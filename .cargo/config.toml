@@ -1,3 +1,9 @@
+# Use the system git CLI for git dependencies so that `url.insteadOf`
+# mirror rewrites (ghfast.top) are honored. The built-in libgit2 backend
+# ignores insteadOf, which makes `cargo build` stall on github.com fetches.
+[net]
+git-fetch-with-cli = true
+
 # getrandom 0.3 (pulled by ahash via acadrust) needs this cfg to select its
 # browser backend on wasm32-unknown-unknown, alongside its `wasm_js` feature
 # (enabled in Cargo.toml for the wasm target). Without it the web build fails

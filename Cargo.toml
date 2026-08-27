@@ -10,6 +10,8 @@ members = [
     "crates/ocs_web_worker",
     "crates/dwg-thumbnailer",
     "crates/dwg-thumbnailer-win",
+    "crates/ocs_ocsm",
+    "crates/ocs_ocsm_mcp",
 ]
 
 [target.'cfg(windows)'.build-dependencies]

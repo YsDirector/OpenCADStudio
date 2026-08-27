@@ -378,6 +378,9 @@ pub fn selection_overlay<'a>(
     pane_move_rect: Option<iced::Rectangle>,
     pane_drop_rect: Option<iced::Rectangle>,
     pan_mode: bool,
+    // The active command replaces the CAD crosshair with a pure pick box
+    // (POWERDIM segment-select mode).
+    hide_crosshair: bool,
     suppressed: bool,
     hover_locked: bool,
     crosshair_bg: [f32; 4],
@@ -400,6 +403,7 @@ pub fn selection_overlay<'a>(
         pane_move_rect,
         pane_drop_rect,
         pan_mode,
+        hide_crosshair,
         suppressed,
         hover_locked,
         crosshair_bg,
@@ -450,6 +454,9 @@ struct SelectionCanvas {
     /// Interactive PAN mode: the crosshair is hidden and the cursor becomes a
     /// hand so the viewport reads as a draggable surface.
     pan_mode: bool,
+    /// The active command replaces the CAD crosshair with a pure pick box
+    /// (POWERDIM segment-select mode).
+    hide_crosshair: bool,
     /// A ribbon dropdown (or similar overlay) is open over the viewport. The
     /// crosshair is not drawn and the OS cursor is shown normally so the panel
     /// is usable instead of the cursor vanishing over it. (#227)
@@ -1131,7 +1138,9 @@ impl canvas::Program<Message> for SelectionCanvas {
         // arrow (see `mouse_interaction`); drawing the CAD crosshair on
         // top of it would double up the visual feedback.
         let over_divider = self.divider_under(cursor, bounds);
-        // PAN mode replaces the crosshair with a hand cursor.
+        // PAN mode replaces the crosshair with a hand cursor. hide_crosshair
+        // (POWERDIM segment-select) drops only the crosshair ARMS — the pick
+        // box stays so the cursor remains visible.
         if !over_viewcube
             && !over_divider
             && !self.pan_mode
@@ -1162,34 +1171,38 @@ impl canvas::Program<Message> for SelectionCanvas {
                     ..Default::default()
                 };
                 let sq = pick_box_half_px(self.crosshair.pick_box);
-                let arm = crosshair_arm_px(bounds, self.crosshair.size_percent);
-                let base_angles: [f64; 2] = if self.crosshair.isometric {
-                    self.crosshair.iso_plane.angles()
-                } else {
-                    [0.0, 90.0]
-                };
-                for angle in base_angles {
-                    let rad = (angle + self.crosshair.snap_angle_deg as f64).to_radians();
-                    let dir = Point::new(rad.cos() as f32, -rad.sin() as f32);
-                    let gap = if sq > 0.0 {
-                        sq / dir.x.abs().max(dir.y.abs()).max(1e-6)
-                    } else {
-                        0.0
-                    };
-                    let arms = canvas::Path::new(|path| {
-                        path.move_to(Point::new(cp.x + dir.x * gap, cp.y + dir.y * gap));
-                        path.line_to(Point::new(cp.x + dir.x * arm, cp.y + dir.y * arm));
-                        path.move_to(Point::new(cp.x - dir.x * gap, cp.y - dir.y * gap));
-                        path.line_to(Point::new(cp.x - dir.x * arm, cp.y - dir.y * arm));
-                    });
-                    frame.stroke(&arms, stroke.clone());
-                }
                 if sq > 0.0 {
                     let square = canvas::Path::rectangle(
                         Point::new(cp.x - sq, cp.y - sq),
                         Size::new(sq * 2.0, sq * 2.0),
                     );
-                    frame.stroke(&square, stroke);
+                    frame.stroke(&square, stroke.clone());
+                }
+                // Crosshair arms only when the command did not ask for a pure
+                // pick-box cursor.
+                if !self.hide_crosshair {
+                    let arm = crosshair_arm_px(bounds, self.crosshair.size_percent);
+                    let base_angles: [f64; 2] = if self.crosshair.isometric {
+                        self.crosshair.iso_plane.angles()
+                    } else {
+                        [0.0, 90.0]
+                    };
+                    for angle in base_angles {
+                        let rad = (angle + self.crosshair.snap_angle_deg as f64).to_radians();
+                        let dir = Point::new(rad.cos() as f32, -rad.sin() as f32);
+                        let gap = if sq > 0.0 {
+                            sq / dir.x.abs().max(dir.y.abs()).max(1e-6)
+                        } else {
+                            0.0
+                        };
+                        let arms = canvas::Path::new(|path| {
+                            path.move_to(Point::new(cp.x + dir.x * gap, cp.y + dir.y * gap));
+                            path.line_to(Point::new(cp.x + dir.x * arm, cp.y + dir.y * arm));
+                            path.move_to(Point::new(cp.x - dir.x * gap, cp.y - dir.y * gap));
+                            path.line_to(Point::new(cp.x - dir.x * arm, cp.y - dir.y * arm));
+                        });
+                        frame.stroke(&arms, stroke.clone());
+                    }
                 }
 
                 // Locked-layer badge: a small padlock beside the crosshair when

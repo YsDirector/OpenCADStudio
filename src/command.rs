@@ -1961,6 +1961,42 @@ pub trait CadCommand: Send {
         None
     }
 
+    /// Plugin interactive commands hand the host the entity they *would*
+    /// commit at `pt` (e.g. a dimension that follows the cursor). The host
+    /// tessellates it transiently alongside the ordinary rubber-band preview.
+    /// Built-in commands return `None` and use [`on_preview_wires`](Self::on_preview_wires).
+    fn plugin_preview_entity(&mut self, _pt: DVec3) -> Option<acadrust::EntityType> {
+        None
+    }
+
+    /// True when this command wants object-snap results at entity-pick clicks
+    /// (plugin POWERDIM-style commands that must tell a snapped *pick point*
+    /// apart from an *object selection* click on the same entity). Built-in
+    /// entity-pick commands keep the current raw-click behaviour.
+    fn entity_pick_applies_osnap(&self) -> bool {
+        false
+    }
+
+    /// True when an entity-pick click on EMPTY space must still be forwarded
+    /// to [`on_entity_pick`](Self::on_entity_pick) with a NULL handle, so the
+    /// command can place / ignore it itself. POWERDIM needs this in both
+    /// pick-point and segment-select modes (segment-select runs with object
+    /// snap off, so the blank-click path must not key off the OSNAP flag).
+    fn entity_pick_blank_forwards(&self) -> bool {
+        false
+    }
+
+    /// True when the command replaces the CAD crosshair with a pure pick box
+    /// (POWERDIM's segment-select mode: object snap off, click geometry
+    /// directly). Built-in commands keep the crosshair.
+    fn hides_crosshair(&self) -> bool {
+        false
+    }
+
+    /// The OSNAP result computed at the pending entity-pick click, if any
+    /// (only called when [`entity_pick_applies_osnap`](Self::entity_pick_applies_osnap)).
+    fn inject_pick_snap(&mut self, _snap: Option<DVec3>) {}
+
     /// Called on every mouse-move; return all preview wires to show (object ghosts + rubber-band).
     /// Default: forwards to `on_mouse_move` for backwards compatibility.
     fn on_preview_wires(&mut self, pt: DVec3) -> Vec<WireModel> {

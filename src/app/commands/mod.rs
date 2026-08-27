@@ -63,7 +63,22 @@ impl OpenCADStudio {
         // routing, so every path below (Start-tab gate, plugins, all dispatch
         // families, the Repeat menu) sees the canonical command. Arguments after
         // the first space are left untouched. A non-alias passes through as-is.
-        let resolved = self.resolve_alias(cmd);
+        //
+        // A verb a plugin registers wins over the alias table: OCSM's `D`
+        // (OCSMPOWERDIM) must beat the shipped `D` → `*DIMSTYLE` alias, or the
+        // plugin command would be unreachable by typing. (project.md)
+        let verb = cmd.split_whitespace().next().unwrap_or(cmd);
+        let plugin_wins = {
+            let disabled = self.disabled_plugin_ids();
+            crate::plugin::plugin_command_names(&disabled)
+                .iter()
+                .any(|n| n.eq_ignore_ascii_case(verb))
+        };
+        let resolved = if plugin_wins {
+            None
+        } else {
+            self.resolve_alias(cmd)
+        };
         let cmd = resolved.as_deref().unwrap_or(cmd);
         // A drafting aid only flips a flag, so it must not disturb whatever is
         // already running: pressing F8 partway through a LINE means "constrain

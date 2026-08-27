@@ -921,6 +921,102 @@ impl OpenCADStudio {
                 Task::none()
             }
 
+            // ── OCSMechanical frame picker ─────────────────────────────────
+            Message::OcsmFramePickerSelect(idx) => {
+                if let Some(state) = self.ocsm_frame_picker.as_mut() {
+                    if idx < state.frames.len() {
+                        state.selected = idx;
+                        state.error = None;
+                    }
+                }
+                Task::none()
+            }
+            Message::OcsmFramePickerScaleV1(value) => {
+                if let Some(state) = self.ocsm_frame_picker.as_mut() {
+                    state.scale_v1 = value;
+                    state.error = None;
+                }
+                Task::none()
+            }
+            Message::OcsmFramePickerScaleV2(value) => {
+                if let Some(state) = self.ocsm_frame_picker.as_mut() {
+                    state.scale_v2 = value;
+                    state.error = None;
+                }
+                Task::none()
+            }
+            Message::OcsmFramePickerOk => {
+                let mut do_close = false;
+                if let Some(state) = self.ocsm_frame_picker.as_mut() {
+                    let v1: Option<i64> = state.scale_v1.trim().parse().ok();
+                    let v2: Option<i64> = state.scale_v2.trim().parse().ok();
+                    let valid = match (v1, v2) {
+                        (Some(a), Some(b)) if a > 0 && b > 0 && (a == 1 || b == 1) => true,
+                        _ => false,
+                    };
+                    if state.frames.is_empty() {
+                        state.error = Some("没有可用的图框文件。".to_string());
+                    } else if !valid {
+                        state.error = Some(
+                            "比例必须为两个正整数（如 1:2、2:1），且其中一个必须为 1。"
+                                .to_string(),
+                        );
+                    } else {
+                        let frame = state.frames[state.selected].clone();
+                        self.ocsm_pending_frame_selection =
+                            Some(ocs_plugin_api::host::FrameSelection {
+                                path: frame.path,
+                                scale_v1: v1.unwrap(),
+                                scale_v2: v2.unwrap(),
+                            });
+                        do_close = true;
+                    }
+                }
+                if do_close {
+                    self.ocsm_frame_picker = None;
+                    self.active_modal = None;
+                    // 回调插件：插件取走 pending selection 并启动交互插入。
+                    return self.run_command_line("OCSMFRAMEINSERT");
+                }
+                Task::none()
+            }
+            Message::OcsmFramePickerCancel => {
+                self.ocsm_frame_picker = None;
+                self.active_modal = None;
+                Task::none()
+            }
+            Message::OcsmFramePickerOpenDir => {
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    // frame 文件都在同一目录：取第一个图框的父目录。
+                    let dir = self
+                        .ocsm_frame_picker
+                        .as_ref()
+                        .and_then(|s| s.frames.first())
+                        .map(|f| std::path::PathBuf::from(&f.path))
+                        .and_then(|p| p.parent().map(|d| d.to_path_buf()));
+                    match dir {
+                        Some(dir) => match crate::sys::reveal_in_file_manager(&dir) {
+                            Ok(()) => self.command_line.push_output(&format!(
+                                "已打开图框文件夹：{}",
+                                dir.display()
+                            )),
+                            Err(e) => self.command_line.push_error(&format!(
+                                "无法打开图框文件夹：{e}"
+                            )),
+                        },
+                        None => self
+                            .command_line
+                            .push_error("没有已加载的图框文件。"),
+                    }
+                }
+                #[cfg(target_arch = "wasm32")]
+                {
+                    let _ = self;
+                }
+                Task::none()
+            }
+
             Message::WblockSave(block_name) => {
                 let name = block_name.clone();
                 Task::perform(

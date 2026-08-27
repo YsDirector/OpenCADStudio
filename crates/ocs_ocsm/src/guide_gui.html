@@ -1,0 +1,528 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>标注配置</title>
+<style>
+  :root { --accent: #2b6fe0; --line: #ddd; --text: #222; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: "Microsoft YaHei", "PingFang SC", sans-serif; color: var(--text);
+         background: #f5f6f8; padding: 18px; width: 620px; }
+  h1 { font-size: 16px; margin-bottom: 14px; }
+  .panel { background: #fff; border: 1px solid var(--line); border-radius: 8px; padding: 14px; margin-bottom: 12px; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .lbl { font-size: 12px; color: #666; margin-right: 4px; }
+  .seg { display: flex; gap: 6px; }
+  .seg button { padding: 6px 14px; border: 1px solid #bbb; border-radius: 6px; background: #fff;
+                cursor: pointer; font-size: 13px; color: var(--text); }
+  .seg button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .seg button.offline { opacity: .45; cursor: not-allowed; }
+  .param { display: flex; align-items: center; gap: 6px; margin-top: 10px; }
+  .param input[type=number] { width: 110px; padding: 5px 8px; border: 1px solid #bbb; border-radius: 6px; font-size: 13px; }
+  .txt { width: 100%; margin-top: 10px; }
+  .txt input { width: 100%; padding: 7px 9px; border: 1px solid #bbb; border-radius: 6px; font-size: 13px; }
+  svg { width: 100%; height: 260px; background: #fff; border: 1px solid var(--line); border-radius: 6px;
+        cursor: grab; touch-action: none; }
+  svg:active { cursor: grabbing; }
+  .btnrow { display: flex; gap: 10px; justify-content: flex-end; }
+  .btnrow button { padding: 8px 20px; border-radius: 6px; border: 1px solid #bbb; background: #fff; cursor: pointer; font-size: 13px; }
+  .btnrow button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .hint { font-size: 12px; color: #888; margin-top: 8px; }
+  .msg { font-size: 12px; margin-top: 8px; min-height: 16px; }
+  .msg.ok { color: #1a7f37; }
+  .msg.err { color: #c62828; }
+</style>
+</head>
+<body>
+  <h1>标注配置 <span id="h" style="font-weight:normal;font-size:12px;color:#888"></span></h1>
+
+  <div class="panel">
+    <div class="row">
+      <span class="lbl">类型</span>
+      <div class="seg" id="seg-type">
+        <button data-t="LINEAR" class="on">线性</button>
+        <button data-t="DIAMETER">直径</button>
+        <button data-t="RADIUS">半径</button>
+        <button data-t="DATUM">基准</button>
+        <button data-t="VIEW">向视图</button>
+      </div>
+    </div>
+    <div class="row" id="row-sub" style="margin-top:8px">
+      <span class="lbl" id="sub-lbl">线性</span>
+      <div class="seg" id="seg-sub">
+        <button data-s="H" class="on">水平</button>
+        <button data-s="V">竖直</button>
+        <button data-s="A">对齐</button>
+      </div>
+      <div class="seg" id="seg-side" style="display:none">
+        <button data-side="in">内侧</button>
+        <button data-side="out">外侧</button>
+      </div>
+      <div class="seg" id="seg-ver" style="display:none; margin-left:10px">
+        <button data-ver="2008" class="on">2008</button>
+        <button data-ver="1996">1996</button>
+      </div>
+      <span class="lbl" id="letter-lbl" style="display:none; margin-left:10px">字母</span>
+      <select id="seg-letter" style="display:none; margin-left:6px; padding:2px 6px; font-size:14px"></select>
+    </div>
+    <div class="row" id="row-view" style="display:none; margin-top:8px">
+      <span class="lbl">比例</span>
+      <input type="text" id="view-scale" value="" placeholder="1:1" style="width:70px">
+      <label class="lbl" style="margin-left:10px">翻转方向</label>
+      <select id="view-flip" style="width:92px">
+        <option value="none" selected>无</option>
+        <option value="cw">顺时针</option>
+        <option value="ccw">逆时针</option>
+      </select>
+      <span class="lbl" style="margin-left:10px">标记放置点</span>
+      <input type="number" id="view-mx" value="" placeholder="x" step="any" style="width:60px">
+      <input type="number" id="view-my" value="" placeholder="y" step="any" style="width:60px">
+    </div>
+    <div class="param" id="row-param">
+      <span class="lbl">(与P2距离)</span>
+      <input type="number" id="dist" value="0" step="any">
+      <span class="lbl" style="margin-left:10px">(小数位)</span>
+      <input type="number" id="dec" value="2" min="0" max="8" step="1" style="width:52px">
+    </div>
+    <div class="txt" id="row-txt">
+      <input type="text" id="text" value="&lt;&gt;" placeholder="标注文字（&lt;&gt; = 测量值）">
+    </div>
+    <div class="hint">线性标注生成在 <b>7标注层</b>；直径/半径在 <b>7标注层</b>（匿名块+INSERT）；基准/向视图在 <b>8符号标注层</b>（匿名块+INSERT）。样式 <b>OCSM_GB</b>。预览可<b>拖拽平移</b>、<b>滚轮缩放</b>。</div>
+  </div>
+
+  <div class="panel">
+    <svg id="prev"></svg>
+  </div>
+
+  <div class="btnrow">
+    <button id="btn-apply">应用</button>
+    <button id="btn-refresh" class="primary">应用并刷新</button>
+  </div>
+  <div id="msg" class="msg"></div>
+
+<script>
+(function () {
+  const q = new URLSearchParams(location.search);
+  const handle = q.get('handle');
+  document.getElementById('h').textContent = handle ? ('#' + handle) : '';
+
+  let P1 = {x:0, y:0}, P2 = {x:100, y:75};
+  let type = 'LINEAR', sub = 'H', side = 'in', ver = '2008', letter = 'A';
+  // GB 基准字母禁用集：1996 用 I/O；2008（ISO 5459）加 E/F/J/L/P/R。
+  const DATUM_DISABLED = { '1996': 'IO', '2008': 'EFIJLOPR' };
+  function renderLetters() {
+    const seg = document.getElementById('seg-letter');
+    const prev = seg.value;
+    seg.innerHTML = '';
+    const disabled = (type === 'DATUM') ? (DATUM_DISABLED[ver] || '') : '';
+    for (const ch of 'ABCDEFGHIJKLMNOPQRSTUVWXYZ') {
+      if (disabled.includes(ch)) continue;
+      const o = document.createElement('option');
+      o.value = ch;
+      o.textContent = ch;
+      seg.appendChild(o);
+    }
+    if ([...seg.options].some(o => o.value === prev)) seg.value = prev;
+    else { seg.value = 'A'; letter = 'A'; }
+    letter = seg.value;
+  }
+  segBind('seg-ver', b => {
+    ver = b.dataset.ver;
+    if (!DATUM_DISABLED[ver].includes(letter)) { /* 保留当前字母 */ }
+    else { letter = 'A'; }
+    renderLetters();
+    draw();
+  });
+  document.getElementById('seg-letter').addEventListener('change', e => {
+    letter = e.target.value;
+    draw();
+  });
+  function distInput() { return document.getElementById('dist'); }
+
+  // ── 视口（世界坐标 → 屏幕）：Y 轴翻转（世界向上 = 屏幕向上） ──
+  const VPW = 600, VPH = 260;          // 逻辑视口尺寸
+  const svg = document.getElementById('prev');
+  svg.setAttribute('viewBox', `0 0 ${VPW} ${VPH}`);
+  let cam = { cx: 0, cy: 0, scale: 1 }; // 相机中心（世界）+ 像素/世界单位
+  function fitCam() {
+    const xs = [P1.x, P2.x], ys = [P1.y, P2.y];
+    const minX = Math.min(...xs), maxX = Math.max(...xs);
+    const minY = Math.min(...ys), maxY = Math.max(...ys);
+    let w = maxX - minX, h = maxY - minY;
+    if (w < 1e-6) w = 1; if (h < 1e-6) h = 1;
+    w *= 1.6; h *= 1.6;
+    cam.cx = (minX + maxX) / 2; cam.cy = (minY + maxY) / 2;
+    cam.scale = Math.min(VPW / w, VPH / h);
+  }
+  function w2s(wx, wy) { return { x: VPW/2 + (wx - cam.cx) * cam.scale, y: VPH/2 - (wy - cam.cy) * cam.scale }; }
+  function s2w(sx, sy) { return { x: cam.cx + (sx - VPW/2) / cam.scale, y: cam.cy - (sy - VPH/2) / cam.scale }; }
+
+  // ── 类型/子类型按钮 ────────────────────────────────────────
+  function segBind(id, cb) {
+    const el = document.getElementById(id);
+    el.querySelectorAll('button').forEach(b => {
+      b.addEventListener('click', () => {
+        el.querySelectorAll('button').forEach(x => x.classList.remove('on'));
+        b.classList.add('on');
+        cb(b);
+      });
+    });
+  }
+  function textInput() { return document.getElementById('text'); }
+  // 内外侧默认 dist：直径 内−9/外+11；半径 内−8/外+8（对照示例 DXF）。
+  function defaultDist() {
+    return (type === 'RADIUS')
+      ? (side === 'in' ? -8 : 8)
+      : (side === 'in' ? -9 : 11);
+  }
+  segBind('seg-type', b => {
+    type = b.dataset.t;
+    // 文字框保持 <>（= 测量值）；直径/半径的 Ø/R 前缀由生成端自动添加，
+    // 不再注入 %%c<>。
+    const linear = (type === 'LINEAR');
+    const datum = (type === 'DATUM');
+    const view = (type === 'VIEW');
+    // row-sub 恒显示：基准/向视图的字母段也放在这一行里。
+    document.getElementById('row-sub').style.display = '';
+    document.getElementById('sub-lbl').textContent = linear ? '线性' : '位置';
+    document.getElementById('sub-lbl').style.display = (datum || view) ? 'none' : '';
+    document.getElementById('seg-sub').style.display = linear ? '' : 'none';
+    document.getElementById('seg-side').style.display = (!linear && !datum && !view) ? '' : 'none';
+    // 基准：版本 + 字母；向视图：字母；都隐藏距离/小数位/文字输入。
+    document.getElementById('seg-ver').style.display = datum ? '' : 'none';
+    document.getElementById('seg-letter').style.display = (datum || view) ? '' : 'none';
+    document.getElementById('letter-lbl').style.display = (datum || view) ? '' : 'none';
+    document.getElementById('row-param').style.display = (datum || view) ? 'none' : '';
+    document.getElementById('row-txt').style.display = (datum || view) ? 'none' : '';
+    // 向视图：比例 / 翻转方向 / 标记放置点。
+    document.getElementById('row-view').style.display = view ? '' : 'none';
+    if (datum || view) { renderLetters(); }
+    else if (!linear) {
+      // 切到直径/半径：按内外按钮自动填示例默认 dist
+      //（直径 内 −9 / 外 +11；半径 内 −8 / 外 +8）。
+      const sideBtn = document.querySelector(`#seg-side button[data-side="${side}"]`);
+      if (sideBtn) sideBtn.click();
+      else { distInput().value = defaultDist(); }
+    }
+    draw();
+  });
+  segBind('seg-sub', b => { sub = b.dataset.s; draw(); });
+  document.querySelectorAll('#seg-side button').forEach(b => {
+    b.addEventListener('click', () => {
+      document.querySelectorAll('#seg-side button').forEach(x => x.classList.remove('on'));
+      b.classList.add('on');
+      side = b.dataset.side;
+      distInput().value = defaultDist();
+      draw();
+    });
+  });
+
+  // ── 生成 URL ───────────────────────────────────────────────
+  function buildUrl() {
+    const text = document.getElementById('text').value;
+    let u = `http://127.0.0.1:${location.port}/DIM/${type}`;
+    const qs = [];
+    if (type === 'DATUM') {
+      u += '/0';
+      if (ver !== '2008') qs.push('ver=' + ver);
+      qs.push('let=' + letter);
+    } else if (type === 'VIEW') {
+      // 向视图：字母（必填）+ 比例（可缺省）+ 翻转方向 + 标记放置点。
+      u += '/0';
+      qs.push('let=' + letter);
+      const scale = document.getElementById('view-scale').value.trim();
+      if (scale) qs.push('scale=' + encodeURIComponent(scale));
+      const flip = document.getElementById('view-flip').value;
+      if (flip !== 'none') qs.push('flip=' + flip);
+      const mx = document.getElementById('view-mx').value.trim();
+      const my = document.getElementById('view-my').value.trim();
+      if (mx !== '') qs.push('mx=' + mx);
+      if (my !== '') qs.push('my=' + my);
+    } else {
+      const dist = parseFloat(document.getElementById('dist').value);
+      if (!isFinite(dist)) throw new Error('距离无效');
+      if (type === 'LINEAR') u += `/${sub}/${dist}`;
+      else u += `/${dist}`;
+      const dec = parseInt(document.getElementById('dec').value, 10);
+      if (isFinite(dec) && dec >= 0) qs.push('dec=' + Math.min(dec, 8));
+    }
+    if (text && text !== '<>') qs.push('text=' + encodeURIComponent(text));
+    if (qs.length) u += '?' + qs.join('&');
+    return u;
+  }
+
+  // ── 预览绘制（世界坐标计算 → 屏幕渲染） ─────────────────────
+  const NS = 'http://www.w3.org/2000/svg';
+  function el(tag, attrs) { const e = document.createElementNS(NS, tag);
+    for (const k in attrs) e.setAttribute(k, attrs[k]); return e; }
+
+  function draw() {
+    svg.innerHTML = '';
+    // 世界线 → 屏幕线（固定像素线宽，缩放不糊）
+    function wline(x1, y1, x2, y2, w, color, dash) {
+      const a = w2s(x1, y1), b = w2s(x2, y2);
+      const attrs = { x1:a.x, y1:a.y, x2:b.x, y2:b.y, stroke:color, 'stroke-width':w };
+      if (dash) attrs['stroke-dasharray'] = dash;
+      return el('line', attrs);
+    }
+    // 引导线
+    svg.appendChild(wline(P1.x, P1.y, P2.x, P2.y, 3.5, '#999', '8 5'));
+    // 端点
+    for (const [p, name] of [[P1,'P1'],[P2,'P2']]) {
+      const s = w2s(p.x, p.y);
+      const t = el('text', {x:s.x+8, y:s.y-8, 'font-size':14, fill:'#555', 'stroke':'#fff', 'stroke-width':3});
+      t.textContent = name; svg.appendChild(t);
+      svg.appendChild(el('circle', {cx:s.x, cy:s.y, r:4, fill:'#333'}));
+    }
+    const dist = parseFloat(document.getElementById('dist').value) || 0;
+    const ax = P2.x - P1.x, ay = P2.y - P1.y;
+    const len = Math.hypot(ax, ay) || 1;
+    const nx = -ay/len, ny = ax/len;
+
+    // ── 基准：引线 + 圆(1996)/方框(2008) + 字母 ──
+    if (type === 'DATUM') {
+      const hpx = 8 * cam.scale; // 示意字母高（预览比例）
+      const ux = ax/len, uy = ay/len, px = -uy, py = ux;
+      const c = w2s(P1.x, P1.y);
+      // 引线 P1 → +dir*2h
+      const e0 = w2s(P1.x + ux*2*hpx, P1.y + uy*2*hpx);
+      svg.appendChild(el('line', {x1:c.x, y1:c.y, x2:e0.x, y2:e0.y, stroke:'#2b6fe0', 'stroke-width':3}));
+      const cc = w2s(P1.x + ux*3.057*hpx, P1.y + uy*3.057*hpx);
+      if (ver === '1996') {
+        svg.appendChild(el('circle', {cx:cc.x, cy:cc.y, r:1.057*hpx, fill:'none', stroke:'#2b6fe0', 'stroke-width':2.5}));
+      } else {
+        const bx = 1.057*hpx;
+        const t0 = w2s(P1.x + ux*2*hpx - px*bx, P1.y + uy*2*hpx - py*bx);
+        const t1 = w2s(P1.x + ux*4.114*hpx + px*bx, P1.y + uy*4.114*hpx + py*bx);
+        svg.appendChild(el('rect', {x:Math.min(t0.x,t1.x), y:Math.min(t0.y,t1.y),
+          width:Math.abs(t1.x-t0.x), height:Math.abs(t1.y-t0.y), fill:'none', stroke:'#2b6fe0', 'stroke-width':2.5}));
+      }
+      const st = w2s(P1.x + ux*3.057*hpx, P1.y + uy*3.057*hpx);
+      const te = el('text', {x:st.x, y:st.y, 'text-anchor':'middle', 'dominant-baseline':'middle', 'font-size':16, fill:'#1a5f1a', 'font-weight':'bold'});
+      te.textContent = letter; svg.appendChild(te);
+      return;
+    }
+
+    // ── 向视图：箭头（P2 箭头端朝外）+ 引线（10×scale 反方向）+ 字母符号（标记放置点） ──
+    if (type === 'VIEW') {
+      const hpx = 8 * cam.scale; // 示意字母高（预览比例）
+      const ux = ax/len, uy = ay/len; // 字母端→箭头端方向
+      const px = -uy, py = ux;
+      const e = w2s(P2.x, P2.y); // 箭头端（引导线 end）
+      // 箭头：实心三角，尖朝 u（端外延），长 0.7h、半宽 0.117h
+      const al = 0.7*hpx, aw = 0.117*hpx;
+      const tip = w2s(P2.x + ux*al, P2.y + uy*al);
+      const b1 = w2s(P2.x + px*aw, P2.y + py*aw);
+      const b2 = w2s(P2.x - px*aw, P2.y - py*aw);
+      svg.appendChild(el('polygon', {points:`${tip.x},${tip.y} ${b1.x},${b1.y} ${b2.x},${b2.y}`, fill:'#ff8c00'}));
+      // 引线：P2 → 反方向 10×hpx
+      const le = w2s(P2.x - ux*10*hpx, P2.y - uy*10*hpx);
+      svg.appendChild(el('line', {x1:e.x, y1:e.y, x2:le.x, y2:le.y, stroke:'#2b6fe0', 'stroke-width':3}));
+      // 字母符号：标记放置点 (mx,my) 字母中心；横线下方 0.7h；比例再下方
+      const mx = parseFloat(document.getElementById('view-mx').value) || 0;
+      const my = parseFloat(document.getElementById('view-my').value) || 0;
+      const sc = w2s(mx, my);
+      const te = el('text', {x:sc.x, y:sc.y, 'text-anchor':'middle', 'dominant-baseline':'middle', 'font-size':16, fill:'#1a5f1a', 'font-weight':'bold'});
+      te.textContent = letter; svg.appendChild(te);
+      const hl = w2s(mx-1.2*hpx, my-0.7*hpx), hr = w2s(mx+1.2*hpx, my-0.7*hpx);
+      svg.appendChild(el('line', {x1:hl.x, y1:hl.y, x2:hr.x, y2:hr.y, stroke:'#1a5f1a', 'stroke-width':2.5}));
+      const scale = document.getElementById('view-scale').value.trim();
+      if (scale) {
+        const st = w2s(mx, my-1.4*hpx);
+        const tp = el('text', {x:st.x, y:st.y, 'text-anchor':'middle', 'dominant-baseline':'middle', 'font-size':12, fill:'#1a5f1a'});
+        tp.textContent = scale; svg.appendChild(tp);
+      }
+      return;
+    }
+
+    // ── 直径/半径：画圆 + 直径线/半径线 + 文字（径向位置/旋转） ──
+    if (type === 'DIAMETER' || type === 'RADIUS') {
+      const c = w2s(P1.x, P1.y);
+      const rp = len * cam.scale; // 半径（像素）
+      svg.appendChild(el('circle', {cx:c.x, cy:c.y, r:rp, fill:'none', stroke:'#666', 'stroke-width':2.5}));
+      // 文字位置 = P2 + dir*dist（径向）
+      const tx = P2.x + (ax/len)*dist, ty = P2.y + (ay/len)*dist;
+      const st = w2s(tx, ty);
+      const sp2 = w2s(P2.x, P2.y);
+      // 屏幕方向（圆心→圆周）
+      const ux = (sp2.x-c.x)/(rp||1), uy = (sp2.y-c.y)/(rp||1);
+      const px = -uy, py = ux;
+      if (type === 'DIAMETER') {
+        // 直径线：过圆心，两端圆周（±方向）
+        const a = {x:c.x - ux*rp, y:c.y - uy*rp}, b = {x:c.x + ux*rp, y:c.y + uy*rp};
+        svg.appendChild(el('line', {x1:a.x, y1:a.y, x2:b.x, y2:b.y, stroke:'#2b6fe0', 'stroke-width':3}));
+        for (const [D, dir] of [[a, 1], [b, -1]]) {
+          const tipx = D.x + dir*ux*4.4, tipy = D.y + dir*uy*4.4;
+          svg.appendChild(el('polygon', {points:`${tipx},${tipy} ${tipx-dir*ux*11+px*5.5},${tipy-dir*uy*11+py*5.5} ${tipx-dir*ux*11-px*5.5},${tipy-dir*uy*11-py*5.5}`, fill:'#2b6fe0'}));
+        }
+      } else {
+        // 半径线：圆心→圆周
+        svg.appendChild(el('line', {x1:c.x, y1:c.y, x2:sp2.x, y2:sp2.y, stroke:'#2b6fe0', 'stroke-width':3}));
+        const tipx = sp2.x + ux*4.4, tipy = sp2.y + uy*4.4;
+        svg.appendChild(el('polygon', {points:`${tipx},${tipy} ${tipx-ux*11+px*5.5},${tipy-uy*11+py*5.5} ${tipx-ux*11-px*5.5},${tipy-uy*11-py*5.5}`, fill:'#2b6fe0'}));
+      }
+      // 文字（径向旋转，与生成一致）
+      const txt = document.getElementById('text').value || '<>';
+      const te = el('text', {x:st.x, y:st.y, 'text-anchor':'middle', 'font-size':16, fill:'#1a5f1a', 'font-weight':'bold'});
+      const rot = Math.atan2(-(ty-P1.y), tx-P1.x) * 180 / Math.PI;
+      te.setAttribute('transform', `rotate(${rot} ${st.x} ${st.y})`);
+      te.textContent = txt;
+      svg.appendChild(te);
+      return; // 直径/半径分支结束
+    }
+
+    // ── 线性：尺寸线经过点 pt = P2 + 法向*dist ──
+    const ptx = P2.x + nx*dist, pty = P2.y + ny*dist;
+    let D1, D2;
+    if (sub === 'H') {
+      D1 = {x:Math.min(P1.x,P2.x), y:pty}; D2 = {x:Math.max(P1.x,P2.x), y:pty};
+    } else if (sub === 'V') {
+      D1 = {x:ptx, y:Math.min(P1.y,P2.y)}; D2 = {x:ptx, y:Math.max(P1.y,P2.y)};
+    } else {
+      const proj = (px, py) => {
+        const t = ((px-P1.x)*ax + (py-P1.y)*ay) / (len*len);
+        return {x: P1.x + ax*t + nx*dist, y: P1.y + ay*t + ny*dist};
+      };
+      D1 = proj(P1.x, P1.y); D2 = proj(P2.x, P2.y);
+    }
+    // 尺寸线 + 边界线
+    svg.appendChild(wline(D1.x, D1.y, D2.x, D2.y, 3, '#2b6fe0'));
+    for (const pt of [P1, P2]) svg.appendChild(wline(pt.x, pt.y, D1.x, D1.y, 2.2, '#2b6fe0'));
+    // 箭头（屏幕方向，加粗）
+    const s1 = w2s(D1.x, D1.y), s2 = w2s(D2.x, D2.y);
+    const sl = Math.hypot(s2.x-s1.x, s2.y-s1.y) || 1;
+    const ux = (s2.x-s1.x)/sl, uy = (s2.y-s1.y)/sl;
+    const px = -uy, py = ux;
+    const aw = 11, ah = 5.5;
+    for (const [sD, side] of [[s1, 1], [s2, -1]]) {
+      const tipx = sD.x + side*ux*aw*0.4, tipy = sD.y + side*uy*aw*0.4;
+      const b1x = tipx - side*ux*aw + px*ah, b1y = tipy - side*uy*aw + py*ah;
+      const b2x = tipx - side*ux*aw - px*ah, b2y = tipy - side*uy*aw - py*ah;
+      svg.appendChild(el('polygon', {points:`${tipx},${tipy} ${b1x},${b1y} ${b2x},${b2y}`, fill:'#2b6fe0'}));
+    }
+    // 文字（对齐标注文字随尺寸线旋转，与生成一致）
+    const Dm = {x:(D1.x+D2.x)/2, y:(D1.y+D2.y)/2};
+    const sm = w2s(Dm.x, Dm.y);
+    const txt = document.getElementById('text').value || '<>';
+    const te = el('text', {x:sm.x, y:sm.y, 'text-anchor':'middle', 'font-size':16, fill:'#1a5f1a', 'font-weight':'bold'});
+    if (sub === 'A') {
+      const rot = Math.atan2(s1.y - s2.y, s2.x - s1.x) * 180 / Math.PI;
+      te.setAttribute('transform', `rotate(${rot} ${sm.x} ${sm.y})`);
+    }
+    te.textContent = txt;
+    svg.appendChild(te);
+  }
+
+  // ── 拖拽平移 + 滚轮缩放 ────────────────────────────────────
+  let panning = false, startX = 0, startY = 0, startCam = null;
+  svg.addEventListener('mousedown', e => {
+    panning = true; startX = e.clientX; startY = e.clientY;
+    startCam = { ...cam };
+    e.preventDefault();
+  });
+  window.addEventListener('mousemove', e => {
+    if (!panning || !startCam) return;
+    const r = svg.getBoundingClientRect();
+    const dx = (e.clientX - startX) * VPW / r.width;
+    const dy = (e.clientY - startY) * VPH / r.height;
+    cam.cx = startCam.cx - dx / startCam.scale;
+    cam.cy = startCam.cy + dy / startCam.scale;
+    draw();
+  });
+  window.addEventListener('mouseup', () => { panning = false; });
+  svg.addEventListener('wheel', e => {
+    e.preventDefault();
+    const r = svg.getBoundingClientRect();
+    const sx = (e.clientX - r.left) * VPW / r.width;
+    const sy = (e.clientY - r.top) * VPH / r.height;
+    const w = s2w(sx, sy);
+    const f = e.deltaY < 0 ? 1.25 : 0.8;
+    cam.scale *= f;
+    cam.cx = w.x - (sx - VPW/2) / cam.scale;
+    cam.cy = w.y + (sy - VPH/2) / cam.scale;
+    draw();
+  }, { passive: false });
+
+  // ── 表单事件 ───────────────────────────────────────────────
+  document.getElementById('dist').addEventListener('input', draw);
+  document.getElementById('text').addEventListener('input', draw);
+
+  async function submit(refresh) {
+    const msg = document.getElementById('msg');
+    msg.className = 'msg'; msg.textContent = '处理中…';
+    let url;
+    try { url = buildUrl(); }
+    catch (e) { msg.className = 'msg err'; msg.textContent = e.message; return; }
+    try {
+      const r = await fetch(refresh ? '/api/apply_refresh' : '/api/apply', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({handle, url})
+      });
+      const j = await r.json();
+      if (j.ok) {
+        msg.className = 'msg ok';
+        msg.textContent = refresh ? '已生成标注（7标注层）并刷新。' : '已写入超链接 URL。';
+        if (refresh) {
+          setTimeout(() => msg.textContent = '', 4000);
+          // 自动关闭当前网页选项卡（xdg-open 打开的标签页）。
+          try { window.close(); } catch (e) {}
+        }
+      } else {
+        msg.className = 'msg err';
+        msg.textContent = j.error || '失败';
+      }
+    } catch (e) {
+      msg.className = 'msg err';
+      msg.textContent = '请求失败: ' + e.message;
+    }
+  }
+  document.getElementById('btn-apply').addEventListener('click', () => submit(false));
+  document.getElementById('btn-refresh').addEventListener('click', () => submit(true));
+
+  // ── 初始化加载 ─────────────────────────────────────────────
+  async function load() {
+    if (!handle) return;
+    try {
+      const r = await fetch('/api/guide?handle=' + encodeURIComponent(handle));
+      const j = await r.json();
+      if (j.ok) {
+        P1 = {x: j.p1[0], y: j.p1[1]};
+        P2 = {x: j.p2[0], y: j.p2[1]};
+        if (j.params) {
+          type = j.params.type || 'LINEAR';
+          const segType = document.querySelector(`#seg-type button[data-t="${type}"]`);
+          if (segType && !segType.classList.contains('offline')) { segType.click(); }
+          if (type === 'LINEAR' && j.params.sub) {
+            sub = j.params.sub;
+            const segSub = document.querySelector(`#seg-sub button[data-s="${sub}"]`);
+            if (segSub) segSub.click();
+          }
+          if (typeof j.params.dist === 'number') distInput().value = j.params.dist;
+          if (j.params.text) document.getElementById('text').value = j.params.text;
+          if (type === 'DIAMETER' || type === 'RADIUS') {
+            // 按已加载的 dist 符号选中 内/外 按钮（不再覆盖 dist）。
+            side = (parseFloat(distInput().value) || 0) < 0 ? 'in' : 'out';
+            document.querySelectorAll('#seg-side button').forEach(x => x.classList.remove('on'));
+            const sb = document.querySelector(`#seg-side button[data-side="${side}"]`);
+            if (sb) sb.classList.add('on');
+          }
+        }
+        fitCam();
+        draw();
+      } else {
+        document.getElementById('msg').className = 'msg err';
+        document.getElementById('msg').textContent = j.error || '加载引导线失败';
+      }
+    } catch (e) {
+      document.getElementById('msg').className = 'msg err';
+      document.getElementById('msg').textContent = '加载失败: ' + e.message;
+    }
+  }
+  fitCam();
+  draw();
+  load();
+})();
+</script>
+</body>
+</html>

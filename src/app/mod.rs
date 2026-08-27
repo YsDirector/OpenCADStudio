@@ -402,6 +402,11 @@ pub(super) struct OpenCADStudio {
     drawing_units: Option<crate::ui::window::drawing_units::State>,
     /// Working copy of the structured feature-control-frame editor.
     geometric_tolerance: Option<crate::ui::window::geometric_tolerance::State>,
+    /// OCSMechanical frame picker dialog state; `None` while closed.
+    ocsm_frame_picker: Option<OcsmFramePicker>,
+    /// Frame selection the user made in the OCSM picker, waiting for the
+    /// plugin to take it (via `OCSMFRAMEINSERT`).
+    ocsm_pending_frame_selection: Option<ocs_plugin_api::host::FrameSelection>,
     /// PICKDRAG (#226): false (default) = press-drag lassoes; true =
     /// press-drag draws a rectangle marquee.
     pick_drag_rect: bool,
@@ -1585,6 +1590,21 @@ impl ClipboardDeps {
 /// Which in-canvas modal dialog is currently open (Plan B). At most one shows
 /// at a time; dialog-specific data lives in its own fields. Closed via the
 /// modal's ✕ (`Message::CloseModal`).
+/// Working state of the OCSMechanical frame picker dialog.
+#[derive(Debug, Clone)]
+pub(super) struct OcsmFramePicker {
+    /// Frame DWG files offered to the user (path + label).
+    pub frames: Vec<ocs_plugin_api::host::FrameItem>,
+    /// Index of the currently selected frame.
+    pub selected: usize,
+    /// Scale numerator text (value before the colon).
+    pub scale_v1: String,
+    /// Scale denominator text (value after the colon).
+    pub scale_v2: String,
+    /// Live validation error, if any.
+    pub error: Option<String>,
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum ModalKind {
     About,
@@ -1628,6 +1648,8 @@ pub enum ModalKind {
     /// Add / remove the annotation scales a single selected object has a
     /// per-object representation for.
     AnnoObjectScale,
+    /// OCSMechanical 图框选择对话框（插件 opencad.ocsm 触发）。
+    OcsmFramePicker,
 }
 
 /// A property group controlled by a layer state's restore mask.
@@ -3091,6 +3113,20 @@ pub enum Message {
         std::path::PathBuf,
         Result<crate::scene::model::mesh_model::MeshModel, String>,
     ),
+    // ── OCSMechanical frame picker ────────────────────────────────────────
+    /// Select a frame in the OCSM picker dialog.
+    OcsmFramePickerSelect(usize),
+    /// Edit the scale numerator field (value before the colon).
+    OcsmFramePickerScaleV1(String),
+    /// Edit the scale denominator field (value after the colon).
+    OcsmFramePickerScaleV2(String),
+    /// Confirm the frame + scale and hand the selection to the plugin.
+    OcsmFramePickerOk,
+    /// Open the frame folder in the system file manager (put custom frames
+    /// there).
+    OcsmFramePickerOpenDir,
+    /// Close the OCSM frame picker without choosing.
+    OcsmFramePickerCancel,
 }
 
 #[derive(Debug, Clone)]
@@ -3269,6 +3305,8 @@ impl OpenCADStudio {
             color_picker_tab: ColorPickerTab::Index,
             recent_colors: Vec::new(),
             active_modal: None,
+            ocsm_frame_picker: None,
+            ocsm_pending_frame_selection: None,
             plotstyle_parent_plot_geometry: None,
             find_replace: FindReplaceState::default(),
             aec_drop_acknowledged: false,

@@ -715,6 +715,183 @@ impl HostApi for V4PluginHostApi {
             view.take();
         }
     }
+
+    // ── API v5 (OCSMechanical) ──────────────────────────────────────────────
+    fn selected_handles(&self) -> Vec<Handle> {
+        match self.request(PluginRequest::SelectedHandles) {
+            Ok(PluginResponse::Handles(handles)) => handles,
+            Ok(other) => {
+                eprintln!("[plugin] unexpected SelectedHandles response: {other:?}");
+                Vec::new()
+            }
+            Err(e) => {
+                eprintln!("[plugin] SelectedHandles failed: {e}");
+                Vec::new()
+            }
+        }
+    }
+
+    fn set_current_layer(&mut self, name: &str) -> bool {
+        match self.request(PluginRequest::SetCurrentLayer(name.to_string())) {
+            Ok(PluginResponse::Bool(b)) => b,
+            Ok(other) => {
+                eprintln!("[plugin] unexpected SetCurrentLayer response: {other:?}");
+                false
+            }
+            Err(e) => {
+                eprintln!("[plugin] SetCurrentLayer failed: {e}");
+                false
+            }
+        }
+    }
+
+    fn ensure_layers(&mut self, defs: Vec<crate::host::LayerDef>) -> usize {
+        match self.request(PluginRequest::EnsureLayers(defs)) {
+            Ok(PluginResponse::Count(n)) => {
+                if n > 0 {
+                    self.document_cache = OnceCell::new();
+                }
+                n
+            }
+            Ok(other) => {
+                eprintln!("[plugin] unexpected EnsureLayers response: {other:?}");
+                0
+            }
+            Err(e) => {
+                eprintln!("[plugin] EnsureLayers failed: {e}");
+                0
+            }
+        }
+    }
+
+    fn ensure_linetypes(&mut self, defs: Vec<crate::host::LinetypeDef>) -> usize {
+        match self.request(PluginRequest::EnsureLinetypes(defs)) {
+            Ok(PluginResponse::Count(n)) => {
+                if n > 0 {
+                    self.document_cache = OnceCell::new();
+                }
+                n
+            }
+            Ok(other) => {
+                eprintln!("[plugin] unexpected EnsureLinetypes response: {other:?}");
+                0
+            }
+            Err(e) => {
+                eprintln!("[plugin] EnsureLinetypes failed: {e}");
+                0
+            }
+        }
+    }
+
+    fn ensure_text_styles(&mut self, defs: Vec<crate::host::TextStyleDef>) -> usize {
+        match self.request(PluginRequest::EnsureTextStyles(defs)) {
+            Ok(PluginResponse::Count(n)) => {
+                if n > 0 {
+                    self.document_cache = OnceCell::new();
+                }
+                n
+            }
+            Ok(other) => {
+                eprintln!("[plugin] unexpected EnsureTextStyles response: {other:?}");
+                0
+            }
+            Err(e) => {
+                eprintln!("[plugin] EnsureTextStyles failed: {e}");
+                0
+            }
+        }
+    }
+
+    fn show_frame_picker(&mut self, frames: Vec<crate::host::FrameItem>) -> bool {
+        match self.request(PluginRequest::ShowFramePicker(frames)) {
+            Ok(PluginResponse::Bool(b)) => b,
+            Ok(other) => {
+                eprintln!("[plugin] unexpected ShowFramePicker response: {other:?}");
+                false
+            }
+            Err(e) => {
+                eprintln!("[plugin] ShowFramePicker failed: {e}");
+                false
+            }
+        }
+    }
+
+    fn take_pending_frame_selection(&mut self) -> Option<crate::host::FrameSelection> {
+        match self.request(PluginRequest::TakePendingFrameSelection) {
+            Ok(PluginResponse::FrameSelection(sel)) => sel,
+            Ok(other) => {
+                eprintln!("[plugin] unexpected TakePendingFrameSelection response: {other:?}");
+                None
+            }
+            Err(e) => {
+                eprintln!("[plugin] TakePendingFrameSelection failed: {e}");
+                None
+            }
+        }
+    }
+
+    fn import_frame_block(
+        &mut self,
+        req: crate::host::ImportFrameBlockRequest,
+    ) -> Result<Vec<acadrust::entities::AttributeDefinition>, String> {
+        match self.request(PluginRequest::ImportFrameBlock(req)) {
+            Ok(PluginResponse::ImportFrameBlock(result)) => {
+                if result.is_ok() {
+                    self.document_cache = OnceCell::new();
+                }
+                result
+            }
+            Ok(other) => {
+                eprintln!("[plugin] unexpected ImportFrameBlock response: {other:?}");
+                Err(format!("unexpected response: {other:?}"))
+            }
+            Err(e) => {
+                eprintln!("[plugin] ImportFrameBlock failed: {e}");
+                Err(e.to_string())
+            }
+        }
+    }
+
+    fn ensure_dim_styles(&mut self, defs: Vec<crate::host::DimStyleDef>) -> usize {
+        match self.request(PluginRequest::EnsureDimStyles(defs)) {
+            Ok(PluginResponse::Count(n)) => {
+                if n > 0 {
+                    self.document_cache = OnceCell::new();
+                }
+                n
+            }
+            Ok(other) => {
+                eprintln!("[plugin] unexpected EnsureDimStyles response: {other:?}");
+                0
+            }
+            Err(e) => {
+                eprintln!("[plugin] EnsureDimStyles failed: {e}");
+                0
+            }
+        }
+    }
+
+    fn add_block_record(
+        &mut self,
+        name: &str,
+        entities: Vec<acadrust::EntityType>,
+    ) -> Result<acadrust::Handle, String> {
+        match self.request(PluginRequest::AddBlockRecord {
+            name: name.to_string(),
+            entities,
+        }) {
+            Ok(PluginResponse::Handle(h)) => {
+                self.document_cache = OnceCell::new();
+                Ok(h)
+            }
+            Ok(PluginResponse::Error(e)) => Err(e),
+            Ok(other) => {
+                eprintln!("[plugin] unexpected AddBlockRecord response: {other:?}");
+                Err("unexpected AddBlockRecord response".to_string())
+            }
+            Err(e) => Err(e.to_string()),
+        }
+    }
 }
 
 #[cfg(test)]

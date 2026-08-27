@@ -9334,7 +9334,7 @@ impl Scene {
     }
 
     /// Full tessellation pipeline for one entity.
-    fn tessellate_one(&self, e: &EntityType) -> Vec<WireModel> {
+    pub(crate) fn tessellate_one(&self, e: &EntityType) -> Vec<WireModel> {
         let bg = if self.current_layout == "Model" {
             self.bg_color
         } else {

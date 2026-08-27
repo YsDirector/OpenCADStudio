@@ -74,5 +74,24 @@ pub fn handle_plugin_request(
             PluginResponse::Ok
         }
         GetTabId => PluginResponse::TabId(host.tab_id()),
+        SelectedHandles => PluginResponse::Handles(host.selected_handles()),
+        SetCurrentLayer(name) => PluginResponse::Bool(host.set_current_layer(&name)),
+        EnsureLayers(defs) => PluginResponse::Count(host.ensure_layers(defs)),
+        EnsureLinetypes(defs) => PluginResponse::Count(host.ensure_linetypes(defs)),
+        EnsureTextStyles(defs) => PluginResponse::Count(host.ensure_text_styles(defs)),
+        ShowFramePicker(frames) => PluginResponse::Bool(host.show_frame_picker(frames)),
+        TakePendingFrameSelection => {
+            PluginResponse::FrameSelection(host.take_pending_frame_selection())
+        }
+        ImportFrameBlock(req) => {
+            PluginResponse::ImportFrameBlock(host.import_frame_block(req))
+        }
+        EnsureDimStyles(defs) => PluginResponse::Count(host.ensure_dim_styles(defs)),
+        AddBlockRecord { name, entities } => {
+            match host.add_block_record(&name, entities) {
+                Ok(h) => PluginResponse::Handle(h),
+                Err(e) => PluginResponse::Error(e),
+            }
+        }
     }
 }

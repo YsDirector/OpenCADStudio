@@ -55,7 +55,8 @@ fn base_max_floor(base: Duration, kind: &'static str) -> Duration {
     let floor = match kind {
         "GetManifest" | "GetRibbon" => Duration::from_secs(5),
         "Dispatch" => Duration::from_secs(10),
-        "InteractiveEvent" | "GetPrompt" | "NeedsEntityPick" => Duration::from_secs(2),
+        "InteractiveEvent" | "GetPrompt" | "NeedsEntityPick" | "WantsTextInput"
+        | "WantsMouseMove" | "EntityPickOsnap" => Duration::from_secs(2),
         "ExecuteCode" => execute_code_timeout(),
         _ => Duration::from_secs(1),
     };
@@ -70,6 +71,9 @@ fn request_kind(req: &HostRequest) -> &'static str {
         HostRequest::InteractiveEvent { .. } => "InteractiveEvent",
         HostRequest::GetPrompt { .. } => "GetPrompt",
         HostRequest::NeedsEntityPick { .. } => "NeedsEntityPick",
+        HostRequest::WantsTextInput { .. } => "WantsTextInput",
+        HostRequest::WantsMouseMove { .. } => "WantsMouseMove",
+        HostRequest::EntityPickOsnap { .. } => "EntityPickOsnap",
         HostRequest::ExecuteCode { .. } => "ExecuteCode",
         HostRequest::Shutdown => "Shutdown",
     }
