@@ -6,7 +6,12 @@
 /// plugins and appends `document_reader` / `document_view` at the end of the
 /// vtable so API v2 plugins keep working. v4 adds full-duplex notifications on
 /// a multiplexed socket while leaving the V2/V3 ABI and protocol untouched.
-pub const API_VERSION: u32 = 4;
+/// v5 appends the layer / selection / text-style / frame-insert surface
+/// (`selected_handles`, `set_current_layer`, `ensure_layers`,
+/// `ensure_linetypes`, `ensure_text_styles`, frame picker and block insertion)
+/// for the OCSMechanical plugin — again appended at the end of the vtable so
+/// older plugins keep loading.
+pub const API_VERSION: u32 = 5;
 
 /// Oldest plugin API major the current host still loads. This keeps previously
 /// compiled cdylibs usable as long as their vtable layout is a prefix of the

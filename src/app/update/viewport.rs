@@ -1694,19 +1694,28 @@ impl OpenCADStudio {
                 .as_ref()
                 .map(|c| c.needs_tangent_pick())
                 .unwrap_or(false);
-            self.tabs[i].snap_result = if needs_entity || is_gathering || needs_structure {
-                None
-            } else if needs_tan {
-                self.snapper.snap_tangent_only(
-                    snap_cursor.as_vec3(),
-                    p,
-                    &snap_candidates,
-                    view_rot,
-                    eye,
-                    bounds,
-                )
-            } else {
-                let (go, gr) = self.drafting_grid_basis(i);
+            // Plugin POWERDIM-style commands want object-snap at entity-pick
+            // clicks so a snapped pick point can be told apart from an object
+            // selection click — keep the snapper running for them.
+            let plugin_osnap = self.tabs[i]
+                .active_cmd
+                .as_ref()
+                .map(|c| c.entity_pick_applies_osnap())
+                .unwrap_or(false);
+            self.tabs[i].snap_result =
+                if (needs_entity && !plugin_osnap) || is_gathering || needs_structure {
+                    None
+                } else if needs_tan {
+                    self.snapper.snap_tangent_only(
+                        snap_cursor.as_vec3(),
+                        p,
+                        &snap_candidates,
+                        view_rot,
+                        eye,
+                        bounds,
+                    )
+                } else {
+                    let (go, gr) = self.drafting_grid_basis(i);
                 // The snapper is a screen-space (f32) engine; the f64
                 // base only matters for typed-input precision, so hand it
                 // the downcast point here.
@@ -2195,6 +2204,17 @@ impl OpenCADStudio {
                     guide.pattern = [0.5, -0.3, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
                     previews.push(guide);
                 }
+            }
+            // Plugin interactive commands may hand back the entity they *would*
+            // commit at the cursor (e.g. a dimension that follows the mouse);
+            // tessellate it into the transient preview set. The entity is
+            // owned, so the `active_cmd` borrow ends before the scene borrow.
+            if let Some(ent) = self.tabs[i]
+                .active_cmd
+                .as_mut()
+                .and_then(|c| c.plugin_preview_entity(effective))
+            {
+                previews.extend(self.tabs[i].scene.tessellate_one(&ent));
             }
             self.tabs[i].scene.set_preview_wires(previews);
         } else {
@@ -3019,7 +3039,7 @@ impl OpenCADStudio {
             let snap_taken = self.tabs[i].snap_result.take();
             let tangent_obj_at_click = snap_taken.and_then(|s| s.tangent_obj);
 
-            let world_pt = {
+            let (world_pt, click_snap) = {
                 // Cursor → model point (viewport camera inside a viewport,
                 // else paper sheet → model). Model space throughout.
                 let raw = self.cursor_model_point(i, &edit_cam, p, bounds);
@@ -3057,7 +3077,12 @@ impl OpenCADStudio {
                     .as_ref()
                     .map(|c| c.needs_entity_pick())
                     .unwrap_or(false);
-                let snap_hit = if needs_entity_click {
+                let plugin_osnap = self.tabs[i]
+                    .active_cmd
+                    .as_ref()
+                    .map(|c| c.entity_pick_applies_osnap())
+                    .unwrap_or(false);
+                let snap_hit = if needs_entity_click && !plugin_osnap {
                     None
                 } else if needs_tan {
                     self.snapper.snap_tangent_only(
@@ -3192,7 +3217,11 @@ impl OpenCADStudio {
                         pt = r;
                     }
                 }
-                pt
+                // Carry the OSNAP result out to the entity-pick branch below
+                // so plugin commands can tell a snapped pick point from an
+                // object-selection click.
+                let click_snap = snap_hit.map(|s| s.world);
+                (pt, click_snap)
             };
 
             // `world_pt` is in offset-relative (local) space, matching
@@ -3342,6 +3371,12 @@ impl OpenCADStudio {
 
                     let shift = self.shift_down;
                     let result = self.tabs[i].active_cmd.as_mut().map(|c| {
+                        // Plugin commands that opted into object-pick snapping
+                        // learn whether the click landed on an OSNAP point
+                        // (and where) before their pick handler runs.
+                        if c.entity_pick_applies_osnap() {
+                            c.inject_pick_snap(click_snap);
+                        }
                         // Shift-swap state for TRIM/EXTEND (#336).
                         c.set_shift(shift);
                         c.on_entity_pick(handle, pick_wcs)
@@ -3406,6 +3441,22 @@ impl OpenCADStudio {
                         selection.box_crossing = false;
                     }
                     None
+                } else if self.tabs[i]
+                    .active_cmd
+                    .as_ref()
+                    .is_some_and(|c| c.entity_pick_blank_forwards())
+                {
+                    // 插件 POWERDIM 类命令：点击空白也回调（handle=NULL），
+                    // 由命令决定（放置标注 / 拾取点 / 忽略）。两种拾取模式都需要。
+                    let shift = self.shift_down;
+                    let result = self.tabs[i].active_cmd.as_mut().map(|c| {
+                        if c.entity_pick_applies_osnap() {
+                            c.inject_pick_snap(click_snap);
+                        }
+                        c.set_shift(shift);
+                        c.on_entity_pick(acadrust::Handle::NULL, pick_wcs)
+                    });
+                    result
                 } else {
                     self.command_line
                         .push_info(crate::t!("Nothing found at that point.").as_ref());

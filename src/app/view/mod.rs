@@ -722,6 +722,11 @@ impl OpenCADStudio {
                 pane_move_rect,
                 pane_drop_rect,
                 tab.pan_mode || tab.orbit_mode || tab.zoom_dynamic_mode,
+                // 插件点选模式（关闭对象捕捉）时隐藏十字，只留拾取方框。
+                tab.active_cmd
+                    .as_ref()
+                    .map(|c| c.hides_crosshair())
+                    .unwrap_or(false),
                 self.ribbon.open_dropdown.is_some(),
                 hover_locked,
                 crosshair_background(tab, is_paper),

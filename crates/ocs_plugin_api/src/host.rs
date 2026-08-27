@@ -317,6 +317,61 @@ pub trait InteractiveCommand: Send {
     fn on_object_pick(&mut self, _handle: Handle, _pt: [f64; 3]) -> CommandStep {
         CommandStep::Cancel
     }
+
+    // ── API v5 interactive enhancements (appended at the end; old plugin
+    // binaries keep their vtable slots) ──────────────────────────────────────
+
+    /// True while the next typed line is captured as command text (a keyword
+    /// letter, a value, or an override) rather than a coordinate. Commands in
+    /// object-pick steps receive every typed token through
+    /// [`on_text_input`](Self::on_text_input) regardless, so POWERDIM-style
+    /// keyword steps (A/H/V/I/R/D) work without opting in here.
+    fn wants_text_input(&self) -> bool {
+        false
+    }
+
+    /// The user typed `text` (a keyword letter, or — when
+    /// [`wants_text_input`](Self::wants_text_input) — a free-form value).
+    fn on_text_input(&mut self, _text: &str) -> CommandStep {
+        CommandStep::NeedPoint
+    }
+
+    /// True when [`on_mouse_move`](Self::on_mouse_move) is meaningful — lets
+    /// the host skip the preview round-trip when a step shows no rubber band.
+    fn wants_mouse_move(&self) -> bool {
+        false
+    }
+
+    /// Called on every mouse-move while the command is active. Return the
+    /// entity that *would* be committed at `pt` (e.g. a dimension that follows
+    /// the cursor); the host renders it as a transient preview and discards it
+    /// on the next move or commit. `None` = no preview for this step.
+    fn on_mouse_move(&mut self, _pt: [f64; 3]) -> Option<EntityType> {
+        None
+    }
+
+    /// Entity pick with object-snap awareness. `snapped == true` means `pt` is
+    /// an OSNAP result (endpoint / centre / intersection / …) rather than the
+    /// raw click point — the plugin can use it to distinguish a *pick point*
+    /// click from an *object selection* click on the same entity. The default
+    /// forwards to [`on_object_pick`](Self::on_object_pick) so older plugins
+    /// behave exactly as before.
+    fn on_object_pick_snapped(
+        &mut self,
+        handle: Handle,
+        pt: [f64; 3],
+        _snapped: bool,
+    ) -> CommandStep {
+        self.on_object_pick(handle, pt)
+    }
+
+    /// Whether entity-pick clicks should also run the object snap. POWERDIM
+    /// toggles this when the user switches between pick-point mode (snap on)
+    /// and segment-select mode (snap off, click lines/circles directly).
+    /// Defaults to `true` (current behaviour).
+    fn entity_pick_applies_osnap(&self) -> bool {
+        true
+    }
 }
 
 /// The outcome of an [`InteractiveCommand`] step.
@@ -333,6 +388,11 @@ pub enum CommandStep {
     Done,
     /// Cancel the command.
     Cancel,
+    /// The input was not consumed — let the host interpret it normally (e.g.
+    /// a non-keyword token at an entity-pick step falls through to the hex
+    /// handle reading). Without this, a plugin `on_text_input` that returns
+    /// `NeedPoint` would swallow every typed token and block handle picks.
+    Ignored,
 }
 
 /// Export a `BuiltinPlugin` from a `cdylib` so the host can load it at runtime.
@@ -370,6 +430,216 @@ macro_rules! export_plugin {
             }
         }
     };
+}
+
+// ── API v5: layer / linetype / text-style / frame data (OCSMechanical) ────
+
+/// A layer definition for [`HostApi::ensure_layers`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LayerDef {
+    /// Layer name (case-insensitive uniqueness against existing layers).
+    pub name: String,
+    /// Layer color.
+    pub color: acadrust::types::Color,
+    /// Linetype name (must exist in the document's linetype table).
+    pub linetype: String,
+    /// Line weight.
+    pub lineweight: acadrust::types::LineWeight,
+    /// Whether the layer is plottable.
+    pub plottable: bool,
+    /// Whether the layer is created in the off (hidden) state.
+    pub off: bool,
+}
+
+/// A linetype definition for [`HostApi::ensure_linetypes`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LinetypeDef {
+    /// Linetype name.
+    pub name: String,
+    /// Human-readable description (the text after the comma in a .lin file).
+    pub description: String,
+    /// Dash pattern elements (the `A, ...` list).
+    pub elements: Vec<f64>,
+}
+
+/// A text-style definition for [`HostApi::ensure_text_styles`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TextStyleDef {
+    /// Style name.
+    pub name: String,
+    /// Primary font file name (e.g. "txt" or "Unicode").
+    pub font_file: String,
+    /// Big font file name (Asian languages).
+    pub big_font_file: String,
+    /// TrueType font name.
+    pub true_type_font: String,
+    /// Fixed text height (0 = variable).
+    pub height: f64,
+    /// Width factor.
+    pub width_factor: f64,
+    /// Annotative: entities using this style scale with the annotation scale.
+    pub annotative: bool,
+    /// Whether this STYLE record names an SHX shape file.
+    pub is_shape_file: bool,
+    /// Whether glyphs are drawn vertically.
+    pub is_vertical: bool,
+}
+
+/// One selectable frame drawing shown in the host's frame picker dialog.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FrameItem {
+    /// Absolute path to the DWG file.
+    pub path: String,
+    /// Display label (usually the file stem).
+    pub label: String,
+}
+
+/// The user's choice from the frame picker dialog (filled scale included).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FrameSelection {
+    /// Absolute path to the chosen DWG file.
+    pub path: String,
+    /// Scale numerator (value before the colon).
+    pub scale_v1: i64,
+    /// Scale denominator (value after the colon).
+    pub scale_v2: i64,
+}
+
+/// Request for [`HostApi::import_frame_block`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ImportFrameBlockRequest {
+    /// Absolute path to the frame DWG.
+    pub path: String,
+    /// Block name to define the frame under.
+    pub block_name: String,
+}
+
+/// A dimension-style definition for [`HostApi::ensure_dim_styles`].
+///
+/// Fields not present in this def keep whatever the document's current
+/// dimension style already specifies (the host clones it as the template), so
+/// a plugin only needs to list the values it wants to guarantee — typically
+/// the GB mechanical style this toolkit ships.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DimStyleDef {
+    /// Style name (case-insensitive uniqueness against existing styles).
+    pub name: String,
+    /// Switch the document's active dimension style to this one after creating.
+    pub make_current: bool,
+    /// Text height (DIMTXT, code 140).
+    pub dimtxt: f64,
+    /// Arrow size (DIMASZ, code 41).
+    pub dimasz: f64,
+    /// Center mark size (DIMCEN, code 141): positive = cross, negative =
+    /// centre lines, 0 = none.
+    pub dimcen: f64,
+    /// Extension beyond the dimension line (DIMEXE, code 44).
+    pub dimexe: f64,
+    /// Offset from the extension-line origin (DIMEXO, code 42).
+    pub dimexo: f64,
+    /// Gap around the dimension text (DIMGAP, code 147).
+    pub dimgap: f64,
+    /// Baseline / continuation increment (DIMDLI, code 43).
+    pub dimdli: f64,
+    /// Dimension-line extension (DIMDLE, code 46).
+    pub dimdle: f64,
+    /// Overall scale factor (DIMSCALE, code 40). The renderer multiplies every
+    /// size by this, so a frame-scale style (e.g. ×2) is expressed as
+    /// `dimscale = 2` with the base sizes unchanged.
+    pub dimscale: f64,
+    /// Text vertical alignment (DIMTAD, code 77): 0 centered, 1 above.
+    pub dimtad: i16,
+    /// Text horizontal justification (DIMJUST, code 280).
+    pub dimjust: i16,
+    /// Decimal places for primary units (DIMDEC, code 271).
+    pub dimdec: i16,
+    /// Linear unit format (DIMLUNIT, code 277): 2 = decimal.
+    pub dimlunit: i16,
+    /// Zero suppression (DIMZIN, code 78): 8 = suppress trailing zeros.
+    pub dimzin: i16,
+    /// Angular unit format (DIMAUNIT, code 275): 0 = degrees.
+    pub dimaunit: i16,
+    /// Angular decimal places (DIMADEC, code 179).
+    pub dimadec: i16,
+    /// Text inside horizontal (DIMTIH, code 73).
+    pub dimtih: bool,
+    /// Text outside horizontal (DIMTOH, code 74).
+    pub dimtoh: bool,
+    /// Force text inside extension lines (DIMTIX, code 174).
+    pub dimtix: bool,
+    /// Suppress outside extension lines (DIMSOXD, code 175).
+    pub dimsoxd: bool,
+    /// Force the dimension line inside the extension lines (DIMTOFL, code 172).
+    pub dimtofl: bool,
+    /// Tolerance generation (DIMTOL, code 71).
+    pub dimtol: bool,
+    /// Plus tolerance (DIMTP, code 47).
+    pub dimtp: f64,
+    /// Minus tolerance (DIMTM, code 48).
+    pub dimtm: f64,
+    /// Tolerance decimal places (DIMTDEC, code 272).
+    pub dimtdec: i16,
+    /// Dimension-line color (DIMCLRD, code 176; ACI).
+    pub dimclrd: i16,
+    /// Extension-line color (DIMCLRE, code 177; ACI).
+    pub dimclre: i16,
+    /// Dimension-text color (DIMCLRT, code 178; ACI).
+    pub dimclrt: i16,
+    /// Dimension-line lineweight (DIMLWD, code 371; -1 = BYBLOCK).
+    pub dimlwd: i16,
+    /// Extension-line lineweight (DIMLWE, code 372; -1 = BYBLOCK).
+    pub dimlwe: i16,
+    /// Text style name (DIMTXSTY) — resolved to a handle against the
+    /// document's text styles; falls back to the template's when absent.
+    pub dimtxsty: String,
+    /// Text suffix / postfix (DIMPOST, code 3).
+    pub dimpost: String,
+    /// Annotative: entities using this style scale with the annotation scale
+    /// instead of DIMSCALE. Mutually exclusive with a positive `dimscale`.
+    pub annotative: bool,
+}
+
+impl Default for DimStyleDef {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            make_current: false,
+            dimtxt: 0.0,
+            dimasz: 0.0,
+            dimcen: 0.09,
+            dimexe: 0.0,
+            dimexo: 0.0,
+            dimgap: 0.0,
+            dimdli: 0.0,
+            dimdle: 0.0,
+            dimscale: 1.0,
+            dimtad: 0,
+            dimjust: 0,
+            dimdec: 2,
+            dimlunit: 2,
+            dimzin: 8,
+            dimaunit: 0,
+            dimadec: 0,
+            dimtih: false,
+            dimtoh: false,
+            dimtix: false,
+            dimsoxd: false,
+            dimtofl: false,
+            dimtol: false,
+            dimtp: 0.0,
+            dimtm: 0.0,
+            dimtdec: 2,
+            dimclrd: 0,
+            dimclre: 0,
+            dimclrt: 0,
+            dimlwd: -1,
+            dimlwe: -1,
+            dimtxsty: String::new(),
+            dimpost: String::new(),
+            annotative: false,
+        }
+    }
 }
 
 /// The plugin-facing runtime surface for one active document tab.
@@ -518,6 +788,85 @@ pub trait HostApi {
     /// entity; hosts should override it for batch efficiency.
     fn add_entities(&mut self, entities: Vec<EntityType>) -> Vec<Handle> {
         entities.into_iter().map(|e| self.add_entity(e)).collect()
+    }
+
+    // ── API v5 (added at the very end; vtable-prefix compatible) ────────────
+    // Layer / selection / text-style / frame surface for the OCSMechanical
+    // plugin. Defaults keep older hosts and test hosts compiling: read-only
+    // queries return empty, mutating calls report "not supported".
+
+    /// Handles of the currently selected entities in the active document.
+    fn selected_handles(&self) -> Vec<Handle> {
+        Vec::new()
+    }
+
+    /// Set the current layer (CLAYER) by name. Mirrors the host's LAYMCUR
+    /// behaviour: header + per-tab default + ribbon + layers panel stay in
+    /// sync. Returns `false` when the layer does not exist.
+    fn set_current_layer(&mut self, _name: &str) -> bool {
+        false
+    }
+
+    /// Create any missing layers from `defs` (case-insensitive). Returns the
+    /// number of layers actually created.
+    fn ensure_layers(&mut self, _defs: Vec<LayerDef>) -> usize {
+        0
+    }
+
+    /// Create any missing linetypes from `defs` (case-insensitive). Returns
+    /// the number of linetypes actually created.
+    fn ensure_linetypes(&mut self, _defs: Vec<LinetypeDef>) -> usize {
+        0
+    }
+
+    /// Create any missing text styles from `defs` (case-insensitive). Returns
+    /// the number of styles actually created.
+    fn ensure_text_styles(&mut self, _defs: Vec<TextStyleDef>) -> usize {
+        0
+    }
+
+    /// Ask the host to open the OCSM frame picker modal with `frames`. Returns
+    /// `true` when the dialog was opened; the chosen frame + scale is retrieved
+    /// later via [`take_pending_frame_selection`](Self::take_pending_frame_selection).
+    fn show_frame_picker(&mut self, _frames: Vec<FrameItem>) -> bool {
+        false
+    }
+
+    /// Take the frame selection the user made in the picker modal, if any.
+    fn take_pending_frame_selection(&mut self) -> Option<FrameSelection> {
+        None
+    }
+
+    /// Load `req.path` (a frame DWG), merge its layers/linetypes/text styles
+    /// into the document, and define it as a block under `req.block_name` when
+    /// absent. Returns the block's attribute definitions (ATTDEFs) in draw
+    /// order so the plugin can build an INSERT with concrete attribute values.
+    fn import_frame_block(
+        &mut self,
+        _req: ImportFrameBlockRequest,
+    ) -> Result<Vec<acadrust::entities::AttributeDefinition>, String> {
+        Err("import_frame_block: not supported by this host".to_string())
+    }
+
+    /// Create any missing dimension styles from `defs` (case-insensitive),
+    /// using the document's current dimension style as the template for the
+    /// fields a def does not specify. Returns the number of styles created.
+    /// When a def sets `make_current`, the document's active dimension style
+    /// switches to it.
+    fn ensure_dim_styles(&mut self, _defs: Vec<DimStyleDef>) -> usize {
+        0
+    }
+
+    /// Create a block definition named `name` whose members are `entities`
+    /// (world coordinates; the block inserts at the origin). Fails when a
+    /// block with that name already exists. Used for baked dimension
+    /// graphics (anonymous `*D` blocks).
+    fn add_block_record(
+        &mut self,
+        _name: &str,
+        _entities: Vec<acadrust::EntityType>,
+    ) -> Result<acadrust::Handle, String> {
+        Err("add_block_record: not supported by this host".to_string())
     }
 }
 

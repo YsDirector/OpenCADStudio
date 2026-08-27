@@ -203,7 +203,8 @@ fn base_max_floor(base: Duration, kind: &'static str) -> Duration {
     let floor = match kind {
         "GetManifest" | "GetRibbon" => Duration::from_secs(5),
         "Dispatch" => Duration::from_secs(10),
-        "InteractiveEvent" | "GetPrompt" | "NeedsEntityPick" => Duration::from_secs(2),
+        "InteractiveEvent" | "GetPrompt" | "NeedsEntityPick" | "WantsTextInput"
+        | "WantsMouseMove" | "EntityPickOsnap" => Duration::from_secs(2),
         "ExecuteCode" => execute_code_timeout(),
         _ => Duration::from_secs(1),
     };
@@ -218,6 +219,9 @@ fn request_kind(req: &HostRequest) -> &'static str {
         HostRequest::InteractiveEvent { .. } => "InteractiveEvent",
         HostRequest::GetPrompt { .. } => "GetPrompt",
         HostRequest::NeedsEntityPick { .. } => "NeedsEntityPick",
+        HostRequest::WantsTextInput { .. } => "WantsTextInput",
+        HostRequest::WantsMouseMove { .. } => "WantsMouseMove",
+        HostRequest::EntityPickOsnap { .. } => "EntityPickOsnap",
         HostRequest::ExecuteCode { .. } => "ExecuteCode",
         HostRequest::Shutdown => "Shutdown",
     }
@@ -653,6 +657,123 @@ impl PluginProcess {
                     PluginToHost::Request(req) => {
                         let resp = crate::ipc::protocol::PluginResponse::Error(format!(
                             "unexpected nested request during needs_entity_pick: {req:?}"
+                        ));
+                        self.send_response(resp)?;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Ask the plugin process whether the interactive command wants typed text
+    /// input (used to route command-line tokens before the generic paths).
+    pub fn get_wants_text_input(&self, command_id: u64) -> Result<bool, PluginError> {
+        self.call_wants_bool(command_id, "WantsTextInput", |id| {
+            HostRequest::WantsTextInput { command_id: id }
+        })
+    }
+
+    /// Ask the plugin process whether the interactive command wants mouse-move
+    /// previews (skips the per-move preview round-trip when not).
+    pub fn get_wants_mouse_move(&self, command_id: u64) -> Result<bool, PluginError> {
+        self.call_wants_bool(command_id, "WantsMouseMove", |id| {
+            HostRequest::WantsMouseMove { command_id: id }
+        })
+    }
+
+    /// Ask the plugin process whether entity-pick clicks should run object
+    /// snap (POWERDIM's pick-point vs segment-select mode toggle).
+    pub fn get_entity_pick_osnap(&self, command_id: u64) -> Result<bool, PluginError> {
+        self.call_wants_bool(command_id, "EntityPickOsnap", |id| {
+            HostRequest::EntityPickOsnap { command_id: id }
+        })
+    }
+
+    /// V3/V4-shared helper for the two boolean capability queries.
+    fn call_wants_bool(
+        &self,
+        command_id: u64,
+        kind: &'static str,
+        make_req: impl Fn(u64) -> HostRequest,
+    ) -> Result<bool, PluginError> {
+        if let Some(v4) = &self.v4 {
+            let resp = v4.call(&mut NullHost, make_req(command_id), &mut |_| {})?;
+            match resp {
+                HostResponse::Bool(b) => Ok(b),
+                other => Err(PluginError::UnexpectedResponse(Box::new(other))),
+            }
+        } else {
+            self.send_request(make_req(command_id))?;
+            let timeout = request_timeout(kind);
+            let deadline = Instant::now() + timeout;
+            loop {
+                match recv_with_deadline::<PluginToHost>(
+                    &self.stream,
+                    &self.child,
+                    deadline,
+                    timeout,
+                    kind,
+                )? {
+                    PluginToHost::Response(HostResponse::Bool(b)) => return Ok(b),
+                    PluginToHost::Response(other) => {
+                        return Err(PluginError::UnexpectedResponse(Box::new(other)))
+                    }
+                    PluginToHost::Request(req) => {
+                        let resp = crate::ipc::protocol::PluginResponse::Error(format!(
+                            "unexpected nested request during {kind}: {req:?}"
+                        ));
+                        self.send_response(resp)?;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Ask the plugin process for a preview entity at `pt` (the entity the
+    /// command would commit there, or `None`). The host renders it transiently
+    /// and discards it on the next move / commit / cancel.
+    pub fn interactive_hover(
+        &self,
+        command_id: u64,
+        pt: [f64; 3],
+    ) -> Result<Option<EntityType>, PluginError> {
+        use crate::ipc::protocol::InteractiveEvent;
+        if let Some(v4) = &self.v4 {
+            let resp = v4.call(
+                &mut NullHost,
+                HostRequest::InteractiveEvent {
+                    command_id,
+                    event: InteractiveEvent::MouseMove(pt),
+                },
+                &mut |_| {},
+            )?;
+            match resp {
+                HostResponse::Preview(ent) => Ok(ent),
+                other => Err(PluginError::UnexpectedResponse(Box::new(other))),
+            }
+        } else {
+            self.send_request(HostRequest::InteractiveEvent {
+                command_id,
+                event: InteractiveEvent::MouseMove(pt),
+            })?;
+            let kind = "InteractiveEvent";
+            let timeout = request_timeout(kind);
+            let deadline = Instant::now() + timeout;
+            loop {
+                match recv_with_deadline::<PluginToHost>(
+                    &self.stream,
+                    &self.child,
+                    deadline,
+                    timeout,
+                    kind,
+                )? {
+                    PluginToHost::Response(HostResponse::Preview(ent)) => return Ok(ent),
+                    PluginToHost::Response(other) => {
+                        return Err(PluginError::UnexpectedResponse(Box::new(other)))
+                    }
+                    PluginToHost::Request(req) => {
+                        let resp = crate::ipc::protocol::PluginResponse::Error(format!(
+                            "unexpected nested request during interactive_hover: {req:?}"
                         ));
                         self.send_response(resp)?;
                     }

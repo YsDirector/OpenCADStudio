@@ -3885,6 +3885,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "ocs_ocsm"
+version = "0.1.0"
+dependencies = [
+ "ocs_plugin_api",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "ocs_ocsm_mcp"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+]
+
+[[package]]
 name = "ocs_plugin_api"
 version = "0.2.0"
 dependencies = [

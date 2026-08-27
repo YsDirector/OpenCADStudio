@@ -28,6 +28,7 @@ impl OpenCADStudio {
             Some(K::LayoutManager) => crate::tr!("modal", "layout-manager"),
             Some(K::ScaleManager) => crate::tr!("modal", "scale-manager"),
             Some(K::AnnoObjectScale) => crate::tr!("modal", "annotation-object-scale"),
+            Some(K::OcsmFramePicker) => "OCSM 图框插入".to_string(),
             Some(K::Plotstyle) => crate::tr!("modal", "plot-style-editor"),
             Some(K::TextStyle) => crate::tr!("modal", "text-style-manager"),
             Some(K::MlStyle) => crate::tr!("modal", "multiline-style-manager"),
@@ -362,6 +363,80 @@ impl OpenCADStudio {
                     },
                 )
             }
+            // OCSM 图框插入：图框列表 + 比例（值1:值2）输入。确定后由 update
+            // 处理把选择存到 ocsm_pending_frame_selection 并回调插件命令。
+            super::super::ModalKind::OcsmFramePicker => automatic_flow(ex, |_flow| {
+                use iced::widget::text_input;
+                let frames: &[ocs_plugin_api::host::FrameItem] = self
+                    .ocsm_frame_picker
+                    .as_ref()
+                    .map(|s| s.frames.as_slice())
+                    .unwrap_or(&[]);
+                let selected = self.ocsm_frame_picker.as_ref().map(|s| s.selected).unwrap_or(0);
+                let v1 = self.ocsm_frame_picker.as_ref().map(|s| s.scale_v1.as_str()).unwrap_or("");
+                let v2 = self.ocsm_frame_picker.as_ref().map(|s| s.scale_v2.as_str()).unwrap_or("");
+                let error = self.ocsm_frame_picker.as_ref().and_then(|s| s.error.clone());
+                let mut col = column![row![
+                    text("选择图框（DWG）：").size(14),
+                    // 打开 frame 文件夹，方便用户放入自定义图框。
+                    button(text("打开图框文件夹").size(12))
+                        .on_press(Message::OcsmFramePickerOpenDir)
+                        .padding([3, 8]),
+                ]
+                .spacing(12)];
+                // 下拉选框（动态加载的 frame 列表）。
+                col = col.push(iced::widget::pick_list(
+                    frames.get(selected),
+                    frames,
+                    |f: &ocs_plugin_api::host::FrameItem| f.label.clone(),
+                )
+                .on_select(move |f: ocs_plugin_api::host::FrameItem| {
+                    let idx = frames
+                        .iter()
+                        .position(|x| x.path == f.path)
+                        .unwrap_or(0);
+                    Message::OcsmFramePickerSelect(idx)
+                })
+                .width(320)
+                .padding([4, 8]));
+                col = col.push(
+                    row![
+                        text("比例：").size(14),
+                        text_input("值1", v1)
+                            .on_input(Message::OcsmFramePickerScaleV1)
+                            .width(72)
+                            .padding([4, 6]),
+                        text(" : ").size(14),
+                        text_input("值2", v2)
+                            .on_input(Message::OcsmFramePickerScaleV2)
+                            .width(72)
+                            .padding([4, 6]),
+                    ]
+                    .spacing(4)
+                    .align_y(iced::Alignment::Center),
+                );
+                if let Some(err) = error {
+                    col = col.push(
+                        text(err)
+                            .color(iced::Color::from_rgb(0.85, 0.3, 0.3))
+                            .size(12),
+                    );
+                } else {
+                    col = col.push(Space::new().height(14));
+                }
+                col = col.push(
+                    row![
+                        dialog_button(
+                            "取消",
+                            Message::OcsmFramePickerCancel,
+                            button::secondary,
+                        ),
+                        dialog_button("确定", Message::OcsmFramePickerOk, button::primary),
+                    ]
+                    .spacing(8),
+                );
+                container(col.spacing(8).padding(16)).into()
+            }),
             super::super::ModalKind::AnnoObjectScale => {
                 let tab = &self.tabs[self.active_tab];
                 let entity = self.anno_object_scale_target;
