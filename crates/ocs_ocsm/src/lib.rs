@@ -862,7 +862,9 @@ impl PowerDim {
                 d.base.text_middle_point = pt;
                 d.base.insertion_point = pt;
                 d.leader_length = leader;
-                d.base.actual_measurement = d.measurement();
+                // 注意：v0.9.8 cadcodec 的 Diameter measurement() = 两点距离
+                //（圆心↔圆周点 = 半径），直径需 ×2。
+                d.base.actual_measurement = d.measurement() * 2.0;
                 Dimension::Diameter(d)
             }
             CircleMode::Radius => {

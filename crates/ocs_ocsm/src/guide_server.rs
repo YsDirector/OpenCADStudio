@@ -1466,9 +1466,11 @@ mod tests {
         assert_eq!(d.leader_length, 0.0);
         assert_eq!(d.base.common.layer, "7标注层");
         assert_eq!(d.base.style_name, "OCSM_GB");
-        // 测量值 = 直径 100（actual 与实时 measurement 一致）。
+        // 测量值 = 直径 100（actual 手动设 2×半径）。
         assert!((d.base.actual_measurement - 100.0).abs() < 1e-6);
-        assert!((d.measurement() - 100.0).abs() < 1e-6);
+        // v0.9.8 cadcodec：Diameter measurement() = 两点距离（圆心↔圆周点 = 半径 50），
+        // 不再 ×2；actual_measurement 由插件手动设为直径。
+        assert!((d.measurement() - 50.0).abs() < 1e-6);
         // 文字随引线旋转（径向 45°）+ 锚点上方（BottomCenter）。
         let expect_rot = (35.35533905932737f64).atan2(35.35533905932738);
         assert!((dim.base().text_rotation - expect_rot).abs() < 1e-6);

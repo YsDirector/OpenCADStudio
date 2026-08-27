@@ -1784,20 +1784,35 @@ mod tests {
             Some(EntityType::Dimension(d)) => d.base().block_name.clone(),
             _ => panic!("dimension missing"),
         };
-        // The longest baked segment is the diameter line; its endpoints span the
-        // full diameter (length ~= 2*radius = 10) centred on `center`.
-        let diam = baked_segments(&doc, &name)
-            .into_iter()
-            .find(|(a, b)| {
-                let len = ((b.x - a.x).powi(2) + (b.y - a.y).powi(2)).sqrt();
-                (len - 10.0).abs() < 1e-6
+        // 注意：v0.9.8 bake 把直径线拆成两段（edge→center、center→far，各长 radius=5）；
+        // 上游 v0.9.8 该测试仍找单段 10 而必然失败（上游 bake 改动未同步测试）。
+        // 这里改为验证：两段合计 = 完整直径 10，且各段中点（含中心段）落在圆心。
+        let segs = baked_segments(&doc, &name);
+        // 过滤中心标记等短段，取两段半径长（≈5）的直径段。
+        let diam: Vec<_> = segs
+            .iter()
+            .filter(|(a, b)| {
+                let l = ((b.x - a.x).powi(2) + (b.y - a.y).powi(2)).sqrt();
+                l > 1.0
             })
-            .expect("diameter line spanning 2*radius");
-        let mid_x = (diam.0.x + diam.1.x) * 0.5;
-        let mid_y = (diam.0.y + diam.1.y) * 0.5;
+            .collect();
+        assert_eq!(diam.len(), 2, "应有两段半径长的直径段（各≈5）");
+        for (a, b) in &diam {
+            let l = ((b.x - a.x).powi(2) + (b.y - a.y).powi(2)).sqrt();
+            assert!((l - 5.0).abs() < 1e-6, "直径段长应≈5（半径）, got {l}");
+        }
+        // 两段拼合端点应覆盖圆周两端 (edge/far)，共享中点 = 圆心。
+        let (a0, b0) = diam[0];
+        let (a1, b1) = diam[1];
+        let mut xs = vec![a0.x, b0.x, a1.x, b1.x];
+        let mut ys = vec![a0.y, b0.y, a1.y, b1.y];
+        xs.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        ys.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let mid_x = (xs[0] + xs[3]) * 0.5;
+        let mid_y = (ys[0] + ys[3]) * 0.5;
         assert!(
             (mid_x - center.x).abs() < 1e-6 && (mid_y - center.y).abs() < 1e-6,
-            "diameter line must be centred on the circle centre, mid=({mid_x},{mid_y})"
+            "直径线应横跨圆心, mid=({mid_x},{mid_y})"
         );
     }
 
