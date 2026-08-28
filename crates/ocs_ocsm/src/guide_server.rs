@@ -164,6 +164,7 @@ fn route(
             (200, "text/html; charset=utf-8", GUI_HTML.to_string())
         }
         ("GET", t) if t.starts_with("/api/guide") => api_guide(target, sender),
+        ("GET", t) if t.starts_with("/api/tolerance") => api_tolerance(target),
         ("GET", t) if t.starts_with("/api/ping") => (200, json, r#"{"ok":true}"#.into()),
         ("POST", "/api/apply") => api_apply(body, sender, false),
         ("POST", "/api/apply_refresh") => api_apply(body, sender, true),
@@ -220,6 +221,15 @@ fn snapshot(sender: &Arc<dyn PluginRequestSender>) -> Result<acadrust::CadDocume
         Ok(other) => Err(format!("DocumentSnapshot 返回异常: {other:?}")),
         Err(e) => Err(e),
     }
+}
+
+/// 标记图纸已修改。宿主里 `tabs[i].dirty = true` 的唯一来源是 SetDirty；
+/// add/remove/write/bump 都不会置 dirty。不加的话，关闭 OCS 时不弹"未保存"
+/// 提示，引导服务生成的改动会静默丢失。与 ocs-mcp-bridge 的写套路一致：
+/// PushUndo → mutate → SetDirty → BumpGeometry。
+fn mark_dirty(sender: &Arc<dyn PluginRequestSender>) -> Result<(), String> {
+    req_timed(sender, PluginRequest::SetDirty, "SetDirty")?;
+    Ok(())
 }
 
 fn pe_url_record(url: &str) -> ExtendedDataRecord {
@@ -769,10 +779,23 @@ fn build_dimension(
     // 用 MTEXT 堆叠代码（对照 OCSMDIMGULIDE/公差.dxf 29C：
     // `{\A1;<>{}{\H0.71x;\C2;\S+0.024^  0;}}`）。`<>` = 测量值占位，OCS 渲染时替换。
     // 仅对原生 DIMENSION（线性）生效；直径/半径走匿名块块内 MTEXT，暂不注入。
-    if let (Some(up), Some(dn)) = (&params.up, &params.dn) {
-        if !up.is_empty() && !dn.is_empty() && params.guide_type == GuideType::Linear {
-            let tol_seg = format!("\\H0.71x;\\C2;\\S{}^{};", up, dn);
-            dim.base_mut().text = format!("{{\\A1;<>{{}}{{{}}}}}", tol_seg);
+    if params.guide_type == GuideType::Linear {
+        let mut up = params.up.clone();
+        let mut dn = params.dn.clone();
+        if let Some(fit) = &params.fit {
+            let m = dim.base().actual_measurement;
+            if m > 0.0 {
+                if let Some((u, d)) = crate::tolerance::resolve_fit_mm(m, fit) {
+                    up = Some(u);
+                    dn = Some(d);
+                }
+            }
+        }
+        if let (Some(up), Some(dn)) = (up, dn) {
+            if !up.is_empty() && !dn.is_empty() {
+                let tol_seg = format!("\\H0.71x;\\C2;\\S{}^{};", up, dn);
+                dim.base_mut().text = format!("{{\\A1;<>{{}}{{{}}}}}", tol_seg);
+            }
         }
     }
     Ok(dim)
@@ -1183,6 +1206,8 @@ fn do_apply(
         },
         "WriteRecord",
     )?;
+    // 写 PE_URL 也是图纸改动，需标记未保存。
+    mark_dirty(sender)?;
 
     if !refresh {
         return Ok(r#"{"ok":true}"#.into());
@@ -1207,6 +1232,7 @@ fn do_apply(
         let out = apply_datum(sender, &doc, p1, p2, &params)?;
         req_timed(sender, PluginRequest::RemoveEntity { handle }, "RemoveEntity")?;
         req_timed(sender, PluginRequest::BumpGeometry, "BumpGeometry")?;
+        mark_dirty(sender)?;
         return Ok(out);
     }
 
@@ -1215,6 +1241,7 @@ fn do_apply(
         let out = apply_view(sender, &doc, p1, p2, &params)?;
         req_timed(sender, PluginRequest::RemoveEntity { handle }, "RemoveEntity")?;
         req_timed(sender, PluginRequest::BumpGeometry, "BumpGeometry")?;
+        mark_dirty(sender)?;
         return Ok(out);
     }
 
@@ -1230,6 +1257,7 @@ fn do_apply(
     };
     req_timed(sender, PluginRequest::RemoveEntity { handle }, "RemoveEntity")?;
     req_timed(sender, PluginRequest::BumpGeometry, "BumpGeometry")?;
+    mark_dirty(sender)?;
 
     Ok(serde_json::json!({
         "ok": true,
@@ -1264,12 +1292,17 @@ fn api_guide(target: &str, sender: &Arc<dyn PluginRequestSender>) -> (u16, &'sta
                     "p1": [p1[0], p1[1], p1[2]],
                     "p2": [p2[0], p2[1], p2[2]],
                     "url": url,
+                    // 引导线长度 = 主尺寸（公差计算用）。
+                    "measurement": ((p2[0]-p1[0]).powi(2)+(p2[1]-p1[1]).powi(2)).sqrt(),
                     "params": params.map(|p| serde_json::json!({
                         "type": p.guide_type.as_str(),
                         "sub": p.sub.map(|s| s.as_str().to_string()),
                         "dist": p.dist,
                         "text": p.text,
                         "tol": p.tol,
+                        "up": p.up,
+                        "dn": p.dn,
+                        "fit": p.fit,
                         "sym": p.sym,
                     })),
                 });
@@ -1277,6 +1310,68 @@ fn api_guide(target: &str, sender: &Arc<dyn PluginRequestSender>) -> (u16, &'sta
             }
         },
     }
+}
+
+/// `GET /api/tolerance?dim=25&fit=H7/g6`：ISO 286 极限偏差查询。
+/// 返回 up/dn 显示（mm，3 位小数）+ 孔/轴数值 + 配合类型。GUI 模态表格点击时调用。
+fn api_tolerance(target: &str) -> (u16, &'static str, String) {
+    let json = "application/json; charset=utf-8";
+    let q = target.split_once('?').map(|(_, q)| q).unwrap_or("");
+    let mut dim = 0.0f64;
+    let mut fit_s = String::new();
+    for kv in q.split('&').filter(|s| !s.is_empty()) {
+        let (k, v) = kv.split_once('=').unwrap_or((kv, ""));
+        match k {
+            "dim" => dim = v.parse().unwrap_or(0.0),
+            "fit" => fit_s = crate::guide_url::percent_decode(v),
+            _ => {}
+        }
+    }
+    if dim <= 0.0 {
+        return (400, json, serde_json::json!({"ok": false, "error": "dim 必须 > 0"}).to_string());
+    }
+    if fit_s.is_empty() {
+        return (400, json, serde_json::json!({"ok": false, "error": "fit 必填"}).to_string());
+    }
+    let (up, dn) = match crate::tolerance::resolve_fit_mm(dim, &fit_s) {
+        Some(v) => v,
+        None => {
+            return (
+                400,
+                json,
+                serde_json::json!({"ok": false, "error": "配合代号不可用", "fit": fit_s}).to_string(),
+            )
+        }
+    };
+    // 配合类型（仅 "H7/g6" 双代号有）。
+    let kind = if let Some((h, s)) = fit_s.split_once('/') {
+        crate::tolerance::fit(dim, h.trim(), s.trim())
+            .map(|f| f.kind.label().to_string())
+            .unwrap_or_default()
+    } else {
+        String::new()
+    };
+    let hole_limits = fit_s
+        .split_once('/')
+        .and_then(|(h, _)| crate::tolerance::hole(dim, h.trim()));
+    let shaft_limits = fit_s
+        .split_once('/')
+        .and_then(|(_, s)| crate::tolerance::shaft(dim, s.trim()));
+    let mut resp = serde_json::json!({
+        "ok": true,
+        "dim": dim,
+        "fit": fit_s,
+        "up": up,
+        "dn": dn,
+        "kind": kind,
+    });
+    if let Some(h) = hole_limits {
+        resp["hole"] = serde_json::json!({"upper": h.upper, "lower": h.lower});
+    }
+    if let Some(sh) = shaft_limits {
+        resp["shaft"] = serde_json::json!({"upper": sh.upper, "lower": sh.lower});
+    }
+    (200, json, resp.to_string())
 }
 
 fn api_apply(
@@ -1530,7 +1625,8 @@ mod tests {
         let inner = std::sync::Arc::new(MockSender::new(acadrust::CadDocument::new()));
         let sender: std::sync::Arc<dyn PluginRequestSender> = inner.clone();
         let doc = inner.doc.lock().unwrap().clone();
-        let pd = GuideParams { guide_type: GuideType::Linear, sub: Some(LinearSub::Aligned), dist: 10.0, text: None, tol: None, up: None, dn: None, sym: None, dec: Some(2), ver: crate::guide_url::DatumVersion::GB2008, letter: None, scale: None, flip: crate::guide_url::FlipDir::None, marker: None };
+        let pd = GuideParams { guide_type: GuideType::Linear, sub: Some(LinearSub::Aligned), dist: 10.0, text: None, tol: None, up: None, dn: None,
+            fit: None, sym: None, dec: Some(2), ver: crate::guide_url::DatumVersion::GB2008, letter: None, scale: None, flip: crate::guide_url::FlipDir::None, marker: None };
         let dim = build_dimension(&sender, &doc, [0.0, 0.0, 0.0], [40.0, 30.0, 0.0], &pd, "OCSM_GB").unwrap();
         let rec = dim.base().common.extended_data.get_record("ACAD").expect("ACAD XDATA 存在");
         let mut found = None;
@@ -1549,10 +1645,12 @@ mod tests {
         let inner = std::sync::Arc::new(MockSender::new(acadrust::CadDocument::new()));
         let sender: std::sync::Arc<dyn PluginRequestSender> = inner.clone();
         let doc = inner.doc.lock().unwrap().clone();
-        let pd = GuideParams { guide_type: GuideType::Diameter, sub: None, dist: -9.0, text: None, tol: None, up: None, dn: None, sym: None, dec: None, ver: crate::guide_url::DatumVersion::GB2008, letter: None, scale: None, flip: crate::guide_url::FlipDir::None, marker: None };
+        let pd = GuideParams { guide_type: GuideType::Diameter, sub: None, dist: -9.0, text: None, tol: None, up: None, dn: None,
+            fit: None, sym: None, dec: None, ver: crate::guide_url::DatumVersion::GB2008, letter: None, scale: None, flip: crate::guide_url::FlipDir::None, marker: None };
         // 直径走匿名块路径：mock 的 AddBlockRecord 返回 Ok → 成功。
         assert!(build_dimension(&sender, &doc, [0.0,0.0,0.0], [35.36,35.36,0.0], &pd, "OCSM_GB").is_ok());
-        let pr = GuideParams { guide_type: GuideType::Radius, sub: None, dist: 11.0, text: None, tol: None, up: None, dn: None, sym: None, dec: None, ver: crate::guide_url::DatumVersion::GB2008, letter: None, scale: None, flip: crate::guide_url::FlipDir::None, marker: None };
+        let pr = GuideParams { guide_type: GuideType::Radius, sub: None, dist: 11.0, text: None, tol: None, up: None, dn: None,
+            fit: None, sym: None, dec: None, ver: crate::guide_url::DatumVersion::GB2008, letter: None, scale: None, flip: crate::guide_url::FlipDir::None, marker: None };
         assert!(build_dimension(&sender, &doc, [0.0,0.0,0.0], [35.36,35.36,0.0], &pr, "OCSM_GB").is_ok());
     }
 
@@ -1569,6 +1667,7 @@ mod tests {
             tol: None,
             up: None,
             dn: None,
+            fit: None,
             sym: None,
             dec: None,
             ver: crate::guide_url::DatumVersion::GB2008,
@@ -1605,6 +1704,7 @@ mod tests {
             tol: None,
             up: Some("+0.035".into()),
             dn: Some("0".into()),
+            fit: None,
             sym: None,
             dec: None,
             ver: crate::guide_url::DatumVersion::GB2008,
@@ -1619,9 +1719,47 @@ mod tests {
             "{\\A1;<>{}{\\H0.71x;\\C2;\\S+0.035^0;}}"
         );
         // 无公差时不注入。
-        let pd2 = GuideParams { up: None, dn: None, ..pd };
+        let pd2 = GuideParams { up: None, dn: None,
+            fit: None, ..pd };
         let dim2 = build_dimension(&sender, &doc, [0.0, 0.0, 0.0], [100.0, 0.0, 0.0], &pd2, "OCSM_GB").unwrap();
         assert!(dim2.base().text.is_empty());
+    }
+
+    #[test]
+    fn build_dimension_injects_fit_tolerance() {
+        // ISO 286 配合代号：25mm 线性标注 + fit=H7/g6 → 测量值 25 → 孔偏差 +0.021/0。
+        let inner = std::sync::Arc::new(MockSender::new(acadrust::CadDocument::new()));
+        let sender: std::sync::Arc<dyn PluginRequestSender> = inner.clone();
+        let doc = inner.doc.lock().unwrap().clone();
+        let pd = GuideParams {
+            guide_type: GuideType::Linear,
+            sub: Some(LinearSub::Horizontal),
+            dist: 25.0,
+            text: None,
+            tol: None,
+            up: None,
+            dn: None,
+            fit: Some("H7/g6".into()),
+            sym: None,
+            dec: None,
+            ver: crate::guide_url::DatumVersion::GB2008,
+            letter: None,
+            scale: None,
+            flip: crate::guide_url::FlipDir::None,
+            marker: None,
+        };
+        let dim = build_dimension(&sender, &doc, [0.0, 0.0, 0.0], [25.0, 0.0, 0.0], &pd, "OCSM_GB").unwrap();
+        assert_eq!(
+            dim.base().text,
+            "{\\A1;<>{}{\\H0.71x;\\C2;\\S+0.021^0;}}"
+        );
+        // 单轴代号 g6 → -0.007/-0.020
+        let pd2 = GuideParams { fit: Some("g6".into()), ..pd };
+        let dim2 = build_dimension(&sender, &doc, [0.0, 0.0, 0.0], [25.0, 0.0, 0.0], &pd2, "OCSM_GB").unwrap();
+        assert_eq!(
+            dim2.base().text,
+            "{\\A1;<>{}{\\H0.71x;\\C2;\\S-0.007^-0.020;}}"
+        );
     }
 
     #[test]
@@ -1634,6 +1772,7 @@ mod tests {
             tol: None,
             up: None,
             dn: None,
+            fit: None,
             sym: None,
             dec: None,
             ver: crate::guide_url::DatumVersion::GB2008,
@@ -1740,6 +1879,30 @@ mod integration {
         let mut resp = String::new();
         s.read_to_string(&mut resp).unwrap();
         resp.split("\r\n\r\n").nth(1).unwrap_or("").to_string()
+    }
+
+    #[test]
+    fn http_api_tolerance_end_to_end() {
+        // 25H7/g6：孔偏差 +0.021/0，间隙配合。
+        let mock = std::sync::Arc::new(MockSender::new(acadrust::CadDocument::new()));
+        let server = spawn(mock.clone()).expect("spawn guide server");
+        let r = http_req(server.port, "GET", "/api/tolerance?dim=25&fit=H7%2Fg6", "");
+        let v: serde_json::Value = serde_json::from_str(&r).unwrap();
+        assert_eq!(v["ok"], true);
+        assert_eq!(v["up"], "+0.021");
+        assert_eq!(v["dn"], "0");
+        assert_eq!(v["kind"], "间隙配合");
+        assert!((v["hole"]["upper"].as_f64().unwrap() - 0.021).abs() < 1e-9);
+        assert!((v["shaft"]["lower"].as_f64().unwrap() + 0.02).abs() < 1e-9);
+        // 单轴 g6
+        let r2 = http_req(server.port, "GET", "/api/tolerance?dim=25&fit=g6", "");
+        let v2: serde_json::Value = serde_json::from_str(&r2).unwrap();
+        assert_eq!(v2["up"], "-0.007");
+        assert_eq!(v2["dn"], "-0.020");
+        // 非法代号
+        let r3 = http_req(server.port, "GET", "/api/tolerance?dim=25&fit=XX7", "");
+        let v3: serde_json::Value = serde_json::from_str(&r3).unwrap();
+        assert_eq!(v3["ok"], false);
     }
 
     #[test]

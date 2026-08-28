@@ -17,6 +17,7 @@
 
 mod guide_server;
 mod guide_url;
+pub mod tolerance;
 
 
 use ocs_plugin_api::export_plugin;
@@ -320,6 +321,11 @@ impl BuiltinPlugin for OcsmPlugin {
     }
 
     fn dispatch(&self, host: &mut dyn HostApi, cmd: &str) -> bool {
+        // auto-start：宿主把每条命令（含核心命令）都路由给插件 dispatch，
+        // 在这里幂等启动标注更新服务器（GUIDE_PORT 防重），MCP 客户端无需
+        // 先手动运行 OCSMMCP/GDIM 即可连接。失败静默，GDIM/OCSMMCP 会给出
+        // 明确错误。
+        let _ = self.ensure_guide_server(host);
         match cmd.trim().to_ascii_uppercase().as_str() {
             "OCSM" => {
                 self.cmd_init(host);

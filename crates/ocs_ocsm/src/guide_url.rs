@@ -156,6 +156,8 @@ pub struct GuideParams {
     pub up: Option<String>,
     /// 下偏差（公差堆叠）。
     pub dn: Option<String>,
+    /// ISO 286 配合代号（如 "H7" / "g6" / "H7/g6"）：服务端结合测量值算极限偏差。
+    pub fit: Option<String>,
     /// 符号（可空）。
     pub sym: Option<String>,
     /// 测量值小数位数（None = 默认 2；渲染时消零：12.70→12.7、12.00→12）。
@@ -184,6 +186,7 @@ impl GuideParams {
             tol: None,
             up: None,
             dn: None,
+            fit: None,
             sym: None,
             dec: None,
             ver: DatumVersion::GB2008,
@@ -226,6 +229,7 @@ impl GuideParams {
         let mut sym = None;
         let mut up = None;
         let mut dn = None;
+        let mut fit: Option<String> = None;
         let mut dec = None;
         let mut ver = DatumVersion::GB2008;
         let mut letter = None;
@@ -242,6 +246,7 @@ impl GuideParams {
                 "dn" => dn = Some(v),
                 "up" => up = Some(v),
                 "dn" => dn = Some(v),
+                "fit" => fit = Some(v),
                 "sym" => sym = Some(v),
                 "dec" => dec = v.parse::<u32>().ok().map(|d| d.min(8)),
                 "ver" => ver = DatumVersion::from_str(&v).unwrap_or(DatumVersion::GB2008),
@@ -269,6 +274,7 @@ impl GuideParams {
             tol,
             up,
             dn,
+            fit,
             sym,
             dec,
             ver,
@@ -311,6 +317,11 @@ impl GuideParams {
         if let Some(d) = &self.dn {
             if !d.is_empty() {
                 q.push(format!("dn={}", percent_encode(d)));
+            }
+        }
+        if let Some(f) = &self.fit {
+            if !f.is_empty() {
+                q.push(format!("fit={}", percent_encode(f)));
             }
         }
         if let Some(s) = &self.sym {
@@ -360,7 +371,7 @@ fn format_dist(d: f64) -> String {
 }
 
 /// 极简 percent-decode（%XX 与保留字符直通）。
-fn percent_decode(s: &str) -> String {
+pub(crate) fn percent_decode(s: &str) -> String {
     let bytes = s.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;
