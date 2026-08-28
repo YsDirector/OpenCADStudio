@@ -779,6 +779,9 @@ const HOLE_BANDS = {
       if (j.ok) {
         P1 = {x: j.p1[0], y: j.p1[1]};
         P2 = {x: j.p2[0], y: j.p2[1]};
+        // 引导线长度 = 主尺寸（公差计算默认尺寸）；必须在 j.params 块外，
+        // 否则 URL 无参数（首次 GDIM）时测量值不赋值，模态窗口主尺寸为空。
+        if (typeof j.measurement === 'number') measurement = j.measurement;
         if (j.params) {
           type = j.params.type || 'LINEAR';
           const segType = document.querySelector(`#seg-type button[data-t="${type}"]`);
@@ -790,8 +793,6 @@ const HOLE_BANDS = {
           }
           if (typeof j.params.dist === 'number') distInput().value = j.params.dist;
           if (j.params.text) document.getElementById('text').value = j.params.text;
-          // 引导线长度 = 主尺寸（公差计算默认尺寸）。
-          if (typeof j.measurement === 'number') measurement = j.measurement;
           // 公差恢复：fit / up/dn。
           const fit = j.params.fit, up = j.params.up, dn = j.params.dn;
           if (fit || up || dn) {
