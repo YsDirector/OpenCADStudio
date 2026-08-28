@@ -155,6 +155,14 @@
         <button data-tab="bh">基孔配合</button>
         <button data-tab="bs">基轴配合</button>
       </div>
+      <div class="row" id="row-band" style="margin-top:8px">
+        <span class="lbl">尺寸段</span>
+        <div class="seg" id="seg-band">
+          <button data-band="0-500" class="on">0~500mm</button>
+          <button data-band="500-3150">500~3150mm</button>
+        </div>
+        <span class="lbl" style="margin-left:10px;color:#888">主尺寸 ≤500 自动用 0~500mm</span>
+      </div>
       <div id="tol-table"></div>
       <div class="btnrow" style="margin-top:14px">
         <button id="btn-tol-close">关闭</button>
@@ -288,6 +296,42 @@
   let measurement = 0; // 引导线长度 = 主尺寸（公差计算用）
   // ISO 286 常用公差配合表（代号仅用于计算，偏差由 /api/tolerance 算）。
   // 分组标题为中文行；其余为可点代号。
+// 孔公差带选用图（GB/T 1800.2，参考 孔公差带.xlsx）
+// cols = 基本偏差代号（横轴），grid[lvl-1][colIdx] = 可用公差带代号（如 "H7"）或 0
+const HOLE_BANDS_COLS = ["A", "B", "C", "D", "E", "F", "G", "H", "J", "JS", "K", "M", "N", "P", "R", "S", "T", "U", "V", "X", "Y", "Z"];
+const HOLE_BANDS = {
+  '0-500': [
+  [0,0,0,0,0,0,0,"H1",0,"JS1",0,0,0,0,0,0,0,0,0,0,0,0],
+  [0,0,0,0,0,0,0,"H2",0,"JS2",0,0,0,0,0,0,0,0,0,0,0,0],
+  [0,0,0,0,0,0,0,"H3",0,"JS3",0,0,0,0,0,0,0,0,0,0,0,0],
+  [0,0,0,0,0,0,0,"H4",0,"JS4","K4","M4",0,0,0,0,0,0,0,0,0,0],
+  [0,0,0,0,0,0,"G5","H5",0,"JS5","K5","M5","N5","P5","R5","S5",0,0,0,0,0,0],
+  [0,0,0,0,0,"F6","G6","H6","J6","JS6","K6","M6","N6","P6","R6","S6","T6","U6","V6","X6","Y6","Z6"],
+  [0,0,0,"D7","E7","F7","G7","H7","J7","JS7","K7","M7","N7","P7","R7","S7","T7","U7","V7","X7","Y7","Z7"],
+  [0,0,"C8","D8","E8","F8","G8","H8","J8","JS8","K8","M8","N8","P8","R8","S8","T8","U8","V8","X8","Y8","Z8"],
+  ["A9","B9","C9","D9","E9","F9",0,"H9",0,"JS9",0,0,"N9","P9",0,0,0,0,0,0,0,0],
+  ["A10","B10","C10","D10","E10",0,0,"H10",0,"JS10",0,0,0,0,0,0,0,0,0,0,0,0],
+  ["A11","B11","C11",0,0,0,0,"H11",0,"JS11",0,0,0,0,0,0,0,0,0,0,0,0],
+  ["A12","B12","C12",0,0,0,0,"H12",0,"JS12",0,0,0,0,0,0,0,0,0,0,0,0],
+  [0,0,0,0,0,0,0,"H13",0,"JS13",0,0,0,0,0,0,0,0,0,0,0,0]
+],
+  '500-3150': [
+  [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+  [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+  [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+  [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+  [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+  [0,0,0,0,0,0,"G6","H6",0,"JS6","K6","M6","N6",0,0,0,0,0,0,0,0,0],
+  [0,0,0,0,0,"F7","G7","H7",0,"JS7","K7","M7","N7",0,0,0,0,0,0,0,0,0],
+  [0,0,0,"D8","E8","F8",0,"H8",0,"JS8",0,0,0,0,0,0,0,0,0,0,0,0],
+  [0,0,0,"D9","E9","F9",0,"H9",0,"JS9",0,0,0,0,0,0,0,0,0,0,0,0],
+  [0,0,0,"D10",0,0,0,"H10",0,"JS10",0,0,0,0,0,0,0,0,0,0,0,0],
+  [0,0,0,"D11",0,0,0,"H11",0,"JS11",0,0,0,0,0,0,0,0,0,0,0,0],
+  [0,0,0,0,0,0,0,"H12",0,"JS12",0,0,0,0,0,0,0,0,0,0,0,0],
+  [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]
+],
+};
+
   const TOL_TABS = {
     hole: { rows: [
       ['H6','H7','H8','H9','H10','H11','H12','H13'],
@@ -312,7 +356,55 @@
   };
   function isCodeCell(v) { return v && /^[A-Za-z]{1,2}[0-9]+(\/[A-Za-z]{1,2}[0-9]+)?$/.test(v); }
   function tolDim() { return document.getElementById('tol-dim'); }
+  let curBand = '0-500';
+  function autoBand(dim) {
+    // 主尺寸 >500 → 500~3150mm 段。
+    if (isFinite(dim) && dim > 500) curBand = '500-3150';
+    else curBand = '0-500';
+  }
+  function renderHoleGrid() {
+    const box = document.getElementById('tol-table');
+    box.innerHTML = '';
+    const grid = HOLE_BANDS[curBand];
+    const tbl = document.createElement('table');
+    tbl.className = 'toltbl';
+    tbl.style.fontSize = '11px';
+    // 表头：等级列标签 + 基本偏差代号（横轴）。
+    const thead = document.createElement('tr');
+    const corner = document.createElement('th');
+    corner.textContent = 'IT\等级';
+    thead.appendChild(corner);
+    for (const col of HOLE_BANDS_COLS) {
+      const th = document.createElement('th');
+      th.textContent = col;
+      thead.appendChild(th);
+    }
+    tbl.appendChild(thead);
+    // 13 个等级行：格子有值 = 可用公差带（点击生成）。
+    for (let lvl = 1; lvl <= 13; lvl++) {
+      const tr = document.createElement('tr');
+      const tdLvl = document.createElement('td');
+      tdLvl.textContent = 'IT' + lvl;
+      tdLvl.style.background = '#eef3fb';
+      tdLvl.style.cursor = 'default';
+      tdLvl.style.fontWeight = '600';
+      tr.appendChild(tdLvl);
+      for (let ci = 0; ci < HOLE_BANDS_COLS.length; ci++) {
+        const code = grid[lvl - 1][ci];
+        const td = document.createElement('td');
+        if (code) {
+          td.textContent = code;
+          td.title = '点击按主尺寸计算 ' + code + '（孔）';
+          td.addEventListener('click', () => pickFit(code));
+        }
+        tr.appendChild(td);
+      }
+      tbl.appendChild(tr);
+    }
+    box.appendChild(tbl);
+  }
   function renderTolTable(tab) {
+    if (tab === 'hole') { renderHoleGrid(); return; }
     const box = document.getElementById('tol-table');
     box.innerHTML = '';
     const tbl = document.createElement('table');
@@ -365,6 +457,13 @@
     } else {
       tolDim().value = String(parseFloat(measurement.toFixed(3)));
     }
+    // 尺寸段：主尺寸 >500 用 500~3150mm（自动 + 同步按钮高亮）。
+    autoBand(measurement);
+    const bandBtn = document.querySelector(`#seg-band button[data-band="${curBand}"]`);
+    if (bandBtn) {
+      document.querySelectorAll('#seg-band button').forEach(x => x.classList.remove('on'));
+      bandBtn.classList.add('on');
+    }
     renderTolTable('hole');
     document.getElementById('tol-modal').style.display = 'flex';
   }
@@ -374,7 +473,11 @@
     document.getElementById('tol-code').style.display = (tolMode === 'code') ? '' : 'none';
     document.getElementById('tol-limit').style.display = (tolMode === 'limit') ? '' : 'none';
   });
-  segBind('seg-toltab', b => renderTolTable(b.dataset.tab));
+  segBind('seg-toltab', b => {
+    document.getElementById('row-band').style.display = (b.dataset.tab === 'hole') ? '' : 'none';
+    renderTolTable(b.dataset.tab);
+  });
+  segBind('seg-band', b => { curBand = b.dataset.band; renderHoleGrid(); });
   document.getElementById('tol-enable').addEventListener('change', e => {
     tolEnabled = e.target.checked;
     const label = e.target.closest('label');
