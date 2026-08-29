@@ -5414,7 +5414,15 @@ fn dimension_text_entity(
             DA::BottomCenter => MA::BottomCenter,
             DA::BottomRight => MA::BottomRight,
         };
+        // 行宽自适应：cadcodec 默认 rectangle_width=10，长 dimtext（测量值+公差堆叠+
+        // 后缀，如 Ø100+H7/g6+,通）会按 10 单位宽度自动换行。按可见字符估算宽度
+        // 给足空间，避免超长标注文字被 OCS 折行。
+        let visible_len = value
+            .chars()
+            .filter(|c| !matches!(c, '\\' | '{' | '}' | ';' | '^'))
+            .count() as f64;
         let mut mtext = MText::with_value(value, pos_f64);
+        mtext.rectangle_width = (visible_len * text_height * 0.75).max(10.0);
         mtext.height = text_height;
         mtext.rotation = rotation;
         mtext.style = style_name;
