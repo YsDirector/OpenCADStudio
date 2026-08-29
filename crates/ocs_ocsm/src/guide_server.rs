@@ -606,20 +606,34 @@ fn build_guide_radial_block(
     // 公差（直径/半径也支持）：优先 ISO 配合代号（fit）结合测量值算偏差，
     // 否则用手输 up/dn。注入块内 MTEXT 堆叠 `{\H0.71x;\C2;\S{up}^{dn};}`
     // （与线性 dimtext 同款，OCS 渲染块内 MTEXT 同样解析 \S 堆叠）。
-    let tol = if let Some(f) = &params.fit {
-        crate::tolerance::resolve_fit_mm(measurement, f)
+    let tol_seg: Option<String> = if let Some(f) = &params.fit {
+        // 代号模式：配合代号堆叠（H7 上 g6 下）
+        if f.is_empty() {
+            None
+        } else {
+            Some(tol_code_for_fit(f))
+        }
     } else if let (Some(up), Some(dn)) = (&params.up, &params.dn) {
         if up.is_empty() || dn.is_empty() {
             None
         } else {
-            Some((up.clone(), dn.clone()))
+            Some(format!("\\H0.71x;\\C2;\\S{}^{};", up, dn))
         }
     } else {
         None
     };
-    let text_value = match &tol {
-        Some((up, dn)) => {
-            format!("{}{{\\H0.71x;\\C2;\\S{}^{};}}", &text_visible, up, dn)
+    // 块内 MTEXT：测量值 + 公差堆叠（\A1 左对齐使堆叠紧跟测量值右侧，
+    // 而非换行到测量值下方）。
+    let text_value = match &tol_seg {
+        Some(seg) => {
+            // {\A1;测量值{堆叠}}：\A1 左对齐使堆叠紧跟测量值右侧（不换行到下方）。
+            let mut t = String::from("{\\A1;");
+            t.push_str(&text_visible);
+            t.push('{');
+            t.push_str(seg);
+            t.push('}');
+            t.push('}');
+            t
         }
         None => text_visible.clone(),
     };
@@ -628,8 +642,13 @@ fn build_guide_radial_block(
     // 'Ø100' h=2.5 → 5.9；示例内侧线端 41−5.9/2−1=37.05 ≈ 实测 37.07 ✓；
     // 示例外侧 landing 3.95 ≈ 5.9/2+1 ✓）。
     let mut text_width = text_visible.chars().count() as f64 * 0.59 * h;
-    if let Some((up, dn)) = &tol {
-        text_width += up.chars().count().max(dn.chars().count()) as f64 * 0.59 * h;
+    if let Some(seg) = &tol_seg {
+        // 堆叠可见宽度：剥离 MTEXT 代码后取最大行字符数。
+        let vis: String = seg
+            .chars()
+            .filter(|c| !"\\H0.71x;\\C2;\\S{}^;".contains(*c))
+            .collect();
+        text_width += vis.chars().count() as f64 * 0.59 * h * 0.5;
     }
     let text_mid = rim + dir * dist; // 文字锚点（在径向线上）
     let rot = dir.y.atan2(dir.x); // 径向角
@@ -804,18 +823,14 @@ fn build_dimension(
     // `{\A1;<>{}{\H0.71x;\C2;\S+0.024^  0;}}`）。`<>` = 测量值占位，OCS 渲染时替换。
     // 仅对原生 DIMENSION（线性）生效；直径/半径走匿名块块内 MTEXT，暂不注入。
     if params.guide_type == GuideType::Linear {
-        let mut up = params.up.clone();
-        let mut dn = params.dn.clone();
+        // 公差（dimtext）：fit 代号模式 → 配合代号堆叠（H7 上 g6 下）；
+        // up/dn 手输 → 极限偏差堆叠。
         if let Some(fit) = &params.fit {
-            let m = dim.base().actual_measurement;
-            if m > 0.0 {
-                if let Some((u, d)) = crate::tolerance::resolve_fit_mm(m, fit) {
-                    up = Some(u);
-                    dn = Some(d);
-                }
+            if !fit.is_empty() {
+                let seg = tol_code_for_fit(fit);
+                dim.base_mut().text = format!("{{\\A1;<>{{}}{{{}}}}}", seg);
             }
-        }
-        if let (Some(up), Some(dn)) = (up, dn) {
+        } else if let (Some(up), Some(dn)) = (&params.up, &params.dn) {
             if !up.is_empty() && !dn.is_empty() {
                 let tol_seg = format!("\\H0.71x;\\C2;\\S{}^{};", up, dn);
                 dim.base_mut().text = format!("{{\\A1;<>{{}}{{{}}}}}", tol_seg);
@@ -823,6 +838,16 @@ fn build_dimension(
         }
     }
     Ok(dim)
+}
+
+/// 配合代号 → MTEXT 堆叠代码（H7/g6 → `\\H0.71x;\\C2;\\S{H7}^{g6};`；单代号 H7 → `\\S{H7}^{};`）。
+fn tol_code_for_fit(fit: &str) -> String {
+    let fit = fit.trim();
+    if let Some((h, s)) = fit.split_once('/') {
+        format!("\\H0.71x;\\C2;\\S{{{}}}^{{{}}};", h.trim(), s.trim())
+    } else {
+        format!("\\H0.71x;\\C2;\\S{{{}}}^{{}};", fit)
+    }
 }
 
 /// 把 DIMENSION XDATA（ACAD/DSTYLE）中 DIMDEC(271) 的覆盖值改为 `dec`。
@@ -1772,17 +1797,18 @@ mod tests {
             flip: crate::guide_url::FlipDir::None,
             marker: None,
         };
+        // fit 代号模式 → 配合代号堆叠（H7 上 g6 下），非极限偏差。
         let dim = build_dimension(&sender, &doc, [0.0, 0.0, 0.0], [25.0, 0.0, 0.0], &pd, "OCSM_GB").unwrap();
         assert_eq!(
             dim.base().text,
-            "{\\A1;<>{}{\\H0.71x;\\C2;\\S+0.021^0;}}"
+            "{\\A1;<>{}{\\H0.71x;\\C2;\\S{H7}^{g6};}}"
         );
-        // 单轴代号 g6 → -0.007/-0.020
+        // 单轴代号 g6 → 代号堆叠（上 g6、下空）
         let pd2 = GuideParams { fit: Some("g6".into()), ..pd };
         let dim2 = build_dimension(&sender, &doc, [0.0, 0.0, 0.0], [25.0, 0.0, 0.0], &pd2, "OCSM_GB").unwrap();
         assert_eq!(
             dim2.base().text,
-            "{\\A1;<>{}{\\H0.71x;\\C2;\\S-0.007^-0.020;}}"
+            "{\\A1;<>{}{\\H0.71x;\\C2;\\S{g6}^{};}}"
         );
     }
 
