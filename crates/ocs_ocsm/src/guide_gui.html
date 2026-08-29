@@ -62,6 +62,10 @@
   /* 配合网格紧凑：22+1 列须在卡片宽度内完整显示 */
   table.toltbl.fitgrid th, table.toltbl.fitgrid td { padding: 1px 2px; font-size: 9px; white-space: nowrap; }
   table.toltbl.fitgrid td { cursor: default; }
+  /* 配合分数堆叠（孔上轴下） */
+  .frac { display: inline-flex; flex-direction: column; align-items: center; vertical-align: middle; margin: 0 1px; }
+  .frac .num { border-bottom: 1px solid #555; padding: 0 3px; line-height: 1.15; }
+  .frac .den { padding: 0 3px; line-height: 1.15; }
 </style>
 </head>
 <body>
@@ -403,7 +407,7 @@ const SHAFT_BANDS = {
 const BH_FITS = [
   { base:'H6', c:['f5','g5','h5'], t:['js5','k5','m5','n5'], i:['p5','r5','s5','t5'] },
   { base:'H7', c:['f6','g6','h6'], t:['js6','k6','m6','n6'], i:['p6','r6','s6','t6','u6','v6','x6','y6','z6'] },
-  { base:'H8', c:['e7','f7','g7','h7','d8','e8','f8','h8'], t:['js7','k7','m7','n7'], i:['p7','r7','s7','t7','u7'] },
+  { base:'H8', c:['e7','f7','g7','h7','d8','f8'], t:['js7','k7','m7','n7'], i:['p7','r7','s7','t7','u7'] },
   { base:'H9', c:['c9','d9','e9','f9','h9'], t:[], i:[] },
   { base:'H10', c:['c10','d10','h10'], t:[], i:[] },
   { base:'H11', c:['a11','b11','c11','d11','h11'], t:[], i:[] },
@@ -542,15 +546,24 @@ const BS_FITS = [
         const codes = map[col];
         const td = document.createElement('td');
         if (codes && codes.length) {
-          // 完整配合文本（用户格式：孔/轴，如 H7/f6、F6/h5）；
-          // 一列多代号（H8 两档轴）用 · 合并，点击生成第一个。
-          const fits = codes.map(code => cfg.holeFirst ? (row.base + '/' + code) : (code + '/' + row.base));
-          const first = fits[0];
-          const extra = codes.length > 1 ? '·' + codes.slice(1).join('·') : '';
-          td.textContent = first + extra;
-          td.title = '点击生成配合 ' + fits.join(' 或 ');
-          td.style.cursor = 'pointer';
-          td.addEventListener('click', () => pickFit(first));
+          // 分数堆叠：分子=孔（H7 / F6），分母=轴（f6 / h5），配合 孔/轴 上分子下分母。
+          for (const code of codes) {
+            const fit = cfg.holeFirst ? (row.base + '/' + code) : (code + '/' + row.base);
+            const frac = document.createElement('span');
+            frac.className = 'frac';
+            const nu = document.createElement('span');
+            nu.className = 'num';
+            nu.textContent = cfg.holeFirst ? row.base : code;
+            const de = document.createElement('span');
+            de.className = 'den';
+            de.textContent = cfg.holeFirst ? code : row.base;
+            frac.appendChild(nu);
+            frac.appendChild(de);
+            frac.title = '点击生成配合 ' + fit;
+            frac.style.cursor = 'pointer';
+            frac.addEventListener('click', () => pickFit(fit));
+            td.appendChild(frac);
+          }
         }
         tr.appendChild(td);
       }
