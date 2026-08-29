@@ -823,18 +823,27 @@ fn build_dimension(
     // `{\A1;<>{}{\H0.71x;\C2;\S+0.024^  0;}}`）。`<>` = 测量值占位，OCS 渲染时替换。
     // 仅对原生 DIMENSION（线性）生效；直径/半径走匿名块块内 MTEXT，暂不注入。
     if params.guide_type == GuideType::Linear {
+        // 文字 override（dimtext）：默认 <>（测量值占位），用户 text 覆盖
+        //（含 %%c 直径符号、中文等，OCS 渲染时替换 <>、解析 %%c）。
+        let text_part = match &params.text {
+            Some(t) if !t.is_empty() => t.clone(),
+            _ => "<>".to_string(),
+        };
         // 公差（dimtext）：fit 代号模式 → 配合代号堆叠（H7 上 g6 下）；
         // up/dn 手输 → 极限偏差堆叠。
         if let Some(fit) = &params.fit {
             if !fit.is_empty() {
                 let seg = tol_code_for_fit(fit);
-                dim.base_mut().text = format!("{{\\A1;<>{{}}{{{}}}}}", seg);
+                dim.base_mut().text = mtext_tol(&text_part, &seg);
             }
         } else if let (Some(up), Some(dn)) = (&params.up, &params.dn) {
             if !up.is_empty() && !dn.is_empty() {
                 let tol_seg = format!("\\H0.71x;\\C2;\\S{}^{};", up, dn);
-                dim.base_mut().text = format!("{{\\A1;<>{{}}{{{}}}}}", tol_seg);
+                dim.base_mut().text = mtext_tol(&text_part, &tol_seg);
             }
+        } else if text_part != "<>" {
+            // 无公差：自定义文字直接作为 dimtext（含 <> 占位 / %%c 等）。
+            dim.base_mut().text = text_part;
         }
     }
     Ok(dim)
@@ -850,6 +859,18 @@ fn tol_code_for_fit(fit: &str) -> String {
     } else {
         format!("\\C3;{}", fit)
     }
+}
+
+/// dimtext = `{\A1;{文字}{}{堆叠}}`（对照示例 `{\A1;<>{}{\C3;\SH7/h6;}}`）。
+fn mtext_tol(text_part: &str, seg: &str) -> String {
+    let mut t = String::from("{\\A1;");
+    t.push_str(text_part);
+    t.push_str("{}"); // 示例 `<>{}` 的空组结构
+    t.push('{');
+    t.push_str(seg);
+    t.push('}');
+    t.push('}');
+    t
 }
 
 /// 把 DIMENSION XDATA（ACAD/DSTYLE）中 DIMDEC(271) 的覆盖值改为 `dec`。
@@ -1774,6 +1795,41 @@ mod tests {
             fit: None, ..pd };
         let dim2 = build_dimension(&sender, &doc, [0.0, 0.0, 0.0], [100.0, 0.0, 0.0], &pd2, "OCSM_GB").unwrap();
         assert!(dim2.base().text.is_empty());
+    }
+
+    #[test]
+    fn build_dimension_keeps_text_override_with_tolerance() {
+        // 用户输入 `%%c<>,通`（直径符号+测量占位+中文）+ 公差 → dimtext 必须保留
+        // %%c 与中文，且公差堆叠在其后（不再硬编码 <> 丢弃文字）。
+        let inner = std::sync::Arc::new(MockSender::new(acadrust::CadDocument::new()));
+        let sender: std::sync::Arc<dyn PluginRequestSender> = inner.clone();
+        let doc = inner.doc.lock().unwrap().clone();
+        let pd = GuideParams {
+            guide_type: GuideType::Linear,
+            sub: Some(LinearSub::Horizontal),
+            dist: 25.0,
+            text: Some("%%c<>,通".into()),
+            tol: None,
+            up: None,
+            dn: None,
+            fit: Some("H7/g6".into()),
+            sym: None,
+            dec: None,
+            ver: crate::guide_url::DatumVersion::GB2008,
+            letter: None,
+            scale: None,
+            flip: crate::guide_url::FlipDir::None,
+            marker: None,
+        };
+        let dim = build_dimension(&sender, &doc, [0.0, 0.0, 0.0], [25.0, 0.0, 0.0], &pd, "OCSM_GB").unwrap();
+        let t = dim.base().text.clone();
+        assert!(t.contains("%%c<>,通"), "应保留 %%c 与中文, got {t}");
+        assert!(t.contains("\\C3;\\SH7/g6;"), "应含公差堆叠, got {t}");
+        assert_eq!(t, "{\\A1;%%c<>,通{}{\\C3;\\SH7/g6;}}");
+        // 无公差 + 自定义文字：dimtext 直接应用文字。
+        let pd2 = GuideParams { fit: None, ..pd };
+        let dim2 = build_dimension(&sender, &doc, [0.0, 0.0, 0.0], [25.0, 0.0, 0.0], &pd2, "OCSM_GB").unwrap();
+        assert_eq!(dim2.base().text, "%%c<>,通");
     }
 
     #[test]
