@@ -622,20 +622,13 @@ fn build_guide_radial_block(
     } else {
         None
     };
-    // 块内 MTEXT：测量值 + 公差堆叠（\A1 左对齐使堆叠紧跟测量值右侧，
-    // 而非换行到测量值下方）。
-    let text_value = match &tol_seg {
-        Some(seg) => {
-            // {\A1;测量值{堆叠}}：\A1 左对齐使堆叠紧跟测量值右侧（不换行到下方）。
-            let mut t = String::from("{\\A1;");
-            t.push_str(&text_visible);
-            t.push('{');
-            t.push_str(seg);
-            t.push('}');
-            t.push('}');
-            t
-        }
-        None => text_visible.clone(),
+    // 块内 MTEXT：文字模板渲染（||| 公差位置、\X 换行、[@] 英制换算），
+    // 有公差时 \A1 左对齐使堆叠紧跟测量值右侧（不换行到下方）。
+    let body = render_text_template(&text_visible, measurement, tol_seg.as_deref());
+    let text_value = if tol_seg.is_some() {
+        format!("{{\\A1;{}}}", body)
+    } else {
+        body
     };
     // 文字宽估算：可见文字（含公差偏差最大宽度）字符数×0.59×h
     //（Standard txt 字体经验值，对照示例验证：
@@ -824,26 +817,32 @@ fn build_dimension(
     // 仅对原生 DIMENSION（线性）生效；直径/半径走匿名块块内 MTEXT，暂不注入。
     if params.guide_type == GuideType::Linear {
         // 文字 override（dimtext）：默认 <>（测量值占位），用户 text 覆盖
-        //（含 %%c 直径符号、中文等，OCS 渲染时替换 <>、解析 %%c）。
+        //（含 %%c 直径符号、中文等）。文字模板：||| = 公差位置、\X = 换行、
+        // [@] = 英制换算（25.4 → [1" ]），OCS 渲染时替换 <>、解析 %%c。
         let text_part = match &params.text {
             Some(t) if !t.is_empty() => t.clone(),
             _ => "<>".to_string(),
         };
         // 公差（dimtext）：fit 代号模式 → 配合代号堆叠（H7 上 g6 下）；
         // up/dn 手输 → 极限偏差堆叠。
-        if let Some(fit) = &params.fit {
-            if !fit.is_empty() {
-                let seg = tol_code_for_fit(fit);
-                dim.base_mut().text = mtext_tol(&text_part, &seg);
-            }
+        let m = dim.base().actual_measurement;
+        let tol_seg: Option<String> = if let Some(fit) = &params.fit {
+            if fit.is_empty() { None } else { Some(tol_code_for_fit(fit)) }
         } else if let (Some(up), Some(dn)) = (&params.up, &params.dn) {
-            if !up.is_empty() && !dn.is_empty() {
-                let tol_seg = format!("\\H0.71x;\\C2;\\S{}^{};", up, dn);
-                dim.base_mut().text = mtext_tol(&text_part, &tol_seg);
+            if up.is_empty() || dn.is_empty() {
+                None
+            } else {
+                Some(format!("\\H0.71x;\\C2;\\S{}^{};", up, dn))
             }
-        } else if text_part != "<>" {
-            // 无公差：自定义文字直接作为 dimtext（含 <> 占位 / %%c 等）。
-            dim.base_mut().text = text_part;
+        } else {
+            None
+        };
+        let body = render_text_template(&text_part, m, tol_seg.as_deref());
+        if tol_seg.is_some() {
+            dim.base_mut().text = format!("{{\\A1;{}}}", body);
+        } else if body != "<>" {
+            // 无公差：模板渲染后直接作为 dimtext（处理 \X 换行 / [@] 英制 / 删 |||）。
+            dim.base_mut().text = body;
         }
     }
     Ok(dim)
@@ -871,6 +870,34 @@ fn mtext_tol(text_part: &str, seg: &str) -> String {
     t.push('}');
     t.push('}');
     t
+}
+
+/// 文字模板渲染（用户引导规则）：
+/// - `|||` → 公差堆叠生成位置（无公差时删除标记）
+/// - `\X` → 换行（转 MTEXT `\P`）
+/// - `[@]` → 英制换算，如 `<>[@]` 对 25.4 → `25.4[1"]`
+/// 返回 dimtext 正文（不含 `{\A1;` 外层）；`<>` 保留给 OCS 测量值占位。
+fn render_text_template(text: &str, measurement: f64, tol: Option<&str>) -> String {
+    let mut out = text.replace("[@]", &format!("[{}]", inch_display(measurement)));
+    out = out.replace("\\X", "\\P");
+    match tol {
+        Some(seg) => {
+            if out.contains("|||") {
+                // ||| 明确位置 → 公差组放此处（无 {} 空组）。
+                out.replace("|||", &format!("{{{}}}", seg))
+            } else {
+                // 默认追加末尾，保留 `{}` 空组结构（对照示例 `<>{}`）。
+                format!("{}{{}}{{{}}}", out, seg)
+            }
+        }
+        None => out.replace("|||", ""),
+    }
+}
+
+/// 毫米 → 英寸显示（25.4 → `1"`），消尾零，最多 4 位小数。
+fn inch_display(mm: f64) -> String {
+    let inch = mm / 25.4;
+    format!("{}\"", format_measurement(inch, 4))
 }
 
 /// 把 DIMENSION XDATA（ACAD/DSTYLE）中 DIMDEC(271) 的覆盖值改为 `dec`。
@@ -1795,6 +1822,55 @@ mod tests {
             fit: None, ..pd };
         let dim2 = build_dimension(&sender, &doc, [0.0, 0.0, 0.0], [100.0, 0.0, 0.0], &pd2, "OCSM_GB").unwrap();
         assert!(dim2.base().text.is_empty());
+    }
+
+    #[test]
+    fn text_template_pipelines() {
+        // ||| = 公差位置
+        let body = render_text_template("%%c<>|||,通", 100.0, Some("\\C3;\\SH7/g6;"));
+        assert_eq!(body, "%%c<>{\\C3;\\SH7/g6;},通");
+        // 无 ||| → 公差追加末尾（保留 {} 空组）
+        let body2 = render_text_template("<>", 100.0, Some("\\C3;\\SH7/g6;"));
+        assert_eq!(body2, "<>{}{\\C3;\\SH7/g6;}");
+        // 无公差 → 删 |||
+        let body3 = render_text_template("%%c<>|||,通", 100.0, None);
+        assert_eq!(body3, "%%c<>,通");
+        // [@] 英制换算：25.4 → [1"]
+        let body4 = render_text_template("<>[@]", 25.4, None);
+        assert_eq!(body4, "<>[1\"]");
+        // \X 换行 → \P
+        let body5 = render_text_template("<>\\X公差行", 100.0, None);
+        assert_eq!(body5, "<>\\P公差行");
+    }
+
+    #[test]
+    fn build_dimension_text_template_with_tolerance() {
+        // 线性 + `%%c<>|||,通` + fit → dimtext 公差插在 ||| 处（Ø100 后），通 在后。
+        let inner = std::sync::Arc::new(MockSender::new(acadrust::CadDocument::new()));
+        let sender: std::sync::Arc<dyn PluginRequestSender> = inner.clone();
+        let doc = inner.doc.lock().unwrap().clone();
+        let pd = GuideParams {
+            guide_type: GuideType::Linear,
+            sub: Some(LinearSub::Horizontal),
+            dist: 25.0,
+            text: Some("%%c<>|||,通".into()),
+            tol: None,
+            up: None,
+            dn: None,
+            fit: Some("H7/g6".into()),
+            sym: None,
+            dec: None,
+            ver: crate::guide_url::DatumVersion::GB2008,
+            letter: None,
+            scale: None,
+            flip: crate::guide_url::FlipDir::None,
+            marker: None,
+        };
+        let dim = build_dimension(&sender, &doc, [0.0, 0.0, 0.0], [25.0, 0.0, 0.0], &pd, "OCSM_GB").unwrap();
+        assert_eq!(
+            dim.base().text,
+            "{\\A1;%%c<>{\\C3;\\SH7/g6;},通}"
+        );
     }
 
     #[test]
