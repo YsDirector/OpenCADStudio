@@ -840,13 +840,15 @@ fn build_dimension(
     Ok(dim)
 }
 
-/// 配合代号 → MTEXT 堆叠代码（H7/g6 → `\\H0.71x;\\C2;\\S{H7}^{g6};`；单代号 H7 → `\\S{H7}^{};`）。
+/// 配合代号 → MTEXT 堆叠代码，对照公差渲染.dxf 左侧标准示例
+/// `{\C3;\SH7/h6;}`：绿色 \C3（与测量值同色）、无花括号、斜杠 `/` 分数堆叠、
+/// 无 \H0.71x 字高覆盖（OCS \S 默认比例）。单代号 H7 → `\C3;H7`（水平，不堆叠）。
 fn tol_code_for_fit(fit: &str) -> String {
     let fit = fit.trim();
     if let Some((h, s)) = fit.split_once('/') {
-        format!("\\H0.71x;\\C2;\\S{{{}}}^{{{}}};", h.trim(), s.trim())
+        format!("\\C3;\\S{}/{};", h.trim(), s.trim())
     } else {
-        format!("\\H0.71x;\\C2;\\S{{{}}}^{{}};", fit)
+        format!("\\C3;{}", fit)
     }
 }
 
@@ -1797,18 +1799,18 @@ mod tests {
             flip: crate::guide_url::FlipDir::None,
             marker: None,
         };
-        // fit 代号模式 → 配合代号堆叠（H7 上 g6 下），非极限偏差。
+        // fit 代号模式 → 配合代号堆叠（对照示例 `{\C3;\SH7/g6;}`：绿色、斜杠分数）。
         let dim = build_dimension(&sender, &doc, [0.0, 0.0, 0.0], [25.0, 0.0, 0.0], &pd, "OCSM_GB").unwrap();
         assert_eq!(
             dim.base().text,
-            "{\\A1;<>{}{\\H0.71x;\\C2;\\S{H7}^{g6};}}"
+            "{\\A1;<>{}{\\C3;\\SH7/g6;}}"
         );
-        // 单轴代号 g6 → 代号堆叠（上 g6、下空）
+        // 单轴代号 g6 → 水平（不堆叠）
         let pd2 = GuideParams { fit: Some("g6".into()), ..pd };
         let dim2 = build_dimension(&sender, &doc, [0.0, 0.0, 0.0], [25.0, 0.0, 0.0], &pd2, "OCSM_GB").unwrap();
         assert_eq!(
             dim2.base().text,
-            "{\\A1;<>{}{\\H0.71x;\\C2;\\S{g6}^{};}}"
+            "{\\A1;<>{}{\\C3;g6}}"
         );
     }
 
