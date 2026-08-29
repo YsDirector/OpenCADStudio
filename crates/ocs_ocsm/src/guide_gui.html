@@ -24,9 +24,16 @@
           cursor: pointer; color: #111; line-height: 1; padding: 0; }
   .gsym:hover { border-color: var(--accent); background: #eef4ff; }
   #gdt-row { margin-top: 8px; }
-  #gdt-row .lbl { margin-right: 6px; }
-  #gdt-chars { display: flex; gap: 3px; flex-wrap: wrap; }
+  #btn-gdt { padding: 5px 14px; border: 1px solid #bbb; border-radius: 6px; background: #fff;
+             cursor: pointer; font-size: 13px; }
+  #btn-gdt:hover { border-color: var(--accent); background: #eef4ff; }
+  #gdt-chars { display: flex; gap: 4px; flex-wrap: wrap; }
   .gdt-hint { font-size: 11px; color: #888; margin-top: 4px; }
+  #gdt-modal { position: fixed; inset: 0; background: rgba(0,0,0,.42); z-index: 50;
+               display: none; align-items: center; justify-content: center; }
+  #gdt-modal .card { background: #fff; border-radius: 10px; padding: 18px; width: 640px;
+                     max-height: 88vh; overflow: auto; box-shadow: 0 8px 30px rgba(0,0,0,.25); }
+  #gdt-modal h2 { font-size: 15px; margin-bottom: 10px; }
   .seg button { padding: 6px 14px; border: 1px solid #bbb; border-radius: 6px; background: #fff;
                 cursor: pointer; font-size: 13px; color: var(--text); }
   .seg button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
@@ -136,12 +143,11 @@
     <div class="txt" id="row-txt">
       <input type="text" id="text" value="&lt;&gt;" placeholder="标注文字（&lt;&gt; = 测量值）">
     </div>
-    <!-- GDT 符号插入：点击在光标处插入 \fGDT;<字符>;（GDT 字体把字符渲染成工程符号） -->
+    <!-- GDT 符号插入：按钮弹模态窗口，点击在光标处插入 {\fGDT;<字符>}（花括号作用域自动恢复标注字体） -->
     <div class="row" id="gdt-row">
-      <span class="lbl">GDT符号</span>
-      <div id="gdt-chars"></div>
+      <button id="btn-gdt" type="button">GDT 符号…</button>
+      <span class="gdt-hint" style="margin:0">插入工程符号，符号后自动恢复标注字体</span>
     </div>
-    <div class="gdt-hint">点击插入 <code>\fGDT;字母;</code>（如 <code>x</code>=深度符号）；标注渲染时该字符用 GDT 字体显示为工程符号。</div>
     <!-- 公差（仅线性；默认不输出） -->
     <div class="param" id="row-tol" style="margin-top:10px">
       <label style="font-size:13px; display:flex; align-items:center; gap:6px; cursor:pointer">
@@ -178,6 +184,18 @@
     <button id="btn-refresh" class="primary">应用并刷新</button>
   </div>
   <div id="msg" class="msg"></div>
+
+  <!-- GDT 工程符号模态窗口 -->
+  <div id="gdt-modal">
+    <div class="card">
+      <h2>GDT 工程符号</h2>
+      <div class="gdt-hint" style="margin-bottom:8px">点击插入符号：GDT 字体把该字符渲染成工程符号（如 x=深度符号），插入后自动恢复标注字体。</div>
+      <div id="gdt-chars"></div>
+      <div style="margin-top:14px; text-align:right">
+        <button id="btn-gdt-close" style="padding:5px 16px;border:1px solid #bbb;border-radius:6px;background:#fff;cursor:pointer">关闭</button>
+      </div>
+    </div>
+  </div>
 
   <!-- 常用公差配合表模态窗口 -->
   <div id="tol-modal">
@@ -1023,7 +1041,7 @@ const BS_FITS = [
       document.getElementById('msg').textContent = '加载失败: ' + e.message;
     }
   }
-  // GDT 符号插入：点击在文字框光标处插入 \fGDT;<字符>;
+  // GDT 符号插入：模态窗口点选，插入 {\fGDT;<字符>}（花括号作用域自动恢复标注字体）
   const GDT_CHARS = 'abcdefghijklmnopqrstuvwxyz0123456789°±'.split('');
   function insertAtCursor(el, str) {
     const s = el.selectionStart, e = el.selectionEnd;
@@ -1032,19 +1050,28 @@ const BS_FITS = [
     el.focus();
     draw();
   }
-  function initGdtRow() {
+  function openGdtModal() { document.getElementById('gdt-modal').style.display = 'flex'; }
+  function closeGdtModal() { document.getElementById('gdt-modal').style.display = 'none'; }
+  function initGdtModal() {
     const box = document.getElementById('gdt-chars');
     GDT_CHARS.forEach(ch => {
       const b = document.createElement('button');
       b.className = 'gsym';
       b.textContent = ch;
-      b.title = '插入 \\fGDT;' + ch + ';（GDT 渲染工程符号）';
-      b.addEventListener('click', () =>
-        insertAtCursor(document.getElementById('text'), '\\fGDT;' + ch + ';'));
+      b.title = '插入 {\\fGDT;' + ch + '}（GDT 渲染工程符号）';
+      b.addEventListener('click', () => {
+        insertAtCursor(document.getElementById('text'), '{\\fGDT;' + ch + '}');
+        closeGdtModal();
+      });
       box.appendChild(b);
     });
+    document.getElementById('btn-gdt').addEventListener('click', openGdtModal);
+    document.getElementById('btn-gdt-close').addEventListener('click', closeGdtModal);
+    document.getElementById('gdt-modal').addEventListener('click', e => {
+      if (e.target === document.getElementById('gdt-modal')) closeGdtModal();
+    });
   }
-  initGdtRow();
+  initGdtModal();
   fitCam();
   draw();
   load();

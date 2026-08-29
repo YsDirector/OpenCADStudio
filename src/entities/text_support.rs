@@ -2515,6 +2515,36 @@ mod adapter_tests {
         assert_eq!(lines.len(), 3);
     }
 
+    #[test]
+    fn brace_scope_restores_inline_font() {
+        // `{\\fGDT;x;}25{\\fGDT;e;}mm`：花括号作用域内字符用 GDT 字体，
+        // 出括号自动恢复基础字体（无硬编码字体名）。
+        let lines = adapt_mtext_paragraphs(r"{\fGDT;x}25{\fGDT;e}mm", 2.5, true);
+        let runs: Vec<(String, Option<String>)> = lines
+            .iter()
+            .flat_map(|l| l.runs.iter())
+            .filter_map(|r| match &r.kind {
+                MTextRunKind::Glyphs(t) => Some((
+                    t.clone(),
+                    r.state.font.as_deref().map(|f| f.to_string()),
+                )),
+                _ => None,
+            })
+            .collect();
+        let gdt: Vec<&str> = runs
+            .iter()
+            .filter(|(_, f)| f.as_deref() == Some("GDT"))
+            .map(|(t, _)| t.as_str())
+            .collect();
+        let normal: String = runs
+            .iter()
+            .filter(|(_, f)| f.is_none())
+            .map(|(t, _)| t.as_str())
+            .collect();
+        assert_eq!(gdt, vec!["x", "e"], "花括号内字符用 GDT 字体");
+        assert!(normal.contains("25") && normal.contains("mm"), "出括号恢复基础字体: {normal}");
+    }
+
 }
 
 
