@@ -280,9 +280,10 @@
     document.getElementById('letter-lbl').style.display = (datum || view) ? '' : 'none';
     document.getElementById('row-param').style.display = (datum || view) ? 'none' : '';
     document.getElementById('row-txt').style.display = (datum || view) ? 'none' : '';
-    // 公差仅线性（服务端只对线性注入 dimtext 堆叠）。
-    document.getElementById('row-tol').style.display = linear ? '' : 'none';
-    if (!linear) { tolEnabled = false; document.getElementById('tol-enable').checked = false;
+    // 公差：线性/直径/半径 都支持（线性=dimtext 堆叠；直径/半径=块内 MTEXT 堆叠）。
+    const withTol = (type === 'LINEAR' || type === 'DIAMETER' || type === 'RADIUS');
+    document.getElementById('row-tol').style.display = withTol ? '' : 'none';
+    if (!withTol) { tolEnabled = false; document.getElementById('tol-enable').checked = false;
       document.getElementById('row-tol-input').style.display = 'none'; }
     // 向视图：比例 / 翻转方向 / 标记放置点。
     document.getElementById('row-view').style.display = view ? '' : 'none';
@@ -696,8 +697,8 @@ const BS_FITS = [
       const dec = parseInt(document.getElementById('dec').value, 10);
       if (isFinite(dec) && dec >= 0) qs.push('dec=' + Math.min(dec, 8));
     }
-    // 公差（默认不输出；仅线性生效，服务端结合测量值算极限偏差）。
-    if (tolEnabled && type === 'LINEAR') {
+    // 公差（默认不输出；线性/直径/半径生效，服务端结合测量值算极限偏差）。
+    if (tolEnabled && (type === 'LINEAR' || type === 'DIAMETER' || type === 'RADIUS')) {
       if (tolMode === 'code') {
         const fit = document.getElementById('fit').value.trim();
         if (fit) qs.push('fit=' + encodeURIComponent(fit));

@@ -599,14 +599,38 @@ fn build_guide_radial_block(
 
     // 文字内容：user_text（<> 替换测量）或自动前缀+测量。
     let auto_value = format!("{prefix}{}", format_measurement(measurement, params.dec.unwrap_or(2)));
-    let text_value = match &params.text {
+    let text_visible = match &params.text {
         Some(t) if !t.is_empty() && *t != "%%c<>" => t.replace("<>", &auto_value),
         _ => auto_value,
     };
-    // 文字宽估算：字符数×0.59×h（Standard txt 字体经验值，对照示例验证：
+    // 公差（直径/半径也支持）：优先 ISO 配合代号（fit）结合测量值算偏差，
+    // 否则用手输 up/dn。注入块内 MTEXT 堆叠 `{\H0.71x;\C2;\S{up}^{dn};}`
+    // （与线性 dimtext 同款，OCS 渲染块内 MTEXT 同样解析 \S 堆叠）。
+    let tol = if let Some(f) = &params.fit {
+        crate::tolerance::resolve_fit_mm(measurement, f)
+    } else if let (Some(up), Some(dn)) = (&params.up, &params.dn) {
+        if up.is_empty() || dn.is_empty() {
+            None
+        } else {
+            Some((up.clone(), dn.clone()))
+        }
+    } else {
+        None
+    };
+    let text_value = match &tol {
+        Some((up, dn)) => {
+            format!("{}{{\\H0.71x;\\C2;\\S{}^{};}}", &text_visible, up, dn)
+        }
+        None => text_visible.clone(),
+    };
+    // 文字宽估算：可见文字（含公差偏差最大宽度）字符数×0.59×h
+    //（Standard txt 字体经验值，对照示例验证：
     // 'Ø100' h=2.5 → 5.9；示例内侧线端 41−5.9/2−1=37.05 ≈ 实测 37.07 ✓；
     // 示例外侧 landing 3.95 ≈ 5.9/2+1 ✓）。
-    let text_width = text_value.chars().count() as f64 * 0.59 * h;
+    let mut text_width = text_visible.chars().count() as f64 * 0.59 * h;
+    if let Some((up, dn)) = &tol {
+        text_width += up.chars().count().max(dn.chars().count()) as f64 * 0.59 * h;
+    }
     let text_mid = rim + dir * dist; // 文字锚点（在径向线上）
     let rot = dir.y.atan2(dir.x); // 径向角
 
