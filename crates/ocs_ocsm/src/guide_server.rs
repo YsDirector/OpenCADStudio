@@ -883,8 +883,9 @@ fn render_text_template(text: &str, measurement: f64, tol: Option<&str>) -> Stri
     match tol {
         Some(seg) => {
             if out.contains("|||") {
-                // ||| 明确位置 → 公差组放此处（无 {} 空组）。
-                out.replace("|||", &format!("{{{}}}", seg))
+                // ||| 明确位置 → `{}` 空组 + 公差组（空组连接测量值与堆叠，
+                // 缺它 OCS 会把 {tol} 组换行到下一行）。
+                out.replace("|||", &format!("{{}}{{{}}}", seg))
             } else {
                 // 默认追加末尾，保留 `{}` 空组结构（对照示例 `<>{}`）。
                 format!("{}{{}}{{{}}}", out, seg)
@@ -1828,7 +1829,7 @@ mod tests {
     fn text_template_pipelines() {
         // ||| = 公差位置
         let body = render_text_template("%%c<>|||,通", 100.0, Some("\\C3;\\SH7/g6;"));
-        assert_eq!(body, "%%c<>{\\C3;\\SH7/g6;},通");
+        assert_eq!(body, "%%c<>{}{\\C3;\\SH7/g6;},通");
         // 无 ||| → 公差追加末尾（保留 {} 空组）
         let body2 = render_text_template("<>", 100.0, Some("\\C3;\\SH7/g6;"));
         assert_eq!(body2, "<>{}{\\C3;\\SH7/g6;}");
@@ -1869,7 +1870,7 @@ mod tests {
         let dim = build_dimension(&sender, &doc, [0.0, 0.0, 0.0], [25.0, 0.0, 0.0], &pd, "OCSM_GB").unwrap();
         assert_eq!(
             dim.base().text,
-            "{\\A1;%%c<>{\\C3;\\SH7/g6;},通}"
+            "{\\A1;%%c<>{}{\\C3;\\SH7/g6;},通}"
         );
     }
 
