@@ -600,7 +600,11 @@ fn build_guide_radial_block(
     // 文字内容：user_text（<> 替换测量）或自动前缀+测量。
     let auto_value = format!("{prefix}{}", format_measurement(measurement, params.dec.unwrap_or(2)));
     let text_visible = match &params.text {
-        Some(t) if !t.is_empty() && *t != "%%c<>" => t.replace("<>", &auto_value),
+        // 直径/半径自动加 Ø/R 前缀（auto_value），用户输入中的 %%c 去掉避免重复
+        //（%%c<> 传统写法 → 用 auto_value；其它文字替换 <> 时清 %%c）。
+        Some(t) if !t.is_empty() && *t != "%%c<>" => {
+            t.replace("%%c", "").replace("<>", &auto_value)
+        }
         _ => auto_value,
     };
     // 公差（直径/半径也支持）：优先 ISO 配合代号（fit）结合测量值算偏差，
@@ -668,6 +672,13 @@ fn build_guide_radial_block(
     //（文字悬于线上方一个 DIMGAP 间隙，对照示例 insert 推导吻合）。
     let mut mk_mtext = |value: String, anchor: Vector3, rotation: f64, up: Vector3| -> E {
         let mut m = MText::new();
+        // 行宽自适应：MText::new() 默认 rectangle_width=10，长文字（测量+公差+后缀）
+        // 会被 OCS 按 10 单位折行；按可见字符估算宽度给足空间。
+        let visible_len = value
+            .chars()
+            .filter(|c| !matches!(c, '\\' | '{' | '}' | ';' | '^'))
+            .count() as f64;
+        m.rectangle_width = (visible_len * h * 0.75).max(10.0);
         m.value = value;
         m.insertion_point = anchor + up * gap;
         m.height = h;
