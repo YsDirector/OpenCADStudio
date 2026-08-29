@@ -37,7 +37,7 @@
   /* 模态窗口 */
   #tol-modal { position: fixed; inset: 0; background: rgba(0,0,0,.42); z-index: 50;
                display: none; align-items: center; justify-content: center; }
-  #tol-modal .card { background: #fff; border-radius: 10px; padding: 18px; width: 740px;
+  #tol-modal .card { background: #fff; border-radius: 10px; padding: 18px; width: 860px;
                      max-height: 88vh; overflow: auto; box-shadow: 0 8px 30px rgba(0,0,0,.25); }
   #tol-modal h2 { font-size: 15px; margin-bottom: 10px; }
   #tol-modal .dimline { font-size: 12px; color: #555; margin-left: 10px; }
@@ -59,6 +59,9 @@
   .tolchip { display: inline-block; padding: 2px 9px; margin: 2px; border: 1px solid #bbb;
              border-radius: 11px; cursor: pointer; font-size: 11px; background: #fff; }
   .tolchip:hover { background: #dbe7ff; border-color: var(--accent); }
+  /* 配合网格紧凑：22+1 列须在卡片宽度内完整显示 */
+  table.toltbl.fitgrid th, table.toltbl.fitgrid td { padding: 2px 2px; font-size: 10px; }
+  table.toltbl.fitgrid .tolchip { padding: 1px 4px; margin: 1px; font-size: 10px; border-radius: 8px; }
 </style>
 </head>
 <body>
@@ -374,14 +377,14 @@ const SHAFT_BANDS = {
   [0,0,0,0,0,"f5","g5","h5","js5","j5","k5","m5","n5","p5","r5","s5","t5","u5","v5","x5",0,0],
   [0,0,0,0,"e6","f6","g6","h6","js6","j6","k6","m6","n6","p6","r6","s6","t6","u6","v6","x6","y6","z6"],
   [0,0,0,"d7","e7","f7","g7","h7","js7","j7","k7","m7","n7","p7","r7","s7","t7","u7","v7","x7","y7","z7"],
-  [0,0,"c8","d8","e8","f8","g8","h8","js8","j8","k8","m8","n8","p8","r8","s8","t8","u8","v8","x8","y8","z8"],
-  ["a9","b9","c9","d9","e9","f9","g9","h9","js9",0,"k9","m9","n9","p9","r9","s9","t9","u9","v9","x9","y9","z9"],
-  ["a10","b10","c10","d10","e10","f10","g10","h10","js10",0,"k10","m10","n10","p10","r10","s10","t10","u10","v10","x10","y10","z10"],
-  ["a11","b11","c11","d11","e11","f11","g11","h11","js11",0,"k11","m11","n11","p11","r11","s11","t11","u11","v11","x11","y11","z11"],
-  ["a12","b12","c12","d12","e12","f12","g12","h12","js12",0,"k12","m12","n12","p12","r12","s12","t12","u12","v12","x12","y12","z12"],
-  ["a13","b13","c13","d13","e13","f13","g13","h13","js13",0,"k13","m13","n13","p13","r13","s13","t13","u13","v13","x13","y13","z13"]
+  [0,0,"c8","d8","e8","f8","g8","h8","js8",0,"k8","m8","n8","p8","r8","s8","t8","u8","v8","x8","y8","z8"],
+  ["a9","b9","c9","d9","e9","f9",0,"h9","js9",0,0,0,0,0,0,0,0,0,0,0,0,0],
+  ["a10","b10","c10","d10","e10",0,0,"h10","js10",0,0,0,0,0,0,0,0,0,0,0,0,0],
+  ["a11","b11","c11","d11",0,0,0,"h11","js11",0,0,0,0,0,0,0,0,0,0,0,0,0],
+  ["a12","b12","c12",0,0,0,0,"h12","js12",0,0,0,0,0,0,0,0,0,0,0,0,0],
+  ["a13","b13",0,0,0,0,0,"h13","js13",0,0,0,0,0,0,0,0,0,0,0,0,0]
 ],
-  '500-3150': [
+'500-3150': [
   [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
   [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
   [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
@@ -468,42 +471,87 @@ const BS_FITS = [
     }
     box.appendChild(tbl);
   }
-  // 配合表（基孔制/基轴制）：fits=[{base,c,t,i}]；holeFirst=true 时 base 为孔（H6/f5），
-  // false 时 base 为轴（F6/h5）。
-  function renderFitTable(fits, baseLabel, holeFirst) {
+  // 配合表网格（基孔制/基轴制，风格与公差带网格统一）：
+  // 行=基准（孔/轴），列=配合对象代号，顶部分组标题（间隙/过渡/过盈），
+  // 格子=该基准该列的配合代号，点击生成完整配合。
+  const FIT_GRIDS = {
+    bh: { baseLabel: '基准孔', holeFirst: true,
+      cols: ['a','b','c','d','e','f','g','h','js','k','m','n','p','r','s','t','u','v','x','y','z'],
+      groups: [['间隙配合',['a','b','c','d','e','f','g','h']],
+               ['过渡配合',['js','k','m','n']],
+               ['过盈配合',['p','r','s','t','u','v','x','y','z']]],
+      fits: BH_FITS },
+    bs: { baseLabel: '基准轴', holeFirst: false,
+      cols: ['A','B','C','D','E','F','G','H','JS','K','M','N','P','R','S','T','U','V','X','Y','Z'],
+      groups: [['间隙配合',['A','B','C','D','E','F','G','H']],
+               ['过渡配合',['JS','K','M','N']],
+               ['过盈配合',['P','R','S','T','U','V','X','Y','Z']]],
+      fits: BS_FITS },
+  };
+  // 把 fits 的 c/t/i 代号数组转成 列->[代号...] 映射。
+  // 一列可含多个代号（如基孔制 H8 行 e 列 = e7+e8 两档轴，原图为上下两格）。
+  function fitColMap(row) {
+    const m = {};
+    for (const arr of [row.c || [], row.t || [], row.i || []]) {
+      for (const code of arr) {
+        const col = code.replace(/[0-9]+$/, '');
+        if (col) (m[col] = m[col] || []).push(code);
+      }
+    }
+    return m;
+  }
+  function renderFitGrid(kind) {
+    const cfg = FIT_GRIDS[kind];
     const box = document.getElementById('tol-table');
     box.innerHTML = '';
     const tbl = document.createElement('table');
-    tbl.className = 'toltbl';
-    const groups = [['c', '间隙配合'], ['t', '过渡配合'], ['i', '过盈配合']];
-    const head = document.createElement('tr');
-    const th0 = document.createElement('th');
-    th0.textContent = baseLabel;
-    head.appendChild(th0);
-    for (const [, label] of groups) {
+    tbl.className = 'toltbl fitgrid';
+    // 第一行：分组标题（合并列）。
+    const ghead = document.createElement('tr');
+    const g0 = document.createElement('th');
+    g0.textContent = cfg.baseLabel;
+    ghead.appendChild(g0);
+    for (const [label, cols] of cfg.groups) {
       const th = document.createElement('th');
       th.textContent = label;
-      head.appendChild(th);
+      th.colSpan = cols.length;
+      th.style.background = '#eef3fb';
+      ghead.appendChild(th);
     }
-    tbl.appendChild(head);
-    for (const row of fits) {
+    tbl.appendChild(ghead);
+    // 第二行：列代号。
+    const chead = document.createElement('tr');
+    const c0 = document.createElement('th');
+    c0.textContent = 'IT\基准';
+    chead.appendChild(c0);
+    for (const col of cfg.cols) {
+      const th = document.createElement('th');
+      th.textContent = col;
+      chead.appendChild(th);
+    }
+    tbl.appendChild(chead);
+    // 数据行：格子=配合代号（一列可多个 chips）。
+    for (const row of cfg.fits) {
+      const map = fitColMap(row);
       const tr = document.createElement('tr');
       const td0 = document.createElement('td');
       td0.textContent = row.base;
       td0.style.fontWeight = '600';
       td0.style.background = '#eef3fb';
       tr.appendChild(td0);
-      for (const [k] of groups) {
+      for (const col of cfg.cols) {
+        const codes = map[col];
         const td = document.createElement('td');
-        td.className = 'group-cell ' + k;
-        for (const code of row[k] || []) {
-          const chip = document.createElement('span');
-          chip.className = 'tolchip';
-          chip.textContent = code;
-          const fit = holeFirst ? (row.base + '/' + code) : (code + '/' + row.base);
-          chip.title = '点击生成配合 ' + fit;
-          chip.addEventListener('click', () => pickFit(fit));
-          td.appendChild(chip);
+        if (codes && codes.length) {
+          for (const code of codes) {
+            const chip = document.createElement('span');
+            chip.className = 'tolchip';
+            chip.textContent = code;
+            const fit = cfg.holeFirst ? (row.base + '/' + code) : (code + '/' + row.base);
+            chip.title = '点击生成配合 ' + fit;
+            chip.addEventListener('click', () => pickFit(fit));
+            td.appendChild(chip);
+          }
         }
         tr.appendChild(td);
       }
@@ -514,8 +562,8 @@ const BS_FITS = [
   function renderTolTable(tab) {
     if (tab === 'hole') { renderBandGrid(HOLE_BANDS_COLS, HOLE_BANDS, '孔'); return; }
     if (tab === 'shaft') { renderBandGrid(SHAFT_BANDS_COLS, SHAFT_BANDS, '轴'); return; }
-    if (tab === 'bh') { renderFitTable(BH_FITS, '基准孔', true); return; }
-    if (tab === 'bs') { renderFitTable(BS_FITS, '基准轴', false); return; }
+    if (tab === 'bh') { renderFitGrid('bh'); return; }
+    if (tab === 'bs') { renderFitGrid('bs'); return; }
     const box = document.getElementById('tol-table');
     box.innerHTML = '';
     const tbl = document.createElement('table');
