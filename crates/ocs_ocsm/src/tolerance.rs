@@ -324,6 +324,35 @@ mod tests {
         assert!((f.min_gap - (-35e-3)).abs() < 1e-9);
     }
 
+    // 基孔制优先/常用配合表（GB/T 1801-2009，至500mm，参考 基孔制1.png 表2-2-43）。
+    // 断言所有组合均为有效 ISO 配合（fit 可算）；分组以用户图为权威
+    //（边界组合如 H6/n5 数学上最小过盈 1µm，标准表按人工划过渡，不断言 kind）。
+    #[test]
+    fn bh_fit_table_valid() {
+        let d = 50.0;
+        for s in ["f5","g5","h5","js5","k5","m5","n5","p5","r5","s5","t5"] { assert!(fit(d,"H6",s).is_some(), "H6/{s}"); }
+        for s in ["f6","g6","h6","js6","k6","m6","n6","p6","r6","s6","t6","u6","v6","x6","y6","z6"] { assert!(fit(d,"H7",s).is_some(), "H7/{s}"); }
+        for s in ["e7","f7","g7","h7","d8","e8","f8","h8","js7","k7","m7","n7","p7","r7","s7","t7","u7"] { assert!(fit(d,"H8",s).is_some(), "H8/{s}"); }
+        for s in ["c9","d9","e9","f9","h9"] { assert!(fit(d,"H9",s).is_some(), "H9/{s}"); }
+        for s in ["c10","d10","h10"] { assert!(fit(d,"H10",s).is_some(), "H10/{s}"); }
+        for s in ["a11","b11","c11","d11","h11"] { assert!(fit(d,"H11",s).is_some(), "H11/{s}"); }
+        for s in ["b12","h12"] { assert!(fit(d,"H12",s).is_some(), "H12/{s}"); }
+    }
+
+    // 基轴制优先/常用配合表（GB/T 1801-2009，至500mm，参考 基轴制1.png 表2-2-44）。
+    #[test]
+    fn bs_fit_table_valid() {
+        let d = 50.0;
+        for h in ["F6","G6","H6","JS6","K6","M6","N6","P6","R6","S6","T6"] { assert!(fit(d,h,"h5").is_some(), "{h}/h5"); }
+        for h in ["F7","G7","H7","JS7","K7","M7","N7","P7","R7","S7","T7","U7"] { assert!(fit(d,h,"h6").is_some(), "{h}/h6"); }
+        for h in ["E8","F8","H8","JS8","K8","M8","N8"] { assert!(fit(d,h,"h7").is_some(), "{h}/h7"); }
+        for h in ["D8","E8","F8","H8"] { assert!(fit(d,h,"h8").is_some(), "{h}/h8"); }
+        for h in ["D9","E9","F9","H9"] { assert!(fit(d,h,"h9").is_some(), "{h}/h9"); }
+        for h in ["D10","H10"] { assert!(fit(d,h,"h10").is_some(), "{h}/h10"); }
+        for h in ["A11","B11","C11","D11","H11"] { assert!(fit(d,h,"h11").is_some(), "{h}/h11"); }
+        for h in ["B12","H12"] { assert!(fit(d,h,"h12").is_some(), "{h}/h12"); }
+    }
+
     #[test]
     fn fit_H7_n6_transition() {
         // 25H7/n6：孔 +21/0，轴 +28/+15 → 过渡（-15~+6µm）。
