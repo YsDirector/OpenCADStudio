@@ -548,6 +548,7 @@ fn build_guide_angular_block(
     };
     let bis = start + sweep * 0.5; // 角平分线角（劣角内）
     let bis_v = Vector3::new(bis.cos(), bis.sin(), 0.0);
+    let delta = 18.393_f64.to_radians(); // 延长弧（对照示例）
 
     let mut members: Vec<E> = Vec::new();
     let mut mk_arc = |a1: f64, a2: f64| -> E {
@@ -564,16 +565,19 @@ fn build_guide_angular_block(
         // 优角：大半圆弧（从 end 逆时针 360°−θ 到 start）。
         members.push(mk_arc(end, start));
     } else {
-        // 劣角：只主弧（无延长弧，箭头在主弧两端尖朝内）。
+        // 劣角：主弧 + 延长弧（起点端 start−δ..start、终点端 end..end+δ）。
         members.push(mk_arc(start, end));
+        members.push(mk_arc(start - delta, start));
+        members.push(mk_arc(end, end + delta));
     }
     // 箭头：尖在弧端，底边朝弧外侧（起点端顺时针切线、终点端逆时针切线），
     // 长 h、底边宽 h/3（对照示例：尖到底边 2.49≈h、底宽 0.83≈h/3）。
-    // 箭头：底边在弧端，尖指向角顶点（角的内部）——"从外侧指向内侧"。
+    // 箭头：底边在弧端（内侧），尖指向弧外侧（out 方向 h 处）——"从内侧指向外侧"。
     // 细长：半宽 h/6（全宽 h/3 → 长:宽 = 3:1，对齐宿主线性 ClosedFilled）。
-    let mk_arrow = |tip_ang: f64, radial: Vector3| -> E {
+    let mk_arrow = |tip_ang: f64, out_ang: f64, radial: Vector3| -> E {
         let arc_end = v + Vector3::new(tip_ang.cos(), tip_ang.sin(), 0.0) * r;
-        let tip = arc_end - radial * h; // 尖朝角顶点（内部）
+        let out = Vector3::new(out_ang.cos(), out_ang.sin(), 0.0);
+        let tip = arc_end + out * h; // 尖朝弧外侧
         let perp = radial * (h / 6.0);
         let base = arc_end; // 底边在弧端
         let mut e = E::Solid(Solid::new(tip, base + perp, base - perp, base - perp));
@@ -585,8 +589,8 @@ fn build_guide_angular_block(
     // 两箭头干涉（弧长 < 2×箭头长）时跳过箭头。
     let arc_len = r * sweep;
     if arc_len >= 2.0 * h {
-        members.push(mk_arrow(start, rad_start));
-        members.push(mk_arrow(end, rad_end));
+        members.push(mk_arrow(start, start - FRAC_PI_2, rad_start));
+        members.push(mk_arrow(end, end + FRAC_PI_2, rad_end));
     }
     // MTEXT：`{θ°}` attach=8，insert=角平分线 (r+gap)（文字底部中心）。
     // 文字书写方向 ⊥ 顶点→文字（径向）→ 沿弧切向（bis − 90°），clamp 防倒置。
