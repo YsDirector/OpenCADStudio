@@ -480,9 +480,6 @@ fn build_guide_angular(
     let minor_deg = angular_minor_sweep_deg(&line1, &line2, pt);
     let (measurement, user_text) = match mode {
         crate::guide_url::AngleMode::Minor => (minor_deg, format!("{:.0}°", minor_deg)),
-        crate::guide_url::AngleMode::Complement => {
-            (180.0 - minor_deg, format!("{:.0}°", 180.0 - minor_deg))
-        }
         crate::guide_url::AngleMode::Reflex => {
             (360.0 - minor_deg, format!("{:.0}°", 360.0 - minor_deg))
         }
@@ -544,6 +541,11 @@ fn build_guide_angular_block(
         sweep = TAU - sweep;
     }
     let minor_deg = sweep.to_degrees();
+    // 角模式 → 显示值：劣角 / 补角（180−劣角）/ 优角（360−劣角）。
+    let show_deg = match params.angle_mode {
+        crate::guide_url::AngleMode::Minor => minor_deg,
+        crate::guide_url::AngleMode::Reflex => 360.0 - minor_deg,
+    };
     let bis = start + sweep * 0.5; // 角平分线角（劣角内）
     let bis_v = Vector3::new(bis.cos(), bis.sin(), 0.0);
     let delta = 18.393_f64.to_radians(); // 延长弧（对照示例）
@@ -559,17 +561,23 @@ fn build_guide_angular_block(
         set_member_layer(&mut e, "7标注层");
         e
     };
-    // 主弧 + 延长弧（起点端 start−δ..start、终点端 end..end+δ）。
-    members.push(mk_arc(start, end));
-    members.push(mk_arc(start - delta, start));
-    members.push(mk_arc(end, end + delta));
+    if params.angle_mode == crate::guide_url::AngleMode::Reflex {
+        // 优角：大半圆弧（从 end 逆时针 360°−θ 到 start）。
+        members.push(mk_arc(end, start));
+    } else {
+        // 劣角：主弧 + 延长弧（起点端 start−δ..start、终点端 end..end+δ）。
+        members.push(mk_arc(start, end));
+        members.push(mk_arc(start - delta, start));
+        members.push(mk_arc(end, end + delta));
+    }
     // 箭头：尖在弧端，底边朝弧外侧（起点端顺时针切线、终点端逆时针切线），
     // 长 h、底边宽 h/3（对照示例：尖到底边 2.49≈h、底宽 0.83≈h/3）。
     let mk_arrow = |tip_ang: f64, out_ang: f64, radial: Vector3| -> E {
         let tip = v + Vector3::new(tip_ang.cos(), tip_ang.sin(), 0.0) * r;
         let out = Vector3::new(out_ang.cos(), out_ang.sin(), 0.0);
         let base = tip + out * h;
-        let perp = radial * (h / 3.0);
+        // 细长箭头：半宽 h/6（全宽 h/3 → 长:宽 = 3:1，对齐宿主线性 ClosedFilled）。
+        let perp = radial * (h / 6.0);
         let mut e = E::Solid(Solid::new(tip, base + perp, base - perp, base - perp));
         set_member_layer(&mut e, "7标注层");
         e
@@ -578,14 +586,21 @@ fn build_guide_angular_block(
     let rad_end = Vector3::new(end.cos(), end.sin(), 0.0);
     members.push(mk_arrow(start, start - FRAC_PI_2, rad_start));
     members.push(mk_arrow(end, end + FRAC_PI_2, rad_end));
-    // MTEXT：`{θ°}` 水平、attach=8，insert=角平分线 (r+gap)（文字底部中心）。
-    let text_value = format!("{{{:.0}°}}", minor_deg);
+    // MTEXT：`{θ°}` attach=8，insert=角平分线 (r+gap)（文字底部中心）。
+    // 文字书写方向 ⊥ 顶点→文字（径向）→ 沿弧切向（bis − 90°），clamp 防倒置。
+    let text_value = format!("{{{:.0}°}}", show_deg);
     let mut m = MText::new();
     m.rectangle_width = (text_value.chars().count() as f64 * h * 0.75).max(10.0);
     m.value = text_value;
     m.insertion_point = v + bis_v * (r + gap);
     m.height = h;
-    m.rotation = 0.0;
+    let mut text_rot = bis - FRAC_PI_2;
+    if text_rot > FRAC_PI_2 {
+        text_rot -= PI;
+    } else if text_rot <= -FRAC_PI_2 {
+        text_rot += PI;
+    }
+    m.rotation = text_rot;
     m.style = "OCSM_GB".into();
     m.attachment_point = AttachmentPoint::BottomCenter;
     let mut e = E::MText(m);
@@ -744,7 +759,8 @@ fn arrow_solid(
     size: f64,
 ) -> acadrust::entities::Solid {
     use acadrust::types::Vector3;
-    let perp = Vector3::new(-away.y, away.x, 0.0) * (size / 3.0);
+    // 细长箭头：半宽 size/6（全宽 size/3 → 长:宽 = 3:1，对齐宿主线性 ClosedFilled）。
+    let perp = Vector3::new(-away.y, away.x, 0.0) * (size / 6.0);
     let base = tip - away * size;
     acadrust::entities::Solid::new(tip, base + perp, base - perp, base - perp)
 }
@@ -2589,11 +2605,7 @@ mod integration {
         assert!((tm.x - 20.0 * 22.5f64.to_radians().cos()).abs() < 1e-6, "x {}", tm.x);
         assert!((tm.y - 20.0 * 22.5f64.to_radians().sin()).abs() < 1e-6, "y {}", tm.y);
 
-        // 补角 135° / 优角 315°。
-        let comp = build_guide_angular(p0, p1, p2, dist, crate::guide_url::AngleMode::Complement, "OCSM_GB").unwrap();
-        let cd = match &comp { Dimension::Angular2Ln(d) => d, _ => panic!() };
-        assert!((cd.base.actual_measurement - 135.0).abs() < 1e-6, "补角 135");
-        assert_eq!(cd.base.user_text.as_deref(), Some("135°"));
+        // 优角 315°。
         let refl = build_guide_angular(p0, p1, p2, dist, crate::guide_url::AngleMode::Reflex, "OCSM_GB").unwrap();
         let rd = match &refl { Dimension::Angular2Ln(d) => d, _ => panic!() };
         assert!((rd.base.actual_measurement - 315.0).abs() < 1e-6, "优角 315");
@@ -2608,20 +2620,18 @@ mod integration {
         assert_eq!(p.guide_type, crate::guide_url::GuideType::Angle);
         assert_eq!(p.angle_mode, AngleMode::Minor);
         assert!((p.dist - 45.0).abs() < 1e-9);
-        // 显式补角/优角。
-        let c = crate::guide_url::GuideParams::from_url("http://127.0.0.1:23751/DIM/ANGLE/C/60").unwrap();
-        assert_eq!(c.angle_mode, AngleMode::Complement);
+        // 显式优角。
         let r = crate::guide_url::GuideParams::from_url("http://127.0.0.1:23751/DIM/ANGLE/R/60").unwrap();
         assert_eq!(r.angle_mode, AngleMode::Reflex);
-        // to_url 往返：劣角不输出模式段，补角/优角输出。
+        // to_url 往返：劣角不输出模式段，优角输出 R。
         let mut cp = crate::guide_url::GuideParams::linear(crate::guide_url::LinearSub::Aligned, 10.0);
         cp.guide_type = crate::guide_url::GuideType::Angle;
         cp.dist = 60.0;
         let u = cp.to_url(23751);
         assert_eq!(u, "http://127.0.0.1:23751/DIM/ANGLE/60", "劣角不输出: {u}");
-        cp.angle_mode = AngleMode::Complement;
+        cp.angle_mode = AngleMode::Reflex;
         let u2 = cp.to_url(23751);
-        assert_eq!(u2, "http://127.0.0.1:23751/DIM/ANGLE/C/60", "补角: {u2}");
+        assert_eq!(u2, "http://127.0.0.1:23751/DIM/ANGLE/R/60", "优角: {u2}");
     }
 
     #[test]

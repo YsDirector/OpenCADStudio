@@ -149,8 +149,6 @@ pub enum AngleMode {
     /// 劣角（锐角，默认）。
     #[default]
     Minor,
-    /// 补角（180°−劣角，折角）。
-    Complement,
     /// 优角（360°−劣角）。
     Reflex,
 }
@@ -159,14 +157,12 @@ impl AngleMode {
     pub fn as_str(self) -> &'static str {
         match self {
             AngleMode::Minor => "M",
-            AngleMode::Complement => "C",
             AngleMode::Reflex => "R",
         }
     }
     fn from_str(s: &str) -> Option<Self> {
         match s.to_ascii_uppercase().as_str() {
             "M" | "MINOR" | "劣" => Some(AngleMode::Minor),
-            "C" | "COMPLEMENT" | "COMP" | "补" => Some(AngleMode::Complement),
             "R" | "REFLEX" | "REF" | "优" => Some(AngleMode::Reflex),
             _ => None,
         }
@@ -176,7 +172,6 @@ impl AngleMode {
     pub fn label(self) -> &'static str {
         match self {
             AngleMode::Minor => "劣角",
-            AngleMode::Complement => "补角",
             AngleMode::Reflex => "优角",
         }
     }
