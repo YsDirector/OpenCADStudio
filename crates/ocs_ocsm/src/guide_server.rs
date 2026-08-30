@@ -569,14 +569,15 @@ fn build_guide_angular_block(
     }
     // 箭头：尖在弧端，底边朝弧外侧（起点端顺时针切线、终点端逆时针切线），
     // 长 h、底边宽 h/3（对照示例：尖到底边 2.49≈h、底宽 0.83≈h/3）。
-    // 箭头：底边在弧端（内侧），尖指向弧外侧（out 方向 h 处）——"从内侧指向外侧"。
+    // 箭头：位于夹角内侧（弧线内侧，底边在弧端向内 h 处），尖指向弧外侧——
+    // "渲染在夹角的内侧，并由内侧指向外侧"（方向=切线朝外，位置=弧内）。
     // 细长：半宽 h/6（全宽 h/3 → 长:宽 = 3:1，对齐宿主线性 ClosedFilled）。
     let mk_arrow = |tip_ang: f64, out_ang: f64, radial: Vector3| -> E {
         let arc_end = v + Vector3::new(tip_ang.cos(), tip_ang.sin(), 0.0) * r;
         let out = Vector3::new(out_ang.cos(), out_ang.sin(), 0.0);
-        let tip = arc_end + out * h; // 尖朝弧外侧
+        let tip = arc_end; // 尖在弧端（最外侧）
         let perp = radial * (h / 6.0);
-        let base = arc_end; // 底边在弧端
+        let base = arc_end - out * h; // 底边在弧内侧 h 处（夹角内侧）
         let mut e = E::Solid(Solid::new(tip, base + perp, base - perp, base - perp));
         set_member_layer(&mut e, "7标注层");
         e
