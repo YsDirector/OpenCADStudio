@@ -548,7 +548,6 @@ fn build_guide_angular_block(
     };
     let bis = start + sweep * 0.5; // 角平分线角（劣角内）
     let bis_v = Vector3::new(bis.cos(), bis.sin(), 0.0);
-    let delta = 18.393_f64.to_radians(); // 延长弧（对照示例）
 
     let mut members: Vec<E> = Vec::new();
     let mut mk_arc = |a1: f64, a2: f64| -> E {
@@ -565,10 +564,8 @@ fn build_guide_angular_block(
         // 优角：大半圆弧（从 end 逆时针 360°−θ 到 start）。
         members.push(mk_arc(end, start));
     } else {
-        // 劣角：主弧 + 延长弧（起点端 start−δ..start、终点端 end..end+δ）。
+        // 劣角：只主弧（无延长弧，箭头在主弧两端尖朝外）。
         members.push(mk_arc(start, end));
-        members.push(mk_arc(start - delta, start));
-        members.push(mk_arc(end, end + delta));
     }
     // 箭头：尖在弧端，底边朝弧外侧（起点端顺时针切线、终点端逆时针切线），
     // 长 h、底边宽 h/3（对照示例：尖到底边 2.49≈h、底宽 0.83≈h/3）。
