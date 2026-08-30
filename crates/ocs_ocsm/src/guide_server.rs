@@ -572,20 +572,26 @@ fn build_guide_angular_block(
     }
     // 箭头：尖在弧端，底边朝弧外侧（起点端顺时针切线、终点端逆时针切线），
     // 长 h、底边宽 h/3（对照示例：尖到底边 2.49≈h、底宽 0.83≈h/3）。
+    // 箭头：底边在弧端（内侧），尖指向弧外侧（out 方向 h 处）——"从内侧指向外侧"。
+    // 细长：半宽 h/6（全宽 h/3 → 长:宽 = 3:1，对齐宿主线性 ClosedFilled）。
     let mk_arrow = |tip_ang: f64, out_ang: f64, radial: Vector3| -> E {
-        let tip = v + Vector3::new(tip_ang.cos(), tip_ang.sin(), 0.0) * r;
+        let arc_end = v + Vector3::new(tip_ang.cos(), tip_ang.sin(), 0.0) * r;
         let out = Vector3::new(out_ang.cos(), out_ang.sin(), 0.0);
-        let base = tip + out * h;
-        // 细长箭头：半宽 h/6（全宽 h/3 → 长:宽 = 3:1，对齐宿主线性 ClosedFilled）。
+        let tip = arc_end + out * h; // 尖朝弧外侧
         let perp = radial * (h / 6.0);
+        let base = arc_end; // 底边在弧端
         let mut e = E::Solid(Solid::new(tip, base + perp, base - perp, base - perp));
         set_member_layer(&mut e, "7标注层");
         e
     };
     let rad_start = Vector3::new(start.cos(), start.sin(), 0.0);
     let rad_end = Vector3::new(end.cos(), end.sin(), 0.0);
-    members.push(mk_arrow(start, start - FRAC_PI_2, rad_start));
-    members.push(mk_arrow(end, end + FRAC_PI_2, rad_end));
+    // 两箭头干涉（弧长 < 2×箭头长）时跳过箭头。
+    let arc_len = r * sweep;
+    if arc_len >= 2.0 * h {
+        members.push(mk_arrow(start, start - FRAC_PI_2, rad_start));
+        members.push(mk_arrow(end, end + FRAC_PI_2, rad_end));
+    }
     // MTEXT：`{θ°}` attach=8，insert=角平分线 (r+gap)（文字底部中心）。
     // 文字书写方向 ⊥ 顶点→文字（径向）→ 沿弧切向（bis − 90°），clamp 防倒置。
     let text_value = format!("{{{:.0}°}}", show_deg);
