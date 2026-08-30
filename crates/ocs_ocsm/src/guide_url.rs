@@ -24,6 +24,7 @@ pub enum GuideType {
     Radius,
     Datum,
     View,
+    Angle,
 }
 
 impl GuideType {
@@ -34,6 +35,7 @@ impl GuideType {
             GuideType::Radius => "RADIUS",
             GuideType::Datum => "DATUM",
             GuideType::View => "VIEW",
+            GuideType::Angle => "ANGLE",
         }
     }
     fn from_str(s: &str) -> Option<Self> {
@@ -43,6 +45,7 @@ impl GuideType {
             "RADIUS" => Some(GuideType::Radius),
             "DATUM" => Some(GuideType::Datum),
             "VIEW" => Some(GuideType::View),
+            "ANGLE" => Some(GuideType::Angle),
             _ => None,
         }
     }
@@ -140,6 +143,45 @@ impl FlipDir {
     }
 }
 
+/// 角度标注的角模式（两段 PLINE 引导线，顶点即转折点）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AngleMode {
+    /// 劣角（锐角，默认）。
+    #[default]
+    Minor,
+    /// 补角（180°−劣角，折角）。
+    Complement,
+    /// 优角（360°−劣角）。
+    Reflex,
+}
+
+impl AngleMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            AngleMode::Minor => "M",
+            AngleMode::Complement => "C",
+            AngleMode::Reflex => "R",
+        }
+    }
+    fn from_str(s: &str) -> Option<Self> {
+        match s.to_ascii_uppercase().as_str() {
+            "M" | "MINOR" | "劣" => Some(AngleMode::Minor),
+            "C" | "COMPLEMENT" | "COMP" | "补" => Some(AngleMode::Complement),
+            "R" | "REFLEX" | "REF" | "优" => Some(AngleMode::Reflex),
+            _ => None,
+        }
+    }
+    /// 显示名（GUI 用）。
+    #[allow(dead_code)]
+    pub fn label(self) -> &'static str {
+        match self {
+            AngleMode::Minor => "劣角",
+            AngleMode::Complement => "补角",
+            AngleMode::Reflex => "优角",
+        }
+    }
+}
+
 /// 解析后的标注参数。
 #[derive(Debug, Clone, PartialEq)]
 pub struct GuideParams {
@@ -172,6 +214,8 @@ pub struct GuideParams {
     pub flip: FlipDir,
     /// 向视图标记放置点（仅 VIEW；缺省 (0,0)，字母中心锚定）。
     pub marker: Option<(f64, f64)>,
+    /// 角度标注角模式（仅 ANGLE；默认劣角 Minor）。
+    pub angle_mode: AngleMode,
 }
 
 impl GuideParams {
@@ -194,6 +238,7 @@ impl GuideParams {
             scale: None,
             flip: FlipDir::None,
             marker: None,
+            angle_mode: AngleMode::Minor,
         }
     }
 
@@ -213,13 +258,25 @@ impl GuideParams {
         let type_raw = segs.next()?;
         let guide_type = GuideType::from_str(type_raw)?;
 
-        // 剩余段：线性 = [SUB, dist]；其它类型暂只需 [dist]（留白）。
+        // 剩余段：线性 = [SUB, dist]；角度 = [mode, dist]（mode 可缺省 → 劣角）。
         let sub = if guide_type == GuideType::Linear {
             Some(LinearSub::from_str(segs.next()?)?)
         } else {
             None
         };
-        let dist: f64 = segs.next()?.parse().ok()?;
+        let mut angle_mode = AngleMode::Minor;
+        let dist: f64 = if guide_type == GuideType::Angle {
+            // 第 3 段可能是角模式（M/C/R），也可能是直接 dist（缺省劣角）。
+            let s3 = segs.next()?;
+            if let Ok(d) = s3.parse::<f64>() {
+                d
+            } else {
+                angle_mode = AngleMode::from_str(s3)?;
+                segs.next()?.parse().ok()?
+            }
+        } else {
+            segs.next()?.parse().ok()?
+        };
 
         // query 参数（text/tol/up/dn/sym）。
         let mut text = None;
@@ -227,8 +284,6 @@ impl GuideParams {
         let mut up: Option<String> = None;
         let mut dn: Option<String> = None;
         let mut sym = None;
-        let mut up = None;
-        let mut dn = None;
         let mut fit: Option<String> = None;
         let mut dec = None;
         let mut ver = DatumVersion::GB2008;
@@ -282,6 +337,7 @@ impl GuideParams {
             scale,
             flip,
             marker,
+            angle_mode,
         })
     }
 
@@ -289,12 +345,15 @@ impl GuideParams {
 #[allow(dead_code)]
     pub fn to_url(&self, port: u16) -> String {
         let mut url = format!("http://127.0.0.1:{port}/DIM/{}", self.guide_type.as_str());
-        // 仅 LINEAR 带子类型段；其它类型（含 VIEW）无 sub。
+        // 仅 LINEAR 带子类型段；ANGLE 非劣角带角模式段；其它类型（含 VIEW）无 sub。
         if self.guide_type == GuideType::Linear {
             if let Some(sub) = self.sub {
                 url.push('/');
                 url.push_str(sub.as_str());
             }
+        } else if self.guide_type == GuideType::Angle && self.angle_mode != AngleMode::Minor {
+            url.push('/');
+            url.push_str(self.angle_mode.as_str());
         }
         url.push('/');
         url.push_str(&format_dist(self.dist));

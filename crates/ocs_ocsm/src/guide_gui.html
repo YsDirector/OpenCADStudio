@@ -101,6 +101,7 @@
         <button data-t="RADIUS">半径</button>
         <button data-t="DATUM">基准</button>
         <button data-t="VIEW">向视图</button>
+        <button data-t="ANGLE">角度</button>
       </div>
     </div>
     <div class="row" id="row-sub" style="margin-top:8px">
@@ -117,6 +118,11 @@
       <div class="seg" id="seg-ver" style="display:none; margin-left:10px">
         <button data-ver="2008" class="on">2008</button>
         <button data-ver="1996">1996</button>
+      </div>
+      <div class="seg" id="seg-angle-mode" style="display:none; margin-left:10px">
+        <button data-am="M" class="on">劣角</button>
+        <button data-am="C">补角</button>
+        <button data-am="R">优角</button>
       </div>
       <span class="lbl" id="letter-lbl" style="display:none; margin-left:10px">字母</span>
       <select id="seg-letter" style="display:none; margin-left:6px; padding:2px 6px; font-size:14px"></select>
@@ -231,7 +237,8 @@
   document.getElementById('h').textContent = handle ? ('#' + handle) : '';
 
   let P1 = {x:0, y:0}, P2 = {x:100, y:75};
-  let type = 'LINEAR', sub = 'H', side = 'in', ver = '2008', letter = 'A';
+  let PTS = null; // 引导线全部顶点（ANGLE 两段 PLINE = 3 个）
+  let type = 'LINEAR', sub = 'H', side = 'in', ver = '2008', letter = 'A', angleMode = 'M';
   // GB 基准字母禁用集：1996 用 I/O；2008（ISO 5459）加 E/F/J/L/P/R。
   const DATUM_DISABLED = { '1996': 'IO', '2008': 'EFIJLOPR' };
   function renderLetters() {
@@ -306,12 +313,14 @@
     const linear = (type === 'LINEAR');
     const datum = (type === 'DATUM');
     const view = (type === 'VIEW');
+    const angle = (type === 'ANGLE');
     // row-sub 恒显示：基准/向视图的字母段也放在这一行里。
     document.getElementById('row-sub').style.display = '';
-    document.getElementById('sub-lbl').textContent = linear ? '线性' : '位置';
-    document.getElementById('sub-lbl').style.display = (datum || view) ? 'none' : '';
+    document.getElementById('sub-lbl').textContent = linear ? '线性' : (angle ? '角度' : '位置');
+    document.getElementById('sub-lbl').style.display = (datum || view || angle) ? 'none' : '';
     document.getElementById('seg-sub').style.display = linear ? '' : 'none';
-    document.getElementById('seg-side').style.display = (!linear && !datum && !view) ? '' : 'none';
+    document.getElementById('seg-side').style.display = (!linear && !datum && !view && !angle) ? '' : 'none';
+    document.getElementById('seg-angle-mode').style.display = angle ? '' : 'none';
     // 基准：版本 + 字母；向视图：字母；都隐藏距离/小数位/文字输入。
     document.getElementById('seg-ver').style.display = datum ? '' : 'none';
     document.getElementById('seg-letter').style.display = (datum || view) ? '' : 'none';
@@ -326,7 +335,7 @@
     // 向视图：比例 / 翻转方向 / 标记放置点。
     document.getElementById('row-view').style.display = view ? '' : 'none';
     if (datum || view) { renderLetters(); }
-    else if (!linear) {
+    else if (!linear && !angle) {
       // 切到直径/半径：按内外按钮自动填示例默认 dist
       //（直径 内 −9 / 外 +11；半径 内 −8 / 外 +8）。
       const sideBtn = document.querySelector(`#seg-side button[data-side="${side}"]`);
@@ -336,6 +345,7 @@
     draw();
   });
   segBind('seg-sub', b => { sub = b.dataset.s; draw(); });
+  segBind('seg-angle-mode', b => { angleMode = b.dataset.am; draw(); });
   document.querySelectorAll('#seg-side button').forEach(b => {
     b.addEventListener('click', () => {
       document.querySelectorAll('#seg-side button').forEach(x => x.classList.remove('on'));
@@ -727,6 +737,11 @@ const BS_FITS = [
       const my = document.getElementById('view-my').value.trim();
       if (mx !== '') qs.push('mx=' + mx);
       if (my !== '') qs.push('my=' + my);
+    } else if (type === 'ANGLE') {
+      // 角度：角模式（劣角缺省不输出）+ 放置距离（沿角平分线）。
+      const dist = parseFloat(document.getElementById('dist').value);
+      if (!isFinite(dist)) throw new Error('距离无效');
+      u += (angleMode === 'M') ? `/${dist}` : `/${angleMode}/${dist}`;
     } else {
       const dist = parseFloat(document.getElementById('dist').value);
       if (!isFinite(dist)) throw new Error('距离无效');
@@ -834,6 +849,51 @@ const BS_FITS = [
         tp.textContent = scale; svg.appendChild(tp);
       }
       return;
+    }
+
+    // ── 角度：两段 PLINE（p0-p1 顶点 p1 -p2）+ 角平分线方向放置文字 ──
+    if (type === 'ANGLE') {
+      // 顶点列表缺省时用示意形状（直角：p0=(100,0) p1=(0,0) p2=(100,100)）。
+      const p0 = PTS ? PTS[0] : {x:100, y:0};
+      const p1 = PTS ? PTS[1] : {x:0, y:0};
+      const p2 = PTS ? PTS[2] : {x:100, y:100};
+      const a0 = w2s(p0.x, p0.y), a1 = w2s(p1.x, p1.y), a2 = w2s(p2.x, p2.y);
+      // 两条边（引导线多段线）。
+      svg.appendChild(el('line', {x1:a0.x, y1:a0.y, x2:a1.x, y2:a1.y, stroke:'#2b6fe0', 'stroke-width':3}));
+      svg.appendChild(el('line', {x1:a1.x, y1:a1.y, x2:a2.x, y2:a2.y, stroke:'#2b6fe0', 'stroke-width':3}));
+      svg.appendChild(el('circle', {cx:a1.x, cy:a1.y, r:4, fill:'#333'}));
+      // 顶点标签
+      for (const [p, nm] of [[p0,'p0'],[p1,'p1'],[p2,'p2']]) {
+        const s = w2s(p.x, p.y);
+        const t = el('text', {x:s.x+8, y:s.y-8, 'font-size':14, fill:'#555', 'stroke':'#fff', 'stroke-width':3});
+        t.textContent = nm; svg.appendChild(t);
+      }
+      // 角平分线方向（劣角内部）→ 放置点 = 顶点 + bis×dist。
+      const l1 = Math.hypot(p2.x-p1.x, p2.y-p1.y) || 1;
+      const l2 = Math.hypot(p0.x-p1.x, p0.y-p1.y) || 1;
+      const d1x = (p2.x-p1.x)/l1, d1y = (p2.y-p1.y)/l1;
+      const d2x = (p0.x-p1.x)/l2, d2y = (p0.y-p1.y)/l2;
+      const bl = Math.hypot(d1x+d2x, d1y+d2y) || 1;
+      const bx = (d1x+d2x)/bl, by = (d1y+d2y)/bl;
+      const tx = p1.x + bx*dist, ty = p1.y + by*dist;
+      const st = w2s(tx, ty);
+      // 劣角示意弧（半径 = dist×0.45）
+      const arcR = dist*0.45;
+      const sa = Math.atan2(p0.y-p1.y, p0.x-p1.x);
+      const ea = Math.atan2(p2.y-p1.y, p2.x-p1.x);
+      let sweep = (ea - sa);
+      while (sweep < 0) sweep += 2*Math.PI;
+      if (sweep > Math.PI) { /* 劣角侧 */ }
+      const big = (sweep > Math.PI) ? 1 : 0;
+      const aS = w2s(p1.x + Math.cos(sa)*arcR, p1.y + Math.sin(sa)*arcR);
+      const aE = w2s(p1.x + Math.cos(ea)*arcR, p1.y + Math.sin(ea)*arcR);
+      const arc = el('path', {d:`M ${aS.x} ${aS.y} A ${arcR*cam.scale} ${arcR*cam.scale} 0 ${big} 1 ${aE.x} ${aE.y}`, fill:'none', stroke:'#2b6fe0', 'stroke-width':2.5, 'stroke-dasharray':'4 3'});
+      svg.appendChild(arc);
+      // 文字（跟随角模式）
+      const txt = document.getElementById('text').value || '<>';
+      const te = el('text', {x:st.x, y:st.y, 'text-anchor':'middle', 'font-size':16, fill:'#1a5f1a', 'font-weight':'bold'});
+      te.textContent = txt; svg.appendChild(te);
+      return; // 角度分支结束
     }
 
     // ── 直径/半径：画圆 + 直径线/半径线 + 文字（径向位置/旋转） ──
@@ -990,6 +1050,7 @@ const BS_FITS = [
       if (j.ok) {
         P1 = {x: j.p1[0], y: j.p1[1]};
         P2 = {x: j.p2[0], y: j.p2[1]};
+        PTS = (j.pts && j.pts.length >= 3) ? j.pts.map(p => ({x:p[0], y:p[1]})) : null;
         // 引导线长度 = 主尺寸（公差计算默认尺寸）；必须在 j.params 块外，
         // 否则 URL 无参数（首次 GDIM）时测量值不赋值，模态窗口主尺寸为空。
         if (typeof j.measurement === 'number') measurement = j.measurement;
@@ -1028,6 +1089,13 @@ const BS_FITS = [
             document.querySelectorAll('#seg-side button').forEach(x => x.classList.remove('on'));
             const sb = document.querySelector(`#seg-side button[data-side="${side}"]`);
             if (sb) sb.classList.add('on');
+          }
+          if (type === 'ANGLE' && j.params.angle_mode) {
+            // 恢复角模式（劣角 M / 补角 C / 优角 R）。
+            angleMode = j.params.angle_mode;
+            document.querySelectorAll('#seg-angle-mode button').forEach(x => x.classList.remove('on'));
+            const am = document.querySelector(`#seg-angle-mode button[data-am="${angleMode}"]`);
+            if (am) am.classList.add('on');
           }
         }
         fitCam();

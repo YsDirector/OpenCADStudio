@@ -272,14 +272,59 @@ fn guide_line_points(
     doc: &acadrust::CadDocument,
     handle: acadrust::Handle,
 ) -> Result<([f64; 3], [f64; 3]), String> {
+    let pts = guide_geom_points(doc, handle)?;
+    if pts.len() < 2 {
+        return Err("引导线顶点不足（需至少 2 个）".into());
+    }
+    Ok((pts[0], pts[1]))
+}
+
+/// 解析引导线几何，返回顶点列表：
+/// - LINE → 2 顶点（[start, end]）
+/// - LWPOLYLINE（不闭合）→ 全部顶点（ANGLE 用两段 = 3 顶点）
+fn guide_geom_points(
+    doc: &acadrust::CadDocument,
+    handle: acadrust::Handle,
+) -> Result<Vec<[f64; 3]>, String> {
     let e = doc.get_entity(handle).ok_or("找不到引导线实体")?;
-    let acadrust::EntityType::Line(l) = e else {
-        return Err("引导线必须是直线（LINE）".into());
-    };
-    Ok((
-        [l.start.x, l.start.y, l.start.z],
-        [l.end.x, l.end.y, l.end.z],
-    ))
+    match e {
+        acadrust::EntityType::Line(l) => Ok(vec![
+            [l.start.x, l.start.y, l.start.z],
+            [l.end.x, l.end.y, l.end.z],
+        ]),
+        acadrust::EntityType::LwPolyline(pl) => {
+            if pl.is_closed {
+                return Err("角度引导线多段线不能闭合".into());
+            }
+            Ok(pl
+                .vertices
+                .iter()
+                .map(|v| [v.location.x, v.location.y, pl.elevation])
+                .collect())
+        }
+        // heavy polyline（DXF 读取路径把 LWPOLYLINE 转为 Polyline/Polyline2D）。
+        acadrust::EntityType::Polyline(pl) => {
+            if pl.flags.is_closed() {
+                return Err("角度引导线多段线不能闭合".into());
+            }
+            Ok(pl
+                .vertices
+                .iter()
+                .map(|v| [v.location.x, v.location.y, v.location.z])
+                .collect())
+        }
+        acadrust::EntityType::Polyline2D(pl) => {
+            if pl.flags.is_closed() {
+                return Err("角度引导线多段线不能闭合".into());
+            }
+            Ok(pl
+                .vertices
+                .iter()
+                .map(|v| [v.location.x, v.location.y, v.location.z])
+                .collect())
+        }
+        _ => Err("引导线必须是直线（LINE）或两段多段线（PLINE）".into()),
+    }
 }
 
 /// 构造与 `OCSMDIMGULIDE1-general.dxf` 标注一致的 DSTYLE XDATA 覆盖
@@ -400,6 +445,65 @@ fn build_guide_linear(
         dim.base_mut().text_rotation = rot;
     }
     dim
+}
+
+/// 角度标注（两段 PLINE 引导线）：p0→p1→p2，p1=角度顶点、两段即两边。
+/// 放置点 = 顶点 + 角平分线方向（劣角内部）× dist。
+/// 复用 PowerDim build_angular 的 Angular2Ln 构建逻辑（lib.rs），
+/// 角模式：劣角（默认）/ 补角（180°−劣角）/ 优角（360°−劣角）。
+fn build_guide_angular(
+    p0: [f64; 3],
+    p1: [f64; 3],
+    p2: [f64; 3],
+    dist: f64,
+    mode: crate::guide_url::AngleMode,
+    style: &str,
+) -> Result<Dimension, String> {
+    use acadrust::entities::{DimensionAngular2Ln, DimensionBase, DimensionType};
+    use crate::{angular_minor_sweep_deg, LineGeom};
+
+    // 顶点 p1；line1 = 第一段（顶点→p2），line2 = 第二段反向（顶点→p0）。
+    let line1 = LineGeom { start: p1, end: p2 };
+    let line2 = LineGeom { start: p1, end: p0 };
+
+    // 角平分线（劣角内部）：单位化两方向之和。
+    let norm = |v: [f64; 3]| (v[0] * v[0] + v[1] * v[1]).sqrt();
+    let unit = |v: [f64; 3]| {
+        let l = norm(v);
+        if l < 1e-12 { [0.0, 0.0, 0.0] } else { [v[0] / l, v[1] / l, 0.0] }
+    };
+    let d1 = unit([p2[0] - p1[0], p2[1] - p1[1], 0.0]);
+    let d2 = unit([p0[0] - p1[0], p0[1] - p1[1], 0.0]);
+    let bis = unit([d1[0] + d2[0], d1[1] + d2[1], 0.0]);
+    let pt = [p1[0] + bis[0] * dist, p1[1] + bis[1] * dist, 0.0];
+
+    let minor_deg = angular_minor_sweep_deg(&line1, &line2, pt);
+    let (measurement, user_text) = match mode {
+        crate::guide_url::AngleMode::Minor => (minor_deg, format!("{:.0}°", minor_deg)),
+        crate::guide_url::AngleMode::Complement => {
+            (180.0 - minor_deg, format!("{:.0}°", 180.0 - minor_deg))
+        }
+        crate::guide_url::AngleMode::Reflex => {
+            (360.0 - minor_deg, format!("{:.0}°", 360.0 - minor_deg))
+        }
+    };
+    let mut d = DimensionAngular2Ln {
+        base: DimensionBase::new(DimensionType::Angular),
+        dimension_arc: v3(pt),
+        first_point: v3(line1.start),
+        second_point: v3(line1.end),
+        angle_vertex: v3(line2.start),
+        definition_point: v3(line2.end),
+    };
+    d.base.text_middle_point = v3(pt);
+    d.base.insertion_point = v3(pt);
+    d.base.actual_measurement = measurement;
+    // 宿主对 Angular2Ln 的文字用 measurement()（对两线存储语义错误，
+    // 可能导致恒 90°），直接用 user_text 提供正确角度值。
+    d.base.user_text = Some(user_text);
+    let mut dim = stamp(Dimension::Angular2Ln(d), style);
+    dim.base_mut().text_user_positioned = true;
+    Ok(dim)
 }
 
 /// 直径/半径标注生成：引导线 P1=圆心、P2=圆周点（线长=半径，方向=偏转角）。
@@ -817,6 +921,7 @@ fn build_dimension(
         }
         GuideType::Datum => return Err("基准标注暂未实现".into()),
         GuideType::View => return Err("向视图标注暂未实现".into()),
+        GuideType::Angle => return Err("角度标注走 do_apply 独立分支".into()),
     };
     // 用户指定小数位数：覆盖 XDATA DSTYLE 里的 DIMDEC(271)（默认样式 4）。
     if let Some(d) = params.dec {
@@ -1326,7 +1431,12 @@ fn do_apply(
 
     // 应用并刷新：生成真实标注 + 删引导线 + REGEN。
     let doc = snapshot(sender)?;
-    let (p1, p2) = guide_line_points(&doc, handle)?;
+    // 引导几何顶点：LINE→2 点；ANGLE 用两段 PLINE（3 顶点）。
+    let pts = guide_geom_points(&doc, handle)?;
+    if pts.len() < 2 {
+        return Err("引导线顶点不足（需至少 2 个）".into());
+    }
+    let (p1, p2) = (pts[0], pts[1]);
     // 按引导线第一点 P1 判定图幅缩放，创建/选用对应样式（文字/箭头缩放）。
     let style = ensure_style_for_point(sender, &doc, p1)?;
 
@@ -1354,6 +1464,32 @@ fn do_apply(
         req_timed(sender, PluginRequest::BumpGeometry, "BumpGeometry")?;
         mark_dirty(sender)?;
         return Ok(out);
+    }
+
+    // 角度标注：两段 PLINE（3 顶点）→ Angular2Ln（角平分线方向放置）。
+    if params.guide_type == GuideType::Angle {
+        if pts.len() < 3 {
+            return Err("角度标注需要两段多段线（PLINE，3 顶点）".into());
+        }
+        let dim = build_guide_angular(pts[0], pts[1], pts[2], params.dist, params.angle_mode, &style)?;
+        let dim_handle = match req_timed(
+            sender,
+            PluginRequest::AddEntities(vec![acadrust::EntityType::Dimension(dim)]),
+            "AddEntities",
+        ) {
+            Ok(PluginResponse::Handles(hs)) => hs.first().copied(),
+            Ok(_) => None,
+            Err(e) => return Err(e),
+        };
+        req_timed(sender, PluginRequest::RemoveEntity { handle }, "RemoveEntity")?;
+        req_timed(sender, PluginRequest::BumpGeometry, "BumpGeometry")?;
+        mark_dirty(sender)?;
+        return Ok(serde_json::json!({
+            "ok": true,
+            "dimension_handle": dim_handle.map(fmt_handle),
+            "style": "OCSM_GB",
+        })
+        .to_string());
     }
 
     let dim = build_dimension(sender, &doc, p1, p2, &params, &style)?;
@@ -1392,9 +1528,10 @@ fn api_guide(target: &str, sender: &Arc<dyn PluginRequestSender>) -> (u16, &'sta
     };
     match snapshot(sender) {
         Err(e) => (500, json, serde_json::json!({"ok": false, "error": e}).to_string()),
-        Ok(doc) => match guide_line_points(&doc, handle) {
+        Ok(doc) => match guide_geom_points(&doc, handle) {
             Err(e) => (404, json, serde_json::json!({"ok": false, "error": e}).to_string()),
-            Ok((p1, p2)) => {
+            Ok(pts) => {
+                let (p1, p2) = (pts[0], pts[1]);
                 let url = read_pe_url(sender, handle);
                 let params = url.as_deref().and_then(GuideParams::from_url);
                 let resp = serde_json::json!({
@@ -1402,12 +1539,15 @@ fn api_guide(target: &str, sender: &Arc<dyn PluginRequestSender>) -> (u16, &'sta
                     "handle": fmt_handle(handle),
                     "p1": [p1[0], p1[1], p1[2]],
                     "p2": [p2[0], p2[1], p2[2]],
+                    // 引导线全部顶点（ANGLE 两段 PLINE = 3 个：p0/p1/p2）。
+                    "pts": pts.iter().map(|q| [q[0], q[1], q[2]]).collect::<Vec<_>>(),
                     "url": url,
                     // 引导线长度 = 主尺寸（公差计算用）。
                     "measurement": ((p2[0]-p1[0]).powi(2)+(p2[1]-p1[1]).powi(2)).sqrt(),
                     "params": params.map(|p| serde_json::json!({
                         "type": p.guide_type.as_str(),
                         "sub": p.sub.map(|s| s.as_str().to_string()),
+                        "angle_mode": p.angle_mode.as_str().to_string(),
                         "dist": p.dist,
                         "text": p.text,
                         "tol": p.tol,
@@ -1737,7 +1877,7 @@ mod tests {
         let sender: std::sync::Arc<dyn PluginRequestSender> = inner.clone();
         let doc = inner.doc.lock().unwrap().clone();
         let pd = GuideParams { guide_type: GuideType::Linear, sub: Some(LinearSub::Aligned), dist: 10.0, text: None, tol: None, up: None, dn: None,
-            fit: None, sym: None, dec: Some(2), ver: crate::guide_url::DatumVersion::GB2008, letter: None, scale: None, flip: crate::guide_url::FlipDir::None, marker: None };
+            fit: None, sym: None, dec: Some(2), ver: crate::guide_url::DatumVersion::GB2008, letter: None, scale: None, flip: crate::guide_url::FlipDir::None, marker: None, angle_mode: crate::guide_url::AngleMode::Minor };
         let dim = build_dimension(&sender, &doc, [0.0, 0.0, 0.0], [40.0, 30.0, 0.0], &pd, "OCSM_GB").unwrap();
         let rec = dim.base().common.extended_data.get_record("ACAD").expect("ACAD XDATA 存在");
         let mut found = None;
@@ -1757,11 +1897,11 @@ mod tests {
         let sender: std::sync::Arc<dyn PluginRequestSender> = inner.clone();
         let doc = inner.doc.lock().unwrap().clone();
         let pd = GuideParams { guide_type: GuideType::Diameter, sub: None, dist: -9.0, text: None, tol: None, up: None, dn: None,
-            fit: None, sym: None, dec: None, ver: crate::guide_url::DatumVersion::GB2008, letter: None, scale: None, flip: crate::guide_url::FlipDir::None, marker: None };
+            fit: None, sym: None, dec: None, ver: crate::guide_url::DatumVersion::GB2008, letter: None, scale: None, flip: crate::guide_url::FlipDir::None, marker: None, angle_mode: crate::guide_url::AngleMode::Minor };
         // 直径走匿名块路径：mock 的 AddBlockRecord 返回 Ok → 成功。
         assert!(build_dimension(&sender, &doc, [0.0,0.0,0.0], [35.36,35.36,0.0], &pd, "OCSM_GB").is_ok());
         let pr = GuideParams { guide_type: GuideType::Radius, sub: None, dist: 11.0, text: None, tol: None, up: None, dn: None,
-            fit: None, sym: None, dec: None, ver: crate::guide_url::DatumVersion::GB2008, letter: None, scale: None, flip: crate::guide_url::FlipDir::None, marker: None };
+            fit: None, sym: None, dec: None, ver: crate::guide_url::DatumVersion::GB2008, letter: None, scale: None, flip: crate::guide_url::FlipDir::None, marker: None, angle_mode: crate::guide_url::AngleMode::Minor };
         assert!(build_dimension(&sender, &doc, [0.0,0.0,0.0], [35.36,35.36,0.0], &pr, "OCSM_GB").is_ok());
     }
 
@@ -1786,6 +1926,7 @@ mod tests {
             scale: None,
             flip: crate::guide_url::FlipDir::None,
             marker: None,
+        angle_mode: crate::guide_url::AngleMode::Minor,
         };
         // "%%c<>" 是默认（GUI 注入一次）→ 不设 user_text（块 TEXT 已用自动值）。
         let dim = build_dimension(&sender, &doc, [0.0, 0.0, 0.0], [35.36, 35.36, 0.0], &pd, "OCSM_GB").unwrap();
@@ -1823,6 +1964,7 @@ mod tests {
             scale: None,
             flip: crate::guide_url::FlipDir::None,
             marker: None,
+        angle_mode: crate::guide_url::AngleMode::Minor,
         };
         let dim = build_dimension(&sender, &doc, [0.0, 0.0, 0.0], [100.0, 0.0, 0.0], &pd, "OCSM_GB").unwrap();
         assert_eq!(
@@ -1877,6 +2019,7 @@ mod tests {
             scale: None,
             flip: crate::guide_url::FlipDir::None,
             marker: None,
+        angle_mode: crate::guide_url::AngleMode::Minor,
         };
         let dim = build_dimension(&sender, &doc, [0.0, 0.0, 0.0], [25.0, 0.0, 0.0], &pd, "OCSM_GB").unwrap();
         assert_eq!(
@@ -1908,6 +2051,7 @@ mod tests {
             scale: None,
             flip: crate::guide_url::FlipDir::None,
             marker: None,
+        angle_mode: crate::guide_url::AngleMode::Minor,
         };
         let dim = build_dimension(&sender, &doc, [0.0, 0.0, 0.0], [25.0, 0.0, 0.0], &pd, "OCSM_GB").unwrap();
         let t = dim.base().text.clone();
@@ -1942,6 +2086,7 @@ mod tests {
             scale: None,
             flip: crate::guide_url::FlipDir::None,
             marker: None,
+        angle_mode: crate::guide_url::AngleMode::Minor,
         };
         // fit 代号模式 → 配合代号堆叠（对照示例 `{\C3;\SH7/g6;}`：绿色、斜杠分数）。
         let dim = build_dimension(&sender, &doc, [0.0, 0.0, 0.0], [25.0, 0.0, 0.0], &pd, "OCSM_GB").unwrap();
@@ -1976,6 +2121,7 @@ mod tests {
             scale: None,
             flip: crate::guide_url::FlipDir::None,
             marker: None,
+        angle_mode: crate::guide_url::AngleMode::Minor,
         };
         let inner = std::sync::Arc::new(MockSender::new(acadrust::CadDocument::new()));
         let sender: std::sync::Arc<dyn PluginRequestSender> = inner.clone();
@@ -2298,5 +2444,92 @@ mod integration {
         let name = ensure_style_for_point(&sender, &inner.doc.lock().unwrap().clone(), [0.0, 0.0, 0.0])
             .expect("ensure style");
         assert_eq!(name, "OCSM_GB");
+    }
+
+    #[test]
+    fn build_guide_angular_45deg_three_modes() {
+        // 两段 PLINE：p0=(50,0) → p1=(0,0) 顶点 → p2=(50,50)。
+        // 两方向 (1,0) 与 (0.707,0.707)：劣角 45°。
+        let p0 = [50.0, 0.0, 0.0];
+        let p1 = [0.0, 0.0, 0.0];
+        let p2 = [50.0, 50.0, 0.0];
+        let dist = 20.0;
+
+        // 劣角（默认）
+        let dim = build_guide_angular(p0, p1, p2, dist, crate::guide_url::AngleMode::Minor, "OCSM_GB").unwrap();
+        let d = match &dim {
+            Dimension::Angular2Ln(d) => d,
+            other => panic!("应为 Angular2Ln，得到 {other:?}"),
+        };
+        assert!((d.base.actual_measurement - 45.0).abs() < 1e-6, "劣角 45");
+        assert_eq!(d.base.user_text.as_deref(), Some("45°"));
+        assert_eq!(d.base.common.layer, "7标注层");
+        assert_eq!(d.base.style_name, "OCSM_GB");
+        // 顶点/两边：first=p1, second=p2, angle_vertex=p1, definition=p0。
+        assert!((d.first_point.x).abs() < 1e-9 && (d.first_point.y).abs() < 1e-9);
+        assert!((d.second_point.x - 50.0).abs() < 1e-6 && (d.second_point.y - 50.0).abs() < 1e-6);
+        assert!((d.angle_vertex.x).abs() < 1e-9 && (d.angle_vertex.y).abs() < 1e-9);
+        assert!((d.definition_point.x - 50.0).abs() < 1e-6);
+        // 放置点 = 顶点 + 角平分线(22.5°)×dist。
+        let tm = d.base.text_middle_point;
+        assert!((tm.x - 20.0 * 22.5f64.to_radians().cos()).abs() < 1e-6, "x {}", tm.x);
+        assert!((tm.y - 20.0 * 22.5f64.to_radians().sin()).abs() < 1e-6, "y {}", tm.y);
+
+        // 补角 135° / 优角 315°。
+        let comp = build_guide_angular(p0, p1, p2, dist, crate::guide_url::AngleMode::Complement, "OCSM_GB").unwrap();
+        let cd = match &comp { Dimension::Angular2Ln(d) => d, _ => panic!() };
+        assert!((cd.base.actual_measurement - 135.0).abs() < 1e-6, "补角 135");
+        assert_eq!(cd.base.user_text.as_deref(), Some("135°"));
+        let refl = build_guide_angular(p0, p1, p2, dist, crate::guide_url::AngleMode::Reflex, "OCSM_GB").unwrap();
+        let rd = match &refl { Dimension::Angular2Ln(d) => d, _ => panic!() };
+        assert!((rd.base.actual_measurement - 315.0).abs() < 1e-6, "优角 315");
+        assert_eq!(rd.base.user_text.as_deref(), Some("315°"));
+    }
+
+    #[test]
+    fn angle_url_roundtrip_and_defaults() {
+        use crate::guide_url::AngleMode;
+        // 缺省角模式段 → 劣角。
+        let p = crate::guide_url::GuideParams::from_url("http://127.0.0.1:23751/DIM/ANGLE/45").unwrap();
+        assert_eq!(p.guide_type, crate::guide_url::GuideType::Angle);
+        assert_eq!(p.angle_mode, AngleMode::Minor);
+        assert!((p.dist - 45.0).abs() < 1e-9);
+        // 显式补角/优角。
+        let c = crate::guide_url::GuideParams::from_url("http://127.0.0.1:23751/DIM/ANGLE/C/60").unwrap();
+        assert_eq!(c.angle_mode, AngleMode::Complement);
+        let r = crate::guide_url::GuideParams::from_url("http://127.0.0.1:23751/DIM/ANGLE/R/60").unwrap();
+        assert_eq!(r.angle_mode, AngleMode::Reflex);
+        // to_url 往返：劣角不输出模式段，补角/优角输出。
+        let mut cp = crate::guide_url::GuideParams::linear(crate::guide_url::LinearSub::Aligned, 10.0);
+        cp.guide_type = crate::guide_url::GuideType::Angle;
+        cp.dist = 60.0;
+        let u = cp.to_url(23751);
+        assert_eq!(u, "http://127.0.0.1:23751/DIM/ANGLE/60", "劣角不输出: {u}");
+        cp.angle_mode = AngleMode::Complement;
+        let u2 = cp.to_url(23751);
+        assert_eq!(u2, "http://127.0.0.1:23751/DIM/ANGLE/C/60", "补角: {u2}");
+    }
+
+    #[test]
+    fn guide_geom_points_reads_pline() {
+        use acadrust::entities::LwPolyline;
+        let mut pl = LwPolyline::new();
+        pl.vertices.push(acadrust::entities::LwVertex::new(acadrust::types::Vector2::new(50.0, 0.0)));
+        pl.vertices.push(acadrust::entities::LwVertex::new(acadrust::types::Vector2::new(0.0, 0.0)));
+        pl.vertices.push(acadrust::entities::LwVertex::new(acadrust::types::Vector2::new(50.0, 50.0)));
+        let mut doc = acadrust::CadDocument::new();
+        let h = doc.add_entity(acadrust::EntityType::LwPolyline(pl)).unwrap();
+        let pts = guide_geom_points(&doc, h).unwrap();
+        assert_eq!(pts.len(), 3);
+        assert!((pts[0][0] - 50.0).abs() < 1e-9);
+        assert!((pts[1][0]).abs() < 1e-9);
+        assert!((pts[2][1] - 50.0).abs() < 1e-9);
+        // LINE 仍返回 2 点（向后兼容）。
+        let mut line = acadrust::entities::Line::new();
+        line.start = v3([0.0, 0.0, 0.0]);
+        line.end = v3([10.0, 5.0, 0.0]);
+        let h2 = doc.add_entity(acadrust::EntityType::Line(line)).unwrap();
+        let pts2 = guide_geom_points(&doc, h2).unwrap();
+        assert_eq!(pts2.len(), 2);
     }
 }

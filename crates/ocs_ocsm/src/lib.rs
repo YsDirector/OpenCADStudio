@@ -391,7 +391,7 @@ impl OcsmPlugin {
     fn cmd_guide(&self, host: &mut dyn HostApi) {
         let selected = host.selected_handles();
         let Some(&h) = selected.first() else {
-            host.push_error("OCSM: 请先选中一条引导线（10引导线层 的直线）。");
+            host.push_error("OCSM: 请先选中一条引导线（10引导线层 的直线或两段多段线）。");
             return;
         };
         let doc = host.document();
@@ -399,10 +399,16 @@ impl OcsmPlugin {
             host.push_error("OCSM: 找不到选中的实体。");
             return;
         };
-        let acadrust::EntityType::Line(_) = e else {
-            host.push_error("OCSM: 引导线必须是直线（LINE）。");
-            return;
-        };
+        match &e {
+            acadrust::EntityType::Line(_) => {}
+            acadrust::EntityType::LwPolyline(pl) if !pl.is_closed && pl.vertices.len() >= 3 => {}
+            acadrust::EntityType::Polyline(pl) if !pl.flags.is_closed() && pl.vertices.len() >= 3 => {}
+            acadrust::EntityType::Polyline2D(pl) if !pl.flags.is_closed() && pl.vertices.len() >= 3 => {}
+            _ => {
+                host.push_error("OCSM: 引导线必须是直线（LINE）或两段多段线（PLINE，3 顶点）。");
+                return;
+            }
+        }
         let Some(port) = self.ensure_guide_server(host) else {
             host.push_error("OCSM: 无法启动标注更新服务器（宿主不支持 worker 请求）。");
             return;
@@ -604,7 +610,7 @@ impl OcsmPlugin {
 
 /// 拾取对象的最小几何描述（命令内不持有宿主，只读快照）。
 #[derive(Clone, Copy)]
-struct LineGeom {
+pub(crate) struct LineGeom {
     start: [f64; 3],
     end: [f64; 3],
 }
@@ -1300,7 +1306,7 @@ fn lines_parallel(a: &LineGeom, b: &LineGeom) -> bool {
 }
 
 /// 两直线交点（平行返回 None）。
-fn line_intersection_vertex(a: &LineGeom, b: &LineGeom) -> Option<Vector3> {
+pub(crate) fn line_intersection_vertex(a: &LineGeom, b: &LineGeom) -> Option<Vector3> {
     let u = v3(a.end) - v3(a.start);
     let v = v3(b.end) - v3(b.start);
     let denom = u.x * v.y - u.y * v.x;
@@ -1314,7 +1320,7 @@ fn line_intersection_vertex(a: &LineGeom, b: &LineGeom) -> Option<Vector3> {
 
 /// 镜像宿主 two_line_angle_frame 的选择逻辑：以 `arc_pt` 为弧点，返回含该点
 /// 的最小劣弧扫过角（度）。保证标注文字与绘制弧一致。
-fn angular_minor_sweep_deg(a: &LineGeom, b: &LineGeom, arc_pt: [f64; 3]) -> f64 {
+pub(crate) fn angular_minor_sweep_deg(a: &LineGeom, b: &LineGeom, arc_pt: [f64; 3]) -> f64 {
     const TAU: f64 = std::f64::consts::TAU;
     const PI: f64 = std::f64::consts::PI;
     let Some(vertex) = line_intersection_vertex(a, b) else {
