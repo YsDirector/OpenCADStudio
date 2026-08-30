@@ -506,6 +506,118 @@ fn build_guide_angular(
     Ok(dim)
 }
 
+/// 角度标注（匿名块形态，对照 `角度.dxf` *D67）：块成员 =
+/// 主弧（劣角）+ 延长弧×2 + SOLID 箭头×2（弧两端尖朝外）+ MTEXT（水平，角平分线）。
+/// DIMENSION 引用匿名块（block_name）→ 渲染走 walk_block 复刻示例样式。
+/// dist 语义不变 = 文字距顶点的距离（弧半径 = dist − DIMGAP）。
+fn build_guide_angular_block(
+    sender: &Arc<dyn PluginRequestSender>,
+    doc: &acadrust::CadDocument,
+    p0: [f64; 3],
+    p1: [f64; 3],
+    p2: [f64; 3],
+    params: &GuideParams,
+    style: &str,
+) -> Result<Dimension, String> {
+    use acadrust::entities::{Arc, AttachmentPoint, MText, Solid};
+    use acadrust::types::Vector3;
+    use acadrust::EntityType as E;
+    use std::f64::consts::{FRAC_PI_2, PI, TAU};
+
+    let v = v3(p1);
+    let scale = frame_scale_at(doc, p1);
+    let h = 2.5 * scale; // DIMTXT（箭头长/文字高）
+    let gap = 1.0 * scale; // DIMGAP（文字距弧）
+    let r = params.dist - gap; // 弧半径 = 文字距顶点 − gap（文字在角平分线 r+gap 处）
+    if r < 1e-9 {
+        return Err("弧半径过小（与顶点距离需大于 DIMGAP=1）".into());
+    }
+    // 从顶点出发的两条边方向角。
+    let a0 = (p0[1] - p1[1]).atan2(p0[0] - p1[0]);
+    let a1 = (p2[1] - p1[1]).atan2(p2[0] - p1[0]);
+    // 劣角弧：从 start 逆时针 sweep 到 end（sweep≤π）。
+    let (mut start, mut end) = (a0, a1);
+    let mut sweep = (end - start).rem_euclid(TAU);
+    if sweep > PI {
+        start = a1;
+        end = a0;
+        sweep = TAU - sweep;
+    }
+    let minor_deg = sweep.to_degrees();
+    let bis = start + sweep * 0.5; // 角平分线角（劣角内）
+    let bis_v = Vector3::new(bis.cos(), bis.sin(), 0.0);
+    let delta = 18.393_f64.to_radians(); // 延长弧（对照示例）
+
+    let mut members: Vec<E> = Vec::new();
+    let mut mk_arc = |a1: f64, a2: f64| -> E {
+        let mut arc = Arc::new();
+        arc.center = v;
+        arc.radius = r;
+        arc.start_angle = a1;
+        arc.end_angle = a2;
+        let mut e = E::Arc(arc);
+        set_member_layer(&mut e, "7标注层");
+        e
+    };
+    // 主弧 + 延长弧（起点端 start−δ..start、终点端 end..end+δ）。
+    members.push(mk_arc(start, end));
+    members.push(mk_arc(start - delta, start));
+    members.push(mk_arc(end, end + delta));
+    // 箭头：尖在弧端，底边朝弧外侧（起点端顺时针切线、终点端逆时针切线），
+    // 长 h、底边宽 h/3（对照示例：尖到底边 2.49≈h、底宽 0.83≈h/3）。
+    let mk_arrow = |tip_ang: f64, out_ang: f64, radial: Vector3| -> E {
+        let tip = v + Vector3::new(tip_ang.cos(), tip_ang.sin(), 0.0) * r;
+        let out = Vector3::new(out_ang.cos(), out_ang.sin(), 0.0);
+        let base = tip + out * h;
+        let perp = radial * (h / 3.0);
+        let mut e = E::Solid(Solid::new(tip, base + perp, base - perp, base - perp));
+        set_member_layer(&mut e, "7标注层");
+        e
+    };
+    let rad_start = Vector3::new(start.cos(), start.sin(), 0.0);
+    let rad_end = Vector3::new(end.cos(), end.sin(), 0.0);
+    members.push(mk_arrow(start, start - FRAC_PI_2, rad_start));
+    members.push(mk_arrow(end, end + FRAC_PI_2, rad_end));
+    // MTEXT：`{θ°}` 水平、attach=8，insert=角平分线 (r+gap)（文字底部中心）。
+    let text_value = format!("{{{:.0}°}}", minor_deg);
+    let mut m = MText::new();
+    m.rectangle_width = (text_value.chars().count() as f64 * h * 0.75).max(10.0);
+    m.value = text_value;
+    m.insertion_point = v + bis_v * (r + gap);
+    m.height = h;
+    m.rotation = 0.0;
+    m.style = "OCSM_GB".into();
+    m.attachment_point = AttachmentPoint::BottomCenter;
+    let mut e = E::MText(m);
+    set_member_layer(&mut e, "7标注层");
+    e.common_mut().color = acadrust::Color::from_index(3); // 绿色（对照示例 *D67 MTEXT 62=3）
+    members.push(e);
+
+    // 匿名块名 *D{n}（取最大序号 +1）。
+    let mut max_n = 0u32;
+    for br in doc.block_records.iter() {
+        if let Some(rest) = br.name.strip_prefix("*D") {
+            if let Ok(n) = rest.parse::<u32>() {
+                max_n = max_n.max(n);
+            }
+        }
+    }
+    let block_name = format!("*D{}", max_n + 1);
+    req_timed(
+        sender,
+        PluginRequest::AddBlockRecord {
+            name: block_name.clone(),
+            entities: members,
+        },
+        "AddBlockRecord",
+    )?;
+
+    // DIMENSION（Angular2Ln 几何/文字 + 引用匿名块）。
+    let mut dim = build_guide_angular(p0, p1, p2, params.dist, params.angle_mode, style)?;
+    dim.base_mut().block_name = block_name;
+    Ok(dim)
+}
+
 /// 直径/半径标注生成：引导线 P1=圆心、P2=圆周点（线长=半径，方向=偏转角）。
 /// dist = 文字沿偏转角方向相对圆周点的偏移（负=圆内侧，正=圆外侧），
 /// 与线性「与P2距离」语义一致。文字径向旋转（复用 PowerDim build_radial
@@ -1471,7 +1583,7 @@ fn do_apply(
         if pts.len() < 3 {
             return Err("角度标注需要两段多段线（PLINE，3 顶点）".into());
         }
-        let dim = build_guide_angular(pts[0], pts[1], pts[2], params.dist, params.angle_mode, &style)?;
+        let dim = build_guide_angular_block(sender, &doc, pts[0], pts[1], pts[2], &params, &style)?;
         let dim_handle = match req_timed(
             sender,
             PluginRequest::AddEntities(vec![acadrust::EntityType::Dimension(dim)]),
@@ -1541,6 +1653,8 @@ fn api_guide(target: &str, sender: &Arc<dyn PluginRequestSender>) -> (u16, &'sta
                     "p2": [p2[0], p2[1], p2[2]],
                     // 引导线全部顶点（ANGLE 两段 PLINE = 3 个：p0/p1/p2）。
                     "pts": pts.iter().map(|q| [q[0], q[1], q[2]]).collect::<Vec<_>>(),
+                    // 引导几何形态：line（LINE）/ pline（多段线，2+ 段）。
+                    "geom": if pts.len() >= 3 { "pline" } else { "line" },
                     "url": url,
                     // 引导线长度 = 主尺寸（公差计算用）。
                     "measurement": ((p2[0]-p1[0]).powi(2)+(p2[1]-p1[1]).powi(2)).sqrt(),

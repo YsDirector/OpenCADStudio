@@ -239,6 +239,7 @@
   let P1 = {x:0, y:0}, P2 = {x:100, y:75};
   let PTS = null; // 引导线全部顶点（ANGLE 两段 PLINE = 3 个）
   let type = 'LINEAR', sub = 'H', side = 'in', ver = '2008', letter = 'A', angleMode = 'M';
+  let geom = 'line'; // 引导几何：line（LINE）/ pline（多段线）
   // GB 基准字母禁用集：1996 用 I/O；2008（ISO 5459）加 E/F/J/L/P/R。
   const DATUM_DISABLED = { '1996': 'IO', '2008': 'EFIJLOPR' };
   function renderLetters() {
@@ -346,6 +347,21 @@
   });
   segBind('seg-sub', b => { sub = b.dataset.s; draw(); });
   segBind('seg-angle-mode', b => { angleMode = b.dataset.am; draw(); });
+  // 按引导几何过滤类型按钮：LINE → 线性/直径/半径/基准/向视图；
+  // PLINE → 角度（以及未来 SECTION/GD&T）。当前类型被隐藏时切到第一个可见。
+  const LINE_TYPES = ['LINEAR', 'DIAMETER', 'RADIUS', 'DATUM', 'VIEW'];
+  const PLINE_TYPES = ['ANGLE'];
+  function applyGeomFilter() {
+    const allow = (geom === 'pline') ? PLINE_TYPES : LINE_TYPES;
+    document.querySelectorAll('#seg-type button').forEach(b => {
+      b.style.display = allow.includes(b.dataset.t) ? '' : 'none';
+    });
+    const cur = document.querySelector('#seg-type button.on');
+    if (cur && cur.style.display === 'none') {
+      const visible = [...document.querySelectorAll('#seg-type button')].find(b => b.style.display !== 'none');
+      if (visible) { visible.click(); } else { type = 'LINEAR'; }
+    }
+  }
   document.querySelectorAll('#seg-side button').forEach(b => {
     b.addEventListener('click', () => {
       document.querySelectorAll('#seg-side button').forEach(x => x.classList.remove('on'));
@@ -1051,6 +1067,7 @@ const BS_FITS = [
         P1 = {x: j.p1[0], y: j.p1[1]};
         P2 = {x: j.p2[0], y: j.p2[1]};
         PTS = (j.pts && j.pts.length >= 3) ? j.pts.map(p => ({x:p[0], y:p[1]})) : null;
+        geom = j.geom || (PTS ? 'pline' : 'line');
         // 引导线长度 = 主尺寸（公差计算默认尺寸）；必须在 j.params 块外，
         // 否则 URL 无参数（首次 GDIM）时测量值不赋值，模态窗口主尺寸为空。
         if (typeof j.measurement === 'number') measurement = j.measurement;
@@ -1098,6 +1115,7 @@ const BS_FITS = [
             if (am) am.classList.add('on');
           }
         }
+        applyGeomFilter();
         fitCam();
         draw();
       } else {
