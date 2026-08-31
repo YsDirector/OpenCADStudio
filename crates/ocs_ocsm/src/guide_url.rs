@@ -25,6 +25,7 @@ pub enum GuideType {
     Datum,
     View,
     Angle,
+    Section,
 }
 
 impl GuideType {
@@ -36,6 +37,7 @@ impl GuideType {
             GuideType::Datum => "DATUM",
             GuideType::View => "VIEW",
             GuideType::Angle => "ANGLE",
+            GuideType::Section => "SECTION",
         }
     }
     fn from_str(s: &str) -> Option<Self> {
@@ -46,6 +48,7 @@ impl GuideType {
             "DATUM" => Some(GuideType::Datum),
             "VIEW" => Some(GuideType::View),
             "ANGLE" => Some(GuideType::Angle),
+            "SECTION" | "SEC" => Some(GuideType::Section),
             _ => None,
         }
     }
@@ -143,6 +146,48 @@ impl FlipDir {
     }
 }
 
+/// 剖切符号的视向箭头侧（相对剖切路径前进方向）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SectionSide {
+    /// 默认右侧：箭头朝剖切路径前进方向逆时针旋转 90°。
+    #[default]
+    Right,
+    /// 左侧：顺时针旋转 90°。
+    Left,
+}
+
+impl SectionSide {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SectionSide::Right => "R",
+            SectionSide::Left => "L",
+        }
+    }
+    fn from_str(s: &str) -> Option<Self> {
+        match s.to_ascii_uppercase().as_str() {
+            "R" | "RIGHT" | "右" => Some(SectionSide::Right),
+            "L" | "LEFT" | "左" => Some(SectionSide::Left),
+            _ => None,
+        }
+    }
+    /// 沿剖切路径前进方向 τ 的箭头侧单位向量。
+    pub fn dir(self, tau: (f64, f64)) -> (f64, f64) {
+        match self {
+            // 右侧 = 逆时针旋转 90°；左侧 = 顺时针旋转 90°。
+            SectionSide::Right => (-tau.1, tau.0),
+            SectionSide::Left => (tau.1, -tau.0),
+        }
+    }
+    /// 显示名（GUI 用）。
+    #[allow(dead_code)]
+    pub fn label(self) -> &'static str {
+        match self {
+            SectionSide::Right => "向右",
+            SectionSide::Left => "向左",
+        }
+    }
+}
+
 /// 角度标注的角模式（两段 PLINE 引导线，顶点即转折点）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum AngleMode {
@@ -211,6 +256,10 @@ pub struct GuideParams {
     pub marker: Option<(f64, f64)>,
     /// 角度标注角模式（仅 ANGLE；默认劣角 Minor）。
     pub angle_mode: AngleMode,
+    /// 剖切符号视向箭头侧（仅 SECTION；默认 Right）。
+    pub section_side: SectionSide,
+    /// 剖切符号是否显示视向箭头（仅 SECTION；默认 true）。
+    pub show_arrow: bool,
 }
 
 impl GuideParams {
@@ -234,6 +283,8 @@ impl GuideParams {
             flip: FlipDir::None,
             marker: None,
             angle_mode: AngleMode::Minor,
+            section_side: SectionSide::Right,
+            show_arrow: true,
         }
     }
 
@@ -286,6 +337,8 @@ impl GuideParams {
         let mut scale = None;
         let mut flip = FlipDir::None;
         let mut marker = None;
+        let mut section_side = SectionSide::Right;
+        let mut show_arrow = true;
         for pair in query.split('&').filter(|s| !s.is_empty()) {
             let (k, v) = pair.split_once('=').unwrap_or((pair, ""));
             let v = percent_decode(v);
@@ -312,6 +365,8 @@ impl GuideParams {
                     }
                     marker = Some((mx, my));
                 }
+                "side" => section_side = SectionSide::from_str(&v).unwrap_or(SectionSide::Right),
+                "show" => show_arrow = !matches!(&*v, "0" | "false" | "no" | "off" | "隐藏"),
                 _ => {}
             }
         }
@@ -333,6 +388,8 @@ impl GuideParams {
             flip,
             marker,
             angle_mode,
+            section_side,
+            show_arrow,
         })
     }
 
@@ -405,6 +462,13 @@ impl GuideParams {
         if let Some((mx, my)) = self.marker {
             q.push(format!("mx={mx}"));
             q.push(format!("my={my}"));
+        }
+        // 剖切符号：视向箭头侧 / 是否显示箭头。
+        if self.section_side != SectionSide::Right {
+            q.push(format!("side={}", self.section_side.as_str()));
+        }
+        if !self.show_arrow {
+            q.push("show=0".to_string());
         }
         if !q.is_empty() {
             url.push('?');
@@ -511,6 +575,54 @@ mod tests {
             GuideParams::from_url("http://x/DIM/DATUM/0").unwrap().guide_type,
             GuideType::Datum
         );
+    }
+
+    #[test]
+    fn parse_section_side_arrow() {
+        use crate::guide_url::SectionSide as SS;
+        // 默认：右侧 + 显示箭头。
+        let p = GuideParams::from_url("http://x/DIM/SECTION/0").unwrap();
+        assert_eq!(p.guide_type, GuideType::Section);
+        assert_eq!(p.section_side, SS::Right);
+        assert!(p.show_arrow);
+        // 左侧 + 隐藏箭头 + 字母 + 比例 + 放置点。
+        let p = GuideParams::from_url(
+            "http://x/DIM/SECTION/0?side=L&show=0&let=B&scale=1%3A1&mx=10&my=-5",
+        )
+        .unwrap();
+        assert_eq!(p.section_side, SS::Left);
+        assert!(!p.show_arrow);
+        assert_eq!(p.letter.as_deref(), Some("B"));
+        assert_eq!(p.scale.as_deref(), Some("1:1"));
+        assert_eq!(p.marker, Some((10.0, -5.0)));
+        // SEC 别名。
+        assert_eq!(
+            GuideParams::from_url("http://x/DIM/SEC/0").unwrap().guide_type,
+            GuideType::Section
+        );
+        // to_url 往返。
+        let mut p2 = GuideParams::linear(LinearSub::Aligned, -14.2);
+        p2.guide_type = GuideType::Section;
+        p2.letter = Some("C".into());
+        p2.scale = Some("1:2".into());
+        p2.marker = Some((12.0, 34.0));
+        let back = GuideParams::from_url(&p2.to_url(1)).unwrap();
+        assert_eq!(back.guide_type, GuideType::Section);
+        assert_eq!(back.letter.as_deref(), Some("C"));
+        assert_eq!(back.scale.as_deref(), Some("1:2"));
+        assert_eq!(back.marker, Some((12.0, 34.0)));
+        // 左侧往返（side=L）。
+        p2.section_side = SS::Left;
+        p2.show_arrow = false;
+        let back2 = GuideParams::from_url(&p2.to_url(1)).unwrap();
+        assert_eq!(back2.section_side, SS::Left);
+        assert!(!back2.show_arrow);
+        // 默认往返（右侧+显箭）。
+        let mut p3 = GuideParams::linear(LinearSub::Aligned, -14.2);
+        p3.guide_type = GuideType::Section;
+        let back3 = GuideParams::from_url(&p3.to_url(1)).unwrap();
+        assert_eq!(back3.section_side, SS::Right);
+        assert!(back3.show_arrow);
     }
 
     #[test]

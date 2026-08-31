@@ -294,7 +294,7 @@ fn guide_geom_points(
         ]),
         acadrust::EntityType::LwPolyline(pl) => {
             if pl.is_closed {
-                return Err("角度引导线多段线不能闭合".into());
+                return Err("引导线多段线不能闭合".into());
             }
             Ok(pl
                 .vertices
@@ -305,7 +305,7 @@ fn guide_geom_points(
         // heavy polyline（DXF 读取路径把 LWPOLYLINE 转为 Polyline/Polyline2D）。
         acadrust::EntityType::Polyline(pl) => {
             if pl.flags.is_closed() {
-                return Err("角度引导线多段线不能闭合".into());
+                return Err("引导线多段线不能闭合".into());
             }
             Ok(pl
                 .vertices
@@ -315,7 +315,7 @@ fn guide_geom_points(
         }
         acadrust::EntityType::Polyline2D(pl) => {
             if pl.flags.is_closed() {
-                return Err("角度引导线多段线不能闭合".into());
+                return Err("引导线多段线不能闭合".into());
             }
             Ok(pl
                 .vertices
@@ -323,7 +323,22 @@ fn guide_geom_points(
                 .map(|v| [v.location.x, v.location.y, v.location.z])
                 .collect())
         }
-        _ => Err("引导线必须是直线（LINE）或两段多段线（PLINE）".into()),
+        _ => Err("引导线必须是直线（LINE）或多段线（PLINE）".into()),
+    }
+}
+
+/// 引导几何形态：line（LINE）/ pline（LWPOLYLINE / Polyline / Polyline2D）。
+fn guide_geom_kind(
+    doc: &acadrust::CadDocument,
+    handle: acadrust::Handle,
+) -> Result<&'static str, String> {
+    let e = doc.get_entity(handle).ok_or("找不到引导线实体")?;
+    match e {
+        acadrust::EntityType::Line(_) => Ok("line"),
+        acadrust::EntityType::LwPolyline(_)
+        | acadrust::EntityType::Polyline(_)
+        | acadrust::EntityType::Polyline2D(_) => Ok("pline"),
+        _ => Err("引导线必须是直线（LINE）或多段线（PLINE）".into()),
     }
 }
 
@@ -1054,6 +1069,7 @@ fn build_dimension(
         GuideType::Datum => return Err("基准标注暂未实现".into()),
         GuideType::View => return Err("向视图标注暂未实现".into()),
         GuideType::Angle => return Err("角度标注走 do_apply 独立分支".into()),
+        GuideType::Section => return Err("剖切符号走 do_apply 独立分支".into()),
     };
     // 用户指定小数位数：覆盖 XDATA DSTYLE 里的 DIMDEC(271)（默认样式 4）。
     if let Some(d) = params.dec {
@@ -1167,6 +1183,227 @@ fn set_dimdec(dim: &mut Dimension, dec: i16) {
         }
         base.common.extended_data.add_record(rec);
     }
+}
+
+/// 剖切符号（匿名块 + INSERT）：对照 OCSMDIMGULIDE/SECTION/{全剖,旋转剖,阶梯剖}.dxf。
+/// 引导线 = 多段 PLINE（顶点 = 剖切路径节点）；输出块成员（局部坐标，原点 = 路径首顶点）：
+/// - 剖切线粗线（color=7 白）：每段两端各 `2×asz` 长（= 示例 10），中间断开。
+/// - 视向箭头（SOLID color=4 青，长 asz=5、半宽 asz/6 ≈0.833、细长 3:1）+ 连接线`
+///   （color=4，长 asz=5）：只在路径两端；箭头尖 = 端部 + side.dir(τ)×2×asz。
+/// - 字母（MTEXT color=3 绿，字高 5s）：路径两端沿剖切方向延长 `1.3×asz`（= 6.5）。
+/// - 视图名 `{L}-{L}\P\O`（color=3）：默认路径包围盒底部中心下方 8h，或用 marker 放置；
+///   可选比例文本（scale）放视图名下方 1.4h。
+/// 块名 *D{n}（与基准/角度共用匿名块计数）；INSERT 在 p0、8符号标注层。
+fn apply_section(
+    sender: &Arc<dyn PluginRequestSender>,
+    doc: &acadrust::CadDocument,
+    pts: &[[f64; 3]],
+    params: &GuideParams,
+) -> Result<String, String> {
+    use acadrust::entities::{Insert, Line, MText, Solid};
+    use acadrust::entities::AttachmentPoint;
+    use acadrust::types::{Color, Vector3};
+    use acadrust::EntityType as E;
+
+
+    if pts.len() < 2 {
+        return Err("剖切路径顶点不足（需至少 2 个）".into());
+    }
+    let origin = v3(pts[0]);
+    let scale = frame_scale_at(doc, pts[0]);
+    let asz = 5.0 * scale; // 箭头长 / 连接线长（示例 5）
+    let cut = 10.0 * scale; // 剖切线粗线段长（示例 10）
+    let h = 5.0 * scale; // 字母高（示例 5）
+    let half = asz / 6.0; // 箭头底边半宽（示例 0.833 = 5/6）
+    let off = 1.3 * asz; // 字母距剖切端（示例 6.5）
+
+    // 字母：显式指定，否则自动编号（图纸已有单字母 MTEXT 序号 + 1）。
+    let letter = params
+        .letter
+        .clone()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| next_section_letter(doc));
+    let text_style = "OCSM_GB";
+
+    let mut members: Vec<E> = Vec::new();
+    let mut mk_line = |a: Vector3, b: Vector3, color: i16| -> E {
+        let mut e = E::Line(Line {
+            common: Default::default(),
+            start: a,
+            end: b,
+            thickness: 0.0,
+            normal: Vector3::new(0.0, 0.0, 1.0),
+        });
+        set_member_layer(&mut e, "8符号标注层");
+        e.common_mut().color = Color::from_index(color);
+        e
+    };
+    let mut mk_mtext = |value: String, pos: Vector3| -> E {
+        let mut m = MText::new();
+        m.value = value;
+        m.insertion_point = pos;
+        m.height = h;
+        m.rotation = 0.0;
+        m.style = text_style.into();
+        m.attachment_point = AttachmentPoint::MiddleCenter;
+        let mut e = E::MText(m);
+        set_member_layer(&mut e, "8符号标注层");
+        e.common_mut().color = Color::from_index(3); // 绿色（对照示例字母/视图名）
+        e
+    };
+    let mut mk_solid = |tip: Vector3, b1: Vector3, b2: Vector3| -> E {
+        let mut e = E::Solid(Solid::new(tip, b1, b2, b2));
+        set_member_layer(&mut e, "8符号标注层");
+        // OCS 对随层 SOLID 渲染空心：显式青色为原生正常实心渲染。
+        e.common_mut().color = Color::from_index(4);
+        e
+    };
+    // 绝对坐标 → 块局部（原点 = 首顶点），并转为 Vector3。
+    let to_local = |p: &[f64; 3]| -> Vector3 { v3(*p) - origin };
+
+    // ── 剖切线粗线（每段两端各 cut，中间断开；段太短则整段） ──
+    for i in 0..pts.len() - 1 {
+        let pi = to_local(&pts[i]);
+        let pj = to_local(&pts[i + 1]);
+        let d = pj - pi;
+        let len = d.length();
+        if len < 1e-9 {
+            continue;
+        }
+        let tau = d * (1.0 / len);
+        if len <= 2.0 * cut {
+            members.push(mk_line(pi, pj, 7));
+        } else {
+            members.push(mk_line(pi, pi + tau * cut, 7));
+            members.push(mk_line(pj - tau * cut, pj, 7));
+        }
+    }
+
+    // ── 视向箭头 + 连接线（路径两端） ──
+    if params.show_arrow {
+        let first = to_local(&pts[0]);
+        let last = to_local(&pts[pts.len() - 1]);
+        let tau0 = {
+            let d = to_local(&pts[1]) - first;
+            d * (1.0 / d.length().max(1e-12))
+        };
+        let taun = {
+            let d = last - to_local(&pts[pts.len() - 2]);
+            d * (1.0 / d.length().max(1e-12))
+        };
+        for (at, tau) in [(first, tau0), (last, taun)] {
+            let dir = {
+                let t = (tau.x, tau.y);
+                let (dx, dy) = params.section_side.dir(t);
+                Vector3::new(dx, dy, 0.0)
+            };
+            let base = at + dir * asz; // 底边中心（连接线外端）
+            members.push(mk_line(at, base, 4)); // 连接线：端 → 底边中心
+            let tip = at + dir * (asz + asz); // 尖 = 端 + dir×2×asz（示例 10）
+            let b1 = base + tau * half;
+            let b2 = base - tau * half;
+            members.push(mk_solid(tip, b1, b2));
+        }
+    }
+
+    // ── 字母（路径两端沿剖切方向延长 off） ──
+    let tau0 = if pts.len() >= 2 {
+        let d = to_local(&pts[1]) - to_local(&pts[0]);
+        d * (1.0 / d.length().max(1e-12))
+    } else {
+        Vector3::new(0.0, -1.0, 0.0)
+    };
+    let taun = {
+        let d = to_local(&pts[pts.len() - 1]) - to_local(&pts[pts.len() - 2]);
+        d * (1.0 / d.length().max(1e-12))
+    };
+    members.push(mk_mtext(letter.clone(), to_local(&pts[0]) - tau0 * off));
+    members.push(mk_mtext(letter.clone(), to_local(&pts[pts.len() - 1]) + taun * off));
+
+    // ── 视图名 `{L}-{L}\P\O` + 可选比例文本 ──
+    // 默认位置：路径包围盒底部中心下方 8h；marker 覆盖（绝对坐标）。
+    let mut xmin = f64::INFINITY;
+    let mut xmax = f64::NEG_INFINITY;
+    let mut ymin = f64::INFINITY;
+    let mut ymax = f64::NEG_INFINITY;
+    for p in pts {
+        let v = to_local(p);
+        xmin = xmin.min(v.x);
+        xmax = xmax.max(v.x);
+        ymin = ymin.min(v.y);
+        ymax = ymax.max(v.y);
+    }
+    let (vmx, vmy) = match params.marker {
+        Some((mx, my)) => (mx - origin.x, my - origin.y),
+        None => ((xmin + xmax) * 0.5, ymin - 8.0 * h),
+    };
+    let view_name = format!("{}-{}\\P\\O", letter, letter);
+    members.push(mk_mtext(view_name, Vector3::new(vmx, vmy, 0.0)));
+    if let Some(sc) = &params.scale {
+        if !sc.is_empty() {
+            members.push(mk_mtext(
+                sc.clone(),
+                Vector3::new(vmx, vmy - 1.4 * h, 0.0),
+            ));
+        }
+    }
+
+    // ── 匿名块名 *D{n}（与基准/角度共用计数器） ──
+    let mut max_n = 0u32;
+    for br in doc.block_records.iter() {
+        if let Some(rest) = br.name.strip_prefix("*D") {
+            if let Ok(n) = rest.parse::<u32>() {
+                max_n = max_n.max(n);
+            }
+        }
+    }
+    let block_name = format!("*D{}", max_n + 1);
+    req_timed(
+        sender,
+        PluginRequest::AddBlockRecord {
+            name: block_name.clone(),
+            entities: members,
+        },
+        "AddBlockRecord",
+    )?;
+
+    // ── INSERT 在路径首顶点，8符号标注层 ──
+    let mut ins = E::Insert(Insert::new(block_name, origin));
+    set_member_layer(&mut ins, "8符号标注层");
+    let handle = match req_timed(sender, PluginRequest::AddEntities(vec![ins]), "AddEntities")? {
+        PluginResponse::Handles(hs) => hs.first().copied(),
+        _ => None,
+    };
+
+    Ok(serde_json::json!({
+        "ok": true,
+        "insert_handle": handle.map(fmt_handle),
+        "style": "OCSM_GB",
+        "letter": letter,
+        "side": params.section_side.as_str(),
+        "show_arrow": params.show_arrow,
+    })
+    .to_string())
+}
+
+/// 自动剖切字母编号：扫描模型空间里值为单一大写字母（A-Z）的 MTEXT，
+/// 从 A 起取第一个未被占用的字母（已有 A → B，有 A/B → C…）。
+fn next_section_letter(doc: &acadrust::CadDocument) -> String {
+    let mut used = [false; 26];
+    for e in doc.entities() {
+        if let acadrust::EntityType::MText(m) = e {
+            let b = m.value.trim().as_bytes();
+            if b.len() == 1 && b[0].is_ascii_uppercase() {
+                used[(b[0] - b'A') as usize] = true;
+            }
+        }
+    }
+    for (i, u) in used.iter().enumerate() {
+        if !u {
+            return ((b'A' + i as u8) as char).to_string();
+        }
+    }
+    "A".to_string()
 }
 
 /// 基准标注（匿名块 + INSERT）：对照 OCSMDIMGULIDE4-1996/2008.dxf。
@@ -1624,6 +1861,15 @@ fn do_apply(
         .to_string());
     }
 
+    // 剖切符号：多段 PLINE 路径（2~N 顶点）→ 匿名块 + INSERT（8符号标注层）。
+    if params.guide_type == GuideType::Section {
+        let out = apply_section(sender, &doc, &pts, &params)?;
+        req_timed(sender, PluginRequest::RemoveEntity { handle }, "RemoveEntity")?;
+        req_timed(sender, PluginRequest::BumpGeometry, "BumpGeometry")?;
+        mark_dirty(sender)?;
+        return Ok(out);
+    }
+
     let dim = build_dimension(sender, &doc, p1, p2, &params, &style)?;
     let dim_handle = match req_timed(
         sender,
@@ -1673,8 +1919,8 @@ fn api_guide(target: &str, sender: &Arc<dyn PluginRequestSender>) -> (u16, &'sta
                     "p2": [p2[0], p2[1], p2[2]],
                     // 引导线全部顶点（ANGLE 两段 PLINE = 3 个：p0/p1/p2）。
                     "pts": pts.iter().map(|q| [q[0], q[1], q[2]]).collect::<Vec<_>>(),
-                    // 引导几何形态：line（LINE）/ pline（多段线，2+ 段）。
-                    "geom": if pts.len() >= 3 { "pline" } else { "line" },
+                    // 引导几何形态：line（LINE）/ pline（LWPOLYLINE，2+ 顶点）。
+                    "geom": guide_geom_kind(&doc, handle).unwrap_or("line"),
                     "url": url,
                     // 引导线长度 = 主尺寸（公差计算用）。
                     "measurement": ((p2[0]-p1[0]).powi(2)+(p2[1]-p1[1]).powi(2)).sqrt(),
@@ -1689,6 +1935,11 @@ fn api_guide(target: &str, sender: &Arc<dyn PluginRequestSender>) -> (u16, &'sta
                         "dn": p.dn,
                         "fit": p.fit,
                         "sym": p.sym,
+                        "letter": p.letter,
+                        "scale": p.scale,
+                        "marker": p.marker,
+                        "section_side": p.section_side.as_str().to_string(),
+                        "show_arrow": p.show_arrow,
                     })),
                 });
                 (200, json, resp.to_string())
@@ -2005,13 +2256,73 @@ mod tests {
     }
 
     #[test]
+    fn apply_section_builds_block_auto_letter() {
+        use crate::guide_url::SectionSide as SS;
+        let inner = std::sync::Arc::new(MockSender::new(acadrust::CadDocument::new()));
+        let sender: std::sync::Arc<dyn PluginRequestSender> = inner.clone();
+        let doc = inner.doc.lock().unwrap().clone();
+        // 竖直剖切路径（全剖形态，2 顶点）。
+        let pts = vec![[0.0, 0.0, 0.0], [0.0, -50.0, 0.0]];
+        let mut p = GuideParams::linear(LinearSub::Aligned, 0.0);
+        p.guide_type = GuideType::Section;
+        let out = apply_section(&sender, &doc, &pts, &p).unwrap();
+        let j: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(j["ok"], true);
+        assert_eq!(j["letter"], "A"); // 空文档 → 自动 A
+        assert_eq!(j["side"], "R"); // 默认右侧
+        assert_eq!(j["show_arrow"], true);
+
+        // 左侧 + 隐藏箭头 + 指定字母 C。
+        let mut p2 = GuideParams::linear(LinearSub::Aligned, 0.0);
+        p2.guide_type = GuideType::Section;
+        p2.section_side = SS::Left;
+        p2.show_arrow = false;
+        p2.letter = Some("C".into());
+        let out2 = apply_section(&sender, &doc, &pts, &p2).unwrap();
+        let j2: serde_json::Value = serde_json::from_str(&out2).unwrap();
+        assert_eq!(j2["letter"], "C");
+        assert_eq!(j2["side"], "L");
+        assert_eq!(j2["show_arrow"], false);
+    }
+
+    #[test]
+    fn apply_section_letter_auto_increments() {
+        let inner = std::sync::Arc::new(MockSender::new(acadrust::CadDocument::new()));
+        let sender: std::sync::Arc<dyn PluginRequestSender> = inner.clone();
+        // 图纸已有一个单字母 MTEXT 'A' → 剖切自动编号 B。
+        let mut doc = acadrust::CadDocument::new();
+        let mut m = acadrust::entities::MText::new();
+        m.value = "A".into();
+        m.insertion_point = acadrust::types::Vector3::new(1.0, 1.0, 0.0);
+        let _ = doc.add_entity(acadrust::EntityType::MText(m));
+        inner.doc.lock().unwrap().clone_from(&doc);
+        let doc2 = inner.doc.lock().unwrap().clone();
+        let pts = vec![[5.0, 5.0, 0.0], [15.0, 5.0, 0.0]]; // 水平剖切路径
+        let mut p = GuideParams::linear(LinearSub::Aligned, 0.0);
+        p.guide_type = GuideType::Section;
+        let out = apply_section(&sender, &doc2, &pts, &p).unwrap();
+        let j: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(j["letter"], "B");
+    }
+
+    #[test]
+    fn apply_section_rejects_single_point() {
+        let inner = std::sync::Arc::new(MockSender::new(acadrust::CadDocument::new()));
+        let sender: std::sync::Arc<dyn PluginRequestSender> = inner.clone();
+        let doc = inner.doc.lock().unwrap().clone();
+        let mut p = GuideParams::linear(LinearSub::Aligned, 0.0);
+        p.guide_type = GuideType::Section;
+        assert!(apply_section(&sender, &doc, &[[0.0, 0.0, 0.0]], &p).is_err());
+    }
+
+    #[test]
     fn build_dimension_dec_overrides_dimdec_xdata() {
         use acadrust::xdata::XDataValue as V;
         let inner = std::sync::Arc::new(MockSender::new(acadrust::CadDocument::new()));
         let sender: std::sync::Arc<dyn PluginRequestSender> = inner.clone();
         let doc = inner.doc.lock().unwrap().clone();
         let pd = GuideParams { guide_type: GuideType::Linear, sub: Some(LinearSub::Aligned), dist: 10.0, text: None, tol: None, up: None, dn: None,
-            fit: None, sym: None, dec: Some(2), ver: crate::guide_url::DatumVersion::GB2008, letter: None, scale: None, flip: crate::guide_url::FlipDir::None, marker: None, angle_mode: crate::guide_url::AngleMode::Minor };
+            fit: None, sym: None, dec: Some(2), ver: crate::guide_url::DatumVersion::GB2008, letter: None, scale: None, flip: crate::guide_url::FlipDir::None, marker: None, angle_mode: crate::guide_url::AngleMode::Minor, section_side: crate::guide_url::SectionSide::Right, show_arrow: true };
         let dim = build_dimension(&sender, &doc, [0.0, 0.0, 0.0], [40.0, 30.0, 0.0], &pd, "OCSM_GB").unwrap();
         let rec = dim.base().common.extended_data.get_record("ACAD").expect("ACAD XDATA 存在");
         let mut found = None;
@@ -2031,11 +2342,11 @@ mod tests {
         let sender: std::sync::Arc<dyn PluginRequestSender> = inner.clone();
         let doc = inner.doc.lock().unwrap().clone();
         let pd = GuideParams { guide_type: GuideType::Diameter, sub: None, dist: -9.0, text: None, tol: None, up: None, dn: None,
-            fit: None, sym: None, dec: None, ver: crate::guide_url::DatumVersion::GB2008, letter: None, scale: None, flip: crate::guide_url::FlipDir::None, marker: None, angle_mode: crate::guide_url::AngleMode::Minor };
+            fit: None, sym: None, dec: None, ver: crate::guide_url::DatumVersion::GB2008, letter: None, scale: None, flip: crate::guide_url::FlipDir::None, marker: None, angle_mode: crate::guide_url::AngleMode::Minor, section_side: crate::guide_url::SectionSide::Right, show_arrow: true };
         // 直径走匿名块路径：mock 的 AddBlockRecord 返回 Ok → 成功。
         assert!(build_dimension(&sender, &doc, [0.0,0.0,0.0], [35.36,35.36,0.0], &pd, "OCSM_GB").is_ok());
         let pr = GuideParams { guide_type: GuideType::Radius, sub: None, dist: 11.0, text: None, tol: None, up: None, dn: None,
-            fit: None, sym: None, dec: None, ver: crate::guide_url::DatumVersion::GB2008, letter: None, scale: None, flip: crate::guide_url::FlipDir::None, marker: None, angle_mode: crate::guide_url::AngleMode::Minor };
+            fit: None, sym: None, dec: None, ver: crate::guide_url::DatumVersion::GB2008, letter: None, scale: None, flip: crate::guide_url::FlipDir::None, marker: None, angle_mode: crate::guide_url::AngleMode::Minor, section_side: crate::guide_url::SectionSide::Right, show_arrow: true };
         assert!(build_dimension(&sender, &doc, [0.0,0.0,0.0], [35.36,35.36,0.0], &pr, "OCSM_GB").is_ok());
     }
 
@@ -2061,6 +2372,8 @@ mod tests {
             flip: crate::guide_url::FlipDir::None,
             marker: None,
         angle_mode: crate::guide_url::AngleMode::Minor,
+            section_side: crate::guide_url::SectionSide::Right,
+            show_arrow: true,
         };
         // "%%c<>" 是默认（GUI 注入一次）→ 不设 user_text（块 TEXT 已用自动值）。
         let dim = build_dimension(&sender, &doc, [0.0, 0.0, 0.0], [35.36, 35.36, 0.0], &pd, "OCSM_GB").unwrap();
@@ -2099,6 +2412,8 @@ mod tests {
             flip: crate::guide_url::FlipDir::None,
             marker: None,
         angle_mode: crate::guide_url::AngleMode::Minor,
+            section_side: crate::guide_url::SectionSide::Right,
+            show_arrow: true,
         };
         let dim = build_dimension(&sender, &doc, [0.0, 0.0, 0.0], [100.0, 0.0, 0.0], &pd, "OCSM_GB").unwrap();
         assert_eq!(
@@ -2154,6 +2469,8 @@ mod tests {
             flip: crate::guide_url::FlipDir::None,
             marker: None,
         angle_mode: crate::guide_url::AngleMode::Minor,
+            section_side: crate::guide_url::SectionSide::Right,
+            show_arrow: true,
         };
         let dim = build_dimension(&sender, &doc, [0.0, 0.0, 0.0], [25.0, 0.0, 0.0], &pd, "OCSM_GB").unwrap();
         assert_eq!(
@@ -2186,6 +2503,8 @@ mod tests {
             flip: crate::guide_url::FlipDir::None,
             marker: None,
         angle_mode: crate::guide_url::AngleMode::Minor,
+            section_side: crate::guide_url::SectionSide::Right,
+            show_arrow: true,
         };
         let dim = build_dimension(&sender, &doc, [0.0, 0.0, 0.0], [25.0, 0.0, 0.0], &pd, "OCSM_GB").unwrap();
         let t = dim.base().text.clone();
@@ -2221,6 +2540,8 @@ mod tests {
             flip: crate::guide_url::FlipDir::None,
             marker: None,
         angle_mode: crate::guide_url::AngleMode::Minor,
+            section_side: crate::guide_url::SectionSide::Right,
+            show_arrow: true,
         };
         // fit 代号模式 → 配合代号堆叠（对照示例 `{\C3;\SH7/g6;}`：绿色、斜杠分数）。
         let dim = build_dimension(&sender, &doc, [0.0, 0.0, 0.0], [25.0, 0.0, 0.0], &pd, "OCSM_GB").unwrap();
@@ -2256,6 +2577,8 @@ mod tests {
             flip: crate::guide_url::FlipDir::None,
             marker: None,
         angle_mode: crate::guide_url::AngleMode::Minor,
+            section_side: crate::guide_url::SectionSide::Right,
+            show_arrow: true,
         };
         let inner = std::sync::Arc::new(MockSender::new(acadrust::CadDocument::new()));
         let sender: std::sync::Arc<dyn PluginRequestSender> = inner.clone();

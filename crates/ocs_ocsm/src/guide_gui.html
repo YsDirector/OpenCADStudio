@@ -102,6 +102,7 @@
         <button data-t="DATUM">基准</button>
         <button data-t="VIEW">向视图</button>
         <button data-t="ANGLE">角度</button>
+        <button data-t="SECTION">剖切</button>
       </div>
     </div>
     <div class="row" id="row-sub" style="margin-top:8px">
@@ -125,11 +126,18 @@
       </div>
       <span class="lbl" id="letter-lbl" style="display:none; margin-left:10px">字母</span>
       <select id="seg-letter" style="display:none; margin-left:6px; padding:2px 6px; font-size:14px"></select>
+      <div class="seg" id="seg-section-side" style="display:none; margin-left:10px">
+        <button data-ss="R" class="on">视向→</button>
+        <button data-ss="L">视向←</button>
+      </div>
+      <label id="sec-arrow-lbl" style="display:none; margin-left:12px; font-size:13px; align-items:center; cursor:pointer">
+        <input type="checkbox" id="sec-arrow" checked> 显示箭头
+      </label>
     </div>
     <div class="row" id="row-view" style="display:none; margin-top:8px">
       <span class="lbl">比例</span>
       <input type="text" id="view-scale" value="" placeholder="1:1" style="width:70px">
-      <label class="lbl" style="margin-left:10px">翻转方向</label>
+      <label class="lbl" id="flip-lbl" style="margin-left:10px">翻转方向</label>
       <select id="view-flip" style="width:92px">
         <option value="none" selected>无</option>
         <option value="cw">顺时针</option>
@@ -236,8 +244,9 @@
   document.getElementById('h').textContent = handle ? ('#' + handle) : '';
 
   let P1 = {x:0, y:0}, P2 = {x:100, y:75};
-  let PTS = null; // 引导线全部顶点（ANGLE 两段 PLINE = 3 个）
+  let PTS = null; // 引导线全部顶点（ANGLE 两段 PLINE = 3 个；SECTION 剖切路径 2~N）
   let type = 'LINEAR', sub = 'H', side = 'in', ver = '2008', letter = 'A', angleMode = 'M';
+  let sectionSide = 'R', showArrow = true;
   let geom = 'line'; // 引导几何：line（LINE）/ pline（多段线）
   // GB 基准字母禁用集：1996 用 I/O；2008（ISO 5459）加 E/F/J/L/P/R。
   const DATUM_DISABLED = { '1996': 'IO', '2008': 'EFIJLOPR' };
@@ -276,7 +285,8 @@
   svg.setAttribute('viewBox', `0 0 ${VPW} ${VPH}`);
   let cam = { cx: 0, cy: 0, scale: 1 }; // 相机中心（世界）+ 像素/世界单位
   function fitCam() {
-    const xs = [P1.x, P2.x], ys = [P1.y, P2.y];
+    const pp = PTS && PTS.length >= 2 ? PTS : [P1, P2];
+    const xs = pp.map(p => p.x), ys = pp.map(p => p.y);
     const minX = Math.min(...xs), maxX = Math.max(...xs);
     const minY = Math.min(...ys), maxY = Math.max(...ys);
     let w = maxX - minX, h = maxY - minY;
@@ -314,27 +324,33 @@
     const datum = (type === 'DATUM');
     const view = (type === 'VIEW');
     const angle = (type === 'ANGLE');
-    // row-sub 恒显示：基准/向视图的字母段也放在这一行里。
+    const section = (type === 'SECTION');
+    // row-sub 恒显示：基准/向视图/剖切的字母段也放在这一行里。
     document.getElementById('row-sub').style.display = '';
-    document.getElementById('sub-lbl').textContent = linear ? '线性' : (angle ? '角度' : '位置');
-    document.getElementById('sub-lbl').style.display = (datum || view || angle) ? 'none' : '';
+    document.getElementById('sub-lbl').textContent = linear ? '线性' : (angle ? '角度' : (section ? '剖切' : '位置'));
+    document.getElementById('sub-lbl').style.display = (datum || view || angle || section) ? 'none' : '';
     document.getElementById('seg-sub').style.display = linear ? '' : 'none';
-    document.getElementById('seg-side').style.display = (!linear && !datum && !view && !angle) ? '' : 'none';
+    document.getElementById('seg-side').style.display = (!linear && !datum && !view && !angle && !section) ? '' : 'none';
     document.getElementById('seg-angle-mode').style.display = angle ? '' : 'none';
-    // 基准：版本 + 字母；向视图：字母；都隐藏距离/小数位/文字输入。
+    // 剖切：左右视向 + 显示箭头 + 字母（复用 seg-letter）。
+    document.getElementById('seg-section-side').style.display = section ? '' : 'none';
+    document.getElementById('sec-arrow-lbl').style.display = section ? '' : 'none';
+    // 基准：版本 + 字母；向视图：字母；剖切：字母；都隐藏距离/小数位/文字输入。
     document.getElementById('seg-ver').style.display = datum ? '' : 'none';
-    document.getElementById('seg-letter').style.display = (datum || view) ? '' : 'none';
-    document.getElementById('letter-lbl').style.display = (datum || view) ? '' : 'none';
-    document.getElementById('row-param').style.display = (datum || view) ? 'none' : '';
-    document.getElementById('row-txt').style.display = (datum || view) ? 'none' : '';
+    document.getElementById('seg-letter').style.display = (datum || view || section) ? '' : 'none';
+    document.getElementById('letter-lbl').style.display = (datum || view || section) ? '' : 'none';
+    document.getElementById('row-param').style.display = (datum || view || section) ? 'none' : '';
+    document.getElementById('row-txt').style.display = (datum || view || section) ? 'none' : '';
     // 公差：线性/直径/半径 都支持（线性=dimtext 堆叠；直径/半径=块内 MTEXT 堆叠）。
     const withTol = (type === 'LINEAR' || type === 'DIAMETER' || type === 'RADIUS');
     document.getElementById('row-tol').style.display = withTol ? '' : 'none';
     if (!withTol) { tolEnabled = false; document.getElementById('tol-enable').checked = false;
       document.getElementById('row-tol-input').style.display = 'none'; }
-    // 向视图：比例 / 翻转方向 / 标记放置点。
-    document.getElementById('row-view').style.display = view ? '' : 'none';
-    if (datum || view) { renderLetters(); }
+    // 向视图/剖切：比例 + 标记放置点（剖切不显示翻转方向）。
+    document.getElementById('row-view').style.display = (view || section) ? '' : 'none';
+    document.getElementById('view-flip').style.display = view ? '' : 'none';
+    document.getElementById('flip-lbl').style.display = view ? '' : 'none';
+    if (datum || view || section) { renderLetters(); }
     else if (!linear && !angle) {
       // 切到直径/半径：按内外按钮自动填示例默认 dist
       //（直径 内 −9 / 外 +11；半径 内 −8 / 外 +8）。
@@ -347,9 +363,9 @@
   segBind('seg-sub', b => { sub = b.dataset.s; draw(); });
   segBind('seg-angle-mode', b => { angleMode = b.dataset.am; draw(); });
   // 按引导几何过滤类型按钮：LINE → 线性/直径/半径/基准/向视图；
-  // PLINE → 角度（以及未来 SECTION/GD&T）。当前类型被隐藏时切到第一个可见。
+  // PLINE → 角度/剖切（以及未来 SECTION/GD&T）。当前类型被隐藏时切到第一个可见。
   const LINE_TYPES = ['LINEAR', 'DIAMETER', 'RADIUS', 'DATUM', 'VIEW'];
-  const PLINE_TYPES = ['ANGLE'];
+  const PLINE_TYPES = ['ANGLE', 'SECTION'];
   function applyGeomFilter() {
     const allow = (geom === 'pline') ? PLINE_TYPES : LINE_TYPES;
     document.querySelectorAll('#seg-type button').forEach(b => {
@@ -370,6 +386,8 @@
       draw();
     });
   });
+  segBind('seg-section-side', b => { sectionSide = b.dataset.ss; draw(); });
+  document.getElementById('sec-arrow').addEventListener('change', e => { showArrow = e.target.checked; draw(); });
 
   // ── 公差（ISO 286 常用配合表） ──────────────────────────────
   let tolEnabled = false, tolMode = 'code';
@@ -757,6 +775,18 @@ const BS_FITS = [
       const dist = parseFloat(document.getElementById('dist').value);
       if (!isFinite(dist)) throw new Error('距离无效');
       u += (angleMode === 'M') ? `/${dist}` : `/${angleMode}/${dist}`;
+    } else if (type === 'SECTION') {
+      // 剖切：剖切线路径（多段 PLINE）+ 字母 + 左右视向 + 显示箭头 + 视图名放置/比例。
+      u += '/0';
+      qs.push('let=' + letter);
+      if (sectionSide === 'L') qs.push('side=L');
+      if (!showArrow) qs.push('show=0');
+      const scale = document.getElementById('view-scale').value.trim();
+      if (scale) qs.push('scale=' + encodeURIComponent(scale));
+      const mx = document.getElementById('view-mx').value.trim();
+      const my = document.getElementById('view-my').value.trim();
+      if (mx !== '') qs.push('mx=' + mx);
+      if (my !== '') qs.push('my=' + my);
     } else {
       const dist = parseFloat(document.getElementById('dist').value);
       if (!isFinite(dist)) throw new Error('距离无效');
@@ -909,6 +939,82 @@ const BS_FITS = [
       const te = el('text', {x:st.x, y:st.y, 'text-anchor':'middle', 'font-size':16, fill:'#1a5f1a', 'font-weight':'bold'});
       te.textContent = txt; svg.appendChild(te);
       return; // 角度分支结束
+    }
+
+    // ── 剖切：剖切路径（多段 PLINE）+ 粗线 + 左右视向箭头 + 字母 + 视图名 ──
+    if (type === 'SECTION') {
+      const pp = (PTS && PTS.length >= 2) ? PTS : [P1, P2];
+      const asz = 6 * cam.scale;   // 箭头长/连接线（示意）
+      const cut = 2 * asz;         // 粗线段长（示例 = 2×箭头长）
+      const hpx = 5 * cam.scale;   // 字母高（示意）
+      const off = 1.3 * asz;       // 字母距剖切端（示意）
+      const half = asz / 6;        // 箭头底边半宽（示意）
+      // 剖切路径（灰引导线已有 P1-P2，这里画全路径顶点折线）
+      svg.appendChild(wline(pp[0].x, pp[0].y, pp[1].x, pp[1].y, 3.5, '#999', '8 5'));
+      for (let i = 0; i < pp.length; i++) {
+        const s = w2s(pp[i].x, pp[i].y);
+        svg.appendChild(el('circle', {cx:s.x, cy:s.y, r:3.5, fill:'#333'}));
+      }
+      const segDir = (a, b) => {
+        const dx = b.x-a.x, dy = b.y-a.y, l = Math.hypot(dx,dy)||1;
+        return {x:dx/l, y:dy/l};
+      };
+      const sideDir = (t) => (sectionSide === 'R') ? {x:-t.y, y:t.x} : {x:t.y, y:-t.x};
+      // 粗线（每段两端各 cut，中间断开）
+      for (let i = 0; i < pp.length-1; i++) {
+        const a = pp[i], b = pp[i+1];
+        const dl = Math.hypot(b.x-a.x, b.y-a.y);
+        const t = segDir(a, b);
+        if (dl <= 2*cut) {
+          svg.appendChild(wline(a.x, a.y, b.x, b.y, 4, '#222'));
+        } else {
+          svg.appendChild(wline(a.x, a.y, a.x+t.x*cut, a.y+t.y*cut, 4, '#222'));
+          svg.appendChild(wline(b.x-t.x*cut, b.y-t.y*cut, b.x, b.y, 4, '#222'));
+        }
+      }
+      // 视向箭头（路径两端）
+      if (showArrow) {
+        const t0 = segDir(pp[0], pp[1]);
+        const tn = segDir(pp[pp.length-2], pp[pp.length-1]);
+        for (const [at, tau] of [[pp[0], t0], [pp[pp.length-1], tn]]) {
+          const d = sideDir(tau);
+          const e0 = w2s(at.x, at.y), e1 = w2s(at.x+d.x*asz, at.y+d.y*asz);
+          svg.appendChild(el('line', {x1:e0.x, y1:e0.y, x2:e1.x, y2:e1.y, stroke:'#2b6fe0', 'stroke-width':3}));
+          const tip = w2s(at.x+d.x*2*asz, at.y+d.y*2*asz);
+          // 底边端点（沿剖切方向 ±half）
+          const bx1 = at.x+d.x*asz + tau.x*half, by1 = at.y+d.y*asz + tau.y*half;
+          const bx2 = at.x+d.x*asz - tau.x*half, by2 = at.y+d.y*asz - tau.y*half;
+          const b1 = w2s(bx1, by1), b2 = w2s(bx2, by2);
+          svg.appendChild(el('polygon', {points:`${tip.x},${tip.y} ${b1.x},${b1.y} ${b2.x},${b2.y}`, fill:'#ff8c00'}));
+        }
+      }
+      // 字母（两端沿剖切方向延长 off）
+      const t0 = segDir(pp[0], pp[1]);
+      const tn = segDir(pp[pp.length-2], pp[pp.length-1]);
+      for (const [at, tau, sgn] of [[pp[0], t0, -1], [pp[pp.length-1], tn, 1]]) {
+        const lt = w2s(at.x + sgn*tau.x*off, at.y + sgn*tau.y*off);
+        const te = el('text', {x:lt.x, y:lt.y, 'text-anchor':'middle', 'dominant-baseline':'middle', 'font-size':15, fill:'#1a5f1a', 'font-weight':'bold'});
+        te.textContent = letter; svg.appendChild(te);
+      }
+      // 视图名：默认路径包围盒底部中心下方 8h；marker 覆盖。
+      let mnx=Infinity, mxx=-Infinity, mny=Infinity;
+      for (const p of pp) { mnx=Math.min(mnx,p.x); mxx=Math.max(mxx,p.x); mny=Math.min(mny,p.y); }
+      let vmx, vmy;
+      const mx = parseFloat(document.getElementById('view-mx').value);
+      const my = parseFloat(document.getElementById('view-my').value);
+      if (document.getElementById('view-mx').value !== '' || document.getElementById('view-my').value !== '') {
+        vmx = mx||0; vmy = my||0;
+      } else { vmx = (mnx+mxx)/2; vmy = mny - 8*hpx; }
+      const st = w2s(vmx, vmy);
+      const te = el('text', {x:st.x, y:st.y, 'text-anchor':'middle', 'dominant-baseline':'middle', 'font-size':15, fill:'#1a5f1a', 'font-weight':'bold'});
+      te.textContent = letter + '-' + letter; svg.appendChild(te);
+      const scale = document.getElementById('view-scale').value.trim();
+      if (scale) {
+        const sp = w2s(vmx, vmy-1.4*hpx);
+        const tp = el('text', {x:sp.x, y:sp.y, 'text-anchor':'middle', 'dominant-baseline':'middle', 'font-size':12, fill:'#1a5f1a'});
+        tp.textContent = scale; svg.appendChild(tp);
+      }
+      return; // 剖切分支结束
     }
 
     // ── 直径/半径：画圆 + 直径线/半径线 + 文字（径向位置/旋转） ──
@@ -1112,6 +1218,25 @@ const BS_FITS = [
             document.querySelectorAll('#seg-angle-mode button').forEach(x => x.classList.remove('on'));
             const am = document.querySelector(`#seg-angle-mode button[data-am="${angleMode}"]`);
             if (am) am.classList.add('on');
+          }
+          if (type === 'SECTION') {
+            // 恢复剖切：左右视向 + 显示箭头 + 字母 + 比例/放置点。
+            sectionSide = (j.params.section_side === 'L') ? 'L' : 'R';
+            document.querySelectorAll('#seg-section-side button').forEach(x => x.classList.remove('on'));
+            const sb = document.querySelector(`#seg-section-side button[data-ss="${sectionSide}"]`);
+            if (sb) sb.classList.add('on');
+            showArrow = (j.params.show_arrow !== false);
+            document.getElementById('sec-arrow').checked = showArrow;
+            if (j.params.letter) {
+              letter = j.params.letter;
+              const sg = document.getElementById('seg-letter');
+              if ([...sg.options].some(o => o.value === letter)) sg.value = letter;
+            }
+            if (j.params.scale) document.getElementById('view-scale').value = j.params.scale;
+            if (j.params.marker) {
+              document.getElementById('view-mx').value = j.params.marker[0];
+              document.getElementById('view-my').value = j.params.marker[1];
+            }
           }
         }
         applyGeomFilter();
