@@ -26,6 +26,7 @@ pub enum GuideType {
     View,
     Angle,
     Section,
+    Tolerance,
 }
 
 impl GuideType {
@@ -38,6 +39,7 @@ impl GuideType {
             GuideType::View => "VIEW",
             GuideType::Angle => "ANGLE",
             GuideType::Section => "SECTION",
+            GuideType::Tolerance => "TOLERANCE",
         }
     }
     fn from_str(s: &str) -> Option<Self> {
@@ -49,6 +51,7 @@ impl GuideType {
             "VIEW" => Some(GuideType::View),
             "ANGLE" => Some(GuideType::Angle),
             "SECTION" | "SEC" => Some(GuideType::Section),
+            "TOLERANCE" | "GDT" | "TOL" | "FTCF" => Some(GuideType::Tolerance),
             _ => None,
         }
     }
@@ -260,6 +263,16 @@ pub struct GuideParams {
     pub section_side: SectionSide,
     /// 剖切符号是否显示视向箭头（仅 SECTION；默认 true）。
     pub show_arrow: bool,
+    /// 形位公差：特征项目符号（gdt 字体字母，仅 TOLERANCE）。如 "b"=垂直度、"j"=位置度。
+    pub gdt_sym: Option<String>,
+    /// 形位公差：公差值前缀 ⌀（直径公差带，仅 TOLERANCE；默认 false）。
+    pub gdt_dia: bool,
+    /// 形位公差：公差值（仅 TOLERANCE）。如 "0.03"。
+    pub gdt_tol: Option<String>,
+    /// 形位公差：基准 1/2/3（仅 TOLERANCE）。
+    pub gdt_d1: Option<String>,
+    pub gdt_d2: Option<String>,
+    pub gdt_d3: Option<String>,
 }
 
 impl GuideParams {
@@ -285,6 +298,12 @@ impl GuideParams {
             angle_mode: AngleMode::Minor,
             section_side: SectionSide::Right,
             show_arrow: true,
+            gdt_sym: None,
+            gdt_dia: false,
+            gdt_tol: None,
+            gdt_d1: None,
+            gdt_d2: None,
+            gdt_d3: None,
         }
     }
 
@@ -339,14 +358,18 @@ impl GuideParams {
         let mut marker = None;
         let mut section_side = SectionSide::Right;
         let mut show_arrow = true;
+        let mut gdt_sym = None;
+        let mut gdt_dia = false;
+        let mut gdt_tol = None;
+        let mut gdt_d1 = None;
+        let mut gdt_d2 = None;
+        let mut gdt_d3 = None;
         for pair in query.split('&').filter(|s| !s.is_empty()) {
             let (k, v) = pair.split_once('=').unwrap_or((pair, ""));
             let v = percent_decode(v);
             match k {
                 "text" => text = Some(v),
                 "tol" => tol = Some(v),
-                "up" => up = Some(v),
-                "dn" => dn = Some(v),
                 "up" => up = Some(v),
                 "dn" => dn = Some(v),
                 "fit" => fit = Some(v),
@@ -367,6 +390,12 @@ impl GuideParams {
                 }
                 "side" => section_side = SectionSide::from_str(&v).unwrap_or(SectionSide::Right),
                 "show" => show_arrow = !matches!(&*v, "0" | "false" | "no" | "off" | "隐藏"),
+                "gdt" | "gsym" => gdt_sym = (!v.is_empty()).then_some(v),
+                "dia" => gdt_dia = matches!(&*v, "1" | "true" | "yes" | "on"),
+                "gtol" => gdt_tol = (!v.is_empty()).then_some(v),
+                "d1" => gdt_d1 = (!v.is_empty()).then_some(v),
+                "d2" => gdt_d2 = (!v.is_empty()).then_some(v),
+                "d3" => gdt_d3 = (!v.is_empty()).then_some(v),
                 _ => {}
             }
         }
@@ -390,6 +419,12 @@ impl GuideParams {
             angle_mode,
             section_side,
             show_arrow,
+            gdt_sym,
+            gdt_dia,
+            gdt_tol,
+            gdt_d1,
+            gdt_d2,
+            gdt_d3,
         })
     }
 
@@ -469,6 +504,27 @@ impl GuideParams {
         }
         if !self.show_arrow {
             q.push("show=0".to_string());
+        }
+        // 形位公差：符号 / ⌀ / 公差值 / 基准。
+        if let Some(s) = &self.gdt_sym {
+            if !s.is_empty() {
+                q.push(format!("gdt={}", percent_encode(s)));
+            }
+        }
+        if self.gdt_dia {
+            q.push("dia=1".to_string());
+        }
+        if let Some(t) = &self.gdt_tol {
+            if !t.is_empty() {
+                q.push(format!("gtol={}", percent_encode(t)));
+            }
+        }
+        for (k, d) in [("d1", &self.gdt_d1), ("d2", &self.gdt_d2), ("d3", &self.gdt_d3)] {
+            if let Some(v) = d {
+                if !v.is_empty() {
+                    q.push(format!("{k}={}", percent_encode(v)));
+                }
+            }
         }
         if !q.is_empty() {
             url.push('?');
@@ -574,6 +630,38 @@ mod tests {
         assert_eq!(
             GuideParams::from_url("http://x/DIM/DATUM/0").unwrap().guide_type,
             GuideType::Datum
+        );
+    }
+
+    #[test]
+    fn parse_tolerance_url_roundtrip() {
+        use crate::guide_url::GuideType as GT;
+        let p = GuideParams::from_url(
+            "http://x/DIM/TOLERANCE/0?gdt=j&dia=1&gtol=0.05&d1=A&d2=B&d3=C",
+        )
+        .unwrap();
+        assert_eq!(p.guide_type, GT::Tolerance);
+        assert_eq!(p.gdt_sym.as_deref(), Some("j"));
+        assert!(p.gdt_dia);
+        assert_eq!(p.gdt_tol.as_deref(), Some("0.05"));
+        assert_eq!(p.gdt_d1.as_deref(), Some("A"));
+        assert_eq!(p.gdt_d2.as_deref(), Some("B"));
+        assert_eq!(p.gdt_d3.as_deref(), Some("C"));
+        // to_url 反向序列化 → 再解一次。
+        let url = p.to_url(23751);
+        assert!(url.contains("gdt=j") && url.contains("dia=1") && url.contains("gtol=0.05"));
+        let back = GuideParams::from_url(&url).unwrap();
+        assert_eq!(back.guide_type, GT::Tolerance);
+        assert_eq!(back.gdt_tol, p.gdt_tol);
+        assert_eq!(back.gdt_d3, p.gdt_d3);
+        // 别名 GDT/TOL 都能解析。
+        assert_eq!(
+            GuideParams::from_url("http://x/DIM/GDT/0").unwrap().guide_type,
+            GT::Tolerance
+        );
+        assert_eq!(
+            GuideParams::from_url("http://x/DIM/TOL/0").unwrap().guide_type,
+            GT::Tolerance
         );
     }
 

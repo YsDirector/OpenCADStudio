@@ -29,6 +29,14 @@
   #btn-gdt:hover { border-color: var(--accent); background: #eef4ff; }
   #gdt-chars { display: flex; gap: 4px; flex-wrap: wrap; }
   .gdt-hint { font-size: 11px; color: #888; margin-top: 4px; }
+  /* 形位公差符号选择器 */
+  .gdt-picker { display: flex; flex-wrap: wrap; gap: 3px; max-width: 460px; }
+  .gdt-sym { width: 34px; height: 34px; border: 1px solid var(--line); border-radius: 5px;
+             background: #fff; cursor: pointer; display: flex; align-items: center; justify-content: center; }
+  .gdt-sym:hover { border-color: var(--accent); background: #f2f7ff; }
+  .gdt-sym.on { border-color: var(--accent); background: var(--accent); }
+  .gdt-sym.on svg * { stroke: #fff; }
+  .gdt-sym svg { width: 26px; height: 26px; }
   #gdt-modal { position: fixed; inset: 0; background: rgba(0,0,0,.42); z-index: 50;
                display: none; align-items: center; justify-content: center; }
   #gdt-modal .card { background: #fff; border-radius: 10px; padding: 18px; width: 640px;
@@ -103,6 +111,7 @@
         <button data-t="VIEW">向视图</button>
         <button data-t="ANGLE">角度</button>
         <button data-t="SECTION">剖切</button>
+        <button data-t="TOLERANCE">形位公差</button>
       </div>
     </div>
     <div class="row" id="row-sub" style="margin-top:8px">
@@ -146,6 +155,22 @@
       <span class="lbl" style="margin-left:10px">标记放置点</span>
       <input type="number" id="view-mx" value="" placeholder="x" step="any" style="width:60px">
       <input type="number" id="view-my" value="" placeholder="y" step="any" style="width:60px">
+    </div>
+    <!-- 形位公差（TOLERANCE）：符号选择器 + ⌀/公差/基准 -->
+    <div class="row" id="row-gdt" style="display:none; margin-top:8px; align-items:flex-start">
+      <span class="lbl" style="padding-top:6px">符号</span>
+      <div id="gdt-picker" class="gdt-picker"></div>
+    </div>
+    <div class="row" id="row-gdt2" style="display:none; margin-top:6px; flex-wrap:wrap; gap:6px 8px; align-items:center">
+      <label style="display:flex;align-items:center;gap:4px;font-size:13px;cursor:pointer">
+        <input type="checkbox" id="gdt-dia"> ⌀直径带
+      </label>
+      <span class="lbl">公差</span>
+      <input type="text" id="gdt-tol" style="width:80px" placeholder="0.03">
+      <span class="lbl" style="margin-left:6px">基准</span>
+      <input type="text" id="gdt-d1" style="width:40px" placeholder="A" maxlength="6">
+      <input type="text" id="gdt-d2" style="width:40px" placeholder="B" maxlength="6">
+      <input type="text" id="gdt-d3" style="width:40px" placeholder="C" maxlength="6">
     </div>
     <div class="param" id="row-param">
       <span class="lbl">(与P2距离)</span>
@@ -247,6 +272,16 @@
   let PTS = null; // 引导线全部顶点（ANGLE 两段 PLINE = 3 个；SECTION 剖切路径 2~N）
   let type = 'LINEAR', sub = 'H', side = 'in', ver = '2008', letter = 'A', angleMode = 'M';
   let sectionSide = 'R', showArrow = true;
+  // 形位公差（TOLERANCE）状态 + QCAD gdt 字体字形（与 DXF 内联 {\Fgdt;X} 同源）。
+  let gdtSym = 'b', gdtDia = false;
+  // [字母, 中文名]（14 个特征项目 + 常用修饰符）。
+  const GDT_LIST = [
+    ['u','直线度'],['c','平面度'],['e','圆度'],['g','圆柱度'],
+    ['d','线轮廓'],['k','面轮廓'],['a','倾斜度'],['b','垂直度'],
+    ['f','平行度'],['j','位置度'],['i','对称度'],['r','同轴度'],
+    ['h','圆跳动'],['t','全跳动'],['n','直径'],['o','基本尺寸'],
+    ['m','Ⓜ最大'],['l','Ⓛ最小'],['p','Ⓟ投影'],['s','Ⓢ独立'],
+  ];
   let geom = 'line'; // 引导几何：line（LINE）/ pline（多段线）
   // GB 基准字母禁用集：1996 用 I/O；2008（ISO 5459）加 E/F/J/L/P/R。
   const DATUM_DISABLED = { '1996': 'IO', '2008': 'EFIJLOPR' };
@@ -287,8 +322,19 @@
   function fitCam() {
     const pp = PTS && PTS.length >= 2 ? PTS : [P1, P2];
     const xs = pp.map(p => p.x), ys = pp.map(p => p.y);
-    const minX = Math.min(...xs), maxX = Math.max(...xs);
-    const minY = Math.min(...ys), maxY = Math.max(...ys);
+    let minX = Math.min(...xs), maxX = Math.max(...xs);
+    let minY = Math.min(...ys), maxY = Math.max(...ys);
+    // 形位公差：把方框（向 +x 延伸、高 2h）纳入包围盒。
+    if (type === 'TOLERANCE') {
+      let len = 0;
+      for (let i = 1; i < pp.length; i++) len += Math.hypot(pp[i].x-pp[i-1].x, pp[i].y-pp[i-1].y);
+      const hh = Math.max(len/7, 1e-3), cell = 2*hh;
+      const nCells = 1 + (document.getElementById('gdt-tol').value.trim() ? 1 : 0)
+        + ['gdt-d1','gdt-d2','gdt-d3'].filter(k => document.getElementById(k).value.trim()).length;
+      maxX = Math.max(maxX, pp[pp.length-1].x + nCells*cell);
+      minY = Math.min(minY, pp[pp.length-1].y - hh);
+      maxY = Math.max(maxY, pp[pp.length-1].y + hh);
+    }
     let w = maxX - minX, h = maxY - minY;
     if (w < 1e-6) w = 1; if (h < 1e-6) h = 1;
     w *= 1.6; h *= 1.6;
@@ -325,8 +371,21 @@
     const view = (type === 'VIEW');
     const angle = (type === 'ANGLE');
     const section = (type === 'SECTION');
-    // row-sub 恒显示：基准/向视图/剖切的字母段也放在这一行里。
-    document.getElementById('row-sub').style.display = '';
+    const gdt = (type === 'TOLERANCE');
+    // 形位公差：隐藏通用 row-sub 与行内控件，改展专属 row-gdt/row-gdt2。
+    document.getElementById('row-sub').style.display = gdt ? 'none' : '';
+    document.getElementById('row-gdt').style.display = gdt ? '' : 'none';
+    document.getElementById('row-gdt2').style.display = gdt ? '' : 'none';
+    if (gdt) {
+      gdtDia = document.getElementById('gdt-dia').checked;
+      document.getElementById('row-param').style.display = 'none';
+      document.getElementById('row-txt').style.display = 'none';
+      document.getElementById('row-tol').style.display = 'none';
+      document.getElementById('row-view').style.display = 'none';
+      tolEnabled = false; document.getElementById('tol-enable').checked = false;
+      renderGdtPicker(); syncGdtOn(); draw();
+      return;
+    }
     document.getElementById('sub-lbl').textContent = linear ? '线性' : (angle ? '角度' : (section ? '剖切' : '位置'));
     document.getElementById('sub-lbl').style.display = (datum || view || angle || section) ? 'none' : '';
     document.getElementById('seg-sub').style.display = linear ? '' : 'none';
@@ -363,13 +422,13 @@
   segBind('seg-sub', b => { sub = b.dataset.s; draw(); });
   segBind('seg-angle-mode', b => { angleMode = b.dataset.am; draw(); });
   // 按引导几何过滤类型按钮：LINE → 线性/直径/半径/基准/向视图；
-  // PLINE → 角度（需 3 顶点=两段）/剖切（2 顶点=单段即可）。当前类型被隐藏时切到第一个可见。
+  // PLINE → 角度（≥3 顶点=两段）/剖切（≥2 顶点=单段）/形位公差（≥2）。
   const LINE_TYPES = ['LINEAR', 'DIAMETER', 'RADIUS', 'DATUM', 'VIEW'];
   function applyGeomFilter() {
     let allow;
     if (geom === 'pline') {
       const nV = (PTS && PTS.length) || 0;
-      allow = (nV >= 3) ? ['ANGLE', 'SECTION'] : (nV >= 2 ? ['SECTION'] : ['SECTION']);
+      allow = (nV >= 3) ? ['ANGLE', 'SECTION', 'TOLERANCE'] : ['SECTION', 'TOLERANCE'];
     } else {
       allow = LINE_TYPES;
     }
@@ -780,6 +839,18 @@ const BS_FITS = [
       const dist = parseFloat(document.getElementById('dist').value);
       if (!isFinite(dist)) throw new Error('距离无效');
       u += (angleMode === 'M') ? `/${dist}` : `/${angleMode}/${dist}`;
+    } else if (type === 'TOLERANCE') {
+      // 形位公差：gdt_sym 字母 + dia ⌀ + tol 值 + d1/d2/d3。
+      u += '/0';
+      if (gdtSym) qs.push('gdt=' + encodeURIComponent(gdtSym));
+      gdtDia = document.getElementById('gdt-dia').checked;
+      if (gdtDia) qs.push('dia=1');
+      const tol = document.getElementById('gdt-tol').value.trim();
+      if (tol) qs.push('gtol=' + encodeURIComponent(tol));
+      ['d1','d2','d3'].forEach(k => {
+        const v = document.getElementById('gdt-'+k).value.trim();
+        if (v) qs.push(k + '=' + encodeURIComponent(v));
+      });
     } else if (type === 'SECTION') {
       // 剖切：剖切线路径（多段 PLINE）+ 字母 + 左右视向 + 显示箭头 + 视图名放置/比例。
       u += '/0';
@@ -1022,6 +1093,57 @@ const BS_FITS = [
       return; // 剖切分支结束
     }
 
+    // ── 形位公差 FCF 预览：箭头 + 引线 + 方框（单元格含符号/公差/基准）──
+    if (type === 'TOLERANCE') {
+      const pp = (PTS && PTS.length >= 2) ? PTS : [P1, P2];
+      // 世界单位尺寸：按引线总长比例定字高，保证预览不失控。
+      let len = 0;
+      for (let i = 1; i < pp.length; i++) len += Math.hypot(pp[i].x-pp[i-1].x, pp[i].y-pp[i-1].y);
+      const h = Math.max(len/7, 1e-3);   // 字高
+      const cell = 2*h;                    // 格宽/高
+      const half = h/6;                    // 箭头底边半宽
+      // 路径顶点
+      for (const p of pp) { const s = w2s(p.x, p.y); svg.appendChild(el('circle', {cx:s.x, cy:s.y, r:3.5, fill:'#333'})); }
+      // 箭头（尖=P1，底沿 P1→P2 方向）
+      const dx0 = pp[1].x-pp[0].x, dy0 = pp[1].y-pp[0].y, l0 = Math.hypot(dx0,dy0)||1;
+      const ux = dx0/l0, uy = dy0/l0, px = -uy, py = ux;
+      const bxc = {x:pp[0].x+ux*h, y:pp[0].y+uy*h};
+      const g0 = w2s(pp[0].x, pp[0].y);
+      const g1 = w2s(bxc.x+px*half, bxc.y+py*half);
+      const g2 = w2s(bxc.x-px*half, bxc.y-py*half);
+      svg.appendChild(el('polygon', {points:`${g0.x},${g0.y} ${g1.x},${g1.y} ${g2.x},${g2.y}`, fill:'#ff8c00'}));
+      // 引线：箭头底 → 各顶点
+      let prev = bxc;
+      for (let i = 1; i < pp.length; i++) { svg.appendChild(wline(prev.x,prev.y,pp[i].x,pp[i].y,3,'#2b6fe0')); prev = pp[i]; }
+      // 方框：以末顶点为左边缘中点，向 +x 延伸
+      const attach = pp[pp.length-1];
+      const cells = [];
+      if (gdtSym) cells.push({kind:'sym', v:gdtSym});
+      const tol = document.getElementById('gdt-tol').value.trim();
+      const dia = document.getElementById('gdt-dia').checked;
+      if (tol) cells.push({kind:'txt', v:(dia?'⌀':'')+tol});
+      for (const k of ['gdt-d1','gdt-d2','gdt-d3']) { const v = document.getElementById(k).value.trim(); if (v) cells.push({kind:'txt', v}); }
+      if (cells.length) {
+        const yb = attach.y - h, yt = attach.y + h;
+        for (let i = 0; i < cells.length; i++) {
+          const xi = attach.x + i*cell, xj = xi + cell;
+          svg.appendChild(wline(xi, yb, xi, yt, 3, '#e65100'));
+          svg.appendChild(wline(xi, yt, xj, yt, 3, '#e65100'));
+          svg.appendChild(wline(xi, yb, xj, yb, 3, '#e65100'));
+          svg.appendChild(wline(xj, yb, xj, yt, 3, '#e65100'));
+          const cc = w2s(xi + cell/2, attach.y);
+          if (cells[i].kind === 'sym') {
+            drawGdtGlyph(svg, cc.x, cc.y, h*cam.scale, cells[i].v, 1.6);
+          } else {
+            const te = el('text', {x:cc.x, y:cc.y, 'text-anchor':'middle', 'dominant-baseline':'middle', 'font-size':Math.max(11,h*cam.scale), fill:'#1a5f1a', 'font-weight':'bold'});
+            te.textContent = cells[i].v; svg.appendChild(te);
+          }
+        }
+        svg.appendChild(wline(attach.x + cells.length*cell, yb, attach.x + cells.length*cell, yt, 3, '#e65100'));
+      }
+      return; // 形位公差分支结束
+    }
+
     // ── 直径/半径：画圆 + 直径线/半径线 + 文字（径向位置/旋转） ──
     if (type === 'DIAMETER' || type === 'RADIUS') {
       const c = w2s(P1.x, P1.y);
@@ -1243,6 +1365,17 @@ const BS_FITS = [
               document.getElementById('view-my').value = j.params.marker[1];
             }
           }
+          if (type === 'TOLERANCE') {
+            // 恢复形位公差：符号字母 + ⌀ + 公差值 + 基准。
+            if (j.params.gdt_sym) gdtSym = j.params.gdt_sym;
+            gdtDia = !!j.params.gdt_dia;
+            document.getElementById('gdt-dia').checked = gdtDia;
+            document.getElementById('gdt-tol').value = j.params.gdt_tol || '';
+            document.getElementById('gdt-d1').value = j.params.gdt_d1 || '';
+            document.getElementById('gdt-d2').value = j.params.gdt_d2 || '';
+            document.getElementById('gdt-d3').value = j.params.gdt_d3 || '';
+            renderGdtPicker(); syncGdtOn();
+          }
         }
         applyGeomFilter();
         fitCam();
@@ -1286,7 +1419,47 @@ const BS_FITS = [
       if (e.target === document.getElementById('gdt-modal')) closeGdtModal();
     });
   }
+  // 形位公差符号选择器：用字形多段线画按钮（WYSIWYG，与 DXF 同字形）。
+  function renderGdtPicker() {
+    const box = document.getElementById('gdt-picker');
+    if (!box || box.childElementCount) return;
+    GDT_LIST.forEach(([ch, name]) => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'gdt-sym';
+      b.dataset.gdt = ch;
+      b.title = name + '（gdt 字形 ' + ch + '）';
+      const s = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      s.setAttribute('viewBox', '0 0 20 15');
+      const polys = GDT_POLYS[ch] || [];
+      polys.forEach(poly => {
+        const pts = poly.map(p => `${p[0]},${15 - (p[1] + 2)}`).join(' ');
+        const pl = document.createElementNS('http://www.w3.org/2000/svg', 'polyline');
+        pl.setAttribute('points', pts);
+        pl.setAttribute('fill', 'none');
+        pl.setAttribute('stroke', '#222');
+        pl.setAttribute('stroke-width', '1.3');
+        pl.setAttribute('stroke-linecap', 'round');
+        pl.setAttribute('stroke-linejoin', 'round');
+        s.appendChild(pl);
+      });
+      b.appendChild(s);
+      b.addEventListener('click', () => { gdtSym = ch; syncGdtOn(); draw(); });
+      box.appendChild(b);
+    });
+    syncGdtOn();
+  }
+  function syncGdtOn() {
+    document.querySelectorAll('#gdt-picker .gdt-sym').forEach(x =>
+      x.classList.toggle('on', x.dataset.gdt === gdtSym));
+  }
+  document.querySelectorAll('#gdt-dia,#gdt-tol,#gdt-d1,#gdt-d2,#gdt-d3').forEach(x => {
+    x.addEventListener('input', draw);
+    x.addEventListener('change', draw);
+  });
+  document.getElementById('gdt-dia').addEventListener('change', e => { gdtDia = e.target.checked; });
   initGdtModal();
+  renderGdtPicker();
   fitCam();
   draw();
   load();
