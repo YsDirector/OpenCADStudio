@@ -363,11 +363,16 @@
   segBind('seg-sub', b => { sub = b.dataset.s; draw(); });
   segBind('seg-angle-mode', b => { angleMode = b.dataset.am; draw(); });
   // 按引导几何过滤类型按钮：LINE → 线性/直径/半径/基准/向视图；
-  // PLINE → 角度/剖切（以及未来 SECTION/GD&T）。当前类型被隐藏时切到第一个可见。
+  // PLINE → 角度（需 3 顶点=两段）/剖切（2 顶点=单段即可）。当前类型被隐藏时切到第一个可见。
   const LINE_TYPES = ['LINEAR', 'DIAMETER', 'RADIUS', 'DATUM', 'VIEW'];
-  const PLINE_TYPES = ['ANGLE', 'SECTION'];
   function applyGeomFilter() {
-    const allow = (geom === 'pline') ? PLINE_TYPES : LINE_TYPES;
+    let allow;
+    if (geom === 'pline') {
+      const nV = (PTS && PTS.length) || 0;
+      allow = (nV >= 3) ? ['ANGLE', 'SECTION'] : (nV >= 2 ? ['SECTION'] : ['SECTION']);
+    } else {
+      allow = LINE_TYPES;
+    }
     document.querySelectorAll('#seg-type button').forEach(b => {
       b.style.display = allow.includes(b.dataset.t) ? '' : 'none';
     });

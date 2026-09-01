@@ -401,11 +401,11 @@ impl OcsmPlugin {
         };
         match &e {
             acadrust::EntityType::Line(_) => {}
-            acadrust::EntityType::LwPolyline(pl) if !pl.is_closed && pl.vertices.len() >= 3 => {}
-            acadrust::EntityType::Polyline(pl) if !pl.flags.is_closed() && pl.vertices.len() >= 3 => {}
-            acadrust::EntityType::Polyline2D(pl) if !pl.flags.is_closed() && pl.vertices.len() >= 3 => {}
+            acadrust::EntityType::LwPolyline(pl) if !pl.is_closed && pl.vertices.len() >= 2 => {}
+            acadrust::EntityType::Polyline(pl) if !pl.flags.is_closed() && pl.vertices.len() >= 2 => {}
+            acadrust::EntityType::Polyline2D(pl) if !pl.flags.is_closed() && pl.vertices.len() >= 2 => {}
             _ => {
-                host.push_error("OCSM: 引导线必须是直线（LINE）或两段多段线（PLINE，3 顶点）。");
+                host.push_error("OCSM: 引导线必须是直线（LINE）或多段线（PLINE，2 顶点以上）。");
                 return;
             }
         }
