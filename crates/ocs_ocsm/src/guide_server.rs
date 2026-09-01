@@ -1334,14 +1334,18 @@ fn apply_section(
         ymax = ymax.max(v.y);
     }
     let (vmx, vmy) = match params.marker {
-        Some((mx, my)) => (mx - origin.x, my - origin.y),
-        None => ((xmin + xmax) * 0.5, ymin - 8.0 * h),
+        // marker 为世界坐标（绝对），直接使用（同向视图 mx/my）。
+        Some((mx, my)) => (mx, my),
+        None => (
+            origin.x + (xmin + xmax) * 0.5,
+            origin.y + ymin - 8.0 * h,
+        ),
     };
     let view_name = format!("{}-{}\\P\\O", letter, letter);
-    members.push(mk_mtext(view_name, Vector3::new(vmx, vmy, 0.0)));
+    let mut extras: Vec<E> = vec![mk_mtext(view_name, Vector3::new(vmx, vmy, 0.0))];
     if let Some(sc) = &params.scale {
         if !sc.is_empty() {
-            members.push(mk_mtext(
+            extras.push(mk_mtext(
                 sc.clone(),
                 Vector3::new(vmx, vmy - 1.4 * h, 0.0),
             ));
@@ -1370,14 +1374,17 @@ fn apply_section(
     // ── INSERT 在路径首顶点，8符号标注层 ──
     let mut ins = E::Insert(Insert::new(block_name, origin));
     set_member_layer(&mut ins, "8符号标注层");
-    let handle = match req_timed(sender, PluginRequest::AddEntities(vec![ins]), "AddEntities")? {
-        PluginResponse::Handles(hs) => hs.first().copied(),
-        _ => None,
+    let mut all = vec![ins];
+    all.append(&mut extras);
+    let (handle, view_handle) = match req_timed(sender, PluginRequest::AddEntities(all), "AddEntities")? {
+        PluginResponse::Handles(hs) => (hs.first().copied(), hs.get(1).copied()),
+        _ => (None, None),
     };
 
     Ok(serde_json::json!({
         "ok": true,
         "insert_handle": handle.map(fmt_handle),
+        "view_name_handle": view_handle.map(fmt_handle),
         "style": "OCSM_GB",
         "letter": letter,
         "side": params.section_side.as_str(),
