@@ -276,43 +276,46 @@ pub struct GuideParams {
     /// 形位公差多行（stack-perp：每行独立 FCF 框，沿垂直于引导线方向堆叠）。
     /// 空时退化为单行（用 gdt_sym/gdt_dia/gdt_tol/gdt_d1..d3）。
     pub gdt_rows: Vec<GdtRow>,
+    /// 形位公差框上方注释（显示在 FCF 框 top 侧，常用如基本尺寸说明）。
+    pub gdt_top: Option<String>,
+    /// 形位公差框下方注释（显示在 FCF 框 bottom 侧）。
+    pub gdt_bot: Option<String>,
 }
 
-/// 形位公差单行：符号 + ⌀ + 公差值 + 基准1/2/3。
+/// 形位公差单行：符号 + ⌀ + 公差值 + 修饰符(ⓂⓁⓅⓈ) + 基准1/2/3。
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct GdtRow {
-    pub sym: String,
-    pub dia: bool,
-    pub tol: String,
+    pub sym: String,   // 特征符号（u c e g d k a b f j i r h t）或基本尺寸 o
+    pub dia: bool,     // 公差值前缀 ⌀（直径公差带）
+    pub tol: String,   // 公差值（如 "0.02"）
+    pub mods: String,  // 修饰符（m/l/p/s → ⓂⓁⓅⓈ），跟在公差值**后面**同一格
     pub d1: String,
     pub d2: String,
     pub d3: String,
 }
 
 impl GdtRow {
-    /// 该行是否有可渲染内容（符号/公差/任一基准）。
+    /// 该行是否有可渲染内容（符号/公差/基准/修饰符）。
     pub fn is_empty(&self) -> bool {
-        self.sym.is_empty() && self.tol.is_empty()
+        self.sym.is_empty() && self.tol.is_empty() && self.mods.is_empty()
             && self.d1.is_empty() && self.d2.is_empty() && self.d3.is_empty()
     }
 }
 
-/// 解析多行形位公差 URL 参数（`rows=sym,dia,tol,d1,d2,d3;sym,dia,tol,d1,d2,d3;...`）。
-/// dia 为 0/1；每行 6 个字段，行内逗号分隔、行间分号。
+/// 解析多行形位公差 URL 参数（`rows=sym,dia,tol,mods,d1,d2,d3;...`）。
+/// dia/mods 为修饰符相关；每行 7 个字段，行内逗号分隔、行间分号。
 fn parse_gdt_rows(v: &str) -> Vec<GdtRow> {
     let mut rows = Vec::new();
     for seg in v.split(';').filter(|s| !s.is_empty()) {
-        if !seg.contains(',') {
-            continue;
-        }
         let mut f = seg.split(',');
         let sym = f.next().unwrap_or("").to_string();
         let dia = matches!(f.next().unwrap_or("0"), "1" | "true");
         let tol = f.next().unwrap_or("").to_string();
+        let mods = f.next().unwrap_or("").to_string();
         let d1 = f.next().unwrap_or("").to_string();
         let d2 = f.next().unwrap_or("").to_string();
         let d3 = f.next().unwrap_or("").to_string();
-        let row = GdtRow { sym, dia, tol, d1, d2, d3 };
+        let row = GdtRow { sym, dia, tol, mods, d1, d2, d3 };
         if !row.is_empty() {
             rows.push(row);
         }
@@ -350,6 +353,8 @@ impl GuideParams {
             gdt_d2: None,
             gdt_d3: None,
             gdt_rows: Vec::new(),
+            gdt_top: None,
+            gdt_bot: None,
         }
     }
 
@@ -411,6 +416,8 @@ impl GuideParams {
         let mut gdt_d2 = None;
         let mut gdt_d3 = None;
         let mut gdt_rows: Vec<GdtRow> = Vec::new();
+        let mut gdt_top = None;
+        let mut gdt_bot = None;
         for pair in query.split('&').filter(|s| !s.is_empty()) {
             let (k, v) = pair.split_once('=').unwrap_or((pair, ""));
             let v = percent_decode(v);
@@ -443,11 +450,12 @@ impl GuideParams {
                 "d1" => gdt_d1 = (!v.is_empty()).then_some(v),
                 "d2" => gdt_d2 = (!v.is_empty()).then_some(v),
                 "d3" => gdt_d3 = (!v.is_empty()).then_some(v),
-                // 多行形位公差：rows=sym,dia,tol,d1,d2,d3;sym,dia,tol,d1,d2,d3;...
-                // （dia 为 0/1；每行 6 个字段，行间用分号）。
+                // 多行形位公差：rows=sym,dia,tol,mods,d1,d2,d3;...（行间分号）。
                 "rows" => {
                     gdt_rows = parse_gdt_rows(&v);
                 }
+                "top" => gdt_top = (!v.is_empty()).then_some(v),
+                "bot" => gdt_bot = (!v.is_empty()).then_some(v),
                 _ => {}
             }
         }
@@ -478,6 +486,8 @@ impl GuideParams {
             gdt_d2,
             gdt_d3,
             gdt_rows,
+            gdt_top,
+            gdt_bot,
         })
     }
 
@@ -490,6 +500,7 @@ impl GuideParams {
             sym: self.gdt_sym.clone().unwrap_or_default(),
             dia: self.gdt_dia,
             tol: self.gdt_tol.clone().unwrap_or_default(),
+            mods: String::new(),
             d1: self.gdt_d1.clone().unwrap_or_default(),
             d2: self.gdt_d2.clone().unwrap_or_default(),
             d3: self.gdt_d3.clone().unwrap_or_default(),
@@ -607,17 +618,18 @@ impl GuideParams {
                 }
             }
         }
-        // 多行形位公差：rows=sym,dia,tol,d1,d2,d3;... 仅当存在多行时输出（单行走上面的单字段）。
+        // 多行形位公差：rows=sym,dia,tol,mods,d1,d2,d3;... 仅当存在多行时输出（单行走上面的单字段）。
         if self.gdt_rows.len() > 1 {
             let rows = self
                 .gdt_rows
                 .iter()
                 .filter(|r| !r.is_empty())
                 .map(|r| {
-                    format!("{},{},{},{},{},{}",
+                    format!("{},{},{},{},{},{},{}",
                         percent_encode(&r.sym),
                         if r.dia { 1 } else { 0 },
                         percent_encode(&r.tol),
+                        percent_encode(&r.mods),
                         percent_encode(&r.d1),
                         percent_encode(&r.d2),
                         percent_encode(&r.d3))
@@ -626,6 +638,17 @@ impl GuideParams {
                 .join(";");
             if !rows.is_empty() {
                 q.push(format!("rows={}", percent_encode(&rows)));
+            }
+        }
+        // 形位公差顶部/底部注释（FCF 框上方/下方）。
+        if let Some(t) = &self.gdt_top {
+            if !t.is_empty() {
+                q.push(format!("top={}", percent_encode(t)));
+            }
+        }
+        if let Some(b) = &self.gdt_bot {
+            if !b.is_empty() {
+                q.push(format!("bot={}", percent_encode(b)));
             }
         }
         if !q.is_empty() {
@@ -770,16 +793,18 @@ mod tests {
     #[test]
     fn parse_tolerance_multiple_rows_roundtrip() {
         use crate::guide_url::GuideType as GT;
-        let url = "http://x/DIM/TOLERANCE/0?rows=f,0,0.02,A,,";
+        // rows=sym,dia,tol,mods,d1,d2,d3
+        let url = "http://x/DIM/TOLERANCE/0?rows=f,0,0.02,,A,,";
         let p = GuideParams::from_url(url).unwrap();
         assert_eq!(p.guide_type, GT::Tolerance);
         assert_eq!(p.gdt_rows.len(), 1);
         assert_eq!(p.gdt_rows[0].sym, "f");
         assert!(!p.gdt_rows[0].dia);
         assert_eq!(p.gdt_rows[0].tol, "0.02");
+        assert_eq!(p.gdt_rows[0].mods, "");
         assert_eq!(p.gdt_rows[0].d1, "A");
-        // 两行：f 平行度 | A ；j 位置度 ⌀0.05 | A B C。
-        let url2 = "http://x/DIM/TOLERANCE/0?rows=f,0,0.02,A,,;j,1,0.05,A,B,C";
+        // 两行：f 平行度 | A ；j 位置度 ⌀0.05 + m 修饰符 | A B C。
+        let url2 = "http://x/DIM/TOLERANCE/0?rows=f,0,0.02,,A,,;j,1,0.05,m,A,B,C";
         let p2 = GuideParams::from_url(url2).unwrap();
         assert_eq!(p2.gdt_rows.len(), 2);
         assert_eq!(p2.gdt_rows[0].sym, "f");
@@ -787,6 +812,7 @@ mod tests {
         assert_eq!(p2.gdt_rows[1].sym, "j");
         assert!(p2.gdt_rows[1].dia);
         assert_eq!(p2.gdt_rows[1].tol, "0.05");
+        assert_eq!(p2.gdt_rows[1].mods, "m");
         assert_eq!(p2.gdt_rows[1].d3, "C");
         // to_url 往返（行数 > 1 时输出 rows=）。
         let url = p2.to_url(23751);

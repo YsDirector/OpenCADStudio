@@ -1420,7 +1420,10 @@ fn apply_tolerance(
     let origin = v3(pts[0]);
     let scale = frame_scale_at(doc, pts[0]);
     let h = 5.0 * scale; // 单元格字高（同 SECTION/DATUM 默认）
-    let cell = 2.0 * h; // 单元格宽/高（示例 2h×2h 方框）
+    // 框格尺寸（GB/T 1182，一倍注释比例 scale=1）：符号/基准格 7×7，数字格 14×7。
+    let ch = 7.0 * scale; // 格高（所有格一致）
+    let cw_sym = 7.0 * scale; // 符号/基准格宽
+    let cw_num = 14.0 * scale; // 数字格宽（容纳多位数/千分位 + ⌀ + 修饰符）
     let half = h / 6.0; // 箭头底边半宽（同 SECTION）
     let text_style = "OCSM_GB";
 
@@ -1495,52 +1498,78 @@ fn apply_tolerance(
     };
     let perp = Vector3::new(-u.y, u.x, 0.0);
 
-    // 每行内容 → 单元格文本列表（不含空行）。
-    let cells_of = |r: &GdtRow| -> Vec<String> {
+    // 每行内容 → 单元格列表 (文本, 格宽)：符号格/基准格 cw_sym，数字格 cw_num。
+    // 顺序 = 读数顺序：符号 → [⌀公差+修饰符] → 基准1 → 基准2 → 基准3。
+    let cells_of = |r: &GdtRow| -> Vec<(String, f64)> {
         let mut c = Vec::new();
         if let Some(ch) = r.sym.chars().next() {
-            c.push(format!("{{\\Fgdt;{}}}", ch.to_ascii_lowercase()));
+            c.push((format!("{{\\Fgdt;{}}}", ch.to_ascii_lowercase()), cw_sym));
         }
         if !r.tol.is_empty() {
-            c.push(format!("{}{}", if r.dia { "%%c" } else { "" }, r.tol));
+            // 数字格：⌀前缀 + 公差值 + 修饰符（ⓂⓁⓅⓈ 跟在数字后同一格）。
+            let mut v = format!("{}{}", if r.dia { "%%c" } else { "" }, r.tol);
+            for m in r.mods.chars() {
+                if matches!(m.to_ascii_lowercase(), 'm' | 'l' | 'p' | 's') {
+                    v.push_str(&format!("{{\\Fgdt;{}}}", m.to_ascii_lowercase()));
+                } else {
+                    v.push(m);
+                }
+            }
+            c.push((v, cw_num));
         }
         for d in [&r.d1, &r.d2, &r.d3] {
             if !d.is_empty() {
-                c.push(d.clone());
+                c.push((d.clone(), cw_sym));
             }
         }
         c
     };
 
-    // 单位长度（沿 u 方向 = 格宽 cell；沿 perp 方向 = 框高 2h，行间重叠一个 cell）。
-    let total_w = rows.iter().map(|r| cell * cells_of(r).len() as f64).fold(0.0, f64::max);
+    // 每行总宽（各格宽之和）。
+    let total_w = rows.iter()
+        .map(|r| cells_of(r).iter().map(|(_, w)| *w).sum::<f64>())
+        .fold(0.0, f64::max);
+
+    // 顶部/底部注释（FCF 框上方/下方，独立 MTEXT，世界坐标附近）。
+    let n_rows_drawn = rows.iter().filter(|r| !r.is_empty()).count() as f64;
+    let frame_h = ch * n_rows_drawn.max(1.0);
+    if let Some(t) = params.gdt_top.as_deref().filter(|s| !s.is_empty()) {
+        let pos = attach + perp * (ch * n_rows_drawn.max(1.0) + h);
+        members.push(mk_mtext(t.to_string(), pos));
+    }
+    if let Some(b) = params.gdt_bot.as_deref().filter(|s| !s.is_empty()) {
+        let pos = attach - perp * (ch + h);
+        members.push(mk_mtext(b.to_string(), pos));
+    }
 
     for (k, r) in rows.iter().enumerate() {
         let cells = cells_of(r);
         if cells.is_empty() {
             continue;
         }
-        // 行 k：框长轴沿 u 延伸，短轴沿 perp 横跨 ±h。行间沿 perp 堆叠（中心相隔 cell）。
-        let base = attach + perp * (k as f64 * cell); // 本行框左边缘中心（接入点所在行）
-        let n = cells.len() as f64;
-        let right = base + u * (cell * n);
-        let lo = base - perp * h;
-        let hi = base + perp * h;
-        let rlo = right - perp * h;
-        let rhi = right + perp * h;
-        // 四边：左封口、右封口、顶边（沿 u 上缘）、底边（沿 u 下缘）。
+        // 行 k：框长轴沿 u 延伸，短轴沿 perp 横跨 ±(ch/2)。行间沿 perp 堆叠（中心相隔 ch）。
+        let base = attach + perp * (k as f64 * ch); // 本行框左边缘中心（接入点所在行）
+        let row_w: f64 = cells.iter().map(|(_, w)| *w).sum();
+        let right = base + u * row_w;
+        let lo = base - perp * (ch / 2.0);
+        let hi = base + perp * (ch / 2.0);
+        let rlo = right - perp * (ch / 2.0);
+        let rhi = right + perp * (ch / 2.0);
+        // 四边：左封口、右封口、顶边、底边。
         members.push(mk_line(lo, hi, 31));
         members.push(mk_line(rlo, rhi, 31));
         members.push(mk_line(hi, rhi, 31));
         members.push(mk_line(lo, rlo, 31));
-        // 每格：内部分隔竖线 + 居中内容（第 0 个格左边缘=框左封口，从 i=1 起画分隔）。
-        for (i, text) in cells.iter().enumerate() {
+        // 每格：内部分隔竖线 + 居中内容（按各自宽度累加位置）。
+        let mut x = 0.0;
+        for (i, (text, w)) in cells.iter().enumerate() {
             if i > 0 {
-                let xi = base + u * (cell * i as f64);
-                members.push(mk_line(xi - perp * h, xi + perp * h, 31));
+                let xi = base + u * x;
+                members.push(mk_line(xi - perp * (ch / 2.0), xi + perp * (ch / 2.0), 31));
             }
-            let ci = base + u * (cell * (i as f64 + 0.5));
+            let ci = base + u * (x + w / 2.0);
             members.push(mk_mtext(text.clone(), ci));
+            x += w;
         }
     }
 
@@ -2152,9 +2181,11 @@ fn api_guide(target: &str, sender: &Arc<dyn PluginRequestSender>) -> (u16, &'sta
                         "gdt_d2": p.gdt_d2,
                         "gdt_d3": p.gdt_d3,
                         "gdt_rows": p.gdt_rows.iter().map(|r| serde_json::json!({
-                            "sym": r.sym, "dia": r.dia, "tol": r.tol,
+                            "sym": r.sym, "dia": r.dia, "tol": r.tol, "mods": r.mods,
                             "d1": r.d1, "d2": r.d2, "d3": r.d3,
                         })).collect::<Vec<_>>(),
+                        "gdt_top": p.gdt_top,
+                        "gdt_bot": p.gdt_bot,
                     })),
                 });
                 (200, json, resp.to_string())
@@ -2594,8 +2625,8 @@ mod tests {
         let mut p = GuideParams::linear(LinearSub::Aligned, 0.0);
         p.guide_type = GuideType::Tolerance;
         p.gdt_rows = vec![
-            GdtRow { sym: "f".into(), dia: false, tol: "0.02".into(), d1: "A".into(), d2: String::new(), d3: String::new() },
-            GdtRow { sym: "j".into(), dia: true, tol: "0.05".into(), d1: "A".into(), d2: "B".into(), d3: "C".into() },
+            GdtRow { sym: "f".into(), dia: false, tol: "0.02".into(), mods: String::new(), d1: "A".into(), d2: String::new(), d3: String::new() },
+            GdtRow { sym: "j".into(), dia: true, tol: "0.05".into(), mods: String::new(), d1: "A".into(), d2: "B".into(), d3: "C".into() },
         ];
         let out = apply_tolerance(&sender, &doc, &pts, &p).unwrap();
         let j: serde_json::Value = serde_json::from_str(&out).unwrap();
@@ -2643,13 +2674,51 @@ mod tests {
     }
 
     #[test]
+    fn apply_tolerance_mods_and_annotations() {
+        use crate::guide_url::GdtRow;
+        let inner = std::sync::Arc::new(MockSender::new(acadrust::CadDocument::new()));
+        let sender: std::sync::Arc<dyn PluginRequestSender> = inner.clone();
+        let doc = inner.doc.lock().unwrap().clone();
+        let pts = vec![[0.0, 0.0, 0.0], [0.0, 30.0, 0.0], [5.0, 30.0, 0.0]];
+        let mut p = GuideParams::linear(LinearSub::Aligned, 0.0);
+        p.guide_type = GuideType::Tolerance;
+        p.gdt_rows = vec![
+            GdtRow { sym: "j".into(), dia: true, tol: "0.05".into(), mods: "m".into(), d1: "A".into(), d2: "B".into(), d3: String::new() },
+        ];
+        p.gdt_top = Some("最大实体".into());
+        p.gdt_bot = Some("基本尺100".into());
+        let out = apply_tolerance(&sender, &doc, &pts, &p).unwrap();
+        let j: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let block_name = j["block"].as_str().unwrap();
+        let ents = inner.block_entities(block_name);
+        // 数字格应含 ⌀ + 公差 + 修饰符（gdt 码）：%%c0.05{\Fgdt;m}
+        let tol_cell = ents.iter().find_map(|e| match e {
+            acadrust::EntityType::MText(m) if m.value.contains("0.05") => Some(m.value.clone()),
+            _ => None,
+        }).expect("公差格 MTEXT");
+        assert!(tol_cell.starts_with("%%c0.05"), "应含 ⌀+公差: {tol_cell}");
+        assert!(tol_cell.contains("Fgdt;m"), "应含修饰符 gdt 码: {tol_cell}");
+        // 顶部/底部注释 MTEXT。
+        let top = ents.iter().find_map(|e| match e {
+            acadrust::EntityType::MText(m) if m.value.contains("最大实体") => Some(()),
+            _ => None,
+        }).is_some();
+        let bot = ents.iter().find_map(|e| match e {
+            acadrust::EntityType::MText(m) if m.value.contains("基本尺") => Some(()),
+            _ => None,
+        }).is_some();
+        assert!(top, "顶部注释缺失");
+        assert!(bot, "底部注释缺失");
+    }
+
+    #[test]
     fn build_dimension_dec_overrides_dimdec_xdata() {
         use acadrust::xdata::XDataValue as V;
         let inner = std::sync::Arc::new(MockSender::new(acadrust::CadDocument::new()));
         let sender: std::sync::Arc<dyn PluginRequestSender> = inner.clone();
         let doc = inner.doc.lock().unwrap().clone();
         let pd = GuideParams { guide_type: GuideType::Linear, sub: Some(LinearSub::Aligned), dist: 10.0, text: None, tol: None, up: None, dn: None,
-            fit: None, sym: None, dec: Some(2), ver: crate::guide_url::DatumVersion::GB2008, letter: None, scale: None, flip: crate::guide_url::FlipDir::None, marker: None, angle_mode: crate::guide_url::AngleMode::Minor, section_side: crate::guide_url::SectionSide::Right, show_arrow: true, gdt_sym: None, gdt_dia: false, gdt_tol: None, gdt_d1: None, gdt_d2: None, gdt_d3: None, gdt_rows: Vec::new() };
+            fit: None, sym: None, dec: Some(2), ver: crate::guide_url::DatumVersion::GB2008, letter: None, scale: None, flip: crate::guide_url::FlipDir::None, marker: None, angle_mode: crate::guide_url::AngleMode::Minor, section_side: crate::guide_url::SectionSide::Right, show_arrow: true, gdt_sym: None, gdt_dia: false, gdt_tol: None, gdt_d1: None, gdt_d2: None, gdt_d3: None, gdt_rows: Vec::new(), gdt_top: None, gdt_bot: None };
         let dim = build_dimension(&sender, &doc, [0.0, 0.0, 0.0], [40.0, 30.0, 0.0], &pd, "OCSM_GB").unwrap();
         let rec = dim.base().common.extended_data.get_record("ACAD").expect("ACAD XDATA 存在");
         let mut found = None;
@@ -2669,11 +2738,11 @@ mod tests {
         let sender: std::sync::Arc<dyn PluginRequestSender> = inner.clone();
         let doc = inner.doc.lock().unwrap().clone();
         let pd = GuideParams { guide_type: GuideType::Diameter, sub: None, dist: -9.0, text: None, tol: None, up: None, dn: None,
-            fit: None, sym: None, dec: None, ver: crate::guide_url::DatumVersion::GB2008, letter: None, scale: None, flip: crate::guide_url::FlipDir::None, marker: None, angle_mode: crate::guide_url::AngleMode::Minor, section_side: crate::guide_url::SectionSide::Right, show_arrow: true, gdt_sym: None, gdt_dia: false, gdt_tol: None, gdt_d1: None, gdt_d2: None, gdt_d3: None, gdt_rows: Vec::new() };
+            fit: None, sym: None, dec: None, ver: crate::guide_url::DatumVersion::GB2008, letter: None, scale: None, flip: crate::guide_url::FlipDir::None, marker: None, angle_mode: crate::guide_url::AngleMode::Minor, section_side: crate::guide_url::SectionSide::Right, show_arrow: true, gdt_sym: None, gdt_dia: false, gdt_tol: None, gdt_d1: None, gdt_d2: None, gdt_d3: None, gdt_rows: Vec::new(), gdt_top: None, gdt_bot: None };
         // 直径走匿名块路径：mock 的 AddBlockRecord 返回 Ok → 成功。
         assert!(build_dimension(&sender, &doc, [0.0,0.0,0.0], [35.36,35.36,0.0], &pd, "OCSM_GB").is_ok());
         let pr = GuideParams { guide_type: GuideType::Radius, sub: None, dist: 11.0, text: None, tol: None, up: None, dn: None,
-            fit: None, sym: None, dec: None, ver: crate::guide_url::DatumVersion::GB2008, letter: None, scale: None, flip: crate::guide_url::FlipDir::None, marker: None, angle_mode: crate::guide_url::AngleMode::Minor, section_side: crate::guide_url::SectionSide::Right, show_arrow: true, gdt_sym: None, gdt_dia: false, gdt_tol: None, gdt_d1: None, gdt_d2: None, gdt_d3: None, gdt_rows: Vec::new() };
+            fit: None, sym: None, dec: None, ver: crate::guide_url::DatumVersion::GB2008, letter: None, scale: None, flip: crate::guide_url::FlipDir::None, marker: None, angle_mode: crate::guide_url::AngleMode::Minor, section_side: crate::guide_url::SectionSide::Right, show_arrow: true, gdt_sym: None, gdt_dia: false, gdt_tol: None, gdt_d1: None, gdt_d2: None, gdt_d3: None, gdt_rows: Vec::new(), gdt_top: None, gdt_bot: None };
         assert!(build_dimension(&sender, &doc, [0.0,0.0,0.0], [35.36,35.36,0.0], &pr, "OCSM_GB").is_ok());
     }
 
@@ -2702,7 +2771,7 @@ mod tests {
             section_side: crate::guide_url::SectionSide::Right,
             show_arrow: true,
 
-                    gdt_sym: None, gdt_dia: false, gdt_tol: None, gdt_d1: None, gdt_d2: None, gdt_d3: None, gdt_rows: Vec::new(),
+                    gdt_sym: None, gdt_dia: false, gdt_tol: None, gdt_d1: None, gdt_d2: None, gdt_d3: None, gdt_rows: Vec::new(), gdt_top: None, gdt_bot: None,
         };
         // "%%c<>" 是默认（GUI 注入一次）→ 不设 user_text（块 TEXT 已用自动值）。
         let dim = build_dimension(&sender, &doc, [0.0, 0.0, 0.0], [35.36, 35.36, 0.0], &pd, "OCSM_GB").unwrap();
@@ -2744,7 +2813,7 @@ mod tests {
             section_side: crate::guide_url::SectionSide::Right,
             show_arrow: true,
 
-                    gdt_sym: None, gdt_dia: false, gdt_tol: None, gdt_d1: None, gdt_d2: None, gdt_d3: None, gdt_rows: Vec::new(),
+                    gdt_sym: None, gdt_dia: false, gdt_tol: None, gdt_d1: None, gdt_d2: None, gdt_d3: None, gdt_rows: Vec::new(), gdt_top: None, gdt_bot: None,
         };
         let dim = build_dimension(&sender, &doc, [0.0, 0.0, 0.0], [100.0, 0.0, 0.0], &pd, "OCSM_GB").unwrap();
         assert_eq!(
@@ -2803,7 +2872,7 @@ mod tests {
             section_side: crate::guide_url::SectionSide::Right,
             show_arrow: true,
 
-                    gdt_sym: None, gdt_dia: false, gdt_tol: None, gdt_d1: None, gdt_d2: None, gdt_d3: None, gdt_rows: Vec::new(),
+                    gdt_sym: None, gdt_dia: false, gdt_tol: None, gdt_d1: None, gdt_d2: None, gdt_d3: None, gdt_rows: Vec::new(), gdt_top: None, gdt_bot: None,
         };
         let dim = build_dimension(&sender, &doc, [0.0, 0.0, 0.0], [25.0, 0.0, 0.0], &pd, "OCSM_GB").unwrap();
         assert_eq!(
@@ -2839,7 +2908,7 @@ mod tests {
             section_side: crate::guide_url::SectionSide::Right,
             show_arrow: true,
 
-                    gdt_sym: None, gdt_dia: false, gdt_tol: None, gdt_d1: None, gdt_d2: None, gdt_d3: None, gdt_rows: Vec::new(),
+                    gdt_sym: None, gdt_dia: false, gdt_tol: None, gdt_d1: None, gdt_d2: None, gdt_d3: None, gdt_rows: Vec::new(), gdt_top: None, gdt_bot: None,
         };
         let dim = build_dimension(&sender, &doc, [0.0, 0.0, 0.0], [25.0, 0.0, 0.0], &pd, "OCSM_GB").unwrap();
         let t = dim.base().text.clone();
@@ -2878,7 +2947,7 @@ mod tests {
             section_side: crate::guide_url::SectionSide::Right,
             show_arrow: true,
 
-                    gdt_sym: None, gdt_dia: false, gdt_tol: None, gdt_d1: None, gdt_d2: None, gdt_d3: None, gdt_rows: Vec::new(),
+                    gdt_sym: None, gdt_dia: false, gdt_tol: None, gdt_d1: None, gdt_d2: None, gdt_d3: None, gdt_rows: Vec::new(), gdt_top: None, gdt_bot: None,
         };
         // fit 代号模式 → 配合代号堆叠（对照示例 `{\C3;\SH7/g6;}`：绿色、斜杠分数）。
         let dim = build_dimension(&sender, &doc, [0.0, 0.0, 0.0], [25.0, 0.0, 0.0], &pd, "OCSM_GB").unwrap();
@@ -2917,7 +2986,7 @@ mod tests {
             section_side: crate::guide_url::SectionSide::Right,
             show_arrow: true,
 
-                    gdt_sym: None, gdt_dia: false, gdt_tol: None, gdt_d1: None, gdt_d2: None, gdt_d3: None, gdt_rows: Vec::new(),
+                    gdt_sym: None, gdt_dia: false, gdt_tol: None, gdt_d1: None, gdt_d2: None, gdt_d3: None, gdt_rows: Vec::new(), gdt_top: None, gdt_bot: None,
         };
         let inner = std::sync::Arc::new(MockSender::new(acadrust::CadDocument::new()));
         let sender: std::sync::Arc<dyn PluginRequestSender> = inner.clone();

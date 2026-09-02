@@ -172,7 +172,15 @@
       <div id="gdt-picker" class="gdt-picker" style="max-width:100%"></div>
       <div id="gdt-table"></div>
       <button type="button" id="gdt-add" style="align-self:flex-start; padding:3px 10px; font-size:12.5px">＋ 添加行</button>
-      <div class="gdt-hint">先选上方特征项目（作用于当前行），再填公差/基准。每行一个形位公差框（多行沿引导线垂直方向堆叠）。行首 ◾ 高亮=当前行。</div>
+      <div class="row" style="display:flex; gap:8px; align-items:center; margin-top:2px">
+        <span class="lbl">顶部注释</span>
+        <input type="text" id="gdt-top" style="flex:1" placeholder="框上方注释（如基本尺寸说明）">
+      </div>
+      <div class="row" style="display:flex; gap:8px; align-items:center">
+        <span class="lbl">底部注释</span>
+        <input type="text" id="gdt-bot" style="flex:1" placeholder="框下方注释">
+      </div>
+      <div class="gdt-hint">先选上方特征项目（作用于当前行），再填公差/基准；修饰符（ⓂⓁⓅⓈ）跟在数字后。每行一个形位公差框（多行沿引导线垂直方向堆叠）。行高亮=当前行，点行内任意处切换。</div>
     </div>
     <div class="param" id="row-param">
       <span class="lbl">(与P2距离)</span>
@@ -276,15 +284,19 @@
   let sectionSide = 'R', showArrow = true;
   // 形位公差（TOLERANCE）状态 + QCAD gdt 字体字形（与 DXF 内联 {\Fgdt;X} 同源）。
   // 多行：每行一个 FCF 框。gdtActive 为当前正在编辑符号的行索引（供符号选择器写入）。
-  let gdtRows = [{ sym: 'b', dia: false, tol: '', d1: '', d2: '', d3: '' }];
+  let gdtRows = [{ sym: 'b', dia: false, tol: '', mods: '', d1: '', d2: '', d3: '' }];
   let gdtActive = 0;
-  // [字母, 中文名]（14 个特征项目 + 常用修饰符）。
+  let gdtTop = '', gdtBot = '';
+  // [字母, 中文名]：14 个特征项目 + 基本尺寸 o（n=直径前缀已在行内 ⌀ 勾选处理）。
   const GDT_LIST = [
     ['u','直线度'],['c','平面度'],['e','圆度'],['g','圆柱度'],
     ['d','线轮廓'],['k','面轮廓'],['a','倾斜度'],['b','垂直度'],
     ['f','平行度'],['j','位置度'],['i','对称度'],['r','同轴度'],
-    ['h','圆跳动'],['t','全跳动'],['n','直径'],['o','基本尺寸'],
-    ['m','Ⓜ最大'],['l','Ⓛ最小'],['p','Ⓟ投影'],['s','Ⓢ独立'],
+    ['h','圆跳动'],['t','全跳动'],['o','基本尺寸'],
+  ];
+  // 修饰符（跟在公差值后面同一格，ⓂⓁⓅⓈ）：最大实体/最小实体/投影/独立原则。
+  const GDT_MODS = [
+    ['m','Ⓜ最大实体'],['l','Ⓛ最小实体'],['p','Ⓟ投影'],['s','Ⓢ独立原则'],
   ];
   // QCAD gdt.lff 字形多段线（glyph units，cap height=9）。键=内联字体码
   // {\Fgdt;X} 的 X（与 GDT_LIST 字母一致）。含 bulge 弧采样（复刻宿主
@@ -357,17 +369,22 @@
     if (type === 'TOLERANCE') {
       let len = 0;
       for (let i = 1; i < pp.length; i++) len += Math.hypot(pp[i].x-pp[i-1].x, pp[i].y-pp[i-1].y);
-      const hh = Math.max(len/7, 1e-3), cell = 2*hh;
-      // 每行最大格数（符号 + 公差 + 基准1/2/3）。
-      const nCells = Math.max(1, ...gdtRows.map(r => {
-        return 1 + (r.tol.trim() ? 1 : 0) + [r.d1,r.d2,r.d3].filter(v => v.trim()).length;
+      const hh = Math.max(len/7, 1e-3), ch = 2*hh, cwSym = 2*hh, cwNum = 4*hh;
+      // 每行总宽（符号格 cwSym + 公差格 cwNum + 基准格 cwSym）。
+      const rowHas = r => r.sym || r.tol.trim() || r.mods || r.d1.trim() || r.d2.trim() || r.d3.trim();
+      const L = Math.max(1, ...gdtRows.map(r => {
+        let w0 = 0;
+        if (r.sym) w0 += cwSym;
+        if (r.tol.trim()) w0 += cwNum;
+        w0 += [r.d1,r.d2,r.d3].filter(v => v.trim()).length * cwSym;
+        return w0;
       }));
       // 方框沿最后一段 u 延伸，多行沿 perp 堆叠；包围盒取最大范围。
       const lp = pp[pp.length-2] || pp[pp.length-1];
       let ldx = pp[pp.length-1].x-lp.x, ldy = pp[pp.length-1].y-lp.y, ll = Math.hypot(ldx,ldy)||1;
       const Ux = ldx/ll, Uy = ldy/ll, Px = -Uy, Py = Ux;
-      const nRows = gdtRows.filter(r => r.sym || r.tol.trim() || r.d1.trim() || r.d2.trim() || r.d3.trim()).length;
-      const L = nCells*cell, W = (nRows-1)*cell + 2*hh;
+      const nRows = gdtRows.filter(rowHas).length;
+      const W = (nRows-1)*ch + 2*hh + (gdtTop.trim()||gdtBot.trim() ? hh : 0);
       maxX = Math.max(maxX, pp[pp.length-1].x + Math.abs(Ux)*L + Math.abs(Px)*W);
       maxY = Math.max(maxY, pp[pp.length-1].y + Math.abs(Uy)*L + Math.abs(Py)*W);
       minY = Math.min(minY, pp[pp.length-1].y - Math.abs(Uy)*L - Math.abs(Py)*W);
@@ -876,9 +893,9 @@ const BS_FITS = [
       if (!isFinite(dist)) throw new Error('距离无效');
       u += (angleMode === 'M') ? `/${dist}` : `/${angleMode}/${dist}`;
     } else if (type === 'TOLERANCE') {
-      // 形位公差：多行 → rows=sym,dia,tol,d1,d2,d3;...  （单行时服务端兼容单字段，但统一走 rows）。
+      // 形位公差：多行 → rows=sym,dia,tol,mods,d1,d2,d3;...（单行走单字段）。
       u += '/0';
-      const nonempty = gdtRows.filter(r => r.sym || r.tol.trim() || r.d1.trim() || r.d2.trim() || r.d3.trim());
+      const nonempty = gdtRows.filter(r => r.sym || r.tol.trim() || r.mods || r.d1.trim() || r.d2.trim() || r.d3.trim());
       if (nonempty.length === 1 && nonempty[0].sym) {
         // 单行且只有符号：走单字段，便于 URL 简洁/可读。
         const r = nonempty[0];
@@ -890,8 +907,10 @@ const BS_FITS = [
         if (r.d3.trim()) qs.push('d3=' + encodeURIComponent(r.d3.trim()));
       } else if (nonempty.length) {
         qs.push('rows=' + encodeURIComponent(nonempty.map(r =>
-          [r.sym, r.dia ? 1 : 0, r.tol.trim(), r.d1.trim(), r.d2.trim(), r.d3.trim()].join(',')).join(';')));
+          [r.sym, r.dia ? 1 : 0, r.tol.trim(), r.mods, r.d1.trim(), r.d2.trim(), r.d3.trim()].join(',')).join(';')));
       }
+      if (gdtTop.trim()) qs.push('top=' + encodeURIComponent(gdtTop.trim()));
+      if (gdtBot.trim()) qs.push('bot=' + encodeURIComponent(gdtBot.trim()));
     } else if (type === 'SECTION') {
       // 剖切：剖切线路径（多段 PLINE）+ 字母 + 左右视向 + 显示箭头 + 视图名放置/比例。
       u += '/0';
@@ -1140,8 +1159,10 @@ const BS_FITS = [
       // 世界单位尺寸：按引线总长比例定字高，保证预览不失控。
       let len = 0;
       for (let i = 1; i < pp.length; i++) len += Math.hypot(pp[i].x-pp[i-1].x, pp[i].y-pp[i-1].y);
-      const h = Math.max(len/7, 1e-3);   // 字高
-      const cell = 2*h;                    // 格宽/高
+      const h = Math.max(len/7, 1e-3);   // 字高（≈ 格高一半）
+      const ch = 2*h;                      // 框格高（7 比例）
+      const cwSym = 2*h;                   // 符号/基准格宽（7 比例）
+      const cwNum = 4*h;                   // 数字格宽（14 比例 = 2×）
       const half = h/6;                    // 箭头底边半宽
       // 路径顶点
       for (const p of pp) { const s = w2s(p.x, p.y); svg.appendChild(el('circle', {cx:s.x, cy:s.y, r:3.5, fill:'#333'})); }
@@ -1161,31 +1182,50 @@ const BS_FITS = [
       const lp = pp[pp.length-2];
       let ldx = attach.x-lp.x, ldy = attach.y-lp.y, ll = Math.hypot(ldx,ldy)||1;
       const U = {x:ldx/ll, y:ldy/ll}, PERP = {x:-U.y, y:U.x};
-      // 每行内容 → 单元格列表（{kind:'sym'|'txt', v}）。
+      // 每行内容 → 单元格列表（{kind:'sym'|'txt', v, w}）。顺序=符号→[⌀公差+修饰符]→基准。
       const cellsOf = r => {
         const c = [];
-        if (r.sym) c.push({kind:'sym', v:r.sym});
-        if (r.tol.trim()) c.push({kind:'txt', v:(r.dia?'⌀':'')+r.tol.trim()});
-        for (const v of [r.d1,r.d2,r.d3]) if (v.trim()) c.push({kind:'txt', v:v.trim()});
+        if (r.sym) c.push({kind:'sym', v:r.sym, w:cwSym});
+        if (r.tol.trim()) {
+          let tx = (r.dia?'⌀':'') + r.tol.trim();
+          (r.mods||'').split('').forEach(m => { tx += '{\\Fgdt;' + m + '}'; });
+          c.push({kind:'txt', v:tx, w:cwNum});
+        }
+        for (const v of [r.d1,r.d2,r.d3]) if (v.trim()) c.push({kind:'txt', v:v.trim(), w:cwSym});
         return c;
       };
+      // 顶部/底部注释（框沿 perp 的上/下方）。
+      const nRows = gdtRows.filter(r => cellsOf(r).length).length;
+      const noteAdd = (txt, pos) => {
+        const s = w2s(pos.x, pos.y);
+        const te = el('text', {x:s.x, y:s.y, 'text-anchor':'middle', 'dominant-baseline':'middle', 'font-size':Math.max(11,h*cam.scale), fill:'#555'});
+        te.textContent = txt; svg.appendChild(te);
+      };
+      if (gdtTop.trim()) noteAdd(gdtTop, {x: attach.x + PERP.x*(ch*nRows + h), y: attach.y + PERP.y*(ch*nRows + h)});
+      if (gdtBot.trim()) noteAdd(gdtBot, {x: attach.x - PERP.x*(ch + h), y: attach.y - PERP.y*(ch + h)});
       gdtRows.forEach((row, k) => {
         const cells = cellsOf(row);
         if (!cells.length) return;
-        // 行 k 的框：长轴沿 U，短轴沿 PERP（横跨 ±h）；行间沿 PERP 堆叠 k*cell。
-        const base = {x: attach.x + PERP.x*(k*cell), y: attach.y + PERP.y*(k*cell)};
-        const ptUL = {x: base.x + U.x*0 + PERP.x*h, y: base.y + U.y*0 + PERP.y*h};
-        const ptUR = {x: base.x + U.x*(cell*cells.length) + PERP.x*h, y: base.y + U.y*(cell*cells.length) + PERP.y*h};
-        const ptLL = {x: base.x + U.x*0 - PERP.x*h, y: base.y + U.y*0 - PERP.y*h};
-        const ptLR = {x: base.x + U.x*(cell*cells.length) - PERP.x*h, y: base.y + U.y*(cell*cells.length) - PERP.y*h};
+        // 行 k 的框：长轴沿 U，短轴沿 PERP（横跨 ±h=ch/2）；行间沿 PERP 堆叠 k*ch。
+        const base = {x: attach.x + PERP.x*(k*ch), y: attach.y + PERP.y*(k*ch)};
+        const rowW = cells.reduce((s0, c) => s0 + c.w, 0);
+        const ptUL = {x: base.x + PERP.x*(ch/2), y: base.y + PERP.y*(ch/2)};
+        const ptUR = {x: base.x + U.x*rowW + PERP.x*(ch/2), y: base.y + U.y*rowW + PERP.y*(ch/2)};
+        const ptLL = {x: base.x - PERP.x*(ch/2), y: base.y - PERP.y*(ch/2)};
+        const ptLR = {x: base.x + U.x*rowW - PERP.x*(ch/2), y: base.y + U.y*rowW - PERP.y*(ch/2)};
         const line = (a,b) => svg.appendChild(wline(a.x,a.y,b.x,b.y,3,'#e65100'));
         line(ptUL, ptUR); line(ptLL, ptLR); line(ptUL, ptLL); line(ptUR, ptLR);
+        let x = 0;
         cells.forEach((cel, i) => {
-          if (i > 0) { const xi = {x: base.x + U.x*(cell*i), y: base.y + U.y*(cell*i)}; line({x:xi.x+PERP.x*h,y:xi.y+PERP.y*h},{x:xi.x-PERP.x*h,y:xi.y-PERP.y*h}); }
-          const cc = {x: base.x + U.x*(cell*(i+0.5)), y: base.y + U.y*(cell*(i+0.5))};
+          if (i > 0) {
+            const xi = {x: base.x + U.x*x, y: base.y + U.y*x};
+            line({x:xi.x+PERP.x*(ch/2),y:xi.y+PERP.y*(ch/2)},{x:xi.x-PERP.x*(ch/2),y:xi.y-PERP.y*(ch/2)});
+          }
+          const cc = {x: base.x + U.x*(x + cel.w/2), y: base.y + U.y*(x + cel.w/2)};
           const s = w2s(cc.x, cc.y);
           if (cel.kind === 'sym') drawGdtGlyph(svg, s.x, s.y, h*cam.scale, cel.v, 1.6);
-          else { const te = el('text', {x:s.x, y:s.y, 'text-anchor':'middle', 'dominant-baseline':'middle', 'font-size':Math.max(11,h*cam.scale), fill:'#1a5f1a', 'font-weight':'bold'}); te.textContent = cel.v; svg.appendChild(te); }
+          else renderCellText(svg, s.x, s.y, Math.max(11,h*cam.scale), cel.v, '#1a5f1a');
+          x += cel.w;
         });
       });
       return; // 形位公差分支结束
@@ -1413,17 +1453,20 @@ const BS_FITS = [
             }
           }
           if (type === 'TOLERANCE') {
-            // 恢复形位公差：符号字母 + ⌀ + 公差值 + 基准。
-            // 恢复形位公差：多行 gdt_rows（每行 sym/dia/tol/d1/d2/d3）；否则退化单行。
+            // 恢复形位公差：多行 gdt_rows（每行 sym/dia/tol/mods/d1/d2/d3）；否则退化单行。
             const rr = j.params.gdt_rows || [];
             if (rr.length) {
-              gdtRows = rr.map(r => ({sym:r.sym||'', dia:!!r.dia, tol:r.tol||'', d1:r.d1||'', d2:r.d2||'', d3:r.d3||''}));
+              gdtRows = rr.map(r => ({sym:r.sym||'', dia:!!r.dia, tol:r.tol||'', mods:r.mods||'', d1:r.d1||'', d2:r.d2||'', d3:r.d3||''}));
             } else {
               gdtRows = [{ sym: j.params.gdt_sym || '', dia: !!j.params.gdt_dia, tol: j.params.gdt_tol || '',
-                           d1: j.params.gdt_d1 || '', d2: j.params.gdt_d2 || '', d3: j.params.gdt_d3 || '' }];
+                           mods: '', d1: j.params.gdt_d1 || '', d2: j.params.gdt_d2 || '', d3: j.params.gdt_d3 || '' }];
             }
-            if (!gdtRows.length) gdtRows = [{ sym: 'b', dia: false, tol: '', d1: '', d2: '', d3: '' }];
+            if (!gdtRows.length) gdtRows = [{ sym: 'b', dia: false, tol: '', mods: '', d1: '', d2: '', d3: '' }];
             gdtActive = 0;
+            gdtTop = j.params.gdt_top || '';
+            gdtBot = j.params.gdt_bot || '';
+            const topInp = document.getElementById('gdt-top'); if (topInp) topInp.value = gdtTop;
+            const botInp = document.getElementById('gdt-bot'); if (botInp) botInp.value = gdtBot;
             renderGdtTable(); renderGdtPicker(); syncGdtOn();
           }
         }
@@ -1470,13 +1513,14 @@ const BS_FITS = [
     });
   }
   // 形位公差符号选择器：用字形多段线画按钮（WYSIWYG，与 DXF 同字形）。
+  // 形位公差符号选择器：特征项目（写入行.sym）+ 修饰符（写入行.mods，跟在数字后）。
   function renderGdtPicker() {
     const box = document.getElementById('gdt-picker');
     if (!box || box.childElementCount) return;
-    GDT_LIST.forEach(([ch, name]) => {
+    const mkBtn = (ch, name, cls, cb) => {
       const b = document.createElement('button');
       b.type = 'button';
-      b.className = 'gdt-sym';
+      b.className = cls;
       b.dataset.gdt = ch;
       b.title = name + '（gdt 字形 ' + ch + '）';
       const s = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
@@ -1494,19 +1538,55 @@ const BS_FITS = [
         s.appendChild(pl);
       });
       b.appendChild(s);
-      b.addEventListener('click', () => {
-        // 符号选择器点击 → 写入当前激活行（gdtActive）的符号。
+      b.addEventListener('click', cb);
+      box.appendChild(b);
+      return b;
+    };
+    // 特征项目组。
+    const featWrap = document.createElement('div');
+    featWrap.style.cssText = 'display:flex;flex-wrap:wrap;gap:3px;align-items:center';
+    const featLbl = document.createElement('span');
+    featLbl.style.cssText = 'font-size:11px;color:#888;margin-right:4px';
+    featLbl.textContent = '特征';
+    featWrap.appendChild(featLbl);
+    GDT_LIST.forEach(([ch, name]) => {
+      mkBtn(ch, name, 'gdt-sym', () => {
         if (gdtRows[gdtActive]) gdtRows[gdtActive].sym = ch;
         syncGdtOn(); renderGdtTable(); draw();
       });
-      box.appendChild(b);
     });
+    // 修饰符组。
+    const modWrap = document.createElement('div');
+    modWrap.style.cssText = 'display:flex;flex-wrap:wrap;gap:3px;align-items:center;margin-top:3px';
+    const modLbl = document.createElement('span');
+    modLbl.style.cssText = 'font-size:11px;color:#888;margin-right:4px';
+    modLbl.textContent = '修饰符（跟在数字后）';
+    modWrap.appendChild(modLbl);
+    GDT_MODS.forEach(([ch, name]) => {
+      mkBtn(ch, name, 'gdt-sym gdt-mod', () => {
+        const r = gdtRows[gdtActive];
+        if (!r) return;
+        if (r.mods.includes(ch)) r.mods = r.mods.replace(ch, '');
+        else r.mods += ch;
+        syncGdtOn(); renderGdtTable(); draw();
+      });
+    });
+    // 移出子元素到最终区（按特征 + 修饰符两段）。
+    [...box.querySelectorAll('.gdt-sym')].forEach(b => {
+      if (b.dataset.gdt && GDT_MODS.some(m => m[0] === b.dataset.gdt)) modWrap.appendChild(b);
+      else featWrap.appendChild(b);
+    });
+    box.appendChild(featWrap);
+    box.appendChild(modWrap);
     syncGdtOn();
   }
   function syncGdtOn() {
     document.querySelectorAll('#gdt-picker .gdt-sym').forEach(x => {
-      const act = (gdtRows[gdtActive] && gdtRows[gdtActive].sym) || '';
-      x.classList.toggle('on', x.dataset.gdt === act);
+      const r = gdtRows[gdtActive];
+      if (!r) return;
+      const isMod = x.classList.contains('gdt-mod');
+      const on = isMod ? (r.mods || '').includes(x.dataset.gdt) : (r.sym === x.dataset.gdt);
+      x.classList.toggle('on', on);
     });
   }
   // 在屏幕坐标 (cx, cy) 以 size 为字高绘制 gdt 字形（glyph units，cap height=9）。
@@ -1536,6 +1616,39 @@ const BS_FITS = [
       svg.appendChild(pl);
     });
   }
+  // 渲染单元格文本：解析 `{\\Fgdt;X}` 内联码（数字+修饰符+基准混合格）。
+  // token：`\\Fgdt;X}` 画 gdt 字形，其余做普通文字。水平居中整个 token 串。
+  function renderCellText(svg, cx, cy, size, raw, fill) {
+    const toks = [];
+    let i = 0;
+    while (i < raw.length) {
+      const m = /\{\\Fgdt;([\s\S])\}/.exec(raw.slice(i));
+      if (m && m.index === 0) {
+        toks.push({kind:'sym', v: m[1]});
+        i += m[0].length;
+      } else if (m) {
+        toks.push({kind:'txt', v: raw.slice(i, i + m.index)});
+        i += m.index;
+      } else {
+        toks.push({kind:'txt', v: raw.slice(i)});
+        break;
+      }
+    }
+    // 估算总宽，粗居中。
+    let tw = 0;
+    toks.forEach(t => { tw += (t.kind === 'sym') ? size * 0.9 : size * 0.55 * (t.v || '').length; });
+    let x = cx - tw / 2;
+    toks.forEach(t => {
+      if (t.kind === 'sym') {
+        drawGdtGlyph(svg, x + size * 0.45, cy, size, t.v, 1.6);
+        x += size * 0.9;
+      } else {
+        const te = el('text', {x:x, y:cy, 'text-anchor':'start', 'dominant-baseline':'middle', 'font-size':size, fill:fill, 'font-weight':'bold'});
+        te.textContent = t.v; svg.appendChild(te);
+        x += size * 0.55 * (t.v || '').length;
+      }
+    });
+  }
   // 渲染形位公差多行表格：每行 符号按钮(点开 GDT 选择器) | 公差 | 基准1 | 基准2 | 基准3 | 删除。
   function renderGdtTable() {
     const box = document.getElementById('gdt-table');
@@ -1551,6 +1664,11 @@ const BS_FITS = [
     gdtRows.forEach((r, idx) => {
       const row = document.createElement('div');
       row.className = 'gdt-row';
+      // 行内任意处点击 → 激活该行（供符号/修饰符选择器写入）。
+      row.addEventListener('click', e => {
+        if (e.target.tagName === 'INPUT' || e.target.tagName === 'BUTTON') return;
+        gdtActive = idx; syncGdtOn(); renderGdtTable(); draw();
+      });
       // 符号按钮：点开符号选择器并设为激活行。
       const symBtn = document.createElement('button');
       symBtn.type = 'button'; symBtn.className = 'gdt-symbtn';
@@ -1579,7 +1697,7 @@ const BS_FITS = [
       diaChk.addEventListener('change', () => { gdtRows[idx].dia = diaChk.checked; draw(); });
       diaLab.appendChild(diaChk); diaLab.appendChild(document.createTextNode('⌀'));
       row.appendChild(diaLab);
-      // 公差 + 基准1/2/3。
+      // 公差 + 修饰符 + 基准1/2/3。
       const mkText = (placeholder, get, set, w) => {
         const inp = document.createElement('input');
         inp.type = 'text'; inp.value = get(); inp.placeholder = placeholder; inp.maxLength = 12;
@@ -1587,8 +1705,10 @@ const BS_FITS = [
         inp.addEventListener('input', () => { set(inp.value); draw(); });
         return inp;
       };
-      const tolInp = mkText('0.03', () => r.tol, v => gdtRows[idx].tol = v, '70px');
+      const tolInp = mkText('0.03', () => r.tol, v => gdtRows[idx].tol = v, '64px');
       row.appendChild(mkCell('公差', tolInp));
+      const modInp = mkText('Ⓜ', () => r.mods, v => gdtRows[idx].mods = v, '56px');
+      row.appendChild(mkCell('修饰符', modInp));
       row.appendChild(mkCell('基准1', mkText('A', () => r.d1, v => gdtRows[idx].d1 = v, '46px')));
       row.appendChild(mkCell('基准2', mkText('B', () => r.d2, v => gdtRows[idx].d2 = v, '46px')));
       row.appendChild(mkCell('基准3', mkText('C', () => r.d3, v => gdtRows[idx].d3 = v, '46px')));
@@ -1608,10 +1728,12 @@ const BS_FITS = [
     });
   }
   document.getElementById('gdt-add').addEventListener('click', () => {
-    gdtRows.push({ sym: '', dia: false, tol: '', d1: '', d2: '', d3: '' });
+    gdtRows.push({ sym: '', dia: false, tol: '', mods: '', d1: '', d2: '', d3: '' });
     gdtActive = gdtRows.length - 1;
     renderGdtTable(); syncGdtOn(); draw();
   });
+  document.getElementById('gdt-top').addEventListener('input', e => { gdtTop = e.target.value; draw(); });
+  document.getElementById('gdt-bot').addEventListener('input', e => { gdtBot = e.target.value; draw(); });
   initGdtModal();
   renderGdtPicker();
   renderGdtTable();
