@@ -1497,10 +1497,20 @@ fn apply_tolerance(
         d * (1.0 / l)
     };
     let vert = raw.y.abs() > raw.x.abs();
+    // 读取方向（符号→基准）：水平固定 +x（左→右），竖直固定 +y（下→上），文字旋转 90°。
     let u = if vert {
-        Vector3::new(0.0, 1.0, 0.0) // 从下往上
+        Vector3::new(0.0, 1.0, 0.0)
     } else {
-        Vector3::new(1.0, 0.0, 0.0) // 从左到右
+        Vector3::new(1.0, 0.0, 0.0)
+    };
+    // 锚点侧（nearest-end）：引导线末端指向哪一侧，锚点就接在框的哪一侧边缘，
+    // 框从锚点向“远离引导线来向”的方向展开 —— 引导线杆体不会穿过框（对照 形位公差5.dxf）。
+    //   dirsign=+1：末段朝右/朝上来 → 锚点=符号侧（框右/上展开），符号格贴锚点。
+    //   dirsign=-1：末段朝左/朝下来 → 锚点=C侧（框左/下展开），符号格在远端。
+    let dirsign: f64 = if vert {
+        if raw.y < 0.0 { -1.0 } else { 1.0 }
+    } else {
+        if raw.x < 0.0 { -1.0 } else { 1.0 }
     };
     let perp = Vector3::new(-u.y, u.x, 0.0); // 行堆叠方向（水平→向上；竖直→向左）
     let text_rot = if vert { std::f64::consts::FRAC_PI_2 } else { 0.0 }; // 逆时针 90°
@@ -1584,8 +1594,10 @@ fn apply_tolerance(
             continue;
         }
         // 行 k：框长轴沿 u 延伸，短轴沿 perp 横跨 ±(ch/2)。行间沿 perp 堆叠（中心相隔 ch）。
-        let base = attach + perp * (k as f64 * ch); // 本行框左边缘中心（接入点所在行）
+        // 符号格永远在框 u 方向的起点（base）；dirsign<0 时锚点在框 C 端，框向 -u 展开。
         let row_w: f64 = cells.iter().map(|(_, w)| *w).sum();
+        let anchor = attach + perp * (k as f64 * ch); // 引导线接入点所在的行线
+        let base = if dirsign < 0.0 { anchor - u * row_w } else { anchor };
         let right = base + u * row_w;
         let lo = base - perp * (ch / 2.0);
         let hi = base + perp * (ch / 2.0);
@@ -2802,6 +2814,57 @@ mod tests {
     }
 
     #[test]
+    fn apply_tolerance_leaders_in_from_anchor_side() {
+        use crate::guide_url::GdtRow;
+        // 末段朝左来（raw.x<0）：锚点应在框 C 端（基准格外缘），框向左展开。
+        // 引导线终点（pts 最后一点）应贴住框右缘（C 侧），框内符号格在左端。
+        let inner = std::sync::Arc::new(MockSender::new(acadrust::CadDocument::new()));
+        let sender: std::sync::Arc<dyn PluginRequestSender> = inner.clone();
+        let doc = inner.doc.lock().unwrap().clone();
+        // 箭头在左 (0,10) → 折点 (40,40) → 接入点 (0,40)：末段从右往左（raw.x=-1，水平）。
+        let pts = vec![[0.0, 10.0, 0.0], [40.0, 40.0, 0.0], [0.0, 40.0, 0.0]];
+        let mut p = GuideParams::linear(LinearSub::Aligned, 0.0);
+        p.guide_type = GuideType::Tolerance;
+        p.gdt_rows = vec![GdtRow {
+            sym: "f".into(), dia: false, tol: "0.02".into(), mods: String::new(),
+            d1: "A".into(), d2: String::new(), d3: String::new(),
+        }];
+        let out = apply_tolerance(&sender, &doc, &pts, &p).unwrap();
+        let j: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let block_name = j["block"].as_str().unwrap();
+        let ents = inner.block_entities(block_name);
+        // 框线（色 31）：找 x 最小/最大的竖线（框左/右缘）。引导线是色 4 不算。
+        let frame = |e: &acadrust::EntityType| -> Option<(f64, f64)> {
+            if let acadrust::EntityType::Line(l) = e {
+                if matches!(l.common.color, acadrust::types::Color::Index(31)) {
+                    return Some((l.start.x.min(l.end.x), l.start.x.max(l.end.x)));
+                }
+            }
+            None
+        };
+        let xmax = ents.iter().filter_map(frame).map(|(_, hi)| hi).fold(f64::MIN, f64::max);
+        let xmin = ents.iter().filter_map(frame).map(|(lo, _)| lo).fold(f64::MAX, f64::min);
+        // 引导线接入点（局部）= pts 最后一点 - origin（origin=pts[0]）。
+        let anchor_x = pts[2][0] - pts[0][0]; // = 0
+        // 末段朝左：框右缘应 = 锚点（C 侧）；框左缘 = 锚点 - 框宽（符号侧在左）。
+        assert!((xmax - anchor_x).abs() < 1e-6, "框右缘应贴锚点(C侧)，右缘={xmax} 锚点={anchor_x}");
+        // 符号 MTEXT 应在框左端（x 较小）。
+        let sym_x = ents.iter().filter_map(|e| match e {
+            acadrust::EntityType::MText(m) if m.value.contains("Fgdt;f") => Some(m.insertion_point.x),
+            _ => None,
+        }).next().expect("符号 MTEXT");
+        assert!(sym_x < (xmin + 6.0), "符号格应在框左端，sym_x={sym_x} 框左缘={xmin}");
+        // 末段朝右：锚点应在符号侧（框左缘）。
+        let pts2 = vec![[0.0, 10.0, 0.0], [40.0, 40.0, 0.0], [80.0, 40.0, 0.0]];
+        let out2 = apply_tolerance(&sender, &doc, &pts2, &p).unwrap();
+        let j2: serde_json::Value = serde_json::from_str(&out2).unwrap();
+        let bn2 = j2["block"].as_str().unwrap();
+        let ents2 = inner.block_entities(bn2);        let xmin2 = ents2.iter().filter_map(frame).map(|(lo, _)| lo).fold(f64::MAX, f64::min);
+        let anchor2_x = pts2[2][0] - pts2[0][0]; // = 80
+        assert!((xmin2 - anchor2_x).abs() < 1e-6, "框左缘应贴锚点(符号侧)，左缘={xmin2} 锚点={anchor2_x}");
+    }
+
+    #[test]
     fn build_dimension_dec_overrides_dimdec_xdata() {
         use acadrust::xdata::XDataValue as V;
         let inner = std::sync::Arc::new(MockSender::new(acadrust::CadDocument::new()));
@@ -3112,7 +3175,8 @@ impl MockSender {
     }
     fn block_entities(&self, name: &str) -> Vec<acadrust::EntityType> {
         self.blocks.lock().unwrap().iter()
-            .find(|(n, _)| n == name)
+            .filter(|(n, _)| n == name)
+            .last()
             .map(|(_, v)| v.clone())
             .unwrap_or_default()
     }
@@ -3494,4 +3558,6 @@ mod integration {
         assert_eq!(pts2.len(), 2);
     }
 }
+
+
 

@@ -1190,6 +1190,7 @@ const BS_FITS = [
       let ldx = attach.x-lp.x, ldy = attach.y-lp.y, ll = Math.hypot(ldx,ldy)||1;
       const vert = Math.abs(ldy) > Math.abs(ldx);
       const U = vert ? {x:0, y:1} : {x:1, y:0};     // 读数方向（符号→基准）
+      const dirsign = vert ? (ldy < 0 ? -1 : 1) : (ldx < 0 ? -1 : 1); // 锚点侧：末段朝左/下→-1（C侧）
       const PERP = {x:-U.y, y:U.x};                  // 行堆叠方向
       // 数字格宽自适应（14→21→28，按内容宽估算；字高 h 实为 5*scale，格宽 7*scale）。
       const estW = s => {
@@ -1229,8 +1230,12 @@ const BS_FITS = [
         const cells = cellsOf(row);
         if (!cells.length) return;
         // 行 k 的框：长轴沿 U，短轴沿 PERP（横跨 ±h=ch/2）；行间沿 PERP 堆叠 k*ch。
-        const base = {x: attach.x + PERP.x*(k*ch), y: attach.y + PERP.y*(k*ch)};
+        // 锚点侧：dirsign<0 时锚点在框 C 端，框向 -U 展开（符号格仍在 U 起点）。
         const rowW = cells.reduce((s0, c) => s0 + c.w, 0);
+        const anchor = {x: attach.x + PERP.x*(k*ch), y: attach.y + PERP.y*(k*ch)};
+        const base = dirsign < 0
+          ? {x: anchor.x - U.x*rowW, y: anchor.y - U.y*rowW}
+          : anchor;
         const ptUL = {x: base.x + PERP.x*(ch/2), y: base.y + PERP.y*(ch/2)};
         const ptUR = {x: base.x + U.x*rowW + PERP.x*(ch/2), y: base.y + U.y*rowW + PERP.y*(ch/2)};
         const ptLL = {x: base.x - PERP.x*(ch/2), y: base.y - PERP.y*(ch/2)};
