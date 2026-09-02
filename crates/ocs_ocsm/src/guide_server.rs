@@ -1525,9 +1525,11 @@ fn apply_tolerance(
                 w += 1.2 * h;
                 i += 3;
             } else if chars[i] == '{' {
-                // {\Fgdt;x}：gdt 字形宽≈1.1h
-                w += 1.1 * h;
-                i += 8;
+                // {\Fgdt;[\H0.8x;]x}：gdt 字形宽≈1.1h（80% 字号 → 0.9h）。
+                // 跳到匹配的 `}` 结束（token 长度可变，不能固定步长）。
+                w += 0.9 * h;
+                let close = chars[i + 1..].iter().position(|&c| c == '}').unwrap_or(0) + 1;
+                i += 2 + close;
             } else if chars[i] == '.' {
                 w += 0.35 * h;
                 i += 1;
@@ -1546,18 +1548,19 @@ fn apply_tolerance(
     };
 
     // 每行内容 → 单元格列表 (文本, 格宽)：符号/基准格 cw_sym，数字格自适应。
+    // gdt 字形统一 80%：{\Fgdt;\H0.8x;X}（宿主 text_support 支持 \H…x; 相对高度）。
     // 顺序 = 读数顺序：符号 → [⌀公差+修饰符] → 基准1 → 基准2 → 基准3。
     let cells_of = |r: &GdtRow| -> Vec<(String, f64)> {
         let mut c = Vec::new();
         if let Some(ch) = r.sym.chars().next() {
-            c.push((format!("{{\\Fgdt;{}}}", ch.to_ascii_lowercase()), cw_sym));
+            c.push((format!("{{\\Fgdt;\\H0.8x;{}}}", ch.to_ascii_lowercase()), cw_sym));
         }
         if !r.tol.is_empty() {
             // 数字格：⌀前缀 + 公差值 + 修饰符（ⓂⓁⓅⓈ 跟在数字后同一格）。
             let mut v = format!("{}{}", if r.dia { "%%c" } else { "" }, r.tol);
             for m in r.mods.chars() {
                 if matches!(m.to_ascii_lowercase(), 'm' | 'l' | 'p' | 's') {
-                    v.push_str(&format!("{{\\Fgdt;{}}}", m.to_ascii_lowercase()));
+                    v.push_str(&format!("{{\\Fgdt;\\H0.8x;{}}}", m.to_ascii_lowercase()));
                 } else {
                     v.push(m);
                 }
@@ -2745,7 +2748,7 @@ mod tests {
             _ => None,
         }).expect("公差格 MTEXT");
         assert!(tol_cell.starts_with("%%c0.05"), "应含 ⌀+公差: {tol_cell}");
-        assert!(tol_cell.contains("Fgdt;m"), "应含修饰符 gdt 码: {tol_cell}");
+        assert!(tol_cell.contains("Fgdt;") && tol_cell.contains("H0.8x") && tol_cell.contains('m'), "应含修饰符 gdt 码(80%): {tol_cell}");
         // 顶部/底部注释 MTEXT。
         let top = ents.iter().find_map(|e| match e {
             acadrust::EntityType::MText(m) if m.value.contains("最大实体") => Some(()),
@@ -2781,7 +2784,7 @@ mod tests {
             acadrust::EntityType::MText(m) => Some(m.clone()),
             _ => None,
         }).collect();
-        let sym = mts.iter().find(|m| m.value.contains("Fgdt;f")).expect("符号");
+        let sym = mts.iter().find(|m| m.value.contains("Fgdt;") && m.value.contains('f')).expect("符号");
         let tol = mts.iter().find(|m| m.value.contains("0.02")).expect("公差");
         let dat = mts.iter().find(|m| m.value.trim() == "A").expect("基准");
         // 从下往上：y：符号 < 公差 < 基准；文字逆时针旋转 90°。
@@ -2850,7 +2853,7 @@ mod tests {
         assert!((xmax - anchor_x).abs() < 1e-6, "框右缘应贴锚点(C侧)，右缘={xmax} 锚点={anchor_x}");
         // 符号 MTEXT 应在框左端（x 较小）。
         let sym_x = ents.iter().filter_map(|e| match e {
-            acadrust::EntityType::MText(m) if m.value.contains("Fgdt;f") => Some(m.insertion_point.x),
+            acadrust::EntityType::MText(m) if m.value.contains("Fgdt;") && m.value.contains('f') => Some(m.insertion_point.x),
             _ => None,
         }).next().expect("符号 MTEXT");
         assert!(sym_x < (xmin + 6.0), "符号格应在框左端，sym_x={sym_x} 框左缘={xmin}");

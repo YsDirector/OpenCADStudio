@@ -370,7 +370,7 @@
       let len = 0;
       for (let i = 1; i < pp.length; i++) len += Math.hypot(pp[i].x-pp[i-1].x, pp[i].y-pp[i-1].y);
       const hh = Math.max(len/7, 1e-3), ch = 2*hh, cwSym = 2*hh;
-      const estW2 = s => { let w=0; for (let i=0;i<s.length;i++){ if(s[i]==='%'&&s[i+1]==='%'&&s[i+2]==='c'){w+=1.2*hh;i+=2;} else if(s[i]==='{'){w+=1.1*hh;i+=8;} else if(s[i]==='.')w+=0.35*hh; else w+=0.6*hh; } return w; };
+      const estW2 = s => { let w=0; for (let i=0;i<s.length;i++){ if(s[i]==='%'&&s[i+1]==='%'&&s[i+2]==='c'){w+=1.2*hh;i+=2;} else if(s[i]==='{'){w+=0.9*hh; const cj=s.indexOf('}',i+1); i=cj<0?s.length:cj;} else if(s[i]==='.')w+=0.35*hh; else w+=0.6*hh; } return w; };
       // 每行总宽（符号格 cwSym + 公差格自适应 + 基准格 cwSym）。
       const rowHas = r => r.sym || r.tol.trim() || r.mods || r.d1.trim() || r.d2.trim() || r.d3.trim();
       const L = Math.max(1, ...gdtRows.map(r => {
@@ -1197,7 +1197,7 @@ const BS_FITS = [
         let w = 0;
         for (let i = 0; i < s.length; i++) {
           if (s[i]==='%' && s[i+1]==='%' && s[i+2]==='c') { w += 1.2*h; i+=2; }
-          else if (s[i]==='{') { w += 1.1*h; i+=8; }
+          else if (s[i]==='{') { w += 0.9*h; const cj = s.indexOf('}', i+1); i = cj<0 ? s.length : cj; }
           else if (s[i]==='.') w += 0.35*h;
           else w += 0.6*h;
         }
@@ -1250,7 +1250,7 @@ const BS_FITS = [
           }
           const cc = {x: base.x + U.x*(x + cel.w/2), y: base.y + U.y*(x + cel.w/2)};
           const s = w2s(cc.x, cc.y);
-          if (cel.kind === 'sym') drawGdtGlyph(svg, s.x, s.y, h*cam.scale, cel.v, 1.6);
+          if (cel.kind === 'sym') drawGdtGlyph(svg, s.x, s.y, h*cam.scale*0.8, cel.v, 1.6);
           else if (vert) renderCellTextRot(svg, s.x, s.y, Math.max(11,h*cam.scale), cel.v, '#1a5f1a');
           else renderCellText(svg, s.x, s.y, Math.max(11,h*cam.scale), cel.v, '#1a5f1a');
           x += cel.w;
@@ -1664,12 +1664,12 @@ const BS_FITS = [
     }
     // 估算总宽，粗居中。
     let tw = 0;
-    toks.forEach(t => { tw += (t.kind === 'sym') ? size * 0.9 : size * 0.55 * (t.v || '').length; });
+    toks.forEach(t => { tw += (t.kind === 'sym') ? size * 0.72 : size * 0.55 * (t.v || '').length; });
     let x = cx - tw / 2;
     toks.forEach(t => {
       if (t.kind === 'sym') {
-        drawGdtGlyph(svg, x + size * 0.45, cy, size, t.v, 1.6);
-        x += size * 0.9;
+        drawGdtGlyph(svg, x + size * 0.36, cy, size * 0.8, t.v, 1.6);
+        x += size * 0.72;
       } else {
         const te = el('text', {x:x, y:cy, 'text-anchor':'start', 'dominant-baseline':'middle', 'font-size':size, fill:fill, 'font-weight':'bold'});
         te.textContent = t.v; svg.appendChild(te);
