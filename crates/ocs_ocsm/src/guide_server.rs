@@ -1420,10 +1420,9 @@ fn apply_tolerance(
     let origin = v3(pts[0]);
     let scale = frame_scale_at(doc, pts[0]);
     let h = 5.0 * scale; // 单元格字高（同 SECTION/DATUM 默认）
-    // 框格尺寸（GB/T 1182，一倍注释比例 scale=1）：符号/基准格 7×7，数字格 14×7。
+    // 框格尺寸（GB/T 1182，一倍注释比例 scale=1）：符号/基准格 7×7，数字格按内容自适应（14/21/28）。
     let ch = 7.0 * scale; // 格高（所有格一致）
     let cw_sym = 7.0 * scale; // 符号/基准格宽
-    let cw_num = 14.0 * scale; // 数字格宽（容纳多位数/千分位 + ⌀ + 修饰符）
     let half = h / 6.0; // 箭头底边半宽（同 SECTION）
     let text_style = "OCSM_GB";
 
@@ -1440,12 +1439,12 @@ fn apply_tolerance(
         e.common_mut().color = Color::from_index(color);
         e
     };
-    let mut mk_mtext = |value: String, pos: Vector3| -> E {
+    let mut mk_mtext = |value: String, pos: Vector3, rotation: f64| -> E {
         let mut m = MText::new();
         m.value = value;
         m.insertion_point = pos;
         m.height = h;
-        m.rotation = 0.0;
+        m.rotation = rotation;
         m.style = text_style.into();
         m.attachment_point = AttachmentPoint::MiddleCenter;
         let mut e = E::MText(m);
@@ -1489,16 +1488,54 @@ fn apply_tolerance(
     }
 
     let attach = to_local(&pts[pts.len() - 1]); // 框接入点（局部）
-    // 最后一段方向（从 Pn-1 → Pn）：方框长轴沿此方向延伸。
-    let prev_p = to_local(&pts[pts.len() - 2]);
-    let u = {
-        let d = attach - prev_p;
+    // 书写方向规范化：
+    //   - 末段水平（|x|≥|y|）→ 固定从左到右读（符号在最左，基准在右）
+    //   - 末段竖直 → 固定从下往上读（符号在最下，基准在上），文字逆时针旋转 90°
+    let raw = {
+        let d = attach - to_local(&pts[pts.len() - 2]);
         let l = d.length().max(1e-12);
         d * (1.0 / l)
     };
-    let perp = Vector3::new(-u.y, u.x, 0.0);
+    let vert = raw.y.abs() > raw.x.abs();
+    let u = if vert {
+        Vector3::new(0.0, 1.0, 0.0) // 从下往上
+    } else {
+        Vector3::new(1.0, 0.0, 0.0) // 从左到右
+    };
+    let perp = Vector3::new(-u.y, u.x, 0.0); // 行堆叠方向（水平→向上；竖直→向左）
+    let text_rot = if vert { std::f64::consts::FRAC_PI_2 } else { 0.0 }; // 逆时针 90°
 
-    // 每行内容 → 单元格列表 (文本, 格宽)：符号格/基准格 cw_sym，数字格 cw_num。
+    // 估算 OCSM_GB 字体文本宽度（字高 h）：数字/字母≈0.6h、⌀(%%c)≈1.2h、gdt 符号≈1.1h。
+    let est_width = |s: &str| -> f64 {
+        let mut w = 0.0;
+        let chars: Vec<char> = s.chars().collect();
+        let mut i = 0;
+        while i < chars.len() {
+            if chars[i] == '%' && i + 2 < chars.len() && chars[i + 1] == '%' && chars[i + 2] == 'c' {
+                w += 1.2 * h;
+                i += 3;
+            } else if chars[i] == '{' {
+                // {\Fgdt;x}：gdt 字形宽≈1.1h
+                w += 1.1 * h;
+                i += 8;
+            } else if chars[i] == '.' {
+                w += 0.35 * h;
+                i += 1;
+            } else {
+                w += 0.6 * h;
+                i += 1;
+            }
+        }
+        w
+    };
+    // 数字格宽：内容估算 → 7 的倍数 14/21/28（clamp）。
+    let num_w = |tol_text: &str| -> f64 {
+        let need = est_width(tol_text);
+        let steps = ((need / (7.0 * scale)).ceil() as i64).clamp(2, 4);
+        (steps as f64) * 7.0 * scale
+    };
+
+    // 每行内容 → 单元格列表 (文本, 格宽)：符号/基准格 cw_sym，数字格自适应。
     // 顺序 = 读数顺序：符号 → [⌀公差+修饰符] → 基准1 → 基准2 → 基准3。
     let cells_of = |r: &GdtRow| -> Vec<(String, f64)> {
         let mut c = Vec::new();
@@ -1515,7 +1552,7 @@ fn apply_tolerance(
                     v.push(m);
                 }
             }
-            c.push((v, cw_num));
+            c.push((v.clone(), num_w(&v)));
         }
         for d in [&r.d1, &r.d2, &r.d3] {
             if !d.is_empty() {
@@ -1532,14 +1569,13 @@ fn apply_tolerance(
 
     // 顶部/底部注释（FCF 框上方/下方，独立 MTEXT，世界坐标附近）。
     let n_rows_drawn = rows.iter().filter(|r| !r.is_empty()).count() as f64;
-    let frame_h = ch * n_rows_drawn.max(1.0);
     if let Some(t) = params.gdt_top.as_deref().filter(|s| !s.is_empty()) {
-        let pos = attach + perp * (ch * n_rows_drawn.max(1.0) + h);
-        members.push(mk_mtext(t.to_string(), pos));
+        let pos = attach + perp * (ch * n_rows_drawn.max(1.0) + h * 2.0);
+        members.push(mk_mtext(t.to_string(), pos, 0.0));
     }
     if let Some(b) = params.gdt_bot.as_deref().filter(|s| !s.is_empty()) {
-        let pos = attach - perp * (ch + h);
-        members.push(mk_mtext(b.to_string(), pos));
+        let pos = attach - perp * (ch + h * 2.0);
+        members.push(mk_mtext(b.to_string(), pos, 0.0));
     }
 
     for (k, r) in rows.iter().enumerate() {
@@ -1568,7 +1604,7 @@ fn apply_tolerance(
                 members.push(mk_line(xi - perp * (ch / 2.0), xi + perp * (ch / 2.0), 31));
             }
             let ci = base + u * (x + w / 2.0);
-            members.push(mk_mtext(text.clone(), ci));
+            members.push(mk_mtext(text.clone(), ci, text_rot));
             x += w;
         }
     }
@@ -2712,6 +2748,60 @@ mod tests {
     }
 
     #[test]
+    fn apply_tolerance_vertical_reading_order_and_rotation() {
+        use crate::guide_url::GdtRow;
+        let inner = std::sync::Arc::new(MockSender::new(acadrust::CadDocument::new()));
+        let sender: std::sync::Arc<dyn PluginRequestSender> = inner.clone();
+        let doc = inner.doc.lock().unwrap().clone();
+        // 末段竖直向上：框应竖直、从下往上读（符号最下→公差→基准最上）、文字旋转 90°。
+        let pts = vec![[0.0, 10.0, 0.0], [0.0, 30.0, 0.0], [0.0, 60.0, 0.0]];
+        let mut p = GuideParams::linear(LinearSub::Aligned, 0.0);
+        p.guide_type = GuideType::Tolerance;
+        p.gdt_rows = vec![GdtRow {
+            sym: "f".into(), dia: false, tol: "0.02".into(), mods: "m".into(),
+            d1: "A".into(), d2: String::new(), d3: String::new(),
+        }];
+        let out = apply_tolerance(&sender, &doc, &pts, &p).unwrap();
+        let j: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let block_name = j["block"].as_str().unwrap();
+        let ents = inner.block_entities(block_name);
+        let mts: Vec<_> = ents.iter().filter_map(|e| match e {
+            acadrust::EntityType::MText(m) => Some(m.clone()),
+            _ => None,
+        }).collect();
+        let sym = mts.iter().find(|m| m.value.contains("Fgdt;f")).expect("符号");
+        let tol = mts.iter().find(|m| m.value.contains("0.02")).expect("公差");
+        let dat = mts.iter().find(|m| m.value.trim() == "A").expect("基准");
+        // 从下往上：y：符号 < 公差 < 基准；文字逆时针旋转 90°。
+        assert!(sym.insertion_point.y < tol.insertion_point.y, "符号应在公差下方");
+        assert!(tol.insertion_point.y < dat.insertion_point.y, "公差应在基准下方");
+        assert!((sym.rotation - std::f64::consts::FRAC_PI_2).abs() < 1e-6, "文字应旋转90°，实际 {}", sym.rotation);
+    }
+
+    #[test]
+    fn apply_tolerance_num_cell_auto_width() {
+        use crate::guide_url::GdtRow;
+        let inner = std::sync::Arc::new(MockSender::new(acadrust::CadDocument::new()));
+        let sender: std::sync::Arc<dyn PluginRequestSender> = inner.clone();
+        let doc = inner.doc.lock().unwrap().clone();
+        // 长公差（0.123456789）应触发数字格扩展到 28（4×7），而非 14 换行。
+        let pts = vec![[0.0, 0.0, 0.0], [0.0, 30.0, 0.0], [40.0, 30.0, 0.0]];
+        let mut p = GuideParams::linear(LinearSub::Aligned, 0.0);
+        p.guide_type = GuideType::Tolerance;
+        p.gdt_rows = vec![GdtRow {
+            sym: "j".into(), dia: true, tol: "0.123456789".into(), mods: "m".into(),
+            d1: "A".into(), d2: String::new(), d3: String::new(),
+        }];
+        let out = apply_tolerance(&sender, &doc, &pts, &p).unwrap();
+        let j: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(j["ok"], true);
+        // 数字格宽 = total_width - 符号格 7 - 基准格 7 = 数字格（应 ≈28, scale=1）。
+        let tw = j["total_width"].as_f64().unwrap();
+        let num_w = tw - 14.0; // 符号(7) + 基准(7)
+        assert!(num_w >= 27.9 && num_w <= 28.1, "长公差应扩展到 28 宽，实际 {num_w}");
+    }
+
+    #[test]
     fn build_dimension_dec_overrides_dimdec_xdata() {
         use acadrust::xdata::XDataValue as V;
         let inner = std::sync::Arc::new(MockSender::new(acadrust::CadDocument::new()));
@@ -3404,3 +3494,4 @@ mod integration {
         assert_eq!(pts2.len(), 2);
     }
 }
+
