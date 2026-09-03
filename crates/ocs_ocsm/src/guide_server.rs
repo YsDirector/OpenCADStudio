@@ -1878,15 +1878,23 @@ fn apply_arclen(
     // 尺寸弧端点（外侧：引导弧端点径向延长；内侧：平移后弧对应端点）。
     let t0 = arc_center + u0 * arc_r;
     let t1 = arc_center + u1 * arc_r;
-    // 界线另一端：外侧=引导弧端点；内侧=同半径平移前端点（引导弧端点）。
+    // 界线：引导弧端点 ⇄ 尺寸弧端点外 2mm（示例界线出头 2.0，B 端亦同）。
     let (b0, b1) = (center + u0 * r, center + u1 * r);
-    // 箭头张开方向：外侧沿半径向外；内侧沿弧中点方向（朝引导弧）。
-    let away0 = if side_out { u0 } else { um };
-    let away1 = if side_out { u1 } else { um };
-    // 文字：尺寸弧中点外 gap（径向）。
+    let head = 2.0 * scale;
+    let ext0 = if side_out { u0 } else { -um }; // 外侧沿半径、内侧沿平移方向
+    let ext1 = if side_out { u1 } else { -um };
+    let e0 = t0 + ext0 * head;
+    let e1 = t1 + ext1 * head;
+    // 箭头（对照示例 SOLID 三角）：尖 = 尺寸弧端点；箭翼沿弧端点处切线方向、
+    // 朝弧外侧张开：起点端翼向 = +T(α0)=（−sinα0,cosα0）、终点端 = −T(α1)。
+    // arrow_solid 的 away = 尖→尾方向 = 翼向的相反。
+    let away0 = Vector3::new(a.start_angle.sin(), -a.start_angle.cos(), 0.0);
+    let away1 = Vector3::new(-a.end_angle.sin(), a.end_angle.cos(), 0.0);
+    // 文字：对照示例 MTEXT（rotation = mid−90°、附着 TopLeft、位置=尺寸弧中点+um×1）
     let arc_mid = arc_center + um * arc_r;
     let text_pos = arc_mid + um * gap;
-    // 小圆弧 ⌒ 符号：文字左下方 8.42×scale，对称轴沿弧外侧方向（参考 308.7°→128.7°）。
+    let text_rot = (a.start_angle + a.end_angle) / 2.0 - std::f64::consts::PI / 2.0;
+    // 小圆弧 ⌒ 符号：文字锚点（左上角）左下方 8.42×scale（参考 308.7°→128.7°）。
     let sym_center = text_pos + Vector3::new(-um.y, um.x, 0.0) * (8.42 * scale);
     let sym_r = 2.6 * scale;
     let sym_dir_up = um.y.atan2(um.x);
@@ -1896,6 +1904,8 @@ fn apply_arclen(
     // ── 块成员（原点 = 引导圆心）──
     let local = |p: Vector3| p - center;
     let mut members: Vec<E> = Vec::new();
+    // 示例块成员显式色：尺寸弧/界线/箭头 = 130（灰蓝），文字 = 3（绿），
+    // 小弧 = 3；7标注层层色为 4（青），必须显式覆盖否则渲染青色。
     let mut mk_line = |a: Vector3, b: Vector3| -> E {
         let mut e = E::Line(Line {
             common: Default::default(),
@@ -1905,11 +1915,13 @@ fn apply_arclen(
             normal: Vector3::new(0.0, 0.0, 1.0),
         });
         set_member_layer(&mut e, "7标注层");
+        e.common_mut().color = Color::from_index(130);
         e
     };
     let mut mk_arrow = |tip: Vector3, away: Vector3| -> E {
         let mut e = E::Solid(arrow_solid(local(tip), away, asz));
         set_member_layer(&mut e, "7标注层");
+        e.common_mut().color = Color::from_index(130);
         e
     };
     let mut mk_mtext = |value: String, pos: Vector3| -> E {
@@ -1917,15 +1929,16 @@ fn apply_arclen(
         m.value = value;
         m.insertion_point = local(pos);
         m.height = h;
-        m.rotation = 0.0;
+        m.rotation = text_rot;
         m.style = "OCSM_GB".into();
-        m.attachment_point = AttachmentPoint::MiddleCenter;
+        m.attachment_point = AttachmentPoint::TopLeft; // 示例 71:8
         let mut e = E::MText(m);
         set_member_layer(&mut e, "7标注层");
+        e.common_mut().color = Color::from_index(3);
         e
     };
 
-    // 尺寸弧（7标注层，随层色）。
+    // 尺寸弧（7标注层，显式 130）。
     let mut dim_arc = E::Arc(Arc::from_center_radius_angles(
         local(arc_center),
         arc_r,
@@ -1933,14 +1946,15 @@ fn apply_arclen(
         a.end_angle,
     ));
     set_member_layer(&mut dim_arc, "7标注层");
+    dim_arc.common_mut().color = Color::from_index(130);
     members.push(dim_arc);
-    // 界线 ×2（外侧：引导弧端点→尺寸弧端点；内侧反接）。
-    members.push(mk_line(b0, t0));
-    members.push(mk_line(b1, t1));
-    // 箭头 ×2（尖 = 尺寸弧端点）。
+    // 界线 ×2：引导弧端点 ⇄ 尺寸弧端点外 2mm。
+    members.push(mk_line(b0, e0));
+    members.push(mk_line(b1, e1));
+    // 箭头 ×2（尖 = 尺寸弧端点，翼沿端点切线朝外）。
     members.push(mk_arrow(t0, away0));
     members.push(mk_arrow(t1, away1));
-    // 文字。
+    // 文字（旋转 mid−90°、TopLeft 锚点）。
     members.push(mk_mtext(body, text_pos));
     // 小圆弧 ⌒ 符号（色3、层0，忠实参考）。
     let mut sym = E::Arc(Arc::from_center_radius_angles(
@@ -4216,7 +4230,7 @@ mod integration {
     /// r≈2.6，对称轴沿弧中点方向）；INSERT @ 引导圆心；引导弧已删除。
     #[test]
     fn apply_arclen_outside_matches_reference() {
-        use acadrust::entities::Arc;
+        use acadrust::entities::{Arc, AttachmentPoint};
         use acadrust::types::{Color, Vector3};
         use acadrust::EntityType as E;
 
@@ -4270,7 +4284,7 @@ mod integration {
                 let ang = ang.to_radians();
                 let (cx, cy) = (76.10315450223098, 69.46285912943617);
                 let inner_p = (cx + 60.59037754501 * ang.cos(), cy + 60.59037754501 * ang.sin());
-                let outer_p = (cx + 74.18714345675 * ang.cos(), cy + 74.18714345675 * ang.sin());
+                let outer_p = (cx + 76.18714345675 * ang.cos(), cy + 76.18714345675 * ang.sin()); // r+dist+2 界线出头
                 // 块局部坐标（原点=引导圆心）。
                 let (sx, sy) = (l.start.x + cx, l.start.y + cy);
                 let (ex, ey) = (l.end.x + cx, l.end.y + cy);
@@ -4283,6 +4297,7 @@ mod integration {
         // 文字：尺寸弧中点外 1.0（径向）。
         if let E::MText(m) = &mts[0] {
             assert_eq!(m.common.layer, "7标注层");
+            assert!(matches!(m.common.color, Color::Index(3)), "文字应显式绿色");
             assert!(m.value.contains("71.89"), "{}", m.value);
             let mid = (4.71319417612647_f64 + 72.69617975791557_f64) / 2.0;
             let mid = mid.to_radians();
@@ -4290,6 +4305,25 @@ mod integration {
             let expect_y = 74.18714345675 * mid.sin() + mid.sin();
             assert!((m.insertion_point.x - expect_x).abs() < 0.01, "x={} exp={}", m.insertion_point.x, expect_x);
             assert!((m.insertion_point.y - expect_y).abs() < 0.01);
+            // 旋转 = mid−90°（示例 −51.295°）、附着 TopLeft（示例 71:8）。
+            assert!(
+                (m.rotation - (mid - std::f64::consts::PI / 2.0)).abs() < 1e-6,
+                "rot={}",
+                m.rotation
+            );
+            assert!(matches!(m.attachment_point, AttachmentPoint::TopLeft));
+            // 箭头翼（示例 SOLID）：尖=尺寸弧端点，翼在端点切线朝外方向。
+            // 起点端 away = (sinα0,−cosα0)；终点端 away = (−sinα1,cosα1)。
+            if let E::Solid(sl) = &solids[0] {
+                // 翼中点 = (second+third)/2 − first（first=尖=尺寸弧端点）。
+                // 示例翼向 = 端点切线朝外：起点端 (sinα0,−cosα0)×2.5… 实测即 base−tip
+                // = −away×2.5 =（−sinα0, cosα0）×2.5（北偏西）。
+                let tip = sl.first_corner.clone();
+                let b = (sl.second_corner.clone() + sl.third_corner.clone()) * 0.5 - tip;
+                let a0 = 4.71319417612647_f64.to_radians();
+                let want = Vector3::new(-a0.sin(), a0.cos(), 0.0) * 2.5;
+                assert!((b.x - want.x).abs() < 0.3 && (b.y - want.y).abs() < 0.3, "翼=({:.3},{:.3}) want({:.3},{:.3})", b.x, b.y, want.x, want.y);
+            }
         }
         // 小弧符号：色3、层0、r≈2.6、对称轴沿弧中点方向。
         let sym = arcs.iter().find_map(|e| match e {
@@ -4368,7 +4402,10 @@ mod integration {
                 let ang = ang.to_radians();
                 let (cx, cy) = (76.10315450223098, 69.46285912943617);
                 let e_p = (cx + 60.59037754501 * ang.cos(), cy + 60.59037754501 * ang.sin());
-                let s_p = (e_p.0 - 12.88 * midr.cos(), e_p.1 - 12.88 * midr.sin());
+                let s_p = (
+                    e_p.0 - (12.88 + 2.0) * midr.cos(),
+                    e_p.1 - (12.88 + 2.0) * midr.sin(),
+                );
                 let (sx, sy) = (l.start.x + cx, l.start.y + cy);
                 let (ex, ey) = (l.end.x + cx, l.end.y + cy);
                 assert!(
