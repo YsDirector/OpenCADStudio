@@ -297,6 +297,17 @@ fn guide_geom_points(
             [c.center.x, c.center.y, c.center.z],
             [c.center.x + c.radius, c.center.y, c.center.z],
         ]),
+        // 弧长引导：起点 + 终点 + 中点（三点可求圆心/半径/扫角）。
+        acadrust::EntityType::Arc(a) => {
+            let s = a.start_point();
+            let e = a.end_point();
+            let m = a.midpoint();
+            Ok(vec![
+                [s.x, s.y, s.z],
+                [e.x, e.y, e.z],
+                [m.x, m.y, m.z],
+            ])
+        }
         acadrust::EntityType::LwPolyline(pl) => {
             Ok(pl
                 .vertices
@@ -324,7 +335,7 @@ fn guide_geom_points(
 }
 
 /// 引导几何形态：line（LINE）/ pline（LWPOLYLINE / Polyline / Polyline2D）/
-/// circle（CIRCLE）/ rect（闭合 4 顶点无 bulge 的 PLINE，矩形引导）。
+/// circle（CIRCLE）/ rect（闭合 4 顶点无 bulge 的 PLINE，矩形引导）/ arc（ARC）。
 fn guide_geom_kind(
     doc: &acadrust::CadDocument,
     handle: acadrust::Handle,
@@ -333,6 +344,7 @@ fn guide_geom_kind(
     match e {
         acadrust::EntityType::Line(_) => Ok("line"),
         acadrust::EntityType::Circle(_) => Ok("circle"),
+        acadrust::EntityType::Arc(_) => Ok("arc"),
         acadrust::EntityType::LwPolyline(pl) => {
             if pl.is_closed
                 && pl.vertices.len() == 4
@@ -1084,6 +1096,7 @@ fn build_dimension(
         GuideType::Section => return Err("剖切符号走 do_apply 独立分支".into()),
         GuideType::Tolerance => return Err("形位公差走 do_apply 独立分支".into()),
         GuideType::Detail => return Err("局部放大图走 do_apply 独立分支".into()),
+        GuideType::ArcLen => return Err("弧长标注走 do_apply 独立分支".into()),
     };
     // 用户指定小数位数：覆盖 XDATA DSTYLE 里的 DIMDEC(271)（默认样式 4）。
     if let Some(d) = params.dec {
@@ -1796,6 +1809,195 @@ fn detail_scale_at(doc: &acadrust::CadDocument, pt: [f64; 3]) -> Option<f64> {
     None
 }
 
+/// 弧长标注（ARCLEN，匿名块 + INSERT）：对照 OCSMDIMGULIDE/ARCLEN.dxf 两种形式。
+/// 引导 = 1 条 ARC（10引导线层）：中心/半径/起止角自足。
+/// - 外侧（dist>0）：尺寸弧 = 引导弧同心外扩 dist（r+dist），界线从引导弧端点
+///   沿半径方向外拉到尺寸弧端点，箭头顶在尺寸弧端点（尖端朝外）。
+/// - 内侧（dist<0）：尺寸弧 = 引导弧等半径平移 |dist|（圆心沿弧中点反方向），
+///   界线从尺寸弧端点连回引导弧端点（方向 ∥ 弧中点方向），箭头朝引导弧。
+/// 文字 = 尺寸弧中点外 1×scale（径向），前加小半圆弧 ⌒ 符号（色3/层0，
+/// 对称轴沿弧外侧方向，忠实参考）。块原点 = 引导圆心；INSERT 于引导圆心。
+/// 测量值 = r × 扫角（放大图内另乘 detail 系数还原真实尺寸）。
+fn apply_arclen(
+    sender: &Arc<dyn PluginRequestSender>,
+    doc: &acadrust::CadDocument,
+    handle: acadrust::Handle,
+    params: &GuideParams,
+) -> Result<String, String> {
+    use acadrust::entities::{Arc, Insert, Line, MText};
+    use acadrust::entities::AttachmentPoint;
+    use acadrust::types::{Color, Vector3};
+    use acadrust::EntityType as E;
+
+    let e = doc.get_entity(handle).ok_or("找不到引导弧实体")?;
+    let acadrust::EntityType::Arc(a) = e else {
+        return Err("弧长标注需要 ARC 引导（10引导线层 的圆弧）".into());
+    };
+    if a.radius < 1e-9 || a.sweep_angle() <= 1e-9 {
+        return Err("引导弧半径或扫角无效".into());
+    }
+    let center = v3([a.center.x, a.center.y, a.center.z]);
+    let r = a.radius;
+    let sweep = a.sweep_angle();
+    let arc_len = r * sweep;
+    let scale = frame_scale_at(doc, [a.center.x, a.center.y, a.center.z]);
+    let h = 2.5 * scale; // 文字高（DIMTXT）
+    let asz = 2.5 * scale; // 箭头长（DIMASZ）
+    let gap = 1.0 * scale; // 文字与弧间隙（DIMGAP）
+    let dist = params.dist;
+    let d = dist.abs();
+    let side_out = dist >= 0.0; // dist=0 → 尺寸弧与引导弧重合（外侧语义）
+
+    // 弧端点/中点方向（相对引导圆心）。
+    let u0 = Vector3::new(a.start_angle.cos(), a.start_angle.sin(), 0.0);
+    let u1 = Vector3::new(a.end_angle.cos(), a.end_angle.sin(), 0.0);
+    let um = Vector3::new(
+        ((a.start_angle + a.end_angle) / 2.0).cos(),
+        ((a.start_angle + a.end_angle) / 2.0).sin(),
+        0.0,
+    );
+
+    // 测量值（放大图内 × 系数还原真实尺寸）。
+    let coef = detail_scale_at(doc, [a.center.x, a.center.y, a.center.z]);
+    let measurement = arc_len * coef.unwrap_or(1.0);
+    let auto_value = format_measurement(measurement, params.dec.unwrap_or(2));
+    let text_visible = match &params.text {
+        Some(t) if !t.is_empty() && *t != "<>" => {
+            t.replace("%%c", "").replace("<>", &auto_value)
+        }
+        _ => auto_value,
+    };
+    let body = render_text_template(&text_visible, measurement, None);
+
+    // 尺寸弧几何。
+    let (arc_center, arc_r) = if side_out {
+        (center, r + d)
+    } else {
+        (center - um * d, r) // 等半径平移（参考 *D2）
+    };
+    // 尺寸弧端点（外侧：引导弧端点径向延长；内侧：平移后弧对应端点）。
+    let t0 = arc_center + u0 * arc_r;
+    let t1 = arc_center + u1 * arc_r;
+    // 界线另一端：外侧=引导弧端点；内侧=同半径平移前端点（引导弧端点）。
+    let (b0, b1) = (center + u0 * r, center + u1 * r);
+    // 箭头张开方向：外侧沿半径向外；内侧沿弧中点方向（朝引导弧）。
+    let away0 = if side_out { u0 } else { um };
+    let away1 = if side_out { u1 } else { um };
+    // 文字：尺寸弧中点外 gap（径向）。
+    let arc_mid = arc_center + um * arc_r;
+    let text_pos = arc_mid + um * gap;
+    // 小圆弧 ⌒ 符号：文字左下方 8.42×scale，对称轴沿弧外侧方向（参考 308.7°→128.7°）。
+    let sym_center = text_pos + Vector3::new(-um.y, um.x, 0.0) * (8.42 * scale);
+    let sym_r = 2.6 * scale;
+    let sym_dir_up = um.y.atan2(um.x);
+    let sym_start = crate::detail_clip::norm_angle(sym_dir_up + 3.0 * std::f64::consts::PI / 2.0);
+    let sym_end = crate::detail_clip::norm_angle(sym_dir_up + std::f64::consts::PI / 2.0);
+
+    // ── 块成员（原点 = 引导圆心）──
+    let local = |p: Vector3| p - center;
+    let mut members: Vec<E> = Vec::new();
+    let mut mk_line = |a: Vector3, b: Vector3| -> E {
+        let mut e = E::Line(Line {
+            common: Default::default(),
+            start: local(a),
+            end: local(b),
+            thickness: 0.0,
+            normal: Vector3::new(0.0, 0.0, 1.0),
+        });
+        set_member_layer(&mut e, "7标注层");
+        e
+    };
+    let mut mk_arrow = |tip: Vector3, away: Vector3| -> E {
+        let mut e = E::Solid(arrow_solid(local(tip), away, asz));
+        set_member_layer(&mut e, "7标注层");
+        e
+    };
+    let mut mk_mtext = |value: String, pos: Vector3| -> E {
+        let mut m = MText::new();
+        m.value = value;
+        m.insertion_point = local(pos);
+        m.height = h;
+        m.rotation = 0.0;
+        m.style = "OCSM_GB".into();
+        m.attachment_point = AttachmentPoint::MiddleCenter;
+        let mut e = E::MText(m);
+        set_member_layer(&mut e, "7标注层");
+        e
+    };
+
+    // 尺寸弧（7标注层，随层色）。
+    let mut dim_arc = E::Arc(Arc::from_center_radius_angles(
+        local(arc_center),
+        arc_r,
+        a.start_angle,
+        a.end_angle,
+    ));
+    set_member_layer(&mut dim_arc, "7标注层");
+    members.push(dim_arc);
+    // 界线 ×2（外侧：引导弧端点→尺寸弧端点；内侧反接）。
+    members.push(mk_line(b0, t0));
+    members.push(mk_line(b1, t1));
+    // 箭头 ×2（尖 = 尺寸弧端点）。
+    members.push(mk_arrow(t0, away0));
+    members.push(mk_arrow(t1, away1));
+    // 文字。
+    members.push(mk_mtext(body, text_pos));
+    // 小圆弧 ⌒ 符号（色3、层0，忠实参考）。
+    let mut sym = E::Arc(Arc::from_center_radius_angles(
+        local(sym_center),
+        sym_r,
+        sym_start,
+        sym_end,
+    ));
+    sym.common_mut().layer = "0".into();
+    sym.common_mut().color = Color::from_index(3);
+    members.push(sym);
+
+    // ── 匿名块 *D{n}（与其他块共用计数器）──
+    let mut max_n = 0u32;
+    for br in doc.block_records.iter() {
+        if let Some(rest) = br.name.strip_prefix("*D") {
+            if let Ok(n) = rest.parse::<u32>() {
+                max_n = max_n.max(n);
+            }
+        }
+    }
+    let block_name = format!("*D{}", max_n + 1);
+    req_timed(
+        sender,
+        PluginRequest::AddBlockRecord {
+            name: block_name.clone(),
+            entities: members,
+        },
+        "AddBlockRecord",
+    )?;
+
+    // ── INSERT @ 引导圆心，8符号标注层 ──
+    let mut ins = E::Insert(Insert::new(block_name.clone(), center));
+    set_member_layer(&mut ins, "8符号标注层");
+    let handle = match req_timed(
+        sender,
+        PluginRequest::AddEntities(vec![ins]),
+        "AddEntities",
+    ) {
+        Ok(PluginResponse::Handles(hs)) => hs.first().copied(),
+        Ok(_) => None,
+        Err(e) => return Err(e),
+    };
+
+    Ok(serde_json::json!({
+        "ok": true,
+        "block": block_name,
+        "insert_handle": handle.map(fmt_handle),
+        "arc_len": arc_len,
+        "text": text_visible,
+        "dist": dist,
+        "side": if side_out { "out" } else { "in" },
+        "geom": "arc",
+    })
+    .to_string())
+}
+
 /// 形位公差框 FCF（Feature Control Frame，匿名块 + INSERT）：
 /// 对照 OCSMDIMGULIDE/GD&T/形位.dxf 示例。引导线 = PLINE，≥3 顶点：
 /// - P1 = 箭头尖（被测要素上）
@@ -2482,6 +2684,15 @@ fn do_apply(
     // 局部放大图：引导 = 圆（CIRCLE）或闭合 4 顶点矩形（PLINE），不删引导（改层保留）。
     if params.guide_type == GuideType::Detail {
         let out = apply_detail(sender, &doc, handle, &params)?;
+        req_timed(sender, PluginRequest::BumpGeometry, "BumpGeometry")?;
+        mark_dirty(sender)?;
+        return Ok(out);
+    }
+
+    // 弧长标注：引导 = ARC，匿名块 + INSERT，生成后删引导弧。
+    if params.guide_type == GuideType::ArcLen {
+        let out = apply_arclen(sender, &doc, handle, &params)?;
+        req_timed(sender, PluginRequest::RemoveEntity { handle }, "RemoveEntity")?;
         req_timed(sender, PluginRequest::BumpGeometry, "BumpGeometry")?;
         mark_dirty(sender)?;
         return Ok(out);
@@ -3995,6 +4206,209 @@ mod integration {
         let h2 = doc.add_entity(acadrust::EntityType::Line(line)).unwrap();
         let pts2 = guide_geom_points(&doc, h2).unwrap();
         assert_eq!(pts2.len(), 2);
+    }
+
+    // ── 弧长标注 ARCLEN ─────────────────────────────────────────
+
+    /// 参考文件 ARCLEN.dxf 几何复刻：引导弧 c=(76.10,69.46) r=60.59 4.71°→72.70°，
+    /// 外侧 dist=13.6：尺寸弧同心 r=74.19；界线从引导弧端点径向到尺寸弧端点×2；
+    /// SOLID 箭头×2；文字 = 弧长（r×sweep=71.89，dec=2）；小半圆弧符号（色3/层0，
+    /// r≈2.6，对称轴沿弧中点方向）；INSERT @ 引导圆心；引导弧已删除。
+    #[test]
+    fn apply_arclen_outside_matches_reference() {
+        use acadrust::entities::Arc;
+        use acadrust::types::{Color, Vector3};
+        use acadrust::EntityType as E;
+
+        let mut doc = acadrust::CadDocument::new();
+        let mut g = E::Arc(Arc::from_center_radius_angles(
+            Vector3::new(76.10315450223098, 69.46285912943617, 0.0),
+            60.59037754501,
+            4.71319417612647_f64.to_radians(),
+            72.69617975791557_f64.to_radians(),
+        ));
+        g.common_mut().layer = "10引导线层".into();
+        let gh = doc.add_entity(g).unwrap();
+        let inner = std::sync::Arc::new(MockSender::new(doc));
+        let sender: std::sync::Arc<dyn PluginRequestSender> = inner.clone();
+        let doc = inner.doc.lock().unwrap().clone();
+        let mut p = GuideParams::linear(LinearSub::Aligned, 0.0);
+        p.guide_type = GuideType::ArcLen;
+        p.dist = 13.6;
+        let out = apply_arclen(&sender, &doc, gh, &p).unwrap();
+        let j: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(j["geom"], "arc");
+        assert_eq!(j["side"], "out");
+        assert!((j["arc_len"].as_f64().unwrap() - 71.892).abs() < 0.01);
+        assert_eq!(j["text"], "71.89");
+        assert_eq!(j["block"], "*D1");
+
+        let ents = inner.block_entities("*D1");
+        let arcs: Vec<_> = ents.iter().filter(|e| matches!(e, E::Arc(_))).collect();
+        let lines: Vec<_> = ents.iter().filter(|e| matches!(e, E::Line(_))).collect();
+        let solids: Vec<_> = ents.iter().filter(|e| matches!(e, E::Solid(_))).collect();
+        let mts: Vec<_> = ents.iter().filter(|e| matches!(e, E::MText(_))).collect();
+        assert_eq!(arcs.len(), 2, "尺寸弧 + 小弧符号");
+        assert_eq!(lines.len(), 2, "界线×2");
+        assert_eq!(solids.len(), 2, "箭头×2");
+        assert_eq!(mts.len(), 1);
+        // 尺寸弧：圆心=块原点、r=60.59+13.6=74.19、角度同引导。
+        let dim_arc = arcs.iter().find_map(|e| match e {
+            E::Arc(a) if a.radius > 70.0 => Some(a.clone()),
+            _ => None,
+        });
+        let dim_arc = dim_arc.expect("尺寸弧");
+        assert!((dim_arc.radius - 74.187).abs() < 0.01);
+        assert!((dim_arc.center.x).abs() < 1e-9 && (dim_arc.center.y).abs() < 1e-9);
+        assert!((dim_arc.start_angle - 4.71319417612647_f64.to_radians()).abs() < 1e-9);
+        assert_eq!(dim_arc.common.layer, "7标注层");
+        // 界线：引导弧端点(半径 r) → 尺寸弧端点(半径 r+dist)，径向。
+        let d = 13.6_f64;
+        for (i, e) in lines.iter().enumerate() {
+            if let E::Line(l) = e {
+                let ang = if i == 0 { 4.71319417612647_f64 } else { 72.69617975791557_f64 };
+                let ang = ang.to_radians();
+                let (cx, cy) = (76.10315450223098, 69.46285912943617);
+                let inner_p = (cx + 60.59037754501 * ang.cos(), cy + 60.59037754501 * ang.sin());
+                let outer_p = (cx + 74.18714345675 * ang.cos(), cy + 74.18714345675 * ang.sin());
+                // 块局部坐标（原点=引导圆心）。
+                let (sx, sy) = (l.start.x + cx, l.start.y + cy);
+                let (ex, ey) = (l.end.x + cx, l.end.y + cy);
+                assert!(
+                    (sx - inner_p.0).abs() < 0.01 && (sy - inner_p.1).abs() < 0.01 && (ex - outer_p.0).abs() < 0.01 && (ey - outer_p.1).abs() < 0.01
+                    || (sx - outer_p.0).abs() < 0.01 && (sy - outer_p.1).abs() < 0.01 && (ex - inner_p.0).abs() < 0.01 && (ey - inner_p.1).abs() < 0.01
+                );
+            }
+        }
+        // 文字：尺寸弧中点外 1.0（径向）。
+        if let E::MText(m) = &mts[0] {
+            assert_eq!(m.common.layer, "7标注层");
+            assert!(m.value.contains("71.89"), "{}", m.value);
+            let mid = (4.71319417612647_f64 + 72.69617975791557_f64) / 2.0;
+            let mid = mid.to_radians();
+            let expect_x = 74.18714345675 * mid.cos() + mid.cos();
+            let expect_y = 74.18714345675 * mid.sin() + mid.sin();
+            assert!((m.insertion_point.x - expect_x).abs() < 0.01, "x={} exp={}", m.insertion_point.x, expect_x);
+            assert!((m.insertion_point.y - expect_y).abs() < 0.01);
+        }
+        // 小弧符号：色3、层0、r≈2.6、对称轴沿弧中点方向。
+        let sym = arcs.iter().find_map(|e| match e {
+            E::Arc(a) if a.radius < 10.0 => Some(a.clone()),
+            _ => None,
+        });
+        let sym = sym.expect("小弧符号");
+        assert!((sym.radius - 2.6).abs() < 1e-6);
+        assert!(matches!(sym.common.color, Color::Index(3)));
+        assert_eq!(sym.common.layer, "0");
+        let mid = (4.71319417612647_f64 + 72.69617975791557_f64) / 2.0;
+        assert!((crate::detail_clip::norm_angle(sym.start_angle - (mid.to_radians() + 3.0 * std::f64::consts::PI / 2.0))) .abs() < 1e-6);
+        // INSERT @ 引导圆心，8符号标注层（引导弧删除由 do_apply 统一执行）。
+        let d2 = inner.doc.lock().unwrap().clone();
+        let mut ins = None;
+        for e in d2.entities() {
+            if let E::Insert(i) = e {
+                ins = Some(i.clone());
+            }
+        }
+        let ins = ins.expect("应有 INSERT");
+        assert_eq!(ins.block_name, "*D1");
+        assert_eq!(ins.common.layer, "8符号标注层");
+        assert!((ins.insert_point.x - 76.103).abs() < 0.01);
+        assert!((ins.insert_point.y - 69.463).abs() < 0.01);
+    }
+
+    /// 内侧：尺寸弧 = 引导弧等半径平移 |dist|（圆心沿弧中点反方向），
+    /// 界线从尺寸弧端点连回引导弧端点（方向 ∥ 弧中点方向），箭头朝引导弧。
+    #[test]
+    fn apply_arclen_inside_moves_arc_parallel() {
+        use acadrust::entities::{Arc};
+        use acadrust::types::Vector3;
+        use acadrust::EntityType as E;
+
+        let mut doc = acadrust::CadDocument::new();
+        let mut g = E::Arc(Arc::from_center_radius_angles(
+            Vector3::new(76.10315450223098, 69.46285912943617, 0.0),
+            60.59037754501,
+            4.71319417612647_f64.to_radians(),
+            72.69617975791557_f64.to_radians(),
+        ));
+        g.common_mut().layer = "10引导线层".into();
+        let gh = doc.add_entity(g).unwrap();
+        let inner = std::sync::Arc::new(MockSender::new(doc));
+        let sender: std::sync::Arc<dyn PluginRequestSender> = inner.clone();
+        let doc = inner.doc.lock().unwrap().clone();
+        let mut p = GuideParams::linear(LinearSub::Aligned, 0.0);
+        p.guide_type = GuideType::ArcLen;
+        p.dist = -12.88;
+        let out = apply_arclen(&sender, &doc, gh, &p).unwrap();
+        let j: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(j["side"], "in");
+        let ents = inner.block_entities("*D1");
+        // 尺寸弧：r 不变，圆心 = −12.88×um（um=38.7°方向）。
+        let dim_arc = ents.iter().find_map(|e| match e {
+            E::Arc(a) if a.radius > 50.0 => Some(a.clone()),
+            _ => None,
+        });
+        let dim_arc = dim_arc.expect("尺寸弧");
+        assert!((dim_arc.radius - 60.59037754501).abs() < 1e-6, "内侧半径不变");
+        let mid = (4.71319417612647_f64 + 72.69617975791557_f64) / 2.0;
+        let midr = mid.to_radians();
+        assert!(
+            (dim_arc.center.x + 12.88 * midr.cos()).abs() < 1e-6 && (dim_arc.center.y + 12.88 * midr.sin()).abs() < 1e-6,
+            "圆心应平移 -12.88×um，实际 c=({},{})",
+            dim_arc.center.x,
+            dim_arc.center.y
+        );
+        // 界线：从尺寸弧端点（=引导弧端点−12.88×um）连回引导弧端点。
+        let lines: Vec<_> = ents.iter().filter(|e| matches!(e, E::Line(_))).collect();
+        assert_eq!(lines.len(), 2);
+        for (i, e) in lines.iter().enumerate() {
+            if let E::Line(l) = e {
+                let ang = if i == 0 { 4.71319417612647_f64 } else { 72.69617975791557_f64 };
+                let ang = ang.to_radians();
+                let (cx, cy) = (76.10315450223098, 69.46285912943617);
+                let e_p = (cx + 60.59037754501 * ang.cos(), cy + 60.59037754501 * ang.sin());
+                let s_p = (e_p.0 - 12.88 * midr.cos(), e_p.1 - 12.88 * midr.sin());
+                let (sx, sy) = (l.start.x + cx, l.start.y + cy);
+                let (ex, ey) = (l.end.x + cx, l.end.y + cy);
+                assert!(
+                    (sx - s_p.0).abs() < 0.01 && (sy - s_p.1).abs() < 0.01 && (ex - e_p.0).abs() < 0.01 && (ey - e_p.1).abs() < 0.01
+                    || (sx - e_p.0).abs() < 0.01 && (sy - e_p.1).abs() < 0.01 && (ex - s_p.0).abs() < 0.01 && (ey - s_p.1).abs() < 0.01
+                );
+            }
+        }
+    }
+
+    /// 弧长文字自定义 + 自动数值两种模式。
+    #[test]
+    fn apply_arclen_text_auto_and_custom() {
+        use acadrust::entities::{Arc};
+        use acadrust::types::Vector3;
+        use acadrust::EntityType as E;
+
+        let mut doc = acadrust::CadDocument::new();
+        let mut g = E::Arc(Arc::from_center_radius_angles(
+            Vector3::new(100.0, 100.0, 0.0),
+            50.0,
+            0.0,
+            std::f64::consts::PI / 2.0,
+        ));
+        g.common_mut().layer = "10引导线层".into();
+        let gh = doc.add_entity(g).unwrap();
+        let inner = std::sync::Arc::new(MockSender::new(doc));
+        let sender: std::sync::Arc<dyn PluginRequestSender> = inner.clone();
+        let doc = inner.doc.lock().unwrap().clone();
+        let mut p = GuideParams::linear(LinearSub::Aligned, 0.0);
+        p.guide_type = GuideType::ArcLen;
+        p.dist = 10.0;
+        p.text = Some("<> mm".into());
+        p.dec = Some(4);
+        let out = apply_arclen(&sender, &doc, gh, &p).unwrap();
+        let j: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(j["text"], "78.5398 mm"); // 50×π/2，4 位小数
+        let ents = inner.block_entities("*D1");
+        let mts: Vec<_> = ents.iter().filter(|e| matches!(e, E::MText(_))).collect();
+        assert_eq!(mts.len(), 1);
     }
 
     // ── 局部放大图 DETAIL ─────────────────────────────────────────

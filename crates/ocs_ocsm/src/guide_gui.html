@@ -123,6 +123,7 @@
         <button data-t="ANGLE">角度</button>
         <button data-t="SECTION">剖切</button>
         <button data-t="TOLERANCE">形位公差</button>
+        <button data-t="ARCLEN">弧长</button>
         <button data-t="DETAIL">局部放大</button>
       </div>
     </div>
@@ -194,7 +195,7 @@
       <div class="gdt-hint">先选上方特征项目（作用于当前行），再填公差/基准；修饰符（ⓂⓁⓅⓈ）跟在数字后。每行一个形位公差框（多行沿引导线垂直方向堆叠）。行高亮=当前行，点行内任意处切换。</div>
     </div>
     <div class="param" id="row-param">
-      <span class="lbl">(与P2距离)</span>
+      <span class="lbl" id="dist-lbl">(与P2距离)</span>
       <input type="number" id="dist" value="0" step="any">
       <span class="lbl" style="margin-left:10px">(小数位)</span>
       <input type="number" id="dec" value="2" min="0" max="8" step="1" style="width:52px">
@@ -449,11 +450,13 @@
     });
   }
   function textInput() { return document.getElementById('text'); }
-  // 内外侧默认 dist：直径 内−9/外+11；半径 内−8/外+8（对照示例 DXF）。
+  // 内外侧默认 dist：直径 内−9/外+11；半径 内−8/外+8；弧长 内−10/外+10（对照示例 DXF）。
   function defaultDist() {
-    return (type === 'RADIUS')
-      ? (side === 'in' ? -8 : 8)
-      : (side === 'in' ? -9 : 11);
+    if (type === 'RADIUS')
+      return (side === 'in' ? -8 : 8);
+    if (type === 'ARCLEN')
+      return (side === 'in' ? -10 : 10);
+    return (side === 'in' ? -9 : 11);
   }
   segBind('seg-type', b => {
     type = b.dataset.t;
@@ -495,8 +498,8 @@
       renderGdtTable(); draw();
       return;
     }
-    document.getElementById('sub-lbl').textContent = linear ? '线性' : (angle ? '角度' : (section ? '剖切' : '位置'));
-    document.getElementById('sub-lbl').style.display = (datum || view || angle || section) ? 'none' : '';
+    document.getElementById('sub-lbl').textContent = linear ? '线性' : (angle ? '角度' : (section ? '剖切' : (type === 'ARCLEN' ? '偏移' : '位置')));
+    document.getElementById('sub-lbl').style.display = (datum || view || angle || section || type === 'ARCLEN') ? 'none' : '';
     document.getElementById('seg-sub').style.display = linear ? '' : 'none';
     document.getElementById('seg-side').style.display = (!linear && !datum && !view && !angle && !section) ? '' : 'none';
     document.getElementById('seg-angle-mode').style.display = angle ? '' : 'none';
@@ -508,6 +511,7 @@
     document.getElementById('seg-letter').style.display = (datum || view || section) ? '' : 'none';
     document.getElementById('letter-lbl').style.display = (datum || view || section) ? '' : 'none';
     document.getElementById('row-param').style.display = (datum || view || section) ? 'none' : '';
+    document.getElementById('dist-lbl').textContent = (type === 'ARCLEN') ? '偏移距离' : '(与P2距离)';
     document.getElementById('row-txt').style.display = (datum || view || section) ? 'none' : '';
     // 公差：线性/直径/半径 都支持（线性=dimtext 堆叠；直径/半径=块内 MTEXT 堆叠）。
     const withTol = (type === 'LINEAR' || type === 'DIAMETER' || type === 'RADIUS');
@@ -532,12 +536,14 @@
   segBind('seg-angle-mode', b => { angleMode = b.dataset.am; draw(); });
   // 按引导几何过滤类型按钮：LINE → 线性/直径/半径/基准/向视图；
   // PLINE → 角度（≥3 顶点=两段）/剖切（≥2 顶点=单段）/形位公差（≥2）；
-  // CIRCLE / 闭合矩形（RECTANG）→ 仅局部放大。
+  // CIRCLE / 闭合矩形（RECTANG）→ 仅局部放大；ARC → 仅弧长（两种形式同构）。
   const LINE_TYPES = ['LINEAR', 'DIAMETER', 'RADIUS', 'DATUM', 'VIEW'];
   function applyGeomFilter() {
     let allow;
     if (geom === 'circle' || geom === 'rect') {
       allow = ['DETAIL'];
+    } else if (geom === 'arc') {
+      allow = ['ARCLEN'];
     } else if (geom === 'pline') {
       const nV = (PTS && PTS.length) || 0;
       allow = (nV >= 3) ? ['ANGLE', 'SECTION', 'TOLERANCE'] : ['SECTION', 'TOLERANCE'];
@@ -1034,7 +1040,50 @@ const BS_FITS = [
     }
     // 引导线（DETAIL 圆引导：圆心→半径点的连线无意义，跳过只留端点标记）
     if (!(type === 'DETAIL' && geom === 'circle')) {
-      svg.appendChild(wline(P1.x, P1.y, P2.x, P2.y, 3.5, '#999', '8 5'));
+      // 弧长引导（ARC）：三点求圆画弧（PTS = 起点/终点/中点）。
+      if (type === 'ARCLEN' && PTS && PTS.length >= 3) {
+        const [pa, pb, pm] = PTS;
+        const d = 2*(pa.x*(pb.y-pm.y)+pb.x*(pm.y-pa.y)+pm.x*(pa.y-pb.y));
+        if (Math.abs(d) > 1e-9) {
+          const ux = (pa.x*pa.x+pa.y*pa.y)*(pb.y-pm.y)+(pb.x*pb.x+pb.y*pb.y)*(pm.y-pa.y)+(pm.x*pm.x+pm.y*pm.y)*(pa.y-pb.y) / d;
+          const uy = (pa.x*pa.x+pa.y*pa.y)*(pm.x-pb.x)+(pb.x*pb.x+pb.y*pb.y)*(pa.x-pm.x)+(pm.x*pm.x+pm.y*pm.y)*(pb.x-pa.x) / d;
+          let a1 = Math.atan2(pa.y-uy, pa.x-ux), a2 = Math.atan2(pb.y-uy, pb.x-ux);
+          const am = Math.atan2(pm.y-uy, pm.x-ux);
+          // DXF ARC 恒逆时针（起点→终点），mid 在中间；sweep 按逆时针。
+          let sweep = (a2 - a1 + 2*Math.PI) % (2*Math.PI);
+          const amR = (am - a1 + 2*Math.PI) % (2*Math.PI);
+          if (Math.abs(amR - sweep/2) > 0.2) sweep -= 2*Math.PI; // 中点不在中间 → 顺时针兜底
+          const R = Math.hypot(pa.x-ux, pa.y-uy);
+          const N = 32, steps = [];
+          for (let i = 0; i <= N; i++) {
+            const a = a1 + sweep*i/N;
+            steps.push(w2s(ux + R*Math.cos(a), uy + R*Math.sin(a)));
+          }
+          for (let i = 0; i < N; i++) {
+            svg.appendChild(el('line', {x1:steps[i].x, y1:steps[i].y, x2:steps[i+1].x, y2:steps[i+1].y, stroke:'#999', 'stroke-width':3.5, 'stroke-dasharray':'8 5'}));
+          }
+          // 示意尺寸弧：外侧同心外扩 dist；内侧等半径平移 |dist|（弧中点反方向）。
+          const dv = parseFloat(document.getElementById('dist').value) || 0;
+          const Rd = dv >= 0 ? R + dv : R;
+          const color = dv < 0 ? '#0aa' : '#e8850a';
+          const am_c = a1 + sweep/2;
+          const cxt = (dv < 0)
+            ? { x: ux - Math.cos(am_c)*Math.abs(dv), y: uy - Math.sin(am_c)*Math.abs(dv) }
+            : { x: ux, y: uy };
+          if (dv !== 0) {
+            const steps2 = [];
+            for (let i = 0; i <= N; i++) {
+              const a = a1 + sweep*i/N;
+              steps2.push(w2s(cxt.x + Rd*Math.cos(a), cxt.y + Rd*Math.sin(a)));
+            }
+            for (let i = 0; i < N; i++) {
+              svg.appendChild(el('line', {x1:steps2[i].x, y1:steps2[i].y, x2:steps2[i+1].x, y2:steps2[i+1].y, stroke:color, 'stroke-width':2.5, 'stroke-dasharray':'4 4'}));
+            }
+          }
+        }
+      } else {
+        svg.appendChild(wline(P1.x, P1.y, P2.x, P2.y, 3.5, '#999', '8 5'));
+      }
     }
     // 端点
     for (const [p, name] of [[P1,'P1'],[P2,'P2']]) {

@@ -404,6 +404,8 @@ impl OcsmPlugin {
             acadrust::EntityType::Line(_) => {}
             // 局部放大图：圆（CIRCLE）或矩形（闭合 4 顶点无 bulge PLINE = RECTANG 产物）。
             acadrust::EntityType::Circle(_) => {}
+            // 弧长标注：ARC 引导。
+            acadrust::EntityType::Arc(_) => {}
             acadrust::EntityType::LwPolyline(pl) if !pl.is_closed && pl.vertices.len() >= 2 => {}
             acadrust::EntityType::LwPolyline(pl)
                 if pl.is_closed
@@ -419,7 +421,7 @@ impl OcsmPlugin {
                     && pl.vertices.len() == 4
                     && pl.vertices.iter().all(|v| v.bulge.abs() < 1e-9) => {}
             _ => {
-                host.push_error("OCSM: 引导线必须是直线（LINE）、多段线（PLINE，2 顶点以上）、圆（CIRCLE）或矩形（RECTANG）。");
+                host.push_error("OCSM: 引导线必须是直线（LINE）、多段线（PLINE，2 顶点以上）、圆（CIRCLE）、圆弧（ARC）或矩形（RECTANG）。");
                 return;
             }
         }

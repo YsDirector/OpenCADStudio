@@ -28,6 +28,7 @@ pub enum GuideType {
     Section,
     Tolerance,
     Detail,
+    ArcLen,
 }
 
 impl GuideType {
@@ -42,6 +43,7 @@ impl GuideType {
             GuideType::Section => "SECTION",
             GuideType::Tolerance => "TOLERANCE",
             GuideType::Detail => "DETAIL",
+            GuideType::ArcLen => "ARCLEN",
         }
     }
     fn from_str(s: &str) -> Option<Self> {
@@ -55,6 +57,7 @@ impl GuideType {
             "SECTION" | "SEC" => Some(GuideType::Section),
             "TOLERANCE" | "GDT" | "TOL" | "FTCF" => Some(GuideType::Tolerance),
             "DETAIL" | "DET" | "放大" => Some(GuideType::Detail),
+            "ARCLEN" | "ARC" | "弧长" => Some(GuideType::ArcLen),
             _ => None,
         }
     }
