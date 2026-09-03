@@ -292,10 +292,12 @@ fn guide_geom_points(
             [l.start.x, l.start.y, l.start.z],
             [l.end.x, l.end.y, l.end.z],
         ]),
+        // 局部放大图圆引导：中心 + 半径点（r 可由两点距离恢复）。
+        acadrust::EntityType::Circle(c) => Ok(vec![
+            [c.center.x, c.center.y, c.center.z],
+            [c.center.x + c.radius, c.center.y, c.center.z],
+        ]),
         acadrust::EntityType::LwPolyline(pl) => {
-            if pl.is_closed {
-                return Err("引导线多段线不能闭合".into());
-            }
             Ok(pl
                 .vertices
                 .iter()
@@ -304,9 +306,6 @@ fn guide_geom_points(
         }
         // heavy polyline（DXF 读取路径把 LWPOLYLINE 转为 Polyline/Polyline2D）。
         acadrust::EntityType::Polyline(pl) => {
-            if pl.flags.is_closed() {
-                return Err("引导线多段线不能闭合".into());
-            }
             Ok(pl
                 .vertices
                 .iter()
@@ -314,9 +313,6 @@ fn guide_geom_points(
                 .collect())
         }
         acadrust::EntityType::Polyline2D(pl) => {
-            if pl.flags.is_closed() {
-                return Err("引导线多段线不能闭合".into());
-            }
             Ok(pl
                 .vertices
                 .iter()
@@ -327,7 +323,8 @@ fn guide_geom_points(
     }
 }
 
-/// 引导几何形态：line（LINE）/ pline（LWPOLYLINE / Polyline / Polyline2D）。
+/// 引导几何形态：line（LINE）/ pline（LWPOLYLINE / Polyline / Polyline2D）/
+/// circle（CIRCLE）/ rect（闭合 4 顶点无 bulge 的 PLINE，矩形引导）。
 fn guide_geom_kind(
     doc: &acadrust::CadDocument,
     handle: acadrust::Handle,
@@ -335,9 +332,18 @@ fn guide_geom_kind(
     let e = doc.get_entity(handle).ok_or("找不到引导线实体")?;
     match e {
         acadrust::EntityType::Line(_) => Ok("line"),
-        acadrust::EntityType::LwPolyline(_)
-        | acadrust::EntityType::Polyline(_)
-        | acadrust::EntityType::Polyline2D(_) => Ok("pline"),
+        acadrust::EntityType::Circle(_) => Ok("circle"),
+        acadrust::EntityType::LwPolyline(pl) => {
+            if pl.is_closed
+                && pl.vertices.len() == 4
+                && pl.vertices.iter().all(|v| v.bulge.abs() < 1e-9)
+            {
+                Ok("rect")
+            } else {
+                Ok("pline")
+            }
+        }
+        acadrust::EntityType::Polyline(_) | acadrust::EntityType::Polyline2D(_) => Ok("pline"),
         _ => Err("引导线必须是直线（LINE）或多段线（PLINE）".into()),
     }
 }
@@ -824,6 +830,7 @@ fn build_guide_radial_block(
     p2: [f64; 3],
     params: &GuideParams,
     style: &str,
+    coef: Option<f64>,
 ) -> Result<Dimension, String> {
     use acadrust::entities::{Line, MText};
     use acadrust::types::Vector3;
@@ -840,6 +847,8 @@ fn build_guide_radial_block(
     let dir = (rim - center) * (1.0 / radius);
     let diameter = params.guide_type == GuideType::Diameter;
     let measurement = if diameter { radius * 2.0 } else { radius };
+    // 局部放大图内：测量值 × 系数（真实尺寸）。
+    let measurement = measurement * coef.unwrap_or(1.0);
     let prefix = if diameter { "Ø" } else { "R" };
 
     // 图幅缩放 → 文字高/箭头尺寸。
@@ -1057,6 +1066,9 @@ fn build_dimension(
     params: &GuideParams,
     style: &str,
 ) -> Result<Dimension, String> {
+    // 局部放大图换算系数：标注起点落在 DETAIL 放大块内 → 测量值 × 1/(detail×frame)
+    // （放大图内标注显示真实尺寸；角度标注除外——angle 不走这里）。
+    let coef = detail_scale_at(doc, p1);
     let mut dim = match params.guide_type {
         GuideType::Linear => {
             let sub = params.sub.ok_or("线性标注缺少对齐子类型")?;
@@ -1064,13 +1076,14 @@ fn build_dimension(
         }
         // 直径/半径：匿名块形态（AutoCAD 画法，渲染走 walk_block）。
         GuideType::Diameter | GuideType::Radius => {
-            build_guide_radial_block(sender, doc, p1, p2, params, style)?
+            build_guide_radial_block(sender, doc, p1, p2, params, style, coef)?
         }
         GuideType::Datum => return Err("基准标注暂未实现".into()),
         GuideType::View => return Err("向视图标注暂未实现".into()),
         GuideType::Angle => return Err("角度标注走 do_apply 独立分支".into()),
         GuideType::Section => return Err("剖切符号走 do_apply 独立分支".into()),
         GuideType::Tolerance => return Err("形位公差走 do_apply 独立分支".into()),
+        GuideType::Detail => return Err("局部放大图走 do_apply 独立分支".into()),
     };
     // 用户指定小数位数：覆盖 XDATA DSTYLE 里的 DIMDEC(271)（默认样式 4）。
     if let Some(d) = params.dec {
@@ -1084,13 +1097,21 @@ fn build_dimension(
         // 文字 override（dimtext）：默认 <>（测量值占位），用户 text 覆盖
         //（含 %%c 直径符号、中文等）。文字模板：||| = 公差位置、\X = 换行、
         // [@] = 英制换算（25.4 → [1" ]），OCS 渲染时替换 <>、解析 %%c。
-        let text_part = match &params.text {
+        let mut text_part = match &params.text {
             Some(t) if !t.is_empty() => t.clone(),
             _ => "<>".to_string(),
         };
+        // 放大图内标注：把 <> 替换成真实尺寸数值（测量 × 系数），宿主不再重算。
+        if let Some(c) = coef {
+            let value = format_measurement(
+                dim.base().actual_measurement * c,
+                params.dec.unwrap_or(2),
+            );
+            text_part = text_part.replace("<>", &value);
+        }
         // 公差（dimtext）：fit 代号模式 → 配合代号堆叠（H7 上 g6 下）；
         // up/dn 手输 → 极限偏差堆叠。
-        let m = dim.base().actual_measurement;
+        let m = dim.base().actual_measurement * coef.unwrap_or(1.0);
         let tol_seg: Option<String> = if let Some(fit) = &params.fit {
             if fit.is_empty() { None } else { Some(tol_code_for_fit(fit)) }
         } else if let (Some(up), Some(dn)) = (&params.up, &params.dn) {
@@ -1392,6 +1413,346 @@ fn apply_section(
         "show_arrow": params.show_arrow,
     })
     .to_string())
+}
+
+// ── 局部放大图（DETAIL） ──────────────────────────────────────────────────
+
+/// 局部放大图引导形状（世界坐标）。
+#[derive(Debug, Clone, Copy)]
+enum GuideShape {
+    Circle {
+        center: (f64, f64),
+        radius: f64,
+    },
+    Rect {
+        center: (f64, f64),
+        half: (f64, f64),
+    },
+}
+
+impl GuideShape {
+    /// 引出线起点（右上 45° 方向，圆上 / 矩形右上角外）。
+    fn lead_origin(&self) -> (f64, f64) {
+        let r = std::f64::consts::FRAC_1_SQRT_2;
+        match self {
+            GuideShape::Circle { center, radius } => {
+                (center.0 + r * radius, center.1 + r * radius)
+            }
+            GuideShape::Rect { center, half } => (center.0 + half.0, center.1 + half.1),
+        }
+    }
+    /// 框顶（块局部坐标 y，放大后）。
+    fn box_top(&self, k: f64, frame: f64) -> f64 {
+        match self {
+            GuideShape::Circle { radius, .. } => radius * k + 6.0 * frame,
+            GuideShape::Rect { half, .. } => half.1 * k + 6.0 * frame,
+        }
+    }
+}
+
+/// 从引导实体读取裁剪窗口与形状：圆（CIRCLE）或闭合 4 顶点无 bulge 矩形（PLINE）。
+fn guide_geom_win(
+    doc: &acadrust::CadDocument,
+    handle: acadrust::Handle,
+) -> Result<(crate::detail_clip::Win, GuideShape), String> {
+    use acadrust::EntityType as E;
+    let e = doc.get_entity(handle).ok_or("找不到引导实体")?;
+    match e {
+        E::Circle(c) => {
+            let center = (c.center.x, c.center.y);
+            Ok((
+                crate::detail_clip::Win::Circle { center, radius: c.radius },
+                GuideShape::Circle { center, radius: c.radius },
+            ))
+        }
+        E::LwPolyline(pl) => rect_win_pts(
+            &pl.vertices.iter().map(|v| (v.location.x, v.location.y)).collect::<Vec<_>>(),
+            pl.is_closed,
+        ),
+        E::Polyline2D(pl) => rect_win_pts(
+            &pl.vertices.iter().map(|v| (v.location.x, v.location.y)).collect::<Vec<_>>(),
+            pl.flags.is_closed(),
+        ),
+        _ => Err("局部放大图引导必须是圆（CIRCLE）或闭合 4 顶点矩形（PLINE）".into()),
+    }
+}
+
+fn rect_win_pts(pts: &[(f64, f64)], closed: bool) -> Result<(crate::detail_clip::Win, GuideShape), String> {
+    if !closed || pts.len() != 4 {
+        return Err("局部放大图矩形引导必须是闭合 4 顶点多段线（RECTANG 产物）".into());
+    }
+    let x0 = pts.iter().map(|p| p.0).fold(f64::INFINITY, f64::min);
+    let x1 = pts.iter().map(|p| p.0).fold(f64::NEG_INFINITY, f64::max);
+    let y0 = pts.iter().map(|p| p.1).fold(f64::INFINITY, f64::min);
+    let y1 = pts.iter().map(|p| p.1).fold(f64::NEG_INFINITY, f64::max);
+    let center = ((x0 + x1) * 0.5, (y0 + y1) * 0.5);
+    let half = ((x1 - x0) * 0.5, (y1 - y0) * 0.5);
+    Ok((
+        crate::detail_clip::Win::Rect { min: (x0, y0), max: (x1, y1) },
+        GuideShape::Rect { center, half },
+    ))
+}
+
+/// 罗马数字（Ⅰ..Ⅻ）。
+const ROMANS: [&str; 12] = [
+    "Ⅰ", "Ⅱ", "Ⅲ", "Ⅳ", "Ⅴ", "Ⅵ", "Ⅶ", "Ⅷ", "Ⅸ", "Ⅹ", "Ⅺ", "Ⅻ",
+];
+
+/// 单字符罗马数字 → 数值。
+fn roman_numeral_value(s: &str) -> Option<usize> {
+    let mut chars = s.trim().chars();
+    let c = chars.next()?;
+    if chars.next().is_some() {
+        return None;
+    }
+    ROMANS.iter().position(|r| r.chars().next() == Some(c)).map(|i| i + 1)
+}
+
+/// 自动序号：图纸已有 Ⅰ..Ⅻ（块外 MTEXT）最大值 + 1。
+fn next_detail_no(doc: &acadrust::CadDocument) -> Result<String, String> {
+    use acadrust::EntityType as E;
+    let mut max = 0usize;
+    for e in doc.entities() {
+        if let E::MText(m) = e {
+            if let Some(v) = roman_numeral_value(&m.value) {
+                max = max.max(v);
+            }
+        }
+    }
+    if max >= ROMANS.len() {
+        return Err(format!(
+            "图纸已有 {} 个局部放大图（Ⅰ~Ⅻ），请在 GUI 手动指定序号",
+            max
+        ));
+    }
+    Ok(ROMANS[max].to_string())
+}
+
+/// 局部放大图（DETAIL）：引导 = 圆（CIRCLE）或闭合 4 顶点矩形（RECTANG 产物）。
+///
+/// 对照 OCSMDIMGULIDE/局部放大/局部放大图.dxf：
+/// - 引导形状保留原位，移入 8符号标注层 色31（表示放大区域）。
+/// - 抽出 5 层（+层 0）中引导窗口内的实体，超界部分**裁剪**，整体
+///   ×(绝对比例 × TF 图幅倍率) 后以匿名块粘贴在图纸其它位置（自动偏移可拖）。
+/// - 放大块 = 框线（色31，= 引导形状×系数）+ 内容（保留原图层）+ 顶部序号/比例。
+/// - 引导旁：引出折线（色31）+ 序号 MTEXT（色3）。
+/// - INSERT 挂 PE_URL（s/frame）供标注换算系数检测。
+fn apply_detail(
+    sender: &Arc<dyn PluginRequestSender>,
+    doc: &acadrust::CadDocument,
+    handle: acadrust::Handle,
+    params: &GuideParams,
+) -> Result<String, String> {
+    use acadrust::entities::{Circle, Insert, Line, LwPolyline, MText};
+    use acadrust::entities::AttachmentPoint;
+    use acadrust::types::{Color, Vector2, Vector3};
+    use acadrust::EntityType as E;
+    use crate::detail_clip::{clip_entity, CONTENT_LAYERS, Win};
+
+    let (win, shape) = guide_geom_win(doc, handle)?;
+    let origin = win.center();
+    let frame = frame_scale_at(doc, [origin.0, origin.1, 0.0]);
+    let detail = params.detail_scale.max(1e-6);
+    let k = detail * frame;
+
+    // 1) 内容：5 层 + 层 0 实体，窗口内裁剪并 ×k 变换。
+    let mut members: Vec<E> = Vec::new();
+    for e in doc.entities() {
+        let layer = e.common().layer.as_str();
+        if !(CONTENT_LAYERS.contains(&layer) || layer == "0") {
+            continue;
+        }
+        members.extend(clip_entity(&win, e, k, origin));
+    }
+
+    // 2) 序号（自动或手输）。
+    let no = match &params.detail_no {
+        Some(n) if !n.is_empty() => n.clone(),
+        _ => next_detail_no(doc)?,
+    };
+    let h = 5.0 * frame; // 文字高跟随 TF 图幅。
+
+    // 3) 放大块：内容 + 框线（色31）+ 顶部序号/比例（色3）。
+    let member_count = members.len();
+    let mut blk: Vec<E> = members;
+    match &shape {
+        GuideShape::Circle { .. } => {
+            let mut e = E::Circle(Circle::from_center_radius(Vector3::ZERO, win.circum_radius() * k));
+            set_member_layer(&mut e, "8符号标注层");
+            e.common_mut().color = Color::from_index(31);
+            blk.push(e);
+        }
+        GuideShape::Rect { half, .. } => {
+            let mut pl = LwPolyline::new();
+            for (sx, sy) in [(1.0, 1.0), (1.0, -1.0), (-1.0, -1.0), (-1.0, 1.0)] {
+                pl.add_point(Vector2::new(sx * half.0 * k, sy * half.1 * k));
+            }
+            pl.close();
+            let mut e = E::LwPolyline(pl);
+            set_member_layer(&mut e, "8符号标注层");
+            e.common_mut().color = Color::from_index(31);
+            blk.push(e);
+        }
+    }
+    // `Ⅰ` + 换行 + 带下划线的 `2:1`（\(\O\) 上划线码对照参考文件）。
+    let label = format!(
+        "{{\\H1x;{}}}{{\\P}}{{\\O\\H1x;{}:1}}",
+        no,
+        trim_scale(detail)
+    );
+    let mut lm = MText::new();
+    lm.value = label;
+    lm.insertion_point = Vector3::new(0.0, shape.box_top(k, frame), 0.0);
+    lm.height = h;
+    lm.rotation = 0.0;
+    lm.style = "OCSM_GB".into();
+    lm.attachment_point = AttachmentPoint::MiddleCenter;
+    let mut le = E::MText(lm);
+    set_member_layer(&mut le, "8符号标注层");
+    le.common_mut().color = Color::from_index(3);
+    blk.push(le);
+
+    // 4) 匿名块 *D{n}。
+    let mut max_n = 0u32;
+    for br in doc.block_records.iter() {
+        if let Some(rest) = br.name.strip_prefix("*D") {
+            if let Ok(n) = rest.parse::<u32>() {
+                max_n = max_n.max(n);
+            }
+        }
+    }
+    let block_name = format!("*D{}", max_n + 1);
+    req_timed(
+        sender,
+        PluginRequest::AddBlockRecord {
+            name: block_name.clone(),
+            entities: blk,
+        },
+        "AddBlockRecord",
+    )?;
+
+    // 5) INSERT：自动偏移（引导外接半径×5 向右，×frame）或指定点（相对引导中心）。
+    let r = win.circum_radius();
+    let (px, py) = params
+        .detail_pos
+        .unwrap_or((origin.0 + 5.0 * r * frame, origin.1));
+    let mut ins = E::Insert(Insert::new(block_name.clone(), v3([px, py, 0.0])));
+    set_member_layer(&mut ins, "8符号标注层");
+    // PE_URL 供标注系数检测（1/(s×frame)）。
+    let url = format!(
+        "http://127.0.0.1:0/DIM/DETAIL/0?s={}&frame={}",
+        trim_scale(detail),
+        trim_scale(frame)
+    );
+    ins.common_mut().extended_data.add_record(pe_url_record(&url));
+
+    // 6) 引导形状原位保留：移入 8符号标注层 + 色31（EditEntity 按 handle 替换）。
+    let mut guide = doc
+        .get_entity(handle)
+        .ok_or("找不到引导实体")?
+        .clone();
+    guide.common_mut().layer = "8符号标注层".to_string();
+    guide.common_mut().color = Color::from_index(31);
+
+    // 7) 引出折线 + 引导旁序号（世界坐标）。
+    let lead = 0.8 * r * frame;
+    let (p0x, p0y) = shape.lead_origin();
+    let (p1x, p1y) = (
+        p0x + std::f64::consts::FRAC_1_SQRT_2 * lead,
+        p0y + std::f64::consts::FRAC_1_SQRT_2 * lead,
+    );
+    let (p2x, p2y) = (p1x + 2.5 * frame, p1y);
+    let mk_line31 = |x1: f64, y1: f64, x2: f64, y2: f64| -> E {
+        let mut e = E::Line(Line::from_coords(x1, y1, 0.0, x2, y2, 0.0));
+        set_member_layer(&mut e, "8符号标注层");
+        e.common_mut().color = Color::from_index(31);
+        e
+    };
+    let mut nm = MText::new();
+    nm.value = format!("{{\\H1.0x;{}}}", no);
+    nm.insertion_point = Vector3::new(p1x + 1.3 * frame, p1y + 1.0 * frame, 0.0);
+    nm.height = h;
+    nm.rotation = 0.0;
+    nm.style = "OCSM_GB".into();
+    nm.attachment_point = AttachmentPoint::MiddleCenter;
+    let mut ne = E::MText(nm);
+    set_member_layer(&mut ne, "8符号标注层");
+    ne.common_mut().color = Color::from_index(3);
+
+    let (handle_s, _) = match req_timed(
+        sender,
+        PluginRequest::AddEntities(vec![
+            ins,
+            mk_line31(p0x, p0y, p1x, p1y),
+            mk_line31(p1x, p1y, p2x, p2y),
+            ne,
+        ]),
+        "AddEntities",
+    )? {
+        PluginResponse::Handles(hs) => (hs.first().copied(), hs.get(1).copied()),
+        _ => (None, None),
+    };
+
+    // 8) 引导形状移层改色（原位替换）。
+    req_timed(sender, PluginRequest::UpdateEntity(guide), "UpdateEntity")?;
+
+    Ok(serde_json::json!({
+        "ok": true,
+        "insert_handle": handle_s.map(fmt_handle),
+        "guide_handle": None::<String>,
+        "block": block_name,
+        "detail_scale": detail,
+        "frame": frame,
+        "no": no,
+        "geom": match shape { GuideShape::Circle { .. } => "circle", GuideShape::Rect { .. } => "rect" },
+        "members": member_count,
+    })
+    .to_string())
+}
+
+/// 起点所在 DETAIL 放大块换算系数：标注起点落在某放大块世界 AABB 内且该块
+/// 挂有 PE_URL（s/frame）→ 返回 1/(detail×frame)，否则 None。
+fn detail_scale_at(doc: &acadrust::CadDocument, pt: [f64; 3]) -> Option<f64> {
+    use acadrust::EntityType as E;
+    use crate::insert_world_aabb;
+    for e in doc.entities() {
+        let E::Insert(ins) = e else {
+            continue;
+        };
+        // PE_URL 记录（字符串值）。
+        let mut url = None;
+        for r in ins.common.extended_data.records() {
+            if r.application_name != "PE_URL" {
+                continue;
+            }
+            for v in &r.values {
+                if let acadrust::xdata::XDataValue::String(s) = v {
+                    url = Some(s.clone());
+                    break;
+                }
+            }
+            if url.is_some() {
+                break;
+            }
+        }
+        let Some(url) = url else {
+            continue;
+        };
+        let Some(p) = GuideParams::from_url(&url) else {
+            continue;
+        };
+        if p.guide_type != GuideType::Detail {
+            continue;
+        }
+        let Some((min, max)) = insert_world_aabb(doc, ins) else {
+            continue;
+        };
+        if pt[0] >= min.x && pt[0] <= max.x && pt[1] >= min.y && pt[1] <= max.y {
+            let f = (p.detail_scale * p.detail_frame).max(1e-9);
+            return Some(1.0 / f);
+        }
+    }
+    None
 }
 
 /// 形位公差框 FCF（Feature Control Frame，匿名块 + INSERT）：
@@ -2076,6 +2437,15 @@ fn do_apply(
 
     // 应用并刷新：生成真实标注 + 删引导线 + REGEN。
     let doc = snapshot(sender)?;
+
+    // 局部放大图：引导 = 圆（CIRCLE）或闭合 4 顶点矩形（PLINE），不删引导（改层保留）。
+    if params.guide_type == GuideType::Detail {
+        let out = apply_detail(sender, &doc, handle, &params)?;
+        req_timed(sender, PluginRequest::BumpGeometry, "BumpGeometry")?;
+        mark_dirty(sender)?;
+        return Ok(out);
+    }
+
     // 引导几何顶点：LINE→2 点；ANGLE 用两段 PLINE（3 顶点）。
     let pts = guide_geom_points(&doc, handle)?;
     if pts.len() < 2 {
@@ -2237,6 +2607,9 @@ fn api_guide(target: &str, sender: &Arc<dyn PluginRequestSender>) -> (u16, &'sta
                         })).collect::<Vec<_>>(),
                         "gdt_top": p.gdt_top,
                         "gdt_bot": p.gdt_bot,
+                        "detail_scale": p.detail_scale,
+                        "detail_no": p.detail_no,
+                        "detail_pos": p.detail_pos,
                     })),
                 });
                 (200, json, resp.to_string())
@@ -2874,7 +3247,9 @@ mod tests {
         let sender: std::sync::Arc<dyn PluginRequestSender> = inner.clone();
         let doc = inner.doc.lock().unwrap().clone();
         let pd = GuideParams { guide_type: GuideType::Linear, sub: Some(LinearSub::Aligned), dist: 10.0, text: None, tol: None, up: None, dn: None,
-            fit: None, sym: None, dec: Some(2), ver: crate::guide_url::DatumVersion::GB2008, letter: None, scale: None, flip: crate::guide_url::FlipDir::None, marker: None, angle_mode: crate::guide_url::AngleMode::Minor, section_side: crate::guide_url::SectionSide::Right, show_arrow: true, gdt_sym: None, gdt_dia: false, gdt_tol: None, gdt_d1: None, gdt_d2: None, gdt_d3: None, gdt_rows: Vec::new(), gdt_top: None, gdt_bot: None };
+            fit: None, sym: None, dec: Some(2), ver: crate::guide_url::DatumVersion::GB2008, letter: None, scale: None, flip: crate::guide_url::FlipDir::None, marker: None, angle_mode: crate::guide_url::AngleMode::Minor, section_side: crate::guide_url::SectionSide::Right, show_arrow: true, gdt_sym: None, gdt_dia: false, gdt_tol: None, gdt_d1: None, gdt_d2: None, gdt_d3: None, gdt_rows: Vec::new(), gdt_top: None, gdt_bot: None,
+            detail_scale: 2.0, detail_no: None, detail_pos: None,
+            detail_frame: 1.0,};
         let dim = build_dimension(&sender, &doc, [0.0, 0.0, 0.0], [40.0, 30.0, 0.0], &pd, "OCSM_GB").unwrap();
         let rec = dim.base().common.extended_data.get_record("ACAD").expect("ACAD XDATA 存在");
         let mut found = None;
@@ -2894,11 +3269,15 @@ mod tests {
         let sender: std::sync::Arc<dyn PluginRequestSender> = inner.clone();
         let doc = inner.doc.lock().unwrap().clone();
         let pd = GuideParams { guide_type: GuideType::Diameter, sub: None, dist: -9.0, text: None, tol: None, up: None, dn: None,
-            fit: None, sym: None, dec: None, ver: crate::guide_url::DatumVersion::GB2008, letter: None, scale: None, flip: crate::guide_url::FlipDir::None, marker: None, angle_mode: crate::guide_url::AngleMode::Minor, section_side: crate::guide_url::SectionSide::Right, show_arrow: true, gdt_sym: None, gdt_dia: false, gdt_tol: None, gdt_d1: None, gdt_d2: None, gdt_d3: None, gdt_rows: Vec::new(), gdt_top: None, gdt_bot: None };
+            fit: None, sym: None, dec: None, ver: crate::guide_url::DatumVersion::GB2008, letter: None, scale: None, flip: crate::guide_url::FlipDir::None, marker: None, angle_mode: crate::guide_url::AngleMode::Minor, section_side: crate::guide_url::SectionSide::Right, show_arrow: true, gdt_sym: None, gdt_dia: false, gdt_tol: None, gdt_d1: None, gdt_d2: None, gdt_d3: None, gdt_rows: Vec::new(), gdt_top: None, gdt_bot: None,
+            detail_scale: 2.0, detail_no: None, detail_pos: None,
+            detail_frame: 1.0,};
         // 直径走匿名块路径：mock 的 AddBlockRecord 返回 Ok → 成功。
         assert!(build_dimension(&sender, &doc, [0.0,0.0,0.0], [35.36,35.36,0.0], &pd, "OCSM_GB").is_ok());
         let pr = GuideParams { guide_type: GuideType::Radius, sub: None, dist: 11.0, text: None, tol: None, up: None, dn: None,
-            fit: None, sym: None, dec: None, ver: crate::guide_url::DatumVersion::GB2008, letter: None, scale: None, flip: crate::guide_url::FlipDir::None, marker: None, angle_mode: crate::guide_url::AngleMode::Minor, section_side: crate::guide_url::SectionSide::Right, show_arrow: true, gdt_sym: None, gdt_dia: false, gdt_tol: None, gdt_d1: None, gdt_d2: None, gdt_d3: None, gdt_rows: Vec::new(), gdt_top: None, gdt_bot: None };
+            fit: None, sym: None, dec: None, ver: crate::guide_url::DatumVersion::GB2008, letter: None, scale: None, flip: crate::guide_url::FlipDir::None, marker: None, angle_mode: crate::guide_url::AngleMode::Minor, section_side: crate::guide_url::SectionSide::Right, show_arrow: true, gdt_sym: None, gdt_dia: false, gdt_tol: None, gdt_d1: None, gdt_d2: None, gdt_d3: None, gdt_rows: Vec::new(), gdt_top: None, gdt_bot: None,
+            detail_scale: 2.0, detail_no: None, detail_pos: None,
+            detail_frame: 1.0,};
         assert!(build_dimension(&sender, &doc, [0.0,0.0,0.0], [35.36,35.36,0.0], &pr, "OCSM_GB").is_ok());
     }
 
@@ -2928,7 +3307,8 @@ mod tests {
             show_arrow: true,
 
                     gdt_sym: None, gdt_dia: false, gdt_tol: None, gdt_d1: None, gdt_d2: None, gdt_d3: None, gdt_rows: Vec::new(), gdt_top: None, gdt_bot: None,
-        };
+            detail_scale: 2.0, detail_no: None, detail_pos: None,
+            detail_frame: 1.0,};
         // "%%c<>" 是默认（GUI 注入一次）→ 不设 user_text（块 TEXT 已用自动值）。
         let dim = build_dimension(&sender, &doc, [0.0, 0.0, 0.0], [35.36, 35.36, 0.0], &pd, "OCSM_GB").unwrap();
         assert!(dim.base().user_text.is_none());
@@ -2970,7 +3350,8 @@ mod tests {
             show_arrow: true,
 
                     gdt_sym: None, gdt_dia: false, gdt_tol: None, gdt_d1: None, gdt_d2: None, gdt_d3: None, gdt_rows: Vec::new(), gdt_top: None, gdt_bot: None,
-        };
+            detail_scale: 2.0, detail_no: None, detail_pos: None,
+            detail_frame: 1.0,};
         let dim = build_dimension(&sender, &doc, [0.0, 0.0, 0.0], [100.0, 0.0, 0.0], &pd, "OCSM_GB").unwrap();
         assert_eq!(
             dim.base().text,
@@ -3029,7 +3410,8 @@ mod tests {
             show_arrow: true,
 
                     gdt_sym: None, gdt_dia: false, gdt_tol: None, gdt_d1: None, gdt_d2: None, gdt_d3: None, gdt_rows: Vec::new(), gdt_top: None, gdt_bot: None,
-        };
+            detail_scale: 2.0, detail_no: None, detail_pos: None,
+            detail_frame: 1.0,};
         let dim = build_dimension(&sender, &doc, [0.0, 0.0, 0.0], [25.0, 0.0, 0.0], &pd, "OCSM_GB").unwrap();
         assert_eq!(
             dim.base().text,
@@ -3065,7 +3447,8 @@ mod tests {
             show_arrow: true,
 
                     gdt_sym: None, gdt_dia: false, gdt_tol: None, gdt_d1: None, gdt_d2: None, gdt_d3: None, gdt_rows: Vec::new(), gdt_top: None, gdt_bot: None,
-        };
+            detail_scale: 2.0, detail_no: None, detail_pos: None,
+            detail_frame: 1.0,};
         let dim = build_dimension(&sender, &doc, [0.0, 0.0, 0.0], [25.0, 0.0, 0.0], &pd, "OCSM_GB").unwrap();
         let t = dim.base().text.clone();
         assert!(t.contains("%%c<>,通"), "应保留 %%c 与中文, got {t}");
@@ -3104,7 +3487,8 @@ mod tests {
             show_arrow: true,
 
                     gdt_sym: None, gdt_dia: false, gdt_tol: None, gdt_d1: None, gdt_d2: None, gdt_d3: None, gdt_rows: Vec::new(), gdt_top: None, gdt_bot: None,
-        };
+            detail_scale: 2.0, detail_no: None, detail_pos: None,
+            detail_frame: 1.0,};
         // fit 代号模式 → 配合代号堆叠（对照示例 `{\C3;\SH7/g6;}`：绿色、斜杠分数）。
         let dim = build_dimension(&sender, &doc, [0.0, 0.0, 0.0], [25.0, 0.0, 0.0], &pd, "OCSM_GB").unwrap();
         assert_eq!(
@@ -3143,7 +3527,8 @@ mod tests {
             show_arrow: true,
 
                     gdt_sym: None, gdt_dia: false, gdt_tol: None, gdt_d1: None, gdt_d2: None, gdt_d3: None, gdt_rows: Vec::new(), gdt_top: None, gdt_bot: None,
-        };
+            detail_scale: 2.0, detail_no: None, detail_pos: None,
+            detail_frame: 1.0,};
         let inner = std::sync::Arc::new(MockSender::new(acadrust::CadDocument::new()));
         let sender: std::sync::Arc<dyn PluginRequestSender> = inner.clone();
         let doc = inner.doc.lock().unwrap().clone();
@@ -3220,6 +3605,16 @@ impl PluginRequestSender for MockSender {
             }
             R::RemoveEntity { handle } => {
                 self.doc.lock().unwrap().remove_entity(handle);
+                Ok(P::Ok)
+            }
+            R::UpdateEntity(e) => {
+                let mut doc = self.doc.lock().unwrap();
+                let h = e.common().handle;
+                if h != acadrust::Handle::NULL {
+                    if let Some(t) = doc.get_entity_mut(h) {
+                        *t = e;
+                    }
+                }
                 Ok(P::Ok)
             }
             R::AddBlockRecord { name, entities } => {
@@ -3560,7 +3955,273 @@ mod integration {
         let pts2 = guide_geom_points(&doc, h2).unwrap();
         assert_eq!(pts2.len(), 2);
     }
+
+    // ── 局部放大图 DETAIL ─────────────────────────────────────────
+
+    /// 参考文件几何复刻：中心线十字 + r10/r20 圆（层 0）+ 引导圆，2:1 放大。
+    /// 断言与 局部放大图.dxf 逐项吻合（中心线截断 74.5、r20→ARC 233°、框 r101.96、
+    /// Ⅰ/2:1 文本、INSERT 自动偏移、PE_URL、引导移层色31、引出线）。
+    #[test]
+    fn apply_detail_circle_guide_matches_reference() {
+        use acadrust::entities::{Circle, Line, LwPolyline, MText};
+        use acadrust::types::{Color, Vector3};
+        use acadrust::EntityType as E;
+
+        let mut doc = acadrust::CadDocument::new();
+        // 原图：中心线十字（3中心线层）+ 同心圆 r10/r20（层 0）@ (425.4,500.7)。
+        let mk_center_line = |p1: (f64, f64), p2: (f64, f64)| -> E {
+            let mut l = E::Line(Line::from_coords(p1.0, p1.1, 0.0, p2.0, p2.1, 0.0));
+            l.common_mut().layer = "3中心线层".into();
+            l
+        };
+        let _ = doc.add_entity(mk_center_line((425.4, 477.7), (425.4, 523.7)));
+        let _ = doc.add_entity(mk_center_line((402.4, 500.7), (448.4, 500.7)));
+        for r in [10.0, 20.0] {
+            let mut c = E::Circle(Circle::from_center_radius(Vector3::new(425.4, 500.7, 0.0), r));
+            c.common_mut().layer = "0".into();
+            let _ = doc.add_entity(c);
+        }
+        // 引导圆（10引导线层）@ (402.1,531.8) r=50.98。
+        let mut g = E::Circle(Circle::from_center_radius(Vector3::new(402.102047399923, 531.8052456139759, 0.0), 50.98234168254744));
+        g.common_mut().layer = "10引导线层".into();
+        let gh = doc.add_entity(g).unwrap();
+
+        let inner = std::sync::Arc::new(MockSender::new(doc));
+        let sender: std::sync::Arc<dyn PluginRequestSender> = inner.clone();
+        let doc = inner.doc.lock().unwrap().clone();
+        let mut p = GuideParams::linear(LinearSub::Aligned, 0.0);
+        p.guide_type = GuideType::Detail;
+        p.detail_scale = 2.0;
+        let out = apply_detail(&sender, &doc, gh, &p).unwrap();
+        let j: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(j["ok"], true);
+        assert_eq!(j["no"], "Ⅰ"); // 空图纸 → 自动 Ⅰ
+        assert_eq!(j["geom"], "circle");
+        assert!((j["detail_scale"].as_f64().unwrap() - 2.0).abs() < 1e-9);
+        assert!((j["frame"].as_f64().unwrap() - 1.0).abs() < 1e-9);
+
+        let ents = inner.block_entities("*D1");
+        // 内容：中心线×2（截断）+ ARC×1 + CIRCLE×1；框 CIRCLE×1 色31；MTEXT×1。
+        let lines: Vec<_> = ents.iter().filter(|e| matches!(e, E::Line(_))).collect();
+        let arcs: Vec<_> = ents.iter().filter(|e| matches!(e, E::Arc(_))).collect();
+        let circles: Vec<_> = ents.iter().filter(|e| matches!(e, E::Circle(_))).collect();
+        let mts: Vec<_> = ents.iter().filter(|e| matches!(e, E::MText(_))).collect();
+        assert_eq!(lines.len(), 2, "中心线应裁出 2 段（参考 BLK_2 两条 LINE）");
+        assert_eq!(arcs.len(), 1, "r20 圆部分超界 → 1 条 ARC（参考 BLK_2）");
+        assert_eq!(circles.len(), 2, "r10 全内 → CIRCLE(r20) + 框 CIRCLE(r101.96)");
+        // 参考 BLK_2：竖线截断 74.5、横线截断 80.2（各自由引导圆决定的弦长）。
+        let mut lens: Vec<f64> = lines
+            .iter()
+            .map(|e| match e {
+                E::Line(l) => ((l.end.x - l.start.x).powi(2) + (l.end.y - l.start.y).powi(2)).sqrt(),
+                _ => 0.0,
+            })
+            .collect();
+        lens.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        assert!((lens[0] - 74.49).abs() < 0.3, "竖线截断 {:.2} 应≈74.5 {lens:?}", lens[0]);
+        assert!((lens[1] - 80.19).abs() < 0.3, "横线截断 {:.2} 应≈80.2 {lens:?}", lens[1]);
+        if let E::Arc(a) = &arcs[0] {
+            assert!((a.radius - 40.0).abs() < 1e-6, "r20×2=40");
+            let span = crate::detail_clip::norm_angle(a.end_angle - a.start_angle);
+            // 参考：10.486°→243.207° span=232.72°=4.0617 rad（含被引导圆裁剪的两交点误差±0.2）
+            assert!((span - 4.07).abs() < 0.25, "span={span}");
+        }
+        // 框 = 大圆 r=101.96 色31。
+        let big = circles.iter().find(|e| matches!(e, E::Circle(c) if c.radius > 100.0));
+        assert!(big.is_some(), "应有框圆 r=101.96");
+        if let Some(E::Circle(c)) = big {
+            assert!((c.radius - 101.96).abs() < 0.01);
+            assert!(matches!(c.common.color, Color::Index(31)), "框色 31");
+            assert_eq!(c.common.layer, "8符号标注层");
+        }
+        let m = mts[0];
+        if let E::MText(m) = m {
+            assert!(m.value.contains("Ⅰ"), "块内序号");
+            assert!(m.value.contains("2:1"), "块内比例");
+        }
+
+        // 模型空间：INSERT(*D1) @ 自动偏移 + PE_URL；引导圆移层色31；引出线×2 + 序号。
+        let d2 = inner.doc.lock().unwrap().clone();
+        let mut ins = None;
+        let mut guide_now = None;
+        let mut lead = 0;
+        let mut no_mt = 0;
+        for e in d2.entities() {
+            match e {
+                E::Insert(i) => ins = Some(i.clone()),
+                E::Circle(c) if (c.center.x - 402.102).abs() < 1e-3 => guide_now = Some(c.clone()),
+                E::Line(l) if l.common.layer == "8符号标注层" => lead += 1,
+                E::MText(t) if t.value.contains("Ⅰ") => no_mt += 1,
+                _ => {}
+            }
+        }
+        let ins = ins.expect("应有 INSERT");
+        assert_eq!(ins.block_name, "*D1");
+        assert_eq!(ins.common.layer, "8符号标注层");
+        // 自动偏移 = 引导中心 + (5×r, 0) = (657.0, 531.8)。
+        assert!((ins.insert_point.x - 657.013).abs() < 0.5, "x={}", ins.insert_point.x);
+        assert!((ins.insert_point.y - 531.805).abs() < 0.5);
+        let url = ins.common.extended_data.records().iter().find_map(|r| {
+            (r.application_name == "PE_URL").then(|| {
+                r.values.iter().find_map(|v| match v {
+                    acadrust::xdata::XDataValue::String(s) => Some(s.clone()),
+                    _ => None,
+                })
+            })?
+        });
+        let url = url.expect("INSERT 应有 PE_URL");
+        assert!(url.contains("DETAIL"), "{url}");
+        assert!(url.contains("s=2"), "{url}");
+        assert!(url.contains("frame=1"), "{url}");
+        // 引导圆已移入 8符号标注层 色31。
+        let g = guide_now.expect("引导圆应保留");
+        assert_eq!(g.common.layer, "8符号标注层");
+        assert!(matches!(g.common.color, Color::Index(31)));
+        // 引出线 2 条 + 块外序号 MTEXT（引导旁）。
+        assert_eq!(lead, 2);
+        assert!(no_mt >= 1);
+    }
+
+    /// 矩形引导（闭合 4v LWPOLYLINE）→ rect 几何 + 框为矩形。
+    #[test]
+    fn apply_detail_rect_guide() {
+        use acadrust::entities::{Circle, LwPolyline, MText};
+        use acadrust::types::{Color, Vector2, Vector3};
+        use acadrust::EntityType as E;
+        let mut doc = acadrust::CadDocument::new();
+        // 内容：一条 0 层直线穿过窗口。
+        let mut l = E::Line(acadrust::entities::Line::from_coords(0.0, 5.0, 0.0, 40.0, 5.0, 0.0));
+        l.common_mut().layer = "0".into();
+        let _ = doc.add_entity(l);
+        // 矩形引导（闭合 4v）：(0,0)-(40,0)-(40,20)-(0,20)。
+        let mut pl = LwPolyline::new();
+        for (x, y) in [(0.0, 0.0), (40.0, 0.0), (40.0, 20.0), (0.0, 20.0)] {
+            pl.add_point(Vector2::new(x, y));
+        }
+        pl.close();
+        let mut ge = E::LwPolyline(pl);
+        ge.common_mut().layer = "10引导线层".into();
+        let gh = doc.add_entity(ge).unwrap();
+        let inner = std::sync::Arc::new(MockSender::new(doc));
+        let sender: std::sync::Arc<dyn PluginRequestSender> = inner.clone();
+        let doc = inner.doc.lock().unwrap().clone();
+        let mut p = GuideParams::linear(LinearSub::Aligned, 0.0);
+        p.guide_type = GuideType::Detail;
+        p.detail_scale = 3.0;
+        p.detail_no = Some("Ⅱ".into());
+        let out = apply_detail(&sender, &doc, gh, &p).unwrap();
+        let j: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(j["geom"], "rect");
+        assert_eq!(j["no"], "Ⅱ");
+        let ents = inner.block_entities("*D1");
+        // 内容 LINE（x 5..20 → 窗口内 5..0? 不：窗口 x∈[0,40]，线 x 0..40 全内 → 整段 ×3 → 长 120）+ 矩形框 + 序号/比例。
+        let lines: Vec<_> = ents.iter().filter(|e| matches!(e, E::Line(_))).collect();
+        let plines: Vec<_> = ents.iter().filter(|e| matches!(e, E::LwPolyline(_))).collect();
+        let mts: Vec<_> = ents.iter().filter(|e| matches!(e, E::MText(_))).collect();
+        assert_eq!(lines.len(), 1);
+        assert_eq!(plines.len(), 1, "框 = 矩形 LWPOLYLINE");
+        assert_eq!(mts.len(), 1);
+        if let E::Line(l) = &lines[0] {
+            let len = ((l.end.x - l.start.x).powi(2) + (l.end.y - l.start.y).powi(2)).sqrt();
+            assert!((len - 120.0).abs() < 1e-6, "全内直线 ×3 = 120");
+            assert_eq!(l.common.layer, "0");
+        }
+        if let E::LwPolyline(pl) = &plines[0] {
+            assert!(pl.is_closed && pl.vertices.len() == 4);
+            assert!(matches!(pl.common.color, Color::Index(31)));
+        }
+        if let E::MText(m) = &mts[0] {
+            assert!(m.value.contains("Ⅱ"));
+            assert!(m.value.contains("3:1"));
+        }
+    }
+
+    /// 号码自动递增 + 已满报错。
+    #[test]
+    fn apply_detail_no_auto_increment_and_limit() {
+        use acadrust::entities::{Circle, MText};
+        use acadrust::types::Vector3;
+        use acadrust::EntityType as E;
+        let mut doc = acadrust::CadDocument::new();
+        // 已有 Ⅰ Ⅱ Ⅴ（块外 MTEXT）→ 自动 Ⅵ。
+        for no in ["Ⅰ", "Ⅱ", "Ⅴ"] {
+            let mut m = acadrust::entities::MText::new();
+            m.value = no.into();
+            m.insertion_point = Vector3::new(1.0, 1.0, 0.0);
+            let _ = doc.add_entity(E::MText(m));
+        }
+        let mut g = E::Circle(Circle::from_center_radius(Vector3::new(100.0, 100.0, 0.0), 10.0));
+        g.common_mut().layer = "10引导线层".into();
+        let gh = doc.add_entity(g).unwrap();
+        let inner = std::sync::Arc::new(MockSender::new(doc));
+        let sender: std::sync::Arc<dyn PluginRequestSender> = inner.clone();
+        let doc = inner.doc.lock().unwrap().clone();
+        let mut p = GuideParams::linear(LinearSub::Aligned, 0.0);
+        p.guide_type = GuideType::Detail;
+        let out = apply_detail(&sender, &doc, gh, &p).unwrap();
+        let j: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(j["no"], "Ⅵ");
+        // 超 Ⅻ → 报错。单独构造 12 个序号。
+        let mut doc2 = acadrust::CadDocument::new();
+        for no in ["Ⅰ","Ⅱ","Ⅲ","Ⅳ","Ⅴ","Ⅵ","Ⅶ","Ⅷ","Ⅸ","Ⅹ","Ⅺ","Ⅻ"] {
+            let mut m = acadrust::entities::MText::new();
+            m.value = no.into();
+            m.insertion_point = Vector3::new(1.0, 1.0, 0.0);
+            let _ = doc2.add_entity(E::MText(m));
+        }
+        let mut g2 = E::Circle(Circle::from_center_radius(Vector3::new(200.0, 200.0, 0.0), 10.0));
+        g2.common_mut().layer = "10引导线层".into();
+        let gh2 = doc2.add_entity(g2).unwrap();
+        let inner2 = std::sync::Arc::new(MockSender::new(doc2));
+        let sender2: std::sync::Arc<dyn PluginRequestSender> = inner2.clone();
+        let doc2b = inner2.doc.lock().unwrap().clone();
+        let mut p2 = GuideParams::linear(LinearSub::Aligned, 0.0);
+        p2.guide_type = GuideType::Detail;
+        assert!(apply_detail(&sender2, &doc2b, gh2, &p2).is_err(), "超 12 应报错");
+    }
+
+    /// 标注系数：起点在放大块 AABB 内 → 线性标注 dimtext = 真实尺寸；
+    /// 块外 → 不换算；角度不受影响（不经过 build_dimension）。
+    #[test]
+    fn build_dimension_detail_scale_factor() {
+        use acadrust::entities::{Circle, Insert, LwPolyline, MText};
+        use acadrust::types::{Color, Vector3};
+        use acadrust::EntityType as E;
+
+        let mut doc = acadrust::CadDocument::new();
+        // 放大块 *D1：内容长线（局部 0..100 的 0 层 LINE，块 AABB 取决于块实体）。
+        let mut bl = E::Line(acadrust::entities::Line::from_coords(0.0, 0.0, 0.0, 100.0, 0.0, 0.0));
+        bl.common_mut().layer = "0".into();
+        let mut br = acadrust::tables::BlockRecord::new("*D1");
+        let bh = doc.add_entity(bl).unwrap();
+        br.entity_handles.push(bh);
+        doc.block_records.add(br);
+        // INSERT @ (1000,0)，PE_URL s=2&frame=1 → 块内世界 = 1000..1100 × 0。
+        let mut ins = Insert::new("*D1", Vector3::new(1000.0, 0.0, 0.0));
+        let url = "http://127.0.0.1:0/DIM/DETAIL/0?s=2&frame=1";
+        ins.common.extended_data.add_record(pe_url_record(url));
+        let _ = doc.add_entity(E::Insert(ins));
+
+        // p1 在块内：(1050, 0)。
+        let coef = detail_scale_at(&doc, [1050.0, 0.0, 0.0]);
+        assert_eq!(coef, Some(0.5), "1/(2×1)");
+        let coef_out = detail_scale_at(&doc, [1500.0, 0.0, 0.0]);
+        assert_eq!(coef_out, None);
+
+        // 线性标注：p1 块内 → dimtext 不含 <>（真实值注入）。
+        let inner = std::sync::Arc::new(MockSender::new(doc));
+        let sender: std::sync::Arc<dyn PluginRequestSender> = inner.clone();
+        let doc2 = inner.doc.lock().unwrap().clone();
+        let mut pd = GuideParams::linear(LinearSub::Aligned, 0.0);
+        pd.text = None; // <> 占位
+        let dim = build_dimension(&sender, &doc2, [1050.0, 0.0, 0.0], [1100.0, 0.0, 0.0], &pd, "OCSM_GB")
+            .unwrap();
+        // 测量 50 × 0.5 = 25 → dimtext "25"。
+        assert_eq!(dim.base().text, "25", "块内标注应显示真实尺寸");
+        // 块外：text 不写（默认 = 宿主测量值 <>）。
+        let dim2 = build_dimension(&sender, &doc2, [1200.0, 0.0, 0.0], [1300.0, 0.0, 0.0], &pd, "OCSM_GB")
+            .unwrap();
+        assert_eq!(dim2.base().text, "");
+    }
 }
-
-
 

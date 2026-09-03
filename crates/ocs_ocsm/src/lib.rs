@@ -15,6 +15,7 @@
 //!   服务器把引导线替换为真实标注（7标注层 / OCSM_GB）并 REGEN。
 //! - `OCSMMCP`：确保标注更新服务器运行（独立 MCP 二进制经 TCP 桥接）。
 
+mod detail_clip;
 mod guide_server;
 mod guide_url;
 pub mod tolerance;
@@ -1410,7 +1411,7 @@ fn is_frame_insert(
 }
 
 /// Insert 的世界 AABB：块局部 AABB 四角经插入变换。
-fn insert_world_aabb(
+pub(crate) fn insert_world_aabb(
     doc: &acadrust::CadDocument,
     ins: &acadrust::entities::Insert,
 ) -> Option<(Vector3, Vector3)> {

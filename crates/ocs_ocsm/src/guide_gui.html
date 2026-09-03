@@ -123,7 +123,18 @@
         <button data-t="ANGLE">角度</button>
         <button data-t="SECTION">剖切</button>
         <button data-t="TOLERANCE">形位公差</button>
+        <button data-t="DETAIL">局部放大</button>
       </div>
+    </div>
+    <!-- 局部放大图：比例/序号/放置偏移（仅 circle/rect 引导） -->
+    <div class="row" id="row-detail" style="display:none; margin-top:8px; flex-wrap:wrap; align-items:center; gap:8px">
+      <span class="lbl">放大比例</span>
+      <input type="number" id="det-s" value="2" min="0.01" step="0.01" style="width:64px">
+      <span class="lbl">序号</span>
+      <input type="text" id="det-no" value="" placeholder="自动 Ⅰ Ⅱ…" style="width:90px">
+      <span class="lbl">放置 X/Y（留空自动）</span>
+      <input type="text" id="det-dx" value="" placeholder="自动" style="width:70px">
+      <input type="text" id="det-dy" value="" placeholder="自动" style="width:70px">
     </div>
     <div class="row" id="row-sub" style="margin-top:8px">
       <span class="lbl" id="sub-lbl">线性</span>
@@ -398,6 +409,25 @@
       minY = Math.min(minY, pp[pp.length-1].y - Math.abs(Uy)*L - Math.abs(Py)*W);
       minX = Math.min(minX, pp[pp.length-1].x - Math.abs(Ux)*L - Math.abs(Px)*W);
     }
+    // 局部放大图：引导形状 + 放大示意框（自动偏移/指定偏移）纳入包围盒。
+    if (type === 'DETAIL') {
+      let cx = (P1 ? P1.x : 0), cy = (P1 ? P1.y : 0), R = 0;
+      if (geom === 'circle' && P2) {
+        R = Math.hypot(P2.x-P1.x, P2.y-P1.y);
+      } else if (geom === 'rect' && PTS && PTS.length >= 4) {
+        const xs = PTS.map(p=>p.x), ys = PTS.map(p=>p.y);
+        cx = (Math.min(...xs)+Math.max(...xs))/2; cy = (Math.min(...ys)+Math.max(...ys))/2;
+        R = Math.hypot(Math.max(...xs)-Math.min(...xs), Math.max(...ys)-Math.min(...ys))/2;
+      }
+      const sVal = parseFloat(document.getElementById('det-s').value) || 2;
+      const dxv = document.getElementById('det-dx').value.trim();
+      const dyv = document.getElementById('det-dy').value.trim();
+      const ix = cx + (dxv !== '' ? (parseFloat(dxv)||0) : 5*R);
+      const iy = cy + (dyv !== '' ? (parseFloat(dyv)||0) : 0);
+      const ir = Math.max(R*sVal, 1e-6);
+      minX = Math.min(minX, cx-R, ix-ir); maxX = Math.max(maxX, cx+R, ix+ir);
+      minY = Math.min(minY, cy-R, iy-ir); maxY = Math.max(maxY, cy+R, iy+ir);
+    }
     let w = maxX - minX, h = maxY - minY;
     if (w < 1e-6) w = 1; if (h < 1e-6) h = 1;
     w *= 1.6; h *= 1.6;
@@ -435,7 +465,25 @@
     const angle = (type === 'ANGLE');
     const section = (type === 'SECTION');
     const gdt = (type === 'TOLERANCE');
+    const detail = (type === 'DETAIL');
     // 形位公差：隐藏通用 row-sub 与行内控件，改展专属 row-gdt（多行表格）。
+    document.getElementById('row-detail').style.display = detail ? '' : 'none';
+    if (detail) {
+      document.getElementById('row-sub').style.display = 'none';
+      document.getElementById('row-gdt').style.display = 'none';
+      document.getElementById('row-param').style.display = 'none';
+      document.getElementById('row-txt').style.display = 'none';
+      document.getElementById('row-tol').style.display = 'none';
+      document.getElementById('row-view').style.display = 'none';
+      document.getElementById('seg-side').style.display = 'none';
+      document.getElementById('seg-angle-mode').style.display = 'none';
+      document.getElementById('seg-section-side').style.display = 'none';
+      document.getElementById('seg-ver').style.display = 'none';
+      document.getElementById('seg-letter').style.display = 'none';
+      tolEnabled = false; document.getElementById('tol-enable').checked = false;
+      draw();
+      return;
+    }
     document.getElementById('row-sub').style.display = gdt ? 'none' : '';
     document.getElementById('row-gdt').style.display = gdt ? '' : 'none';
     if (gdt) {
@@ -483,11 +531,14 @@
   segBind('seg-sub', b => { sub = b.dataset.s; draw(); });
   segBind('seg-angle-mode', b => { angleMode = b.dataset.am; draw(); });
   // 按引导几何过滤类型按钮：LINE → 线性/直径/半径/基准/向视图；
-  // PLINE → 角度（≥3 顶点=两段）/剖切（≥2 顶点=单段）/形位公差（≥2）。
+  // PLINE → 角度（≥3 顶点=两段）/剖切（≥2 顶点=单段）/形位公差（≥2）；
+  // CIRCLE / 闭合矩形（RECTANG）→ 仅局部放大。
   const LINE_TYPES = ['LINEAR', 'DIAMETER', 'RADIUS', 'DATUM', 'VIEW'];
   function applyGeomFilter() {
     let allow;
-    if (geom === 'pline') {
+    if (geom === 'circle' || geom === 'rect') {
+      allow = ['DETAIL'];
+    } else if (geom === 'pline') {
       const nV = (PTS && PTS.length) || 0;
       allow = (nV >= 3) ? ['ANGLE', 'SECTION', 'TOLERANCE'] : ['SECTION', 'TOLERANCE'];
     } else {
@@ -931,6 +982,17 @@ const BS_FITS = [
       const my = document.getElementById('view-my').value.trim();
       if (mx !== '') qs.push('mx=' + mx);
       if (my !== '') qs.push('my=' + my);
+    } else if (type === 'DETAIL') {
+      // 局部放大图：放大比例（绝对）+ 序号（自动）+ 放置偏移（相对引导中心，留空自动）。
+      u += '/0';
+      const s = parseFloat(document.getElementById('det-s').value);
+      if (isFinite(s) && s > 0 && s !== 2) qs.push('s=' + s);
+      const no = document.getElementById('det-no').value.trim();
+      if (no) qs.push('no=' + encodeURIComponent(no));
+      const dx = document.getElementById('det-dx').value.trim();
+      const dy = document.getElementById('det-dy').value.trim();
+      if (dx !== '' && isFinite(parseFloat(dx))) qs.push('dx=' + parseFloat(dx));
+      if (dy !== '' && isFinite(parseFloat(dy))) qs.push('dy=' + parseFloat(dy));
     } else {
       const dist = parseFloat(document.getElementById('dist').value);
       if (!isFinite(dist)) throw new Error('距离无效');
@@ -1159,6 +1221,50 @@ const BS_FITS = [
         tp.textContent = scale; svg.appendChild(tp);
       }
       return; // 剖切分支结束
+    }
+
+    // ── 局部放大图预览：引导形状 + 放大示意框 + 序号/比例 ──
+    if (type === 'DETAIL') {
+      let cx = (P1 ? P1.x : 0), cy = (P1 ? P1.y : 0), R = 0;
+      // 引导形状（蓝色虚线）：圆 / 矩形。
+      if (geom === 'circle' && P2) {
+        R = Math.hypot(P2.x-P1.x, P2.y-P1.y);
+        const s0 = w2s(cx, cy);
+        svg.appendChild(el('circle', {cx:s0.x, cy:s0.y, r:R*cam.scale, fill:'none', stroke:'#2b6fe0', 'stroke-width':2.5, 'stroke-dasharray':'6 4'}));
+      } else if (geom === 'rect' && PTS && PTS.length >= 4) {
+        const xs = PTS.map(p=>p.x), ys = PTS.map(p=>p.y);
+        cx = (Math.min(...xs)+Math.max(...xs))/2; cy = (Math.min(...ys)+Math.max(...ys))/2;
+        R = Math.hypot(Math.max(...xs)-Math.min(...xs), Math.max(...ys)-Math.min(...ys))/2;
+        const pts = PTS.map(p => { const s = w2s(p.x, p.y); return `${s.x},${s.y}`; }).join(' ');
+        svg.appendChild(el('polygon', {points:pts, fill:'none', stroke:'#2b6fe0', 'stroke-width':2.5, 'stroke-dasharray':'6 4'}));
+      }
+      // 放大示意框（橙色虚线，位置 = 自动偏移或 dx/dy）。
+      const no = document.getElementById('det-no').value.trim() || 'Ⅰ';
+      const sVal = parseFloat(document.getElementById('det-s').value) || 2;
+      const dxv = document.getElementById('det-dx').value.trim();
+      const dyv = document.getElementById('det-dy').value.trim();
+      const ix = cx + (dxv !== '' ? (parseFloat(dxv)||0) : 5*R);
+      const iy = cy + (dyv !== '' ? (parseFloat(dyv)||0) : 0);
+      const ir = Math.max(R*sVal, 1e-6);
+      const st = w2s(ix, iy);
+      svg.appendChild(el('circle', {cx:st.x, cy:st.y, r:ir*cam.scale, fill:'none', stroke:'#e65100', 'stroke-width':2.5, 'stroke-dasharray':'5 4'}));
+      // 引出线示意 + 序号/比例。
+      if (geom === 'circle') {
+        const rq = Math.SQRT1_2 * R;
+        const p0 = w2s(cx + rq, cy + rq), p1 = w2s(cx + rq*1.9, cy + rq*1.9);
+        svg.appendChild(el('line', {x1:p0.x, y1:p0.y, x2:p1.x, y2:p1.y, stroke:'#e65100', 'stroke-width':2}));
+        const lt = w2s(cx + rq*1.9, cy + rq*1.9 + R*0.06);
+        const te = el('text', {x:lt.x, y:lt.y, 'text-anchor':'middle', 'dominant-baseline':'middle', 'font-size':Math.max(11, ir*cam.scale*0.16), fill:'#1a5f1a', 'font-weight':'bold'});
+        te.textContent = no; svg.appendChild(te);
+      }
+      // 放大框正上方序号 + 比例（示意）。
+      const lt2 = w2s(ix, iy + ir + Math.max(ir*0.12, 12/cam.scale));
+      const te2 = el('text', {x:lt2.x, y:lt2.y, 'text-anchor':'middle', 'dominant-baseline':'middle', 'font-size':Math.max(11, ir*cam.scale*0.16), fill:'#1a5f1a', 'font-weight':'bold'});
+      te2.textContent = no; svg.appendChild(te2);
+      const lp = w2s(ix, iy + ir - Math.max(ir*0.06, 6/cam.scale));
+      const tp = el('text', {x:lp.x, y:lp.y, 'text-anchor':'middle', 'dominant-baseline':'middle', 'font-size':Math.max(10, ir*cam.scale*0.12), fill:'#1a5f1a'});
+      tp.textContent = sVal + ':1'; svg.appendChild(tp);
+      return; // 局部放大分支结束
     }
 
     // ── 形位公差 FCF 预览：箭头 + 引线 + 方框；书写方向沿最后一段，多行垂直堆叠 ──
@@ -1496,6 +1602,15 @@ const BS_FITS = [
             const topInp = document.getElementById('gdt-top'); if (topInp) topInp.value = gdtTop;
             const botInp = document.getElementById('gdt-bot'); if (botInp) botInp.value = gdtBot;
             renderGdtTable(); renderGdtPicker(); syncGdtOn();
+          }
+          if (type === 'DETAIL') {
+            // 恢复局部放大：比例/序号/放置偏移。
+            if (typeof j.params.detail_scale === 'number') document.getElementById('det-s').value = j.params.detail_scale;
+            if (j.params.detail_no) document.getElementById('det-no').value = j.params.detail_no;
+            if (j.params.detail_pos) {
+              document.getElementById('det-dx').value = j.params.detail_pos[0];
+              document.getElementById('det-dy').value = j.params.detail_pos[1];
+            }
           }
         }
         applyGeomFilter();

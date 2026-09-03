@@ -27,6 +27,7 @@ pub enum GuideType {
     Angle,
     Section,
     Tolerance,
+    Detail,
 }
 
 impl GuideType {
@@ -40,6 +41,7 @@ impl GuideType {
             GuideType::Angle => "ANGLE",
             GuideType::Section => "SECTION",
             GuideType::Tolerance => "TOLERANCE",
+            GuideType::Detail => "DETAIL",
         }
     }
     fn from_str(s: &str) -> Option<Self> {
@@ -52,6 +54,7 @@ impl GuideType {
             "ANGLE" => Some(GuideType::Angle),
             "SECTION" | "SEC" => Some(GuideType::Section),
             "TOLERANCE" | "GDT" | "TOL" | "FTCF" => Some(GuideType::Tolerance),
+            "DETAIL" | "DET" | "放大" => Some(GuideType::Detail),
             _ => None,
         }
     }
@@ -280,6 +283,14 @@ pub struct GuideParams {
     pub gdt_top: Option<String>,
     /// 形位公差框下方注释（显示在 FCF 框 bottom 侧）。
     pub gdt_bot: Option<String>,
+    /// 局部放大图：放大比例（绝对比例，默认 2）。
+    pub detail_scale: f64,
+    /// 局部放大图：序号（罗马数字，空 = 自动编号）。
+    pub detail_no: Option<String>,
+    /// 局部放大图：放置点偏移（相对引导中心，缺省 = 自动偏移）。
+    pub detail_pos: Option<(f64, f64)>,
+    /// 局部放大图：生成时的 TF 图幅倍率（frame_scale_at 记录，标注系数用）。
+    pub detail_frame: f64,
 }
 
 /// 形位公差单行：符号 + ⌀ + 公差值 + 修饰符(ⓂⓁⓅⓈ) + 基准1/2/3。
@@ -355,6 +366,10 @@ impl GuideParams {
             gdt_rows: Vec::new(),
             gdt_top: None,
             gdt_bot: None,
+            detail_scale: 2.0,
+            detail_no: None,
+            detail_pos: None,
+            detail_frame: 1.0,
         }
     }
 
@@ -418,6 +433,10 @@ impl GuideParams {
         let mut gdt_rows: Vec<GdtRow> = Vec::new();
         let mut gdt_top = None;
         let mut gdt_bot = None;
+        let mut detail_scale = 2.0;
+        let mut detail_no = None;
+        let mut detail_pos = None;
+        let mut detail_frame = 1.0;
         for pair in query.split('&').filter(|s| !s.is_empty()) {
             let (k, v) = pair.split_once('=').unwrap_or((pair, ""));
             let v = percent_decode(v);
@@ -456,6 +475,18 @@ impl GuideParams {
                 }
                 "top" => gdt_top = (!v.is_empty()).then_some(v),
                 "bot" => gdt_bot = (!v.is_empty()).then_some(v),
+                "s" => detail_scale = v.parse::<f64>().ok().filter(|s| *s > 0.0).unwrap_or(2.0),
+                "no" => detail_no = (!v.is_empty()).then_some(v),
+                "frame" => detail_frame = v.parse::<f64>().ok().filter(|s| *s > 0.0).unwrap_or(1.0),
+                "dx" | "dy" => {
+                    let (mut dx, mut dy) = detail_pos.unwrap_or((f64::NAN, f64::NAN));
+                    if k == "dx" {
+                        dx = v.parse().ok()?;
+                    } else {
+                        dy = v.parse().ok()?;
+                    }
+                    detail_pos = Some((dx, dy));
+                }
                 _ => {}
             }
         }
@@ -488,6 +519,10 @@ impl GuideParams {
             gdt_rows,
             gdt_top,
             gdt_bot,
+            detail_scale,
+            detail_no,
+            detail_pos,
+            detail_frame,
         })
     }
 
@@ -650,6 +685,18 @@ impl GuideParams {
             if !b.is_empty() {
                 q.push(format!("bot={}", percent_encode(b)));
             }
+        }
+        if self.detail_scale != 2.0 {
+            q.push(format!("s={}", self.detail_scale));
+        }
+        if let Some(n) = &self.detail_no {
+            if !n.is_empty() {
+                q.push(format!("no={}", percent_encode(n)));
+            }
+        }
+        if let Some((dx, dy)) = self.detail_pos {
+            q.push(format!("dx={}", dx));
+            q.push(format!("dy={}", dy));
         }
         if !q.is_empty() {
             url.push('?');
