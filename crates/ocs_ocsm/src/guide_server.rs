@@ -1895,11 +1895,11 @@ fn apply_arclen(
     let arc_mid = arc_center + um * arc_r;
     let text_pos = arc_mid + um * h;
     let text_rot = (a.start_angle + a.end_angle) / 2.0 - std::f64::consts::PI / 2.0;
-    // 小圆弧 ⌒ 符号（参考：相对文字框左上角；用户反馈：距文字约 4 个半角数字宽
-    // 观感最佳）。换算为相对文字中心：− baseline×(0.5w + 4×0.59h) − um×0.5h。
+    // 小圆弧 ⌒ 符号：距文字约 2 个数字宽（用户二轮微调：4 → 2 字宽，贴靠）。
+    // 相对文字中心：− baseline×(0.5w + 2×0.59h) − um×0.5h。
     let baseline = Vector3::new(text_rot.cos(), text_rot.sin(), 0.0);
     let text_w = text_visible.chars().count() as f64 * 0.59 * h; // 文字宽估算（与直径块同惯例）
-    let sym_gap = 4.0 * 0.59 * h; // 符号中心距文字起点约 4 个数字宽
+    let sym_gap = 2.0 * 0.59 * h; // 符号中心距文字起点约 2 个数字宽
     let sym_center = text_pos - baseline * (text_w * 0.5 + sym_gap) - um * (h * 0.5);
     let sym_r = 2.6 * scale;
     let sym_dir_up = um.y.atan2(um.x);
@@ -4338,14 +4338,14 @@ mod integration {
             _ => None,
         });
         let sym = sym.expect("小弧符号");
-        // 小弧中心 = 文字中心 − baseline×(0.5w+4×0.59h) − um×0.5h。
+        // 小弧中心 = 文字中心 − baseline×(0.5w+2×0.59h) − um×0.5h。
         let w = 5.0 * 0.59 * 2.5; // "71.89" 5 字符
         let baseline = Vector3::new((mid - std::f64::consts::PI / 2.0).cos(), (mid - std::f64::consts::PI / 2.0).sin(), 0.0);
         let (ccx, ccy) = (76.10315450223098, 69.46285912943617);
         let arc_mid_g = (ccx + 74.18714345675 * mid.cos(), ccy + 74.18714345675 * mid.sin());
         let text_c = Vector3::new(arc_mid_g.0 + 2.5 * mid.cos(), arc_mid_g.1 + 2.5 * mid.sin(), 0.0);
         let expect_sym = text_c
-            - baseline * (w * 0.5 + 4.0 * 0.59 * 2.5)
+            - baseline * (w * 0.5 + 2.0 * 0.59 * 2.5)
             - Vector3::new(mid.cos(), mid.sin(), 0.0) * (2.5 * 0.5);
         // 块内坐标 = 全局 − 引导圆心。
         let expect_sym = expect_sym - Vector3::new(ccx, ccy, 0.0);
