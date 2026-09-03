@@ -1032,8 +1032,10 @@ const BS_FITS = [
       if (dash) attrs['stroke-dasharray'] = dash;
       return el('line', attrs);
     }
-    // 引导线
-    svg.appendChild(wline(P1.x, P1.y, P2.x, P2.y, 3.5, '#999', '8 5'));
+    // 引导线（DETAIL 圆引导：圆心→半径点的连线无意义，跳过只留端点标记）
+    if (!(type === 'DETAIL' && geom === 'circle')) {
+      svg.appendChild(wline(P1.x, P1.y, P2.x, P2.y, 3.5, '#999', '8 5'));
+    }
     // 端点
     for (const [p, name] of [[P1,'P1'],[P2,'P2']]) {
       const s = w2s(p.x, p.y);
