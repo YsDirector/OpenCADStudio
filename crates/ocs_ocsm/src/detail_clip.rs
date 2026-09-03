@@ -212,7 +212,9 @@ fn circle_circle_angles(
     }
     let h = h2.max(0.0).sqrt();
     let base = dy.atan2(dx);
-    let off = (x / d).clamp(-1.0, 1.0).acos();
+    // 沿圆心连线方向的投影 x 除**弧半径**才是夹角余弦（除以 d 是错的：
+    // 会把裁剪角放大，弧穿出窗口——用户 局部放大2.dxf 实测）。
+    let off = (x / ar).clamp(-1.0, 1.0).acos();
     let mut out = vec![norm_angle(base + off)];
     if h > 1e-9 {
         out.push(norm_angle(base - off));
@@ -1138,6 +1140,23 @@ mod tests {
         ));
         let out2 = clip_entity(&w, &el, 2.0, (0.0, 0.0));
         assert!(!out2.is_empty());
+    }
+
+    #[test]
+    fn circle_intersect_angle_uses_arc_radius_not_d() {
+        // 用户回归：局部放大2.dxf。原圆（相对引导中心）c=(89.68,-50.95) r=59.17，
+        // 引导圆 c=(0,0) r=67.49。正确交点角（引导圆内弧段边界）
+        // = base(150.38°) ± acos(x/r)：x=46.48 → off=38.26° → [112.12°,188.64°]。
+        // bug 版用 acos(x/d)=63.22° → [87.16°,213.60°]（弧穿出放大框）。
+        let hits = circle_circle_angles((89.68, -50.95), 59.17, (0.0, 0.0), 67.49);
+        assert_eq!(hits.len(), 2, "{hits:?}");
+        let deg = |a: f64| a * 180.0 / std::f64::consts::PI;
+        let a0 = deg(hits[0]);
+        let a1 = deg(hits[1]);
+        let lo = a0.min(a1);
+        let hi = a0.max(a1);
+        assert!((lo - 112.12).abs() < 0.3, "lo={lo}");
+        assert!((hi - 188.64).abs() < 0.3, "hi={hi}");
     }
 
     #[test]
