@@ -402,11 +402,24 @@ impl OcsmPlugin {
         };
         match &e {
             acadrust::EntityType::Line(_) => {}
+            // 局部放大图：圆（CIRCLE）或矩形（闭合 4 顶点无 bulge PLINE = RECTANG 产物）。
+            acadrust::EntityType::Circle(_) => {}
             acadrust::EntityType::LwPolyline(pl) if !pl.is_closed && pl.vertices.len() >= 2 => {}
+            acadrust::EntityType::LwPolyline(pl)
+                if pl.is_closed
+                    && pl.vertices.len() == 4
+                    && pl.vertices.iter().all(|v| v.bulge.abs() < 1e-9) => {}
             acadrust::EntityType::Polyline(pl) if !pl.flags.is_closed() && pl.vertices.len() >= 2 => {}
             acadrust::EntityType::Polyline2D(pl) if !pl.flags.is_closed() && pl.vertices.len() >= 2 => {}
+            // 矩形引导也可能以 heavy polyline 形式存在（DXF 读取路径转换）。
+            acadrust::EntityType::Polyline(pl)
+                if pl.flags.is_closed() && pl.vertices.len() == 4 => {}
+            acadrust::EntityType::Polyline2D(pl)
+                if pl.flags.is_closed()
+                    && pl.vertices.len() == 4
+                    && pl.vertices.iter().all(|v| v.bulge.abs() < 1e-9) => {}
             _ => {
-                host.push_error("OCSM: 引导线必须是直线（LINE）或多段线（PLINE，2 顶点以上）。");
+                host.push_error("OCSM: 引导线必须是直线（LINE）、多段线（PLINE，2 顶点以上）、圆（CIRCLE）或矩形（RECTANG）。");
                 return;
             }
         }
