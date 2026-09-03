@@ -1843,7 +1843,6 @@ fn apply_arclen(
     let scale = frame_scale_at(doc, [a.center.x, a.center.y, a.center.z]);
     let h = 2.5 * scale; // 文字高（DIMTXT）
     let asz = 2.5 * scale; // 箭头长（DIMASZ）
-    let gap = 1.0 * scale; // 文字与弧间隙（DIMGAP）
     let dist = params.dist;
     let d = dist.abs();
     let side_out = dist >= 0.0; // dist=0 → 尺寸弧与引导弧重合（外侧语义）
@@ -1890,12 +1889,17 @@ fn apply_arclen(
     // arrow_solid 的 away = 尖→尾方向 = 翼向的相反。
     let away0 = Vector3::new(a.start_angle.sin(), -a.start_angle.cos(), 0.0);
     let away1 = Vector3::new(-a.end_angle.sin(), a.end_angle.cos(), 0.0);
-    // 文字：对照示例 MTEXT（rotation = mid−90°、附着 TopLeft、位置=尺寸弧中点+um×1）
+    // 文字：中心锚点（MiddleCenter，宿主最可靠），文字中心在尺寸弧中点上方
+    // h（=DIMTXT）处：下缘距弧 = h−h/2 = 1.25×scale，保证不与弧线相交
+    //（TopLeft 锚点在弧上 1.0 时文字块向下展开会压弧——用户实测反馈）。
     let arc_mid = arc_center + um * arc_r;
-    let text_pos = arc_mid + um * gap;
+    let text_pos = arc_mid + um * h;
     let text_rot = (a.start_angle + a.end_angle) / 2.0 - std::f64::consts::PI / 2.0;
-    // 小圆弧 ⌒ 符号：文字锚点（左上角）左下方 8.42×scale（参考 308.7°→128.7°）。
-    let sym_center = text_pos + Vector3::new(-um.y, um.x, 0.0) * (8.42 * scale);
+    // 小圆弧 ⌒ 符号（参考：相对文字框左上角 = 基线反方向 8.42 + 上行 0.5h；
+    // 换算为相对文字中心：− baseline×(0.5w+8.42×scale) − um×0.5h）。
+    let baseline = Vector3::new(text_rot.cos(), text_rot.sin(), 0.0);
+    let text_w = text_visible.chars().count() as f64 * 0.59 * h; // 文字宽估算（与直径块同惯例）
+    let sym_center = text_pos - baseline * (text_w * 0.5 + 8.42 * scale) - um * (h * 0.5);
     let sym_r = 2.6 * scale;
     let sym_dir_up = um.y.atan2(um.x);
     let sym_start = crate::detail_clip::norm_angle(sym_dir_up + 3.0 * std::f64::consts::PI / 2.0);
@@ -1931,7 +1935,7 @@ fn apply_arclen(
         m.height = h;
         m.rotation = text_rot;
         m.style = "OCSM_GB".into();
-        m.attachment_point = AttachmentPoint::TopLeft; // 示例 71:8
+        m.attachment_point = AttachmentPoint::MiddleCenter; // 中心锚点：文字整体居弧上方
         let mut e = E::MText(m);
         set_member_layer(&mut e, "7标注层");
         e.common_mut().color = Color::from_index(3);
@@ -4266,6 +4270,9 @@ mod integration {
         assert_eq!(lines.len(), 2, "界线×2");
         assert_eq!(solids.len(), 2, "箭头×2");
         assert_eq!(mts.len(), 1);
+        // 弧中点方向（全局角，供小弧断言复用）。
+        let mid_deg = (4.71319417612647_f64 + 72.69617975791557_f64) / 2.0;
+        let mid = mid_deg.to_radians();
         // 尺寸弧：圆心=块原点、r=60.59+13.6=74.19、角度同引导。
         let dim_arc = arcs.iter().find_map(|e| match e {
             E::Arc(a) if a.radius > 70.0 => Some(a.clone()),
@@ -4299,19 +4306,18 @@ mod integration {
             assert_eq!(m.common.layer, "7标注层");
             assert!(matches!(m.common.color, Color::Index(3)), "文字应显式绿色");
             assert!(m.value.contains("71.89"), "{}", m.value);
-            let mid = (4.71319417612647_f64 + 72.69617975791557_f64) / 2.0;
-            let mid = mid.to_radians();
-            let expect_x = 74.18714345675 * mid.cos() + mid.cos();
-            let expect_y = 74.18714345675 * mid.sin() + mid.sin();
+            // 文字中心在尺寸弧中点上方 h=2.5（不与弧相交）。
+            let expect_x = 74.18714345675 * mid.cos() + 2.5 * mid.cos();
+            let expect_y = 74.18714345675 * mid.sin() + 2.5 * mid.sin();
             assert!((m.insertion_point.x - expect_x).abs() < 0.01, "x={} exp={}", m.insertion_point.x, expect_x);
             assert!((m.insertion_point.y - expect_y).abs() < 0.01);
-            // 旋转 = mid−90°（示例 −51.295°）、附着 TopLeft（示例 71:8）。
+            // 旋转 = mid−90°（示例 −51.295°）、附着 MiddleCenter（宿主可靠中心锚点）。
             assert!(
                 (m.rotation - (mid - std::f64::consts::PI / 2.0)).abs() < 1e-6,
                 "rot={}",
                 m.rotation
             );
-            assert!(matches!(m.attachment_point, AttachmentPoint::TopLeft));
+            assert!(matches!(m.attachment_point, AttachmentPoint::MiddleCenter));
             // 箭头翼（示例 SOLID）：尖=尺寸弧端点，翼在端点切线朝外方向。
             // 起点端 away = (sinα0,−cosα0)；终点端 away = (−sinα1,cosα1)。
             if let E::Solid(sl) = &solids[0] {
@@ -4331,6 +4337,22 @@ mod integration {
             _ => None,
         });
         let sym = sym.expect("小弧符号");
+        // 小弧中心 = 文字中心 − baseline×(0.5w+8.42) − um×0.5h。
+        let w = 5.0 * 0.59 * 2.5; // "71.89" 5 字符
+        let baseline = Vector3::new((mid - std::f64::consts::PI / 2.0).cos(), (mid - std::f64::consts::PI / 2.0).sin(), 0.0);
+        let (ccx, ccy) = (76.10315450223098, 69.46285912943617);
+        let arc_mid_g = (ccx + 74.18714345675 * mid.cos(), ccy + 74.18714345675 * mid.sin());
+        let text_c = Vector3::new(arc_mid_g.0 + 2.5 * mid.cos(), arc_mid_g.1 + 2.5 * mid.sin(), 0.0);
+        let expect_sym = text_c
+            - baseline * (w * 0.5 + 8.42)
+            - Vector3::new(mid.cos(), mid.sin(), 0.0) * (2.5 * 0.5);
+        // 块内坐标 = 全局 − 引导圆心。
+        let expect_sym = expect_sym - Vector3::new(ccx, ccy, 0.0);
+        assert!(
+            (sym.center.x - expect_sym.x).abs() < 0.05 && (sym.center.y - expect_sym.y).abs() < 0.05,
+            "sym=({:.3},{:.3}) exp=({:.3},{:.3})",
+            sym.center.x, sym.center.y, expect_sym.x, expect_sym.y
+        );
         assert!((sym.radius - 2.6).abs() < 1e-6);
         assert!(matches!(sym.common.color, Color::Index(3)));
         assert_eq!(sym.common.layer, "0");
