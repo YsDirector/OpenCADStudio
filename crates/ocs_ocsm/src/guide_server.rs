@@ -1441,11 +1441,11 @@ impl GuideShape {
             GuideShape::Rect { center, half } => (center.0 + half.0, center.1 + half.1),
         }
     }
-    /// 框顶（块局部坐标 y，放大后）。
+    /// 框顶（块局部坐标 y，放大后，文字中心再上移 4×frame 避让）。
     fn box_top(&self, k: f64, frame: f64) -> f64 {
         match self {
-            GuideShape::Circle { radius, .. } => radius * k + 6.0 * frame,
-            GuideShape::Rect { half, .. } => half.1 * k + 6.0 * frame,
+            GuideShape::Circle { radius, .. } => radius * k + 10.0 * frame,
+            GuideShape::Rect { half, .. } => half.1 * k + 10.0 * frame,
         }
     }
 }
@@ -1493,39 +1493,43 @@ fn rect_win_pts(pts: &[(f64, f64)], closed: bool) -> Result<(crate::detail_clip:
     ))
 }
 
-/// 罗马数字（Ⅰ..Ⅻ）。
-const ROMANS: [&str; 12] = [
+/// 局部放大图序号（ASCII 罗马式：I, II, III, IV … XII）。
+const ROMANS_ASCII: [&str; 12] = [
+    "I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX", "X", "XI", "XII",
+];
+
+/// 兼容旧版 Unicode 罗马数字（Ⅰ..Ⅻ）。
+const ROMANS_UNICODE: [&str; 12] = [
     "Ⅰ", "Ⅱ", "Ⅲ", "Ⅳ", "Ⅴ", "Ⅵ", "Ⅶ", "Ⅷ", "Ⅸ", "Ⅹ", "Ⅺ", "Ⅻ",
 ];
 
-/// 单字符罗马数字 → 数值。
-fn roman_numeral_value(s: &str) -> Option<usize> {
-    let mut chars = s.trim().chars();
-    let c = chars.next()?;
-    if chars.next().is_some() {
-        return None;
+/// 匹配 ASCII（I..XII）或 Unicode（Ⅰ..Ⅻ）序号 → 数值。
+fn detail_no_value(s: &str) -> Option<usize> {
+    let t = s.trim();
+    if let Some(i) = ROMANS_ASCII.iter().position(|r| *r == t) {
+        return Some(i + 1);
     }
-    ROMANS.iter().position(|r| r.chars().next() == Some(c)).map(|i| i + 1)
+    ROMANS_UNICODE.iter().position(|r| *r == t).map(|i| i + 1)
 }
 
-/// 自动序号：图纸已有 Ⅰ..Ⅻ（块外 MTEXT）最大值 + 1。
+/// 自动序号：图纸已有 I..XII / Ⅰ..Ⅻ（块外 MTEXT）最大值 + 1。
 fn next_detail_no(doc: &acadrust::CadDocument) -> Result<String, String> {
     use acadrust::EntityType as E;
     let mut max = 0usize;
     for e in doc.entities() {
         if let E::MText(m) = e {
-            if let Some(v) = roman_numeral_value(&m.value) {
+            if let Some(v) = detail_no_value(&m.value) {
                 max = max.max(v);
             }
         }
     }
-    if max >= ROMANS.len() {
+    if max >= ROMANS_ASCII.len() {
         return Err(format!(
-            "图纸已有 {} 个局部放大图（Ⅰ~Ⅻ），请在 GUI 手动指定序号",
+            "图纸已有 {} 个局部放大图（I~XII），请在 GUI 手动指定序号",
             max
         ));
     }
-    Ok(ROMANS[max].to_string())
+    Ok(ROMANS_ASCII[max].to_string())
 }
 
 /// 局部放大图（DETAIL）：引导 = 圆（CIRCLE）或闭合 4 顶点矩形（RECTANG 产物）。
@@ -1612,7 +1616,7 @@ fn apply_detail(
     le.common_mut().color = Color::from_index(3);
     blk.push(le);
 
-    // 4) 匿名块 *D{n}。
+    // 4) 匿名块：*D{n+1} = 放大块；*D{n+2} = 原位标记块（引导形状 + 引出线 + 序号）。
     let mut max_n = 0u32;
     for br in doc.block_records.iter() {
         if let Some(rest) = br.name.strip_prefix("*D") {
@@ -1631,30 +1635,9 @@ fn apply_detail(
         "AddBlockRecord",
     )?;
 
-    // 5) INSERT：自动偏移（引导外接半径×5 向右，×frame）或指定点（相对引导中心）。
+    // 5) 原位标记块：局部原点 = 引导中心；引导形状（色31）+ 引出折线（色31）+
+    //    引导旁序号（色3）。整体成块便于选择/移动。
     let r = win.circum_radius();
-    let (px, py) = params
-        .detail_pos
-        .unwrap_or((origin.0 + 5.0 * r * frame, origin.1));
-    let mut ins = E::Insert(Insert::new(block_name.clone(), v3([px, py, 0.0])));
-    set_member_layer(&mut ins, "8符号标注层");
-    // PE_URL 供标注系数检测（1/(s×frame)）。
-    let url = format!(
-        "http://127.0.0.1:0/DIM/DETAIL/0?s={}&frame={}",
-        trim_scale(detail),
-        trim_scale(frame)
-    );
-    ins.common_mut().extended_data.add_record(pe_url_record(&url));
-
-    // 6) 引导形状原位保留：移入 8符号标注层 + 色31（EditEntity 按 handle 替换）。
-    let mut guide = doc
-        .get_entity(handle)
-        .ok_or("找不到引导实体")?
-        .clone();
-    guide.common_mut().layer = "8符号标注层".to_string();
-    guide.common_mut().color = Color::from_index(31);
-
-    // 7) 引出折线 + 引导旁序号（世界坐标）。
     let lead = 0.8 * r * frame;
     let (p0x, p0y) = shape.lead_origin();
     let (p1x, p1y) = (
@@ -1668,9 +1651,44 @@ fn apply_detail(
         e.common_mut().color = Color::from_index(31);
         e
     };
+    let mut origin_blk: Vec<E> = Vec::new();
+    // 引导形状（局部 = 原坐标 − 引导中心）。
+    match &shape {
+        GuideShape::Circle { radius, .. } => {
+            let mut e = E::Circle(Circle::from_center_radius(Vector3::ZERO, *radius));
+            set_member_layer(&mut e, "8符号标注层");
+            e.common_mut().color = Color::from_index(31);
+            origin_blk.push(e);
+        }
+        GuideShape::Rect { half, .. } => {
+            let mut pl = LwPolyline::new();
+            for (sx, sy) in [(1.0, 1.0), (1.0, -1.0), (-1.0, -1.0), (-1.0, 1.0)] {
+                pl.add_point(Vector2::new(sx * half.0, sy * half.1));
+            }
+            pl.close();
+            let mut e = E::LwPolyline(pl);
+            set_member_layer(&mut e, "8符号标注层");
+            e.common_mut().color = Color::from_index(31);
+            origin_blk.push(e);
+        }
+    }
+    // 引出折线 + 序号（上移避让：y 方向 +1.0×frame → +2.0×frame）。
+    origin_blk.push(mk_line31(
+        p0x - origin.0,
+        p0y - origin.1,
+        p1x - origin.0,
+        p1y - origin.1,
+    ));
+    origin_blk.push(mk_line31(
+        p1x - origin.0,
+        p1y - origin.1,
+        p2x - origin.0,
+        p2y - origin.1,
+    ));
     let mut nm = MText::new();
     nm.value = format!("{{\\H1.0x;{}}}", no);
-    nm.insertion_point = Vector3::new(p1x + 1.3 * frame, p1y + 1.0 * frame, 0.0);
+    nm.insertion_point =
+        Vector3::new(p1x - origin.0 + 1.3 * frame, p1y - origin.1 + 2.0 * frame, 0.0);
     nm.height = h;
     nm.rotation = 0.0;
     nm.style = "OCSM_GB".into();
@@ -1678,29 +1696,52 @@ fn apply_detail(
     let mut ne = E::MText(nm);
     set_member_layer(&mut ne, "8符号标注层");
     ne.common_mut().color = Color::from_index(3);
+    origin_blk.push(ne);
 
-    let (handle_s, _) = match req_timed(
+    let origin_block_name = format!("*D{}", max_n + 2);
+    req_timed(
         sender,
-        PluginRequest::AddEntities(vec![
-            ins,
-            mk_line31(p0x, p0y, p1x, p1y),
-            mk_line31(p1x, p1y, p2x, p2y),
-            ne,
-        ]),
+        PluginRequest::AddBlockRecord {
+            name: origin_block_name.clone(),
+            entities: origin_blk,
+        },
+        "AddBlockRecord",
+    )?;
+
+    // 6) INSERT：放大块（自动偏移：引导外接半径×5 向右×frame，或 dx/dy 覆盖）；
+    //    原位标记块 @ 引导中心。
+    let (px, py) = params
+        .detail_pos
+        .unwrap_or((origin.0 + 5.0 * r * frame, origin.1));
+    let mut ins = E::Insert(Insert::new(block_name.clone(), v3([px, py, 0.0])));
+    set_member_layer(&mut ins, "8符号标注层");
+    // PE_URL 供标注系数检测（1/(s×frame)）。
+    let url = format!(
+        "http://127.0.0.1:0/DIM/DETAIL/0?s={}&frame={}",
+        trim_scale(detail),
+        trim_scale(frame)
+    );
+    ins.common_mut().extended_data.add_record(pe_url_record(&url));
+    let mut oins = E::Insert(Insert::new(origin_block_name.clone(), v3([origin.0, origin.1, 0.0])));
+    set_member_layer(&mut oins, "8符号标注层");
+
+    // 7) 新增两个 INSERT；原引导实体删除（图形由原位块替代）。
+    let (handle_s, handle_o) = match req_timed(
+        sender,
+        PluginRequest::AddEntities(vec![ins, oins]),
         "AddEntities",
     )? {
         PluginResponse::Handles(hs) => (hs.first().copied(), hs.get(1).copied()),
         _ => (None, None),
     };
-
-    // 8) 引导形状移层改色（原位替换）。
-    req_timed(sender, PluginRequest::UpdateEntity(guide), "UpdateEntity")?;
+    req_timed(sender, PluginRequest::RemoveEntity { handle }, "RemoveEntity")?;
 
     Ok(serde_json::json!({
         "ok": true,
         "insert_handle": handle_s.map(fmt_handle),
-        "guide_handle": None::<String>,
+        "origin_handle": handle_o.map(fmt_handle),
         "block": block_name,
+        "origin_block": origin_block_name,
         "detail_scale": detail,
         "frame": frame,
         "no": no,
@@ -3995,8 +4036,10 @@ mod integration {
         let out = apply_detail(&sender, &doc, gh, &p).unwrap();
         let j: serde_json::Value = serde_json::from_str(&out).unwrap();
         assert_eq!(j["ok"], true);
-        assert_eq!(j["no"], "Ⅰ"); // 空图纸 → 自动 Ⅰ
+        assert_eq!(j["no"], "I"); // 空图纸 → 自动 I（ASCII 罗马式）
         assert_eq!(j["geom"], "circle");
+        assert_eq!(j["block"], "*D1");
+        assert_eq!(j["origin_block"], "*D2");
         assert!((j["detail_scale"].as_f64().unwrap() - 2.0).abs() < 1e-9);
         assert!((j["frame"].as_f64().unwrap() - 1.0).abs() < 1e-9);
 
@@ -4036,27 +4079,58 @@ mod integration {
         }
         let m = mts[0];
         if let E::MText(m) = m {
-            assert!(m.value.contains("Ⅰ"), "块内序号");
-            assert!(m.value.contains("2:1"), "块内比例");
+            assert!(m.value.contains("I"), "块内序号 {}", m.value);
+            assert!(m.value.contains("2:1"), "块内比例 {}", m.value);
+            // 文字上移：坐标 ≈ 框顶(101.96) + 10（不压圆框）。
+            assert!(m.insertion_point.y > 101.96 + 9.0, "文字应上移 y={}", m.insertion_point.y);
         }
 
-        // 模型空间：INSERT(*D1) @ 自动偏移 + PE_URL；引导圆移层色31；引出线×2 + 序号。
+        // 原位标记块 *D2：引导圆（色31）+ 引出线×2 + 序号；
+        // 模型空间只剩两个 INSERT（*D1 自动偏移、*D2 @ 引导中心），原引导实体已删。
+        let ents2 = inner.block_entities("*D2");
+        let g_c = ents2.iter().filter(|e| matches!(e, E::Circle(_))).count();
+        let g_l = ents2.iter().filter(|e| matches!(e, E::Line(_))).count();
+        let g_m = ents2.iter().filter(|e| matches!(e, E::MText(_))).count();
+        assert_eq!(g_c, 1, "原位块含引导圆");
+        assert_eq!(g_l, 2, "原位块含引出线×2");
+        assert_eq!(g_m, 1, "原位块含序号");
+        let g_circle = ents2.iter().find_map(|e| match e {
+            E::Circle(c) => Some(c.clone()),
+            _ => None,
+        });
+        let g_circle = g_circle.unwrap();
+        assert!((g_circle.radius - 50.9823).abs() < 1e-4);
+        assert!(matches!(g_circle.common.color, Color::Index(31)));
+        assert_eq!(g_circle.common.layer, "8符号标注层");
+        let g_mt = ents2.iter().find_map(|e| match e {
+            E::MText(m) => Some(m.clone()),
+            _ => None,
+        });
+        let g_mt = g_mt.unwrap();
+        assert!(g_mt.value.contains("I"), "原位序号 {}", g_mt.value);
+        assert!(g_mt.insertion_point.y > 20.0, "原位序号应上移 y={}", g_mt.insertion_point.y);
+
+        // 模型空间：两个 INSERT；引导线层圆已删除；8符号标注层 无散 LINE（均入块）。
         let d2 = inner.doc.lock().unwrap().clone();
         let mut ins = None;
-        let mut guide_now = None;
+        let mut oins = None;
+        let mut guide_left = false;
         let mut lead = 0;
-        let mut no_mt = 0;
         for e in d2.entities() {
             match e {
-                E::Insert(i) => ins = Some(i.clone()),
-                E::Circle(c) if (c.center.x - 402.102).abs() < 1e-3 => guide_now = Some(c.clone()),
+                E::Insert(i) => {
+                    if i.block_name == "*D1" {
+                        ins = Some(i.clone());
+                    } else if i.block_name == "*D2" {
+                        oins = Some(i.clone());
+                    }
+                }
+                E::Circle(c) if c.common.layer == "10引导线层" => guide_left = true,
                 E::Line(l) if l.common.layer == "8符号标注层" => lead += 1,
-                E::MText(t) if t.value.contains("Ⅰ") => no_mt += 1,
                 _ => {}
             }
         }
-        let ins = ins.expect("应有 INSERT");
-        assert_eq!(ins.block_name, "*D1");
+        let ins = ins.expect("应有放大块 INSERT");
         assert_eq!(ins.common.layer, "8符号标注层");
         // 自动偏移 = 引导中心 + (5×r, 0) = (657.0, 531.8)。
         assert!((ins.insert_point.x - 657.013).abs() < 0.5, "x={}", ins.insert_point.x);
@@ -4073,13 +4147,12 @@ mod integration {
         assert!(url.contains("DETAIL"), "{url}");
         assert!(url.contains("s=2"), "{url}");
         assert!(url.contains("frame=1"), "{url}");
-        // 引导圆已移入 8符号标注层 色31。
-        let g = guide_now.expect("引导圆应保留");
-        assert_eq!(g.common.layer, "8符号标注层");
-        assert!(matches!(g.common.color, Color::Index(31)));
-        // 引出线 2 条 + 块外序号 MTEXT（引导旁）。
-        assert_eq!(lead, 2);
-        assert!(no_mt >= 1);
+        // 原位标记 INSERT @ 引导中心，引导实体已删除（图形由块替代）。
+        let oins = oins.expect("应有原位 INSERT");
+        assert!((oins.insert_point.x - 402.102).abs() < 0.01);
+        assert!((oins.insert_point.y - 531.805).abs() < 0.01);
+        assert!(!guide_left, "原引导圆应已删除");
+        assert_eq!(lead, 0, "引出线已并入原位块");
     }
 
     /// 矩形引导（闭合 4v LWPOLYLINE）→ rect 几何 + 框为矩形。
@@ -4112,9 +4185,9 @@ mod integration {
         let out = apply_detail(&sender, &doc, gh, &p).unwrap();
         let j: serde_json::Value = serde_json::from_str(&out).unwrap();
         assert_eq!(j["geom"], "rect");
-        assert_eq!(j["no"], "Ⅱ");
+        assert_eq!(j["no"], "Ⅱ"); // 手输透传（Unicode 也允许）
         let ents = inner.block_entities("*D1");
-        // 内容 LINE（x 5..20 → 窗口内 5..0? 不：窗口 x∈[0,40]，线 x 0..40 全内 → 整段 ×3 → 长 120）+ 矩形框 + 序号/比例。
+        // 内容 LINE（窗口 x∈[0,40] 全内 → 整段 ×3 → 长 120）+ 矩形框 + 序号/比例。
         let lines: Vec<_> = ents.iter().filter(|e| matches!(e, E::Line(_))).collect();
         let plines: Vec<_> = ents.iter().filter(|e| matches!(e, E::LwPolyline(_))).collect();
         let mts: Vec<_> = ents.iter().filter(|e| matches!(e, E::MText(_))).collect();
@@ -4134,17 +4207,37 @@ mod integration {
             assert!(m.value.contains("Ⅱ"));
             assert!(m.value.contains("3:1"));
         }
+        // 原位标记块 *D2：矩形（色31）+ 引出线×2 + 序号。
+        let ents2 = inner.block_entities("*D2");
+        assert_eq!(
+            ents2.iter().filter(|e| matches!(e, E::LwPolyline(_))).count(),
+            1,
+            "原位块含矩形"
+        );
+        assert_eq!(ents2.iter().filter(|e| matches!(e, E::Line(_))).count(), 2);
+        assert_eq!(ents2.iter().filter(|e| matches!(e, E::MText(_))).count(), 1);
+        let rpl = ents2.iter().find_map(|e| match e {
+            E::LwPolyline(p) => Some(p.clone()),
+            _ => None,
+        });
+        let rpl = rpl.unwrap();
+        assert!(rpl.is_closed && rpl.vertices.len() == 4);
+        assert!(matches!(rpl.common.color, Color::Index(31)));
+        // 文字上移：块内序号 y > 框顶(30×3/2=45... half.y=10×3=30) + 9。
+        if let E::MText(m) = &mts[0] {
+            assert!(m.insertion_point.y > 30.0 + 9.0, "文字应上移 y={}", m.insertion_point.y);
+        }
     }
 
-    /// 号码自动递增 + 已满报错。
+    /// 号码自动递增 + 已满报错（ASCII I..XII）。
     #[test]
     fn apply_detail_no_auto_increment_and_limit() {
         use acadrust::entities::{Circle, MText};
         use acadrust::types::Vector3;
         use acadrust::EntityType as E;
         let mut doc = acadrust::CadDocument::new();
-        // 已有 Ⅰ Ⅱ Ⅴ（块外 MTEXT）→ 自动 Ⅵ。
-        for no in ["Ⅰ", "Ⅱ", "Ⅴ"] {
+        // 已有 I II V（块外 MTEXT）→ 自动 VI。
+        for no in ["I", "II", "V"] {
             let mut m = acadrust::entities::MText::new();
             m.value = no.into();
             m.insertion_point = Vector3::new(1.0, 1.0, 0.0);
@@ -4160,10 +4253,10 @@ mod integration {
         p.guide_type = GuideType::Detail;
         let out = apply_detail(&sender, &doc, gh, &p).unwrap();
         let j: serde_json::Value = serde_json::from_str(&out).unwrap();
-        assert_eq!(j["no"], "Ⅵ");
-        // 超 Ⅻ → 报错。单独构造 12 个序号。
+        assert_eq!(j["no"], "VI");
+        // 兼容旧版 Unicode 序号也参与计数：已有 Ⅰ..Ⅻ 且新图纸 → 超 12 报错。
         let mut doc2 = acadrust::CadDocument::new();
-        for no in ["Ⅰ","Ⅱ","Ⅲ","Ⅳ","Ⅴ","Ⅵ","Ⅶ","Ⅷ","Ⅸ","Ⅹ","Ⅺ","Ⅻ"] {
+        for no in ["Ⅰ", "Ⅱ", "Ⅲ", "Ⅳ", "Ⅴ", "Ⅵ", "Ⅶ", "Ⅷ", "Ⅸ", "Ⅹ", "XI", "XII"] {
             let mut m = acadrust::entities::MText::new();
             m.value = no.into();
             m.insertion_point = Vector3::new(1.0, 1.0, 0.0);
