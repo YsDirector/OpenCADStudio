@@ -163,11 +163,15 @@ fn route(
         ("GET", t) if t == "/" || t.starts_with("/guide.html") => {
             (200, "text/html; charset=utf-8", GUI_HTML.to_string())
         }
+        ("GET", t) if t.starts_with("/rough.html") => {
+            (200, "text/html; charset=utf-8", ROUGH_HTML.to_string())
+        }
         ("GET", t) if t.starts_with("/api/guide") => api_guide(target, sender),
         ("GET", t) if t.starts_with("/api/tolerance") => api_tolerance(target),
         ("GET", t) if t.starts_with("/api/ping") => (200, json, r#"{"ok":true}"#.into()),
         ("POST", "/api/apply") => api_apply(body, sender, false),
         ("POST", "/api/apply_refresh") => api_apply(body, sender, true),
+        ("POST", "/api/rough_apply") => api_rough_apply(body, sender),
         ("POST", "/api/mcp") => api_mcp(body, sender),
         _ => (404, text, "not found".into()),
     }
@@ -2998,6 +3002,287 @@ fn api_mcp(body: &[u8], sender: &Arc<dyn PluginRequestSender>) -> (u16, &'static
     }
 }
 
+/// `POST /api/rough_apply`：表面粗糙度符号生成（命令 OCSMRGH / CC，无引导线）。
+fn api_rough_apply(body: &[u8], sender: &Arc<dyn PluginRequestSender>) -> (u16, &'static str, String) {
+    let json = "application/json; charset=utf-8";
+    match apply_roughness(sender, body) {
+        Ok(s) => (200, json, s),
+        Err(e) => (400, json, serde_json::json!({"ok": false, "error": e}).to_string()),
+    }
+}
+
+/// 表面粗糙度符号：生成匿名块 `*D{n}`（几何显式色 31 + 绿色文字转 ATTDEF）
+/// + INSERT（层 0，带 attributes，rotation 由 GUI 指定）。
+///
+/// 20 形态 = 4 基础体 × 5 附加区，坐标/文字位全部对照参考
+/// `OCSMDIMGULIDE/粗糙度1.dxf`（zw$ 块，20 个）1:1（× 图幅倍率）。
+///
+/// 基础体：C1 基本 V / C2 V+内圆（不去除材料）/ C3 V+横线（去除材料）/
+///         C4 V+横线+短线+填充三角（去除材料）
+/// 附加区：R1 无 / R2 长横线+顶点圆 / R3 短横线 / R4 短横线+台阶 /
+///         R5 长横线+顶点圆+台阶
+/// 文字 ATTDEF（tag = 中文描述+英文代号，style OCSM_GB，可缺省空白）：
+/// 公共 A'（上限）/A（下限）@(8.248,11.65/7.1) h3.5 ML、E（加工余量）
+/// @(1.386,0) h4.9 ML；P（加工符号）@(11.009,1.4) h3.5 MC「仅非 C2 列」；
+/// 附加区 B/B'/C/G 按形态（R2: x=16.14；R3: x=14.473；R4/R5: x=17.706，
+/// B'@y=18、B@y=12.4、C@y=6.8、G@y=2.25）。
+fn apply_roughness(
+    sender: &Arc<dyn PluginRequestSender>,
+    body: &[u8],
+) -> Result<String, String> {
+    use acadrust::entities::{AttributeDefinition, Circle, Insert, Line, Solid};
+    use acadrust::entities::attribute_definition::{HorizontalAlignment, VerticalAlignment};
+    use acadrust::types::{Color, Vector3};
+    use acadrust::EntityType as E;
+
+    #[derive(serde::Deserialize)]
+    struct Req {
+        x: f64,
+        y: f64,
+        base: String, // C1..C4
+        extra: String, // R1..R5
+        #[serde(default)]
+        p: String, // 加工符号（C2 时强制空）
+        #[serde(default)]
+        rotation: f64, // 度
+        #[serde(default)]
+        values: std::collections::HashMap<String, String>,
+    }
+    let req: Req = serde_json::from_slice(body).map_err(|e| format!("请求 JSON 无效: {e}"))?;
+    let base = req.base.to_ascii_uppercase();
+    let extra = req.extra.to_ascii_uppercase();
+    let bi = match base.as_str() {
+        "C1" => 0, "C2" => 1, "C3" => 2, "C4" => 3,
+        _ => return Err(format!("无效的基础体 {base}（应为 C1..C4）")),
+    };
+    let ri = match extra.as_str() {
+        "R1" => 0, "R2" => 1, "R3" => 2, "R4" => 3, "R5" => 4,
+        _ => return Err(format!("无效的附加区 {extra}（应为 R1..R5）")),
+    };
+    // C2 列（V内圆/不去除材料）：P 强制空白且不生成 P 属性（对照参考）。
+    let has_p = bi != 1;
+    let p_value = if has_p { req.p.clone() } else { String::new() };
+
+    let doc = snapshot(sender)?;
+    let scale = frame_scale_at(&doc, [req.x, req.y, 0.0]);
+    let s = |v: f64| v * scale;
+    let rot: f64 = req.rotation.to_radians();
+
+    // ── 几何表（参考坐标）──
+    let l1 = ((4.186, 5.35), (7.072, 0.35));
+    let l2 = ((7.072, 0.35), (13.423, 11.35));
+    // 基础体差异件
+    let base_lines: &[((f64, f64), (f64, f64))] = match bi {
+        2 => &[((4.186, 5.35), (9.959, 5.35))], // C3 横线
+        3 => &[((4.186, 5.35), (9.959, 5.35)), ((7.072, 0.35), (9.959, 5.35))], // C4 横线+短线
+        _ => &[],
+    };
+    let base_circle: Option<(f64, f64, f64)> = if bi == 1 {
+        Some((7.072, 3.683, 1.667)) // C2 V内圆
+    } else {
+        None
+    };
+    let base_fill: Option<((f64, f64), (f64, f64), (f64, f64))> = if bi == 3 {
+        Some(((4.186, 5.35), (9.959, 5.35), (7.072, 0.35))) // C4 填充三角
+    } else {
+        None
+    };
+    // 附加区差异件
+    let extra_lines: &[((f64, f64), (f64, f64))] = match ri {
+        1 => &[((13.423, 11.35), (30.833, 11.35))], // R2 长横线
+        2 => &[((13.423, 11.35), (25.654, 11.35))], // R3 短横线
+        3 => &[
+            ((13.423, 11.35), (25.654, 11.35)), // R4 短横线 + 台阶
+            ((13.423, 11.35), (16.656, 16.95)),
+            ((16.656, 16.95), (25.654, 16.95)),
+        ],
+        4 => &[
+            ((13.423, 11.35), (30.833, 11.35)), // R5 长横线 + 台阶
+            ((13.423, 11.35), (16.656, 16.95)),
+            ((16.656, 16.95), (30.833, 16.95)),
+        ],
+        _ => &[],
+    };
+    let extra_circle: Option<(f64, f64, f64)> = if ri == 1 || ri == 4 {
+        Some((13.423, 11.35, 1.667)) // R2/R5 顶点圆
+    } else {
+        None
+    };
+
+    // ── 块成员（局部坐标 = 参考 × scale；块基点 (0,0)）──
+    let mut members: Vec<E> = Vec::new();
+    let mut mk_line = |a: (f64, f64), b: (f64, f64)| -> E {
+        let mut e = E::Line(Line {
+            common: Default::default(),
+            start: Vector3::new(s(a.0), s(a.1), 0.0),
+            end: Vector3::new(s(b.0), s(b.1), 0.0),
+            thickness: 0.0,
+            normal: Vector3::new(0.0, 0.0, 1.0),
+        });
+        set_member_layer(&mut e, "8符号标注层");
+        e.common_mut().color = Color::from_index(31); // 深红（参考 62=31）
+        e
+    };
+    members.push(mk_line(l1.0, l1.1));
+    members.push(mk_line(l2.0, l2.1));
+    for &(a, b) in base_lines { members.push(mk_line(a, b)); }
+    for &(a, b) in extra_lines { members.push(mk_line(a, b)); }
+    // 圆
+    let mut mk_circle = |c: (f64, f64, f64)| -> E {
+        let mut e = E::Circle(Circle {
+            common: Default::default(),
+            center: Vector3::new(s(c.0), s(c.1), 0.0),
+            radius: s(c.2),
+            thickness: 0.0,
+            normal: Vector3::new(0.0, 0.0, 1.0),
+        });
+        set_member_layer(&mut e, "8符号标注层");
+        e.common_mut().color = Color::from_index(31);
+        e
+    };
+    if let Some(c) = base_circle { members.push(mk_circle(c)); }
+    if let Some(c) = extra_circle { members.push(mk_circle(c)); }
+    // C4 填充三角（参考 HATCH，宿主用 SOLID 等效；第 4 点 = 第 3 点）
+    if let Some((a, b, c)) = base_fill {
+        let mut e = E::Solid(Solid::new(
+            Vector3::new(s(a.0), s(a.1), 0.0),
+            Vector3::new(s(b.0), s(b.1), 0.0),
+            Vector3::new(s(c.0), s(c.1), 0.0),
+            Vector3::new(s(c.0), s(c.1), 0.0),
+        ));
+        set_member_layer(&mut e, "8符号标注层");
+        e.common_mut().color = Color::from_index(31);
+        members.push(e);
+    }
+
+    // ── ATTDEF（tag = 中文描述+英文代号；style OCSM_GB；可缺省空白）──
+    // (tag, x, y, 高, 对齐 ML/MC, value 取自 req.values)
+    let mut attdefs: Vec<(String, f64, f64, f64, bool)> = Vec::new();
+    let att = |tag: &str, x: f64, y: f64, h: f64, mc: bool| -> (String, f64, f64, f64, bool) {
+        (tag.to_string(), x, y, h, mc)
+    };
+    // A' 上限 / A 下限：ML 左中；E 加工余量：ML；P 加工符号：MC
+    attdefs.push(att("粗糙度上限A′", 8.248, 11.65, 3.5, false));
+    attdefs.push(att("粗糙度下限A", 8.248, 7.1, 3.5, false));
+    attdefs.push(att("加工余量E", 1.386, 0.0, 4.9, false));
+    if has_p {
+        attdefs.push(att("加工符号P", 11.009, 1.4, 3.5, true));
+    }
+    // 附加区文字
+    // 附加区文字（B′ 总在最高位：R2/R3 y=12.4、R4/R5 y=18；B 仅 R4/R5 y=12.4）
+    let (bx, by, bbx, bby) = match ri {
+        1 => (16.14, 12.4, 0.0, 0.0),      // R2: B′
+        2 => (14.473, 12.4, 0.0, 0.0),     // R3: B′
+        _ => (17.706, 18.0, 17.706, 12.4), // R4/R5: B′@18、B@12.4
+    };
+    if ri >= 1 {
+        attdefs.push(att("加工方法B′", bx, by, 3.5, true));
+    }
+    if ri >= 3 {
+        attdefs.push(att("加工方法B", bbx, bby, 3.5, true));
+    }
+    if ri >= 1 {
+        attdefs.push(att("取样长度C", bx, 6.8, 3.5, true));
+        attdefs.push(att("纹理方向G", bx, 2.25, 3.5, true));
+    }
+    // 值（values 键 = 英文代号：A' / A / E / P / B / B' / C / G）
+    let value_of = |_tag: &str, alias: &str| -> String {
+        req.values.get(alias).cloned().unwrap_or_default()
+    };
+    let mut mk_attdef = |(tag, x, y, h, mc): (String, f64, f64, f64, bool), val: String| -> E {
+        let mut ad = AttributeDefinition::new(tag, String::new(), val);
+        ad.insertion_point = Vector3::new(s(x), s(y), 0.0);
+        ad.alignment_point = ad.insertion_point;
+        ad.height = s(h);
+        ad.rotation = rot; // 符号旋转时文字随符号旋转
+        ad.width_factor = 0.7; // 与 OCSM_GB 一致
+        ad.text_style = "OCSM_GB".into();
+        if mc {
+            ad.set_alignment(HorizontalAlignment::Center, VerticalAlignment::Middle); // MC 正中
+        } else {
+            ad.set_alignment(HorizontalAlignment::Left, VerticalAlignment::Middle); // ML 左中
+        }
+        ad.flags.preset = true; // 插入时不逐项提示
+        let mut e = E::AttributeDefinition(ad);
+        set_member_layer(&mut e, "8符号标注层");
+        e.common_mut().color = Color::from_index(3); // 绿色（参考 62=3）
+        e
+    };
+    for (tag, x, y, h, mc) in attdefs.iter() {
+        let alias = tag_alias(tag);
+        let val = if alias == "P" { p_value.clone() } else { value_of(tag, alias) };
+        members.push(mk_attdef((tag.clone(), *x, *y, *h, *mc), val));
+    }
+
+    // ── 匿名块 *D{n}（与其它标注共用计数器）──
+    let mut max_n = 0u32;
+    for br in doc.block_records.iter() {
+        if let Some(rest) = br.name.strip_prefix("*D") {
+            if let Ok(n) = rest.parse::<u32>() {
+                max_n = max_n.max(n);
+            }
+        }
+    }
+    let block_name = format!("*D{}", max_n + 1);
+    req_timed(
+        sender,
+        PluginRequest::AddBlockRecord {
+            name: block_name.clone(),
+            entities: members,
+        },
+        "AddBlockRecord",
+    )?;
+
+    // ── INSERT @ 插入点（层 0 跟参考；rotation 由 GUI 指定；attributes 对齐 ATTDEF）──
+    let mut ins = Insert::new(block_name.clone(), Vector3::new(req.x, req.y, 0.0));
+    ins.rotation = rot;
+    for (tag, _x, _y, _h, _mc) in attdefs.iter() {
+        let alias = tag_alias(tag);
+        let val = if alias == "P" { p_value.clone() } else { value_of(tag, alias) };
+        let mut attr = acadrust::entities::AttributeEntity::new(tag.clone(), val);
+        attr.insertion_point = Vector3::new(req.x, req.y, 0.0);
+        ins.attributes.push(attr);
+    }
+    let handle = match req_timed(
+        sender,
+        PluginRequest::AddEntities(vec![E::Insert(ins)]),
+        "AddEntities",
+    ) {
+        Ok(PluginResponse::Handles(hs)) => hs.first().copied(),
+        Ok(_) => None,
+        Err(e) => return Err(e),
+    };
+    req_timed(sender, PluginRequest::BumpGeometry, "BumpGeometry")?;
+    mark_dirty(sender)?;
+
+    Ok(serde_json::json!({
+        "ok": true,
+        "block": block_name,
+        "insert_handle": handle.map(fmt_handle),
+        "base": base,
+        "extra": extra,
+        "p": p_value,
+        "scale": scale,
+        "rotation": req.rotation,
+    })
+    .to_string())
+}
+
+/// ATTDEF tag → 英文代号（用于 values 查询 / attributes 对齐）。
+fn tag_alias(tag: &str) -> &str {
+    match tag {
+        "粗糙度上限A′" => "A′",
+        "粗糙度下限A" => "A",
+        "加工余量E" => "E",
+        "加工符号P" => "P",
+        "加工方法B′" => "B′",
+        "加工方法B" => "B",
+        "取样长度C" => "C",
+        "纹理方向G" => "G",
+        _ => tag,
+    }
+}
+
 fn mcp_list_guides(sender: &Arc<dyn PluginRequestSender>) -> Result<String, String> {
     let doc = snapshot(sender)?;
     let mut out = Vec::new();
@@ -3024,6 +3309,7 @@ fn mcp_list_guides(sender: &Arc<dyn PluginRequestSender>) -> Result<String, Stri
 // ── 浏览器 GUI（对应 GUI.png） ─────────────────────────────────────────────
 
 const GUI_HTML: &str = include_str!("guide_gui.html");
+const ROUGH_HTML: &str = include_str!("rough_gui.html");
 
 #[cfg(test)]
 mod tests {
@@ -4066,6 +4352,42 @@ mod integration {
     }
 
     #[test]
+    fn http_server_rough_apply_end_to_end() {
+        // POST /api/rough_apply：C4R5 全形态 → 块含 7 线/1 圆/1 SOLID/8 ATTDEF，
+        // INSERT @ 坐标 + attributes；GET /rough.html 返回 GUI。
+        let mock = std::sync::Arc::new(MockSender::new(acadrust::CadDocument::new()));
+        let server = spawn(mock.clone()).expect("spawn guide server");
+        let html = http_req(server.port, "GET", "/rough.html?x=5&y=6", "");
+        assert!(html.contains("OCSM 表面粗糙度"), "rough.html 内嵌 GUI");
+        assert!(html.contains("/api/rough_apply"));
+        assert!(html.contains("不去除材料"));
+        let body = r#"{"x":50.0,"y":60.0,"base":"C4","extra":"R5","p":"",
+            "rotation":0.0,"values":{"A′":"3.2"}}"#;
+        let r = http_req(server.port, "POST", "/api/rough_apply", body);
+        let j: serde_json::Value = serde_json::from_str(&r).unwrap();
+        assert_eq!(j["ok"], true);
+        assert_eq!(j["block"], "*D1");
+        let members = mock.block_entities("*D1");
+        assert_eq!(
+            members
+                .iter()
+                .filter(|e| matches!(e, EntityType::Line(_)))
+                .count(),
+            7
+        );
+        assert_eq!(
+            members
+                .iter()
+                .filter(|e| matches!(e, EntityType::AttributeDefinition(_)))
+                .count(),
+            8
+        );
+        // 坏请求：非法 base。
+        let bad = http_req(server.port, "POST", "/api/rough_apply", r#"{"x":0,"y":0,"base":"X9","extra":"R1"}"#);
+        assert!(bad.contains("无效的基础体"));
+    }
+
+    #[test]
     fn http_server_mcp_bridge_list_guides() {
         let mut doc = acadrust::CadDocument::new();
         let mut line = Line {
@@ -4790,5 +5112,325 @@ mod integration {
             .unwrap();
         assert_eq!(dim2.base().text, "");
     }
+mod rough_tests {
+    use super::*;
+    use ocs_plugin_api::host::acadrust::entities::{Block, BlockEnd, Insert, Line};
+    use ocs_plugin_api::host::acadrust::entities::attribute_definition::{
+        HorizontalAlignment, VerticalAlignment,
+    };
+    use ocs_plugin_api::host::acadrust::types::{Color, Vector3};
+    use ocs_plugin_api::host::acadrust::EntityType as E;
+
+    // ── 表面粗糙度 OCSMRGH / CC（apply_roughness）───────────────────────
+
+    fn rough_body(
+        x: f64,
+        y: f64,
+        base: &str,
+        extra: &str,
+        p: &str,
+        rot: f64,
+        values: &[(&str, &str)],
+    ) -> String {
+        let vals: serde_json::Map<String, serde_json::Value> = values
+            .iter()
+            .map(|(k, v)| (k.to_string(), serde_json::json!(v)))
+            .collect();
+        serde_json::json!({
+            "x": x, "y": y, "base": base, "extra": extra, "p": p,
+            "rotation": rot, "values": vals,
+        })
+        .to_string()
+    }
+
+    fn rough_apply(
+        mock: &std::sync::Arc<MockSender>,
+        body: &str,
+    ) -> Result<(serde_json::Value, Vec<acadrust::EntityType>), String> {
+        let sender: std::sync::Arc<dyn PluginRequestSender> = mock.clone();
+        let out = apply_roughness(&sender, body.as_bytes())?;
+        let j: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let name = j["block"].as_str().unwrap().to_string();
+        Ok((j, mock.block_entities(&name)))
+    }
+
+    fn count_attdefs(members: &[acadrust::EntityType]) -> Vec<&acadrust::entities::AttributeDefinition> {
+        members
+            .iter()
+            .filter_map(|e| match e {
+                E::AttributeDefinition(a) => Some(a),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn apply_roughness_c1r1_builds_minimal_block() {
+        let mock = std::sync::Arc::new(MockSender::new(acadrust::CadDocument::new()));
+        let body = rough_body(100.0, 200.0, "C1", "R1", "", 0.0, &[]);
+        let (j, members) = rough_apply(&mock, &body).unwrap();
+        assert_eq!(j["base"], "C1");
+        assert_eq!(j["extra"], "R1");
+        assert_eq!(j["scale"], 1.0);
+        // 2 LINE + 4 ATTDEF（A′/A/E/P，无圆无填充）。
+        assert_eq!(members.len(), 6);
+        assert_eq!(
+            members.iter().filter(|e| matches!(e, E::Line(_))).count(),
+            2,
+            "C1R1 只有公共两条斜边"
+        );
+        // 公共斜边端点（参考坐标，scale=1）。
+        let lines: Vec<_> = members
+            .iter()
+            .filter_map(|e| match e {
+                E::Line(l) => Some((l.start, l.end)),
+                _ => None,
+            })
+            .collect();
+        assert!(lines.contains(&(Vector3::new(4.186, 5.35, 0.0), Vector3::new(7.072, 0.35, 0.0))));
+        assert!(lines.contains(&(Vector3::new(7.072, 0.35, 0.0), Vector3::new(13.423, 11.35, 0.0))));
+        let ads = count_attdefs(&members);
+        assert_eq!(ads.len(), 4);
+        let tags: Vec<&str> = ads.iter().map(|a| a.tag.as_str()).collect();
+        assert_eq!(
+            tags,
+            vec!["粗糙度上限A′", "粗糙度下限A", "加工余量E", "加工符号P"]
+        );
+        // A′/A/E：ML 左中、h3.5/4.9、样式 OCSM_GB、绿色、8符号标注层。
+        let a1 = &ads[0];
+        assert_eq!(a1.insertion_point.x, 8.248);
+        assert_eq!(a1.insertion_point.y, 11.65);
+        assert_eq!(a1.height, 3.5);
+        assert_eq!(a1.text_style, "OCSM_GB");
+        assert_eq!(a1.width_factor, 0.7);
+        assert!(matches!(a1.horizontal_alignment, HorizontalAlignment::Left));
+        assert!(matches!(a1.vertical_alignment, VerticalAlignment::Middle));
+        assert_eq!(a1.common.layer, "8符号标注层");
+        assert_eq!(a1.common.color, Color::from_index(3));
+        let e1 = &ads[2];
+        assert_eq!(e1.height, 4.9, "E 大号字");
+        let p1 = &ads[3];
+        assert_eq!(p1.insertion_point.x, 11.009);
+        assert_eq!(p1.insertion_point.y, 1.4);
+        assert!(matches!(p1.horizontal_alignment, HorizontalAlignment::Center));
+        // 缺省空白。
+        assert_eq!(a1.default_value, "");
+        // INSERT：层 0、attributes 与 ATTDEF 对齐。
+        let inserts: Vec<_> = mock
+            .doc
+            .lock()
+            .unwrap()
+            .entities()
+            .filter_map(|e| match e {
+                acadrust::EntityType::Insert(i) => Some(i.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(inserts.len(), 1);
+        let ins = &inserts[0];
+        assert_eq!(ins.block_name, "*D1");
+        assert_eq!(ins.insert_point.x, 100.0);
+        assert_eq!(ins.insert_point.y, 200.0);
+        assert_eq!(ins.common.layer, "0");
+        assert_eq!(ins.rotation, 0.0);
+        let atags: Vec<&str> = ins.attributes.iter().map(|a| a.tag.as_str()).collect();
+        assert_eq!(atags, vec!["粗糙度上限A′", "粗糙度下限A", "加工余量E", "加工符号P"]);
+    }
+
+    #[test]
+    fn apply_roughness_c2_forces_p_blank() {
+        // C2（不去除材料）：无 P ATTDEF、无 P attribute，p 输入被忽略。
+        let mock = std::sync::Arc::new(MockSender::new(acadrust::CadDocument::new()));
+        let body = rough_body(0.0, 0.0, "C2", "R1", "M", 0.0, &[]);
+        let (j, members) = rough_apply(&mock, &body).unwrap();
+        assert_eq!(j["p"], "");
+        // L1/L2 + V内圆 + 3 ATTDEF（无 P）。
+        assert_eq!(
+            members.iter().filter(|e| matches!(e, E::Circle(_))).count(),
+            1,
+            "C2 有 V 内圆"
+        );
+        let circle = members
+            .iter()
+            .find_map(|e| match e {
+                E::Circle(c) => Some((c.center, c.radius)),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(circle.0.x, 7.072);
+        assert_eq!(circle.0.y, 3.683);
+        assert_eq!(circle.1, 1.667);
+        let ads = count_attdefs(&members);
+        assert_eq!(ads.len(), 3);
+        assert!(ads.iter().all(|a| a.tag != "加工符号P"));
+        // 非 C2 时 p 生效（C1 + P=M）。
+        let mock2 = std::sync::Arc::new(MockSender::new(acadrust::CadDocument::new()));
+        let body2 = rough_body(0.0, 0.0, "C1", "R1", "M", 0.0, &[]);
+        let (_, members2) = rough_apply(&mock2, &body2).unwrap();
+        let p = count_attdefs(&members2)
+            .into_iter()
+            .find(|a| a.tag == "加工符号P")
+            .unwrap();
+        assert_eq!(p.default_value, "M");
+    }
+
+    #[test]
+    fn apply_roughness_c4r5_builds_full_block() {
+        // C4R5：横线+短线+填充三角 + 长横线+顶点圆+台阶；8 文字含 P。
+        let mock = std::sync::Arc::new(MockSender::new(acadrust::CadDocument::new()));
+        let body = rough_body(0.0, 0.0, "C4", "R5", "", 0.0, &[]);
+        let (_, members) = rough_apply(&mock, &body).unwrap();
+        // L1+L2 + C4 横线/短线 2 + R5 长横线/竖线/顶线 3 = 7 线；
+        // 顶点圆 1 + SOLID 1 + ATTDEF 8 = 17 成员。
+        assert_eq!(
+            members.iter().filter(|e| matches!(e, E::Line(_))).count(),
+            7
+        );
+        assert_eq!(
+            members.iter().filter(|e| matches!(e, E::Circle(_))).count(),
+            1
+        );
+        assert_eq!(
+            members.iter().filter(|e| matches!(e, E::Solid(_))).count(),
+            1,
+            "C4 填充三角"
+        );
+        let solid = members
+            .iter()
+            .find_map(|e| match e {
+                E::Solid(s) => Some((s.second_corner, s.third_corner)),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(solid.0.x, 9.959);
+        assert_eq!(solid.1.y, 0.35, "填充三角顶点 = (7.072,0.35)");
+        let ads = count_attdefs(&members);
+        assert_eq!(
+            ads.iter().map(|a| a.tag.as_str()).collect::<Vec<_>>(),
+            vec![
+                "粗糙度上限A′", "粗糙度下限A", "加工余量E", "加工符号P",
+                "加工方法B′", "加工方法B", "取样长度C", "纹理方向G",
+            ]
+        );
+        // R5 台阶文字位：B′@(17.706,18)、B@(17.706,12.4)、C@(17.706,6.8)、G@(17.706,2.25)。
+        let by = ads.iter().find(|a| a.tag == "加工方法B′").unwrap();
+        assert_eq!(by.insertion_point.x, 17.706);
+        assert_eq!(by.insertion_point.y, 18.0);
+        let g = ads.iter().find(|a| a.tag == "纹理方向G").unwrap();
+        assert_eq!(g.insertion_point.y, 2.25);
+        // R2 文字 x=16.14、R3 x=14.473。
+        let mock2 = std::sync::Arc::new(MockSender::new(acadrust::CadDocument::new()));
+        let body2 = rough_body(0.0, 0.0, "C1", "R2", "", 0.0, &[]);
+        let (_, m2) = rough_apply(&mock2, &body2).unwrap();
+        let ad2 = count_attdefs(&m2);
+        let b = ad2.iter().find(|a| a.tag == "加工方法B′").unwrap();
+        assert_eq!(b.insertion_point.x, 16.14);
+        assert_eq!(ad2.len(), 7, "R2 = 公共3 + P + B′/C/G");
+        let mock3 = std::sync::Arc::new(MockSender::new(acadrust::CadDocument::new()));
+        let body3 = rough_body(0.0, 0.0, "C1", "R3", "", 0.0, &[]);
+        let (_, m3) = rough_apply(&mock3, &body3).unwrap();
+        let ad3 = count_attdefs(&m3);
+        let b3 = ad3.iter().find(|a| a.tag == "加工方法B′").unwrap();
+        assert_eq!(b3.insertion_point.x, 14.473);
+    }
+
+    #[test]
+    fn apply_roughness_values_and_rotation() {
+        let mock = std::sync::Arc::new(MockSender::new(acadrust::CadDocument::new()));
+        let body = rough_body(
+            0.0,
+            0.0,
+            "C1",
+            "R1",
+            "⊥",
+            90.0,
+            &[("A′", "3.2"), ("A", "1.6"), ("E", "5")],
+        );
+        let (j, members) = rough_apply(&mock, &body).unwrap();
+        assert_eq!(j["p"], "⊥");
+        assert!((j["rotation"].as_f64().unwrap() - 90.0).abs() < 1e-9);
+        let ads = count_attdefs(&members);
+        let a1 = ads.iter().find(|a| a.tag == "粗糙度上限A′").unwrap();
+        assert_eq!(a1.default_value, "3.2");
+        assert!((a1.rotation - std::f64::consts::PI / 2.0).abs() < 1e-9, "ATTDEF 随符号旋转");
+        let p = ads.iter().find(|a| a.tag == "加工符号P").unwrap();
+        assert_eq!(p.default_value, "⊥");
+        // INSERT attributes 对齐 ATTDEF 值。
+        let ins = mock
+            .doc
+            .lock()
+            .unwrap()
+            .entities()
+            .find_map(|e| match e {
+                acadrust::EntityType::Insert(i) => Some(i.clone()),
+                _ => None,
+            })
+            .unwrap();
+        assert!((ins.rotation - std::f64::consts::PI / 2.0).abs() < 1e-9);
+        let attrs = &ins.attributes;
+        assert_eq!(attrs.len(), 4);
+        let a = attrs.iter().find(|a| a.tag == "粗糙度上限A′").unwrap();
+        assert_eq!(a.value, "3.2");
+        let p = attrs.iter().find(|a| a.tag == "加工符号P").unwrap();
+        assert_eq!(p.value, "⊥");
+    }
+
+    #[test]
+    fn apply_roughness_frame_scale_doubles_geometry() {
+        // TF 图框（比例 ATTDEF，uniform 2.0）→ 坐标 ×2。
+        let mut doc = acadrust::CadDocument::new();
+        let mut att = acadrust::entities::AttributeDefinition::new(
+            "比例".into(),
+            "Scale".into(),
+            " ".into(),
+        );
+        att.tag = "比例".into();
+        let lines: Vec<E> = vec![
+            E::Line(acadrust::entities::Line::from_coords(0.0, 0.0, 0.0, 100.0, 0.0, 0.0)),
+            E::Line(acadrust::entities::Line::from_coords(100.0, 0.0, 0.0, 100.0, 50.0, 0.0)),
+            E::Line(acadrust::entities::Line::from_coords(100.0, 50.0, 0.0, 0.0, 50.0, 0.0)),
+            E::Line(acadrust::entities::Line::from_coords(0.0, 50.0, 0.0, 0.0, 0.0, 0.0)),
+            E::AttributeDefinition(att),
+        ];
+        let mut br = acadrust::tables::BlockRecord::new("a3_test");
+        br.handle = doc.allocate_handle();
+        br.entity_handles
+            .push(doc.add_entity(E::Block(acadrust::entities::Block::new(
+                "a3_test",
+                Vector3::ZERO,
+            ))).unwrap());
+        for e in lines {
+            br.entity_handles.push(doc.add_entity(e).unwrap());
+        }
+        br.entity_handles
+            .push(doc.add_entity(E::BlockEnd(acadrust::entities::BlockEnd::new())).unwrap());
+        doc.block_records.add(br).unwrap();
+        let mut ins = Insert::new("a3_test", Vector3::new(0.0, 0.0, 0.0));
+        ins.set_x_scale(2.0);
+        ins.set_y_scale(2.0);
+        ins.set_z_scale(2.0);
+        doc.add_entity(E::Insert(ins)).unwrap();
+
+        let mock = std::sync::Arc::new(MockSender::new(doc));
+        let body = rough_body(50.0, 30.0, "C1", "R1", "", 0.0, &[]);
+        let (j, members) = rough_apply(&mock, &body).unwrap();
+        assert_eq!(j["scale"], 2.0, "图框 1:2 → 倍率 2");
+        let lines: Vec<_> = members
+            .iter()
+            .filter_map(|e| match e {
+                E::Line(l) => Some((l.start, l.end)),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            lines.contains(&(Vector3::new(8.372, 10.7, 0.0), Vector3::new(14.144, 0.7, 0.0))),
+            "L1 ×2"
+        );
+        let ads = count_attdefs(&members);
+        assert_eq!(ads[0].insertion_point.x, 16.496, "A′ x ×2");
+        assert_eq!(ads[0].height, 7.0, "字高 ×2");
+    }
 }
+}
+
 

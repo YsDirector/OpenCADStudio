@@ -27,7 +27,7 @@ use ocs_plugin_api::host::acadrust::entities::Dimension;
 use ocs_plugin_api::host::acadrust::types::{Color, LineWeight, Vector3};
 use ocs_plugin_api::host::{
     BuiltinPlugin, CommandStep, DimStyleDef, FrameItem, HostApi, ImportFrameBlockRequest,
-    InteractiveCommand, LayerDef, LinetypeDef, TextStyleDef,
+    InteractiveCommand, LayerDef, LinetypeDef, PluginRequestSender, TextStyleDef,
 };
 use ocs_plugin_api::manifest::{ApiVersion, PluginManifest};
 use ocs_plugin_api::ribbon::{
@@ -45,7 +45,7 @@ static MANIFEST: PluginManifest = PluginManifest {
     command_prefixes: &[
         "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "TF", "OCSM",
         "OCSMFRAMEINIT", "OCSMFRAMEINSERT", "D", "OCSMPOWERDIM", "OCSMDIMGULIDE",
-        "GDIM", "OCSMMCP",
+        "GDIM", "OCSMMCP", "OCSMRGH", "CC",
     ],
 };
 
@@ -348,6 +348,10 @@ impl BuiltinPlugin for OcsmPlugin {
                 self.cmd_guide(host);
                 true
             }
+            "OCSMRGH" | "CC" => {
+                self.cmd_roughness(host);
+                true
+            }
             "OCSMMCP" => {
                 self.cmd_mcp(host);
                 true
@@ -434,6 +438,19 @@ impl OcsmPlugin {
         host.push_info(&format!(
             "OCSM 尺寸引导：已打开标注配置 {url}。应用=写超链接；应用并刷新=生成标注（7标注层/OCSM_GB）。"
         ));
+    }
+
+    /// `OCSMRGH` / `CC`：表面粗糙度——交互点选插入点 → 打开粗糙度配置 GUI。
+    /// 无引导线：点选位置即符号插入点（URL 带坐标），GUI 里选形态/填属性后
+    /// POST /api/rough_apply 生成匿名块（ATTDEF 文字）+ INSERT。
+    fn cmd_roughness(&self, host: &mut dyn HostApi) {
+        let Some(sender) = host.plugin_request_sender() else {
+            host.push_error("OCSM: 无法获取插件请求通道（宿主不支持 worker 请求）。");
+            return;
+        };
+        host.start_interactive(Box::new(RoughnessPlace {
+            sender: std::sync::Arc::from(sender),
+        }));
     }
 
     /// `OCSMMCP`：确保标注更新服务器运行，打印 MCP 接入信息。
@@ -1501,6 +1518,42 @@ fn frame_dir_stems() -> Vec<String> {
     stems.sort();
     stems.dedup();
     stems
+}
+
+/// 表面粗糙度交互：点选插入点 → 打开粗糙度 GUI（rough.html?x=&y=）。
+struct RoughnessPlace {
+    sender: std::sync::Arc<dyn PluginRequestSender>,
+}
+
+impl InteractiveCommand for RoughnessPlace {
+    fn prompt(&self) -> String {
+        "OCSM 表面粗糙度：指定符号插入点。".to_string()
+    }
+
+    fn on_point(&mut self, pt: [f64; 3]) -> CommandStep {
+        // 确保标注更新服务器在跑（GUIDE_PORT 进程级防重），打开 GUI。
+        let sender = self.sender.clone();
+        let mut slot = GUIDE_PORT
+            .get_or_init(|| std::sync::Mutex::new(None))
+            .lock()
+            .unwrap();
+        let port = if let Some(p) = *slot {
+            p
+        } else {
+            let Some(server) = crate::guide_server::spawn(sender) else {
+                return CommandStep::Cancel;
+            };
+            *slot = Some(server.port);
+            server.port
+        };
+        drop(slot);
+        let url = format!(
+            "http://127.0.0.1:{port}/rough.html?x={}&y={}",
+            pt[0], pt[1]
+        );
+        let _ = std::process::Command::new("xdg-open").arg(&url).spawn();
+        CommandStep::Cancel
+    }
 }
 
 /// 交互插入：点击给出插入点 → 构造带属性的 Insert 交给宿主提交。
