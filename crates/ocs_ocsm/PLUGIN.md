@@ -71,8 +71,8 @@ rm -rf "$HOME/.config/OpenCADStudio/plugins/opencad.layers_quick"
 - 输入 `CC`（或 `OCSMRGH`）→ 表面粗糙度：点选插入点 → GUI 选 20 形态之
   一（4 基础体 × 5 附加区）+ 填属性文字（转 ATTDEF，可缺省空白）→ 应用插入。
   基础体：C1 基础 / C2 周边相同处理（此时 P 强制空白）/ C3 去除材料 /
-  C4 去除材料（必去）；附加区：R1 基础 / R2 高级+周边相同处理 / R3 高级 /
-  R4 上限开关 / R5 上限开关+高级+周边相同处理。注意 `CC` 原为 COPYCLIP
+  C4 去除材料（必去）；附加区：R1 基础 / R2 周边相同处理 / R3 高级 /
+  R4 上限开关 / R5 上限开关+周边相同处理。注意 `CC` 原为 COPYCLIP
   别名，插件命令优先级更高，会接管（COPYCLIP 可输全名）。
 - 环境变量 `OCSM_FRAME_DIR` 可覆盖图框文件夹（测试/排障用）。
 
