@@ -3017,10 +3017,10 @@ fn api_rough_apply(body: &[u8], sender: &Arc<dyn PluginRequestSender>) -> (u16, 
 /// 20 形态 = 4 基础体 × 5 附加区，坐标/文字位全部对照参考
 /// `OCSMDIMGULIDE/粗糙度1.dxf`（zw$ 块，20 个）1:1（× 图幅倍率）。
 ///
-/// 基础体：C1 基本 V / C2 V+内圆（不去除材料）/ C3 V+横线（去除材料）/
-///         C4 V+横线+短线+填充三角（去除材料）
-/// 附加区：R1 无 / R2 长横线+顶点圆 / R3 短横线 / R4 短横线+台阶 /
-///         R5 长横线+顶点圆+台阶
+/// 基础体：C1 基础 / C2 周边相同处理（V 内圆）/ C3 去除材料（V 内横线）/
+///         C4 去除材料·必去（横线+短线+填充三角）
+/// 附加区：R1 基础 / R2 高级+周边相同处理（长线+圆）/ R3 高级（短线）/
+///         R4 上限开关（台阶）/ R5 上限开关+高级+周边相同处理（台阶+长线+圆）
 /// 文字 ATTDEF（tag = 中文描述+英文代号，style OCSM_GB，可缺省空白）：
 /// 公共 A'（上限）/A（下限）@(8.248,11.65/7.1) h3.5 ML、E（加工余量）
 /// @(1.386,0) h4.9 ML；P（加工符号）@(11.009,1.4) h3.5 MC「仅非 C2 列」；
@@ -3059,7 +3059,7 @@ fn apply_roughness(
         "R1" => 0, "R2" => 1, "R3" => 2, "R4" => 3, "R5" => 4,
         _ => return Err(format!("无效的附加区 {extra}（应为 R1..R5）")),
     };
-    // C2 列（V内圆/不去除材料）：P 强制空白且不生成 P 属性（对照参考）。
+    // C2 列（周边相同处理）：P 强制空白且不生成 P 属性（对照参考）。
     let has_p = bi != 1;
     let p_value = if has_p { req.p.clone() } else { String::new() };
 
@@ -3078,7 +3078,7 @@ fn apply_roughness(
         _ => &[],
     };
     let base_circle: Option<(f64, f64, f64)> = if bi == 1 {
-        Some((7.072, 3.683, 1.667)) // C2 V内圆
+        Some((7.072, 3.683, 1.667)) // C2 周边相同处理（V 内圆）
     } else {
         None
     };
@@ -3089,22 +3089,22 @@ fn apply_roughness(
     };
     // 附加区差异件
     let extra_lines: &[((f64, f64), (f64, f64))] = match ri {
-        1 => &[((13.423, 11.35), (30.833, 11.35))], // R2 长横线
-        2 => &[((13.423, 11.35), (25.654, 11.35))], // R3 短横线
+        1 => &[((13.423, 11.35), (30.833, 11.35))], // R2 高级（长线）+ 周边
+        2 => &[((13.423, 11.35), (25.654, 11.35))], // R3 高级（短线）
         3 => &[
-            ((13.423, 11.35), (25.654, 11.35)), // R4 短横线 + 台阶
+            ((13.423, 11.35), (25.654, 11.35)), // R4 上限开关（台阶）
             ((13.423, 11.35), (16.656, 16.95)),
             ((16.656, 16.95), (25.654, 16.95)),
         ],
         4 => &[
-            ((13.423, 11.35), (30.833, 11.35)), // R5 长横线 + 台阶
+            ((13.423, 11.35), (30.833, 11.35)), // R5 上限开关+高级+周边
             ((13.423, 11.35), (16.656, 16.95)),
             ((16.656, 16.95), (30.833, 16.95)),
         ],
         _ => &[],
     };
     let extra_circle: Option<(f64, f64, f64)> = if ri == 1 || ri == 4 {
-        Some((13.423, 11.35, 1.667)) // R2/R5 顶点圆
+        Some((13.423, 11.35, 1.667)) // R2/R5 周边相同处理（顶点圆）
     } else {
         None
     };
@@ -3142,7 +3142,7 @@ fn apply_roughness(
     };
     if let Some(c) = base_circle { members.push(mk_circle(c)); }
     if let Some(c) = extra_circle { members.push(mk_circle(c)); }
-    // C4 填充三角（参考 HATCH，宿主用 SOLID 等效；第 4 点 = 第 3 点）
+    // C4 必去填充三角（参考 HATCH，宿主用 SOLID 等效；第 4 点 = 第 3 点）
     if let Some((a, b, c)) = base_fill {
         let mut e = E::Solid(Solid::new(
             Vector3::new(s(a.0), s(a.1), 0.0),
@@ -3170,6 +3170,7 @@ fn apply_roughness(
     }
     // 附加区文字
     // 附加区文字（B′ 总在最高位：R2/R3 y=12.4、R4/R5 y=18；B 仅 R4/R5 y=12.4）
+    //（R2 高级+周边 / R3 高级 / R4 上限开关 / R5 上限开关+高级+周边）
     let (bx, by, bbx, bby) = match ri {
         1 => (16.14, 12.4, 0.0, 0.0),      // R2: B′
         2 => (14.473, 12.4, 0.0, 0.0),     // R3: B′
@@ -4360,7 +4361,9 @@ mod integration {
         let html = http_req(server.port, "GET", "/rough.html?x=5&y=6", "");
         assert!(html.contains("OCSM 表面粗糙度"), "rough.html 内嵌 GUI");
         assert!(html.contains("/api/rough_apply"));
-        assert!(html.contains("不去除材料"));
+        assert!(html.contains("周边相同处理"), "rough.html 基础体术语");
+        assert!(html.contains("上限开关"));
+        assert!(html.contains("高级+周边相同处理"));
         let body = r#"{"x":50.0,"y":60.0,"base":"C4","extra":"R5","p":"",
             "rotation":0.0,"values":{"A′":"3.2"}}"#;
         let r = http_req(server.port, "POST", "/api/rough_apply", body);
