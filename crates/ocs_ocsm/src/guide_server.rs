@@ -3031,6 +3031,7 @@ fn apply_roughness(
     body: &[u8],
 ) -> Result<String, String> {
     use acadrust::entities::{AttributeDefinition, Circle, Insert, Line, Solid};
+    use acadrust::entities::Entity as _; // apply_transform
     use acadrust::entities::attribute_definition::{HorizontalAlignment, VerticalAlignment};
     use acadrust::types::{Color, Vector3};
     use acadrust::EntityType as E;
@@ -3064,6 +3065,30 @@ fn apply_roughness(
     let p_value = if has_p { req.p.clone() } else { String::new() };
 
     let doc = snapshot(sender)?;
+    // 幂等 ensure：文档缺 OCSM_GB 样式 / 8符号标注层时补齐（新图纸直接 CC
+    // 时宿主渲染 ATTDEF 会 fallback 未知字体、图层色错乱——用户实测）。
+    if !doc
+        .text_styles
+        .iter()
+        .any(|st| st.name.eq_ignore_ascii_case("OCSM_GB"))
+    {
+        req_timed(
+            sender,
+            PluginRequest::EnsureTextStyles(crate::text_style_defs()),
+            "EnsureTextStyles",
+        )?;
+    }
+    if !doc
+        .layers
+        .iter()
+        .any(|ly| ly.name.eq_ignore_ascii_case("8符号标注层"))
+    {
+        req_timed(
+            sender,
+            PluginRequest::EnsureLayers(crate::layer_defs()),
+            "EnsureLayers",
+        )?;
+    }
     let scale = frame_scale_at(&doc, [req.x, req.y, 0.0]);
     let s = |v: f64| v * scale;
     let rot: f64 = req.rotation.to_radians();
@@ -3164,7 +3189,7 @@ fn apply_roughness(
     // A' 上限 / A 下限：ML 左中；E 加工余量：ML；P 加工符号：MC
     attdefs.push(att("粗糙度上限A′", 8.248, 11.65, 3.5, false));
     attdefs.push(att("粗糙度下限A", 8.248, 7.1, 3.5, false));
-    attdefs.push(att("加工余量E", 1.386, 0.0, 4.9, false));
+    attdefs.push(att("备注E", 1.386, 0.0, 4.9, false));
     if has_p {
         attdefs.push(att("加工符号P", 11.009, 1.4, 3.5, true));
     }
@@ -3190,8 +3215,11 @@ fn apply_roughness(
     let value_of = |_tag: &str, alias: &str| -> String {
         req.values.get(alias).cloned().unwrap_or_default()
     };
-    let mut mk_attdef = |(tag, x, y, h, mc): (String, f64, f64, f64, bool), val: String| -> E {
-        let mut ad = AttributeDefinition::new(tag, String::new(), val);
+    // 块内 ATTDEF 模板（default 一律空格：宿主对空 default 渲染 tag 名会
+    // 在符号上堆出中文属性名——真实值只放 INSERT.attributes，图框同套路）。
+    let mut att_templates: Vec<acadrust::entities::AttributeDefinition> = Vec::new();
+    let mut mk_attdef = |(tag, x, y, h, mc): (String, f64, f64, f64, bool)| -> acadrust::entities::AttributeDefinition {
+        let mut ad = AttributeDefinition::new(tag, String::new(), " ".into());
         ad.insertion_point = Vector3::new(s(x), s(y), 0.0);
         ad.alignment_point = ad.insertion_point;
         ad.height = s(h);
@@ -3204,15 +3232,17 @@ fn apply_roughness(
             ad.set_alignment(HorizontalAlignment::Left, VerticalAlignment::Middle); // ML 左中
         }
         ad.flags.preset = true; // 插入时不逐项提示
-        let mut e = E::AttributeDefinition(ad);
-        set_member_layer(&mut e, "8符号标注层");
-        e.common_mut().color = Color::from_index(3); // 绿色（参考 62=3）
-        e
+        ad
     };
     for (tag, x, y, h, mc) in attdefs.iter() {
-        let alias = tag_alias(tag);
-        let val = if alias == "P" { p_value.clone() } else { value_of(tag, alias) };
-        members.push(mk_attdef((tag.clone(), *x, *y, *h, *mc), val));
+        let mut ad = mk_attdef((tag.clone(), *x, *y, *h, *mc));
+        ad.common.layer = "8符号标注层".into();
+        ad.common.color = Color::from_index(3); // 绿色（参考 62=3）
+        let mut e = E::AttributeDefinition(ad.clone());
+        set_member_layer(&mut e, "8符号标注层");
+        e.common_mut().color = Color::from_index(3);
+        members.push(e);
+        att_templates.push(ad);
     }
 
     // ── 匿名块 *D{n}（与其它标注共用计数器）──
@@ -3237,11 +3267,17 @@ fn apply_roughness(
     // ── INSERT @ 插入点（层 0 跟参考；rotation 由 GUI 指定；attributes 对齐 ATTDEF）──
     let mut ins = Insert::new(block_name.clone(), Vector3::new(req.x, req.y, 0.0));
     ins.rotation = rot;
-    for (tag, _x, _y, _h, _mc) in attdefs.iter() {
-        let alias = tag_alias(tag);
-        let val = if alias == "P" { p_value.clone() } else { value_of(tag, alias) };
-        let mut attr = acadrust::entities::AttributeEntity::new(tag.clone(), val);
-        attr.insertion_point = Vector3::new(req.x, req.y, 0.0);
+    // 属性值 = 用户输入（空 → 空格空白显示）；位置 = 块内 ATTDEF 位 ×变换
+    //（宿主把 attributes 当独立实体渲染在其自身坐标：必须 transform 到世界，
+    // 否则全部堆在插入点——用户实测「文字堆在了一起」）。
+    for ad in att_templates.iter() {
+        let alias = tag_alias(&ad.tag);
+        let val = if alias == "P" { p_value.clone() } else { value_of(&ad.tag, alias) };
+        let val = if val.trim().is_empty() { " ".to_string() } else { val };
+        let mut tmpl = ad.clone();
+        tmpl.rotation = 0.0; // 旋转由 INSERT 变换施加（避免双转）
+        let mut attr = acadrust::entities::AttributeEntity::from_definition(&tmpl, Some(val));
+        attr.apply_transform(&ins.get_transform());
         ins.attributes.push(attr);
     }
     let handle = match req_timed(
@@ -3274,7 +3310,7 @@ fn tag_alias(tag: &str) -> &str {
     match tag {
         "粗糙度上限A′" => "A′",
         "粗糙度下限A" => "A",
-        "加工余量E" => "E",
+        "备注E" => "E",
         "加工符号P" => "P",
         "加工方法B′" => "B′",
         "加工方法B" => "B",
@@ -4110,6 +4146,7 @@ struct MockSender {
     doc: std::sync::Mutex<acadrust::CadDocument>,
     url_writes: std::sync::Mutex<Vec<(acadrust::Handle, String)>>,
     blocks: std::sync::Mutex<Vec<(String, Vec<acadrust::EntityType>)>>,
+    ensures: std::sync::Mutex<Vec<String>>,
 }
 impl MockSender {
     fn new(doc: acadrust::CadDocument) -> Self {
@@ -4117,6 +4154,7 @@ impl MockSender {
             doc: std::sync::Mutex::new(doc),
             url_writes: std::sync::Mutex::new(Vec::new()),
             blocks: std::sync::Mutex::new(Vec::new()),
+            ensures: std::sync::Mutex::new(Vec::new()),
         }
     }
     fn block_entities(&self, name: &str) -> Vec<acadrust::EntityType> {
@@ -4177,6 +4215,20 @@ impl PluginRequestSender for MockSender {
             }
             R::AddBlockRecord { name, entities } => {
                 self.blocks.lock().unwrap().push((name, entities));
+                Ok(P::Ok)
+            }
+            R::EnsureTextStyles(defs) => {
+                self.ensures
+                    .lock()
+                    .unwrap()
+                    .extend(defs.iter().map(|d| format!("text:{}", d.name)));
+                Ok(P::Ok)
+            }
+            R::EnsureLayers(defs) => {
+                self.ensures
+                    .lock()
+                    .unwrap()
+                    .extend(defs.iter().map(|d| format!("layer:{}", d.name)));
                 Ok(P::Ok)
             }
             _ => Ok(P::Ok),
@@ -5200,7 +5252,7 @@ mod rough_tests {
         let tags: Vec<&str> = ads.iter().map(|a| a.tag.as_str()).collect();
         assert_eq!(
             tags,
-            vec!["粗糙度上限A′", "粗糙度下限A", "加工余量E", "加工符号P"]
+            vec!["粗糙度上限A′", "粗糙度下限A", "备注E", "加工符号P"]
         );
         // A′/A/E：ML 左中、h3.5/4.9、样式 OCSM_GB、绿色、8符号标注层。
         let a1 = &ads[0];
@@ -5219,8 +5271,9 @@ mod rough_tests {
         assert_eq!(p1.insertion_point.x, 11.009);
         assert_eq!(p1.insertion_point.y, 1.4);
         assert!(matches!(p1.horizontal_alignment, HorizontalAlignment::Center));
-        // 缺省空白。
-        assert_eq!(a1.default_value, "");
+        // 缺省显示空白：ATTDEF default 用空格（空 default 宿主显示 tag）；
+        // 真实值放 INSERT.attributes。
+        assert_eq!(a1.default_value, " ");
         // INSERT：层 0、attributes 与 ATTDEF 对齐。
         let inserts: Vec<_> = mock
             .doc
@@ -5240,7 +5293,18 @@ mod rough_tests {
         assert_eq!(ins.common.layer, "0");
         assert_eq!(ins.rotation, 0.0);
         let atags: Vec<&str> = ins.attributes.iter().map(|a| a.tag.as_str()).collect();
-        assert_eq!(atags, vec!["粗糙度上限A′", "粗糙度下限A", "加工余量E", "加工符号P"]);
+        assert_eq!(atags, vec!["粗糙度上限A′", "粗糙度下限A", "备注E", "加工符号P"]);
+        // 属性渲染位置 = 块内 ATTDEF 位变换到世界（不堆在插入点）。
+        let a1_attr = ins.attributes.iter().find(|a| a.tag == "粗糙度上限A′").unwrap();
+        assert!(
+            (a1_attr.insertion_point.x - 108.248).abs() < 0.01
+                && (a1_attr.insertion_point.y - 211.65).abs() < 0.01,
+            "attr pos=({:.3},{:.3})",
+            a1_attr.insertion_point.x,
+            a1_attr.insertion_point.y
+        );
+        assert_eq!(a1_attr.text_style, "OCSM_GB");
+        assert_eq!(a1_attr.common.color, Color::from_index(3));
     }
 
     #[test]
@@ -5273,11 +5337,21 @@ mod rough_tests {
         let mock2 = std::sync::Arc::new(MockSender::new(acadrust::CadDocument::new()));
         let body2 = rough_body(0.0, 0.0, "C1", "R1", "M", 0.0, &[]);
         let (_, members2) = rough_apply(&mock2, &body2).unwrap();
-        let p = count_attdefs(&members2)
+        let p_attr = mock2
+            .doc
+            .lock()
+            .unwrap()
+            .entities()
+            .find_map(|e| match e {
+                acadrust::EntityType::Insert(i) => Some(i.clone()),
+                _ => None,
+            })
+            .unwrap()
+            .attributes
             .into_iter()
             .find(|a| a.tag == "加工符号P")
             .unwrap();
-        assert_eq!(p.default_value, "M");
+        assert_eq!(p_attr.value, "M", "P 值写入 INSERT 属性（ATTDEF 常显空格）");
     }
 
     #[test]
@@ -5314,7 +5388,7 @@ mod rough_tests {
         assert_eq!(
             ads.iter().map(|a| a.tag.as_str()).collect::<Vec<_>>(),
             vec![
-                "粗糙度上限A′", "粗糙度下限A", "加工余量E", "加工符号P",
+                "粗糙度上限A′", "粗糙度下限A", "备注E", "加工符号P",
                 "加工方法B′", "加工方法B", "取样长度C", "纹理方向G",
             ]
         );
@@ -5341,6 +5415,25 @@ mod rough_tests {
     }
 
     #[test]
+    fn apply_roughness_ensures_ocsm_style_and_layers() {
+        // 空文档（未初始化）直接 CC：必须补 OCSM_GB 样式与 8符号标注层，
+        // 否则宿主渲染 ATTDEF 时 fallback 未知字体、文字堆叠（用户实测）。
+        let mock = std::sync::Arc::new(MockSender::new(acadrust::CadDocument::new()));
+        let body = rough_body(0.0, 0.0, "C1", "R1", "", 0.0, &[]);
+        rough_apply(&mock, &body).unwrap();
+        let ensures = mock.ensures.lock().unwrap().clone();
+        assert!(
+            ensures.iter().any(|e| e == "text:OCSM_GB"),
+            "确保 OCSM_GB 文字样式，实际: {ensures:?}"
+        );
+        assert!(
+            ensures.iter().any(|e| e == "layer:8符号标注层"),
+            "确保 8符号标注层"
+        );
+        // 10 图层 + 1 样式（空文档一次补齐）；重复 apply 不再追加（宿主幂等）。
+    }
+
+    #[test]
     fn apply_roughness_values_and_rotation() {
         let mock = std::sync::Arc::new(MockSender::new(acadrust::CadDocument::new()));
         let body = rough_body(
@@ -5357,11 +5450,9 @@ mod rough_tests {
         assert!((j["rotation"].as_f64().unwrap() - 90.0).abs() < 1e-9);
         let ads = count_attdefs(&members);
         let a1 = ads.iter().find(|a| a.tag == "粗糙度上限A′").unwrap();
-        assert_eq!(a1.default_value, "3.2");
+        assert_eq!(a1.default_value, " ", "ATTDEF 常显空格（值走 attributes）");
         assert!((a1.rotation - std::f64::consts::PI / 2.0).abs() < 1e-9, "ATTDEF 随符号旋转");
-        let p = ads.iter().find(|a| a.tag == "加工符号P").unwrap();
-        assert_eq!(p.default_value, "⊥");
-        // INSERT attributes 对齐 ATTDEF 值。
+        // INSERT attributes 对齐 ATTDEF 值 + 位置随插入点/旋转变换。
         let ins = mock
             .doc
             .lock()
@@ -5379,6 +5470,18 @@ mod rough_tests {
         assert_eq!(a.value, "3.2");
         let p = attrs.iter().find(|a| a.tag == "加工符号P").unwrap();
         assert_eq!(p.value, "⊥");
+        // 90° 旋转：A′ 块内位 (8.248,11.65) → 绕原点转 → (−11.65,8.248)。
+        assert!(
+            (a.insertion_point.x - (-11.65)).abs() < 0.02 && (a.insertion_point.y - 8.248).abs() < 0.02,
+            "90° attr pos=({:.3},{:.3})",
+            a.insertion_point.x,
+            a.insertion_point.y
+        );
+        // 传入的 E=5（values 键 E）→ 备注E value=5；未传的 A/B′ 等 = 空格。
+        let e = attrs.iter().find(|a| a.tag == "备注E").unwrap();
+        assert_eq!(e.value, "5");
+        let a_lo = attrs.iter().find(|a| a.tag == "粗糙度下限A").unwrap();
+        assert_eq!(a_lo.value, "1.6");
     }
 
     #[test]

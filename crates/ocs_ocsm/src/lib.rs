@@ -52,7 +52,7 @@ static MANIFEST: PluginManifest = PluginManifest {
 /// 10 层模板（来自 opencad.layers_quick，名称数字后无空格；线型全部在
 /// OCS 内置 OpenCADStudio.lin 表中）。第 10 层为引导线层：默认关闭（隐藏），
 /// 线宽 0mm（本身不打印），用于承载 AI/用户画的引导线。
-fn layer_defs() -> Vec<LayerDef> {
+pub(crate) fn layer_defs() -> Vec<LayerDef> {
     let lw = |v: i16| LineWeight::from_value(v);
     vec![
         LayerDef {
@@ -161,7 +161,7 @@ fn linetype_defs() -> Vec<LinetypeDef> {
 }
 
 /// OCSM_GB 文字样式（固定高度 3.5、宽度因子 0.7、注释性）。
-fn text_style_defs() -> Vec<TextStyleDef> {
+pub(crate) fn text_style_defs() -> Vec<TextStyleDef> {
     vec![TextStyleDef {
         name: "OCSM_GB".into(),
         font_file: "Unicode".into(),
