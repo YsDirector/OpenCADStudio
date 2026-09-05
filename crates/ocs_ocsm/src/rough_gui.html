@@ -97,8 +97,7 @@
       <div class="hint">符号绕插入点旋转（默认 0）。</div>
     </div>
     <div class="bar">
-      <button class="btn primary" id="apply">应用并插入</button>
-      <button class="btn ghost" id="close">关闭</button>
+      <button class="btn primary" id="apply">应用并关闭</button>
     </div>
     <div id="status"></div>
   </div>
@@ -276,8 +275,11 @@
       const j = await r.json();
       if (j.ok) {
         status.className = 'ok';
-        status.textContent = '已插入（块 ' + j.block + '，比例 ' + j.scale + '）。可关闭本页。';
+        status.textContent = '已插入（块 ' + j.block + '，比例 ' + j.scale + '）。';
         if (j.error) status.textContent = '已插入：' + j.error;
+        // 成功自动关闭页面。
+        setTimeout(() => { try { window.close(); } catch (_) {} }, 350);
+        return;
       } else {
         status.className = 'bad';
         status.textContent = '失败：' + (j.error || JSON.stringify(j));
@@ -289,7 +291,7 @@
       applyBtn.disabled = false;
     }
   });
-  document.getElementById('close').addEventListener('click', () => window.close());
+
 })();
 </script>
 </body>
