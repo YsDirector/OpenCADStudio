@@ -3017,7 +3017,7 @@ fn api_rough_apply(body: &[u8], sender: &Arc<dyn PluginRequestSender>) -> (u16, 
 /// 20 形态 = 4 基础体 × 5 附加区，坐标/文字位全部对照参考
 /// `OCSMDIMGULIDE/粗糙度1.dxf`（zw$ 块，20 个）1:1（× 图幅倍率）。
 ///
-/// 基础体：C1 基础 / C2 周边相同处理（V 内圆）/ C3 去除材料（V 内横线）/
+/// 基础体：C1 通用 / C2 以不去除材料的方法获得（V 内圆）/ C3 去除材料（V 内横线）/
 ///         C4 焊后加工（横线+短线+填充三角）
 /// 附加区：R1 基础 / R2 周边相同处理（长线+圆）/ R3 高级（短线）/
 ///         R4 上限开关（台阶）/ R5 上限开关+周边相同处理（台阶+长线+圆）
@@ -3059,7 +3059,7 @@ fn apply_roughness(
         "R1" => 0, "R2" => 1, "R3" => 2, "R4" => 3, "R5" => 4,
         _ => return Err(format!("无效的附加区 {extra}（应为 R1..R5）")),
     };
-    // C2 列（周边相同处理）：P 强制空白且不生成 P 属性（对照参考）。
+    // C2 列（以不去除材料的方法获得）：P 强制空白且不生成 P 属性（对照参考）。
     let has_p = bi != 1;
     let p_value = if has_p { req.p.clone() } else { String::new() };
 
@@ -3078,7 +3078,7 @@ fn apply_roughness(
         _ => &[],
     };
     let base_circle: Option<(f64, f64, f64)> = if bi == 1 {
-        Some((7.072, 3.683, 1.667)) // C2 周边相同处理（V 内圆）
+        Some((7.072, 3.683, 1.667)) // C2 以不去除材料的方法获得（V 内圆）
     } else {
         None
     };

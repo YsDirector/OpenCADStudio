@@ -44,8 +44,8 @@
 <div class="card">
   <h2>基础体（V 内差异）</h2>
   <div class="row" id="baseRow">
-    <button class="opt" data-v="C1">C1 基础</button>
-    <button class="opt" data-v="C2">C2 周边相同处理</button>
+    <button class="opt" data-v="C1">C1 通用</button>
+    <button class="opt" data-v="C2">C2 以不去除材料的方法获得</button>
     <button class="opt" data-v="C3">C3 去除材料</button>
     <button class="opt" data-v="C4">C4 焊后加工</button>
   </div>
@@ -89,7 +89,7 @@
         <option value="R">R</option>
         <option value="P">P</option>
       </select>
-      <div class="hint">仅 C2（周边相同处理）时强制空白。</div>
+      <div class="hint">仅 C2（以不去除材料的方法获得）时强制空白。</div>
     </div>
     <div class="card">
       <h2>旋转</h2>
@@ -226,7 +226,7 @@
   BASE.addEventListener('click', e => {
     const b = e.target.closest('button'); if (!b) return;
     base = b.dataset.v; btn(BASE, base);
-    // C2（周边相同处理）时 P 强制空白并禁用（对照参考：该列无 P）。
+    // C2（以不去除材料的方法获得）时 P 强制空白并禁用（对照参考：该列无 P）。
     const pSel = document.getElementById('pSel');
     if (base === 'C2') { pSel.value = ''; pSel.disabled = true; }
     else pSel.disabled = false;
