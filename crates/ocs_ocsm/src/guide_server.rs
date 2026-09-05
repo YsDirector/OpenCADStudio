@@ -3018,7 +3018,7 @@ fn api_rough_apply(body: &[u8], sender: &Arc<dyn PluginRequestSender>) -> (u16, 
 /// `OCSMDIMGULIDE/粗糙度1.dxf`（zw$ 块，20 个）1:1（× 图幅倍率）。
 ///
 /// 基础体：C1 基础 / C2 周边相同处理（V 内圆）/ C3 去除材料（V 内横线）/
-///         C4 去除材料·必去（横线+短线+填充三角）
+///         C4 焊后加工（横线+短线+填充三角）
 /// 附加区：R1 基础 / R2 周边相同处理（长线+圆）/ R3 高级（短线）/
 ///         R4 上限开关（台阶）/ R5 上限开关+周边相同处理（台阶+长线+圆）
 /// 文字 ATTDEF（tag = 中文描述+英文代号，style OCSM_GB，可缺省空白）：
@@ -3083,7 +3083,7 @@ fn apply_roughness(
         None
     };
     let base_fill: Option<((f64, f64), (f64, f64), (f64, f64))> = if bi == 3 {
-        Some(((4.186, 5.35), (9.959, 5.35), (7.072, 0.35))) // C4 填充三角
+        Some(((4.186, 5.35), (9.959, 5.35), (7.072, 0.35))) // C4 焊后加工填充三角
     } else {
         None
     };
@@ -3142,7 +3142,7 @@ fn apply_roughness(
     };
     if let Some(c) = base_circle { members.push(mk_circle(c)); }
     if let Some(c) = extra_circle { members.push(mk_circle(c)); }
-    // C4 必去填充三角（参考 HATCH，宿主用 SOLID 等效；第 4 点 = 第 3 点）
+    // C4 焊后加工填充三角（参考 HATCH，宿主用 SOLID 等效；第 4 点 = 第 3 点）
     if let Some((a, b, c)) = base_fill {
         let mut e = E::Solid(Solid::new(
             Vector3::new(s(a.0), s(a.1), 0.0),
