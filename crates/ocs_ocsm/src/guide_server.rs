@@ -3181,19 +3181,20 @@ fn apply_roughness(
     }
 
     // ── ATTDEF（tag = 中文描述+英文代号；style OCSM_GB；可缺省空白）──
-    // (tag, x, y, 高, 对齐 ML/MC, value 取自 req.values)
-    let mut attdefs: Vec<(String, f64, f64, f64, bool)> = Vec::new();
-    let att = |tag: &str, x: f64, y: f64, h: f64, mc: bool| -> (String, f64, f64, f64, bool) {
-        (tag.to_string(), x, y, h, mc)
+    // (tag, x, y, 高, 对齐：rb=右下(Right+Bottom)/lb=左下(Left+Bottom))
+    // 对齐依据 = 素材块 MTEXT 的 71 组标准语义：A′/A/E = 71:9 → 右下、
+    // P/B′/B/C/G = 71:7 → 左下（文字块以锚点为右下/左下角——素材原图
+    // 就按此渲染；此前 ML 左缘导致我们整体偏右，用户实测对照确认）。
+    let mut attdefs: Vec<(String, f64, f64, f64, &'static str)> = Vec::new();
+    let att = |tag: &str, x: f64, y: f64, h: f64, al: &'static str| -> (String, f64, f64, f64, &'static str) {
+        (tag.to_string(), x, y, h, al)
     };
-    // A' 上限 / A 下限：ML 左中；E 加工余量：ML；P 加工符号：MC
-    attdefs.push(att("粗糙度上限A′", 8.248, 11.65, 3.5, false));
-    attdefs.push(att("粗糙度下限A", 8.248, 7.1, 3.5, false));
-    attdefs.push(att("备注E", 1.386, 0.0, 4.9, false));
+    attdefs.push(att("粗糙度上限A′", 8.248, 11.65, 3.5, "rb"));
+    attdefs.push(att("粗糙度下限A", 8.248, 7.1, 3.5, "rb"));
+    attdefs.push(att("备注E", 1.386, 0.0, 4.9, "rb"));
     if has_p {
-        attdefs.push(att("加工符号P", 11.009, 1.4, 3.5, true));
+        attdefs.push(att("加工符号P", 11.009, 1.4, 3.5, "lb"));
     }
-    // 附加区文字
     // 附加区文字（B′ 总在最高位：R2/R3 y=12.4、R4/R5 y=18；B 仅 R4/R5 y=12.4）
     //（R2 周边 / R3 高级 / R4 上限开关 / R5 上限开关+周边）
     let (bx, by, bbx, bby) = match ri {
@@ -3202,14 +3203,14 @@ fn apply_roughness(
         _ => (17.706, 18.0, 17.706, 12.4), // R4/R5: B′@18、B@12.4
     };
     if ri >= 1 {
-        attdefs.push(att("加工方法B′", bx, by, 3.5, true));
+        attdefs.push(att("加工方法B′", bx, by, 3.5, "lb"));
     }
     if ri >= 3 {
-        attdefs.push(att("加工方法B", bbx, bby, 3.5, true));
+        attdefs.push(att("加工方法B", bbx, bby, 3.5, "lb"));
     }
     if ri >= 1 {
-        attdefs.push(att("取样长度C", bx, 6.8, 3.5, true));
-        attdefs.push(att("纹理方向G", bx, 2.25, 3.5, true));
+        attdefs.push(att("取样长度C", bx, 6.8, 3.5, "lb"));
+        attdefs.push(att("纹理方向G", bx, 2.25, 3.5, "lb"));
     }
     // 值（values 键 = 英文代号：A' / A / E / P / B / B' / C / G）
     let value_of = |_tag: &str, alias: &str| -> String {
@@ -3218,7 +3219,7 @@ fn apply_roughness(
     // 块内 ATTDEF 模板（default 一律空格：宿主对空 default 渲染 tag 名会
     // 在符号上堆出中文属性名——真实值只放 INSERT.attributes，图框同套路）。
     let mut att_templates: Vec<acadrust::entities::AttributeDefinition> = Vec::new();
-    let mut mk_attdef = |(tag, x, y, h, mc): (String, f64, f64, f64, bool)| -> acadrust::entities::AttributeDefinition {
+    let mut mk_attdef = |(tag, x, y, h, al): (String, f64, f64, f64, &str)| -> acadrust::entities::AttributeDefinition {
         let mut ad = AttributeDefinition::new(tag, String::new(), " ".into());
         ad.insertion_point = Vector3::new(s(x), s(y), 0.0);
         ad.alignment_point = ad.insertion_point;
@@ -3226,16 +3227,18 @@ fn apply_roughness(
         ad.rotation = rot; // 符号旋转时文字随符号旋转
         ad.width_factor = 0.7; // 与 OCSM_GB 一致
         ad.text_style = "OCSM_GB".into();
-        if mc {
-            ad.set_alignment(HorizontalAlignment::Center, VerticalAlignment::Middle); // MC 正中
+        // 对齐：rb = 右下（Right+Bottom）、lb = 左下（Left+Bottom），
+        // 对应素材块 MTEXT 71:9 / 71:7 的标准渲染。
+        if al == "rb" {
+            ad.set_alignment(HorizontalAlignment::Right, VerticalAlignment::Bottom);
         } else {
-            ad.set_alignment(HorizontalAlignment::Left, VerticalAlignment::Middle); // ML 左中
+            ad.set_alignment(HorizontalAlignment::Left, VerticalAlignment::Bottom);
         }
         ad.flags.preset = true; // 插入时不逐项提示
         ad
     };
-    for (tag, x, y, h, mc) in attdefs.iter() {
-        let mut ad = mk_attdef((tag.clone(), *x, *y, *h, *mc));
+    for (tag, x, y, h, al) in attdefs.iter() {
+        let mut ad = mk_attdef((tag.clone(), *x, *y, *h, al));
         ad.common.layer = "8符号标注层".into();
         ad.common.color = Color::from_index(3); // 绿色（参考 62=3）
         let mut e = E::AttributeDefinition(ad.clone());
@@ -5261,8 +5264,9 @@ mod rough_tests {
         assert_eq!(a1.height, 3.5);
         assert_eq!(a1.text_style, "OCSM_GB");
         assert_eq!(a1.width_factor, 0.7);
-        assert!(matches!(a1.horizontal_alignment, HorizontalAlignment::Left));
-        assert!(matches!(a1.vertical_alignment, VerticalAlignment::Middle));
+        // 对齐跟随素材 MTEXT 71 组语义：A′/A/E = 71:9 → 右下；P = 71:7 → 左下。
+        assert!(matches!(a1.horizontal_alignment, HorizontalAlignment::Right));
+        assert!(matches!(a1.vertical_alignment, VerticalAlignment::Bottom));
         assert_eq!(a1.common.layer, "8符号标注层");
         assert_eq!(a1.common.color, Color::from_index(3));
         let e1 = &ads[2];
@@ -5270,7 +5274,8 @@ mod rough_tests {
         let p1 = &ads[3];
         assert_eq!(p1.insertion_point.x, 11.009);
         assert_eq!(p1.insertion_point.y, 1.4);
-        assert!(matches!(p1.horizontal_alignment, HorizontalAlignment::Center));
+        assert!(matches!(p1.horizontal_alignment, HorizontalAlignment::Left));
+        assert!(matches!(p1.vertical_alignment, VerticalAlignment::Bottom));
         // 缺省显示空白：ATTDEF default 用空格（空 default 宿主显示 tag）；
         // 真实值放 INSERT.attributes。
         assert_eq!(a1.default_value, " ");
