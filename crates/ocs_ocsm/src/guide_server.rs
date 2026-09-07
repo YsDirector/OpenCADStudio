@@ -6542,6 +6542,203 @@ mod weld_tests {
         assert!(r3.contains("3 顶点"), "4 顶点应报错: {r3}");
     }
 
+    /// 冒烟测试用宿主代理：把插件请求真实落到 CadDocument（镜像宿主
+    /// add_block_record/ensure_* 语义），供 DxfWriter 写出检查文件。
+    struct ApplySender {
+        doc: std::sync::Mutex<acadrust::CadDocument>,
+    }
+    impl ApplySender {
+        fn new(doc: acadrust::CadDocument) -> Self {
+            ApplySender { doc: std::sync::Mutex::new(doc) }
+        }
+    }
+    impl PluginRequestSender for ApplySender {
+        fn request(
+            &self,
+            req: PluginRequest,
+        ) -> Result<PluginResponse, PluginRequestError> {
+            use PluginRequest as R;
+            use PluginResponse as P;
+            match req {
+                R::EnsureTextStyles(defs) => {
+                    use acadrust::tables::TextStyle;
+                    let mut doc = self.doc.lock().unwrap();
+                    for d in defs {
+                        if doc
+                            .text_styles
+                            .iter()
+                            .any(|x| x.name.eq_ignore_ascii_case(&d.name))
+                        {
+                            continue;
+                        }
+                        let mut st = TextStyle::new(&d.name);
+                        st.handle = doc.allocate_handle();
+                        st.font_file = d.font_file;
+                        st.big_font_file = d.big_font_file;
+                        st.true_type_font = d.true_type_font;
+                        st.height = d.height;
+                        st.width_factor = d.width_factor;
+                        st.annotative = d.annotative;
+                        st.is_shape_file = d.is_shape_file;
+                        st.is_vertical = d.is_vertical;
+                        doc.text_styles.add_or_replace(st);
+                    }
+                    Ok(P::Ok)
+                }
+                R::EnsureLayers(defs) => {
+                    let mut doc = self.doc.lock().unwrap();
+                    for d in defs {
+                        if doc
+                            .layers
+                            .iter()
+                            .any(|x| x.name.eq_ignore_ascii_case(&d.name))
+                        {
+                            continue;
+                        }
+                        let mut ly = acadrust::tables::Layer::new(&d.name);
+                        ly.handle = doc.allocate_handle();
+                        ly.color = d.color;
+                        ly.line_type = d.linetype;
+                        ly.line_weight = d.lineweight;
+                        ly.is_plottable = d.plottable;
+                        ly.flags.off = d.off;
+                        doc.layers.add_or_replace(ly);
+                    }
+                    Ok(P::Ok)
+                }
+                R::EnsureLinetypes(defs) => {
+                    use acadrust::tables::{LineType, LineTypeElement};
+                    let mut doc = self.doc.lock().unwrap();
+                    for d in defs {
+                        if doc
+                            .line_types
+                            .iter()
+                            .any(|x| x.name.eq_ignore_ascii_case(&d.name))
+                        {
+                            continue;
+                        }
+                        let mut lt = LineType::new(&d.name);
+                        lt.handle = doc.allocate_handle();
+                        lt.description = d.description;
+                        lt.elements = d
+                            .elements
+                            .into_iter()
+                            .map(|v| LineTypeElement { length: v, complex: None })
+                            .collect();
+                        lt.pattern_length =
+                            lt.elements.iter().map(|e| e.length.abs()).sum();
+                        doc.line_types.add_or_replace(lt);
+                    }
+                    Ok(P::Ok)
+                }
+                R::AddBlockRecord { name, entities } => {
+                    use acadrust::entities::{Block, BlockEnd};
+                    use acadrust::EntityType as E;
+                    let mut doc = self.doc.lock().unwrap();
+                    if name.trim().is_empty() || doc.block_records.get(&name).is_some() {
+                        return Ok(P::Error("add_block_record: 名称空或已存在".into()));
+                    }
+                    let mut br = acadrust::tables::BlockRecord::new(&name);
+                    br.handle = doc.allocate_handle();
+                    let origin = acadrust::types::Vector3::new(0.0, 0.0, 0.0);
+                    let mut block = Block::new(&name, origin);
+                    block.common.handle = doc.allocate_handle();
+                    block.common.owner_handle = br.handle;
+                    br.block_entity_handle = block.common.handle;
+                    doc.add_entity(E::Block(block)).map_err(|e| {
+                        PluginRequestError(e.to_string())
+                    })?;
+                    let br_handle = br.handle;
+                    doc.block_records.add(br).map_err(|e| {
+                        PluginRequestError(e.to_string())
+                    })?;
+                    let mut member_handles = Vec::new();
+                    for mut e in entities {
+                        e.common_mut().owner_handle = br_handle;
+                        member_handles.push(doc.add_entity(e).map_err(|e| {
+                            PluginRequestError(e.to_string())
+                        })?);
+                    }
+                    let mut end = BlockEnd::new();
+                    end.common.handle = doc.allocate_handle();
+                    end.common.owner_handle = br_handle;
+                    let end_handle = end.common.handle;
+                    doc.add_entity(E::BlockEnd(end)).map_err(|e| {
+                        PluginRequestError(e.to_string())
+                    })?;
+                    if let Some(br) = doc.block_records.get_mut(&name) {
+                        br.entity_handles = member_handles;
+                        br.block_end_handle = end_handle;
+                    }
+                    Ok(P::Handle(br_handle))
+                }
+                R::AddEntities(vec) => {
+                    let mut doc = self.doc.lock().unwrap();
+                    let mut hs = Vec::new();
+                    for e in vec {
+                        hs.push(
+                            doc.add_entity(e)
+                                .map_err(|e| PluginRequestError(e.to_string()))?,
+                        );
+                    }
+                    Ok(P::Handles(hs))
+                }
+                _ => Ok(P::Ok),
+            }
+        }
+    }
+
+    /// 冒烟测试（设 OCSM_WELD_SMOKE_OUT 才写文件）：箭头侧单边V焊缝标注。
+    /// 引导：焊缝点 (0,0)（箭头尖，从 (100,100) 指向 (0,0)）、拐点 (100,100)、
+    /// 基准线末端 (147.647,100)（右向 47.647 照参考）。上侧=带单边坡口的V型
+    /// 对接焊缝、厚度尺寸=5、尾部注释=N=2；虚线/下侧/圆/旗/C 全关。
+    #[test]
+    fn weld_smoke_write_dxf() {
+        let out = std::env::var("OCSM_WELD_SMOKE_OUT").unwrap_or_default();
+        if out.is_empty() {
+            return; // 未设环境变量时跳过（无副作用）
+        }
+        // 引导 PLINE（10引导线层，真实流程里保留不打印）。
+        let mut guide_doc = acadrust::CadDocument::new();
+        let mut pl = LwPolyline::new();
+        pl.common.layer = "10引导线层".into();
+        pl.add_point(Vector2::new(0.0, 0.0));
+        pl.add_point(Vector2::new(100.0, 100.0));
+        pl.add_point(Vector2::new(147.647, 100.0));
+        guide_doc.add_entity(E::LwPolyline(pl)).unwrap();
+        let mock = Arc::new(ApplySender::new(guide_doc));
+        let sender: Arc<dyn PluginRequestSender> = mock.clone();
+        let params = {
+            let mut p = GuideParams::linear(LinearSub::Aligned, 0.0);
+            p.guide_type = GuideType::Weld;
+            p.weld = WeldParams {
+                upper: "带单边坡口的V型对接焊缝".into(),
+                lower: String::new(),
+                dash: false,
+                circle: false,
+                flag: false,
+                tail: true,
+                c: false,
+                up_thick: "5".into(),
+                up_qty: String::new(),
+                lo_thick: String::new(),
+                lo_qty: String::new(),
+                tail_text: "N=2".into(),
+            };
+            p
+        };
+        // doc 参数传独立空文档（避免与 ApplySender 锁死锁；apply_weld 只读
+        // 它做样式检查/计数器，ensure 请求会落到 ApplySender 的真文档）。
+        let read_doc = acadrust::CadDocument::new();
+        apply_weld(&sender, &read_doc, [0.0, 0.0, 0.0], [100.0, 100.0, 0.0], [147.647, 100.0, 0.0], &params)
+            .unwrap();
+        let doc = mock.doc.lock().unwrap();
+        acadrust::io::DxfWriter::new(&doc)
+            .write_to_file(&out)
+            .unwrap();
+        println!("weld smoke dxf written: {out}");
+    }
+
     #[test]
     fn http_server_serves_weld_gui_and_syms() {
         // guide.html：焊接按钮/面板/URL 参数键/符号几何端点（静态断言；
