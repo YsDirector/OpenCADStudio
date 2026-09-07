@@ -21,7 +21,7 @@ use ocs_plugin_api::host::acadrust::xdata::{ExtendedDataRecord, XDataValue};
 use ocs_plugin_api::host::PluginRequestSender;
 use ocs_plugin_api::ipc::protocol::{PluginRequest, PluginResponse};
 
-use crate::guide_url::{GdtRow, GuideParams, GuideType, LinearSub};
+use crate::guide_url::{GdtRow, GuideParams, GuideType, LinearSub, WeldParams};
 use crate::{frame_scale_at, linear_text_pos, stamp, trim_scale, v3};
 
 /// 默认端口；占用时自动 +1 递增重试。
@@ -172,6 +172,7 @@ fn route(
         ("POST", "/api/apply") => api_apply(body, sender, false),
         ("POST", "/api/apply_refresh") => api_apply(body, sender, true),
         ("POST", "/api/rough_apply") => api_rough_apply(body, sender),
+        ("GET", "/api/weld_syms") => (200, json, weld_syms_json()),
         ("POST", "/api/mcp") => api_mcp(body, sender),
         _ => (404, text, "not found".into()),
     }
@@ -1101,6 +1102,7 @@ fn build_dimension(
         GuideType::Tolerance => return Err("形位公差走 do_apply 独立分支".into()),
         GuideType::Detail => return Err("局部放大图走 do_apply 独立分支".into()),
         GuideType::ArcLen => return Err("弧长标注走 do_apply 独立分支".into()),
+        GuideType::Weld => return Err("焊接符号走 do_apply 独立分支".into()),
     };
     // 用户指定小数位数：覆盖 XDATA DSTYLE 里的 DIMDEC(271)（默认样式 4）。
     if let Some(d) = params.dec {
@@ -2800,6 +2802,15 @@ fn do_apply(
         return Ok(out);
     }
 
+    // 焊接符号：两段 PLINE（恰好 3 顶点）→ 匿名块 *W{n} + INSERT@拐点。
+    // 引导 PLINE 不删（10引导线层不打印），保留可重选再改。
+    if params.guide_type == GuideType::Weld {
+        if pts.len() != 3 {
+            return Err("焊接标注需要两段多段线（PLINE，3 顶点：焊缝点→拐点→基准线末端）".into());
+        }
+        return apply_weld(sender, &doc, pts[0], pts[1], pts[2], &params);
+    }
+
     let dim = build_dimension(sender, &doc, p1, p2, &params, &style)?;
     let dim_handle = match req_timed(
         sender,
@@ -2885,6 +2896,7 @@ fn api_guide(target: &str, sender: &Arc<dyn PluginRequestSender>) -> (u16, &'sta
                         "detail_scale": p.detail_scale,
                         "detail_no": p.detail_no,
                         "detail_pos": p.detail_pos,
+                        "weld": weld_params_json(&p.weld),
                     })),
                 });
                 (200, json, resp.to_string())
@@ -3304,6 +3316,486 @@ fn apply_roughness(
         "p": p_value,
         "scale": scale,
         "rotation": req.rotation,
+    })
+    .to_string())
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 焊接符号（WELD）：两段 PLINE 引导 → 匿名块 *W{n}（GB/T 324 焊缝标注全家福）。
+// 骨架尺寸 1:1 对照 OCSMDIMGULIDE/焊接符号示例.dxf（箭头 3.5×0.587、虚线偏移
+// 0.700、全周边圆 r1.75、旗杆 7.0、旗 5.25×3.5、尾叉 3.5、符号槽 +19.413、
+// 数字区 ±2.750、C 弧 r2.625 @+20.538）；符号几何由 焊接符号表.dxf 的 27 个
+// 块（24 镜像对 + 3 跨线单置）逐块归一化生成（锚点=贴线特征点→(0,0)，
+// 行基线 y=0：上侧 y>0、下侧/镜像 y<0、跨线骑 0）。
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// 焊缝符号实体（局部坐标）。
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum WeldSymEnt {
+    /// 直线 (x1,y1)→(x2,y2)
+    Line(f64, f64, f64, f64),
+    /// 圆 (cx,cy) r
+    Circle(f64, f64, f64),
+    /// 圆弧 (cx,cy) r 起止角（度，CCW，DXF 50/51 语义）
+    Arc(f64, f64, f64, f64, f64),
+    /// 固定小字（持久衬垫 MR / 临时衬垫 M），中中锚定（OCSM_GB 替代 PC_TEXTSTYLE）
+    Text(f64, f64, &'static str),
+}
+
+/// 焊缝符号实体别名（表内构造用）。
+type WSE = WeldSymEnt;
+
+/// 27 个焊缝符号：(名称, 上侧几何, 下侧几何（镜像版；None=无）, 跨线单置)。
+/// 跨线单置（参考线上的点/缝焊缝、堆焊接头）只有一种位置——骑基准线。
+static WELD_SYMS: &[(
+    &'static str,
+    &'static [WeldSymEnt],
+    Option<&'static [WeldSymEnt]>,
+    bool,
+)] = &[
+    ("参考线上的点焊缝", &[WSE::Circle(2.275, 0.0, 2.275)], None, true),
+    ("参考线上的缝焊缝", &[WSE::Circle(3.5, 0.0, 2.625), WSE::Line(0.0, -1.312, 7.0, -1.312), WSE::Line(0.0, 1.313, 7.0, 1.313)], None, true),
+    ("堆焊接头", &[WSE::Line(0.0, -0.7, 5.25, -0.7), WSE::Line(0.0, 0.7, 5.25, 0.7)], None, true),
+    ("I型对接焊缝", &[WSE::Line(0.0, 0.0, 0.0, 3.5), WSE::Line(2.45, 0.0, 2.45, 3.5)], Some(&[WSE::Line(0.0, 0.0, 0.0, -3.5), WSE::Line(2.45, 0.0, 2.45, -3.5)]), false),
+    ("V型对接焊缝", &[WSE::Line(0.0, 3.5, 1.75, 0.0), WSE::Line(1.75, 0.0, 3.5, 3.5)], Some(&[WSE::Line(0.0, -3.5, 1.75, 0.0), WSE::Line(1.75, 0.0, 3.5, -3.5)]), false),
+    ("临时衬垫", &[WSE::Line(0.0, 0.0, 0.0, 2.8), WSE::Line(0.0, 2.8, 5.25, 2.8), WSE::Line(5.25, 2.8, 5.25, 0.0), WSE::Text(2.625, 1.4, "M")], Some(&[WSE::Line(0.0, 0.0, 0.0, -2.8), WSE::Line(0.0, -2.8, 5.25, -2.8), WSE::Line(5.25, -2.8, 5.25, 0.0), WSE::Text(2.625, -1.4, "M")]), false),
+    ("倾斜接头", &[WSE::Line(0.0, 0.0, 4.547, 2.625), WSE::Line(0.0, 2.1, 4.547, 4.725)], Some(&[WSE::Line(0.0, 0.0, 4.547, -2.625), WSE::Line(0.0, -2.1, 4.547, -4.725)]), false),
+    ("单边喇叭形焊", &[WSE::Line(0.0, 0.0, 0.0, 3.5), WSE::Line(1.05, 0.0, 1.05, 0.525), WSE::Arc(4.025, 0.525, 2.975, 90.0, 180.0)], Some(&[WSE::Line(0.0, 0.0, 0.0, -3.5), WSE::Line(1.05, 0.0, 1.05, -0.525), WSE::Arc(4.025, -0.525, 2.975, 180.0, 270.0)]), false),
+    ("单边陡侧V型坡口对焊", &[WSE::Line(0.0, 0.125, 2.1, 0.125), WSE::Line(0.0, 0.125, 0.0, 3.625), WSE::Line(1.05, 0.125, 2.1, 3.625)], Some(&[WSE::Line(0.0, -0.125, 2.1, -0.125), WSE::Line(0.0, -0.125, 0.0, -3.625), WSE::Line(1.05, -0.125, 2.1, -3.625)]), false),
+    ("卷边焊缝", &[WSE::Arc(0.0, 3.1, 2.975, 270.0, 0.0), WSE::Arc(7.0, 3.1, 2.975, 180.0, 270.0), WSE::Line(0.0, 0.125, 7.0, 0.125), WSE::Line(2.975, 3.1, 2.975, 3.625), WSE::Line(4.025, 3.1, 4.025, 3.625)], Some(&[WSE::Arc(0.0, -3.1, 2.975, 0.0, 90.0), WSE::Arc(7.0, -3.1, 2.975, 90.0, 180.0), WSE::Line(0.0, -0.125, 7.0, -0.125), WSE::Line(2.975, -3.1, 2.975, -3.625), WSE::Line(4.025, -3.1, 4.025, -3.625)]), false),
+    ("喇叭形焊", &[WSE::Arc(0.0, 0.525, 2.975, 0.0, 90.0), WSE::Arc(7.0, 0.525, 2.975, 90.0, 180.0), WSE::Line(2.975, -0.0, 2.975, 0.525), WSE::Line(4.025, -0.0, 4.025, 0.525)], Some(&[WSE::Arc(0.0, -0.525, 2.975, 270.0, 0.0), WSE::Arc(7.0, -0.525, 2.975, 180.0, 270.0), WSE::Line(2.975, -0.0, 2.975, -0.525), WSE::Line(4.025, -0.0, 4.025, -0.525)]), false),
+    ("堆焊缝", &[WSE::Line(0.0, 0.125, 9.1, 0.125), WSE::Arc(2.275, 0.125, 2.275, 0.0, 180.0), WSE::Arc(6.825, 0.125, 2.275, 0.0, 180.0)], Some(&[WSE::Line(0.0, -0.125, 9.1, -0.125), WSE::Arc(2.275, -0.125, 2.275, 180.0, 0.0), WSE::Arc(6.825, -0.125, 2.275, 180.0, 0.0)]), false),
+    ("塞焊缝", &[WSE::Line(0.0, -0.0, 0.0, 2.45), WSE::Line(0.0, 2.45, 4.2, 2.45), WSE::Line(4.2, 2.45, 4.2, -0.0)], Some(&[WSE::Line(0.0, -0.0, 0.0, -2.45), WSE::Line(0.0, -2.45, 4.2, -2.45), WSE::Line(4.2, -2.45, 4.2, -0.0)]), false),
+    ("封底焊缝", &[WSE::Line(0.0, -0.0, 5.191, -0.0), WSE::Arc(2.595, -1.075, 2.809, 22.5, 157.5)], Some(&[WSE::Line(0.0, -0.0, 5.191, -0.0), WSE::Arc(2.595, 1.075, 2.809, 202.5, 337.5)]), false),
+    ("带单边坡口的V型对接焊缝", &[WSE::Line(0.0, 3.5, 0.0, 0.0), WSE::Line(0.0, 0.0, 3.5, 3.5)], Some(&[WSE::Line(0.0, -3.5, 0.0, 0.0), WSE::Line(0.0, 0.0, 3.5, -3.5)]), false),
+    ("带钝边J型对接焊缝", &[WSE::Line(0.0, 0.0, 0.0, 3.5), WSE::Arc(0.0, 3.5, 1.75, 270.0, 0.0)], Some(&[WSE::Line(0.0, 0.0, 0.0, -3.5), WSE::Arc(0.0, -3.5, 1.75, 0.0, 90.0)]), false),
+    ("带钝边U型对接焊缝", &[WSE::Line(1.75, 0.0, 1.75, 1.75), WSE::Arc(1.75, 3.5, 1.75, 180.0, 0.0)], Some(&[WSE::Line(1.75, 0.0, 1.75, -1.75), WSE::Arc(1.75, -3.5, 1.75, 0.0, 180.0)]), false),
+    ("带钝边V型焊缝", &[WSE::Line(1.75, 0.0, 1.75, 1.75), WSE::Line(0.0, 3.5, 1.75, 1.75), WSE::Line(3.5, 3.5, 1.75, 1.75)], Some(&[WSE::Line(1.75, 0.0, 1.75, -1.75), WSE::Line(0.0, -3.5, 1.75, -1.75), WSE::Line(3.5, -3.5, 1.75, -1.75)]), false),
+    ("带钝边单边V型焊缝", &[WSE::Line(0.0, 0.0, 0.0, 3.5), WSE::Line(0.0, 1.75, 2.8, 3.5)], Some(&[WSE::Line(0.0, 0.0, 0.0, -3.5), WSE::Line(0.0, -1.75, 2.8, -3.5)]), false),
+    ("打底", &[WSE::Line(0.0, 0.125, 0.0, 0.825), WSE::Line(0.0, 0.825, 3.5, 0.825), WSE::Line(3.5, 0.825, 3.5, 2.575), WSE::Line(3.5, 2.575, 0.0, 2.575)], Some(&[WSE::Line(0.0, -0.125, 0.0, -0.825), WSE::Line(0.0, -0.825, 3.5, -0.825), WSE::Line(3.5, -0.825, 3.5, -2.575), WSE::Line(3.5, -2.575, 0.0, -2.575)]), false),
+    ("折叠接头", &[WSE::Line(1.05, 0.0, 4.9, 0.0), WSE::Line(1.05, 1.05, 3.85, 1.05), WSE::Line(3.85, 2.1, 1.05, 2.1), WSE::Line(3.85, 3.15, 0.0, 3.15), WSE::Arc(1.05, 1.05, 1.05, 90.0, 270.0), WSE::Arc(3.85, 2.1, 1.05, 270.0, 90.0)], Some(&[WSE::Line(1.05, 0.0, 4.9, 0.0), WSE::Line(1.05, -1.05, 3.85, -1.05), WSE::Line(3.85, -2.1, 1.05, -2.1), WSE::Line(3.85, -3.15, 0.0, -3.15), WSE::Arc(1.05, -1.05, 1.05, 90.0, 270.0), WSE::Arc(3.85, -2.1, 1.05, 270.0, 90.0)]), false),
+    ("持久衬垫", &[WSE::Line(0.0, 0.0, 0.0, 2.8), WSE::Line(0.0, 2.8, 5.25, 2.8), WSE::Line(5.25, 2.8, 5.25, 0.0), WSE::Text(2.625, 1.4, "MR")], Some(&[WSE::Line(0.0, 0.0, 0.0, -2.8), WSE::Line(0.0, -2.8, 5.25, -2.8), WSE::Line(5.25, -2.8, 5.25, 0.0), WSE::Text(2.625, -1.4, "MR")]), false),
+    ("点焊", &[WSE::Circle(2.275, 2.275, 2.275)], Some(&[WSE::Circle(2.275, -2.275, 2.275)]), false),
+    ("端接焊缝", &[WSE::Line(1.05, 0.0, 1.05, 3.5), WSE::Line(0.0, 0.0, 0.0, 3.5), WSE::Line(2.1, 0.0, 2.1, 3.5)], Some(&[WSE::Line(1.05, 0.0, 1.05, -3.5), WSE::Line(0.0, 0.0, 0.0, -3.5), WSE::Line(2.1, 0.0, 2.1, -3.5)]), false),
+    ("缝焊缝", &[WSE::Circle(3.5, 2.625, 2.625), WSE::Line(0.0, 1.313, 7.0, 1.313), WSE::Line(0.0, 3.938, 7.0, 3.938)], Some(&[WSE::Circle(3.5, -2.625, 2.625), WSE::Line(0.0, -1.312, 7.0, -1.312), WSE::Line(0.0, -3.937, 7.0, -3.937)]), false),
+    ("角焊", &[WSE::Line(0.0, 0.125, 3.5, 0.125), WSE::Line(3.5, 0.125, 0.0, 3.625), WSE::Line(0.0, 3.625, 0.0, 0.125)], Some(&[WSE::Line(0.0, -0.125, 3.5, -0.125), WSE::Line(3.5, -0.125, 0.0, -3.625), WSE::Line(0.0, -3.625, 0.0, -0.125)]), false),
+    ("陡侧V型坡口对焊", &[WSE::Line(0.238, 0.125, 3.038, 0.125), WSE::Line(0.938, 0.125, 0.0, 3.625), WSE::Line(2.338, 0.125, 3.276, 3.625)], Some(&[WSE::Line(0.238, -0.125, 3.038, -0.125), WSE::Line(0.938, -0.125, 0.0, -3.625), WSE::Line(2.338, -0.125, 3.276, -3.625)]), false),
+];
+
+/// 按名称查焊缝符号定义。
+fn weld_sym(
+    name: &str,
+) -> Option<
+    &'static (
+        &'static str,
+        &'static [WeldSymEnt],
+        Option<&'static [WeldSymEnt]>,
+        bool,
+    ),
+> {
+    WELD_SYMS.iter().find(|s| s.0 == name)
+}
+
+/// 焊接参数 → JSON（/api/guide 回显，GUI 恢复表单用；独立函数避免 json! 递归超限）。
+fn weld_params_json(w: &WeldParams) -> serde_json::Value {
+    serde_json::json!({
+        "upper": w.upper, "lower": w.lower,
+        "dash": w.dash, "circle": w.circle, "flag": w.flag,
+        "tail": w.tail, "c": w.c,
+        "up_thick": w.up_thick, "up_qty": w.up_qty,
+        "lo_thick": w.lo_thick, "lo_qty": w.lo_qty, "tail_text": w.tail_text,
+    })
+}
+
+/// `GET /api/weld_syms`：27 个焊缝符号的归一化几何（GUI 焊接预览用）。
+/// 实体编码：["L",x1,y1,x2,y2] / ["C",cx,cy,r] / ["A",cx,cy,r,a0,a1] / ["T",x,y,text]。
+fn weld_syms_json() -> String {
+    fn ent_json(e: &WeldSymEnt) -> serde_json::Value {
+        match *e {
+            WeldSymEnt::Line(x1, y1, x2, y2) => serde_json::json!(["L", x1, y1, x2, y2]),
+            WeldSymEnt::Circle(cx, cy, r) => serde_json::json!(["C", cx, cy, r]),
+            WeldSymEnt::Arc(cx, cy, r, a0, a1) => serde_json::json!(["A", cx, cy, r, a0, a1]),
+            WeldSymEnt::Text(x, y, t) => serde_json::json!(["T", x, y, t]),
+        }
+    }
+    fn ents_json(ents: &[WeldSymEnt]) -> serde_json::Value {
+        serde_json::Value::Array(ents.iter().map(ent_json).collect())
+    }
+    let syms: Vec<serde_json::Value> = WELD_SYMS
+        .iter()
+        .map(|(name, up, lo, cross)| {
+            serde_json::json!({
+                "name": name,
+                "upper": ents_json(up),
+                "lower": lo.map(ents_json),
+                "cross": cross,
+            })
+        })
+        .collect();
+    serde_json::json!({ "ok": true, "syms": syms }).to_string()
+}
+
+/// 焊接块成员：直线（层 8符号标注层 + 显式色；坐标 ×s）。
+fn weld_member_line(a: (f64, f64), b: (f64, f64), s: f64, color: i16) -> acadrust::EntityType {
+    use acadrust::entities::Line;
+    use acadrust::types::Color;
+    use acadrust::EntityType as E;
+    let mut e = E::Line(Line {
+        common: Default::default(),
+        start: Vector3::new(s * a.0, s * a.1, 0.0),
+        end: Vector3::new(s * b.0, s * b.1, 0.0),
+        thickness: 0.0,
+        normal: Vector3::new(0.0, 0.0, 1.0),
+    });
+    set_member_layer(&mut e, "8符号标注层");
+    e.common_mut().color = Color::from_index(color);
+    e
+}
+
+/// 焊接块成员：圆（色 31）。
+fn weld_member_circle(c: (f64, f64), r: f64, s: f64) -> acadrust::EntityType {
+    use acadrust::entities::Circle;
+    use acadrust::types::Color;
+    use acadrust::EntityType as E;
+    let mut e = E::Circle(Circle {
+        common: Default::default(),
+        center: Vector3::new(s * c.0, s * c.1, 0.0),
+        radius: s * r,
+        thickness: 0.0,
+        normal: Vector3::new(0.0, 0.0, 1.0),
+    });
+    set_member_layer(&mut e, "8符号标注层");
+    e.common_mut().color = Color::from_index(31);
+    e
+}
+
+/// 焊接块成员：圆弧（度→弧度；色 31）。
+fn weld_member_arc(c: (f64, f64), r: f64, a0_deg: f64, a1_deg: f64, s: f64) -> acadrust::EntityType {
+    use acadrust::entities::Arc;
+    use acadrust::types::Color;
+    use acadrust::EntityType as E;
+    let mut e = E::Arc(Arc::from_center_radius_angles(
+        Vector3::new(s * c.0, s * c.1, 0.0),
+        s * r,
+        a0_deg.to_radians(),
+        a1_deg.to_radians(),
+    ));
+    set_member_layer(&mut e, "8符号标注层");
+    e.common_mut().color = Color::from_index(31);
+    e
+}
+
+/// 焊接块成员：SOLID 三角（第 4 点 = 第 1 点，对照参考 13/23 组）。
+fn weld_member_solid(p1: (f64, f64), p2: (f64, f64), p3: (f64, f64), s: f64, color: i16) -> acadrust::EntityType {
+    use acadrust::entities::Solid;
+    use acadrust::types::Color;
+    use acadrust::EntityType as E;
+    let mut e = E::Solid(Solid::new(
+        Vector3::new(s * p1.0, s * p1.1, 0.0),
+        Vector3::new(s * p2.0, s * p2.1, 0.0),
+        Vector3::new(s * p3.0, s * p3.1, 0.0),
+        Vector3::new(s * p1.0, s * p1.1, 0.0),
+    ));
+    set_member_layer(&mut e, "8符号标注层");
+    e.common_mut().color = Color::from_index(color);
+    e
+}
+
+/// 焊接块成员：固定文字（中中锚定；OCSM_GB 宽比 0.7；色 3）——C 字与 MR/M 小字。
+fn weld_member_text(value: &str, pos: (f64, f64), h: f64, s: f64) -> acadrust::EntityType {
+    use acadrust::entities::{Text, TextHorizontalAlignment, TextVerticalAlignment};
+    use acadrust::types::Color;
+    use acadrust::EntityType as E;
+    let mut t = Text::with_value(value, Vector3::new(s * pos.0, s * pos.1, 0.0));
+    t.height = s * h;
+    t.width_factor = 0.7;
+    t.style = "OCSM_GB".into();
+    t.horizontal_alignment = TextHorizontalAlignment::Center;
+    t.vertical_alignment = TextVerticalAlignment::Middle;
+    t.alignment_point = Some(t.insertion_point);
+    let mut e = E::Text(t);
+    set_member_layer(&mut e, "8符号标注层");
+    e.common_mut().color = Color::from_index(3);
+    e
+}
+
+/// 把符号几何追加为块成员（×图幅倍率后平移到 (ox,oy)；色 31、文字色 3）。
+fn push_weld_sym(members: &mut Vec<acadrust::EntityType>, ents: &[WeldSymEnt], ox: f64, oy: f64, s: f64) {
+    for e in ents {
+        match *e {
+            WeldSymEnt::Line(x1, y1, x2, y2) => members.push(weld_member_line(
+                (ox + x1 * s, oy + y1 * s),
+                (ox + x2 * s, oy + y2 * s),
+                1.0,
+                31,
+            )),
+            WeldSymEnt::Circle(cx, cy, r) => {
+                members.push(weld_member_circle((ox + cx * s, oy + cy * s), r * s, 1.0))
+            }
+            WeldSymEnt::Arc(cx, cy, r, a0, a1) => members.push(weld_member_arc(
+                (ox + cx * s, oy + cy * s),
+                r * s,
+                a0,
+                a1,
+                1.0,
+            )),
+            WeldSymEnt::Text(x, y, t) => members.push(weld_member_text(
+                t,
+                (ox + x * s, oy + y * s),
+                2.24,
+                1.0,
+            )),
+        }
+    }
+}
+
+/// 焊接符号生成：p_tip=顶点0（焊缝点/箭头尖）、p0=顶点1（基准线起点/拐点）、
+/// p_end=顶点2（基准线末端）。生成单匿名块 *W{n}（引线+箭头+基准线+虚线+
+/// 全周边圆+现场旗+尾叉+上下符号+C 弧字+5 ATTDEF）+ INSERT@p0（attributes
+/// 带值，from_definition+transform 定位——粗糙度同套路）。
+/// 引导 PLINE 不删（10引导线层不打印，保留便于重选再改）。
+fn apply_weld(
+    sender: &Arc<dyn PluginRequestSender>,
+    doc: &acadrust::CadDocument,
+    p_tip: [f64; 3],
+    p0: [f64; 3],
+    p_end: [f64; 3],
+    params: &GuideParams,
+) -> Result<String, String> {
+    use acadrust::entities::{AttributeDefinition, AttributeEntity, Insert};
+    use acadrust::entities::attribute_definition::{HorizontalAlignment, VerticalAlignment};
+    use acadrust::entities::Entity as _; // apply_transform
+    use acadrust::types::Color;
+    use acadrust::EntityType as E;
+
+    let w = &params.weld;
+
+    // ── 引导校验：第二段（基准线段）须水平向右；第一段（引线）足容箭头 ──
+    if (p_end[1] - p0[1]).abs() >= 0.5 {
+        return Err("焊接引导：第二段（基准线段）须水平".into());
+    }
+    let base_len = p_end[0] - p0[0];
+    if base_len <= 0.0 {
+        return Err("焊接引导：第二段（基准线段）须向右（终点在拐点右侧）".into());
+    }
+    let dx = p0[0] - p_tip[0];
+    let dy = p0[1] - p_tip[1];
+    let lead_len = (dx * dx + dy * dy).sqrt();
+    let s = frame_scale_at(doc, p0);
+    if lead_len <= 4.0 * s {
+        return Err("焊接引导：第一段（引线）过短（需容纳 3.5 长箭头）".into());
+    }
+
+    // ── 符号名解析（"无"/空 = None）──
+    let clean = |v: &str| -> Option<String> {
+        let t = v.trim();
+        if t.is_empty() || t == "无" { None } else { Some(t.to_string()) }
+    };
+    let upper = clean(&w.upper);
+    let lower = clean(&w.lower);
+    if let Some(n) = &upper {
+        weld_sym(n).ok_or_else(|| format!("未知焊缝符号：{n}"))?;
+    }
+    if let Some(n) = &lower {
+        let d = weld_sym(n).ok_or_else(|| format!("未知焊缝符号：{n}"))?;
+        if d.3 {
+            return Err(format!("跨线符号只有一种位置（骑基准线），不可放于下侧：{n}"));
+        }
+    }
+    // 下侧内容（符号或文字）⇒ 虚线强制开（GB/T 324：虚线=非箭头侧基准线）。
+    let lower_texted = !w.lo_thick.trim().is_empty() || !w.lo_qty.trim().is_empty();
+    let dash = w.dash || lower.is_some() || lower_texted;
+
+    // ── 幂等 ensure：OCSM_GB 样式 / 8符号标注层 / ACISOWELD 线型（虚线用）──
+    if !doc
+        .text_styles
+        .iter()
+        .any(|st| st.name.eq_ignore_ascii_case("OCSM_GB"))
+    {
+        req_timed(
+            sender,
+            PluginRequest::EnsureTextStyles(crate::text_style_defs()),
+            "EnsureTextStyles",
+        )?;
+    }
+    if !doc
+        .layers
+        .iter()
+        .any(|ly| ly.name.eq_ignore_ascii_case("8符号标注层"))
+    {
+        req_timed(
+            sender,
+            PluginRequest::EnsureLayers(crate::layer_defs()),
+            "EnsureLayers",
+        )?;
+    }
+    if !doc
+        .line_types
+        .iter()
+        .any(|lt| lt.name.eq_ignore_ascii_case("ACISOWELD"))
+    {
+        req_timed(
+            sender,
+            PluginRequest::EnsureLinetypes(crate::linetype_defs()),
+            "EnsureLinetypes",
+        )?;
+    }
+
+    // ── 块成员（局部坐标原点 = p0；全部 × 图幅倍率 s；颜色照参考：
+    //    引线/基准线/箭头=青4、虚线=品红6、符号几何=31、文字=绿3）──
+    let mut members: Vec<E> = Vec::new();
+    let u = (dx / lead_len, dy / lead_len); // 引线单位向量（焊缝点→p0）
+    let nv = (-u.1, u.0); // 左法向
+    let (aw, ah) = (3.5 * s, 0.587 * s); // 箭头长 / 半宽（对照参考 SOLID 展开）
+    let tip = (p_tip[0] - p0[0], p_tip[1] - p0[1]); // 箭头尖（局部）
+    let b1 = (tip.0 + aw * u.0 + ah * nv.0, tip.1 + aw * u.1 + ah * nv.1);
+    let b2 = (tip.0 + aw * u.0 - ah * nv.0, tip.1 + aw * u.1 - ah * nv.1);
+    members.push(weld_member_solid(tip, b1, b2, s, 4));
+    // 引线：箭头底中 → 拐点（参考 LINE 起点 = 箭头底中）
+    members.push(weld_member_line(
+        (tip.0 + aw * u.0, tip.1 + aw * u.1),
+        (0.0, 0.0),
+        s,
+        4,
+    ));
+    // 基准线（全长；尾部开关只影响尾叉+注释）
+    members.push(weld_member_line((0.0, 0.0), (base_len, 0.0), s, 4));
+    // 虚线（第二基准线；参考偏移 −0.700、ACISOWELD 真线型 dash2/gap1）
+    if dash {
+        let mut e = weld_member_line((0.0, -0.7), (base_len, -0.7), s, 6);
+        e.common_mut().linetype = "ACISOWELD".into();
+        members.push(e);
+    }
+    // 全周边圆（圆心 = 拐点，参考 r1.750）
+    if w.circle {
+        members.push(weld_member_circle((0.0, 0.0), 1.75, s));
+    }
+    // 现场焊接旗（竖杆 7.0 + 实心三角旗 5.25×3.5 + 底边，参考 SOLID 13/23 组）
+    if w.flag {
+        members.push(weld_member_line((0.0, 0.0), (0.0, 7.0), s, 31));
+        members.push(weld_member_solid((0.0, 7.0), (5.25, 3.5), (0.0, 3.5), s, 31));
+        members.push(weld_member_line((5.25, 3.5), (0.0, 3.5), s, 31));
+    }
+    // 尾叉（终点 → (+3.5,±3.5)）
+    if w.tail {
+        members.push(weld_member_line((base_len, 0.0), (base_len + 3.5, 3.5), s, 31));
+        members.push(weld_member_line((base_len, 0.0), (base_len + 3.5, -3.5), s, 31));
+    }
+    // 上/下侧焊缝符号（槽位锚点统一 +19.413；上贴实线 y=0、下贴虚线 y=−0.7）
+    let slot = 19.413 * s;
+    if let Some(n) = &upper {
+        push_weld_sym(&mut members, weld_sym(n).unwrap().1, slot, 0.0, s);
+    }
+    if let Some(n) = &lower {
+        push_weld_sym(&mut members, weld_sym(n).unwrap().2.unwrap(), slot, -0.7, s);
+    }
+    // C：凸弧 + 固定 "C" 字（上侧贴实线；下侧贴虚线、虚线开才生成；
+    // 参考弧心 +20.538/±1.125、r2.625、上 1.5°→88.5° 下 271.5°→358.5°、
+    // 字 @+23.444/线±4.960。详细语义下一轮扩展）
+    if w.c {
+        members.push(weld_member_arc((20.538, 1.125), 2.625, 1.5, 88.5, s));
+        members.push(weld_member_text("C", (23.444, 4.960), 3.5, s));
+        if dash {
+            members.push(weld_member_arc((20.538, -1.825), 2.625, 271.5, 358.5, s));
+            members.push(weld_member_text("C", (23.444, -5.660), 3.5, s));
+        }
+    }
+
+    // ── ATTDEF×5（对照示例 MTEXT 71 组语义：中右(6)=Right+Middle、
+    //    中左(4)=Left+Middle；上侧 y=+2.750、下侧 y=虚线−2.750=−3.450、
+    //    尾部注释 = 终点+4.55（叉尖+1.05））──
+    let mut attdefs: Vec<(String, f64, f64, bool)> = Vec::new();
+    attdefs.push(("上侧厚度尺寸A′".to_string(), 17.413 * s, 2.750 * s, true));
+    attdefs.push(("上侧数量长度L′".to_string(), 25.913 * s, 2.750 * s, false));
+    if dash {
+        attdefs.push(("下侧厚度尺寸A".to_string(), 17.413 * s, -3.450 * s, true));
+        attdefs.push(("下侧数量长度L".to_string(), 25.913 * s, -3.450 * s, false));
+    }
+    if w.tail {
+        attdefs.push(("尾部注释E".to_string(), base_len + 4.55 * s, 0.0, false));
+    }
+    let value_of = |tag: &str| -> String {
+        match tag {
+            "上侧厚度尺寸A′" => w.up_thick.clone(),
+            "上侧数量长度L′" => w.up_qty.clone(),
+            "下侧厚度尺寸A" => w.lo_thick.clone(),
+            "下侧数量长度L" => w.lo_qty.clone(),
+            "尾部注释E" => w.tail_text.clone(),
+            _ => String::new(),
+        }
+    };
+    // 块内 ATTDEF 模板（default 空格占位——宿主空 default 会渲染 tag 名；
+    // 真实值只放 INSERT.attributes，粗糙度/图框同套路）。
+    let mut att_templates: Vec<AttributeDefinition> = Vec::new();
+    for (tag, x, y, right) in attdefs.iter() {
+        let mut ad = AttributeDefinition::new(tag.clone(), String::new(), " ".into());
+        ad.insertion_point = Vector3::new(*x, *y, 0.0);
+        ad.alignment_point = ad.insertion_point;
+        ad.height = 3.5 * s;
+        ad.width_factor = 0.7;
+        ad.text_style = "OCSM_GB".into();
+        if *right {
+            ad.set_alignment(HorizontalAlignment::Right, VerticalAlignment::Middle);
+        } else {
+            ad.set_alignment(HorizontalAlignment::Left, VerticalAlignment::Middle);
+        }
+        ad.flags.preset = true; // 插入时不逐项提示
+        let mut e = E::AttributeDefinition(ad.clone());
+        set_member_layer(&mut e, "8符号标注层");
+        e.common_mut().color = Color::from_index(3);
+        members.push(e);
+        att_templates.push(ad);
+    }
+
+    // ── 匿名块 *W{n}（独立计数器，避开尺寸标注的 *D 与粗糙度共用 *D）──
+    let mut max_n = 0u32;
+    for br in doc.block_records.iter() {
+        if let Some(rest) = br.name.strip_prefix("*W") {
+            if let Ok(n) = rest.parse::<u32>() {
+                max_n = max_n.max(n);
+            }
+        }
+    }
+    let block_name = format!("*W{}", max_n + 1);
+    req_timed(
+        sender,
+        PluginRequest::AddBlockRecord {
+            name: block_name.clone(),
+            entities: members,
+        },
+        "AddBlockRecord",
+    )?;
+
+    // ── INSERT @ 拐点（8符号标注层；attributes = 块内 ATTDEF 位 ×变换）──
+    let mut ins = Insert::new(block_name.clone(), Vector3::new(p0[0], p0[1], 0.0));
+    ins.common.layer = "8符号标注层".into();
+    for ad in att_templates.iter() {
+        let val = value_of(&ad.tag);
+        let val = if val.trim().is_empty() { " ".to_string() } else { val };
+        let mut attr = AttributeEntity::from_definition(ad, Some(val));
+        attr.apply_transform(&ins.get_transform());
+        ins.attributes.push(attr);
+    }
+    let handle = match req_timed(
+        sender,
+        PluginRequest::AddEntities(vec![E::Insert(ins)]),
+        "AddEntities",
+    ) {
+        Ok(PluginResponse::Handles(hs)) => hs.first().copied(),
+        Ok(_) => None,
+        Err(e) => return Err(e),
+    };
+    req_timed(sender, PluginRequest::BumpGeometry, "BumpGeometry")?;
+    mark_dirty(sender)?;
+
+    Ok(serde_json::json!({
+        "ok": true,
+        "block": block_name,
+        "insert_handle": handle.map(fmt_handle),
+        "scale": s,
+        "dash": dash,
+        "upper": upper,
+        "lower": lower,
     })
     .to_string())
 }
@@ -3846,7 +4338,7 @@ mod tests {
         let pd = GuideParams { guide_type: GuideType::Linear, sub: Some(LinearSub::Aligned), dist: 10.0, text: None, tol: None, up: None, dn: None,
             fit: None, sym: None, dec: Some(2), ver: crate::guide_url::DatumVersion::GB2008, letter: None, scale: None, flip: crate::guide_url::FlipDir::None, marker: None, angle_mode: crate::guide_url::AngleMode::Minor, section_side: crate::guide_url::SectionSide::Right, show_arrow: true, gdt_sym: None, gdt_dia: false, gdt_tol: None, gdt_d1: None, gdt_d2: None, gdt_d3: None, gdt_rows: Vec::new(), gdt_top: None, gdt_bot: None,
             detail_scale: 2.0, detail_no: None, detail_pos: None,
-            detail_frame: 1.0,};
+            detail_frame: 1.0, weld: WeldParams::default(),};
         let dim = build_dimension(&sender, &doc, [0.0, 0.0, 0.0], [40.0, 30.0, 0.0], &pd, "OCSM_GB").unwrap();
         let rec = dim.base().common.extended_data.get_record("ACAD").expect("ACAD XDATA 存在");
         let mut found = None;
@@ -3868,13 +4360,13 @@ mod tests {
         let pd = GuideParams { guide_type: GuideType::Diameter, sub: None, dist: -9.0, text: None, tol: None, up: None, dn: None,
             fit: None, sym: None, dec: None, ver: crate::guide_url::DatumVersion::GB2008, letter: None, scale: None, flip: crate::guide_url::FlipDir::None, marker: None, angle_mode: crate::guide_url::AngleMode::Minor, section_side: crate::guide_url::SectionSide::Right, show_arrow: true, gdt_sym: None, gdt_dia: false, gdt_tol: None, gdt_d1: None, gdt_d2: None, gdt_d3: None, gdt_rows: Vec::new(), gdt_top: None, gdt_bot: None,
             detail_scale: 2.0, detail_no: None, detail_pos: None,
-            detail_frame: 1.0,};
+            detail_frame: 1.0, weld: WeldParams::default(),};
         // 直径走匿名块路径：mock 的 AddBlockRecord 返回 Ok → 成功。
         assert!(build_dimension(&sender, &doc, [0.0,0.0,0.0], [35.36,35.36,0.0], &pd, "OCSM_GB").is_ok());
         let pr = GuideParams { guide_type: GuideType::Radius, sub: None, dist: 11.0, text: None, tol: None, up: None, dn: None,
             fit: None, sym: None, dec: None, ver: crate::guide_url::DatumVersion::GB2008, letter: None, scale: None, flip: crate::guide_url::FlipDir::None, marker: None, angle_mode: crate::guide_url::AngleMode::Minor, section_side: crate::guide_url::SectionSide::Right, show_arrow: true, gdt_sym: None, gdt_dia: false, gdt_tol: None, gdt_d1: None, gdt_d2: None, gdt_d3: None, gdt_rows: Vec::new(), gdt_top: None, gdt_bot: None,
             detail_scale: 2.0, detail_no: None, detail_pos: None,
-            detail_frame: 1.0,};
+            detail_frame: 1.0, weld: WeldParams::default(),};
         assert!(build_dimension(&sender, &doc, [0.0,0.0,0.0], [35.36,35.36,0.0], &pr, "OCSM_GB").is_ok());
     }
 
@@ -3905,7 +4397,7 @@ mod tests {
 
                     gdt_sym: None, gdt_dia: false, gdt_tol: None, gdt_d1: None, gdt_d2: None, gdt_d3: None, gdt_rows: Vec::new(), gdt_top: None, gdt_bot: None,
             detail_scale: 2.0, detail_no: None, detail_pos: None,
-            detail_frame: 1.0,};
+            detail_frame: 1.0, weld: WeldParams::default(),};
         // "%%c<>" 是默认（GUI 注入一次）→ 不设 user_text（块 TEXT 已用自动值）。
         let dim = build_dimension(&sender, &doc, [0.0, 0.0, 0.0], [35.36, 35.36, 0.0], &pd, "OCSM_GB").unwrap();
         assert!(dim.base().user_text.is_none());
@@ -3948,7 +4440,7 @@ mod tests {
 
                     gdt_sym: None, gdt_dia: false, gdt_tol: None, gdt_d1: None, gdt_d2: None, gdt_d3: None, gdt_rows: Vec::new(), gdt_top: None, gdt_bot: None,
             detail_scale: 2.0, detail_no: None, detail_pos: None,
-            detail_frame: 1.0,};
+            detail_frame: 1.0, weld: WeldParams::default(),};
         let dim = build_dimension(&sender, &doc, [0.0, 0.0, 0.0], [100.0, 0.0, 0.0], &pd, "OCSM_GB").unwrap();
         assert_eq!(
             dim.base().text,
@@ -4008,7 +4500,7 @@ mod tests {
 
                     gdt_sym: None, gdt_dia: false, gdt_tol: None, gdt_d1: None, gdt_d2: None, gdt_d3: None, gdt_rows: Vec::new(), gdt_top: None, gdt_bot: None,
             detail_scale: 2.0, detail_no: None, detail_pos: None,
-            detail_frame: 1.0,};
+            detail_frame: 1.0, weld: WeldParams::default(),};
         let dim = build_dimension(&sender, &doc, [0.0, 0.0, 0.0], [25.0, 0.0, 0.0], &pd, "OCSM_GB").unwrap();
         assert_eq!(
             dim.base().text,
@@ -4045,7 +4537,7 @@ mod tests {
 
                     gdt_sym: None, gdt_dia: false, gdt_tol: None, gdt_d1: None, gdt_d2: None, gdt_d3: None, gdt_rows: Vec::new(), gdt_top: None, gdt_bot: None,
             detail_scale: 2.0, detail_no: None, detail_pos: None,
-            detail_frame: 1.0,};
+            detail_frame: 1.0, weld: WeldParams::default(),};
         let dim = build_dimension(&sender, &doc, [0.0, 0.0, 0.0], [25.0, 0.0, 0.0], &pd, "OCSM_GB").unwrap();
         let t = dim.base().text.clone();
         assert!(t.contains("%%c<>,通"), "应保留 %%c 与中文, got {t}");
@@ -4085,7 +4577,7 @@ mod tests {
 
                     gdt_sym: None, gdt_dia: false, gdt_tol: None, gdt_d1: None, gdt_d2: None, gdt_d3: None, gdt_rows: Vec::new(), gdt_top: None, gdt_bot: None,
             detail_scale: 2.0, detail_no: None, detail_pos: None,
-            detail_frame: 1.0,};
+            detail_frame: 1.0, weld: WeldParams::default(),};
         // fit 代号模式 → 配合代号堆叠（对照示例 `{\C3;\SH7/g6;}`：绿色、斜杠分数）。
         let dim = build_dimension(&sender, &doc, [0.0, 0.0, 0.0], [25.0, 0.0, 0.0], &pd, "OCSM_GB").unwrap();
         assert_eq!(
@@ -4125,7 +4617,7 @@ mod tests {
 
                     gdt_sym: None, gdt_dia: false, gdt_tol: None, gdt_d1: None, gdt_d2: None, gdt_d3: None, gdt_rows: Vec::new(), gdt_top: None, gdt_bot: None,
             detail_scale: 2.0, detail_no: None, detail_pos: None,
-            detail_frame: 1.0,};
+            detail_frame: 1.0, weld: WeldParams::default(),};
         let inner = std::sync::Arc::new(MockSender::new(acadrust::CadDocument::new()));
         let sender: std::sync::Arc<dyn PluginRequestSender> = inner.clone();
         let doc = inner.doc.lock().unwrap().clone();
@@ -4232,6 +4724,13 @@ impl PluginRequestSender for MockSender {
                     .lock()
                     .unwrap()
                     .extend(defs.iter().map(|d| format!("layer:{}", d.name)));
+                Ok(P::Ok)
+            }
+            R::EnsureLinetypes(defs) => {
+                self.ensures
+                    .lock()
+                    .unwrap()
+                    .extend(defs.iter().map(|d| format!("ltype:{}", d.name)));
                 Ok(P::Ok)
             }
             _ => Ok(P::Ok),
@@ -5545,6 +6044,529 @@ mod rough_tests {
         assert_eq!(ads[0].height, 7.0, "字高 ×2");
     }
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 焊接符号（WELD）测试：符号表归一化 / apply_weld 全家福逐位对照参考 /
+// 边界校验 / HTTP 全链路
+// ═══════════════════════════════════════════════════════════════════════════
+#[cfg(test)]
+mod weld_tests {
+    use super::*;
+    use crate::guide_url::{GuideParams, LinearSub, WeldParams};
+    use acadrust::entities::attribute_definition::{HorizontalAlignment, VerticalAlignment};
+    use acadrust::entities::{AttributeDefinition, LwPolyline, Text};
+    use acadrust::types::Vector2;
+    use acadrust::EntityType as E;
+
+    /// 示例.dxf 的引导几何（P0 = 拐点/基准线起点；坐标 1:1 取自参考）。
+    const P_TIP: [f64; 3] = [75.186, 76.858, 0.0];
+    const P0: [f64; 3] = [95.591, 95.728, 0.0];
+    const P_END: [f64; 3] = [143.238, 95.728, 0.0];
+
+    fn weld_doc() -> acadrust::CadDocument {
+        acadrust::CadDocument::new()
+    }
+
+    fn full_params() -> GuideParams {
+        let mut p = GuideParams::linear(LinearSub::Aligned, 0.0);
+        p.guide_type = GuideType::Weld;
+        p.weld = WeldParams {
+            upper: "角焊".into(),
+            lower: "角焊".into(),
+            dash: true,
+            circle: true,
+            flag: true,
+            tail: true,
+            c: true,
+            up_thick: "5".into(),
+            up_qty: "100".into(),
+            lo_thick: "3".into(),
+            lo_qty: "50".into(),
+            tail_text: "封底焊".into(),
+        };
+        p
+    }
+
+    fn lines_of<'a>(members: &'a [E]) -> Vec<&'a acadrust::entities::Line> {
+        members
+            .iter()
+            .filter_map(|e| match e {
+                E::Line(l) => Some(l),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn solids_of<'a>(members: &'a [E]) -> Vec<&'a acadrust::entities::Solid> {
+        members
+            .iter()
+            .filter_map(|e| match e {
+                E::Solid(s) => Some(s),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn attdefs_of(members: &[E]) -> Vec<AttributeDefinition> {
+        members
+            .iter()
+            .filter_map(|e| match e {
+                E::AttributeDefinition(a) => Some(a.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn kinds(members: &[E]) -> (usize, usize, usize, usize, usize, usize) {
+        // (line, circle, arc, solid, text, attdef)
+        let mut c = (0, 0, 0, 0, 0, 0);
+        for e in members {
+            match e {
+                E::Line(_) => c.0 += 1,
+                E::Circle(_) => c.1 += 1,
+                E::Arc(_) => c.2 += 1,
+                E::Solid(_) => c.3 += 1,
+                E::Text(_) => c.4 += 1,
+                E::AttributeDefinition(_) => c.5 += 1,
+                _ => {}
+            }
+        }
+        c
+    }
+
+    /// 实体的 y 坐标集合（锚点归一校验用）。
+    fn weld_ent_ys(e: &WeldSymEnt) -> Vec<f64> {
+        match *e {
+            WSE::Line(_, y1, _, y2) => vec![y1, y2],
+            WSE::Circle(_, cy, r) => vec![cy - r, cy + r],
+            WSE::Arc(_, cy, r, a0, a1) => {
+                // 实际弧段 y 范围：端点 + 区间内的 90°/270° 卡点。
+                let span = (a1 - a0).rem_euclid(360.0);
+                let mut angs = vec![a0, a0 + span];
+                for card in [90.0, 270.0] {
+                    if (card - a0).rem_euclid(360.0) <= span {
+                        angs.push(card);
+                    }
+                }
+                angs.iter().map(|a| cy + r * a.to_radians().sin()).collect()
+            }
+            WSE::Text(_, y, _) => vec![y],
+        }
+    }
+
+    #[test]
+    fn weld_sym_table_27_normalized() {
+        assert_eq!(WELD_SYMS.len(), 27, "24 镜像对 + 3 跨线单置");
+        let mut pairs = 0;
+        let mut singles = 0;
+        for (name, upper, lower, crossing) in WELD_SYMS.iter() {
+            assert!(!upper.is_empty(), "{name} 上侧几何为空");
+            if *crossing {
+                singles += 1;
+                assert!(lower.is_none(), "{name} 跨线单置不应有下侧几何");
+                let ys: Vec<f64> = upper.iter().flat_map(weld_ent_ys).collect();
+                assert!(
+                    ys.iter().any(|y| *y <= 1e-9) && ys.iter().any(|y| *y >= -1e-9),
+                    "{name} 跨线几何不骑基线"
+                );
+            } else {
+                pairs += 1;
+                assert!(lower.is_some(), "{name} 缺镜像版");
+                // 上侧几何全部 ≥ −0.13（贴线 ±0.125 以内容差）；下侧全部 ≤ 0.13。
+                let uy: Vec<f64> = upper.iter().flat_map(weld_ent_ys).collect();
+                assert!(uy.iter().all(|y| *y >= -0.13), "{name} 上侧几何越过基线过深");
+                let ly: Vec<f64> = lower.unwrap().iter().flat_map(weld_ent_ys).collect();
+                assert!(ly.iter().all(|y| *y <= 0.13), "{name} 下侧几何越过基线过深");
+            }
+        }
+        assert_eq!(pairs, 24);
+        assert_eq!(singles, 3);
+        // 角焊 1:1（表.dxf 归一化坐标 + 示例.dxf 展开验证）。
+        let fw = weld_sym("角焊").unwrap();
+        assert!(!fw.3);
+        assert_eq!(
+            fw.1,
+            &[
+                WSE::Line(0.0, 0.125, 3.5, 0.125),
+                WSE::Line(3.5, 0.125, 0.0, 3.625),
+                WSE::Line(0.0, 3.625, 0.0, 0.125),
+            ]
+        );
+        assert_eq!(
+            fw.2.unwrap(),
+            &[
+                WSE::Line(0.0, -0.125, 3.5, -0.125),
+                WSE::Line(3.5, -0.125, 0.0, -3.625),
+                WSE::Line(0.0, -3.625, 0.0, -0.125),
+            ]
+        );
+        // 跨线单置：参考线上的点焊缝（圆心骑线）。
+        let d = weld_sym("参考线上的点焊缝").unwrap();
+        assert!(d.3 && d.2.is_none());
+        assert_eq!(d.1, &[WSE::Circle(2.275, 0.0, 2.275)]);
+        // 持久衬垫带固定小字 MR（OCSM_GB 替代 PC_TEXTSTYLE）。
+        let pc = weld_sym("持久衬垫").unwrap();
+        assert!(matches!(pc.1.last(), Some(WSE::Text(2.625, 1.4, "MR"))));
+        assert!(matches!(pc.2.unwrap().last(), Some(WSE::Text(2.625, -1.4, "MR"))));
+    }
+
+    #[test]
+    fn apply_weld_full_family_matches_reference() {
+        let mock = Arc::new(MockSender::new(weld_doc()));
+        let sender: Arc<dyn PluginRequestSender> = mock.clone();
+        let doc = weld_doc(); // 独立文档（不持 mock 锁——AddEntities 会再锁）
+        let out = apply_weld(&sender, &doc, P_TIP, P0, P_END, &full_params()).unwrap();
+        let j: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(j["ok"], true);
+        assert_eq!(j["block"], "*W1");
+        // ACISOWELD 线型 ensure（虚线用）。
+        assert!(mock
+            .ensures
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|e| e == "ltype:ACISOWELD"));
+
+        // ── 块成员 25 个：13 线（引线/基准线/虚线/旗杆/旗底/尾叉2/上下三角各3）
+        //    + 圆1 + C 弧2 + 箭头/旗 SOLID2 + C 字2 + ATTDEF5 ──
+        let members = mock.block_entities("*W1");
+        assert_eq!(members.len(), 25, "全家福成员数");
+        assert_eq!(kinds(&members), (13, 1, 2, 2, 2, 5), "类型分布");
+
+        // ── 线几何逐位对照示例.dxf（块局部坐标，原点 = P0；世界位 = 局部+P0）──
+        let ls = lines_of(&members);
+        let base_len = P_END[0] - P0[0]; // 47.647
+        // 基准线（青4）：局部 (0,0)→(47.647,0)
+        assert!(ls.iter().any(|l| l.start.x == 0.0
+            && l.start.y == 0.0
+            && l.end.x == base_len
+            && l.end.y == 0.0
+            && l.common.color == acadrust::types::Color::from_index(4)));
+        // 虚线（品红6 + ACISOWELD；局部 y = −0.7）
+        assert!(ls.iter().any(|l| l.start.x == 0.0
+            && l.start.y == -0.7
+            && l.end.x == base_len
+            && l.end.y == -0.7
+            && l.common.color == acadrust::types::Color::from_index(6)
+            && l.common.linetype == "ACISOWELD"));
+        // 引线：箭头底中 → 拐点（底中 = 尖 + 3.5·u）
+        let dx = P0[0] - P_TIP[0];
+        let dy = P0[1] - P_TIP[1];
+        let len = (dx * dx + dy * dy).sqrt();
+        let (ux, uy) = (dx / len, dy / len);
+        let lead_start = (P_TIP[0] - P0[0] + 3.5 * ux, P_TIP[1] - P0[1] + 3.5 * uy);
+        assert!(ls.iter().any(|l| (l.start.x - lead_start.0).abs() < 1e-9
+            && (l.start.y - lead_start.1).abs() < 1e-9
+            && l.end.x == 0.0
+            && l.end.y == 0.0));
+        // 旗杆 + 旗底（局部）
+        assert!(ls.iter()
+            .any(|l| l.start.x == 0.0 && l.start.y == 0.0 && l.end.x == 0.0 && l.end.y == 7.0));
+        assert!(ls.iter().any(|l| l.start.x == 5.25
+            && l.start.y == 3.5
+            && l.end.x == 0.0
+            && l.end.y == 3.5));
+        // 尾叉（终点 → +3.5,±3.5；局部终点 = (47.647,0)）
+        assert!(ls.iter().any(|l| l.start.x == base_len
+            && l.start.y == 0.0
+            && l.end.x == base_len + 3.5
+            && l.end.y == 3.5));
+        assert!(ls.iter().any(|l| l.start.x == base_len
+            && l.start.y == 0.0
+            && l.end.x == base_len + 3.5
+            && l.end.y == -3.5));
+        // 上角焊三角（贴实线 +0.125；槽位局部 x = 19.413）
+        assert!(ls.iter().any(|l| l.start.x == 19.413
+            && l.start.y == 0.125
+            && l.end.x == 22.913
+            && l.end.y == 0.125));
+        assert!(ls.iter().any(|l| l.start.x == 22.913
+            && l.start.y == 0.125
+            && l.end.x == 19.413
+            && l.end.y == 3.625));
+        // 下角焊镜像（贴虚线：局部 y = −0.7−0.125 = −0.825）
+        assert!(ls.iter().any(|l| l.start.x == 19.413
+            && l.start.y == -0.825
+            && l.end.x == 22.913
+            && l.end.y == -0.825));
+        assert!(ls.iter().any(|l| l.start.x == 22.913
+            && l.start.y == -0.825
+            && l.end.x == 19.413
+            && l.end.y == -4.325));
+
+        // ── SOLID：箭头（尖=焊缝点）与旗（对照参考 13/23 组）──
+        let ss = solids_of(&members);
+        assert!(ss.iter().any(|s| s.first_corner.x == P_TIP[0] - P0[0]
+            && s.first_corner.y == P_TIP[1] - P0[1]
+            && (s.second_corner.x - (P_TIP[0] - P0[0] + 3.5 * ux + 0.587 * (-uy))).abs() < 1e-9));
+        assert!(ss.iter().any(|s| s.first_corner.x == 0.0
+            && s.first_corner.y == 7.0
+            && s.second_corner.x == 5.25
+            && s.second_corner.y == 3.5
+            && s.third_corner.x == 0.0
+            && s.third_corner.y == 3.5));
+
+        // ── C 弧（上贴实线 +1.125 / 下贴虚线 −1.125；r2.625）──
+        let arcs: Vec<&acadrust::entities::Arc> = members
+            .iter()
+            .filter_map(|e| match e {
+                E::Arc(a) => Some(a),
+                _ => None,
+            })
+            .collect();
+        assert!(arcs.iter().any(|a| a.center.x == 20.538
+            && a.center.y == 1.125
+            && a.radius == 2.625
+            && (a.start_angle - 1.5f64.to_radians()).abs() < 1e-9
+            && (a.end_angle - 88.5f64.to_radians()).abs() < 1e-9));
+        assert!(arcs.iter().any(|a| a.center.x == 20.538
+            && a.center.y == -1.825
+            && (a.start_angle - 271.5f64.to_radians()).abs() < 1e-9
+            && (a.end_angle - 358.5f64.to_radians()).abs() < 1e-9));
+
+        // ── 固定 "C" 字（中中锚 @+23.444/线±4.960）──
+        let texts: Vec<&Text> = members
+            .iter()
+            .filter_map(|e| match e {
+                E::Text(t) => Some(t),
+                _ => None,
+            })
+            .collect();
+        assert!(texts.iter().any(|t| t.value == "C"
+            && t.insertion_point.x == 23.444
+            && t.insertion_point.y == 4.960));
+        assert!(texts
+            .iter()
+            .any(|t| t.value == "C" && t.insertion_point.y == -5.660));
+
+        // ── ATTDEF×5：锚点/对齐/样式（对照示例 MTEXT 71 组语义）──
+        let ads = attdefs_of(&members);
+        assert_eq!(ads.len(), 5);
+        let by_tag = |tag: &str| ads.iter().find(|a| a.tag == tag).unwrap();
+        let a = by_tag("上侧厚度尺寸A′");
+        assert_eq!(a.insertion_point.x, 17.413);
+        assert_eq!(a.insertion_point.y, 2.750);
+        assert!(matches!(
+            a.horizontal_alignment,
+            HorizontalAlignment::Right
+        ));
+        assert!(matches!(a.vertical_alignment, VerticalAlignment::Middle));
+        let a = by_tag("上侧数量长度L′");
+        assert_eq!(a.insertion_point.x, 25.913);
+        assert!(matches!(a.horizontal_alignment, HorizontalAlignment::Left));
+        let a = by_tag("下侧厚度尺寸A");
+        assert_eq!(a.insertion_point.y, -3.450);
+        let a = by_tag("尾部注释E");
+        assert_eq!(a.insertion_point.x, base_len + 4.55);
+        assert_eq!(a.insertion_point.y, 0.0);
+        for a in ads.iter() {
+            assert_eq!(a.height, 3.5);
+            assert_eq!(a.text_style, "OCSM_GB");
+            assert_eq!(a.width_factor, 0.7);
+            assert_eq!(a.common.layer, "8符号标注层");
+            assert_eq!(a.default_value, " ");
+            assert!(a.flags.preset);
+        }
+
+        // ── INSERT@拐点 + attributes 值 ──
+        let doc = mock.doc.lock().unwrap();
+        let ins = doc
+            .entities()
+            .find_map(|e| match e {
+                E::Insert(i) if i.block_name == "*W1" => Some(i.clone()),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(ins.insert_point.x, 95.591);
+        assert_eq!(ins.insert_point.y, 95.728);
+        assert_eq!(ins.attributes.len(), 5);
+        let val = |tag: &str| {
+            ins.attributes
+                .iter()
+                .find(|a| a.tag == tag)
+                .unwrap()
+                .value
+                .clone()
+        };
+        assert_eq!(val("上侧厚度尺寸A′"), "5");
+        assert_eq!(val("上侧数量长度L′"), "100");
+        assert_eq!(val("下侧厚度尺寸A"), "3");
+        assert_eq!(val("下侧数量长度L"), "50");
+        assert_eq!(val("尾部注释E"), "封底焊");
+        // 属性位置 = 块内 ATTDEF 位 + 插入点平移（宿主独立渲染）。
+        let a = ins
+            .attributes
+            .iter()
+            .find(|a| a.tag == "上侧厚度尺寸A′")
+            .unwrap();
+        assert!((a.insertion_point.x - 113.004).abs() < 1e-9);
+        assert!((a.insertion_point.y - 98.478).abs() < 1e-9);
+    }
+
+    #[test]
+    fn apply_weld_minimal_only_skeleton() {
+        // 全关无符号：箭头 + 引线 + 基准线 + 上侧 2 ATTDEF = 5 成员。
+        let mock = Arc::new(MockSender::new(weld_doc()));
+        let sender: Arc<dyn PluginRequestSender> = mock.clone();
+        let doc = weld_doc();
+        let mut p = full_params();
+        p.weld = WeldParams::default();
+        apply_weld(&sender, &doc, P_TIP, P0, P_END, &p).unwrap();
+        let members = mock.block_entities("*W1");
+        assert_eq!(members.len(), 5);
+        assert_eq!(kinds(&members), (2, 0, 0, 1, 0, 2), "箭头+引线+基准线+2 ATTDEF");
+        // 无虚线：没有品红线。
+        assert!(lines_of(&members)
+            .iter()
+            .all(|l| l.common.color != acadrust::types::Color::from_index(6)));
+        // 无 ensure（文档空样式/层缺失时仍会 ensure 样式与层——断言不强制）。
+    }
+
+    #[test]
+    fn apply_weld_lower_forces_dash() {
+        // dash=false 输入，但下侧符号存在 ⇒ 虚线强制开 + 下侧 ATTDEF 出现。
+        let mock = Arc::new(MockSender::new(weld_doc()));
+        let sender: Arc<dyn PluginRequestSender> = mock.clone();
+        let doc = weld_doc();
+        let mut p = full_params();
+        p.weld = WeldParams {
+            upper: String::new(),
+            lower: "点焊".into(),
+            dash: false,
+            circle: false,
+            flag: false,
+            tail: false,
+            c: false,
+            lo_thick: "3".into(),
+            ..WeldParams::default()
+        };
+        apply_weld(&sender, &doc, P_TIP, P0, P_END, &p).unwrap();
+        let members = mock.block_entities("*W1");
+        // 箭头1+引线1+基准线1+虚线1+点焊圆1+ATTDEF4 = 9
+        assert_eq!(members.len(), 9);
+        assert_eq!(kinds(&members), (3, 1, 0, 1, 0, 4));
+        assert!(lines_of(&members).iter().any(|l| l.common.linetype == "ACISOWELD"));
+        // 下侧点焊圆：圆心 = 槽位+2.275、虚线下 2.275。
+        let circles: Vec<&acadrust::entities::Circle> = members
+            .iter()
+            .filter_map(|e| match e {
+                E::Circle(c) => Some(c),
+                _ => None,
+            })
+            .collect();
+        assert!(circles
+            .iter()
+            .any(|c| (c.center.x - (19.413 + 2.275)).abs() < 1e-9
+                && (c.center.y - (-0.7 - 2.275)).abs() < 1e-9
+                && c.radius == 2.275));
+    }
+
+    #[test]
+    fn apply_weld_rejects_invalid() {
+        let mock = Arc::new(MockSender::new(weld_doc()));
+        let sender: Arc<dyn PluginRequestSender> = mock.clone();
+        let doc = weld_doc();
+        let p = full_params();
+        // 第二段不水平。
+        let r = apply_weld(&sender, &doc, P_TIP, P0, [143.238, 96.5, 0.0], &p);
+        assert!(r.err().map_or(false, |e| e.contains("水平")));
+        // 第二段向左。
+        let r = apply_weld(&sender, &doc, P_TIP, P0, [90.0, 95.728, 0.0], &p);
+        assert!(r.err().map_or(false, |e| e.contains("向右")));
+        // 引线过短。
+        let r = apply_weld(&sender, &doc, [94.0, 95.2, 0.0], P0, P_END, &p);
+        assert!(r.err().map_or(false, |e| e.contains("过短")));
+        // 未知符号。
+        let mut p2 = full_params();
+        p2.weld.upper = "角焊XL".into();
+        let r = apply_weld(&sender, &doc, P_TIP, P0, P_END, &p2);
+        assert!(r.err().map_or(false, |e| e.contains("未知焊缝符号")));
+        // 跨线符号放下侧。
+        let mut p3 = full_params();
+        p3.weld.lower = "堆焊接头".into();
+        let r = apply_weld(&sender, &doc, P_TIP, P0, P_END, &p3);
+        assert!(r.err().map_or(false, |e| e.contains("跨线")));
+    }
+
+    #[test]
+    fn http_server_weld_apply_refresh() {
+        // 两段 PLINE 引导：(0,0)→(20,20)→(60,20)（焊缝点→拐点→基准线末端）。
+        let mut doc = acadrust::CadDocument::new();
+        let mut pl = LwPolyline::new();
+        pl.common.layer = "10引导线层".into();
+        pl.add_point(Vector2::new(0.0, 0.0));
+        pl.add_point(Vector2::new(20.0, 20.0));
+        pl.add_point(Vector2::new(60.0, 20.0));
+        let gh = doc.add_entity(E::LwPolyline(pl)).unwrap();
+        let mock = Arc::new(MockSender::new(doc));
+        let server = spawn(mock.clone()).expect("spawn guide server");
+        let hx = format!("{:#X}", u64::from(gh));
+        // 角焊 + 虚线 + 尾部 + 文字（URL percent-encode 中文）。
+        let url = "http://127.0.0.1:1/DIM/WELD/0?wu=%E8%A7%92%E7%84%8A&wdash=1&wtail=1&wut=5&wuq=100";
+        // 1) POST /api/apply → 写超链接（引导保留）。
+        let body = serde_json::json!({"handle": hx, "url": url}).to_string();
+        let r = http_req(server.port, "POST", "/api/apply", &body);
+        assert!(r.contains("\"ok\":true"), "apply: {r}");
+        assert!(mock
+            .url_writes
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(h, _)| *h == gh));
+        // 2) POST /api/apply_refresh → 生成 *W1 + INSERT；引导 PLINE 保留。
+        let r2 = http_req(server.port, "POST", "/api/apply_refresh", &body);
+        let v: serde_json::Value = serde_json::from_str(&r2).unwrap();
+        assert_eq!(v["ok"], true, "apply_refresh: {r2}");
+        assert_eq!(v["block"], "*W1");
+        let doc2 = mock.doc.lock().unwrap();
+        assert!(
+            doc2.entities().any(|e| matches!(e, E::LwPolyline(_))),
+            "焊接引导 PLINE 保留（10引导线层，便于重选再改）"
+        );
+        assert!(doc2.entities().any(|e| matches!(e, E::Insert(_))));
+        // 3) 坏请求：4 顶点 PLINE → 报错。
+        //    （重建 mock：另起 server。）
+        drop(server);
+        let mut doc3 = acadrust::CadDocument::new();
+        let mut pl3 = LwPolyline::new();
+        pl3.common.layer = "10引导线层".into();
+        for pt in [(0.0, 0.0), (10.0, 0.0), (20.0, 0.0), (30.0, 0.0)] {
+            pl3.add_point(Vector2::new(pt.0, pt.1));
+        }
+        let gh3 = doc3.add_entity(E::LwPolyline(pl3)).unwrap();
+        let mock3 = Arc::new(MockSender::new(doc3));
+        let server3 = spawn(mock3.clone()).expect("spawn guide server 3");
+        let hx3 = format!("{:#X}", u64::from(gh3));
+        let body3 = serde_json::json!({"handle": hx3, "url": url}).to_string();
+        let r3 = http_req(server3.port, "POST", "/api/apply_refresh", &body3);
+        assert!(r3.contains("3 顶点"), "4 顶点应报错: {r3}");
+    }
+
+    #[test]
+    fn http_server_serves_weld_gui_and_syms() {
+        // guide.html：焊接按钮/面板/URL 参数键/符号几何端点（静态断言；
+        // 按钮显隐由 JS applyGeomFilter 按 3 顶点 PLINE 过滤）。
+        let mock = Arc::new(MockSender::new(acadrust::CadDocument::new()));
+        let server = spawn(mock.clone()).expect("spawn guide server");
+        let html = http_req(server.port, "GET", "/guide.html?handle=0x1", "");
+        assert!(html.contains("data-t=\"WELD\""), "焊接按钮");
+        assert!(html.contains("id=\"row-weld\""), "焊接面板");
+        assert!(html.contains("id=\"w-upper\"") && html.contains("id=\"w-lower\""));
+        assert!(html.contains("wdash=1") && html.contains("wcir=1") && html.contains("wut="));
+        assert!(html.contains("/api/weld_syms"));
+        assert!(html.contains("weldLowerHasContent"), "虚线联动");
+        // /api/weld_syms：27 符号 + 跨线标记 + MR 小字。
+        let j = http_req(server.port, "GET", "/api/weld_syms", "");
+        assert!(j.contains("角焊") && j.contains("持久衬垫"));
+        assert!(j.contains("\"cross\":true"));
+        assert!(j.contains("\"MR\""));
+        let v: serde_json::Value = serde_json::from_str(&j).unwrap();
+        assert_eq!(v["ok"], true);
+        assert_eq!(v["syms"].as_array().unwrap().len(), 27);
+    }
 }
+}
+
+
 
 

@@ -140,7 +140,7 @@ pub(crate) fn layer_defs() -> Vec<LayerDef> {
 }
 
 /// 防御性线型（宿主内置表已有则跳过；保证 DWG 写出时层引用的线型在表内）。
-fn linetype_defs() -> Vec<LinetypeDef> {
+pub(crate) fn linetype_defs() -> Vec<LinetypeDef> {
     vec![
         LinetypeDef {
             name: "CENTER2".into(),
@@ -156,6 +156,12 @@ fn linetype_defs() -> Vec<LinetypeDef> {
             name: "DIVIDE2".into(),
             description: "Divide (.5x)".into(),
             elements: vec![6.35, -3.175, 0.0, -3.175, 0.0, -3.175],
+        },
+        // 焊接符号第二基准线（虚线）：对照 焊接符号示例.dxf 的 ACISOWELD（__ __）。
+        LinetypeDef {
+            name: "ACISOWELD".into(),
+            description: "Weld dash __ __ __".into(),
+            elements: vec![2.0, -1.0],
         },
     ]
 }

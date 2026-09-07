@@ -12,6 +12,8 @@
 //! ver (DATUM): 1996 | 2008（GB/T 1182 版本，默认 2008）；let (DATUM): 基准字母（默认 A）
 //! let (VIEW): 向视图字母（必填）；scale (VIEW): 比例文本（可缺省，如 1:1）；
 //! flip (VIEW): 翻转方向（1 = 加旋转弧线箭头 → 样式3）；mx/my (VIEW): 标记放置点（缺省 0,0）
+//! WELD (焊接): wu/wl=上下侧符号名、wdash/wcir/wflg/wtail/wc=五开关（虚线/全周边/现场旗/尾部/C）、
+//! wut/wuq/wlt/wlq/wtt=五文字槽（上/下侧厚度尺寸、上/下侧数量长度、尾部注释）
 //! ```
 //!
 //! 端口为标注更新服务器端口；解析时忽略（本机单实例）。
@@ -29,6 +31,9 @@ pub enum GuideType {
     Tolerance,
     Detail,
     ArcLen,
+    /// 焊接符号（两段 PLINE 引导：顶点0=焊缝点，顶点1=基准线起点，
+    /// 顶点2=基准线末端；生成全家福块——GB/T 324 焊缝标注）。
+    Weld,
 }
 
 impl GuideType {
@@ -44,6 +49,7 @@ impl GuideType {
             GuideType::Tolerance => "TOLERANCE",
             GuideType::Detail => "DETAIL",
             GuideType::ArcLen => "ARCLEN",
+            GuideType::Weld => "WELD",
         }
     }
     fn from_str(s: &str) -> Option<Self> {
@@ -58,6 +64,7 @@ impl GuideType {
             "TOLERANCE" | "GDT" | "TOL" | "FTCF" => Some(GuideType::Tolerance),
             "DETAIL" | "DET" | "放大" => Some(GuideType::Detail),
             "ARCLEN" | "ARC" | "弧长" => Some(GuideType::ArcLen),
+            "WELD" | "焊接" => Some(GuideType::Weld),
             _ => None,
         }
     }
@@ -231,6 +238,38 @@ impl AngleMode {
     }
 }
 
+/// 焊接符号参数（GB/T 324；仅 WELD）。
+/// 上/下侧符号名来自焊接符号表.dxf 块名（"无"/空 = 不放符号）；
+/// 下侧符号由服务端查镜像版几何。跨线单置块（参考线上的点焊缝等）
+/// 只能放上侧（跨线绘制）。
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct WeldParams {
+    /// 上侧焊缝符号名（"无"/"" = 无；跨线单置块也填这里）。
+    pub upper: String,
+    /// 下侧焊缝符号名（"无"/"" = 无；服务端用镜像版几何）。
+    pub lower: String,
+    /// 虚线（第二基准线，非箭头侧指示；下侧有内容时强制开）。
+    pub dash: bool,
+    /// 全周边符号（圆圈，基准线起点）。
+    pub circle: bool,
+    /// 现场焊接（三角旗，基准线起点竖杆）。
+    pub flag: bool,
+    /// 尾部（尾叉 + 尾部注释；关 = 基准线保留全长，仅去尾叉注释）。
+    pub tail: bool,
+    /// C 凸面弧 + 固定 "C" 字（上/下各一；详细语义下一轮扩展）。
+    pub c: bool,
+    /// 上侧厚度尺寸（文字，可空）。
+    pub up_thick: String,
+    /// 上侧数量长度（文字，可空）。
+    pub up_qty: String,
+    /// 下侧厚度尺寸（文字，可空）。
+    pub lo_thick: String,
+    /// 下侧数量长度（文字，可空）。
+    pub lo_qty: String,
+    /// 尾部注释（文字，可空；tail 开才生成）。
+    pub tail_text: String,
+}
+
 /// 解析后的标注参数。
 #[derive(Debug, Clone, PartialEq)]
 pub struct GuideParams {
@@ -294,6 +333,8 @@ pub struct GuideParams {
     pub detail_pos: Option<(f64, f64)>,
     /// 局部放大图：生成时的 TF 图幅倍率（frame_scale_at 记录，标注系数用）。
     pub detail_frame: f64,
+    /// 焊接符号参数（仅 WELD）。
+    pub weld: WeldParams,
 }
 
 /// 形位公差单行：符号 + ⌀ + 公差值 + 修饰符(ⓂⓁⓅⓈ) + 基准1/2/3。
@@ -373,6 +414,7 @@ impl GuideParams {
             detail_no: None,
             detail_pos: None,
             detail_frame: 1.0,
+            weld: WeldParams::default(),
         }
     }
 
@@ -390,7 +432,7 @@ impl GuideParams {
             return None;
         }
         let type_raw = segs.next()?;
-        let guide_type = GuideType::from_str(type_raw)?;
+        let guide_type = GuideType::from_str(&percent_decode(type_raw))?;
 
         // 剩余段：线性 = [SUB, dist]；角度 = [mode, dist]（mode 可缺省 → 劣角）。
         let sub = if guide_type == GuideType::Linear {
@@ -440,6 +482,7 @@ impl GuideParams {
         let mut detail_no = None;
         let mut detail_pos = None;
         let mut detail_frame = 1.0;
+        let mut weld = WeldParams::default();
         for pair in query.split('&').filter(|s| !s.is_empty()) {
             let (k, v) = pair.split_once('=').unwrap_or((pair, ""));
             let v = percent_decode(v);
@@ -490,6 +533,20 @@ impl GuideParams {
                     }
                     detail_pos = Some((dx, dy));
                 }
+                // 焊接符号（仅 WELD）：wu/wl=上下侧符号名；wdash/wcir/wflg/
+                // wtail/wc=五开关；wut/wuq/wlt/wlq/wtt=五文字槽。
+                "wu" => weld.upper = v,
+                "wl" => weld.lower = v,
+                "wdash" => weld.dash = matches!(&*v, "1" | "true" | "yes" | "on"),
+                "wcir" => weld.circle = matches!(&*v, "1" | "true" | "yes" | "on"),
+                "wflg" => weld.flag = matches!(&*v, "1" | "true" | "yes" | "on"),
+                "wtail" => weld.tail = matches!(&*v, "1" | "true" | "yes" | "on"),
+                "wc" => weld.c = matches!(&*v, "1" | "true" | "yes" | "on"),
+                "wut" => weld.up_thick = v,
+                "wuq" => weld.up_qty = v,
+                "wlt" => weld.lo_thick = v,
+                "wlq" => weld.lo_qty = v,
+                "wtt" => weld.tail_text = v,
                 _ => {}
             }
         }
@@ -526,6 +583,7 @@ impl GuideParams {
             detail_no,
             detail_pos,
             detail_frame,
+            weld,
         })
     }
 
@@ -700,6 +758,42 @@ impl GuideParams {
         if let Some((dx, dy)) = self.detail_pos {
             q.push(format!("dx={}", dx));
             q.push(format!("dy={}", dy));
+        }
+        // 焊接符号（仅 WELD）：上下侧符号 + 五开关 + 五文字槽。
+        if self.guide_type == GuideType::Weld {
+            let w = &self.weld;
+            if !w.upper.is_empty() && w.upper != "无" {
+                q.push(format!("wu={}", percent_encode(&w.upper)));
+            }
+            if !w.lower.is_empty() && w.lower != "无" {
+                q.push(format!("wl={}", percent_encode(&w.lower)));
+            }
+            if w.dash {
+                q.push("wdash=1".to_string());
+            }
+            if w.circle {
+                q.push("wcir=1".to_string());
+            }
+            if w.flag {
+                q.push("wflg=1".to_string());
+            }
+            if w.tail {
+                q.push("wtail=1".to_string());
+            }
+            if w.c {
+                q.push("wc=1".to_string());
+            }
+            for (k, v) in [
+                ("wut", &w.up_thick),
+                ("wuq", &w.up_qty),
+                ("wlt", &w.lo_thick),
+                ("wlq", &w.lo_qty),
+                ("wtt", &w.tail_text),
+            ] {
+                if !v.is_empty() {
+                    q.push(format!("{k}={}", percent_encode(v)));
+                }
+            }
         }
         if !q.is_empty() {
             url.push('?');
@@ -921,6 +1015,36 @@ mod tests {
         let back3 = GuideParams::from_url(&p3.to_url(1)).unwrap();
         assert_eq!(back3.section_side, SS::Right);
         assert!(back3.show_arrow);
+    }
+
+    #[test]
+    fn parse_weld_url_roundtrip() {
+        use crate::guide_url::GuideType as GT;
+        // 全参数：上=角焊、下=点焊（镜像版）、五开关全开、五文字槽。
+        let url = "http://x/DIM/WELD/0?wu=%E8%A7%92%E7%84%8A&wl=%E7%82%B9%E7%84%8A&wdash=1&wcir=1&wflg=1&wtail=1&wc=1&wut=5&wuq=100&wlt=3&wlq=50&wtt=%E5%B0%81%E5%BA%95%E7%84%8A";
+        let p = GuideParams::from_url(url).unwrap();
+        assert_eq!(p.guide_type, GT::Weld);
+        assert_eq!(p.weld.upper, "角焊");
+        assert_eq!(p.weld.lower, "点焊");
+        assert!(p.weld.dash && p.weld.circle && p.weld.flag && p.weld.tail && p.weld.c);
+        assert_eq!(p.weld.up_thick, "5");
+        assert_eq!(p.weld.up_qty, "100");
+        assert_eq!(p.weld.lo_thick, "3");
+        assert_eq!(p.weld.lo_qty, "50");
+        assert_eq!(p.weld.tail_text, "封底焊");
+        // to_url 往返。
+        let back = GuideParams::from_url(&p.to_url(1)).unwrap();
+        assert_eq!(back.weld, p.weld);
+        // 缺省：全关全空；别名 焊接。
+        let p0 = GuideParams::from_url("http://x/DIM/%E7%84%8A%E6%8E%A5/0").unwrap();
+        assert_eq!(p0.guide_type, GT::Weld);
+        assert_eq!(p0.weld, WeldParams::default());
+        // “无”符号不上 URL（to_url 过滤），解析后仍为空串。
+        let mut p1 = GuideParams::linear(LinearSub::Aligned, 0.0);
+        p1.guide_type = GT::Weld;
+        p1.weld.upper = "无".into();
+        let back1 = GuideParams::from_url(&p1.to_url(1)).unwrap();
+        assert_eq!(back1.weld.upper, "");
     }
 
     #[test]

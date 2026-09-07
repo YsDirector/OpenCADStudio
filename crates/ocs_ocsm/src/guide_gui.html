@@ -123,6 +123,7 @@
         <button data-t="ANGLE">角度</button>
         <button data-t="SECTION">剖切</button>
         <button data-t="TOLERANCE">形位公差</button>
+        <button data-t="WELD">焊接</button>
         <button data-t="ARCLEN">弧长</button>
         <button data-t="DETAIL">局部放大</button>
       </div>
@@ -193,6 +194,31 @@
         <input type="text" id="gdt-bot" style="flex:1" placeholder="框下方注释">
       </div>
       <div class="gdt-hint">先选上方特征项目（作用于当前行），再填公差/基准；修饰符（ⓂⓁⓅⓈ）跟在数字后。每行一个形位公差框（多行沿引导线垂直方向堆叠）。行高亮=当前行，点行内任意处切换。</div>
+    </div>
+    <!-- 焊接符号：上下侧符号 + 五开关 + 五文字槽（仅两段 PLINE 引导=3 顶点） -->
+    <div class="row" id="row-weld" style="display:none; margin-top:8px; flex-direction:column; align-items:stretch; gap:6px">
+      <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap">
+        <span class="lbl">上侧符号</span>
+        <select id="w-upper" style="padding:2px 6px; font-size:14px"></select>
+        <span class="lbl" style="margin-left:10px">下侧符号</span>
+        <select id="w-lower" style="padding:2px 6px; font-size:14px"></select>
+      </div>
+      <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap; font-size:13px">
+        <label style="display:flex;align-items:center;gap:4px;cursor:pointer"><input type="checkbox" id="w-dash"> 虚线（非箭头侧）</label>
+        <label style="display:flex;align-items:center;gap:4px;cursor:pointer"><input type="checkbox" id="w-cir"> 全周边（圆圈）</label>
+        <label style="display:flex;align-items:center;gap:4px;cursor:pointer"><input type="checkbox" id="w-flg"> 现场焊接（三角旗）</label>
+        <label style="display:flex;align-items:center;gap:4px;cursor:pointer"><input type="checkbox" id="w-tail"> 尾部</label>
+        <label style="display:flex;align-items:center;gap:4px;cursor:pointer"><input type="checkbox" id="w-c"> C 凸面</label>
+      </div>
+      <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap">
+        <span class="lbl">上厚度</span><input type="text" id="w-ut" style="width:56px">
+        <span class="lbl" style="margin-left:6px">上数量/长度</span><input type="text" id="w-uq" style="width:56px">
+        <span class="lbl" style="margin-left:6px">下厚度</span><input type="text" id="w-lt" style="width:56px">
+        <span class="lbl" style="margin-left:6px">下数量/长度</span><input type="text" id="w-lq" style="width:56px">
+        <span class="lbl" style="margin-left:6px">尾部注释</span><input type="text" id="w-tt" style="width:88px">
+      </div>
+      <div id="w-warn" style="display:none; color:#b60; font-size:12px"></div>
+      <div class="gdt-hint">引导两段 PLINE：顶点1=焊缝点（箭头）、顶点2=拐点（基准线起点）、顶点3=基准线末端（须水平向右）。基准线全长随引导（尾部开关只控制尾叉+注释）。虚线=非箭头侧第二基准线（下侧有内容时强制开）。生成在 8符号标注层（匿名块 *W + INSERT）。</div>
     </div>
     <div class="param" id="row-param">
       <span class="lbl" id="dist-lbl">(与P2距离)</span>
@@ -498,6 +524,26 @@
       renderGdtTable(); draw();
       return;
     }
+    // 焊接：隐藏通用行，展示专属 row-weld（上下侧符号 + 五开关 + 五文字槽）。
+    if (type === 'WELD') {
+      document.getElementById('row-sub').style.display = 'none';
+      document.getElementById('row-gdt').style.display = 'none';
+      document.getElementById('row-param').style.display = 'none';
+      document.getElementById('row-txt').style.display = 'none';
+      document.getElementById('row-tol').style.display = 'none';
+      document.getElementById('row-view').style.display = 'none';
+      document.getElementById('row-detail').style.display = 'none';
+      document.getElementById('seg-side').style.display = 'none';
+      document.getElementById('seg-angle-mode').style.display = 'none';
+      document.getElementById('seg-section-side').style.display = 'none';
+      document.getElementById('seg-ver').style.display = 'none';
+      document.getElementById('seg-letter').style.display = 'none';
+      document.getElementById('letter-lbl').style.display = 'none';
+      tolEnabled = false; document.getElementById('tol-enable').checked = false;
+      weldLockDash();
+      draw();
+      return;
+    }
     document.getElementById('sub-lbl').textContent = linear ? '线性' : (angle ? '角度' : (section ? '剖切' : (type === 'ARCLEN' ? '偏移' : '位置')));
     document.getElementById('sub-lbl').style.display = (datum || view || angle || section || type === 'ARCLEN') ? 'none' : '';
     document.getElementById('seg-sub').style.display = linear ? '' : 'none';
@@ -546,7 +592,9 @@
       allow = ['ARCLEN'];
     } else if (geom === 'pline') {
       const nV = (PTS && PTS.length) || 0;
-      allow = (nV >= 3) ? ['ANGLE', 'SECTION', 'TOLERANCE'] : ['SECTION', 'TOLERANCE'];
+      // 焊接：仅两段（恰好 3 顶点：焊缝点→拐点→基准线末端）。
+      allow = (nV >= 3) ? ['ANGLE', 'SECTION', 'TOLERANCE'].concat(nV === 3 ? ['WELD'] : [])
+                        : ['SECTION', 'TOLERANCE'];
     } else {
       allow = LINE_TYPES;
     }
@@ -988,6 +1036,24 @@ const BS_FITS = [
       const my = document.getElementById('view-my').value.trim();
       if (mx !== '') qs.push('mx=' + mx);
       if (my !== '') qs.push('my=' + my);
+    } else if (type === 'WELD') {
+      // 焊接：上下侧符号 + 五开关 + 五文字槽（wu/wl/wdash/wcir/wflg/wtail/wc/wut/wuq/wlt/wlq/wtt）。
+      u += '/0';
+      const wu = document.getElementById('w-upper').value;
+      const wl = document.getElementById('w-lower').value;
+      if (wu && wu !== '无') qs.push('wu=' + encodeURIComponent(wu));
+      if (wl && wl !== '无') qs.push('wl=' + encodeURIComponent(wl));
+      if (document.getElementById('w-dash').checked) qs.push('wdash=1');
+      if (document.getElementById('w-cir').checked) qs.push('wcir=1');
+      if (document.getElementById('w-flg').checked) qs.push('wflg=1');
+      if (document.getElementById('w-tail').checked) qs.push('wtail=1');
+      if (document.getElementById('w-c').checked) qs.push('wc=1');
+      const gv = (id) => document.getElementById(id).value.trim();
+      if (gv('w-ut')) qs.push('wut=' + encodeURIComponent(gv('w-ut')));
+      if (gv('w-uq')) qs.push('wuq=' + encodeURIComponent(gv('w-uq')));
+      if (gv('w-lt')) qs.push('wlt=' + encodeURIComponent(gv('w-lt')));
+      if (gv('w-lq')) qs.push('wlq=' + encodeURIComponent(gv('w-lq')));
+      if (gv('w-tt')) qs.push('wtt=' + encodeURIComponent(gv('w-tt')));
     } else if (type === 'DETAIL') {
       // 局部放大图：放大比例（绝对）+ 序号（自动）+ 放置偏移（相对引导中心，留空自动）。
       u += '/0';
@@ -1029,8 +1095,176 @@ const BS_FITS = [
   function el(tag, attrs) { const e = document.createElementNS(NS, tag);
     for (const k in attrs) e.setAttribute(k, attrs[k]); return e; }
 
+  // ── 焊接符号几何（/api/weld_syms 拉取；编码 L/C/A/T 数组）──
+  let WSYMS = null;
+  const WELD_PAIRS = ['角焊','I型对接焊缝','点焊','缝焊缝','V型对接焊缝','带单边坡口的V型对接焊缝','带钝边J型对接焊缝','带钝边U型对接焊缝','带钝边V型焊缝','带钝边单边V型焊缝','端接焊缝','折叠接头','倾斜接头','陡侧V型坡口对焊','单边陡侧V型坡口对焊','卷边焊缝','堆焊缝','封底焊缝','塞焊缝','喇叭形焊','单边喇叭形焊','持久衬垫','临时衬垫','打底'];
+  const WELD_CROSS = ['参考线上的点焊缝','参考线上的缝焊缝','堆焊接头'];
+
+  function initWeldRows() {
+    const wu = document.getElementById('w-upper');
+    const wl = document.getElementById('w-lower');
+    wu.appendChild(new Option('无', '无'));
+    wl.appendChild(new Option('无', '无'));
+    for (const n of WELD_PAIRS) { wu.appendChild(new Option(n, n)); wl.appendChild(new Option(n, n)); }
+    for (const n of WELD_CROSS) { wu.appendChild(new Option(n + '（跨线）', n)); }
+    wu.addEventListener('change', () => { weldLockDash(); draw(); });
+    wl.addEventListener('change', () => { weldLockDash(); draw(); });
+    for (const id of ['w-dash','w-cir','w-flg','w-tail','w-c']) {
+      document.getElementById(id).addEventListener('change', () => { weldLockDash(); draw(); });
+    }
+    for (const id of ['w-ut','w-uq','w-lt','w-lq','w-tt']) {
+      document.getElementById(id).addEventListener('input', () => { weldLockDash(); draw(); });
+    }
+  }
+
+  // 下侧有内容（符号/文字）⇒ 虚线强制开并锁定（GB/T 324：虚线=非箭头侧基准）。
+  function weldLowerHasContent() {
+    return document.getElementById('w-lower').value !== '无'
+      || document.getElementById('w-lt').value.trim() !== ''
+      || document.getElementById('w-lq').value.trim() !== '';
+  }
+  function weldLockDash() {
+    const cb = document.getElementById('w-dash');
+    if (type !== 'WELD') return;
+    if (weldLowerHasContent()) { cb.checked = true; cb.disabled = true; }
+    else { cb.disabled = false; }
+  }
+
+  function drawWeld() {
+    svg.innerHTML = '';
+    // 世界线 → 屏幕线（draw 的 wline 是其局部函数，这里复制同款）。
+    function wline(x1, y1, x2, y2, w, color, dash) {
+      const a = w2s(x1, y1), b = w2s(x2, y2);
+      const attrs = { x1:a.x, y1:a.y, x2:b.x, y2:b.y, stroke:color, 'stroke-width':w };
+      if (dash) attrs['stroke-dasharray'] = dash;
+      return el('line', attrs);
+    }
+    const warn = document.getElementById('w-warn');
+    warn.style.display = 'none'; warn.textContent = '';
+    if (!PTS || PTS.length !== 3) return;
+    const [pw, p0, pe] = PTS;
+    // 引导 PLINE（灰）。
+    for (let i = 0; i + 1 < PTS.length; i++) {
+      svg.appendChild(wline(PTS[i].x, PTS[i].y, PTS[i+1].x, PTS[i+1].y, 1.5, '#bbb'));
+    }
+    // 校验：第二段须水平向右。
+    if (Math.abs(pe.y - p0.y) > 0.5 || pe.x <= p0.x) {
+      warn.style.display = '';
+      warn.textContent = '焊接引导无效：第二段（顶点2→顶点3）须水平且向右（终点在拐点右侧）。';
+      return;
+    }
+    const baseLen = pe.x - p0.x;
+    if (baseLen < 33) {
+      warn.style.display = '';
+      warn.textContent = '基准线偏短（' + baseLen.toFixed(1) + ' < 33）：符号/数字区可能超出线端。';
+    }
+    const dx = p0.x - pw.x, dy = p0.y - pw.y;
+    const L = Math.hypot(dx, dy);
+    if (L < 4) { warn.style.display = ''; warn.textContent = '引线过短（需容纳箭头）。'; return; }
+    const ux = dx / L, uy = dy / L, nx = -uy, ny = ux;
+    const CY = '#0aa', MG = '#d0d', OR = '#e8850a', GR = '#090';
+    // 箭头（青，实心）。
+    const abx = pw.x + 3.5 * ux, aby = pw.y + 3.5 * uy;
+    svg.appendChild(el('polygon', {
+      points: [[pw.x,pw.y],[abx + 0.587*nx, aby + 0.587*ny],[abx - 0.587*nx, aby - 0.587*ny]]
+        .map(p => { const q = w2s(p[0], p[1]); return q.x + ',' + q.y; }).join(' '),
+      fill: CY, stroke: 'none' }));
+    // 引线 + 基准线（青）。
+    svg.appendChild(wline(abx, aby, p0.x, p0.y, 2, CY));
+    svg.appendChild(wline(p0.x, p0.y, pe.x, pe.y, 2, CY));
+    const dash = document.getElementById('w-dash').checked || weldLowerHasContent();
+    // 虚线（品红）。
+    if (dash) svg.appendChild(wline(p0.x, p0.y - 0.7, pe.x, pe.y - 0.7, 2, MG, '6 3'));
+    // 全周边圆。
+    if (document.getElementById('w-cir').checked) {
+      const c = w2s(p0.x, p0.y);
+      svg.appendChild(el('circle', { cx: c.x, cy: c.y, r: 1.75 * cam.scale, fill: 'none', stroke: OR, 'stroke-width': 2 }));
+    }
+    // 现场焊接旗（竖杆 + 实心旗 + 底边）。
+    if (document.getElementById('w-flg').checked) {
+      svg.appendChild(wline(p0.x, p0.y, p0.x, p0.y + 7, 2, OR));
+      const tri = [[p0.x, p0.y + 7],[p0.x + 5.25, p0.y + 3.5],[p0.x, p0.y + 3.5]]
+        .map(p => { const q = w2s(p[0], p[1]); return q.x + ',' + q.y; }).join(' ');
+      svg.appendChild(el('polygon', { points: tri, fill: OR, stroke: 'none' }));
+      svg.appendChild(wline(p0.x + 5.25, p0.y + 3.5, p0.x, p0.y + 3.5, 2, OR));
+    }
+    // 尾叉。
+    if (document.getElementById('w-tail').checked) {
+      svg.appendChild(wline(pe.x, pe.y, pe.x + 3.5, pe.y + 3.5, 2, OR));
+      svg.appendChild(wline(pe.x, pe.y, pe.x + 3.5, pe.y - 3.5, 2, OR));
+    }
+    // 上下侧焊缝符号（几何来自 /api/weld_syms；预览 ×1 不乘图幅）。
+    const putSym = (name, lower, ox, oy) => {
+      if (!WSYMS || !WSYMS[name]) return;
+      const ents = lower ? (WSYMS[name].lower || []) : WSYMS[name].upper;
+      for (const e of ents) {
+        const k = e[0];
+        if (k === 'L') {
+          svg.appendChild(wline(ox + e[1], oy + e[2], ox + e[3], oy + e[4], 1.8, OR));
+        } else if (k === 'C') {
+          const c = w2s(ox + e[1], oy + e[2]);
+          svg.appendChild(el('circle', { cx: c.x, cy: c.y, r: e[3] * cam.scale, fill: 'none', stroke: OR, 'stroke-width': 1.8 }));
+        } else if (k === 'A') {
+          const [_, cx0, cy0, r, a0, a1] = e;
+          const span = ((a1 - a0) % 360 + 360) % 360;
+          const N = 24; let prev = null;
+          for (let i = 0; i <= N; i++) {
+            const a = (a0 + span * i / N) * Math.PI / 180;
+            const q = w2s(ox + cx0 + r * Math.cos(a), oy + cy0 + r * Math.sin(a));
+            if (prev) svg.appendChild(el('line', { x1: prev.x, y1: prev.y, x2: q.x, y2: q.y, stroke: OR, 'stroke-width': 1.8 }));
+            prev = q;
+          }
+        } else if (k === 'T') {
+          const t = w2s(ox + e[1], oy + e[2]);
+          const tx = el('text', { x: t.x, y: t.y, fill: GR, 'font-size': 10, 'text-anchor': 'middle', 'dominant-baseline': 'middle' });
+          tx.textContent = e[3];
+          svg.appendChild(tx);
+        }
+      }
+    };
+    const wu = document.getElementById('w-upper').value;
+    const wl = document.getElementById('w-lower').value;
+    const slotX = p0.x + 19.413;
+    if (wu !== '无') putSym(wu, false, slotX, p0.y);
+    if (wl !== '无') putSym(wl, true, slotX, p0.y - 0.7);
+    // C 凸面弧 + 固定 C 字。
+    if (document.getElementById('w-c').checked) {
+      for (const [cy, a0, a1, ty] of [[1.125, 1.5, 88.5, 4.96], [-1.825, 271.5, 358.5, -5.66]]) {
+        if (cy < 0 && !dash) continue;
+        const N = 24; let prev = null;
+        for (let i = 0; i <= N; i++) {
+          const a = (a0 + (a1 - a0) * i / N) * Math.PI / 180;
+          const q = w2s(p0.x + 20.538 + 2.625 * Math.cos(a), p0.y + cy + 2.625 * Math.sin(a));
+          if (prev) svg.appendChild(el('line', { x1: prev.x, y1: prev.y, x2: q.x, y2: q.y, stroke: OR, 'stroke-width': 1.8 }));
+          prev = q;
+        }
+        const t = w2s(p0.x + 23.444, p0.y + ty);
+        const tx = el('text', { x: t.x, y: t.y, fill: GR, 'font-size': 12, 'text-anchor': 'middle', 'dominant-baseline': 'middle' });
+        tx.textContent = 'C';
+        svg.appendChild(tx);
+      }
+    }
+    // 数字区（绿色文字；空槽不画）。
+    const slotTexts = [
+      ['w-ut', p0.x + 17.413, p0.y + 2.75, 'end'],
+      ['w-uq', p0.x + 25.913, p0.y + 2.75, 'start'],
+      ['w-lt', p0.x + 17.413, p0.y - 3.45, 'end'],
+      ['w-lq', p0.x + 25.913, p0.y - 3.45, 'start'],
+      ['w-tt', pe.x + 4.55, pe.y, 'start'],
+    ];
+    for (const [id, wx, wy, anch] of slotTexts) {
+      const v = document.getElementById(id).value.trim();
+      if (!v) continue;
+      const t = w2s(wx, wy);
+      const tx = el('text', { x: t.x, y: t.y, fill: GR, 'font-size': 12, 'text-anchor': anch, 'dominant-baseline': 'middle' });
+      tx.textContent = v;
+      svg.appendChild(tx);
+    }
+  }
+
   function draw() {
     svg.innerHTML = '';
+    if (type === 'WELD') { drawWeld(); return; }
     // 世界线 → 屏幕线（固定像素线宽，缩放不糊）
     function wline(x1, y1, x2, y2, w, color, dash) {
       const a = w2s(x1, y1), b = w2s(x2, y2);
@@ -1564,6 +1798,8 @@ const BS_FITS = [
   // ── 初始化加载 ─────────────────────────────────────────────
   async function load() {
     if (!handle) return;
+    // 焊接下拉必须先初始化（参数恢复时 setSel 需要 options 已存在）。
+    initWeldRows();
     try {
       const r = await fetch('/api/guide?handle=' + encodeURIComponent(handle));
       const j = await r.json();
@@ -1575,6 +1811,25 @@ const BS_FITS = [
         // 引导线长度 = 主尺寸（公差计算默认尺寸）；必须在 j.params 块外，
         // 否则 URL 无参数（首次 GDIM）时测量值不赋值，模态窗口主尺寸为空。
         if (typeof j.measurement === 'number') measurement = j.measurement;
+        if (j.params && j.params.weld) {
+          const w = j.params.weld;
+          const setSel = (id, v) => {
+            const sel = document.getElementById(id);
+            sel.value = (v && [...sel.options].some(o => o.value === v)) ? v : '无';
+          };
+          setSel('w-upper', w.upper);
+          setSel('w-lower', w.lower);
+          document.getElementById('w-dash').checked = !!w.dash;
+          document.getElementById('w-cir').checked = !!w.circle;
+          document.getElementById('w-flg').checked = !!w.flag;
+          document.getElementById('w-tail').checked = !!w.tail;
+          document.getElementById('w-c').checked = !!w.c;
+          document.getElementById('w-ut').value = w.up_thick || '';
+          document.getElementById('w-uq').value = w.up_qty || '';
+          document.getElementById('w-lt').value = w.lo_thick || '';
+          document.getElementById('w-lq').value = w.lo_qty || '';
+          document.getElementById('w-tt').value = w.tail_text || '';
+        }
         if (j.params) {
           type = j.params.type || 'LINEAR';
           const segType = document.querySelector(`#seg-type button[data-t="${type}"]`);
@@ -1675,8 +1930,14 @@ const BS_FITS = [
       document.getElementById('msg').className = 'msg err';
       document.getElementById('msg').textContent = '加载失败: ' + e.message;
     }
-  }
-  // GDT 符号插入：模态窗口点选，插入 {\fGDT;<字符>}（花括号作用域自动恢复标注字体）
+  
+  // 焊接：拉取符号几何（预览用；失败仅缺符号预览）。
+  try {
+    const wr = await fetch('/api/weld_syms');
+    const wj = await wr.json();
+    if (wj.ok) { WSYMS = {}; for (const it of wj.syms) WSYMS[it.name] = it; draw(); }
+  } catch (e) { /* 预览降级：无符号几何 */ }
+  }  // GDT 符号插入：模态窗口点选，插入 {\fGDT;<字符>}（花括号作用域自动恢复标注字体）
   const GDT_CHARS = 'abcdefghijklmnopqrstuvwxyz0123456789°±'.split('');
   function insertAtCursor(el, str) {
     const s = el.selectionStart, e = el.selectionEnd;
