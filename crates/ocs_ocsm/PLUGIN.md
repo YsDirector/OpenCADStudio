@@ -51,7 +51,9 @@ cargo build --release -p ocs_ocsm
 PLUGIN_DIR="$HOME/.config/OpenCADStudio/plugins/opencad.ocsm"
 mkdir -p "$PLUGIN_DIR/frame"
 cp target/release/libocs_ocsm.so "$PLUGIN_DIR/"
-cp crates/ocs_ocsm/plugin.toml "$PLUGIN_DIR/"
+# 宿主 v2026.36+ 对 API≥4 插件增加 rustc 门禁（Rust 无稳定 ABI）：plugin.toml
+# 必须携带构建该 .so 的 `rustc --version` 原串，否则插件被拒绝加载。
+sed "s|__RUSTC_VERSION__|$(rustc --version)|" crates/ocs_ocsm/plugin.toml > "$PLUGIN_DIR/plugin.toml"
 # 把图框 DWG 拷进 frame/（已有样例在 ~/桌面/OCSM/frame/）
 cp ~/桌面/OCSM/frame/*.dwg "$PLUGIN_DIR/frame/" || true
 
@@ -60,7 +62,11 @@ rm -rf "$HOME/.config/OpenCADStudio/plugins/opencad.layers_quick"
 ```
 
 启动 OpenCADStudio，日志应出现：
-`Loaded plugin: OCSMechanical 机械工具包 (opencad.ocsm 0.1.0)`
+`Loaded plugin: OCSMechanical 机械工具包 (opencad.ocsm 0.2.0)`
+
+若启动日志显示 `Plugin built with ..., host requires ... - rebuild required`，
+说明 plugin.toml 的 `rustc_version` 与实际构建工具链不一致（升级过 rustc？）——
+重新执行上面第 2、3 步即可（sed 会刷新工具链串）。
 
 ## 使用
 
