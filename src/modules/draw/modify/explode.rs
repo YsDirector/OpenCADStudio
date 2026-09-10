@@ -153,6 +153,11 @@ fn explode_polyline2d(p: &Polyline2D) -> Vec<EntityType> {
     let closed = p.is_closed();
     let n_segs = if closed { n } else { n - 1 };
     let elevation = p.elevation;
+    let normal = DVec3::new(p.normal.x, p.normal.y, p.normal.z)
+        .try_normalize()
+        .unwrap_or(DVec3::Z);
+    let normal = Vector3::new(normal.x, normal.y, normal.z);
+    let plane = crate::entities::curve::ocs_plane(normal.clone(), elevation);
 
     let mut result = Vec::new();
     for i in 0..n_segs {
@@ -164,13 +169,25 @@ fn explode_polyline2d(p: &Polyline2D) -> Vec<EntityType> {
         if v0.bulge.abs() < 1e-10 {
             let mut common = p.common.clone();
             common.handle = Handle::NULL;
+            let start = plane.point_at(p0);
+            let end = plane.point_at(p1);
             result.push(EntityType::Line(LineEnt {
                 common,
-                start: Vector3::new(p0[0], p0[1], elevation),
-                end: Vector3::new(p1[0], p1[1], elevation),
+                start: Vector3::new(start[0], start[1], start[2]),
+                end: Vector3::new(end[0], end[1], end[2]),
+                thickness: p.thickness,
+                normal: normal.clone(),
                 ..LineEnt::new()
             }));
-        } else if let Some(arc) = bulge_to_arc(p0, p1, v0.bulge, elevation, &p.common) {
+        } else if let Some(arc) = bulge_to_arc(
+            p0,
+            p1,
+            v0.bulge,
+            elevation,
+            &p.common,
+            p.thickness,
+            normal.clone(),
+        ) {
             result.push(arc);
         }
     }
@@ -237,12 +254,22 @@ fn explode_lwpolyline(p: &LwPolyline) -> Vec<EntityType> {
                 common,
                 start: Vector3::new(p0[0], p0[1], elevation),
                 end: Vector3::new(p1[0], p1[1], elevation),
+                thickness: p.thickness,
+                normal: p.normal.clone(),
                 ..LineEnt::new()
             };
             result.push(EntityType::Line(line));
         } else {
             // Arc segment from bulge
-            if let Some(arc) = bulge_to_arc(p0, p1, v0.bulge, elevation, &p.common) {
+            if let Some(arc) = bulge_to_arc(
+                p0,
+                p1,
+                v0.bulge,
+                elevation,
+                &p.common,
+                p.thickness,
+                p.normal.clone(),
+            ) {
                 result.push(arc);
             }
         }
@@ -258,6 +285,8 @@ fn bulge_to_arc(
     bulge: f64,
     elevation: f64,
     common_src: &EntityCommon,
+    thickness: f64,
+    normal: Vector3,
 ) -> Option<EntityType> {
     let ba = crate::entities::common::BulgeArc::from_bulge(p0, p1, bulge)?;
 
@@ -280,6 +309,8 @@ fn bulge_to_arc(
         radius: ba.radius,
         start_angle,
         end_angle,
+        thickness,
+        normal,
         ..ArcEnt::new()
     };
     Some(EntityType::Arc(arc))
@@ -354,6 +385,38 @@ fn dim_seg(a: Vector3, b: Vector3, common: &acadrust::entities::EntityCommon) ->
         end: b,
         ..LineEnt::new()
     })
+}
+
+fn dim_geom_entities(
+    geometry: &crate::scene::convert::tessellate::DimGeom,
+    ext_common: &acadrust::entities::EntityCommon,
+    dim_common: &acadrust::entities::EntityCommon,
+) -> Vec<EntityType> {
+    let mut entities = Vec::new();
+    let point = |value: [f32; 3]| {
+        Vector3::new(value[0] as f64, value[1] as f64, value[2] as f64)
+    };
+    for (points, common) in [
+        (geometry.ext_lines.as_slice(), ext_common),
+        (geometry.dim_lines.as_slice(), dim_common),
+    ] {
+        for run in points.split(|point| point[0].is_nan()) {
+            for pair in run.windows(2) {
+                entities.push(dim_seg(point(pair[0]), point(pair[1]), common));
+            }
+        }
+    }
+    for triangle in geometry.arrow_fill.chunks_exact(3) {
+        let mut solid = acadrust::entities::Solid::triangle(
+            point(triangle[0]),
+            point(triangle[1]),
+            point(triangle[2]),
+        );
+        solid.common = dim_common.clone();
+        solid.common.handle = Handle::NULL;
+        entities.push(EntityType::Solid(solid));
+    }
+    entities
 }
 
 /// A dimension-line terminator at `tip`, body extending back along the unit
@@ -597,80 +660,23 @@ struct DimMetrics {
     dimclrt: i16,
     dimlwd: i16,
     dimlwe: i16,
-    /// Resolved terminator shapes for the first / second end (DIMTSZ tick,
-    /// DIMBLK/DIMBLK1/DIMBLK2 per DIMSAH, else closed-filled), so the bake
-    /// reproduces the style's actual arrow type.
+    dimltype: Handle,
+    dimltex1: Handle,
     arrow1: crate::scene::convert::tessellate::ArrowKind,
     arrow2: crate::scene::convert::tessellate::ArrowKind,
 }
 
-/// Metrics from the dim's style, mirroring what the live renderer applies, so a
-/// baked block reproduces the same gaps, arrow type, suppression, colours and
-/// lineweights: DIMASZ (arrow), DIMCEN (centre mark), DIMEXO/DIMEXE (extension
-/// gap/overshoot), DIMTSZ (oblique tick; >0 = ticks not arrows), DIMDLE (dim
-/// line overshoot past ticks), DIMSE1/2 + DIMSD1/2 (extension / dim-line
-/// suppression), DIMCLRD/E/T (colours) and DIMLWD/E (lineweights).
+/// Resolve style metrics used by saved dimension geometry.
 fn dim_metrics(dim: &Dimension, doc: &CadDocument) -> DimMetrics {
     let name = dim.base().style_name.as_str();
-    let mut effective_style = doc.dim_styles.iter().find(|s| {
-        s.name.eq_ignore_ascii_case(name)
-            || (name.trim().is_empty() && s.name.eq_ignore_ascii_case("Standard"))
-    }).cloned();
-    if let Some(style) = &mut effective_style {
-        use crate::entities::dim_override as ov;
-        let data = &dim.base().common.extended_data;
-        macro_rules! real {
-            ($field:ident, $code:ident) => {
-                if let Some(value) = ov::real(data, ov::$code) {
-                    style.$field = value;
-                }
-            };
-        }
-        macro_rules! int {
-            ($field:ident, $code:ident) => {
-                if let Some(value) = ov::int(data, ov::$code) {
-                    style.$field = value;
-                }
-            };
-        }
-        macro_rules! flag {
-            ($field:ident, $code:ident) => {
-                if let Some(value) = ov::int(data, ov::$code) {
-                    style.$field = value != 0;
-                }
-            };
-        }
-        macro_rules! handle {
-            ($field:ident, $code:ident) => {
-                if let Some(value) = ov::handle(data, ov::$code) {
-                    style.$field = value;
-                }
-            };
-        }
-        real!(dimscale, DIMSCALE);
-        real!(dimasz, DIMASZ);
-        real!(dimcen, DIMCEN);
-        real!(dimexo, DIMEXO);
-        real!(dimexe, DIMEXE);
-        real!(dimtsz, DIMTSZ);
-        real!(dimdle, DIMDLE);
-        real!(dimfxl, DIMFXL);
-        flag!(dimfxlon, DIMFXLON);
-        flag!(dimse1, DIMSE1);
-        flag!(dimse2, DIMSE2);
-        flag!(dimsd1, DIMSD1);
-        flag!(dimsd2, DIMSD2);
-        flag!(dimsoxd, DIMSOXD);
-        flag!(dimsah, DIMSAH);
-        int!(dimclrd, DIMCLRD);
-        int!(dimclre, DIMCLRE);
-        int!(dimclrt, DIMCLRT);
-        int!(dimlwd, DIMLWD);
-        int!(dimlwe, DIMLWE);
-        handle!(dimblk, DIMBLK);
-        handle!(dimblk1, DIMBLK1);
-        handle!(dimblk2, DIMBLK2);
-    }
+    let effective_style = doc
+        .dim_styles
+        .iter()
+        .find(|style| {
+            style.name.eq_ignore_ascii_case(name)
+                || (name.trim().is_empty() && style.name.eq_ignore_ascii_case("Standard"))
+        })
+        .map(|style| crate::entities::dimension::resolved_dimension_style(style, dim, doc));
     let style = effective_style.as_ref();
     let scale = style
         .map(|s| if s.dimscale > 1e-6 { s.dimscale } else { 1.0 })
@@ -679,14 +685,14 @@ fn dim_metrics(dim: &Dimension, doc: &CadDocument) -> DimMetrics {
     let dimasz = style.map(|s| s.dimasz * scale).unwrap_or(0.18 * scale).max(1e-6);
     let dimtsz = style.map(|s| s.dimtsz * scale).unwrap_or(0.0);
     let asz = dimasz as f32;
-    // Resolve the terminator shapes exactly like the live render: ticks when
-    // DIMTSZ>0, otherwise the DIMBLK / DIMBLK1+DIMBLK2 (per DIMSAH) arrow blocks,
-    // else closed-filled.
     let (arrow1, arrow2) = if dimtsz > 1e-9 {
         let t = ArrowKind::Tick { size: dimtsz as f32 };
         (t.clone(), t)
     } else if let Some(s) = style {
-        if matches!(dim, Dimension::Diameter(_)) {
+        if matches!(dim, Dimension::Radius(_) | Dimension::LargeRadial(_)) {
+            let arrow = arrow_from_block(doc, s.dimldrblk, asz);
+            (arrow.clone(), arrow)
+        } else if matches!(dim, Dimension::Diameter(_)) {
             use crate::entities::dim_override as ov;
             let data = &dim.base().common.extended_data;
             let first = ov::handle(data, ov::DIMBLK1)
@@ -723,6 +729,8 @@ fn dim_metrics(dim: &Dimension, doc: &CadDocument) -> DimMetrics {
         dimclrt: style.map(|s| s.dimclrt).unwrap_or(0),
         dimlwd: style.map(|s| s.dimlwd).unwrap_or(-2),
         dimlwe: style.map(|s| s.dimlwe).unwrap_or(-2),
+        dimltype: style.map(|s| s.dimltex_handle).unwrap_or(Handle::NULL),
+        dimltex1: style.map(|s| s.dimltex1_handle).unwrap_or(Handle::NULL),
         arrow1,
         arrow2,
     }
@@ -737,11 +745,28 @@ fn dim_common(base: &acadrust::entities::EntityCommon, clr: i16, lw: i16) -> aca
     c.handle = Handle::NULL;
     if clr != 0 && clr != 256 {
         c.color = acadrust::types::Color::from_index(clr);
+        c.color_name = None;
+        c.color_book_handle = None;
     }
     if lw >= 0 {
         c.line_weight = acadrust::types::LineWeight::from_value(lw);
     }
     c
+}
+
+fn with_dim_linetype(
+    mut common: acadrust::entities::EntityCommon,
+    doc: &CadDocument,
+    handle: Handle,
+) -> acadrust::entities::EntityCommon {
+    common.linetype = doc
+        .line_types
+        .iter()
+        .find(|line_type| line_type.handle == handle)
+        .map(|line_type| line_type.name.clone())
+        .unwrap_or_else(|| "Continuous".to_string());
+    common.linetype_handle = (!handle.is_null()).then_some(handle);
+    common
 }
 
 /// Baked geometry for an angular dimension, matching the live render exactly:
@@ -804,49 +829,6 @@ fn angular_block_segs(
     out.extend(dim_terminator(e1, -a1.sin() * sgn, a1.cos() * sgn, &met.arrow1, dim_c));
     out.extend(dim_terminator(e2, a2.sin() * sgn, -a2.cos() * sgn, &met.arrow2, dim_c));
     out
-}
-
-fn jogged_radial_break(
-    chord: Vector3,
-    jog: Vector3,
-    override_center: Vector3,
-    jog_angle: f64,
-) -> (Vector3, Vector3) {
-    let radial = norm2(
-        chord.x - override_center.x,
-        chord.y - override_center.y,
-        1.0,
-        0.0,
-    );
-    let (sin, cos) = jog_angle.sin_cos();
-    let transverse = (
-        radial.0 * cos - radial.1 * sin,
-        radial.0 * sin + radial.1 * cos,
-    );
-    let length = ((chord.x - override_center.x).powi(2)
-        + (chord.y - override_center.y).powi(2))
-    .sqrt();
-    let half = (length * 0.04).max(1e-6);
-    let first = Vector3::new(
-        jog.x - transverse.0 * half,
-        jog.y - transverse.1 * half,
-        jog.z,
-    );
-    let second = Vector3::new(
-        jog.x + transverse.0 * half,
-        jog.y + transverse.1 * half,
-        jog.z,
-    );
-    let distance_squared = |point: Vector3| {
-        (point.x - chord.x).powi(2)
-            + (point.y - chord.y).powi(2)
-            + (point.z - chord.z).powi(2)
-    };
-    if distance_squared(first) <= distance_squared(second) {
-        (first, second)
-    } else {
-        (second, first)
-    }
 }
 
 /// The text anchor for a radial leader: the saved text middle point when set,
@@ -1246,38 +1228,14 @@ fn explode_dimension(dim: &Dimension, doc: &CadDocument) -> Vec<EntityType> {
                 ));
             }
         }
-        Dimension::LargeRadial(d) => {
-            let (near, far) = jogged_radial_break(
-                d.chord_point,
-                d.jog_point,
-                d.override_center,
-                d.jog_angle,
-            );
-            if !met.dimsd1 {
-                result.push(make_seg(&d.chord_point, &near, &dim_c));
-                result.push(make_seg(&near, &far, &dim_c));
-                result.push(make_seg(&far, &d.override_center, &dim_c));
+        Dimension::LargeRadial(_) => {
+            if let Some(geometry) =
+                crate::entities::dimension::baked_large_radial_geometry(dim, doc)
+            {
+                let radial_ext_c = with_dim_linetype(ext_c.clone(), doc, met.dimltex1);
+                let radial_dim_c = with_dim_linetype(dim_c.clone(), doc, met.dimltype);
+                result.extend(dim_geom_entities(&geometry, &radial_ext_c, &radial_dim_c));
             }
-            let len = ((near.x - d.chord_point.x).powi(2)
-                + (near.y - d.chord_point.y).powi(2))
-            .sqrt()
-            .max(1e-12);
-            result.extend(dim_terminator(
-                d.chord_point,
-                (near.x - d.chord_point.x) / len,
-                (near.y - d.chord_point.y) / len,
-                &met.arrow1,
-                &dim_c,
-            ));
-            let radius = ((d.definition_point.x - d.chord_point.x).powi(2)
-                + (d.definition_point.y - d.chord_point.y).powi(2))
-            .sqrt();
-            result.extend(dim_center_mark(
-                d.definition_point,
-                met.dimcen,
-                radius,
-                &dim_c,
-            ));
         }
     }
 
@@ -1298,6 +1256,8 @@ fn explode_dimension(dim: &Dimension, doc: &CadDocument) -> Vec<EntityType> {
         // Apply the text colour / lineweight (DIMCLRT) onto the entity.
         let tc = dim_common(&base.common, met.dimclrt, -2);
         tent.common_mut().color = tc.color;
+        tent.common_mut().color_name = tc.color_name;
+        tent.common_mut().color_book_handle = tc.color_book_handle;
         tent.common_mut().line_weight = tc.line_weight;
         result.push(tent);
     }
@@ -1371,23 +1331,7 @@ fn next_dimension_block_name(doc: &CadDocument, next: &mut u64) -> String {
     }
 }
 
-/// Bake an anonymous `*D<n>` geometry block for every DIMENSION that doesn't
-/// already own one, so the file is valid for AutoCAD-family readers.
-///
-/// OCS renders dimensions by re-tessellating them on the fly and never
-/// materialises the `*D` block that a DWG `DIMENSION` is supposed to reference
-/// (the lines / arrows / text that AutoCAD actually draws). A dimension created
-/// in OCS therefore goes out referencing a block that doesn't exist, and the
-/// writer emits a null block handle — strict readers (DWG TrueView, QCAD) drop
-/// the dimension or demand a recovery, and lenient ones (BricsCAD) regenerate it
-/// at a different position. Call this on the document about to be written so each
-/// such dimension gets a real block built from its exploded geometry (extension
-/// lines + dimension line + measurement text, the same decomposition EXPLODE
-/// uses) and its `block_name` points at it.
-///
-/// Dimensions that already reference an existing block (e.g. imported from a real
-/// DWG, or copied via the `*D`-cloning copy path) are left untouched so their
-/// original graphics are preserved.
+/// Build missing anonymous dimension geometry blocks before writing.
 pub fn bake_dimension_blocks(doc: &mut CadDocument) {
     // Keep group-10 in step and find missing blocks in one entity pass. Existing
     // `*D` blocks are the save cache: only invalidated/new dimensions enter the
@@ -1451,35 +1395,13 @@ pub fn bake_dimension_blocks(doc: &mut CadDocument) {
 
         if let Some(EntityType::Dimension(d)) = doc.get_entity_mut(handle) {
             d.base_mut().block_name = name;
-            // The block we just baked holds the dimension graphics in absolute
-            // WCS, so the DWG group-12 insertion point (base.insertion_point)
-            // MUST be the origin. A reader that positions the *D block by that
-            // point (BricsCAD / ODA) otherwise draws it shifted by the offset,
-            // while OCS — which renders the block in place — shows it correctly.
-            // OCS's dimension commands seed insertion_point with the text
-            // anchor; reset it here so the saved dimension lands identically in
-            // every application. (#181)
+            // Baked geometry uses absolute coordinates.
             d.base_mut().insertion_point = Vector3::new(0.0, 0.0, 0.0);
         }
     }
 }
 
-/// Drop a dimension's baked `*D` block so the next save regenerates it from the
-/// dimension's current definition points / text / style.
-///
-/// OCS renders a dimension live from its definition points, but exports a baked
-/// `*D` block that other applications (BricsCAD / ODA) draw instead. An in-place
-/// edit — grip drag, DIMTEDIT, restyle, text edit, DIMSPACE — changes the
-/// definition points while leaving the old block, so without this the export
-/// keeps the pre-edit graphics and the dimension appears wrong everywhere but in
-/// OCS. Call this after any such edit; [`bake_dimension_blocks`] then rebuilds a
-/// fresh block on save.
-///
-/// The transform path (MOVE / COPY / PASTE) keeps its own block in sync via
-/// `define_transformed_block` and must NOT call this. The removed block's record
-/// and owned entities are deleted too, so re-baking on every edit can't
-/// accumulate orphan `*D` blocks. No-op when the dimension has no baked block
-/// yet (the pending path bakes it fresh on save). (#181)
+/// Drop baked dimension geometry so the next save regenerates it.
 pub fn invalidate_dim_block(doc: &mut CadDocument, handle: Handle) {
     let bn = match doc.get_entity(handle) {
         Some(EntityType::Dimension(d)) => d.base().block_name.clone(),
@@ -1784,36 +1706,21 @@ mod tests {
             Some(EntityType::Dimension(d)) => d.base().block_name.clone(),
             _ => panic!("dimension missing"),
         };
-        // 注意：v0.9.8 bake 把直径线拆成两段（edge→center、center→far，各长 radius=5）；
-        // 上游 v0.9.8 该测试仍找单段 10 而必然失败（上游 bake 改动未同步测试）。
-        // 这里改为验证：两段合计 = 完整直径 10，且各段中点（含中心段）落在圆心。
-        let segs = baked_segments(&doc, &name);
-        // 过滤中心标记等短段，取两段半径长（≈5）的直径段。
-        let diam: Vec<_> = segs
-            .iter()
-            .filter(|(a, b)| {
-                let l = ((b.x - a.x).powi(2) + (b.y - a.y).powi(2)).sqrt();
-                l > 1.0
+        // Each suppressible half must join an endpoint to the circle centre.
+        let segments = baked_segments(&doc, &name);
+        let connects = |expected: Vector3| {
+            segments.iter().any(|(a, b)| {
+                let near = |p: &Vector3, q: &Vector3| {
+                    (p.x - q.x).abs() < 1e-6
+                        && (p.y - q.y).abs() < 1e-6
+                        && (p.z - q.z).abs() < 1e-6
+                };
+                (near(a, &expected) && near(b, &center))
+                    || (near(b, &expected) && near(a, &center))
             })
-            .collect();
-        assert_eq!(diam.len(), 2, "应有两段半径长的直径段（各≈5）");
-        for (a, b) in &diam {
-            let l = ((b.x - a.x).powi(2) + (b.y - a.y).powi(2)).sqrt();
-            assert!((l - 5.0).abs() < 1e-6, "直径段长应≈5（半径）, got {l}");
-        }
-        // 两段拼合端点应覆盖圆周两端 (edge/far)，共享中点 = 圆心。
-        let (a0, b0) = diam[0];
-        let (a1, b1) = diam[1];
-        let mut xs = vec![a0.x, b0.x, a1.x, b1.x];
-        let mut ys = vec![a0.y, b0.y, a1.y, b1.y];
-        xs.sort_by(|a, b| a.partial_cmp(b).unwrap());
-        ys.sort_by(|a, b| a.partial_cmp(b).unwrap());
-        let mid_x = (xs[0] + xs[3]) * 0.5;
-        let mid_y = (ys[0] + ys[3]) * 0.5;
-        assert!(
-            (mid_x - center.x).abs() < 1e-6 && (mid_y - center.y).abs() < 1e-6,
-            "直径线应横跨圆心, mid=({mid_x},{mid_y})"
-        );
+        };
+        assert!(connects(edge), "near diameter half missing");
+        assert!(connects(far), "far diameter half missing");
     }
 
     // A rotated linear dimension uses `rotation` directly (radians). Before the
@@ -1843,5 +1750,67 @@ mod tests {
             "dimension line must be vertical at x=8, got {:?}",
             dim_line
         );
+    }
+
+    // EXPLODE replaces the polyline with fresh Line/Arc entities; each piece
+    // must carry the source thickness instead of resetting to 0 (#916).
+    #[test]
+    fn explode_keeps_lwpolyline_thickness() {
+        use acadrust::entities::LwVertex;
+        use acadrust::types::Vector2;
+
+        let mut pl = LwPolyline::new();
+        // One straight span + one bulged span, so the result holds a Line and
+        // an Arc and both paths through the rebuild are covered.
+        let mut v1 = LwVertex::new(Vector2::new(0.0, 0.0));
+        v1.bulge = 1.0; // semicircle to the next vertex
+        pl.vertices = vec![
+            v1,
+            LwVertex::new(Vector2::new(10.0, 0.0)),
+            LwVertex::new(Vector2::new(20.0, 0.0)),
+        ];
+        pl.thickness = 4.0;
+
+        let pieces = explode_polyline_segments(&EntityType::LwPolyline(pl));
+        assert!(pieces.len() >= 2, "expected a line and an arc piece");
+        for piece in &pieces {
+            match piece {
+                EntityType::Line(l) => assert!(
+                    (l.thickness - 4.0).abs() < 1e-12,
+                    "exploded line must keep thickness, got {}",
+                    l.thickness
+                ),
+                EntityType::Arc(a) => assert!(
+                    (a.thickness - 4.0).abs() < 1e-12,
+                    "exploded arc must keep thickness, got {}",
+                    a.thickness
+                ),
+                other => panic!("unexpected piece type: {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn explode_keeps_polyline2d_extrusion() {
+        use acadrust::entities::Vertex2D;
+
+        let mut pl = Polyline2D::new();
+        pl.vertices = vec![
+            Vertex2D::new(Vector3::new(0.0, 0.0, 0.0)),
+            Vertex2D::new(Vector3::new(10.0, 0.0, 0.0)),
+        ];
+        pl.elevation = 2.0;
+        pl.thickness = -4.0;
+        pl.normal = Vector3::new(1.0, 0.0, 0.0);
+
+        let pieces = explode_polyline_segments(&EntityType::Polyline2D(pl));
+        let Some(EntityType::Line(line)) = pieces.first() else {
+            panic!("expected one line");
+        };
+        assert_eq!(pieces.len(), 1);
+        assert_eq!(line.normal, Vector3::new(1.0, 0.0, 0.0));
+        assert!((line.thickness + 4.0).abs() < 1e-12);
+        assert!((line.start.x - 2.0).abs() < 1e-12);
+        assert!((line.end.x - 2.0).abs() < 1e-12);
     }
 }

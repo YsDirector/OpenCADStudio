@@ -93,5 +93,8 @@ pub fn handle_plugin_request(
                 Err(e) => PluginResponse::Error(e),
             }
         }
+        DocumentPath { tab_id } => PluginResponse::DocumentPath(
+            host.document_path(tab_id).map(|path| path.into_os_string()),
+        ),
     }
 }

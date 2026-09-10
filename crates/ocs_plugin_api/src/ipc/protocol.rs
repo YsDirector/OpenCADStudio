@@ -21,7 +21,7 @@ use crate::host::{CommandSource, CommandStep};
 use crate::manifest::ApiVersion;
 use crate::ribbon::owned::{OwnedPluginManifest, OwnedRibbonGroup};
 
-pub use acadrust::xdata::ExtendedDataRecord;
+pub use acadrust::xdata::{ExtendedDataRecord, XDataValue};
 pub use acadrust::{CadDocument, EntityType, Handle};
 
 /// Events the host forwards to an active plugin `InteractiveCommand`.
@@ -165,6 +165,8 @@ pub enum PluginRequest {
     CloseDocumentViewV4 { tab_id: u64 },
     /// V4: ask the host for the stable tab identifier of the active tab.
     GetTabId,
+    /// V5: ask the host for the filesystem path of the document in `tab_id`.
+    DocumentPath { tab_id: u64 },
     /// API v5: handles of the currently selected entities.
     SelectedHandles,
     /// API v5: set the current layer by name.
@@ -214,6 +216,8 @@ pub enum PluginResponse {
     },
     /// V4: stable tab identifier of the active tab.
     TabId(u64),
+    /// V5: filesystem path of the document in the requested tab, if any.
+    DocumentPath(Option<std::ffi::OsString>),
     /// API v5: count returned by `ensure_layers` / `ensure_linetypes` /
     /// `ensure_text_styles` (number of entries created).
     Count(usize),

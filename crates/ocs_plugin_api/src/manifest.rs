@@ -17,12 +17,13 @@
 /// `document()` / `document_mut()` to local cached copies for out-of-process
 /// plugins and appends `document_reader` / `document_view` at the end of the
 /// vtable so API v2 plugins keep working. v4 adds full-duplex notifications on
-/// a multiplexed socket while leaving the V2/V3 ABI and protocol untouched.
-/// v5 appends the layer / selection / text-style / frame-insert surface
+/// a multiplexed socket while leaving the V2/V3 ABI and protocol untouched. v5
+/// adds the layer / selection / text-style / frame-insert surface
 /// (`selected_handles`, `set_current_layer`, `ensure_layers`,
 /// `ensure_linetypes`, `ensure_text_styles`, frame picker and block insertion)
-/// for the OCSMechanical plugin — again appended at the end of the vtable so
-/// older plugins keep loading.
+/// for the OCSMechanical plugin and the `BuiltinPlugin::on_load` lifecycle
+/// callback — again appended at the end of the vtable so older plugins keep
+/// loading.
 pub const API_VERSION: u32 = 5;
 
 /// Oldest plugin API major the current host still loads. This keeps previously
@@ -31,9 +32,8 @@ pub const API_VERSION: u32 = 5;
 pub const API_VERSION_MIN_SUPPORTED: u32 = 2;
 
 /// Environment variable that caps the API major accepted by the host at
-/// runtime. Set to `3` to disable V4 plugins while keeping V2/V3 plugins
-/// working; set to `2` for V2-only mode. The same mechanism will apply to
-/// future API majors.
+/// runtime. Set to `4` to disable V5 plugins, `3` to disable V4, or `2` for
+/// V2-only mode.
 pub const MAX_API_VERSION_ENV: &str = "OCS_PLUGIN_MAX_API_VERSION";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

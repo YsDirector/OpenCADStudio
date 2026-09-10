@@ -4,10 +4,11 @@ version = 4
 
 [[package]]
 name = "OpenCADStudio"
-version = "0.9.8"
+version = "2026.36.0"
 dependencies = [
  "acadrust",
  "ashpd",
+ "base64",
  "bincode",
  "bytemuck",
  "cadkernel",
@@ -25,6 +26,7 @@ dependencies = [
  "iced",
  "iced_aw",
  "iced_core",
+ "iced_runtime",
  "image",
  "inventory",
  "js-sys",
@@ -71,8 +73,8 @@ checksum = "366ffbaa4442f4684d91e2cd7c5ea7c4ed8add41959a31447066e279e432b618"
 
 [[package]]
 name = "acadrust"
-version = "0.4.1"
-source = "git+https://ghfast.top/https://github.com/HakanSeven12/cadcodec.git?rev=788eea0161ba9f3eb7ee6569fd8bb52a8207a2ed#788eea0161ba9f3eb7ee6569fd8bb52a8207a2ed"
+version = "0.5.4"
+source = "git+https://ghfast.top/https://github.com/HakanSeven12/cadcodec.git?rev=5b56571a190e7a17c8f12d36390d2938b0fb72f7#5b56571a190e7a17c8f12d36390d2938b0fb72f7"
 dependencies = [
  "ahash 0.8.12",
  "anyhow",
@@ -878,7 +880,7 @@ checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
 [[package]]
 name = "cadkernel"
 version = "0.1.0"
-source = "git+https://ghfast.top/https://github.com/HakanSeven12/cadkernel.git?rev=b2b1d4b#b2b1d4b0cd7def2d26a0d519991fc89a89f916d3"
+source = "git+https://ghfast.top/https://github.com/HakanSeven12/cadkernel.git?rev=67f2427282d28922d9263e37b0136b6632e929b3#67f2427282d28922d9263e37b0136b6632e929b3"
 dependencies = [
  "acadrust",
  "cavalier_contours",
@@ -3902,7 +3904,7 @@ dependencies = [
 
 [[package]]
 name = "ocs_plugin_api"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "acadrust",
  "bincode",

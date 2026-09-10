@@ -454,6 +454,38 @@ impl OpenCADStudio {
                 self.tabs[i].active_cmd = Some(Box::new(new_cmd));
             }
 
+            "3DMESH" => {
+                use crate::modules::draw::draw::mesh3d::Mesh3dCommand;
+                let new_cmd = Mesh3dCommand::new();
+                self.command_line.push_info(&new_cmd.prompt());
+                self.tabs[i].active_cmd = Some(Box::new(new_cmd));
+            }
+
+            "3DFACE" => {
+                use crate::modules::draw::draw::face3d::Face3dCommand;
+                let new_cmd = Face3dCommand::new();
+                self.command_line.push_info(&new_cmd.prompt());
+                self.tabs[i].active_cmd = Some(Box::new(new_cmd));
+            }
+
+            "EDGE" => {
+                use crate::modules::draw::draw::face3d::FaceEdgeCommand;
+                let faces = self.tabs[i]
+                    .scene
+                    .document
+                    .entities()
+                    .filter_map(|entity| match entity {
+                        acadrust::EntityType::Face3D(face) => {
+                            Some((face.common.handle, face.clone()))
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                let new_cmd = FaceEdgeCommand::new(faces);
+                self.command_line.push_info(&new_cmd.prompt());
+                self.tabs[i].active_cmd = Some(Box::new(new_cmd));
+            }
+
             // 2D filled solid. Reached via SO / SOLID2D — the bare SOLID verb is
             // currently the shaded-display toggle (token collision tracked).
             "SOLID" | "SOLID2D" => {
@@ -925,7 +957,13 @@ impl OpenCADStudio {
             }
 
             // ── Model commands (3D primitives) ─────────────────────────────
-            "BOX" | "WEDGE" | "CYLINDER" | "CONE" | "SPHERE" | "PYRAMID" | "PYR"
+            "CYLINDER" => {
+                use crate::modules::model::cylinder_cmd::CylinderCommand;
+                let new_cmd = CylinderCommand::new();
+                self.command_line.push_info(&new_cmd.prompt());
+                self.tabs[i].active_cmd = Some(Box::new(new_cmd));
+            }
+            "BOX" | "WEDGE" | "CONE" | "SPHERE" | "PYRAMID" | "PYR"
             | "TORUS" => {
                 use crate::modules::model::primitive_cmd::PrimitiveCommand;
                 let new_cmd = PrimitiveCommand::new(cmd);
@@ -1000,31 +1038,27 @@ impl OpenCADStudio {
                 return Some(self.solid_convtosurface());
             }
 
-            // POLYSOLID <width> <height> — extrude a selected polyline into a
-            // wall-like solid.
             "POLYSOLID" => {
-                use crate::command::SelectThenTwoValueCommand;
-                let has_sel = !self.tabs[i].scene.selected_entities().is_empty();
-                let c = SelectThenTwoValueCommand::new(
-                    "POLYSOLID",
-                    "POLYSOLID  wall width:",
-                    "POLYSOLID  wall height:",
-                    has_sel,
-                );
+                use crate::modules::model::polysolid_cmd::PolysolidCommand;
+                let preselected = self.tabs[i]
+                    .scene
+                    .selected_entities()
+                    .into_iter()
+                    .find(|(_, entity)| {
+                        matches!(
+                            entity,
+                            acadrust::EntityType::Line(_)
+                                | acadrust::EntityType::Arc(_)
+                                | acadrust::EntityType::Circle(_)
+                                | acadrust::EntityType::Ellipse(_)
+                                | acadrust::EntityType::LwPolyline(_)
+                                | acadrust::EntityType::Spline(_)
+                        )
+                    })
+                    .map(|(handle, entity)| (handle, entity.clone()));
+                let c = PolysolidCommand::new(preselected);
                 self.command_line.push_info(&c.prompt());
                 self.tabs[i].active_cmd = Some(Box::new(c));
-            }
-            cmd if cmd.starts_with("POLYSOLID ") => {
-                let nums: Vec<f64> = cmd
-                    .split_whitespace()
-                    .skip(1)
-                    .filter_map(|s| s.parse::<f64>().ok())
-                    .collect();
-                if nums.len() >= 2 && nums[0] > 0.0 && nums[1] > 0.0 {
-                    return Some(self.solid_polysolid(nums[0], nums[1]));
-                }
-                self.command_line
-                    .push_info(crate::t!("Usage: POLYSOLID <width> <height>   (select a polyline first)").as_ref());
             }
 
             // SPLINEFIT — fit a smooth spline through the selected polyline's points.

@@ -12,6 +12,7 @@
 //! [`ensure_plugin_state`] helpers for the ergonomic typed access.
 
 use std::any::Any;
+use std::path::PathBuf;
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
@@ -22,8 +23,12 @@ use crate::ribbon::CadModule;
 // so out-of-tree plugins can use them without adding their own acadrust
 // dependency (which would risk an ABI-mismatching version).
 pub use acadrust;
+pub use acadrust::objects::{
+    DictionaryCloningFlags, KnownXRecordKind, ProxyObjectReference, ProxyReferenceKind, XRecord,
+    XRecordEntry, XRecordSection, XRecordValue, XRecordValueType,
+};
+pub use acadrust::xdata::{ExtendedDataRecord, XDataValue};
 pub use acadrust::{CadDocument, EntityType, Handle};
-pub use acadrust::xdata::ExtendedDataRecord;
 
 use crate::ipc::protocol::{PluginRequest, PluginResponse};
 
@@ -298,6 +303,14 @@ pub trait BuiltinPlugin: Send + Sync {
     /// the V4 runner guarantees it is only called for plugins that report
     /// API major 4 or newer.
     fn on_notification(&mut self, _command_id: Option<u64>, _notification: HostNotification) {}
+
+    /// Lifecycle callback invoked once after the runner connects. The plugin
+    /// receives the active document tab's `HostApi` so it can set up worker
+    /// threads or cache `plugin_request_sender()` before any user command runs.
+    ///
+    /// Added in API v5. The runner only calls this for plugins that report API
+    /// major 5 or newer.
+    fn on_load(&mut self, _host: &mut dyn HostApi) {}
 }
 
 /// A point-driven interactive command a plugin starts via
@@ -800,6 +813,14 @@ pub trait HostApi {
     /// entity; hosts should override it for batch efficiency.
     fn add_entities(&mut self, entities: Vec<EntityType>) -> Vec<Handle> {
         entities.into_iter().map(|e| self.add_entity(e)).collect()
+    }
+
+    /// Return the filesystem path of the document in tab `tab_id`, if any.
+    /// Added in API v5. The default returns `None`; in-process hosts should
+    /// override it to expose the real path.
+    fn document_path(&self, tab_id: u64) -> Option<PathBuf> {
+        let _ = tab_id;
+        None
     }
 
     // ── API v5 (added at the very end; vtable-prefix compatible) ────────────

@@ -10,17 +10,7 @@ impl OpenCADStudio {
 
             // ── Selection utilities ───────────────────────────────────────
             "SELECTALL" => {
-                use crate::scene::Scene;
-                let handles: Vec<acadrust::Handle> = self.tabs[i]
-                    .scene
-                    .entity_wires()
-                    .iter()
-                    .filter_map(|w| Scene::handle_from_wire_name(&w.name))
-                    .collect();
-                let count = handles.len();
-                for h in handles {
-                    self.tabs[i].scene.select_entity(h, false);
-                }
+                let count = self.tabs[i].scene.select_all_visible();
                 self.command_line
                     .push_output(crate::tf!("SELECTALL: {} object(s) selected.", count).as_ref());
                 self.refresh_properties();
@@ -262,6 +252,8 @@ impl OpenCADStudio {
                                 PeditTarget {
                                     is_poly: true,
                                     convertible: false,
+                                    mesh_size: None,
+                                    mesh_closed: None,
                                 },
                             )),
                             acadrust::EntityType::Line(_) | acadrust::EntityType::Arc(_) => {
@@ -270,9 +262,23 @@ impl OpenCADStudio {
                                     PeditTarget {
                                         is_poly: false,
                                         convertible: true,
+                                        mesh_size: None,
+                                        mesh_closed: None,
                                     },
                                 ))
                             }
+                            acadrust::EntityType::PolygonMesh(mesh) => Some((
+                                h,
+                                PeditTarget {
+                                    is_poly: true,
+                                    convertible: false,
+                                    mesh_size: Some((
+                                        mesh.m_vertex_count.max(0) as usize,
+                                        mesh.n_vertex_count.max(0) as usize,
+                                    )),
+                                    mesh_closed: Some((mesh.is_closed_m(), mesh.is_closed_n())),
+                                },
+                            )),
                             _ => None,
                         }
                     })
@@ -281,7 +287,14 @@ impl OpenCADStudio {
                 // the convert prompt) skips the select step.
                 let preselected: Vec<acadrust::Handle> =
                     self.tabs[i].scene.selected.iter().copied().collect();
-                let cmd_obj = PeditCommand::new(info).with_preselection(&preselected);
+                let header = &self.tabs[i].scene.document.header;
+                let cmd_obj = PeditCommand::new(
+                    info,
+                    header.surface_type,
+                    header.surface_u_density,
+                    header.surface_v_density,
+                )
+                .with_preselection(&preselected);
                 self.command_line.push_info(&cmd_obj.prompt());
                 self.tabs[i].active_cmd = Some(Box::new(cmd_obj));
             }

@@ -17,6 +17,7 @@ impl OpenCADStudio {
             Some(K::FindReplace) => crate::tr!("modal", "find-replace"),
             Some(K::PluginManager) => crate::tr!("modal", "plugin-manager"),
             Some(K::UpdateNotice) => crate::tr!("modal", "update-available"),
+            Some(K::DonationPrompt) => crate::tr!("donation", "title"),
             Some(K::Layers) => crate::tr!("modal", "layer-manager"),
             Some(K::LayerStateManager) => crate::tr!("modal", "layer-state-manager"),
             Some(K::LayerTranslator) => crate::t!("Layer Translator").into_owned(),
@@ -79,6 +80,68 @@ impl OpenCADStudio {
                 automatic_flow(ex, crate::ui::window::about::view_window)
             }
             super::super::ModalKind::Shortcuts => {
+                // Keys claimed by two rows — the cells turn red and a
+                // persistent warning names the command already using each
+                // key; the last row wins in the binding map on Apply.
+                let mut key_rows: std::collections::BTreeMap<String, Vec<&(String, String)>> =
+                    std::collections::BTreeMap::new();
+                for row in &self.shortcut_editor_rows {
+                    let key = crate::app::shortcuts::normalize_key(&row.0);
+                    if !key.is_empty() {
+                        key_rows.entry(key).or_default().push(row);
+                    }
+                }
+                let duplicate_keys: Vec<String> = key_rows
+                    .iter()
+                    .filter(|(_, rows)| rows.len() > 1)
+                    .map(|(key, _)| key.clone())
+                    .collect();
+                let duplicate_conflicts: Vec<(String, String)> = key_rows
+                    .iter()
+                    .filter(|(_, rows)| rows.len() > 1)
+                    .map(|(key, rows)| {
+                        // Name the established binding: the first row with
+                        // this key that actually has a command.
+                        let command = rows
+                            .iter()
+                            .find(|(_, command)| !command.is_empty())
+                            .map(|(_, command)| command.clone())
+                            .unwrap_or_default();
+                        (key.clone(), command)
+                    })
+                    .collect();
+                let duplicate_set: rustc_hash::FxHashSet<String> =
+                    duplicate_keys.into_iter().collect();
+                // Commands the dispatcher can't run: not a registered
+                // command, plugin command, alias, or input action.
+                let valid: rustc_hash::FxHashSet<String> =
+                    crate::command::all_registered_command_names()
+                        .into_iter()
+                        .map(str::to_uppercase)
+                        .chain(
+                            self.command_line
+                                .dynamic_commands
+                                .iter()
+                                .map(|cmd| cmd.to_uppercase()),
+                        )
+                        .chain(self.command_aliases.keys().cloned())
+                        .chain(
+                            crate::app::shortcuts::INPUT_ACTIONS
+                                .iter()
+                                .map(|action| action.to_string()),
+                        )
+                        .collect();
+                let unknown_commands: Vec<String> = self
+                    .shortcut_editor_rows
+                    .iter()
+                    .filter_map(|(_, command)| {
+                        let command = command.trim();
+                        (!command.is_empty() && !valid.contains(command))
+                            .then(|| command.to_string())
+                    })
+                    .collect();
+                let unknown_set: rustc_hash::FxHashSet<String> =
+                    unknown_commands.into_iter().collect();
                 sized_flow(
                     ex,
                     720,
@@ -86,6 +149,13 @@ impl OpenCADStudio {
                     |flow| {
                         crate::ui::window::shortcuts::view_window(
                             &self.shortcut_editor_rows,
+                            self.shortcut_capture_row,
+                            self.shortcut_pending_add,
+                            self.shortcut_reset_confirm,
+                            &duplicate_set,
+                            &duplicate_conflicts,
+                            &unknown_set,
+                            self.shortcut_close_confirm,
                             flow,
                         )
                     },
@@ -106,8 +176,8 @@ impl OpenCADStudio {
             }
             super::super::ModalKind::Options => sized_flow(
                 ex,
-                520,
-                500,
+                540,
+                560,
                 |flow| {
                     crate::ui::window::options::view_window(
                         &self.default_save_format,
@@ -121,6 +191,11 @@ impl OpenCADStudio {
                         self.cursor_type,
                         self.crosshair_color,
                         &self.crosshair_color_input,
+                        self.lineweight_display_scale,
+                        &self.model_space,
+                        &self.model_bg_input,
+                        &self.paper_bg_input,
+                        &self.desk_bg_input,
                         flow,
                     )
                 },
@@ -1301,6 +1376,9 @@ impl OpenCADStudio {
             super::super::ModalKind::AssocPrompt => {
                 automatic_flow(ex, default_assoc_dialog_window)
             }
+            super::super::ModalKind::DonationPrompt => {
+                sized_flow(ex, 540, 360, donation_dialog_window)
+            }
             super::super::ModalKind::AecDropWarning => {
                 let src_label = self
                     .tabs
@@ -1844,10 +1922,43 @@ fn layer_delete_warning_window(
     .into()
 }
 
-/// First-launch prompt offering to register Open CAD Studio as the default
-/// handler for .dwg / .dxf. "Yes" runs the platform association call; "Not now"
-/// just dismisses. Either answer flips the persisted `default_assoc_prompted`
-/// flag so the dialog never reappears.
+fn donation_dialog_window(sizing: crate::ui::modal::ModalSizing) -> Element<'static, Message> {
+    container(
+        column![
+            text(crate::tr!("donation", "heading")).size(18),
+            row![
+                text(crate::tr!("donation", "body"))
+                    .size(14)
+                    .width(Fill),
+                crate::ui::icons::themed(crate::ui::icons::HEART, 52.0),
+            ]
+            .spacing(20)
+            .align_y(iced::Center),
+            row![
+                Space::new().width(Fill),
+                dialog_button(
+                    crate::tr!("start", "donate"),
+                    Message::DonationPromptDonate,
+                    button::primary,
+                ),
+                dialog_button(
+                    crate::tr!("donation", "decline"),
+                    Message::CloseModal,
+                    button::secondary,
+                ),
+            ]
+            .spacing(8)
+            .align_y(iced::Center),
+        ]
+        .spacing(18)
+        .width(sizing.width),
+    )
+    .style(dialog_body_style)
+    .padding([24, 28])
+    .into()
+}
+
+/// One-time default application prompt.
 fn default_assoc_dialog_window(
     sizing: crate::ui::modal::ModalSizing,
 ) -> Element<'static, Message> {
