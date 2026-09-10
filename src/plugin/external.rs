@@ -799,4 +799,71 @@ acadrust_source = "git+https://github.com/HakanSeven12/cadcodec.git?rev=0908da7#
         assert!(handled, "plugin should handle MP_HELLO");
         assert!(!started, "MP_HELLO is not interactive");
     }
+
+    /// End-to-end smoke for a *real* installed plugin.
+    ///
+    /// Spawns the cdylib at `OCS_SMOKE_PLUGIN` (skipped when unset/missing) and
+    /// asserts the ribbon it registered with the host: group titles and the
+    /// command ids the host feeds into command-line autocomplete (#272). This
+    /// is the "is the deployed .so actually usable?" check — a package can
+    /// load and still register an empty ribbon if `ribbon_groups()` bails.
+    ///
+    /// No command is dispatched: real plugin commands have side effects
+    /// (starting servers, opening modals), so registration is asserted only.
+    #[test]
+    fn installed_plugin_registers_its_ribbon() {
+        let path = match std::env::var_os("OCS_SMOKE_PLUGIN") {
+            Some(p) => std::path::PathBuf::from(p),
+            None => return,
+        };
+        if !path.exists() {
+            eprintln!("OCS_SMOKE_PLUGIN does not exist: {}", path.display());
+            return;
+        }
+        let host_exe = std::path::PathBuf::from(
+            std::env::var_os("OCS_PLUGIN_RUNNER_EXE")
+                .unwrap_or_else(|| std::env::current_exe().unwrap().into_os_string()),
+        );
+        assert!(
+            host_exe.exists(),
+            "host exe not found: {}",
+            host_exe.display()
+        );
+        std::env::set_var("OCS_PLUGIN_RUNNER_EXE", &host_exe);
+
+        let mut app = crate::app::OpenCADStudio::new_for_test();
+        let mut host = crate::app::plugin_host::HostSession::new(&mut app, 0);
+        let process = ocs_plugin_api::process::PluginProcess::spawn(
+            &path,
+            &mut host,
+            v4_support::notification_handler(),
+        )
+        .expect("spawn installed plugin");
+
+        let groups = process.ribbon();
+        assert!(
+            !groups.is_empty(),
+            "plugin {} loaded but registered no ribbon groups",
+            process.id()
+        );
+        let mut titles = Vec::new();
+        let mut commands = Vec::new();
+        for group in groups {
+            titles.push(group.title.clone());
+            commands.extend(group.command_ids());
+        }
+        eprintln!(
+            "plugin {} v{} ribbon groups: [{}] | commands: [{}]",
+            process.id(),
+            process.manifest().version,
+            titles.join(", "),
+            commands.join(", ")
+        );
+        assert!(
+            !commands.is_empty(),
+            "plugin {} registered ribbon groups but no invocable commands",
+            process.id()
+        );
+        process.shutdown();
+    }
 }
