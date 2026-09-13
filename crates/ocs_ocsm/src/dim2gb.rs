@@ -272,6 +272,28 @@ fn xdata_real(base: &DimensionBase, code: i16) -> Option<f64> {
     None
 }
 
+/// 偏差文本：按 `dec` 位小数格式化后**抹尾零**；四舍五入结果为 0 时输出纯 `"0"`
+/// （不带正负号与小数点，例：0.0000 → `0`、-0.0 → `0`）；非零时带 `sign`（+ / −）。
+fn deviation_text(value: f64, dec: usize, sign: char) -> String {
+    let dec = dec.min(8);
+    // 先按 dec 位量化：丢弃 0.0000xxx 这类数值噪声与 -0.0 的符号。
+    let factor = 10f64.powi(dec as i32);
+    let q = (value * factor).round() / factor;
+    if q.abs() < 1e-12 {
+        return "0".to_string();
+    }
+    let mut s = format!("{:.*}", dec, q.abs());
+    if s.contains('.') {
+        while s.ends_with('0') {
+            s.pop();
+        }
+        if s.ends_with('.') {
+            s.pop();
+        }
+    }
+    format!("{sign}{s}")
+}
+
 /// 公差（极限偏差）→ 公差堆叠参数。取值优先级与宿主一致：
 /// **实体 XDATA DSTYLE 覆盖**（DIMTOL 71 / DIMTP 47 / DIMTM 48 / DIMTDEC 272）
 /// 优先于**样式表**（dimtol/dimtp/dimtm/dimtdec）——OCS 自带公差正是写在实体覆盖里，
@@ -304,17 +326,10 @@ fn tol_params(doc: &Doc, base: &DimensionBase) -> (Option<String>, Option<String
     if tp.abs() <= 1e-12 && tm.abs() <= 1e-12 {
         return (None, None);
     }
-    // 上/下偏差文本：对照 OCSM 既有画法 `\S+0.024^  0;`（正号显式，零值用空格对齐）。
-    let up = if tp.abs() > 1e-12 {
-        format!("+{:.*}", dec, tp)
-    } else {
-        " 0".to_string()
-    };
-    let dn = if tm.abs() > 1e-12 {
-        format!("-{:.*}", dec, tm)
-    } else {
-        " 0".to_string()
-    };
+    // 偏差文本：抹尾零；值按 `dec` 位四舍五入为 0 时输出纯 "0"（不带正负号、不带小数，
+    // 例如下差 0.0000 → "0" 而不是 "-0.00"）。非零时显式带号（上 +、下 −）。
+    let up = deviation_text(tp, dec, '+');
+    let dn = deviation_text(tm, dec, '-');
     (Some(up), Some(dn))
 }
 
@@ -1572,8 +1587,8 @@ mod tests {
         };
         let text = new.base().text.clone();
         assert!(
-            text.contains("\\S+0.100^-0.140;"),
-            "公差堆叠应来自实体覆盖（3 位小数），实际 {text:?}"
+            text.contains("\\S+0.1^-0.14;"),
+            "公差堆叠应来自实体覆盖且抹尾零，实际 {text:?}"
         );
     }
 
@@ -1634,5 +1649,51 @@ mod tests {
             "样式公差应带过来，实际 {:?}",
             new.base().text
         );
+    }
+    /// 偏差文本规则：抹尾零；值为 0（含 −0.0 与数值噪声）→ 输出纯 "0"（无符号无小数）。
+    #[test]
+    fn deviation_text_strips_zeros_and_drops_sign_at_zero() {
+        assert_eq!(deviation_text(0.1, 3, '+'), "+0.1");
+        assert_eq!(deviation_text(0.14, 3, '-'), "-0.14");
+        assert_eq!(deviation_text(0.2, 1, '-'), "-0.2");
+        // 0 / 负零 / 小于量化步长的噪声 → 纯 "0"
+        assert_eq!(deviation_text(0.0, 3, '-'), "0");
+        assert_eq!(deviation_text(-0.0, 3, '-'), "0");
+        assert_eq!(deviation_text(0.0, 3, '+'), "0");
+        assert_eq!(deviation_text(0.0004, 3, '-'), "0");
+        assert_eq!(deviation_text(-0.0004, 3, '-'), "0");
+        // 恰好半格仍会进位（round-half-away-from-zero）
+        assert_eq!(deviation_text(0.0005, 3, '-'), "-0.001");
+        // 整数偏差不带小数点
+        assert_eq!(deviation_text(1.0, 2, '+'), "+1");
+    }
+
+    /// 实体级公差里下差为 -0.0（OCS 界面常见）→ 堆叠应是 `^0` 而非 `^-0.00`。
+    #[test]
+    fn plan_zero_lower_deviation_converts_to_plain_zero() {
+        let mut l = DimensionLinear::horizontal(
+            Vector3::new(0.0, 0.0, 0.0),
+            Vector3::new(20.0, 0.0, 0.0),
+        );
+        l.definition_point = Vector3::new(10.0, 5.0, 0.0);
+        l.base.actual_measurement = 20.0;
+        l.base.style_name = "Standard".into();
+        l.base.common.extended_data.add_record(dstyle_record(&[
+            (71, XDataValue::Integer16(1)),
+            (47, XDataValue::Real(0.025)),
+            (48, XDataValue::Real(-0.0)),
+            (272, XDataValue::Integer16(4)),
+        ]));
+        let doc = doc_with(vec![Entity::Dimension(Dimension::Linear(l))]);
+        let plan = plan(&doc, &[]);
+        let Entity::Dimension(new) = &plan.adds[0] else {
+            panic!()
+        };
+        let text = new.base().text.clone();
+        assert!(
+            text.contains("\\S+0.025^0;"),
+            "下差 -0.0 应转成 0（无符号无小数），实际 {text:?}"
+        );
+        assert!(!text.contains("-0"), "不应出现 -0，实际 {text:?}");
     }
 }

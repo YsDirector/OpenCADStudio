@@ -6,7 +6,8 @@ Open CAD Studio 机械工具包插件（`opencad.ocsm`，API v5）。为机械�
    + 防御性线型 + 文字样式 `OCSM_GB`（固定高度 3.5、宽度因子 0.7、注释性）
    + **标注样式 `OCSM_GB`**（参数与用户示例 Mechanical 对齐：dimtxt/dimasz 2.5、
    dimexe 2.0、dimexo 0.625、dimcen 2.5、dimtad=1 上方、dimtoh=0 文字随尺寸线旋转、
-   dimtofl 开、dimdec=2、dimclrd/clre=130、dimclrt=3 绿字、dimtxsty=OCSM_GB），
+   dimtofl 开、dimdec=2（尺寸小数位）、dimtdec=3（偏差小数位）、dimclrd/clre=130、
+  dimclrt=3 绿字、dimtxsty=OCSM_GB），
    并设为当前标注样式。
 2. **数字键 `1`~`9` 快速切层**（从 `opencad.layers_quick` 迁移；`0` 不注册）：
    - 无选中：切换当前图层（不记 undo）；
@@ -90,6 +91,8 @@ rm -rf "$HOME/.config/OpenCADStudio/plugins/opencad.layers_quick"
   **公差（极限偏差）一并带过来**：取值优先级与宿主一致——实体 XDATA `DSTYLE`
   覆盖（DIMTOL/DIMTP/DIMTM/DIMTDEC）优先于样式表，渲染成 OCSM 既有的堆叠画法
   `\H0.71x;\C2;\S+0.1^-0.14;`（线性进 dimtext、直径/半径/弧长进块内 MTEXT）；
+  **偏差文本自动抹尾零，且量化后为 0 时输出纯 `0`**（不再出现 `-0.00`/`+0.00`）；
+
 
   坐标、折弯半径等本期跳过，结束时打印「转换 N 个 / 跳过 M 个（原因）」，
   整批一次 Ctrl+Z 可全撤。自动幂等补 OCSM_GB 样式、图层与文字样式，

@@ -213,7 +213,7 @@ pub(crate) fn dim_style_defs() -> Vec<DimStyleDef> {
         dimtol: false,
         dimtp: 0.0,
         dimtm: 0.0,
-        dimtdec: 2,
+        dimtdec: 3,
         dimclrd: 130,
         dimclre: 130,
         dimclrt: 3,
