@@ -395,8 +395,7 @@ fn pick_linear_sub(dim: &Dimension, first: Vector3, second: Vector3, measured: f
 fn stamp_edit(entity: &mut Entity, params: &GuideParams, pts: &[[f64; 3]], kind: &str) {
     let port = crate::current_guide_port().unwrap_or(0);
     let url = params.to_url(port);
-    let rec = gs::edit_record(&url, pts, kind, None);
-    entity.common_mut().extended_data.add_record(rec);
+    gs::stamp_edit_entity(entity, &url, pts, kind);
 }
 
 /// 构造 `GuideParams`（只填本次转换用得到的字段，其余用保守默认值）。
@@ -1337,6 +1336,28 @@ mod tests {
             "产出 INSERT"
         );
         assert_eq!(plan.removes.len(), 1, "删除原弧长标注");
+        // 弧长产出的 INSERT 也要带 OCSM_EDIT（可再编辑）——它由 apply_arclen
+        // 内部产出、经收集器加入，所以记录是在 apply_arclen 里挂到实体上的。
+        let ins = plan
+            .adds
+            .iter()
+            .find(|e| matches!(e, Entity::Insert(_)))
+            .unwrap();
+        let rec = ins
+            .common()
+            .extended_data
+            .get_record("OCSM_EDIT")
+            .expect("弧长产出应带 OCSM_EDIT");
+        let url = rec
+            .values
+            .iter()
+            .find_map(|v| match v {
+                XDataValue::String(s) if !s.is_empty() => Some(s.clone()),
+                _ => None,
+            })
+            .expect("参数 URL");
+        let p = GuideParams::from_url(&url).expect("URL 可解析");
+        assert_eq!(p.guide_type, GuideType::ArcLen, "{url}");
     }
 
     /// 不支持的类型：跳过并给出原因，不阻断整批。

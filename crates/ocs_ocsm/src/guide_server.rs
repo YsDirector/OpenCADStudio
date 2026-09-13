@@ -2017,6 +2017,21 @@ pub(crate) fn apply_arclen(
     // ── INSERT @ 引导圆心，8符号标注层 ──
     let mut ins = E::Insert(Insert::new(block_name.clone(), center));
     set_member_layer(&mut ins, "8符号标注层");
+    {
+        // 可再编辑信息：弧长引导 = ARC，几何按 `guide_geom_points` 的约定
+        // （圆心 + 起点/终点/中点）；参数 URL 由 GuideParams 原样编码。
+        // 与 `guide_geom_points` 对 ARC 的约定一致：起点 / 终点 / 中点。
+        let sp = a.start_point();
+        let ep = a.end_point();
+        let mp = a.midpoint();
+        let arc_pts = [
+            [sp.x, sp.y, sp.z],
+            [ep.x, ep.y, ep.z],
+            [mp.x, mp.y, mp.z],
+        ];
+        let port = crate::current_guide_port().unwrap_or(0);
+        stamp_edit_entity(&mut ins, &params.to_url(port), &arc_pts, "arc");
+    }
     let handle = match req_timed(
         sender,
         PluginRequest::AddEntities(vec![ins]),
@@ -4802,6 +4817,19 @@ fn temp_guide_entity(kind: &str, pts: &[[f64; 3]]) -> Result<acadrust::EntityTyp
         }
         other => Err(format!("该引导类型暂不支持再编辑（{other}）")),
     }
+}
+
+/// 把 `OCSM_EDIT`（参数 URL + 引导几何 + 种类）**直接挂到实体对象**上。
+/// 与 `stamp_editable` 的区别：不需要 sender、不需要 handle —— 所以实体无论是
+/// 直接返回、还是经收集器/宿主加进文档，记录都跟着走（D2G 场景必需）。
+pub(crate) fn stamp_edit_entity(
+    entity: &mut acadrust::EntityType,
+    params_url: &str,
+    pts: &[[f64; 3]],
+    kind: &str,
+) {
+    let rec = edit_record(params_url, pts, kind, None);
+    entity.common_mut().extended_data.add_record(rec);
 }
 
 /// 生成后：给标注写 `PE_URL`（回编辑 GUI 的链接，供宿主 Ctrl+点击）+ `OCSM_EDIT`
