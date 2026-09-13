@@ -1230,6 +1230,15 @@ const BS_FITS = [
     // 由本函数自动判定（GUI/MCP 侧手工规则，服务端宽容处理）。
     cb.checked = weldLowerHasContent();
     cb.disabled = true;
+    // 尾部：开关可手动控制，但**存在尾部注释文字时强制打开并锁定**（用户定），
+    // 否则尾叉与文字都不会生成。
+    const tailCb = document.getElementById('w-tail');
+    if (document.getElementById('w-tt').value.trim() !== '') {
+      tailCb.checked = true;
+      tailCb.disabled = true;
+    } else {
+      tailCb.disabled = false;
+    }
     // 焊接方法字母：仅角焊缝与喇叭形焊缝可用（角焊 / 喇叭形焊 / 单边喇叭形焊）。
     const wu = document.getElementById('w-upper').value;
     const wl = document.getElementById('w-lower').value;
@@ -1385,8 +1394,10 @@ const BS_FITS = [
       svg.appendChild(el('polygon', { points: tri, fill: OR, stroke: 'none' }));
       svg.appendChild(wline(t1.x, t1.y, t2.x, t2.y, 2, OR));
     }
-    // 尾叉
-    if (document.getElementById('w-tail').checked) {
+    // 尾叉（有尾部注释时同样生成——与开关锁定一致，双保险）
+    const tailOn = document.getElementById('w-tail').checked
+      || document.getElementById('w-tt').value.trim() !== '';
+    if (tailOn) {
       const f0 = tp(farT, 0), f1 = tp(farT + dirOut * 3.5, 3.5), f2 = tp(farT + dirOut * 3.5, -3.5);
       svg.appendChild(wline(f0.x, f0.y, f1.x, f1.y, 2, OR));
       svg.appendChild(wline(f0.x, f0.y, f2.x, f2.y, 2, OR));

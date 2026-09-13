@@ -3817,6 +3817,9 @@ fn apply_weld(
     //   把下侧内容显示到上方，且虚线画在基准线**上**（+0.7），符号在虚线之上。
     let flipped = upper.is_none() && !upper_texted && lower_has;
     let dash = lower_has || w.dash;
+    // 尾部：开关仍可手动控制，但**存在尾部注释文字时强制打开**（用户定），
+    // 否则尾叉与文字都不会生成。
+    let tail = w.tail || !w.tail_text.trim().is_empty();
     /// 虚线在内容坐标系 v 轴上的偏移（参考单位）：一般 −0.7（v 负侧 = 横线下/竖线右），
     /// 特殊情况（flipped）+0.7（内容显示到上方、虚线在其下）。
     let dash_v: f64 = if flipped { 0.7 } else { -0.7 };
@@ -3998,7 +4001,7 @@ fn apply_weld(
         ));
     }
     // 尾叉（基准线远端 → 向外 (+3.5,±3.5)）
-    if w.tail {
+    if tail {
         let dir_out = if far_t == blen { 1.0 } else { -1.0 };
         let f0 = tp(far_t, 0.0);
         members.push(weld_member_line(f0, tp(far_t + dir_out * 3.5 * s, 3.5 * s), 31));
@@ -4006,13 +4009,17 @@ fn apply_weld(
     }
     // 主符号槽位：保持示例布局 t = 19.413（自锚点起）；若补充元素（圆/括号）
     // 伸得更远则右移避让（用户定）。
-    let supp_end = if w.half {
+    // 补充元素（圆/半包围）自拐点向远端延伸：仅当它们位于"内容增长方向"
+    // （dir_in=+1，即拐点在锚点一侧）时才可能与槽位冲突；拐点在远端
+    // （dir_in=−1，第二段指向左/下）时它们在槽位之外，无需避让。
+    let supp_far_t = if w.half {
         corner_t + dir_in * 5.2 * s
     } else if w.circle {
-        corner_t + 1.75 * s
+        corner_t + dir_in * 1.75 * s
     } else {
         f64::NEG_INFINITY
     };
+    let supp_end = if dir_in > 0.0 { supp_far_t } else { f64::NEG_INFINITY };
     let slot_ref = (19.413_f64).max((supp_end + 4.0 * s) / s);
     // 侧渲染：base_v = 内容侧基线 v 偏移、m = ±1（−1 = 另一侧镜像）
     let mk = |base_u: f64, base_v: f64, m: f64| {
@@ -4078,8 +4085,11 @@ fn apply_weld(
             attdefs.push(("下侧数量长度L".to_string(), b.0, b.1, false));
         }
     }
-    if w.tail {
-        attdefs.push(("尾部注释E".to_string(), tail_anchor.0, tail_anchor.1, far_dir >= 0.0));
+    if tail {
+        // 对齐：尾注在线端之外；far_dir=+1（线端在内容远端）时文字继续向右
+        // 展开 → Left+Middle；far_dir=−1（线端在锚点侧）时文字向左展开 →
+        // Right+Middle。否则文字会压到尾叉上（用户实测）。
+        attdefs.push(("尾部注释E".to_string(), tail_anchor.0, tail_anchor.1, far_dir < 0.0));
     }
     let value_of = |tag: &str| -> String {
         match tag {
@@ -7542,7 +7552,62 @@ mod weld_tests {
         assert!((bl2.end.x - 60.0).abs() < 1e-9, "长基准线应保持 60：{}", bl2.end.x);
     }
 
-    /// 冒烟测试用宿主代理：把插件请求真实落到 CadDocument（镜像宿主
+    /// 回归：第二段指向左 + 角焊 + 厚度3 + 尾部注释 N=2（用户实测三问题）。
+    /// ① 槽位避让不得把内容推到拐点外；② 有尾注即生成尾叉+文字（开关可手动）；
+    /// ③ 尾注对齐随方向（向外 +t → 左对齐；−t → 右对齐，避免压尾叉）。
+    #[test]
+    fn apply_weld_left_pointing_tail_regressions() {
+        for tail_switch in [false, true] {
+            let mock = Arc::new(MockSender::new(weld_doc()));
+            let sender: Arc<dyn PluginRequestSender> = mock.clone();
+            let mut p = full_params();
+            p.weld = WeldParams {
+                upper: "角焊".into(),
+                lower: String::new(),
+                dash: false,
+                tail: tail_switch,
+                tail_text: "N=2".into(), // 有关注释 → 应强制生成尾叉+文字
+                circle: true,
+                flag: false,
+                half: false,
+                grind_upper: GrindKind::None,
+                grind_lower: GrindKind::None,
+                method_upper: String::new(),
+                method_lower: String::new(),
+                up_thick: "3".into(),
+                ..WeldParams::default()
+            };
+            // 拐点 (100,100)、第二段指向左 32（远端 x=68）
+            apply_weld(&sender, &weld_doc(), [128.0, 128.0, 0.0], [100.0, 100.0, 0.0], [68.0, 100.0, 0.0], &p)
+                .unwrap();
+            let m = mock.block_entities("*W1");
+            let ls = lines_of(&m);
+            // ① 符号槽位须在线内（锚点在 −blen（≤−32.263），槽位 +19.413 → 约 −12.85）
+            let sym = ls
+                .iter()
+                .find(|l| l.common.color == acadrust::types::Color::from_index(31)
+                    && (l.start.y - 0.125).abs() < 1e-9 && (l.end.y - 0.125).abs() < 1e-9)
+                .expect("上侧角焊水平腿");
+            assert!(
+                sym.start.x < 0.0 && sym.start.x > -32.0,
+                "符号须在线内（拐点外侧=错）: x={}",
+                sym.start.x
+            );
+            // ①b 尺寸文字同样在线内
+            let ads = attdefs_of(&m);
+            let a = ads.iter().find(|a| a.tag == "上侧厚度尺寸A′").unwrap();
+            assert!(a.insertion_point.x < 0.0 && a.insertion_point.x > -32.0);
+            // ② 尾叉（远端两侧各一条）+ 尾注文字（不论开关，只要有文字）
+            let fork = ls.iter().filter(|l| l.start.y == 0.0 && l.common.color == acadrust::types::Color::from_index(31)).count();
+            assert!(fork >= 2, "尾叉应生成（有尾注）: {fork}");
+            let tail = ads.iter().find(|a| a.tag == "尾部注释E").expect("尾注 ATTDEF");
+            // ③ 尾注对齐：线端在锚点侧（far_dir=−1）→ Right+Middle（文字向左展开，不压尾叉）
+            assert!(matches!(tail.horizontal_alignment, HorizontalAlignment::Right), "尾注应右对齐");
+            assert!(tail.insertion_point.x < -35.0, "尾注须在线端之外: {}", tail.insertion_point.x);
+        }
+    }
+
+    /// 冒烟测试用宿主代理：把插件请求真实落到 CadDocument（镜像宿主    /// 冒烟测试用宿主代理：把插件请求真实落到 CadDocument（镜像宿主
     /// add_block_record/ensure_* 语义），供 DxfWriter 写出检查文件。
     struct ApplySender {
         doc: std::sync::Mutex<acadrust::CadDocument>,
@@ -7731,7 +7796,7 @@ mod weld_tests {
                 circle: !half && !lower.is_empty(),
                 dash: smoke_dash || !lower.is_empty(),
                 flag: false,
-                tail: true,
+                tail: std::env::var("OCSM_WELD_SMOKE_TAIL_OFF").is_err(),
                 half,
                 // 分侧打磨/方法（新键优先，旧键 _GRIND/_METHOD 作两侧缺省）
                 grind_upper: std::env::var("OCSM_WELD_SMOKE_GRIND_U")
@@ -7748,7 +7813,9 @@ mod weld_tests {
                 method_lower: std::env::var("OCSM_WELD_SMOKE_METHOD_L")
                     .or_else(|_| std::env::var("OCSM_WELD_SMOKE_METHOD"))
                     .unwrap_or_default(),
-                up_thick: if up.is_empty() && !lower.is_empty() { String::new() } else { "5".into() },
+                up_thick: std::env::var("OCSM_WELD_SMOKE_UP_THICK").unwrap_or_else(|_| {
+                    if up.is_empty() && !lower.is_empty() { String::new() } else { "5".into() }
+                }),
                 lo_thick,
                 up_qty: String::new(),
                 lo_qty: String::new(),
