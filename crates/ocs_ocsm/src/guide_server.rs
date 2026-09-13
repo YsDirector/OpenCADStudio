@@ -2701,6 +2701,117 @@ fn do_apply(
     }
     let req: Req =
         serde_json::from_slice(body).map_err(|e| format!("请求 JSON 无效: {e}"))?;
+    let posted = handle_hex(&req.handle)?;
+
+    // ── 编辑模式：posted 实体本身是 OCSM 生成的标注（带 `OCSM_EDIT`）──
+    // 用记录里的引导几何造一条**临时引导**重走现有生成路径（各类型代码不用改），
+    // 生成后删临时引导 + 删旧标注 → 用记录里的引导几何重生成，达成"替换"。
+    if let Some((_, pts, kind, guide)) = read_edit_record(sender, posted) {
+        if !refresh {
+            // 只应用不生成：仅刷新参数记录（保持可编辑）。
+            let kind2 = kind.clone();
+            let _ = req_timed(
+                sender,
+                PluginRequest::WriteRecord {
+                    handle: posted,
+                    record: edit_record(&req.url, &pts, &kind2, guide),
+                },
+                "WriteRecord",
+            );
+            mark_dirty(sender)?;
+            return Ok(r#"{"ok":true,"edit":true}"#.into());
+        }
+        // 优先复用原引导（若还在且类型兼容），否则造临时引导。
+        let doc = snapshot(sender)?;
+        let reuse = guide.filter(|h| {
+            doc.get_entity(*h)
+                .is_some_and(|e| guide_kind_of(e) == kind)
+        });
+        let (work_handle, temp) = match reuse {
+            Some(h) => (h, false),
+            None => {
+                let ent = temp_guide_entity(&kind, &pts)?;
+                let h = match req_timed(
+                    sender,
+                    PluginRequest::AddEntity(ent),
+                    "AddEntity",
+                ) {
+                    Ok(PluginResponse::Handle(h)) => h,
+                    Ok(_) => return Err("创建临时引导失败".into()),
+                    Err(e) => return Err(e),
+                };
+                (h, true)
+            }
+        };
+        let body2 = serde_json::json!({
+            "handle": fmt_handle(work_handle),
+            "url": req.url,
+        })
+        .to_string();
+        let out = do_apply_inner(sender, body2.as_bytes(), true)?;
+        if temp {
+            let _ = req_timed(
+                sender,
+                PluginRequest::RemoveEntity {
+                    handle: work_handle,
+                },
+                "RemoveEntity",
+            );
+        }
+        // 删旧标注 → 给新标注回写可编辑信息。
+        req_timed(
+            sender,
+            PluginRequest::RemoveEntity { handle: posted },
+            "RemoveEntity",
+        )?;
+        let gk = kind.clone();
+        for h in produced_handles(&out) {
+            stamp_editable(sender, h, &req.url, &pts, &gk, reuse.or(guide));
+        }
+        req_timed(sender, PluginRequest::BumpGeometry, "BumpGeometry")?;
+        mark_dirty(sender)?;
+        return Ok(serde_json::json!({
+            "ok": true,
+            "edit": true,
+            "replaced": fmt_handle(posted),
+        })
+        .to_string());
+    }
+
+    // ── 普通模式（posted = 引导实体）──
+    // 先记下引导几何：**多数类型生成后会把引导删掉**（尺寸/基准/向视图/剖切/公差…），
+    // 所以必须生成前取。
+    let pre = snapshot(sender).ok().and_then(|doc| {
+        doc.get_entity(posted).map(|e| {
+            (
+                guide_kind_of(e),
+                guide_geom_points(&doc, posted).unwrap_or_default(),
+            )
+        })
+    });
+    let out = do_apply_inner(sender, body, refresh)?;
+    if refresh {
+        if let Some((kind, pts)) = pre {
+            for h in produced_handles(&out) {
+                stamp_editable(sender, h, &req.url, &pts, kind, Some(posted));
+            }
+        }
+    }
+    Ok(out)
+}
+
+fn do_apply_inner(
+    sender: &Arc<dyn PluginRequestSender>,
+    body: &[u8],
+    refresh: bool,
+) -> Result<String, String> {
+    #[derive(serde::Deserialize)]
+    struct Req {
+        handle: String,
+        url: String,
+    }
+    let req: Req =
+        serde_json::from_slice(body).map_err(|e| format!("请求 JSON 无效: {e}"))?;
     let handle = handle_hex(&req.handle)?;
     let params = GuideParams::from_url(&req.url).ok_or_else(|| format!("URL 无法解析: {}", req.url))?;
 
@@ -2878,6 +2989,22 @@ fn api_guide(target: &str, sender: &Arc<dyn PluginRequestSender>) -> (u16, &'sta
             Ok(pts) => {
                 let (p1, p2) = (pts[0], pts[1]);
                 let url = read_pe_url(sender, handle);
+                // 若 handle 是 OCSM 生成的**标注**（PE_URL 指向回去的 GUI），
+                // 则从 `OCSM_EDIT` 里取参数 URL + 引导几何（可能原引导已删）。
+                let (url, pts, geom) = match url
+                    .as_deref()
+                    .and_then(GuideParams::from_url)
+                    .map(|_| ())
+                {
+                    Some(()) => (url, pts, None),
+                    None => match read_edit_record(sender, handle) {
+                        Some((u, p2v, kind, _)) if p2v.len() >= 2 => {
+                            (Some(u), p2v, Some(kind))
+                        }
+                        _ => (url, pts, None),
+                    },
+                };
+                let (p1, p2) = (pts[0], pts[1]);
                 let params = url.as_deref().and_then(GuideParams::from_url);
                 let resp = serde_json::json!({
                     "ok": true,
@@ -2887,7 +3014,10 @@ fn api_guide(target: &str, sender: &Arc<dyn PluginRequestSender>) -> (u16, &'sta
                     // 引导线全部顶点（ANGLE 两段 PLINE = 3 个：p0/p1/p2）。
                     "pts": pts.iter().map(|q| [q[0], q[1], q[2]]).collect::<Vec<_>>(),
                     // 引导几何形态：line（LINE）/ pline（LWPOLYLINE，2+ 顶点）。
-                    "geom": guide_geom_kind(&doc, handle).unwrap_or("line"),
+                    "geom": geom
+                        .clone()
+                        .or_else(|| guide_geom_kind(&doc, handle).ok().map(str::to_string))
+                        .unwrap_or_else(|| "line".to_string()),
                     "url": url,
                     // 引导线长度 = 主尺寸（公差计算用）。
                     "measurement": ((p2[0]-p1[0]).powi(2)+(p2[1]-p1[1]).powi(2)).sqrt(),
@@ -4498,6 +4628,228 @@ fn apply_leader(
     .to_string())
 }
 
+// ── 标注再编辑（`OCSM_EDIT` XDATA）──────────────────────────────────────
+// 生成物上记两份信息：
+//   `PE_URL`    = 回编辑 GUI 的链接（供宿主 Ctrl+点击打开）——**这是标准超链接**；
+//   `OCSM_EDIT` = [参数 URL, 引导顶点 "x,y;x,y;…", 引导种类, 原引导 handle]
+//                重建标注所需的原始信息（引线被删的类型靠它恢复）。
+const EDIT_APP: &str = "OCSM_EDIT";
+
+/// 引导种类（重建临时引导用）：line / pline / rect / circle / arc。
+fn guide_kind_of(e: &acadrust::EntityType) -> &'static str {
+    use acadrust::EntityType as E;
+    match e {
+        E::Line(_) => "line",
+        E::Circle(_) => "circle",
+        E::Arc(_) => "arc",
+        E::LwPolyline(pl) => {
+            if pl.is_closed && pl.vertices.len() == 4 {
+                "rect"
+            } else {
+                "pline"
+            }
+        }
+        E::Polyline(pl) => {
+            if pl.flags.is_closed() && pl.vertices.len() == 4 {
+                "rect"
+            } else {
+                "pline"
+            }
+        }
+        E::Polyline2D(pl) => {
+            if pl.flags.is_closed() && pl.vertices.len() == 4 {
+                "rect"
+            } else {
+                "pline"
+            }
+        }
+        _ => "line",
+    }
+}
+
+fn edit_record(
+    url: &str,
+    pts: &[[f64; 3]],
+    kind: &str,
+    guide: Option<acadrust::Handle>,
+) -> ExtendedDataRecord {
+    let csv = pts
+        .iter()
+        .map(|p| format!("{},{}", p[0], p[1]))
+        .collect::<Vec<_>>()
+        .join(";");
+    let mut rec = ExtendedDataRecord::new(EDIT_APP);
+    rec.values.push(XDataValue::String(url.to_string()));
+    rec.values.push(XDataValue::String(csv));
+    rec.values.push(XDataValue::String(kind.to_string()));
+    rec.values.push(XDataValue::String(
+        guide.map(fmt_handle).unwrap_or_default(),
+    ));
+    rec
+}
+
+/// 读生成物上的 `OCSM_EDIT`：返回（参数 URL、引导顶点、引导种类、原引导 handle）。
+/// 返回 Some 即表示这个实体是 OCSM 生成的可重编辑标注。
+#[allow(clippy::type_complexity)]
+fn read_edit_record(
+    sender: &Arc<dyn PluginRequestSender>,
+    handle: acadrust::Handle,
+) -> Option<(String, Vec<[f64; 3]>, String, Option<acadrust::Handle>)> {
+    let rec = match req_timed(
+        sender,
+        PluginRequest::ReadRecord {
+            handle,
+            app_name: EDIT_APP.into(),
+        },
+        "ReadRecord",
+    ) {
+        Ok(PluginResponse::Record(Some(rec))) => rec,
+        _ => return None,
+    };
+    let strs: Vec<String> = rec
+        .values
+        .iter()
+        .filter_map(|v| match v {
+            XDataValue::String(s) => Some(s.clone()),
+            _ => None,
+        })
+        .collect();
+    let url = strs.first().filter(|s| !s.is_empty())?.clone();
+    let pts: Vec<[f64; 3]> = strs
+        .get(1)
+        .map(|s| {
+            s.split(';')
+                .filter_map(|kv| {
+                    let (x, y) = kv.split_once(',')?;
+                    Some([x.trim().parse().ok()?, y.trim().parse().ok()?, 0.0])
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let kind = strs.get(2).cloned().unwrap_or_else(|| "line".into());
+    let guide = strs
+        .get(3)
+        .filter(|s| !s.is_empty())
+        .and_then(|s| handle_hex(s).ok());
+    Some((url, pts, kind, guide))
+}
+
+/// 按种类 + 顶点造一条临时引导实体（编辑时原引导可能已被删除）。
+fn temp_guide_entity(kind: &str, pts: &[[f64; 3]]) -> Result<acadrust::EntityType, String> {
+    use acadrust::entities::{LwPolyline, LwVertex};
+    use acadrust::types::Vector2;
+    use acadrust::EntityType as E;
+    let _ = LwVertex::new(Vector2::new(0.0, 0.0));
+    match kind {
+        "line" if pts.len() >= 2 => {
+            let mut l = acadrust::entities::Line::new();
+            l.start = Vector3::new(pts[0][0], pts[0][1], pts[0][2]);
+            l.end = Vector3::new(pts[1][0], pts[1][1], pts[1][2]);
+            Ok(E::Line(l))
+        }
+        "pline" | "rect" if pts.len() >= 2 => {
+            let mut pl = LwPolyline::new();
+            for p in pts {
+                pl.add_point(Vector2::new(p[0], p[1]));
+            }
+            if kind == "rect" {
+                pl.is_closed = true;
+            }
+            Ok(E::LwPolyline(pl))
+        }
+        "circle" if pts.len() >= 2 => {
+            let r = ((pts[1][0] - pts[0][0]).powi(2) + (pts[1][1] - pts[0][1]).powi(2)).sqrt();
+            let mut c = acadrust::entities::Circle::new();
+            c.center = Vector3::new(pts[0][0], pts[0][1], pts[0][2]);
+            c.radius = r;
+            Ok(E::Circle(c))
+        }
+        // ARC：存的是 起点/终点/中点（同 `guide_geom_points`）→ 三点定圆恢复。
+        "arc" if pts.len() >= 3 => {
+            let (a, b, m) = (pts[0], pts[1], pts[2]);
+            let (ax, ay, bx, by, mx, my) = (a[0], a[1], b[0], b[1], m[0], m[1]);
+            let d = 2.0 * (ax * (by - my) + bx * (my - ay) + mx * (ay - by));
+            if d.abs() < 1e-12 {
+                return Err("弧引导三点共线，无法恢复".into());
+            }
+            let ux = ((ax * ax + ay * ay) * (by - my)
+                + (bx * bx + by * by) * (my - ay)
+                + (mx * mx + my * my) * (ay - by))
+                / d;
+            let uy = ((ax * ax + ay * ay) * (mx - bx)
+                + (bx * bx + by * by) * (ax - mx)
+                + (mx * mx + my * my) * (bx - ax))
+                / d;
+            let r = ((ax - ux).powi(2) + (ay - uy).powi(2)).sqrt();
+            let mut arc = acadrust::entities::Arc::new();
+            arc.center = Vector3::new(ux, uy, a[2]);
+            arc.radius = r;
+            arc.start_angle = (ay - uy).atan2(ax - ux);
+            arc.end_angle = (by - uy).atan2(bx - ux);
+            // 中点决定扫向（逆/顺时针）。
+            let mid_ang = (my - uy).atan2(mx - ux);
+            let sweep = (arc.end_angle - arc.start_angle).rem_euclid(std::f64::consts::TAU);
+            let to_mid = (mid_ang - arc.start_angle).rem_euclid(std::f64::consts::TAU);
+            if to_mid > sweep {
+                std::mem::swap(&mut arc.start_angle, &mut arc.end_angle);
+            }
+            Ok(E::Arc(arc))
+        }
+        other => Err(format!("该引导类型暂不支持再编辑（{other}）")),
+    }
+}
+
+/// 生成后：给标注写 `PE_URL`（回编辑 GUI 的链接，供宿主 Ctrl+点击）+ `OCSM_EDIT`
+/// （重建信息）。`params_url` = 形如 `http://127.0.0.1:PORT/DIM/...` 的参数 URL。
+fn stamp_editable(
+    sender: &Arc<dyn PluginRequestSender>,
+    annotation: acadrust::Handle,
+    params_url: &str,
+    pts: &[[f64; 3]],
+    kind: &str,
+    guide: Option<acadrust::Handle>,
+) {
+    if let Some(port) = crate::current_guide_port() {
+        let gui = format!(
+            "http://127.0.0.1:{port}/guide.html?handle={}",
+            fmt_handle(annotation)
+        );
+        let _ = req_timed(
+            sender,
+            PluginRequest::WriteRecord {
+                handle: annotation,
+                record: pe_url_record(&gui),
+            },
+            "WriteRecord",
+        );
+    }
+    let _ = req_timed(
+        sender,
+        PluginRequest::WriteRecord {
+            handle: annotation,
+            record: edit_record(params_url, pts, kind, guide),
+        },
+        "WriteRecord",
+    );
+}
+
+/// 从 apply 返回的 JSON 里取生成物 handle（各类型键名不同）。
+fn produced_handles(out: &str) -> Vec<acadrust::Handle> {
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(out) else {
+        return Vec::new();
+    };
+    [
+        "insert_handle",
+        "dimension_handle",
+        "arrow_insert_handle",
+        "marker_insert_handle",
+    ]
+    .iter()
+    .filter_map(|k| v.get(*k).and_then(|s| s.as_str()))
+    .filter_map(|s| handle_hex(s).ok())
+    .collect()
+}
+
 /// ATTDEF tag → 英文代号（用于 values 查询 / attributes 对齐）。
 fn tag_alias(tag: &str) -> &str {
     match tag {
@@ -5378,7 +5730,18 @@ impl PluginRequestSender for MockSender {
             R::DocumentSnapshot => {
                 Ok(P::Document(Box::new(self.doc.lock().unwrap().clone())))
             }
-            R::ReadRecord { .. } => Ok(P::Record(None)),
+            R::ReadRecord { handle, app_name } => {
+                // 从（可变的）测试文档里真读：编辑模式的 OCSM_EDIT 往返靠它。
+                // 同时保留旧的 url_writes 快照（PE_URL 断言沿用）。
+                let doc = self.doc.lock().unwrap();
+                let rec = doc.get_entity(handle).and_then(|e| {
+                    e.common()
+                        .extended_data
+                        .get_record(&app_name)
+                        .cloned()
+                });
+                Ok(P::Record(rec))
+            }
             R::WriteRecord { handle, record } => {
                 let url = record
                     .values
@@ -5389,7 +5752,33 @@ impl PluginRequestSender for MockSender {
                     })
                     .unwrap_or_default();
                 self.url_writes.lock().unwrap().push((handle, url));
+                // 真写进文档，**同名替换**（与宿主 write_record 一致）——
+                // 否则重复写入会保留旧值，编辑模式读不到新参数。
+                if let Some(e) = self.doc.lock().unwrap().get_entity_mut(handle) {
+                    let xd = &mut e.common_mut().extended_data;
+                    let app = record.application_name.clone();
+                    let kept: Vec<_> = xd
+                        .records()
+                        .iter()
+                        .filter(|r| r.application_name != app)
+                        .cloned()
+                        .collect();
+                    xd.clear();
+                    for r in kept {
+                        xd.add_record(r);
+                    }
+                    xd.add_record(record);
+                }
                 Ok(P::Ok)
+            }
+            R::AddEntity(e) => {
+                let h = self
+                    .doc
+                    .lock()
+                    .unwrap()
+                    .add_entity(e)
+                    .map_err(|err| PluginRequestError(err.to_string()))?;
+                Ok(P::Handle(h))
             }
             R::AddEntities(es) => {
                 let mut hs = Vec::new();
@@ -8561,6 +8950,134 @@ mod weld_tests {
             .write_to_file(&out)
             .unwrap();
         println!("leader smoke dxf written: {out}");
+    }
+
+    // ── 标注再编辑（OCSM_EDIT）测试 ──────────────────────────────────────
+
+    /// 生成后给标注写 OCSM_EDIT；编辑模式（posted = 标注本体）能读回并替换旧标注。
+    #[test]
+    fn edit_replaces_previous_annotation() {
+        // 引导：两段 PLINE（顶点0 箭头点 / 顶点1 拐点 / 顶点2 肩线末端）
+        let mut doc = acadrust::CadDocument::new();
+        let mut pl = LwPolyline::new();
+        pl.common.layer = "10引导线层".into();
+        pl.add_point(Vector2::new(0.0, 0.0));
+        pl.add_point(Vector2::new(60.0, 60.0));
+        pl.add_point(Vector2::new(120.0, 60.0));
+        let gh = doc.add_entity(E::LwPolyline(pl)).unwrap();
+        let mock = Arc::new(MockSender::new(doc));
+        let sender: Arc<dyn PluginRequestSender> = mock.clone();
+
+        // 1) 引导模式：生成引线标注
+        let url1 = "http://127.0.0.1:23751/DIM/LEADER/0?lu=%E9%80%9A%E5%AD%94&ll=%E6%B7%B120";
+        let body1 = serde_json::json!({"handle": fmt_handle(gh), "url": url1}).to_string();
+        let out1 = do_apply(&sender, body1.as_bytes(), true).unwrap();
+        let anns = produced_handles(&out1);
+        assert_eq!(anns.len(), 1, "应生成一个标注: {out1}");
+        let ann = anns[0];
+        // 记录写在标注上（不是引导上）
+        let rec = read_edit_record(&sender, ann).expect("标注应带 OCSM_EDIT");
+        assert_eq!(rec.0, url1, "记录里的参数 URL");
+        assert_eq!(rec.1.len(), 3, "引导三点");
+        assert_eq!(rec.2, "pline");
+        assert_eq!(rec.3, Some(gh), "记录原引导 handle");
+        assert!(read_edit_record(&sender, gh).is_none(), "引导本身不写 OCSM_EDIT");
+
+        // 2) 编辑模式：posted = 标注本体，改文字 → 替换
+        let url2 = "http://127.0.0.1:23751/DIM/LEADER/0?lu=%E6%9B%B4%E6%94%B9&ll=%E6%B7%B130";
+        let body2 = serde_json::json!({"handle": fmt_handle(ann), "url": url2}).to_string();
+        let out2 = do_apply(&sender, body2.as_bytes(), true).unwrap();
+        assert!(out2.contains("\"edit\":true"), "编辑模式应答: {out2}");
+        // 旧标注已删
+        assert!(
+            mock.doc.lock().unwrap().get_entity(ann).is_none(),
+            "旧标注应被替换删除"
+        );
+        // 新标注存在且记录已更新
+        let doc = mock.doc.lock().unwrap();
+        let new_ann = doc
+            .entities()
+            .find(|e| matches!(e, E::Insert(_)))
+            .map(|e| e.common().handle)
+            .expect("新标注存在");
+        assert_ne!(new_ann, ann);
+        drop(doc);
+        let rec2 = read_edit_record(&sender, new_ann).expect("新标注也要带记录");
+        assert_eq!(rec2.0, url2, "记录已更新为新参数");
+        let vals: Vec<String> = mtexts_of(&mock.block_entities("*L1"))
+            .iter()
+            .map(|m| m.value.clone())
+            .collect();
+        assert_eq!(vals, vec!["更改".to_string(), "深30".to_string()], "文字已改");
+    }
+
+    /// 只有「应用」（不刷新）时：只更新记录，不重生成。
+    #[test]
+    fn edit_apply_only_updates_record() {
+        let mut doc = acadrust::CadDocument::new();
+        let mut pl = LwPolyline::new();
+        pl.common.layer = "10引导线层".into();
+        pl.add_point(Vector2::new(0.0, 0.0));
+        pl.add_point(Vector2::new(60.0, 60.0));
+        pl.add_point(Vector2::new(120.0, 60.0));
+        let gh = doc.add_entity(E::LwPolyline(pl)).unwrap();
+        let mock = Arc::new(MockSender::new(doc));
+        let sender: Arc<dyn PluginRequestSender> = mock.clone();
+        let url1 = "http://127.0.0.1:23751/DIM/LEADER/0?lu=A&ll=B";
+        let body1 = serde_json::json!({"handle": fmt_handle(gh), "url": url1}).to_string();
+        let _ = do_apply(&sender, body1.as_bytes(), true).unwrap();
+        let ann = mock
+            .doc
+            .lock()
+            .unwrap()
+            .entities()
+            .find(|e| matches!(e, E::Insert(_)))
+            .map(|e| e.common().handle)
+            .unwrap();
+        let url2 = "http://127.0.0.1:23751/DIM/LEADER/0?lu=X&ll=Y";
+        let body2 = serde_json::json!({"handle": fmt_handle(ann), "url": url2}).to_string();
+        let out = do_apply(&sender, body2.as_bytes(), false).unwrap();
+        assert!(out.contains("\"edit\":true"), "{out}");
+        assert!(mock.doc.lock().unwrap().get_entity(ann).is_some(), "不重生成");
+        assert_eq!(read_edit_record(&sender, ann).unwrap().0, url2);
+    }
+
+    /// 引导已删的类型（线性尺寸）：编辑时用记录里的点造临时引导重生成。
+    #[test]
+    fn edit_rebuilds_temp_guide_for_deleted_guide() {
+        let mut doc = acadrust::CadDocument::new();
+        let mut l = acadrust::entities::Line::new();
+        l.common.layer = "10引导线层".into();
+        l.start = Vector3::new(0.0, 0.0, 0.0);
+        l.end = Vector3::new(50.0, 0.0, 0.0);
+        let gh = doc.add_entity(E::Line(l)).unwrap();
+        let mock = Arc::new(MockSender::new(doc));
+        let sender: Arc<dyn PluginRequestSender> = mock.clone();
+        let url1 = "http://127.0.0.1:23751/DIM/LINEAR/H/0?text=50";
+        let body1 = serde_json::json!({"handle": fmt_handle(gh), "url": url1}).to_string();
+        let out1 = do_apply(&sender, body1.as_bytes(), true).unwrap();
+        let ann = produced_handles(&out1)[0];
+        // 线性尺寸生成会删引导 → 编辑必须靠记录里的点
+        assert!(mock.doc.lock().unwrap().get_entity(gh).is_none(), "引导已删");
+        let rec = read_edit_record(&sender, ann);
+        assert!(rec.is_some(), "首轮生成应给标注写 OCSM_EDIT（{:?}）", out1);
+        assert_eq!(rec.unwrap().1.len(), 2, "线引导两点");
+        let url2 = "http://127.0.0.1:23751/DIM/LINEAR/H/0?text=80";
+        let body2 = serde_json::json!({"handle": fmt_handle(ann), "url": url2}).to_string();
+        let out2 = do_apply(&sender, body2.as_bytes(), true).unwrap();
+        assert!(out2.contains("\"edit\":true"), "编辑应成功: {out2}");
+        assert!(mock.doc.lock().unwrap().get_entity(ann).is_none(), "旧标注已替换");
+        let doc = mock.doc.lock().unwrap();
+        let dims = doc
+            .entities()
+            .filter(|e| matches!(e, E::Dimension(_)))
+            .count();
+        assert_eq!(dims, 1, "重生成一个标注");
+        assert_eq!(
+            doc.entities().filter(|e| matches!(e, E::Line(_))).count(),
+            0,
+            "临时引导用完即删"
+        );
     }
 
     /// GUI 运行时冒烟（node + 最小 DOM 垫片）：catch node --check 查不出的

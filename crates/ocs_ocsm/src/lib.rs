@@ -46,7 +46,7 @@ static MANIFEST: PluginManifest = PluginManifest {
     command_prefixes: &[
         "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "TF", "OCSM",
         "OCSMFRAMEINIT", "OCSMFRAMEINSERT", "D", "OCSMPOWERDIM", "OCSMDIMGULIDE",
-        "GDIM", "OCSMMCP", "OCSMRGH", "CC", "OCSMDIM2GB", "D2G",
+        "GDIM", "OCSMMCP", "OCSMRGH", "CC", "OCSMDIM2GB", "D2G", "OCSMEDIT", "ME",
     ],
 };
 
@@ -276,6 +276,11 @@ struct OcsmPlugin;
 static GUIDE_PORT: std::sync::OnceLock<std::sync::Mutex<Option<u16>>> =
     std::sync::OnceLock::new();
 
+/// 当前标注更新服务器端口（未启动时 None）。guide_server 回写"可编辑链接"要用。
+pub(crate) fn current_guide_port() -> Option<u16> {
+    GUIDE_PORT.get().and_then(|m| *m.lock().unwrap())
+}
+
 impl BuiltinPlugin for OcsmPlugin {
     fn manifest(&self) -> &'static PluginManifest {
         &MANIFEST
@@ -359,6 +364,10 @@ impl BuiltinPlugin for OcsmPlugin {
             }
             "OCSMDIMGULIDE" | "GDIM" => {
                 self.cmd_guide(host);
+                true
+            }
+            "OCSMEDIT" | "ME" => {
+                self.cmd_edit(host);
                 true
             }
             "OCSMRGH" | "CC" => {
@@ -454,6 +463,42 @@ impl OcsmPlugin {
         let _ = std::process::Command::new("xdg-open").arg(&url).spawn();
         host.push_info(&format!(
             "OCSM 尺寸引导：已打开标注配置 {url}。应用=写超链接；应用并刷新=生成标注（7标注层/OCSM_GB）。"
+        ));
+    }
+
+    /// `OCSMEDIT` / `ME`：选中一个 OCSM 生成的标注（带 `OCSM_EDIT` 记录）→
+    /// 打开同一个标注配置 GUI 改它：GUI 从 `/api/guide` 读该标注的记录恢复
+    /// 全部参数；「应用并刷新」时插件会删旧标注并用原引导几何重生成（替换）。
+    /// 注意：命令里**不能**用 sender（会与主线程死锁）——直接读 host.document()。
+    fn cmd_edit(&self, host: &mut dyn HostApi) {
+        let selected = host.selected_handles();
+        let Some(&h) = selected.first() else {
+            host.push_error("OCSM: 请先选中一个 OCSM 生成的标注（引导生成的尺寸/焊接/引线/公差等），再执行 OCSMEDIT。");
+            return;
+        };
+        let has_edit = {
+            let doc = host.document();
+            doc.get_entity(h).is_some_and(|e| {
+                e.common()
+                    .extended_data
+                    .get_record("OCSM_EDIT")
+                    .is_some()
+            })
+        };
+        if !has_edit {
+            host.push_error(
+                "OCSM: 选中的对象不是 OCSM 生成的标注（没有可编辑信息）。若它是旧版生成的标注，请先重画一次。",
+            );
+            return;
+        }
+        let Some(port) = self.ensure_guide_server(host) else {
+            host.push_error("OCSM: 无法启动标注更新服务器（宿主不支持 worker 请求）。");
+            return;
+        };
+        let url = format!("http://127.0.0.1:{port}/guide.html?handle={:#X}", u64::from(h));
+        let _ = std::process::Command::new("xdg-open").arg(&url).spawn();
+        host.push_info(&format!(
+            "OCSM 标注编辑：已打开配置 {url}（改完点「应用并刷新」= 替换旧标注）。"
         ));
     }
 
