@@ -53,13 +53,22 @@ OCS_SMOKE_PLUGIN=$PWD/target/release/libocs_ocsm.so \
 | | `src/command.rs` | +36 | 插件交互命令：预览实体、`hides_crosshair` 等钩子 |
 | | `src/app/commands/mod.rs` | +17 | **插件命令优先于别名表**（`plugin_wins`） |
 | | `src/scene/mod.rs` | +3 | `tessellate_one()`（预览用单实体剖分） |
-| **C. 渲染器** | `src/entities/dimension.rs` | +189 | **DIMTMOVE=1 线性引线**（本次）+ 4 测试 |
+| **C. 渲染器** | `src/entities/dimension.rs` | +189 | **C-1** DIMTMOVE=1 线性引线（本次）+ 4 测试；**C-2** 标注文字宽度自适应 |
 | | `src/entities/text_support.rs` | +30 | MTEXT 花括号作用域字体恢复（`{\fGDT;x}` 供符号字形） |
 | **D. 测试/冒烟** | `src/plugin/external.rs` | +67 | `OCS_SMOKE_PLUGIN` 外部插件冒烟（纯新增） |
 | | `tests/dim_leader_render_check.rs` | +107 | 引线渲染级冒烟（新文件） |
 | **E. 插件本体（无需台账）** | `crates/ocs_ocsm/**`、`crates/ocs_ocsm_mcp/**` | 4400+ | 与上游天然解耦；仅 `Cargo.toml` 成员需保留 |
 
 ## 2. 关键补丁详情
+
+### C-2 `src/entities/dimension.rs` — 标注文字宽度自适应（fork 本地）
+
+- **位置**：`fn dimension_text_entity()`（`DA::` → `MA::` 映射之后）。
+- **为什么**：cadcodec 的 `MText` 默认 `rectangle_width = 10`，长 dimtext（测量值 + 公差堆叠 +
+  后缀，如 `Ø100+H7/g6+`）会被按 10 单位宽度折行。
+- **改法**：按可见字符数估算宽度 `(visible_len * text_height * 0.75).max(10.0)`。
+- **验证**：给标注加长文字/公差，观察不折行。
+- **合并注意**：与 C-1 同文件不同区域；**上游 PR 分支不含此项**（见下）。
 
 ### C-1 `src/entities/dimension.rs` — DIMTMOVE=1 引线（2026-09-13，提交 `cbaf6d61f`）
 
@@ -73,6 +82,10 @@ OCS_SMOKE_PLUGIN=$PWD/target/release/libocs_ocsm.so \
 - **验证**：`cargo test -p OpenCADStudio --lib dimtmove`；
   `OCSM_DIM_LEADER_PDF=/tmp/x.pdf cargo test --test dim_leader_render_check` → PDF 转图目视。
 - **合并注意**：若上游重写该引线，保留"文字在外→水平延伸"这一形状语义（可对照本行说明）。
+- **已提交上游 PR**（2026-09-13）：分支 `fix/dimtmove-leader-under-text`（fork
+  `YsDirector/OpenCADStudio`），基点 = 上游 `main` `052b6b23`，提交 `e7675160`。
+  PR 分支上该文件的注释为**英文**（上游语境），且**不含 C-2**（文字宽度补丁是 fork 本地项）。
+  即：PR 分支与本仓库该文件会有注释语言差异——上游若合并，记得同步回来（或保留 fork 版本）。
 
 ### B-1 `src/app/commands/mod.rs` — 插件命令优先于别名表（`plugin_wins`）
 
