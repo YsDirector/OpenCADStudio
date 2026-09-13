@@ -3401,7 +3401,7 @@ fn weld_params_json(w: &WeldParams) -> serde_json::Value {
     serde_json::json!({
         "upper": w.upper, "lower": w.lower,
         "dash": w.dash, "circle": w.circle, "flag": w.flag,
-        "tail": w.tail, "grind": w.grind.as_str(),
+        "tail": w.tail, "grind": w.grind.as_str(), "method": w.method,
         "up_thick": w.up_thick, "up_qty": w.up_qty,
         "lo_thick": w.lo_thick, "lo_qty": w.lo_qty, "tail_text": w.tail_text,
     })
@@ -3527,10 +3527,48 @@ fn push_weld_grind(
             }
         }
     }
-    // 角焊版带固定 "C" 字（参考第一行文字锚点；其它版无文字）。
-    if let Some((tx, ty)) = ctext {
-        members.push(weld_member_text("C", (ox + tx * s, oy + my(ty) * s), 3.5, 1.0));
+    let _ = ctext; // "C" 等字母属"焊接方法"（见 push_weld_method），不属打磨件。
+}
+
+/// 焊接方法字母位置（相对焊缝符号锚点；随打磨方式，取自 打磨.dxf 第一行
+/// 每种打磨旁的文字锚点；不打磨/弧·凹/弧·凸同点，喇叭形沿用此表）。
+fn weld_method_pos(k: GrindKind) -> (f64, f64) {
+    match k {
+        GrindKind::None | GrindKind::ArcConcave | GrindKind::ArcConvex => (4.0316, 4.9598),
+        GrindKind::Line => (4.9598, 6.8159),
+        GrindKind::DoubleArc => (6.3206, 7.3109),
+        GrindKind::Zigzag => (4.8360, 6.5684),
     }
+}
+
+/// 焊接方法字母可用性：仅角焊缝与喇叭形焊缝（角焊 / 喇叭形焊 / 单边喇叭形焊）。
+fn weld_method_allowed(name: &str) -> bool {
+    matches!(name, "角焊" | "喇叭形焊" | "单边喇叭形焊")
+}
+
+/// 追加焊接方法字母（C/G/H/M/R/U，色 3 中中锚；下侧对称镜像）。仅当该侧
+/// 符号属角焊/喇叭形且字母非空时绘制。
+fn push_weld_method(
+    members: &mut Vec<acadrust::EntityType>,
+    method: &str,
+    sym_name: &str,
+    grind: GrindKind,
+    mirror: bool,
+    ox: f64,
+    oy: f64,
+    s: f64,
+) {
+    if method.is_empty() || method == "无" || !weld_method_allowed(sym_name) {
+        return;
+    }
+    let (tx, ty) = weld_method_pos(grind);
+    let my = if mirror { -ty } else { ty };
+    members.push(weld_member_text(
+        method,
+        (ox + tx * s, oy + my * s),
+        3.5,
+        1.0,
+    ));
 }
 
 /// `GET /api/weld_syms`：27 个焊缝符号的归一化几何（GUI 焊接预览用）。
@@ -3820,10 +3858,12 @@ fn apply_weld(
     // 侧不画。角焊版带固定 "C" 字（参考第一行文字锚点）。
     if let Some(n) = &upper {
         push_weld_grind(&mut members, w.grind, n == "角焊", false, slot, 0.0, s);
+        push_weld_method(&mut members, &w.method, n, w.grind, false, slot, 0.0, s);
     }
     if let Some(n) = &lower {
         if dash {
             push_weld_grind(&mut members, w.grind, n == "角焊", true, slot, -0.7, s);
+            push_weld_method(&mut members, &w.method, n, w.grind, true, slot, -0.7, s);
         }
     }
 
@@ -6204,6 +6244,7 @@ mod weld_tests {
             flag: true,
             tail: true,
             grind: GrindKind::ArcConvex, // 示例.dxf 用弧·凸
+            method: "C".into(),          // 示例.dxf 的 "C" = 焊接方法字母
             up_thick: "5".into(),
             up_qty: "100".into(),
             lo_thick: "3".into(),
@@ -6458,7 +6499,8 @@ mod weld_tests {
                 _ => None,
             })
             .collect();
-        // "C" 字（角焊版弧·凸；锚点 = 槽位 + (4.0316, 4.9598)）
+        // "C" = 焊接方法字母（仅角焊/喇叭形可用）：上侧锚点 = 槽位+(4.0316,4.9598)
+        // = rel P0 (23.4446, 4.9598)；下侧镜像 y = −(0.7+4.9598) = −5.6598。
         assert!(texts.iter().any(|t| t.value == "C"
             && (t.insertion_point.x - 23.4446).abs() < 1e-9
             && (t.insertion_point.y - 4.9598).abs() < 1e-9));
@@ -6710,7 +6752,6 @@ mod weld_tests {
         assert!((a[0].center.y - 3.9598).abs() < 1e-9);
         assert!((a[0].start_angle - 181.5f64.to_radians()).abs() < 1e-9);
         assert!((a[0].end_angle - 268.5f64.to_radians()).abs() < 1e-9);
-        assert!(m.iter().any(|e| matches!(e, E::Text(t) if t.value == "C")));
         // 弧·凸：中心 = 槽位+(1.125,1.125)（= 示例.dxf），1.5°→88.5°
         let m = weld_members("角焊", "", GrindKind::ArcConvex, false);
         let a = grind_arcs(&m);
@@ -6752,7 +6793,6 @@ mod weld_tests {
         assert!((a[0].center.y - 7.125).abs() < 1e-9);
         assert!((a[0].start_angle - 226.5f64.to_radians()).abs() < 1e-9);
         assert!((a[0].end_angle - 313.5f64.to_radians()).abs() < 1e-9);
-        assert!(!m.iter().any(|e| matches!(e, E::Text(_))), "其它版无 C 字");
         // 弧·凸：中心 = 槽位+(1.75,3.1169)，46.5°→133.5°
         let m = weld_members(mono, "", GrindKind::ArcConvex, false);
         let a = grind_arcs(&m);
@@ -6808,6 +6848,99 @@ mod weld_tests {
         let m = weld_members("角焊", "", GrindKind::None, false);
         assert!(grind_arcs(&m).is_empty());
         assert!(!m.iter().any(|e| matches!(e, E::Text(_))));
+    }
+
+    /// 焊接方法字母：位置随打磨方式、仅角焊/喇叭形可用、下侧镜像。
+    fn weld_method_members(upper: &str, k: GrindKind, m: &str, dash: bool) -> Vec<E> {
+        let doc = acadrust::CadDocument::new();
+        let mock = Arc::new(MockSender::new(acadrust::CadDocument::new()));
+        let sender: Arc<dyn PluginRequestSender> = mock.clone();
+        let mut p = GuideParams::linear(LinearSub::Aligned, 0.0);
+        p.guide_type = GuideType::Weld;
+        p.weld = WeldParams {
+            upper: upper.into(),
+            dash,
+            grind: k,
+            method: m.into(),
+            ..WeldParams::default()
+        };
+        apply_weld(&sender, &doc, P_TIP, P0, P_END, &p).unwrap();
+        mock.block_entities("*W1")
+    }
+
+    fn letters(members: &[E]) -> Vec<(String, f64, f64)> {
+        members
+            .iter()
+            .filter_map(|e| match e {
+                E::Text(t) => {
+                    Some((t.value.clone(), t.insertion_point.x, t.insertion_point.y))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn apply_weld_method_letters_scope_and_positions() {
+        let slot = 19.413;
+        // 角焊 + 6 个字母：位置 = 槽位 + 打磨方式对应锚点。
+        for m in ["C", "G", "H", "M", "R", "U"] {
+            let l = letters(&weld_method_members("角焊", GrindKind::ArcConvex, m, false));
+            assert_eq!(l.len(), 1, "{m} 应画 1 个字母");
+            assert_eq!(l[0].0, m);
+            assert!((l[0].1 - (slot + 4.0316)).abs() < 1e-9);
+            assert!((l[0].2 - 4.9598).abs() < 1e-9);
+        }
+        // 位置随打磨方式：直线 / 双弧 / 锯齿 各自锚点；不打磨 → 用弧凸锚点。
+        let cases = [
+            (GrindKind::Line, 4.9598, 6.8159),
+            (GrindKind::DoubleArc, 6.3206, 7.3109),
+            (GrindKind::Zigzag, 4.8360, 6.5684),
+            (GrindKind::ArcConcave, 4.0316, 4.9598),
+            (GrindKind::None, 4.0316, 4.9598),
+        ];
+        for (k, ex, ey) in cases {
+            let l = letters(&weld_method_members("角焊", k, "C", false));
+            assert!(
+                l.iter().any(|(v, x, y)| v == "C"
+                    && (x - (slot + ex)).abs() < 1e-9
+                    && (y - ey).abs() < 1e-9),
+                "{k:?} 字母位置"
+            );
+        }
+        // 喇叭形焊缝（喇叭形焊 / 单边喇叭形焊）可用。
+        for n in ["喇叭形焊", "单边喇叭形焊"] {
+            assert_eq!(letters(&weld_method_members(n, GrindKind::ArcConvex, "G", false)).len(), 1, "{n}");
+        }
+        // 其它符号不可用（点焊 / 单边V / I 型…）。
+        for n in ["点焊", "带单边坡口的V型对接焊缝", "I型对接焊缝", "堆焊接头"] {
+            assert!(
+                letters(&weld_method_members(n, GrindKind::ArcConvex, "C", false)).is_empty(),
+                "{n} 不应出现焊接方法字母"
+            );
+        }
+        // 空 / 无 → 不画。
+        for m in ["", "无"] {
+            assert!(letters(&weld_method_members("角焊", GrindKind::ArcConvex, m, false)).is_empty());
+        }
+        // 下侧镜像：lower=角焊 + 虚线 + C → y = −(0.7+4.9598)。
+        let doc = acadrust::CadDocument::new();
+        let mock = Arc::new(MockSender::new(acadrust::CadDocument::new()));
+        let sender: Arc<dyn PluginRequestSender> = mock.clone();
+        let mut p = GuideParams::linear(LinearSub::Aligned, 0.0);
+        p.guide_type = GuideType::Weld;
+        p.weld = WeldParams {
+            lower: "角焊".into(),
+            dash: true,
+            grind: GrindKind::ArcConvex,
+            method: "U".into(),
+            ..WeldParams::default()
+        };
+        apply_weld(&sender, &doc, P_TIP, P0, P_END, &p).unwrap();
+        let l = letters(&mock.block_entities("*W1"));
+        assert!(l.iter().any(|(v, x, y)| v == "U"
+            && (x - (slot + 4.0316)).abs() < 1e-9
+            && (y + 5.6598).abs() < 1e-9), "下侧字母镜像: {l:?}");
     }
 
     /// 冒烟测试用宿主代理：把插件请求真实落到 CadDocument（镜像宿主
@@ -6994,6 +7127,7 @@ mod weld_tests {
                 flag: false,
                 tail: true,
                 grind,
+                method: std::env::var("OCSM_WELD_SMOKE_METHOD").unwrap_or_default(),
                 up_thick: "5".into(),
                 up_qty: String::new(),
                 lo_thick: String::new(),
@@ -7026,6 +7160,7 @@ mod weld_tests {
         assert!(html.contains("id=\"w-upper\"") && html.contains("id=\"w-lower\""));
         assert!(html.contains("wdash=1") && html.contains("wcir=1") && html.contains("wut="));
         assert!(html.contains("wgr=") && html.contains("id=\"w-grind\""), "打磨方式下拉");
+        assert!(html.contains("id=\"w-method\"") && html.contains("WELD_METHOD_SYMS"), "焊接方法下拉");
         assert!(html.contains("/api/weld_syms"));
         assert!(html.contains("weldLowerHasContent"), "虚线联动");
         // /api/weld_syms：27 符号 + 跨线标记 + MR 小字。

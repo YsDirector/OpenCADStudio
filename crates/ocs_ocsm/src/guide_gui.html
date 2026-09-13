@@ -217,6 +217,16 @@
           <option value="dbl">双弧</option>
           <option value="zig">锯齿</option>
         </select>
+        <span class="lbl" style="margin-left:6px">焊接方法</span>
+        <select id="w-method" style="padding:2px 6px; font-size:14px">
+          <option value="" selected>无标注</option>
+          <option value="C">C</option>
+          <option value="G">G</option>
+          <option value="H">H</option>
+          <option value="M">M</option>
+          <option value="R">R</option>
+          <option value="U">U</option>
+        </select>
       </div>
       <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap">
         <span class="lbl">上厚度</span><input type="text" id="w-ut" style="width:56px">
@@ -226,7 +236,7 @@
         <span class="lbl" style="margin-left:6px">尾部注释</span><input type="text" id="w-tt" style="width:88px">
       </div>
       <div id="w-warn" style="display:none; color:#b60; font-size:12px"></div>
-      <div class="gdt-hint">引导两段 PLINE：顶点1=焊缝点（箭头）、顶点2=拐点（基准线起点）、顶点3=基准线末端（须水平向右）。基准线全长随引导（尾部开关只控制尾叉+注释）。虚线=非箭头侧第二基准线（下侧有内容时强制开）。打磨=焊缝表面加工方式（6 态；角焊用倾斜右上版、其它焊缝用正上方版，下侧对称镜像，无符号侧不画）。生成在 8符号标注层（匿名块 *W + INSERT）。</div>
+      <div class="gdt-hint">引导两段 PLINE：顶点1=焊缝点（箭头）、顶点2=拐点（基准线起点）、顶点3=基准线末端（须水平向右）。基准线全长随引导（尾部开关只控制尾叉+注释）。虚线=非箭头侧第二基准线（下侧有内容时强制开）。打磨=焊缝表面加工方式（6 态；角焊用倾斜右上版、其它焊缝用正上方版，下侧对称镜像，无符号侧不画）。焊接方法=C/G/H/M/R/U 字母（仅角焊缝与喇叭形焊缝可用，位置随打磨方式，下侧镜像）。生成在 8符号标注层（匿名块 *W + INSERT）。</div>
     </div>
     <div class="param" id="row-param">
       <span class="lbl" id="dist-lbl">(与P2距离)</span>
@@ -1057,6 +1067,8 @@ const BS_FITS = [
       if (document.getElementById('w-tail').checked) qs.push('wtail=1');
       const gk = document.getElementById('w-grind').value;
       if (gk && gk !== 'none') qs.push('wgr=' + gk);
+      const wm = document.getElementById('w-method').value;
+      if (wm) qs.push('wm=' + wm);
       const gv = (id) => document.getElementById(id).value.trim();
       if (gv('w-ut')) qs.push('wut=' + encodeURIComponent(gv('w-ut')));
       if (gv('w-uq')) qs.push('wuq=' + encodeURIComponent(gv('w-uq')));
@@ -1108,6 +1120,11 @@ const BS_FITS = [
   let WSYMS = null;
   const WELD_PAIRS = ['角焊','I型对接焊缝','点焊','缝焊缝','V型对接焊缝','带单边坡口的V型对接焊缝','带钝边J型对接焊缝','带钝边U型对接焊缝','带钝边V型焊缝','带钝边单边V型焊缝','端接焊缝','折叠接头','倾斜接头','陡侧V型坡口对焊','单边陡侧V型坡口对焊','卷边焊缝','堆焊缝','封底焊缝','塞焊缝','喇叭形焊','单边喇叭形焊','持久衬垫','临时衬垫','打底'];
   const WELD_CROSS = ['参考线上的点焊缝','参考线上的缝焊缝','堆焊接头'];
+  // 焊接方法字母可用符号（角焊缝 + 喇叭形焊缝）
+  const WELD_METHOD_SYMS = ['角焊','喇叭形焊','单边喇叭形焊'];
+  // 字母锚点（相对符号锚点）随打磨方式（照 打磨.dxf 第一行文字锚点）
+  const GRIND_METHOD_POS = { none:[4.0316,4.9598], cav:[4.0316,4.9598], cvx:[4.0316,4.9598],
+    lin:[4.9598,6.8159], dbl:[6.3206,7.3109], zig:[4.8360,6.5684] };
 
   function initWeldRows() {
     const wu = document.getElementById('w-upper');
@@ -1121,7 +1138,8 @@ const BS_FITS = [
     for (const id of ['w-dash','w-cir','w-flg','w-tail']) {
       document.getElementById(id).addEventListener('change', () => { weldLockDash(); draw(); });
     }
-    document.getElementById('w-grind').addEventListener('change', draw);
+    document.getElementById('w-grind').addEventListener('change', () => { weldLockDash(); draw(); });
+    document.getElementById('w-method').addEventListener('change', draw);
     for (const id of ['w-ut','w-uq','w-lt','w-lq','w-tt']) {
       document.getElementById(id).addEventListener('input', () => { weldLockDash(); draw(); });
     }
@@ -1138,6 +1156,13 @@ const BS_FITS = [
     if (type !== 'WELD') return;
     if (weldLowerHasContent()) { cb.checked = true; cb.disabled = true; }
     else { cb.disabled = false; }
+    // 焊接方法字母：仅角焊缝与喇叭形焊缝可用（角焊 / 喇叭形焊 / 单边喇叭形焊）。
+    const wu = document.getElementById('w-upper').value;
+    const wl = document.getElementById('w-lower').value;
+    const ok = WELD_METHOD_SYMS.includes(wu) || WELD_METHOD_SYMS.includes(wl);
+    const ms = document.getElementById('w-method');
+    ms.disabled = !ok;
+    if (!ok) ms.value = '';
   }
 
   function drawWeld() {
@@ -1286,6 +1311,19 @@ const BS_FITS = [
     if (gk !== 'none') {
       if (wu !== '无') putGrind(gk, wu === '角焊', false, slotX, p0.y);
       if (wl !== '无' && dash) putGrind(gk, wl === '角焊', true, slotX, p0.y - 0.7);
+    }
+    // 焊接方法字母（C/G/H/M/R/U；仅角焊/喇叭形，位置随打磨方式，下侧镜像）。
+    const wm = document.getElementById('w-method').value;
+    if (wm) {
+      const mp = GRIND_METHOD_POS[gk] || GRIND_METHOD_POS.none;
+      const putLetter = (tx, ty) => {
+        const t = w2s(tx, ty);
+        const el2 = el('text', { x: t.x, y: t.y, fill: GR, 'font-size': 13, 'text-anchor': 'middle', 'dominant-baseline': 'middle' });
+        el2.textContent = wm;
+        svg.appendChild(el2);
+      };
+      if (wu !== '无' && WELD_METHOD_SYMS.includes(wu)) putLetter(slotX + mp[0], p0.y + mp[1]);
+      if (wl !== '无' && dash && WELD_METHOD_SYMS.includes(wl)) putLetter(slotX + mp[0], p0.y - 0.7 - mp[1]);
     }
     // 数字区（绿色文字；空槽不画）。
     const slotTexts = [
@@ -1867,6 +1905,7 @@ const BS_FITS = [
           document.getElementById('w-flg').checked = !!w.flag;
           document.getElementById('w-tail').checked = !!w.tail;
           document.getElementById('w-grind').value = w.grind || 'none';
+          document.getElementById('w-method').value = w.method || '';
           document.getElementById('w-ut').value = w.up_thick || '';
           document.getElementById('w-uq').value = w.up_qty || '';
           document.getElementById('w-lt').value = w.lo_thick || '';

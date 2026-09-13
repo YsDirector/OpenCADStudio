@@ -313,6 +313,9 @@ pub struct WeldParams {
     pub tail: bool,
     /// 焊缝打磨方式（附加件；几何按焊缝形式选角焊版/其它版，下侧对称镜像）。
     pub grind: GrindKind,
+    /// 焊接方法字母（C/G/H/M/R/U；空/"无" = 无标注）。仅角焊缝与喇叭形焊缝
+    /// 可用（角焊 / 喇叭形焊 / 单边喇叭形焊），其余符号忽略。
+    pub method: String,
     /// 上侧厚度尺寸（文字，可空）。
     pub up_thick: String,
     /// 上侧数量长度（文字，可空）。
@@ -603,6 +606,15 @@ impl GuideParams {
                     }
                 }
                 "wgr" => weld.grind = GrindKind::from_str(&v).unwrap_or(GrindKind::None),
+                // 焊接方法字母（仅角焊/喇叭形可选）：wm=C|G|H|M|R|U。
+                "wm" => {
+                    let t = v.trim().to_ascii_uppercase();
+                    weld.method = if matches!(t.as_str(), "C" | "G" | "H" | "M" | "R" | "U") {
+                        t
+                    } else {
+                        String::new()
+                    };
+                }
                 "wut" => weld.up_thick = v,
                 "wuq" => weld.up_qty = v,
                 "wlt" => weld.lo_thick = v,
@@ -843,6 +855,9 @@ impl GuideParams {
             }
             if w.grind != GrindKind::None {
                 q.push(format!("wgr={}", w.grind.as_str()));
+            }
+            if !w.method.is_empty() {
+                q.push(format!("wm={}", w.method));
             }
             for (k, v) in [
                 ("wut", &w.up_thick),
@@ -1115,6 +1130,23 @@ mod tests {
             assert_eq!(GuideParams::from_url(&pg.to_url(1)).unwrap().weld.grind, k);
             assert_eq!(GrindKind::from_str(k.as_str()), Some(k));
         }
+        // 焊接方法字母：合法/非法/往返（仅 C/G/H/M/R/U）。
+        for m in ["C", "G", "H", "M", "R", "U"] {
+            let mut pm = GuideParams::linear(LinearSub::Aligned, 0.0);
+            pm.guide_type = GT::Weld;
+            pm.weld.method = m.to_string();
+            let back = GuideParams::from_url(&pm.to_url(1)).unwrap();
+            assert_eq!(back.weld.method, m);
+        }
+        assert_eq!(
+            GuideParams::from_url("http://x/DIM/WELD/0?wm=Z").unwrap().weld.method,
+            ""
+        );
+        assert_eq!(
+            GuideParams::from_url("http://x/DIM/WELD/0?wm=g").unwrap().weld.method,
+            "G",
+            "小写转大写"
+        );
         // 非法打磨代号 → 不打磨。
         let bad = GuideParams::from_url("http://x/DIM/WELD/0?wgr=xyz").unwrap();
         assert_eq!(bad.weld.grind, GrindKind::None);
