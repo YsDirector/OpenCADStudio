@@ -236,7 +236,7 @@
         <span class="lbl" style="margin-left:6px">尾部注释</span><input type="text" id="w-tt" style="width:88px">
       </div>
       <div id="w-warn" style="display:none; color:#b60; font-size:12px"></div>
-      <div class="gdt-hint">引导两段 PLINE：顶点1=焊缝点（箭头）、顶点2=拐点（基准线起点）、顶点3=基准线末端（须水平向右）。基准线全长随引导（尾部开关只控制尾叉+注释）。虚线=非箭头侧第二基准线（下侧有内容时强制开）。打磨=焊缝表面加工方式（6 态；角焊用倾斜右上版、其它焊缝用正上方版，下侧对称镜像，无符号侧不画）。焊接方法=C/G/H/M/R/U 字母（仅角焊缝与喇叭形焊缝可用，位置随打磨方式，下侧镜像）。生成在 8符号标注层（匿名块 *W + INSERT）。</div>
+      <div class="gdt-hint">引导两段 PLINE：顶点1=焊缝点（箭头）、顶点2=拐点（基准线起点）、顶点3=基准线末端（须水平向右）。基准线全长随引导（尾部开关只控制尾叉+注释）。虚线（识别线）=所指位置另一侧的指示：一般画在基准线下；仅当引线下方填入内容时出现（上侧什么都没填而下侧有内容时→下侧内容显示到上方、虚线画在基准线上方）。打磨=焊缝表面加工方式（6 态；角焊用倾斜右上版、其它焊缝用正上方版，下侧对称镜像，无符号侧不画）。焊接方法=C/G/H/M/R/U 字母（仅角焊缝与喇叭形焊缝可用，位置随打磨方式，下侧镜像）。生成在 8符号标注层（匿名块 *W + INSERT）。</div>
     </div>
     <div class="param" id="row-param">
       <span class="lbl" id="dist-lbl">(与P2距离)</span>
@@ -1161,8 +1161,10 @@ const BS_FITS = [
   function weldLockDash() {
     const cb = document.getElementById('w-dash');
     if (type !== 'WELD') return;
-    if (weldLowerHasContent()) { cb.checked = true; cb.disabled = true; }
-    else { cb.disabled = false; }
+    // 虚线（识别线）= "另一侧（下方）有焊缝" 的指示：只在下方填入内容时出现，
+    // 由本函数自动判定（GUI/MCP 侧手工规则，服务端宽容处理）。
+    cb.checked = weldLowerHasContent();
+    cb.disabled = true;
     // 焊接方法字母：仅角焊缝与喇叭形焊缝可用（角焊 / 喇叭形焊 / 单边喇叭形焊）。
     const wu = document.getElementById('w-upper').value;
     const wl = document.getElementById('w-lower').value;
@@ -1215,9 +1217,20 @@ const BS_FITS = [
     // 引线 + 基准线（青）。
     svg.appendChild(wline(abx, aby, p0.x, p0.y, 2, CY));
     svg.appendChild(wline(p0.x, p0.y, pe.x, pe.y, 2, CY));
-    const dash = document.getElementById('w-dash').checked || weldLowerHasContent();
+    // 虚线（识别线）语义：一般情况画在基准线下 −0.7（表示另一侧=下方）；
+    // 特殊情况（上方什么都没填、下方有内容）→ 下方内容显示到上方、虚线在
+    // 基准线上方 +0.7（服务端同规则）。
+    const upperTexted = document.getElementById('w-ut').value.trim() !== ''
+      || document.getElementById('w-uq').value.trim() !== '';
+    const lowerTexted = document.getElementById('w-lt').value.trim() !== ''
+      || document.getElementById('w-lq').value.trim() !== '';
+    const lowerFilled = (document.getElementById('w-lower').value !== '无') || lowerTexted;
+    const upperFilled = (document.getElementById('w-upper').value !== '无') || upperTexted;
+    const flipped = (!upperFilled) && lowerFilled;
+    const dashOff = flipped ? 0.7 : -0.7;
+    const dash = lowerFilled || document.getElementById('w-dash').checked;
     // 虚线（品红）。
-    if (dash) svg.appendChild(wline(p0.x, p0.y - 0.7, pe.x, pe.y - 0.7, 2, MG, '6 3'));
+    if (dash) svg.appendChild(wline(p0.x, p0.y + dashOff, pe.x, pe.y + dashOff, 2, MG, '6 3'));
     // 全周边圆。
     if (document.getElementById('w-cir').checked) {
       const c = w2s(p0.x, p0.y);
@@ -1312,13 +1325,22 @@ const BS_FITS = [
     const wu = document.getElementById('w-upper').value;
     const wl = document.getElementById('w-lower').value;
     const slotX = p0.x + 19.413;
-    if (wu !== '无') putSym(wu, false, slotX, p0.y);
-    if (wl !== '无') putSym(wl, true, slotX, p0.y - 0.7);
+    if (flipped) {
+        // 特殊情况：下侧内容显示到上方（用上侧正朝向几何，锚在虚线上）。
+        if (wl !== '无') putSym(wl, false, slotX, p0.y + dashOff);
+    } else {
+        if (wu !== '无') putSym(wu, false, slotX, p0.y);
+        if (wl !== '无' && dash) putSym(wl, true, slotX, p0.y + dashOff);
+    }
     // 焊缝打磨方式（6 态 × 2 风格：角焊=倾斜右上版 / 其它=正上方版；下侧镜像）。
     const gk = document.getElementById('w-grind').value;
     if (gk !== 'none') {
-      if (wu !== '无') putGrind(gk, wu === '角焊', false, slotX, p0.y);
-      if (wl !== '无' && dash) putGrind(gk, wl === '角焊', true, slotX, p0.y - 0.7);
+      if (flipped) {
+        if (wl !== '无') putGrind(gk, wl === '角焊', false, slotX, p0.y + dashOff);
+      } else {
+        if (wu !== '无') putGrind(gk, wu === '角焊', false, slotX, p0.y);
+        if (wl !== '无' && dash) putGrind(gk, wl === '角焊', true, slotX, p0.y + dashOff);
+      }
     }
     // 焊接方法字母（C/G/H/M/R/U；仅角焊/喇叭形，位置随打磨方式，下侧镜像）。
     const wm = document.getElementById('w-method').value;
@@ -1329,23 +1351,36 @@ const BS_FITS = [
         el2.textContent = wm;
         svg.appendChild(el2);
       };
-      if (wu !== '无' && WELD_METHOD_SYMS.includes(wu)) {
-        const mp = methodPos(gk, wu === '角焊');
-        putLetter(slotX + mp[0], p0.y + mp[1]);
-      }
-      if (wl !== '无' && dash && WELD_METHOD_SYMS.includes(wl)) {
-        const mp = methodPos(gk, wl === '角焊');
-        putLetter(slotX + mp[0], p0.y - 0.7 - mp[1]);
+      if (flipped) {
+        if (wl !== '无' && WELD_METHOD_SYMS.includes(wl)) {
+          const mp = methodPos(gk, wl === '角焊');
+          putLetter(slotX + mp[0], p0.y + dashOff + mp[1]);
+        }
+      } else {
+        if (wu !== '无' && WELD_METHOD_SYMS.includes(wu)) {
+          const mp = methodPos(gk, wu === '角焊');
+          putLetter(slotX + mp[0], p0.y + mp[1]);
+        }
+        if (wl !== '无' && dash && WELD_METHOD_SYMS.includes(wl)) {
+          const mp = methodPos(gk, wl === '角焊');
+          putLetter(slotX + mp[0], p0.y + dashOff - mp[1]);
+        }
       }
     }
     // 数字区（绿色文字；空槽不画）。
-    const slotTexts = [
-      ['w-ut', p0.x + 17.413, p0.y + 2.75, 'end'],
-      ['w-uq', p0.x + 25.913, p0.y + 2.75, 'start'],
-      ['w-lt', p0.x + 17.413, p0.y - 3.45, 'end'],
-      ['w-lq', p0.x + 25.913, p0.y - 3.45, 'start'],
-      ['w-tt', pe.x + 4.55, pe.y, 'start'],
-    ];
+    const slotTexts = flipped
+      ? [
+          ['w-lt', p0.x + 17.413, p0.y + dashOff + 2.75, 'end'],
+          ['w-lq', p0.x + 25.913, p0.y + dashOff + 2.75, 'start'],
+          ['w-tt', pe.x + 4.55, pe.y, 'start'],
+        ]
+      : [
+          ['w-ut', p0.x + 17.413, p0.y + 2.75, 'end'],
+          ['w-uq', p0.x + 25.913, p0.y + 2.75, 'start'],
+          ['w-lt', p0.x + 17.413, p0.y - 3.45, 'end'],
+          ['w-lq', p0.x + 25.913, p0.y - 3.45, 'start'],
+          ['w-tt', pe.x + 4.55, pe.y, 'start'],
+        ];
     for (const [id, wx, wy, anch] of slotTexts) {
       const v = document.getElementById(id).value.trim();
       if (!v) continue;
