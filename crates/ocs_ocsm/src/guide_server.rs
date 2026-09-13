@@ -4324,9 +4324,12 @@ pub(crate) fn build_leader_parts(
             .sum::<f64>()
     };
     let need_u = (SLOT + text_w(upper)).max(SLOT + text_w(lower));
-    let blen = (need_u + 2.0) * s;
+    let blen_ru = need_u + 2.0; // 参考单位下的肩线全长
+    let blen = blen_ru * s;
 
     // 块局部坐标（原点 = 拐点 P0）：锚点 = 沿主轴坐标较小的一端。
+    // 拐点是否就在锚点一侧（= 肩线自拐点朝 +t 方向延伸），供"文字自拐点外移"用。
+    let corner_at_origin = (horizontal && bdx >= 0.0) || (!horizontal && bdy >= 0.0);
     let anchor_l = if horizontal {
         (if bdx >= 0.0 { 0.0 } else { -blen }, 0.0)
     } else if bdy >= 0.0 {
@@ -4365,11 +4368,15 @@ pub(crate) fn build_leader_parts(
     // 肩线（内容驱动全长；本功能不画虚线/圆/旗/尾叉）
     members.push(weld_member_line(tp(0.0, 0.0), tp(blen, 0.0), 4));
 
-    // ── ATTDEF×2：上侧（v=+2.750）、下侧（v=−2.750），左对齐（引线文字是
-    //    主内容，自锚点向右展开；焊接该槽位右对齐是为符号让位）──
+    // ── ATTDEF×2：上侧（v=+2.750）、下侧（v=−2.750）。
+    //    文字自**拐点**沿肩线向外偏移 SLOT（用户定：不沿用焊接"自坐标较小端
+    //    起算"）——左/下向时改用右对齐，使文字同样"向外展开"，与右/上向镜像对称。──
+    let dir_out: f64 = if corner_at_origin { 1.0 } else { -1.0 };
+    let corner_ru: f64 = if corner_at_origin { 0.0 } else { blen_ru };
+    let text_t_ru = corner_ru + dir_out * SLOT;
     let mut att_templates: Vec<AttributeDefinition> = Vec::new();
     for (tag, v) in [("上侧引线文字T′", 2.750_f64), ("下侧引线文字T", -2.750_f64)] {
-        let (x, y) = tr(SLOT, v);
+        let (x, y) = tr(text_t_ru, v);
         let mut ad = AttributeDefinition::new(tag.to_string(), String::new(), " ".into());
         ad.insertion_point = Vector3::new(x, y, 0.0);
         ad.alignment_point = ad.insertion_point;
@@ -4377,7 +4384,11 @@ pub(crate) fn build_leader_parts(
         ad.rotation = text_rot; // 竖肩线 → 90°（沿肩线书写）
         ad.width_factor = 0.7;
         ad.text_style = "OCSM_GB".into();
-        ad.set_alignment(HorizontalAlignment::Left, VerticalAlignment::Middle);
+        if dir_out > 0.0 {
+            ad.set_alignment(HorizontalAlignment::Left, VerticalAlignment::Middle);
+        } else {
+            ad.set_alignment(HorizontalAlignment::Right, VerticalAlignment::Middle);
+        }
         ad.flags.preset = true; // 插入时不逐项提示
         let mut e = E::AttributeDefinition(ad.clone());
         set_member_layer(&mut e, "8符号标注层");
@@ -7412,6 +7423,36 @@ mod weld_tests {
         assert!((ads[0].insertion_point.x + 2.750).abs() < 1e-9);
         assert!((ads[0].insertion_point.y - 17.413).abs() < 1e-9);
         assert!((ads[1].insertion_point.x - 2.750).abs() < 1e-9);
+    }
+
+    /// 左向肩线：文字自**拐点**向外偏移（局部 −17.413）+ 右对齐 → 与右向镜像对称。
+    #[test]
+    fn apply_leader_leftward_text_mirrors() {
+        // 肩线自拐点向左画 40。
+        let p_end = [P0[0] - 40.0, P0[1], 0.0];
+        let parts = build_leader_parts(P_TIP, P0, p_end, 1.0, "通孔", "深10").unwrap();
+        let ads = attdefs_of(&parts.members);
+        // 块局部（原点 = 拐点）：肩线在 t∈[0,blen]，拐点在 t=blen（左端世界坐标更大的一侧）。
+        // 文字锚点 = 拐点 −17.413 → 局部 x = blen − (blen − 17.413) … 直接断言 −17.413。
+        assert!((ads[0].insertion_point.x + 17.413).abs() < 1e-9, "上侧文字在拐点左侧 17.413");
+        assert!((ads[1].insertion_point.x + 17.413).abs() < 1e-9);
+        // 右对齐（72=2），使文字仍向外（左）展开 → 与右向镜像对称。
+        for a in &ads {
+            assert!(
+                matches!(a.horizontal_alignment, HorizontalAlignment::Right),
+                "应为右对齐（文字向外展开）"
+            );
+        }
+        // 肩线长度不受方向影响：17.413 + max(字宽) + 2（"深10"=2.45+1.45+1.45=5.35）。
+        assert!((parts.blen - (17.413 + 5.35 + 2.0)).abs() < 1e-9, "{}", parts.blen);
+        // 肩线自拐点向左：一端在拐点 (0,0)、另一端局部 x = −blen（水平线）。
+        let sh = lines_of(&parts.members)
+            .into_iter()
+            .find(|l| l.start.y.abs() < 1e-9 && l.end.y.abs() < 1e-9
+                && ((l.start.x.abs() < 1e-9) || (l.end.x.abs() < 1e-9)))
+            .expect("肩线");
+        let far = if sh.start.x.abs() < 1e-9 { sh.end.x } else { sh.start.x };
+        assert!((far + parts.blen).abs() < 1e-9, "肩线另一端在拐点左侧 blen 处");
     }
 
     /// 坏引导：引线过短 / 肩线零长 → 报错。

@@ -1634,7 +1634,9 @@ const BS_FITS = [
     const P = (u, v) => ({ x: p0.x + u * d_c.x + v * n_up.x, y: p0.y + u * d_c.y + v * n_up.y });
     const se = P(blen, 0);
     svg.appendChild(wline(p0.x, p0.y, se.x, se.y, 2, CY));
-    // 上下侧文字：锚点 P0 + (17.413, ±2.750)×SCALE，左对齐；竖肩线旋转 90°（沿肩线书写）。
+    // 上下侧文字：自**拐点**沿肩线向外 17.413、±2.750（与服务端一致）。
+    // 方向为负（肩线画向左/下）时改 `text-anchor:end`，让文字同样"向外展开"。
+    const anchorMode = dir > 0 ? 'start' : 'end';
     const slots = [
       [up, P(17.413 * SCALE, 2.750 * SCALE)],
       [lo, P(17.413 * SCALE, -2.750 * SCALE)],
@@ -1643,7 +1645,7 @@ const BS_FITS = [
       if (!v) continue;
       const t = w2s(wp.x, wp.y);
       const tx = el('text', Object.assign(
-        { x: t.x, y: t.y, fill: GR, 'font-size': 12, 'text-anchor': 'start', 'dominant-baseline': 'middle' },
+        { x: t.x, y: t.y, fill: GR, 'font-size': 12, 'text-anchor': anchorMode, 'dominant-baseline': 'middle' },
         weldTextRot(horizontal, t.x, t.y)));
       tx.textContent = v;
       svg.appendChild(tx);
