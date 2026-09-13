@@ -4025,18 +4025,23 @@ fn apply_weld(
         members.push(weld_member_line(tp(t0, 1.0 * s), tp(t1, 1.0 * s), 31));
         members.push(weld_member_line(tp(t0, 4.5 * s), tp(t1, 4.5 * s), 31));
     }
-    // 现场焊接旗（竖杆 7.0 + 实心三角旗 5.25×3.5 + 底边，参考 SOLID 13/23 组）
+    // 现场焊接旗（竖杆 + 实心三角旗 5.25×3.5 + 底边，参考 SOLID 13/23 组）。
+    // 旗底 v 默认 3.5（旗顶 7.0，照示例）；但半包围 ⊏ 顶到 +4.5 且与旗同侧
+    //（dir_in>0，即 ⊏ 也朝 +u 延伸）时会与旗三角重叠 → 整旗抬到其上方
+    //（旗底 5.0 = 4.5 + 0.5 间隙，旗顶 8.5）。用户实测：旗与焊接区域符号干涉。
     if w.flag {
-        members.push(weld_member_line(tp(corner_t, 0.0), tp(corner_t, 7.0 * s), 31));
+        let fb = if w.half && dir_in > 0.0 { 5.0 } else { 3.5 };
+        let ftop = fb + 3.5;
+        members.push(weld_member_line(tp(corner_t, 0.0), tp(corner_t, ftop * s), 31));
         members.push(weld_member_solid(
-            tp(corner_t, 7.0 * s),
-            tp(corner_t + 5.25 * s, 3.5 * s),
-            tp(corner_t, 3.5 * s),
+            tp(corner_t, ftop * s),
+            tp(corner_t + 5.25 * s, fb * s),
+            tp(corner_t, fb * s),
             31,
         ));
         members.push(weld_member_line(
-            tp(corner_t + 5.25 * s, 3.5 * s),
-            tp(corner_t, 3.5 * s),
+            tp(corner_t + 5.25 * s, fb * s),
+            tp(corner_t, fb * s),
             31,
         ));
     }
@@ -7724,6 +7729,52 @@ mod weld_tests {
         }
     }
 
+    /// 现场焊接旗避让焊缝区域符号：有半包围 ⊏（与其同侧）时整旗抬高。
+    #[test]
+    fn apply_weld_flag_raised_above_half_bracket() {
+        let run = |half: bool| -> Vec<E> {
+            let mock = Arc::new(MockSender::new(weld_doc()));
+            let sender: Arc<dyn PluginRequestSender> = mock.clone();
+            let mut p = full_params();
+            p.weld = WeldParams {
+                upper: "角焊".into(),
+                lower: String::new(),
+                dash: false,
+                tail: false,
+                circle: false,
+                half,
+                flag: true,
+                grind_upper: GrindKind::None,
+                grind_lower: GrindKind::None,
+                method_upper: String::new(),
+                method_lower: String::new(),
+                ..WeldParams::default()
+            };
+            apply_weld(&sender, &weld_doc(), P_TIP, P0, P_END, &p).unwrap();
+            mock.block_entities("*W1")
+        };
+        // 有 ⊏：旗底 +5.0（⊏ 顶 4.5 + 0.5 间隙）、旗顶 +8.5、杆高 8.5
+        let m = run(true);
+        let ls = lines_of(&m);
+        assert!(
+            ls.iter().any(|l| (l.start.y - 0.0).abs() < 1e-9 && (l.end.y - 8.5).abs() < 1e-9),
+            "有 ⊏ 时旗杆应升到 8.5"
+        );
+        assert!(
+            ls.iter().any(|l| (l.start.y - 5.0).abs() < 1e-9 && (l.end.y - 5.0).abs() < 1e-9
+                && (l.start.x - 5.25).abs() < 1e-9),
+            "有 ⊏ 时旗底应在 +5.0"
+        );
+        // 无 ⊏：照参考（旗底 3.5、旗顶 7.0）
+        let m2 = run(false);
+        let ls2 = lines_of(&m2);
+        assert!(
+            ls2.iter().any(|l| (l.start.y - 0.0).abs() < 1e-9 && (l.end.y - 7.0).abs() < 1e-9),
+            "无 ⊏ 时旗杆保持 7.0（照示例）"
+        );
+        assert!(ls2.iter().any(|l| (l.start.y - 3.5).abs() < 1e-9 && (l.end.y - 3.5).abs() < 1e-9));
+    }
+
     /// 冒烟测试用宿主代理：把插件请求真实落到 CadDocument（镜像宿主    /// 冒烟测试用宿主代理：把插件请求真实落到 CadDocument（镜像宿主
     /// add_block_record/ensure_* 语义），供 DxfWriter 写出检查文件。
     struct ApplySender {
@@ -7912,7 +7963,7 @@ mod weld_tests {
                 lower: lower.clone(),
                 circle: !half && !lower.is_empty(),
                 dash: smoke_dash || !lower.is_empty(),
-                flag: false,
+                flag: std::env::var("OCSM_WELD_SMOKE_FLAG").is_ok(),
                 tail: std::env::var("OCSM_WELD_SMOKE_TAIL_OFF").is_err(),
                 half,
                 // 分侧打磨/方法（新键优先，旧键 _GRIND/_METHOD 作两侧缺省）

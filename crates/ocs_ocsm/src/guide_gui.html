@@ -1395,11 +1395,13 @@ const BS_FITS = [
       svg.appendChild(wline(a.x, a.y, c.x, c.y, 1.8, OR));
       svg.appendChild(wline(b.x, b.y, d.x, d.y, 1.8, OR));
     }
-    // 现场焊接旗
+    // 现场焊接旗（与半包围 ⊏ 同侧时抬高：旗底 5.0 / 旗顶 8.5，否则照示例 3.5/7.0）
     if (document.getElementById('w-flg').checked) {
-      const f0 = tp(cornerT, 0), f1 = tp(cornerT, 7.0);
+      const fb = (halfOn && dirIn > 0) ? 5.0 : 3.5;
+      const ftop = fb + 3.5;
+      const f0 = tp(cornerT, 0), f1 = tp(cornerT, ftop);
       svg.appendChild(wline(f0.x, f0.y, f1.x, f1.y, 2, OR));
-      const t1 = tp(cornerT + 5.25, 3.5), t2 = tp(cornerT, 3.5);
+      const t1 = tp(cornerT + 5.25, fb), t2 = tp(cornerT, fb);
       const tri = [f1, t1, t2].map(p => { const q = w2s(p.x, p.y); return q.x + ',' + q.y; }).join(' ');
       svg.appendChild(el('polygon', { points: tri, fill: OR, stroke: 'none' }));
       svg.appendChild(wline(t1.x, t1.y, t2.x, t2.y, 2, OR));
