@@ -45,6 +45,9 @@ Open CAD Studio 机械工具包插件（`opencad.ocsm`，API v5）。为机械�
 
 ## 构建与安装
 
+> 与上游不同的**宿主侧本地补丁清单**见 `docs/fork-patches.md`（同步上游后照单核对；
+> 注意宿主二进制与插件 `.so` 是**两套产物**，改到宿主 `src/` 必须重编宿主）。
+
 ```bash
 # 1. 宿主（API v5）——runner 是宿主自身二进制，必须重编
 cargo build --release
