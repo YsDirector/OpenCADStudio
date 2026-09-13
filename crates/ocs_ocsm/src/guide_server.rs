@@ -3824,15 +3824,22 @@ fn apply_weld(
     //    引线/基准线/箭头=青4、虚线=品红6、符号几何=31、文字=绿3）──
     let mut members: Vec<E> = Vec::new();
     let u = (dx / lead_len, dy / lead_len); // 引线单位向量（焊缝点→p0）
-    let nv = (-u.1, u.0); // 左法向
-    let (aw, ah) = (3.5 * s, 0.587 * s); // 箭头长 / 半宽（对照参考 SOLID 展开）
     let tip = (p_tip[0] - p0[0], p_tip[1] - p0[1]); // 箭头尖（局部）
-    let b1 = (tip.0 + aw * u.0 + ah * nv.0, tip.1 + aw * u.1 + ah * nv.1);
-    let b2 = (tip.0 + aw * u.0 - ah * nv.0, tip.1 + aw * u.1 - ah * nv.1);
-    members.push(weld_member_solid(tip, b1, b2, s, 4));
-    // 引线：箭头底中 → 拐点（参考 LINE 起点 = 箭头底中）
+    // 实心箭头：与其它 OCSM 标注同款 arrow_solid（长 2.5×图幅 = DIMASZ、
+    // 宽 = 长/3；青色 4 同引线/基准线）。arrow_solid 的 away = 箭头指向方向，
+    // 箭体沿 −away 展开 → away = −u（指向焊缝），体沿 +u 朝拐点。
+    let asz = 2.5 * s;
+    let mut arrow = E::Solid(arrow_solid(
+        Vector3::new(tip.0 * s, tip.1 * s, 0.0),
+        Vector3::new(-u.0, -u.1, 0.0),
+        asz,
+    ));
+    set_member_layer(&mut arrow, "8符号标注层");
+    arrow.common_mut().color = Color::from_index(4);
+    members.push(arrow);
+    // 引线：箭头底中（尖 + 2.5×图幅）→ 拐点
     members.push(weld_member_line(
-        (tip.0 + aw * u.0, tip.1 + aw * u.1),
+        (tip.0 + 2.5 * u.0, tip.1 + 2.5 * u.1),
         (0.0, 0.0),
         s,
         4,
@@ -6436,7 +6443,7 @@ mod weld_tests {
         let dy = P0[1] - P_TIP[1];
         let len = (dx * dx + dy * dy).sqrt();
         let (ux, uy) = (dx / len, dy / len);
-        let lead_start = (P_TIP[0] - P0[0] + 3.5 * ux, P_TIP[1] - P0[1] + 3.5 * uy);
+        let lead_start = (P_TIP[0] - P0[0] + 2.5 * ux, P_TIP[1] - P0[1] + 2.5 * uy);
         assert!(ls.iter().any(|l| (l.start.x - lead_start.0).abs() < 1e-9
             && (l.start.y - lead_start.1).abs() < 1e-9
             && l.end.x == 0.0
@@ -6478,9 +6485,24 @@ mod weld_tests {
 
         // ── SOLID：箭头（尖=焊缝点）与旗（对照参考 13/23 组）──
         let ss = solids_of(&members);
-        assert!(ss.iter().any(|s| s.first_corner.x == P_TIP[0] - P0[0]
-            && s.first_corner.y == P_TIP[1] - P0[1]
-            && (s.second_corner.x - (P_TIP[0] - P0[0] + 3.5 * ux + 0.587 * (-uy))).abs() < 1e-9));
+        // 箭头：尖 = 焊缝点；底中 = 尖 + 2.5×图幅×u（与其它 OCSM 标注同款
+        // arrow_solid：长 2.5、宽 1/3）。
+        assert!(ss.iter().any(|s| {
+            let (mx, my) = (
+                (s.second_corner.x + s.third_corner.x) / 2.0,
+                (s.second_corner.y + s.third_corner.y) / 2.0,
+            );
+            (s.first_corner.x - (P_TIP[0] - P0[0])).abs() < 1e-9
+                && (s.first_corner.y - (P_TIP[1] - P0[1])).abs() < 1e-9
+                && (mx - (P_TIP[0] - P0[0] + 2.5 * ux)).abs() < 1e-9
+                && (my - (P_TIP[1] - P0[1] + 2.5 * uy)).abs() < 1e-9
+                && {
+                    let w = ((s.second_corner.x - s.third_corner.x).powi(2)
+                        + (s.second_corner.y - s.third_corner.y).powi(2))
+                    .sqrt();
+                    (w - 2.5 / 3.0).abs() < 1e-9 // 宽 = 长/3（arrow_solid 同款）
+                }
+        }));
         assert!(ss.iter().any(|s| s.first_corner.x == 0.0
             && s.first_corner.y == 7.0
             && s.second_corner.x == 5.25

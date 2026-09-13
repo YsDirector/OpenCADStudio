@@ -1205,10 +1205,11 @@ const BS_FITS = [
     if (L < 4) { warn.style.display = ''; warn.textContent = '引线过短（需容纳箭头）。'; return; }
     const ux = dx / L, uy = dy / L, nx = -uy, ny = ux;
     const CY = '#0aa', MG = '#d0d', OR = '#e8850a', GR = '#090';
-    // 箭头（青，实心）。
-    const abx = pw.x + 3.5 * ux, aby = pw.y + 3.5 * uy;
+    // 箭头（青，实心）：与其它 OCSM 标注同款 arrow_solid —— 长 2.5、宽 1/3。
+    const asz = 2.5, ahw = asz / 6.0;
+    const abx = pw.x + asz * ux, aby = pw.y + asz * uy;
     svg.appendChild(el('polygon', {
-      points: [[pw.x,pw.y],[abx + 0.587*nx, aby + 0.587*ny],[abx - 0.587*nx, aby - 0.587*ny]]
+      points: [[pw.x,pw.y],[abx + ahw*nx, aby + ahw*ny],[abx - ahw*nx, aby - ahw*ny]]
         .map(p => { const q = w2s(p[0], p[1]); return q.x + ',' + q.y; }).join(' '),
       fill: CY, stroke: 'none' }));
     // 引线 + 基准线（青）。
