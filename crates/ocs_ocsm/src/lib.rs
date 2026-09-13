@@ -281,6 +281,79 @@ pub(crate) fn current_guide_port() -> Option<u16> {
     GUIDE_PORT.get().and_then(|m| *m.lock().unwrap())
 }
 
+/// 上次已刷新过链接的端口（避免每次调用都扫图）。
+static EDIT_LINK_PORT: std::sync::OnceLock<std::sync::Mutex<Option<u16>>> =
+    std::sync::OnceLock::new();
+
+/// 该实体的 `PE_URL` 是否需要重写成当前端口。
+/// 需要：无链接 / 链接指向别的端口 / 链接里的 handle 对不上（实体被复制过）。
+fn needs_link_rewrite(stored: Option<&str>, port: u16, handle: acadrust::Handle) -> bool {
+    let want = format!("/guide.html?handle={:#X}", u64::from(handle));
+    match stored {
+        Some(u) => {
+            !u.contains(&want)
+                || !u
+                    .split_once("127.0.0.1:")
+                    .map(|(_, rest)| rest.starts_with(&format!("{port}/")))
+                    .unwrap_or(false)
+        }
+        None => true,
+    }
+}
+
+/// 把图纸里带 `OCSM_EDIT` 的标注的 `PE_URL` 重写到当前端口（只写真正需要改的），
+/// 使“Ctrl+点击标注回编辑 GUI”在插件换端口后仍然有效。
+fn refresh_edit_links(host: &mut dyn HostApi, port: u16) {
+    let slot = EDIT_LINK_PORT.get_or_init(|| std::sync::Mutex::new(None));
+    {
+        let mut last = slot.lock().unwrap();
+        if *last == Some(port) {
+            return;
+        }
+        *last = Some(port);
+    }
+    // 先收集目标（读、写分开借用 host）。
+    let targets: Vec<(acadrust::Handle, Option<String>)> = {
+        let doc = host.document();
+        doc.entities()
+            .filter(|e| e.common().extended_data.get_record("OCSM_EDIT").is_some())
+            .map(|e| {
+                let h = e.common().handle;
+                let url = e
+                    .common()
+                    .extended_data
+                    .get_record("PE_URL")
+                    .and_then(|r| {
+                        r.values.iter().find_map(|v| match v {
+                            acadrust::xdata::XDataValue::String(s) if !s.is_empty() => Some(s.clone()),
+                            _ => None,
+                        })
+                    });
+                (h, url)
+            })
+            .collect()
+    };
+    let mut changed = 0usize;
+    for (h, stored) in targets {
+        if !needs_link_rewrite(stored.as_deref(), port, h) {
+            continue;
+        }
+        let gui = format!(
+            "http://127.0.0.1:{port}/guide.html?handle={:#X}",
+            u64::from(h)
+        );
+        if host.write_record(h, crate::guide_server::pe_url_record(&gui)) {
+            changed += 1;
+        }
+    }
+    if changed > 0 {
+        host.set_dirty();
+        host.push_info(&format!(
+            "OCSM：已更新 {changed} 个标注的编辑链接（端口 {port}）。"
+        ));
+    }
+}
+
 impl BuiltinPlugin for OcsmPlugin {
     fn manifest(&self) -> &'static PluginManifest {
         &MANIFEST
@@ -612,12 +685,18 @@ impl OcsmPlugin {
     fn ensure_guide_server(&self, host: &mut dyn HostApi) -> Option<u16> {
         let sender = std::sync::Arc::from(host.plugin_request_sender()?);
         let mut port_slot = GUIDE_PORT.get_or_init(|| std::sync::Mutex::new(None)).lock().unwrap();
-        if let Some(p) = *port_slot {
-            return Some(p);
-        }
-        let server = crate::guide_server::spawn(sender)?;
-        *port_slot = Some(server.port);
-        Some(server.port)
+        let port = if let Some(p) = *port_slot {
+            p
+        } else {
+            let server = crate::guide_server::spawn(sender)?;
+            *port_slot = Some(server.port);
+            server.port
+        };
+        drop(port_slot);
+        // 端口与上次不同（含首次、含插件重启后端口变了）→ 把图纸里已有 OCSM 标注的
+        // “回编辑”链接重写到当前端口，否则老标注 Ctrl+点击会打开失效地址。
+        refresh_edit_links(host, port);
+        Some(port)
     }
 
     /// 数字键 1~10：有选中 → 移动对象到目标层；无选中 → 切当前图层。
@@ -1743,6 +1822,24 @@ export_plugin!(OcsmPlugin);
 
 #[cfg(test)]
 mod tests {
+    /// 端口/句柄不一致时才重写链接（避免每次开图都改图纸）。
+    #[test]
+    fn needs_link_rewrite_only_when_stale() {
+        let h = acadrust::Handle::new(0x4A);
+        let good = "http://127.0.0.1:23751/guide.html?handle=0x4A";
+        assert!(!needs_link_rewrite(Some(good), 23751, h), "端口与句柄都对 → 不写");
+        assert!(needs_link_rewrite(Some(good), 23752, h), "端口变了 → 要写");
+        assert!(
+            needs_link_rewrite(Some("http://127.0.0.1:23751/guide.html?handle=0x99"), 23751, h),
+            "句柄对不上（被复制过）→ 要写"
+        );
+        assert!(needs_link_rewrite(None, 23751, h), "没链接 → 要写");
+        assert!(
+            needs_link_rewrite(Some("https://example.com/x"), 23751, h),
+            "无关链接 → 要写"
+        );
+    }
+
     use super::*;
     use acadrust::entities::{Arc, Circle, EntityType, Insert, Line};
 
