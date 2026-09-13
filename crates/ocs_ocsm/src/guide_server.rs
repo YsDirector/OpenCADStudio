@@ -7534,6 +7534,33 @@ mod weld_tests {
         println!("weld smoke dxf written: {out}");
     }
 
+    /// GUI 运行时冒烟（node + 最小 DOM 垫片）：catch node --check 查不出的
+    /// 运行时错误（历史两次：缺 GDT_POLYS 定义、wline 定义域错误 + row-weld
+    /// 漏显示）。断言：焊接面板可见、预览 SVG 非空、无异常。node 缺失时跳过。
+    #[test]
+    fn gui_runtime_smoke_with_node() {
+        let manifest = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let js = manifest.join("tests/gui_smoke.mjs");
+        let html = manifest.join("src/guide_gui.html");
+        if !js.exists() {
+            return;
+        }
+        let out = match std::process::Command::new("node")
+            .arg(&js)
+            .arg(&html)
+            .output()
+        {
+            Ok(o) => o,
+            Err(_) => return, // 无 node：跳过（不阻塞 CI）
+        };
+        assert!(
+            out.status.success(),
+            "GUI 运行时冒烟失败：\n{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
     #[test]
     fn http_server_serves_weld_gui_and_syms() {
         // guide.html：焊接按钮/面板/URL 参数键/符号几何端点（静态断言；

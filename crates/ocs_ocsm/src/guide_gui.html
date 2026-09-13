@@ -505,6 +505,10 @@
   }
   segBind('seg-type', b => {
     type = b.dataset.t;
+    // 所有"类型专属行"先统一隐藏，各分支只负责显示自己需要的（防漏显示）。
+    ['row-weld', 'row-gdt', 'row-detail'].forEach((id) => {
+      document.getElementById(id).style.display = 'none';
+    });
     // 文字框保持 <>（= 测量值）；直径/半径的 Ø/R 前缀由生成端自动添加，
     // 不再注入 %%c<>。
     const linear = (type === 'LINEAR');
@@ -559,10 +563,13 @@
       document.getElementById('seg-letter').style.display = 'none';
       document.getElementById('letter-lbl').style.display = 'none';
       tolEnabled = false; document.getElementById('tol-enable').checked = false;
+      document.getElementById('row-weld').style.display = ''; // 显示焊接专属面板
+      document.getElementById('gdt-row').style.display = 'none'; // 焊接无标注文字
       weldLockDash();
       draw();
       return;
     }
+    document.getElementById('gdt-row').style.display = gdt ? 'none' : '';
     document.getElementById('sub-lbl').textContent = linear ? '线性' : (angle ? '角度' : (section ? '剖切' : (type === 'ARCLEN' ? '偏移' : '位置')));
     document.getElementById('sub-lbl').style.display = (datum || view || angle || section || type === 'ARCLEN') ? 'none' : '';
     document.getElementById('seg-sub').style.display = linear ? '' : 'none';
@@ -1134,6 +1141,23 @@ const BS_FITS = [
     const top = (GRIND_OTHER_TOP[kind] !== undefined) ? GRIND_OTHER_TOP[kind] : 3.5;
     return [4.0316, top + 2.1];
   };
+  // 打磨附加件几何（相对焊缝符号锚点；与 apply_weld 的 Rust 表一致）。
+  // 编码：['L',x1,y1,x2,y2] / ['A',cx,cy,r,a0,a1]
+  const GRIND_FILLET = {
+    cav: [['A',3.9597,3.9598,2.625,181.5,268.5]],
+    cvx: [['A',1.125,1.125,2.625,1.5,88.5]],
+    lin: [['L',0.2475,3.9598,3.9598,0.2474]],
+    dbl: [['L',6.3106,6.3109,3.7120,3.7123],['A',2.6602,4.7641,1.4875,135,315],['A',4.7638,2.6604,1.4875,135,315]],
+    zig: [['L',0.3712,3.8360,3.8360,0.3712],['L',4.9094,3.1091,3.1090,4.9094],['L',3.1090,4.9094,2.4501,2.4501],['L',2.4501,2.4501,7.3688,3.7680]],
+  };
+  const GRIND_FILLET_C = { cav:[4.0316,4.9598], cvx:[4.0316,4.9598], lin:[4.9598,6.8159], dbl:[6.3206,7.3109], zig:[4.8360,6.5684] };
+  const GRIND_OTHER = {
+    cav: [['A',1.75,7.125,2.625,226.5,313.5]],
+    cvx: [['A',1.75,3.1169,2.625,46.5,133.5]],
+    lin: [['L',-0.875,4.5,4.375,4.5]],
+    dbl: [['L',1.75,6.775,1.75,10.45],['A',0.2625,6.775,1.4875,180,0],['A',3.2375,6.775,1.4875,180,0]],
+    zig: [['L',-0.7,4.5,4.2,4.5],['L',3.0235,7.195,0.4774,7.195],['L',1.7504,4.99,4.2965,9.4]],
+  };
 
   function initWeldRows() {
     const wu = document.getElementById('w-upper');
@@ -1395,16 +1419,17 @@ const BS_FITS = [
     }
   }
 
+  // 世界线 → 屏幕线（固定像素线宽，缩放不糊）——drawWeld 与 draw 共用。
+  function wline(x1, y1, x2, y2, w, color, dash) {
+    const a = w2s(x1, y1), b = w2s(x2, y2);
+    const attrs = { x1:a.x, y1:a.y, x2:b.x, y2:b.y, stroke:color, 'stroke-width':w };
+    if (dash) attrs['stroke-dasharray'] = dash;
+    return el('line', attrs);
+  }
+
   function draw() {
     svg.innerHTML = '';
     if (type === 'WELD') { drawWeld(); return; }
-    // 世界线 → 屏幕线（固定像素线宽，缩放不糊）
-    function wline(x1, y1, x2, y2, w, color, dash) {
-      const a = w2s(x1, y1), b = w2s(x2, y2);
-      const attrs = { x1:a.x, y1:a.y, x2:b.x, y2:b.y, stroke:color, 'stroke-width':w };
-      if (dash) attrs['stroke-dasharray'] = dash;
-      return el('line', attrs);
-    }
     // 引导线（DETAIL 圆引导：圆心→半径点的连线无意义，跳过只留端点标记）
     if (!(type === 'DETAIL' && geom === 'circle')) {
       // 弧长引导（ARC）：三点求圆画弧（PTS = 起点/终点/中点）。
