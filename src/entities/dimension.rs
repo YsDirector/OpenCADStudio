@@ -3768,15 +3768,23 @@ fn tessellate_dimension_inner(
     // DIMTMOVE=1 connects the dimension line to rendered text.
     if let Some(s) = style {
         if s.dimtmove == 1 {
-            if let Some((anchor, txt)) = dimtmove_leader_endpoints(dim, text_layout.position) {
+            if let Some((anchor, txt, under_text)) = dimtmove_leader_endpoints(
+                dim,
+                text_layout.position,
+                text_layout.width * 0.5,
+            ) {
                 let gap = dim_txt as f32 * 0.5;
                 if (txt - anchor).length() > gap * 2.0 {
-                    add_segment_with_text_break(
-                        &mut geom.dim_lines,
-                        anchor,
-                        txt,
-                        text_layout.break_box,
-                    );
+                    if under_text {
+                        add_segment(&mut geom.dim_lines, anchor, txt);
+                    } else {
+                        add_segment_with_text_break(
+                            &mut geom.dim_lines,
+                            anchor,
+                            txt,
+                            text_layout.break_box,
+                        );
+                    }
                 }
             }
         }
@@ -4296,29 +4304,80 @@ fn split_ext_lines(points: &[[f32; 3]]) -> (Vec<[f32; 3]>, Vec<[f32; 3]>) {
     (first, rest)
 }
 
+/// 线性/对齐标注的 DIMTMOVE=1 引线：
+/// - 文字沿轴超出尺寸线范围 → 返回 (近端, 文字远侧边缘, true)：一段沿轴的线，
+///   在尺寸线同一水平/竖直线上跑到文字底下（`true` = 不要做文字断线处理，
+///   否则这段线会被文字包围盒啃掉）。
+/// - 文字仍在范围内 → 返回 (尺寸线上文字正对点, 文字位置, false)：从尺寸线连到文字。
+fn linear_leader(
+    first: Vec3,
+    second: Vec3,
+    def: Vec3,
+    axis: Vec3,
+    txt: Vec3,
+    text_half_width: f32,
+) -> Option<(Vec3, Vec3, bool)> {
+    let perp = Vec3::new(-axis.y, axis.x, 0.0);
+    let dim_line_pos = def.dot(perp);
+    let a1 = first + perp * (dim_line_pos - first.dot(perp));
+    let a2 = second + perp * (dim_line_pos - second.dot(perp));
+    let t1 = a1.dot(axis);
+    let t2 = a2.dot(axis);
+    let tt = txt.dot(axis);
+    // 尺寸线上（轴线参数 t 处）的点。
+    let at = |t: f32| a1 + axis * (t - t1);
+    let half = text_half_width.max(0.0);
+    if tt > t1.max(t2) {
+        // 文字在正方向外侧：尺寸线从未超出的一端延伸到文字远侧边缘。
+        let (near, far) = if t2 >= t1 { (a2, t1) } else { (a1, t2) };
+        let _ = far;
+        Some((near, at(tt + half), true))
+    } else if tt < t1.min(t2) {
+        let (near, _) = if t1 <= t2 { (a1, t1) } else { (a2, t2) };
+        Some((near, at(tt - half), true))
+    } else {
+        Some((at(tt), txt, false))
+    }
+}
+
 /// Endpoints for the DIMTMOVE=1 leader.
-fn dimtmove_leader_endpoints(dim: &Dimension, txt: Vec3) -> Option<(Vec3, Vec3)> {
+fn dimtmove_leader_endpoints(
+    dim: &Dimension,
+    txt: Vec3,
+    text_half_width: f32,
+) -> Option<(Vec3, Vec3, bool)> {
     let lv = |v| vec3_local(v);
-    let anchor = match dim {
+    // 线性 / 对齐：文字沿轴线跑到尺寸线范围外时，尺寸线**沿轴延伸到文字底下**
+    // （GB/T 4458.4 与 AutoCAD DIMTMOVE=1 的画法：文字下方带一根引线）；
+    // 文字仍在范围内（只是偏上/偏下）时，从尺寸线上文字正对的位置连到文字。
+    match dim {
         Dimension::Linear(d) => {
-            let perp = Vec3::new(-(d.rotation.sin() as f32), d.rotation.cos() as f32, 0.0);
-            let first = lv(d.first_point);
-            let second = lv(d.second_point);
-            let def = lv(d.definition_point);
-            let off1 = def.dot(perp) - first.dot(perp);
-            let off2 = def.dot(perp) - second.dot(perp);
-            (first + perp * off1 + second + perp * off2) * 0.5
+            let axis = Vec3::new(d.rotation.cos() as f32, d.rotation.sin() as f32, 0.0);
+            return linear_leader(
+                lv(d.first_point),
+                lv(d.second_point),
+                lv(d.definition_point),
+                normalized_or(axis, Vec3::X),
+                txt,
+                text_half_width,
+            );
         }
         Dimension::Aligned(d) => {
             let first = lv(d.first_point);
             let second = lv(d.second_point);
             let axis = normalized_or(second - first, Vec3::X);
-            let perp = Vec3::new(-axis.y, axis.x, 0.0);
-            let def = lv(d.definition_point);
-            let off1 = def.dot(perp) - first.dot(perp);
-            let off2 = def.dot(perp) - second.dot(perp);
-            (first + perp * off1 + second + perp * off2) * 0.5
+            return linear_leader(
+                first,
+                second,
+                lv(d.definition_point),
+                axis,
+                txt,
+                text_half_width,
+            );
         }
+        _ => {}
+    }
+    let anchor = match dim {
         Dimension::Radius(_) => return None,
         Dimension::Diameter(d) => {
             let chord = lv(d.angle_vertex);
@@ -4353,7 +4412,7 @@ fn dimtmove_leader_endpoints(dim: &Dimension, txt: Vec3) -> Option<(Vec3, Vec3)>
         }
         _ => return None,
     };
-    Some((anchor, txt))
+    Some((anchor, txt, false))
 }
 
 /// Build a rectangle of filled triangles sitting under the dim text, used
@@ -7181,14 +7240,20 @@ pub(crate) fn baked_large_radial_geometry(
         }
     }
     if style.is_some_and(|style| style.dimtmove == 1) {
-        if let Some((anchor, endpoint)) = dimtmove_leader_endpoints(dimension, text.position) {
+        if let Some((anchor, endpoint, under_text)) =
+            dimtmove_leader_endpoints(dimension, text.position, text.width * 0.5)
+        {
             if anchor.distance(endpoint) > text_height as f32 {
-                add_segment_with_text_break(
-                    &mut geometry.dim_lines,
-                    anchor,
-                    endpoint,
-                    text.break_box,
-                );
+                if under_text {
+                    add_segment(&mut geometry.dim_lines, anchor, endpoint);
+                } else {
+                    add_segment_with_text_break(
+                        &mut geometry.dim_lines,
+                        anchor,
+                        endpoint,
+                        text.break_box,
+                    );
+                }
             }
         }
     }
@@ -7518,5 +7583,63 @@ mod arch_format_tests {
     #[test]
     fn engineering_negative_zero_has_no_sign() {
         assert_eq!(format_engineering(-0.001, 2), "0'-0.00\"");
+    }
+}
+
+#[cfg(test)]
+mod dimtmove_leader_tests {
+    use super::{dimtmove_leader_endpoints, vec3_local, Dimension};
+    use acadrust::entities::DimensionLinear;
+    use acadrust::types::Vector3;
+
+    fn v(x: f64, y: f64) -> Vector3 {
+        Vector3::new(x, y, 0.0)
+    }
+
+    /// 文字跑到尺寸线范围外（沿轴）→ 尺寸线沿轴延伸到文字底下（不经过文字断线）。
+    #[test]
+    fn text_outside_extends_dim_line_under_text() {
+        let mut d = DimensionLinear::horizontal(v(0.0, 0.0), v(20.0, 0.0));
+        d.definition_point = v(0.0, -5.0); // 尺寸线在 y=-5
+        let dim = Dimension::Linear(d);
+        // 文字锚点在右侧外（中线 x=30，半宽 3 → 远侧边缘 33）
+        let txt = vec3_local(v(30.0, -3.0));
+        let (anchor, end, under) = dimtmove_leader_endpoints(&dim, txt, 3.0).expect("leader");
+        assert!(under, "文字在外侧 → 引线在文字底下（不做断线）");
+        assert!((anchor.x - 20.0).abs() < 1e-4 && (anchor.y + 5.0).abs() < 1e-4, "近端=尺寸线右端 (20,-5)，实际 {anchor:?}");
+        assert!((end.x - 33.0).abs() < 1e-4 && (end.y + 5.0).abs() < 1e-4, "终点=文字远侧边缘 (33,-5)，实际 {end:?}");
+    }
+
+    /// 文字在左侧外 → 往左延伸。
+    #[test]
+    fn text_outside_left_extends_leftwards() {
+        let mut d = DimensionLinear::horizontal(v(0.0, 0.0), v(20.0, 0.0));
+        d.definition_point = v(0.0, -5.0);
+        let dim = Dimension::Linear(d);
+        let txt = vec3_local(v(-12.0, -3.0));
+        let (anchor, end, under) = dimtmove_leader_endpoints(&dim, txt, 2.0).expect("leader");
+        assert!(under);
+        assert!((anchor.x - 0.0).abs() < 1e-4, "近端=尺寸线左端，实际 {anchor:?}");
+        assert!((end.x + 14.0).abs() < 1e-4, "终点=文字远侧边缘 -14，实际 {end:?}");
+    }
+
+    /// 文字仍在范围里（只是偏上/偏下）→ 从尺寸线连到文字，并允许文字断线。
+    #[test]
+    fn text_inside_connects_to_text() {
+        let mut d = DimensionLinear::horizontal(v(0.0, 0.0), v(20.0, 0.0));
+        d.definition_point = v(0.0, -5.0);
+        let dim = Dimension::Linear(d);
+        let txt = vec3_local(v(10.0, 2.0));
+        let (anchor, end, under) = dimtmove_leader_endpoints(&dim, txt, 3.0).expect("leader");
+        assert!(!under, "范围内 → 维持原「连到文字」画法（可断线）");
+        assert!((anchor.x - 10.0).abs() < 1e-4 && (anchor.y + 5.0).abs() < 1e-4, "锚点=尺寸线上文字正对点，实际 {anchor:?}");
+        assert!((end.y - 2.0).abs() < 1e-4, "终点=文字位置，实际 {end:?}");
+    }
+
+    /// 半径标注不画引线（与既有行为一致）。
+    #[test]
+    fn radius_has_no_leader() {
+        let r = acadrust::entities::DimensionRadius::new(v(0.0, 0.0), v(0.0, 5.0));
+        assert!(dimtmove_leader_endpoints(&Dimension::Radius(r), vec3_local(v(0.0, 8.0)), 2.0).is_none());
     }
 }
