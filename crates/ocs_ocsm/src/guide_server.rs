@@ -3530,15 +3530,30 @@ fn push_weld_grind(
     let _ = ctext; // "C" 等字母属"焊接方法"（见 push_weld_method），不属打磨件。
 }
 
-/// 焊接方法字母位置（相对焊缝符号锚点；随打磨方式，取自 打磨.dxf 第一行
-/// 每种打磨旁的文字锚点；不打磨/弧·凹/弧·凸同点，喇叭形沿用此表）。
-fn weld_method_pos(k: GrindKind) -> (f64, f64) {
-    match k {
-        GrindKind::None | GrindKind::ArcConcave | GrindKind::ArcConvex => (4.0316, 4.9598),
-        GrindKind::Line => (4.9598, 6.8159),
-        GrindKind::DoubleArc => (6.3206, 7.3109),
-        GrindKind::Zigzag => (4.8360, 6.5684),
+/// 焊接方法字母位置（相对焊缝符号锚点）。
+/// - 角焊版（倾斜右上打磨件）：照 打磨.dxf 第一行各态的文字锚点。
+/// - 其它版（正上方打磨件，喇叭形焊缝等）：打磨件在符号正上方较高，字母
+///   须抬到其最高点之上（用户实测：喇叭形+弧·凸 时字母与弧干涉），
+///   取 字母中心 = 打磨件最高点 + 2.1（字高 3.5 半高 1.75 + 0.35 间隙）。
+fn weld_method_pos(k: GrindKind, is_fillet: bool) -> (f64, f64) {
+    if is_fillet {
+        return match k {
+            GrindKind::None | GrindKind::ArcConcave | GrindKind::ArcConvex => (4.0316, 4.9598),
+            GrindKind::Line => (4.9598, 6.8159),
+            GrindKind::DoubleArc => (6.3206, 7.3109),
+            GrindKind::Zigzag => (4.8360, 6.5684),
+        };
     }
+    // 其它版打磨件最高点（与 weld_grind_other 几何一致；不打磨 = 喇叭形符号顶 3.5）。
+    let top = match k {
+        GrindKind::None => 3.5,
+        GrindKind::ArcConcave => 5.22,   // 弧端点 +5.22（弧心 +7.125 下凹）
+        GrindKind::ArcConvex => 5.742,   // 弧顶 = 弧心 +3.1169 + r2.625
+        GrindKind::Line => 4.5,
+        GrindKind::DoubleArc => 10.45,
+        GrindKind::Zigzag => 9.4,
+    };
+    (4.0316, top + 2.1)
 }
 
 /// 焊接方法字母可用性：仅角焊缝与喇叭形焊缝（角焊 / 喇叭形焊 / 单边喇叭形焊）。
@@ -3561,7 +3576,7 @@ fn push_weld_method(
     if method.is_empty() || method == "无" || !weld_method_allowed(sym_name) {
         return;
     }
-    let (tx, ty) = weld_method_pos(grind);
+    let (tx, ty) = weld_method_pos(grind, weld_method_allowed(sym_name) && sym_name == "角焊");
     let my = if mirror { -ty } else { ty };
     members.push(weld_member_text(
         method,
@@ -6908,9 +6923,24 @@ mod weld_tests {
                 "{k:?} 字母位置"
             );
         }
-        // 喇叭形焊缝（喇叭形焊 / 单边喇叭形焊）可用。
+        // 喇叭形焊缝（喇叭形焊 / 单边喇叭形焊）可用 —— 属"其它版"（正上方
+        // 打磨件），字母须在打磨件最高点之上：弧·凸 顶 5.742 → y = 7.842。
         for n in ["喇叭形焊", "单边喇叭形焊"] {
-            assert_eq!(letters(&weld_method_members(n, GrindKind::ArcConvex, "G", false)).len(), 1, "{n}");
+            let l = letters(&weld_method_members(n, GrindKind::ArcConvex, "G", false));
+            assert_eq!(l.len(), 1, "{n}");
+            assert!((l[0].1 - (slot + 4.0316)).abs() < 1e-9);
+            assert!((l[0].2 - 7.842).abs() < 1e-9, "{n} 字母须高于打磨弧: {l:?}");
+        }
+        // 其它版各打磨方式：字母中心 = 打磨件最高点 + 2.1。
+        for (k, ey) in [
+            (GrindKind::None, 5.6), (GrindKind::ArcConcave, 7.32), (GrindKind::Line, 6.6),
+            (GrindKind::DoubleArc, 12.55), (GrindKind::Zigzag, 11.5),
+        ] {
+            let l = letters(&weld_method_members("喇叭形焊", k, "C", false));
+            assert!(
+                l.iter().any(|(_, _, y)| (y - ey).abs() < 1e-9),
+                "{k:?} 其它版字母高度应为 {ey}: {l:?}"
+            );
         }
         // 其它符号不可用（点焊 / 单边V / I 型…）。
         for n in ["点焊", "带单边坡口的V型对接焊缝", "I型对接焊缝", "堆焊接头"] {

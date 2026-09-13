@@ -1125,6 +1125,13 @@ const BS_FITS = [
   // 字母锚点（相对符号锚点）随打磨方式（照 打磨.dxf 第一行文字锚点）
   const GRIND_METHOD_POS = { none:[4.0316,4.9598], cav:[4.0316,4.9598], cvx:[4.0316,4.9598],
     lin:[4.9598,6.8159], dbl:[6.3206,7.3109], zig:[4.8360,6.5684] };
+  // 其它版（正上方打磨件）最高点：字母须抬到其上方（角焊版照参考锚点）。
+  const GRIND_OTHER_TOP = { none:3.5, cav:5.22, cvx:5.742, lin:4.5, dbl:10.45, zig:9.4 };
+  const methodPos = (kind, isFillet) => {
+    if (isFillet) return GRIND_METHOD_POS[kind] || GRIND_METHOD_POS.none;
+    const top = (GRIND_OTHER_TOP[kind] !== undefined) ? GRIND_OTHER_TOP[kind] : 3.5;
+    return [4.0316, top + 2.1];
+  };
 
   function initWeldRows() {
     const wu = document.getElementById('w-upper');
@@ -1315,15 +1322,20 @@ const BS_FITS = [
     // 焊接方法字母（C/G/H/M/R/U；仅角焊/喇叭形，位置随打磨方式，下侧镜像）。
     const wm = document.getElementById('w-method').value;
     if (wm) {
-      const mp = GRIND_METHOD_POS[gk] || GRIND_METHOD_POS.none;
       const putLetter = (tx, ty) => {
         const t = w2s(tx, ty);
         const el2 = el('text', { x: t.x, y: t.y, fill: GR, 'font-size': 13, 'text-anchor': 'middle', 'dominant-baseline': 'middle' });
         el2.textContent = wm;
         svg.appendChild(el2);
       };
-      if (wu !== '无' && WELD_METHOD_SYMS.includes(wu)) putLetter(slotX + mp[0], p0.y + mp[1]);
-      if (wl !== '无' && dash && WELD_METHOD_SYMS.includes(wl)) putLetter(slotX + mp[0], p0.y - 0.7 - mp[1]);
+      if (wu !== '无' && WELD_METHOD_SYMS.includes(wu)) {
+        const mp = methodPos(gk, wu === '角焊');
+        putLetter(slotX + mp[0], p0.y + mp[1]);
+      }
+      if (wl !== '无' && dash && WELD_METHOD_SYMS.includes(wl)) {
+        const mp = methodPos(gk, wl === '角焊');
+        putLetter(slotX + mp[0], p0.y - 0.7 - mp[1]);
+      }
     }
     // 数字区（绿色文字；空槽不画）。
     const slotTexts = [
