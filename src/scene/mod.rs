@@ -232,6 +232,7 @@ pub use model::mesh_model::MeshLodSet;
 pub use model::object::{GripApply, GripDef};
 pub use model::wire_model::WireModel;
 pub use pick::selection_state::SelectionState;
+pub use selection::pe_url_of;
 pub use pipeline::uniforms::Uniforms;
 pub use pipeline::viewcube::{
     hit_test, hit_test_cardinal, hover_id, CubeRegion, NudgeDir, VIEWCUBE_DRAW_PX, VIEWCUBE_PAD,

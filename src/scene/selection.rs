@@ -1,5 +1,21 @@
 use super::*;
 
+/// 读取实体标准 `PE_URL` XDATA 超链接（AutoCAD 的 HYPERLINK 记录）。
+///
+/// 只返回记录里第一个非空的字符串值；实体不存在、没有 `PE_URL` 记录、
+/// 记录里没有字符串、或字符串为空时一律返回 `None`。读取口径与属性
+/// 面板的 `"hyperlink"` 字段保持一致。
+pub fn pe_url_of(doc: &CadDocument, handle: Handle) -> Option<String> {
+    doc.get_entity(handle)
+        .and_then(|entity| entity.common().extended_data.get_record("PE_URL"))
+        .and_then(|record| {
+            record.values.iter().find_map(|value| match value {
+                acadrust::xdata::XDataValue::String(text) if !text.is_empty() => Some(text.clone()),
+                _ => None,
+            })
+        })
+}
+
 impl Scene {
     // ── Selection ─────────────────────────────────────────────────────────
     /// Treat a classic LEADER and its attached annotation as one logical object.
@@ -992,6 +1008,43 @@ mod tests {
             scene.entity_type_names_in_layout().as_slice(),
             ["Circle", "Line"]
         );
+    }
+
+    #[test]
+    fn pe_url_of_reads_standard_hyperlink_xdata() {
+        use acadrust::entities::Point;
+        use acadrust::xdata::{ExtendedDataRecord, XDataValue};
+
+        let mut doc = CadDocument::new();
+
+        // 带 PE_URL 超链接的实体 → 返回到链接。
+        let mut linked = Point::new();
+        let mut rec = ExtendedDataRecord::new("PE_URL");
+        rec.add_value(XDataValue::String("https://example.com/gui".to_string()));
+        linked.common.extended_data.add_record(rec);
+        let linked_handle = doc
+            .add_entity(EntityType::Point(linked))
+            .expect("linked entity added");
+        assert_eq!(
+            pe_url_of(&doc, linked_handle).as_deref(),
+            Some("https://example.com/gui")
+        );
+
+        // 没有 PE_URL 记录的实体 → None。
+        let plain_handle = doc
+            .add_entity(EntityType::Point(Point::new()))
+            .expect("plain entity added");
+        assert_eq!(pe_url_of(&doc, plain_handle), None);
+
+        // PE_URL 记录里是空字符串 → None。
+        let mut empty = Point::new();
+        let mut empty_rec = ExtendedDataRecord::new("PE_URL");
+        empty_rec.add_value(XDataValue::String(String::new()));
+        empty.common.extended_data.add_record(empty_rec);
+        let empty_handle = doc
+            .add_entity(EntityType::Point(empty))
+            .expect("empty-link entity added");
+        assert_eq!(pe_url_of(&doc, empty_handle), None);
     }
 
     #[test]

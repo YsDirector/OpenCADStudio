@@ -2910,6 +2910,50 @@ impl OpenCADStudio {
         };
         let (vw, vh) = vp_size;
 
+        // Ctrl+点击带标准 `PE_URL` 超链接的实体 → 用系统浏览器打开链接
+        // （AutoCAD 习惯）。仅在模型空间、且没有命令进行中时生效；命中
+        // 即消费这次点击，不再开始框选/选择。未命中（含未按 Ctrl、实体
+        // 没有超链接）则完全照常往下走，不影响任何既有交互。
+        if self.ctrl_down
+            && self.tabs[i].active_cmd.is_none()
+            && self.tabs[i].scene.current_layout == "Model"
+        {
+            // 与下方选择拾取一致：光标映射进活动模型 tile，bounds 用零原点。
+            let tile_b = self.tabs[i].scene.active_model_tile_bounds(vw, vh);
+            let local = iced::Point {
+                x: p.x - tile_b.x,
+                y: p.y - tile_b.y,
+            };
+            let bounds = iced::Rectangle {
+                x: 0.0,
+                y: 0.0,
+                width: tile_b.width,
+                height: tile_b.height,
+            };
+            let (view_rot, eye) = {
+                let cam = self.tabs[i].scene.camera.borrow();
+                (cam.view_proj_rte(bounds), cam.eye())
+            };
+            let wires = self.tabs[i].scene.hit_test_wires();
+            let hit = scene::pick::hit_test::click_hit(
+                local,
+                &*wires,
+                view_rot,
+                eye,
+                bounds,
+                self.tabs[i].scene.document.header.lineweight_display,
+                crate::ui::overlay::pick_box_aperture_px(self.pick_box),
+            )
+            .and_then(|s| Scene::handle_from_wire_name(s));
+            if let Some(url) =
+                hit.and_then(|handle| scene::pe_url_of(&self.tabs[i].scene.document, handle))
+            {
+                self.command_line
+                    .push_info(&format!("打开超链接：{url}"));
+                return crate::sys::open_url(&url, self.main_window);
+            }
+        }
+
         // An engaged grip owns the next left press (click-move-click placement
         // or the release of a press-drag). Do not let the same press arm the
         // normal box/lasso state or trigger another viewport control; the
