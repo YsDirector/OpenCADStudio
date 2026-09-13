@@ -3401,7 +3401,10 @@ fn weld_params_json(w: &WeldParams) -> serde_json::Value {
     serde_json::json!({
         "upper": w.upper, "lower": w.lower,
         "dash": w.dash, "circle": w.circle, "flag": w.flag,
-        "tail": w.tail, "circle": w.circle, "half": w.half, "grind": w.grind.as_str(), "method": w.method,
+        "tail": w.tail, "circle": w.circle, "half": w.half,
+        "grindUpper": w.grind_upper.as_str(), "grindLower": w.grind_lower.as_str(),
+        "methodUpper": w.method_upper, "methodLower": w.method_lower,
+        "grind": w.grind_upper.as_str(), "method": w.method_upper,
         "up_thick": w.up_thick, "up_qty": w.up_qty,
         "lo_thick": w.lo_thick, "lo_qty": w.lo_qty, "tail_text": w.tail_text,
     })
@@ -3925,20 +3928,24 @@ fn apply_weld(
     // 一般情况：上侧（实线侧，v=0）、下侧（虚线侧，v=−0.7，镜像几何）。
     // 特殊情况（flipped）：只有下侧有内容 → 用上侧正朝向几何画在虚线之上
     //（v=+0.7），打磨/焊接方法同样不镜像。
+    // 打磨/焊接方法按侧取用（用户定：上下侧独立控制）。
+    let (gu, gl) = (w.grind_upper, w.grind_lower);
+    let (mu, ml) = (w.method_upper.as_str(), w.method_lower.as_str());
     if flipped {
         if let Some(n) = &lower {
-            // 翻转：上侧正朝向几何（表 .1 未镜像）+ 内容侧 v=+0.7，不镜像。
+            // 翻转：上方显示的是"下侧内容" → 用下侧的打磨/方法设置，
+            // 上侧正朝向几何（表 .1 未镜像）+ 内容侧 v=+0.7，不镜像。
             let map = mk(slot_ref, dash_v, 1.0);
             push_weld_sym(&mut members, weld_sym(n).unwrap().1, s, map);
-            push_weld_grind(&mut members, w.grind, n == "角焊", false, s, map);
-            push_weld_method(&mut members, &w.method, n, w.grind, s, map);
+            push_weld_grind(&mut members, gl, n == "角焊", false, s, map);
+            push_weld_method(&mut members, ml, n, gl, s, map);
         }
     } else {
         if let Some(n) = &upper {
             let map = mk(slot_ref, 0.0, 1.0);
             push_weld_sym(&mut members, weld_sym(n).unwrap().1, s, map);
-            push_weld_grind(&mut members, w.grind, n == "角焊", false, s, map);
-            push_weld_method(&mut members, &w.method, n, w.grind, s, map);
+            push_weld_grind(&mut members, gu, n == "角焊", false, s, map);
+            push_weld_method(&mut members, mu, n, gu, s, map);
         }
         if let Some(n) = &lower {
             if dash {
@@ -3947,8 +3954,8 @@ fn apply_weld(
                 let sym_map = mk(slot_ref, dash_v, 1.0);
                 let aux_map = mk(slot_ref, dash_v, -1.0);
                 push_weld_sym(&mut members, weld_sym(n).unwrap().2.unwrap(), s, sym_map);
-                push_weld_grind(&mut members, w.grind, n == "角焊", true, s, aux_map);
-                push_weld_method(&mut members, &w.method, n, w.grind, s, aux_map);
+                push_weld_grind(&mut members, gl, n == "角焊", true, s, aux_map);
+                push_weld_method(&mut members, ml, n, gl, s, aux_map);
             }
         }
     }
@@ -6346,8 +6353,10 @@ mod weld_tests {
             flag: true,
             tail: true,
             half: false,
-            grind: GrindKind::ArcConvex, // 示例.dxf 用弧·凸
-            method: "C".into(),          // 示例.dxf 的 "C" = 焊接方法字母
+            grind_upper: GrindKind::ArcConvex, // 示例.dxf 用弧·凸
+            grind_lower: GrindKind::ArcConvex,
+            method_upper: "C".into(), // 示例.dxf 的 "C" = 焊接方法字母
+            method_lower: "C".into(),
             up_thick: "5".into(),
             up_qty: "100".into(),
             lo_thick: "3".into(),
@@ -6724,7 +6733,8 @@ mod weld_tests {
             circle: false,
             flag: false,
             tail: false,
-            grind: GrindKind::None,
+            grind_upper: GrindKind::None,
+            grind_lower: GrindKind::None,
             lo_thick: "3".into(),
             ..WeldParams::default()
         };
@@ -6768,7 +6778,8 @@ mod weld_tests {
             circle: false,
             flag: false,
             tail: false,
-            grind: GrindKind::ArcConvex,
+            grind_upper: GrindKind::ArcConvex,
+            grind_lower: GrindKind::ArcConvex,
             lo_thick: "5".into(),
             ..WeldParams::default()
         };
@@ -6914,7 +6925,8 @@ mod weld_tests {
             upper: upper.into(),
             lower: lower.into(),
             dash,
-            grind: k,
+            grind_upper: k,
+            grind_lower: k,
             ..WeldParams::default()
         };
         apply_weld(&sender, &doc, P_TIP, P0, P_END, &p).unwrap();
@@ -7055,8 +7067,10 @@ mod weld_tests {
         p.weld = WeldParams {
             upper: upper.into(),
             dash,
-            grind: k,
-            method: m.into(),
+            grind_upper: k,
+            grind_lower: k,
+            method_upper: m.into(),
+            method_lower: m.into(),
             ..WeldParams::default()
         };
         apply_weld(&sender, &doc, P_TIP, P0, P_END, &p).unwrap();
@@ -7143,8 +7157,10 @@ mod weld_tests {
             upper: "点焊".into(), // 上方有符号 → 一般情况（不触发特殊情况翻转）
             lower: "角焊".into(),
             dash: true,
-            grind: GrindKind::ArcConvex,
-            method: "U".into(),
+            grind_upper: GrindKind::ArcConvex,
+            grind_lower: GrindKind::ArcConvex,
+            method_upper: "U".into(),
+            method_lower: "U".into(),
             ..WeldParams::default()
         };
         apply_weld(&sender, &doc, P_TIP, P0, P_END, &p).unwrap();
@@ -7191,8 +7207,10 @@ mod weld_tests {
                 lower: String::new(),
                 dash: true, // 本用例只验证虚线的方向规律
                 tail: false,
-                grind: GrindKind::None,
-                method: String::new(),
+                grind_upper: GrindKind::None,
+                grind_lower: GrindKind::None,
+                method_upper: String::new(),
+                method_lower: String::new(),
                 ..WeldParams::default()
             };
             apply_weld(&sender, &weld_doc(), [-30.0, -30.0, 0.0], p0, pe, &p).unwrap();
@@ -7264,7 +7282,8 @@ mod weld_tests {
                 tail: false,
                 circle: true, // 与 half 同开 → 以 half 优先
                 half: true,
-                grind: GrindKind::None,
+                grind_upper: GrindKind::None,
+                grind_lower: GrindKind::None,
                 ..WeldParams::default()
             };
             apply_weld(&sender, &weld_doc(), P_TIP, P0, P_END, &p).unwrap();
@@ -7305,7 +7324,8 @@ mod weld_tests {
                 tail: false,
                 circle: true,
                 half: false,
-                grind: GrindKind::None,
+                grind_upper: GrindKind::None,
+                grind_lower: GrindKind::None,
                 ..WeldParams::default()
             };
             apply_weld(&sender, &weld_doc(), P_TIP, P0, P_END, &p).unwrap();
@@ -7313,6 +7333,54 @@ mod weld_tests {
         };
         assert!(m2.iter().any(|e| matches!(e, E::Circle(_))), "全周边圆");
         assert!(!lines_of(&m2).iter().any(|l| (l.start.x - 1.0).abs() < 1e-9), "不应有括号");
+    }
+
+    /// 打磨与焊接方法**上下侧独立**（用户定）：上侧 锯齿+C、下侧 弧·凸+U。
+    #[test]
+    fn apply_weld_per_side_grind_and_method() {
+        let mock = Arc::new(MockSender::new(weld_doc()));
+        let sender: Arc<dyn PluginRequestSender> = mock.clone();
+        let mut p = full_params();
+        p.weld = WeldParams {
+            upper: "角焊".into(),
+            lower: "角焊".into(),
+            dash: true,
+            tail: false,
+            circle: false,
+            flag: false,
+            half: false,
+            grind_upper: GrindKind::Zigzag,
+            grind_lower: GrindKind::ArcConvex,
+            method_upper: "C".into(),
+            method_lower: "U".into(),
+            ..WeldParams::default()
+        };
+        apply_weld(&sender, &weld_doc(), P_TIP, P0, P_END, &p).unwrap();
+        let m = mock.block_entities("*W1");
+        let slot = 19.413;
+        // 上侧 = 锯齿（4 线段，第 1 段 (0.3712,3.8360)→(3.8360,0.3712)）
+        assert!(lines_of(&m).iter().any(|l| {
+            (l.start.x - (slot + 0.3712)).abs() < 1e-9
+                && (l.start.y - 3.8360).abs() < 1e-9
+                && (l.end.x - (slot + 3.8360)).abs() < 1e-9
+        }), "上侧应为锯齿");
+        // 下侧 = 弧·凸（镜像：弧心 y = −0.7−1.125 = −1.825；角 271.5→358.5）
+        let arcs = grind_arcs(&m);
+        assert!(arcs.iter().any(|a| (a.center.x - (slot + 1.125)).abs() < 1e-9
+            && (a.center.y + 1.825).abs() < 1e-9
+            && (a.start_angle - 271.5f64.to_radians()).abs() < 1e-9), "下侧应为弧·凸镜像");
+        // 上侧无弧（锯齿不是弧）；下侧无锯齿线段
+        assert!(arcs.iter().all(|a| a.center.y < 0.0), "上侧不应有打磨弧");
+        assert!(!lines_of(&m).iter().any(|l| (l.start.y - 3.8360).abs() < 1e-9 && l.start.x > slot + 1.0
+            && (l.end.x - (slot + 3.8360)).abs() < 1e-9), "下侧不该出现上侧锯齿");
+        // 方法字母：上侧 C 按锯齿位置 (4.8360,6.5684)；下侧 U 按弧凸位置镜像 (−5.6598)
+        let l = letters(&m);
+        assert!(l.iter().any(|(v, x, y)| v == "C"
+            && (x - (slot + 4.8360)).abs() < 1e-9
+            && (y - 6.5684).abs() < 1e-9), "上侧 C 位置随上侧打磨方式: {l:?}");
+        assert!(l.iter().any(|(v, x, y)| v == "U"
+            && (x - (slot + 4.0316)).abs() < 1e-9
+            && (y + 5.6598).abs() < 1e-9), "下侧 U 位置随下侧打磨方式且镜像: {l:?}");
     }
 
     /// 冒烟测试用宿主代理：把插件请求真实落到 CadDocument（镜像宿主
@@ -7506,8 +7574,10 @@ mod weld_tests {
                 flag: false,
                 tail: true,
                 half,
-                grind,
-                method: std::env::var("OCSM_WELD_SMOKE_METHOD").unwrap_or_default(),
+                grind_upper: grind,
+                grind_lower: grind,
+                method_upper: std::env::var("OCSM_WELD_SMOKE_METHOD").unwrap_or_default(),
+                method_lower: std::env::var("OCSM_WELD_SMOKE_METHOD").unwrap_or_default(),
                 up_thick: if up.is_empty() && !lower.is_empty() { String::new() } else { "5".into() },
                 lo_thick,
                 up_qty: String::new(),
@@ -7572,8 +7642,11 @@ mod weld_tests {
         assert!(html.contains("id=\"row-weld\""), "焊接面板");
         assert!(html.contains("id=\"w-upper\"") && html.contains("id=\"w-lower\""));
         assert!(html.contains("wdash=1") && html.contains("wcir=1") && html.contains("wut="));
-        assert!(html.contains("wgr=") && html.contains("id=\"w-grind\""), "打磨方式下拉");
-        assert!(html.contains("id=\"w-method\"") && html.contains("WELD_METHOD_SYMS"), "焊接方法下拉");
+        assert!(html.contains("wgr="), "打磨 URL 键");
+        assert!(html.contains("id=\"w-method-u\"") && html.contains("id=\"w-method-l\"")
+            && html.contains("WELD_METHOD_SYMS"), "焊接方法上下侧下拉");
+        assert!(html.contains("id=\"w-grind-u\"") && html.contains("id=\"w-grind-l\""), "打磨上下侧下拉");
+        assert!(html.contains("wgru=") && html.contains("wgrl="), "分侧打磨 URL 键");
         assert!(html.contains("id=\"w-half\"") && html.contains("whalf=1"), "半包围开关");
         assert!(html.contains("/api/weld_syms"));
         assert!(html.contains("weldLowerHasContent"), "虚线联动");

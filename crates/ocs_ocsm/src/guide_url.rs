@@ -314,11 +314,15 @@ pub struct WeldParams {
     pub flag: bool,
     /// 尾部（尾叉 + 尾部注释；关 = 基准线保留全长，仅去尾叉注释）。
     pub tail: bool,
-    /// 焊缝打磨方式（附加件；几何按焊缝形式选角焊版/其它版，下侧对称镜像）。
-    pub grind: GrindKind,
-    /// 焊接方法字母（C/G/H/M/R/U；空/"无" = 无标注）。仅角焊缝与喇叭形焊缝
-    /// 可用（角焊 / 喇叭形焊 / 单边喇叭形焊），其余符号忽略。
-    pub method: String,
+    /// 上侧焊缝打磨方式（附加件；几何按焊缝形式选角焊版/其它版）。
+    pub grind_upper: GrindKind,
+    /// 下侧（另一侧）焊缝打磨方式——与上侧**独立**控制。
+    pub grind_lower: GrindKind,
+    /// 上侧焊接方法字母（C/G/H/M/R/U；空/"无" = 无标注）。仅角焊缝与喇叭形
+    /// 焊缝可用（角焊 / 喇叭形焊 / 单边喇叭形焊），其余符号忽略。
+    pub method_upper: String,
+    /// 下侧焊接方法字母——与上侧**独立**控制。
+    pub method_lower: String,
     /// 上侧厚度尺寸（文字，可空）。
     pub up_thick: String,
     /// 上侧数量长度（文字，可空）。
@@ -544,6 +548,13 @@ impl GuideParams {
         let mut detail_pos = None;
         let mut detail_frame = 1.0;
         let mut weld = WeldParams::default();
+        // 打磨/焊接方法：兼容"两侧同值"旧键 + 上下侧独立新键。
+        let mut grind_all = GrindKind::None;
+        let mut grind_u: Option<GrindKind> = None;
+        let mut grind_l: Option<GrindKind> = None;
+        let mut method_all = String::new();
+        let mut method_u: Option<String> = None;
+        let mut method_l: Option<String> = None;
         for pair in query.split('&').filter(|s| !s.is_empty()) {
             let (k, v) = pair.split_once('=').unwrap_or((pair, ""));
             let v = percent_decode(v);
@@ -606,18 +617,27 @@ impl GuideParams {
                 // 旧键 wc=1 等价于打磨=弧·凸（向后兼容）；新键 wgr=打磨方式代号。
                 "wc" => {
                     if matches!(&*v, "1" | "true" | "yes" | "on") {
-                        weld.grind = GrindKind::ArcConvex;
+                        grind_all = GrindKind::ArcConvex;
                     }
                 }
-                "wgr" => weld.grind = GrindKind::from_str(&v).unwrap_or(GrindKind::None),
-                // 焊接方法字母（仅角焊/喇叭形可选）：wm=C|G|H|M|R|U。
-                "wm" => {
+                // 打磨：旧键 wgr=两侧同值；新键 wgru/wgrl=上下侧独立。
+                "wgr" => grind_all = GrindKind::from_str(&v).unwrap_or(GrindKind::None),
+                "wgru" => grind_u = Some(GrindKind::from_str(&v).unwrap_or(GrindKind::None)),
+                "wgrl" => grind_l = Some(GrindKind::from_str(&v).unwrap_or(GrindKind::None)),
+                // 焊接方法字母（仅角焊/喇叭形可选）：旧键 wm=两侧同值；
+                // 新键 wmu/wml=上下侧独立。
+                "wm" | "wmu" | "wml" => {
                     let t = v.trim().to_ascii_uppercase();
-                    weld.method = if matches!(t.as_str(), "C" | "G" | "H" | "M" | "R" | "U") {
+                    let val = if matches!(t.as_str(), "C" | "G" | "H" | "M" | "R" | "U") {
                         t
                     } else {
                         String::new()
                     };
+                    match k {
+                        "wm" => method_all = val,
+                        "wmu" => method_u = Some(val),
+                        _ => method_l = Some(val),
+                    }
                 }
                 "wut" => weld.up_thick = v,
                 "wuq" => weld.up_qty = v,
@@ -627,6 +647,11 @@ impl GuideParams {
                 _ => {}
             }
         }
+
+        weld.grind_upper = grind_u.unwrap_or(grind_all);
+        weld.grind_lower = grind_l.unwrap_or(grind_all);
+        weld.method_upper = method_u.unwrap_or_else(|| method_all.clone());
+        weld.method_lower = method_l.unwrap_or(method_all);
 
         Some(GuideParams {
             guide_type,
@@ -860,11 +885,31 @@ impl GuideParams {
             if w.tail {
                 q.push("wtail=1".to_string());
             }
-            if w.grind != GrindKind::None {
-                q.push(format!("wgr={}", w.grind.as_str()));
+            // 打磨/焊接方法：两侧相同则用旧键（wgr/wm，紧凑且向后兼容），
+            // 不同则分侧输出 wgru/wgrl 与 wmu/wml。
+            if w.grind_upper == w.grind_lower {
+                if w.grind_upper != GrindKind::None {
+                    q.push(format!("wgr={}", w.grind_upper.as_str()));
+                }
+            } else {
+                if w.grind_upper != GrindKind::None {
+                    q.push(format!("wgru={}", w.grind_upper.as_str()));
+                }
+                if w.grind_lower != GrindKind::None {
+                    q.push(format!("wgrl={}", w.grind_lower.as_str()));
+                }
             }
-            if !w.method.is_empty() {
-                q.push(format!("wm={}", w.method));
+            if w.method_upper == w.method_lower {
+                if !w.method_upper.is_empty() {
+                    q.push(format!("wm={}", w.method_upper));
+                }
+            } else {
+                if !w.method_upper.is_empty() {
+                    q.push(format!("wmu={}", w.method_upper));
+                }
+                if !w.method_lower.is_empty() {
+                    q.push(format!("wml={}", w.method_lower));
+                }
             }
             for (k, v) in [
                 ("wut", &w.up_thick),
@@ -1110,7 +1155,8 @@ mod tests {
         assert_eq!(p.weld.upper, "角焊");
         assert_eq!(p.weld.lower, "点焊");
         assert!(p.weld.dash && p.weld.circle && p.weld.flag && p.weld.tail);
-        assert_eq!(p.weld.grind, GrindKind::ArcConvex);
+        assert_eq!(p.weld.grind_upper, GrindKind::ArcConvex);
+        assert_eq!(p.weld.grind_lower, GrindKind::ArcConvex);
         assert_eq!(p.weld.up_thick, "5");
         assert_eq!(p.weld.up_qty, "100");
         assert_eq!(p.weld.lo_thick, "3");
@@ -1125,7 +1171,8 @@ mod tests {
         assert_eq!(p0.weld, WeldParams::default());
         // 旧键 wc=1 向后兼容 → 打磨=弧·凸。
         let pc = GuideParams::from_url("http://x/DIM/WELD/0?wc=1").unwrap();
-        assert_eq!(pc.weld.grind, GrindKind::ArcConvex);
+        assert_eq!(pc.weld.grind_upper, GrindKind::ArcConvex);
+        assert_eq!(pc.weld.grind_lower, GrindKind::ArcConvex);
         // 6 种打磨方式解析 + 序列化往返。
         for k in [
             GrindKind::None, GrindKind::ArcConcave, GrindKind::ArcConvex,
@@ -1133,30 +1180,49 @@ mod tests {
         ] {
             let mut pg = GuideParams::linear(LinearSub::Aligned, 0.0);
             pg.guide_type = GT::Weld;
-            pg.weld.grind = k;
-            assert_eq!(GuideParams::from_url(&pg.to_url(1)).unwrap().weld.grind, k);
+            pg.weld.grind_upper = k;
+            pg.weld.grind_lower = k;
+            let backg = GuideParams::from_url(&pg.to_url(1)).unwrap().weld;
+            assert_eq!(backg.grind_upper, k);
+            assert_eq!(backg.grind_lower, k);
             assert_eq!(GrindKind::from_str(k.as_str()), Some(k));
         }
         // 焊接方法字母：合法/非法/往返（仅 C/G/H/M/R/U）。
         for m in ["C", "G", "H", "M", "R", "U"] {
             let mut pm = GuideParams::linear(LinearSub::Aligned, 0.0);
             pm.guide_type = GT::Weld;
-            pm.weld.method = m.to_string();
+            pm.weld.method_upper = m.to_string();
+            pm.weld.method_lower = m.to_string();
             let back = GuideParams::from_url(&pm.to_url(1)).unwrap();
-            assert_eq!(back.weld.method, m);
+            assert_eq!(back.weld.method_upper, m);
+            assert_eq!(back.weld.method_lower, m);
         }
         assert_eq!(
-            GuideParams::from_url("http://x/DIM/WELD/0?wm=Z").unwrap().weld.method,
+            GuideParams::from_url("http://x/DIM/WELD/0?wm=Z").unwrap().weld.method_upper,
             ""
         );
         assert_eq!(
-            GuideParams::from_url("http://x/DIM/WELD/0?wm=g").unwrap().weld.method,
+            GuideParams::from_url("http://x/DIM/WELD/0?wm=g").unwrap().weld.method_upper,
             "G",
             "小写转大写"
         );
+        // 上下侧独立：wmu/wml
+        let im = GuideParams::from_url("http://x/DIM/WELD/0?wmu=C&wml=U").unwrap();
+        assert_eq!(im.weld.method_upper, "C");
+        assert_eq!(im.weld.method_lower, "U");
+        let rtm = GuideParams::from_url(&im.to_url(1)).unwrap();
+        assert_eq!(rtm.weld.method_upper, "C");
+        assert_eq!(rtm.weld.method_lower, "U");
         // 非法打磨代号 → 不打磨。
         let bad = GuideParams::from_url("http://x/DIM/WELD/0?wgr=xyz").unwrap();
-        assert_eq!(bad.weld.grind, GrindKind::None);
+        assert_eq!(bad.weld.grind_upper, GrindKind::None);
+        // 上下侧独立：wgru/wgrl 分别解析并往返。
+        let ind = GuideParams::from_url("http://x/DIM/WELD/0?wgru=zig&wgrl=cvx").unwrap();
+        assert_eq!(ind.weld.grind_upper, GrindKind::Zigzag);
+        assert_eq!(ind.weld.grind_lower, GrindKind::ArcConvex);
+        let rt = GuideParams::from_url(&ind.to_url(1)).unwrap();
+        assert_eq!(rt.weld.grind_upper, GrindKind::Zigzag);
+        assert_eq!(rt.weld.grind_lower, GrindKind::ArcConvex);
         // “无”符号不上 URL（to_url 过滤），解析后仍为空串。
         let mut p1 = GuideParams::linear(LinearSub::Aligned, 0.0);
         p1.guide_type = GT::Weld;

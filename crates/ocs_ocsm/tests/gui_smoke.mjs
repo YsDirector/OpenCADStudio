@@ -127,7 +127,8 @@ const GUIDE = {
     type: 'WELD', dist: 0,
     weld: {
       upper: '角焊', lower: '点焊', dash: true, circle: false, half: true,
-      flag: true, tail: true, grind: 'cvx', method: 'C',
+      flag: true, tail: true, grindUpper: 'zig', grindLower: 'cvx',
+      methodUpper: 'C', methodLower: 'U',
       up_thick: '5', up_qty: '100', lo_thick: '3', lo_qty: '50', tail_text: 'N=2',
     },
   },
@@ -189,9 +190,16 @@ const svg = document.getElementById('prev');
 if (!svg.children || svg.children.length === 0) {
   errors.push('预览 SVG 为空（drawWeld 未画出任何元素）');
 }
-// 焊接方法下拉在不适用符号下应禁用；本例 upper=角焊 → 可用
-if (document.getElementById('w-method').disabled) {
-  errors.push('w-method 不应禁用（upper=角焊 属可用范围）');
+// 焊接方法：按侧独立判定——本例 upper=角焊（可用）、lower=点焊（不可用）
+if (document.getElementById('w-method-u').disabled) {
+  errors.push('w-method-u 不应禁用（upper=角焊 属可用范围）');
+}
+if (!document.getElementById('w-method-l').disabled) {
+  errors.push('w-method-l 应禁用（lower=点焊 不属可用范围）');
+}
+// 打磨：上下侧独立两个下拉
+if (!document.getElementById('w-grind-u') || !document.getElementById('w-grind-l')) {
+  errors.push('缺少上/下侧打磨下拉');
 }
 
 if (errors.length) {

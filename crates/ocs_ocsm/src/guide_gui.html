@@ -209,8 +209,11 @@
         <label style="display:flex;align-items:center;gap:4px;cursor:pointer"><input type="checkbox" id="w-half"> 半包围（⊏ 焊缝区域）</label>
         <label style="display:flex;align-items:center;gap:4px;cursor:pointer"><input type="checkbox" id="w-flg"> 现场焊接（三角旗）</label>
         <label style="display:flex;align-items:center;gap:4px;cursor:pointer"><input type="checkbox" id="w-tail"> 尾部</label>
-        <span class="lbl" style="margin-left:6px">打磨</span>
-        <select id="w-grind" style="padding:2px 6px; font-size:14px">
+      </div>
+      <!-- 打磨与焊接方法：上/下侧**独立**控制 -->
+      <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap; font-size:13px">
+        <span class="lbl">上侧打磨</span>
+        <select id="w-grind-u" style="padding:2px 6px; font-size:14px">
           <option value="none" selected>不打磨</option>
           <option value="cav">弧·凹</option>
           <option value="cvx">弧·凸</option>
@@ -218,15 +221,26 @@
           <option value="dbl">双弧</option>
           <option value="zig">锯齿</option>
         </select>
-        <span class="lbl" style="margin-left:6px">焊接方法</span>
-        <select id="w-method" style="padding:2px 6px; font-size:14px">
+        <span class="lbl" style="margin-left:6px">上侧方法</span>
+        <select id="w-method-u" style="padding:2px 6px; font-size:14px">
           <option value="" selected>无标注</option>
-          <option value="C">C</option>
-          <option value="G">G</option>
-          <option value="H">H</option>
-          <option value="M">M</option>
-          <option value="R">R</option>
-          <option value="U">U</option>
+          <option value="C">C</option><option value="G">G</option><option value="H">H</option>
+          <option value="M">M</option><option value="R">R</option><option value="U">U</option>
+        </select>
+        <span class="lbl" style="margin-left:10px">下侧打磨</span>
+        <select id="w-grind-l" style="padding:2px 6px; font-size:14px">
+          <option value="none" selected>不打磨</option>
+          <option value="cav">弧·凹</option>
+          <option value="cvx">弧·凸</option>
+          <option value="lin">直线</option>
+          <option value="dbl">双弧</option>
+          <option value="zig">锯齿</option>
+        </select>
+        <span class="lbl" style="margin-left:6px">下侧方法</span>
+        <select id="w-method-l" style="padding:2px 6px; font-size:14px">
+          <option value="" selected>无标注</option>
+          <option value="C">C</option><option value="G">G</option><option value="H">H</option>
+          <option value="M">M</option><option value="R">R</option><option value="U">U</option>
         </select>
       </div>
       <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap">
@@ -1074,10 +1088,22 @@ const BS_FITS = [
       if (document.getElementById('w-half').checked) qs.push('whalf=1');
       if (document.getElementById('w-flg').checked) qs.push('wflg=1');
       if (document.getElementById('w-tail').checked) qs.push('wtail=1');
-      const gk = document.getElementById('w-grind').value;
-      if (gk && gk !== 'none') qs.push('wgr=' + gk);
-      const wm = document.getElementById('w-method').value;
-      if (wm) qs.push('wm=' + wm);
+      const gu = document.getElementById('w-grind-u').value;
+      const gl = document.getElementById('w-grind-l').value;
+      if (gu === gl) {
+        if (gu !== 'none') qs.push('wgr=' + gu);
+      } else {
+        if (gu !== 'none') qs.push('wgru=' + gu);
+        if (gl !== 'none') qs.push('wgrl=' + gl);
+      }
+      const mu = document.getElementById('w-method-u').value;
+      const ml = document.getElementById('w-method-l').value;
+      if (mu === ml) {
+        if (mu) qs.push('wm=' + mu);
+      } else {
+        if (mu) qs.push('wmu=' + mu);
+        if (ml) qs.push('wml=' + ml);
+      }
       const gv = (id) => document.getElementById(id).value.trim();
       if (gv('w-ut')) qs.push('wut=' + encodeURIComponent(gv('w-ut')));
       if (gv('w-uq')) qs.push('wuq=' + encodeURIComponent(gv('w-uq')));
@@ -1171,7 +1197,9 @@ const BS_FITS = [
     for (const id of ['w-dash','w-flg','w-tail']) {
       document.getElementById(id).addEventListener('change', () => { weldLockDash(); draw(); });
     }
-    document.getElementById('w-grind').addEventListener('change', () => { weldLockDash(); draw(); });
+    for (const id of ['w-grind-u', 'w-grind-l']) {
+      document.getElementById(id).addEventListener('change', () => { weldLockDash(); draw(); });
+    }
     // 全周边圆与半包围 ⊏ 互斥（单选）
     document.getElementById('w-cir').addEventListener('change', (e) => {
       if (e.target.checked) document.getElementById('w-half').checked = false;
@@ -1181,7 +1209,9 @@ const BS_FITS = [
       if (e.target.checked) document.getElementById('w-cir').checked = false;
       draw();
     });
-    document.getElementById('w-method').addEventListener('change', draw);
+    for (const id of ['w-method-u', 'w-method-l']) {
+      document.getElementById(id).addEventListener('change', draw);
+    }
     for (const id of ['w-ut','w-uq','w-lt','w-lq','w-tt']) {
       document.getElementById(id).addEventListener('input', () => { weldLockDash(); draw(); });
     }
@@ -1203,10 +1233,14 @@ const BS_FITS = [
     // 焊接方法字母：仅角焊缝与喇叭形焊缝可用（角焊 / 喇叭形焊 / 单边喇叭形焊）。
     const wu = document.getElementById('w-upper').value;
     const wl = document.getElementById('w-lower').value;
-    const ok = WELD_METHOD_SYMS.includes(wu) || WELD_METHOD_SYMS.includes(wl);
-    const ms = document.getElementById('w-method');
-    ms.disabled = !ok;
-    if (!ok) ms.value = '';
+    const okU = WELD_METHOD_SYMS.includes(wu);
+    const okL = WELD_METHOD_SYMS.includes(wl);
+    const msU = document.getElementById('w-method-u');
+    const msL = document.getElementById('w-method-l');
+    msU.disabled = !okU;
+    msL.disabled = !okL;
+    if (!okU) msU.value = '';
+    if (!okL) msL.value = '';
   }
 
   // 焊接预览：内容按"基准线坐标系"渲染（四向基准线 + 可读朝向，服务端同规则）
@@ -1366,33 +1400,36 @@ const BS_FITS = [
         }
       }
     };
-    const gk = document.getElementById('w-grind').value;
-    const wm = document.getElementById('w-method').value;
-    const putMethod = (name, baseU, baseV, m) => {
-      if (!wm || !WELD_METHOD_SYMS.includes(name)) return;
-      const mp = methodPos(gk, name === '角焊');
+    const gku = document.getElementById('w-grind-u').value;
+    const gkl = document.getElementById('w-grind-l').value;
+    const wmu = document.getElementById('w-method-u').value;
+    const wml = document.getElementById('w-method-l').value;
+    const putMethod = (name, baseU, baseV, m, letter, kind) => {
+      if (!letter || !WELD_METHOD_SYMS.includes(name)) return;
+      const mp = methodPos(kind, name === '角焊');
       const p = mk(baseU, baseV, m)(mp[0], mp[1]);
       const s5 = w2s(p.x, p.y);
       const tx = el('text', { x: s5.x, y: s5.y, fill: GR, 'font-size': 13, 'text-anchor': 'middle', 'dominant-baseline': 'middle' });
-      tx.textContent = wm;
+      tx.textContent = letter;
       svg.appendChild(tx);
     };
     if (flipped) {
+      // 翻转：上方显示的是下侧内容 → 用下侧设置
       if (wl !== '无') {
         putSym(wl, false, slotT, dashV, 1);
-        if (gk !== 'none') putGrind(gk, wl === '角焊', slotT, dashV, 1);
-        putMethod(wl, slotT, dashV, 1);
+        if (gkl !== 'none') putGrind(gkl, wl === '角焊', slotT, dashV, 1);
+        putMethod(wl, slotT, dashV, 1, wml, gkl);
       }
     } else {
       if (wu !== '无') {
         putSym(wu, false, slotT, 0, 1);
-        if (gk !== 'none') putGrind(gk, wu === '角焊', slotT, 0, 1);
-        putMethod(wu, slotT, 0, 1);
+        if (gku !== 'none') putGrind(gku, wu === '角焊', slotT, 0, 1);
+        putMethod(wu, slotT, 0, 1, wmu, gku);
       }
       if (wl !== '无' && dash) {
         putSym(wl, true, slotT, dashV, 1); // 表 .2 已镜像
-        if (gk !== 'none') putGrind(gk, wl === '角焊', slotT, dashV, -1);
-        putMethod(wl, slotT, dashV, -1);
+        if (gkl !== 'none') putGrind(gkl, wl === '角焊', slotT, dashV, -1);
+        putMethod(wl, slotT, dashV, -1, wml, gkl);
       }
     }
     // 数字区（绿色文字；空槽不画）—— 内容坐标系：实线侧 v=+2.75、虚线侧 v=−3.45
@@ -1982,8 +2019,12 @@ const BS_FITS = [
           document.getElementById('w-half').checked = !!w.half;
           document.getElementById('w-flg').checked = !!w.flag;
           document.getElementById('w-tail').checked = !!w.tail;
-          document.getElementById('w-grind').value = w.grind || 'none';
-          document.getElementById('w-method').value = w.method || '';
+          const gU = w.grindUpper || w.grind || 'none';
+          const gL = w.grindLower || w.grind || 'none';
+          document.getElementById('w-grind-u').value = gU;
+          document.getElementById('w-grind-l').value = gL;
+          document.getElementById('w-method-u').value = w.methodUpper || w.method || '';
+          document.getElementById('w-method-l').value = w.methodLower || w.method || '';
           document.getElementById('w-ut').value = w.up_thick || '';
           document.getElementById('w-uq').value = w.up_qty || '';
           document.getElementById('w-lt').value = w.lo_thick || '';
