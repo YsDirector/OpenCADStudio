@@ -7574,10 +7574,21 @@ mod weld_tests {
                 flag: false,
                 tail: true,
                 half,
-                grind_upper: grind,
-                grind_lower: grind,
-                method_upper: std::env::var("OCSM_WELD_SMOKE_METHOD").unwrap_or_default(),
-                method_lower: std::env::var("OCSM_WELD_SMOKE_METHOD").unwrap_or_default(),
+                // 分侧打磨/方法（新键优先，旧键 _GRIND/_METHOD 作两侧缺省）
+                grind_upper: std::env::var("OCSM_WELD_SMOKE_GRIND_U")
+                    .ok()
+                    .and_then(|g| GrindKind::from_str(&g))
+                    .unwrap_or(grind),
+                grind_lower: std::env::var("OCSM_WELD_SMOKE_GRIND_L")
+                    .ok()
+                    .and_then(|g| GrindKind::from_str(&g))
+                    .unwrap_or(grind),
+                method_upper: std::env::var("OCSM_WELD_SMOKE_METHOD_U")
+                    .or_else(|_| std::env::var("OCSM_WELD_SMOKE_METHOD"))
+                    .unwrap_or_default(),
+                method_lower: std::env::var("OCSM_WELD_SMOKE_METHOD_L")
+                    .or_else(|_| std::env::var("OCSM_WELD_SMOKE_METHOD"))
+                    .unwrap_or_default(),
                 up_thick: if up.is_empty() && !lower.is_empty() { String::new() } else { "5".into() },
                 lo_thick,
                 up_qty: String::new(),
