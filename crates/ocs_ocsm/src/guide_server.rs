@@ -3560,13 +3560,14 @@ fn push_weld_method<M: Fn(f64, f64) -> (f64, f64)>(
     sym_name: &str,
     grind: GrindKind,
     s: f64,
+    rot: f64,
     map: M,
 ) {
     if method.is_empty() || method == "无" || !weld_method_allowed(sym_name) {
         return;
     }
     let (tx, ty) = weld_method_pos(grind, sym_name == "角焊");
-    members.push(weld_member_text(method, map(tx, ty), 3.5 * s));
+    members.push(weld_member_text(method, map(tx, ty), 3.5 * s, rot));
 }
 
 /// 符号几何沿基准线的最大 u（右端）——用于计算基准线所需长度。
@@ -3700,12 +3701,13 @@ fn weld_member_solid(p1: (f64, f64), p2: (f64, f64), p3: (f64, f64), color: i16)
 }
 
 /// 焊接块成员：固定文字（中中锚定；OCSM_GB 宽比 0.7；色 3）——方法字母与 MR/M 小字。
-fn weld_member_text(value: &str, pos: (f64, f64), h: f64) -> acadrust::EntityType {
+fn weld_member_text(value: &str, pos: (f64, f64), h: f64, rot: f64) -> acadrust::EntityType {
     use acadrust::entities::{Text, TextHorizontalAlignment, TextVerticalAlignment};
     use acadrust::types::Color;
     use acadrust::EntityType as E;
     let mut t = Text::with_value(value, Vector3::new(pos.0, pos.1, 0.0));
     t.height = h;
+    t.rotation = rot; // 随基准线轴向（竖基准线 90° 自下而上，永不倒置）
     t.width_factor = 0.7;
     t.style = "OCSM_GB".into();
     t.horizontal_alignment = TextHorizontalAlignment::Center;
@@ -3723,6 +3725,7 @@ fn push_weld_sym<M: Fn(f64, f64) -> (f64, f64)>(
     members: &mut Vec<acadrust::EntityType>,
     ents: &[WeldSymEnt],
     s: f64,
+    rot: f64,
     map: M,
 ) {
     for e in ents {
@@ -3737,7 +3740,7 @@ fn push_weld_sym<M: Fn(f64, f64) -> (f64, f64)>(
                 members.push(weld_member_arc(map(cx, cy), r * s, a0, a1))
             }
             WeldSymEnt::Text(x, y, t) => {
-                members.push(weld_member_text(t, map(x, y), 2.24 * s))
+                members.push(weld_member_text(t, map(x, y), 2.24 * s, rot))
             }
         }
     }
@@ -3903,6 +3906,9 @@ fn apply_weld(
     };
     // 参考单位（表内 u 沿基准线、v 内容上方）→ 块局部坐标（×图幅倍率）
     let tr = |u: f64, v: f64| -> (f64, f64) { tp(u * s, v * s) };
+    // 文字书写方向：随基准线轴向（横=0；竖=+90°，自下而上，永不倒置——
+    // 用户实测：竖基准线标注的文字须沿基准线书写，对照示例）。
+    let text_rot: f64 = if horizontal { 0.0 } else { std::f64::consts::FRAC_PI_2 };
 
     // ── 幂等 ensure：OCSM_GB 样式 / 8符号标注层 / ACISOWELD 线型（虚线用）──
     if !doc
@@ -4036,16 +4042,16 @@ fn apply_weld(
             // 翻转：上方显示的是"下侧内容" → 用下侧的打磨/方法设置，
             // 上侧正朝向几何（表 .1 未镜像）+ 内容侧 v=+0.7，不镜像。
             let map = mk(slot_ref, dash_v, 1.0);
-            push_weld_sym(&mut members, weld_sym(n).unwrap().1, s, map);
+            push_weld_sym(&mut members, weld_sym(n).unwrap().1, s, text_rot, map);
             push_weld_grind(&mut members, gl, n == "角焊", false, s, map);
-            push_weld_method(&mut members, ml, n, gl, s, map);
+            push_weld_method(&mut members, ml, n, gl, s, text_rot, map);
         }
     } else {
         if let Some(n) = &upper {
             let map = mk(slot_ref, 0.0, 1.0);
-            push_weld_sym(&mut members, weld_sym(n).unwrap().1, s, map);
+            push_weld_sym(&mut members, weld_sym(n).unwrap().1, s, text_rot, map);
             push_weld_grind(&mut members, gu, n == "角焊", false, s, map);
-            push_weld_method(&mut members, mu, n, gu, s, map);
+            push_weld_method(&mut members, mu, n, gu, s, text_rot, map);
         }
         if let Some(n) = &lower {
             if dash {
@@ -4053,9 +4059,9 @@ fn apply_weld(
                 //（m=−1）。弧角度需翻转（mirror_angles=true）。
                 let sym_map = mk(slot_ref, dash_v, 1.0);
                 let aux_map = mk(slot_ref, dash_v, -1.0);
-                push_weld_sym(&mut members, weld_sym(n).unwrap().2.unwrap(), s, sym_map);
+                push_weld_sym(&mut members, weld_sym(n).unwrap().2.unwrap(), s, text_rot, sym_map);
                 push_weld_grind(&mut members, gl, n == "角焊", true, s, aux_map);
-                push_weld_method(&mut members, ml, n, gl, s, aux_map);
+                push_weld_method(&mut members, ml, n, gl, s, text_rot, aux_map);
             }
         }
     }
@@ -4109,6 +4115,7 @@ fn apply_weld(
         ad.insertion_point = Vector3::new(*x, *y, 0.0);
         ad.alignment_point = ad.insertion_point;
         ad.height = 3.5 * s;
+        ad.rotation = text_rot; // 竖基准线 → 90°（沿基准线书写）
         ad.width_factor = 0.7;
         ad.text_style = "OCSM_GB".into();
         if *right {
@@ -7360,10 +7367,15 @@ mod weld_tests {
                 has(v, mapc(SLOT + 3.5, 0.125)) && has(v, mapc(SLOT, 3.625)),
                 "{name}：三角腿方向应随坐标系"
             );
-            // 文字恒水平（rotation = 0）
+            // 文字书写方向随基准线轴向：横=0；竖=+90°（自下而上，永不倒置）
+            let want_rot = if horizontal { 0.0 } else { std::f64::consts::FRAC_PI_2 };
             for e in m.iter() {
                 if let E::AttributeDefinition(a) = e {
-                    assert!(a.rotation.abs() < 1e-9, "{name}：尺寸文字应保持水平");
+                    assert!(
+                        (a.rotation - want_rot).abs() < 1e-9,
+                        "{name}：尺寸文字旋转应为 {want_rot}，实际 {}",
+                        a.rotation
+                    );
                 }
             }
         }
