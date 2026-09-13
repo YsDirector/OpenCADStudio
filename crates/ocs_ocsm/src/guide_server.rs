@@ -2984,31 +2984,33 @@ fn api_guide(target: &str, sender: &Arc<dyn PluginRequestSender>) -> (u16, &'sta
     };
     match snapshot(sender) {
         Err(e) => (500, json, serde_json::json!({"ok": false, "error": e}).to_string()),
-        Ok(doc) => match guide_geom_points(&doc, handle) {
-            Err(e) => (404, json, serde_json::json!({"ok": false, "error": e}).to_string()),
-            Ok(pts) => {
+        Ok(doc) => {
+            // 先看 handle 是不是 OCSM **生成的标注**（带 `OCSM_EDIT`）：
+            // 标注是 INSERT / DIMENSION，`guide_geom_points` 不认——必须先走这条路，
+            // 否则会先把错误报给 GUI（那正是"引导线必须为直线或多段线"提示的来源），
+            // 参数也因此回填不了。引导几何直接取自记录。
+            let edit = read_edit_record(sender, handle);
+            let (pts, geom_forced, url) = match (&edit, guide_geom_points(&doc, handle)) {
+                (Some((u, p, k, _)), _) if p.len() >= 2 => {
+                    (p.clone(), Some(k.clone()), Some(u.clone()))
+                }
+                (None, Ok(p)) => (p, None, read_pe_url(sender, handle)),
+                (_, Err(e)) => {
+                    return (404, json, serde_json::json!({"ok": false, "error": e}).to_string())
+                }
+                (_, Ok(p)) => (p, None, read_pe_url(sender, handle)),
+            };
+            let is_edit = edit.is_some();
+            {
                 let (p1, p2) = (pts[0], pts[1]);
-                let url = read_pe_url(sender, handle);
-                // 若 handle 是 OCSM 生成的**标注**（PE_URL 指向回去的 GUI），
-                // 则从 `OCSM_EDIT` 里取参数 URL + 引导几何（可能原引导已删）。
-                let (url, pts, geom) = match url
-                    .as_deref()
-                    .and_then(GuideParams::from_url)
-                    .map(|_| ())
-                {
-                    Some(()) => (url, pts, None),
-                    None => match read_edit_record(sender, handle) {
-                        Some((u, p2v, kind, _)) if p2v.len() >= 2 => {
-                            (Some(u), p2v, Some(kind))
-                        }
-                        _ => (url, pts, None),
-                    },
-                };
-                let (p1, p2) = (pts[0], pts[1]);
+                let geom = geom_forced;
                 let params = url.as_deref().and_then(GuideParams::from_url);
-                let resp = serde_json::json!({
+                // 先建小对象，再把大的 `params` 单独塞进去（同一个 json! 里嵌套太深
+                // 会触发宏递归上限）。
+                let mut resp = serde_json::json!({
                     "ok": true,
                     "handle": fmt_handle(handle),
+                    "edit": is_edit,
                     "p1": [p1[0], p1[1], p1[2]],
                     "p2": [p2[0], p2[1], p2[2]],
                     // 引导线全部顶点（ANGLE 两段 PLINE = 3 个：p0/p1/p2）。
@@ -3021,7 +3023,9 @@ fn api_guide(target: &str, sender: &Arc<dyn PluginRequestSender>) -> (u16, &'sta
                     "url": url,
                     // 引导线长度 = 主尺寸（公差计算用）。
                     "measurement": ((p2[0]-p1[0]).powi(2)+(p2[1]-p1[1]).powi(2)).sqrt(),
-                    "params": params.map(|p| serde_json::json!({
+                });
+                resp["params"] = match params {
+                    Some(p) => serde_json::json!({
                         "type": p.guide_type.as_str(),
                         "sub": p.sub.map(|s| s.as_str().to_string()),
                         "angle_mode": p.angle_mode.as_str().to_string(),
@@ -3057,8 +3061,9 @@ fn api_guide(target: &str, sender: &Arc<dyn PluginRequestSender>) -> (u16, &'sta
                             "upper": p.leader.upper,
                             "lower": p.leader.lower,
                         },
-                    })),
-                });
+                    }),
+                    None => serde_json::Value::Null,
+                };
                 (200, json, resp.to_string())
             }
         },
@@ -9009,6 +9014,36 @@ mod weld_tests {
             .map(|m| m.value.clone())
             .collect();
         assert_eq!(vals, vec!["更改".to_string(), "深30".to_string()], "文字已改");
+    }
+
+    /// `/api/guide` 对**标注实体**要回退读 OCSM_EDIT（曾经写在 guide_geom_points 的
+    /// 成功分支里 → 标注永远拿不到参数、还报"引导线必须为直线或多段线"）。
+    #[test]
+    fn api_guide_serves_annotation_edit_record() {
+        let mut doc = acadrust::CadDocument::new();
+        let mut pl = LwPolyline::new();
+        pl.common.layer = "10引导线层".into();
+        pl.add_point(Vector2::new(0.0, 0.0));
+        pl.add_point(Vector2::new(60.0, 60.0));
+        pl.add_point(Vector2::new(120.0, 60.0));
+        let gh = doc.add_entity(E::LwPolyline(pl)).unwrap();
+        let mock = Arc::new(MockSender::new(doc));
+        let sender: Arc<dyn PluginRequestSender> = mock.clone();
+        let url = "http://127.0.0.1:23751/DIM/LEADER/0?lu=%E9%80%9A%E5%AD%94&ll=%E6%B7%B120";
+        let body = serde_json::json!({"handle": fmt_handle(gh), "url": url}).to_string();
+        let out = do_apply(&sender, body.as_bytes(), true).unwrap();
+        let ann = produced_handles(&out)[0];
+
+        let (code, _, resp) = api_guide(&format!("?handle={}", fmt_handle(ann)), &sender);
+        assert_eq!(code, 200, "标注查询应成功（不再走引导几何校验）: {resp}");
+        let v: serde_json::Value = serde_json::from_str(&resp).unwrap();
+        assert_eq!(v["ok"], true);
+        assert_eq!(v["edit"], true, "应标记为编辑目标");
+        assert_eq!(v["geom"], "pline");
+        assert_eq!(v["pts"].as_array().unwrap().len(), 3, "引导三点来自记录");
+        assert_eq!(v["params"]["type"], "LEADER");
+        assert_eq!(v["params"]["leader"]["upper"], "通孔", "参数应回填");
+        assert_eq!(v["params"]["leader"]["lower"], "深20");
     }
 
     /// 只有「应用」（不刷新）时：只更新记录，不重生成。
