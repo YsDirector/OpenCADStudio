@@ -237,7 +237,7 @@ fn mark_dirty(sender: &Arc<dyn PluginRequestSender>) -> Result<(), String> {
     Ok(())
 }
 
-fn pe_url_record(url: &str) -> ExtendedDataRecord {
+pub(crate) fn pe_url_record(url: &str) -> ExtendedDataRecord {
     let mut rec = ExtendedDataRecord::new("PE_URL");
     rec.values.push(XDataValue::String(url.to_string()));
     rec
@@ -4672,7 +4672,7 @@ fn guide_kind_of(e: &acadrust::EntityType) -> &'static str {
     }
 }
 
-fn edit_record(
+pub(crate) fn edit_record(
     url: &str,
     pts: &[[f64; 3]],
     kind: &str,

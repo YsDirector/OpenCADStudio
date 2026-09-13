@@ -549,7 +549,31 @@ impl OcsmPlugin {
             }
         }
         if !plan.adds.is_empty() {
-            host.add_entities(plan.adds.clone());
+            let handles = host.add_entities(plan.adds.clone());
+            // D2G 产出的标注带 `OCSM_EDIT`（参数 + 引导几何）→ 再补上回编辑 GUI 的
+            // `PE_URL`。**必须等实体有了句柄**（URL 里要嵌 handle），所以放在这里。
+            // 插件服务没起（端口未知）时跳过——`ME` 命令仍可编辑。
+            if let Some(port) = crate::current_guide_port() {
+                let targets: Vec<acadrust::Handle> = handles
+                    .iter()
+                    .copied()
+                    .filter(|h| {
+                        host.document().get_entity(*h).is_some_and(|e| {
+                            e.common()
+                                .extended_data
+                                .get_record("OCSM_EDIT")
+                                .is_some()
+                        })
+                    })
+                    .collect();
+                for h in targets {
+                    let gui = format!(
+                        "http://127.0.0.1:{port}/guide.html?handle={:#X}",
+                        u64::from(h)
+                    );
+                    host.write_record(h, crate::guide_server::pe_url_record(&gui));
+                }
+            }
         }
         for h in &plan.removes {
             host.remove_entity(*h);

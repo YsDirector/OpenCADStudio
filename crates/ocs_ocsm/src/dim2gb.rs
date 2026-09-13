@@ -389,6 +389,16 @@ fn pick_linear_sub(dim: &Dimension, first: Vector3, second: Vector3, measured: f
     cands[0].0
 }
 
+/// 给 D2G 产出的标注挂 `OCSM_EDIT`（参数 URL + 引导几何 + 引导种类）。
+/// 用实体自己的 XDATA（不需要 handle），所以能在加入文档前直接挂；
+/// 回编辑 GUI 的 `PE_URL` 需要实体句柄，由 `cmd_dim2gb` 在 `add_entities` 后补写。
+fn stamp_edit(entity: &mut Entity, params: &GuideParams, pts: &[[f64; 3]], kind: &str) {
+    let port = crate::current_guide_port().unwrap_or(0);
+    let url = params.to_url(port);
+    let rec = gs::edit_record(&url, pts, kind, None);
+    entity.common_mut().extended_data.add_record(rec);
+}
+
 /// 构造 `GuideParams`（只填本次转换用得到的字段，其余用保守默认值）。
 fn base_params(guide_type: GuideType, dist: f64, dec: Option<u32>) -> GuideParams {
     GuideParams {
@@ -482,7 +492,9 @@ fn convert_linear(
             b.text_rotation = base.text_rotation;
         }
     }
-    Ok(Entity::Dimension(dim))
+    let mut e = Entity::Dimension(dim);
+    stamp_edit(&mut e, &params, &[to_arr(first), to_arr(second)], "line");
+    Ok(e)
 }
 
 /// 半径 / 直径 → OCSM 匿名块形态（块内 MTEXT + 7标注层）。
@@ -521,7 +533,9 @@ fn convert_radial(
     params.dn = dn;
 
     let dim = gs::build_dimension(c, doc, to_arr(center), to_arr(rim), &params, style)?;
-    Ok(Entity::Dimension(dim))
+    let mut e = Entity::Dimension(dim);
+    stamp_edit(&mut e, &params, &[to_arr(center), to_arr(rim)], "line");
+    Ok(e)
 }
 
 /// 角度 → OCSM 匿名块形态（弧 + 箭头 + MTEXT）。
@@ -556,7 +570,10 @@ fn convert_angular(
         &params,
         style,
     )?;
-    Ok(Entity::Dimension(dim))
+    let mut e = Entity::Dimension(dim);
+    // 角度引导 = 两段 PLINE，**顶点在中间**（与 GDIM 的 ANGLE 约定一致）。
+    stamp_edit(&mut e, &params, &[to_arr(ray1), to_arr(vertex), to_arr(ray2)], "pline");
+    Ok(e)
 }
 
 /// 弧长 → OCSM 匿名块 + INSERT（块成员含尺寸弧/界线/箭头/文字）。
@@ -915,7 +932,20 @@ fn convert_leader(
     })
     .map_err(|e| format!("建块失败：{e}"))?;
 
-    let ins = gs::leader_insert(&block_name, p0);
+    let mut ins = gs::leader_insert(&block_name, p0);
+    {
+        // 参数 URL：与引导模式一致（GUI 靠它回填上下文字）。
+        let mut params = base_params(GuideType::Leader, 0.0, None);
+        params.leader = crate::guide_url::LeaderParams {
+            upper: upper.clone(),
+            lower: lower.clone(),
+        };
+        let mut e = Entity::Insert(ins.clone());
+        stamp_edit(&mut e, &params, &[p_tip, p0, p_end], "pline");
+        if let Entity::Insert(i) = e {
+            ins = i;
+        }
+    }
     c.request(PluginRequest::AddEntities(vec![Entity::Insert(ins)]))
         .map_err(|e| format!("加实体失败：{e}"))?;
     Ok(())
@@ -1984,6 +2014,47 @@ mod tests {
             .expect("INSERT");
         assert!(block_texts(&plan.blocks[0]).is_empty(), "无文字 → 块内无 MTEXT");
         assert_eq!(plan.removes.len(), 1, "只删 Leader（无 MText）");
+    }
+
+    /// D2G 产出的标注要带 `OCSM_EDIT`（参数 + 引导几何），才可再编辑。
+    #[test]
+    fn plan_converted_dim_carries_edit_record() {
+        let mut d = DimensionLinear::horizontal(
+            Vector3::new(0.0, 0.0, 0.0),
+            Vector3::new(50.0, 0.0, 0.0),
+        );
+        d.definition_point = Vector3::new(0.0, -10.0, 0.0);
+        d.base.definition_point = d.definition_point;
+        d.base.actual_measurement = 50.0;
+        let doc = doc_with(vec![Entity::Dimension(Dimension::Linear(d))]);
+        let plan = plan(&doc, &[]);
+        assert_eq!(plan.converted, 1, "{:?}", plan.skipped);
+        let e = plan
+            .adds
+            .iter()
+            .find(|e| matches!(e, Entity::Dimension(_)))
+            .expect("转换后的标注");
+        let rec = e
+            .common()
+            .extended_data
+            .get_record("OCSM_EDIT")
+            .expect("应带 OCSM_EDIT（可再编辑）");
+        let url = rec
+            .values
+            .iter()
+            .find_map(|v| match v {
+                XDataValue::String(s) if !s.is_empty() => Some(s.clone()),
+                _ => None,
+            })
+            .expect("记录里应有参数 URL");
+        let params = GuideParams::from_url(&url).expect("URL 应能被引导解析");
+        assert_eq!(params.guide_type, GuideType::Linear, "{url}");
+        // 引导几何（两点）也在记录里。
+        assert!(rec.values.iter().any(|v| matches!(
+            v,
+            XDataValue::String(s) if s.contains(';') || s.contains(',')
+        )));
+        // 带 OCSM_EDIT 的实体在 plan.adds 里（cmd_dim2gb 之后会补 PE_URL）。
     }
 
     /// 多重引线明确不转（选中时报告原因）。
