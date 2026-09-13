@@ -307,6 +307,9 @@ pub struct WeldParams {
     pub dash: bool,
     /// 全周边符号（圆圈，基准线起点）。
     pub circle: bool,
+    /// 半包围焊缝区域（⊏ 形；区别于全周边圆，表示半包围结构）。与 circle
+    /// 互斥（同开时以半包围优先）。
+    pub half: bool,
     /// 现场焊接（三角旗，基准线起点竖杆）。
     pub flag: bool,
     /// 尾部（尾叉 + 尾部注释；关 = 基准线保留全长，仅去尾叉注释）。
@@ -597,6 +600,7 @@ impl GuideParams {
                 "wl" => weld.lower = v,
                 "wdash" => weld.dash = matches!(&*v, "1" | "true" | "yes" | "on"),
                 "wcir" => weld.circle = matches!(&*v, "1" | "true" | "yes" | "on"),
+                "whalf" => weld.half = matches!(&*v, "1" | "true" | "yes" | "on"),
                 "wflg" => weld.flag = matches!(&*v, "1" | "true" | "yes" | "on"),
                 "wtail" => weld.tail = matches!(&*v, "1" | "true" | "yes" | "on"),
                 // 旧键 wc=1 等价于打磨=弧·凸（向后兼容）；新键 wgr=打磨方式代号。
@@ -846,6 +850,9 @@ impl GuideParams {
             }
             if w.circle {
                 q.push("wcir=1".to_string());
+            }
+            if w.half {
+                q.push("whalf=1".to_string());
             }
             if w.flag {
                 q.push("wflg=1".to_string());
