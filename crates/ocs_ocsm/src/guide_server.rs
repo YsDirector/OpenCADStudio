@@ -3494,6 +3494,7 @@ fn push_weld_grind<M: Fn(f64, f64) -> (f64, f64)>(
     is_fillet: bool,
     mirror_angles: bool,
     s: f64,
+    arc_rot_deg: f64,
     map: M,
 ) {
     if k == GrindKind::None {
@@ -3515,7 +3516,12 @@ fn push_weld_grind<M: Fn(f64, f64) -> (f64, f64)>(
                 } else {
                     (a0, a1)
                 };
-                members.push(weld_member_arc(map(cx, cy), r * s, b0, b1));
+                members.push(weld_member_arc(
+                    map(cx, cy),
+                    r * s,
+                    b0 + arc_rot_deg,
+                    b1 + arc_rot_deg,
+                ));
             }
         }
     }
@@ -3726,6 +3732,7 @@ fn push_weld_sym<M: Fn(f64, f64) -> (f64, f64)>(
     ents: &[WeldSymEnt],
     s: f64,
     rot: f64,
+    arc_rot_deg: f64,
     map: M,
 ) {
     for e in ents {
@@ -3737,7 +3744,7 @@ fn push_weld_sym<M: Fn(f64, f64) -> (f64, f64)>(
                 members.push(weld_member_circle(map(cx, cy), r * s))
             }
             WeldSymEnt::Arc(cx, cy, r, a0, a1) => {
-                members.push(weld_member_arc(map(cx, cy), r * s, a0, a1))
+                members.push(weld_member_arc(map(cx, cy), r * s, a0 + arc_rot_deg, a1 + arc_rot_deg))
             }
             WeldSymEnt::Text(x, y, t) => {
                 members.push(weld_member_text(t, map(x, y), 2.24 * s, rot))
@@ -3827,60 +3834,85 @@ fn apply_weld(
     /// 特殊情况（flipped）+0.7（内容显示到上方、虚线在其下）。
     let dash_v: f64 = if flipped { 0.7 } else { -0.7 };
 
-    // ── 基准线长度：强制容纳全部标注（用户实测：第二段画太短会让符号溢出）
-    //    blen_final = max(用户画的长度, 内容所需长度 + 余量) ──
-    //    内容所需长度（参考单位，自锚点沿 t 起算）取各件右端最大者。
-    let slot_base = 19.413_f64; // 示例布局槽位（补充元素避让在下面追加）
-    let mut need_u = slot_base + 6.5; // 数量长度文字锚点
-    // 文字宽度粗估：0.59 × 字高3.5 × 宽比0.7 ≈ 1.45/字
-    need_u = need_u.max(slot_base + 6.5 + 3.0 * 1.45);
-    // 符号本体（含跨线单置）宽度
-    let sym_names: Vec<&String> = match (&upper, &lower, flipped) {
-        (_, Some(n), true) => vec![n],
-        (Some(u), Some(l), false) => vec![u, l],
-        (Some(u), None, _) => vec![u],
-        (None, Some(l), false) => vec![l],
-        _ => vec![],
+    // ── 基准线长度：**随输入内容动态调整**（用户定：不再跟随用户画的长短，
+    //    画长了会被收紧、画短了会被延长）──
+    //    长度 = 各"启用件"沿基准线的右端最大者 + 末端余量。
+    //    文字宽粗估：0.59 × 字高3.5 × 宽比0.7 ≈ 1.45/字。
+    let slot_base = 19.413_f64; // 示例布局槽位
+    let text_w = |t: &str| 1.45 * (t.trim().chars().count() as f64);
+    // 方向符号（判断补充元素在拐点侧还是内容侧）：+1 = 拐点在锚点侧
+    let dir_in_sign: f64 = if (horizontal && bdx >= 0.0) || (!horizontal && bdy >= 0.0) {
+        1.0
+    } else {
+        -1.0
     };
-    for n in &sym_names {
+    // 实际绘制的侧：翻转时只有下侧（显示到上方）；否则上侧 + （虚线开且下侧有符号）
+    let up_on = !flipped && upper.is_some();
+    let lo_on = if flipped { lower.is_some() } else { lower.is_some() && dash };
+    // 厚度在槽位左侧不影响长度；数量长度锚点 slot+6.5（有文字再加文字宽）
+    let qty_up = if up_on { w.up_qty.trim() } else { "" };
+    let qty_lo = if lo_on { w.lo_qty.trim() } else { "" };
+    let up_thick_shown = up_on && !w.up_thick.trim().is_empty();
+    let lo_thick_shown = lo_on && !w.lo_thick.trim().is_empty();
+    let any_content = upper.is_some()
+        || lower.is_some()
+        || !w.up_thick.trim().is_empty()
+        || !w.up_qty.trim().is_empty()
+        || !w.lo_thick.trim().is_empty()
+        || !w.lo_qty.trim().is_empty()
+        || w.grind_upper != GrindKind::None
+        || w.grind_lower != GrindKind::None
+        || !w.method_upper.trim().is_empty()
+        || !w.method_lower.trim().is_empty()
+        || w.half
+        || w.circle
+        || w.flag
+        || !w.tail_text.trim().is_empty();
+    let mut need_u = slot_base + if any_content { 6.5 } else { 0.0 }; // 数量长度锚点
+    need_u = need_u.max(slot_base + 6.5 + text_w(qty_up));
+    need_u = need_u.max(slot_base + 6.5 + text_w(qty_lo));
+    // 符号本体（含跨线单置）宽度
+    let sym_sides: Vec<(&String, bool)> = if flipped {
+        lower.as_ref().map(|n| vec![(n, true)]).unwrap_or_default()
+    } else {
+        let mut v: Vec<(&String, bool)> = Vec::new();
+        if let Some(n) = &upper {
+            v.push((n, false));
+        }
+        if let Some(n) = &lower {
+            v.push((n, true));
+        }
+        v
+    };
+    for (n, is_lower) in &sym_sides {
         if let Some(d) = weld_sym(n) {
             let ents = if flipped { d.1 } else { d.1 };
-            let lo = if flipped { None } else { d.2 };
             need_u = need_u.max(slot_base + weld_sym_max_u(ents));
-            if let Some(e) = lo {
-                need_u = need_u.max(slot_base + weld_sym_max_u(e));
+            if !flipped {
+                if let (false, Some(e)) = (is_lower, d.2) {
+                    need_u = need_u.max(slot_base + weld_sym_max_u(e));
+                }
             }
         }
     }
     // 打磨件与方法字母（按侧取用）
-    let grind_sides: Vec<(GrindKind, bool, &String)> = if flipped {
-        match &lower {
-            Some(n) => vec![(w.grind_lower, n == "角焊", n)],
-            None => vec![],
-        }
-    } else {
-        let mut v = Vec::new();
-        if let Some(n) = &upper {
-            v.push((w.grind_upper, n == "角焊", n));
-        }
-        if let Some(n) = &lower {
-            v.push((w.grind_lower, n == "角焊", n));
-        }
-        v
-    };
-    for (k, is_fillet, n) in &grind_sides {
-        need_u = need_u.max(slot_base + weld_grind_max_u(*k, *is_fillet));
-        let m = if flipped { w.method_lower.as_str() } else if Some(*n) == upper.as_ref() { w.method_upper.as_str() } else { w.method_lower.as_str() };
-        if !m.is_empty() && m != "无" && weld_method_allowed(n) {
-            let (mx, _) = weld_method_pos(*k, *n == "角焊");
+    for (k, is_fillet, n, is_lower) in sym_sides.iter().map(|(n, is_lower)| {
+        let k = if *is_lower && !flipped { w.grind_lower } else { w.grind_upper };
+        (k, n.as_str() == "角焊", *n, *is_lower)
+    }) {
+        need_u = need_u.max(slot_base + weld_grind_max_u(k, is_fillet));
+        let m = if is_lower && !flipped { w.method_lower.as_str() } else { w.method_upper.as_str() };
+        if !m.trim().is_empty() && m != "无" && weld_method_allowed(n) {
+            let (mx, _) = weld_method_pos(k, is_fillet);
             need_u = need_u.max(slot_base + mx + 1.45);
         }
     }
-    // 半包围 ⊏ / 全周边圆占位（拐点在 t=0 或末尾，取靠内容一侧）
-    let supp_extent = if w.half { 5.2 } else { 0.0 };
-    // 余量 2.0：让末端文字不贴线端
-    let blen_need = (need_u.max(slot_base + supp_extent + 4.0) + 2.0) * s;
-    let blen = blen.max(blen_need);
+    // 半包围 ⊏：在拐点侧（dir_in<0，即线端为拐点）时须在内容之后多留 5.2+1
+    if w.half && dir_in_sign < 0.0 {
+        need_u += 6.2;
+    }
+    // 末端余量 2.0
+    let blen = (need_u + 2.0) * s;
 
     // 块局部坐标（原点 = 拐点 p0）：锚点 = 沿主轴坐标较小的一端；
     // 延长只发生在"远离拐点"一侧（拐点世界坐标不变）。
@@ -3909,6 +3941,8 @@ fn apply_weld(
     // 文字书写方向：随基准线轴向（横=0；竖=+90°，自下而上，永不倒置——
     // 用户实测：竖基准线标注的文字须沿基准线书写，对照示例）。
     let text_rot: f64 = if horizontal { 0.0 } else { std::f64::consts::FRAC_PI_2 };
+    // 圆弧角度随坐标系旋转（横=0°、竖=+90°；坐标系为右手正交基，CCW 语义不变）
+    let frame_rot_deg: f64 = if horizontal { 0.0 } else { 90.0 };
 
     // ── 幂等 ensure：OCSM_GB 样式 / 8符号标注层 / ACISOWELD 线型（虚线用）──
     if !doc
@@ -3983,7 +4017,7 @@ fn apply_weld(
     // 半包围（⊏ 形）：区别于全周边圆，表示"半包围结构"的焊缝区域
     //（对照 焊缝区域补充符号.dxf 样例3）：自拐点沿基准线 1.0 起，高 3.5、
     // 两臂长 4.2（参考单位），开口朝基准线远端。
-    let dir_in = if corner_t == 0.0 { 1.0 } else { -1.0 };
+    let dir_in = dir_in_sign;
     if w.half {
         let t0 = corner_t + dir_in * 1.0 * s;
         let t1 = corner_t + dir_in * 5.2 * s;
@@ -4042,15 +4076,15 @@ fn apply_weld(
             // 翻转：上方显示的是"下侧内容" → 用下侧的打磨/方法设置，
             // 上侧正朝向几何（表 .1 未镜像）+ 内容侧 v=+0.7，不镜像。
             let map = mk(slot_ref, dash_v, 1.0);
-            push_weld_sym(&mut members, weld_sym(n).unwrap().1, s, text_rot, map);
-            push_weld_grind(&mut members, gl, n == "角焊", false, s, map);
+            push_weld_sym(&mut members, weld_sym(n).unwrap().1, s, text_rot, frame_rot_deg, map);
+            push_weld_grind(&mut members, gl, n == "角焊", false, s, frame_rot_deg, map);
             push_weld_method(&mut members, ml, n, gl, s, text_rot, map);
         }
     } else {
         if let Some(n) = &upper {
             let map = mk(slot_ref, 0.0, 1.0);
-            push_weld_sym(&mut members, weld_sym(n).unwrap().1, s, text_rot, map);
-            push_weld_grind(&mut members, gu, n == "角焊", false, s, map);
+            push_weld_sym(&mut members, weld_sym(n).unwrap().1, s, text_rot, frame_rot_deg, map);
+            push_weld_grind(&mut members, gu, n == "角焊", false, s, frame_rot_deg, map);
             push_weld_method(&mut members, mu, n, gu, s, text_rot, map);
         }
         if let Some(n) = &lower {
@@ -4059,8 +4093,8 @@ fn apply_weld(
                 //（m=−1）。弧角度需翻转（mirror_angles=true）。
                 let sym_map = mk(slot_ref, dash_v, 1.0);
                 let aux_map = mk(slot_ref, dash_v, -1.0);
-                push_weld_sym(&mut members, weld_sym(n).unwrap().2.unwrap(), s, text_rot, sym_map);
-                push_weld_grind(&mut members, gl, n == "角焊", true, s, aux_map);
+                push_weld_sym(&mut members, weld_sym(n).unwrap().2.unwrap(), s, text_rot, frame_rot_deg, sym_map);
+                push_weld_grind(&mut members, gl, n == "角焊", true, s, frame_rot_deg, aux_map);
                 push_weld_method(&mut members, ml, n, gl, s, text_rot, aux_map);
             }
         }
@@ -6625,16 +6659,17 @@ mod weld_tests {
         // ── 线几何逐位对照示例.dxf（块局部坐标，原点 = P0；世界位 = 局部+P0）──
         let ls = lines_of(&members);
         let base_len = P_END[0] - P0[0]; // 47.647
-        // 基准线（青4）：局部 (0,0)→(47.647,0)
+        // 基准线（青4）：长度随内容 = 19.413+6.5+文字"100"(4.35)+余量2 = 32.263
+        let blen_eff = 32.263_f64;
         assert!(ls.iter().any(|l| l.start.x == 0.0
             && l.start.y == 0.0
-            && l.end.x == base_len
+            && (l.end.x - blen_eff).abs() < 1e-6
             && l.end.y == 0.0
             && l.common.color == acadrust::types::Color::from_index(4)));
         // 虚线（品红6 + ACISOWELD；局部 y = −0.7）
         assert!(ls.iter().any(|l| l.start.x == 0.0
             && l.start.y == -0.7
-            && l.end.x == base_len
+            && (l.end.x - blen_eff).abs() < 1e-6
             && l.end.y == -0.7
             && l.common.color == acadrust::types::Color::from_index(6)
             && l.common.linetype == "ACISOWELD"));
@@ -6655,14 +6690,14 @@ mod weld_tests {
             && l.start.y == 3.5
             && l.end.x == 0.0
             && l.end.y == 3.5));
-        // 尾叉（终点 → +3.5,±3.5；局部终点 = (47.647,0)）
-        assert!(ls.iter().any(|l| l.start.x == base_len
+        // 尾叉（内容驱动后的终点 = (32.263,0) → +3.5,±3.5）
+        assert!(ls.iter().any(|l| (l.start.x - blen_eff).abs() < 1e-6
             && l.start.y == 0.0
-            && l.end.x == base_len + 3.5
+            && (l.end.x - (blen_eff + 3.5)).abs() < 1e-6
             && l.end.y == 3.5));
-        assert!(ls.iter().any(|l| l.start.x == base_len
+        assert!(ls.iter().any(|l| (l.start.x - blen_eff).abs() < 1e-6
             && l.start.y == 0.0
-            && l.end.x == base_len + 3.5
+            && (l.end.x - (blen_eff + 3.5)).abs() < 1e-6
             && l.end.y == -3.5));
         // 上角焊三角（贴实线 +0.125；槽位局部 x = 19.413）
         assert!(ls.iter().any(|l| l.start.x == 19.413
@@ -6763,7 +6798,7 @@ mod weld_tests {
         let a = by_tag("下侧厚度尺寸A");
         assert_eq!(a.insertion_point.y, -3.450);
         let a = by_tag("尾部注释E");
-        assert_eq!(a.insertion_point.x, base_len + 4.55);
+        assert!((a.insertion_point.x - (blen_eff + 4.55)).abs() < 1e-6);
         assert_eq!(a.insertion_point.y, 0.0);
         for a in ads.iter() {
             assert_eq!(a.height, 3.5);
@@ -7295,7 +7330,8 @@ mod weld_tests {
             let bdx = pe[0] - p0[0];
             let bdy = pe[1] - p0[1];
             let horizontal = bdx.abs() >= bdy.abs();
-            let blen = if horizontal { bdx.abs() } else { bdy.abs() };
+            // 生成长度随内容动态调整（本用例 = 27.913）
+            let blen = 27.913_f64;
             // 期望：锚点（块局部，原点=拐点）+ 参考单位→块局部映射
             let anchor = if horizontal {
                 (if bdx >= 0.0 { 0.0 } else { -blen }, 0.0)
@@ -7326,17 +7362,18 @@ mod weld_tests {
             apply_weld(&sender, &weld_doc(), [-30.0, -30.0, 0.0], p0, pe, &p).unwrap();
             let m = mock.block_entities("*W1");
             let ls = lines_of(&m);
-            // 基准线沿吸附主轴、全长
+            // 基准线沿吸附主轴；长度随内容动态调整（本用例无尺寸文字：
+            // 槽位 19.413+数量锚点 6.5+余量 2 = 27.913）
             assert!(
                 ls.iter().any(|l| {
                     let (dx, dy) = (l.end.x - l.start.x, l.end.y - l.start.y);
                     if horizontal {
-                        dy.abs() < 1e-9 && (dx.abs() - blen).abs() < 1e-9
+                        dy.abs() < 1e-9 && (dx.abs() - 27.913).abs() < 1e-6
                     } else {
-                        dx.abs() < 1e-9 && (dy.abs() - blen).abs() < 1e-9
+                        dx.abs() < 1e-9 && (dy.abs() - 27.913).abs() < 1e-6
                     }
                 }),
-                "{name}：基准线应沿主轴"
+                "{name}：基准线应沿主轴且长度随内容（27.913）"
             );
             // 虚线（识别线）：横线在下（y=−0.7）；竖线在右（x=+0.7）
             let dl = ls
@@ -7550,7 +7587,7 @@ mod weld_tests {
         );
         // 打磨件（弧·凸 右端 = 槽位+1.125+2.625 = 23.163）也须在线内
         assert!(bl.end.x > 19.413 + 1.125 + 2.625, "打磨件须在线内");
-        // ② 长基准线（60）：保持用户长度，不缩短
+        // ② 长基准线（60）：内容驱动 → 收紧（用户定：长度随内容，不再跟随画的长度）
         let mock2 = Arc::new(MockSender::new(weld_doc()));
         let sender2: Arc<dyn PluginRequestSender> = mock2.clone();
         apply_weld(&sender2, &weld_doc(), [0.0, 0.0, 0.0], [100.0, 0.0, 0.0], [160.0, 0.0, 0.0], &pre())
@@ -7561,7 +7598,13 @@ mod weld_tests {
             .find(|l| l.start.y == 0.0 && l.end.y == 0.0 && l.start.x == 0.0)
             .copied()
             .expect("基准线2");
-        assert!((bl2.end.x - 60.0).abs() < 1e-9, "长基准线应保持 60：{}", bl2.end.x);
+        assert!(
+            (bl2.end.x - bl.end.x).abs() < 1e-9,
+            "长度只与内容有关（两次同值）: {} vs {}",
+            bl2.end.x,
+            bl.end.x
+        );
+        assert!(bl2.end.x < 60.0, "画长了应被收紧: {}", bl2.end.x);
     }
 
     /// 回归：第二段指向左 + 角焊 + 厚度3 + 尾部注释 N=2（用户实测三问题）。
@@ -7615,7 +7658,69 @@ mod weld_tests {
             let tail = ads.iter().find(|a| a.tag == "尾部注释E").expect("尾注 ATTDEF");
             // ③ 尾注对齐：线端在锚点侧（far_dir=−1）→ Right+Middle（文字向左展开，不压尾叉）
             assert!(matches!(tail.horizontal_alignment, HorizontalAlignment::Right), "尾注应右对齐");
-            assert!(tail.insertion_point.x < -35.0, "尾注须在线端之外: {}", tail.insertion_point.x);
+            assert!(
+                tail.insertion_point.x < -27.913 - 3.0,
+                "尾注须在线端之外: {}",
+                tail.insertion_point.x
+            );
+        }
+    }
+
+    /// 竖基准线：符号内圆弧角度须随坐标系旋转（+90°）。
+    #[test]
+    fn apply_weld_vertical_rotates_symbol_arcs() {
+        for (dir_name, pe) in [
+            ("up", [0.0, 40.0, 0.0]),
+            ("down", [0.0, -40.0, 0.0]),
+        ] {
+            let mock = Arc::new(MockSender::new(weld_doc()));
+            let sender: Arc<dyn PluginRequestSender> = mock.clone();
+            let mut p = full_params();
+            p.weld = WeldParams {
+                // 带钝边U型对接焊缝：ARC c=(1.75,3.5) r1.75 180→0（本地）
+                upper: "带钝边U型对接焊缝".into(),
+                lower: String::new(),
+                dash: false,
+                tail: false,
+                circle: false,
+                half: false,
+                flag: false,
+                grind_upper: GrindKind::None,
+                grind_lower: GrindKind::None,
+                method_upper: String::new(),
+                method_lower: String::new(),
+                up_thick: String::new(),
+                up_qty: String::new(),
+                ..WeldParams::default()
+            };
+            apply_weld(&sender, &weld_doc(), [-30.0, -30.0, 0.0], [0.0, 0.0, 0.0], pe, &p).unwrap();
+            let m = mock.block_entities("*W1");
+            let a = m
+                .iter()
+                .find_map(|e| match e {
+                    E::Arc(x) => Some(x.clone()),
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("{dir_name}: 应有圆弧"));
+            // 竖基准线：本地 (u,v) → 世界 (−v, anchor_y+slot+u)；表内弧心
+            // (u=1.75,v=3.5)；生成长度内容驱动 = 19.413+6.5+2 = 27.913
+            let blen_eff = 27.913_f64;
+            let anchor_y = if pe[1] >= 0.0 { 0.0 } else { -blen_eff };
+            assert!(
+                (a.center.x + 3.5).abs() < 1e-9
+                    && (a.center.y - (anchor_y + 19.413 + 1.75)).abs() < 1e-9,
+                "{dir_name} 弧心映射: ({}, {}) 期望 y={}",
+                a.center.x,
+                a.center.y,
+                anchor_y + 19.413 + 1.75
+            );
+            assert!(
+                (a.start_angle - 270f64.to_radians()).abs() < 1e-9
+                    && (a.end_angle - 90f64.to_radians()).abs() < 1e-9,
+                "{dir_name} 弧角应 +90°: {}→{}",
+                a.start_angle.to_degrees(),
+                a.end_angle.to_degrees()
+            );
         }
     }
 

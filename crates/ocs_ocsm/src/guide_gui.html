@@ -1317,12 +1317,20 @@ const BS_FITS = [
         needU = Math.max(needU, SLOT_BASE + methodPos(gk, nm === '角焊')[0] + 1.45);
       }
     }
-    const suppExtent0 = halfOn0 ? 5.2 : 0;
-    const blenEff = Math.max(blen, Math.max(needU, SLOT_BASE + suppExtent0 + 4.0) + 2.0);
-    const autoExtended = blenEff > blen + 1e-9;
-    if (autoExtended) {
+    // 数量长度文字宽度（该侧有文字时）
+    const textW = (t) => 1.45 * String(t || '').trim().length;
+    if ((flipped0 ? '' : DOM('w-uq').value) !== '') {
+      needU = Math.max(needU, SLOT_BASE + 6.5 + textW(DOM('w-uq').value));
+    }
+    if (lowerHas) needU = Math.max(needU, SLOT_BASE + 6.5 + textW(DOM('w-lq').value));
+    // 半包围 ⊏ 在拐点侧（线端为拐点）时须在内容之后多留 5.2+1
+    const dirIn0 = ((horizontal && bdx >= 0) || (!horizontal && bdy >= 0)) ? 1 : -1;
+    if (halfOn0 && dirIn0 < 0) needU += 6.2;
+    // 基准线长度 = 内容长度 + 余量（用户定：随输入内容动态调整，不跟随画的长度）
+    const blenEff = needU + 2.0;
+    if (Math.abs(blenEff - blen) > 1e-6) {
       warn.style.display = '';
-      warn.textContent = `提示：第二段过短，生成的基准线已自动延长到 ${blenEff.toFixed(1)}（原画 ${blen.toFixed(1)}）以容纳全部标注。`;
+      warn.textContent = `提示：基准线长度已按内容调整为 ${blenEff.toFixed(1)}（原画 ${blen.toFixed(1)}）。`;
     }
     const dxl = p0.x - pw.x, dyl = p0.y - pw.y;
     const L = Math.hypot(dxl, dyl);
@@ -1346,6 +1354,8 @@ const BS_FITS = [
       return p;
     };
     const CY = '#0aa', MG = '#d0d', OR = '#e8850a', GR = '#090';
+    // 圆弧角度随坐标系旋转（横=0°、竖=+90°；与服务端 frame_rot_deg 一致）
+    const arcRot = horizontal ? 0 : 90;
     // 箭头（青，实心）：与其它 OCSM 标注同款 arrow_solid —— 长 2.5、宽 1/3。
     const asz = 2.5, ahw = asz / 6.0;
     const abx = pw.x + asz * ux, aby = pw.y + asz * uy;
@@ -1421,7 +1431,7 @@ const BS_FITS = [
           const c = P(e[1], e[2]); const s2 = w2s(c.x, c.y);
           svg.appendChild(el('circle', { cx: s2.x, cy: s2.y, r: e[3] * cam.scale, fill: 'none', stroke: OR, 'stroke-width': 1.8 }));
         } else if (k === 'A') {
-          const cx0 = e[1], cy0 = e[2], r = e[3], a0 = e[4], a1 = e[5];
+          const cx0 = e[1], cy0 = e[2], r = e[3], a0 = e[4] + arcRot, a1 = e[5] + arcRot;
           const span = ((a1 - a0) % 360 + 360) % 360;
           const N = 24; let prev = null;
           for (let i = 0; i <= N; i++) {
@@ -1453,6 +1463,7 @@ const BS_FITS = [
           const cx0 = e[1], cy0 = e[2], r = e[3];
           let t0 = e[4], t1 = e[5];
           if (m < 0) { t0 = ((-e[5] % 360) + 360) % 360; t1 = ((-e[4] % 360) + 360) % 360; }
+          t0 += arcRot; t1 += arcRot; // 随基准线轴向旋转
           const span = ((t1 - t0) % 360 + 360) % 360;
           const N = 24; let prev = null;
           for (let i = 0; i <= N; i++) {
