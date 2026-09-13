@@ -545,7 +545,7 @@ fn build_guide_angular(
 /// 主弧（劣角）+ 延长弧×2 + SOLID 箭头×2（弧两端尖朝外）+ MTEXT（水平，角平分线）。
 /// DIMENSION 引用匿名块（block_name）→ 渲染走 walk_block 复刻示例样式。
 /// dist 语义不变 = 文字距顶点的距离（弧半径 = dist − DIMGAP）。
-fn build_guide_angular_block(
+pub(crate) fn build_guide_angular_block(
     sender: &Arc<dyn PluginRequestSender>,
     doc: &acadrust::CadDocument,
     p0: [f64; 3],
@@ -630,7 +630,14 @@ fn build_guide_angular_block(
     }
     // MTEXT：`{θ°}` attach=8，insert=角平分线 (r+gap)（文字底部中心）。
     // 文字书写方向 ⊥ 顶点→文字（径向）→ 沿弧切向（bis − 90°），clamp 防倒置。
-    let text_value = format!("{{{:.0}°}}", show_deg);
+    // 用户所见文字优先（OCSMDIM2GB 等外部转换会带原标注文字）；否则按角模式算。
+    let text_value = match &params.text {
+        Some(t) if !t.trim().is_empty() => t.clone(),
+        _ => {
+            let dec = params.dec.unwrap_or(0).min(8) as usize;
+            format!("{{{}}}°", format_measurement(show_deg, dec as u32))
+        }
+    };
     let mut m = MText::new();
     m.rectangle_width = (text_value.chars().count() as f64 * h * 0.75).max(10.0);
     m.value = text_value;
@@ -768,7 +775,7 @@ fn build_guide_radial(
 /// frame 比例感知的标注样式（与 PowerDim::resolve_style 同逻辑）：检查
 /// `pt` 是否在 TF 图幅块内，返回对应缩放样式名；样式缺失时经 sender 向宿主
 /// 创建 `OCSM_GB_x{scale}`（确保生成标注能应用文字/箭头缩放）。
-fn ensure_style_for_point(
+pub(crate) fn ensure_style_for_point(
     sender: &Arc<dyn PluginRequestSender>,
     doc: &acadrust::CadDocument,
     pt: [f64; 3],
@@ -1075,7 +1082,7 @@ fn build_guide_radial_block(
     Ok(dim)
 }
 
-fn build_dimension(
+pub(crate) fn build_dimension(
     sender: &Arc<dyn PluginRequestSender>,
     doc: &acadrust::CadDocument,
     p1: [f64; 3],
@@ -1824,7 +1831,7 @@ fn detail_scale_at(doc: &acadrust::CadDocument, pt: [f64; 3]) -> Option<f64> {
 /// 文字 = 尺寸弧中点外 1×scale（径向），前加小半圆弧 ⌒ 符号（色3/层0，
 /// 对称轴沿弧外侧方向，忠实参考）。块原点 = 引导圆心；INSERT 于引导圆心。
 /// 测量值 = r × 扫角（放大图内另乘 detail 系数还原真实尺寸）。
-fn apply_arclen(
+pub(crate) fn apply_arclen(
     sender: &Arc<dyn PluginRequestSender>,
     doc: &acadrust::CadDocument,
     handle: acadrust::Handle,

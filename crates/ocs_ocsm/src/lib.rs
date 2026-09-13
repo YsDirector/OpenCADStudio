@@ -16,6 +16,7 @@
 //! - `OCSMMCP`：确保标注更新服务器运行（独立 MCP 二进制经 TCP 桥接）。
 
 mod detail_clip;
+mod dim2gb;
 mod guide_server;
 mod guide_url;
 pub mod tolerance;
@@ -45,7 +46,7 @@ static MANIFEST: PluginManifest = PluginManifest {
     command_prefixes: &[
         "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "TF", "OCSM",
         "OCSMFRAMEINIT", "OCSMFRAMEINSERT", "D", "OCSMPOWERDIM", "OCSMDIMGULIDE",
-        "GDIM", "OCSMMCP", "OCSMRGH", "CC",
+        "GDIM", "OCSMMCP", "OCSMRGH", "CC", "OCSMDIM2GB", "D2G",
     ],
 };
 
@@ -183,7 +184,7 @@ pub(crate) fn text_style_defs() -> Vec<TextStyleDef> {
 
 /// OCSM_GB 标注样式：参数取自用户示例（标注对比.dxf 的 Mechanical 风格），
 /// 但 dimtxsty 换成 OCSM_GB 字体（project.md 要求）。
-fn dim_style_defs() -> Vec<DimStyleDef> {
+pub(crate) fn dim_style_defs() -> Vec<DimStyleDef> {
     vec![DimStyleDef {
         name: "OCSM_GB".into(),
         make_current: true,
@@ -358,6 +359,10 @@ impl BuiltinPlugin for OcsmPlugin {
                 self.cmd_roughness(host);
                 true
             }
+            "OCSMDIM2GB" | "D2G" => {
+                self.cmd_dim2gb(host);
+                true
+            }
             "OCSMMCP" => {
                 self.cmd_mcp(host);
                 true
@@ -444,6 +449,60 @@ impl OcsmPlugin {
         host.push_info(&format!(
             "OCSM 尺寸引导：已打开标注配置 {url}。应用=写超链接；应用并刷新=生成标注（7标注层/OCSM_GB）。"
         ));
+    }
+
+    /// `OCSMDIM2GB` / `D2G`：把宿主原生标注（模型空间 DIMENSION）**重建**为 OCSM 的
+    /// GB 标准版本——OCSM_GB_x{图框比例} 样式 + `7标注层`（尺寸）/ 匿名块（直径、
+    /// 半径、角度、弧长），保留原文字覆盖、小数位、样式前后缀与公差。
+    /// 有选中→只转选中集；无选中→全图扫描。不支持的类型跳过并在结束时报清单，
+    /// 整批一次 Ctrl+Z 可全撤。
+    fn cmd_dim2gb(&self, host: &mut dyn HostApi) {
+        let selected = host.selected_handles();
+        let plan = {
+            let doc = host.document();
+            crate::dim2gb::plan(doc, &selected)
+        };
+        if plan.seen == 0 {
+            let tail = if plan.skipped.is_empty() {
+                String::new()
+            } else {
+                format!("（{}）", plan.skipped.join("；"))
+            };
+            host.push_info(&format!(
+                "OCSMDIM2GB：未找到可转换的原生标注（仅扫描模型空间）{tail}"
+            ));
+            return;
+        }
+        host.push_info(&plan.report());
+        if plan.converted == 0 {
+            return;
+        }
+        host.push_undo("OCSMDIM2GB 原生标注转 GB");
+        // ① 幂等补基建（图层/文字样式/标注样式——图纸可能从没跑过 OCSM 初始化）
+        // ② 建匿名块（INSERT 引用它）③ 加新实体 ④ 删原标注。
+        host.ensure_layers(layer_defs());
+        host.ensure_text_styles(text_style_defs());
+        let mut ensured: Vec<String> = Vec::new();
+        for def in &plan.styles {
+            if ensured.iter().any(|n| n.eq_ignore_ascii_case(&def.name)) {
+                continue;
+            }
+            ensured.push(def.name.clone());
+            host.ensure_dim_styles(vec![def.clone()]);
+        }
+        for (name, ents) in &plan.blocks {
+            if let Err(e) = host.add_block_record(name, ents.clone()) {
+                host.push_error(&format!("OCSMDIM2GB：建块 {name} 失败：{e}"));
+            }
+        }
+        if !plan.adds.is_empty() {
+            host.add_entities(plan.adds.clone());
+        }
+        for h in &plan.removes {
+            host.remove_entity(*h);
+        }
+        host.bump_geometry();
+        host.set_dirty();
     }
 
     /// `OCSMRGH` / `CC`：表面粗糙度——交互点选插入点 → 打开粗糙度配置 GUI。
