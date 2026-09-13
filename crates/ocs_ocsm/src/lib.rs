@@ -1741,6 +1741,180 @@ fn frame_dir_stems() -> Vec<String> {
     stems
 }
 
+// ── 标准件库（parts/）─────────────────────────────────────────────────────
+//
+// 库契约见 `docs`/`OCSMBOM-plan.md` §2：每个标准件一个 DWG（含 ATTDEF +
+// 正确基点），可选一份 `catalog.csv` 索引。此处只负责"列出库里有什么"，
+// 真正的块导入/属性写入由命令路径完成（见 §9 实施清单 2~5 步）。
+
+/// 标准件库里的一项。
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(dead_code)] // 二期（序号）/三期（明细表）接线后用满
+pub(crate) struct PartEntry {
+    /// 类别（如 `bolt` / `nut` / `washer`）。
+    pub category: String,
+    /// 标准号（如 `GB/T 5782`）。
+    pub std: String,
+    /// 名称（如 `六角头螺栓`）；无索引时回退为文件名主干。
+    pub name: String,
+    /// 规格（如 `M10x40`）。
+    pub spec: String,
+    /// 材料（索引可选）。
+    pub material: String,
+    /// 单件重量（索引可选，文本，保留库里的写法）。
+    pub weight: String,
+    /// DWG 绝对路径。
+    pub path: String,
+}
+
+/// 标准件文件夹：优先 `OCSM_PARTS_DIR` 环境变量（测试/排障），否则为插件
+/// 安装目录下的 `parts/`。与 `frame_dir()` 同一套路。
+#[allow(dead_code)]
+fn parts_dir() -> std::path::PathBuf {
+    if let Ok(dir) = std::env::var("OCSM_PARTS_DIR") {
+        let dir = dir.trim();
+        if !dir.is_empty() {
+            return std::path::PathBuf::from(dir);
+        }
+    }
+    let mut args = std::env::args();
+    while let Some(arg) = args.next() {
+        if arg == "--ocs-plugin-runner" {
+            if let (Some(_socket), Some(lib)) = (args.next(), args.next()) {
+                let p = std::path::PathBuf::from(lib);
+                if let Some(dir) = p.parent() {
+                    return dir.join("parts");
+                }
+            }
+        }
+    }
+    std::path::PathBuf::from("parts")
+}
+
+/// 文件名兜底解析：`<类别>_<标准号>_<规格>.dwg` → `(类别, 标准号, 规格)`。
+/// 段数不足或为空时该位留空（不报错：库文件不规范也要能列出来）。
+#[allow(dead_code)]
+fn parse_part_stem(stem: &str) -> (String, String, String) {
+    let mut it = stem.split('_').map(|x| x.trim());
+    let category = it.next().unwrap_or_default().to_string();
+    let std = it.next().unwrap_or_default().to_string();
+    // 规格里允许出现 `_`（如 `M10_40`）→ 剩余部分全部接回，保真。
+    let spec = it.collect::<Vec<_>>().join("_");
+    (category, std, spec)
+}
+
+/// 解析 `catalog.csv` 文本。列序：`类别,标准号,名称,规格,材料,单重,文件名`。
+/// - 首行若以「类别」开头视为表头跳过；`#` 开头为注释；空行忽略。
+/// - 列数不足的行走"能填多少填多少"（不丢弃，避免库文件一点点不规范就消失）。
+#[allow(dead_code)]
+fn parse_catalog_csv(text: &str) -> Vec<(String, String, String, String, String, String, String)> {
+    let mut rows = Vec::new();
+    for (idx, line) in text.lines().enumerate() {
+        let line = line.trim().trim_start_matches('\u{feff}');
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let cols: Vec<String> = line
+            .split(',')
+            .map(|c| c.trim().trim_matches('"').to_string())
+            .collect();
+        if idx == 0 && cols.first().map(|c| c.as_str()) == Some("类别") {
+            continue; // 表头
+        }
+        let get = |i: usize| cols.get(i).cloned().unwrap_or_default();
+        let file = get(6);
+        if file.is_empty() {
+            continue; // 没有文件名 → 无法插入，跳过
+        }
+        rows.push((
+            get(0),
+            get(1),
+            get(2),
+            get(3),
+            get(4),
+            get(5),
+            file,
+        ));
+    }
+    rows
+}
+
+/// 扫描指定目录（纯函数，便于测试；`parts_scan()` 传 `parts_dir()`）。
+/// 优先用 `catalog.csv`（只保留实际存在的 DWG）；没有索引则扫 `*.dwg`
+/// 并用文件名兜底解析。
+#[allow(dead_code)]
+fn parts_scan_in(dir: &std::path::Path) -> Vec<PartEntry> {
+    let dwg_names: Vec<String> = std::fs::read_dir(dir)
+        .map(|entries| {
+            entries
+                .flatten()
+                .filter(|e| {
+                    e.path()
+                        .extension()
+                        .and_then(|x| x.to_str())
+                        .map(|x| x.eq_ignore_ascii_case("dwg"))
+                        .unwrap_or(false)
+                })
+                .filter_map(|e| e.path().file_name().map(|s| s.to_string_lossy().into_owned()))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let mut out: Vec<PartEntry> = Vec::new();
+
+    if let Ok(text) = std::fs::read_to_string(dir.join("catalog.csv")) {
+        for (category, std, name, spec, material, weight, file) in parse_catalog_csv(&text) {
+            // 文件名对不上（大小写不敏感）时按原样试拼，仍不存在则跳过。
+            let matched = dwg_names
+                .iter()
+                .find(|n| n.eq_ignore_ascii_case(&file))
+                .cloned()
+                .unwrap_or_else(|| file.clone());
+            let path = dir.join(&matched);
+            if !path.exists() {
+                continue;
+            }
+            out.push(PartEntry {
+                category,
+                std,
+                name,
+                spec,
+                material,
+                weight,
+                path: path.to_string_lossy().into_owned(),
+            });
+        }
+    } else {
+        for name in &dwg_names {
+            let stem = std::path::Path::new(name)
+                .file_stem()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            let (category, std, spec) = parse_part_stem(&stem);
+            out.push(PartEntry {
+                category,
+                std,
+                name: stem.clone(),
+                spec,
+                material: String::new(),
+                weight: String::new(),
+                path: dir.join(name).to_string_lossy().into_owned(),
+            });
+        }
+    }
+
+    out.sort_by(|a, b| {
+        (&a.category, &a.std, &a.spec, &a.path).cmp(&(&b.category, &b.std, &b.spec, &b.path))
+    });
+    out
+}
+
+/// 扫描标准件库（`parts_dir()`）。
+#[allow(dead_code)]
+pub(crate) fn parts_scan() -> Vec<PartEntry> {
+    parts_scan_in(&parts_dir())
+}
+
 /// 表面粗糙度交互：点选插入点 → 打开粗糙度 GUI（rough.html?x=&y=）。
 struct RoughnessPlace {
     sender: std::sync::Arc<dyn PluginRequestSender>,
@@ -1822,6 +1996,80 @@ export_plugin!(OcsmPlugin);
 
 #[cfg(test)]
 mod tests {
+    // ── 标准件库扫描 ──────────────────────────────────────────────
+    #[test]
+    fn parse_part_stem_splits_three_parts() {
+        assert_eq!(
+            parse_part_stem("bolt_GBT5782_M10x40"),
+            ("bolt".to_string(), "GBT5782".to_string(), "M10x40".to_string())
+        );
+        // 规格里含 `_` → 剩余段全部接回（保真）。
+        assert_eq!(
+            parse_part_stem("bearing_GBT276_M10_40"),
+            ("bearing".to_string(), "GBT276".to_string(), "M10_40".to_string())
+        );
+        // 段数不足：缺的空着，不报错。
+        assert_eq!(
+            parse_part_stem("washer"),
+            ("washer".to_string(), String::new(), String::new())
+        );
+    }
+
+    #[test]
+    fn parse_catalog_csv_skips_header_comments_and_blanks() {
+        let text = "类别,标准号,名称,规格,材料,单重,文件名\n\
+                    # 这是注释\n\
+                    \n\
+                    bolt,GB/T 5782,六角头螺栓,M10x40,8.8,31.5,bolt_GBT5782_M10x40.dwg\n\
+                    nut,GB/T 6170,1型六角螺母,M10,8,11,\n";
+        let rows = parse_catalog_csv(text);
+        assert_eq!(rows.len(), 1, "表头/注释/空行/无文件名行都应被跳过");
+        assert_eq!(rows[0].0, "bolt");
+        assert_eq!(rows[0].2, "六角头螺栓");
+        assert_eq!(rows[0].6, "bolt_GBT5782_M10x40.dwg");
+    }
+
+    #[test]
+    fn parts_scan_without_index_falls_back_to_filename() {
+        let dir = std::env::temp_dir().join(format!("ocsm_parts_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("temp parts dir");
+        std::fs::write(dir.join("bolt_GBT5782_M10x40.dwg"), b"not a real dwg").unwrap();
+        std::fs::write(dir.join("readme.txt"), b"ignore me").unwrap();
+
+        let entries = parts_scan_in(&dir);
+        assert_eq!(entries.len(), 1, "非 dwg 文件必须被忽略");
+        assert_eq!(entries[0].category, "bolt");
+        assert_eq!(entries[0].std, "GBT5782");
+        assert_eq!(entries[0].spec, "M10x40");
+        assert_eq!(entries[0].name, "bolt_GBT5782_M10x40", "无索引时名称回退为文件名主干");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn parts_scan_with_index_uses_catalog_and_drops_missing_files() {
+        let dir = std::env::temp_dir().join(format!("ocsm_parts_idx_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("temp parts dir");
+        std::fs::write(dir.join("bolt_GBT5782_M10x40.dwg"), b"x").unwrap();
+        std::fs::write(
+            dir.join("catalog.csv"),
+            "类别,标准号,名称,规格,材料,单重,文件名\n\
+             bolt,GB/T 5782,六角头螺栓,M10x40,8.8级,31.5,bolt_GBT5782_M10x40.dwg\n\
+             nut,GB/T 6170,1型六角螺母,M10,8级,11,nut_GBT6170_M10.dwg\n",
+        )
+        .unwrap();
+
+        let entries = parts_scan_in(&dir);
+        assert_eq!(entries.len(), 1, "索引里缺失的 DWG 必须被跳过");
+        assert_eq!(entries[0].name, "六角头螺栓", "有索引时用中文名称而非文件名");
+        assert_eq!(entries[0].material, "8.8级");
+        assert_eq!(entries[0].weight, "31.5");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// 端口/句柄不一致时才重写链接（避免每次开图都改图纸）。
     #[test]
     fn needs_link_rewrite_only_when_stale() {
