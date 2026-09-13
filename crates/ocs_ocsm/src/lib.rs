@@ -199,7 +199,7 @@ pub(crate) fn dim_style_defs() -> Vec<DimStyleDef> {
         dimscale: 1.0,
         dimtad: 1,
         dimjust: 0,
-        dimdec: 4,
+        dimdec: 2,
         dimlunit: 2,
         dimzin: 8,
         dimaunit: 0,
@@ -318,6 +318,12 @@ impl BuiltinPlugin for OcsmPlugin {
                                     label: "尺寸引导",
                                     icon: IconKind::Glyph("🖱️"),
                                     event: ModuleEvent::Command("OCSMDIMGULIDE".to_string()),
+                                }),
+                                RibbonItem::LargeTool(ToolDef {
+                                    id: "OCSMDIM2GB",
+                                    label: "标注转GB",
+                                    icon: IconKind::Glyph("🔁"),
+                                    event: ModuleEvent::Command("OCSMDIM2GB".to_string()),
                                 }),
                             ],
                         },
@@ -1823,7 +1829,7 @@ mod tests {
         assert_eq!(d.dimtad, 1);
         assert_eq!(d.dimtoh, true); // 文字强制水平（general.dxf dimtoh=1）
         assert_eq!(d.dimtofl, true);
-        assert_eq!(d.dimdec, 4); // 4 位小数（general.dxf dimdec=4）
+        assert_eq!(d.dimdec, 2); // 2 位小数（用户指定：原为 4）
         assert_eq!(d.dimlunit, 2);
         assert_eq!(d.dimzin, 8);
         assert_eq!(d.dimclrd, 130);

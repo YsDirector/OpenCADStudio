@@ -239,24 +239,79 @@ fn text_param(doc: &Doc, base: &DimensionBase) -> Option<String> {
     None
 }
 
-/// 样式的极限偏差 → 公差堆叠参数（DIMTOL）。
+/// 读实体 XDATA（ACAD/DSTYLE）里的某个覆盖值。
+fn xdata_int(base: &DimensionBase, code: i16) -> Option<i16> {
+    for rec in base.common.extended_data.records() {
+        if rec.application_name != "ACAD" {
+            continue;
+        }
+        for w in rec.values.windows(2) {
+            if matches!(w[0], XDataValue::Integer16(c) if c == code) {
+                if let XDataValue::Integer16(v) = w[1] {
+                    return Some(v);
+                }
+            }
+        }
+    }
+    None
+}
+
+fn xdata_real(base: &DimensionBase, code: i16) -> Option<f64> {
+    for rec in base.common.extended_data.records() {
+        if rec.application_name != "ACAD" {
+            continue;
+        }
+        for w in rec.values.windows(2) {
+            if matches!(w[0], XDataValue::Integer16(c) if c == code) {
+                if let XDataValue::Real(v) = w[1] {
+                    return Some(v);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// 公差（极限偏差）→ 公差堆叠参数。取值优先级与宿主一致：
+/// **实体 XDATA DSTYLE 覆盖**（DIMTOL 71 / DIMTP 47 / DIMTM 48 / DIMTDEC 272）
+/// 优先于**样式表**（dimtol/dimtp/dimtm/dimtdec）——OCS 自带公差正是写在实体覆盖里，
+/// 只读样式会全部丢掉（用户实测反馈）。
+/// 返回 (上偏差, 下偏差) 文本；无公差时 (None, None)。
 fn tol_params(doc: &Doc, base: &DimensionBase) -> (Option<String>, Option<String>) {
-    let Some(st) = source_style(doc, base) else {
-        return (None, None);
-    };
-    if !st.dimtol {
+    let st = source_style(doc, base);
+    let dimtol = xdata_int(base, 71)
+        .map(|v| v != 0)
+        .or_else(|| st.map(|s| s.dimtol))
+        .unwrap_or(false);
+    let dimlim = xdata_int(base, 72)
+        .map(|v| v != 0)
+        .or_else(|| st.map(|s| s.dimlim))
+        .unwrap_or(false);
+    if !dimtol && !dimlim {
         return (None, None);
     }
-    let dec = st.dimtdec.max(0) as usize;
-    let up = if st.dimtp.abs() > 1e-12 {
-        format!("+{:.*}", dec, st.dimtp)
-    } else if st.dimtm.abs() > 1e-12 {
-        " 0".to_string()
-    } else {
+    let tp = xdata_real(base, 47)
+        .or_else(|| st.map(|s| s.dimtp))
+        .unwrap_or(0.0);
+    let tm = xdata_real(base, 48)
+        .or_else(|| st.map(|s| s.dimtm))
+        .unwrap_or(0.0);
+    let dec = xdata_int(base, 272)
+        .or_else(|| st.map(|s| s.dimtdec))
+        .map(|v| v.max(0) as usize)
+        .unwrap_or(2)
+        .min(8);
+    if tp.abs() <= 1e-12 && tm.abs() <= 1e-12 {
         return (None, None);
+    }
+    // 上/下偏差文本：对照 OCSM 既有画法 `\S+0.024^  0;`（正号显式，零值用空格对齐）。
+    let up = if tp.abs() > 1e-12 {
+        format!("+{:.*}", dec, tp)
+    } else {
+        " 0".to_string()
     };
-    let dn = if st.dimtm.abs() > 1e-12 {
-        format!("-{:.*}", dec, st.dimtm)
+    let dn = if tm.abs() > 1e-12 {
+        format!("-{:.*}", dec, tm)
     } else {
         " 0".to_string()
     };
@@ -436,6 +491,9 @@ fn convert_radial(
     };
     let mut params = base_params(gt, dist, Some(effective_dec(doc, base)));
     params.text = displayed_text(doc, base);
+    let (up, dn) = tol_params(doc, base);
+    params.up = up;
+    params.dn = dn;
 
     let dim = gs::build_dimension(c, doc, to_arr(center), to_arr(rim), &params, style)?;
     Ok(Entity::Dimension(dim))
@@ -500,6 +558,9 @@ fn convert_arclen(
     };
     let mut params = base_params(GuideType::ArcLen, dist, Some(effective_dec(doc, base)));
     params.text = displayed_text(doc, base);
+    let (up, dn) = tol_params(doc, base);
+    params.up = up;
+    params.dn = dn;
 
     // 在临时文档里造出引导 ARC（apply_arclen 的输入是引导弧 handle）。
     let mut scratch = doc.clone();
@@ -1302,6 +1363,13 @@ mod tests {
         l1.base.definition_point = l1.definition_point;
         l1.base.actual_measurement = 50.0;
         l1.base.style_name = "Standard".into();
+        // OCS 自带公差（实体级 DSTYLE 覆盖）：+0.1 / −0.14（3 位小数）。
+        l1.base.common.extended_data.add_record(dstyle_record(&[
+            (71, XDataValue::Integer16(1)),
+            (47, XDataValue::Real(0.1)),
+            (48, XDataValue::Real(0.14)),
+            (272, XDataValue::Integer16(3)),
+        ]));
         doc.add_entity(Entity::Dimension(Dimension::Linear(l1))).unwrap();
 
         let mut l2 = DimensionLinear::vertical(
@@ -1331,6 +1399,12 @@ mod tests {
         r1.base.definition_point = r1.base.text_middle_point;
         r1.base.actual_measurement = 25.0;
         r1.base.style_name = "Standard".into();
+        r1.base.common.extended_data.add_record(dstyle_record(&[
+            (71, XDataValue::Integer16(1)),
+            (47, XDataValue::Real(0.02)),
+            (48, XDataValue::Real(0.02)),
+            (272, XDataValue::Integer16(2)),
+        ]));
         doc.add_entity(Entity::Dimension(Dimension::Radius(r1))).unwrap();
 
         let mut circle = Circle::new();
@@ -1458,5 +1532,107 @@ mod tests {
                 "引用的块 {referenced} 未列入 plan.blocks（names={names:?}）"
             );
         }
+    }
+    /// 造一个 OCS 风格的实体级 DSTYLE 覆盖记录（与宿主 dim_override 写入同形）。
+    fn dstyle_record(pairs: &[(i16, XDataValue)]) -> acadrust::xdata::ExtendedDataRecord {
+        let mut rec = acadrust::xdata::ExtendedDataRecord::new("ACAD");
+        rec.add_value(XDataValue::String("DSTYLE".into()));
+        rec.add_value(XDataValue::ControlString("{".into()));
+        for (code, val) in pairs {
+            rec.add_value(XDataValue::Integer16(*code));
+            rec.add_value(val.clone());
+        }
+        rec.add_value(XDataValue::ControlString("}".into()));
+        rec
+    }
+
+    /// 用户实测反馈：OCS 自带公差写在**实体 XDATA 覆盖**里，D2G 必须带过来
+    /// （只读样式表会全丢）。线性：堆叠进 dimtext。
+    #[test]
+    fn plan_carries_entity_level_tolerance_linear() {
+        let mut l = DimensionLinear::horizontal(
+            Vector3::new(0.0, 0.0, 0.0),
+            Vector3::new(50.0, 0.0, 0.0),
+        );
+        l.definition_point = Vector3::new(25.0, 10.0, 0.0);
+        l.base.actual_measurement = 50.0;
+        l.base.style_name = "Standard".into();
+        l.base.common.extended_data.add_record(dstyle_record(&[
+            (71, XDataValue::Integer16(1)),   // DIMTOL
+            (47, XDataValue::Real(0.1)),      // DIMTP
+            (48, XDataValue::Real(0.14)),     // DIMTM
+            (272, XDataValue::Integer16(3)),  // DIMTDEC
+        ]));
+        let doc = doc_with(vec![Entity::Dimension(Dimension::Linear(l))]);
+
+        let plan = plan(&doc, &[]);
+        assert_eq!(plan.converted, 1, "{:?}", plan.skipped);
+        let Entity::Dimension(new) = &plan.adds[0] else {
+            panic!()
+        };
+        let text = new.base().text.clone();
+        assert!(
+            text.contains("\\S+0.100^-0.140;"),
+            "公差堆叠应来自实体覆盖（3 位小数），实际 {text:?}"
+        );
+    }
+
+    /// 直径/半径（块内 MTEXT 形态）同样带公差。
+    #[test]
+    fn plan_carries_entity_level_tolerance_radial() {
+        let mut r = DimensionRadius::new(
+            Vector3::new(0.0, 0.0, 0.0),
+            Vector3::new(0.0, 20.0, 0.0),
+        );
+        r.base.text_middle_point = Vector3::new(0.0, 26.0, 0.0);
+        r.base.definition_point = r.base.text_middle_point;
+        r.base.actual_measurement = 20.0;
+        r.base.style_name = "Standard".into();
+        r.base.common.extended_data.add_record(dstyle_record(&[
+            (71, XDataValue::Integer16(1)),
+            (47, XDataValue::Real(0.05)),
+            (48, XDataValue::Real(0.05)),
+            (272, XDataValue::Integer16(2)),
+        ]));
+        let doc = doc_with(vec![Entity::Dimension(Dimension::Radius(r))]);
+
+        let plan = plan(&doc, &[]);
+        assert_eq!(plan.converted, 1, "{:?}", plan.skipped);
+        let text = block_text(&plan.blocks[0]);
+        assert!(
+            text.contains("\\S+0.05^-0.05;"),
+            "半径块内文字应含公差堆叠，实际 {text:?}"
+        );
+    }
+
+    /// 样式表里的公差（无实体覆盖）照样带过来。
+    #[test]
+    fn plan_carries_style_level_tolerance() {
+        let mut doc = Doc::new();
+        let mut st = acadrust::tables::DimStyle::new("STDTOL");
+        st.dimtol = true;
+        st.dimtp = 0.2;
+        st.dimtm = 0.2;
+        st.dimtdec = 1;
+        doc.dim_styles.add_or_replace(st);
+
+        let mut l = DimensionLinear::horizontal(
+            Vector3::new(0.0, 0.0, 0.0),
+            Vector3::new(30.0, 0.0, 0.0),
+        );
+        l.definition_point = Vector3::new(15.0, 6.0, 0.0);
+        l.base.actual_measurement = 30.0;
+        l.base.style_name = "STDTOL".into();
+        doc.add_entity(Entity::Dimension(Dimension::Linear(l))).unwrap();
+
+        let plan = plan(&doc, &[]);
+        let Entity::Dimension(new) = &plan.adds[0] else {
+            panic!()
+        };
+        assert!(
+            new.base().text.contains("\\S+0.2^-0.2;"),
+            "样式公差应带过来，实际 {:?}",
+            new.base().text
+        );
     }
 }

@@ -368,9 +368,9 @@ fn guide_geom_kind(
 /// 构造与 `OCSMDIMGULIDE1-general.dxf` 标注一致的 DSTYLE XDATA 覆盖
 /// （ACAD/DSTYLE）。OCS 渲染 Dimension 时优先用 XDATA 覆盖样式表
 /// （dim_override），因此必须写入这些参数才能复刻示例渲染：
-/// dimdec=4（4 位小数）、dimtoh=1（文字水平）、dimdli=0.38 等。
+/// dimdec=2（2 位小数）、dimtoh=1（文字水平）、dimdli=0.38 等。
 fn dim_override_record() -> ExtendedDataRecord {
-    dim_override_record_dec(4)
+    dim_override_record_dec(2)
 }
 
 /// `dec`：DIMDEC(271) 测量值小数位数覆盖。
@@ -1111,7 +1111,7 @@ pub(crate) fn build_dimension(
         GuideType::ArcLen => return Err("弧长标注走 do_apply 独立分支".into()),
         GuideType::Weld => return Err("焊接符号走 do_apply 独立分支".into()),
     };
-    // 用户指定小数位数：覆盖 XDATA DSTYLE 里的 DIMDEC(271)（默认样式 4）。
+    // 用户指定小数位数：覆盖 XDATA DSTYLE 里的 DIMDEC(271)（样式默认 2）。
     if let Some(d) = params.dec {
         set_dimdec(&mut dim, d.min(8) as i16);
     }
@@ -1879,7 +1879,14 @@ pub(crate) fn apply_arclen(
         }
         _ => auto_value,
     };
-    let body = render_text_template(&text_visible, measurement, None);
+    // 公差（极限偏差）：与线性/直径半径同款堆叠 `\H0.71x;\C2;\S{up}^{dn};`。
+    let tol_seg: Option<String> = match (&params.up, &params.dn) {
+        (Some(up), Some(dn)) if !up.is_empty() && !dn.is_empty() => {
+            Some(format!("\\H0.71x;\\C2;\\S{}^{};", up, dn))
+        }
+        _ => None,
+    };
+    let body = render_text_template(&text_visible, measurement, tol_seg.as_deref());
 
     // 尺寸弧几何。
     let (arc_center, arc_r) = if side_out {
@@ -4329,7 +4336,7 @@ mod tests {
         let xd = &dim.base().common.extended_data;
         let rec = xd.get_record("ACAD").expect("应有 ACAD/DSTYLE XDATA");
         assert!(matches!(rec.values.first(), Some(V::String(s)) if s == "DSTYLE"));
-        // 扁平流必须含 (271 → 4) dimdec 与 (74 → 1) dimtoh。
+        // 扁平流必须含 (271 → 2) dimdec 与 (74 → 1) dimtoh。
         let mut codes = std::collections::HashMap::new();
         let mut it = rec.values.iter().skip(1).peekable();
         while let Some(v) = it.next() {
@@ -4343,7 +4350,7 @@ mod tests {
                 }
             }
         }
-        assert_eq!(codes.get(&271).map(|s| s.as_str()), Some("int4"));
+        assert_eq!(codes.get(&271).map(|s| s.as_str()), Some("int2"));
         assert_eq!(codes.get(&74).map(|s| s.as_str()), Some("int1"));
         assert_eq!(codes.get(&41).map(|s| s.as_str()), Some("real2.5"));
     }
