@@ -4261,12 +4261,8 @@ fn apply_weld(
 
 /// 引线标注构件（块局部坐标已算好；ATTDEF 模板与取值分列，便于 D2G 复用）。
 pub(crate) struct LeaderParts {
-    /// 块内实体（含 ATTDEF；层与颜色已设）。
+    /// 块内实体（含上/下侧 MTEXT；层与颜色已设）。
     pub members: Vec<acadrust::EntityType>,
-    /// ATTDEF 模板（与 `values` 一一对应）。
-    pub att_templates: Vec<acadrust::entities::AttributeDefinition>,
-    /// 文字取值（空 = INSERT 时占位空格）。
-    pub values: Vec<String>,
     /// 图幅倍率。
     pub scale: f64,
     /// 肩线长度（世界单位，内容驱动）。
@@ -4368,39 +4364,43 @@ pub(crate) fn build_leader_parts(
     // 肩线（内容驱动全长；本功能不画虚线/圆/旗/尾叉）
     members.push(weld_member_line(tp(0.0, 0.0), tp(blen, 0.0), 4));
 
-    // ── ATTDEF×2：上侧（v=+2.750）、下侧（v=−2.750）。
-    //    文字自**拐点**沿肩线向外偏移 SLOT（用户定：不沿用焊接"自坐标较小端
-    //    起算"）——左/下向时改用右对齐，使文字同样"向外展开"，与右/上向镜像对称。──
+    // ── 上/下侧文字：**块内 MTEXT**（不是 ATTDEF）。
+    //    为什么用 MTEXT：只有 MTEXT 路径会解析内联字体码 `{\Fgdt;x}` —— 工程
+    //    符号（如 x = 深度符号）必须走它；ATTRIB/ATTDEF 会把代码原样画出来。
+    //    对齐：自**拐点**沿肩线向外偏移 SLOT（左/下向时右对齐 → 镜像对称）。──
     let dir_out: f64 = if corner_at_origin { 1.0 } else { -1.0 };
     let corner_ru: f64 = if corner_at_origin { 0.0 } else { blen_ru };
     let text_t_ru = corner_ru + dir_out * SLOT;
-    let mut att_templates: Vec<AttributeDefinition> = Vec::new();
-    for (tag, v) in [("上侧引线文字T′", 2.750_f64), ("下侧引线文字T", -2.750_f64)] {
-        let (x, y) = tr(text_t_ru, v);
-        let mut ad = AttributeDefinition::new(tag.to_string(), String::new(), " ".into());
-        ad.insertion_point = Vector3::new(x, y, 0.0);
-        ad.alignment_point = ad.insertion_point;
-        ad.height = 3.5 * s;
-        ad.rotation = text_rot; // 竖肩线 → 90°（沿肩线书写）
-        ad.width_factor = 0.7;
-        ad.text_style = "OCSM_GB".into();
-        if dir_out > 0.0 {
-            ad.set_alignment(HorizontalAlignment::Left, VerticalAlignment::Middle);
-        } else {
-            ad.set_alignment(HorizontalAlignment::Right, VerticalAlignment::Middle);
+    for (value, v) in [(upper, 2.750_f64), (lower, -2.750_f64)] {
+        if value.trim().is_empty() {
+            continue; // 空文字 → 不画（无需占位）
         }
-        ad.flags.preset = true; // 插入时不逐项提示
-        let mut e = E::AttributeDefinition(ad.clone());
+        let (x, y) = tr(text_t_ru, v);
+        let mut m = acadrust::entities::MText::new();
+        // 行宽自适应：MText::new() 默认 rectangle_width=10，长文字（含 GDT 字体码）
+        // 会被宿主按 10 单位折行；按可剥格式码后的可见宽度估足。
+        let visible_len = value
+            .chars()
+            .filter(|c| !matches!(c, '\\' | '{' | '}' | ';' | '^'))
+            .count() as f64;
+        m.rectangle_width = (visible_len * 3.5 * s * 0.75).max(10.0 * s);
+        m.value = value.to_string();
+        m.insertion_point = Vector3::new(x, y, 0.0);
+        m.height = 3.5 * s;
+        m.rotation = text_rot; // 竖肩线 → 90°（沿肩线书写）
+        m.style = "OCSM_GB".into();
+        m.attachment_point = if dir_out > 0.0 {
+            acadrust::entities::AttachmentPoint::MiddleLeft
+        } else {
+            acadrust::entities::AttachmentPoint::MiddleRight
+        };
+        let mut e = E::MText(m);
         set_member_layer(&mut e, "8符号标注层");
         e.common_mut().color = Color::from_index(3);
         members.push(e);
-        att_templates.push(ad);
     }
-    let values = vec![upper.to_string(), lower.to_string()];
     Ok(LeaderParts {
         members,
-        att_templates,
-        values,
         scale: s,
         blen,
         horizontal,
@@ -4408,20 +4408,10 @@ pub(crate) fn build_leader_parts(
 }
 
 /// 由构件组 INSERT（attributes = 块内 ATTDEF 位 × 变换；空值占位空格）。
-pub(crate) fn leader_insert(
-    block_name: &str,
-    p0: [f64; 3],
-    parts: &LeaderParts,
-) -> acadrust::entities::Insert {
-    use acadrust::entities::{AttributeEntity, Entity as _, Insert};
+pub(crate) fn leader_insert(block_name: &str, p0: [f64; 3]) -> acadrust::entities::Insert {
+    use acadrust::entities::Insert;
     let mut ins = Insert::new(block_name.to_string(), Vector3::new(p0[0], p0[1], 0.0));
     ins.common.layer = "8符号标注层".into();
-    for (ad, val) in parts.att_templates.iter().zip(parts.values.iter()) {
-        let val = if val.trim().is_empty() { " ".to_string() } else { val.clone() };
-        let mut attr = AttributeEntity::from_definition(ad, Some(val));
-        attr.apply_transform(&ins.get_transform());
-        ins.attributes.push(attr);
-    }
     ins
 }
 
@@ -4482,7 +4472,7 @@ fn apply_leader(
         "AddBlockRecord",
     )?;
 
-    let ins = leader_insert(&block_name, p0, &parts);
+    let ins = leader_insert(&block_name, p0);
     let handle = match req_timed(
         sender,
         PluginRequest::AddEntities(vec![E::Insert(ins)]),
@@ -4511,8 +4501,6 @@ fn apply_leader(
 /// ATTDEF tag → 英文代号（用于 values 查询 / attributes 对齐）。
 fn tag_alias(tag: &str) -> &str {
     match tag {
-        "上侧引线文字T′" => "T′",
-        "下侧引线文字T" => "T",
         "粗糙度上限A′" => "A′",
         "粗糙度下限A" => "A",
         "备注E" => "E",
@@ -6840,6 +6828,16 @@ mod weld_tests {
             .collect()
     }
 
+    fn mtexts_of(members: &[E]) -> Vec<acadrust::entities::MText> {
+        members
+            .iter()
+            .filter_map(|e| match e {
+                E::MText(m) => Some(m.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
     fn kinds(members: &[E]) -> (usize, usize, usize, usize, usize, usize) {
         // (line, circle, arc, solid, text, attdef)
         let mut c = (0, 0, 0, 0, 0, 0);
@@ -7327,33 +7325,15 @@ mod weld_tests {
         let out = apply_leader(&sender, &doc, P_TIP, P0, P_END, &p).unwrap();
         assert!(out.contains("\"block\":\"*L1\""), "块名 *L1: {out}");
         let members = mock.block_entities("*L1");
-        assert_eq!(kinds(&members), (2, 0, 0, 1, 0, 2), "2 线 + 1 实心箭头 + 2 ATTDEF");
-        // 无虚线/无符号几何：除箭头外颜色只有青4（线）与绿3（文字）。
+        // 全空文字：2 线 + 1 实心箭头，无文字对象（不必占位）。
+        assert_eq!(kinds(&members), (2, 0, 0, 1, 0, 0), "2 线 + 1 箭头 + 无 ATTDEF");
+        assert!(mtexts_of(&members).is_empty(), "空文字不画 MTEXT");
         assert!(lines_of(&members)
             .iter()
             .all(|l| l.common.color == acadrust::types::Color::from_index(4)));
-        // 箭头：实心，长 2.5（空文档比例 1:1）。
         let sol = &solids_of(&members)[0];
-        let d = sol.first_corner.distance(&sol.third_corner);
-        assert!(d > 0.0, "箭头实心体存在");
-        // ATTDEF：上 ±2.750、锚点 x = P0.x + 17.413；左对齐、OCSM_GB、高 3.5。
-        let ads = attdefs_of(&members);
-        assert_eq!(ads.len(), 2);
-        assert_eq!(ads[0].tag, "上侧引线文字T′");
-        assert_eq!(ads[1].tag, "下侧引线文字T");
-        // 块局部坐标（原点 = 拐点）：上 17.413/+2.750、下 17.413/−2.750。
-        assert!((ads[0].insertion_point.x - 17.413).abs() < 1e-9);
-        assert!((ads[0].insertion_point.y - 2.750).abs() < 1e-9);
-        assert!((ads[1].insertion_point.x - 17.413).abs() < 1e-9);
-        assert!((ads[1].insertion_point.y + 2.750).abs() < 1e-9);
-        for a in &ads {
-            assert_eq!(a.height, 3.5);
-            assert_eq!(a.width_factor, 0.7);
-            assert_eq!(a.text_style, "OCSM_GB");
-            assert_eq!(a.rotation, 0.0);
-            assert!(a.flags.preset);
-        }
-        // 空文字 → INSERT.attributes 占位空格（宿主空 default 会渲染 tag 名）。
+        assert!(sol.first_corner.distance(&sol.third_corner) > 0.0, "箭头实心体存在");
+        // INSERT 无属性（文字在块内 MTEXT，不再走 ATTRIB）。
         let doc2 = mock.doc.lock().unwrap();
         let ins = doc2
             .entities()
@@ -7362,8 +7342,35 @@ mod weld_tests {
                 _ => None,
             })
             .expect("INSERT");
-        assert_eq!(ins.attributes.len(), 2);
-        assert!(ins.attributes.iter().all(|a| a.value == " "));
+        assert!(ins.attributes.is_empty(), "MTEXT 方案不再用 ATTRIB");
+        drop(doc2);
+
+        // 有文字：块内 2 个 MTEXT —— 上 +2.750 / 下 −2.750，锚点 x = 17.413（块局部）。
+        let mock2 = Arc::new(MockSender::new(weld_doc()));
+        let sender2: Arc<dyn PluginRequestSender> = mock2.clone();
+        apply_leader(&sender2, &weld_doc(), P_TIP, P0, P_END, &leader_params("通孔", "深20")).unwrap();
+        let ms = mtexts_of(&mock2.block_entities("*L1"));
+        assert_eq!(ms.len(), 2, "上/下各一个 MTEXT");
+        assert_eq!(ms[0].value, "通孔");
+        assert_eq!(ms[1].value, "深20");
+        assert!((ms[0].insertion_point.x - 17.413).abs() < 1e-9);
+        assert!((ms[0].insertion_point.y - 2.750).abs() < 1e-9);
+        assert!((ms[1].insertion_point.x - 17.413).abs() < 1e-9);
+        assert!((ms[1].insertion_point.y + 2.750).abs() < 1e-9);
+        for m in &ms {
+            assert_eq!(m.height, 3.5);
+            assert_eq!(m.style, "OCSM_GB");
+            assert_eq!(m.rotation, 0.0);
+            // 行宽给足：不会被宿主按默认 10 单位折行。
+            assert!(m.rectangle_width >= 10.0);
+            assert_eq!(m.common.layer, "8符号标注层");
+            assert_eq!(m.common.color, acadrust::types::Color::from_index(3));
+        }
+        // 左向（dir_out>0）→ MiddleLeft 对齐。
+        assert!(matches!(
+            ms[0].attachment_point,
+            acadrust::entities::AttachmentPoint::MiddleLeft
+        ));
     }
 
     /// 肩线长度内容驱动：文字越长肩线越长；两行文字取较大者。
@@ -7391,22 +7398,17 @@ mod weld_tests {
 
     /// 文字值进 INSERT.attributes（上/下侧各一）。
     #[test]
-    fn apply_leader_writes_attribute_values() {
+    fn apply_leader_writes_mtext_values() {
         let mock = Arc::new(MockSender::new(weld_doc()));
         let sender: Arc<dyn PluginRequestSender> = mock.clone();
         let doc = weld_doc();
         let p = leader_params("通孔", "深10");
         apply_leader(&sender, &doc, P_TIP, P0, P_END, &p).unwrap();
-        let doc2 = mock.doc.lock().unwrap();
-        let ins = doc2
-            .entities()
-            .find_map(|e| match e {
-                E::Insert(i) => Some(i.clone()),
-                _ => None,
-            })
-            .expect("INSERT");
-        let vals: Vec<&str> = ins.attributes.iter().map(|a| a.value.as_str()).collect();
-        assert_eq!(vals, vec!["通孔", "深10"]);
+        let vals: Vec<String> = mtexts_of(&mock.block_entities("*L1"))
+            .iter()
+            .map(|m| m.value.clone())
+            .collect();
+        assert_eq!(vals, vec!["通孔".to_string(), "深10".to_string()]);
     }
 
     /// 竖肩线：文字旋转 90°（沿肩线书写、永不倒置），锚点按 v 轴换算。
@@ -7416,13 +7418,14 @@ mod weld_tests {
         let p_end = [P0[0], P0[1] + 40.0, 0.0];
         let parts = build_leader_parts(P_TIP, P0, p_end, 1.0, "A", "B").unwrap();
         assert!(!parts.horizontal);
-        let ads = attdefs_of(&parts.members);
-        assert!((ads[0].rotation - std::f64::consts::FRAC_PI_2).abs() < 1e-9);
+        let ms = mtexts_of(&parts.members);
+        assert_eq!(ms.len(), 2);
+        assert!((ms[0].rotation - std::f64::consts::FRAC_PI_2).abs() < 1e-9);
         // 竖轴内容坐标系（块局部）：n_up = (−1,0) → v 正方向为 −x，
         // 故上侧文字在肩线左侧 (−2.750, 17.413)、下侧在右侧 (+2.750, 17.413)。
-        assert!((ads[0].insertion_point.x + 2.750).abs() < 1e-9);
-        assert!((ads[0].insertion_point.y - 17.413).abs() < 1e-9);
-        assert!((ads[1].insertion_point.x - 2.750).abs() < 1e-9);
+        assert!((ms[0].insertion_point.x + 2.750).abs() < 1e-9);
+        assert!((ms[0].insertion_point.y - 17.413).abs() < 1e-9);
+        assert!((ms[1].insertion_point.x - 2.750).abs() < 1e-9);
     }
 
     /// 左向肩线：文字自**拐点**向外偏移（局部 −17.413）+ 右对齐 → 与右向镜像对称。
@@ -7431,17 +7434,14 @@ mod weld_tests {
         // 肩线自拐点向左画 40。
         let p_end = [P0[0] - 40.0, P0[1], 0.0];
         let parts = build_leader_parts(P_TIP, P0, p_end, 1.0, "通孔", "深10").unwrap();
-        let ads = attdefs_of(&parts.members);
-        // 块局部（原点 = 拐点）：肩线在 t∈[0,blen]，拐点在 t=blen（左端世界坐标更大的一侧）。
-        // 文字锚点 = 拐点 −17.413 → 局部 x = blen − (blen − 17.413) … 直接断言 −17.413。
-        assert!((ads[0].insertion_point.x + 17.413).abs() < 1e-9, "上侧文字在拐点左侧 17.413");
-        assert!((ads[1].insertion_point.x + 17.413).abs() < 1e-9);
-        // 右对齐（72=2），使文字仍向外（左）展开 → 与右向镜像对称。
-        for a in &ads {
-            assert!(
-                matches!(a.horizontal_alignment, HorizontalAlignment::Right),
-                "应为右对齐（文字向外展开）"
-            );
+        let ms = mtexts_of(&parts.members);
+        assert_eq!(ms.len(), 2);
+        // 文字锚点 = 拐点 −17.413（块局部 x = −17.413）。
+        assert!((ms[0].insertion_point.x + 17.413).abs() < 1e-9, "上侧文字在拐点左侧 17.413");
+        assert!((ms[1].insertion_point.x + 17.413).abs() < 1e-9);
+        // 右对齐（MiddleRight）→ 文字仍向外（左）展开 → 与右向镜像对称。
+        for m in &ms {
+            assert!(matches!(m.attachment_point, acadrust::entities::AttachmentPoint::MiddleRight));
         }
         // 肩线长度不受方向影响：17.413 + max(字宽) + 2（"深10"=2.45+1.45+1.45=5.35）。
         assert!((parts.blen - (17.413 + 5.35 + 2.0)).abs() < 1e-9, "{}", parts.blen);
@@ -7491,16 +7491,12 @@ mod weld_tests {
         assert_eq!(v["block"], "*L1");
         let doc2 = mock.doc.lock().unwrap();
         assert!(doc2.entities().any(|e| matches!(e, E::LwPolyline(_))), "引导 PLINE 保留");
-        let ins = doc2
-            .entities()
-            .find_map(|e| match e {
-                E::Insert(i) => Some(i.clone()),
-                _ => None,
-            })
-            .expect("INSERT");
-        let vals: Vec<&str> = ins.attributes.iter().map(|a| a.value.as_str()).collect();
-        assert_eq!(vals, vec!["通孔", "深10"]);
         drop(doc2);
+        let vals: Vec<String> = mtexts_of(&mock.block_entities("*L1"))
+            .iter()
+            .map(|m| m.value.clone())
+            .collect();
+        assert_eq!(vals, vec!["通孔".to_string(), "深10".to_string()]);
         drop(server);
         // 坏请求：4 顶点 PLINE → 报错。
         let mut doc3 = acadrust::CadDocument::new();

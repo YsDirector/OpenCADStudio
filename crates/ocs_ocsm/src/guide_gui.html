@@ -264,6 +264,10 @@
         <span class="lbl">下侧文字</span>
         <input type="text" id="l-lo" style="flex:1" placeholder="肩线下方文字（可空）">
       </div>
+      <div class="row" style="display:flex; gap:8px; align-items:center">
+        <button id="btn-gdt-leader" type="button">GDT 符号…</button>
+        <span class="gdt-hint" style="margin:0">插入工程符号（如 x=深度符号，即 GB 的深度标法）；符号后自动恢复标注字体</span>
+      </div>
       <div class="gdt-hint">肩线长度随文字自动调整</div>
     </div>
     <div class="param" id="row-param">
@@ -1587,6 +1591,11 @@ const BS_FITS = [
     }
   }
 
+  // 预览用：剥掉 MTEXT 内联字体码（`{\fGDT;x}` → `x`），否则预览里会显示原始代码。
+  function stripFontCodes(s) {
+    return String(s).replace(/\{\\[Ff][^;]*;/g, '').replace(/\}/g, '');
+  }
+
   // 引线标注预览：引线 + 实心箭头 + 肩线（主轴吸附，内容驱动长度）+ 上下侧文字（左对齐）。
   function drawLeader() {
     svg.innerHTML = '';
@@ -1603,8 +1612,8 @@ const BS_FITS = [
     const sdx = pe ? (pe.x - p0.x) : 1, sdy = pe ? (pe.y - p0.y) : 0;
     const horizontal = Math.abs(sdx) >= Math.abs(sdy);
     const SCALE = 1.0; // 预览与世界坐标 1:1（与 drawWeld 同规则）
-    const up = document.getElementById('l-up').value.trim();
-    const lo = document.getElementById('l-lo').value.trim();
+    const up = stripFontCodes(document.getElementById('l-up').value.trim());
+    const lo = stripFontCodes(document.getElementById('l-lo').value.trim());
     // 肩线长度内容驱动：文字锚点 17.413 + 单字宽（拉丁 1.45 / 中日韩 2.45）+ 末端余量 2。
     const charW = (s) => {
       let w = 0;
@@ -2348,6 +2357,12 @@ const BS_FITS = [
   } catch (e) { /* 预览降级：无符号几何 */ }
   }  // GDT 符号插入：模态窗口点选，插入 {\fGDT;<字符>}（花括号作用域自动恢复标注字体）
   const GDT_CHARS = 'abcdefghijklmnopqrstuvwxyz0123456789°±'.split('');
+  // GDT 符号插入目标：默认标注文字框；引线页聚焦哪个槽就插到哪个槽
+  let gdtTarget = null;
+  ['text', 'l-up', 'l-lo'].forEach((id) => {
+    const el = document.getElementById(id);
+    if (el && el.addEventListener) el.addEventListener('focus', () => { gdtTarget = el; });
+  });
   function insertAtCursor(el, str) {
     const s = el.selectionStart, e = el.selectionEnd;
     el.value = el.value.slice(0, s) + str + el.value.slice(e);
@@ -2365,12 +2380,20 @@ const BS_FITS = [
       b.textContent = ch;
       b.title = '插入 {\\fGDT;' + ch + '}（GDT 渲染工程符号）';
       b.addEventListener('click', () => {
-        insertAtCursor(document.getElementById('text'), '{\\fGDT;' + ch + '}');
+        insertAtCursor(gdtTarget || document.getElementById('text'), '{\\fGDT;' + ch + '}');
         closeGdtModal();
       });
       box.appendChild(b);
     });
     document.getElementById('btn-gdt').addEventListener('click', openGdtModal);
+    const btnLeader = document.getElementById('btn-gdt-leader');
+    if (btnLeader) {
+      btnLeader.addEventListener('click', () => {
+        // 引线页：插到最近聚焦的引线文字槽（默认上侧）
+        gdtTarget = document.getElementById('l-up');
+        openGdtModal();
+      });
+    }
     document.getElementById('btn-gdt-close').addEventListener('click', closeGdtModal);
     document.getElementById('gdt-modal').addEventListener('click', e => {
       if (e.target === document.getElementById('gdt-modal')) closeGdtModal();

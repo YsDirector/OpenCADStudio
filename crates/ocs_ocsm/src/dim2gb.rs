@@ -812,6 +812,7 @@ fn mtext_lines(value: &str) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     let mut cur = String::new();
     let mut chars = value.chars().peekable();
+    let mut font_scope = 0usize; // 打开的字体作用域层数（保留 \F…;）
     while let Some(ch) = chars.next() {
         match ch {
             '\\' => match chars.next() {
@@ -823,7 +824,21 @@ fn mtext_lines(value: &str) -> Vec<String> {
                 Some('~') => cur.push(' '),
                 // 单字符开关（下/上划线、删除线）：直接丢弃
                 Some('L') | Some('l') | Some('O') | Some('o') | Some('K') | Some('k') => {}
-                // 其余带 `;` 的控制码（\H2.5x; \C1; \fArial|b0; \S+0.1^-0.2; …）
+                // **字体作用域**：保留为 `{\\Fxxx;…}` —— GDT 工程符号（如 x=深度符号）
+                // 靠这个代码渲染，而引线标注的文字槽已是 MTEXT，能解析它。
+                Some(code @ ('F' | 'f')) => {
+                    cur.push('{');
+                    cur.push('\\');
+                    cur.push(code);
+                    for c3 in chars.by_ref() {
+                        cur.push(c3);
+                        if c3 == ';' {
+                            break;
+                        }
+                    }
+                    font_scope += 1;
+                }
+                // 其余带 `;` 的控制码（\H2.5x; \C1; \S+0.1^-0.2; …）
                 Some(_) => {
                     for c2 in chars.by_ref() {
                         if c2 == ';' {
@@ -833,7 +848,14 @@ fn mtext_lines(value: &str) -> Vec<String> {
                 }
                 None => {}
             },
-            '{' | '}' => {}
+            '{' => {}
+            '}' => {
+                // 字体作用域闭合（`\F` 分支自己补过 `{`）
+                if font_scope > 0 {
+                    cur.push('}');
+                    font_scope -= 1;
+                }
+            }
             '\n' | '\r' => out.push(std::mem::take(&mut cur)),
             _ => cur.push(ch),
         }
@@ -893,7 +915,7 @@ fn convert_leader(
     })
     .map_err(|e| format!("建块失败：{e}"))?;
 
-    let ins = gs::leader_insert(&block_name, p0, &parts);
+    let ins = gs::leader_insert(&block_name, p0);
     c.request(PluginRequest::AddEntities(vec![Entity::Insert(ins)]))
         .map_err(|e| format!("加实体失败：{e}"))?;
     Ok(())
@@ -1073,6 +1095,18 @@ mod tests {
             }
         }
         None
+    }
+
+    /// 块内所有 MTEXT 的文字（引线标注的上/下侧文字现在走 MTEXT）。
+    fn block_texts(block: &(String, Vec<Entity>)) -> Vec<String> {
+        block
+            .1
+            .iter()
+            .filter_map(|e| match e {
+                Entity::MText(m) => Some(m.value.clone()),
+                _ => None,
+            })
+            .collect()
     }
 
     fn block_text(block: &(String, Vec<Entity>)) -> String {
@@ -1904,8 +1938,9 @@ mod tests {
             .expect("INSERT");
         assert_eq!(ins.block_name, "*L1");
         assert_eq!(ins.common.layer, "8符号标注层");
-        let vals: Vec<&str> = ins.attributes.iter().map(|a| a.value.as_str()).collect();
-        assert_eq!(vals, vec!["通孔", " "], "第 1 行→上侧，下侧空占位");
+        assert!(ins.attributes.is_empty(), "文字走块内 MTEXT，不再用 ATTRIB");
+        let vals = block_texts(&plan.blocks[0]);
+        assert_eq!(vals, vec!["通孔".to_string()], "第 1 行→上侧；下侧为空则不画");
         assert!(plan.report().contains("引线标注 1"));
     }
 
@@ -1915,16 +1950,12 @@ mod tests {
         let (doc2, _, _) = leader_doc(Some("通孔\\P深10"));
         let plan2 = plan(&doc2, &[]);
         assert_eq!(plan2.converted, 1, "{:?}", plan2.skipped);
-        let ins = plan2
+        assert!(plan2
             .adds
             .iter()
-            .find_map(|e| match e {
-                Entity::Insert(i) => Some(i),
-                _ => None,
-            })
-            .expect("INSERT");
-        let vals: Vec<&str> = ins.attributes.iter().map(|a| a.value.as_str()).collect();
-        assert_eq!(vals, vec!["通孔", "深10"]);
+            .any(|e| matches!(e, Entity::Insert(_))), "应生成块参照");
+        let vals = block_texts(&plan2.blocks[0]);
+        assert_eq!(vals, vec!["通孔".to_string(), "深10".to_string()]);
 
         let (doc3, lh3, _) = leader_doc(Some("A\\PB\\PC"));
         let plan3 = plan(&doc3, &[]);
@@ -1951,7 +1982,7 @@ mod tests {
                 _ => None,
             })
             .expect("INSERT");
-        assert!(ins.attributes.iter().all(|a| a.value == " "));
+        assert!(block_texts(&plan.blocks[0]).is_empty(), "无文字 → 块内无 MTEXT");
         assert_eq!(plan.removes.len(), 1, "只删 Leader（无 MText）");
     }
 
