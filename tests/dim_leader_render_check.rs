@@ -33,12 +33,12 @@ fn dim_leader_under_outside_text_renders() {
     let out = std::env::var("OCSM_DIM_LEADER_PDF").unwrap_or_default();
 
     let mut scene = Scene::new();
-    let mut d = DimensionLinear::horizontal(v(0.0, 0.0), v(60.0, 0.0));
-    d.definition_point = v(0.0, -14.0); // 尺寸线在 y=-14
+    let mut d = DimensionLinear::horizontal(v(20.0, 100.0), v(80.0, 100.0));
+    d.definition_point = v(20.0, 86.0); // 尺寸线在 y=86
     d.base.definition_point = d.definition_point;
     d.base.actual_measurement = 60.0;
-    // 文字被拖到尺寸线右端之外（中线 x=78，尺寸线右端 x=60）。
-    d.base.text_middle_point = v(78.0, -11.0);
+    // 文字被拖到尺寸线右端之外（中线 x=98，尺寸线右端 x=80）。
+    d.base.text_middle_point = v(98.0, 89.0);
     d.base.insertion_point = d.base.text_middle_point;
     d.base.text_user_positioned = true;
     // OCSM 生成的标注样式：DIMTMOVE(279)=1 + 可见的字高/箭头/间隙。
@@ -53,11 +53,11 @@ fn dim_leader_under_outside_text_renders() {
     scene.add_entity(EntityType::Dimension(Dimension::Linear(d)));
 
     // 对照组：同一根标注但 DIMTMOVE=0（不画引线）。
-    let mut d0 = DimensionLinear::horizontal(v(0.0, 0.0), v(60.0, 0.0));
-    d0.definition_point = v(0.0, -40.0);
+    let mut d0 = DimensionLinear::horizontal(v(20.0, 60.0), v(80.0, 60.0));
+    d0.definition_point = v(20.0, 46.0);
     d0.base.definition_point = d0.definition_point;
     d0.base.actual_measurement = 60.0;
-    d0.base.text_middle_point = v(78.0, -37.0);
+    d0.base.text_middle_point = v(98.0, 49.0);
     d0.base.insertion_point = d0.base.text_middle_point;
     d0.base.text_user_positioned = true;
     d0.base.style_name = "Standard".into();
