@@ -238,6 +238,61 @@ impl AngleMode {
     }
 }
 
+/// 焊缝打磨方式（GB/T 324 焊缝表面加工；参考 焊接符号-焊缝打磨.dxf 第一行
+/// 角焊 6 例：不打磨 / 弧·凹 / 弧·凸 / 直线 / 双弧 / 锯齿）。弧与附加件的
+/// 几何按焊缝形式分两种风格：角焊版（倾斜右上）/ 其它焊缝版（正上方）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum GrindKind {
+    /// 不打磨（无附加件）。
+    #[default]
+    None,
+    /// 弧·凹（弧向焊缝凹入）。
+    ArcConcave,
+    /// 弧·凸（弧向外鼓；示例.dxf 用的这种）。
+    ArcConvex,
+    /// 直线（加工成平面）。
+    Line,
+    /// 双弧（鱼鳞状打磨纹）。
+    DoubleArc,
+    /// 锯齿（打磨纹）。
+    Zigzag,
+}
+
+impl GrindKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            GrindKind::None => "none",
+            GrindKind::ArcConcave => "cav",
+            GrindKind::ArcConvex => "cvx",
+            GrindKind::Line => "lin",
+            GrindKind::DoubleArc => "dbl",
+            GrindKind::Zigzag => "zig",
+        }
+    }
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s.to_ascii_lowercase().as_str() {
+            "" | "0" | "none" | "无" | "不打磨" => Some(GrindKind::None),
+            "cav" | "concave" | "凹" | "弧凹" => Some(GrindKind::ArcConcave),
+            "cvx" | "convex" | "1" | "凸" | "弧凸" => Some(GrindKind::ArcConvex),
+            "lin" | "line" | "直线" | "平面" => Some(GrindKind::Line),
+            "dbl" | "double" | "双弧" => Some(GrindKind::DoubleArc),
+            "zig" | "zigzag" | "锯齿" => Some(GrindKind::Zigzag),
+            _ => None,
+        }
+    }
+    /// 显示名（GUI/文档用）。
+    pub fn label(self) -> &'static str {
+        match self {
+            GrindKind::None => "不打磨",
+            GrindKind::ArcConcave => "弧·凹",
+            GrindKind::ArcConvex => "弧·凸",
+            GrindKind::Line => "直线",
+            GrindKind::DoubleArc => "双弧",
+            GrindKind::Zigzag => "锯齿",
+        }
+    }
+}
+
 /// 焊接符号参数（GB/T 324；仅 WELD）。
 /// 上/下侧符号名来自焊接符号表.dxf 块名（"无"/空 = 不放符号）；
 /// 下侧符号由服务端查镜像版几何。跨线单置块（参考线上的点焊缝等）
@@ -256,8 +311,8 @@ pub struct WeldParams {
     pub flag: bool,
     /// 尾部（尾叉 + 尾部注释；关 = 基准线保留全长，仅去尾叉注释）。
     pub tail: bool,
-    /// C 凸面弧 + 固定 "C" 字（上/下各一；详细语义下一轮扩展）。
-    pub c: bool,
+    /// 焊缝打磨方式（附加件；几何按焊缝形式选角焊版/其它版，下侧对称镜像）。
+    pub grind: GrindKind,
     /// 上侧厚度尺寸（文字，可空）。
     pub up_thick: String,
     /// 上侧数量长度（文字，可空）。
@@ -541,7 +596,13 @@ impl GuideParams {
                 "wcir" => weld.circle = matches!(&*v, "1" | "true" | "yes" | "on"),
                 "wflg" => weld.flag = matches!(&*v, "1" | "true" | "yes" | "on"),
                 "wtail" => weld.tail = matches!(&*v, "1" | "true" | "yes" | "on"),
-                "wc" => weld.c = matches!(&*v, "1" | "true" | "yes" | "on"),
+                // 旧键 wc=1 等价于打磨=弧·凸（向后兼容）；新键 wgr=打磨方式代号。
+                "wc" => {
+                    if matches!(&*v, "1" | "true" | "yes" | "on") {
+                        weld.grind = GrindKind::ArcConvex;
+                    }
+                }
+                "wgr" => weld.grind = GrindKind::from_str(&v).unwrap_or(GrindKind::None),
                 "wut" => weld.up_thick = v,
                 "wuq" => weld.up_qty = v,
                 "wlt" => weld.lo_thick = v,
@@ -780,8 +841,8 @@ impl GuideParams {
             if w.tail {
                 q.push("wtail=1".to_string());
             }
-            if w.c {
-                q.push("wc=1".to_string());
+            if w.grind != GrindKind::None {
+                q.push(format!("wgr={}", w.grind.as_str()));
             }
             for (k, v) in [
                 ("wut", &w.up_thick),
@@ -1021,12 +1082,13 @@ mod tests {
     fn parse_weld_url_roundtrip() {
         use crate::guide_url::GuideType as GT;
         // 全参数：上=角焊、下=点焊（镜像版）、五开关全开、五文字槽。
-        let url = "http://x/DIM/WELD/0?wu=%E8%A7%92%E7%84%8A&wl=%E7%82%B9%E7%84%8A&wdash=1&wcir=1&wflg=1&wtail=1&wc=1&wut=5&wuq=100&wlt=3&wlq=50&wtt=%E5%B0%81%E5%BA%95%E7%84%8A";
+        let url = "http://x/DIM/WELD/0?wu=%E8%A7%92%E7%84%8A&wl=%E7%82%B9%E7%84%8A&wdash=1&wcir=1&wflg=1&wtail=1&wgr=cvx&wut=5&wuq=100&wlt=3&wlq=50&wtt=%E5%B0%81%E5%BA%95%E7%84%8A";
         let p = GuideParams::from_url(url).unwrap();
         assert_eq!(p.guide_type, GT::Weld);
         assert_eq!(p.weld.upper, "角焊");
         assert_eq!(p.weld.lower, "点焊");
-        assert!(p.weld.dash && p.weld.circle && p.weld.flag && p.weld.tail && p.weld.c);
+        assert!(p.weld.dash && p.weld.circle && p.weld.flag && p.weld.tail);
+        assert_eq!(p.weld.grind, GrindKind::ArcConvex);
         assert_eq!(p.weld.up_thick, "5");
         assert_eq!(p.weld.up_qty, "100");
         assert_eq!(p.weld.lo_thick, "3");
@@ -1039,6 +1101,23 @@ mod tests {
         let p0 = GuideParams::from_url("http://x/DIM/%E7%84%8A%E6%8E%A5/0").unwrap();
         assert_eq!(p0.guide_type, GT::Weld);
         assert_eq!(p0.weld, WeldParams::default());
+        // 旧键 wc=1 向后兼容 → 打磨=弧·凸。
+        let pc = GuideParams::from_url("http://x/DIM/WELD/0?wc=1").unwrap();
+        assert_eq!(pc.weld.grind, GrindKind::ArcConvex);
+        // 6 种打磨方式解析 + 序列化往返。
+        for k in [
+            GrindKind::None, GrindKind::ArcConcave, GrindKind::ArcConvex,
+            GrindKind::Line, GrindKind::DoubleArc, GrindKind::Zigzag,
+        ] {
+            let mut pg = GuideParams::linear(LinearSub::Aligned, 0.0);
+            pg.guide_type = GT::Weld;
+            pg.weld.grind = k;
+            assert_eq!(GuideParams::from_url(&pg.to_url(1)).unwrap().weld.grind, k);
+            assert_eq!(GrindKind::from_str(k.as_str()), Some(k));
+        }
+        // 非法打磨代号 → 不打磨。
+        let bad = GuideParams::from_url("http://x/DIM/WELD/0?wgr=xyz").unwrap();
+        assert_eq!(bad.weld.grind, GrindKind::None);
         // “无”符号不上 URL（to_url 过滤），解析后仍为空串。
         let mut p1 = GuideParams::linear(LinearSub::Aligned, 0.0);
         p1.guide_type = GT::Weld;

@@ -21,7 +21,7 @@ use ocs_plugin_api::host::acadrust::xdata::{ExtendedDataRecord, XDataValue};
 use ocs_plugin_api::host::PluginRequestSender;
 use ocs_plugin_api::ipc::protocol::{PluginRequest, PluginResponse};
 
-use crate::guide_url::{GdtRow, GuideParams, GuideType, LinearSub, WeldParams};
+use crate::guide_url::{GdtRow, GrindKind, GuideParams, GuideType, LinearSub, WeldParams};
 use crate::{frame_scale_at, linear_text_pos, stamp, trim_scale, v3};
 
 /// 默认端口；占用时自动 +1 递增重试。
@@ -3401,10 +3401,136 @@ fn weld_params_json(w: &WeldParams) -> serde_json::Value {
     serde_json::json!({
         "upper": w.upper, "lower": w.lower,
         "dash": w.dash, "circle": w.circle, "flag": w.flag,
-        "tail": w.tail, "c": w.c,
+        "tail": w.tail, "grind": w.grind.as_str(),
         "up_thick": w.up_thick, "up_qty": w.up_qty,
         "lo_thick": w.lo_thick, "lo_qty": w.lo_qty, "tail_text": w.tail_text,
     })
+}
+
+/// 打磨附加件几何（相对焊缝符号锚点；上侧正排，下侧镜像 y/角度）。
+/// 数据 1:1 取自 焊接符号-焊缝打磨.dxf 两行样例（角焊版 / 其它焊缝版），
+/// 每种 6 态（不打磨 / 弧·凹 / 弧·凸 / 直线 / 双弧 / 锯齿）。
+#[derive(Debug, Clone, Copy)]
+enum WeldGrindEnt {
+    Line(f64, f64, f64, f64),
+    Arc(f64, f64, f64, f64, f64),
+}
+
+/// 角焊版（倾斜右上，第一行样例）+ 文字 "C" 位置。
+fn weld_grind_fillet(k: GrindKind) -> (&'static [WeldGrindEnt], Option<(f64, f64)>) {
+    match k {
+        GrindKind::None => (&[], None),
+        // 弧·凹：弧向焊缝凹入（样例 1.2）
+        GrindKind::ArcConcave => (
+            &[WeldGrindEnt::Arc(3.9597, 3.9598, 2.625, 181.5, 268.5)],
+            Some((4.0316, 4.9598)),
+        ),
+        // 弧·凸：向外鼓（示例.dxf + 样例 1.3）
+        GrindKind::ArcConvex => (
+            &[WeldGrindEnt::Arc(1.125, 1.125, 2.625, 1.5, 88.5)],
+            Some((4.0316, 4.9598)),
+        ),
+        // 直线（加工成平面；样例 1.4）
+        GrindKind::Line => (
+            &[WeldGrindEnt::Line(0.2475, 3.9598, 3.9598, 0.2474)],
+            Some((4.9598, 6.8159)),
+        ),
+        // 双弧（鱼鳞打磨纹；样例 1.5）
+        GrindKind::DoubleArc => (
+            &[
+                WeldGrindEnt::Line(6.3106, 6.3109, 3.7120, 3.7123),
+                WeldGrindEnt::Arc(2.6602, 4.7641, 1.4875, 135.0, 315.0),
+                WeldGrindEnt::Arc(4.7638, 2.6604, 1.4875, 135.0, 315.0),
+            ],
+            Some((6.3206, 7.3109)),
+        ),
+        // 锯齿（打磨纹；样例 1.6）
+        GrindKind::Zigzag => (
+            &[
+                WeldGrindEnt::Line(0.3712, 3.8360, 3.8360, 0.3712),
+                WeldGrindEnt::Line(4.9094, 3.1091, 3.1090, 4.9094),
+                WeldGrindEnt::Line(3.1090, 4.9094, 2.4501, 2.4501),
+                WeldGrindEnt::Line(2.4501, 2.4501, 7.3688, 3.7680),
+            ],
+            Some((4.8360, 6.5684)),
+        ),
+    }
+}
+
+/// 其它焊缝版（正上方，第二行样例；无 "C" 文字——参考文件该行无文字锚点）。
+fn weld_grind_other(k: GrindKind) -> &'static [WeldGrindEnt] {
+    match k {
+        GrindKind::None => &[],
+        // 弧·凹（样例 2.1）
+        GrindKind::ArcConcave => &[WeldGrindEnt::Arc(1.75, 7.125, 2.625, 226.5, 313.5)],
+        // 弧·凸（样例 2.3）
+        GrindKind::ArcConvex => &[WeldGrindEnt::Arc(1.75, 3.1169, 2.625, 46.5, 133.5)],
+        // 直线（样例 2.4）
+        GrindKind::Line => &[WeldGrindEnt::Line(-0.875, 4.5, 4.375, 4.5)],
+        // 双弧（样例 2.5）
+        GrindKind::DoubleArc => &[
+            WeldGrindEnt::Line(1.75, 6.775, 1.75, 10.45),
+            WeldGrindEnt::Arc(0.2625, 6.775, 1.4875, 180.0, 0.0),
+            WeldGrindEnt::Arc(3.2375, 6.775, 1.4875, 180.0, 0.0),
+        ],
+        // 锯齿（样例 2.6）
+        GrindKind::Zigzag => &[
+            WeldGrindEnt::Line(-0.7, 4.5, 4.2, 4.5),
+            WeldGrindEnt::Line(3.0235, 7.195, 0.4774, 7.195),
+            WeldGrindEnt::Line(1.7504, 4.99, 4.2965, 9.4),
+        ],
+    }
+}
+
+/// 追加打磨附加件（色 31；mirror = 下侧对称镜像：y 取反、弧角反向）。
+/// 无焊缝符号的侧不调用（用户确认：无符号侧不画打磨）。
+fn push_weld_grind(
+    members: &mut Vec<acadrust::EntityType>,
+    k: GrindKind,
+    is_fillet: bool,
+    mirror: bool,
+    ox: f64,
+    oy: f64,
+    s: f64,
+) {
+    if k == GrindKind::None {
+        return;
+    }
+    let (ents, ctext) = if is_fillet {
+        weld_grind_fillet(k)
+    } else {
+        (weld_grind_other(k), None)
+    };
+    let my = |y: f64| if mirror { -y } else { y };
+    for e in ents {
+        match *e {
+            WeldGrindEnt::Line(x1, y1, x2, y2) => members.push(weld_member_line(
+                (ox + x1 * s, oy + my(y1) * s),
+                (ox + x2 * s, oy + my(y2) * s),
+                1.0,
+                31,
+            )),
+            WeldGrindEnt::Arc(cx, cy, r, a0, a1) => {
+                // 镜像后仍保持 CCW：角度取反并交换起止（−a1 → −a0）。
+                let (b0, b1) = if mirror {
+                    ((-a1).rem_euclid(360.0), (-a0).rem_euclid(360.0))
+                } else {
+                    (a0, a1)
+                };
+                members.push(weld_member_arc(
+                    (ox + cx * s, oy + my(cy) * s),
+                    r * s,
+                    b0,
+                    b1,
+                    1.0,
+                ));
+            }
+        }
+    }
+    // 角焊版带固定 "C" 字（参考第一行文字锚点；其它版无文字）。
+    if let Some((tx, ty)) = ctext {
+        members.push(weld_member_text("C", (ox + tx * s, oy + my(ty) * s), 3.5, 1.0));
+    }
 }
 
 /// `GET /api/weld_syms`：27 个焊缝符号的归一化几何（GUI 焊接预览用）。
@@ -3689,15 +3815,15 @@ fn apply_weld(
     if let Some(n) = &lower {
         push_weld_sym(&mut members, weld_sym(n).unwrap().2.unwrap(), slot, -0.7, s);
     }
-    // C：凸弧 + 固定 "C" 字（上侧贴实线；下侧贴虚线、虚线开才生成；
-    // 参考弧心 +20.538/±1.125、r2.625、上 1.5°→88.5° 下 271.5°→358.5°、
-    // 字 @+23.444/线±4.960。详细语义下一轮扩展）
-    if w.c {
-        members.push(weld_member_arc((20.538, 1.125), 2.625, 1.5, 88.5, s));
-        members.push(weld_member_text("C", (23.444, 4.960), 3.5, s));
+    // 焊缝打磨方式（GB/T 324 表面加工）：几何按该侧焊缝符号是否为角焊分
+    // 两种风格（角焊=倾斜右上版 / 其它=正上方版），下侧对称镜像；无符号的
+    // 侧不画。角焊版带固定 "C" 字（参考第一行文字锚点）。
+    if let Some(n) = &upper {
+        push_weld_grind(&mut members, w.grind, n == "角焊", false, slot, 0.0, s);
+    }
+    if let Some(n) = &lower {
         if dash {
-            members.push(weld_member_arc((20.538, -1.825), 2.625, 271.5, 358.5, s));
-            members.push(weld_member_text("C", (23.444, -5.660), 3.5, s));
+            push_weld_grind(&mut members, w.grind, n == "角焊", true, slot, -0.7, s);
         }
     }
 
@@ -6077,7 +6203,7 @@ mod weld_tests {
             circle: true,
             flag: true,
             tail: true,
-            c: true,
+            grind: GrindKind::ArcConvex, // 示例.dxf 用弧·凸
             up_thick: "5".into(),
             up_qty: "100".into(),
             lo_thick: "3".into(),
@@ -6332,12 +6458,13 @@ mod weld_tests {
                 _ => None,
             })
             .collect();
+        // "C" 字（角焊版弧·凸；锚点 = 槽位 + (4.0316, 4.9598)）
         assert!(texts.iter().any(|t| t.value == "C"
-            && t.insertion_point.x == 23.444
-            && t.insertion_point.y == 4.960));
+            && (t.insertion_point.x - 23.4446).abs() < 1e-9
+            && (t.insertion_point.y - 4.9598).abs() < 1e-9));
         assert!(texts
             .iter()
-            .any(|t| t.value == "C" && t.insertion_point.y == -5.660));
+            .any(|t| t.value == "C" && (t.insertion_point.y + 5.6598).abs() < 1e-9));
 
         // ── ATTDEF×5：锚点/对齐/样式（对照示例 MTEXT 71 组语义）──
         let ads = attdefs_of(&members);
@@ -6436,7 +6563,7 @@ mod weld_tests {
             circle: false,
             flag: false,
             tail: false,
-            c: false,
+            grind: GrindKind::None,
             lo_thick: "3".into(),
             ..WeldParams::default()
         };
@@ -6540,6 +6667,147 @@ mod weld_tests {
         let body3 = serde_json::json!({"handle": hx3, "url": url}).to_string();
         let r3 = http_req(server3.port, "POST", "/api/apply_refresh", &body3);
         assert!(r3.contains("3 顶点"), "4 顶点应报错: {r3}");
+    }
+
+    /// 打磨几何断言辅助：跑一次 apply_weld，返回块成员。
+    fn weld_members(upper: &str, lower: &str, k: GrindKind, dash: bool) -> Vec<E> {
+        let doc = acadrust::CadDocument::new();
+        let mock = Arc::new(MockSender::new(acadrust::CadDocument::new()));
+        let sender: Arc<dyn PluginRequestSender> = mock.clone();
+        let mut p = GuideParams::linear(LinearSub::Aligned, 0.0);
+        p.guide_type = GuideType::Weld;
+        p.weld = WeldParams {
+            upper: upper.into(),
+            lower: lower.into(),
+            dash,
+            grind: k,
+            ..WeldParams::default()
+        };
+        apply_weld(&sender, &doc, P_TIP, P0, P_END, &p).unwrap();
+        mock.block_entities("*W1")
+    }
+
+    fn grind_arcs(members: &[E]) -> Vec<&acadrust::entities::Arc> {
+        members
+            .iter()
+            .filter_map(|e| match e {
+                E::Arc(a) if a.radius > 2.0 && a.radius < 3.0 => Some(a),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn apply_weld_grind_six_kinds_two_styles() {
+        // 槽位（块局部）= 19.413；引导 P_TIP/P0/P_END 与参考示例同几何。
+        let slot = 19.413;
+        // ── 角焊版（上侧 = 角焊；倾斜右上，带 "C" 字）──
+        // 弧·凹：中心 = 槽位+(3.9597,3.9598)，181.5°→268.5°
+        let m = weld_members("角焊", "", GrindKind::ArcConcave, false);
+        let a = grind_arcs(&m);
+        assert_eq!(a.len(), 1);
+        assert!((a[0].center.x - (slot + 3.9597)).abs() < 1e-9);
+        assert!((a[0].center.y - 3.9598).abs() < 1e-9);
+        assert!((a[0].start_angle - 181.5f64.to_radians()).abs() < 1e-9);
+        assert!((a[0].end_angle - 268.5f64.to_radians()).abs() < 1e-9);
+        assert!(m.iter().any(|e| matches!(e, E::Text(t) if t.value == "C")));
+        // 弧·凸：中心 = 槽位+(1.125,1.125)（= 示例.dxf），1.5°→88.5°
+        let m = weld_members("角焊", "", GrindKind::ArcConvex, false);
+        let a = grind_arcs(&m);
+        assert_eq!(a.len(), 1);
+        assert!((a[0].center.x - (slot + 1.125)).abs() < 1e-9);
+        assert!((a[0].center.y - 1.125).abs() < 1e-9);
+        assert!((a[0].start_angle - 1.5f64.to_radians()).abs() < 1e-9);
+        assert!((a[0].end_angle - 88.5f64.to_radians()).abs() < 1e-9);
+        // 直线：(槽位+0.2475,3.9598) → (槽位+3.9598,0.2474)
+        let m = weld_members("角焊", "", GrindKind::Line, false);
+        assert!(lines_of(&m).iter().any(|l| (l.start.x - (slot + 0.2475)).abs() < 1e-9
+            && (l.start.y - 3.9598).abs() < 1e-9
+            && (l.end.x - (slot + 3.9598)).abs() < 1e-9
+            && (l.end.y - 0.2474).abs() < 1e-9));
+        // 双弧：2 弧（r1.4875，135°→315°）+ 1 线
+        let m = weld_members("角焊", "", GrindKind::DoubleArc, false);
+        let small: Vec<_> = m
+            .iter()
+            .filter_map(|e| match e {
+                E::Arc(a) if (a.radius - 1.4875).abs() < 1e-9 => Some(a),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(small.len(), 2);
+        assert!(small.iter().all(|a| (a.start_angle - 135f64.to_radians()).abs() < 1e-9));
+        // 锯齿：4 线段
+        let m = weld_members("角焊", "", GrindKind::Zigzag, false);
+        assert!(lines_of(&m).iter().any(|l| (l.start.x - (slot + 0.3712)).abs() < 1e-9
+            && (l.end.x - (slot + 3.8360)).abs() < 1e-9));
+        assert!(lines_of(&m).iter().any(|l| (l.start.x - (slot + 2.4501)).abs() < 1e-9
+            && (l.end.x - (slot + 7.3688)).abs() < 1e-9));
+        // ── 其它焊缝版（上侧 = 单边V；正上方，无 "C" 字）──
+        let mono = "带单边坡口的V型对接焊缝";
+        // 弧·凹：中心 = 槽位+(1.75,7.125)，226.5°→313.5°
+        let m = weld_members(mono, "", GrindKind::ArcConcave, false);
+        let a = grind_arcs(&m);
+        assert_eq!(a.len(), 1);
+        assert!((a[0].center.x - (slot + 1.75)).abs() < 1e-9);
+        assert!((a[0].center.y - 7.125).abs() < 1e-9);
+        assert!((a[0].start_angle - 226.5f64.to_radians()).abs() < 1e-9);
+        assert!((a[0].end_angle - 313.5f64.to_radians()).abs() < 1e-9);
+        assert!(!m.iter().any(|e| matches!(e, E::Text(_))), "其它版无 C 字");
+        // 弧·凸：中心 = 槽位+(1.75,3.1169)，46.5°→133.5°
+        let m = weld_members(mono, "", GrindKind::ArcConvex, false);
+        let a = grind_arcs(&m);
+        assert!((a[0].center.y - 3.1169).abs() < 1e-9);
+        assert!((a[0].start_angle - 46.5f64.to_radians()).abs() < 1e-9);
+        // 直线：水平 y=4.5，x 槽位−0.875 → 槽位+4.375
+        let m = weld_members(mono, "", GrindKind::Line, false);
+        assert!(lines_of(&m).iter().any(|l| (l.start.x - (slot - 0.875)).abs() < 1e-9
+            && (l.start.y - 4.5).abs() < 1e-9
+            && (l.end.x - (slot + 4.375)).abs() < 1e-9));
+        // 双弧：竖短线 + 2 半圆（180°→0°）
+        let m = weld_members(mono, "", GrindKind::DoubleArc, false);
+        assert!(lines_of(&m).iter().any(|l| (l.start.y - 6.775).abs() < 1e-9
+            && (l.end.y - 10.45).abs() < 1e-9));
+        let small: Vec<_> = m
+            .iter()
+            .filter_map(|e| match e {
+                E::Arc(a) if (a.radius - 1.4875).abs() < 1e-9 => Some(a),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(small.len(), 2);
+        // 参考：50=180° → 51=0°（DXF 恒 CCW：下半个圆，即向焊缝方向鼓）
+        assert!(small
+            .iter()
+            .all(|a| (a.start_angle - 180f64.to_radians()).abs() < 1e-9
+                && a.end_angle.abs() < 1e-9));
+        // 锯齿：3 线段（水平 + 水平 + 斜线）
+        let m = weld_members(mono, "", GrindKind::Zigzag, false);
+        assert!(lines_of(&m).iter().any(|l| (l.start.x - (slot - 0.7)).abs() < 1e-9
+            && (l.start.y - 4.5).abs() < 1e-9
+            && (l.end.x - (slot + 4.2)).abs() < 1e-9));
+        assert!(lines_of(&m).iter().any(|l| (l.start.y - 4.99).abs() < 1e-9
+            && (l.end.y - 9.4).abs() < 1e-9));
+    }
+
+    #[test]
+    fn apply_weld_grind_lower_mirrors_and_requires_symbol() {
+        // 下侧镜像：lower=角焊 + 虚线 + 弧·凸 → 弧心 y = −0.7−1.125 = −1.825，
+        // 角度镜像为 271.5°→358.5°（保持 CCW）。
+        let m = weld_members("", "角焊", GrindKind::ArcConvex, true);
+        let a = grind_arcs(&m);
+        assert_eq!(a.len(), 1);
+        assert!((a[0].center.x - (19.413 + 1.125)).abs() < 1e-9);
+        assert!((a[0].center.y + 1.825).abs() < 1e-9, "下侧镜像 y");
+        assert!((a[0].start_angle - 271.5f64.to_radians()).abs() < 1e-9);
+        assert!((a[0].end_angle - 358.5f64.to_radians()).abs() < 1e-9);
+        // 无符号侧不画打磨：上下皆无符号 + 打磨开 → 无弧无线（仅箭头/引线/基准 + 2 ATTDEF）
+        let m = weld_members("", "", GrindKind::ArcConvex, false);
+        assert!(grind_arcs(&m).is_empty(), "无符号侧不画打磨弧");
+        assert_eq!(m.len(), 5, "箭头+引线+基准线+2 ATTDEF");
+        // 不打磨：角焊 + None → 无附加件，亦无 C 字
+        let m = weld_members("角焊", "", GrindKind::None, false);
+        assert!(grind_arcs(&m).is_empty());
+        assert!(!m.iter().any(|e| matches!(e, E::Text(_))));
     }
 
     /// 冒烟测试用宿主代理：把插件请求真实落到 CadDocument（镜像宿主
@@ -6698,6 +6966,13 @@ mod weld_tests {
         if out.is_empty() {
             return; // 未设环境变量时跳过（无副作用）
         }
+        // 可选：符号名（缺省 带单边坡口的V型对接焊缝）与打磨方式（缺省 none）。
+        let up = std::env::var("OCSM_WELD_SMOKE_UP")
+            .unwrap_or_else(|_| "带单边坡口的V型对接焊缝".to_string());
+        let grind = std::env::var("OCSM_WELD_SMOKE_GRIND")
+            .ok()
+            .and_then(|g| GrindKind::from_str(&g))
+            .unwrap_or(GrindKind::None);
         // 引导 PLINE（10引导线层，真实流程里保留不打印）。
         let mut guide_doc = acadrust::CadDocument::new();
         let mut pl = LwPolyline::new();
@@ -6712,13 +6987,13 @@ mod weld_tests {
             let mut p = GuideParams::linear(LinearSub::Aligned, 0.0);
             p.guide_type = GuideType::Weld;
             p.weld = WeldParams {
-                upper: "带单边坡口的V型对接焊缝".into(),
+                upper: up.clone(),
                 lower: String::new(),
                 dash: false,
                 circle: false,
                 flag: false,
                 tail: true,
-                c: false,
+                grind,
                 up_thick: "5".into(),
                 up_qty: String::new(),
                 lo_thick: String::new(),
@@ -6750,6 +7025,7 @@ mod weld_tests {
         assert!(html.contains("id=\"row-weld\""), "焊接面板");
         assert!(html.contains("id=\"w-upper\"") && html.contains("id=\"w-lower\""));
         assert!(html.contains("wdash=1") && html.contains("wcir=1") && html.contains("wut="));
+        assert!(html.contains("wgr=") && html.contains("id=\"w-grind\""), "打磨方式下拉");
         assert!(html.contains("/api/weld_syms"));
         assert!(html.contains("weldLowerHasContent"), "虚线联动");
         // /api/weld_syms：27 符号 + 跨线标记 + MR 小字。

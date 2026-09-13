@@ -208,7 +208,15 @@
         <label style="display:flex;align-items:center;gap:4px;cursor:pointer"><input type="checkbox" id="w-cir"> 全周边（圆圈）</label>
         <label style="display:flex;align-items:center;gap:4px;cursor:pointer"><input type="checkbox" id="w-flg"> 现场焊接（三角旗）</label>
         <label style="display:flex;align-items:center;gap:4px;cursor:pointer"><input type="checkbox" id="w-tail"> 尾部</label>
-        <label style="display:flex;align-items:center;gap:4px;cursor:pointer"><input type="checkbox" id="w-c"> C 凸面</label>
+        <span class="lbl" style="margin-left:6px">打磨</span>
+        <select id="w-grind" style="padding:2px 6px; font-size:14px">
+          <option value="none" selected>不打磨</option>
+          <option value="cav">弧·凹</option>
+          <option value="cvx">弧·凸</option>
+          <option value="lin">直线</option>
+          <option value="dbl">双弧</option>
+          <option value="zig">锯齿</option>
+        </select>
       </div>
       <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap">
         <span class="lbl">上厚度</span><input type="text" id="w-ut" style="width:56px">
@@ -218,7 +226,7 @@
         <span class="lbl" style="margin-left:6px">尾部注释</span><input type="text" id="w-tt" style="width:88px">
       </div>
       <div id="w-warn" style="display:none; color:#b60; font-size:12px"></div>
-      <div class="gdt-hint">引导两段 PLINE：顶点1=焊缝点（箭头）、顶点2=拐点（基准线起点）、顶点3=基准线末端（须水平向右）。基准线全长随引导（尾部开关只控制尾叉+注释）。虚线=非箭头侧第二基准线（下侧有内容时强制开）。生成在 8符号标注层（匿名块 *W + INSERT）。</div>
+      <div class="gdt-hint">引导两段 PLINE：顶点1=焊缝点（箭头）、顶点2=拐点（基准线起点）、顶点3=基准线末端（须水平向右）。基准线全长随引导（尾部开关只控制尾叉+注释）。虚线=非箭头侧第二基准线（下侧有内容时强制开）。打磨=焊缝表面加工方式（6 态；角焊用倾斜右上版、其它焊缝用正上方版，下侧对称镜像，无符号侧不画）。生成在 8符号标注层（匿名块 *W + INSERT）。</div>
     </div>
     <div class="param" id="row-param">
       <span class="lbl" id="dist-lbl">(与P2距离)</span>
@@ -1047,7 +1055,8 @@ const BS_FITS = [
       if (document.getElementById('w-cir').checked) qs.push('wcir=1');
       if (document.getElementById('w-flg').checked) qs.push('wflg=1');
       if (document.getElementById('w-tail').checked) qs.push('wtail=1');
-      if (document.getElementById('w-c').checked) qs.push('wc=1');
+      const gk = document.getElementById('w-grind').value;
+      if (gk && gk !== 'none') qs.push('wgr=' + gk);
       const gv = (id) => document.getElementById(id).value.trim();
       if (gv('w-ut')) qs.push('wut=' + encodeURIComponent(gv('w-ut')));
       if (gv('w-uq')) qs.push('wuq=' + encodeURIComponent(gv('w-uq')));
@@ -1109,9 +1118,10 @@ const BS_FITS = [
     for (const n of WELD_CROSS) { wu.appendChild(new Option(n + '（跨线）', n)); }
     wu.addEventListener('change', () => { weldLockDash(); draw(); });
     wl.addEventListener('change', () => { weldLockDash(); draw(); });
-    for (const id of ['w-dash','w-cir','w-flg','w-tail','w-c']) {
+    for (const id of ['w-dash','w-cir','w-flg','w-tail']) {
       document.getElementById(id).addEventListener('change', () => { weldLockDash(); draw(); });
     }
+    document.getElementById('w-grind').addEventListener('change', draw);
     for (const id of ['w-ut','w-uq','w-lt','w-lq','w-tt']) {
       document.getElementById(id).addEventListener('input', () => { weldLockDash(); draw(); });
     }
@@ -1222,27 +1232,60 @@ const BS_FITS = [
         }
       }
     };
+    // 打磨附加件几何（相对符号锚点；与 apply_weld 表一致）。
+    const GRIND_FILLET = {
+      cav: [['A',3.9597,3.9598,2.625,181.5,268.5]],
+      cvx: [['A',1.125,1.125,2.625,1.5,88.5]],
+      lin: [['L',0.2475,3.9598,3.9598,0.2474]],
+      dbl: [['L',6.3106,6.3109,3.7120,3.7123],['A',2.6602,4.7641,1.4875,135,315],['A',4.7638,2.6604,1.4875,135,315]],
+      zig: [['L',0.3712,3.8360,3.8360,0.3712],['L',4.9094,3.1091,3.1090,4.9094],['L',3.1090,4.9094,2.4501,2.4501],['L',2.4501,2.4501,7.3688,3.7680]],
+    };
+    const GRIND_FILLET_C = { cav:[4.0316,4.9598], cvx:[4.0316,4.9598], lin:[4.9598,6.8159], dbl:[6.3206,7.3109], zig:[4.8360,6.5684] };
+    const GRIND_OTHER = {
+      cav: [['A',1.75,7.125,2.625,226.5,313.5]],
+      cvx: [['A',1.75,3.1169,2.625,46.5,133.5]],
+      lin: [['L',-0.875,4.5,4.375,4.5]],
+      dbl: [['L',1.75,6.775,1.75,10.45],['A',0.2625,6.775,1.4875,180,0],['A',3.2375,6.775,1.4875,180,0]],
+      zig: [['L',-0.7,4.5,4.2,4.5],['L',3.0235,7.195,0.4774,7.195],['L',1.7504,4.99,4.2965,9.4]],
+    };
+    const putGrind = (kind, isFillet, mirror, ox, oy) => {
+      const ents = isFillet ? (GRIND_FILLET[kind] || []) : (GRIND_OTHER[kind] || []);
+      const my = (y) => (mirror ? -y : y);
+      for (const e of ents) {
+        if (e[0] === 'L') {
+          svg.appendChild(wline(ox + e[1], oy + my(e[2]), ox + e[3], oy + my(e[4]), 1.8, OR));
+        } else {
+          const cx0 = e[1], cy0 = e[2], r = e[3];
+          let t0 = e[4], t1 = e[5];
+          if (mirror) { t0 = ((-e[5] % 360) + 360) % 360; t1 = ((-e[4] % 360) + 360) % 360; }
+          const span = ((t1 - t0) % 360 + 360) % 360;
+          const N = 24; let prev = null;
+          for (let i = 0; i <= N; i++) {
+            const a = (t0 + span * i / N) * Math.PI / 180;
+            const q = w2s(ox + cx0 + r * Math.cos(a), oy + my(cy0) + r * Math.sin(a));
+            if (prev) svg.appendChild(el('line', { x1: prev.x, y1: prev.y, x2: q.x, y2: q.y, stroke: OR, 'stroke-width': 1.8 }));
+            prev = q;
+          }
+        }
+      }
+      // 角焊版带固定 "C" 字（其它版无）。
+      if (isFillet && GRIND_FILLET_C[kind]) {
+        const t = w2s(ox + GRIND_FILLET_C[kind][0], oy + my(GRIND_FILLET_C[kind][1]));
+        const tx = el('text', { x: t.x, y: t.y, fill: GR, 'font-size': 12, 'text-anchor': 'middle', 'dominant-baseline': 'middle' });
+        tx.textContent = 'C';
+        svg.appendChild(tx);
+      }
+    };
     const wu = document.getElementById('w-upper').value;
     const wl = document.getElementById('w-lower').value;
     const slotX = p0.x + 19.413;
     if (wu !== '无') putSym(wu, false, slotX, p0.y);
     if (wl !== '无') putSym(wl, true, slotX, p0.y - 0.7);
-    // C 凸面弧 + 固定 C 字。
-    if (document.getElementById('w-c').checked) {
-      for (const [cy, a0, a1, ty] of [[1.125, 1.5, 88.5, 4.96], [-1.825, 271.5, 358.5, -5.66]]) {
-        if (cy < 0 && !dash) continue;
-        const N = 24; let prev = null;
-        for (let i = 0; i <= N; i++) {
-          const a = (a0 + (a1 - a0) * i / N) * Math.PI / 180;
-          const q = w2s(p0.x + 20.538 + 2.625 * Math.cos(a), p0.y + cy + 2.625 * Math.sin(a));
-          if (prev) svg.appendChild(el('line', { x1: prev.x, y1: prev.y, x2: q.x, y2: q.y, stroke: OR, 'stroke-width': 1.8 }));
-          prev = q;
-        }
-        const t = w2s(p0.x + 23.444, p0.y + ty);
-        const tx = el('text', { x: t.x, y: t.y, fill: GR, 'font-size': 12, 'text-anchor': 'middle', 'dominant-baseline': 'middle' });
-        tx.textContent = 'C';
-        svg.appendChild(tx);
-      }
+    // 焊缝打磨方式（6 态 × 2 风格：角焊=倾斜右上版 / 其它=正上方版；下侧镜像）。
+    const gk = document.getElementById('w-grind').value;
+    if (gk !== 'none') {
+      if (wu !== '无') putGrind(gk, wu === '角焊', false, slotX, p0.y);
+      if (wl !== '无' && dash) putGrind(gk, wl === '角焊', true, slotX, p0.y - 0.7);
     }
     // 数字区（绿色文字；空槽不画）。
     const slotTexts = [
@@ -1823,7 +1866,7 @@ const BS_FITS = [
           document.getElementById('w-cir').checked = !!w.circle;
           document.getElementById('w-flg').checked = !!w.flag;
           document.getElementById('w-tail').checked = !!w.tail;
-          document.getElementById('w-c').checked = !!w.c;
+          document.getElementById('w-grind').value = w.grind || 'none';
           document.getElementById('w-ut').value = w.up_thick || '';
           document.getElementById('w-uq').value = w.up_qty || '';
           document.getElementById('w-lt').value = w.lo_thick || '';
