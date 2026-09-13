@@ -109,7 +109,8 @@
 </style>
 </head>
 <body>
-  <h1>标注配置 <span id="h" style="font-weight:normal;font-size:12px;color:#888"></span></h1>
+  <h1><span id="title-text">标注配置</span> <span id="h" style="font-weight:normal;font-size:12px;color:#888"></span></h1>
+  <div id="edit-note" style="display:none;margin:-6px 0 10px;font-size:12px;color:#7a5b00;background:#fff8e1;border:1px solid #ffe082;border-radius:6px;padding:6px 10px">编辑已有标注：改完点「更新标注」会用新参数**替换**原标注（不会叠加）。要删除标注请用 OCS 原生 ERASE。</div>
 
   <div class="panel">
     <div class="row">
@@ -663,6 +664,27 @@
   //         焊接/引线（恰好 3 顶点=两段：起点→拐点→末端）；
   // CIRCLE / 闭合矩形（RECTANG）→ 仅局部放大；ARC → 仅弧长（两种形式同构）。
   const LINE_TYPES = ['LINEAR', 'DIAMETER', 'RADIUS', 'DATUM', 'VIEW'];
+  // 编辑模式文案（标题/按钮 → 「更新标注」）。由 /api/guide 的 edit 标志决定：
+  // 标注实体带 OCSM_EDIT 记录时即为编辑（见 guide_server 的 api_guide 回退分支）。
+  // 不提供「删除标注」按钮——删除走 OCS 原生 ERASE。
+  function setEditMode(on) {
+    const t = document.getElementById('title-text');
+    if (t) t.textContent = on ? '更新标注' : '标注配置';
+    try { document.title = on ? '更新标注' : '标注配置'; } catch (e) { /* 无 title 的垫片 */ }
+    const apply = document.getElementById('btn-apply');
+    const refresh = document.getElementById('btn-refresh');
+    if (apply) {
+      apply.textContent = on ? '另存为新标注' : '应用';
+      apply.title = on ? '保留原标注，按当前参数另生成一个' : '';
+    }
+    if (refresh) {
+      refresh.textContent = on ? '更新标注' : '应用并刷新';
+      refresh.title = on ? '用当前参数重建并替换原标注' : '';
+    }
+    const note = document.getElementById('edit-note');
+    if (note) note.style.display = on ? '' : 'none';
+  }
+
   function applyGeomFilter() {
     let allow;
     if (geom === 'circle' || geom === 'rect') {
@@ -2211,6 +2233,7 @@ const BS_FITS = [
       const r = await fetch('/api/guide?handle=' + encodeURIComponent(handle));
       const j = await r.json();
       if (j.ok) {
+        setEditMode(!!j.edit);
         P1 = {x: j.p1[0], y: j.p1[1]};
         P2 = {x: j.p2[0], y: j.p2[1]};
         PTS = (j.pts && j.pts.length >= 3) ? j.pts.map(p => ({x:p[0], y:p[1]})) : null;

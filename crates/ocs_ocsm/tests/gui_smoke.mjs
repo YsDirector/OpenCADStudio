@@ -151,7 +151,9 @@ const errors = [];
 try {
   // IIFE：直接 eval（全局垫片已就位）
   // eslint-disable-next-line no-eval
-  (0, eval)(script);
+  // 末尾追加探针：把 IIFE 内的 setEditMode 暴露给断言用（不改生产代码）
+  const probed = script.replace(/\}\)\(\);\s*$/, ';globalThis.__setEditMode = setEditMode;\n})();');
+  (0, eval)(probed);
 } catch (e) {
   errors.push('脚本求值异常: ' + (e && e.stack ? e.stack : e));
 }
@@ -255,6 +257,35 @@ if (!leaderBtn) {
 if (!/nV === 3 *\? *\[.*'WELD'.*'LEADER'/.test(html) &&
     !/nV === 3 *\? *\[.*'LEADER'/.test(html)) {
   errors.push('几何过滤未把 LEADER 限定在 3 顶点 PLINE');
+}
+
+// ⑥ A1：编辑模式文案（标题/按钮 → 「更新标注」）
+if (typeof globalThis.__setEditMode !== 'function') {
+  errors.push('未暴露 setEditMode（探针失败）');
+} else {
+  globalThis.__setEditMode(true);
+  const tt = document.getElementById('title-text').textContent;
+  if (tt !== '更新标注') errors.push(`编辑模式标题应为「更新标注」，实为 ${JSON.stringify(tt)}`);
+  if (document.title !== '更新标注') {
+    errors.push(`编辑模式 document.title 应为「更新标注」，实为 ${JSON.stringify(document.title)}`);
+  }
+  const btnA = document.getElementById('btn-apply').textContent;
+  const btnR = document.getElementById('btn-refresh').textContent;
+  if (btnR !== '更新标注') errors.push(`编辑模式主按钮应为「更新标注」，实为 ${JSON.stringify(btnR)}`);
+  if (btnA !== '另存为新标注') errors.push(`编辑模式副按钮应为「另存为新标注」，实为 ${JSON.stringify(btnA)}`);
+  if (document.getElementById('edit-note').style.display !== '') {
+    errors.push('编辑模式提示行 edit-note 应可见');
+  }
+  globalThis.__setEditMode(false);
+  if (document.getElementById('title-text').textContent !== '标注配置') {
+    errors.push('退出编辑模式后标题应还原为「标注配置」');
+  }
+  if (document.getElementById('btn-refresh').textContent !== '应用并刷新') {
+    errors.push('退出编辑模式后主按钮应还原为「应用并刷新」');
+  }
+  if (document.getElementById('edit-note').style.display !== 'none') {
+    errors.push('退出编辑模式后提示行应隐藏');
+  }
 }
 
 if (errors.length) {
