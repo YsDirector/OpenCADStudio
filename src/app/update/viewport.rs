@@ -2935,16 +2935,32 @@ impl OpenCADStudio {
                 (cam.view_proj_rte(bounds), cam.eye())
             };
             let wires = self.tabs[i].scene.hit_test_wires();
-            let hit = scene::pick::hit_test::click_hit(
-                local,
-                &*wires,
-                view_rot,
-                eye,
-                bounds,
-                self.tabs[i].scene.document.header.lineweight_display,
-                crate::ui::overlay::pick_box_aperture_px(self.pick_box),
-            )
-            .and_then(|s| Scene::handle_from_wire_name(s));
+            // ViewCube / 罗盘区域优先（画在视图右上角）：那里不跟随超链接，
+            // 否则压在一条带链接的线上的视图立方会被抢走。
+            let (vw, vh) = self.tabs[i].scene.selection.borrow().vp_size;
+            let (ccx, ccy, cw, ch) = match self.tabs[i]
+                .scene
+                .active_viewport
+                .and_then(|hndl| self.tabs[i].scene.viewport_screen_rect(hndl, (vw, vh)))
+            {
+                Some(r) => (p.x - r.x, p.y - r.y, r.width, r.height),
+                None => (local.x, local.y, tile_b.width, tile_b.height),
+            };
+            let on_gizmo = scene::hit_test(ccx, ccy, cw, ch, view_rot, VIEWCUBE_PX).is_some();
+            let hit = if on_gizmo {
+                None
+            } else {
+                scene::pick::hit_test::click_hit(
+                    local,
+                    &*wires,
+                    view_rot,
+                    eye,
+                    bounds,
+                    self.tabs[i].scene.document.header.lineweight_display,
+                    crate::ui::overlay::pick_box_aperture_px(self.pick_box),
+                )
+                .and_then(|s| Scene::handle_from_wire_name(s))
+            };
             if let Some(url) =
                 hit.and_then(|handle| scene::pe_url_of(&self.tabs[i].scene.document, handle))
             {
