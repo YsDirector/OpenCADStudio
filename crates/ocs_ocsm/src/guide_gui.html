@@ -1263,6 +1263,58 @@ const BS_FITS = [
       warn.textContent = '焊接引导无效：第二段（基准线段）长度为零。';
       return;
     }
+    // 基准线强制容纳全部标注（与服务端同规则）：blenEff = max(画的, 所需+2)
+    const DOM = (id) => document.getElementById(id);
+    const SLOT_BASE = 19.413;
+    const symMaxU = (ents) => {
+      let m = 0;
+      for (const e of (ents || [])) {
+        const u = (e[0] === 'L') ? Math.max(e[1], e[3])
+          : (e[0] === 'C' || e[0] === 'A') ? e[1] + e[3]
+          : e[1] + 1.45 * String(e[3] || '').length;
+        m = Math.max(m, u);
+      }
+      return m;
+    };
+    const grindMaxU = (kind, isFillet) => {
+      const ents = isFillet ? (GRIND_FILLET[kind] || []) : (GRIND_OTHER[kind] || []);
+      let m = 0;
+      for (const e of ents) {
+        const u = (e[0] === 'L') ? Math.max(e[1], e[3]) : e[1] + e[3];
+        m = Math.max(m, u);
+      }
+      return m;
+    };
+    const wu0 = DOM('w-upper').value, wl0 = DOM('w-lower').value;
+    const halfOn0 = DOM('w-half').checked;
+    // 与下方同规则先判 flipped（上方空+下方有内容 → 以下侧设置显示到上方）
+    const upT = DOM('w-ut').value.trim() !== '' || DOM('w-uq').value.trim() !== '';
+    const loT = DOM('w-lt').value.trim() !== '' || DOM('w-lq').value.trim() !== '';
+    const lowerHas = (wl0 !== '无') || loT;
+    const flipped0 = (wu0 === '无' && !upT) && lowerHas;
+    let needU = SLOT_BASE + 6.5 + 3.0 * 1.45; // 数量长度文字锚点 + 文字宽粗估
+    const sides0 = flipped0
+      ? (wl0 !== '无' ? [['l', wl0, DOM('w-grind-l').value, DOM('w-method-l').value]] : [])
+      : [].concat(
+          wu0 !== '无' ? [['u', wu0, DOM('w-grind-u').value, DOM('w-method-u').value]] : [],
+          (wl0 !== '无' && lowerHas) ? [['l', wl0, DOM('w-grind-l').value, DOM('w-method-l').value]] : []);
+    for (const [side, nm, gk, mth] of sides0) {
+      const sym = WSYMS && WSYMS[nm];
+      if (sym) {
+        needU = Math.max(needU, SLOT_BASE + symMaxU(side === 'l' ? sym.lower : sym.upper));
+      }
+      if (gk !== 'none') needU = Math.max(needU, SLOT_BASE + grindMaxU(gk, nm === '角焊'));
+      if (mth && WELD_METHOD_SYMS.includes(nm)) {
+        needU = Math.max(needU, SLOT_BASE + methodPos(gk, nm === '角焊')[0] + 1.45);
+      }
+    }
+    const suppExtent0 = halfOn0 ? 5.2 : 0;
+    const blenEff = Math.max(blen, Math.max(needU, SLOT_BASE + suppExtent0 + 4.0) + 2.0);
+    const autoExtended = blenEff > blen + 1e-9;
+    if (autoExtended) {
+      warn.style.display = '';
+      warn.textContent = `提示：第二段过短，生成的基准线已自动延长到 ${blenEff.toFixed(1)}（原画 ${blen.toFixed(1)}）以容纳全部标注。`;
+    }
     const dxl = p0.x - pw.x, dyl = p0.y - pw.y;
     const L = Math.hypot(dxl, dyl);
     if (L < 4) { warn.style.display = ''; warn.textContent = '引线过短（需容纳箭头）。'; return; }
@@ -1275,8 +1327,8 @@ const BS_FITS = [
     const n_up = horizontal ? { x: 0, y: 1 } : { x: -1, y: 0 };
     const tp = (t, v) => ({ x: anchor.x + t * d_c.x + v * n_up.x, y: anchor.y + t * d_c.y + v * n_up.y });
     const tr = (u, v) => tp(u, v); // 预览按 1:1（不作图幅缩放）
-    const cornerT = ((horizontal && bdx >= 0) || (!horizontal && bdy >= 0)) ? 0 : blen;
-    const farT = cornerT === 0 ? blen : 0;
+    const cornerT = ((horizontal && bdx >= 0) || (!horizontal && bdy >= 0)) ? 0 : blenEff;
+    const farT = cornerT === 0 ? blenEff : 0;
     const dirIn = cornerT === 0 ? 1 : -1;
     const dirOut = farT === blen ? 1 : -1;
     // 侧映射：baseV = 内容侧 v 偏移；m = ±1
@@ -1294,7 +1346,7 @@ const BS_FITS = [
       fill: CY, stroke: 'none' }));
     // 引线 + 基准线（青）
     svg.appendChild(wline(abx, aby, p0.x, p0.y, 2, CY));
-    const b0 = tp(0, 0), b1 = tp(blen, 0);
+    const b0 = tp(0, 0), b1 = tp(blenEff, 0);
     svg.appendChild(wline(b0.x, b0.y, b1.x, b1.y, 2, CY));
     // 虚线（识别线）
     const upperTexted = document.getElementById('w-ut').value.trim() !== ''
@@ -1307,7 +1359,7 @@ const BS_FITS = [
     const dashV = flipped ? 0.7 : -0.7;
     const dash = lowerFilled || document.getElementById('w-dash').checked;
     if (dash) {
-      const d0 = tp(0, dashV), d1 = tp(blen, dashV);
+      const d0 = tp(0, dashV), d1 = tp(blenEff, dashV);
       svg.appendChild(wline(d0.x, d0.y, d1.x, d1.y, 2, MG, '6 3'));
     }
     // 全周边圆（圆弧优先于圆）/ 半包围 ⊏（互斥）

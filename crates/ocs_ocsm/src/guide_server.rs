@@ -3569,6 +3569,42 @@ fn push_weld_method<M: Fn(f64, f64) -> (f64, f64)>(
     members.push(weld_member_text(method, map(tx, ty), 3.5 * s));
 }
 
+/// 符号几何沿基准线的最大 u（右端）——用于计算基准线所需长度。
+fn weld_sym_max_u(ents: &[WeldSymEnt]) -> f64 {
+    let mut m: f64 = 0.0;
+    for e in ents {
+        let u = match *e {
+            WeldSymEnt::Line(x1, _, x2, _) => x1.max(x2),
+            WeldSymEnt::Circle(cx, _, r) => cx + r,
+            WeldSymEnt::Arc(cx, _, r, ..) => cx + r, // 上界（不细分扫角）
+            WeldSymEnt::Text(x, _, t) => x + 1.45 * (t.chars().count() as f64),
+        };
+        m = m.max(u);
+    }
+    m
+}
+
+/// 打磨附加件沿基准线的最大 u（右端）。
+fn weld_grind_max_u(k: GrindKind, is_fillet: bool) -> f64 {
+    if k == GrindKind::None {
+        return 0.0;
+    }
+    let ents = if is_fillet {
+        weld_grind_fillet(k).0
+    } else {
+        weld_grind_other(k)
+    };
+    let mut m: f64 = 0.0;
+    for e in ents {
+        let u = match *e {
+            WeldGrindEnt::Line(x1, _, x2, _) => x1.max(x2),
+            WeldGrindEnt::Arc(cx, _, r, ..) => cx + r,
+        };
+        m = m.max(u);
+    }
+    m
+}
+
 /// `GET /api/weld_syms`：27 个焊缝符号的归一化几何（GUI 焊接预览用）。
 /// 实体编码：["L",x1,y1,x2,y2] / ["C",cx,cy,r] / ["A",cx,cy,r,a0,a1] / ["T",x,y,text]。
 fn weld_syms_json() -> String {
@@ -3753,29 +3789,6 @@ fn apply_weld(
     } else {
         ((0.0, 1.0), (-1.0, 0.0))
     };
-    // 块局部坐标（原点 = 拐点 p0）：锚点 = 沿主轴坐标较小的一端。
-    let anchor_l = if horizontal {
-        (if bdx >= 0.0 { 0.0 } else { -blen }, 0.0)
-    } else if bdy >= 0.0 {
-        (0.0, 0.0)
-    } else {
-        (0.0, -blen)
-    };
-    let corner_t = if (horizontal && bdx >= 0.0) || (!horizontal && bdy >= 0.0) {
-        0.0
-    } else {
-        blen
-    };
-    let far_t = if corner_t == 0.0 { blen } else { 0.0 };
-    // (沿轴 t, 法向 v) → 块局部坐标
-    let tp = |t: f64, v: f64| -> (f64, f64) {
-        (
-            anchor_l.0 + t * d_c.0 + v * n_up.0,
-            anchor_l.1 + t * d_c.1 + v * n_up.1,
-        )
-    };
-    // 参考单位（表内 u 沿基准线、v 内容上方）→ 块局部坐标（×图幅倍率）
-    let tr = |u: f64, v: f64| -> (f64, f64) { tp(u * s, v * s) };
 
     // ── 符号名解析（"无"/空 = None）──
     let clean = |v: &str| -> Option<String> {
@@ -3807,6 +3820,86 @@ fn apply_weld(
     /// 虚线在内容坐标系 v 轴上的偏移（参考单位）：一般 −0.7（v 负侧 = 横线下/竖线右），
     /// 特殊情况（flipped）+0.7（内容显示到上方、虚线在其下）。
     let dash_v: f64 = if flipped { 0.7 } else { -0.7 };
+
+    // ── 基准线长度：强制容纳全部标注（用户实测：第二段画太短会让符号溢出）
+    //    blen_final = max(用户画的长度, 内容所需长度 + 余量) ──
+    //    内容所需长度（参考单位，自锚点沿 t 起算）取各件右端最大者。
+    let slot_base = 19.413_f64; // 示例布局槽位（补充元素避让在下面追加）
+    let mut need_u = slot_base + 6.5; // 数量长度文字锚点
+    // 文字宽度粗估：0.59 × 字高3.5 × 宽比0.7 ≈ 1.45/字
+    need_u = need_u.max(slot_base + 6.5 + 3.0 * 1.45);
+    // 符号本体（含跨线单置）宽度
+    let sym_names: Vec<&String> = match (&upper, &lower, flipped) {
+        (_, Some(n), true) => vec![n],
+        (Some(u), Some(l), false) => vec![u, l],
+        (Some(u), None, _) => vec![u],
+        (None, Some(l), false) => vec![l],
+        _ => vec![],
+    };
+    for n in &sym_names {
+        if let Some(d) = weld_sym(n) {
+            let ents = if flipped { d.1 } else { d.1 };
+            let lo = if flipped { None } else { d.2 };
+            need_u = need_u.max(slot_base + weld_sym_max_u(ents));
+            if let Some(e) = lo {
+                need_u = need_u.max(slot_base + weld_sym_max_u(e));
+            }
+        }
+    }
+    // 打磨件与方法字母（按侧取用）
+    let grind_sides: Vec<(GrindKind, bool, &String)> = if flipped {
+        match &lower {
+            Some(n) => vec![(w.grind_lower, n == "角焊", n)],
+            None => vec![],
+        }
+    } else {
+        let mut v = Vec::new();
+        if let Some(n) = &upper {
+            v.push((w.grind_upper, n == "角焊", n));
+        }
+        if let Some(n) = &lower {
+            v.push((w.grind_lower, n == "角焊", n));
+        }
+        v
+    };
+    for (k, is_fillet, n) in &grind_sides {
+        need_u = need_u.max(slot_base + weld_grind_max_u(*k, *is_fillet));
+        let m = if flipped { w.method_lower.as_str() } else if Some(*n) == upper.as_ref() { w.method_upper.as_str() } else { w.method_lower.as_str() };
+        if !m.is_empty() && m != "无" && weld_method_allowed(n) {
+            let (mx, _) = weld_method_pos(*k, *n == "角焊");
+            need_u = need_u.max(slot_base + mx + 1.45);
+        }
+    }
+    // 半包围 ⊏ / 全周边圆占位（拐点在 t=0 或末尾，取靠内容一侧）
+    let supp_extent = if w.half { 5.2 } else { 0.0 };
+    // 余量 2.0：让末端文字不贴线端
+    let blen_need = (need_u.max(slot_base + supp_extent + 4.0) + 2.0) * s;
+    let blen = blen.max(blen_need);
+
+    // 块局部坐标（原点 = 拐点 p0）：锚点 = 沿主轴坐标较小的一端；
+    // 延长只发生在"远离拐点"一侧（拐点世界坐标不变）。
+    let anchor_l = if horizontal {
+        (if bdx >= 0.0 { 0.0 } else { -blen }, 0.0)
+    } else if bdy >= 0.0 {
+        (0.0, 0.0)
+    } else {
+        (0.0, -blen)
+    };
+    let corner_t = if (horizontal && bdx >= 0.0) || (!horizontal && bdy >= 0.0) {
+        0.0
+    } else {
+        blen
+    };
+    let far_t = if corner_t == 0.0 { blen } else { 0.0 };
+    // (沿轴 t, 法向 v) → 块局部坐标
+    let tp = |t: f64, v: f64| -> (f64, f64) {
+        (
+            anchor_l.0 + t * d_c.0 + v * n_up.0,
+            anchor_l.1 + t * d_c.1 + v * n_up.1,
+        )
+    };
+    // 参考单位（表内 u 沿基准线、v 内容上方）→ 块局部坐标（×图幅倍率）
+    let tr = |u: f64, v: f64| -> (f64, f64) { tp(u * s, v * s) };
 
     // ── 幂等 ensure：OCSM_GB 样式 / 8符号标注层 / ACISOWELD 线型（虚线用）──
     if !doc
@@ -7383,6 +7476,72 @@ mod weld_tests {
             && (y + 5.6598).abs() < 1e-9), "下侧 U 位置随下侧打磨方式且镜像: {l:?}");
     }
 
+    /// 短基准线自动延长：第二段画太短时，生成的基准线强制容纳全部标注。
+    #[test]
+    fn apply_weld_extends_short_baseline() {
+        // 画一条只有 10 长的第二段（用户实测溢出场景）：上侧角焊+弧凸+方法C+尾部，
+        // 下侧角焊（虚线）。
+        let pre = || {
+            let mut p = full_params();
+            p.weld = WeldParams {
+                upper: "角焊".into(),
+                lower: "角焊".into(),
+                dash: true,
+                tail: true,
+                tail_text: "N=2".into(),
+                circle: false,
+                half: false,
+                flag: false,
+                grind_upper: GrindKind::ArcConvex,
+                grind_lower: GrindKind::ArcConvex,
+                method_upper: "C".into(),
+                method_lower: "C".into(),
+                up_thick: "5".into(),
+                lo_thick: "10".into(),
+                ..WeldParams::default()
+            };
+            p
+        };
+        // ① 短基准线（10）：自动延长
+        let mock = Arc::new(MockSender::new(weld_doc()));
+        let sender: Arc<dyn PluginRequestSender> = mock.clone();
+        apply_weld(&sender, &weld_doc(), [0.0, 0.0, 0.0], [100.0, 0.0, 0.0], [110.0, 0.0, 0.0], &pre())
+            .unwrap();
+        let m = mock.block_entities("*W1");
+        let bl = lines_of(&m)
+            .iter()
+            .find(|l| l.start.y == 0.0 && l.end.y == 0.0 && l.start.x == 0.0 && (l.end.x - 10.0).abs() > 1e-9)
+            .copied()
+            .expect("基准线");
+        let drawn = 10.0_f64;
+        assert!(bl.end.x > drawn + 1.0, "基准线应被延长：{}", bl.end.x);
+        // 内容全部在线内：数量长度文字锚点（slot+6.5）须 < 线端
+        let qty = lines_of(&m);
+        let _ = qty;
+        let ads = attdefs_of(&m);
+        let q = ads.iter().find(|a| a.tag == "上侧数量长度L′").unwrap();
+        assert!(
+            q.insertion_point.x < bl.end.x,
+            "数量文字须在线内: {} < {}",
+            q.insertion_point.x,
+            bl.end.x
+        );
+        // 打磨件（弧·凸 右端 = 槽位+1.125+2.625 = 23.163）也须在线内
+        assert!(bl.end.x > 19.413 + 1.125 + 2.625, "打磨件须在线内");
+        // ② 长基准线（60）：保持用户长度，不缩短
+        let mock2 = Arc::new(MockSender::new(weld_doc()));
+        let sender2: Arc<dyn PluginRequestSender> = mock2.clone();
+        apply_weld(&sender2, &weld_doc(), [0.0, 0.0, 0.0], [100.0, 0.0, 0.0], [160.0, 0.0, 0.0], &pre())
+            .unwrap();
+        let m2 = mock2.block_entities("*W1");
+        let bl2 = lines_of(&m2)
+            .iter()
+            .find(|l| l.start.y == 0.0 && l.end.y == 0.0 && l.start.x == 0.0)
+            .copied()
+            .expect("基准线2");
+        assert!((bl2.end.x - 60.0).abs() < 1e-9, "长基准线应保持 60：{}", bl2.end.x);
+    }
+
     /// 冒烟测试用宿主代理：把插件请求真实落到 CadDocument（镜像宿主
     /// add_block_record/ensure_* 语义），供 DxfWriter 写出检查文件。
     struct ApplySender {
@@ -7600,11 +7759,16 @@ mod weld_tests {
         // doc 参数传独立空文档（避免与 ApplySender 锁死锁；apply_weld 只读
         // 它做样式检查/计数器，ensure 请求会落到 ApplySender 的真文档）。
         let read_doc = acadrust::CadDocument::new();
+        // 可选：第二段长度（缺省 47.647，用于复现"画太短"场景）。
+        let seg_len: f64 = std::env::var("OCSM_WELD_SMOKE_LEN")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(47.647);
         let p_end = match dir.as_str() {
-            "up" => [100.0, 147.647, 0.0],
-            "left" => [52.353, 100.0, 0.0],
-            "down" => [100.0, 52.353, 0.0],
-            _ => [147.647, 100.0, 0.0],
+            "up" => [100.0, 100.0 + seg_len, 0.0],
+            "left" => [100.0 - seg_len, 100.0, 0.0],
+            "down" => [100.0, 100.0 - seg_len, 0.0],
+            _ => [100.0 + seg_len, 100.0, 0.0],
         };
         apply_weld(&sender, &read_doc, [0.0, 0.0, 0.0], [100.0, 100.0, 0.0], p_end, &params)
             .unwrap();
