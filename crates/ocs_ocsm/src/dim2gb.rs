@@ -15,13 +15,17 @@
 //!   （DIMPOST）、公差（DIMTOL/DIMTP/DIMTM）、手动文字位置（`text_user_positioned`）都
 //!   尽量原样带过去；直径/半径/角度/弧长这类"块内字面文字"的形态，优先从原标注自己的
 //!   匿名块里读回用户实际看到的文字。
-//! - **跳过并报告**：不支持的类型（坐标/折弯半径等）或几何无效的对象不中断整批，记入
-//!   报告由命令打印。
+//! - **跳过并报告**：不支持的类型（坐标、折弯半径、多重引线等）或几何无效的对象不中断
+//!   整批，记入报告由命令打印。
+//!
+//! 除原生标注（`DIMENSION`）外，还转 **引线标注**（`LEADER` + 绑定 `MTEXT`）：
+//! 文字 1~2 行 → 转成 OCSM 引线标注（第1行=上侧、第2行=下侧）；**≥3 行跳过**；
+//! 0 行（空引线）转成纯骨架。多重引线（`MULTILEADER`）本期不转（报告说明）。
 
 use std::sync::{Arc, Mutex};
 
 use ocs_plugin_api::host::acadrust;
-use ocs_plugin_api::host::acadrust::entities::{Dimension, DimensionBase, DimensionType};
+use ocs_plugin_api::host::acadrust::entities::{Dimension, DimensionBase, DimensionType, Leader};
 use ocs_plugin_api::host::acadrust::types::Vector3;
 use ocs_plugin_api::host::acadrust::xdata::XDataValue;
 use ocs_plugin_api::host::{DimStyleDef, PluginRequestError, PluginRequestSender};
@@ -49,6 +53,8 @@ pub(crate) struct Dim2GbPlan {
     pub removes: Vec<Handle>,
     /// 成功转换数。
     pub converted: usize,
+    /// 其中：引线标注（Leader + MText）转换数。
+    pub leaders: usize,
     /// 扫描到的原生标注总数。
     pub seen: usize,
     /// 跳过清单（每条 = 一个对象 + 原因）。
@@ -62,6 +68,9 @@ impl Dim2GbPlan {
             "OCSMDIM2GB：扫描原生标注 {} 个，转换成功 {} 个。",
             self.seen, self.converted
         );
+        if self.leaders > 0 {
+            s.push_str(&format!("其中引线标注 {} 个。", self.leaders));
+        }
         if !self.skipped.is_empty() {
             s.push_str(&format!("跳过 {} 个：", self.skipped.len()));
             s.push_str(&self.skipped.join("；"));
@@ -415,6 +424,7 @@ fn base_params(guide_type: GuideType, dist: f64, dec: Option<u32>) -> GuideParam
         detail_pos: None,
         detail_frame: 1.0,
         weld: WeldParams::default(),
+        leader: crate::guide_url::LeaderParams::default(),
     }
 }
 
@@ -787,6 +797,108 @@ fn sync_collected_blocks(scratch: &mut Doc, collector: &CollectSender) {
     }
 }
 
+/// 选择集预检：可转换的对象（标注 / 引线）算数，其余记入跳过报告。
+fn selection_note(e: &Entity) -> Option<String> {
+    match e {
+        Entity::Dimension(_) | Entity::Leader(_) => None,
+        Entity::MultiLeader(_) => Some("多重引线（本期不转）".to_string()),
+        other => Some(format!("非标注对象（{}）", entity_kind(other))),
+    }
+}
+
+/// MText 取值 → 行（按 `\P`/裸换行切；剥掉 MTEXT 格式码与分组花括号）。
+/// 空行被丢弃（`A\P\PB` → ["A","B"]）。
+fn mtext_lines(value: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut cur = String::new();
+    let mut chars = value.chars().peekable();
+    while let Some(ch) = chars.next() {
+        match ch {
+            '\\' => match chars.next() {
+                // 段落分隔 → 换行
+                Some('P') | Some('p') => {
+                    out.push(std::mem::take(&mut cur));
+                }
+                // 不换行空格
+                Some('~') => cur.push(' '),
+                // 单字符开关（下/上划线、删除线）：直接丢弃
+                Some('L') | Some('l') | Some('O') | Some('o') | Some('K') | Some('k') => {}
+                // 其余带 `;` 的控制码（\H2.5x; \C1; \fArial|b0; \S+0.1^-0.2; …）
+                Some(_) => {
+                    for c2 in chars.by_ref() {
+                        if c2 == ';' {
+                            break;
+                        }
+                    }
+                }
+                None => {}
+            },
+            '{' | '}' => {}
+            '\n' | '\r' => out.push(std::mem::take(&mut cur)),
+            _ => cur.push(ch),
+        }
+    }
+    out.push(cur);
+    out.into_iter()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
+/// 引线标注 → OCSM 引线标注（引线+箭头+肩线+上下侧文字）。
+/// 通过收集器产出建块/加实体请求；成功返回 `Ok(())`（调用方只记删原实体）。
+fn convert_leader(
+    c: &Arc<dyn PluginRequestSender>,
+    doc: &Doc,
+    leader: &Leader,
+    ann_text: Option<&str>,
+) -> Result<(), String> {
+    // 顶点：宿主 LEADER 产物 = 箭头点 → 拐点 → 肩线末端（恰好 3 点）。
+    let vs: Vec<[f64; 3]> = leader
+        .vertices
+        .iter()
+        .map(|v| [v.x, v.y, v.z])
+        .collect();
+    if vs.len() < 3 {
+        return Err("顶点不足（需 箭头点→拐点→肩线末端）".into());
+    }
+    let p_tip = vs[0];
+    let p0 = vs[vs.len() - 2];
+    let p_end = vs[vs.len() - 1];
+
+    // 文字行数判据：1~2 行转（0 行 = 空文字骨架），≥3 行跳过。
+    let lines = ann_text.map(mtext_lines).unwrap_or_default();
+    if lines.len() > 2 {
+        return Err(format!("文字 {} 行（>2 行不转换）", lines.len()));
+    }
+    let upper = lines.first().cloned().unwrap_or_default();
+    let lower = lines.get(1).cloned().unwrap_or_default();
+
+    let s = crate::frame_scale_at(doc, p0);
+    let parts = gs::build_leader_parts(p_tip, p0, p_end, s, &upper, &lower)?;
+
+    // 匿名块 *L{n}（scratch 已回灌本批收集到的块名，避免重名）。
+    let mut max_n = 0u32;
+    for br in doc.block_records.iter() {
+        if let Some(rest) = br.name.strip_prefix("*L") {
+            if let Ok(n) = rest.parse::<u32>() {
+                max_n = max_n.max(n);
+            }
+        }
+    }
+    let block_name = format!("*L{}", max_n + 1);
+    c.request(PluginRequest::AddBlockRecord {
+        name: block_name.clone(),
+        entities: parts.members.clone(),
+    })
+    .map_err(|e| format!("建块失败：{e}"))?;
+
+    let ins = gs::leader_insert(&block_name, p0, &parts);
+    c.request(PluginRequest::AddEntities(vec![Entity::Insert(ins)]))
+        .map_err(|e| format!("加实体失败：{e}"))?;
+    Ok(())
+}
+
 /// 规划整批转换：`selected` 为空 = 全图（模型空间）扫描。
 pub(crate) fn plan(doc: &Doc, selected: &[Handle]) -> Dim2GbPlan {
     let collector = Arc::new(CollectSender::default());
@@ -797,12 +909,11 @@ pub(crate) fn plan(doc: &Doc, selected: &[Handle]) -> Dim2GbPlan {
     if !selected.is_empty() {
         for h in selected {
             match doc.get_entity(*h) {
-                Some(Entity::Dimension(_)) => {}
-                Some(other) => plan.skipped.push(format!(
-                    "handle {} 非标注对象（{}）",
-                    h.value(),
-                    entity_kind(other)
-                )),
+                Some(other) => {
+                    if let Some(note) = selection_note(other) {
+                        plan.skipped.push(format!("handle {} {}", h.value(), note));
+                    }
+                }
                 None => plan.skipped.push(format!("handle {} 不存在", h.value())),
             }
         }
@@ -861,6 +972,43 @@ pub(crate) fn plan(doc: &Doc, selected: &[Handle]) -> Dim2GbPlan {
                 plan.converted += 1;
             }
             Err(e) => plan.skipped.push(format!("{label}（{e}）")),
+        }
+    }
+
+    // ── 引线标注（Leader + 绑定 MText）→ OCSM 引线标注（同批转换）──
+    // 文字行数：1~2 行转（第1行→上侧、第2行→下侧；0 行 = 空文字骨架），
+    // **≥3 行跳过**。删原 Leader + 原 MText。
+    let leaders: Vec<(Handle, Leader, Option<(Handle, String)>)> = doc
+        .entities()
+        .filter_map(|e| {
+            let Entity::Leader(l) = e else { return None };
+            let h = e.common().handle;
+            if !selected.is_empty() && !selected.contains(&h) {
+                return None;
+            }
+            // 文字源：annotation_handle → MText
+            let ah = l.annotation_handle;
+            let ann = match doc.get_entity(ah) {
+                Some(Entity::MText(m)) => Some((ah, m.value.clone())),
+                _ => None,
+            };
+            Some((h, l.clone(), ann))
+        })
+        .collect();
+    for (handle, leader, ann) in leaders {
+        plan.seen += 1;
+        sync_collected_blocks(&mut scratch, &collector);
+        let text = ann.as_ref().map(|(_, t)| t.as_str());
+        match convert_leader(&c_dyn, &scratch, &leader, text) {
+            Ok(()) => {
+                plan.removes.push(handle);
+                if let Some((mh, _)) = ann {
+                    plan.removes.push(mh);
+                }
+                plan.converted += 1;
+                plan.leaders += 1;
+            }
+            Err(e) => plan.skipped.push(format!("引线标注（{e}）")),
         }
     }
 
@@ -1696,4 +1844,131 @@ mod tests {
         );
         assert!(!text.contains("-0"), "不应出现 -0，实际 {text:?}");
     }
+    // ── 引线标注转化（Leader + 绑定 MText）────────────────────────────────
+
+    /// MText → 行：`\P` 换行、剥格式码、丢空行。
+    #[test]
+    fn mtext_lines_parses_and_strips() {
+        assert_eq!(mtext_lines("通孔"), vec!["通孔"]);
+        assert_eq!(mtext_lines("通孔\\P深10"), vec!["通孔", "深10"]);
+        assert_eq!(mtext_lines("{\\H2.5x;通孔}\\P{\\C1;深10}"), vec!["通孔", "深10"]);
+        assert_eq!(mtext_lines("A\\P\\PB"), vec!["A", "B"], "空行丢弃");
+        assert_eq!(mtext_lines("X\\L下划线\\l尾"), vec!["X下划线尾"], "单字符开关丢弃");
+        assert_eq!(mtext_lines("a\nb"), vec!["a", "b"], "裸换行");
+    }
+
+    /// 造一个宿主风格的引线标注：Leader（箭头点→拐点→肩线末端）+ 绑定 MText。
+    fn leader_doc(text: Option<&str>) -> (Doc, Handle, Option<Handle>) {
+        let mut doc = Doc::new();
+        let mut l = Leader::from_vertices(vec![
+            Vector3::new(0.0, 0.0, 0.0),
+            Vector3::new(20.0, 20.0, 0.0),
+            Vector3::new(24.0, 20.0, 0.0),
+        ]);
+        l.common.layer = "0".into();
+        let lh = doc.add_entity(Entity::Leader(l)).unwrap();
+        let mh = text.map(|t| {
+            let mut m = MText::new();
+            m.value = t.to_string();
+            m.insertion_point = Vector3::new(24.0, 20.0, 0.0);
+            let h = doc.add_entity(Entity::MText(m)).unwrap();
+            h
+        });
+        if let Some(h) = mh {
+            if let Some(Entity::Leader(l)) = doc.get_entity_mut(lh) {
+                l.annotation_handle = h;
+            }
+        }
+        (doc, lh, mh)
+    }
+
+    /// 1 行文字 → 转成 OCSM 引线标注（上侧），删原 Leader + MText。
+    #[test]
+    fn plan_converts_one_line_leader() {
+        let (doc, lh, mh) = leader_doc(Some("通孔"));
+        let plan = plan(&doc, &[]);
+        assert_eq!(plan.converted, 1, "转换成功: {:?}", plan.skipped);
+        assert_eq!(plan.leaders, 1);
+        assert!(plan.skipped.is_empty(), "{:?}", plan.skipped);
+        assert_eq!(plan.removes.len(), 2, "删 Leader + MText");
+        assert!(plan.removes.contains(&lh) && plan.removes.contains(&mh.unwrap()));
+        assert_eq!(plan.blocks.len(), 1);
+        assert_eq!(plan.blocks[0].0, "*L1");
+        let ins = plan
+            .adds
+            .iter()
+            .find_map(|e| match e {
+                Entity::Insert(i) => Some(i),
+                _ => None,
+            })
+            .expect("INSERT");
+        assert_eq!(ins.block_name, "*L1");
+        assert_eq!(ins.common.layer, "8符号标注层");
+        let vals: Vec<&str> = ins.attributes.iter().map(|a| a.value.as_str()).collect();
+        assert_eq!(vals, vec!["通孔", " "], "第 1 行→上侧，下侧空占位");
+        assert!(plan.report().contains("引线标注 1"));
+    }
+
+    /// 2 行 → 上/下侧各一行；3 行 → 跳过并报告。
+    #[test]
+    fn plan_leader_two_lines_and_three_line_skip() {
+        let (doc2, _, _) = leader_doc(Some("通孔\\P深10"));
+        let plan2 = plan(&doc2, &[]);
+        assert_eq!(plan2.converted, 1, "{:?}", plan2.skipped);
+        let ins = plan2
+            .adds
+            .iter()
+            .find_map(|e| match e {
+                Entity::Insert(i) => Some(i),
+                _ => None,
+            })
+            .expect("INSERT");
+        let vals: Vec<&str> = ins.attributes.iter().map(|a| a.value.as_str()).collect();
+        assert_eq!(vals, vec!["通孔", "深10"]);
+
+        let (doc3, lh3, _) = leader_doc(Some("A\\PB\\PC"));
+        let plan3 = plan(&doc3, &[]);
+        assert_eq!(plan3.converted, 0, "3 行不转");
+        assert_eq!(plan3.leaders, 0);
+        assert_eq!(plan3.skipped.len(), 1);
+        assert!(plan3.skipped[0].contains("引线标注"), "{:?}", plan3.skipped);
+        assert!(plan3.skipped[0].contains("3 行"), "{:?}", plan3.skipped);
+        assert!(plan3.removes.is_empty(), "跳过的不删原实体");
+        assert!(!plan3.removes.contains(&lh3));
+    }
+
+    /// 无绑定文字 → 0 行，仍转（空文字骨架）。
+    #[test]
+    fn plan_leader_without_mtext_converts_skeleton() {
+        let (doc, _, _) = leader_doc(None);
+        let plan = plan(&doc, &[]);
+        assert_eq!(plan.converted, 1, "{:?}", plan.skipped);
+        let ins = plan
+            .adds
+            .iter()
+            .find_map(|e| match e {
+                Entity::Insert(i) => Some(i),
+                _ => None,
+            })
+            .expect("INSERT");
+        assert!(ins.attributes.iter().all(|a| a.value == " "));
+        assert_eq!(plan.removes.len(), 1, "只删 Leader（无 MText）");
+    }
+
+    /// 多重引线明确不转（选中时报告原因）。
+    #[test]
+    fn plan_reports_multileader_as_unsupported() {
+        let mut doc = Doc::new();
+        let mh = doc
+            .add_entity(Entity::MultiLeader(acadrust::entities::MultiLeader::new()))
+            .unwrap();
+        let plan = plan(&doc, &[mh]);
+        assert_eq!(plan.converted, 0);
+        assert!(
+            plan.skipped.iter().any(|s| s.contains("多重引线")),
+            "{:?}",
+            plan.skipped
+        );
+    }
+
 }

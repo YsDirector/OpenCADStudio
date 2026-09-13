@@ -77,7 +77,7 @@ function mkEl(id, dataset = {}) {
 // #seg-type 的类型按钮（脚本会按 data-t 过滤/绑定）
 const TYPE_NAMES = [
   'LINEAR', 'DIAMETER', 'RADIUS', 'DATUM', 'VIEW',
-  'ANGLE', 'SECTION', 'TOLERANCE', 'ARCLEN', 'DETAIL', 'WELD',
+  'ANGLE', 'SECTION', 'TOLERANCE', 'ARCLEN', 'DETAIL', 'WELD', 'LEADER',
 ];
 const typeButtons = TYPE_NAMES.map((t) => mkEl('seg-type-' + t, { t }));
 typeButtons.forEach((b) => b.classList.add('on'));
@@ -93,6 +93,7 @@ global.document = {
   },
   querySelector(sel) {
     if (sel === '#seg-type button[data-t="WELD"]') return typeButtons.find((b) => b.dataset.t === 'WELD');
+    if (sel === '#seg-type button[data-t="LEADER"]') return typeButtons.find((b) => b.dataset.t === 'LEADER');
     return null;
   },
   createElementNS() { return mkEl('ns'); },
@@ -202,8 +203,62 @@ if (!document.getElementById('w-grind-u') || !document.getElementById('w-grind-l
   errors.push('缺少上/下侧打磨下拉');
 }
 
+// ── 引线标注（LEADER）页 ────────────────────────────────────────
+// ① 两段（3 顶点）PLINE 场景：「焊接」与「引线」按钮都应可见。
+const leaderBtn = typeButtons.find((b) => b.dataset.t === 'LEADER');
+if (!leaderBtn) {
+  errors.push('缺少「引线」类型按钮');
+} else {
+  if (leaderBtn.style.display === 'none') errors.push('3 顶点 PLINE 下「引线」按钮应可见');
+  if (weldBtn.style.display === 'none') errors.push('3 顶点 PLINE 下「焊接」按钮应可见');
+  // ② 切到引线页：面板显示 + 预览非空 + 无异常。
+  try {
+    leaderBtn.click();
+  } catch (e) {
+    errors.push('点击引线按钮异常: ' + (e && e.stack ? e.stack : e));
+  }
+  await new Promise((r) => setImmediate(r));
+  const rowLeader = document.getElementById('row-leader');
+  if (rowLeader.style.display !== '') {
+    errors.push(`row-leader 未显示（display=${JSON.stringify(rowLeader.style.display)}）`);
+  }
+  if (!svg.children || svg.children.length === 0) {
+    errors.push('引线预览 SVG 为空（drawLeader 未画出任何元素）');
+  }
+  // ③ 填文字后重绘：不抛异常且预览仍在（肩线随文字变长）。
+  document.getElementById('l-up').value = '通孔';
+  document.getElementById('l-lo').value = '深10';
+  const before = svg.children.length;
+  try {
+    leaderBtn.click();
+  } catch (e) {
+    errors.push('填文字后重绘异常: ' + (e && e.stack ? e.stack : e));
+  }
+  await new Promise((r) => setImmediate(r));
+  if (!svg.children || svg.children.length === 0) {
+    errors.push('填文字后引线预览为空');
+  }
+  if (before > 0 && svg.children.length === before) {
+    // 元素数相同是正常的（线数不变），只要不是 0 即视为重绘成功。
+  }
+  // ④ 退回焊接页，确认互不干扰。
+  try {
+    weldBtn.click();
+  } catch (e) {
+    errors.push('引线→焊接回切异常: ' + (e && e.stack ? e.stack : e));
+  }
+  await new Promise((r) => setImmediate(r));
+  if (rowWeld.style.display !== '') errors.push('回切后 row-weld 未显示');
+}
+// ⑤ 只允许两段 PLINE：「焊接」「引线」必须同在 nV===3 的过滤分支里
+//（防止以后误改成所有多段线都显示）。
+if (!/nV === 3 *\? *\[.*'WELD'.*'LEADER'/.test(html) &&
+    !/nV === 3 *\? *\[.*'LEADER'/.test(html)) {
+  errors.push('几何过滤未把 LEADER 限定在 3 顶点 PLINE');
+}
+
 if (errors.length) {
   console.error('GUI 冒烟失败：\n- ' + errors.join('\n- '));
   process.exit(1);
 }
-console.log('GUI 冒烟通过：焊接面板可见、预览非空、无运行时异常');
+console.log('GUI 冒烟通过：焊接面板可见、预览非空、引线面板可见、无运行时异常');

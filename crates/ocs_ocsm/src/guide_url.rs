@@ -34,6 +34,9 @@ pub enum GuideType {
     /// 焊接符号（两段 PLINE 引导：顶点0=焊缝点，顶点1=基准线起点，
     /// 顶点2=基准线末端；生成全家福块——GB/T 324 焊缝标注）。
     Weld,
+    /// 引线标注（两段 PLINE 引导：顶点0=箭头点，顶点1=拐点，顶点2=肩线
+    /// 末端；生成引线+箭头+肩线+上下侧文字——焊接的减法版）。
+    Leader,
 }
 
 impl GuideType {
@@ -50,6 +53,7 @@ impl GuideType {
             GuideType::Detail => "DETAIL",
             GuideType::ArcLen => "ARCLEN",
             GuideType::Weld => "WELD",
+            GuideType::Leader => "LEADER",
         }
     }
     fn from_str(s: &str) -> Option<Self> {
@@ -65,6 +69,7 @@ impl GuideType {
             "DETAIL" | "DET" | "放大" => Some(GuideType::Detail),
             "ARCLEN" | "ARC" | "弧长" => Some(GuideType::ArcLen),
             "WELD" | "焊接" => Some(GuideType::Weld),
+            "LEADER" | "引线" | "LEAD" => Some(GuideType::Leader),
             _ => None,
         }
     }
@@ -400,6 +405,17 @@ pub struct GuideParams {
     pub detail_frame: f64,
     /// 焊接符号参数（仅 WELD）。
     pub weld: WeldParams,
+    /// 引线标注参数（仅 LEADER）。
+    pub leader: LeaderParams,
+}
+
+/// 引线标注参数：引线上方文字 + 引线下方文字（各单行；空 = 不显示）。
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct LeaderParams {
+    /// 上侧文字（肩线上方，锚点 17.413s / +2.750s，左对齐）。
+    pub upper: String,
+    /// 下侧文字（肩线下方，锚点 17.413s / −2.750s，左对齐）。
+    pub lower: String,
 }
 
 /// 形位公差单行：符号 + ⌀ + 公差值 + 修饰符(ⓂⓁⓅⓈ) + 基准1/2/3。
@@ -480,6 +496,7 @@ impl GuideParams {
             detail_pos: None,
             detail_frame: 1.0,
             weld: WeldParams::default(),
+            leader: LeaderParams::default(),
         }
     }
 
@@ -548,6 +565,7 @@ impl GuideParams {
         let mut detail_pos = None;
         let mut detail_frame = 1.0;
         let mut weld = WeldParams::default();
+        let mut leader = LeaderParams::default();
         // 打磨/焊接方法：兼容"两侧同值"旧键 + 上下侧独立新键。
         let mut grind_all = GrindKind::None;
         let mut grind_u: Option<GrindKind> = None;
@@ -609,6 +627,9 @@ impl GuideParams {
                 // wtail/wc=五开关；wut/wuq/wlt/wlq/wtt=五文字槽。
                 "wu" => weld.upper = v,
                 "wl" => weld.lower = v,
+                // 引线标注（仅 LEADER）：lu=上侧文字、ll=下侧文字（单行）。
+                "lu" => leader.upper = v,
+                "ll" => leader.lower = v,
                 "wdash" => weld.dash = matches!(&*v, "1" | "true" | "yes" | "on"),
                 "wcir" => weld.circle = matches!(&*v, "1" | "true" | "yes" | "on"),
                 "whalf" => weld.half = matches!(&*v, "1" | "true" | "yes" | "on"),
@@ -686,6 +707,7 @@ impl GuideParams {
             detail_pos,
             detail_frame,
             weld,
+            leader,
         })
     }
 
@@ -918,6 +940,14 @@ impl GuideParams {
                 ("wlq", &w.lo_qty),
                 ("wtt", &w.tail_text),
             ] {
+                if !v.is_empty() {
+                    q.push(format!("{k}={}", percent_encode(v)));
+                }
+            }
+        }
+        if self.guide_type == GuideType::Leader {
+            let l = &self.leader;
+            for (k, v) in [("lu", &l.upper), ("ll", &l.lower)] {
                 if !v.is_empty() {
                     q.push(format!("{k}={}", percent_encode(v)));
                 }

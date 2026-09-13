@@ -1112,6 +1112,7 @@ pub(crate) fn build_dimension(
         GuideType::Detail => return Err("局部放大图走 do_apply 独立分支".into()),
         GuideType::ArcLen => return Err("弧长标注走 do_apply 独立分支".into()),
         GuideType::Weld => return Err("焊接符号走 do_apply 独立分支".into()),
+        GuideType::Leader => return Err("引线标注走 do_apply 独立分支".into()),
     };
     // 用户指定小数位数：覆盖 XDATA DSTYLE 里的 DIMDEC(271)（样式默认 2）。
     if let Some(d) = params.dec {
@@ -2827,6 +2828,15 @@ fn do_apply(
         return apply_weld(sender, &doc, pts[0], pts[1], pts[2], &params);
     }
 
+    // 引线标注：两段 PLINE（恰好 3 顶点）→ 匿名块 *L{n} + INSERT@拐点。
+    // 焊接的减法版：只留 引线+箭头+肩线+上下侧文字。
+    if params.guide_type == GuideType::Leader {
+        if pts.len() != 3 {
+            return Err("引线标注需要两段多段线（PLINE，3 顶点：箭头点→拐点→肩线末端）".into());
+        }
+        return apply_leader(sender, &doc, pts[0], pts[1], pts[2], &params);
+    }
+
     let dim = build_dimension(sender, &doc, p1, p2, &params, &style)?;
     let dim_handle = match req_timed(
         sender,
@@ -2913,6 +2923,10 @@ fn api_guide(target: &str, sender: &Arc<dyn PluginRequestSender>) -> (u16, &'sta
                         "detail_no": p.detail_no,
                         "detail_pos": p.detail_pos,
                         "weld": weld_params_json(&p.weld),
+                        "leader": {
+                            "upper": p.leader.upper,
+                            "lower": p.leader.lower,
+                        },
                     })),
                 });
                 (200, json, resp.to_string())
@@ -4240,9 +4254,254 @@ fn apply_weld(
     .to_string())
 }
 
+// ── 引线标注（LEADER）────────────────────────────────────────────────────
+// 定位：焊接标注的**减法版**。骨架 = 引线 + 实心箭头 + 肩线 + 上/下侧文字；
+// 无虚线、无全周边圆、无现场旗、无尾叉、无 C、无上下符号槽。
+// 引导几何与焊接同构：顶点0 = 箭头点、顶点1 = 拐点 P0、顶点2 = 肩线末端。
+
+/// 引线标注构件（块局部坐标已算好；ATTDEF 模板与取值分列，便于 D2G 复用）。
+pub(crate) struct LeaderParts {
+    /// 块内实体（含 ATTDEF；层与颜色已设）。
+    pub members: Vec<acadrust::EntityType>,
+    /// ATTDEF 模板（与 `values` 一一对应）。
+    pub att_templates: Vec<acadrust::entities::AttributeDefinition>,
+    /// 文字取值（空 = INSERT 时占位空格）。
+    pub values: Vec<String>,
+    /// 图幅倍率。
+    pub scale: f64,
+    /// 肩线长度（世界单位，内容驱动）。
+    pub blen: f64,
+    /// 肩线是否水平（竖肩线 → 文字旋转 90°）。
+    pub horizontal: bool,
+}
+
+/// 引线标注几何：**纯函数**（不读文档、不建块），交互路径与 D2G 转化共用。
+/// `s` = `frame_scale_at(doc, p0)`。
+pub(crate) fn build_leader_parts(
+    p_tip: [f64; 3],
+    p0: [f64; 3],
+    p_end: [f64; 3],
+    s: f64,
+    upper: &str,
+    lower: &str,
+) -> Result<LeaderParts, String> {
+    use acadrust::entities::attribute_definition::{HorizontalAlignment, VerticalAlignment};
+    use acadrust::entities::AttributeDefinition;
+    use acadrust::types::Color;
+    use acadrust::EntityType as E;
+
+    // ── 引导校验 ──
+    let ldx = p0[0] - p_tip[0];
+    let ldy = p0[1] - p_tip[1];
+    let lead_len = (ldx * ldx + ldy * ldy).sqrt();
+    let asz = 2.5 * s; // 箭头长 = DIMASZ（与其它 OCSM 标注同款）
+    if lead_len <= asz {
+        return Err("引线标注：第一段（引线）过短（需容纳箭头）".into());
+    }
+    // 肩线（第二段）：按主分量吸附水平/竖直；内容永远按"可读朝向"渲染
+    // （t 沿世界正方向自坐标较小端起算，v = 内容上方）——同焊接。
+    let bdx = p_end[0] - p0[0];
+    let bdy = p_end[1] - p0[1];
+    let horizontal = bdx.abs() >= bdy.abs();
+    let blen_drawn = if horizontal { bdx.abs() } else { bdy.abs() };
+    if blen_drawn <= 1e-9 {
+        return Err("引线标注：第二段（肩线段）长度为零".into());
+    }
+    let (d_c, n_up): ((f64, f64), (f64, f64)) = if horizontal {
+        ((1.0, 0.0), (0.0, 1.0))
+    } else {
+        ((0.0, 1.0), (-1.0, 0.0))
+    };
+
+    // ── 肩线长度：内容驱动（照焊接定案：画长收紧、画短延长）──
+    // 文字锚点 = 焊接槽位 19.413 − 2.0 = 17.413；单字宽：拉丁/数字 1.45、
+    // 中日韩 2.45（字高 3.5 × 宽比 0.7 下的方块字宽）。
+    const SLOT: f64 = 17.413;
+    let text_w = |t: &str| -> f64 {
+        t.trim()
+            .chars()
+            .map(|c| if (c as u32) >= 0x2E80 { 2.45 } else { 1.45 })
+            .sum::<f64>()
+    };
+    let need_u = (SLOT + text_w(upper)).max(SLOT + text_w(lower));
+    let blen = (need_u + 2.0) * s;
+
+    // 块局部坐标（原点 = 拐点 P0）：锚点 = 沿主轴坐标较小的一端。
+    let anchor_l = if horizontal {
+        (if bdx >= 0.0 { 0.0 } else { -blen }, 0.0)
+    } else if bdy >= 0.0 {
+        (0.0, 0.0)
+    } else {
+        (0.0, -blen)
+    };
+    let tp = |t: f64, v: f64| -> (f64, f64) {
+        (
+            anchor_l.0 + t * d_c.0 + v * n_up.0,
+            anchor_l.1 + t * d_c.1 + v * n_up.1,
+        )
+    };
+    let tr = |u: f64, v: f64| -> (f64, f64) { tp(u * s, v * s) };
+    // 文字书写方向：随肩线轴向（横=0；竖=+90°，自下而上，永不倒置）。
+    let text_rot: f64 = if horizontal { 0.0 } else { std::f64::consts::FRAC_PI_2 };
+
+    // ── 块成员（颜色同焊接：引线/箭头/肩线=青4、文字=绿3）──
+    let mut members: Vec<E> = Vec::new();
+    let u = (ldx / lead_len, ldy / lead_len); // 引线单位向量（箭头点→拐点）
+    let tip = (p_tip[0] - p0[0], p_tip[1] - p0[1]);
+    let mut arrow = E::Solid(arrow_solid(
+        Vector3::new(tip.0, tip.1, 0.0),
+        Vector3::new(-u.0, -u.1, 0.0),
+        asz,
+    ));
+    set_member_layer(&mut arrow, "8符号标注层");
+    arrow.common_mut().color = Color::from_index(4);
+    members.push(arrow);
+    // 引线：箭头底中（尖 + 2.5×图幅）→ 拐点
+    members.push(weld_member_line(
+        (tip.0 + asz * u.0, tip.1 + asz * u.1),
+        (0.0, 0.0),
+        4,
+    ));
+    // 肩线（内容驱动全长；本功能不画虚线/圆/旗/尾叉）
+    members.push(weld_member_line(tp(0.0, 0.0), tp(blen, 0.0), 4));
+
+    // ── ATTDEF×2：上侧（v=+2.750）、下侧（v=−2.750），左对齐（引线文字是
+    //    主内容，自锚点向右展开；焊接该槽位右对齐是为符号让位）──
+    let mut att_templates: Vec<AttributeDefinition> = Vec::new();
+    for (tag, v) in [("上侧引线文字T′", 2.750_f64), ("下侧引线文字T", -2.750_f64)] {
+        let (x, y) = tr(SLOT, v);
+        let mut ad = AttributeDefinition::new(tag.to_string(), String::new(), " ".into());
+        ad.insertion_point = Vector3::new(x, y, 0.0);
+        ad.alignment_point = ad.insertion_point;
+        ad.height = 3.5 * s;
+        ad.rotation = text_rot; // 竖肩线 → 90°（沿肩线书写）
+        ad.width_factor = 0.7;
+        ad.text_style = "OCSM_GB".into();
+        ad.set_alignment(HorizontalAlignment::Left, VerticalAlignment::Middle);
+        ad.flags.preset = true; // 插入时不逐项提示
+        let mut e = E::AttributeDefinition(ad.clone());
+        set_member_layer(&mut e, "8符号标注层");
+        e.common_mut().color = Color::from_index(3);
+        members.push(e);
+        att_templates.push(ad);
+    }
+    let values = vec![upper.to_string(), lower.to_string()];
+    Ok(LeaderParts {
+        members,
+        att_templates,
+        values,
+        scale: s,
+        blen,
+        horizontal,
+    })
+}
+
+/// 由构件组 INSERT（attributes = 块内 ATTDEF 位 × 变换；空值占位空格）。
+pub(crate) fn leader_insert(
+    block_name: &str,
+    p0: [f64; 3],
+    parts: &LeaderParts,
+) -> acadrust::entities::Insert {
+    use acadrust::entities::{AttributeEntity, Entity as _, Insert};
+    let mut ins = Insert::new(block_name.to_string(), Vector3::new(p0[0], p0[1], 0.0));
+    ins.common.layer = "8符号标注层".into();
+    for (ad, val) in parts.att_templates.iter().zip(parts.values.iter()) {
+        let val = if val.trim().is_empty() { " ".to_string() } else { val.clone() };
+        let mut attr = AttributeEntity::from_definition(ad, Some(val));
+        attr.apply_transform(&ins.get_transform());
+        ins.attributes.push(attr);
+    }
+    ins
+}
+
+/// 交互路径：`POST /api/apply` type=LEADER。引导 PLINE 保留（不删）。
+fn apply_leader(
+    sender: &Arc<dyn PluginRequestSender>,
+    doc: &acadrust::CadDocument,
+    p_tip: [f64; 3],
+    p0: [f64; 3],
+    p_end: [f64; 3],
+    params: &GuideParams,
+) -> Result<String, String> {
+    use acadrust::EntityType as E;
+
+    let s = frame_scale_at(doc, p0);
+    let parts = build_leader_parts(p_tip, p0, p_end, s, &params.leader.upper, &params.leader.lower)?;
+
+    // ── 幂等 ensure：OCSM_GB 样式 / 8符号标注层（无虚线 → 不需要 ACISOWELD）──
+    if !doc
+        .text_styles
+        .iter()
+        .any(|st| st.name.eq_ignore_ascii_case("OCSM_GB"))
+    {
+        req_timed(
+            sender,
+            PluginRequest::EnsureTextStyles(crate::text_style_defs()),
+            "EnsureTextStyles",
+        )?;
+    }
+    if !doc
+        .layers
+        .iter()
+        .any(|ly| ly.name.eq_ignore_ascii_case("8符号标注层"))
+    {
+        req_timed(
+            sender,
+            PluginRequest::EnsureLayers(crate::layer_defs()),
+            "EnsureLayers",
+        )?;
+    }
+
+    // ── 匿名块 *L{n}（独立计数器，避开尺寸标注 *D 与焊接 *W）──
+    let mut max_n = 0u32;
+    for br in doc.block_records.iter() {
+        if let Some(rest) = br.name.strip_prefix("*L") {
+            if let Ok(n) = rest.parse::<u32>() {
+                max_n = max_n.max(n);
+            }
+        }
+    }
+    let block_name = format!("*L{}", max_n + 1);
+    req_timed(
+        sender,
+        PluginRequest::AddBlockRecord {
+            name: block_name.clone(),
+            entities: parts.members.clone(),
+        },
+        "AddBlockRecord",
+    )?;
+
+    let ins = leader_insert(&block_name, p0, &parts);
+    let handle = match req_timed(
+        sender,
+        PluginRequest::AddEntities(vec![E::Insert(ins)]),
+        "AddEntities",
+    ) {
+        Ok(PluginResponse::Handles(hs)) => hs.first().copied(),
+        Ok(_) => None,
+        Err(e) => return Err(e),
+    };
+    req_timed(sender, PluginRequest::BumpGeometry, "BumpGeometry")?;
+    mark_dirty(sender)?;
+
+    Ok(serde_json::json!({
+        "ok": true,
+        "block": block_name,
+        "insert_handle": handle.map(fmt_handle),
+        "scale": s,
+        "blen": parts.blen,
+        "horizontal": parts.horizontal,
+        "upper": params.leader.upper,
+        "lower": params.leader.lower,
+    })
+    .to_string())
+}
+
 /// ATTDEF tag → 英文代号（用于 values 查询 / attributes 对齐）。
 fn tag_alias(tag: &str) -> &str {
     match tag {
+        "上侧引线文字T′" => "T′",
+        "下侧引线文字T" => "T",
         "粗糙度上限A′" => "A′",
         "粗糙度下限A" => "A",
         "备注E" => "E",
@@ -4778,7 +5037,8 @@ mod tests {
         let pd = GuideParams { guide_type: GuideType::Linear, sub: Some(LinearSub::Aligned), dist: 10.0, text: None, tol: None, up: None, dn: None,
             fit: None, sym: None, dec: Some(2), ver: crate::guide_url::DatumVersion::GB2008, letter: None, scale: None, flip: crate::guide_url::FlipDir::None, marker: None, angle_mode: crate::guide_url::AngleMode::Minor, section_side: crate::guide_url::SectionSide::Right, show_arrow: true, gdt_sym: None, gdt_dia: false, gdt_tol: None, gdt_d1: None, gdt_d2: None, gdt_d3: None, gdt_rows: Vec::new(), gdt_top: None, gdt_bot: None,
             detail_scale: 2.0, detail_no: None, detail_pos: None,
-            detail_frame: 1.0, weld: WeldParams::default(),};
+            detail_frame: 1.0, weld: WeldParams::default(),
+            leader: crate::guide_url::LeaderParams::default(),};
         let dim = build_dimension(&sender, &doc, [0.0, 0.0, 0.0], [40.0, 30.0, 0.0], &pd, "OCSM_GB").unwrap();
         let rec = dim.base().common.extended_data.get_record("ACAD").expect("ACAD XDATA 存在");
         let mut found = None;
@@ -4800,13 +5060,15 @@ mod tests {
         let pd = GuideParams { guide_type: GuideType::Diameter, sub: None, dist: -9.0, text: None, tol: None, up: None, dn: None,
             fit: None, sym: None, dec: None, ver: crate::guide_url::DatumVersion::GB2008, letter: None, scale: None, flip: crate::guide_url::FlipDir::None, marker: None, angle_mode: crate::guide_url::AngleMode::Minor, section_side: crate::guide_url::SectionSide::Right, show_arrow: true, gdt_sym: None, gdt_dia: false, gdt_tol: None, gdt_d1: None, gdt_d2: None, gdt_d3: None, gdt_rows: Vec::new(), gdt_top: None, gdt_bot: None,
             detail_scale: 2.0, detail_no: None, detail_pos: None,
-            detail_frame: 1.0, weld: WeldParams::default(),};
+            detail_frame: 1.0, weld: WeldParams::default(),
+            leader: crate::guide_url::LeaderParams::default(),};
         // 直径走匿名块路径：mock 的 AddBlockRecord 返回 Ok → 成功。
         assert!(build_dimension(&sender, &doc, [0.0,0.0,0.0], [35.36,35.36,0.0], &pd, "OCSM_GB").is_ok());
         let pr = GuideParams { guide_type: GuideType::Radius, sub: None, dist: 11.0, text: None, tol: None, up: None, dn: None,
             fit: None, sym: None, dec: None, ver: crate::guide_url::DatumVersion::GB2008, letter: None, scale: None, flip: crate::guide_url::FlipDir::None, marker: None, angle_mode: crate::guide_url::AngleMode::Minor, section_side: crate::guide_url::SectionSide::Right, show_arrow: true, gdt_sym: None, gdt_dia: false, gdt_tol: None, gdt_d1: None, gdt_d2: None, gdt_d3: None, gdt_rows: Vec::new(), gdt_top: None, gdt_bot: None,
             detail_scale: 2.0, detail_no: None, detail_pos: None,
-            detail_frame: 1.0, weld: WeldParams::default(),};
+            detail_frame: 1.0, weld: WeldParams::default(),
+            leader: crate::guide_url::LeaderParams::default(),};
         assert!(build_dimension(&sender, &doc, [0.0,0.0,0.0], [35.36,35.36,0.0], &pr, "OCSM_GB").is_ok());
     }
 
@@ -4837,7 +5099,8 @@ mod tests {
 
                     gdt_sym: None, gdt_dia: false, gdt_tol: None, gdt_d1: None, gdt_d2: None, gdt_d3: None, gdt_rows: Vec::new(), gdt_top: None, gdt_bot: None,
             detail_scale: 2.0, detail_no: None, detail_pos: None,
-            detail_frame: 1.0, weld: WeldParams::default(),};
+            detail_frame: 1.0, weld: WeldParams::default(),
+            leader: crate::guide_url::LeaderParams::default(),};
         // "%%c<>" 是默认（GUI 注入一次）→ 不设 user_text（块 TEXT 已用自动值）。
         let dim = build_dimension(&sender, &doc, [0.0, 0.0, 0.0], [35.36, 35.36, 0.0], &pd, "OCSM_GB").unwrap();
         assert!(dim.base().user_text.is_none());
@@ -4880,7 +5143,8 @@ mod tests {
 
                     gdt_sym: None, gdt_dia: false, gdt_tol: None, gdt_d1: None, gdt_d2: None, gdt_d3: None, gdt_rows: Vec::new(), gdt_top: None, gdt_bot: None,
             detail_scale: 2.0, detail_no: None, detail_pos: None,
-            detail_frame: 1.0, weld: WeldParams::default(),};
+            detail_frame: 1.0, weld: WeldParams::default(),
+            leader: crate::guide_url::LeaderParams::default(),};
         let dim = build_dimension(&sender, &doc, [0.0, 0.0, 0.0], [100.0, 0.0, 0.0], &pd, "OCSM_GB").unwrap();
         assert_eq!(
             dim.base().text,
@@ -4940,7 +5204,8 @@ mod tests {
 
                     gdt_sym: None, gdt_dia: false, gdt_tol: None, gdt_d1: None, gdt_d2: None, gdt_d3: None, gdt_rows: Vec::new(), gdt_top: None, gdt_bot: None,
             detail_scale: 2.0, detail_no: None, detail_pos: None,
-            detail_frame: 1.0, weld: WeldParams::default(),};
+            detail_frame: 1.0, weld: WeldParams::default(),
+            leader: crate::guide_url::LeaderParams::default(),};
         let dim = build_dimension(&sender, &doc, [0.0, 0.0, 0.0], [25.0, 0.0, 0.0], &pd, "OCSM_GB").unwrap();
         assert_eq!(
             dim.base().text,
@@ -4977,7 +5242,8 @@ mod tests {
 
                     gdt_sym: None, gdt_dia: false, gdt_tol: None, gdt_d1: None, gdt_d2: None, gdt_d3: None, gdt_rows: Vec::new(), gdt_top: None, gdt_bot: None,
             detail_scale: 2.0, detail_no: None, detail_pos: None,
-            detail_frame: 1.0, weld: WeldParams::default(),};
+            detail_frame: 1.0, weld: WeldParams::default(),
+            leader: crate::guide_url::LeaderParams::default(),};
         let dim = build_dimension(&sender, &doc, [0.0, 0.0, 0.0], [25.0, 0.0, 0.0], &pd, "OCSM_GB").unwrap();
         let t = dim.base().text.clone();
         assert!(t.contains("%%c<>,通"), "应保留 %%c 与中文, got {t}");
@@ -5017,7 +5283,8 @@ mod tests {
 
                     gdt_sym: None, gdt_dia: false, gdt_tol: None, gdt_d1: None, gdt_d2: None, gdt_d3: None, gdt_rows: Vec::new(), gdt_top: None, gdt_bot: None,
             detail_scale: 2.0, detail_no: None, detail_pos: None,
-            detail_frame: 1.0, weld: WeldParams::default(),};
+            detail_frame: 1.0, weld: WeldParams::default(),
+            leader: crate::guide_url::LeaderParams::default(),};
         // fit 代号模式 → 配合代号堆叠（对照示例 `{\C3;\SH7/g6;}`：绿色、斜杠分数）。
         let dim = build_dimension(&sender, &doc, [0.0, 0.0, 0.0], [25.0, 0.0, 0.0], &pd, "OCSM_GB").unwrap();
         assert_eq!(
@@ -5057,7 +5324,8 @@ mod tests {
 
                     gdt_sym: None, gdt_dia: false, gdt_tol: None, gdt_d1: None, gdt_d2: None, gdt_d3: None, gdt_rows: Vec::new(), gdt_top: None, gdt_bot: None,
             detail_scale: 2.0, detail_no: None, detail_pos: None,
-            detail_frame: 1.0, weld: WeldParams::default(),};
+            detail_frame: 1.0, weld: WeldParams::default(),
+            leader: crate::guide_url::LeaderParams::default(),};
         let inner = std::sync::Arc::new(MockSender::new(acadrust::CadDocument::new()));
         let sender: std::sync::Arc<dyn PluginRequestSender> = inner.clone();
         let doc = inner.doc.lock().unwrap().clone();
@@ -7026,6 +7294,189 @@ mod weld_tests {
         assert!(r.err().map_or(false, |e| e.contains("跨线")));
     }
 
+    // ── 引线标注（LEADER）测试────────────────────────────────────────────
+
+    fn leader_params(upper: &str, lower: &str) -> GuideParams {
+        let mut p = GuideParams::linear(LinearSub::Aligned, 0.0);
+        p.guide_type = GuideType::Leader;
+        p.leader = crate::guide_url::LeaderParams {
+            upper: upper.into(),
+            lower: lower.into(),
+        };
+        p
+    }
+
+    /// 骨架：箭头 + 引线 + 肩线 + 2 ATTDEF = 5 成员；两文字空值也允许。
+    #[test]
+    fn apply_leader_skeleton_members_and_slots() {
+        let mock = Arc::new(MockSender::new(weld_doc()));
+        let sender: Arc<dyn PluginRequestSender> = mock.clone();
+        let doc = weld_doc();
+        let p = leader_params("", "");
+        let out = apply_leader(&sender, &doc, P_TIP, P0, P_END, &p).unwrap();
+        assert!(out.contains("\"block\":\"*L1\""), "块名 *L1: {out}");
+        let members = mock.block_entities("*L1");
+        assert_eq!(kinds(&members), (2, 0, 0, 1, 0, 2), "2 线 + 1 实心箭头 + 2 ATTDEF");
+        // 无虚线/无符号几何：除箭头外颜色只有青4（线）与绿3（文字）。
+        assert!(lines_of(&members)
+            .iter()
+            .all(|l| l.common.color == acadrust::types::Color::from_index(4)));
+        // 箭头：实心，长 2.5（空文档比例 1:1）。
+        let sol = &solids_of(&members)[0];
+        let d = sol.first_corner.distance(&sol.third_corner);
+        assert!(d > 0.0, "箭头实心体存在");
+        // ATTDEF：上 ±2.750、锚点 x = P0.x + 17.413；左对齐、OCSM_GB、高 3.5。
+        let ads = attdefs_of(&members);
+        assert_eq!(ads.len(), 2);
+        assert_eq!(ads[0].tag, "上侧引线文字T′");
+        assert_eq!(ads[1].tag, "下侧引线文字T");
+        // 块局部坐标（原点 = 拐点）：上 17.413/+2.750、下 17.413/−2.750。
+        assert!((ads[0].insertion_point.x - 17.413).abs() < 1e-9);
+        assert!((ads[0].insertion_point.y - 2.750).abs() < 1e-9);
+        assert!((ads[1].insertion_point.x - 17.413).abs() < 1e-9);
+        assert!((ads[1].insertion_point.y + 2.750).abs() < 1e-9);
+        for a in &ads {
+            assert_eq!(a.height, 3.5);
+            assert_eq!(a.width_factor, 0.7);
+            assert_eq!(a.text_style, "OCSM_GB");
+            assert_eq!(a.rotation, 0.0);
+            assert!(a.flags.preset);
+        }
+        // 空文字 → INSERT.attributes 占位空格（宿主空 default 会渲染 tag 名）。
+        let doc2 = mock.doc.lock().unwrap();
+        let ins = doc2
+            .entities()
+            .find_map(|e| match e {
+                E::Insert(i) => Some(i.clone()),
+                _ => None,
+            })
+            .expect("INSERT");
+        assert_eq!(ins.attributes.len(), 2);
+        assert!(ins.attributes.iter().all(|a| a.value == " "));
+    }
+
+    /// 肩线长度内容驱动：文字越长肩线越长；两行文字取较大者。
+    #[test]
+    fn apply_leader_content_drives_shoulder_length() {
+        let short = build_leader_parts(P_TIP, P0, P_END, 1.0, "A", "").unwrap();
+        let long = build_leader_parts(P_TIP, P0, P_END, 1.0, "ABCDEFGHIJ", "").unwrap();
+        assert!((short.blen - (17.413 + 1.45 + 2.0)).abs() < 1e-9, "{short_blen}", short_blen = short.blen);
+        assert!(long.blen > short.blen);
+        // 中日韩按方块字宽 2.45 估算。
+        let cjk = build_leader_parts(P_TIP, P0, P_END, 1.0, "通孔", "").unwrap();
+        assert!((cjk.blen - (17.413 + 2.45 * 2.0 + 2.0)).abs() < 1e-9, "{b}", b = cjk.blen);
+        // 下侧更长时以下侧为准。
+        let lower = build_leader_parts(P_TIP, P0, P_END, 1.0, "A", "ABCDEFGH").unwrap();
+        assert!((lower.blen - (17.413 + 1.45 * 8.0 + 2.0)).abs() < 1e-9);
+        // 肩线实体确实到 blen（线末端沿主轴）。
+        // 肩线 = 起于块局部原点、沿 +t 的那条线（块局部坐标，原点 = 拐点）。
+        let shoulder = lines_of(&long.members)
+            .into_iter()
+            .find(|l| l.start.x.abs() < 1e-9 && l.start.y.abs() < 1e-9)
+            .map(|l| (l.start, l.end))
+            .expect("肩线");
+        assert!((shoulder.1.x - long.blen).abs() < 1e-9, "肩线末 t = blen");
+    }
+
+    /// 文字值进 INSERT.attributes（上/下侧各一）。
+    #[test]
+    fn apply_leader_writes_attribute_values() {
+        let mock = Arc::new(MockSender::new(weld_doc()));
+        let sender: Arc<dyn PluginRequestSender> = mock.clone();
+        let doc = weld_doc();
+        let p = leader_params("通孔", "深10");
+        apply_leader(&sender, &doc, P_TIP, P0, P_END, &p).unwrap();
+        let doc2 = mock.doc.lock().unwrap();
+        let ins = doc2
+            .entities()
+            .find_map(|e| match e {
+                E::Insert(i) => Some(i.clone()),
+                _ => None,
+            })
+            .expect("INSERT");
+        let vals: Vec<&str> = ins.attributes.iter().map(|a| a.value.as_str()).collect();
+        assert_eq!(vals, vec!["通孔", "深10"]);
+    }
+
+    /// 竖肩线：文字旋转 90°（沿肩线书写、永不倒置），锚点按 v 轴换算。
+    #[test]
+    fn apply_leader_vertical_rotates_text() {
+        // 拐点 → 上方 40（竖肩线，bdy>0）。
+        let p_end = [P0[0], P0[1] + 40.0, 0.0];
+        let parts = build_leader_parts(P_TIP, P0, p_end, 1.0, "A", "B").unwrap();
+        assert!(!parts.horizontal);
+        let ads = attdefs_of(&parts.members);
+        assert!((ads[0].rotation - std::f64::consts::FRAC_PI_2).abs() < 1e-9);
+        // 竖轴内容坐标系（块局部）：n_up = (−1,0) → v 正方向为 −x，
+        // 故上侧文字在肩线左侧 (−2.750, 17.413)、下侧在右侧 (+2.750, 17.413)。
+        assert!((ads[0].insertion_point.x + 2.750).abs() < 1e-9);
+        assert!((ads[0].insertion_point.y - 17.413).abs() < 1e-9);
+        assert!((ads[1].insertion_point.x - 2.750).abs() < 1e-9);
+    }
+
+    /// 坏引导：引线过短 / 肩线零长 → 报错。
+    #[test]
+    fn apply_leader_rejects_invalid() {
+        let mock = Arc::new(MockSender::new(weld_doc()));
+        let sender: Arc<dyn PluginRequestSender> = mock.clone();
+        let doc = weld_doc();
+        let p = leader_params("A", "");
+        let r = apply_leader(&sender, &doc, P_TIP, P0, P0, &p);
+        assert!(r.err().map_or(false, |e| e.contains("长度为零")));
+        let r = apply_leader(&sender, &doc, [P0[0] - 1.0, P0[1] - 1.0, 0.0], P0, P_END, &p);
+        assert!(r.err().map_or(false, |e| e.contains("过短")));
+    }
+
+    /// HTTP 端到端：两段 PLINE → type=LEADER → *L1 + INSERT（引导保留）；
+    /// 非 3 顶点 → 报错。
+    #[test]
+    fn http_server_leader_apply_refresh() {
+        let mut doc = acadrust::CadDocument::new();
+        let mut pl = LwPolyline::new();
+        pl.common.layer = "10引导线层".into();
+        pl.add_point(Vector2::new(0.0, 0.0));
+        pl.add_point(Vector2::new(20.0, 20.0));
+        pl.add_point(Vector2::new(60.0, 20.0));
+        let gh = doc.add_entity(E::LwPolyline(pl)).unwrap();
+        let mock = Arc::new(MockSender::new(doc));
+        let server = spawn(mock.clone()).expect("spawn guide server");
+        let hx = format!("{:#X}", u64::from(gh));
+        // 上侧“通孔”、下侧“深10”（percent-encode 中文）。
+        let url = "http://127.0.0.1:1/DIM/LEADER/0?lu=%E9%80%9A%E5%AD%94&ll=%E6%B7%B110";
+        let body = serde_json::json!({"handle": hx, "url": url}).to_string();
+        let r2 = http_req(server.port, "POST", "/api/apply_refresh", &body);
+        let v: serde_json::Value = serde_json::from_str(&r2).unwrap();
+        assert_eq!(v["ok"], true, "apply_refresh: {r2}");
+        assert_eq!(v["block"], "*L1");
+        let doc2 = mock.doc.lock().unwrap();
+        assert!(doc2.entities().any(|e| matches!(e, E::LwPolyline(_))), "引导 PLINE 保留");
+        let ins = doc2
+            .entities()
+            .find_map(|e| match e {
+                E::Insert(i) => Some(i.clone()),
+                _ => None,
+            })
+            .expect("INSERT");
+        let vals: Vec<&str> = ins.attributes.iter().map(|a| a.value.as_str()).collect();
+        assert_eq!(vals, vec!["通孔", "深10"]);
+        drop(doc2);
+        drop(server);
+        // 坏请求：4 顶点 PLINE → 报错。
+        let mut doc3 = acadrust::CadDocument::new();
+        let mut pl3 = LwPolyline::new();
+        pl3.common.layer = "10引导线层".into();
+        for pt in [(0.0, 0.0), (10.0, 0.0), (20.0, 0.0), (30.0, 0.0)] {
+            pl3.add_point(Vector2::new(pt.0, pt.1));
+        }
+        let gh3 = doc3.add_entity(E::LwPolyline(pl3)).unwrap();
+        let mock3 = Arc::new(MockSender::new(doc3));
+        let server3 = spawn(mock3.clone()).expect("spawn guide server 3");
+        let hx3 = format!("{:#X}", u64::from(gh3));
+        let body3 = serde_json::json!({"handle": hx3, "url": url}).to_string();
+        let r3 = http_req(server3.port, "POST", "/api/apply_refresh", &body3);
+        assert!(r3.contains("3 顶点"), "4 顶点应报错: {r3}");
+    }
+
     #[test]
     fn http_server_weld_apply_refresh() {
         // 两段 PLINE 引导：(0,0)→(20,20)→(60,20)（焊缝点→拐点→基准线末端）。
@@ -8028,6 +8479,51 @@ mod weld_tests {
             .write_to_file(&out)
             .unwrap();
         println!("weld smoke dxf written: {out}");
+    }
+
+    /// 冒烟测试（设 `OCSM_LEADER_SMOKE_OUT` 才写文件）：引线标注。
+    /// 引导：箭头点 (0,0)、拐点 (100,100)、肩线末端 (100+len,100)；
+    /// 上侧文字、下侧文字可用 `OCSM_LEADER_SMOKE_UP` / `_LO` 覆盖。
+    #[test]
+    fn leader_smoke_write_dxf() {
+        let out = std::env::var("OCSM_LEADER_SMOKE_OUT").unwrap_or_default();
+        if out.is_empty() {
+            return; // 未设环境变量时跳过（无副作用）
+        }
+        let up = std::env::var("OCSM_LEADER_SMOKE_UP").unwrap_or_else(|_| "通孔⌀10".into());
+        let lo = std::env::var("OCSM_LEADER_SMOKE_LO").unwrap_or_else(|_| "深20".into());
+        let seg_len: f64 = std::env::var("OCSM_LEADER_SMOKE_LEN")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(47.647);
+        let dir = std::env::var("OCSM_LEADER_SMOKE_DIR").unwrap_or_else(|_| "right".into());
+        // 引导 PLINE（10引导线层，真实流程里保留不打印）。
+        let mut guide_doc = acadrust::CadDocument::new();
+        let mut pl = LwPolyline::new();
+        pl.common.layer = "10引导线层".into();
+        pl.add_point(Vector2::new(0.0, 0.0));
+        pl.add_point(Vector2::new(100.0, 100.0));
+        pl.add_point(Vector2::new(100.0 + seg_len, 100.0));
+        guide_doc.add_entity(E::LwPolyline(pl)).unwrap();
+        let mock = Arc::new(ApplySender::new(guide_doc));
+        let sender: Arc<dyn PluginRequestSender> = mock.clone();
+        let mut params = GuideParams::linear(LinearSub::Aligned, 0.0);
+        params.guide_type = GuideType::Leader;
+        params.leader = crate::guide_url::LeaderParams { upper: up, lower: lo };
+        let p_end = match dir.as_str() {
+            "up" => [100.0, 100.0 + seg_len, 0.0],
+            "left" => [100.0 - seg_len, 100.0, 0.0],
+            "down" => [100.0, 100.0 - seg_len, 0.0],
+            _ => [100.0 + seg_len, 100.0, 0.0],
+        };
+        let read_doc = acadrust::CadDocument::new();
+        apply_leader(&sender, &read_doc, [0.0, 0.0, 0.0], [100.0, 100.0, 0.0], p_end, &params)
+            .unwrap();
+        let doc = mock.doc.lock().unwrap();
+        acadrust::io::DxfWriter::new(&doc)
+            .write_to_file(&out)
+            .unwrap();
+        println!("leader smoke dxf written: {out}");
     }
 
     /// GUI 运行时冒烟（node + 最小 DOM 垫片）：catch node --check 查不出的
