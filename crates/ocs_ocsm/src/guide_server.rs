@@ -9445,6 +9445,19 @@ mod weld_tests {
         assert!(cat.contains("零件库") && cat.contains("六角螺栓") && cat.contains("六角头螺栓 C级 GB/T 5780-2016"), "树路径");
         assert!(cat.contains("\"implemented\":false"), "未实现族在树上标注");
         assert!(cat.contains("1型六角螺母 GB/T 6170-2015"), "未实现常用件也列在树上");
+        // 螺母两族：**四视图**必须在目录里（曾因 views 数组为空导致 GUI 面板静默失效）
+        for fam in ["nut_61721", "nut_c41"] {
+            let f: serde_json::Value = serde_json::from_str(&cat).unwrap();
+            let v: Vec<String> = f["families"][fam]["views"]
+                .as_array()
+                .unwrap_or_else(|| panic!("{fam} 缺 views"))
+                .iter()
+                .map(|x| x["id"].as_str().unwrap().to_string())
+                .collect();
+            assert_eq!(v, vec!["main", "top", "end", "section"], "{fam} 应四视图");
+            assert!(f["families"][fam]["sizes"].as_array().unwrap().len() >= 23, "{fam} 规格缺失");
+        }
+        assert!(cat.contains("六角螺母 C级 GB/T 41-2016") && cat.contains("六角薄螺母 GB/T 6172.1-2016"), "树缺螺母两族");
         let svg = http_req(server.port, "GET", "/api/part_svg?family=hex_bolt_c&d=5&l=25&view=main", "");
         assert!(svg.contains("<svg") && svg.contains("M5x25"), "预览 SV");
         assert!(svg.contains("GB/T 5780-2016"), "标题含现行代号");
@@ -9452,6 +9465,71 @@ mod weld_tests {
         assert!(bad.contains("error"), "越界长度报错");
         let bad2 = http_req(server.port, "GET", "/api/part_svg?family=nope&d=5&l=25", "");
         assert!(bad2.contains("error"), "未实现族报错");
+        // 螺母两族逐视图出图（GUI 预览通路：曾全部空白）
+        for (fam, d, l) in [("nut_61721", 10.0, 5.0), ("nut_c41", 24.0, 22.3)] {
+            for view in ["main", "top", "end", "section"] {
+                let u = format!("/api/part_svg?family={fam}&d={d}&l={l}&view={view}");
+                let svg = http_req(server.port, "GET", &u, "");
+                assert!(svg.contains("<svg"), "{fam}/{view} 预览为空：{svg}");
+                assert!(!svg.contains("\"error\""), "{fam}/{view} 预览报错：{svg}");
+            }
+        }
+        // 销两族（单视图）
+        for (fam, d, l) in [("pin_1191", 10.0, 18.0), ("pin_1201", 20.0, 40.0)] {
+            let u = format!("/api/part_svg?family={fam}&d={d}&l={l}&view=main");
+            let svg = http_req(server.port, "GET", &u, "");
+            assert!(svg.contains("<svg") && !svg.contains("\"error\""), "{fam} 预览：{svg}");
+            let bad = http_req(server.port, "GET", &format!("/api/part_svg?family={fam}&d={d}&l={l}&view=top"), "");
+            assert!(bad.contains("error"), "{fam} 只应有一个视图");
+            assert!(cat.contains(fam), "目录缺 {fam}");
+        }
+        // 视图名中文文案（GUI 按钮）
+        assert!(cat.contains("剖视图") && cat.contains("俯视图"), "视图名文案缺失");
+        // 销族树标签
+        assert!(cat.contains("圆柱销 A型 GB/T 119.1-2000") && cat.contains("内螺纹圆柱销 GB/T 120.1-2000"));
+    }
+
+    /// GUI 实机自查用：把零件库窗口在固定端口上跑起来并**阻塞**，
+    /// 然后用真 chromium（或 CDP 工具）打开 `http://127.0.0.1:<port>/parts` 截图核对。
+    ///
+    /// `cargo test -p ocs_ocsm -- --ignored serve_parts_page_for_check --nocapture`
+    #[test]
+    #[ignore]
+    fn serve_parts_page_for_check() {
+        let mock = Arc::new(MockSender::new(acadrust::CadDocument::new()));
+        let server = spawn(mock).expect("spawn guide server");
+        let url = format!("http://127.0.0.1:{}/parts", server.port);
+        println!("零件库窗口 → {url}");
+        println!("（阻塞 20 分钟供人工/浏览器核对；Ctrl-C 结束）");
+        std::thread::sleep(std::time::Duration::from_secs(1200));
+    }
+
+    /// 螺母剖视图出库：块里必须带 `5剖面线层` 的 ANSI31 Hatch（落图实体验收点）。
+    #[test]
+    fn part_export_section_block_has_hatch() {
+        let mock = Arc::new(MockSender::new(acadrust::CadDocument::new()));
+        let sender: Arc<dyn PluginRequestSender> = mock.clone();
+        let body = br#"{"family":"nut_c41","d":24,"l":22.3,"view":"section"}"#;
+        let resp = apply_part_export(&sender, body).expect("出库");
+        assert!(resp.contains("\"ok\":true"), "{resp}");
+        let ents = mock.block_entities("OCSM_NUT_C41_M24_SECTION");
+        let hats: Vec<_> = ents
+            .iter()
+            .filter_map(|e| match e {
+                acadrust::EntityType::Hatch(h) => Some(h),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(hats.len(), 2, "两片剖面线，实得 {}", hats.len());
+        for h in &hats {
+            assert_eq!(h.common.layer, crate::partgen_more::LAYER_HATCH);
+            assert_eq!(h.pattern.name, "ANSI31");
+            assert!(
+                h.pattern_angle.abs() < 1e-9 || (h.pattern_angle - 270f64.to_radians()).abs() < 1e-9,
+                "图案角存弧度（0 / 270°），实得 {}",
+                h.pattern_angle
+            );
+        }
     }
 
     #[test]
@@ -9498,6 +9576,29 @@ mod weld_tests {
             .filter(|e| matches!(e, acadrust::EntityType::Insert(_)))
             .count();
         assert_eq!(inserts, 2, "两次插入各一个 INSERT");
+    }
+
+    /// 销族出库：块里带 2细线层/5剖面线层（局部剖）且图层合法。
+    #[test]
+    fn part_export_pin_blocks() {
+        let mock = Arc::new(MockSender::new(acadrust::CadDocument::new()));
+        let sender: Arc<dyn PluginRequestSender> = mock.clone();
+        let resp = apply_part_export(&sender, br#"{"family":"pin_1201","d":20,"l":40,"view":"main"}"#).expect("出库");
+        assert!(resp.contains("\"ok\":true"), "{resp}");
+        let ents = mock.block_entities("OCSM_PIN_1201_Ø20×40_MAIN");
+        assert!(ents.iter().any(|e| matches!(e, acadrust::EntityType::Hatch(_))), "局部剖剖面线");
+        assert!(ents.iter().any(|e| matches!(e, acadrust::EntityType::LwPolyline(_))), "波浪线");
+        for e in &ents {
+            let lay = e.common().layer.as_str();
+            assert!(
+                [crate::partgen::LAYER_MAIN, crate::partgen::LAYER_THIN, crate::partgen::LAYER_CENTER,
+                 crate::partgen_more::LAYER_HATCH].contains(&lay),
+                "图层越界: {lay}"
+            );
+        }
+        let resp = apply_part_export(&sender, br#"{"family":"pin_1191","d":10,"l":18,"view":"main"}"#).expect("出库");
+        assert!(resp.contains("Ø10×18"), "{resp}");
+        assert!(mock.block_entities("OCSM_PIN_1191_Ø10×18_MAIN").len() > 8, "销块已建好");
     }
 
     #[test]

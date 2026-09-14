@@ -667,6 +667,8 @@ pub fn catalog_json() -> String {
             "implemented": true,
             "views": views,
             "sizes": sizes,
+            "len_label": "长度 l",
+            "base_hint": "基点 = 头部支承面 × 轴线",
         }),
     );
     for (k, v) in crate::partgen_more::families_json() {
@@ -689,6 +691,9 @@ pub fn catalog_json() -> String {
             { "name": "螺母", "children": [
                 { "name": "六角螺母", "children": [
                     { "name": "1型六角螺母 GB/T 6170-2015", "implemented": false },
+                    { "name": "六角螺母 C级 GB/T 41-2016", "family": "nut_c41", "implemented": true }
+                ]},
+                { "name": "六角薄螺母", "children": [
                     { "name": "六角薄螺母 GB/T 6172.1-2016", "family": "nut_61721", "implemented": true }
                 ]}
             ]},
@@ -706,8 +711,8 @@ pub fn catalog_json() -> String {
             ]},
             { "name": "销", "children": [
                 { "name": "圆柱销", "children": [
-                    { "name": "圆柱销 GB/T 119.1-2000", "implemented": false },
-                    { "name": "内螺纹圆柱销 GB/T 120.1-2000", "implemented": false }
+                    { "name": "圆柱销 A型 GB/T 119.1-2000", "family": "pin_1191", "implemented": true },
+                    { "name": "内螺纹圆柱销 GB/T 120.1-2000", "family": "pin_1201", "implemented": true }
                 ]}
             ]}
         ]}
@@ -813,12 +818,30 @@ pub fn to_svg(part: &GenPart, title: &str, px_w: f64, px_h: f64) -> String {
             }
             EntityType::Hatch(h) => {
                 // 预览：把边界画出来 + 半透明填充（图案线由 CAD 按 ANSI31 生成）
+                // 边界边支持 Line 与带 bulge 的 Polyline（120.1 局部剖的波浪线）；弧/样条边按端点连线近似。
                 for path in &h.paths {
                     let mut pts: Vec<(f64, f64)> = Vec::new();
                     for e in &path.edges {
-                        if let ocs_plugin_api::host::acadrust::entities::hatch::BoundaryEdge::Line(l) = e {
-                            pts.push((l.start.x, l.start.y));
-                            pts.push((l.end.x, l.end.y));
+                        use ocs_plugin_api::host::acadrust::entities::hatch::BoundaryEdge as BE;
+                        match e {
+                            BE::Line(l) => {
+                                pts.push((l.start.x, l.start.y));
+                                pts.push((l.end.x, l.end.y));
+                            }
+                            BE::Polyline(pe) => {
+                                for v in &pe.vertices {
+                                    pts.push((v.x, v.y));
+                                }
+                            }
+                            BE::CircularArc(a) => {
+                                let c = a.center;
+                                for step in 0..=8 {
+                                    let t = step as f64 / 8.0;
+                                    let ang = a.start_angle + (a.end_angle - a.start_angle) * t;
+                                    pts.push((c.x + a.radius * ang.cos(), c.y + a.radius * ang.sin()));
+                                }
+                            }
+                            _ => {}
                         }
                     }
                     if pts.len() >= 3 {
@@ -1222,6 +1245,57 @@ mod tests {
         }
     }
 
+    /// 目录 JSON 的**全局防呆**：每个上架族都必须有视图、有规格、且第一个规格能出图。
+    ///
+    /// 回归背景（2026-09-15）：`families_json` 曾把已下架族（`nut_6170`）的空视图数组
+    /// 错给到 `nut_61721` / `nut_c41` → GUI 视图按钮为空、`pickFamily` 抛异常、
+    /// 长度与预览全不加载（面板静默失效）。此测试是那一类错误的语料级护栏。
+    #[test]
+    fn catalog_all_implemented_families_usable() {
+        let cat: serde_json::Value = serde_json::from_str(&catalog_json()).expect("目录 JSON");
+        let fams = cat["families"].as_object().expect("families");
+        assert!(fams.len() >= 8, "上架族数异常：{}", fams.len());
+        for (id, f) in fams {
+            if f["implemented"] == serde_json::json!(false) {
+                continue;
+            }
+            let views: Vec<String> = f["views"]
+                .as_array()
+                .unwrap_or_else(|| panic!("{id} 缺 views"))
+                .iter()
+                .map(|v| v["id"].as_str().unwrap().to_string())
+                .collect();
+            assert!(!views.is_empty(), "{id} 上架却没有视图（GUI 会静默失效）");
+            assert_eq!(
+                views,
+                crate::partgen_more::family_views(id),
+                "{id} 的 views 与视图注册表不一致"
+            );
+            let sizes = f["sizes"].as_array().unwrap_or_else(|| panic!("{id} 缺 sizes"));
+            assert!(!sizes.is_empty(), "{id} 没有规格");
+            let d = sizes[0]["d"].as_f64().unwrap();
+            let l = sizes[0]["lengths"][0].as_f64().unwrap();
+            for v in &views {
+                generate(id, d, l, v)
+                    .unwrap_or_else(|e| panic!("{id} Ø{d}×{l} {v} 生成失败: {e}"));
+            }
+            // 视图名齐全（GUI 按钮文案）
+            for v in f["views"].as_array().unwrap() {
+                assert!(!v["name"].as_str().unwrap_or("").is_empty(), "{id} 视图缺 name");
+            }
+        }
+        // 树上：螺母两族、销两族都必须挂上 family（否则 GUI 里点不到）
+        let tree = cat["tree"].to_string();
+        for needle in [
+            "六角螺母 C级 GB/T 41-2016",
+            "六角薄螺母 GB/T 6172.1-2016",
+            "1型六角螺母 GB/T 6170-2015",
+            "nut_c41",
+            "nut_61721",
+        ] {
+            assert!(tree.contains(needle), "树里缺 {needle}");
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1267,9 +1341,13 @@ pub(crate) mod acceptance_dump {
     }
 
     /// 图层 + 线型（与插件运行时 `ensure_layers/ensure_linetypes` 同源）。
+    ///
+    /// 注意：**必须给 LTYPE/LAYER 分配句柄**，否则 DxfWriter 会写出 `handle=0`，
+    /// ezdxf 等严格读取器会报 `Invalid handle 0`（验收 DXF 打不开）。
     pub(crate) fn add_ocsm_layers(doc: &mut CadDocument) {
         for def in crate::linetype_defs() {
             let mut lt = LineType::new(&def.name);
+            lt.handle = doc.allocate_handle();
             lt.description = def.description.clone();
             lt.elements = def
                 .elements
@@ -1281,6 +1359,7 @@ pub(crate) mod acceptance_dump {
         }
         for def in crate::layer_defs() {
             let mut l = Layer::new(&def.name);
+            l.handle = doc.allocate_handle();
             l.color = def.color;
             l.line_type = def.linetype.clone();
             l.line_weight = def.lineweight;

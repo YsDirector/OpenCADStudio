@@ -665,6 +665,7 @@ pub fn families_json() -> serde_json::Map<String, serde_json::Value> {
             "id": "hex_bolt_b_full", "name": "六角头全螺纹螺栓 全螺纹 B级",
             "code": "GB/T 5783-2016", "iso": "ISO 4017:2014",
             "implemented": true, "views": views_json("hex_bolt_b_full"), "sizes": sizes,
+            "len_label": "长度 l", "base_hint": "基点 = 头部支承面 × 轴线",
         }),
     );
 
@@ -684,7 +685,8 @@ pub fn families_json() -> serde_json::Map<String, serde_json::Value> {
         serde_json::json!({
             "id": "hex_bolt_hole_a", "name": "六角头头部带孔螺栓 A级",  // 视图见下方 views_json
             "code": "GB/T 32.1-2020", "iso": "ISO 4014:2011（同族）",
-            "implemented": true, "views": views_json("hex_bolt_b_full"), "sizes": sizes,
+            "implemented": true, "views": views_json("hex_bolt_hole_a"), "sizes": sizes,
+            "len_label": "长度 l", "base_hint": "基点 = 头部支承面 × 轴线",
         }),
     );
 
@@ -699,7 +701,6 @@ pub fn families_json() -> serde_json::Map<String, serde_json::Value> {
             })
         })
         .collect();
-    let views_nut = views_json("nut_6170");
     let views_ring = views_json("washer_971");
     for (key, tab_name, code, iso, thin) in [
         ("nut_61721", "六角薄螺母", "GB/T 6172.1-2016", "ISO 4035:2012", true),
@@ -725,7 +726,10 @@ pub fn families_json() -> serde_json::Map<String, serde_json::Value> {
             key.into(),
             serde_json::json!({
                 "id": key, "name": tab_name, "code": code, "iso": iso,
-                "implemented": true, "views": views_nut.clone(), "sizes": sizes,
+                // 视图**按族**取注册表（`nut_6170` 已下架、family_views 为空，
+                // 曾把它的空数组错给到这两族 → GUI 视图按钮为空、面板静默失效）
+                "implemented": true, "views": views_json(key), "sizes": sizes,
+                "len_label": "高度 m", "base_hint": "基点 = 左端面 × 轴线",
             }),
         );
     }
@@ -746,6 +750,7 @@ pub fn families_json() -> serde_json::Map<String, serde_json::Value> {
             serde_json::json!({
                 "id": "washer_971", "name": "平垫圈 A级", "code": "GB/T 97.1-2002",
                 "iso": "ISO 7089:2000", "implemented": true, "views": views_ring.clone(), "sizes": sizes,
+                "len_label": "厚度 h", "base_hint": "基点 = 端面中心（轴线）",
             }),
         );
         let sizes: Vec<serde_json::Value> = washer_93_table()
@@ -764,6 +769,53 @@ pub fn families_json() -> serde_json::Map<String, serde_json::Value> {
             serde_json::json!({
                 "id": "washer_93", "name": "标准型弹簧垫圈", "code": "GB/T 93-2025",
                 "iso": "—", "implemented": true, "views": views_ring, "sizes": sizes,
+                "len_label": "厚度 s", "base_hint": "基点 = 端面中心（轴线）",
+            }),
+        );
+    }
+    // ── 销族（GB/T 119.1-2000 / GB/T 120.1-2000）：单视图 ──
+    for (key, tab_name, code, iso, rows_json) in [
+        (
+            "pin_1191",
+            "圆柱销 A型",
+            "GB/T 119.1-2000",
+            "ISO 2338:1997",
+            pin_1191_table()
+                .rows
+                .iter()
+                .map(|r| {
+                    serde_json::json!({
+                        "d": r.d, "label": format!("Ø{}", trim(r.d)), "pitch": 0.0,
+                        "l_min": r.l_min, "l_max": r.l_max, "lengths": r.lengths,
+                        "extra": format!("c={} a={}（左端 15° 锥 / 右端球冠）", trim(r.c), trim(r.a)),
+                    })
+                })
+                .collect::<Vec<_>>(),
+        ),
+        (
+            "pin_1201",
+            "内螺纹圆柱销",
+            "GB/T 120.1-2000",
+            "ISO 8735:1997",
+            pin_1201_table()
+                .rows
+                .iter()
+                .map(|r| {
+                    serde_json::json!({
+                        "d": r.d, "label": format!("Ø{}", trim(r.d)), "pitch": 0.0,
+                        "l_min": r.l_min, "l_max": r.l_max, "lengths": r.lengths,
+                        "extra": format!("M{} 深{} 钻孔{} c={} a={}", trim(r.d1), trim(r.t1), trim(r.t2), trim(r.c), trim(r.a)),
+                    })
+                })
+                .collect::<Vec<_>>(),
+        ),
+    ] {
+        m.insert(
+            key.into(),
+            serde_json::json!({
+                "id": key, "name": tab_name, "code": code, "iso": iso,
+                "implemented": true, "views": views_json(key), "sizes": rows_json,
+                "len_label": "长度 l", "base_hint": "基点 = 左端面（c 锥端）× 轴线",
             }),
         );
     }
@@ -773,6 +825,7 @@ pub fn families_json() -> serde_json::Map<String, serde_json::Value> {
             "id": "socket_head", "name": "内六角圆柱头螺钉",
             "code": "GB/T 70.1-2008", "iso": "ISO 4762:2004",
             "implemented": true, "views": views_json("socket_head"), "sizes": sizes,
+            "len_label": "长度 l", "base_hint": "基点 = 头部支承面 × 轴线",
         }),
     );
     m
@@ -793,6 +846,16 @@ pub fn generate(family: &str, d: f64, l: f64, view: &str) -> Option<Result<GenPa
             "{family} 不提供视图 {view}（可用：{}）",
             allowed.join("/")
         )));
+    }
+    // 销族：单视图（模板只有主视图）
+    if matches!(family, "pin_1191" | "pin_1201") {
+        if view != "main" {
+            return Some(Err(format!("{family} 只有主视图（模板只有这一个视图）")));
+        }
+        return Some(match family {
+            "pin_1191" => pin_a(d, l),
+            _ => pin_threaded(d, l),
+        });
     }
     // 螺母/垫圈族：视图名含 section（剖视图）
     if matches!(family, "nut_6170" | "nut_61721" | "nut_c41" | "washer_971" | "washer_93") {
@@ -1030,9 +1093,9 @@ mod tests {
         );
     }
 
-    /// 三族三视图都只有 OCSM 模板图层、且**不含任何尺寸标注**。
+    /// 所有上架族都只有 OCSM 模板图层、且**不含任何尺寸标注**。
     #[test]
-    fn three_families_layers_and_no_dimension() {
+    fn all_families_layers_and_no_dimension() {
         let dots = [
             ("hex_bolt_b_full", 10.0, 20.0),
             ("hex_bolt_b_full", 1.6, 8.0),
@@ -1040,6 +1103,17 @@ mod tests {
             ("hex_bolt_hole_a", 6.0, 30.0),
             ("socket_head", 10.0, 70.0),
             ("socket_head", 1.6, 4.0),
+            // 螺母两族（含剖视图的 5剖面线层 Hatch）
+            ("nut_61721", 10.0, 0.0),
+            ("nut_61721", 30.0, 0.0),
+            ("nut_c41", 24.0, 0.0),
+            ("nut_c41", 64.0, 0.0),
+            // 垫圈两族
+            ("washer_971", 10.0, 0.0),
+            ("washer_93", 10.0, 0.0),
+            // 销两族（单视图；120.1 含 5剖面线层 局部剖 Hatch）
+            ("pin_1191", 10.0, 18.0),
+            ("pin_1201", 20.0, 40.0),
         ];
         for (fam, d, l) in dots {
             for view in family_views(fam) {
@@ -1147,13 +1221,50 @@ mod tests {
         }
     }
 
-    /// 人工核对用：三族九视图 → SVG（`cargo test -p ocs_ocsm -- --ignored dump_three_fams_svg`）。
+    /// 人工核对用：各族各视图 → SVG（`cargo test -p ocs_ocsm -- --ignored dump_parts_svg --nocapture`）。
+    ///
+    /// 输出目录在 `~/桌面/OCSM/test/参数化预览/`（**不用 /tmp**：tmpfs 会被清空）。
+    /// 配套：`tools/overlay_check.py` 拿本测试写的 DXF 与用户模板 DXF 叠合比对。
     #[test]
     #[ignore]
-    fn dump_three_fams_svg() {
-        let dir = std::path::Path::new("/tmp/partgen3");
+    fn dump_parts_svg() {
+        let dir = std::path::Path::new("/home/ysdirector/桌面/OCSM/test/参数化预览");
         std::fs::create_dir_all(dir).unwrap();
-        let cases: &[(&str, f64, f64, &str, &str)] = &[
+        for (fam, d, l, name, view) in all_dump_cases() {
+            let p = crate::partgen::generate(fam, d, l, view).unwrap();
+            let vn = view_name(view);
+            let (code, spec) = (p.meta.code.clone(), p.meta.spec.clone());
+            let svg = to_svg(&p, &format!("{code} {spec} {vn}"), 620.0, 330.0);
+            let f = dir.join(format!("{name}-{vn}.svg"));
+            std::fs::write(&f, svg).unwrap();
+            println!("写出 {}", f.display());
+        }
+    }
+
+    /// 同上的**几何 DXF**（模型空间直出，不套块）：给 `tools/overlay_check.py` 与模板叠合比对。
+    #[test]
+    #[ignore]
+    fn dump_parts_dxf() {
+        use ocs_plugin_api::host::acadrust::io::dxf::DxfWriter;
+        use ocs_plugin_api::host::acadrust::CadDocument;
+        let dir = std::path::Path::new("/home/ysdirector/桌面/OCSM/test/参数化预览");
+        std::fs::create_dir_all(dir).unwrap();
+        for (fam, d, l, name, view) in all_dump_cases() {
+            let p = crate::partgen::generate(fam, d, l, view).unwrap();
+            let mut doc = CadDocument::new();
+            crate::partgen::acceptance_dump::add_ocsm_layers(&mut doc);
+            for e in p.entities.clone() {
+                doc.add_entity(e).expect("图元入库");
+            }
+            let f = dir.join(format!("{name}-{}.dxf", view_name(view)));
+            DxfWriter::new(&doc).write_to_file(&f).expect("写 DXF");
+            println!("写出 {}", f.display());
+        }
+    }
+
+    /// 预览/叠合用的族-规格-视图清单（(族, d, l, 文件名前缀, 视图)）。
+    fn all_dump_cases() -> Vec<(&'static str, f64, f64, &'static str, &'static str)> {
+        vec![
             ("hex_bolt_c", 5.0, 25.0, "5780-M5x25", "main"),
             ("hex_bolt_c", 5.0, 25.0, "5780-M5x25", "top"),
             ("hex_bolt_c", 5.0, 25.0, "5780-M5x25", "end"),
@@ -1163,31 +1274,31 @@ mod tests {
             ("hex_bolt_hole_a", 18.0, 60.0, "32_1-M18x60", "end"),
             ("socket_head", 10.0, 70.0, "70_1-M10x70", "main"),
             ("socket_head", 10.0, 70.0, "70_1-M10x70", "end"),
+            // 用户模板对照族：薄螺母 / C级螺母（四视图）
+            ("nut_61721", 10.0, 0.0, "nut61721-M10", "main"),
+            ("nut_61721", 10.0, 0.0, "nut61721-M10", "top"),
+            ("nut_61721", 10.0, 0.0, "nut61721-M10", "end"),
+            ("nut_61721", 10.0, 0.0, "nut61721-M10", "section"),
             ("nut_61721", 20.0, 0.0, "nut61721-M20", "end"),
+            ("nut_c41", 24.0, 0.0, "nut41-M24", "main"),
+            ("nut_c41", 24.0, 0.0, "nut41-M24", "top"),
+            ("nut_c41", 24.0, 0.0, "nut41-M24", "end"),
+            ("nut_c41", 24.0, 0.0, "nut41-M24", "section"),
+            // 垫圈
             ("washer_971", 20.0, 0.0, "washer971-20", "main"),
             ("washer_971", 20.0, 0.0, "washer971-20", "end"),
             ("washer_93", 20.0, 0.0, "spring93-20", "main"),
             ("washer_93", 20.0, 0.0, "spring93-20", "end"),
             ("washer_93", 1.6, 0.0, "spring93-1_6", "main"),
             ("washer_93", 1.6, 0.0, "spring93-1_6", "end"),
-            // 第三轮模板对照：薄螺母 / C级螺母 / 弹垫
-            ("nut_61721", 10.0, 0.0, "nut61721-M10", "main"),
-            ("nut_61721", 10.0, 0.0, "nut61721-M10", "top"),
-            ("nut_61721", 10.0, 0.0, "nut61721-M10", "end"),
-            ("nut_61721", 10.0, 0.0, "nut61721-M10", "section"),
-            ("nut_c41", 24.0, 0.0, "nut41-M24", "main"),
-            ("nut_c41", 24.0, 0.0, "nut41-M24", "section"),
             ("washer_93", 10.0, 0.0, "spring93-10", "main"),
             ("washer_93", 10.0, 0.0, "spring93-10", "end"),
-        ];
-        for (fam, d, l, name, view) in cases {
-            let p = crate::partgen::generate(fam, *d, *l, view).unwrap();
-            let vn = view_name(view);
-            let svg = to_svg(&p, &format!("{} {} {}", p.meta.code, p.meta.spec, vn), 620.0, 330.0);
-            let f = dir.join(format!("{name}-{vn}.svg"));
-            std::fs::write(&f, svg).unwrap();
-            println!("写出 {}", f.display());
-        }
+            // 销族（用户模板对照：119.1 d10×18 / 120.1 d20×40）
+            ("pin_1191", 10.0, 18.0, "pin1191-10x18", "main"),
+            ("pin_1191", 3.0, 30.0, "pin1191-3x30", "main"),
+            ("pin_1201", 20.0, 40.0, "pin1201-20x40", "main"),
+            ("pin_1201", 6.0, 16.0, "pin1201-6x16", "main"),
+        ]
     }
 
     /// 目录 JSON：三族都在树里打勾，且带 ISO 对应与视图表。
@@ -1209,6 +1320,80 @@ mod tests {
 
 #[cfg(test)]
 mod acceptance {
+    /// 验收图纸（第二批）：螺母 2 族 × 4 视图 + 销 2 族 × 1 视图 → 10 个块。
+    /// 跑法：`cargo test -p ocs_ocsm -- --ignored dump_acceptance_nuts_pins --nocapture`
+    #[test]
+    #[ignore]
+    fn dump_acceptance_nuts_pins() {
+        use ocs_plugin_api::host::acadrust::entities::Insert;
+        use ocs_plugin_api::host::acadrust::io::dwg::DwgWriter;
+        use ocs_plugin_api::host::acadrust::io::dxf::DxfWriter;
+        use ocs_plugin_api::host::acadrust::types::{Color, LineWeight, Vector3};
+        use ocs_plugin_api::host::acadrust::xdata::{ExtendedDataRecord, XDataValue};
+        use ocs_plugin_api::host::acadrust::{CadDocument, EntityType};
+
+        // (族, d, l, 视图, 插入点x, 插入点y)
+        let cases: &[(&str, f64, f64, &str, f64, f64)] = &[
+            ("nut_61721", 10.0, 5.0, "main", 20.0, 200.0),
+            ("nut_61721", 10.0, 5.0, "top", 80.0, 200.0),
+            ("nut_61721", 10.0, 5.0, "end", 140.0, 200.0),
+            ("nut_61721", 10.0, 5.0, "section", 200.0, 200.0),
+            ("nut_c41", 24.0, 22.3, "main", 280.0, 200.0),
+            ("nut_c41", 24.0, 22.3, "top", 360.0, 200.0),
+            ("nut_c41", 24.0, 22.3, "end", 420.0, 200.0),
+            ("nut_c41", 24.0, 22.3, "section", 480.0, 200.0),
+            ("pin_1191", 10.0, 18.0, "main", 20.0, 80.0),
+            ("pin_1201", 20.0, 40.0, "main", 80.0, 80.0),
+        ];
+
+        let mut doc = CadDocument::new();
+        crate::partgen::acceptance_dump::add_ocsm_layers(&mut doc);
+        let mut log = Vec::new();
+        for (fam, d, l, view, x, y) in cases {
+            let part = crate::partgen::generate(fam, *d, *l, view).expect("生成");
+            let block = format!(
+                "OCSM_{}_{}_{}",
+                fam.to_uppercase(),
+                part.meta.spec.replace(['.', ' '], "_"),
+                view.to_uppercase()
+            );
+            crate::partgen::acceptance_dump::add_block(&mut doc, &block, part.entities.clone());
+            let mut ins = Insert::new(&block, Vector3::new(*x, *y, 0.0));
+            ins.common.layer = crate::partgen::LAYER_MAIN.to_string();
+            ins.common.color = Color::ByLayer;
+            ins.common.linetype = "ByLayer".to_string();
+            ins.common.line_weight = LineWeight::ByLayer;
+            let mut rec = ExtendedDataRecord::new("OCSM_PART");
+            rec.values.push(XDataValue::String(
+                serde_json::json!({
+                    "code": part.meta.code, "name": part.meta.name, "spec": part.meta.spec,
+                    "weight": part.meta.weight, "d": d, "l": l, "view": view,
+                })
+                .to_string(),
+            ));
+            ins.common.extended_data.add_record(rec);
+            doc.add_entity(EntityType::Insert(ins)).expect("insert");
+            log.push(format!(
+                "{:>16} {:>10} {:>6}  {:>7} 图元  @({x:.0},{y:.0})",
+                part.meta.code,
+                part.meta.name,
+                part.meta.spec,
+                view
+            ));
+        }
+        let dir = std::path::Path::new("/home/ysdirector/桌面/OCSM/test");
+        std::fs::create_dir_all(dir).unwrap();
+        let dwg = dir.join("参数化验收-螺母与销.dwg");
+        let dxf = dir.join("参数化验收-螺母与销.dxf");
+        DwgWriter::write_to_file(&dwg, &doc).expect("写 DWG");
+        DxfWriter::new(&doc).write_to_file(&dxf).expect("写 DXF");
+        println!("已写出：\n  {}\n  {}", dwg.display(), dxf.display());
+        println!("内容：{} 个零件（块 + INSERT + OCSM_PART 记录）", log.len());
+        for l in &log {
+            println!("  {l}");
+        }
+    }
+
     /// 验收图纸：三族 × 三视图 × 多规格 → DWG/DXF（块 + INSERT + OCSM_PART 记录）。
     /// 跑法：`cargo test -p ocs_ocsm -- --ignored dump_acceptance_three_fams`
     #[test]
@@ -1425,6 +1610,8 @@ pub fn family_views(family: &str) -> Vec<&'static str> {
         // （6172.1 薄螺母、GB/T 41 C级各有模板；**6170 1型螺母画法待模板 → 暂不提供**）
         "nut_61721" | "nut_c41" => vec!["main", "top", "end", "section"],
         "nut_6170" => vec![],
+        // 销族：用户模板里只有一个视图（119.1 轴向外形；120.1 外形 + 局部剖）
+        "pin_1191" | "pin_1201" => vec!["main"],
         // 垫圈：主视图（面视）+ 左视图（侧视）；用户明确"不需要俯视图"
         "washer_971" | "washer_93" => vec!["main", "end"],
         _ => vec![],
@@ -1508,6 +1695,66 @@ pub struct SpringWasherRow {
     pub h_free_max: f64,
 }
 
+/// 圆柱销一行（GB/T 119.1-2000 A型 ← ISO 2338:1997）。
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct PinARow {
+    pub d: f64,
+    /// 端部 15° 锥面轴向长 c（模板：左端）
+    pub c: f64,
+    /// 末端倒圆（球冠）轴向高 a（模板：右端；R=(a²+(d/2)²)/(2a)）
+    pub a: f64,
+    pub l_min: f64,
+    pub l_max: f64,
+    pub lengths: Vec<f64>,
+}
+
+/// 内螺纹圆柱销一行（GB/T 120.1-2000 ← ISO 8735:1997）。
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct ThreadedPinRow {
+    pub d: f64,
+    /// 螺纹公称直径（M6 → d1=6）
+    pub d1: f64,
+    /// 螺纹深度
+    pub t1: f64,
+    /// 钻孔深度（圆柱段；尖高另加）
+    pub t2: f64,
+    /// 孔口端外锥轴向长 a
+    pub a: f64,
+    /// 实心端外锥轴向长 c
+    pub c: f64,
+    pub l_min: f64,
+    pub l_max: f64,
+    pub lengths: Vec<f64>,
+}
+
+fn pin_1191_table() -> &'static Table<PinARow> {
+    static T: std::sync::OnceLock<Table<PinARow>> = std::sync::OnceLock::new();
+    T.get_or_init(|| serde_json::from_str(include_str!("tables/partsPin1191.json")).expect("partsPin1191.json"))
+}
+
+fn pin_1201_table() -> &'static Table<ThreadedPinRow> {
+    static T: std::sync::OnceLock<Table<ThreadedPinRow>> = std::sync::OnceLock::new();
+    T.get_or_init(|| {
+        serde_json::from_str(include_str!("tables/partsPin1201.json")).expect("partsPin1201.json")
+    })
+}
+
+pub fn pin_1191_row(d: f64) -> Option<&'static PinARow> {
+    pin_1191_table().rows.iter().find(|r| (r.d - d).abs() < 1e-9)
+}
+
+pub fn pin_1201_row(d: f64) -> Option<&'static ThreadedPinRow> {
+    pin_1201_table().rows.iter().find(|r| (r.d - d).abs() < 1e-9)
+}
+
+pub fn pin_1191_diameters() -> Vec<f64> {
+    pin_1191_table().rows.iter().map(|r| r.d).collect()
+}
+
+pub fn pin_1201_diameters() -> Vec<f64> {
+    pin_1201_table().rows.iter().map(|r| r.d).collect()
+}
+
 fn nut_6170_table() -> &'static Table<NutRow> {
     static T: std::sync::OnceLock<Table<NutRow>> = std::sync::OnceLock::new();
     T.get_or_init(|| serde_json::from_str(include_str!("tables/partsNut6170.json")).expect("partsNut6170.json"))
@@ -1554,7 +1801,10 @@ pub fn washer_93_row(d: f64) -> Option<&'static SpringWasherRow> {
 /// `六角螺母_C级_GB-T41-2016`，四视图 DXF 逐条量取）：
 /// - **基点**：左端面 × 轴线（原点）；螺母占 x ∈ [0, m]，对角朝前 e = s/cos30°。
 /// - 主视图：两端面 s 宽、60° 角斜线到 e 宽、内棱线 ±e/4、四个角弧（r=(e/8)/sinθ，
-///   θ=2·atan(8Δ/e)，弧心 (端±r, ±0.375e)，由 ±0.375e 画到内棱线）。
+///   θ=2·atan(8Δ/e)，弧心 (端±r, ±0.375e)，由 ±0.375e 画到内棱线）
+///   + **两端各一条端面倒角大弧**（与 5780 螺栓头同一套构造：r1=u+Δ，u=((e/4)²−Δ²)/(2Δ)，
+///   弧心 (端±r1, 0)，张角 180°∓atan((e/4)/u)；模板里这条弧在两端都在，曾漏画）
+/// - 剖视图：**只画被切材料轮廓**（模板实测：无角弧、无 ±e/4 内棱线），27 条线 + 两片 Hatch。
 /// - 俯视图：s×m 矩形 + 中棱线 y=0（Δ→m−Δ）+ 两端各两条倒角弧（r=(s/4)/sinθ′，
 ///   θ′=2·atan(4Δ/s)，弧心 (r, ±s/4) 与 (m−r, ±s/4)，张角 180°±θ′）。
 /// - 左视图：六边形 + 端面倒角圆 r=s/2 + 螺纹孔小径圆 r=0.85d/2（粗）
@@ -1571,6 +1821,10 @@ pub fn hex_nut(d: f64, family: &str, view: NutView) -> Result<GenPart, String> {
     let (s, e, m) = (row.s, across_corners(row.s), row.m);
     let dm = 0.85 * d; // 螺纹孔小径（模板实测：0.85d）
     let delta = chamfer_run(s, e);
+    // 端面倒角大弧（与 5780 螺栓头同构）：过 (端±Δ, ±e/4) 与 (端, 0) 的圆
+    let u_big = ((e / 4.0).powi(2) - delta * delta) / (2.0 * delta);
+    let r_big = u_big + delta;
+    let al_big = (e / 4.0 / u_big).atan().to_degrees();
     let meta = PartMeta {
         code: code.into(),
         name: name.into(),
@@ -1596,6 +1850,9 @@ pub fn hex_nut(d: f64, family: &str, view: NutView) -> Result<GenPart, String> {
             en.push(arc([r2, 0.375 * e], r2, 180.0, 180.0 + th.to_degrees(), LAYER_MAIN));
             en.push(arc([m - r2, -0.375 * e], r2, 0.0, th.to_degrees(), LAYER_MAIN));
             en.push(arc([m - r2, 0.375 * e], r2, -th.to_degrees(), 0.0, LAYER_MAIN));
+            // 两端面倒角大弧（模板逐条实测：弧心 (r1, 0) / (m−r1, 0)，r1 = u+Δ，张角 ±atan((e/4)/u)）
+            en.push(arc([r_big, 0.0], r_big, 180.0 - al_big, 180.0 + al_big, LAYER_MAIN));
+            en.push(arc([m - r_big, 0.0], r_big, -al_big, al_big, LAYER_MAIN));
             en.push(line([-AXIS_OVER, 0.0], [m + AXIS_OVER, 0.0], LAYER_CENTER));
             Ok(GenPart { entities: en, meta, bbox: [0.0, -e / 2.0, m, e / 2.0] })
         }
@@ -1682,7 +1939,6 @@ pub fn nut_section(d: f64, family: &str, row: &NutRow) -> Result<GenPart, String
     let delta = chamfer_run(s, e);
     let c45 = (d - dm) / 2.0; // 端面 45° 倒角轴向宽度 = 0.075d（模板实测）
     let th = 2.0 * (8.0 * delta / e).atan();
-    let r2 = (e / 8.0) / th.sin();
     let meta = PartMeta {
         code: code.into(),
         name: name.into(),
@@ -1690,20 +1946,16 @@ pub fn nut_section(d: f64, family: &str, row: &NutRow) -> Result<GenPart, String
         material: String::new(),
         weight: format!("≈{:.4}", nut_weight_kg(row, d)),
     };
+    let _ = th;
     let mut en: Vec<EntityType> = Vec::new();
-    // 外形（与主视图同构）
+    // 剖视图 = **被切材料轮廓**（模板逐条实测：只有直线，没有角弧、没有 ±e/4 内棱线）
     en.push(line([0.0, s / 2.0], [0.0, -s / 2.0], LAYER_MAIN));
     en.push(line([m, s / 2.0], [m, -s / 2.0], LAYER_MAIN));
     for sgn in [1.0, -1.0] {
         en.push(line([0.0, sgn * s / 2.0], [delta, sgn * e / 2.0], LAYER_MAIN));
         en.push(line([m, sgn * s / 2.0], [m - delta, sgn * e / 2.0], LAYER_MAIN));
         en.push(line([delta, sgn * e / 2.0], [m - delta, sgn * e / 2.0], LAYER_MAIN));
-        en.push(line([delta, sgn * e / 4.0], [m - delta, sgn * e / 4.0], LAYER_MAIN));
     }
-    en.push(arc([r2, -0.375 * e], r2, 180.0 - th.to_degrees(), 180.0, LAYER_MAIN));
-    en.push(arc([r2, 0.375 * e], r2, 180.0, 180.0 + th.to_degrees(), LAYER_MAIN));
-    en.push(arc([m - r2, -0.375 * e], r2, 0.0, th.to_degrees(), LAYER_MAIN));
-    en.push(arc([m - r2, 0.375 * e], r2, -th.to_degrees(), 0.0, LAYER_MAIN));
     // 端面 45° 倒角 + 内孔壁（粗）+ 大径（细，全长）
     for sgn in [1.0, -1.0] {
         en.push(line([0.0, sgn * d / 2.0], [c45, sgn * dm / 2.0], LAYER_MAIN));
@@ -1712,6 +1964,10 @@ pub fn nut_section(d: f64, family: &str, row: &NutRow) -> Result<GenPart, String
     }
     en.push(line([c45, dm / 2.0], [c45, -dm / 2.0], LAYER_MAIN));
     en.push(line([m - c45, dm / 2.0], [m - c45, -dm / 2.0], LAYER_MAIN));
+    // 孔壁水平线（模板实测：从倒角终点到另一端倒角终点，跨满孔长）
+    for sgn in [1.0, -1.0] {
+        en.push(line([c45, sgn * dm / 2.0], [m - c45, sgn * dm / 2.0], LAYER_MAIN));
+    }
     // 两片 ANSI31 剖面线（5剖面线层）：下半 0°、上半 270°，边界 = 被切材料轮廓（模板 8 顶点）
     for (sgn, ang) in [(-1.0, 0.0), (1.0, 270.0)] {
         let verts: Vec<[f64; 2]> = vec![
@@ -1731,6 +1987,10 @@ pub fn nut_section(d: f64, family: &str, row: &NutRow) -> Result<GenPart, String
 }
 
 /// ANSI31 图案填充（落在 `5剖面线层`）：边界为闭合折线，图案角 = 45° + angle（模板用法：0° 与 270°）。
+///
+/// 注意：acadrust 的 `Hatch.pattern_angle` 存**弧度**（DXF 写出时才 `to_degrees()`，读入时 `to_radians()`，
+/// 见 `cadcodec/src/io/dxf/{writer/section_writer.rs,reader/section_reader.rs}`）——
+/// 曾写成度数，落图后图案被转了 15470°（ezdxf 读到 15469.86）。
 fn hatch_ansi31(verts: &[[f64; 2]], angle_deg: f64) -> EntityType {
     use ocs_plugin_api::host::acadrust::entities::hatch::{
         BoundaryPath, HatchPattern, HatchPatternLine,
@@ -1748,7 +2008,7 @@ fn hatch_ansi31(verts: &[[f64; 2]], angle_deg: f64) -> EntityType {
     });
     h.pattern = pat;
     h.is_solid = false;
-    h.pattern_angle = angle_deg;
+    h.pattern_angle = angle_deg.to_radians();
     h.pattern_scale = 1.0;
     let mut bp = BoundaryPath::new();
     bp.flags.set_external(true);
@@ -1787,6 +2047,231 @@ pub fn nut_weight_kg(row: &NutRow, d: f64) -> f64 {
     let hex_area = 0.866 * row.s * row.s;
     let hole = std::f64::consts::PI / 4.0 * (0.85 * d).powi(2);
     ((hex_area - hole).max(0.0) * row.m) * 7.85e-3 / 1000.0
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// 销族（GB/T 119.1-2000 A型圆柱销 / GB/T 120.1-2000 内螺纹圆柱销）
+//
+// 画法 100% 由用户模板反解（`~/桌面/GB/参数化/圆柱销_A型_…_GB-T119.1-2000/`、
+// `内螺纹圆柱销_…_GB-T120.1-2000/` 的 *主视图 DXF* 逐条量取）：
+// - **端点 = 左端面（c 锥端）× 轴线**（与全库“端面×轴线”一致）。
+//   120.1 的模板把「孔口端」放在原点、零件向 −x；本库统一为 x_new = x_模板 + l（整体平移），
+//   即实心端在原点、零件向 +x——其余坐标/角度与模板逐条相同。
+// - 端部锥面**半锥角 15°**（模板角标实测 15.0000°）：端面半径 = d/2 − 轴向长·tan15°
+//   （验证：120.1 左端 10−3.5×tan15°=9.06218 ✓、右端 10−2.5×tan15°=9.33013 ✓）。
+// - 119.1 右端 = **球冠**：单条 ARC，圆心 (l−R, 0)、R=(a²+(d/2)²)/(2a)、
+//   起止角 ∓atan2(d/2, R−a)（模板：起 333.0085° 止 26.9915°）。
+// - 两端锥面/球冠与圆柱交界处各一条**竖棱线**（模板 119.1 两端都有；120.1 模板在 a 端漏画，
+//   按同族同一规则补上——该差异已在叠合自查中单独列出）。
+// - 中心线（3中心线层）两端各伸出 3.0（模板实测）。
+// - 120.1 的孔：大径 d1 细线、螺尾/孔口 45° 倒角 0.075d1、底孔 0.85d1、
+//   钻孔深度线 + **120° 钻尖**（尖高 = (0.85d1/2)/tan60°），
+//   **局部剖**：波浪线（2细线层，带 bulge）+ 两片 ANSI31（5剖面线层，角 0°/270°）。
+// ══════════════════════════════════════════════════════════════════════════
+
+/// 端部锥面半锥角（模板角标实测 15.0000°）。
+const PIN_CONE_DEG: f64 = 15.0;
+
+/// 端面半径 = d/2 − 锥面轴向长·tan15°（模板实测关系）。
+pub fn pin_face_r(d: f64, axial: f64) -> f64 {
+    d / 2.0 - axial * PIN_CONE_DEG.to_radians().tan()
+}
+
+/// 内螺纹圆柱销的孔口/螺尾倒角轴向宽 = 0.075·d1（模板实测：d1=12 → 0.9），
+/// 底孔半径 = 0.85·d1/2（模板实测：Ø10.2 = 0.85×12）。
+fn pin_hole_r(d1: f64) -> f64 {
+    0.85 * d1 / 2.0
+}
+
+/// 120.1 局部剖波浪线：把模板拟合多段线**等比复刻**。
+///
+/// 模板（d=20 实例）实测顶点（归一到 `u = dx/(0.1d) ∈ [0,1]`、`w = y/(d/2) ∈ [−1,1]`，bulge 无量纲原样保留）：
+/// `(0,1,0.036406) (0.8331,0.71978,0.096211) (1.0,0.6,0.040804) (0.99645,0.1481,0.024408)`
+/// `(0.5,−0.6,0.016057) (0.3297,−0.7576,0.010304) (0,−1,0)`。
+const PIN_WAVE: [(f64, f64, f64); 7] = [
+    (0.0, 1.0, 0.036406),
+    (0.8331, 0.71978, 0.096211),
+    (1.0, 0.6, 0.040804),
+    (0.99645, 0.1481, 0.024408),
+    (0.5, -0.6, 0.016057),
+    (0.3297, -0.7576, 0.010304),
+    (0.0, -1.0, 0.0),
+];
+
+/// 波浪线顶点（自钻尖顶点 `x_tip` 起算，向实心端鼓出 0.1d；自 y=+d/2 到 y=−d/2）。
+fn pin_wave_points(x_tip: f64, d: f64) -> Vec<([f64; 2], f64)> {
+    PIN_WAVE
+        .iter()
+        .map(|(u, w, b)| ([x_tip - 0.1 * d * u, d / 2.0 * w], *b))
+        .collect()
+}
+
+/// 单件重量（钢 7.85 g/cm³）：圆柱段 + 两端锥台/球冠。
+fn pin_a_weight_kg(row: &PinARow, l: f64) -> f64 {
+    let (d, c, a) = (row.d, row.c, row.a);
+    let r = d / 2.0;
+    let rf_c = pin_face_r(d, c);
+    let v_cone_c = std::f64::consts::PI * c / 3.0 * (r * r + r * rf_c + rf_c * rf_c);
+    let rc = (a * a + r * r) / (2.0 * a);
+    let v_cap = std::f64::consts::PI * a * a * (3.0 * rc - a) / 3.0; // 球冠高 = a
+    let v_barrel = std::f64::consts::PI * r * r * (l - c - a).max(0.0);
+    (v_cone_c + v_cap + v_barrel) * 7.85e-3 / 1000.0
+}
+
+/// GB/T 119.1-2000 A 型圆柱销主视图（唯一视图；模板实测逐条复刻）。
+pub fn pin_a(d: f64, l: f64) -> Result<GenPart, String> {
+    let row = pin_1191_row(d).ok_or_else(|| format!("GB/T 119.1-2000 数据表里没有 Ø{}", trim(d)))?;
+    if l + 1e-9 < row.l_min || l > row.l_max + 1e-9 {
+        return Err(format!(
+            "GB/T 119.1 Ø{} 的长度应在 {} ~ {} 之间（表内系列：{:?}）",
+            trim(d), trim(row.l_min), trim(row.l_max), row.lengths
+        ));
+    }
+    let r = d / 2.0;
+    let (c, a) = (row.c, row.a);
+    let rf = pin_face_r(d, c); // 左端面半径
+    let rc = (a * a + r * r) / (2.0 * a); // 球冠半径 R = (a²+r²)/(2a)
+    let phi = (r / (rc - a)).atan().to_degrees(); // 半张角（模板 26.9915°）
+    let mut en: Vec<EntityType> = Vec::new();
+    // 左端：端面 + 15° 锥面
+    en.push(line([0.0, rf], [0.0, -rf], LAYER_MAIN));
+    for sgn in [1.0, -1.0] {
+        en.push(line([0.0, sgn * rf], [c, sgn * r], LAYER_MAIN));
+    }
+    // 圆柱段 + 两端交界棱线
+    for sgn in [1.0, -1.0] {
+        en.push(line([c, sgn * r], [l - a, sgn * r], LAYER_MAIN));
+    }
+    en.push(line([c, r], [c, -r], LAYER_MAIN));
+    en.push(line([l - a, r], [l - a, -r], LAYER_MAIN));
+    // 右端球冠（单弧，过顶点 (l, 0)）
+    en.push(arc([l - rc, 0.0], rc, -phi, phi, LAYER_MAIN));
+    en.push(line([-AXIS_OVER, 0.0], [l + AXIS_OVER, 0.0], LAYER_CENTER));
+    Ok(GenPart {
+        entities: en,
+        meta: PartMeta {
+            code: "GB/T 119.1-2000".into(),
+            name: "圆柱销 A型".into(),
+            spec: format!("Ø{}×{}", trim(d), trim(l)),
+            material: String::new(),
+            weight: format!("≈{:.5}", pin_a_weight_kg(row, l)),
+        },
+        bbox: [0.0, -r, l, r],
+    })
+}
+
+/// GB/T 120.1-2000 内螺纹圆柱销主视图（外形 + 局部剖；模板实测逐条复刻）。
+pub fn pin_threaded(d: f64, l: f64) -> Result<GenPart, String> {
+    let row = pin_1201_row(d).ok_or_else(|| format!("GB/T 120.1-2000 数据表里没有 Ø{}", trim(d)))?;
+    if l + 1e-9 < row.l_min || l > row.l_max + 1e-9 {
+        return Err(format!(
+            "GB/T 120.1 Ø{} 的长度应在 {} ~ {} 之间（表内系列：{:?}）",
+            trim(d), trim(row.l_min), trim(row.l_max), row.lengths
+        ));
+    }
+    let r = d / 2.0;
+    let (c, a) = (row.c, row.a);
+    let (d1, t1, t2) = (row.d1, row.t1, row.t2);
+    let rf_c = pin_face_r(d, c); // 实心端端面半径
+    let rf_a = pin_face_r(d, a); // 孔口端端面半径
+    let hole_r = pin_hole_r(d1);
+    let ch = 0.075 * d1; // 孔口/螺尾 45° 倒角轴向宽（模板 0.9）
+    let h_tip = hole_r / 60f64.to_radians().tan(); // 120° 钻尖高（模板 2.9445）
+    let x_tip = l - t2 - h_tip; // 钻尖顶点（模板：波浪线右端正好在此）
+    let mut en: Vec<EntityType> = Vec::new();
+    // 外形：左端 c 锥 + 圆柱 + 右端 a 锥 + 两端面 + 两端交界棱线
+    en.push(line([0.0, rf_c], [0.0, -rf_c], LAYER_MAIN));
+    en.push(line([l, rf_a], [l, -rf_a], LAYER_MAIN));
+    for sgn in [1.0, -1.0] {
+        en.push(line([0.0, sgn * rf_c], [c, sgn * r], LAYER_MAIN));
+        en.push(line([l - a, sgn * r], [l, sgn * rf_a], LAYER_MAIN));
+        en.push(line([c, sgn * r], [l - a, sgn * r], LAYER_MAIN));
+    }
+    en.push(line([c, r], [c, -r], LAYER_MAIN));
+    // a 端交界棱线：模板漏画（同族 119.1 与 c 端都有）→ 按同一规则补；叠合自查单列该差异
+    en.push(line([l - a, r], [l - a, -r], LAYER_MAIN));
+    // 内螺纹孔（自孔口端 x=l 向左）
+    for sgn in [1.0, -1.0] {
+        en.push(line([l, sgn * d1 / 2.0], [l - ch, sgn * hole_r], LAYER_MAIN)); // 孔口 45° 倒角
+        en.push(line([l - t1 - ch, sgn * hole_r], [l - t1, sgn * d1 / 2.0], LAYER_THIN)); // 螺尾斜线（细）
+        en.push(line([l - t1, sgn * d1 / 2.0], [l, sgn * d1 / 2.0], LAYER_THIN)); // 螺纹大径（细）
+        en.push(line([l - ch, sgn * hole_r], [l - t2, sgn * hole_r], LAYER_MAIN)); // 底孔壁
+        en.push(line([l - t2, sgn * hole_r], [x_tip, 0.0], LAYER_MAIN)); // 120° 钻尖
+    }
+    en.push(line([l - ch, hole_r], [l - ch, -hole_r], LAYER_MAIN)); // 孔口倒角终点竖线
+    en.push(line([l - t1, d1 / 2.0], [l - t1, -d1 / 2.0], LAYER_MAIN)); // 螺纹终止线
+    en.push(line([l - t2, hole_r], [l - t2, -hole_r], LAYER_MAIN)); // 钻孔深度线
+    // 局部剖：波浪线（2细线层）+ ANSI31 剖面线（5剖面线层）
+    let wave = pin_wave_points(x_tip, d);
+    {
+        use ocs_plugin_api::host::acadrust::entities::{LwPolyline, LwVertex};
+        use ocs_plugin_api::host::acadrust::types::Vector2;
+        let mut pl = LwPolyline::new();
+        for (p, b) in &wave {
+            let mut v = LwVertex::new(Vector2::new(p[0], p[1]));
+            v.bulge = *b;
+            pl.vertices.push(v);
+        }
+        pl.is_closed = false;
+        set_layer(&mut pl, LAYER_THIN);
+        en.push(EntityType::LwPolyline(pl));
+    }
+    // 边界：外形右段（12 条直线，自波浪线顶端到波浪线底端）+ 波浪线（反向、bulge 取反，模板共 18 条边）
+    let verts: Vec<[f64; 2]> = vec![
+        [x_tip, r],
+        [l - a, r],
+        [l, rf_a],
+        [l, d1 / 2.0],
+        [l - ch, hole_r],
+        [l - t2, hole_r],
+        [x_tip, 0.0],
+        [l - t2, -hole_r],
+        [l - ch, -hole_r],
+        [l, -d1 / 2.0],
+        [l, -rf_a],
+        [l - a, -r],
+        [x_tip, -r],
+    ];
+    let mut hatch = hatch_ansi31(&verts, 0.0);
+    if let EntityType::Hatch(h) = &mut hatch {
+        use ocs_plugin_api::host::acadrust::entities::hatch::{BoundaryEdge, PolylineEdge};
+        use ocs_plugin_api::host::acadrust::types::Vector3;
+        let mut pe = PolylineEdge { vertices: Vec::new(), is_closed: false };
+        for (p, b) in wave.iter().rev() {
+            pe.vertices.push(Vector3::new(p[0], p[1], -*b));
+        }
+        for path in &mut h.paths {
+            path.edges.pop(); // 去掉用于闭合的最后一条直线边 (x_tip,−r)→(x_tip,+r)
+            path.edges.push(BoundaryEdge::Polyline(pe.clone()));
+        }
+    }
+    en.push(hatch);
+    en.push(line([-AXIS_OVER, 0.0], [l + AXIS_OVER, 0.0], LAYER_CENTER));
+    Ok(GenPart {
+        entities: en,
+        meta: PartMeta {
+            code: "GB/T 120.1-2000".into(),
+            name: "内螺纹圆柱销".into(),
+            spec: format!("Ø{}×{}", trim(d), trim(l)),
+            material: String::new(),
+            weight: format!("≈{:.5}", pin_threaded_weight_kg(row, l)),
+        },
+        bbox: [0.0, -r, l, r],
+    })
+}
+
+/// 内螺纹圆柱销单件重量（钢 7.85 g/cm³，扣除螺纹孔）。
+fn pin_threaded_weight_kg(row: &ThreadedPinRow, l: f64) -> f64 {
+    let (d, c, a, d1, t1, t2) = (row.d, row.c, row.a, row.d1, row.t1, row.t2);
+    let r = d / 2.0;
+    let rf_c = pin_face_r(d, c);
+    let rf_a = pin_face_r(d, a);
+    let cone = |len: f64, rf: f64| std::f64::consts::PI * len / 3.0 * (r * r + r * rf + rf * rf);
+    let barrel = std::f64::consts::PI * r * r * (l - c - a).max(0.0);
+    let hole_r = pin_hole_r(d1);
+    let hole = std::f64::consts::PI * hole_r * hole_r * (t2 + hole_r / 60f64.to_radians().tan() / 3.0);
+    let _ = t1;
+    ((cone(c, rf_c) + barrel + cone(a, rf_a) - hole).max(0.0)) * 7.85e-3 / 1000.0
 }
 
 /// 平垫圈（GB/T 97.1）的一个视图。
@@ -1981,7 +2466,7 @@ mod acm_ref_tests {
                 _ => None,
             })
             .collect();
-        assert_eq!(arcs.len(), 4, "四个角各一条弧");
+        assert_eq!(arcs.len(), 6, "四个角弧 + 两端面倒角大弧（模板实测；旧版漏画大弧）");
         assert!(arcs.iter().any(|a| (a.center.x - r2).abs() < 1e-3
             && (a.center.y + 0.375 * e).abs() < 1e-3
             && (a.start_angle.to_degrees() - 145.616).abs() < 0.01
@@ -1998,6 +2483,20 @@ mod acm_ref_tests {
                 arcs.iter().any(|a| (a.center.x - cx).abs() < 1e-3 && (a.center.y - cy).abs() < 1e-3
                     && (a.end_angle - a.start_angle).abs().to_degrees() > th.to_degrees() - 0.01),
                 "缺弧心 ({cx},{cy}) 且张角 θ 的角弧"
+            );
+        }
+        // 端面倒角大弧（模板实测：r1 = u+Δ = 15.2855，弧心 (r1, 0) / (m−r1, 0)，张角 180°±17.588°）
+        let u = ((e / 4.0).powi(2) - delta * delta) / (2.0 * delta);
+        let r1 = u + delta;
+        let al = (e / 4.0 / u).atan().to_degrees();
+        assert!((r1 - 15.2855).abs() < 1e-3, "大弧半径 r1 = 15.2855（模板），实得 {r1}");
+        for (cx, a0, a1) in [(r1, 180.0 - al, 180.0 + al), (m - r1, -al, al)] {
+            assert!(
+                arcs.iter().any(|a| (a.center.x - cx).abs() < 1e-3 && a.center.y.abs() < 1e-3
+                    && (a.radius - r1).abs() < 1e-3
+                    && (a.start_angle.to_degrees() - a0).abs() < 0.02
+                    && (a.end_angle.to_degrees() - a1).abs() < 0.02),
+                "缺弧心 ({cx},0) r={r1} 张角 {a0}°→{a1}° 的端面大弧（模板 162.412°→197.588°）"
             );
         }
         // 俯视图两端弧角度：左端 180°±θ′、右端 ±θ′（模板 159.744°→200.256°）
@@ -2081,7 +2580,349 @@ mod acm_ref_tests {
             assert!(!h.paths.is_empty(), "有边界");
         }
         let angles: Vec<f64> = hats.iter().map(|h| h.pattern_angle).collect();
-        assert!(angles.contains(&0.0) && angles.contains(&270.0), "两片角度 0° / 270°（模板），实得 {angles:?}");
+        assert!(
+            angles.contains(&0.0) && angles.contains(&270f64.to_radians()),
+            "两片角度 0° / 270°（模板；**存弧度**），实得 {angles:?}"
+        );
+        // 防回归：角度以弧度存储 → DXF 写出时才是 270°。以前写成度数，落图后图案被转 15470°。
+        {
+            let mut doc = ocs_plugin_api::host::acadrust::CadDocument::new();
+            crate::partgen::acceptance_dump::add_ocsm_layers(&mut doc);
+            for e in sec.entities.clone() {
+                doc.add_entity(e).unwrap();
+            }
+            let tmp = std::env::temp_dir().join("ocsm_nut_hatch_roundtrip.dxf");
+            ocs_plugin_api::host::acadrust::io::dxf::DxfWriter::new(&doc)
+                .write_to_file(&tmp)
+                .unwrap();
+            let txt = std::fs::read_to_string(&tmp).unwrap();
+            let deg: Vec<f64> = txt
+                .split("\n")
+                .collect::<Vec<_>>()
+                .windows(2)
+                .filter(|w| w[0].trim() == "52")
+                .filter_map(|w| w[1].trim().parse::<f64>().ok())
+                .collect();
+            assert!(
+                deg.iter().any(|d| (d - 270.0).abs() < 1e-6),
+                "DXF 里图案角应为 270°（实得 {deg:?}）"
+            );
+            let _ = std::fs::remove_file(&tmp);
+        }
+        // 剖视图**只有直线**（模板逐条实测）：既无角弧、也无 ±e/4 内棱线
+        assert!(
+            !sec.entities.iter().any(|e| matches!(e, EntityType::Arc(_))),
+            "剖视图不应有圆弧（模板：纯被切材料轮廓）"
+        );
+        assert!(
+            !sec.entities.iter().any(|x| match x {
+                EntityType::Line(l) => {
+                    let y = l.start.y;
+                    (y.abs() - e / 4.0).abs() < 1e-6 && l.start.y == l.end.y
+                }
+                _ => false,
+            }),
+            "剖视图不应有 ±e/4 内棱线（模板无）"
+        );
+    }
+
+    /// 六角螺母 C级 M24（GB/T 41-2016）：与用户模板（四视图 DXF）逐条一致。
+    ///
+    /// 模板实测（`ref_dump`）：s=36、e_公称=41.5692（表里 39.55 是公差下限）、m=22.3、
+    /// Δ=1.6077、角弧 r=9.201（145.6156°→180°）、大弧 r1=34.3922（162.412°→197.588°）、
+    /// 俯视弧 r=28.454（同角）、左视倒角圆 r=18 / 孔 Ø20.4 / 大径 3/4 弧 r=12、
+    /// 剖视 Δ45=1.8、孔壁竖线 x=1.8/20.5、大径细线 ±12 全长、两片 ANSI31。
+    #[test]
+    fn c41_nut_matches_template() {
+        let (d, m) = (24.0, 22.3);
+        let row = nut_c41_row(d).unwrap();
+        let s = row.s; // 36
+        let e = across_corners(s); // 41.5692
+        let delta = chamfer_run(s, e); // 1.6077
+        let th = 2.0 * (8.0 * delta / e).atan();
+        let r2 = (e / 8.0) / th.sin();
+        let u = ((e / 4.0).powi(2) - delta * delta) / (2.0 * delta);
+        let r1 = u + delta;
+        assert!((delta - 1.6077).abs() < 1e-3, "Δ = 1.6077（模板），实得 {delta}");
+        assert!((r2 - 9.201).abs() < 1e-2, "角弧 r = 9.201（模板），实得 {r2}");
+        assert!((r1 - 34.3922).abs() < 1e-2, "端面大弧 r1 = 34.3922（模板），实得 {r1}");
+        assert!((row.m - m).abs() < 1e-9 && (s - 36.0).abs() < 1e-9, "表里 M24 = s36 / m22.3");
+
+        // 主视图：轮廓 + 内棱线 + 4 角弧 + 2 大弧
+        let main = hex_nut(d, "nut_c41", NutView::Main).unwrap();
+        assert!(has_line(&main, (0.0, s / 2.0), (delta, e / 2.0), "MAIN"), "60° 角斜线");
+        assert!(has_line(&main, (delta, e / 4.0), (m - delta, e / 4.0), "MAIN"), "内棱线 ±e/4");
+        assert!(has_line(&main, (m, s / 2.0), (m, -s / 2.0), "MAIN"), "右端面");
+        let arcs: Vec<&ocs_plugin_api::host::acadrust::entities::Arc> = main
+            .entities
+            .iter()
+            .filter_map(|x| match x {
+                EntityType::Arc(a) => Some(a),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(arcs.len(), 6, "4 角弧 + 2 端面大弧");
+        assert!(arcs.iter().any(|a| (a.center.x - r2).abs() < 1e-2
+            && (a.center.y + 0.375 * e).abs() < 1e-2
+            && (a.start_angle.to_degrees() - 145.6156).abs() < 0.02
+            && (a.end_angle.to_degrees() - 180.0).abs() < 1e-6), "左下角弧（模板 145.6156°→180°）");
+        assert!(arcs.iter().any(|a| (a.center.x - r1).abs() < 1e-2 && a.center.y.abs() < 1e-6
+            && (a.radius - r1).abs() < 1e-2
+            && (a.start_angle.to_degrees() - 162.412).abs() < 0.02), "左端面大弧（模板 162.412°→197.588°）");
+
+        // 俯视图：矩形 + 中棱线 + 两端弧 r=28.4539、张角 180°±23.91°
+        let th2 = 2.0 * (4.0 * delta / s).atan();
+        let r3 = (s / 4.0) / th2.sin();
+        let top = hex_nut(d, "nut_c41", NutView::Top).unwrap();
+        assert!(has_line(&top, (0.0, s / 2.0), (m, s / 2.0), "MAIN"), "俯视上边");
+        assert!(has_line(&top, (delta, 0.0), (m - delta, 0.0), "MAIN"), "中棱线");
+        let tarcs: Vec<&ocs_plugin_api::host::acadrust::entities::Arc> = top
+            .entities
+            .iter()
+            .filter_map(|x| match x {
+                EntityType::Arc(a) => Some(a),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(tarcs.len(), 4, "俯视两端各两条弧");
+        for cy in [s / 4.0, -s / 4.0] {
+            assert!(tarcs.iter().any(|a| (a.center.x - r3).abs() < 1e-2 && (a.center.y - cy).abs() < 1e-6
+                && (a.radius - r3).abs() < 1e-2), "俯视左端弧（弧心 ({r3},{cy})）");
+            assert!(tarcs.iter().any(|a| (a.center.x - (m - r3)).abs() < 1e-2 && (a.center.y - cy).abs() < 1e-6),
+                "俯视右端弧（弧心 ({},{cy})）", m - r3);
+        }
+
+        // 左视图：六边形 + 倒角圆 r=s/2=18 + 孔 Ø20.4（0.85d）+ 大径 3/4 细弧 r=12
+        let end = hex_nut(d, "nut_c41", NutView::End).unwrap();
+        let circ: Vec<f64> = end
+            .entities
+            .iter()
+            .filter_map(|x| match x {
+                EntityType::Circle(c) => Some(c.radius),
+                _ => None,
+            })
+            .collect();
+        assert!(circ.iter().any(|r| (r - s / 2.0).abs() < 1e-9), "倒角圆 r=s/2=18");
+        assert!(circ.iter().any(|r| (r - 0.85 * d / 2.0).abs() < 1e-9), "小径圆 r=10.2（模板 Ø20.4）");
+        assert!(end.entities.iter().any(|x| match x {
+            EntityType::Arc(a) => (a.radius - d / 2.0).abs() < 1e-9
+                && (a.start_angle.to_degrees() - 270.0).abs() < 1e-6
+                && (a.end_angle.to_degrees() - 180.0).abs() < 1e-6,
+            _ => false,
+        }), "大径细弧 r=12，270°→180°");
+
+        // 剖视图：纯轮廓（无弧） + 45° 倒角 1.8 + 孔壁竖线/水平线 + 大径细线 + 两片 ANSI31
+        let sec = hex_nut(d, "nut_c41", NutView::Section).unwrap();
+        let c45 = 0.075 * d; // 1.8（模板实测）
+        assert!(has_line(&sec, (0.0, d / 2.0), (c45, 0.85 * d / 2.0), "MAIN"), "45° 端面倒角");
+        assert!(has_line(&sec, (c45, 0.85 * d / 2.0), (c45, -0.85 * d / 2.0), "MAIN"), "左孔壁竖线");
+        assert!(has_line(&sec, (m - c45, 0.85 * d / 2.0), (m - c45, -0.85 * d / 2.0), "MAIN"), "右孔壁竖线");
+        assert!(has_line(&sec, (c45, 0.85 * d / 2.0), (m - c45, 0.85 * d / 2.0), "MAIN"), "孔壁水平线（模板）");
+        assert!(has_line(&sec, (c45, -0.85 * d / 2.0), (m - c45, -0.85 * d / 2.0), "MAIN"), "孔壁水平线（下）");
+        assert!(has_line(&sec, (0.0, d / 2.0), (m, d / 2.0), "THIN"), "大径细线全长");
+        assert!(!sec.entities.iter().any(|x| matches!(x, EntityType::Arc(_))), "剖视图无圆弧（模板）");
+        let hats: Vec<&ocs_plugin_api::host::acadrust::entities::Hatch> = sec
+            .entities
+            .iter()
+            .filter_map(|x| match x {
+                EntityType::Hatch(h) => Some(h),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(hats.len(), 2, "上下两片剖面线");
+        for h in &hats {
+            assert_eq!(h.common.layer, LAYER_HATCH);
+            assert_eq!(h.pattern.name, "ANSI31");
+            assert_eq!(h.pattern_scale, 1.0);
+            assert_eq!(h.paths[0].edges.len(), 8, "被切材料 8 顶点边界");
+        }
+        let angles: Vec<f64> = hats.iter().map(|h| h.pattern_angle).collect();
+        assert!(angles.contains(&0.0) && angles.contains(&270f64.to_radians()), "0°/270°（模板，弧度存储）");
+    }
+
+    /// GB/T 119.1-2000 A 型圆柱销 d10×18：与用户模板主视图 DXF 逐条一致。
+    ///
+    /// 模板实测（d=10 / l=18）：端面半宽 4.464100（=10/2−2·tan15°）、锥面轴向长 c=2、
+    /// 圆柱段 x∈[2, 16.8]、球冠 R=11.0166667（圆心 x=6.9833333，333.0085°→26.9915°）、
+    /// 两端交界竖棱线 x=2 / x=16.8、中心线 −3→21。
+    #[test]
+    fn pin_1191_matches_template() {
+        let p = pin_a(10.0, 18.0).unwrap();
+        let (r, c, a) = (5.0, 2.0, 1.2);
+        let rf = pin_face_r(10.0, c);
+        assert!((rf - 4.4641016151377544).abs() < 1e-9, "端面半宽 = d/2−c·tan15°，实得 {rf}");
+        assert!((PIN_CONE_DEG - 15.0).abs() < 1e-12, "半锥角 = 15°（模板角标）");
+        let ls = lines_of(&p);
+        let near = |u: f64, v: f64| (u - v).abs() < 1e-3;
+        let has = |x1: f64, y1: f64, x2: f64, y2: f64| {
+            ls.iter().any(|(a, b, cc, d, _)| {
+                (near(*a, x1) && near(*b, y1) && near(*cc, x2) && near(*d, y2))
+                    || (near(*a, x2) && near(*b, y2) && near(*cc, x1) && near(*d, y1))
+            })
+        };
+        assert!(has(0.0, rf, 0.0, -rf), "左端面（±4.4641）");
+        assert!(has(0.0, rf, c, r), "左端 15° 锥面（上）");
+        assert!(has(0.0, -rf, c, -r), "左端 15° 锥面（下）");
+        assert!(has(c, r, 18.0 - a, r), "圆柱段母线（上，到 l−a=16.8）");
+        assert!(has(c, r, c, -r), "c 端交界竖棱线 x=2");
+        assert!(has(18.0 - a, r, 18.0 - a, -r), "球冠端交界竖棱线 x=16.8");
+        assert!(has(-3.0, 0.0, 21.0, 0.0), "中心线两端各伸出 3.0");
+        let arcs: Vec<&ocs_plugin_api::host::acadrust::entities::Arc> = p
+            .entities
+            .iter()
+            .filter_map(|e| match e {
+                EntityType::Arc(a) => Some(a),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(arcs.len(), 1, "球冠为单弧（模板）");
+        let a0 = arcs[0];
+        let rc = (a * a + r * r) / (2.0 * a);
+        let phi = (r / (rc - a)).atan().to_degrees();
+        assert!((a0.radius - 11.0166667).abs() < 1e-5, "球冠 R=(a²+r²)/(2a)=11.0166667（模板），实得 {}", a0.radius);
+        assert!((a0.center.x - (18.0 - rc)).abs() < 1e-5 && a0.center.y.abs() < 1e-9, "弧心 (l−R, 0) = (6.9833333, 0)");
+        assert!((phi - 26.9914666).abs() < 1e-6, "半张角 26.9915°（模板）");
+        assert!(
+            (a0.end_angle.to_degrees() - phi).abs() < 1e-9 && (a0.start_angle.to_degrees() + phi).abs() < 1e-9,
+            "张角 −φ→φ（等价模板 333.0085°→26.9915°）"
+        );
+        assert_eq!(p.meta.code, "GB/T 119.1-2000");
+        assert_eq!(p.meta.name, "圆柱销 A型");
+        assert_eq!(p.meta.spec, "Ø10×18");
+        assert!(p.meta.weight.starts_with('≈'));
+        assert!(pin_a(10.0, 200.0).unwrap_err().contains("长度应在"));
+    }
+
+    /// GB/T 120.1-2000 内螺纹圆柱销 d20×40：与用户模板主视图 DXF 逐条一致。
+    ///
+    /// 模板（自身坐标：孔口端 x=0、实心端 x=−40）实测：c=3.5（端面 9.06218）、a=2.5（端面 9.33013）、
+    /// 螺纹大径 Ø12 细线（x −18→0）、螺尾斜线 0.9、底孔 Ø10.2（x −0.9→−28）、
+    /// 钻孔深度线 x=−28、120° 钻尖到 x=−30.9445（尖高 2.9445）、波浪线顶点（−30.9445,±10）…（−32.9445,6）…、
+    /// 剖面线 ANSI31 角 0°、比例 1。本库把孔口端映到 x=l（整体平移 +l），下列断言已平移。
+    #[test]
+    fn pin_1201_matches_template() {
+        let (d, l) = (20.0, 40.0);
+        let row = pin_1201_row(d).unwrap();
+        let (c, a, d1, t1, t2) = (row.c, row.a, row.d1, row.t1, row.t2);
+        assert_eq!((c, a, d1, t1, t2), (3.5, 2.5, 12.0, 18.0, 28.0), "表内 d20 行（模板实测一致）");
+        let p = pin_threaded(d, l).unwrap();
+        let (r, rf_c, rf_a) = (10.0, pin_face_r(d, c), pin_face_r(d, a));
+        assert!((rf_c - 9.062180000000012).abs() < 2e-5, "实心端端面 9.06218（模板；模板值只存 4 位小数）");
+        assert!((rf_a - 9.330129999999996).abs() < 2e-5, "孔口端端面 9.33013（模板；模板值只存 4 位小数）");
+        let hole_r = pin_hole_r(d1);
+        assert!((hole_r - 5.1).abs() < 1e-9, "底孔半径 0.85·d1/2 = 5.1（模板 Ø10.2）");
+        let ch = 0.075 * d1;
+        assert!((ch - 0.9).abs() < 1e-9, "孔口/螺尾倒角轴向 0.075·d1 = 0.9（模板）");
+        let h_tip = hole_r / 60f64.to_radians().tan();
+        assert!((h_tip - 2.9445).abs() < 1e-3, "120° 钻尖高 = 2.9445（模板）");
+        let x_tip = l - t2 - h_tip;
+        assert!((x_tip - 9.0555).abs() < 1e-3, "钻尖顶点平移后 x = 9.0555（模板 −30.9445）");
+        let ls = lines_of(&p);
+        let near = |u: f64, v: f64| (u - v).abs() < 1e-3;
+        let has = |x1: f64, y1: f64, x2: f64, y2: f64, lay: &str| {
+            ls.iter().any(|(a, b, cc, dd, l2)| {
+                *l2 == lay
+                    && ((near(*a, x1) && near(*b, y1) && near(*cc, x2) && near(*dd, y2))
+                        || (near(*a, x2) && near(*b, y2) && near(*cc, x1) && near(*dd, y1)))
+            })
+        };
+        assert!(has(0.0, rf_c, 0.0, -rf_c, "MAIN"), "实心端端面");
+        assert!(has(0.0, rf_c, c, r, "MAIN"), "实心端 15° 锥");
+        assert!(has(c, r, l - a, r, "MAIN"), "圆柱母线到 l−a=37.5");
+        assert!(has(l - a, r, l, rf_a, "MAIN"), "孔口端 15° 锥");
+        assert!(has(l, rf_a, l, -rf_a, "MAIN"), "孔口端面");
+        assert!(has(l - a, r, l - a, -r, "MAIN"), "孔口端交界棱线（模板漏画，按规则补）");
+        assert!(has(l, d1 / 2.0, l - ch, hole_r, "MAIN"), "孔口 45° 倒角");
+        assert!(has(l - t1 - ch, hole_r, l - t1, d1 / 2.0, "THIN"), "螺尾斜线（细）");
+        assert!(has(l - t1, d1 / 2.0, l, d1 / 2.0, "THIN"), "螺纹大径细线（22→40）");
+        assert!(has(l - ch, hole_r, l - t2, hole_r, "MAIN"), "底孔壁（39.1→12）");
+        assert!(has(l - t2, hole_r, x_tip, 0.0, "MAIN"), "钻尖（12,5.1）→(9.0555,0)");
+        assert!(has(l - t1, d1 / 2.0, l - t1, -d1 / 2.0, "MAIN"), "螺纹终止线 x=22");
+        assert!(has(l - t2, hole_r, l - t2, -hole_r, "MAIN"), "钻孔深度线 x=12");
+        assert!(has(-3.0, 0.0, l + 3.0, 0.0, "CENTER"), "中心线两端各伸出 3.0");
+        let pl: Vec<&ocs_plugin_api::host::acadrust::entities::LwPolyline> = p
+            .entities
+            .iter()
+            .filter_map(|e| match e {
+                EntityType::LwPolyline(x) if x.common.layer == LAYER_THIN => Some(x),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(pl.len(), 1, "2细线层上一条波浪线");
+        assert_eq!(pl[0].vertices.len(), PIN_WAVE.len(), "波浪线 7 顶点（模板）");
+        for (i, (u, w, b)) in PIN_WAVE.iter().enumerate() {
+            let v = &pl[0].vertices[i];
+            assert!((v.location.x - (x_tip - 0.1 * d * u)).abs() < 1e-6, "顶点{i} x");
+            assert!((v.location.y - d / 2.0 * w).abs() < 1e-6, "顶点{i} y");
+            assert!((v.bulge - b).abs() < 1e-9, "顶点{i} bulge（模板原值）");
+        }
+        let hats: Vec<&ocs_plugin_api::host::acadrust::entities::Hatch> = p
+            .entities
+            .iter()
+            .filter_map(|e| match e {
+                EntityType::Hatch(h) => Some(h),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(hats.len(), 1, "整片局部剖只有一片剖面线（模板）");
+        let h = hats[0];
+        assert_eq!(h.common.layer, LAYER_HATCH);
+        assert_eq!(h.pattern.name, "ANSI31");
+        assert!(h.pattern_angle.abs() < 1e-12, "图案角 0°（模板 52=0）");
+        assert_eq!(h.pattern_scale, 1.0);
+        assert_eq!(h.paths.len(), 1);
+        let n_lines = h.paths[0]
+            .edges
+            .iter()
+            .filter(|e| matches!(e, ocs_plugin_api::host::acadrust::entities::hatch::BoundaryEdge::Line(_)))
+            .count();
+        let n_poly = h.paths[0]
+            .edges
+            .iter()
+            .filter(|e| matches!(e, ocs_plugin_api::host::acadrust::entities::hatch::BoundaryEdge::Polyline(_)))
+            .count();
+        assert_eq!((n_lines, n_poly), (12, 1), "12 条直线 + 1 条波浪线（模板把波浪线存为 6 段弧）");
+        let pe = h.paths[0]
+            .edges
+            .iter()
+            .find_map(|e| match e {
+                ocs_plugin_api::host::acadrust::entities::hatch::BoundaryEdge::Polyline(pe) => Some(pe),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(pe.vertices.len(), PIN_WAVE.len(), "波浪线边界 7 顶点");
+        for (i, (u, w, b)) in PIN_WAVE.iter().rev().enumerate() {
+            let v = &pe.vertices[i];
+            assert!((v.x - (x_tip - 0.1 * d * u)).abs() < 1e-6, "边界波浪顶点{i} x");
+            assert!((v.y - d / 2.0 * w).abs() < 1e-6, "边界波浪顶点{i} y");
+            assert!((v.z + b).abs() < 1e-9, "边界波浪 bulge 反向（模板反向遍历）");
+        }
+        assert_eq!(p.meta.code, "GB/T 120.1-2000");
+        assert_eq!(p.meta.spec, "Ø20×40");
+        assert!(pin_threaded(20.0, 10.0).unwrap_err().contains("长度应在"));
+    }
+
+    /// 销族数据表体检：规格数、长度递增、全规格可生成、模板实例在表内。
+    #[test]
+    fn pin_tables_sane() {
+        assert_eq!(pin_1191_table().rows.len(), 20, "GB/T 119.1 共 20 规格");
+        assert_eq!(pin_1201_table().rows.len(), 10, "GB/T 120.1 共 10 规格");
+        for row in pin_1191_table().rows.iter() {
+            assert!(row.lengths.windows(2).all(|w| w[1] > w[0]), "Ø{} 长度序列非递增", row.d);
+            assert!((row.lengths[0] - row.l_min).abs() < 1e-9);
+            assert!((row.lengths[row.lengths.len() - 1] - row.l_max).abs() < 1e-9);
+            for l in &row.lengths {
+                pin_a(row.d, *l).unwrap_or_else(|e| panic!("Ø{}×{} 生成失败: {e}", row.d, l));
+            }
+        }
+        assert!(pin_1191_row(10.0).unwrap().lengths.contains(&18.0), "模板实例 Ø10×18 在表内");
+        for row in pin_1201_table().rows.iter() {
+            assert!(row.lengths.windows(2).all(|w| w[1] > w[0]), "Ø{} 长度序列非递增", row.d);
+            for l in &row.lengths {
+                pin_threaded(row.d, *l).unwrap_or_else(|e| panic!("Ø{}×{} 生成失败: {e}", row.d, l));
+            }
+        }
+        assert!(pin_1201_row(20.0).unwrap().lengths.contains(&40.0), "模板实例 Ø20×40 在表内");
     }
 
     /// 弹簧垫圈 Ø10：与用户模板（标准型弹簧垫圈_GB-T93-1987 主视图/左视图 DXF）逐条一致。

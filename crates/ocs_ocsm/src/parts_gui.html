@@ -61,7 +61,7 @@
     <div id="panel" style="display:none">
       <label for="dia">公称直径</label>
       <select id="dia"></select>
-      <label for="len">长度（mm，仅列该直径标准系列）</label>
+      <label for="len" id="lenLabel">长度 l（mm，仅列该直径标准长度系列）</label>
       <select id="len"></select>
       <label>视图（出库哪个视图）</label>
       <div class="row" id="viewRow"></div>
@@ -70,8 +70,9 @@
       <div id="status"></div>
       <img id="preview" alt="零件预览" style="margin-top:10px" />
       <div class="hint">
-        生成物：轮廓 → <code>1轮廓实线层</code>、牙底细线 → <code>2细线层</code>、中心线 → <code>3中心线层</code>；
-        颜色/线型/线宽一律 <b>ByLayer</b>；基点 = 头部支承面 × 轴线；<b>不含尺寸标注</b>。
+        生成物：轮廓 → <code>1轮廓实线层</code>、牙底/细线 → <code>2细线层</code>、中心线 → <code>3中心线层</code>、
+        剖面线 → <code>5剖面线层</code>；颜色/线型/线宽一律 <b>ByLayer</b>；
+        <span id="baseHint">基点 = 头部支承面 × 轴线</span>；<b>不含尺寸标注</b>。
       </div>
     </div>
     <div id="tip" class="hint">← 在左侧展开并选择零件</div>
@@ -120,16 +121,35 @@ function buildTree(ul, nodes, path) {
 }
 
 function pickFamily(id, row) {
+  try {
+    pickFamilyInner(id, row);
+  } catch (e) {
+    // 数据异常（例如某族的 views 为空）不再静默死面板，直接把原因写在状态行
+    el("status").textContent = "该零件族数据异常：" + e;
+    el("status").className = "bad";
+  }
+}
+
+function pickFamilyInner(id, row) {
   if (row) {
     document.querySelectorAll(".node.sel").forEach((x) => x.classList.remove("sel"));
     row.classList.add("sel");
   }
   const f = catalog.families[id];
   if (!f) return;
+  if (!f.views || !f.views.length) {
+    el("status").textContent = "该族暂无可出库视图（待画法确认）";
+    el("status").className = "bad";
+    return;
+  }
+  el("status").textContent = "";
+  el("status").className = "";
   cur.family = id;
   el("code").textContent = "　" + f.code + " ← " + f.iso;
   el("panel").style.display = "";
   el("tip").style.display = "none";
+  el("lenLabel").textContent = (f.len_label || "长度 l") + "（mm，仅列该直径的取值）";
+  el("baseHint").textContent = f.base_hint || "基点 = 头部支承面 × 轴线";
   const dia = el("dia");
   dia.innerHTML = "";
   f.sizes.forEach((s) => {
@@ -169,7 +189,10 @@ function onDia(size) {
   });
   len.value = size.lengths[0];
   cur.l = Number(size.lengths[0]);
-  el("steps").textContent = "该直径标准长度系列：" + size.lengths.join("、") + " mm（" + size.l_min + " ~ " + size.l_max + "）";
+  const lab = catalog.families[cur.family].len_label || "长度";
+  el("steps").textContent = size.lengths.length > 1
+      ? "该直径" + lab + " 的取值：" + size.lengths.join("、") + " mm"
+      : "该直径" + lab + " = " + size.lengths[0] + " mm";
   update();
 }
 
