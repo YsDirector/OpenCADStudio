@@ -19,7 +19,7 @@ cargo build --release                                  # 宿主（也是插件 r
 cargo build --release -p ocs_ocsm && cp target/release/libocs_ocsm.so \
     ~/.config/OpenCADStudio/plugins/opencad.ocsm/       # 插件（含 plugin.toml 的 rustc 门禁）
 # ③ 回归
-cargo test -p ocs_ocsm --lib                           # 插件 155
+cargo test -p ocs_ocsm                                 # 插件 178（2026-09-14 起）
 cargo test -p OpenCADStudio --lib dimtmove              # 宿主 DIMTMOVE 引线 4
 OCS_SMOKE_PLUGIN=$PWD/target/release/libocs_ocsm.so \
   OCS_PLUGIN_RUNNER_EXE=$PWD/target/release/OpenCADStudio \
@@ -31,7 +31,17 @@ OCS_SMOKE_PLUGIN=$PWD/target/release/libocs_ocsm.so \
 所以**改到宿主 `src/` 的渲染/几何逻辑必须重编宿主**（只换 `.so` 会看到旧渲染，
 2026-09-13 曾因此误判"改了没效果"）。
 
-## 0.5 已上游化（2026-09-14 记 — **下轮同步按此删本地副本，以上游版为准**）
+## 0.5 已上游化（2026-09-14 记 — **已在同日的上游同步中执行完毕**）
+
+> ✅ **执行结果**：`git merge origin/main`（上游 `fc1788df`，即 **v2026.37.0**）完成，
+> 合并提交 `d4007055`（父：fork `ba6fab35` + 上游 `fc1788df`）。9 个冲突按本表处置：
+> `selection.rs` / `dim_leader_render_check.rs` 取上游；`viewport.rs` / `app/mod.rs` /
+> `manifest.rs` 融合（fork 钩子与上游新结构两边都留）；`dimension.rs` 取上游 DIMTMOVE +
+> **手工补回 fork 的 C-2 文字宽度自适应**（上游没有）；`Cargo.toml`/`Cargo.lock` 保住镜像 URL 与
+> workspace 成员。另修一处自动合并产生的重复再导出（`src/scene/mod.rs` 同时出现上游
+> `pub(crate) use selection::pe_url_of;` 与 fork 旧 `pub use`，后者会编译报错，已删）。
+> 验证：`cargo check --lib` ✅ · `--lib dimtmove` **5 passed** · `--test dim_leader_render_check` **1 passed** ·
+> `-p ocs_ocsm` **178 passed**（插件 API 未被上游改动破坏）。安全网分支/tag 仍保留指向 `ba6fab35`。
 
 上游 owner HakanSeven12 于 **2026-09-13T18:14:50Z** 一次性合并了本 fork 的两个 PR：
 
@@ -139,7 +149,11 @@ OCS_SMOKE_PLUGIN=$PWD/target/release/libocs_ocsm.so \
 ### A-2 `Cargo.toml` — workspace 成员与 acadrust pin
 
 - 成员新增 `crates/ocs_ocsm`、`crates/ocs_ocsm_mcp`；
-  `acadrust` 固定到 fork 镜像 rev（`ghfast.top/.../cadcodec` rev `5b56571a`）。
+  `acadrust` 固定到 fork 镜像 rev（`ghfast.top/.../cadcodec`）。
+  **2026-09-14 上游同步时 rev 由 `5b56571a` 升到 `5eea24cf`（acadrust 0.5.5）**：上游 542 提交依赖
+  更新的 cadcodec/cadkernel（DIMTMOVE kernel 渲染器等），沿用旧 rev 无法编译；**镜像 URL 保持 ghfast.top，
+  未被覆盖成官方 URL**。宿主与插件经 `cargo tree` 确认共用同一份 acadrust（无重复版本），插件 178 测试全过
+  → 实体 API 未破坏。这符合本节原定规则「上游更新 rev 时同步升 rev 并重跑插件测试」。
 - **合并注意**：上游更新 acadrust rev 时，需确认插件依赖的实体 API（ATTDEF/块/标注字段）
   没变；必要时同步升 rev 并重跑插件测试。**不要**让上游覆盖成本地的镜像 URL（网络环境原因）。
 
