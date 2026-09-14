@@ -20,8 +20,6 @@ use printpdf::{
     PdfFontHandle, PdfPage, PdfSaveOptions, Point, Polygon, PolygonRing, Pt, Rgb, TextItem,
     WindingOrder,
 };
-#[cfg(not(target_arch = "wasm32"))]
-use std::io::Write;
 use std::path::Path;
 
 #[derive(Clone, Debug)]
@@ -175,8 +173,7 @@ pub fn export_pdf(
         plot_style,
         options,
     );
-    let mut file = std::fs::File::create(path).map_err(|e| e.to_string())?;
-    file.write_all(&bytes).map_err(|e| e.to_string())
+    write_pdf_atomically(path, &bytes)
 }
 
 /// Export several independently sized pages into one PDF file.
@@ -190,8 +187,22 @@ pub fn export_pdf_pages(
         return Err("No pages were selected.".into());
     }
     let bytes = build_pdf_pages(pages, plot_style);
-    let mut file = std::fs::File::create(path).map_err(|e| e.to_string())?;
-    file.write_all(&bytes).map_err(|e| e.to_string())
+    write_pdf_atomically(path, &bytes)
+}
+
+/// Write a complete PDF beside the destination, then replace it atomically.
+#[cfg(not(target_arch = "wasm32"))]
+fn write_pdf_atomically(path: &Path, bytes: &[u8]) -> Result<(), String> {
+    let temp_path = super::save_temp_path(path);
+    if let Err(error) = std::fs::write(&temp_path, bytes) {
+        let _ = std::fs::remove_file(&temp_path);
+        return Err(format!("Failed to write PDF data: {error}"));
+    }
+    if let Err(error) = super::replace_save_file(&temp_path, path) {
+        let _ = std::fs::remove_file(&temp_path);
+        return Err(format!("Failed to replace PDF file: {error}"));
+    }
+    Ok(())
 }
 
 /// Show a parented PDF save-file dialog and return the chosen path.
@@ -206,10 +217,10 @@ pub fn pick_pdf_path_owned(
 ) -> Option<std::path::PathBuf> {
     let path = crate::sys::blocking_file_dialog()
         .set_parent(parent)
-        .set_title("Export as PDF")
+        .set_title(crate::t!("Export as PDF").as_ref())
         .set_file_name(&format!("{stem}.pdf"))
-        .add_filter("PDF Files", &["pdf"])
-        .add_filter("All Files", &["*"])
+        .add_filter(crate::t!("PDF Files").as_ref(), &["pdf"])
+        .add_filter(crate::t!("All Files").as_ref(), &["*"])
         .save_file()
         ?;
     crate::config::remember_dialog_dir(&path);
@@ -916,6 +927,7 @@ fn emit_wire_fills(
                 }
                 boundary.push(boundary[0]);
                 let hatch = HatchModel {
+                    pattern_origin: None,
                     render_instance: wire.render_instance.clone(),
                     world_origin: [0.0, 0.0],
                     boundary: std::sync::Arc::new(boundary),
@@ -1504,6 +1516,24 @@ fn emit_text(
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn atomic_write_replaces_an_existing_pdf() {
+        let path = std::env::temp_dir().join(format!(
+            "ocs-pdf-replace-{}-{}.pdf",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::write(&path, b"old").unwrap();
+
+        write_pdf_atomically(&path, b"new").unwrap();
+
+        assert_eq!(std::fs::read(&path).unwrap(), b"new");
+        std::fs::remove_file(path).unwrap();
+    }
 
     #[test]
     fn clip_and_scale_emit_pdf_bytes() {

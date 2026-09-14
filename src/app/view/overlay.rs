@@ -69,7 +69,7 @@ pub(super) fn text_inline_overlay(
     position_canvas_overlay(anchor, panel.into())
 }
 
-// Stroke-font families the renderer ships (LibreCAD LFF; see scene/lff.rs).
+// Stroke-font families bundled with the renderer; see scene/lff.rs.
 const MTEXT_FONTS: [&str; 10] = [
     "[Style default]",
     "Standard",
@@ -141,10 +141,18 @@ impl MTextPreview {
             let d = dy * 1000.0 + dx; // prefer the correct line first
             if d < best_d {
                 best_d = d;
-                best = b.vis;
-                // After the glyph centre → caret sits after this char.
-                if wx > (b.xmin + b.xmax) * 0.5 {
-                    best = b.vis + 1;
+                if b.is_rtl {
+                    if wx < (b.xmin + b.xmax) * 0.5 {
+                        best = b.vis + 1;
+                    } else {
+                        best = b.vis;
+                    }
+                } else {
+                    best = b.vis;
+                    // After the glyph centre → caret sits after this char.
+                    if wx > (b.xmin + b.xmax) * 0.5 {
+                        best = b.vis + 1;
+                    }
                 }
             }
         }
@@ -280,14 +288,21 @@ impl iced::widget::canvas::Program<Message> for MTextPreview {
             );
         } else if collapsed {
             let bar = if let Some(b) = self.boxes.iter().find(|b| b.vis == self.caret) {
-                Some((b.xmin, b.ymin, b.ymax)) // left edge of the caret's glyph
+                let cx = if b.is_rtl { b.xmax } else { b.xmin };
+                Some((cx, b.ymin, b.ymax))
             } else if self.caret > 0 {
                 self.boxes
                     .iter()
                     .find(|b| b.vis == self.caret - 1)
-                    .map(|b| (b.xmax, b.ymin, b.ymax)) // after the last glyph
+                    .map(|b| {
+                        let cx = if b.is_rtl { b.xmin } else { b.xmax };
+                        (cx, b.ymin, b.ymax)
+                    })
             } else {
-                self.boxes.first().map(|b| (b.xmin, b.ymin, b.ymax))
+                self.boxes.first().map(|b| {
+                    let cx = if b.is_rtl { b.xmax } else { b.xmin };
+                    (cx, b.ymin, b.ymax)
+                })
             };
             if let Some((cx, y0, y1)) = bar {
                 let p0 = map(cx, y0);
@@ -465,7 +480,7 @@ fn mtext_editor_content<'a>(
             .iter()
             .map(|s| s.to_string())
             .collect::<Vec<_>>(),
-        |value| value.to_string(),
+        |value| t!(value).into_owned(),
     )
     .on_select(Message::MTextFont)
     .text_size(11)
@@ -626,7 +641,7 @@ fn mtext_editor_content<'a>(
             .into_iter()
             .map(str::to_string)
             .collect::<Vec<_>>(),
-        |value| value.to_string(),
+        |value| t!(value).into_owned(),
     )
     .on_select(Message::MTextColumnMode)
     .text_size(11)
@@ -703,7 +718,7 @@ fn mtext_editor_content<'a>(
     .width(width);
     let row4 = row![
         lbl("Find"),
-        text_input("Find", &ed.find_text)
+        text_input(&t!("Find"), &ed.find_text)
             .on_input(Message::MTextFindText)
             .width(iced::Length::Fixed(140.0))
             .padding(3)
@@ -713,7 +728,7 @@ fn mtext_editor_content<'a>(
             .padding(3)
             .style(btn_style),
         lbl("Replace"),
-        text_input("Replace", &ed.replace_text)
+        text_input(&t!("Replace"), &ed.replace_text)
             .on_input(Message::MTextReplaceText)
             .width(iced::Length::Fixed(140.0))
             .padding(3)
@@ -1102,6 +1117,7 @@ pub(super) fn viewport_context_menu_overlay(
     isolation_active: bool,
     last_cmds: Vec<String>,
     draworder_open: bool,
+    has_point_step: bool,
 ) -> Element<'static, Message> {
     let item = |label: String, msg: Message| -> Element<'static, Message> {
         button(text(label).size(12))
@@ -1146,6 +1162,15 @@ pub(super) fn viewport_context_menu_overlay(
     if has_cmd {
         items.push(item(t!("Cancel").into_owned(), Message::CommandEscape));
         items.push(item(t!("Enter").into_owned(), Message::CommandFinalize));
+        // MTP (`_M2P`) goes last, after Parallel: two picks, so not a
+        // `SnapType`, but same icon-only cell with hover tooltip.
+        if has_point_step {
+            items.push(sep());
+            items.push(item(
+                t!("Mid Between 2 Points (M2P)").into_owned(),
+                Message::SnapOverrideMtp,
+            ));
+        }
     } else {
         if !last_cmds.is_empty() {
             let last = last_cmds[0].clone();
@@ -1262,21 +1287,19 @@ pub(super) fn viewport_context_menu_overlay(
 
 /// One-shot snap override menu (Shift+RMB, #337): a cursor-anchored grid of
 /// snap ICONS only — the names show as hover tooltips. Picking one applies
-/// that snap to just the next point pick.
+/// that snap to just the next point pick; the trailing MTP cell instead
+/// suspends the prompt for two picks and returns their midpoint.
 pub(super) fn snap_override_overlay(pos: iced::Point) -> Element<'static, Message> {
     const COLS: usize = 4;
 
-    let cell = |snap_type: crate::snap::SnapType, label: &'static str| -> Element<'static, Message> {
-        let icon = container(crate::ui::icons::themed::<Message>(
-            crate::ui::icons::osnap(snap_type),
-            16.0,
-        ))
+    let cell_icon = |icon: &'static [u8], label: String, msg: Message| -> Element<'static, Message> {
+        let icon = container(crate::ui::icons::themed::<Message>(icon, 16.0))
         .width(26)
         .height(26)
         .align_x(iced::Center)
         .align_y(iced::Center);
         let btn = button(icon)
-            .on_press(Message::SnapOverridePick(snap_type))
+            .on_press(msg)
             .style(|theme: &Theme, status| button::Style {
                 background: matches!(
                     status,
@@ -1312,11 +1335,29 @@ pub(super) fn snap_override_overlay(pos: iced::Point) -> Element<'static, Messag
         .into()
     };
 
+    // MTP (`_M2P`) goes last, after Parallel: two picks, so not a
+    // `SnapType`, but same icon-only cell with hover tooltip.
+    let mut cells: Vec<Element<'static, Message>> = Vec::with_capacity(
+        crate::snap::ALL_SNAP_MODES.len() + 1,
+    );
+    for &(snap_type, _glyph, label) in crate::snap::ALL_SNAP_MODES {
+        cells.push(cell_icon(
+            crate::ui::icons::osnap(snap_type),
+            label.to_string(),
+            Message::SnapOverridePick(snap_type),
+        ));
+    }
+    cells.push(cell_icon(
+        crate::ui::icons::mtp_icon(),
+        t!("Mid Between 2 Points (M2P)").into_owned(),
+        Message::SnapOverrideMtp,
+    ));
     let mut grid = column![].spacing(2);
-    for chunk in crate::snap::ALL_SNAP_MODES.chunks(COLS) {
+    while !cells.is_empty() {
+        let n = cells.len().min(COLS);
         let mut r = row![].spacing(2);
-        for &(snap_type, _glyph, label) in chunk {
-            r = r.push(cell(snap_type, label));
+        for c in cells.drain(..n) {
+            r = r.push(c);
         }
         grid = grid.push(r);
     }
@@ -1409,7 +1450,7 @@ fn qselect_content<'a>(
     let mut prop_options: Vec<crate::app::QSelectPropertyChoice> =
         vec![crate::app::QSelectPropertyChoice {
             field: String::new(),
-            label: QSELECT_ANY_PROP.to_string(),
+            label: t!(QSELECT_ANY_PROP).into_owned(),
             editor: crate::app::QSelectValueEditor::Text,
         }];
     prop_options.extend(properties.iter().cloned());
@@ -1436,7 +1477,7 @@ fn qselect_content<'a>(
         .clone()
         .unwrap_or(crate::app::QSelectPropertyChoice {
             field: String::new(),
-            label: QSELECT_ANY_PROP.to_string(),
+            label: t!(QSELECT_ANY_PROP).into_owned(),
             editor: crate::app::QSelectValueEditor::Text,
         });
 
@@ -1552,7 +1593,7 @@ fn qselect_content<'a>(
             .spacing(8)
             .width(sizing.width),
         Space::new().height(4),
-        text(format!("{} candidate object(s)", candidate_count))
+        text(crate::tf!("{} candidate object(s)", candidate_count))
             .size(11)
             .style(|theme: &Theme| iced::widget::text::Style {
                 color: Some(theme.palette().background.base.text.scale_alpha(0.65)),
@@ -1567,7 +1608,7 @@ fn qselect_content<'a>(
             iced::widget::pick_list(
                 Some(type_sel),
                 type_options,
-                |value| value.to_string(),
+                |value| t!(value).into_owned(),
             )
             .on_select(|s: String| {
                 if s == QSELECT_ANY_TYPE {

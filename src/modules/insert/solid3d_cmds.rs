@@ -513,6 +513,172 @@ impl CadCommand for ExtrudeCommand {
     }
 }
 
+// ── THICKEN command ────────────────────────────────────────────────────────
+
+pub struct ThickenCommand {
+    step: ThickenStep,
+    handles: Vec<Handle>,
+    first_point: Option<DVec3>,
+    last_distance: f64,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ThickenStep {
+    Pick,
+    Distance,
+    SecondPoint,
+}
+
+fn thicken_default() -> &'static Mutex<f64> {
+    static DEFAULT: OnceLock<Mutex<f64>> = OnceLock::new();
+    DEFAULT.get_or_init(|| Mutex::new(0.0))
+}
+
+impl ThickenCommand {
+    pub fn new(preselection: Vec<(Handle, EntityType)>) -> Self {
+        let handles = preselection
+            .into_iter()
+            .filter_map(|(handle, entity)| {
+                matches!(entity, EntityType::Surface(_)).then_some(handle)
+            })
+            .collect::<Vec<_>>();
+        Self {
+            step: if handles.is_empty() {
+                ThickenStep::Pick
+            } else {
+                ThickenStep::Distance
+            },
+            handles,
+            first_point: None,
+            last_distance: *thicken_default()
+                .lock()
+                .unwrap_or_else(|error| error.into_inner()),
+        }
+    }
+
+    fn finish(&mut self, distance: f64) -> CmdResult {
+        self.last_distance = distance;
+        *thicken_default()
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = distance;
+        CmdResult::ThickenEntities {
+            handles: self.handles.clone(),
+            distance,
+        }
+    }
+}
+
+impl CadCommand for ThickenCommand {
+    fn name(&self) -> &'static str {
+        "THICKEN"
+    }
+
+    fn prompt(&self) -> String {
+        match self.step {
+            ThickenStep::Pick => t!("Select surfaces to thicken:").into_owned(),
+            ThickenStep::Distance => format!(
+                "{} <{}>:",
+                t!("Specify thickness"),
+                crate::entities::common::format_length(self.last_distance)
+            ),
+            ThickenStep::SecondPoint => {
+                t!("Specify second point:").into_owned()
+            }
+        }
+    }
+
+    fn wants_text_input(&self) -> bool {
+        self.step == ThickenStep::Distance
+    }
+
+    fn on_text_input(&mut self, text: &str) -> Option<CmdResult> {
+        if self.step != ThickenStep::Distance {
+            return None;
+        }
+        let value = text.trim();
+        if value.is_empty() {
+            return None;
+        }
+        Some(match crate::entities::common::parse_typed_length(value) {
+            Some(distance) if distance.is_finite() => self.finish(distance),
+            _ => CmdResult::ReportError(
+                t!("Requires numeric distance or two points.").into_owned(),
+            ),
+        })
+    }
+
+    fn on_point(&mut self, point: DVec3) -> CmdResult {
+        match self.step {
+            ThickenStep::Distance => {
+                self.first_point = Some(point);
+                self.step = ThickenStep::SecondPoint;
+                CmdResult::NeedPoint
+            }
+            ThickenStep::SecondPoint => {
+                let distance = point.distance(self.first_point.unwrap_or(point));
+                if distance.is_finite() {
+                    self.finish(distance)
+                } else {
+                    CmdResult::ReportError(
+                        t!("Requires numeric distance or two points.").into_owned(),
+                    )
+                }
+            }
+            ThickenStep::Pick => CmdResult::NeedPoint,
+        }
+    }
+
+    fn on_enter(&mut self) -> CmdResult {
+        match self.step {
+            ThickenStep::Pick if self.handles.is_empty() => {
+                CmdResult::Measurement(t!("No surfaces selected.").into_owned())
+            }
+            ThickenStep::Pick => {
+                self.step = ThickenStep::Distance;
+                CmdResult::NeedPoint
+            }
+            ThickenStep::Distance => self.finish(self.last_distance),
+            ThickenStep::SecondPoint => CmdResult::ReportError(
+                t!("Requires numeric distance or two points.").into_owned(),
+            ),
+        }
+    }
+
+    fn is_selection_gathering(&self) -> bool {
+        self.step == ThickenStep::Pick
+    }
+
+    fn selection_forces_add(&self) -> bool {
+        self.step == ThickenStep::Pick
+    }
+
+    fn inject_selection_entities(&mut self, entities: Vec<SelectionEntity>) {
+        if self.step != ThickenStep::Pick {
+            return;
+        }
+        self.handles = entities
+            .into_iter()
+            .filter_map(|entry| {
+                matches!(entry.entity, EntityType::Surface(_)).then_some(entry.handle)
+            })
+            .collect();
+    }
+
+    fn on_selection_complete(&mut self, _handles: Vec<Handle>) -> CmdResult {
+        CmdResult::NeedPoint
+    }
+
+    fn on_undo_step(&mut self) -> Option<CmdResult> {
+        if self.step == ThickenStep::SecondPoint {
+            self.first_point = None;
+            self.step = ThickenStep::Distance;
+            Some(CmdResult::NeedPoint)
+        } else {
+            None
+        }
+    }
+}
+
 // ── PRESSPULL command ─────────────────────────────────────────────────────
 
 pub struct PresspullCommand {
@@ -2211,7 +2377,7 @@ impl LoftCommand {
     fn option_prompt(&self) -> String {
         match self.state.step {
             LoftStep::Sections => format!(
-                "{} ({}):", t!("LOFT  Select cross-sections in order or [Point/Join/Mode/Undo] (Enter to finish)"),
+                "{} ({}):", t!("LOFT  Select cross-sections in order or [Point/Join/Mode] (Enter to finish)"),
                 self.state.sections.len(),
             ),
             LoftStep::Join => format!(
@@ -2224,9 +2390,9 @@ impl LoftCommand {
             LoftStep::Options => {
                 let (start, end) = self.point_ends();
                 if start || end {
-                    t!("LOFT  Enter an option [Guides/Path/Cross sections only/Settings/Continuity/Bulge magnitude/Mode/Undo] <Cross sections only>:").into_owned()
+                    t!("LOFT  Enter an option [Guides/Path/Cross sections only/Settings/Continuity/Bulge magnitude] <Cross sections only>:").into_owned()
                 } else {
-                    t!("LOFT  Enter an option [Guides/Path/Cross sections only/Settings/Mode/Undo] <Cross sections only>:").into_owned()
+                    t!("LOFT  Enter an option [Guides/Path/Cross sections only/Settings] <Cross sections only>:").into_owned()
                 }
             }
             LoftStep::Guides => format!("{} ({}):", t!("LOFT  Select guide curves or [Undo] (Enter to finish)"), self.state.guides.len()),
@@ -2272,7 +2438,7 @@ impl CadCommand for LoftCommand {
     }
     fn options(&self) -> Vec<CmdOption> {
         let mut options = match self.state.step {
-            LoftStep::Sections => vec![CmdOption::new("Point", "POINT"), CmdOption::new("Join", "JOIN"), CmdOption::new("Mode", "MODE"), CmdOption::enter("Done")],
+            LoftStep::Sections => vec![CmdOption::new("Point", "POINT"), CmdOption::new("Join", "JOIN"), CmdOption::new("Mode", "MODE")],
             LoftStep::Join | LoftStep::Guides => vec![CmdOption::enter("Done")],
             LoftStep::Mode => vec![CmdOption::new("Solid", "SOLID"), CmdOption::new("Surface", "SURFACE")],
             LoftStep::Options => {
@@ -2282,7 +2448,6 @@ impl CadCommand for LoftCommand {
                     choices.push(CmdOption::new("Continuity", "CONTINUITY"));
                     choices.push(CmdOption::new("Bulge magnitude", "BULGE"));
                 }
-                choices.push(CmdOption::new("Mode", "MODE"));
                 choices
             }
             LoftStep::Settings => {
@@ -2308,7 +2473,9 @@ impl CadCommand for LoftCommand {
             LoftStep::StartContinuity | LoftStep::EndContinuity => vec![CmdOption::new("G0", "G0"), CmdOption::new("G1", "G1")],
             _ => Vec::new(),
         };
-        options.push(CmdOption::new("Undo", "UNDO"));
+        if !matches!(self.state.step, LoftStep::Sections | LoftStep::Options) {
+            options.push(CmdOption::new("Undo", "UNDO"));
+        }
         options
     }
     fn needs_entity_pick(&self) -> bool {
@@ -2611,6 +2778,8 @@ pub fn empty_extruded_surface(direction: DVec3, taper_angle: f64) -> EntityType 
     use acadrust::types::Vector3;
 
     let mut surface = Surface::new(SurfaceKind::Extruded);
+    surface.u_isolines = 6;
+    surface.v_isolines = 6;
     if let SurfaceData::Extruded {
         options,
         sweep_vector,
@@ -2700,3 +2869,29 @@ mod revolve_tests {
     }
 }
 inventory::submit!(crate::command::CommandRegistration { names: &["SWEEP"] });
+
+#[cfg(test)]
+mod thicken_command_tests {
+    use super::*;
+
+    #[test]
+    fn thicken_filters_selection_recovers_from_invalid_text_and_measures_two_points() {
+        let handle = Handle::new(42);
+        let mut command = ThickenCommand::new(vec![
+            (Handle::new(1), EntityType::Line(acadrust::entities::Line::default())),
+            (handle, EntityType::Surface(acadrust::entities::Surface::new(acadrust::entities::SurfaceKind::Plane))),
+        ]);
+        assert!(!command.is_selection_gathering());
+        assert_eq!(command.handles, vec![handle]);
+        assert!(matches!(command.on_text_input("bad"), Some(CmdResult::ReportError(_))));
+        assert!(command.input_kind().wants_text());
+        assert!(matches!(command.on_text_input("-2"), Some(CmdResult::ThickenEntities { distance: -2.0, .. })));
+        assert!(matches!(command.on_point(DVec3::ZERO), CmdResult::NeedPoint));
+        assert!(command.on_undo_step().is_some());
+        let _ = command.on_point(DVec3::ZERO);
+        assert!(matches!(command.on_point(DVec3::new(3.0, 4.0, 0.0)), CmdResult::ThickenEntities { distance: 5.0, .. }));
+        let mut empty = ThickenCommand::new(Vec::new());
+        assert!(empty.is_selection_gathering());
+        assert!(matches!(empty.on_enter(), CmdResult::Measurement(_)));
+    }
+}

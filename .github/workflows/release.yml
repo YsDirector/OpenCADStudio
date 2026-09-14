@@ -39,6 +39,9 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: ${{ inputs.commit || github.sha }}
+          # Full history so build.rs can measure the distance from the
+          # release tag; a shallow clone would label the build `+g<hash>`.
+          fetch-depth: 0
 
       - name: Validate package versions
         id: version
@@ -127,6 +130,9 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: ${{ inputs.commit || github.sha }}
+          # Full history so build.rs can measure the distance from the
+          # release tag; a shallow clone would label the build `+g<hash>`.
+          fetch-depth: 0
 
       - name: Validate package versions
         id: version
@@ -194,6 +200,9 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: ${{ inputs.commit || github.sha }}
+          # Full history so build.rs can measure the distance from the
+          # release tag; a shallow clone would label the build `+g<hash>`.
+          fetch-depth: 0
 
       - name: Validate package versions
         id: version
@@ -270,7 +279,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "candle failed" }
           $mainObj = Join-Path $objDir "main.wixobj"
           $uiObj   = Join-Path $objDir "ui.wixobj"
-          & $light $mainObj $uiObj -ext WixUIExtension -out $msiPath
+          & $light $mainObj $uiObj -ext WixUIExtension -cultures:en-us -loc packaging/windows/strings.en-US.wxl -out $msiPath
           if ($LASTEXITCODE -ne 0) { throw "light failed" }
 
       - name: Sign MSI installer (Azure Trusted Signing)
@@ -315,6 +324,9 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: ${{ inputs.commit || github.sha }}
+          # Full history so build.rs can measure the distance from the
+          # release tag; a shallow clone would label the build `+g<hash>`.
+          fetch-depth: 0
 
       - name: Validate package versions
         id: version
@@ -337,6 +349,9 @@ jobs:
         run: |
           cargo build --locked --release --target aarch64-apple-darwin
           cargo build --locked --release --target aarch64-apple-darwin -p dwg-thumbnailer
+          # The launcher shim is the .app's actual CFBundleExecutable (#1039)
+          # — see src/bin/ocs_launcher.rs for why.
+          cargo build --locked --release --target aarch64-apple-darwin --bin ocs_launcher
 
       - name: Build .icns from SVG
         run: |
@@ -395,8 +410,10 @@ jobs:
           APP=OpenCADStudio.app
           rm -rf "$APP"
           mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/PlugIns"
-          cp target/aarch64-apple-darwin/release/OpenCADStudio "$APP/Contents/MacOS/OpenCADStudio"
-          chmod +x "$APP/Contents/MacOS/OpenCADStudio"
+          # Finder opens the launcher, which relays files to the sibling GUI.
+          cp target/aarch64-apple-darwin/release/ocs_launcher "$APP/Contents/MacOS/OpenCADStudio"
+          cp target/aarch64-apple-darwin/release/OpenCADStudio "$APP/Contents/MacOS/OpenCADStudio-App"
+          chmod +x "$APP/Contents/MacOS/OpenCADStudio" "$APP/Contents/MacOS/OpenCADStudio-App"
           cp AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
           cp DWG.icns DXF.icns "$APP/Contents/Resources/"
           # QuickLook thumbnail extension.

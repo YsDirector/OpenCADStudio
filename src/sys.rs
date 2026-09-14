@@ -1,6 +1,30 @@
 // Small platform shims for things the desktop build does natively but the web
 // (wasm) build must handle differently or skip.
 
+/// Drawing hyperlinks may open web pages, never local files or custom handlers.
+pub(crate) fn web_hyperlink(value: &str) -> Option<String> {
+    if value.chars().any(char::is_control) {
+        return None;
+    }
+    let url = url::Url::parse(value.trim()).ok()?;
+    (matches!(url.scheme(), "http" | "https") && url.host_str().is_some())
+        .then(|| url.into())
+}
+
+#[test]
+fn drawing_hyperlinks_only_open_web_pages() {
+    for value in ["https://example.com/path", " HTTP://example.com "] {
+        assert!(web_hyperlink(value).is_some(), "{value}");
+    }
+    for value in [
+        "", "https://", "javascript:alert(1)", "data:text/html,example",
+        "file:///tmp/program.desktop", "/tmp/program.desktop", "custom:run",
+        "mailto:user@example.com", "https://example.com/\npath",
+    ] {
+        assert!(web_hyperlink(value).is_none(), "{value}");
+    }
+}
+
 /// Open a URL in the user's browser.
 ///
 /// Wayland requires an xdg-activation token from the source window before it
@@ -93,7 +117,7 @@ pub fn open_url<Message>(
     _parent: Option<iced::window::Id>,
 ) -> iced::Task<Message> {
     if let Some(window) = web_sys::window() {
-        let _ = window.open_with_url_and_target(url, "_blank");
+        let _ = window.open_with_url_and_target_and_features(url, "_blank", "noopener,noreferrer");
     }
     iced::Task::none()
 }
@@ -224,6 +248,13 @@ pub async fn read_clipboard_text() -> Option<String> {
         .await
         .ok()?;
     value.as_string()
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen(module = "/web/clipboard.js")]
+extern "C" {
+    #[wasm_bindgen::prelude::wasm_bindgen(js_name = copyHistory)]
+    pub fn copy_history_text(text: &str, fallback_label: &str, close_label: &str) -> js_sys::Promise;
 }
 
 /// Web: write text to the system clipboard (fire-and-forget). Backs Ctrl+C in
@@ -442,20 +473,24 @@ pub mod web_diag {
                      padding:8px 12px;max-height:40vh;overflow:auto;\
                      user-select:text;cursor:text;",
                 );
-                // Inline `onclick` keeps this dependency-free (no JS closures):
-                // Copy puts the full error text on the clipboard; Dismiss
-                // removes the overlay so the app stays usable underneath.
                 overlay.set_inner_html(
-                    "<div><b>OpenCADStudio renderer error</b> — please copy \
-                     this into a bug report: \
-                     <button style=\"margin-left:8px\" onclick=\"navigator.clipboard.writeText(\
-                     document.getElementById('ocs-err-text').innerText)\">Copy</button> \
-                     <button onclick=\"document.getElementById('ocs-err').remove()\">\
-                     Dismiss</button></div>\
+                    "<div><b id=\"ocs-err-title\"></b> \
+                     <button id=\"ocs-err-copy\" style=\"margin-left:8px\" onclick=\"navigator.clipboard.writeText(\
+                     document.getElementById('ocs-err-text').innerText)\"></button> \
+                     <button id=\"ocs-err-dismiss\" onclick=\"document.getElementById('ocs-err').remove()\"></button></div>\
                      <pre id=\"ocs-err-text\" style=\"margin:6px 0 0;\
                      white-space:pre-wrap;user-select:text;\"></pre>",
                 );
                 let _ = body.append_child(&overlay);
+                for (id, label) in [
+                    ("ocs-err-title", crate::t!("OpenCADStudio renderer error — copy this into a bug report:")),
+                    ("ocs-err-copy", crate::t!("Copy")),
+                    ("ocs-err-dismiss", crate::t!("Dismiss")),
+                ] {
+                    if let Some(element) = doc.get_element_by_id(id) {
+                        element.set_text_content(Some(label.as_ref()));
+                    }
+                }
                 match doc.get_element_by_id("ocs-err-text") {
                     Some(pre) => pre,
                     None => return,

@@ -429,11 +429,11 @@ impl OpenCADStudio {
                     self.tabs[i].scene.set_drawing_limit_check(enabled);
                     self.tabs[i].dirty = true;
                 }
-                self.command_line.push_output(if enabled {
+                self.command_line.push_output(crate::t!(if enabled {
                     "Limits checking ON."
                 } else {
                     "Limits checking OFF."
-                });
+                }).as_ref());
             }
             cmd if cmd.starts_with("LIMITS SET ") => {
                 let tokens: Vec<&str> = cmd["LIMITS SET ".len()..].split_whitespace().collect();
@@ -492,24 +492,20 @@ impl OpenCADStudio {
             "REDRAW" => {
                 use crate::scene::ViewportRefreshScope;
                 self.tabs[i].scene.request_refresh(ViewportRefreshScope::Active);
-                self.command_line.push_output("REDRAW: viewport refreshed.");
+                self.command_line.push_output(crate::t!("REDRAW: viewport refreshed.").as_ref());
                 return Some(Task::none());
             }
             // REDRAWALL — force re-rasterize of every generated viewport.
             "REDRAWALL" => {
                 use crate::scene::ViewportRefreshScope;
                 self.tabs[i].scene.request_refresh(ViewportRefreshScope::All);
-                self.command_line.push_output("REDRAWALL: viewports refreshed.");
+                self.command_line.push_output(crate::t!("REDRAWALL: viewports refreshed.").as_ref());
                 return Some(Task::none());
             }
-            // REGEN — full model regeneration (bump_geometry: geometry_epoch AND
-            // block_epoch; C4). No undo, no DB mutation, so do NOT touch
-            // self.tabs[i].dirty — a newly opened drawing must not become
-            // "modified" merely because tessellation caches were invalidated (C7).
-            // REGENALL is functionally identical (C5).
+            // Rebuild tessellation caches without modifying the document.
             "REGEN" | "REGENALL" => {
-                self.tabs[i].scene.bump_geometry();
-                self.command_line.push_output("REGEN: regenerated model.");
+                self.tabs[i].scene.populate_meshes_from_document();
+                self.command_line.push_output(crate::t!("REGEN: regenerated model.").as_ref());
                 return Some(Task::none());
             }
 
@@ -734,7 +730,7 @@ impl OpenCADStudio {
             }
 
             // ── EXTRUDE ────────────────────────────────────────────────────
-            "EXTRUDE" | "THICKEN" => {
+            "EXTRUDE" => {
                 use crate::modules::insert::solid3d_cmds::ExtrudeCommand;
                 // A preselection becomes the complete source set; otherwise
                 // the interactive command gathers any number of profiles.
@@ -767,6 +763,19 @@ impl OpenCADStudio {
                     self.command_line.push_info(&cmd.prompt());
                     self.tabs[i].active_cmd = Some(Box::new(cmd));
                 }
+            }
+
+            "THICKEN" => {
+                use crate::modules::insert::solid3d_cmds::ThickenCommand;
+                let selected = self.tabs[i]
+                    .scene
+                    .selected_entities()
+                    .into_iter()
+                    .map(|(handle, entity)| (handle, entity.clone()))
+                    .collect();
+                let command = ThickenCommand::new(selected);
+                self.command_line.push_info(&command.prompt());
+                self.tabs[i].active_cmd = Some(Box::new(command));
             }
 
             "PRESSPULL" => {
@@ -877,8 +886,8 @@ impl OpenCADStudio {
                         let active = self
                             .active_plot_style
                             .as_ref()
-                            .map(|t| format!("Active: {}", t.name))
-                            .unwrap_or_else(|| "No plot style loaded.".into());
+                            .map(|t| crate::tf!("Active: {}", t.name).into_owned())
+                            .unwrap_or_else(|| crate::t!("No plot style loaded.").into_owned());
                         self.command_line.push_info(&active);
                         return Some(Task::done(Message::PlotStyleLoad));
                     }
@@ -887,13 +896,13 @@ impl OpenCADStudio {
                             .active_plot_style
                             .as_ref()
                             .map(|t| {
-                                format!(
+                                crate::tf!(
                                     "Plot style: {}  ({} color overrides)",
                                     t.name,
                                     t.aci_entries.iter().filter(|e| e.color.is_some()).count()
-                                )
+                                ).into_owned()
                             })
-                            .unwrap_or_else(|| "No plot style table loaded.".into());
+                            .unwrap_or_else(|| crate::t!("No plot style table loaded.").into_owned());
                         self.command_line.push_output(&msg);
                     }
                     _ => {
@@ -1215,7 +1224,7 @@ impl OpenCADStudio {
                             .push_output(crate::tf!("ADJUST: {action} = {v} on {changed} image(s).").as_ref());
                     } else {
                         self.command_line.push_error(
-                            "ADJUST: no raster images selected, or unknown property (use BRIGHTNESS|CONTRAST|FADE).",
+                            crate::t!("ADJUST: no raster images selected, or unknown property (use BRIGHTNESS|CONTRAST|FADE).").as_ref(),
                         );
                     }
                 } else {
@@ -1274,7 +1283,7 @@ impl OpenCADStudio {
                 match value.parse::<i8>() {
                     Ok(mode @ -4..=4) => self.annotation_auto_scale = mode,
                     _ => self.command_line.push_error(
-                        "ANNOAUTOSCALE: enter an integer from -4 through 4.",
+                        crate::t!("ANNOAUTOSCALE: enter an integer from -4 through 4.").as_ref(),
                     ),
                 }
             }
@@ -1461,7 +1470,7 @@ impl OpenCADStudio {
                 let path = cmd.trim_start_matches("DATALINK").trim();
                 if path.is_empty() {
                     self.command_line.push_info(
-                        "Usage: DATALINK <path-to-.csv>",
+                        crate::t!("Usage: DATALINK <path-to-.csv>").as_ref(),
                     );
                     return Some(Task::none());
                 }
@@ -1574,7 +1583,7 @@ impl OpenCADStudio {
                 }
                 if jobs.is_empty() {
                     self.command_line
-                        .push_error("DATALINKUPDATE: no linked tables found.");
+                        .push_error(crate::t!("DATALINKUPDATE: no linked tables found.").as_ref());
                     return Some(Task::none());
                 }
                 if write_back {
@@ -1606,7 +1615,7 @@ impl OpenCADStudio {
                     .collect();
                 if updates.is_empty() {
                     self.command_line
-                        .push_error("DATALINKUPDATE: linked sources could not be read.");
+                        .push_error(crate::t!("DATALINKUPDATE: linked sources could not be read.").as_ref());
                     return Some(Task::none());
                 }
                 self.push_undo_snapshot(i, "DATALINKUPDATE");
@@ -1675,7 +1684,7 @@ impl OpenCADStudio {
                 let path = cmd.trim_start_matches("LANDXMLIMPORT").trim();
                 if path.is_empty() {
                     self.command_line.push_info(
-                        "Usage: LANDXMLIMPORT <path-to-.xml>  (imports CgPoint survey points)",
+                        crate::t!("Usage: LANDXMLIMPORT <path-to-.xml>  (imports CgPoint survey points)").as_ref(),
                     );
                     return Some(Task::none());
                 }
@@ -1878,5 +1887,87 @@ mod tests {
         assert!(!app.tabs[i].dirty, "REGEN must NOT mark the document as modified (no DB change)");
         let _ = app.run_command_line("REGENALL");
         assert!(!app.tabs[i].dirty, "REGENALL must not dirty the document either");
+    }
+
+    #[test]
+    fn regen_rebuilds_the_mesh_map_rather_than_only_bumping_the_epoch() {
+        let mut app = OpenCADStudio::new_for_test();
+        app.automation_op(r#"{"op":"new"}"#);
+        let i = app.active_tab;
+
+        let stale = acadrust::Handle::new(0xDEAD);
+        app.tabs[i].scene.meshes.insert(stale, stale_mesh());
+        let epoch_before = app.tabs[i].scene.geometry_epoch;
+
+        let _ = app.run_command_line("REGEN");
+
+        assert!(
+            !app.tabs[i].scene.meshes.contains_key(&stale),
+            "REGEN left a stale mesh",
+        );
+        assert_ne!(
+            app.tabs[i].scene.geometry_epoch, epoch_before,
+            "REGEN did not bump the geometry epoch",
+        );
+    }
+
+    #[test]
+    fn the_isolines_slider_rebuilds_once_on_release_and_not_while_dragging() {
+        use crate::app::Message;
+
+        let mut app = OpenCADStudio::new_for_test();
+        app.automation_op(r#"{"op":"new"}"#);
+        let i = app.active_tab;
+
+        let seed = |app: &mut OpenCADStudio, i: usize| {
+            let stale = acadrust::Handle::new(0xBEEF);
+            app.tabs[i].scene.meshes.insert(stale, stale_mesh());
+            stale
+        };
+        let stale = seed(&mut app, i);
+
+        for value in [4i16, 3, 2, 1, 0] {
+            let _ = app.update(Message::IsolinesChanged(value));
+        }
+        assert!(
+            app.tabs[i].scene.meshes.contains_key(&stale),
+            "the drag itself must not rebuild the meshes",
+        );
+        assert_eq!(app.tabs[i].scene.document.header.isolines, 0);
+
+        let _ = app.update(Message::IsolinesReleased);
+        assert!(
+            !app.tabs[i].scene.meshes.contains_key(&stale),
+            "releasing after a change rebuilds them",
+        );
+
+        let stale = seed(&mut app, i);
+        let _ = app.update(Message::IsolinesChanged(0));
+        let _ = app.update(Message::IsolinesReleased);
+        assert!(
+            app.tabs[i].scene.meshes.contains_key(&stale),
+            "releasing without a change must rebuild nothing",
+        );
+    }
+
+    fn stale_mesh() -> crate::scene::model::mesh_model::MeshLodSet {
+        crate::scene::model::mesh_model::MeshLodSet {
+            lods: Vec::new(),
+            material: None,
+            face_materials: Default::default(),
+            visual_style: None,
+            complete: true,
+            edge_verts: Vec::new(),
+            edge_verts_low: Vec::new(),
+            curved_gens: Vec::new(),
+            metrics: Default::default(),
+            world_aabb: [0.0; 4],
+            z_aabb: [0.0; 2],
+            instance_source: None,
+            instance_transform: None,
+            instance_handle: None,
+            instance_color: None,
+            instance_aabb: None,
+        }
     }
 }

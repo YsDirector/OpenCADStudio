@@ -133,6 +133,9 @@ fn plot_dialog_sheet_mm(d: &crate::ui::window::plot::PlotDialogState) -> (f64, f
         "A1" => Some(PaperSize::A1),
         "A0" => Some(PaperSize::A0),
         "A4" => Some(PaperSize::A4),
+        "Letter" => Some(PaperSize::Letter),
+        "Legal" => Some(PaperSize::Legal),
+        "Tabloid" => Some(PaperSize::Tabloid),
         _ => None,
     };
     if let Some(paper) = standard {
@@ -352,6 +355,37 @@ impl OpenCADStudio {
         }
     }
 
+    /// Write a header variable on the active drawing and mark it modified.
+    pub(in crate::app) fn set_drawing_var(
+        &mut self,
+        write: impl FnOnce(&mut acadrust::document::HeaderVariables),
+    ) {
+        let i = self.active_tab;
+        if let Some(tab) = self.tabs.get_mut(i) {
+            write(&mut tab.scene.document.header);
+            tab.dirty = true;
+        }
+    }
+
+    /// Re-tessellate active-drawing solids after an ISOLINES change.
+    pub(in crate::app) fn regenerate_meshes(&mut self) {
+        let i = self.active_tab;
+        if let Some(tab) = self.tabs.get_mut(i) {
+            tab.scene.populate_meshes_from_document();
+        }
+    }
+
+    /// Rebuild text geometry in every open drawing.
+    ///
+    /// `TEXTFILL` is a process-global, so a change to it invalidates the text
+    /// in every tab. Doing only the active one leaves the others rendering the
+    /// previous setting until some unrelated edit happens to rebuild them.
+    pub(in crate::app) fn invalidate_text_everywhere(&mut self) {
+        for tab in &mut self.tabs {
+            tab.scene.invalidate_text_geometry_dependencies();
+        }
+    }
+
     /// Snapshot the persisted UI preferences from live state.
     pub(in crate::app) fn current_settings(&self) -> crate::app::settings::UserSettings {
         crate::app::settings::UserSettings {
@@ -362,6 +396,15 @@ impl OpenCADStudio {
             zoom_factor: self.zoom_factor,
             cursor_size: self.cursor_size,
             pick_box: self.pick_box,
+            options_tab: self.options_tab,
+            show_viewcube: self.show_viewcube,
+            show_ucs_icon: self.show_ucs_icon,
+            ucs_icon_at_origin: self.ucs_icon_at_origin,
+            selection_cycling: self.selection_cycling,
+            double_click_block_refedit: self.double_click_block_refedit,
+            double_click_block_attedit: self.double_click_block_attedit,
+            grip_object_limit: self.grip_object_limit,
+            ncopy_bind: self.ncopy_bind,
             cursor_type: self.cursor_type,
             crosshair_color: self.crosshair_color,
             lineweight_display_scale: self.lineweight_display_scale,
@@ -371,6 +414,7 @@ impl OpenCADStudio {
             otrack: self.snapper.otrack_enabled,
             default_assoc_prompted: self.default_assoc_prompted,
             donation_prompt_version: self.donation_prompt_version.clone(),
+            gpu_warning_silenced: self.gpu_warning_silenced.clone(),
             disabled_plugins: {
                 let mut v: Vec<String> = self.disabled_plugins.iter().cloned().collect();
                 v.sort();
@@ -386,16 +430,17 @@ impl OpenCADStudio {
             texteditmode: self.texteditmode,
             quick_dimension_snap_priority: self.quick_dimension_snap_priority,
             dimension_continue_mode: self.dimension_continue_mode,
+            delete_objects: self.delete_objects,
             textfill: crate::scene::text::sdf_atlas::textfill(),
             backup_on_save: self.backup_on_save,
             file_assoc_enabled: self.file_assoc_enabled,
+            write_dwg_native_constraints: self.write_dwg_native_constraints,
+            show_constraint_values: self.show_constraint_values,
             savetime_min: self.savetime_min,
             default_save_format: self.default_save_format.clone(),
             pick_add: self.pick_add,
             pick_drag_rect: self.pick_drag_rect,
             quick_properties: self.quick_properties,
-            bg_color: None,
-            paper_bg_color: None,
             language: self.language,
             cliprompt_lines: crate::app::settings::clamp_clipromptlines(self.cliprompt_lines),
             commandline_fade_ms: crate::app::settings::clamp_commandline_fade_ms(
@@ -415,6 +460,18 @@ impl OpenCADStudio {
         self.zoom_factor = s.zoom_factor.clamp(3, 100);
         self.cursor_size = s.cursor_size.clamp(1, 100);
         self.pick_box = s.pick_box.clamp(0, 50);
+        self.options_tab = s.options_tab;
+        // These four drive real features with commands and status-bar pills,
+        // but they lived only on the app struct: turning the ViewCube off and
+        // restarting brought it straight back.
+        self.show_viewcube = s.show_viewcube;
+        self.show_ucs_icon = s.show_ucs_icon;
+        self.ucs_icon_at_origin = s.ucs_icon_at_origin;
+        self.selection_cycling = s.selection_cycling;
+        self.double_click_block_refedit = s.double_click_block_refedit;
+        self.double_click_block_attedit = s.double_click_block_attedit;
+        self.grip_object_limit = s.grip_object_limit.clamp(0, 32767);
+        self.ncopy_bind = s.ncopy_bind;
         self.cursor_type = s.cursor_type;
         self.crosshair_color = s.crosshair_color;
         self.crosshair_color_input = s
@@ -429,11 +486,15 @@ impl OpenCADStudio {
         } else {
             0.0
         };
+        // The Options field edits a buffer rather than the value, so it has to
+        // be reseeded whenever the value is restored from behind it.
+        self.snap_angle_input = crate::app::settings::format_snap_angle(self.snap_angle_deg);
         // Ortho + running OSNAP are per-drawing (adopted from the header on
         // open / tab switch), not app-global, so they are not applied here.
         self.snapper.otrack_enabled = s.otrack;
         self.default_assoc_prompted = s.default_assoc_prompted;
         self.donation_prompt_version = s.donation_prompt_version.clone();
+        self.gpu_warning_silenced = s.gpu_warning_silenced.clone();
         self.disabled_plugins = s.disabled_plugins.iter().cloned().collect();
         self.plugin_repos = s.plugin_repos.clone();
         self.command_line.literal_spaces = s.literal_spaces;
@@ -451,16 +512,18 @@ impl OpenCADStudio {
         self.texteditmode = s.texteditmode;
         self.quick_dimension_snap_priority = s.quick_dimension_snap_priority.min(1);
         self.dimension_continue_mode = s.dimension_continue_mode.clamp(0, 1);
+        self.delete_objects = s.delete_objects.clamp(0, 3);
         crate::scene::text::sdf_atlas::set_textfill(s.textfill);
         self.backup_on_save = s.backup_on_save;
         self.file_assoc_enabled = s.file_assoc_enabled;
+        self.write_dwg_native_constraints = s.write_dwg_native_constraints;
+        self.show_constraint_values = s.show_constraint_values;
         self.savetime_min = s.savetime_min;
         self.default_save_format =
             crate::io::canonical_save_format(&s.default_save_format).to_string();
         self.pick_add = s.pick_add;
         self.pick_drag_rect = s.pick_drag_rect;
         self.quick_properties = s.quick_properties;
-        // Legacy settings.bg_color / paper_bg_color are superseded by model_space config.
         if crate::i18n::set_language(s.language).is_ok() {
             self.language = s.language;
         }
@@ -1383,6 +1446,11 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                 self.tabs[i].scene.material_base_dir =
                     path.parent().map(std::path::Path::to_path_buf);
                 self.tabs[i].scene.document = doc;
+                // Load persisted constraints after installing the document.
+                self.tabs[i].scene.load_sketch_constraints_from_document();
+                // named_parameters_design.md stage 2: same load-time hook,
+                // for the document-wide parameter table.
+                self.tabs[i].scene.load_named_parameters_from_document();
                 self.tabs[i].active_layer = self.tabs[i]
                     .scene
                     .document
@@ -1646,6 +1714,13 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
         self.tabs[i].scene.document.header.user_real1 =
             self.tabs[i].scene.annotation_scale as f64;
         self.sync_solid_models_for_save(i);
+        // Materialize constraints immediately before serialization.
+        self.tabs[i].scene.materialize_sketch_constraints_for_save();
+        // named_parameters_design.md stage 2: same save-time hook, for the
+        // document-wide parameter table.
+        self.tabs[i].scene.materialize_named_parameters_for_save();
+        // Keep the optional native constraint graph synchronized on save.
+        self.tabs[i].scene.materialize_dwg_native_constraints_for_save(self.write_dwg_native_constraints);
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -2576,7 +2651,7 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                     let pick = Task::perform(
                         async move {
                             let mut dlg = crate::sys::file_dialog()
-                                .set_title("Save Drawing As")
+                                .set_title(crate::t!("Save Drawing As").as_ref())
                                 .set_file_name(default_name)
                                 .add_filter(filter_label, &[filter_ext]);
                             if let Some(dir) = seed_dir {
@@ -2596,6 +2671,9 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                     sync_annotation_scale_header(&mut self.tabs[i].scene);
                     self.stamp_header_sysvars(i);
                     self.sync_solid_models_for_save(i);
+                    self.tabs[i].scene.materialize_sketch_constraints_for_save();
+                    self.tabs[i].scene.materialize_named_parameters_for_save();
+                    self.tabs[i].scene.materialize_dwg_native_constraints_for_save(self.write_dwg_native_constraints);
                     let tab_id = self.tabs[i].id;
                     let bounds = crate::ui::wrap_bar::dropdown_bounds(
                         crate::app::view::VIEWPORT_CAPTURE_BOUNDS_ID,
@@ -2934,8 +3012,8 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                     plot_style.as_ref(),
                     render_options,
                 )
-                .map(|_| format!("Exported: {}", worker_path.display()))
-                .map_err(|e| format!("Export failed: {e}"))
+                .map(|_| crate::tf!("Exported: {}", worker_path.display()).into_owned())
+                .map_err(|e| crate::tf!("Export failed: {e}").into_owned())
         };
         self.run_plot_work(self.plot_dialog.background, false, work)
     }
@@ -2978,12 +3056,12 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                     plot_style.as_ref(),
                     render_options,
                 )
-                .map(|_| {format!(
+                .map(|_| {crate::tf!(
                             "Plotted window to {}",
                         worker_path
                             .file_name().unwrap_or_default().to_string_lossy()
-                        )
-                }).map_err(|e| format!("Plot failed: {e}"))
+                        ).into_owned()
+                }).map_err(|e| crate::tf!("Plot failed: {e}").into_owned())
         };
         self.run_plot_work(self.plot_dialog.background, false, work)
     }
@@ -3020,15 +3098,32 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
         let previous = self.plot_dialog.clone();
         let previous_style = self.active_plot_style.clone();
         let previous_window = self.plot_window;
-        let previous_setup = self.plot_setup_template.clone();
+
+        // Once Print All has an explicit override, reopening Options must keep
+        // those settings instead of replacing them with the active layout's
+        // page setup.
+        let keep_print_all_override = self.print_all_settings_override;
+
+        // Refresh runtime data such as printers, paper sizes, plot styles and
+        // named page setups.
         let task = self.on_plot_dialog_open();
+
+        if keep_print_all_override {
+            // Restore only the user-editable plot settings. Runtime lists populated
+            // above remain intact.
+            self.plot_dialog.copy_settings_from(&previous);
+            self.active_plot_style = previous_style.clone();
+            self.plot_window = previous_window;
+        }
+
         self.print_all_options_prev = Some(previous);
         self.print_all_plot_style_prev = Some(previous_style);
         self.print_all_plot_window_prev = Some(previous_window);
-        self.print_all_plot_setup_prev = Some(previous_setup);
+
         self.print_all_options = true;
         self.plot_dialog.paper_space = true;
         self.plot_dialog.area = "Layout".into();
+
         task
     }
 
@@ -3071,7 +3166,7 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                 let page_setup = self.tabs[i]
                     .scene
                     .plot_settings_for(&name)
-                    .ok_or_else(|| format!("Layout '{name}' has no page setup."))?;
+                    .ok_or_else(|| crate::tf!("Layout '{name}' has no page setup.").into_owned())?;
                 {
                     let scene = &mut self.tabs[i].scene;
                     scene.current_layout = name.clone();
@@ -3092,10 +3187,10 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                     self.tabs[i].scene.restore_saved_camera();
                 }
                 if dialog.style_missing && dialog.apply_plot_styles {
-                    return Err(format!(
+                    return Err(crate::tf!(
                         "Layout '{name}' plot style table '{}' is not loaded.",
                         dialog.style_name
-                    ));
+                    ).into_owned());
                 }
                 let plot_style = self.dialog_plot_style(&dialog);
                 let params = match dialog.area.as_str() {
@@ -3135,7 +3230,7 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                         rotation_deg,
                         scale,
                         clip,
-                    ) = params.ok_or_else(|| format!("Layout '{name}' plot area is empty."))?;
+                    ) = params.ok_or_else(|| crate::tf!("Layout '{name}' plot area is empty.").into_owned())?;
                     (
                         std::sync::Arc::new(wires),
                         hatches,
@@ -3219,8 +3314,8 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                 &worker_path,
                 None,
             )
-            .map(|_| format!("Exported {} layouts to {}", pages.len(), worker_path.display()))
-            .map_err(|error| format!("Export failed: {error}"))
+            .map(|_| crate::tf!("Exported {} layouts to {}", pages.len(), worker_path.display()).into_owned())
+            .map_err(|error| crate::tf!("Export failed: {error}").into_owned())
         };
         self.run_print_all_work(dialog.background, work)
     }
@@ -3269,8 +3364,8 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                 .and_then(|_| {
                     crate::io::print_to_printer::print_existing_pdf(&temp_path, &options)
                 })
-                .map(|printer| format!("Sent {} layouts to printer: {printer}", pages.len()))
-                .map_err(|error| format!("Print failed: {error}"))
+                .map(|printer| crate::tf!("Sent {} layouts to printer: {printer}", pages.len()).into_owned())
+                .map_err(|error| crate::tf!("Print failed: {error}").into_owned())
             };
             self.run_print_all_work(true, work)
         }
@@ -4285,7 +4380,10 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                 .as_deref()
                 .is_some_and(|name| name.eq_ignore_ascii_case(&style_name));
         let (mut paper, orient) = paper_label_from_dims(ps.paper_width, ps.paper_height);
-        if !matches!(paper.as_str(), "A4" | "A3" | "A2" | "A1" | "A0")
+        if !matches!(
+            paper.as_str(),
+            "A4" | "A3" | "A2" | "A1" | "A0" | "Letter" | "Legal" | "Tabloid"
+        )
             && !ps.paper_size.is_empty()
         {
             paper = ps.paper_size.clone();
@@ -4389,6 +4487,9 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
             "A2" => PaperSize::A2,
             "A1" => PaperSize::A1,
             "A0" => PaperSize::A0,
+            "Letter" => PaperSize::Letter,
+            "Legal" => PaperSize::Legal,
+            "Tabloid" => PaperSize::Tabloid,
             _ => PaperSize::A4,
         };
         let orient = if d.orientation == "Portrait" {
@@ -4480,7 +4581,7 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                     plot_style.as_ref(),
                     render_options,
                 ).and_then(|_| crate::io::print_to_printer::open_in_viewer(&tmp))
-                        .map(|_| "Opened plot preview.".to_string()).map_err(|e| format!("Preview failed: {e}"))
+                        .map(|_| crate::t!("Opened plot preview.").into_owned()).map_err(|e| crate::tf!("Preview failed: {e}").into_owned())
                 };
                 return self.run_plot_work(d.background, true, work);
             }
@@ -4497,8 +4598,8 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                 plot_style.as_ref(),
                 render_options,
             ).and_then(|_| crate::io::print_to_printer::print_existing_pdf(&tmp, &opts))
-                    .map(|printer| format!("Sent to printer: {printer}"))
-                    .map_err(|e| format!("Print failed: {e}"))
+                    .map(|printer| crate::tf!("Sent to printer: {printer}").into_owned())
+                    .map_err(|e| crate::tf!("Print failed: {e}").into_owned())
             };
             return self.run_plot_work(true, false, work);
         }
@@ -4525,7 +4626,7 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                 plot_style.as_ref(),
                 render_options,
             ).and_then(|_| crate::io::print_to_printer::open_in_viewer(&tmp))
-                    .map(|_| "Opened plot preview.".to_string()).map_err(|e| format!("Preview failed: {e}"))
+                    .map(|_| crate::t!("Opened plot preview.").into_owned()).map_err(|e| crate::tf!("Preview failed: {e}").into_owned())
             };
             return self.run_plot_work(d.background, true, work);
         }
@@ -4543,8 +4644,8 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                     wires, hatches, wipeouts, page_w, page_h, ox, oy, rotation, scale, clip,
                     plot_style, opts,
                 ))
-                .map(|printer| format!("Sent to printer: {printer}"))
-                .map_err(|error| format!("Print failed: {error}"))
+                .map(|printer| crate::tf!("Sent to printer: {printer}").into_owned())
+                .map_err(|error| crate::tf!("Print failed: {error}").into_owned())
         };
         self.run_plot_work(true, false, work)
     }
@@ -4860,10 +4961,10 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                 Task::perform(
                     async move {
                         let dialog = crate::sys::file_dialog()
-                            .set_title("Save Plot Style Table")
+                            .set_title(crate::t!("Save Plot Style Table").as_ref())
                             .set_file_name(&default_name)
-                            .add_filter("Plot Style Files", &["ctb", "CTB"])
-                            .add_filter("All Files", &["*"]);
+                            .add_filter(crate::t!("Plot Style Files").as_ref(), &["ctb", "CTB"])
+                            .add_filter(crate::t!("All Files").as_ref(), &["*"]);
                         #[cfg(not(target_arch = "wasm32"))]
                         let dialog = match crate::io::plot_style::ensure_plot_styles_dir() {
                             Ok(dir) => dialog.set_directory(dir),
