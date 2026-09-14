@@ -81,8 +81,8 @@ OCS_SMOKE_PLUGIN=$PWD/target/release/libocs_ocsm.so \
 | | `src/scene/mod.rs` | +3 | `tessellate_one()`（预览用单实体剖分） |
 | **C. 渲染器** | `src/entities/dimension.rs` | +189 | **C-1** DIMTMOVE=1 线性引线（本次）+ 4 测试；**C-2** 标注文字宽度自适应 |
 | | `src/entities/text_support.rs` | +30 | MTEXT 花括号作用域字体恢复（`{\fGDT;x}` 供符号字形） |
-| **D. 测试/冒烟** | `src/plugin/external.rs` | +67 | `OCS_SMOKE_PLUGIN` 外部插件冒烟（纯新增） |
-| | `tests/dim_leader_render_check.rs` | +107 | 引线渲染级冒烟（新文件） |
+| **D. 测试** | `src/plugin/external.rs` | +67 | `OCS_SMOKE_PLUGIN` 外部插件测试（纯新增） |
+| | `tests/dim_leader_render_check.rs` | +107 | 引线渲染级测试（新文件） |
 | **E. 插件本体（无需台账）** | `crates/ocs_ocsm/**`、`crates/ocs_ocsm_mcp/**` | 4400+ | 与上游天然解耦；仅 `Cargo.toml` 成员需保留 |
 
 ## 2. 关键补丁详情
@@ -147,8 +147,8 @@ OCS_SMOKE_PLUGIN=$PWD/target/release/libocs_ocsm.so \
 
 - 宿主补丁刻意保持**最小、可局部合并**：C 组只有 1 个文件、1 个私有函数；
   A/B 组是"给插件开的口子"，追加式修改，不动既有语义。
-- 若上游接受，C-1 可作为上游 PR（旧行为从尺寸线中点拉引线本身可疑）；
-  D 组冒烟测试也是不错的 upstream 贡献候选。
-- ✅ **2026-09-14 状态更新**：C-1（→ PR #1235）与 Ctrl+点击超链接（→ PR #1234）**均已被上游合并**；
-  D 组冒烟测试（`tests/leader_smoke_render.rs`）与 C-2（文字宽度自适应）**仍为 fork 本地**，
-  仍是可选的下一批上游贡献候选。
+- 若上游接受，C-1 可作为上游 PR（旧行为从尺寸线中点拉引线本身可疑）。
+  D 组渲染测试与 C-2 曾考虑作上游贡献候选，**用户判断采纳概率不大（2026-09-14）→ 不再推进**。
+- ✅ **2026-09-14 状态更新**：C-1（→ PR #1235）与 Ctrl+点击超链接（→ PR #1234）**均已被上游合并**。
+  `tests/leader_smoke_render.rs`（引线渲染测试）与 C-2（标注文字宽度自适应）**仍为 fork 本地**；
+  用户判断这两项**上游采纳概率不大** → **不作为上游贡献推进**，仅本地保留。
