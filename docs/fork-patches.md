@@ -31,6 +31,32 @@ OCS_SMOKE_PLUGIN=$PWD/target/release/libocs_ocsm.so \
 所以**改到宿主 `src/` 的渲染/几何逻辑必须重编宿主**（只换 `.so` 会看到旧渲染，
 2026-09-13 曾因此误判"改了没效果"）。
 
+## 0.5 已上游化（2026-09-14 记 — **下轮同步按此删本地副本，以上游版为准**）
+
+上游 owner HakanSeven12 于 **2026-09-13T18:14:50Z** 一次性合并了本 fork 的两个 PR：
+
+| PR | 标题 | 合并提交 | 上游实现说明 |
+|---|---|---|---|
+| **#1234** | `feat(viewport): Ctrl+click opens an entity PE_URL hyperlink` | `84836b0f` | 直接收录本 fork 的提交 `171fc489`（哈希一致） |
+| **#1235** | `fix(dimension): extend the DIMTMOVE=1 leader under the text for linear dims` | `64e64c80` | **改造后收录**：合并信息写 *"with kernel-based dimension leaders"*，上游把该修复接进了他们新的 kernel 渲染器 |
+
+**同步动作（重要）**
+1. 冲突时**一律取上游版**（`--theirs` 语义），不要保留本地副本——否则同一功能会有两份实现。
+2. 删除本地对应补丁条目：本文档 **C-1**（`cbaf6d61f` → `src/entities/dimension.rs`、
+   `tests/dim_leader_render_check.rs`）与 **E-1**（`381c328e`/`6ba3da8e` → `src/scene/selection.rs`、
+   `src/scene/mod.rs`、`src/app/update/viewport.rs`）。本地这两处改动**尚未进过台账表格**，
+   同步后无需再登记。
+3. 注意 **DIMTMOVE 的本地版可能与上游 kernel 版语义不同**（上游重构了引线绘制）→ 同步后必须
+   重跑 `cargo test -p OpenCADStudio --lib dimtmove` 与 `tests/dim_leader_render_check.rs`，
+   并实测 `DIMTMOVE=1` 的显示（fork 的 OCSM 标注也依赖这条路径）。
+4. `crates/ocs_ocsm/src/guide_server.rs` 里对 DIMTMOVE 的处理（`cbaf6d61f` 顺带改动）**属于插件侧**，
+   不受上游合并影响，保留。
+5. 收尾：合并后可删除分支 `feat/ctrl-click-hyperlink`、`fix/dimtmove-leader-under-text`
+   （本地 `/tmp/ocs-pr` 工作区 + fork 远端）。
+
+> 结论：fork 的**上游接受路线**已成功（对照 `obs-2026-08-22-pr-fork` 的双保险策略，
+> 无需启用"fork 单向吸收"备选方案）。
+
 ## 1. 补丁总表（基准：上游 v2026.36 → HEAD，24 文件 / +2972 −119）
 
 | 组 | 文件 | 规模 | 作用 |
@@ -71,6 +97,8 @@ OCS_SMOKE_PLUGIN=$PWD/target/release/libocs_ocsm.so \
 - **合并注意**：与 C-1 同文件不同区域；**上游 PR 分支不含此项**（见下）。
 
 ### C-1 `src/entities/dimension.rs` — DIMTMOVE=1 引线（2026-09-13，提交 `cbaf6d61f`）
+> ⚠️ **已上游化**：PR **#1235** 已合并（`64e64c80`，上游改用 kernel 渲染器实现）
+> → 下轮同步**按上游版、删本条目**，见 §0.5。
 
 - **位置**：私有 `dimtmove_leader_endpoints()`（重写）+ 新增私有 `linear_leader()` +
   2 处调用点（`tessellate_dimension_inner` ≈L3768、baked 渲染 ≈L7183）+ 测试模块
@@ -121,3 +149,6 @@ OCS_SMOKE_PLUGIN=$PWD/target/release/libocs_ocsm.so \
   A/B 组是"给插件开的口子"，追加式修改，不动既有语义。
 - 若上游接受，C-1 可作为上游 PR（旧行为从尺寸线中点拉引线本身可疑）；
   D 组冒烟测试也是不错的 upstream 贡献候选。
+- ✅ **2026-09-14 状态更新**：C-1（→ PR #1235）与 Ctrl+点击超链接（→ PR #1234）**均已被上游合并**；
+  D 组冒烟测试（`tests/leader_smoke_render.rs`）与 C-2（文字宽度自适应）**仍为 fork 本地**，
+  仍是可选的下一批上游贡献候选。
