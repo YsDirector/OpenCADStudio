@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>OCSM 标准件库</title>
+<style>
+  :root { color-scheme: light; }
+  body { font-family: "Helvetica Neue", "PingFang SC", "Microsoft YaHei", sans-serif;
+         margin: 14px; background: #f4f6f8; color: #222; }
+  h1 { font-size: 16px; margin: 0 0 10px; }
+  .wrap { display: flex; gap: 12px; align-items: flex-start; }
+  .card { background: #fff; border: 1px solid #d9dee5; border-radius: 8px; padding: 12px 14px; }
+  .left { width: 340px; flex: none; max-height: 78vh; overflow: auto; }
+  .right { flex: 1; min-width: 340px; }
+  .card h2 { font-size: 13px; margin: 0 0 8px; color: #555; }
+  label { display: block; font-size: 12px; color: #666; margin: 8px 0 2px; }
+  select { width: 100%; padding: 5px 6px; border: 1px solid #c6ccd4;
+           border-radius: 4px; font-size: 13px; box-sizing: border-box; background: #fff; }
+  .row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+  .opt { padding: 5px 10px; border: 1px solid #c6ccd4; border-radius: 5px;
+         background: #fafbfc; cursor: pointer; font-size: 13px; user-select: none; }
+  .opt.on { background: #1e6fff; border-color: #1e6fff; color: #fff; }
+  .btn { border: none; border-radius: 6px; padding: 9px 18px; font-size: 14px; cursor: pointer;
+         background: #1e6fff; color: #fff; margin-top: 12px; }
+  .btn[disabled] { background: #9db9e8; cursor: not-allowed; }
+  .btn.ghost { background: #e4e7ec; color: #333; }
+  .hint { font-size: 12px; color: #888; margin-top: 8px; line-height: 1.5; }
+  #status { font-size: 13px; margin-top: 8px; min-height: 18px; }
+  .ok { color: #1a7f37; } .bad { color: #d1242f; }
+  #preview { width: 100%; max-height: 56vh; object-fit: contain;
+             border: 1px solid #e2e6ea; border-radius: 6px; background: #fff; }
+  code { background: #f1f3f5; padding: 1px 4px; border-radius: 3px; }
+  /* ── 文件树 ── */
+  ul.tree, ul.tree ul { list-style: none; margin: 0; padding-left: 14px; }
+  ul.tree { padding-left: 0; }
+  .node { display: flex; align-items: center; gap: 4px; padding: 3px 4px; border-radius: 4px;
+          cursor: pointer; font-size: 13px; line-height: 1.35; }
+  .node:hover { background: #eef3fb; }
+  .node.sel { background: #1e6fff; color: #fff; }
+  .node.dim { color: #b0b6bd; cursor: not-allowed; }
+  .node.dim:hover { background: transparent; }
+  .tw { width: 12px; display: inline-block; color: #888; font-size: 11px; }
+  .node.sel .tw { color: #fff; }
+  .tag { font-size: 11px; color: #99a; margin-left: 4px; }
+  .node.sel .tag { color: #dce8ff; }
+  li.collapsed > ul { display: none; }
+</style>
+</head>
+<body>
+<h1>OCSM 标准件库<span id="code" class="hint"></span></h1>
+
+<div class="wrap">
+  <div class="card left">
+    <h2>零件树（点选零件）</h2>
+    <ul class="tree" id="tree"></ul>
+    <div class="hint">灰色 = 待实现（已列在树上，按需排期）</div>
+  </div>
+
+  <div class="card right">
+    <h2>规格与视图</h2>
+    <div id="panel" style="display:none">
+      <label for="dia">公称直径</label>
+      <select id="dia"></select>
+      <label for="len">长度（mm，仅列该直径标准系列）</label>
+      <select id="len"></select>
+      <label>视图（出库哪个视图）</label>
+      <div class="row" id="viewRow"></div>
+      <button class="btn" id="out">零件出库</button>
+      <div class="hint" id="steps"></div>
+      <div id="status"></div>
+      <img id="preview" alt="零件预览" style="margin-top:10px" />
+      <div class="hint">
+        生成物：轮廓 → <code>1轮廓实线层</code>、牙底细线 → <code>2细线层</code>、中心线 → <code>3中心线层</code>；
+        颜色/线型/线宽一律 <b>ByLayer</b>；基点 = 头部支承面 × 轴线；<b>不含尺寸标注</b>。
+      </div>
+    </div>
+    <div id="tip" class="hint">← 在左侧展开并选择零件</div>
+  </div>
+</div>
+
+<script>
+let catalog = null, cur = { family: "", d: 0, l: 0, view: "main" };
+const el = (id) => document.getElementById(id);
+
+async function load() {
+  catalog = await (await fetch("/api/parts")).json();
+  buildTree(el("tree"), catalog.tree, []);
+}
+
+function buildTree(ul, nodes, path) {
+  nodes.forEach((n) => {
+    const li = document.createElement("li");
+    const row = document.createElement("div");
+    row.className = "node";
+    const hasKids = n.children && n.children.length;
+    const extra = n.family ? "" : (hasKids ? "" : (n.implemented === false ? "待实现" : ""));
+    row.innerHTML = '<span class="tw">' + (hasKids ? "▾" : "•") + "</span>" + n.name +
+                    (extra ? '<span class="tag">' + extra + "</span>" : "");
+    if (!hasKids && n.implemented === false) row.classList.add("dim");
+    li.appendChild(row);
+
+    if (hasKids) {
+      const sub = document.createElement("ul");
+      buildTree(sub, n.children, path.concat(n.name));
+      li.appendChild(sub);
+      row.addEventListener("click", () => {
+        li.classList.toggle("collapsed");
+        row.querySelector(".tw").textContent = li.classList.contains("collapsed") ? "▸" : "▾";
+      });
+    } else if (n.family && n.implemented !== false) {
+      row.addEventListener("click", () => {
+        document.querySelectorAll(".node.sel").forEach((x) => x.classList.remove("sel"));
+        row.classList.add("sel");
+        pickFamily(n.family);
+      });
+      if (!cur.family) setTimeout(() => pickFamily(n.family, row), 0);
+    }
+    ul.appendChild(li);
+  });
+}
+
+function pickFamily(id, row) {
+  if (row) {
+    document.querySelectorAll(".node.sel").forEach((x) => x.classList.remove("sel"));
+    row.classList.add("sel");
+  }
+  const f = catalog.families[id];
+  if (!f) return;
+  cur.family = id;
+  el("code").textContent = "　" + f.code + " ← " + f.iso;
+  el("panel").style.display = "";
+  el("tip").style.display = "none";
+  const dia = el("dia");
+  dia.innerHTML = "";
+  f.sizes.forEach((s) => {
+    const o = document.createElement("option");
+    o.value = s.d;
+    o.textContent = s.label + "（P" + s.pitch + "）";
+    dia.appendChild(o);
+  });
+  dia.value = f.sizes[0].d;
+  const vrow = el("viewRow");
+  vrow.innerHTML = "";
+  f.views.forEach((v, i) => {
+    const b = document.createElement("button");
+    b.className = "opt" + (i === 0 ? " on" : "");
+    b.dataset.v = v.id;
+    b.textContent = v.name;
+    b.addEventListener("click", () => {
+      cur.view = v.id;
+      [...vrow.querySelectorAll("button")].forEach((x) => x.classList.toggle("on", x.dataset.v === v.id));
+      update();
+    });
+    vrow.appendChild(b);
+  });
+  cur.view = f.views[0].id;
+  onDia(f.sizes[0]);
+}
+
+function onDia(size) {
+  cur.d = Number(size.d);
+  const len = el("len");
+  len.innerHTML = "";
+  size.lengths.forEach((L) => {
+    const o = document.createElement("option");
+    o.value = L;
+    o.textContent = L + " mm";
+    len.appendChild(o);
+  });
+  len.value = size.lengths[0];
+  cur.l = Number(size.lengths[0]);
+  el("steps").textContent = "该直径标准长度系列：" + size.lengths.join("、") + " mm（" + size.l_min + " ~ " + size.l_max + "）";
+  update();
+}
+
+function update() {
+  el("preview").src = "/api/part_svg?family=" + cur.family + "&d=" + cur.d + "&l=" + cur.l + "&view=" + cur.view;
+  el("status").textContent = "";
+}
+
+async function outOfStock() {
+  el("status").textContent = "出库中…";
+  el("status").className = "";
+  try {
+    const r = await fetch("/api/part_export", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(cur),
+    });
+    const j = await r.json();
+    if (j.ok) {
+      el("status").textContent = j.message || "已出库";
+      el("status").className = "ok";
+      // 出库后自动关掉本窗口：chromium 的标签页/--app 窗口都允许脚本自关
+      //（"会话历史仅一条即可自关"规则，已实测）；若浏览器拒绝（如 Firefox 标签页），
+      // 下面的文案会提示手动切回图纸。
+      setTimeout(() => {
+        try { window.close(); } catch (e) { /* 被拒绝时忽略 */ }
+        el("status").textContent = (j.message || "已出库") + "（若本窗口未自动关闭，请切回图纸继续）";
+      }, 300);
+    } else {
+      el("status").textContent = "失败：" + (j.error || "未知错误");
+      el("status").className = "bad";
+    }
+  } catch (e) {
+    el("status").textContent = "请求失败：" + e;
+    el("status").className = "bad";
+  }
+}
+
+// 心跳：告诉插件"零件库窗口还开着"（避免重复开窗）；关闭时 bye=1
+function ping(bye) {
+  try { fetch("/api/page_ping?p=parts" + (bye ? "&bye=1" : ""), { cache: "no-store" }); } catch (e) {}
+}
+
+(async function init() {
+  ping(false);
+  setInterval(() => ping(false), 5000);
+  window.addEventListener("beforeunload", () => ping(true));
+  await load();
+  el("dia").addEventListener("change", () => {
+    const f = catalog.families[cur.family];
+    onDia(f.sizes.find((s) => Number(s.d) === Number(el("dia").value)));
+  });
+  el("len").addEventListener("change", () => { cur.l = Number(el("len").value); update(); });
+  el("out").addEventListener("click", outOfStock);
+})();
+</script>
+</body>
+</html>

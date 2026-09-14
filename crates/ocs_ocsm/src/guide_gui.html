@@ -2660,5 +2660,17 @@ const BS_FITS = [
   load();
 })();
 </script>
+<script>
+/* 页面心跳：告诉插件本窗口还开着（避免重复开窗）；关闭时 bye=1 */
+(function () {
+  var key = location.search.replace(/^\?/, "") || "guide";
+  function ping(bye) {
+    try { fetch("/api/page_ping?p=" + encodeURIComponent(key) + (bye ? "&bye=1" : ""), { cache: "no-store" }); } catch (e) {}
+  }
+  ping(false);
+  setInterval(function () { ping(false); }, 5000);
+  window.addEventListener("beforeunload", function () { ping(true); });
+})();
+</script>
 </body>
 </html>

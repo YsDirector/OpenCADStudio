@@ -166,6 +166,36 @@ fn route(
         ("GET", t) if t.starts_with("/rough.html") => {
             (200, "text/html; charset=utf-8", ROUGH_HTML.to_string())
         }
+        ("GET", t) if t.starts_with("/parts") => {
+            (200, "text/html; charset=utf-8", PARTS_HTML.to_string())
+        }
+        ("GET", t) if t.starts_with("/api/parts_ping") => {
+            crate::page_window_ping("parts", t.contains("bye=1"));
+            (200, json, r#"{"ok":true}"#.into())
+        }
+        ("GET", t) if t.starts_with("/api/page_ping") => {
+            let q = t.split_once('?').map(|(_, q)| q).unwrap_or("");
+            let key = q
+                .split('&')
+                .filter_map(|kv| kv.split_once('='))
+                .find(|(k, _)| *k == "p")
+                .map(|(_, v)| v.to_string())
+                .unwrap_or_else(|| "page".to_string());
+            crate::page_window_ping(&key, q.contains("bye=1"));
+            (200, json, r#"{"ok":true}"#.into())
+        }
+        ("GET", t) if t.starts_with("/api/parts") => {
+            (200, json, crate::partgen::catalog_json())
+        }
+        ("GET", t) if t.starts_with("/api/part_svg") => {
+            let q = t.split_once('?').map(|(_, q)| q).unwrap_or("");
+            match crate::partgen::preview_svg(q) {
+                Ok(svg) => (200, "image/svg+xml; charset=utf-8", svg),
+                Err(e) => (400, json, serde_json::json!({"ok": false, "error": e}).to_string()),
+            }
+        }
+        ("POST", "/api/part_pick") => api_part_pick(body, sender),
+        ("POST", "/api/part_export") => api_part_export(body, sender),
         ("GET", t) if t.starts_with("/api/guide") => api_guide(target, sender),
         ("GET", t) if t.starts_with("/api/tolerance") => api_tolerance(target),
         ("GET", t) if t.starts_with("/api/ping") => (200, json, r#"{"ok":true}"#.into()),
@@ -3218,6 +3248,200 @@ fn api_rough_apply(body: &[u8], sender: &Arc<dyn PluginRequestSender>) -> (u16, 
 /// @(1.386,0) h4.9 ML；P（加工符号）@(11.009,1.4) h3.5 MC「仅非 C2 列」；
 /// 附加区 B/B'/C/G 按形态（R2: x=16.14；R3: x=14.473；R4/R5: x=17.706，
 /// B'@y=18、B@y=12.4、C@y=6.8、G@y=2.25）。
+
+/// `POST /api/part_pick`：按选择器页的族/规格/视图**参数化生成**零件并插入。
+///
+/// 与既有 apply 路径同构：worker 线程向宿主发请求（建块 → 加 INSERT → 写记录 → 标脏）。
+/// 插入点取 `OCSMPART`/`SP` 命令里点选的点（`crate::take_parts_point`），没有则落在原点。
+/// 块名规则 `OCSM_<族>_<规格>`，重复插入同一规格复用块定义。
+
+/// `POST /api/part_export`：**零件出库** —— 生成零件、建好块（幂等）、登记为"待放置"，
+/// 之后图纸里的 `XL` 放置态即可用鼠标跟随预览并连续点放（不需要任何剪切板/宿主改动）。
+fn api_part_export(body: &[u8], sender: &Arc<dyn PluginRequestSender>) -> (u16, &'static str, String) {
+    let json = "application/json; charset=utf-8";
+    match apply_part_export(sender, body) {
+        Ok(s) => (200, json, s),
+        Err(e) => (400, json, serde_json::json!({"ok": false, "error": e}).to_string()),
+    }
+}
+
+fn apply_part_export(
+    sender: &Arc<dyn PluginRequestSender>,
+    body: &[u8],
+) -> Result<String, String> {
+    #[derive(serde::Deserialize)]
+    struct Req {
+        family: String,
+        d: f64,
+        l: f64,
+        #[serde(default = "default_view")]
+        view: String,
+    }
+    fn default_view() -> String {
+        "main".to_string()
+    }
+    let req: Req = serde_json::from_slice(body).map_err(|e| format!("请求 JSON 无效: {e}"))?;
+    let part = crate::partgen::generate(&req.family, req.d, req.l, &req.view)?;
+    let block = format!(
+        "OCSM_{}_{}_{}",
+        req.family.to_ascii_uppercase().replace(['.', ' ', '/'], "_"),
+        part.meta.spec.replace(['.', ' ', '/', 'x', 'X'], "_"),
+        req.view.to_ascii_uppercase()
+    );
+
+    // 块定义：幂等创建（预览要引用它，所以必须在出库时就建好）
+    let exists = snapshot(sender)?.block_records.iter().any(|b| b.name == block);
+    if !exists {
+        req_timed(
+            sender,
+            PluginRequest::AddBlockRecord {
+                name: block.clone(),
+                entities: part.entities.clone(),
+            },
+            "AddBlockRecord",
+        )?;
+    }
+
+    // 登记为待放置件（`XL` 放置态的光标预览 + 点击落件都读它）
+    let meta_json = serde_json::json!({
+        "family": req.family,
+        "view": req.view,
+        "code": part.meta.code,
+        "name": part.meta.name,
+        "spec": part.meta.spec,
+        "material": part.meta.material,
+        "weight": part.meta.weight,
+        "d": req.d,
+        "l": req.l,
+    })
+    .to_string();
+    crate::set_pending_part(crate::PendingPart {
+        block: block.clone(),
+        meta_json,
+        label: format!("{} {}（{}）", part.meta.name, part.meta.spec, part.meta.code),
+    });
+
+    // 出库后窗口由页面自己 `window.close()` 关闭（实测 chromium 允许；
+    // 若是浏览器拒绝关闭（如 Firefox 标签页），用户手动切回图纸即可）。
+    Ok(serde_json::json!({
+        "ok": true,
+        "message": format!(
+            "已出库：{} {}（{}）。切回图纸，鼠标上已带该零件，左键点击放置（可连续，Esc 结束）。",
+            part.meta.name, part.meta.spec, part.meta.code
+        ),
+        "block": block,
+        "code": part.meta.code,
+        "spec": part.meta.spec,
+    })
+    .to_string())
+}
+
+fn api_part_pick(body: &[u8], sender: &Arc<dyn PluginRequestSender>) -> (u16, &'static str, String) {
+    let json = "application/json; charset=utf-8";
+    match apply_part_pick(sender, body) {
+        Ok(s) => (200, json, s),
+        Err(e) => (400, json, serde_json::json!({"ok": false, "error": e}).to_string()),
+    }
+}
+
+fn apply_part_pick(
+    sender: &Arc<dyn PluginRequestSender>,
+    body: &[u8],
+) -> Result<String, String> {
+    #[derive(serde::Deserialize)]
+    struct Req {
+        family: String,
+        d: f64,
+        l: f64,
+        #[serde(default = "default_view")]
+        view: String,
+    }
+    fn default_view() -> String {
+        "main".to_string()
+    }
+    let req: Req = serde_json::from_slice(body).map_err(|e| format!("请求 JSON 无效: {e}"))?;
+    let part = crate::partgen::generate(&req.family, req.d, req.l, &req.view)?;
+
+    // 块名：族 + 规格（去掉不合法字符，利于复用与排查）
+    let block = format!(
+        "OCSM_{}_{}",
+        req.family.to_ascii_uppercase().replace(['.', ' ', '/'], "_"),
+        part.meta.spec.replace(['.', ' ', '/', 'x', 'X'], "_")
+    );
+
+    // 块定义幂等：已存在就不再建（同名块重复插入直接复用）
+    let exists = snapshot(sender)?
+        .block_records
+        .iter()
+        .any(|b| b.name == block);
+    if !exists {
+        req_timed(
+            sender,
+            PluginRequest::AddBlockRecord {
+                name: block.clone(),
+                entities: part.entities.clone(),
+            },
+            "AddBlockRecord",
+        )?;
+    }
+
+    let at = crate::take_parts_point().unwrap_or([0.0, 0.0, 0.0]);
+    let mut ins = acadrust::entities::Insert::new(&block, Vector3::new(at[0], at[1], at[2]));
+    {
+        let c = &mut ins.common;
+        c.layer = crate::partgen::LAYER_MAIN.to_string();
+        c.color = ocs_plugin_api::host::acadrust::types::Color::ByLayer;
+        c.linetype = "ByLayer".to_string();
+        c.line_weight = ocs_plugin_api::host::acadrust::types::LineWeight::ByLayer;
+    }
+    let handle = match req_timed(
+        sender,
+        PluginRequest::AddEntities(vec![acadrust::EntityType::Insert(ins)]),
+        "AddEntities",
+    ) {
+        Ok(PluginResponse::Handles(hs)) => hs.first().copied(),
+        Ok(_) => None,
+        Err(e) => return Err(e),
+    };
+
+    // `OCSM_PART`：台账记录（二期序号 / 三期明细表直接取用）
+    let meta_json = serde_json::json!({
+        "family": req.family,
+        "view": req.view,
+        "code": part.meta.code,
+        "name": part.meta.name,
+        "spec": part.meta.spec,
+        "material": part.meta.material,
+        "weight": part.meta.weight,
+        "d": req.d,
+        "l": req.l,
+    })
+    .to_string();
+    let mut rec = ExtendedDataRecord::new("OCSM_PART");
+    rec.values.push(XDataValue::String(meta_json));
+    if let Some(h) = handle {
+        req_timed(
+            sender,
+            PluginRequest::WriteRecord { handle: h, record: rec },
+            "WriteRecord",
+        )?;
+    }
+    req_timed(sender, PluginRequest::BumpGeometry, "BumpGeometry")?;
+    mark_dirty(sender)?;
+
+    Ok(serde_json::json!({
+        "ok": true,
+        "message": format!("已插入 {} {}（{}）", part.meta.name, part.meta.spec, part.meta.code),
+        "block": block,
+        "insert_handle": handle.map(fmt_handle),
+        "at": at,
+        "code": part.meta.code,
+        "spec": part.meta.spec,
+        "weight": part.meta.weight,
+    })
+    .to_string())
+}
+
 fn apply_roughness(
     sender: &Arc<dyn PluginRequestSender>,
     body: &[u8],
@@ -4925,6 +5149,8 @@ fn mcp_list_guides(sender: &Arc<dyn PluginRequestSender>) -> Result<String, Stri
 
 const GUI_HTML: &str = include_str!("guide_gui.html");
 const ROUGH_HTML: &str = include_str!("rough_gui.html");
+/// 标准件选择器页（参数化生成）。
+const PARTS_HTML: &str = include_str!("parts_gui.html");
 
 #[cfg(test)]
 mod tests {
@@ -9199,6 +9425,99 @@ mod weld_tests {
         assert_eq!(v["syms"].as_array().unwrap().len(), 27);
     }
 }
+    // ── 标准件选择器（参数化生成）─────────────────────────────────────────
+
+    #[test]
+    fn parts_routes_serve_page_catalog_and_preview() {
+        let mock = Arc::new(MockSender::new(acadrust::CadDocument::new()));
+        let server = spawn(mock.clone()).expect("spawn guide server");
+        let html = http_req(server.port, "GET", "/parts", "");
+        assert!(html.contains("OCSM 标准件库"), "零件库窗口标题");
+        assert!(html.contains("/api/parts") && html.contains("/api/part_svg") && html.contains("/api/part_export"));
+        assert!(html.contains("零件出库"), "出库按钮");
+        assert!(html.contains("window.close()"), "出库后自动关窗");
+        assert!(html.contains("ul class=\"tree\"") || html.contains("class=\"tree\""), "左侧文件树");
+        let cat = http_req(server.port, "GET", "/api/parts", "");
+        assert!(cat.contains("GB/T 5780-2016") && cat.contains("hex_bolt_c"), "目录含 C 级螺栓族");
+        assert!(cat.contains("\"M5\"") && cat.contains("lengths") && cat.contains("hex_bolt_c"), "含规格与长度系列");
+        assert!(cat.contains("\"main\"") && cat.contains("\"top\"") && cat.contains("\"end\""), "三个视图");
+        // 文件树：零件库 / 螺栓 / 六角螺栓 分级 + 待实现族标注
+        assert!(cat.contains("零件库") && cat.contains("六角螺栓") && cat.contains("六角头螺栓 C级 GB/T 5780-2016"), "树路径");
+        assert!(cat.contains("\"implemented\":false"), "未实现族在树上标注");
+        assert!(cat.contains("1型六角螺母 GB/T 6170-2015"), "未实现常用件也列在树上");
+        let svg = http_req(server.port, "GET", "/api/part_svg?family=hex_bolt_c&d=5&l=25&view=main", "");
+        assert!(svg.contains("<svg") && svg.contains("M5x25"), "预览 SV");
+        assert!(svg.contains("GB/T 5780-2016"), "标题含现行代号");
+        let bad = http_req(server.port, "GET", "/api/part_svg?family=hex_bolt_c&d=5&l=9999", "");
+        assert!(bad.contains("error"), "越界长度报错");
+        let bad2 = http_req(server.port, "GET", "/api/part_svg?family=nope&d=5&l=25", "");
+        assert!(bad2.contains("error"), "未实现族报错");
+    }
+
+    #[test]
+    fn part_pick_builds_block_inserts_at_point_and_records_meta() {
+        let mock = Arc::new(MockSender::new(acadrust::CadDocument::new()));
+        *crate::parts_point_slot().lock().unwrap() = Some([10.0, 20.0, 0.0]);
+        let body = br#"{"family":"hex_bolt_c","d":5,"l":25,"view":"main"}"#;
+        let sender: Arc<dyn PluginRequestSender> = mock.clone();
+        let resp = apply_part_pick(&sender, body).expect("插入成功");
+        assert!(resp.contains("\"ok\":true"), "{resp}");
+        assert!(resp.contains("GB/T 5780-2016") && resp.contains("M5x25"), "回执含代号规格");
+        // 建块（幂等名）+ 块内图元
+        let ents = mock.block_entities("OCSM_HEX_BOLT_C_M5_25");
+        assert!(ents.len() > 12, "块内含生成图元，实际 {}", ents.len());
+        assert!(ents.iter().all(|e| !matches!(e, acadrust::EntityType::Dimension(_))), "不含尺寸标注");
+        // 插入点取点选值；INSERT 落在轮廓层且 ByLayer
+        assert!(resp.contains("[10.0,20.0,0.0]"), "插入点：{resp}");
+        {
+            let doc = mock.doc.lock().unwrap();
+            let ins = doc
+                .entities()
+                .find_map(|e| match e {
+                    acadrust::EntityType::Insert(i) => Some(i.clone()),
+                    _ => None,
+                })
+                .expect("有 INSERT");
+            assert_eq!(ins.block_name, "OCSM_HEX_BOLT_C_M5_25");
+            assert_eq!((ins.insert_point.x, ins.insert_point.y), (10.0, 20.0));
+            assert_eq!(ins.common.layer, crate::partgen::LAYER_MAIN);
+            assert!(doc
+                .get_entity(ins.common.handle)
+                .and_then(|e| e.common().extended_data.get_record("OCSM_PART"))
+                .is_some());
+        }
+        // 第二次插入同一规格：块名一致（宿主侧块表幂等由已有块判断保证），点已被取走 → 落原点
+        let resp2 = apply_part_pick(&sender, body).expect("再次插入");
+        assert!(resp2.contains("OCSM_HEX_BOLT_C_M5_25"), "复用同一块名：{resp2}");
+        assert!(resp2.contains("[0.0,0.0,0.0]"), "点被取走后落原点：{resp2}");
+        let inserts = mock
+            .doc
+            .lock()
+            .unwrap()
+            .entities()
+            .filter(|e| matches!(e, acadrust::EntityType::Insert(_)))
+            .count();
+        assert_eq!(inserts, 2, "两次插入各一个 INSERT");
+    }
+
+    #[test]
+    fn part_export_builds_block_and_registers_pending_part() {
+        let mock = Arc::new(MockSender::new(acadrust::CadDocument::new()));
+        let sender: Arc<dyn PluginRequestSender> = mock.clone();
+        let body = br#"{"family":"hex_bolt_c","d":5,"l":25,"view":"main"}"#;
+        let resp = apply_part_export(&sender, body).expect("出库");
+        assert!(resp.contains("\"ok\":true"), "{resp}");
+        assert!(resp.contains("零件出库") || resp.contains("已出库"), "回执提示：{resp}");
+        assert_eq!(mock.block_entities("OCSM_HEX_BOLT_C_M5_25_MAIN").len() > 12, true, "块已建好");
+        // 待放置件登记（供 XL 放置态预览/落件）
+        let label = crate::pending_part_label().expect("已登记待放置件");
+        assert!(label.contains("M5x25") && label.contains("GB/T 5780-2016"), "{label}");
+        assert_eq!(crate::pending_block().as_deref(), Some("OCSM_HEX_BOLT_C_M5_25_MAIN"));
+        // 越界/未知族报错
+        assert!(apply_part_export(&sender, br#"{"family":"hex_bolt_c","d":5,"l":9999}"#).is_err());
+        assert!(apply_part_export(&sender, br#"{"family":"nope","d":5,"l":25}"#).is_err());
+    }
+
 }
 
 

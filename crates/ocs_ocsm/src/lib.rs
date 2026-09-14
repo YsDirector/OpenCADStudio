@@ -19,6 +19,8 @@ mod detail_clip;
 mod dim2gb;
 mod guide_server;
 mod guide_url;
+mod partgen;
+mod partgen_more;
 pub mod tolerance;
 
 
@@ -47,6 +49,7 @@ static MANIFEST: PluginManifest = PluginManifest {
         "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "TF", "OCSM",
         "OCSMFRAMEINIT", "OCSMFRAMEINSERT", "D", "OCSMPOWERDIM", "OCSMDIMGULIDE",
         "GDIM", "OCSMMCP", "OCSMRGH", "CC", "OCSMDIM2GB", "D2G", "OCSMEDIT", "ME",
+        "OCSMPART", "XL",
     ],
 };
 
@@ -273,6 +276,291 @@ struct OcsmPlugin;
 
 /// 标注更新服务器端口（插件进程级；out-of-process 插件不能存宿主 state，
 /// 用进程内 static 保存）。
+/// 各插件页面窗口的最后心跳（页面每 5 s ping 一次；用来避免重复开窗）。
+static PAGE_PING: std::sync::OnceLock<
+    std::sync::Mutex<std::collections::HashMap<String, std::time::Instant>>,
+> = std::sync::OnceLock::new();
+
+fn page_ping_map() -> &'static std::sync::Mutex<std::collections::HashMap<String, std::time::Instant>> {
+    PAGE_PING.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+}
+
+/// 页面心跳：`key` 标识页面（含 handle 这类区分项），`bye=true` 表示窗口正在关闭。
+pub(crate) fn page_window_ping(key: &str, bye: bool) {
+    let mut m = page_ping_map().lock().unwrap();
+    if bye {
+        m.remove(key);
+    } else {
+        m.insert(key.to_string(), std::time::Instant::now());
+    }
+}
+
+/// 该页面窗口是否还开着（15 s 内有心跳）。
+pub(crate) fn page_window_alive(key: &str) -> bool {
+    page_ping_map()
+        .lock()
+        .unwrap()
+        .get(key)
+        .map(|t| t.elapsed() < std::time::Duration::from_secs(15))
+        .unwrap_or(false)
+}
+
+/// 打开某个插件页面为 **chromium `--app=` 独立窗口**（沉浸式；页面自关后窗口随之退出）。
+/// 已开着（有心跳）则不再重复开；返回 true=已（尝试）打开，false=已开着。
+pub(crate) fn open_plugin_page(
+    port: u16,
+    path_and_query: &str,
+    ping_key: &str,
+    width: u32,
+    height: u32,
+) -> bool {
+    if page_window_alive(ping_key) {
+        return false;
+    }
+    let url = format!("http://127.0.0.1:{port}{path_and_query}");
+    if open_app_window(&url, width, height) {
+        return true;
+    }
+    let _ = std::process::Command::new("xdg-open").arg(&url).spawn();
+    true
+}
+
+/// 打开零件库页面：优先 **chromium `--app=` 独立窗口**（沉浸式，无地址栏/标签栏；
+/// 且出库后页面能自己 `window.close()` 关掉它），失败时退回 `xdg-open`。
+///
+/// 坑：插件进程环境是**精简的**（宿主给 plugin runner 的 environ 里没有
+/// `DISPLAY`/`WAYLAND_DISPLAY`），直接 spawn chromium 会以
+/// "Missing X server or $DISPLAY" 失败 —— 所以先补齐会话的显示变量。
+pub(crate) fn open_parts_window(port: u16) -> bool {
+    open_plugin_page(port, "/parts", "parts", 960, 900)
+}
+
+/// 用 chromium/chrome 的 `--app=` 打开独立窗口；成功返回 true。
+fn open_app_window(url: &str, width: u32, height: u32) -> bool {
+    let bin = [
+        "/usr/bin/chromium",
+        "/usr/bin/chromium-browser",
+        "/usr/bin/google-chrome",
+        "/usr/bin/microsoft-edge",
+    ]
+    .iter()
+    .find(|p| std::path::Path::new(p).exists());
+    let Some(bin) = bin else { return false };
+    let mut cmd = std::process::Command::new(bin);
+    cmd.arg(format!("--app={url}"))
+        .arg(format!("--window-size={width},{height}"))
+        .arg("--class=OCSM-Parts");
+    for (k, v) in session_display_env() {
+        cmd.env(k, v);
+    }
+    cmd.spawn().is_ok()
+}
+
+/// 取会话的显示相关环境变量（插件自身没有时分两步补齐）：
+/// ① 自己环境里已有就用；② `systemctl --user show-environment`（X11/Wayland 会话都登记）；
+/// ③ 再兜底按 `XDG_RUNTIME_DIR` 下的 wayland socket / xauth 文件推断。
+/// 解析 `systemctl --user show-environment` 输出中的显示相关变量（纯函数，便于测试）。
+pub(crate) fn parse_session_env(text: &str) -> Vec<(String, String)> {
+    const KEYS: [&str; 6] = [
+        "DISPLAY",
+        "WAYLAND_DISPLAY",
+        "XAUTHORITY",
+        "XDG_RUNTIME_DIR",
+        "DBUS_SESSION_BUS_ADDRESS",
+        "XDG_SESSION_TYPE",
+    ];
+    let mut out = Vec::new();
+    for line in text.lines() {
+        if let Some((k, v)) = line.split_once('=') {
+            let k = k.trim();
+            if KEYS.contains(&k) && !v.trim().is_empty() && !out.iter().any(|(kk, _)| kk == k) {
+                out.push((k.to_string(), v.trim().to_string()));
+            }
+        }
+    }
+    out
+}
+
+fn session_display_env() -> Vec<(String, String)> {
+    const KEYS: [&str; 6] = [
+        "DISPLAY",
+        "WAYLAND_DISPLAY",
+        "XAUTHORITY",
+        "XDG_RUNTIME_DIR",
+        "DBUS_SESSION_BUS_ADDRESS",
+        "XDG_SESSION_TYPE",
+    ];
+    let mut out: Vec<(String, String)> = Vec::new();
+    let push = |out: &mut Vec<(String, String)>, k: &str, v: &str| {
+        if !v.is_empty() && !out.iter().any(|(kk, _)| kk == k) {
+            out.push((k.to_string(), v.to_string()));
+        }
+    };
+    for k in KEYS {
+        if let Ok(v) = std::env::var(k) {
+            push(&mut out, k, &v);
+        }
+    }
+    fn has_display(out: &[(String, String)]) -> bool {
+        out.iter().any(|(k, _)| k == "DISPLAY" || k == "WAYLAND_DISPLAY")
+    }
+    if !has_display(&out) {
+        if let Ok(o) = std::process::Command::new("systemctl")
+            .args(["--user", "show-environment"])
+            .output()
+        {
+            for (k, v) in parse_session_env(&String::from_utf8_lossy(&o.stdout)) {
+                push(&mut out, &k, &v);
+            }
+        }
+    }
+    if !has_display(&out) {
+        // 兜底：按运行时目录里的 socket / xauth 文件推断
+        let rt = out
+            .iter()
+            .find(|(k, _)| k == "XDG_RUNTIME_DIR")
+            .map(|(_, v)| v.clone())
+            .unwrap_or_else(|| format!("/run/user/{}", unsafe { libc_getuid() }));
+        if let Ok(rd) = std::fs::read_dir(&rt) {
+            for e in rd.flatten() {
+                let name = e.file_name().to_string_lossy().into_owned();
+                if name.starts_with("wayland-") && !name.ends_with(".lock") {
+                    push(&mut out, "WAYLAND_DISPLAY", &name);
+                } else if name.starts_with("xauth_") {
+                    push(&mut out, "XAUTHORITY", &format!("{rt}/{name}"));
+                }
+            }
+        }
+        push(&mut out, "DISPLAY", ":0");
+    }
+    out
+}
+
+/// 当前用户 uid（Linux）。
+unsafe fn libc_getuid() -> u32 {
+    extern "C" {
+        fn getuid() -> u32;
+    }
+    getuid()
+}
+
+/// 待放置零件（「零件出库」登记，`XL` 放置态读它做光标预览与落件）。
+#[derive(Clone)]
+pub(crate) struct PendingPart {
+    pub block: String,
+    pub meta_json: String,
+    pub label: String,
+}
+
+static PENDING_PART: std::sync::OnceLock<std::sync::Mutex<Option<PendingPart>>> =
+    std::sync::OnceLock::new();
+
+fn pending_slot() -> &'static std::sync::Mutex<Option<PendingPart>> {
+    PENDING_PART.get_or_init(|| std::sync::Mutex::new(None))
+}
+
+pub(crate) fn set_pending_part(p: PendingPart) {
+    *pending_slot().lock().unwrap() = Some(p);
+}
+
+fn pending_part_label() -> Option<String> {
+    pending_slot().lock().unwrap().as_ref().map(|p| p.label.clone())
+}
+
+fn pending_block() -> Option<String> {
+    pending_slot().lock().unwrap().as_ref().map(|p| p.block.clone())
+}
+
+/// 一个待落件（基点位置 + 绕基点的旋转角，弧度）。
+#[derive(Clone, Copy)]
+pub(crate) struct PlaceTask {
+    pub pt: [f64; 3],
+    pub rotation: f64,
+}
+
+/// 落件通道（`XL` 放置态第二下点击 → 放置 worker 落一个件）。
+static PLACE_TX: std::sync::OnceLock<std::sync::mpsc::Sender<PlaceTask>> =
+    std::sync::OnceLock::new();
+
+fn place_sender(sender: std::sync::Arc<dyn PluginRequestSender>) -> std::sync::mpsc::Sender<PlaceTask> {
+    PLACE_TX
+        .get_or_init(|| {
+            let (tx, rx) = std::sync::mpsc::channel::<PlaceTask>();
+            std::thread::Builder::new()
+                .name("ocsm-part-place".into())
+                .spawn(move || {
+                    for task in rx {
+                        let pt = task.pt;
+                        // 宿主此刻不在命令回调里，worker 请求可安全下发。
+                        // 与宿主交互事件处理的微小时序差：稍等一拍更稳。
+                        std::thread::sleep(std::time::Duration::from_millis(120));
+                        let p = pending_slot().lock().unwrap().clone();
+                        let Some(p) = p else { continue };
+                        if let Err(e) = place_one(&sender, &p, task) {
+                            use ocs_plugin_api::ipc::protocol::PluginRequest;
+                            let _ = sender.request(PluginRequest::PushError(format!(
+                                "OCSM 标准件：放置失败 {e}"
+                            )));
+                        }
+                    }
+                })
+                .ok();
+            tx
+        })
+        .clone()
+}
+
+/// 在点处落一个件：INSERT + `OCSM_PART` 记录 + 标脏。
+fn place_one(
+    sender: &std::sync::Arc<dyn PluginRequestSender>,
+    p: &PendingPart,
+    task: PlaceTask,
+) -> Result<(), String> {
+    let pt = task.pt;
+    use ocs_plugin_api::ipc::protocol::{PluginRequest, PluginResponse};
+    use ocs_plugin_api::host::acadrust::entities::Insert;
+    use ocs_plugin_api::host::acadrust::types::{Color, LineWeight, Vector3};
+    let mut ins = Insert::new(&p.block, Vector3::new(pt[0], pt[1], pt[2]));
+    // Insert.rotation 单位是**弧度**（同 Arc，DXF 读入已转换）
+    ins.rotation = task.rotation;
+    {
+        let c = &mut ins.common;
+        c.layer = partgen::LAYER_MAIN.to_string();
+        c.color = Color::ByLayer;
+        c.linetype = "ByLayer".to_string();
+        c.line_weight = LineWeight::ByLayer;
+    }
+    let resp = sender
+        .request(PluginRequest::AddEntities(vec![acadrust::EntityType::Insert(ins)]))
+        .map_err(|e| e.to_string())?;
+    let handle = match resp {
+        PluginResponse::Handles(hs) => hs.first().copied(),
+        _ => None,
+    };
+    if let Some(h) = handle {
+        let mut rec = ocs_plugin_api::host::acadrust::xdata::ExtendedDataRecord::new("OCSM_PART");
+        rec.values.push(ocs_plugin_api::host::acadrust::xdata::XDataValue::String(
+            p.meta_json.clone(),
+        ));
+        let _ = sender.request(PluginRequest::WriteRecord { handle: h, record: rec });
+    }
+    let _ = sender.request(PluginRequest::BumpGeometry);
+    let _ = sender.request(PluginRequest::SetDirty);
+    Ok(())
+}
+
+/// `SP` 命令里点选的插入点（旧路径保留）。
+static PARTS_POINT: std::sync::OnceLock<std::sync::Mutex<Option<[f64; 3]>>> =
+    std::sync::OnceLock::new();
+
+fn parts_point_slot() -> &'static std::sync::Mutex<Option<[f64; 3]>> {
+    PARTS_POINT.get_or_init(|| std::sync::Mutex::new(None))
+}
+
+pub(crate) fn take_parts_point() -> Option<[f64; 3]> {
+    parts_point_slot().lock().unwrap().take()
+}
+
 static GUIDE_PORT: std::sync::OnceLock<std::sync::Mutex<Option<u16>>> =
     std::sync::OnceLock::new();
 
@@ -447,6 +735,10 @@ impl BuiltinPlugin for OcsmPlugin {
                 self.cmd_roughness(host);
                 true
             }
+            "OCSMPART" | "XL" => {
+                self.cmd_parts(host);
+                true
+            }
             "OCSMDIM2GB" | "D2G" => {
                 self.cmd_dim2gb(host);
                 true
@@ -532,11 +824,20 @@ impl OcsmPlugin {
             host.push_error("OCSM: 无法启动标注更新服务器（宿主不支持 worker 请求）。");
             return;
         };
-        let url = format!("http://127.0.0.1:{port}/guide.html?handle={:#X}", u64::from(h));
-        let _ = std::process::Command::new("xdg-open").arg(&url).spawn();
-        host.push_info(&format!(
-            "OCSM 尺寸引导：已打开标注配置 {url}。应用=写超链接；应用并刷新=生成标注（7标注层/OCSM_GB）。"
-        ));
+        // 心跳键与页面一致（页面用 location.search 去掉 '?'：`handle=2A`）
+        let key = format!("handle={:X}", u64::from(h));
+        let opened = open_plugin_page(
+            port,
+            &format!("/guide.html?handle={:#X}", u64::from(h)),
+            &key,
+            1020,
+            900,
+        );
+        host.push_info(if opened {
+            "OCSM 尺寸引导：已打开标注配置窗口。应用=写超链接；应用并刷新=生成标注（7标注层/OCSM_GB）。"
+        } else {
+            "OCSM 尺寸引导：标注配置窗口已打开（Alt+Tab 切换过去）。"
+        });
     }
 
     /// `OCSMEDIT` / `ME`：选中一个 OCSM 生成的标注（带 `OCSM_EDIT` 记录）→
@@ -568,11 +869,20 @@ impl OcsmPlugin {
             host.push_error("OCSM: 无法启动标注更新服务器（宿主不支持 worker 请求）。");
             return;
         };
-        let url = format!("http://127.0.0.1:{port}/guide.html?handle={:#X}", u64::from(h));
-        let _ = std::process::Command::new("xdg-open").arg(&url).spawn();
-        host.push_info(&format!(
-            "OCSM 标注编辑：已打开配置 {url}（改完点「应用并刷新」= 替换旧标注）。"
-        ));
+        // 心跳键与页面一致（页面用 location.search 去掉 '?'：`handle=2A`）
+        let key = format!("handle={:X}", u64::from(h));
+        let opened = open_plugin_page(
+            port,
+            &format!("/guide.html?handle={:#X}", u64::from(h)),
+            &key,
+            1020,
+            900,
+        );
+        host.push_info(if opened {
+            "OCSM 标注编辑：已打开配置窗口（改完点「应用并刷新」= 替换旧标注）。"
+        } else {
+            "OCSM 标注编辑：配置窗口已打开（Alt+Tab 切换过去）。"
+        });
     }
 
     /// `OCSMDIM2GB` / `D2G`：把宿主原生标注（模型空间 DIMENSION）**重建**为 OCSM 的
@@ -665,6 +975,34 @@ impl OcsmPlugin {
         };
         host.start_interactive(Box::new(RoughnessPlace {
             sender: std::sync::Arc::from(sender),
+        }));
+    }
+
+    /// `OCSMPART` / `XL`：直接打开标准件库窗口，并进入放置态
+    /// （窗口里「零件出库」→ 回到图纸鼠标跟随预览 → 左键点击放置，可连续，Esc 结束）。
+    fn cmd_parts(&self, host: &mut dyn HostApi) {
+        // 先确保标注更新服务器在跑并打开零件库窗口（不需要先点插入点）
+        if let Some(port) = self.ensure_guide_server(host) {
+            if open_parts_window(port) {
+                host.push_info(
+                    "OCSM 标准件库：已打开零件库窗口。选零件点「零件出库」→ 回到图纸点击定位基点 → 移动光标旋转 → 再点击落定（可连续，Esc 结束）。",
+                );
+            } else {
+                host.push_info("OCSM 标准件库：零件库窗口已打开（Alt+Tab 切换过去）。");
+            }
+        } else {
+            host.push_error("OCSM: 无法启动零件库服务（宿主不支持 worker 请求）。");
+            return;
+        }
+        // 同时进入放置态：窗口里出库后，鼠标即跟随预览、左键落件
+        let _ = self.ensure_guide_server(host);
+        let Some(sender) = host.plugin_request_sender() else {
+            return;
+        };
+        host.start_interactive(Box::new(PartPlace {
+            sender: std::sync::Arc::from(sender),
+            phase: std::cell::Cell::new(PlacePhase::Follow),
+            base: std::cell::Cell::new([0.0, 0.0, 0.0]),
         }));
     }
 
@@ -1942,12 +2280,104 @@ impl InteractiveCommand for RoughnessPlace {
             server.port
         };
         drop(slot);
-        let url = format!(
-            "http://127.0.0.1:{port}/rough.html?x={}&y={}",
-            pt[0], pt[1]
+        open_plugin_page(
+            port,
+            &format!("/rough.html?x={}&y={}", pt[0], pt[1]),
+            "rough",
+            900,
+            880,
         );
-        let _ = std::process::Command::new("xdg-open").arg(&url).spawn();
         CommandStep::Cancel
+    }
+}
+
+/// 标准件插入：点选插入点 → 记下点 + 打开选择器页（族/规格/视图由页面挑）。
+/// 与粗糙度同构：点选回调里**不能**发宿主请求，写图统一由页面 `/api/part_pick` 触发。
+struct PartPlace {
+    sender: std::sync::Arc<dyn PluginRequestSender>,
+    /// 放置阶段（`Cell`：prompt 只用 &self）
+    phase: std::cell::Cell<PlacePhase>,
+    /// 已定位的基点
+    base: std::cell::Cell<[f64; 3]>,
+}
+
+/// 放置阶段：`Follow` = 零件跟光标（未定位基点）；`Rotate` = 已定位基点、跟随光标绕基点旋转。
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PlacePhase {
+    Follow,
+    Rotate,
+}
+
+impl InteractiveCommand for PartPlace {
+    fn prompt(&self) -> String {
+        match (pending_part_label(), self.phase.get()) {
+            (None, _) => "OCSM 标准件：请在零件库窗口里点「零件出库」，然后在此点击放置。".to_string(),
+            (Some(l), PlacePhase::Follow) => {
+                format!("OCSM 标准件：{l} —— 点击定位基点（可连续，Esc 结束）")
+            }
+            (Some(l), PlacePhase::Rotate) => format!(
+                "OCSM 标准件：{l} —— 移动光标绕基点旋转，再点击落定（Esc 取消）"
+            ),
+        }
+    }
+
+    /// 光标跟随预览（与 POWERDIM 同机制）：定位前跟光标走，定位后绕基点旋转。
+    fn wants_mouse_move(&self) -> bool {
+        true
+    }
+
+    fn on_mouse_move(&mut self, pt: [f64; 3]) -> Option<acadrust::EntityType> {
+        let block = pending_block()?;
+        let (at, rot) = match self.phase.get() {
+            PlacePhase::Follow => (pt, 0.0),
+            PlacePhase::Rotate => (self.base.get(), rotate_angle(self.base.get(), pt)),
+        };
+        let mut ins = acadrust::entities::Insert::new(&block, Vector3::new(at[0], at[1], at[2]));
+        ins.rotation = rot;
+        {
+            let c = &mut ins.common;
+            c.layer = partgen::LAYER_MAIN.to_string();
+            c.color = Color::ByLayer;
+            c.linetype = "ByLayer".to_string();
+            c.line_weight = LineWeight::ByLayer;
+        }
+        Some(acadrust::EntityType::Insert(ins))
+    }
+
+    fn on_point(&mut self, pt: [f64; 3]) -> CommandStep {
+        if pending_block().is_none() {
+            // 还没出库：只进入放置态等待（兼容旧的"先点后选"路径）
+            *parts_point_slot().lock().unwrap() = Some(pt);
+            return CommandStep::NeedPoint;
+        }
+        match self.phase.get() {
+            // 第一下：定位基点，转入旋转阶段
+            PlacePhase::Follow => {
+                self.base.set(pt);
+                self.phase.set(PlacePhase::Rotate);
+                CommandStep::NeedPoint
+            }
+            // 第二下：落定（交给放置 worker 发宿主请求：INSERT + OCSM_PART + 标脏）
+            PlacePhase::Rotate => {
+                let task = PlaceTask {
+                    pt: self.base.get(),
+                    rotation: rotate_angle(self.base.get(), pt),
+                };
+                let _ = place_sender(self.sender.clone()).send(task);
+                self.phase.set(PlacePhase::Follow);
+                CommandStep::NeedPoint
+            }
+        }
+    }
+}
+
+/// 绕基点旋转角（弧度）：基点 → 光标方向；光标离基点太近（<1 mm）视为 0，避免抖动。
+fn rotate_angle(base: [f64; 3], pt: [f64; 3]) -> f64 {
+    let (dx, dy) = (pt[0] - base[0], pt[1] - base[1]);
+    if (dx * dx + dy * dy).sqrt() < 1.0 {
+        0.0
+    } else {
+        dy.atan2(dx)
     }
 }
 
@@ -2775,4 +3205,143 @@ mod tests {
             other => panic!("expected preview Dimension, got {other:?}"),
         }
     }
+    // ── 标准件放置：两段式（定位基点 → 绕基点旋转 → 落定）──────────────────
+
+    /// 记录型 sender（只记请求，不做真实图纸操作）。
+    struct RecordingSender {
+        reqs: std::sync::Mutex<Vec<String>>,
+    }
+    impl RecordingSender {
+        fn new() -> Self {
+            RecordingSender { reqs: std::sync::Mutex::new(Vec::new()) }
+        }
+        fn names(&self) -> Vec<String> {
+            self.reqs.lock().unwrap().clone()
+        }
+    }
+    impl PluginRequestSender for RecordingSender {
+        fn request(
+            &self,
+            req: ocs_plugin_api::ipc::protocol::PluginRequest,
+        ) -> Result<ocs_plugin_api::ipc::protocol::PluginResponse, ocs_plugin_api::host::PluginRequestError>
+        {
+            use ocs_plugin_api::ipc::protocol::{PluginRequest as R, PluginResponse as P};
+            let name = match &req {
+                R::AddEntities(v) => {
+                    // 记下 INSERT 的旋转角（弧度）便于断言
+                    let rot = v.iter().find_map(|e| match e {
+                        acadrust::EntityType::Insert(i) => Some(i.rotation),
+                        _ => None,
+                    });
+                    self.reqs
+                        .lock()
+                        .unwrap()
+                        .push(format!("AddEntities rot={:.6}", rot.unwrap_or(f64::NAN)));
+                    return Ok(P::Handles(vec![acadrust::Handle::NULL]));
+                }
+                R::AddBlockRecord { name, .. } => format!("AddBlockRecord {name}"),
+                R::WriteRecord { .. } => "WriteRecord".to_string(),
+                R::BumpGeometry => "BumpGeometry".to_string(),
+                R::SetDirty => "SetDirty".to_string(),
+                other => format!("{other:?}"),
+            };
+            self.reqs.lock().unwrap().push(name);
+            Ok(P::Ok)
+        }
+    }
+
+    #[test]
+    fn rotate_angle_follows_cursor_direction() {
+        let b = [0.0, 0.0, 0.0];
+        assert!(rotate_angle(b, [10.0, 0.0, 0.0]).abs() < 1e-12, "向右 = 0°");
+        assert!((rotate_angle(b, [0.0, 10.0, 0.0]) - std::f64::consts::FRAC_PI_2).abs() < 1e-12, "向上 = +90°");
+        assert!((rotate_angle(b, [-10.0, 0.0, 0.0]).abs() - std::f64::consts::PI).abs() < 1e-12, "向左 = 180°");
+        assert!((rotate_angle(b, [0.0, -10.0, 0.0]) + std::f64::consts::FRAC_PI_2).abs() < 1e-12, "向下 = −90°");
+        assert!((rotate_angle(b, [5.0, 5.0, 0.0]) - std::f64::consts::FRAC_PI_4).abs() < 1e-12, "45°");
+        assert_eq!(rotate_angle(b, [0.2, 0.2, 0.0]), 0.0, "贴近基点不抖动");
+        // 基点不在原点也按"基点→光标"方向算
+        assert!((rotate_angle([3.0, 4.0, 0.0], [8.0, 9.0, 0.0]) - std::f64::consts::FRAC_PI_4).abs() < 1e-12, "平移基点");
+    }
+
+    #[test]
+    fn part_place_is_two_stage_with_rotation_preview() {
+        let rec = std::sync::Arc::new(RecordingSender::new());
+        let sender: std::sync::Arc<dyn PluginRequestSender> = rec.clone();
+        set_pending_part(PendingPart {
+            block: "OCSM_TEST".into(),
+            meta_json: "{}".into(),
+            label: "测试件 M10x40".into(),
+        });
+        let mut cmd = PartPlace {
+            sender: sender.clone(),
+            phase: std::cell::Cell::new(PlacePhase::Follow),
+            base: std::cell::Cell::new([0.0, 0.0, 0.0]),
+        };
+        // 未定位：预览跟光标（旋转 0）
+        let prev = cmd.on_mouse_move([7.0, 8.0, 0.0]).expect("预览");
+        match prev {
+            acadrust::EntityType::Insert(i) => {
+                assert_eq!((i.insert_point.x, i.insert_point.y), (7.0, 8.0));
+                assert_eq!(i.rotation, 0.0);
+                assert_eq!(i.block_name, "OCSM_TEST");
+            }
+            other => panic!("预览应为 INSERT：{other:?}"),
+        }
+        assert!(cmd.prompt().contains("点击定位基点"), "提示：{}", cmd.prompt());
+        // 第一下：定位基点 → 转入旋转阶段
+        assert_eq!(std::mem::discriminant(&cmd.on_point([2.0, 3.0, 0.0])),
+                   std::mem::discriminant(&CommandStep::NeedPoint));
+        assert!(cmd.prompt().contains("绕基点旋转"), "提示：{}", cmd.prompt());
+        // 移动光标：预览停在基点、绕基点旋转（光标在 +y → 90°）
+        let prev = cmd.on_mouse_move([2.0, 13.0, 0.0]).expect("旋转预览");
+        match prev {
+            acadrust::EntityType::Insert(i) => {
+                assert_eq!((i.insert_point.x, i.insert_point.y), (2.0, 3.0), "预览吸附到基点");
+                assert!((i.rotation - std::f64::consts::FRAC_PI_2).abs() < 1e-12, "旋转 90°，实际 {}", i.rotation);
+            }
+            other => panic!("预览应为 INSERT：{other:?}"),
+        }
+        // 第二下：落定（插入交给 worker；这里直接同步调用 place_one 验证请求内容）
+        let pending = PendingPart {
+            block: "OCSM_TEST".into(),
+            meta_json: "{}".into(),
+            label: "测试件".into(),
+        };
+        place_one(&sender, &pending, PlaceTask { pt: [2.0, 3.0, 0.0], rotation: std::f64::consts::FRAC_PI_2 })
+            .expect("落件");
+        let names = rec.names();
+        assert!(names.iter().any(|n| n.contains("AddEntities") && n.contains("rot=1.570796")), "{names:?}");
+        assert!(names.contains(&"WriteRecord".to_string()), "{names:?}");
+        assert!(names.contains(&"SetDirty".to_string()), "{names:?}");
+        // 落定后回到跟随阶段，可连续放置
+        set_pending_part(PendingPart {
+            block: "OCSM_TEST".into(),
+            meta_json: "{}".into(),
+            label: "测试件".into(),
+        });
+        let mut cmd2 = PartPlace {
+            sender,
+            phase: std::cell::Cell::new(PlacePhase::Follow),
+            base: std::cell::Cell::new([0.0, 0.0, 0.0]),
+        };
+        let _ = cmd2.on_point([1.0, 1.0, 0.0]);
+        assert!(cmd2.prompt().contains("绕基点旋转"));
+        let _ = cmd2.on_point([1.0, 2.0, 0.0]);
+        assert!(cmd2.prompt().contains("点击定位基点"), "落定后回到跟随：{}", cmd2.prompt());
+    }
+
+    #[test]
+    fn parse_session_env_picks_display_keys() {
+        let sample = "LANG=zh_CN.UTF-8\nDISPLAY=:0\nWAYLAND_DISPLAY=wayland-0\nXAUTHORITY=/run/user/1000/xauth_uAXGEA\nXDG_SESSION_TYPE=wayland\nPATH=/usr/bin\nEMPTY=\n";
+        let got = parse_session_env(sample);
+        let get = |k: &str| got.iter().find(|(kk, _)| kk == k).map(|(_, v)| v.as_str());
+        assert_eq!(get("DISPLAY"), Some(":0"));
+        assert_eq!(get("WAYLAND_DISPLAY"), Some("wayland-0"));
+        assert_eq!(get("XAUTHORITY"), Some("/run/user/1000/xauth_uAXGEA"));
+        assert_eq!(get("PATH"), None, "无关变量不入表");
+        assert_eq!(get("EMPTY"), None, "空值不入表");
+        // 去重：同名只保留第一个
+        assert_eq!(parse_session_env("DISPLAY=:1\nDISPLAY=:2\n").len(), 1);
+    }
+
 }
