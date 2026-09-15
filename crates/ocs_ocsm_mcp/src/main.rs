@@ -12,6 +12,18 @@ use std::io::{BufRead, Read, Write};
 
 const PROTOCOL_VERSION: &str = "2024-11-05";
 
+/// 插件 `/api/mcp`（`guide_server::api_mcp`）认识的方法名。
+///
+/// ⚠️ MCP 工具名必须与之一致（桥接原样转发 `method`）：历史上工具名叫
+/// `apply_guide` / `apply_guide_refresh`，而插件只认 `apply` / `apply_refresh`，
+/// 导致两个写工具实际不可用（返回“未知 MCP 方法”）。2026-09-15 对齐。
+const PLUGIN_METHODS: &[&str] = &["list_guides", "get_guide", "apply", "apply_refresh"];
+
+/// MCP 工具名 → 插件方法名（None = 该工具不存在，不发给插件）。
+fn plugin_method(tool: &str) -> Option<&'static str> {
+    PLUGIN_METHODS.iter().copied().find(|m| *m == tool)
+}
+
 fn main() {
     let port = std::env::var("OCSM_GUIDE_PORT")
         .ok()
@@ -54,7 +66,7 @@ fn handle(req: &Value, port: u16) -> Value {
                 "protocolVersion": PROTOCOL_VERSION,
                 "capabilities": { "tools": { "listChanged": false } },
                 "serverInfo": { "name": "ocs-ocsm-mcp", "version": env!("CARGO_PKG_VERSION") },
-                "instructions": "控制 OCS 的引导线标注：list_guides / get_guide / apply_guide / apply_guide_refresh。先确保 OCS 内运行了 OCSMMCP。",
+                "instructions": "控制 OCS 的引导线标注：list_guides / get_guide / apply / apply_refresh。先确保 OCS 内运行了 OCSMMCP。",
                 "clientInfo": client,
             })
         }
@@ -93,7 +105,7 @@ fn tools() -> Vec<Value> {
             },
         }),
         json!({
-            "name": "apply_guide",
+            "name": "apply",
             "description": "把标注参数 URL 写入引导线超链接（应用，不生成标注）。URL 形如 http://127.0.0.1:23751/DIM/LINEAR/H/-50。",
             "inputSchema": {
                 "type": "object",
@@ -105,7 +117,7 @@ fn tools() -> Vec<Value> {
             },
         }),
         json!({
-            "name": "apply_guide_refresh",
+            "name": "apply_refresh",
             "description": "把参数 URL 写入引导线并立即生成真实标注（7标注层/OCSM_GB），删除引导线并刷新（应用并刷新）。",
             "inputSchema": {
                 "type": "object",
@@ -120,8 +132,14 @@ fn tools() -> Vec<Value> {
 }
 
 fn call_tool(name: &str, args: &Value, port: u16) -> Value {
-    // 桥接：插件 /api/mcp 的 method 与 MCP 工具名一一对应。
-    let body = json!({ "method": name, "params": args });
+    // 桥接：工具名 → 插件 `/api/mcp` 的方法名（两者必须一致，见 PLUGIN_METHODS）。
+    let Some(method) = plugin_method(name) else {
+        return json!({
+            "content": [{ "type": "text", "text": format!("未知工具: {name}") }],
+            "isError": true
+        });
+    };
+    let body = json!({ "method": method, "params": args });
     match bridge_http(port, &body) {
         Ok(v) => {
             let text = serde_json::to_string_pretty(&v).unwrap_or_else(|_| "{}".into());
@@ -177,7 +195,24 @@ mod tests {
         assert_eq!(tools.len(), 4);
         let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
         assert!(names.contains(&"list_guides"));
-        assert!(names.contains(&"apply_guide_refresh"));
+        assert!(names.contains(&"apply_refresh"));
+    }
+
+    #[test]
+    fn every_tool_name_is_a_plugin_method() {
+        // 回归：工具名与插件 `/api/mcp` 的方法名必须一一对应，否则写工具会收到
+        // “未知 MCP 方法”（2026-09-15 的 apply_guide/apply_guide_refresh 事故）。
+        let req = json!({"jsonrpc":"2.0","id":5,"method":"tools/list"});
+        let resp = handle(&req, 23751);
+        for tool in resp["result"]["tools"].as_array().unwrap() {
+            let name = tool["name"].as_str().unwrap();
+            assert_eq!(
+                plugin_method(name),
+                Some(name),
+                "工具 {name} 没有对应的插件方法"
+            );
+        }
+        assert_eq!(plugin_method("apply_guide"), None, "旧名不应再映射");
     }
 
     #[test]

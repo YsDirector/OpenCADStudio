@@ -797,6 +797,9 @@ impl BuiltinPlugin for OcsmPlugin {
 impl OcsmPlugin {
     /// `OCSM`：初始化图层 + 线型 + 文字样式 + 标注样式（幂等）。
     fn cmd_init(&self, host: &mut dyn HostApi) {
+        // 表变更（线型/图层/文字样式/标注样式）宿主不会自动入撤销栈：命令必须
+        // 自己声明撤销点，否则 AI/MCP 驱动初始化后 Ctrl+Z 与 MCP `op:"undo"` 都撤不掉。
+        host.push_undo("OCSM 初始化");
         // 线型先于图层：DWG 写出时层引用的线型名必须在 line_types 表。
         let lt = host.ensure_linetypes(linetype_defs());
         let layers = host.ensure_layers(layer_defs());
@@ -1179,6 +1182,9 @@ impl OcsmPlugin {
 
         // 图框比例感知：为本次缩放创建对应标注样式（如 OCSM_GB_x2），
         // POWERDIM 在 frame 内标注时按此样式放大文字/箭头。
+        // 缩放样式（以及随后的块导入/插入）都要可撤销：宿主 import 自带 push，
+        // 这里补一次覆盖缩放样式创建；无改动时宿主会丢弃空条目。
+        host.push_undo("OCSM 插入图框");
         if (scale - 1.0).abs() > 1e-9 {
             host.ensure_dim_styles(vec![scaled_dim_style_def(scale)]);
         }
@@ -1211,6 +1217,9 @@ impl OcsmPlugin {
     fn cmd_powerdim(&self, host: &mut dyn HostApi) {
         // 标注固定放 7标注层（模板层），兜底确保存在；同时确保文字/标注样式
         // 就绪——否则样式缺失时标注回退默认参数（文字变图层色、尺寸异常）。
+        // 样式补齐也是文档改动 → 先声明撤销点（标注实体本身由宿主在每次提交时
+        // 各自入栈，这里覆盖的是样式表）。
+        host.push_undo("OCSM 智能标注");
         host.ensure_layers(layer_defs());
         host.ensure_text_styles(text_style_defs());
         host.ensure_dim_styles(dim_style_defs());
@@ -3230,6 +3239,137 @@ mod tests {
             }
             other => panic!("expected preview Dimension, got {other:?}"),
         }
+    }
+    /// 只关心“谁先动了文档”的宿主桩：HostApi 的 ensure_* / ensure_plugin_state 默认
+    /// 什么都不做，这里覆盖成记录调用，用来断言 push_undo 发生在表变更之前。
+    #[derive(Default)]
+    struct UndoOrderSpy {
+        log: Vec<String>,
+        doc: ocs_plugin_api::host::CadDocument,
+    }
+    /// 空的只读文档视图（HostApi 要求实现 DocumentReader）。
+    struct SpyReader;
+    impl ocs_plugin_api::host::DocumentReader for SpyReader {
+        fn entity_count(&self) -> usize {
+            0
+        }
+        fn for_each_entity(&self, _f: &mut dyn FnMut(ocs_plugin_api::host::ReaderEntity<'_>)) {}
+        fn layer_name(&self, _handle: ocs_plugin_api::host::Handle) -> Option<&str> {
+            None
+        }
+        fn app_id_name(&self, _handle: ocs_plugin_api::host::Handle) -> Option<&str> {
+            None
+        }
+    }
+    impl ocs_plugin_api::host::HostApi for UndoOrderSpy {
+        fn tab_index(&self) -> usize {
+            0
+        }
+        fn document(&self) -> &ocs_plugin_api::host::CadDocument {
+            &self.doc
+        }
+        fn document_mut(&mut self) -> &mut ocs_plugin_api::host::CadDocument {
+            &mut self.doc
+        }
+        fn add_entity(&mut self, _entity: ocs_plugin_api::host::EntityType) -> ocs_plugin_api::host::Handle {
+            ocs_plugin_api::host::Handle::NULL
+        }
+        fn bump_geometry(&mut self) {
+            self.log.push("bump_geometry".into());
+        }
+        fn read_record(
+            &self,
+            _handle: ocs_plugin_api::host::Handle,
+            _app_name: &str,
+        ) -> Option<&ocs_plugin_api::host::ExtendedDataRecord> {
+            None
+        }
+        fn write_record(
+            &mut self,
+            _handle: ocs_plugin_api::host::Handle,
+            _record: ocs_plugin_api::host::ExtendedDataRecord,
+        ) -> bool {
+            false
+        }
+        fn remove_record(&mut self, _handle: ocs_plugin_api::host::Handle, _app_name: &str) -> bool {
+            false
+        }
+        fn push_undo(&mut self, label: &str) {
+            self.log.push(format!("push_undo:{label}"));
+        }
+        fn set_dirty(&mut self) {}
+        fn push_info(&mut self, _msg: &str) {}
+        fn push_output(&mut self, _msg: &str) {}
+        fn push_error(&mut self, _msg: &str) {}
+        fn start_interactive(
+            &mut self,
+            _command: Box<dyn ocs_plugin_api::host::InteractiveCommand>,
+        ) {
+            self.log.push("start_interactive".into());
+        }
+        fn plugin_state_any(&self, _plugin_id: &str) -> Option<&(dyn std::any::Any + Send + Sync)> {
+            None
+        }
+        fn plugin_state_any_mut(
+            &mut self,
+            _plugin_id: &str,
+        ) -> Option<&mut (dyn std::any::Any + Send + Sync)> {
+            None
+        }
+        fn ensure_plugin_state_any(
+            &mut self,
+            _plugin_id: &'static str,
+            init: &mut dyn FnMut() -> Box<dyn std::any::Any + Send + Sync>,
+        ) -> &mut (dyn std::any::Any + Send + Sync) {
+            Box::leak(init())
+        }
+        fn document_reader(&self) -> Box<dyn ocs_plugin_api::host::DocumentReader + '_> {
+            Box::new(SpyReader)
+        }
+        fn ensure_linetypes(&mut self, _defs: Vec<ocs_plugin_api::host::LinetypeDef>) -> usize {
+            self.log.push("ensure_linetypes".into());
+            0
+        }
+        fn ensure_layers(&mut self, _defs: Vec<ocs_plugin_api::host::LayerDef>) -> usize {
+            self.log.push("ensure_layers".into());
+            0
+        }
+        fn ensure_text_styles(&mut self, _defs: Vec<ocs_plugin_api::host::TextStyleDef>) -> usize {
+            self.log.push("ensure_text_styles".into());
+            0
+        }
+        fn ensure_dim_styles(&mut self, _defs: Vec<ocs_plugin_api::host::DimStyleDef>) -> usize {
+            self.log.push("ensure_dim_styles".into());
+            0
+        }
+    }
+
+    #[test]
+    fn mutating_commands_push_undo_before_touching_tables() {
+        // 宿主 ensure_* 直接改表、不自动入撤销栈（MCP `op:"undo"` 也撤不掉），
+        // 所以命令必须自己先声明撤销点 —— 2026-09-15 发现的契约缺口。
+        let mut host = UndoOrderSpy::default();
+        OcsmPlugin.cmd_init(&mut host);
+        assert_eq!(
+            host.log.first().map(String::as_str),
+            Some("push_undo:OCSM 初始化"),
+            "{:?}",
+            host.log
+        );
+        assert!(
+            host.log.iter().any(|l| l == "ensure_layers"),
+            "初始化应真的去建表：{:?}",
+            host.log
+        );
+
+        let mut host = UndoOrderSpy::default();
+        OcsmPlugin.cmd_powerdim(&mut host);
+        assert_eq!(
+            host.log.first().map(String::as_str),
+            Some("push_undo:OCSM 智能标注"),
+            "{:?}",
+            host.log
+        );
     }
     // ── 标准件放置：两段式（定位基点 → 绕基点旋转 → 落定）──────────────────
 

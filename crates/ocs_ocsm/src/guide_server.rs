@@ -2748,6 +2748,16 @@ fn do_apply(
         serde_json::from_slice(body).map_err(|e| format!("请求 JSON 无效: {e}"))?;
     let posted = handle_hex(&req.handle)?;
 
+    // “仅应用”（刷新参数记录 / 写 PE_URL）也改文档；生成路径由 do_apply_inner 自己
+    // push。这里先声明一次，让 URL 写入同样可撤销（无改动时宿主会丢弃空条目）。
+    req_timed(
+        sender,
+        PluginRequest::PushUndo {
+            label: "尺寸引导".into(),
+        },
+        "PushUndo",
+    )?;
+
     // ── 编辑模式：posted 实体本身是 OCSM 生成的标注（带 `OCSM_EDIT`）──
     // 用记录里的引导几何造一条**临时引导**重走现有生成路径（各类型代码不用改），
     // 生成后删临时引导 + 删旧标注 → 用记录里的引导几何重生成，达成"替换"。
@@ -3289,6 +3299,14 @@ fn apply_part_export(
         req.view.to_ascii_uppercase()
     );
 
+    // 出库会新建块定义（文档改动）→ 先声明撤销点。
+    req_timed(
+        sender,
+        PluginRequest::PushUndo {
+            label: "零件出库".into(),
+        },
+        "PushUndo",
+    )?;
     // 块定义：幂等创建（预览要引用它，所以必须在出库时就建好）
     let exists = snapshot(sender)?.block_records.iter().any(|b| b.name == block);
     if !exists {
@@ -3369,6 +3387,14 @@ fn apply_part_pick(
         part.meta.spec.replace(['.', ' ', '/', 'x', 'X'], "_")
     );
 
+    // 插入会建块 + 落 INSERT 实体 → 先声明撤销点。
+    req_timed(
+        sender,
+        PluginRequest::PushUndo {
+            label: "零件插入".into(),
+        },
+        "PushUndo",
+    )?;
     // 块定义幂等：已存在就不再建（同名块重复插入直接复用）
     let exists = snapshot(sender)?
         .block_records
@@ -3481,6 +3507,14 @@ fn apply_roughness(
     let p_value = if has_p { req.p.clone() } else { String::new() };
 
     let doc = snapshot(sender)?;
+    // 符号会新建块 + 实体、并可能补齐样式/图层 → 先声明撤销点。
+    req_timed(
+        sender,
+        PluginRequest::PushUndo {
+            label: "表面粗糙度".into(),
+        },
+        "PushUndo",
+    )?;
     // 幂等 ensure：文档缺 OCSM_GB 样式 / 8符号标注层时补齐（新图纸直接 CC
     // 时宿主渲染 ATTDEF 会 fallback 未知字体、图层色错乱——用户实测）。
     if !doc
@@ -5960,6 +5994,7 @@ struct MockSender {
     url_writes: std::sync::Mutex<Vec<(acadrust::Handle, String)>>,
     blocks: std::sync::Mutex<Vec<(String, Vec<acadrust::EntityType>)>>,
     ensures: std::sync::Mutex<Vec<String>>,
+    undos: std::sync::Mutex<Vec<String>>,
 }
 impl MockSender {
     fn new(doc: acadrust::CadDocument) -> Self {
@@ -5968,7 +6003,12 @@ impl MockSender {
             url_writes: std::sync::Mutex::new(Vec::new()),
             blocks: std::sync::Mutex::new(Vec::new()),
             ensures: std::sync::Mutex::new(Vec::new()),
+            undos: std::sync::Mutex::new(Vec::new()),
         }
+    }
+    /// PushUndo 标签序列（断言“写之前先声明撤销点”）。
+    fn undos(&self) -> Vec<String> {
+        self.undos.lock().unwrap().clone()
     }
     fn block_entities(&self, name: &str) -> Vec<acadrust::EntityType> {
         self.blocks.lock().unwrap().iter()
@@ -6086,6 +6126,10 @@ impl PluginRequestSender for MockSender {
                     .lock()
                     .unwrap()
                     .extend(defs.iter().map(|d| format!("ltype:{}", d.name)));
+                Ok(P::Ok)
+            }
+            R::PushUndo { label } => {
+                self.undos.lock().unwrap().push(label);
                 Ok(P::Ok)
             }
             _ => Ok(P::Ok),
@@ -7073,6 +7117,41 @@ mod rough_tests {
         let j: serde_json::Value = serde_json::from_str(&out).unwrap();
         let name = j["block"].as_str().unwrap().to_string();
         Ok((j, mock.block_entities(&name)))
+    }
+
+    #[test]
+    fn mutating_apis_declare_undo_before_writing() {
+        // 宿主不会替插件命令入撤销栈（2026-09-15 契约缺口）：每个改文档的入口
+        // 必须先 PushUndo，否则 MCP/AI 驱动后 Ctrl+Z 撤不掉。
+        let mock = std::sync::Arc::new(MockSender::new(acadrust::CadDocument::new()));
+        let body = rough_body(100.0, 200.0, "C1", "R1", "", 0.0, &[]);
+        rough_apply(&mock, &body).unwrap();
+        assert_eq!(
+            mock.undos().first().map(String::as_str),
+            Some("表面粗糙度"),
+            "粗糙度应先声明撤销点"
+        );
+
+        let mock = std::sync::Arc::new(MockSender::new(acadrust::CadDocument::new()));
+        *crate::parts_point_slot().lock().unwrap() = Some([0.0, 0.0, 0.0]);
+        let sender: std::sync::Arc<dyn PluginRequestSender> = mock.clone();
+        apply_part_pick(&sender, br#"{"family":"hex_bolt_c","d":5,"l":25,"view":"main"}"#)
+            .expect("插入成功");
+        assert_eq!(
+            mock.undos().first().map(String::as_str),
+            Some("零件插入"),
+            "零件插入应先声明撤销点"
+        );
+
+        let mock = std::sync::Arc::new(MockSender::new(acadrust::CadDocument::new()));
+        let sender: std::sync::Arc<dyn PluginRequestSender> = mock.clone();
+        apply_part_export(&sender, br#"{"family":"hex_bolt_c","d":5,"l":25,"view":"main"}"#)
+            .expect("出库成功");
+        assert_eq!(
+            mock.undos().first().map(String::as_str),
+            Some("零件出库"),
+            "零件出库应先声明撤销点"
+        );
     }
 
     fn count_attdefs(members: &[acadrust::EntityType]) -> Vec<&acadrust::entities::AttributeDefinition> {
