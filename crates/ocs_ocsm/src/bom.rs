@@ -230,6 +230,264 @@ pub(crate) fn cell_values(it: &BomItem, seq: usize) -> [String; 8] {
     ]
 }
 
+// ── 序号驱动刷新（序号球标联动）───────────────────────────────────────────
+
+/// 一行明细表的内容规格。**序号由外部给**（球标台账 / 自动接号 / 一期聚合行号）。
+#[derive(Debug, Clone, PartialEq, Default)]
+pub(crate) struct RowSpec {
+    pub item_no: String,
+    pub code: String,
+    pub name: String,
+    pub spec: String,
+    pub qty: usize,
+    pub material: String,
+    pub unit_weight: String,
+}
+
+impl RowSpec {
+    /// 由聚合件 + 指定序号构造。
+    pub(crate) fn from_item(it: &BomItem, item_no: String) -> Self {
+        RowSpec {
+            item_no,
+            code: it.code.clone(),
+            name: it.name.clone(),
+            spec: it.spec.clone(),
+            qty: it.qty,
+            material: it.material.clone(),
+            unit_weight: it.unit_weight.clone(),
+        }
+    }
+
+    /// 空行（只有序号，其余待手填）——球标组里关联不到零件的条目走这个。
+    pub(crate) fn blank(item_no: String) -> Self {
+        RowSpec {
+            item_no,
+            ..Default::default()
+        }
+    }
+
+    /// 8 个单元格取值（tag 顺序见 [`CELL_TAGS`]）。
+    pub(crate) fn values(&self) -> [String; 8] {
+        let unit = weight_text(&self.unit_weight);
+        let empty = self.name.is_empty() && self.code.is_empty();
+        let qty = self.qty.max(1);
+        let total = weight_number(&unit)
+            .map(|w| trim_num(w * qty as f64))
+            .unwrap_or_default();
+        let name = if self.spec.is_empty() {
+            self.name.clone()
+        } else {
+            format!("{} {}", self.name, self.spec)
+        };
+        [
+            self.item_no.clone(),
+            self.code.clone(),
+            name,
+            if empty { String::new() } else { qty.to_string() },
+            self.material.clone(),
+            unit,
+            total,
+            String::new(),
+        ]
+    }
+}
+
+/// 建表/刷新需要的**最小写入能力**：命令路径（`HostApi`）与 HTTP 路径（`PluginRequestSender`）
+/// 各一份实现，建行逻辑（[`fill_bom`]）只写一份。
+pub(crate) trait BomSink {
+    fn push_undo(&mut self, label: &str) -> Result<(), String>;
+    fn remove_entity(&mut self, h: Handle) -> Result<(), String>;
+    fn add_entities(&mut self, ents: Vec<EntityType>) -> Result<usize, String>;
+    /// 导入块定义；**回传块内 ATTDEF**（宿主 import 的返回值就是这样，省得再取一次快照）。
+    fn import_block(
+        &mut self,
+        path: &str,
+        name: &str,
+    ) -> Result<Vec<AttributeDefinition>, String>;
+    fn set_dirty(&mut self) -> Result<(), String>;
+    fn info(&mut self, msg: &str);
+    fn error(&mut self, msg: &str);
+}
+
+/// 命令路径 sink。
+pub(crate) struct HostSink<'a>(pub &'a mut dyn HostApi);
+
+impl BomSink for HostSink<'_> {
+    fn push_undo(&mut self, label: &str) -> Result<(), String> {
+        self.0.push_undo(label);
+        Ok(())
+    }
+    fn remove_entity(&mut self, h: Handle) -> Result<(), String> {
+        self.0.remove_entity(h);
+        Ok(())
+    }
+    fn add_entities(&mut self, ents: Vec<EntityType>) -> Result<usize, String> {
+        Ok(self.0.add_entities(ents).len())
+    }
+    fn import_block(
+        &mut self,
+        path: &str,
+        name: &str,
+    ) -> Result<Vec<AttributeDefinition>, String> {
+        self.0.import_frame_block(ImportFrameBlockRequest {
+            path: path.to_string(),
+            block_name: name.to_string(),
+        })
+    }
+    fn set_dirty(&mut self) -> Result<(), String> {
+        self.0.set_dirty();
+        Ok(())
+    }
+    fn info(&mut self, msg: &str) {
+        self.0.push_info(msg)
+    }
+    fn error(&mut self, msg: &str) {
+        self.0.push_error(msg)
+    }
+}
+
+/// 建表/刷新结果。
+pub(crate) struct BomReport {
+    pub rows: usize,
+    pub cols: Vec<usize>,
+    pub removed: usize,
+    pub added: usize,
+    pub untracked: usize,
+}
+
+/// **建行核心**（命令 `BOM` 与球标联动共用）：按 `rows` 的次序重建全部行块，
+/// 保留布局规则（自下而上、首列贴标题栏、写满另起一列、续列自带表头）。
+pub(crate) fn fill_bom(
+    sink: &mut dyn BomSink,
+    doc: &ocs_plugin_api::host::acadrust::CadDocument,
+    rows: &[RowSpec],
+    per_col: usize,
+) -> Result<BomReport, String> {
+    let dir = bom_dir();
+    let cfg = load_config(&dir);
+    let head_dwg = dir.join("OCSM_BOMHEAD.dwg");
+    let row_dwg = dir.join("OCSM_BOMROW.dwg");
+    if !head_dwg.exists() || !row_dwg.exists() {
+        return Err(format!(
+            "OCSMBOM: 找不到明细表模板块（{} / {}）。请把 OCSM_BOMHEAD.dwg、OCSM_BOMROW.dwg \
+             放进插件目录 bom/（或设 OCSM_BOM_DIR）。",
+            head_dwg.display(),
+            row_dwg.display()
+        ));
+    }
+
+    // ① 表头块：缺了才导入（宿主 import 自己会 PushUndo）。
+    if doc.block_records.get(HEAD_BLOCK).is_none() {
+        let _ = sink.import_block(&head_dwg.to_string_lossy(), HEAD_BLOCK)?;
+    }
+
+    // ② 行块 + 它的 8 个 ATTDEF（几何 + 样式契约从模板来，插件不写死坐标）。
+    //    注意：`doc` 是调用方给的**快照**，刚导入的块不在里面 —— 所以导入路径直接
+    //    用宿主 import 的返回值（就是块内 ATTDEF），只有"块本来就在"时才读快照。
+    let mut attdefs: Vec<AttributeDefinition> = doc
+        .entities_in_block(ROW_BLOCK)
+        .filter_map(|e| match e {
+            EntityType::AttributeDefinition(ad) => Some(ad.clone()),
+            _ => None,
+        })
+        .collect();
+    if attdefs.is_empty() || doc.block_records.get(ROW_BLOCK).is_none() {
+        attdefs = sink.import_block(&row_dwg.to_string_lossy(), ROW_BLOCK)?;
+    }
+    if attdefs.len() != CELL_TAGS.len() {
+        return Err(format!(
+            "OCSMBOM: 行块 {ROW_BLOCK} 应有 {} 个 ATTDEF，实际 {} 个 → 模板不对。",
+            CELL_TAGS.len(),
+            attdefs.len()
+        ));
+    }
+
+    // ③ 扫图：旧表元（带 OCSM_BOM）+ 未入台账的 OCSM_ 零件块计数。
+    let mut old: Vec<Handle> = Vec::new();
+    let mut untracked = 0usize;
+    for e in doc.model_space_entities() {
+        let common = e.common();
+        if is_bom(common) {
+            old.push(common.handle);
+        }
+        if let EntityType::Insert(ins) = e {
+            if part_meta_of(&ins.common).is_none()
+                && ins.block_name.starts_with("OCSM_")
+                && ins.block_name != HEAD_BLOCK
+                && ins.block_name != ROW_BLOCK
+            {
+                untracked += 1;
+            }
+        }
+    }
+
+    let cols = layout(rows.len(), per_col, &cfg)?;
+
+    // ④ 建表（表头 + 行，含 8 个属性值），全部打 OCSM_BOM 标记。
+    let mut ents: Vec<EntityType> = Vec::new();
+    let mut seq = 0usize;
+    for (ci, nrows) in cols.iter().enumerate() {
+        let x0 = cfg.first_col_left - COL_W * ci as f64;
+        let y0 = if ci == 0 {
+            cfg.first_col_bottom
+        } else {
+            cfg.sheet_bottom
+        };
+        let mut head = Insert::new(HEAD_BLOCK, Vector3::new(x0, y0, 0.0));
+        {
+            let c = insert_common(&mut head);
+            c.layer = LAYER_LINE.to_string();
+            c.color = Color::ByLayer;
+            c.linetype = "ByLayer".to_string();
+            c.line_weight = LineWeight::ByLayer;
+            tag_bom(c);
+        }
+        ents.push(EntityType::Insert(head));
+
+        for k in 0..*nrows {
+            let yr = y0 + HEAD_H + ROW_H * k as f64;
+            let mut ins = Insert::new(ROW_BLOCK, Vector3::new(x0, yr, 0.0));
+            {
+                let c = insert_common(&mut ins);
+                c.layer = LAYER_LINE.to_string();
+                c.color = Color::ByLayer;
+                c.linetype = "ByLayer".to_string();
+                c.line_weight = LineWeight::ByLayer;
+            }
+            let values = rows[seq].values();
+            seq += 1;
+            let transform = ins.get_transform();
+            for ad in &attdefs {
+                let Some(idx) = CELL_TAGS.iter().position(|t| *t == ad.tag) else {
+                    continue;
+                };
+                let mut a = AttributeEntity::from_definition(ad, Some(values[idx].clone()));
+                a.apply_transform(&transform);
+                ins.attributes.push(a);
+            }
+            tag_bom(insert_common(&mut ins));
+            ents.push(EntityType::Insert(ins));
+        }
+    }
+
+    // ⑤ 替换语义：一次 undo（删旧 + 建新），整体可 Ctrl+Z。
+    sink.push_undo("OCSM 明细表")?;
+    let removed = old.len();
+    for h in old {
+        sink.remove_entity(h)?;
+    }
+    let added = sink.add_entities(ents)?;
+    sink.set_dirty()?;
+
+    Ok(BomReport {
+        rows: rows.len(),
+        cols,
+        removed,
+        added,
+        untracked,
+    })
+}
+
 /// 列布局：返回每列行数；列数放不下当前图幅时返回 Err（说明要换图幅/多页）。
 pub(crate) fn layout(n_items: usize, per_col_rows: usize, cfg: &BomConfig) -> Result<Vec<usize>, String> {
     let cap = |bottom: f64| -> usize {
@@ -322,154 +580,87 @@ pub(crate) fn cmd_bom(host: &mut dyn HostApi, args: &str) {
         .filter(|n| *n > 0)
         .unwrap_or(cfg.per_col_rows);
 
-    let head_dwg = dir.join("OCSM_BOMHEAD.dwg");
-    let row_dwg = dir.join("OCSM_BOMROW.dwg");
-    if !head_dwg.exists() || !row_dwg.exists() {
-        host.push_error(&format!(
-            "OCSMBOM: 找不到明细表模板块（{} / {}）。请把 OCSM_BOMHEAD.dwg、OCSM_BOMROW.dwg \
-             放进插件目录 bom/（或设 OCSM_BOM_DIR）。",
-            head_dwg.display(),
-            row_dwg.display()
-        ));
-        return;
-    }
-
-    // ① 块：缺了才导入（宿主 import 自己会 PushUndo，且已存在时直接返回 ATTDEF）。
-    let have = |host: &dyn HostApi, name: &str| host.document().block_records.get(name).is_some();
-    for (path, name) in [(&head_dwg, HEAD_BLOCK), (&row_dwg, ROW_BLOCK)] {
-        if have(host, name) {
-            continue;
-        }
-        if let Err(e) = host.import_frame_block(ImportFrameBlockRequest {
-            path: path.to_string_lossy().into_owned(),
-            block_name: name.to_string(),
-        }) {
-            host.push_error(&format!("OCSMBOM: 导入块 {name} 失败：{e}"));
-            return;
-        }
-    }
-
-    // ② 行块里的 8 个 ATTDEF（几何 + 样式契约从模板来，插件不写死坐标）。
+    // 零件台账 → 聚合 → 行（**一期行为：序号 = 行号**，按台账首次出现顺序）。
     let doc = host.document().clone();
-    let attdefs: Vec<AttributeDefinition> = doc
-        .entities_in_block(ROW_BLOCK)
+    let parts: Vec<PartMeta> = doc
+        .model_space_entities()
         .filter_map(|e| match e {
-            EntityType::AttributeDefinition(ad) => Some(ad.clone()),
+            EntityType::Insert(ins) => part_meta_of(&ins.common),
             _ => None,
         })
         .collect();
-    if attdefs.len() != CELL_TAGS.len() {
-        host.push_error(&format!(
-            "OCSMBOM: 行块 {ROW_BLOCK} 应有 {} 个 ATTDEF，实际 {} 个 → 模板不对。",
-            CELL_TAGS.len(),
-            attdefs.len()
-        ));
-        return;
-    }
+    let items = aggregate(&parts);
+    let rows: Vec<RowSpec> = items
+        .iter()
+        .enumerate()
+        .map(|(i, it)| RowSpec::from_item(it, (i + 1).to_string()))
+        .collect();
 
-    // ③ 扫图：旧表元（带 OCSM_BOM）+ 零件（带 OCSM_PART）。
-    let mut old: Vec<Handle> = Vec::new();
-    let mut parts: Vec<PartMeta> = Vec::new();
-    let mut untracked = 0usize; // OCSM_ 零件块但缺 OCSM_PART 台账（离线生成/早期版本）
-    for e in doc.model_space_entities() {
-        let common = e.common();
-        if is_bom(common) {
-            old.push(common.handle);
-        }
-        if let EntityType::Insert(ins) = e {
-            match part_meta_of(&ins.common) {
-                Some(m) => parts.push(m),
-                None if ins.block_name.starts_with("OCSM_") && ins.block_name != HEAD_BLOCK
-                    && ins.block_name != ROW_BLOCK => untracked += 1,
-                None => {}
+    match fill_bom(&mut HostSink(host), &doc, &rows, per_col) {
+        Ok(rep) => {
+            let desc: Vec<String> = rep
+                .cols
+                .iter()
+                .enumerate()
+                .map(|(i, n)| format!("第{}列 {} 行", i + 1, n))
+                .collect();
+            let _ = &rep;
+            host.push_info(&format!(
+                "OCSMBOM: {} 件 → {} 列（{}）；旧表元 {} 个已替换（Ctrl+Z 可整体撤销）。",
+                rep.rows,
+                rep.cols.len(),
+                desc.join("、"),
+                rep.removed
+            ));
+            if items.iter().any(|it| it.spec.is_empty()) && !items.is_empty() {
+                host.push_info(
+                    "OCSMBOM: 提示——数量按「图中插入件数」统计，同一零件画在多个视图里会重复计数。",
+                );
+            }
+            if rep.untracked > 0 {
+                host.push_info(&format!(
+                    "OCSMBOM: 注意——图中有 {} 个 OCSM_ 零件块引用但没有 OCSM_PART 台账记录             （多为离线生成/早期版本的文件），它们不会进明细表。用 XL 重新放置，或后续用表格导入补录。",
+                    rep.untracked
+                ));
             }
         }
+        Err(e) => host.push_error(&e),
     }
+}
 
-    let items = aggregate(&parts);
-    let cols = match layout(items.len(), per_col, &cfg) {
-        Ok(c) => c,
-        Err(msg) => {
-            host.push_error(&format!("OCSMBOM: {msg}"));
+/// `OCSMBOMSYNC` / `BOMSYNC`：按**序号球标台账**重排/重建明细表（球标联动的手动入口）。
+///
+/// 规则（用户 2026-09-15 定）：行 = 序号（球标组每个条目一个）∪ 未被球标引用的聚合零件
+/// （沿用它们在旧表里的序号，没表则自动接号）；行序按序号升序、自下而上。
+pub(crate) fn cmd_bom_sync(host: &mut dyn HostApi, _args: &str) {
+    let doc = host.document().clone();
+    let rows = match crate::balloon_sync::plan_rows(&doc) {
+        Ok(r) => r,
+        Err(e) => {
+            host.push_error(&format!("OCSMBOMSYNC: {e}"));
             return;
         }
     };
-
-    // ④ 建表（表头 + 行，含 8 个属性值），全部打 OCSM_BOM 标记。
-    let mut ents: Vec<EntityType> = Vec::new();
-    let mut seq = 0usize;
-    for (ci, rows) in cols.iter().enumerate() {
-        let x0 = cfg.first_col_left - COL_W * ci as f64;
-        let y0 = if ci == 0 { cfg.first_col_bottom } else { cfg.sheet_bottom };
-
-        let mut head = Insert::new(HEAD_BLOCK, Vector3::new(x0, y0, 0.0));
-        {
-            let c = insert_common(&mut head);
-            c.layer = LAYER_LINE.to_string();
-            c.color = Color::ByLayer;
-            c.linetype = "ByLayer".to_string();
-            c.line_weight = LineWeight::ByLayer;
-            tag_bom(c);
+    if rows.is_empty() {
+        host.push_error("OCSMBOMSYNC: 没有可排的内容（图上没有序号球标，也没有零件台账）。");
+        return;
+    }
+    let per_col = 0; // 0 = 用配置默认（fill_bom 里 layout 的 per_col_rows）
+    let cfg = load_config(&bom_dir());
+    let per_col = if per_col == 0 { cfg.per_col_rows } else { per_col };
+    match fill_bom(&mut HostSink(host), &doc, &rows, per_col) {
+        Ok(rep) => {
+            let nos: Vec<String> = rows.iter().map(|r| r.item_no.clone()).collect();
+            host.push_info(&format!(
+                "OCSMBOMSYNC: {} 行（序号 {}）→ {} 列；旧表元 {} 个已替换。",
+                rep.rows,
+                nos.join("、"),
+                rep.cols.len(),
+                rep.removed
+            ));
         }
-        ents.push(EntityType::Insert(head));
-
-        for k in 0..*rows {
-            seq += 1;
-            let yr = y0 + HEAD_H + ROW_H * k as f64;
-            let mut ins = Insert::new(ROW_BLOCK, Vector3::new(x0, yr, 0.0));
-            {
-                let c = insert_common(&mut ins);
-                c.layer = LAYER_LINE.to_string();
-                c.color = Color::ByLayer;
-                c.linetype = "ByLayer".to_string();
-                c.line_weight = LineWeight::ByLayer;
-            }
-            let item = &items[seq - 1];
-            let values = cell_values(item, seq);
-            let transform = ins.get_transform();
-            for ad in &attdefs {
-                let Some(idx) = CELL_TAGS.iter().position(|t| *t == ad.tag) else {
-                    continue;
-                };
-                let mut a = AttributeEntity::from_definition(ad, Some(values[idx].clone()));
-                a.apply_transform(&transform);
-                ins.attributes.push(a);
-            }
-            tag_bom(insert_common(&mut ins));
-            ents.push(EntityType::Insert(ins));
-        }
+        Err(e) => host.push_error(&e),
     }
-
-    // ⑤ 替换语义：一次 undo（删旧 + 建新），整体可 Ctrl+Z。
-    host.push_undo("OCSM 明细表");
-    let removed = old.len();
-    for h in old {
-        host.remove_entity(h);
-    }
-    let added = host.add_entities(ents).len();
-    host.set_dirty();
-
-    let desc: Vec<String> = cols
-        .iter()
-        .enumerate()
-        .map(|(i, n)| format!("第{}列 {} 行", i + 1, n))
-        .collect();
-    host.push_info(&format!(
-        "OCSMBOM: {} 件 → {} 列（{}）；旧表元 {} 个已替换（Ctrl+Z 可整体撤销）。",
-        items.len(),
-        cols.len(),
-        desc.join("、"),
-        removed
-    ));
-    if items.iter().any(|it| it.spec.is_empty()) && !items.is_empty() {
-        host.push_info("OCSMBOM: 提示——数量按「图中插入件数」统计，同一零件画在多个视图里会重复计数。");
-    }
-    if untracked > 0 {
-        host.push_info(&format!(
-            "OCSMBOM: 注意——图中有 {untracked} 个 OCSM_ 零件块引用但没有 OCSM_PART 台账记录             （多为离线生成/早期版本的文件），它们不会进明细表。用 XL 重新放置，或后续用表格导入补录。"
-        ));
-    }
-    let _ = added;
 }
 
 /// `OCSMBOMCFG` / `BOMCFG [每列行数]`：查看/修改 `bom/settings.json`。

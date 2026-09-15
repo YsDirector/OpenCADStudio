@@ -16,6 +16,7 @@
 //! - `OCSMMCP`：确保标注更新服务器运行（独立 MCP 二进制经 TCP 桥接）。
 
 mod balloon;
+mod balloon_sync;
 mod bom;
 mod detail_clip;
 mod dim2gb;
@@ -52,7 +53,7 @@ static MANIFEST: PluginManifest = PluginManifest {
         "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "TF", "OCSM",
         "OCSMFRAMEINIT", "OCSMFRAMEINSERT", "D", "OCSMPOWERDIM", "OCSMDIMGULIDE",
         "GDIM", "OCSMMCP", "OCSMRGH", "CC", "OCSMDIM2GB", "D2G", "OCSMEDIT", "ME",
-        "OCSMPART", "XL", "OCSMJOINT", "OCSMHELP", "OH", "OCSMBOM", "BOM", "OCSMBOMCFG", "BOMCFG",
+        "OCSMPART", "XL", "OCSMJOINT", "OCSMHELP", "OH", "OCSMBOM", "BOM", "BOMSYNC", "OCSMBOMSYNC", "OCSMBOMCFG", "BOMCFG",
     ],
 };
 
@@ -300,7 +301,7 @@ fn is_bom_command(cmd: &str) -> bool {
         .next()
         .unwrap_or_default()
         .to_ascii_uppercase();
-    matches!(name.as_str(), "OCSMBOM" | "BOM" | "OCSMBOMCFG" | "BOMCFG")
+    matches!(name.as_str(), "OCSMBOM" | "BOM" | "OCSMBOMCFG" | "BOMCFG" | "OCSMBOMSYNC" | "BOMSYNC")
 }
 
 struct OcsmPlugin;
@@ -1050,6 +1051,8 @@ impl BuiltinPlugin for OcsmPlugin {
                 };
                 if name == "OCSMBOMCFG" || name == "BOMCFG" {
                     bom::cmd_bom_cfg(host, &rest);
+                } else if name == "OCSMBOMSYNC" || name == "BOMSYNC" {
+                    bom::cmd_bom_sync(host, &rest);
                 } else {
                     bom::cmd_bom(host, &rest);
                 }

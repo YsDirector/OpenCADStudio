@@ -3474,6 +3474,7 @@ pub const COMMAND_CATALOG: &[(&str, &str, &str)] = &[
     ("OCSMRGH", "CC", "表面粗糙度：点选插入点 → 配置窗口（匿名块 + ATTDEF）"),
     ("OCSMDIM2GB", "D2G", "一键转国标：原生标注 → OCSM_GB 样式 + 匿名块"),
     ("OCSMBOM", "BOM", "明细表：建表/刷新（BOM 30 = 本次首列 30 行）"),
+    ("OCSMBOMSYNC", "BOMSYNC", "明细表：按序号球标重排/重建（球标联动入口）"),
     ("OCSMBOMCFG", "BOMCFG", "明细表配置（表头/列/格式）"),
     ("OCSMMCP", "", "打印 MCP/HTTP 接入信息（给外部 AI/脚本）"),
     ("OCSMHELP", "OH", "打开本手册窗口（命令目录 + 操作教程）"),
@@ -5512,6 +5513,132 @@ fn part_block_at(
     best.map(|(_, h, m)| (h, m))
 }
 
+/// HTTP 路径的 `BomSink`：与命令路径（`HostApi`）共用同一套建行逻辑（`bom::fill_bom`）。
+struct SenderSink<'a>(&'a Arc<dyn PluginRequestSender>);
+
+impl crate::bom::BomSink for SenderSink<'_> {
+    fn push_undo(&mut self, label: &str) -> Result<(), String> {
+        req_timed(
+            self.0,
+            PluginRequest::BeginUndo {
+                label: label.to_string(),
+            },
+            "BeginUndo",
+        )
+        .map(|_| ())?
+        ;
+        Ok(())
+    }
+    fn remove_entity(&mut self, h: acadrust::Handle) -> Result<(), String> {
+        req_timed(
+            self.0,
+            PluginRequest::RemoveEntity { handle: h },
+            "RemoveEntity",
+        )
+        .map(|_| ())?;
+        Ok(())
+    }
+    fn add_entities(&mut self, ents: Vec<acadrust::EntityType>) -> Result<usize, String> {
+        match req_timed(self.0, PluginRequest::AddEntities(ents), "AddEntities")? {
+            PluginResponse::Handles(hs) => Ok(hs.len()),
+            _ => Ok(0),
+        }
+    }
+    fn import_block(
+        &mut self,
+        path: &str,
+        name: &str,
+    ) -> Result<Vec<acadrust::entities::AttributeDefinition>, String> {
+        match req_timed(
+            self.0,
+            PluginRequest::ImportFrameBlock(ocs_plugin_api::host::ImportFrameBlockRequest {
+                path: path.to_string(),
+                block_name: name.to_string(),
+            }),
+            "ImportFrameBlock",
+        )? {
+            PluginResponse::ImportFrameBlock(Ok(v)) => Ok(v),
+            PluginResponse::ImportFrameBlock(Err(e)) => Err(e),
+            other => Err(format!("ImportFrameBlock 返回异常: {other:?}")),
+        }
+    }
+    fn set_dirty(&mut self) -> Result<(), String> {
+        mark_dirty(self.0)
+    }
+    fn info(&mut self, msg: &str) {
+        let _ = req_timed(self.0, PluginRequest::PushInfo(msg.to_string()), "PushInfo");
+    }
+    fn error(&mut self, msg: &str) {
+        let _ = req_timed(self.0, PluginRequest::PushError(msg.to_string()), "PushError");
+    }
+}
+
+/// 球标联动（第二期）：
+/// ① 勾了「插入序号」且新序号与已有重复 → 把**已有**受影响球标整体重编号（重建块，几何/台账一起更新）；
+/// ② 按序号规划行（球标每个条目一行 + 未引用零件接号）→ 重建明细表。
+///
+/// **尽力而为**：模板块缺失/宿主不配合时只在报告里给个 warning，不影响球标本身生成。
+fn balloon_sync_after(
+    sender: &Arc<dyn PluginRequestSender>,
+    doc: &acadrust::CadDocument,
+    items: &[String],
+    insert_mode: bool,
+) -> (Option<serde_json::Value>, Option<String>) {
+    let mut renumbered: Vec<String> = Vec::new();
+    // ① 重编号（只动已有球标；本次新建的组不在 existing 里是因为它的 items 就是 new_items
+    //     —— 重编号只作用于**已存在**的序号值，新建组保持自己的号）。
+    let ren = crate::balloon_sync::sync_with(doc, items, insert_mode, |old, new_items| {
+        let Some((url, pts, _kind, _guide)) = read_edit_record(sender, old) else {
+            return Err("旧球标缺少 OCSM_EDIT 记录，无法重编号".to_string());
+        };
+        let Some(mut params) = GuideParams::from_url(&url) else {
+            return Err("旧球标参数 URL 解析失败".to_string());
+        };
+        if pts.len() != 3 {
+            return Err("旧球标引导几何不是三顶点".to_string());
+        }
+        params.balloon.items = new_items.to_vec();
+        apply_balloon(sender, doc, pts[0], pts[1], pts[2], &params)?;
+        req_timed(
+            sender,
+            PluginRequest::RemoveEntity { handle: old },
+            "RemoveEntity",
+        )?;
+        renumbered.push(new_items.join("、"));
+        Ok(())
+    });
+    if let Err(e) = ren {
+        return (None, Some(format!("序号重编号失败：{e}")));
+    }
+
+    // ② 重建明细表（重新取快照：上面可能已经改过文档）
+    let doc2 = match snapshot(sender) {
+        Ok(d) => d,
+        Err(e) => return (None, Some(format!("取快照失败：{e}"))),
+    };
+    let rows = match crate::balloon_sync::plan_rows(&doc2) {
+        Ok(r) => r,
+        Err(e) => return (None, Some(e)),
+    };
+    if rows.is_empty() {
+        return (None, None);
+    }
+    let per_col = crate::bom::load_config(&crate::bom::bom_dir()).per_col_rows;
+    match crate::bom::fill_bom(&mut SenderSink(sender), &doc2, &rows, per_col) {
+        Ok(rep) => (
+            Some(serde_json::json!({
+                "rows": rep.rows,
+                "cols": rep.cols,
+                "replaced": rep.removed,
+                "renumbered": renumbered,
+                "item_nos": rows.iter().map(|r| r.item_no.clone()).collect::<Vec<_>>(),
+            })),
+            None,
+        ),
+        Err(e) => (None, Some(e)),
+    }
+}
+
 /// 交互路径：`POST /api/apply` type=BALLOON。引导 PLINE 保留（不删，可反复重改）。
 ///
 /// 组台账写 `OCSM_BALLOON`（JSON：序号列表/方向/插入模式/关联零件），供
@@ -5612,6 +5739,18 @@ fn apply_balloon(
     req_timed(sender, PluginRequest::BumpGeometry, "BumpGeometry")?;
     mark_dirty(sender)?;
 
+    // ── 第二期：球标↔明细表联动（尽力而为，失败只在报告里给 warning）──
+    let (bom_report, bom_warning) = if crate::bom::bom_dir().join("OCSM_BOMROW.dwg").exists() {
+        balloon_sync_after(
+            sender,
+            doc,
+            &items,
+            params.balloon.insert_mode,
+        )
+    } else {
+        (None, None)
+    };
+
     Ok(serde_json::json!({
         "ok": true,
         "block": block_name,
@@ -5623,6 +5762,8 @@ fn apply_balloon(
         "shelf_lens": parts.shelf_lens,
         "horizontal": parts.horizontal,
         "part": assoc.map(|(h, m)| serde_json::json!({"handle": fmt_handle(h), "meta": m})),
+        "bom": bom_report,
+        "bom_warning": bom_warning,
     })
     .to_string())
 }
