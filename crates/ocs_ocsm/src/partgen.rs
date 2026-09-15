@@ -751,6 +751,26 @@ pub fn hex_bolt_weight_kg(row: &BoltCRow, l: f64) -> f64 {
 ///
 /// 树形路径与用户约定一致：`零件库/螺栓/六角螺栓/六角头螺栓 C级 GB/T 5780-2016`。
 /// 未实现的常用族也列在树里（`implemented:false`），便于按图索骥。
+/// 块名清洗（零件库插入与件链装配共用）：只留 ASCII 字母数字和 `-`，
+/// 规格里的 `x`/`×`/`Ø` 当分隔符（族名的 x 保留——`hex` 的 x 不能切）。
+pub fn ascii_block(family: &str, spec: &str) -> String {
+    fn clean(text: &str, separator_chars: &[char], keep_case: bool) -> String {
+        let mut out = String::new();
+        for ch in text.chars() {
+            if (ch.is_ascii_alphanumeric() || ch == '-') && !separator_chars.contains(&ch) {
+                out.push(if keep_case { ch } else { ch.to_ascii_uppercase() });
+            } else if !out.ends_with('_') {
+                out.push('_');
+            }
+        }
+        out.trim_matches('_').to_string()
+    }
+    match spec.is_empty() {
+        true => clean(family, &[], false),
+        false => format!("{}_{}", clean(family, &[], false), clean(spec, &['x', 'X', '×', 'Ø', 'ø'], false)),
+    }
+}
+
 pub fn catalog_json() -> String {
     // ── 已实现族的规格表
     let mut sizes = Vec::new();
@@ -823,7 +843,18 @@ pub fn catalog_json() -> String {
     for (k, v) in crate::partgen_more::families_json() {
         fam_map.insert(k, v);
     }
-    let families = serde_json::Value::Object(fam_map);
+    // 每族补一个 kind 字段（bolt/nut/washer/pin/other）：GUI 与 AI 都靠它分组，
+    // 不用去猜族名前缀（`family_kind` 是唯一判据来源）。
+    let families = {
+        let mut obj = fam_map;
+        for (key, value) in obj.iter_mut() {
+            let kind = family_kind(key);
+            if let Some(map) = value.as_object_mut() {
+                map.insert("kind".to_string(), serde_json::json!(kind));
+            }
+        }
+        serde_json::Value::Object(obj)
+    };
     let tree = serde_json::json!([
         { "name": "零件库", "children": [
             { "name": "螺栓", "children": [

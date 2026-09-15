@@ -348,6 +348,11 @@ pub(crate) fn open_parts_window(port: u16) -> bool {
     open_plugin_page(port, "/parts", "parts", 960, 900)
 }
 
+/// 打开**螺栓副装配**窗口（人用 GUI；AI 走命令行/HTTP 同一实现）。
+pub(crate) fn open_joint_window(port: u16) -> bool {
+    open_plugin_page(port, "/joint", "joint", 1080, 900)
+}
+
 /// 用 chromium/chrome 的 `--app=` 打开独立窗口；成功返回 true。
 fn open_app_window(url: &str, width: u32, height: u32) -> bool {
     let bin = [
@@ -482,6 +487,45 @@ fn pending_part_label() -> Option<String> {
 
 fn pending_block() -> Option<String> {
     pending_slot().lock().unwrap().as_ref().map(|p| p.block.clone())
+}
+
+/// 待放置的**件链**（螺栓副）：GUI 点「装配到图纸」后登记，图纸里点击落定。
+///
+/// 与单个零件（`PendingPart`）分开存：件链落定走 `apply_joint`（各件独立块 + 一次事务），
+/// 而预览块（`OCSMJOINT_PREV_*`）内含整链裁好的几何，只用于光标跟随。
+#[derive(Clone)]
+pub(crate) struct PendingJoint {
+    /// 件链规格 JSON（`at`/`rot` 在落定时被图纸点击覆盖）。
+    pub spec_json: String,
+    /// 光标预览块名。
+    pub block: String,
+    /// 命令行提示文本。
+    pub label: String,
+}
+
+static PENDING_JOINT: std::sync::OnceLock<std::sync::Mutex<Option<PendingJoint>>> =
+    std::sync::OnceLock::new();
+
+fn pending_joint_slot() -> &'static std::sync::Mutex<Option<PendingJoint>> {
+    PENDING_JOINT.get_or_init(|| std::sync::Mutex::new(None))
+}
+
+pub(crate) fn set_pending_joint(j: PendingJoint) {
+    *pending_joint_slot().lock().unwrap() = Some(j);
+}
+
+fn pending_joint() -> Option<PendingJoint> {
+    pending_joint_slot().lock().unwrap().clone()
+}
+
+/// 测试用：取当前待放置件链（guide_server 的集成测试断言用）。
+pub(crate) fn pending_joint_for_test() -> Option<PendingJoint> {
+    pending_joint()
+}
+
+/// 测试用：把图纸点选的基点/转角写进件链规格。
+pub(crate) fn joint_spec_at_rot_for_test(spec_json: &str, pt: [f64; 3], rotation: f64) -> String {
+    joint_spec_at_rot(spec_json, pt, rotation)
 }
 
 /// 一个待落件（基点位置 + 绕基点的旋转角，弧度）。
@@ -657,6 +701,119 @@ impl PartsSpec {
 /// `SP` 命令里点选的插入点（旧路径保留）。
 static PARTS_POINT: std::sync::OnceLock<std::sync::Mutex<Option<[f64; 3]>>> =
     std::sync::OnceLock::new();
+
+/// 件链落件通道（`OCSMJOINT` 放置态第二下点击 → worker 落整链）。
+static JOINT_TX: std::sync::OnceLock<std::sync::mpsc::Sender<PlaceTask>> =
+    std::sync::OnceLock::new();
+
+fn joint_place_sender(sender: std::sync::Arc<dyn PluginRequestSender>) -> std::sync::mpsc::Sender<PlaceTask> {
+    JOINT_TX
+        .get_or_init(|| {
+            let (tx, rx) = std::sync::mpsc::channel::<PlaceTask>();
+            std::thread::Builder::new()
+                .name("ocsm-joint-place".into())
+                .spawn(move || {
+                    for task in rx {
+                        // 宿主此刻不在命令回调里，但点击事件刚过：稍等一拍更稳（与零件放置同因）
+                        std::thread::sleep(std::time::Duration::from_millis(120));
+                        let Some(pending) = pending_joint() else { continue };
+                        let body = joint_spec_at_rot(&pending.spec_json, task.pt, task.rotation);
+                        use ocs_plugin_api::ipc::protocol::PluginRequest;
+                        match crate::guide_server::apply_joint(&sender, body.as_bytes()) {
+                            Ok(out) => {
+                                let report = serde_json::from_str::<serde_json::Value>(&out)
+                                    .ok()
+                                    .and_then(|v| v["report"].as_str().map(str::to_string))
+                                    .unwrap_or(out);
+                                let _ = sender.request(PluginRequest::PushOutput(report));
+                            }
+                            Err(e) => {
+                                let _ = sender.request(PluginRequest::PushError(format!(
+                                    "OCSMJOINT 落件失败：{e}"
+                                )));
+                            }
+                        }
+                    }
+                })
+                .expect("joint-place worker");
+            tx
+        })
+        .clone()
+}
+
+/// 把图纸点选的基点/转角写进件链规格（覆盖 GUI 里的 at/rot）。
+fn joint_spec_at_rot(spec_json: &str, pt: [f64; 3], rotation: f64) -> String {
+    let mut value: serde_json::Value =
+        serde_json::from_str(spec_json).unwrap_or_else(|_| serde_json::json!({}));
+    value["at"] = serde_json::json!([pt[0], pt[1]]);
+    value["rot"] = serde_json::json!(rotation.to_degrees());
+    value.to_string()
+}
+
+/// `OCSMJOINT` 放置态：与零件放置同体验（基点 → 光标旋转 → 落定）。
+struct JointPlace {
+    sender: std::sync::Arc<dyn PluginRequestSender>,
+    phase: std::cell::Cell<PlacePhase>,
+    base: std::cell::Cell<[f64; 3]>,
+}
+
+impl InteractiveCommand for JointPlace {
+    fn prompt(&self) -> String {
+        match (pending_joint().map(|p| p.label), self.phase.get()) {
+            (None, _) => {
+                "OCSM 螺栓副：请在螺栓副窗口里点「装配到图纸」，然后在此点击放置。".to_string()
+            }
+            (Some(l), PlacePhase::Follow) => {
+                format!("OCSM 螺栓副：{l} —— 点击定位基点（可连续，Esc 结束）")
+            }
+            (Some(l), PlacePhase::Rotate) => format!(
+                "OCSM 螺栓副：{l} —— 移动光标绕基点旋转，再点击落定（Esc 取消）"
+            ),
+        }
+    }
+
+    fn wants_mouse_move(&self) -> bool {
+        true
+    }
+
+    fn on_mouse_move(&mut self, pt: [f64; 3]) -> Option<acadrust::EntityType> {
+        let pending = pending_joint()?;
+        let (at, rot) = match self.phase.get() {
+            PlacePhase::Follow => (pt, 0.0),
+            PlacePhase::Rotate => (self.base.get(), rotate_angle(self.base.get(), pt)),
+        };
+        let mut ins = acadrust::entities::Insert::new(&pending.block, Vector3::new(at[0], at[1], at[2]));
+        ins.rotation = rot;
+        {
+            let c = &mut ins.common;
+            c.layer = partgen::LAYER_MAIN.to_string();
+            c.color = Color::ByLayer;
+            c.linetype = "ByLayer".to_string();
+            c.line_weight = LineWeight::ByLayer;
+        }
+        Some(acadrust::EntityType::Insert(ins))
+    }
+
+    fn on_point(&mut self, pt: [f64; 3]) -> CommandStep {
+        if pending_joint().is_none() {
+            // 还没在窗口里点「装配到图纸」：先记下点，等窗口那边登记
+            *parts_point_slot().lock().unwrap() = Some(pt);
+            return CommandStep::NeedPoint;
+        }
+        match self.phase.get() {
+            PlacePhase::Follow => {
+                self.base.set(pt);
+                self.phase.set(PlacePhase::Rotate);
+                CommandStep::NeedPoint
+            }
+            PlacePhase::Rotate => {
+                let task = PlaceTask { pt: self.base.get(), rotation: rotate_angle(self.base.get(), pt) };
+                let _ = joint_place_sender(self.sender.clone()).send(task);
+                CommandStep::Done
+            }
+        }
+    }
+}
 
 fn parts_point_slot() -> &'static std::sync::Mutex<Option<[f64; 3]>> {
     PARTS_POINT.get_or_init(|| std::sync::Mutex::new(None))
@@ -1180,11 +1337,26 @@ impl OcsmPlugin {
     /// **不判断件链**（该不该加平垫/弹垫/防松件属于工况判断）：件链由 skill/工艺层给出，
     /// 命令只负责“算得对、放得准、能回退”。
     fn cmd_joint(&self, host: &mut dyn HostApi, args: &str) {
+        // 不带参数 = **人类侧 GUI**（与 OCSMPART 一致）：开螺栓副窗口 + 进放置态，
+        // 窗口里点「装配到图纸」→ 回图纸点基点 → 光标旋转 → 再点落定。
         if args.trim().is_empty() {
-            host.push_error(
-                "OCSMJOINT 用法：OCSMJOINT at x,y rot 度 [protrude 扣数] \
-                 bolt=<族>:<d>[:<l>] [plate=<厚>|gap=<厚>|nut=<族>:<d>|washer=<族>:<d>] …",
-            );
+            let Some(port) = self.ensure_guide_server(host) else {
+                host.push_error("OCSMJOINT: 无法启动螺栓副服务（宿主不支持 worker 请求）。");
+                return;
+            };
+            if open_joint_window(port) {
+                host.push_info(
+                    "OCSM 螺栓副：已打开装配窗口。选好螺栓/件链点「装配到图纸」→ 回到图纸点击定位基点 → 移动光标旋转 → 再点击落定（可连续，Esc 结束）。",
+                );
+            } else {
+                host.push_info("OCSM 螺栓副：装配窗口已打开（Alt+Tab 切换过去）。");
+            }
+            let Some(sender) = host.plugin_request_sender() else { return };
+            host.start_interactive(Box::new(JointPlace {
+                sender: std::sync::Arc::from(sender),
+                phase: std::cell::Cell::new(PlacePhase::Follow),
+                base: std::cell::Cell::new([0.0, 0.0, 0.0]),
+            }));
             return;
         }
         let spec = match crate::joint::JointSpec::parse(args) {

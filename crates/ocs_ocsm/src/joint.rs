@@ -52,26 +52,26 @@ impl JointItem {
             JointItem::Bolt { family, d, l } => {
                 let (name, code) = partgen::family_meta(family);
                 match l {
-                    Some(l) => format!("{name} {code} {}×{}", label_d(*d), trim(*l)),
+                    Some(l) => format!("{name} {code} {}×{}", label_d(*d), num(*l)),
                     None => format!("{name} {code} {}", label_d(*d)),
                 }
             }
             JointItem::Nut { family, d } => {
                 let (name, code) = partgen::family_meta(family);
                 match partgen::size_row(family, *d) {
-                    Some(row) => format!("{name} {code} {}(m{})", label_d(*d), trim(row.l_min)),
+                    Some(row) => format!("{name} {code} {}(m{})", label_d(*d), num(row.l_min)),
                     None => format!("{name} {code} {}", label_d(*d)),
                 }
             }
             JointItem::Washer { family, d } => {
                 let (name, code) = partgen::family_meta(family);
                 match partgen::size_row(family, *d) {
-                    Some(row) => format!("{name} {code} {}(厚{})", label_d(*d), trim(row.l_min)),
+                    Some(row) => format!("{name} {code} {}(厚{})", label_d(*d), num(row.l_min)),
                     None => format!("{name} {code} {}", label_d(*d)),
                 }
             }
-            JointItem::Plate { t } => format!("板厚 {}", trim(*t)),
-            JointItem::Gap { t } => format!("间隔 {}", trim(*t)),
+            JointItem::Plate { t } => format!("板厚 {}", num(*t)),
+            JointItem::Gap { t } => format!("间隔 {}", num(*t)),
         }
     }
 }
@@ -261,6 +261,8 @@ pub struct Placement {
 
 #[derive(Debug, Clone)]
 pub struct JointPlan {
+    /// 件链一句话（如 "板厚 10 + 板厚 10 + 六角螺母 C级 GB/T 41-2016 M8(m7.9)"）。
+    pub chain_note: String,
     pub stack: f64,
     /// 长度需求（Σ + 露出）。
     pub need: f64,
@@ -317,8 +319,8 @@ pub fn plan(spec: &JointSpec) -> Result<JointPlan, String> {
                 format!(
                     "{family} {} 的供货长度最大 {}，装不下（需 ≥ {}）。换更长的族或改件链。",
                     label_d(d),
-                    trim(row.l_max),
-                    trim(need)
+                    num(row.l_max),
+                    num(need)
                 )
             })?
         }
@@ -333,7 +335,7 @@ pub fn plan(spec: &JointSpec) -> Result<JointPlan, String> {
     let mut offset = 0.0f64;
     for (index, item) in spec.items.iter().enumerate() {
         let (family, d, l, spec_text) = match item {
-            JointItem::Bolt { family, d, .. } => (family.clone(), *d, bolt_l, format!("{}{}", label_d(*d), format!("x{}", trim(bolt_l)))),
+            JointItem::Bolt { family, d, .. } => (family.clone(), *d, bolt_l, format!("{}{}", label_d(*d), format!("x{}", num(bolt_l)))),
             JointItem::Nut { family, d } => (family.clone(), *d, 0.0, label_d(*d)),
             JointItem::Washer { family, d } => (family.clone(), *d, 0.0, label_d(*d)),
             JointItem::Plate { t } | JointItem::Gap { t } => {
@@ -377,22 +379,23 @@ pub fn plan(spec: &JointSpec) -> Result<JointPlan, String> {
     let report = format!(
         "OCSMJOINT：{bolt_name} {bolt_code} {}×{}｜件链 {chain_note} → Σ{}｜需 l ≥ {}(= Σ{} + 露出{}扣×{}) → 取供货长度 {}（实际外露 {}mm≈{}扣）｜基点 ({}, {}) rot {}°｜共 {} 件",
         label_d(d),
-        trim(bolt_l),
-        trim(stack),
-        trim(need),
-        trim(stack),
-        trim(spec.protrude_turns),
-        trim(row.pitch),
-        trim(bolt_l),
-        trim(protrude_mm),
-        trim(protrude_turns.round_at(1)),
-        trim(spec.at[0]),
-        trim(spec.at[1]),
-        trim(spec.rot_deg),
+        num(bolt_l),
+        num(stack),
+        num(need),
+        num(stack),
+        num(spec.protrude_turns),
+        num(row.pitch),
+        num(bolt_l),
+        num(protrude_mm),
+        num(protrude_turns.round_at(1)),
+        num(spec.at[0]),
+        num(spec.at[1]),
+        num(spec.rot_deg),
         placements.len(),
     );
 
     Ok(JointPlan {
+        chain_note,
         stack,
         need,
         protrude_mm,
@@ -472,7 +475,7 @@ fn parse_size(raw: &str) -> Result<(f64, Option<f64>), String> {
 
 fn item_for(family: String, d: f64, l: Option<f64>) -> Result<JointItem, String> {
     if partgen::size_row(&family, d).is_none() {
-        return Err(format!("零件库没有 {family} 的 M{}（可用：{}）", trim(d), diameters_hint(&family)));
+        return Err(format!("零件库没有 {family} 的 M{}（可用：{}）", num(d), diameters_hint(&family)));
     }
     Ok(match partgen::family_kind(&family) {
         "bolt" => JointItem::Bolt { family, d, l },
@@ -669,7 +672,7 @@ pub fn window_radius(
 pub fn cut_tag(spans: &[(f64, f64)]) -> String {
     spans
         .iter()
-        .map(|(a, b)| format!("{}x{}", trim(*a), trim(*b)))
+        .map(|(a, b)| format!("{}x{}", num(*a), num(*b)))
         .collect::<Vec<_>>()
         .join("+")
 }
@@ -771,6 +774,112 @@ pub fn clip_hidden(
     (out, removed)
 }
 
+// ── 整链几何构建（命令插入 / GUI 预览 / GUI SVG 预览共用）────────────────
+
+/// 一次装配的完整几何产物：各件裁好的几何 + 整装图（装配坐标，基点 = 螺栓支承面）。
+pub struct JointBuild {
+    /// 各件（局部坐标，基点在自己的原点；`entities` 已裁剪）。
+    pub parts: Vec<crate::partgen::GenPart>,
+    /// 各件被遮挡的区间（件链坐标，mm；空 = 没裁）。
+    pub hidden: Vec<Vec<(f64, f64)>>,
+    /// 裁剪说明（写进报告/命令行日志）。
+    pub notes: Vec<String>,
+    /// 整装图：所有件平移到各自轴向位置后的**合并几何**（给 SVG 预览与光标预览块用）。
+    /// 各件仍是独立实体，但已落在装配坐标里，可以直接渲染/建一个预览块。
+    pub assembly: crate::partgen::GenPart,
+}
+
+/// 生成整链几何：逐件生成 → 算遮挡区间 → 裁剪 → 合并成整装图。
+///
+/// `trim=false` 时完全跳过遮挡裁剪（要"全件实画"时用）。
+pub fn build(plan: &JointPlan, trim: bool) -> Result<JointBuild, String> {
+    use ocs_plugin_api::host::acadrust::EntityType;
+    let mut parts: Vec<crate::partgen::GenPart> = Vec::new();
+    for placement in &plan.placements {
+        parts.push(crate::partgen::generate(
+            &placement.family,
+            placement.d,
+            placement.l,
+            &placement.view,
+        )?);
+    }
+    let mut geometry: Vec<Vec<EntityType>> = parts.iter().map(|p| p.entities.clone()).collect();
+    let hidden = if trim {
+        hidden_spans(&plan.placements, &geometry)
+    } else {
+        vec![Vec::new(); plan.placements.len()]
+    };
+    let mut notes: Vec<String> = Vec::new();
+    for (index, spans) in hidden.iter().enumerate() {
+        if spans.is_empty() {
+            continue;
+        }
+        let (clipped, _removed) = clip_hidden(&geometry[index], spans);
+        let (name, _) = crate::partgen::family_meta(&plan.placements[index].family);
+        let iv = spans
+            .iter()
+            .map(|(a, b)| format!("{}~{}", num(*a), num(*b)))
+            .collect::<Vec<_>>()
+            .join("、");
+        notes.push(format!("{name} {} 被遮 {iv}", parts[index].meta.spec));
+        parts[index].entities = clipped.clone();
+        geometry[index] = clipped;
+    }
+
+    // 合并成整装图（装配坐标：件链沿 +x，基点 = 螺栓头部支承面）
+    let mut merged: Vec<EntityType> = Vec::new();
+    let mut bbox = [f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY];
+    for (index, placement) in plan.placements.iter().enumerate() {
+        for entity in &geometry[index] {
+            let moved = shift_entity(entity, placement.offset);
+            if let Some((x0, x1, y)) = entity_bbox(&moved) {
+                bbox[0] = bbox[0].min(x0);
+                bbox[1] = bbox[1].min(-y);
+                bbox[2] = bbox[2].max(x1);
+                bbox[3] = bbox[3].max(y);
+            }
+            merged.push(moved);
+        }
+    }
+    if !bbox[0].is_finite() {
+        return Err("整链几何为空".into());
+    }
+    let mut assembly = parts
+        .first()
+        .cloned()
+        .ok_or_else(|| "件链为空".to_string())?;
+    assembly.entities = merged;
+    assembly.bbox = bbox;
+    Ok(JointBuild { parts, hidden, notes, assembly })
+}
+
+/// 实体沿轴线平移（装配坐标 = 件局部 x + 件基点偏移）。
+fn shift_entity(
+    entity: &ocs_plugin_api::host::acadrust::EntityType,
+    dx: f64,
+) -> ocs_plugin_api::host::acadrust::EntityType {
+    use ocs_plugin_api::host::acadrust::EntityType;
+    if dx == 0.0 {
+        return entity.clone();
+    }
+    let mut out = entity.clone();
+    match &mut out {
+        EntityType::Line(l) => {
+            l.start.x += dx;
+            l.end.x += dx;
+        }
+        EntityType::Circle(c) => c.center.x += dx,
+        EntityType::Arc(a) => a.center.x += dx,
+        EntityType::LwPolyline(p) => {
+            for v in &mut p.vertices {
+                v.location.x += dx;
+            }
+        }
+        _ => {}
+    }
+    out
+}
+
 fn number(raw: &str) -> Result<f64, String> {
     let value: f64 = raw
         .trim()
@@ -784,10 +893,15 @@ fn number(raw: &str) -> Result<f64, String> {
 }
 
 fn label_d(d: f64) -> String {
-    format!("M{}", trim(d))
+    format!("M{}", num(d))
 }
 
-fn trim(v: f64) -> String {
+/// 数字 → 去尾零文本（报告/块名/对外 JSON 用）。名字避开 `trim` 开关参数。
+pub fn num_text(v: f64) -> String {
+    num(v)
+}
+
+fn num(v: f64) -> String {
     let mut text = format!("{v:.3}");
     while text.contains('.') && text.ends_with('0') {
         text.pop();

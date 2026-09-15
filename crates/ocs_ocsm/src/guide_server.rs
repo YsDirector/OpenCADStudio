@@ -187,6 +187,9 @@ fn route(
         ("GET", t) if t.starts_with("/api/parts") => {
             (200, json, crate::partgen::catalog_json())
         }
+        ("GET", t) if t == "/joint" || t.starts_with("/joint?") => {
+            (200, "text/html; charset=utf-8", JOINT_HTML.to_string())
+        }
         ("GET", t) if t.starts_with("/api/part_svg") => {
             let q = t.split_once('?').map(|(_, q)| q).unwrap_or("");
             match crate::partgen::preview_svg(q) {
@@ -202,6 +205,8 @@ fn route(
                 Err(e) => (400, json, serde_json::json!({"ok": false, "error": e}).to_string()),
             }
         }
+        ("POST", "/api/joint_plan") => api_joint_plan(body),
+        ("POST", "/api/joint_place") => api_joint_place(sender, body),
         ("POST", "/api/part_export") => api_part_export(body, sender),
         ("GET", t) if t.starts_with("/api/guide") => api_guide(target, sender),
         ("GET", t) if t.starts_with("/api/tolerance") => api_tolerance(target),
@@ -3327,42 +3332,15 @@ pub(crate) fn apply_joint(
     let plan = crate::joint::plan(&spec)?;
     begin_undo(sender, "OCSM 螺栓副")?;
     let doc = snapshot(sender)?;
-    // ① 先把整链几何都生成出来：遮挡裁剪要在写库之前算（裁剪后的几何才是块定义）
-    let mut parts: Vec<crate::partgen::GenPart> = Vec::new();
-    for placement in &plan.placements {
-        parts.push(crate::partgen::generate(
-            &placement.family,
-            placement.d,
-            placement.l,
-            &placement.view,
-        )?);
-    }
-    let geometry: Vec<Vec<ocs_plugin_api::host::acadrust::EntityType>> =
-        parts.iter().map(|p| p.entities.clone()).collect();
-    let hidden = if spec.trim {
-        crate::joint::hidden_spans(&plan.placements, &geometry)
-    } else {
-        vec![Vec::new(); plan.placements.len()]
-    };
+    // ① 先把整链几何算出来（生成 → 遮挡裁剪）：裁剪后的几何才是块定义
+    let built = crate::joint::build(&plan, spec.trim)?;
+    let trim_notes = built.notes.clone();
     let mut known_blocks: std::collections::HashSet<String> =
         doc.block_records.iter().map(|b| b.name.clone()).collect();
-    let mut trim_notes: Vec<String> = Vec::new();
     let mut placed: Vec<serde_json::Value> = Vec::new();
     for (index, placement) in plan.placements.iter().enumerate() {
-        let mut part = parts[index].clone();
-        let spans = old_hidden(&hidden, index);
-        if !spans.is_empty() {
-            let (clipped, removed) = crate::joint::clip_hidden(&part.entities, &spans);
-            part.entities = clipped;
-            let (name, _) = crate::partgen::family_meta(&placement.family);
-            let iv = spans
-                .iter()
-                .map(|(a, b)| format!("{}~{}", trim_num(*a), trim_num(*b)))
-                .collect::<Vec<_>>()
-                .join("、");
-            trim_notes.push(format!("{name} {} 被遮 {iv}", part.meta.spec));
-            let _ = removed;
-        }
+        let part = built.parts[index].clone();
+        let spans = built.hidden.get(index).cloned().unwrap_or_default();
         let mut block = part_block_name(&placement.family, &part.meta.spec);
         if !spans.is_empty() {
             // 裁剪过的件用独立块名（块定义不能被裁，只能按裁剪档位各建一块）
@@ -3453,21 +3431,128 @@ pub(crate) fn apply_joint(
     .to_string())
 }
 
-/// 取第 i 件的遮挡区间（没有就空）。
-fn old_hidden(hidden: &[Vec<(f64, f64)>], index: usize) -> Vec<(f64, f64)> {
-    hidden.get(index).cloned().unwrap_or_default()
+/// `POST /api/joint_plan`：**只算不写文档** —— 给 GUI 做实时预览（SVG + 推理一行 + 数字）。
+///
+/// 与 `apply_joint` 共用 `joint::plan` + `joint::build`，所以预览和落地必然一致。
+fn api_joint_plan(body: &[u8]) -> (u16, &'static str, String) {
+    let json = "application/json; charset=utf-8";
+    match plan_joint_json(body) {
+        Ok(s) => (200, json, s),
+        Err(e) => (400, json, serde_json::json!({"ok": false, "error": e}).to_string()),
+    }
 }
 
-/// 报告里用的数字文本（去尾零）。
-fn trim_num(v: f64) -> String {
-    let mut text = format!("{v:.3}");
-    while text.contains('.') && text.ends_with('0') {
-        text.pop();
+fn plan_joint_json(body: &[u8]) -> Result<String, String> {
+    let spec = crate::joint::JointSpec::from_json(body)?;
+    let plan = crate::joint::plan(&spec)?;
+    let built = crate::joint::build(&plan, spec.trim)?;
+    let title = format!(
+        "{} {}｜{}",
+        plan.bolt_family,
+        crate::joint::num_text(plan.bolt_l),
+        plan.chain_note
+    );
+    let svg = crate::partgen::to_svg(&built.assembly, &title, 620.0, 300.0);
+    Ok(serde_json::json!({
+        "ok": true,
+        "svg": svg,
+        "report": plan.report,
+        "stack": plan.stack,
+        "need": plan.need,
+        "bolt": { "family": plan.bolt_family, "d": plan.bolt_d, "l": plan.bolt_l },
+        "protrude_mm": plan.protrude_mm,
+        "count": plan.placements.len(),
+        "trim": spec.trim,
+        "trimmed": built.notes,
+        "blocks": plan
+            .placements
+            .iter()
+            .enumerate()
+            .map(|(i, p)| serde_json::json!({
+                "family": p.family,
+                "spec": p.spec,
+                "at": p.at,
+                "rot": p.rot_rad.to_degrees(),
+                "offset": p.offset,
+                "view": p.view,
+                "trimmed": built.hidden.get(i).cloned().unwrap_or_default(),
+            }))
+            .collect::<Vec<_>>(),
+    })
+    .to_string())
+}
+
+/// `POST /api/joint_place`：GUI 点「装配到图纸」→ 建**光标预览块** + 登记待放置件链。
+///
+/// 落点在图纸里点（与零件库同体验）：预览块给光标跟随用；真正落定时
+/// `apply_joint` 会把整链按**各件独立块**插进去（明细表/零件识别仍按件走）。
+fn api_joint_place(sender: &Arc<dyn PluginRequestSender>, body: &[u8]) -> (u16, &'static str, String) {
+    let json = "application/json; charset=utf-8";
+    match apply_joint_place(sender, body) {
+        Ok(s) => (200, json, s),
+        Err(e) => (400, json, serde_json::json!({"ok": false, "error": e}).to_string()),
     }
-    if text.ends_with('.') {
-        text.pop();
+}
+
+fn apply_joint_place(
+    sender: &Arc<dyn PluginRequestSender>,
+    body: &[u8],
+) -> Result<String, String> {
+    let spec = crate::joint::JointSpec::from_json(body)?;
+    let plan = crate::joint::plan(&spec)?;
+    let built = crate::joint::build(&plan, spec.trim)?;
+    let (bolt_name, _) = crate::partgen::family_meta(&plan.bolt_family);
+    // 预览块名带上"长度 + 裁剪档"，同规格重复放置复用同一块
+    let cut_sig: String = built
+        .hidden
+        .iter()
+        .flat_map(|s| s.iter())
+        .map(|(a, b)| format!("{}-{}", crate::joint::num_text(*a), crate::joint::num_text(*b)))
+        .collect::<Vec<_>>()
+        .join("_");
+    let block = if cut_sig.is_empty() {
+        format!("OCSMJOINT_PREV_{}", crate::partgen::ascii_block(&plan.bolt_family, &format!("M{}x{}", crate::joint::num_text(plan.bolt_d), crate::joint::num_text(plan.bolt_l))))
+    } else {
+        format!(
+            "OCSMJOINT_PREV_{}_CUT_{}",
+            crate::partgen::ascii_block(&plan.bolt_family, &format!("M{}x{}", crate::joint::num_text(plan.bolt_d), crate::joint::num_text(plan.bolt_l))),
+            crate::partgen::ascii_block("", &cut_sig)
+        )
+    };
+    // 建预览块也是文档改动 → 单独一个撤销条目（与出库同规矩）
+    begin_undo(sender, "螺栓副预览")?;
+    let exists = snapshot(sender)?.block_records.iter().any(|b| b.name == block);
+    if !exists {
+        req_timed(
+            sender,
+            PluginRequest::AddBlockRecord {
+                name: block.clone(),
+                entities: built.assembly.entities.clone(),
+            },
+            "AddBlockRecord",
+        )?;
     }
-    text
+    commit_undo(sender);
+    crate::set_pending_joint(crate::PendingJoint {
+        spec_json: spec.to_json(),
+        block: block.clone(),
+        label: format!(
+            "{} {} 螺栓副（{} 件）",
+            bolt_name,
+            format!("M{}×{}", crate::joint::num_text(plan.bolt_d), crate::joint::num_text(plan.bolt_l)),
+            plan.placements.len()
+        ),
+    });
+    Ok(serde_json::json!({
+        "ok": true,
+        "block": block,
+        "report": plan.report,
+        "message": format!(
+            "已就绪：{}。切回图纸点击定位基点 → 移动光标旋转 → 再点击落定（可连续，Esc 结束）。",
+            plan.report
+        ),
+    })
+    .to_string())
 }
 
 fn api_part_export(body: &[u8], sender: &Arc<dyn PluginRequestSender>) -> (u16, &'static str, String) {
@@ -5385,6 +5470,8 @@ const GUI_HTML: &str = include_str!("guide_gui.html");
 const ROUGH_HTML: &str = include_str!("rough_gui.html");
 /// 标准件选择器页（参数化生成）。
 const PARTS_HTML: &str = include_str!("parts_gui.html");
+/// 螺栓副（件链装配）页：给人类用的 GUI（AI 走命令行/HTTP 同一套实现）。
+const JOINT_HTML: &str = include_str!("joint_gui.html");
 
 #[cfg(test)]
 mod tests {
@@ -6216,6 +6303,10 @@ impl MockSender {
     /// 插入的 INSERT 序列（块名 / 基点 / 转角）。
     fn inserts(&self) -> Vec<(String, [f64; 3], f64)> {
         self.inserts.lock().unwrap().clone()
+    }
+    /// 建过的块序列（名字）：断言"同名块不重复建"。
+    fn blocks(&self) -> Vec<(String, Vec<acadrust::EntityType>)> {
+        self.blocks.lock().unwrap().clone()
     }
     fn block_entities(&self, name: &str) -> Vec<acadrust::EntityType> {
         self.blocks.lock().unwrap().iter()
@@ -7398,6 +7489,121 @@ mod rough_tests {
         let report = value["report"].as_str().unwrap();
         assert!(report.contains("遮挡裁剪"), "报告要写清裁剪：{report}");
         assert!(report.contains("20~27.9"), "报告要有被遮区间：{report}");
+    }
+
+    #[test]
+    fn double_nut_chain_inserts_once_per_part_and_dedups_blocks() {
+        // 双螺母防松（厚+厚，GUI 预设之一）：两枚同族螺母 → 块定义只建一次，
+        // 但 INSERT 两条（明细表要按件数统计）。
+        let mock = std::sync::Arc::new(MockSender::new(acadrust::CadDocument::new()));
+        let sender: std::sync::Arc<dyn PluginRequestSender> = mock.clone();
+        let body = br#"{"at":[0,0],"rot":0,
+            "items":[{"kind":"bolt","family":"hex_bolt_b_full","d":8},
+                     {"kind":"plate","t":10},{"kind":"plate","t":10},
+                     {"kind":"washer","family":"washer_971","d":8},
+                     {"kind":"nut","family":"nut_c41","d":8},
+                     {"kind":"nut","family":"nut_c41","d":8}]}"#;
+        let out = apply_joint(&sender, body).expect("双螺母装配成功");
+        let value: serde_json::Value = serde_json::from_str(&out).unwrap();
+        // 件数 = 实际插入的件（板只是厚度账，不成为件）：螺栓 + 平垫 + 两枚螺母 = 4
+        assert_eq!(value["placed"].as_array().unwrap().len(), 4, "{out}");
+        // Σ = 10 + 10 + 平垫 1.6 + 螺母 7.9 × 2
+        let stack = value["stack"].as_f64().unwrap();
+        assert!((stack - 37.4).abs() < 1e-9, "Σ={stack}");
+        let inserts = mock.inserts();
+        assert_eq!(inserts.len(), 4, "{inserts:?}");
+        assert_eq!(
+            inserts.iter().filter(|(b, _, _)| b.contains("NUT_C41_M8")).count(),
+            2,
+            "两枚螺母两条 INSERT：{inserts:?}"
+        );
+        // 螺母的块定义只建一次（同名块不重复 AddBlockRecord）
+        let nut_blocks: Vec<String> = mock
+            .blocks()
+            .into_iter()
+            .map(|(n, _)| n)
+            .filter(|n| n.contains("NUT_C41_M8"))
+            .collect();
+        assert_eq!(nut_blocks.len(), 1, "块名重复建了：{nut_blocks:?}");
+        // 一次事务
+        assert_eq!(mock.undos().first().map(String::as_str), Some("begin:OCSM 螺栓副"));
+        assert_eq!(mock.undos().last().map(String::as_str), Some("commit"));
+        // 遮挡裁剪：杆被平垫 + 两枚螺母连续遮住，合并成一段
+        let trimmed = value["trimmed"].as_array().unwrap();
+        assert_eq!(trimmed.len(), 1, "只有螺栓被裁：{trimmed:?}");
+        assert!(trimmed[0].as_str().unwrap().contains('~'), "{trimmed:?}");
+    }
+
+    #[test]
+    fn joint_plan_endpoint_returns_svg_and_numbers_without_writing() {
+        // GUI 的实时预览端点：只算不写（不进撤销栈、不动文档）
+        let body = br#"{"at":[0,0],"rot":-90,"protrude":2.5,
+            "items":[{"kind":"bolt","family":"hex_bolt_b_full","d":8},
+                     {"kind":"plate","t":10},{"kind":"plate","t":10},
+                     {"kind":"washer","family":"washer_971","d":8},
+                     {"kind":"nut","family":"nut_61721","d":8},
+                     {"kind":"nut","family":"nut_c41","d":8}]}"#;
+        let out = plan_joint_json(body).expect("预览成功");
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["ok"], true);
+        let svg = v["svg"].as_str().unwrap();
+        assert!(svg.starts_with("<svg") || svg.contains("<svg"), "要返回 SVG：{}", &svg[..80.min(svg.len())]);
+        assert!(svg.contains("polyline") || svg.contains("line") || svg.contains("path"), "SVG 里应有几何");
+        assert_eq!(v["count"].as_u64().unwrap(), 4, "螺栓 + 平垫 + 薄螺母 + 厚螺母 = 4 件");
+        // Σ = 两板 20 + 平垫 1.6 + 薄螺母 6172.1 M8(m=4.0) + 厚螺母 41 M8(m=7.9)
+        assert!(
+            (v["stack"].as_f64().unwrap() - (20.0 + 1.6 + 4.0 + 7.9)).abs() < 1e-6,
+            "{}",
+            v["stack"]
+        );
+        assert!(v["report"].as_str().unwrap().contains("6172.1"), "报告要写清薄螺母标准号");
+        assert!(v["trimmed"].as_array().unwrap().len() == 1);
+        // 关掉裁剪 → 没有被裁的件
+        let plain = plan_joint_json(br#"{"at":[0,0],"rot":0,"trim":false,
+            "items":[{"kind":"bolt","family":"hex_bolt_b_full","d":8},
+                     {"kind":"plate","t":10},{"kind":"nut","family":"nut_c41","d":8}]}"#).unwrap();
+        let pv: serde_json::Value = serde_json::from_str(&plain).unwrap();
+        assert!(pv["trimmed"].as_array().unwrap().is_empty(), "trim=false 不该裁：{pv}");
+    }
+
+    #[test]
+    fn joint_place_registers_preview_block_and_pending_chain() {
+        // GUI 点「装配到图纸」：建预览块（整链几何）+ 登记待放置件链；**不落件**（等图纸点选）
+        let mock = std::sync::Arc::new(MockSender::new(acadrust::CadDocument::new()));
+        let sender: std::sync::Arc<dyn PluginRequestSender> = mock.clone();
+        let body = br#"{"at":[0,0],"rot":-90,
+            "items":[{"kind":"bolt","family":"hex_bolt_b_full","d":8},
+                     {"kind":"plate","t":10},{"kind":"plate","t":10},
+                     {"kind":"nut","family":"nut_c41","d":8}]}"#;
+        let out = apply_joint_place(&sender, body).expect("登记成功");
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["ok"], true);
+        let block = v["block"].as_str().unwrap();
+        assert!(block.starts_with("OCSMJOINT_PREV_"), "{block}");
+        assert!(block.contains("CUT"), "带裁剪档：{block}");
+        // 预览块建好了，里面是整链几何（比单个螺栓多），且没有落任何 INSERT
+        let entities = mock.block_entities(block);
+        assert!(!entities.is_empty(), "预览块定义应为整链几何");
+        assert!(mock.inserts().is_empty(), "登记阶段不落件：{:?}", mock.inserts());
+        // 待放置件链登记好（含裁剪档块名 + 提示词）
+        let pending = crate::pending_joint_for_test().expect("待放置件链");
+        assert_eq!(pending.block, block);
+        assert!(pending.label.contains("螺栓副"), "{}", pending.label);
+        assert!(pending.spec_json.contains("hex_bolt_b_full"), "{}", pending.spec_json);
+        // 建块也是文档改动 → 有自己的撤销条目
+        assert_eq!(mock.undos().first().map(String::as_str), Some("begin:螺栓副预览"));
+        assert_eq!(mock.undos().last().map(String::as_str), Some("commit"));
+    }
+
+    #[test]
+    fn joint_spec_at_rot_overrides_gui_placement() {
+        // 图纸点选的基点/转角必须覆盖 GUI 里的 at/rot（GUI 只是初始值）
+        let spec = r#"{"at":[0,0],"rot":0,"items":[{"kind":"bolt","family":"hex_bolt_b_full","d":8}]}"#;
+        let out = crate::joint_spec_at_rot_for_test(spec, [120.0, -35.5, 0.0], std::f64::consts::FRAC_PI_2);
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["at"], serde_json::json!([120.0, -35.5]));
+        assert!((v["rot"].as_f64().unwrap() - 90.0).abs() < 1e-9, "{}", v["rot"]);
+        assert_eq!(v["items"][0]["family"], "hex_bolt_b_full", "件链原样保留");
     }
 
     #[test]
@@ -9867,6 +10073,11 @@ mod weld_tests {
         assert!(cat.contains("剖视图") && cat.contains("俯视图"), "视图名文案缺失");
         // 销族树标签
         assert!(cat.contains("圆柱销 A型 GB/T 119.1-2000") && cat.contains("内螺纹圆柱销 GB/T 120.1-2000"));
+        // 螺栓副 GUI 页：关键控件都在（件链编辑器 / 实时预览 / 装配按钮 / 防松模板）
+        let jhtml = super::JOINT_HTML;
+        for key in ["/api/joint_plan", "/api/joint_place", "/api/parts", "装配到图纸", "双螺母", "弹垫", "遮挡裁剪"] {
+            assert!(jhtml.contains(key), "螺栓副页缺 {key}");
+        }
     }
 
     /// GUI 实机自查用：把零件库窗口在固定端口上跑起来并**阻塞**，
