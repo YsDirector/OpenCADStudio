@@ -192,6 +192,15 @@ pub enum PluginRequest {
         name: String,
         entities: Vec<EntityType>,
     },
+    /// API v6: open an undo transaction. Unlike `PushUndo`, the snapshot stays
+    /// pending across host message boundaries so a plugin flow that issues
+    /// several requests for one user action (the local HTTP surface) still
+    /// produces a single undo entry. Close it with `CommitUndo`.
+    BeginUndo {
+        label: String,
+    },
+    /// API v6: close the transaction opened by `BeginUndo` (commits the entry).
+    CommitUndo,
 }
 
 /// Responses the host sends back for `PluginRequest`.

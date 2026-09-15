@@ -345,6 +345,16 @@ impl OpenCADStudio {
 
     pub(super) fn finish_all_pending_history(&mut self) {
         for i in 0..self.tabs.len() {
+            // An open plugin undo transaction stays pending: its flow spans
+            // several host messages (see `begin_deferred_undo`).
+            if self.tabs[i]
+                .history
+                .pending
+                .as_ref()
+                .is_some_and(|pending| pending.deferred)
+            {
+                continue;
+            }
             self.finish_pending_history(i);
         }
     }
@@ -365,7 +375,34 @@ impl OpenCADStudio {
             dirty_before,
             structure_before,
             recorder,
+            deferred: false,
         });
+    }
+
+    /// Open a plugin undo transaction (`HostApi::begin_undo`).
+    ///
+    /// Identical to [`push_undo_snapshot`](Self::push_undo_snapshot) except that the
+    /// per-message [`finish_all_pending_history`](Self::finish_all_pending_history)
+    /// skips it: an out-of-process plugin flow (local HTTP surface) sends one host
+    /// request per step, and the host would otherwise commit — and drop as empty —
+    /// the snapshot before the mutations arrive. Closed by
+    /// [`commit_deferred_undo`](Self::commit_deferred_undo), or implicitly by the
+    /// next history start (another push/begin) or an undo/redo.
+    pub(super) fn begin_deferred_undo(&mut self, i: usize, label: impl Into<String>) {
+        self.push_undo_snapshot(i, label);
+        if let Some(pending) = self.tabs[i].history.pending.as_mut() {
+            pending.deferred = true;
+        }
+    }
+
+    /// Close the transaction opened by [`begin_deferred_undo`](Self::begin_deferred_undo)
+    /// and commit its entry. Also closes an already-committed transaction when
+    /// nothing was pending any more (no-op then).
+    pub(super) fn commit_deferred_undo(&mut self, i: usize) {
+        if let Some(pending) = self.tabs[i].history.pending.as_mut() {
+            pending.deferred = false;
+        }
+        self.finish_pending_history(i);
     }
 
     /// Begin undo capture for an entity edit that will touch `touched` entities.

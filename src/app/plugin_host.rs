@@ -457,6 +457,14 @@ impl HostApi for HostSession<'_> {
     fn push_undo(&mut self, label: &str) {
         self.push_undo(label)
     }
+    fn begin_undo(&mut self, label: &str) {
+        let tab = self.tab;
+        self.app.begin_deferred_undo(tab, label);
+    }
+    fn commit_undo(&mut self) {
+        let tab = self.tab;
+        self.app.commit_deferred_undo(tab);
+    }
     fn set_dirty(&mut self) {
         self.set_dirty()
     }
@@ -1125,7 +1133,52 @@ mod tests {
     }
 
     #[test]
-    fn v5_add_block_record_creates_block_with_members() {
+    fn v6_begin_undo_keeps_the_snapshot_open_across_messages() {
+        // 插件 HTTP/GUI 流程：一次用户动作 = 多条宿主请求。宿主在每条 message 末尾
+        // 提交（并丢弃空）pending 快照，所以必须靠显式事务把快照握住。
+        let mut app = OpenCADStudio::new_for_test();
+        app.tabs[0].is_start = false;
+        {
+            let mut host = HostSession::new(&mut app, 0);
+            host.begin_undo("表面粗糙度");
+        }
+        app.finish_all_pending_history();
+        assert!(
+            app.tabs[0].history.undo_stack.is_empty(),
+            "事务未提交前不应产生撤销条目"
+        );
+        // 第二条请求：真正改文档（建一个图层代表插件的写操作）。
+        {
+            let mut host = HostSession::new(&mut app, 0);
+            assert_eq!(host.ensure_layers(vec![layer_def()]), 1);
+        }
+        app.finish_all_pending_history();
+        assert!(
+            app.tabs[0].history.undo_stack.is_empty(),
+            "事务保持打开，跨 message 不提交"
+        );
+        // 第三条请求：插件提交事务（快照成条目 + revision 自增）。
+        let revision_before = app.tabs[0].edit_revision;
+        {
+            let mut host = HostSession::new(&mut app, 0);
+            host.commit_undo();
+        }
+        assert_eq!(app.tabs[0].history.undo_stack.len(), 1, "提交后才有条目");
+        assert_eq!(
+            app.tabs[0].edit_revision,
+            revision_before + 1,
+            "提交即 revision 自增（MCP compare-and-set 才看得到）"
+        );
+        // 撤销：图层表回到创建前。
+        app.undo_active_tab();
+        assert!(
+            app.tabs[0].scene.document.layers.get("1轮廓实线层").is_none(),
+            "插件事务的改动可被撤销"
+        );
+    }
+
+    #[test]
+    fn v6_add_block_record_creates_block_with_members() {
         let mut app = OpenCADStudio::new_for_test();
         app.tabs[0].is_start = false;
         let mut host = HostSession::new(&mut app, 0);
