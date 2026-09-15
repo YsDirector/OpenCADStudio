@@ -258,6 +258,28 @@ fn snapshot(sender: &Arc<dyn PluginRequestSender>) -> Result<acadrust::CadDocume
     }
 }
 
+/// 声明一个撤销点（插件 HTTP 流程里的写操作前置）。
+///
+/// ⚠️ **当前只在“同一条宿主 message 内完成”的流程里真正成条目**：宿主在每条
+/// message 末尾调 `finish_all_pending_history()`（`src/app/update/mod.rs:296`），
+/// 而本文件的 HTTP 流程是 PushUndo 一个请求、后续 AddEntities/WriteRecord 各自再发
+/// 请求（各占一条 message）——快照会在还是空的时候被提交并当作空条目丢弃
+/// （`src/app/history.rs:285`）。实测 2026-09-15：`apply` / `rough_apply` /
+/// `apply_refresh` 后 `state.revision` 不变、`op:"undo"` 也回退不掉生成的实体。
+/// 命令驱动流程（整个插件命令在同一条 message 内同步跑完）不受此限，例如 `OCSM`
+/// 初始化现在可撤销。保留声明是因为：①宿主支持显式事务（Begin/Commit 或 Batch）
+/// 后立即生效；② mock 单测可断言“先 push 再写”。
+fn push_undo(sender: &Arc<dyn PluginRequestSender>, label: &str) -> Result<(), String> {
+    req_timed(
+        sender,
+        PluginRequest::PushUndo {
+            label: label.to_string(),
+        },
+        "PushUndo",
+    )?;
+    Ok(())
+}
+
 /// 标记图纸已修改。宿主里 `tabs[i].dirty = true` 的唯一来源是 SetDirty；
 /// add/remove/write/bump 都不会置 dirty。不加的话，关闭 OCS 时不弹"未保存"
 /// 提示，引导服务生成的改动会静默丢失。与 ocs-mcp-bridge 的写套路一致：
@@ -2748,15 +2770,9 @@ fn do_apply(
         serde_json::from_slice(body).map_err(|e| format!("请求 JSON 无效: {e}"))?;
     let posted = handle_hex(&req.handle)?;
 
-    // “仅应用”（刷新参数记录 / 写 PE_URL）也改文档；生成路径由 do_apply_inner 自己
-    // push。这里先声明一次，让 URL 写入同样可撤销（无改动时宿主会丢弃空条目）。
-    req_timed(
-        sender,
-        PluginRequest::PushUndo {
-            label: "尺寸引导".into(),
-        },
-        "PushUndo",
-    )?;
+    // “仅应用”（刷新参数记录 / 写 PE_URL）也改文档 → 声明撤销点（生效条件见
+    // `push_undo` 的说明：需整个流程落在同一条宿主 message 内）。
+    push_undo(sender, "尺寸引导")?;
 
     // ── 编辑模式：posted 实体本身是 OCSM 生成的标注（带 `OCSM_EDIT`）──
     // 用记录里的引导几何造一条**临时引导**重走现有生成路径（各类型代码不用改），
@@ -2915,13 +2931,7 @@ fn do_apply_inner(
     // 按引导线第一点 P1 判定图幅缩放，创建/选用对应样式（文字/箭头缩放）。
     let style = ensure_style_for_point(sender, &doc, p1)?;
 
-    req_timed(
-        sender,
-        PluginRequest::PushUndo {
-            label: "尺寸引导".into(),
-        },
-        "PushUndo",
-    )?;
+    push_undo(sender, "尺寸引导")?;
 
     // 基准标注：不产生 DIMENSION，而是 匿名块 + INSERT（8符号标注层）。
     if params.guide_type == GuideType::Datum {
@@ -3299,14 +3309,8 @@ fn apply_part_export(
         req.view.to_ascii_uppercase()
     );
 
-    // 出库会新建块定义（文档改动）→ 先声明撤销点。
-    req_timed(
-        sender,
-        PluginRequest::PushUndo {
-            label: "零件出库".into(),
-        },
-        "PushUndo",
-    )?;
+    // 出库会新建块定义（文档改动）→ 声明撤销点（生效条件见 push_undo 说明）。
+    push_undo(sender, "零件出库")?;
     // 块定义：幂等创建（预览要引用它，所以必须在出库时就建好）
     let exists = snapshot(sender)?.block_records.iter().any(|b| b.name == block);
     if !exists {
@@ -3387,14 +3391,8 @@ fn apply_part_pick(
         part.meta.spec.replace(['.', ' ', '/', 'x', 'X'], "_")
     );
 
-    // 插入会建块 + 落 INSERT 实体 → 先声明撤销点。
-    req_timed(
-        sender,
-        PluginRequest::PushUndo {
-            label: "零件插入".into(),
-        },
-        "PushUndo",
-    )?;
+    // 插入会建块 + 落 INSERT 实体 → 声明撤销点（生效条件见 push_undo 说明）。
+    push_undo(sender, "零件插入")?;
     // 块定义幂等：已存在就不再建（同名块重复插入直接复用）
     let exists = snapshot(sender)?
         .block_records
@@ -3507,14 +3505,8 @@ fn apply_roughness(
     let p_value = if has_p { req.p.clone() } else { String::new() };
 
     let doc = snapshot(sender)?;
-    // 符号会新建块 + 实体、并可能补齐样式/图层 → 先声明撤销点。
-    req_timed(
-        sender,
-        PluginRequest::PushUndo {
-            label: "表面粗糙度".into(),
-        },
-        "PushUndo",
-    )?;
+    // 符号会新建块 + 实体、并可能补齐样式/图层 → 声明撤销点（生效条件见 push_undo 说明）。
+    push_undo(sender, "表面粗糙度")?;
     // 幂等 ensure：文档缺 OCSM_GB 样式 / 8符号标注层时补齐（新图纸直接 CC
     // 时宿主渲染 ATTDEF 会 fallback 未知字体、图层色错乱——用户实测）。
     if !doc
