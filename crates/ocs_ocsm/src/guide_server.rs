@@ -3173,6 +3173,8 @@ fn api_guide(target: &str, sender: &Arc<dyn PluginRequestSender>) -> (u16, &'sta
                         "existing": existing,
                         "next": next,
                     });
+                    // 未存盘 → GUI 在「序号」面板上直接给出提示（画之前就知道）
+                    resp["unsaved"] = serde_json::json!(crate::current_doc_unsaved().is_some());
                 }
                 (200, json, resp.to_string())
             }
@@ -5642,6 +5644,11 @@ fn balloon_sync_after(
     }
 }
 
+/// 未存盘提示的去重（每个标签页只提一次）。返回 true = 这次应该提。
+fn should_warn_unsaved(tab: u64, warned: &mut std::collections::HashSet<u64>) -> bool {
+    warned.insert(tab)
+}
+
 /// 交互路径：`POST /api/apply` type=BALLOON。引导 PLINE 保留（不删，可反复重改）。
 ///
 /// 组台账写 `OCSM_BALLOON`（JSON：序号列表/方向/插入模式/关联零件），供
@@ -5659,6 +5666,25 @@ fn apply_balloon(
     let items: Vec<String> = params.balloon.items.clone();
     if items.is_empty() {
         return Err("序号标注：至少要有一个序号（在窗口里加条目）".into());
+    }
+    // ── "这图还没存过盘"的提示（每个标签页只提一次）──
+    // 为什么要提：`BOMXLSX` 导出的 xlsx 默认落在**图纸同目录**；新图没存盘时只能落到
+    // 默认目录（`~/桌面/OCSM/`），容易找不到。球标与明细表本身不受影响，所以只提示、不拦。
+    if let Some(tab) = crate::current_doc_unsaved() {
+        static WARNED_UNSAVED: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<u64>>> =
+            std::sync::OnceLock::new();
+        let set = WARNED_UNSAVED.get_or_init(|| std::sync::Mutex::new(std::collections::HashSet::new()));
+        let first = set.lock().map(|mut s| should_warn_unsaved(tab, &mut s)).unwrap_or(false);
+        if first {
+            let _ = req_timed(
+                sender,
+                PluginRequest::PushInfo(
+                    "OCSM: 本图还没存过盘 —— 序号球标与明细表照常生成，但 `BOMXLSX` 导出的 xlsx                      会落到默认目录（~/桌面/OCSM/）。建议先 Ctrl+S 存盘，xlsx 就会生成在图纸同目录、                     名为「图纸同名-明细表.xlsx」。"
+                        .to_string(),
+                ),
+                "PushInfo",
+            );
+        }
     }
     let s = frame_scale_at(doc, p0);
     let parts = crate::balloon::build_balloon_parts(
@@ -9211,6 +9237,15 @@ mod weld_tests {
             lower: lower.into(),
         };
         p
+    }
+
+    /// 未存盘提示的去重：同一标签页只提一次。
+    #[test]
+    fn unsaved_hint_warns_once_per_tab() {
+        let mut warned = std::collections::HashSet::new();
+        assert!(should_warn_unsaved(1, &mut warned), "第一次要提");
+        assert!(!should_warn_unsaved(1, &mut warned), "同一标签页不再提");
+        assert!(should_warn_unsaved(2, &mut warned), "换标签页要提");
     }
 
     // ── 序号标注（BALLOON）测试─────────────────────────────────────────────

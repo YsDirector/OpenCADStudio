@@ -934,6 +934,13 @@ pub(crate) fn cmd_bom_xlsx(host: &mut dyn HostApi, args: &str) {
     }
     set_xlsx_url(host, &path);
     host.set_dirty();
+    if host.document_path(host.tab_id()).is_none() {
+        host.push_info(&format!(
+            "OCSMBOMXLSX: 提示——本图还没存过盘，所以文件落在默认目录（{}）。\
+             想让它生成在图纸同目录，先 Ctrl+S 存盘再导出。",
+            path.display()
+        ));
+    }
     host.push_info(&format!(
         "OCSMBOMXLSX: {} 行已导出 → {}（{} 行记下导出基线；表头已挂链接，Ctrl+点击可打开）。",
         xrows.len(),

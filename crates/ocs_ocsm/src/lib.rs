@@ -307,6 +307,43 @@ fn is_bom_command(cmd: &str) -> bool {
 
 struct OcsmPlugin;
 
+/// **当前标签页的存盘状态缓存**（插件进程级）。
+///
+/// 宿主没有实现 `GetTabId` / `DocumentPath` 两个请求 → 引导服务的 HTTP 线程拿不到图纸
+/// 路径；而命令路径的 `HostApi::document_path()` 是好的。于是**每次跑插件命令时刷新**这个
+/// 缓存（`dispatch` 开头），HTTP 侧（序号标注落地时）读它来判断"这图存过盘没有"。
+/// `None` = 还不知道（没跑过命令）；`Some((tab, None))` = 该标签页还没存过盘。
+static DOC_SAVE_STATE: std::sync::OnceLock<std::sync::Mutex<Option<(u64, Option<std::path::PathBuf>)>>> =
+    std::sync::OnceLock::new();
+
+fn doc_save_state() -> &'static std::sync::Mutex<Option<(u64, Option<std::path::PathBuf>)>> {
+    DOC_SAVE_STATE.get_or_init(|| std::sync::Mutex::new(None))
+}
+
+/// 命令路径调用：刷新"当前标签页是否存过盘 + 图纸路径"。
+fn refresh_doc_save_state(host: &dyn HostApi) {
+    let tab = host.tab_id();
+    let path = host.document_path(tab);
+    if let Ok(mut g) = doc_save_state().lock() {
+        *g = Some((tab, path));
+    }
+}
+
+/// HTTP 侧调用：`Some((tab, None))` = 这张图**还没存过盘**；`None` = 未知。
+pub(crate) fn current_doc_unsaved() -> Option<u64> {
+    let g = doc_save_state().lock().ok()?;
+    match g.as_ref() {
+        Some((tab, None)) => Some(*tab),
+        _ => None,
+    }
+}
+
+/// HTTP 侧调用：当前图纸路径（存过盘时）。
+pub(crate) fn current_doc_path() -> Option<std::path::PathBuf> {
+    let g = doc_save_state().lock().ok()?;
+    g.as_ref().and_then(|(_, p)| p.clone())
+}
+
 /// 标注更新服务器端口（插件进程级；out-of-process 插件不能存宿主 state，
 /// 用进程内 static 保存）。
 /// 各插件页面窗口的最后心跳（页面每 5 s ping 一次；用来避免重复开窗）。
@@ -993,6 +1030,8 @@ impl BuiltinPlugin for OcsmPlugin {
         // 先手动运行 OCSMMCP/GDIM 即可连接。失败静默，GDIM/OCSMMCP 会给出
         // 明确错误。
         let _ = self.ensure_guide_server(host);
+        // 顺路刷新"这图存过盘没有"（HTTP 侧要用来提示 xlsx 落点）。
+        refresh_doc_save_state(host);
         // 命令名（大写，大小写不敏感）+ 其后的参数（**保留原大小写**，供参数化命令
         // 解析：`OCSMPART hex_bolt_c 10 95 at 150,30 rot 0`）。
         let raw = cmd.trim();
