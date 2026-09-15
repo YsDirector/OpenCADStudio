@@ -3456,8 +3456,10 @@ pub const COMMAND_CATALOG: &[(&str, &str, &str)] = &[
 ];
 
 /// 手册 md 的搜索目录（按优先级）：
-/// ① 环境变量 `OCSM_MANUAL_DIR`；② 用户级 skill 目录（默认分发形态）；
-/// ③ 仓库内 `crates/ocs_ocsm/handbook`（开发期）。
+/// ① 环境变量 `OCSM_MANUAL_DIR`；
+/// ② **插件安装目录/handbook**（人类侧教程随插件分发 —— 默认形态）；
+/// ③ 仓库内 `crates/ocs_ocsm/handbook`（开发期/源码树直跑）；
+/// ④ 旧位置 `~/.agents/skills/ocsm-manual/manual`（兼容：早期把正文放在 skill 里）。
 pub fn manual_dirs() -> Vec<std::path::PathBuf> {
     let mut out: Vec<std::path::PathBuf> = Vec::new();
     if let Ok(dir) = std::env::var("OCSM_MANUAL_DIR") {
@@ -3465,12 +3467,15 @@ pub fn manual_dirs() -> Vec<std::path::PathBuf> {
             out.push(std::path::PathBuf::from(dir));
         }
     }
+    if let Some(dir) = crate::plugin_install_dir() {
+        out.push(dir.join("handbook"));
+    }
+    out.push(std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("handbook"));
     if let Ok(home) = std::env::var("HOME") {
         let home = std::path::PathBuf::from(home);
         out.push(home.join(".agents/skills/ocsm-manual/manual"));
         out.push(home.join(".pi/agent/skills/ocsm-manual/manual"));
     }
-    out.push(std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("handbook"));
     out
 }
 
@@ -3555,22 +3560,29 @@ fn api_manual(target: &str) -> (u16, &'static str, String) {
             ),
         };
     }
-    // 索引：命令目录 + 找到的每个手册目录的主题
-    let topics: Vec<serde_json::Value> = dirs
-        .iter()
-        .flat_map(|dir| {
-            manual_topics_in(dir)
-                .into_iter()
-                .map(|(slug, title)| {
-                    serde_json::json!({
-                        "slug": slug,
-                        "title": title,
-                        "dir": dir.display().to_string(),
-                    })
+    // 索引：命令目录 + 主题。**按 slug 去重、高优先级目录胜出**——
+    // 手册可能在多个位置各有一份（插件安装目录 + 源码仓库 + 旧 skill 目录），
+    // 若不去重，窗口里每篇会重复出现（曾实测 18 篇 × 2 = 36 条）。
+    let mut seen: std::collections::HashMap<String, serde_json::Value> =
+        std::collections::HashMap::new();
+    for dir in &dirs {
+        for (slug, title) in manual_topics_in(dir) {
+            seen.entry(slug.clone()).or_insert_with(|| {
+                serde_json::json!({
+                    "slug": slug,
+                    "title": title,
+                    "dir": dir.display().to_string(),
                 })
-                .collect::<Vec<_>>()
-        })
-        .collect();
+            });
+        }
+    }
+    let mut topics: Vec<serde_json::Value> = seen.into_values().collect();
+    topics.sort_by(|a, b| {
+        a["slug"]
+            .as_str()
+            .unwrap_or_default()
+            .cmp(b["slug"].as_str().unwrap_or_default())
+    });
     let groups: Vec<serde_json::Value> = vec![
         serde_json::json!({ "name": "入门与总览", "prefix": "0" }),
         serde_json::json!({ "name": "建图与插入", "prefix": "1" }),
@@ -7704,10 +7716,22 @@ mod rough_tests {
         assert!(super::COMMAND_CATALOG.iter().any(|(n, _, _)| *n == "OCSMHELP"));
         let dirs = super::manual_dirs();
         assert!(!dirs.is_empty(), "至少要有仓库内的 handbook 兜底目录");
-        assert!(
-            dirs.iter().any(|d| d.ends_with("ocsm-manual/manual")),
-            "默认应搜索用户级 skill 目录：{dirs:?}"
-        );
+        // 顺序：插件安装目录/handbook（人侧教程随插件走）在**仓库 handbook 之前**，旧 skill 目录在最后
+        let plugin_idx = dirs
+            .iter()
+            .position(|d| d.to_string_lossy().ends_with("plugins/opencad.ocsm/handbook"));
+        let repo_idx = dirs
+            .iter()
+            .position(|d| d.to_string_lossy().ends_with("crates/ocs_ocsm/handbook"));
+        assert!(repo_idx.is_some(), "仓库 handbook 必须在内：{dirs:?}");
+        // `cargo test` 里没有 `--ocs-plugin-runner` 参数 → plugin_install_dir() 为 None，
+        // 该项就不会出现；出现时必须在仓库 handbook 之前（人侧教程随插件走）。
+        if let Some(pi) = plugin_idx {
+            assert!(pi < repo_idx.unwrap(), "插件目录应排在仓库之前：{dirs:?}");
+        }
+        if let Some(skill_idx) = dirs.iter().position(|d| d.ends_with("ocsm-manual/manual")) {
+            assert!(skill_idx > repo_idx.unwrap(), "旧 skill 目录只作最后兜底：{dirs:?}");
+        }
         // 索引端点：命令目录 + （磁盘上有手册时的）主题
         let (code, _, body) = api_manual("/api/manual");
         assert_eq!(code, 200);
@@ -7715,6 +7739,17 @@ mod rough_tests {
         assert_eq!(v["ok"], true);
         assert!(v["commands"].as_array().unwrap().len() >= 10, "{body}");
         assert!(v["dirs"].as_array().unwrap().len() >= 1);
+        // 同一 slug 在多个目录都有副本时，索引里只出现一次（高优先级目录胜出）
+        let slugs: Vec<String> = v["topics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["slug"].as_str().unwrap_or_default().to_string())
+            .collect();
+        let mut uniq = slugs.clone();
+        uniq.sort();
+        uniq.dedup();
+        assert_eq!(uniq.len(), slugs.len(), "主题重复了：{slugs:?}");
     }
 
     #[test]

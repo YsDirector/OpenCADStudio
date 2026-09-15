@@ -252,6 +252,23 @@ pub(crate) fn trim_scale(scale: f64) -> String {
 /// 图框文件夹：优先 `OCSM_FRAME_DIR` 环境变量（测试/排障），否则为插件
 /// 安装目录下的 `frame/`（插件 .so 由宿主以 `--ocs-plugin-runner <socket>
 /// <cdylib>` 加载，取其父目录即可）。
+/// 插件**安装目录**（`.so` 所在目录）：宿主以 `--ocs-plugin-runner <socket> <lib>` 启动插件，
+/// 从该参数反解。`frame/` 与 `handbook/` 都挂在它下面（随插件分发）。
+pub(crate) fn plugin_install_dir() -> Option<std::path::PathBuf> {
+    let args: Vec<String> = std::env::args().collect();
+    for (i, arg) in args.iter().enumerate() {
+        if arg == "--ocs-plugin-runner" {
+            if let Some(lib) = args.get(i + 2) {
+                let path = std::path::PathBuf::from(lib);
+                if let Some(dirs) = path.parent() {
+                    return Some(dirs.to_path_buf());
+                }
+            }
+        }
+    }
+    None
+}
+
 fn frame_dir() -> std::path::PathBuf {
     if let Ok(dir) = std::env::var("OCSM_FRAME_DIR") {
         let dir = dir.trim();
