@@ -69,6 +69,7 @@
 ```
 BOMXLSX                    → 导出到「图纸同名-明细表.xlsx」（同目录），并在表头挂链接（Ctrl+点击打开）
 BOMXLSX D:/表.xlsx          → 指定路径（省扩展名自动补 .xlsx；路径大小写原样保留）
+BOMXLSX D:/表.csv          → 指定 `.csv` 则导出 CSV（UTF-8 带 BOM，Excel/WPS/文本编辑器都能开）
 BOMXLSXI                   → 从表头链接指向的文件导入（没链接就用默认路径）
 BOMXLSXI D:/表.xlsx         → 指定文件（也收 `.csv`）
 ```

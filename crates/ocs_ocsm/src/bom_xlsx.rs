@@ -1014,4 +1014,16 @@ mod tests {
         assert_eq!(rows[0].unit_weight, "1.5");
         assert_eq!(rows[0].qty, 2);
     }
+
+    #[test]
+    fn csv_export_text_is_excel_friendly() {
+        // 导出成 CSV 时外面会加 BOM（Excel 认中文）；这里验证文本本身与解析对称
+        let rows = vec![xrow(&["1", "GB/T 5782", "螺栓", "2", "Q235", "0.02", "0.04", "外购", "2"])];
+        let text = csv_text(&rows);
+        assert!(text.starts_with("序号,"), "首行是表头");
+        assert!(text.contains("GB/T 5782"), "不含逗号的字段不加引号");
+        assert!(text.contains("\r\n"), "CRLF 行尾");
+        let back = parse_csv(&format!("\u{feff}{text}")).unwrap();
+        assert_eq!(back, rows);
+    }
 }

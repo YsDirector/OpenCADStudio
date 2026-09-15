@@ -887,7 +887,23 @@ pub(crate) fn cmd_bom_xlsx(host: &mut dyn HostApi, args: &str) {
         .iter()
         .map(|(_, (v, lock, _))| crate::bom_xlsx::xrow_from_cells(v, *lock))
         .collect();
-    if let Err(e) = crate::bom_xlsx::write_xlsx(&path, &xrows) {
+    // 按扩展名分派：`.csv` → 写 CSV（UTF-8 **带 BOM**，Excel/WPS 认中文）；
+    // 其它 → 写真 xlsx。两种格式导入侧都收（见 `BOMXLSXI`）。
+    let as_csv = path
+        .extension()
+        .map(|e| e.eq_ignore_ascii_case("csv"))
+        .unwrap_or(false);
+    let wrote = if as_csv {
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        let mut text = String::from("\u{feff}");
+        text.push_str(&crate::bom_xlsx::csv_text(&xrows));
+        std::fs::write(&path, text.as_bytes()).map_err(|e| format!("写 {} 失败: {e}", path.display()))
+    } else {
+        crate::bom_xlsx::write_xlsx(&path, &xrows)
+    };
+    if let Err(e) = wrote {
         host.push_error(&format!("OCSMBOMXLSX: {e}"));
         return;
     }
