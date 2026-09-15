@@ -238,6 +238,13 @@ pub(crate) fn cell_values(it: &BomItem, seq: usize) -> [String; 8] {
 
 /// 压缩后的**最小字高**（再小就看不清了；宁可让它压到最小后允许轻微溢出并在命令行点名）。
 const MIN_CELL_TEXT_H: f64 = 2.0;
+/// **压缩目标 = 可用宽 × 这个系数**（故意留一手）。
+///
+/// 字宽模型对混排文本仍偏乐观（实测渲染比模型宽约 10~20%），所以不压到"刚好填满"，
+/// 只用到可用宽的 **90%** —— 用户 2026-09-15 先要 80%（嫌字太小）、再定为 90%。
+/// 调这个数就能整体加减压缩力度（0.8 边距更宽但字小、1.0 字最大但可能顶格）。
+const FIT_TARGET_RATIO: f64 = 0.9;
+
 /// 横向压缩的**告警阈值**：宽度因子压到名义值的这个比例以下就算"压得太扁"（只提醒，不阻止）。
 ///
 /// 没有下限 —— 用户定案「宽度因子可以无限压缩」，保证文字**永远压进格内、绝不到邻格**。
@@ -285,19 +292,21 @@ pub(crate) fn fit_cell_text(
     if v.is_empty() || nominal_h <= 0.0 || avail <= 0.0 {
         return (nominal_h, wf0, false);
     }
+    // 目标宽度：只用可用宽的 80%（见 FIT_TARGET_RATIO）
+    let target = avail * FIT_TARGET_RATIO;
     let need = cell_text_width(v, nominal_h, wf0);
-    if need <= avail + 1e-9 {
+    if need <= target + 1e-9 {
         return (nominal_h, wf0, false);
     }
     // ① 压字高（保底 MIN_CELL_TEXT_H）
-    let h = (nominal_h * avail / need).max(MIN_CELL_TEXT_H);
-    if cell_text_width(v, h, wf0) <= avail + 1e-9 {
+    let h = (nominal_h * target / need).max(MIN_CELL_TEXT_H);
+    if cell_text_width(v, h, wf0) <= target + 1e-9 {
         return (h, wf0, false);
     }
-    // ② 还长 → 横向压缩（字高保底不动；宽度因子**不设下限**，压到刚好放得下为止）
+    // ② 还长 → 横向压缩（字高保底不动；宽度因子**不设下限**，压到目标宽为止）
     let need2 = cell_text_width(v, h, wf0);
-    let wf = wf0 * avail / need2;
-    let overflow = cell_text_width(v, h, wf) > avail + 1e-9;
+    let wf = wf0 * target / need2;
+    let overflow = cell_text_width(v, h, wf) > target + 1e-9;
     (h, wf, overflow)
 }
 
@@ -1375,19 +1384,22 @@ mod tests {
         let (h, wf, over) = fit_cell_text(name, avail_name, h0, wf0);
         assert!(h < h0 && (wf - wf0).abs() < 1e-9, "应先只压字高：h={h} wf={wf}");
         assert!(!over);
-        assert!(cell_text_width(name, h, wf) <= avail_name + 1e-9);
+        assert!(cell_text_width(name, h, wf) <= avail_name * FIT_TARGET_RATIO + 1e-9);
         // 用户实况②：`0.018` 在 10mm 格（单重）→ 也要压
         let (h2, _, over2) = fit_cell_text("0.018", 10.0, h0, wf0);
         assert!(h2 < h0 && !over2, "h={h2}");
-        // 图号 `GB/T 5780-2016` 在**够宽的**格里不动（37mm 列 → 可用 34.5）
-        assert_eq!(fit_cell_text("GB/T 5780-2016", 40.0, h0, wf0), (h0, wf0, false));
+        // 图号 `GB/T 5780-2016` 在**够宽的**格里不动（可用宽 40 → 目标 32，仍放得下）
+        assert_eq!(fit_cell_text("GB/T 5780-2016", 55.0, h0, wf0), (h0, wf0, false));
+        // 目标只用到可用宽的 80%：可用 34.5（37mm 列）也要压一点 —— 给渲染误差留余量
+        let (hg, _, _) = fit_cell_text("GB/T 5780-2016", 34.5, h0, wf0);
+        assert!(hg < h0, "80% 目标下该压：{hg}");
         // 极长（60 个汉字）→ 字高到底后**无限横向压缩**，保证一定放进格内、绝不到邻格
         let long: String = "超长名称".repeat(15);
         let (h3, wf3, over3) = fit_cell_text(&long, 36.0, h0, wf0);
         assert_eq!(h3, MIN_CELL_TEXT_H);
         assert!(wf3 < wf0 * WARN_WIDTH_FACTOR, "应压得很扁：{wf3}");
         assert!(!over3, "压到底也必须放得下（用户定案：宽度因子可无限压缩）");
-        assert!(cell_text_width(&long, h3, wf3) <= 36.0 + 1e-9);
+        assert!(cell_text_width(&long, h3, wf3) <= 36.0 * FIT_TARGET_RATIO + 1e-9);
         // 极端：可用宽只有 1mm 也照样压进去
         let (_, wf4, over4) = fit_cell_text(&long, 1.0, h0, wf0);
         assert!(!over4);
