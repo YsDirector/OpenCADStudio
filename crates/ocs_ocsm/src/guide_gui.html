@@ -126,6 +126,7 @@
         <button data-t="TOLERANCE">形位公差</button>
         <button data-t="WELD">焊接</button>
         <button data-t="LEADER">引线</button>
+        <button data-t="BALLOON">序号</button>
         <button data-t="ARCLEN">弧长</button>
         <button data-t="DETAIL">局部放大</button>
       </div>
@@ -270,6 +271,27 @@
         <span class="gdt-hint" style="margin:0">插入工程符号（如 x=深度符号，即 GB 的深度标法）；符号后自动恢复标注字体</span>
       </div>
       <div class="gdt-hint">肩线长度随文字自动调整</div>
+    </div>
+    <!-- 序号标注（BALLOON）：一个组 = 1 指引线 + 1 圆点 + N 横线 + N 序号；可横向/纵向扩展 -->
+    <div class="row" id="row-balloon" style="display:none; margin-top:8px; flex-direction:column; align-items:stretch; gap:6px">
+      <div class="row" style="display:flex; gap:8px; align-items:center; flex-wrap:wrap">
+        <span class="lbl">扩展方向</span>
+        <div class="seg" id="seg-xh-dir">
+          <button data-d="H" class="on">横向</button>
+          <button data-d="V">纵向</button>
+        </div>
+        <span class="gdt-hint" style="margin:0">横向 = 横线并排、V 形折线连接；纵向 = 上下叠放、在指引线那端竖线连接</span>
+      </div>
+      <div class="row" style="display:flex; gap:8px; align-items:center; flex-wrap:wrap">
+        <span class="lbl">序号条目</span>
+        <button id="xh-add" type="button">+ 添加</button>
+        <button id="xh-auto" type="button">自动取号（上一个 +1）</button>
+        <label style="display:flex;align-items:center;gap:4px;font-size:12px">
+          <input type="checkbox" id="xh-ins"> 插入序号（与已有序号重复时：勾选 = 其后所有序号 +1；不勾 = 明细表里同序号行数量 +1）
+        </label>
+      </div>
+      <div id="xh-list" style="display:flex; flex-direction:column; gap:4px"></div>
+      <div class="gdt-hint">一个组共用**一条指引线 + 一个圆点**（指针点落在零件块内则挂靠到该零件）；条目顺序 = 从指引线向外/向上（5 贴指引线、6 在上）。比例按参考图实测：横线长 = 文字宽 + 1.0h、数字在横线上方 0.3h、横向间隙 0.5h/V 深 0.38h、纵向节距 1.6h、圆点 Ø0.33h。生成在 8符号标注层（匿名块 *XH + INSERT）。</div>
     </div>
     <div class="param" id="row-param">
       <span class="lbl" id="dist-lbl">(与P2距离)</span>
@@ -538,7 +560,7 @@
   segBind('seg-type', b => {
     type = b.dataset.t;
     // 所有"类型专属行"先统一隐藏，各分支只负责显示自己需要的（防漏显示）。
-    ['row-weld', 'row-leader', 'row-gdt', 'row-detail'].forEach((id) => {
+    ['row-weld', 'row-leader', 'row-balloon', 'row-gdt', 'row-detail'].forEach((id) => {
       document.getElementById(id).style.display = 'none';
     });
     // 文字框保持 <>（= 测量值）；直径/半径的 Ø/R 前缀由生成端自动添加，
@@ -622,6 +644,28 @@
       draw();
       return;
     }
+    // 序号标注：与引线同构（两段 PLINE：指针点→拐点→肩线末端），专属面板 row-balloon。
+    if (type === 'BALLOON') {
+      document.getElementById('row-sub').style.display = 'none';
+      document.getElementById('row-gdt').style.display = 'none';
+      document.getElementById('row-param').style.display = 'none';
+      document.getElementById('row-txt').style.display = 'none';
+      document.getElementById('row-tol').style.display = 'none';
+      document.getElementById('row-view').style.display = 'none';
+      document.getElementById('row-detail').style.display = 'none';
+      document.getElementById('seg-side').style.display = 'none';
+      document.getElementById('seg-angle-mode').style.display = 'none';
+      document.getElementById('seg-section-side').style.display = 'none';
+      document.getElementById('seg-ver').style.display = 'none';
+      document.getElementById('seg-letter').style.display = 'none';
+      document.getElementById('letter-lbl').style.display = 'none';
+      tolEnabled = false; document.getElementById('tol-enable').checked = false;
+      document.getElementById('row-balloon').style.display = ''; // 显示序号专属面板
+      document.getElementById('gdt-row').style.display = 'none';
+      if (xhItems.length === 0) { xhItems = [xhNextNo()]; renderXhList(); }
+      draw();
+      return;
+    }
     document.getElementById('gdt-row').style.display = gdt ? 'none' : '';
     document.getElementById('sub-lbl').textContent = linear ? '线性' : (angle ? '角度' : (section ? '剖切' : (type === 'ARCLEN' ? '偏移' : '位置')));
     document.getElementById('sub-lbl').style.display = (datum || view || angle || section || type === 'ARCLEN') ? 'none' : '';
@@ -694,7 +738,7 @@
     } else if (geom === 'pline') {
       const nV = (PTS && PTS.length) || 0;
       // 焊接：仅两段（恰好 3 顶点：焊缝点→拐点→基准线末端）；引线同构（箭头→拐点→肩线末端）。
-      allow = (nV >= 3) ? ['ANGLE', 'SECTION', 'TOLERANCE'].concat(nV === 3 ? ['WELD', 'LEADER'] : [])
+      allow = (nV >= 3) ? ['ANGLE', 'SECTION', 'TOLERANCE'].concat(nV === 3 ? ['WELD', 'LEADER', 'BALLOON'] : [])
                         : ['SECTION', 'TOLERANCE'];
     } else {
       allow = LINE_TYPES;
@@ -718,6 +762,8 @@
     });
   });
   segBind('seg-section-side', b => { sectionSide = b.dataset.ss; draw(); });
+  // 序号扩展方向（横向 / 纵向）——条目序号标号也跟着变（→ / ↑）。
+  segBind('seg-xh-dir', b => { xhDir = b.dataset.d; renderXhList(); draw(); });
   document.getElementById('sec-arrow').addEventListener('change', e => { showArrow = e.target.checked; draw(); });
 
   // ── 公差（ISO 286 常用配合表） ──────────────────────────────
@@ -1178,6 +1224,14 @@ const BS_FITS = [
       const ll = document.getElementById('l-lo').value.trim();
       if (lu) qs.push('lu=' + encodeURIComponent(lu));
       if (ll) qs.push('ll=' + encodeURIComponent(ll));
+    } else if (type === 'BALLOON') {
+      // 序号标注：序号列表（items，从指引线向外/向上）+ 方向（dir）+ 插入模式（ins）。
+      u += '/0';
+      const arr = xhItems.map(s => s.trim()).filter(s => s.length > 0);
+      if (arr.length === 0) throw new Error('序号标注：至少要有一个序号');
+      qs.push('items=' + encodeURIComponent(arr.join(',')));
+      qs.push('dir=' + xhDir);
+      if (document.getElementById('xh-ins').checked) qs.push('ins=1');
     } else if (type === 'DETAIL') {
       // 局部放大图：放大比例（绝对）+ 序号（自动）+ 放置偏移（相对引导中心，留空自动）。
       u += '/0';
@@ -1290,6 +1344,80 @@ const BS_FITS = [
     for (const id of ['l-up', 'l-lo']) {
       document.getElementById(id).addEventListener('input', draw);
     }
+  }
+
+  // ── 序号标注（BALLOON）条目编辑器 ───────────────────────────────────────
+  // 一个组 = 1 指引线 + 1 圆点 + N 横线 + N 序号；条目顺序 = 从指引线向外/向上。
+  let xhItems = [];
+  let xhDir = 'H';
+  let xhExisting = [];   // 图纸上已有的序号（/api/guide 返回）
+  let xhDefaultNext = '1';
+
+  /// 序号末尾数字 +1（前缀保留、位宽保留），与插件侧 balloon::item_no_next 同规则。
+  function itemNoNext(s) {
+    const t = (s || '').trim();
+    const m = t.match(/^(.*?)(\d+)$/);
+    if (!m) return '';
+    const prefix = m[1], digits = m[2];
+    const next = (parseInt(digits, 10) + 1).toString();
+    const kept = (digits.length > 1 && digits[0] === '0') ? next.padStart(digits.length, '0') : next;
+    return prefix + kept;
+  }
+  /// 排序键：先前缀后数值（与插件侧 balloon::item_no_key 同规则）。
+  function itemNoKey(s) {
+    const m = (s || '').trim().match(/^(.*?)(\d+)$/);
+    return m ? [m[1], parseInt(m[2], 10), 0] : [(s || '').trim(), 0, 1];
+  }
+  function xhNextNo() {
+    const all = xhItems.concat(xhExisting).filter(s => s.trim());
+    if (all.length === 0) return xhDefaultNext || '1';
+    all.sort((a, b) => {
+      const ka = itemNoKey(a), kb = itemNoKey(b);
+      if (ka[0] !== kb[0]) return ka[0] < kb[0] ? -1 : 1;
+      if (ka[1] !== kb[1]) return ka[1] - kb[1];
+      return ka[2] - kb[2];
+    });
+    return itemNoNext(all[all.length - 1]) || '1';
+  }
+  function renderXhList() {
+    const box = document.getElementById('xh-list');
+    box.innerHTML = '';
+    xhItems.forEach((val, i) => {
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex; gap:6px; align-items:center';
+      const no = document.createElement('span');
+      no.className = 'lbl'; no.style.width = '52px';
+      no.textContent = (i === 0 ? '① 贴指引线' : (xhDir === 'V' ? `↑ ${i + 1}` : `→ ${i + 1}`));
+      const inp = document.createElement('input');
+      inp.type = 'text'; inp.value = val; inp.style.flex = '1'; inp.placeholder = '序号（如 5 / A3）';
+      inp.addEventListener('input', () => { xhItems[i] = inp.value; draw(); });
+      const up = document.createElement('button');
+      up.type = 'button'; up.textContent = '▲'; up.disabled = i === 0;
+      up.addEventListener('click', () => { const t = xhItems[i-1]; xhItems[i-1] = xhItems[i]; xhItems[i] = t; renderXhList(); draw(); });
+      const dn = document.createElement('button');
+      dn.type = 'button'; dn.textContent = '▼'; dn.disabled = i === xhItems.length - 1;
+      dn.addEventListener('click', () => { const t = xhItems[i+1]; xhItems[i+1] = xhItems[i]; xhItems[i] = t; renderXhList(); draw(); });
+      const rm = document.createElement('button');
+      rm.type = 'button'; rm.textContent = '✕'; rm.disabled = xhItems.length <= 1;
+      rm.addEventListener('click', () => { xhItems.splice(i, 1); if (xhItems.length === 0) xhItems = [xhNextNo()]; renderXhList(); draw(); });
+      row.append(no, inp, up, dn, rm);
+      box.appendChild(row);
+    });
+  }
+  function initBalloonRows() {
+    document.getElementById('xh-add').addEventListener('click', () => {
+      xhItems.push(xhNextNo()); renderXhList(); draw();
+    });
+    document.getElementById('xh-auto').addEventListener('click', () => {
+      // 自动取号：保留已填的表头，后面按"上一个 +1"补齐（图纸已有序号也算进去）。
+      const first = xhItems[0] && xhItems[0].trim() ? xhItems[0].trim() : xhNextNo();
+      const keep = Math.max(1, xhItems.length);
+      const out = [first];
+      for (let i = 1; i < keep; i++) out.push(itemNoNext(out[i-1]) || `${i + 1}`);
+      xhItems = out; renderXhList(); draw();
+    });
+    document.getElementById('xh-ins').addEventListener('change', draw);
+    renderXhList();
   }
 
   // 下侧有内容（符号/文字）⇒ 虚线强制开并锁定（GB/T 324：虚线=非箭头侧基准）。
@@ -1683,6 +1811,84 @@ const BS_FITS = [
     }
   }
 
+  /// 序号标注预览：一个组 = 1 指引线 + 1 圆点（八边形实心）+ N 横线
+  /// （横向 V 形折线连 / 纵向竖线连）+ N 个序号（各自横线上方居中）。
+  /// 比例与服务端 balloon.rs 完全同源（参考单位 × 图幅倍率；预览按 1:1）。
+  function drawBalloon() {
+    svg.innerHTML = '';
+    if (!PTS || PTS.length < 2) return;
+    const a = PTS[0];
+    const p0 = PTS[1];
+    const pe = (PTS.length >= 3) ? PTS[2] : { x: p0.x + 20, y: p0.y };
+    // 引导 PLINE（灰）。
+    for (let i = 0; i + 1 < PTS.length; i++) {
+      svg.appendChild(wline(PTS[i].x, PTS[i].y, PTS[i+1].x, PTS[i+1].y, 1.5, '#bbb'));
+    }
+    const CY2 = '#0aa', GR2 = '#090';
+    // 横线必须水平（序号永远水平写；竖肩线不支持——与服务端同规则直接拒）。
+    const sdx = pe.x - p0.x, sdy = pe.y - p0.y;
+    const horizontal = true;
+    if (Math.abs(sdy) > Math.abs(sdx) || Math.abs(sdx) < 1e-9) {
+      const t0 = w2s(p0.x, p0.y + 14);
+      const warn = el('text', { x: t0.x, y: t0.y, fill: '#c00', 'font-size': 13, 'text-anchor': 'middle' });
+      warn.textContent = '序号标注：横线必须水平（第二段水平画）——不支持竖肩线';
+      svg.appendChild(warn);
+      return;
+    }
+    const dir = Math.sign(sdx) || 1;
+    const d_c = { x: dir, y: 0 };
+    const n_up = { x: 0, y: 1 };
+    const P = (u, v) => ({ x: p0.x + u * d_c.x + v * n_up.x, y: p0.y + u * d_c.y + v * n_up.y });
+    const items = xhItems.map(s => stripFontCodes((s || '').trim())).filter(s => s.length > 0);
+    if (items.length === 0) return;
+    const H = 3.5, MARGIN = 1.75, GAP = 1.75, VDEPTH = 1.33, PITCH = 5.6, TEXTUP = 1.05, DOTR = 0.58;
+    const charW = (s) => { let w = 0; for (const ch of s) w += (ch.codePointAt(0) >= 0x2E80) ? 2.45 : 1.45; return w; };
+    const lens = items.map(s => charW(s) + 2 * MARGIN);
+    // 指针圆点（八边形实心）。
+    const dotPts = [];
+    for (let k = 0; k < 8; k++) {
+      const ang = Math.PI / 4 * (k + 0.5);
+      const q = w2s(a.x + DOTR * Math.cos(ang), a.y + DOTR * Math.sin(ang));
+      dotPts.push(q.x + ',' + q.y);
+    }
+    svg.appendChild(el('polygon', { points: dotPts.join(' '), fill: CY2, stroke: 'none' }));
+    // 指引线。
+    svg.appendChild(wline(a.x, a.y, p0.x, p0.y, 2, CY2));
+    // 横线 + 连接 + 序号。
+    const putNo = (txt, wp) => {
+      const t = w2s(wp.x, wp.y);
+      const tx = el('text', Object.assign(
+        { x: t.x, y: t.y, fill: GR2, 'font-size': 12, 'text-anchor': 'middle', 'dominant-baseline': 'alphabetic' },
+        weldTextRot(horizontal, t.x, t.y)));
+      tx.textContent = txt;
+      svg.appendChild(tx);
+    };
+    if (xhDir === 'H') {
+      let cursor = 0;
+      for (let i = 0; i < items.length; i++) {
+        const L = lens[i];
+        const s0 = P(cursor, 0), s1 = P(cursor + L, 0);
+        svg.appendChild(wline(s0.x, s0.y, s1.x, s1.y, 2, CY2));
+        putNo(items[i], P(cursor + L / 2, TEXTUP));
+        if (i + 1 < items.length) {
+          const b1 = P(cursor + L, 0), b2 = P(cursor + L + GAP / 2, -VDEPTH), b3 = P(cursor + L + GAP, 0);
+          svg.appendChild(wline(b1.x, b1.y, b2.x, b2.y, 2, CY2));
+          svg.appendChild(wline(b2.x, b2.y, b3.x, b3.y, 2, CY2));
+          cursor += L + GAP;
+        }
+      }
+    } else {
+      for (let i = 0; i < items.length; i++) {
+        const L = lens[i], v = PITCH * i;
+        const s0 = P(0, v), s1 = P(L, v);
+        svg.appendChild(wline(s0.x, s0.y, s1.x, s1.y, 2, CY2));
+        putNo(items[i], P(L / 2, v + TEXTUP));
+      }
+      const c0 = P(0, 0), c1 = P(0, PITCH * (items.length - 1));
+      svg.appendChild(wline(c0.x, c0.y, c1.x, c1.y, 2, CY2));
+    }
+  }
+
   // 世界线 → 屏幕线（固定像素线宽，缩放不糊）——drawWeld 与 draw 共用。
   function wline(x1, y1, x2, y2, w, color, dash) {
     const a = w2s(x1, y1), b = w2s(x2, y2);
@@ -1700,6 +1906,7 @@ const BS_FITS = [
     svg.innerHTML = '';
     if (type === 'WELD') { drawWeld(); return; }
     if (type === 'LEADER') { drawLeader(); return; }
+    if (type === 'BALLOON') { drawBalloon(); return; }
     // 引导线（DETAIL 圆引导：圆心→半径点的连线无意义，跳过只留端点标记）
     if (!(type === 'DETAIL' && geom === 'circle')) {
       // 弧长引导（ARC）：三点求圆画弧（PTS = 起点/终点/中点）。
@@ -2229,6 +2436,7 @@ const BS_FITS = [
     // 焊接下拉必须先初始化（参数恢复时 setSel 需要 options 已存在）。
     initWeldRows();
     initLeaderRows();
+    initBalloonRows();
     try {
       const r = await fetch('/api/guide?handle=' + encodeURIComponent(handle));
       const j = await r.json();
@@ -2271,6 +2479,23 @@ const BS_FITS = [
           document.getElementById('l-up').value = l.upper || '';
           document.getElementById('l-lo').value = l.lower || '';
         }
+        if (j.params && j.params.balloon) {
+          const xb = j.params.balloon;
+          xhItems = (xb.items || []).slice();
+          xhDir = (xb.dir === 'V') ? 'V' : 'H';
+          document.getElementById('xh-ins').checked = !!xb.ins;
+          const segD = document.querySelector(`#seg-xh-dir button[data-d="${xhDir}"]`);
+          if (segD) segD.click();
+        }
+        // 图纸上已有序号 + 下一个（自动取号用）
+        if (j.balloon_next) {
+          xhExisting = j.balloon_next.existing || [];
+          xhDefaultNext = j.balloon_next.next || xhDefaultNext;
+        }
+        if (type === 'BALLOON' && xhItems.length === 0) {
+          xhItems = [xhNextNo()];
+        }
+        renderXhList();
         if (j.params) {
           type = j.params.type || 'LINEAR';
           const segType = document.querySelector(`#seg-type button[data-t="${type}"]`);

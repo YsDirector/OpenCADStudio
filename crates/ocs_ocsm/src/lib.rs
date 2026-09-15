@@ -15,6 +15,7 @@
 //!   服务器把引导线替换为真实标注（7标注层 / OCSM_GB）并 REGEN。
 //! - `OCSMMCP`：确保标注更新服务器运行（独立 MCP 二进制经 TCP 桥接）。
 
+mod balloon;
 mod bom;
 mod detail_clip;
 mod dim2gb;

@@ -434,6 +434,7 @@ fn base_params(guide_type: GuideType, dist: f64, dec: Option<u32>) -> GuideParam
         detail_frame: 1.0,
         weld: WeldParams::default(),
         leader: crate::guide_url::LeaderParams::default(),
+        balloon: Default::default(),
     }
 }
 

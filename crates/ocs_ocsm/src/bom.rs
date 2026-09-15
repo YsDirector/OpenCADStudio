@@ -293,7 +293,7 @@ fn tag_bom(common: &mut ocs_plugin_api::host::acadrust::entities::EntityCommon) 
     common.extended_data.add_record(rec);
 }
 
-fn part_meta_of(common: &ocs_plugin_api::host::acadrust::entities::EntityCommon) -> Option<PartMeta> {
+pub(crate) fn part_meta_of(common: &ocs_plugin_api::host::acadrust::entities::EntityCommon) -> Option<PartMeta> {
     let rec = common.extended_data.get_record(XDATA_PART)?;
     let text = rec.values.iter().find_map(|v| match v {
         XDataValue::String(s) => Some(s.clone()),

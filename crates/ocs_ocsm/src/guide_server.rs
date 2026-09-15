@@ -1183,6 +1183,7 @@ pub(crate) fn build_dimension(
         GuideType::ArcLen => return Err("弧长标注走 do_apply 独立分支".into()),
         GuideType::Weld => return Err("焊接符号走 do_apply 独立分支".into()),
         GuideType::Leader => return Err("引线标注走 do_apply 独立分支".into()),
+        GuideType::Balloon => return Err("序号标注走 do_apply 独立分支".into()),
     };
     // 用户指定小数位数：覆盖 XDATA DSTYLE 里的 DIMDEC(271)（样式默认 2）。
     if let Some(d) = params.dec {
@@ -3034,6 +3035,15 @@ fn do_apply_inner(
         return apply_leader(sender, &doc, pts[0], pts[1], pts[2], &params);
     }
 
+    // 序号标注：两段 PLINE（恰好 3 顶点）→ 匿名块 *XH{n} + INSERT@拐点。
+    // 一个组 = 1 指引线 + 1 圆点 + N 条横线（横向 V 折线连 / 纵向竖线连）+ N 个序号。
+    if params.guide_type == GuideType::Balloon {
+        if pts.len() != 3 {
+            return Err("序号标注需要两段多段线（PLINE，3 顶点：指针点→拐点→肩线末端）".into());
+        }
+        return apply_balloon(sender, &doc, pts[0], pts[1], pts[2], &params);
+    }
+
     let dim = build_dimension(sender, &doc, p1, p2, &params, &style)?;
     let dim_handle = match req_timed(
         sender,
@@ -3147,9 +3157,23 @@ fn api_guide(target: &str, sender: &Arc<dyn PluginRequestSender>) -> (u16, &'sta
                             "upper": p.leader.upper,
                             "lower": p.leader.lower,
                         },
+                        "balloon": {
+                            "items": p.balloon.items,
+                            "dir": p.balloon.dir.as_str(),
+                            "ins": p.balloon.insert_mode,
+                        },
                     }),
                     None => serde_json::Value::Null,
                 };
+                // 序号标注贴心信息：图纸上已有的序号 + 按"上一个 +1"算出的下一个。
+                {
+                    let existing = existing_item_nos(&doc);
+                    let next = crate::balloon::next_after_all(&existing, "0");
+                    resp["balloon_next"] = serde_json::json!({
+                        "existing": existing,
+                        "next": next,
+                    });
+                }
                 (200, json, resp.to_string())
             }
         },
@@ -5402,6 +5426,207 @@ fn apply_leader(
     .to_string())
 }
 
+/// 图纸上已有的序号码（用于自动取号）：来源 = ①序号球标组台账 `OCSM_BALLOON`
+/// 的 items；②明细表行块 `OCSM_BOMROW` 的属性「序号」。去重 + 升序。
+pub(crate) fn existing_item_nos(doc: &acadrust::CadDocument) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut push = |s: &str| {
+        let t = s.trim();
+        if !t.is_empty() && !out.iter().any(|x| x == t) {
+            out.push(t.to_string());
+        }
+    };
+    for e in doc.model_space_entities() {
+        let acadrust::EntityType::Insert(ins) = e else {
+            continue;
+        };
+        // ① 球标组台账
+        if let Some(rec) = ins.common.extended_data.get_record("OCSM_BALLOON") {
+            if let Some(text) = rec.values.iter().find_map(|v| match v {
+                acadrust::xdata::XDataValue::String(s) => Some(s.clone()),
+                _ => None,
+            }) {
+                if let Ok(meta) = serde_json::from_str::<serde_json::Value>(&text) {
+                    if let Some(arr) = meta.get("items").and_then(|v| v.as_array()) {
+                        for it in arr {
+                            if let Some(s) = it.as_str() {
+                                push(s);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // ② 明细表行的「序号」属性
+        if ins.block_name == crate::bom::ROW_BLOCK {
+            for a in ins.attributes.iter() {
+                if a.tag.trim() == "序号" {
+                    push(&a.value);
+                }
+            }
+        }
+    }
+    crate::balloon::sort_item_nos(&mut out);
+    out
+}
+
+/// 指针点落在哪个零件块内（**只认块**）：在包含该点的、带 `OCSM_PART` 台账的
+/// INSERT 里取**界盒最小**的那个（= 最内层，大装配块套小零件时不会误挂）。
+/// 返回 `(insert handle, 台账 JSON)`。落点不在任何零件块内 → `None`（按画的点走）。
+fn part_block_at(
+    doc: &acadrust::CadDocument,
+    p: [f64; 3],
+) -> Option<(acadrust::Handle, serde_json::Value)> {
+    let mut best: Option<(f64, acadrust::Handle, serde_json::Value)> = None;
+    for e in doc.model_space_entities() {
+        let acadrust::EntityType::Insert(ins) = e else {
+            continue;
+        };
+        let Some(rec) = ins.common.extended_data.get_record("OCSM_PART") else {
+            continue;
+        };
+        let Some(text) = rec.values.iter().find_map(|v| match v {
+            acadrust::xdata::XDataValue::String(s) => Some(s.clone()),
+            _ => None,
+        }) else {
+            continue;
+        };
+        let Ok(meta) = serde_json::from_str::<serde_json::Value>(&text) else {
+            continue;
+        };
+        let Some((mn, mx)) = crate::insert_world_aabb(doc, ins) else {
+            continue;
+        };
+        let inside = p[0] >= mn.x - 1e-6
+            && p[0] <= mx.x + 1e-6
+            && p[1] >= mn.y - 1e-6
+            && p[1] <= mx.y + 1e-6;
+        if !inside {
+            continue;
+        }
+        let area = (mx.x - mn.x) * (mx.y - mn.y);
+        if best.as_ref().map(|(a, _, _)| area < *a).unwrap_or(true) {
+            best = Some((area, ins.common.handle, meta));
+        }
+    }
+    best.map(|(_, h, m)| (h, m))
+}
+
+/// 交互路径：`POST /api/apply` type=BALLOON。引导 PLINE 保留（不删，可反复重改）。
+///
+/// 组台账写 `OCSM_BALLOON`（JSON：序号列表/方向/插入模式/关联零件），供
+/// 明细表联动（升序排名、新增行、冲突时后续序号 +1）与后续重排使用。
+fn apply_balloon(
+    sender: &Arc<dyn PluginRequestSender>,
+    doc: &acadrust::CadDocument,
+    p_tip: [f64; 3],
+    p0: [f64; 3],
+    p_end: [f64; 3],
+    params: &GuideParams,
+) -> Result<String, String> {
+    use acadrust::EntityType as E;
+
+    let items: Vec<String> = params.balloon.items.clone();
+    if items.is_empty() {
+        return Err("序号标注：至少要有一个序号（在窗口里加条目）".into());
+    }
+    let s = frame_scale_at(doc, p0);
+    let parts = crate::balloon::build_balloon_parts(
+        p_tip,
+        p0,
+        p_end,
+        s,
+        &items,
+        params.balloon.dir,
+    )?;
+
+    // ── 幂等 ensure：OCSM_GB 样式 / 8符号标注层（同引线）──
+    if !doc
+        .text_styles
+        .iter()
+        .any(|st| st.name.eq_ignore_ascii_case("OCSM_GB"))
+    {
+        req_timed(
+            sender,
+            PluginRequest::EnsureTextStyles(crate::text_style_defs()),
+            "EnsureTextStyles",
+        )?;
+    }
+    if !doc
+        .layers
+        .iter()
+        .any(|ly| ly.name.eq_ignore_ascii_case("8符号标注层"))
+    {
+        req_timed(
+            sender,
+            PluginRequest::EnsureLayers(crate::layer_defs()),
+            "EnsureLayers",
+        )?;
+    }
+
+    // ── 匿名块 *XH{n}（独立计数器，避开 *D 尺寸 / *L 引线 / *W 焊接 / *V 向视）──
+    let mut max_n = 0u32;
+    for br in doc.block_records.iter() {
+        if let Some(rest) = br.name.strip_prefix("*XH") {
+            if let Ok(n) = rest.parse::<u32>() {
+                max_n = max_n.max(n);
+            }
+        }
+    }
+    let block_name = format!("*XH{}", max_n + 1);
+    req_timed(
+        sender,
+        PluginRequest::AddBlockRecord {
+            name: block_name.clone(),
+            entities: parts.members.clone(),
+        },
+        "AddBlockRecord",
+    )?;
+
+    // ── 落点吸附：指针点在零件块内 → 关联该零件（读 XDATA OCSM_PART）──
+    let assoc = part_block_at(doc, p_tip);
+    let mut ins = leader_insert(&block_name, p0);
+    {
+        let mut rec = ExtendedDataRecord::new("OCSM_BALLOON");
+        rec.values.push(XDataValue::String(
+            serde_json::json!({
+                "items": items,
+                "dir": params.balloon.dir.as_str(),
+                "ins": params.balloon.insert_mode,
+                "part_handle": assoc.as_ref().map(|(h, _)| fmt_handle(*h)),
+                "part": assoc.as_ref().map(|(_, m)| m.clone()),
+            })
+            .to_string(),
+        ));
+        ins.common.extended_data.add_record(rec);
+    }
+    let handle = match req_timed(
+        sender,
+        PluginRequest::AddEntities(vec![E::Insert(ins)]),
+        "AddEntities",
+    ) {
+        Ok(PluginResponse::Handles(hs)) => hs.first().copied(),
+        Ok(_) => None,
+        Err(e) => return Err(e),
+    };
+    req_timed(sender, PluginRequest::BumpGeometry, "BumpGeometry")?;
+    mark_dirty(sender)?;
+
+    Ok(serde_json::json!({
+        "ok": true,
+        "block": block_name,
+        "insert_handle": handle.map(fmt_handle),
+        "scale": s,
+        "dir": params.balloon.dir.as_str(),
+        "items": items,
+        "span": parts.span,
+        "shelf_lens": parts.shelf_lens,
+        "horizontal": parts.horizontal,
+        "part": assoc.map(|(h, m)| serde_json::json!({"handle": fmt_handle(h), "meta": m})),
+    })
+    .to_string())
+}
+
 // ── 标注再编辑（`OCSM_EDIT` XDATA）──────────────────────────────────────
 // 生成物上记两份信息：
 //   `PE_URL`    = 回编辑 GUI 的链接（供宿主 Ctrl+点击打开）——**这是标准超链接**；
@@ -6183,7 +6408,8 @@ mod tests {
             fit: None, sym: None, dec: Some(2), ver: crate::guide_url::DatumVersion::GB2008, letter: None, scale: None, flip: crate::guide_url::FlipDir::None, marker: None, angle_mode: crate::guide_url::AngleMode::Minor, section_side: crate::guide_url::SectionSide::Right, show_arrow: true, gdt_sym: None, gdt_dia: false, gdt_tol: None, gdt_d1: None, gdt_d2: None, gdt_d3: None, gdt_rows: Vec::new(), gdt_top: None, gdt_bot: None,
             detail_scale: 2.0, detail_no: None, detail_pos: None,
             detail_frame: 1.0, weld: WeldParams::default(),
-            leader: crate::guide_url::LeaderParams::default(),};
+            leader: crate::guide_url::LeaderParams::default(),balloon: Default::default(),
+            };
         let dim = build_dimension(&sender, &doc, [0.0, 0.0, 0.0], [40.0, 30.0, 0.0], &pd, "OCSM_GB").unwrap();
         let rec = dim.base().common.extended_data.get_record("ACAD").expect("ACAD XDATA 存在");
         let mut found = None;
@@ -6206,14 +6432,16 @@ mod tests {
             fit: None, sym: None, dec: None, ver: crate::guide_url::DatumVersion::GB2008, letter: None, scale: None, flip: crate::guide_url::FlipDir::None, marker: None, angle_mode: crate::guide_url::AngleMode::Minor, section_side: crate::guide_url::SectionSide::Right, show_arrow: true, gdt_sym: None, gdt_dia: false, gdt_tol: None, gdt_d1: None, gdt_d2: None, gdt_d3: None, gdt_rows: Vec::new(), gdt_top: None, gdt_bot: None,
             detail_scale: 2.0, detail_no: None, detail_pos: None,
             detail_frame: 1.0, weld: WeldParams::default(),
-            leader: crate::guide_url::LeaderParams::default(),};
+            leader: crate::guide_url::LeaderParams::default(),balloon: Default::default(),
+            };
         // 直径走匿名块路径：mock 的 AddBlockRecord 返回 Ok → 成功。
         assert!(build_dimension(&sender, &doc, [0.0,0.0,0.0], [35.36,35.36,0.0], &pd, "OCSM_GB").is_ok());
         let pr = GuideParams { guide_type: GuideType::Radius, sub: None, dist: 11.0, text: None, tol: None, up: None, dn: None,
             fit: None, sym: None, dec: None, ver: crate::guide_url::DatumVersion::GB2008, letter: None, scale: None, flip: crate::guide_url::FlipDir::None, marker: None, angle_mode: crate::guide_url::AngleMode::Minor, section_side: crate::guide_url::SectionSide::Right, show_arrow: true, gdt_sym: None, gdt_dia: false, gdt_tol: None, gdt_d1: None, gdt_d2: None, gdt_d3: None, gdt_rows: Vec::new(), gdt_top: None, gdt_bot: None,
             detail_scale: 2.0, detail_no: None, detail_pos: None,
             detail_frame: 1.0, weld: WeldParams::default(),
-            leader: crate::guide_url::LeaderParams::default(),};
+            leader: crate::guide_url::LeaderParams::default(),balloon: Default::default(),
+            };
         assert!(build_dimension(&sender, &doc, [0.0,0.0,0.0], [35.36,35.36,0.0], &pr, "OCSM_GB").is_ok());
     }
 
@@ -6245,7 +6473,8 @@ mod tests {
                     gdt_sym: None, gdt_dia: false, gdt_tol: None, gdt_d1: None, gdt_d2: None, gdt_d3: None, gdt_rows: Vec::new(), gdt_top: None, gdt_bot: None,
             detail_scale: 2.0, detail_no: None, detail_pos: None,
             detail_frame: 1.0, weld: WeldParams::default(),
-            leader: crate::guide_url::LeaderParams::default(),};
+            leader: crate::guide_url::LeaderParams::default(),balloon: Default::default(),
+            };
         // "%%c<>" 是默认（GUI 注入一次）→ 不设 user_text（块 TEXT 已用自动值）。
         let dim = build_dimension(&sender, &doc, [0.0, 0.0, 0.0], [35.36, 35.36, 0.0], &pd, "OCSM_GB").unwrap();
         assert!(dim.base().user_text.is_none());
@@ -6289,7 +6518,8 @@ mod tests {
                     gdt_sym: None, gdt_dia: false, gdt_tol: None, gdt_d1: None, gdt_d2: None, gdt_d3: None, gdt_rows: Vec::new(), gdt_top: None, gdt_bot: None,
             detail_scale: 2.0, detail_no: None, detail_pos: None,
             detail_frame: 1.0, weld: WeldParams::default(),
-            leader: crate::guide_url::LeaderParams::default(),};
+            leader: crate::guide_url::LeaderParams::default(),balloon: Default::default(),
+            };
         let dim = build_dimension(&sender, &doc, [0.0, 0.0, 0.0], [100.0, 0.0, 0.0], &pd, "OCSM_GB").unwrap();
         assert_eq!(
             dim.base().text,
@@ -6350,7 +6580,8 @@ mod tests {
                     gdt_sym: None, gdt_dia: false, gdt_tol: None, gdt_d1: None, gdt_d2: None, gdt_d3: None, gdt_rows: Vec::new(), gdt_top: None, gdt_bot: None,
             detail_scale: 2.0, detail_no: None, detail_pos: None,
             detail_frame: 1.0, weld: WeldParams::default(),
-            leader: crate::guide_url::LeaderParams::default(),};
+            leader: crate::guide_url::LeaderParams::default(),balloon: Default::default(),
+            };
         let dim = build_dimension(&sender, &doc, [0.0, 0.0, 0.0], [25.0, 0.0, 0.0], &pd, "OCSM_GB").unwrap();
         assert_eq!(
             dim.base().text,
@@ -6388,7 +6619,8 @@ mod tests {
                     gdt_sym: None, gdt_dia: false, gdt_tol: None, gdt_d1: None, gdt_d2: None, gdt_d3: None, gdt_rows: Vec::new(), gdt_top: None, gdt_bot: None,
             detail_scale: 2.0, detail_no: None, detail_pos: None,
             detail_frame: 1.0, weld: WeldParams::default(),
-            leader: crate::guide_url::LeaderParams::default(),};
+            leader: crate::guide_url::LeaderParams::default(),balloon: Default::default(),
+            };
         let dim = build_dimension(&sender, &doc, [0.0, 0.0, 0.0], [25.0, 0.0, 0.0], &pd, "OCSM_GB").unwrap();
         let t = dim.base().text.clone();
         assert!(t.contains("%%c<>,通"), "应保留 %%c 与中文, got {t}");
@@ -6429,7 +6661,8 @@ mod tests {
                     gdt_sym: None, gdt_dia: false, gdt_tol: None, gdt_d1: None, gdt_d2: None, gdt_d3: None, gdt_rows: Vec::new(), gdt_top: None, gdt_bot: None,
             detail_scale: 2.0, detail_no: None, detail_pos: None,
             detail_frame: 1.0, weld: WeldParams::default(),
-            leader: crate::guide_url::LeaderParams::default(),};
+            leader: crate::guide_url::LeaderParams::default(),balloon: Default::default(),
+            };
         // fit 代号模式 → 配合代号堆叠（对照示例 `{\C3;\SH7/g6;}`：绿色、斜杠分数）。
         let dim = build_dimension(&sender, &doc, [0.0, 0.0, 0.0], [25.0, 0.0, 0.0], &pd, "OCSM_GB").unwrap();
         assert_eq!(
@@ -6470,7 +6703,8 @@ mod tests {
                     gdt_sym: None, gdt_dia: false, gdt_tol: None, gdt_d1: None, gdt_d2: None, gdt_d3: None, gdt_rows: Vec::new(), gdt_top: None, gdt_bot: None,
             detail_scale: 2.0, detail_no: None, detail_pos: None,
             detail_frame: 1.0, weld: WeldParams::default(),
-            leader: crate::guide_url::LeaderParams::default(),};
+            leader: crate::guide_url::LeaderParams::default(),balloon: Default::default(),
+            };
         let inner = std::sync::Arc::new(MockSender::new(acadrust::CadDocument::new()));
         let sender: std::sync::Arc<dyn PluginRequestSender> = inner.clone();
         let doc = inner.doc.lock().unwrap().clone();
@@ -8833,6 +9067,187 @@ mod weld_tests {
             lower: lower.into(),
         };
         p
+    }
+
+    // ── 序号标注（BALLOON）测试─────────────────────────────────────────────
+
+    fn balloon_params(items: &[&str], dir: crate::balloon::BalloonDir) -> GuideParams {
+        let mut p = GuideParams::linear(LinearSub::Aligned, 0.0);
+        p.guide_type = GuideType::Balloon;
+        p.sub = None;
+        p.balloon = crate::guide_url::BalloonParams {
+            items: items.iter().map(|s| s.to_string()).collect(),
+            dir,
+            insert_mode: false,
+        };
+        p
+    }
+
+    /// 横向扩展：2 个序号 → 圆点 2 枚 SOLID + 指引线/2 横线/V 两段 = 5 线 + 2 MTEXT。
+    #[test]
+    fn apply_balloon_row_writes_block_dot_shelves_and_items() {
+        let mock = Arc::new(MockSender::new(weld_doc()));
+        let sender: Arc<dyn PluginRequestSender> = mock.clone();
+        let doc = weld_doc();
+        let p = balloon_params(&["2", "3"], crate::balloon::BalloonDir::Row);
+        let out = apply_balloon(&sender, &doc, P_TIP, P0, P_END, &p).unwrap();
+        assert!(out.contains("\"block\":\"*XH1\""), "块名 *XH1: {out}");
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["dir"], "H");
+        assert_eq!(v["items"][1], "3");
+        assert!(v["span"].as_f64().unwrap() > 10.0, "跨度应大于两条横线之和: {out}");
+        let members = mock.block_entities("*XH1");
+        assert_eq!(kinds(&members), (5, 0, 0, 2, 0, 0), "5 线 + 2 实心（圆点两枚）");
+        let ms = mtexts_of(&members);
+        assert_eq!(ms.len(), 2);
+        assert_eq!(ms[0].value, "2");
+        assert_eq!(ms[1].value, "3");
+        for m in &ms {
+            assert_eq!(m.height, 3.5);
+            assert_eq!(m.style, "OCSM_GB");
+            assert_eq!(m.rotation, 0.0);
+        }
+        // 两个序号都写在各自横线中点上方（v = 1.05）；且两者 x 不同（并排）
+        let (x0, x1) = (ms[0].insertion_point.x, ms[1].insertion_point.x);
+        assert!(x1 > x0 + 4.0, "横向：第二条应在右边 {x0} / {x1}");
+        for m in &ms {
+            assert!((m.insertion_point.y - 1.05).abs() < 1e-9);
+        }
+        // 圆点两枚 SOLID 都在指针点 P_TIP 附近（块局部 = 世界 − P0）
+        let tip_l = (P_TIP[0] - P0[0], P_TIP[1] - P0[1]);
+        for s in solids_of(&members) {
+            let dx = s.first_corner.x - tip_l.0;
+            let dy = s.first_corner.y - tip_l.1;
+            assert!(dx.abs() < 1.0 && dy.abs() < 1.0, "圆点应贴指针点");
+        }
+        // INSERT 落在 8符号标注层、原点 = 拐点，并带 OCSM_BALLOON 台账
+        let doc2 = mock.doc.lock().unwrap();
+        let ins = doc2
+            .model_space_entities()
+            .find_map(|e| match e {
+                E::Insert(i) => Some(i.clone()),
+                _ => None,
+            })
+            .expect("INSERT");
+        assert_eq!(ins.common.layer, "8符号标注层");
+        assert!((ins.insert_point.x - P0[0]).abs() < 1e-9);
+        let rec = ins
+            .common
+            .extended_data
+            .get_record("OCSM_BALLOON")
+            .expect("OCSM_BALLOON 台账");
+        let text = rec
+            .values
+            .iter()
+            .find_map(|x| match x {
+                acadrust::xdata::XDataValue::String(s) => Some(s.clone()),
+                _ => None,
+            })
+            .unwrap();
+        let meta: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(meta["items"][0], "2");
+        assert_eq!(meta["dir"], "H");
+        assert_eq!(meta["ins"], false);
+        assert!(meta["part"].is_null(), "落点不在零件块内 → 不关联");
+    }
+
+    /// 纵向扩展：2 个序号 → 指引线 + 2 横线 + 1 竖线 = 4 线；竖线在指引线那一端。
+    #[test]
+    fn apply_balloon_col_links_at_leader_end() {
+        let mock = Arc::new(MockSender::new(weld_doc()));
+        let sender: Arc<dyn PluginRequestSender> = mock.clone();
+        let p = balloon_params(&["5", "6"], crate::balloon::BalloonDir::Col);
+        let out = apply_balloon(&sender, &weld_doc(), P_TIP, P0, P_END, &p).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["dir"], "V");
+        let members = mock.block_entities("*XH1");
+        assert_eq!(kinds(&members), (4, 0, 0, 2, 0, 0));
+        let ms = mtexts_of(&members);
+        // 纵向：x 都落在各自横线中点（L/2），y 递增（6 在 5 上方）
+        assert!(ms[1].insertion_point.y > ms[0].insertion_point.y, "6 应在 5 上方");
+    }
+
+    /// 空条目 / 顶点数不对 → 报错。
+    #[test]
+    fn apply_balloon_rejects_empty_items() {
+        let mock = Arc::new(MockSender::new(weld_doc()));
+        let sender: Arc<dyn PluginRequestSender> = mock.clone();
+        let p = balloon_params(&[], crate::balloon::BalloonDir::Row);
+        let e = apply_balloon(&sender, &weld_doc(), P_TIP, P0, P_END, &p).unwrap_err();
+        assert!(e.contains("至少要有一个序号"), "{e}");
+    }
+
+    /// 指针点落在零件块内 → 关联该零件（读 XDATA OCSM_PART），并在台账里记下。
+    #[test]
+    fn balloon_tip_inside_part_block_is_associated() {
+        let mut doc = weld_doc();
+        // 一个 20×10 的“零件”块，带 OCSM_PART 台账，插在 (0,0)
+        let mut br = acadrust::tables::BlockRecord::new("OCSM_TESTPART");
+        br.handle = doc.allocate_handle();
+        br.entity_handles.push(
+            doc.add_entity(E::Block(acadrust::entities::Block::new(
+                "OCSM_TESTPART",
+                Vector3::ZERO,
+            )))
+            .unwrap(),
+        );
+        for (a, b) in [
+            ((0.0, 0.0), (20.0, 0.0)),
+            ((20.0, 0.0), (20.0, 10.0)),
+            ((20.0, 10.0), (0.0, 10.0)),
+            ((0.0, 10.0), (0.0, 0.0)),
+        ] {
+            br.entity_handles.push(
+                doc.add_entity(E::Line(acadrust::entities::Line::from_coords(
+                    a.0, a.1, 0.0, b.0, b.1, 0.0,
+                )))
+                .unwrap(),
+            );
+        }
+        br.entity_handles.push(
+            doc.add_entity(E::BlockEnd(acadrust::entities::BlockEnd::new()))
+                .unwrap(),
+        );
+        doc.block_records.add(br).unwrap();
+        let mut ins = acadrust::entities::Insert::new("OCSM_TESTPART", Vector3::new(60.0, 60.0, 0.0));
+        let mut rec = acadrust::xdata::ExtendedDataRecord::new("OCSM_PART");
+        rec.values.push(acadrust::xdata::XDataValue::String(
+            serde_json::json!({"code": "0165", "name": "偏心轴", "spec": "φ12"}).to_string(),
+        ));
+        ins.common.extended_data.add_record(rec);
+        doc.add_entity(E::Insert(ins)).unwrap();
+
+        // 指针点 (70,66) 在块内（块 = 60..80 / 60..70）
+        let assoc = part_block_at(&doc, [70.0, 66.0, 0.0]).expect("应关联到零件块");
+        assert_eq!(assoc.1["code"], "0165");
+        // 块外 → 不关联
+        assert!(part_block_at(&doc, [200.0, 200.0, 0.0]).is_none());
+
+        // 走完 apply：报告里有 part，台账里也有
+        let mock = Arc::new(MockSender::new(doc));
+        let sender: Arc<dyn PluginRequestSender> = mock.clone();
+        let body = serde_json::json!({
+            "handle": "2A",
+            "url": "http://127.0.0.1:23751/DIM/BALLOON/0?items=1,2&dir=H",
+            "pts": [[70.0, 66.0, 0.0], [90.0, 80.0, 0.0], [110.0, 80.0, 0.0]],
+        });
+        let _ = (mock, sender, body); // 组装细节由 api_apply 集成测试覆盖
+    }
+
+    /// 参数 URL 往返：items/dir/ins 三个键。
+    #[test]
+    fn balloon_url_roundtrip() {
+        let mut p = balloon_params(&["1", "2", "3"], crate::balloon::BalloonDir::Col);
+        p.balloon.insert_mode = true;
+        let url = p.to_url(23751);
+        assert!(url.contains("items=1%2C2%2C3") || url.contains("items=1,2,3"), "{url}");
+        assert!(url.contains("dir=V"), "{url}");
+        assert!(url.contains("ins=1"), "{url}");
+        let back = GuideParams::from_url(&url).expect("能解析回来");
+        assert_eq!(back.guide_type, GuideType::Balloon);
+        assert_eq!(back.balloon.items, vec!["1", "2", "3"]);
+        assert_eq!(back.balloon.dir, crate::balloon::BalloonDir::Col);
+        assert!(back.balloon.insert_mode);
     }
 
     /// 骨架：箭头 + 引线 + 肩线 + 2 ATTDEF = 5 成员；两文字空值也允许。

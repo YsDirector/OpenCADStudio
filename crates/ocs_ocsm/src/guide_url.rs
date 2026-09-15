@@ -12,11 +12,15 @@
 //! ver (DATUM): 1996 | 2008（GB/T 1182 版本，默认 2008）；let (DATUM): 基准字母（默认 A）
 //! let (VIEW): 向视图字母（必填）；scale (VIEW): 比例文本（可缺省，如 1:1）；
 //! flip (VIEW): 翻转方向（1 = 加旋转弧线箭头 → 样式3）；mx/my (VIEW): 标记放置点（缺省 0,0）
+//! BALLOON (序号): items=序号列表（逗号分隔，从指引线向外/向上）、dir=H 横向 / V 纵向、
+//! ins=1 序号冲突时插入后移（否则同序号行数量 +1）
 //! WELD (焊接): wu/wl=上下侧符号名、wdash/wcir/wflg/wtail/wc=五开关（虚线/全周边/现场旗/尾部/C）、
 //! wut/wuq/wlt/wlq/wtt=五文字槽（上/下侧厚度尺寸、上/下侧数量长度、尾部注释）
 //! ```
 //!
 //! 端口为标注更新服务器端口；解析时忽略（本机单实例）。
+
+use crate::balloon::BalloonDir;
 
 /// 标注主类型。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -37,6 +41,10 @@ pub enum GuideType {
     /// 引线标注（两段 PLINE 引导：顶点0=箭头点，顶点1=拐点，顶点2=肩线
     /// 末端；生成引线+箭头+肩线+上下侧文字——焊接的减法版）。
     Leader,
+    /// 序号标注（引线的变体）：两段 PLINE 引导（顶点0=指针点→画圆点，
+    /// 顶点1=拐点，顶点2=肩线末端）；一个组 = 1 指引线 + 1 圆点 + N 条横线
+    /// （横向 V 形折线连 / 纵向竖线连）+ N 个序号（各自横线上方居中）。
+    Balloon,
 }
 
 impl GuideType {
@@ -54,6 +62,7 @@ impl GuideType {
             GuideType::ArcLen => "ARCLEN",
             GuideType::Weld => "WELD",
             GuideType::Leader => "LEADER",
+            GuideType::Balloon => "BALLOON",
         }
     }
     fn from_str(s: &str) -> Option<Self> {
@@ -70,6 +79,7 @@ impl GuideType {
             "ARCLEN" | "ARC" | "弧长" => Some(GuideType::ArcLen),
             "WELD" | "焊接" => Some(GuideType::Weld),
             "LEADER" | "引线" | "LEAD" => Some(GuideType::Leader),
+            "BALLOON" | "序号" | "序号标注" | "XH" => Some(GuideType::Balloon),
             _ => None,
         }
     }
@@ -407,6 +417,23 @@ pub struct GuideParams {
     pub weld: WeldParams,
     /// 引线标注参数（仅 LEADER）。
     pub leader: LeaderParams,
+    /// 序号标注参数（仅 BALLOON）。
+    pub balloon: BalloonParams,
+}
+
+/// 序号标注参数。
+///
+/// 一个组 = 1 条指引线 + 1 个圆点 + N 条横线 + N 个序号：
+/// `items` 按**从指引线向外/向上**排列（通常升序，如 `[5,6]`：5 贴指引线、6 在上）。
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct BalloonParams {
+    /// 序号列表（`items=1,2,3`）。
+    pub items: Vec<String>,
+    /// 扩展方向：横向 `H`（V 形折线连接）/ 纵向 `V`（竖线连接）。
+    pub dir: BalloonDir,
+    /// 序号冲突时是否"插入后移"（GUI 勾选）：true = 其后所有序号 +1；
+    /// false = 视为同一零件，明细表里对应行**数量 +1**。
+    pub insert_mode: bool,
 }
 
 /// 引线标注参数：引线上方文字 + 引线下方文字（各单行；空 = 不显示）。
@@ -497,7 +524,18 @@ impl GuideParams {
             detail_frame: 1.0,
             weld: WeldParams::default(),
             leader: LeaderParams::default(),
+            balloon: BalloonParams::default(),
         }
+    }
+
+    /// 构造一个序号标注参数（`items` 从指引线向外/向上排列）。
+    #[allow(dead_code)]
+    pub fn balloon(items: Vec<String>, dir: BalloonDir) -> Self {
+        let mut p = GuideParams::linear(LinearSub::Aligned, 0.0);
+        p.guide_type = GuideType::Balloon;
+        p.sub = None;
+        p.balloon = BalloonParams { items, dir, insert_mode: false };
+        p
     }
 
     /// 解析引导线 URL。失败返回 None。
@@ -566,6 +604,7 @@ impl GuideParams {
         let mut detail_frame = 1.0;
         let mut weld = WeldParams::default();
         let mut leader = LeaderParams::default();
+        let mut balloon = BalloonParams::default();
         // 打磨/焊接方法：兼容"两侧同值"旧键 + 上下侧独立新键。
         let mut grind_all = GrindKind::None;
         let mut grind_u: Option<GrindKind> = None;
@@ -630,6 +669,11 @@ impl GuideParams {
                 // 引线标注（仅 LEADER）：lu=上侧文字、ll=下侧文字（单行）。
                 "lu" => leader.upper = v,
                 "ll" => leader.lower = v,
+                // 序号标注（仅 BALLOON）：items=序号列表（逗号分隔，从指引线向外/向上）、
+                // dir=H 横向 / V 纵向、ins=1 序号冲突时插入后移（否则数量 +1）。
+                "items" | "nos" => balloon.items = crate::balloon::parse_items(&v),
+                "dir" => balloon.dir = BalloonDir::from_str(&v).unwrap_or_default(),
+                "ins" => balloon.insert_mode = matches!(&*v, "1" | "true" | "yes" | "on"),
                 "wdash" => weld.dash = matches!(&*v, "1" | "true" | "yes" | "on"),
                 "wcir" => weld.circle = matches!(&*v, "1" | "true" | "yes" | "on"),
                 "whalf" => weld.half = matches!(&*v, "1" | "true" | "yes" | "on"),
@@ -708,6 +752,7 @@ impl GuideParams {
             detail_frame,
             weld,
             leader,
+            balloon,
         })
     }
 
@@ -951,6 +996,16 @@ impl GuideParams {
                 if !v.is_empty() {
                     q.push(format!("{k}={}", percent_encode(v)));
                 }
+            }
+        }
+        if self.guide_type == GuideType::Balloon {
+            let b = &self.balloon;
+            if !b.items.is_empty() {
+                q.push(format!("items={}", percent_encode(&b.items.join(","))));
+            }
+            q.push(format!("dir={}", b.dir.as_str()));
+            if b.insert_mode {
+                q.push("ins=1".into());
             }
         }
         if !q.is_empty() {
