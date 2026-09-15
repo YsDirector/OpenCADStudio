@@ -561,6 +561,98 @@ fn place_one(
     Ok(())
 }
 
+/// `OCSMPART`/`XL` 的参数化形式：`<族> <d> <l> [view <视图>] [at x,y] [rot 度]`。
+///
+/// 例：`OCSMPART hex_bolt_c 10 95 at 150,30 rot 0`、`OCSMPART hex_bolt_ab 8 40`。
+/// 解析失败（或参数为空）返回 `None` → 回退到原 GUI（零件库窗口 + 鼠标放置）流程。
+#[derive(Debug, PartialEq)]
+struct PartsSpec {
+    family: String,
+    d: f64,
+    l: f64,
+    view: String,
+    at: Option<[f64; 2]>,
+    rotation: Option<f64>,
+}
+
+impl PartsSpec {
+    fn parse(args: &str) -> Option<Self> {
+        let mut tokens = args.split_whitespace();
+        let family = tokens.next()?;
+        if family.is_empty() || family.starts_with('-') {
+            return None;
+        }
+        let d: f64 = tokens.next()?.parse().ok()?;
+        let l: f64 = tokens.next()?.parse().ok()?;
+        if !(d.is_finite() && l.is_finite() && d > 0.0 && l > 0.0) {
+            return None;
+        }
+        let mut spec = PartsSpec {
+            family: family.to_ascii_lowercase(),
+            d,
+            l,
+            view: "main".to_string(),
+            at: None,
+            rotation: None,
+        };
+        while let Some(token) = tokens.next() {
+            // 关键字大小写不敏感（宿主把整条命令交给插件时可能是大写）。
+            match token.to_ascii_lowercase().as_str() {
+                "view" | "--view" => {
+                    let view = tokens.next()?;
+                    if view.is_empty() {
+                        return None;
+                    }
+                    spec.view = view.to_ascii_lowercase();
+                }
+                // `at 150,30` 与 `at 150 30` 都收。
+                "at" | "@" => {
+                    let first = tokens.next()?;
+                    let (x, y) = match first.split_once(',') {
+                        Some((x, y)) => (x.parse::<f64>().ok()?, y.parse::<f64>().ok()?),
+                        None => (
+                            first.parse::<f64>().ok()?,
+                            tokens.next()?.parse::<f64>().ok()?,
+                        ),
+                    };
+                    if !(x.is_finite() && y.is_finite()) {
+                        return None;
+                    }
+                    spec.at = Some([x, y]);
+                }
+                "rot" | "rotation" | "--rot" => {
+                    let deg: f64 = tokens.next()?.parse().ok()?;
+                    if !deg.is_finite() {
+                        return None;
+                    }
+                    spec.rotation = Some(deg);
+                }
+                // 多余/无法识别的 token：当作没用参数，回退 GUI 流程。
+                _ => return None,
+            }
+        }
+        Some(spec)
+    }
+
+    /// `/api/part_pick` 的请求体（与选择器页同一条生成/插入路径）。
+    fn to_body(&self) -> String {
+        let mut obj = serde_json::json!({
+            "family": self.family,
+            "d": self.d,
+            "l": self.l,
+            "view": self.view,
+        });
+        if let Some([x, y]) = self.at {
+            obj["x"] = serde_json::json!(x);
+            obj["y"] = serde_json::json!(y);
+        }
+        if let Some(rotation) = self.rotation {
+            obj["rotation"] = serde_json::json!(rotation);
+        }
+        obj.to_string()
+    }
+}
+
 /// `SP` 命令里点选的插入点（旧路径保留）。
 static PARTS_POINT: std::sync::OnceLock<std::sync::Mutex<Option<[f64; 3]>>> =
     std::sync::OnceLock::new();
@@ -718,7 +810,15 @@ impl BuiltinPlugin for OcsmPlugin {
         // 先手动运行 OCSMMCP/GDIM 即可连接。失败静默，GDIM/OCSMMCP 会给出
         // 明确错误。
         let _ = self.ensure_guide_server(host);
-        match cmd.trim().to_ascii_uppercase().as_str() {
+        // 命令名（大写，大小写不敏感）+ 其后的参数（**保留原大小写**，供参数化命令
+        // 解析：`OCSMPART hex_bolt_c 10 95 at 150,30 rot 0`）。
+        let raw = cmd.trim();
+        let (name, rest) = match raw.split_once(char::is_whitespace) {
+            Some((name, rest)) => (name, rest.trim()),
+            None => (raw, ""),
+        };
+        let upper = name.to_ascii_uppercase();
+        match upper.as_str() {
             "OCSM" => {
                 self.cmd_init(host);
                 true
@@ -748,7 +848,7 @@ impl BuiltinPlugin for OcsmPlugin {
                 true
             }
             "OCSMPART" | "XL" => {
-                self.cmd_parts(host);
+                self.cmd_parts(host, rest);
                 true
             }
             // 明细表：建表/刷新（`BOM 30` = 本次首列 30 行）、配置（`BOMCFG 30`）
@@ -1009,7 +1109,27 @@ impl OcsmPlugin {
 
     /// `OCSMPART` / `XL`：直接打开标准件库窗口，并进入放置态
     /// （窗口里「零件出库」→ 回到图纸鼠标跟随预览 → 左键点击放置，可连续，Esc 结束）。
-    fn cmd_parts(&self, host: &mut dyn HostApi) {
+    fn cmd_parts(&self, host: &mut dyn HostApi, args: &str) {
+        // 带参数 = 参数化直接插入（给 MCP/AI 一行驱动）：
+        //   `OCSMPART <族> <d> <l> [view <视图>] [at x,y] [rot 度]`
+        // 例：`OCSMPART hex_bolt_c 10 95 at 150,30 rot 0`
+        // 无参数 = 原 GUI 流程（开零件库窗口 + 进放置态）。
+        // 有参数但解析失败 = 报用法（不静默开浏览器窗口，避免 AI 驱动时弹出无意义窗口）。
+        if !args.trim().is_empty() {
+            match PartsSpec::parse(args) {
+                Some(spec) => {
+                    self.cmd_parts_insert(host, &spec);
+                    return;
+                }
+                None => {
+                    host.push_error(
+                        "OCSMPART 参数无效。用法：OCSMPART <族> <d> <l> [view <视图>] [at x,y] [rot 度]，\
+                         例：OCSMPART hex_bolt_c 10 95 at 150,30 rot 0（不带参数则打开零件库窗口）。",
+                    );
+                    return;
+                }
+            }
+        }
         // 先确保标注更新服务器在跑并打开零件库窗口（不需要先点插入点）
         if let Some(port) = self.ensure_guide_server(host) {
             if open_parts_window(port) {
@@ -1033,6 +1153,20 @@ impl OcsmPlugin {
             phase: std::cell::Cell::new(PlacePhase::Follow),
             base: std::cell::Cell::new([0.0, 0.0, 0.0]),
         }));
+    }
+
+    /// `OCSMPART`/`XL` 参数化插入：直接调零件库同一条生成/插入路径
+    /// （`guide_server::apply_part_pick`，已带 Begin/Commit 撤销事务）。
+    fn cmd_parts_insert(&self, host: &mut dyn HostApi, spec: &PartsSpec) {
+        let Some(sender) = host.plugin_request_sender() else {
+            host.push_error("OCSM 标准件：宿主不支持 worker 请求，无法参数化插入。");
+            return;
+        };
+        let sender: std::sync::Arc<dyn PluginRequestSender> = std::sync::Arc::from(sender);
+        match crate::guide_server::apply_part_pick(&sender, spec.to_body().as_bytes()) {
+            Ok(msg) => host.push_output(&format!("OCSM 标准件：{msg}")),
+            Err(e) => host.push_error(&format!("OCSM 标准件插入失败：{e}")),
+        }
     }
 
     /// `OCSMMCP`：确保标注更新服务器运行，打印 MCP 接入信息。
@@ -2481,6 +2615,48 @@ mod tests {
     }
 
     #[test]
+    #[test]
+    fn parts_spec_parses_parameterized_form() {
+        assert_eq!(PartsSpec::parse(""), None);
+        assert_eq!(PartsSpec::parse("hex_bolt_c"), None);
+        assert_eq!(PartsSpec::parse("hex_bolt_c 10"), None);
+        let spec = PartsSpec::parse("HEX_BOLT_C 10 95").unwrap();
+        assert_eq!(spec.family, "hex_bolt_c");
+        assert_eq!((spec.d, spec.l), (10.0, 95.0));
+        assert_eq!(spec.view, "main");
+        assert_eq!(spec.at, None);
+        assert_eq!(spec.rotation, None);
+
+        let spec = PartsSpec::parse("hex_bolt_c 10 95 view top at 150,30 rot 90").unwrap();
+        assert_eq!(spec.view, "top");
+        assert_eq!(spec.at, Some([150.0, 30.0]));
+        assert_eq!(spec.rotation, Some(90.0));
+        // 空白分隔的落点同样收。
+        assert_eq!(
+            PartsSpec::parse("nut_c41 10 9.5 at 150 30").unwrap().at,
+            Some([150.0, 30.0])
+        );
+        // 无法识别的尾巴 → 回退 GUI 流程。
+        assert_eq!(PartsSpec::parse("hex_bolt_c 10 95 嗯"), None);
+        // 宿主交给插件时可能是大写 → 关键字大小写不敏感（实测：曾经因大写
+        // `AT`/`ROT` 解析失败 → 静默回退到 GUI 流程，白开一个浏览器窗口）。
+        let spec = PartsSpec::parse("NUT_C41 10 9.5 AT 150,30 ROT 180").unwrap();
+        assert_eq!(spec.family, "nut_c41");
+        assert_eq!(spec.at, Some([150.0, 30.0]));
+        assert_eq!(spec.rotation, Some(180.0));
+
+        let body: serde_json::Value = serde_json::from_str(
+            &PartsSpec::parse("hex_bolt_c 10 95 at 1,2 rot 45")
+                .unwrap()
+                .to_body(),
+        )
+        .unwrap();
+        assert_eq!(body["family"], "hex_bolt_c");
+        assert_eq!(body["x"], 1.0);
+        assert_eq!(body["y"], 2.0);
+        assert_eq!(body["rotation"], 45.0);
+    }
+
     fn parse_catalog_csv_skips_header_comments_and_blanks() {
         let text = "类别,标准号,名称,规格,材料,单重,文件名\n\
                     # 这是注释\n\

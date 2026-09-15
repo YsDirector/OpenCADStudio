@@ -3277,7 +3277,8 @@ fn api_rough_apply(body: &[u8], sender: &Arc<dyn PluginRequestSender>) -> (u16, 
 /// `POST /api/part_pick`：按选择器页的族/规格/视图**参数化生成**零件并插入。
 ///
 /// 与既有 apply 路径同构：worker 线程向宿主发请求（建块 → 加 INSERT → 写记录 → 标脏）。
-/// 插入点取 `OCSMPART`/`SP` 命令里点选的点（`crate::take_parts_point`），没有则落在原点。
+/// 落点优先级：**显式 `x`/`y`（+可选 `z`/`rotation`，AI/MCP 一行驱动）** →
+/// `OCSMPART`/`SP` 命令里点选的点（`crate::take_parts_point`） → 原点。
 /// 块名规则 `OCSM_<族>_<规格>`，重复插入同一规格复用块定义。
 
 /// `POST /api/part_export`：**零件出库** —— 生成零件、建好块（幂等）、登记为"待放置"，
@@ -3372,7 +3373,7 @@ fn api_part_pick(body: &[u8], sender: &Arc<dyn PluginRequestSender>) -> (u16, &'
     }
 }
 
-fn apply_part_pick(
+pub(crate) fn apply_part_pick(
     sender: &Arc<dyn PluginRequestSender>,
     body: &[u8],
 ) -> Result<String, String> {
@@ -3383,6 +3384,16 @@ fn apply_part_pick(
         l: f64,
         #[serde(default = "default_view")]
         view: String,
+        /// 显式落点（MCP/AI 驱动）：同时给了 `x` 与 `y` 就不再取 GUI 点选的待放置点。
+        #[serde(default)]
+        x: Option<f64>,
+        #[serde(default)]
+        y: Option<f64>,
+        #[serde(default)]
+        z: Option<f64>,
+        /// 可选旋转角（**度**，逆时针）；缺省 0。
+        #[serde(default)]
+        rotation: Option<f64>,
     }
     fn default_view() -> String {
         "main".to_string()
@@ -3415,8 +3426,14 @@ fn apply_part_pick(
         )?;
     }
 
-    let at = crate::take_parts_point().unwrap_or([0.0, 0.0, 0.0]);
+    // 落点优先级：显式 x/y（MCP/AI 一行驱动）→ GUI 点选的待放置点 → 原点。
+    let at = match (req.x, req.y) {
+        (Some(x), Some(y)) => [x, y, req.z.unwrap_or(0.0)],
+        _ => crate::take_parts_point().unwrap_or([0.0, 0.0, 0.0]),
+    };
     let mut ins = acadrust::entities::Insert::new(&block, Vector3::new(at[0], at[1], at[2]));
+    // Insert.rotation 单位是弧度（与 place_one 一致），参数按度给。
+    ins.rotation = req.rotation.unwrap_or(0.0).to_radians();
     {
         let c = &mut ins.common;
         c.layer = crate::partgen::LAYER_MAIN.to_string();
