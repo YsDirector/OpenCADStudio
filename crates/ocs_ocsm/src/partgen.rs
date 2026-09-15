@@ -869,6 +869,74 @@ pub fn catalog_json() -> String {
     serde_json::json!({ "tree": tree, "families": families }).to_string()
 }
 
+/// 族的规模行（直径/螺距/长度范围/供货长度系列）——从同一份 catalog JSON 取，不另建数据源。
+#[derive(Debug, Clone, PartialEq)]
+pub struct SizeRow {
+    pub d: f64,
+    pub pitch: f64,
+    pub l_min: f64,
+    pub l_max: f64,
+    /// 厂家实际可购的供货长度系列（可能略偏离推标公称系列，以表为准）。
+    pub lengths: Vec<f64>,
+}
+
+/// 族的类型：bolt / nut / washer / pin / other（件链解析用）。
+pub fn family_kind(family: &str) -> &'static str {
+    if family.starts_with("hex_bolt") || family == "socket_head" {
+        "bolt"
+    } else if family.starts_with("nut_") {
+        "nut"
+    } else if family.starts_with("washer_") {
+        "washer"
+    } else if family.starts_with("pin_") {
+        "pin"
+    } else {
+        "other"
+    }
+}
+
+/// 族的显示名与标准号（报告/日志用）。
+pub fn family_meta(family: &str) -> (String, String) {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(&catalog_json()) else {
+        return (family.to_string(), String::new());
+    };
+    let entry = &value["families"][family];
+    let name = entry["name"].as_str().unwrap_or(family).to_string();
+    let code = entry["code"].as_str().unwrap_or_default().to_string();
+    (name, code)
+}
+
+/// 族 → 规模行列表。
+pub fn family_sizes(family: &str) -> Vec<SizeRow> {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(&catalog_json()) else {
+        return Vec::new();
+    };
+    let Some(rows) = value["families"][family]["sizes"].as_array() else {
+        return Vec::new();
+    };
+    rows.iter()
+        .filter_map(|row| {
+            Some(SizeRow {
+                d: row["d"].as_f64()?,
+                pitch: row["pitch"].as_f64().unwrap_or(0.0),
+                l_min: row["l_min"].as_f64().unwrap_or(0.0),
+                l_max: row["l_max"].as_f64().unwrap_or(0.0),
+                lengths: row["lengths"]
+                    .as_array()
+                    .map(|list| list.iter().filter_map(|v| v.as_f64()).collect())
+                    .unwrap_or_default(),
+            })
+        })
+        .collect()
+}
+
+/// 族 + 直径 → 规模行（大小写不敏感，1e-9 容差）。
+pub fn size_row(family: &str, d: f64) -> Option<SizeRow> {
+    family_sizes(family)
+        .into_iter()
+        .find(|row| (row.d - d).abs() < 1e-9)
+}
+
 /// 按族/规格/视图生成零件（预览与插入共用同一入口）。
 pub fn generate(family: &str, d: f64, l: f64, view: &str) -> Result<GenPart, String> {
     if let Some(r) = crate::partgen_more::generate(family, d, l, view) {

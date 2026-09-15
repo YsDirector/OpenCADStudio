@@ -195,6 +195,13 @@ fn route(
             }
         }
         ("POST", "/api/part_pick") => api_part_pick(body, sender),
+        ("POST", "/api/joint") => {
+            let json = "application/json; charset=utf-8";
+            match apply_joint(sender, body) {
+                Ok(s) => (200, json, s),
+                Err(e) => (400, json, serde_json::json!({"ok": false, "error": e}).to_string()),
+            }
+        }
         ("POST", "/api/part_export") => api_part_export(body, sender),
         ("GET", t) if t.starts_with("/api/guide") => api_guide(target, sender),
         ("GET", t) if t.starts_with("/api/tolerance") => api_tolerance(target),
@@ -3283,6 +3290,119 @@ fn api_rough_apply(body: &[u8], sender: &Arc<dyn PluginRequestSender>) -> (u16, 
 
 /// `POST /api/part_export`：**零件出库** —— 生成零件、建好块（幂等）、登记为"待放置"，
 /// 之后图纸里的 `XL` 放置态即可用鼠标跟随预览并连续点放（不需要任何剪切板/宿主改动）。
+/// 零件块名：`OCSM_<族>_<规格>`（只留 ASCII 字母数字/下划线，利于复用、BOM 与排查；
+/// “M8×35”→`M8_35`、“Ø8”→`8`）。
+fn part_block_name(family: &str, spec: &str) -> String {
+    /// `separator_chars`：额外当作分隔符的字符（规格里的 `x`/`×`/`Ø`；族名里没有，
+    /// 所以族名传空——否则 `hex` 的 x 会被切开）。
+    fn clean(text: &str, separator_chars: &[char]) -> String {
+        let mut out = String::new();
+        for ch in text.chars() {
+            if (ch.is_ascii_alphanumeric() || ch == '-') && !separator_chars.contains(&ch) {
+                out.push(ch.to_ascii_uppercase());
+            } else if !out.ends_with('_') {
+                out.push('_');
+            }
+        }
+        out.trim_matches('_').to_string()
+    }
+    format!(
+        "OCSM_{}_{}",
+        clean(family, &[]),
+        clean(spec, &['x', 'X', '×', 'Ø', 'ø'])
+    )
+}
+
+/// `POST /api/joint`：按**件链**装配螺栓副（`OCSMJOINT` 命令走同一实现）。
+///
+/// 与零件库插入同构（建块 → 加 INSERT → 写记录 → 标脏），差别是**一次事务里放多件**：
+/// 件链的高度求和、长度落点（取该族表内供货系列 ≥ 需求的最小值）与各件基点由
+/// `crate::joint::plan` 算好（确定性、可回归）。**不判断“该不该加平垫/弹垫”** ——
+/// 件链由 skill/工况层决定。
+pub(crate) fn apply_joint(
+    sender: &Arc<dyn PluginRequestSender>,
+    body: &[u8],
+) -> Result<String, String> {
+    let spec = crate::joint::JointSpec::from_json(body)?;
+    let plan = crate::joint::plan(&spec)?;
+    begin_undo(sender, "OCSM 螺栓副")?;
+    let doc = snapshot(sender)?;
+    let mut placed: Vec<serde_json::Value> = Vec::new();
+    for placement in &plan.placements {
+        let part = crate::partgen::generate(&placement.family, placement.d, placement.l, &placement.view)?;
+        let block = part_block_name(&placement.family, &part.meta.spec);
+        if !doc.block_records.iter().any(|b| b.name == block) {
+            req_timed(
+                sender,
+                PluginRequest::AddBlockRecord {
+                    name: block.clone(),
+                    entities: part.entities.clone(),
+                },
+                "AddBlockRecord",
+            )?;
+        }
+        let mut ins = acadrust::entities::Insert::new(
+            &block,
+            Vector3::new(placement.at[0], placement.at[1], placement.at[2]),
+        );
+        ins.rotation = placement.rot_rad;
+        {
+            let c = &mut ins.common;
+            c.layer = crate::partgen::LAYER_MAIN.to_string();
+            c.color = ocs_plugin_api::host::acadrust::types::Color::ByLayer;
+            c.linetype = "ByLayer".to_string();
+            c.line_weight = ocs_plugin_api::host::acadrust::types::LineWeight::ByLayer;
+        }
+        let handle = match req_timed(
+            sender,
+            PluginRequest::AddEntities(vec![acadrust::EntityType::Insert(ins)]),
+            "AddEntities",
+        )? {
+            PluginResponse::Handles(hs) => hs.first().copied(),
+            _ => None,
+        };
+        if let Some(h) = handle {
+            let mut rec = ocs_plugin_api::host::acadrust::xdata::ExtendedDataRecord::new("OCSM_PART");
+            rec.values.push(ocs_plugin_api::host::acadrust::xdata::XDataValue::String(
+                serde_json::json!({
+                    "family": placement.family,
+                    "spec": part.meta.spec,
+                    "code": part.meta.code,
+                    "joint": true,
+                    "bolt_l": plan.bolt_l,
+                })
+                .to_string(),
+            ));
+            let _ = req_timed(
+                sender,
+                PluginRequest::WriteRecord { handle: h, record: rec },
+                "WriteRecord",
+            );
+            placed.push(serde_json::json!({
+                "handle": fmt_handle(h),
+                "family": placement.family,
+                "spec": part.meta.spec,
+                "at": placement.at,
+            }));
+        }
+    }
+    req_timed(sender, PluginRequest::BumpGeometry, "BumpGeometry")?;
+    mark_dirty(sender)?;
+    commit_undo(sender);
+    Ok(serde_json::json!({
+        "ok": true,
+        "at": spec.at,
+        "rot": spec.rot_deg,
+        "bolt": { "family": plan.bolt_family, "d": plan.bolt_d, "l": plan.bolt_l },
+        "stack": plan.stack,
+        "need": plan.need,
+        "protrude_mm": plan.protrude_mm,
+        "report": plan.report,
+        "placed": placed,
+    })
+    .to_string())
+}
+
 fn api_part_export(body: &[u8], sender: &Arc<dyn PluginRequestSender>) -> (u16, &'static str, String) {
     let json = "application/json; charset=utf-8";
     match apply_part_export(sender, body) {
@@ -3402,11 +3522,7 @@ pub(crate) fn apply_part_pick(
     let part = crate::partgen::generate(&req.family, req.d, req.l, &req.view)?;
 
     // 块名：族 + 规格（去掉不合法字符，利于复用与排查）
-    let block = format!(
-        "OCSM_{}_{}",
-        req.family.to_ascii_uppercase().replace(['.', ' ', '/'], "_"),
-        part.meta.spec.replace(['.', ' ', '/', 'x', 'X'], "_")
-    );
+    let block = part_block_name(&req.family, &part.meta.spec);
 
     // 插入会建块 + 落 INSERT 实体 → 开事务，结束时 commit。
     begin_undo(sender, "零件插入")?;
@@ -6012,6 +6128,8 @@ struct MockSender {
     blocks: std::sync::Mutex<Vec<(String, Vec<acadrust::EntityType>)>>,
     ensures: std::sync::Mutex<Vec<String>>,
     undos: std::sync::Mutex<Vec<String>>,
+    /// 插入的 INSERT：(块名, 基点, 转角弧度)
+    inserts: std::sync::Mutex<Vec<(String, [f64; 3], f64)>>,
 }
 impl MockSender {
     fn new(doc: acadrust::CadDocument) -> Self {
@@ -6021,11 +6139,16 @@ impl MockSender {
             blocks: std::sync::Mutex::new(Vec::new()),
             ensures: std::sync::Mutex::new(Vec::new()),
             undos: std::sync::Mutex::new(Vec::new()),
+            inserts: std::sync::Mutex::new(Vec::new()),
         }
     }
     /// 撤销事务序列（断言“写之前先 begin、写完后 commit”）。
     fn undos(&self) -> Vec<String> {
         self.undos.lock().unwrap().clone()
+    }
+    /// 插入的 INSERT 序列（块名 / 基点 / 转角）。
+    fn inserts(&self) -> Vec<(String, [f64; 3], f64)> {
+        self.inserts.lock().unwrap().clone()
     }
     fn block_entities(&self, name: &str) -> Vec<acadrust::EntityType> {
         self.blocks.lock().unwrap().iter()
@@ -6100,6 +6223,14 @@ impl PluginRequestSender for MockSender {
                 let mut hs = Vec::new();
                 let mut doc = self.doc.lock().unwrap();
                 for e in es {
+                    // 记下 INSERT 的块名/基点/转角（装配类断言用）。
+                    if let acadrust::EntityType::Insert(ins) = &e {
+                        self.inserts.lock().unwrap().push((
+                            ins.block_name.clone(),
+                            [ins.insert_point.x, ins.insert_point.y, ins.insert_point.z],
+                            ins.rotation,
+                        ));
+                    }
                     if let Ok(h) = doc.add_entity(e) {
                         hs.push(h);
                     }
@@ -7142,6 +7273,36 @@ mod rough_tests {
         let j: serde_json::Value = serde_json::from_str(&out).unwrap();
         let name = j["block"].as_str().unwrap().to_string();
         Ok((j, mock.block_entities(&name)))
+    }
+
+    #[test]
+    fn joint_command_inserts_the_chain_in_one_transaction() {
+        // 用户工况：两板 10+10、Ø10 孔 → 命令只算几何/长度/位置；件链由调用方给。
+        let mock = std::sync::Arc::new(MockSender::new(acadrust::CadDocument::new()));
+        let sender: std::sync::Arc<dyn PluginRequestSender> = mock.clone();
+        let body = br#"{"at":[50,10],"rot":-90,"protrude":2.5,
+            "items":[{"kind":"bolt","family":"hex_bolt_b_full","d":8},
+                     {"kind":"plate","t":10},{"kind":"plate","t":10},
+                     {"kind":"nut","family":"nut_c41","d":8}]}"#;
+        let out = apply_joint(&sender, body).expect("装配成功");
+        let value: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(value["ok"], true);
+        assert!((value["stack"].as_f64().unwrap() - 27.9).abs() < 1e-9);
+        assert!((value["bolt"]["l"].as_f64().unwrap() - 35.0).abs() < 1e-9, "{out}");
+        assert!(value["report"].as_str().unwrap().contains("35"), "{out}");
+
+        // 螺栓基点 = 头部支承面 (50,10)、杆朝下（rot -90）；螺母基点 = Σ 处 (50,-10)、同向。
+        let inserts = mock.inserts();
+        assert_eq!(inserts.len(), 2, "{inserts:?}");
+        assert!(inserts[0].0.contains("HEX_BOLT_B_FULL_M8_35"), "{}", inserts[0].0);
+        assert_eq!(inserts[0].1, [50.0, 10.0, 0.0]);
+        assert!((inserts[0].2 + std::f64::consts::FRAC_PI_2).abs() < 1e-9);
+        assert!(inserts[1].0.contains("NUT_C41_M8"), "{}", inserts[1].0);
+        assert_eq!(inserts[1].1, [50.0, -10.0, 0.0]);
+        // 整链一次事务（一个撤销条目）。
+        let undos = mock.undos();
+        assert_eq!(undos.first().map(String::as_str), Some("begin:OCSM 螺栓副"), "{undos:?}");
+        assert_eq!(undos.last().map(String::as_str), Some("commit"), "{undos:?}");
     }
 
     #[test]

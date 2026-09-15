@@ -20,6 +20,7 @@ mod detail_clip;
 mod dim2gb;
 mod guide_server;
 mod guide_url;
+mod joint;
 mod partgen;
 mod partgen_more;
 pub mod tolerance;
@@ -50,7 +51,7 @@ static MANIFEST: PluginManifest = PluginManifest {
         "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "TF", "OCSM",
         "OCSMFRAMEINIT", "OCSMFRAMEINSERT", "D", "OCSMPOWERDIM", "OCSMDIMGULIDE",
         "GDIM", "OCSMMCP", "OCSMRGH", "CC", "OCSMDIM2GB", "D2G", "OCSMEDIT", "ME",
-        "OCSMPART", "XL", "OCSMBOM", "BOM", "OCSMBOMCFG", "BOMCFG",
+        "OCSMPART", "XL", "OCSMJOINT", "OCSMBOM", "BOM", "OCSMBOMCFG", "BOMCFG",
     ],
 };
 
@@ -847,6 +848,11 @@ impl BuiltinPlugin for OcsmPlugin {
                 self.cmd_roughness(host);
                 true
             }
+            // 按件链装配螺栓副（确定性执行器）：`OCSMJOINT at … bolt=… plate=… nut=…`
+            "OCSMJOINT" => {
+                self.cmd_joint(host, rest);
+                true
+            }
             "OCSMPART" | "XL" => {
                 self.cmd_parts(host, rest);
                 true
@@ -1166,6 +1172,42 @@ impl OcsmPlugin {
         match crate::guide_server::apply_part_pick(&sender, spec.to_body().as_bytes()) {
             Ok(msg) => host.push_output(&format!("OCSM 标准件：{msg}")),
             Err(e) => host.push_error(&format!("OCSM 标准件插入失败：{e}")),
+        }
+    }
+
+    /// `OCSMJOINT`：按件链装配螺栓副（几何/长度/放置确定性，可撤销）。
+    ///
+    /// **不判断件链**（该不该加平垫/弹垫/防松件属于工况判断）：件链由 skill/工艺层给出，
+    /// 命令只负责“算得对、放得准、能回退”。
+    fn cmd_joint(&self, host: &mut dyn HostApi, args: &str) {
+        if args.trim().is_empty() {
+            host.push_error(
+                "OCSMJOINT 用法：OCSMJOINT at x,y rot 度 [protrude 扣数] \
+                 bolt=<族>:<d>[:<l>] [plate=<厚>|gap=<厚>|nut=<族>:<d>|washer=<族>:<d>] …",
+            );
+            return;
+        }
+        let spec = match crate::joint::JointSpec::parse(args) {
+            Ok(spec) => spec,
+            Err(e) => {
+                host.push_error(&format!("OCSMJOINT: {e}"));
+                return;
+            }
+        };
+        let Some(sender) = host.plugin_request_sender() else {
+            host.push_error("OCSMJOINT: 宿主不支持 worker 请求，无法装配。");
+            return;
+        };
+        let sender: std::sync::Arc<dyn PluginRequestSender> = std::sync::Arc::from(sender);
+        match crate::guide_server::apply_joint(&sender, spec.to_json().as_bytes()) {
+            Ok(body) => {
+                let report = serde_json::from_str::<serde_json::Value>(&body)
+                    .ok()
+                    .and_then(|value| value["report"].as_str().map(str::to_string))
+                    .unwrap_or(body);
+                host.push_output(&report);
+            }
+            Err(e) => host.push_error(&format!("OCSMJOINT: {e}")),
         }
     }
 

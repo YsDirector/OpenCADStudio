@@ -1687,7 +1687,8 @@ pub fn family_views(family: &str) -> Vec<&'static str> {
         "nut_6170" => vec![],
         // 销族：用户模板里只有一个视图（119.1 轴向外形；120.1 外形 + 局部剖）
         "pin_1191" | "pin_1201" => vec!["main"],
-        // 垫圈：主视图（面视）+ 左视图（侧视）；用户明确"不需要俯视图"
+        // 垫圈：主视图（侧视：平垫=矩形、弹垫=月牙）+ 左视图（面视）；用户明确"不需要俯视图"
+        // 两视图内容在 2026-09-15 按用户要求互换过（装配插的永远是 main）。
         "washer_971" | "washer_93" => vec!["main", "end"],
         _ => vec![],
     }
@@ -2360,7 +2361,8 @@ fn pin_threaded_weight_kg(row: &ThreadedPinRow, l: f64) -> f64 {
 /// 平垫圈（GB/T 97.1）的一个视图。
 ///
 /// - 基点：**左端面 × 轴线**
-/// - `main`：面视（两圆 d2 / d1）；`end`：左视图 = 侧视（矩形 h × d2）
+/// - `main`：**侧视**（矩形 h × d2，装配/剖视图用）；`end`：左视图 = 面视（两圆 d2 / d1）
+///   —— 2026-09-15 用户要求主视图/左视图互换（主视图 = 装配要用的侧视轮廓）。
 pub fn flat_washer(d: f64, view: NutView) -> Result<GenPart, String> {
     let row = washer_971_row(d).ok_or_else(|| format!("GB/T 97.1 数据表里没有 Ø{}", trim(d)))?;
     let (d1, d2, h) = (row.d1, row.d2, row.h);
@@ -2376,8 +2378,8 @@ pub fn flat_washer(d: f64, view: NutView) -> Result<GenPart, String> {
     };
     let mut en: Vec<EntityType> = Vec::new();
     match view {
-        NutView::End | NutView::Top => {
-            // 左视图 = 侧视：矩形 h × d2
+        NutView::Main | NutView::Top => {
+            // 主视图（装配用）= 侧视：矩形 h × d2
             en.push(line([0.0, d2 / 2.0], [h, d2 / 2.0], LAYER_MAIN));
             en.push(line([0.0, -d2 / 2.0], [h, -d2 / 2.0], LAYER_MAIN));
             en.push(line([0.0, d2 / 2.0], [0.0, -d2 / 2.0], LAYER_MAIN));
@@ -2386,7 +2388,7 @@ pub fn flat_washer(d: f64, view: NutView) -> Result<GenPart, String> {
             Ok(GenPart { entities: en, meta, bbox: [0.0, -d2 / 2.0, h, d2 / 2.0] })
         }
         _ => {
-            // 面视：外径圆 + 内径圆
+            // 左视图 = 面视：外径圆 + 内径圆
             en.push(circle([0.0, 0.0], d2 / 2.0, LAYER_MAIN));
             en.push(circle([0.0, 0.0], d1 / 2.0, LAYER_MAIN));
             let o = d2 / 2.0 + AXIS_OVER;
@@ -2400,8 +2402,8 @@ pub fn flat_washer(d: f64, view: NutView) -> Result<GenPart, String> {
 /// 弹簧垫圈（GB/T 93）的一个视图。
 ///
 /// - 基点：**端面中心**
-/// - `main` 面视：内外弧 + 开口端面线（开口宽 gap，默认 0.075d）
-/// - `end` 左视图：两片月牙（被剪开环带的侧视简化画法）
+/// - `main` **侧视**：两片月牙（被剪开环带的侧视简化画法，装配/剖视图用）
+/// - `end` 左视图：面视——内外弧 + 开口端面线（开口宽 gap，默认 0.075d）
 /// 弹簧垫圈（GB/T 93）的一个视图 —— 画法 100% 由用户模板反解
 /// （`~/桌面/GB/参数化/标准型弹簧垫圈_GB-T93-1987/`，主视图 + 左视图 DXF 逐条量取）。
 ///
@@ -2430,7 +2432,8 @@ pub fn spring_washer(d: f64, view: NutView) -> Result<GenPart, String> {
     let mut en: Vec<EntityType> = Vec::new();
     let half = |r: f64, y: f64| ((y / r).min(1.0)).asin().to_degrees();
     match view {
-        NutView::Main => {
+        // 2026-09-15 用户要求主视图/左视图互换：面视挪到左视图，主视图 = 侧视月牙。
+        NutView::End => {
             en.push(arc([0.0, 0.0], r_out, half(r_out, g1), 360.0 - half(r_out, g1), LAYER_MAIN));
             en.push(arc([0.0, 0.0], r_in, half(r_in, g1), 360.0 - half(r_in, g1), LAYER_MAIN));
             let x = |r: f64, y: f64| (r * r - y * y).max(0.0).sqrt();
@@ -3067,7 +3070,7 @@ mod acm_ref_tests {
         let g2 = g1 + s * 15f64.to_radians().tan(); // 模板实测 1.0213
         assert!((g1 - 0.3246).abs() < 1e-3, "近侧端面 y = s/8");
         assert!((g2 - 1.0213).abs() < 1e-3, "远侧端面 y = s/8 + s·tan15°，实得 {g2}");
-        let face = spring_washer(10.0, NutView::Main).unwrap();
+        let face = spring_washer(10.0, NutView::End).unwrap();
         let arcs: Vec<&ocs_plugin_api::host::acadrust::entities::Arc> = face
             .entities
             .iter()
@@ -3095,8 +3098,8 @@ mod acm_ref_tests {
         assert!(mains.iter().any(|(_, y)| (*y - g1).abs() < 1e-6), "近侧上端面实线在 +s/8");
         assert!(mains.iter().any(|(_, y)| (*y + g1).abs() < 1e-6), "近侧下端面实线");
         assert!(mains.iter().any(|(_, y)| (*y + g2).abs() < 1e-6), "远侧下端面实线（实线）");
-        // 左视图：两个半矩形（s × r_out，LwPolyline）+ 两条 15° 斜切口
-        let side = spring_washer(10.0, NutView::End).unwrap();
+        // 主视图：两个半矩形（s × r_out，LwPolyline）+ 两条 15° 斜切口
+        let side = spring_washer(10.0, NutView::Main).unwrap();
         let polys: Vec<&ocs_plugin_api::host::acadrust::entities::LwPolyline> = side
             .entities
             .iter()
