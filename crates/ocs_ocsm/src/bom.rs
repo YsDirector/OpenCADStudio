@@ -238,8 +238,10 @@ pub(crate) fn cell_values(it: &BomItem, seq: usize) -> [String; 8] {
 
 /// 压缩后的**最小字高**（再小就看不清了；宁可让它压到最小后允许轻微溢出并在命令行点名）。
 const MIN_CELL_TEXT_H: f64 = 2.0;
-/// 压缩后的**最小宽度因子**（横向挤压的下限）。
-const MIN_WIDTH_FACTOR: f64 = 0.6;
+/// 横向压缩的**告警阈值**：宽度因子压到名义值的这个比例以下就算"压得太扁"（只提醒，不阻止）。
+///
+/// 没有下限 —— 用户定案「宽度因子可以无限压缩」，保证文字**永远压进格内、绝不到邻格**。
+const WARN_WIDTH_FACTOR: f64 = 0.7;
 /// 单元格左右留白合计（mm）：可用宽度 = 列宽 − 这个值。
 ///
 /// 2.5 mm = 每侧 1.25 mm。别调太小（1.0 时压缩后的文字会顶满格子，看着像压到邻格）。
@@ -265,9 +267,13 @@ fn cell_text_width(s: &str, h: f64, wf: f64) -> f64 {
     s.chars().map(|c| h * wf * char_em(c)).sum()
 }
 
-/// **单元格文字自动压缩**：先压字高到下限，再横向压宽度因子（下限 = 名义值 × 0.6）。
+/// **单元格文字自动压缩**：先压字高到下限，再**无限**横向压宽度因子。
 ///
-/// 返回 `(字高, 宽度因子, 是否仍溢出)`；短文本原样返回。
+/// 顺序：① 字高按"刚好放得下"算（但不低于 [`MIN_CELL_TEXT_H`]）；
+/// ② 若压到下限仍然放不下 → 横向压缩宽度因子，**不设下限**（用户定案：可以无限压），
+/// 保证文字永远压进格内、绝不到邻格。
+///
+/// 返回 `(字高, 宽度因子, 是否仍溢出)`；短文本原样返回（溢出只在退化输入下可能出现）。
 pub(crate) fn fit_cell_text(
     value: &str,
     avail: f64,
@@ -288,9 +294,9 @@ pub(crate) fn fit_cell_text(
     if cell_text_width(v, h, wf0) <= avail + 1e-9 {
         return (h, wf0, false);
     }
-    // ② 还长 → 横向压缩（字高保底不动，宽度因子最多压到 0.6×）
+    // ② 还长 → 横向压缩（字高保底不动；宽度因子**不设下限**，压到刚好放得下为止）
     let need2 = cell_text_width(v, h, wf0);
-    let wf = (wf0 * avail / need2).max(wf0 * MIN_WIDTH_FACTOR);
+    let wf = wf0 * avail / need2;
     let overflow = cell_text_width(v, h, wf) > avail + 1e-9;
     (h, wf, overflow)
 }
@@ -507,8 +513,8 @@ pub(crate) struct BomReport {
     pub untracked: usize,
     /// 被自动压缩（压字高/横向挤压）的单元格数。
     pub squeezed: usize,
-    /// 压到下限仍可能溢出的单元格（"tag=值"），供命令行点名。
-    pub overflow: Vec<String>,
+    /// **横向压得偏扁**（宽度因子 < 名义 × 0.7）的单元格（"tag「值」42%"），供命令行点名。
+    pub squeezed_hard: Vec<String>,
 }
 
 /// **建行核心**（命令 `BOM` 与球标联动共用）：按 `rows` 的次序重建全部行块，
@@ -582,7 +588,7 @@ pub(crate) fn fill_bom(
     let row_block_entities: Vec<EntityType> = doc.entities_in_block(ROW_BLOCK).cloned().collect();
     let cell_cols = row_cell_widths(&row_block_entities);
     let mut squeezed = 0usize;
-    let mut overflow: Vec<String> = Vec::new();
+    let mut squeezed_hard: Vec<String> = Vec::new();
 
     // ④ 建表（表头 + 行，含 8 个属性值），全部打 OCSM_BOM 标记。
     let mut ents: Vec<EntityType> = Vec::new();
@@ -630,9 +636,16 @@ pub(crate) fn fill_bom(
                     if (h - ad.height).abs() > 1e-9 || (f - wf0).abs() > 1e-9 {
                         squeezed += 1;
                     }
-                    if over {
-                        overflow.push(format!("{}「{}」", ad.tag, values[idx]));
+                    // 压得太扁（可读性下降）→ 点名，建议加宽列/缩短文本
+                    if f < wf0 * WARN_WIDTH_FACTOR {
+                        squeezed_hard.push(format!(
+                            "{}「{}」{:.0}%",
+                            ad.tag,
+                            values[idx],
+                            f / wf0 * 100.0
+                        ));
                     }
+                    let _ = over;
                     a.height = h;
                     a.width_factor = f;
                 }
@@ -676,7 +689,7 @@ pub(crate) fn fill_bom(
         added,
         untracked,
         squeezed,
-        overflow,
+        squeezed_hard,
     })
 }
 
@@ -886,11 +899,12 @@ fn report_cell_fit(host: &mut dyn HostApi, rep: &BomReport) {
             rep.squeezed
         ));
     }
-    if !rep.overflow.is_empty() {
+    if !rep.squeezed_hard.is_empty() {
         host.push_info(&format!(
-            "OCSMBOM: 下面 {} 格压到下限仍可能压到邻格：{}（建议加宽列 / 把标准号写进名称列 / 缩短文本）。",
-            rep.overflow.len(),
-            rep.overflow.join("、")
+            "OCSMBOM: 下面 {} 格横向压得偏扁（已压进格内、不会到邻格，但可读性下降）：{} \
+             （建议加宽该列 / 缩短文本 / 把标准号写进名称列）。",
+            rep.squeezed_hard.len(),
+            rep.squeezed_hard.join("、")
         ));
     }
 }
@@ -1367,12 +1381,17 @@ mod tests {
         assert!(h2 < h0 && !over2, "h={h2}");
         // 图号 `GB/T 5780-2016` 在**够宽的**格里不动（37mm 列 → 可用 34.5）
         assert_eq!(fit_cell_text("GB/T 5780-2016", 40.0, h0, wf0), (h0, wf0, false));
-        // 极长（60 个汉字）→ 压到下限仍溢出 → 要能被点名
+        // 极长（60 个汉字）→ 字高到底后**无限横向压缩**，保证一定放进格内、绝不到邻格
         let long: String = "超长名称".repeat(15);
         let (h3, wf3, over3) = fit_cell_text(&long, 36.0, h0, wf0);
         assert_eq!(h3, MIN_CELL_TEXT_H);
-        assert!((wf3 - wf0 * MIN_WIDTH_FACTOR).abs() < 1e-9);
-        assert!(over3, "这种要报出来让用户处理");
+        assert!(wf3 < wf0 * WARN_WIDTH_FACTOR, "应压得很扁：{wf3}");
+        assert!(!over3, "压到底也必须放得下（用户定案：宽度因子可无限压缩）");
+        assert!(cell_text_width(&long, h3, wf3) <= 36.0 + 1e-9);
+        // 极端：可用宽只有 1mm 也照样压进去
+        let (_, wf4, over4) = fit_cell_text(&long, 1.0, h0, wf0);
+        assert!(!over4);
+        assert!(wf4 < wf0 * 0.1);
         // 空文本/异常参数不炸
         assert_eq!(fit_cell_text("  ", 10.0, h0, wf0), (h0, wf0, false));
         assert_eq!(fit_cell_text("abc", 0.0, h0, wf0), (h0, wf0, false));
