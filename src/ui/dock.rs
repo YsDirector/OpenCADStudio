@@ -67,13 +67,22 @@ impl PanelId {
         match self {
             PanelId::Properties => 250.0,
             PanelId::BlockPalette => 260.0,
-            // A chat transcript wants a comfortable reading column.
-            PanelId::Ai => 420.0,
+            // A chat column should not steal the drawing area by default.
+            PanelId::Ai => 340.0,
         }
     }
 
-    /// Per-panel width ceiling. Web content (full web apps) legitimately wants
-    /// more than the palette-ish 600px default.
+    /// Per-panel width floor. The AI panel is a chat column used *next to* the
+    /// drawing, so it may be squeezed far below the palette-ish default.
+    pub fn min_width(self) -> f32 {
+        match self {
+            PanelId::Ai => 150.0,
+            _ => DOCK_MIN_W,
+        }
+    }
+
+    /// Per-panel width ceiling. Full web/palette views want more than the
+    /// palette-ish 600px default.
     fn max_width(self) -> f32 {
         match self {
             PanelId::Ai => 1200.0,
@@ -84,7 +93,9 @@ impl PanelId {
     /// Per-panel share of the window width the dock may ever take.
     fn max_fraction(self) -> f32 {
         match self {
-            PanelId::Ai => 0.6,
+            // A chat panel must stay a side column even on a small window; on a
+            // ~750px-wide window 0.6 was half the drawing area.
+            PanelId::Ai => 0.4,
             _ => 0.45,
         }
     }
@@ -111,7 +122,10 @@ impl DockPanel {
     fn for_id(id: PanelId) -> Self {
         Self {
             width: id.default_width(),
-            auto_collapse: false,
+            // The AI panel starts pinned: it collapses to a rail unless the
+            // pointer is over it, so it never eats the drawing area by default.
+            // (The pin button unpins it for a permanent column.)
+            auto_collapse: matches!(id, PanelId::Ai),
         }
     }
 }
@@ -184,11 +198,12 @@ impl DockState {
 
     /// Docked width for `id`, clamped to sane bounds.
     pub fn width(&self, id: PanelId, win_w: f32) -> f32 {
+        let floor = id.min_width();
         self.settings(id).width.clamp(
-            DOCK_MIN_W,
+            floor,
             id.max_width()
                 .min(win_w * id.max_fraction())
-                .max(DOCK_MIN_W),
+                .max(floor),
         )
     }
 
@@ -199,7 +214,7 @@ impl DockState {
     /// Set the persisted width, clamped.
     pub fn set_width(&mut self, id: PanelId, width: f32) {
         let entry = self.panels.entry(id).or_insert_with(|| DockPanel::for_id(id));
-        entry.width = width.clamp(DOCK_MIN_W, id.max_width());
+        entry.width = width.clamp(id.min_width(), id.max_width());
     }
 
     /// Reset width to the panel's default.

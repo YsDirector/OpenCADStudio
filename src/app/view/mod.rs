@@ -2615,6 +2615,15 @@ impl OpenCADStudio {
                     iced::Event::Window(window::Event::FileDropped(path)) => {
                         Some(Message::FileDropped(path))
                     }
+                    // The dock's drag/resize preview ("ghost") is only cleared by
+                    // a mouse release *inside* the window. Releasing outside (or
+                    // alt-tabbing away mid-drag) used to leave it stuck on screen
+                    // — the blue panel-shaped outline users see. Any focus loss
+                    // now ends the gesture; a plain click inside the window still
+                    // clears it too.
+                    iced::Event::Window(window::Event::Unfocused) => {
+                        Some(Message::Dock(crate::ui::dock::DockMsg::DragRelease))
+                    }
                     iced::Event::Keyboard(keyboard::Event::ModifiersChanged(m)) => {
                         // `command()` is Cmd on macOS, Ctrl elsewhere — the
                         // platform multi-select modifier for the layer list.
