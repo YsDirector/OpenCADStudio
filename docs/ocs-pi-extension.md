@@ -1,104 +1,109 @@
-# OCS Pi Extension（原「网页面板 / AI 助手」线）— 交接与待办
+# OCS Pi Extension（原「网页面板 / AI 助手」线）— 交接与状态
 
-> 2026-09-16 交接。上一会话上下文已满，本文件是唯一入口：新会话从「现状 → 待办」读起即可。
+> 2026-09-16 Phase 2 已交付（提交 `5f946787`）。本文件继续作为唯一入口。
 
 ## 1. 定位与命名
 
 - 正式名：**OCS Pi Extension**（宿主内建面板，标题「Pi 助手」，命令 `PI`，别名 `OCSPI` / `AI` / `AICHAT`）。
 - **它是宿主内建能力，不是插件**：宿主插件 API 没有「注册 UI 面板」的能力，而 iced 控件无法跨进程传递，
   所以面板内容必须由宿主自己用 iced 画（`src/ui/pi_panel.rs`）。
-- 曾经的方案（**已废弃并删除**）：通用「网页面板」插件 `crates/ocs_webpanel` + 子进程 GTK/WebKitGTK +
-  `XReparentWindow` 嵌进宿主窗口。放弃原因：宿主绘制的面板标题栏（× / 图钉）与 5px 拖动分割线被盖住、
-  对齐脆弱、双进程争焦点、依赖 XWayland、缩放/DPI 要自己换算、视觉不像原生。
-  提交 `a4f122ec` 已把这条线（插件 crate、API v7 的 `DockRect`/`SetWebPanelDocked`/`WebPanelRect`、
-  宿主 `web_panel_rect`、两列 bounds 上报、已安装插件目录）全部移除。
-- 因此**通用性不再成立**：本面板专用于 pi（`pi-web` 本地 HTTP API），故按用户要求改名 Pi Extension。
+- 通用「网页面板」方案已废弃删除（见 Phase 1 交接史，提交 `a4f122ec`）。
 
-## 2. 现状（已完成，可运行）
+## 2. 现状（Phase 2 完成，已实机验证）
 
 | 提交 | 内容 |
 |---|---|
-| `a4f122ec` | 停靠位改原生面板；删除 webview 方案；`PanelId::Pi`（当时叫 `Ai`）；面板骨架；数据层 `src/pi.rs`；命令 `PI` |
-| `7ee77938` | 宽度策略（下限 150 / 上限占窗 40% / 默认 340 / 默认钉住）+ 拖动幽灵失焦清除 |
-| `675e552b` | **真因修复**：面板 `view(width, …)` 必须 `.width(Length::Fixed(width))` |
-| 本提交 | 改名 Pi（`PanelId::Pi` / `PiPanelState` / `src/pi.rs` / `src/ui/pi_panel.rs`）+ 本文件 |
+| `a4f122ec`~`01281249` | Phase 1：原生停靠面板骨架、宽度策略、Fixed(width) 真因修复、改名 Pi |
+| `5f946787` | **Phase 2**：聊天面板完整交付（见下） |
 
-现在能做的：命令 `PI` 在右侧栏停靠出原生面板，可拖宽（150 起）、换边、钉住收起、关闭；
-面板显示连接状态占位（"未连接 / 正在连接 / 已就绪"），**还没有消息列表与输入框**。
+Phase 2 功能清单（用户已定案：工具/思考默认折叠、流式中发送排队、跟随最近活跃+顶部会话切换下拉、不接审批 UI）：
 
-## 3. 待办：Phase 2（把内容做出来）
+- **数据层 `src/pi.rs`**：worker（会话列表/命令）+ reader（SSE 解析）双线程；
+  事件全覆盖：`message_update`（text/thinking 流式 delta、toolcall）、`message_start|end`、
+  `tool_execution_*`、`agent_start|end`、`queue_update`、`startup_error`；
+  **chunked 响应解码**（Next.js 全部走 Transfer-Encoding: chunked，不 decode 连 sessions 都解析不了）；
+  POST 用 **`{"type":"prompt","message":…}`**（不是 `{"prompt":…}`，会被 `prompt_rejected` 拒绝），
+  流式中自动加 `streamingBehavior:"followUp"` 走服务端排队；
+  会话列表 + `Watch(id)` 切换 + session `.jsonl` 尾部回填历史。18 个单测。
+- **UI `src/ui/pi_panel.rs`**：原生头部（图钉/关闭/DockGrab）+ 会话下拉 + 状态行（重连）+
+  滚动消息列表（用户气泡/助手文本/思考折叠/工具折叠带「完成绿/出错红/运行中紫」徽标）+
+  底部多行输入框（`text_editor` + `.key_binding` 拦截 Enter：无修饰发送、Shift+Enter 换行）+
+  排队/流式提示。事件折叠状态机 `PiPanelState::apply`：乐观气泡 + 回声去重、
+  流式原地追加（按 contentIndex 分块）、工具按 call-id 幂等合并、
+  条目 id 用内容 FNV 哈希（重连回填后展开状态保持）。9 个单测。
+- **接线**：`Message::Pi(PiMsg)` → `src/app/update/pi.rs`；10Hz `PiMsg::Poll` 订阅（仅面板可见时）；
+  面板开/关（PI 命令、DockMsg::Close）起停 worker。
 
-数据层已就绪（`src/pi.rs`，2 个单测），缺的是接到 UI 上：
+已实机验证（OCS 运行中 + pi-web 本地服务）：跟随最近活跃会话、历史回填（消息/思考/工具折叠行）、
+实时工具流（新 toolcall 实时流入面板）、composer 输入+Enter 排队（「已排队 1 条」）、
+乐观气泡 + 输入清空、折叠行渲染（▸/▾ + 徽标）。
 
-1. **轮询客户端事件**：宿主每帧有 `Message::Tick(Instant)`（`window::frames()` 订阅，见
-   `src/app/view/mod.rs`）。在 Tick 里 `while let Ok(ev) = state.worker.rx.try_recv()` 抽干事件，
-   映射成 `PiPanelState` 的状态/条目；只在必要时 `Task::none()`（不要每帧重绘整列）。
-   建议新增 `Message::PiPoll`（订阅里节流到 ~10Hz）而不是直接用 Tick，避免 60fps 空转。
-2. **消息列表**（iced 原生）：
-   - 用户消息 / 助手文本（流式中**原地追加**到同一条 `PiEntry::Assistant`，靠 `message_start|end` 配对）
-   - 思考块：默认折叠（一行摘要 + 点击展开）
-   - 工具调用：`PiEntry::Tool { name, output, done }`，标题行「工具名 + 运行中/完成」，
-     输出默认可折叠（长输出截断显示，展开看全量）
-   - 用 `scrollable`，新事件到达时滚到底（`scrollable::scroll_to` 需要 `scrollable::Id`）
-3. **底部输入框**：多行（`text_editor`），Enter 发送 / Shift+Enter 换行；
-   发送 → `Command::Send { session, prompt }`，本地先插入 `PiEntry::User` 并清空输入；
-   流式中禁用发送或改为排队（二选一并注释理由）。
-4. **异常态**：pi-web 未运行 → 显示「未连接 + 启动方式（`pi-web` 或 `node ~/.local/bin/pi-web`）」，
-   重连按钮（`Command::Reconnect`）；不阻塞宿主、不刷屏报错。
-5. **会话**：`/api/sessions` 已有列表与首条消息；Phase 2 先"跟随最近活跃会话"，
-   顶部可选加一个会话切换下拉（`/api/agent/<id>/events` 换 id + `Event::Replace` 清空列表）。
-   回填历史：SSE 只推新事件，历史可读 `/api/sessions` 里的 `path`（session `.jsonl`）尾部。
-6. 可选：`extension_ui_request`（`setWidget`，如 `bash-bg` 后台任务小部件）→ 面板底部显示一行状态。
+## 3. Phase 2 中踩到的坑（血泪新增）
 
-## 4. 关键契约与坑（血泪版）
+- **Next.js 的 HTTP 响应全部是 chunked**：手写 HTTP 客户端必须 de-chunk，否则 body 前是
+  hex 长度行，`serde_json` 全部失败（症状：`pi-web 没有会话`）。
+- **POST body 是 `{type:"prompt", message}`**：pi-web route 取 `body.type==="prompt"` 才接受；
+  `{"prompt":…}` 返回 500 + `prompt_rejected`。排队加 `streamingBehavior:"followUp"`（steer=打断改向）。
+- **iced `text_editor` 的 Enter/Shift+Enter**：本版本有 `.key_binding(|KeyPress| -> Option<Binding>)`，
+  拦截 `Key::Named(Named::Enter) && !modifiers.shift()` 返回 `Binding::Custom(发送)`，
+  其余走 `Binding::from_key_press(kp)`。
+- **滚动到底**：`iced::widget::operation::snap_to_end(widget::Id)` 现成的，别用相对 offset 凑。
+- **pick_list 助手函数参数顺序**是 `(selected, options, to_string)`（与 `PickList::new` 相同，先 selected）。
+- **消息列表自动滚底 + 实时流**会让 GUI 点击坐标漂移（行在截图与点击之间移动）；
+  自动化点击验证要么切到安静会话，要么接受漂移靠单测兜底。
+- **验收环境**：KWin Wayland 屏 2560×1600 物理 / **2048×1280 逻辑（缩放 1.25）**；
+  uinput 相对位移被 libinput 加速（≈2×）不可控 → 用 **ABS 触摸设备**（`/tmp/ui-touch.py`，
+  ABS 范围映射逻辑屏）精确点击；`wtype` 在 KWin 不可用（无虚拟键盘协议）；
+  键盘输入也用 uinput（设备要 UI_SET_KEYBIT 全部字母，`goto` 后等 0.25s 设备 settle）。
+  每次截图会弹 Spectacle 通知（挡面板右上），截图用 delay 0 或先点 × 关通知。
+- **视觉验收用子代理量截图**（沿用 Phase 1 约定）。
 
-- **面板宽度**：`build_edge_stack` 把列宽传进 `view(width, …)`；实现**必须** `.width(Length::Fixed(width))`，
-  写 `Fill` 会与画布平分同一行空间（症状：宽度与 `dock.set_width` 存的值无关、关掉另一侧面板后恰好占 50%）。
-  内置面板 `src/ui/properties.rs`、`src/ui/window/block_palette.rs` 是正确范例。
-- **dock 配置**：`~/.config/OpenCADStudio/settings.json` 的**顶层 `dock` 键**：
-  `{"left":[…],"right":[…],"panels":{"<id>":{"width":f32,"auto_collapse":bool}}}`。
-  **改配置必须先关 OCS**：运行中的实例退出时会把内存值写回，覆盖你的修改。
-  本次改名把 serde 键从 `ai` 改为 `pi` → 旧 `ai` 条目被忽略，将采用新默认（340 + 钉住）；
-  想手工设定就写 `"pi": {"width":300.0,"auto_collapse":false}`。
-- **钉住语义**：`auto_collapse: true` = 平时收成窄轨（`DOCK_RAIL_W`）、鼠标悬停才展开；图钉按钮切换。
-- **拖动幽灵**：蓝色 2px 边框 + 蓝底标题 = `dock_dragging` 投放预览；窗口内点一下或
-  `window::Event::Unfocused` 会结束手势（后者是本次补的修复）。
-- **验收方式（用户指定）**：改完用**视觉子代理**读截图量像素（它会给出每块面板左右边界与占比），
-  再用配置里的宽度/比例复核，不要凭肉眼看截图下结论（我在这上面错过两轮）。
-- **构建/重启**：`cargo build --release`（全量约 1.5 min，机器负载高时更久）→ `pkill -x OpenCADStudio` →
-  `bash /tmp/launch-ocs.sh 1231`（原生 Wayland）或 `bash /tmp/launch-ocs-x11.sh`（XWayland，现已不需要）。
-  自动化接口：`mcporter call ocs.ocs_sessions` → `ocs.ocs_read op:"state"` → `ocs.ocs_execute op:"run" cmd:"PI"`。
-  注意：欢迎页不渲染停靠栏，必须 `op:"new"` 新建图纸后再开面板。
+## 4. 关键契约与坑（Phase 1 沿用）
 
-## 5. pi-web 本地 API 契约（详见 wiki: `pi-web 本地 API 契约`）
+- 面板 `view(width, …)` 必须 `.width(Length::Fixed(width))`（正确范例 `src/ui/properties.rs`）。
+- dock 配置：`~/.config/OpenCADStudio/settings.json` 顶层 `dock` 键；**改配置先关 OCS**。
+  当前：`pi: {width: 347.6, auto_collapse: false}`。
+- 构建/重启：`cargo build --release`（≈1.5min）→ `pkill -x OpenCADStudio` → `bash /tmp/launch-ocs.sh 1178`。
+  自动化接口：`mcporter call ocs.ocs_sessions` → `ocs.ocs_execute {request:{op:"run",cmd:"PI"},ocs_session_id,request_id}`（**request_id 在 request 对象里**）。
+  欢迎页不渲染停靠栏，先 `op:"new"`。
+
+## 5. pi-web 本地 API 契约（实测版，详见 wiki）
 
 | 用途 | 请求 |
 |---|---|
-| 会话列表 | `GET /api/sessions` → `{"sessions":[{id,path,cwd,modified,messageCount,firstMessage}]}` |
-| 事件流 | `GET /api/agent/<id>/events` → SSE `data: {json}` |
-| 发消息 | `POST /api/agent/<id>`，body `{"prompt":"…"}` |
+| 会话列表 | `GET /api/sessions` → `{"sessions":[{id,path,cwd,modified,messageCount,firstMessage}]}`（按 modified 降序） |
+| 事件流 | `GET /api/agent/<id>/events` → SSE `data: {json}`（30s 心跳 `: \n\n`） |
+| 发消息 | `POST /api/agent/<id>`，body `{"type":"prompt","message":"…"}`（排队加 `"streamingBehavior":"followUp"`） |
 
-SSE 事件：`connected`（`isStreaming`）、`message_start`/`message_end`（`message.role` =
-`user`/`assistant`/`toolResult`，`content[].text`）、`tool_execution_update`（`partialResult`）、
-`tool_execution_end`（`result`）、`extension_ui_request`（`setWidget`）。
-默认端点 `http://127.0.0.1:30141`（可用环境变量 `OCS_PI_ENDPOINT` 覆盖）。
+SSE 事件（wire 过滤 turn_start/turn_end、message_update 的 partial 已剥除）：
+`connected{sessionId,isStreaming}`、`message_start|end{message{role,content[],toolCallId,toolName}}`、
+`message_update{assistantMessageEvent{type:text_start|text_delta|text_end|thinking_*|toolcall_start|toolcall_end|error,
+contentIndex,delta/content/toolCall{id,toolName}}}`、
+`tool_execution_start|update|end{toolCallId,toolName,partialResult|result}`、
+`agent_start|agent_end`、`agent_settled`、`queue_update{steering[],followUp[]}`、
+`startup_error{errorMessage}`、`extension_ui_request`（暂未接）。
+默认端点 `http://127.0.0.1:30141`（`OCS_PI_ENDPOINT` 覆盖）。
+pi-web 源码：`/home/ysdirector/dev/pi-web`；事件投影逻辑 `lib/agent-event-wire.ts`、
+`app/api/agent/[id]/events/route.ts`；客户端消费范例 `hooks/useAgentSession.ts`。
 
 ## 6. 文件地图
 
 ```
-src/pi.rs                        pi-web 客户端（工作线程 + SSE 解析 + 单测）
-src/ui/pi_panel.rs               Pi 面板：状态 + header（pin/close/DockGrab）+ 占位内容
-src/ui/dock.rs                   PanelId::Pi（宽度策略：150 / 40% / 340 / 默认钉住）
+src/pi.rs                        pi-web 客户端：worker/reader、SSE 映射、dechunk、回填、排队（18 测）
+src/ui/pi_panel.rs               面板：状态机 apply() + 全套 UI（9 测）
+src/app/update/pi.rs             Message::Pi 处理器（Poll/Editor/Send/SessionPick/Toggle/Reconnect）
+src/app/update/mod.rs            TogglePiPanel 开停 worker；mod pi;
+src/app/update/dialog.rs         DockMsg::Close → stop_worker
+src/app/view/mod.rs              10Hz PiPoll 订阅；expanded_panel Pi 分支
+src/app/mod.rs                   Message::Pi(PiMsg)
+src/ui/dock.rs                   PanelId::Pi 宽度策略（150 / 40% / 340 / 默认钉住）
 src/app/document.rs              tab 字段 pi_panel
-src/app/update/mod.rs            Message::TogglePiPanel（停靠 + 启动客户端线程）；Tick 轮询要加在这
-src/app/update/dialog.rs         可见性（dock_panel_visible）与关闭语义
-src/app/view/mod.rs              expanded_panel 的 Pi 分支；订阅（含 Unfocused → DragRelease）
 src/app/commands/display.rs      PI / OCSPI / AI / AICHAT 命令
 ```
 
-## 7. 开放问题（下次先问用户）
+## 7. 可选后续（Phase 3 候选，未做）
 
-1. 工具输出默认展开还是折叠？思考块要不要显示？
-2. 发送后是"禁用输入"还是"排队"？
-3. 会话跟随最近活跃，还是顶部加会话切换器？
-4. 是否需要把 pi 的审批弹窗（`permission` 类交互）也接进面板？（可能超出面板范围，先问）
+1. `extension_ui_request`（`setWidget`，如 `bash-bg` 后台任务小部件）→ 面板底部一行状态。
+2. 审批交互（用户已定不接；若 pi 侧策略变化再议）。
+3. 发送失败自动重试、历史回填条数可配置。
+4. 会话下拉当前依赖 GUI 点击验证未完全走通（Watch/Replace 逻辑有单测覆盖），可补一次人工点选确认。
