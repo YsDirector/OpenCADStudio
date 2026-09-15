@@ -809,20 +809,26 @@ pub(crate) fn cmd_bom_lock(host: &mut dyn HostApi, args: &str) {
 
 // ── xlsx 导出 / 导入（第三期）─────────────────────────────────────────────
 
-/// 默认的 xlsx 路径：图纸同目录同名 + `-明细表.xlsx`；图纸未存盘则落到 `~/桌面/OCSM/`。
+/// 图纸**没存过盘**时的默认落点目录：系统临时目录下的 `OCSM/`。
+///
+/// 走 `std::env::temp_dir()` 而不是写死路径 —— 一份代码跨平台：
+/// Linux/macOS 给 `$TMPDIR`（通常 `/tmp`）、Windows 给 `%TEMP%`。
+/// （临时目录会被系统清理，所以只是"找不到更好地方"时的兜底；插件各处提示都会明说。）
+pub(crate) fn default_xlsx_dir() -> std::path::PathBuf {
+    std::env::temp_dir().join("OCSM")
+}
+
+/// 默认的 xlsx 路径：图纸同目录同名 + `-明细表.xlsx`；
+/// 图纸未存盘 → [`default_xlsx_dir`]（临时目录/OCSM）。
 fn default_xlsx_path(host: &dyn HostApi) -> std::path::PathBuf {
-    let stem = host
+    let saved = host
         .document_path(host.tab_id())
-        .map(|p| p.to_path_buf())
         .and_then(|p| {
             let parent = p.parent().map(|d| d.to_path_buf())?;
             let stem = p.file_stem().map(|s| s.to_string_lossy().to_string())?;
             Some(parent.join(format!("{stem}-明细表.xlsx")))
         });
-    stem.unwrap_or_else(|| {
-        let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
-        std::path::PathBuf::from(home).join("桌面/OCSM/明细表.xlsx")
-    })
+    saved.unwrap_or_else(|| default_xlsx_dir().join("明细表.xlsx"))
 }
 
 /// 把 xlsx 路径写进**表头块**的 `PE_URL`（宿主 Ctrl+点击即可打开该文件）。
@@ -936,8 +942,8 @@ pub(crate) fn cmd_bom_xlsx(host: &mut dyn HostApi, args: &str) {
     host.set_dirty();
     if host.document_path(host.tab_id()).is_none() {
         host.push_info(&format!(
-            "OCSMBOMXLSX: 提示——本图还没存过盘，所以文件落在默认目录（{}）。\
-             想让它生成在图纸同目录，先 Ctrl+S 存盘再导出。",
+            "OCSMBOMXLSX: 提示——本图还没存过盘，所以文件落在**临时目录**（{}）。\
+             临时目录会被系统清理，要长期保存请先 Ctrl+S 存盘再导出（xlsx 就会生成在图纸同目录、同名-明细表.xlsx）。",
             path.display()
         ));
     }
@@ -1076,6 +1082,15 @@ pub(crate) fn cmd_bom_cfg(host: &mut dyn HostApi, args: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn default_xlsx_dir_is_temp_ocsm_cross_platform() {
+        // 跨平台：走 std::env::temp_dir() —— Linux/macOS 给 /tmp（或 $TMPDIR）、
+        // Windows 给 %TEMP%，所以这一条断言在两个平台都成立。
+        let d = default_xlsx_dir();
+        assert!(d.ends_with("OCSM"), "{d:?}");
+        assert!(d.starts_with(std::env::temp_dir()), "{d:?}");
+    }
 
     fn part(code: &str, name: &str, material: &str, weight: &str) -> PartMeta {
         PartMeta {

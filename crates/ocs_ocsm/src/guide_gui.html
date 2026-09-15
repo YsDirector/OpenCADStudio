@@ -291,7 +291,7 @@
         </label>
       </div>
       <div id="xh-list" style="display:flex; flex-direction:column; gap:4px"></div>
-      <div id="xh-unsaved" style="display:none; color:#b60; font-size:12px">⚠ 本图还没存过盘：序号与明细表照常生成，但 `BOMXLSX` 导出的 xlsx 会落到默认目录（~/桌面/OCSM/）。建议先 Ctrl+S 存盘。</div>
+      <div id="xh-unsaved" style="display:none; color:#b60; font-size:12px">⚠ 本图还没存过盘：序号与明细表照常生成，但 `BOMXLSX` 导出的 xlsx 会落到<b>临时目录</b>（<span id="xh-unsaved-dir">…</span>，会被系统清理）。建议先 Ctrl+S 存盘。</div>
       <div class="gdt-hint">一个组共用**一条指引线 + 一个圆点**（指针点落在零件块内则挂靠到该零件）；条目顺序 = 从指引线向外/向上（5 贴指引线、6 在上）。比例按参考图实测：横线长 = 文字宽 + 1.0h、数字在横线上方 0.3h、横向间隙 0.5h/V 深 0.38h、纵向节距 1.6h、圆点 Ø0.33h。生成在 8符号标注层（匿名块 *XH + INSERT）。</div>
     </div>
     <div class="param" id="row-param">
@@ -2489,7 +2489,12 @@ const BS_FITS = [
           if (segD) segD.click();
         }
         // 图纸上已有序号 + 下一个（自动取号用）
-        { const el = document.getElementById('xh-unsaved'); if (el) el.style.display = j.unsaved ? '' : 'none'; }
+        {
+          const el = document.getElementById('xh-unsaved');
+          if (el) el.style.display = j.unsaved ? '' : 'none';
+          const d = document.getElementById('xh-unsaved-dir');
+          if (d && j.unsaved_dir) d.textContent = j.unsaved_dir;
+        }
         if (j.balloon_next) {
           xhExisting = j.balloon_next.existing || [];
           xhDefaultNext = j.balloon_next.next || xhDefaultNext;

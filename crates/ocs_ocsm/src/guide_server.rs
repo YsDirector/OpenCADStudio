@@ -3174,7 +3174,12 @@ fn api_guide(target: &str, sender: &Arc<dyn PluginRequestSender>) -> (u16, &'sta
                         "next": next,
                     });
                     // 未存盘 → GUI 在「序号」面板上直接给出提示（画之前就知道）
-                    resp["unsaved"] = serde_json::json!(crate::current_doc_unsaved().is_some());
+                    let unsaved = crate::current_doc_unsaved().is_some();
+                    resp["unsaved"] = serde_json::json!(unsaved);
+                    if unsaved {
+                        resp["unsaved_dir"] =
+                            serde_json::json!(crate::bom::default_xlsx_dir().display().to_string());
+                    }
                 }
                 (200, json, resp.to_string())
             }
@@ -5669,7 +5674,8 @@ fn apply_balloon(
     }
     // ── "这图还没存过盘"的提示（每个标签页只提一次）──
     // 为什么要提：`BOMXLSX` 导出的 xlsx 默认落在**图纸同目录**；新图没存盘时只能落到
-    // 默认目录（`~/桌面/OCSM/`），容易找不到。球标与明细表本身不受影响，所以只提示、不拦。
+    // 会落到**临时目录**（`std::env::temp_dir()/OCSM`，Linux = /tmp、Windows = %TEMP%），
+    // 容易被系统清理/找不到。球标与明细表本身不受影响，所以只提示、不拦。
     if let Some(tab) = crate::current_doc_unsaved() {
         static WARNED_UNSAVED: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<u64>>> =
             std::sync::OnceLock::new();
@@ -5678,10 +5684,10 @@ fn apply_balloon(
         if first {
             let _ = req_timed(
                 sender,
-                PluginRequest::PushInfo(
-                    "OCSM: 本图还没存过盘 —— 序号球标与明细表照常生成，但 `BOMXLSX` 导出的 xlsx                      会落到默认目录（~/桌面/OCSM/）。建议先 Ctrl+S 存盘，xlsx 就会生成在图纸同目录、                     名为「图纸同名-明细表.xlsx」。"
-                        .to_string(),
-                ),
+                PluginRequest::PushInfo(format!(
+                    "OCSM: 本图还没存过盘 —— 序号球标与明细表照常生成，但 `BOMXLSX` 导出的 xlsx 会落到**临时目录**（{}，会被系统清理）。建议先 Ctrl+S 存盘：xlsx 就会生成在图纸同目录、名为「图纸同名-明细表.xlsx」。",
+                    crate::bom::default_xlsx_dir().display()
+                )),
                 "PushInfo",
             );
         }
