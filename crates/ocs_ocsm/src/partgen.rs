@@ -557,7 +557,7 @@ pub fn hex_bolt_c(d: f64, l: f64, view: BoltView) -> Result<GenPart, String> {
         material: String::new(),
         weight: format!("≈{}", format!("{:.3}", hex_bolt_weight_kg(row, l))),
     };
-    Ok(hex_bolt_views(view, d, l, row.s, row.k, b, row.runout, meta))
+    Ok(hex_bolt_views(view, d, l, row.s, row.k, b, row.runout, None, meta))
 }
 
 /// GB/T 5782-2016 六角头螺栓 A/B级（部分螺纹）——**与 C 级同一套画法**（用户确认直接复制）。
@@ -577,7 +577,6 @@ pub fn hex_bolt_ab(d: f64, l: f64, view: BoltView) -> Result<GenPart, String> {
         ));
     }
     let b = thread_length_c(row, l);
-    // 收尾：无模板，按本族惯例取 5P（与 32.1 / 70.1 同源）
     let runout = 5.0 * row.pitch;
     let meta = PartMeta {
         code: "GB/T 5782-2016".to_string(),
@@ -586,13 +585,31 @@ pub fn hex_bolt_ab(d: f64, l: f64, view: BoltView) -> Result<GenPart, String> {
         material: String::new(),
         weight: format!("≈{}", format!("{:.3}", hex_bolt_weight_kg(row, l))),
     };
-    Ok(hex_bolt_views(view, d, l, row.s, row.k, b, runout, meta))
+    // 头部垫圈面 dw×c：**主视图 + 俯视图**都画（用户 2026-09-15 确认），左视图不画
+    Ok(hex_bolt_views(
+        view,
+        d,
+        l,
+        row.s,
+        row.k,
+        b,
+        runout,
+        Some((row.dw, row.c)),
+        meta,
+    ))
 }
 
 /// 六角头螺栓三视图的**画法本体**（GB/T 5780 C级 与 GB/T 5782 A/B级共用）。
 ///
-/// 传入已解出的对边宽 `s`、头高 `k`、螺纹长 `b`、收尾 `runout` 与元数据；
-/// 对角宽一律用**公称** `e = s/cos30°`（表里的 e 是公差下限，只记录不画）。
+/// 传入已解出的对边宽 `s`、头高 `k`、螺纹长 `b`、收尾 `runout`、元数据，
+/// 以及**头部垫圈面** `washer_face`（A/B 级特有：`Some((dw, c))`；C 级传 `None`）。
+///
+/// 垫圈面画法（标准 CAD 图实测，M10 例）：
+/// - 它是支承面上一个高 `c`、直径 `dw` 的凸台（垫圈面在最低处，周围是内缩的六角体支承面）；
+/// - **头高 `k` 从垫圈面量到顶面**（总高 = k，六角体高 = k − c）；
+/// - 主视图：垫圈面竖线 `(0, ±dw/2)` + 凸台母线 `(0,±dw/2)→(−c,±dw/2)`；
+///   六角体支承面横线由 `x=0` 改到 `x=−c`（仍跨 ±e/2），头其余几何不动（顶面仍在 `x=−k`）；
+/// - 端视图：多一个垫圈面圆 `r=dw/2`（在倒角圆 r=s/2 内部）；附、俯视图不变。
 fn hex_bolt_views(
     view: BoltView,
     d: f64,
@@ -601,6 +618,7 @@ fn hex_bolt_views(
     k: f64,
     b: f64,
     runout: f64,
+    washer_face: Option<(f64, f64)>,
     meta: PartMeta,
 ) -> GenPart {
     // 几何用**公称对角宽** e = s/cos30°（表里的 e 是公差下限：M5 8.63 vs 公称 9.2376，
@@ -609,16 +627,27 @@ fn hex_bolt_views(
     let dm = 0.85 * d; // GB/T 4459.1 简化画法：牙底 ≈ 0.85d
     let delta = chamfer_run(s, e);
     let x_out = -k + delta;
+    // 六角体支承面（轴承面）位置：无垫圈面时 = 基点 x=0；有垫圈面时内缩到 x=−c
+    let (xj, wf) = match washer_face {
+        Some((dw, c)) => (-c, Some((dw, c))),
+        None => (0.0, None),
+    };
     // 中心线出头固定 3.0（实测：5780 M5 = 3.0、5783 M10 = 3.0、32.1 M18 = 3.0）
     let over = 3.0;
 
     let mut entities = Vec::new();
     match view {
         BoltView::Main => {
+            // 垫圈面（A/B 级）：凸台母线 + 垫圈面线，位于头的最下方（基点 x=0）
+            if let Some((dw, c)) = wf {
+                entities.push(line([-c, dw / 2.0], [0.0, dw / 2.0], LAYER_MAIN));
+                entities.push(line([-c, -dw / 2.0], [0.0, -dw / 2.0], LAYER_MAIN));
+                entities.push(line([0.0, dw / 2.0], [0.0, -dw / 2.0], LAYER_MAIN));
+            }
             // 头：端面（s 宽）、轮廓（e 宽）、斜线、角弧、端面倒角大弧、棱线、交界线
             entities.push(line([-k, s / 2.0], [-k, -s / 2.0], LAYER_MAIN));
-            entities.push(line([x_out, e / 2.0], [0.0, e / 2.0], LAYER_MAIN));
-            entities.push(line([x_out, -e / 2.0], [0.0, -e / 2.0], LAYER_MAIN));
+            entities.push(line([x_out, e / 2.0], [xj, e / 2.0], LAYER_MAIN));
+            entities.push(line([x_out, -e / 2.0], [xj, -e / 2.0], LAYER_MAIN));
             entities.push(line([-k, s / 2.0], [x_out, e / 2.0], LAYER_MAIN));
             entities.push(line([-k, -s / 2.0], [x_out, -e / 2.0], LAYER_MAIN));
             // 角弧：θ = 2·atan(8Δ/e)，r = (e/8)/sinθ，弧心 (−k+r, ±0.375e)，从 180°−θ 到 180°
@@ -634,16 +663,23 @@ fn hex_bolt_views(
             let al = (e / 4.0 / u).atan().to_degrees();
             entities.push(arc([-k + r1, 0.0], r1, 180.0 - al, 180.0 + al, LAYER_MAIN));
             // 头内部棱线（六边形侧棱的投影，位于 ±e/4）
-            entities.push(line([x_out, e / 4.0], [0.0, e / 4.0], LAYER_MAIN));
-            entities.push(line([x_out, -e / 4.0], [0.0, -e / 4.0], LAYER_MAIN));
-            // 头/杆交界
-            entities.push(line([0.0, e / 2.0], [0.0, -e / 2.0], LAYER_MAIN));
+            entities.push(line([x_out, e / 4.0], [xj, e / 4.0], LAYER_MAIN));
+            entities.push(line([x_out, -e / 4.0], [xj, -e / 4.0], LAYER_MAIN));
+            // 六角体支承面（无垫圈面时就是头/杆交界；有垫圈面时是内缩的支承面）
+            entities.push(line([xj, e / 2.0], [xj, -e / 2.0], LAYER_MAIN));
         }
         BoltView::Top => {
+            // 垫圈面（A/B 级，用户 2026-09-15 确认“主视图和俯视图都按你现在的画法”）：
+            // 俯视看下去，凸台是个比头体窄的“小脚”（宽 dw、轴向长 c），位置在支承面之后
+            if let Some((dw, c)) = wf {
+                entities.push(line([-c, dw / 2.0], [0.0, dw / 2.0], LAYER_MAIN));
+                entities.push(line([-c, -dw / 2.0], [0.0, -dw / 2.0], LAYER_MAIN));
+                entities.push(line([0.0, dw / 2.0], [0.0, -dw / 2.0], LAYER_MAIN));
+            }
             entities.push(line([-k, s / 2.0], [-k, -s / 2.0], LAYER_MAIN));
-            // 轮廓线从端面竖线 x=−k 起（用户规范图：穿过倒角弧终点直到底面）
-            entities.push(line([-k, s / 2.0], [0.0, s / 2.0], LAYER_MAIN));
-            entities.push(line([-k, -s / 2.0], [0.0, -s / 2.0], LAYER_MAIN));
+            // 轮廓线从端面竖线 x=−k 起（用户规范图：穿过倒角弧终点直到底面；有垫圈面时至 x=−c）
+            entities.push(line([-k, s / 2.0], [xj, s / 2.0], LAYER_MAIN));
+            entities.push(line([-k, -s / 2.0], [xj, -s / 2.0], LAYER_MAIN));
             // 弧：θ = 2·atan(4Δ/s)，r = (s/4)/sinθ，弧心 (−k+r, ±s/4)
             let th = 2.0 * (4.0 * delta / s).atan();
             let r3 = (s / 4.0) / th.sin();
@@ -652,11 +688,13 @@ fn hex_bolt_views(
             entities.push(arc([-k + r3, s / 4.0], r3, 180.0 - th.to_degrees(), 180.0 + th.to_degrees(), LAYER_MAIN));
             entities.push(arc([-k + r3, -s / 4.0], r3, 180.0 - th.to_degrees(), 180.0 + th.to_degrees(), LAYER_MAIN));
             // 头内部中棱线
-            entities.push(line([x_out, 0.0], [0.0, 0.0], LAYER_MAIN));
-            entities.push(line([0.0, s / 2.0], [0.0, -s / 2.0], LAYER_MAIN));
+            entities.push(line([x_out, 0.0], [xj, 0.0], LAYER_MAIN));
+            // 六角体支承面（无垫圈面时就是头/杆交界）
+            entities.push(line([xj, s / 2.0], [xj, -s / 2.0], LAYER_MAIN));
         }
         BoltView::End => {
             // 六边形：上下顶点 ±e/2，左右对边 ±s/2（顶点在 (±s/2, ±e/4)）
+            // 注：**垫圈面圆不画**（用户 2026-09-15：“主视图和俯视图按你的画法，左视图不改”）
             let v = [
                 [0.0, e / 2.0],
                 [s / 2.0, e / 4.0],
@@ -1320,53 +1358,144 @@ mod tests {
             .collect()
     }
 
-    /// GB/T 5782-2016 A/B 级：**画法与 C 级完全相同**（用户 2026-09-15 确认「肉眼看不出来区别，直接复制」）。
+    /// GB/T 5782-2016 A/B 级 = **C 级画法 + 头部垫圈面 dw×c**
+    /// （用户 2026-09-15 确认：主视图/俯视图按草稿画，**左视图不改**）。
     ///
-    /// 强断言：取一个两族都能生成的规格（M10×60：5780 40~100 ✓、5782 45~100 ✓，
-    /// 且两族螺纹长 b 与收尾 runout 都相等），三视图的图元列表必须**逐条完全一致**。
+    /// 强断言：主/俯视图里 C 级的每条图元，要么与 AB 完全重合，要么在 AB 里被整体平移 −c；
+    /// 且 AB 恰好比 C 级多 3 条垫圈面线；左视图两族完全相同（不画垫圈面圆）。
     #[test]
-    fn hex_bolt_ab_reuses_c_drawing() {
-        for (view, name) in [(BoltView::Main, "主视图"), (BoltView::Top, "俯视图"), (BoltView::End, "左视图")] {
-            let c = hex_bolt_c(10.0, 60.0, view).expect("5780 M10x60");
-            let ab = hex_bolt_ab(10.0, 60.0, view).expect("5782 M10x60");
-            assert_eq!(c.entities.len(), ab.entities.len(), "{name} 图元数应一致");
-            let key = |p: &GenPart| -> Vec<String> {
-                p.entities
-                    .iter()
-                    .map(|e| match e {
-                        EntityType::Line(l) => format!(
-                            "LINE {} ({:.4},{:.4})-({:.4},{:.4})",
-                            l.common.layer, l.start.x, l.start.y, l.end.x, l.end.y
-                        ),
-                        EntityType::Arc(a) => format!(
-                            "ARC {} ({:.4},{:.4}) r={:.4} {:.4}->{:.4}",
-                            a.common.layer,
-                            a.center.x,
-                            a.center.y,
-                            a.radius,
-                            a.start_angle.to_degrees(),
-                            a.end_angle.to_degrees()
-                        ),
-                        EntityType::Circle(c) => {
-                            format!("CIRCLE {} ({:.4},{:.4}) r={:.4}", c.common.layer, c.center.x, c.center.y, c.radius)
-                        }
-                        other => format!("OTHER {}", other.common().layer),
-                    })
-                    .collect()
-            };
-            assert_eq!(key(&c), key(&ab), "{name}：5782 应与 5780 逐条相同");
-            assert_eq!(c.bbox, ab.bbox, "{name} bbox");
+    fn hex_bolt_ab_is_c_drawing_plus_washer_face() {
+        let ab_row = hex_bolt_ab_row(10.0).unwrap();
+        let (dw, c) = (ab_row.dw, ab_row.c);
+        fn key(p: &GenPart) -> Vec<String> {
+            p.entities
+                .iter()
+                .map(|e| match e {
+                    EntityType::Line(l) => format!(
+                        "LINE {} ({:.4},{:.4})-({:.4},{:.4})",
+                        l.common.layer, l.start.x, l.start.y, l.end.x, l.end.y
+                    ),
+                    EntityType::Arc(a) => format!(
+                        "ARC {} ({:.4},{:.4}) r={:.4} {:.4}->{:.4}",
+                        a.common.layer,
+                        a.center.x,
+                        a.center.y,
+                        a.radius,
+                        a.start_angle.to_degrees(),
+                        a.end_angle.to_degrees()
+                    ),
+                    EntityType::Circle(ci) => format!(
+                        "CIRCLE {} ({:.4},{:.4}) r={:.4}",
+                        ci.common.layer, ci.center.x, ci.center.y, ci.radius
+                    ),
+                    other => format!("OTHER {}", other.common().layer),
+                })
+                .collect()
         }
-        // 元数据不同（代号/名称），基点约定相同
-        let ab = hex_bolt_ab(10.0, 60.0, BoltView::Main).unwrap();
-        assert_eq!(ab.meta.code, "GB/T 5782-2016");
-        assert_eq!(ab.meta.name, "六角头螺栓 A/B级");
-        assert_eq!(ab.meta.spec, "M10x60");
-        assert!(ab.meta.weight.starts_with('≈'));
+        for (view, name) in [(BoltView::Main, "主视图"), (BoltView::Top, "俯视图")] {
+            let pc = hex_bolt_c(10.0, 60.0, view).unwrap();
+            let pab = hex_bolt_ab(10.0, 60.0, view).unwrap();
+            assert_eq!(pab.entities.len(), pc.entities.len() + 3, "{name}: 只多 3 条垫圈面线");
+            let ck = key(&pc);
+            let abk = key(&pab);
+            for k in &ck {
+                // C 级的一条线，在 AB 里应是下列之一：
+                // ① 原样保留（杆/螺纹/中心线等与支承面无关的）；② 整体平移 −c（支承面线）；
+                // ③ 只有 x=0 那端内缩到 x=−c（轮廓线/内棱线 —— 另一端仍从端面 x_out 起）
+                let ok = abk.contains(k)
+                    || abk.contains(&shift_key_x(k, -c, false))
+                    || abk.contains(&shift_key_x(k, -c, true));
+                assert!(ok, "{name}: C 级图元 {k} 在 AB 里既没原样保留、也没平移/端点内缩 −c");
+            }
+            // AB 里"与 C 级对不上"的图元：只能是 ① 3 条垫圈面线，或 ② C 级某条线经上述变换后的版本
+            for k in abk.iter().filter(|k| !ck.contains(k)) {
+                let is_washer = k.contains("7.3150") || (k.contains("(0.0000,") && k.contains("(-0.6000,"));
+                let moved = ck.iter().any(|c2| {
+                    shift_key_x(c2, -c, false) == *k || shift_key_x(c2, -c, true) == *k
+                });
+                assert!(is_washer || moved, "{name}: AB 多出的图元既不是垫圈面线也不是 C 级线的平移/内缩: {k}");
+            }
+            // 垫圈面三条（凸台母线 ×2 + 垫圈面线）必须在 AB、且不在 C
+            for k in [
+                format!("LINE {} ({:.4},{:.4})-({:.4},{:.4})", LAYER_MAIN, -c, dw / 2.0, 0.0, dw / 2.0),
+                format!("LINE {} ({:.4},{:.4})-({:.4},{:.4})", LAYER_MAIN, -c, -dw / 2.0, 0.0, -dw / 2.0),
+                format!("LINE {} ({:.4},{:.4})-({:.4},{:.4})", LAYER_MAIN, 0.0, dw / 2.0, 0.0, -dw / 2.0),
+            ] {
+                assert!(abk.contains(&k), "{name}: 缺垫圈面线 {k}");
+                assert!(!ck.contains(&k), "{name}: C 级不应有垫圈面线");
+            }
+        }
+        // 左视图：两族完全相同（**不画**垫圈面圆）
+        assert_eq!(
+            key(&hex_bolt_c(10.0, 60.0, BoltView::End).unwrap()),
+            key(&hex_bolt_ab(10.0, 60.0, BoltView::End).unwrap()),
+            "左视图应与 C 级完全相同（用户：左视图不改）"
+        );
+        // 绝对坐标钉死（M10：dw=14.63 → ±7.315；c=0.6 → 支承面在 x=−0.6）
+        assert!((dw - 14.63).abs() < 1e-9 && (c - 0.6).abs() < 1e-9);
+        for (view, name) in [(BoltView::Main, "主视图"), (BoltView::Top, "俯视图")] {
+            let p = hex_bolt_ab(10.0, 60.0, view).unwrap();
+            let half = dw / 2.0;
+            let has = |x1: f64, y1: f64, x2: f64, y2: f64| {
+                p.entities.iter().any(|e| match e {
+                    EntityType::Line(l) => {
+                        let near = |u: f64, v: f64| (u - v).abs() < 1e-9;
+                        (near(l.start.x, x1) && near(l.start.y, y1) && near(l.end.x, x2) && near(l.end.y, y2))
+                            || (near(l.start.x, x2) && near(l.start.y, y2) && near(l.end.x, x1) && near(l.end.y, y1))
+                    }
+                    _ => false,
+                })
+            };
+            assert!(has(-c, half, 0.0, half), "{name}: 凸台母线（上）");
+            assert!(has(-c, -half, 0.0, -half), "{name}: 凸台母线（下）");
+            assert!(has(0.0, half, 0.0, -half), "{name}: 垫圈面线");
+            let want = if view == BoltView::Main {
+                across_corners(ab_row.s) / 2.0
+            } else {
+                ab_row.s / 2.0
+            };
+            assert!(
+                p.entities.iter().any(|e| matches!(e, EntityType::Line(l)
+                    if (l.start.x + c).abs() < 1e-9 && (l.end.x + c).abs() < 1e-9
+                        && (l.start.y - want).abs() < 1e-9 && (l.end.y + want).abs() < 1e-9)),
+                "{name}: 支承面线内缩到 x=−c 且宽 ±{want}"
+            );
+        }
     }
 
-    /// 两族差异只在**数据**：s/k 逐规格相同（所以画法一致），
-    /// e（公差下限，仅记录）与可用长度区间不同（用户说的「可用尺寸区间有出入」）。
+    /// 把 "LINE 层 (x,y)-(x,y)" 这类 key 里的 x 坐标平移 dx（配合上面那条断言）。
+    /// `only_zero = true` 时只平移原本 x≈0 的端点（模拟"支承面侧内缩、另一端不动"）。
+    fn shift_key_x(k: &str, dx: f64, only_zero: bool) -> String {
+        let mut out = String::new();
+        let mut rest = k;
+        while let Some(i) = rest.find('(') {
+            out.push_str(&rest[..i]);
+            let j = match rest[i..].find(')') {
+                Some(v) => v + i,
+                None => break,
+            };
+            let inside = &rest[i + 1..j];
+            match inside.split_once(',') {
+                Some((a, b)) => {
+                    let x: f64 = a.trim().parse().unwrap_or(f64::NAN);
+                    let nx = if only_zero && x.abs() > 1e-9 { x } else { x + dx };
+                    out.push_str(&format!("({:.4},{})", nx, b.trim()));
+                }
+                None => {
+                    out.push('(');
+                    out.push_str(inside);
+                    out.push(')');
+                }
+            }
+            rest = &rest[j + 1..];
+        }
+        out.push_str(rest);
+        out
+    }
+
+    /// 两族差异只在**数据 + 头部垫圈面**：s/k 逐规格相同（所以头部画法一致），
+    /// e（公差下限，仅记录）与可用长度区间不同（用户说的「可用尺寸区间有出入」）；
+    /// A/B 级另有垫圈面 dw×c（主/俯视图画，左视图不画）。
     #[test]
     fn hex_bolt_ab_table_differs_from_c_only_in_records() {
         assert_eq!(hex_bolt_ab_diameters().len(), 29, "5782 共 29 规格（M1.6…M64）");
@@ -1387,7 +1516,7 @@ mod tests {
                 if cr.l_min != ar.l_min || cr.l_max != ar.l_max {
                     diff_len += 1;
                 }
-                assert!(ar.dw > 0.0 && ar.c > 0.0, "M{d} A/B 级应有垫圈面 dw/c（仅记录）");
+                assert!(ar.dw > 0.0 && ar.c > 0.0, "M{d} A/B 级应有垫圈面 dw/c（已用于主/俯视图）");
             }
         }
         assert!(diff_len >= 5, "至少若干规格的可用长度区间应与 C 级不同（实际 {diff_len}）");
@@ -1696,6 +1825,56 @@ pub(crate) mod acceptance_dump {
             l.line_type = def.linetype.clone();
             l.line_weight = def.lineweight;
             doc.layers.add_or_replace(l);
+        }
+    }
+
+    /// GB/T 5782 A/B 级三视图（带头部垫圈面 dw×c）→ SVG + DXF，供看图/开 OCS 核对。
+    ///
+    /// `cargo test -p ocs_ocsm -- --ignored dump_washer_face_draft --nocapture`
+    #[test]
+    #[ignore]
+    fn dump_washer_face_draft() {
+        use ocs_plugin_api::host::acadrust::io::dxf::DxfWriter;
+        use ocs_plugin_api::host::acadrust::CadDocument;
+        let dir = std::path::Path::new("/home/ysdirector/桌面/OCSM/test/模板草案-5782垫圈面");
+        std::fs::create_dir_all(dir).unwrap();
+        for (d, l, tag) in [(10.0, 60.0, "M10x60"), (42.0, 200.0, "M42x200")] {
+            for (view, vn) in [
+                (BoltView::Main, "主视图"),
+                (BoltView::Top, "俯视图"),
+                (BoltView::End, "左视图"),
+            ] {
+                let part = hex_bolt_ab(d, l, view).unwrap();
+                // SVG（预览）
+                let svg = to_svg(&part, &format!("GB/T 5782-2016 {} {} 带垫圈面", part.meta.spec, vn), 760.0, 420.0);
+                let f = dir.join(format!("草稿-{tag}-{vn}.svg"));
+                std::fs::write(&f, svg).unwrap();
+                // DXF（落图实体，供 OCS 打开核图）
+                let mut doc = CadDocument::new();
+                add_ocsm_layers(&mut doc);
+                for e in part.entities.clone() {
+                    doc.add_entity(e).expect("图元入库");
+                }
+                let f2 = dir.join(format!("草稿-{tag}-{vn}.dxf"));
+                DxfWriter::new(&doc).write_to_file(&f2).expect("写 DXF");
+                println!("写出 {} / {}", f.display(), f2.display());
+            }
+        }
+        // 与 C 级（无垫圈面）同规格对比：主/俯视图各一份，供叠合差异自查
+        for (part, suffix) in [
+            (hex_bolt_c(10.0, 60.0, BoltView::Main).unwrap(), "C级-主视图"),
+            (hex_bolt_c(10.0, 60.0, BoltView::Top).unwrap(), "C级-俯视图"),
+            (hex_bolt_ab(10.0, 60.0, BoltView::Main).unwrap(), "A-B级-主视图"),
+            (hex_bolt_ab(10.0, 60.0, BoltView::Top).unwrap(), "A-B级-俯视图"),
+        ] {
+            let mut doc = CadDocument::new();
+            add_ocsm_layers(&mut doc);
+            for e in part.entities.clone() {
+                doc.add_entity(e).expect("图元入库");
+            }
+            let f = dir.join(format!("对比-M10x60-{suffix}.dxf"));
+            DxfWriter::new(&doc).write_to_file(&f).expect("写 DXF");
+            println!("写出 {}", f.display());
         }
     }
 
