@@ -67,6 +67,25 @@ OCS_SMOKE_PLUGIN=$PWD/target/release/libocs_ocsm.so \
 > 结论：fork 的**上游接受路线**已成功（对照 `obs-2026-08-22-pr-fork` 的双保险策略，
 > 无需启用"fork 单向吸收"备选方案）。
 
+## 0.6 待上游合并（2026-09-15 开 PR）
+
+> **修复**：MCP `ocs_read op:"commands"` 的清单响应把 `detail_parameters.name` /
+> `search_parameter.search` 硬编码成示例值 `"LINE"`（任何 search 都回显 LINE，客户端无法判断
+> 实际生效的过滤条件）。现改为回显真正应用的 `search`（未过滤时为 `null`），
+> `detail_parameters.name` 固定 `null`（带 `name` 的请求在上方提前返回 `command` 清单）。
+>
+> | 项 | 值 |
+> |---|---|
+> | 文件 | `src/app/control/mod.rs`（+27 −2，含 1 个回归测试） |
+> | fork 提交 | `c0f42f4e`（与 PR 提交 **逐字节相同的 diff/消息/作者**） |
+> | PR 分支 | `fix/mcp-command-listing-filters`（`34175d9a`，基点 = 上游 `d738ebfc`） |
+> | 验证 | 上游基点 `cargo test -p OpenCADStudio --lib control::` → **9 passed**；fork 同套 **9 passed** |
+> | 报告 | `桌面/OCSM/PR-MCP命令清单回显-{正文.md,链接.txt}` |
+>
+> **同步动作**：上游合并后**直接取上游版**（两边提交内容一致，git 会自动归并，无需手工补回）；
+> 然后删掉本节、删除分支 `fix/mcp-command-listing-filters`（fork 远端 + 本地 worktree `/tmp/ocs-pr-upstream`）。
+> 该改动**不属于 fork 独有补丁**，故不进 §2 总表。
+
 ## 1. 补丁总表（基准：上游 v2026.36 → HEAD，24 文件 / +2972 −119）
 
 | 组 | 文件 | 规模 | 作用 |
