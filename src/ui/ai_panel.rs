@@ -158,7 +158,7 @@ fn header(auto_collapse: bool) -> Element<'static, Message> {
 
 /// Panel body. Phase 1 shows the connection state; the transcript + composer
 /// land with the client (`crate::ai`).
-pub fn view(state: &AiPanelState, _width: f32, auto_collapse: bool) -> Element<'_, Message> {
+pub fn view(state: &AiPanelState, width: f32, auto_collapse: bool) -> Element<'_, Message> {
     use iced::widget::column;
     let body = column![
         text(state.status_label()).size(12),
@@ -167,8 +167,12 @@ pub fn view(state: &AiPanelState, _width: f32, auto_collapse: bool) -> Element<'
     .spacing(6)
     .padding([8, 8]);
 
+    // **`Fixed(width)` is load-bearing**: the dock hands every expanded panel
+    // the column width it computed, and a `Fill`-width panel instead competes
+    // with the drawing canvas for the same row space (which made the panel take
+    // half the window). Every built-in panel pins its width this way.
     column![header(auto_collapse), body]
-        .width(Length::Fill)
+        .width(Length::Fixed(width))
         .height(Length::Fill)
         .into()
 }
