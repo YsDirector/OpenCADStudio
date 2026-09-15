@@ -117,9 +117,6 @@ pub enum HostResponse {
     CodeExecutionResult(crate::host::ExecutionResult),
     /// API v5: the plugin's preview entity for the current cursor position.
     Preview(Option<EntityType>),
-    /// API v7: the host's reserved web-panel slot (see
-    /// `PluginRequest::WebPanelRect`).
-    DockRect(Option<crate::host::DockRect>),
 }
 
 /// Requests the plugin runner sends to the host.
@@ -204,19 +201,6 @@ pub enum PluginRequest {
     },
     /// API v6: close the transaction opened by `BeginUndo` (commits the entry).
     CommitUndo,
-    /// API v7: show or hide the host's dockable web panel (`PanelId::Web`).
-    /// `side` is `"left"` / `"right"`; `None` keeps the panel where it is.
-    /// Answered with `PluginResponse::Ok`.
-    SetWebPanelDocked {
-        docked: bool,
-        side: Option<String>,
-    },
-    /// API v7: ask for the window-relative rectangle the host reserved for its
-    /// dockable web panel (`PanelId::Web`). Polled by a plugin that owns a
-    /// native web-view child window. Answered with
-    /// `PluginResponse::DockRect(Option<DockRect>)`: `Some` while the panel is
-    /// docked and visible (dock a child window into it), `None` when closed.
-    WebPanelRect,
 }
 
 /// Responses the host sends back for `PluginRequest`.
@@ -250,9 +234,6 @@ pub enum PluginResponse {
     FrameSelection(Option<crate::host::FrameSelection>),
     /// API v5: result of a frame block import (ATTDEFs in draw order).
     ImportFrameBlock(Result<Vec<acadrust::entities::AttributeDefinition>, String>),
-    /// API v7: the host's reserved web-panel slot (`None` = closed / not laid
-    /// out yet). See `PluginRequest::WebPanelRect`.
-    DockRect(Option<crate::host::DockRect>),
 }
 
 /// Messages sent from the host to the plugin runner.

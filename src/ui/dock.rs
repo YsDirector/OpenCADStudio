@@ -41,25 +41,24 @@ pub enum DockMsg {
 pub enum PanelId {
     Properties,
     BlockPalette,
-    /// The host reserves this column for a **native web view** owned by a
-    /// plugin (the host cannot render HTML). Its content is a placeholder; a
-    /// plugin docks its own child window into the reported rectangle
-    /// (`HostApi::web_panel_rect`). Everything else — header chrome, drag to
-    /// another edge, width drag, auto-collapse, close — is the stock dock
-    /// behaviour, so it behaves exactly like Properties.
-    Web,
+    /// The built-in **AI assistant** panel: a chat view over the local
+    /// `pi-web` HTTP API (`/api/sessions`, `/api/agent/<id>/events`, …). It is
+    /// an ordinary iced panel — same chrome, drag, resize, collapse and close
+    /// behaviour as Properties — so nothing about it is special-cased in the
+    /// dock, and it renders natively on both X11 and Wayland.
+    Ai,
 }
 
 impl PanelId {
     /// Every dockable panel, in stable order (settings healing iterates this).
-    pub const ALL: [PanelId; 3] = [PanelId::Properties, PanelId::BlockPalette, PanelId::Web];
+    pub const ALL: [PanelId; 3] = [PanelId::Properties, PanelId::BlockPalette, PanelId::Ai];
 
     /// Localized-friendly display name used by the collapsed/edge chrome.
     pub fn title(self) -> &'static str {
         match self {
             PanelId::Properties => "Properties",
             PanelId::BlockPalette => "Block Palette",
-            PanelId::Web => "Web Panel",
+            PanelId::Ai => "AI Assistant",
         }
     }
 
@@ -68,9 +67,8 @@ impl PanelId {
         match self {
             PanelId::Properties => 250.0,
             PanelId::BlockPalette => 260.0,
-            // Web pages need room: most web apps stop being usable below
-            // ~600px, so the web panel starts wide.
-            PanelId::Web => 620.0,
+            // A chat transcript wants a comfortable reading column.
+            PanelId::Ai => 420.0,
         }
     }
 
@@ -78,7 +76,7 @@ impl PanelId {
     /// more than the palette-ish 600px default.
     fn max_width(self) -> f32 {
         match self {
-            PanelId::Web => 1600.0,
+            PanelId::Ai => 1200.0,
             _ => DOCK_MAX_W,
         }
     }
@@ -86,7 +84,7 @@ impl PanelId {
     /// Per-panel share of the window width the dock may ever take.
     fn max_fraction(self) -> f32 {
         match self {
-            PanelId::Web => 0.7,
+            PanelId::Ai => 0.6,
             _ => 0.45,
         }
     }

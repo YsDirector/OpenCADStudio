@@ -104,11 +104,5 @@ pub fn handle_plugin_request(
         DocumentPath { tab_id } => PluginResponse::DocumentPath(
             host.document_path(tab_id).map(|path| path.into_os_string()),
         ),
-        // API v7: dockable web panel. The host reserves the slot; a plugin
-        // docks a native web-view child window into the reported rectangle.
-        SetWebPanelDocked { docked, side } => {
-            PluginResponse::Bool(host.set_web_panel_docked(docked, side.as_deref()))
-        }
-        WebPanelRect => PluginResponse::DockRect(host.web_panel_rect()),
     }
 }

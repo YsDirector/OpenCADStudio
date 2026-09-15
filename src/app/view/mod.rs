@@ -34,17 +34,6 @@ pub(in crate::app) use overlay::{MTEXT_TEXT_ID, TEXT_INLINE_ID};
 
 pub(in crate::app) const VIEWPORT_CAPTURE_BOUNDS_ID: &str = "viewport-capture-bounds";
 
-/// Bounds id of the reserved **web panel** slot (`PanelId::Web`). The host
-/// renders only a placeholder there; the rectangle is reported to plugins via
-/// `HostApi::web_panel_rect`, so a plugin can dock a native web-view child
-/// window into exactly the space the layout reserved for it.
-pub(in crate::app) const WEB_PANEL_BOUNDS_ID: &str = "web-panel-bounds";
-
-/// Bounds ids of the two dock **columns**. The web-panel slot's rectangle is
-/// derived from the column's real laid-out bounds (not from a cached window
-/// size), so it stays correct after window resizes the app hasn't processed.
-pub(in crate::app) const DOCK_COLUMN_BOUNDS_LEFT: &str = "dock-column-bounds-left";
-pub(in crate::app) const DOCK_COLUMN_BOUNDS_RIGHT: &str = "dock-column-bounds-right";
 
 const VIEWCUBE_HIT_SIZE: f32 = VIEWCUBE_REGION_PX;
 static MOBILE_SPONSOR_IMAGE: std::sync::LazyLock<iced::widget::image::Handle> =
@@ -1871,7 +1860,7 @@ bg={bg_ms:.1}ms n={view_count}"
             match id {
                 crate::ui::dock::PanelId::Properties => self.show_properties,
                 crate::ui::dock::PanelId::BlockPalette => self.show_block_palette,
-                crate::ui::dock::PanelId::Web => self.show_web_panel,
+                crate::ui::dock::PanelId::Ai => self.show_ai_panel,
             }
         };
         let edge_stack =
@@ -1924,9 +1913,7 @@ bg={bg_ms:.1}ms n={view_count}"
         // The workspace row is: left edge stack, viewport, right edge stack.
         let mut parts: Vec<Element<'_, Message>> = Vec::new();
         if let Some(e) = left_edge {
-            parts.push(
-                crate::ui::wrap_bar::PosReport::new(DOCK_COLUMN_BOUNDS_LEFT, e).into(),
-            );
+            parts.push(e);
         }
         parts.push(
             crate::ui::wrap_bar::PosReport::new(
@@ -1936,9 +1923,7 @@ bg={bg_ms:.1}ms n={view_count}"
             .into(),
         );
         if let Some(e) = right_edge {
-            parts.push(
-                crate::ui::wrap_bar::PosReport::new(DOCK_COLUMN_BOUNDS_RIGHT, e).into(),
-            );
+            parts.push(e);
         }
         let workspace: Element<'_, Message> = row(parts).width(Fill).height(Fill).into();
 
@@ -2931,25 +2916,12 @@ impl OpenCADStudio {
             crate::ui::dock::PanelId::BlockPalette => {
                 crate::ui::window::block_palette::view(&self.block_palette, width, auto_collapse)
             }
-            // The host cannot render HTML, so it reserves the column and lets a
-            // plugin dock a native web view into it. The placeholder keeps the
-            // space visually honest (and reports its bounds, which is how the
-            // plugin learns the rectangle it must fill).
-            crate::ui::dock::PanelId::Web => crate::ui::wrap_bar::PosReport::new(
-                WEB_PANEL_BOUNDS_ID,
-                container(
-                    column![
-                        text("Web Panel").size(13),
-                        text("Reserved for a plugin's web view").size(11),
-                    ]
-                    .spacing(6)
-                    .align_x(iced::Alignment::Center),
-                )
-                .width(Fill)
-                .height(Fill)
-                .center_x(Fill)
-                .center_y(Fill),
-            )
+            // Native AI assistant panel: chat over the local pi-web HTTP API.
+            // Rendering is plain iced, so it behaves and looks like every other
+            // dockable panel on both X11 and Wayland.
+            crate::ui::dock::PanelId::Ai => self.tabs[self.active_tab]
+                .ai_panel
+                .view(width, auto_collapse)
             .into(),
         };
         let divider = dock_divider(id);

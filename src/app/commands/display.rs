@@ -472,6 +472,12 @@ impl OpenCADStudio {
                 return Some(Task::done(Message::ToggleProperties));
             }
 
+            // ── AI — toggle the built-in AI assistant panel ──────────────────────
+            // Native chat over the local pi-web API; docked like any other panel.
+            "AI" | "AICHAT" | "OCSAI" => {
+                return Some(Task::done(Message::ToggleAiPanel));
+            }
+
             // ── FILETAB — toggle file/document tabs ──────────────────────────────
             "FILETAB" => {
                 return Some(Task::done(Message::ToggleFileTabs));

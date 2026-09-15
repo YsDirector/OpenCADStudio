@@ -603,12 +603,10 @@ pub(super) fn on_ribbon_tool_click(&mut self, tool_id: String, event: ModuleEven
                         self.show_properties = false;
                         self.ribbon.set_properties(false);
                     }
-                    // Closing the web panel only hides the slot (it stays in the
-                    // dock stack, like the others, so `WEBPANEL` brings it back
-                    // at the same spot). The plugin notices through
-                    // `web_panel_rect()` turning `None` and hides its web view.
-                    PanelId::Web => {
-                        self.show_web_panel = false;
+                    // Closing hides the panel (it keeps its dock slot, like the
+                    // others, so the `AI` command brings it back where it was).
+                    PanelId::Ai => {
+                        self.show_ai_panel = false;
                     }
                 }
                 if self.dock_expanded == Some(id) {
@@ -699,7 +697,7 @@ pub(super) fn on_ribbon_tool_click(&mut self, tool_id: String, event: ModuleEven
         match id {
             PanelId::Properties => self.show_properties,
             PanelId::BlockPalette => self.show_block_palette,
-            PanelId::Web => self.show_web_panel,
+            PanelId::Ai => self.show_ai_panel,
         }
     }
 

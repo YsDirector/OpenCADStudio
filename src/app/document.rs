@@ -129,6 +129,8 @@ pub(super) struct DocumentTab {
     pub(super) edit_revision: u64,
     pub(super) tab_title: String,
     pub(super) properties: PropertiesPanel,
+    /// Built-in AI assistant panel (native chat over the local pi-web API).
+    pub(super) ai_panel: crate::ui::ai_panel::AiPanelState,
     pub(super) layers: LayerPanel,
     pub(super) active_cmd: Option<Box<dyn CadCommand>>,
     /// The selection set the most recent command worked on, captured when a
@@ -580,6 +582,7 @@ impl DocumentTab {
             prev_selection: Vec::new(),
             tab_title: format!("Drawing{}", n),
             properties: PropertiesPanel::empty(),
+            ai_panel: crate::ui::ai_panel::AiPanelState::empty(),
             layers: LayerPanel::default(),
             active_cmd: None,
             last_cmd: None,
