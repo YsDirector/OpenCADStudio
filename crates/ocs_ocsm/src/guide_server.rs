@@ -3475,6 +3475,7 @@ pub const COMMAND_CATALOG: &[(&str, &str, &str)] = &[
     ("OCSMDIM2GB", "D2G", "一键转国标：原生标注 → OCSM_GB 样式 + 匿名块"),
     ("OCSMBOM", "BOM", "明细表：建表/刷新（BOM 30 = 本次首列 30 行）"),
     ("OCSMBOMSYNC", "BOMSYNC", "明细表：按序号球标重排/重建（球标联动入口）"),
+    ("OCSMBOMLOCK", "BOMLOCK", "明细表：锁定某行数量（BOMLOCK 5 3 / BOMLOCK 5 off）"),
     ("OCSMBOMCFG", "BOMCFG", "明细表配置（表头/列/格式）"),
     ("OCSMMCP", "", "打印 MCP/HTTP 接入信息（给外部 AI/脚本）"),
     ("OCSMHELP", "OH", "打开本手册窗口（命令目录 + 操作教程）"),

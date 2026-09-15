@@ -92,9 +92,11 @@ pub(crate) fn groups(doc: &CadDocument) -> Vec<Group> {
     out
 }
 
-/// 旧表行（`OCSM_BOMROW`）的 (序号, 图号, 名称) —— 供"未被球标引用的零件沿用旧序号"。
-fn old_row_nos(doc: &CadDocument) -> Vec<(String, String, String)> {
-    let mut out = Vec::new();
+/// 现有明细表行（`OCSM_BOMROW`）：序号 → (8 格值, 数量锁)。
+///
+/// 锁来自行块 XDATA `OCSM_BOMLOCK`（用户手改数量后写下的，见 `bom::LOCK_APP`）。
+fn old_rows(doc: &CadDocument) -> BTreeMap<String, ([String; 8], Option<usize>)> {
+    let mut out: BTreeMap<String, ([String; 8], Option<usize>)> = BTreeMap::new();
     for e in doc.model_space_entities() {
         let EntityType::Insert(ins) = e else {
             continue;
@@ -109,9 +111,64 @@ fn old_row_nos(doc: &CadDocument) -> Vec<(String, String, String)> {
                 .map(|a| a.value.trim().to_string())
                 .unwrap_or_default()
         };
-        out.push((get("序号"), get("图号"), get("名称")));
+        let no = get("序号");
+        if no.is_empty() {
+            continue;
+        }
+        let values: [String; 8] = [
+            no.clone(),
+            get("图号"),
+            get("名称"),
+            get("数量"),
+            get("材料"),
+            get("单重"),
+            get("总重"),
+            get("备注"),
+        ];
+        let lock = record_text(&ins.common, bom::LOCK_APP)
+            .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+            .and_then(|v| v.get("qty").and_then(|q| q.as_u64()))
+            .map(|q| q as usize);
+        out.entry(no).or_insert((values, lock));
     }
     out
+}
+
+/// 旧表行的 (序号, 图号, 名称) —— 供"未被球标引用的零件沿用旧序号"。
+fn old_row_nos(doc: &CadDocument) -> Vec<(String, String, String)> {
+    old_rows(doc)
+        .into_iter()
+        .map(|(no, (v, _))| (no, v[1].clone(), v[2].clone()))
+        .collect()
+}
+
+/// **合并现有行**（用户 2026-09-15 定案）：
+/// * 序号以外**非空即保留**（"无法解开的锁"：图号/名称/材料/单重/备注 手改过就不再被覆盖）；
+///   空白格才写新值（空行逐渐被填满）。
+/// * 数量：有锁 → 锁定值；无锁 → 用算出来的值。
+fn merge_prev(r: &mut RowSpec, prev: &([String; 8], Option<usize>)) {
+    let (v, lock) = prev;
+    if !v[1].is_empty() {
+        r.code = v[1].clone();
+    }
+    if !v[2].is_empty() {
+        // 图纸里"名称"是 名称+规格 合并写的 → 原样保留，规格清空避免二次拼接
+        r.name = v[2].clone();
+        r.spec = String::new();
+    }
+    if !v[4].is_empty() {
+        r.material = v[4].clone();
+    }
+    if !v[5].is_empty() {
+        r.unit_weight = v[5].clone();
+    }
+    if !v[7].is_empty() {
+        r.remark = v[7].clone();
+    }
+    if let Some(q) = lock.as_ref().filter(|q| **q > 0) {
+        r.qty = *q;
+        r.lock_qty = Some(*q);
+    }
 }
 
 /// 零件键（代号 + 材料）——与 `bom::aggregate` 的分组键一致。
@@ -184,6 +241,8 @@ pub(crate) fn plan_rows(doc: &CadDocument) -> Result<Vec<RowSpec>, String> {
                     qty: agg_qty.max(*n_refs),
                     material: p.material.clone(),
                     unit_weight: p.weight.clone(),
+                    remark: String::new(),
+                    lock_qty: None,
                 };
                 // 图上没这件（台账被删）→ 仍然列出来，数量按引用次数
                 if r.name.is_empty() && r.code.is_empty() {
@@ -196,7 +255,11 @@ pub(crate) fn plan_rows(doc: &CadDocument) -> Result<Vec<RowSpec>, String> {
     }
 
     // ② 未被球标引用的聚合零件：沿用旧表序号，否则自动接号
-    let old = old_row_nos(doc);
+    let prev = old_rows(doc);
+    let old: Vec<(String, String, String)> = prev
+        .iter()
+        .map(|(no, (v, _))| (no.clone(), v[1].clone(), v[2].clone()))
+        .collect();
     let mut next_no = {
         let mut all: Vec<String> = rows.iter().map(|r| r.item_no.clone()).collect();
         all.sort_by_key(|s| item_no_key(s));
@@ -233,7 +296,18 @@ pub(crate) fn plan_rows(doc: &CadDocument) -> Result<Vec<RowSpec>, String> {
             }
         };
         taken.insert(key, no.clone());
-        rows.push(RowSpec::from_item(it, no));
+        let mut r = RowSpec::from_item(it, no.clone());
+        if let Some(p) = prev.get(&no) {
+            merge_prev(&mut r, p);
+        }
+        rows.push(r);
+    }
+
+    // ③ 合并现有行：非空即保留（序号以外）、数量锁优先
+    for r in rows.iter_mut() {
+        if let Some(p) = prev.get(&r.item_no) {
+            merge_prev(r, p);
+        }
     }
 
     sort_rows(&mut rows);
@@ -540,6 +614,67 @@ mod tests {
         let rows = plan_rows(&doc).unwrap();
         let nos: Vec<&str> = rows.iter().map(|r| r.item_no.as_str()).collect();
         assert_eq!(nos, vec!["1", "7"], "同件应沿用旧序号");
+    }
+
+    /// 造一行现成的明细表行（8 个属性 + 可选数量锁）。
+    fn push_row(doc: &mut CadDocument, no: &str, cells: [&str; 8], lock: Option<usize>) {
+        use ocs_plugin_api::host::acadrust::entities::AttributeEntity;
+        let mut row = Insert::new(bom::ROW_BLOCK, Vector3::new(0.0, 0.0, 0.0));
+        for (tag, val) in bom::CELL_TAGS.iter().zip(cells.iter()) {
+            let mut a = AttributeEntity::default();
+            a.tag = tag.to_string();
+            a.value = val.to_string();
+            row.attributes.push(a);
+        }
+        if let Some(q) = lock {
+            let mut r = ocs_plugin_api::host::acadrust::xdata::ExtendedDataRecord::new(bom::LOCK_APP);
+            r.values.push(XDataValue::String(
+                serde_json::json!({"qty": q}).to_string(),
+            ));
+            row.common.extended_data.add_record(r);
+        }
+        doc.add_entity(EntityType::Insert(row)).unwrap();
+    }
+
+    #[test]
+    fn plan_rows_keeps_hand_edited_cells_but_recomputes_unlocked_qty() {
+        let mut doc = CadDocument::new();
+        let p = r#"{"code":"GB/T 6170","name":"六角螺母","spec":"M8","material":"Q235","weight":"0.01"}"#;
+        ins(&mut doc, "*XH1", (0.0, 0.0), Some((XDATA_BALLOON, &ball("*XH1", &["3"], Some(p)))));
+        // 现成行：图号/名称/材料/备注 都被手改过；数量 9（没锁）
+        push_row(
+            &mut doc,
+            "3",
+            ["3", "手改图号", "手改名称", "9", "手改材料", "0.01", "0.09", "外购"],
+            None,
+        );
+        let rows = plan_rows(&doc).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].code, "手改图号", "图号非空即保留");
+        assert_eq!(rows[0].name, "手改名称");
+        assert_eq!(rows[0].material, "手改材料");
+        assert_eq!(rows[0].remark, "外购");
+        assert_eq!(rows[0].qty, 1, "无锁 → 数量按规则重算（引用 1 次）");
+        assert!(rows[0].lock_qty.is_none());
+    }
+
+    #[test]
+    fn plan_rows_honours_qty_lock() {
+        let mut doc = CadDocument::new();
+        let p = r#"{"code":"GB/T 6170","name":"六角螺母","spec":"M8","material":"Q235","weight":"0.01"}"#;
+        ins(&mut doc, "*XH1", (0.0, 0.0), Some((XDATA_BALLOON, &ball("*XH1", &["3"], Some(p)))));
+        push_row(
+            &mut doc,
+            "3",
+            ["3", "", "", "9", "", "", "", ""],
+            Some(9),
+        );
+        let rows = plan_rows(&doc).unwrap();
+        assert_eq!(rows[0].qty, 9, "锁定量优先");
+        assert_eq!(rows[0].lock_qty, Some(9), "锁要跟着新行写回去");
+        // 空白格被填上（空行逐渐填满）
+        assert_eq!(rows[0].code, "GB/T 6170");
+        assert_eq!(rows[0].material, "Q235");
     }
 
     #[test]

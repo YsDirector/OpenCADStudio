@@ -301,7 +301,7 @@ fn is_bom_command(cmd: &str) -> bool {
         .next()
         .unwrap_or_default()
         .to_ascii_uppercase();
-    matches!(name.as_str(), "OCSMBOM" | "BOM" | "OCSMBOMCFG" | "BOMCFG" | "OCSMBOMSYNC" | "BOMSYNC")
+    matches!(name.as_str(), "OCSMBOM" | "BOM" | "OCSMBOMCFG" | "BOMCFG" | "OCSMBOMSYNC" | "BOMSYNC" | "OCSMBOMLOCK" | "BOMLOCK")
 }
 
 struct OcsmPlugin;
@@ -1053,6 +1053,8 @@ impl BuiltinPlugin for OcsmPlugin {
                     bom::cmd_bom_cfg(host, &rest);
                 } else if name == "OCSMBOMSYNC" || name == "BOMSYNC" {
                     bom::cmd_bom_sync(host, &rest);
+                } else if name == "OCSMBOMLOCK" || name == "BOMLOCK" {
+                    bom::cmd_bom_lock(host, &rest);
                 } else {
                     bom::cmd_bom(host, &rest);
                 }

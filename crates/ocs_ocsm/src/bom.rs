@@ -26,6 +26,8 @@ use ocs_plugin_api::host::acadrust::{Entity, EntityType, Handle};
 use ocs_plugin_api::host::{HostApi, ImportFrameBlockRequest};
 
 pub(crate) const XDATA_BOM: &str = "OCSM_BOM";
+/// 行块上的「数量锁」记录（用户手改数量后不应被同步覆盖）。
+pub(crate) const LOCK_APP: &str = "OCSM_BOMLOCK";
 pub(crate) const XDATA_PART: &str = "OCSM_PART";
 pub(crate) const HEAD_BLOCK: &str = "OCSM_BOMHEAD";
 pub(crate) const ROW_BLOCK: &str = "OCSM_BOMROW";
@@ -242,6 +244,10 @@ pub(crate) struct RowSpec {
     pub qty: usize,
     pub material: String,
     pub unit_weight: String,
+    pub remark: String,
+    /// 数量锁（用户手改过 → 锁定值）：Some 时同步**不重算数量**；
+    /// 其它列不需要锁位——规则是"已存在的行非空即保留"（用户定案：无法解开的锁）。
+    pub lock_qty: Option<usize>,
 }
 
 impl RowSpec {
@@ -255,6 +261,8 @@ impl RowSpec {
             qty: it.qty,
             material: it.material.clone(),
             unit_weight: it.unit_weight.clone(),
+            remark: String::new(),
+            lock_qty: None,
         }
     }
 
@@ -287,7 +295,7 @@ impl RowSpec {
             self.material.clone(),
             unit,
             total,
-            String::new(),
+            self.remark.clone(),
         ]
     }
 }
@@ -466,6 +474,14 @@ pub(crate) fn fill_bom(
                 ins.attributes.push(a);
             }
             tag_bom(insert_common(&mut ins));
+            // 数量锁（用户手改过）→ 写进行块 XDATA，同步时就不会被重算覆盖。
+            if let Some(q) = rows[seq - 1].lock_qty {
+                let mut rec = ExtendedDataRecord::new(LOCK_APP);
+                rec.values.push(XDataValue::String(
+                    serde_json::json!({"qty": q}).to_string(),
+                ));
+                ins.common.extended_data.add_record(rec);
+            }
             ents.push(EntityType::Insert(ins));
         }
     }
@@ -658,9 +674,124 @@ pub(crate) fn cmd_bom_sync(host: &mut dyn HostApi, _args: &str) {
                 rep.cols.len(),
                 rep.removed
             ));
+            // 锁定/保留提示（不静默：用户要知道哪些行没被重算）
+            let locked: Vec<String> = rows
+                .iter()
+                .filter(|r| r.lock_qty.is_some())
+                .map(|r| format!("{}（数量 {}）", r.item_no, r.lock_qty.unwrap()))
+                .collect();
+            if !locked.is_empty() {
+                host.push_info(&format!(
+                    "OCSMBOMSYNC: {} 行数量已锁定，未覆盖：{}。要重算用 `BOMLOCK <序号> off`。",
+                    locked.len(),
+                    locked.join("、")
+                ));
+            }
         }
         Err(e) => host.push_error(&e),
     }
+}
+
+/// `BOMLOCK <序号|图号> [数量|off]`：给某一行**加/改/清数量锁**。
+///
+/// * 不给数量 → 用行上现值的数量锁上（"我手动改过，别覆盖"）；
+/// * 给数量   → 把数量改成该值并锁上；
+/// * `off`   → 解锁（下次同步按件数/引用次数重算）。
+///
+/// 只锁**数量**：序号永远由取号规则掌握；图号/名称/材料/单重/备注 是"非空即保留"
+/// （用户定案：无法解开的锁），要重算就删掉那一行再同步。
+pub(crate) fn cmd_bom_lock(host: &mut dyn HostApi, args: &str) {
+    let mut it = args.split_whitespace();
+    let Some(key) = it.next() else {
+        host.push_info(
+            "OCSMBOMLOCK / BOMLOCK 用法：BOMLOCK <序号|图号> [数量|off]\
+             （不给数量 = 按行上现值锁；off = 解锁）",
+        );
+        return;
+    };
+    let arg = it.next().map(|s| s.to_string());
+
+    // 找那一行（按序号或图号匹配；先找序号）
+    let doc = host.document().clone();
+    let attr_of = |ins: &Insert, tag: &str| -> String {
+        ins.attributes
+            .iter()
+            .find(|a| a.tag.trim() == tag)
+            .map(|a| a.value.trim().to_string())
+            .unwrap_or_default()
+    };
+    let mut target: Option<Insert> = None;
+    for e in doc.model_space_entities() {
+        let EntityType::Insert(ins) = e else {
+            continue;
+        };
+        if ins.block_name != ROW_BLOCK {
+            continue;
+        }
+        if attr_of(ins, "序号") == *key || attr_of(ins, "图号") == *key {
+            target = Some(ins.clone());
+            break;
+        }
+    }
+    let Some(mut ins) = target else {
+        host.push_error(&format!("OCSMBOMLOCK: 表里找不到序号/图号为「{key}」的行。"));
+        return;
+    };
+    let cur_qty: usize = attr_of(&ins, "数量").parse().unwrap_or(1);
+    let unlock = matches!(arg.as_deref(), Some("off") | Some("OFF") | Some("解锁") | Some("unlock"));
+
+    if unlock {
+        ins.common.extended_data.remove_record(LOCK_APP);
+        host.push_undo("OCSM 数量锁");
+        host.update_entity(EntityType::Insert(ins));
+        host.set_dirty();
+        host.push_info(&format!(
+            "OCSMBOMLOCK: 序号 {}→已解锁（数量 {}）——下次同步会按件数/引用次数重算。",
+            key, cur_qty
+        ));
+        return;
+    }
+
+    let qty = match arg.as_deref() {
+        None => cur_qty,
+        Some(v) => match v.parse::<usize>() {
+            Ok(q) if q > 0 => q,
+            _ => {
+                host.push_error(&format!("OCSMBOMLOCK: 数量「{v}」不是正整数（或写 off 解锁）。"));
+                return;
+            }
+        },
+    };
+    // 数量改值（如果指定了新值）+ 写锁记录
+    if qty != cur_qty {
+        for a in ins.attributes.iter_mut() {
+            if a.tag.trim() == "数量" {
+                a.value = qty.to_string();
+            }
+        }
+        // 总重跟着算（单重 × 数量）
+        let unit = attr_of(&ins, "单重");
+        if let Some(w) = weight_number(&unit) {
+            for a in ins.attributes.iter_mut() {
+                if a.tag.trim() == "总重" {
+                    a.value = trim_num(w * qty as f64);
+                }
+            }
+        }
+    }
+    let mut rec = ExtendedDataRecord::new(LOCK_APP);
+    rec.values.push(XDataValue::String(
+        serde_json::json!({"qty": qty}).to_string(),
+    ));
+    ins.common.extended_data.remove_record(LOCK_APP);
+    ins.common.extended_data.add_record(rec);
+    host.push_undo("OCSM 数量锁");
+    host.update_entity(EntityType::Insert(ins));
+    host.set_dirty();
+    host.push_info(&format!(
+        "OCSMBOMLOCK: 序号 {} 数量锁定为 {qty}（同步不再重算；BOMLOCK {key} off 可解锁）。",
+        key
+    ));
 }
 
 /// `OCSMBOMCFG` / `BOMCFG [每列行数]`：查看/修改 `bom/settings.json`。
