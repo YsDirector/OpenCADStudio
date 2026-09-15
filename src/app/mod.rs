@@ -684,8 +684,8 @@ pub(super) struct OpenCADStudio {
     render_mode_preview: Option<acadrust::entities::ViewportRenderMode>,
     /// Whether the Properties panel is shown on the left (PROPERTIES).
     show_properties: bool,
-    /// Is the built-in **AI assistant** panel docked/visible?
-    show_ai_panel: bool,
+    /// Is the **OCS Pi Extension** panel docked/visible?
+    show_pi_panel: bool,
     /// Docked Insert Block panel visibility.
     pub(crate) show_block_palette: bool,
     /// General edge-stack dock layout for the side panels.
@@ -1894,8 +1894,8 @@ pub enum Message {
     ControlScreenshot(String, Option<iced::window::Screenshot>),
     ControlToggle,
     Tick(Instant),
-    /// Toggle the built-in AI assistant panel (`AI` command).
-    ToggleAiPanel,
+    /// Toggle the built-in Pi assistant panel (`PI` command).
+    TogglePiPanel,
     /// Periodic drain of plugin-to-host requests that arrived outside a host
     /// call (e.g. mutations from the Python REPL).
     #[cfg(not(target_arch = "wasm32"))]
@@ -3649,7 +3649,7 @@ impl OpenCADStudio {
             render_mode_menu_open: false,
             render_mode_preview: None,
             show_properties: true,
-            show_ai_panel: false,
+            show_pi_panel: false,
             show_block_palette: false,
             block_palette: Default::default(),
             dock: Default::default(),

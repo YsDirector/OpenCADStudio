@@ -605,8 +605,8 @@ pub(super) fn on_ribbon_tool_click(&mut self, tool_id: String, event: ModuleEven
                     }
                     // Closing hides the panel (it keeps its dock slot, like the
                     // others, so the `AI` command brings it back where it was).
-                    PanelId::Ai => {
-                        self.show_ai_panel = false;
+                    PanelId::Pi => {
+                        self.show_pi_panel = false;
                     }
                 }
                 if self.dock_expanded == Some(id) {
@@ -697,7 +697,7 @@ pub(super) fn on_ribbon_tool_click(&mut self, tool_id: String, event: ModuleEven
         match id {
             PanelId::Properties => self.show_properties,
             PanelId::BlockPalette => self.show_block_palette,
-            PanelId::Ai => self.show_ai_panel,
+            PanelId::Pi => self.show_pi_panel,
         }
     }
 

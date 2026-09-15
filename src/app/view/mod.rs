@@ -1860,7 +1860,7 @@ bg={bg_ms:.1}ms n={view_count}"
             match id {
                 crate::ui::dock::PanelId::Properties => self.show_properties,
                 crate::ui::dock::PanelId::BlockPalette => self.show_block_palette,
-                crate::ui::dock::PanelId::Ai => self.show_ai_panel,
+                crate::ui::dock::PanelId::Pi => self.show_pi_panel,
             }
         };
         let edge_stack =
@@ -2925,11 +2925,11 @@ impl OpenCADStudio {
             crate::ui::dock::PanelId::BlockPalette => {
                 crate::ui::window::block_palette::view(&self.block_palette, width, auto_collapse)
             }
-            // Native AI assistant panel: chat over the local pi-web HTTP API.
+            // OCS Pi Extension: native chat over the local pi-web HTTP API.
             // Rendering is plain iced, so it behaves and looks like every other
             // dockable panel on both X11 and Wayland.
-            crate::ui::dock::PanelId::Ai => self.tabs[self.active_tab]
-                .ai_panel
+            crate::ui::dock::PanelId::Pi => self.tabs[self.active_tab]
+                .pi_panel
                 .view(width, auto_collapse)
             .into(),
         };

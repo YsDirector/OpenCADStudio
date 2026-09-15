@@ -41,24 +41,24 @@ pub enum DockMsg {
 pub enum PanelId {
     Properties,
     BlockPalette,
-    /// The built-in **AI assistant** panel: a chat view over the local
-    /// `pi-web` HTTP API (`/api/sessions`, `/api/agent/<id>/events`, …). It is
-    /// an ordinary iced panel — same chrome, drag, resize, collapse and close
-    /// behaviour as Properties — so nothing about it is special-cased in the
-    /// dock, and it renders natively on both X11 and Wayland.
-    Ai,
+    /// **OCS Pi Extension**: the built-in Pi assistant panel — a chat view over
+    /// the local `pi-web` HTTP API (`/api/sessions`, `/api/agent/<id>/events`,
+    /// …). It is an ordinary iced panel — same chrome, drag, resize, collapse
+    /// and close behaviour as Properties — so nothing about it is special-cased
+    /// in the dock, and it renders natively on both X11 and Wayland.
+    Pi,
 }
 
 impl PanelId {
     /// Every dockable panel, in stable order (settings healing iterates this).
-    pub const ALL: [PanelId; 3] = [PanelId::Properties, PanelId::BlockPalette, PanelId::Ai];
+    pub const ALL: [PanelId; 3] = [PanelId::Properties, PanelId::BlockPalette, PanelId::Pi];
 
     /// Localized-friendly display name used by the collapsed/edge chrome.
     pub fn title(self) -> &'static str {
         match self {
             PanelId::Properties => "Properties",
             PanelId::BlockPalette => "Block Palette",
-            PanelId::Ai => "AI Assistant",
+            PanelId::Pi => "Pi 助手",
         }
     }
 
@@ -68,7 +68,7 @@ impl PanelId {
             PanelId::Properties => 250.0,
             PanelId::BlockPalette => 260.0,
             // A chat column should not steal the drawing area by default.
-            PanelId::Ai => 340.0,
+            PanelId::Pi => 340.0,
         }
     }
 
@@ -76,7 +76,7 @@ impl PanelId {
     /// drawing, so it may be squeezed far below the palette-ish default.
     pub fn min_width(self) -> f32 {
         match self {
-            PanelId::Ai => 150.0,
+            PanelId::Pi => 150.0,
             _ => DOCK_MIN_W,
         }
     }
@@ -85,7 +85,7 @@ impl PanelId {
     /// palette-ish 600px default.
     fn max_width(self) -> f32 {
         match self {
-            PanelId::Ai => 1200.0,
+            PanelId::Pi => 1200.0,
             _ => DOCK_MAX_W,
         }
     }
@@ -95,7 +95,7 @@ impl PanelId {
         match self {
             // A chat panel must stay a side column even on a small window; on a
             // ~750px-wide window 0.6 was half the drawing area.
-            PanelId::Ai => 0.4,
+            PanelId::Pi => 0.4,
             _ => 0.45,
         }
     }
@@ -125,7 +125,7 @@ impl DockPanel {
             // The AI panel starts pinned: it collapses to a rail unless the
             // pointer is over it, so it never eats the drawing area by default.
             // (The pin button unpins it for a permanent column.)
-            auto_collapse: matches!(id, PanelId::Ai),
+            auto_collapse: matches!(id, PanelId::Pi),
         }
     }
 }

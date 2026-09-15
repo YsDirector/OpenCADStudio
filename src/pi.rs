@@ -1,4 +1,4 @@
-//! Local **pi-web API client** for the built-in AI panel.
+//! Local **pi-web API client** for the OCS Pi Extension panel.
 //!
 //! Everything is local, plain HTTP + JSON + SSE, so this speaks the protocol
 //! directly over `std::net::TcpStream` — no HTTP/TLS dependencies, no bridge
@@ -58,13 +58,13 @@ pub enum Command {
 }
 
 /// Handle the panel keeps for its worker thread.
-pub struct AiHandle {
+pub struct PiHandle {
     pub rx: Receiver<Event>,
     pub tx: Sender<Command>,
     join: Option<std::thread::JoinHandle<()>>,
 }
 
-impl AiHandle {
+impl PiHandle {
     /// Start a worker for `endpoint` and immediately connect.
     pub fn start(endpoint: &str) -> Self {
         let (tx_ev, rx_ev) = channel();

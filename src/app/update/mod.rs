@@ -3516,18 +3516,18 @@ impl OpenCADStudio {
                 self.ribbon.set_properties(self.show_properties);
                 Task::none()
             }
-            Message::ToggleAiPanel => {
+            Message::TogglePiPanel => {
                 use crate::ui::dock::PanelId;
-                self.show_ai_panel ^= true;
-                if self.show_ai_panel {
+                self.show_pi_panel ^= true;
+                if self.show_pi_panel {
                     // Dock it on the right, appending after whatever is there.
                     self.dock.ensure_settings();
-                    let _ = self.dock.dock(PanelId::Ai, crate::app::config::DockSide::Right, usize::MAX);
+                    let _ = self.dock.dock(PanelId::Pi, crate::app::config::DockSide::Right, usize::MAX);
                     // Arm polling of the pi-web client (the panel renders from
                     // whatever the worker thread has pushed so far).
                     let tab = self.active_tab;
-                    let ep = self.tabs[tab].ai_panel.endpoint.clone();
-                    self.tabs[tab].ai_panel.worker = Some(crate::ai::AiHandle::start(&ep));
+                    let ep = self.tabs[tab].pi_panel.endpoint.clone();
+                    self.tabs[tab].pi_panel.worker = Some(crate::pi::PiHandle::start(&ep));
                 }
                 Task::none()
             }

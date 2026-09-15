@@ -1,7 +1,7 @@
 #![allow(non_snake_case)]
 #![recursion_limit = "256"]
 
-pub mod ai;
+pub mod pi;
 pub mod app;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod cli;

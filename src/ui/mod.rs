@@ -9,7 +9,7 @@ pub mod icons;
 pub mod modal;
 pub mod overlay;
 pub mod popup;
-pub mod ai_panel;
+pub mod pi_panel;
 pub mod properties;
 pub mod read_only;
 pub mod ribbon;

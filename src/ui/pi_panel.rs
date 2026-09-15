@@ -1,4 +1,4 @@
-//! Built-in **AI assistant** panel: a native chat view over the local `pi-web`
+//! **OCS Pi Extension**: the built-in Pi assistant panel — a native chat view over the local `pi-web`
 //! HTTP API.
 //!
 //! Everything here is plain iced — same header chrome (pin / close / drag),
@@ -11,7 +11,7 @@
 //!   GET  {endpoint}/api/agent/<id>/events        SSE transcript/tool stream
 //!   POST {endpoint}/api/agent/<id> {"prompt":…}  send a message
 //!
-//! The client lives on a worker thread (see `crate::ai`); this module owns the
+//! The client lives on a worker thread (see `crate::pi`); this module owns the
 //! state that thread feeds and turns it into widgets.
 
 use iced::widget::{button, container, mouse_area, row, text, tooltip, Space};
@@ -21,7 +21,7 @@ use crate::app::Message;
 
 /// One rendered transcript entry.
 #[derive(Debug, Clone, PartialEq)]
-pub enum AiEntry {
+pub enum PiEntry {
     /// A message the user sent.
     User(String),
     /// Assistant text (grown in place while streaming).
@@ -34,7 +34,7 @@ pub enum AiEntry {
 
 /// Connection status shown in the panel header.
 #[derive(Debug, Clone, PartialEq, Default)]
-pub enum AiStatus {
+pub enum PiStatus {
     /// Not started yet — no worker running.
     #[default]
     Idle,
@@ -47,26 +47,26 @@ pub enum AiStatus {
 }
 
 /// State for one document tab's AI panel.
-pub struct AiPanelState {
+pub struct PiPanelState {
     /// Base URL of the local `pi-web` server (no trailing slash).
     pub endpoint: String,
-    pub status: AiStatus,
+    pub status: PiStatus,
     /// Session list (`/api/sessions`), newest activity first.
     pub sessions: Vec<(String, String)>,
     pub active: Option<String>,
-    pub entries: Vec<AiEntry>,
+    pub entries: Vec<PiEntry>,
     /// Composer text.
     pub input: String,
     /// Worker handles (None while stopped).
-    pub worker: Option<crate::ai::AiHandle>,
+    pub worker: Option<crate::pi::PiHandle>,
 }
 
-impl Default for AiPanelState {
+impl Default for PiPanelState {
     fn default() -> Self {
         Self {
             endpoint: std::env::var("OCS_PI_ENDPOINT")
                 .unwrap_or_else(|_| "http://127.0.0.1:30141".to_string()),
-            status: AiStatus::Idle,
+            status: PiStatus::Idle,
             sessions: Vec::new(),
             active: None,
             entries: Vec::new(),
@@ -76,7 +76,7 @@ impl Default for AiPanelState {
     }
 }
 
-impl AiPanelState {
+impl PiPanelState {
     pub fn empty() -> Self {
         Self::default()
     }
@@ -84,18 +84,18 @@ impl AiPanelState {
     /// Human-readable status for the header/subtitle.
     pub fn status_label(&self) -> String {
         match &self.status {
-            AiStatus::Idle => "AI 助手：未连接（命令 AI 打开）".to_string(),
-            AiStatus::Connecting => "正在连接 pi-web…".to_string(),
-            AiStatus::Ready { session, streaming } => {
+            PiStatus::Idle => "Pi 助手：未连接（命令 PI 打开）".to_string(),
+            PiStatus::Connecting => "正在连接 pi-web…".to_string(),
+            PiStatus::Ready { session, streaming } => {
                 let dot = if *streaming { "● 生成中" } else { "○ 空闲" };
                 format!("{dot} · {session}")
             }
-            AiStatus::Error(e) => format!("连接失败：{e}"),
+            PiStatus::Error(e) => format!("连接失败：{e}"),
         }
     }
 
     pub fn view(&self, width: f32, auto_collapse: bool) -> Element<'_, Message> {
-        crate::ui::ai_panel::view(self, width, auto_collapse)
+        crate::ui::pi_panel::view(self, width, auto_collapse)
     }
 }
 
@@ -109,7 +109,7 @@ fn header(auto_collapse: bool) -> Element<'static, Message> {
         crate::ui::icons::themed_secondary(crate::ui::icons::PIN, 12.0)
     };
     let pin = button(pin_icon)
-        .on_press(Message::Dock(DockMsg::AutoCollapseToggle(PanelId::Ai)))
+        .on_press(Message::Dock(DockMsg::AutoCollapseToggle(PanelId::Pi)))
         .style(move |theme: &Theme, status| {
             let mut style = button::subtle(theme, status);
             if auto_collapse {
@@ -128,7 +128,7 @@ fn header(auto_collapse: bool) -> Element<'static, Message> {
         crate::ui::icons::CLOSE,
         12.0,
     ))
-    .on_press(Message::Dock(DockMsg::Close(PanelId::Ai)))
+    .on_press(Message::Dock(DockMsg::Close(PanelId::Pi)))
     .style(button::subtle)
     .padding([3, 5]);
     let close = tooltip(close, text("Close").size(10), tooltip::Position::Bottom).gap(4);
@@ -136,7 +136,7 @@ fn header(auto_collapse: bool) -> Element<'static, Message> {
     mouse_area(
         container(
             row![
-                text("AI 助手").size(12),
+                text("Pi 助手").size(12),
                 Space::new().width(Length::Fill),
                 pin,
                 close,
@@ -151,14 +151,14 @@ fn header(auto_collapse: bool) -> Element<'static, Message> {
         .width(Length::Fill)
         .padding([3, 6]),
     )
-    .on_press(Message::Dock(DockMsg::DockGrab(PanelId::Ai)))
+    .on_press(Message::Dock(DockMsg::DockGrab(PanelId::Pi)))
     .interaction(iced::mouse::Interaction::Grab)
     .into()
 }
 
 /// Panel body. Phase 1 shows the connection state; the transcript + composer
-/// land with the client (`crate::ai`).
-pub fn view(state: &AiPanelState, width: f32, auto_collapse: bool) -> Element<'_, Message> {
+/// land with the client (`crate::pi`).
+pub fn view(state: &PiPanelState, width: f32, auto_collapse: bool) -> Element<'_, Message> {
     use iced::widget::column;
     let body = column![
         text(state.status_label()).size(12),
