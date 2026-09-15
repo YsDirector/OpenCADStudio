@@ -798,10 +798,13 @@ fn empty_state(state: &PiPanelState) -> Element<'static, Message> {
     container(
         column![
             text("Pi 助手").size(13),
+            // Full-contrast body text: the empty-state hint carries setup
+            // instructions the user must read, so a dim secondary gray is
+            // not enough (视觉验收曾点名对比度不足).
             text(hint)
                 .size(11)
                 .style(|theme: &Theme| iced::widget::text::Style {
-                    color: Some(secondary_color(theme)),
+                    color: Some(theme.palette().background.base.text),
                 }),
         ]
         .spacing(8),
