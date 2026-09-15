@@ -16,3 +16,8 @@ crate-type = ["cdylib"]
 ocs_plugin_api = { path = "../ocs_plugin_api", features = ["host"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# 明细表 ↔ 外部 .xlsx（第三期）：自己读写 xlsx（zip 容器 + XML），
+# 只用 workspace 里已有的 crate（不引外部工具、不联网新增依赖）。
+flate2 = "1"
+crc32fast = "1"
+quick-xml = "0.39"

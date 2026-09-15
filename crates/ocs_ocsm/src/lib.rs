@@ -17,6 +17,7 @@
 
 mod balloon;
 mod balloon_sync;
+mod bom_xlsx;
 mod bom;
 mod detail_clip;
 mod dim2gb;
@@ -301,7 +302,7 @@ fn is_bom_command(cmd: &str) -> bool {
         .next()
         .unwrap_or_default()
         .to_ascii_uppercase();
-    matches!(name.as_str(), "OCSMBOM" | "BOM" | "OCSMBOMCFG" | "BOMCFG" | "OCSMBOMSYNC" | "BOMSYNC" | "OCSMBOMLOCK" | "BOMLOCK")
+    matches!(name.as_str(), "OCSMBOM" | "BOM" | "OCSMBOMCFG" | "BOMCFG" | "OCSMBOMSYNC" | "BOMSYNC" | "OCSMBOMLOCK" | "BOMLOCK" | "OCSMBOMXLSX" | "BOMXLSX" | "OCSMBOMXLSXI" | "BOMXLSXI")
 }
 
 struct OcsmPlugin;
@@ -1044,17 +1045,25 @@ impl BuiltinPlugin for OcsmPlugin {
             }
             // 明细表：建表/刷新（`BOM 30` = 本次首列 30 行）、配置（`BOMCFG 30`）
             _ if is_bom_command(cmd) => {
-                let upper = cmd.trim().to_ascii_uppercase();
-                let (name, rest) = match upper.split_once(char::is_whitespace) {
-                    Some((n, r)) => (n.to_string(), r.trim().to_string()),
-                    None => (upper.clone(), String::new()),
-                };
+                // 只有**命令名**转大写；参数（路径、序号等）保留原始大小写
+                // —— 否则 `BOMXLSXI ~/桌面/x.xlsx` 会变成 `~/桌面/X.XLSX` 找不到文件。
+                let trimmed = cmd.trim();
+                let name = trimmed
+                    .split_whitespace()
+                    .next()
+                    .unwrap_or("")
+                    .to_ascii_uppercase();
+                let rest = trimmed[name.len().min(trimmed.len())..].trim().to_string();
                 if name == "OCSMBOMCFG" || name == "BOMCFG" {
                     bom::cmd_bom_cfg(host, &rest);
                 } else if name == "OCSMBOMSYNC" || name == "BOMSYNC" {
                     bom::cmd_bom_sync(host, &rest);
                 } else if name == "OCSMBOMLOCK" || name == "BOMLOCK" {
                     bom::cmd_bom_lock(host, &rest);
+                } else if name == "OCSMBOMXLSX" || name == "BOMXLSX" {
+                    bom::cmd_bom_xlsx(host, &rest);
+                } else if name == "OCSMBOMXLSXI" || name == "BOMXLSXI" {
+                    bom::cmd_bom_xlsxi(host, &rest);
                 } else {
                     bom::cmd_bom(host, &rest);
                 }

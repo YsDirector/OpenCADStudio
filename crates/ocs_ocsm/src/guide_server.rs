@@ -3476,6 +3476,8 @@ pub const COMMAND_CATALOG: &[(&str, &str, &str)] = &[
     ("OCSMBOM", "BOM", "明细表：建表/刷新（BOM 30 = 本次首列 30 行）"),
     ("OCSMBOMSYNC", "BOMSYNC", "明细表：按序号球标重排/重建（球标联动入口）"),
     ("OCSMBOMLOCK", "BOMLOCK", "明细表：锁定某行数量（BOMLOCK 5 3 / BOMLOCK 5 off）"),
+    ("OCSMBOMXLSX", "BOMXLSX", "明细表：导出到 .xlsx（带「锁定数量」列，可外部编辑）"),
+    ("OCSMBOMXLSXI", "BOMXLSXI", "明细表：从 .xlsx/.csv 导入（手改数量自动上锁）"),
     ("OCSMBOMCFG", "BOMCFG", "明细表配置（表头/列/格式）"),
     ("OCSMMCP", "", "打印 MCP/HTTP 接入信息（给外部 AI/脚本）"),
     ("OCSMHELP", "OH", "打开本手册窗口（命令目录 + 操作教程）"),

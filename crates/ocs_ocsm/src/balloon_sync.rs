@@ -95,8 +95,8 @@ pub(crate) fn groups(doc: &CadDocument) -> Vec<Group> {
 /// 现有明细表行（`OCSM_BOMROW`）：序号 → (8 格值, 数量锁)。
 ///
 /// 锁来自行块 XDATA `OCSM_BOMLOCK`（用户手改数量后写下的，见 `bom::LOCK_APP`）。
-fn old_rows(doc: &CadDocument) -> BTreeMap<String, ([String; 8], Option<usize>)> {
-    let mut out: BTreeMap<String, ([String; 8], Option<usize>)> = BTreeMap::new();
+pub(crate) fn old_rows(doc: &CadDocument) -> BTreeMap<String, ([String; 8], Option<usize>, Option<usize>)> {
+    let mut out: BTreeMap<String, ([String; 8], Option<usize>, Option<usize>)> = BTreeMap::new();
     for e in doc.model_space_entities() {
         let EntityType::Insert(ins) = e else {
             continue;
@@ -129,7 +129,11 @@ fn old_rows(doc: &CadDocument) -> BTreeMap<String, ([String; 8], Option<usize>)>
             .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
             .and_then(|v| v.get("qty").and_then(|q| q.as_u64()))
             .map(|q| q as usize);
-        out.entry(no).or_insert((values, lock));
+        let exported = record_text(&ins.common, bom::EXPORTED_APP)
+            .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+            .and_then(|v| v.get("qty").and_then(|q| q.as_u64()))
+            .map(|q| q as usize);
+        out.entry(no).or_insert((values, lock, exported));
     }
     out
 }
@@ -138,7 +142,7 @@ fn old_rows(doc: &CadDocument) -> BTreeMap<String, ([String; 8], Option<usize>)>
 fn old_row_nos(doc: &CadDocument) -> Vec<(String, String, String)> {
     old_rows(doc)
         .into_iter()
-        .map(|(no, (v, _))| (no, v[1].clone(), v[2].clone()))
+        .map(|(no, (v, _, _))| (no, v[1].clone(), v[2].clone()))
         .collect()
 }
 
@@ -146,8 +150,8 @@ fn old_row_nos(doc: &CadDocument) -> Vec<(String, String, String)> {
 /// * 序号以外**非空即保留**（"无法解开的锁"：图号/名称/材料/单重/备注 手改过就不再被覆盖）；
 ///   空白格才写新值（空行逐渐被填满）。
 /// * 数量：有锁 → 锁定值；无锁 → 用算出来的值。
-fn merge_prev(r: &mut RowSpec, prev: &([String; 8], Option<usize>)) {
-    let (v, lock) = prev;
+fn merge_prev(r: &mut RowSpec, prev: &([String; 8], Option<usize>, Option<usize>)) {
+    let (v, lock, exported) = prev;
     if !v[1].is_empty() {
         r.code = v[1].clone();
     }
@@ -169,6 +173,7 @@ fn merge_prev(r: &mut RowSpec, prev: &([String; 8], Option<usize>)) {
         r.qty = *q;
         r.lock_qty = Some(*q);
     }
+    r.exported = *exported;
 }
 
 /// 零件键（代号 + 材料）——与 `bom::aggregate` 的分组键一致。
@@ -243,6 +248,7 @@ pub(crate) fn plan_rows(doc: &CadDocument) -> Result<Vec<RowSpec>, String> {
                     unit_weight: p.weight.clone(),
                     remark: String::new(),
                     lock_qty: None,
+                    exported: None,
                 };
                 // 图上没这件（台账被删）→ 仍然列出来，数量按引用次数
                 if r.name.is_empty() && r.code.is_empty() {
@@ -258,7 +264,7 @@ pub(crate) fn plan_rows(doc: &CadDocument) -> Result<Vec<RowSpec>, String> {
     let prev = old_rows(doc);
     let old: Vec<(String, String, String)> = prev
         .iter()
-        .map(|(no, (v, _))| (no.clone(), v[1].clone(), v[2].clone()))
+        .map(|(no, (v, _, _))| (no.clone(), v[1].clone(), v[2].clone()))
         .collect();
     let mut next_no = {
         let mut all: Vec<String> = rows.iter().map(|r| r.item_no.clone()).collect();
@@ -308,6 +314,28 @@ pub(crate) fn plan_rows(doc: &CadDocument) -> Result<Vec<RowSpec>, String> {
         if let Some(p) = prev.get(&r.item_no) {
             merge_prev(r, p);
         }
+    }
+
+    // ④ **已存在的行不会自己消失**（用户定案的精神：手改过的东西不许被同步悄悄删掉）。
+    //    球标拆了 / 零件台账删了，行仍然在；要让某行消失，**手工删掉它**——删行即重置。
+    for (no, (v, lock, exported)) in prev.iter() {
+        if rows.iter().any(|r| r.item_no == *no) {
+            continue;
+        }
+        let mut r = RowSpec {
+            item_no: no.clone(),
+            code: v[1].clone(),
+            name: v[2].clone(),
+            material: v[4].clone(),
+            unit_weight: v[5].clone(),
+            remark: v[7].clone(),
+            qty: v[3].parse().unwrap_or(1),
+            lock_qty: *lock,
+            exported: *exported,
+            ..Default::default()
+        };
+        r.spec = String::new();
+        rows.push(r);
     }
 
     sort_rows(&mut rows);
@@ -634,6 +662,19 @@ mod tests {
             row.common.extended_data.add_record(r);
         }
         doc.add_entity(EntityType::Insert(row)).unwrap();
+    }
+
+    #[test]
+    fn plan_rows_never_drops_existing_rows() {
+        let mut doc = CadDocument::new();
+        // 图上既没有球标也没有零件台账，但表里有一行（xlsx 里手工加的）
+        push_row(&mut doc, "9", ["9", "9999", "手加件", "2", "Q235", "0.5", "1", "试导入"], None);
+        let rows = plan_rows(&doc).unwrap();
+        assert_eq!(rows.len(), 1, "已存在的行不能被同步丢掉");
+        assert_eq!(rows[0].item_no, "9");
+        assert_eq!(rows[0].name, "手加件");
+        assert_eq!(rows[0].qty, 2);
+        assert_eq!(rows[0].remark, "试导入");
     }
 
     #[test]

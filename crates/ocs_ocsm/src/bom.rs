@@ -28,6 +28,8 @@ use ocs_plugin_api::host::{HostApi, ImportFrameBlockRequest};
 pub(crate) const XDATA_BOM: &str = "OCSM_BOM";
 /// 行块上的「数量锁」记录（用户手改数量后不应被同步覆盖）。
 pub(crate) const LOCK_APP: &str = "OCSM_BOMLOCK";
+/// 行块上的「上次导出数量」记录（`BOMXLSX` 写；导入侧"手改即锁"的比对基线）。
+pub(crate) const EXPORTED_APP: &str = "OCSM_BOMXEXP";
 pub(crate) const XDATA_PART: &str = "OCSM_PART";
 pub(crate) const HEAD_BLOCK: &str = "OCSM_BOMHEAD";
 pub(crate) const ROW_BLOCK: &str = "OCSM_BOMROW";
@@ -248,6 +250,8 @@ pub(crate) struct RowSpec {
     /// 数量锁（用户手改过 → 锁定值）：Some 时同步**不重算数量**；
     /// 其它列不需要锁位——规则是"已存在的行非空即保留"（用户定案：无法解开的锁）。
     pub lock_qty: Option<usize>,
+    /// 上次**导出到 xlsx** 时的数量（"手改即锁"的比对基线）；没导出过就是 None。
+    pub exported: Option<usize>,
 }
 
 impl RowSpec {
@@ -263,6 +267,7 @@ impl RowSpec {
             unit_weight: it.unit_weight.clone(),
             remark: String::new(),
             lock_qty: None,
+            exported: None,
         }
     }
 
@@ -479,6 +484,14 @@ pub(crate) fn fill_bom(
                 let mut rec = ExtendedDataRecord::new(LOCK_APP);
                 rec.values.push(XDataValue::String(
                     serde_json::json!({"qty": q}).to_string(),
+                ));
+                ins.common.extended_data.add_record(rec);
+            }
+            // 导出基线（`BOMXLSX` 时写下）：导入侧靠它判断"人手改过数量"
+            if let Some(b) = rows[seq - 1].exported {
+                let mut rec = ExtendedDataRecord::new(EXPORTED_APP);
+                rec.values.push(XDataValue::String(
+                    serde_json::json!({"qty": b}).to_string(),
                 ));
                 ins.common.extended_data.add_record(rec);
             }
@@ -792,6 +805,226 @@ pub(crate) fn cmd_bom_lock(host: &mut dyn HostApi, args: &str) {
         "OCSMBOMLOCK: 序号 {} 数量锁定为 {qty}（同步不再重算；BOMLOCK {key} off 可解锁）。",
         key
     ));
+}
+
+// ── xlsx 导出 / 导入（第三期）─────────────────────────────────────────────
+
+/// 默认的 xlsx 路径：图纸同目录同名 + `-明细表.xlsx`；图纸未存盘则落到 `~/桌面/OCSM/`。
+fn default_xlsx_path(host: &dyn HostApi) -> std::path::PathBuf {
+    let stem = host
+        .document_path(host.tab_id())
+        .map(|p| p.to_path_buf())
+        .and_then(|p| {
+            let parent = p.parent().map(|d| d.to_path_buf())?;
+            let stem = p.file_stem().map(|s| s.to_string_lossy().to_string())?;
+            Some(parent.join(format!("{stem}-明细表.xlsx")))
+        });
+    stem.unwrap_or_else(|| {
+        let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
+        std::path::PathBuf::from(home).join("桌面/OCSM/明细表.xlsx")
+    })
+}
+
+/// 把 xlsx 路径写进**表头块**的 `PE_URL`（宿主 Ctrl+点击即可打开该文件）。
+fn set_xlsx_url(host: &mut dyn HostApi, path: &std::path::Path) {
+    let doc = host.document().clone();
+    let head = doc.model_space_entities().find_map(|e| match e {
+        EntityType::Insert(ins) if ins.block_name == HEAD_BLOCK => Some(ins.clone()),
+        _ => None,
+    });
+    let Some(mut ins) = head else { return };
+    let url = path.to_string_lossy().to_string();
+    let mut rec = ExtendedDataRecord::new("PE_URL");
+    rec.values.push(XDataValue::String(url.clone()));
+    ins.common.extended_data.remove_record("PE_URL");
+    ins.common.extended_data.add_record(rec);
+    host.update_entity(EntityType::Insert(ins));
+    host.set_dirty();
+    let _ = url;
+}
+
+/// 表头块上的 xlsx 路径（导入时默认从这里取）。
+fn xlsx_url_of(host: &dyn HostApi) -> Option<std::path::PathBuf> {
+    let doc = host.document();
+    for e in doc.model_space_entities() {
+        if let EntityType::Insert(ins) = e {
+            if ins.block_name == HEAD_BLOCK {
+                if let Some(rec) = ins.common.extended_data.get_record("PE_URL") {
+                    if let Some(XDataValue::String(s)) =
+                        rec.values.iter().find(|v| matches!(v, XDataValue::String(_)))
+                    {
+                        return Some(std::path::PathBuf::from(s));
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+/// `OCSMBOMXLSX` / `BOMXLSX [路径]`：把**当前明细表**导出成 `.xlsx`（带「锁定数量」列）。
+///
+/// 导出的同时把每行当时的数量记进行块 XDATA（导入侧"手改即锁"的基线），
+/// 并把文件路径写进表头块的 `PE_URL`（Ctrl+点击打开）。
+pub(crate) fn cmd_bom_xlsx(host: &mut dyn HostApi, args: &str) {
+    let doc = host.document().clone();
+    let rows = crate::balloon_sync::old_rows(&doc);
+    if rows.is_empty() {
+        host.push_error("OCSMBOMXLSX: 图上还没有明细表行（先 `BOM` 或 `BOMSYNC` 建表）。");
+        return;
+    }
+    let path = match args.split_whitespace().next() {
+        Some(p) if !p.is_empty() => {
+            let mut pb = std::path::PathBuf::from(p);
+            if pb.extension().is_none() {
+                pb.set_extension("xlsx");
+            }
+            pb
+        }
+        _ => default_xlsx_path(host),
+    };
+    let xrows: Vec<crate::bom_xlsx::XRow> = rows
+        .iter()
+        .map(|(_, (v, lock, _))| crate::bom_xlsx::xrow_from_cells(v, *lock))
+        .collect();
+    if let Err(e) = crate::bom_xlsx::write_xlsx(&path, &xrows) {
+        host.push_error(&format!("OCSMBOMXLSX: {e}"));
+        return;
+    }
+    // 导出基线：每行当时的数量（用于导入侧判断"人手改过"）
+    let doc = host.document().clone();
+    let mut stamped = 0usize;
+    host.push_undo("OCSM 明细表导出");
+    for e in doc.model_space_entities() {
+        let EntityType::Insert(ins) = e else { continue };
+        if ins.block_name != ROW_BLOCK {
+            continue;
+        }
+        let qty: Option<usize> = ins
+            .attributes
+            .iter()
+            .find(|a| a.tag.trim() == "数量")
+            .and_then(|a| a.value.trim().parse::<usize>().ok());
+        let Some(q) = qty else { continue };
+        let mut ins2 = ins.clone();
+        let mut rec = ExtendedDataRecord::new(EXPORTED_APP);
+        rec.values
+            .push(XDataValue::String(serde_json::json!({"qty": q}).to_string()));
+        ins2.common.extended_data.remove_record(EXPORTED_APP);
+        ins2.common.extended_data.add_record(rec);
+        if host.update_entity(EntityType::Insert(ins2)) {
+            stamped += 1;
+        }
+    }
+    set_xlsx_url(host, &path);
+    host.set_dirty();
+    host.push_info(&format!(
+        "OCSMBOMXLSX: {} 行已导出 → {}（{} 行记下导出基线；表头已挂链接，Ctrl+点击可打开）。",
+        xrows.len(),
+        path.display(),
+        stamped
+    ));
+    host.push_info(&format!(
+        "OCSMBOMXLSX: 列 = {}（「锁定数量」只在此文件里，不进图纸表格；空=不锁，Y/是=锁为同行数量，数字=锁为该数）。",
+        crate::bom_xlsx::col_list()
+    ));
+}
+
+/// `OCSMBOMXLSXI` / `BOMXLSXI [路径]`：读 `.xlsx`（或 `.csv`）回灌明细表。
+///
+/// 规则：文件里**非空**的单元格覆盖图纸；**空白**保留图纸现值；文件里没有的序号保留；
+/// **总重**列忽略输入（算出来的）；数量与"导出基线"不一致 = 手改 → **自动上锁**。
+pub(crate) fn cmd_bom_xlsxi(host: &mut dyn HostApi, args: &str) {
+    let arg = args.split_whitespace().next().unwrap_or("").to_string();
+    let path = if !arg.is_empty() {
+        std::path::PathBuf::from(&arg)
+    } else {
+        match xlsx_url_of(host) {
+            Some(p) => p,
+            None => default_xlsx_path(host),
+        }
+    };
+    if !path.exists() {
+        host.push_error(&format!(
+            "OCSMBOMXLSXI: 找不到文件 {}（先 `BOMXLSX` 导出，或给个路径）。",
+            path.display()
+        ));
+        return;
+    }
+    let is_csv = path
+        .extension()
+        .map(|e| e.eq_ignore_ascii_case("csv"))
+        .unwrap_or(false);
+    let file = if is_csv {
+        match std::fs::read_to_string(&path)
+            .map_err(|e| e.to_string())
+            .and_then(|s| crate::bom_xlsx::parse_csv(&s))
+        {
+            Ok(v) => v,
+            Err(e) => {
+                host.push_error(&format!("OCSMBOMXLSXI: 读 CSV 失败：{e}"));
+                return;
+            }
+        }
+    } else {
+        match crate::bom_xlsx::read_xlsx(&path) {
+            Ok(v) => v,
+            Err(e) => {
+                host.push_error(&format!("OCSMBOMXLSXI: {e}"));
+                return;
+            }
+        }
+    };
+    if file.is_empty() {
+        host.push_error("OCSMBOMXLSXI: 文件里没有数据行。");
+        return;
+    }
+    let doc = host.document().clone();
+    let prev = crate::balloon_sync::old_rows(&doc);
+    let rows = crate::bom_xlsx::plan_import(&prev, &file);
+    let per_col = load_config(&bom_dir()).per_col_rows;
+    let locked = rows.iter().filter(|r| r.lock_qty.is_some()).count();
+    let kept = rows
+        .iter()
+        .filter(|r| !file.iter().any(|f| f.item_no() == r.item_no))
+        .count();
+    match fill_bom(&mut HostSink(host), &doc, &rows, per_col) {
+        Ok(rep) => {
+            // 导入成功后刷新导出基线（同一份文件重复导入不会再"手改即锁"一次）
+            let doc2 = host.document().clone();
+            host.push_undo("OCSM 明细表导入");
+            for e in doc2.model_space_entities() {
+                let EntityType::Insert(ins) = e else { continue };
+                if ins.block_name != ROW_BLOCK {
+                    continue;
+                }
+                let qty: Option<usize> = ins
+                    .attributes
+                    .iter()
+                    .find(|a| a.tag.trim() == "数量")
+                    .and_then(|a| a.value.trim().parse::<usize>().ok());
+                let Some(q) = qty else { continue };
+                let mut ins2 = ins.clone();
+                let mut rec = ExtendedDataRecord::new(EXPORTED_APP);
+                rec.values
+                    .push(XDataValue::String(serde_json::json!({"qty": q}).to_string()));
+                ins2.common.extended_data.remove_record(EXPORTED_APP);
+                ins2.common.extended_data.add_record(rec);
+                host.update_entity(EntityType::Insert(ins2));
+            }
+            host.set_dirty();
+            host.push_info(&format!(
+                "OCSMBOMXLSXI: 从 {} 导入 {} 行 → 表 {} 行 / {} 列（{} 行数量已锁定，{} 行文件里没有、按图纸保留）。",
+                path.display(),
+                file.len(),
+                rep.rows,
+                rep.cols.len(),
+                locked,
+                kept
+            ));
+        }
+        Err(e) => host.push_error(&format!("OCSMBOMXLSXI: {e}")),
+    }
 }
 
 /// `OCSMBOMCFG` / `BOMCFG [每列行数]`：查看/修改 `bom/settings.json`。
