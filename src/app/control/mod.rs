@@ -485,7 +485,8 @@ impl OpenCADStudio {
                     Task::none(),
                 );
             }
-            if let Some(search) = req["search"].as_str().filter(|search| !search.is_empty()) {
+            let applied_search = req["search"].as_str().filter(|search| !search.is_empty());
+            if let Some(search) = applied_search {
                 let search = search.to_ascii_uppercase();
                 names.retain(|name| name.contains(&search));
             }
@@ -498,7 +499,11 @@ impl OpenCADStudio {
                     "ok":true,"count":count,"returned":commands.len(),
                     "next_offset":(offset + commands.len() < count).then_some(offset + commands.len()),
                     "commands":commands,"actions":actions::NAMES,
-                    "detail_parameters":{"name":"LINE"},"search_parameter":{"search":"LINE"},
+                    // Report the request that produced this listing instead of a
+                    // fixed example: a client must be able to tell which filter
+                    // was applied. A named request returns the command manifest
+                    // earlier, so a listing never carries a detail name.
+                    "detail_parameters":{"name":Value::Null},"search_parameter":{"search":applied_search},
                     "guidance":"Request one command by name for batch examples and interactive input guidance."
                 }),
                 Task::none(),
@@ -1187,6 +1192,27 @@ mod tests {
                 .0["code"],
             "unknown_command"
         );
+    }
+    #[test]
+    fn command_listing_reports_the_applied_search_filter() {
+        let mut app = OpenCADStudio::new_for_test();
+        let all = app.control_request(json!({"op":"commands"})).0;
+        assert_eq!(all["detail_parameters"]["name"], Value::Null);
+        assert_eq!(all["search_parameter"]["search"], Value::Null);
+        let filtered = app
+            .control_request(json!({"op":"commands","search":"circle"}))
+            .0;
+        assert_eq!(filtered["search_parameter"]["search"], "circle");
+        assert!(filtered["commands"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("CIRCLE")));
+        assert!(
+            filtered["count"].as_u64().unwrap() < all["count"].as_u64().unwrap(),
+            "{filtered} vs {all}"
+        );
+        let blank = app.control_request(json!({"op":"commands","search":""})).0;
+        assert_eq!(blank["search_parameter"]["search"], Value::Null);
     }
     #[test]
     fn control_queries_exact_curve_relationships_and_metrics() {
