@@ -14,6 +14,8 @@ The server provides four tools:
 
 - `ocs_sessions` finds running editor sessions and opens OpenCADStudio when none exists.
 - `ocs_read` discovers capabilities and reads document state, complete database records, command manifests, entities, properties, kernel measurements and spatial relationships, history, events, and operation status.
+
+Document state carries the live selection, so a client can read what the user has highlighted: `state.selection` lists the selected handles in pick order, `state.selection_revision` increments on every real change, and `ocs_read` with `op: "query"` (with `handles`) or `op: "properties"` returns the selected entities and the Properties-panel view of them. `ocs_read` with `op: "events"` streams the same changes as `{"kind": "selection", "selection": [...], "document_id": …, "revision": …}` alongside the operation-status events, which lets a client follow the highlight without polling. An `ocs_execute` request may also carry `selection` with the handles it expects; a mismatch fails with `selection_changed` instead of editing a different set. `ocs_read` with `op: "history"` returns the command-line log (echoed commands, plugin output, and undo/redo labels).
 - `ocs_execute` performs one operation, an atomic record update, or a sequential batch against the real editor.
 - `ocs_capture` returns a bounded PNG of the drawing viewport or complete window.
 

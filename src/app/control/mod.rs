@@ -108,6 +108,9 @@ pub(super) struct State {
     pub enabled: bool,
     serial: u64,
     events: VecDeque<Value>,
+    /// Monotonic counter bumped on every real selection change, so a client can
+    /// detect highlight changes cheaply (`state.selection_revision`).
+    selection_revision: u64,
     pub(super) routing: bool,
 }
 impl State {
@@ -343,6 +346,37 @@ impl OpenCADStudio {
         self.control.pending.is_some()
     }
 
+    /// Mirror a real selection change into the automation event stream.
+    ///
+    /// The host already broadcasts `SelectionChangedV4` to plugins; automation
+    /// clients (stdio MCP, headless feeder) had no way to notice a highlight
+    /// change except polling `state`. They now get one event per change
+    /// (`kind:"selection"`) plus a `selection_revision` counter in `state`.
+    pub(super) fn control_record_selection_event(&mut self, handles: &[acadrust::Handle]) {
+        let (document_id, revision) = {
+            let tab = &self.tabs[self.active_tab];
+            (tab.id, tab.edit_revision)
+        };
+        let selection: Vec<String> = handles
+            .iter()
+            .map(|h| format!("{:X}", h.value()))
+            .collect();
+        self.control.selection_revision = self.control.selection_revision.wrapping_add(1);
+        let selection_revision = self.control.selection_revision;
+        self.control.serial += 1;
+        self.control.events.push_back(json!({
+            "sequence":self.control.serial,
+            "kind":"selection",
+            "document_id":document_id,
+            "revision":revision,
+            "selection_revision":selection_revision,
+            "selection":selection,
+        }));
+        while self.control.events.len() > 128 {
+            self.control.events.pop_front();
+        }
+    }
+
     pub(super) fn control_state(&self) -> Value {
         let tab = &self.tabs[self.active_tab];
         let command = tab.active_cmd.as_deref().map(active_command_metadata);
@@ -360,6 +394,7 @@ impl OpenCADStudio {
             "camera":({let c=tab.scene.camera.borrow();json!({"target":c.target.to_array(),"rotation":[c.rotation.x,c.rotation.y,c.rotation.z,c.rotation.w],"distance":c.distance,"fov_y":c.fov_y,"projection":format!("{:?}",c.projection),"yaw":c.yaw,"pitch":c.pitch})}),
             "mtext_editor":self.mtext_editor.as_ref().map(|e|json!({"text":e.content.text(),"height":e.height,"style":e.style})),
             "text_editor":self.text_inline.is_some(),"event_cursor":self.control.serial,
+            "selection_revision":self.control.selection_revision,
             "operation":self.control.pending.as_ref().map(|p| &p.id),
             "capabilities":["commands","command_manifest","step_input","batch","compact_results","entity_pick","structure_pick","selection","properties","records","record_schemas","record_filters","atomic_record_updates","layers","history","documents","events","capture","viewport_capture","measure","spatial_query"]
         })
@@ -1188,6 +1223,39 @@ mod tests {
             "unknown_command"
         );
     }
+    #[test]
+    fn selection_changes_are_published_to_the_event_stream() {
+        // A highlight change used to be visible only by polling `state`.
+        let mut app = OpenCADStudio::new_for_test();
+        request(&mut app, json!({"op":"new"}));
+        request(&mut app, json!({"op":"run","cmd":"LINE 0,0 10,0"}));
+        let handle = request(&mut app, json!({"op":"query","type":"Line"}))["entities"][0]["handle"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let before = app.control_state()["selection_revision"].as_u64().unwrap();
+        let selected = app.automation_op(&format!(r#"{{"op":"select","handles":["{handle}"]}}"#));
+        assert_eq!(selected["ok"], true, "{selected}");
+        let state = app.control_state();
+        assert_eq!(
+            state["selection_revision"].as_u64().unwrap(),
+            before + 1,
+            "one bump per real change: {state}"
+        );
+        assert!(
+            state["selection"].as_array().unwrap().contains(&json!(handle)),
+            "{state}"
+        );
+        let events = app.control_request(json!({"op":"events"})).0;
+        let last = events["events"].as_array().unwrap().last().unwrap();
+        assert_eq!(last["kind"], "selection", "{events}");
+        assert_eq!(last["document_id"], state["document_id"], "{events}");
+        assert!(
+            last["selection"].as_array().unwrap().contains(&json!(handle)),
+            "{events}"
+        );
+    }
+
     #[test]
     fn control_queries_exact_curve_relationships_and_metrics() {
         let mut app = OpenCADStudio::new_for_test();
