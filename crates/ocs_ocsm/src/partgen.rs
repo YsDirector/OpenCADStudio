@@ -415,7 +415,7 @@ pub enum BoltView {
     End,
 }
 
-/// 六角头螺栓 C 级一行（GB/T 5780 ← ISO 4016）。
+/// 六角头螺栓一行（GB/T 5780 C级 与 GB/T 5782 A/B级 共用字段）。
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct BoltCRow {
     pub d: f64,
@@ -423,7 +423,7 @@ pub struct BoltCRow {
     pub pitch: f64,
     pub s: f64,
     pub k: f64,
-    /// 对角宽度（公差下限）
+    /// 对角宽度（公差下限；**画图一律用公称 e = s/cos30°**，此列只记录）
     pub e: f64,
     pub b1: f64,
     pub b2: f64,
@@ -434,6 +434,12 @@ pub struct BoltCRow {
     pub runout: f64,
     /// 该直径的标准长度系列
     pub lengths: Vec<f64>,
+    /// A/B 级头部垫圈面直径（只有 GB/T 5782 表有；C 级无此特征 —— 仅记录不画）
+    #[serde(default)]
+    pub dw: f64,
+    /// A/B 级头部垫圈面高度（仅记录不画）
+    #[serde(default)]
+    pub c: f64,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -475,6 +481,41 @@ pub fn hex_bolt_c_row(d: f64) -> Option<&'static BoltCRow> {
     hex_bolt_c_table().rows.iter().find(|r| (r.d - d).abs() < 1e-9)
 }
 
+// ── GB/T 5782-2016 六角头螺栓 A/B级（部分螺纹）────────────────────────────
+//
+// **画法与 GB/T 5780 C级完全相同**（用户 2026-09-15：「A/B 级与 C 级肉眼看不出来区别，直接复制过来即可」）。
+// 两族表的 s/k 逐规格一致（所以头部画法一致），差异只在：
+// - `e`（公差下限，仅记录不画 —— 几何一律用公称 e = s/cos30°）；
+// - 可用长度区间（如 M10：5782 = 45~100、5780 C级 = 40~100；M36：140~360 vs 110~360）；
+// - A/B 级标准图在头部支承面有垫圈面 dw×c（C 级无）—— 本库按用户指示不画，dw/c 仅入表备查。
+
+fn hex_bolt_ab_table() -> &'static BoltCTable {
+    static T: std::sync::OnceLock<BoltCTable> = std::sync::OnceLock::new();
+    T.get_or_init(|| {
+        serde_json::from_str(include_str!("tables/partsHexBolt5782.json"))
+            .expect("partsHexBolt5782.json")
+    })
+}
+
+/// GB/T 5782 可选的公称直径（29 规格 M1.6…M64）。
+pub fn hex_bolt_ab_diameters() -> Vec<f64> {
+    hex_bolt_ab_table().rows.iter().map(|r| r.d).collect()
+}
+
+/// GB/T 5782 某个直径的长度系列。
+pub fn hex_bolt_ab_lengths(d: f64) -> Vec<f64> {
+    hex_bolt_ab_table()
+        .rows
+        .iter()
+        .find(|r| (r.d - d).abs() < 1e-9)
+        .map(|r| r.lengths.clone())
+        .unwrap_or_default()
+}
+
+pub fn hex_bolt_ab_row(d: f64) -> Option<&'static BoltCRow> {
+    hex_bolt_ab_table().rows.iter().find(|r| (r.d - d).abs() < 1e-9)
+}
+
 /// 螺纹长度（GB/T 5780：l ≤ 125 → b1；125 < l ≤ 200 → b2；l > 200 → b3）。
 pub fn thread_length_c(row: &BoltCRow, l: f64) -> f64 {
     if l <= 125.0 {
@@ -508,7 +549,60 @@ pub fn hex_bolt_c(d: f64, l: f64, view: BoltView) -> Result<GenPart, String> {
             trim_num(row.l_max)
         ));
     }
-    let (s, k) = (row.s, row.k);
+    let b = thread_length_c(row, l);
+    let meta = PartMeta {
+        code: "GB/T 5780-2016".to_string(),
+        name: "六角头螺栓 C级".to_string(),
+        spec: spec_text_bolt(d, l),
+        material: String::new(),
+        weight: format!("≈{}", format!("{:.3}", hex_bolt_weight_kg(row, l))),
+    };
+    Ok(hex_bolt_views(view, d, l, row.s, row.k, b, row.runout, meta))
+}
+
+/// GB/T 5782-2016 六角头螺栓 A/B级（部分螺纹）——**与 C 级同一套画法**（用户确认直接复制）。
+///
+/// 差异全在数据侧：s/k 与 5780 C级逐规格相同、`e` 是公差下限（仅记录）、可用长度区间不同；
+/// A/B 级标准图的头部垫圈面 dw×c 未画（按用户指示，dw/c 仅入表备查）。
+pub fn hex_bolt_ab(d: f64, l: f64, view: BoltView) -> Result<GenPart, String> {
+    let Some(row) = hex_bolt_ab_row(d) else {
+        return Err(format!("GB/T 5782 数据表里没有 M{}", trim_num(d)));
+    };
+    if l < row.l_min - 1e-9 || l > row.l_max + 1e-9 {
+        return Err(format!(
+            "M{} 的长度应在 {}~{} 之间（GB/T 5782 A/B级）",
+            trim_num(d),
+            trim_num(row.l_min),
+            trim_num(row.l_max)
+        ));
+    }
+    let b = thread_length_c(row, l);
+    // 收尾：无模板，按本族惯例取 5P（与 32.1 / 70.1 同源）
+    let runout = 5.0 * row.pitch;
+    let meta = PartMeta {
+        code: "GB/T 5782-2016".to_string(),
+        name: "六角头螺栓 A/B级".to_string(),
+        spec: spec_text_bolt(d, l),
+        material: String::new(),
+        weight: format!("≈{}", format!("{:.3}", hex_bolt_weight_kg(row, l))),
+    };
+    Ok(hex_bolt_views(view, d, l, row.s, row.k, b, runout, meta))
+}
+
+/// 六角头螺栓三视图的**画法本体**（GB/T 5780 C级 与 GB/T 5782 A/B级共用）。
+///
+/// 传入已解出的对边宽 `s`、头高 `k`、螺纹长 `b`、收尾 `runout` 与元数据；
+/// 对角宽一律用**公称** `e = s/cos30°`（表里的 e 是公差下限，只记录不画）。
+fn hex_bolt_views(
+    view: BoltView,
+    d: f64,
+    l: f64,
+    s: f64,
+    k: f64,
+    b: f64,
+    runout: f64,
+    meta: PartMeta,
+) -> GenPart {
     // 几何用**公称对角宽** e = s/cos30°（表里的 e 是公差下限：M5 8.63 vs 公称 9.2376，
     // 用户图实测轮廓在 ±4.619 = ±e_公称/2）
     let e = across_corners(s);
@@ -580,19 +674,11 @@ pub fn hex_bolt_c(d: f64, l: f64, view: BoltView) -> Result<GenPart, String> {
             let o = s / 2.0 + 3.0;
             entities.push(line([-o, 0.0], [o, 0.0], LAYER_CENTER));
             entities.push(line([0.0, o], [0.0, -o], LAYER_CENTER));
-            let meta = PartMeta {
-                code: "GB/T 5780-2016".to_string(),
-                name: "六角头螺栓 C级".to_string(),
-                spec: spec_text_bolt(d, l),
-                material: String::new(),
-                weight: format!("≈{}", format!("{:.3}", bolt_c_weight_kg(row, l))),
-            };
-            return Ok(GenPart { entities, meta, bbox: [-s / 2.0, -e / 2.0, s / 2.0, e / 2.0] });
+            return GenPart { entities, meta, bbox: [-s / 2.0, -e / 2.0, s / 2.0, e / 2.0] };
         }
     }
 
     // 杆 + 螺纹（主/俯视图共用）
-    let b = thread_length_c(row, l);
     let c = 0.075 * d; // 杆端倒角
     entities.push(line([0.0, d / 2.0], [l - c, d / 2.0], LAYER_MAIN));
     entities.push(line([0.0, -d / 2.0], [l - c, -d / 2.0], LAYER_MAIN));
@@ -605,27 +691,17 @@ pub fn hex_bolt_c(d: f64, l: f64, view: BoltView) -> Result<GenPart, String> {
     // 牙底细实线 + 收尾斜线
     entities.push(line([l - b, dm / 2.0], [l, dm / 2.0], LAYER_THIN));
     entities.push(line([l - b, -dm / 2.0], [l, -dm / 2.0], LAYER_THIN));
-    entities.push(line([l - b - row.runout, d / 2.0], [l - b, dm / 2.0], LAYER_THIN));
-    entities.push(line([l - b - row.runout, -d / 2.0], [l - b, -dm / 2.0], LAYER_THIN));
+    entities.push(line([l - b - runout, d / 2.0], [l - b, dm / 2.0], LAYER_THIN));
+    entities.push(line([l - b - runout, -d / 2.0], [l - b, -dm / 2.0], LAYER_THIN));
     // 中心线
     entities.push(line([-k - over, 0.0], [l + over, 0.0], LAYER_CENTER));
 
     let half_h = if view == BoltView::Main { e / 2.0 } else { s / 2.0 };
-    Ok(GenPart {
-        entities,
-        meta: PartMeta {
-            code: "GB/T 5780-2016".to_string(),
-            name: "六角头螺栓 C级".to_string(),
-            spec: spec_text_bolt(d, l),
-            material: String::new(),
-            weight: format!("≈{}", format!("{:.3}", bolt_c_weight_kg(row, l))),
-        },
-        bbox: [-k, -half_h, l, half_h],
-    })
+    GenPart { entities, meta, bbox: [-k, -half_h, l, half_h] }
 }
 
-/// C 级螺栓单件重量估算（钢 7.85 g/cm³）。
-pub fn bolt_c_weight_kg(row: &BoltCRow, l: f64) -> f64 {
+/// 六角头螺栓单件重量估算（钢 7.85 g/cm³，六角头按正六边形面积 + 杆体积）。
+pub fn hex_bolt_weight_kg(row: &BoltCRow, l: f64) -> f64 {
     let head = COS30 * row.s * row.s * row.k;
     let shank = std::f64::consts::PI / 4.0 * row.d * row.d * (l - row.k).max(0.0);
     (head + shank) * 7.85e-3 / 1000.0
@@ -671,6 +747,41 @@ pub fn catalog_json() -> String {
             "base_hint": "基点 = 头部支承面 × 轴线",
         }),
     );
+    // GB/T 5782-2016 A/B 级：**画法与 C 级完全相同**（用户确认直接复制），差异只在数据表
+    let sizes_ab: Vec<serde_json::Value> = hex_bolt_ab_table()
+        .rows
+        .iter()
+        .map(|r| {
+            serde_json::json!({
+                "d": r.d,
+                "label": format!("M{}", trim_num(r.d)),
+                "pitch": r.pitch,
+                "l_min": r.l_min,
+                "l_max": r.l_max,
+                "lengths": r.lengths,
+                "extra": format!("s={} k={} e={}（A级）dw={} c={}", trim_num(r.s), trim_num(r.k), trim_num(r.e), trim_num(r.dw), trim_num(r.c)),
+            })
+        })
+        .collect();
+    let views_ab = serde_json::json!([
+        { "id": "main", "name": "主视图" },
+        { "id": "top",  "name": "俯视图" },
+        { "id": "end",  "name": "左视图" },
+    ]);
+    fam_map.insert(
+        "hex_bolt_ab".to_string(),
+        serde_json::json!({
+            "id": "hex_bolt_ab",
+            "name": "六角头螺栓 A/B级",
+            "code": "GB/T 5782-2016",
+            "iso": "ISO 4014:2011",
+            "implemented": true,
+            "views": views_ab,
+            "sizes": sizes_ab,
+            "len_label": "长度 l",
+            "base_hint": "基点 = 头部支承面 × 轴线（画法同 GB/T 5780 C级）",
+        }),
+    );
     for (k, v) in crate::partgen_more::families_json() {
         fam_map.insert(k, v);
     }
@@ -680,7 +791,7 @@ pub fn catalog_json() -> String {
             { "name": "螺栓", "children": [
                 { "name": "六角螺栓", "children": [
                     { "name": "六角头螺栓 C级 GB/T 5780-2016", "family": "hex_bolt_c", "implemented": true },
-                    { "name": "六角头螺栓 A/B级 GB/T 5782-2016", "implemented": false },
+                    { "name": "六角头螺栓 A/B级 GB/T 5782-2016", "family": "hex_bolt_ab", "implemented": true },
                     { "name": "六角头螺栓 全螺纹 GB/T 5783-2016", "family": "hex_bolt_b_full", "implemented": true },
                     { "name": "六角头头部带孔螺栓 GB/T 32.1-2020", "family": "hex_bolt_hole_a", "implemented": true }
                 ]},
@@ -730,6 +841,11 @@ pub fn generate(family: &str, d: f64, l: f64, view: &str) -> Result<GenPart, Str
         ("hex_bolt_c", "top") => hex_bolt_c(d, l, BoltView::Top),
         ("hex_bolt_c", "end") => hex_bolt_c(d, l, BoltView::End),
         ("hex_bolt_c", other) => Err(format!("hex_bolt_c 没有视图 {other}")),
+        // GB/T 5782-2016 A/B级：画法同 C 级（用户确认直接复制），数据表不同
+        ("hex_bolt_ab", "main") => hex_bolt_ab(d, l, BoltView::Main),
+        ("hex_bolt_ab", "top") => hex_bolt_ab(d, l, BoltView::Top),
+        ("hex_bolt_ab", "end") => hex_bolt_ab(d, l, BoltView::End),
+        ("hex_bolt_ab", other) => Err(format!("hex_bolt_ab 没有视图 {other}")),
         (other, _) => Err(format!("零件族 {other} 尚未实现")),
     }
 }
@@ -1202,6 +1318,108 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    /// GB/T 5782-2016 A/B 级：**画法与 C 级完全相同**（用户 2026-09-15 确认「肉眼看不出来区别，直接复制」）。
+    ///
+    /// 强断言：取一个两族都能生成的规格（M10×60：5780 40~100 ✓、5782 45~100 ✓，
+    /// 且两族螺纹长 b 与收尾 runout 都相等），三视图的图元列表必须**逐条完全一致**。
+    #[test]
+    fn hex_bolt_ab_reuses_c_drawing() {
+        for (view, name) in [(BoltView::Main, "主视图"), (BoltView::Top, "俯视图"), (BoltView::End, "左视图")] {
+            let c = hex_bolt_c(10.0, 60.0, view).expect("5780 M10x60");
+            let ab = hex_bolt_ab(10.0, 60.0, view).expect("5782 M10x60");
+            assert_eq!(c.entities.len(), ab.entities.len(), "{name} 图元数应一致");
+            let key = |p: &GenPart| -> Vec<String> {
+                p.entities
+                    .iter()
+                    .map(|e| match e {
+                        EntityType::Line(l) => format!(
+                            "LINE {} ({:.4},{:.4})-({:.4},{:.4})",
+                            l.common.layer, l.start.x, l.start.y, l.end.x, l.end.y
+                        ),
+                        EntityType::Arc(a) => format!(
+                            "ARC {} ({:.4},{:.4}) r={:.4} {:.4}->{:.4}",
+                            a.common.layer,
+                            a.center.x,
+                            a.center.y,
+                            a.radius,
+                            a.start_angle.to_degrees(),
+                            a.end_angle.to_degrees()
+                        ),
+                        EntityType::Circle(c) => {
+                            format!("CIRCLE {} ({:.4},{:.4}) r={:.4}", c.common.layer, c.center.x, c.center.y, c.radius)
+                        }
+                        other => format!("OTHER {}", other.common().layer),
+                    })
+                    .collect()
+            };
+            assert_eq!(key(&c), key(&ab), "{name}：5782 应与 5780 逐条相同");
+            assert_eq!(c.bbox, ab.bbox, "{name} bbox");
+        }
+        // 元数据不同（代号/名称），基点约定相同
+        let ab = hex_bolt_ab(10.0, 60.0, BoltView::Main).unwrap();
+        assert_eq!(ab.meta.code, "GB/T 5782-2016");
+        assert_eq!(ab.meta.name, "六角头螺栓 A/B级");
+        assert_eq!(ab.meta.spec, "M10x60");
+        assert!(ab.meta.weight.starts_with('≈'));
+    }
+
+    /// 两族差异只在**数据**：s/k 逐规格相同（所以画法一致），
+    /// e（公差下限，仅记录）与可用长度区间不同（用户说的「可用尺寸区间有出入」）。
+    #[test]
+    fn hex_bolt_ab_table_differs_from_c_only_in_records() {
+        assert_eq!(hex_bolt_ab_diameters().len(), 29, "5782 共 29 规格（M1.6…M64）");
+        let mut diff_len = 0;
+        for d in hex_bolt_ab_diameters() {
+            if let Some(cr) = hex_bolt_c_row(d) {
+                let ar = hex_bolt_ab_row(d).unwrap();
+                assert_eq!(cr.s, ar.s, "M{d} 对边宽 s 应相同（画法一致的前提）");
+                assert_eq!(cr.k, ar.k, "M{d} 头高 k 应相同");
+                assert!(cr.pitch == ar.pitch, "M{d} 螺距应相同");
+                // 螺纹长分档相同（都是 2d+6 / 2d+12 / 2d+25）；b1 在最小长度 > 125 的大直径上
+                // 一方可能记 0（不适用）—— 只比"双方都填了"的档
+                for (ci, ai, label) in [(cr.b1, ar.b1, "b1"), (cr.b2, ar.b2, "b2"), (cr.b3, ar.b3, "b3")] {
+                    if ci > 0.0 && ai > 0.0 {
+                        assert_eq!(ci, ai, "M{d} {label} 应相同");
+                    }
+                }
+                if cr.l_min != ar.l_min || cr.l_max != ar.l_max {
+                    diff_len += 1;
+                }
+                assert!(ar.dw > 0.0 && ar.c > 0.0, "M{d} A/B 级应有垫圈面 dw/c（仅记录）");
+            }
+        }
+        assert!(diff_len >= 5, "至少若干规格的可用长度区间应与 C 级不同（实际 {diff_len}）");
+        // 具体差异例（用户说的「支持的尺寸区间不同」）
+        assert_eq!(hex_bolt_c_row(10.0).unwrap().l_min, 40.0);
+        assert_eq!(hex_bolt_ab_row(10.0).unwrap().l_min, 45.0);
+        assert_eq!(hex_bolt_c_row(36.0).unwrap().l_min, 110.0);
+        assert_eq!(hex_bolt_ab_row(36.0).unwrap().l_min, 140.0);
+        assert!((hex_bolt_ab_row(42.0).unwrap().e - 71.3).abs() < 1e-9, "M42 e=71.3（官方规格图）");
+        // 越界报错自带族名
+        assert!(hex_bolt_ab(10.0, 300.0, BoltView::Main).unwrap_err().contains("GB/T 5782"));
+    }
+
+    /// 5782 全部 29 规格 × 长度系列 × 三视图都能生成，且长度序列递增。
+    #[test]
+    fn hex_bolt_ab_all_specs_generate() {
+        for d in hex_bolt_ab_diameters() {
+            let ls = hex_bolt_ab_lengths(d);
+            assert!(!ls.is_empty(), "M{d} 无长度系列");
+            assert!(ls.windows(2).all(|w| w[1] > w[0]), "M{d} 长度序列非递增");
+            for l in &ls {
+                for view in [BoltView::Main, BoltView::Top, BoltView::End] {
+                    let p = hex_bolt_ab(d, *l, view)
+                        .unwrap_or_else(|e| panic!("5782 M{d}x{l} {view:?} 生成失败: {e}"));
+                    assert!(!p.entities.is_empty());
+                    assert!(
+                        !p.entities.iter().any(|e| matches!(e, EntityType::Dimension(_))),
+                        "5782 M{d}x{l} 不含尺寸标注"
+                    );
+                }
+            }
+        }
     }
 
     #[test]

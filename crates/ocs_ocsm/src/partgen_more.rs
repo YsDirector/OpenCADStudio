@@ -1268,6 +1268,12 @@ mod tests {
             ("hex_bolt_c", 5.0, 25.0, "5780-M5x25", "main"),
             ("hex_bolt_c", 5.0, 25.0, "5780-M5x25", "top"),
             ("hex_bolt_c", 5.0, 25.0, "5780-M5x25", "end"),
+            // 5780 vs 5782 同规格对照（叠合比对：两者应逐条相同）
+            ("hex_bolt_c", 10.0, 60.0, "5780-M10x60", "main"),
+            ("hex_bolt_ab", 10.0, 60.0, "5782-M10x60", "main"),
+            ("hex_bolt_ab", 10.0, 60.0, "5782-M10x60", "top"),
+            ("hex_bolt_ab", 10.0, 60.0, "5782-M10x60", "end"),
+            ("hex_bolt_ab", 42.0, 200.0, "5782-M42x200", "main"),
             ("hex_bolt_b_full", 10.0, 20.0, "5783-M10x20", "main"),
             ("hex_bolt_b_full", 10.0, 20.0, "5783-M10x20", "end"),
             ("hex_bolt_hole_a", 18.0, 60.0, "32_1-M18x60", "main"),
@@ -1320,6 +1326,71 @@ mod tests {
 
 #[cfg(test)]
 mod acceptance {
+    /// 验收图纸：GB/T 5782-2016 A/B 级（与 5780 同一套画法）6 个块。
+    /// 跑法：`cargo test -p ocs_ocsm -- --ignored dump_acceptance_5782 --nocapture`
+    #[test]
+    #[ignore]
+    fn dump_acceptance_5782() {
+        use ocs_plugin_api::host::acadrust::entities::Insert;
+        use ocs_plugin_api::host::acadrust::io::dwg::DwgWriter;
+        use ocs_plugin_api::host::acadrust::io::dxf::DxfWriter;
+        use ocs_plugin_api::host::acadrust::types::{Color, LineWeight, Vector3};
+        use ocs_plugin_api::host::acadrust::xdata::{ExtendedDataRecord, XDataValue};
+        use ocs_plugin_api::host::acadrust::{CadDocument, EntityType};
+
+        let cases: &[(&str, f64, f64, &str, f64, f64)] = &[
+            ("hex_bolt_ab", 10.0, 60.0, "main", 20.0, 150.0),
+            ("hex_bolt_ab", 10.0, 60.0, "top", 120.0, 150.0),
+            ("hex_bolt_ab", 10.0, 60.0, "end", 180.0, 150.0),
+            ("hex_bolt_ab", 42.0, 200.0, "main", 20.0, 60.0),
+            ("hex_bolt_ab", 42.0, 200.0, "top", 200.0, 60.0),
+            ("hex_bolt_ab", 42.0, 200.0, "end", 300.0, 60.0),
+            // 同规格 C 级对照（便于目视确认“画法一样、只是数据不同”）
+            ("hex_bolt_c", 10.0, 60.0, "main", 20.0, -30.0),
+        ];
+
+        let mut doc = CadDocument::new();
+        crate::partgen::acceptance_dump::add_ocsm_layers(&mut doc);
+        let mut log = Vec::new();
+        for (fam, d, l, view, x, y) in cases {
+            let part = crate::partgen::generate(fam, *d, *l, view).expect("生成");
+            let block = format!(
+                "OCSM_{}_{}_{}",
+                fam.to_uppercase(),
+                part.meta.spec.replace(['.', ' '], "_"),
+                view.to_uppercase()
+            );
+            crate::partgen::acceptance_dump::add_block(&mut doc, &block, part.entities.clone());
+            let mut ins = Insert::new(&block, Vector3::new(*x, *y, 0.0));
+            ins.common.layer = crate::partgen::LAYER_MAIN.to_string();
+            ins.common.color = Color::ByLayer;
+            ins.common.linetype = "ByLayer".to_string();
+            ins.common.line_weight = LineWeight::ByLayer;
+            let mut rec = ExtendedDataRecord::new("OCSM_PART");
+            rec.values.push(XDataValue::String(
+                serde_json::json!({
+                    "code": part.meta.code, "name": part.meta.name, "spec": part.meta.spec,
+                    "weight": part.meta.weight, "d": d, "l": l, "view": view,
+                })
+                .to_string(),
+            ));
+            ins.common.extended_data.add_record(rec);
+            doc.add_entity(EntityType::Insert(ins)).expect("insert");
+            log.push(format!("{:>16} {:>10} {:>4} @({x:.0},{y:.0})", part.meta.code, part.meta.spec, view));
+        }
+        let dir = std::path::Path::new("/home/ysdirector/桌面/OCSM/test");
+        std::fs::create_dir_all(dir).unwrap();
+        let dwg = dir.join("参数化验收-5782A-B级.dwg");
+        let dxf = dir.join("参数化验收-5782A-B级.dxf");
+        DwgWriter::write_to_file(&dwg, &doc).expect("写 DWG");
+        DxfWriter::new(&doc).write_to_file(&dxf).expect("写 DXF");
+        println!("已写出：\n  {}\n  {}", dwg.display(), dxf.display());
+        println!("内容：{} 个零件块", log.len());
+        for l in &log {
+            println!("  {l}");
+        }
+    }
+
     /// 验收图纸（第二批）：螺母 2 族 × 4 视图 + 销 2 族 × 1 视图 → 10 个块。
     /// 跑法：`cargo test -p ocs_ocsm -- --ignored dump_acceptance_nuts_pins --nocapture`
     #[test]
@@ -1604,6 +1675,8 @@ pub fn family_views(family: &str) -> Vec<&'static str> {
     match family {
         // 六角头 C 级：用户样例给了主/俯/左三视图
         "hex_bolt_c" => vec!["main", "top", "end"],
+        // GB/T 5782 A/B 级：用户确认「与 C 级肉眼无区别，直接复制」→ 同样三视图
+        "hex_bolt_ab" => vec!["main", "top", "end"],
         // 5783 / 32.1 / 70.1：样例只有主视图 + 左视图（无俯视图）
         "hex_bolt_b_full" | "hex_bolt_hole_a" | "socket_head" => vec!["main", "end"],
         // 螺母：用户模板给了 主视/俯视/左视/剖视 四视图

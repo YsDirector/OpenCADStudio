@@ -191,6 +191,7 @@ rm -rf "$HOME/.config/OpenCADStudio/plugins/opencad.layers_quick"
   | 族 id | 代号·名称 | 规格 | 视图 |
   |---|---|---|---|
   | `hex_bolt_c` | GB/T 5780-2016 六角头螺栓 C级 | 23 | 主/俯/左 |
+  | `hex_bolt_ab` | GB/T 5782-2016 六角头螺栓 A/B级 | 29 | 主/俯/左（**画法直接复用 C 级**） |
   | `hex_bolt_b_full` | GB/T 5783-2016 全螺纹 B级 | 20 | 主/左 |
   | `hex_bolt_hole_a` | GB/T 32.1-2020 头部带孔 A级 | 15 | 主/左 |
   | `socket_head` | GB/T 70.1-2008 内六角圆柱头螺钉 | 20 | 主/左 |
@@ -202,7 +203,9 @@ rm -rf "$HOME/.config/OpenCADStudio/plugins/opencad.layers_quick"
   | `pin_1201` | GB/T 120.1-2000 内螺纹圆柱销 | 10 | 主（外形 + 局部剖） |
 
   已下架：1型六角螺母 GB/T 6170-2015（画法待模板，数据表保留）。
-  规格总数 212（尺寸/长度系列来源见 `src/tables/*.json` 的 `source` 字段）。
+  规格总数 241（尺寸/长度系列来源见 `src/tables/*.json` 的 `source` 字段）。
+  注：GB/T 5782 A/B 级按用户 2026-09-15 指示直接复用 5780 C级画法（叠合比对 23/23 一致）；
+  其头部**垫圈面 dw×c** 未画（dw/c 已在表内备查）。
 - 自查工具：`tools/overlay_check.py`（模板 vs 生成 **叠合比对**：图形指纹双向匹配 + 叠合 PNG）、
   `tools/ref_analyze.py`（模板 TSV → 视图聚类）。生成侧几何用 `cargo test -p ocs_ocsm -- --ignored dump_parts_dxf|dump_parts_svg` 出到
   `~/桌面/OCSM/test/参数化预览/`；叠合图在 `…/参数化预览/对比/`。

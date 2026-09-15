@@ -6104,6 +6104,12 @@ mod integration {
     use ocs_plugin_api::host::{PluginRequestError, PluginRequestSender};
 
 
+    /// 进程级串行锁：`set_pending_part` 是全局状态，多个导出测试并行会互相覆盖（曾致偶发失败）。
+    fn export_lock() -> std::sync::MutexGuard<'static, ()> {
+        static L: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        L.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     fn http_req(port: u16, method: &str, path: &str, body: &str) -> String {
         let mut s = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
         write!(
@@ -9439,6 +9445,10 @@ mod weld_tests {
         assert!(html.contains("ul class=\"tree\"") || html.contains("class=\"tree\""), "左侧文件树");
         let cat = http_req(server.port, "GET", "/api/parts", "");
         assert!(cat.contains("GB/T 5780-2016") && cat.contains("hex_bolt_c"), "目录含 C 级螺栓族");
+        assert!(
+            cat.contains("GB/T 5782-2016") && cat.contains("hex_bolt_ab"),
+            "目录含 A/B 级螺栓族（5782）"
+        );
         assert!(cat.contains("\"M5\"") && cat.contains("lengths") && cat.contains("hex_bolt_c"), "含规格与长度系列");
         assert!(cat.contains("\"main\"") && cat.contains("\"top\"") && cat.contains("\"end\""), "三个视图");
         // 文件树：零件库 / 螺栓 / 六角螺栓 分级 + 待实现族标注
@@ -9475,8 +9485,7 @@ mod weld_tests {
             }
         }
         // 销两族（单视图）
-        for (fam, d, l) in [("pin_1191", 10.0, 18.0), ("pin_1201", 20.0, 40.0)] {
-            let u = format!("/api/part_svg?family={fam}&d={d}&l={l}&view=main");
+        for (fam, d, l) in [("pin_1191", 10.0, 18.0), ("pin_1201", 20.0, 40.0)] {            let u = format!("/api/part_svg?family={fam}&d={d}&l={l}&view=main");
             let svg = http_req(server.port, "GET", &u, "");
             assert!(svg.contains("<svg") && !svg.contains("\"error\""), "{fam} 预览：{svg}");
             let bad = http_req(server.port, "GET", &format!("/api/part_svg?family={fam}&d={d}&l={l}&view=top"), "");
@@ -9507,6 +9516,7 @@ mod weld_tests {
     /// 螺母剖视图出库：块里必须带 `5剖面线层` 的 ANSI31 Hatch（落图实体验收点）。
     #[test]
     fn part_export_section_block_has_hatch() {
+        let _g = export_lock();
         let mock = Arc::new(MockSender::new(acadrust::CadDocument::new()));
         let sender: Arc<dyn PluginRequestSender> = mock.clone();
         let body = br#"{"family":"nut_c41","d":24,"l":22.3,"view":"section"}"#;
@@ -9581,6 +9591,7 @@ mod weld_tests {
     /// 销族出库：块里带 2细线层/5剖面线层（局部剖）且图层合法。
     #[test]
     fn part_export_pin_blocks() {
+        let _g = export_lock();
         let mock = Arc::new(MockSender::new(acadrust::CadDocument::new()));
         let sender: Arc<dyn PluginRequestSender> = mock.clone();
         let resp = apply_part_export(&sender, br#"{"family":"pin_1201","d":20,"l":40,"view":"main"}"#).expect("出库");
@@ -9603,6 +9614,7 @@ mod weld_tests {
 
     #[test]
     fn part_export_builds_block_and_registers_pending_part() {
+        let _g = export_lock();
         let mock = Arc::new(MockSender::new(acadrust::CadDocument::new()));
         let sender: Arc<dyn PluginRequestSender> = mock.clone();
         let body = br#"{"family":"hex_bolt_c","d":5,"l":25,"view":"main"}"#;
