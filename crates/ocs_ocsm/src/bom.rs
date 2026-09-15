@@ -1290,6 +1290,101 @@ mod tests {
 
     // ── 单元格文字自动压缩 ──
 
+    /// **改表头模板**：把「单件」「总重」「重量」三个标签的字高乘 `scale`（默认 0.9），
+    /// 原文件存 `.bak`。表头是静态文字、不走单元格压缩，所以只能在模板上改。
+    ///
+    /// `cargo test -p ocs_ocsm --lib rescale_head_template_labels -- --ignored --nocapture`
+    #[test]
+    #[ignore = "改模板（手动跑）"]
+    fn rescale_head_template_labels() {
+        use ocs_plugin_api::host::acadrust::io::dwg::{DwgReader, DwgWriter};
+        const SCALE: f64 = 0.9;
+        const LABELS: [&str; 3] = ["单件", "总重", "重量"];
+        let path = bom_dir().join(format!("{HEAD_BLOCK}.dwg"));
+        println!("表头模板：{}", path.display());
+        let mut doc = match DwgReader::from_file(&path).and_then(|mut r| r.read()) {
+            Ok(d) => d,
+            Err(e) => {
+                println!("读失败：{e}");
+                return;
+            }
+        };
+        // 备份
+        let bak = path.with_extension("dwg.bak");
+        if !bak.exists() {
+            if let Err(e) = std::fs::copy(&path, &bak) {
+                println!("备份失败：{e}");
+                return;
+            }
+            println!("已备份 → {}", bak.display());
+        }
+        // 改：整块改到本地副本再整体替换，避免边遍历边改
+        let mut changed = 0usize;
+        let mut entities: Vec<EntityType> = doc.model_space_entities().cloned().collect();
+        for e in entities.iter_mut() {
+            if let EntityType::Text(tx) = e {
+                if LABELS.iter().any(|l| tx.value.trim() == *l) {
+                    let old = tx.height;
+                    tx.height *= SCALE;
+                    println!("  {:?} 字高 {old:.2} → {:.2}", tx.value, tx.height);
+                    changed += 1;
+                }
+            }
+        }
+        if changed == 0 {
+            println!("没找到要改的标签，退出");
+            return;
+        }
+        // 用改后的实体替换模型空间（先删旧的，再加新的）
+        let old: Vec<_> = doc.model_space_entities().map(|e| e.common().handle).collect();
+        for h in old {
+            let _ = doc.remove_entity(h);
+        }
+        for e in entities {
+            let _ = doc.add_entity(e);
+        }
+        if let Err(e) = DwgWriter::write_to_file(&path, &doc) {
+            println!("写回失败：{e}");
+            return;
+        }
+        println!("已写回：{}（{changed} 个标签 ×{SCALE}）", path.display());
+    }
+
+    /// 打印表头模板（`OCSM_BOMHEAD.dwg`）里的文字实体与字高（人工核对用）：
+    /// `cargo test -p ocs_ocsm --lib dump_head_template_texts -- --ignored --nocapture`
+    #[test]
+    #[ignore = "读表头模板打印文字（手动跑）"]
+    fn dump_head_template_texts() {
+        use ocs_plugin_api::host::acadrust::io::dwg::DwgReader;
+        let path = bom_dir().join(format!("{HEAD_BLOCK}.dwg"));
+        println!("表头模板：{}", path.display());
+        let doc = match DwgReader::from_file(&path).and_then(|mut r| r.read()) {
+            Ok(d) => d,
+            Err(e) => {
+                println!("读失败：{e}");
+                return;
+            }
+        };
+        for e in doc.model_space_entities() {
+            match e {
+                EntityType::Text(tx) => println!(
+                    "  TEXT  {:?}  插入点 x={:.1} y={:.1}  字高 {:.2} 宽比 {:.2} 字型 {:?}",
+                    tx.value, tx.insertion_point.x, tx.insertion_point.y,
+                    tx.height, tx.width_factor, "?"
+                ),
+                EntityType::MText(m) => println!(
+                    "  MTEXT {:?}  插入点 x={:.1} y={:.1}  字高 {:.2}",
+                    m.value, m.insertion_point.x, m.insertion_point.y, m.height
+                ),
+                EntityType::AttributeDefinition(ad) => println!(
+                    "  ATTDEF tag={:?} 默认 {:?}  字高 {:.2}",
+                    ad.tag, ad.default_value, ad.height
+                ),
+                _ => {}
+            }
+        }
+    }
+
     /// 对**真实模板**跑一遍列宽解析 + 压缩模拟（人工检查用）：
     /// `cargo test -p ocs_ocsm --lib dump_row_template_widths -- --ignored --nocapture`
     #[test]
