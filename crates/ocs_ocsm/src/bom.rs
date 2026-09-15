@@ -234,6 +234,141 @@ pub(crate) fn cell_values(it: &BomItem, seq: usize) -> [String; 8] {
     ]
 }
 
+// ── 单元格文字自动压缩（列宽自适应）────────────────────────────────────────
+
+/// 压缩后的**最小字高**（再小就看不清了；宁可让它压到最小后允许轻微溢出并在命令行点名）。
+const MIN_CELL_TEXT_H: f64 = 2.0;
+/// 压缩后的**最小宽度因子**（横向挤压的下限）。
+const MIN_WIDTH_FACTOR: f64 = 0.6;
+/// 单元格左右留白合计（mm）：可用宽度 = 列宽 − 这个值。
+const CELL_PADDING: f64 = 1.0;
+
+/// 单字**自然宽度**（em 倍数）：中日韩 1.0、拉丁/数字/空格 0.7。
+///
+/// 这两个数按明细表模板（`OCSM_BOM_G` 字型 / 字高 5、宽比 0.7）**实测校准**：
+/// `GB/T 5780-2016` 14 字符 ≈ 31 mm、`0.018` 5 字符 ≈ 12 mm —— 与图上量到的尺寸一致。
+/// （引线/焊接那套 0.414 是另一个字型的比例，别混用。）
+fn char_em(c: char) -> f64 {
+    if (c as u32) >= 0x2E80 {
+        1.0
+    } else {
+        0.7
+    }
+}
+
+/// 文字在给定字高/宽度因子下的宽度。
+fn cell_text_width(s: &str, h: f64, wf: f64) -> f64 {
+    s.chars().map(|c| h * wf * char_em(c)).sum()
+}
+
+/// **单元格文字自动压缩**：先压字高到下限，再横向压宽度因子（下限 = 名义值 × 0.6）。
+///
+/// 返回 `(字高, 宽度因子, 是否仍溢出)`；短文本原样返回。
+pub(crate) fn fit_cell_text(
+    value: &str,
+    avail: f64,
+    nominal_h: f64,
+    nominal_wf: f64,
+) -> (f64, f64, bool) {
+    let v = value.trim();
+    let wf0 = if nominal_wf > 0.0 { nominal_wf } else { 1.0 };
+    if v.is_empty() || nominal_h <= 0.0 || avail <= 0.0 {
+        return (nominal_h, wf0, false);
+    }
+    let need = cell_text_width(v, nominal_h, wf0);
+    if need <= avail + 1e-9 {
+        return (nominal_h, wf0, false);
+    }
+    // ① 压字高（保底 MIN_CELL_TEXT_H）
+    let h = (nominal_h * avail / need).max(MIN_CELL_TEXT_H);
+    if cell_text_width(v, h, wf0) <= avail + 1e-9 {
+        return (h, wf0, false);
+    }
+    // ② 还长 → 横向压缩（字高保底不动，宽度因子最多压到 0.6×）
+    let need2 = cell_text_width(v, h, wf0);
+    let wf = (wf0 * avail / need2).max(wf0 * MIN_WIDTH_FACTOR);
+    let overflow = cell_text_width(v, h, wf) > avail + 1e-9;
+    (h, wf, overflow)
+}
+
+/// 行块里**各列的边界 x**（块局部坐标）：取块内竖直细线的 x，排序去重。
+///
+/// 从模板几何里读，而不是写死列宽 —— 用户改模板（加宽图号列等）后仍然正确。
+fn vertical_line_xs(entities: &[EntityType]) -> Vec<f64> {
+    let mut xs: Vec<f64> = Vec::new();
+    let mut push = |x: f64| {
+        if !xs.iter().any(|v| (v - x).abs() < 1e-6) {
+            xs.push(x);
+        }
+    };
+    for e in entities {
+        match e {
+            EntityType::Line(l) => {
+                if (l.start.x - l.end.x).abs() < 1e-9 && (l.start.y - l.end.y).abs() > 1e-9 {
+                    push(l.start.x);
+                }
+            }
+            EntityType::LwPolyline(pl) => {
+                let n = pl.vertices.len();
+                for i in 0..n {
+                    let a = &pl.vertices[i];
+                    let b = &pl.vertices[(i + 1) % n];
+                    if (a.location.x - b.location.x).abs() < 1e-9
+                        && (a.location.y - b.location.y).abs() > 1e-9
+                    {
+                        push(a.location.x);
+                    }
+                }
+            }
+            EntityType::Polyline(pl) => {
+                let n = pl.vertices.len();
+                for i in 0..n {
+                    let a = &pl.vertices[i];
+                    let b = &pl.vertices[(i + 1) % n];
+                    if (a.location.x - b.location.x).abs() < 1e-9
+                        && (a.location.y - b.location.y).abs() > 1e-9
+                    {
+                        push(a.location.x);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    xs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    xs
+}
+
+/// 每列的 (左边界, 可用宽) —— 由竖直分隔线差分得到；解析不出 8 段时退回模板标称值。
+fn row_cell_widths(entities: &[EntityType]) -> Vec<(f64, f64)> {
+    let xs = vertical_line_xs(entities);
+    let mut out: Vec<(f64, f64)> = Vec::new();
+    for w in xs.windows(2) {
+        let width = w[1] - w[0];
+        if width > 1.0 {
+            out.push((w[0], width - CELL_PADDING));
+        }
+    }
+    if out.len() != CELL_TAGS.len() {
+        // 模板里没有足够的分隔线 / 不是直线 → 用标称列宽兜底（0/11/48/81/92/127/138/150/180）
+        const EDGES: [f64; 9] = [0.0, 11.0, 48.0, 81.0, 92.0, 127.0, 138.0, 150.0, 180.0];
+        out = EDGES
+            .windows(2)
+            .map(|w| (w[0], w[1] - w[0] - CELL_PADDING))
+            .collect();
+    }
+    out
+}
+
+/// 按 ATTDEF 的插入点 x 找它落在哪一列 → 返回可用宽（块局部坐标）。
+fn avail_width_at(x: f64, cols: &[(f64, f64)]) -> Option<f64> {
+    // 取"最后一个左边界 ≤ x"的列
+    cols.iter()
+        .rev()
+        .find(|(left, _)| x >= *left - 0.5)
+        .map(|(_, w)| *w)
+}
+
 // ── 序号驱动刷新（序号球标联动）───────────────────────────────────────────
 
 /// 一行明细表的内容规格。**序号由外部给**（球标台账 / 自动接号 / 一期聚合行号）。
@@ -366,6 +501,10 @@ pub(crate) struct BomReport {
     pub removed: usize,
     pub added: usize,
     pub untracked: usize,
+    /// 被自动压缩（压字高/横向挤压）的单元格数。
+    pub squeezed: usize,
+    /// 压到下限仍可能溢出的单元格（"tag=值"），供命令行点名。
+    pub overflow: Vec<String>,
 }
 
 /// **建行核心**（命令 `BOM` 与球标联动共用）：按 `rows` 的次序重建全部行块，
@@ -435,6 +574,11 @@ pub(crate) fn fill_bom(
     }
 
     let cols = layout(rows.len(), per_col, &cfg)?;
+    // 单元格文字自动压缩：列宽从**行块几何**里读（模板改了也对）
+    let row_block_entities: Vec<EntityType> = doc.entities_in_block(ROW_BLOCK).cloned().collect();
+    let cell_cols = row_cell_widths(&row_block_entities);
+    let mut squeezed = 0usize;
+    let mut overflow: Vec<String> = Vec::new();
 
     // ④ 建表（表头 + 行，含 8 个属性值），全部打 OCSM_BOM 标记。
     let mut ents: Vec<EntityType> = Vec::new();
@@ -475,6 +619,19 @@ pub(crate) fn fill_bom(
                     continue;
                 };
                 let mut a = AttributeEntity::from_definition(ad, Some(values[idx].clone()));
+                // 长文本自动压缩（按该 ATTDEF 所在列的列宽）；块局部坐标下判断列。
+                if let Some(avail) = avail_width_at(ad.insertion_point.x, &cell_cols) {
+                    let wf0 = if ad.width_factor.abs() < 1e-9 { 1.0 } else { ad.width_factor };
+                    let (h, f, over) = fit_cell_text(&values[idx], avail, ad.height, wf0);
+                    if (h - ad.height).abs() > 1e-9 || (f - wf0).abs() > 1e-9 {
+                        squeezed += 1;
+                    }
+                    if over {
+                        overflow.push(format!("{}「{}」", ad.tag, values[idx]));
+                    }
+                    a.height = h;
+                    a.width_factor = f;
+                }
                 a.apply_transform(&transform);
                 ins.attributes.push(a);
             }
@@ -514,6 +671,8 @@ pub(crate) fn fill_bom(
         removed,
         added,
         untracked,
+        squeezed,
+        overflow,
     })
 }
 
@@ -641,6 +800,7 @@ pub(crate) fn cmd_bom(host: &mut dyn HostApi, args: &str) {
                 desc.join("、"),
                 rep.removed
             ));
+            report_cell_fit(host, &rep);
             if items.iter().any(|it| it.spec.is_empty()) && !items.is_empty() {
                 host.push_info(
                     "OCSMBOM: 提示——数量按「图中插入件数」统计，同一零件画在多个视图里会重复计数。",
@@ -687,6 +847,7 @@ pub(crate) fn cmd_bom_sync(host: &mut dyn HostApi, _args: &str) {
                 rep.cols.len(),
                 rep.removed
             ));
+            report_cell_fit(host, &rep);
             // 锁定/保留提示（不静默：用户要知道哪些行没被重算）
             let locked: Vec<String> = rows
                 .iter()
@@ -713,6 +874,23 @@ pub(crate) fn cmd_bom_sync(host: &mut dyn HostApi, _args: &str) {
 ///
 /// 只锁**数量**：序号永远由取号规则掌握；图号/名称/材料/单重/备注 是"非空即保留"
 /// （用户定案：无法解开的锁），要重算就删掉那一行再同步。
+/// 打印"单元格自动压缩"结果（有压缩才说；压到下限仍溢出的点名）。
+fn report_cell_fit(host: &mut dyn HostApi, rep: &BomReport) {
+    if rep.squeezed > 0 {
+        host.push_info(&format!(
+            "OCSMBOM: {} 格文字超宽 → 已自动压缩（先压字高到 {MIN_CELL_TEXT_H}，再横向压缩）。",
+            rep.squeezed
+        ));
+    }
+    if !rep.overflow.is_empty() {
+        host.push_info(&format!(
+            "OCSMBOM: 下面 {} 格压到下限仍可能压到邻格：{}（建议加宽列 / 把标准号写进名称列 / 缩短文本）。",
+            rep.overflow.len(),
+            rep.overflow.join("、")
+        ));
+    }
+}
+
 pub(crate) fn cmd_bom_lock(host: &mut dyn HostApi, args: &str) {
     let mut it = args.split_whitespace();
     let Some(key) = it.next() else {
@@ -1082,6 +1260,140 @@ pub(crate) fn cmd_bom_cfg(host: &mut dyn HostApi, args: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── 单元格文字自动压缩 ──
+
+    /// 对**真实模板**跑一遍列宽解析 + 压缩模拟（人工检查用）：
+    /// `cargo test -p ocs_ocsm --lib dump_row_template_widths -- --ignored --nocapture`
+    #[test]
+    #[ignore = "读模板 DWG 打印列宽（手动跑）"]
+    fn dump_row_template_widths() {
+        use ocs_plugin_api::host::acadrust::io::dwg::DwgReader;
+        let path = bom_dir().join(format!("{ROW_BLOCK}.dwg"));
+        println!("模板：{}", path.display());
+        let doc = match DwgReader::from_file(&path).and_then(|mut r| r.read()) {
+            Ok(d) => d,
+            Err(e) => {
+                println!("读失败：{e}");
+                return;
+            }
+        };
+        // 模板 DWG 的内容在**模型空间**（导入时才被定义成块 OCSM_BOMROW）。
+        let ents: Vec<EntityType> = doc.model_space_entities().cloned().collect();
+        let cols = row_cell_widths(&ents);
+        println!("解析到 {} 列：", cols.len());
+        for (i, (left, avail)) in cols.iter().enumerate() {
+            let tag = CELL_TAGS.get(i).copied().unwrap_or("?");
+            println!("  {tag:>4}: 左边界 {left:>7.2}  可用宽 {avail:>6.2}");
+        }
+        // 拿模板里的 ATTDEF 字高/宽度因子/字型，模拟常见内容
+        let h = ents
+            .iter()
+            .find_map(|e| match e {
+                EntityType::AttributeDefinition(ad) => Some(ad.height),
+                _ => None,
+            })
+            .unwrap_or(3.5);
+        println!("ATTDEF 字高 = {h}");
+        {
+            let mut counts: std::collections::BTreeMap<&str, usize> = Default::default();
+            for e in &ents {
+                let k = match e {
+                    EntityType::Line(_) => "Line",
+                    EntityType::AttributeDefinition(_) => "ATTDEF",
+                    EntityType::Text(_) => "Text",
+                    EntityType::MText(_) => "MText",
+                    EntityType::LwPolyline(_) => "LwPolyline",
+                    EntityType::Polyline(_) => "Polyline",
+                    EntityType::Insert(_) => "Insert",
+                    _ => "other",
+                };
+                *counts.entry(k).or_insert(0) += 1;
+            }
+            println!("块内实体：{counts:?}");
+            for e in &ents {
+                if let EntityType::Text(tx) = e {
+                    println!("  Text {tx:?}");
+                }
+            }
+        }
+        for e in &ents {
+            if let EntityType::AttributeDefinition(ad) = e {
+                println!(
+                    "  ATTDEF {:<4} 字高 {:.2} 宽比 {:.2} 字型 {:?} 对齐 {:?}",
+                    ad.tag, ad.height, ad.width_factor, ad.text_style, ad.horizontal_alignment
+                );
+            }
+        }
+        for (tag, sample) in [
+            ("序号", "1"),
+            ("图号", "GB/T 5780-2016"),
+            ("名称", "六角头螺栓 C级 M8x35"),
+            ("数量", "2"),
+            ("材料", "Q235"),
+            ("单重", "0.018"),
+            ("总重", "0.018"),
+            ("备注", "外购"),
+        ] {
+            let Some(i) = CELL_TAGS.iter().position(|x| *x == tag) else { continue };
+            let avail = cols.get(i).map(|c| c.1).unwrap_or(0.0);
+            let (h2, f, over) = fit_cell_text(sample, avail, h, 0.7);
+            println!(
+                "  {tag:>4} {sample:<26} 可用 {avail:>6.2} → 字高 {h2:.2} 宽比 {f:.2}{}",
+                if over { "  ← 仍溢出" } else { "" }
+            );
+        }
+    }
+
+    #[test]
+    fn fit_cell_text_shrinks_height_then_squeezes_width() {
+        // 模板实况：字高 5、宽度因子 0.7
+        let (h0, wf0) = (5.0, 0.7);
+        // 短文本原样
+        assert_eq!(fit_cell_text("1", 10.0, h0, wf0), (h0, wf0, false));
+        // 用户实况①：`名称 六角头螺栓 C级 M8x35` 在 33mm 格里 → 压字高（宽比不变）
+        let name = "六角头螺栓 C级 M8x35";
+        let (h, wf, over) = fit_cell_text(name, 33.0 - CELL_PADDING, h0, wf0);
+        assert!(h < h0 && (wf - wf0).abs() < 1e-9, "应先只压字高：h={h} wf={wf}");
+        assert!(!over);
+        assert!(cell_text_width(name, h, wf) <= 33.0 - CELL_PADDING + 1e-9);
+        // 用户实况②：`0.018` 在 10mm 格（单重）→ 也要压
+        let (h2, _, over2) = fit_cell_text("0.018", 10.0, h0, wf0);
+        assert!(h2 < h0 && !over2, "h={h2}");
+        // 图号 `GB/T 5780-2016` 在 36mm 格里本来就放得下 → 不动
+        assert_eq!(fit_cell_text("GB/T 5780-2016", 36.0, h0, wf0), (h0, wf0, false));
+        // 极长（60 个汉字）→ 压到下限仍溢出 → 要能被点名
+        let long: String = "超长名称".repeat(15);
+        let (h3, wf3, over3) = fit_cell_text(&long, 36.0, h0, wf0);
+        assert_eq!(h3, MIN_CELL_TEXT_H);
+        assert!((wf3 - wf0 * MIN_WIDTH_FACTOR).abs() < 1e-9);
+        assert!(over3, "这种要报出来让用户处理");
+        // 空文本/异常参数不炸
+        assert_eq!(fit_cell_text("  ", 10.0, h0, wf0), (h0, wf0, false));
+        assert_eq!(fit_cell_text("abc", 0.0, h0, wf0), (h0, wf0, false));
+    }
+
+    #[test]
+    fn row_cell_widths_reads_template_geometry() {
+        use ocs_plugin_api::host::acadrust::entities::Line;
+        let mut ents: Vec<EntityType> = Vec::new();
+        for x in [0.0, 11.0, 48.0, 81.0, 92.0, 127.0, 138.0, 150.0, 180.0] {
+            ents.push(EntityType::Line(Line::from_coords(x, 0.0, 0.0, x, 8.0, 0.0)));
+        }
+        // 横线不该被当成分隔线
+        ents.push(EntityType::Line(Line::from_coords(0.0, 0.0, 0.0, 180.0, 0.0, 0.0)));
+        let cols = row_cell_widths(&ents);
+        assert_eq!(cols.len(), CELL_TAGS.len(), "应得到 8 列");
+        assert!((cols[0].1 - (11.0 - CELL_PADDING)).abs() < 1e-9);
+        assert!((cols[1].1 - (37.0 - CELL_PADDING)).abs() < 1e-9);
+        // 列定位：ATTDEF 落在第 2 列（图号 11..48）
+        assert_eq!(avail_width_at(12.0, &cols).unwrap(), cols[1].1);
+        assert_eq!(avail_width_at(49.0, &cols).unwrap(), cols[2].1);
+        // 解析不出（空块）→ 退回标称列宽
+        let fallback = row_cell_widths(&[]);
+        assert_eq!(fallback.len(), CELL_TAGS.len());
+        assert!((fallback[1].1 - (37.0 - CELL_PADDING)).abs() < 1e-9);
+    }
 
     #[test]
     fn default_xlsx_dir_is_temp_ocsm_cross_platform() {
