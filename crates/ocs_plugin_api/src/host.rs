@@ -552,6 +552,27 @@ pub trait HostApi {
         let _ = tab_id;
         None
     }
+
+    // ── API v6 additions (appended at the end; old plugin binaries keep their
+    // vtable slots) ──────────────────────────────────────────────────────────
+
+    /// Open an undo transaction: unlike [`push_undo`](Self::push_undo) the snapshot
+    /// stays pending across host message boundaries until
+    /// [`commit_undo`](Self::commit_undo). Use it when one user action spans
+    /// several host requests (plugin flows over a local HTTP surface): the host
+    /// commits — and drops as empty — a pending snapshot at every message
+    /// boundary, so a plain `push_undo` in request N never covers the mutations
+    /// that arrive in request N+1.
+    ///
+    /// The default falls back to `push_undo` for hosts without the transaction
+    /// surface, so a plugin can call it unconditionally.
+    fn begin_undo(&mut self, label: &str) {
+        self.push_undo(label);
+    }
+
+    /// Close the transaction opened by [`begin_undo`](Self::begin_undo) and commit
+    /// its entry. No-op by default (and when no transaction is open).
+    fn commit_undo(&mut self) {}
 }
 
 /// Simplified, read-only entity kind exposed by [`DocumentReader`].

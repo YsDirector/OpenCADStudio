@@ -849,4 +849,8 @@ pub(super) struct PendingHistorySnapshot {
     pub(super) dirty_before: bool,
     pub(super) structure_before: CadDocument,
     pub(super) recorder: Arc<acadrust::document::EntityChangeRecorder>,
+    /// Open plugin undo transaction (`HostApi::begin_undo`): stays pending across
+    /// message boundaries until `commit_deferred_undo` closes it, so a flow made
+    /// of several host requests still lands in one entry.
+    pub(super) deferred: bool,
 }

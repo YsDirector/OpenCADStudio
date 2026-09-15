@@ -138,6 +138,15 @@ pub enum PluginRequest {
     GetTabId,
     /// V5: ask the host for the filesystem path of the document in `tab_id`.
     DocumentPath { tab_id: u64 },
+    /// API v6: open an undo transaction. Unlike `PushUndo`, the snapshot stays
+    /// pending across host message boundaries so a plugin flow that issues
+    /// several requests for one user action still produces a single undo entry.
+    /// Close it with `CommitUndo`.
+    BeginUndo {
+        label: String,
+    },
+    /// API v6: close the transaction opened by `BeginUndo` (commits the entry).
+    CommitUndo,
 }
 
 /// Responses the host sends back for `PluginRequest`.

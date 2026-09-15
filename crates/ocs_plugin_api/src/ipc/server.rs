@@ -46,6 +46,14 @@ pub fn handle_plugin_request(
             host.push_undo(&label);
             PluginResponse::Ok
         }
+        BeginUndo { label } => {
+            host.begin_undo(&label);
+            PluginResponse::Ok
+        }
+        CommitUndo => {
+            host.commit_undo();
+            PluginResponse::Ok
+        }
         SetDirty => {
             host.set_dirty();
             PluginResponse::Ok

@@ -301,6 +301,14 @@ impl HostApi for HostSession<'_> {
     fn push_undo(&mut self, label: &str) {
         self.push_undo(label)
     }
+    fn begin_undo(&mut self, label: &str) {
+        let tab = self.tab;
+        self.app.begin_deferred_undo(tab, label);
+    }
+    fn commit_undo(&mut self) {
+        let tab = self.tab;
+        self.app.commit_deferred_undo(tab);
+    }
     fn set_dirty(&mut self) {
         self.set_dirty()
     }
@@ -509,6 +517,51 @@ mod tests {
     use acadrust::entities::Point;
     use acadrust::xdata::XDataValue;
     use ocs_plugin_api::host::DocumentReader;
+
+    #[test]
+    fn v6_begin_undo_keeps_the_snapshot_open_across_messages() {
+        // A plugin flow over a local HTTP surface sends one host request per step.
+        // The host commits — and drops as empty — a pending snapshot at every
+        // message boundary, so the flow needs an explicit transaction.
+        let mut app = OpenCADStudio::new_for_test();
+        app.tabs[0].is_start = false;
+        {
+            let mut host = HostSession::new(&mut app, 0);
+            host.begin_undo("plugin flow");
+        }
+        app.finish_all_pending_history();
+        assert!(
+            app.tabs[0].history.undo_stack.is_empty(),
+            "an open transaction must not become an entry yet"
+        );
+        // Second request: the plugin mutates the document.
+        let handle = {
+            let mut host = HostSession::new(&mut app, 0);
+            host.add_entity(EntityType::Point(Point::new()))
+        };
+        app.finish_all_pending_history();
+        assert!(
+            app.tabs[0].history.undo_stack.is_empty(),
+            "the transaction stays open across messages"
+        );
+        // Third request: the plugin commits the transaction.
+        let revision_before = app.tabs[0].edit_revision;
+        {
+            let mut host = HostSession::new(&mut app, 0);
+            host.commit_undo();
+        }
+        assert_eq!(app.tabs[0].history.undo_stack.len(), 1, "commit lands one entry");
+        assert_eq!(
+            app.tabs[0].edit_revision,
+            revision_before + 1,
+            "committing bumps edit_revision so the automation layer sees the change"
+        );
+        app.undo_active_tab();
+        assert!(
+            app.tabs[0].scene.document.get_entity(handle).is_none(),
+            "the plugin transaction is undoable"
+        );
+    }
 
     #[test]
     fn xdata_record_round_trips_and_registers_appid() {

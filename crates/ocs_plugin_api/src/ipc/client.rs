@@ -304,6 +304,20 @@ impl HostApi for PluginHostApi {
         }
     }
 
+    fn begin_undo(&mut self, label: &str) {
+        if let Err(e) = self.client.request(PluginRequest::BeginUndo {
+            label: label.to_string(),
+        }) {
+            eprintln!("[plugin] begin_undo failed: {e}");
+        }
+    }
+
+    fn commit_undo(&mut self) {
+        if let Err(e) = self.client.request(PluginRequest::CommitUndo) {
+            eprintln!("[plugin] commit_undo failed: {e}");
+        }
+    }
+
     fn set_dirty(&mut self) {
         if let Err(e) = self.client.request(PluginRequest::SetDirty) {
             eprintln!("[plugin] set_dirty failed: {e}");
