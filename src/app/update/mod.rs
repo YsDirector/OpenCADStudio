@@ -393,7 +393,17 @@ impl OpenCADStudio {
             // user-generated message. Desktop only.
             #[cfg(not(target_arch = "wasm32"))]
             Message::DrainPluginRequests => {
-                for tab in 0..self.tabs.len() {
+                // 插件→宿主的请求分两类：**带 tab id** 的（按 id 找对应会话）和
+                // **不带 tab id** 的（_unscoped_：插件自己的 HTTP 服务线程发的，如
+                // 引导服务的 `DocumentSnapshot`）。后者在 `v4::drain_requests` 里
+                // 归“当前会话”，所以**必须让活动标签页的会话先被调用**：否则
+                // 循环从 tab 0 开始，不带 tab 的请求会被启动时那张空图吃掉 ——
+                // 症状就是插件 HTTP 接口永远看到第一张图（`list_guides` 空、
+                // `apply_refresh` 报“找不到引导线实体”）。
+                let active = self.active_tab.min(self.tabs.len().saturating_sub(1));
+                let order = std::iter::once(active)
+                    .chain((0..self.tabs.len()).filter(|t| *t != active));
+                for tab in order {
                     let mut host = crate::app::plugin_host::HostSession::new(self, tab);
                     crate::plugin::external::with_manager(|mgr| {
                         mgr.drain_requests(&mut host, &mut |_| {});
