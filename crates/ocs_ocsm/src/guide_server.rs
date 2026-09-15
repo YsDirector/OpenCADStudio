@@ -258,32 +258,34 @@ fn snapshot(sender: &Arc<dyn PluginRequestSender>) -> Result<acadrust::CadDocume
     }
 }
 
-/// 声明一个撤销点（插件 HTTP 流程里的写操作前置）。
+/// 开启插件撤销事务（`HostApi::begin_undo`）。
 ///
-/// ⚠️ **当前只在“同一条宿主 message 内完成”的流程里真正成条目**：宿主在每条
-/// message 末尾调 `finish_all_pending_history()`（`src/app/update/mod.rs:296`），
-/// 而本文件的 HTTP 流程是 PushUndo 一个请求、后续 AddEntities/WriteRecord 各自再发
-/// 请求（各占一条 message）——快照会在还是空的时候被提交并当作空条目丢弃
-/// （`src/app/history.rs:285`）。实测 2026-09-15：`apply` / `rough_apply` /
-/// `apply_refresh` 后 `state.revision` 不变、`op:"undo"` 也回退不掉生成的实体。
-/// 命令驱动流程（整个插件命令在同一条 message 内同步跑完）不受此限，例如 `OCSM`
-/// 初始化现在可撤销。保留声明是因为：①宿主支持显式事务（Begin/Commit 或 Batch）
-/// 后立即生效；② mock 单测可断言“先 push 再写”。
-fn push_undo(sender: &Arc<dyn PluginRequestSender>, label: &str) -> Result<(), String> {
+/// HTTP/GUI 流程的一次用户动作会向宿主发多条请求（各占一条 message），而宿主在每条
+/// message 末尾提交并丢弃空 pending 快照（`src/app/update/mod.rs:296` +
+/// `src/app/history.rs:285`）——所以必须用事务把快照握住，写完再 `commit_undo`。
+/// 旧宿主没有这对请求时，请求会报错（等同现状：不可撤销），不影响主流程。
+fn begin_undo(sender: &Arc<dyn PluginRequestSender>, label: &str) -> Result<(), String> {
     req_timed(
         sender,
-        PluginRequest::PushUndo {
+        PluginRequest::BeginUndo {
             label: label.to_string(),
         },
-        "PushUndo",
+        "BeginUndo",
     )?;
     Ok(())
 }
 
+/// 提交 `begin_undo` 开启的事务，让它成为一个撤销条目（revision 同时自增）。
+/// 失败中途也调用一次：无改动时空条目会被宿主丢弃，未调用则会被下一次历史操作
+/// （另一次 push/begin 或撤销）兜底关闭。
+fn commit_undo(sender: &Arc<dyn PluginRequestSender>) {
+    let _ = req_timed(sender, PluginRequest::CommitUndo, "CommitUndo");
+}
+
 /// 标记图纸已修改。宿主里 `tabs[i].dirty = true` 的唯一来源是 SetDirty；
 /// add/remove/write/bump 都不会置 dirty。不加的话，关闭 OCS 时不弹"未保存"
-/// 提示，引导服务生成的改动会静默丢失。与 ocs-mcp-bridge 的写套路一致：
-/// PushUndo → mutate → SetDirty → BumpGeometry。
+/// 提示，引导服务生成的改动会静默丢失。写套路：BeginUndo → mutate → SetDirty →
+/// BumpGeometry → CommitUndo（见 `begin_undo` / `commit_undo`）。
 fn mark_dirty(sender: &Arc<dyn PluginRequestSender>) -> Result<(), String> {
     req_timed(sender, PluginRequest::SetDirty, "SetDirty")?;
     Ok(())
@@ -2770,9 +2772,8 @@ fn do_apply(
         serde_json::from_slice(body).map_err(|e| format!("请求 JSON 无效: {e}"))?;
     let posted = handle_hex(&req.handle)?;
 
-    // “仅应用”（刷新参数记录 / 写 PE_URL）也改文档 → 声明撤销点（生效条件见
-    // `push_undo` 的说明：需整个流程落在同一条宿主 message 内）。
-    push_undo(sender, "尺寸引导")?;
+    // “仅应用”（刷新参数记录 / 写 PE_URL）也改文档 → 开事务，结束时 commit。
+    begin_undo(sender, "尺寸引导")?;
 
     // ── 编辑模式：posted 实体本身是 OCSM 生成的标注（带 `OCSM_EDIT`）──
     // 用记录里的引导几何造一条**临时引导**重走现有生成路径（各类型代码不用改），
@@ -2790,6 +2791,7 @@ fn do_apply(
                 "WriteRecord",
             );
             mark_dirty(sender)?;
+            commit_undo(sender);
             return Ok(r#"{"ok":true,"edit":true}"#.into());
         }
         // 优先复用原引导（若还在且类型兼容），否则造临时引导。
@@ -2841,6 +2843,7 @@ fn do_apply(
         }
         req_timed(sender, PluginRequest::BumpGeometry, "BumpGeometry")?;
         mark_dirty(sender)?;
+        commit_undo(sender);
         return Ok(serde_json::json!({
             "ok": true,
             "edit": true,
@@ -2868,6 +2871,7 @@ fn do_apply(
             }
         }
     }
+    commit_undo(sender);
     Ok(out)
 }
 
@@ -2931,7 +2935,8 @@ fn do_apply_inner(
     // 按引导线第一点 P1 判定图幅缩放，创建/选用对应样式（文字/箭头缩放）。
     let style = ensure_style_for_point(sender, &doc, p1)?;
 
-    push_undo(sender, "尺寸引导")?;
+    // 撤销事务由调用方（`do_apply`）开启与提交：本函数是它的一部分，不再单独 push
+    // （再 push 会把事务切成两段，后一段又会在 message 边界被当空条目丢弃）。
 
     // 基准标注：不产生 DIMENSION，而是 匿名块 + INSERT（8符号标注层）。
     if params.guide_type == GuideType::Datum {
@@ -3309,8 +3314,8 @@ fn apply_part_export(
         req.view.to_ascii_uppercase()
     );
 
-    // 出库会新建块定义（文档改动）→ 声明撤销点（生效条件见 push_undo 说明）。
-    push_undo(sender, "零件出库")?;
+    // 出库会新建块定义（文档改动）→ 开事务，结束时 commit。
+    begin_undo(sender, "零件出库")?;
     // 块定义：幂等创建（预览要引用它，所以必须在出库时就建好）
     let exists = snapshot(sender)?.block_records.iter().any(|b| b.name == block);
     if !exists {
@@ -3345,6 +3350,7 @@ fn apply_part_export(
 
     // 出库后窗口由页面自己 `window.close()` 关闭（实测 chromium 允许；
     // 若是浏览器拒绝关闭（如 Firefox 标签页），用户手动切回图纸即可）。
+    commit_undo(sender);
     Ok(serde_json::json!({
         "ok": true,
         "message": format!(
@@ -3391,8 +3397,8 @@ fn apply_part_pick(
         part.meta.spec.replace(['.', ' ', '/', 'x', 'X'], "_")
     );
 
-    // 插入会建块 + 落 INSERT 实体 → 声明撤销点（生效条件见 push_undo 说明）。
-    push_undo(sender, "零件插入")?;
+    // 插入会建块 + 落 INSERT 实体 → 开事务，结束时 commit。
+    begin_undo(sender, "零件插入")?;
     // 块定义幂等：已存在就不再建（同名块重复插入直接复用）
     let exists = snapshot(sender)?
         .block_records
@@ -3452,6 +3458,7 @@ fn apply_part_pick(
     }
     req_timed(sender, PluginRequest::BumpGeometry, "BumpGeometry")?;
     mark_dirty(sender)?;
+    commit_undo(sender);
 
     Ok(serde_json::json!({
         "ok": true,
@@ -3505,8 +3512,8 @@ fn apply_roughness(
     let p_value = if has_p { req.p.clone() } else { String::new() };
 
     let doc = snapshot(sender)?;
-    // 符号会新建块 + 实体、并可能补齐样式/图层 → 声明撤销点（生效条件见 push_undo 说明）。
-    push_undo(sender, "表面粗糙度")?;
+    // 符号会新建块 + 实体、并可能补齐样式/图层 → 开事务，结束时 commit。
+    begin_undo(sender, "表面粗糙度")?;
     // 幂等 ensure：文档缺 OCSM_GB 样式 / 8符号标注层时补齐（新图纸直接 CC
     // 时宿主渲染 ATTDEF 会 fallback 未知字体、图层色错乱——用户实测）。
     if !doc
@@ -3736,6 +3743,7 @@ fn apply_roughness(
     };
     req_timed(sender, PluginRequest::BumpGeometry, "BumpGeometry")?;
     mark_dirty(sender)?;
+    commit_undo(sender);
 
     Ok(serde_json::json!({
         "ok": true,
@@ -5998,7 +6006,7 @@ impl MockSender {
             undos: std::sync::Mutex::new(Vec::new()),
         }
     }
-    /// PushUndo 标签序列（断言“写之前先声明撤销点”）。
+    /// 撤销事务序列（断言“写之前先 begin、写完后 commit”）。
     fn undos(&self) -> Vec<String> {
         self.undos.lock().unwrap().clone()
     }
@@ -6122,6 +6130,14 @@ impl PluginRequestSender for MockSender {
             }
             R::PushUndo { label } => {
                 self.undos.lock().unwrap().push(label);
+                Ok(P::Ok)
+            }
+            R::BeginUndo { label } => {
+                self.undos.lock().unwrap().push(format!("begin:{label}"));
+                Ok(P::Ok)
+            }
+            R::CommitUndo => {
+                self.undos.lock().unwrap().push("commit".into());
                 Ok(P::Ok)
             }
             _ => Ok(P::Ok),
@@ -7120,8 +7136,15 @@ mod rough_tests {
         rough_apply(&mock, &body).unwrap();
         assert_eq!(
             mock.undos().first().map(String::as_str),
-            Some("表面粗糙度"),
-            "粗糙度应先声明撤销点"
+            Some("begin:表面粗糙度"),
+            "粗糙度应先开撤销事务：{:?}",
+            mock.undos()
+        );
+        assert_eq!(
+            mock.undos().last().map(String::as_str),
+            Some("commit"),
+            "写完后应提交事务：{:?}",
+            mock.undos()
         );
 
         let mock = std::sync::Arc::new(MockSender::new(acadrust::CadDocument::new()));
@@ -7131,9 +7154,11 @@ mod rough_tests {
             .expect("插入成功");
         assert_eq!(
             mock.undos().first().map(String::as_str),
-            Some("零件插入"),
-            "零件插入应先声明撤销点"
+            Some("begin:零件插入"),
+            "{:?}",
+            mock.undos()
         );
+        assert_eq!(mock.undos().last().map(String::as_str), Some("commit"));
 
         let mock = std::sync::Arc::new(MockSender::new(acadrust::CadDocument::new()));
         let sender: std::sync::Arc<dyn PluginRequestSender> = mock.clone();
@@ -7141,9 +7166,11 @@ mod rough_tests {
             .expect("出库成功");
         assert_eq!(
             mock.undos().first().map(String::as_str),
-            Some("零件出库"),
-            "零件出库应先声明撤销点"
+            Some("begin:零件出库"),
+            "{:?}",
+            mock.undos()
         );
+        assert_eq!(mock.undos().last().map(String::as_str), Some("commit"));
     }
 
     fn count_attdefs(members: &[acadrust::EntityType]) -> Vec<&acadrust::entities::AttributeDefinition> {
