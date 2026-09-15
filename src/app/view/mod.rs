@@ -2583,6 +2583,17 @@ impl OpenCADStudio {
         };
         #[cfg(target_arch = "wasm32")]
         let plugin_drain = Subscription::none();
+        // OCS Pi Extension: drain the pi-web client at ~10 Hz while the panel
+        // is open (worker events land in a channel; `PiMsg::Poll` drains it).
+        #[cfg(not(target_arch = "wasm32"))]
+        let pi_poll = if self.show_pi_panel && self.tabs[self.active_tab].pi_panel.worker.is_some() {
+            iced::time::every(std::time::Duration::from_millis(100))
+                .map(|_| Message::Pi(crate::ui::pi_panel::PiMsg::Poll))
+        } else {
+            Subscription::none()
+        };
+        #[cfg(target_arch = "wasm32")]
+        let pi_poll = Subscription::none();
         let hatch_pattern_keys = if self.tabs[self.active_tab]
             .properties
             .hatch_pattern_picker_open
@@ -2755,6 +2766,7 @@ impl OpenCADStudio {
             web_fonts,
             autosave,
             plugin_drain,
+            pi_poll,
             single_instance,
             hatch_pattern_keys,
             keyboard_events,

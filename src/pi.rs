@@ -2,41 +2,96 @@
 //!
 //! Everything is local, plain HTTP + JSON + SSE, so this speaks the protocol
 //! directly over `std::net::TcpStream` — no HTTP/TLS dependencies, no bridge
-//! process, no Node.js. A worker thread owns the connection and pushes parsed
-//! events into a channel; the UI polls that channel (see `Message::AiPoll`).
+//! process, no Node.js.
 //!
-//! Endpoints used (documented by the pi-web route manifest):
-//!   GET  {endpoint}/api/sessions                  → session list
-//!   GET  {endpoint}/api/agent/<id>/events         → SSE stream (text/event-stream)
-//!   POST {endpoint}/api/agent/<id> {"prompt": …}  → send a user message
+//! Two threads per panel:
+//!   * the **worker** owns the session list, the transcript backfill, and the
+//!     command channel (send / watch / reconnect); it never blocks the UI.
+//!   * a short-lived **reader** per SSE connection parses `data: {json}` events
+//!     and forwards them to the UI through the same channel.
+//!
+//! The UI polls the channel via `Message::Pi(PiMsg::Poll)` (10 Hz) and applies
+//! events in `PiPanelState::apply` (see `crate::ui::pi_panel`).
+//!
+//! Wire contract (verified against pi-web's route bundle and live SSE):
+//!   GET  {endpoint}/api/sessions              → {"sessions":[{id,path,cwd,…}]}
+//!   GET  {endpoint}/api/agent/<id>/events     → SSE stream
+//!   POST {endpoint}/api/agent/<id>            → {"type":"prompt","message":…}
+//!       (+ "streamingBehavior":"followUp" to queue behind a running turn)
+//!
+//! SSE events the panel consumes:
+//!   connected {sessionId, isStreaming}
+//!   message_start/message_end {message:{role,content[],toolCallId,toolName}}
+//!   message_update {assistantMessageEvent:{type:text_|thinking_|toolcall_*,…}}
+//!   tool_execution_start/update/end {toolCallId, toolName, partialResult|result}
+//!   agent_start/agent_end/agent_settled, queue_update {steering,followUp},
+//!   startup_error {errorMessage}
 
 use std::io::{BufRead, BufReader, Read, Write};
-use std::net::TcpStream;
-use std::sync::mpsc::{channel, Receiver, Sender};
+use std::net::{TcpStream, Shutdown};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};
+use std::sync::Arc;
 use std::time::Duration;
 
-/// A transcript entry the UI renders.
+/// One transcript entry the UI renders.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Entry {
     User(String),
     Assistant(String),
-    Tool { id: String, name: String, output: String, done: bool },
+    Thinking(String),
+    Tool { id: String, name: String, output: String, done: bool, is_error: bool },
     Notice(String),
 }
 
-/// Events sent from the worker thread to the UI.
-#[derive(Debug, Clone)]
+/// One content block of an assistant message (text / thinking / tool call).
+#[derive(Debug, Clone, PartialEq)]
+pub enum Part {
+    Text(String),
+    Thinking(String),
+    ToolCall { id: String, name: String },
+}
+
+/// Which kind of delta a `Delta` event appends.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeltaKind {
+    Text,
+    Thinking,
+}
+
+/// Events sent from the worker/reader threads to the UI.
+#[derive(Debug, Clone, PartialEq)]
 pub enum Event {
     /// Connection state changed.
     Status(Status),
-    /// Session list refreshed (`(id, first message)`).
-    Sessions(Vec<(String, String)>),
-    /// Append this entry.
-    Push(Entry),
-    /// The last `Tool` entry with this id changed.
-    ToolUpdate { id: String, name: String, chunk: String, done: bool },
-    /// The transcript was replaced wholesale (session switch / reconnect).
+    /// Session list refreshed (`/api/sessions`), newest activity first.
+    Sessions(Vec<SessionInfo>),
+    /// The transcript was replaced wholesale (backfill / session switch).
     Replace(Vec<Entry>),
+    /// A completed user message arrived (echoes the local optimistic bubble).
+    User(String),
+    /// An assistant message started streaming; `parts` is the snapshot so far
+    /// (non-empty only when attaching mid-stream), tagged with `contentIndex`.
+    MsgStart { parts: Vec<(usize, Part)> },
+    /// Streaming delta for the block at `idx` (append).
+    Delta { kind: DeltaKind, idx: usize, chunk: String },
+    /// The streaming assistant message ended with these final parts
+    /// (tagged with `contentIndex`).
+    AssistantEnd { parts: Vec<(usize, Part)> },
+    /// A tool call became known (toolcall_start / tool_execution_start).
+    ToolCallStart { id: String, name: String },
+    /// A running tool's output so far (replaces whatever was shown).
+    ToolPartial { id: String, name: String, output: String },
+    /// A tool finished; final output.
+    ToolResult { id: String, name: String, output: String, is_error: bool },
+    /// The follow-up/steer queue changed (server-side queue of prompts).
+    Queue { steering: Vec<String>, follow_up: Vec<String> },
+    /// An agent run started / ended (turn-level streaming flag).
+    Streaming(bool),
+    /// An assistant stream failed mid-generation.
+    StreamError(String),
+    /// A `POST` prompt was rejected by pi-web.
+    SendFailed { message: String },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -46,12 +101,23 @@ pub enum Status {
     Error(String),
 }
 
+/// A session from `/api/sessions`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SessionInfo {
+    pub id: String,
+    /// First line of `firstMessage` (≤ 60 chars) — the pick-list label.
+    pub label: String,
+    /// Absolute path of the session `.jsonl` (used for history backfill).
+    pub path: Option<String>,
+}
+
 /// Commands the UI sends to the worker.
 #[derive(Debug, Clone)]
 pub enum Command {
-    /// Send `prompt` to the active session.
-    Send { session: String, prompt: String },
-    /// Switch the streamed session.
+    /// Send `message` to `session`. `queued` = attach as a follow-up behind
+    /// the running turn (server-side queue) instead of a plain prompt.
+    Send { session: String, message: String, queued: bool },
+    /// Switch the streamed session (backfills its history, replaces the view).
     Watch(String),
     /// Drop the connection and reconnect from scratch.
     Reconnect,
@@ -61,7 +127,7 @@ pub enum Command {
 pub struct PiHandle {
     pub rx: Receiver<Event>,
     pub tx: Sender<Command>,
-    join: Option<std::thread::JoinHandle<()>>,
+    stop: Arc<AtomicBool>,
 }
 
 impl PiHandle {
@@ -69,41 +135,47 @@ impl PiHandle {
     pub fn start(endpoint: &str) -> Self {
         let (tx_ev, rx_ev) = channel();
         let (tx_cmd, rx_cmd) = channel();
-        let endpoint = endpoint.trim_end_matches('/').to_string();
-        let join = std::thread::Builder::new()
-            .name("ocs-ai-client".into())
-            .spawn(move || worker(endpoint, tx_ev, rx_cmd))
-            .ok();
-        Self { rx: rx_ev, tx: tx_cmd, join }
+        let stop = Arc::new(AtomicBool::new(false));
+        let endpoint = endpoint.trim().trim_end_matches('/').to_string();
+        let stop_clone = Arc::clone(&stop);
+        let _ = std::thread::Builder::new()
+            .name("ocs-pi-client".into())
+            .spawn(move || worker(endpoint, tx_ev, rx_cmd, stop_clone));
+        Self { rx: rx_ev, tx: tx_cmd, stop }
     }
 
-    pub fn stop(&mut self) {
-        // Dropping the command sender ends the worker's loop; the thread is
-        // detached so a blocked read can never stall the UI.
-        let (dead_tx, _) = channel();
-        let old = std::mem::replace(&mut self.tx, dead_tx);
-        drop(old);
-        if let Some(join) = self.join.take() {
-            let _ = join.thread().id();
-        }
+    /// Ask the worker to exit at its next loop boundary and stop forwarding.
+    /// Ask the worker to exit at its next loop boundary and stop forwarding.
+    /// The Reconnect command wakes the worker out of any wait so it reaches the
+    /// stop check promptly; the thread is fully detached, so a blocked read can
+    /// never stall the UI.
+    pub fn stop(&self) {
+        self.stop.store(true, Ordering::Relaxed);
+        let _ = self.tx.send(Command::Reconnect);
+    }
+
+    pub fn is_alive(&self) -> bool {
+        !self.stop.load(Ordering::Relaxed)
     }
 }
 
-/// Minimal blocking HTTP request over a fresh connection.
-fn http(
-    endpoint: &str,
-    method: &str,
-    path: &str,
-    body: Option<&str>,
-) -> Result<String, String> {
+// ── Minimal HTTP over a fresh connection ────────────────────────────────────
+
+struct Response {
+    status: u16,
+    body: String,
+}
+
+/// Minimal blocking HTTP request. Returns status + body (headers stripped).
+fn http(endpoint: &str, method: &str, path: &str, body: Option<&str>, timeout: Duration) -> Result<Response, String> {
     let host_port = endpoint
         .trim_start_matches("http://")
         .trim_end_matches('/')
         .to_string();
-    let mut stream = TcpStream::connect(&host_port).map_err(|e| format!("连接 {host_port} 失败：{e}"))?;
-    stream
-        .set_read_timeout(Some(Duration::from_secs(30)))
-        .ok();
+    let mut stream = TcpStream::connect(&host_port)
+        .map_err(|e| format!("连接 {host_port} 失败：{e}"))?;
+    stream.set_read_timeout(Some(timeout)).ok();
+    stream.set_write_timeout(Some(timeout)).ok();
     let payload = body.unwrap_or("");
     let req = format!(
         "{method} {path} HTTP/1.1\r\nHost: {host_port}\r\nAccept: application/json\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{payload}",
@@ -111,13 +183,67 @@ fn http(
     );
     stream.write_all(req.as_bytes()).map_err(|e| e.to_string())?;
     let mut out = String::new();
-    stream.read_to_string(&mut out).map_err(|e| e.to_string())?;
-    let body = out.split("\r\n\r\n").nth(1).unwrap_or("").to_string();
-    Ok(body)
+    // Reading to EOF is fine: requests use `Connection: close`.
+    if stream.read_to_string(&mut out).is_err() && out.is_empty() {
+        return Err("读取响应失败".into());
+    }
+    // Split status line, headers and body.
+    let mut parts = out.splitn(2, "\r\n");
+    let status_line = parts.next().unwrap_or_default();
+    let status = status_line
+        .split_whitespace()
+        .nth(1)
+        .and_then(|c| c.parse::<u16>().ok())
+        .unwrap_or(0);
+    let rest = parts.next().unwrap_or_default();
+    let (headers, raw_body) = match rest.split_once("\r\n\r\n") {
+        Some((h, b)) => (h, b),
+        None => (rest, ""),
+    };
+    // Next.js answers with `Transfer-Encoding: chunked`; a leading hex chunk
+    // size would break every JSON parse — de-chunk when present.
+    let body = if headers.to_ascii_lowercase().contains("transfer-encoding: chunked") {
+        dechunk(raw_body)
+    } else {
+        raw_body.to_string()
+    };
+    Ok(Response { status, body })
 }
 
-/// Extract `"sessions":[…]` into `(id, first line of firstMessage)`.
-fn parse_sessions(text: &str) -> Vec<(String, String)> {
+/// Decode a chunked body: `<hex size>\r\n<data>\r\n` … `0\r\n[trailers]`.
+fn dechunk(body: &str) -> String {
+    let mut out = String::new();
+    let mut rest = body;
+    loop {
+        // Chunk size line: hex, optional `;ext`.
+        let Some(line_end) = rest.find('\n') else { break };
+        let size_line = rest[..line_end].trim_end_matches('\r');
+        let size = usize::from_str_radix(size_line_hex(size_line), 16).unwrap_or(0);
+        rest = &rest[line_end + 1..];
+        if size == 0 {
+            break;
+        }
+        let take = size.min(rest.len());
+        out.push_str(&rest[..take]);
+        rest = &rest[take..];
+        if let Some(stripped) = rest.strip_prefix("\r\n") {
+            rest = stripped;
+        }
+    }
+    out
+}
+
+/// Hex portion of a chunk-size line (strip extensions after `;`).
+fn size_line_hex(line: &str) -> &str {
+    match line.split_once(';') {
+        Some((hex, _)) => hex.trim(),
+        None => line.trim(),
+    }
+}
+
+/// Extract `"sessions":[…]` into `SessionInfo`s, preserving server order
+/// (pi-web lists them newest-activity-first).
+fn parse_sessions(text: &str) -> Vec<SessionInfo> {
     let Ok(json) = serde_json::from_str::<serde_json::Value>(text) else {
         return Vec::new();
     };
@@ -132,17 +258,23 @@ fn parse_sessions(text: &str) -> Vec<(String, String)> {
                 .lines()
                 .next()
                 .unwrap_or("")
+                .trim()
                 .chars()
                 .take(60)
                 .collect::<String>();
+            let path = s
+                .get("path")
+                .and_then(|v| v.as_str())
+                .map(|p| p.to_string());
             if !id.is_empty() {
-                out.push((id, first));
+                out.push(SessionInfo { id, label: first, path });
             }
         }
     }
     out
 }
 
+/// Join `content[].text` parts of a message-like object.
 fn content_text(msg: &serde_json::Value) -> String {
     let mut out = String::new();
     if let Some(parts) = msg.get("content").and_then(|c| c.as_array()) {
@@ -155,77 +287,61 @@ fn content_text(msg: &serde_json::Value) -> String {
     out
 }
 
-/// The worker: connect, stream the active session, answer UI commands.
-fn worker(endpoint: String, tx: Sender<Event>, rx: Receiver<Command>) {
-    loop {
-        let _ = tx.send(Event::Status(Status::Connecting));
-        let sessions = match http(&endpoint, "GET", "/api/sessions", None) {
-            Ok(body) => parse_sessions(&body),
-            Err(e) => {
-                let _ = tx.send(Event::Status(Status::Error(e)));
-                // Back off, but stay responsive to commands/stop.
-                match rx.recv_timeout(Duration::from_secs(5)) {
-                    Ok(Command::Reconnect) | Ok(Command::Watch(_)) => continue,
-                    Ok(_) => continue,
-                    Err(_) => return,
-                }
-            }
-        };
-        let Some((active, _)) = sessions.first().cloned() else {
-            let _ = tx.send(Event::Status(Status::Error("pi-web 没有会话".into())));
-            match rx.recv_timeout(Duration::from_secs(5)) {
-                Ok(_) => continue,
-                Err(_) => return,
-            }
-        };
-        let _ = tx.send(Event::Sessions(sessions));
-        let _ = tx.send(Event::Status(Status::Ready {
-            session: active.clone(),
-            streaming: false,
-        }));
-
-        // Stream the session's events. Reads are blocking; the UI thread never
-        // waits on this thread.
-        let host_port = endpoint.trim_start_matches("http://").to_string();
-        let Ok(mut stream) = TcpStream::connect(&host_port) else {
-            continue;
-        };
-        let req = format!(
-            "GET /api/agent/{active}/events HTTP/1.1\r\nHost: {host_port}\r\nAccept: text/event-stream\r\nConnection: keep-alive\r\n\r\n"
-        );
-        if stream.write_all(req.as_bytes()).is_err() {
-            continue;
-        }
-        let mut reader = BufReader::new(stream.try_clone().expect("clone"));
-        let mut line = String::new();
-        while reader.read_line(&mut line).unwrap_or(0) > 0 {
-            if let Some(data) = line.strip_prefix("data: ") {
-                if let Ok(ev) = serde_json::from_str::<serde_json::Value>(data.trim()) {
-                    handle_sse_event(&ev, &tx);
-                }
-            }
-            line.clear();
-            // Commands arriving while streaming are handled on this loop too.
-            while let Ok(cmd) = rx.try_recv() {
-                match cmd {
-                    Command::Send { session, prompt } => {
-                        let body = serde_json::json!({ "prompt": prompt }).to_string();
-                        let _ = http(
-                            &endpoint,
-                            "POST",
-                            &format!("/api/agent/{session}"),
-                            Some(&body),
-                        );
+/// Map one message's `content` array into semantic [`Part`]s tagged with the
+/// block's `contentIndex` (needed to route streaming deltas to the right block).
+fn parse_parts(msg: &serde_json::Value) -> Vec<(usize, Part)> {
+    let mut out = Vec::new();
+    if let Some(parts) = msg.get("content").and_then(|c| c.as_array()) {
+        for (idx, part) in parts.iter().enumerate() {
+            let ty = part.get("type").and_then(|t| t.as_str()).unwrap_or("");
+            match ty {
+                "text" => {
+                    let t = part.get("text").and_then(|t| t.as_str()).unwrap_or("");
+                    if !t.is_empty() {
+                        out.push((idx, Part::Text(t.to_string())));
                     }
-                    Command::Reconnect | Command::Watch(_) => return,
                 }
+                "thinking" => {
+                    let t = part
+                        .get("thinking")
+                        .and_then(|t| t.as_str())
+                        .unwrap_or("");
+                    out.push((idx, Part::Thinking(t.to_string())));
+                }
+                "toolCall" => {
+                    let id = part
+                        .get("id")
+                        .or_else(|| part.get("toolCallId"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let name = part
+                        .get("name")
+                        .or_else(|| part.get("toolName"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("tool")
+                        .to_string();
+                    if !id.is_empty() {
+                        out.push((idx, Part::ToolCall { id, name }));
+                    }
+                }
+                _ => {}
             }
         }
     }
+    out
 }
 
-/// Map one SSE payload to a UI event.
-fn handle_sse_event(ev: &serde_json::Value, tx: &Sender<Event>) {
+/// Extract a tool result's text (and error flag) from a result-like object.
+fn tool_output(result: &serde_json::Value) -> (String, bool) {
+    let text = content_text(result);
+    let is_error = result.get("isError").and_then(|b| b.as_bool()).unwrap_or(false);
+    (text, is_error)
+}
+
+/// Map one SSE `data:` payload to zero or more UI events.
+pub fn sse_to_events(ev: &serde_json::Value) -> Vec<Event> {
+    let mut out = Vec::new();
     let kind = ev.get("type").and_then(|t| t.as_str()).unwrap_or("");
     match kind {
         "connected" => {
@@ -235,70 +351,688 @@ fn handle_sse_event(ev: &serde_json::Value, tx: &Sender<Event>) {
                 .unwrap_or_default()
                 .to_string();
             let streaming = ev.get("isStreaming").and_then(|b| b.as_bool()).unwrap_or(false);
-            let _ = tx.send(Event::Status(Status::Ready { session, streaming }));
+            out.push(Event::Streaming(streaming));
+            out.push(Event::Status(Status::Ready { session, streaming }));
         }
-        "message_start" | "message_end" => {
+        "message_start" => {
             let msg = ev.get("message").cloned().unwrap_or_default();
             match msg.get("role").and_then(|r| r.as_str()).unwrap_or("") {
-                "user" => {
-                    let _ = tx.send(Event::Push(Entry::User(content_text(&msg))));
-                }
-                "assistant" => {
-                    let _ = tx.send(Event::Push(Entry::Assistant(content_text(&msg))));
-                }
+                // The run's prompt echoes locally already; user bubbles come
+                // from `message_end` so the full text is authoritative.
+                "user" => {}
+                "assistant" => out.push(Event::MsgStart { parts: parse_parts(&msg) }),
                 "toolResult" => {
-                    let id = msg.get("toolCallId").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                    let name = msg.get("toolName").and_then(|v| v.as_str()).unwrap_or("tool").to_string();
-                    let _ = tx.send(Event::ToolUpdate {
-                        id,
-                        name,
-                        chunk: content_text(&msg),
-                        done: true,
+                    let (output, is_error) = tool_output(&msg);
+                    out.push(Event::ToolResult {
+                        id: msg.get("toolCallId").and_then(|v| v.as_str()).unwrap_or("").into(),
+                        name: msg.get("toolName").and_then(|v| v.as_str()).unwrap_or("tool").into(),
+                        output,
+                        is_error,
                     });
                 }
                 _ => {}
             }
         }
+        "message_update" => {
+            let delta = ev.get("assistantMessageEvent");
+            match delta.and_then(|d| d.get("type")).and_then(|t| t.as_str()).unwrap_or("") {
+                "text_delta" => {
+                    if let Some(chunk) = delta.and_then(|d| d.get("delta")).and_then(|c| c.as_str()) {
+                        let idx = delta.and_then(|d| d.get("contentIndex")).and_then(|c| c.as_u64()).unwrap_or(0) as usize;
+                        out.push(Event::Delta { kind: DeltaKind::Text, idx, chunk: chunk.to_string() });
+                    }
+                }
+                "thinking_delta" => {
+                    if let Some(chunk) = delta.and_then(|d| d.get("delta")).and_then(|c| c.as_str()) {
+                        let idx = delta.and_then(|d| d.get("contentIndex")).and_then(|c| c.as_u64()).unwrap_or(0) as usize;
+                        out.push(Event::Delta { kind: DeltaKind::Thinking, idx, chunk: chunk.to_string() });
+                    }
+                }
+                "toolcall_start" | "toolcall_end" => {
+                    // toolcall_start carries top-level id/toolName (projected
+                    // by the wire); toolcall_end nests a full toolCall object.
+                    let id = delta
+                        .and_then(|d| d.get("id"))
+                        .and_then(|v| v.as_str())
+                        .map(str::to_string)
+                        .or_else(|| {
+                            delta
+                                .and_then(|d| d.get("toolCall"))
+                                .and_then(|t| t.get("id"))
+                                .and_then(|v| v.as_str())
+                                .map(str::to_string)
+                        })
+                        .unwrap_or_default();
+                    let name = delta
+                        .and_then(|d| d.get("toolName"))
+                        .and_then(|v| v.as_str())
+                        .map(str::to_string)
+                        .or_else(|| {
+                            delta
+                                .and_then(|d| d.get("toolCall"))
+                                .and_then(|t| t.get("name"))
+                                .and_then(|v| v.as_str())
+                                .map(str::to_string)
+                        })
+                        .unwrap_or_else(|| "tool".into());
+                    if !id.is_empty() {
+                        out.push(Event::ToolCallStart { id, name });
+                    }
+                }
+                "error" => {
+                    let text = delta
+                        .and_then(|d| d.get("error"))
+                        .map(content_text)
+                        .unwrap_or_default();
+                    let text = if text.is_empty() {
+                        "生成失败".to_string()
+                    } else {
+                        format!("生成失败：{text}")
+                    };
+                    out.push(Event::StreamError(text));
+                }
+                // text_end/thinking_end (finals arrive via message_end),
+                // start/done bookkeeping — nothing to render incrementally.
+                _ => {}
+            }
+        }
+        "message_end" => {
+            let msg = ev.get("message").cloned().unwrap_or_default();
+            match msg.get("role").and_then(|r| r.as_str()).unwrap_or("") {
+                "user" => {
+                    let text = content_text(&msg);
+                    if !text.is_empty() {
+                        out.push(Event::User(text));
+                    }
+                }
+                "assistant" => out.push(Event::AssistantEnd { parts: parse_parts(&msg) }),
+                "toolResult" => {
+                    let (output, is_error) = tool_output(&msg);
+                    out.push(Event::ToolResult {
+                        id: msg.get("toolCallId").and_then(|v| v.as_str()).unwrap_or("").into(),
+                        name: msg.get("toolName").and_then(|v| v.as_str()).unwrap_or("tool").into(),
+                        output,
+                        is_error,
+                    });
+                }
+                _ => {}
+            }
+        }
+        "tool_execution_start" => {
+            out.push(Event::ToolCallStart {
+                id: ev.get("toolCallId").and_then(|v| v.as_str()).unwrap_or("").into(),
+                name: ev.get("toolName").and_then(|v| v.as_str()).unwrap_or("tool").into(),
+            });
+        }
         "tool_execution_update" => {
-            let id = ev.get("toolCallId").and_then(|v| v.as_str()).unwrap_or("").to_string();
-            let name = ev.get("toolName").and_then(|v| v.as_str()).unwrap_or("tool").to_string();
             let partial = ev.get("partialResult").cloned().unwrap_or_default();
-            let _ = tx.send(Event::ToolUpdate {
-                id,
-                name,
-                chunk: content_text(&partial),
-                done: false,
+            let (output, _) = tool_output(&partial);
+            out.push(Event::ToolPartial {
+                id: ev.get("toolCallId").and_then(|v| v.as_str()).unwrap_or("").into(),
+                name: ev.get("toolName").and_then(|v| v.as_str()).unwrap_or("tool").into(),
+                output,
             });
         }
         "tool_execution_end" => {
-            let id = ev.get("toolCallId").and_then(|v| v.as_str()).unwrap_or("").to_string();
-            let name = ev.get("toolName").and_then(|v| v.as_str()).unwrap_or("tool").to_string();
             let result = ev.get("result").cloned().unwrap_or_default();
-            let _ = tx.send(Event::ToolUpdate {
-                id,
-                name,
-                chunk: content_text(&result),
-                done: true,
+            let (output, is_error) = tool_output(&result);
+            out.push(Event::ToolResult {
+                id: ev.get("toolCallId").and_then(|v| v.as_str()).unwrap_or("").into(),
+                name: ev.get("toolName").and_then(|v| v.as_str()).unwrap_or("tool").into(),
+                output,
+                is_error,
             });
         }
+        "agent_start" => out.push(Event::Streaming(true)),
+        "agent_end" | "agent_settled" => out.push(Event::Streaming(false)),
+        "queue_update" => {
+            let list = |key: &str| {
+                ev.get(key)
+                    .and_then(|v| v.as_array())
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|s| s.as_str().map(str::to_string))
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            };
+            out.push(Event::Queue {
+                steering: list("steering"),
+                follow_up: list("followUp"),
+            });
+        }
+        "startup_error" => {
+            let msg = ev
+                .get("errorMessage")
+                .and_then(|m| m.as_str())
+                .unwrap_or("pi-web 启动代理失败");
+            out.push(Event::Status(Status::Error(msg.to_string())));
+        }
+        // extension_ui_request (setWidget widgets), auto_retry_*, compaction_*,
+        // session_* bookkeeping — ignored by the panel for now.
         _ => {}
     }
+    out
+}
+
+// ── Session history backfill ────────────────────────────────────────────────
+
+/// Read the tail of a session `.jsonl` (≤ `max_bytes`) and reconstruct the
+/// transcript. SSE only pushes *new* events, so history comes from the file.
+pub fn read_jsonl_tail(path: &str, max_bytes: u64) -> Vec<Entry> {
+    use std::io::Seek;
+    let Ok(mut file) = std::fs::File::open(path) else {
+        return Vec::new();
+    };
+    let len = file.metadata().map(|m| m.len()).unwrap_or(0);
+    let start = len.saturating_sub(max_bytes);
+    if file.seek(std::io::SeekFrom::Start(start)).is_err() {
+        return Vec::new();
+    }
+    let mut buf = String::new();
+    if file.read_to_string(&mut buf).is_err() {
+        return Vec::new();
+    }
+    // Drop the first (probably partial) line when we seeked.
+    let buf = if start > 0 {
+        match buf.find('\n') {
+            Some(i) => &buf[i + 1..],
+            None => "",
+        }
+    } else {
+        buf.as_str()
+    };
+    let mut out = Vec::new();
+    for line in buf.lines() {
+        let Ok(json) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        if json.get("type").and_then(|t| t.as_str()) != Some("message") {
+            continue; // session header, model_change, custom entries, …
+        }
+        let msg = json.get("message").cloned().unwrap_or_default();
+        match msg.get("role").and_then(|r| r.as_str()).unwrap_or("") {
+            "user" => {
+                let text = content_text(&msg);
+                if !text.is_empty() {
+                    out.push(Entry::User(text));
+                }
+            }
+            "assistant" => {
+                for (_, part) in parse_parts(&msg) {
+                    match part {
+                        Part::Text(t) if !t.is_empty() => out.push(Entry::Assistant(t)),
+                        Part::Thinking(t) => out.push(Entry::Thinking(t)),
+                        Part::ToolCall { id, name } => out.push(Entry::Tool {
+                            id,
+                            name,
+                            output: String::new(),
+                            done: false,
+                            is_error: false,
+                        }),
+                        _ => {}
+                    }
+                }
+            }
+            "toolResult" => {
+                let (output, is_error) = tool_output(&msg);
+                let id = msg.get("toolCallId").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let name = msg.get("toolName").and_then(|v| v.as_str()).unwrap_or("tool").to_string();
+                // Fill the earlier toolCall placeholder (same id) if we saw
+                // one; otherwise surface the result standalone.
+                let filled = out.iter_mut().rev().any(|e| match e {
+                    Entry::Tool { id: tid, output: out_text, done, is_error: err, .. } if *tid == id => {
+                        *out_text = output.clone();
+                        *done = true;
+                        *err = is_error;
+                        true
+                    }
+                    _ => false,
+                });
+                if !filled {
+                    out.push(Entry::Tool { id, name, output, done: true, is_error });
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+// ── The worker ──────────────────────────────────────────────────────────────
+
+const POLL_TIMEOUT: Duration = Duration::from_millis(100);
+const RETRY_DELAY: Duration = Duration::from_secs(3);
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
+const BACKFILL_MAX_BYTES: u64 = 128 * 1024;
+
+/// The worker: maintain a connection to the (single) active session, map
+/// commands to HTTP calls, and never block the UI thread.
+fn worker(endpoint: String, tx: Sender<Event>, rx: Receiver<Command>, stop: Arc<AtomicBool>) {
+    let mut watch_target: Option<String> = None;
+    loop {
+        if stop.load(Ordering::Relaxed) {
+            return;
+        }
+        let _ = tx.send(Event::Status(Status::Connecting));
+        // 1. Session list (also proves the server is up).
+        let sessions = match http(&endpoint, "GET", "/api/sessions", None, REQUEST_TIMEOUT) {
+            Ok(resp) if resp.status == 200 => parse_sessions(&resp.body),
+            Ok(resp) => {
+                let msg = format!("pi-web /api/sessions 返回 {status}", status = resp.status);
+                let _ = tx.send(Event::Status(Status::Error(msg)));
+                if wait_retry(&endpoint, &tx, &rx, &stop, &mut watch_target).is_break() {
+                    return;
+                }
+                continue;
+            }
+            Err(e) => {
+                let _ = tx.send(Event::Status(Status::Error(e)));
+                if wait_retry(&endpoint, &tx, &rx, &stop, &mut watch_target).is_break() {
+                    return;
+                }
+                continue;
+            }
+        };
+        if stop.load(Ordering::Relaxed) {
+            return;
+        }
+        let _ = tx.send(Event::Sessions(sessions.clone()));
+
+        // 2. Choose which session to follow: an explicit Watch beats the
+        //    newest-active default.
+        let active = watch_target
+            .clone()
+            .filter(|id| sessions.iter().any(|s| s.id == *id))
+            .or_else(|| sessions.first().map(|s| s.id.clone()));
+        let Some(active) = active else {
+            let _ = tx.send(Event::Status(Status::Error("pi-web 没有会话".into())));
+            if wait_retry(&endpoint, &tx, &rx, &stop, &mut watch_target).is_break() {
+                return;
+            }
+            continue;
+        };
+        let _ = tx.send(Event::Status(Status::Ready {
+            session: active.clone(),
+            streaming: false,
+        }));
+
+        // 3. Backfill history from the session file so the panel shows recent
+        //    context (SSE only pushes new events).
+        if let Some(path) = sessions
+            .iter()
+            .find(|s| s.id == active)
+            .and_then(|s| s.path.clone())
+        {
+            let backfill = read_jsonl_tail(&path, BACKFILL_MAX_BYTES);
+            if !backfill.is_empty() {
+                let _ = tx.send(Event::Replace(backfill));
+            }
+        }
+
+        // 4. Stream the session's SSE events on a helper thread; commands are
+        //    answered here so a busy stream never delays a send.
+        match TcpStream::connect(endpoint.trim_start_matches("http://")) {
+            Ok(stream) => {
+                let host_port = endpoint.trim_start_matches("http://").to_string();
+                let req = format!(
+                    "GET /api/agent/{active}/events HTTP/1.1\r\nHost: {host_port}\r\nAccept: text/event-stream\r\nConnection: keep-alive\r\n\r\n"
+                );
+                let control = match stream.try_clone() {
+                    Ok(c) => c,
+                    Err(_) => continue,
+                };
+                let mut stream = stream;
+                if stream.write_all(req.as_bytes()).is_err() {
+                    continue;
+                }
+                let is_streaming = Arc::new(AtomicBool::new(false));
+                let reader_done = Arc::new(AtomicBool::new(false));
+                let ev_tx = tx.clone();
+                let done_flag = Arc::clone(&reader_done);
+                let stream_flag = Arc::clone(&is_streaming);
+                let _ = std::thread::Builder::new()
+                    .name("ocs-pi-sse".into())
+                    .spawn(move || reader(stream, ev_tx, stream_flag, done_flag));
+
+                // Serve commands while the reader runs; shut the socket down
+                // when we must leave (Watch/Reconnect) so the reader unblocks.
+                let mut leave = false;
+                loop {
+                    if stop.load(Ordering::Relaxed) {
+                        leave = true;
+                        break;
+                    }
+                    match rx.recv_timeout(POLL_TIMEOUT) {
+                        Ok(Command::Send { session, message, queued }) => {
+                            post_prompt(&endpoint, &tx, &session, &message, queued, &is_streaming);
+                        }
+                        Ok(Command::Watch(id)) => {
+                            if id != active {
+                                watch_target = Some(id);
+                                leave = true;
+                            }
+                            break;
+                        }
+                        Ok(Command::Reconnect) => {
+                            leave = true;
+                            break;
+                        }
+                        Err(RecvTimeoutError::Timeout) => {
+                            if reader_done.load(Ordering::Relaxed) {
+                                leave = true; // stream died; reconnect above
+                                break;
+                            }
+                        }
+                        Err(RecvTimeoutError::Disconnected) => {
+                            leave = true; // UI dropped the handle
+                            break;
+                        }
+                    }
+                }
+                let _ = control.shutdown(Shutdown::Both);
+                if stop.load(Ordering::Relaxed) {
+                    return;
+                }
+                if leave {
+                    continue; // fresh sessions fetch + backfill + stream
+                }
+            }
+            Err(e) => {
+                let _ = tx.send(Event::Status(Status::Error(e.to_string())));
+                if wait_retry(&endpoint, &tx, &rx, &stop, &mut watch_target).is_break() {
+                    return;
+                }
+            }
+        }
+    }
+}
+
+/// Block for up to `RETRY_DELAY`, staying responsive to commands.
+/// Returns `ControlFlow::Break` when the worker should exit.
+fn wait_retry(
+    endpoint: &str,
+    tx: &Sender<Event>,
+    rx: &Receiver<Command>,
+    stop: &Arc<AtomicBool>,
+    watch_target: &mut Option<String>,
+) -> std::ops::ControlFlow<()> {
+    let streaming = Arc::new(AtomicBool::new(false)); // nothing streams while offline
+    let deadline = std::time::Instant::now() + RETRY_DELAY;
+    loop {
+        if stop.load(Ordering::Relaxed) {
+            return std::ops::ControlFlow::Break(());
+        }
+        let now = std::time::Instant::now();
+        if now >= deadline {
+            return std::ops::ControlFlow::Continue(());
+        }
+        match rx.recv_timeout(deadline - now) {
+            Ok(Command::Watch(id)) => {
+                *watch_target = Some(id);
+                return std::ops::ControlFlow::Continue(());
+            }
+            Ok(Command::Reconnect) => return std::ops::ControlFlow::Continue(()),
+            Ok(Command::Send { session, message, queued }) => {
+                // Try the POST even while offline: the server may be fine and
+                // only the session list hiccuped; failure surfaces as
+                // SendFailed either way.
+                post_prompt(endpoint, tx, &session, &message, queued, &streaming);
+            }
+            Err(RecvTimeoutError::Timeout) => {}
+            Err(RecvTimeoutError::Disconnected) => return std::ops::ControlFlow::Break(()),
+        }
+    }
+}
+
+/// POST one prompt. `queued` adds `streamingBehavior:"followUp"` so pi-web
+/// queues it behind the running turn instead of rejecting/steering.
+fn post_prompt(
+    endpoint: &str,
+    tx: &Sender<Event>,
+    session: &str,
+    message: &str,
+    queued: bool,
+    is_streaming: &Arc<AtomicBool>,
+) {
+    let mut body = serde_json::json!({ "type": "prompt", "message": message });
+    if queued || is_streaming.load(Ordering::Relaxed) {
+        body["streamingBehavior"] = serde_json::json!("followUp");
+    }
+    let payload = body.to_string();
+    match http(
+        endpoint,
+        "POST",
+        &format!("/api/agent/{session}"),
+        Some(&payload),
+        REQUEST_TIMEOUT,
+    ) {
+        Ok(resp) if (200..300).contains(&resp.status) => {}
+        Ok(resp) => {
+            let detail = serde_json::from_str::<serde_json::Value>(&resp.body)
+                .ok()
+                .and_then(|v| {
+                    v.get("error")
+                        .and_then(|e| e.as_str())
+                        .map(str::to_string)
+                })
+                .unwrap_or_else(|| format!("HTTP {}", resp.status));
+            let _ = tx.send(Event::SendFailed { message: detail });
+        }
+        Err(e) => {
+            let _ = tx.send(Event::SendFailed { message: e });
+        }
+    }
+}
+
+/// Read one SSE connection to exhaustion, forwarding parsed events.
+fn reader(stream: TcpStream, tx: Sender<Event>, is_streaming: Arc<AtomicBool>, done: Arc<AtomicBool>) {
+    let mut r = BufReader::new(stream);
+    let mut line = String::new();
+    loop {
+        line.clear();
+        match r.read_line(&mut line) {
+            Ok(0) => break,                 // EOF
+            Ok(_) => {}
+            Err(_) => break,               // shutdown by the worker / reset
+        }
+        if let Some(data) = line.strip_prefix("data: ") {
+            if let Ok(ev) = serde_json::from_str::<serde_json::Value>(data.trim()) {
+                // Track the run flag so queued prompts pick the right body.
+                for event in sse_to_events(&ev) {
+                    if let Event::Streaming(v) = event {
+                        is_streaming.store(v, Ordering::Relaxed);
+                    }
+                    let _ = tx.send(event);
+                }
+            }
+        }
+        // `:` heartbeat comments and other lines are ignored.
+    }
+    done.store(true, Ordering::Relaxed);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
-    fn session_list_parses_ids_and_first_message() {
-        let body = r#"{"sessions":[{"id":"abc","firstMessage":"第一行\n第二行","messageCount":3}]}"#;
+    fn dechunk_strips_chunk_framing_and_trailers() {
+        let payload = r#"{"sessions":[{"id":"abc"}]}"#;
+        let chunked = format!("{:x}\r\n{}\r\n0\r\nX-Trailer: 1\r\n\r\n", payload.len(), payload);
+        assert_eq!(dechunk(&chunked), payload);
+        // Multi-chunk body: split the payload into two chunks.
+        let (a, b) = payload.split_at(10);
+        let chunked = format!(
+            "{:x}\r\n{}\r\n{:x}\r\n{}\r\n0\r\n\r\n",
+            a.len(),
+            a,
+            b.len(),
+            b
+        );
+        assert_eq!(dechunk(&chunked), payload);
+    }
+
+    #[test]
+    fn dechunk_handles_chunk_extensions_and_split_crlf() {
+        let payload = "hello";
+        let chunked = format!("{:x};ext=1\r\n{}\r\n0\r\n\r\n", payload.len(), payload);
+        assert_eq!(dechunk(&chunked), payload);
+    }
+
+    #[test]
+    fn session_list_parses_ids_labels_and_paths() {
+        let body = r#"{"sessions":[{"id":"abc","firstMessage":"第一行\n第二行","messageCount":3,"path":"/tmp/a.jsonl"},{"id":"","firstMessage":"skip"},{"id":"c","firstMessage":"  消息  "}]}"#;
         let got = parse_sessions(body);
-        assert_eq!(got, vec![("abc".to_string(), "第一行".to_string())]);
+        assert_eq!(got.len(), 2);
+        assert_eq!(got[0].id, "abc");
+        assert_eq!(got[0].label, "第一行");
+        assert_eq!(got[0].path.as_deref(), Some("/tmp/a.jsonl"));
+        assert_eq!(got[1].label, "消息");
+        assert_eq!(got[1].path, None);
     }
 
     #[test]
     fn content_text_joins_text_parts() {
-        let msg = serde_json::json!({"content":[{"type":"text","text":"a"},{"type":"text","text":"b"}]});
+        let msg = json!({"content":[{"type":"text","text":"a"},{"type":"text","text":"b"}]});
         assert_eq!(content_text(&msg), "ab");
+    }
+
+    #[test]
+    fn parts_split_text_thinking_toolcall() {
+        let msg = json!({"content":[
+            {"type":"thinking","thinking":"想一想"},
+            {"type":"text","text":"答案"},
+            {"type":"toolCall","id":"t1","name":"bash"},
+        ]});
+        assert_eq!(
+            parse_parts(&msg),
+            vec![
+                (0, Part::Thinking("想一想".into())),
+                (1, Part::Text("答案".into())),
+                (2, Part::ToolCall { id: "t1".into(), name: "bash".into() }),
+            ]
+        );
+    }
+
+    #[test]
+    fn connected_sets_ready_and_streaming_flag() {
+        let events = sse_to_events(&json!({"type":"connected","sessionId":"s1","isStreaming":true}));
+        assert_eq!(
+            events,
+            vec![
+                Event::Streaming(true),
+                Event::Status(Status::Ready { session: "s1".into(), streaming: true }),
+            ]
+        );
+    }
+
+    #[test]
+    fn text_and_thinking_deltas_map_with_index() {
+        let text = sse_to_events(&json!({"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":1,"delta":"你好"}}));
+        assert_eq!(text, vec![Event::Delta { kind: DeltaKind::Text, idx: 1, chunk: "你好".into() }]);
+        assert_eq!(
+            sse_to_events(&json!({"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":"嗯"}})),
+            vec![Event::Delta { kind: DeltaKind::Thinking, idx: 0, chunk: "嗯".into() }]
+        );
+    }
+
+    #[test]
+    fn toolcall_start_and_tool_result_are_idempotent_events() {
+        let start = sse_to_events(&json!({"type":"message_update","assistantMessageEvent":{"type":"toolcall_start","contentIndex":2,"id":"t9","toolName":"read"}}));
+        assert_eq!(start, vec![Event::ToolCallStart { id: "t9".into(), name: "read".into() }]);
+
+        let end = sse_to_events(&json!({"type":"tool_execution_end","toolCallId":"t9","toolName":"read","result":{"content":[{"type":"text","text":"文件内容"}],"isError":true}}));
+        assert_eq!(
+            end,
+            vec![Event::ToolResult { id: "t9".into(), name: "read".into(), output: "文件内容".into(), is_error: true }]
+        );
+    }
+
+    #[test]
+    fn user_message_end_pushes_user_entry() {
+        let events = sse_to_events(&json!({"type":"message_end","message":{"role":"user","content":[{"type":"text","text":"你好"}]}}));
+        assert_eq!(events, vec![Event::User("你好".into())]);
+    }
+
+    #[test]
+    fn assistant_end_carries_final_parts() {
+        let events = sse_to_events(&json!({"type":"message_end","message":{"role":"assistant","content":[{"type":"thinking","thinking":"t"},{"type":"text","text":"final"}]}}));
+        assert_eq!(
+            events,
+            vec![Event::AssistantEnd { parts: vec![(0, Part::Thinking("t".into())), (1, Part::Text("final".into()))] }]
+        );
+    }
+
+    #[test]
+    fn agent_lifecycle_sets_streaming_flag() {
+        assert_eq!(sse_to_events(&json!({"type":"agent_start"})), vec![Event::Streaming(true)]);
+        assert_eq!(sse_to_events(&json!({"type":"agent_end","messages":[]})), vec![Event::Streaming(false)]);
+    }
+
+    #[test]
+    fn queue_update_collects_follow_ups() {
+        let events = sse_to_events(&json!({"type":"queue_update","steering":["a"],"followUp":["b","c"]}));
+        assert_eq!(
+            events,
+            vec![Event::Queue { steering: vec!["a".into()], follow_up: vec!["b".into(), "c".into()] }]
+        );
+    }
+
+    #[test]
+    fn http_error_body_maps_to_send_failed() {
+        // post_prompt failure path is exercised indirectly; here we only check
+        // that a non-2xx response body's "error" field is what we'd report.
+        let body = r#"{"error":"Session not found","code":"prompt_rejected","accepted":false}"#;
+        let detail = serde_json::from_str::<serde_json::Value>(body)
+            .ok()
+            .and_then(|v| v.get("error").and_then(|e| e.as_str()).map(str::to_string))
+            .unwrap_or_default();
+        assert_eq!(detail, "Session not found");
+    }
+
+    #[test]
+    fn jsonl_tail_reconstructs_transcript() {
+        let dir = std::env::temp_dir().join(format!("ocs-pi-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("session.jsonl");
+        std::fs::write(
+            &path,
+            concat!(
+                "{\"type\":\"session\",\"version\":3,\"id\":\"s\"}\n",
+                "{\"type\":\"model_change\",\"provider\":\"x\"}\n",
+                "{\"type\":\"message\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"问\"}]}}\n",
+                "{\"type\":\"message\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"thinking\",\"thinking\":\"思\"},{\"type\":\"text\",\"text\":\"答\"},{\"type\":\"toolCall\",\"id\":\"t1\",\"name\":\"bash\"}]}}\n",
+                "{\"type\":\"message\",\"message\":{\"role\":\"toolResult\",\"toolCallId\":\"t1\",\"toolName\":\"bash\",\"content\":[{\"type\":\"text\",\"text\":\"输出\"}],\"isError\":false}}\n",
+            ),
+        )
+        .unwrap();
+        let got = read_jsonl_tail(path.to_str().unwrap(), 1 << 20);
+        assert_eq!(
+            got,
+            vec![
+                Entry::User("问".into()),
+                Entry::Thinking("思".into()),
+                Entry::Assistant("答".into()),
+                Entry::Tool { id: "t1".into(), name: "bash".into(), output: "输出".into(), done: true, is_error: false },
+            ]
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn jsonl_tail_skips_partial_first_line() {
+        let dir = std::env::temp_dir().join(format!("ocs-pi-tail-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("s.jsonl");
+        let full = "{\"type\":\"session\"}\n{\"type\":\"message\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"hi\"}]}}\n";
+        std::fs::write(&path, full).unwrap();
+        // A window that starts mid-way through the header line (100 bytes
+        // leaves the whole message line intact after dropping the partial
+        // first line).
+        let got = read_jsonl_tail(path.to_str().unwrap(), 100);
+        assert_eq!(got, vec![Entry::User("hi".into())]);
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

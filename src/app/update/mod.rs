@@ -92,6 +92,7 @@ mod command;
 mod dialog;
 mod dynamic;
 mod file;
+mod pi;
 mod style;
 mod util;
 mod viewport;
@@ -493,6 +494,9 @@ impl OpenCADStudio {
             }
 
             Message::Tick(t) => self.on_tick(t),
+
+            // OCS Pi Extension panel.
+            Message::Pi(msg) => self.on_pi_msg(msg),
 
             Message::OpenFile => self.on_open_file(),
 
@@ -3526,8 +3530,11 @@ impl OpenCADStudio {
                     // Arm polling of the pi-web client (the panel renders from
                     // whatever the worker thread has pushed so far).
                     let tab = self.active_tab;
-                    let ep = self.tabs[tab].pi_panel.endpoint.clone();
-                    self.tabs[tab].pi_panel.worker = Some(crate::pi::PiHandle::start(&ep));
+                    self.tabs[tab].pi_panel.ensure_worker();
+                } else {
+                    // Panel closed: stop streaming + free the worker thread.
+                    let tab = self.active_tab;
+                    self.tabs[tab].pi_panel.stop_worker();
                 }
                 Task::none()
             }

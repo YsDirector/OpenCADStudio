@@ -604,9 +604,12 @@ pub(super) fn on_ribbon_tool_click(&mut self, tool_id: String, event: ModuleEven
                         self.ribbon.set_properties(false);
                     }
                     // Closing hides the panel (it keeps its dock slot, like the
-                    // others, so the `AI` command brings it back where it was).
+                    // others, so the `PI` command brings it back where it was).
                     PanelId::Pi => {
                         self.show_pi_panel = false;
+                        // Stop streaming + free the worker thread.
+                        let tab = self.active_tab;
+                        self.tabs[tab].pi_panel.stop_worker();
                     }
                 }
                 if self.dock_expanded == Some(id) {

@@ -1896,6 +1896,8 @@ pub enum Message {
     Tick(Instant),
     /// Toggle the built-in Pi assistant panel (`PI` command).
     TogglePiPanel,
+    /// Sub-messages of the built-in Pi assistant panel (poll/send/…).
+    Pi(crate::ui::pi_panel::PiMsg),
     /// Periodic drain of plugin-to-host requests that arrived outside a host
     /// call (e.g. mutations from the Python REPL).
     #[cfg(not(target_arch = "wasm32"))]
