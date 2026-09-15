@@ -94,7 +94,7 @@ def pick(pid: int | None, quiet: bool = False) -> tuple[dict, dict]:
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("op", choices=["state", "list", "run", "capture", "save", "open", "raw"])
+    ap.add_argument("op", choices=["state", "list", "run", "capture", "save", "open", "input", "raw"])
     ap.add_argument("arg", nargs="?")
     ap.add_argument("--pid", type=int, default=None)
     ap.add_argument("--json", action="store_true", help="原样打印应答 JSON")
@@ -135,6 +135,9 @@ def main(argv: list[str] | None = None) -> int:
         req = {"op": "save"} if not args.arg else {"op": "save", "path": args.arg}
     elif args.op == "open":
         req = {"op": "open", "path": args.arg}
+    elif args.op == "input":
+        # 交互命令喂字符串（如 INSERT 的块名/插入点、属性的 8 个值）；空串 = 空格
+        req = {"op": "input", "kind": "token", "text": " " if args.arg == "" else args.arg}
     else:
         req = json.loads(args.arg)
     if doc_id is not None:
