@@ -86,6 +86,22 @@ OCS_SMOKE_PLUGIN=$PWD/target/release/libocs_ocsm.so \
 > 然后删掉本节、删除分支 `fix/mcp-command-listing-filters`（fork 远端 + 本地 worktree `/tmp/ocs-pr-upstream`）。
 > 该改动**不属于 fork 独有补丁**，故不进 §2 总表。
 
+## 0.7 待上游合并 · 插件撤销事务 + 高亮事件（2026-09-15 开 PR）
+
+> 两条宿主侧改动（都源于 OCSM 的 MCP/自动化实测缺口），各自一个上游 PR：
+>
+> | 项 | 内容 | 文件 | PR 分支 | fork 提交 | 报告 |
+> |---|---|---|---|---|---|
+> | **撤销事务** | `PluginRequest::BeginUndo/CommitUndo` + `HostApi::begin_undo/commit_undo`：宿主每条 message 末尾提交（空快照即丢）pending 快照，插件一次用户动作（HTTP 流程）必须显式开/关事务才能成一个撤销条目 | `crates/ocs_plugin_api/src/host.rs`、`.../ipc/{protocol.rs,server.rs,client.rs,v4/client.rs}`、`src/app/{document.rs,history.rs,plugin_host.rs}`、`docs/plugin-architecture.md` | `feat/plugin-undo-transaction` | `30425cbc` | `桌面/OCSM/PR-插件撤销事务-正文.md` |
+> | **高亮事件** | `state.selection_revision` + `op:"events"` 的 `kind:"selection"` 事件（宿主本来只广播给 V4 插件，自动化客户端只能轮询） | `src/app/{control/mod.rs,update/mod.rs}`、`src/mcp.rs`、`docs/automation/README.md` | `feat/automation-selection-events` | `8845d5f8`+`7bb6d1e2` | `桌面/OCSM/PR-高亮选择事件-正文.md` |
+>
+> ⚠️ **同步注意（重要）**：`crates/ocs_plugin_api/src/host.rs` 与 `ipc/protocol.rs` 在本 fork 里还带着**尚未上游的 v5 插件面**（`ensure_layers/ensure_linetypes/ensure_text_styles/ensure_dim_styles`、
+> `add_block_record`、`SelectedHandles`、`SetCurrentLayer`、frame picker 等；实测上游 `d738ebfc` 里 `ensure_layers`/`add_block_record`/`SelectedHandles` 均 **0 命中**）。
+> 上游 PR **只含 v6 追加部分**（追加在 trait/enum 末尾，保 vtable 槽位），合并时两边都要留：上游 v6 段 ≠ fork v5 段，别把 fork 的 v5 段当成已上游。
+>
+> **同步动作**：上游合并后取上游版（内容一致，git 自动归并）；删本节 + 删分支 `feat/plugin-undo-transaction`、`feat/automation-selection-events`。
+> 插件侧（`crates/ocs_ocsm`，非上游）已在 `20ea5ef6` 改用 Begin/Commit；命令驱动流程继续用 `push_undo`（同一条 message 内本来就成立）。
+
 ## 1. 补丁总表（基准：上游 v2026.36 → HEAD，24 文件 / +2972 −119）
 
 | 组 | 文件 | 规模 | 作用 |
