@@ -228,7 +228,7 @@ pub struct PartMeta {
     pub spec: String,
     /// 材料（默认空，由数据表补）
     pub material: String,
-    /// 单件重量 kg（估算值，前缀 `≈`）
+    /// 单件重量 kg（估算值；不写 `≈`，用户 2026-09-15）
     pub weight: String,
 }
 
@@ -329,7 +329,7 @@ pub fn hex_bolt(d: f64, l: f64, full_thread: bool) -> Result<GenPart, String> {
             name: name.to_string(),
             spec: spec_text_bolt(d, l),
             material: String::new(),
-            weight: format!("≈{}", format!("{:.3}", bolt_weight_kg(row, l))),
+            weight: format!("{:.3}", bolt_weight_kg(row, l)),
         },
         bbox: [-k, -s / 2.0, l, s / 2.0],
     })
@@ -375,7 +375,7 @@ pub fn hex_nut(d: f64) -> Result<GenPart, String> {
             name: "1型六角螺母".to_string(),
             spec: spec_text_dia(d),
             material: String::new(),
-            weight: format!("≈{}", format!("{:.3}", nut_weight_kg(row))),
+            weight: format!("{:.3}", nut_weight_kg(row)),
         },
         bbox: [-s / 2.0, 0.0, s / 2.0, m],
     })
@@ -555,7 +555,7 @@ pub fn hex_bolt_c(d: f64, l: f64, view: BoltView) -> Result<GenPart, String> {
         name: "六角头螺栓 C级".to_string(),
         spec: spec_text_bolt(d, l),
         material: String::new(),
-        weight: format!("≈{}", format!("{:.3}", hex_bolt_weight_kg(row, l))),
+        weight: format!("{:.3}", hex_bolt_weight_kg(row, l)),
     };
     Ok(hex_bolt_views(view, d, l, row.s, row.k, b, row.runout, None, meta))
 }
@@ -583,7 +583,7 @@ pub fn hex_bolt_ab(d: f64, l: f64, view: BoltView) -> Result<GenPart, String> {
         name: "六角头螺栓 A/B级".to_string(),
         spec: spec_text_bolt(d, l),
         material: String::new(),
-        weight: format!("≈{}", format!("{:.3}", hex_bolt_weight_kg(row, l))),
+        weight: format!("{:.3}", hex_bolt_weight_kg(row, l)),
     };
     // 头部垫圈面 dw×c：**主视图 + 俯视图**都画（用户 2026-09-15 确认），左视图不画
     Ok(hex_bolt_views(
@@ -1596,7 +1596,9 @@ mod tests {
         assert_eq!(center[0].0[1], 0.0);
         assert_eq!(p.meta.code, "GB/T 5782-2016");
         assert_eq!(p.meta.spec, "M10x100");
-        assert!(p.meta.weight.starts_with('≈'));
+        // 设计重量是估算值，但**不写 ≈**（用户 2026-09-15）
+        assert!(!p.meta.weight.contains('≈'));
+        assert!(p.meta.weight.parse::<f64>().unwrap() > 0.0);
     }
 
     #[test]

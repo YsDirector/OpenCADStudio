@@ -245,7 +245,7 @@ pub fn hex_bolt_b_full(d: f64, l: f64, view: BoltView) -> Result<GenPart, String
         name: "六角头全螺纹螺栓 全螺纹 B级".into(),
         spec: format!("M{}×{}", trim(d), trim(l)),
         material: String::new(),
-        weight: format!("≈{}", format!("{:.3}", bolt_weight_kg(row, l))),
+        weight: format!("{:.3}", bolt_weight_kg(row, l)),
     };
     Ok(part)
 }
@@ -294,7 +294,7 @@ pub fn hex_bolt_hole_a(d: f64, l: f64, view: BoltView) -> Result<GenPart, String
         name: "六角头头部带孔螺栓 A级".into(),
         spec: format!("M{}×{}", trim(d), trim(l)),
         material: String::new(),
-        weight: format!("≈{}", format!("{:.3}", hole_a_weight_kg(row, l))),
+        weight: format!("{:.3}", hole_a_weight_kg(row, l)),
     };
     Ok(part)
 }
@@ -593,7 +593,7 @@ pub fn socket_head(d: f64, l: f64, view: BoltView) -> Result<GenPart, String> {
                     name: "内六角圆柱头螺钉".into(),
                     spec: format!("M{}×{}", trim(d), trim(l)),
                     material: String::new(),
-                    weight: format!("≈{}", format!("{:.3}", socket_weight_kg(row, l))),
+                    weight: format!("{:.3}", socket_weight_kg(row, l)),
                 },
                 bbox: [-row.dk / 2.0, -row.dk / 2.0, row.dk / 2.0, row.dk / 2.0],
             });
@@ -627,7 +627,7 @@ pub fn socket_head(d: f64, l: f64, view: BoltView) -> Result<GenPart, String> {
             name: "内六角圆柱头螺钉".into(),
             spec: format!("M{}×{}", trim(d), trim(l)),
             material: String::new(),
-            weight: format!("≈{}", format!("{:.3}", socket_weight_kg(row, l))),
+            weight: format!("{:.3}", socket_weight_kg(row, l)),
         },
         bbox: [-row.k, -half_h, l, half_h],
     })
@@ -1197,7 +1197,9 @@ mod tests {
         let p = hex_bolt_hole_a(18.0, 60.0, BoltView::Main).unwrap();
         assert_eq!(p.meta.code, "GB/T 32.1-2020");
         assert_eq!(p.meta.spec, "M18×60");
-        assert!(p.meta.weight.starts_with('≈'));
+        // 设计重量是估算值，但**不写 ≈**（用户 2026-09-15）
+        assert!(!p.meta.weight.contains('≈'));
+        assert!(p.meta.weight.parse::<f64>().unwrap() > 0.0);
         let p = socket_head(10.0, 70.0, BoltView::Main).unwrap();
         assert_eq!(p.meta.code, "GB/T 70.1-2008");
         assert_eq!(p.meta.name, "内六角圆柱头螺钉");
@@ -1903,7 +1905,7 @@ pub fn hex_nut(d: f64, family: &str, view: NutView) -> Result<GenPart, String> {
         name: name.into(),
         spec: format!("M{}", trim(d)),
         material: String::new(),
-        weight: format!("≈{:.4}", nut_weight_kg(row, d)),
+        weight: format!("{:.4}", nut_weight_kg(row, d)),
     };
     let mut en: Vec<EntityType> = Vec::new();
     let th = 2.0 * (8.0 * delta / e).atan();
@@ -2017,7 +2019,7 @@ pub fn nut_section(d: f64, family: &str, row: &NutRow) -> Result<GenPart, String
         name: name.into(),
         spec: format!("M{}", trim(d)),
         material: String::new(),
-        weight: format!("≈{:.4}", nut_weight_kg(row, d)),
+        weight: format!("{:.4}", nut_weight_kg(row, d)),
     };
     let _ = th;
     let mut en: Vec<EntityType> = Vec::new();
@@ -2235,7 +2237,7 @@ pub fn pin_a(d: f64, l: f64) -> Result<GenPart, String> {
             name: "圆柱销 A型".into(),
             spec: format!("Ø{}×{}", trim(d), trim(l)),
             material: String::new(),
-            weight: format!("≈{:.5}", pin_a_weight_kg(row, l)),
+            weight: format!("{:.5}", pin_a_weight_kg(row, l)),
         },
         bbox: [0.0, -r, l, r],
     })
@@ -2335,7 +2337,7 @@ pub fn pin_threaded(d: f64, l: f64) -> Result<GenPart, String> {
             name: "内螺纹圆柱销".into(),
             spec: format!("Ø{}×{}", trim(d), trim(l)),
             material: String::new(),
-            weight: format!("≈{:.5}", pin_threaded_weight_kg(row, l)),
+            weight: format!("{:.5}", pin_threaded_weight_kg(row, l)),
         },
         bbox: [0.0, -r, l, r],
     })
@@ -2368,7 +2370,7 @@ pub fn flat_washer(d: f64, view: NutView) -> Result<GenPart, String> {
         spec: format!("Ø{}", trim(d)),
         material: String::new(),
         weight: format!(
-            "≈{:.5}",
+            "{:.5}",
             std::f64::consts::PI / 4.0 * (d2 * d2 - d1 * d1) * h * 7.85e-3 / 1000.0
         ),
     };
@@ -2421,7 +2423,7 @@ pub fn spring_washer(d: f64, view: NutView) -> Result<GenPart, String> {
         spec: format!("Ø{}", trim(d)),
         material: String::new(),
         weight: format!(
-            "≈{:.5}",
+            "{:.5}",
             std::f64::consts::PI / 4.0 * (r_out * r_out - r_in * r_in) * s * 7.85e-3 / 1000.0 * 4.0
         ),
     };
@@ -2870,7 +2872,9 @@ mod acm_ref_tests {
         assert_eq!(p.meta.code, "GB/T 119.1-2000");
         assert_eq!(p.meta.name, "圆柱销 A型");
         assert_eq!(p.meta.spec, "Ø10×18");
-        assert!(p.meta.weight.starts_with('≈'));
+        // 设计重量是估算值，但**不写 ≈**（用户 2026-09-15）
+        assert!(!p.meta.weight.contains('≈'));
+        assert!(p.meta.weight.parse::<f64>().unwrap() > 0.0);
         assert!(pin_a(10.0, 200.0).unwrap_err().contains("长度应在"));
     }
 

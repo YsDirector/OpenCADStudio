@@ -174,7 +174,17 @@ pub(crate) fn aggregate(parts: &[PartMeta]) -> Vec<BomItem> {
     out
 }
 
-/// 单件重量字符串里的数字（`≈1.35` / `≈ 1.35 kg` → 1.35）。
+/// 单件重量显示文本：去掉估算前缀（历史数据可能带 `≈`；设计重量本来就是估算值，
+/// 用户 2026-09-15 定：**不写 ≈**）。
+pub(crate) fn weight_text(s: &str) -> String {
+    s.trim()
+        .trim_start_matches(['≈', '~', '～', '=', ' '])
+        .trim_start_matches('约')
+        .trim_start()
+        .to_string()
+}
+
+/// 单件重量字符串里的数字（`1.35` / `≈ 1.35 kg` → 1.35；老数据带 ≈ 也能解析）。
 fn weight_number(s: &str) -> Option<f64> {
     let mut num = String::new();
     let mut seen_digit = false;
@@ -199,7 +209,8 @@ fn trim_num(v: f64) -> String {
 
 /// 一行的 8 个单元格取值（tag 顺序见 [`CELL_TAGS`]）。
 pub(crate) fn cell_values(it: &BomItem, seq: usize) -> [String; 8] {
-    let total = weight_number(&it.unit_weight)
+    let unit = weight_text(&it.unit_weight);
+    let total = weight_number(&unit)
         .map(|w| trim_num(w * it.qty.max(1) as f64))
         .unwrap_or_default();
     let name = if it.spec.is_empty() {
@@ -213,7 +224,7 @@ pub(crate) fn cell_values(it: &BomItem, seq: usize) -> [String; 8] {
         name,
         it.qty.to_string(),
         it.material.clone(),
-        it.unit_weight.clone(),
+        unit,
         total,
         String::new(),
     ]
@@ -526,7 +537,7 @@ mod tests {
         assert_eq!(v[1], "0165");
         assert_eq!(v[2], "偏心轴 φ10");
         assert_eq!(v[3], "3");
-        assert_eq!(v[5], "≈1.35");
+        assert_eq!(v[5], "1.35"); // 不写 ≈
         assert_eq!(v[6], "4.05");
     }
 
@@ -565,8 +576,16 @@ mod tests {
 
     #[test]
     fn weight_number_accepts_estimation_prefix() {
-        assert_eq!(weight_number("≈1.35"), Some(1.35));
+        assert_eq!(weight_number("≈1.35"), Some(1.35)); // 老数据仍能算总重
         assert_eq!(weight_number("≈ 0.05 kg"), Some(0.05));
         assert_eq!(weight_number(""), None);
+    }
+
+    #[test]
+    fn weight_text_drops_estimate_prefix() {
+        assert_eq!(weight_text("≈1.35"), "1.35");
+        assert_eq!(weight_text(" ≈ 0.050 kg "), "0.050 kg");
+        assert_eq!(weight_text("约2.5"), "2.5");
+        assert_eq!(weight_text("1.35"), "1.35");
     }
 }
