@@ -7,7 +7,9 @@
 //!    C 级除 40 起还有 35），所以**以表为准**、不按推标公称系列卡；取不到就报该族范围
 //!    并提示换族（例如 C 级 M8 装不下 → 建议 5783 全螺纹）；
 //! 3. 沿轴线把每个零件放到它该在的位置（基点约定来自零件族：螺栓 = 头部支承面 × 轴线、
-//!    螺母/垫圈 = 端面 × 轴线）。
+//!    螺母/垫圈 = 端面 × 轴线）；并做**外形视图遮挡裁剪**：被螺母/垫圈包住的那段螺栓杆
+//!    （含螺纹细实线）剪掉，只保留露在遮挡件之外的部分 —— 2D 装配图里被挡住的轮廓不画
+//!    （否则螺母里会横穿一堆螺栓线，见 `clip_hidden`；`trim=off` 可关掉）。
 //!
 //! **刻意不判断"该不该加平垫/弹垫/防松件"** —— 那取决于安装面材料、振动环境、企业规范，
 //! 由 skill/工况层决定并把件链传进来；命令侧只负责算得对、放得准、能撤销。
@@ -82,6 +84,8 @@ pub struct JointSpec {
     pub rot_deg: f64,
     /// 期望露出螺母端的扣数（1 扣 = 1 个螺距），默认 2.5。
     pub protrude_turns: f64,
+    /// 外形视图遮挡裁剪（默认开）：被螺母/垫圈包住的杆段不画。
+    pub trim: bool,
     /// 视图覆盖（可选）：默认全族用 `main`——螺栓/螺母是“轴线水平”的侧视，
     /// 垫圈的主视图也已按用户要求改为侧视轮廓（平垫=矩形 h×d2、弹垫=月牙）。
     pub view: Option<String>,
@@ -99,6 +103,7 @@ impl JointSpec {
         let mut at: Option<[f64; 2]> = None;
         let mut rot_deg = 0.0f64;
         let mut protrude_turns = Self::DEFAULT_PROTRUDE_TURNS;
+        let mut trim = true;
         let mut view: Option<String> = None;
         let mut items: Vec<JointItem> = Vec::new();
         while let Some(token) = tokens.next() {
@@ -126,6 +131,20 @@ impl JointSpec {
                         return Err("protrude 不能为负（扣数）".into());
                     }
                 }
+                // `trim` / `trim on` = 开（默认）；`trim off` / `no-trim` / `notrim` = 关
+                "trim" | "no-trim" | "notrim" => {
+                    let mut off = lower != "trim";
+                    if lower == "trim" {
+                        // 只有明确跟一个 off/0/false 才关；否则是"开启"
+                        if let Some(next) = tokens.clone().next() {
+                            if matches!(next.to_ascii_lowercase().as_str(), "off" | "0" | "false" | "no") {
+                                tokens.next();
+                                off = true;
+                            }
+                        }
+                    }
+                    trim = !off;
+                }
                 "view" => {
                     let raw = tokens.next().ok_or_else(|| format!("view 缺视图名。{usage}"))?;
                     view = Some(raw.to_ascii_lowercase());
@@ -140,7 +159,7 @@ impl JointSpec {
         if !matches!(items.first(), Some(JointItem::Bolt { .. })) {
             return Err("件链必须以 bolt=<族>:<d> 开头（它决定轴线与长度基准）。".into());
         }
-        Ok(JointSpec { at, rot_deg, protrude_turns, view, items })
+        Ok(JointSpec { at, rot_deg, protrude_turns, trim, view, items })
     }
 
     /// HTTP/JSON 形式（`POST /api/joint` 用）。
@@ -154,6 +173,8 @@ impl JointSpec {
             protrude: f64,
             #[serde(default)]
             view: Option<String>,
+            #[serde(default = "default_true")]
+            trim: bool,
             items: Vec<RawItem>,
         }
         #[derive(serde::Deserialize)]
@@ -170,6 +191,9 @@ impl JointSpec {
         }
         fn default_protrude() -> f64 {
             JointSpec::DEFAULT_PROTRUDE_TURNS
+        }
+        fn default_true() -> bool {
+            true
         }
         let raw: Raw = serde_json::from_slice(body).map_err(|e| format!("请求 JSON 无效: {e}"))?;
         let items = raw
@@ -189,7 +213,7 @@ impl JointSpec {
         if !matches!(items.first(), Some(JointItem::Bolt { .. })) {
             return Err("件链必须以 kind=bolt 开头".into());
         }
-        Ok(JointSpec { at: raw.at, rot_deg: raw.rot, protrude_turns: raw.protrude, view: raw.view, items })
+        Ok(JointSpec { at: raw.at, rot_deg: raw.rot, protrude_turns: raw.protrude, trim: raw.trim, view: raw.view, items })
     }
 
     pub fn to_json(&self) -> String {
@@ -227,6 +251,12 @@ pub struct Placement {
     pub spec: String,
     /// 该件采用的视图 id（默认 `main`，见 `JointSpec::view`）。
     pub view: String,
+    /// 件类：`bolt` / `nut` / `washer`（`partgen::family_kind`）。
+    pub kind: String,
+    /// 基点沿装配轴到螺栓支承面的距离（mm）——件链的排布坐标。
+    pub offset: f64,
+    /// 该件沿装配轴自身占的区间 `[offset, offset + 轴向长]`（mm）。
+    pub span: [f64; 2],
 }
 
 #[derive(Debug, Clone)]
@@ -317,10 +347,24 @@ pub fn plan(spec: &JointSpec) -> Result<JointPlan, String> {
             0.0,
         ];
         let view = spec.view.clone().unwrap_or_else(|| "main".to_string());
-        placements.push(Placement { family, d, l, at, rot_rad, spec: spec_text, view });
+        // 沿轴的占位区间：螺栓 = 杆长（头部在支承面之后，不参与遮挡）；其余 = 自身高度
+        let axial = if index == 0 { bolt_l } else { item.height().unwrap_or(0.0) };
+        let kind = family_kind(&family).to_string();
+        placements.push(Placement {
+            family,
+            d,
+            l,
+            at,
+            rot_rad,
+            spec: spec_text,
+            view,
+            kind,
+            offset,
+            span: [offset, offset + axial],
+        });
         if index > 0 {
-            // 该件自身占用 offset 之后的空间
-            offset += item.height().unwrap_or(0.0);
+            // 该件自身占用 offset 之后的空间（螺栓是长度基准，不推进件链坐标）
+            offset += axial;
         }
     }
 
@@ -438,6 +482,295 @@ fn item_for(family: String, d: f64, l: Option<f64>) -> Result<JointItem, String>
     })
 }
 
+// ── 外形视图的遮挡裁剪 ─────────────────────────────────────────────────────
+//
+// 2D 装配（外形）视图里，被别的零件挡住的轮廓**不画**：螺母/垫圈套在螺杆上时，
+// 它们包住的那段螺杆轮廓线和螺纹细实线都要剪掉，只留露在遮挡件之外的部分。
+// 这些件在库里是整件块（块定义不能裁剪），所以裁剪在**生成几何之后、写块之前**做：
+// 被裁剪的件用一个带裁剪标记的块名（`…_CUT23.7x31.6`）建块，块定义本身即裁好的几何。
+
+/// 该件是不是"环形遮挡件"（螺母/垫圈：径向包住杆）。
+fn is_ring(kind: &str) -> bool {
+    matches!(kind, "nut" | "washer")
+}
+
+/// 该件是不是"被包住的杆件"。
+fn is_shaft(kind: &str) -> bool {
+    matches!(kind, "bolt")
+}
+
+/// 算出每件被遮挡的轴向区间（换算到该件的**局部** x 坐标，基点为 0）。
+///
+/// `outer_radii[i]` = 第 i 件**前段**（基点之后，即伸进件链的那部分）的径向半尺寸：
+/// 只有遮挡件的径向尺寸不小于被遮件时才算遮得住（否则轮廓会从旁边露出来，不能剪）。
+/// 用"前段"而不是整件 bbox，是因为螺栓的 bbox 被头部撑大（M8 头对角 15 > 弹垫外径
+/// 12.3），拿整件比会把弹垫误判成"遮不住杆"——它明明套在杆上。
+/// 返回的区间已按起点排序、合并重叠。
+pub fn hidden_spans(
+    placements: &[Placement],
+    parts: &[Vec<ocs_plugin_api::host::acadrust::EntityType>],
+) -> Vec<Vec<(f64, f64)>> {
+    let mut out: Vec<Vec<(f64, f64)>> = vec![Vec::new(); placements.len()];
+    for (i, covered) in placements.iter().enumerate() {
+        if !is_shaft(&covered.kind) {
+            continue;
+        }
+        let Some(shaft) = parts.get(i) else { continue };
+        let mut spans: Vec<(f64, f64)> = Vec::new();
+        for (j, cover) in placements.iter().enumerate() {
+            if i == j || !is_ring(&cover.kind) {
+                continue;
+            }
+            let Some(ring) = parts.get(j) else { continue };
+            // 两件轴向区间相交的部分 = 被遮住的那段（换算到被遮件的局部 x）
+            let a = covered.span[0].max(cover.span[0]) - covered.offset;
+            let b = covered.span[1].min(cover.span[1]) - covered.offset;
+            if b - a <= 1e-9 {
+                continue;
+            }
+            // 就地比粗细：环形件轮廓 ≥ 杆在这段窗口里的径向尺寸 → 挡得住
+            if silhouette_radius(ring) + 1e-9 >= window_radius(shaft, a, b) {
+                spans.push((a, b));
+            }
+        }
+        spans.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+        // 合并重叠
+        let mut merged: Vec<(f64, f64)> = Vec::new();
+        for (a, b) in spans {
+            match merged.last_mut() {
+                Some(last) if a <= last.1 + 1e-9 => last.1 = last.1.max(b),
+                _ => merged.push((a, b)),
+            }
+        }
+        out[i] = merged;
+    }
+    out
+}
+
+/// 一个实体的 y 方向半尺寸（含 |y| 极值）与 x 范围：轮廓求极值用。
+fn entity_bbox(entity: &ocs_plugin_api::host::acadrust::EntityType) -> Option<(f64, f64, f64)> {
+    use ocs_plugin_api::host::acadrust::EntityType;
+    match entity {
+        EntityType::Line(l) => Some((
+            l.start.x.min(l.end.x),
+            l.start.x.max(l.end.x),
+            l.start.y.abs().max(l.end.y.abs()),
+        )),
+        EntityType::Circle(c) => Some((
+            c.center.x - c.radius,
+            c.center.x + c.radius,
+            c.center.y.abs() + c.radius,
+        )),
+        EntityType::Arc(a) => {
+            // 弧只扫一段：用两端点 + 扫幅内的角度极值点近似 bbox（够判遮挡，不追求精确包围盒）
+            let (mut x0, mut x1) = (a.center.x, a.center.x);
+            let mut ymax = a.center.y.abs();
+            let a0 = a.start_angle;
+            let a1 = a.end_angle;
+            let sweep = {
+                let mut d = a1 - a0;
+                while d < 0.0 {
+                    d += std::f64::consts::TAU;
+                }
+                d
+            };
+            for t in [0.0, 1.0, 0.25, 0.5, 0.75] {
+                let ang = a0 + sweep * t;
+                let (x, y) = (
+                    a.center.x + a.radius * ang.cos(),
+                    a.center.y + a.radius * ang.sin(),
+                );
+                x0 = x0.min(x);
+                x1 = x1.max(x);
+                ymax = ymax.max(y.abs());
+            }
+            Some((x0, x1, ymax))
+        }
+        EntityType::LwPolyline(p) => {
+            let mut x0 = f64::INFINITY;
+            let mut x1 = f64::NEG_INFINITY;
+            let mut ymax: f64 = 0.0;
+            for v in &p.vertices {
+                x0 = x0.min(v.location.x);
+                x1 = x1.max(v.location.x);
+                ymax = ymax.max(v.location.y.abs());
+            }
+            if x0.is_finite() {
+                Some((x0, x1, ymax))
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+/// 件整体轮廓的径向半尺寸（螺母/垫圈的"能挡住多宽"）。
+///
+/// 环形件用它自己的轮廓极值——平垫 Ø16/2=8、弹垫 Ø12.3/2≈6.2、螺母对角 15/2=7.5。
+pub fn silhouette_radius(entities: &[ocs_plugin_api::host::acadrust::EntityType]) -> f64 {
+    entities
+        .iter()
+        .filter_map(entity_bbox)
+        .map(|(_, _, y)| y)
+        .fold(0.0f64, f64::max)
+}
+
+/// 被遮件在 x 窗口 `[lo, hi]`（件局部坐标）里的径向半尺寸——遮挡判据要"就地比粗细"。
+///
+/// 为什么不用件整体 bbox：螺栓整体 bbox 被头部撑大（M8 对角 15/2=7.5 > 弹垫 6.2），
+/// 拿整件比会把"明明套在杆上的弹垫"误判成遮不住；而且杆在窗口里其实只有 Ø8/2=4。
+pub fn window_radius(
+    entities: &[ocs_plugin_api::host::acadrust::EntityType],
+    lo: f64,
+    hi: f64,
+) -> f64 {
+    use ocs_plugin_api::host::acadrust::EntityType;
+    let mut r: f64 = 0.0;
+    for entity in entities {
+        let Some((x0, x1, y)) = entity_bbox(entity) else {
+            continue;
+        };
+        if matches!(entity, EntityType::Line(_)) {
+            // 直线：把 y 按 x 线性插值到窗口内（斜线只取窗口内那一段的极值）
+            if let EntityType::Line(l) = entity {
+                let (xa, ya, xb, yb) = if l.start.x <= l.end.x {
+                    (l.start.x, l.start.y, l.end.x, l.end.y)
+                } else {
+                    (l.end.x, l.end.y, l.start.x, l.start.y)
+                };
+                let at = |x: f64| {
+                    if (xb - xa).abs() < 1e-12 {
+                        ya.max(yb)
+                    } else {
+                        ya + (yb - ya) * (x - xa) / (xb - xa)
+                    }
+                };
+                if x1 < lo - 1e-9 || x0 > hi + 1e-9 {
+                    continue; // 不在窗口里
+                }
+                let a = at(xa.max(lo));
+                let b = at(xb.min(hi));
+                r = r.max(a.abs()).max(b.abs());
+            }
+            continue;
+        }
+        // 别的实体：整体落在窗口内才算进来，否则按"可能更宽"处理（保守 → 不轻易剪）
+        if lo - 1e-9 <= x0 && x1 <= hi + 1e-9 {
+            r = r.max(y);
+        } else if !(x1 < lo - 1e-9 || x0 > hi + 1e-9) {
+            r = r.max(y);
+        }
+    }
+    r
+}
+
+/// 裁剪标记（拼进块名，保证"同一裁剪"复用同一块、"不同裁剪"不互相污染）。
+pub fn cut_tag(spans: &[(f64, f64)]) -> String {
+    spans
+        .iter()
+        .map(|(a, b)| format!("{}x{}", trim(*a), trim(*b)))
+        .collect::<Vec<_>>()
+        .join("+")
+}
+
+/// 把一个件的几何按被遮挡区间裁剪（局部 x 坐标）。
+///
+/// - 直线：按 x 区间做减集 —— 整段被遮 → 删；一头被遮 → 截短；中间被遮 → 断成两段
+///   （斜线按参数插值取点，不改变方向）；
+/// - 圆弧/圆：整体落在遮挡区间内才删（保守，不切弧）；
+/// - **中心线层不动**（轴线是装配基准，要通长画）；
+/// - 其它实体（文字等）不动。
+pub fn clip_hidden(
+    entities: &[ocs_plugin_api::host::acadrust::EntityType],
+    spans: &[(f64, f64)],
+) -> (Vec<ocs_plugin_api::host::acadrust::EntityType>, usize) {
+    use ocs_plugin_api::host::acadrust::EntityType;
+    // 把 [x1, x2] 减去遮挡区间，返回还留下的子区间（按原方向）。
+    fn subtract(x1: f64, x2: f64, spans: &[(f64, f64)]) -> Vec<(f64, f64)> {
+        let (lo, hi) = if x1 <= x2 { (x1, x2) } else { (x2, x1) };
+        let mut pieces = vec![(lo, hi)];
+        for (a, b) in spans {
+            let mut next: Vec<(f64, f64)> = Vec::new();
+            for (p, q) in pieces {
+                let (a, b) = (*a, *b);
+                if b <= p + 1e-12 || a >= q - 1e-12 {
+                    next.push((p, q)); // 不重叠
+                    continue;
+                }
+                if a > p + 1e-12 {
+                    next.push((p, a.min(q)));
+                }
+                if b < q - 1e-12 {
+                    next.push((b.max(p), q));
+                }
+            }
+            pieces = next;
+        }
+        if x1 > x2 {
+            pieces.into_iter().map(|(p, q)| (q, p)).collect()
+        } else {
+            pieces
+        }
+    }
+
+    let mut out = Vec::with_capacity(entities.len());
+    let mut removed = 0usize;
+    for entity in entities {
+        let EntityType::Line(line) = entity else {
+            // 圆弧/圆等：只做"整体被遮则删"，不做部分裁剪
+            let hidden_whole = match entity {
+                EntityType::Arc(a) => {
+                    let (lo, hi) = (a.center.x - a.radius, a.center.x + a.radius);
+                    spans.iter().any(|(p, q)| *p <= lo + 1e-9 && hi <= *q + 1e-9)
+                }
+                EntityType::Circle(c) => {
+                    let (lo, hi) = (c.center.x - c.radius, c.center.x + c.radius);
+                    spans.iter().any(|(p, q)| *p <= lo + 1e-9 && hi <= *q + 1e-9)
+                }
+                _ => false,
+            };
+            if hidden_whole {
+                removed += 1;
+            } else {
+                out.push(entity.clone());
+            }
+            continue;
+        };
+        if line.common.layer == crate::partgen::LAYER_CENTER {
+            out.push(entity.clone()); // 轴线通长，不裁
+            continue;
+        }
+        let (x1, x2) = (line.start.x, line.end.x);
+        if spans.is_empty() {
+            out.push(entity.clone());
+            continue;
+        }
+        let pieces = subtract(x1, x2, spans);
+        if pieces.is_empty() {
+            removed += 1;
+            continue;
+        }
+        if pieces.len() == 1 && (pieces[0].0 - x1).abs() < 1e-12 && (pieces[0].1 - x2).abs() < 1e-12 {
+            out.push(entity.clone()); // 没被切到
+            continue;
+        }
+        for (p, q) in pieces {
+            if (q - p).abs() < 1e-9 {
+                continue; // 退化成点
+            }
+            let (t1, t2) = ((p - x1) / (x2 - x1), (q - x1) / (x2 - x1));
+            let mut piece = line.clone();
+            piece.start.x = p;
+            piece.end.x = q;
+            piece.start.y = line.start.y + (line.end.y - line.start.y) * t1;
+            piece.end.y = line.start.y + (line.end.y - line.start.y) * t2;
+            out.push(EntityType::Line(piece));
+        }
+    }
+    (out, removed)
+}
+
 fn number(raw: &str) -> Result<f64, String> {
     let value: f64 = raw
         .trim()
@@ -491,6 +824,197 @@ mod tests {
         assert!(JointSpec::parse("bolt=hex_bolt_c:8 plate=10").is_err());
         assert!(JointSpec::parse("at 0,0 plate=10").is_err());
         assert!(JointSpec::parse("at 0,0 bolt=nut_c41:8").is_err());
+    }
+
+    // ── 遮挡裁剪 ────────────────────────────────────────────────────────────
+
+    fn line_of(x1: f64, y1: f64, x2: f64, y2: f64, layer: &str) -> ocs_plugin_api::host::acadrust::EntityType {
+        use ocs_plugin_api::host::acadrust::{entities::Line as AcadLine, types::Vector3, EntityType};
+        let mut l = AcadLine::from_points(
+            Vector3::new(x1, y1, 0.0),
+            Vector3::new(x2, y2, 0.0),
+        );
+        l.common.layer = layer.to_string();
+        EntityType::Line(l)
+    }
+
+    /// 实际生成的 M8×35 全螺纹：取 y=±d/2 的杆轮廓线和 y=±dm/2 的螺纹细实线。
+    fn shank_segments(entities: &[ocs_plugin_api::host::acadrust::EntityType], y: f64) -> Vec<(f64, f64)> {
+        use ocs_plugin_api::host::acadrust::EntityType;
+        entities
+            .iter()
+            .filter_map(|e| match e {
+                EntityType::Line(l) if (l.start.y - y).abs() < 1e-9 && (l.end.y - y).abs() < 1e-9 => {
+                    Some((l.start.x.min(l.end.x), l.start.x.max(l.end.x)))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn clip_hidden_trims_partial_covered_and_keeps_center_line() {
+        use ocs_plugin_api::host::acadrust::EntityType;
+        let main = crate::partgen::LAYER_MAIN;
+        let center = crate::partgen::LAYER_CENTER;
+        let entities = vec![
+            line_of(4.2, 0.0, 5.8, 0.0, main),     // 整段落在遮挡区 → 删
+            line_of(0.0, 1.0, 10.0, 1.0, main),    // 跨遮挡区间 4~6 → 断成两段
+            line_of(0.0, 2.0, 5.0, 2.0, main),     // 尾巴被遮 → 截到 4
+            line_of(5.0, 3.0, 9.0, 3.0, main),     // 头被遮 → 从 6 起
+            line_of(7.0, 4.0, 7.0, -4.0, main),    // 竖线在遮挡区外 → 留
+            line_of(5.0, 5.0, 5.0, -5.0, main),    // 竖线在遮挡区内 → 删
+            line_of(-2.0, 0.0, 12.0, 0.0, center), // 轴线：通长不裁
+        ];
+        let (out, removed) = clip_hidden(&entities, &[(4.0, 6.0)]);
+        assert_eq!(removed, 2, "整段被遮 1 + 竖线在区内 1");
+        // 杆线：y=1 断成 [0,4]+[6,10]
+        let segs = shank_segments(&out, 1.0);
+        assert_eq!(segs.len(), 2, "{out:?}");
+        assert!(segs.contains(&(0.0, 4.0)) && segs.contains(&(6.0, 10.0)), "{segs:?}");
+        // y=2 → [0,4]；y=3 → [6,9]
+        assert_eq!(shank_segments(&out, 2.0), vec![(0.0, 4.0)]);
+        assert_eq!(shank_segments(&out, 3.0), vec![(6.0, 9.0)]);
+        // 轴线还在（原样两头）
+        let axis: Vec<(f64, f64)> = out
+            .iter()
+            .filter_map(|e| match e {
+                EntityType::Line(l) if l.common.layer == center => Some((l.start.x, l.end.x)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(axis, vec![(-2.0, 12.0)], "轴线必须通长");
+    }
+
+    #[test]
+    fn clip_hidden_drops_arc_fully_inside_but_keeps_partial() {
+        use ocs_plugin_api::host::acadrust::{
+            entities::Arc as AcadArc, types::Vector3, EntityType,
+        };
+        let arc = |cx: f64, r: f64| {
+            let mut a = AcadArc::from_center_radius_angles(
+                Vector3::new(cx, 0.0, 0.0),
+                r,
+                0.0,
+                std::f64::consts::PI,
+            );
+            a.common.layer = crate::partgen::LAYER_MAIN.to_string();
+            EntityType::Arc(a)
+        };
+        let (out, removed) = clip_hidden(&[arc(30.0, 1.0), arc(4.0, 1.0)], &[(28.0, 32.0)]);
+        assert_eq!(removed, 1, "只有完全落在遮挡区里的那条弧被删");
+        assert_eq!(out.len(), 1);
+    }
+
+    #[test]
+    fn hidden_spans_cover_shank_under_washer_and_nut() {
+        // 两板 20 + 平垫 1.6 + 弹垫 2.1 + 螺母 7.9 → 遮挡区间 [20, 31.6]（连续，合并成一段）
+        let spec = JointSpec::parse(
+            "at 0,0 bolt=hex_bolt_b_full:8 plate=10 plate=10 washer=washer_971:8 washer=washer_93:8 nut=nut_c41:8",
+        )
+        .unwrap();
+        let plan = plan(&spec).unwrap();
+        assert_eq!(plan.placements.len(), 4);
+        assert!(
+            (plan.placements[3].span[0] - 23.7).abs() < 1e-9
+                && (plan.placements[3].span[1] - 31.6).abs() < 1e-9,
+            "螺母占位 {:?}",
+            plan.placements[3].span
+        );
+        let parts: Vec<Vec<ocs_plugin_api::host::acadrust::EntityType>> = plan
+            .placements
+            .iter()
+            .map(|p| {
+                crate::partgen::generate(&p.family, p.d, p.l, &p.view)
+                    .unwrap()
+                    .entities
+            })
+            .collect();
+        // 轮廓径向：平垫 Ø16/2、弹垫 Ø12.3/2、螺母 15/2；杆在那段窗口里只有 Ø8/2=4
+        assert!((silhouette_radius(&parts[1]) - 8.0).abs() < 1e-9, "平垫 {:?}", silhouette_radius(&parts[1]));
+        assert!(silhouette_radius(&parts[2]) > 6.0, "弹垫 {:?}", silhouette_radius(&parts[2]));
+        assert!((window_radius(&parts[0], 20.0, 31.6) - 4.0).abs() < 1e-9, "杆在窗口里 {:?}", window_radius(&parts[0], 20.0, 31.6));
+        let spans = hidden_spans(&plan.placements, &parts);
+        assert_eq!(spans[0].len(), 1, "垫圈+螺母连续 → 合并成一段：{:?}", spans[0]);
+        assert!(
+            (spans[0][0].0 - 20.0).abs() < 1e-9 && (spans[0][0].1 - 31.6).abs() < 1e-9,
+            "螺栓杆被垫圈+螺母遮住 20~31.6，实得 {:?}",
+            spans[0]
+        );
+        for (i, s) in spans.iter().enumerate().skip(1) {
+            assert!(s.is_empty(), "第 {i} 件不该被遮：{s:?}");
+        }
+        assert_eq!(cut_tag(&spans[0]), "20x31.6");
+    }
+
+    #[test]
+    fn narrow_spring_washer_still_covers_the_shank() {
+        // 回归：M8 弹垫外径 Ø12.3 < 螺栓头对角 15 → 若拿"整件 bbox"比粗细会误判成遮不住，
+        // 实际它套在 Ø8 杆上，必须算遮得住。
+        let spec = JointSpec::parse("at 0,0 bolt=hex_bolt_b_full:8 plate=10 plate=10 washer=washer_93:8 nut=nut_c41:8")
+            .unwrap();
+        let plan = plan(&spec).unwrap();
+        let parts: Vec<Vec<ocs_plugin_api::host::acadrust::EntityType>> = plan
+            .placements
+            .iter()
+            .map(|p| {
+                crate::partgen::generate(&p.family, p.d, p.l, &p.view)
+                    .unwrap()
+                    .entities
+            })
+            .collect();
+        let spans = hidden_spans(&plan.placements, &parts);
+        assert_eq!(spans[0].len(), 1, "弹垫+螺母连续，合成一段：{:?}", spans[0]);
+        assert!((spans[0][0].0 - 20.0).abs() < 1e-9, "遮挡从板背面(20)起：{:?}", spans[0]);
+        // 弹垫 2.1 + 螺母 7.9 = 10 → 遮到 30.0
+        assert!((spans[0][0].1 - 30.0).abs() < 1e-9, "遮挡到螺母端面(30)：{:?}", spans[0]);
+    }
+
+    #[test]
+    fn clipped_bolt_keeps_the_exposed_thread_and_end_face() {
+        // 真实几何：M8×35 杆被 20~31.6 遮住后，露出的两段（0~20、31.6~34.925）都还在，
+        // 杆端倒角/端面竖线（x=35）和轴线保留，遮挡段内没有杆线。
+        use ocs_plugin_api::host::acadrust::EntityType;
+        let part = crate::partgen::generate("hex_bolt_b_full", 8.0, 35.0, "main").unwrap();
+        let spans = vec![(20.0, 31.6)];
+        let (out, removed) = clip_hidden(&part.entities, &spans);
+        assert_eq!(removed, 0, "杆线是跨区间的（断开而非删除），不该有整段被删");
+        assert!(
+            out.len() > part.entities.len(),
+            "断开后实体数应变多：{} → {}",
+            part.entities.len(),
+            out.len()
+        );
+        let y8 = shank_segments(&out, 4.0); // 杆轮廓 ±d/2
+        let yt = shank_segments(&out, 0.85 * 8.0 / 2.0); // 螺纹细实线 ±dm/2
+        for (label, segs) in [("杆线", &y8), ("螺纹线", &yt)] {
+            assert!(
+                segs.iter().any(|(_, b)| (*b - 20.0).abs() < 1e-9),
+                "{label} 应保留到 20（遮挡起点）：{segs:?}"
+            );
+            assert!(
+                segs.iter().any(|(a, b)| (*a - 31.6).abs() < 1e-9 && *b > 34.0),
+                "{label} 应保留 31.6~杆端：{segs:?}"
+            );
+            for (a, b) in segs {
+                let mid = (a + b) / 2.0;
+                assert!(!(20.0 < mid && mid < 31.6), "{label} 遮挡段里不该有线：{segs:?}");
+            }
+        }
+        // 杆轮廓从支承面（x=0）起；螺纹细实线从收尾之后（x=l−a）起
+        assert!(y8.iter().any(|(a, _)| a.abs() < 1e-9), "杆轮廓应从支承面起：{y8:?}");
+        assert!(yt.iter().all(|(a, _)| *a >= 1.0), "螺纹细实线不该画到头部里：{yt:?}");
+        // 端面竖线 x=35 与倒角竖线 x=34.925 保留，轴线通长
+        let verticals: Vec<f64> = out
+            .iter()
+            .filter_map(|e| match e {
+                EntityType::Line(l) if (l.start.x - l.end.x).abs() < 1e-9 => Some(l.start.x),
+                _ => None,
+            })
+            .collect();
+        assert!(verticals.iter().any(|x| (*x - 35.0).abs() < 1e-9), "{verticals:?}");
+        let (_, removed_all) = clip_hidden(&part.entities, &[]);
+        assert_eq!(removed_all, 0, "不给遮挡区间时不该动任何线");
     }
 
     #[test]

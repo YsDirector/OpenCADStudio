@@ -3327,11 +3327,48 @@ pub(crate) fn apply_joint(
     let plan = crate::joint::plan(&spec)?;
     begin_undo(sender, "OCSM 螺栓副")?;
     let doc = snapshot(sender)?;
-    let mut placed: Vec<serde_json::Value> = Vec::new();
+    // ① 先把整链几何都生成出来：遮挡裁剪要在写库之前算（裁剪后的几何才是块定义）
+    let mut parts: Vec<crate::partgen::GenPart> = Vec::new();
     for placement in &plan.placements {
-        let part = crate::partgen::generate(&placement.family, placement.d, placement.l, &placement.view)?;
-        let block = part_block_name(&placement.family, &part.meta.spec);
-        if !doc.block_records.iter().any(|b| b.name == block) {
+        parts.push(crate::partgen::generate(
+            &placement.family,
+            placement.d,
+            placement.l,
+            &placement.view,
+        )?);
+    }
+    let geometry: Vec<Vec<ocs_plugin_api::host::acadrust::EntityType>> =
+        parts.iter().map(|p| p.entities.clone()).collect();
+    let hidden = if spec.trim {
+        crate::joint::hidden_spans(&plan.placements, &geometry)
+    } else {
+        vec![Vec::new(); plan.placements.len()]
+    };
+    let mut known_blocks: std::collections::HashSet<String> =
+        doc.block_records.iter().map(|b| b.name.clone()).collect();
+    let mut trim_notes: Vec<String> = Vec::new();
+    let mut placed: Vec<serde_json::Value> = Vec::new();
+    for (index, placement) in plan.placements.iter().enumerate() {
+        let mut part = parts[index].clone();
+        let spans = old_hidden(&hidden, index);
+        if !spans.is_empty() {
+            let (clipped, removed) = crate::joint::clip_hidden(&part.entities, &spans);
+            part.entities = clipped;
+            let (name, _) = crate::partgen::family_meta(&placement.family);
+            let iv = spans
+                .iter()
+                .map(|(a, b)| format!("{}~{}", trim_num(*a), trim_num(*b)))
+                .collect::<Vec<_>>()
+                .join("、");
+            trim_notes.push(format!("{name} {} 被遮 {iv}", part.meta.spec));
+            let _ = removed;
+        }
+        let mut block = part_block_name(&placement.family, &part.meta.spec);
+        if !spans.is_empty() {
+            // 裁剪过的件用独立块名（块定义不能被裁，只能按裁剪档位各建一块）
+            block = format!("{block}_CUT{}", crate::joint::cut_tag(&spans));
+        }
+        if !known_blocks.contains(&block) {
             req_timed(
                 sender,
                 PluginRequest::AddBlockRecord {
@@ -3340,6 +3377,7 @@ pub(crate) fn apply_joint(
                 },
                 "AddBlockRecord",
             )?;
+            known_blocks.insert(block.clone());
         }
         let mut ins = acadrust::entities::Insert::new(
             &block,
@@ -3370,6 +3408,9 @@ pub(crate) fn apply_joint(
                     "code": part.meta.code,
                     "joint": true,
                     "bolt_l": plan.bolt_l,
+                    "block": block,
+                    // 被遮挡剪掉的区间（件链坐标，mm）：0 表示未裁剪
+                    "trimmed": spans,
                 })
                 .to_string(),
             ));
@@ -3383,12 +3424,19 @@ pub(crate) fn apply_joint(
                 "family": placement.family,
                 "spec": part.meta.spec,
                 "at": placement.at,
+                "block": block,
+                "trimmed": spans,
             }));
         }
     }
     req_timed(sender, PluginRequest::BumpGeometry, "BumpGeometry")?;
     mark_dirty(sender)?;
     commit_undo(sender);
+    // 报告里补一句遮挡裁剪（命令行日志要能审计"哪些线为什么没画"）
+    let mut report = plan.report.clone();
+    if !trim_notes.is_empty() {
+        report.push_str(&format!("｜遮挡裁剪 {}", trim_notes.join("；")));
+    }
     Ok(serde_json::json!({
         "ok": true,
         "at": spec.at,
@@ -3397,10 +3445,29 @@ pub(crate) fn apply_joint(
         "stack": plan.stack,
         "need": plan.need,
         "protrude_mm": plan.protrude_mm,
-        "report": plan.report,
+        "trim": spec.trim,
+        "trimmed": trim_notes,
+        "report": report,
         "placed": placed,
     })
     .to_string())
+}
+
+/// 取第 i 件的遮挡区间（没有就空）。
+fn old_hidden(hidden: &[Vec<(f64, f64)>], index: usize) -> Vec<(f64, f64)> {
+    hidden.get(index).cloned().unwrap_or_default()
+}
+
+/// 报告里用的数字文本（去尾零）。
+fn trim_num(v: f64) -> String {
+    let mut text = format!("{v:.3}");
+    while text.contains('.') && text.ends_with('0') {
+        text.pop();
+    }
+    if text.ends_with('.') {
+        text.pop();
+    }
+    text
 }
 
 fn api_part_export(body: &[u8], sender: &Arc<dyn PluginRequestSender>) -> (u16, &'static str, String) {
@@ -7303,6 +7370,34 @@ mod rough_tests {
         let undos = mock.undos();
         assert_eq!(undos.first().map(String::as_str), Some("begin:OCSM 螺栓副"), "{undos:?}");
         assert_eq!(undos.last().map(String::as_str), Some("commit"), "{undos:?}");
+
+        // 遮挡裁剪：螺母包住的那段杆（20~27.9）不画 → 螺栓块名带 _CUT、几何被断开
+        assert!(inserts[0].0.contains("_CUT20x27.9"), "螺栓块名应带裁剪标记：{}", inserts[0].0);
+        assert!(!inserts[1].0.contains("_CUT"), "螺母自己不被裁：{}", inserts[1].0);
+        let bolt = mock.block_entities(&inserts[0].0);
+        assert!(!bolt.is_empty(), "块定义里应有裁好的几何");
+        let plain = crate::partgen::generate("hex_bolt_b_full", 8.0, 35.0, "main").unwrap();
+        assert!(
+            bolt.len() > plain.entities.len(),
+            "裁剪后实体数应更多（杆线断成两段）：{} vs {}",
+            bolt.len(),
+            plain.entities.len()
+        );
+        use ocs_plugin_api::host::acadrust::EntityType;
+        let in_span: Vec<f64> = bolt
+            .iter()
+            .filter_map(|e| match e {
+                EntityType::Line(l) if l.common.layer != crate::partgen::LAYER_CENTER => {
+                    let mid = (l.start.x + l.end.x) / 2.0;
+                    (20.0 < mid && mid < 27.9).then_some(mid)
+                }
+                _ => None,
+            })
+            .collect();
+        assert!(in_span.is_empty(), "遮挡段里不该留线：{in_span:?}");
+        let report = value["report"].as_str().unwrap();
+        assert!(report.contains("遮挡裁剪"), "报告要写清裁剪：{report}");
+        assert!(report.contains("20~27.9"), "报告要有被遮区间：{report}");
     }
 
     #[test]
