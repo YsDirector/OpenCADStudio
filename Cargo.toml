@@ -13,6 +13,7 @@ members = [
     "crates/dwg-thumbnailer-win",
     "crates/ocs_ocsm",
     "crates/ocs_ocsm_mcp",
+    "crates/ocs_webpanel",
 ]
 
 [target.'cfg(windows)'.build-dependencies]

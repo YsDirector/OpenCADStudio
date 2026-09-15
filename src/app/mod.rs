@@ -684,6 +684,10 @@ pub(super) struct OpenCADStudio {
     render_mode_preview: Option<acadrust::entities::ViewportRenderMode>,
     /// Whether the Properties panel is shown on the left (PROPERTIES).
     show_properties: bool,
+    /// Is the host's dockable **web panel** slot visible? The host renders only
+    /// a placeholder there; a plugin docks a native web-view child window into
+    /// the rectangle this slot occupies (see `HostApi::web_panel_rect`).
+    show_web_panel: bool,
     /// Docked Insert Block panel visibility.
     pub(crate) show_block_palette: bool,
     /// General edge-stack dock layout for the side panels.
@@ -3645,6 +3649,7 @@ impl OpenCADStudio {
             render_mode_menu_open: false,
             render_mode_preview: None,
             show_properties: true,
+            show_web_panel: false,
             show_block_palette: false,
             block_palette: Default::default(),
             dock: Default::default(),

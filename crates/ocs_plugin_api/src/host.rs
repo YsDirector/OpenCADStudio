@@ -313,6 +313,35 @@ pub trait BuiltinPlugin: Send + Sync {
     fn on_load(&mut self, _host: &mut dyn HostApi) {}
 }
 
+/// API v7: the window-relative rectangle the host has reserved for its own
+/// dockable **web panel** (`PanelId::Web`), plus the host window's native
+/// handle. A plugin that embeds a real browser/web-view process (the host
+/// cannot render HTML itself) docks its child window into this slot.
+///
+/// All values are in **logical** pixels relative to the host window's client
+/// area; multiply by [`scale`](Self::scale) for the native pixel rectangle a
+/// child window must use.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct DockRect {
+    pub x: f32,
+    pub y: f32,
+    pub w: f32,
+    pub h: f32,
+    /// Device pixel ratio of the host window (1.0 = no HiDPI scaling).
+    pub scale: f64,
+    /// Native handle of the host window: for X11 this is the `XID`, on Windows
+    /// the `HWND`, on macOS 0 (no embeddable handle without a view pointer).
+    /// `0` means "not available" — the plugin should fall back to a plain
+    /// window instead of embedding.
+    pub window: u64,
+    /// The host window's size in the **same logical space** as `x/y/w/h`. A
+    /// native child window lives in device pixels, so the embedder compares
+    /// these against the real window size to recover the logical → device
+    /// factor (the host cannot know it: winit/iced own that mapping).
+    pub logical_w: f32,
+    pub logical_h: f32,
+}
+
 /// A point-driven interactive command a plugin starts via
 /// [`HostApi::start_interactive`]. The host shows the prompt, collects points —
 /// clicked in the viewport, or fed as coordinates over the `--serve` automation
@@ -922,6 +951,29 @@ pub trait HostApi {
     /// Close the transaction opened by [`begin_undo`](Self::begin_undo) and commit
     /// its entry. No-op by default (and when no transaction is open).
     fn commit_undo(&mut self) {}
+
+    // ── API v7 dockable web panel (appended at the end for vtable stability) ──
+
+    /// Show or hide the host's dockable **web panel** (`PanelId::Web`) — a
+    /// reserved edge column the host itself leaves empty (it cannot render
+    /// HTML). A plugin that embeds a native browser/web-view child window asks
+    /// for the slot here and then tracks it with
+    /// [`web_panel_rect`](Self::web_panel_rect), docking its window into the
+    /// returned rectangle.
+    ///
+    /// `side` is `"left"` or `"right"`; `None` keeps the current side. Returns
+    /// `true` when the layout changed.
+    fn set_web_panel_docked(&mut self, _docked: bool, _side: Option<&str>) -> bool {
+        false
+    }
+
+    /// The window-relative rectangle the host reserved for its web panel
+    /// (`None` = panel closed, not docked, or not laid out yet). Poll this
+    /// (e.g. a few times a second) while the panel is open — the host re-lays
+    /// out on window resizes, dock drags, side switches and collapses.
+    fn web_panel_rect(&self) -> Option<DockRect> {
+        None
+    }
 }
 
 /// Simplified, read-only entity kind exposed by [`DocumentReader`].

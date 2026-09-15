@@ -795,6 +795,73 @@ impl HostApi for HostSession<'_> {
         Ok(br_handle)
     }
 
+    /// API v7: dock / undock the host's reserved web-panel column. The host
+    /// renders only a placeholder there — a plugin docks its own web-view child
+    /// window into the rectangle reported by `web_panel_rect`.
+    fn set_web_panel_docked(&mut self, docked: bool, side: Option<&str>) -> bool {
+        use crate::app::config::DockSide;
+        use crate::ui::dock::PanelId;
+        let app = &mut *self.app;
+        let mut changed = false;
+        if docked {
+            app.dock.ensure_settings();
+            let want = match side {
+                Some("left") => DockSide::Left,
+                Some("right") => DockSide::Right,
+                _ => app
+                    .dock
+                    .location(PanelId::Web)
+                    .map(|(s, _)| s)
+                    .unwrap_or(DockSide::Right),
+            };
+            // `usize::MAX` appends — `dock()` clamps the index itself.
+            changed |= app.dock.dock(PanelId::Web, want, usize::MAX);
+        }
+        changed |= app.show_web_panel != docked;
+        app.show_web_panel = docked;
+        changed
+    }
+
+    /// API v7: the window-relative rectangle the web-panel slot occupies right
+    /// now. Computed from the same numbers the dock renderer uses (the edge
+    /// column's width and the canvas row's bounds), so it cannot drift from
+    /// what is actually on screen. `None` while the panel is closed or the
+    /// layout has not run yet.
+    fn web_panel_rect(&self) -> Option<ocs_plugin_api::host::DockRect> {
+        use crate::app::config::DockSide;
+        use crate::ui::dock::PanelId;
+        if !self.app.show_web_panel {
+            return None;
+        }
+        let (side, index) = self.app.dock.location(PanelId::Web)?;
+        // The column's **real** laid-out rectangle (reported by the view this
+        // frame) — never a cached window size, which lags WM-driven resizes and
+        // put the panel one column off.
+        let id = match side {
+            DockSide::Left => crate::app::view::DOCK_COLUMN_BOUNDS_LEFT,
+            DockSide::Right => crate::app::view::DOCK_COLUMN_BOUNDS_RIGHT,
+        };
+        let col = crate::ui::wrap_bar::dropdown_bounds(id)?;
+        // Several panels may share the column: the slot is 1/N of its height.
+        let slots = self.app.dock_visible_len(side).max(1) as f32;
+        let slot_h = col.height / slots;
+        let y = col.y + slot_h * index as f32;
+        if col.width < 8.0 || slot_h < 8.0 {
+            return None;
+        }
+        let (win_w, win_h) = self.app.win_size;
+        Some(ocs_plugin_api::host::DockRect {
+            x: col.x,
+            y,
+            w: col.width,
+            h: slot_h,
+            scale: 1.0,
+            window: 0,
+            logical_w: win_w,
+            logical_h: win_h,
+        })
+    }
+
     fn show_frame_picker(&mut self, frames: Vec<ocs_plugin_api::host::FrameItem>) -> bool {
         if frames.is_empty() {
             return false;

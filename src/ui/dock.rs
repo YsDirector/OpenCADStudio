@@ -41,14 +41,25 @@ pub enum DockMsg {
 pub enum PanelId {
     Properties,
     BlockPalette,
+    /// The host reserves this column for a **native web view** owned by a
+    /// plugin (the host cannot render HTML). Its content is a placeholder; a
+    /// plugin docks its own child window into the reported rectangle
+    /// (`HostApi::web_panel_rect`). Everything else — header chrome, drag to
+    /// another edge, width drag, auto-collapse, close — is the stock dock
+    /// behaviour, so it behaves exactly like Properties.
+    Web,
 }
 
 impl PanelId {
+    /// Every dockable panel, in stable order (settings healing iterates this).
+    pub const ALL: [PanelId; 3] = [PanelId::Properties, PanelId::BlockPalette, PanelId::Web];
+
     /// Localized-friendly display name used by the collapsed/edge chrome.
     pub fn title(self) -> &'static str {
         match self {
             PanelId::Properties => "Properties",
             PanelId::BlockPalette => "Block Palette",
+            PanelId::Web => "Web Panel",
         }
     }
 
@@ -57,6 +68,26 @@ impl PanelId {
         match self {
             PanelId::Properties => 250.0,
             PanelId::BlockPalette => 260.0,
+            // Web pages need room: most web apps stop being usable below
+            // ~600px, so the web panel starts wide.
+            PanelId::Web => 620.0,
+        }
+    }
+
+    /// Per-panel width ceiling. Web content (full web apps) legitimately wants
+    /// more than the palette-ish 600px default.
+    fn max_width(self) -> f32 {
+        match self {
+            PanelId::Web => 1600.0,
+            _ => DOCK_MAX_W,
+        }
+    }
+
+    /// Per-panel share of the window width the dock may ever take.
+    fn max_fraction(self) -> f32 {
+        match self {
+            PanelId::Web => 0.7,
+            _ => 0.45,
         }
     }
 }
@@ -131,7 +162,7 @@ impl DockState {
     /// resize never hit a missing configuration. Also a cheap heal for configs
     /// written by an older version.
     pub fn ensure_settings(&mut self) {
-        for id in [PanelId::Properties, PanelId::BlockPalette] {
+        for id in PanelId::ALL {
             self.panels.entry(id).or_insert_with(|| DockPanel::for_id(id));
         }
     }
@@ -155,9 +186,12 @@ impl DockState {
 
     /// Docked width for `id`, clamped to sane bounds.
     pub fn width(&self, id: PanelId, win_w: f32) -> f32 {
-        self.settings(id)
-            .width
-            .clamp(DOCK_MIN_W, DOCK_MAX_W.min(win_w * 0.45).max(DOCK_MIN_W))
+        self.settings(id).width.clamp(
+            DOCK_MIN_W,
+            id.max_width()
+                .min(win_w * id.max_fraction())
+                .max(DOCK_MIN_W),
+        )
     }
 
     pub fn auto_collapse(&self, id: PanelId) -> bool {
@@ -167,7 +201,7 @@ impl DockState {
     /// Set the persisted width, clamped.
     pub fn set_width(&mut self, id: PanelId, width: f32) {
         let entry = self.panels.entry(id).or_insert_with(|| DockPanel::for_id(id));
-        entry.width = width.clamp(DOCK_MIN_W, DOCK_MAX_W);
+        entry.width = width.clamp(DOCK_MIN_W, id.max_width());
     }
 
     /// Reset width to the panel's default.

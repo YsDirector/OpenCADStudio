@@ -816,6 +816,35 @@ impl HostApi for V4PluginHostApi {
         }
     }
 
+    fn set_web_panel_docked(&mut self, docked: bool, side: Option<&str>) -> bool {
+        match self.request(PluginRequest::SetWebPanelDocked {
+            docked,
+            side: side.map(|s| s.to_string()),
+        }) {
+            Ok(PluginResponse::Bool(b)) => b,
+            Ok(PluginResponse::Ok) => true,
+            Ok(other) => {
+                eprintln!("[plugin] unexpected SetWebPanelDocked response: {other:?}");
+                false
+            }
+            Err(e) => {
+                eprintln!("[plugin] SetWebPanelDocked failed: {e}");
+                false
+            }
+        }
+    }
+
+    fn web_panel_rect(&self) -> Option<crate::host::DockRect> {
+        match self.request(PluginRequest::WebPanelRect) {
+            Ok(PluginResponse::DockRect(r)) => r,
+            Ok(other) => {
+                eprintln!("[plugin] unexpected WebPanelRect response: {other:?}");
+                None
+            }
+            Err(_) => None,
+        }
+    }
+
     fn show_frame_picker(&mut self, frames: Vec<crate::host::FrameItem>) -> bool {
         match self.request(PluginRequest::ShowFramePicker(frames)) {
             Ok(PluginResponse::Bool(b)) => b,
