@@ -15,6 +15,7 @@
 //!   服务器把引导线替换为真实标注（7标注层 / OCSM_GB）并 REGEN。
 //! - `OCSMMCP`：确保标注更新服务器运行（独立 MCP 二进制经 TCP 桥接）。
 
+mod bom;
 mod detail_clip;
 mod dim2gb;
 mod guide_server;
@@ -44,12 +45,12 @@ static MANIFEST: PluginManifest = PluginManifest {
     description: "OCSM 初始化 + 数字键 1-10 快速图层 + 图框插入（TF）+ 智能标注（D）",
     api_version: ApiVersion { major: 5 },
     ribbon_order: 100,
-    xdata_apps: &[],
+    xdata_apps: &["OCSM_BOM"],
     command_prefixes: &[
         "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "TF", "OCSM",
         "OCSMFRAMEINIT", "OCSMFRAMEINSERT", "D", "OCSMPOWERDIM", "OCSMDIMGULIDE",
         "GDIM", "OCSMMCP", "OCSMRGH", "CC", "OCSMDIM2GB", "D2G", "OCSMEDIT", "ME",
-        "OCSMPART", "XL",
+        "OCSMPART", "XL", "OCSMBOM", "BOM", "OCSMBOMCFG", "BOMCFG",
     ],
 };
 
@@ -270,6 +271,17 @@ fn frame_dir() -> std::path::PathBuf {
         }
     }
     std::path::PathBuf::from("frame")
+}
+
+/// `OCSMBOM`/`BOM`/`OCSMBOMCFG`/`BOMCFG`（整行可能带参数，如 `BOM 30`）。
+fn is_bom_command(cmd: &str) -> bool {
+    let name = cmd
+        .trim()
+        .split_whitespace()
+        .next()
+        .unwrap_or_default()
+        .to_ascii_uppercase();
+    matches!(name.as_str(), "OCSMBOM" | "BOM" | "OCSMBOMCFG" | "BOMCFG")
 }
 
 struct OcsmPlugin;
@@ -737,6 +749,20 @@ impl BuiltinPlugin for OcsmPlugin {
             }
             "OCSMPART" | "XL" => {
                 self.cmd_parts(host);
+                true
+            }
+            // 明细表：建表/刷新（`BOM 30` = 本次首列 30 行）、配置（`BOMCFG 30`）
+            _ if is_bom_command(cmd) => {
+                let upper = cmd.trim().to_ascii_uppercase();
+                let (name, rest) = match upper.split_once(char::is_whitespace) {
+                    Some((n, r)) => (n.to_string(), r.trim().to_string()),
+                    None => (upper.clone(), String::new()),
+                };
+                if name == "OCSMBOMCFG" || name == "BOMCFG" {
+                    bom::cmd_bom_cfg(host, &rest);
+                } else {
+                    bom::cmd_bom(host, &rest);
+                }
                 true
             }
             "OCSMDIM2GB" | "D2G" => {

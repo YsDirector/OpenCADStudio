@@ -54,3 +54,25 @@ python3 tools/bom_template.py            # 生成 + 自检 + 同步 crates/ocs_o
 工具链坑（详见脚本头注释）：`dxf2dwg` 必须 `--as r2000`（r2004 写坏图层颜色 → 整片黑白）；
 不要用 OCS 做 DXF→DWG（acadrust 的 DXF 读入不读 ATTDEF 的样式/宽比/对齐）；
 LibreDWG 会丢 INSERT 上的 ATTRIB（块定义不受影响）。
+
+## 插件侧用法（三期 `OCSMBOM` / `BOM`，2026-09-15）
+
+* 目录：插件安装目录 `bom/`（环境变量 **`OCSM_BOM_DIR`** 可覆盖），与 `frame/`、`parts/` 同一套路。
+  插件只读 **`OCSM_BOMHEAD.dwg`**、**`OCSM_BOMROW.dwg`**（单块文件：模型空间即该块内容，
+  走宿主 `import_frame_block` 定义块 → 拿回行块 8 个 ATTDEF 的几何/样式）。
+  `明细表模板.dwg` 是给人看/审阅的组合版（2 个块定义 + 示例行），插件不用它。
+* 命令：
+  * `BOM` / `OCSMBOM [每列行数]` —— 扫全图 `OCSM_PART` → 按代号+材料聚合 → 建表/刷新；
+    省略参数时用配置里的默认值（只对本次生效的可选参数）。
+  * `BOMCFG [每列行数]` / `OCSMBOMCFG` —— 查看/修改默认值，写 `bom/settings.json`。
+* 配置 `bom/settings.json`（首次运行自动生成）：
+  ```json
+  { "per_col_rows": 26, "first_col_bottom": 45.0, "first_col_left": 210.0,
+    "sheet_bottom": 0.0, "sheet_left": 0.0, "sheet_top": 287.0 }
+  ```
+  A3 通用图框：内框 x 0..390 / y 0..287，标题栏顶 y=45；首列贴标题栏，续列贴图框内下边线。
+* 布局：自下而上填写；首列 `per_col_rows` 行写满 → 左边紧贴另起一列（x −= 180）**自带整套表头**；
+  序号全表连续；所有列都放不下时**报错**并提示换图幅 / 多页明细表。
+* 刷新 = 替换语义：一次 `PushUndo` → 删掉所有带 `OCSM_BOM` 记录的旧表元 → 重建（Ctrl+Z 整体撤销）。
+* 数量口径：**按图中插入件数**统计（同一零件多视图会重复计数，命令会提示）；离线生成的文件没有
+  `OCSM_PART` 台账 → 命令会提示"有 N 个 OCSM_ 零件块缺台账"。

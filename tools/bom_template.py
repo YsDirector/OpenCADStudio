@@ -211,6 +211,23 @@ def add_sample(msp, doc: ezdxf.document.Drawing, at=(TB_LEFT, TB_TOP)) -> None:
                 attr.dxf.align_point = Vec3(ap) + shift
 
 
+def export_single_block(doc: ezdxf.document.Drawing, block_name: str,
+                        out_dxf: Path, out_dwg: Path) -> Path:
+    """把某个块定义的图元放到**模型空间**单独出一份 DWG。
+
+    插件侧 `host.import_frame_block(path, block_name)` 是「按模型的图元定义一个块」，
+    所以每个块要一份自己的文件（组合模板 `明细表模板.dwg` 是给人看/审阅用的）。
+    """
+    d2 = ezdxf.new("R2000")
+    ensure_tables(d2)
+    for e in doc.blocks.get(block_name):
+        d2.modelspace().add_entity(e.copy())
+    d2.header["$EXTMIN"] = (X[0], 0.0, 0.0)
+    d2.header["$EXTMAX"] = (X[-1], HEADER_H if block_name == HEAD_BLOCK else ROW_H, 0.0)
+    write_dxf(d2, out_dxf)
+    return to_dwg(out_dxf, out_dwg)
+
+
 def write_dxf(doc: ezdxf.document.Drawing, path: Path) -> Path:
     doc.encoding = "gb2312"
     doc.saveas(path)
@@ -340,10 +357,14 @@ def verify(dxf: Path, strict_attribs: bool = True, encoding: str = "utf-8") -> l
         bad.append("OCSM_GB 样式缺 font")
 
     # 前公司/旧环境残留守卫（用户 2026-09-15：图框是通用图框，不能带 ZWCAD/PCCAD/前公司命名）
-    try:
-        raw = dxf.read_bytes()
-    except Exception:
-        raw = b""
+    bad.extend(guard_junk(dxf))
+    return bad
+
+
+def guard_junk(path: Path) -> list[str]:
+    """前公司/旧环境残留守卫：图框/模板/块文件都必须是通用件（用户 2026-09-15）。"""
+    bad: list[str] = []
+    raw = path.read_bytes()
     for enc in ("utf-8", "gb2312", "utf-16-le"):
         text = raw.decode(enc, errors="ignore")
         for needle in ("[redacted]", "[redacted]", "Zwm", "ZWM", "PCCAD", "TH_Paper"):
@@ -379,6 +400,11 @@ def main(argv: list[str] | None = None) -> int:
     doc.header["$EXTMAX"] = (ext[2], ext[3], 0.0)
     tpl_dxf = write_dxf(doc, out / "明细表模板.dxf")
     tpl_dwg = to_dwg(tpl_dxf, out / "明细表模板.dwg")
+    # ①b 插件用单块文件（import_frame_block 按「模型空间图元」定义块）
+    single = [
+        export_single_block(doc, HEAD_BLOCK, out / f"{HEAD_BLOCK}.dxf", out / f"{HEAD_BLOCK}.dwg"),
+        export_single_block(doc, ROW_BLOCK, out / f"{ROW_BLOCK}.dxf", out / f"{ROW_BLOCK}.dwg"),
+    ]
 
     # ② 图框 + 明细表（审阅/截图）
     fdoc = ezdxf.readfile(Path(args.frame) if args.frame else frame_dxf(tmp), encoding="utf-8")
@@ -402,13 +428,25 @@ def main(argv: list[str] | None = None) -> int:
         Path(__file__).resolve().parent.parent / "crates/ocs_ocsm/bom")
     if str(repo_out) not in ("", "."):
         repo_out.mkdir(parents=True, exist_ok=True)
-        for f in (tpl_dwg, tpl_dxf):
+        for f in (tpl_dwg, tpl_dxf, *single):
             (repo_out / f.name).write_bytes(f.read_bytes())
         print(f"仓库副本 : {repo_out}")
 
     # ④ 自检：源 DXF 严格（含示例 ATTRIB），DWG 读回放宽（LibreDWG 丢 INSERT 属性）
     problems = (verify(tpl_dxf, strict_attribs=True, encoding="gb2312")
                 + verify(read_back(tpl_dwg, tmp), strict_attribs=False))
+    for f in single:
+        doc_s = ezdxf.readfile(f.with_suffix(".dxf"), encoding="gb2312")
+        bad = guard_junk(f)
+        if bad:
+            problems.append(f"{f.name}: 残留 {bad}")
+        n_ad = sum(1 for e in doc_s.modelspace() if e.dxftype() == "ATTDEF")
+        n_ln = sum(1 for e in doc_s.modelspace() if e.dxftype() == "LINE")
+        want_ad = 8 if "ROW" in f.name else 0
+        if n_ad != want_ad:
+            problems.append(f"{f.name}: ATTDEF {n_ad} != {want_ad}")
+        if n_ln < 5:
+            problems.append(f"{f.name}: LINE 少（{n_ln}）")
     print(f"模板 : {tpl_dwg}")
     print(f"图框 : {demo_dwg}")
     if problems:
