@@ -338,6 +338,18 @@ def verify(dxf: Path, strict_attribs: bool = True, encoding: str = "utf-8") -> l
 
     if doc.styles.get(STYLE).dxf.font.strip() == "":
         bad.append("OCSM_GB 样式缺 font")
+
+    # 前公司/旧环境残留守卫（用户 2026-09-15：图框是通用图框，不能带 ZWCAD/PCCAD/前公司命名）
+    try:
+        raw = dxf.read_bytes()
+    except Exception:
+        raw = b""
+    for enc in ("utf-8", "gb2312", "utf-16-le"):
+        text = raw.decode(enc, errors="ignore")
+        for needle in ("[redacted]", "[redacted]", "Zwm", "ZWM", "PCCAD", "TH_Paper"):
+            if needle in text:
+                bad.append(f"检出旧环境残留串 {needle!r}（通用图框必须干净）")
+                break
     return bad
 
 
