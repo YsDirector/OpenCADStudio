@@ -845,8 +845,30 @@ impl HostApi for HostSession<'_> {
         // Several panels may share the column: the slot is 1/N of its height.
         let slots = self.app.dock_visible_len(side).max(1) as f32;
         let slot_h = col.height / slots;
-        let y = col.y + slot_h * index as f32;
+        let slot_y = col.y + slot_h * index as f32;
         if col.width < 8.0 || slot_h < 8.0 {
+            return None;
+        }
+        // The host draws its own header (title + pin + close) on top of every
+        // expanded panel; the web view must start **below** it or it swallows
+        // those buttons. The placeholder's own bounds sit exactly in the content
+        // area, so their offset from the slot's top *is* the header height —
+        // self-calibrating, with a constant fallback.
+        const HEADER_FALLBACK: f32 = 26.0;
+        let header = crate::ui::wrap_bar::dropdown_bounds(crate::app::view::WEB_PANEL_BOUNDS_ID)
+            .filter(|r| {
+                r.width >= 8.0
+                    && r.height >= 8.0
+                    && r.y >= slot_y - 1.0
+                    && r.y <= slot_y + slot_h
+                    && r.y + r.height <= col.y + col.height + 1.0
+            })
+            .map(|r| r.y - slot_y)
+            .filter(|h| *h >= 0.0 && *h < slot_h * 0.5)
+            .unwrap_or(HEADER_FALLBACK);
+        let y = slot_y + header;
+        let h = slot_h - header;
+        if h < 8.0 {
             return None;
         }
         let (win_w, win_h) = self.app.win_size;
@@ -854,7 +876,7 @@ impl HostApi for HostSession<'_> {
             x: col.x,
             y,
             w: col.width,
-            h: slot_h,
+            h,
             scale: 1.0,
             window: 0,
             logical_w: win_w,
