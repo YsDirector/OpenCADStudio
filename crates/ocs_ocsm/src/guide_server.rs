@@ -187,6 +187,10 @@ fn route(
         ("GET", t) if t.starts_with("/api/parts") => {
             (200, json, crate::partgen::catalog_json())
         }
+        ("GET", t) if t == "/manual" || t.starts_with("/manual?") => {
+            (200, "text/html; charset=utf-8", MANUAL_HTML.to_string())
+        }
+        ("GET", t) if t.starts_with("/api/manual") => api_manual(t),
         ("GET", t) if t == "/joint" || t.starts_with("/joint?") => {
             (200, "text/html; charset=utf-8", JOINT_HTML.to_string())
         }
@@ -3431,6 +3435,201 @@ pub(crate) fn apply_joint(
     .to_string())
 }
 
+/// 人类侧的**命令目录**（窗口左侧那个总表）：一句话 + 别名。
+/// 这是"插件自带"的部分——手册 md 没装也能看命令清单。
+pub const COMMAND_CATALOG: &[(&str, &str, &str)] = &[
+    ("OCSM", "", "初始化：建图层/线型/文字样式/标注样式（并打开零件库窗口）"),
+    ("1 … 10", "数字键", "切当前图层；有选中对象时把对象移到该层"),
+    ("OCSMFRAMEINIT", "TF", "打开图框选择窗口（插件目录 frame/*.dwg）"),
+    ("OCSMFRAMEINSERT", "", "按所选图框 + 比例插入（光标跟随，比例感知标注样式）"),
+    ("OCSMPART", "XL", "标准件插入：不带参数=开零件库窗口+放置态；带参数=一行直插"),
+    ("OCSMJOINT", "", "螺栓副装配：不带参数=开装配窗口+放置态；带参数=一行直装（件链算长度、遮挡裁剪、一次撤销）"),
+    ("OCSMPOWERDIM", "D", "智能标注：拾取点模式标线性/对齐/半径/直径（Enter 切线段点选）"),
+    ("OCSMDIMGULIDE", "GDIM", "引导线标注：选引导线 → 配置窗口（尺寸/剖视/向视/局部放大/角度/弧长/焊接/引线/公差/粗糙度/形位公差）"),
+    ("OCSMEDIT", "ME", "改标注：选中 OCSM 生成的标注 → 配置窗口改参数 → 重生成"),
+    ("OCSMRGH", "CC", "表面粗糙度：点选插入点 → 配置窗口（匿名块 + ATTDEF）"),
+    ("OCSMDIM2GB", "D2G", "一键转国标：原生标注 → OCSM_GB 样式 + 匿名块"),
+    ("OCSMBOM", "BOM", "明细表：建表/刷新（BOM 30 = 本次首列 30 行）"),
+    ("OCSMBOMCFG", "BOMCFG", "明细表配置（表头/列/格式）"),
+    ("OCSMMCP", "", "打印 MCP/HTTP 接入信息（给外部 AI/脚本）"),
+    ("OCSMHELP", "OH", "打开本手册窗口（命令目录 + 操作教程）"),
+];
+
+/// 手册 md 的搜索目录（按优先级）：
+/// ① 环境变量 `OCSM_MANUAL_DIR`；② 用户级 skill 目录（默认分发形态）；
+/// ③ 仓库内 `crates/ocs_ocsm/handbook`（开发期）。
+pub fn manual_dirs() -> Vec<std::path::PathBuf> {
+    let mut out: Vec<std::path::PathBuf> = Vec::new();
+    if let Ok(dir) = std::env::var("OCSM_MANUAL_DIR") {
+        if !dir.trim().is_empty() {
+            out.push(std::path::PathBuf::from(dir));
+        }
+    }
+    if let Ok(home) = std::env::var("HOME") {
+        let home = std::path::PathBuf::from(home);
+        out.push(home.join(".agents/skills/ocsm-manual/manual"));
+        out.push(home.join(".pi/agent/skills/ocsm-manual/manual"));
+    }
+    out.push(std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("handbook"));
+    out
+}
+
+/// 目录清单（跳过非 md、按文件名排序；标题取文件首个 `# ` 行）。
+pub fn manual_topics_in(dir: &std::path::Path) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = Vec::new();
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return out;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|x| x.to_str()).map(|x| x.eq_ignore_ascii_case("md")) != Some(true) {
+            continue;
+        }
+        let Some(stem) = path.file_stem().and_then(|x| x.to_str()) else { continue };
+        let title = std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|text| {
+                text.lines()
+                    .find(|l| l.trim_start().starts_with("# "))
+                    .map(|l| l.trim_start_matches("# ").trim().to_string())
+            })
+            .unwrap_or_else(|| stem.to_string());
+        out.push((stem.to_string(), title));
+        if out.len() >= 200 {
+            break;
+        }
+    }
+    out.sort_by(|a, b| a.0.cmp(&b.0));
+    out
+}
+
+/// 按 slug 找 md：返回 (路径, 内容)。slug 只允许 `[A-Za-z0-9_-]` 与中文字符，
+/// 且不允许路径分隔符（防目录穿越）。
+pub fn find_manual(dirs: &[std::path::PathBuf], slug: &str) -> Option<(std::path::PathBuf, String)> {
+    if slug.is_empty()
+        || slug.contains('/')
+        || slug.contains('\\')
+        || slug.contains("..")
+        || slug.contains('\0')
+    {
+        return None;
+    }
+    for dir in dirs {
+        let path = dir.join(format!("{slug}.md"));
+        if let Ok(text) = std::fs::read_to_string(&path) {
+            return Some((path, text));
+        }
+    }
+    None
+}
+
+/// `GET /api/manual`（命令目录 + 手册主题）与 `GET /api/manual/md?slug=…`（正文）。
+fn api_manual(target: &str) -> (u16, &'static str, String) {
+    let json = "application/json; charset=utf-8";
+    let query = target.split_once('?').map(|(_, q)| q).unwrap_or("");
+    let dirs = manual_dirs();
+    if target.starts_with("/api/manual/md") {
+        let slug = query
+            .split('&')
+            .filter_map(|kv| kv.split_once('='))
+            .find(|(k, _)| *k == "slug")
+            .map(|(_, v)| urldecode(v))
+            .unwrap_or_default();
+        return match find_manual(&dirs, &slug) {
+            Some((path, md)) => (
+                200,
+                json,
+                serde_json::json!({ "ok": true, "slug": slug, "path": path.display().to_string(), "md": md })
+                    .to_string(),
+            ),
+            None => (
+                404,
+                json,
+                serde_json::json!({
+                    "ok": false,
+                    "error": format!("手册里没有「{slug}」这篇"),
+                    "searched": dirs.iter().map(|d| d.display().to_string()).collect::<Vec<_>>(),
+                    "hint": "把手册 md 放到 ~/.agents/skills/ocsm-manual/manual/，或用环境变量 OCSM_MANUAL_DIR 指定目录",
+                })
+                .to_string(),
+            ),
+        };
+    }
+    // 索引：命令目录 + 找到的每个手册目录的主题
+    let topics: Vec<serde_json::Value> = dirs
+        .iter()
+        .flat_map(|dir| {
+            manual_topics_in(dir)
+                .into_iter()
+                .map(|(slug, title)| {
+                    serde_json::json!({
+                        "slug": slug,
+                        "title": title,
+                        "dir": dir.display().to_string(),
+                    })
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    let groups: Vec<serde_json::Value> = vec![
+        serde_json::json!({ "name": "入门与总览", "prefix": "0" }),
+        serde_json::json!({ "name": "建图与插入", "prefix": "1" }),
+        serde_json::json!({ "name": "标注与符号", "prefix": "2" }),
+        serde_json::json!({ "name": "表格与自动化", "prefix": "3" }),
+        serde_json::json!({ "name": "机械制图知识", "prefix": "4" }),
+    ];
+    let commands: Vec<serde_json::Value> = COMMAND_CATALOG
+        .iter()
+        .map(|(name, alias, summary)| {
+            serde_json::json!({ "name": name, "alias": alias, "summary": summary })
+        })
+        .collect();
+    (
+        200,
+        json,
+        serde_json::json!({
+            "ok": true,
+            "commands": commands,
+            "topics": topics,
+            "groups": groups,
+            "dirs": dirs.iter().map(|d| d.display().to_string()).collect::<Vec<_>>(),
+        })
+        .to_string(),
+    )
+}
+
+fn urldecode(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'%' if i + 2 < bytes.len() => {
+                let hex = std::str::from_utf8(&bytes[i + 1..i + 3]).unwrap_or("");
+                match u8::from_str_radix(hex, 16) {
+                    Ok(b) => {
+                        out.push(b);
+                        i += 3;
+                    }
+                    Err(_) => {
+                        out.push(bytes[i]);
+                        i += 1;
+                    }
+                }
+            }
+            b'+' => {
+                out.push(b' ');
+                i += 1;
+            }
+            b => {
+                out.push(b);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).to_string()
+}
+
 /// `POST /api/joint_plan`：**只算不写文档** —— 给 GUI 做实时预览（SVG + 推理一行 + 数字）。
 ///
 /// 与 `apply_joint` 共用 `joint::plan` + `joint::build`，所以预览和落地必然一致。
@@ -5472,6 +5671,9 @@ const ROUGH_HTML: &str = include_str!("rough_gui.html");
 const PARTS_HTML: &str = include_str!("parts_gui.html");
 /// 螺栓副（件链装配）页：给人类用的 GUI（AI 走命令行/HTTP 同一套实现）。
 const JOINT_HTML: &str = include_str!("joint_gui.html");
+/// 命令手册页（人类侧命令目录 + 操作教程）：教程正文是**磁盘上的 md**（见 `manual_dirs()`），
+/// 与 AI 侧 skill（`~/.agents/skills/ocsm-manual/`）共用同一批文件，避免两份内容漂移。
+const MANUAL_HTML: &str = include_str!("manual_gui.html");
 
 #[cfg(test)]
 mod tests {
@@ -7489,6 +7691,58 @@ mod rough_tests {
         let report = value["report"].as_str().unwrap();
         assert!(report.contains("遮挡裁剪"), "报告要写清裁剪：{report}");
         assert!(report.contains("20~27.9"), "报告要有被遮区间：{report}");
+    }
+
+    #[test]
+    fn manual_page_and_catalog_expose_commands_and_topics() {
+        // 人类侧手册：页面关键控件在；命令目录非空；手册目录按优先级排好
+        let html = super::MANUAL_HTML;
+        for key in ["/api/manual", "/api/manual/md", "命令目录", "操作教程", "renderMd"] {
+            assert!(html.contains(key), "手册页缺 {key}");
+        }
+        assert!(super::COMMAND_CATALOG.iter().any(|(n, _, _)| *n == "OCSMJOINT"));
+        assert!(super::COMMAND_CATALOG.iter().any(|(n, _, _)| *n == "OCSMHELP"));
+        let dirs = super::manual_dirs();
+        assert!(!dirs.is_empty(), "至少要有仓库内的 handbook 兜底目录");
+        assert!(
+            dirs.iter().any(|d| d.ends_with("ocsm-manual/manual")),
+            "默认应搜索用户级 skill 目录：{dirs:?}"
+        );
+        // 索引端点：命令目录 + （磁盘上有手册时的）主题
+        let (code, _, body) = api_manual("/api/manual");
+        assert_eq!(code, 200);
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["ok"], true);
+        assert!(v["commands"].as_array().unwrap().len() >= 10, "{body}");
+        assert!(v["dirs"].as_array().unwrap().len() >= 1);
+    }
+
+    #[test]
+    fn manual_lookup_is_path_traversal_safe_and_reads_markdown() {
+        let dir = std::env::temp_dir().join(format!("ocsm-manual-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("00-总览.md"), "# 总览\n\n正文\n").unwrap();
+        let dirs = vec![dir.clone()];
+        // 正常命中，标题取首个 `# ` 行
+        let (path, md) = find_manual(&dirs, "00-总览").expect("应能命中");
+        assert!(path.ends_with("00-总览.md"));
+        assert!(md.contains("正文"));
+        let topics = manual_topics_in(&dir);
+        assert_eq!(topics.len(), 1);
+        assert_eq!(topics[0].1, "总览", "标题应取文件名后的 # 行");
+        // 目录穿越 / 不存在 → 一律 None
+        for bad in ["../secret", "..", "sub/dir", "nope", ""] {
+            assert!(find_manual(&dirs, bad).is_none(), "{bad} 不该命中");
+        }
+        // md 端点返回原文 + 路径；缺参数给 404 与提示
+        let (code, _, body) = api_manual("/api/manual/md?slug=00-%E6%80%BB%E8%A7%88");
+        let _ = (code, body); // 临时目录不在默认搜索路径里，这里只验证不 panic
+        let (code, _, body) = api_manual("/api/manual/md?slug=definitely-missing");
+        assert_eq!(code, 404);
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["ok"], false);
+        assert!(v["hint"].as_str().unwrap().contains("OCSM_MANUAL_DIR"), "{body}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

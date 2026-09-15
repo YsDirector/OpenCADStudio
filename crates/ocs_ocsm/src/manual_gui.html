@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>OCSM 命令手册</title>
+<style>
+  :root { color-scheme: light; }
+  body { font-family: "Helvetica Neue", "PingFang SC", "Microsoft YaHei", sans-serif;
+         margin: 14px; background: #f4f6f8; color: #222; }
+  h1 { font-size: 16px; margin: 0 0 10px; }
+  .wrap { display: flex; gap: 12px; align-items: flex-start; }
+  .card { background: #fff; border: 1px solid #d9dee5; border-radius: 8px; padding: 12px 14px; }
+  .left { width: 330px; flex: none; max-height: 84vh; overflow-y: auto; overflow-x: hidden; }
+  .right { flex: 1; min-width: 420px; max-height: 84vh; overflow: auto; }
+  .card h2 { font-size: 13px; margin: 0 0 8px; color: #555; }
+  .card h3 { font-size: 12px; margin: 14px 0 6px; color: #8a8f98; font-weight: 600;
+             text-transform: none; letter-spacing: .02em; }
+  .node { display: block; width: 100%; text-align: left; overflow-wrap: anywhere; border: none; background: transparent;
+          padding: 4px 6px; border-radius: 4px; cursor: pointer; font-size: 13px; line-height: 1.4;
+          color: #222; }
+  .node:hover { background: #eef3fb; }
+  .node.sel { background: #1e6fff; color: #fff; }
+  .node .sub { color: #8a8f98; font-size: 11.5px; display: block; margin-top: 1px; }
+  .node.sel .sub { color: #dce8ff; }
+  .cmdcard { border: 1px solid #eceff3; border-radius: 6px; padding: 6px 8px; margin-bottom: 6px;
+             overflow-wrap: anywhere; word-break: break-word; }
+  .cmdcard b { font-size: 13px; }
+  .cmdcard code { font-size: 12px; }
+  .cmdcard .sub { font-size: 12px; color: #666; margin-top: 2px; line-height: 1.45; }
+  #status { font-size: 12px; margin-top: 8px; min-height: 16px; }
+  .bad { color: #d1242f; } .ok { color: #1a7f37; } .hint { color: #888; font-size: 12px; line-height: 1.5; }
+  #md { font-size: 13.5px; line-height: 1.72; }
+  #md h1 { font-size: 17px; margin: 6px 0 10px; padding-bottom: 6px; border-bottom: 1px solid #e6eaef; }
+  #md h2 { font-size: 15px; margin: 18px 0 8px; padding-left: 8px; border-left: 3px solid #1e6fff; }
+  #md h3 { font-size: 13.5px; margin: 14px 0 6px; color: #333; }
+  #md p { margin: 6px 0; }
+  #md ul, #md ol { margin: 6px 0 6px 20px; padding: 0; }
+  #md li { margin: 3px 0; }
+  #md code { background: #f1f3f5; padding: 1px 4px; border-radius: 3px; font-size: 12.5px; }
+  #md pre { background: #f7f9fb; border: 1px solid #e6eaef; border-radius: 6px; padding: 8px 10px;
+            overflow-x: auto; }
+  #md pre code { background: transparent; padding: 0; }
+  #md table { border-collapse: collapse; margin: 8px 0; font-size: 12.5px; }
+  #md th, #md td { border: 1px solid #dfe4ea; padding: 4px 7px; text-align: left; vertical-align: top; }
+  #md th { background: #f6f8fa; }
+  #md blockquote { margin: 8px 0; padding: 6px 10px; background: #fbfaf3; border-left: 3px solid #e0c98a;
+                   color: #5c5540; }
+  #md a { color: #1e6fff; }
+  .path { font-size: 11.5px; color: #999; margin-top: 10px; word-break: break-all; }
+</style>
+</head>
+<body>
+<h1>OCSM 命令手册<span class="hint" id="src"></span></h1>
+
+<div class="wrap">
+  <div class="card left">
+    <h2>命令目录</h2>
+    <div id="cmds"></div>
+    <h2 style="margin-top:14px">操作教程 / 制图知识</h2>
+    <div id="topics"></div>
+    <div id="status"></div>
+    <div class="hint">
+      教程正文是磁盘上的 markdown（与 AI 用的 skill 手册**同一批文件**）。
+      搜索目录：<span id="dirs"></span>
+    </div>
+  </div>
+
+  <div class="card right">
+    <div id="md"><span class="hint">← 左侧点一个命令或主题；这里显示它的用法与步骤。</span></div>
+    <div class="path" id="path"></div>
+  </div>
+</div>
+
+<script>
+const el = (id) => document.getElementById(id);
+let topics = [];
+
+// ── 迷你 markdown 渲染（够用手册：标题/列表/表格/代码块/引用/粗体/行内码/链接）──
+function esc(s) {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+function inline(s) {
+  return esc(s)
+    .replace(/`([^`]+)`/g, "<code>$1</code>")
+    .replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>")
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>');
+}
+function renderMd(md) {
+  const lines = md.split(/\r?\n/);
+  let html = "", inCode = false, inList = false, inTable = false, inQuote = false;
+  const closeAll = () => {
+    if (inList) { html += "</ul>"; inList = false; }
+    if (inTable) { html += "</table>"; inTable = false; }
+    if (inQuote) { html += "</blockquote>"; inQuote = false; }
+  };
+  for (const raw of lines) {
+    const line = raw.replace(/\s+$/, "");
+    if (line.trim().startsWith("```")) {
+      if (inCode) { html += "</code></pre>"; inCode = false; }
+      else { closeAll(); html += "<pre><code>"; inCode = true; }
+      continue;
+    }
+    if (inCode) { html += esc(raw) + "\n"; continue; }
+    if (!line.trim()) { closeAll(); continue; }
+    const h = line.match(/^(#{1,4})\s+(.*)$/);
+    if (h) {
+      closeAll();
+      const lv = Math.min(h[1].length, 3);
+      html += "<h" + lv + ">" + inline(h[2]) + "</h" + lv + ">";
+      continue;
+    }
+    if (/^\s*[-*]\s+/.test(line)) {
+      if (!inList) { closeAll(); html += "<ul>"; inList = true; }
+      html += "<li>" + inline(line.replace(/^\s*[-*]\s+/, "")) + "</li>";
+      continue;
+    }
+    if (/^\s*\d+\.\s+/.test(line)) {
+      if (!inList) { closeAll(); html += "<ul>"; inList = true; }
+      html += "<li>" + inline(line.replace(/^\s*\d+\.\s+/, "")) + "</li>";
+      continue;
+    }
+    if (line.trim().startsWith("|")) {
+      const cells = line.trim().replace(/^\||\|$/g, "").split("|").map((c) => c.trim());
+      if (/^[-: ]+$/.test(cells.join(""))) continue;   // 分隔行
+      if (!inTable) {
+        closeAll();
+        html += "<table><tr>" + cells.map((c) => "<th>" + inline(c) + "</th>").join("") + "</tr>";
+        inTable = true;
+        // 首行后紧跟分隔行 → 首行是表头，已处理
+      } else {
+        html += "<tr>" + cells.map((c) => "<td>" + inline(c) + "</td>").join("") + "</tr>";
+      }
+      continue;
+    }
+    if (line.trim().startsWith(">")) {
+      if (!inQuote) { closeAll(); html += "<blockquote>"; inQuote = true; }
+      html += inline(line.replace(/^\s*>\s?/, "")) + "<br>";
+      continue;
+    }
+    closeAll();
+    html += "<p>" + inline(line) + "</p>";
+  }
+  closeAll();
+  if (inCode) html += "</code></pre>";
+  return html;
+}
+
+function selectNode(btn, slug, title) {
+  document.querySelectorAll(".node.sel").forEach((x) => x.classList.remove("sel"));
+  if (btn) btn.classList.add("sel");
+  loadTopic(slug, title);
+}
+
+async function loadTopic(slug, title) {
+  el("status").textContent = "读取中…";
+  el("status").className = "";
+  try {
+    const r = await fetch("/api/manual/md?slug=" + encodeURIComponent(slug));
+    const j = await r.json();
+    if (!j.ok) {
+      el("md").innerHTML = "<h2>" + esc(title || slug) + "</h2><p class='bad'>"
+        + esc(j.error || "读取失败") + "</p><p class='hint'>搜索目录：" + esc((j.searched || []).join("；"))
+        + "</p>";
+      el("path").textContent = "";
+      el("status").textContent = "未找到该主题的 md";
+      el("status").className = "bad";
+      return;
+    }
+    el("md").innerHTML = renderMd(j.md);
+    el("path").textContent = "来源：" + j.path;
+    el("status").textContent = "";
+  } catch (e) {
+    el("status").textContent = "请求失败：" + e;
+    el("status").className = "bad";
+  }
+}
+
+async function load() {
+  try {
+    const idx = await (await fetch("/api/manual")).json();
+    const cmds = el("cmds");
+    cmds.innerHTML = "";
+    (idx.commands || []).forEach((c) => {
+      const div = document.createElement("div");
+      div.className = "cmdcard";
+      div.innerHTML = "<b>" + esc(c.name) + "</b> "
+        + (c.alias ? '<code>' + esc(c.alias) + "</code>" : "")
+        + '<div class="sub">' + inline(c.summary) + "</div>";
+      cmds.appendChild(div);
+    });
+    topics = idx.topics || [];
+    const box = el("topics");
+    box.innerHTML = "";
+    if (!topics.length) {
+      box.innerHTML = '<div class="hint">没找到手册 md。把手册放到 <code>~/.agents/skills/ocsm-manual/manual/</code>，'
+        + "或用环境变量 <code>OCSM_MANUAL_DIR</code> 指定目录后重开本窗口。</div>";
+    }
+    topics.forEach((t) => {
+      const b = document.createElement("button");
+      b.className = "node";
+      b.innerHTML = esc(t.title) + '<span class="sub">' + esc(t.slug) + "</span>";
+      b.addEventListener("click", () => selectNode(b, t.slug, t.title));
+      box.appendChild(b);
+    });
+    el("dirs").textContent = (idx.dirs || []).join("；");
+    el("src").textContent = "　共 " + (idx.commands || []).length + " 条命令、" + topics.length + " 篇教程";
+    // 默认打开总览
+    const first = topics.find((t) => t.slug.startsWith("00")) || topics[0];
+    if (first) {
+      const btn = [...box.querySelectorAll(".node")][topics.indexOf(first)];
+      selectNode(btn, first.slug, first.title);
+    }
+  } catch (e) {
+    el("status").textContent = "初始化失败：" + e;
+    el("status").className = "bad";
+  }
+}
+
+// 心跳：告诉插件"手册窗口还开着"（避免重复开窗）；关闭时 bye=1
+function ping(bye) {
+  try { fetch("/api/page_ping?p=manual" + (bye ? "&bye=1" : ""), { cache: "no-store" }); } catch (e) {}
+}
+
+(async function init() {
+  ping(false);
+  setInterval(() => ping(false), 5000);
+  window.addEventListener("beforeunload", () => ping(true));
+  await load();
+})();
+</script>
+</body>
+</html>

@@ -51,7 +51,7 @@ static MANIFEST: PluginManifest = PluginManifest {
         "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "TF", "OCSM",
         "OCSMFRAMEINIT", "OCSMFRAMEINSERT", "D", "OCSMPOWERDIM", "OCSMDIMGULIDE",
         "GDIM", "OCSMMCP", "OCSMRGH", "CC", "OCSMDIM2GB", "D2G", "OCSMEDIT", "ME",
-        "OCSMPART", "XL", "OCSMJOINT", "OCSMBOM", "BOM", "OCSMBOMCFG", "BOMCFG",
+        "OCSMPART", "XL", "OCSMJOINT", "OCSMHELP", "OH", "OCSMBOM", "BOM", "OCSMBOMCFG", "BOMCFG",
     ],
 };
 
@@ -351,6 +351,11 @@ pub(crate) fn open_parts_window(port: u16) -> bool {
 /// 打开**螺栓副装配**窗口（人用 GUI；AI 走命令行/HTTP 同一实现）。
 pub(crate) fn open_joint_window(port: u16) -> bool {
     open_plugin_page(port, "/joint", "joint", 1080, 900)
+}
+
+/// 打开**命令手册**窗口（人类侧：命令目录 + 操作教程；教程 md 与 AI 的 skill 手册同一批文件）。
+pub(crate) fn open_manual_window(port: u16) -> bool {
+    open_plugin_page(port, "/manual", "manual", 1180, 940)
 }
 
 /// 用 chromium/chrome 的 `--app=` 打开独立窗口；成功返回 true。
@@ -1006,6 +1011,10 @@ impl BuiltinPlugin for OcsmPlugin {
                 true
             }
             // 按件链装配螺栓副（确定性执行器）：`OCSMJOINT at … bolt=… plate=… nut=…`
+            "OCSMHELP" | "OH" => {
+                self.cmd_help(host);
+                true
+            }
             "OCSMJOINT" => {
                 self.cmd_joint(host, rest);
                 true
@@ -1329,6 +1338,25 @@ impl OcsmPlugin {
         match crate::guide_server::apply_part_pick(&sender, spec.to_body().as_bytes()) {
             Ok(msg) => host.push_output(&format!("OCSM 标准件：{msg}")),
             Err(e) => host.push_error(&format!("OCSM 标准件插入失败：{e}")),
+        }
+    }
+
+    /// `OCSMHELP` / `OH`：打开命令手册窗口（命令目录 + 操作教程）。
+    ///
+    /// 教程正文是**磁盘上的 md**（`guide_server::manual_dirs()` 搜索：
+    /// `OCSM_MANUAL_DIR` → `~/.agents/skills/ocsm-manual/manual` → 仓库 `handbook/`），
+    /// 与 AI 侧 skill 共用同一批文件——改一处两边都更新。
+    fn cmd_help(&self, host: &mut dyn HostApi) {
+        let Some(port) = self.ensure_guide_server(host) else {
+            host.push_error("OCSMHELP: 无法启动手册服务（宿主不支持 worker 请求）。");
+            return;
+        };
+        if open_manual_window(port) {
+            host.push_info(
+                "OCSM 命令手册：已打开手册窗口（左侧命令目录 + 操作教程，教程正文来自磁盘上的手册 md）。",
+            );
+        } else {
+            host.push_info("OCSM 命令手册：手册窗口已打开（Alt+Tab 切换过去）。");
         }
     }
 
