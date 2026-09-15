@@ -403,7 +403,19 @@ impl OpenCADStudio {
             // user-generated message. Desktop only.
             #[cfg(not(target_arch = "wasm32"))]
             Message::DrainPluginRequests => {
-                for tab in 0..self.tabs.len() {
+                // Plugin→host requests come in two flavours: those carrying a tab
+                // id (routed to that tab's session) and those without one — the
+                // *unscoped* requests an out-of-process plugin sends from its own
+                // HTTP thread (`DocumentSnapshot` and friends). `v4::drain_requests`
+                // hands the unscoped ones to "the current session", so the session
+                // for the **active tab must be drained first**: with the old
+                // `0..tabs.len()` order they were all answered from tab 0, which
+                // made the plugin's HTTP surface operate on the startup drawing
+                // instead of the one the user is looking at.
+                let active = self.active_tab.min(self.tabs.len().saturating_sub(1));
+                let order = std::iter::once(active)
+                    .chain((0..self.tabs.len()).filter(|t| *t != active));
+                for tab in order {
                     let mut host = crate::app::plugin_host::HostSession::new(self, tab);
                     crate::plugin::external::with_manager(|mgr| {
                         mgr.drain_requests(&mut host, &mut |_| {});
