@@ -1986,11 +1986,17 @@ pub fn nut_section(d: f64, family: &str, row: &NutRow) -> Result<GenPart, String
     Ok(GenPart { entities: en, meta, bbox: [0.0, -e / 2.0, m, e / 2.0] })
 }
 
-/// ANSI31 图案填充（落在 `5剖面线层`）：边界为闭合折线，图案角 = 45° + angle（模板用法：0° 与 270°）。
+/// ANSI31 图案填充（落在 `5剖面线层`）：边界为闭合折线，`pattern_angle` 传度数（内部转弧度）。
 ///
-/// 注意：acadrust 的 `Hatch.pattern_angle` 存**弧度**（DXF 写出时才 `to_degrees()`，读入时 `to_radians()`，
-/// 见 `cadcodec/src/io/dxf/{writer/section_writer.rs,reader/section_reader.rs}`）——
-/// 曾写成度数，落图后图案被转了 15470°（ezdxf 读到 15469.86）。
+/// 三个单位/语义坑（都已按宿主实现校准，别再改回去）：
+/// 1. `Hatch.pattern_angle` 存**弧度**（DXF 写出时 `to_degrees()`、读入时 `to_radians()`）；
+///    写成度数 → 落图后图案被转 15470°。
+/// 2. `HatchPatternLine.angle` 也存**弧度**（DXF 53 是度）。
+/// 3. `HatchPatternLine.offset` 是**世界单位**的偏移向量，DXF 45/46 原样存。
+///    别写 PAT 文件里的 `0,.125`——宿主（OCS `scene/entity.rs::family_from_stored_line`）
+///    在有 `pattern.lines` 时**直接用这一条定义画线**（并把 offset 当世界单位），
+///    `0.125` 就变成 0.125 mm 间距 → 视觉上就是**实心填充**（用户实测就是这个现象）。
+///    这里用与用户模板逐位一致的值：offset 长度 = 3.175 mm（0.125″）→ 45° 斜线间距 3.175 mm。
 fn hatch_ansi31(verts: &[[f64; 2]], angle_deg: f64) -> EntityType {
     use ocs_plugin_api::host::acadrust::entities::hatch::{
         BoundaryPath, HatchPattern, HatchPatternLine,
@@ -2001,9 +2007,11 @@ fn hatch_ansi31(verts: &[[f64; 2]], angle_deg: f64) -> EntityType {
     let mut pat = HatchPattern::new("ANSI31");
     pat.description = "ANSI Iron, Brick, Stone masonry".into();
     pat.add_line(HatchPatternLine {
-        angle: 45.0,
+        // 45°（**弧度**）；pattern_angle 另存 0°/270° 以与模板 DXF 一致
+        angle: 45f64.to_radians(),
         base_point: Vector2::new(0.0, 0.0),
-        offset: Vector2::new(0.0, 0.125),
+        // 世界单位偏移（ANSI31 = 0.125″ = 3.175 mm 线间距）；与用户模板 45/46 逐位一致
+        offset: Vector2::new(-2.245064030267288, 2.245064030267288),
         dash_lengths: Vec::new(),
     });
     h.pattern = pat;
@@ -2900,6 +2908,55 @@ mod acm_ref_tests {
         assert_eq!(p.meta.code, "GB/T 120.1-2000");
         assert_eq!(p.meta.spec, "Ø20×40");
         assert!(pin_threaded(20.0, 10.0).unwrap_err().contains("长度应在"));
+    }
+
+    /// 剖面线图案定义必须与宿主渲染语义一致（防回归：曾把 PAT 文件的 `0,.125` 直接当 offset，
+    /// 宿主把 offset 当**世界单位** → 0.125 mm 间距 → 视觉上就是「实心填充」，用户实测如此）。
+    ///
+    /// 宿主侧换算见 `src/scene/entity.rs::family_from_stored_line`：
+    /// `dx = ox·cos a + oy·sin a`、`dy = −ox·sin a + oy·cos a`（a 为**弧度**）。
+    #[test]
+    fn hatch_pattern_lines_are_world_units() {
+        let sec = hex_nut(24.0, "nut_c41", NutView::Section).unwrap();
+        let pin = pin_threaded(20.0, 40.0).unwrap();
+        for (label, part) in [("nut_c41 剖视图", &sec), ("pin_1201 主视图", &pin)] {
+            let hats: Vec<&ocs_plugin_api::host::acadrust::entities::Hatch> = part
+                .entities
+                .iter()
+                .filter_map(|e| match e {
+                    EntityType::Hatch(h) => Some(h),
+                    _ => None,
+                })
+                .collect();
+            assert!(!hats.is_empty(), "{label} 应有剖面线");
+            for h in hats {
+                assert!(!h.is_solid, "{label} 不能是实心填充");
+                assert_eq!(h.pattern.lines.len(), 1, "{label} ANSI31 一条图案定义线");
+                let ln = &h.pattern.lines[0];
+                assert!(
+                    (ln.angle - std::f64::consts::FRAC_PI_4).abs() < 1e-12,
+                    "{label} 图案线角度存**弧度**（45°），实得 {}",
+                    ln.angle
+                );
+                assert!(
+                    (ln.offset.x + 2.245064030267288).abs() < 1e-12
+                        && (ln.offset.y - 2.245064030267288).abs() < 1e-12,
+                    "{label} offset 与模板 45/46 一致（世界单位），实得 {:?}",
+                    ln.offset
+                );
+                // 复现宿主换算：族偏移为 (沿线位移 dx, 垂直间距 dy)，应力 0 / 3.175 mm（0.125″）
+                let (ca, sa) = (ln.angle.cos(), ln.angle.sin());
+                let (dx, dy) = (
+                    ln.offset.x * ca + ln.offset.y * sa,
+                    -ln.offset.x * sa + ln.offset.y * ca,
+                );
+                assert!(dx.abs() < 1e-9, "{label} 沿线位移应为 0，实得 {dx}");
+                assert!(
+                    (dy - 3.175).abs() < 1e-9,
+                    "{label} 垂直间距应为 3.175 mm，实得 {dy}"
+                );
+            }
+        }
     }
 
     /// 销族数据表体检：规格数、长度递增、全规格可生成、模板实例在表内。

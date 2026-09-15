@@ -754,7 +754,90 @@ pub fn preview_svg(query: &str) -> Result<String, String> {
 
 // ── SVG 预览（选择器页 / 人工核对共用）────────────────────────────────────
 //
-// 按图层着色（1轮廓实线层=黑、2细线层=青、3中心线层=红点划线），自动适配包围盒。
+// 按图层着色（1轮廓实线层=黑、2细线层=青、3中心线层=红点划线、5剖面线层=暗金），自动适配包围盒。
+
+/// 剖面线边界路径 → 多边形顶点（Line / 带 bulge 多段线 / 圆弧按 8 段近似）。
+pub fn boundary_polygon(
+    path: &ocs_plugin_api::host::acadrust::entities::hatch::BoundaryPath,
+) -> Vec<(f64, f64)> {
+    use ocs_plugin_api::host::acadrust::entities::hatch::BoundaryEdge as BE;
+    let mut pts: Vec<(f64, f64)> = Vec::new();
+    for e in &path.edges {
+        match e {
+            BE::Line(l) => {
+                pts.push((l.start.x, l.start.y));
+                pts.push((l.end.x, l.end.y));
+            }
+            BE::Polyline(pe) => {
+                for v in &pe.vertices {
+                    pts.push((v.x, v.y));
+                }
+            }
+            BE::CircularArc(a) => {
+                for step in 0..=8 {
+                    let ang = a.start_angle + (a.end_angle - a.start_angle) * (step as f64 / 8.0);
+                    pts.push((a.center.x + a.radius * ang.cos(), a.center.y + a.radius * ang.sin()));
+                }
+            }
+            _ => {}
+        }
+    }
+    pts
+}
+
+/// 直线（过 `p0`、方向 `dir`）与闭合多边形的**偶数规则**内外区间裁剪。
+pub fn clip_line_to_polygon(
+    p0: (f64, f64),
+    dir: (f64, f64),
+    poly: &[(f64, f64)],
+) -> Vec<((f64, f64), (f64, f64))> {
+    let n = poly.len();
+    if n < 3 {
+        return Vec::new();
+    }
+    let mut ts: Vec<f64> = Vec::new();
+    for i in 0..n {
+        let (ax, ay) = poly[i];
+        let (bx, by) = poly[(i + 1) % n];
+        let (ex, ey) = (bx - ax, by - ay);
+        let den = dir.0 * ey - dir.1 * ex;
+        if den.abs() < 1e-12 {
+            continue; // 平行
+        }
+        // p0 + t·dir = a + s·e
+        let (rx, ry) = (ax - p0.0, ay - p0.1);
+        let t = (rx * ey - ry * ex) / den;
+        // s = cross(r, dir) / cross(dir, e)（与 t 同分母 den）；符号写反会得到错误的裁剪区间
+        let s = (rx * dir.1 - ry * dir.0) / den;
+        if (-1e-9..=1.0 + 1e-9).contains(&s) {
+            ts.push(t);
+        }
+    }
+    if ts.len() < 2 {
+        return Vec::new();
+    }
+    ts.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    // 去重：线正好穿过多边形顶点时，同一处会被相邻两条边各记一次（否则奇偶配对错位）
+    let mut uniq: Vec<f64> = Vec::with_capacity(ts.len());
+    for t in ts {
+        if uniq.last().is_none_or(|p| (t - p).abs() > 1e-7) {
+            uniq.push(t);
+        }
+    }
+    let mut segs = Vec::new();
+    let mut i = 0;
+    while i + 1 < uniq.len() {
+        let (t0, t1) = (uniq[i], uniq[i + 1]);
+        if t1 - t0 > 1e-9 {
+            segs.push((
+                (p0.0 + t0 * dir.0, p0.1 + t0 * dir.1),
+                (p0.0 + t1 * dir.0, p0.1 + t1 * dir.1),
+            ));
+        }
+        i += 2;
+    }
+    segs
+}
 
 /// 单个视图 → 独立 SVG（宽高像素由 `px_w`/`px_h` 控制）。
 pub fn to_svg(part: &GenPart, title: &str, px_w: f64, px_h: f64) -> String {
@@ -777,6 +860,8 @@ pub fn to_svg(part: &GenPart, title: &str, px_w: f64, px_h: f64) -> String {
             LAYER_CENTER => ("#d02020", "stroke-dasharray=\"10 3 3 3\""),
             // 4虚线层（不可见轮廓）
             "4虚线层" => ("#1040c0", "stroke-dasharray=\"9 4\""),
+            // 5剖面线层（Hatch 图形本体在各自分支里画，这里只备用）
+            "5剖面线层" => ("#b8860b", ""),
             _ => ("#111111", ""),
         };
         match e {
@@ -817,45 +902,48 @@ pub fn to_svg(part: &GenPart, title: &str, px_w: f64, px_h: f64) -> String {
                 ));
             }
             EntityType::Hatch(h) => {
-                // 预览：把边界画出来 + 半透明填充（图案线由 CAD 按 ANSI31 生成）
-                // 边界边支持 Line 与带 bulge 的 Polyline（120.1 局部剖的波浪线）；弧/样条边按端点连线近似。
+                // 预览：按 ANSI31 图案定义画**45° 剖面线**并裁剪到边界多边形内。
+                // 与宿主同语义（`scene/entity.rs::family_from_stored_line`）：`pattern.lines` 的
+                // angle 是弧度、offset 是世界单位偏移 → 预览与落图看到的一致（不再画半透明填充，
+                // 免得"预览看着像实心/落图是实心"误导人）。
                 for path in &h.paths {
-                    let mut pts: Vec<(f64, f64)> = Vec::new();
-                    for e in &path.edges {
-                        use ocs_plugin_api::host::acadrust::entities::hatch::BoundaryEdge as BE;
-                        match e {
-                            BE::Line(l) => {
-                                pts.push((l.start.x, l.start.y));
-                                pts.push((l.end.x, l.end.y));
-                            }
-                            BE::Polyline(pe) => {
-                                for v in &pe.vertices {
-                                    pts.push((v.x, v.y));
-                                }
-                            }
-                            BE::CircularArc(a) => {
-                                let c = a.center;
-                                for step in 0..=8 {
-                                    let t = step as f64 / 8.0;
-                                    let ang = a.start_angle + (a.end_angle - a.start_angle) * t;
-                                    pts.push((c.x + a.radius * ang.cos(), c.y + a.radius * ang.sin()));
-                                }
-                            }
-                            _ => {}
-                        }
+                    let poly = boundary_polygon(path);
+                    if poly.len() < 3 {
+                        continue;
                     }
-                    if pts.len() >= 3 {
-                        let d: Vec<String> = pts
-                            .iter()
-                            .enumerate()
-                            .map(|(i, (x, y))| {
-                                format!("{} {:.2} {:.2}", if i == 0 { "M" } else { "L" }, tx(*x), ty(*y))
-                            })
-                            .collect();
-                        out.push_str(&format!(
-                            "<path d=\"{} Z\" fill=\"#f0c040\" fill-opacity=\"0.35\" stroke=\"#c09000\" stroke-width=\"1\"/>",
-                            d.join(" ")
-                        ));
+                    let (mut x0, mut y0, mut x1, mut y1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
+                    for (x, y) in &poly {
+                        x0 = x0.min(*x);
+                        y0 = y0.min(*y);
+                        x1 = x1.max(*x);
+                        y1 = y1.max(*y);
+                    }
+                    for ln in &h.pattern.lines {
+                        let (ca, sa) = (ln.angle.cos(), ln.angle.sin());
+                        let dir = (ca, sa);
+                        let step = (ln.offset.x * ca + ln.offset.y * sa, -ln.offset.x * sa + ln.offset.y * ca);
+                        let space = step.0.hypot(step.1);
+                        if space < 1e-6 {
+                            continue;
+                        }
+                        // 沿线间距 step 排线，覆盖边界包围盒（投影到 step 方向）
+                        let ext = ((x1 - x0).hypot(y1 - y0)) + (x1 - x0).abs() + (y1 - y0).abs();
+                        let n = (ext / space).ceil().min(2000.0) as i64;
+                        let phase = if ln.base_point.x.abs() + ln.base_point.y.abs() > 1e-12 {
+                            ln.base_point.x * step.0 + ln.base_point.y * step.1
+                        } else {
+                            0.0
+                        };
+                        let k0 = -n - (phase / space).floor() as i64;
+                        for k in k0..=(k0 + 2 * n) {
+                            let (px, py) = (k as f64 * step.0, k as f64 * step.1);
+                            for (a, b) in clip_line_to_polygon((px, py), dir, &poly) {
+                                out.push_str(&format!(
+                                    "<line x1=\"{:.2}\" y1=\"{:.2}\" x2=\"{:.2}\" y2=\"{:.2}\" stroke=\"#b8860b\" stroke-width=\"1.1\"/>",
+                                    tx(a.0), ty(a.1), tx(b.0), ty(b.1)
+                                ));
+                            }
+                        }
                     }
                 }
             }
@@ -909,6 +997,32 @@ mod svg_dump {
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// 剖面线裁剪（预览用）：直线与闭合多边形的偶数规则区间。
+    #[test]
+    fn hatch_preview_clip_line_to_polygon() {
+        // 长方形 0..20 × 0..10
+        let poly = vec![(0.0, 0.0), (20.0, 0.0), (20.0, 10.0), (0.0, 10.0)];
+        // 水平线 y=2 穿过矩形
+        let segs = clip_line_to_polygon((0.0, 2.0), (1.0, 0.0), &poly);
+        assert_eq!(segs.len(), 1, "一条区间：{segs:?}");
+        let ((x0, y0), (x1, y1)) = segs[0];
+        assert!((x0 - 0.0).abs() < 1e-9 && (x1 - 20.0).abs() < 1e-9, "区间应为 0→20：{segs:?}");
+        assert!((y0 - 2.0).abs() < 1e-9 && (y1 - 2.0).abs() < 1e-9);
+        // 45° 线过原点：在矩形内的区间 = (0,0)→(10,10)
+        let segs = clip_line_to_polygon((0.0, 0.0), (std::f64::consts::FRAC_1_SQRT_2, std::f64::consts::FRAC_1_SQRT_2), &poly);
+        assert_eq!(segs.len(), 1, "{segs:?}");
+        let ((x0, y0), (x1, y1)) = segs[0];
+        assert!(x0.abs() < 1e-9 && y0.abs() < 1e-9 && (x1 - 10.0).abs() < 1e-9 && (y1 - 10.0).abs() < 1e-9, "{segs:?}");
+        // 完全在外的线：无区间
+        assert!(clip_line_to_polygon((0.0, 100.0), (1.0, 0.0), &poly).is_empty());
+        // 凹多边形（L 形）：横线穿两个区间
+        let l = vec![(0.0, 0.0), (10.0, 0.0), (10.0, 4.0), (4.0, 4.0), (4.0, 10.0), (0.0, 10.0)];
+        let segs = clip_line_to_polygon((0.0, 6.0), (1.0, 0.0), &l);
+        assert_eq!(segs.len(), 1, "L 形上半部只有 x∈[0,4]：{segs:?}");
+        let segs = clip_line_to_polygon((0.0, 2.0), (1.0, 0.0), &l);
+        assert_eq!(segs.len(), 1, "L 形下半部 x∈[0,10]：{segs:?}");
+    }
+
     /// 与用户提供的规范图逐条对齐（`六角头螺栓 C级 GBT5780-2016_主视图.dxf`，M5x25）。
     #[test]
     fn hex_bolt_c_main_view_matches_user_dxf() {
