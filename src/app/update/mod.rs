@@ -258,7 +258,10 @@ impl OpenCADStudio {
         }
         self.last_plugin_selection = Some(key);
         let handles = self.tabs[i].scene.selected_handles_in_order();
-        crate::plugin::v4_support::publish_selection_changed_v4(tab_id, handles);
+        crate::plugin::v4_support::publish_selection_changed_v4(tab_id, handles.clone());
+        // Automation clients get the same signal as an event (and a
+        // `selection_revision` counter in `state`) instead of polling.
+        self.control_record_selection_event(&handles);
     }
 
     pub fn update(&mut self, msg: Message) -> Task<Message> {
