@@ -241,18 +241,22 @@ const MIN_CELL_TEXT_H: f64 = 2.0;
 /// 压缩后的**最小宽度因子**（横向挤压的下限）。
 const MIN_WIDTH_FACTOR: f64 = 0.6;
 /// 单元格左右留白合计（mm）：可用宽度 = 列宽 − 这个值。
-const CELL_PADDING: f64 = 1.0;
-
-/// 单字**自然宽度**（em 倍数）：中日韩 1.0、拉丁/数字/空格 0.7。
 ///
-/// 这两个数按明细表模板（`OCSM_BOM_G` 字型 / 字高 5、宽比 0.7）**实测校准**：
-/// `GB/T 5780-2016` 14 字符 ≈ 31 mm、`0.018` 5 字符 ≈ 12 mm —— 与图上量到的尺寸一致。
-/// （引线/焊接那套 0.414 是另一个字型的比例，别混用。）
+/// 2.5 mm = 每侧 1.25 mm。别调太小（1.0 时压缩后的文字会顶满格子，看着像压到邻格）。
+const CELL_PADDING: f64 = 2.5;
+
+/// 单字**自然宽度**（em 倍数）：中日韩 1.15、拉丁/数字/空格 0.8。
+///
+/// 按明细表模板（字型 `OCSM_GB`、字高 5、宽比 0.7）**在图上像素实测校准**：
+/// 拉丁串 `GB/T 5780-2016` ≈ 0.73 em/字（模型 0.8 → 略保守），
+/// 而中日韩混排（`六角头螺栓 C级 M8x35`）实测比 1.0 em 宽约 15% —— 所以取 **1.15**。
+/// 宁可算宽一点（多压一点、留出边距），也别算窄（压不够就顶到格线）。
+/// （引线/焊接标注那套 0.414/0.7 是另一个字型的比例，别混用。）
 fn char_em(c: char) -> f64 {
     if (c as u32) >= 0x2E80 {
-        1.0
+        1.15
     } else {
-        0.7
+        0.8
     }
 }
 
@@ -1353,15 +1357,16 @@ mod tests {
         assert_eq!(fit_cell_text("1", 10.0, h0, wf0), (h0, wf0, false));
         // 用户实况①：`名称 六角头螺栓 C级 M8x35` 在 33mm 格里 → 压字高（宽比不变）
         let name = "六角头螺栓 C级 M8x35";
-        let (h, wf, over) = fit_cell_text(name, 33.0 - CELL_PADDING, h0, wf0);
+        let avail_name = 33.0 - CELL_PADDING;
+        let (h, wf, over) = fit_cell_text(name, avail_name, h0, wf0);
         assert!(h < h0 && (wf - wf0).abs() < 1e-9, "应先只压字高：h={h} wf={wf}");
         assert!(!over);
-        assert!(cell_text_width(name, h, wf) <= 33.0 - CELL_PADDING + 1e-9);
+        assert!(cell_text_width(name, h, wf) <= avail_name + 1e-9);
         // 用户实况②：`0.018` 在 10mm 格（单重）→ 也要压
         let (h2, _, over2) = fit_cell_text("0.018", 10.0, h0, wf0);
         assert!(h2 < h0 && !over2, "h={h2}");
-        // 图号 `GB/T 5780-2016` 在 36mm 格里本来就放得下 → 不动
-        assert_eq!(fit_cell_text("GB/T 5780-2016", 36.0, h0, wf0), (h0, wf0, false));
+        // 图号 `GB/T 5780-2016` 在**够宽的**格里不动（37mm 列 → 可用 34.5）
+        assert_eq!(fit_cell_text("GB/T 5780-2016", 40.0, h0, wf0), (h0, wf0, false));
         // 极长（60 个汉字）→ 压到下限仍溢出 → 要能被点名
         let long: String = "超长名称".repeat(15);
         let (h3, wf3, over3) = fit_cell_text(&long, 36.0, h0, wf0);
