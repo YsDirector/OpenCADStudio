@@ -239,8 +239,6 @@ pub(crate) fn cell_values(it: &BomItem, seq: usize) -> [String; 8] {
 
 // ── 单元格文字自动压缩（列宽自适应）────────────────────────────────────────
 
-/// 压缩后的**最小字高**（再小就看不清了；宁可让它压到最小后允许轻微溢出并在命令行点名）。
-const MIN_CELL_TEXT_H: f64 = 2.0;
 /// **压缩目标 = 可用宽 × 这个系数**（故意留一手）。
 ///
 /// 字宽模型对混排文本仍偏乐观（实测渲染比模型宽约 10~20%），所以不压到"刚好填满"，
@@ -277,40 +275,30 @@ fn cell_text_width(s: &str, h: f64, wf: f64) -> f64 {
     s.chars().map(|c| h * wf * char_em(c)).sum()
 }
 
-/// **单元格文字自动压缩**：先压字高到下限，再**无限**横向压宽度因子。
+/// **单元格文字自动压缩**（2026-09-16 用户定案）：**字高一律不动（全表统一）**，
+/// 超宽只横向压宽度因子，且**不设下限**（可以无限压），保证文字永远压进格内、绝不到邻格；
+/// 压到 [`WARN_WIDTH_FACTOR`]（0.7×名义）以下仍在 `squeezed_hard` 里点名提醒。
 ///
-/// 顺序：① 字高按"刚好放得下"算（但不低于 [`MIN_CELL_TEXT_H`]）；
-/// ② 若压到下限仍然放不下 → 横向压缩宽度因子，**不设下限**（用户定案：可以无限压），
-/// 保证文字永远压进格内、绝不到邻格。
-///
-/// 返回 `(字高, 宽度因子, 是否仍溢出)`；短文本原样返回（溢出只在退化输入下可能出现）。
-pub(crate) fn fit_cell_text(
-    value: &str,
-    avail: f64,
-    nominal_h: f64,
-    nominal_wf: f64,
-) -> (f64, f64, bool) {
+/// 返回 `宽度因子`（字高恒为名义值，不再返回）；短文本原样返回。
+pub(crate) fn fit_cell_text(value: &str, avail: f64, nominal_h: f64, nominal_wf: f64) -> f64 {
     let v = value.trim();
     let wf0 = if nominal_wf > 0.0 { nominal_wf } else { 1.0 };
     if v.is_empty() || nominal_h <= 0.0 || avail <= 0.0 {
-        return (nominal_h, wf0, false);
+        return wf0;
     }
-    // 目标宽度：只用可用宽的 80%（见 FIT_TARGET_RATIO）
+    // 目标宽度：只用可用宽的 90%（见 FIT_TARGET_RATIO）
     let target = avail * FIT_TARGET_RATIO;
     let need = cell_text_width(v, nominal_h, wf0);
     if need <= target + 1e-9 {
-        return (nominal_h, wf0, false);
+        return wf0;
     }
-    // ① 压字高（保底 MIN_CELL_TEXT_H）
-    let h = (nominal_h * target / need).max(MIN_CELL_TEXT_H);
-    if cell_text_width(v, h, wf0) <= target + 1e-9 {
-        return (h, wf0, false);
+    // 字高不动，只横向压缩（无下限，压到目标宽为止 → 数学上必能放下，不存在溢出）
+    let wf = wf0 * target / need;
+    if cell_text_width(v, nominal_h, wf) > target + 1e-9 {
+        // 浮点防线：理论上不会发生，真发生就压到 0（几乎不可见总比揉进邻格强）。
+        return 0.0;
     }
-    // ② 还长 → 横向压缩（字高保底不动；宽度因子**不设下限**，压到目标宽为止）
-    let need2 = cell_text_width(v, h, wf0);
-    let wf = wf0 * target / need2;
-    let overflow = cell_text_width(v, h, wf) > target + 1e-9;
-    (h, wf, overflow)
+    wf
 }
 
 /// 行块里**各列的边界 x**（块局部坐标）：取块内竖直细线的 x，排序去重。
@@ -642,10 +630,11 @@ pub(crate) fn fill_bom(
                 };
                 let mut a = AttributeEntity::from_definition(ad, Some(values[idx].clone()));
                 // 长文本自动压缩（按该 ATTDEF 所在列的列宽）；块局部坐标下判断列。
+                // 2026-09-16 用户定案：字高一律不动（全表统一），只横向压缩。
                 if let Some(avail) = avail_width_at(ad.insertion_point.x, &cell_cols) {
                     let wf0 = if ad.width_factor.abs() < 1e-9 { 1.0 } else { ad.width_factor };
-                    let (h, f, over) = fit_cell_text(&values[idx], avail, ad.height, wf0);
-                    if (h - ad.height).abs() > 1e-9 || (f - wf0).abs() > 1e-9 {
+                    let f = fit_cell_text(&values[idx], avail, ad.height, wf0);
+                    if (f - wf0).abs() > 1e-9 {
                         squeezed += 1;
                     }
                     // 压得太扁（可读性下降）→ 点名，建议加宽列/缩短文本
@@ -657,8 +646,6 @@ pub(crate) fn fill_bom(
                             f / wf0 * 100.0
                         ));
                     }
-                    let _ = over;
-                    a.height = h;
                     a.width_factor = f;
                 }
                 a.apply_transform(&transform);
@@ -909,7 +896,7 @@ pub(crate) fn cmd_bom_sync(host: &mut dyn HostApi, _args: &str) {
 fn report_cell_fit(host: &mut dyn HostApi, rep: &BomReport) {
     if rep.squeezed > 0 {
         host.push_info(&format!(
-            "OCSMBOM: {} 格文字超宽 → 已自动压缩（先压字高到 {MIN_CELL_TEXT_H}，再横向压缩）。",
+            "OCSMBOM: {} 格文字超宽 → 已自动横向压缩（字高统一不动；压太扁的另点名）。",
             rep.squeezed
         ));
     }
@@ -1663,49 +1650,47 @@ mod tests {
         ] {
             let Some(i) = CELL_TAGS.iter().position(|x| *x == tag) else { continue };
             let avail = cols.get(i).map(|c| c.1).unwrap_or(0.0);
-            let (h2, f, over) = fit_cell_text(sample, avail, h, 0.7);
+            let f = fit_cell_text(sample, avail, h, 0.7);
             println!(
-                "  {tag:>4} {sample:<26} 可用 {avail:>6.2} → 字高 {h2:.2} 宽比 {f:.2}{}",
-                if over { "  ← 仍溢出" } else { "" }
+                "  {tag:>4} {sample:<26} 可用 {avail:>6.2} → 字高 {h:.2}(不动) 宽比 {f:.2}{}",
+                if f < 0.7 * WARN_WIDTH_FACTOR { "  ← 压太扁" } else { "" }
             );
         }
     }
 
     #[test]
-    fn fit_cell_text_shrinks_height_then_squeezes_width() {
-        // 模板实况：字高 5、宽度因子 0.7
+    fn fit_cell_text_keeps_height_squeezes_width_only() {
+        // 模板实况：字高 5、宽度因子 0.7；2026-09-16 用户定案：字高全表统一，只横向压缩。
         let (h0, wf0) = (5.0, 0.7);
         // 短文本原样
-        assert_eq!(fit_cell_text("1", 10.0, h0, wf0), (h0, wf0, false));
-        // 用户实况①：`名称 六角头螺栓 C级 M8x35` 在 33mm 格里 → 压字高（宽比不变）
+        assert_eq!(fit_cell_text("1", 10.0, h0, wf0), wf0);
+        // 用户实况①：`名称 六角头螺栓 C级 M8x35` 在 33mm 格里 → 字高不动，只压宽比
         let name = "六角头螺栓 C级 M8x35";
         let avail_name = 33.0 - CELL_PADDING;
-        let (h, wf, over) = fit_cell_text(name, avail_name, h0, wf0);
-        assert!(h < h0 && (wf - wf0).abs() < 1e-9, "应先只压字高：h={h} wf={wf}");
-        assert!(!over);
-        assert!(cell_text_width(name, h, wf) <= avail_name * FIT_TARGET_RATIO + 1e-9);
-        // 用户实况②：`0.018` 在 10mm 格（单重）→ 也要压
-        let (h2, _, over2) = fit_cell_text("0.018", 10.0, h0, wf0);
-        assert!(h2 < h0 && !over2, "h={h2}");
-        // 图号 `GB/T 5780-2016` 在**够宽的**格里不动（可用宽 40 → 目标 32，仍放得下）
-        assert_eq!(fit_cell_text("GB/T 5780-2016", 55.0, h0, wf0), (h0, wf0, false));
-        // 目标只用到可用宽的 80%：可用 34.5（37mm 列）也要压一点 —— 给渲染误差留余量
-        let (hg, _, _) = fit_cell_text("GB/T 5780-2016", 34.5, h0, wf0);
-        assert!(hg < h0, "80% 目标下该压：{hg}");
-        // 极长（60 个汉字）→ 字高到底后**无限横向压缩**，保证一定放进格内、绝不到邻格
+        let wf = fit_cell_text(name, avail_name, h0, wf0);
+        assert!(wf < wf0, "超宽应压宽比：wf={wf}");
+        assert!(cell_text_width(name, h0, wf) <= avail_name * FIT_TARGET_RATIO + 1e-9);
+        // 字高不压后，这一格宽比会压到 0.41（< 0.7 阈）→ 属于"压太扁"，应被 squeezed_hard 点名
+        assert!(wf < wf0 * WARN_WIDTH_FACTOR, "压太扁点名：wf={wf}");
+        // 用户实况②：`0.018` 在 10mm 格（单重）→ 压宽比（字高不动）
+        let wf2 = fit_cell_text("0.018", 10.0, h0, wf0);
+        assert!(wf2 < wf0);
+        // 图号 `GB/T 5780-2016` 在**够宽的**格里不动
+        assert_eq!(fit_cell_text("GB/T 5780-2016", 55.0, h0, wf0), wf0);
+        // 目标只用到可用宽的 90%：可用 34.5（37mm 列）也要压一点 —— 给渲染误差留余量
+        let wg = fit_cell_text("GB/T 5780-2016", 34.5, h0, wf0);
+        assert!(wg < wf0, "90% 目标下该压：{wg}");
+        // 极长（60 个汉字）→ 字高不动、**无限横向压缩**，保证一定放进格内、绝不到邻格
         let long: String = "超长名称".repeat(15);
-        let (h3, wf3, over3) = fit_cell_text(&long, 36.0, h0, wf0);
-        assert_eq!(h3, MIN_CELL_TEXT_H);
+        let wf3 = fit_cell_text(&long, 36.0, h0, wf0);
         assert!(wf3 < wf0 * WARN_WIDTH_FACTOR, "应压得很扁：{wf3}");
-        assert!(!over3, "压到底也必须放得下（用户定案：宽度因子可无限压缩）");
-        assert!(cell_text_width(&long, h3, wf3) <= 36.0 * FIT_TARGET_RATIO + 1e-9);
+        assert!(cell_text_width(&long, h0, wf3) <= 36.0 * FIT_TARGET_RATIO + 1e-9);
         // 极端：可用宽只有 1mm 也照样压进去
-        let (_, wf4, over4) = fit_cell_text(&long, 1.0, h0, wf0);
-        assert!(!over4);
+        let wf4 = fit_cell_text(&long, 1.0, h0, wf0);
         assert!(wf4 < wf0 * 0.1);
         // 空文本/异常参数不炸
-        assert_eq!(fit_cell_text("  ", 10.0, h0, wf0), (h0, wf0, false));
-        assert_eq!(fit_cell_text("abc", 0.0, h0, wf0), (h0, wf0, false));
+        assert_eq!(fit_cell_text("  ", 10.0, h0, wf0), wf0);
+        assert_eq!(fit_cell_text("abc", 0.0, h0, wf0), wf0);
     }
 
     #[test]
