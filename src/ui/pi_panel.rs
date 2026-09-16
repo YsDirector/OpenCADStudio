@@ -49,22 +49,29 @@ pub enum PiMsg {
     ToggleEntry(u64),
     /// Connect (or drop and reconnect) the worker.
     Reconnect,
+    /// Paste from the clipboard: an image becomes the attachment, otherwise
+    /// the text falls back into the editor.
+    Paste,
+    /// Drop the attached image.
+    ClearImage,
+    /// Switch the model the session uses.
+    ModelPick(pi::ModelInfo),
 }
 
 // ── View model ──────────────────────────────────────────────────────────────
 
 /// One rendered transcript entry.
-#[derive(Debug, Clone, PartialEq)]
 pub enum PiEntryKind {
     User(String),
-    Assistant(String),
+    /// Assistant text + incrementally parsed markdown for rendering.
+    Assistant { text: String, md: iced::widget::markdown::Content },
     Thinking(String),
     Tool { id: String, name: String, output: String, done: bool, is_error: bool },
     Notice(String),
 }
 
 /// A transcript entry plus per-entry UI state (collapsed/expanded).
-#[derive(Debug, Clone)]
+/// (`markdown::Content` isn't `Clone`, so entries are built in place.)
 pub struct PiEntry {
     pub id: u64,
     pub kind: PiEntryKind,
@@ -72,15 +79,16 @@ pub struct PiEntry {
 }
 
 /// Blocks of the assistant message currently streaming in.
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, Default)]
 pub struct StreamingMsg {
     pub blocks: Vec<StreamBlock>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug)]
 pub enum StreamBlock {
     Thinking { idx: usize, text: String },
-    Text { idx: usize, text: String },
+    /// Live assistant text with its incrementally parsed markdown.
+    Text { idx: usize, text: String, md: iced::widget::markdown::Content },
 }
 
 /// Connection status shown in the status strip.
@@ -140,6 +148,18 @@ pub struct PiPanelState {
     pub pending_echoes: VecDeque<String>,
     /// Server-side follow-up queue length (`queue_update`), if known.
     pub queued_followups: Option<usize>,
+    /// Model catalog (`/api/models`) + the model the session currently uses.
+    pub models: Vec<pi::ModelInfo>,
+    pub current_model: Option<(String, String)>,
+    /// Screenshot attached to the next message (raw base64 PNG).
+    pub pending_image: Option<pi::ImageAttachment>,
+    /// Image dimensions for the attachment chip.
+    pub pending_image_size: Option<(u32, u32)>,
+    /// Canvas selection summary shown above the composer ("圆弧（1）"…).
+    pub selection_label: String,
+    /// Selection fingerprint the label was computed from (skip per-frame
+    /// rescans while the selection is unchanged).
+    pub(crate) selection_fingerprint: u64,
     /// Expand flags for *live* blocks (streaming thinking), keyed by block id
     /// — they don't exist as entries yet.
     live_expanded: HashSet<u64>,
@@ -162,6 +182,12 @@ impl Default for PiPanelState {
             input: text_editor::Content::new(),
             pending_echoes: VecDeque::new(),
             queued_followups: None,
+            models: Vec::new(),
+            current_model: None,
+            pending_image: None,
+            pending_image_size: None,
+            selection_label: String::new(),
+            selection_fingerprint: 0,
             live_expanded: HashSet::new(),
             next_id: 0,
             worker: None,
@@ -195,11 +221,17 @@ impl PiPanelState {
         }
     }
 
-    /// Render the panel (delegates to the free `view`).
-    pub fn view(&self, width: f32, auto_collapse: bool) -> Element<'_, Message> {
-        view(self, width, auto_collapse)
+    /// Render the panel (delegates to the free `view`). `theme` feeds the
+    /// markdown renderer (it resolves colors eagerly, not via style closures).
+    pub fn view<'a>(
+        &'a self,
+        width: f32,
+        auto_collapse: bool,
+        selection_label: &'a str,
+        theme: &'a Theme,
+    ) -> Element<'a, Message> {
+        view(self, width, auto_collapse, selection_label, theme)
     }
-
     /// Whether an agent run is currently streaming.
     pub fn is_streaming(&self) -> bool {
         matches!(&self.status, PiStatus::Ready { streaming: true, .. })
@@ -257,11 +289,28 @@ impl PiPanelState {
                     self.pending_echoes.pop_front();
                     return false;
                 }
+                // An empty echo with no ticket is just an image-only message
+                // we already showed optimistically — don't render an empty
+                // bubble.
+                if msg_text.is_empty() {
+                    return false;
+                }
                 if matches!(self.entries.last().map(|e| &e.kind), Some(PiEntryKind::User(t)) if *t == msg_text) {
                     return false;
                 }
                 self.push_kind(PiEntryKind::User(msg_text));
                 true
+            }
+            Event::Models { list, current } => {
+                self.models = list;
+                if current.is_some() {
+                    self.current_model = current;
+                }
+                false
+            }
+            Event::ModelSet { provider, id } => {
+                self.current_model = Some((provider, id));
+                false
             }
             Event::MsgStart { parts } => {
                 self.streaming = StreamingMsg {
@@ -271,7 +320,11 @@ impl PiPanelState {
                             Part::Thinking(t) => {
                                 Some(StreamBlock::Thinking { idx: *idx, text: t.clone() })
                             }
-                            Part::Text(t) => Some(StreamBlock::Text { idx: *idx, text: t.clone() }),
+                            Part::Text(t) => Some(StreamBlock::Text {
+                                idx: *idx,
+                                text: t.clone(),
+                                md: iced::widget::markdown::Content::parse(t),
+                            }),
                             Part::ToolCall { .. } => None,
                         })
                         .collect(),
@@ -291,13 +344,19 @@ impl PiPanelState {
                     _ => false,
                 }) {
                     match slot {
-                        StreamBlock::Text { text: t, .. } | StreamBlock::Thinking { text: t, .. } => {
+                        StreamBlock::Text { text: t, md, .. } => {
                             t.push_str(&chunk);
+                            md.push_str(&chunk); // incremental markdown parse
                         }
+                        StreamBlock::Thinking { text: t, .. } => t.push_str(&chunk),
                     }
                 } else {
                     blocks.push(match kind {
-                        pi::DeltaKind::Text => StreamBlock::Text { idx, text: chunk },
+                        pi::DeltaKind::Text => StreamBlock::Text {
+                            idx,
+                            text: chunk.clone(),
+                            md: iced::widget::markdown::Content::parse(&chunk),
+                        },
                         pi::DeltaKind::Thinking => StreamBlock::Thinking { idx, text: chunk },
                     });
                 }
@@ -316,7 +375,10 @@ impl PiPanelState {
                         }
                         Part::Text(t) => {
                             if !t.is_empty() {
-                                self.push_kind(PiEntryKind::Assistant(t));
+                                self.push_kind(PiEntryKind::Assistant {
+                                    md: iced::widget::markdown::Content::parse(&t),
+                                    text: t,
+                                });
                             }
                         }
                         Part::ToolCall { id, name } => self.ensure_tool(&id, &name),
@@ -376,15 +438,17 @@ impl PiPanelState {
     /// Returns whether the transcript changed (bubble pushed).
     pub fn send_current(&mut self) -> bool {
         let message = self.input.text().trim().to_string();
-        if message.is_empty() {
+        let image = self.pending_image.take();
+        if message.is_empty() && image.is_none() {
             return false;
         }
         let session = self.active.clone().unwrap_or_default();
         let queued = self.is_streaming();
         self.pending_echoes.push_back(message.clone());
         self.push_kind(PiEntryKind::User(message.clone()));
+        self.pending_image_size = None;
         self.input = text_editor::Content::new();
-        self.send_command(pi::Command::Send { session, message, queued });
+        self.send_command(pi::Command::Send { session, message, image, queued });
         true
     }
 
@@ -397,6 +461,11 @@ impl PiPanelState {
         self.queued_followups = None;
         self.status = PiStatus::Connecting;
         self.send_command(pi::Command::Watch(id));
+    }
+
+    /// Append a host-side notice entry (capture failures, …).
+    pub fn push_notice(&mut self, message: String) {
+        self.push_kind(PiEntryKind::Notice(message));
     }
 
     /// Toggle one entry's expanded flag (entries first, then live blocks).
@@ -500,7 +569,10 @@ fn stable_id(tag: &str, key: &str, occurrence: usize) -> u64 {
 fn stable_entry(entry: Entry) -> PiEntry {
     let (tag, key, kind) = match entry {
         Entry::User(t) => ("u", t.clone(), PiEntryKind::User(t)),
-        Entry::Assistant(t) => ("a", t.clone(), PiEntryKind::Assistant(t)),
+        Entry::Assistant(t) => {
+            let md = iced::widget::markdown::Content::parse(&t);
+            ("a", t.clone(), PiEntryKind::Assistant { text: t, md })
+        }
         Entry::Thinking(t) => ("t", t.clone(), PiEntryKind::Thinking(t)),
         Entry::Tool { id, name, output, done, is_error } => {
             ("tool", id.clone(), PiEntryKind::Tool { id, name, output, done, is_error })
@@ -608,7 +680,9 @@ fn toggle_row(
                 }),
         );
     }
+    // The whole row width is the hit target (fill = 收起块填满整行).
     button(head)
+        .width(Length::Fill)
         .on_press(Message::Pi(PiMsg::ToggleEntry(id)))
         .style(|theme: &Theme, status| button::subtle(theme, status))
         .padding([2, 4])
@@ -666,27 +740,35 @@ fn status_strip(state: &PiPanelState) -> Element<'_, Message> {
 
 // ── Transcript ────────────────────────────────────────────────────────
 
-fn entry_view(e: &PiEntry) -> Element<'_, Message> {
+fn entry_view<'a>(e: &'a PiEntry, theme: &'a Theme) -> Element<'a, Message> {
     match &e.kind {
-        PiEntryKind::User(t) => container(
-            column![tag_label("你"), text(t.clone()).size(12)]
-                .spacing(2)
-                .width(Length::Fill),
-        )
-        .style(|theme: &Theme| container::Style {
-            background: Some(Background::Color(theme.palette().primary.weak.color)),
-            border: Border {
-                radius: 4.0.into(),
+        PiEntryKind::User(t) => {
+            // Image-only sends carry no text; show a camera placeholder.
+            let body = if t.is_empty() {
+                "📷 截图".to_string()
+            } else {
+                t.clone()
+            };
+            container(
+                column![tag_label("你"), text(body).size(12)]
+                    .spacing(2)
+                    .width(Length::Fill),
+            )
+            .style(|theme: &Theme| container::Style {
+                background: Some(Background::Color(theme.palette().primary.weak.color)),
+                border: Border {
+                    radius: 4.0.into(),
+                    ..Default::default()
+                },
                 ..Default::default()
-            },
-            ..Default::default()
-        })
-        .width(Length::Fill)
-        .padding([6, 8])
-        .into(),
-        PiEntryKind::Assistant(t) => column![
+            })
+            .width(Length::Fill)
+            .padding([6, 8])
+            .into()
+        }
+        PiEntryKind::Assistant { md, .. } => column![
             tag_label("Pi"),
-            text(t.clone()).size(12).width(Length::Fill),
+            assistant_markdown(md, theme),
         ]
         .spacing(2)
         .padding([2, 4])
@@ -741,8 +823,19 @@ fn entry_view(e: &PiEntry) -> Element<'_, Message> {
     }
 }
 
+/// Render assistant markdown (shared by finalized entries and live stream).
+/// Links open in the system browser.
+fn assistant_markdown<'a>(md: &'a iced::widget::markdown::Content, theme: &'a Theme) -> Element<'a, Message> {
+    iced::widget::markdown::view(
+        md.items(),
+        iced::widget::markdown::Settings::with_text_size(12, theme),
+    )
+    .map(Message::OpenUrl)
+    .into()
+}
+
 /// The live assistant message (thinking blocks + growing text).
-fn streaming_view(state: &PiPanelState) -> Option<Element<'_, Message>> {
+fn streaming_view<'a>(state: &'a PiPanelState, theme: &'a Theme) -> Option<Element<'a, Message>> {
     if state.streaming.blocks.is_empty() {
         return None;
     }
@@ -768,10 +861,19 @@ fn streaming_view(state: &PiPanelState) -> Option<Element<'_, Message>> {
                 }
                 col = col.push(body);
             }
-            StreamBlock::Text { text: t, .. } => {
-                let body = if t.is_empty() { "…".to_string() } else { t.clone() };
+            StreamBlock::Text { text: t, md, .. } => {
+                let body: Element<'_, Message> = if t.is_empty() && md.items().is_empty() {
+                    text("…")
+                        .size(12)
+                        .style(|theme: &Theme| iced::widget::text::Style {
+                            color: Some(secondary_color(theme)),
+                        })
+                        .into()
+                } else {
+                    assistant_markdown(md, theme)
+                };
                 col = col.push(
-                    column![tag_label("Pi"), text(body).size(12)]
+                    column![tag_label("Pi"), body]
                         .spacing(2)
                         .padding([2, 4])
                         .width(Length::Fill),
@@ -821,8 +923,65 @@ fn empty_state(state: &PiPanelState) -> Element<'static, Message> {
 
 /// Composer: multiline editor + send row. Enter sends, Shift+Enter breaks the
 /// line (see the `key_binding` interception below).
-fn composer(state: &PiPanelState) -> Element<'_, Message> {
-    let can_send = !state.input.text().trim().is_empty();
+fn composer<'a>(
+    state: &'a PiPanelState,
+    selection_label: &'a str,
+) -> Element<'a, Message> {
+    let can_send =
+        !state.input.text().trim().is_empty() || state.pending_image.is_some();
+
+    // Attached-screenshot chip (click × to drop it before sending).
+    let attachment: Option<Element<'_, Message>> = state.pending_image.as_ref().map(|img| {
+        let dims = state
+            .pending_image_size
+            .map(|(w, h)| format!(" {}×{}", w, h))
+            .unwrap_or_default();
+        let chip = row![
+            text(format!("📷 截图（{} KB）{}", img.base64.len() * 3 / 4 / 1024, dims)).size(10),
+            Space::new().width(Length::Fill),
+            button(text("✕").size(10))
+                .on_press(Message::Pi(PiMsg::ClearImage))
+                .style(|theme: &Theme, status| button::subtle(theme, status))
+                .padding([1, 5]),
+        ]
+        .align_y(iced::Center);
+        container(chip)
+            .style(|theme: &Theme| container::Style {
+                background: Some(Background::Color(theme.palette().primary.weak.color)),
+                border: Border {
+                    radius: 4.0.into(),
+                    ..Default::default()
+                },
+                ..Default::default()
+            })
+            .width(Length::Fill)
+            .padding([3, 6])
+            .into()
+    });
+    let chip_column: Element<'_, Message> = match attachment {
+        Some(chip) => column![chip].spacing(4).into(),
+        None => column![].into(),
+    };
+
+    // Canvas selection summary (same detection the Properties panel uses).
+    let selection_row: Element<'_, Message> = if selection_label.is_empty() {
+        column![].into()
+    } else {
+        container(
+            row![
+                text("◉").size(10).style(|theme: &Theme| iced::widget::text::Style {
+                    color: Some(theme.palette().primary.base.color),
+                }),
+                text(selection_label.to_string()).size(10),
+            ]
+            .spacing(4)
+            .align_y(iced::Center),
+        )
+        .width(Length::Fill)
+        .padding([2, 4])
+        .into()
+    };
+
     let editor = text_editor(&state.input)
         .placeholder("向 Pi 发送…（Enter 发送 / Shift+Enter 换行）")
         .size(12)
@@ -833,8 +992,14 @@ fn composer(state: &PiPanelState) -> Element<'_, Message> {
             use iced::widget::text_editor::{Binding, Status};
             let focused = matches!(kp.status, Status::Focused { .. });
             let plain_enter = matches!(kp.key, Key::Named(Named::Enter)) && !kp.modifiers.shift();
+            let paste = kp.key.to_latin(kp.physical_key) == Some('v')
+                && kp.modifiers.command()
+                && !kp.modifiers.alt();
             if focused && plain_enter {
                 Some(Binding::Custom(Message::Pi(PiMsg::Send)))
+            } else if focused && paste {
+                // Image clipboard first; text falls back in `on_pi_paste`.
+                Some(Binding::Custom(Message::Pi(PiMsg::Paste)))
             } else {
                 Binding::from_key_press(kp)
             }
@@ -870,16 +1035,46 @@ fn composer(state: &PiPanelState) -> Element<'_, Message> {
             color: Some(secondary_color(theme)),
         });
 
+    // Model switcher below the input box (the session's current model).
+    let model_row: Element<'_, Message> = if state.models.is_empty() {
+        column![].into()
+    } else {
+        let selected = state.current_model.as_ref().and_then(|(provider, id)| {
+            state
+                .models
+                .iter()
+                .find(|m| &m.provider == provider && &m.id == id)
+        });
+        let picker = pick_list(
+            selected,
+            state.models.as_slice(),
+            move |m: &pi::ModelInfo| m.name.clone(),
+        )
+        .placeholder("模型…")
+        .width(Length::Fill)
+        .text_size(11)
+        .padding([2, 6])
+        .menu_height(220.0)
+        .on_select(|m: pi::ModelInfo| Message::Pi(PiMsg::ModelPick(m)));
+        container(picker)
+            .width(Length::Fill)
+            .padding([2, 2])
+            .into()
+    };
+
     container(
         column![
+            selection_row,
+            chip_column,
             editor,
             row![hint, Space::new().width(Length::Fill), send]
                 .spacing(6)
                 .align_y(iced::Center),
+            model_row,
         ]
         .spacing(4),
     )
-    .style(|theme: &Theme| container::Style {
+    .style(move |theme: &Theme| container::Style {
         border: Border {
             color: theme.palette().background.strong.color,
             width: 1.0,
@@ -897,7 +1092,13 @@ fn composer(state: &PiPanelState) -> Element<'_, Message> {
 
 /// Panel chrome: title + pin + close, exactly like the Properties panel so the
 /// dock drag/resize/collapse affordances all behave identically.
-pub fn view(state: &PiPanelState, width: f32, auto_collapse: bool) -> Element<'_, Message> {
+pub fn view<'a>(
+    state: &'a PiPanelState,
+    width: f32,
+    auto_collapse: bool,
+    selection_label: &'a str,
+    theme: &'a Theme,
+) -> Element<'a, Message> {
     let nothing_to_show =
         state.entries.is_empty() && state.streaming.blocks.is_empty();
     let transcript: Element<'_, Message> = if nothing_to_show {
@@ -905,9 +1106,9 @@ pub fn view(state: &PiPanelState, width: f32, auto_collapse: bool) -> Element<'_
     } else {
         let mut list = column![].spacing(10).width(Length::Fill);
         for e in &state.entries {
-            list = list.push(entry_view(e));
+            list = list.push(entry_view(e, theme));
         }
-        if let Some(live) = streaming_view(state) {
+        if let Some(live) = streaming_view(state, theme) {
             list = list.push(live);
         }
         scrollable(list)
@@ -921,10 +1122,16 @@ pub fn view(state: &PiPanelState, width: f32, auto_collapse: bool) -> Element<'_
     // the column width it computed, and a `Fill`-width panel instead competes
     // with the drawing canvas for the same row space (which made the panel
     // take half the window). Every built-in panel pins its width this way.
-    column![header(auto_collapse), session_picker(state), status_strip(state), transcript, composer(state)]
-        .width(Length::Fixed(width))
-        .height(Length::Fill)
-        .into()
+    column![
+        header(auto_collapse),
+        session_picker(state),
+        status_strip(state),
+        transcript,
+        composer(state, selection_label),
+    ]
+    .width(Length::Fixed(width))
+    .height(Length::Fill)
+    .into()
 }
 
 #[cfg(test)]
@@ -963,7 +1170,7 @@ mod tests {
         assert!(s.apply(Event::AssistantEnd { parts: vec![(0, Part::Text("你好，世界".into()))] }));
         // Final flush lands as one Assistant entry; live buffer cleared.
         assert_eq!(s.entries.len(), 1);
-        assert!(matches!(&s.entries[0].kind, PiEntryKind::Assistant(t) if t == "你好，世界"));
+        assert!(matches!(&s.entries[0].kind, PiEntryKind::Assistant { text, .. } if text == "你好，世界"));
         assert!(s.streaming.blocks.is_empty());
     }
 
@@ -981,7 +1188,7 @@ mod tests {
         }));
         assert_eq!(s.entries.len(), 2);
         assert!(matches!(&s.entries[0].kind, PiEntryKind::Thinking(_)));
-        assert!(matches!(&s.entries[1].kind, PiEntryKind::Assistant(_)));
+        assert!(matches!(&s.entries[1].kind, PiEntryKind::Assistant { .. }));
         // Thinking entries start collapsed.
         assert!(!s.entries[0].expanded);
     }

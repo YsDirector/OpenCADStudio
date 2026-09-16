@@ -68,8 +68,13 @@ pub enum Event {
     Sessions(Vec<SessionInfo>),
     /// The transcript was replaced wholesale (backfill / session switch).
     Replace(Vec<Entry>),
-    /// A completed user message arrived (echoes the local optimistic bubble).
+    /// A completed user message arrived (echoes the local optimistic bubble;
+    /// may be empty when the message only carries an image).
     User(String),
+    /// Model catalog + the model the active session currently uses.
+    Models { list: Vec<ModelInfo>, current: Option<(String, String)> },
+    /// A `set_model` succeeded; the session now uses this model.
+    ModelSet { provider: String, id: String },
     /// An assistant message started streaming; `parts` is the snapshot so far
     /// (non-empty only when attaching mid-stream), tagged with `contentIndex`.
     MsgStart { parts: Vec<(usize, Part)> },
@@ -102,6 +107,22 @@ pub enum Status {
 }
 
 /// A session from `/api/sessions`.
+/// A model entry from `GET /api/models`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ModelInfo {
+    pub provider: String,
+    pub id: String,
+    /// Human display name (may repeat across providers).
+    pub name: String,
+}
+
+/// An image attachment carried with a prompt (raw base64, no data URL).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ImageAttachment {
+    pub mime: String,
+    pub base64: String,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct SessionInfo {
     pub id: String,
@@ -114,13 +135,21 @@ pub struct SessionInfo {
 /// Commands the UI sends to the worker.
 #[derive(Debug, Clone)]
 pub enum Command {
-    /// Send `message` to `session`. `queued` = attach as a follow-up behind
-    /// the running turn (server-side queue) instead of a plain prompt.
-    Send { session: String, message: String, queued: bool },
+    /// Send `message` to `session`, optionally with one image attachment.
+    /// `queued` = attach as a follow-up behind the running turn (server-side
+    /// queue) instead of a plain prompt.
+    Send {
+        session: String,
+        message: String,
+        image: Option<ImageAttachment>,
+        queued: bool,
+    },
     /// Switch the streamed session (backfills its history, replaces the view).
     Watch(String),
     /// Drop the connection and reconnect from scratch.
     Reconnect,
+    /// Switch the model of the streamed session (`set_model`).
+    SetModel { provider: String, model_id: String },
 }
 
 /// Handle the panel keeps for its worker thread.
@@ -440,10 +469,9 @@ pub fn sse_to_events(ev: &serde_json::Value) -> Vec<Event> {
             let msg = ev.get("message").cloned().unwrap_or_default();
             match msg.get("role").and_then(|r| r.as_str()).unwrap_or("") {
                 "user" => {
-                    let text = content_text(&msg);
-                    if !text.is_empty() {
-                        out.push(Event::User(text));
-                    }
+                    // Empty text is meaningful: an image-only message echo
+                    // must still consume the optimistic-bubble ticket.
+                    out.push(Event::User(content_text(&msg)));
                 }
                 "assistant" => out.push(Event::AssistantEnd { parts: parse_parts(&msg) }),
                 "toolResult" => {
@@ -695,6 +723,10 @@ fn worker(endpoint: String, tx: Sender<Event>, rx: Receiver<Command>, stop: Arc<
                     .name("ocs-pi-sse".into())
                     .spawn(move || reader(stream, ev_tx, stream_flag, done_flag));
 
+                // Model catalog + current model for the picker (best effort —
+                // a hiccup here just leaves the picker empty until reconnect).
+                fetch_models(&endpoint, &tx, &active);
+
                 // Serve commands while the reader runs; shut the socket down
                 // when we must leave (Watch/Reconnect) so the reader unblocks.
                 let mut leave = false;
@@ -704,8 +736,11 @@ fn worker(endpoint: String, tx: Sender<Event>, rx: Receiver<Command>, stop: Arc<
                         break;
                     }
                     match rx.recv_timeout(POLL_TIMEOUT) {
-                        Ok(Command::Send { session, message, queued }) => {
-                            post_prompt(&endpoint, &tx, &session, &message, queued, &is_streaming);
+                        Ok(Command::Send { session, message, image, queued }) => {
+                            post_prompt(&endpoint, &tx, &session, &message, image, queued, &is_streaming);
+                        }
+                        Ok(Command::SetModel { provider, model_id }) => {
+                            set_model(&endpoint, &tx, &active, &provider, &model_id);
                         }
                         Ok(Command::Watch(id)) => {
                             if id != active {
@@ -773,11 +808,16 @@ fn wait_retry(
                 return std::ops::ControlFlow::Continue(());
             }
             Ok(Command::Reconnect) => return std::ops::ControlFlow::Continue(()),
-            Ok(Command::Send { session, message, queued }) => {
+            Ok(Command::Send { session, message, image, queued }) => {
                 // Try the POST even while offline: the server may be fine and
                 // only the session list hiccuped; failure surfaces as
                 // SendFailed either way.
-                post_prompt(endpoint, tx, &session, &message, queued, &streaming);
+                post_prompt(endpoint, tx, &session, &message, image, queued, &streaming);
+            }
+            Ok(Command::SetModel { .. }) => {
+                let _ = tx.send(Event::SendFailed {
+                    message: "切换模型失败：尚未连接 pi-web".into(),
+                });
             }
             Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => return std::ops::ControlFlow::Break(()),
@@ -792,12 +832,18 @@ fn post_prompt(
     tx: &Sender<Event>,
     session: &str,
     message: &str,
+    image: Option<ImageAttachment>,
     queued: bool,
     is_streaming: &Arc<AtomicBool>,
 ) {
     let mut body = serde_json::json!({ "type": "prompt", "message": message });
     if queued || is_streaming.load(Ordering::Relaxed) {
         body["streamingBehavior"] = serde_json::json!("followUp");
+    }
+    if let Some(img) = image {
+        body["images"] = serde_json::json!([
+            { "type": "image", "data": img.base64, "mimeType": img.mime }
+        ]);
     }
     let payload = body.to_string();
     match http(
@@ -825,7 +871,92 @@ fn post_prompt(
     }
 }
 
-/// Read one SSE connection to exhaustion, forwarding parsed events.
+/// POST a `set_model` command; on success report the confirmed model back.
+fn set_model(endpoint: &str, tx: &Sender<Event>, session: &str, provider: &str, model_id: &str) {
+    let body = serde_json::json!({ "type": "set_model", "provider": provider, "modelId": model_id });
+    let fail = |tx: &Sender<Event>, message: String| {
+        let _ = tx.send(Event::SendFailed { message: format!("切换模型失败：{message}") });
+    };
+    match http(
+        endpoint,
+        "POST",
+        &format!("/api/agent/{session}"),
+        Some(&body.to_string()),
+        REQUEST_TIMEOUT,
+    ) {
+        Ok(resp) if (200..300).contains(&resp.status) => {
+            // `{success:true, data:{…, id, provider}}` — trust the response's
+            // provider/id over the request (the server may normalize).
+            let confirmed = serde_json::from_str::<serde_json::Value>(&resp.body)
+                .ok()
+                .and_then(|v| {
+                    let data = v.get("data")?;
+                    Some((
+                        data.get("provider")?.as_str()?.to_string(),
+                        data.get("id").or_else(|| data.get("modelId"))?.as_str()?.to_string(),
+                    ))
+                });
+            let _ = tx.send(match confirmed {
+                Some((provider, id)) => Event::ModelSet { provider, id },
+                None => Event::ModelSet {
+                    provider: provider.to_string(),
+                    id: model_id.to_string(),
+                },
+            });
+        }
+        Ok(resp) => {
+            let detail = serde_json::from_str::<serde_json::Value>(&resp.body)
+                .ok()
+                .and_then(|v| v.get("error").and_then(|e| e.as_str()).map(str::to_string))
+                .unwrap_or_else(|| format!("HTTP {}", resp.status));
+            fail(tx, detail);
+        }
+        Err(e) => fail(tx, e),
+    }
+}
+
+/// Fetch the model catalog + the model the session currently uses.
+fn fetch_models(endpoint: &str, tx: &Sender<Event>, session: &str) {
+    let catalog = http(endpoint, "GET", "/api/models", None, REQUEST_TIMEOUT)
+        .ok()
+        .and_then(|r| serde_json::from_str::<serde_json::Value>(&r.body).ok());
+    let Some(catalog) = catalog else { return };
+    let list: Vec<ModelInfo> = catalog
+        .get("modelList")
+        .and_then(|m| m.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|m| {
+                    let provider = m.get("provider")?.as_str()?.to_string();
+                    let id = m.get("id").or_else(|| m.get("modelId"))?.as_str()?.to_string();
+                    let name = m
+                        .get("name")
+                        .and_then(|n| n.as_str())
+                        .unwrap_or(&id)
+                        .to_string();
+                    Some(ModelInfo { provider, id, name })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    if list.is_empty() {
+        return;
+    }
+    // Current model: from the per-session agent state (`state.model`).
+    let current = http(endpoint, "GET", &format!("/api/agent/{session}"), None, REQUEST_TIMEOUT)
+        .ok()
+        .and_then(|r| serde_json::from_str::<serde_json::Value>(&r.body).ok())
+        .and_then(|v| {
+            let model = v.get("state")?.get("model")?;
+            Some((
+                model.get("provider")?.as_str()?.to_string(),
+                model.get("id").or_else(|| model.get("modelId"))?.as_str()?.to_string(),
+            ))
+        });
+    let _ = tx.send(Event::Models { list, current });
+}
+
 fn reader(stream: TcpStream, tx: Sender<Event>, is_streaming: Arc<AtomicBool>, done: Arc<AtomicBool>) {
     let mut r = BufReader::new(stream);
     let mut line = String::new();

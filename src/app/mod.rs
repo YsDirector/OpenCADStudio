@@ -1898,6 +1898,11 @@ pub enum Message {
     TogglePiPanel,
     /// Sub-messages of the built-in Pi assistant panel (poll/send/…).
     Pi(crate::ui::pi_panel::PiMsg),
+    /// Pi composer paste result: `Ok(image)` = clipboard image,
+    /// `Err(Some(text))` = text fallback, `Err(None)` = nothing to paste.
+    PiImagePasted(
+        Result<iced::clipboard::Image, Option<std::sync::Arc<String>>>,
+    ),
     /// Periodic drain of plugin-to-host requests that arrived outside a host
     /// call (e.g. mutations from the Python REPL).
     #[cfg(not(target_arch = "wasm32"))]

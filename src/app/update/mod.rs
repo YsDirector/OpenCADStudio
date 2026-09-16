@@ -498,6 +498,9 @@ impl OpenCADStudio {
             // OCS Pi Extension panel.
             Message::Pi(msg) => self.on_pi_msg(msg),
 
+            // Pi composer paste completion.
+            Message::PiImagePasted(payload) => self.on_pi_image_pasted(payload),
+
             Message::OpenFile => self.on_open_file(),
 
             Message::OpenPathPicked(None) => Task::none(),

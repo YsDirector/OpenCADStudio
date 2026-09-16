@@ -2930,6 +2930,8 @@ impl OpenCADStudio {
         tab: &'a DocumentTab,
     ) -> Element<'a, Message> {
         let auto_collapse = self.dock.auto_collapse(id);
+        // The label lives in per-tab state (refreshed by `PiMsg::Poll` so it
+        // outlives the panel element instead of being a per-frame temporary).
         let panel: Element<'_, Message> = match id {
             crate::ui::dock::PanelId::Properties => {
                 tab.properties.view(width, auto_collapse)
@@ -2942,7 +2944,12 @@ impl OpenCADStudio {
             // dockable panel on both X11 and Wayland.
             crate::ui::dock::PanelId::Pi => self.tabs[self.active_tab]
                 .pi_panel
-                .view(width, auto_collapse)
+                .view(
+                    width,
+                    auto_collapse,
+                    &tab.pi_panel.selection_label,
+                    &self.active_theme,
+                )
             .into(),
         };
         let divider = dock_divider(id);
