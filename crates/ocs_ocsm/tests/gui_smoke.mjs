@@ -252,14 +252,40 @@ if (!leaderBtn) {
   await new Promise((r) => setImmediate(r));
   if (rowWeld.style.display !== '') errors.push('回切后 row-weld 未显示');
 }
-// ⑤ 只允许两段 PLINE：「焊接」「引线」必须同在 nV===3 的过滤分支里
+// ⑤ 工艺代号下拉（GB/T 5185）：选中「代号 名称」→ 尾部注释只写代号，
+// 且尾部开关自动锁定；再选一个=组合工艺（空格并列）。
+{
+  const c5185 = document.getElementById('w-c5185');
+  if (!c5185) {
+    errors.push('缺 w-c5185 工艺代号下拉');
+  } else {
+    document.getElementById('w-tt').value = '';
+    c5185.value = '111';
+    (c5185._handlers['change'] || []).forEach((f) => f({ target: c5185 }));
+    const tt1 = document.getElementById('w-tt').value;
+    if (tt1 !== '111') errors.push(`选「111 焊条电弧焊」尾部应为「111」，实为 ${JSON.stringify(tt1)}`);
+    if (document.getElementById('w-tail').checked !== true) {
+      errors.push('选工艺代号后尾部开关应自动打开');
+    }
+    c5185.value = '12';
+    (c5185._handlers['change'] || []).forEach((f) => f({ target: c5185 }));
+    const tt2 = document.getElementById('w-tt').value;
+    if (tt2 !== '111 12') errors.push(`组合工艺应为「111 12」，实为 ${JSON.stringify(tt2)}`);
+    if (c5185.value !== '') errors.push('选完后下拉应复位为空');
+    // 恢复现场（GUIDE 参数里有 tail_text='N=2'，不影响后续断言）
+    document.getElementById('w-tt').value = 'N=2';
+    (document.getElementById('w-tt')._handlers['input'] || []).forEach((f) => f({ target: document.getElementById('w-tt') }));
+  }
+}
+
+// ⑥ 只允许两段 PLINE：「焊接」「引线」必须同在 nV===3 的过滤分支里
 //（防止以后误改成所有多段线都显示）。
 if (!/nV === 3 *\? *\[.*'WELD'.*'LEADER'/.test(html) &&
     !/nV === 3 *\? *\[.*'LEADER'/.test(html)) {
   errors.push('几何过滤未把 LEADER 限定在 3 顶点 PLINE');
 }
 
-// ⑥ A1：编辑模式文案（标题/按钮 → 「更新标注」）
+// ⑦ A1：编辑模式文案（标题/按钮 → 「更新标注」）
 if (typeof globalThis.__setEditMode !== 'function') {
   errors.push('未暴露 setEditMode（探针失败）');
 } else {
