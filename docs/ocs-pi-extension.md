@@ -101,9 +101,44 @@ src/app/document.rs              tab 字段 pi_panel
 src/app/commands/display.rs      PI / OCSPI / AI / AICHAT 命令
 ```
 
-## 7. 可选后续（Phase 3 候选，未做）
+## 7. Phase 2.5（2026-09-16 第二轮，提交 `2a365995`）
+
+用户追加的 5 个功能，全部完成并实机验证：
+
+1. **markdown 渲染**：助手消息（`PiEntryKind::Assistant { text, md }`）与流式文本
+   （`StreamBlock::Text { md }`）用 `iced::widget::markdown` 渲染；
+   `Content::parse` 静态解析、`Content::push_str` 流式增量解析；链接 → `Message::OpenUrl`；
+   `Settings::with_text_size(12, theme)` 需要 Theme 提前传入（面板视图签名带 `&Theme`，
+   来自 `OpenCADStudio::active_theme`）。
+2. **粘贴图片（替代内置截图）**：用户定案 —— 截图走系统工具（Spectacle）复制到剪贴板，
+   面板只负责粘贴。composer 的 `key_binding` 里 Ctrl+V（focused 时）→ `PiMsg::Paste` →
+   `iced::clipboard::read_image()` 优先；成功则 RGBA→PNG→base64 存 `pending_image`
+   （长边缩至 1600、PNG >8 MB 拒绝），输入框上方显示 chip（大小/尺寸/✕）；
+   失败回退 `iced::clipboard::read_text()` → `Edit::Paste(text)` 插入文本。
+   发送时 POST `images:[{type:"image",data(<raw base64>),mimeType}]`。
+   **注意**：pi-web 侧校验（`lib/image-attachments.ts`）要求裸 base64、≤10 MB、≤10 张，
+   校验失败会整条 `prompt_rejected`。空文本+纯图发送合法（optimistic 气泡显示「📷 截图」）。
+3. **选中标签**：输入框上方一行「◉ 圆弧（1）」；规则 = 单一类型→`t!(类型名)（n）`，
+   混合类型→`t!("All")（n）`，与特性面板 `build_selection_groups` 同源翻译；
+   在 `PiMsg::Poll` 里用 `scene.selection_fingerprint()`（缓存哈希）判断变化才重算
+   （`selection_label` 存 per-tab 状态，避免视图借用临时值）。
+4. **工具/思考折叠行整行宽**：`toggle_row` 的 button 加 `.width(Length::Fill)`。
+5. **模型下拉**：输入框下方 `pick_list`；worker 连接后 `GET /api/models`（`modelList`
+   81 项）+ `GET /api/agent/<id>`（`state.model`）→ `Event::Models`；选择 → `Command::SetModel`
+   → POST `{type:"set_model",provider,modelId}` → `Event::ModelSet`。
+   （实测用户已用它在面板里把模型切到 DeepSeek V4 Pro (New)。）
+
+### 本轮验收注意
+- GUI 自动化：uinput 触摸设备（`/tmp/ui-touch.py`）点击/输入；**键盘组合键（Ctrl+V）需要
+  设备注册 CTRL(29) 的 KEYBIT**，否则修饰键被内核丢弃、V 变成裸字符（或被丢弃）。
+- 截图/通知：Spectacle 通知会反复遮挡面板右上；截图尽量小裁剪、间隔拉长
+  （用户反馈「一次上传太多图报 400」）。
+- 待观察：带图消息在回合结束交付后，session `.jsonl` 的 user message 应含 image part
+  （本轮已验证 POST 通过 pi-web 校验并进入 followUp 队列）。
+
+## 8. 可选后续（Phase 3 候选，未做）
 
 1. `extension_ui_request`（`setWidget`，如 `bash-bg` 后台任务小部件）→ 面板底部一行状态。
 2. 审批交互（用户已定不接；若 pi 侧策略变化再议）。
 3. 发送失败自动重试、历史回填条数可配置。
-4. 会话下拉当前依赖 GUI 点击验证未完全走通（Watch/Replace 逻辑有单测覆盖），可补一次人工点选确认。
+4. 会话下拉的人工点选（Watch/Replace 逻辑有单测覆盖）。
