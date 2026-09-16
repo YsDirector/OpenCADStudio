@@ -36,7 +36,9 @@ pub struct GuideServer {
 /// 启动标注更新服务器（绑定 127.0.0.1，端口从 DEFAULT_PORT 起 +1 重试）。
 /// 成功后返回端口；全部端口占用返回 None。
 pub fn spawn(sender: Arc<dyn PluginRequestSender>) -> Option<GuideServer> {
-    for port in DEFAULT_PORT..DEFAULT_PORT + 16 {
+    // 端口窗 32 个：真 OCS 常占 23751，并行测试每个 spawn 占一个 —— 窗口太小会
+    // 偶发抢不到端口（曾致 weld apply_refresh 测试 panic）。
+    for port in DEFAULT_PORT..DEFAULT_PORT + 32 {
         if let Ok(listener) = TcpListener::bind(("127.0.0.1", port)) {
             std::thread::Builder::new()
                 .name("ocsm-guide-server".into())
@@ -5642,16 +5644,21 @@ fn balloon_sync_after(
     }
     let per_col = crate::bom::load_config(&crate::bom::bom_dir()).per_col_rows;
     match crate::bom::fill_bom(&mut SenderSink(sender), &doc2, &rows, per_col) {
-        Ok(rep) => (
-            Some(serde_json::json!({
-                "rows": rep.rows,
-                "cols": rep.cols,
-                "replaced": rep.removed,
-                "renumbered": renumbered,
-                "item_nos": rows.iter().map(|r| r.item_no.clone()).collect::<Vec<_>>(),
-            })),
-            None,
-        ),
+        Ok(rep) => {
+            // 表块挂编辑页链接（同一撤销事务；2026-09-16 补：此前球标自动联动建表
+            // 漏了挂链 → Ctrl+点击打不开编辑页，只有 BOM/BOMSYNC 命令路径有链接）。
+            stamp_bom_links_http(sender);
+            (
+                Some(serde_json::json!({
+                    "rows": rep.rows,
+                    "cols": rep.cols,
+                    "replaced": rep.removed,
+                    "renumbered": renumbered,
+                    "item_nos": rows.iter().map(|r| r.item_no.clone()).collect::<Vec<_>>(),
+                })),
+                None,
+            )
+        }
         Err(e) => (None, Some(e)),
     }
 }
@@ -5659,6 +5666,47 @@ fn balloon_sync_after(
 /// 未存盘提示的去重（每个标签页只提一次）。返回 true = 这次应该提。
 fn should_warn_unsaved(tab: u64, warned: &mut std::collections::HashSet<u64>) -> bool {
     warned.insert(tab)
+}
+
+/// HTTP 路径的明细表挂链：扫快照里带 `OCSM_BOM` 的表元，把 PE_URL 写成当前端口的
+/// bom.html（已是当前链接的跳过）。**调用方应已开启撤销事务**（与建表同一事务）。
+fn stamp_bom_links_http(sender: &Arc<dyn PluginRequestSender>) -> usize {
+    let Some(port) = crate::current_guide_port() else {
+        return 0;
+    };
+    let doc = match snapshot(sender) {
+        Ok(d) => d,
+        Err(_) => return 0,
+    };
+    let want = crate::bom::bom_edit_url(port);
+    let mut n = 0usize;
+    for e in doc.model_space_entities() {
+        let c = e.common();
+        if c.extended_data.get_record(crate::bom::XDATA_BOM).is_none() {
+            continue;
+        }
+        let stored = c.extended_data.get_record("PE_URL").and_then(|r| {
+            r.values.iter().find_map(|v| match v {
+                XDataValue::String(s) if !s.trim().is_empty() => Some(s.clone()),
+                _ => None,
+            })
+        });
+        if !crate::bom::bom_link_is_current(stored.as_deref(), port) {
+            if req_timed(
+                sender,
+                PluginRequest::WriteRecord {
+                    handle: c.handle,
+                    record: pe_url_record(&want),
+                },
+                "WriteRecord",
+            )
+            .is_ok()
+            {
+                n += 1;
+            }
+        }
+    }
+    n
 }
 
 // ── 明细表网页编辑（bom.html，2026-09-16 第四期）─────────────────────────
@@ -5942,42 +5990,7 @@ fn api_bom_apply(body: &[u8], sender: &Arc<dyn PluginRequestSender>) -> (u16, &'
                 }
             };
             // ③ 新表块挂编辑页链接（同一撤销事务；旧块死链接也顺带重写）。
-            let doc3 = match snapshot(sender) {
-                Ok(d) => d,
-                Err(e) => {
-                    commit_undo(sender);
-                    return bad(format!("取快照失败: {e}"));
-                }
-            };
-            let mut link_n = 0usize;
-            for e in doc3.model_space_entities() {
-                let c = e.common();
-                if c.extended_data.get_record(crate::bom::XDATA_BOM).is_none() {
-                    continue;
-                }
-                let stored = c.extended_data.get_record("PE_URL").and_then(|r| {
-                    r.values.iter().find_map(|v| match v {
-                        XDataValue::String(s) if !s.trim().is_empty() => Some(s.clone()),
-                        _ => None,
-                    })
-                });
-                if let Some(port) = crate::current_guide_port() {
-                    if !crate::bom::bom_link_is_current(stored.as_deref(), port) {
-                        if req_timed(
-                            sender,
-                            PluginRequest::WriteRecord {
-                                handle: c.handle,
-                                record: pe_url_record(&crate::bom::bom_edit_url(port)),
-                            },
-                            "WriteRecord",
-                        )
-                        .is_ok()
-                        {
-                            link_n += 1;
-                        }
-                    }
-                }
-            }
+            let link_n = stamp_bom_links_http(sender);
             if let Err(e) = mark_dirty(sender) {
                 commit_undo(sender);
                 return bad(e);
@@ -6065,37 +6078,7 @@ fn api_bom_import(
     let per_col = crate::bom::load_config(&crate::bom::bom_dir()).per_col_rows;
     match crate::bom::fill_bom(&mut SenderSink(sender), &doc, &rows, per_col) {
         Ok(rep) => {
-            let doc2 = match snapshot(sender) {
-                Ok(d) => d,
-                Err(e) => {
-                    commit_undo(sender);
-                    return bad(format!("取快照失败: {e}"));
-                }
-            };
-            for e in doc2.model_space_entities() {
-                let c = e.common();
-                if c.extended_data.get_record(crate::bom::XDATA_BOM).is_none() {
-                    continue;
-                }
-                if let Some(port) = crate::current_guide_port() {
-                    let stored = c.extended_data.get_record("PE_URL").and_then(|r| {
-                        r.values.iter().find_map(|v| match v {
-                            XDataValue::String(s) if !s.trim().is_empty() => Some(s.clone()),
-                            _ => None,
-                        })
-                    });
-                    if !crate::bom::bom_link_is_current(stored.as_deref(), port) {
-                        let _ = req_timed(
-                            sender,
-                            PluginRequest::WriteRecord {
-                                handle: c.handle,
-                                record: pe_url_record(&crate::bom::bom_edit_url(port)),
-                            },
-                            "WriteRecord",
-                        );
-                    }
-                }
-            }
+            stamp_bom_links_http(sender);
             if let Err(e) = mark_dirty(sender) {
                 commit_undo(sender);
                 return bad(e);
@@ -8011,6 +7994,38 @@ mod integration {
         row_ys.sort_by(|a, b| a.partial_cmp(b).unwrap());
         assert!((row_ys[0] - (2.0 * (45.0 + 12.0))).abs() < 1e-6, "行1 y=2×57=114: {row_ys:?}");
         assert!((row_ys[1] - (2.0 * (45.0 + 20.0))).abs() < 1e-6, "行2 y=2×65=130: {row_ys:?}");
+    }
+
+    #[test]
+    fn bom_link_stamp_http_adds_missing_link() {
+        // 球标"应用并刷新"自动联动建表走的同款 helper：表块缺链接 → 补挂 bom.html。
+        let mut doc = acadrust::CadDocument::new();
+        let mut ins = acadrust::entities::Insert::new(
+            crate::bom::ROW_BLOCK,
+            Vector3::new(0.0, 0.0, 0.0),
+        );
+        use acadrust::xdata::{ExtendedDataRecord, XDataValue as XV};
+        let mut r = ExtendedDataRecord::new(crate::bom::XDATA_BOM);
+        r.values.push(XV::String("1".into()));
+        ins.common.extended_data.add_record(r);
+        let h = doc.add_entity(EntityType::Insert(ins)).unwrap();
+        let mock = std::sync::Arc::new(MockSender::new(doc));
+        let sender: std::sync::Arc<dyn PluginRequestSender> = mock.clone();
+        let server = spawn(mock.clone()).expect("spawn guide server");
+        crate::set_guide_port_for_test(server.port);
+        let n = stamp_bom_links_http(&sender);
+        assert_eq!(n, 1, "应补 1 条链接");
+        assert!(
+            mock.url_writes
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|(hd, url)| *hd == h && url.contains("/bom.html")),
+            "缺链接的表块应被补挂"
+        );
+        // 已是对的 → 不再写。
+        let n2 = stamp_bom_links_http(&sender);
+        assert_eq!(n2, 0);
     }
 
     fn head_and_rows_ok(doc: &acadrust::CadDocument) -> bool {
