@@ -33,16 +33,111 @@ pub struct GuideServer {
     pub port: u16,
 }
 
+/// **这张图该用哪个 sender** 的路由表（进程级、可热更新）。
+///
+/// 为什么需要它（2026-09-16 修的 bug）：**插件进程比一张图纸活得久**。
+/// 引导服务器的**端口**是进程级复用的（lib.rs 的 `GUIDE_PORT`），但
+/// `PluginRequestSender` 是**绑定标签页**的（宿主按 `tab_id` 把请求投给对应会话，
+/// 见 `ocs_plugin_api::process::v4::drain_requests`）。旧写法把首次 `spawn` 时的
+/// sender 固定进服务器线程，于是「关掉当前图纸 → 新建一张 → GDIM」之后：
+///
+/// - 那张图**已关闭** → 宿主把带该死 `tab_id` 的请求永远挂在 deferred 队列里 →
+///   HTTP 5 s 超时 → GUI 报「读不到引导线」（用户报的 bug）；
+/// - 那张图**还开着**（只是不是当前图）→ 静默读到/写到**别的图纸**（更隐蔽的坏图）。
+///
+/// 现在服务器线程每次请求都从这里取：
+///
+/// - 不带 `tab=` 的请求（MCP/AI、`PE_URL` Ctrl+点击）走 `default` = **最近一次命令
+///   所在的图**（≈ 用户正在动的图）；
+/// - 带 `tab=` 的页面窗口（GDIM/ME 打开的配置窗）走 `by_tab` 对号入座 —— 多张图各自
+///   开着配置窗口也不会串图，旧窗口只会超时（不会写到别的图上）。
+pub struct SenderRouter {
+    /// 最近一次命令所在的标签页的 sender。
+    default: std::sync::Mutex<Arc<dyn PluginRequestSender>>,
+    /// 标签页 → sender（每条命令刷新；按插入顺序，超上限淘汰最旧）。
+    by_tab: std::sync::Mutex<Vec<(u64, Arc<dyn PluginRequestSender>)>>,
+}
+
+/// `by_tab` 上限：正常也就几张图；给足余量，避免长会话里无限增长。
+const MAX_TRACKED_TABS: usize = 64;
+
+impl SenderRouter {
+    pub fn new(sender: Arc<dyn PluginRequestSender>) -> Self {
+        Self {
+            default: std::sync::Mutex::new(sender),
+            by_tab: std::sync::Mutex::new(Vec::new()),
+        }
+    }
+
+    /// 命令路径调用：登记「这张图（`tab`）该用这个 sender」，并设为默认目标。
+    pub fn set_current(&self, tab: u64, sender: Arc<dyn PluginRequestSender>) {
+        {
+            let mut by_tab = self.by_tab.lock().unwrap_or_else(|e| e.into_inner());
+            match by_tab.iter_mut().find(|(t, _)| *t == tab) {
+                Some(entry) => entry.1 = Arc::clone(&sender),
+                None => {
+                    by_tab.push((tab, Arc::clone(&sender)));
+                    if by_tab.len() > MAX_TRACKED_TABS {
+                        by_tab.remove(0);
+                    }
+                }
+            }
+        }
+        self.set_default_sender(sender);
+    }
+
+    /// 拿不到标签页号的路径（点选回调里不能发宿主请求）：只换默认目标；
+    /// 该标签页的登记在命令 dispatch 时已经做好。
+    pub fn set_default_sender(&self, sender: Arc<dyn PluginRequestSender>) {
+        *self.default.lock().unwrap_or_else(|e| e.into_inner()) = sender;
+    }
+
+    /// HTTP 入口：按请求里的 `tab=`（查询串或 POST body 的 `"tab"` 字段）选 sender；
+    /// 缺失或未知（老页面、MCP、`PE_URL` 链接）→ 默认目标 = 最近一次命令所在的图。
+    pub fn sender_for_request(&self, target: &str, body: &[u8]) -> Arc<dyn PluginRequestSender> {
+        if let Some(tab) = request_tab(target, body) {
+            let by_tab = self.by_tab.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some((_, sender)) = by_tab.iter().find(|(t, _)| *t == tab) {
+                return Arc::clone(sender);
+            }
+        }
+        Arc::clone(&self.default.lock().unwrap_or_else(|e| e.into_inner()))
+    }
+}
+
+/// 从 GET 查询串（`?tab=3` / `&tab=3`）或 POST body 的 `"tab"` 字段读标签页号。
+fn request_tab(target: &str, body: &[u8]) -> Option<u64> {
+    if let Some((_, query)) = target.split_once('?') {
+        for kv in query.split('&') {
+            if let Some((k, v)) = kv.split_once('=') {
+                if k == "tab" {
+                    if let Ok(tab) = v.parse::<u64>() {
+                        return Some(tab);
+                    }
+                }
+            }
+        }
+    }
+    if !body.is_empty() {
+        if let Ok(value) = serde_json::from_slice::<serde_json::Value>(body) {
+            if let Some(tab) = value.get("tab").and_then(serde_json::Value::as_u64) {
+                return Some(tab);
+            }
+        }
+    }
+    None
+}
+
 /// 启动标注更新服务器（绑定 127.0.0.1，端口从 DEFAULT_PORT 起 +1 重试）。
 /// 成功后返回端口；全部端口占用返回 None。
-pub fn spawn(sender: Arc<dyn PluginRequestSender>) -> Option<GuideServer> {
+pub fn spawn(router: Arc<SenderRouter>) -> Option<GuideServer> {
     // 端口窗 32 个：真 OCS 常占 23751，并行测试每个 spawn 占一个 —— 窗口太小会
     // 偶发抢不到端口（曾致 weld apply_refresh 测试 panic）。
     for port in DEFAULT_PORT..DEFAULT_PORT + 32 {
         if let Ok(listener) = TcpListener::bind(("127.0.0.1", port)) {
             std::thread::Builder::new()
                 .name("ocsm-guide-server".into())
-                .spawn(move || serve(listener, sender))
+                .spawn(move || serve(listener, router))
                 .ok()?;
             return Some(GuideServer { port });
         }
@@ -50,14 +145,20 @@ pub fn spawn(sender: Arc<dyn PluginRequestSender>) -> Option<GuideServer> {
     None
 }
 
-fn serve(listener: TcpListener, sender: Arc<dyn PluginRequestSender>) {
+/// 固定 sender 的服务器（测试用：不换图）。生产路径用 [`spawn`] + [`SenderRouter`]。
+#[cfg(test)]
+fn spawn_fixed(sender: Arc<dyn PluginRequestSender>) -> Option<GuideServer> {
+    spawn(Arc::new(SenderRouter::new(sender)))
+}
+
+fn serve(listener: TcpListener, router: Arc<SenderRouter>) {
     for stream in listener.incoming() {
         match stream {
             Ok(s) => {
                 // 每连接一个线程，防止慢客户端阻塞后续请求。
-                let sender = sender.clone();
+                let router = Arc::clone(&router);
                 std::thread::spawn(move || {
-                    let _ = handle_conn(&mut s.try_clone().unwrap_or_else(|_| s), &sender);
+                    let _ = handle_conn(&mut s.try_clone().unwrap_or_else(|_| s), &router);
                 });
             }
             Err(_) => continue,
@@ -146,10 +247,13 @@ fn write_response(
 
 fn handle_conn(
     stream: &mut TcpStream,
-    sender: &Arc<dyn PluginRequestSender>,
+    router: &Arc<SenderRouter>,
 ) -> std::io::Result<()> {
     let req = read_request(stream)?;
-    let (status, ctype, resp) = route(&req.method, &req.target, &req.body, sender);
+    // **每次请求都重新解析**该发给哪张图：端口是进程级复用的，图纸会换
+    // （关图 → 新建图 → 再 GDIM），固定的 sender 会指向已经关闭的标签页。
+    let sender = router.sender_for_request(&req.target, &req.body);
+    let (status, ctype, resp) = route(&req.method, &req.target, &req.body, &sender);
     write_response(stream, status, ctype, resp.as_bytes())
 }
 
@@ -7729,7 +7833,7 @@ mod integration {
     fn http_bom_get_apply_export_end_to_end() {
         let _g = export_lock();
         let mock = std::sync::Arc::new(MockSender::new(acadrust::CadDocument::new()));
-        let server = spawn(mock.clone()).expect("spawn guide server");
+        let server = spawn_fixed(mock.clone()).expect("spawn guide server");
         let port = server.port;
         // 测试服务器的端口写进静态（真插件在启动时由 lib.rs 写；挂链逻辑依赖它）。
         crate::set_guide_port_for_test(port);
@@ -7834,7 +7938,7 @@ mod integration {
     #[test]
     fn http_server_serves_bom_gui() {
         let mock = std::sync::Arc::new(MockSender::new(acadrust::CadDocument::new()));
-        let server = spawn(mock.clone()).expect("spawn guide server");
+        let server = spawn_fixed(mock.clone()).expect("spawn guide server");
         let html = http_req(server.port, "GET", "/bom.html", "");
         assert!(html.contains("btn-apply"), "应用按钮");
         assert!(html.contains("/api/bom_get"), "读端点");
@@ -7943,7 +8047,7 @@ mod integration {
         let _g = export_lock();
         let doc = synthetic_frame_doc(2.0, [0.0, 0.0]);
         let mock = std::sync::Arc::new(MockSender::new(doc));
-        let server = spawn(mock.clone()).expect("spawn guide server");
+        let server = spawn_fixed(mock.clone()).expect("spawn guide server");
         let port = server.port;
         crate::set_guide_port_for_test(port);
         let body = serde_json::json!({
@@ -7999,6 +8103,9 @@ mod integration {
     #[test]
     fn bom_link_stamp_http_adds_missing_link() {
         // 球标"应用并刷新"自动联动建表走的同款 helper：表块缺链接 → 补挂 bom.html。
+        // 串行：`set_guide_port_for_test` 写的是**进程级**静态，三个写它的测试
+        // 并行时会互相把端口改掉（本测试第二次调用就因此偶发重写链接）。
+        let _g = export_lock();
         let mut doc = acadrust::CadDocument::new();
         let mut ins = acadrust::entities::Insert::new(
             crate::bom::ROW_BLOCK,
@@ -8011,7 +8118,7 @@ mod integration {
         let h = doc.add_entity(EntityType::Insert(ins)).unwrap();
         let mock = std::sync::Arc::new(MockSender::new(doc));
         let sender: std::sync::Arc<dyn PluginRequestSender> = mock.clone();
-        let server = spawn(mock.clone()).expect("spawn guide server");
+        let server = spawn_fixed(mock.clone()).expect("spawn guide server");
         crate::set_guide_port_for_test(server.port);
         let n = stamp_bom_links_http(&sender);
         assert_eq!(n, 1, "应补 1 条链接");
@@ -8076,7 +8183,7 @@ mod integration {
     fn http_api_tolerance_end_to_end() {
         // 25H7/g6：孔偏差 +0.021/0，间隙配合。
         let mock = std::sync::Arc::new(MockSender::new(acadrust::CadDocument::new()));
-        let server = spawn(mock.clone()).expect("spawn guide server");
+        let server = spawn_fixed(mock.clone()).expect("spawn guide server");
         let r = http_req(server.port, "GET", "/api/tolerance?dim=25&fit=H7%2Fg6", "");
         let v: serde_json::Value = serde_json::from_str(&r).unwrap();
         assert_eq!(v["ok"], true);
@@ -8109,7 +8216,7 @@ mod integration {
         line.common.layer = "10引导线层".into();
         let gh = doc.add_entity(EntityType::Line(line)).unwrap();
         let mock = std::sync::Arc::new(MockSender::new(doc));
-        let server = spawn(mock.clone()).expect("spawn guide server");
+        let server = spawn_fixed(mock.clone()).expect("spawn guide server");
         let port = server.port;
         let hx = format!("{:#X}", u64::from(gh));
 
@@ -8168,7 +8275,7 @@ mod integration {
         line.common.layer = "10引导线层".into();
         let gh = doc.add_entity(EntityType::Line(line)).unwrap();
         let mock = std::sync::Arc::new(MockSender::new(doc));
-        let server = spawn(mock.clone()).expect("spawn");
+        let server = spawn_fixed(mock.clone()).expect("spawn");
         let port = server.port;
         let hx = format!("{:#X}", u64::from(gh));
 
@@ -8207,7 +8314,7 @@ mod integration {
         // 浏览器请求 /guide.html?handle=0x3AE（带 query），必须返回 200 HTML。
         let mut doc = acadrust::CadDocument::new();
         let mock = std::sync::Arc::new(MockSender::new(doc));
-        let server = spawn(mock.clone()).expect("spawn");
+        let server = spawn_fixed(mock.clone()).expect("spawn");
         let port = server.port;
         let r = http_req(port, "GET", "/guide.html?handle=0x3AE", "");
         assert!(r.contains("标注配置"), "应返回 GUI HTML: {}", &r[..r.len().min(200)]);
@@ -8219,7 +8326,7 @@ mod integration {
         // POST /api/rough_apply：C4R5 全形态 → 块含 7 线/1 圆/1 SOLID/8 ATTDEF，
         // INSERT @ 坐标 + attributes；GET /rough.html 返回 GUI。
         let mock = std::sync::Arc::new(MockSender::new(acadrust::CadDocument::new()));
-        let server = spawn(mock.clone()).expect("spawn guide server");
+        let server = spawn_fixed(mock.clone()).expect("spawn guide server");
         let html = http_req(server.port, "GET", "/rough.html?x=5&y=6", "");
         assert!(html.contains("OCSM 表面粗糙度"), "rough.html 内嵌 GUI");
         assert!(html.contains("/api/rough_apply"));
@@ -8268,7 +8375,7 @@ mod integration {
         line.common.layer = "10引导线层".into();
         doc.add_entity(EntityType::Line(line)).unwrap();
         let mock = std::sync::Arc::new(MockSender::new(doc));
-        let server = spawn(mock.clone()).expect("spawn");
+        let server = spawn_fixed(mock.clone()).expect("spawn");
         let port = server.port;
 
         // MCP 桥接：list_guides（无 /DIM/ 超链接的引导线不出现 → 空）。
@@ -8292,7 +8399,7 @@ mod integration {
         line.common.layer = "10引导线层".into();
         let gh = doc.add_entity(EntityType::Line(line)).unwrap();
         let mock = std::sync::Arc::new(MockSender::new(doc));
-        let server = spawn(mock.clone()).expect("spawn");
+        let server = spawn_fixed(mock.clone()).expect("spawn");
         let port = server.port;
         let hx = format!("{:#X}", u64::from(gh));
 
@@ -10565,7 +10672,7 @@ mod weld_tests {
         pl.add_point(Vector2::new(60.0, 20.0));
         let gh = doc.add_entity(E::LwPolyline(pl)).unwrap();
         let mock = Arc::new(MockSender::new(doc));
-        let server = spawn(mock.clone()).expect("spawn guide server");
+        let server = spawn_fixed(mock.clone()).expect("spawn guide server");
         let hx = format!("{:#X}", u64::from(gh));
         // 上侧“通孔”、下侧“深10”（percent-encode 中文）。
         let url = "http://127.0.0.1:1/DIM/LEADER/0?lu=%E9%80%9A%E5%AD%94&ll=%E6%B7%B110";
@@ -10592,7 +10699,7 @@ mod weld_tests {
         }
         let gh3 = doc3.add_entity(E::LwPolyline(pl3)).unwrap();
         let mock3 = Arc::new(MockSender::new(doc3));
-        let server3 = spawn(mock3.clone()).expect("spawn guide server 3");
+        let server3 = spawn_fixed(mock3.clone()).expect("spawn guide server 3");
         let hx3 = format!("{:#X}", u64::from(gh3));
         let body3 = serde_json::json!({"handle": hx3, "url": url}).to_string();
         let r3 = http_req(server3.port, "POST", "/api/apply_refresh", &body3);
@@ -10610,7 +10717,7 @@ mod weld_tests {
         pl.add_point(Vector2::new(60.0, 20.0));
         let gh = doc.add_entity(E::LwPolyline(pl)).unwrap();
         let mock = Arc::new(MockSender::new(doc));
-        let server = spawn(mock.clone()).expect("spawn guide server");
+        let server = spawn_fixed(mock.clone()).expect("spawn guide server");
         let hx = format!("{:#X}", u64::from(gh));
         // 角焊 + 虚线 + 尾部 + 文字（URL percent-encode 中文）。
         let url = "http://127.0.0.1:1/DIM/WELD/0?wu=%E8%A7%92%E7%84%8A&wdash=1&wtail=1&wut=5&wuq=100";
@@ -10646,7 +10753,7 @@ mod weld_tests {
         }
         let gh3 = doc3.add_entity(E::LwPolyline(pl3)).unwrap();
         let mock3 = Arc::new(MockSender::new(doc3));
-        let server3 = spawn(mock3.clone()).expect("spawn guide server 3");
+        let server3 = spawn_fixed(mock3.clone()).expect("spawn guide server 3");
         let hx3 = format!("{:#X}", u64::from(gh3));
         let body3 = serde_json::json!({"handle": hx3, "url": url}).to_string();
         let r3 = http_req(server3.port, "POST", "/api/apply_refresh", &body3);
@@ -11838,7 +11945,7 @@ mod weld_tests {
         // guide.html：焊接按钮/面板/URL 参数键/符号几何端点（静态断言；
         // 按钮显隐由 JS applyGeomFilter 按 3 顶点 PLINE 过滤）。
         let mock = Arc::new(MockSender::new(acadrust::CadDocument::new()));
-        let server = spawn(mock.clone()).expect("spawn guide server");
+        let server = spawn_fixed(mock.clone()).expect("spawn guide server");
         let html = http_req(server.port, "GET", "/guide.html?handle=0x1", "");
         assert!(html.contains("data-t=\"WELD\""), "焊接按钮");
         assert!(html.contains("id=\"row-weld\""), "焊接面板");
@@ -11867,7 +11974,7 @@ mod weld_tests {
     #[test]
     fn parts_routes_serve_page_catalog_and_preview() {
         let mock = Arc::new(MockSender::new(acadrust::CadDocument::new()));
-        let server = spawn(mock.clone()).expect("spawn guide server");
+        let server = spawn_fixed(mock.clone()).expect("spawn guide server");
         let html = http_req(server.port, "GET", "/parts", "");
         assert!(html.contains("OCSM 标准件库"), "零件库窗口标题");
         assert!(html.contains("/api/parts") && html.contains("/api/part_svg") && html.contains("/api/part_export"));
@@ -11942,7 +12049,7 @@ mod weld_tests {
     #[ignore]
     fn serve_parts_page_for_check() {
         let mock = Arc::new(MockSender::new(acadrust::CadDocument::new()));
-        let server = spawn(mock).expect("spawn guide server");
+        let server = spawn_fixed(mock).expect("spawn guide server");
         let url = format!("http://127.0.0.1:{}/parts", server.port);
         println!("零件库窗口 → {url}");
         println!("（阻塞 20 分钟供人工/浏览器核对；Ctrl-C 结束）");
@@ -12046,6 +12153,66 @@ mod weld_tests {
         let resp = apply_part_export(&sender, br#"{"family":"pin_1191","d":10,"l":18,"view":"main"}"#).expect("出库");
         assert!(resp.contains("Ø10×18"), "{resp}");
         assert!(mock.block_entities("OCSM_PIN_1191_Ø10×18_MAIN").len() > 8, "销块已建好");
+    }
+
+    /// **回归：换图之后引导服务器必须跟着换图**（2026-09-16 用户报的 bug）。
+    ///
+    /// 症状：关掉当前图纸、新建一张、画引导线跑 GDIM —— GUI 读不到引导线。根因是
+    /// 端口进程级复用、而 sender 绑定的标签页固定在了首次 spawn 那张图上（旧图被关掉
+    /// 后宿主根本不回答那个 tab 的请求 → HTTP 5 s 超时）。这里用两张图（句柄按图纸重置、
+    /// 两张图里撞成同一个，模拟真实现场）验证三种请求各自打到哪张图。
+    #[test]
+    fn http_guide_follows_the_current_drawing_after_a_drawing_switch() {
+        let line_in = |x: f64| {
+            let mut doc = acadrust::CadDocument::new();
+            let mut line = Line {
+                common: Default::default(),
+                start: Vector3::new(x, 0.0, 0.0),
+                end: Vector3::new(x + 40.0, 0.0, 0.0),
+                thickness: 0.0,
+                normal: Vector3::new(0.0, 0.0, 1.0),
+            };
+            line.common.layer = "10引导线层".into();
+            let h = doc.add_entity(EntityType::Line(line)).unwrap();
+            (doc, h)
+        };
+        let (doc1, h1) = line_in(0.0); // 旧图：引导线在 (0,0)
+        let (doc2, h2) = line_in(100.0); // 新图：同句柄，在 (100,0)
+        assert_eq!(u64::from(h1), u64::from(h2), "测试前提：句柄重置后又撞上了");
+        let mock1 = Arc::new(MockSender::new(doc1));
+        let mock2 = Arc::new(MockSender::new(doc2));
+        let router = Arc::new(SenderRouter::new(mock1.clone()));
+        router.set_current(1, mock1.clone());
+        let server = spawn(Arc::clone(&router)).expect("spawn guide server");
+        let port = server.port;
+        let hx = format!("{:#X}", u64::from(h1));
+
+        // ① 关掉图 1 → 新建图 2 → 跑命令（dispatch 里 set_current(2, …)）：
+        //    不带 tab 的请求（MCP/AI、新开的 GDIM 窗口之前的那一步、Ctrl+点击）
+        //    必须落到**当前图**——“关图后读不到引导线”就是这个断的。
+        router.set_current(2, mock2.clone());
+        let r = http_req(port, "GET", &format!("/api/guide?handle={hx}"), "");
+        let v: serde_json::Value = serde_json::from_str(&r).unwrap();
+        assert_eq!(v["ok"], true, "当前图应能读到引导线: {r}");
+        assert_eq!(v["p1"][0].as_f64().unwrap(), 100.0, "应读当前图（100,0）: {r}");
+
+        // ② 老窗口（URL 带 tab=1）仍钉在它自己的图上：多图各开配置窗不串图。
+        let r1 = http_req(port, "GET", &format!("/api/guide?handle={hx}&tab=1"), "");
+        let v1: serde_json::Value = serde_json::from_str(&r1).unwrap();
+        assert_eq!(v1["p1"][0].as_f64().unwrap(), 0.0, "tab=1 的窗口应读图 1: {r1}");
+
+        // ③ POST 端点从 body 的 `tab` 字段选图（页面 POST 不带查询串）：写只落在图 1。
+        let body = serde_json::json!({"handle": hx, "url": "http://127.0.0.1:23751/DIM/LINEAR/H/-10", "tab": 1}).to_string();
+        let r2 = http_req(port, "POST", "/api/apply", &body);
+        let v2: serde_json::Value = serde_json::from_str(&r2).unwrap();
+        assert_eq!(v2["ok"], true, "apply 应成功: {r2}");
+        assert_eq!(mock1.url_writes.lock().unwrap().len(), 1, "写入应落在图 1");
+        assert!(mock2.url_writes.lock().unwrap().is_empty(), "不能写到当前图");
+
+        // ④ 未知 tab（老页面/异常参数）兜底走默认目标 = 当前图，不报错。
+        let r3 = http_req(port, "GET", &format!("/api/guide?handle={hx}&tab=999"), "");
+        let v3: serde_json::Value = serde_json::from_str(&r3).unwrap();
+        assert_eq!(v3["p1"][0].as_f64().unwrap(), 100.0, "未知 tab 兜底当前图: {r3}");
     }
 
     #[test]

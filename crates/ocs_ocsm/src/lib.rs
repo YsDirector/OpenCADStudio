@@ -590,18 +590,22 @@ pub(crate) fn joint_spec_at_rot_for_test(spec_json: &str, pt: [f64; 3], rotation
     joint_spec_at_rot(spec_json, pt, rotation)
 }
 
-/// 一个待落件（基点位置 + 绕基点的旋转角，弧度）。
-#[derive(Clone, Copy)]
+/// 一个待落件（基点位置 + 绕基点的旋转角，弧度 + **该落哪张图**的 sender）。
+///
+/// sender 必须跟着任务走，不能存在 worker 线程里：插件进程比图纸活得久，
+/// 首次命住的那种图一旦被关掉，后续落件就会落到旧图（或永远没回应）。
+#[derive(Clone)]
 pub(crate) struct PlaceTask {
     pub pt: [f64; 3],
     pub rotation: f64,
+    pub sender: std::sync::Arc<dyn PluginRequestSender>,
 }
 
 /// 落件通道（`XL` 放置态第二下点击 → 放置 worker 落一个件）。
 static PLACE_TX: std::sync::OnceLock<std::sync::mpsc::Sender<PlaceTask>> =
     std::sync::OnceLock::new();
 
-fn place_sender(sender: std::sync::Arc<dyn PluginRequestSender>) -> std::sync::mpsc::Sender<PlaceTask> {
+fn place_sender() -> std::sync::mpsc::Sender<PlaceTask> {
     PLACE_TX
         .get_or_init(|| {
             let (tx, rx) = std::sync::mpsc::channel::<PlaceTask>();
@@ -610,6 +614,7 @@ fn place_sender(sender: std::sync::Arc<dyn PluginRequestSender>) -> std::sync::m
                 .spawn(move || {
                     for task in rx {
                         let pt = task.pt;
+                        let sender = task.sender.clone();
                         // 宿主此刻不在命令回调里，worker 请求可安全下发。
                         // 与宿主交互事件处理的微小时序差：稍等一拍更稳。
                         std::thread::sleep(std::time::Duration::from_millis(120));
@@ -768,7 +773,7 @@ static PARTS_POINT: std::sync::OnceLock<std::sync::Mutex<Option<[f64; 3]>>> =
 static JOINT_TX: std::sync::OnceLock<std::sync::mpsc::Sender<PlaceTask>> =
     std::sync::OnceLock::new();
 
-fn joint_place_sender(sender: std::sync::Arc<dyn PluginRequestSender>) -> std::sync::mpsc::Sender<PlaceTask> {
+fn joint_place_sender() -> std::sync::mpsc::Sender<PlaceTask> {
     JOINT_TX
         .get_or_init(|| {
             let (tx, rx) = std::sync::mpsc::channel::<PlaceTask>();
@@ -776,6 +781,8 @@ fn joint_place_sender(sender: std::sync::Arc<dyn PluginRequestSender>) -> std::s
                 .name("ocsm-joint-place".into())
                 .spawn(move || {
                     for task in rx {
+                        // sender 跟着任务走：worker 不住首次命住的那张图（见 PlaceTask）
+                        let sender = task.sender.clone();
                         // 宿主此刻不在命令回调里，但点击事件刚过：稍等一拍更稳（与零件放置同因）
                         std::thread::sleep(std::time::Duration::from_millis(120));
                         let Some(pending) = pending_joint() else { continue };
@@ -869,8 +876,12 @@ impl InteractiveCommand for JointPlace {
                 CommandStep::NeedPoint
             }
             PlacePhase::Rotate => {
-                let task = PlaceTask { pt: self.base.get(), rotation: rotate_angle(self.base.get(), pt) };
-                let _ = joint_place_sender(self.sender.clone()).send(task);
+                let task = PlaceTask {
+                    pt: self.base.get(),
+                    rotation: rotate_angle(self.base.get(), pt),
+                    sender: self.sender.clone(),
+                };
+                let _ = joint_place_sender().send(task);
                 CommandStep::Done
             }
         }
@@ -887,6 +898,43 @@ pub(crate) fn take_parts_point() -> Option<[f64; 3]> {
 
 static GUIDE_PORT: std::sync::OnceLock<std::sync::Mutex<Option<u16>>> =
     std::sync::OnceLock::new();
+
+/// 引导服务器「请求该发给哪张图」的路由表（进程级）。
+///
+/// 端口在进程级复用，但 sender 绑定标签页：关掉一张图 / 新建一张之后必须换成
+/// 当前图的 sender，否则服务器会一直对着旧图（旧图被关掉时宿主根本不回答那个
+/// `tab_id` 的请求 → GUI 5 s 超时「读不到引导线」）。详见 `guide_server::SenderRouter`。
+static GUIDE_ROUTER: std::sync::OnceLock<std::sync::Arc<guide_server::SenderRouter>> =
+    std::sync::OnceLock::new();
+
+/// 登记 `sender`（`tab` 已知时同时按标签页登记），并把它设为默认目标。
+/// 返回进程级路由表（服务器线程持有同一个）。
+fn guide_router(
+    tab: Option<u64>,
+    sender: std::sync::Arc<dyn PluginRequestSender>,
+) -> std::sync::Arc<guide_server::SenderRouter> {
+    let router = GUIDE_ROUTER.get_or_init(|| {
+        std::sync::Arc::new(guide_server::SenderRouter::new(std::sync::Arc::clone(&sender)))
+    });
+    match tab {
+        Some(tab) => router.set_current(tab, sender),
+        None => router.set_default_sender(sender),
+    }
+    std::sync::Arc::clone(router)
+}
+
+/// 确保引导服务器在跑（端口进程级防重），并把当前图的 sender 记进路由表。
+/// 拿不到 sender 时返回 None。
+fn ensure_guide_server_running(sender: std::sync::Arc<dyn PluginRequestSender>, tab: Option<u64>) -> Option<u16> {
+    let router = guide_router(tab, sender);
+    let mut port_slot = GUIDE_PORT.get_or_init(|| std::sync::Mutex::new(None)).lock().unwrap();
+    if let Some(port) = *port_slot {
+        return Some(port);
+    }
+    let server = crate::guide_server::spawn(router)?;
+    *port_slot = Some(server.port);
+    Some(server.port)
+}
 
 /// 当前标注更新服务器端口（未启动时 None）。guide_server 回写"可编辑链接"要用。
 pub(crate) fn current_guide_port() -> Option<u16> {
@@ -1253,9 +1301,10 @@ impl OcsmPlugin {
         };
         // 心跳键与页面一致（页面用 location.search 去掉 '?'：`handle=2A`）
         let key = format!("handle={:X}", u64::from(h));
+        // `tab=`：把本窗口钉在**这张图**上（关图 → 新建图后老窗口不会跑到新图上写）。
         let opened = open_plugin_page(
             port,
-            &format!("/guide.html?handle={:#X}", u64::from(h)),
+            &format!("/guide.html?handle={:#X}&tab={}", u64::from(h), host.tab_id()),
             &key,
             1020,
             900,
@@ -1298,9 +1347,10 @@ impl OcsmPlugin {
         };
         // 心跳键与页面一致（页面用 location.search 去掉 '?'：`handle=2A`）
         let key = format!("handle={:X}", u64::from(h));
+        // `tab=`：把本窗口钉在**这张图**上（同 cmd_guide）。
         let opened = open_plugin_page(
             port,
-            &format!("/guide.html?handle={:#X}", u64::from(h)),
+            &format!("/guide.html?handle={:#X}&tab={}", u64::from(h), host.tab_id()),
             &key,
             1020,
             900,
@@ -1553,15 +1603,9 @@ impl OcsmPlugin {
     /// 确保标注更新服务器在跑，返回端口；失败返回 None。
     fn ensure_guide_server(&self, host: &mut dyn HostApi) -> Option<u16> {
         let sender = std::sync::Arc::from(host.plugin_request_sender()?);
-        let mut port_slot = GUIDE_PORT.get_or_init(|| std::sync::Mutex::new(None)).lock().unwrap();
-        let port = if let Some(p) = *port_slot {
-            p
-        } else {
-            let server = crate::guide_server::spawn(sender)?;
-            *port_slot = Some(server.port);
-            server.port
-        };
-        drop(port_slot);
+        // 每条命令都走到这里（dispatch 开头）→ 顺手把「当前图纸」的 sender 刷新进
+        // 路由表：关图 → 新建图之后，HTTP 侧不再对着已经关闭的标签页发请求。
+        let port = ensure_guide_server_running(sender, Some(host.tab_id()))?;
         // 端口与上次不同（含首次、含插件重启后端口变了）→ 把图纸里已有 OCSM 标注的
         // “回编辑”链接重写到当前端口，否则老标注 Ctrl+点击会打开失效地址。
         refresh_edit_links(host, port);
@@ -2843,21 +2887,12 @@ impl InteractiveCommand for RoughnessPlace {
 
     fn on_point(&mut self, pt: [f64; 3]) -> CommandStep {
         // 确保标注更新服务器在跑（GUIDE_PORT 进程级防重），打开 GUI。
+        // 点选回调里**不能**发宿主请求（会与主线程死锁）→ 拿不到标签页号，
+        // 只换默认目标（该标签页的登记在命令 dispatch 时已做好）。
         let sender = self.sender.clone();
-        let mut slot = GUIDE_PORT
-            .get_or_init(|| std::sync::Mutex::new(None))
-            .lock()
-            .unwrap();
-        let port = if let Some(p) = *slot {
-            p
-        } else {
-            let Some(server) = crate::guide_server::spawn(sender) else {
-                return CommandStep::Cancel;
-            };
-            *slot = Some(server.port);
-            server.port
+        let Some(port) = ensure_guide_server_running(sender, None) else {
+            return CommandStep::Cancel;
         };
-        drop(slot);
         open_plugin_page(
             port,
             &format!("/rough.html?x={}&y={}", pt[0], pt[1]),
@@ -2940,8 +2975,9 @@ impl InteractiveCommand for PartPlace {
                 let task = PlaceTask {
                     pt: self.base.get(),
                     rotation: rotate_angle(self.base.get(), pt),
+                    sender: self.sender.clone(),
                 };
-                let _ = place_sender(self.sender.clone()).send(task);
+                let _ = place_sender().send(task);
                 self.phase.set(PlacePhase::Follow);
                 CommandStep::NeedPoint
             }
@@ -4058,7 +4094,7 @@ mod tests {
             meta_json: "{}".into(),
             label: "测试件".into(),
         };
-        place_one(&sender, &pending, PlaceTask { pt: [2.0, 3.0, 0.0], rotation: std::f64::consts::FRAC_PI_2 })
+        place_one(&sender, &pending, PlaceTask { pt: [2.0, 3.0, 0.0], rotation: std::f64::consts::FRAC_PI_2, sender: sender.clone() })
             .expect("落件");
         let names = rec.names();
         assert!(names.iter().any(|n| n.contains("AddEntities") && n.contains("rot=1.570796")), "{names:?}");
@@ -4095,4 +4131,59 @@ mod tests {
         assert_eq!(parse_session_env("DISPLAY=:1\nDISPLAY=:2\n").len(), 1);
     }
 
+    // ── 引导服务器：请求必须跟着“当前图纸”走（2026-09-16 GDIM bug）──────
+
+    /// 记下自己被要求过几次（用来断言请求落到了哪张图的 sender）。
+    struct TabSender {
+        asks: std::sync::Mutex<Vec<String>>,
+    }
+    impl TabSender {
+        fn new() -> Self {
+            TabSender { asks: std::sync::Mutex::new(Vec::new()) }
+        }
+        fn asks(&self) -> Vec<String> {
+            self.asks.lock().unwrap().clone()
+        }
+    }
+    impl PluginRequestSender for TabSender {
+        fn request(
+            &self,
+            req: ocs_plugin_api::ipc::protocol::PluginRequest,
+        ) -> Result<ocs_plugin_api::ipc::protocol::PluginResponse, ocs_plugin_api::host::PluginRequestError>
+        {
+            self.asks.lock().unwrap().push(format!("{req:?}"));
+            Ok(ocs_plugin_api::ipc::protocol::PluginResponse::Ok)
+        }
+    }
+
+    /// **回归：每条命令都把“当前图纸”的 sender 刷新进路由表**（用户报的 bug）。
+    ///
+    /// 插件进程比一张图纸活得久：端口进程级复用，但 sender 绑定标签页。旧写法把
+    /// 首次 spawn 的 sender 固定进服务器线程，于是「关掉当前图纸 → 新建一张 → GDIM」
+    /// 之后 HTTP 侧还在对着已经关闭的标签页发请求（宿主不回答 → 5 s 超时 →
+    /// GUI 读不到引导线）。
+    #[test]
+    fn guide_router_follows_the_command_tab() {
+        let s1 = std::sync::Arc::new(TabSender::new());
+        let s2 = std::sync::Arc::new(TabSender::new());
+        let tab1: std::sync::Arc<dyn PluginRequestSender> = s1.clone();
+        let tab2: std::sync::Arc<dyn PluginRequestSender> = s2.clone();
+        // 图 1 跑过命令 → 图 1 被关掉、新建图 2 又跑命令（dispatch 里走的就是这两步）。
+        let router = guide_router(Some(1), tab1);
+        guide_router(Some(2), tab2);
+
+        let ask = |target: &str, body: &[u8]| {
+            router
+                .sender_for_request(target, body)
+                .request(ocs_plugin_api::ipc::protocol::PluginRequest::BumpGeometry)
+                .unwrap();
+        };
+        ask("/api/guide?handle=2A", b""); // 无 tab（MCP/AI/新窗口）→ 当前图 2
+        ask("/api/guide?handle=2A&tab=999", b""); // 未知 tab → 兜底当前图 2
+        ask("/api/guide?handle=2A&tab=1", b""); // 老窗口（tab=1）→ 图 1
+        ask("/api/apply", br#"{"handle":"2A","url":"/DIM/HORIZONTAL/10","tab":1}"#); // POST body 的 tab 同样生效
+
+        assert_eq!(s1.asks().len(), 2, "图 1 只接带 tab=1 的请求：{:?}", s1.asks());
+        assert_eq!(s2.asks().len(), 2, "图 2 接默认与未知 tab：{:?}", s2.asks());
+    }
 }

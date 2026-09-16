@@ -394,6 +394,9 @@
 (function () {
   const q = new URLSearchParams(location.search);
   const handle = q.get('handle');
+  // 本窗口属于哪张图纸（标签页号，由 GDIM/ME 写在 URL 上）。请求带回插件后，
+  // 插件只把请求投给**这张图**——否则多张图各自开着配置窗口时会串图（甚至写错图）。
+  const tab = q.get('tab');
   document.getElementById('h').textContent = handle ? ('#' + handle) : '';
 
   let P1 = {x:0, y:0}, P2 = {x:100, y:75};
@@ -2449,7 +2452,7 @@ const BS_FITS = [
       const r = await fetch(refresh ? '/api/apply_refresh' : '/api/apply', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({handle, url})
+        body: JSON.stringify(tab ? {handle, url, tab} : {handle, url})
       });
       const j = await r.json();
       if (j.ok) {
@@ -2480,7 +2483,8 @@ const BS_FITS = [
     initLeaderRows();
     initBalloonRows();
     try {
-      const r = await fetch('/api/guide?handle=' + encodeURIComponent(handle));
+      const r = await fetch('/api/guide?handle=' + encodeURIComponent(handle)
+                            + (tab ? '&tab=' + encodeURIComponent(tab) : ''));
       const j = await r.json();
       if (j.ok) {
         setEditMode(!!j.edit);
