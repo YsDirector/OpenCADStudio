@@ -29,6 +29,9 @@ use crate::pi::{self, Entry, Event, Part, Status};
 pub const TRANSCRIPT_ID: &str = "pi_transcript_scroll";
 /// Fixed composer height in px.
 const COMPOSER_H: f32 = 72.0;
+/// Muted-but-readable grey for the composer hint and the stats line
+/// (#B1B1B1) — the theme's secondary text is too dim on the dark panel.
+const MUTED_TEXT: Color = Color::from_rgb8(177, 177, 177);
 /// Live entry ids start above this base so they never collide with the
 /// content-hashed ids of backfilled (`Replace`) entries.
 const LIVE_ID_BASE: u64 = 1 << 62;
@@ -1588,8 +1591,8 @@ fn composer<'a>(
     }
     let hint = text(hint_text)
         .size(10)
-        .style(|theme: &Theme| iced::widget::text::Style {
-            color: Some(secondary_color(theme)),
+        .style(|_: &Theme| iced::widget::text::Style {
+            color: Some(MUTED_TEXT),
         });
 
     // Model switcher + thinking level below the input box.
@@ -1692,8 +1695,8 @@ fn composer<'a>(
             container(
                 text(line)
                     .size(9)
-                    .style(|theme: &Theme| iced::widget::text::Style {
-                        color: Some(secondary_color(theme)),
+                    .style(|_: &Theme| iced::widget::text::Style {
+                        color: Some(MUTED_TEXT),
                     })
                     .width(Length::Fill),
             )
