@@ -159,14 +159,47 @@ src/app/commands/display.rs      PI / OCSPI / AI / AICHAT 命令
 `/` 列出 extension 命令（`/websearch` `/wiki-trajectories` `/wiki-model`）并可 Enter 填入；
 `@` 列出文件匹配并可 Enter 插入路径。
 
-## 9. 可选后续（Phase 3 候选，未做）
+## 9. Phase 2.7（2026-09-16 第四轮，提交 `1b8bff69`）
+
+用户追加四项 + 一个 UI 修正，全部完成：
+
+1. **表格横向滚动**：iced 内置 markdown 表格在窄面板会把单元格挤成单字列
+   （`Row.cells` 是私有字段，没法只覆盖 Viewer::table）。改法：数据层
+   `AssistantBody { text, md, table_split }` —— 文本含管道表格时用 `split_tables()`
+   切成「markdown 段 / 表格段」，表格段用 `150px` 固定列宽 + 水平滚动渲染；
+   不含表格的消息走原生快速路径；**流式期间走快速路径，定稿后表格化**（避免每 delta 重解析）。
+   2 个单测（分段解析、仅在含表格时分段）。
+2. **自由文本审批**：`input`/`editor` 类 extension UI 请求在警示行内渲染 `text_editor`
+   （editor 高 84px / input 34px），`prefill` 自动回填，`确定`(UiSubmit) / `取消`；
+   `UiEdit` 转发编辑器动作。select/confirm 保持按钮式。
+3. **压缩按钮**：模型行右端「压缩」，流式中禁用（`is_streaming()` 时 `on_press_maybe(None)`）；
+   `Command::Compact` → web `POST {type:"compact"}` / RPC `{"type":"compact"}`；
+   成败分别由 `compaction_*` 事件（Notice）与 `SendFailed` 呈现。
+4. **用量统计**：`Command::FetchStats` → `get_session_stats` → `Event::Stats(SessionStats)`；
+   展示 `↑输入 ↓输出 · 缓存 读/写 · 上下文 百分比（tokens/window） · $成本`；
+   触发时机 = 连接就绪（`Status::Ready`）+ 每轮流式结束后（`Streaming(false)` 且有转换）。
+   `contextUsage.percent` 为 null 时用 `tokens*100/window` 自算。
+5. **滚动条让位**：iced 的滚动条是**浮层**（无预留空间模式）→ transcript 内容加 12px 右
+   padding、表格容器加 12px 底 padding，滚动条落在 padding 内不再遮挡内容
+   （像素采样验证：行背景右边界距面板右缘 ~20px）。
+
+**踩坑记录**：
+- `markdown::Row.cells` / `Column` 的字段私有 → 无法在自定义 `Viewer` 里改列宽；
+  只能走文本分段 + 自建 `table` 组件。
+- 表格/分段的 `markdown::Content` **不是 `Clone`** → 分段必须在数据层构建并随条目存储
+  （渲染时构建会撞 E0515 借用局部变量）。
+- 面板 GUI 自动化的两点教训：会话下拉菜单项坐标随列表长度漂移（先截图定位再点）；
+  合盖提交时 `git add -A` 会误扫**其他并行会话**在仓库里的未提交改动 —— 提交前用
+  `git status` 核对，误扫后用 `git reset --soft HEAD~1` + `git restore --staged` 拆开。
+
+## 10. 可选后续（Phase 3 候选，未做）
 
 1. `extension_ui_request`（`setWidget`，如 `bash-bg` 后台任务小部件）→ 面板底部一行状态。
 2. 审批交互（用户已定不接；若 pi 侧策略变化再议）。
 3. 发送失败自动重试、历史回填条数可配置。
 4. 会话下拉的人工点选（Watch/Replace 逻辑有单测覆盖）。
 
-## 10. B 期已实施：pi RPC 后端（不依赖 pi-web，提交见下）
+## 11. B 期已实施：pi RPC 后端（不依赖 pi-web）
 
 **问题**：当前面板依赖 pi-web（本地 HTTP + SSE）。只有 pi（CLI）时应能工作。
 
