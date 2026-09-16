@@ -101,7 +101,11 @@ pub enum Event {
         title: String,
         message: Option<String>,
         options: Vec<String>,
+        /// Prefilled text for `input`/`editor`.
+        prefill: Option<String>,
     },
+    /// Session token/cost/context accounting.
+    Stats(SessionStats),
     /// A `set_model` succeeded; the session now uses this model.
     ModelSet { provider: String, id: String },
     /// An assistant message started streaming; `parts` is the snapshot so far
@@ -163,6 +167,41 @@ pub struct SessionInfo {
     pub cwd: Option<String>,
 }
 
+/// Token/cost/context accounting from `get_session_stats`.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct SessionStats {
+    pub input: u64,
+    pub output: u64,
+    pub cache_read: u64,
+    pub cache_write: u64,
+    pub cost: Option<f64>,
+    pub context_tokens: Option<u64>,
+    pub context_window: Option<u64>,
+    pub context_percent: Option<u8>,
+}
+
+/// Parse the `get_session_stats` payload (both backends share the shape).
+pub fn parse_stats(data: &serde_json::Value) -> SessionStats {
+    let tokens = data.get("tokens").cloned().unwrap_or_default();
+    let number = |value: &serde_json::Value, key: &str| -> u64 {
+        value.get(key).and_then(|v| v.as_u64()).unwrap_or(0)
+    };
+    let usage = data.get("contextUsage").cloned().unwrap_or_default();
+    SessionStats {
+        input: number(&tokens, "input"),
+        output: number(&tokens, "output"),
+        cache_read: number(&tokens, "cacheRead"),
+        cache_write: number(&tokens, "cacheWrite"),
+        cost: data.get("cost").and_then(|c| c.as_f64()),
+        context_tokens: usage.get("tokens").and_then(|t| t.as_u64()),
+        context_window: usage.get("contextWindow").and_then(|t| t.as_u64()),
+        context_percent: usage
+            .get("percent")
+            .and_then(|p| p.as_u64())
+            .map(|p| p.min(255) as u8),
+    }
+}
+
 /// A slash-invokable command from `get_commands`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CommandInfo {
@@ -198,6 +237,10 @@ pub enum Command {
     Browse { path: String },
     /// Fetch the file index of `cwd` (for `@` file references).
     FetchFiles { cwd: String },
+    /// Compact the conversation context (`compact`).
+    Compact,
+    /// Refresh session stats (`get_session_stats`).
+    FetchStats,
     /// Answer an extension UI request.
     UiRespond {
         id: String,
@@ -691,7 +734,18 @@ pub fn sse_to_events(ev: &serde_json::Value) -> Vec<Event> {
                                 .collect()
                         })
                         .unwrap_or_default();
-                    out.push(Event::UiRequest { id, method: method.to_string(), title, message, options });
+                    let prefill = ev
+                        .get("prefill")
+                        .and_then(|p| p.as_str())
+                        .map(str::to_string);
+                    out.push(Event::UiRequest {
+                        id,
+                        method: method.to_string(),
+                        title,
+                        message,
+                        options,
+                        prefill,
+                    });
                 }
                 // setStatus / setWidget / … — not rendered by the panel yet.
                 _ => {}
@@ -1001,6 +1055,12 @@ fn worker(endpoint: String, tx: Sender<Event>, rx: Receiver<Command>, stop: Arc<
                         Ok(Command::UiRespond { id, value, confirmed, cancelled }) => {
                             ui_respond(&endpoint, &tx, &active, &id, value, confirmed, cancelled);
                         }
+                        Ok(Command::Compact) => {
+                            compact_session(&endpoint, &tx, &active);
+                        }
+                        Ok(Command::FetchStats) => {
+                            fetch_stats(&endpoint, &tx, &active);
+                        }
                         Ok(Command::Browse { path }) => {
                             browse(&endpoint, &tx, &path);
                         }
@@ -1111,7 +1171,9 @@ fn wait_retry(
                 });
             }
             Ok(Command::Browse { .. }) | Ok(Command::FetchFiles { .. }) => {}
-            Ok(Command::UiRespond { .. }) => {}
+            Ok(Command::UiRespond { .. })
+            | Ok(Command::Compact)
+            | Ok(Command::FetchStats) => {}
             Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => return std::ops::ControlFlow::Break(()),
         }
@@ -1176,6 +1238,49 @@ fn post_prompt(
         }
         Err(e) => {
             let _ = tx.send(Event::SendFailed { message: e });
+        }
+    }
+}
+
+/// POST a bare command type (compact / get_session_stats) and return the body.
+fn post_command(
+    endpoint: &str,
+    session: &str,
+    command: &str,
+) -> Result<serde_json::Value, String> {
+    let body = serde_json::json!({ "type": command }).to_string();
+    let resp = http(
+        endpoint,
+        "POST",
+        &format!("/api/agent/{session}"),
+        Some(&body),
+        REQUEST_TIMEOUT,
+    )?;
+    if !(200..300).contains(&resp.status) {
+        let detail = serde_json::from_str::<serde_json::Value>(&resp.body)
+            .ok()
+            .and_then(|v| v.get("error").and_then(|e| e.as_str()).map(str::to_string))
+            .unwrap_or_else(|| format!("HTTP {}", resp.status));
+        return Err(detail);
+    }
+    serde_json::from_str::<serde_json::Value>(&resp.body).map_err(|e| e.to_string())
+}
+
+/// Fetch session stats and forward them to the panel.
+fn fetch_stats(endpoint: &str, tx: &Sender<Event>, session: &str) {
+    if let Ok(value) = post_command(endpoint, session, "get_session_stats") {
+        // pi-web wraps the payload as `{success, data}`.
+        let data = value.get("data").cloned().unwrap_or(value);
+        let _ = tx.send(Event::Stats(parse_stats(&data)));
+    }
+}
+
+/// Request a manual context compaction.
+fn compact_session(endpoint: &str, tx: &Sender<Event>, session: &str) {
+    match post_command(endpoint, session, "compact") {
+        Ok(_) => {}
+        Err(e) => {
+            let _ = tx.send(Event::SendFailed { message: format!("压缩失败：{e}") });
         }
     }
 }

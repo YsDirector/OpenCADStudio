@@ -369,6 +369,19 @@ fn serve(
                                     });
                                 }
                             }
+                            "get_session_stats" => {
+                                let _ = tx.send(Event::Stats(pi::parse_stats(&data)));
+                            }
+                            "compact" => {
+                                if !success {
+                                    let _ = tx.send(Event::SendFailed {
+                                        message: format!(
+                                            "压缩失败：{}",
+                                            data.as_str().unwrap_or("未知错误")
+                                        ),
+                                    });
+                                }
+                            }
                             "prompt" => {
                                 if !success {
                                     let _ = tx.send(Event::SendFailed {
@@ -501,6 +514,12 @@ fn serve(
             }
             Ok(Command::FetchFiles { cwd }) => {
                 let _ = tx.send(files_event(&cwd));
+            }
+            Ok(Command::Compact) => {
+                let _ = send_cmd(&mut stdin, &json!({"type":"compact"}));
+            }
+            Ok(Command::FetchStats) => {
+                let _ = send_cmd(&mut stdin, &json!({"type":"get_session_stats"}));
             }
             Ok(Command::UiRespond { id, value, confirmed, cancelled }) => {
                 let mut body = json!({"type":"extension_ui_response","id":id});
@@ -690,7 +709,7 @@ fn session_id_of(path: &std::path::Path) -> Option<String> {
 
 /// First user message (first line, ≤ 60 chars) as the picker label.
 fn session_label(path: &std::path::Path) -> Option<String> {
-    let mut file = std::fs::File::open(path).ok()?;
+    let file = std::fs::File::open(path).ok()?;
     let mut buffer = String::new();
     file.take(SESSION_HEAD_BYTES).read_to_string(&mut buffer).ok()?;
     for line in buffer.lines() {

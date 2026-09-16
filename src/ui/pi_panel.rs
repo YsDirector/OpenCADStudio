@@ -80,6 +80,12 @@ pub enum PiMsg {
     UiAnswer { value: Option<String>, confirmed: Option<bool> },
     /// Dismiss a pending extension UI request (cancelled).
     UiCancel,
+    /// Edit the free-text answer of an input/editor request.
+    UiEdit(text_editor::Action),
+    /// Submit the free-text answer.
+    UiSubmit,
+    /// Manually compact the conversation context.
+    Compact,
 }
 
 // ── View model ──────────────────────────────────────────────────────────────
@@ -87,11 +93,97 @@ pub enum PiMsg {
 /// One rendered transcript entry.
 pub enum PiEntryKind {
     User(String),
-    /// Assistant text + incrementally parsed markdown for rendering.
-    Assistant { text: String, md: iced::widget::markdown::Content },
+    /// Assistant text + parsed markdown (and table segments when present).
+    Assistant(AssistantBody),
     Thinking(String),
     Tool { id: String, name: String, output: String, done: bool, is_error: bool },
     Notice(String),
+}
+
+/// One rendered piece of an assistant message: markdown or a pipe table.
+/// (`markdown::Content` isn't `Clone`, so segments are built in place.)
+#[derive(Debug)]
+pub enum MdSegment {
+    Markdown {
+        text: String,
+        md: iced::widget::markdown::Content,
+    },
+    /// `[header, body rows…]`, cells trimmed.
+    Table(Vec<Vec<String>>),
+}
+
+/// Assistant message content: the raw text, its parsed markdown, and — only
+/// when the text contains pipe tables — a table-aware segmentation.
+pub struct AssistantBody {
+    pub text: String,
+    pub md: iced::widget::markdown::Content,
+    /// `None` when the message has no table (fast path at render time).
+    pub table_split: Option<Vec<MdSegment>>,
+}
+
+impl AssistantBody {
+    pub fn new(text: String) -> Self {
+        let md = iced::widget::markdown::Content::parse(&text);
+        let table_split = if text.contains('|') {
+            let segments = split_tables(&text);
+            segments
+                .iter()
+                .any(|s| matches!(s, MdSegment::Table(_)))
+                .then_some(segments)
+        } else {
+            None
+        };
+        Self { text, md, table_split }
+    }
+}
+
+/// Split raw markdown into markdown and table segments. A table starts at a
+/// `|`-prefixed line whose next line is a `|---|` separator.
+pub fn split_tables(text: &str) -> Vec<MdSegment> {
+    let lines: Vec<&str> = text.lines().collect();
+    let is_row = |line: &str| line.trim_start().starts_with('|');
+    let is_separator = |line: &str| {
+        let trimmed = line.trim();
+        trimmed.starts_with('|')
+            && trimmed.chars().all(|c| matches!(c, '|' | '-' | ':' | ' '))
+            && trimmed.contains('-')
+    };
+    let cells = |line: &str| -> Vec<String> {
+        line.trim()
+            .trim_matches('|')
+            .split('|')
+            .map(|cell| cell.trim().to_string())
+            .collect()
+    };
+    let mut segments = Vec::new();
+    let mut plain = String::new();
+    let mut i = 0;
+    while i < lines.len() {
+        let starts_table = is_row(lines[i]) && i + 1 < lines.len() && is_separator(lines[i + 1]);
+        if !starts_table {
+            plain.push_str(lines[i]);
+            plain.push('\n');
+            i += 1;
+            continue;
+        }
+        if !plain.trim().is_empty() {
+            let chunk = std::mem::take(&mut plain);
+            let md = iced::widget::markdown::Content::parse(&chunk);
+            segments.push(MdSegment::Markdown { text: chunk, md });
+        }
+        let mut rows = vec![cells(lines[i])];
+        i += 2; // header + separator
+        while i < lines.len() && is_row(lines[i]) {
+            rows.push(cells(lines[i]));
+            i += 1;
+        }
+        segments.push(MdSegment::Table(rows));
+    }
+    if !plain.trim().is_empty() {
+        let md = iced::widget::markdown::Content::parse(&plain);
+        segments.push(MdSegment::Markdown { text: plain, md });
+    }
+    segments
 }
 
 /// A transcript entry plus per-entry UI state (collapsed/expanded).
@@ -256,6 +348,10 @@ pub struct PiPanelState {
     pub pending_ui: Option<PendingUi>,
     /// Backend label shown in the status strip ("pi-web …" / "pi rpc …").
     pub backend: String,
+    /// Token/cost/context accounting (`get_session_stats`).
+    pub stats: Option<pi::SessionStats>,
+    /// Free-text answer buffer for `input`/`editor` UI requests.
+    pub ui_answer: text_editor::Content,
     /// How to reach pi: "auto" | "web" | "rpc" (`OCS_PI_MODE`).
     pub mode: String,
     /// `pi` executable for RPC mode (`OCS_PI_BIN`).
@@ -304,6 +400,8 @@ impl Default for PiPanelState {
             browse: None,
             pending_ui: None,
             backend: String::new(),
+            stats: None,
+            ui_answer: text_editor::Content::new(),
             mode: std::env::var("OCS_PI_MODE").unwrap_or_else(|_| "auto".to_string()),
             pi_bin: std::env::var("OCS_PI_BIN").unwrap_or_else(|_| "pi".to_string()),
             project_cwd: std::env::var("OCS_PI_CWD")
@@ -392,6 +490,11 @@ impl PiPanelState {
     pub fn apply(&mut self, ev: Event) -> bool {
         match ev {
             Event::Status(s) => {
+                // A fresh connection/session — pull the token accounting so the
+                // stats line is populated right away.
+                if matches!(s, Status::Ready { .. }) {
+                    self.send_command(pi::Command::FetchStats);
+                }
                 self.status = match &s {
                     Status::Connecting => PiStatus::Connecting,
                     Status::Ready { session, streaming } => {
@@ -481,9 +584,18 @@ impl PiPanelState {
                 self.backend = label;
                 false
             }
-            Event::UiRequest { id, method, title, message, options } => {
+            Event::UiRequest { id, method, title, message, options, prefill } => {
+                if let Some(prefill) = &prefill {
+                    self.ui_answer = text_editor::Content::with_text(prefill);
+                } else {
+                    self.ui_answer = text_editor::Content::new();
+                }
                 self.pending_ui = Some(PendingUi { id, method, title, message, options });
                 true
+            }
+            Event::Stats(stats) => {
+                self.stats = Some(stats);
+                false
             }
             Event::ModelSet { provider, id } => {
                 self.current_model = Some((provider, id));
@@ -552,10 +664,7 @@ impl PiPanelState {
                         }
                         Part::Text(t) => {
                             if !t.is_empty() {
-                                self.push_kind(PiEntryKind::Assistant {
-                                    md: iced::widget::markdown::Content::parse(&t),
-                                    text: t,
-                                });
+                                self.push_kind(PiEntryKind::Assistant(AssistantBody::new(t)));
                             }
                         }
                         Part::ToolCall { id, name } => self.ensure_tool(&id, &name),
@@ -581,8 +690,13 @@ impl PiPanelState {
                 false
             }
             Event::Streaming(v) => {
+                let was_streaming = self.is_streaming();
                 if let PiStatus::Ready { streaming, .. } = &mut self.status {
                     *streaming = v;
+                }
+                // A run just finished — refresh the token/context accounting.
+                if was_streaming && !v {
+                    self.send_command(pi::Command::FetchStats);
                 }
                 false
             }
@@ -924,8 +1038,8 @@ fn stable_entry(entry: Entry) -> PiEntry {
     let (tag, key, kind) = match entry {
         Entry::User(t) => ("u", t.clone(), PiEntryKind::User(t)),
         Entry::Assistant(t) => {
-            let md = iced::widget::markdown::Content::parse(&t);
-            ("a", t.clone(), PiEntryKind::Assistant { text: t, md })
+            let body = AssistantBody::new(t.clone());
+            ("a", t, PiEntryKind::Assistant(body))
         }
         Entry::Thinking(t) => ("t", t.clone(), PiEntryKind::Thinking(t)),
         Entry::Tool { id, name, output, done, is_error } => {
@@ -1138,9 +1252,9 @@ fn entry_view<'a>(e: &'a PiEntry, theme: &'a Theme) -> Element<'a, Message> {
             .padding([6, 8])
             .into()
         }
-        PiEntryKind::Assistant { md, .. } => column![
+        PiEntryKind::Assistant(body) => column![
             tag_label("Pi"),
-            assistant_markdown(md, theme),
+            assistant_markdown(body, theme),
         ]
         .spacing(2)
         .padding([2, 4])
@@ -1195,15 +1309,64 @@ fn entry_view<'a>(e: &'a PiEntry, theme: &'a Theme) -> Element<'a, Message> {
     }
 }
 
-/// Render assistant markdown (shared by finalized entries and live stream).
-/// Links open in the system browser.
-fn assistant_markdown<'a>(md: &'a iced::widget::markdown::Content, theme: &'a Theme) -> Element<'a, Message> {
-    iced::widget::markdown::view(
-        md.items(),
-        iced::widget::markdown::Settings::with_text_size(12, theme),
+/// Minimum column width for rendered tables — wider than the dock panel, so
+/// the table scrolls horizontally instead of squeezing cells to one character.
+const TABLE_COLUMN_MIN_WIDTH: f32 = 150.0;
+
+/// Render one pipe table with fixed-width columns inside a horizontal
+/// scrollable (iced's built-in markdown table squeezes in narrow panels).
+fn table_view(rows: &[Vec<String>]) -> Element<'_, Message> {
+    use iced::widget::{scrollable, table};
+    let columns: &[String] = rows.first().map(|header| header.as_slice()).unwrap_or(&[]);
+    let grid = table(
+        columns.iter().enumerate().map(|(index, header)| {
+            table::column(text(header.clone()).size(11), move |row: &Vec<String>| {
+                text(row.get(index).cloned().unwrap_or_default()).size(11)
+            })
+            .width(Length::Fixed(TABLE_COLUMN_MIN_WIDTH))
+        }),
+        rows.iter().skip(1),
     )
-    .map(Message::OpenUrl)
+    .padding_x(4.0)
+    .padding_y(2.0)
+    .separator_x(0);
+    // Bottom padding reserves room for the floating horizontal scrollbar so it
+    // doesn't cover the last row.
+    scrollable(
+        container(grid).padding(iced::Padding {
+            top: 0.0,
+            right: 0.0,
+            bottom: 12.0,
+            left: 0.0,
+        }),
+    )
+    .direction(scrollable::Direction::Horizontal(
+        scrollable::Scrollbar::default(),
+    ))
     .into()
+}
+
+/// Render an assistant message: the stock markdown viewer, except when the
+/// message contains pipe tables — those are rendered separately so they can
+/// scroll horizontally instead of collapsing to one character per line.
+fn assistant_markdown<'a>(body: &'a AssistantBody, theme: &'a Theme) -> Element<'a, Message> {
+    let settings = iced::widget::markdown::Settings::with_text_size(12, theme);
+    let Some(segments) = &body.table_split else {
+        return iced::widget::markdown::view(body.md.items(), settings).map(Message::OpenUrl);
+    };
+    let mut column_children = column![].spacing(2).width(Length::Fill);
+    for segment in segments {
+        match segment {
+            MdSegment::Markdown { md, .. } => {
+                column_children = column_children
+                    .push(iced::widget::markdown::view(md.items(), settings).map(Message::OpenUrl));
+            }
+            MdSegment::Table(rows) => {
+                column_children = column_children.push(table_view(rows));
+            }
+        }
+    }
+    column_children.into()
 }
 
 /// The live assistant message (thinking blocks + growing text).
@@ -1242,7 +1405,13 @@ fn streaming_view<'a>(state: &'a PiPanelState, theme: &'a Theme) -> Option<Eleme
                         })
                         .into()
                 } else {
-                    assistant_markdown(md, theme)
+                    // Streaming uses the fast path; the finalized entry gets
+                    // the table-aware rendering.
+                    iced::widget::markdown::view(
+                        md.items(),
+                        iced::widget::markdown::Settings::with_text_size(12, theme),
+                    )
+                    .map(Message::OpenUrl)
                 };
                 col = col.push(
                     column![tag_label("Pi"), body]
@@ -1473,7 +1642,66 @@ fn composer<'a>(
                     .on_select(|l: String| Message::Pi(PiMsg::ThinkingPick(l))),
             );
         }
+        // Manual context compaction (disabled while a run is streaming).
+        let compact = button(text("压缩").size(10))
+            .on_press_maybe(
+                (!state.is_streaming()).then_some(Message::Pi(PiMsg::Compact)),
+            )
+            .style(|theme: &Theme, status| button::subtle(theme, status))
+            .padding([2, 7]);
+        row = row.push(compact);
         container(row).width(Length::Fill).padding([2, 2]).into()
+    };
+
+    // Token/cost/context accounting for the session.
+    let stats_row: Element<'_, Message> = match &state.stats {
+        Some(stats) if stats.input > 0 || stats.context_tokens.is_some() => {
+            let short = |n: u64| -> String {
+                if n >= 1_000_000 {
+                    format!("{:.1}M", n as f64 / 1_000_000.0)
+                } else if n >= 1_000 {
+                    format!("{:.1}k", n as f64 / 1_000.0)
+                } else {
+                    n.to_string()
+                }
+            };
+            let mut line = format!(
+                "↑{} ↓{} · 缓存 {}/{}",
+                short(stats.input),
+                short(stats.output),
+                short(stats.cache_read),
+                short(stats.cache_write),
+            );
+            if let (Some(tokens), Some(window)) = (stats.context_tokens, stats.context_window) {
+                // pi-web may report `percent: null`（压缩后）；兜底自算。
+                let percent = stats
+                    .context_percent
+                    .map(u64::from)
+                    .or_else(|| (window > 0).then(|| tokens * 100 / window))
+                    .map(|p| format!("{p}%"))
+                    .unwrap_or_default();
+                line = format!(
+                    "{line} · 上下文 {percent}（{}/{}）",
+                    short(tokens),
+                    short(window)
+                );
+            }
+            if let Some(cost) = stats.cost {
+                line = format!("{line} · ${cost:.3}");
+            }
+            container(
+                text(line)
+                    .size(9)
+                    .style(|theme: &Theme| iced::widget::text::Style {
+                        color: Some(secondary_color(theme)),
+                    })
+                    .width(Length::Fill),
+            )
+            .width(Length::Fill)
+            .padding([1, 4])
+            .into()
+        }
+        _ => column![].into(),
     };
 
     let popup_row: Element<'_, Message> = popup_view(state);
@@ -1482,7 +1710,7 @@ fn composer<'a>(
         None => column![].into(),
     };
     let ui_request_row: Element<'_, Message> = match &state.pending_ui {
-        Some(request) => ui_request_view(request),
+        Some(request) => ui_request_view(request, &state.ui_answer),
         None => column![].into(),
     };
 
@@ -1498,6 +1726,7 @@ fn composer<'a>(
                 .spacing(6)
                 .align_y(iced::Center),
             model_row,
+            stats_row,
         ]
         .spacing(4),
     )
@@ -1516,7 +1745,10 @@ fn composer<'a>(
 }
 
 /// Pending approval dialog (extension UI request) above the editor.
-fn ui_request_view(request: &PendingUi) -> Element<'_, Message> {
+fn ui_request_view<'a>(
+    request: &'a PendingUi,
+    answer: &'a text_editor::Content,
+) -> Element<'a, Message> {
     let mut body = column![
         text(request.title.clone()).size(11),
     ]
@@ -1529,6 +1761,16 @@ fn ui_request_view(request: &PendingUi) -> Element<'_, Message> {
                 .style(|theme: &Theme| iced::widget::text::Style {
                     color: Some(secondary_color(theme)),
                 }),
+        );
+    }
+    // `input` / `editor` requests are answered with free text.
+    if request.method == "input" || request.method == "editor" {
+        body = body.push(
+            text_editor(answer)
+                .size(11)
+                .height(Length::Fixed(if request.method == "editor" { 84.0 } else { 34.0 }))
+                .padding(3)
+                .on_action(|a| Message::Pi(PiMsg::UiEdit(a))),
         );
     }
     let mut actions = row![].spacing(4).align_y(iced::Center);
@@ -1573,15 +1815,19 @@ fn ui_request_view(request: &PendingUi) -> Element<'_, Message> {
                     .padding([3, 10]),
             );
         }
-        // `input` / `editor` need free-form text; the panel routes those to
-        // another client for now.
+        // `input` / `editor`: answer with the free-text editor above.
         _ => {
             actions = actions.push(
-                text("（请在其他 pi 客户端作答）")
-                    .size(10)
-                    .style(|theme: &Theme| iced::widget::text::Style {
-                        color: Some(secondary_color(theme)),
-                    }),
+                button(text("确定").size(10))
+                    .on_press(Message::Pi(PiMsg::UiSubmit))
+                    .style(|theme: &Theme, status| {
+                        let mut style = button::subtle(theme, status);
+                        style.background =
+                            Some(Background::Color(theme.palette().success.weak.color));
+                        style.text_color = theme.palette().success.weak.text;
+                        style
+                    })
+                    .padding([3, 10]),
             );
         }
     }
@@ -1785,11 +2031,18 @@ pub fn view<'a>(
         if let Some(live) = streaming_view(state, theme) {
             list = list.push(live);
         }
-        scrollable(list)
-            .id(iced::widget::Id::new(TRANSCRIPT_ID))
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .into()
+        // iced scrollbars float above the content; the right padding keeps the
+        // vertical one from covering text.
+        scrollable(list.padding(iced::Padding {
+            top: 2.0,
+            right: 12.0,
+            bottom: 2.0,
+            left: 0.0,
+        }))
+        .id(iced::widget::Id::new(TRANSCRIPT_ID))
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .into()
     };
 
     // **`Fixed(width)` is load-bearing**: the dock hands every expanded panel
@@ -1815,6 +2068,32 @@ mod tests {
 
     fn state() -> PiPanelState {
         PiPanelState::empty()
+    }
+
+    #[test]
+    fn split_tables_detects_pipe_tables() {
+        let text = "前言\n\n| A | B |\n|---|---|\n| 1 | 2 |\n\n后记";
+        let segments = split_tables(text);
+        assert_eq!(segments.len(), 3, "{segments:?}");
+        assert!(matches!(&segments[0], MdSegment::Markdown { text, .. } if text.contains("前言")));
+        match &segments[1] {
+            MdSegment::Table(rows) => {
+                assert_eq!(rows.len(), 2);
+                assert_eq!(rows[0], vec!["A".to_string(), "B".to_string()]);
+                assert_eq!(rows[1], vec!["1".to_string(), "2".to_string()]);
+            }
+            other => panic!("expected a table, got {other:?}"),
+        }
+        assert!(matches!(&segments[2], MdSegment::Markdown { text, .. } if text.contains("后记")));
+    }
+
+    #[test]
+    fn assistant_body_only_splits_when_a_table_exists() {
+        assert!(AssistantBody::new("普通文本，没有表格".into()).table_split.is_none());
+        assert!(AssistantBody::new("带 | 竖线 但没表格".into()).table_split.is_none());
+        let with_table = AssistantBody::new("| A |\n|---|\n| 1 |\n".into());
+        assert!(with_table.table_split.is_some());
+        assert_eq!(with_table.text, "| A |\n|---|\n| 1 |\n");
     }
 
     #[test]
@@ -1844,7 +2123,7 @@ mod tests {
         assert!(s.apply(Event::AssistantEnd { parts: vec![(0, Part::Text("你好，世界".into()))] }));
         // Final flush lands as one Assistant entry; live buffer cleared.
         assert_eq!(s.entries.len(), 1);
-        assert!(matches!(&s.entries[0].kind, PiEntryKind::Assistant { text, .. } if text == "你好，世界"));
+        assert!(matches!(&s.entries[0].kind, PiEntryKind::Assistant(body) if body.text == "你好，世界"));
         assert!(s.streaming.blocks.is_empty());
     }
 
@@ -1862,7 +2141,7 @@ mod tests {
         }));
         assert_eq!(s.entries.len(), 2);
         assert!(matches!(&s.entries[0].kind, PiEntryKind::Thinking(_)));
-        assert!(matches!(&s.entries[1].kind, PiEntryKind::Assistant { .. }));
+        assert!(matches!(&s.entries[1].kind, PiEntryKind::Assistant(_)));
         // Thinking entries start collapsed.
         assert!(!s.entries[0].expanded);
     }
