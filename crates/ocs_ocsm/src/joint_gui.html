@@ -130,6 +130,9 @@
 let catalog = null;
 let chain = [];          // [{kind, family, d, t}]
 const el = (id) => document.getElementById(id);
+// 本窗口钉在哪张图纸上（插件开窗时写的 `tab=`）：装配/落件请求带回给插件，
+// 多张图各开窗口时不串图；旧窗口（图纸已关）会被插件明确拒绝。
+const TAB = new URLSearchParams(location.search).get("tab");
 
 const KIND_LABEL = { plate: "板厚（被连接件）", gap: "间隙/垫片", washer: "垫圈", nut: "螺母" };
 // 件链可选项：板厚、间隙 + 库里的垫圈/螺母族（kind 由 /api/parts 给出）
@@ -431,7 +434,7 @@ async function place() {
     const r = await fetch("/api/joint_place", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(specJson()),
+      body: JSON.stringify(Object.assign({ tab: TAB || undefined }, specJson())),
     });
     const j = await r.json();
     if (j.ok) {

@@ -82,6 +82,9 @@
 <script>
 let catalog = null, cur = { family: "", d: 0, l: 0, view: "main" };
 const el = (id) => document.getElementById(id);
+// 本窗口钉在哪张图纸上（插件开窗时写的 `tab=`）：出库/插入都带回给插件，
+// 多张图各开窗口时不串图；旧窗口（图纸已关）会被插件明确拒绝。
+const TAB = new URLSearchParams(location.search).get("tab");
 
 async function load() {
   catalog = await (await fetch("/api/parts")).json();
@@ -208,7 +211,7 @@ async function outOfStock() {
     const r = await fetch("/api/part_export", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(cur),
+      body: JSON.stringify(TAB ? Object.assign({ tab: TAB }, cur) : cur),
     });
     const j = await r.json();
     if (j.ok) {

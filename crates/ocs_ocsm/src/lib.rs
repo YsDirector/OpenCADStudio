@@ -34,8 +34,9 @@ use ocs_plugin_api::host::acadrust;
 use ocs_plugin_api::host::acadrust::entities::Dimension;
 use ocs_plugin_api::host::acadrust::types::{Color, LineWeight, Vector3};
 use ocs_plugin_api::host::{
-    BuiltinPlugin, CommandStep, DimStyleDef, FrameItem, HostApi, ImportFrameBlockRequest,
-    InteractiveCommand, LayerDef, LinetypeDef, PluginRequestSender, TextStyleDef,
+    BuiltinPlugin, CommandStep, DimStyleDef, FrameItem, HostApi, HostNotification,
+    ImportFrameBlockRequest, InteractiveCommand, LayerDef, LinetypeDef, PluginRequestSender,
+    TextStyleDef,
 };
 use ocs_plugin_api::manifest::{ApiVersion, PluginManifest};
 use ocs_plugin_api::ribbon::{
@@ -395,22 +396,36 @@ pub(crate) fn open_plugin_page(
     true
 }
 
+/// 给页面 URL 接上 `tab=<图纸号>`（页面会把它带回给插件的每个请求，见
+/// `guide_server::SenderRouter`）：**命令开窗时知道自己在哪张图上**，就把它钉死。
+/// 拿不到 tab（`PE_URL` 链接、旧窗口）→ 不带参数：插件按「当前活跃图纸」算。
+pub(crate) fn with_tab(path: &str, tab: Option<u64>) -> String {
+    match tab {
+        Some(tab) => format!(
+            "{path}{}tab={tab}",
+            if path.contains('?') { '&' } else { '?' }
+        ),
+        None => path.to_string(),
+    }
+}
+
 /// 打开零件库页面：优先 **chromium `--app=` 独立窗口**（沉浸式，无地址栏/标签栏；
 /// 且出库后页面能自己 `window.close()` 关掉它），失败时退回 `xdg-open`。
 ///
 /// 坑：插件进程环境是**精简的**（宿主给 plugin runner 的 environ 里没有
 /// `DISPLAY`/`WAYLAND_DISPLAY`），直接 spawn chromium 会以
 /// "Missing X server or $DISPLAY" 失败 —— 所以先补齐会话的显示变量。
-pub(crate) fn open_parts_window(port: u16) -> bool {
-    open_plugin_page(port, "/parts", "parts", 960, 900)
+pub(crate) fn open_parts_window(port: u16, tab: Option<u64>) -> bool {
+    open_plugin_page(port, &with_tab("/parts", tab), "parts", 960, 900)
 }
 
 /// 打开**螺栓副装配**窗口（人用 GUI；AI 走命令行/HTTP 同一实现）。
-pub(crate) fn open_joint_window(port: u16) -> bool {
-    open_plugin_page(port, "/joint", "joint", 1080, 900)
+pub(crate) fn open_joint_window(port: u16, tab: Option<u64>) -> bool {
+    open_plugin_page(port, &with_tab("/joint", tab), "joint", 1080, 900)
 }
 
 /// 打开**命令手册**窗口（人类侧：命令目录 + 操作教程；教程 md 与 AI 的 skill 手册同一批文件）。
+/// 手册页只读磁盘上的 md（不碰图纸）→ 不需要 `tab=`。
 pub(crate) fn open_manual_window(port: u16) -> bool {
     open_plugin_page(port, "/manual", "manual", 1180, 940)
 }
@@ -907,6 +922,54 @@ static GUIDE_PORT: std::sync::OnceLock<std::sync::Mutex<Option<u16>>> =
 static GUIDE_ROUTER: std::sync::OnceLock<std::sync::Arc<guide_server::SenderRouter>> =
     std::sync::OnceLock::new();
 
+/// 宿主通知里的「当前活跃标签页」（`SelectionChangedV4` 只对活动标签页发，见
+/// `notify_plugins_selection_changed`）。比「最近一次命令所在的图」更准：用户切个
+/// 标签页不动命令，插件也知道现在看的是哪张图。
+///
+/// 单独存一份：通知可能在引导服务器（路由表）创建**之前**就到了。
+static HOST_ACTIVE_TAB: std::sync::OnceLock<std::sync::Mutex<Option<u64>>> =
+    std::sync::OnceLock::new();
+
+fn host_active_tab() -> Option<u64> {
+    *HOST_ACTIVE_TAB
+        .get_or_init(|| std::sync::Mutex::new(None))
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+}
+
+/// 处理宿主通知（`BuiltinPlugin::on_notification`）：只维护路由表需要的两条信息。
+pub(crate) fn on_host_notification(notification: &HostNotification) {
+    match notification {
+        // 活动标签页换了（切图、改选择都会发）→ 无 `tab=` 的请求跟它走。
+        HostNotification::SelectionChangedV4 { tab_id, .. } => {
+            *HOST_ACTIVE_TAB
+                .get_or_init(|| std::sync::Mutex::new(None))
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()) = Some(*tab_id);
+            if let Some(router) = GUIDE_ROUTER.get() {
+                router.set_active(*tab_id);
+            }
+        }
+        // 标签页关了 → 那张图上的窗口请求立即报错（而不是 5 s 超时），
+        // 也不会退化成「写到当前图」。
+        HostNotification::DocumentTabClosed { tab_id } => {
+            {
+                let mut active = HOST_ACTIVE_TAB
+                    .get_or_init(|| std::sync::Mutex::new(None))
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
+                if *active == Some(*tab_id) {
+                    *active = None; // 等宿主的下一条 SelectionChangedV4
+                }
+            }
+            if let Some(router) = GUIDE_ROUTER.get() {
+                router.mark_closed(*tab_id);
+            }
+        }
+        _ => {}
+    }
+}
+
 /// 登记 `sender`（`tab` 已知时同时按标签页登记），并把它设为默认目标。
 /// 返回进程级路由表（服务器线程持有同一个）。
 fn guide_router(
@@ -914,7 +977,10 @@ fn guide_router(
     sender: std::sync::Arc<dyn PluginRequestSender>,
 ) -> std::sync::Arc<guide_server::SenderRouter> {
     let router = GUIDE_ROUTER.get_or_init(|| {
-        std::sync::Arc::new(guide_server::SenderRouter::new(std::sync::Arc::clone(&sender)))
+        std::sync::Arc::new(guide_server::SenderRouter::new(
+            std::sync::Arc::clone(&sender),
+            host_active_tab(),
+        ))
     });
     match tab {
         Some(tab) => router.set_current(tab, sender),
@@ -1125,6 +1191,15 @@ impl BuiltinPlugin for OcsmPlugin {
             }
         }
         Box::new(OcsmModule)
+    }
+
+    /// 宿主通知（API v4+）：只用来维护「当前活跃图纸」。
+    ///
+    /// `SelectionChangedV4` / `DocumentTabClosed` 是宿主主动推的（不靠命令），
+    /// 所以用户**只切标签页不跑命令**时插件也知道现在看的是哪张图；图纸被关掉
+    /// 时也能立刻拒绝那张图上的窗口请求（而不是干等 5 s 超时）。
+    fn on_notification(&mut self, _command_id: Option<u64>, notification: HostNotification) {
+        crate::on_host_notification(&notification);
     }
 
     fn dispatch(&self, host: &mut dyn HostApi, cmd: &str) -> bool {
@@ -1452,6 +1527,8 @@ impl OcsmPlugin {
         };
         host.start_interactive(Box::new(RoughnessPlace {
             sender: std::sync::Arc::from(sender),
+            // 命令里知道自己在哪张图上 → 把窗口钉死在这张图（点选回调里拿不到 tab）。
+            tab: Some(host.tab_id()),
         }));
     }
 
@@ -1480,7 +1557,7 @@ impl OcsmPlugin {
         }
         // 先确保标注更新服务器在跑并打开零件库窗口（不需要先点插入点）
         if let Some(port) = self.ensure_guide_server(host) {
-            if open_parts_window(port) {
+            if open_parts_window(port, Some(host.tab_id())) {
                 host.push_info(
                     "OCSM 标准件库：已打开零件库窗口。选零件点「零件出库」→ 回到图纸点击定位基点 → 移动光标旋转 → 再点击落定（可连续，Esc 结束）。",
                 );
@@ -1548,7 +1625,7 @@ impl OcsmPlugin {
                 host.push_error("OCSMJOINT: 无法启动螺栓副服务（宿主不支持 worker 请求）。");
                 return;
             };
-            if open_joint_window(port) {
+            if open_joint_window(port, Some(host.tab_id())) {
                 host.push_info(
                     "OCSM 螺栓副：已打开装配窗口。选好螺栓/件链点「装配到图纸」→ 回到图纸点击定位基点 → 移动光标旋转 → 再点击落定（可连续，Esc 结束）。",
                 );
@@ -2875,9 +2952,11 @@ pub(crate) fn parts_scan() -> Vec<PartEntry> {
     parts_scan_in(&parts_dir())
 }
 
-/// 表面粗糙度交互：点选插入点 → 打开粗糙度 GUI（rough.html?x=&y=）。
+/// 表面粗糙度交互：点选插入点 → 打开粗糙度 GUI（rough.html?x=&y=&tab=N）。
 struct RoughnessPlace {
     sender: std::sync::Arc<dyn PluginRequestSender>,
+    /// 打开窗口时钉住的图纸（标签页号；命令启动时记下，点选时拿不到）。
+    tab: Option<u64>,
 }
 
 impl InteractiveCommand for RoughnessPlace {
@@ -2887,15 +2966,15 @@ impl InteractiveCommand for RoughnessPlace {
 
     fn on_point(&mut self, pt: [f64; 3]) -> CommandStep {
         // 确保标注更新服务器在跑（GUIDE_PORT 进程级防重），打开 GUI。
-        // 点选回调里**不能**发宿主请求（会与主线程死锁）→ 拿不到标签页号，
-        // 只换默认目标（该标签页的登记在命令 dispatch 时已做好）。
+        // 点选回调里**不能**发宿主请求（会与主线程死锁）→ 只换默认目标
+        // （该标签页的登记在命令 dispatch 时已做好）。
         let sender = self.sender.clone();
         let Some(port) = ensure_guide_server_running(sender, None) else {
             return CommandStep::Cancel;
         };
         open_plugin_page(
             port,
-            &format!("/rough.html?x={}&y={}", pt[0], pt[1]),
+            &with_tab(&format!("/rough.html?x={}&y={}", pt[0], pt[1]), self.tab),
             "rough",
             900,
             880,
@@ -4156,34 +4235,59 @@ mod tests {
         }
     }
 
-    /// **回归：每条命令都把“当前图纸”的 sender 刷新进路由表**（用户报的 bug）。
+    /// **回归：请求跟着“当前活跃图纸”走**（用户报的 bug + 后续加固）。
     ///
     /// 插件进程比一张图纸活得久：端口进程级复用，但 sender 绑定标签页。旧写法把
     /// 首次 spawn 的 sender 固定进服务器线程，于是「关掉当前图纸 → 新建一张 → GDIM」
     /// 之后 HTTP 侧还在对着已经关闭的标签页发请求（宿主不回答 → 5 s 超时 →
-    /// GUI 读不到引导线）。
+    /// GUI 读不到引导线）。现在：带 `tab=` 的窗口对号入座；不带 `tab=` 的跟宿主通知
+    /// 的活跃图纸；目标图没了/没登记过就明确报错，不猜着写到别的图上。
     #[test]
-    fn guide_router_follows_the_command_tab() {
+    fn guide_router_follows_the_active_drawing() {
         let s1 = std::sync::Arc::new(TabSender::new());
         let s2 = std::sync::Arc::new(TabSender::new());
+        let s3 = std::sync::Arc::new(TabSender::new());
         let tab1: std::sync::Arc<dyn PluginRequestSender> = s1.clone();
         let tab2: std::sync::Arc<dyn PluginRequestSender> = s2.clone();
+        let tab3: std::sync::Arc<dyn PluginRequestSender> = s3.clone();
         // 图 1 跑过命令 → 图 1 被关掉、新建图 2 又跑命令（dispatch 里走的就是这两步）。
         let router = guide_router(Some(1), tab1);
         guide_router(Some(2), tab2);
 
-        let ask = |target: &str, body: &[u8]| {
-            router
-                .sender_for_request(target, body)
+        let ask = |target: &str, body: &[u8]| -> Result<(), String> {
+            let sender = router.resolve(target, body)?;
+            sender
                 .request(ocs_plugin_api::ipc::protocol::PluginRequest::BumpGeometry)
                 .unwrap();
+            Ok(())
         };
-        ask("/api/guide?handle=2A", b""); // 无 tab（MCP/AI/新窗口）→ 当前图 2
-        ask("/api/guide?handle=2A&tab=999", b""); // 未知 tab → 兜底当前图 2
-        ask("/api/guide?handle=2A&tab=1", b""); // 老窗口（tab=1）→ 图 1
-        ask("/api/apply", br#"{"handle":"2A","url":"/DIM/HORIZONTAL/10","tab":1}"#); // POST body 的 tab 同样生效
+
+        // ① 无 tab（AI/MCP、新窗口）→ 当前图（最近命令所在）图 2
+        ask("/api/guide?handle=2A", b"").expect("无 tab 请求");
+        // ② 老窗口（tab=1）→ 图 1；POST body 里的 tab 同样生效
+        ask("/api/guide?handle=2A&tab=1", b"").expect("tab=1 请求");
+        ask("/api/apply", br#"{"handle":"2A","url":"/DIM/LINEAR/H/10","tab":1}"#).expect("带 tab 的 POST");
+        // ③ 宿主通知“活跃图纸换成图 3”（只切标签页、不跑命令）——图 3 还没跑过命令
+        //    → 明确报错，不猜着用图 2。
+        crate::on_host_notification(&HostNotification::SelectionChangedV4 {
+            tab_id: 3,
+            handles: Vec::new(),
+        });
+        let err = ask("/api/guide?handle=2A", b"").expect_err("活跃图未登记应报错");
+        assert!(err.contains("还没跑过 OCSM 命令"), "{err}");
+        // ④ 图 3 跑过命令（dispatch 里 set_current(3, …)）后，无 tab 的请求就走图 3。
+        guide_router(Some(3), tab3);
+        ask("/api/guide?handle=2A", b"").expect("活跃图已登记");
+        // ⑤ 图 2 被关掉（宿主通知）→ 它的窗口请求立即报错（不超时、不串到图 3）。
+        crate::on_host_notification(&HostNotification::DocumentTabClosed { tab_id: 2 });
+        let err = ask("/api/guide?handle=2A&tab=2", b"").expect_err("已关图纸的窗口应报错");
+        assert!(err.contains("已经关"), "{err}");
+        // ⑥ 没登记过的 tab（插件重启前的老页面 / 乱填）→ 报错，不落到别的图。
+        let err = ask("/api/guide?handle=2A&tab=99", b"").expect_err("未登记 tab 应报错");
+        assert!(err.contains("重新打开窗口"), "{err}");
 
         assert_eq!(s1.asks().len(), 2, "图 1 只接带 tab=1 的请求：{:?}", s1.asks());
-        assert_eq!(s2.asks().len(), 2, "图 2 接默认与未知 tab：{:?}", s2.asks());
+        assert_eq!(s2.asks().len(), 1, "图 2 只接①那次（后来被关且活跃图已换）：{:?}", s2.asks());
+        assert_eq!(s3.asks().len(), 1, "图 3 接④那次：{:?}", s3.asks());
     }
 }

@@ -33,7 +33,7 @@ pub struct GuideServer {
     pub port: u16,
 }
 
-/// **这张图该用哪个 sender** 的路由表（进程级、可热更新）。
+/// **请求该发给哪张图** 的路由表（进程级、可热更新）。
 ///
 /// 为什么需要它（2026-09-16 修的 bug）：**插件进程比一张图纸活得久**。
 /// 引导服务器的**端口**是进程级复用的（lib.rs 的 `GUIDE_PORT`），但
@@ -45,44 +45,49 @@ pub struct GuideServer {
 ///   HTTP 5 s 超时 → GUI 报「读不到引导线」（用户报的 bug）；
 /// - 那张图**还开着**（只是不是当前图）→ 静默读到/写到**别的图纸**（更隐蔽的坏图）。
 ///
-/// 现在服务器线程每次请求都从这里取：
+/// 现在服务器线程每次请求都从这里解析目标：
 ///
-/// - 不带 `tab=` 的请求（MCP/AI、`PE_URL` Ctrl+点击）走 `default` = **最近一次命令
-///   所在的图**（≈ 用户正在动的图）；
-/// - 带 `tab=` 的页面窗口（GDIM/ME 打开的配置窗）走 `by_tab` 对号入座 —— 多张图各自
-///   开着配置窗口也不会串图，旧窗口只会超时（不会写到别的图上）。
+/// 1. **带 `tab=` 的页面窗口**（GDIM/ME、零件库、螺栓副、粗糙度开的那几个）→ 对号
+///    入座；图纸已关闭 → 直接报「窗口过期」而不是空转 5 s，更不会写到别的图上。
+/// 2. **不带 `tab=` 的请求**（AI/MCP、`PE_URL` Ctrl+点击）→ **宿主通知里的当前活跃
+///    图纸**（`HostNotification::SelectionChangedV4` 只对活动标签页发）；拿不到就退回
+///    「最近一次命令所在的图纸」。
+///
+/// 注意：插件只能对**跑过命令**的标签页发请求（sender 是宿主在命令调用里给的）——
+/// 活跃图纸没登记过时宁可明确报错，也不猜着写到别的图上。
 pub struct SenderRouter {
-    /// 最近一次命令所在的标签页的 sender。
+    /// 兜底目标：最近一次命令所在的标签页（命令一定跑在活跃图纸上）。
     default: std::sync::Mutex<Arc<dyn PluginRequestSender>>,
+    /// 宿主通知里的当前活跃标签页。
+    active: std::sync::Mutex<Option<u64>>,
     /// 标签页 → sender（每条命令刷新；按插入顺序，超上限淘汰最旧）。
     by_tab: std::sync::Mutex<Vec<(u64, Arc<dyn PluginRequestSender>)>>,
+    /// 宿主通知过「已关闭」的标签页（有上限）：这些图上的窗口请求直接报错。
+    closed: std::sync::Mutex<Vec<u64>>,
 }
 
-/// `by_tab` 上限：正常也就几张图；给足余量，避免长会话里无限增长。
+/// `by_tab` / `closed` 上限：正常也就几张图；给足余量，避免长会话里无限增长。
 const MAX_TRACKED_TABS: usize = 64;
 
 impl SenderRouter {
-    pub fn new(sender: Arc<dyn PluginRequestSender>) -> Self {
+    /// `active` = 建表前从宿主通知里记下的活跃标签页（可能还没有）。
+    pub fn new(sender: Arc<dyn PluginRequestSender>, active: Option<u64>) -> Self {
         Self {
             default: std::sync::Mutex::new(sender),
+            active: std::sync::Mutex::new(active),
             by_tab: std::sync::Mutex::new(Vec::new()),
+            closed: std::sync::Mutex::new(Vec::new()),
         }
     }
 
     /// 命令路径调用：登记「这张图（`tab`）该用这个 sender」，并设为默认目标。
+    /// 命令一定跑在活跃标签页上，所以顺便确认活跃图纸。
     pub fn set_current(&self, tab: u64, sender: Arc<dyn PluginRequestSender>) {
         {
             let mut by_tab = self.by_tab.lock().unwrap_or_else(|e| e.into_inner());
-            match by_tab.iter_mut().find(|(t, _)| *t == tab) {
-                Some(entry) => entry.1 = Arc::clone(&sender),
-                None => {
-                    by_tab.push((tab, Arc::clone(&sender)));
-                    if by_tab.len() > MAX_TRACKED_TABS {
-                        by_tab.remove(0);
-                    }
-                }
-            }
+            Self::remember(&mut by_tab, tab, Arc::clone(&sender));
         }
+        *self.active.lock().unwrap_or_else(|e| e.into_inner()) = Some(tab);
         self.set_default_sender(sender);
     }
 
@@ -92,16 +97,103 @@ impl SenderRouter {
         *self.default.lock().unwrap_or_else(|e| e.into_inner()) = sender;
     }
 
-    /// HTTP 入口：按请求里的 `tab=`（查询串或 POST body 的 `"tab"` 字段）选 sender；
-    /// 缺失或未知（老页面、MCP、`PE_URL` 链接）→ 默认目标 = 最近一次命令所在的图。
-    pub fn sender_for_request(&self, target: &str, body: &[u8]) -> Arc<dyn PluginRequestSender> {
-        if let Some(tab) = request_tab(target, body) {
-            let by_tab = self.by_tab.lock().unwrap_or_else(|e| e.into_inner());
-            if let Some((_, sender)) = by_tab.iter().find(|(t, _)| *t == tab) {
-                return Arc::clone(sender);
+    /// 宿主通知：当前活跃标签页变了（`SelectionChangedV4` 只对活动标签页发）。
+    pub fn set_active(&self, tab: u64) {
+        let mut active = self.active.lock().unwrap_or_else(|e| e.into_inner());
+        if *active != Some(tab) {
+            *active = Some(tab);
+        }
+    }
+
+    /// 宿主通知：标签页已关闭 → 该图上的窗口请求应该立刻报错（而不是 5 s 超时），
+    /// 也不能退化成「写到当前图」。
+    pub fn mark_closed(&self, tab: u64) {
+        {
+            let mut closed = self.closed.lock().unwrap_or_else(|e| e.into_inner());
+            if !closed.contains(&tab) {
+                closed.push(tab);
+                if closed.len() > MAX_TRACKED_TABS {
+                    closed.remove(0);
+                }
             }
         }
-        Arc::clone(&self.default.lock().unwrap_or_else(|e| e.into_inner()))
+        self.by_tab
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .retain(|(t, _)| *t != tab);
+        let mut active = self.active.lock().unwrap_or_else(|e| e.into_inner());
+        if *active == Some(tab) {
+            *active = None; // 等宿主的下一条 SelectionChangedV4
+        }
+    }
+
+    /// 解析本次请求该用哪个 sender（`Err` = 明确拒绝，附原因）。
+    pub fn resolve(
+        &self,
+        target: &str,
+        body: &[u8],
+    ) -> Result<Arc<dyn PluginRequestSender>, String> {
+        let by_tab_lookup = |tab: u64| -> Option<Arc<dyn PluginRequestSender>> {
+            self.by_tab
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .iter()
+                .find(|(t, _)| *t == tab)
+                .map(|(_, s)| Arc::clone(s))
+        };
+        // ① 页面窗口带了 `tab=`：对号入座。
+        if let Some(tab) = request_tab(target, body) {
+            if self
+                .closed
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .contains(&tab)
+            {
+                return Err(format!(
+                    "这个窗口对应的图纸（标签页 {tab}）已经关闭了 —— 请重新运行 GDIM / ME 打开新窗口。"
+                ));
+            }
+            return by_tab_lookup(tab).ok_or_else(|| {
+                format!(
+                    "这个窗口对应的图纸（标签页 {tab}）已经不在（插件可能重启过）—— 请重新打开窗口。"
+                )
+            });
+        }
+        // ② 不带 `tab=`：优先宿主通知的活跃图纸，退回最近一次命令所在的图纸。
+        let active = *self.active.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(tab) = active {
+            if let Some(sender) = by_tab_lookup(tab) {
+                return Ok(sender);
+            }
+            let closed = self
+                .closed
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .contains(&tab);
+            if !closed {
+                return Err(format!(
+                    "当前活跃图纸（标签页 {tab}）还没跑过 OCSM 命令 —— 插件拿不到它的请求通道；\
+                     请先在这张图上执行任意 OCSM 命令（例：选中标注后运行 ME，或运行 GDIM）再操作。"
+                ));
+            }
+        }
+        Ok(Arc::clone(&self.default.lock().unwrap_or_else(|e| e.into_inner())))
+    }
+
+    fn remember(
+        by_tab: &mut Vec<(u64, Arc<dyn PluginRequestSender>)>,
+        tab: u64,
+        sender: Arc<dyn PluginRequestSender>,
+    ) {
+        match by_tab.iter_mut().find(|(t, _)| *t == tab) {
+            Some(entry) => entry.1 = sender,
+            None => {
+                by_tab.push((tab, sender));
+                if by_tab.len() > MAX_TRACKED_TABS {
+                    by_tab.remove(0);
+                }
+            }
+        }
     }
 }
 
@@ -148,7 +240,7 @@ pub fn spawn(router: Arc<SenderRouter>) -> Option<GuideServer> {
 /// 固定 sender 的服务器（测试用：不换图）。生产路径用 [`spawn`] + [`SenderRouter`]。
 #[cfg(test)]
 fn spawn_fixed(sender: Arc<dyn PluginRequestSender>) -> Option<GuideServer> {
-    spawn(Arc::new(SenderRouter::new(sender)))
+    spawn(Arc::new(SenderRouter::new(sender, None)))
 }
 
 fn serve(listener: TcpListener, router: Arc<SenderRouter>) {
@@ -250,10 +342,7 @@ fn handle_conn(
     router: &Arc<SenderRouter>,
 ) -> std::io::Result<()> {
     let req = read_request(stream)?;
-    // **每次请求都重新解析**该发给哪张图：端口是进程级复用的，图纸会换
-    // （关图 → 新建图 → 再 GDIM），固定的 sender 会指向已经关闭的标签页。
-    let sender = router.sender_for_request(&req.target, &req.body);
-    let (status, ctype, resp) = route(&req.method, &req.target, &req.body, &sender);
+    let (status, ctype, resp) = route(&req.method, &req.target, &req.body, router);
     write_response(stream, status, ctype, resp.as_bytes())
 }
 
@@ -261,10 +350,29 @@ fn route(
     method: &str,
     target: &str,
     body: &[u8],
-    sender: &Arc<dyn PluginRequestSender>,
+    router: &Arc<SenderRouter>,
 ) -> (u16, &'static str, String) {
     let json = "application/json; charset=utf-8";
     let text = "text/plain; charset=utf-8";
+    // **每次请求都重新解析**该发给哪张图：端口是进程级复用的，图纸会换
+    // （关图 → 新建图 → 再 GDIM），固定的 sender 会指向已经关闭的标签页。
+    // 只有**要动图纸**的端点才需要它 —— 静态页/心跳/查表拿默认目标就行，
+    // 不能让「窗口过期」把页面本身也挡在门外。
+    macro_rules! sender {
+        () => {
+            match router.resolve(target, body) {
+                Ok(s) => s,
+                Err(e) => {
+                    dbg_guide(&format!("resolve failed: {e}"));
+                    return (
+                        409,
+                        json,
+                        serde_json::json!({"ok": false, "error": e}).to_string(),
+                    );
+                }
+            }
+        };
+    }
     match (method, target) {
         ("GET", t) if t == "/" || t.starts_with("/guide.html") => {
             (200, "text/html; charset=utf-8", GUI_HTML.to_string())
@@ -299,10 +407,10 @@ fn route(
         ("GET", t) if t == "/bom" || t.starts_with("/bom.html") => {
             (200, "text/html; charset=utf-8", BOM_HTML.to_string())
         }
-        ("GET", t) if t.starts_with("/api/bom_get") => api_bom_get(sender),
-        ("POST", "/api/bom_apply") => api_bom_apply(body, sender),
-        ("POST", t) if t.starts_with("/api/bom_import") => api_bom_import(target, body, sender),
-        ("POST", t) if t.starts_with("/api/bom_export") => api_bom_export(target, sender),
+        ("GET", t) if t.starts_with("/api/bom_get") => api_bom_get(&sender!()),
+        ("POST", "/api/bom_apply") => api_bom_apply(body, &sender!()),
+        ("POST", t) if t.starts_with("/api/bom_import") => api_bom_import(target, body, &sender!()),
+        ("POST", t) if t.starts_with("/api/bom_export") => api_bom_export(target, &sender!()),
         ("GET", t) if t.starts_with("/api/manual") => api_manual(t),
         ("GET", t) if t == "/joint" || t.starts_with("/joint?") => {
             (200, "text/html; charset=utf-8", JOINT_HTML.to_string())
@@ -314,25 +422,25 @@ fn route(
                 Err(e) => (400, json, serde_json::json!({"ok": false, "error": e}).to_string()),
             }
         }
-        ("POST", "/api/part_pick") => api_part_pick(body, sender),
+        ("POST", "/api/part_pick") => api_part_pick(body, &sender!()),
         ("POST", "/api/joint") => {
             let json = "application/json; charset=utf-8";
-            match apply_joint(sender, body) {
+            match apply_joint(&sender!(), body) {
                 Ok(s) => (200, json, s),
                 Err(e) => (400, json, serde_json::json!({"ok": false, "error": e}).to_string()),
             }
         }
         ("POST", "/api/joint_plan") => api_joint_plan(body),
-        ("POST", "/api/joint_place") => api_joint_place(sender, body),
-        ("POST", "/api/part_export") => api_part_export(body, sender),
-        ("GET", t) if t.starts_with("/api/guide") => api_guide(target, sender),
+        ("POST", "/api/joint_place") => api_joint_place(&sender!(), body),
+        ("POST", "/api/part_export") => api_part_export(body, &sender!()),
+        ("GET", t) if t.starts_with("/api/guide") => api_guide(target, &sender!()),
         ("GET", t) if t.starts_with("/api/tolerance") => api_tolerance(target),
         ("GET", t) if t.starts_with("/api/ping") => (200, json, r#"{"ok":true}"#.into()),
-        ("POST", "/api/apply") => api_apply(body, sender, false),
-        ("POST", "/api/apply_refresh") => api_apply(body, sender, true),
-        ("POST", "/api/rough_apply") => api_rough_apply(body, sender),
+        ("POST", "/api/apply") => api_apply(body, &sender!(), false),
+        ("POST", "/api/apply_refresh") => api_apply(body, &sender!(), true),
+        ("POST", "/api/rough_apply") => api_rough_apply(body, &sender!()),
         ("GET", "/api/weld_syms") => (200, json, weld_syms_json()),
-        ("POST", "/api/mcp") => api_mcp(body, sender),
+        ("POST", "/api/mcp") => api_mcp(body, &sender!()),
         _ => (404, text, "not found".into()),
     }
 }
@@ -12160,7 +12268,11 @@ mod weld_tests {
     /// 症状：关掉当前图纸、新建一张、画引导线跑 GDIM —— GUI 读不到引导线。根因是
     /// 端口进程级复用、而 sender 绑定的标签页固定在了首次 spawn 那张图上（旧图被关掉
     /// 后宿主根本不回答那个 tab 的请求 → HTTP 5 s 超时）。这里用两张图（句柄按图纸重置、
-    /// 两张图里撞成同一个，模拟真实现场）验证三种请求各自打到哪张图。
+    /// 两张图里撞成同一个，模拟真实现场）验证每种请求各自打到哪张图。
+    ///
+    /// 期望（见 `SenderRouter`）：带 `tab=` 的窗口对号入座；不带 `tab=` 的（AI/MCP、
+    /// `PE_URL` Ctrl+点击）跟宿主通知的**当前活跃图纸**；窗口对应的图没了就明确报错，
+    /// 绝不退化成「写到别的图」。
     #[test]
     fn http_guide_follows_the_current_drawing_after_a_drawing_switch() {
         let line_in = |x: f64| {
@@ -12181,27 +12293,36 @@ mod weld_tests {
         assert_eq!(u64::from(h1), u64::from(h2), "测试前提：句柄重置后又撞上了");
         let mock1 = Arc::new(MockSender::new(doc1));
         let mock2 = Arc::new(MockSender::new(doc2));
-        let router = Arc::new(SenderRouter::new(mock1.clone()));
+        let router = Arc::new(SenderRouter::new(mock1.clone(), None));
         router.set_current(1, mock1.clone());
         let server = spawn(Arc::clone(&router)).expect("spawn guide server");
         let port = server.port;
         let hx = format!("{:#X}", u64::from(h1));
+        let p1x = |r: &str| -> f64 {
+            let v: serde_json::Value = serde_json::from_str(r).unwrap();
+            assert_eq!(v["ok"], true, "应成功: {r}");
+            v["p1"][0].as_f64().unwrap()
+        };
 
         // ① 关掉图 1 → 新建图 2 → 跑命令（dispatch 里 set_current(2, …)）：
-        //    不带 tab 的请求（MCP/AI、新开的 GDIM 窗口之前的那一步、Ctrl+点击）
-        //    必须落到**当前图**——“关图后读不到引导线”就是这个断的。
+        //    不带 tab 的请求（MCP/AI、Ctrl+点击）必须落到**当前图**——
+        //    “关图后读不到引导线”就是这个断的。
         router.set_current(2, mock2.clone());
         let r = http_req(port, "GET", &format!("/api/guide?handle={hx}"), "");
-        let v: serde_json::Value = serde_json::from_str(&r).unwrap();
-        assert_eq!(v["ok"], true, "当前图应能读到引导线: {r}");
-        assert_eq!(v["p1"][0].as_f64().unwrap(), 100.0, "应读当前图（100,0）: {r}");
+        assert_eq!(p1x(&r), 100.0, "应读当前图（100,0）: {r}");
 
-        // ② 老窗口（URL 带 tab=1）仍钉在它自己的图上：多图各开配置窗不串图。
+        // ② 宿主通知说“活跃图纸”换成图 1（只切标签页、不跑命令）→ 无 tab 的请求
+        //    跟宿主通知走，不跟“最近命令”走。
+        router.set_active(1);
+        let r = http_req(port, "GET", &format!("/api/guide?handle={hx}"), "");
+        assert_eq!(p1x(&r), 0.0, "应读宿主通知的活跃图（0,0）: {r}");
+        router.set_active(2);
+
+        // ③ 老窗口（URL 带 tab=1）仍钉在它自己的图上：多图各开配置窗不串图。
         let r1 = http_req(port, "GET", &format!("/api/guide?handle={hx}&tab=1"), "");
-        let v1: serde_json::Value = serde_json::from_str(&r1).unwrap();
-        assert_eq!(v1["p1"][0].as_f64().unwrap(), 0.0, "tab=1 的窗口应读图 1: {r1}");
+        assert_eq!(p1x(&r1), 0.0, "tab=1 的窗口应读图 1: {r1}");
 
-        // ③ POST 端点从 body 的 `tab` 字段选图（页面 POST 不带查询串）：写只落在图 1。
+        // ④ POST 端点从 body 的 `tab` 字段选图（页面 POST 不带查询串）：写只落在图 1。
         let body = serde_json::json!({"handle": hx, "url": "http://127.0.0.1:23751/DIM/LINEAR/H/-10", "tab": 1}).to_string();
         let r2 = http_req(port, "POST", "/api/apply", &body);
         let v2: serde_json::Value = serde_json::from_str(&r2).unwrap();
@@ -12209,10 +12330,26 @@ mod weld_tests {
         assert_eq!(mock1.url_writes.lock().unwrap().len(), 1, "写入应落在图 1");
         assert!(mock2.url_writes.lock().unwrap().is_empty(), "不能写到当前图");
 
-        // ④ 未知 tab（老页面/异常参数）兜底走默认目标 = 当前图，不报错。
-        let r3 = http_req(port, "GET", &format!("/api/guide?handle={hx}&tab=999"), "");
-        let v3: serde_json::Value = serde_json::from_str(&r3).unwrap();
-        assert_eq!(v3["p1"][0].as_f64().unwrap(), 100.0, "未知 tab 兜底当前图: {r3}");
+        // ⑤ 图纸被关掉（宿主 DocumentTabClosed）→ 该图的旧窗口立即报“已关闭”，
+        //    既不空转 5 s，也不退化成“写到当前图”。
+        router.mark_closed(1);
+        let r3 = http_req(port, "GET", &format!("/api/guide?handle={hx}&tab=1"), "");
+        assert!(r3.contains("已经关"), "应明确报窗口过期: {r3}");
+        let body = serde_json::json!({"handle": hx, "url": "http://127.0.0.1:23751/DIM/LINEAR/H/-10", "tab": 1}).to_string();
+        let r4 = http_req(port, "POST", "/api/apply", &body);
+        assert!(r4.contains("已经关"), "写入也该被挡住: {r4}");
+        assert_eq!(mock1.url_writes.lock().unwrap().len(), 1, "不能再写图 1");
+        assert!(mock2.url_writes.lock().unwrap().is_empty(), "也不能改写到图 2");
+
+        // ⑥ 未登记过的 tab（插件重启前的老页面 / 乱填的参数）→ 明确报错，
+        //    不猜着落到别的图上。
+        let r5 = http_req(port, "GET", &format!("/api/guide?handle={hx}&tab=999"), "");
+        assert!(r5.contains("重新打开窗口"), "未知 tab 应拒绕: {r5}");
+
+        // ⑦ 活跃图纸没跑过 OCSM 命令（插件拿不到它的请求通道）→ 也不猜。
+        router.set_active(999);
+        let r6 = http_req(port, "GET", &format!("/api/guide?handle={hx}"), "");
+        assert!(r6.contains("还没跑过 OCSM 命令"), "活跃图未登记应拒绕: {r6}");
     }
 
     #[test]
