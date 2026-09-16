@@ -136,9 +136,60 @@ src/app/commands/display.rs      PI / OCSPI / AI / AICHAT 命令
 - 待观察：带图消息在回合结束交付后，session `.jsonl` 的 user message 应含 image part
   （本轮已验证 POST 通过 pi-web 校验并进入 followUp 队列）。
 
-## 8. 可选后续（Phase 3 候选，未做）
+## 8. Phase 2.6（A 期四功能，提交 `29175b9f`）
+
+用户问的五问 → 先做 A 期四项（B 期 RPC 后端见第 10 节）：
+
+1. **思考强度下拉**：worker 在 `/api/models` 里解析 `thinkingLevels: {"provider:id":[…]}`，
+   并在 `GET /api/agent/<id>` 取 `state.thinkingLevel`；模型下拉旁显示「思考:max」，
+   选择 → POST `{type:"set_thinking_level", level}` → `Event::ThinkingSet`。
+2. **新建会话 + 目录浏览**：会话行「＋」按钮 → `open_browse()` → `GET /api/cwd/browse?path=`
+   （↑ 上级 / 8 个子目录 / 在此新建会话 / 取消）→ POST `/api/agent/new`
+   `{cwd, type:"ensure_session"}` → 返回 `sessionId` → worker 设 `watch_target` 并重连跟随。
+   注意：**切换目录 = 用新 cwd 新建会话**（会话的项目目录创建时固定）。
+3. **命令补全**：worker 连接后 `{type:"get_commands"}` → `Event::Commands`；
+   composer 行首 `/` 弹层（名称 + `[source]` + 描述，子序列模糊过滤，最多 8 行可见）；
+   `key_binding` 在弹层打开时接管 ↑/↓/Enter/Tab/Esc；Enter 填入 `/{name} `（不发送）。
+4. **@ 文件引用**：`@` 触发文件补全（`/api/file-index?cwd=` 一次拉 5000 条缓存进状态，
+   Rust 端子序列模糊匹配）；**发送时展开**：`@path`/`@"带 空格"` → 按 pi CLI 语义
+   拼 `<file name="绝对路径">\n内容\n</file>` 块（图片走 image 附件通道；文本 ≤512KB、
+   图片 ≤8MB、最多 12 个；失败发 Notice）。
+
+实机验证：思考下拉显示「思考:max」；＋ 打开目录浏览器（/home/ysdirector + 目录列表）；
+`/` 列出 extension 命令（`/websearch` `/wiki-trajectories` `/wiki-model`）并可 Enter 填入；
+`@` 列出文件匹配并可 Enter 插入路径。
+
+## 9. 可选后续（Phase 3 候选，未做）
 
 1. `extension_ui_request`（`setWidget`，如 `bash-bg` 后台任务小部件）→ 面板底部一行状态。
 2. 审批交互（用户已定不接；若 pi 侧策略变化再议）。
 3. 发送失败自动重试、历史回填条数可配置。
 4. 会话下拉的人工点选（Watch/Replace 逻辑有单测覆盖）。
+
+## 10. B 期设计：pi RPC 后端（不依赖 pi-web）——待新会话实施
+
+**问题**：当前面板依赖 pi-web（本地 HTTP + SSE）。只有 pi（CLI）时应能工作。
+
+**pi 自带两条路**（`docs/rpc.md` / `docs/sdk.md`，1578/1205 行）：
+- `pi --mode rpc`：JSONL over stdin/stdout（一行一 JSON，LF 分隔；`\r\n` 容错）。
+- Node SDK `AgentSession`（Rust 宿主不适用，只能走 RPC 子进程）。
+
+**RPC 命令面（比 pi-web HTTP 更全）**：
+`prompt`/`steer`/`follow_up`（含 images + streamingBehavior）、`abort`、`new_session`、
+`switch_session{sessionPath}`、`fork`/`clone`/`get_fork_messages`、`get_state`/`get_messages`/
+`get_entries`/`get_tree`/`get_session_stats`/`export_html`/`set_session_name`、
+`set_model`/`cycle_model`/`get_available_models`、`set_thinking_level`/`cycle_thinking_level`/
+`get_available_thinking_levels`、`get_commands`、`compact`/`set_auto_compaction`、
+`set_auto_retry`/`abort_retry`、`bash`/`abort_bash`、`set_steering_mode`/`set_follow_up_mode`。
+事件类型与 pi-web SSE 同源（message_start/update/end、tool_execution_*、agent_start/end/settled、
+queue_update、compaction_*、auto_retry_*、extension_error），**现有 `sse_to_events` 映射可复用**。
+另有 **Extension UI Requests**（select/confirm 交互）→ 可接审批弹窗（此前搁置项）。
+
+**实施建议**：
+1. 抽象 `trait PiBackend`（`send(Command)` / `poll() -> Vec<Event>`），现有 `pi.rs` 归为
+   `backend::web`（HTTP/SSE）；新增 `backend::rpc`：`Command::spawn("pi", ["--mode","rpc",
+   "--session-dir",…])`，stdin 写 JSONL、stdout 线程读 JSONL → 同 `Event` 事件。
+2. 端点配置：`OCS_PI_ENDPOINT`（HTTP）或 `OCS_PI_MODE=rpc` + `OCS_PI_BIN=pi`。
+3. RPC 侧注意：`@file` CLI 参数在 RPC 模式被禁（args，与 prompt 文本无关，@ 展开仍由面板做）；
+   子进程 cwd = 项目目录（换目录 = 重启子进程）；`--session-dir` 自定义会话存储。
+4. 启动/退出：子进程随面板 worker 生命周期（stop 时 kill）；首行 `--no-session` 可选。
