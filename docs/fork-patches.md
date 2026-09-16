@@ -5,8 +5,9 @@
 > 宿主侧改动，供**每次同步上游后照单核对**，避免补丁被合掉却无人发现。
 >
 > 上游：`origin` = HakanSeven12/OpenCADStudio（经 ghfast 镜像）
-> 最近同步点：`80733ecb4`（Merge upstream **v2026.36**，上游父 = `ddbbdd27b`）
-> 台账基准：`git diff 80733ecb4^2..HEAD`（上游 v2026.36 → 当前本地 HEAD）
+> 最近同步点：`d4007055`（Merge upstream **v2026.37** = `fc1788df`，执行记录见 §0.5）
+> 台账基准：`git diff d4007055^2..HEAD`（上游 v2026.37 → 当前本地 HEAD，**47 文件 / +10991 −96**）
+> ⚠️ 上游此后仍有更新（`origin/main` = `1450fdee`，**尚未同步**）
 
 ## 0. 怎么用（每次同步上游后）
 
@@ -102,7 +103,34 @@ OCS_SMOKE_PLUGIN=$PWD/target/release/libocs_ocsm.so \
 > **同步动作**：上游合并后取上游版（内容一致，git 自动归并）；删本节 + 删分支 `feat/plugin-undo-transaction`、`feat/automation-selection-events`。
 > 插件侧（`crates/ocs_ocsm`，非上游）已在 `20ea5ef6` 改用 Begin/Commit；命令驱动流程继续用 `push_undo`（同一条 message 内本来就成立）。
 
-## 1. 补丁总表（基准：上游 v2026.36 → HEAD，24 文件 / +2972 −119）
+## 0.8 已开上游 issue · 面板扩展点 RFC（2026-09-16）
+
+> **#1303**「RFC: plugin-supplied dock panels — declarative widget surface instead of embedding
+> external windows」· https://github.com/HakanSeven12/OpenCADStudio/issues/1303
+>
+> **背景**：宿主 dock 的 `PanelId` 是**编译期枚举**（`dock.rs` 原注释：*"New palettes add a
+> variant"*），第三方 `.so` 插件拿不到面板。本 fork 先做过通用方案 —— 宿主预留停靠列 + 上报矩形，
+> 插件把自己的 GTK3+WebKitGTK 进程用 `XReparentWindow` 嵌进去（`cc5ec098`）：**实测像素级成功**
+> （槽位 385×554 逻辑 @(640,184) → 481×692 设备像素 @(800,230)），但代价是
+> ①X11/XWayland 专属（宿主须 `env -u WAYLAND_DISPLAY` 启动，Wayland/Windows/macOS/wasm 全废）
+> ②多一个 GTK 进程 ③200ms 轮询矩形 + GDK 反复重申几何 ④焦点交接脆弱 ⑤为矩形握手扩 ABI（v7）
+> —— 已在 `a4f122ec` 整体删除（−1811 行，含 `crates/ocs_webpanel` 5 个文件）。
+>
+> **issue 里给出两件事**：
+> 1. **建议形态**：插件在 `plugin.toml` 声明面板 + 一棵声明式控件树（`row`/`column`/`scrollable`/
+>    `label`/`button`/`text_input`/`checkbox`/`select`/`list`/`progress`），宿主用同一套 iced 控件渲染，
+>    事件带 `widget_id` 回插件 —— 跨平台、wasm 无害、无第二进程；明确反对做立即模式绘图面。
+> 2. **可独立成小 PR 的抓手**：每面板宽度策略（`min_width`/`max_width`/`max_fraction`）
+>    + `Length::Fixed(width)` 宽度契约（`Fill` 面板会与画布抢同一行 —— fork「占半屏」的根因）。
+>
+> **同步动作**：无需同步代码。等维护者回复：若只要「小 PR」，按 §2 F-1 的宽度策略段落剥独立分支
+> （英文注释、去掉 Pi 依赖、以现有面板为消费者）；若接受声明式控件面，另开设计分支 ——
+> **不要**复活 `cc5ec098` 的 reparent 方案。
+> 本地材料：`~/桌面/OCSM/issue-插件面板UI-正文.md` + `issue-插件面板UI-链接.txt`。
+
+## 1. 补丁总表（基准：上游 v2026.37 `fc1788df` → HEAD，47 文件 / +10991 −96）
+
+> A–E 组的行数是 v2026.36 基准时的记录（功能性描述仍适用）；F 组为 2026-09-16 新增。
 
 | 组 | 文件 | 规模 | 作用 |
 |---|---|---|---|
@@ -129,6 +157,13 @@ OCS_SMOKE_PLUGIN=$PWD/target/release/libocs_ocsm.so \
 | **D. 测试** | `src/plugin/external.rs` | +67 | `OCS_SMOKE_PLUGIN` 外部插件测试（纯新增） |
 | | `tests/dim_leader_render_check.rs` | +107 | 引线渲染级测试（新文件） |
 | **E. 插件本体（无需台账）** | `crates/ocs_ocsm/**`、`crates/ocs_ocsm_mcp/**` | 4400+ | 与上游天然解耦；仅 `Cargo.toml` 成员需保留 |
+| **F. 内建面板：Pi 助手（fork 本地，2026-09-16）** | `src/ui/pi_panel.rs`（新） | +2239 | 面板 UI（聊天流 / 审批 / 用量统计 / 表格横向滚动） |
+| | `src/pi.rs`、`src/pi_rpc.rs`、`src/app/update/pi.rs`（新） | +1957 / +961 / +328 | pi-web HTTP 后端 / pi RPC 子进程后端 / 消息处理 |
+| | `src/ui/dock.rs` | ~+30 | `PanelId::Pi` 变体 + `ALL` + `title()` + 每面板宽度策略（340 / 150 / 1200 / 0.4）+ 默认钉住 |
+| | `src/app/view/mod.rs` | ~+20 | 面板渲染分支（展开态 L1863 / 收边态 L2945）+ 10Hz `pi_poll`（L2589） |
+| | `src/app/{mod.rs,document.rs,update/mod.rs,update/dialog.rs}` | ~+40 | `Message::Pi` / `PiImagePasted` 路由、`show_pi_panel` 开关、**每标签页** `PiPanelState`、× 关闭语义 |
+| | `src/lib.rs`、`src/ui/mod.rs` | +3 | 模块注册（`pi`、`pi_rpc`、`pi_panel`） |
+| | 依赖 | 0 | **无新增 crate**（`ureq`/`base64`/`image` 上游本有；仅 `Cargo.lock` +3 行） |
 
 ## 2. 关键补丁详情
 
@@ -192,6 +227,38 @@ OCS_SMOKE_PLUGIN=$PWD/target/release/libocs_ocsm.so \
 - **合并注意**：上游更新 acadrust rev 时，需确认插件依赖的实体 API（ATTDEF/块/标注字段）
   没变；必要时同步升 rev 并重跑插件测试。**不要**让上游覆盖成本地的镜像 URL（网络环境原因）。
 
+### F-1 `src/ui/` 等 — 内建 Pi 助手面板（fork 本地，2026-09-16）
+
+- **为什么**：宿主 dock 的 `PanelId` 是编译期枚举，第三方插件拿不到面板（→ §0.8 的 RFC）。
+  本面板是**内建**面板，用的就是上游 dock 自己的扩展方式（"New palettes add a variant"），
+  **未改任何插件 ABI**（`ocs_plugin_api` 仍是 v5；`cc5ec098` 的 v7 追加已随 `a4f122ec` 删除）。
+- **接点清单**（同步上游后逐项核对，缺一即面板报错或丢失；行号为 2026-09-16 的值，
+  实际以符号名搜索 `PanelId::Pi` / `pi_poll` / `PiPanelState` / `on_pi_msg` 为准）：
+  1. `src/ui/dock.rs`：`PanelId::Pi` 变体、`ALL: [PanelId; 3]`、`title()`、`default_width()` 340、
+     `min_width()` 150、`max_width()` 1200、`max_fraction()` 0.4、`auto_collapse` 默认 `true`（钉住）。
+  2. `src/app/view/mod.rs`：`expanded_panel` 的 `PanelId::Pi` 分支（L1863）、收边/占用分支（L2945）、
+     `pi_poll` 订阅（L2589：`show_pi_panel && worker.is_some()` 时 100ms）。
+  3. `src/app/mod.rs`：`Message::Pi`（L1900）、`show_pi_panel` 开关（L688 / 初始化 L3659）。
+  4. `src/app/document.rs`：**每标签页** 的 `pi_panel: PiPanelState`（L133 / 初始化 L585）——
+     上游若重构 Tab 结构，这处要跟着搬。
+  5. `src/app/update/mod.rs`：`Message::Pi` → `on_pi_msg`、`Message::PiImagePasted` →
+     `on_pi_image_pasted`（L499/502）。
+  6. `src/app/update/dialog.rs`：dock × 关闭语义（× 只是取消停靠，面板仍在栈里，`PI` 命令可再开）。
+  7. 模块注册：`src/lib.rs`（`pub mod pi; pub mod pi_rpc;`）、`src/ui/mod.rs`（`pub mod pi_panel;`）、
+     `src/app/update/`（`mod pi;`）。
+- **接口影响**：插件 ABI 无改动。但面板 view **必须** `.width(Length::Fixed(width))` —— `Fill`
+  会与画布抢同一行空间（「占半个屏」的根因，提交 `675e552b`）；宽度策略在 `7ee77938`。
+- **验证**：`cargo test --lib pi` → **145 passed**；实测：`PI` 命令开面板、后端标签
+  （`pi rpc · <cwd>` 或 `pi-web · <url>`）、用量统计行、表格横向滚动、审批 UI
+  （细节见 `docs/ocs-pi-extension.md`）。
+- **合并注意**：
+  - 按 §0 规则「冲突一律取上游版」会**丢掉全部 7 处接点**，必须手工补回（清单见上）；
+    `PanelId::ALL` 的数组长度、`auto_collapse` 默认值、`Fixed(width)` 契约是三个易丢点。
+  - 若上游同步后要跑 **wasm 构建**（上游有 pages 工作流），`src/pi.rs` / `pi_rpc.rs` /
+    `ui/pi_panel.rs` 依赖 `ureq`、文件系统与子进程 → 需 `#[cfg(not(target_arch = "wasm32"))]`
+    门控，否则 wasm 目标编译失败。
+  - 面板需要**运行时环境**（本机 `pi` CLI 或 pi-web HTTP）：不影响构建，没有它时面板显示错误态。
+
 ## 3. 已知取舍
 
 - 宿主补丁刻意保持**最小、可局部合并**：C 组只有 1 个文件、1 个私有函数；
@@ -201,3 +268,10 @@ OCS_SMOKE_PLUGIN=$PWD/target/release/libocs_ocsm.so \
 - ✅ **2026-09-14 状态更新**：C-1（→ PR #1235）与 Ctrl+点击超链接（→ PR #1234）**均已被上游合并**。
   `tests/leader_smoke_render.rs`（引线渲染测试）与 C-2（标注文字宽度自适应）**仍为 fork 本地**；
   用户判断这两项**上游采纳概率不大** → **不作为上游贡献推进**，仅本地保留。
+- ⚠️ **2026-09-16 结论：「让第三方插件加窗口」的通用机制不作为上游候选。** 该机制
+  （`cc5ec098`：`PanelId::Web` + `HostApi::web_panel_rect` + 插件 API v7 + `crates/ocs_webpanel`）
+  因 X11/XWayland 专属等五点代价（见 §0.8）已在 `a4f122ec` 整体删除；**同步/合并时不要**把它
+  当作「已上游化的能力」复活，也不要把它算作本 fork 的待推补丁。替代路线（插件声明式控件面）
+  已开 issue #1303 征询意向。
+- 供参考：内建 Pi 面板的宿主侧改动属**本地独有**（F 组），**不由**上游候选清单管理；
+  它依赖外部 `pi` 运行时，是产品选择而非通用补丁，故不推上游。
