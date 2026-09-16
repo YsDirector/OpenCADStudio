@@ -190,6 +190,13 @@ fn route(
         ("GET", t) if t == "/manual" || t.starts_with("/manual?") => {
             (200, "text/html; charset=utf-8", MANUAL_HTML.to_string())
         }
+        ("GET", t) if t == "/bom" || t.starts_with("/bom.html") => {
+            (200, "text/html; charset=utf-8", BOM_HTML.to_string())
+        }
+        ("GET", t) if t.starts_with("/api/bom_get") => api_bom_get(sender),
+        ("POST", "/api/bom_apply") => api_bom_apply(body, sender),
+        ("POST", t) if t.starts_with("/api/bom_import") => api_bom_import(target, body, sender),
+        ("POST", t) if t.starts_with("/api/bom_export") => api_bom_export(target, sender),
         ("GET", t) if t.starts_with("/api/manual") => api_manual(t),
         ("GET", t) if t == "/joint" || t.starts_with("/joint?") => {
             (200, "text/html; charset=utf-8", JOINT_HTML.to_string())
@@ -5654,6 +5661,595 @@ fn should_warn_unsaved(tab: u64, warned: &mut std::collections::HashSet<u64>) ->
     warned.insert(tab)
 }
 
+// ── 明细表网页编辑（bom.html，2026-09-16 第四期）─────────────────────────
+//
+// 图纸 = 唯一真源；xlsx 只是导入/导出的数据交换格式（用户定案）。
+// 四个端点：GET /api/bom_get（现状）、POST /api/bom_apply（整表一次提交，
+// CAS 防并发）、POST /api/bom_import（浏览器读文件字节上传 → 合并规则回灌）、
+// POST /api/bom_export（聚合 → xlsx 字节 → 浏览器另存为 + 写导出基线）。
+
+/// bom_get / apply / import 共用的回包：行数组 + 指纹 + 图纸信息。
+fn bom_payload(sender: &Arc<dyn PluginRequestSender>) -> Result<serde_json::Value, String> {
+    let doc = snapshot(sender)?;
+    let rows = crate::bom::sheet_rows(&doc);
+    let path = crate::current_doc_path();
+    let path_str = path.as_ref().map(|p| p.to_string_lossy().to_string());
+    let doc_name = path
+        .as_ref()
+        .and_then(|p| p.file_stem().map(|s| s.to_string_lossy().to_string()));
+    // 网页导出的默认文件名（浏览器另存为对话框里显示）：图纸同名-明细表.xlsx；
+    // 没存盘 → 提示用户先存盘（临时目录的文件会被系统清理）。
+    let xlsx_name = match &doc_name {
+        Some(stem) => format!("{stem}-明细表.xlsx"),
+        None => "明细表.xlsx".to_string(),
+    };
+    let untracked = doc
+        .model_space_entities()
+        .filter(|e| match e {
+            acadrust::EntityType::Insert(ins) => {
+                crate::bom::part_meta_of(&ins.common).is_none()
+                    && ins.block_name.starts_with("OCSM_")
+                    && ins.block_name != crate::bom::HEAD_BLOCK
+                    && ins.block_name != crate::bom::ROW_BLOCK
+            }
+            _ => false,
+        })
+        .count();
+    Ok(serde_json::json!({
+        "ok": true,
+        "doc": {
+            "name": doc_name,
+            "path": path_str,
+            "saved": path.is_some(),
+        },
+        "per_col_rows": crate::bom::load_config(&crate::bom::bom_dir()).per_col_rows,
+        "xlsx_name": xlsx_name,
+        "rows": rows.iter().map(|r| serde_json::json!({
+            "item_no": r.cells[0], "code": r.cells[1], "name": r.cells[2],
+            "qty": r.cells[3], "material": r.cells[4], "unit_weight": r.cells[5],
+            "total_weight": r.cells[6], "remark": r.cells[7],
+            "lock": r.lock, "exported": r.exported,
+        })).collect::<Vec<_>>(),
+        "untracked": untracked,
+        "fp": crate::bom::fingerprint(path_str.as_deref(), &rows),
+    }))
+}
+
+fn api_bom_get(sender: &Arc<dyn PluginRequestSender>) -> (u16, &'static str, String) {
+    let json = "application/json; charset=utf-8";
+    match bom_payload(sender) {
+        Ok(v) => (200, json, v.to_string()),
+        Err(e) => (
+            500,
+            json,
+            serde_json::json!({"ok": false, "error": e}).to_string(),
+        ),
+    }
+}
+
+/// 请求里的行数组 → `RowSpec`（校验：序号非空且全表唯一、数量为正整数）。
+fn rowspecs_from_json(v: &serde_json::Value) -> Result<Vec<crate::bom::RowSpec>, String> {
+    let arr = v.as_array().ok_or_else(|| "rows 必须是数组".to_string())?;
+    if arr.len() > 500 {
+        return Err("行数超过上限 500（明细表放不下，先拆图/分页）".into());
+    }
+    let mut out = Vec::new();
+    let mut seen = std::collections::BTreeSet::new();
+    for r in arr {
+        let cell = |k: &str| -> String {
+            r.get(k)
+                .map(|x| match x {
+                    serde_json::Value::String(s) => s.clone(),
+                    serde_json::Value::Null => String::new(),
+                    other => other.to_string(),
+                })
+                .unwrap_or_default()
+                .trim()
+                .to_string()
+        };
+        let cells = [
+            cell("item_no"),
+            cell("code"),
+            cell("name"),
+            cell("qty"),
+            cell("material"),
+            cell("unit_weight"),
+            cell("total_weight"),
+            cell("remark"),
+        ];
+        let spec = crate::bom::rowspec_from_cells(
+            &cells,
+            r.get("lock").and_then(|x| x.as_u64()).map(|q| q as usize),
+            r.get("exported").and_then(|x| x.as_u64()).map(|q| q as usize),
+        )?;
+        if !seen.insert(spec.item_no.clone()) {
+            return Err(format!("序号重复：「{}」（改序号后全表必须唯一）", spec.item_no));
+        }
+        out.push(spec);
+    }
+    Ok(out)
+}
+
+/// 旧表现状 vs 网页提交的新行 → 序号映射（旧序号 → 新序号）。
+///
+/// 身份 = 「图号｜名称｜材料」：用户只改序号、不动这三列时才能对上；
+/// 对不上的行不进映射，球标保持原号并在报告里说明。
+fn bom_renumber_map(
+    old: &[crate::bom::SheetRow],
+    specs: &[crate::bom::RowSpec],
+) -> std::collections::BTreeMap<String, String> {
+    let key = |code: &str, name: &str, material: &str| {
+        format!("{}\u{1}{}\u{1}{}", code.trim(), name.trim(), material.trim())
+    };
+    let mut old_by: std::collections::BTreeMap<String, Vec<String>> = Default::default();
+    for r in old {
+        old_by
+            .entry(key(&r.cells[1], &r.cells[2], &r.cells[4]))
+            .or_default()
+            .push(r.cells[0].clone());
+    }
+    let mut new_by: std::collections::BTreeMap<String, Vec<String>> = Default::default();
+    for s in specs {
+        new_by
+            .entry(key(&s.code, &s.name, &s.material))
+            .or_default()
+            .push(s.item_no.clone());
+    }
+    let mut map = std::collections::BTreeMap::new();
+    for (k, olds) in &old_by {
+        let Some(nws) = new_by.get(k) else { continue };
+        for (o, n) in olds.iter().zip(nws) {
+            if o != n && map.values().all(|v| v != n) {
+                map.insert(o.clone(), n.clone());
+            }
+        }
+    }
+    map
+}
+
+/// 按映射重编号球标组（复用球标 GUI 的重建机制：读 `OCSM_EDIT` → 改参数 →
+/// 重生成块 → 删旧 INSERT）。返回「旧序号列表 → 新序号列表」报告。
+fn bom_ball_renumber(
+    sender: &Arc<dyn PluginRequestSender>,
+    doc: &acadrust::CadDocument,
+    map: &std::collections::BTreeMap<String, String>,
+) -> Result<Vec<String>, String> {
+    if map.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut report = Vec::new();
+    for g in crate::balloon_sync::groups(doc) {
+        let mapped: Vec<String> = g
+            .items
+            .iter()
+            .map(|x| map.get(x).cloned().unwrap_or_else(|| x.clone()))
+            .collect();
+        if mapped == g.items {
+            continue;
+        }
+        let Some((url, pts, _kind, _guide)) = read_edit_record(sender, g.handle) else {
+            return Err("旧球标缺少 OCSM_EDIT 记录，无法重编号".into());
+        };
+        let Some(mut params) = GuideParams::from_url(&url) else {
+            return Err("旧球标参数 URL 解析失败".into());
+        };
+        if pts.len() != 3 {
+            return Err("旧球标引导几何不是三顶点".into());
+        }
+        params.balloon.items = mapped.clone();
+        apply_balloon(sender, doc, pts[0], pts[1], pts[2], &params)?;
+        req_timed(
+            sender,
+            PluginRequest::RemoveEntity { handle: g.handle },
+            "RemoveEntity",
+        )?;
+        report.push(format!("{} → {}", g.items.join("+"), mapped.join("+")));
+    }
+    Ok(report)
+}
+
+fn api_bom_apply(body: &[u8], sender: &Arc<dyn PluginRequestSender>) -> (u16, &'static str, String) {
+    let json = "application/json; charset=utf-8";
+    let bad = |e: String| {
+        (
+            400,
+            json,
+            serde_json::json!({"ok": false, "error": e}).to_string(),
+        )
+    };
+    let v: serde_json::Value = match serde_json::from_slice(body) {
+        Ok(v) => v,
+        Err(e) => return bad(format!("请求 JSON 解析失败: {e}")),
+    };
+    let specs = match rowspecs_from_json(v.get("rows").unwrap_or(&serde_json::Value::Null)) {
+        Ok(s) => s,
+        Err(e) => return bad(e),
+    };
+    let client_fp = v.get("fp").and_then(|x| x.as_str()).unwrap_or("");
+    let doc = match snapshot(sender) {
+        Ok(d) => d,
+        Err(e) => return bad(e),
+    };
+    let old = crate::bom::sheet_rows(&doc);
+    let path_str = crate::current_doc_path().map(|p| p.to_string_lossy().to_string());
+    let cur_fp = crate::bom::fingerprint(path_str.as_deref(), &old);
+    if !client_fp.is_empty() && client_fp != cur_fp {
+        // CAS：打开编辑页后图纸被别的路径动过（球标联动/另一处编辑）→ 拒绝并回传最新状态。
+        let state = bom_payload(sender).ok();
+        return (
+            409,
+            json,
+            serde_json::json!({
+                "ok": false, "conflict": true,
+                "error": "图纸在你打开编辑页之后被修改过（如球标联动/另一处编辑）。已回传最新状态，请核对后再提交。",
+                "state": state,
+            })
+            .to_string(),
+        );
+    }
+    let per_col = crate::bom::load_config(&crate::bom::bom_dir()).per_col_rows;
+    match crate::bom::fill_bom(&mut SenderSink(sender), &doc, &specs, per_col) {
+        Ok(rep) => {
+            // ② 球标重编（重排式）：旧序号 → 新序号。尽力而为：失败只告警不阻断建表。
+            let map = bom_renumber_map(&old, &specs);
+            let mut warn: Option<String> = None;
+            let balls = if map.is_empty() {
+                Vec::new()
+            } else {
+                let doc2 = match snapshot(sender) {
+                    Ok(d) => d,
+                    Err(e) => {
+                        commit_undo(sender);
+                        return bad(format!("取快照失败: {e}"));
+                    }
+                };
+                match bom_ball_renumber(sender, &doc2, &map) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        warn = Some(format!("球标重编号未完成：{e}"));
+                        Vec::new()
+                    }
+                }
+            };
+            // ③ 新表块挂编辑页链接（同一撤销事务；旧块死链接也顺带重写）。
+            let doc3 = match snapshot(sender) {
+                Ok(d) => d,
+                Err(e) => {
+                    commit_undo(sender);
+                    return bad(format!("取快照失败: {e}"));
+                }
+            };
+            let mut link_n = 0usize;
+            for e in doc3.model_space_entities() {
+                let c = e.common();
+                if c.extended_data.get_record(crate::bom::XDATA_BOM).is_none() {
+                    continue;
+                }
+                let stored = c.extended_data.get_record("PE_URL").and_then(|r| {
+                    r.values.iter().find_map(|v| match v {
+                        XDataValue::String(s) if !s.trim().is_empty() => Some(s.clone()),
+                        _ => None,
+                    })
+                });
+                if let Some(port) = crate::current_guide_port() {
+                    if !crate::bom::bom_link_is_current(stored.as_deref(), port) {
+                        if req_timed(
+                            sender,
+                            PluginRequest::WriteRecord {
+                                handle: c.handle,
+                                record: pe_url_record(&crate::bom::bom_edit_url(port)),
+                            },
+                            "WriteRecord",
+                        )
+                        .is_ok()
+                        {
+                            link_n += 1;
+                        }
+                    }
+                }
+            }
+            if let Err(e) = mark_dirty(sender) {
+                commit_undo(sender);
+                return bad(e);
+            }
+            commit_undo(sender);
+            let mut payload = bom_payload(sender).unwrap_or(serde_json::json!({"ok": true}));
+            payload["report"] = serde_json::json!({
+                "rows": rep.rows, "cols": rep.cols, "replaced": rep.removed,
+                "squeezed": rep.squeezed, "squeezed_hard": rep.squeezed_hard,
+                "balls_renumbered": balls, "links_stamped": link_n,
+                "warn": warn,
+            });
+            (200, json, payload.to_string())
+        }
+        Err(e) => {
+            commit_undo(sender);
+            (
+                400,
+                json,
+                serde_json::json!({"ok": false, "error": e}).to_string(),
+            )
+        }
+    }
+}
+
+/// POST /api/bom_import?name=xxx.xlsx｜xxx.csv —— 浏览器读文件字节上传，
+/// 复用 `BOMXLSXI` 的解析与合并规则（非空覆盖/空白保留/缺序号保留/手改即锁）。
+fn api_bom_import(
+    target: &str,
+    body: &[u8],
+    sender: &Arc<dyn PluginRequestSender>,
+) -> (u16, &'static str, String) {
+    let json = "application/json; charset=utf-8";
+    let bad = |e: String| {
+        (
+            400,
+            json,
+            serde_json::json!({"ok": false, "error": e}).to_string(),
+        )
+    };
+    if body.len() > 8 * 1024 * 1024 {
+        return bad("文件超过 8 MB 上限（明细表用不了那么大的表）".into());
+    }
+    let q = target.split_once('?').map(|(_, q)| q).unwrap_or("");
+    let name = q
+        .split('&')
+        .filter_map(|kv| kv.split_once('='))
+        .find(|(k, _)| *k == "name")
+        .map(|(_, v)| v.to_string());
+    let is_csv = name
+        .as_deref()
+        .map(|n| n.to_ascii_lowercase().ends_with(".csv"))
+        .unwrap_or(false);
+    let file: Vec<crate::bom_xlsx::XRow> = if is_csv {
+        match String::from_utf8(body.to_vec())
+            .map_err(|e| format!("文件不是 UTF-8 文本: {e}"))
+            .and_then(|s| crate::bom_xlsx::parse_csv(&s))
+        {
+            Ok(f) => f,
+            Err(e) => return bad(format!("读 CSV 失败：{e}")),
+        }
+    } else {
+        match crate::bom_xlsx::read_xlsx_bytes(body) {
+            Ok(f) => f,
+            Err(e) => return bad(e),
+        }
+    };
+    if file.is_empty() {
+        return bad("文件里没有数据行（表头行会被跳过）".into());
+    }
+    let doc = match snapshot(sender) {
+        Ok(d) => d,
+        Err(e) => return bad(e),
+    };
+    let prev = crate::balloon_sync::old_rows(&doc);
+    let rows = crate::bom_xlsx::plan_import(&prev, &file);
+    // 导入刚写下的数量就是新基线（重复导入不会再次「手改即锁」）。
+    let rows: Vec<crate::bom::RowSpec> = rows
+        .into_iter()
+        .map(|mut r| {
+            r.exported = Some(r.qty);
+            r
+        })
+        .collect();
+    let per_col = crate::bom::load_config(&crate::bom::bom_dir()).per_col_rows;
+    match crate::bom::fill_bom(&mut SenderSink(sender), &doc, &rows, per_col) {
+        Ok(rep) => {
+            let doc2 = match snapshot(sender) {
+                Ok(d) => d,
+                Err(e) => {
+                    commit_undo(sender);
+                    return bad(format!("取快照失败: {e}"));
+                }
+            };
+            for e in doc2.model_space_entities() {
+                let c = e.common();
+                if c.extended_data.get_record(crate::bom::XDATA_BOM).is_none() {
+                    continue;
+                }
+                if let Some(port) = crate::current_guide_port() {
+                    let stored = c.extended_data.get_record("PE_URL").and_then(|r| {
+                        r.values.iter().find_map(|v| match v {
+                            XDataValue::String(s) if !s.trim().is_empty() => Some(s.clone()),
+                            _ => None,
+                        })
+                    });
+                    if !crate::bom::bom_link_is_current(stored.as_deref(), port) {
+                        let _ = req_timed(
+                            sender,
+                            PluginRequest::WriteRecord {
+                                handle: c.handle,
+                                record: pe_url_record(&crate::bom::bom_edit_url(port)),
+                            },
+                            "WriteRecord",
+                        );
+                    }
+                }
+            }
+            if let Err(e) = mark_dirty(sender) {
+                commit_undo(sender);
+                return bad(e);
+            }
+            commit_undo(sender);
+            let locked = rows.iter().filter(|r| r.lock_qty.is_some()).count();
+            let kept = rows
+                .iter()
+                .filter(|r| !file.iter().any(|f| f.item_no() == r.item_no))
+                .count();
+            let mut payload = bom_payload(sender).unwrap_or(serde_json::json!({"ok": true}));
+            payload["report"] = serde_json::json!({
+                "imported": file.len(), "rows": rep.rows, "cols": rep.cols,
+                "replaced": rep.removed, "locked": locked, "kept": kept,
+            });
+            (200, json, payload.to_string())
+        }
+        Err(e) => {
+            commit_undo(sender);
+            (
+                400,
+                json,
+                serde_json::json!({"ok": false, "error": e}).to_string(),
+            )
+        }
+    }
+}
+
+/// POST /api/bom_export?name=...&fmt=xlsx|csv —— 聚合 → xlsx/csv 字节（JSON 数组
+/// 回传）→ 浏览器「另存为」；同时记下导出基线（「手改即锁」的比对值，同一撤销事务）。
+fn api_bom_export(
+    target: &str,
+    sender: &Arc<dyn PluginRequestSender>,
+) -> (u16, &'static str, String) {
+    let json = "application/json; charset=utf-8";
+    let bad = |e: String| {
+        (
+            400,
+            json,
+            serde_json::json!({"ok": false, "error": e}).to_string(),
+        )
+    };
+    let q = target.split_once('?').map(|(_, q)| q).unwrap_or("");
+    let param = |key: &str| -> Option<String> {
+        q.split('&')
+            .filter_map(|kv| kv.split_once('='))
+            .find(|(k, _)| *k == key)
+            .map(|(_, v)| v.to_string())
+    };
+    let is_csv = param("fmt").map(|f| f.eq_ignore_ascii_case("csv")).unwrap_or(false);
+    let doc = match snapshot(sender) {
+        Ok(d) => d,
+        Err(e) => return bad(e),
+    };
+    let rows = crate::bom::sheet_rows(&doc);
+    if rows.is_empty() {
+        return bad("图上还没有明细表行（先在网页里建行并「应用到图纸」）。".into());
+    }
+    let xrows: Vec<crate::bom_xlsx::XRow> = rows
+        .iter()
+        .map(|r| crate::bom_xlsx::xrow_from_cells(&r.cells, r.lock))
+        .collect();
+    let filename = {
+        let raw = param("name").unwrap_or_else(|| "明细表.xlsx".to_string());
+        // 只留文件名部分，防路径注入/分隔符。
+        raw.split(['/', '\\'])
+            .last()
+            .unwrap_or("明细表.xlsx")
+            .replace('"', "")
+            .replace('\\', "")
+            .trim()
+            .to_string()
+    };
+    // 导出文件名：扩展名跟格式走（页面给的 name 可能与 fmt 不一致）。
+    let stem = filename.trim_end_matches(|c| c != '.').trim_end_matches('.');
+    let fname = if is_csv {
+        format!("{stem}.csv")
+    } else if filename.to_ascii_lowercase().ends_with(".csv") {
+        format!("{stem}.xlsx")
+    } else {
+        filename
+    };
+    let (mime, data) = if is_csv {
+        (
+            "text/csv;charset=utf-8",
+            crate::bom_xlsx::csv_text(&xrows).into_bytes(),
+        )
+    } else {
+        match crate::bom_xlsx::xlsx_bytes(&xrows) {
+            Ok(b) => (
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                b,
+            ),
+            Err(e) => return bad(e),
+        }
+    };
+    // 导出基线（同一撤销事务）：每行当时的数量 → EXPORTED_APP（「手改即锁」的比对值）。
+    if let Err(e) = begin_undo(sender, "OCSM 明细表导出") {
+        return bad(e);
+    }
+    let doc2 = match snapshot(sender) {
+        Ok(d) => d,
+        Err(e) => {
+            commit_undo(sender);
+            return bad(format!("取快照失败: {e}"));
+        }
+    };
+    let mut stamped = 0usize;
+    for e in doc2.model_space_entities() {
+        let acadrust::EntityType::Insert(ins) = e else { continue };
+        if ins.block_name != crate::bom::ROW_BLOCK {
+            continue;
+        }
+        let Some(q) = ins
+            .attributes
+            .iter()
+            .find(|a| a.tag.trim() == "数量")
+            .and_then(|a| a.value.trim().parse::<usize>().ok())
+        else {
+            continue;
+        };
+        let mut rec = acadrust::xdata::ExtendedDataRecord::new(crate::bom::EXPORTED_APP);
+        rec.values.push(acadrust::xdata::XDataValue::String(
+            serde_json::json!({"qty": q}).to_string(),
+        ));
+        if req_timed(
+            sender,
+            PluginRequest::WriteRecord { handle: ins.common.handle, record: rec },
+            "WriteRecord",
+        )
+        .is_ok()
+        {
+            stamped += 1;
+        }
+    }
+    // 表块挂编辑页链接（同一撤销事务）。
+    let doc3 = match snapshot(sender) {
+        Ok(d) => d,
+        Err(e) => {
+            commit_undo(sender);
+            return bad(format!("取快照失败: {e}"));
+        }
+    };
+    for e in doc3.model_space_entities() {
+        let c = e.common();
+        if c.extended_data.get_record(crate::bom::XDATA_BOM).is_none() {
+            continue;
+        }
+        let stored = c.extended_data.get_record("PE_URL").and_then(|r| {
+            r.values.iter().find_map(|v| match v {
+                XDataValue::String(s) if !s.trim().is_empty() => Some(s.clone()),
+                _ => None,
+            })
+        });
+        if let Some(port) = crate::current_guide_port() {
+            if !crate::bom::bom_link_is_current(stored.as_deref(), port) {
+                let _ = req_timed(
+                    sender,
+                    PluginRequest::WriteRecord {
+                        handle: c.handle,
+                        record: pe_url_record(&crate::bom::bom_edit_url(port)),
+                    },
+                    "WriteRecord",
+                );
+            }
+        }
+    }
+    if let Err(e) = mark_dirty(sender) {
+        commit_undo(sender);
+        return bad(e);
+    }
+    commit_undo(sender);
+    let payload = serde_json::json!({
+        "ok": true,
+        "filename": fname,
+        "mime": mime,
+        "rows": xrows.len(),
+        "stamped": stamped,
+        // 字节走 JSON 数组（明细表体量小；省掉 base64 依赖），页面 Uint8Array 直接吃。
+        "data": data,
+    });
+    (200, json, payload.to_string())
+}
+
 /// 交互路径：`POST /api/apply` type=BALLOON。引导 PLINE 保留（不删，可反复重改）。
 ///
 /// 组台账写 `OCSM_BALLOON`（JSON：序号列表/方向/插入模式/关联零件），供
@@ -6087,6 +6683,9 @@ const JOINT_HTML: &str = include_str!("joint_gui.html");
 /// 命令手册页（人类侧命令目录 + 操作教程）：教程正文是**磁盘上的 md**（见 `manual_dirs()`），
 /// 与 AI 侧 skill（`~/.agents/skills/ocsm-manual/`）共用同一批文件，避免两份内容漂移。
 const MANUAL_HTML: &str = include_str!("manual_gui.html");
+/// 明细表编辑页（2026-09-16 第四期）：Ctrl+点击表头/行块打开，网页即中间层 ——
+/// 图纸 = 唯一真源，xlsx 只作为导入/导出的数据交换格式。
+const BOM_HTML: &str = include_str!("bom_gui.html");
 
 #[cfg(test)]
 mod tests {
@@ -7070,6 +7669,24 @@ impl PluginRequestSender for MockSender {
                 self.undos.lock().unwrap().push("commit".into());
                 Ok(P::Ok)
             }
+            // 真 import：读模板 DWG 里的模型空间 ATTDEF（明细表测试用真模板）。
+            R::ImportFrameBlock(r) => {
+                match acadrust::io::dwg::DwgReader::from_file(std::path::Path::new(&r.path))
+                    .and_then(|mut rd| rd.read())
+                {
+                    Ok(mut d) => {
+                        let defs: Vec<acadrust::entities::AttributeDefinition> = d
+                            .model_space_entities()
+                            .filter_map(|e| match e {
+                                acadrust::EntityType::AttributeDefinition(ad) => Some(ad.clone()),
+                                _ => None,
+                            })
+                            .collect();
+                        Ok(P::ImportFrameBlock(Ok(defs)))
+                    }
+                    Err(e) => Ok(P::ImportFrameBlock(Err(e.to_string()))),
+                }
+            }
             _ => Ok(P::Ok),
         }
     }
@@ -7090,6 +7707,216 @@ mod integration {
     fn export_lock() -> std::sync::MutexGuard<'static, ()> {
         static L: std::sync::Mutex<()> = std::sync::Mutex::new(());
         L.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    // ── 明细表网页编辑端到端（bom.html 四端点，2026-09-16）────────────────
+
+    #[test]
+    fn http_bom_get_apply_export_end_to_end() {
+        let _g = export_lock();
+        let mock = std::sync::Arc::new(MockSender::new(acadrust::CadDocument::new()));
+        let server = spawn(mock.clone()).expect("spawn guide server");
+        let port = server.port;
+        // 测试服务器的端口写进静态（真插件在启动时由 lib.rs 写；挂链逻辑依赖它）。
+        crate::set_guide_port_for_test(port);
+
+        // ① GET /api/bom_get：空表。
+        let r = http_req(port, "GET", "/api/bom_get", "");
+        let v: serde_json::Value = serde_json::from_str(&r).unwrap();
+        assert_eq!(v["ok"], true, "bom_get 应成功: {r}");
+        assert_eq!(v["rows"].as_array().unwrap().len(), 0);
+        assert_eq!(v["fp"].as_str().unwrap().len(), 16);
+
+        // ② POST /api/bom_apply：两行（第一行数量锁 2；总重应自动算）。
+        let body = serde_json::json!({
+            "fp": "",
+            "rows": [
+                {"item_no":"1","code":"GB/T 5782-2016","name":"六角头螺栓 M10x40","qty":"2",
+                 "material":"Q235","unit_weight":"0.021","total_weight":"","remark":"","lock":2},
+                {"item_no":"2","code":"0165","name":"偏心轴 φ12","qty":"1","material":"45",
+                 "unit_weight":"1.35","total_weight":"","remark":""}
+            ]
+        })
+        .to_string();
+        let r2 = http_req(port, "POST", "/api/bom_apply", &body);
+        let v2: serde_json::Value = serde_json::from_str(&r2).unwrap();
+        assert_eq!(v2["ok"], true, "apply 应成功: {v2}");
+        assert_eq!(v2["report"]["rows"], 2);
+        assert!(v2["report"]["balls_renumbered"].as_array().unwrap().is_empty());
+        let doc = mock.doc.lock().unwrap().clone();
+        assert!(head_and_rows_ok(&doc), "应有 1 表头 + 2 行块");
+        let mut got: Vec<(String, String, String, bool)> = Vec::new();
+        for e in doc.model_space_entities() {
+            let EntityType::Insert(ins) = e else { continue };
+            if ins.block_name != crate::bom::ROW_BLOCK {
+                continue;
+            }
+            let get = |tag: &str| -> String {
+                ins.attributes
+                    .iter()
+                    .find(|a| a.tag.trim() == tag)
+                    .map(|a| a.value.clone())
+                    .unwrap_or_default()
+            };
+            let locked = ins
+                .common
+                .extended_data
+                .get_record(crate::bom::LOCK_APP)
+                .is_some();
+            got.push((get("序号"), get("数量"), get("总重"), locked));
+        }
+        got.sort();
+        assert_eq!(
+            got[0],
+            ("1".to_string(), "2".to_string(), "0.042".to_string(), true),
+            "第1行：数量2+锁，总重=0.021×2 自动算"
+        );
+        assert_eq!(got[1], ("2".to_string(), "1".to_string(), "1.35".to_string(), false));
+        // ③ 撤销序：begin → … → commit（一次事务）。
+        let u = mock.undos();
+        assert!(u.contains(&"begin:OCSM 明细表".to_string()), "撤销序: {u:?}");
+        assert!(u.contains(&"commit".to_string()));
+        // ④ 挂链：PE_URL 指向 /bom.html。
+        assert!(
+            mock.url_writes
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|(_, url)| url.contains("/bom.html")),
+            "表块应挂编辑页链接"
+        );
+        // ⑤ 再 GET：2 行 + 非空 fp；错 fp 再 apply → 409 conflict。
+        let r5 = http_req(port, "GET", "/api/bom_get", "");
+        let v5: serde_json::Value = serde_json::from_str(&r5).unwrap();
+        assert_eq!(v5["rows"].as_array().unwrap().len(), 2);
+        let fp = v5["fp"].as_str().unwrap().to_string();
+        let bad_body = serde_json::json!({
+            "fp": format!("{fp}x"),
+            "rows": [{"item_no":"1","code":"X","name":"Y","qty":"1","material":"","unit_weight":"","total_weight":"","remark":""}]
+        })
+        .to_string();
+        let r6 = http_req(port, "POST", "/api/bom_apply", &bad_body);
+        let v6: serde_json::Value = serde_json::from_str(&r6)
+            .unwrap_or_else(|e| panic!("r6 不是 JSON（{e}）: {r6}"));
+        assert_eq!(v6["conflict"], true, "错指纹应 409: {v6}");
+        // ⑥ 导出 xlsx：data 前 2 字节 = PK；基线打进行块。
+        let r7 = http_req(port, "POST", "/api/bom_export?fmt=xlsx&name=t.xlsx", "");
+        let v7: serde_json::Value = serde_json::from_str(&r7)
+            .unwrap_or_else(|e| panic!("r7 不是 JSON（{e}）: {r7}"));
+        assert_eq!(v7["ok"], true, "导出应成功: {v7}");
+        assert_eq!(v7["filename"], "t.xlsx");
+        assert_eq!(v7["rows"], 2);
+        let data = v7["data"].as_array().unwrap();
+        assert_eq!(data[0], 0x50);
+        assert_eq!(data[1], 0x4B);
+        let doc2 = mock.doc.lock().unwrap().clone();
+        assert_eq!(
+            baselines(&doc2),
+            stamped_count(v7.clone()),
+            "导出基线应打到全部行块"
+        );
+    }
+
+    #[test]
+    fn http_server_serves_bom_gui() {
+        let mock = std::sync::Arc::new(MockSender::new(acadrust::CadDocument::new()));
+        let server = spawn(mock.clone()).expect("spawn guide server");
+        let html = http_req(server.port, "GET", "/bom.html", "");
+        assert!(html.contains("btn-apply"), "应用按钮");
+        assert!(html.contains("/api/bom_get"), "读端点");
+        assert!(html.contains("/api/bom_apply"), "写端点");
+        assert!(html.contains("/api/bom_import"), "导入");
+        assert!(html.contains("/api/bom_export"), "导出");
+        assert!(html.contains("应用到图纸"));
+    }
+
+    #[test]
+    fn bom_renumber_map_pairs_by_identity() {
+        // 旧表 1=A/x、2=B/y；网页把它们改成 7=A/x、1=B/y —— 按图号+名称+材料配对。
+        let old = vec![
+            crate::bom::SheetRow {
+                cells: ["1".into(), "A".into(), "x".into(), "2".into(), "m".into(), String::new(), String::new(), String::new()],
+                lock: None,
+                exported: None,
+            },
+            crate::bom::SheetRow {
+                cells: ["2".into(), "B".into(), "y".into(), "1".into(), "45".into(), String::new(), String::new(), String::new()],
+                lock: None,
+                exported: None,
+            },
+        ];
+        let specs = vec![
+            crate::bom::RowSpec {
+                item_no: "7".into(),
+                code: "A".into(),
+                name: "x".into(),
+                spec: String::new(),
+                qty: 2,
+                material: "m".into(),
+                unit_weight: String::new(),
+                remark: String::new(),
+                lock_qty: None,
+                exported: None,
+            },
+            crate::bom::RowSpec {
+                item_no: "1".into(),
+                code: "B".into(),
+                name: "y".into(),
+                spec: String::new(),
+                qty: 1,
+                material: "45".into(),
+                unit_weight: String::new(),
+                remark: String::new(),
+                lock_qty: None,
+                exported: None,
+            },
+        ];
+        let map = bom_renumber_map(&old, &specs);
+        assert_eq!(map.get("1").map(String::as_str), Some("7"));
+        assert_eq!(map.get("2").map(String::as_str), Some("1"));
+        // 新行里没有的旧身份 → 不进映射。
+        let specs2 = vec![crate::bom::RowSpec {
+            item_no: "9".into(),
+            code: "C".into(),
+            name: "z".into(),
+            spec: String::new(),
+            qty: 1,
+            material: "m".into(),
+            unit_weight: String::new(),
+            remark: String::new(),
+            lock_qty: None,
+            exported: None,
+        }];
+        assert!(bom_renumber_map(&old, &specs2).is_empty());
+    }
+
+    fn head_and_rows_ok(doc: &acadrust::CadDocument) -> bool {
+        let mut head = 0usize;
+        let mut rows = 0usize;
+        for e in doc.model_space_entities() {
+            match e {
+                EntityType::Insert(ins) if ins.block_name == crate::bom::HEAD_BLOCK => head += 1,
+                EntityType::Insert(ins) if ins.block_name == crate::bom::ROW_BLOCK => rows += 1,
+                _ => {}
+            }
+        }
+        head == 1 && rows == 2
+    }
+
+    fn baselines(doc: &acadrust::CadDocument) -> usize {
+        doc.model_space_entities()
+            .filter(|e| {
+                matches!(e, EntityType::Insert(ins) if ins.block_name == crate::bom::ROW_BLOCK)
+                    && e.common()
+                        .extended_data
+                        .get_record(crate::bom::EXPORTED_APP)
+                        .is_some()
+            })
+            .count()
+    }
+
+    fn stamped_count(v: serde_json::Value) -> usize {
+        v["stamped"].as_u64().unwrap_or(0) as usize
     }
 
     fn http_req(port: u16, method: &str, path: &str, body: &str) -> String {

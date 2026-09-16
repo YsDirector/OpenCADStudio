@@ -893,6 +893,15 @@ pub(crate) fn current_guide_port() -> Option<u16> {
     GUIDE_PORT.get().and_then(|m| *m.lock().unwrap())
 }
 
+/// 写端口（测试用：spawn() 起的测试服务器也要能让挂链逻辑拿到端口）。
+#[cfg(test)]
+pub(crate) fn set_guide_port_for_test(port: u16) {
+    *GUIDE_PORT
+        .get_or_init(|| std::sync::Mutex::new(None))
+        .lock()
+        .unwrap() = Some(port);
+}
+
 /// 上次已刷新过链接的端口（避免每次调用都扫图）。
 static EDIT_LINK_PORT: std::sync::OnceLock<std::sync::Mutex<Option<u16>>> =
     std::sync::OnceLock::new();
@@ -962,6 +971,52 @@ fn refresh_edit_links(host: &mut dyn HostApi, port: u16) {
         host.set_dirty();
         host.push_info(&format!(
             "OCSM：已更新 {changed} 个标注的编辑链接（端口 {port}）。"
+        ));
+    }
+    // ── 明细表块（表头 + 行块）：链接是同一张编辑页（bom.html，不带 handle）──
+    // 老图纸里这里可能还存着指向 xlsx 文件路径的死链接（宿主 web_hyperlink
+    // 只放行 http/https），一并重写掉。
+    let bom_targets: Vec<(acadrust::Handle, Option<String>)> = {
+        let doc = host.document();
+        doc.entities()
+            .filter(|e| {
+                e.common()
+                    .extended_data
+                    .get_record(crate::bom::XDATA_BOM)
+                    .is_some()
+            })
+            .map(|e| {
+                let h = e.common().handle;
+                let url = e
+                    .common()
+                    .extended_data
+                    .get_record("PE_URL")
+                    .and_then(|r| {
+                        r.values.iter().find_map(|v| match v {
+                            acadrust::xdata::XDataValue::String(s) if !s.is_empty() => Some(s.clone()),
+                            _ => None,
+                        })
+                    });
+                (h, url)
+            })
+            .collect()
+    };
+    let mut bom_changed = 0usize;
+    for (h, stored) in bom_targets {
+        if crate::bom::bom_link_is_current(stored.as_deref(), port) {
+            continue;
+        }
+        if host.write_record(
+            h,
+            crate::guide_server::pe_url_record(&crate::bom::bom_edit_url(port)),
+        ) {
+            bom_changed += 1;
+        }
+    }
+    if bom_changed > 0 {
+        host.set_dirty();
+        host.push_info(&format!(
+            "OCSM：已把 {bom_changed} 个明细表块链接指向编辑页（Ctrl+点击打开）。"
         ));
     }
 }

@@ -30,6 +30,9 @@ pub(crate) const XDATA_BOM: &str = "OCSM_BOM";
 pub(crate) const LOCK_APP: &str = "OCSM_BOMLOCK";
 /// 行块上的「上次导出数量」记录（`BOMXLSX` 写；导入侧"手改即锁"的比对基线）。
 pub(crate) const EXPORTED_APP: &str = "OCSM_BOMXEXP";
+/// 表头块上的「上次导出 xlsx 路径」记录（`BOMXLSX` 写；导入默认路径，与
+/// Ctrl+点击链接解耦 —— 老版本写在 PE_URL 里的文件路径宿主打不开，见 `stamp_bom_links`）。
+pub(crate) const XLSX_PATH_APP: &str = "OCSM_BOMXPATH";
 pub(crate) const XDATA_PART: &str = "OCSM_PART";
 pub(crate) const HEAD_BLOCK: &str = "OCSM_BOMHEAD";
 pub(crate) const ROW_BLOCK: &str = "OCSM_BOMROW";
@@ -832,6 +835,7 @@ pub(crate) fn cmd_bom(host: &mut dyn HostApi, args: &str) {
                     "OCSMBOM: 提示——数量按「图中插入件数」统计，同一零件画在多个视图里会重复计数。",
                 );
             }
+            stamp_bom_links(host);
             if rep.untracked > 0 {
                 host.push_info(&format!(
                     "OCSMBOM: 注意——图中有 {} 个 OCSM_ 零件块引用但没有 OCSM_PART 台账记录             （多为离线生成/早期版本的文件），它们不会进明细表。用 XL 重新放置，或后续用表格导入补录。",
@@ -887,6 +891,7 @@ pub(crate) fn cmd_bom_sync(host: &mut dyn HostApi, _args: &str) {
                     locked.join("、")
                 ));
             }
+            stamp_bom_links(host);
         }
         Err(e) => host.push_error(&e),
     }
@@ -1036,7 +1041,11 @@ fn default_xlsx_path(host: &dyn HostApi) -> std::path::PathBuf {
     saved.unwrap_or_else(|| default_xlsx_dir().join("明细表.xlsx"))
 }
 
-/// 把 xlsx 路径写进**表头块**的 `PE_URL`（宿主 Ctrl+点击即可打开该文件）。
+/// 把 xlsx 路径写进**表头块**的 `OCSM_BOMXPATH`（`BOMXLSXI` 导入时的默认路径）。
+///
+/// 注意：不要把文件路径写进 `PE_URL` —— 宿主 `web_hyperlink` 只放行 http/https，
+/// 文件路径链接永远打不开（这是“明细表 Ctrl+点击失效”的根因）；Ctrl+点击链接
+/// 由 [`stamp_bom_links`] 挂到 `bom.html` 编辑页。
 fn set_xlsx_url(host: &mut dyn HostApi, path: &std::path::Path) {
     let doc = host.document().clone();
     let head = doc.model_space_entities().find_map(|e| match e {
@@ -1045,13 +1054,13 @@ fn set_xlsx_url(host: &mut dyn HostApi, path: &std::path::Path) {
     });
     let Some(mut ins) = head else { return };
     let url = path.to_string_lossy().to_string();
-    let mut rec = ExtendedDataRecord::new("PE_URL");
-    rec.values.push(XDataValue::String(url.clone()));
-    ins.common.extended_data.remove_record("PE_URL");
+    let mut rec = ExtendedDataRecord::new(XLSX_PATH_APP);
+    rec.values.push(XDataValue::String(url));
+    ins.common.extended_data.remove_record(XLSX_PATH_APP);
     ins.common.extended_data.add_record(rec);
     host.update_entity(EntityType::Insert(ins));
     host.set_dirty();
-    let _ = url;
+    stamp_bom_links(host);
 }
 
 /// 表头块上的 xlsx 路径（导入时默认从这里取）。
@@ -1060,17 +1069,211 @@ fn xlsx_url_of(host: &dyn HostApi) -> Option<std::path::PathBuf> {
     for e in doc.model_space_entities() {
         if let EntityType::Insert(ins) = e {
             if ins.block_name == HEAD_BLOCK {
+                // 新记录：上次导出路径（`BOMXLSX` 写；与 Ctrl+点击链接解耦）。
+                if let Some(rec) = ins.common.extended_data.get_record(XLSX_PATH_APP) {
+                    if let Some(XDataValue::String(s)) =
+                        rec.values.iter().find(|v| matches!(v, XDataValue::String(_)))
+                    {
+                        let p = std::path::PathBuf::from(s);
+                        if !s.is_empty() {
+                            return Some(p);
+                        }
+                    }
+                }
+                // 兼容旧图：老版本把 xlsx 路径写在 PE_URL 里（永远打不开的死链接）。
                 if let Some(rec) = ins.common.extended_data.get_record("PE_URL") {
                     if let Some(XDataValue::String(s)) =
                         rec.values.iter().find(|v| matches!(v, XDataValue::String(_)))
                     {
-                        return Some(std::path::PathBuf::from(s));
+                        if !s.trim().is_empty() && !s.contains("/bom.html") {
+                            return Some(std::path::PathBuf::from(s));
+                        }
                     }
                 }
             }
         }
     }
     None
+}
+
+// ── 网页编辑器（bom.html）数据通道（2026-09-16 第四期）─────────────────────
+
+/// 图纸上的明细表行现状（网页 `GET /api/bom_get` 的数据源）。
+#[derive(Debug, Clone)]
+pub(crate) struct SheetRow {
+    pub cells: [String; 8],
+    pub lock: Option<usize>,
+    pub exported: Option<usize>,
+}
+
+/// 读行块 XDATA 里的 `{"qty":N}`（锁 / 导出基线共用）。
+fn record_qty(common: &ocs_plugin_api::host::acadrust::entities::EntityCommon, app: &str) -> Option<usize> {
+    let rec = common.extended_data.get_record(app)?;
+    let text = rec.values.iter().find_map(|v| match v {
+        XDataValue::String(s) => Some(s.clone()),
+        _ => None,
+    })?;
+    serde_json::from_str::<serde_json::Value>(&text)
+        .ok()?
+        .get("qty")
+        .and_then(|q| q.as_u64())
+        .map(|q| q as usize)
+}
+
+/// 扫描图上的明细表行块，**按序号升序**返回（纯数字在前、数字序，非数字在後字典序）。
+pub(crate) fn sheet_rows(doc: &ocs_plugin_api::host::acadrust::CadDocument) -> Vec<SheetRow> {
+    let mut out: Vec<SheetRow> = Vec::new();
+    for e in doc.model_space_entities() {
+        let EntityType::Insert(ins) = e else { continue };
+        if ins.block_name != ROW_BLOCK {
+            continue;
+        }
+        let get = |tag: &str| -> String {
+            ins.attributes
+                .iter()
+                .find(|a| a.tag.trim() == tag)
+                .map(|a| a.value.trim().to_string())
+                .unwrap_or_default()
+        };
+        let cells = [
+            get("序号"),
+            get("图号"),
+            get("名称"),
+            get("数量"),
+            get("材料"),
+            get("单重"),
+            get("总重"),
+            get("备注"),
+        ];
+        if cells[0].is_empty() {
+            continue;
+        }
+        out.push(SheetRow {
+            cells,
+            lock: record_qty(&ins.common, LOCK_APP),
+            exported: record_qty(&ins.common, EXPORTED_APP),
+        });
+    }
+    out.sort_by_key(|r| match r.cells[0].trim().parse::<u64>() {
+        Ok(n) => (0u8, n, String::new()),
+        Err(_) => (1u8, 0, r.cells[0].trim().to_string()),
+    });
+    out
+}
+
+/// 8 格值 → 行规格（网页提交 / 导入共用）。总重不在此存——`RowSpec::values()` 统一按
+/// 「单重 × 数量」算（单重解析不出则空），与命令路径同一口径。
+pub(crate) fn rowspec_from_cells(
+    cells: &[String; 8],
+    lock: Option<usize>,
+    exported: Option<usize>,
+) -> Result<RowSpec, String> {
+    let no = cells[0].trim().to_string();
+    if no.is_empty() {
+        return Err("有行的序号为空（每行都需要序号）".into());
+    }
+    let qty: usize = cells[3]
+        .trim()
+        .parse()
+        .map_err(|_| format!("序号 {no} 的数量「{}」不是正整数", cells[3]))?;
+    if qty == 0 {
+        return Err(format!("序号 {no} 的数量不能为 0（要删行就删行）"));
+    }
+    let unit = weight_text(&cells[5]);
+    Ok(RowSpec {
+        item_no: no,
+        code: cells[1].trim().to_string(),
+        name: cells[2].trim().to_string(),
+        spec: String::new(),
+        qty,
+        material: cells[4].trim().to_string(),
+        unit_weight: unit,
+        remark: cells[7].trim().to_string(),
+        lock_qty: lock,
+        exported,
+    })
+}
+
+/// 明细表现状指纹（图纸路径 + 全部行值/锁/基线）：网页「应用到图纸」时校验
+/// 打开网页之后图纸有没有被别的路径（如球标联动 BOMSYNC）改过 —— 变了就拒绝
+/// 并提示刷新，防止把旧视图上的整表盖回新图纸。
+pub(crate) fn fingerprint(doc_path: Option<&str>, rows: &[SheetRow]) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    doc_path.unwrap_or("").hash(&mut h);
+    for r in rows {
+        for c in &r.cells {
+            c.hash(&mut h);
+        }
+        r.lock.hash(&mut h);
+        r.exported.hash(&mut h);
+    }
+    format!("{:016x}", h.finish())
+}
+
+/// 明细表编辑页（bom.html）的 Ctrl+点击链接。
+///
+/// 宿主 `web_hyperlink` 只放行 http/https —— 这就是为什么明细表以前
+/// 挂 xlsx 文件路径永远点不开；编辑入口统一指向插件自带的网页。
+pub(crate) fn bom_edit_url(port: u16) -> String {
+    format!("http://127.0.0.1:{port}/bom.html")
+}
+
+/// 行块/表头上的 `PE_URL` 是否已是当前端口的编辑页链接。
+pub(crate) fn bom_link_is_current(stored: Option<&str>, port: u16) -> bool {
+    match stored {
+        Some(u) => u.trim() == bom_edit_url(port),
+        None => false,
+    }
+}
+
+/// 给**表头 + 全部行块**挂上编辑页链接（已挂对的跳过；无插件服务端口时静默）。
+///
+/// 命令路径用（HTTP 端点另有 sender 版）；**不带 PushUndo** —— 应填进调用方
+/// 已开启的撤销事务里（如 fill_bom 的替换事务 / 导出的基线事务）。
+pub(crate) fn stamp_bom_links(host: &mut dyn HostApi) {
+    let Some(port) = crate::current_guide_port() else {
+        return;
+    };
+    let want = bom_edit_url(port);
+    let doc = host.document().clone();
+    let pe = |c: &ocs_plugin_api::host::acadrust::entities::EntityCommon| -> Option<String> {
+        c.extended_data
+            .get_record("PE_URL")
+            .and_then(|r| {
+                r.values.iter().find_map(|v| match v {
+                    XDataValue::String(s) if !s.trim().is_empty() => Some(s.clone()),
+                    _ => None,
+                })
+            })
+    };
+    let targets: Vec<Handle> = doc
+        .model_space_entities()
+        .filter_map(|e| {
+            let c = e.common();
+            let is_bom = c.extended_data.get_record(XDATA_BOM).is_some();
+            if is_bom && !bom_link_is_current(pe(c).as_deref(), port) {
+                Some(c.handle)
+            } else {
+                None
+            }
+        })
+        .collect();
+    if targets.is_empty() {
+        return;
+    }
+    let mut changed = 0usize;
+    for h in targets {
+        if host.write_record(h, crate::guide_server::pe_url_record(&want)) {
+            changed += 1;
+        }
+    }
+    if changed > 0 {
+        host.set_dirty();
+        host.push_info(&format!(
+            "OCSMBOM: 已把 {changed} 个表块链接指向明细表编辑页（Ctrl+点击打开）。"
+        ));
+    }
 }
 
 /// `OCSMBOMXLSX` / `BOMXLSX [路径]`：把**当前明细表**导出成 `.xlsx`（带「锁定数量」列）。
@@ -1153,7 +1356,7 @@ pub(crate) fn cmd_bom_xlsx(host: &mut dyn HostApi, args: &str) {
         ));
     }
     host.push_info(&format!(
-        "OCSMBOMXLSX: {} 行已导出 → {}（{} 行记下导出基线；表头已挂链接，Ctrl+点击可打开）。",
+        "OCSMBOMXLSX: {} 行已导出 → {}（{} 行记下导出基线；表块已挂编辑页链接，Ctrl+点击打开网页）。",
         xrows.len(),
         path.display(),
         stamped
@@ -1247,6 +1450,7 @@ pub(crate) fn cmd_bom_xlsxi(host: &mut dyn HostApi, args: &str) {
                 host.update_entity(EntityType::Insert(ins2));
             }
             host.set_dirty();
+            stamp_bom_links(host);
             host.push_info(&format!(
                 "OCSMBOMXLSXI: 从 {} 导入 {} 行 → 表 {} 行 / {} 列（{} 行数量已锁定，{} 行文件里没有、按图纸保留）。",
                 path.display(),
@@ -1594,6 +1798,95 @@ mod tests {
         // A3 只放得下 2 列（(210+180-0)/180 = 2.17），第 3 列要被拒绝
         let err = layout(150, 26, &cfg).unwrap_err();
         assert!(err.contains("多页明细表"), "{err}");
+    }
+
+    // ── 网页编辑（第四期）纯函数 ──
+
+    fn sr(cells: [&str; 8], lock: Option<usize>) -> SheetRow {
+        SheetRow {
+            cells: cells.map(|s| s.to_string()),
+            lock,
+            exported: None,
+        }
+    }
+
+    #[test]
+    fn rowspec_from_cells_recomputes_total_and_validates() {
+        let rs = rowspec_from_cells(
+            &[
+                "5".into(),
+                "GB/T 5782-2016".into(),
+                "六角头螺栓 M10x40".into(),
+                "3".into(),
+                "Q235".into(),
+                "0.021".into(),
+                "9".into(),
+                "".into(),
+            ],
+            Some(3),
+            Some(2),
+        )
+        .unwrap();
+        assert_eq!(rs.item_no, "5");
+        assert_eq!(rs.qty, 3);
+        assert_eq!(rs.values()[6], "0.063", "总重应=单重×数量");
+        assert_eq!(rs.lock_qty, Some(3));
+        assert_eq!(rs.exported, Some(2));
+        // 非法数量
+        assert!(rowspec_from_cells(
+            &["1".into(), "".into(), "".into(), "x".into(), "".into(), "".into(), "".into(), "".into()],
+            None,
+            None
+        )
+        .is_err());
+        assert!(rowspec_from_cells(
+            &["".into(), "".into(), "".into(), "1".into(), "".into(), "".into(), "".into(), "".into()],
+            None, None
+        )
+        .is_err(), "序号不能为空");
+        assert!(rowspec_from_cells(
+            &["1".into(), "".into(), "".into(), "0".into(), "".into(), "".into(), "".into(), "".into()],
+            None, None
+        )
+        .is_err(), "数量不能为 0");
+    }
+
+    #[test]
+    fn fingerprint_changes_when_rows_change() {
+        let a = vec![sr(["1", "A", "x", "2", "m", "1", "2", ""], None)];
+        let b = vec![sr(["1", "A", "x", "3", "m", "1", "3", ""], None)];
+        let c = vec![sr(["1", "A", "x", "2", "m", "1", "2", ""], Some(2))];
+        assert_eq!(fingerprint(Some("p"), &a), fingerprint(Some("p"), &a));
+        assert_ne!(fingerprint(Some("p"), &a), fingerprint(Some("p"), &b));
+        assert_ne!(fingerprint(Some("p"), &a), fingerprint(Some("p"), &c), "上锁也是变化");
+        assert_ne!(fingerprint(Some("p"), &a), fingerprint(Some("q"), &a));
+    }
+
+    #[test]
+    fn bom_link_is_current_only_for_exact_edit_page() {
+        assert!(bom_link_is_current(Some("http://127.0.0.1:23751/bom.html"), 23751));
+        assert!(!bom_link_is_current(Some("http://127.0.0.1:23752/bom.html"), 23751), "端口变了要重写");
+        assert!(!bom_link_is_current(Some("/tmp/a-明细表.xlsx"), 23751), "旧死链接要重写");
+        assert!(!bom_link_is_current(None, 23751));
+    }
+
+    #[test]
+    fn sheet_rows_sorts_by_numeric_item_no() {
+        let mut doc = ocs_plugin_api::host::acadrust::CadDocument::new();
+        use ocs_plugin_api::host::acadrust::{types::Vector3, entities::AttributeEntity};
+        for (no, code) in [("10", "B"), ("2", "A")] {
+            let mut row = Insert::new(ROW_BLOCK, Vector3::new(0.0, 0.0, 0.0));
+            for (tag, val) in CELL_TAGS.iter().zip([no, code, "", "1", "", "", "", ""]) {
+                let mut a = AttributeEntity::default();
+                a.tag = tag.to_string();
+                a.value = val.to_string();
+                row.attributes.push(a);
+            }
+            doc.add_entity(EntityType::Insert(row)).unwrap();
+        }
+        let rows = sheet_rows(&doc);
+        let nos: Vec<&str> = rows.iter().map(|r| r.cells[0].as_str()).collect();
+        assert_eq!(nos, vec!["2", "10"], "应按数字序升序（不是字典序）");
     }
 
     #[test]

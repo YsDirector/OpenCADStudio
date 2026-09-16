@@ -402,6 +402,15 @@ fn sheet_xml(rows: &[XRow]) -> String {
 
 /// 把行写成 `.xlsx` 文件。
 pub(crate) fn write_xlsx(path: &Path, rows: &[XRow]) -> Result<(), String> {
+    let bytes = xlsx_bytes(rows)?;
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| format!("建目录失败: {e}"))?;
+    }
+    std::fs::write(path, bytes).map_err(|e| format!("写 {} 失败: {e}", path.display()))
+}
+
+/// 构造 .xlsx 的字节（zip 容器；`write_xlsx` 与网页「导出→浏览器另存为」共用）。
+pub(crate) fn xlsx_bytes(rows: &[XRow]) -> Result<Vec<u8>, String> {
     let mut z = ZipWriter::new();
     z.add(
         "[Content_Types].xml",
@@ -439,11 +448,7 @@ pub(crate) fn write_xlsx(path: &Path, rows: &[XRow]) -> Result<(), String> {
         .as_bytes(),
     )?;
     z.add("xl/worksheets/sheet1.xml", sheet_xml(rows).as_bytes())?;
-    let bytes = z.finish();
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir).map_err(|e| format!("建目录失败: {e}"))?;
-    }
-    std::fs::write(path, bytes).map_err(|e| format!("写 {} 失败: {e}", path.display()))
+    Ok(z.finish())
 }
 
 // ── xlsx 读 ─────────────────────────────────────────────────────────────
@@ -676,7 +681,12 @@ fn parse_shared(xml: &str) -> Vec<String> {
 /// 读 `.xlsx` → 行（跳过表头；列数不足补空）。
 pub(crate) fn read_xlsx(path: &Path) -> Result<Vec<XRow>, String> {
     let data = std::fs::read(path).map_err(|e| format!("读 {} 失败: {e}", path.display()))?;
-    let entries = read_zip_entries(&data)?;
+    read_xlsx_bytes(&data)
+}
+
+/// 读 `.xlsx` 字节 → 行（网页导入用；与 [`read_xlsx`] 同一解析核心）。
+pub(crate) fn read_xlsx_bytes(data: &[u8]) -> Result<Vec<XRow>, String> {
+    let entries = read_zip_entries(data)?;
     let get = |n: &str| -> Option<&[u8]> {
         entries
             .iter()
