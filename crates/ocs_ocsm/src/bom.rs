@@ -1270,7 +1270,7 @@ pub(crate) fn stamp_bom_links(host: &mut dyn HostApi) {
     if changed > 0 {
         host.set_dirty();
         host.push_info(&format!(
-            "OCSMBOM: 已把 {changed} 个表块链接指向明细表编辑页（Ctrl+点击打开）。"
+            "OCSMBOM: 已把 {changed} 个表块链接指向明细表编辑页（Ctrl+点击打开；或运行 `BOMEDIT` 在新窗口打开）。"
         ));
     }
 }

@@ -325,12 +325,13 @@ fn write_response(
         200 => "OK",
         400 => "Bad Request",
         404 => "Not Found",
+        409 => "Conflict",
         500 => "Internal Server Error",
         _ => "Error",
     };
     write!(
         stream,
-        "HTTP/1.1 {status} {reason}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\nAccess-Control-Allow-Origin: *\r\n\r\n",
+        "HTTP/1.1 {status} {reason}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\nCache-Control: no-store\r\nAccess-Control-Allow-Origin: *\r\n\r\n",
         body.len()
     )?;
     stream.write_all(body)?;
@@ -344,6 +345,201 @@ fn handle_conn(
     let req = read_request(stream)?;
     let (status, ctype, resp) = route(&req.method, &req.target, &req.body, router);
     write_response(stream, status, ctype, resp.as_bytes())
+}
+
+// ── 外部打开的页面 → 补一个 app 窗口 ──────────────────────────────────────
+
+/// 页面标题（提示页用）。
+fn page_label(path: &str) -> &'static str {
+    if path.starts_with("/bom") {
+        "明细表编辑"
+    } else if path.starts_with("/parts") {
+        "零件库"
+    } else if path.starts_with("/joint") {
+        "螺栓副装配"
+    } else if path.starts_with("/rough") {
+        "表面粗糙度"
+    } else if path.starts_with("/manual") {
+        "命令手册"
+    } else {
+        "标注配置"
+    }
+}
+
+/// 已知插件页面路径（去查询串，回到规范形式）；不是页面则 None。
+fn plugin_page_path(target: &str) -> Option<&'static str> {
+    let path = target.split_once('?').map(|(p, _)| p).unwrap_or(target);
+    match path {
+        "/" | "/guide.html" | "/guide" => Some("/guide.html"),
+        "/parts" | "/parts.html" => Some("/parts"),
+        "/joint" | "/joint.html" => Some("/joint"),
+        "/rough.html" | "/rough" => Some("/rough.html"),
+        "/bom" | "/bom.html" => Some("/bom.html"),
+        "/manual" | "/manual.html" => Some("/manual"),
+        _ => None,
+    }
+}
+
+/// 请求里带了 `app=1`（= 插件自己用 chromium `--app` 开的窗口）。
+fn is_app_window_request(target: &str) -> bool {
+    query_flag(target, "app=1")
+}
+
+fn query_flag(target: &str, kv: &str) -> bool {
+    target
+        .split_once('?')
+        .map(|(_, q)| q.split('&').any(|part| part == kv))
+        .unwrap_or(false)
+}
+
+/// 查询串里的某个参数值（不做百分号解码 —— 句柄/图纸号都是 ASCII）。
+fn query_value(target: &str, key: &str) -> Option<String> {
+    target
+        .split_once('?')
+        .map(|(_, q)| q)
+        .unwrap_or("")
+        .split('&')
+        .filter_map(|kv| kv.split_once('='))
+        .find(|(k, _)| *k == key)
+        .map(|(_, v)| v.to_string())
+}
+
+/// 给页面 URL 补 `app=1`（插件自己开窗时用）。
+pub(crate) fn with_app_marker(path_and_query: &str) -> String {
+    if query_flag(path_and_query, "app=1") {
+        return path_and_query.to_string();
+    }
+    format!(
+        "{path_and_query}{}app=1",
+        if path_and_query.contains('?') { '&' } else { '?' }
+    )
+}
+
+/// 把请求 URL 改写成 app 窗口用的 URL：保留原参数，补 `app=1`；
+/// 没有 `tab=` 时钉上当前活跃图纸（`active_tab` 为 None 就不加）。
+fn app_window_url(port: u16, target: &str, active_tab: Option<u64>) -> Option<String> {
+    let path = plugin_page_path(target)?;
+    let query = target.split_once('?').map(|(_, q)| q).unwrap_or("");
+    let mut parts: Vec<String> = query
+        .split('&')
+        .filter(|p| !p.is_empty() && *p != "app=1")
+        .map(str::to_string)
+        .collect();
+    parts.push("app=1".to_string());
+    if !parts.iter().any(|p| p.starts_with("tab=")) {
+        if let Some(tab) = active_tab {
+            parts.push(format!("tab={tab}"));
+        }
+    }
+    Some(format!("http://127.0.0.1:{port}{path}?{}", parts.join("&")))
+}
+
+/// “已在新窗口打开”的提示页（给那个带地址栏的浏览器页签用）。
+fn opened_elsewhere_html(label: &str) -> String {
+    const TPL: &str = r#"<!DOCTYPE html><html lang="zh"><head><meta charset="utf-8">
+<title>__LABEL__（已在新窗口打开）</title>
+<style>
+body { font-family: "Microsoft YaHei", "PingFang SC", sans-serif; color: #333;
+       background: #f5f6f8; padding: 26px; }
+h1 { font-size: 15px; margin: 0 0 10px; }
+p { font-size: 13px; line-height: 1.8; color: #555; max-width: 680px; }
+code { background: #eef1f6; padding: 1px 4px; border-radius: 3px; }
+button { margin-top: 14px; padding: 6px 16px; border: 1px solid #bbb; border-radius: 6px;
+         background: #fff; cursor: pointer; font-size: 13px; }
+button:hover { border-color: #2b6fe0; background: #eef4ff; }
+</style></head><body>
+<h1>「__LABEL__」已经用独立窗口打开了</h1>
+<p>图纸里的链接（Ctrl+点击）只能落在这种带地址栏的浏览器页签上，所以插件又开了一个 OCSM 独立窗口
+（去掉了地址栏/页签，与其它 OCSM 页面一致）—— 请到那个窗口里操作，<b>本页可以直接关掉</b>。</p>
+<p>明细表编辑器下次也可以直接运行命令 <code>BOMEDIT</code> 打开，不走浏览器。</p>
+<p><button onclick="window.close()">关闭本页</button></p>
+<script>try { window.close(); } catch (e) {}</script>
+</body></html>"#;
+    TPL.replace("__LABEL__", label)
+}
+
+/// 目标页面的心跳键（页面自己 ping 的键）：用来判断“这个编辑器/配置窗已经开着了”。
+/// 键的规则必须跟页面里算的一致，否则永远判定为“没开着”。
+fn page_ping_key_for(path: &str, target: &str, active_tab: Option<u64>) -> Option<String> {
+    match path {
+        "/bom.html" => Some("bom".to_string()),
+        "/parts" => Some("parts".to_string()),
+        "/joint" => Some("joint".to_string()),
+        "/rough.html" => Some("rough".to_string()),
+        "/manual" => Some("manual".to_string()),
+        // 引导/标注配置窗：键含句柄与图纸号（页面从 URL 里的 handle/tab 算同一个键）。
+        _ => {
+            let raw = query_value(target, "handle")?;
+            let clean = raw
+                .trim_start_matches("0x")
+                .trim_start_matches("0X")
+                .to_ascii_lowercase();
+            u64::from_str_radix(&clean, 16).ok()?; // 不是句柄就不参与去重
+            Some(match active_tab {
+                Some(tab) => format!("guide-{clean}@{tab}"),
+                None => format!("guide-{clean}"),
+            })
+        }
+    }
+}
+
+/// 外部打开的页面（不带 `app=1`：Ctrl+点击 `PE_URL`、粘地址栏、书签）→
+/// 用 chromium `--app` 补一个独立窗口，并把这一个换成一个提示页。
+///
+/// 为什么在插件侧做：Ctrl+点击是**宿主**在开 URL（`src/app/update/viewport.rs`
+/// → `sys::open_url` → `xdg-open`），插件拦不到 —— 只能在页面被加载时自己再弹一个。
+/// 插件自己开的窗口都带 `app=1`，所以不会被重复弹；浏览器页签重载在去抖窗口内
+/// （4 s）也不会重复弹。返回 `Some(提示页)` = 已经补了窗口，调用方别再把真页面发出去。
+fn upgrade_external_page(target: &str) -> Option<String> {
+    let path = plugin_page_path(target)?;
+    if is_app_window_request(target) {
+        return None;
+    }
+    let active_tab = crate::host_active_tab();
+    // 已经开着同一窗口（心跳键匹配）→ 只给浏览器页签一个提示，不再弹一个重复窗口。
+    if let Some(key) = page_ping_key_for(path, target, active_tab) {
+        if crate::page_window_alive(&key) {
+            return Some(opened_elsewhere_html(page_label(path)));
+        }
+    }
+    {
+        // 去抖：同一页面 4 s 内只补一次（浏览器重载/多标签不重复弹窗）。
+        static LAST: std::sync::OnceLock<
+            std::sync::Mutex<std::collections::HashMap<&'static str, std::time::Instant>>,
+        > = std::sync::OnceLock::new();
+        let mut last = LAST
+            .get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let now = std::time::Instant::now();
+        if let Some(prev) = last.get(path) {
+            if now.duration_since(*prev) < std::time::Duration::from_secs(4) {
+                return None;
+            }
+        }
+        last.insert(path, now);
+    }
+    let port = crate::current_guide_port()?;
+    let url = app_window_url(port, target, active_tab)?;
+    // 测试里不弹窗（也不去碰 chromium）：真环境才补窗口。
+    #[cfg(not(test))]
+    let spawned = crate::open_app_window(&url, 1180, 900);
+    #[cfg(test)]
+    let spawned = false;
+    if !spawned {
+        dbg_guide(&format!("external page {target}: app window spawn failed"));
+        return None;
+    }
+    dbg_guide(&format!("external page {target} → app window {url}"));
+    Some(opened_elsewhere_html(page_label(path)))
+}
+
+/// 页面响应：外部打开的页面换成提示页（同时补一个 app 窗口），否则发真页面。
+fn page_response(target: &str, html: &'static str) -> (u16, &'static str, String) {
+    match upgrade_external_page(target) {
+        Some(notice) => (200, "text/html; charset=utf-8", notice),
+        None => (200, "text/html; charset=utf-8", html.to_string()),
+    }
 }
 
 fn route(
@@ -374,26 +570,23 @@ fn route(
         };
     }
     match (method, target) {
-        ("GET", t) if t == "/" || t.starts_with("/guide.html") => {
-            (200, "text/html; charset=utf-8", GUI_HTML.to_string())
-        }
-        ("GET", t) if t.starts_with("/rough.html") => {
-            (200, "text/html; charset=utf-8", ROUGH_HTML.to_string())
-        }
-        ("GET", t) if t.starts_with("/parts") => {
-            (200, "text/html; charset=utf-8", PARTS_HTML.to_string())
-        }
+        ("GET", t) if t == "/" || t.starts_with("/guide.html") => page_response(t, GUI_HTML),
+        ("GET", t) if t.starts_with("/rough.html") => page_response(t, ROUGH_HTML),
+        ("GET", t) if t.starts_with("/parts") => page_response(t, PARTS_HTML),
         ("GET", t) if t.starts_with("/api/parts_ping") => {
             crate::page_window_ping("parts", t.contains("bye=1"));
             (200, json, r#"{"ok":true}"#.into())
         }
         ("GET", t) if t.starts_with("/api/page_ping") => {
             let q = t.split_once('?').map(|(_, q)| q).unwrap_or("");
+            // `p` 是百分号编码过的（页面用 `encodeURIComponent`，键里可能带 `@`）→
+            // 必须解码后再当键，否则页面算的 `guide-71@2` 会变成 `guide-71%402`，
+            // 与插件开窗时记的键对不上（重复开窗就是这么来的）。
             let key = q
                 .split('&')
                 .filter_map(|kv| kv.split_once('='))
                 .find(|(k, _)| *k == "p")
-                .map(|(_, v)| v.to_string())
+                .map(|(_, v)| crate::guide_url::percent_decode(v))
                 .unwrap_or_else(|| "page".to_string());
             crate::page_window_ping(&key, q.contains("bye=1"));
             (200, json, r#"{"ok":true}"#.into())
@@ -401,20 +594,14 @@ fn route(
         ("GET", t) if t.starts_with("/api/parts") => {
             (200, json, crate::partgen::catalog_json())
         }
-        ("GET", t) if t == "/manual" || t.starts_with("/manual?") => {
-            (200, "text/html; charset=utf-8", MANUAL_HTML.to_string())
-        }
-        ("GET", t) if t == "/bom" || t.starts_with("/bom.html") => {
-            (200, "text/html; charset=utf-8", BOM_HTML.to_string())
-        }
+        ("GET", t) if t == "/manual" || t.starts_with("/manual?") => page_response(t, MANUAL_HTML),
+        ("GET", t) if t == "/bom" || t.starts_with("/bom.html") => page_response(t, BOM_HTML),
         ("GET", t) if t.starts_with("/api/bom_get") => api_bom_get(&sender!()),
         ("POST", "/api/bom_apply") => api_bom_apply(body, &sender!()),
         ("POST", t) if t.starts_with("/api/bom_import") => api_bom_import(target, body, &sender!()),
         ("POST", t) if t.starts_with("/api/bom_export") => api_bom_export(target, &sender!()),
         ("GET", t) if t.starts_with("/api/manual") => api_manual(t),
-        ("GET", t) if t == "/joint" || t.starts_with("/joint?") => {
-            (200, "text/html; charset=utf-8", JOINT_HTML.to_string())
-        }
+        ("GET", t) if t == "/joint" || t.starts_with("/joint?") => page_response(t, JOINT_HTML),
         ("GET", t) if t.starts_with("/api/part_svg") => {
             let q = t.split_once('?').map(|(_, q)| q).unwrap_or("");
             match crate::partgen::preview_svg(q) {
@@ -7717,6 +7904,176 @@ mod tests {
         assert!(GUI_HTML.contains("应用并刷新"));
         assert!(GUI_HTML.contains("/api/apply_refresh"));
         assert!(GUI_HTML.contains("LINEAR"));
+    }
+
+    /// **回归：GUI 页开局不能抛错**（2026-09-16 用户报的 BOM 页 bug）。
+    ///
+    /// 页面主体是一整块 IIFE：`$('btn-add').addEventListener('click', add)` 写错了
+    /// 函数名（实际叫 `addRow`）→ 开局 `ReferenceError` → 排在后面的 `reload()` 永远
+    /// 不执行 → 现象就是「页面打开是空的（连“读取中…”都没有），手动点一下刷新才出来」。
+    /// 这里用静态检查拦住这一类“回调名写错 / 找不到元素 id”（纯文本扫描，不需要 JS 引擎）。
+    /// 外部打开的页面（Ctrl+点击 `PE_URL`、粘地址栏）→ 插件补一个 chromium `--app` 窗口。
+    /// 这里只测纯函数部分（真弹窗在生产构建里，测试里刻意不碰 chromium）。
+    #[test]
+    fn external_page_upgrade_maps_urls_to_app_windows() {
+        // 页面路径识别
+        assert_eq!(plugin_page_path("/"), Some("/guide.html"));
+        assert_eq!(plugin_page_path("/guide.html?handle=0x2A"), Some("/guide.html"));
+        assert_eq!(plugin_page_path("/bom.html"), Some("/bom.html"));
+        assert_eq!(plugin_page_path("/parts?tab=2"), Some("/parts"));
+        assert_eq!(plugin_page_path("/api/bom_get"), None, "API 不是页面");
+        assert_eq!(plugin_page_path("/nope"), None);
+
+        // app=1 标记：插件自己开的窗口带它，外部打开的不带
+        assert!(is_app_window_request("/bom.html?app=1"));
+        assert!(is_app_window_request("/guide.html?handle=0x2A&app=1&tab=3"));
+        assert!(!is_app_window_request("/bom.html"));
+        assert!(!is_app_window_request("/bom.html?tab=3"));
+        assert_eq!(with_app_marker("/parts"), "/parts?app=1");
+        assert_eq!(with_app_marker("/parts?tab=2"), "/parts?tab=2&app=1");
+        assert_eq!(with_app_marker("/parts?app=1"), "/parts?app=1", "不重复加");
+
+        // 改写出的 app 窗口 URL：保留原参数 + 补 app=1 + 钉当前活跃图纸
+        assert_eq!(
+            app_window_url(23751, "/bom.html", Some(7)).unwrap(),
+            "http://127.0.0.1:23751/bom.html?app=1&tab=7"
+        );
+        assert_eq!(
+            app_window_url(23751, "/guide.html?handle=0x2A", Some(7)).unwrap(),
+            "http://127.0.0.1:23751/guide.html?handle=0x2A&app=1&tab=7"
+        );
+        assert_eq!(
+            app_window_url(23752, "/parts?tab=2", Some(7)).unwrap(),
+            "http://127.0.0.1:23752/parts?tab=2&app=1",
+            "URL 里已有 tab= 就不覆盖"
+        );
+        assert_eq!(
+            app_window_url(23751, "/rough.html?x=1&y=2", None).unwrap(),
+            "http://127.0.0.1:23751/rough.html?x=1&y=2&app=1",
+            "活跃图纸未知就不加 tab="
+        );
+
+        // 提示页：标题随页面变，并且会尝试自关
+        let bom_notice = opened_elsewhere_html(page_label("/bom.html"));
+        assert!(bom_notice.contains("明细表编辑"));
+        assert!(bom_notice.contains("BOMEDIT"));
+        assert!(bom_notice.contains("window.close()"));
+        assert!(opened_elsewhere_html(page_label("/guide.html")).contains("标注配置"));
+
+        // “这个窗口已经开着”的心跳键：必须与页面里算的键完全一致，否则去重永远失效。
+        assert_eq!(page_ping_key_for("/bom.html", "/bom.html", None).unwrap(), "bom");
+        assert_eq!(page_ping_key_for("/parts", "/parts?app=1", None).unwrap(), "parts");
+        assert_eq!(
+            page_ping_key_for("/guide.html", "/guide.html?handle=0x2A", Some(3)).unwrap(),
+            "guide-2a@3"
+        );
+        assert_eq!(
+            page_ping_key_for("/guide.html", "/guide.html?handle=0X2a", None).unwrap(),
+            "guide-2a"
+        );
+        assert!(page_ping_key_for("/guide.html", "/guide.html", None).is_none());
+        // 页面里的算法（guide_gui.html）要与上面的规则一致：`guide-<句柄小写>[@<图纸号>]`。
+        assert!(GUI_HTML.contains("'guide-' + h + (t ? '@' + t : '')"), "页面心跳键算法漂了");
+        assert_eq!(
+            crate::guide_ping_key(0x2A.into(), Some(3)),
+            "guide-2a@3",
+            "插件开窗时的键也必须一样"
+        );
+    }
+
+    /// 测试环境不弹窗：`page_response` 必须照常发真页面（否则既有页面测试全挂）。
+    #[test]
+    fn page_response_serves_the_real_page_without_spawning() {
+        let (status, ctype, body) = page_response("/bom.html", BOM_HTML);
+        assert_eq!((status, ctype), (200, "text/html; charset=utf-8"));
+        assert!(body.contains("btn-apply"), "应该是真页面：{}", &body[..80.min(body.len())]);
+    }
+
+    #[test]
+    fn gui_pages_have_no_dangling_handlers_or_ids() {
+        for (name, html) in [
+            ("guide_gui", GUI_HTML),
+            ("rough_gui", ROUGH_HTML),
+            ("parts_gui", PARTS_HTML),
+            ("joint_gui", JOINT_HTML),
+            ("manual_gui", MANUAL_HTML),
+            ("bom_gui", BOM_HTML),
+        ] {
+            for ident in js_handler_idents(html) {
+                assert!(
+                    js_defines(html, &ident),
+                    "{name}.html: addEventListener 里用了未定义的 `{ident}` —— 页面开局会抛 ReferenceError"
+                );
+            }
+            for id in js_element_ids(html) {
+                assert!(
+                    html.contains(&format!("id=\"{id}\""))
+                        || html.contains(&format!("id='{id}'\"")),
+                    "{name}.html: JS 里用了 `{id}`，但没有这个 id 的元素（开局 TypeError）"
+                );
+            }
+        }
+    }
+
+    /// `addEventListener('<事件>', NAME)` 里的**裸标识符**回调（匿名/箭头函数、
+    /// 属性访问 `a.b`、函数调用 `f(...)` 都不算）。
+    fn js_handler_idents(html: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        for (i, _) in html.match_indices("addEventListener(") {
+            let rest = &html[i + "addEventListener(".len()..];
+            let Some((_evt, tail)) = rest.split_once(',') else {
+                continue;
+            };
+            let tail = tail.trim_start();
+            let name: String = tail
+                .chars()
+                .take_while(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '$')
+                .collect();
+            let after = tail.get(name.len()..).unwrap_or("").trim_start();
+            if !name.is_empty()
+                && !after.starts_with('(')
+                && !after.starts_with('.')
+                && !after.starts_with('=')
+            {
+                out.push(name);
+            }
+        }
+        out
+    }
+
+    fn js_defines(html: &str, ident: &str) -> bool {
+        ["function ", "const ", "let ", "var "]
+            .iter()
+            .any(|kw| {
+                let needle = format!("{kw}{ident}");
+                html.match_indices(&needle).any(|(i, _)| {
+                    // 必须是完整的标识符：`function addRow(` 不能当成 `function add`。
+                    !matches!(html[i + needle.len()..].chars().next(),
+                        Some(c) if c.is_ascii_alphanumeric() || c == '_' || c == '$')
+                })
+            })
+    }
+
+    /// `$('x')` / `getElementById('x')`（单双引号都算）里的元素 id；跳过字符串拼接。
+    fn js_element_ids(html: &str) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        for quote in ['\'', '"'] {
+            for prefix in ["$(", "getElementById("] {
+                let needle = format!("{prefix}{quote}");
+                for (i, _) in html.match_indices(&needle) {
+                    let rest = &html[i + needle.len()..];
+                    let Some(end) = rest.find(quote) else { continue };
+                    let id = &rest[..end];
+                    if !id.is_empty()
+                        && !id.contains('+')
+                        && !out.iter().any(|v| v == id)
+                    {
+                        out.push(id.to_string());
+                    }
+                }
+            }
+        }
+        out
     }
 }
 

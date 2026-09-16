@@ -77,6 +77,10 @@
   const $ = (id) => document.getElementById(id);
   const COLS = ['item_no', 'code', 'name', 'qty', 'material', 'unit_weight', 'total_weight', 'remark'];
   const state = { fp: '', doc: {}, xlsxName: '明细表.xlsx', rows: [], busy: false };
+  // 本窗口钉在哪张图纸上（`BOMEDIT` 开窗时写在 URL 上）——请求带回给插件，
+  // 多张图各开编辑窗不串表；不带（Ctrl+点击链接、AI/MCP 直连）则按“当前活跃图纸”算。
+  const TAB = new URLSearchParams(location.search).get('tab');
+  const withTab = (url) => (TAB ? url + (url.includes('?') ? '&' : '?') + 'tab=' + encodeURIComponent(TAB) : url);
 
   function note(msg, cls) {
     const n = $('note');
@@ -186,7 +190,7 @@
   async function reload() {
     setBusy(true); note('读取中…', 'info');
     try {
-      const r = await fetch('/api/bom_get');
+      const r = await fetch(withTab('/api/bom_get'));
       const j = await r.json();
       if (!j.ok) { note('读取失败：' + (j.error || r.status), 'err'); return; }
       applyState(j);
@@ -220,6 +224,7 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           fp: state.fp,
+          tab: TAB || undefined,
           rows: state.rows.map((x) => ({
             item_no: x.item_no.trim(), code: x.code.trim(), name: x.name.trim(),
             qty: parseInt(x.qty, 10), material: x.material.trim(),
@@ -264,7 +269,7 @@
       const name = fmt === 'csv'
         ? state.xlsxName.replace(/\.xlsx$/i, '.csv')
         : state.xlsxName;
-      const r = await fetch(`/api/bom_export?fmt=${fmt}&name=${encodeURIComponent(name)}`, { method: 'POST' });
+      const r = await fetch(withTab(`/api/bom_export?fmt=${fmt}&name=${encodeURIComponent(name)}`), { method: 'POST' });
       const j = await r.json();
       if (!j.ok) { note('导出失败：' + (j.error || r.status), 'err'); return; }
       downloadBytes(j.filename, j.mime, j.data);
@@ -278,7 +283,7 @@
     setBusy(true); note(`导入 ${file.name} …`, 'info');
     try {
       const buf = new Uint8Array(await file.arrayBuffer());
-      const r = await fetch(`/api/bom_import?name=${encodeURIComponent(file.name)}`, {
+      const r = await fetch(withTab(`/api/bom_import?name=${encodeURIComponent(file.name)}`), {
         method: 'POST',
         headers: { 'Content-Type': 'application/octet-stream' },
         body: buf,
@@ -309,7 +314,9 @@
 
   $('btn-reload').addEventListener('click', reload);
   $('btn-apply').addEventListener('click', apply);
-  $('btn-add').addEventListener('click', add);
+  // 别再写成 `add`（未定义）—— 开局抛 ReferenceError 会让后面的 reload() 不执行，
+  // 现象就是「页面打开是空的，手动点一下刷新才出来」（2026-09-16 用户报的）。
+  $('btn-add').addEventListener('click', addRow);
   $('btn-export-x').addEventListener('click', () => exportAs('xlsx'));
   $('btn-export-c').addEventListener('click', () => exportAs('csv'));
   $('btn-import').addEventListener('click', () => $('file-in').click());

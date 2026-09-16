@@ -56,6 +56,7 @@ static MANIFEST: PluginManifest = PluginManifest {
         "OCSMFRAMEINIT", "OCSMFRAMEINSERT", "D", "OCSMPOWERDIM", "OCSMDIMGULIDE",
         "GDIM", "OCSMMCP", "OCSMRGH", "CC", "OCSMDIM2GB", "D2G", "OCSMEDIT", "ME",
         "OCSMPART", "XL", "OCSMJOINT", "OCSMHELP", "OH", "OCSMBOM", "BOM", "BOMSYNC", "OCSMBOMSYNC", "OCSMBOMCFG", "BOMCFG",
+        "OCSMBOMEDIT", "BOMEDIT",
     ],
 };
 
@@ -295,7 +296,7 @@ fn frame_dir() -> std::path::PathBuf {
     std::path::PathBuf::from("frame")
 }
 
-/// `OCSMBOM`/`BOM`/`OCSMBOMCFG`/`BOMCFG`（整行可能带参数，如 `BOM 30`）。
+/// `OCSMBOM`/`BOM`/`OCSMBOMCFG`/`BOMCFG`/`BOMEDIT`（整行可能带参数，如 `BOM 30`）。
 fn is_bom_command(cmd: &str) -> bool {
     let name = cmd
         .trim()
@@ -303,7 +304,7 @@ fn is_bom_command(cmd: &str) -> bool {
         .next()
         .unwrap_or_default()
         .to_ascii_uppercase();
-    matches!(name.as_str(), "OCSMBOM" | "BOM" | "OCSMBOMCFG" | "BOMCFG" | "OCSMBOMSYNC" | "BOMSYNC" | "OCSMBOMLOCK" | "BOMLOCK" | "OCSMBOMXLSX" | "BOMXLSX" | "OCSMBOMXLSXI" | "BOMXLSXI")
+    matches!(name.as_str(), "OCSMBOM" | "BOM" | "OCSMBOMCFG" | "BOMCFG" | "OCSMBOMSYNC" | "BOMSYNC" | "OCSMBOMLOCK" | "BOMLOCK" | "OCSMBOMXLSX" | "BOMXLSX" | "OCSMBOMXLSXI" | "BOMXLSXI" | "OCSMBOMEDIT" | "BOMEDIT")
 }
 
 struct OcsmPlugin;
@@ -376,6 +377,18 @@ pub(crate) fn page_window_alive(key: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// 引导/标注配置窗口的页面心跳键：`guide-<句柄十六进制（去0x、小写）>[@<图纸号>]`。
+///
+/// 页面 (`guide_gui.html`) 按同一规则算键（句柄/图纸号从 URL 里取），所以插件的
+/// 「窗口还开着就别重复开」判断真的生效；带上图纸号 → 两张图里同句柄的引导线
+/// 各开各的窗口，不会互相挡住。
+pub(crate) fn guide_ping_key(handle: acadrust::Handle, tab: Option<u64>) -> String {
+    match tab {
+        Some(tab) => format!("guide-{:x}@{tab}", u64::from(handle)),
+        None => format!("guide-{:x}", u64::from(handle)),
+    }
+}
+
 /// 打开某个插件页面为 **chromium `--app=` 独立窗口**（沉浸式；页面自关后窗口随之退出）。
 /// 已开着（有心跳）则不再重复开；返回 true=已（尝试）打开，false=已开着。
 pub(crate) fn open_plugin_page(
@@ -388,7 +401,13 @@ pub(crate) fn open_plugin_page(
     if page_window_alive(ping_key) {
         return false;
     }
-    let url = format!("http://127.0.0.1:{port}{path_and_query}");
+    // `app=1` 标记：外部打开同一个页面（Ctrl+点击 PE_URL、粘地址栏）时，
+    // 插件据此判断"这页本来就该在 app 窗口里"，不会再补一个窗口（见
+    // `guide_server::upgrade_external_page`）。
+    let url = format!(
+        "http://127.0.0.1:{port}{}",
+        crate::guide_server::with_app_marker(path_and_query)
+    );
     if open_app_window(&url, width, height) {
         return true;
     }
@@ -431,7 +450,7 @@ pub(crate) fn open_manual_window(port: u16) -> bool {
 }
 
 /// 用 chromium/chrome 的 `--app=` 打开独立窗口；成功返回 true。
-fn open_app_window(url: &str, width: u32, height: u32) -> bool {
+pub(crate) fn open_app_window(url: &str, width: u32, height: u32) -> bool {
     let bin = [
         "/usr/bin/chromium",
         "/usr/bin/chromium-browser",
@@ -930,7 +949,7 @@ static GUIDE_ROUTER: std::sync::OnceLock<std::sync::Arc<guide_server::SenderRout
 static HOST_ACTIVE_TAB: std::sync::OnceLock<std::sync::Mutex<Option<u64>>> =
     std::sync::OnceLock::new();
 
-fn host_active_tab() -> Option<u64> {
+pub(crate) fn host_active_tab() -> Option<u64> {
     *HOST_ACTIVE_TAB
         .get_or_init(|| std::sync::Mutex::new(None))
         .lock()
@@ -1273,6 +1292,8 @@ impl BuiltinPlugin for OcsmPlugin {
                 let rest = trimmed[name.len().min(trimmed.len())..].trim().to_string();
                 if name == "OCSMBOMCFG" || name == "BOMCFG" {
                     bom::cmd_bom_cfg(host, &rest);
+                } else if name == "OCSMBOMEDIT" || name == "BOMEDIT" {
+                    self.cmd_bom_edit(host);
                 } else if name == "OCSMBOMSYNC" || name == "BOMSYNC" {
                     bom::cmd_bom_sync(host, &rest);
                 } else if name == "OCSMBOMLOCK" || name == "BOMLOCK" {
@@ -1374,8 +1395,8 @@ impl OcsmPlugin {
             host.push_error("OCSM: 无法启动标注更新服务器（宿主不支持 worker 请求）。");
             return;
         };
-        // 心跳键与页面一致（页面用 location.search 去掉 '?'：`handle=2A`）
-        let key = format!("handle={:X}", u64::from(h));
+        // 心跳键与页面一致（页面按同样的规则从 URL 算键）：`guide-<句柄>@<图纸号>`。
+        let key = guide_ping_key(h, Some(host.tab_id()));
         // `tab=`：把本窗口钉在**这张图**上（关图 → 新建图后老窗口不会跑到新图上写）。
         let opened = open_plugin_page(
             port,
@@ -1420,8 +1441,8 @@ impl OcsmPlugin {
             host.push_error("OCSM: 无法启动标注更新服务器（宿主不支持 worker 请求）。");
             return;
         };
-        // 心跳键与页面一致（页面用 location.search 去掉 '?'：`handle=2A`）
-        let key = format!("handle={:X}", u64::from(h));
+        // 心跳键与页面一致（页面按同样的规则从 URL 算键）：`guide-<句柄>@<图纸号>`。
+        let key = guide_ping_key(h, Some(host.tab_id()));
         // `tab=`：把本窗口钉在**这张图**上（同 cmd_guide）。
         let opened = open_plugin_page(
             port,
@@ -1592,6 +1613,32 @@ impl OcsmPlugin {
             Ok(msg) => host.push_output(&format!("OCSM 标准件：{msg}")),
             Err(e) => host.push_error(&format!("OCSM 标准件插入失败：{e}")),
         }
+    }
+
+    /// `OCSMBOMEDIT` / `BOMEDIT`：打开**明细表网页编辑器**（chromium `--app` 独立窗口，
+    /// 与零件库/螺栓副/引导窗口同一个开窗方式）。
+    ///
+    /// 原来只有一条路：Ctrl+点击图纸里的表头/行块（`PE_URL` 链接）—— 那是宿主
+    /// `open_url` → `xdg-open`，会落到**带地址栏的浏览器标签页**里，且链接是持久化在
+    /// 图纸里的（重开图后端口会变）。这个命令不依赖链接，直接从插件开 app 窗口，
+    /// 并把窗口钉在当前图纸上（`tab=`）。
+    fn cmd_bom_edit(&self, host: &mut dyn HostApi) {
+        let Some(port) = self.ensure_guide_server(host) else {
+            host.push_error("OCSMBOMEDIT: 无法启动明细表服务（宿主不支持 worker 请求）。");
+            return;
+        };
+        let opened = open_plugin_page(
+            port,
+            &with_tab("/bom.html", Some(host.tab_id())),
+            "bom",
+            1180,
+            900,
+        );
+        host.push_info(if opened {
+            "OCSMBOM：明细表编辑器已打开（独立窗口）。改完点「应用到图纸」；也可继续 Ctrl+点击图纸里的表块回到本页。"
+        } else {
+            "OCSMBOM：明细表编辑器已打开（Alt+Tab 切换过去）。"
+        });
     }
 
     /// `OCSMHELP` / `OH`：打开命令手册窗口（命令目录 + 操作教程）。

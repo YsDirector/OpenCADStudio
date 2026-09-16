@@ -2938,9 +2938,15 @@ const BS_FITS = [
 })();
 </script>
 <script>
-/* 页面心跳：告诉插件本窗口还开着（避免重复开窗）；关闭时 bye=1 */
+/* 页面心跳：告诉插件本窗口还开着（避免重复开窗）；关闭时 bye=1。
+   键 = `guide-<句柄十六进制（去0x、小写）>[@<图纸号>]`，与插件开窗时的键**完全一致**
+   —— 以前拿 `location.search` 当键，跟插件记的 `handle=2A` 对不上，等于从来不生效
+   （同一个引导线反复 GDIM 会开出一堆重复窗口）。 */
 (function () {
-  var key = location.search.replace(/^\?/, "") || "guide";
+  var q = new URLSearchParams(location.search);
+  var h = (q.get('handle') || '').replace(/^0x/i, '').toLowerCase();
+  var t = q.get('tab');
+  var key = 'guide-' + h + (t ? '@' + t : '');
   function ping(bye) {
     try { fetch("/api/page_ping?p=" + encodeURIComponent(key) + (bye ? "&bye=1" : ""), { cache: "no-store" }); } catch (e) {}
   }
