@@ -1779,18 +1779,37 @@ fn ui_request_view<'a>(
     let mut actions = row![].spacing(4).align_y(iced::Center);
     match request.method.as_str() {
         "select" => {
-            for option in request.options.iter().take(6) {
-                let value = option.clone();
-                actions = actions.push(
-                    button(text(option.clone()).size(10))
+            // Options go **one per line, full width**. An `ask_question` option is a
+            // label *plus* a description (easily 80+ chars), so a horizontal row of
+            // buttons got squeezed into a one-character-wide column each and wrapped
+            // vertically — a 300px-tall wall of text with one option legible.
+            let mut options = column![].spacing(3).width(Length::Fill);
+            for option in request.options.iter().take(8) {
+                options = options.push(
+                    button(text(option.clone()).size(10).width(Length::Fill))
                         .on_press(Message::Pi(PiMsg::UiAnswer {
-                            value: Some(value),
+                            value: Some(option.clone()),
                             confirmed: None,
                         }))
                         .style(|theme: &Theme, status| button::subtle(theme, status))
+                        .width(Length::Fill)
                         .padding([3, 8]),
                 );
             }
+            // A long list must not push the transcript out of the panel: cap it and
+            // scroll (the extra right padding keeps the floating scrollbar off the
+            // wrapped text).
+            let options: Element<'a, Message> = if request.options.len() > 3 {
+                scrollable(options.padding(iced::Padding {
+                    right: 12.0,
+                    ..Default::default()
+                }))
+                .height(Length::Fixed(150.0))
+                .into()
+            } else {
+                options.into()
+            };
+            body = body.push(options);
         }
         "confirm" => {
             actions = actions.push(
@@ -1843,14 +1862,20 @@ fn ui_request_view<'a>(
     );
     body = body.push(actions);
     container(body)
-        .style(|theme: &Theme| container::Style {
-            background: Some(Background::Color(theme.palette().warning.weak.color)),
-            border: Border {
-                color: theme.palette().warning.base.color,
-                width: 1.0,
-                radius: 4.0.into(),
-            },
-            ..Default::default()
+        .style(|theme: &Theme| {
+            // Match the composer's own text editor instead of the theme's loud
+            // `warning.weak` fill (a lavender wall behind the options). The thin
+            // warning border keeps the "needs an answer" signal.
+            let editor = text_editor::default(theme, text_editor::Status::Active);
+            container::Style {
+                background: Some(editor.background),
+                border: Border {
+                    color: theme.palette().warning.base.color,
+                    width: 1.0,
+                    radius: 4.0.into(),
+                },
+                ..Default::default()
+            }
         })
         .width(Length::Fill)
         .padding(6)
