@@ -27,6 +27,7 @@
 //!   agent_start/agent_end/agent_settled, queue_update {steering,followUp},
 //!   startup_error {errorMessage}
 
+use base64::Engine as _;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpStream, Shutdown};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -71,8 +72,25 @@ pub enum Event {
     /// A completed user message arrived (echoes the local optimistic bubble;
     /// may be empty when the message only carries an image).
     User(String),
-    /// Model catalog + the model the active session currently uses.
-    Models { list: Vec<ModelInfo>, current: Option<(String, String)> },
+    /// Model catalog + the model/thinking level the active session uses.
+    Models {
+        list: Vec<ModelInfo>,
+        current: Option<(String, String)>,
+        /// Available thinking levels per `"provider:id"`.
+        thinking_levels: Vec<(String, Vec<String>)>,
+        /// The session's current thinking level.
+        thinking: Option<String>,
+    },
+    /// Slash commands available in the session (`get_commands`).
+    Commands(Vec<CommandInfo>),
+    /// File index of a session cwd (`/api/file-index`).
+    Files { cwd: String, files: Vec<String> },
+    /// Sub-directories for the new-session browser (`/api/cwd/browse`).
+    DirListing { path: String, parent: Option<String>, dirs: Vec<(String, String)> },
+    /// The session's thinking level changed.
+    ThinkingSet { level: String },
+    /// A host-side notice (file-reference problems, …).
+    Notice(String),
     /// A `set_model` succeeded; the session now uses this model.
     ModelSet { provider: String, id: String },
     /// An assistant message started streaming; `parts` is the snapshot so far
@@ -130,6 +148,17 @@ pub struct SessionInfo {
     pub label: String,
     /// Absolute path of the session `.jsonl` (used for history backfill).
     pub path: Option<String>,
+    /// Working directory of the session (file index / new sessions).
+    pub cwd: Option<String>,
+}
+
+/// A slash-invokable command from `get_commands`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CommandInfo {
+    pub name: String,
+    pub description: String,
+    /// `"extension"` | `"prompt"` | `"skill"`.
+    pub source: String,
 }
 
 /// Commands the UI sends to the worker.
@@ -150,6 +179,14 @@ pub enum Command {
     Reconnect,
     /// Switch the model of the streamed session (`set_model`).
     SetModel { provider: String, model_id: String },
+    /// Set the session's reasoning/thinking level.
+    SetThinking { level: String },
+    /// Create a fresh session in `cwd` and start following it.
+    NewSession { cwd: String },
+    /// List sub-directories of `path` (new-session browser).
+    Browse { path: String },
+    /// Fetch the file index of `cwd` (for `@` file references).
+    FetchFiles { cwd: String },
 }
 
 /// Handle the panel keeps for its worker thread.
@@ -295,8 +332,12 @@ fn parse_sessions(text: &str) -> Vec<SessionInfo> {
                 .get("path")
                 .and_then(|v| v.as_str())
                 .map(|p| p.to_string());
+            let cwd = s
+                .get("cwd")
+                .and_then(|v| v.as_str())
+                .map(|p| p.to_string());
             if !id.is_empty() {
-                out.push(SessionInfo { id, label: first, path });
+                out.push(SessionInfo { id, label: first, path, cwd });
             }
         }
     }
@@ -680,6 +721,10 @@ fn worker(endpoint: String, tx: Sender<Event>, rx: Receiver<Command>, stop: Arc<
             }
             continue;
         };
+        let active_cwd = sessions
+            .iter()
+            .find(|s| s.id == active)
+            .and_then(|s| s.cwd.clone());
         let _ = tx.send(Event::Status(Status::Ready {
             session: active.clone(),
             streaming: false,
@@ -726,6 +771,8 @@ fn worker(endpoint: String, tx: Sender<Event>, rx: Receiver<Command>, stop: Arc<
                 // Model catalog + current model for the picker (best effort —
                 // a hiccup here just leaves the picker empty until reconnect).
                 fetch_models(&endpoint, &tx, &active);
+                // Slash commands for the composer's `/` completion.
+                fetch_commands(&endpoint, &tx, &active);
 
                 // Serve commands while the reader runs; shut the socket down
                 // when we must leave (Watch/Reconnect) so the reader unblocks.
@@ -737,10 +784,44 @@ fn worker(endpoint: String, tx: Sender<Event>, rx: Receiver<Command>, stop: Arc<
                     }
                     match rx.recv_timeout(POLL_TIMEOUT) {
                         Ok(Command::Send { session, message, image, queued }) => {
-                            post_prompt(&endpoint, &tx, &session, &message, image, queued, &is_streaming);
+                            post_prompt(
+                                &endpoint,
+                                &tx,
+                                &session,
+                                active_cwd.as_deref(),
+                                &message,
+                                image,
+                                queued,
+                                &is_streaming,
+                            );
                         }
                         Ok(Command::SetModel { provider, model_id }) => {
                             set_model(&endpoint, &tx, &active, &provider, &model_id);
+                        }
+                        Ok(Command::SetThinking { level }) => {
+                            set_thinking(&endpoint, &tx, &active, &level);
+                        }
+                        Ok(Command::Browse { path }) => {
+                            browse(&endpoint, &tx, &path);
+                        }
+                        Ok(Command::FetchFiles { cwd }) => {
+                            fetch_files(&endpoint, &tx, &cwd);
+                        }
+                        Ok(Command::NewSession { cwd }) => {
+                            match post_new_session(&endpoint, &cwd) {
+                                Ok(id) => {
+                                    // Follow the fresh session (backfill lands
+                                    // on the next outer-loop iteration).
+                                    watch_target = Some(id);
+                                }
+                                Err(e) => {
+                                    let _ = tx.send(Event::SendFailed {
+                                        message: format!("新建会话失败：{e}"),
+                                    });
+                                }
+                            }
+                            leave = true;
+                            break;
                         }
                         Ok(Command::Watch(id)) => {
                             if id != active {
@@ -812,13 +893,24 @@ fn wait_retry(
                 // Try the POST even while offline: the server may be fine and
                 // only the session list hiccuped; failure surfaces as
                 // SendFailed either way.
-                post_prompt(endpoint, tx, &session, &message, image, queued, &streaming);
+                post_prompt(endpoint, tx, &session, None, &message, image, queued, &streaming);
             }
             Ok(Command::SetModel { .. }) => {
                 let _ = tx.send(Event::SendFailed {
                     message: "切换模型失败：尚未连接 pi-web".into(),
                 });
             }
+            Ok(Command::SetThinking { .. }) => {
+                let _ = tx.send(Event::SendFailed {
+                    message: "切换思考强度失败：尚未连接 pi-web".into(),
+                });
+            }
+            Ok(Command::NewSession { .. }) => {
+                let _ = tx.send(Event::SendFailed {
+                    message: "新建会话失败：尚未连接 pi-web".into(),
+                });
+            }
+            Ok(Command::Browse { .. }) | Ok(Command::FetchFiles { .. }) => {}
             Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => return std::ops::ControlFlow::Break(()),
         }
@@ -831,19 +923,35 @@ fn post_prompt(
     endpoint: &str,
     tx: &Sender<Event>,
     session: &str,
+    cwd: Option<&str>,
     message: &str,
     image: Option<ImageAttachment>,
     queued: bool,
     is_streaming: &Arc<AtomicBool>,
 ) {
+    // `@path` references expand into `<file …>` blocks (+ image attachments),
+    // mirroring pi's CLI `@file` argument semantics.
+    let (message, extra_images, notices) = expand_file_refs(message, cwd);
+    for notice in notices {
+        let _ = tx.send(Event::Notice(notice));
+    }
     let mut body = serde_json::json!({ "type": "prompt", "message": message });
     if queued || is_streaming.load(Ordering::Relaxed) {
         body["streamingBehavior"] = serde_json::json!("followUp");
     }
+    let mut images = Vec::new();
     if let Some(img) = image {
-        body["images"] = serde_json::json!([
-            { "type": "image", "data": img.base64, "mimeType": img.mime }
-        ]);
+        images.push(serde_json::json!({
+            "type": "image", "data": img.base64, "mimeType": img.mime
+        }));
+    }
+    for img in extra_images {
+        images.push(serde_json::json!({
+            "type": "image", "data": img.base64, "mimeType": img.mime
+        }));
+    }
+    if !images.is_empty() {
+        body["images"] = serde_json::Value::Array(images);
     }
     let payload = body.to_string();
     match http(
@@ -915,7 +1023,7 @@ fn set_model(endpoint: &str, tx: &Sender<Event>, session: &str, provider: &str, 
     }
 }
 
-/// Fetch the model catalog + the model the session currently uses.
+/// Fetch the model catalog + the model/thinking the session currently uses.
 fn fetch_models(endpoint: &str, tx: &Sender<Event>, session: &str) {
     let catalog = http(endpoint, "GET", "/api/models", None, REQUEST_TIMEOUT)
         .ok()
@@ -943,18 +1051,337 @@ fn fetch_models(endpoint: &str, tx: &Sender<Event>, session: &str) {
     if list.is_empty() {
         return;
     }
-    // Current model: from the per-session agent state (`state.model`).
-    let current = http(endpoint, "GET", &format!("/api/agent/{session}"), None, REQUEST_TIMEOUT)
+    // Per-model thinking levels (`{"provider:id": ["off","low",…]}`).
+    let thinking_levels: Vec<(String, Vec<String>)> = catalog
+        .get("thinkingLevels")
+        .and_then(|v| v.as_object())
+        .map(|m| {
+            m.iter()
+                .map(|(k, v)| {
+                    let levels = v
+                        .as_array()
+                        .map(|a| {
+                            a.iter()
+                                .filter_map(|s| s.as_str().map(str::to_string))
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    (k.clone(), levels)
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    // Current model + thinking level from the per-session agent state.
+    let state = http(endpoint, "GET", &format!("/api/agent/{session}"), None, REQUEST_TIMEOUT)
         .ok()
-        .and_then(|r| serde_json::from_str::<serde_json::Value>(&r.body).ok())
-        .and_then(|v| {
-            let model = v.get("state")?.get("model")?;
-            Some((
-                model.get("provider")?.as_str()?.to_string(),
-                model.get("id").or_else(|| model.get("modelId"))?.as_str()?.to_string(),
-            ))
+        .and_then(|r| serde_json::from_str::<serde_json::Value>(&r.body).ok());
+    let current = state.as_ref().and_then(|v| {
+        let model = v.get("state")?.get("model")?;
+        Some((
+            model.get("provider")?.as_str()?.to_string(),
+            model.get("id").or_else(|| model.get("modelId"))?.as_str()?.to_string(),
+        ))
+    });
+    let thinking = state
+        .as_ref()
+        .and_then(|v| v.get("state")?.get("thinkingLevel")?.as_str().map(str::to_string));
+    let _ = tx.send(Event::Models { list, current, thinking_levels, thinking });
+}
+
+/// Fetch the session's slash commands (`get_commands`).
+fn fetch_commands(endpoint: &str, tx: &Sender<Event>, session: &str) {
+    let body = serde_json::json!({ "type": "get_commands" }).to_string();
+    let Ok(resp) = http(
+        endpoint,
+        "POST",
+        &format!("/api/agent/{session}"),
+        Some(&body),
+        REQUEST_TIMEOUT,
+    ) else {
+        return;
+    };
+    if !(200..300).contains(&resp.status) {
+        return;
+    }
+    let list: Vec<CommandInfo> = serde_json::from_str::<serde_json::Value>(&resp.body)
+        .ok()
+        .and_then(|v| v.get("data")?.get("commands")?.as_array().cloned())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|c| {
+                    Some(CommandInfo {
+                        name: c.get("name")?.as_str()?.to_string(),
+                        description: c
+                            .get("description")
+                            .and_then(|d| d.as_str())
+                            .unwrap_or("")
+                            .to_string(),
+                        source: c
+                            .get("source")
+                            .and_then(|s| s.as_str())
+                            .unwrap_or("")
+                            .to_string(),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let _ = tx.send(Event::Commands(list));
+}
+
+/// POST a `set_thinking_level`; report the confirmed level back.
+fn set_thinking(endpoint: &str, tx: &Sender<Event>, session: &str, level: &str) {
+    let body = serde_json::json!({ "type": "set_thinking_level", "level": level });
+    match http(
+        endpoint,
+        "POST",
+        &format!("/api/agent/{session}"),
+        Some(&body.to_string()),
+        REQUEST_TIMEOUT,
+    ) {
+        Ok(resp) if (200..300).contains(&resp.status) => {
+            let _ = tx.send(Event::ThinkingSet { level: level.to_string() });
+        }
+        Ok(resp) => {
+            let detail = serde_json::from_str::<serde_json::Value>(&resp.body)
+                .ok()
+                .and_then(|v| v.get("error").and_then(|e| e.as_str()).map(str::to_string))
+                .unwrap_or_else(|| format!("HTTP {}", resp.status));
+            let _ = tx.send(Event::SendFailed { message: format!("切换思考强度失败：{detail}") });
+        }
+        Err(e) => {
+            let _ = tx.send(Event::SendFailed { message: format!("切换思考强度失败：{e}") });
+        }
+    }
+}
+
+/// Minimal percent-encoding for query-string path values (space, #, ?, %…).
+fn encode_query(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for b in value.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' | b'/' => {
+                out.push(b as char)
+            }
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
+}
+
+/// List sub-directories of `path` for the new-session browser.
+fn browse(endpoint: &str, tx: &Sender<Event>, path: &str) {
+    let resp = http(
+        endpoint,
+        "GET",
+        &format!("/api/cwd/browse?path={}", encode_query(path)),
+        None,
+        REQUEST_TIMEOUT,
+    );
+    let Ok(resp) = resp else { return };
+    if !(200..300).contains(&resp.status) {
+        let _ = tx.send(Event::DirListing {
+            path: path.to_string(),
+            parent: None,
+            dirs: Vec::new(),
         });
-    let _ = tx.send(Event::Models { list, current });
+        return;
+    }
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(&resp.body) else {
+        return;
+    };
+    let dirs: Vec<(String, String)> = v
+        .get("directories")
+        .and_then(|d| d.as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|d| {
+                    Some((
+                        d.get("name")?.as_str()?.to_string(),
+                        d.get("path")?.as_str()?.to_string(),
+                    ))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let _ = tx.send(Event::DirListing {
+        path: v
+            .get("path")
+            .and_then(|p| p.as_str())
+            .unwrap_or(path)
+            .to_string(),
+        parent: v.get("parentPath").and_then(|p| p.as_str()).map(str::to_string),
+        dirs,
+    });
+}
+
+/// Fetch the file index of `cwd` (capped by the server at ~5000 entries).
+fn fetch_files(endpoint: &str, tx: &Sender<Event>, cwd: &str) {
+    let resp = http(
+        endpoint,
+        "GET",
+        &format!("/api/file-index?cwd={}", encode_query(cwd)),
+        None,
+        REQUEST_TIMEOUT,
+    );
+    let Ok(resp) = resp else { return };
+    if !(200..300).contains(&resp.status) {
+        return;
+    }
+    let files: Vec<String> = serde_json::from_str::<serde_json::Value>(&resp.body)
+        .ok()
+        .and_then(|v| v.get("files")?.as_array().cloned())
+        .map(|a| {
+            a.iter()
+                .filter_map(|f| f.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+    let _ = tx.send(Event::Files { cwd: cwd.to_string(), files });
+}
+
+/// Create a fresh pi session in `cwd` (returns the new session id).
+fn post_new_session(endpoint: &str, cwd: &str) -> Result<String, String> {
+    let body = serde_json::json!({ "cwd": cwd, "type": "ensure_session" }).to_string();
+    let resp = http(endpoint, "POST", "/api/agent/new", Some(&body), REQUEST_TIMEOUT)?;
+    if !(200..300).contains(&resp.status) {
+        let detail = serde_json::from_str::<serde_json::Value>(&resp.body)
+            .ok()
+            .and_then(|v| v.get("error").and_then(|e| e.as_str()).map(str::to_string))
+            .unwrap_or_else(|| format!("HTTP {}", resp.status));
+        return Err(detail);
+    }
+    serde_json::from_str::<serde_json::Value>(&resp.body)
+        .ok()
+        .and_then(|v| v.get("sessionId").and_then(|s| s.as_str()).map(str::to_string))
+        .ok_or_else(|| "响应缺少 sessionId".to_string())
+}
+
+// ── `@file` reference expansion (mirrors pi CLI's `@file` arguments) ───────
+
+const FILE_REF_MAX_TEXT_BYTES: u64 = 512 * 1024;
+const FILE_REF_MAX_IMAGE_BYTES: u64 = 8 * 1024 * 1024;
+const FILE_REF_MAX_FILES: usize = 12;
+
+/// Extract `@path` / `@"path with spaces"` tokens from a message.
+fn file_refs(message: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let bytes = message.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'@' && (i == 0 || bytes[i - 1].is_ascii_whitespace()) {
+            // Quoted form: @"path"
+            if i + 1 < bytes.len() && bytes[i + 1] == b'"' {
+                if let Some(end) = message[i + 2..].find('"') {
+                    let path = &message[i + 2..i + 2 + end];
+                    if !path.is_empty() {
+                        out.push(path.to_string());
+                    }
+                    i = i + 2 + end + 1;
+                    continue;
+                }
+            }
+            let start = i + 1;
+            let mut end = start;
+            while end < bytes.len() && !bytes[end].is_ascii_whitespace() {
+                end += 1;
+            }
+            if end > start {
+                out.push(message[start..end].to_string());
+            }
+            i = end;
+        } else {
+            i += 1;
+        }
+    }
+    out.truncate(FILE_REF_MAX_FILES);
+    out
+}
+
+/// Expand `@path` references into `<file name="…">…</file>` text blocks plus
+/// image attachments (the same contract pi's CLI uses for `pi @file`).
+/// Returns `(augmented_message, extra_images, notices)`.
+pub fn expand_file_refs(
+    message: &str,
+    cwd: Option<&str>,
+) -> (String, Vec<ImageAttachment>, Vec<String>) {
+    let refs = file_refs(message);
+    if refs.is_empty() {
+        return (message.to_string(), Vec::new(), Vec::new());
+    }
+    let mut blocks = String::new();
+    let mut images = Vec::new();
+    let mut notices = Vec::new();
+    for reference in refs {
+        let path = std::path::Path::new(&reference);
+        let resolved = if path.is_absolute() {
+            path.to_path_buf()
+        } else if let Some(cwd) = cwd {
+            std::path::Path::new(cwd).join(path)
+        } else {
+            path.to_path_buf()
+        };
+        let Ok(meta) = std::fs::metadata(&resolved) else {
+            notices.push(format!("未找到文件：{reference}"));
+            continue;
+        };
+        if meta.len() == 0 {
+            continue;
+        }
+        let absolute = resolved.display().to_string();
+        let ext = resolved
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        match ext.as_str() {
+            "png" | "jpg" | "jpeg" | "webp" | "gif" => {
+                if meta.len() > FILE_REF_MAX_IMAGE_BYTES {
+                    notices.push(format!("图片过大，已跳过：{reference}"));
+                    continue;
+                }
+                let Ok(bytes) = std::fs::read(&resolved) else {
+                    notices.push(format!("读取失败：{reference}"));
+                    continue;
+                };
+                let mime = match ext.as_str() {
+                    "png" => "image/png",
+                    "jpg" | "jpeg" => "image/jpeg",
+                    "webp" => "image/webp",
+                    _ => "image/gif",
+                };
+                images.push(ImageAttachment {
+                    mime: mime.to_string(),
+                    base64: base64::engine::general_purpose::STANDARD.encode(&bytes),
+                });
+                blocks.push_str(&format!("<file name=\"{absolute}\"></file>\n"));
+            }
+            _ => {
+                if meta.len() > FILE_REF_MAX_TEXT_BYTES {
+                    notices.push(format!("文件过大（>512KB），已跳过：{reference}"));
+                    continue;
+                }
+                match std::fs::read_to_string(&resolved) {
+                    Ok(content) => {
+                        blocks.push_str(&format!(
+                            "<file name=\"{absolute}\">\n{content}\n</file>\n"
+                        ));
+                    }
+                    Err(_) => notices.push(format!("读取失败（非文本？）：{reference}")),
+                }
+            }
+        }
+    }
+    if blocks.is_empty() {
+        return (message.to_string(), images, notices);
+    }
+    let augmented = if message.trim().is_empty() {
+        blocks
+    } else {
+        format!("{message}\n\n{blocks}")
+    };
+    (augmented, images, notices)
 }
 
 fn reader(stream: TcpStream, tx: Sender<Event>, is_streaming: Arc<AtomicBool>, done: Arc<AtomicBool>) {
@@ -1121,6 +1548,32 @@ mod tests {
             .and_then(|v| v.get("error").and_then(|e| e.as_str()).map(str::to_string))
             .unwrap_or_default();
         assert_eq!(detail, "Session not found");
+    }
+
+    #[test]
+    fn file_refs_parses_plain_and_quoted() {
+        let refs = file_refs("看看 @src/pi.rs 和 @\"my dir/a b.txt\" 还有 @note.md");
+        assert_eq!(refs, vec!["src/pi.rs", "my dir/a b.txt", "note.md"]);
+        // `@` inside a word (email) is not a reference.
+        assert!(file_refs("a@b.com").is_empty());
+    }
+
+    #[test]
+    fn expand_file_refs_reads_text_into_file_blocks() {
+        let dir = std::env::temp_dir().join(format!("ocs-pi-refs-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("note.txt");
+        std::fs::write(&file, "hello refs").unwrap();
+        let message = format!("看一下 @{}", file.display());
+        let (augmented, images, notices) = expand_file_refs(&message, None);
+        assert!(images.is_empty() && notices.is_empty());
+        assert!(augmented.starts_with("看一下"));
+        assert!(augmented.contains("<file name="));
+        assert!(augmented.contains("hello refs"));
+        // A missing reference produces a notice, not an error.
+        let (_, _, notices) = expand_file_refs("@no/such/file.txt", None);
+        assert_eq!(notices.len(), 1);
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

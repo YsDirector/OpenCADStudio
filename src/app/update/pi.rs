@@ -52,7 +52,10 @@ impl OpenCADStudio {
                 }
             }
             PiMsg::Editor(action) => {
-                self.tabs[tab].pi_panel.input.perform(action);
+                let panel = &mut self.tabs[tab].pi_panel;
+                panel.input.perform(action);
+                // Keep the `/` and `@` completion popups in sync with the text.
+                panel.refresh_popup();
                 Task::none()
             }
             PiMsg::Send => {
@@ -113,6 +116,50 @@ impl OpenCADStudio {
                         model_id: model.id.clone(),
                     });
                 }
+                Task::none()
+            }
+            PiMsg::ThinkingPick(level) => {
+                let panel = &mut self.tabs[tab].pi_panel;
+                if panel.active.is_some() {
+                    panel.current_thinking = Some(level.clone());
+                    panel.send_command(crate::pi::Command::SetThinking { level });
+                }
+                Task::none()
+            }
+            PiMsg::MenuUp => {
+                self.tabs[tab].pi_panel.menu_move(-1);
+                Task::none()
+            }
+            PiMsg::MenuDown => {
+                self.tabs[tab].pi_panel.menu_move(1);
+                Task::none()
+            }
+            PiMsg::MenuAccept => {
+                self.tabs[tab].pi_panel.menu_accept();
+                Task::none()
+            }
+            PiMsg::MenuClose => {
+                self.tabs[tab].pi_panel.menu_close();
+                Task::none()
+            }
+            PiMsg::NewSessionOpen => {
+                self.tabs[tab].pi_panel.open_browse();
+                Task::none()
+            }
+            PiMsg::NewSessionCancel => {
+                self.tabs[tab].pi_panel.browse = None;
+                Task::none()
+            }
+            PiMsg::DirOpen(path) => {
+                self.tabs[tab].pi_panel.browse_to(Some(path));
+                Task::none()
+            }
+            PiMsg::DirUp => {
+                self.tabs[tab].pi_panel.browse_to(None);
+                Task::none()
+            }
+            PiMsg::CreateSession => {
+                self.tabs[tab].pi_panel.create_session();
                 Task::none()
             }
         }

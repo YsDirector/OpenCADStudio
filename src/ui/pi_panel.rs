@@ -56,6 +56,25 @@ pub enum PiMsg {
     ClearImage,
     /// Switch the model the session uses.
     ModelPick(pi::ModelInfo),
+    /// Switch the session's reasoning/thinking level.
+    ThinkingPick(String),
+    /// Completion popup: move the highlight.
+    MenuUp,
+    MenuDown,
+    /// Completion popup: accept the highlighted item.
+    MenuAccept,
+    /// Completion popup: dismiss.
+    MenuClose,
+    /// Open the new-session directory browser.
+    NewSessionOpen,
+    /// Close the new-session browser.
+    NewSessionCancel,
+    /// Browse into a directory.
+    DirOpen(String),
+    /// Browse to the parent directory.
+    DirUp,
+    /// Create a session in the browsed directory.
+    CreateSession,
 }
 
 // ── View model ──────────────────────────────────────────────────────────────
@@ -89,6 +108,60 @@ pub enum StreamBlock {
     Thinking { idx: usize, text: String },
     /// Live assistant text with its incrementally parsed markdown.
     Text { idx: usize, text: String, md: iced::widget::markdown::Content },
+}
+
+/// Completion popup above the composer (`/` commands or `@` files).
+#[derive(Debug, Clone, PartialEq)]
+pub enum Popup {
+    Slash {
+        query: String,
+        /// Indices into `PiPanelState::commands`.
+        matches: Vec<usize>,
+        active: usize,
+    },
+    At {
+        query: String,
+        /// Matching file paths (relative to the session cwd).
+        matches: Vec<String>,
+        active: usize,
+    },
+}
+
+impl Popup {
+    fn len(&self) -> usize {
+        match self {
+            Popup::Slash { matches, .. } => matches.len(),
+            Popup::At { matches, .. } => matches.len(),
+        }
+    }
+
+    fn active(&self) -> usize {
+        match self {
+            Popup::Slash { active, .. } | Popup::At { active, .. } => *active,
+        }
+    }
+
+    fn move_active(&mut self, delta: isize) {
+        let len = self.len();
+        if len == 0 {
+            return;
+        }
+        let current = self.active() as isize;
+        let next = (current + delta).rem_euclid(len as isize) as usize;
+        match self {
+            Popup::Slash { active, .. } | Popup::At { active, .. } => *active = next,
+        }
+    }
+}
+
+/// New-session directory browser state.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct BrowseState {
+    pub path: String,
+    pub parent: Option<String>,
+    /// `(name, absolute path)` of sub-directories.
+    pub dirs: Vec<(String, String)>,
+    pub loading: bool,
 }
 
 /// Connection status shown in the status strip.
@@ -151,6 +224,19 @@ pub struct PiPanelState {
     /// Model catalog (`/api/models`) + the model the session currently uses.
     pub models: Vec<pi::ModelInfo>,
     pub current_model: Option<(String, String)>,
+    /// Available thinking levels per `"provider:id"` + the current level.
+    pub thinking_levels: Vec<(String, Vec<String>)>,
+    pub current_thinking: Option<String>,
+    /// Slash commands from `get_commands`.
+    pub commands: Vec<pi::CommandInfo>,
+    /// File index `(cwd, files)` for `@` references.
+    pub files: Option<(String, Vec<String>)>,
+    /// A `FetchFiles` request is in flight for this cwd.
+    files_requested: Option<String>,
+    /// Completion popup (`/` or `@`) above the composer.
+    pub popup: Option<Popup>,
+    /// New-session directory browser.
+    pub browse: Option<BrowseState>,
     /// Screenshot attached to the next message (raw base64 PNG).
     pub pending_image: Option<pi::ImageAttachment>,
     /// Image dimensions for the attachment chip.
@@ -184,6 +270,13 @@ impl Default for PiPanelState {
             queued_followups: None,
             models: Vec::new(),
             current_model: None,
+            thinking_levels: Vec::new(),
+            current_thinking: None,
+            commands: Vec::new(),
+            files: None,
+            files_requested: None,
+            popup: None,
+            browse: None,
             pending_image: None,
             pending_image_size: None,
             selection_label: String::new(),
@@ -301,12 +394,45 @@ impl PiPanelState {
                 self.push_kind(PiEntryKind::User(msg_text));
                 true
             }
-            Event::Models { list, current } => {
+            Event::Models { list, current, thinking_levels, thinking } => {
                 self.models = list;
+                self.thinking_levels = thinking_levels;
                 if current.is_some() {
                     self.current_model = current;
                 }
+                if thinking.is_some() {
+                    self.current_thinking = thinking;
+                }
                 false
+            }
+            Event::Commands(list) => {
+                self.commands = list;
+                // A popup may be open right now with a stale (empty) list.
+                self.refresh_popup();
+                false
+            }
+            Event::Files { cwd, files } => {
+                self.files = Some((cwd, files));
+                self.files_requested = None;
+                self.refresh_popup();
+                false
+            }
+            Event::DirListing { path, parent, dirs } => {
+                if let Some(browse) = &mut self.browse {
+                    browse.path = path;
+                    browse.parent = parent;
+                    browse.dirs = dirs;
+                    browse.loading = false;
+                }
+                false
+            }
+            Event::ThinkingSet { level } => {
+                self.current_thinking = Some(level);
+                false
+            }
+            Event::Notice(message) => {
+                self.push_notice(message);
+                true
             }
             Event::ModelSet { provider, id } => {
                 self.current_model = Some((provider, id));
@@ -468,6 +594,152 @@ impl PiPanelState {
         self.push_kind(PiEntryKind::Notice(message));
     }
 
+    /// Recompute the completion popup from the composer text (called after
+    /// every editor action). `/` at line start → commands; a trailing `@token`
+    /// → file references.
+    pub fn refresh_popup(&mut self) {
+        let text = self.input.text();
+        let last_line = text.rsplit('\n').next().unwrap_or("");
+        // Slash command: the line starts with `/` and has no space yet.
+        if let Some(query) = last_line.strip_prefix('/') {
+            if !query.contains(' ') && !query.contains('\t') {
+                let query = query.to_string();
+                let needle = query.to_ascii_lowercase();
+                let mut scored: Vec<(i32, usize)> = self
+                    .commands
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, c)| {
+                        fuzzy_score(&needle, &c.name.to_ascii_lowercase()).map(|s| (s, i))
+                    })
+                    .collect();
+                scored.sort_by_key(|(s, i)| (-*s, *i));
+                let matches: Vec<usize> = scored.into_iter().take(30).map(|(_, i)| i).collect();
+                self.popup = Some(Popup::Slash { query, matches, active: 0 });
+                return;
+            }
+        }
+        // `@file` reference: the last whitespace-separated token is `@query`.
+        if let Some(token) = last_line.split_whitespace().last() {
+            if let Some(query) = token.strip_prefix('@') {
+                if !query.contains('"') && query.len() < 200 {
+                    let cwd = self.active_cwd();
+                    // Lazily pull the file index for the session cwd.
+                    if let Some(cwd) = cwd.clone() {
+                        let have_index = self.files.as_ref().is_some_and(|(c, _)| *c == cwd);
+                        if !have_index && self.files_requested.as_deref() != Some(cwd.as_str()) {
+                            self.files_requested = Some(cwd.clone());
+                            self.send_command(pi::Command::FetchFiles { cwd });
+                        }
+                    }
+                    let query = query.to_string();
+                    let needle = query.to_ascii_lowercase();
+                    let mut matches: Vec<String> = self
+                        .files
+                        .as_ref()
+                        .map(|(_, files)| {
+                            let mut scored: Vec<(i32, &String)> = files
+                                .iter()
+                                .filter_map(|f| {
+                                    fuzzy_score(&needle, &f.to_ascii_lowercase())
+                                        .map(|s| (s, f))
+                                })
+                                .collect();
+                            scored.sort_by_key(|(s, f)| (-*s, (*f).clone()));
+                            scored.into_iter().take(30).map(|(_, f)| f.clone()).collect()
+                        })
+                        .unwrap_or_default();
+                    matches.truncate(30);
+                    self.popup = Some(Popup::At { query, matches, active: 0 });
+                    return;
+                }
+            }
+        }
+        self.popup = None;
+    }
+
+    /// Move the popup highlight (`MenuUp`/`MenuDown`).
+    pub fn menu_move(&mut self, delta: isize) {
+        if let Some(popup) = &mut self.popup {
+            popup.move_active(delta);
+        }
+    }
+
+    /// Accept the highlighted popup item: `/name ` into the composer, or
+    /// `@path ` inserted at the cursor.
+    pub fn menu_accept(&mut self) {
+        let Some(popup) = self.popup.take() else { return };
+        match popup {
+            Popup::Slash { matches, active, .. } => {
+                let Some(idx) = matches.get(active).and_then(|i| self.commands.get(*i)) else {
+                    return;
+                };
+                let text = format!("/{} ", idx.name);
+                self.input = text_editor::Content::with_text(&text);
+            }
+            Popup::At { matches, active, .. } => {
+                let Some(path) = matches.get(active) else { return };
+                self.input
+                    .perform(text_editor::Action::Edit(text_editor::Edit::Paste(
+                        std::sync::Arc::new(format!("{path} ")),
+                    )));
+                self.refresh_popup();
+            }
+        }
+    }
+
+    /// Dismiss the popup without inserting anything.
+    pub fn menu_close(&mut self) {
+        self.popup = None;
+    }
+
+    /// The followed session's working directory, if known.
+    pub fn active_cwd(&self) -> Option<String> {
+        let id = self.active.as_ref()?;
+        self.sessions
+            .iter()
+            .find(|s| &s.id == id)
+            .and_then(|s| s.cwd.clone())
+    }
+
+    /// Open the new-session browser at the active session's directory.
+    pub fn open_browse(&mut self) {
+        let start = self
+            .active_cwd()
+            .or_else(|| std::env::var("HOME").ok())
+            .unwrap_or_else(|| "/".to_string());
+        self.browse = Some(BrowseState {
+            path: start.clone(),
+            parent: None,
+            dirs: Vec::new(),
+            loading: true,
+        });
+        self.send_command(pi::Command::Browse { path: start });
+    }
+
+    /// Browse into `path` (or the parent when `None`).
+    pub fn browse_to(&mut self, path: Option<String>) {
+        let Some(browse) = &mut self.browse else { return };
+        let target = match path {
+            Some(p) => p,
+            None => match browse.parent.clone() {
+                Some(p) => p,
+                None => return,
+            },
+        };
+        browse.path = target.clone();
+        browse.dirs.clear();
+        browse.loading = true;
+        self.send_command(pi::Command::Browse { path: target });
+    }
+
+    /// Create a session in the browsed directory and close the browser.
+    pub fn create_session(&mut self) {
+        let Some(browse) = self.browse.take() else { return };
+        self.status = PiStatus::Connecting;
+        self.send_command(pi::Command::NewSession { cwd: browse.path });
+    }
+
     /// Toggle one entry's expanded flag (entries first, then live blocks).
     pub fn toggle_entry(&mut self, id: u64) {
         if let Some(e) = self.entries.iter_mut().find(|e| e.id == id) {
@@ -548,6 +820,37 @@ impl PiPanelState {
 }
 
 // ── Stable ids (backfill) ───────────────────────────────────────────────────
+
+/// Subsequence fuzzy match: returns a score (higher = better) or `None`.
+/// Empty needle matches everything with a neutral score.
+fn fuzzy_score(needle: &str, haystack: &str) -> Option<i32> {
+    if needle.is_empty() {
+        return Some(0);
+    }
+    let mut score = 0i32;
+    let mut hay = haystack.chars().enumerate();
+    let mut last: Option<usize> = None;
+    for want in needle.chars() {
+        let mut found = None;
+        for (i, c) in hay.by_ref() {
+            if c == want {
+                found = Some(i);
+                break;
+            }
+        }
+        let idx = found?;
+        // Consecutive matches and earlier matches score higher.
+        score += match last {
+            Some(prev) if idx == prev + 1 => 8,
+            _ => 4,
+        };
+        score -= idx as i32 / 8;
+        last = Some(idx);
+    }
+    // Prefer shorter haystacks on ties.
+    score -= haystack.chars().count() as i32 / 32;
+    Some(score)
+}
 
 /// FNV-1a — cheap deterministic hash for entry ids.
 fn fnv1a(data: &str) -> u64 {
@@ -711,7 +1014,14 @@ fn session_picker(state: &PiPanelState) -> Element<'_, Message> {
         .padding([2, 6])
         .menu_height(240.0)
         .on_select(|s: pi::SessionInfo| Message::Pi(PiMsg::SessionPick(s.id.clone())));
-    container(picker).width(Length::Fill).padding([4, 6]).into()
+    let new_session = button(text("＋").size(11))
+        .on_press(Message::Pi(PiMsg::NewSessionOpen))
+        .style(|theme: &Theme, status| button::subtle(theme, status))
+        .padding([2, 7]);
+    container(row![picker.width(Length::Fill), new_session].spacing(4))
+        .width(Length::Fill)
+        .padding([4, 6])
+        .into()
 }
 
 /// Status strip: connection label, optional reconnect button.
@@ -929,6 +1239,7 @@ fn composer<'a>(
 ) -> Element<'a, Message> {
     let can_send =
         !state.input.text().trim().is_empty() || state.pending_image.is_some();
+    let menu_open = state.popup.as_ref().map(|p| p.len() > 0).unwrap_or(false);
 
     // Attached-screenshot chip (click × to drop it before sending).
     let attachment: Option<Element<'_, Message>> = state.pending_image.as_ref().map(|img| {
@@ -987,7 +1298,7 @@ fn composer<'a>(
         .size(12)
         .height(Length::Fixed(COMPOSER_H))
         .padding(4)
-        .key_binding(|kp| {
+        .key_binding(move |kp| {
             use iced::keyboard::{key::Named, Key};
             use iced::widget::text_editor::{Binding, Status};
             let focused = matches!(kp.status, Status::Focused { .. });
@@ -995,6 +1306,21 @@ fn composer<'a>(
             let paste = kp.key.to_latin(kp.physical_key) == Some('v')
                 && kp.modifiers.command()
                 && !kp.modifiers.alt();
+            if focused && menu_open {
+                // The completion popup owns the navigation keys while open.
+                if matches!(kp.key, Key::Named(Named::ArrowUp)) {
+                    return Some(Binding::Custom(Message::Pi(PiMsg::MenuUp)));
+                }
+                if matches!(kp.key, Key::Named(Named::ArrowDown)) {
+                    return Some(Binding::Custom(Message::Pi(PiMsg::MenuDown)));
+                }
+                if plain_enter || matches!(kp.key, Key::Named(Named::Tab)) {
+                    return Some(Binding::Custom(Message::Pi(PiMsg::MenuAccept)));
+                }
+                if matches!(kp.key, Key::Named(Named::Escape)) {
+                    return Some(Binding::Custom(Message::Pi(PiMsg::MenuClose)));
+                }
+            }
             if focused && plain_enter {
                 Some(Binding::Custom(Message::Pi(PiMsg::Send)))
             } else if focused && paste {
@@ -1035,7 +1361,7 @@ fn composer<'a>(
             color: Some(secondary_color(theme)),
         });
 
-    // Model switcher below the input box (the session's current model).
+    // Model switcher + thinking level below the input box.
     let model_row: Element<'_, Message> = if state.models.is_empty() {
         column![].into()
     } else {
@@ -1056,16 +1382,50 @@ fn composer<'a>(
         .padding([2, 6])
         .menu_height(220.0)
         .on_select(|m: pi::ModelInfo| Message::Pi(PiMsg::ModelPick(m)));
-        container(picker)
-            .width(Length::Fill)
-            .padding([2, 2])
-            .into()
+        // Thinking levels supported by the current model (`off`… `max`).
+        let levels: Vec<String> = state
+            .current_model
+            .as_ref()
+            .and_then(|(provider, id)| {
+                let key = format!("{provider}:{id}");
+                state
+                    .thinking_levels
+                    .iter()
+                    .find(|(k, _)| *k == key)
+                    .map(|(_, v)| v.clone())
+            })
+            .unwrap_or_default();
+        let mut row = row![picker.width(Length::Fill)].spacing(4);
+        if !levels.is_empty() {
+            let selected = state
+                .current_thinking
+                .as_ref()
+                .and_then(|c| levels.iter().find(|l| *l == c).cloned());
+            row = row.push(
+                pick_list(selected, levels, move |l: &String| format!("思考:{l}"))
+                    .placeholder("思考…")
+                    .width(Length::Fixed(96.0))
+                    .text_size(11)
+                    .padding([2, 6])
+                    .menu_height(180.0)
+                    .on_select(|l: String| Message::Pi(PiMsg::ThinkingPick(l))),
+            );
+        }
+        container(row).width(Length::Fill).padding([2, 2]).into()
+    };
+
+    let popup_row: Element<'_, Message> = popup_view(state);
+    let browse_row: Element<'_, Message> = match &state.browse {
+        Some(browse) => browse_view(browse),
+        None => column![].into(),
     };
 
     container(
         column![
             selection_row,
+            browse_row,
             chip_column,
+            popup_row,
             editor,
             row![hint, Space::new().width(Length::Fill), send]
                 .spacing(6)
@@ -1086,6 +1446,160 @@ fn composer<'a>(
     .width(Length::Fill)
     .padding([6, 8])
     .into()
+}
+
+/// Completion popup above the editor: slash commands or `@` files.
+fn popup_view(state: &PiPanelState) -> Element<'_, Message> {
+    let Some(popup) = &state.popup else {
+        return column![].into();
+    };
+    if popup.len() == 0 {
+        return column![].into();
+    }
+    let mut list = column![].spacing(1).width(Length::Fill);
+    let active = popup.active();
+    for (row_index, (label, hint)) in popup_rows(state, popup).into_iter().enumerate() {
+        let is_active = row_index == active;
+        let content = row![
+            text(label).size(11),
+            Space::new().width(8),
+            text(hint)
+                .size(10)
+                .style(|theme: &Theme| iced::widget::text::Style {
+                    color: Some(secondary_color(theme)),
+                })
+                .width(Length::Fill),
+        ]
+        .align_y(iced::Center);
+        list = list.push(
+            container(content)
+                .style(move |theme: &Theme| container::Style {
+                    background: is_active
+                        .then(|| Background::Color(theme.palette().primary.weak.color)),
+                    ..Default::default()
+                })
+                .width(Length::Fill)
+                .padding([2, 6]),
+        );
+    }
+    container(list)
+        .style(|theme: &Theme| container::Style {
+            background: Some(Background::Color(theme.palette().background.weakest.color)),
+            border: Border {
+                color: theme.palette().background.strong.color,
+                width: 1.0,
+                radius: 4.0.into(),
+            },
+            ..Default::default()
+        })
+        .width(Length::Fill)
+        .padding(2)
+        .into()
+}
+
+/// `(label, hint)` rows for the popup list (capped at 8 visible entries).
+fn popup_rows(state: &PiPanelState, popup: &Popup) -> Vec<(String, String)> {
+    const MAX_VISIBLE: usize = 8;
+    let start = popup.active().saturating_sub(MAX_VISIBLE - 1);
+    match popup {
+        Popup::Slash { matches, .. } => matches
+            .iter()
+            .skip(start)
+            .take(MAX_VISIBLE)
+            .filter_map(|i| state.commands.get(*i))
+            .map(|c| {
+                let hint = if c.source.is_empty() {
+                    c.description.clone()
+                } else {
+                    format!("[{}] {}", c.source, c.description)
+                };
+                (format!("/{}", c.name), hint)
+            })
+            .collect(),
+        Popup::At { matches, .. } => matches
+            .iter()
+            .skip(start)
+            .take(MAX_VISIBLE)
+            .map(|path| ("@".to_string() + path, String::new()))
+            .collect(),
+    }
+}
+
+/// New-session directory browser row.
+fn browse_view(browse: &BrowseState) -> Element<'_, Message> {
+    let mut list = column![].spacing(1).width(Length::Fill);
+    if browse.loading {
+        list = list.push(
+            text("读取目录…")
+                .size(10)
+                .style(|theme: &Theme| iced::widget::text::Style {
+                    color: Some(secondary_color(theme)),
+                }),
+        );
+    }
+    for (name, path) in browse.dirs.iter().take(8) {
+        let target = path.clone();
+        list = list.push(
+            button(text(format!("📁 {name}")).size(11))
+                .width(Length::Fill)
+                .on_press(Message::Pi(PiMsg::DirOpen(target)))
+                .style(|theme: &Theme, status| button::subtle(theme, status))
+                .padding([2, 6]),
+        );
+    }
+    if browse.dirs.is_empty() && !browse.loading {
+        list = list.push(
+            text("（没有子目录）")
+                .size(10)
+                .style(|theme: &Theme| iced::widget::text::Style {
+                    color: Some(secondary_color(theme)),
+                }),
+        );
+    }
+    let header = row![
+        button(text("↑ 上级").size(10))
+            .on_press(Message::Pi(PiMsg::DirUp))
+            .style(|theme: &Theme, status| button::subtle(theme, status))
+            .padding([2, 6]),
+        text(browse.path.clone())
+            .size(10)
+            .style(|theme: &Theme| iced::widget::text::Style {
+                color: Some(secondary_color(theme)),
+            })
+            .width(Length::Fill),
+    ]
+    .spacing(4)
+    .align_y(iced::Center);
+    let actions = row![
+        button(text("在此新建会话").size(10))
+            .on_press(Message::Pi(PiMsg::CreateSession))
+            .style(|theme: &Theme, status| {
+                let mut style = button::subtle(theme, status);
+                style.background = Some(Background::Color(theme.palette().primary.weak.color));
+                style.text_color = theme.palette().primary.weak.text;
+                style
+            })
+            .padding([3, 8]),
+        Space::new().width(Length::Fill),
+        button(text("取消").size(10))
+            .on_press(Message::Pi(PiMsg::NewSessionCancel))
+            .style(|theme: &Theme, status| button::subtle(theme, status))
+            .padding([3, 8]),
+    ]
+    .align_y(iced::Center);
+    container(column![header, list, actions].spacing(4))
+        .style(|theme: &Theme| container::Style {
+            background: Some(Background::Color(theme.palette().background.weakest.color)),
+            border: Border {
+                color: theme.palette().primary.base.color,
+                width: 1.0,
+                radius: 4.0.into(),
+            },
+            ..Default::default()
+        })
+        .width(Length::Fill)
+        .padding(4)
+        .into()
 }
 
 // ── Panel body ──────────────────────────────────────────────────────────────
@@ -1254,8 +1768,8 @@ mod tests {
     fn user_picked_session_beats_follow_newest() {
         let mut s = state();
         s.apply(Event::Sessions(vec![
-            pi::SessionInfo { id: "newest".into(), label: "最新".into(), path: None },
-            pi::SessionInfo { id: "picked".into(), label: "手选".into(), path: None },
+            pi::SessionInfo { id: "newest".into(), label: "最新".into(), path: None, cwd: None },
+            pi::SessionInfo { id: "picked".into(), label: "手选".into(), path: None, cwd: None },
         ]));
         // Default: newest.
         assert_eq!(s.active.as_deref(), Some("newest"));
@@ -1267,6 +1781,7 @@ mod tests {
             id: "newer".into(),
             label: "更新".into(),
             path: None,
+            cwd: None,
         }]));
         assert_eq!(s.active.as_deref(), Some("picked"));
     }
