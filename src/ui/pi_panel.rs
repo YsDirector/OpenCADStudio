@@ -75,6 +75,11 @@ pub enum PiMsg {
     DirUp,
     /// Create a session in the browsed directory.
     CreateSession,
+    /// Answer a pending extension UI request (`select` option index or
+    /// confirm value; `value` is `None` for confirm).
+    UiAnswer { value: Option<String>, confirmed: Option<bool> },
+    /// Dismiss a pending extension UI request (cancelled).
+    UiCancel,
 }
 
 // ── View model ──────────────────────────────────────────────────────────────
@@ -152,6 +157,16 @@ impl Popup {
             Popup::Slash { active, .. } | Popup::At { active, .. } => *active = next,
         }
     }
+}
+
+/// A pending extension UI request (approval dialog) awaiting an answer.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PendingUi {
+    pub id: String,
+    pub method: String,
+    pub title: String,
+    pub message: Option<String>,
+    pub options: Vec<String>,
 }
 
 /// New-session directory browser state.
@@ -237,6 +252,16 @@ pub struct PiPanelState {
     pub popup: Option<Popup>,
     /// New-session directory browser.
     pub browse: Option<BrowseState>,
+    /// Pending extension UI request (approval dialog).
+    pub pending_ui: Option<PendingUi>,
+    /// Backend label shown in the status strip ("pi-web …" / "pi rpc …").
+    pub backend: String,
+    /// How to reach pi: "auto" | "web" | "rpc" (`OCS_PI_MODE`).
+    pub mode: String,
+    /// `pi` executable for RPC mode (`OCS_PI_BIN`).
+    pub pi_bin: String,
+    /// Project directory for RPC mode (`OCS_PI_CWD`, default `$HOME`).
+    pub project_cwd: String,
     /// Screenshot attached to the next message (raw base64 PNG).
     pub pending_image: Option<pi::ImageAttachment>,
     /// Image dimensions for the attachment chip.
@@ -277,6 +302,13 @@ impl Default for PiPanelState {
             files_requested: None,
             popup: None,
             browse: None,
+            pending_ui: None,
+            backend: String::new(),
+            mode: std::env::var("OCS_PI_MODE").unwrap_or_else(|_| "auto".to_string()),
+            pi_bin: std::env::var("OCS_PI_BIN").unwrap_or_else(|_| "pi".to_string()),
+            project_cwd: std::env::var("OCS_PI_CWD")
+                .or_else(|_| std::env::var("HOME"))
+                .unwrap_or_else(|_| "/".to_string()),
             pending_image: None,
             pending_image_size: None,
             selection_label: String::new(),
@@ -293,11 +325,22 @@ impl PiPanelState {
         Self::default()
     }
 
-    /// Start the worker if none is running.
+    /// Start the worker if none is running. `auto` tries pi-web first and
+    /// falls back to a local `pi --mode rpc` child process.
     pub fn ensure_worker(&mut self) {
-        if self.worker.is_none() {
-            self.worker = Some(crate::pi::PiHandle::start(&self.endpoint));
+        if self.worker.is_some() {
+            return;
         }
+        let handle = match self.mode.as_str() {
+            "web" => crate::pi::PiHandle::start(&self.endpoint),
+            "rpc" => crate::pi::PiHandle::start_rpc(&self.pi_bin, &self.project_cwd),
+            _ => crate::pi::PiHandle::start_auto(
+                &self.endpoint,
+                &self.pi_bin,
+                &self.project_cwd,
+            ),
+        };
+        self.worker = Some(handle);
     }
 
     /// Stop the worker (panel closed).
@@ -432,6 +475,14 @@ impl PiPanelState {
             }
             Event::Notice(message) => {
                 self.push_notice(message);
+                true
+            }
+            Event::Backend(label) => {
+                self.backend = label;
+                false
+            }
+            Event::UiRequest { id, method, title, message, options } => {
+                self.pending_ui = Some(PendingUi { id, method, title, message, options });
                 true
             }
             Event::ModelSet { provider, id } => {
@@ -1028,7 +1079,18 @@ fn session_picker(state: &PiPanelState) -> Element<'_, Message> {
 fn status_strip(state: &PiPanelState) -> Element<'_, Message> {
     let errored = matches!(state.status, PiStatus::Error(_));
     let idle = matches!(state.status, PiStatus::Idle);
+    let backend_tag: Element<'_, Message> = if state.backend.is_empty() {
+        column![].into()
+    } else {
+        text(state.backend.clone())
+            .size(9)
+            .style(|theme: &Theme| iced::widget::text::Style {
+                color: Some(theme.palette().primary.base.color),
+            })
+            .into()
+    };
     let mut strip = row![
+        backend_tag,
         text(state.status_label())
             .size(10)
             .style(|theme: &Theme| iced::widget::text::Style {
@@ -1419,10 +1481,15 @@ fn composer<'a>(
         Some(browse) => browse_view(browse),
         None => column![].into(),
     };
+    let ui_request_row: Element<'_, Message> = match &state.pending_ui {
+        Some(request) => ui_request_view(request),
+        None => column![].into(),
+    };
 
     container(
         column![
             selection_row,
+            ui_request_row,
             browse_row,
             chip_column,
             popup_row,
@@ -1446,6 +1513,99 @@ fn composer<'a>(
     .width(Length::Fill)
     .padding([6, 8])
     .into()
+}
+
+/// Pending approval dialog (extension UI request) above the editor.
+fn ui_request_view(request: &PendingUi) -> Element<'_, Message> {
+    let mut body = column![
+        text(request.title.clone()).size(11),
+    ]
+    .spacing(4)
+    .width(Length::Fill);
+    if let Some(message) = &request.message {
+        body = body.push(
+            text(message.clone())
+                .size(10)
+                .style(|theme: &Theme| iced::widget::text::Style {
+                    color: Some(secondary_color(theme)),
+                }),
+        );
+    }
+    let mut actions = row![].spacing(4).align_y(iced::Center);
+    match request.method.as_str() {
+        "select" => {
+            for option in request.options.iter().take(6) {
+                let value = option.clone();
+                actions = actions.push(
+                    button(text(option.clone()).size(10))
+                        .on_press(Message::Pi(PiMsg::UiAnswer {
+                            value: Some(value),
+                            confirmed: None,
+                        }))
+                        .style(|theme: &Theme, status| button::subtle(theme, status))
+                        .padding([3, 8]),
+                );
+            }
+        }
+        "confirm" => {
+            actions = actions.push(
+                button(text("允许").size(10))
+                    .on_press(Message::Pi(PiMsg::UiAnswer {
+                        value: None,
+                        confirmed: Some(true),
+                    }))
+                    .style(|theme: &Theme, status| {
+                        let mut style = button::subtle(theme, status);
+                        style.background =
+                            Some(Background::Color(theme.palette().success.weak.color));
+                        style.text_color = theme.palette().success.weak.text;
+                        style
+                    })
+                    .padding([3, 10]),
+            );
+            actions = actions.push(
+                button(text("拒绝").size(10))
+                    .on_press(Message::Pi(PiMsg::UiAnswer {
+                        value: None,
+                        confirmed: Some(false),
+                    }))
+                    .style(|theme: &Theme, status| button::subtle(theme, status))
+                    .padding([3, 10]),
+            );
+        }
+        // `input` / `editor` need free-form text; the panel routes those to
+        // another client for now.
+        _ => {
+            actions = actions.push(
+                text("（请在其他 pi 客户端作答）")
+                    .size(10)
+                    .style(|theme: &Theme| iced::widget::text::Style {
+                        color: Some(secondary_color(theme)),
+                    }),
+            );
+        }
+    }
+    actions = actions.push(Space::new().width(Length::Fill));
+    actions = actions.push(
+        button(text("取消").size(10))
+            .on_press(Message::Pi(PiMsg::UiCancel))
+            .style(|theme: &Theme, status| button::subtle(theme, status))
+            .padding([3, 8]),
+    );
+    body = body.push(actions);
+    container(body)
+        .style(|theme: &Theme| container::Style {
+            background: Some(Background::Color(theme.palette().warning.weak.color)),
+            border: Border {
+                color: theme.palette().warning.base.color,
+                width: 1.0,
+                radius: 4.0.into(),
+            },
+            ..Default::default()
+        })
+        .width(Length::Fill)
+        .padding(6)
+        .into()
 }
 
 /// Completion popup above the editor: slash commands or `@` files.

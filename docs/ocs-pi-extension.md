@@ -166,7 +166,7 @@ src/app/commands/display.rs      PI / OCSPI / AI / AICHAT 命令
 3. 发送失败自动重试、历史回填条数可配置。
 4. 会话下拉的人工点选（Watch/Replace 逻辑有单测覆盖）。
 
-## 10. B 期设计：pi RPC 后端（不依赖 pi-web）——待新会话实施
+## 10. B 期已实施：pi RPC 后端（不依赖 pi-web，提交见下）
 
 **问题**：当前面板依赖 pi-web（本地 HTTP + SSE）。只有 pi（CLI）时应能工作。
 
@@ -185,11 +185,37 @@ src/app/commands/display.rs      PI / OCSPI / AI / AICHAT 命令
 queue_update、compaction_*、auto_retry_*、extension_error），**现有 `sse_to_events` 映射可复用**。
 另有 **Extension UI Requests**（select/confirm 交互）→ 可接审批弹窗（此前搁置项）。
 
-**实施建议**：
-1. 抽象 `trait PiBackend`（`send(Command)` / `poll() -> Vec<Event>`），现有 `pi.rs` 归为
-   `backend::web`（HTTP/SSE）；新增 `backend::rpc`：`Command::spawn("pi", ["--mode","rpc",
-   "--session-dir",…])`，stdin 写 JSONL、stdout 线程读 JSONL → 同 `Event` 事件。
-2. 端点配置：`OCS_PI_ENDPOINT`（HTTP）或 `OCS_PI_MODE=rpc` + `OCS_PI_BIN=pi`。
-3. RPC 侧注意：`@file` CLI 参数在 RPC 模式被禁（args，与 prompt 文本无关，@ 展开仍由面板做）；
-   子进程 cwd = 项目目录（换目录 = 重启子进程）；`--session-dir` 自定义会话存储。
-4. 启动/退出：子进程随面板 worker 生命周期（stop 时 kill）；首行 `--no-session` 可选。
+**已实现（`src/pi_rpc.rs`，7 个单测）**：
+
+- **模式选择**（`PiHandle::start_auto`）：`OCS_PI_MODE=auto|web|rpc`（默认 auto）+
+  `OCS_PI_BIN`（默认 `pi`）+ `OCS_PI_CWD`（默认 `$HOME`）。auto = 150ms TCP 探测
+  `OCS_PI_ENDPOINT`（默认 127.0.0.1:30141）可达 → web，否则 RPC 子进程。
+- **RPC worker**：`pi --mode rpc` 子进程；单线程消息循环（stdout 解析线程 → 通道 →
+  循环里分流：`type:"response"` 走握手/动作处理，其余按事件映射到同一个 `Event`，
+  **完全复用 `pi::sse_to_events`**）。停止/重连时 kill 子进程。
+- **握手**：`get_state`（sessionId/model/thinkingLevel/isStreaming → `Status::Ready` +
+  `Models`）、`get_available_models`、`get_available_thinking_levels`、
+  `get_commands`；会话列表由本地扫描 `~/.pi/agent/sessions/--<cwd 编码>--/*.jsonl`
+  （slug = cwd 去首斜杠、`/`与`:`→`-`、两侧 `--`）得到（id=文件名 uuid，label=首条
+  user 消息首行）。
+- **命令映射**：Send→`prompt`（流式中自动 `streamingBehavior:"followUp"`，图片/`@` 展开同 web）、
+  SetModel→`set_model`、SetThinking→`set_thinking_level`、Watch→`switch_session{sessionPath}`
+  + `get_messages` 回填（`pi::messages_to_entries`）、NewSession→同 cwd 用 `new_session`，
+  换目录则重启子进程（项目目录随进程）、Browse/FetchFiles→**本地 fs/git 实现**
+  （`git ls-files` 或 BFS walk，跳过 vendor 目录，上限 5000）、UiRespond→`extension_ui_response`。
+- **找不到 `pi` 的坑**：OCS 由启动脚本拉起时 PATH 只有 `/usr/local/bin:/usr/bin:/bin`，
+  而 pi 装在 `~/.local/bin` → 新增 `resolve_bin()`（显式路径 → PATH → `~/.local/bin` /
+  `~/.npm-global/bin` / `~/.local` 等）和 `child_path()`（给子进程补 `~/.local/bin`、
+  `~/.npm-global/bin`、`~/.cargo/bin`，让 agent 自己跑的工具也能解析）。
+- **审批 UI（两个后端都支持）**：`Event::UiRequest`（select/confirm/input/editor）+
+  `Command::UiRespond`；面板在输入框上方渲染警示色提示行：select→选项按钮、
+  confirm→允许/拒绝、input/editor→提示到其他客户端作答、取消；`notify` 方法映射为
+  Notice 条目。Web 侧 POST `{type:"extension_ui_response",…}` 给 pi-web。
+- **实测**：`OCS_PI_MODE=rpc` 启动 OCS → 面板状态行显示「pi rpc · /home/ysdirector」，
+  扩展 notify 通知以 Notice 条目出现；composer 发消息 → 新会话文件
+  `~/.pi/agent/sessions/--home-ysdirector--/<ts>_<id>.jsonl` 出现 user 消息 +
+  assistant thinking/toolCall（即 pi 子进程真的在跑）。auto 模式在有 pi-web 时选中
+  「pi-web · http://127.0.0.1:30141」。
+- **已知取舍**：pi 的 RPC 子进程里 `@file` **CLI 参数**被禁（与 prompt 文本无关，面板的
+  `@` 展开不受影响）；面板窄宽度下 markdown 表格会挤成单字列（iced markdown 渲染的
+  固有行为，后续可加表格横向滚动或降级为纯文本）。

@@ -91,6 +91,17 @@ pub enum Event {
     ThinkingSet { level: String },
     /// A host-side notice (file-reference problems, …).
     Notice(String),
+    /// Which backend is serving the panel ("pi-web …" / "pi rpc …").
+    Backend(String),
+    /// An extension UI request (approval dialog) awaiting an answer.
+    UiRequest {
+        id: String,
+        /// `select` | `confirm` | `input` | `editor`.
+        method: String,
+        title: String,
+        message: Option<String>,
+        options: Vec<String>,
+    },
     /// A `set_model` succeeded; the session now uses this model.
     ModelSet { provider: String, id: String },
     /// An assistant message started streaming; `parts` is the snapshot so far
@@ -187,6 +198,13 @@ pub enum Command {
     Browse { path: String },
     /// Fetch the file index of `cwd` (for `@` file references).
     FetchFiles { cwd: String },
+    /// Answer an extension UI request.
+    UiRespond {
+        id: String,
+        value: Option<String>,
+        confirmed: Option<bool>,
+        cancelled: bool,
+    },
 }
 
 /// Handle the panel keeps for its worker thread.
@@ -197,16 +215,55 @@ pub struct PiHandle {
 }
 
 impl PiHandle {
-    /// Start a worker for `endpoint` and immediately connect.
+    /// Start a worker against the local pi-web HTTP API.
     pub fn start(endpoint: &str) -> Self {
+        let endpoint = endpoint.trim().trim_end_matches('/').to_string();
+        Self::spawn(move |tx, rx, stop| worker(endpoint, tx, rx, stop))
+    }
+
+    /// Start a worker against a local `pi --mode rpc` child process.
+    pub fn start_rpc(bin: &str, cwd: &str) -> Self {
+        let bin = bin.to_string();
+        let cwd = cwd.to_string();
+        Self::spawn(move |tx, rx, stop| crate::pi_rpc::worker(bin, cwd, tx, rx, stop))
+    }
+
+    /// Pick a backend automatically: pi-web when it answers on `endpoint`,
+    /// otherwise a local `pi --mode rpc` child.
+    pub fn start_auto(endpoint: &str, bin: &str, cwd: &str) -> Self {
+        let endpoint = endpoint.trim().trim_end_matches('/').to_string();
+        let bin = bin.to_string();
+        let cwd = cwd.to_string();
+        Self::spawn(move |tx, rx, stop| {
+            let host_port = endpoint.trim_start_matches("http://").to_string();
+            let reachable = std::net::TcpStream::connect_timeout(
+                &match host_port.parse() {
+                    Ok(addr) => addr,
+                    Err(_) => {
+                        crate::pi_rpc::worker(bin, cwd, tx, rx, stop);
+                        return;
+                    }
+                },
+                Duration::from_millis(150),
+            )
+            .is_ok();
+            if reachable {
+                worker(endpoint, tx, rx, stop);
+            } else {
+                crate::pi_rpc::worker(bin, cwd, tx, rx, stop);
+            }
+        })
+    }
+
+    /// Spawn the worker thread with the given body.
+    fn spawn(body: impl FnOnce(Sender<Event>, Receiver<Command>, Arc<AtomicBool>) + Send + 'static) -> Self {
         let (tx_ev, rx_ev) = channel();
         let (tx_cmd, rx_cmd) = channel();
         let stop = Arc::new(AtomicBool::new(false));
-        let endpoint = endpoint.trim().trim_end_matches('/').to_string();
         let stop_clone = Arc::clone(&stop);
         let _ = std::thread::Builder::new()
             .name("ocs-pi-client".into())
-            .spawn(move || worker(endpoint, tx_ev, rx_cmd, stop_clone));
+            .spawn(move || body(tx_ev, rx_cmd, stop_clone));
         Self { rx: rx_ev, tx: tx_cmd, stop }
     }
 
@@ -409,6 +466,16 @@ fn tool_output(result: &serde_json::Value) -> (String, bool) {
     (text, is_error)
 }
 
+/// Tool-call block at `contentIndex` inside a raw RPC `message_update`
+/// (`partial.content[…]`); pi-web's wire projection already flattened
+/// `id`/`toolName` to the top level, so this is only a fallback.
+fn partial_tool_block(delta: Option<&serde_json::Value>) -> Option<&serde_json::Value> {
+    let delta = delta?;
+    let content = delta.get("partial")?.get("content")?.as_array()?;
+    let index = delta.get("contentIndex")?.as_u64()? as usize;
+    content.get(index)
+}
+
 /// Map one SSE `data:` payload to zero or more UI events.
 pub fn sse_to_events(ev: &serde_json::Value) -> Vec<Event> {
     let mut out = Vec::new();
@@ -459,8 +526,10 @@ pub fn sse_to_events(ev: &serde_json::Value) -> Vec<Event> {
                     }
                 }
                 "toolcall_start" | "toolcall_end" => {
-                    // toolcall_start carries top-level id/toolName (projected
-                    // by the wire); toolcall_end nests a full toolCall object.
+                    // pi-web's wire projection puts id/toolName at the top
+                    // level; raw RPC events keep them inside `partial.content
+                    // [contentIndex]` (a `toolCall` block). toolcall_end also
+                    // nests a full `toolCall` object.
                     let id = delta
                         .and_then(|d| d.get("id"))
                         .and_then(|v| v.as_str())
@@ -471,6 +540,15 @@ pub fn sse_to_events(ev: &serde_json::Value) -> Vec<Event> {
                                 .and_then(|t| t.get("id"))
                                 .and_then(|v| v.as_str())
                                 .map(str::to_string)
+                        })
+                        .or_else(|| {
+                            partial_tool_block(delta).and_then(|block| {
+                                block
+                                    .get("id")
+                                    .or_else(|| block.get("toolCallId"))
+                                    .and_then(|v| v.as_str())
+                                    .map(str::to_string)
+                            })
                         })
                         .unwrap_or_default();
                     let name = delta
@@ -483,6 +561,15 @@ pub fn sse_to_events(ev: &serde_json::Value) -> Vec<Event> {
                                 .and_then(|t| t.get("name"))
                                 .and_then(|v| v.as_str())
                                 .map(str::to_string)
+                        })
+                        .or_else(|| {
+                            partial_tool_block(delta).and_then(|block| {
+                                block
+                                    .get("name")
+                                    .or_else(|| block.get("toolName"))
+                                    .and_then(|v| v.as_str())
+                                    .map(str::to_string)
+                            })
                         })
                         .unwrap_or_else(|| "tool".into());
                     if !id.is_empty() {
@@ -570,6 +657,56 @@ pub fn sse_to_events(ev: &serde_json::Value) -> Vec<Event> {
                 follow_up: list("followUp"),
             });
         }
+        "extension_ui_request" => {
+            let method = ev.get("method").and_then(|m| m.as_str()).unwrap_or("");
+            let id = ev.get("id").and_then(|i| i.as_str()).unwrap_or("").to_string();
+            match method {
+                // Fire-and-forget notifications become transcript notices.
+                "notify" => {
+                    let message = ev
+                        .get("message")
+                        .and_then(|m| m.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    if !message.is_empty() {
+                        out.push(Event::Notice(message));
+                    }
+                }
+                "select" | "confirm" | "input" | "editor" => {
+                    let title = ev
+                        .get("title")
+                        .and_then(|t| t.as_str())
+                        .unwrap_or("需要确认")
+                        .to_string();
+                    let message = ev
+                        .get("message")
+                        .and_then(|m| m.as_str())
+                        .map(str::to_string);
+                    let options = ev
+                        .get("options")
+                        .and_then(|o| o.as_array())
+                        .map(|a| {
+                            a.iter()
+                                .filter_map(|o| o.as_str().map(str::to_string))
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    out.push(Event::UiRequest { id, method: method.to_string(), title, message, options });
+                }
+                // setStatus / setWidget / … — not rendered by the panel yet.
+                _ => {}
+            }
+        }
+        "compaction_start" | "auto_compaction_start" => {
+            out.push(Event::Notice("上下文压缩中…".into()));
+        }
+        "compaction_end" | "auto_compaction_end" => {
+            out.push(Event::Notice("上下文压缩完成".into()));
+        }
+        "auto_retry_start" => {
+            let attempt = ev.get("attempt").and_then(|a| a.as_u64()).unwrap_or(0);
+            out.push(Event::Notice(format!("自动重试中（第 {attempt} 次）…")));
+        }
         "startup_error" => {
             let msg = ev
                 .get("errorMessage")
@@ -585,6 +722,65 @@ pub fn sse_to_events(ev: &serde_json::Value) -> Vec<Event> {
 }
 
 // ── Session history backfill ────────────────────────────────────────────────
+
+/// Convert a list of `AgentMessage` JSON objects (RPC `get_messages`, or
+/// session-file messages) into transcript entries.
+pub fn messages_to_entries(messages: &[serde_json::Value]) -> Vec<Entry> {
+    let mut out = Vec::new();
+    for msg in messages {
+        match msg.get("role").and_then(|r| r.as_str()).unwrap_or("") {
+            "user" => {
+                let text = content_text(msg);
+                if !text.is_empty() {
+                    out.push(Entry::User(text));
+                }
+            }
+            "assistant" => {
+                for (_, part) in parse_parts(msg) {
+                    match part {
+                        Part::Text(t) if !t.is_empty() => out.push(Entry::Assistant(t)),
+                        Part::Thinking(t) => out.push(Entry::Thinking(t)),
+                        Part::ToolCall { id, name } => out.push(Entry::Tool {
+                            id,
+                            name,
+                            output: String::new(),
+                            done: false,
+                            is_error: false,
+                        }),
+                        _ => {}
+                    }
+                }
+            }
+            "toolResult" => {
+                let (output, is_error) = tool_output(msg);
+                let id = msg
+                    .get("toolCallId")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let name = msg
+                    .get("toolName")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("tool")
+                    .to_string();
+                let filled = out.iter_mut().rev().any(|e| match e {
+                    Entry::Tool { id: tid, output: o, done, is_error: err, .. } if *tid == id => {
+                        *o = output.clone();
+                        *done = true;
+                        *err = is_error;
+                        true
+                    }
+                    _ => false,
+                });
+                if !filled {
+                    out.push(Entry::Tool { id, name, output, done: true, is_error });
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
 
 /// Read the tail of a session `.jsonl` (≤ `max_bytes`) and reconstruct the
 /// transcript. SSE only pushes *new* events, so history comes from the file.
@@ -684,6 +880,7 @@ fn worker(endpoint: String, tx: Sender<Event>, rx: Receiver<Command>, stop: Arc<
             return;
         }
         let _ = tx.send(Event::Status(Status::Connecting));
+        let _ = tx.send(Event::Backend(format!("pi-web · {endpoint}")));
         // 1. Session list (also proves the server is up).
         let sessions = match http(&endpoint, "GET", "/api/sessions", None, REQUEST_TIMEOUT) {
             Ok(resp) if resp.status == 200 => parse_sessions(&resp.body),
@@ -801,6 +998,9 @@ fn worker(endpoint: String, tx: Sender<Event>, rx: Receiver<Command>, stop: Arc<
                         Ok(Command::SetThinking { level }) => {
                             set_thinking(&endpoint, &tx, &active, &level);
                         }
+                        Ok(Command::UiRespond { id, value, confirmed, cancelled }) => {
+                            ui_respond(&endpoint, &tx, &active, &id, value, confirmed, cancelled);
+                        }
                         Ok(Command::Browse { path }) => {
                             browse(&endpoint, &tx, &path);
                         }
@@ -911,6 +1111,7 @@ fn wait_retry(
                 });
             }
             Ok(Command::Browse { .. }) | Ok(Command::FetchFiles { .. }) => {}
+            Ok(Command::UiRespond { .. }) => {}
             Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => return std::ops::ControlFlow::Break(()),
         }
@@ -976,6 +1177,35 @@ fn post_prompt(
         Err(e) => {
             let _ = tx.send(Event::SendFailed { message: e });
         }
+    }
+}
+
+/// Forward an `extension_ui_response` to pi-web.
+fn ui_respond(
+    endpoint: &str,
+    tx: &Sender<Event>,
+    session: &str,
+    id: &str,
+    value: Option<String>,
+    confirmed: Option<bool>,
+    cancelled: bool,
+) {
+    let mut body = serde_json::json!({ "type": "extension_ui_response", "id": id });
+    if cancelled {
+        body["cancelled"] = serde_json::json!(true);
+    } else if let Some(value) = value {
+        body["value"] = serde_json::json!(value);
+    } else if let Some(confirmed) = confirmed {
+        body["confirmed"] = serde_json::json!(confirmed);
+    }
+    if let Err(e) = http(
+        endpoint,
+        "POST",
+        &format!("/api/agent/{session}"),
+        Some(&body.to_string()),
+        REQUEST_TIMEOUT,
+    ) {
+        let _ = tx.send(Event::Notice(format!("提交确认失败：{e}")));
     }
 }
 

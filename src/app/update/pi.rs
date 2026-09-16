@@ -162,6 +162,30 @@ impl OpenCADStudio {
                 self.tabs[tab].pi_panel.create_session();
                 Task::none()
             }
+            PiMsg::UiAnswer { value, confirmed } => {
+                let panel = &mut self.tabs[tab].pi_panel;
+                if let Some(request) = panel.pending_ui.take() {
+                    panel.send_command(crate::pi::Command::UiRespond {
+                        id: request.id,
+                        value,
+                        confirmed,
+                        cancelled: false,
+                    });
+                }
+                Task::none()
+            }
+            PiMsg::UiCancel => {
+                let panel = &mut self.tabs[tab].pi_panel;
+                if let Some(request) = panel.pending_ui.take() {
+                    panel.send_command(crate::pi::Command::UiRespond {
+                        id: request.id,
+                        value: None,
+                        confirmed: None,
+                        cancelled: true,
+                    });
+                }
+                Task::none()
+            }
         }
     }
 

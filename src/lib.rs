@@ -2,6 +2,7 @@
 #![recursion_limit = "256"]
 
 pub mod pi;
+pub mod pi_rpc;
 pub mod app;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod cli;
