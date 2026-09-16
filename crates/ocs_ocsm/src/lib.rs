@@ -2487,9 +2487,17 @@ pub(crate) fn angular_minor_sweep_deg(a: &LineGeom, b: &LineGeom, arc_pt: [f64; 
 /// 模型空间里含 `pt` 的（最内层）图框 Insert 的均匀缩放比例；无命中 = 1.0。
 /// 候选：块名 ∈ frame 目录 stem，或块内含 tag 比例/SCALE 的 ATTDEF。
 pub(crate) fn frame_scale_at(doc: &acadrust::CadDocument, pt: [f64; 3]) -> f64 {
+    frame_anchor_at(doc, pt).map(|(_, s)| s).unwrap_or(1.0)
+}
+
+/// 含 `pt` 的（最内层）图框 Insert：返回（插入点，均匀缩放）。无命中 = None。
+fn frame_anchor_at(
+    doc: &acadrust::CadDocument,
+    pt: [f64; 3],
+) -> Option<(Vector3, f64)> {
     use acadrust::EntityType as E;
     let stems = frame_dir_stems();
-    let mut best: Option<(f64, f64)> = None; // (AABB 面积, scale)
+    let mut best: Option<(f64, Vector3, f64)> = None; // (AABB 面积, 插入点, scale)
     for e in doc.entities() {
         let E::Insert(ins) = e else { continue };
         let Some(scale) = ins.uniform_scale() else { continue };
@@ -2503,11 +2511,44 @@ pub(crate) fn frame_scale_at(doc: &acadrust::CadDocument, pt: [f64; 3]) -> f64 {
             continue;
         }
         let area = (max.x - min.x).max(0.0) * (max.y - min.y).max(0.0);
-        if best.is_none_or(|(a, _)| area < a) {
-            best = Some((area, scale));
+        if best.is_none_or(|(a, _, _)| area < a) {
+            best = Some((area, ins.insert_point, scale));
         }
     }
-    best.map(|(_, s)| s).unwrap_or(1.0)
+    best.map(|(_, o, s)| (o, s))
+}
+
+/// 明细表用的图框锚点：优先“包含名义锚点的最内层图框”；没有命中但**全图只有一张
+/// 图框**时用那张（图框不一定在原点）；多张且都不含名义点 → None（按 1:1 原位）。
+/// 返回（图框插入点，均匀缩放）。
+pub(crate) fn bom_frame_anchor(
+    doc: &acadrust::CadDocument,
+    nominal_pt: [f64; 3],
+) -> Option<(Vector3, f64)> {
+    if let Some(hit) = frame_anchor_at(doc, nominal_pt) {
+        return Some(hit);
+    }
+    // 单一图框兜底：图框不在名义锚点下（如整图平移过/放大后名义点落在框外）也能锚上。
+    use acadrust::EntityType as E;
+    let stems = frame_dir_stems();
+    let mut found: Option<(Vector3, f64)> = None;
+    let mut count = 0usize;
+    for e in doc.entities() {
+        let E::Insert(ins) = e else { continue };
+        let Some(scale) = ins.uniform_scale() else { continue };
+        if !is_frame_insert(doc, ins, &stems) {
+            continue;
+        }
+        count += 1;
+        if found.is_none() {
+            found = Some((ins.insert_point, scale));
+        }
+    }
+    if count == 1 {
+        found
+    } else {
+        None
+    }
 }
 
 /// 是否为图框块引用（帧目录 stem 或含 比例/SCALE ATTDEF）。

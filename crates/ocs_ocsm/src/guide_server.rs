@@ -7921,6 +7921,98 @@ mod integration {
         assert!(bom_renumber_map(&old, &specs2).is_empty());
     }
 
+    /// 合成图框块（带 比例 ATTDEF → is_frame_insert 认；100×50 局部 AABB）。
+    fn synthetic_frame_doc(scale: f64, insert_at: [f64; 2]) -> acadrust::CadDocument {
+        use acadrust::entities::{
+            AttributeDefinition, Block, BlockEnd, EntityType as E, Insert, Line,
+        };
+        use acadrust::tables::BlockRecord;
+        let mut doc = acadrust::CadDocument::default();
+        let mut att = acadrust::entities::AttributeDefinition::new("比例".into(), "Scale".into(), " ".into());
+        att.tag = "比例".into();
+        let lines: Vec<E> = vec![
+            E::Line(Line { common: Default::default(), start: Vector3::new(0.0, 0.0, 0.0), end: Vector3::new(100.0, 0.0, 0.0), thickness: 0.0, normal: Vector3::new(0.0, 0.0, 1.0) }),
+            E::Line(Line { common: Default::default(), start: Vector3::new(100.0, 0.0, 0.0), end: Vector3::new(100.0, 50.0, 0.0), thickness: 0.0, normal: Vector3::new(0.0, 0.0, 1.0) }),
+            E::Line(Line { common: Default::default(), start: Vector3::new(100.0, 50.0, 0.0), end: Vector3::new(0.0, 50.0, 0.0), thickness: 0.0, normal: Vector3::new(0.0, 0.0, 1.0) }),
+            E::Line(Line { common: Default::default(), start: Vector3::new(0.0, 50.0, 0.0), end: Vector3::new(0.0, 0.0, 0.0), thickness: 0.0, normal: Vector3::new(0.0, 0.0, 1.0) }),
+            E::AttributeDefinition(att),
+        ];
+        let mut br = BlockRecord::new("a3_test");
+        br.handle = doc.allocate_handle();
+        br.entity_handles.push(doc.add_entity(E::Block(Block::new("a3_test", Vector3::ZERO))).unwrap());
+        for e in lines {
+            br.entity_handles.push(doc.add_entity(e).unwrap());
+        }
+        br.entity_handles.push(doc.add_entity(E::BlockEnd(BlockEnd::new())).unwrap());
+        doc.block_records.add(br).unwrap();
+        let mut ins = Insert::new("a3_test", Vector3::new(insert_at[0], insert_at[1], 0.0));
+        ins.set_x_scale(scale);
+        ins.set_y_scale(scale);
+        ins.set_z_scale(scale);
+        doc.add_entity(E::Insert(ins)).unwrap();
+        doc
+    }
+
+    #[test]
+    fn http_bom_apply_anchors_to_scaled_frame() {
+        // 用户实况（2026-09-16）：图框 2 倍插入 → 明细表应落在图框内框右下、按 2 倍缩放，
+        // 而不是落在 1:1 的 (210,45)。布局/列宽仍按块局部坐标（fill_bom 内部规则）。
+        let _g = export_lock();
+        let doc = synthetic_frame_doc(2.0, [0.0, 0.0]);
+        let mock = std::sync::Arc::new(MockSender::new(doc));
+        let server = spawn(mock.clone()).expect("spawn guide server");
+        let port = server.port;
+        crate::set_guide_port_for_test(port);
+        let body = serde_json::json!({
+            "fp": "",
+            "rows": [
+                {"item_no":"1","code":"A","name":"件一","qty":"2","material":"m","unit_weight":"1","total_weight":"","remark":""},
+                {"item_no":"2","code":"B","name":"件二","qty":"1","material":"m","unit_weight":"1","total_weight":"","remark":""}
+            ]
+        })
+        .to_string();
+        let r = http_req(port, "POST", "/api/bom_apply", &body);
+        let v: serde_json::Value = serde_json::from_str(&r).unwrap();
+        assert_eq!(v["ok"], true, "apply 应成功: {v}");
+        let doc2 = mock.doc.lock().unwrap().clone();
+        let mut hits: Vec<(String, [f64; 2], f64)> = Vec::new();
+        for e in doc2.model_space_entities() {
+            let EntityType::Insert(ins) = e else { continue };
+            let is_bom = matches!(
+                ins.block_name.as_str(),
+                crate::bom::HEAD_BLOCK | crate::bom::ROW_BLOCK
+            );
+            if !is_bom {
+                continue;
+            }
+            hits.push((
+                ins.block_name.clone(),
+                [ins.insert_point.x, ins.insert_point.y],
+                ins.uniform_scale().unwrap_or(1.0),
+            ));
+        }
+        assert!(hits.len() >= 3, "应有表头+2 行: {hits:?}");
+        for (name, pos, sc) in &hits {
+            assert!((sc - 2.0).abs() < 1e-9, "表块应按图框 2 倍缩放: {name} sc={sc}");
+            assert!((pos[0] - 420.0).abs() < 1e-6, "x 应=2×210=420: {name} {pos:?}");
+        }
+        // 表头 y = 2×45=90；行块 y = 90 + 2×(12+8k)。
+        let ys: Vec<f64> = hits
+            .iter()
+            .filter(|(n, _, _)| n == crate::bom::HEAD_BLOCK)
+            .map(|(_, p, _)| p[1])
+            .collect();
+        assert_eq!(hits.iter().filter(|(n, _, _)| n == crate::bom::HEAD_BLOCK).count(), 1);
+        let mut row_ys: Vec<f64> = hits
+            .iter()
+            .filter(|(n, _, _)| n == crate::bom::ROW_BLOCK)
+            .map(|(_, p, _)| p[1])
+            .collect();
+        row_ys.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        assert!((row_ys[0] - (2.0 * (45.0 + 12.0))).abs() < 1e-6, "行1 y=2×57=114: {row_ys:?}");
+        assert!((row_ys[1] - (2.0 * (45.0 + 20.0))).abs() < 1e-6, "行2 y=2×65=130: {row_ys:?}");
+    }
+
     fn head_and_rows_ok(doc: &acadrust::CadDocument) -> bool {
         let mut head = 0usize;
         let mut rows = 0usize;

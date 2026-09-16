@@ -584,6 +584,13 @@ pub(crate) fn fill_bom(
     }
 
     let cols = layout(rows.len(), per_col, &cfg)?;
+    // 图框锚点与缩放：图框不是 1:1（或不在原点）时，明细表跟着图框走 ——
+    // 名义锚点（标题栏名义区域）落在哪张图框里就贴哪张；只有一张图框时即便名义点
+    // 在框外（整图平移/放大）也锚上；都没有 → 按 1:1 原位（老行为）。
+    // 布局/列宽/单元格压缩仍用**块局部**坐标（图框缩放由 INSERT 变换统一完成）。
+    let (fx, fy, fs) = crate::bom_frame_anchor(doc, [cfg.first_col_left, cfg.first_col_bottom, 0.0])
+        .map(|(o, s)| (o.x, o.y, s))
+        .unwrap_or((0.0, 0.0, 1.0));
     // 单元格文字自动压缩：列宽从**行块几何**里读（模板改了也对）
     let row_block_entities: Vec<EntityType> = doc.entities_in_block(ROW_BLOCK).cloned().collect();
     let cell_cols = row_cell_widths(&row_block_entities);
@@ -591,16 +598,18 @@ pub(crate) fn fill_bom(
     let mut squeezed_hard: Vec<String> = Vec::new();
 
     // ④ 建表（表头 + 行，含 8 个属性值），全部打 OCSM_BOM 标记。
+    //    插入点 = 图框插入点 + 局部坐标 × 图框缩放；块本身也按图框缩放插入。
     let mut ents: Vec<EntityType> = Vec::new();
     let mut seq = 0usize;
     for (ci, nrows) in cols.iter().enumerate() {
-        let x0 = cfg.first_col_left - COL_W * ci as f64;
-        let y0 = if ci == 0 {
-            cfg.first_col_bottom
-        } else {
-            cfg.sheet_bottom
-        };
+        let local_x = cfg.first_col_left - COL_W * ci as f64;
+        let local_y0 = if ci == 0 { cfg.first_col_bottom } else { cfg.sheet_bottom };
+        let x0 = fx + fs * local_x;
+        let y0 = fy + fs * local_y0;
         let mut head = Insert::new(HEAD_BLOCK, Vector3::new(x0, y0, 0.0));
+        head.set_x_scale(fs);
+        head.set_y_scale(fs);
+        head.set_z_scale(fs);
         {
             let c = insert_common(&mut head);
             c.layer = LAYER_LINE.to_string();
@@ -612,8 +621,11 @@ pub(crate) fn fill_bom(
         ents.push(EntityType::Insert(head));
 
         for k in 0..*nrows {
-            let yr = y0 + HEAD_H + ROW_H * k as f64;
+            let yr = y0 + fs * (HEAD_H + ROW_H * k as f64);
             let mut ins = Insert::new(ROW_BLOCK, Vector3::new(x0, yr, 0.0));
+            ins.set_x_scale(fs);
+            ins.set_y_scale(fs);
+            ins.set_z_scale(fs);
             {
                 let c = insert_common(&mut ins);
                 c.layer = LAYER_LINE.to_string();
