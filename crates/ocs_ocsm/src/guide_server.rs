@@ -5662,6 +5662,36 @@ fn should_warn_unsaved(tab: u64, warned: &mut std::collections::HashSet<u64>) ->
 }
 
 // ── 明细表网页编辑（bom.html，2026-09-16 第四期）─────────────────────────
+
+/// 查询参数里的值做百分号解码（页面 JS 用 encodeURIComponent；不解码文件名会
+/// 变成 "MCP%E6%B5%8B..." 这种乱码名）。只处理 %XX 与 +→空格。
+fn query_decode(v: &str) -> String {
+    let bytes = v.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'%' if i + 2 < bytes.len() + 1 && i + 2 < bytes.len() => {
+                let hex = std::str::from_utf8(&bytes[i + 1..i + 3]).ok();
+                match hex.and_then(|h| u8::from_str_radix(h, 16).ok()) {
+                    Some(b) => {
+                        out.push(b);
+                        i += 3;
+                    }
+                    None => {
+                        out.push(bytes[i]);
+                        i += 1;
+                    }
+                }
+            }
+            b => {
+                out.push(b);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).to_string()
+}
 //
 // 图纸 = 唯一真源；xlsx 只是导入/导出的数据交换格式（用户定案）。
 // 四个端点：GET /api/bom_get（现状）、POST /api/bom_apply（整表一次提交，
@@ -5996,7 +6026,7 @@ fn api_bom_import(
         .split('&')
         .filter_map(|kv| kv.split_once('='))
         .find(|(k, _)| *k == "name")
-        .map(|(_, v)| v.to_string());
+        .map(|(_, v)| query_decode(v));
     let is_csv = name
         .as_deref()
         .map(|n| n.to_ascii_lowercase().ends_with(".csv"))
@@ -6116,6 +6146,7 @@ fn api_bom_export(
             .map(|(_, v)| v.to_string())
     };
     let is_csv = param("fmt").map(|f| f.eq_ignore_ascii_case("csv")).unwrap_or(false);
+    let decode = query_decode;
     let doc = match snapshot(sender) {
         Ok(d) => d,
         Err(e) => return bad(e),
@@ -6129,7 +6160,7 @@ fn api_bom_export(
         .map(|r| crate::bom_xlsx::xrow_from_cells(&r.cells, r.lock))
         .collect();
     let filename = {
-        let raw = param("name").unwrap_or_else(|| "明细表.xlsx".to_string());
+        let raw = decode(&param("name").unwrap_or_else(|| "明细表.xlsx".to_string()));
         // 只留文件名部分，防路径注入/分隔符。
         raw.split(['/', '\\'])
             .last()
