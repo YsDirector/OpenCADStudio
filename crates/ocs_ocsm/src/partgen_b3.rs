@@ -28,7 +28,8 @@
 //! ## seal_fb（模板 D30×d16×b7）
 //! - 主视图 = **轴向剖视**（轴线 x=0，y 为轴向 0…b；两侧对称）。剖面轮廓（金属骨架 +
 //!   橡胶体）在归一坐标 `u=(x−r)/(R−r)`、`v=y/b` 下逐条复刻（下表常量），镜像得另一侧；
-//!   另画两处弹簧小圆与中心线。**不画剖面线**（按主代理约定）。
+//!   另画两处弹簧小圆与中心线。**剖面线**（模板 4 片 ANSI31）：金属骨架左半 angle 0°/scale 1.0、
+//!   右半 angle 90°/scale 0.25；橡胶体左右各 1 片 angle 0°/scale 0.25（唇口含 r=0.1b 圆弧）。
 //!
 //! ## bearing_276（模板 61807：d35 D47 B7 r0.3）
 //! - 主视图 = **轴向剖视**（轴线 y=0，x 为轴向 0…B、y 为半径；上半个视镜像得下半）。
@@ -42,8 +43,9 @@ use ocs_plugin_api::host::acadrust::entities::EntityType;
 
 use crate::partgen::{GenPart, PartMeta};
 use crate::partgen_kit::{
-    arc, circle, line, polyline, trim, views_json, Table, LAYER_CENTER, LAYER_HIDDEN, LAYER_MAIN,
-    LAYER_THIN,
+    arc, circle, hatch_ansi31_edges, hatch_ansi31_scaled, hatch_ansi37_edges, line, polyline, trim,
+    views_json,
+    HatchEdge, Table, LAYER_CENTER, LAYER_HIDDEN, LAYER_MAIN, LAYER_THIN,
 };
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -110,6 +112,66 @@ fn push_y(en: &mut Vec<EntityType>, e: EntityType) {
     let m = mirror_y(&e);
     en.push(e);
     en.push(m);
+}
+
+/// 关于 x=0 镜像一条剖面线边界（与 `mirror_x` 同规则；圆弧统一重表为正向区间）。
+fn mirror_hatch_x(edges: &[HatchEdge]) -> Vec<HatchEdge> {
+    edges
+        .iter()
+        .map(|e| match *e {
+            HatchEdge::Line { a, b } => HatchEdge::Line {
+                a: [-a[0], a[1]],
+                b: [-b[0], b[1]],
+            },
+            HatchEdge::Arc {
+                c,
+                r,
+                start_deg,
+                end_deg,
+                ..
+            } => {
+                let span = (end_deg - start_deg).abs();
+                let s = (180.0 - end_deg).rem_euclid(360.0);
+                HatchEdge::Arc {
+                    c: [-c[0], c[1]],
+                    r,
+                    start_deg: s,
+                    end_deg: s + span,
+                    ccw: true,
+                }
+            }
+        })
+        .collect()
+}
+
+/// 关于 y=0 镜像一条剖面线边界（与 `mirror_y` 同规则）。
+fn mirror_hatch_y(edges: &[HatchEdge]) -> Vec<HatchEdge> {
+    edges
+        .iter()
+        .map(|e| match *e {
+            HatchEdge::Line { a, b } => HatchEdge::Line {
+                a: [a[0], -a[1]],
+                b: [b[0], -b[1]],
+            },
+            HatchEdge::Arc {
+                c,
+                r,
+                start_deg,
+                end_deg,
+                ..
+            } => {
+                let span = (end_deg - start_deg).abs();
+                let s = (-end_deg).rem_euclid(360.0);
+                HatchEdge::Arc {
+                    c: [c[0], -c[1]],
+                    r,
+                    start_deg: s,
+                    end_deg: s + span,
+                    ccw: true,
+                }
+            }
+        })
+        .collect()
 }
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -414,6 +476,50 @@ const SEAL_CIRCLES: [[f64; 3]; 2] = [
     [0.333329, 0.666671, 0.1],
 ];
 
+/// 金属骨架剖面线边界（归一 `(u,v)`，6 点；模板左半 angle 0°/scale 1.0、右半 angle 90°/scale 0.25）。
+const SEAL_METAL_HATCH: [[f64; 2]; 6] = [
+    [0.333329, 0.1],
+    [0.333329, 0.2],
+    [0.85, 0.2],
+    [0.85, 0.9],
+    [0.95, 0.9],
+    [0.95, 0.1],
+];
+
+/// 橡胶体剖面线边界（归一 `(u,v)`，29 边）：第 1 条边是唇口圆弧（圆心 (0.333329,0.666671)、
+/// 半径 0.1b、270°→480°），后 28 条为直线（`[29]` 收尾回 `[0]`）。模板左右各 1 片。
+const SEAL_RUBBER_HATCH: [[f64; 2]; 29] = [
+    [0.333329, 0.566671],
+    [0.383329, 0.753271],
+    [0.383329, 0.9],
+    [0.1, 0.9],
+    [0.0, 0.8],
+    [0.1, 0.5],
+    [0.166671, 0.5],
+    [0.25, 0.3],
+    [0.041671, 0.05],
+    [0.141671, 0.0],
+    [0.191671, 0.05],
+    [0.241671, 0.0],
+    [0.95, 0.0],
+    [1.0, 0.1],
+    [1.0, 0.9],
+    [0.95, 1.0],
+    [0.835714, 1.0],
+    [0.8, 0.25],
+    [0.75, 0.25],
+    [0.75, 0.2],
+    [0.85, 0.2],
+    [0.85, 0.9],
+    [0.95, 0.9],
+    [0.95, 0.1],
+    [0.333329, 0.1],
+    [0.333329, 0.2],
+    [0.433329, 0.2],
+    [0.433329, 0.25],
+    [0.347614, 0.25],
+];
+
 fn seal_weight(row: &SealRow) -> String {
     let v = std::f64::consts::PI / 4.0 * (row.od * row.od - row.d1 * row.d1) * row.b;
     crate::partgen_kit::weight_text(crate::partgen_kit::weight_kg(v, 7.85))
@@ -445,6 +551,40 @@ pub fn seal_fb(row: &SealRow) -> Result<GenPart, String> {
     en.push(line([0.0, b + 3.0], [0.0, -3.0], LAYER_CENTER));
     push_x(&mut en, line([x(6.6333 / 7.0 - 8.0 / 7.0), y(2.0 / 3.0)], [x(14.0333 / 7.0 - 8.0 / 7.0), y(2.0 / 3.0)], LAYER_CENTER));
     push_x(&mut en, line([x((10.3333 - 8.0) / 7.0), y(0.9667 / 7.0)], [x((10.3333 - 8.0) / 7.0), y(8.3667 / 7.0)], LAYER_CENTER));
+
+    // ── 剖面线（模板 4 片 ANSI31；左半 = 模板存储的 extrude(+z) 半边，右半 = 其镜像）──
+    let xn = |u: f64| -(r + u * w);
+    let yv = |v: f64| v * b;
+    // 金属骨架：左半 #1（angle 0°/scale 1.0），右半 #3（angle 90°/scale 0.25）
+    let metal = |sx: f64| -> Vec<[f64; 2]> {
+        SEAL_METAL_HATCH
+            .iter()
+            .map(|p| [sx * (r + p[0] * w), p[1] * b])
+            .collect()
+    };
+    en.push(hatch_ansi31_scaled(&metal(-1.0), 0.0, 1.0));
+    en.push(hatch_ansi31_scaled(&metal(1.0), 90.0, 0.25));
+    // 橡胶体：左半 #2、右半 #4，均 angle 0°/scale 0.25；边界含唇口圆弧
+    let rubber_neg: Vec<HatchEdge> = {
+        let p = |k: usize| [xn(SEAL_RUBBER_HATCH[k][0]), yv(SEAL_RUBBER_HATCH[k][1])];
+        let mut edges = Vec::with_capacity(29);
+        edges.push(HatchEdge::Arc {
+            c: [xn(0.333329), yv(0.666671)],
+            r: 0.1 * b,
+            start_deg: 270.0,
+            end_deg: 480.0,
+            ccw: true,
+        });
+        for k in 1..28 {
+            edges.push(HatchEdge::Line { a: p(k), b: p(k + 1) });
+        }
+        edges.push(HatchEdge::Line { a: p(28), b: p(0) });
+        edges
+    };
+    // 橡胶件（唇口）用 **ANSI37 双向网纹**（GB/T 4457.5 材质剖面线约定）；
+    // 模板实测：这两片 pattern_name=ANSI37（金属骨架两片是 ANSI31），同名同边界同角度同 scale，只差图案。
+    en.push(hatch_ansi37_edges(&rubber_neg, 0.0, 0.25));
+    en.push(hatch_ansi37_edges(&mirror_hatch_x(&rubber_neg), 0.0, 0.25));
 
     Ok(GenPart {
         entities: en,
@@ -511,6 +651,33 @@ pub fn bearing_276(row: &BearingRow) -> Result<GenPart, String> {
     en.push(line([-2.0, 0.0], [bw + 2.0, 0.0], LAYER_CENTER));
     push_y(&mut en, line([hw, rcen - 3.0 * rb], [hw, rcen + 3.0 * rb], LAYER_CENTER));
     push_y(&mut en, line([-1.0, rcen], [bw + 1.0, rcen], LAYER_CENTER));
+
+    // ── 剖面线（模板 4 片 ANSI31 scale 1.0）：上外圈 0°/上内圈 90°/下外圈 270°/下内圈 180° ──
+    // 上半边界 = 模板 piece#0/#1 实测（含滚道 r=b 弧、端圆角 r=rc 弧）；下半 = 关于 y=0 镜像。
+    let outer_up: Vec<HatchEdge> = vec![
+        HatchEdge::Line { a: [0.0, r_or], b: [xg1, r_or] },
+        HatchEdge::Arc { c: [hw, rcen], r: rb, start_deg: 30.0, end_deg: 150.0, ccw: true },
+        HatchEdge::Line { a: [xg2, r_or], b: [bw, r_or] },
+        HatchEdge::Line { a: [bw, r_or], b: [bw, rr - rc] },
+        HatchEdge::Arc { c: [bw - rc, rr - rc], r: rc, start_deg: 0.0, end_deg: 90.0, ccw: true },
+        HatchEdge::Line { a: [bw - rc, rr], b: [rc, rr] },
+        HatchEdge::Arc { c: [rc, rr - rc], r: rc, start_deg: 90.0, end_deg: 180.0, ccw: true },
+        HatchEdge::Line { a: [0.0, rr - rc], b: [0.0, r_or] },
+    ];
+    let inner_up: Vec<HatchEdge> = vec![
+        HatchEdge::Arc { c: [rc, r + rc], r: rc, start_deg: 180.0, end_deg: 270.0, ccw: true },
+        HatchEdge::Line { a: [rc, r], b: [bw - rc, r] },
+        HatchEdge::Arc { c: [bw - rc, r + rc], r: rc, start_deg: 270.0, end_deg: 360.0, ccw: true },
+        HatchEdge::Line { a: [bw, r + rc], b: [bw, r_ir] },
+        HatchEdge::Line { a: [bw, r_ir], b: [xg2, r_ir] },
+        HatchEdge::Arc { c: [hw, rcen], r: rb, start_deg: 210.0, end_deg: 330.0, ccw: true },
+        HatchEdge::Line { a: [xg1, r_ir], b: [0.0, r_ir] },
+        HatchEdge::Line { a: [0.0, r_ir], b: [0.0, r + rc] },
+    ];
+    en.push(hatch_ansi31_edges(&outer_up, 0.0, 1.0));
+    en.push(hatch_ansi31_edges(&inner_up, 90.0, 1.0));
+    en.push(hatch_ansi31_edges(&mirror_hatch_y(&outer_up), 270.0, 1.0));
+    en.push(hatch_ansi31_edges(&mirror_hatch_y(&inner_up), 180.0, 1.0));
 
     Ok(GenPart {
         entities: en,
@@ -941,8 +1108,250 @@ mod tests {
         assert!(circles_of(&p).iter().any(|(c, r)| near(c.0, 10.3333) && near(c.1, 4.6667) && near(*r, 0.56)), "弹簧内圆");
         // 镜像
         assert!(has_line(&p, (-15.0, 6.3), (-15.0, 0.7)), "外径柱面镜像");
-        // 无剖面线（主代理约定）
-        assert!(!p.entities.iter().any(|e| matches!(e, EntityType::Hatch(_))), "约定不画剖面线");
+        // 剖面线：模板 4 片（金属骨架左右各 1、橡胶体左右各 1）
+        let hatches = p.entities.iter().filter(|e| matches!(e, EntityType::Hatch(_))).count();
+        assert_eq!(hatches, 4, "密封圈主视图应 4 片剖面线");
+    }
+
+    /// 模板剖面线回归（片数 / angle / scale / 边界逐边含圆弧）。
+    ///
+    /// 模板权威读数（ezdxf）：
+    /// - seal_fb：4 片——金属骨架左 angle 0°/scale 1.0、右 angle 90°/scale 0.25；
+    ///   橡胶体左右各 1 片 angle 0°/scale 0.25（含唇口 r=0.7 圆弧）。模板右半的 HATCH 以
+    ///   OCS(extrusion=0,0,-1) 存储，按族规则换算为 x→−x（即生成件的正中 x 半）。
+    /// - bearing_276：4 片 scale 1.0，上外 0°/上内 90°/下外 270°/下内 180°，各 8 边含滚道弧/圆角弧。
+    #[test]
+    fn seal_bearing_hatches_match_template() {
+        #[derive(Debug, Clone)]
+        enum HEdge {
+            L([f64; 2], [f64; 2]),
+            A([f64; 2], f64, f64, f64),
+        }
+        fn extract_hatches(p: &GenPart) -> Vec<(f64, f64, Vec<HEdge>)> {
+            use ocs_plugin_api::host::acadrust::entities::hatch::BoundaryEdge;
+            p.entities
+                .iter()
+                .filter_map(|e| match e {
+                    EntityType::Hatch(h) => {
+                        let path = h.paths.first()?;
+                        let mut edges = Vec::new();
+                        for ed in &path.edges {
+                            match ed {
+                                BoundaryEdge::Line(l) => {
+                                    edges.push(HEdge::L([l.start.x, l.start.y], [l.end.x, l.end.y]))
+                                }
+                                BoundaryEdge::CircularArc(a) => edges.push(HEdge::A(
+                                    [a.center.x, a.center.y],
+                                    a.radius,
+                                    a.start_angle.to_degrees(),
+                                    a.end_angle.to_degrees(),
+                                )),
+                                _ => return None,
+                            }
+                        }
+                        Some((h.pattern_angle.to_degrees(), h.pattern_scale, edges))
+                    }
+                    _ => None,
+                })
+                .collect()
+        }
+        fn edges_close(got: &[HEdge], want: &[HEdge]) -> bool {
+            let ap = |a: f64, b: f64| {
+                let d = (a - b).rem_euclid(360.0);
+                d.min(360.0 - d)
+            };
+            got.len() == want.len()
+                && got.iter().zip(want).all(|(g, w)| match (g, w) {
+                    (HEdge::L(a, b), HEdge::L(c, d)) => {
+                        (a[0] - c[0]).abs() < 1e-3
+                            && (a[1] - c[1]).abs() < 1e-3
+                            && (b[0] - d[0]).abs() < 1e-3
+                            && (b[1] - d[1]).abs() < 1e-3
+                    }
+                    (HEdge::A(c1, r1, s1, e1), HEdge::A(c2, r2, s2, e2)) => {
+                        (c1[0] - c2[0]).abs() < 1e-3
+                            && (c1[1] - c2[1]).abs() < 1e-3
+                            && (r1 - r2).abs() < 1e-3
+                            && ap(*s1, *s2) < 1e-3
+                            && ap(*e1, *e2) < 1e-3
+                    }
+                    _ => false,
+                })
+        }
+
+        // ── seal_fb（D30×d16×b7）──
+        let p = gen_all("seal_fb", 16.0, 30.0, "main").unwrap();
+        let hs = extract_hatches(&p);
+        assert_eq!(hs.len(), 4, "seal_fb 应 4 片剖面线");
+        // 图案名：**金属骨架 2 片 = ANSI31（单向 45°）、唇口橡胶 2 片 = ANSI37（双向网纹）**
+        // —— GB/T 4457.5 材质剖面线约定；模板实测：片0/2=ANSI31、片1/3=ANSI37。
+        let names: Vec<String> = p
+            .entities
+            .iter()
+            .filter_map(|e| match e {
+                EntityType::Hatch(h) => Some(h.pattern.name.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            names.iter().filter(|n| n.as_str() == "ANSI31").count(),
+            2,
+            "seal_fb 金属骨架应为 ANSI31：{names:?}"
+        );
+        assert_eq!(
+            names.iter().filter(|n| n.as_str() == "ANSI37").count(),
+            2,
+            "seal_fb 唇口橡胶应为 ANSI37（双向网纹）：{names:?}"
+        );
+        // 模板金属骨架 6 点（左半，负 x）
+        let metal_pts: [[f64; 2]; 6] = [
+            [-10.3333, 0.7],
+            [-10.3333, 1.4],
+            [-13.95, 1.4],
+            [-13.95, 6.3],
+            [-14.65, 6.3],
+            [-14.65, 0.7],
+        ];
+        let metal_neg: Vec<HEdge> = (0..6)
+            .map(|i| HEdge::L(metal_pts[i], metal_pts[(i + 1) % 6]))
+            .collect();
+        let metal_pos: Vec<HEdge> = metal_neg
+            .iter()
+            .map(|e| match e {
+                HEdge::L(a, b) => HEdge::L([-a[0], a[1]], [-b[0], b[1]]),
+                _ => unreachable!(),
+            })
+            .collect();
+        // 模板橡胶体 29 边（左半，负 x；首边为唇口弧）
+        let rub_pts: [[f64; 2]; 28] = [
+            [-10.6833, 5.2729],
+            [-10.6833, 6.3],
+            [-8.7, 6.3],
+            [-8.0, 5.6],
+            [-8.7, 3.5],
+            [-9.1667, 3.5],
+            [-9.75, 2.1],
+            [-8.2917, 0.35],
+            [-8.9917, 0.0],
+            [-9.3417, 0.35],
+            [-9.6917, 0.0],
+            [-14.65, 0.0],
+            [-15.0, 0.7],
+            [-15.0, 6.3],
+            [-14.65, 7.0],
+            [-13.85, 7.0],
+            [-13.6, 1.75],
+            [-13.25, 1.75],
+            [-13.25, 1.4],
+            [-13.95, 1.4],
+            [-13.95, 6.3],
+            [-14.65, 6.3],
+            [-14.65, 0.7],
+            [-10.3333, 0.7],
+            [-10.3333, 1.4],
+            [-11.0333, 1.4],
+            [-11.0333, 1.75],
+            [-10.4333, 1.75],
+        ];
+        let arc_start = [-10.3333, 3.9667];
+        let mut rubber_neg: Vec<HEdge> = vec![HEdge::A([-10.3333, 4.6667], 0.7, 270.0, 480.0)];
+        for k in 0..27 {
+            rubber_neg.push(HEdge::L(rub_pts[k], rub_pts[k + 1]));
+        }
+        rubber_neg.push(HEdge::L(rub_pts[27], arc_start));
+        let rubber_pos: Vec<HEdge> = rubber_neg
+            .iter()
+            .map(|e| match e {
+                HEdge::L(a, b) => HEdge::L([-a[0], a[1]], [-b[0], b[1]]),
+                HEdge::A(c, r, s, en) => {
+                    let span = (en - s).abs();
+                    let ns = (180.0 - en).rem_euclid(360.0);
+                    HEdge::A([-c[0], c[1]], *r, ns, ns + span)
+                }
+            })
+            .collect();
+        for (ang, scale, edges) in &hs {
+            let (wa, ws) = if edges_close(edges, &metal_neg) {
+                (0.0, 1.0)
+            } else if edges_close(edges, &metal_pos) {
+                (90.0, 0.25)
+            } else if edges_close(edges, &rubber_neg) {
+                (0.0, 0.25)
+            } else if edges_close(edges, &rubber_pos) {
+                (0.0, 0.25)
+            } else {
+                panic!("seal_fb 未知边界片: {edges:?}");
+            };
+            assert!((ang - wa).abs() < 1e-9, "seal_fb angle {ang} ≠ {wa}");
+            assert!((scale - ws).abs() < 1e-9, "seal_fb scale {scale} ≠ {ws}");
+        }
+
+        // ── bearing_276（61807：d35 D47 B7 r0.3）──
+        let p = gen_all("bearing_276", 35.0, 7.0, "main").unwrap();
+        let hs = extract_hatches(&p);
+        assert_eq!(hs.len(), 4, "bearing_276 应 4 片剖面线");
+        let (r, rr, rcen, rb, hw, rc) = (17.5, 23.5, 20.5, 1.5, 3.5, 0.3);
+        let r_or = rcen + rb / 2.0;
+        let r_ir = rcen - rb / 2.0;
+        let gx = rb * 30f64.to_radians().cos();
+        let (xg1, xg2, bw) = (hw - gx, hw + gx, 7.0);
+        let outer_up: Vec<HEdge> = vec![
+            HEdge::L([0.0, r_or], [xg1, r_or]),
+            HEdge::A([hw, rcen], rb, 30.0, 150.0),
+            HEdge::L([xg2, r_or], [bw, r_or]),
+            HEdge::L([bw, r_or], [bw, rr - rc]),
+            HEdge::A([bw - rc, rr - rc], rc, 0.0, 90.0),
+            HEdge::L([bw - rc, rr], [rc, rr]),
+            HEdge::A([rc, rr - rc], rc, 90.0, 180.0),
+            HEdge::L([0.0, rr - rc], [0.0, r_or]),
+        ];
+        let inner_up: Vec<HEdge> = vec![
+            HEdge::A([rc, r + rc], rc, 180.0, 270.0),
+            HEdge::L([rc, r], [bw - rc, r]),
+            HEdge::A([bw - rc, r + rc], rc, 270.0, 360.0),
+            HEdge::L([bw, r + rc], [bw, r_ir]),
+            HEdge::L([bw, r_ir], [xg2, r_ir]),
+            HEdge::A([hw, rcen], rb, 210.0, 330.0),
+            HEdge::L([xg1, r_ir], [0.0, r_ir]),
+            HEdge::L([0.0, r_ir], [0.0, r + rc]),
+        ];
+        let outer_lo: Vec<HEdge> = outer_up
+            .iter()
+            .map(|e| match e {
+                HEdge::L(a, b) => HEdge::L([a[0], -a[1]], [b[0], -b[1]]),
+                HEdge::A(c, rr_, s, en) => {
+                    let span = (en - s).abs();
+                    let ns = (-en).rem_euclid(360.0);
+                    HEdge::A([c[0], -c[1]], *rr_, ns, ns + span)
+                }
+            })
+            .collect();
+        let inner_lo: Vec<HEdge> = inner_up
+            .iter()
+            .map(|e| match e {
+                HEdge::L(a, b) => HEdge::L([a[0], -a[1]], [b[0], -b[1]]),
+                HEdge::A(c, rr_, s, en) => {
+                    let span = (en - s).abs();
+                    let ns = (-en).rem_euclid(360.0);
+                    HEdge::A([c[0], -c[1]], *rr_, ns, ns + span)
+                }
+            })
+            .collect();
+        for (ang, scale, edges) in &hs {
+            let wa = if edges_close(edges, &outer_up) {
+                0.0
+            } else if edges_close(edges, &inner_up) {
+                90.0
+            } else if edges_close(edges, &outer_lo) {
+                270.0
+            } else if edges_close(edges, &inner_lo) {
+                180.0
+            } else {
+                panic!("bearing_276 未知边界片: {edges:?}");
+            };
+            assert!((scale - 1.0).abs() < 1e-9, "bearing_276 scale {scale}");
+            assert!((ang - wa).abs() < 1e-9, "bearing_276 angle {ang} ≠ {wa}");
+        }
     }
 
     /// 视图校验 / 错误信息。

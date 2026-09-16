@@ -75,44 +75,124 @@ pub fn polyline(pts: &[[f64; 2]], closed: bool, layer: &str) -> EntityType {
     EntityType::LwPolyline(pl)
 }
 
-/// ANSI31 图案填充（落在 `5剖面线层`）：边界为闭合折线，`angle_deg` 传度数。
-///
-/// 三个单位/语义坑（都已按宿主实现校准，**别再改回去**）：
-/// 1. `Hatch.pattern_angle` 存**弧度**（DXF 写出 `to_degrees()`、读入 `to_radians()`）；
-///    写成度数 → 落图后被转 15470°。
-/// 2. `HatchPatternLine.angle` 也存**弧度**（DXF 53 是度）。
-/// 3. `HatchPatternLine.offset` 是**世界单位**偏移（DXF 45/46 原样存）；别写 PAT 文件里的
-///    `0,.125`——宿主在有 `pattern.lines` 时直接用这一条定义画线并把 offset 当世界单位，
-///    `0.125` 就变成 0.125 mm 间距（视觉上等于实心）。ANSI31 = 0.125″ = 3.175 mm 线间距。
+/// ANSI31 图案填充（落在 `5剖面线层`）：边界为闭合折线，`angle_deg` 传度数（默认比例 1.0）。
 pub fn hatch_ansi31(verts: &[[f64; 2]], angle_deg: f64) -> EntityType {
+    hatch_ansi31_scaled(verts, angle_deg, 1.0)
+}
+
+/// 剖面线边界的一段（角度用**度**，逆时针为正）。
+#[derive(Debug, Clone, Copy)]
+pub enum HatchEdge {
+    /// 直线段
+    Line { a: [f64; 2], b: [f64; 2] },
+    /// 圆弧段（`ccw` = 从 `start_deg` 到 `end_deg` 是否逆时针）
+    Arc {
+        c: [f64; 2],
+        r: f64,
+        start_deg: f64,
+        end_deg: f64,
+        ccw: bool,
+    },
+}
+
+/// 用任意（直线/圆弧）边界画 ANSI31（5剖面线层）。
+///
+/// **模板里「深沟球轴承 GB/T 276」「密封圈 FB」的剖面线边界带圆弧**（滚道弧/唇口圆弧），
+/// 纯折线版本（`hatch_ansi31_scaled`）画不了，用这个。
+pub fn hatch_ansi31_edges(edges: &[HatchEdge], angle_deg: f64, pattern_scale: f64) -> EntityType {
+    let off = 2.245_064_030_267_288 * pattern_scale;
+    hatch_edges_with(
+        "ANSI31",
+        "ANSI Iron, Brick, Stone masonry",
+        &[(45.0, off, off)],
+        edges,
+        angle_deg,
+        pattern_scale,
+    )
+}
+
+/// 用任意边界画 **ANSI37（双向网纹 45°+135°）**。
+///
+/// 模板里**橡胶/非金属**的剖面用这个（GB/T 4457.5 材质剖面线约定）：
+/// 密封圈 FB 型的唇口橡胶两片在模板里就是 `ANSI37`（金属骨架两片是 `ANSI31`），
+/// 两者同名同边界、只差图案 —— 不能都用 ANSI31（视觉上少一个方向）。
+pub fn hatch_ansi37_edges(edges: &[HatchEdge], angle_deg: f64, pattern_scale: f64) -> EntityType {
+    let off = 2.245_064_030_267_288 * pattern_scale;
+    hatch_edges_with(
+        "ANSI37",
+        "ANSI Lead, Zinc, Magnesium, Sound/Heat/Elec Insulation",
+        &[(45.0, off, off), (135.0, -off, -off)],
+        edges,
+        angle_deg,
+        pattern_scale,
+    )
+}
+
+/// 剖面线通用实现：`(角度度, offset.x, offset.y)` 列 = 图案的各条定义线。
+fn hatch_edges_with(
+    name: &str,
+    description: &str,
+    lines: &[(f64, f64, f64)],
+    edges: &[HatchEdge],
+    angle_deg: f64,
+    pattern_scale: f64,
+) -> EntityType {
     use ocs_plugin_api::host::acadrust::entities::hatch::{
-        BoundaryEdge, BoundaryPath, HatchPattern, HatchPatternLine, LineEdge,
+        BoundaryEdge, BoundaryPath, CircularArcEdge, HatchPattern, HatchPatternLine, LineEdge,
     };
     use ocs_plugin_api::host::acadrust::types::Vector2;
     let mut h = Hatch::new();
-    let mut pat = HatchPattern::new("ANSI31");
-    pat.description = "ANSI Iron, Brick, Stone masonry".into();
-    pat.add_line(HatchPatternLine {
-        angle: 45f64.to_radians(),
-        base_point: Vector2::new(0.0, 0.0),
-        offset: Vector2::new(-2.245064030267288, 2.245064030267288),
-        dash_lengths: Vec::new(),
-    });
+    let mut pat = HatchPattern::new(name);
+    pat.description = description.into();
+    for (deg, ox, oy) in lines {
+        pat.add_line(HatchPatternLine {
+            angle: deg.to_radians(),
+            base_point: Vector2::new(0.0, 0.0),
+            offset: Vector2::new(*ox, *oy),
+            dash_lengths: Vec::new(),
+        });
+    }
     h.pattern = pat;
     h.is_solid = false;
     h.pattern_angle = angle_deg.to_radians();
-    h.pattern_scale = 1.0;
+    h.pattern_scale = pattern_scale;
     let mut bp = BoundaryPath::new();
     bp.flags.set_external(true);
-    for i in 0..verts.len() {
-        bp.add_edge(BoundaryEdge::Line(LineEdge {
-            start: Vector2::new(verts[i][0], verts[i][1]),
-            end: Vector2::new(verts[(i + 1) % verts.len()][0], verts[(i + 1) % verts.len()][1]),
-        }));
+    for e in edges {
+        match *e {
+            HatchEdge::Line { a, b } => bp.add_edge(BoundaryEdge::Line(LineEdge {
+                start: Vector2::new(a[0], a[1]),
+                end: Vector2::new(b[0], b[1]),
+            })),
+            HatchEdge::Arc {
+                c,
+                r,
+                start_deg,
+                end_deg,
+                ccw,
+            } => bp.add_edge(BoundaryEdge::CircularArc(CircularArcEdge {
+                center: Vector2::new(c[0], c[1]),
+                radius: r,
+                start_angle: start_deg.to_radians(),
+                end_angle: end_deg.to_radians(),
+                counter_clockwise: ccw,
+            })),
+        }
     }
     h.paths.push(bp);
     set_layer(&mut h, LAYER_HATCH);
     EntityType::Hatch(h)
+}
+
+/// 同上，但边界用**闭合折线**（顶点顺序任意，闭合由工具处理）。
+pub fn hatch_ansi31_scaled(verts: &[[f64; 2]], angle_deg: f64, pattern_scale: f64) -> EntityType {
+    let edges: Vec<HatchEdge> = (0..verts.len())
+        .map(|i| HatchEdge::Line {
+            a: verts[i],
+            b: verts[(i + 1) % verts.len()],
+        })
+        .collect();
+    hatch_ansi31_edges(&edges, angle_deg, pattern_scale)
 }
 
 /// 把实体归到某图层并统一 ByLayer（颜色/线型/线宽随层）。

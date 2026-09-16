@@ -17,15 +17,16 @@
 //! - 858：d≤100 取规格 25（d=25.5 D1=34 dc=45 b=4.8 a=22 s=1 h=4）；
 //!        d≥100 取规格 160（d=161 D1=190 dc=216 b=15.5 a=156 s=2 h=8）
 //!
-//! 说明：模板 DXF 的剖视图带 `5剖面线层` ANSI31 剖面线，但用户 2026-09-16 明确
-//! 「用户参数化图不画剖面线、图元只许落 1/2/3/4 层」→ 本模块不计 Hatch。
+//! 说明：模板 DXF 的剖视图带 `5剖面线层` ANSI31 剖面线（ezdxf 复核：`圆螺母`/`止动垫圈`
+//! 剖视图各 2 片，`round_nut` angle 0/270°·scale 0.25，`lock_washer` angle 0°·scale 1.0），
+//! 本模块按模板逐片补出（边界 = 模板实测的被切材料轮廓）。
 
 use ocs_plugin_api::host::acadrust::entities::EntityType;
 
 use crate::partgen::{GenPart, PartMeta};
 use crate::partgen_kit::{
-    arc, check_length, circle, line, polyline, trim, weight_kg, Table, LAYER_CENTER, LAYER_HIDDEN,
-    LAYER_MAIN, LAYER_THIN,
+    arc, check_length, circle, hatch_ansi31_scaled, line, polyline, trim, weight_kg, Table,
+    LAYER_CENTER, LAYER_HIDDEN, LAYER_MAIN, LAYER_THIN,
 };
 
 /// 常量：sin/cos/tan 常用角。
@@ -455,6 +456,20 @@ fn round_nut_section(g: &Nut812) -> GenPart {
         en.push(line([-m, sgn * r_major], [0.0, sgn * r_major], LAYER_THIN));
     }
     en.push(line([-(m + 3.0), 0.0], [3.0, 0.0], LAYER_CENTER));
+    // ANSI31 剖面线（模板 2 片，scale 0.25，angle 下 0°/上 270°）：边界 = 被切材料轮廓。
+    // 模板 M22 实测：(-10,-10.766)-(-9.5,-9.9)-(-0.6351,-9.9)-(0,-11)-(0,-15)-(-0.4124,-15.7143)-(-10,-15.7143)。
+    let lower = [
+        [-m, -r_bore_l],
+        [-(m - c1), -r_minor],
+        [-c_r, -r_minor],
+        [0.0, -r_major],
+        [0.0, -rdk],
+        [-x_slot, -r_slot],
+        [-m, -r_slot],
+    ];
+    en.push(hatch_ansi31_scaled(&lower, 0.0, 0.25));
+    let upper: Vec<[f64; 2]> = lower.iter().map(|p| [p[0], -p[1]]).collect();
+    en.push(hatch_ansi31_scaled(&upper, 270.0, 0.25));
     GenPart {
         entities: en,
         meta: nut812_meta(g),
@@ -620,6 +635,28 @@ fn lock_washer_section(row: &LockWasherRow, large: bool) -> GenPart {
     ));
     let _ = large;
     en.push(line([-h, 0.0], [3.0, 0.0], LAYER_CENTER));
+    // ANSI31 剖面线（模板 2 片，angle 0°/scale 1.0）：上片 = 上外舌区域（6 点），
+    // 下片 = 内舌 + 下外舌区域（9 点），边界即上面两段材料轮廓。
+    en.push(hatch_ansi31_scaled(
+        &[[0.0, rh], [0.0, rb], [-delta, rt], [-delta - s, rt], [-s, rb], [-s, rh]],
+        0.0,
+        1.0,
+    ));
+    en.push(hatch_ansi31_scaled(
+        &[
+            [0.0, -rit],
+            [-s, -rit],
+            [-h, -rit],
+            [-h, -rit - s],
+            [-s, -rit - s],
+            [-s, -y],
+            [-delta - s, -rt],
+            [-delta, -rt],
+            [0.0, -y],
+        ],
+        0.0,
+        1.0,
+    ));
     GenPart {
         entities: en,
         meta: lock_washer_meta(row),
@@ -781,6 +818,7 @@ pub fn generate(family: &str, d: f64, l: f64, view: &str) -> Option<Result<GenPa
 mod tests {
     use super::*;
     use crate::partgen::{generate as gen, BoltView};
+    use crate::partgen_kit::LAYER_HATCH;
     use ocs_plugin_api::host::acadrust::entities::EntityCommon;
     use ocs_plugin_api::host::acadrust::types::Color;
 
@@ -812,7 +850,7 @@ mod tests {
         for e in &p.entities {
             let lay = common(e).layer.as_str();
             assert!(
-                [LAYER_MAIN, LAYER_THIN, LAYER_CENTER, LAYER_HIDDEN].contains(&lay),
+                [LAYER_MAIN, LAYER_THIN, LAYER_CENTER, LAYER_HIDDEN, LAYER_HATCH].contains(&lay),
                 "{fam} {view} 图层越界: {lay}"
             );
             assert!(matches!(common(e).color, Color::ByLayer), "{fam} {view} 非 ByLayer");
@@ -1102,6 +1140,176 @@ mod tests {
         // 模板 858l：上外舌尖 (-6.062,108)/(-8.062,108)，内舌尖 (-8,-75.5)
         assert!(pts.iter().any(|p| (p[0] + 6.062).abs() < 1e-3 && (p[1] - 108.0).abs() < 1e-3), "上外舌尖");
         assert!(pts.iter().any(|p| (p[0] + 8.0).abs() < 1e-3 && (p[1] + 75.5).abs() < 1e-3), "内舌尖");
+    }
+
+    /// 模板剖视图剖面线回归（片数 / angle / scale / 边界逐点）。
+    ///
+    /// 模板权威读数（ezdxf）：812 剖视 2 片 scale 0.25（下 0°/上 270°）；
+    /// 858 两段模板剖视各 2 片，均 angle 0°/scale 1.0。812 的上片在模板里以 OCS(extrusion=0,0,-1)
+    /// 存储（存储 x 为负），本库按既有规则换算为 x→−x，即“上片 = 下片关于 y=0 镜像”；
+    /// 858 两个 HATCH 都是 extrusion=+z，存储即真 WCS，无需换算。
+    #[test]
+    fn hatch_sections_match_template() {
+        use ocs_plugin_api::host::acadrust::entities::hatch::BoundaryEdge;
+        let hatches = |p: &GenPart| -> Vec<(f64, f64, Vec<[f64; 2]>)> {
+            p.entities
+                .iter()
+                .filter_map(|e| match e {
+                    EntityType::Hatch(h) => {
+                        let path = h.paths.first()?;
+                        let mut pts = Vec::new();
+                        for ed in &path.edges {
+                            match ed {
+                                BoundaryEdge::Line(l) => pts.push([l.start.x, l.start.y]),
+                                _ => return None,
+                            }
+                        }
+                        Some((h.pattern_angle.to_degrees(), h.pattern_scale, pts))
+                    }
+                    _ => None,
+                })
+                .collect()
+        };
+        let verts_match = |got: &[[f64; 2]], want: &[[f64; 2]]| -> bool {
+            got.len() == want.len()
+                && want.iter().all(|w| got.iter().any(|g| (g[0] - w[0]).abs() <= 1e-3 && (g[1] - w[1]).abs() <= 1e-3))
+        };
+
+        // ── round_nut_812 / section（M22）──
+        let p = gen("round_nut_812", 22.0, 10.0, "section").unwrap();
+        let hs = hatches(&p);
+        assert_eq!(hs.len(), 2, "812 剖视应 2 片剖面线");
+        let lower = [
+            [-10.0, -10.766],
+            [-9.5, -9.9],
+            [-0.6351, -9.9],
+            [0.0, -11.0],
+            [0.0, -15.0],
+            [-0.4124, -15.7143],
+            [-10.0, -15.7143],
+        ];
+        // 模板上片 OCS → 真 WCS（x→−x）
+        let upper: Vec<[f64; 2]> = lower.iter().map(|q| [q[0], -q[1]]).collect();
+        for (ang, scale, verts) in &hs {
+            assert!((*scale - 0.25).abs() < 1e-9, "812 scale={scale}");
+            if (*ang - 0.0).abs() < 1e-9 {
+                assert!(verts_match(verts, &lower), "812 下片边界 {verts:?}");
+            } else if (*ang - 270.0).abs() < 1e-9 {
+                assert!(verts_match(verts, &upper), "812 上片边界 {verts:?}");
+            } else {
+                panic!("812 意外 angle={ang}");
+            }
+        }
+
+        // ── lock_washer_858 / section（d≤100 规格 25、d≥100 规格 160）──
+        //
+        // 注：模板与用户 PNG 参数表给 d≥100 的 s 都 = 2.0，但矿采的
+        // `partsLockWasher858l.json` 在 d≥150 行写成 2.5（数据 bug，本次不越权改表）。
+        // 因此 d=160 的剖面线边界用生成的 s 参数化验证；d=25 直接对模板硬值。
+        for d in [25.0, 160.0] {
+            let row = lock_washer_row(lock_washer_large(d), d).unwrap();
+            let (rh, rb, rt, rit, y) = lock_washer_geom(row);
+            let s = row.s;
+            let h = row.h;
+            let delta = (rt - rb) * TAN25;
+            let lower: Vec<[f64; 2]> = vec![
+                [0.0, -rit],
+                [-s, -rit],
+                [-h, -rit],
+                [-h, -rit - s],
+                [-s, -rit - s],
+                [-s, -y],
+                [-delta - s, -rt],
+                [-delta, -rt],
+                [0.0, -y],
+            ];
+            let upper: Vec<[f64; 2]> = vec![
+                [0.0, rh],
+                [0.0, rb],
+                [-delta, rt],
+                [-delta - s, rt],
+                [-s, rb],
+                [-s, rh],
+            ];
+            let p = gen("lock_washer_858", d, s, "section").unwrap();
+            let hs = hatches(&p);
+            assert_eq!(hs.len(), 2, "858 d{d} 剖视应 2 片剖面线");
+            for (ang, scale, verts) in &hs {
+                assert!((*ang - 0.0).abs() < 1e-9, "858 d{d} angle={ang}");
+                assert!((*scale - 1.0).abs() < 1e-9, "858 d{d} scale={scale}");
+                assert!(
+                    verts_match(verts, &upper) || verts_match(verts, &lower),
+                    "858 d{d} 边界 {verts:?}"
+                );
+            }
+            // 两片必须一片上、一片下（不能都是同一片）
+            assert!(hs.iter().any(|h| verts_match(&h.2, &upper)), "858 d{d} 缺上片");
+            assert!(hs.iter().any(|h| verts_match(&h.2, &lower)), "858 d{d} 缺下片");
+        }
+        // d=25：模板实测边界逐点 ≤1e-3（模板 s=1.0 = 表 s）
+        let p = gen("lock_washer_858", 25.0, 1.0, "section").unwrap();
+        let hs = hatches(&p);
+        let tpl_upper = [
+            [0.0, 12.75],
+            [0.0, 17.0],
+            [-2.5647, 22.5],
+            [-3.5647, 22.5],
+            [-1.0, 17.0],
+            [-1.0, 12.75],
+        ];
+        let tpl_lower = [
+            [0.0, -9.25],
+            [-1.0, -9.25],
+            [-4.0, -9.25],
+            [-4.0, -10.25],
+            [-1.0, -10.25],
+            [-1.0, -16.8297],
+            [-3.5647, -22.5],
+            [-2.5647, -22.5],
+            [0.0, -16.8297],
+        ];
+        assert!(hs.iter().any(|h| verts_match(&h.2, &tpl_upper)), "858 d25 与模板上片不符");
+        assert!(hs.iter().any(|h| verts_match(&h.2, &tpl_lower)), "858 d25 与模板下片不符");
+        // d=160：表 s 已按**用户参数表 PNG + 模板 DIM** 从 164580 的 2.5 修回 2.0，
+        // 所以边界现在应与模板**逐点**一致（不再有 s 推移的容差）。
+        let row = lock_washer_row(true, 160.0).unwrap();
+        assert!((row.s - 2.0).abs() < 1e-9, "d160 的 s 应为 2（用户 PNG/模板 DIM）");
+        let p = gen("lock_washer_858", 160.0, row.s, "section").unwrap();
+        let hs = hatches(&p);
+        let tpl_upper = [
+            [0.0, 80.5],
+            [0.0, 95.0],
+            [-6.062, 108.0],
+            [-8.062, 108.0],
+            [-2.0, 95.0],
+            [-2.0, 80.5],
+        ];
+        let got = hs
+            .iter()
+            .find(|h| (h.0 - 0.0).abs() < 1e-9 && h.2.len() == 6)
+            .map(|h| h.2.clone())
+            .expect("858 d160 上片");
+        for (g, t) in got.iter().zip(tpl_upper.iter()) {
+            assert!(
+                (g[0] - t[0]).abs() <= 1e-3 && (g[1] - t[1]).abs() <= 1e-3,
+                "858 d160 上片顶点 {g:?} vs 模板 {t:?}"
+            );
+        }
+        // 下片 9 点：y 顶点必须落在模板的 {±75.5, ±77.5, ±94.6834, ±108} 上
+        let low = hs
+            .iter()
+            .find(|h| h.2.len() == 9)
+            .map(|h| h.2.clone())
+            .expect("858 d160 下片");
+        for v in &low {
+            let y = v[1].abs();
+            assert!(
+                [75.5, 77.5, 94.6834, 108.0]
+                    .iter()
+                    .any(|t| (y - t).abs() <= 1e-3),
+                "858 d160 下片 y 顶点 {v:?} 不在模板值集内"
+            );
+        }
     }
 
     /// 数据表健全性：单调、范围合理。

@@ -7,7 +7,7 @@
 //! | 族 id | 名称 | 模板（用户参数化图 DXF） | 视图 | 数据 |
 //! |---|---|---|---|---|
 //! | `bearing_297` | 圆锥滚子轴承 30000型 02系列 | `~/桌面/GB/参数化/圆锥滚子轴承_30000型_02系列_GB-T297-1994/` | main | `tables/partsBearing297.json` |
-//! | `bearing_288` | 调心滚子轴承 20000C型 | `~/桌面/GB/参数化/调心滚子轴承_20000C型_GB-T288-1994/` | main | `tables/partsBearing288.json` |
+//! | `bearing_288` | 调心滚子轴承 20000C型 | `~/桌面/GB/参数化/调心滚子轴承_20000C型_GB-T288-1994/` | main | `tables/partsBearing288.json`（已扩到 GB/T 288-1994 圆柱孔 C/CC 型全量 71 规格） |
 //!
 //! 反解工具：`target/debug/examples/ref_dump <dxf> <out.tsv>`（TSV 圆弧角度是**度**）。
 //!
@@ -650,6 +650,48 @@ mod tests {
         }
     }
 
+    /// 表规模 + 尺寸单调性（扩系列后新增的护栏）。
+    ///
+    /// - `bearing_297`：保持用户 20 行锚点——E（外圈滚道小端直径）拿不到可信在线来源，
+    ///   按“不许臆造/插值”原则不扩（详见表 `source`）。
+    /// - `bearing_288`：扩到 GB/T 288-1994 圆柱孔 `230xx/231xx/232xx/240xx/241xx` C/CC 型全量 71 行，
+    ///   新增最小规格 23218C（d90）也必须能出图。
+    #[test]
+    fn tables_expected_counts_and_monotonic_dims() {
+        use std::collections::HashSet;
+        assert_eq!(t297().rows.len(), 20, "297 应保持用户 20 行锚点（E 无来源，不扩）");
+        assert_eq!(t288().rows.len(), 71, "288 应扩到 GB/T 288-1994 C 型全量 71 行");
+        // 297：d 严格递增；D/T/B/C/E 合法且 E 落在 (d, D) 内。
+        let mut prev = 0.0;
+        let mut codes = HashSet::new();
+        for r in &t297().rows {
+            assert!(codes.insert(r.code.clone()), "297 代号重复 {}", r.code);
+            assert!(r.d > prev, "297 d 非严格递增：{}", r.code);
+            prev = r.d;
+            assert!(
+                r.od > r.d && r.t > 0.0 && r.b > 0.0 && r.c > 0.0 && r.r1 > 0.0 && r.r3 > 0.0,
+                "297 尺寸非法 {}",
+                r.code
+            );
+            assert!(r.e > r.d && r.e < r.od, "297 E 越界 {}: E={}", r.code, r.e);
+        }
+        // 288：按 d 升序排列（非递减）；D>d、B>0、r>0。
+        let mut prev = 0.0;
+        let mut codes = HashSet::new();
+        for r in &t288().rows {
+            assert!(codes.insert(r.code.clone()), "288 代号重复 {}", r.code);
+            assert!(r.d + 1e-9 >= prev, "288 d 非递增：{}", r.code);
+            prev = r.d;
+            assert!(r.od > r.d && r.b > 0.0 && r.r > 0.0, "288 尺寸非法 {}", r.code);
+        }
+        // 新增的最小规格（23218C，d90 B52.4）必须能出图。
+        let p = gen_all("bearing_288", 90.0, 52.4, "main").expect("23218C 应能出图");
+        assert!(!p.entities.is_empty());
+        // 最大新规格（24060C，d300 B160）也要能出图。
+        let p = gen_all("bearing_288", 300.0, 160.0, "main").expect("24060C 应能出图");
+        assert!(!p.entities.is_empty());
+    }
+
     // ── 模板 30202 主视图逐条数值回归（坐标/半径/角度）──
 
     fn lines_of(p: &GenPart) -> Vec<((f64, f64), (f64, f64))> {
@@ -826,8 +868,10 @@ mod tests {
         for (fam, d, l) in [
             ("bearing_297", 15.0, 11.75),
             ("bearing_297", 100.0, 37.0),
+            ("bearing_288", 90.0, 52.4),
             ("bearing_288", 110.0, 45.0),
             ("bearing_288", 240.0, 92.0),
+            ("bearing_288", 300.0, 160.0),
         ] {
             let p = gen_all(fam, d, l, "main").unwrap();
             let f = format!("/tmp/b4/{}-{}-main.svg", fam, trim(d));

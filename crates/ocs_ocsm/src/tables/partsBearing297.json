@@ -3,7 +3,7 @@
  "name": "圆锥滚子轴承 30000型 02系列",
  "code": "GB/T 297-1994",
  "iso": "—",
- "source": "用户参数表 PNG（GB/T 297-1994 30000型 02系列，30202…30220 共 20 行，列为 轴承型号/d/D/T/B/r1/C/r3/E）+ 与模板实尺图 30202 逐条核对（模板 d15 D35 T11.75 B11 C10 E27 r1=r3=0.6，主视图坐标已全部复现）。原表只到 30220；未联网扩系列（保底方案）。",
+ "source": "用户参数表 PNG（GB/T 297-1994 30000型 02系列，30202…30220 共 20 行，列为 轴承型号/d/D/T/B/r1/C/r3/E）+ 与模板实尺图 30202 逐条核对（模板 d15 D35 T11.75 B11 C10 E27 r1=r3=0.6，主视图坐标已全部复现）。本次尝试扩到 302 系列全量但**未果，保持 20 行、不臆造**：E（外圈滚道小端直径，模板左端面内径）不是 GB/T 297 的目录尺寸——Mechtool『单列圆锥滚子轴承(摘自 GB/T 297-1994)』https://www.mechtool.cn/bearing/bearing_taperedrollerbearings.html 与新版 https://www.mechtool.cn/bearing/bearing_taperedrollerbearingsnew.html（GB/T 297-2015）均只给 d/D/T/B/C/r/r1/da/db/Da/Db/a1/a2/e/Y/Y0，无 E；caloc.cn、c.zcwz.com、SKF 产品页（如 https://www.skf.com/cn/products/rolling-bearings/roller-bearings/tapered-roller-bearings/single-row-tapered-roller-bearings/productid-30220 ）、轴承型号库亦只给 d/D/T/B/C。用 360/必应检索 20 个 E 值（如 151.31、105.748）无任何带 E 列的在线表；E 也无法由 d/D/T/B/C 用统一公式反推（对 20 行拟合 (D−E)/T、(D−E)/(D−d) 等均非常数）。故按『不许臆造/插值』原则不追加任何规格；若要扩，需提供带 E 列的可信表（如原 20 行出处的手册/样本）。",
  "rows": [
   {
    "code": "30202",

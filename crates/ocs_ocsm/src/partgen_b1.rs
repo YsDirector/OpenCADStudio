@@ -548,6 +548,14 @@ fn ring893_end(row: &Ring893Row, meta: PartMeta) -> GenPart {
     en.push(line([0.0, y_out], [0.0, y_bottom], LAYER_MAIN));
     en.push(line([s, y_out], [s, y_bottom], LAYER_MAIN));
     en.push(line([-AXIS_OVER, 0.0], [s + AXIS_OVER, 0.0], LAYER_CENTER));
+    // 剖面线（模板 左视图 1 片，ANSI31 angle=0°/scale=1.0）：
+    // 边界 = 模板实测矩形 (0, y_in)-(0, y_out)-(s, y_out)-(s, y_in)，
+    // 其中 y_in = ri−e_i = 22.55、y_out = ro = 27.1、s = 2.0（规格 50）。
+    en.push(hatch_ansi31_scaled(
+        &[[0.0, y_in], [0.0, y_out], [s, y_out], [s, y_in]],
+        0.0,
+        1.0,
+    ));
     GenPart { entities: en, meta, bbox: [0.0, y_bottom, s, y_out] }
 }
 
@@ -664,6 +672,14 @@ fn ring894_end(row: &Ring894Row, meta: PartMeta) -> GenPart {
     en.push(line([0.0, y_out], [0.0, y_bottom], LAYER_MAIN));
     en.push(line([s, y_out], [s, y_bottom], LAYER_MAIN));
     en.push(line([-AXIS_OVER, 0.0], [s + AXIS_OVER, 0.0], LAYER_CENTER));
+    // 剖面线（模板 左视图 1 片，ANSI31 angle=0°/scale=1.5）：
+    // 边界 = 矩形 (0, ri)-(0, y_out)-(s, y_out)-(s, ri)；模板用 1986 版 s=1.5，
+    // 本库数据表用 2017 版 s=1.75（既有 `R894_END` 回归已按 0.30 容差记该版本差异）。
+    en.push(hatch_ansi31_scaled(
+        &[[0.0, g.ri], [0.0, y_out], [s, y_out], [s, g.ri]],
+        0.0,
+        1.5,
+    ));
     GenPart { entities: en, meta, bbox: [0.0, y_bottom, s, y_out] }
 }
 
@@ -1071,6 +1087,70 @@ const R894_END: &[Tpl] = &[
                 "{fam} 主视图不应有剖面线"
             );
         }
+    }
+
+    /// 模板 `左视图` 剖面线回归（模板片数 / angle / scale / 边界逐点）。
+    ///
+    /// 模板（ezdxf 权威读数，坐标 = 模板坐标）：
+    /// - ring_893/end：1 片 ANSI31 angle 0 scale 1.0，矩形 (0,22.55)-(0,27.1)-(2,27.1)-(2,22.55)
+    /// - ring_894/end：1 片 ANSI31 angle 0 scale 1.5，矩形 (0,18.25)-(0,23.25)-(1.5,23.25)-(1.5,18.25)
+    ///   （x=1.5 是模板 1986 版厚度；本库数据表用 2017 版 s=1.75，见 `template_regression` 的版本说明）
+    #[test]
+    fn hatch_end_views_match_template() {
+        use ocs_plugin_api::host::acadrust::entities::hatch::BoundaryEdge;
+        // 把生成件的 Hatch 边界取成闭合折线（本组端视剖面线都是直线边）
+        let hatches = |p: &GenPart| -> Vec<(f64, f64, Vec<[f64; 2]>)> {
+            p.entities
+                .iter()
+                .filter_map(|e| match e {
+                    EntityType::Hatch(h) => {
+                        let path = h.paths.first()?;
+                        let mut pts = Vec::new();
+                        for ed in &path.edges {
+                            match ed {
+                                BoundaryEdge::Line(l) => pts.push([l.start.x, l.start.y]),
+                                _ => return None,
+                            }
+                        }
+                        Some((h.pattern_angle.to_degrees(), h.pattern_scale, pts))
+                    }
+                    _ => None,
+                })
+                .collect()
+        };
+        // 顶点集比对（顺序无关；容差 = tol）。
+        let verts_match = |got: &[[f64; 2]], want: &[[f64; 2]], tol: f64| -> bool {
+            got.len() == want.len()
+                && want.iter().all(|w| got.iter().any(|g| (g[0] - w[0]).abs() <= tol && (g[1] - w[1]).abs() <= tol))
+        };
+
+        // ring_893 / end（规格 50：ro=27.1，ri=23.75，e_i=1.2 ⇒ y_in=22.55，s=2.0）
+        let p = generate("ring_893", 50.0, 2.0, "end").unwrap().unwrap();
+        let hs = hatches(&p);
+        assert_eq!(hs.len(), 1, "ring_893 左视图应 1 片剖面线");
+        assert!((hs[0].0 - 0.0).abs() < 1e-9, "angle={}", hs[0].0);
+        assert!((hs[0].1 - 1.0).abs() < 1e-9, "scale={}", hs[0].1);
+        assert!(
+            verts_match(&hs[0].2, &[[0.0, 22.55], [0.0, 27.1], [2.0, 27.1], [2.0, 22.55]], 1e-3),
+            "ring_893 左视边界 = {:?}",
+            hs[0].2
+        );
+
+        // ring_894 / end（规格 40：ri=18.25，y_out=23.25）
+        let p = generate("ring_894", 40.0, 1.75, "end").unwrap().unwrap();
+        let s = ring894_table().row(40.0).unwrap().s;
+        let hs = hatches(&p);
+        assert_eq!(hs.len(), 1, "ring_894 左视图应 1 片剖面线");
+        assert!((hs[0].0 - 0.0).abs() < 1e-9, "angle={}", hs[0].0);
+        assert!((hs[0].1 - 1.5).abs() < 1e-9, "scale={}", hs[0].1);
+        // 边界 = 本库被切材料矩形（x 用本库 s=1.75）
+        assert!(
+            verts_match(&hs[0].2, &[[0.0, 18.25], [0.0, 23.25], [s, 23.25], [s, 18.25]], 1e-3),
+            "ring_894 左视边界 = {:?}",
+            hs[0].2
+        );
+        // 模板 x=1.5 vs 本库 x=s：差值就是已知的 1986/2017 版本厚度差
+        assert!((s - 1.5 - 0.25).abs() < 1e-9, "模板/本库厚度版本差应 = 0.25");
     }
 
     // ── 导出：SVG + 叠合 ──────────────────────────────────────────────────
