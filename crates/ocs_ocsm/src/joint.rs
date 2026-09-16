@@ -251,7 +251,8 @@ pub struct Placement {
     pub spec: String,
     /// 该件采用的视图 id（默认 `main`，见 `JointSpec::view`）。
     pub view: String,
-    /// 件类：`bolt` / `nut` / `washer`（`partgen::family_kind`）。
+    /// 该件的类（`bolt`/`screw`/`nut`/`washer`/`pin`/`ring`/`bearing`/`seal`/`other`）。
+    /// 螺钉（`screw`）不是螺栓，不能进件链（`partgen::family_kind`）。
     pub kind: String,
     /// 基点沿装配轴到螺栓支承面的距离（mm）——件链的排布坐标。
     pub offset: f64,
@@ -448,13 +449,26 @@ fn parse_item(token: &str) -> Result<JointItem, String> {
     let family = family.to_ascii_lowercase();
     let (d, l) = parse_size(rest)?;
     let expected = match key.as_str() {
-        "bolt" | "screw" | "screw_bolt" => "bolt",
+        "bolt" | "screw_bolt" => "bolt",
+        "screw" | "螺钉" => {
+            return Err(
+                "件链不支持螺钉（螺钉拧入螺纹孔、不配螺母）；螺栓副请用 六角头螺栓族".into(),
+            )
+        }
         "nut" => "nut",
         "washer" => "washer",
         other => return Err(format!("未知件类型 {other}（可用 bolt/nut/washer/plate/gap，或直接写族名）")),
     };
     if partgen::family_kind(&family) != expected {
-        return Err(format!("{family} 不是{expected}族"));
+        let kind = partgen::family_kind(&family);
+        return Err(if kind == "screw" {
+            // 螺钉 ≠ 螺栓：提示上说清楚，别让人再去猜
+            format!(
+                "{family} 是螺钉（screw）——螺钉拧入螺纹孔、不配螺母，不能当件链的 {expected} 用"
+            )
+        } else {
+            format!("{family} 不是{expected}族")
+        });
     }
     item_for(family, d, l)
 }
@@ -481,6 +495,13 @@ fn item_for(family: String, d: f64, l: Option<f64>) -> Result<JointItem, String>
         "bolt" => JointItem::Bolt { family, d, l },
         "nut" => JointItem::Nut { family, d },
         "washer" => JointItem::Washer { family, d },
+        // 螺钉是另一类东西：自带头部、拧入螺纹孔，不配螺母 —— 不能当件链的"螺栓"使
+        "screw" => {
+            return Err(format!(
+                "{family} 是螺钉（screw）——螺钉拧入螺纹孔、不配螺母，不是螺栓；\
+                 件链只支持 螺栓（六角头螺栓族）/螺母/垫圈"
+            ))
+        }
         other => return Err(format!("{family} 是 {other} 类，件链里只支持螺栓/螺母/垫圈")),
     })
 }
@@ -938,6 +959,19 @@ mod tests {
         assert!(JointSpec::parse("bolt=hex_bolt_c:8 plate=10").is_err());
         assert!(JointSpec::parse("at 0,0 plate=10").is_err());
         assert!(JointSpec::parse("at 0,0 bolt=nut_c41:8").is_err());
+
+        // 螺钉 ≠ 螺栓（用户 2026-09-16）：件链两种写法都不收螺钉（拧入螺纹孔、不配螺母）
+        for probe in [
+            "at 0,0 socket_head=8:30 plate=10",       // 写法①直接写族名
+            "at 0,0 bolt=socket_head:8:30 plate=10",  // 写法②显式 bolt=
+            "at 0,0 screw=hex_bolt_c:8 plate=10",     // 旧的 screw= 别名已取消
+        ] {
+            let err = JointSpec::parse(probe).unwrap_err();
+            assert!(
+                err.contains("螺钉") || err.contains("只支持螺栓"),
+                "{probe} 应被拒且提示螺钉/螺栓之别，实际: {err}"
+            );
+        }
     }
 
     // ── 遮挡裁剪 ────────────────────────────────────────────────────────────

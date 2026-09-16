@@ -12454,10 +12454,46 @@ mod weld_tests {
         );
         assert!(cat.contains("\"M5\"") && cat.contains("lengths") && cat.contains("hex_bolt_c"), "含规格与长度系列");
         assert!(cat.contains("\"main\"") && cat.contains("\"top\"") && cat.contains("\"end\""), "三个视图");
-        // 文件树：零件库 / 螺栓 / 六角螺栓 分级 + 待实现族标注
+        // 文件树：零件库 / 螺栓 / 六角螺栓 分级
         assert!(cat.contains("零件库") && cat.contains("六角螺栓") && cat.contains("六角头螺栓 C级 GB/T 5780-2016"), "树路径");
-        assert!(cat.contains("\"implemented\":false"), "未实现族在树上标注");
-        assert!(cat.contains("1型六角螺母 GB/T 6170-2015"), "未实现常用件也列在树上");
+        assert!(cat.contains("1型六角螺母 GB/T 6170-2015"), "树上列了 1型六角螺母");
+        // 树 ↔ families 双向一致：每个带 family 的叶子必须能在 families 里找到，且名字一致
+        // （第四批起叶子由各族 `tree_path` 动态插入，这里就是那道护栏）
+        {
+            let f: serde_json::Value = serde_json::from_str(&cat).unwrap();
+            fn walk(node: &serde_json::Value, fams: &serde_json::Value, out: &mut Vec<String>) {
+                if let Some(arr) = node.as_array() {
+                    for n in arr {
+                        walk(n, fams, out);
+                    }
+                    return;
+                }
+                if let Some(family) = node.get("family").and_then(|x| x.as_str()) {
+                    let entry = &fams[family];
+                    assert!(!entry.is_null(), "树上挂了未登记族 {family}");
+                    // 叶子显示名 = 族名 + 代号（历史上两族写法不严格一致，如 5783 叶＝
+                    // 「六角头螺栓 全螺纹 GB/T 5783-2016」而族名＝「六角头全螺纹螺栓 全螺纹 B级」），
+                    // 所以只要**以族名开头 或 含该族代号**即算挂对（能挡住指错族/写错名）
+                    let leaf = node["name"].as_str().unwrap_or("");
+                    let name = entry["name"].as_str().unwrap_or("");
+                    let code = entry["code"].as_str().unwrap_or("");
+                    assert!(
+                        leaf.starts_with(name) || (!code.is_empty() && leaf.contains(code)),
+                        "族 {family} 的树名「{leaf}」应包含族名「{name}」或代号「{code}」"
+                    );
+                    out.push(family.to_string());
+                }
+                if let Some(kids) = node.get("children") {
+                    walk(kids, fams, out);
+                }
+            }
+            let mut on_tree = Vec::new();
+            walk(&f["tree"], &f["families"], &mut on_tree);
+            for fam in ["nut_6170", "ring_893", "ring_894", "set_screw_77", "round_nut_812",
+                        "lock_washer_858", "eye_bolt_825", "seal_fb", "bearing_276", "bearing_297", "bearing_288"] {
+                assert!(on_tree.contains(&fam.to_string()), "第四批族 {fam} 没挂到树上");
+            }
+        }
         // 螺母两族：**四视图**必须在目录里（曾因 views 数组为空导致 GUI 面板静默失效）
         for fam in ["nut_61721", "nut_c41"] {
             let f: serde_json::Value = serde_json::from_str(&cat).unwrap();

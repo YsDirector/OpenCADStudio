@@ -25,6 +25,11 @@ mod guide_server;
 mod guide_url;
 mod joint;
 mod partgen;
+mod partgen_b1;
+mod partgen_b2;
+mod partgen_b3;
+mod partgen_b4;
+mod partgen_kit;
 mod partgen_more;
 pub mod tolerance;
 

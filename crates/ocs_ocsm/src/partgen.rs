@@ -843,6 +843,16 @@ pub fn catalog_json() -> String {
     for (k, v) in crate::partgen_more::families_json() {
         fam_map.insert(k, v);
     }
+    // 第四批起：各族模块**自报家门**（id/name/code/views/sizes/tree_path），
+    // 本文件不再逐个登记——并行分支各写各的模块，接进来自动出现。
+    for (k, v) in crate::partgen_b1::families_json()
+        .into_iter()
+        .chain(crate::partgen_b2::families_json())
+        .chain(crate::partgen_b3::families_json())
+        .chain(crate::partgen_b4::families_json())
+    {
+        fam_map.insert(k, v);
+    }
     // 每族补一个 kind 字段（bolt/nut/washer/pin/other）：GUI 与 AI 都靠它分组，
     // 不用去猜族名前缀（`family_kind` 是唯一判据来源）。
     let families = {
@@ -863,14 +873,15 @@ pub fn catalog_json() -> String {
                     { "name": "六角头螺栓 A/B级 GB/T 5782-2016", "family": "hex_bolt_ab", "implemented": true },
                     { "name": "六角头螺栓 全螺纹 GB/T 5783-2016", "family": "hex_bolt_b_full", "implemented": true },
                     { "name": "六角头头部带孔螺栓 GB/T 32.1-2020", "family": "hex_bolt_hole_a", "implemented": true }
-                ]},
+                ]}
+            ]},
+            { "name": "螺钉", "children": [
                 { "name": "内六角", "children": [
                     { "name": "内六角圆柱头螺钉 GB/T 70.1-2008", "family": "socket_head", "implemented": true }
                 ]}
             ]},
             { "name": "螺母", "children": [
                 { "name": "六角螺母", "children": [
-                    { "name": "1型六角螺母 GB/T 6170-2015", "implemented": false },
                     { "name": "六角螺母 C级 GB/T 41-2016", "family": "nut_c41", "implemented": true }
                 ]},
                 { "name": "六角薄螺母", "children": [
@@ -885,10 +896,6 @@ pub fn catalog_json() -> String {
                     { "name": "标准型弹簧垫圈 GB/T 93-2025", "family": "washer_93", "implemented": true }
                 ]}
             ]},
-            { "name": "挡圈", "children": [
-                { "name": "孔用弹性挡圈 GB/T 893-2017", "implemented": false },
-                { "name": "轴用弹性挡圈 GB/T 894-2017", "implemented": false }
-            ]},
             { "name": "销", "children": [
                 { "name": "圆柱销", "children": [
                     { "name": "圆柱销 A型 GB/T 119.1-2000", "family": "pin_1191", "implemented": true },
@@ -897,7 +904,124 @@ pub fn catalog_json() -> String {
             ]}
         ]}
     ]);
+
+    // 树叶子动态补位：新批次的族在自己的 `families_json` 里声明**目录**，叶子名由代码统一拼
+    // （`族名 + 代号`，保证全库标签一致）：
+    //   `tree_dir = "零件库/螺钉/紧定螺钉"` → 叶子「内六角平端紧定螺钉 GB/T 77-2007」
+    // 目录路径用 `/` 分隔是安全的（目录名里不会出现代号）。
+    //
+    // 另一种写法 `tree_path`（整条路径）**必须用 `>` 分隔**：`零件库 > 螺钉 > 内六角平端紧定螺钉 GB/T 77-2007`
+    // —— 不能用 `/`，否则代号里的 `GB/T` 会被当成路径分隔符切成「…螺钉 GB」「T 77-2007」（踩过）。
+    //
+    // 注意：**螺钉不是螺栓**（用户 2026-09-16 明确）——螺钉自带头部、直接拧入螺纹孔、不配螺母，
+    // 所以树上单独一类「螺钉」；紧定螺钉（GB/T 77）与吊环螺钉（GB/T 825）也走这一支。
+    let mut tree = tree;
+    let leaves: Vec<(String, String, bool)> = families
+        .as_object()
+        .map(|obj| {
+            obj.iter()
+                .filter_map(|(key, val)| {
+                    let implemented = val.get("implemented") != Some(&serde_json::json!(false));
+                    let name = val.get("name").and_then(|v| v.as_str()).unwrap_or(key);
+                    let code = val.get("code").and_then(|v| v.as_str()).unwrap_or("");
+                    let leaf = format!("{name} {code}").trim().to_string();
+                    let path = if let Some(dir) = val.get("tree_dir").and_then(|v| v.as_str()) {
+                        format!("{}/{}", dir.trim_end_matches('/'), leaf)
+                    } else {
+                        val.get("tree_path")?.as_str()?.replace('>', "/")
+                    };
+                    Some((path, key.clone(), implemented))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    for (path, family, implemented) in leaves {
+        insert_tree_leaf(&mut tree, &path, &family, implemented);
+    }
     serde_json::json!({ "tree": tree, "families": families }).to_string()
+}
+
+/// 把 `/`（或 `>`）分隔的路径切成段。**代号里的斜杠不能当分隔符**：
+///
+/// `GB/T`、`JB/T` 这类代号自带斜杠，直接 `split('/')` 会把「内六角平端紧定螺钉 GB/T 77-2007」
+/// 切成「…螺钉 GB」+「T 77-2007」（目录与叶子全错）。这里做**代号回接**：
+/// 若上一段以标准代号前缀（GB/JB/ISO/DIN/…）结尾，就把下一段用 `/` 拼回去。
+fn split_tree_path(path: &str) -> Vec<String> {
+    const CODE_PREFIX: [&str; 12] = [
+        "GB", "JB", "Q", "ASME", "ISO", "DIN", "ANSI", "UNI", "CNS", "GOST", "HB", "QJ",
+    ];
+    let raw = path
+        .replace('>', "/")
+        .split('/')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>();
+    let mut out: Vec<String> = Vec::new();
+    for seg in raw {
+        let merge = out
+            .last()
+            .map(|prev: &String| {
+                let tail = prev.rsplit([' ', '　']).next().unwrap_or(prev.as_str());
+                CODE_PREFIX.contains(&tail)
+            })
+            .unwrap_or(false);
+        if merge {
+            let prev = out.last_mut().expect("非空");
+            prev.push('/');
+            prev.push_str(&seg);
+        } else {
+            out.push(seg);
+        }
+    }
+    out
+}
+
+/// 把族插到零件树的指定路径（`零件库/挡圈/孔用弹性挡圈 A型 GB/T 893-2017`）。
+///
+/// 缺的中间目录自动创建；同名族已存在则幂等跳过。
+fn insert_tree_leaf(tree: &mut serde_json::Value, path: &str, family: &str, implemented: bool) {
+    let segs = split_tree_path(path);
+    if !segs.is_empty() {
+        let refs: Vec<&str> = segs.iter().map(|s| s.as_str()).collect();
+        insert_leaf_rec(tree, &refs, family, implemented);
+    }
+}
+
+fn tree_children_mut(node: &mut serde_json::Value) -> Option<&mut Vec<serde_json::Value>> {
+    if node.is_array() {
+        node.as_array_mut()
+    } else {
+        node.get_mut("children").and_then(|c| c.as_array_mut())
+    }
+}
+
+fn insert_leaf_rec(node: &mut serde_json::Value, segs: &[&str], family: &str, implemented: bool) {
+    let Some(children) = tree_children_mut(node) else {
+        return;
+    };
+    if segs.len() == 1 {
+        if children
+            .iter()
+            .any(|c| c.get("family").and_then(|f| f.as_str()) == Some(family))
+        {
+            return;
+        }
+        children.push(
+            serde_json::json!({ "name": segs[0], "family": family, "implemented": implemented }),
+        );
+        return;
+    }
+    let idx = match children
+        .iter()
+        .position(|c| c.get("name").and_then(|n| n.as_str()) == Some(segs[0]))
+    {
+        Some(i) => i,
+        None => {
+            children.push(serde_json::json!({ "name": segs[0], "children": [] }));
+            children.len() - 1
+        }
+    };
+    insert_leaf_rec(&mut children[idx], &segs[1..], family, implemented);
 }
 
 /// 族的规模行（直径/螺距/长度范围/供货长度系列）——从同一份 catalog JSON 取，不另建数据源。
@@ -913,14 +1037,28 @@ pub struct SizeRow {
 
 /// 族的类型：bolt / nut / washer / pin / other（件链解析用）。
 pub fn family_kind(family: &str) -> &'static str {
-    if family.starts_with("hex_bolt") || family == "socket_head" {
+    if family.starts_with("hex_bolt") {
+        // 真·螺栓：穿孔 + 螺母（件链装配只认这一种）
         "bolt"
-    } else if family.starts_with("nut_") {
+    } else if family == "socket_head"
+        || family.starts_with("set_screw")
+        || family.starts_with("eye_bolt")
+    {
+        // 螺钉：自带头部、直接拧入螺纹孔、不配螺母 —— 与螺栓是两类东西
+        // （用户 2026-09-16 明确：螺钉从螺栓族里抽出来单独成类；也不进螺栓副装配）
+        "screw"
+    } else if family.starts_with("nut_") || family.starts_with("round_nut") {
         "nut"
-    } else if family.starts_with("washer_") {
+    } else if family.starts_with("washer_") || family.starts_with("lock_washer") {
         "washer"
     } else if family.starts_with("pin_") {
         "pin"
+    } else if family.starts_with("ring_") {
+        "ring"
+    } else if family.starts_with("bearing_") {
+        "bearing"
+    } else if family.starts_with("seal") {
+        "seal"
     } else {
         "other"
     }
@@ -970,6 +1108,17 @@ pub fn size_row(family: &str, d: f64) -> Option<SizeRow> {
 
 /// 按族/规格/视图生成零件（预览与插入共用同一入口）。
 pub fn generate(family: &str, d: f64, l: f64, view: &str) -> Result<GenPart, String> {
+    // 第四批起的族：各自模块里带完整实现（画法/数据/校验），先于本文件的历史分支派发
+    for f in [
+        crate::partgen_b1::generate,
+        crate::partgen_b2::generate,
+        crate::partgen_b3::generate,
+        crate::partgen_b4::generate,
+    ] {
+        if let Some(r) = f(family, d, l, view) {
+            return r;
+        }
+    }
     if let Some(r) = crate::partgen_more::generate(family, d, l, view) {
         return r;
     }
@@ -1846,7 +1995,8 @@ mod tests {
                 assert!(!v["name"].as_str().unwrap_or("").is_empty(), "{id} 视图缺 name");
             }
         }
-        // 树上：螺母两族、销两族都必须挂上 family（否则 GUI 里点不到）
+        // 树上：每个已上架族的叶子必须挂上 family 且名字与 families 一致
+        // （第四批起树上叶子由各族自己的 `tree_path` 动态插入，见 catalog_json）
         let tree = cat["tree"].to_string();
         for needle in [
             "六角螺母 C级 GB/T 41-2016",
@@ -1854,9 +2004,95 @@ mod tests {
             "1型六角螺母 GB/T 6170-2015",
             "nut_c41",
             "nut_61721",
+            "nut_6170",
+            // 第四批 11 族
+            "ring_893",
+            "ring_894",
+            "set_screw_77",
+            "round_nut_812",
+            "lock_washer_858",
+            "eye_bolt_825",
+            "seal_fb",
+            "bearing_276",
+            "bearing_297",
+            "bearing_288",
         ] {
             assert!(tree.contains(needle), "树里缺 {needle}");
         }
+    }
+
+    /// 螺栓 ≠ 螺钉：两类东西，各有各的 kind 与树位置（用户 2026-09-16 明确）。
+    ///
+    /// 螺钉：自带头部、直接拧入螺纹孔、不配螺母 → `screw`，且在树上是独立顶级类「螺钉」；
+    /// 螺栓：穿孔 + 螺母 → `bolt`，进件链（`joint`）的只有这一类。
+    #[test]
+    fn bolts_and_screws_are_different_kinds() {
+        for fam in ["hex_bolt_c", "hex_bolt_ab", "hex_bolt_b_full", "hex_bolt_hole_a"] {
+            assert_eq!(family_kind(fam), "bolt", "{fam} 应是螺栓");
+        }
+        for fam in ["socket_head", "set_screw_77", "eye_bolt_825"] {
+            assert_eq!(family_kind(fam), "screw", "{fam} 应是螺钉（与螺栓不同类）");
+        }
+        // 内六角圆柱头螺钉必须在「螺钉」支下，且不在「螺栓」支下
+        let cat: serde_json::Value = serde_json::from_str(&catalog_json()).expect("目录 JSON");
+        let mut found: Option<(String, Vec<String>)> = None;
+        fn walk(node: &serde_json::Value, path: &mut Vec<String>, found: &mut Option<(String, Vec<String>)>) {
+            if let Some(arr) = node.as_array() {
+                for n in arr {
+                    walk(n, path, found);
+                }
+                return;
+            }
+            if let Some(name) = node.get("name").and_then(|n| n.as_str()) {
+                path.push(name.to_string());
+            }
+            if node.get("family").and_then(|f| f.as_str()) == Some("socket_head") {
+                *found = Some(("socket_head".to_string(), path.clone()));
+            }
+            if let Some(kids) = node.get("children") {
+                walk(kids, path, found);
+            }
+            if node.get("name").is_some() {
+                path.pop();
+            }
+        }
+        walk(&cat["tree"], &mut Vec::new(), &mut found);
+        let (_, path) = found.expect("树上必须有 socket_head");
+        let joined = path.join("/");
+        assert!(
+            path.contains(&"螺钉".to_string()),
+            "内六角圆柱头螺钉应在「螺钉」支下，实际: {joined}"
+        );
+        assert!(
+            !path.contains(&"螺栓".to_string()),
+            "内六角圆柱头螺钉不该还在「螺栓」支下，实际: {joined}"
+        );
+    }
+
+    /// 零件树叶子动态插入器：同名目录复用、缺目录新建、重复插幂等。
+    ///
+    /// 第四批 11 族都由各模块声明 `tree_path` 自动上树；这个测试守住插入器的三个行为。
+    #[test]
+    fn tree_leaf_insert_is_nested_and_idempotent() {
+        let mut tree = serde_json::json!([
+            { "name": "零件库", "children": [
+                { "name": "挡圈", "children": [] }
+            ]}
+        ]);
+        // 1) 已有目录下插叶子
+        insert_tree_leaf(&mut tree, "零件库/挡圈/孔用弹性挡圈 A型 GB/T 893-2017", "ring_893", true);
+        // 2) 新目录（密封件）自动建
+        insert_tree_leaf(&mut tree, "零件库/密封件/密封圈 FB型 GB/T 13871.1-2007", "seal_fb", true);
+        // 3) 幂等：同族再插一次不会重复
+        insert_tree_leaf(&mut tree, "零件库/挡圈/孔用弹性挡圈 A型 GB/T 893-2017", "ring_893", true);
+        let s = tree.to_string();
+        assert!(s.contains("\"family\":\"ring_893\""), "挡圈叶子没插上: {s}");
+        assert_eq!(s.matches("ring_893").count(), 1, "重复插入: {s}");
+        assert!(s.contains("\"name\":\"密封件\""), "中间目录没自动建: {s}");
+        assert!(s.contains("\"family\":\"seal_fb\""), "密封圈叶子没插上: {s}");
+        // 4) 树上没有的路径（根不是数组/没有 children）不该 panic
+        let mut weird = serde_json::json!({ "name": "零件库" });
+        insert_tree_leaf(&mut weird, "零件库/挡圈/X", "ring_893", true);
     }
 }
 

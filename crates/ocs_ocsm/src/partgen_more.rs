@@ -833,6 +833,17 @@ pub fn families_json() -> serde_json::Map<String, serde_json::Value> {
 
 /// 派发（三族 × 三视图）。未命中返回 None，由调用方给通用错误。
 pub fn generate(family: &str, d: f64, l: f64, view: &str) -> Option<Result<GenPart, String>> {
+    // 第四批起的族自带完整实现（含视图校验），先问它们（partgen_b1…b4 的 `generate`）
+    for f in [
+        crate::partgen_b1::generate,
+        crate::partgen_b2::generate,
+        crate::partgen_b3::generate,
+        crate::partgen_b4::generate,
+    ] {
+        if let Some(r) = f(family, d, l, view) {
+            return Some(r);
+        }
+    }
     // 1型六角螺母：画法待用户模板（先用 6172.1 模板外推过，用户确认不对 → 暂时下架）
     if family == "nut_6170" {
         return Some(Err(
@@ -1674,6 +1685,18 @@ fn views_json(family: &str) -> serde_json::Value {
 }
 
 pub fn family_views(family: &str) -> Vec<&'static str> {
+    // 第四批起：各族在自己的模块里声明视图（本文件不再逐族登记，避免并行开发冲突）
+    for f in [
+        crate::partgen_b1::family_views,
+        crate::partgen_b2::family_views,
+        crate::partgen_b3::family_views,
+        crate::partgen_b4::family_views,
+    ] {
+        let views = f(family);
+        if !views.is_empty() {
+            return views;
+        }
+    }
     match family {
         // 六角头 C 级：用户样例给了主/俯/左三视图
         "hex_bolt_c" => vec!["main", "top", "end"],
@@ -3141,10 +3164,24 @@ mod acm_ref_tests {
             // 左视图 = 侧视，必须能生成
             assert!(crate::partgen::generate(fam, 10.0, 0.0, "end").is_ok(), "{fam} 左视图");
         }
-        // 6170 1型螺母：画法待模板 → 暂不提供（树上退回"待实现"）
-        assert!(family_views("nut_6170").is_empty(), "6170 暂不提供视图");
-        let e = crate::partgen::generate("nut_6170", 10.0, 0.0, "main").unwrap_err();
-        assert!(e.contains("暂未提供"), "6170 应报暂未提供: {e}");
+        // 6170 1型螺母：第四批 b1 按用户模板上架。这里不写死“上架/未上架”，
+        // 只守一条不变式：**上架标记与视图注册表必须一致**（曾经两者错位导致 GUI 静默失效）。
+        let cat: serde_json::Value =
+            serde_json::from_str(&crate::partgen::catalog_json()).expect("目录 JSON");
+        let n6170_on = cat["families"]["nut_6170"]["implemented"] == serde_json::json!(true);
+        let n6170_views = family_views("nut_6170");
+        assert_eq!(
+            n6170_on,
+            !n6170_views.is_empty(),
+            "6170 的上架标记与视图注册表不一致"
+        );
+        if n6170_on {
+            assert_eq!(n6170_views, vec!["main", "top", "end", "section"], "6170 四视图");
+            assert!(crate::partgen::generate("nut_6170", 10.0, 0.0, "main").is_ok(), "6170 主视图");
+        } else {
+            let e = crate::partgen::generate("nut_6170", 10.0, 0.0, "main").unwrap_err();
+            assert!(e.contains("暂未提供"), "6170 应报暂未提供: {e}");
+        }
         assert_eq!(family_views("nut_61721"), vec!["main", "top", "end", "section"], "薄螺母四视图");
         assert_eq!(family_views("nut_c41"), vec!["main", "top", "end", "section"], "C级四视图");
         // 目录 JSON 里各族 views 与注册表一致
