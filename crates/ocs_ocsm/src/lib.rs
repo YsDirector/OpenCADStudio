@@ -65,7 +65,7 @@ static MANIFEST: PluginManifest = PluginManifest {
         "OCSMPART", "XL", "OCSMJOINT", "OCSMHELP", "OH", "OCSMBOM", "BOM", "BOMSYNC", "OCSMBOMSYNC", "OCSMBOMCFG", "BOMCFG",
         "OCSMBOMEDIT", "BOMEDIT", "OCSMBOMLOCK", "BOMLOCK", "OCSMBOMXLSX", "BOMXLSX", "OCSMBOMXLSXI", "BOMXLSXI",
         "OCSMCENTERLINE", "ZX",
-        "OCSMGEAR", "CL",
+        "OCSMGEAR",
     ],
 };
 
@@ -1303,7 +1303,7 @@ impl BuiltinPlugin for OcsmPlugin {
                 true
             }
             // 齿轮（外齿轮 / 内齿轮）：不带参数 = 齿轮窗口 + 放置态；带参数 = 一行直插
-            "OCSMGEAR" | "CL" => {
+            "OCSMGEAR" => {
                 self.cmd_gear(host, rest);
                 true
             }
@@ -1606,7 +1606,7 @@ impl OcsmPlugin {
         }));
     }
 
-    /// `OCSMGEAR` / `CL`：齿轮出图（外齿轮一期 / **内齿轮二期**）。
+    /// `OCSMGEAR`：齿轮出图（外齿轮 / 内齿轮）。
     ///
     /// * 不带参数 = 人类侧：开齿轮窗口（参数表 + 视图按钮 + 实时预览）+ 进放置态；
     ///   窗口里点「生成到图纸」→ 回图纸点基点 → 移动光标旋转 → 再点落定。
