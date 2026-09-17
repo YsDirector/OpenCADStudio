@@ -1724,11 +1724,12 @@ impl OcsmPlugin {
         }));
     }
 
-    /// `OCSMSHAFT`：轴生成器（一期骨架）——行 DSL / JSON → 单视图侧视图。
+    /// `OCSMSHAFT`：轴生成器——行 DSL / JSON → 单视图侧视图。
     ///
     /// 不带参数 = 打印用法；带参数 = 解析 → 校验/生成 → 按 `at`/`rot` 放置 →
     /// 一次撤销直插（与 `OCSMCENTERLINE` 同一条落图路径：`add_entities`）。
-    /// 不标尺寸、不打剖面线；轮廓 `1轮廓实线层`、砂轮细线 `2细线层`、轴线 `3中心线层`。
+    /// 不标尺寸、不打剖面线；轮廓/端面/倒角/退刀槽/齿根线 `1轮廓实线层`、
+    /// 砂轮细线 `2细线层`、轴线与分度线 `3中心线层`。
     fn cmd_shaft(&self, host: &mut dyn HostApi, args: &str) {
         if args.trim().is_empty() {
             host.push_output(crate::shaft::USAGE);

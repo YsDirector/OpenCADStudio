@@ -3911,7 +3911,7 @@ pub const COMMAND_CATALOG: &[(&str, &str, &str)] = &[
     ("OCSMDIMGULIDE", "GDIM", "引导线标注：选引导线 → 配置窗口（尺寸/剖视/向视/局部放大/角度/弧长/焊接/引线/序号/公差/粗糙度/形位公差）"),
     ("OCSMCENTERLINE", "ZX", "中心线：点圆/圆弧 → 十字中心线；点两根直线 → 角平分线中心线（`3中心线层`，线长 = 直径/投影长 + 图框比例×6mm）"),
     ("OCSMGEAR", "", "齿轮（外齿轮 / 内齿轮（齿圈））：不带参数=开齿轮窗口（参数 + 视图按钮 + 实时预览）；带参数=一行直插（`OCSMGEAR 2 40 20 view 剖视图`、`OCSMGEAR int 2 40 30 view 端视图`）。内齿轮只有剖视图+端视图（用户模板只有这两个），且剖视图**不打剖面线**（齿圈外壁留用户延伸）"),
-    ("OCSMSHAFT", "", "轴生成器（一期骨架）：行 DSL/JSON → 单视图侧视图（段拼接 + 端面倒角 + 砂轮越程槽）；不带参数=打印用法。`OCSMSHAFT S30 E30 L45 CH2@L | S40 E40 L30 CH2@R OV3 | … at x,y rot 度`"),
+    ("OCSMSHAFT", "", "轴生成器：行 DSL/JSON → 单视图侧视图（段拼接 + 端面倒角 + 砂轮越程槽 + 螺纹退刀槽 ES + 齿轮段 GEAR）；不带参数=打印用法。`OCSMSHAFT S30 E30 L45 CH2@L | S40 E40 L30 CH2@R OV3 | S40 E40 L12 ES5*3 | GEAR M3 Z20 at x,y rot 度`"),
     ("OCSMEDIT", "ME", "改标注：选中 OCSM 生成的标注 → 配置窗口改参数 → 重生成"),
     ("OCSMRGH", "CC", "表面粗糙度：点选插入点 → 配置窗口（匿名块 + ATTDEF）"),
     ("OCSMDIM2GB", "D2G", "一键转国标：原生标注 → OCSM_GB 样式 + 匿名块；智能圆心标记（CENTERMARK）一并换成 `3中心线层` 中心线（Ø + 图框比例×6）"),

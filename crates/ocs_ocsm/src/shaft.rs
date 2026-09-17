@@ -1,8 +1,8 @@
-//! **轴生成器（一期骨架）**：行 DSL / JSON → 单视图侧视图（`OCSMSHAFT`）。
+//! **轴生成器**：行 DSL / JSON → 单视图侧视图（`OCSMSHAFT`）。
 //!
 //! 本文件只做三件事：**解析**、**段拼接几何**、**落层/放置**。
-//! 不标尺寸、不打剖面线、不建块；GUI 与更复杂特征（键槽/退刀槽/螺纹/齿轮/中心孔）
-//! 留二期——行 DSL 里出现这些关键字会明确报「二期未实现」，不静默忽略。
+//! 不标尺寸、不打剖面线、不建块；更复杂特征（键槽/螺纹/中心孔）仍留二期——
+//! 行 DSL 里出现这些关键字会明确报「二期未实现」，不静默忽略。
 //!
 //! ## 行 DSL（一行一段，从左到右拼接）
 //!
@@ -12,14 +12,32 @@
 //! S40 E40 L30 CH2@R OV3
 //! S50 E30 L20
 //! S30 E30 L15 CH2@R
+//! S40 E40 L12 ES5*3
+//! GEAR M3 Z20
 //! ```
 //!
 //! - `S` 起始直径（靠左）、`E` 终点直径（省略 = 圆柱段，`E=S`）、`L` 段长（必给）；
 //! - `CH2@L` / `CH2@R`：端面倒角 C2，贴该段左/右端（`@` 省略默认右端）；
 //! - `OV` / `OV3` / `OV3@L`：磨外圆砂轮越程槽（GB/T 6403.5），不写值 = 按该端
 //!   直径查表；`@` 省略默认右端；
+//! - `ES5*3` / `ES5*3@L`：**螺纹退刀槽**（GB 常规，矩形直槽），轴向宽 b=5 ×
+//!   径向深 h=3，贴段端（`@` 省略默认右端）；槽底半径 = 该端直径/2 − h，
+//!   槽沿端面占 b；只能开在圆柱端；
+//! - `GEAR M5 Z10 H20`：**齿轮段（直齿）**，分度圆 d = m·z 由参数导出、**不给
+//!   S/E**；H = 齿宽（省略 = 10m）；齿顶线 = 该段轮廓（粗实线）、分度线
+//!   （点划线）/齿根线（粗实线）画在内部；齿形用 `OCSMGEAR` 单独出，这里不画齿、
+//!   本期不做斜齿（`BETA…` 报二期）；
 //! - 多段可用 `|` 或换行分隔；行尾可跟放置参数 `at x,y rot 度`；
 //! - 解析错误报「第 N 行（第 k 段）：…」，几何错误报「第 N 段：…」。
+//!
+//! ## 齿轮段画法口径（侧视图，GB 简化画法）
+//!
+//! 齿顶线 ra = d/2 + m（= `1轮廓实线层`，即该段上下轮廓）、分度线 r = d/2
+//! （`3中心线层`，点划线）、齿根线 rf = d/2 − 1.25m（`1轮廓实线层`）三条线都
+//! 贯穿该段；分度线/齿根线上下各一条、画在齿顶线内部。派生尺寸取 `gear.rs`
+//! 同口径（ha*=1、c*=0.25、Xn=0 → ra = da/2、rf = df/2），不自己另立公式。
+//! 齿轮段与相邻段的过渡按台阶处理（不做过渡圆角）；相邻段轮廓半径若要跨过
+//! 齿根线/齿顶线（齿根 < r邻 < 齿顶，或 r邻 > 齿顶）一律报「第 N 段」。
 //!
 //! ## 几何口径（单视图侧视图）
 //!
@@ -32,8 +50,9 @@
 //!   定案口径（待用户复核）。
 //! - `OV` 复用 `detail.rs` 的查表与画法（R 圆角/槽底/45° 斜坡/砂轮细线），
 //!   只要求台阶面一侧更高、且槽落在圆柱端；
-//! - 落层：轮廓/端面/倒角 → `1轮廓实线层`；砂轮细线 → `2细线层`；
-//!   轴线 → `3中心线层`（点划线，长度 = 总长 + 图框比例 × 6，两端各半）。
+//! - 落层：轮廓/端面/倒角/退刀槽轮廓/齿根线 → `1轮廓实线层`；砂轮细线 →
+//!   `2细线层`；轴线与分度线 → `3中心线层`（点划线，轴线长度 = 总长 +
+//!   图框比例 × 6，两端各半）。
 //!
 //! ## JSON（同一模型，给以后的 GUI/HTTP）
 //!
@@ -46,19 +65,23 @@ use ocs_plugin_api::host::acadrust::types::Vector3;
 use serde::Deserialize;
 
 use crate::detail;
+use crate::gear::{GearKind, GearParams};
 use crate::partgen_kit::{line, trim, LAYER_CENTER, LAYER_MAIN};
 
 /// `OCSMSHAFT` 不带参数时打印的用法。
 pub const USAGE: &str = "\
-OCSMSHAFT 轴生成器（一期骨架）：行 DSL / JSON → 单视图侧视图（段拼接 + 端面倒角 + 砂轮越程槽）。
+OCSMSHAFT 轴生成器：行 DSL / JSON → 单视图侧视图（段拼接 + 端面倒角 + 砂轮越程槽 + 螺纹退刀槽 ES + 齿轮段 GEAR）。
 用法：OCSMSHAFT <行 DSL 或 JSON>
   行 DSL：一行一段，从左到右拼接；多段用 | 或换行分隔；大小写不敏感、段内关键字顺序无关
-    S 起始直径（靠左）   E 终点直径（省略 = 圆柱段 E=S）   L 段长（必给）
+    S 起始直径（靠左）   E 终点直径（省略 = 圆柱段 E=S）   L 段长（必给；齿轮段用 H 代替）
     CH2@L / CH2@R   端面倒角 C2（@ 省略默认 R）    OV / OV3 / OV3@L   砂轮越程槽
+    ES5*3 / ES5*3@L   螺纹退刀槽：轴向宽 5 × 径向深 3（贴段端，@ 省略默认 R，只能圆柱端）
+    GEAR M5 Z10 H20   齿轮段（直齿）：d=m·z 导出、不给 S/E；H = 齿宽（省略 = 10m）
+                      齿顶线 = 该段轮廓，分度线（点划线）/齿根线（粗实线）画在内部
     at x,y rot 度   放置（不写 = 原点、不转）
-  例：OCSMSHAFT S30 E30 L45 CH2@L | S40 E40 L30 CH2@R OV3 | S50 E30 L20 | S30 E30 L15 CH2@R at 100,50 rot 30
+  例：OCSMSHAFT S30 E30 L45 CH2@L | S40 E40 L30 CH2@R OV3 | S50 E30 L20 | S30 E30 L15 CH2@R | S40 E40 L12 ES5*3 | GEAR M3 Z20 at 100,50 rot 30
   JSON：{\"segments\":[{\"s\":30,\"e\":30,\"l\":45,\"ch\":[{\"c\":2,\"end\":\"L\"}]}],\"at\":[100,50],\"rot\":30}
-不标尺寸、不打剖面线；轮廓 → 1轮廓实线层，砂轮细线 → 2细线层，轴线 → 3中心线层。";
+不标尺寸、不打剖面线；轮廓/端面/倒角/退刀槽/齿根线 → 1轮廓实线层，砂轮细线 → 2细线层，轴线/分度线 → 3中心线层。";
 
 // ══════════════════════════════════════════════════════════════════════════
 // 数据模型
@@ -92,19 +115,108 @@ pub struct Overtravel {
     pub end: End,
 }
 
+/// 螺纹退刀槽（ES）：矩形直槽，轴向宽 b、径向深 h，贴该段端面。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Relief {
+    /// 轴向宽 b（> 0，< 段长）。
+    pub b: f64,
+    /// 径向深 h（> 0，< 该端直径/2）。
+    pub h: f64,
+    /// 所在端。
+    pub end: End,
+}
+
+/// 齿轮段参数（本期：**外齿轮、直齿**）。派生尺寸统一走 [`GearParams`]（gear.rs 口径）。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Gear {
+    /// 模数 m（> 0）。
+    pub m: f64,
+    /// 齿数 z（整数，2..=1000，与 gear.rs 一致）。
+    pub z: u32,
+    /// 齿宽 H；`None` = 10m。
+    pub h: Option<f64>,
+    /// 螺旋角 β（度）；本期只支持 0（斜齿 = 二期）。
+    pub beta_deg: f64,
+}
+
+impl Gear {
+    /// 齿宽（H 省略 = 10m）。
+    pub fn width(&self) -> f64 {
+        self.h.unwrap_or(10.0 * self.m)
+    }
+
+    /// 与 `gear.rs` 同口径的齿轮参数（外齿轮、ha*=1、c*=0.25、Xn=0、直齿）。
+    pub fn params(&self) -> GearParams {
+        GearParams {
+            kind: GearKind::External,
+            m: self.m,
+            z: self.z,
+            beta_deg: self.beta_deg,
+            h: self.width(),
+            ..GearParams::default()
+        }
+    }
+
+    /// 分度圆半径 r = d/2（= m·z/2）。
+    pub fn pitch_radius(&self) -> f64 {
+        self.params().d() / 2.0
+    }
+
+    /// 齿顶圆半径 ra = da/2（外齿轮 = d/2 + m）。
+    pub fn addendum_radius(&self) -> f64 {
+        self.params().da() / 2.0
+    }
+
+    /// 齿根圆半径 rf = df/2（外齿轮 = d/2 − 1.25m）。
+    pub fn root_radius(&self) -> f64 {
+        self.params().df() / 2.0
+    }
+}
+
 /// 一段轴（从左到右）。
 #[derive(Debug, Clone, PartialEq)]
 pub struct Segment {
-    /// 起始直径（左端）。
+    /// 起始直径（左端）。齿轮段 = 分度圆直径（由 M·Z 导出）。
     pub s: f64,
-    /// 终点直径（右端）。
+    /// 终点直径（右端）。齿轮段 = 分度圆直径。
     pub e: f64,
-    /// 段长。
+    /// 段长。齿轮段 = H（省略 10m）。
     pub l: f64,
     /// 倒角（同一端最多一个）。
     pub ch: Vec<Chamfer>,
     /// 越程槽（同一端最多一个）。
     pub ov: Vec<Overtravel>,
+    /// 螺纹退刀槽（同一端最多一个）。
+    pub es: Vec<Relief>,
+    /// 齿轮段参数（`None` = 普通轴段）。
+    pub gear: Option<Gear>,
+}
+
+impl Segment {
+    /// 某端退刀槽。
+    pub fn es_at(&self, end: End) -> Option<&Relief> {
+        self.es.iter().find(|es| es.end == end)
+    }
+
+    /// 某端的**外轮廓半径**（齿轮段 = 齿顶圆半径；不含退刀槽）。
+    pub fn outer_radius(&self, end: End) -> f64 {
+        if let Some(gear) = &self.gear {
+            return gear.addendum_radius();
+        }
+        match end {
+            End::L => self.s / 2.0,
+            End::R => self.e / 2.0,
+        }
+    }
+
+    /// 某端的**最终轮廓半径**（退刀槽底 = 外轮廓 − h；齿轮段 = 齿顶圆）。
+    pub fn profile_radius(&self, end: End) -> f64 {
+        let radius = self.outer_radius(end);
+        match self.es_at(end) {
+            Some(es) => radius - es.h,
+            None => radius,
+        }
+    }
 }
 
 /// 解析结果：段序列 + 放置参数（`at` / `rot` 由命令层应用）。
@@ -151,7 +263,8 @@ pub fn parse_program(text: &str) -> Result<Program, String> {
             let label = if multi {
                 format!("第 {line_no} 行第 {} 段", chunk_idx + 1)
             } else {
-                format!("第 {line_no} 行")
+                // 单段行也带上「第 N 段」，便于用户按段定位（与几何错误口径一致）。
+                format!("第 {line_no} 行（第 {} 段）", program.segments.len() + 1)
             };
             let first = chunk.split_whitespace().next().unwrap_or("");
             if first.eq_ignore_ascii_case("at") || first == "@" {
@@ -169,7 +282,7 @@ pub fn parse_program(text: &str) -> Result<Program, String> {
 }
 
 fn unknown_keyword(token: &str, label: &str) -> String {
-    format!("{label}：关键字「{token}」二期未实现（本期只支持 S/E/L/CH/OV）")
+    format!("{label}：关键字「{token}」二期未实现（本期只支持 S/E/L/CH/OV/ES/GEAR）")
 }
 
 fn starts_number(s: &str) -> bool {
@@ -280,11 +393,50 @@ fn parse_ov(token: &str, rest: &str, label: &str) -> Result<Overtravel, String> 
     })
 }
 
+fn parse_es(rest: &str, label: &str) -> Result<Relief, String> {
+    let rest = rest.strip_prefix(['=', ':']).unwrap_or(rest);
+    if rest.is_empty() {
+        return Err(format!(
+            "{label}：关键字 ES 缺少数值（写法 ES<宽>*<深>，如 ES5*3 / ES5*3@L）"
+        ));
+    }
+    let (value, end) = split_end(rest);
+    let Some((b, h)) = value.split_once('*') else {
+        return Err(format!(
+            "{label}：关键字 ES 缺径向深（写法 ES<宽>*<深>，如 ES5*3）"
+        ));
+    };
+    let b = parse_number(b, label, "ES")?;
+    let h = parse_number(h, label, "ES")?;
+    if b <= 0.0 {
+        return Err(format!(
+            "{label}：关键字 ES 的槽宽 b={} 非法（必须 > 0）",
+            trim(b)
+        ));
+    }
+    if h <= 0.0 {
+        return Err(format!(
+            "{label}：关键字 ES 的槽深 h={} 非法（必须 > 0）",
+            trim(h)
+        ));
+    }
+    Ok(Relief {
+        b,
+        h,
+        end: parse_end_token(end, label, "ES")?,
+    })
+}
+
 fn parse_segment(chunk: &str, label: &str, program: &mut Program) -> Result<Segment, String> {
     let tokens: Vec<&str> = chunk.split_whitespace().collect();
     let (mut s, mut e, mut l) = (None, None, None);
     let mut ch: Vec<Chamfer> = Vec::new();
     let mut ov: Vec<Overtravel> = Vec::new();
+    let mut es: Vec<Relief> = Vec::new();
+    // GEAR 子关键字（M/Z/H/BETA）先收齐，段内顺序无关；没有 GEAR 时仍是二期关键字。
+    let mut gear_on = false;
+    let (mut gear_m, mut gear_z, mut gear_h, mut gear_beta) = (None, None, None, None);
+    let mut loose_gear_token: Option<String> = None;
     let mut index = 0;
     while index < tokens.len() {
         let token = tokens[index];
@@ -312,6 +464,53 @@ fn parse_segment(chunk: &str, label: &str, program: &mut Program) -> Result<Segm
                 ));
             }
             ov.push(item);
+        } else if upper.starts_with("ES") {
+            let item = parse_es(&token[2..], label)?;
+            if es.iter().any(|x| x.end == item.end) {
+                return Err(format!(
+                    "{label}：关键字 ES 在{}端重复",
+                    end_cn(item.end)
+                ));
+            }
+            es.push(item);
+        } else if upper == "GEAR" {
+            if gear_on {
+                return Err(format!("{label}：关键字 GEAR 重复"));
+            }
+            gear_on = true;
+        } else if upper.starts_with("GEAR") {
+            return Err(unknown_keyword(token, label));
+        } else if upper.starts_with('M') {
+            let value = parse_gear_number(token, 1, "M", label)?;
+            if gear_m.is_some() {
+                return Err(format!("{label}：关键字 M 重复"));
+            }
+            gear_m = Some(value);
+            remember_loose_gear_token(&mut loose_gear_token, token);
+        } else if upper.starts_with('Z') {
+            let rest = parse_gear_value(token, 1, "Z", label)?;
+            let value: u32 = rest.parse().map_err(|_| {
+                format!("{label}：关键字 Z 的值「{rest}」不是正整数（齿数 z 必须是整数）")
+            })?;
+            if gear_z.is_some() {
+                return Err(format!("{label}：关键字 Z 重复"));
+            }
+            gear_z = Some(value);
+            remember_loose_gear_token(&mut loose_gear_token, token);
+        } else if upper.starts_with('H') {
+            let value = parse_gear_number(token, 1, "H", label)?;
+            if gear_h.is_some() {
+                return Err(format!("{label}：关键字 H 重复"));
+            }
+            gear_h = Some(value);
+            remember_loose_gear_token(&mut loose_gear_token, token);
+        } else if upper.starts_with("BETA") {
+            let value = parse_gear_number(token, 4, "BETA", label)?;
+            if gear_beta.is_some() {
+                return Err(format!("{label}：关键字 BETA 重复"));
+            }
+            gear_beta = Some(value);
+            remember_loose_gear_token(&mut loose_gear_token, token);
         } else if upper.starts_with('S') {
             if !looks_like_keyword_value(&token[1..]) {
                 return Err(unknown_keyword(token, label));
@@ -341,16 +540,100 @@ fn parse_segment(chunk: &str, label: &str, program: &mut Program) -> Result<Segm
         }
         index += 1;
     }
-    let s = s.ok_or_else(|| format!("{label}：缺少 S（起始直径）"))?;
-    // E 省略 = 圆柱段；L 必给。
-    let l = l.ok_or_else(|| format!("{label}：缺少 L（段长）"))?;
+    if !gear_on {
+        // 没有 GEAR 的 M/Z/H/BETA 仍按二期关键字报（不静默忽略）。
+        if let Some(token) = loose_gear_token {
+            return Err(unknown_keyword(&token, label));
+        }
+        let s = s.ok_or_else(|| format!("{label}：缺少 S（起始直径）"))?;
+        // E 省略 = 圆柱段；L 必给。
+        let l = l.ok_or_else(|| format!("{label}：缺少 L（段长）"))?;
+        return Ok(Segment {
+            s,
+            e: e.unwrap_or(s),
+            l,
+            ch,
+            ov,
+            es,
+            gear: None,
+        });
+    }
+    // ── 齿轮段：直径由 M·Z 导出、长度用 H；CH/OV/ES 同段冲突 ──
+    if s.is_some() || e.is_some() {
+        return Err(format!("{label}：齿轮段不给 S/E（直径由 M·Z 导出）"));
+    }
+    if l.is_some() {
+        return Err(format!(
+            "{label}：齿轮段长度用 H（省略 = 10m），不要再给 L"
+        ));
+    }
+    if !ch.is_empty() {
+        return Err(format!(
+            "{label}：齿轮段不能与倒角 CH 同段（齿形用 OCSMGEAR 单独出）"
+        ));
+    }
+    if !ov.is_empty() {
+        return Err(format!("{label}：齿轮段不能与越程槽 OV 同段"));
+    }
+    if !es.is_empty() {
+        return Err(format!("{label}：齿轮段不能与退刀槽 ES 同段"));
+    }
+    let m = gear_m.ok_or_else(|| format!("{label}：关键字 GEAR 缺少 M（模数）"))?;
+    let z = gear_z.ok_or_else(|| format!("{label}：关键字 GEAR 缺少 Z（齿数）"))?;
+    let beta_deg = gear_beta.unwrap_or(0.0);
+    if beta_deg.abs() > 1e-9 {
+        return Err(format!(
+            "{label}：关键字 BETA 的斜齿（β={}°）二期未实现，本期只做直齿",
+            trim(beta_deg)
+        ));
+    }
+    let gear = Gear {
+        m,
+        z,
+        h: gear_h,
+        beta_deg,
+    };
+    let params = gear.params();
+    params
+        .validate()
+        .map_err(|e| format!("{label}：齿轮段：{e}"))?;
+    let d = params.d();
     Ok(Segment {
-        s,
-        e: e.unwrap_or(s),
-        l,
+        s: d,
+        e: d,
+        l: gear.width(),
         ch,
         ov,
+        es,
+        gear: Some(gear),
     })
+}
+
+/// GEAR 子关键字（M/Z/H/BETA）：`M=5` / `M5` 都收；缺值报错。
+fn parse_gear_value<'a>(
+    token: &'a str,
+    prefix_len: usize,
+    what: &str,
+    label: &str,
+) -> Result<&'a str, String> {
+    let rest = &token[prefix_len..];
+    let rest = rest.strip_prefix(['=', ':']).unwrap_or(rest);
+    if rest.is_empty() {
+        return Err(format!("{label}：关键字 {what} 缺少数值"));
+    }
+    Ok(rest)
+}
+
+fn parse_gear_number(token: &str, prefix_len: usize, what: &str, label: &str) -> Result<f64, String> {
+    let rest = parse_gear_value(token, prefix_len, what, label)?;
+    parse_number(rest, label, what)
+}
+
+/// 没有 GEAR 时记住第一个 M/Z/H/BETA 原文（到段尾统一报二期未实现）。
+fn remember_loose_gear_token(slot: &mut Option<String>, token: &str) {
+    if slot.is_none() {
+        *slot = Some(token.to_string());
+    }
 }
 
 fn is_rot(token: &str) -> bool {
@@ -446,14 +729,20 @@ struct JsonProgram {
 
 #[derive(serde::Deserialize)]
 struct JsonSegment {
-    s: f64,
+    #[serde(default)]
+    s: Option<f64>,
     #[serde(default)]
     e: Option<f64>,
-    l: f64,
+    #[serde(default)]
+    l: Option<f64>,
     #[serde(default, deserialize_with = "one_or_many")]
     ch: Vec<JsonChamfer>,
     #[serde(default, deserialize_with = "one_or_many")]
     ov: Vec<JsonOvertravel>,
+    #[serde(default, deserialize_with = "one_or_many")]
+    es: Vec<JsonRelief>,
+    #[serde(default)]
+    gear: Option<JsonGear>,
 }
 
 #[derive(serde::Deserialize)]
@@ -469,6 +758,24 @@ struct JsonOvertravel {
     b1: Option<f64>,
     #[serde(default)]
     end: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+struct JsonRelief {
+    b: f64,
+    h: f64,
+    #[serde(default)]
+    end: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+struct JsonGear {
+    m: f64,
+    z: u32,
+    #[serde(default)]
+    h: Option<f64>,
+    #[serde(default)]
+    beta: Option<f64>,
 }
 
 /// `at` 允许 `[x,y]` / `"x,y"` / `{"x":…,"y":…}`。
@@ -539,12 +846,84 @@ fn parse_json(text: &str) -> Result<Program, String> {
             }
             ov.push(Overtravel { b1: value.b1, end });
         }
+        let mut es = Vec::new();
+        for (k, value) in item.es.iter().enumerate() {
+            let end = match &value.end {
+                None => End::R,
+                Some(text) => parse_end(text).map_err(|bad| {
+                    format!("第 {number} 段：es[{k}] 的端别「{bad}」非法（只能用 L 或 R）")
+                })?,
+            };
+            if es.iter().any(|x: &Relief| x.end == end) {
+                return Err(format!("第 {number} 段：es 在{}端重复", end_cn(end)));
+            }
+            es.push(Relief {
+                b: value.b,
+                h: value.h,
+                end,
+            });
+        }
+        // 齿轮段：直径由 m·z 导出、长度用 h；不给 s/e/l，且与 CH/OV/ES 同段冲突。
+        if let Some(g) = &item.gear {
+            if item.s.is_some() || item.e.is_some() {
+                return Err(format!("第 {number} 段：齿轮段不给 s/e（直径由 m·z 导出）"));
+            }
+            if item.l.is_some() {
+                return Err(format!(
+                    "第 {number} 段：齿轮段长度用 h（省略 = 10m），不要再给 l"
+                ));
+            }
+            if !ch.is_empty() {
+                return Err(format!("第 {number} 段：齿轮段不能与倒角 ch 同段"));
+            }
+            if !ov.is_empty() {
+                return Err(format!("第 {number} 段：齿轮段不能与越程槽 ov 同段"));
+            }
+            if !es.is_empty() {
+                return Err(format!("第 {number} 段：齿轮段不能与退刀槽 es 同段"));
+            }
+            let gear = Gear {
+                m: g.m,
+                z: g.z,
+                h: g.h,
+                beta_deg: g.beta.unwrap_or(0.0),
+            };
+            if gear.beta_deg.abs() > 1e-9 {
+                return Err(format!(
+                    "第 {number} 段：齿轮段斜齿（beta={}）二期未实现，本期只做直齿",
+                    trim(gear.beta_deg)
+                ));
+            }
+            let params = gear.params();
+            params
+                .validate()
+                .map_err(|e| format!("第 {number} 段：齿轮段：{e}"))?;
+            let d = params.d();
+            segments.push(Segment {
+                s: d,
+                e: d,
+                l: gear.width(),
+                ch,
+                ov,
+                es,
+                gear: Some(gear),
+            });
+            continue;
+        }
+        let s = item
+            .s
+            .ok_or_else(|| format!("第 {number} 段：缺少 s（起始直径）"))?;
+        let l = item
+            .l
+            .ok_or_else(|| format!("第 {number} 段：缺少 l（段长）"))?;
         segments.push(Segment {
-            s: item.s,
-            e: item.e.unwrap_or(item.s),
-            l: item.l,
+            s,
+            e: item.e.unwrap_or(s),
+            l,
             ch,
             ov,
+            es,
+            gear: None,
         });
     }
     if raw.rot.is_some_and(|v| !v.is_finite()) {
@@ -640,6 +1019,87 @@ pub fn validate(program: &Program) -> Result<(), String> {
                 }
             }
         }
+        for es in &seg.es {
+            if !es.b.is_finite() || es.b <= 0.0 {
+                return Err(format!(
+                    "第 {number} 段：退刀槽宽 b={} 必须 > 0",
+                    trim(es.b)
+                ));
+            }
+            if !es.h.is_finite() || es.h <= 0.0 {
+                return Err(format!(
+                    "第 {number} 段：退刀槽深 h={} 必须 > 0",
+                    trim(es.h)
+                ));
+            }
+            if es.b > seg.l + 1e-9 {
+                return Err(format!(
+                    "第 {number} 段：退刀槽 b={} > 段长 l={}",
+                    trim(es.b),
+                    trim(seg.l)
+                ));
+            }
+            if (es.b - seg.l).abs() <= 1e-9 {
+                return Err(format!(
+                    "第 {number} 段：退刀槽 b={} 占满整个段长 l={}（没有剩余轮廓可画，至少留一点）",
+                    trim(es.b),
+                    trim(seg.l)
+                ));
+            }
+            let radius = match es.end {
+                End::L => seg.s / 2.0,
+                End::R => seg.e / 2.0,
+            };
+            if es.h >= radius - 1e-12 {
+                return Err(format!(
+                    "第 {number} 段：{}端退刀槽深 h={} ≥ 端面半径 {}（切到轴线）",
+                    end_cn(es.end),
+                    trim(es.h),
+                    trim(radius)
+                ));
+            }
+            if seg.ch.iter().any(|c| c.end == es.end) {
+                return Err(format!(
+                    "第 {number} 段：{}端退刀槽与倒角落在同一端，特征重叠",
+                    end_cn(es.end)
+                ));
+            }
+            if seg.ov.iter().any(|o| o.end == es.end) {
+                return Err(format!(
+                    "第 {number} 段：{}端退刀槽与越程槽落在同一端，特征重叠",
+                    end_cn(es.end)
+                ));
+            }
+        }
+        for (a, first) in seg.es.iter().enumerate() {
+            for second in &seg.es[a + 1..] {
+                if first.end == second.end {
+                    return Err(format!(
+                        "第 {number} 段：退刀槽 ES 在{}端重复",
+                        end_cn(first.end)
+                    ));
+                }
+            }
+        }
+        if !seg.es.is_empty() && (seg.s - seg.e).abs() > 1e-9 {
+            return Err(format!(
+                "第 {number} 段：退刀槽只能开在圆柱端（S≠E 的锥面不支持）"
+            ));
+        }
+        if let Some(gear) = &seg.gear {
+            gear.params()
+                .validate()
+                .map_err(|e| format!("第 {number} 段：齿轮段：{e}"))?;
+            if !seg.ch.is_empty() {
+                return Err(format!("第 {number} 段：齿轮段不能与倒角 CH 同段"));
+            }
+            if !seg.ov.is_empty() {
+                return Err(format!("第 {number} 段：齿轮段不能与越程槽 OV 同段"));
+            }
+            if !seg.es.is_empty() {
+                return Err(format!("第 {number} 段：齿轮段不能与退刀槽 ES 同段"));
+            }
+        }
     }
     Ok(())
 }
@@ -679,6 +1139,24 @@ fn chamfer_geom(seg: &Segment, x0: f64, end: End, c: f64) -> ([f64; 2], [f64; 2]
             ([x_contour, y_contour], [x_face, y_contour - c])
         }
     }
+}
+
+/// 某段某端**端面处实际轮廓半径**：退刀槽底 / 越程槽圆角切点 / 齿顶圆 / 普通半径。
+/// 只用于齿轮相邻直径检查；落图的端面几何在 `build` 里另算。
+fn face_radius(seg: &Segment, end: End) -> f64 {
+    if let Some(es) = seg.es_at(end) {
+        return seg.outer_radius(end) - es.h;
+    }
+    if let Some(ov) = seg.ov.iter().find(|o| o.end == end) {
+        let d = match end {
+            End::L => seg.s,
+            End::R => seg.e,
+        };
+        if let Ok((_, row)) = detail::groove_entities(d, ov.b1) {
+            return detail::fillet_tangent_radius(d, row);
+        }
+    }
+    seg.outer_radius(end)
 }
 
 /// 端面一侧的竖直平移。
@@ -733,21 +1211,67 @@ pub fn build(program: &Program, frame_scale: f64) -> Result<Shaft, String> {
     let total = program.total_length();
     let max_diameter = segs
         .iter()
-        .map(|s| s.s.max(s.e))
+        .map(|s| s.outer_radius(End::L).max(s.outer_radius(End::R)) * 2.0)
         .fold(0.0_f64, f64::max);
 
-    // 倒角 / 越程槽落在**本段自己**身上的量（决定本段轮廓线被吃掉多少）。
+    // 倒角 / 越程槽 / 退刀槽落在**本段自己**身上的量（决定本段轮廓线被吃掉多少）。
     let mut own_ch = vec![[None::<f64>; 2]; count]; // [左, 右]
     let mut own_ov = vec![[None::<f64>; 2]; count];
+    let mut own_es = vec![[None::<f64>; 2]; count];
     let mut entities: Vec<EntityType> = Vec::new();
+
+    // ── 齿轮段相邻直径检查：齿根 < r邻 < 齿顶（切进齿间）或 r邻 > 齿顶
+    //    （盖过齿顶线）都判矛盾；r邻 ≤ 齿根或与齿顶齐平（同径）放行。 ──
+    for (index, seg) in segs.iter().enumerate() {
+        let Some(gear) = &seg.gear else { continue };
+        let (ra, rf) = (gear.addendum_radius(), gear.root_radius());
+        let neighbors = [
+            (index.checked_sub(1), End::R),
+            (
+                if index + 1 < count {
+                    Some(index + 1)
+                } else {
+                    None
+                },
+                End::L,
+            ),
+        ];
+        for (j, end) in neighbors {
+            let Some(j) = j else { continue };
+            let r_n = face_radius(&segs[j], end);
+            if r_n > rf + 1e-9 && (r_n - ra).abs() > 1e-9 {
+                let why = if r_n > ra {
+                    format!(
+                        "相邻 Ø{} 大于齿顶圆 Ø{}（相邻直径与齿顶线矛盾）",
+                        trim(r_n * 2.0),
+                        trim(ra * 2.0)
+                    )
+                } else {
+                    format!(
+                        "相邻 Ø{} 落在齿根圆 Ø{} 与齿顶圆 Ø{} 之间（切进齿间）",
+                        trim(r_n * 2.0),
+                        trim(rf * 2.0),
+                        trim(ra * 2.0)
+                    )
+                };
+                return Err(format!(
+                    "第 {} 段：齿轮段相邻第 {} 段 {why}",
+                    index + 1,
+                    j + 1
+                ));
+            }
+        }
+    }
 
     // ── 内部端面（第 i 段右端 ↔ 第 i+1 段左端） ──
     for j in 0..count.saturating_sub(1) {
         let i = j;
         let k = j + 1;
         let x_face = x0s[k];
-        let ra = segs[i].e / 2.0;
-        let rb = segs[k].s / 2.0;
+        let ra_outer = segs[i].outer_radius(End::R);
+        let rb_outer = segs[k].outer_radius(End::L);
+        let es_r = segs[i].es_at(End::R).copied();
+        let es_l = segs[k].es_at(End::L).copied();
         let ch_r = segs[i].ch.iter().find(|c| c.end == End::R).map(|c| c.c);
         let ch_l = segs[k].ch.iter().find(|c| c.end == End::L).map(|c| c.c);
         let (chamfer, ch_from_left) = match (ch_r, ch_l) {
@@ -771,6 +1295,24 @@ pub fn build(program: &Program, frame_scale: f64) -> Result<Shaft, String> {
                 k + 1
             ));
         }
+        if es_r.is_some() && es_l.is_some() {
+            return Err(format!(
+                "第 {} 段：右端与第 {} 段左端都写了退刀槽（同一端面只能一侧）",
+                i + 1,
+                k + 1
+            ));
+        }
+        if (es_r.is_some() && ov_l.is_some()) || (es_l.is_some() && ov_r.is_some()) {
+            return Err(format!(
+                "第 {} 段／第 {} 段：同一端面不能一边退刀槽、一边越程槽（特征重叠）",
+                i + 1,
+                k + 1
+            ));
+        }
+
+        // 该端面处两侧的**最终轮廓半径**（退刀槽底 / 齿顶圆）。
+        let ra = segs[i].profile_radius(End::R);
+        let rb = segs[k].profile_radius(End::L);
 
         let mut bottom = ra.min(rb);
         let mut top = ra.max(rb);
@@ -798,7 +1340,24 @@ pub fn build(program: &Program, frame_scale: f64) -> Result<Shaft, String> {
                     trim(delta)
                 ));
             }
-            // 倒角贴**凸角**（大的一侧）。
+            // 倒角贴**凸角**（大的一侧）；落在齿轮段 / 退刀槽那侧则冲突。
+            let (land, land_end) = if rb > ra { (k, End::L) } else { (i, End::R) };
+            if segs[land].gear.is_some() {
+                return Err(format!(
+                    "第 {} 段：{}端倒角会落在第 {} 段齿轮段上（齿轮段不能倒角）",
+                    requester + 1,
+                    requester_end,
+                    land + 1
+                ));
+            }
+            if segs[land].es_at(land_end).is_some() {
+                return Err(format!(
+                    "第 {} 段：{}端倒角与第 {} 段退刀槽落在同一端面，特征重叠",
+                    requester + 1,
+                    requester_end,
+                    land + 1
+                ));
+            }
             let (contour, face_point) = if rb > ra {
                 chamfer_geom(&segs[k], x0s[k], End::L, c)
             } else {
@@ -906,6 +1465,26 @@ pub fn build(program: &Program, frame_scale: f64) -> Result<Shaft, String> {
                 LAYER_MAIN,
             ));
         }
+
+        // ── 螺纹退刀槽（矩形直槽）：槽壁 + 槽底，均落 1轮廓实线层 ──
+        if let Some(es) = es_r {
+            own_es[i][1] = Some(es.b);
+            let x_wall = x_face - es.b;
+            let g = ra_outer - es.h;
+            entities.push(line([x_wall, g], [x_wall, ra_outer], LAYER_MAIN));
+            entities.push(line([x_wall, g], [x_face, g], LAYER_MAIN));
+            entities.push(line([x_wall, -g], [x_wall, -ra_outer], LAYER_MAIN));
+            entities.push(line([x_wall, -g], [x_face, -g], LAYER_MAIN));
+        }
+        if let Some(es) = es_l {
+            own_es[k][0] = Some(es.b);
+            let x_wall = x_face + es.b;
+            let g = rb_outer - es.h;
+            entities.push(line([x_face, g], [x_wall, g], LAYER_MAIN));
+            entities.push(line([x_wall, g], [x_wall, rb_outer], LAYER_MAIN));
+            entities.push(line([x_face, -g], [x_wall, -g], LAYER_MAIN));
+            entities.push(line([x_wall, -g], [x_wall, -rb_outer], LAYER_MAIN));
+        }
     }
 
     // ── 左自由端（第 1 段左端面） ──
@@ -938,8 +1517,17 @@ pub fn build(program: &Program, frame_scale: f64) -> Result<Shaft, String> {
             LAYER_MAIN,
         ));
         face_point[1]
+    } else if let Some(es) = segs[0].es_at(End::L).copied() {
+        own_es[0][0] = Some(es.b);
+        let radius = segs[0].s / 2.0;
+        let g = radius - es.h;
+        entities.push(line([0.0, g], [es.b, g], LAYER_MAIN));
+        entities.push(line([es.b, g], [es.b, radius], LAYER_MAIN));
+        entities.push(line([0.0, -g], [es.b, -g], LAYER_MAIN));
+        entities.push(line([es.b, -g], [es.b, -radius], LAYER_MAIN));
+        g
     } else {
-        segs[0].s / 2.0
+        segs[0].outer_radius(End::L)
     };
     entities.push(line([0.0, -left_face], [0.0, left_face], LAYER_MAIN));
 
@@ -985,15 +1573,50 @@ pub fn build(program: &Program, frame_scale: f64) -> Result<Shaft, String> {
             LAYER_MAIN,
         ));
         face_point[1]
+    } else if let Some(es) = segs[last].es_at(End::R).copied() {
+        own_es[last][1] = Some(es.b);
+        let radius = segs[last].e / 2.0;
+        let g = radius - es.h;
+        let x_wall = x_end - es.b;
+        entities.push(line([x_wall, g], [x_wall, radius], LAYER_MAIN));
+        entities.push(line([x_wall, g], [x_end, g], LAYER_MAIN));
+        entities.push(line([x_wall, -g], [x_wall, -radius], LAYER_MAIN));
+        entities.push(line([x_wall, -g], [x_end, -g], LAYER_MAIN));
+        g
     } else {
-        segs[last].e / 2.0
+        segs[last].outer_radius(End::R)
     };
     entities.push(line([x_end, -right_face], [x_end, right_face], LAYER_MAIN));
 
-    // ── 每段上下轮廓线（两端被倒角/越程槽吃掉多少已定） ──
+    // ── 每段上下轮廓线（两端被倒角/越程槽/退刀槽吃掉多少已定）；
+    //    齿轮段 = 齿顶线（轮廓）+ 分度线 + 齿根线 ──
     for (index, seg) in segs.iter().enumerate() {
-        let start_shift = own_ch[index][0].unwrap_or(0.0).max(own_ov[index][0].unwrap_or(0.0));
-        let end_shift = own_ch[index][1].unwrap_or(0.0).max(own_ov[index][1].unwrap_or(0.0));
+        if let Some(gear) = &seg.gear {
+            let (x0, x1) = (x0s[index], x0s[index] + seg.l);
+            let (r, ra, rf) = (
+                gear.pitch_radius(),
+                gear.addendum_radius(),
+                gear.root_radius(),
+            );
+            // 齿顶线 = 该段轮廓（粗实线）
+            entities.push(line([x0, ra], [x1, ra], LAYER_MAIN));
+            entities.push(line([x0, -ra], [x1, -ra], LAYER_MAIN));
+            // 分度线（点划线，3中心线层）
+            entities.push(line([x0, r], [x1, r], LAYER_CENTER));
+            entities.push(line([x0, -r], [x1, -r], LAYER_CENTER));
+            // 齿根线（粗实线，齿顶线以内）
+            entities.push(line([x0, rf], [x1, rf], LAYER_MAIN));
+            entities.push(line([x0, -rf], [x1, -rf], LAYER_MAIN));
+            continue;
+        }
+        let start_shift = own_ch[index][0]
+            .unwrap_or(0.0)
+            .max(own_ov[index][0].unwrap_or(0.0))
+            .max(own_es[index][0].unwrap_or(0.0));
+        let end_shift = own_ch[index][1]
+            .unwrap_or(0.0)
+            .max(own_ov[index][1].unwrap_or(0.0))
+            .max(own_es[index][1].unwrap_or(0.0));
         if start_shift + end_shift > seg.l + 1e-9 {
             return Err(format!(
                 "第 {} 段：两端特征重叠（左 {} + 右 {} > 段长 {}）",
@@ -1110,14 +1733,16 @@ mod tests {
 S30 E30 L45 CH2@L
 S40 E40 L30 CH2@R OV3
 S50 E30 L20
-S30 E30 L15 CH2@R";
+S30 E30 L15 CH2@R
+S40 E40 L12 ES5*3
+GEAR M3 Z20";
 
     // ── 解析 ──────────────────────────────────────────────────────────────
 
     #[test]
     fn dsl_demo_parses() {
         let program = parse_program(DEMO).unwrap();
-        assert_eq!(program.segments.len(), 4);
+        assert_eq!(program.segments.len(), 6);
         assert_eq!(program.at, None);
         assert_eq!(program.rot, None);
         assert_eq!(
@@ -1134,6 +1759,18 @@ S30 E30 L15 CH2@R";
         );
         // E 省略 = 圆柱段
         assert_eq!((program.segments[2].s, program.segments[2].e), (50.0, 30.0));
+        // ES5*3：轴向宽 5 × 径向深 3，@ 省略默认右端
+        assert_eq!(
+            program.segments[4].es,
+            vec![Relief { b: 5.0, h: 3.0, end: End::R }]
+        );
+        // GEAR M3 Z20：d = m·z = 60；H 省略 = 10m = 30
+        let gear = program.segments[5].gear.expect("第 6 段是齿轮段");
+        assert_eq!((gear.m, gear.z), (3.0, 20));
+        assert_eq!(gear.h, None);
+        assert!(near(program.segments[5].s, 60.0));
+        assert!(near(program.segments[5].e, 60.0));
+        assert!(near(program.segments[5].l, 30.0));
         // 关键字顺序无关 + 大小写不敏感
         let shuffled = parse_program("ch2@l l45 e30 s30").unwrap();
         assert_eq!(shuffled.segments[0], program.segments[0]);
@@ -1157,16 +1794,19 @@ S30 E30 L15 CH2@R";
         let err = parse_program("S30 E30 L45\nS40 E40 L30 OV0").unwrap_err();
         assert!(err.contains("第 2 行"), "{err}");
         assert!(err.contains("OV") && err.contains("b1=0"), "{err}");
-        // 未知关键字（含用户点名的 ES / GEAR / THREAD / M）→ 二期未实现 + 行号/词
-        for token in ["ES", "GEAR", "THREAD", "M", "M10", "KEYWAY"] {
+        // 二期关键字（THREAD / M / Z / H / KEYWAY）→ 二期未实现 + 行号/词，不静默忽略
+        for token in ["THREAD", "M10", "Z10", "H20", "KEYWAY"] {
             let text = format!("S30 E30 L45\nS40 E40 L30 {token}");
             let err = parse_program(&text).unwrap_err();
             assert!(err.contains("第 2 行"), "{token}: {err}");
             assert!(err.contains(token), "{token}: {err}");
             assert!(err.contains("二期未实现"), "{token}: {err}");
         }
-        // 同一行多段时标注「第 k 段」
-        let err = parse_program("S30 E30 L10 | S40 L20 GEAR").unwrap_err();
+        // `M` 光杆（无 GEAR）也要报错，不是静默忽略
+        let err = parse_program("S30 E30 L45\nS40 E40 L30 M").unwrap_err();
+        assert!(err.contains("第 2 行") && err.contains("M"), "{err}");
+        // 同一行多段时标注「第 k 段」（GEAR 段缺 M）
+        let err = parse_program("S30 E30 L10 | GEAR").unwrap_err();
         assert!(err.contains("第 1 行第 2 段") && err.contains("GEAR"), "{err}");
         // 注释行不影响物理行号
         let err = parse_program("# 注释\nS30 E30 L10\nOV0").unwrap_err();
@@ -1197,10 +1837,12 @@ S30 E30 L15 CH2@R";
             {"s":30,"e":30,"l":45,"ch":[{"c":2,"end":"L"}]},
             {"s":40,"e":40,"l":30,"ch":{"c":2,"end":"R"},"ov":{"b1":3,"end":"R"}},
             {"s":50,"e":30,"l":20},
-            {"s":30,"e":30,"l":15,"ch":[{"c":2,"end":"R"}]}
+            {"s":30,"e":30,"l":15,"ch":[{"c":2,"end":"R"}]},
+            {"s":40,"e":40,"l":12,"es":{"b":5,"h":3,"end":"R"}},
+            {"gear":{"m":3,"z":20}}
         ],"at":[10,20],"rot":90}"#;
         let program = parse_program(json).unwrap();
-        assert_eq!(program.segments.len(), 4);
+        assert_eq!(program.segments.len(), 6);
         assert_eq!(program.at, Some([10.0, 20.0]));
         assert_eq!(program.rot, Some(90.0));
         assert_eq!(program.segments, parse_program(DEMO).unwrap().segments);
@@ -1316,6 +1958,235 @@ S30 E30 L15 CH2@R";
         ));
     }
 
+    // ── 螺纹退刀槽 ES ────────────────────────────────────────────────────
+
+    #[test]
+    fn dsl_es_parses_and_reports_errors() {
+        let program = parse_program("S30 E30 L20 ES5*3").unwrap();
+        assert_eq!(
+            program.segments[0].es,
+            vec![Relief { b: 5.0, h: 3.0, end: End::R }]
+        );
+        let program = parse_program("S30 E30 L20 ES5*3@L").unwrap();
+        assert_eq!(
+            program.segments[0].es,
+            vec![Relief { b: 5.0, h: 3.0, end: End::L }]
+        );
+        // 两端各一个
+        let program = parse_program("S30 E30 L20 ES5*3@L ES2*1").unwrap();
+        assert_eq!(program.segments[0].es.len(), 2);
+        // 解析错误
+        let cases: &[(&str, &str)] = &[
+            ("S30 E30 L20 ES5", "缺径向深"),
+            ("S30 E30 L20 ES5*0", "槽深 h=0"),
+            ("S30 E30 L20 ES0*3", "槽宽 b=0"),
+            ("S30 E30 L20 ES5*3 ES2*1", "ES 在右端重复"),
+            ("S30 E30 L20 ES5*3@X", "端别"),
+            ("S30 E30 L20 ES5*3@", "端别缺省"),
+        ];
+        for (text, needle) in cases {
+            let err = parse_program(text).unwrap_err();
+            assert!(err.contains(needle), "{text}: 期望含「{needle}」，得到 {err}");
+        }
+    }
+
+    #[test]
+    fn es_geometry_rectangular_groove_on_both_ends() {
+        // 右端 ES5*3：第 1 段 Ø40 → 第 2 段 Ø50；槽底半径 20−3=17
+        let program = parse_program("S40 E40 L30 ES5*3@R\nS50 E50 L10").unwrap();
+        let shaft = build(&program, 1.0).unwrap();
+        // 轮廓吃到 x=25；槽壁 (25,17)→(25,20)；槽底 (25,17)→(30,17)
+        assert!(has_line(&shaft, [0.0, 20.0], [25.0, 20.0]));
+        assert!(has_line(&shaft, [25.0, 17.0], [25.0, 20.0]));
+        assert!(has_line(&shaft, [25.0, 17.0], [30.0, 17.0]));
+        // 端面从槽底 17 到台阶 25
+        assert!(has_line(&shaft, [30.0, 17.0], [30.0, 25.0]));
+        // 下半镜像
+        assert!(has_line(&shaft, [25.0, -17.0], [25.0, -20.0]));
+        assert!(has_line(&shaft, [25.0, -17.0], [30.0, -17.0]));
+        assert!(has_line(&shaft, [30.0, -17.0], [30.0, -25.0]));
+        // 左端 ES：槽贴左端面（第 2 段 Ø40 左端）
+        let program = parse_program("S50 E50 L10\nS40 E40 L30 ES5*3@L").unwrap();
+        let shaft = build(&program, 1.0).unwrap();
+        assert!(has_line(&shaft, [10.0, 17.0], [15.0, 17.0]));
+        assert!(has_line(&shaft, [15.0, 17.0], [15.0, 20.0]));
+        assert!(has_line(&shaft, [15.0, 20.0], [40.0, 20.0]));
+        assert!(has_line(&shaft, [10.0, 17.0], [10.0, 25.0]));
+        // 自由端 ES：端面缩到槽底
+        let program = parse_program("S40 E40 L30 ES5*3").unwrap();
+        let shaft = build(&program, 1.0).unwrap();
+        assert!(has_line(&shaft, [30.0, -17.0], [30.0, 17.0]));
+        assert!(has_line(&shaft, [25.0, 17.0], [30.0, 17.0]));
+        assert!(has_line(&shaft, [25.0, 17.0], [25.0, 20.0]));
+        // 自由端 ES@L（第 1 段左端）：端面在 x=0 缩到槽底，槽开到 x=5
+        let program = parse_program("S40 E40 L30 ES5*3@L").unwrap();
+        let shaft = build(&program, 1.0).unwrap();
+        assert!(has_line(&shaft, [0.0, -17.0], [0.0, 17.0]));
+        assert!(has_line(&shaft, [0.0, 17.0], [5.0, 17.0]));
+        assert!(has_line(&shaft, [5.0, 17.0], [5.0, 20.0]));
+        assert!(has_line(&shaft, [5.0, 20.0], [30.0, 20.0]));
+        assert!(has_line(&shaft, [30.0, -20.0], [30.0, 20.0]));
+    }
+
+    #[test]
+    fn es_validity_errors_point_at_the_segment() {
+        let cases: &[(&str, &str)] = &[
+            ("S30 E30 L4 ES5*3", "b=5 > 段长"),
+            ("S30 E30 L5 ES5*3", "占满整个段长"),
+            ("S30 E30 L20 ES5*20", "切到轴线"),
+            ("S30 E40 L20 ES5*3", "锥面"),
+            ("S30 E30 L20 ES5*2 CH2@R", "退刀槽与倒角"),
+            ("S30 E30 L20 ES5*2 OV\nS40 E40 L10", "退刀槽与越程槽"),
+            ("S30 E30 L6 ES4*2@L ES4*2@R", "两端特征重叠"),
+            ("S30 E30 L10 ES5*2\nS40 E40 L10 ES5*2@L", "都写了退刀槽"),
+        ];
+        for (text, needle) in cases {
+            let program = parse_program(text).unwrap_or_else(|e| panic!("{text}: 解析失败 {e}"));
+            let err = build(&program, 1.0).unwrap_err();
+            assert!(err.contains(needle), "{text}: 期望含「{needle}」，得到 {err}");
+        }
+    }
+
+    // ── 齿轮段 GEAR ──────────────────────────────────────────────────────
+
+    #[test]
+    fn dsl_gear_parses_and_derives() {
+        // 直齿轮段：d = m·z 导出；默认齿宽 10m
+        let program = parse_program("GEAR M3 Z20").unwrap();
+        let seg = &program.segments[0];
+        assert!(near(seg.s, 60.0) && near(seg.e, 60.0));
+        assert!(near(seg.l, 30.0), "默认 H = 10m");
+        let gear = seg.gear.expect("齿轮段");
+        assert_eq!((gear.m, gear.z), (3.0, 20));
+        assert_eq!(gear.h, None);
+        // H 显式 + BETA0（直齿）可写
+        let program = parse_program("GEAR M5 Z10 H20 BETA0").unwrap();
+        let seg = &program.segments[0];
+        assert!(near(seg.l, 20.0));
+        assert_eq!(seg.gear.unwrap().h, Some(20.0));
+        // 大小写 / 顺序无所谓（Z10 H20 GEAR M5）
+        let shuffled = parse_program("z10 h20 gear m5").unwrap();
+        assert_eq!(shuffled.segments[0], program.segments[0]);
+        // 派生尺寸与 gear.rs 同口径（ra/da/2、r/d/2、rf/df/2）
+        let gear = parse_program("GEAR M5 Z10 H20")
+            .unwrap()
+            .segments[0]
+            .gear
+            .unwrap();
+        let params = crate::gear::GearParams {
+            kind: crate::gear::GearKind::External,
+            m: 5.0,
+            z: 10,
+            h: 20.0,
+            ..crate::gear::GearParams::default()
+        };
+        assert!(near(gear.pitch_radius(), params.d() / 2.0));
+        assert!(near(gear.addendum_radius(), params.da() / 2.0));
+        assert!(near(gear.root_radius(), params.df() / 2.0));
+        assert!(near(gear.pitch_radius(), 25.0));
+        assert!(near(gear.addendum_radius(), 30.0));
+        assert!(near(gear.root_radius(), 18.75));
+    }
+
+    #[test]
+    fn dsl_gear_reports_errors() {
+        let cases: &[(&str, &str)] = &[
+            ("GEAR M3", "缺少 Z"),
+            ("GEAR Z20", "缺少 M"),
+            ("GEAR M3 Z20.5", "不是正整数"),
+            ("GEAR M0 Z20", "模数 m 必须是正数"),
+            ("GEAR M-3 Z20", "模数 m 必须是正数"),
+            ("GEAR M3 Z1", "齿数 z 超出范围"),
+            ("GEAR M3 Z20 S40", "不给 S/E"),
+            ("GEAR M3 Z20 E40", "不给 S/E"),
+            ("GEAR M3 Z20 L30", "不要再给 L"),
+            ("GEAR M3 Z20 BETA12", "二期未实现"),
+            ("GEAR M3 Z20 H0", "厚度 h 必须是正数"),
+            ("GEAR M3 Z20 CH2", "不能与倒角"),
+            ("GEAR M3 Z20 OV", "不能与越程槽"),
+            ("GEAR M3 Z20 ES5*2", "不能与退刀槽"),
+            ("GEAR GEAR M3 Z20", "GEAR 重复"),
+            ("S40 E40 L20 GEAR M3 Z20", "不给 S/E"),
+        ];
+        for (text, needle) in cases {
+            let err = parse_program(text).unwrap_err();
+            assert!(err.contains(needle), "{text}: 期望含「{needle}」，得到 {err}");
+        }
+        // GEAR 的 m/z 错误也要能按「第 N 段」定位（含跨行）
+        let err = parse_program("GEAR M0 Z20").unwrap_err();
+        assert!(err.contains("第 1 段"), "{err}");
+        let err = parse_program("S30 E30 L10\nGEAR M3 Z20.5").unwrap_err();
+        assert!(err.contains("第 2 段"), "{err}");
+    }
+
+    #[test]
+    fn gear_geometry_addendum_pitch_root_layers() {
+        // 第 1 段 Ø40，第 2 段齿轮 M3 Z20（x=20..50）：d=60、ra=33、rf=26.25
+        let program = parse_program("S40 E40 L20\nGEAR M3 Z20 H30").unwrap();
+        let shaft = build(&program, 1.0).unwrap();
+        let gear = program.segments[1].gear.unwrap();
+        let (r, ra, rf) = (
+            gear.pitch_radius(),
+            gear.addendum_radius(),
+            gear.root_radius(),
+        );
+        // 齿顶线 = 该段轮廓（粗实线，上下各一条）
+        assert!(has_line(&shaft, [20.0, ra], [50.0, ra]));
+        assert!(has_line(&shaft, [20.0, -ra], [50.0, -ra]));
+        let layer_of_y = |y: f64| -> Option<&str> {
+            shaft.entities.iter().find_map(|e| match e {
+                EntityType::Line(l)
+                    if near(l.start.y, y)
+                        && near(l.end.y, y)
+                        && near(l.start.x, 20.0)
+                        && near(l.end.x, 50.0) =>
+                {
+                    Some(l.common.layer.as_str())
+                }
+                _ => None,
+            })
+        };
+        // 分度线 → 3中心线层（点划线）
+        assert!(has_line(&shaft, [20.0, r], [50.0, r]));
+        assert!(has_line(&shaft, [20.0, -r], [50.0, -r]));
+        assert_eq!(layer_of_y(r), Some(crate::partgen_kit::LAYER_CENTER));
+        // 齿根线 → 1轮廓实线层（粗实线）
+        assert!(has_line(&shaft, [20.0, rf], [50.0, rf]));
+        assert!(has_line(&shaft, [20.0, -rf], [50.0, -rf]));
+        assert_eq!(layer_of_y(rf), Some(crate::partgen_kit::LAYER_MAIN));
+        // 分度圆半径 30 不是轮廓（轮廓在齿顶 33）
+        assert!(!shaft.entities.iter().any(|e| matches!(e, EntityType::Line(l)
+            if near(l.start.y, r) && near(l.end.y, r) && l.common.layer == crate::partgen_kit::LAYER_MAIN)));
+        // 端面：x=20 从 Ø40/2=20 到 ra=33；x=50 自由端面 ±33
+        assert!(has_line(&shaft, [20.0, 20.0], [20.0, 33.0]));
+        assert!(has_line(&shaft, [50.0, -33.0], [50.0, 33.0]));
+        // 最大直径按齿顶圆算
+        assert!(near(shaft.max_diameter, 66.0));
+        assert!(near(shaft.total_length, 50.0));
+    }
+
+    #[test]
+    fn gear_adjacent_diameter_conflicts_point_at_the_gear() {
+        // Ø58（r=29）落在齿根 26.25 与齿顶 33 之间 → 报「落在…之间」
+        let program = parse_program("S58 E58 L20\nGEAR M3 Z20").unwrap();
+        let err = build(&program, 1.0).unwrap_err();
+        assert!(err.contains("第 2 段") && err.contains("落在"), "{err}");
+        // Ø70（r=35）大于齿顶 33 → 报「大于齿顶圆」（与齿顶线矛盾）
+        let program = parse_program("S70 E70 L20\nGEAR M3 Z20").unwrap();
+        let err = build(&program, 1.0).unwrap_err();
+        assert!(err.contains("第 2 段") && err.contains("大于齿顶圆"), "{err}");
+        // Ø52（r=26 ≤ 齿根 26.25）→ 放行
+        let program = parse_program("S52 E52 L20\nGEAR M3 Z20").unwrap();
+        assert!(build(&program, 1.0).is_ok());
+        // 同参数相邻齿轮（齿顶齐平）→ 放行
+        let program = parse_program("GEAR M3 Z20 H20\nGEAR M3 Z20 H30").unwrap();
+        assert!(build(&program, 1.0).is_ok());
+        // 倒角会落在齿轮段上 → 报（第 1 段 Ø40 的 CH2@R 贴到齿轮凸角）
+        let program = parse_program("S40 E40 L20 CH2@R\nGEAR M3 Z20").unwrap();
+        let err = build(&program, 1.0).unwrap_err();
+        assert!(err.contains("齿轮段"), "{err}");
+    }
+
     // ── 合法性 ────────────────────────────────────────────────────────────
 
     #[test]
@@ -1409,13 +2280,15 @@ S30 E30 L15 CH2@R";
 
     // ── 交付：demo 几何 dump（人工核对用） ────────────────────────────────
 
-    /// 把 4 段 demo 的几何落成 CSV（列：entity,x1,y1,x2,y2,layer,cx,cy,r,a0,a1），
+    /// 把 6 段 demo 的几何落成 CSV（列：entity,x1,y1,x2,y2,layer,cx,cy,r,a0,a1），
     /// 给用户画叠合/预览图。LINE 用两端点；ARC 用起终点 + 圆心/半径/角度。
     #[test]
     fn dump_demo_geometry_csv() {
         let program = parse_program(DEMO).unwrap();
         let shaft = build(&program, 1.0).unwrap();
-        assert!(near(shaft.total_length, 110.0));
+        assert!(near(shaft.total_length, 152.0));
+        assert!(near(shaft.max_diameter, 66.0));
+        assert_eq!(shaft.segment_count, 6);
 
         let mut csv = String::from("entity,x1,y1,x2,y2,layer,cx,cy,r,a0,a1\n");
         for entity in &shaft.entities {
@@ -1447,11 +2320,51 @@ S30 E30 L15 CH2@R";
             }
         }
 
-        // 关键几何自检（demo 的 4 段：30 / 40（右端 OV3 + φ50 台阶倒角）/ 锥 50→30 / 30）
+        // 关键几何自检（demo 6 段：30 / 40（OV3 + φ50 台阶倒角）/ 锥 50→30 / 30 /
+        // 40（右端 ES5*3 螺纹退刀槽）/ 齿轮段 M3 Z20（d=60、da=66、df=52.5））
         assert!(has_line(&shaft, [72.0, 20.0], [57.0, 35.0]), "φ40 的 OV 砂轮细线");
         assert!(
             has_line(&shaft, [75.0, 22.0], [77.0, 24.0]),
             "φ50 台阶左端的 CH2（贴凸角）"
+        );
+        assert!(
+            has_line(&shaft, [110.0, 15.0], [110.0, 18.0]),
+            "前段 φ30 → φ40 台阶面"
+        );
+        assert!(has_line(&shaft, [110.0, 18.0], [112.0, 20.0]), "φ40 段左端 CH2");
+        // ES5*3：轮廓到 117，槽壁 117、槽底 117→122（槽底半径 17）
+        assert!(has_line(&shaft, [112.0, 20.0], [117.0, 20.0]), "ES 前轮廓");
+        assert!(has_line(&shaft, [117.0, 17.0], [117.0, 20.0]), "ES 槽壁");
+        assert!(has_line(&shaft, [117.0, 17.0], [122.0, 17.0]), "ES 槽底");
+        assert!(
+            has_line(&shaft, [122.0, 17.0], [122.0, 33.0]),
+            "ES 端面从槽底到齿顶"
+        );
+        // 齿轮三线：齿顶（轮廓，±33）/ 分度（点划线，±30）/ 齿根（粗实线，±26.25）
+        assert!(has_line(&shaft, [122.0, 33.0], [152.0, 33.0]), "齿顶线");
+        assert!(has_line(&shaft, [122.0, 30.0], [152.0, 30.0]), "分度线");
+        assert!(has_line(&shaft, [122.0, 26.25], [152.0, 26.25]), "齿根线");
+        assert!(
+            has_line(&shaft, [152.0, -33.0], [152.0, 33.0]),
+            "齿轮自由端面"
+        );
+        let layer_at = |x: f64, y: f64| -> Option<&str> {
+            shaft.entities.iter().find_map(|e| match e {
+                EntityType::Line(l)
+                    if near(l.start.x, x) && near(l.start.y, y) && near(l.end.y, y) =>
+                {
+                    Some(l.common.layer.as_str())
+                }
+                _ => None,
+            })
+        };
+        assert_eq!(
+            layer_at(122.0, 30.0),
+            Some(crate::partgen_kit::LAYER_CENTER)
+        );
+        assert_eq!(
+            layer_at(122.0, 26.25),
+            Some(crate::partgen_kit::LAYER_MAIN)
         );
 
         let path = std::env::var("HOME")
@@ -1464,7 +2377,8 @@ S30 E30 L15 CH2@R";
         assert!(file.is_file(), "demo CSV 已落盘：{}", file.display());
         assert!(csv.contains("LINE") && csv.contains("ARC"));
         assert!(csv.contains("3中心线层") && csv.contains("2细线层"));
-        // 28 = 轮廓 8 + 端面/倒角 12 + 槽体 7 + 轴线 1
-        assert_eq!(shaft.entities.len(), 28, "demo 图元数");
+        // 44 = 原 4 段 25 + φ30→φ40 台阶面/倒角 4 + ES 段轮廓 2 +
+        //      ES 端面/槽壁槽底 6 + 齿轮三线 6 + 齿轮自由端面 1
+        assert_eq!(shaft.entities.len(), 44, "demo 图元数");
     }
 }
