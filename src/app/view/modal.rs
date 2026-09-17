@@ -25,6 +25,7 @@ impl OpenCADStudio {
             Some(K::DrawingUnits) => crate::t!("Drawing Units").into_owned(),
             Some(K::GeometricTolerance) => crate::t!("Geometric Tolerance").into_owned(),
             Some(K::DraftingSettings) => crate::t!("Drafting Settings").into_owned(),
+            Some(K::AutoConstrainSettings) => crate::t!("Constraint Settings").into_owned(),
             Some(K::LayerStateEditor) => crate::tr!("modal", "edit-layer-state"),
             Some(K::Plot) => crate::tr!("modal", "plot"),
             Some(K::PrintAll) => t!("Print All").into_owned(),
@@ -32,6 +33,9 @@ impl OpenCADStudio {
             Some(K::ScaleManager) => crate::tr!("modal", "scale-manager"),
             Some(K::AnnoObjectScale) => crate::tr!("modal", "annotation-object-scale"),
             Some(K::OcsmFramePicker) => "OCSM 图框插入".to_string(),
+            Some(K::InsertTable) => crate::t!("Insert Table").into_owned(),
+            Some(K::DataLinkManager) => crate::t!("Data Link Manager").into_owned(),
+            Some(K::DataExtraction) => crate::t!("Data Extraction Wizard").into_owned(),
             Some(K::Plotstyle) => crate::tr!("modal", "plot-style-editor"),
             Some(K::TextStyle) => crate::tr!("modal", "text-style-manager"),
             Some(K::MlStyle) => crate::tr!("modal", "multiline-style-manager"),
@@ -50,6 +54,7 @@ impl OpenCADStudio {
             Some(K::AttributeEditor) => crate::tr!("modal", "attribute-editor"),
             Some(K::SaveDialog) => crate::tr!("modal", "save-drawing-as"),
             Some(K::Recovery) => crate::tr!("modal", "recovery-report"),
+            Some(K::MissingFonts) => crate::t!("Missing fonts").into_owned(),
             Some(K::RecoveryPrompt) => crate::tr!("modal", "recovery-prompt"),
             Some(K::GpuWarning) => crate::tr!("gpu", "title"),
             None => String::new(),
@@ -61,8 +66,8 @@ impl OpenCADStudio {
     ) -> Element<'s, Message> {
         sized_flow(
             extra,
-            760,
-            540,
+            940,
+            620,
             |flow| {
                 crate::ui::window::plot::view_window(
                     &self.plot_dialog,
@@ -164,6 +169,65 @@ impl OpenCADStudio {
                 )
             }
             super::super::ModalKind::Aliases => {
+                // Aliases claimed by two rows — the cells turn red and a
+                // persistent warning names the command already using each
+                // alias; the last row wins in the alias map on Apply.
+                let mut alias_rows: std::collections::BTreeMap<String, Vec<&(String, String)>> =
+                    std::collections::BTreeMap::new();
+                for row in &self.alias_editor_rows {
+                    let alias = row.0.trim().to_uppercase();
+                    if !alias.is_empty() {
+                        alias_rows.entry(alias).or_default().push(row);
+                    }
+                }
+                let duplicate_aliases: Vec<String> = alias_rows
+                    .iter()
+                    .filter(|(_, rows)| rows.len() > 1)
+                    .map(|(alias, _)| alias.clone())
+                    .collect();
+                let duplicate_conflicts: Vec<(String, String)> = alias_rows
+                    .iter()
+                    .filter(|(_, rows)| rows.len() > 1)
+                    .map(|(alias, rows)| {
+                        let command = rows
+                            .iter()
+                            .find(|(_, command)| !command.is_empty())
+                            .map(|(_, command)| command.clone())
+                            .unwrap_or_default();
+                        (alias.clone(), command)
+                    })
+                    .collect();
+                let duplicate_set: rustc_hash::FxHashSet<String> =
+                    duplicate_aliases.into_iter().collect();
+                // Commands the dispatcher can't run: not a registered
+                // command, plugin command, or input action.
+                let valid: rustc_hash::FxHashSet<String> =
+                    crate::command::all_registered_command_names()
+                        .into_iter()
+                        .map(str::to_uppercase)
+                        .chain(
+                            self.command_line
+                                .dynamic_commands
+                                .iter()
+                                .map(|cmd| cmd.to_uppercase()),
+                        )
+                        .chain(
+                            crate::app::shortcuts::INPUT_ACTIONS
+                                .iter()
+                                .map(|action| action.to_string()),
+                        )
+                        .collect();
+                let unknown_commands: Vec<String> = self
+                    .alias_editor_rows
+                    .iter()
+                    .filter_map(|(_, command)| {
+                        let command = command.trim();
+                        (!command.is_empty() && !valid.contains(command))
+                            .then(|| command.to_string())
+                    })
+                    .collect();
+                let unknown_set: rustc_hash::FxHashSet<String> =
+                    unknown_commands.into_iter().collect();
                 sized_flow(
                     ex,
                     480,
@@ -171,6 +235,12 @@ impl OpenCADStudio {
                     |flow| {
                         crate::ui::window::alias_editor::view_window(
                             &self.alias_editor_rows,
+                            self.alias_pending_add,
+                            self.alias_reset_confirm,
+                            &duplicate_set,
+                            &duplicate_conflicts,
+                            &unknown_set,
+                            self.alias_close_confirm,
                             flow,
                         )
                     },
@@ -199,7 +269,6 @@ impl OpenCADStudio {
                     crate::ui::window::options::view_window(
                         &self.default_save_format,
                         self.file_assoc_enabled,
-                        self.write_dwg_native_constraints,
                         self.show_constraint_values,
                         &self.ui_theme,
                         &self.theme_color_inputs,
@@ -230,6 +299,10 @@ impl OpenCADStudio {
                             show_ucs_icon: self.show_ucs_icon,
                             ucs_icon_at_origin: self.ucs_icon_at_origin,
                         },
+                        crate::ui::window::options::spacemouse::view(
+                            self.spacemouse_preferences, self.spacemouse.status(),
+                            self.spacemouse_paused, self.spacemouse_details,
+                        ),
                         &self.snap_angle_input,
                         {
                             let header = self
@@ -284,21 +357,38 @@ impl OpenCADStudio {
                     )
                 },
             ),
-            super::super::ModalKind::DraftingSettings => sized_flow(
+            super::super::ModalKind::DraftingSettings => {
+                let state = self.drafting_settings_state.as_ref();
+                let dirty = self.drafting_settings_dirty();
+                let confirm = self.drafting_settings_close_confirm;
+                sized_flow(
+                    ex,
+                    780,
+                    500,
+                    |flow| {
+                        if let Some(state) = state {
+                            crate::ui::window::drafting_settings::view_window(
+                                state,
+                                dirty,
+                                confirm,
+                                flow,
+                            )
+                        } else {
+                            iced::widget::Space::new().into()
+                        }
+                    },
+                )
+            }
+            super::super::ModalKind::AutoConstrainSettings => sized_flow(
                 ex,
-                520,
-                560,
+                620,
+                610,
                 |flow| {
-                    crate::ui::window::drafting_settings::view_window(
-                        &self.snapper,
-                        self.show_grid,
-                        self.snapper.grid_snap(),
-                        self.ortho_mode,
-                        self.polar_mode,
-                        self.snapper.otrack_enabled,
-                        self.isometric_drafting,
-                        self.iso_plane,
-                        self.snap_angle_deg,
+                    crate::ui::window::auto_constrain_settings::view_window(
+                        &self.auto_constrain_settings,
+                        self.auto_constrain_selected_row,
+                        &self.auto_constrain_distance_input,
+                        &self.auto_constrain_angle_input,
                         flow,
                     )
                 },
@@ -656,6 +746,24 @@ impl OpenCADStudio {
                     },
                 )
             }
+            super::super::ModalKind::InsertTable => sized_flow(
+                ex,
+                620,
+                650,
+                |flow| crate::ui::window::annotation_data::table_insert_view(&self.table_insert, flow),
+            ),
+            super::super::ModalKind::DataLinkManager => sized_flow(
+                ex,
+                760,
+                560,
+                |flow| crate::ui::window::annotation_data::data_link_view(&self.data_link_manager, flow),
+            ),
+            super::super::ModalKind::DataExtraction => sized_flow(
+                ex,
+                780,
+                570,
+                |flow| crate::ui::window::annotation_data::data_extraction_view(&self.data_extraction, flow),
+            ),
             super::super::ModalKind::Plotstyle => sized_flow(
                 ex,
                 780,
@@ -1601,6 +1709,17 @@ impl OpenCADStudio {
                     save_as_dialog_window(
                         &self.save_dialog_filename,
                         &self.save_dialog_format,
+                        flow,
+                    )
+                })
+            }
+            super::super::ModalKind::MissingFonts => {
+                let fonts = self.missing_fonts.as_ref()?;
+                let font_source = &self.font_source_input;
+                automatic_flow(ex, |flow| {
+                    crate::ui::window::missing_fonts::view_window(
+                        fonts,
+                        &font_source,
                         flow,
                     )
                 })

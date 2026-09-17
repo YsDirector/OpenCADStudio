@@ -6,7 +6,7 @@ use std::path::PathBuf;
 
 mod blocks;
 mod dim;
-mod display;
+pub(crate) mod display;
 mod draw;
 mod fileops;
 mod inquiry;
@@ -80,6 +80,9 @@ impl OpenCADStudio {
             self.resolve_alias(cmd)
         };
         let cmd = resolved.as_deref().unwrap_or(cmd);
+        if is_spacemouse_command(cmd) {
+            return self.run_action(cmd);
+        }
         // A drafting aid only flips a flag, so it must not disturb whatever is
         // already running: pressing F8 partway through a LINE means "constrain
         // the rest of this line", not "abandon it". Everything below tears the
@@ -135,6 +138,9 @@ impl OpenCADStudio {
         // Reset the last committed point so the first click of the new command
         // is not constrained by ortho/polar relative to a previous command's endpoint.
         self.last_point = None;
+        // A new command collects its own points, so the previous command's
+        // accepted snaps must not leak into it.
+        self.clear_accepted_snaps();
         // Starting a command restarts the right-click cycle, so its first
         // right-click acts as Enter rather than opening the context menu.
         self.tabs[i]
@@ -285,9 +291,22 @@ impl OpenCADStudio {
 /// vanish. Nothing here starts a command, opens a document or reads geometry,
 /// so there is nothing for the teardown to protect. (#677)
 pub fn is_transparent(cmd: &str) -> bool {
+    is_spacemouse_command(cmd)
+        || matches!(
+            cmd,
+            "ORTHO" | "GRID" | "SNAP" | "POLAR" | "OSNAP" | "DSETTINGS"
+        )
+}
+
+fn is_spacemouse_command(cmd: &str) -> bool {
     matches!(
         cmd,
-        "ORTHO" | "GRID" | "SNAP" | "POLAR" | "OSNAP" | "DSETTINGS"
+        "SPACEMOUSE"
+            | "SPACEMOUSEPAUSE"
+            | "SPACEMOUSEPAN"
+            | "SPACEMOUSEPANZOOM"
+            | "SPACEMOUSEAUTO"
+            | "SPACEMOUSE3D"
     )
 }
 
@@ -296,7 +315,7 @@ pub fn is_transparent(cmd: &str) -> bool {
 /// source of truth: the dispatch gate refuses everything else, and the ribbon
 /// dims the tools this rejects.
 pub fn start_allowed(cmd: &str) -> bool {
-    matches!(
+    is_spacemouse_command(cmd) || matches!(
         cmd,
         "NEW"
             | "OPEN"
@@ -415,6 +434,7 @@ inventory::submit!(crate::command::CommandRegistration {
         "ANNOUPDATE",
         "SCALELISTEDIT",
         "OBJECTSCALE",
+        "ANNORESET",
         // Import CSV into a table + LandXML survey points.
         "DATALINK",
         "DATALINKUPDATE",
@@ -626,6 +646,7 @@ inventory::submit!(crate::command::CommandRegistration {
         "EXPORT",
         "EXPORTSTEP",
         "EXPORTSTL",
+        "EXTERNALREFERENCES",
         "EXTRIM",
         "FILETAB",
         "FIND",
@@ -635,6 +656,7 @@ inventory::submit!(crate::command::CommandRegistration {
         "IM",
         "IMAGE",
         "IMAGEATTACH",
+        "IMAGEEMBED",
         "IMPORTOBJ",
         "ISOLATEOBJECTS",
         "LA",
@@ -727,6 +749,7 @@ inventory::submit!(crate::command::CommandRegistration {
         "XDATA",
         "XR",
         "XREF",
+        "-XREF",
         "XRELOAD",
         "ZOOM",
         "ZS",

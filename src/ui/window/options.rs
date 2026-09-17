@@ -1,3 +1,4 @@
+pub(crate) mod spacemouse;
 use crate::app::config::UiThemeConfig;
 use crate::app::settings::CursorType;
 use crate::app::Message;
@@ -145,7 +146,6 @@ impl<T> fmt::Display for Labelled<T> {
 pub fn view_window<'a>(
     default_save_format: &'a str,
     file_assoc_enabled: bool,
-    write_dwg_native_constraints: bool,
     show_constraint_values: bool,
     ui_theme: &'a UiThemeConfig,
     theme_color_inputs: &'a [String; 6],
@@ -154,6 +154,7 @@ pub fn view_window<'a>(
     cursor_size: i32,
     selection: SelectionPrefs,
     prefs: AppPrefs,
+    spacemouse: Element<'a, Message>,
     snap_angle_input: &'a str,
     drawing_prefs: DrawingPrefs,
     folders: Folders,
@@ -348,22 +349,6 @@ pub fn view_window<'a>(
         Space::new().height(6),
         text(crate::t!(
             "Also installs the application and file-type icons the desktop shows."
-        ))
-        .size(11)
-        .width(sizing.width),
-        Space::new().height(14),
-        row![
-            iced::widget::checkbox(write_dwg_native_constraints)
-                .on_toggle(Message::WriteDwgNativeConstraintsChanged)
-                .size(15),
-            text(crate::t!("Write native constraint objects on save")).size(12),
-        ]
-        .spacing(8)
-        .align_y(iced::Center),
-        Space::new().height(6),
-        text(crate::t!(
-            "Saves sketch constraints as native drawing objects alongside this app's own format. \
-             Off by default because it adds file size. Existing native objects stay synchronized."
         ))
         .size(11)
         .width(sizing.width),
@@ -1152,6 +1137,8 @@ pub fn view_window<'a>(
     let user_prefs = column![
         text(crate::t!("User Preferences")).size(15),
         Space::new().height(10),
+        spacemouse,
+        Space::new().height(12),
         text(crate::t!("Zoom")).size(15),
         Space::new().height(10),
         row![

@@ -21,6 +21,7 @@ winresource = "0.1"
 [dependencies]
 serde_json = "1"
 serde = { version = "1", features = ["derive"] }
+calamine = "0.36.1"
 base64 = "0.22"
 semver = "1"
 url = "2"
@@ -33,12 +34,14 @@ glam = { version = "0.33", features = ["bytemuck"] }
 rfd = "0.17"
 clap = { version = "4", features = ["derive", "string"] }
 env_logger = "0.11"
-acadrust = { git = "https://github.com/HakanSeven12/cadcodec.git", rev = "5eea24cf35ba1739c22e982fc398ddb6c285def5", features = ["serde"] }
-cadkernel = { git = "https://github.com/HakanSeven12/cadkernel.git", rev = "5f0cdffc0faa9db03346aa794e22285c365b5f7f", features = ["acis", "offset"] }
-cadkernel-constraints = { git = "https://github.com/HakanSeven12/cadkernel.git", rev = "5f0cdffc0faa9db03346aa794e22285c365b5f7f" }
+log = "0.4"
+acadrust = { git = "https://github.com/HakanSeven12/cadcodec.git", rev = "8a28c21", features = ["serde"] }
+cadkernel = { git = "https://github.com/HakanSeven12/cadkernel.git", rev = "35aa7a5", features = ["acis", "offset"] }
+cadkernel-constraints = { git = "https://github.com/HakanSeven12/cadkernel.git", rev = "35aa7a5" }
 dwg-thumbnailer = { path = "crates/dwg-thumbnailer" }
 flate2 = "1"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "bmp", "tiff"] }
+hayro = "0.7.1"
 # Rasterises assets/logo.svg into the window icon at startup, so the taskbar
 # icon comes from the same file every other build target does. Already in the
 # tree behind iced's svg feature; named here only to use it directly.
@@ -57,10 +60,12 @@ lyon_tessellation = "1.0.20"
 
 [dev-dependencies]
 fluent-syntax = "0.12"
+iced_test = { git = "https://github.com/iced-rs/iced.git", rev = "23604ff22ab0aad9e00b9327cb7b8546ed84db39" }
 naga = { version = "27", features = ["wgsl-in"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
-windows-sys = { version = "0.61", features = ["Win32_UI_Shell", "Win32_UI_WindowsAndMessaging", "Win32_System_Com", "Win32_System_Registry", "Win32_Storage_FileSystem", "Win32_Foundation"] }
+libloading = "0.8"
+windows-sys = { version = "0.61", features = ["Win32_UI_Shell", "Win32_UI_WindowsAndMessaging", "Win32_UI_Input", "Win32_System_LibraryLoader", "Win32_System_Threading", "Win32_Security", "Win32_System_Com", "Win32_System_Registry", "Win32_Storage_FileSystem", "Win32_Foundation", "Win32_Graphics_Printing", "Win32_Graphics_Gdi", "Win32_Storage_Xps"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 ashpd = { version = "0.13.13", default-features = false, features = ["async-io", "wayland"] }
@@ -77,8 +82,12 @@ objc2-foundation = { version = "0.2", features = ["NSArray", "NSURL", "NSString"
 iced_core = { git = "https://github.com/iced-rs/iced.git", rev = "23604ff22ab0aad9e00b9327cb7b8546ed84db39" }
 iced_widget = { git = "https://github.com/iced-rs/iced.git", rev = "23604ff22ab0aad9e00b9327cb7b8546ed84db39" }
 
+# fork 镜像 pin：上游只带官方 URL + 自己的 rev，这里把同一 rev 指到 ghfast 镜像
+# （配合全局 git insteadOf 与 `[net] git-fetch-with-cli = true`）。
+# 同步规则：**上游升 rev 时跟着升**，但 URL 必须保持镜像；`Cargo.lock` 里 acadrust 的
+# source 应显示 ghfast.top（不是 github.com）。
 [patch."https://github.com/HakanSeven12/cadcodec.git"]
-acadrust = { git = "https://ghfast.top/https://github.com/HakanSeven12/cadcodec.git", rev = "5eea24cf35ba1739c22e982fc398ddb6c285def5" }
+acadrust = { git = "https://ghfast.top/https://github.com/HakanSeven12/cadcodec.git", rev = "8a28c21" }
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 getrandom = "0.3"
 ocs_plugin_api = { path = "crates/ocs_plugin_api", features = ["host"] }
@@ -87,7 +96,7 @@ meshopt = "0.6.2"
 i18n-embed = { version = "0.16", features = ["desktop-requester"] }
 rayon = "1"
 open = "5"
-printpdf = { version = "0.9.1", default-features = false }
+printpdf = { version = "0.9.1", default-features = false, features = ["images"] }
 ureq = { version = "3", default-features = false, features = ["rustls", "platform-verifier", "win-system-proxy"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
@@ -95,7 +104,6 @@ ocs_plugin_api = { path = "crates/ocs_plugin_api" }
 i18n-embed = { version = "0.16", features = ["web-sys-requester"] }
 rust-embed = { version = "8", features = ["debug-embed"] }
 console_error_panic_hook = "0.1"
-log = "0.4"
 getrandom = { version = "0.3", features = ["wasm_js"] }
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"

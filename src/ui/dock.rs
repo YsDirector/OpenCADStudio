@@ -47,11 +47,17 @@ pub enum PanelId {
     /// and close behaviour as Properties — so nothing about it is special-cased
     /// in the dock, and it renders natively on both X11 and Wayland.
     Pi,
+    ExternalReferences,
 }
 
 impl PanelId {
     /// Every dockable panel, in stable order (settings healing iterates this).
-    pub const ALL: [PanelId; 3] = [PanelId::Properties, PanelId::BlockPalette, PanelId::Pi];
+    pub const ALL: [PanelId; 4] = [
+        PanelId::Properties,
+        PanelId::BlockPalette,
+        PanelId::Pi,
+        PanelId::ExternalReferences,
+    ];
 
     /// Localized-friendly display name used by the collapsed/edge chrome.
     pub fn title(self) -> &'static str {
@@ -59,6 +65,7 @@ impl PanelId {
             PanelId::Properties => "Properties",
             PanelId::BlockPalette => "Block Palette",
             PanelId::Pi => "Pi 助手",
+            PanelId::ExternalReferences => "External References",
         }
     }
 
@@ -69,6 +76,7 @@ impl PanelId {
             PanelId::BlockPalette => 260.0,
             // A chat column should not steal the drawing area by default.
             PanelId::Pi => 340.0,
+            PanelId::ExternalReferences => 460.0,
         }
     }
 
@@ -82,10 +90,12 @@ impl PanelId {
     }
 
     /// Per-panel width ceiling. Full web/palette views want more than the
-    /// palette-ish 600px default.
+    /// palette-ish 600px default; the references table is column-rich, so it
+    /// allows double the shared maximum.
     fn max_width(self) -> f32 {
         match self {
             PanelId::Pi => 1200.0,
+            PanelId::ExternalReferences => DOCK_MAX_W * 2.0,
             _ => DOCK_MAX_W,
         }
     }
@@ -269,6 +279,20 @@ pub const DOCK_MAX_W: f32 = 600.0;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn external_references_allows_double_max_width() {
+        let mut state = DockState::default();
+        state.ensure_settings();
+        // Wider default for the column-rich references table, double the maximum.
+        // (The 45%-of-window rule still dominates on narrow windows.)
+        assert_eq!(state.width(PanelId::ExternalReferences, 3000.0), 460.0);
+        state.set_width(PanelId::ExternalReferences, 5000.0);
+        assert_eq!(state.width(PanelId::ExternalReferences, 3000.0), DOCK_MAX_W * 2.0);
+        // Other panels keep the shared maximum.
+        state.set_width(PanelId::BlockPalette, 5000.0);
+        assert_eq!(state.width(PanelId::BlockPalette, 3000.0), DOCK_MAX_W);
+    }
 
     #[test]
     fn default_docks_each_known_panel_on_an_edge() {

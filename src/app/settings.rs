@@ -11,6 +11,108 @@
 use crate::snap::SnapType;
 use serde::{Deserialize, Serialize};
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum AutoConstraintKind {
+    Coincident,
+    Collinear,
+    Parallel,
+    Perpendicular,
+    Tangent,
+    Concentric,
+    Horizontal,
+    Vertical,
+    Equal,
+}
+
+impl AutoConstraintKind {
+    pub const ALL: [Self; 9] = [
+        Self::Coincident,
+        Self::Collinear,
+        Self::Parallel,
+        Self::Perpendicular,
+        Self::Tangent,
+        Self::Concentric,
+        Self::Horizontal,
+        Self::Vertical,
+        Self::Equal,
+    ];
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Coincident => "Coincident",
+            Self::Collinear => "Collinear",
+            Self::Parallel => "Parallel",
+            Self::Perpendicular => "Perpendicular",
+            Self::Tangent => "Tangent",
+            Self::Concentric => "Concentric",
+            Self::Horizontal => "Horizontal",
+            Self::Vertical => "Vertical",
+            Self::Equal => "Equal",
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AutoConstrainSettings {
+    pub priority: Vec<AutoConstraintKind>,
+    pub enabled: Vec<AutoConstraintKind>,
+    pub tangent_must_share_point: bool,
+    pub perpendicular_must_intersect: bool,
+    pub distance_tolerance: f64,
+    pub angle_tolerance_deg: f64,
+}
+
+impl Default for AutoConstrainSettings {
+    fn default() -> Self {
+        Self {
+            priority: AutoConstraintKind::ALL.to_vec(),
+            // Keep Equal available without creating redundant relations
+            // between equal-length segments by default.
+            enabled: AutoConstraintKind::ALL
+                .into_iter()
+                .filter(|kind| *kind != AutoConstraintKind::Equal)
+                .collect(),
+            tangent_must_share_point: true,
+            perpendicular_must_intersect: true,
+            distance_tolerance: 0.05,
+            angle_tolerance_deg: 1.0,
+        }
+    }
+}
+
+impl AutoConstrainSettings {
+    pub fn sanitize(&mut self) {
+        let mut priority = Vec::with_capacity(AutoConstraintKind::ALL.len());
+        for kind in self
+            .priority
+            .iter()
+            .copied()
+            .chain(AutoConstraintKind::ALL)
+        {
+            if !priority.contains(&kind) {
+                priority.push(kind);
+            }
+        }
+        self.priority = priority;
+        self.enabled
+            .retain(|kind| AutoConstraintKind::ALL.contains(kind));
+        self.enabled.sort_by_key(|kind| {
+            self.priority
+                .iter()
+                .position(|candidate| candidate == kind)
+                .unwrap_or(usize::MAX)
+        });
+        self.enabled.dedup();
+        if !self.distance_tolerance.is_finite() || self.distance_tolerance < 0.0 {
+            self.distance_tolerance = 0.05;
+        }
+        if !self.angle_tolerance_deg.is_finite() || self.angle_tolerance_deg < 0.0 {
+            self.angle_tolerance_deg = 1.0;
+        }
+    }
+}
+
 /// Cursor shown over the drawing viewport.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CursorType {
@@ -91,7 +193,9 @@ const SNAP_ORDER: &[SnapType] = &[
 ];
 
 /// `$OSMODE` bit for each running object-snap mode.
-/// `None` for OCS-only snaps (Grid, ObjectPick) that have no standard bit.
+/// `None` for OCS-only snaps (Grid, ObjectPick) and the 3D solid snaps
+/// (Vertex, EdgeMidpoint, FaceCenter, Knot, FacePerpendicular, NearestFace),
+/// which live in the separate 3D set and have no standard bit.
 fn snap_bit(s: SnapType) -> Option<i32> {
     Some(match s {
         SnapType::Endpoint => 1,
@@ -107,7 +211,14 @@ fn snap_bit(s: SnapType) -> Option<i32> {
         SnapType::ApparentIntersection => 2048,
         SnapType::Extension => 4096,
         SnapType::Parallel => 8192,
-        SnapType::Grid | SnapType::ObjectPick => return None,
+        SnapType::Grid
+        | SnapType::ObjectPick
+        | SnapType::Vertex
+        | SnapType::EdgeMidpoint
+        | SnapType::FaceCenter
+        | SnapType::Knot
+        | SnapType::FacePerpendicular
+        | SnapType::NearestFace => return None,
     })
 }
 
@@ -187,6 +298,7 @@ pub const DEFAULT_GRIP_OBJECT_LIMIT: i32 = 100;
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct UserSettings {
+    pub spacemouse: crate::input::spacemouse::Preferences,
     pub dyn_input: bool,
     pub polar: bool,
     pub polar_increment_deg: f32,
@@ -236,6 +348,15 @@ pub struct UserSettings {
     /// prompt has already been shown. Set once the user answers (either way),
     /// so we never nag again on subsequent launches.
     pub default_assoc_prompted: bool,
+    /// Offer to download missing `.shx` fonts from the community repository
+    /// when a drawing opens (see `crate::io::font_repo`).
+    #[serde(default = "default_check_missing_fonts")]
+    pub check_missing_fonts: bool,
+    /// Custom font source base URL (empty = the OpenCADStudio community
+    /// repository). Each missing font is fetched as `{base}/{file_name}`,
+    /// so an intranet folder or a private GitHub raw folder both work.
+    #[serde(default)]
+    pub font_source_url: String,
     /// App version whose donation prompt has been displayed.
     pub donation_prompt_version: String,
     /// The graphics verdict (`GpuStatus::identity()`) whose warning popup the
@@ -283,16 +404,25 @@ pub struct UserSettings {
     /// When true (default), the app (re)registers itself as a .dwg/.dxf/.bak
     /// handler on every launch. Toggle with the FILEASSOC command.
     pub file_assoc_enabled: bool,
-    /// When true, saving also writes sketch constraints as native drawing
-    /// objects alongside the application's own persistence record.
-    #[serde(default)]
-    pub write_dwg_native_constraints: bool,
     /// When true (default), a sketch constraint's viewport pill shows its
     /// glyph plus a driven value or named-parameter name. When false, every
     /// pill shows just the bare glyph, so the value/name text doesn't cover
     /// canvas detail on a dense sketch.
     #[serde(default = "default_show_constraint_values")]
     pub show_constraint_values: bool,
+    /// Inference types, priority, intersection rules, and tolerances used by
+    /// the Auto Constrain command.
+    #[serde(default)]
+    pub auto_constrain: AutoConstrainSettings,
+    /// Keep existing geometry size while solving after a constraint edit.
+    #[serde(default = "default_constraint_solve_mode")]
+    pub constraint_solve_mode: bool,
+    /// Apply eligible geometric constraints while creating geometry.
+    #[serde(default)]
+    pub constraint_infer: bool,
+    /// Constraint bar display bit mask: 1 after applying, 2 on selection.
+    #[serde(default = "default_constraint_bar_display")]
+    pub constraint_bar_display: i16,
     /// Minutes between autosaves to a `.sv$` recovery file (SAVETIME command).
     /// 0 disables autosave.
     pub savetime_min: i32,
@@ -322,6 +452,13 @@ pub struct UserSettings {
         deserialize_with = "deserialize_commandline_fade_ms"
     )]
     pub commandline_fade_ms: i32,
+    /// SNAPUNIT X/Y spacing used by grid snap. 10 matches the Drafting
+    /// Settings dialog defaults; older configs without these keys fall
+    /// back via `default_snap_spacing`.
+    #[serde(default = "default_snap_spacing")]
+    pub snap_spacing_x: f32,
+    #[serde(default = "default_snap_spacing")]
+    pub snap_spacing_y: f32,
     /// Most-recently-inserted block names, most recent first, capped to 20.
     /// Used to rank INSERT suggestions without touching the drawing file.
     #[serde(default)]
@@ -343,6 +480,20 @@ fn default_commandline_fade_ms() -> i32 {
     3000
 }
 
+/// Default SNAPUNIT spacing shown in the Drafting Settings dialog.
+fn default_snap_spacing() -> f32 {
+    10.0
+}
+
+/// Clamp a snap spacing to the positive range the dialog accepts.
+pub fn sanitize_snap_spacing(v: f32) -> f32 {
+    if v.is_finite() && v > 0.0 && v <= 1e9 {
+        v
+    } else {
+        10.0
+    }
+}
+
 fn deserialize_commandline_fade_ms<'de, D>(de: D) -> Result<i32, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -359,8 +510,20 @@ fn default_dimension_continue_mode() -> i16 {
     1
 }
 
+fn default_check_missing_fonts() -> bool {
+    true
+}
+
 fn default_show_constraint_values() -> bool {
     true
+}
+
+fn default_constraint_solve_mode() -> bool {
+    true
+}
+
+fn default_constraint_bar_display() -> i16 {
+    3
 }
 
 fn deserialize_clipromptlines<'de, D>(de: D) -> Result<i32, D::Error>
@@ -378,6 +541,7 @@ pub fn clamp_clipromptlines(v: i32) -> i32 {
 impl Default for UserSettings {
     fn default() -> Self {
         Self {
+            spacemouse: crate::input::spacemouse::Preferences::default(),
             dyn_input: true,
             polar: false,
             polar_increment_deg: 45.0,
@@ -402,6 +566,8 @@ impl Default for UserSettings {
             snap_angle_deg: 0.0,
             otrack: false,
             default_assoc_prompted: false,
+            check_missing_fonts: true,
+            font_source_url: String::new(),
             donation_prompt_version: String::new(),
             gpu_warning_silenced: String::new(),
             disabled_plugins: Vec::new(),
@@ -418,8 +584,11 @@ impl Default for UserSettings {
             textfill: true,
             backup_on_save: true,
             file_assoc_enabled: true,
-            write_dwg_native_constraints: false,
             show_constraint_values: true,
+            auto_constrain: AutoConstrainSettings::default(),
+            constraint_solve_mode: true,
+            constraint_infer: false,
+            constraint_bar_display: 3,
             savetime_min: 10,
             default_save_format: crate::io::DEFAULT_SAVE_FORMAT.to_string(),
             pick_add: true,
@@ -428,6 +597,8 @@ impl Default for UserSettings {
             language: crate::i18n::Language::default(),
             cliprompt_lines: 3,
             commandline_fade_ms: 3000,
+            snap_spacing_x: 10.0,
+            snap_spacing_y: 10.0,
             block_mru: Vec::new(),
             block_freq: std::collections::HashMap::new(),
         }

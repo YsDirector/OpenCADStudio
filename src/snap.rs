@@ -9,8 +9,9 @@ use iced::time::Instant;
 use iced::{Point, Rectangle};
 
 use cadkernel::geom2d::Curve;
+use acadrust::types::Handle;
 
-use crate::command::TangentObject;
+use crate::command::{DimensionAssociationSource, TangentObject};
 use crate::scene::model::wire_model::{SnapHint, TangentGeom, WireModel};
 use crate::scene::pick::interaction_index::WireSource;
 const DEFAULT_OSNAP_RADIUS_PX: f32 = 15.0;
@@ -42,6 +43,39 @@ pub enum SnapType {
     Grid,
     /// Object acquisition (domain-object pick, e.g. network structure) — orange marker.
     ObjectPick,
+    /// B-rep corner of a 3D solid. Part of the separate 3D object-snap
+    /// system (`Snapper::snap3d_enabled` + `enabled3d`): the 2D master toggle
+    /// and mode set never catch it.
+    Vertex,
+    /// Centre of a 3D solid B-rep edge. Same separate 3D system as `Vertex`.
+    EdgeMidpoint,
+    /// Centre of a 3D solid B-rep face (loop-vertex average; exact for
+    /// planar faces). Same separate 3D system.
+    FaceCenter,
+    /// NURBS knot location on a spline entity. Same separate 3D system.
+    Knot,
+    /// Foot of the perpendicular from the command base point onto a solid
+    /// face. Same separate 3D system.
+    FacePerpendicular,
+    /// Nearest point on a solid face to the cursor. Same separate 3D system.
+    NearestFace,
+}
+
+impl SnapType {
+    /// True for the separate 3D object-snap system (F4 master + `enabled3d`
+    /// set). The single source of truth — every master-gating check must use
+    /// this rather than listing variants, so new 3D modes stay independent.
+    pub fn is_3d(self) -> bool {
+        matches!(
+            self,
+            SnapType::Vertex
+                | SnapType::EdgeMidpoint
+                | SnapType::FaceCenter
+                | SnapType::Knot
+                | SnapType::FacePerpendicular
+                | SnapType::NearestFace
+        )
+    }
 }
 
 /// Ordered list used by the popup and snap engine.
@@ -62,6 +96,20 @@ pub const ALL_SNAP_MODES: &[(SnapType, &str, &str)] = &[
     // NOTE: Grid is intentionally NOT an object-snap mode. Grid snap is a
     // separate system (`Snapper::grid_snap_on`) so object snap never catches a
     // grid point; it is toggled on its own and handled directly in `snap()`.
+];
+
+/// 3D object-snap modes: solid B-rep features with their own master toggle
+/// (`Snapper::snap3d_enabled`, F4) and mode set (`Snapper::enabled3d`),
+/// configured on the Drafting Settings "3D Object Snap" tab. Deliberately
+/// absent from [`ALL_SNAP_MODES`] so the 2D Select All / Clear All, the snap
+/// popup and `$OSMODE` persistence never touch them.
+pub const ALL_3D_SNAP_MODES: &[(SnapType, &str, &str)] = &[
+    (SnapType::Vertex, "◈", "Vertex"),
+    (SnapType::EdgeMidpoint, "▽", "Midpoint on edge"),
+    (SnapType::FaceCenter, "◉", "Center of face"),
+    (SnapType::Knot, "⬥", "Knot"),
+    (SnapType::FacePerpendicular, "⟂", "Perpendicular to face"),
+    (SnapType::NearestFace, "✦", "Nearest to face"),
 ];
 
 // ── Snap result ───────────────────────────────────────────────────────────
@@ -86,6 +134,37 @@ pub struct SnapResult {
     pub extension_origin: Option<glam::DVec3>,
     /// Source direction paired with `extension_origin`.
     pub extension_dir: Option<glam::DVec3>,
+    /// Layout viewport this snap was seen *through*, when the snap ran against
+    /// model geometry displayed by a paper-space viewport. `None` for ordinary
+    /// model-space / paper-sheet snaps. Filled by the paper-space viewport snap
+    /// query, never by the engine itself.
+    pub viewport: Option<Handle>,
+    /// Owning entity of the geometry the snap landed on, when the engine could
+    /// attribute the feature to a wire. Block sub-entities report the top-level
+    /// INSERT handle; the block path is resolved later by
+    /// [`crate::scene::viewport_ref::SnapSourceRef::block_path`].
+    pub source: Option<DimensionAssociationSource>,
+    /// Second real object at an intersection, when both objects are known.
+    pub secondary_source: Option<DimensionAssociationSource>,
+    /// Original model point when `world` has been projected onto a sheet.
+    pub model_point: Option<glam::DVec3>,
+}
+
+impl SnapResult {
+    /// Handle of the entity the snap landed on, when known.
+    pub fn source_handle(&self) -> Option<Handle> {
+        self.source.map(|s| s.handle)
+    }
+}
+
+/// Entity handle carried by a wire (`WireModel::name` is the decimal handle
+/// value). Returns `None` for preview / interim wires with a symbolic name.
+#[inline]
+pub(crate) fn wire_source(wire: &WireModel) -> Option<DimensionAssociationSource> {
+    wire.name
+        .parse::<u64>()
+        .ok()
+        .map(|v| DimensionAssociationSource::inferred(Handle::new(v)))
 }
 
 /// Object-snap-tracking alignment: the cursor projected onto a ray from an
@@ -112,11 +191,21 @@ pub struct Snapper {
     pub snap_enabled: bool,
     /// Which snap modes are configured (used when `snap_enabled` is true).
     pub enabled: HashSet<SnapType>,
+    /// 3D object-snap master toggle (F4). Independent of the 2D master:
+    /// when false, solid B-rep snaps never fire but `enabled3d` is kept.
+    pub snap3d_enabled: bool,
+    /// Which 3D snap modes are configured (used when `snap3d_enabled`).
+    pub enabled3d: HashSet<SnapType>,
     /// Grid snap on/off — a system fully separate from object snap. When on,
     /// `snap()` can pick the nearest grid corner; object snap never does.
     pub grid_snap_on: bool,
     /// World-space grid spacing.
     pub grid_spacing: f32,
+    /// User-configurable snap spacing (SNAPUNIT X/Y). Used for grid-snap
+    /// positions; kept separate from the adaptive `grid_spacing`, which
+    /// tracks the visible grid step and drives tolerances.
+    pub snap_spacing_x: f32,
+    pub snap_spacing_y: f32,
     /// Pixel-radius snap aperture, shared by OSNAP, tracking, polar and
     /// extension so the catch distance is the same everywhere.
     pub osnap_radius_px: f32,
@@ -179,11 +268,24 @@ impl Default for Snapper {
         enabled.insert(SnapType::Quadrant);
         enabled.insert(SnapType::Intersection);
         enabled.insert(SnapType::Nearest);
+        let mut enabled3d = HashSet::default();
+        enabled3d.insert(SnapType::Vertex);
+        enabled3d.insert(SnapType::EdgeMidpoint);
+        enabled3d.insert(SnapType::FaceCenter);
+        enabled3d.insert(SnapType::Knot);
+        enabled3d.insert(SnapType::FacePerpendicular);
+        // Nearest-to-face stays off by default: on dense curved solids it
+        // would catch nearly every cursor position, masking the discrete
+        // vertex/edge/face snaps. Opt in via the 3D Object Snap tab.
         Self {
             snap_enabled: false,
             enabled,
+            snap3d_enabled: true,
+            enabled3d,
             grid_snap_on: false,
             grid_spacing: 1.0,
+            snap_spacing_x: 10.0,
+            snap_spacing_y: 10.0,
             osnap_radius_px: DEFAULT_OSNAP_RADIUS_PX,
             otrack_enabled: false,
             tracking_points: Vec::new(),
@@ -200,6 +302,97 @@ impl Default for Snapper {
         }
     }
 }
+
+/// Inline stack-allocated collection for up to 16 in-range `WireModel` references,
+/// falling back to heap if an aperture contains more than 16 wires.
+/// Avoids heap allocations entirely on the interactive drafting and cursor hover paths.
+struct InRangeWires<'a> {
+    stack: [Option<&'a WireModel>; 16],
+    heap: Vec<&'a WireModel>,
+    count: usize,
+}
+
+impl<'a> InRangeWires<'a> {
+    #[inline(always)]
+    fn new() -> Self {
+        Self {
+            stack: [None; 16],
+            heap: Vec::new(),
+            count: 0,
+        }
+    }
+
+    #[inline(always)]
+    fn push(&mut self, wire: &'a WireModel) {
+        if self.count < 16 {
+            self.stack[self.count] = Some(wire);
+        } else {
+            if self.heap.is_empty() {
+                self.heap.reserve(16);
+                for slot in &self.stack {
+                    if let Some(w) = slot {
+                        self.heap.push(*w);
+                    }
+                }
+            }
+            self.heap.push(wire);
+        }
+        self.count += 1;
+    }
+
+    #[inline(always)]
+    fn len(&self) -> usize {
+        self.count
+    }
+
+    #[inline(always)]
+    fn is_empty(&self) -> bool {
+        self.count == 0
+    }
+
+    #[inline(always)]
+    fn get(&self, idx: usize) -> Option<&'a WireModel> {
+        if idx >= self.count {
+            None
+        } else if self.count <= 16 {
+            self.stack[idx]
+        } else {
+            self.heap.get(idx).copied()
+        }
+    }
+
+    #[inline(always)]
+    fn iter(&self) -> InRangeWiresIter<'a, '_> {
+        InRangeWiresIter {
+            wires: self,
+            index: 0,
+        }
+    }
+}
+
+struct InRangeWiresIter<'a, 'b> {
+    wires: &'b InRangeWires<'a>,
+    index: usize,
+}
+
+impl<'a, 'b> Iterator for InRangeWiresIter<'a, 'b> {
+    type Item = &'a WireModel;
+
+    #[inline(always)]
+    fn next(&mut self) -> Option<Self::Item> {
+        let item = self.wires.get(self.index)?;
+        self.index += 1;
+        Some(item)
+    }
+
+    #[inline(always)]
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let remaining = self.wires.count.saturating_sub(self.index);
+        (remaining, Some(remaining))
+    }
+}
+
+impl<'a, 'b> ExactSizeIterator for InRangeWiresIter<'a, 'b> {}
 
 impl Snapper {
     /// True when snap is globally on AND at least one mode is configured.
@@ -257,6 +450,28 @@ impl Snapper {
 
     pub fn toggle_grid_snap(&mut self) {
         self.grid_snap_on = !self.grid_snap_on;
+    }
+
+    /// 3D object snap on/off (F4) — independent of the 2D object-snap master
+    /// and mode set. Only gates the solid B-rep snaps (`Vertex`,
+    /// `EdgeMidpoint`).
+    pub fn snap3d(&self) -> bool {
+        self.snap3d_enabled
+    }
+
+    pub fn toggle_snap3d(&mut self) {
+        self.snap3d_enabled = !self.snap3d_enabled;
+    }
+
+    /// Whether 3D snap mode `t` can fire: master on and mode configured.
+    pub fn is_on_3d(&self, t: SnapType) -> bool {
+        self.snap3d_enabled && self.enabled3d.contains(&t)
+    }
+
+    pub fn toggle_3d(&mut self, t: SnapType) {
+        if !self.enabled3d.remove(&t) {
+            self.enabled3d.insert(t);
+        }
     }
 
     pub fn toggle(&mut self, t: SnapType) {
@@ -863,6 +1078,10 @@ impl Snapper {
             extension_base2: None,
             extension_origin: None,
             extension_dir: None,
+            viewport: None,
+            source: None,
+            secondary_source: None,
+            model_point: None,
         })
     }
 
@@ -885,6 +1104,10 @@ impl Snapper {
             },
             grid_snap_on: false,
             grid_spacing: self.grid_spacing,
+            snap_spacing_x: self.snap_spacing_x,
+            snap_spacing_y: self.snap_spacing_y,
+            snap3d_enabled: false,
+            enabled3d: HashSet::default(),
             osnap_radius_px: self.osnap_radius_px,
             otrack_enabled: false,
             tracking_points: Vec::new(),
@@ -957,9 +1180,16 @@ impl Snapper {
         // Object snaps therefore NEVER catch grid points; only when grid snap is
         // on can a grid corner be picked. It is evaluated first and at the
         // lowest priority, so any object snap inside the aperture overrides it.
+        // Unlike object snap, grid snap LOCKS: like AutoCAD SNAP, every point
+        // rounds to the grid — it is not gated by the aperture. (Gating it
+        // would break as soon as the fixed SNAPUNIT spacing differs from the
+        // adaptive visible-grid step on screen.)
         if self.grid_snap_on {
-            let s = self.grid_spacing as f64;
-            if s.abs() > 1e-9 {
+            let sx = self.snap_spacing_x as f64;
+            let sy = self.snap_spacing_y as f64;
+            // Z has no independent spacing in the dialog; follow X.
+            let sz = sx;
+            if sx.abs() > 1e-9 && sy.abs() > 1e-9 && sz.abs() > 1e-9 {
                 // Round in the UCS grid frame, then map back to world.
                 let (ax, ay, az) = grid_axes;
                 let ax = ax.normalize_or(Vec3::X).as_dvec3();
@@ -980,13 +1210,16 @@ impl Snapper {
                 } else {
                     (rel.dot(ax), rel.dot(ay))
                 };
-                let ux = (ux / s).round() * s;
-                let uy = (uy / s).round() * s;
-                let uz = (rel.dot(az) / s).round() * s;
+                let ux = (ux / sx).round() * sx;
+                let uy = (uy / sy).round() * sy;
+                let uz = (rel.dot(az) / sz).round() * sz;
                 let gp = origin + ax * ux + ay * uy + az * uz;
                 let screen = world_to_screen(gp, view_rot, eye, bounds);
                 let d2 = dist2(screen, cursor_screen);
-                if d2 < radius2 && in_bounds(screen) {
+                // Lock, don't magnet: any in-pane grid point stands, so the
+                // cursor jumps grid-to-grid even when the SNAPUNIT spacing
+                // is far from the adaptive visible-grid step.
+                if in_bounds(screen) {
                     best = Some(SnapResult {
                         world: gp,
                         screen,
@@ -996,6 +1229,10 @@ impl Snapper {
                         extension_base2: None,
                         extension_origin: None,
                         extension_dir: None,
+                        viewport: None,
+                        source: None,
+                        secondary_source: None,
+                        model_point: None,
                     });
                     best_rank = snap_tier(SnapType::Grid);
                     best_sub = snap_priority(SnapType::Grid);
@@ -1004,9 +1241,10 @@ impl Snapper {
             }
         }
 
-        // Object snaps are gated by the object-snap master toggle. With it off
-        // only the grid result (if any) stands.
-        if !self.snap_enabled {
+        // The 2D object-snap master gates the 2D passes below. With it off,
+        // the grid result (if any) and the independent 3D system still stand.
+        // (`try_pt` drops 2D candidates itself when the master is off.)
+        if !self.snap_enabled && !self.snap3d_enabled {
             return best;
         }
 
@@ -1071,18 +1309,35 @@ impl Snapper {
         // cursor cell held ~1k wires / ~240k points → 15 s pre-gate.)
         const MAX_PAIRWISE_POINTS: usize = 3_000;
         let mut in_range_pts = 0usize;
-        if wires.segments().is_none() {
-            for w in wires.iter().filter(|w| wire_in_range(w)) {
-                in_range_pts += w.points.len();
-                if in_range_pts > MAX_PAIRWISE_POINTS {
-                    break;
+        let mut in_range_wires = InRangeWires::new();
+        let unindexed = wires.segments().is_none();
+        if unindexed {
+            for w in wires.iter() {
+                if wire_in_range(w) {
+                    in_range_pts += w.points.len();
+                    in_range_wires.push(w);
                 }
             }
         }
         let allow_unindexed_pairwise = in_range_pts <= MAX_PAIRWISE_POINTS;
         let local_segments = indexed_segments(wires);
 
-        let mut try_pt = |world: glam::DVec3, snap_type: SnapType| {
+        // Early out: if no unindexed wires overlap the cursor aperture and
+        // no persistent tracking points exist, discrete/continuous object snaps
+        // cannot hit anything. Avoid running all subsequent pass setups and loops.
+        if unindexed && in_range_wires.is_empty() && self.tracking_points.is_empty() {
+            return best;
+        }
+
+        let mut try_pt = |world: glam::DVec3,
+                          snap_type: SnapType,
+                          src: Option<DimensionAssociationSource>,
+                          secondary: Option<DimensionAssociationSource>| {
+            // Masters are per-system: 2D candidates need the 2D master, 3D
+            // solid candidates answer only to the F4 master.
+            if !snap_type.is_3d() && !self.snap_enabled {
+                return;
+            }
             let screen = world_to_screen(world, view_rot, eye, bounds);
             if !in_bounds(screen) {
                 return;
@@ -1096,7 +1351,20 @@ impl Snapper {
                 return;
             }
             let (tier, sub) = (snap_tier(snap_type), snap_priority(snap_type));
-            if snap_better(tier, d2, sub, (best_rank, best_d2, best_sub)) {
+            // Coincident 3D features share pixels (top and bottom face
+            // centres coincide in plan view): break exact ties by eye depth
+            // so the nearer one wins instead of whichever was evaluated
+            // first. 2D geometry is coplanar, so this never triggers there.
+            let depth_tie = snap_type.is_3d()
+                && tier == best_rank
+                && (d2 - best_d2).abs() <= 1e-4
+                && sub == best_sub
+                && best.is_some_and(|prev| {
+                    (world - eye).length_squared() < (prev.world - eye).length_squared()
+                });
+            if depth_tie
+                || snap_better(tier, d2, sub, (best_rank, best_d2, best_sub))
+            {
                 best_rank = tier;
                 best_sub = sub;
                 best_d2 = d2;
@@ -1109,38 +1377,57 @@ impl Snapper {
                     extension_base2: None,
                     extension_origin: None,
                     extension_dir: None,
+                    viewport: None,
+                    source: src,
+                    secondary_source: secondary,
+                    model_point: None,
                 });
             }
         };
 
         // ── Pre-baked snap points (Center, Node, Quadrant, Insertion) ──────
-        let mut try_snap_hint = |world: DVec3, hint: SnapHint| {
-            let snap_type = match hint {
-                SnapHint::Center => SnapType::Center,
-                SnapHint::Node => SnapType::Node,
-                SnapHint::Quadrant => SnapType::Quadrant,
-                SnapHint::Insertion => SnapType::Insertion,
-                SnapHint::Midpoint => SnapType::Midpoint,
-                SnapHint::Endpoint => SnapType::Endpoint,
+        let mut try_snap_hint = |world: DVec3,
+                                 hint: SnapHint,
+                                 src: Option<DimensionAssociationSource>| {
+            // 3D hints run on the separate 3D master + mode set; everything
+            // else stays on the 2D master + mode set.
+            let (snap_type, on) = match hint {
+                SnapHint::Center => (SnapType::Center, self.is_on(SnapType::Center)),
+                SnapHint::Node => (SnapType::Node, self.is_on(SnapType::Node)),
+                SnapHint::Quadrant => (SnapType::Quadrant, self.is_on(SnapType::Quadrant)),
+                SnapHint::Insertion => (SnapType::Insertion, self.is_on(SnapType::Insertion)),
+                SnapHint::Midpoint => (SnapType::Midpoint, self.is_on(SnapType::Midpoint)),
+                SnapHint::Endpoint => (SnapType::Endpoint, self.is_on(SnapType::Endpoint)),
+                SnapHint::Vertex => (SnapType::Vertex, self.is_on_3d(SnapType::Vertex)),
+                SnapHint::EdgeMidpoint => (
+                    SnapType::EdgeMidpoint,
+                    self.is_on_3d(SnapType::EdgeMidpoint),
+                ),
+                SnapHint::FaceCenter => (
+                    SnapType::FaceCenter,
+                    self.is_on_3d(SnapType::FaceCenter),
+                ),
+                SnapHint::Knot => (SnapType::Knot, self.is_on_3d(SnapType::Knot)),
             };
-            if self.is_on(snap_type) {
-                try_pt(world, snap_type);
+            if on {
+                try_pt(world, snap_type, src, None);
             }
         };
         if let Some(points) = wires.snap_points() {
             for point_ref in points {
-                let Some(&(world, hint)) = wires
-                    .source_wire(point_ref.wire)
-                    .and_then(|wire| wire.snap_pts.get(point_ref.index as usize))
-                else {
+                let Some(wire) = wires.source_wire(point_ref.wire) else {
                     continue;
                 };
-                try_snap_hint(world, hint);
+                let Some(&(world, hint)) = wire.snap_pts.get(point_ref.index as usize) else {
+                    continue;
+                };
+                try_snap_hint(world, hint, wire_source(wire));
             }
         } else {
-            for wire in wires.iter() {
+            for wire in in_range_wires.iter() {
+                let src = wire_source(wire);
                 for &(world, hint) in &wire.snap_pts {
-                    try_snap_hint(world, hint);
+                    try_snap_hint(world, hint, src);
                 }
             }
         }
@@ -1150,13 +1437,18 @@ impl Snapper {
         if self.is_on(SnapType::Endpoint) {
             if let Some(vertices) = wires.key_vertices() {
                 for vertex_ref in vertices {
-                    let Some(&point) = wires
-                        .source_wire(vertex_ref.wire)
-                        .and_then(|wire| wire.key_vertices.get(vertex_ref.index as usize))
-                    else {
+                    let Some(wire) = wires.source_wire(vertex_ref.wire) else {
                         continue;
                     };
-                    try_pt(DVec3::from_array(point), SnapType::Endpoint);
+                    let Some(&point) = wire.key_vertices.get(vertex_ref.index as usize) else {
+                        continue;
+                    };
+                    try_pt(
+                        DVec3::from_array(point),
+                        SnapType::Endpoint,
+                        wire_source(wire),
+                        None,
+                    );
                 }
                 // Tessellated open curves have no key-vertex set. Their only
                 // endpoints are first/last, so testing candidate wires remains
@@ -1170,20 +1462,23 @@ impl Snapper {
                         continue;
                     }
                     if !wire.points.is_empty() {
-                        try_pt(wp_f64(wire, 0), SnapType::Endpoint);
+                        try_pt(wp_f64(wire, 0), SnapType::Endpoint, wire_source(wire), None);
                     }
                     if wire.points.len() > 1 {
-                        try_pt(wp_f64(wire, wire.points.len() - 1), SnapType::Endpoint);
+                        try_pt(
+                            wp_f64(wire, wire.points.len() - 1),
+                            SnapType::Endpoint,
+                            wire_source(wire),
+                            None,
+                        );
                     }
                 }
             } else {
-                for wire in wires.iter() {
-                    if !wire_in_range(wire) {
-                        continue;
-                    }
+                for wire in in_range_wires.iter() {
+                    let src = wire_source(wire);
                     if !wire.key_vertices.is_empty() {
                         for &point in &wire.key_vertices {
-                            try_pt(DVec3::from_array(point), SnapType::Endpoint);
+                            try_pt(DVec3::from_array(point), SnapType::Endpoint, src, None);
                         }
                     } else {
                         let closed = wire
@@ -1192,10 +1487,15 @@ impl Snapper {
                             .any(|(_, hint)| matches!(hint, SnapHint::Quadrant));
                         if !closed {
                             if !wire.points.is_empty() {
-                                try_pt(wp_f64(wire, 0), SnapType::Endpoint);
+                                try_pt(wp_f64(wire, 0), SnapType::Endpoint, src, None);
                             }
                             if wire.points.len() > 1 {
-                                try_pt(wp_f64(wire, wire.points.len() - 1), SnapType::Endpoint);
+                                try_pt(
+                                    wp_f64(wire, wire.points.len() - 1),
+                                    SnapType::Endpoint,
+                                    src,
+                                    None,
+                                );
                             }
                         }
                     }
@@ -1222,16 +1522,17 @@ impl Snapper {
                     let a = DVec3::from_array(a);
                     let b = DVec3::from_array(b);
                     if a.distance_squared(b) > 1e-12 {
-                        try_pt((a + b) * 0.5, SnapType::Midpoint);
+                        try_pt((a + b) * 0.5, SnapType::Midpoint, wire_source(wire), None);
                     }
                 }
             } else {
-                for wire in wires.iter().filter(|wire| wire_in_range(wire)) {
+                for wire in in_range_wires.iter() {
+                    let src = wire_source(wire);
                     for segment in wire.key_vertices.windows(2) {
                         let a = DVec3::from_array(segment[0]);
                         let b = DVec3::from_array(segment[1]);
                         if a.distance_squared(b) > 1e-12 {
-                            try_pt((a + b) * 0.5, SnapType::Midpoint);
+                            try_pt((a + b) * 0.5, SnapType::Midpoint, src, None);
                         }
                     }
                 }
@@ -1245,17 +1546,17 @@ impl Snapper {
                     try_pt(
                         nearest_on_segment(cursor_world, seg.a, seg.b),
                         SnapType::Nearest,
+                        wires.source_wire(seg.wire).and_then(wire_source),
+                        None,
                     );
                 }
             } else {
-                for wire in wires.iter() {
-                    if !wire_in_range(wire) {
-                        continue;
-                    }
+                for wire in in_range_wires.iter() {
+                    let src = wire_source(wire);
                     for i in 0..wire.points.len().saturating_sub(1) {
                         let p =
                             nearest_on_segment(cursor_world, wp_f64(wire, i), wp_f64(wire, i + 1));
-                        try_pt(p, SnapType::Nearest);
+                        try_pt(p, SnapType::Nearest, src, None);
                     }
                 }
             }
@@ -1268,17 +1569,20 @@ impl Snapper {
                 if let Some(segments) = &local_segments {
                     for seg in segments {
                         if let Some(foot) = perp_foot(q, seg.a, seg.b) {
-                            try_pt(foot, SnapType::Perpendicular);
+                            try_pt(
+                                foot,
+                                SnapType::Perpendicular,
+                                wires.source_wire(seg.wire).and_then(wire_source),
+                                None,
+                            );
                         }
                     }
                 } else {
-                    for wire in wires.iter() {
-                        if !wire_in_range(wire) {
-                            continue;
-                        }
+                    for wire in in_range_wires.iter() {
+                        let src = wire_source(wire);
                         for i in 0..wire.points.len().saturating_sub(1) {
                             if let Some(foot) = perp_foot(q, wp_f64(wire, i), wp_f64(wire, i + 1)) {
-                                try_pt(foot, SnapType::Perpendicular);
+                                try_pt(foot, SnapType::Perpendicular, src, None);
                             }
                         }
                     }
@@ -1296,12 +1600,18 @@ impl Snapper {
                         ray_segment_intersect_3d(origin, through, segment.a, segment.b)
                     {
                         if (point - origin).length_squared() > 1e-18 {
-                            try_pt(point, SnapType::Intersection);
+                            try_pt(
+                                point,
+                                SnapType::Intersection,
+                                wires.source_wire(segment.wire).and_then(wire_source),
+                                None,
+                            );
                         }
                     }
                 }
             } else {
-                for wire in wires.iter().filter(|wire| wire_in_range(wire)) {
+                for wire in in_range_wires.iter() {
+                    let src = wire_source(wire);
                     for index in 0..wire.points.len().saturating_sub(1) {
                         if let Some(point) = ray_segment_intersect_3d(
                             origin,
@@ -1310,7 +1620,7 @@ impl Snapper {
                             wp_f64(wire, index + 1),
                         ) {
                             if (point - origin).length_squared() > 1e-18 {
-                                try_pt(point, SnapType::Intersection);
+                                try_pt(point, SnapType::Intersection, src, None);
                             }
                         }
                     }
@@ -1392,8 +1702,11 @@ impl Snapper {
                 for (idx, &wire_i) in local_wires.iter().enumerate() {
                     for &wire_j in &local_wires[idx + 1..] {
                         if let Some(points) = exact_curve_intersections(wire_i, wire_j) {
+                            // Two wires meet here; attribute the feature to the
+                            // first. Association resolution requires both source paths.
+                            let src = wire_source(wire_i);
                             for point in points {
-                                try_pt(point, SnapType::Intersection);
+                                try_pt(point, SnapType::Intersection, src, wire_source(wire_j));
                             }
                             resolved_pairs.insert(pair_key(wire_i, wire_j));
                         }
@@ -1424,7 +1737,12 @@ impl Snapper {
                                     world_to_screen(pt, view_rot, eye, bounds),
                                     cursor_screen,
                                 ) <= f32::EPSILON;
-                                try_pt(pt, SnapType::Intersection);
+                                try_pt(
+                                    pt,
+                                    SnapType::Intersection,
+                                    wires.source_wire(a.wire).and_then(wire_source),
+                                    wires.source_wire(b.wire).and_then(wire_source),
+                                );
                                 if exact_cursor {
                                     break 'intersection_sweep;
                                 }
@@ -1432,26 +1750,21 @@ impl Snapper {
                         }
                     }
                 }
-            } else {
-                for i in 0..wires.len() {
-                    let Some(wire_i) = wires.get(i) else {
+            } else if in_range_wires.len() >= 2 {
+                for i in 0..in_range_wires.len() {
+                    let Some(wire_i) = in_range_wires.get(i) else {
                         continue;
                     };
-                    if !wire_in_range(wire_i) {
-                        continue;
-                    }
-                    for j in (i + 1)..wires.len() {
-                        let Some(wire_j) = wires.get(j) else {
+                    for j in (i + 1)..in_range_wires.len() {
+                        let Some(wire_j) = in_range_wires.get(j) else {
                             continue;
                         };
-                        if !wire_in_range(wire_j) {
-                            continue;
-                        }
                         // Curved pairs are solved exactly (bug #1052); see
                         // `exact_curve_intersections`'s doc comment.
                         if let Some(pts) = exact_curve_intersections(wire_i, wire_j) {
+                            let src = wire_source(wire_i);
                             for pt in pts {
-                                try_pt(pt, SnapType::Intersection);
+                                try_pt(pt, SnapType::Intersection, src, wire_source(wire_j));
                             }
                             continue;
                         }
@@ -1475,7 +1788,12 @@ impl Snapper {
                                     continue;
                                 }
                                 if let Some(pt) = seg_intersect_3d(a0, a1, b0, b1) {
-                                    try_pt(pt, SnapType::Intersection);
+                                    try_pt(
+                                        pt,
+                                        SnapType::Intersection,
+                                        wire_source(wire_i),
+                                        wire_source(wire_j),
+                                    );
                                 }
                             }
                         }
@@ -1501,7 +1819,7 @@ impl Snapper {
                         bounds,
                         self.osnap_radius_px,
                     ) {
-                        try_pt(ext, SnapType::Extension);
+                        try_pt(ext, SnapType::Extension, None, None);
                     }
                 }
             }
@@ -1548,7 +1866,7 @@ impl Snapper {
                     // feet (which sit closer to the cursor on their own lines),
                     // or the cursor would snap to a line instead of the crossing.
                     let pt = glam::DVec3::new(a0.x + t1 * d1.x, a0.y + t1 * d1.y, a0.z);
-                    try_pt(pt, SnapType::Intersection);
+                    try_pt(pt, SnapType::Intersection, None, None);
                 }
             }
         }
@@ -1601,6 +1919,8 @@ impl Snapper {
                                 try_pt(
                                     segment_a.a + ta as f64 * (segment_a.b - segment_a.a),
                                     SnapType::ApparentIntersection,
+                                    wires.source_wire(segment_a.wire).and_then(wire_source),
+                                    wires.source_wire(segment_b.wire).and_then(wire_source),
                                 );
                                 if dist2(apparent_screen, cursor_screen) <= f32::EPSILON {
                                     break 'apparent_sweep;
@@ -1609,35 +1929,26 @@ impl Snapper {
                         }
                     }
                 }
-            } else {
-                let screen_pts: Vec<Option<Vec<Point>>> = wires
+            } else if in_range_wires.len() >= 2 {
+                let screen_pts: Vec<Vec<Point>> = in_range_wires
                     .iter()
                     .map(|w| {
-                        if !wire_in_range(w) {
-                            return None;
-                        }
-                        Some(
-                            (0..w.points.len())
-                                .map(|i| world_to_screen(wp_f64(w, i), view_rot, eye, bounds))
-                                .collect::<Vec<_>>(),
-                        )
+                        (0..w.points.len())
+                            .map(|i| world_to_screen(wp_f64(w, i), view_rot, eye, bounds))
+                            .collect()
                     })
                     .collect();
 
-                for i in 0..wires.len() {
-                    let Some(ref si) = screen_pts[i] else {
+                for i in 0..in_range_wires.len() {
+                    let Some(wire_i) = in_range_wires.get(i) else {
                         continue;
                     };
-                    let Some(wire_i) = wires.get(i) else {
-                        continue;
-                    };
-                    for j in (i + 1)..wires.len() {
-                        let Some(ref sj) = screen_pts[j] else {
+                    let si = &screen_pts[i];
+                    for j in (i + 1)..in_range_wires.len() {
+                        let Some(wire_j) = in_range_wires.get(j) else {
                             continue;
                         };
-                        let Some(wire_j) = wires.get(j) else {
-                            continue;
-                        };
+                        let sj = &screen_pts[j];
                         for ai in 0..wire_i.points.len().saturating_sub(1) {
                             let sa0 = si[ai];
                             let sa1 = si[ai + 1];
@@ -1650,6 +1961,8 @@ impl Snapper {
                                     try_pt(
                                         wa0 + ta as f64 * (wa1 - wa0),
                                         SnapType::ApparentIntersection,
+                                        wire_source(wire_i),
+                                        wire_source(wire_j),
                                     );
                                 }
                             }
@@ -1662,8 +1975,10 @@ impl Snapper {
         // ── Tangent ────────────────────────────────────────────────────────
         // Operates directly on tangent_geoms geometry — independent of the
         // wire.points rendering structure so polyline segments work correctly.
-        if self.is_on(SnapType::Tangent) {
-            for wire in wires.iter() {
+        // 2D master applies (the shared `try_pt` gate does not cover this
+        // direct-evaluation pass).
+        if self.snap_enabled && self.is_on(SnapType::Tangent) {
+            let mut eval_tangent = |wire: &WireModel| {
                 for tg in &wire.tangent_geoms {
                     let (world_pt, d2) = match tg {
                         TangentGeom::Line { p1, p2 } => {
@@ -1871,7 +2186,23 @@ impl Snapper {
                             extension_base2: None,
                             extension_origin: None,
                             extension_dir: None,
+                            viewport: None,
+                            source: wire_source(wire),
+                            secondary_source: None,
+                            model_point: None,
                         });
+                    }
+                }
+            };
+
+            if unindexed {
+                for wire in in_range_wires.iter() {
+                    eval_tangent(wire);
+                }
+            } else {
+                for wire in wires.iter() {
+                    if wire_in_range(wire) {
+                        eval_tangent(wire);
                     }
                 }
             }
@@ -1886,7 +2217,8 @@ impl Snapper {
         // cursor is near such a curve, offer its centre, ranked by how close
         // the cursor is to the curve. Runs here, after `try_pt`'s borrow ends,
         // so it can update the candidate state directly. (#152)
-        if self.is_on(SnapType::Center) {
+        // 2D master applies (this direct-evaluation pass bypasses `try_pt`).
+        if self.snap_enabled && self.is_on(SnapType::Center) {
             let mut offer = |wire: &WireModel, curve_d2: f32| {
                 let Some(center) = wire
                     .snap_pts
@@ -1921,6 +2253,10 @@ impl Snapper {
                         extension_base2: None,
                         extension_origin: None,
                         extension_dir: None,
+                        viewport: None,
+                        source: wire_source(wire),
+                        secondary_source: None,
+                        model_point: None,
                     });
                 }
             };
@@ -1953,7 +2289,7 @@ impl Snapper {
                     }
                 }
             } else {
-                for wire in wires.iter().filter(|wire| wire_in_range(wire)) {
+                for wire in in_range_wires.iter() {
                     let mut curve_d2 = f32::INFINITY;
                     for index in 0..wire.points.len().saturating_sub(1) {
                         let nearest = nearest_on_segment(
@@ -2010,7 +2346,7 @@ impl Snapper {
 /// among them — a circle's Center must not mask its Quadrants just by rank
 /// (#420). Continuous snaps keep their individual lower tiers, preserving the
 /// #118 guarantee that they never suppress a discrete snap in the aperture.
-fn snap_tier(t: SnapType) -> u8 {
+pub(crate) fn snap_tier(t: SnapType) -> u8 {
     match t {
         SnapType::Endpoint
         | SnapType::Intersection
@@ -2019,8 +2355,41 @@ fn snap_tier(t: SnapType) -> u8 {
         | SnapType::Center
         | SnapType::Node
         | SnapType::Quadrant
-        | SnapType::Insertion => 0,
+        | SnapType::Insertion
+        // Solid B-rep snaps are discrete like the 2D ones above.
+        | SnapType::Vertex
+        | SnapType::EdgeMidpoint
+        | SnapType::FaceCenter
+        | SnapType::Knot => 0,
+        // The face-continuous modes slot alongside their 2D analogues —
+        // without these arms the sub-priority fallback would rank them
+        // below Grid.
+        SnapType::FacePerpendicular => 9,
+        SnapType::NearestFace => 13,
         other => snap_priority(other),
+    }
+}
+
+/// Merge paper and viewport snaps using the engine's ordering.
+/// Both screen positions must use canvas pixels.
+pub fn merge_snap(
+    a: Option<SnapResult>,
+    b: Option<SnapResult>,
+    cursor: Point,
+) -> Option<SnapResult> {
+    match (a, b) {
+        (Some(a), Some(b)) => {
+            let (at, asub) = (snap_tier(a.snap_type), snap_priority(a.snap_type));
+            let (bt, bsub) = (snap_tier(b.snap_type), snap_priority(b.snap_type));
+            let bd2 = dist2(b.screen, cursor);
+            let ad2 = dist2(a.screen, cursor);
+            if snap_better(bt, bd2, bsub, (at, ad2, asub)) {
+                Some(b)
+            } else {
+                Some(a)
+            }
+        }
+        (some, None) | (None, some) => some,
     }
 }
 
@@ -2028,7 +2397,7 @@ fn snap_tier(t: SnapType) -> u8 {
 /// candidates are effectively equidistant (coincident features) the classic
 /// sub-priority — so an Endpoint still beats an Intersection sitting on the
 /// exact same point. Distances are screen-px²; 4.0 ≈ a 2 px coincidence band.
-fn snap_better(tier: u8, d2: f32, sub: u8, best: (u8, f32, u8)) -> bool {
+pub(crate) fn snap_better(tier: u8, d2: f32, sub: u8, best: (u8, f32, u8)) -> bool {
     let (bt, bd2, bsub) = best;
     if tier != bt {
         return tier < bt;
@@ -2039,7 +2408,7 @@ fn snap_better(tier: u8, d2: f32, sub: u8, best: (u8, f32, u8)) -> bool {
     sub < bsub
 }
 
-fn snap_priority(t: SnapType) -> u8 {
+pub(crate) fn snap_priority(t: SnapType) -> u8 {
     match t {
         SnapType::Endpoint => 0,
         SnapType::Intersection => 1,
@@ -2056,6 +2425,15 @@ fn snap_priority(t: SnapType) -> u8 {
         SnapType::Extension => 12,
         SnapType::Nearest => 13,
         SnapType::Grid => 14,
+        // 3D discretes sort after the 2D ones so a coincident 2D feature wins
+        // the tie-break; distance still decides first (`snap_better`). The
+        // face-continuous modes slot alongside their 2D analogues.
+        SnapType::Vertex => 15,
+        SnapType::EdgeMidpoint => 16,
+        SnapType::FaceCenter => 17,
+        SnapType::Knot => 18,
+        SnapType::FacePerpendicular => 19,
+        SnapType::NearestFace => 20,
     }
 }
 
@@ -2767,6 +3145,113 @@ fn dist2(a: Point, b: Point) -> f32 {
     dx * dx + dy * dy
 }
 
+/// Closest point on the 2D triangle (a, b, c) to `p`: the point, its squared
+/// distance, and its barycentric weights for (a, b, c) so callers can lift
+/// the result back to 3D. Used to land Nearest-to-face on a projected mesh
+/// triangle.
+pub(crate) fn closest_point_on_tri_2d(
+    p: [f32; 2],
+    a: [f32; 2],
+    b: [f32; 2],
+    c: [f32; 2],
+) -> ([f32; 2], f32, [f32; 3]) {
+    let close = |q: [f32; 2], w: [f32; 3]| {
+        let dx = p[0] - q[0];
+        let dy = p[1] - q[1];
+        (q, dx * dx + dy * dy, w)
+    };
+    // Barycentric region tests (Real-Time Collision Detection §5.1.5).
+    let ab = [b[0] - a[0], b[1] - a[1]];
+    let ac = [c[0] - a[0], c[1] - a[1]];
+    let ap = [p[0] - a[0], p[1] - a[1]];
+    let d1 = ab[0] * ap[0] + ab[1] * ap[1];
+    let d2 = ac[0] * ap[0] + ac[1] * ap[1];
+    if d1 <= 0.0 && d2 <= 0.0 {
+        return close(a, [1.0, 0.0, 0.0]);
+    }
+    let bp = [p[0] - b[0], p[1] - b[1]];
+    let d3 = ab[0] * bp[0] + ab[1] * bp[1];
+    let d4 = ac[0] * bp[0] + ac[1] * bp[1];
+    if d3 >= 0.0 && d4 <= d3 {
+        return close(b, [0.0, 1.0, 0.0]);
+    }
+    let vc = d1 * d4 - d3 * d2;
+    if vc <= 0.0 && d1 >= 0.0 && d3 <= 0.0 {
+        let v = d1 / (d1 - d3);
+        return close([a[0] + v * ab[0], a[1] + v * ab[1]], [1.0 - v, v, 0.0]);
+    }
+    let cp = [p[0] - c[0], p[1] - c[1]];
+    let d5 = ab[0] * cp[0] + ab[1] * cp[1];
+    let d6 = ac[0] * cp[0] + ac[1] * cp[1];
+    if d6 >= 0.0 && d5 <= d6 {
+        return close(c, [0.0, 0.0, 1.0]);
+    }
+    let vb = d5 * d2 - d1 * d6;
+    if vb <= 0.0 && d2 >= 0.0 && d6 <= 0.0 {
+        let w = d2 / (d2 - d6);
+        return close([a[0] + w * ac[0], a[1] + w * ac[1]], [1.0 - w, 0.0, w]);
+    }
+    let va = d3 * d6 - d5 * d4;
+    if va <= 0.0 && (d4 - d3) >= 0.0 && (d5 - d6) >= 0.0 {
+        let w = (d4 - d3) / ((d4 - d3) + (d5 - d6));
+        return close(
+            [b[0] + w * (c[0] - b[0]), b[1] + w * (c[1] - b[1])],
+            [0.0, 1.0 - w, w],
+        );
+    }
+    // Inside: barycentric interpolation.
+    let denom = 1.0 / (va + vb + vc);
+    let v = vb * denom;
+    let w = vc * denom;
+    close(
+        [a[0] + ab[0] * v + ac[0] * w, a[1] + ab[1] * v + ac[1] * w],
+        [1.0 - v - w, v, w],
+    )
+}
+
+/// Foot of the perpendicular from `base` onto the triangle (a, b, c):
+/// `None` for degenerate triangles, a base already in the face plane
+/// (perpendicular undefined), or a foot landing outside the triangle.
+pub(crate) fn foot_on_triangle(
+    base: glam::DVec3,
+    a: glam::DVec3,
+    b: glam::DVec3,
+    c: glam::DVec3,
+) -> Option<glam::DVec3> {
+    let ab = b - a;
+    let ac = c - a;
+    let n = ab.cross(ac);
+    let n2 = n.length_squared();
+    if !(n2 > 1e-24) {
+        return None;
+    }
+    let dist = (base - a).dot(n) / n2.sqrt();
+    if dist.abs() <= 1e-9 {
+        return None;
+    }
+    let foot = base - n * ((base - a).dot(n) / n2);
+    // Inside test via barycentric areas (tolerant sliver at the rim).
+    let v0 = c - a;
+    let v1 = b - a;
+    let v2 = foot - a;
+    let d00 = v0.dot(v0);
+    let d01 = v0.dot(v1);
+    let d11 = v1.dot(v1);
+    let d20 = v2.dot(v0);
+    let d21 = v2.dot(v1);
+    let denom = d00 * d11 - d01 * d01;
+    if denom.abs() <= 1e-24 {
+        return None;
+    }
+    let v = (d11 * d20 - d01 * d21) / denom;
+    let w = (d00 * d21 - d01 * d20) / denom;
+    if v >= -1e-9 && w >= -1e-9 && v + w <= 1.0 + 1e-9 {
+        Some(foot)
+    } else {
+        None
+    }
+}
+
 /// The nearest line / polyline segment under the cursor as (unit direction,
 /// world point on it), within `aperture_px` in screen space, or None.
 /// Tessellated curves (circle / arc / ellipse) are skipped — they carry a
@@ -2900,6 +3385,68 @@ fn t_on_segment(p: Point, a: Point, b: Point) -> f32 {
 #[cfg(test)]
 mod ext_tests {
     use super::*;
+
+    #[test]
+    fn closest_point_on_triangle_2d_handles_inside_edge_and_vertex() {
+        let (a, b, c) = ([0.0f32, 0.0], [10.0, 0.0], [0.0, 10.0]);
+        // Interior → itself, with barycentric weights for (a, b, c).
+        let (q, d2, w) = closest_point_on_tri_2d([2.0, 2.0], a, b, c);
+        assert!((q[0] - 2.0).abs() < 1e-6 && (q[1] - 2.0).abs() < 1e-6);
+        assert!(d2 < 1e-12);
+        assert!((w[0] - 0.6).abs() < 1e-6 && (w[1] - 0.2).abs() < 1e-6 && (w[2] - 0.2).abs() < 1e-6);
+        // Outside near an edge → foot on the edge.
+        let (q, d2, w) = closest_point_on_tri_2d([5.0, -3.0], a, b, c);
+        assert!((q[0] - 5.0).abs() < 1e-6 && q[1].abs() < 1e-6);
+        assert!((d2 - 9.0).abs() < 1e-6);
+        assert!(w[2].abs() < 1e-6, "edge AB carries no C weight: {w:?}");
+        // Outside near a vertex → the vertex.
+        let (q, d2, _) = closest_point_on_tri_2d([-4.0, -3.0], a, b, c);
+        assert!(q[0].abs() < 1e-6 && q[1].abs() < 1e-6);
+        assert!((d2 - 25.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn foot_on_triangle_needs_off_plane_base_and_inside_landing() {
+        let (a, b, c) = (
+            DVec3::new(0.0, 0.0, 5.0),
+            DVec3::new(10.0, 0.0, 5.0),
+            DVec3::new(0.0, 10.0, 5.0),
+        );
+        // Base below the face interior → foot straight above it.
+        let foot = foot_on_triangle(DVec3::new(2.0, 3.0, 0.0), a, b, c)
+            .expect("interior foot");
+        assert!((foot - DVec3::new(2.0, 3.0, 5.0)).length() < 1e-9);
+        // Base outside the triangle's span → the foot misses it.
+        assert!(foot_on_triangle(DVec3::new(9.0, 9.0, 0.0), a, b, c).is_none());
+        // Base already in the face plane → perpendicular undefined.
+        assert!(foot_on_triangle(DVec3::new(2.0, 3.0, 5.0), a, b, c).is_none());
+    }
+
+    #[test]
+    fn snap3d_master_and_set_gate_independently_of_2d() {
+        let mut s = Snapper::default();
+        // Defaults: master on; every 3D mode configured except
+        // Nearest-to-face, which would mask the discrete snaps.
+        assert!(s.is_on_3d(SnapType::Vertex));
+        assert!(s.is_on_3d(SnapType::EdgeMidpoint));
+        assert!(!s.is_on_3d(SnapType::NearestFace));
+        // The 2D master has no say over 3D modes.
+        s.snap_enabled = false;
+        assert!(s.is_on_3d(SnapType::Vertex));
+        // Per-mode toggle.
+        s.toggle_3d(SnapType::Vertex);
+        assert!(!s.is_on_3d(SnapType::Vertex));
+        assert!(s.is_on_3d(SnapType::EdgeMidpoint));
+        // Master toggle gates the whole 3D system, keeping the set.
+        s.toggle_snap3d();
+        assert!(!s.is_on_3d(SnapType::EdgeMidpoint));
+        assert!(s.enabled3d.contains(&SnapType::EdgeMidpoint));
+        s.toggle_snap3d();
+        assert!(s.is_on_3d(SnapType::EdgeMidpoint));
+        // 3D modes never leak into the 2D set.
+        assert!(!s.is_on(SnapType::Vertex));
+        assert!(!s.is_on(SnapType::EdgeMidpoint));
+    }
 
     #[test]
     fn tracking_active_covers_otrack_and_extension() {
@@ -3454,6 +4001,174 @@ mod ext_tests {
         let points = exact_curve_intersections(&line, &circle).unwrap();
         assert_eq!(points.len(), 2);
         assert!(points.iter().all(|point| (point.x - origin).abs() == 3.0 && point.y == origin));
+    }
+
+    #[test]
+    fn test_unindexed_snap_endpoint_and_midpoint_accuracy() {
+        let mut snapper = Snapper::default();
+        snapper.snap_enabled = true;
+        snapper.enabled = [SnapType::Endpoint, SnapType::Midpoint].into_iter().collect();
+
+        let line = WireModel {
+            points: vec![[0.0, 0.0, 0.0], [100.0, 100.0, 0.0]],
+            key_vertices: vec![[0.0, 0.0, 0.0], [100.0, 100.0, 0.0]],
+            aabb: [0.0, 0.0, 100.0, 100.0],
+            tangent_geoms: vec![TangentGeom::Line { p1: [0.0, 0.0, 0.0], p2: [100.0, 100.0, 0.0] }],
+            ..Default::default()
+        };
+        let wires = vec![line];
+
+        let view_rot = Mat4::IDENTITY;
+        let bounds = Rectangle { x: 0.0, y: 0.0, width: 1000.0, height: 1000.0 };
+
+        // Test Endpoint snap near (0, 0) with eye at (0, 0, 500)
+        let eye_origin = DVec3::new(0.0, 0.0, 500.0);
+        let cursor_world = DVec3::new(0.01, 0.01, 0.0);
+        let cursor_screen = world_to_screen(cursor_world, view_rot, eye_origin, bounds);
+        let res = snapper.snap(
+            cursor_world, cursor_screen, wires.as_slice(),
+            view_rot, eye_origin, bounds, Vec3::ZERO, (Vec3::X, Vec3::Y, Vec3::Z), None,
+        ).expect("should snap to endpoint");
+        assert_eq!(res.snap_type, SnapType::Endpoint);
+        assert_eq!(res.world, DVec3::new(0.0, 0.0, 0.0));
+
+        // Test Midpoint snap near (50, 50) with eye at (50, 50, 500)
+        let eye_mid = DVec3::new(50.0, 50.0, 500.0);
+        let cursor_world = DVec3::new(50.01, 50.01, 0.0);
+        let cursor_screen = world_to_screen(cursor_world, view_rot, eye_mid, bounds);
+        let res = snapper.snap(
+            cursor_world, cursor_screen, wires.as_slice(),
+            view_rot, eye_mid, bounds, Vec3::ZERO, (Vec3::X, Vec3::Y, Vec3::Z), None,
+        ).expect("should snap to midpoint");
+        assert_eq!(res.snap_type, SnapType::Midpoint);
+        assert_eq!(res.world, DVec3::new(50.0, 50.0, 0.0));
+    }
+
+    #[test]
+    fn test_unindexed_snap_empty_space_early_out() {
+        let mut snapper = Snapper::default();
+        snapper.snap_enabled = true;
+        snapper.enable_all();
+
+        let line = WireModel {
+            points: vec![[0.0, 0.0, 0.0], [10.0, 10.0, 0.0]],
+            key_vertices: vec![[0.0, 0.0, 0.0], [10.0, 10.0, 0.0]],
+            aabb: [0.0, 0.0, 10.0, 10.0],
+            ..Default::default()
+        };
+        let wires = vec![line];
+
+        let view_rot = Mat4::IDENTITY;
+        let eye = DVec3::new(500.0, 500.0, 500.0);
+        let bounds = Rectangle { x: 0.0, y: 0.0, width: 1000.0, height: 1000.0 };
+
+        // Cursor in far whitespace (5000, 5000)
+        let cursor_world = DVec3::new(5000.0, 5000.0, 0.0);
+        let cursor_screen = Point::new(500.0, 500.0);
+        let res = snapper.snap(
+            cursor_world, cursor_screen, wires.as_slice(),
+            view_rot, eye, bounds, Vec3::ZERO, (Vec3::X, Vec3::Y, Vec3::Z), None,
+        );
+        assert!(res.is_none(), "whitespace cursor must return None");
+    }
+
+    #[test]
+    fn test_unindexed_snap_intersection_pair() {
+        let mut snapper = Snapper::default();
+        snapper.snap_enabled = true;
+        snapper.enabled = [SnapType::Intersection].into_iter().collect();
+
+        let line1 = WireModel {
+            points: vec![[0.0, 0.0, 0.0], [100.0, 100.0, 0.0]],
+            key_vertices: vec![[0.0, 0.0, 0.0], [100.0, 100.0, 0.0]],
+            aabb: [0.0, 0.0, 100.0, 100.0],
+            ..Default::default()
+        };
+        let line2 = WireModel {
+            points: vec![[0.0, 100.0, 0.0], [100.0, 0.0, 0.0]],
+            key_vertices: vec![[0.0, 100.0, 0.0], [100.0, 0.0, 0.0]],
+            aabb: [0.0, 0.0, 100.0, 100.0],
+            ..Default::default()
+        };
+        let wires = vec![line1, line2];
+
+        let view_rot = Mat4::IDENTITY;
+        let eye = DVec3::new(50.0, 50.0, 500.0);
+        let bounds = Rectangle { x: 0.0, y: 0.0, width: 1000.0, height: 1000.0 };
+
+        // Cursor near intersection (50, 50)
+        let cursor_world = DVec3::new(50.01, 50.01, 0.0);
+        let cursor_screen = world_to_screen(cursor_world, view_rot, eye, bounds);
+        let res = snapper.snap(
+            cursor_world, cursor_screen, wires.as_slice(),
+            view_rot, eye, bounds, Vec3::ZERO, (Vec3::X, Vec3::Y, Vec3::Z), None,
+        ).expect("should snap to intersection");
+        assert_eq!(res.snap_type, SnapType::Intersection);
+        assert!((res.world - DVec3::new(50.0, 50.0, 0.0)).length() < 1e-6);
+    }
+
+    #[test]
+    fn test_unindexed_snap_dense_cluster_fallback() {
+        let mut snapper = Snapper::default();
+        snapper.snap_enabled = true;
+        snapper.enabled = [SnapType::Endpoint].into_iter().collect();
+
+        // Generate 25 lines passing through (0, 0) to force > 16 wires in aperture
+        let mut wires = Vec::new();
+        for i in 0..25 {
+            let angle = (i as f64) * 0.1;
+            let p1 = [0.0f32, 0.0, 0.0];
+            let p2 = [(angle.cos() * 50.0) as f32, (angle.sin() * 50.0) as f32, 0.0];
+            let p1_f64 = [0.0f64, 0.0, 0.0];
+            let p2_f64 = [angle.cos() * 50.0, angle.sin() * 50.0, 0.0];
+            wires.push(WireModel {
+                points: vec![p1, p2],
+                key_vertices: vec![p1_f64, p2_f64],
+                aabb: [p1[0].min(p2[0]), p1[1].min(p2[1]), p1[0].max(p2[0]), p1[1].max(p2[1])],
+                ..Default::default()
+            });
+        }
+
+        let view_rot = Mat4::IDENTITY;
+        let eye = DVec3::new(0.0, 0.0, 500.0);
+        let bounds = Rectangle { x: 0.0, y: 0.0, width: 1000.0, height: 1000.0 };
+
+        let cursor_world = DVec3::new(0.01, 0.01, 0.0);
+        let cursor_screen = world_to_screen(cursor_world, view_rot, eye, bounds);
+        let res = snapper.snap(
+            cursor_world, cursor_screen, wires.as_slice(),
+            view_rot, eye, bounds, Vec3::ZERO, (Vec3::X, Vec3::Y, Vec3::Z), None,
+        ).expect("should snap to endpoint even with > 16 wires in aperture");
+        assert_eq!(res.snap_type, SnapType::Endpoint);
+        assert_eq!(res.world, DVec3::ZERO);
+    }
+
+    #[test]
+    fn grid_snap_locks_beyond_aperture_with_independent_xy() {
+        let mut s = Snapper::default();
+        s.grid_snap_on = true;
+        s.snap_enabled = false; // grid only
+        s.snap_spacing_x = 1.0;
+        s.snap_spacing_y = 0.5;
+        s.osnap_radius_px = 15.0;
+
+        let view_rot = Mat4::IDENTITY;
+        let eye = DVec3::new(0.0, 0.0, 500.0);
+        let bounds = Rectangle { x: 0.0, y: 0.0, width: 1000.0, height: 1000.0 };
+        let wires: Vec<WireModel> = Vec::new();
+
+        // 500 px per world unit: the cursor sits ~160 px from the nearest
+        // grid corner — far outside the 15 px aperture — yet SNAP must still
+        // lock like AutoCAD instead of magnetizing only when near a point.
+        let cursor_world = DVec3::new(0.32, 0.47, 500.0);
+        let cursor_screen = world_to_screen(cursor_world, view_rot, eye, bounds);
+        let res = s.snap(
+            cursor_world, cursor_screen, &wires,
+            view_rot, eye, bounds, Vec3::ZERO, (Vec3::X, Vec3::Y, Vec3::Z), None,
+        ).expect("grid snap must lock even outside the aperture");
+        assert_eq!(res.snap_type, SnapType::Grid);
+        assert!((res.world.x - 0.0).abs() < 1e-9, "x rounds to 0: {:?}", res.world);
+        assert!((res.world.y - 0.5).abs() < 1e-9, "y rounds to 0.5: {:?}", res.world);
     }
 
 }

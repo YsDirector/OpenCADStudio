@@ -4,9 +4,11 @@
 // Default save format: DWG (AC1032 / R2018+).
 
 pub mod file_association;
+pub mod font_repo;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod edit_lock;
 pub mod obj;
+pub mod ole_embed;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod single_instance;
 pub mod pdf_export;
@@ -16,10 +18,12 @@ pub mod recovery;
 pub mod step;
 pub mod stl;
 pub mod xref;
+pub mod xref_model;
 pub mod linetypes;
 pub mod patterns;
 pub mod update_check;
-pub mod paper_sizes;
+pub mod paper_catalog;
+pub mod plot_device;
 pub mod thumbnail;
 #[cfg(target_arch = "wasm32")]
 mod web_worker;
@@ -1553,6 +1557,23 @@ pub async fn pick_image_file() -> Result<(PathBuf, u32, u32), String> {
     Ok((path, w, h))
 }
 
+/// Pick an image file and prepare it for embedding (IMAGEEMBED). The bytes
+/// are read before returning so the OLE2FRAME payload is ready to place.
+pub async fn pick_embedded_image_file() -> Result<ole_embed::EmbeddedImage, String> {
+    let handle = crate::sys::file_dialog()
+        .set_title(crate::t!("Select Image File").as_ref())
+        .add_filter(crate::t!("Images").as_ref(), &["png", "jpg", "jpeg", "bmp", "tiff", "tif"])
+        .add_filter(crate::t!("PNG").as_ref(), &["png"])
+        .add_filter(crate::t!("JPEG").as_ref(), &["jpg", "jpeg"])
+        .add_filter(crate::t!("All Files").as_ref(), &["*"])
+        .pick_file()
+        .await
+        .ok_or_else(|| "Cancelled".to_string())?;
+    let name = handle.file_name();
+    let bytes = handle.read().await;
+    ole_embed::EmbeddedImage::from_bytes(name, bytes)
+}
+
 /// Save `doc` to `path` with the given DXF version, overriding `doc.version`.
 /// Format is auto-detected from the extension (dwg / dxf).
 pub fn save_as_version(
@@ -2022,6 +2043,8 @@ fn sync_current_styles_on_save(doc: &mut CadDocument) {
 // `purge_corrupt_entities` scans the document and removes any entity that
 // fails a cheap sanity check, returning the number dropped so the caller can
 // surface it to the UI / log.
+//
+// Keep valid degenerate geometry: dropping it would trigger strict-open recovery.
 
 fn finite_unit_normal(n: &acadrust::types::Vector3) -> bool {
     let (x, y, z) = (n.x, n.y, n.z);
@@ -2079,20 +2102,15 @@ pub(crate) fn is_entity_corrupt(e: &EntityType) -> bool {
                 || p.vertices.iter().any(|v| !finite_vec3(&v.location))
         }
         E::Line(l) => !finite_vec3(&l.start) || !finite_vec3(&l.end),
+        // Zero-radius curves are valid and have bounded kernel tessellation.
         E::Circle(c) => {
-            !finite_vec3(&c.center)
-                || !finite_coord(c.radius)
-                // Reject zero- or near-zero circles: they tessellate into a
-                // degenerate curve the tessellator cannot sample.
-                || c.radius.abs() < 1.0e-10
-                || c.radius.abs() > 1.0e10
+            !finite_vec3(&c.center) || !finite_coord(c.radius) || c.radius.abs() > 1.0e10
         }
         E::Arc(a) => {
             !finite_vec3(&a.center)
                 || !finite_coord(a.radius)
                 || !a.start_angle.is_finite()
                 || !a.end_angle.is_finite()
-                || a.radius.abs() < 1.0e-10
                 || a.radius.abs() > 1.0e10
                 || !finite_unit_normal(&a.normal)
         }
@@ -2342,7 +2360,7 @@ mod layer_roundtrip_tests {
 #[cfg(test)]
 mod corrupt_guard_tests {
     use super::*;
-    use acadrust::entities::{Arc, EntityType, Spline};
+    use acadrust::entities::{Arc, Circle, EntityType, Spline};
     use acadrust::types::Vector3;
 
     // Small but finite arcs are valid records. Kernel tessellation is bounded,
@@ -2380,6 +2398,32 @@ mod corrupt_guard_tests {
         a.end_angle = 1.0e-4;
         a.normal = Vector3::new(0.0, 0.0, 1.0);
         assert!(!is_entity_corrupt(&EntityType::Arc(a)));
+    }
+
+    #[test]
+    fn keeps_zero_radius_circle_and_arc() {
+        let mut c = Circle::new();
+        c.center = Vector3::new(206.2, 150.7, 0.0);
+        c.radius = 0.0;
+        assert!(!is_entity_corrupt(&EntityType::Circle(c)));
+
+        let mut a = Arc::new();
+        a.center = Vector3::new(223.5, 174.5, 0.0);
+        a.radius = 0.0;
+        a.start_angle = 0.0;
+        a.end_angle = 0.0;
+        a.normal = Vector3::new(0.0, 0.0, 1.0);
+        assert!(!is_entity_corrupt(&EntityType::Arc(a)));
+    }
+
+    #[test]
+    fn drops_absurd_radius_circle() {
+        let mut c = Circle::new();
+        c.radius = 1.0e11;
+        assert!(is_entity_corrupt(&EntityType::Circle(c)));
+        let mut c = Circle::new();
+        c.radius = f64::NAN;
+        assert!(is_entity_corrupt(&EntityType::Circle(c)));
     }
 
     // Parser desync emits 100_000-control-point splines; building a kernel
