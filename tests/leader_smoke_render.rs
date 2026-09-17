@@ -6,7 +6,7 @@
 //! 上下侧文字"的观感（数值正确性已由插件侧单测覆盖）。
 use acadrust::EntityType;
 use OpenCADStudio::io::load_file;
-use OpenCADStudio::io::pdf_export::{export_pdf, PdfPlotOptions, PlotWire};
+use OpenCADStudio::io::pdf_export::{export_pdf, PdfPageInput, PdfPlotOptions, PlotContent, PlotWire};
 use OpenCADStudio::scene::Scene;
 
 #[test]
@@ -43,21 +43,25 @@ fn leader_smoke_renders() {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).ok();
     }
+    let wire_count = wires.len();
     export_pdf(
-        &wires,
-        &[],
-        &[],
-        210.0,
-        297.0,
-        0.0,
-        0.0,
-        0,
-        1.0,
-        None,
+        &PdfPageInput {
+            content: PlotContent {
+                wires: std::sync::Arc::new(wires),
+                ..Default::default()
+            },
+            paper_w: 210.0,
+            paper_h: 297.0,
+            offset_x: 0.0,
+            offset_y: 0.0,
+            rotation_deg: 0,
+            scale: 1.0,
+            clip: None,
+            options: PdfPlotOptions::default(),
+            plot_style: None,
+        },
         &path,
-        None,
-        PdfPlotOptions::default(),
     )
     .expect("export pdf");
-    println!("leader smoke pdf written: {out} ({} wires)", wires.len());
+    println!("leader smoke pdf written: {out} ({} wires)", wire_count);
 }

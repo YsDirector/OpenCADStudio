@@ -52,18 +52,15 @@ Open CAD Studio 机械工具包插件（`opencad.ocsm`，API v5）。为机械�
 # 1. 宿主（API v5）——runner 是宿主自身二进制，必须重编
 cargo build --release
 
-# 2. 插件
-cargo build --release -p ocs_ocsm
+# 2. 插件 + 安装（.so / plugin.toml / handbook 一次搞定）
+#    宿主 API≥4 的两道门禁都靠 plugin.toml 里的**部署时占位符**，脚本会从 Cargo.lock 与 rustc 填好：
+#      __RUSTC_VERSION__   ← rustc --version 原串
+#      __ACADRUST_SOURCE__ ← Cargo.lock 里 acadrust 的 source（缺了插件直接被拒：
+#                            `Plugin built for acadrust @unknown, but this host uses @…`）
+tools/deploy_plugin.sh
 
-# 3. 安装（插件目录 + frame 文件夹）
-PLUGIN_DIR="$HOME/.config/OpenCADStudio/plugins/opencad.ocsm"
-mkdir -p "$PLUGIN_DIR/frame"
-cp target/release/libocs_ocsm.so "$PLUGIN_DIR/"
-# 宿主 v2026.36+ 对 API≥4 插件增加 rustc 门禁（Rust 无稳定 ABI）：plugin.toml
-# 必须携带构建该 .so 的 `rustc --version` 原串，否则插件被拒绝加载。
-sed "s|__RUSTC_VERSION__|$(rustc --version)|" crates/ocs_ocsm/plugin.toml > "$PLUGIN_DIR/plugin.toml"
-# 把图框 DWG 拷进 frame/（已有样例在 ~/桌面/OCSM/frame/）
-cp ~/桌面/OCSM/frame/*.dwg "$PLUGIN_DIR/frame/" || true
+# 3. 图框 DWG（已有样例在 ~/桌面/OCSM/frame/）
+cp ~/桌面/OCSM/frame/*.dwg "$HOME/.config/OpenCADStudio/plugins/opencad.ocsm/frame/" || true
 
 # 4. 卸载旧 layers_quick（宿主升 v5 后它会重新加载并与 OCSM 数字键冲突）
 rm -rf "$HOME/.config/OpenCADStudio/plugins/opencad.layers_quick"

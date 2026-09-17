@@ -13,7 +13,14 @@ description = "OCSM 初始化 + 数字键 1-9 快速图层 + 图框插入（TF�
 
 [opencad]
 api_version = 5
+# 两者都是**部署时替换**的占位符（不要手改；用 tools/deploy_plugin.sh 或下面 PLUGIN.md 的两条 sed）：
+# * rustc_version —— 宿主 v2026.36+ 对 API≥4 的 rustc 门禁；
+# * acadrust_source —— 宿主 API≥4 的 acadrust 源指纹门禁（上游 v2026.38 起强制；填错/缺失
+#   插件会被直接拒绝加载，命令行只报 `Plugin built for acadrust @unknown, but this host uses @…`）。
+#   值 = `Cargo.lock` 里 `name = "acadrust"` 那条的 `source`（形如
+#   `git+https://ghfast.top/…cadcodec.git?rev=8a28c21#8a28c21537d5e5ab06a431b1741d0c2d2b098b15`）。
 rustc_version = "__RUSTC_VERSION__"
+acadrust_source = "__ACADRUST_SOURCE__"
 ribbon_order = 100
 command_prefixes = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "TF", "OCSM", "OCSMFRAMEINIT", "OCSMFRAMEINSERT", "D", "OCSMPOWERDIM", "OCSMDIMGULIDE", "GDIM", "OCSMMCP", "OCSMRGH", "CC", "OCSMDIM2GB", "D2G", "OCSMEDIT", "ME", "OCSMPART", "XL", "OCSMJOINT", "OCSMHELP", "OH", "OCSMBOM", "BOM", "OCSMBOMSYNC", "BOMSYNC", "OCSMBOMEDIT", "BOMEDIT", "OCSMBOMLOCK", "BOMLOCK", "OCSMBOMXLSX", "BOMXLSX", "OCSMBOMXLSXI", "BOMXLSXI", "OCSMBOMCFG", "BOMCFG", "OCSMCENTERLINE", "ZX"]
 xdata_apps = ["OCSM_BOM"]

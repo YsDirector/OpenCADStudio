@@ -5,16 +5,20 @@
 > 宿主侧改动，供**每次同步上游后照单核对**，避免补丁被合掉却无人发现。
 >
 > 上游：`origin` = HakanSeven12/OpenCADStudio（经 ghfast 镜像）
-> 最近同步点：`d4007055`（Merge upstream **v2026.37** = `fc1788df`，执行记录见 §0.5）
-> 台账基准：`git diff d4007055^2..HEAD`（上游 v2026.37 → 当前本地 HEAD，**47 文件 / +10991 −96**）
-> ⚠️ 上游此后仍有更新（`origin/main` = `1450fdee`，**尚未同步**）
+> 最近同步点：`5200ef5d`（Merge upstream **`65c0fe54`**，213 提交，执行记录见 §0.11）
+> 台账基准：`git diff origin/main..HEAD`（**62 文件 / +13770 −100**，不含插件 crate；
+> 含 `crates/ocs_ocsm*` 则为 154 文件 / +81900 −100）
+> ⚠️ 上一次同步点 `d4007055`（上游 v2026.37 `fc1788df`）→ 本次之前上游又走了 213 提交。
 >
 > **2026-09-17 状态刷新（本次调查顺便核实）**：
 > * §0.6 / §0.7 / §0.9 的分支**都已推到 `prf` 远端，但上游 PR 未开** ——
 >   `gh pr list --author YsDirector -R HakanSeven12/OpenCADStudio --state all` 只有已合并的
 >   **#1234 / #1235**（2026-09-13T18:14:50Z）。要发 PR 直接用各节的 compare 链接
 >   （`桌面/OCSM/PR-*-链接.txt` 里已经是拼好的 create-PR URL）。
-> * 上游 `origin/main`（`1450fdee`）现领先本地 **127 个提交**；台账基准仍是 v2026.37（`d4007055`）。
+>   ⚠️ **开 PR 前先把那四个分支 rebase 到 `origin/main`**（它们的基点是几个月前的上游，
+>   直接用旧 diff 开 PR 会冲突）。
+> * 上游那次 213 提交**完全没有碰 `crates/ocs_plugin_api/**` 与 `src/app/plugin_host.rs`**
+>   （已用 `git diff fc1788df..origin/main --name-only` 核对）→ 插件 API v5/v6 天然安全。
 > * 别人的上游 PR **#1306**（*docs(plugin): fix inaccuracies and flag real gaps found building a plugin*）
 >   还开着，值得看一眼它点名的插件坑（可能是我们也会踩的）。
 
@@ -29,7 +33,7 @@ cargo build --release                                  # 宿主（也是插件 r
 cargo build --release -p ocs_ocsm && cp target/release/libocs_ocsm.so \
     ~/.config/OpenCADStudio/plugins/opencad.ocsm/       # 插件（含 plugin.toml 的 rustc 门禁）
 # ③ 回归
-cargo test -p ocs_ocsm                                 # 插件 178（2026-09-14 起）
+cargo test -p ocs_ocsm                                 # 插件 380（2026-09-17 起；9-14 时为 178）
 cargo test -p OpenCADStudio --lib dimtmove              # 宿主 DIMTMOVE 引线 4
 OCS_SMOKE_PLUGIN=$PWD/target/release/libocs_ocsm.so \
   OCS_PLUGIN_RUNNER_EXE=$PWD/target/release/OpenCADStudio \
@@ -180,7 +184,91 @@ OCS_SMOKE_PLUGIN=$PWD/target/release/libocs_ocsm.so \
 > **同步动作**：上游若接受，取上游版；若上游改成别的形态（如 `CommitMany`），
 > 插件侧只需改 `centerline.rs` 的返回值（其余逻辑不依赖）。
 
-## 1. 补丁总表（基准：上游 v2026.37 `fc1788df` → HEAD，47 文件 / +10991 −96）
+## 0.11 上游同步执行记录（2026-09-17，**213 提交** / `fc1788df` → `65c0fe54`）
+
+> 安全网：分支 `pre-sync-2026-09-17` + tag `presync-30c67f2f` → 合并前 `30c67f2f`。
+> 手法：**在临时 worktree `/tmp/ocs-sync` 里合**（主工作树保持干净），解完冲突再
+> `git merge --ff-only sync-2026-09-17` 快进主树 → 合并提交 `5200ef5d`。
+>
+> **8 个冲突的处置（上游 213 提交里真正跟我们撞车的只有这 8 处）**：
+>
+> | 文件 | 冲突 | 处置 |
+> |---|---|---|
+> | `Cargo.lock` | 1 | 取上游后由 cargo 重新生成（acadrust 要回到 ghfast 镜像源） |
+> | `src/app/mod.rs` | 1 块 | 并集：fork `OcsmFramePicker` + 上游 `InsertTable`/`DataLinkManager`/`DataExtraction` |
+> | `src/app/update/dialog.rs` | 1 块 | 并集：fork `PanelId::Pi` + 上游 `ExternalReferences` |
+> | `src/app/update/viewport.rs` | 1 块 | **取 fork**（上游只是把同一条件换行重排；保住 fork 的 `click_snap`/`click_pt`） |
+> | `src/app/view/mod.rs` | 2 块 | 并集（面板派发 + 面板渲染两处） |
+> | `src/app/view/modal.rs` | 1 块 | 并集：fork `OcsmFramePicker` 标题 + 上游三个新标题 |
+> | `src/scene/mod.rs` | 1 块 | **取 fork**（`pub(crate) fn tessellate_one`，插件预览要调） |
+> | `src/ui/dock.rs` | 6 块 | 并集：fork Pi 面板宽度策略（`min_width`/`max_fraction`）+ 上游 xref 策略；`PanelId::ALL` 补 `ExternalReferences` |
+>
+> **两处非冲突但必须手工修的**：
+> 1. `Cargo.toml`：上游把 acadrust 升到 rev `8a28c21` → 镜像 `[patch]` 段**跟升同一 rev**（URL 保持
+>    `ghfast.top`）；`Cargo.lock` 里 `name = "acadrust"` 的 source 必须是 ghfast（不是 github.com）。
+> 2. `src/ui/dock.rs` 的 `PanelId::ALL`：fork 用它遍历归一化宽度，**上游新增的变体要补进去**
+>    （本次补 `ExternalReferences` → `[PanelId; 4]`）。
+>
+> **⚠️ 上游删掉了 `.cargo/config.toml` 的 `[net] git-fetch-with-cli = true`** —— 本次合并把它保住了
+> （自动化合并恰好取 fork 侧）。**下次同步要盯**：没有它 libgit2 会忽略全局 `url.insteadOf`，
+> 直接卡在 github.com 拉取。
+>
+> **验证（全绿）**：`cargo check --lib` ✅ ·
+> 宿主 `cargo test -p OpenCADStudio --lib` **1360 passed / 0 failed / 18 ignored** ✅ ·
+> 插件 `cargo test -p ocs_ocsm` **380 passed / 0 failed / 24 ignored** ✅ ·
+> `--lib dimtmove` **5 passed** ✅ · `--test dim_leader_render_check` **1 passed** ✅ ·
+> `--test leader_smoke_render` **1 passed** ✅ ·
+> `OCS_SMOKE_PLUGIN=… installed_plugin…` **1 passed** ✅（新宿主加载新 .so 的 ABI 验证）·
+> 两套 release 产物已重编并安装 ✅ · **实机 smoke** ✅（重启后 `TF a3_landscape 1:2 at 0,0` →
+> 「已插入图框…比例 1:2（缩放 2.00 倍）」；Ø20 圆 `ZX` → 32 = 20 + 2×6）。
+>
+> **⚠️ 坑 3（本次最坑的一个）：上游 API≥4 新增 `acadrust_source` 门禁，插件会被静默拒绝。**
+> 新宿主要求 `plugin.toml` 的 `[opencad]` **同时**声明 `rustc_version` 与 `acadrust_source`
+> （上游 `docs/plugin-architecture.md:247/322`：值从 `Cargo.lock` 里 `name = "acadrust"` 的 `source` 取）；
+> 漏填一个插件就直接不加载，命令行只报一句含糊的
+> `✕ 插件"opencad.ocsm" 无法装入: Plugin built for acadrust @unknown, but this host uses @8a28c215…`。
+> 已把部署步骤写成一个脚本防复发：**`tools/deploy_plugin.sh`**（读 Cargo.lock 填两个占位符 + 拷手册 +
+> 自检占位符已替换 + 校验 `acadrust_source` 形状）。手动做法等价于：
+> ```bash
+> SRC=$(python3 -c "import re;print(re.search(r'name = \"acadrust\"\nversion = \"[^\"]+\"\nsource = \"([^\"]+)\"', open('Cargo.lock').read()).group(1))")
+> sed -e "s|__RUSTC_VERSION__|$(rustc --version)|" -e "s|__ACADRUST_SOURCE__|$SRC|" \
+>     crates/ocs_ocsm/plugin.toml > "$HOME/.config/OpenCADStudio/plugins/opencad.ocsm/plugin.toml"
+> ```
+>
+> **⚠️ 坑 1：上游 xref 测试对语言敏感（不是合并问题）**：`src/app/commands/blocks.rs` 里上游新加的一批
+> 用例断言**英文文案**（`"Path set"` / `"No external references"` / `"across drives"` …），
+> 而 `locales/zh-CN/opencadstudio.ftl`（上游 `737666b8` 引入，fork 没改过 `locales/`）会把它们翻成中文
+> → **在 zh-CN 语言环境下必然失败**（本次一次跑出 6 个，全模块强制英文后 **27 passed / 0 failed**）。
+> 跑宿主测试请强制英文：`LC_ALL=C LANG=C LANGUAGE=C cargo test -p OpenCADStudio --lib`。
+> → 值得给上游提 issue/PR（让这些测试固定 `Language::EnUs`，或断言 message id 而不是文案），
+> 与上游开着的 **#1306**（"docs(plugin): fix inaccuracies and flag real gaps"）同一类。
+>
+> **⚠️ 坑 2：自动合并的“语义冲突”**：`tests/leader_smoke_render.rs`（fork 侧）还在调旧的 13 参数
+> `export_pdf(...)`，而上游把它重构成了 `export_pdf(&PdfPageInput, &Path)`；两边改的是同一文件的
+> **不同区域** → git 不报冲突，直接拼出一份编译不过的文件（`E0061`）。已改成新签名
+> （`PlotContent { wires: Arc::new(wires), ..Default::default() }` + `PdfPageInput { … }`）。
+> **教训：同一文件双方都改时，即使没冲突也要靠 `cargo test` 编一遍兜住。**
+>
+> **盯防清单（双方都改过的 23 个文件，本次只有 8 个真冲突，其余自动合并成功）**：
+> `.cargo/config.toml`、`Cargo.toml`、`docs/plugin-architecture.md`、`src/app/commands/{display,mod}.rs`、
+> `src/app/control/mod.rs`、`src/app/{document,history,mod}.rs`、`src/app/update/{dialog,mod,viewport}.rs`、
+> `src/app/view/{mod,modal}.rs`、`src/command.rs`、`src/entities/{dimension,text_support}.rs`、
+> `src/lib.rs`、`src/mcp.rs`、`src/plugin/external.rs`、`src/scene/mod.rs`、`src/ui/{dock,overlay}.rs`
+>
+> **哨兵（同步后必查，全过）**：`crates/ocs_plugin_api/src/host.rs` 的
+> `ensure_layers`/`add_block_record`/`show_frame_picker`/`begin_undo`/`CommandStep::CommitEntities*`、
+> `src/app/plugin_host.rs` 的 `plugin_preview_entity`/`inject_pick_snap`/`CmdResult::CommitEntities`、
+> `src/scene/mod.rs` 的 `pub(crate) tessellate_one`、`src/app/update/viewport.rs` 的 `click_snap`/
+> `entity_pick_accepts_points`、`src/app/commands/mod.rs` 的 `plugin_wins`、`src/plugin/external.rs`
+> 的 `shutdown_plugins`、`src/mcp.rs` 的 `selection_revision`、`src/entities/dimension.rs` 的 C-2
+> （`visible_len`）、`src/ui/pi_panel.rs` 等 F 组新文件、`Cargo.toml` 的 `ocs_ocsm`/`ocs_ocsm_mcp`
+> 成员 + ghfast 镜像。
+>
+> **上游本次顺带做的**（无需动作，仅备案）：`tests/sketch_constraints_solve.rs` →
+> `tests/parametric_constraints_solve.rs`（改名）、删 `tests/sketch_constraints_xrecord_roundtrip.rs`、
+> 加 `tests/pdf_export_images_check.rs`、新增 `crates/plugin-template-api2`。
+
+## 1. 补丁总表（基准：上游 `65c0fe54` → HEAD，**62 文件 / +13770 −100**，不含插件 crate）
 
 > A–E 组的行数是 v2026.36 基准时的记录（功能性描述仍适用）；F 组为 2026-09-16 新增。
 
