@@ -34,6 +34,7 @@ mod partgen_b3;
 mod partgen_b4;
 mod partgen_kit;
 mod partgen_more;
+mod shaft;
 pub mod tolerance;
 
 
@@ -67,6 +68,7 @@ static MANIFEST: PluginManifest = PluginManifest {
         "OCSMBOMEDIT", "BOMEDIT", "OCSMBOMLOCK", "BOMLOCK", "OCSMBOMXLSX", "BOMXLSX", "OCSMBOMXLSXI", "BOMXLSXI",
         "OCSMCENTERLINE", "ZX",
         "OCSMGEAR",
+        "OCSMSHAFT",
     ],
 };
 
@@ -1339,6 +1341,11 @@ impl BuiltinPlugin for OcsmPlugin {
                 self.cmd_gear(host, rest);
                 true
             }
+            // 轴生成器（一期骨架）：行 DSL / JSON 一行直插（单视图侧视图）
+            "OCSMSHAFT" => {
+                self.cmd_shaft(host, rest);
+                true
+            }
             "OCSMDIMGULIDE" | "GDIM" => {
                 self.cmd_guide(host);
                 true
@@ -1715,6 +1722,54 @@ impl OcsmPlugin {
             what: "OCSM 齿轮",
             where_to: "请在齿轮窗口里点「生成到图纸」",
         }));
+    }
+
+    /// `OCSMSHAFT`：轴生成器（一期骨架）——行 DSL / JSON → 单视图侧视图。
+    ///
+    /// 不带参数 = 打印用法；带参数 = 解析 → 校验/生成 → 按 `at`/`rot` 放置 →
+    /// 一次撤销直插（与 `OCSMCENTERLINE` 同一条落图路径：`add_entities`）。
+    /// 不标尺寸、不打剖面线；轮廓 `1轮廓实线层`、砂轮细线 `2细线层`、轴线 `3中心线层`。
+    fn cmd_shaft(&self, host: &mut dyn HostApi, args: &str) {
+        if args.trim().is_empty() {
+            host.push_output(crate::shaft::USAGE);
+            return;
+        }
+        let program = match crate::shaft::parse_program(args) {
+            Ok(program) => program,
+            Err(message) => {
+                host.push_error(&format!("OCSMSHAFT 参数无效：{message}"));
+                return;
+            }
+        };
+        let at = program.at.unwrap_or([0.0, 0.0]);
+        let rot = program.rot.unwrap_or(0.0);
+        // 图框比例在落点处查（与 D/GDIM/中心线同口径）；无图框 = 1.0。
+        let scale = crate::frame_scale_at(host.document(), [at[0], at[1], 0.0]);
+        let shaft = match crate::shaft::build(&program, scale) {
+            Ok(shaft) => shaft,
+            Err(message) => {
+                host.push_error(&format!("OCSMSHAFT 几何非法：{message}"));
+                return;
+            }
+        };
+        let crate::shaft::Shaft {
+            entities,
+            total_length,
+            max_diameter,
+            segment_count,
+        } = shaft;
+        let entities = crate::shaft::place(entities, at, rot);
+        crate::centerline::ensure_layers_before_draw(host);
+        host.push_undo("OCSMSHAFT 轴");
+        let count = entities.len();
+        let _ = host.add_entities(entities);
+        host.set_dirty();
+        host.push_output(&format!(
+            "OCSMSHAFT：已生成轴（{} 段，总长 {}，最大 Ø{}，{count} 个图元）→ 1轮廓实线层 / 2细线层 / 3中心线层",
+            segment_count,
+            crate::partgen_kit::trim(total_length),
+            crate::partgen_kit::trim(max_diameter),
+        ));
     }
 
     /// `OCSMPART` / `XL`：直接打开标准件库窗口，并进入放置态

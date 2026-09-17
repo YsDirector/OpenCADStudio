@@ -407,6 +407,39 @@ fn build_grind_od(d: f64, row: &GrooveRow) -> GenPart {
     }
 }
 
+/// 磨外圆的**槽体**图元（轴生成器等复用；与 `build_grind_od` 同一套画法）。
+///
+/// 与 `build_grind_od` 的差别：只去掉**独立要素图自己的两条闭合线**
+/// （台阶面竖线 `x=0`、右端竖线 `x=b1`）——放进轴里那两条会变成内部线；
+/// 保留上半/下半的 R 圆角、槽底、45° 斜坡 + 砂轮细实线，落层与原来一致。
+///
+/// 局部坐标与 `build_grind_od` 完全一致：台阶面 = `x=0`、槽向 `+x` 展开、
+/// 外圆 `y = ±d/2`；返回 `(图元, 数据行)`，图元顺序 = 上圆角/槽底/斜坡、
+/// 下圆角/槽底/斜坡、砂轮细线。
+///
+/// **不改 `build_grind_od` 的输出**（独立要素预览/DXF 不受影响）。
+pub fn groove_entities(
+    d: f64,
+    b1: Option<f64>,
+) -> Result<(Vec<EntityType>, &'static GrooveRow), String> {
+    let row = row_for(d, b1)?;
+    let part = build_grind_od(d, row);
+    // build_grind_od 的固定顺序：上（台阶面/圆角/槽底/斜坡/右端）→ 下（同构）→ 砂轮细线；
+    // 丢弃 0/5（台阶面）与 4/9（右端闭合竖线）。
+    let keep = [1usize, 2, 3, 6, 7, 8, 10];
+    let entities = keep
+        .iter()
+        .map(|&index| part.entities[index].clone())
+        .collect();
+    Ok((entities, row))
+}
+
+/// 槽体 R 圆角与台阶面（端面）的相切点半径：`d/2 + r − h`。
+/// 轴生成器用它作为端面线在槽一侧的下端。
+pub fn fillet_tangent_radius(d: f64, row: &GrooveRow) -> f64 {
+    d / 2.0 + row.r - row.h
+}
+
 /// 磨外圆的要素定义（登记到 `ELEMENTS`）。
 pub struct GrindOd;
 
