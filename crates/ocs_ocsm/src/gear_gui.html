@@ -48,7 +48,7 @@
 </style>
 </head>
 <body>
-<h1>OCSM 齿轮（<span id="kindName">外齿轮</span>）<span class="sub" id="pageSub">四个视图：剖视图 / 侧视图 / 简化正视图 / 常规正视图</span></h1>
+<h1>OCSM 齿轮<span class="sub">外齿轮 / 内齿轮（齿圈）</span><span class="sub" id="pageSub"></span></h1>
 
 <div class="wrap">
   <!-- ① 上部预览区：当前选中视图（大图位，深色底） -->
@@ -293,9 +293,9 @@ function buildKinds() {
 // 种类相关 UI：标题/副标题/视图按钮/默认 h 提示/命令行提示（切种类时统一刷新）
 function applyKindUI() {
   const k = kindOf();
-  el("kindName").textContent = k.name;
-  el("pageSub").textContent = k.sub;
-  document.title = "OCSM 齿轮（" + k.name + "）";
+  // 标题固定写工具名（两种齿轮都支持，不能只写一种），当前种类放副标题里
+  el("pageSub").textContent = "· 当前：" + k.name + " · " + k.sub;
+  document.title = "OCSM 齿轮（外齿轮 / 内齿轮）";
   buildViews();
   syncHRule();
   syncBetaHint();

@@ -1302,7 +1302,7 @@ impl BuiltinPlugin for OcsmPlugin {
                 self::centerline::cmd_centerline(host);
                 true
             }
-            // 齿轮（一期外齿轮）：不带参数 = 齿轮窗口 + 放置态；带参数 = 一行直插
+            // 齿轮（外齿轮 / 内齿轮）：不带参数 = 齿轮窗口 + 放置态；带参数 = 一行直插
             "OCSMGEAR" | "CL" => {
                 self.cmd_gear(host, rest);
                 true
