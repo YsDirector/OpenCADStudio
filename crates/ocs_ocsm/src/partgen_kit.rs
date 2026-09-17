@@ -104,7 +104,7 @@ pub fn hatch_ansi31_edges(edges: &[HatchEdge], angle_deg: f64, pattern_scale: f6
     hatch_edges_with(
         "ANSI31",
         "ANSI Iron, Brick, Stone masonry",
-        &[(45.0, off, off)],
+        &[(45.0, -off, off)],
         edges,
         angle_deg,
         pattern_scale,
@@ -121,18 +121,33 @@ pub fn hatch_ansi37_edges(edges: &[HatchEdge], angle_deg: f64, pattern_scale: f6
     hatch_edges_with(
         "ANSI37",
         "ANSI Lead, Zinc, Magnesium, Sound/Heat/Elec Insulation",
-        &[(45.0, off, off), (135.0, -off, -off)],
+        &[(45.0, -off, off), (135.0, -off, -off)],
         edges,
         angle_deg,
         pattern_scale,
     )
 }
 
-/// 剖面线通用实现：`(角度度, offset.x, offset.y)` 列 = 图案的各条定义线。
+/// 剖面线通用实现。`base_lines` = 基准方向下的 `(线角度, offset.x, offset.y)`（即 dir=0 时的定义）。
+///
+/// ## 两条“写法硬约束”（都是踩过的坑，别再改回去）
+///
+/// **① offset 必须是「世界坐标向量」，且让宿主反旋转后得到 dx≈0 / |dy|=线间距。**
+/// 宿主与预览都按 `scene/entity.rs::family_from_stored_line` 的读法：
+/// `dx = off.x·cos(a)+off.y·sin(a)`（沿线位移）、`dy = -off.x·sin(a)+off.y·cos(a)`（垂距）。
+/// 对 ANSI31（a=45°）基准 offset 必须是 **(-off, +off)**（off = 3.175 mm × pattern_scale）：
+/// 反旋转后 dx=0、dy=+off ✓；写成 (+off,+off) 会得到 dx=off、**dy=0 → 间距塔缩 → 宿主渲染成**
+/// **实心填充**（用户 2026-09-17 报的“轴承剖面线变纯色填充”就是这个，根因是本文件 refactor 时丢了负号）。
+///
+/// **② 方向要烘焙到线角度/offset 里，`pattern_angle` 只是记录值。**
+/// 模板实测（用户参数化图：6170 剖视 / 276 / 297 / 288 主视）：
+/// `line.angle = 45 + dir`、`offset = rotate(基准 offset, dir)`、同时 `pattern_angle = dir`；
+/// 宿主 `prebaked` 路径**只用线角度、不再叠加 pattern_angle**（`angle_offset: 0.0`），
+/// 所以只改 pattern_angle 不改线角度的话，四片会在 OCS 里全画成 45° 同向。
 fn hatch_edges_with(
     name: &str,
     description: &str,
-    lines: &[(f64, f64, f64)],
+    base_lines: &[(f64, f64, f64)],
     edges: &[HatchEdge],
     angle_deg: f64,
     pattern_scale: f64,
@@ -144,17 +159,22 @@ fn hatch_edges_with(
     let mut h = Hatch::new();
     let mut pat = HatchPattern::new(name);
     pat.description = description.into();
-    for (deg, ox, oy) in lines {
+    let rot = angle_deg.to_radians();
+    let (cr, sr) = (rot.cos(), rot.sin());
+    for (deg, ox, oy) in base_lines {
         pat.add_line(HatchPatternLine {
-            angle: deg.to_radians(),
+            // 方向烘焙进线角度（模板就是这么存的：45° 基向 + dir）
+            angle: deg.to_radians() + rot,
             base_point: Vector2::new(0.0, 0.0),
-            offset: Vector2::new(*ox, *oy),
+            // offset 同步旋转（保持 dx≈0 / |dy|=间距 不变）
+            offset: Vector2::new(ox * cr - oy * sr, ox * sr + oy * cr),
             dash_lengths: Vec::new(),
         });
     }
     h.pattern = pat;
     h.is_solid = false;
-    h.pattern_angle = angle_deg.to_radians();
+    // 与模板一致：记录值（读者以线角度为准）
+    h.pattern_angle = rot;
     h.pattern_scale = pattern_scale;
     let mut bp = BoundaryPath::new();
     bp.flags.set_external(true);
@@ -326,4 +346,79 @@ pub fn part_svg(part: &GenPart, px_w: f64, px_h: f64) -> String {
 /// 测试里把生成结果落盘成 SVG（`dump_*` 测试用；路径放 `/tmp`）。
 pub fn dump_svg(part: &GenPart, path: &str) -> std::io::Result<()> {
     std::fs::write(path, part_svg(part, 1200.0, 800.0))
+}
+
+#[cfg(test)]
+mod tests {
+    use ocs_plugin_api::host::acadrust::EntityType;
+
+    /// 剖面线写入的**全局护栏**（管住整库的剖面线，2026-09-17 用户报"轴承剖面线渲染成纯色填充"后加）。
+    ///
+    /// ① **片数**：各族的剖面线片数必须等于用户模板实测值（此前因误判"模板没有剖面线"漏画过 6 处）。
+    /// ② **图案定义可被宿主正确读出**：宿主/预览都按 `scene/entity.rs::family_from_stored_line` 的读法
+    ///    `dx = off.x·cos a + off.y·sin a`（沿线位移）、`dy = -off.x·sin a + off.y·cos a`（垂距）。
+    ///    必须 `dx ≈ 0` 且 `|dy| = 3.175 mm × pattern_scale`；**dy = 0 就是间距塌缩 → 宿主画成实心**
+    ///    （把 ANSI31 基准 offset 写成 (+off,+off) 就会这样）。
+    /// ③ **方向烘焙在线角度里**（模板实测存法）：`line.angle = 45°/135° + dir`，
+    ///    且 `pattern_angle = dir`（记录值）；只改 pattern_angle 不改线角度，OCS 里四片会同向。
+    #[test]
+    fn hatch_patterns_are_readable_by_host() {
+        let cases = [
+            ("nut_6170", 8.0, 6.8, "section", 2),
+            ("ring_893", 50.0, 2.0, "end", 1),
+            ("ring_894", 40.0, 1.75, "end", 1),
+            ("round_nut_812", 22.0, 10.0, "section", 2),
+            ("lock_washer_858", 25.0, 1.0, "section", 2),
+            ("lock_washer_858", 160.0, 2.0, "section", 2),
+            ("seal_fb", 16.0, 30.0, "main", 4),
+            ("bearing_276", 35.0, 7.0, "main", 4),
+            ("bearing_297", 15.0, 11.75, "main", 4),
+            ("bearing_288", 110.0, 45.0, "main", 6),
+        ];
+        for (fam, d, l, view, want) in cases {
+            let p = crate::partgen::generate(fam, d, l, view)
+                .unwrap_or_else(|e| panic!("{fam} {view}: {e}"));
+            let hatches: Vec<_> = p
+                .entities
+                .iter()
+                .filter_map(|e| match e {
+                    EntityType::Hatch(h) => Some(h),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(
+                hatches.len(),
+                want,
+                "{fam} {view} 剖面线片数应为 {want}（模板实测）"
+            );
+            for h in hatches {
+                let scale = h.pattern_scale;
+                let dir = h.pattern_angle.to_degrees();
+                assert!(
+                    !h.pattern.lines.is_empty(),
+                    "{fam} {view}: 剖面线缺图案定义（会被宿主当实心画）"
+                );
+                for ln in &h.pattern.lines {
+                    let (ca, sa) = (ln.angle.cos(), ln.angle.sin());
+                    let dx = ln.offset.x * ca + ln.offset.y * sa;
+                    let dy = -ln.offset.x * sa + ln.offset.y * ca;
+                    assert!(
+                        dx.abs() < 1e-9,
+                        "{fam} {view}: 沿线位移 dx={dx}（应 0；非 0 说明 offset 不是世界向量）"
+                    );
+                    assert!(
+                        (dy.abs() - 3.175 * scale).abs() < 1e-9,
+                        "{fam} {view}: 垂距 |dy|={} ≠ 3.175×{scale}（间距塌缩会被宿主画成实心）",
+                        dy.abs()
+                    );
+                    let base = (ln.angle.to_degrees() - dir).rem_euclid(360.0);
+                    assert!(
+                        (base - 45.0).abs() < 1e-9 || (base - 135.0).abs() < 1e-9,
+                        "{fam} {view}: 线角度 {:.3}° 与 pattern_angle {dir}° 不满足「45/135 + dir」的烘焙约定",
+                        ln.angle.to_degrees()
+                    );
+                }
+            }
+        }
+    }
 }
