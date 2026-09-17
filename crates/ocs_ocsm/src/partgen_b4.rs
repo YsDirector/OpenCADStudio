@@ -43,7 +43,7 @@ use ocs_plugin_api::host::acadrust::entities::EntityType;
 
 use crate::partgen::{GenPart, PartMeta};
 use crate::partgen_kit::{
-    arc, circle, hatch_ansi31, line, polyline, trim, views_json, Table, LAYER_CENTER, LAYER_MAIN,
+    arc, circle, hatch_ansi31_scaled, line, polyline, trim, views_json, Table, LAYER_CENTER, LAYER_MAIN,
 };
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -174,6 +174,26 @@ fn arc_pts(c: [f64; 2], r: f64, a1_deg: f64, a2_deg: f64, n: usize) -> Vec<[f64;
             [c[0] + r * a.cos(), c[1] + r * a.sin()]
         })
         .collect()
+}
+
+/// 去掉折线环里相邻重复点（含首尾重复），返回新环。
+///
+/// 剖面线边界由直线段 + `arc_pts` 采样拼接，弧的首点常与上一段末点重合，
+/// 末点又常与下一段起点重合。这些零长边会让宿主判边界无效而**整片不画**
+/// （297/288 在 OCS 里一片都看不到的根因之一）。阈值 1e-9（比较平方距离）。
+fn dedup_ring(verts: &[[f64; 2]]) -> Vec<[f64; 2]> {
+    const EPS2: f64 = 1e-18; // (1e-9)^2
+    let d2 = |a: [f64; 2], b: [f64; 2]| (a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2);
+    let mut out: Vec<[f64; 2]> = Vec::with_capacity(verts.len());
+    for &p in verts {
+        if out.last().map_or(true, |&q| d2(q, p) > EPS2) {
+            out.push(p);
+        }
+    }
+    while out.len() >= 2 && d2(out[0], out[out.len() - 1]) <= EPS2 {
+        out.pop();
+    }
+    out
 }
 
 /// 三点外接圆（圆心 + 半径）；共线时退化返回 `None`。
@@ -324,22 +344,27 @@ pub fn bearing_297(row: &B297Row) -> GenPart {
         v.push([0.0, r2 - r1]);
         v
     };
+    // 环序（模板 30202，上半个视，沿轮廓一周）：
+    //   (T−B, d/2+r3) 起，圆角 → 内孔 (T−B+r3, d/2)→(T−r3, d/2) → 圆角 →
+    //   右端面 (T, d/2+r3)→(T, y_lr) → 大挡边顶 → 大挡边面 → 内圈滚道 →
+    //   小挡边面 → 小挡边顶 (T−B, y_sr) → 闭合回起点（左端面竖线）。
+    // 首个弧采样点就是起点 (T−B, d/2+r3)，不再额外 push；弧末点与后续顶点重合
+    // 交给 `dedup_ring` 处理 —— 避免重复点让宿主判边界无效。
     let inner_verts = {
-        let mut v = vec![[t - b, r + r3]];
-        v.extend(arc_pts([t - b + r3, r + r3], r3, 180.0, 270.0, 4));
-        v.push([t - r3, r]);
-        v.extend(arc_pts([t - r3, r + r3], r3, 270.0, 360.0, 4));
-        v.push([t, r + r3]);
-        v.push([t, y_lr]);
-        v.push(c2_pt);
-        v.push(p2);
-        v.push(p1);
-        v.push(d_pt);
-        v.push([t - b, y_sr]);
+        let mut v = Vec::new();
+        v.extend(arc_pts([t - b + r3, r + r3], r3, 180.0, 270.0, 4)); // 左倒角
+        v.push([t - r3, r]); // 内孔
+        v.extend(arc_pts([t - r3, r + r3], r3, 270.0, 360.0, 4)); // 右倒角
+        v.push([t, y_lr]); // 右端面
+        v.push(c2_pt); // 大挡边顶
+        v.push(p2); // 大挡边面
+        v.push(p1); // 内圈滚道
+        v.push(d_pt); // 小挡边面
+        v.push([t - b, y_sr]); // 小挡边顶 → 闭合回起点（左端面）
         v
     };
-    add_hatch_pair(&mut en, &outer_verts);
-    add_hatch_pair(&mut en, &inner_verts);
+    add_hatch_pair(&mut en, &outer_verts, 0.0, 270.0, 1.0);
+    add_hatch_pair(&mut en, &inner_verts, 90.0, 180.0, 1.0);
 
     GenPart {
         entities: en,
@@ -349,10 +374,17 @@ pub fn bearing_297(row: &B297Row) -> GenPart {
 }
 
 /// 一片剖面线的边界同时落上、下两个半视（下半 = y 镜像）。
-fn add_hatch_pair(en: &mut Vec<EntityType>, verts: &[[f64; 2]]) {
-    en.push(hatch_ansi31(verts, 0.0));
-    let m: Vec<[f64; 2]> = verts.iter().map(|p| [p[0], -p[1]]).collect();
-    en.push(hatch_ansi31(&m, 0.0));
+///
+/// 角度/比例按**用户模板逐片实测**（GB/T 297/288 主视图的 hatch 数据）：
+/// 上半·外圈 0° / 上半·内圈 90° / 下半·外圈 270° / 下半·内圈 180°（scale 1.0）；
+/// 调心滚子的**保持架**两片模板是 **scale 0.5**（同一图案画密一倍）。
+/// 方向必须**烘焙进线角度**（OCS 的 prebaked 路径只认线角度、不叠加 pattern_angle）——
+/// `hatch_ansi31_scaled` 已做烘焙，别改成只传 pattern_angle。
+fn add_hatch_pair(en: &mut Vec<EntityType>, verts: &[[f64; 2]], up_deg: f64, lo_deg: f64, scale: f64) {
+    let up = dedup_ring(verts);
+    en.push(hatch_ansi31_scaled(&up, up_deg, scale));
+    let m: Vec<[f64; 2]> = up.iter().map(|p| [p[0], -p[1]]).collect();
+    en.push(hatch_ansi31_scaled(&m, lo_deg, scale));
 }
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -455,28 +487,39 @@ pub fn bearing_288(row: &B288Row) -> GenPart {
     push2(&mut en, line([hw, r2 + AXIS_OVER], [hw, r - AXIS_OVER], LAYER_CENTER));
 
     // ── 剖面线（外圈 / 内圈 / 保持架）──
+    // 环序（模板 23022C，上半个视，沿轮廓一周）：
+    //   球面滚道从**左端 (0, y0) 向右扫到 (B, y0)** → 右侧面 (B, y0)→(B, D/2−r) →
+    //   右圆角 → 外径 (B−r, D/2)→(r, D/2) → 左圆角 → 左侧面 (0, D/2−r) →
+    //   闭合回 (0, y0)（左端面竖线）。
+    // 关键：弧采样必须 `sp_end→sp_start`（左→右）；若 `sp_start→sp_end`（右→左），
+    // 闭合成 (0,D/2−r)→(B,y0) 的长对角线，宿主按奇偶规则判不出内部 → 整片不画。
     let outer_verts = {
-        let mut v = arc_pts([hw, 0.0], rs, sp_start, sp_end, 12);
-        v.push([w, y0]);
-        v.push([w, r2 - rr]);
-        v.extend(arc_pts([w - rr, r2 - rr], rr, 0.0, 90.0, 4));
-        v.push([w - rr, r2]);
-        v.push([rr, r2]);
-        v.extend(arc_pts([rr, r2 - rr], rr, 90.0, 180.0, 4));
-        v.push([0.0, r2 - rr]);
+        let mut v = Vec::new();
+        v.extend(arc_pts([hw, 0.0], rs, sp_end, sp_start, 12)); // 球面滚道（左→右）
+        v.push([w, r2 - rr]); // 右侧面
+        v.extend(arc_pts([w - rr, r2 - rr], rr, 0.0, 90.0, 4)); // 右圆角
+        v.push([rr, r2]); // 外径
+        v.extend(arc_pts([rr, r2 - rr], rr, 90.0, 180.0, 4)); // 左圆角
+        v.push([0.0, r2 - rr]); // 左侧面（闭合回弧起点）
         v
     };
+    // 环序（模板 23022C，上半个视，沿轮廓一周）：
+    //   (0, d/2+rr) 起，左圆角 → 内孔 (rr, d/2)→(B−rr, d/2) → 右圆角 →
+    //   右端面 (B, d/2+rr)→(B, y_in) → 上侧内滚道弧 (B,y_in)→(hw+hb,y_cage) →
+    //   保持架底 (hw+hb,y_cage)→(hw−hb,y_cage) → 下侧内滚道弧 (hw−hb,y_cage)→(0,y_in) →
+    //   左端面 (0, y_in)→(0, d/2+rr) 闭合。
+    // 两条内滚道弧在模板里分别是 cc 的 a1→a2、cc_r 的 ar1→ar2；按本环序遍历时
+    // 方向相反，故采样 a2→a1 / ar2→ar1（arc_pts 支持 a2<a1 反向，避免折返）。
     let inner_verts = {
-        let mut v = arc_pts(cc, ri, a1, a2, 10);
-        v.push([hw - hb, y_cage]);
-        v.push([hw + hb, y_cage]);
-        v.extend(arc_pts(cc_r, ri, ar1, ar2, 10));
-        v.push([w, r + rr]);
-        v.extend(arc_pts([w - rr, r + rr], rr, 270.0, 360.0, 4));
-        v.push([w - rr, r]);
-        v.push([rr, r]);
-        v.extend(arc_pts([rr, r + rr], rr, 180.0, 270.0, 4));
-        v.push([0.0, r + rr]);
+        let mut v = Vec::new();
+        v.extend(arc_pts([rr, r + rr], rr, 180.0, 270.0, 4)); // 左倒角
+        v.push([w - rr, r]); // 内孔
+        v.extend(arc_pts([w - rr, r + rr], rr, 270.0, 360.0, 4)); // 右倒角
+        v.push([w, y_in]); // 右端面
+        v.extend(arc_pts(cc_r, ri, ar2, ar1, 10)); // 上侧内滚道弧（反向）
+        v.push([hw - hb, y_cage]); // 保持架底
+        v.extend(arc_pts(cc, ri, a2, a1, 10)); // 下侧内滚道弧（反向）
+        v.push([0.0, r + rr]); // 左端面（闭合回起点）
         v
     };
     let cage_verts = [
@@ -485,9 +528,9 @@ pub fn bearing_288(row: &B288Row) -> GenPart {
         [hw + ht, y_top],
         [hw + hb, y_cage],
     ];
-    add_hatch_pair(&mut en, &outer_verts);
-    add_hatch_pair(&mut en, &inner_verts);
-    add_hatch_pair(&mut en, &cage_verts);
+    add_hatch_pair(&mut en, &outer_verts, 0.0, 270.0, 1.0);
+    add_hatch_pair(&mut en, &inner_verts, 90.0, 180.0, 1.0);
+    add_hatch_pair(&mut en, &cage_verts, 0.0, 270.0, 0.5);
 
     GenPart {
         entities: en,
@@ -615,6 +658,8 @@ mod tests {
     use super::*;
     use crate::partgen::generate as gen_all;
     use crate::partgen_kit::{dump_svg, part_svg, LAYER_HATCH, LAYER_MAIN, LAYER_THIN};
+    use ocs_plugin_api::host::acadrust::entities::hatch::BoundaryEdge;
+    use ocs_plugin_api::host::acadrust::entities::Hatch;
     use ocs_plugin_api::host::acadrust::types::Color;
 
     const OCSM_LAYERS: [&str; 5] = [LAYER_MAIN, LAYER_THIN, LAYER_CENTER, "4虚线层", LAYER_HATCH];
@@ -778,13 +823,27 @@ mod tests {
         // 上/下两个镜像
         assert!(has_line(&p, (0.0, -13.5), (0.0, -16.9)), "下半外圈左端面");
         assert!(has_arc(&p, (0.6, -16.9), 0.6, 180.0, 270.0), "下半圆角镜像");
-        // 剖面线：外圈 + 内圈，每片镜像 → 共 4 片
-        let hatches = p
+        // 剖面线：外圈 + 内圈，每片镜像 → 共 4 片；角度/比例 = 模板逐片实测
+        let hs: Vec<(f64, f64)> = p
             .entities
             .iter()
-            .filter(|e| matches!(e, EntityType::Hatch(_)))
-            .count();
-        assert_eq!(hatches, 4, "30202 剖面线片数");
+            .filter_map(|e| match e {
+                EntityType::Hatch(h) => Some((h.pattern_angle.to_degrees(), h.pattern_scale)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(hs.len(), 4, "30202 剖面线片数");
+        let mut got: Vec<(i64, i64)> = hs
+            .iter()
+            .map(|(a, s)| (a.round() as i64, (s * 100.0).round() as i64))
+            .collect();
+        got.sort_unstable();
+        // 模板：上外 0° / 上内 90° / 下外 270° / 下内 180°，均 scale 1.0
+        assert_eq!(
+            got,
+            vec![(0, 100), (90, 100), (180, 100), (270, 100)],
+            "297 剖面线角度/比例应同模板"
+        );
     }
 
     // ── 模板 23022C 主视图逐条数值回归 ──
@@ -819,13 +878,338 @@ mod tests {
         assert!(has_line(&p, (22.5, 88.0), (22.5, 52.0)), "竖中心线");
         // 镜像
         assert!(has_line(&p, (0.0, -75.7281), (0.0, -83.0)), "下半外圈侧面");
-        // 剖面线：外圈/内圈/保持架 各镜像 → 共 6 片
-        let hatches = p
+        // 剖面线：外圈/内圈/保持架 各镜像 → 共 6 片；角度/比例 = 模板逐片实测
+        let hs: Vec<(f64, f64)> = p
             .entities
             .iter()
-            .filter(|e| matches!(e, EntityType::Hatch(_)))
-            .count();
-        assert_eq!(hatches, 6, "23022C 剖面线片数");
+            .filter_map(|e| match e {
+                EntityType::Hatch(h) => Some((h.pattern_angle.to_degrees(), h.pattern_scale)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(hs.len(), 6, "23022C 剖面线片数");
+        let mut got: Vec<(i64, i64)> = hs
+            .iter()
+            .map(|(a, s)| (a.round() as i64, (s * 100.0).round() as i64))
+            .collect();
+        got.sort_unstable();
+        // 模板：外圈 0°/270°、内圈 90°/180°（scale 1.0）+ 保持架 0°/270°（scale 0.5）
+        assert_eq!(
+            got,
+            vec![(0, 50), (0, 100), (90, 100), (180, 100), (270, 50), (270, 100)],
+            "288 剖面线角度/比例应同模板"
+        );
+    }
+
+    // ── 剖面线边界：去重 / 简单 / 面积非零 / 环序 = 模板 ──
+    //
+    // 297/288 之前在 OCS 里一片都看不到：边界有重复点、弧反向遍历折返、闭合边成了长
+    // 对角线，宿主按奇偶规则算不出内部。下列测试把模板环序独立硬编码，逐片回归。
+
+    /// 从一个 Hatch 实体取出折线边界顶点（`hatch_ansi31_scaled` 的边序 = 环顶点序）。
+    fn hatch_ring(h: &Hatch) -> Vec<[f64; 2]> {
+        h.paths
+            .iter()
+            .flat_map(|p| p.edges.iter())
+            .map(|e| match e {
+                BoundaryEdge::Line(l) => [l.start.x, l.start.y],
+                other => panic!("剖面线边界应为折线边，实际 {other:?}"),
+            })
+            .collect()
+    }
+
+    fn hdist2(a: [f64; 2], b: [f64; 2]) -> f64 {
+        (a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2)
+    }
+
+    /// 按图元顺序取出全部剖面线的 `(角度°, 比例, 环顶点)`。
+    fn hatch_entries(p: &GenPart) -> Vec<(f64, f64, Vec<[f64; 2]>)> {
+        p.entities
+            .iter()
+            .filter_map(|e| match e {
+                EntityType::Hatch(h) => Some((
+                    h.pattern_angle.to_degrees(),
+                    h.pattern_scale,
+                    hatch_ring(h),
+                )),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// 鞋带公式符号面积。
+    fn signed_area(ring: &[[f64; 2]]) -> f64 {
+        let n = ring.len();
+        let mut s = 0.0;
+        for i in 0..n {
+            let a = ring[i];
+            let b = ring[(i + 1) % n];
+            s += a[0] * b[1] - b[0] * a[1];
+        }
+        s * 0.5
+    }
+
+    fn orient(a: [f64; 2], b: [f64; 2], c: [f64; 2]) -> f64 {
+        (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
+    }
+
+    fn on_seg(p: [f64; 2], a: [f64; 2], b: [f64; 2]) -> bool {
+        const E: f64 = 1e-9;
+        p[0] >= a[0].min(b[0]) - E
+            && p[0] <= a[0].max(b[0]) + E
+            && p[1] >= a[1].min(b[1]) - E
+            && p[1] <= a[1].max(b[1]) + E
+    }
+
+    /// 线段相交（含共线重叠/端点相切）；相邻边共用端点由调用方跳过。
+    fn seg_cross(a: [f64; 2], b: [f64; 2], c: [f64; 2], d: [f64; 2]) -> bool {
+        const E: f64 = 1e-9;
+        let (o1, o2, o3, o4) = (orient(a, b, c), orient(a, b, d), orient(c, d, a), orient(c, d, b));
+        if ((o1 > E && o2 < -E) || (o1 < -E && o2 > E))
+            && ((o3 > E && o4 < -E) || (o3 < -E && o4 > E))
+        {
+            return true;
+        }
+        (o1.abs() <= E && on_seg(c, a, b))
+            || (o2.abs() <= E && on_seg(d, a, b))
+            || (o3.abs() <= E && on_seg(a, c, d))
+            || (o4.abs() <= E && on_seg(b, c, d))
+    }
+
+    /// 简单多边形：任意两条非相邻边不相交。
+    fn ring_is_simple(ring: &[[f64; 2]]) -> bool {
+        let n = ring.len();
+        for i in 0..n {
+            for j in (i + 1)..n {
+                if j == i + 1 || (i == 0 && j == n - 1) {
+                    continue;
+                }
+                if seg_cross(ring[i], ring[(i + 1) % n], ring[j], ring[(j + 1) % n]) {
+                    return false;
+                }
+            }
+        }
+        true
+    }
+
+    /// 对每一片剖面线断言：① 相邻顶点不重复（>1e-9）；② 简单；③ 面积非零。
+    fn assert_hatch_rings_clean(label: &str, hs: &[(f64, f64, Vec<[f64; 2]>)]) {
+        for (k, (angle, scale, ring)) in hs.iter().enumerate() {
+            assert!(ring.len() >= 3, "{label} 第{k}片({angle}°/{scale}) 顶点不足");
+            for i in 0..ring.len() {
+                let j = (i + 1) % ring.len();
+                assert!(
+                    hdist2(ring[i], ring[j]) > 1e-18,
+                    "{label} 第{k}片({angle}°/{scale}) 相邻顶点重复 @ {i}: {:?}",
+                    ring[i]
+                );
+            }
+            assert!(
+                ring_is_simple(ring),
+                "{label} 第{k}片({angle}°/{scale}) 不是简单多边形（自交/折返）: {ring:?}"
+            );
+            let a = signed_area(ring);
+            assert!(a.abs() > 1e-6, "{label} 第{k}片({angle}°/{scale}) 面积≈0 ({a})");
+        }
+    }
+
+    /// 模板环的一段：`Line(终点)`（起点由上一段决定）或按 `a1→a2` 方向采样的 `Arc`。
+    enum TplSeg {
+        Line([f64; 2]),
+        Arc { c: [f64; 2], r: f64, a1: f64, a2: f64, n: usize },
+    }
+
+    /// 按模板环序从 `start` 构造期望环（测试内独立硬编码，不复用生产的 verts）。
+    /// 相邻重复点（弧端点与直线端点重合）会被去掉，首尾重复也去掉，与生产一致。
+    fn build_tpl_ring(start: [f64; 2], segs: &[TplSeg]) -> Vec<[f64; 2]> {
+        fn push(v: &mut Vec<[f64; 2]>, p: [f64; 2]) {
+            if v.last().map_or(true, |q| hdist2(*q, p) > 1e-18) {
+                v.push(p);
+            }
+        }
+        let mut v = vec![start];
+        for s in segs {
+            match s {
+                TplSeg::Line(p) => push(&mut v, *p),
+                TplSeg::Arc { c, r, a1, a2, n } => {
+                    for p in arc_pts(*c, *r, *a1, *a2, *n) {
+                        push(&mut v, p);
+                    }
+                }
+            }
+        }
+        while v.len() >= 2 && hdist2(v[0], v[v.len() - 1]) <= 1e-18 {
+            v.pop();
+        }
+        v
+    }
+
+    fn assert_ring_eq_tpl(label: &str, got: &[[f64; 2]], want: &[[f64; 2]]) {
+        assert_eq!(got.len(), want.len(), "{label} 顶点数不一致：got {} want {}", got.len(), want.len());
+        for (i, (g, w)) in got.iter().zip(want).enumerate() {
+            let dd = hdist2(*g, *w).sqrt();
+            assert!(dd <= 1e-3, "{label} 第{i}点偏离模板 {dd:.6}：got {g:?} want {w:?}");
+        }
+    }
+
+    fn mirror_y(v: &[[f64; 2]]) -> Vec<[f64; 2]> {
+        v.iter().map(|p| [p[0], -p[1]]).collect()
+    }
+
+    #[test]
+    fn bearing_297_hatch_ring_order_and_simplicity() {
+        let row = row297(15.0, 11.75).expect("30202");
+        let p = bearing_297(row);
+        let hs = hatch_entries(&p);
+        // 片数与角度/比例（模板逐片实测，顺序 = 构造顺序）
+        let meta: Vec<(i64, i64)> = hs
+            .iter()
+            .map(|(a, s, _)| (a.round() as i64, (s * 100.0).round() as i64))
+            .collect();
+        assert_eq!(
+            meta,
+            vec![(0, 100), (270, 100), (90, 100), (180, 100)],
+            "297 剖面线角度/比例顺序"
+        );
+        assert_hatch_rings_clean("297", &hs);
+
+        // 模板参数（环序在下面独立硬编码）
+        let (d, od, t, b, c, e, r1, r3) = (row.d, row.od, row.t, row.b, row.c, row.e, row.r1, row.r3);
+        let r = d / 2.0;
+        let r2 = od / 2.0;
+        let e2 = e / 2.0;
+        let tn = CONE_OUTER_DEG.to_radians().tan();
+        let y_or = e2 + c * tn;
+        let y_sr = r + RIB_SMALL_FRAC * (r2 - r);
+        let y_lr = r + RIB_LARGE_FRAC * (r2 - r);
+        let ang = CONE_ROLLER_DEG.to_radians();
+        let dirv = [ang.cos(), ang.sin()];
+        let axis_c = [c / 2.0, (r + r2) / 2.0];
+        let ef = [ang.sin(), -ang.cos()];
+        let a_pt = [ROLLER_X1_FRAC * c, e2 + tn * ROLLER_X1_FRAC * c];
+        let b_pt = [ROLLER_X2_FRAC * c, e2 + tn * ROLLER_X2_FRAC * c];
+        let p1 = mirror_pt(a_pt, axis_c, dirv);
+        let p2 = mirror_pt(b_pt, axis_c, dirv);
+        let d_pt = ray_to_y(a_pt, ef, y_sr);
+        let c2_pt = ray_to_y(b_pt, ef, y_lr);
+
+        // 297 外圈：(0,E/2) → 滚道 → (C,D/2−r1) → 右圆角 → 外径 → 左圆角 → (0,D/2−r1) → 闭合
+        let outer_tpl = build_tpl_ring(
+            [0.0, e2],
+            &[
+                TplSeg::Line([c, y_or]),
+                TplSeg::Line([c, r2 - r1]),
+                TplSeg::Arc { c: [c - r1, r2 - r1], r: r1, a1: 0.0, a2: 90.0, n: 4 },
+                TplSeg::Line([r1, r2]),
+                TplSeg::Arc { c: [r1, r2 - r1], r: r1, a1: 90.0, a2: 180.0, n: 4 },
+                TplSeg::Line([0.0, r2 - r1]),
+            ],
+        );
+        // 297 内圈：(T−B, d/2+r3) → 左圆角 → 内孔 → 右圆角 → 右端面 → 大挡边 → 滚道 →
+        //          小挡边 → (T−B, y_sr) → 闭合
+        let inner_tpl = build_tpl_ring(
+            [t - b, r + r3],
+            &[
+                TplSeg::Arc { c: [t - b + r3, r + r3], r: r3, a1: 180.0, a2: 270.0, n: 4 },
+                TplSeg::Line([t - r3, r]),
+                TplSeg::Arc { c: [t - r3, r + r3], r: r3, a1: 270.0, a2: 360.0, n: 4 },
+                TplSeg::Line([t, y_lr]),
+                TplSeg::Line(c2_pt),
+                TplSeg::Line(p2),
+                TplSeg::Line(p1),
+                TplSeg::Line(d_pt),
+                TplSeg::Line([t - b, y_sr]),
+            ],
+        );
+        assert_ring_eq_tpl("297 上外圈", &hs[0].2, &outer_tpl);
+        assert_ring_eq_tpl("297 上内圈", &hs[2].2, &inner_tpl);
+        assert_ring_eq_tpl("297 下外圈", &hs[1].2, &mirror_y(&outer_tpl));
+        assert_ring_eq_tpl("297 下内圈", &hs[3].2, &mirror_y(&inner_tpl));
+    }
+
+    #[test]
+    fn bearing_288_hatch_ring_order_and_simplicity() {
+        let row = row288(110.0, 45.0).expect("23022C");
+        let p = bearing_288(row);
+        let hs = hatch_entries(&p);
+        let meta: Vec<(i64, i64)> = hs
+            .iter()
+            .map(|(a, s, _)| (a.round() as i64, (s * 100.0).round() as i64))
+            .collect();
+        assert_eq!(
+            meta,
+            vec![(0, 100), (270, 100), (90, 100), (180, 100), (0, 50), (270, 50)],
+            "288 剖面线角度/比例顺序"
+        );
+        assert_hatch_rings_clean("288", &hs);
+
+        let (d, od, w, rr) = (row.d, row.od, row.b, row.r);
+        let r = d / 2.0;
+        let r2 = od / 2.0;
+        let dr = r2 - r;
+        let hw = w / 2.0;
+        let y0 = r2 - S288_Y0_FRAC * dr;
+        let rs = (hw * hw + y0 * y0).sqrt();
+        let sp_start = y0.atan2(hw).to_degrees();
+        let sp_end = 180.0 - sp_start;
+        let y_in = r + S288_YIN_FRAC * dr;
+        let pb = [S288_PB_X_FRAC * w, r + S288_PB_Y_FRAC * dr];
+        let pc = [S288_PC_X_FRAC * w, r + S288_PC_Y_FRAC * dr];
+        let pa = [0.0, y_in];
+        let (cc, ri) = circumcircle(pa, pb, pc).expect("内滚道三点共线");
+        let a1 = (pa[1] - cc[1]).atan2(pa[0] - cc[0]).to_degrees();
+        let a2 = (pc[1] - cc[1]).atan2(pc[0] - cc[0]).to_degrees();
+        let cc_r = [w - cc[0], cc[1]];
+        let (ar1, ar2) = (180.0 - a2, 180.0 - a1);
+        let y_cage = r + S288_CAGE_BOT_FRAC * dr;
+        let y_top = r + S288_CAGE_TOP_FRAC * dr;
+        let hb = S288_CAGE_HB_FRAC * w;
+        let ht = S288_CAGE_HT_FRAC * w;
+
+        // 288 外圈：(0,y0) → 球面滚道（左→右）→ (B,y0) → 右侧面 → 右圆角 → 外径 →
+        //          左圆角 → (0,D/2−r) → 闭合回 (0,y0)
+        let outer_tpl = build_tpl_ring(
+            [0.0, y0],
+            &[
+                TplSeg::Arc { c: [hw, 0.0], r: rs, a1: sp_end, a2: sp_start, n: 12 },
+                TplSeg::Line([w, r2 - rr]),
+                TplSeg::Arc { c: [w - rr, r2 - rr], r: rr, a1: 0.0, a2: 90.0, n: 4 },
+                TplSeg::Line([rr, r2]),
+                TplSeg::Arc { c: [rr, r2 - rr], r: rr, a1: 90.0, a2: 180.0, n: 4 },
+                TplSeg::Line([0.0, r2 - rr]),
+            ],
+        );
+        // 288 内圈：(0,d/2+rr) → 左圆角 → 内孔 → 右圆角 → 右端面 → 上侧内滚道弧 →
+        //          保持架底 → 下侧内滚道弧 → 左端面 (0,y_in) → 闭合
+        let inner_tpl = build_tpl_ring(
+            [0.0, r + rr],
+            &[
+                TplSeg::Arc { c: [rr, r + rr], r: rr, a1: 180.0, a2: 270.0, n: 4 },
+                TplSeg::Line([w - rr, r]),
+                TplSeg::Arc { c: [w - rr, r + rr], r: rr, a1: 270.0, a2: 360.0, n: 4 },
+                TplSeg::Line([w, y_in]),
+                TplSeg::Arc { c: cc_r, r: ri, a1: ar2, a2: ar1, n: 10 },
+                TplSeg::Line([hw - hb, y_cage]),
+                TplSeg::Arc { c: cc, r: ri, a1: a2, a2: a1, n: 10 },
+                TplSeg::Line([0.0, r + rr]),
+            ],
+        );
+        assert_ring_eq_tpl("288 上外圈", &hs[0].2, &outer_tpl);
+        assert_ring_eq_tpl("288 上内圈", &hs[2].2, &inner_tpl);
+        assert_ring_eq_tpl("288 下外圈", &hs[1].2, &mirror_y(&outer_tpl));
+        assert_ring_eq_tpl("288 下内圈", &hs[3].2, &mirror_y(&inner_tpl));
+
+        // 288 保持架：4 点梯形（scale 0.5），模板逐点硬编码
+        let cage_tpl = build_tpl_ring(
+            [hw - hb, y_cage],
+            &[
+                TplSeg::Line([hw - ht, y_top]),
+                TplSeg::Line([hw + ht, y_top]),
+                TplSeg::Line([hw + hb, y_cage]),
+            ],
+        );
+        assert_ring_eq_tpl("288 上保持架", &hs[4].2, &cage_tpl);
+        assert_ring_eq_tpl("288 下保持架", &hs[5].2, &mirror_y(&cage_tpl));
     }
 
     /// 最小规格 + 每个规格的首个长度都能出图（全局护栏用的就是这一条）。
