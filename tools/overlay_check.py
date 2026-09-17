@@ -288,6 +288,16 @@ def main():
     # ── 叠合图 ──
     import matplotlib
     matplotlib.use("Agg")
+    # 中文字体：不配的话标题/图例会变成空心方框（matplotlib 默认 DejaVu Sans 无中文字形）
+    try:
+        import os
+
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        from mpl_zh import use_zh
+
+        use_zh()
+    except Exception:  # 找不到就继续（顶多是方框，不影响比对结果）
+        pass
     import matplotlib.pyplot as plt
     from matplotlib.patches import Arc as MplArc, Circle as MplCircle
 
