@@ -214,8 +214,54 @@ impl GearParams {
                 trim(self.x)
             ));
         }
+        if let Some(w) = self.root_style_note() {
+            v.push(w);
+        }
         v
     }
+    /// 齿根那一段用哪种画法（模板口径能不能解出来）。
+    ///
+    /// 模板（z=40）的构造要求“圆角圆心在 rf+ρ、且到齿廓起点距离 = ρ”，
+    /// 这等价于三角形两边 `r_c = rf+ρ`、`r_s = 齿廓起点半径`、夹角未知——
+    /// **可解条件 = |r_c − r_s| ≤ ρ**。齿数小的时候 r_s 比 r_c 高出超过 ρ，就无解了
+    /// （用户 2026-09-17 实测 z=17 渲染异常）。
+    pub fn root_style(&self) -> RootStyle {
+        let (rb, ra, rf) = (self.db() / 2.0, self.da() / 2.0, self.df() / 2.0);
+        let rho = self.rho();
+        let r_c = rf + rho;
+        let r_s = rb + (ra - rb) * FIT_FRACTIONS[0];
+        if (r_c - r_s).abs() <= rho {
+            return RootStyle::TemplateArc;
+        }
+        // 降级①：渐开线只到基圆，基圆以下留一段径向直线（要求基圆高于圆角圆心）
+        if rb > r_c + 1e-9 && (rb - rf) > rho {
+            return RootStyle::BaseCircleLine;
+        }
+        // 降级②
+        RootStyle::NoFillet
+    }
+
+    /// 齿根降级的提示（要显示给人看；模板口径时返回 None）。
+    pub fn root_style_note(&self) -> Option<String> {
+        let style = self.root_style();
+        if style == RootStyle::TemplateArc {
+            return None;
+        }
+        let r_c = self.df() / 2.0 + self.rho();
+        let r_s = self.db() / 2.0 + (self.da() / 2.0 - self.db() / 2.0) * FIT_FRACTIONS[0];
+        Some(format!(
+            "齿根圆角无解：z={}、m={} 时齿廓起点半径 {:.3} 与圆角圆心半径 {:.3} 相差 {:.3} > 圆角半径 ρ={:.3}，\
+             模板口径的 0.38m 圆角放不下。已按{}出图（想看真实根切曲线请用变位，或按 GB 允许的轻微根切另画）。",
+            self.z,
+            trim(self.m),
+            r_s.abs(),
+            r_c.abs(),
+            (r_s - r_c).abs(),
+            self.rho(),
+            style.label()
+        ))
+    }
+
     /// 规格文本（块名/明细表用）。
     pub fn spec(&self) -> String {
         let mut s = format!("m{} z{} h{}", trim(self.m), self.z, trim(self.h));
@@ -311,7 +357,34 @@ impl GearView {
 
 // ─────────────────────────── 齿廓（渐开线 + 圆角 + 样条）─────────
 
-/// 一条齿廓（含齿根圆角）的构造结果 —— 局部坐标，齿中心线为 +x 轴。
+/// 齿根那一段怎么画（模板口径 / 小齿数降级）。
+///
+/// 模板（z=40）的“圆角圆与齿根圆相切、且过齿廓起点”在齿数小时**无解**：
+/// 齿廓起点半径与圆角圆心半径差超过 ρ 时三角形不成立。用户 2026-09-17 定案：
+/// **别出乱图** —— 给警告 + 降级。降级分两级，都有警告、都写进 `notes()`。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RootStyle {
+    /// 模板口径：0.38m 圆角切齿根圆、且过齿廓起点（大齿数，模板 z=40 就是这样）
+    TemplateArc,
+    /// 降级①（FreeCAD `fcgear/involute.py` 的做法，用户指定参考）：
+    /// 渐开线只到**基圆**，基圆以下用**指向圆心的直线**接到圆角弧顶（圆角保留）
+    BaseCircleLine,
+    /// 降级②：连圆角都放不下 → **圆角 = 0**（直线直接落到齿根圆）
+    NoFillet,
+}
+
+impl RootStyle {
+    /// 人看的名字（警告/手册用）。
+    pub fn label(self) -> &'static str {
+        match self {
+            RootStyle::TemplateArc => "齿根圆角（模板口径）",
+            RootStyle::BaseCircleLine => "基圆以下直线 + 圆角（FreeCAD 口径降级）",
+            RootStyle::NoFillet => "无齿根圆角（直线到齿根圆）",
+        }
+    }
+}
+
+/// 齿底那一段（含圆角）的构造结果 —— 局部坐标，齿中心线为 +x 轴。
 #[derive(Debug, Clone)]
 struct Flank {
     /// 渐开线在 5 个拟合点上的点
@@ -320,7 +393,7 @@ struct Flank {
     ctrl: Vec<[f64; 2]>,
     /// 11 个节点（弦长参数化，clamped）
     knots: Vec<f64>,
-    /// 齿廓起点（= 圆角弧终点）
+    /// 齿廓起点（= 样条近似曲线的最低端）
     start: [f64; 2],
     /// 齿廓终点（在齿顶圆上）
     end: [f64; 2],
@@ -331,6 +404,10 @@ struct Flank {
     /// 圆角弧的起/讫角（相对**圆角圆心**，度，CCW）
     fillet_a0: f64,
     fillet_a1: f64,
+    /// 采用哪种齿根画法
+    style: RootStyle,
+    /// 降级时：从基圆（或渐开线起点）到圆角弧顶的那段**径向直线**的两端
+    radial: Option<([f64; 2], [f64; 2])>,
 }
 
 /// 渐开线上一点：齿中心线角 `c`（弧度），`sign`=+1 取齿廓一侧（逆时针那侧）。
@@ -341,11 +418,13 @@ fn involute_point(p: &GearParams, radius: f64, c: f64, sign: f64) -> [f64; 2] {
 
 /// B 样条基函数 N_{i,p}(u)（Cox–de Boor，clamped 节点向量）。
 fn basis(i: usize, p: usize, u: f64, knots: &[f64]) -> f64 {
+    // 右端点 u = u_max 取极限：只有**最后一个控制点**对应的基函数为 1
+    // （clamped 节点向量的性质；不特判的话求和会得到 0，采样点会掉到原点）。
+    let last = knots.len() - 1;
+    if i + p + 1 == last && (u - knots[last]).abs() < 1e-12 {
+        return 1.0;
+    }
     if p == 0 {
-        let last = knots.len() - 1;
-        if i + 1 == last && (u - knots[last]).abs() < 1e-12 {
-            return 1.0; // 右端点归入最后一段
-        }
         return if knots[i] <= u && u < knots[i + 1] { 1.0 } else { 0.0 };
     }
     let mut out = 0.0;
@@ -439,21 +518,27 @@ fn fit_cubic_bspline(knots: &[f64], fit: &[[f64; 2]; 5]) -> Result<Vec<[f64; 2]>
 
 /// 由参数生成一条齿廓（含齿根圆角），`c` = 齿中心线角（弧度），`sign` = ±1 取哪一侧。
 fn make_flank(p: &GearParams, c: f64, sign: f64) -> Result<Flank, String> {
-    let r = p.d() / 2.0;
     let ra = p.da() / 2.0;
     let rf = p.df() / 2.0;
     let rb = p.db() / 2.0;
     let rho = p.rho();
-    let _ = (r, rb); // 供将来扩展用（当前只依赖 fit/half_tooth_angle）
+    let r_c = rf + rho; // 圆角圆心半径（与齿根圆相切）
+    let style = p.root_style();
 
-    // ① 5 个拟合点：渐开线上 r = rb + (ra−rb)·{1/8,¼,½,¾,1}（反解自模板）
+    // ① 5 个拟合点。模板口径：渐开线上 r = rb + (ra−rb)·{1/8,¼,½,¾,1}（反解自模板）。
+    //    降级口径：齿廓只到**基圆**（下面用直线接），所以从 rb 起取 {0,¼,½,¾,1}。
+    //    降级口径：齿廓只到**基圆略上方**（避开渐开线在基圆处的曲率奇异 —— 与 FreeCAD
+    //    `fcgear` 的 fs=0.01 同一手法：起点正好落在基圆上时，插值样条会在起点附近“勾”回去）。
+    let fracs: [f64; 5] = match style {
+        RootStyle::TemplateArc => FIT_FRACTIONS,
+        _ => [0.02, 0.25, 0.5, 0.75, 1.0],
+    };
     let mut fit = [[0.0f64; 2]; 5];
-    for (i, f) in FIT_FRACTIONS.iter().enumerate() {
+    for (i, f) in fracs.iter().enumerate() {
         let radius = rb + (ra - rb) * f;
         fit[i] = involute_point(p, radius, c, sign);
     }
     // ② 弦长参数化 → clamped 节点（**11 个** = 7 控制点 + 3 次 + 1，与模板同构）
-    //    内节点只有 3 个（首尾各 4 个被 clamped 吸收）：U = [0×4, c1, c1+c2, c1+c2+c3, Σ×4]
     let mut knots = vec![0.0, 0.0, 0.0, 0.0];
     let mut acc = 0.0;
     for i in 0..4 {
@@ -467,31 +552,57 @@ fn make_flank(p: &GearParams, c: f64, sign: f64) -> Result<Flank, String> {
     // ③ 控制点
     let ctrl = fit_cubic_bspline(&knots, &fit)?;
 
-    // ④ 齿根圆角：圆心在 r = rf+ρ 上，且 |圆心 − 齿廓起点| = ρ（余弦定理直接解）
+    // ④ 齿根那一段（三种画法，见 `RootStyle`）
     let start = fit[0];
-    let rs = (start[0] * start[0] + start[1] * start[1]).sqrt();
-    let a_rad = rf + rho;
-    let cosd = ((a_rad * a_rad + rs * rs - rho * rho) / (2.0 * a_rad * rs)).clamp(-1.0, 1.0);
-    let dth = cosd.acos();
     let th_start = start[1].atan2(start[0]);
-    // 圆心在齿廓起点**朝齿槽一侧**：sign=+1 时角更大
-    let th_c = th_start + sign * dth;
-    let fillet_c = [a_rad * th_c.cos(), a_rad * th_c.sin()];
-    // 与齿根圆的切点：圆心与原点连线的延长（半径方向最短点）
-    let root_pt = [rf * th_c.cos(), rf * th_c.sin()];
-    // 圆角弧的起/讫角（相对圆角圆心，度）
+    let mut radial: Option<([f64; 2], [f64; 2])> = None;
+    let mut arc_top = start; // 圆角弧的另一端（降级时是弧顶）
+    let (fillet_c, root_pt) = match style {
+        RootStyle::TemplateArc => {
+            // 圆心在 r = rf+ρ 上、且 |圆心 − 齿廓起点| = ρ（余弦定理）
+            let rs = (start[0] * start[0] + start[1] * start[1]).sqrt();
+            let cosd = ((r_c * r_c + rs * rs - rho * rho) / (2.0 * r_c * rs)).clamp(-1.0, 1.0);
+            let th_c = th_start + sign * cosd.acos();
+            (
+                [r_c * th_c.cos(), r_c * th_c.sin()],
+                [rf * th_c.cos(), rf * th_c.sin()],
+            )
+        }
+        RootStyle::BaseCircleLine => {
+            // FreeCAD `fcgear` 口径：弧顶在齿廓起点**同一半径线**上（径向直线），
+            // 圆心角 δ 由“弧顶落在该半径线上”反解：δ = 2·asin(ρ/(2·Rci))
+            let dth = 2.0 * (rho / (2.0 * r_c)).min(1.0).asin();
+            let th_c = th_start + sign * dth;
+            let top = [r_c * th_start.cos(), r_c * th_start.sin()];
+            radial = Some((start, top));
+            arc_top = top;
+            (
+                [r_c * th_c.cos(), r_c * th_c.sin()],
+                [rf * th_c.cos(), rf * th_c.sin()],
+            )
+        }
+        RootStyle::NoFillet => {
+            // 圆角 = 0：直线直接落到齿根圆
+            let foot = [rf * th_start.cos(), rf * th_start.sin()];
+            radial = Some((start, foot));
+            (foot, foot)
+        }
+    };
+    // root_pt / arc_top 相对**齿轮中心**的极角（用于判定圆角弧取哪一支）
+    let th_root = root_pt[1].atan2(root_pt[0]);
+    let th_top = arc_top[1].atan2(arc_top[0]);
+    // 圆角弧的起/讫角（相对圆角圆心，度）—— NoFillet 时弧退化，调用方不画
     let ang = |q: [f64; 2]| {
         let v = (q[0] - fillet_c[0], q[1] - fillet_c[1]);
         v.1.atan2(v.0).to_degrees()
     };
-    let (a_root, a_start) = (ang(root_pt), ang(start));
-    let (mut a0, mut a1) = (a_root, a_start);
-    // 取 CCW 弧（不超过 180° 那个方向）：两者互换后仍不超过 180° 时取 CCW
-    if (a1 - a0).rem_euclid(360.0) > 180.0 {
+    let (mut a0, mut a1) = (ang(root_pt), ang(arc_top));
+    if style != RootStyle::NoFillet && (a1 - a0).rem_euclid(360.0) > 180.0 {
+        // 取**短弧**那一支：圆角弧两种画法都 ≲90°（模板 80°、降级①约 90°），
+        // 短弧判定唯一正确；早先“按弧中点是否落在两端之间”的写法会把 270° 那支选进来，
+        // 采样链会先鼓出去再缩回来（z=7/17 单调性测试就挂在这里）。
         std::mem::swap(&mut a0, &mut a1);
     }
-
-    // ⑤ 齿廓终点角度（齿顶弧要接上）
     Ok(Flank {
         fit,
         ctrl,
@@ -502,7 +613,65 @@ fn make_flank(p: &GearParams, c: f64, sign: f64) -> Result<Flank, String> {
         root_pt,
         fillet_a0: a0,
         fillet_a1: a1,
+        style,
+        radial,
     })
+}
+
+/// 一条齿根段的采样点（**从齿根端到齿顶**，用于质量估算与闭合性自检）。
+fn flank_points(p: &GearParams, f: &Flank, seg: usize) -> Vec<[f64; 2]> {
+    let rho = p.rho();
+    let mut out = Vec::with_capacity(3 * seg + 4);
+    // 圆角弧：root_pt → start（若 NoFillet 则跳过，由直线承担）
+    if f.style != RootStyle::NoFillet {
+        let mut seg_pts = Vec::with_capacity(seg + 1);
+        // DXF 圆弧是“从 start 逆时针扫到 end”：a1 可能比 a0 小（例如 a0=97.9°、a1=−176.2°），
+        // 直接线性插值会反着绕过 0°（把圆角的“肚子”也扫进来）→ 必须先解出 CCW 扫角。
+        let sweep = (f.fillet_a1 - f.fillet_a0).rem_euclid(360.0);
+        for k in 0..=seg {
+            let a = (f.fillet_a0 + sweep * k as f64 / seg as f64).to_radians();
+            seg_pts.push([f.fillet_c[0] + rho * a.cos(), f.fillet_c[1] + rho * a.sin()]);
+        }
+        // 弧实体按 CCW(a0→a1) 存（渲染口径），但采样链必须**从齿根端往齿顶走**：
+        // 若首点比末点更靠近圆心，就把这一段反过来。
+        let r = |q: [f64; 2]| (q[0] * q[0] + q[1] * q[1]).sqrt();
+        if r(seg_pts[0]) > r(seg_pts[seg]) {
+            seg_pts.reverse();
+        }
+        out.extend(seg_pts);
+    }
+    // 径向直线（降级时）：start → 弧顶（与上一段相接）
+    if let Some((from, to)) = f.radial {
+        // 链方向是“齿根→齿顶”：本段要从弧顶/齿根脚走到渐开线起点
+        let (a, b) = (to, from);
+        for k in 0..=seg {
+            let t = k as f64 / seg as f64;
+            out.push([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]);
+        }
+    }
+    // 渐开线样条：按真实曲线采样
+    let (t0, t1) = (f.knots[3], f.knots[7]);
+    for k in 0..=3 * seg {
+        let u = t0 + (t1 - t0) * k as f64 / (3 * seg) as f64;
+        let mut q = [0.0f64; 2];
+        for (j, d) in f.ctrl.iter().enumerate() {
+            let w = basis(j, 3, u, &f.knots);
+            q[0] += w * d[0];
+            q[1] += w * d[1];
+        }
+        out.push(q);
+    }
+    out
+}
+
+/// 齿根段的实体：圆角弧（模板/降级①）+ 降级时的**径向直线**；NoFillet 时只有直线。
+fn push_root_seg(out: &mut Vec<EntityType>, p: &GearParams, f: &Flank) {
+    if f.style != RootStyle::NoFillet {
+        out.push(arc_deg(f.fillet_c, p.rho(), f.fillet_a0, f.fillet_a1, LAYER_MAIN));
+    }
+    if let Some((from, to)) = f.radial {
+        out.push(line(from, to, LAYER_MAIN));
+    }
 }
 
 /// 一条齿廓对应的 B 样条实体。
@@ -604,16 +773,16 @@ fn front_regular(p: &GearParams, n: f64) -> Result<Vec<EntityType>, String> {
             near(th_of(fr.root_pt), c_deg - 3.0),
             LAYER_MAIN,
         ));
-        // 圆角 + 齿廓（−1 侧）
-        out.push(arc_deg(fr.fillet_c, p.rho(), fr.fillet_a0, fr.fillet_a1, LAYER_MAIN));
+        // 齿根段 + 齿廓（−1 侧）：齿根端 → 弧/直线 → 渐开线
+        push_root_seg(&mut out, p, &fr);
         out.push(spline_of(&fr));
         // 齿顶弧：以齿中心线为界各半条（模板同构）
         let psi_end = p.half_tooth_angle(ra).to_degrees();
         out.push(arc_deg([0.0, 0.0], ra, c_deg - psi_end, c_deg, LAYER_MAIN));
         out.push(arc_deg([0.0, 0.0], ra, c_deg, c_deg + psi_end, LAYER_MAIN));
-        // 齿廓 + 圆角（+1 侧）
+        // 齿廓 + 齿根段（+1 侧）：渐开线 → 直线/弧 → 齿根端
         out.push(spline_of(&fl));
-        out.push(arc_deg(fl.fillet_c, p.rho(), fl.fillet_a0, fl.fillet_a1, LAYER_MAIN));
+        push_root_seg(&mut out, p, &fl);
         // 齿根弧（本齿槽的另半条）：从 +1 侧圆角切点到下一个齿槽中心
         // 最后一齿要收口到 360°（= 第一齿齿槽中心 0°，闭合链条）
         let gap_hi = if t + 1 == p.z as usize {
@@ -859,10 +1028,8 @@ pub fn generate(p: &GearParams, view: GearView, n: f64) -> Result<GenPart, Strin
 fn solid_weight_kg(p: &GearParams) -> String {
     let ra = p.da() / 2.0;
     let rf = p.df() / 2.0;
-    let rho = p.rho();
     let pitch = p.pitch_angle();
     let c_first = pitch / 2.0;
-    let r_start = fr_start_radius(p);
     const SEG: usize = 12;
     let arc = |r: f64, a0_deg: f64, a1_deg: f64, out: &mut Vec<[f64; 2]>| {
         for k in 0..=SEG {
@@ -870,45 +1037,27 @@ fn solid_weight_kg(p: &GearParams) -> String {
             out.push([r * a.cos(), r * a.sin()]);
         }
     };
-    let mut pts: Vec<[f64; 2]> = Vec::with_capacity(p.z as usize * (6 * SEG + 3));
+    let mut pts: Vec<[f64; 2]> = Vec::with_capacity(p.z as usize * (8 * SEG + 4));
     for t in 0..p.z as usize {
         let c = c_first + pitch * t as f64;
         let (fl, fr) = match (make_flank(p, c, 1.0), make_flank(p, c, -1.0)) {
             (Ok(a), Ok(b)) => (a, b),
             _ => return String::new(),
         };
-        // 与 front_regular 完全同一顺序（CCW 闭合链）：
-        // ① 齿根弧 → ② −1 侧圆角 → ③ −1 侧齿廓（根→顶）→ ④ 齿顶弧 → ⑤ +1 侧齿廓（顶→根）→ ⑥ +1 侧圆角
         let c_deg = c.to_degrees();
-        arc(
-            rf,
-            c_deg - pitch.to_degrees() / 2.0,
-            near(th_of(fr.root_pt), c_deg - 3.0),
-            &mut pts,
-        );
-        arc_center(
-            fr.fillet_c,
-            rho,
-            fr.fillet_a0,
-            fr.fillet_a1,
-            SEG,
-            &mut pts,
-        );
-        for k in 0..=SEG {
-            let r = r_start + (ra - r_start) * k as f64 / SEG as f64;
-            pts.push(involute_point(p, r, c, -1.0));
-        }
+        // 与 front_regular 同一条 CCW 链：
+        // 齿根弧 → −1 侧齿根段 → −1 侧齿廓 → 齿顶弧 → +1 侧齿廓 → +1 侧齿根段
+        arc(rf, c_deg - pitch.to_degrees() / 2.0, near(th_of(fr.root_pt), c_deg - 3.0), &mut pts);
+        let neg = flank_points(p, &fr, SEG); // 齿根端 → 齿顶
+        pts.extend(neg.iter().copied());
         arc(
             ra,
             c_deg - p.half_tooth_angle(ra).to_degrees(),
             c_deg + p.half_tooth_angle(ra).to_degrees(),
             &mut pts,
         );
-        for k in 0..=SEG {
-            let r = ra - (ra - r_start) * k as f64 / SEG as f64;
-            pts.push(involute_point(p, r, c, 1.0));
-        }
-        arc_center(fl.fillet_c, rho, fl.fillet_a0, fl.fillet_a1, SEG, &mut pts);
+        let pos = flank_points(p, &fl, SEG); // 齿根端 → 齿顶（要反着走）
+        pts.extend(pos.iter().rev().copied());
     }
     let n = pts.len();
     let mut area = 0.0;
@@ -1616,6 +1765,96 @@ mod tests {
         assert!((len - (84.0 + 6.0 * 2.0)).abs() < 1e-9, "长度 = da + 6n = {}", len);
     }
 
+    /// 小齿数回归（用户 2026-09-17 报 z=17 渲染异常）：
+    /// 模板口径的圆角在齿数小时无解 → 必须降级 + 给警告，且**齿廓链不能断**。
+    #[test]
+    fn small_tooth_counts_fall_back_and_stay_continuous() {
+        for (m, z, want) in [
+            (10.0, 7u32, RootStyle::BaseCircleLine),
+            (10.0, 14, RootStyle::BaseCircleLine),
+            (10.0, 17, RootStyle::BaseCircleLine),
+            (10.0, 40, RootStyle::TemplateArc),
+            (2.0, 40, RootStyle::TemplateArc),
+        ] {
+            let p = GearParams { m, z, h: 20.0, ..GearParams::default() };
+            assert_eq!(p.root_style(), want, "m={m} z={z} 的齿根画法");
+            if want != RootStyle::TemplateArc {
+                assert!(p.root_style_note().is_some(), "m={m} z={z} 应有降级警告");
+            } else {
+                assert!(p.root_style_note().is_none());
+            }
+            // 齿廓链连续性：采样点半径从 rf 单调升到 ra，且相邻点间距没有大跳（原 bug 就是这里断开）
+            let pitch = p.pitch_angle();
+            for sign in [1.0f64, -1.0] {
+                let f = make_flank(&p, pitch / 2.0, sign).unwrap();
+                let pts = flank_points(&p, &f, 12);
+                let radii: Vec<f64> = pts.iter().map(|q| (q[0] * q[0] + q[1] * q[1]).sqrt()).collect();
+                assert!(
+                    (radii[0] - p.df() / 2.0).abs() < 1e-6,
+                    "链首应在齿根圆上：{:.6} vs {:.6}",
+                    radii[0],
+                    p.df() / 2.0
+                );
+                assert!(
+                    (radii[radii.len() - 1] - p.da() / 2.0).abs() < 1e-6,
+                    "链尾应在齿顶圆上：{:.6} vs {:.6}",
+                    radii[radii.len() - 1],
+                    p.da() / 2.0
+                );
+                for w in radii.windows(2) {
+                    assert!(w[1] >= w[0] - 1e-6, "半径应单调升：{} → {}", w[0], w[1]);
+                }
+                // 连续性：最大步长不该是常见步长的好几倍（原 bug 就是圆角弧与样条之间差 ~1.6mm 的断口）
+                let mut steps: Vec<f64> = pts
+                    .windows(2)
+                    .map(|w| ((w[1][0] - w[0][0]).powi(2) + (w[1][1] - w[0][1]).powi(2)).sqrt())
+                    .collect();
+                let mut sorted = steps.clone();
+                sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+                let median = sorted[sorted.len() / 2];
+                steps.sort_by(|a, b| b.partial_cmp(a).unwrap());
+                let worst = steps[0];
+                assert!(
+                    worst < 3.0 * median,
+                    "相邻采样点最大间距 {:.4}（中位 {:.4}，链应连续）",
+                    worst,
+                    median
+                );
+            }
+            // 出图实体也不该有异常张角的弧
+            let v = front_regular(&p, 1.0).unwrap();
+            for e in &v {
+                if let EntityType::Arc(a) = e {
+                    let span = (a.end_angle - a.start_angle).to_degrees().rem_euclid(360.0);
+                    assert!(span < 180.0, "弧张角异常 {:.2}°（r={:.3}）", span, a.radius);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn z17_fallback_adds_radial_line_and_keeps_fillet() {
+        let p = GearParams { m: 10.0, z: 17, h: 20.0, ..GearParams::default() };
+        let f = make_flank(&p, p.pitch_angle() / 2.0, 1.0).unwrap();
+        let (from, to) = f.radial.expect("降级①应有径向直线");
+        let r1 = (from[0] * from[0] + from[1] * from[1]).sqrt();
+        let r2 = (to[0] * to[0] + to[1] * to[1]).sqrt();
+        let r_start = p.db() / 2.0 + (p.da() / 2.0 - p.db() / 2.0) * 0.02; // 降级起点（基圆略上方）
+        assert!((r1 - r_start).abs() < 1e-9, "直线从齿廓起点起（{:.3} vs {:.3}）", r1, r_start);
+        assert!(
+            (r2 - (p.df() / 2.0 + p.rho())).abs() < 1e-9,
+            "直线到圆角弧顶（{:.3}）",
+            r2
+        );
+        // 直线是径向的（两端同角度）
+        let a1 = from[1].atan2(from[0]);
+        let a2 = to[1].atan2(to[0]);
+        assert!((a1 - a2).abs() < 1e-9, "径向直线");
+        // 圆角弧仍保留、且不过 180°
+        let span = (f.fillet_a1 - f.fillet_a0).rem_euclid(360.0);
+        assert!(span < 180.0 && span > 1.0, "圆角弧张角 {:.3}°", span);
+    }
+
     #[test]
     fn fillet_arc_span_matches_template() {
         // 模板圆角弧张角 79.79°；本实现取精确渐开线齿廓起点（比模板的生成器准 ~7µm），
@@ -1634,6 +1873,43 @@ mod tests {
     #[test]
     #[ignore]
     fn dump_views_csv() {
+        // 除模板参数（m=2 z=40）外，再导两组小齿数供人工核对（用户 2026-09-17 报 z=17 异常）
+        for (tag, m, z) in [("smallz17", 10.0, 17u32), ("smallz7", 10.0, 7)] {
+            let p = GearParams { m, z, h: 20.0, ..GearParams::default() };
+            let part = generate(&p, GearView::Front, 1.0).unwrap();
+            let mut out = String::new();
+            for e in &part.entities {
+                match e {
+                    EntityType::Line(l) => out.push_str(&format!(
+                        "LINE,{},{:.6},{:.6},{:.6},{:.6}\n",
+                        l.common.layer, l.start.x, l.start.y, l.end.x, l.end.y
+                    )),
+                    EntityType::Arc(a) => out.push_str(&format!(
+                        "ARC,{},{:.6},{:.6},{:.6},{:.4},{:.4}\n",
+                        a.common.layer, a.center.x, a.center.y, a.radius,
+                        a.start_angle.to_degrees(), a.end_angle.to_degrees()
+                    )),
+                    EntityType::Spline(sp) => {
+                        let (t0, t1) = (sp.knots[3], sp.knots[sp.knots.len() - 4]);
+                        out.push_str(&format!("POLY,{},", sp.common.layer));
+                        for i in 0..=40 {
+                            let u = t0 + (t1 - t0) * i as f64 / 40.0;
+                            let mut q = [0.0f64; 2];
+                            for (j, d) in sp.control_points.iter().enumerate() {
+                                let w = basis(j, 3, u, &sp.knots);
+                                q[0] += w * d.x;
+                                q[1] += w * d.y;
+                            }
+                            out.push_str(&format!("({:.6},{:.6})", q[0], q[1]));
+                        }
+                        out.push('\n');
+                    }
+                    _ => {}
+                }
+            }
+            std::fs::write(format!("/tmp/gear_review/{tag}.csv"), out).unwrap();
+            println!("已导出 /tmp/gear_review/{tag}.csv（{} 实体）", part.entities.len());
+        }
         let p = tmpl();
         // 关键数字对账（与模板实测值同列）
         let ra = p.da() / 2.0;
