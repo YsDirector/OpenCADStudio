@@ -61,7 +61,7 @@ static MANIFEST: PluginManifest = PluginManifest {
         "OCSMFRAMEINIT", "OCSMFRAMEINSERT", "D", "OCSMPOWERDIM", "OCSMDIMGULIDE",
         "GDIM", "OCSMMCP", "OCSMRGH", "CC", "OCSMDIM2GB", "D2G", "OCSMEDIT", "ME",
         "OCSMPART", "XL", "OCSMJOINT", "OCSMHELP", "OH", "OCSMBOM", "BOM", "BOMSYNC", "OCSMBOMSYNC", "OCSMBOMCFG", "BOMCFG",
-        "OCSMBOMEDIT", "BOMEDIT",
+        "OCSMBOMEDIT", "BOMEDIT", "OCSMBOMLOCK", "BOMLOCK", "OCSMBOMXLSX", "BOMXLSX", "OCSMBOMXLSXI", "BOMXLSXI",
     ],
 };
 
@@ -2830,9 +2830,14 @@ fn frame_dir_stems() -> Vec<String> {
     stems
 }
 
-// ── 标准件库（parts/）─────────────────────────────────────────────────────
+// ── 标准件库（parts/）═════════════════════════════════════════════════════
 //
-// 库契约见 `docs`/`OCSMBOM-plan.md` §2：每个标准件一个 DWG（含 ATTDEF +
+// 【已作废 · 2026-09-17 标注】下面这组 `*_scan` / `PartEntry` 是 2026-09-14 前
+// “插件直读 DWG 标准件库（ACM 代理图形解码）”路线的遗留（曾预留给二期序号/三期明细表）。
+// 用户 2026-09-14 定案（`OCSMBOM-plan.md` §16）**标准件全部走参数化**，本路线不再使用；
+// 现行实现见 `src/partgen*.rs`（`catalog_json` + `OCSMPART`）与 `src/tables/*.json`。
+// 保留代码仅作历史/对比参考，**不要接线**；要清就整块删（含其单测）。
+// 库契约见 `OCSMBOM-plan.md` §2：每个标准件一个 DWG（含 ATTDEF +
 // 正确基点），可选一份 `catalog.csv` 索引。此处只负责"列出库里有什么"，
 // 真正的块导入/属性写入由命令路径完成（见 §9 实施清单 2~5 步）。
 

@@ -806,11 +806,14 @@ pub(crate) fn cmd_bom(host: &mut dyn HostApi, args: &str) {
         })
         .collect();
     let items = aggregate(&parts);
-    let rows: Vec<RowSpec> = items
+    let mut rows: Vec<RowSpec> = items
         .iter()
         .enumerate()
         .map(|(i, it)| RowSpec::from_item(it, (i + 1).to_string()))
         .collect();
+    // 与 BOMSYNC/网页 apply/导入 同一套政策：现有表行里手改过的列（非空即保留）与
+    // `BOMLOCK` 数量锁不能被这次刷新冲掉（此前 `BOM` 少了这一步，见 `merge_existing` 注释）。
+    crate::balloon_sync::merge_existing(&mut rows, &doc);
 
     match fill_bom(&mut HostSink(host), &doc, &rows, per_col) {
         Ok(rep) => {
@@ -822,7 +825,8 @@ pub(crate) fn cmd_bom(host: &mut dyn HostApi, args: &str) {
                 .collect();
             let _ = &rep;
             host.push_info(&format!(
-                "OCSMBOM: {} 件 → {} 列（{}）；旧表元 {} 个已替换（Ctrl+Z 可整体撤销）。",
+                "OCSMBOM: {} 件 → {} 列（{}）；旧表元 {} 个已替换（Ctrl+Z 可整体撤销）；\
+                 现有行里手改过的列与 BOMLOCK 数量锁已保留。",
                 rep.rows,
                 rep.cols.len(),
                 desc.join("、"),

@@ -844,7 +844,8 @@ pub fn generate(family: &str, d: f64, l: f64, view: &str) -> Option<Result<GenPa
             return Some(r);
         }
     }
-    // 1型六角螺母：画法待用户模板（先用 6172.1 模板外推过，用户确认不对 → 暂时下架）
+    // 1型六角螺母：**已在第四批（2026-09-17）由 `partgen_b1` 按用户四视图模板上架**，
+    // 本模块这分支只作傅底（正常情况到不了这里）；真走到说明 b1 未接管。
     if family == "nut_6170" {
         return Some(Err(
             "1型六角螺母 GB/T 6170-2015 暂未提供（画法待模板确认，数据表已备好）".into(),

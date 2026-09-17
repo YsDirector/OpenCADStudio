@@ -1582,8 +1582,12 @@ pub(crate) fn build_dimension(
         GuideType::Diameter | GuideType::Radius => {
             build_guide_radial_block(sender, doc, p1, p2, params, style, coef)?
         }
-        GuideType::Datum => return Err("基准标注暂未实现".into()),
-        GuideType::View => return Err("向视图标注暂未实现".into()),
+        // 基准/向视图/角度/剖切/形位公差/局部放大/弧长/焊接 都走 `do_apply` 的**独立分支**
+        // （基准/向视图是匿名块形态，见 `build_guide_datum` / `build_guide_view`）。
+        // 这里只是 Dimension 实体派发器的返回，文案不要再写成“暂未实现”（2026-09-17 改正，
+        // 之前会让人以为功能没做）。
+        GuideType::Datum => return Err("基准标注走 do_apply 的匿名块分支（不经此函数）".into()),
+        GuideType::View => return Err("向视图标注走 do_apply 的匿名块分支（不经此函数）".into()),
         GuideType::Angle => return Err("角度标注走 do_apply 独立分支".into()),
         GuideType::Section => return Err("剖切符号走 do_apply 独立分支".into()),
         GuideType::Tolerance => return Err("形位公差走 do_apply 独立分支".into()),
@@ -3884,16 +3888,17 @@ pub const COMMAND_CATALOG: &[(&str, &str, &str)] = &[
     ("OCSMPART", "XL", "标准件插入：不带参数=开零件库窗口+放置态；带参数=一行直插"),
     ("OCSMJOINT", "", "螺栓副装配：不带参数=开装配窗口+放置态；带参数=一行直装（件链算长度、遮挡裁剪、一次撤销）"),
     ("OCSMPOWERDIM", "D", "智能标注：拾取点模式标线性/对齐/半径/直径（Enter 切线段点选）"),
-    ("OCSMDIMGULIDE", "GDIM", "引导线标注：选引导线 → 配置窗口（尺寸/剖视/向视/局部放大/角度/弧长/焊接/引线/公差/粗糙度/形位公差）"),
+    ("OCSMDIMGULIDE", "GDIM", "引导线标注：选引导线 → 配置窗口（尺寸/剖视/向视/局部放大/角度/弧长/焊接/引线/序号/公差/粗糙度/形位公差）"),
     ("OCSMEDIT", "ME", "改标注：选中 OCSM 生成的标注 → 配置窗口改参数 → 重生成"),
     ("OCSMRGH", "CC", "表面粗糙度：点选插入点 → 配置窗口（匿名块 + ATTDEF）"),
     ("OCSMDIM2GB", "D2G", "一键转国标：原生标注 → OCSM_GB 样式 + 匿名块"),
-    ("OCSMBOM", "BOM", "明细表：建表/刷新（BOM 30 = 本次首列 30 行）"),
+    ("OCSMBOM", "BOM", "明细表：建表/刷新（BOM 30 = 本次首列 30 行；现有行的手改与数量锁保留）"),
     ("OCSMBOMSYNC", "BOMSYNC", "明细表：按序号球标重排/重建（球标联动入口）"),
+    ("OCSMBOMEDIT", "BOMEDIT", "明细表：打开网页编辑器（＝Ctrl+点击图纸里的表块；改完点「应用到图纸」）"),
     ("OCSMBOMLOCK", "BOMLOCK", "明细表：锁定某行数量（BOMLOCK 5 3 / BOMLOCK 5 off）"),
     ("OCSMBOMXLSX", "BOMXLSX", "明细表：导出到 .xlsx（带「锁定数量」列，可外部编辑）"),
     ("OCSMBOMXLSXI", "BOMXLSXI", "明细表：从 .xlsx/.csv 导入（手改数量自动上锁）"),
-    ("OCSMBOMCFG", "BOMCFG", "明细表配置（表头/列/格式）"),
+    ("OCSMBOMCFG", "BOMCFG", "明细表：只改「每列行数」（表头/列宽/格式在 bom/ 模板块里，本命令改不了）"),
     ("OCSMMCP", "", "打印 MCP/HTTP 接入信息（给外部 AI/脚本）"),
     ("OCSMHELP", "OH", "打开本手册窗口（命令目录 + 操作教程）"),
 ];

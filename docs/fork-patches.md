@@ -8,6 +8,15 @@
 > 最近同步点：`d4007055`（Merge upstream **v2026.37** = `fc1788df`，执行记录见 §0.5）
 > 台账基准：`git diff d4007055^2..HEAD`（上游 v2026.37 → 当前本地 HEAD，**47 文件 / +10991 −96**）
 > ⚠️ 上游此后仍有更新（`origin/main` = `1450fdee`，**尚未同步**）
+>
+> **2026-09-17 状态刷新（本次调查顺便核实）**：
+> * §0.6 / §0.7 / §0.9 的分支**都已推到 `prf` 远端，但上游 PR 未开** ——
+>   `gh pr list --author YsDirector -R HakanSeven12/OpenCADStudio --state all` 只有已合并的
+>   **#1234 / #1235**（2026-09-13T18:14:50Z）。要发 PR 直接用各节的 compare 链接
+>   （`桌面/OCSM/PR-*-链接.txt` 里已经是拼好的 create-PR URL）。
+> * 上游 `origin/main`（`1450fdee`）现领先本地 **127 个提交**；台账基准仍是 v2026.37（`d4007055`）。
+> * 别人的上游 PR **#1306**（*docs(plugin): fix inaccuracies and flag real gaps found building a plugin*）
+>   还开着，值得看一眼它点名的插件坑（可能是我们也会踩的）。
 
 ## 0. 怎么用（每次同步上游后）
 
@@ -127,6 +136,27 @@ OCS_SMOKE_PLUGIN=$PWD/target/release/libocs_ocsm.so \
 > （英文注释、去掉 Pi 依赖、以现有面板为消费者）；若接受声明式控件面，另开设计分支 ——
 > **不要**复活 `cc5ec098` 的 reparent 方案。
 > 本地材料：`~/桌面/OCSM/issue-插件面板UI-正文.md` + `issue-插件面板UI-链接.txt`。
+
+## 0.9 分支已推、**PR 未开** · 插件请求跟「活跃图纸」（2026-09-16）
+
+> **修复**：插件自建 HTTP 服务（OCSMechanical 的 `GET /api/guide`、`POST /api/apply_refresh`…）
+> 发的**无 tab 请求**原先被 `Message::DrainPluginRequests` 从 **tab 0** 开始 drain，
+> 于是“总是答在启动那张图上”：读错（`DocumentSnapshot`/`SelectedHandles`/图层扫描）、写也落错图。
+> 一张图时看不出来，一旦有第二个标签（New/Open/自动化建图）就暴露（实测：活动图里的引导线
+> 在插件 HTTP 侧报 `no such guide entity`，而插件命令 `GDIM/OCSM` 看得到）。
+> 修法：drain 顺序改为**先活跃标签、再其它**（带 tab id 的请求仍回自己的 session）。
+>
+> | 项 | 值 |
+> |---|---|
+> | 文件 | `src/app/update/mod.rs`（drain 顺序） |
+> | fork 提交 | `3b35b258` |
+> | PR 分支 | `fix/plugin-requests-active-tab`（已推 `prf` 远端） |
+> | 验证 | OCSMechanical + 自动化客户端建第二图：修前 `no such guide entity`/`400`，修后 `200` + 几何，
+> 生成的标注落进**活跃**文档（`op:"query"` 在 8符号标注层查到）；宿主 `cargo test --lib` 973 passed |
+> | 报告 | `桌面/OCSM/PR-插件请求活动标签页-{正文.md,链接.txt}` |
+>
+> **同步动作**：上游合并后取上游版（内容一致时 git 自动归并）；删本节 + 删分支
+> `fix/plugin-requests-active-tab`。**本条 2026-09-17 才登记进台账**（先前只在 fork 提交里）。
 
 ## 1. 补丁总表（基准：上游 v2026.37 `fc1788df` → HEAD，47 文件 / +10991 −96）
 

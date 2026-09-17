@@ -150,7 +150,7 @@ fn old_row_nos(doc: &CadDocument) -> Vec<(String, String, String)> {
 /// * 序号以外**非空即保留**（"无法解开的锁"：图号/名称/材料/单重/备注 手改过就不再被覆盖）；
 ///   空白格才写新值（空行逐渐被填满）。
 /// * 数量：有锁 → 锁定值；无锁 → 用算出来的值。
-fn merge_prev(r: &mut RowSpec, prev: &([String; 8], Option<usize>, Option<usize>)) {
+pub(crate) fn merge_prev(r: &mut RowSpec, prev: &([String; 8], Option<usize>, Option<usize>)) {
     let (v, lock, exported) = prev;
     if !v[1].is_empty() {
         r.code = v[1].clone();
@@ -174,6 +174,25 @@ fn merge_prev(r: &mut RowSpec, prev: &([String; 8], Option<usize>, Option<usize>
         r.lock_qty = Some(*q);
     }
     r.exported = *exported;
+}
+
+/// **把现有表行的手改/数量锁合并进新算出的行**（BOM / BOMSYNC / 网页 apply / 导入 共用同一套政策）。
+///
+/// 回归背景（2026-09-17 用户要求“调查计划余项”时发现）：`BOM` 刷新路径原先只走
+/// `aggregate → fill_bom` 全量重建，**不走 `merge_prev`** → 手改过的图号/名称/材料/备注
+/// 与 `BOMLOCK` 数量锁会被冲掉，与 `b3df1fca` 定的“非空即保留、手改即锁”政策不一致。
+/// 合并按**序号**对齐：表里的序号与本次算出来的行号一致才合并（BOMSYNC 按球标重编过号时，
+/// 想让手改保留请继续用 `BOMSYNC`/网页编辑器 —— 它们本来就是按序号对齐的）。
+pub(crate) fn merge_existing(rows: &mut [RowSpec], doc: &CadDocument) {
+    let prev = old_rows(doc);
+    if prev.is_empty() {
+        return;
+    }
+    for r in rows.iter_mut() {
+        if let Some(p) = prev.get(&r.item_no) {
+            merge_prev(r, p);
+        }
+    }
 }
 
 /// 零件键（代号 + 材料）——与 `bom::aggregate` 的分组键一致。
@@ -541,6 +560,55 @@ mod tests {
             v["part"] = serde_json::from_str(p).unwrap();
         }
         v.to_string()
+    }
+
+    /// `BOM` 刷新（以及其它路径）必须保住现有表行的手改与 `BOMLOCK` 数量锁。
+    /// 回归：`cmd_bom` 曾经不走 `merge_prev` → 手改列与锁被全量重建冲掉。
+    #[test]
+    fn merge_existing_keeps_manual_edits_and_qty_lock() {
+        use ocs_plugin_api::host::acadrust::entities::AttributeEntity;
+        let mut doc = CadDocument::new();
+        // 现有表行：序号 1；图号/名称/材料/备注 都是手改过的；数量锁 = 7
+        let mut row = Insert::new(bom::ROW_BLOCK, Vector3::new(0.0, 0.0, 0.0));
+        let vals = ["1", "GB/T 5782 手改", "六角头螺栓 M8x35", "7", "45钢", "0.02", "0.14", "自制"];
+        for (tag, val) in bom::CELL_TAGS.iter().zip(vals) {
+            let mut a = AttributeEntity::default();
+            a.tag = tag.to_string();
+            a.value = val.to_string();
+            row.attributes.push(a);
+        }
+        let mut rec = XDataValue::String("{\"qty\":7}".to_string());
+        let mut r = ocs_plugin_api::host::acadrust::xdata::ExtendedDataRecord::new(bom::LOCK_APP);
+        r.values.push(rec);
+        row.common.extended_data.add_record(r);
+        doc.add_entity(EntityType::Insert(row)).unwrap();
+
+        // 本次台账算出来的行：序号 1、数量 3、名称/材料未填
+        let mut rows = vec![RowSpec {
+            item_no: "1".to_string(),
+            code: "GB/T 5782".to_string(),
+            name: String::new(),
+            spec: "M8x35".to_string(),
+            qty: 3,
+            material: String::new(),
+            unit_weight: String::new(),
+            remark: String::new(),
+            lock_qty: None,
+            exported: None,
+        }];
+        merge_existing(&mut rows, &doc);
+        assert_eq!(rows[0].qty, 7, "数量应取锁值 7（不是重算的 3）");
+        assert_eq!(rows[0].lock_qty, Some(7), "锁位要带下去，fill_bom 才会重新写锁");
+        assert_eq!(rows[0].code, "GB/T 5782 手改", "手改过的图号不能被覆盖");
+        assert_eq!(rows[0].name, "六角头螺栓 M8x35", "手改过的名称不能被覆盖（且规格要清空避免二次拼接）");
+        assert!(rows[0].spec.is_empty(), "名称已含规格 → spec 应清空");
+        assert_eq!(rows[0].material, "45钢");
+        assert_eq!(rows[0].unit_weight, "0.02");
+        assert_eq!(rows[0].remark, "自制");
+        // 空表时是 no-op
+        let mut fresh = vec![RowSpec { lock_qty: None, ..rows[0].clone() }];
+        merge_existing(&mut fresh, &CadDocument::new());
+        assert!(fresh[0].lock_qty.is_none());
     }
 
     #[test]
