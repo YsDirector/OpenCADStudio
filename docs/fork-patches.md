@@ -6,8 +6,8 @@
 >
 > 上游：`origin` = HakanSeven12/OpenCADStudio（经 ghfast 镜像）
 > 最近同步点：`5200ef5d`（Merge upstream **`65c0fe54`**，213 提交，执行记录见 §0.11）
-> 台账基准：`git diff origin/main..HEAD`（**62 文件 / +13770 −100**，不含插件 crate；
-> 含 `crates/ocs_ocsm*` 则为 154 文件 / +81900 −100）
+> 台账基准：`git diff origin/main..HEAD`（**64 文件 / +13943 −101**，不含插件 crate；
+> 含 `crates/ocs_ocsm*` 则为 156 文件 / +82077 −101）
 > ⚠️ 上一次同步点 `d4007055`（上游 v2026.37 `fc1788df`）→ 本次之前上游又走了 213 提交。
 >
 > **2026-09-17 状态刷新（本次调查顺便核实）**：
