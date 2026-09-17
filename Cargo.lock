@@ -85,7 +85,7 @@ checksum = "366ffbaa4442f4684d91e2cd7c5ea7c4ed8add41959a31447066e279e432b618"
 [[package]]
 name = "acadrust"
 version = "0.5.5"
-source = "git+https://github.com/HakanSeven12/cadcodec.git?rev=8a28c21#8a28c21537d5e5ab06a431b1741d0c2d2b098b15"
+source = "git+https://ghfast.top/https://github.com/HakanSeven12/cadcodec.git?rev=8a28c21#8a28c21537d5e5ab06a431b1741d0c2d2b098b15"
 dependencies = [
  "ahash 0.8.12",
  "anyhow",
@@ -4179,6 +4179,25 @@ dependencies = [
  "objc2 0.5.2",
  "objc2-core-location",
  "objc2-foundation 0.2.2",
+]
+
+[[package]]
+name = "ocs_ocsm"
+version = "0.1.0"
+dependencies = [
+ "crc32fast",
+ "flate2",
+ "ocs_plugin_api",
+ "quick-xml 0.39.4",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "ocs_ocsm_mcp"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
 ]
 
 [[package]]
