@@ -11,6 +11,7 @@ token 当十六进制句柄喂进实体拾取步骤 —— 那种写法可以直
 
 用法：
     python3 /tmp/ocs_mcp.py <<'PY'
+    newdoc
     run CENTERMARK
     input entity DD 315,350,0
     cancel
@@ -126,6 +127,11 @@ for raw in sys.stdin.read().splitlines():
             pass  # 回车（kind=enter 本身即语义）
         d = call_tool("ocs_execute", {"ocs_session_id": sid, "request": req})
         show(d, f"input {arg!r}")
+    elif op == "newdoc":
+        # `newdoc`：新建一张空白图纸（不然新起的会话里没有任何文档，run 会报 no_document）
+        d = call_tool("ocs_execute", {"ocs_session_id": sid,
+                                      "request": {"request_id": f"mcp-{_id[0]}", "op": "new"}})
+        show(d, "newdoc")
     elif op == "cancel":
         d = call_tool("ocs_execute", {"ocs_session_id": sid,
                                       "request": {"request_id": f"mcp-{_id[0]}", "op": "cancel"}})
