@@ -19,6 +19,7 @@ mod balloon;
 mod balloon_sync;
 mod bom_xlsx;
 mod bom;
+mod centerline;
 mod detail_clip;
 mod dim2gb;
 mod guide_server;
@@ -62,6 +63,7 @@ static MANIFEST: PluginManifest = PluginManifest {
         "GDIM", "OCSMMCP", "OCSMRGH", "CC", "OCSMDIM2GB", "D2G", "OCSMEDIT", "ME",
         "OCSMPART", "XL", "OCSMJOINT", "OCSMHELP", "OH", "OCSMBOM", "BOM", "BOMSYNC", "OCSMBOMSYNC", "OCSMBOMCFG", "BOMCFG",
         "OCSMBOMEDIT", "BOMEDIT", "OCSMBOMLOCK", "BOMLOCK", "OCSMBOMXLSX", "BOMXLSX", "OCSMBOMXLSXI", "BOMXLSXI",
+        "OCSMCENTERLINE", "ZX",
     ],
 };
 
@@ -1188,6 +1190,15 @@ impl BuiltinPlugin for OcsmPlugin {
                             })],
                         },
                         RibbonGroup {
+                            title: "中心线",
+                            tools: vec![RibbonItem::LargeTool(ToolDef {
+                                id: "OCSMCENTERLINE",
+                                label: "中心线",
+                                icon: IconKind::Glyph("⊕"),
+                                event: ModuleEvent::Command("OCSMCENTERLINE".to_string()),
+                            })],
+                        },
+                        RibbonGroup {
                             title: "标注",
                             tools: vec![
                                 RibbonItem::LargeTool(ToolDef {
@@ -1257,6 +1268,11 @@ impl BuiltinPlugin for OcsmPlugin {
             }
             "D" | "OCSMPOWERDIM" => {
                 self.cmd_powerdim(host);
+                true
+            }
+            // 中心线：点圆/圆弧 → 十字；点两根直线 → 角平分线（`3中心线层`）
+            "OCSMCENTERLINE" | "ZX" => {
+                self::centerline::cmd_centerline(host);
                 true
             }
             "OCSMDIMGULIDE" | "GDIM" => {

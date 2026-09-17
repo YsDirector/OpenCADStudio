@@ -281,6 +281,15 @@ rm -rf "$HOME/.config/OpenCADStudio/plugins/opencad.layers_quick"
 | `on_object_pick_snapped(handle, pt, snapped) -> CommandStep` | 实体拾取 + OSNAP 感知：`snapped=true` 表示 pt 是吸附点（拾取点），否则是对象选择点击 |
 | `entity_pick_applies_osnap() -> bool` | 实体拾取点击是否跑对象捕捉（POWERDIM 拾取点/线段点选模式切换） |
 
+命令返回值（`CommandStep`）在 v5 **末尾追加**（2026-09-17，`OCSMCENTERLINE` 需要一次落两条线）：
+
+| 变体 | 说明 |
+|------|------|
+| `CommitEntities(Vec<EntityType>)` | 一步提交**多个**实体并继续（映射宿主 `CmdResult::CommitEntities`） |
+| `CommitEntitiesAndExit(Vec<EntityType>)` | 一步提交多个实体并结束（映射 `CmdResult::CommitEntitiesAndExit`）—— 与单实体版本共用同一套撤销分组（一个 Ctrl+Z 一起回去），不需要为了“一步一实体”把复合几何塞进匿名块 |
+
+功能区也加了一组「中心线」（⊕ 按钮，等效 `ZX`）。
+
 宿主侧配套：`CadCommand` 新增 `plugin_preview_entity` / `entity_pick_applies_osnap` /
 `inject_pick_snap`；`InteractiveEvent` 增 `snapped` 字段与 `Text`/`MouseMove` 变体；
 `HostRequest` 增 `WantsTextInput`/`WantsMouseMove`；`HostResponse` 增 `Preview`。

@@ -419,6 +419,19 @@ pub enum CommandStep {
     /// handle reading). Without this, a plugin `on_text_input` that returns
     /// `NeedPoint` would swallow every typed token and block handle picks.
     Ignored,
+
+    // ── API v5 addendum (2026-09-17; appended at the end so the bincode
+    // discriminants of the variants above stay put for pre-built plugins) ──
+
+    /// Commit **several** entities in one step and stay active.
+    ///
+    /// Maps onto the host's `CmdResult::CommitEntities`, so a plugin command
+    /// can emit composite geometry as *plain* entities — e.g. the two centre
+    /// lines of `OCSMCENTERLINE` — in a single undo entry, instead of having
+    /// to wrap them in an anonymous block to keep one entity per step.
+    CommitEntities(Vec<EntityType>),
+    /// Commit several entities and end the command (see [`Self::CommitEntities`]).
+    CommitEntitiesAndExit(Vec<EntityType>),
 }
 
 /// Export a `BuiltinPlugin` from a `cdylib` so the host can load it at runtime.

@@ -158,6 +158,28 @@ OCS_SMOKE_PLUGIN=$PWD/target/release/libocs_ocsm.so \
 > **同步动作**：上游合并后取上游版（内容一致时 git 自动归并）；删本节 + 删分支
 > `fix/plugin-requests-active-tab`。**本条 2026-09-17 才登记进台账**（先前只在 fork 提交里）。
 
+## 0.10 分支未开 PR · 插件一步提交多实体（2026-09-17，`CommandStep::CommitEntities*`）
+
+> **缺口**：插件命令一步只能落**一个**实体（`CommandStep::Commit` / `CommitAndEnd`），
+> 而宿主 `CmdResult` 早就有 `CommitEntities` / `CommitEntitiesAndExit`（镜像/复制等内置命令在用）。
+> 插件要画“复合几何”（例：`OCSMCENTERLINE` 的十字中心线 = **两条 `LINE`**）就只能
+> ① 塞进匿名块（用户没法直接修剪/夹点），或 ② 走插件 HTTP 通道异步补实体（撤销分组/原子性变差）。
+>
+> **改法**（两处，纯追加）：
+> * `crates/ocs_plugin_api/src/host.rs`：`CommandStep` **末尾**追加
+>   `CommitEntities(Vec<EntityType>)` / `CommitEntitiesAndExit(Vec<EntityType>)`
+>   —— 必须追加在末尾：该类型走 **bincode**（`ipc::transport`），动已有变体的判别值就断旧插件；
+> * `src/app/plugin_host.rs`：`plugin_step_to_result()` 加两条映射到宿主同名 `CmdResult`。
+>
+> | 项 | 值 |
+> |---|---|
+> | 文件 | `crates/ocs_plugin_api/src/host.rs`（+~22）、`src/app/plugin_host.rs`（+2 + 1 测试） |
+> | 验证 | 宿主 `plugin_commit_entities_and_exit_lands_both_in_one_undo_entry`：两条线一次落图 + 命令结束 + **一个**撤销条目 + `undo` 一次两条一起回去；插件侧 `centerline::` 15 个单测 |
+> | 报告 | （待写）`桌面/OCSM/PR-插件多实体提交-正文.md` |
+>
+> **同步动作**：上游若接受，取上游版；若上游改成别的形态（如 `CommitMany`），
+> 插件侧只需改 `centerline.rs` 的返回值（其余逻辑不依赖）。
+
 ## 1. 补丁总表（基准：上游 v2026.37 `fc1788df` → HEAD，47 文件 / +10991 −96）
 
 > A–E 组的行数是 v2026.36 基准时的记录（功能性描述仍适用）；F 组为 2026-09-16 新增。

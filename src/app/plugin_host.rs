@@ -1083,6 +1083,8 @@ fn plugin_step_to_result(step: ocs_plugin_api::host::CommandStep) -> crate::comm
         CommandStep::NeedPoint => CmdResult::NeedPoint,
         CommandStep::Commit(e) => CmdResult::CommitEntity(e),
         CommandStep::CommitAndEnd(e) => CmdResult::CommitAndExit(e),
+        CommandStep::CommitEntities(entities) => CmdResult::CommitEntities(entities),
+        CommandStep::CommitEntitiesAndExit(entities) => CmdResult::CommitEntitiesAndExit(entities),
         CommandStep::Done | CommandStep::Cancel | CommandStep::Ignored => CmdResult::Cancel,
     }
 }
@@ -1902,6 +1904,62 @@ mod tests {
         let _ = app.apply_cmd_result(r);
         // Original point + the mark the command committed.
         assert_eq!(app.tabs[0].scene.document.entities().count(), 2);
+    }
+
+    /// A plugin command that commits **two** entities in one step
+    /// (`CommandStep::CommitEntitiesAndExit`, v5 addendum 2026-09-17):
+    /// composite geometry as plain entities, one undo entry, one message.
+    struct CommitTwoLines;
+    impl ocs_plugin_api::host::InteractiveCommand for CommitTwoLines {
+        fn prompt(&self) -> String {
+            crate::t!("Pick a point").into_owned()
+        }
+        fn on_point(&mut self, pt: [f64; 3]) -> ocs_plugin_api::host::CommandStep {
+            use ocs_plugin_api::host::CommandStep;
+            let v = |dx: f64, dy: f64| {
+                acadrust::types::Vector3::new(pt[0] + dx, pt[1] + dy, 0.0)
+            };
+            let cross = acadrust::entities::Line::from_points(v(-1.0, 0.0), v(1.0, 0.0));
+            let vert = acadrust::entities::Line::from_points(v(0.0, -1.0), v(0.0, 1.0));
+            CommandStep::CommitEntitiesAndExit(vec![
+                acadrust::EntityType::Line(cross),
+                acadrust::EntityType::Line(vert),
+            ])
+        }
+    }
+
+    #[test]
+    fn plugin_commit_entities_and_exit_lands_both_in_one_undo_entry() {
+        let mut app = OpenCADStudio::new_for_test();
+        app.tabs[0].is_start = false;
+        {
+            let mut host = HostSession::new(&mut app, 0);
+            host.start_interactive(Box::new(CommitTwoLines));
+        }
+        let r = app.tabs[0]
+            .active_cmd
+            .as_mut()
+            .unwrap()
+            .on_point(glam::DVec3::new(10.0, 20.0, 0.0));
+        let _ = app.apply_cmd_result(r);
+        app.finish_all_pending_history();
+        assert_eq!(
+            app.tabs[0].scene.document.entities().count(),
+            2,
+            "十字中心线：两条线都要落图"
+        );
+        assert!(app.tabs[0].active_cmd.is_none(), "命令应当结束");
+        assert_eq!(
+            app.tabs[0].history.undo_stack.len(),
+            1,
+            "一次用户动作 = 一个撤销条目（不是两条）"
+        );
+        app.undo_active_tab();
+        assert_eq!(
+            app.tabs[0].scene.document.entities().count(),
+            0,
+            "Ctrl+Z 一次两条一起回去"
+        );
     }
 
     #[test]
