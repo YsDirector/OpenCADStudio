@@ -845,11 +845,14 @@ pub fn catalog_json() -> String {
     }
     // 第四批起：各族模块**自报家门**（id/name/code/views/sizes/tree_path），
     // 本文件不再逐个登记——并行分支各写各的模块，接进来自动出现。
+    // 结构要素（磨外圆等）走同一套：`detail::families_json` 用 `tree_dir` 声明
+    // 「结构要素/…」路径，会在文件树上自动长出与「零件库」并列的根树。
     for (k, v) in crate::partgen_b1::families_json()
         .into_iter()
         .chain(crate::partgen_b2::families_json())
         .chain(crate::partgen_b3::families_json())
         .chain(crate::partgen_b4::families_json())
+        .chain(crate::detail::families_json())
     {
         fam_map.insert(k, v);
     }
@@ -1035,9 +1038,13 @@ pub struct SizeRow {
     pub lengths: Vec<f64>,
 }
 
-/// 族的类型：bolt / nut / washer / pin / other（件链解析用）。
+/// 族的类型：bolt / nut / washer / pin / detail / other（件链解析用）。
 pub fn family_kind(family: &str) -> &'static str {
-    if family.starts_with("hex_bolt") {
+    if family.starts_with("detail_") {
+        // 结构要素（磨外圆/退刀槽/键槽…）：与标准件并列的另一棵树
+        // （不进螺栓副/件链，GUI 面板走「自由输入 d」而不是固定规格下拉）
+        "detail"
+    } else if family.starts_with("hex_bolt") {
         // 真·螺栓：穿孔 + 螺母（件链装配只认这一种）
         "bolt"
     } else if family == "socket_head"
@@ -1107,7 +1114,14 @@ pub fn size_row(family: &str, d: f64) -> Option<SizeRow> {
 }
 
 /// 按族/规格/视图生成零件（预览与插入共用同一入口）。
+///
+/// 结构要素（`detail_*`）没有长度 l：本入口约定 `l` 槽位承载**可选 b1**
+///（`l = 0` → 该 d 档默认行），方便预览/测试用一条统一入口；HTTP/CLI 侧
+/// 有显式 `b1` 字段，走 `generate_requested`。
 pub fn generate(family: &str, d: f64, l: f64, view: &str) -> Result<GenPart, String> {
+    if let Some(result) = crate::detail::try_generate(family, d, (l > 0.0).then_some(l), view) {
+        return result;
+    }
     // 第四批起的族：各自模块里带完整实现（画法/数据/校验），先于本文件的历史分支派发
     for f in [
         crate::partgen_b1::generate,
@@ -1136,8 +1150,28 @@ pub fn generate(family: &str, d: f64, l: f64, view: &str) -> Result<GenPart, Str
     }
 }
 
+/// 统一生成入口（HTTP / CLI 调用）：标准件要求 `l`；结构要素不要 `l`，
+/// `b1` 可选（`None` = 该 d 档默认行）。
+pub fn generate_requested(
+    family: &str,
+    d: f64,
+    l: Option<f64>,
+    b1: Option<f64>,
+    view: &str,
+) -> Result<GenPart, String> {
+    if crate::detail::is_detail(family) {
+        return crate::detail::generate(family, d, b1, view);
+    }
+    let l = l.ok_or_else(|| "缺少参数 l".to_string())?;
+    generate(family, d, l, view)
+}
+
 /// URL 查询串（`family=hex_bolt_c&d=5&l=25&view=main`）→ 预览 SVG。
+/// 结构要素形如 `family=detail_grind_od&d=100[&b1=8]&view=main`（无 l）。
 pub fn preview_svg(query: &str) -> Result<String, String> {
+    if let Some(result) = crate::detail::preview_svg(query) {
+        return result;
+    }
     let get = |k: &str| {
         query
             .split('&')
@@ -1982,6 +2016,16 @@ mod tests {
                 crate::partgen_more::family_views(id),
                 "{id} 的 views 与视图注册表不一致"
             );
+            // 结构要素（detail_*）：**自由输入 d**、没有固定规格下拉；用目录里
+            // 第一档区间内的一个 d 试生成，不走下面的 sizes/lengths 校验。
+            if crate::detail::is_detail(id) {
+                let d = detail_sample_d(f);
+                for v in &views {
+                    crate::detail::generate(id, d, None, v)
+                        .unwrap_or_else(|e| panic!("{id} d={d} {v} 生成失败: {e}"));
+                }
+                continue;
+            }
             let sizes = f["sizes"].as_array().unwrap_or_else(|| panic!("{id} 缺 sizes"));
             assert!(!sizes.is_empty(), "{id} 没有规格");
             let d = sizes[0]["d"].as_f64().unwrap();
@@ -2016,8 +2060,22 @@ mod tests {
             "bearing_276",
             "bearing_297",
             "bearing_288",
+            // 结构要素（第一期：磨外圆）
+            "结构要素",
+            "detail_grind_od",
+            "磨外圆 GB/T 6403.5-2008",
         ] {
             assert!(tree.contains(needle), "树里缺 {needle}");
+        }
+    }
+
+    /// 目录里结构要素第一档取一个可生成的 d（自由输入，没有固定规格）。
+    fn detail_sample_d(f: &serde_json::Value) -> f64 {
+        let band = &f["bands"][0];
+        let lo = band["lo"].as_f64().unwrap_or(1.0);
+        match band["hi"].as_f64() {
+            Some(hi) if hi.is_finite() => (lo.max(0.0) + hi) / 2.0,
+            _ => lo.max(1.0) * 2.0,
         }
     }
 

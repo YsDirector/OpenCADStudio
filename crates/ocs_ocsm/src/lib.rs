@@ -20,6 +20,7 @@ mod balloon_sync;
 mod bom_xlsx;
 mod bom;
 mod centerline;
+mod detail;
 mod detail_clip;
 mod dim2gb;
 mod gear;
@@ -732,15 +733,22 @@ fn place_one(
     Ok(())
 }
 
-/// `OCSMPART`/`XL` 的参数化形式：`<族> <d> <l> [view <视图>] [at x,y] [rot 度]`。
+/// `OCSMPART`/`XL` 的参数化形式。
 ///
-/// 例：`OCSMPART hex_bolt_c 10 95 at 150,30 rot 0`、`OCSMPART hex_bolt_ab 8 40`。
+/// - **标准件**：`<族> <d> <l> [view <视图>] [at x,y] [rot 度]`
+///   例：`OCSMPART hex_bolt_c 10 95 at 150,30 rot 0`、`OCSMPART hex_bolt_ab 8 40`。
+/// - **结构要素**（`detail_*`）：没有长度 l，`<族> <d> [b1 <值>] [view <视图>] [at x,y] [rot 度]`
+///   例：`OCSMPART detail_grind_od 100 b1 10 at 150,30 rot 0`（b1 缺省 = 该 d 档默认行）。
+///
 /// 解析失败（或参数为空）返回 `None` → 回退到原 GUI（零件库窗口 + 鼠标放置）流程。
 #[derive(Debug, PartialEq)]
 struct PartsSpec {
     family: String,
     d: f64,
+    /// 标准件的长度；结构要素无长度（固定 0.0）。
     l: f64,
+    /// 结构要素可选 b1 覆盖（标准件恒为 None）。
+    b1: Option<f64>,
     view: String,
     at: Option<[f64; 2]>,
     rotation: Option<f64>,
@@ -753,22 +761,40 @@ impl PartsSpec {
         if family.is_empty() || family.starts_with('-') {
             return None;
         }
+        let family = family.to_ascii_lowercase();
         let d: f64 = tokens.next()?.parse().ok()?;
-        let l: f64 = tokens.next()?.parse().ok()?;
-        if !(d.is_finite() && l.is_finite() && d > 0.0 && l > 0.0) {
+        if !(d.is_finite() && d > 0.0) {
             return None;
         }
+        // 结构要素（磨外圆等）没有长度，第二个数字参数后直接进关键字。
+        let detail = crate::detail::is_detail(&family);
         let mut spec = PartsSpec {
-            family: family.to_ascii_lowercase(),
+            family,
             d,
-            l,
+            l: 0.0,
+            b1: None,
             view: "main".to_string(),
             at: None,
             rotation: None,
         };
+        if !detail {
+            let l: f64 = tokens.next()?.parse().ok()?;
+            if !(l.is_finite() && l > 0.0) {
+                return None;
+            }
+            spec.l = l;
+        }
         while let Some(token) = tokens.next() {
             // 关键字大小写不敏感（宿主把整条命令交给插件时可能是大写）。
             match token.to_ascii_lowercase().as_str() {
+                // 结构要素的可选 b1 覆盖（标准件不认这个关键字）。
+                "b1" if detail => {
+                    let b1: f64 = tokens.next()?.parse().ok()?;
+                    if !b1.is_finite() {
+                        return None;
+                    }
+                    spec.b1 = Some(b1);
+                }
                 "view" | "--view" => {
                     let view = tokens.next()?;
                     if view.is_empty() {
@@ -810,9 +836,15 @@ impl PartsSpec {
         let mut obj = serde_json::json!({
             "family": self.family,
             "d": self.d,
-            "l": self.l,
             "view": self.view,
         });
+        // 结构要素没有 l（服务端 l 可缺省）；标准件必须带。
+        if !crate::detail::is_detail(&self.family) {
+            obj["l"] = serde_json::json!(self.l);
+        }
+        if let Some(b1) = self.b1 {
+            obj["b1"] = serde_json::json!(b1);
+        }
         if let Some([x, y]) = self.at {
             obj["x"] = serde_json::json!(x);
             obj["y"] = serde_json::json!(y);
@@ -1701,8 +1733,10 @@ impl OcsmPlugin {
                 }
                 None => {
                     host.push_error(
-                        "OCSMPART 参数无效。用法：OCSMPART <族> <d> <l> [view <视图>] [at x,y] [rot 度]，\
-                         例：OCSMPART hex_bolt_c 10 95 at 150,30 rot 0（不带参数则打开零件库窗口）。",
+                        "OCSMPART 参数无效。用法：标准件 `OCSMPART <族> <d> <l> [view <视图>] [at x,y] [rot 度]`\
+                         （例：OCSMPART hex_bolt_c 10 95 at 150,30 rot 0）；\
+                         结构要素 `OCSMPART detail_grind_od <d> [b1 <值>] [at x,y] [rot 度]`\
+                         （b1 缺省 = 该 d 档默认行；不带参数则打开零件库窗口）。",
                     );
                     return;
                 }
@@ -3657,6 +3691,32 @@ mod tests {
         assert_eq!(spec.view, "main");
         assert_eq!(spec.at, None);
         assert_eq!(spec.rotation, None);
+        assert_eq!(spec.b1, None);
+
+        // 结构要素：没有长度 l，可选 b1（`b1 <值>`），其余关键字同标准件。
+        let spec = PartsSpec::parse("detail_grind_od 100").unwrap();
+        assert_eq!(spec.family, "detail_grind_od");
+        assert_eq!((spec.d, spec.l), (100.0, 0.0));
+        assert_eq!(spec.b1, None);
+        let spec = PartsSpec::parse("DETAIL_GRIND_OD 100 b1 8 at 150,30 rot 45").unwrap();
+        assert_eq!(spec.b1, Some(8.0));
+        assert_eq!(spec.at, Some([150.0, 30.0]));
+        assert_eq!(spec.rotation, Some(45.0));
+        // 结构要素不接受第二个数字当长度（必须显式 b1），也不接受标准件里的 b1。
+        assert_eq!(PartsSpec::parse("detail_grind_od 100 10"), None);
+        assert_eq!(PartsSpec::parse("hex_bolt_c 10 95 b1 3"), None);
+        // to_body：结构要素不带 l、带 b1。
+        let body: serde_json::Value = serde_json::from_str(
+            &PartsSpec::parse("detail_grind_od 100 b1 8 at 1,2 rot 45")
+                .unwrap()
+                .to_body(),
+        )
+        .unwrap();
+        assert_eq!(body["family"], "detail_grind_od");
+        assert!(body.get("l").is_none(), "结构要素请求体不应带 l：{body}");
+        assert_eq!(body["b1"], 8.0);
+        assert_eq!(body["x"], 1.0);
+        assert_eq!(body["y"], 2.0);
 
         let spec = PartsSpec::parse("hex_bolt_c 10 95 view top at 150,30 rot 90").unwrap();
         assert_eq!(spec.view, "top");

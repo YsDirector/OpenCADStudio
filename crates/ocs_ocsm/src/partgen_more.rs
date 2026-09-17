@@ -1686,6 +1686,11 @@ fn views_json(family: &str) -> serde_json::Value {
 }
 
 pub fn family_views(family: &str) -> Vec<&'static str> {
+    // 结构要素（detail_*）在自己的模块里声明视图（第一期都只有主视图）
+    let detail = crate::detail::family_views(family);
+    if !detail.is_empty() {
+        return detail;
+    }
     // 第四批起：各族在自己的模块里声明视图（本文件不再逐族登记，避免并行开发冲突）
     for f in [
         crate::partgen_b1::family_views,

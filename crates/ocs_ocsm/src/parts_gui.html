@@ -14,7 +14,7 @@
   .right { flex: 1; min-width: 340px; }
   .card h2 { font-size: 13px; margin: 0 0 8px; color: #555; }
   label { display: block; font-size: 12px; color: #666; margin: 8px 0 2px; }
-  select { width: 100%; padding: 5px 6px; border: 1px solid #c6ccd4;
+  select, input[type="number"] { width: 100%; padding: 5px 6px; border: 1px solid #c6ccd4;
            border-radius: 4px; font-size: 13px; box-sizing: border-box; background: #fff; }
   .row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
   .opt { padding: 5px 10px; border: 1px solid #c6ccd4; border-radius: 5px;
@@ -59,10 +59,19 @@
   <div class="card right">
     <h2>规格与视图</h2>
     <div id="panel" style="display:none">
-      <label for="dia">公称直径</label>
-      <select id="dia"></select>
-      <label for="len" id="lenLabel">长度 l（mm，仅列该直径标准长度系列）</label>
-      <select id="len"></select>
+      <div id="stdFields">
+        <label for="dia">公称直径</label>
+        <select id="dia"></select>
+        <label for="len" id="lenLabel">长度 l（mm，仅列该直径标准长度系列）</label>
+        <select id="len"></select>
+      </div>
+      <div id="detailFields" style="display:none">
+        <label for="dnum" id="dLabel">轴径 d（mm，自由输入）</label>
+        <input id="dnum" type="number" step="0.1" min="0.01" value="100" />
+        <label for="b1num">槽宽 b1 覆盖（mm，留空 = 该 d 档默认）</label>
+        <input id="b1num" type="number" step="0.1" min="0.01" placeholder="留空 = 默认" />
+        <div class="hint" id="detailHint"></div>
+      </div>
       <label>视图（出库哪个视图）</label>
       <div class="row" id="viewRow"></div>
       <button class="btn" id="out">零件出库</button>
@@ -80,7 +89,7 @@
 </div>
 
 <script>
-let catalog = null, cur = { family: "", d: 0, l: 0, view: "main" };
+let catalog = null, cur = { family: "", d: 0, l: 0, b1: null, view: "main" };
 const el = (id) => document.getElementById(id);
 // 本窗口钉在哪张图纸上（插件开窗时写的 `tab=`）：出库/插入都带回给插件，
 // 多张图各开窗口时不串图；旧窗口（图纸已关）会被插件明确拒绝。
@@ -148,20 +157,14 @@ function pickFamilyInner(id, row) {
   el("status").textContent = "";
   el("status").className = "";
   cur.family = id;
+  cur.b1 = null;
   el("code").textContent = "　" + f.code + " ← " + f.iso;
   el("panel").style.display = "";
   el("tip").style.display = "none";
-  el("lenLabel").textContent = (f.len_label || "长度 l") + "（mm，仅列该直径的取值）";
   el("baseHint").textContent = f.base_hint || "基点 = 头部支承面 × 轴线";
-  const dia = el("dia");
-  dia.innerHTML = "";
-  f.sizes.forEach((s) => {
-    const o = document.createElement("option");
-    o.value = s.d;
-    o.textContent = s.label + "（P" + s.pitch + "）";
-    dia.appendChild(o);
-  });
-  dia.value = f.sizes[0].d;
+  const detail = !!f.free_d;
+  el("stdFields").style.display = detail ? "none" : "";
+  el("detailFields").style.display = detail ? "" : "none";
   const vrow = el("viewRow");
   vrow.innerHTML = "";
   f.views.forEach((v, i) => {
@@ -177,7 +180,55 @@ function pickFamilyInner(id, row) {
     vrow.appendChild(b);
   });
   cur.view = f.views[0].id;
+  if (detail) {
+    // 结构要素：自由输入 d（不是固定规格下拉）；b1 可留空 = 该 d 档默认
+    el("dLabel").textContent = f.d_label || "参数 d（mm，自由输入）";
+    el("dnum").value = f.default_d || 100;
+    el("b1num").value = "";
+    onDetail();
+    return;
+  }
+  el("lenLabel").textContent = (f.len_label || "长度 l") + "（mm，仅列该直径的取值）";
+  const dia = el("dia");
+  dia.innerHTML = "";
+  f.sizes.forEach((s) => {
+    const o = document.createElement("option");
+    o.value = s.d;
+    o.textContent = s.label + "（P" + s.pitch + "）";
+    dia.appendChild(o);
+  });
+  dia.value = f.sizes[0].d;
   onDia(f.sizes[0]);
+}
+
+// 结构要素：d 自由输入；b1 留空 = 该 d 档默认（档内可选值在 hint 里列出）。
+function onDetail() {
+  const f = catalog.families[cur.family];
+  const d = Number(el("dnum").value);
+  const raw = el("b1num").value.trim();
+  cur.d = d;
+  cur.b1 = raw === "" ? null : Number(raw);
+  const hint = el("detailHint");
+  if (!isFinite(d) || d <= 0) {
+    hint.textContent = "d 必须是正数";
+    el("preview").removeAttribute("src");
+    return;
+  }
+  const band = (f.bands || []).find((b) => {
+    const loOk = b.lo_incl ? d >= b.lo : d > b.lo;
+    const hiOk = b.hi == null ? true : (b.hi_incl ? d <= b.hi : d < b.hi);
+    return loOk && hiOk;
+  });
+  if (!band) {
+    hint.textContent = "d 超出标准表范围";
+    el("preview").removeAttribute("src");
+    return;
+  }
+  const rows = band.rows || [];
+  const def = rows.length ? rows[rows.length - 1].b1 : "?";
+  const choices = rows.map((r) => r.b1).join("、");
+  hint.textContent = "该 d 属于「" + band.label + "」档；默认 b1=" + def + "；可选 b1=" + choices;
+  update();
 }
 
 function onDia(size) {
@@ -200,7 +251,15 @@ function onDia(size) {
 }
 
 function update() {
-  el("preview").src = "/api/part_svg?family=" + cur.family + "&d=" + cur.d + "&l=" + cur.l + "&view=" + cur.view;
+  const f = catalog.families[cur.family];
+  if (f && f.free_d) {
+    // 结构要素没有 l；b1 留空时不拼进 URL（服务端取该 d 档默认行）
+    let url = "/api/part_svg?family=" + cur.family + "&d=" + cur.d + "&view=" + cur.view;
+    if (cur.b1 !== null && cur.b1 !== undefined && cur.b1 !== "") url += "&b1=" + cur.b1;
+    el("preview").src = url;
+  } else {
+    el("preview").src = "/api/part_svg?family=" + cur.family + "&d=" + cur.d + "&l=" + cur.l + "&view=" + cur.view;
+  }
   el("status").textContent = "";
 }
 
@@ -249,6 +308,8 @@ function ping(bye) {
     onDia(f.sizes.find((s) => Number(s.d) === Number(el("dia").value)));
   });
   el("len").addEventListener("change", () => { cur.l = Number(el("len").value); update(); });
+  el("dnum").addEventListener("input", onDetail);
+  el("b1num").addEventListener("input", onDetail);
   el("out").addEventListener("click", outOfStock);
 })();
 </script>

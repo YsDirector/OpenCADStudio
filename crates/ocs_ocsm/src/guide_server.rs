@@ -3905,7 +3905,7 @@ pub const COMMAND_CATALOG: &[(&str, &str, &str)] = &[
     ("1 … 10", "数字键", "切当前图层；有选中对象时把对象移到该层"),
     ("OCSMFRAMEINIT", "TF", "图框：不带参数=打开图框选择窗口；带参数=一行直插（`TF a3_landscape 1:2 at 0,0 [rot 度]`）"),
     ("OCSMFRAMEINSERT", "", "按所选图框 + 比例插入（光标跟随，比例感知标注样式）；也可带参数直插（同 TF）"),
-    ("OCSMPART", "XL", "标准件插入：不带参数=开零件库窗口+放置态；带参数=一行直插"),
+    ("OCSMPART", "XL", "标准件/结构要素插入：不带参数=开零件库窗口（左「标准件」树 + 右「结构要素」树）+放置态；带参数=一行直插（标准件 `XL 族 d l [view …] [at x,y] [rot 度]`；结构要素 `XL detail_grind_od d [b1 值] [at x,y] [rot 度]`，d 自由输入）"),
     ("OCSMJOINT", "", "螺栓副装配：不带参数=开装配窗口+放置态；带参数=一行直装（件链算长度、遮挡裁剪、一次撤销）"),
     ("OCSMPOWERDIM", "D", "智能标注：拾取点模式标线性/对齐/半径/直径（Enter 切线段点选）"),
     ("OCSMDIMGULIDE", "GDIM", "引导线标注：选引导线 → 配置窗口（尺寸/剖视/向视/局部放大/角度/弧长/焊接/引线/序号/公差/粗糙度/形位公差）"),
@@ -4467,7 +4467,12 @@ fn apply_part_export(
     struct Req {
         family: String,
         d: f64,
-        l: f64,
+        /// 标准件长度；结构要素（磨外圆等）没有长度 → 可缺省。
+        #[serde(default)]
+        l: Option<f64>,
+        /// 结构要素可选 b1 覆盖（标准件忽略）。
+        #[serde(default)]
+        b1: Option<f64>,
         #[serde(default = "default_view")]
         view: String,
     }
@@ -4475,7 +4480,13 @@ fn apply_part_export(
         "main".to_string()
     }
     let req: Req = serde_json::from_slice(body).map_err(|e| format!("请求 JSON 无效: {e}"))?;
-    let part = crate::partgen::generate(&req.family, req.d, req.l, &req.view)?;
+    let part = crate::partgen::generate_requested(
+        &req.family,
+        req.d,
+        req.l,
+        req.b1,
+        &req.view,
+    )?;
     let block = format!(
         "OCSM_{}_{}_{}",
         req.family.to_ascii_uppercase().replace(['.', ' ', '/'], "_"),
@@ -4509,6 +4520,7 @@ fn apply_part_export(
         "weight": part.meta.weight,
         "d": req.d,
         "l": req.l,
+        "b1": req.b1,
     })
     .to_string();
     crate::set_pending_part(crate::PendingPart {
@@ -4549,7 +4561,12 @@ pub(crate) fn apply_part_pick(
     struct Req {
         family: String,
         d: f64,
-        l: f64,
+        /// 标准件长度；结构要素（磨外圆等）没有长度 → 可缺省。
+        #[serde(default)]
+        l: Option<f64>,
+        /// 结构要素可选 b1 覆盖（标准件忽略）。
+        #[serde(default)]
+        b1: Option<f64>,
         #[serde(default = "default_view")]
         view: String,
         /// 显式落点（MCP/AI 驱动）：同时给了 `x` 与 `y` 就不再取 GUI 点选的待放置点。
@@ -4567,7 +4584,13 @@ pub(crate) fn apply_part_pick(
         "main".to_string()
     }
     let req: Req = serde_json::from_slice(body).map_err(|e| format!("请求 JSON 无效: {e}"))?;
-    let part = crate::partgen::generate(&req.family, req.d, req.l, &req.view)?;
+    let part = crate::partgen::generate_requested(
+        &req.family,
+        req.d,
+        req.l,
+        req.b1,
+        &req.view,
+    )?;
 
     // 块名：族 + 规格（去掉不合法字符，利于复用与排查）
     let block = part_block_name(&req.family, &part.meta.spec);
@@ -4626,6 +4649,7 @@ pub(crate) fn apply_part_pick(
         "weight": part.meta.weight,
         "d": req.d,
         "l": req.l,
+        "b1": req.b1,
     })
     .to_string();
     let mut rec = ExtendedDataRecord::new("OCSM_PART");
@@ -12752,6 +12776,19 @@ mod weld_tests {
             assert!(f["families"][fam]["sizes"].as_array().unwrap().len() >= 23, "{fam} 规格缺失");
         }
         assert!(cat.contains("六角螺母 C级 GB/T 41-2016") && cat.contains("六角薄螺母 GB/T 6172.1-2016"), "树缺螺母两族");
+        // 结构要素（第一期：磨外圆）：与「零件库」并列的根树 + 自由输入 d 的面板数据
+        assert!(cat.contains("结构要素") && cat.contains("磨外圆 GB/T 6403.5-2008"), "结构要素树");
+        assert!(cat.contains("detail_grind_od") && cat.contains("\"free_d\":true"), "结构要素族条目");
+        assert!(cat.contains("50 < d < 100") && cat.contains("d ≥ 100"), "d 档数据进了目录");
+        assert!(html.contains("detailFields") && html.contains("dnum") && html.contains("b1num"), "自由输入 d 的表单");
+        let svg = http_req(server.port, "GET", "/api/part_svg?family=detail_grind_od&d=100", "");
+        assert!(svg.contains("<svg") && svg.contains("d100 b1 10"), "磨外圆预览（无 l）：{svg}");
+        let svg = http_req(server.port, "GET", "/api/part_svg?family=detail_grind_od&d=100&b1=8", "");
+        assert!(svg.contains("d100 b1 8"), "磨外圆 b1 覆盖预览：{svg}");
+        let bad = http_req(server.port, "GET", "/api/part_svg?family=detail_grind_od&d=100&b1=4", "");
+        assert!(bad.contains("error") && bad.contains("可选 b1"), "b1 不匹配报错：{bad}");
+        let bad = http_req(server.port, "GET", "/api/part_svg?family=detail_grind_od&d=0", "");
+        assert!(bad.contains("error"), "d=0 报错：{bad}");
         let svg = http_req(server.port, "GET", "/api/part_svg?family=hex_bolt_c&d=5&l=25&view=main", "");
         assert!(svg.contains("<svg") && svg.contains("M5x25"), "预览 SV");
         assert!(svg.contains("GB/T 5780-2016"), "标题含现行代号");
@@ -12785,6 +12822,49 @@ mod weld_tests {
         for key in ["/api/joint_plan", "/api/joint_place", "/api/parts", "装配到图纸", "双螺母", "弹垫", "遮挡裁剪"] {
             assert!(jhtml.contains(key), "螺栓副页缺 {key}");
         }
+    }
+
+    /// 结构要素（磨外圆）插入：锚点 = 台阶面与轴线交点 (0,0)，rotation 度 → 弧度，
+    /// 块里 10 轮廓 + 1 砂轮细线，xdata 台账带 b1。
+    #[test]
+    fn detail_grind_od_pick_anchor_rotation_and_layers() {
+        let mock = Arc::new(MockSender::new(acadrust::CadDocument::new()));
+        let sender: Arc<dyn PluginRequestSender> = mock.clone();
+        let body = br#"{"family":"detail_grind_od","d":100,"b1":8,"x":120.5,"y":-33.25,"rotation":30,"view":"main"}"#;
+        let resp = apply_part_pick(&sender, body).expect("结构要素插入");
+        assert!(resp.contains("\"ok\":true"), "{resp}");
+        assert!(resp.contains("d100 b1 8"), "{resp}");
+        let inserts = mock.inserts();
+        assert_eq!(inserts.len(), 1, "只落一个 INSERT");
+        let (block, at, rot) = &inserts[0];
+        assert!((at[0] - 120.5).abs() < 1e-9 && (at[1] + 33.25).abs() < 1e-9, "{at:?}");
+        assert!(
+            (rot.to_degrees() - 30.0).abs() < 1e-9,
+            "rotation 按度转弧度：{rot}"
+        );
+        assert!(block.contains("D100_B1_8"), "块名含规格：{block}");
+        let ents = mock.block_entities(block);
+        assert_eq!(ents.len(), 11, "10 轮廓 + 1 砂轮细线");
+        // 锚点 = 台阶面与轴线交点 (0,0)：上/下台阶面竖线各有一条端点落在锚点。
+        let from_origin = ents
+            .iter()
+            .filter(|e| match e {
+                EntityType::Line(l) => {
+                    (l.start.x.abs() < 1e-9 && l.start.y.abs() < 1e-9)
+                        || (l.end.x.abs() < 1e-9 && l.end.y.abs() < 1e-9)
+                }
+                _ => false,
+            })
+            .count();
+        assert_eq!(from_origin, 2, "上/下台阶面竖线各从锚点出发");
+        // xdata 台账：OCSM_PART 记录里 family/d/b1 可追溯。
+        let writes = mock.url_writes.lock().unwrap();
+        assert_eq!(writes.len(), 1, "写一条 OCSM_PART 记录");
+        let meta: serde_json::Value = serde_json::from_str(&writes[0].1).unwrap();
+        assert_eq!(meta["family"], "detail_grind_od");
+        assert_eq!(meta["d"], 100.0);
+        assert_eq!(meta["b1"], 8.0);
+        assert_eq!(meta["code"], "GB/T 6403.5-2008");
     }
 
     /// GUI 实机自查用：把零件库窗口在固定端口上跑起来并**阻塞**，
