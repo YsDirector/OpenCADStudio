@@ -1259,11 +1259,11 @@ impl BuiltinPlugin for OcsmPlugin {
                 true
             }
             "TF" | "OCSMFRAMEINIT" => {
-                self.cmd_frame_init(host);
+                self.cmd_frame_init(host, rest);
                 true
             }
             "OCSMFRAMEINSERT" => {
-                self.cmd_frame_insert(host);
+                self.cmd_frame_insert(host, rest);
                 true
             }
             "D" | "OCSMPOWERDIM" => {
@@ -1804,42 +1804,55 @@ impl OcsmPlugin {
         host.push_info(&msg);
     }
 
-    /// `TF`：扫描图框文件夹并打开宿主侧选择窗口。
-    fn cmd_frame_init(&self, host: &mut dyn HostApi) {
-        let dir = frame_dir();
-        let Ok(entries) = std::fs::read_dir(&dir) else {
-            host.push_error(&format!(
-                "OCSMFRAMEINIT: 找不到图框文件夹 {}。请在插件目录的 frame/ 中放入 DWG。",
-                dir.display()
-            ));
-            return;
-        };
-        let mut frames: Vec<FrameItem> = entries
-            .flatten()
-            .filter(|e| {
-                e.path()
-                    .extension()
-                    .and_then(|x| x.to_str())
-                    .map(|x| x.eq_ignore_ascii_case("dwg"))
-                    .unwrap_or(false)
-            })
-            .filter_map(|e| {
-                let path = e.path();
-                let label = path.file_stem()?.to_string_lossy().into_owned();
-                Some(FrameItem {
-                    path: path.to_string_lossy().into_owned(),
-                    label,
-                })
-            })
-            .collect();
-        frames.sort_by(|a, b| a.label.cmp(&b.label));
-        if frames.is_empty() {
-            host.push_error(&format!(
-                "OCSMFRAMEINIT: {} 下没有 DWG 图框文件。",
-                dir.display()
-            ));
-            return;
+    /// `TF` / `OCSMFRAMEINIT`：
+    ///
+    /// * **不带参数** → 扫描图框文件夹并打开宿主侧选择窗口（**人侧**，与原来一致）；
+    /// * **带参数** → `TF <名称> [比例] [at x,y] [rot 度]` **直接插图框**（**AI/自动化侧**）：
+    ///   给了 `at` 就一次落图（不进交互），只给名称/比例则进光标跟随放置。
+    fn cmd_frame_init(&self, host: &mut dyn HostApi, rest: &str) {
+        match parse_frame_args(rest) {
+            Err(e) => host.push_error(&format!("TF：{e}")),
+            Ok(Some(args)) => self.cmd_frame_direct(host, args),
+            Ok(None) => self.cmd_frame_picker(host),
         }
+    }
+
+    /// `TF` 带参数：把名称解析到 `frame/*.dwg` 后直接走插入。
+    fn cmd_frame_direct(&self, host: &mut dyn HostApi, args: FrameArgs) {
+        let frames = match frame_files() {
+            Ok(f) => f,
+            Err(e) => {
+                host.push_error(&format!("TF：{e}"));
+                return;
+            }
+        };
+        let item = match resolve_frame(&frames, &args.name) {
+            Ok(item) => item,
+            Err(e) => {
+                host.push_error(&format!("TF：{e}"));
+                return;
+            }
+        };
+        self.frame_insert(
+            host,
+            &item.path,
+            args.v1,
+            args.v2,
+            args.at,
+            args.rot_deg,
+            "TF",
+        );
+    }
+
+    /// `TF` 不带参数：打开图框选择窗口（人侧流程）。
+    fn cmd_frame_picker(&self, host: &mut dyn HostApi) {
+        let frames = match frame_files() {
+            Ok(f) => f,
+            Err(e) => {
+                host.push_error(&format!("OCSMFRAMEINIT：{e}"));
+                return;
+            }
+        };
         host.push_info(&format!(
             "OCSMFRAMEINIT: 找到 {} 个图框，正在打开选择窗口…",
             frames.len()
@@ -1849,23 +1862,29 @@ impl OcsmPlugin {
         }
     }
 
-    /// `OCSMFRAMEINSERT`：取走宿主选择结果，定义图框块并进入交互插入。
-    fn cmd_frame_insert(&self, host: &mut dyn HostApi) {
-        let Some(sel) = host.take_pending_frame_selection() else {
-            host.push_error("OCSMFRAMEINSERT: 没有待处理的图框选择。请先运行 TF。");
-            return;
-        };
+    /// 定义图框块 + 插入：`at` 给了就一次落图，否则进交互放置（光标跟随）。
+    ///
+    /// `who` 只用于错误信息前缀（`TF` / `OCSMFRAMEINSERT`）。
+    fn frame_insert(
+        &self,
+        host: &mut dyn HostApi,
+        path: &str,
+        v1: i64,
+        v2: i64,
+        at: Option<[f64; 3]>,
+        rot_deg: f64,
+        who: &str,
+    ) {
         // 复校比例：正整数且其一为 1。
-        if sel.scale_v1 <= 0
-            || sel.scale_v2 <= 0
-            || (sel.scale_v1 != 1 && sel.scale_v2 != 1)
-        {
-            host.push_error("OCSMFRAMEINSERT: 非法的比例（必须为两个正整数且其一为 1）。");
+        if v1 <= 0 || v2 <= 0 || (v1 != 1 && v2 != 1) {
+            host.push_error(&format!(
+                "{who}: 非法的比例（必须为两个正整数且其一为 1，如 1:2 / 2:1 / 1:1）。"
+            ));
             return;
         }
-        let scale = sel.scale_v2 as f64 / sel.scale_v1 as f64;
-        let scale_text = format!("{}:{}", sel.scale_v1, sel.scale_v2);
-        let block_name = std::path::Path::new(&sel.path)
+        let scale = v2 as f64 / v1 as f64;
+        let scale_text = format!("{v1}:{v2}");
+        let block_name = std::path::Path::new(path)
             .file_stem()
             .map(|s| s.to_string_lossy().into_owned())
             .filter(|s| !s.is_empty())
@@ -1882,25 +1901,66 @@ impl OcsmPlugin {
 
         // 先在宿主侧定义块（幂等），并取回 ATTDEF 供插入时构造属性。
         let attdefs = match host.import_frame_block(ImportFrameBlockRequest {
-            path: sel.path.clone(),
+            path: path.to_string(),
             block_name: block_name.clone(),
         }) {
             Ok(attdefs) => attdefs,
             Err(e) => {
-                host.push_error(&format!("OCSMFRAMEINSERT: {e}"));
+                host.push_error(&format!("{who}: {e}"));
                 return;
             }
         };
 
-        host.push_info(&format!(
-            "指定图框「{block_name}」的插入点（比例 {scale_text}，缩放 {scale:.2} 倍）…"
-        ));
-        host.start_interactive(Box::new(FramePlace {
-            block_name,
-            scale,
-            scale_text,
-            attdefs,
-        }));
+        match at {
+            None => {
+                host.push_info(&format!(
+                    "指定图框「{block_name}」的插入点（比例 {scale_text}，缩放 {scale:.2} 倍）…"
+                ));
+                host.start_interactive(Box::new(FramePlace {
+                    block_name,
+                    scale,
+                    scale_text,
+                    attdefs,
+                }));
+            }
+            Some(base) => {
+                let ins =
+                    build_frame_insert(&block_name, scale, &scale_text, &attdefs, base, rot_deg);
+                let _ = host.add_entities(vec![acadrust::EntityType::Insert(ins)]);
+                host.set_dirty();
+                host.push_info(&format!(
+                    "OCSMFRAMEINSERT: 已插入图框「{block_name}」比例 {scale_text}（缩放 {scale:.2} 倍）\
+                     基点 ({}, {})，旋转 {}°",
+                    trim_num(base[0]),
+                    trim_num(base[1]),
+                    trim_num(rot_deg)
+                ));
+                host.push_output(&format!(
+                    "图框 {block_name} 插入完成（比例 {scale_text}）"
+                ));
+            }
+        }
+    }
+
+    /// `OCSMFRAMEINSERT`：带参数同 `TF <名称> <比例> at x,y`；
+    /// 不带参数 = 取走选择窗口的结果（人侧两步流程）。
+    fn cmd_frame_insert(&self, host: &mut dyn HostApi, rest: &str) {
+        if !rest.trim().is_empty() {
+            return self.cmd_frame_init(host, rest);
+        }
+        let Some(sel) = host.take_pending_frame_selection() else {
+            host.push_error("OCSMFRAMEINSERT: 没有待处理的图框选择。请先运行 TF。");
+            return;
+        };
+        self.frame_insert(
+            host,
+            &sel.path,
+            sel.scale_v1,
+            sel.scale_v2,
+            None,
+            0.0,
+            "OCSMFRAMEINSERT",
+        );
     }
 
     /// `D` / `OCSMPOWERDIM`：智能标注（点/直线/圆/圆弧 → 自动推断标注类型，
@@ -2822,28 +2882,296 @@ pub(crate) fn insert_world_aabb(
 
 /// frame 目录里所有 DWG 的文件名（不含扩展名），用于识别图框块。
 fn frame_dir_stems() -> Vec<String> {
-    let mut stems: Vec<String> = std::fs::read_dir(frame_dir())
-        .map(|entries| {
-            entries
-                .flatten()
-                .filter(|e| {
-                    e.path()
-                        .extension()
-                        .and_then(|x| x.to_str())
-                        .map(|x| x.eq_ignore_ascii_case("dwg"))
-                        .unwrap_or(false)
-                })
-                .filter_map(|e| {
-                    e.path()
-                        .file_stem()
-                        .map(|s| s.to_string_lossy().into_owned())
-                })
-                .collect()
+    frame_files()
+        .map(|items| items.into_iter().map(|i| i.label).collect())
+        .unwrap_or_default()
+}
+
+/// `frame/` 目录里的图框清单（按标签排序）；错误带人话（给命令提示用）。
+fn frame_files() -> Result<Vec<FrameItem>, String> {
+    let dir = frame_dir();
+    let entries = std::fs::read_dir(&dir).map_err(|_| {
+        format!(
+            "找不到图框文件夹 {}。请在插件目录的 frame/ 中放入 DWG。",
+            dir.display()
+        )
+    })?;
+    let mut frames: Vec<FrameItem> = entries
+        .flatten()
+        .filter(|e| {
+            e.path()
+                .extension()
+                .and_then(|x| x.to_str())
+                .map(|x| x.eq_ignore_ascii_case("dwg"))
+                .unwrap_or(false)
         })
-        .unwrap_or_default();
-    stems.sort();
-    stems.dedup();
-    stems
+        .filter_map(|e| {
+            let path = e.path();
+            let label = path.file_stem()?.to_string_lossy().into_owned();
+            Some(FrameItem {
+                path: path.to_string_lossy().into_owned(),
+                label,
+            })
+        })
+        .collect();
+    frames.sort_by(|a, b| a.label.cmp(&b.label));
+    if frames.is_empty() {
+        return Err(format!("{} 下没有 DWG 图框文件。", dir.display()));
+    }
+    Ok(frames)
+}
+
+/// 按名字在清单里找图框：
+/// * 名字为空 → 只有**唯一**一个图框时用它；
+/// * 否则先**精确**比 label（大小写不敏感，可带可省 `.dwg`），
+/// * 再唯一**包含**匹配（例 `landscape` → `a3_landscape`）；多个候选 → 报错列出。
+fn resolve_frame(frames: &[FrameItem], name: &str) -> Result<FrameItem, String> {
+    let want = name.trim();
+    let want = want.strip_suffix(".dwg").or_else(|| want.strip_suffix(".DWG")).unwrap_or(want);
+    if want.is_empty() {
+        return match frames {
+            [only] => Ok(only.clone()),
+            _ => Err(format!(
+                "图框目录里有 {} 个图框，请指名一个：{}。",
+                frames.len(),
+                frames
+                    .iter()
+                    .map(|f| f.label.as_str())
+                    .collect::<Vec<_>>()
+                    .join(" / ")
+            )),
+        };
+    }
+    if let Some(hit) = frames
+        .iter()
+        .find(|f| f.label.eq_ignore_ascii_case(want))
+    {
+        return Ok(hit.clone());
+    }
+    let lower = want.to_lowercase();
+    let hits: Vec<&FrameItem> = frames
+        .iter()
+        .filter(|f| f.label.to_lowercase().contains(&lower))
+        .collect();
+    match hits.as_slice() {
+        [only] => Ok((*only).clone()),
+        [] => Err(format!(
+            "没有叫「{want}」的图框。现有：{}。",
+            frames
+                .iter()
+                .map(|f| f.label.as_str())
+                .collect::<Vec<_>>()
+                .join(" / ")
+        )),
+        many => Err(format!(
+            "「{want}」匹配到多个图框（{}），请写全名。",
+            many.iter()
+                .map(|f| f.label.as_str())
+                .collect::<Vec<_>>()
+                .join(" / ")
+        )),
+    }
+}
+
+/// `TF` 的参数（AI/自动化侧直插图框）。
+#[derive(Debug, Clone, PartialEq)]
+struct FrameArgs {
+    /// 图框名（`frame/` 里的 dwg 文件名，可省 `.dwg`；空 = 目录里唯一的那个）。
+    name: String,
+    /// 比例前项（图）与后项（物）：`1:2` → 1 / 2（缩放 2 倍）。
+    v1: i64,
+    v2: i64,
+    /// 基点（`at x,y`；省略 = 进交互放置）。
+    at: Option<[f64; 3]>,
+    /// 旋转角度（度）。
+    rot_deg: f64,
+}
+
+/// 去掉小数尾巴的显示（`2.00` → `2`、`1.5` → `1.5`）。
+fn trim_num(v: f64) -> String {
+    let s = format!("{v:.4}");
+    let s = s.trim_end_matches('0').trim_end_matches('.');
+    if s.is_empty() || s == "-0" {
+        "0".to_string()
+    } else {
+        s.to_string()
+    }
+}
+
+/// 解析 `TF` 的 rest：
+///
+/// ```text
+/// ""                          → Ok(None)（人侧：弹选择窗口）
+/// "<名>"                      → 1:1 + 交互放置
+/// "<名> 1:2"                  → 指比例 + 交互放置
+/// "<名> 1:2 at 0,0"           → 全自动直插
+/// "<名> 1:2 at 0,0 rot 90"    → 带旋转
+/// "1:2 at 0,0"                → 只给比例（图框取目录里唯一的）
+/// ```
+fn parse_frame_args(rest: &str) -> Result<Option<FrameArgs>, String> {
+    let tokens: Vec<&str> = rest.split_whitespace().collect();
+    if tokens.is_empty() {
+        return Ok(None);
+    }
+    let usage = "用法：TF <名称> [比例] [at x,y] [rot 度]（不带参数 = 打开选择窗口）";
+    let mut args = FrameArgs {
+        name: String::new(),
+        v1: 1,
+        v2: 1,
+        at: None,
+        rot_deg: 0.0,
+    };
+    let mut scale_seen = false;
+    let mut i = 0;
+    while i < tokens.len() {
+        let tok = tokens[i];
+        let lower = tok.to_ascii_lowercase();
+        match lower.as_str() {
+            "at" | "@" => {
+                if args.at.is_some() {
+                    return Err(format!("基点给了两次。{usage}"));
+                }
+                let Some(next) = tokens.get(i + 1) else {
+                    return Err(format!("`at` 后面要给坐标，如 at 0,0。{usage}"));
+                };
+                args.at = Some(parse_point(next)?);
+                i += 2;
+            }
+            "rot" | "rotation" => {
+                let Some(next) = tokens.get(i + 1) else {
+                    return Err(format!("`rot` 后面要给角度。{usage}"));
+                };
+                let deg: f64 = next
+                    .parse()
+                    .map_err(|_| format!("旋转角度「{next}」不是数字。{usage}"))?;
+                args.rot_deg = normalize_deg(deg);
+                i += 2;
+            }
+            _ => {
+                if tok.contains(',') {
+                    if args.at.is_some() {
+                        return Err(format!("基点给了两次。{usage}"));
+                    }
+                    args.at = Some(parse_point(tok)?);
+                } else if looks_like_scale(tok) {
+                    if scale_seen {
+                        return Err(format!("比例给了两次。{usage}"));
+                    }
+                    let (v1, v2) = parse_scale_token(tok)?;
+                    args.v1 = v1;
+                    args.v2 = v2;
+                    scale_seen = true;
+                } else if args.name.is_empty() {
+                    args.name = tok.to_string();
+                } else {
+                    return Err(format!("认不出的参数「{tok}」。{usage}"));
+                }
+                i += 1;
+            }
+        }
+    }
+    if args.v1 <= 0 || args.v2 <= 0 || (args.v1 != 1 && args.v2 != 1) {
+        return Err("比例必须是两个正整数且其一为 1（例 1:2 / 2:1 / 1:1）。".to_string());
+    }
+    Ok(Some(args))
+}
+
+/// `x,y` / `x,y,z`。
+fn parse_point(tok: &str) -> Result<[f64; 3], String> {
+    let parts: Vec<&str> = tok.split(',').map(|s| s.trim()).collect();
+    if !(2..=3).contains(&parts.len()) {
+        return Err(format!("坐标「{tok}」应写成 x,y 或 x,y,z。"));
+    }
+    let mut out = [0.0f64; 3];
+    for (i, p) in parts.iter().enumerate() {
+        out[i] = p
+            .parse::<f64>()
+            .map_err(|_| format!("坐标「{tok}」里「{p}」不是数字。"))?;
+    }
+    Ok(out)
+}
+
+fn normalize_deg(deg: f64) -> f64 {
+    let mut d = deg % 360.0;
+    if d >= 180.0 {
+        d -= 360.0;
+    } else if d < -180.0 {
+        d += 360.0;
+    }
+    d
+}
+
+/// 像比例吗？（`1:2` / `1：2` / `1/2` / 光数字 `2` / `0.5`）
+fn looks_like_scale(tok: &str) -> bool {
+    tok.contains(':') || tok.contains('：') || tok.contains('/') || tok.parse::<f64>().is_ok()
+}
+
+/// 解析比例：
+/// * `a:b`、`a：b`、`a/b` → (a, b)
+/// * 光数字 `n`：`n >= 1` → (1, n)（缩小 n 倍）；`0 < n < 1` → (1/n, 1)（放大）。
+fn parse_scale_token(tok: &str) -> Result<(i64, i64), String> {
+    let norm = tok.replace('：', ":").replace('/', ":");
+    if norm.contains(':') {
+        let (a, b) = norm
+            .split_once(':')
+            .ok_or_else(|| format!("比例「{tok}」写法不对（示例 1:2）。"))?;
+        return Ok((parse_scale_num(a, tok)?, parse_scale_num(b, tok)?));
+    }
+    let n: f64 = tok
+        .parse()
+        .map_err(|_| format!("比例「{tok}」不是数字（示例 1:2 / 2 / 0.5）。"))?;
+    if !(n.is_finite() && n > 0.0) {
+        return Err(format!("比例「{tok}」必须是正数。"));
+    }
+    let (v1, v2) = if n >= 1.0 { (1.0, n) } else { (1.0 / n, 1.0) };
+    Ok((
+        parse_scale_num(&format!("{}", v1.round()), tok)?,
+        parse_scale_num(&format!("{}", v2.round()), tok)?,
+    ))
+}
+
+fn parse_scale_num(s: &str, whole: &str) -> Result<i64, String> {
+    let v: f64 = s
+        .trim()
+        .parse()
+        .map_err(|_| format!("比例「{whole}」里「{s}」不是数字。"))?;
+    if (v - v.round()).abs() > 1e-9 {
+        return Err(format!("比例「{whole}」必须是整数比（示例 1:2）。"));
+    }
+    Ok(v.round() as i64)
+}
+
+/// 建图框块引用：按比例缩放 + 填属性（`比例`/`SCALE` 填 `v1:v2`，其余用 ATTDEF 默认值）+ 旋转。
+fn build_frame_insert(
+    block_name: &str,
+    scale: f64,
+    scale_text: &str,
+    attdefs: &[acadrust::entities::AttributeDefinition],
+    base: [f64; 3],
+    rot_deg: f64,
+) -> acadrust::entities::Insert {
+    use acadrust::entities::{AttributeEntity, Entity, Insert};
+    use acadrust::types::Vector3;
+
+    let mut ins = Insert::new(block_name, Vector3::new(base[0], base[1], base[2]));
+    ins.set_x_scale(scale);
+    ins.set_y_scale(scale);
+    ins.set_z_scale(scale);
+    ins.rotation = rot_deg.to_radians();
+    let xform = ins.get_transform();
+    for ad in attdefs {
+        let is_scale =
+            ad.tag.eq_ignore_ascii_case("比例") || ad.tag.eq_ignore_ascii_case("SCALE");
+        let value = if is_scale {
+            scale_text.to_string()
+        } else {
+            ad.default_value.clone()
+        };
+        let mut attr = AttributeEntity::from_definition(ad, Some(value));
+        attr.apply_transform(&xform);
+        ins.attributes.push(attr);
+    }
+    ins
 }
 
 // ── 标准件库（parts/）═════════════════════════════════════════════════════
@@ -3164,26 +3492,14 @@ impl InteractiveCommand for FramePlace {
     }
 
     fn on_point(&mut self, pt: [f64; 3]) -> CommandStep {
-        use acadrust::entities::{AttributeEntity, Entity, Insert};
-        use acadrust::types::Vector3;
-
-        let mut ins = Insert::new(&self.block_name, Vector3::new(pt[0], pt[1], pt[2]));
-        ins.set_x_scale(self.scale);
-        ins.set_y_scale(self.scale);
-        ins.set_z_scale(self.scale);
-        let xform = ins.get_transform();
-        for ad in &self.attdefs {
-            let is_scale = ad.tag.eq_ignore_ascii_case("比例")
-                || ad.tag.eq_ignore_ascii_case("SCALE");
-            let value = if is_scale {
-                self.scale_text.clone()
-            } else {
-                ad.default_value.clone()
-            };
-            let mut attr = AttributeEntity::from_definition(ad, Some(value));
-            attr.apply_transform(&xform);
-            ins.attributes.push(attr);
-        }
+        let ins = build_frame_insert(
+            &self.block_name,
+            self.scale,
+            &self.scale_text,
+            &self.attdefs,
+            pt,
+            0.0,
+        );
         CommandStep::CommitAndEnd(acadrust::EntityType::Insert(ins))
     }
 }
@@ -3569,6 +3885,133 @@ mod tests {
         ins.set_z_scale(scale);
         doc.add_entity(E::Insert(ins)).unwrap();
         doc
+    }
+
+    #[test]
+    fn tf_args_parse_full_and_partial_forms() {
+        // 不带参数 → 人侧：弹选择窗口
+        assert_eq!(parse_frame_args("").unwrap(), None);
+        assert_eq!(parse_frame_args("   ").unwrap(), None);
+        // 只给名称 → 1:1 + 交互放置
+        let a = parse_frame_args("a3_landscape").unwrap().unwrap();
+        assert_eq!(a.name, "a3_landscape");
+        assert_eq!((a.v1, a.v2), (1, 1));
+        assert_eq!(a.at, None);
+        // 名称 + 比例（全角冒号 / 斜杠 / 光数字都收）→ 仍进交互放置
+        for token in ["1:2", "1：2", "1/2", "2"] {
+            let a = parse_frame_args(&format!("a3_landscape {token}")).unwrap().unwrap();
+            assert_eq!((a.v1, a.v2), (1, 2), "比例 {token}");
+            assert_eq!(a.at, None, "没给 at → 交互放置");
+        }
+        // 全自动：名称 + 比例 + at（+ 旋转）
+        let a = parse_frame_args("a3_landscape 1:2 at 100,200").unwrap().unwrap();
+        assert_eq!((a.v1, a.v2), (1, 2));
+        assert_eq!(a.at, Some([100.0, 200.0, 0.0]));
+        let a = parse_frame_args("a3_landscape 1:2 at 100,200,5 rot 90").unwrap().unwrap();
+        assert_eq!(a.at, Some([100.0, 200.0, 5.0]));
+        assert_eq!(a.rot_deg, 90.0);
+        // 省略 `at` 关键字、只给坐标也认；放大比例 2:1 / 0.5 也认
+        let a = parse_frame_args("a3 200,0").unwrap().unwrap();
+        assert_eq!(a.at, Some([200.0, 0.0, 0.0]));
+        for token in ["2:1", "0.5"] {
+            let a = parse_frame_args(&format!("a3 {token} at 0,0")).unwrap().unwrap();
+            assert_eq!((a.v1, a.v2), (2, 1), "比例 {token}");
+        }
+        // 名称可省（目录里有唯一图框时）
+        let a = parse_frame_args("1:2 at 0,0").unwrap().unwrap();
+        assert_eq!(a.name, "");
+        assert_eq!((a.v1, a.v2), (1, 2));
+    }
+
+    #[test]
+    fn tf_args_reject_bad_input_with_usage() {
+        for bad in [
+            "a3 3:2",          // 两个正整数但都不是 1
+            "a3 0:2",          // 不能是 0
+            "a3 1.5:2",        // 必须是整数比
+            "a3 1:2 at 1,2,3,4", // 坐标维度不对
+            "a3 1:2 at 1,x",   // 坐标不是数字
+            "a3 1:2 rot",      // rot 缺角度
+            "a3 1:2 at",       // at 缺坐标
+            "a3 1:2 2:1",      // 比例给了两次
+            "a3 1:2 at 0,0 at 1,1", // 基点给了两次
+            "a3 1:2 乱写",      // 认不出的参数
+        ] {
+            let e = parse_frame_args(bad).unwrap_err();
+            assert!(
+                e.contains("用法") || e.contains("比例") || e.contains("坐标"),
+                "{bad} → {e}"
+            );
+        }
+    }
+
+    #[test]
+    fn resolve_frame_matches_stem_substring_and_reports_ambiguity() {
+        let mk = |label: &str| FrameItem {
+            path: format!("/tmp/{label}.dwg"),
+            label: label.to_string(),
+        };
+        let frames = vec![mk("a3_landscape"), mk("a4_portrait")];
+        // 全名 / 大小写 / 带 .dwg
+        assert_eq!(resolve_frame(&frames, "a3_landscape").unwrap().label, "a3_landscape");
+        assert_eq!(resolve_frame(&frames, "A3_LANDSCAPE").unwrap().label, "a3_landscape");
+        assert_eq!(resolve_frame(&frames, "a3_landscape.dwg").unwrap().label, "a3_landscape");
+        // 唯一包含匹配
+        assert_eq!(resolve_frame(&frames, "landscape").unwrap().label, "a3_landscape");
+        // 名字为空：多个 → 报错列出
+        let e = resolve_frame(&frames, "").unwrap_err();
+        assert!(e.contains("a3_landscape") && e.contains("a4_portrait"), "{e}");
+        // 只一个图框时名字可省
+        let one = vec![mk("a3_landscape")];
+        assert_eq!(resolve_frame(&one, "").unwrap().label, "a3_landscape");
+        // 匹配不到 / 多个候选（精确名永远优先）
+        let e = resolve_frame(&frames, "a2").unwrap_err();
+        assert!(e.contains("没有叫"), "{e}");
+        let many = vec![mk("a3_landscape"), mk("a3_landscape_att")];
+        let e = resolve_frame(&many, "a3").unwrap_err();
+        assert!(e.contains("多个"), "{e}");
+        assert_eq!(
+            resolve_frame(&many, "a3_landscape").unwrap().label,
+            "a3_landscape",
+            "精确名优先于包含匹配"
+        );
+        assert_eq!(
+            resolve_frame(&many, "a3_landscape_att.dwg").unwrap().label,
+            "a3_landscape_att"
+        );
+    }
+
+    #[test]
+    fn build_frame_insert_scales_and_stamps_scale_attribute() {
+        let mut ad_scale =
+            acadrust::entities::AttributeDefinition::new("比例".into(), "Scale".into(), " ".into());
+        ad_scale.tag = "比例".into();
+        let mut ad_title =
+            acadrust::entities::AttributeDefinition::new("图名".into(), "Title".into(), " ".into());
+        ad_title.tag = "图名".into();
+        ad_title.default_value = "零件图".into();
+        let ins = build_frame_insert(
+            "a3_landscape",
+            2.0,
+            "1:2",
+            &[ad_scale, ad_title],
+            [10.0, 20.0, 0.0],
+            90.0,
+        );
+        assert_eq!(ins.block_name, "a3_landscape");
+        assert_eq!(ins.insert_point.x, 10.0);
+        assert!((ins.rotation - std::f64::consts::FRAC_PI_2).abs() < 1e-12);
+        assert_eq!(ins.attributes.len(), 2);
+        let by_tag = |t: &str| {
+            ins.attributes
+                .iter()
+                .find(|a| a.tag == t)
+                .map(|a| a.value.clone())
+                .unwrap_or_default()
+        };
+        // `比例` 填 v1:v2（不是 ATTDEF 的默认值），其它属性保持默认值
+        assert_eq!(by_tag("比例"), "1:2");
+        assert_eq!(by_tag("图名"), "零件图");
     }
 
     #[test]
