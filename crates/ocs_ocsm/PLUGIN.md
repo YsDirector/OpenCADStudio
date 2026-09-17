@@ -239,7 +239,8 @@ rm -rf "$HOME/.config/OpenCADStudio/plugins/opencad.layers_quick"
   规格总数 241（尺寸/长度系列来源见 `src/tables/*.json` 的 `source` 字段）。
   注：GB/T 5782 A/B 级 = 5780 C级画法 + **头部垫圈面 dw×c**（主/俯视图画、左视图不画；
   用户 2026-09-15 看图定案，画法依据 164580 官方 CAD 图实测；详见 OCSMBOM-plan.md §27.5）。
-- 自查工具：`tools/overlay_check.py`（模板 vs 生成 **叠合比对**：图形指纹双向匹配 + 叠合 PNG）、
+- 自查工具：`tools/mpl_zh.py`（**matplotlib 中文字体开关**：不配的话标题/图例全是空心方框；
+  可直接 `python3 tools/mpl_zh.py out.png` 自检）、`tools/overlay_check.py`（模板 vs 生成 **叠合比对**：图形指纹双向匹配 + 叠合 PNG、已自动接中文字体）、
   `tools/ref_analyze.py`（模板 TSV → 视图聚类）。生成侧几何用 `cargo test -p ocs_ocsm -- --ignored dump_parts_dxf|dump_parts_svg` 出到
   `~/桌面/OCSM/test/参数化预览/`；叠合图在 `…/参数化预览/对比/`。
 - 接口：`GET /api/parts`（零件树 + 规格目录 JSON）、`GET /api/part_svg?family=..&d=..&l=..&view=..`（预览 SVG）、
