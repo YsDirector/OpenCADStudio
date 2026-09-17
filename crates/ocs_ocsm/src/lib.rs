@@ -22,6 +22,7 @@ mod bom;
 mod centerline;
 mod detail_clip;
 mod dim2gb;
+mod gear;
 mod guide_server;
 mod guide_url;
 mod joint;
@@ -64,6 +65,7 @@ static MANIFEST: PluginManifest = PluginManifest {
         "OCSMPART", "XL", "OCSMJOINT", "OCSMHELP", "OH", "OCSMBOM", "BOM", "BOMSYNC", "OCSMBOMSYNC", "OCSMBOMCFG", "BOMCFG",
         "OCSMBOMEDIT", "BOMEDIT", "OCSMBOMLOCK", "BOMLOCK", "OCSMBOMXLSX", "BOMXLSX", "OCSMBOMXLSXI", "BOMXLSXI",
         "OCSMCENTERLINE", "ZX",
+        "OCSMGEAR", "CL",
     ],
 };
 
@@ -445,6 +447,11 @@ pub(crate) fn open_parts_window(port: u16, tab: Option<u64>) -> bool {
     open_plugin_page(port, &with_tab("/parts", tab), "parts", 960, 900)
 }
 
+/// 打开**齿轮**窗口（人用 GUI：参数表单 + 4 个视图按钮 + 实时预览；AI 走命令行/HTTP 同一实现）。
+pub(crate) fn open_gear_window(port: u16, tab: Option<u64>) -> bool {
+    open_plugin_page(port, &with_tab("/gear", tab), "gear", 980, 940)
+}
+
 /// 打开**螺栓副装配**窗口（人用 GUI；AI 走命令行/HTTP 同一实现）。
 pub(crate) fn open_joint_window(port: u16, tab: Option<u64>) -> bool {
     open_plugin_page(port, &with_tab("/joint", tab), "joint", 1080, 900)
@@ -471,7 +478,18 @@ pub(crate) fn open_app_window(url: &str, width: u32, height: u32) -> bool {
     cmd.arg(format!("--app={url}"))
         .arg(format!("--window-size={width},{height}"))
         .arg("--class=OCSM-Parts");
-    for (k, v) in session_display_env() {
+    let envs = session_display_env();
+    // Chromium 默认走 X11：纯 Wayland 会话（没有 DISPLAY、只有 WAYLAND_DISPLAY）下
+    // 它会以 “Missing X server or $DISPLAY” 秒退 —— 此时显式指 ozone 平台。
+    // （2026-09-17 实机踩到：齿轮窗口起不来就是因为这个；以前的 X11 会话不需要这一条。）
+    let has_x = envs.iter().any(|(k, _)| k == "DISPLAY");
+    let has_wl = envs.iter().any(|(k, _)| k == "WAYLAND_DISPLAY");
+    if has_wl && !has_x {
+        cmd.arg("--ozone-platform=wayland");
+    } else if has_wl {
+        cmd.arg("--ozone-platform-hint=auto");
+    }
+    for (k, v) in envs {
         cmd.env(k, v);
     }
     cmd.spawn().is_ok()
@@ -1199,6 +1217,15 @@ impl BuiltinPlugin for OcsmPlugin {
                             })],
                         },
                         RibbonGroup {
+                            title: "齿轮",
+                            tools: vec![RibbonItem::LargeTool(ToolDef {
+                                id: "OCSMGEAR",
+                                label: "齿轮",
+                                icon: IconKind::Glyph("⚙"),
+                                event: ModuleEvent::Command("OCSMGEAR".to_string()),
+                            })],
+                        },
+                        RibbonGroup {
                             title: "标注",
                             tools: vec![
                                 RibbonItem::LargeTool(ToolDef {
@@ -1273,6 +1300,11 @@ impl BuiltinPlugin for OcsmPlugin {
             // 中心线：点圆/圆弧 → 十字；点两根直线 → 角平分线（`3中心线层`）
             "OCSMCENTERLINE" | "ZX" => {
                 self::centerline::cmd_centerline(host);
+                true
+            }
+            // 齿轮（一期外齿轮）：不带参数 = 齿轮窗口 + 放置态；带参数 = 一行直插
+            "OCSMGEAR" | "CL" => {
+                self.cmd_gear(host, rest);
                 true
             }
             "OCSMDIMGULIDE" | "GDIM" => {
@@ -1574,6 +1606,84 @@ impl OcsmPlugin {
         }));
     }
 
+    /// `OCSMGEAR` / `CL`：齿轮出图（一期：**外齿轮**）。
+    ///
+    /// * 不带参数 = 人类侧：开齿轮窗口（参数表 + 4 个视图按钮 + 实时预览）+ 进放置态；
+    ///   窗口里点「生成到图纸」→ 回图纸点基点 → 移动光标旋转 → 再点落定。
+    /// * 带参数 = AI/MCP：`OCSMGEAR <m> <z> [h] [ha=..] [c=..] [beta=..] [x=..] [view 视图] [at x,y] [rot 度]`。
+    fn cmd_gear(&self, host: &mut dyn HostApi, args: &str) {
+        if !args.trim().is_empty() {
+            let req = match crate::gear::parse_request(args) {
+                Ok(r) => r,
+                Err(msg) => {
+                    host.push_error(&msg);
+                    return;
+                }
+            };
+            // 插之前先拦一道：没跑过 OCSM 初始化的图纸画齿轮会出“实线白中心线”（用户定案）
+            if let Err(msg) = crate::gear::ocsm_ready(host.document()) {
+                host.push_error(&format!("OCSMGEAR: {msg}"));
+                host.push_info("OCSMGEAR：先运行 OCSM（或点功能区「图幅」组里的 OCSM 初始化），再生成齿轮。");
+                return;
+            }
+            let Some(sender) = host.plugin_request_sender() else {
+                host.push_error("OCSM 齿轮：宿主不支持 worker 请求，无法参数化插入。");
+                return;
+            };
+            let sender: std::sync::Arc<dyn PluginRequestSender> = std::sync::Arc::from(sender);
+            match crate::guide_server::apply_gear_insert(&sender, &req) {
+                Ok(msg) => {
+                    let v: serde_json::Value =
+                        serde_json::from_str(&msg).unwrap_or(serde_json::Value::Null);
+                    let text = v
+                        .get("message")
+                        .and_then(|m| m.as_str())
+                        .map(|s| s.to_string())
+                        .unwrap_or(msg);
+                    host.push_output(&format!("OCSM 齿轮：{text}"));
+                    if let Some(notes) = v.get("notes").and_then(|n| n.as_array()) {
+                        for nt in notes {
+                            if let Some(s) = nt.as_str() {
+                                host.push_info(&format!("OCSM 齿轮提示：{s}"));
+                            }
+                        }
+                    }
+                }
+                Err(e) => host.push_error(&format!("OCSM 齿轮插入失败：{e}")),
+            }
+            return;
+        }
+        // 人类侧：先确保服务在跑并开窗，然后进放置态（窗口出图后鼠标即跟随预览）
+        // —— 但没初始化就拦下来（同上：避免出“实线白中心线”的废图）
+        if let Err(msg) = crate::gear::ocsm_ready(host.document()) {
+            host.push_error(&format!("OCSMGEAR: {msg}"));
+            host.push_info("OCSMGEAR：先运行 OCSM 初始化，再打开齿轮窗口。");
+            return;
+        }
+        let Some(port) = self.ensure_guide_server(host) else {
+            host.push_error("OCSMGEAR: 无法启动齿轮服务（宿主不支持 worker 请求）。");
+            return;
+        };
+        if open_gear_window(port, Some(host.tab_id())) {
+            host.push_info(
+                "OCSM 齿轮（一期外齿轮）：已打开齿轮窗口。选视图 + 填参数点「生成到图纸」→ \
+                 回到图纸点击定位基点 → 移动光标旋转 → 再点击落定（可连续，Esc 结束）。",
+            );
+        } else {
+            host.push_info("OCSM 齿轮：齿轮窗口已打开（Alt+Tab 切换过去）。");
+        }
+        let Some(sender) = host.plugin_request_sender() else {
+            return;
+        };
+        host.start_interactive(Box::new(PartPlace {
+            sender: std::sync::Arc::from(sender),
+            phase: std::cell::Cell::new(PlacePhase::Follow),
+            base: std::cell::Cell::new([0.0, 0.0, 0.0]),
+            what: "OCSM 齿轮",
+            where_to: "请在齿轮窗口里点「生成到图纸」",
+        }));
+    }
+
     /// `OCSMPART` / `XL`：直接打开标准件库窗口，并进入放置态
     /// （窗口里「零件出库」→ 回到图纸鼠标跟随预览 → 左键点击放置，可连续，Esc 结束）。
     fn cmd_parts(&self, host: &mut dyn HostApi, args: &str) {
@@ -1619,6 +1729,8 @@ impl OcsmPlugin {
             sender: std::sync::Arc::from(sender),
             phase: std::cell::Cell::new(PlacePhase::Follow),
             base: std::cell::Cell::new([0.0, 0.0, 0.0]),
+            what: "OCSM 标准件",
+            where_to: "请在零件库窗口里点「零件出库」",
         }));
     }
 
@@ -3392,6 +3504,10 @@ struct PartPlace {
     phase: std::cell::Cell<PlacePhase>,
     /// 已定位的基点
     base: std::cell::Cell<[f64; 3]>,
+    /// 人看的名字（“OCSM 标准件” / “OCSM 齿轮”）——只影响提示语
+    what: &'static str,
+    /// 去哪里出图（“请在零件库窗口里点「零件出库」” / “请在齿轮窗口里点「生成到图纸」”）
+    where_to: &'static str,
 }
 
 /// 放置阶段：`Follow` = 零件跟光标（未定位基点）；`Rotate` = 已定位基点、跟随光标绕基点旋转。
@@ -3403,13 +3519,14 @@ enum PlacePhase {
 
 impl InteractiveCommand for PartPlace {
     fn prompt(&self) -> String {
+        let (what, where_to) = (self.what, self.where_to);
         match (pending_part_label(), self.phase.get()) {
-            (None, _) => "OCSM 标准件：请在零件库窗口里点「零件出库」，然后在此点击放置。".to_string(),
+            (None, _) => format!("{what}：{where_to}，然后在此点击放置。"),
             (Some(l), PlacePhase::Follow) => {
-                format!("OCSM 标准件：{l} —— 点击定位基点（可连续，Esc 结束）")
+                format!("{what}：{l} —— 点击定位基点（可连续，Esc 结束）")
             }
             (Some(l), PlacePhase::Rotate) => format!(
-                "OCSM 标准件：{l} —— 移动光标绕基点旋转，再点击落定（Esc 取消）"
+                "{what}：{l} —— 移动光标绕基点旋转，再点击落定（Esc 取消）"
             ),
         }
     }
@@ -4658,6 +4775,8 @@ mod tests {
             sender: sender.clone(),
             phase: std::cell::Cell::new(PlacePhase::Follow),
             base: std::cell::Cell::new([0.0, 0.0, 0.0]),
+        what: "OCSM 标准件",
+        where_to: "请在零件库窗口里点「零件出库」",
         };
         // 未定位：预览跟光标（旋转 0）
         let prev = cmd.on_mouse_move([7.0, 8.0, 0.0]).expect("预览");
@@ -4705,6 +4824,8 @@ mod tests {
             sender,
             phase: std::cell::Cell::new(PlacePhase::Follow),
             base: std::cell::Cell::new([0.0, 0.0, 0.0]),
+            what: "OCSM 标准件",
+            where_to: "请在零件库窗口里点「零件出库」",
         };
         let _ = cmd2.on_point([1.0, 1.0, 0.0]);
         assert!(cmd2.prompt().contains("绕基点旋转"));

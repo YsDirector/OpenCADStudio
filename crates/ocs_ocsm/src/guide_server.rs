@@ -355,6 +355,8 @@ fn page_label(path: &str) -> &'static str {
         "明细表编辑"
     } else if path.starts_with("/parts") {
         "零件库"
+    } else if path.starts_with("/gear") {
+        "齿轮"
     } else if path.starts_with("/joint") {
         "螺栓副装配"
     } else if path.starts_with("/rough") {
@@ -372,6 +374,7 @@ fn plugin_page_path(target: &str) -> Option<&'static str> {
     match path {
         "/" | "/guide.html" | "/guide" => Some("/guide.html"),
         "/parts" | "/parts.html" => Some("/parts"),
+        "/gear" | "/gear.html" => Some("/gear"),
         "/joint" | "/joint.html" => Some("/joint"),
         "/rough.html" | "/rough" => Some("/rough.html"),
         "/bom" | "/bom.html" => Some("/bom.html"),
@@ -464,6 +467,7 @@ fn page_ping_key_for(path: &str, target: &str, active_tab: Option<u64>) -> Optio
     match path {
         "/bom.html" => Some("bom".to_string()),
         "/parts" => Some("parts".to_string()),
+        "/gear" => Some("gear".to_string()),
         "/joint" => Some("joint".to_string()),
         "/rough.html" => Some("rough".to_string()),
         "/manual" => Some("manual".to_string()),
@@ -573,6 +577,22 @@ fn route(
         ("GET", t) if t == "/" || t.starts_with("/guide.html") => page_response(t, GUI_HTML),
         ("GET", t) if t.starts_with("/rough.html") => page_response(t, ROUGH_HTML),
         ("GET", t) if t.starts_with("/parts") => page_response(t, PARTS_HTML),
+        ("GET", t) if t.starts_with("/gear") => page_response(t, GEAR_HTML),
+        ("GET", t) if t.starts_with("/api/gear_svg") => {
+            let q = t.split_once('?').map(|(_, q)| q).unwrap_or("");
+            match crate::gear::preview_svg(q) {
+                Ok(svg) => (200, "image/svg+xml; charset=utf-8", svg),
+                Err(e) => (400, json, serde_json::json!({"ok": false, "error": e}).to_string()),
+            }
+        }
+        ("GET", t) if t.starts_with("/api/gear_info") => {
+            let q = t.split_once('?').map(|(_, q)| q).unwrap_or("");
+            match crate::gear::info_json(q) {
+                Ok(s) => (200, json, s),
+                Err(e) => (400, json, serde_json::json!({"ok": false, "error": e}).to_string()),
+            }
+        }
+        ("POST", "/api/gear_export") => api_gear_export(body, &sender!()),
         ("GET", t) if t.starts_with("/api/parts_ping") => {
             crate::page_window_ping("parts", t.contains("bye=1"));
             (200, json, r#"{"ok":true}"#.into())
@@ -3890,6 +3910,7 @@ pub const COMMAND_CATALOG: &[(&str, &str, &str)] = &[
     ("OCSMPOWERDIM", "D", "智能标注：拾取点模式标线性/对齐/半径/直径（Enter 切线段点选）"),
     ("OCSMDIMGULIDE", "GDIM", "引导线标注：选引导线 → 配置窗口（尺寸/剖视/向视/局部放大/角度/弧长/焊接/引线/序号/公差/粗糙度/形位公差）"),
     ("OCSMCENTERLINE", "ZX", "中心线：点圆/圆弧 → 十字中心线；点两根直线 → 角平分线中心线（`3中心线层`，线长 = 直径/投影长 + 图框比例×6mm）"),
+    ("OCSMGEAR", "CL", "齿轮（一期外齿轮）：不带参数=开齿轮窗口（参数 + 4 个视图按钮 + 实时预览）；带参数=一行直插（`OCSMGEAR 2 40 20 view 剖视图 at x,y`）"),
     ("OCSMEDIT", "ME", "改标注：选中 OCSM 生成的标注 → 配置窗口改参数 → 重生成"),
     ("OCSMRGH", "CC", "表面粗糙度：点选插入点 → 配置窗口（匿名块 + ATTDEF）"),
     ("OCSMDIM2GB", "D2G", "一键转国标：原生标注 → OCSM_GB 样式 + 匿名块；智能圆心标记（CENTERMARK）一并换成 `3中心线层` 中心线（Ø + 图框比例×6）"),
@@ -4221,6 +4242,212 @@ fn api_part_export(body: &[u8], sender: &Arc<dyn PluginRequestSender>) -> (u16, 
         Ok(s) => (200, json, s),
         Err(e) => (400, json, serde_json::json!({"ok": false, "error": e}).to_string()),
     }
+}
+
+// ── 齿轮（OCSMGEAR）HTTP 入口 ───────────────────────────────────────────
+
+fn api_gear_export(body: &[u8], sender: &Arc<dyn PluginRequestSender>) -> (u16, &'static str, String) {
+    let json = "application/json; charset=utf-8";
+    match apply_gear_export(sender, body) {
+        Ok(s) => (200, json, s),
+        Err(e) => (400, json, serde_json::json!({"ok": false, "error": e}).to_string()),
+    }
+}
+
+/// 视图比例 k：图框 `比例` 属性。优先用包含待放置点的图框，否则退到文档里任一张图框，
+/// 再没有就 1.0（k 只影响中心线伸出量与斜齿轮细实线间距，退到 1 也不会画错图）。
+pub(crate) fn gear_view_scale(doc: &acadrust::CadDocument, pt: [f64; 3]) -> f64 {
+    let by_point = crate::frame_scale_at(doc, pt);
+    if (by_point - 1.0).abs() > 1e-9 {
+        return by_point;
+    }
+    let stems = crate::frame_dir_stems();
+    for e in doc.entities() {
+        if let acadrust::EntityType::Insert(ins) = e {
+            if crate::is_frame_insert(doc, ins, &stems) {
+                if let Some(s) = ins.uniform_scale() {
+                    if (s - 1.0).abs() > 1e-9 {
+                        return s;
+                    }
+                }
+            }
+        }
+    }
+    1.0
+}
+
+/// `OCSM_PART` 台账记录（明细表/球标直接取用）。
+fn gear_meta_json(p: &crate::gear::GearParams, view: crate::gear::GearView, part: &crate::partgen::GenPart) -> String {
+    serde_json::json!({
+        "family": "gear",
+        "view": view.key(),
+        "code": p.spec(),
+        "name": part.meta.name,
+        "spec": part.meta.spec,
+        "material": part.meta.material,
+        "weight": part.meta.weight,
+        "m": p.m,
+        "z": p.z,
+        "ha": p.ha,
+        "c": p.c,
+        "beta": p.beta_deg,
+        "h": p.h,
+        "x": p.x,
+        "chamfer": p.chamfer(),
+    })
+    .to_string()
+}
+
+/// GUI「生成到图纸」：建块 + 登记待放置件（回到图纸点击定位基点 → 旋转 → 落定）。
+fn apply_gear_export(
+    sender: &Arc<dyn PluginRequestSender>,
+    body: &[u8],
+) -> Result<String, String> {
+    #[derive(serde::Deserialize)]
+    struct Req {
+        m: f64,
+        z: u32,
+        #[serde(default = "d_ha")]
+        ha: f64,
+        #[serde(default = "d_c")]
+        c: f64,
+        #[serde(default)]
+        beta: f64,
+        #[serde(default = "d_h")]
+        h: f64,
+        #[serde(default)]
+        x: f64,
+        #[serde(default = "d_view")]
+        view: String,
+    }
+    fn d_ha() -> f64 {
+        1.0
+    }
+    fn d_c() -> f64 {
+        0.25
+    }
+    fn d_h() -> f64 {
+        20.0
+    }
+    fn d_view() -> String {
+        "section".to_string()
+    }
+    let req: Req = serde_json::from_slice(body).map_err(|e| format!("请求 JSON 无效: {e}"))?;
+    let p = crate::gear::GearParams {
+        m: req.m,
+        z: req.z,
+        ha: req.ha,
+        c: req.c,
+        beta_deg: req.beta,
+        h: req.h,
+        x: req.x,
+    };
+    let view = crate::gear::GearView::parse(&req.view)?;
+    let doc = snapshot(sender)?;
+    // 插入前拦一道：没跑过 OCSM 初始化的图纸会出“实线白中心线”（用户 2026-09-17 定案）
+    crate::gear::ocsm_ready(&doc)?;
+    let n = gear_view_scale(&doc, crate::take_parts_point().unwrap_or([0.0, 0.0, 0.0]));
+    let part = crate::gear::generate(&p, view, n)?;
+    let block = crate::gear::block_name(&p, view);
+
+    begin_undo(sender, "齿轮出图")?;
+    let exists = snapshot(sender)?.block_records.iter().any(|b| b.name == block);
+    if !exists {
+        req_timed(
+            sender,
+            PluginRequest::AddBlockRecord { name: block.clone(), entities: part.entities.clone() },
+            "AddBlockRecord",
+        )?;
+    }
+    crate::set_pending_part(crate::PendingPart {
+        block: block.clone(),
+        meta_json: gear_meta_json(&p, view, &part),
+        label: format!("外齿轮 {}（{}）", p.spec(), view.label()),
+    });
+    commit_undo(sender);
+    Ok(serde_json::json!({
+        "ok": true,
+        "message": format!(
+            "已生成外齿轮 {}（{}）：切回图纸，鼠标上已带这个视图，左键点击定位基点 → 移动光标旋转 → 再点击落定（可连续，Esc 结束）。",
+            p.spec(),
+            view.label()
+        ),
+        "block": block,
+        "spec": p.spec(),
+        "notes": p.notes(),
+    })
+    .to_string())
+}
+
+/// 参数化直接插入（MCP/AI 一行驱动）：与 GUI 同一条生成路径，落点给显式 `at`。
+pub(crate) fn apply_gear_insert(
+    sender: &Arc<dyn PluginRequestSender>,
+    req: &crate::gear::GearRequest,
+) -> Result<String, String> {
+    let doc = snapshot(sender)?;
+    crate::gear::ocsm_ready(&doc)?;
+    let pt = req.at.map(|[x, y]| [x, y, 0.0]).unwrap_or([0.0, 0.0, 0.0]);
+    let n = gear_view_scale(&doc, pt);
+    let part = crate::gear::generate(&req.params, req.view, n)?;
+    let block = crate::gear::block_name(&req.params, req.view);
+
+    begin_undo(sender, "齿轮插入")?;
+    let exists = snapshot(sender)?.block_records.iter().any(|b| b.name == block);
+    if !exists {
+        req_timed(
+            sender,
+            PluginRequest::AddBlockRecord { name: block.clone(), entities: part.entities.clone() },
+            "AddBlockRecord",
+        )?;
+    }
+    let at = match req.at {
+        Some([x, y]) => [x, y, 0.0],
+        None => crate::take_parts_point().unwrap_or([0.0, 0.0, 0.0]),
+    };
+    let mut ins = acadrust::entities::Insert::new(&block, Vector3::new(at[0], at[1], at[2]));
+    ins.rotation = req.rotation.to_radians();
+    {
+        let c = &mut ins.common;
+        c.layer = crate::partgen::LAYER_MAIN.to_string();
+        c.color = ocs_plugin_api::host::acadrust::types::Color::ByLayer;
+        c.linetype = "ByLayer".to_string();
+        c.line_weight = ocs_plugin_api::host::acadrust::types::LineWeight::ByLayer;
+    }
+    let handle = match req_timed(
+        sender,
+        PluginRequest::AddEntities(vec![acadrust::EntityType::Insert(ins)]),
+        "AddEntities",
+    ) {
+        Ok(PluginResponse::Handles(hs)) => hs.first().copied(),
+        Ok(_) => None,
+        Err(e) => return Err(e),
+    };
+    if let Some(h) = handle {
+        let mut rec = ExtendedDataRecord::new("OCSM_PART");
+        rec.values
+            .push(XDataValue::String(gear_meta_json(&req.params, req.view, &part)));
+        req_timed(sender, PluginRequest::WriteRecord { handle: h, record: rec }, "WriteRecord")?;
+    }
+    req_timed(sender, PluginRequest::BumpGeometry, "BumpGeometry")?;
+    mark_dirty(sender)?;
+    commit_undo(sender);
+    Ok(serde_json::json!({
+        "ok": true,
+        "message": format!(
+            "已插入外齿轮 {}（{}）于 ({:.3}, {:.3})",
+            req.params.spec(),
+            req.view.label(),
+            at[0],
+            at[1]
+        ),
+        "block": block,
+        "insert_handle": handle.map(fmt_handle),
+        "at": at,
+        "spec": req.params.spec(),
+        "scale": n,
+        "notes": req.params.notes(),
+    })
+    .to_string())
 }
 
 fn apply_part_export(
@@ -7097,6 +7324,8 @@ const GUI_HTML: &str = include_str!("guide_gui.html");
 const ROUGH_HTML: &str = include_str!("rough_gui.html");
 /// 标准件选择器页（参数化生成）。
 const PARTS_HTML: &str = include_str!("parts_gui.html");
+/// 齿轮页（参数 + 视图选择 + 实时预览）。
+const GEAR_HTML: &str = include_str!("gear_gui.html");
 /// 螺栓副（件链装配）页：给人类用的 GUI（AI 走命令行/HTTP 同一套实现）。
 const JOINT_HTML: &str = include_str!("joint_gui.html");
 /// 命令手册页（人类侧命令目录 + 操作教程）：教程正文是**磁盘上的 md**（见 `manual_dirs()`），
@@ -8001,6 +8230,7 @@ mod tests {
             ("guide_gui", GUI_HTML),
             ("rough_gui", ROUGH_HTML),
             ("parts_gui", PARTS_HTML),
+            ("gear_gui", GEAR_HTML),
             ("joint_gui", JOINT_HTML),
             ("manual_gui", MANUAL_HTML),
             ("bom_gui", BOM_HTML),

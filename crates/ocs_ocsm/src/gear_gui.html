@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>OCSM 齿轮（外齿轮）</title>
+<style>
+  /* 样式与 parts_gui.html / joint_gui.html 同款：同一套配色、圆角与控件尺寸 */
+  :root { color-scheme: light; }
+  body { font-family: "Helvetica Neue", "PingFang SC", "Microsoft YaHei", sans-serif;
+         margin: 14px; background: #f4f6f8; color: #222; }
+  h1 { font-size: 16px; margin: 0 0 10px; }
+  .sub { font-size: 12px; color: #888; font-weight: 400; margin-left: 8px; }
+  .wrap { display: flex; flex-direction: column; gap: 12px; align-items: stretch; }
+  .card { background: #fff; border: 1px solid #d9dee5; border-radius: 8px; padding: 12px 14px; }
+  .card h2 { font-size: 13px; margin: 0 0 8px; color: #555; }
+  label { display: block; font-size: 12px; color: #666; margin: 8px 0 2px; }
+  select, input[type=number], input[type=text] { width: 100%; padding: 5px 6px; border: 1px solid #c6ccd4;
+           border-radius: 4px; font-size: 13px; box-sizing: border-box; background: #fff; }
+  input[disabled] { background: #f1f3f5; color: #777; cursor: not-allowed; }
+  .row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+  .opt { padding: 5px 10px; border: 1px solid #c6ccd4; border-radius: 5px;
+         background: #fafbfc; cursor: pointer; font-size: 13px; user-select: none; }
+  .opt.on { background: #1e6fff; border-color: #1e6fff; color: #fff; }
+  .btn { border: none; border-radius: 6px; padding: 9px 18px; font-size: 14px; cursor: pointer;
+         background: #1e6fff; color: #fff; margin-top: 12px; }
+  .btn[disabled] { background: #9db9e8; cursor: not-allowed; }
+  .hint { font-size: 12px; color: #888; margin-top: 8px; line-height: 1.5; }
+  #status, #perr { font-size: 13px; margin-top: 8px; min-height: 18px; }
+  .ok { color: #1a7f37; } .bad { color: #d1242f; } .warn { color: #b26a00; }
+  code { background: #f1f3f5; padding: 1px 4px; border-radius: 3px; }
+  /* ── 预览区：深色底、居中、宽度自适应（与后端 SVG 的 #111 底色一致） ── */
+  #preview { display: block; width: 100%; max-height: 56vh; object-fit: contain;
+             border: 1px solid #e2e6ea; border-radius: 6px; background: #111; margin-top: 10px; }
+  /* ── 参数表单：标签在左、控件在右（照用户草图） ── */
+  .form { display: grid; grid-template-columns: 170px 1fr; gap: 8px 10px; align-items: start; }
+  .form > label { margin: 0; padding-top: 6px; }
+  .ctl { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+  .ctl select, .ctl input { flex: none; }
+  .ctl input[type=number] { width: 120px; }
+  #mSel { width: 190px; }
+  #m { width: 110px; }
+  .ctl.beta input[type=number] { width: 64px; }
+  .unit { font-size: 12px; color: #888; }
+  /* ── 派生值信息行 ── */
+  .info { display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: 12.5px; margin-top: 12px; }
+  .info .k { color: #777; }
+  .info b { font-weight: 600; }
+</style>
+</head>
+<body>
+<h1>OCSM 齿轮（外齿轮）<span class="sub">一期只画外齿轮；内齿轮二期</span></h1>
+
+<div class="wrap">
+  <!-- ① 上部预览区：当前选中视图（大图位，深色底） -->
+  <div class="card">
+    <h2>预览（当前视图：<span id="viewName">剖视图</span>）</h2>
+    <div class="row" id="viewRow"></div>
+    <img id="preview" alt="齿轮预览">
+    <div id="perr"></div>
+  </div>
+
+  <!-- ② 参数表单：键名与 gear.rs 的 GearParams / parse_request 完全一致 -->
+  <div class="card">
+    <h2>几何参数</h2>
+    <div class="form">
+      <label for="mSel">模数[m/Mn]</label>
+      <div class="ctl">
+        <select id="mSel" title="GB/T 1357 标准模数系列（第一/第二系列）"></select>
+        <input type="number" id="m" value="2" min="0.01" step="0.01" title="可直接手填非标准模数">
+      </div>
+
+      <label for="z">齿数[z]</label>
+      <div class="ctl"><input type="number" id="z" value="40" min="2" step="1"></div>
+
+      <label for="ha">齿顶高系数[ha*]</label>
+      <div class="ctl"><input type="number" id="ha" value="1" step="0.05"></div>
+
+      <label for="c">顶隙系数[c*]</label>
+      <div class="ctl"><input type="number" id="c" value="0.25" step="0.05"></div>
+
+      <label for="betaD">螺旋角[β]</label>
+      <div class="ctl beta">
+        <input type="number" id="betaD" value="0" step="1" title="度（左旋填负数）">
+        <span class="unit">°</span>
+        <input type="number" id="betaM" value="0" min="0" step="1" title="分">
+        <span class="unit">′</span>
+        <input type="number" id="betaS" value="0" min="0" step="1" title="秒">
+        <span class="unit">″</span>
+        <div class="hint" style="flex-basis:100%; margin-top:2px">
+          右旋为正、左旋在度数里填负数；β≠0 = 斜齿轮：侧视图会加三条细实线
+        </div>
+      </div>
+
+      <label for="h">厚度[h]</label>
+      <div class="ctl">
+        <input type="number" id="h" value="20" min="0.01" step="1">
+        <span class="unit">mm</span>
+      </div>
+
+      <label for="chamfer">轴向倒角距离[d]</label>
+      <div class="ctl">
+        <input type="text" id="chamfer" value="1" disabled>
+        <span class="hint" style="margin:0">自动 = round(0.6m)（用户定案）</span>
+      </div>
+
+      <label for="x">变位系数[Xn]</label>
+      <div class="ctl"><input type="number" id="x" value="0" step="0.05"></div>
+    </div>
+
+    <!-- ③ 信息行：后端算出的派生值 + 提示（notes） -->
+    <div class="info" id="info"></div>
+    <div class="hint" id="notes"></div>
+
+    <!-- ④ 校验红字 + 主按钮（流程与零件库「零件出库」一致） -->
+    <div class="hint bad" id="warn"></div>
+    <button class="btn" id="out">生成到图纸</button>
+    <div id="status"></div>
+
+    <div class="hint">
+      生成物：轮廓 → <code>1轮廓实线层</code>、齿根/细线 → <code>2细线层</code>、
+      分度圆/中心线 → <code>3中心线层</code>、剖面线 → <code>5剖面线层</code>；
+      颜色/线型/线宽一律 <b>ByLayer</b>；<b>不含尺寸标注</b>。
+    </div>
+  </div>
+</div>
+
+<script>
+/* ─────────────────────────── 常量与状态 ─────────────────────────── */
+
+// GB/T 1357 标准模数系列（GUI 直接全列，选它即填数字框）
+const MODULES = [0.5, 0.6, 0.7, 0.8, 1, 1.25, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10, 12, 16, 20, 25, 32, 40, 50];
+// 四个视图：键与 gear.rs 里 GearView::key() 一致（section|side|simplified|front）
+const VIEWS = [
+  { key: "section", name: "剖视图" },
+  { key: "side", name: "侧视图" },
+  { key: "simplified", name: "简化正视图" },
+  { key: "front", name: "常规正视图" },
+];
+let curView = "section";          // 当前选中视图（默认剖视图）
+let seqPreview = 0, seqInfo = 0;  // 过期响应丢弃序号（快速连点时只认最后一次）
+let tPreview = 0, tInfo = 0;      // 防抖计时器（预览 250ms / 派生值 300ms）
+const el = (id) => document.getElementById(id);
+
+/* ─────────────────────────── 参数读取与校验 ─────────────────────────── */
+
+// 读一个数字框（空/非数字 → NaN）
+function num(id) { return parseFloat(el(id).value); }
+
+// 螺旋角换算：sign(度)*(|度| + 分/60 + 秒/3600)（右旋为正，左旋在度数里填负数）
+function betaDeg() {
+  const d = num("betaD"), mm = num("betaM"), s = num("betaS");
+  if (![d, mm, s].every(Number.isFinite)) return NaN;
+  const sign = d < 0 ? -1 : 1;
+  return sign * (Math.abs(d) + mm / 60 + s / 3600);
+}
+
+// 收集当前参数：err 非空 = 非法（禁用主按钮、红字提示）；p 供 URL / POST JSON 用
+function collect() {
+  const m = num("m"), z = num("z"), ha = num("ha"), c = num("c"), h = num("h"), x = num("x");
+  const beta = betaDeg();
+  let err = "";
+  if (!Number.isFinite(m) || m <= 0) err = "模数 m 必须是正数。";
+  else if (!Number.isFinite(z) || z < 2) err = "齿数 z 不能小于 2。";
+  else if (!Number.isFinite(ha)) err = "齿顶高系数 ha* 必须是数字。";
+  else if (!Number.isFinite(c)) err = "顶隙系数 c* 必须是数字。";
+  else if (!Number.isFinite(beta)) err = "螺旋角 β 的度/分/秒都必须是数字。";
+  else if (!Number.isFinite(h) || h <= 0) err = "厚度 h 必须是正数。";
+  else if (!Number.isFinite(x)) err = "变位系数 Xn 必须是数字。";
+  return { ok: !err, err, p: { m, z: Math.round(z), ha, c, beta, h, x } };
+}
+
+// 每次输入都跑：校验按钮可用性 + 红字；顺带同步模数下拉与只读倒角框
+function validateUI() {
+  const v = collect();
+  el("warn").textContent = v.err;
+  el("out").disabled = !v.ok;
+  return v;
+}
+
+// 模数下拉 ↔ 数字框联动：数字命中系列就选它，否则显示「自定义」
+function syncModuleSelect() {
+  const m = num("m");
+  const hit = Number.isFinite(m) ? MODULES.find((v) => Math.abs(v - m) < 1e-9) : undefined;
+  el("mSel").value = hit ? String(hit) : "custom";
+}
+
+// 轴向倒角只读框：C = round(0.6m)，随模数实时更新（与 gear.rs 的 chamfer() 同口径）
+function syncChamfer() {
+  const m = num("m");
+  el("chamfer").value = Number.isFinite(m) && m > 0 ? String(Math.round(0.6 * m)) : "—";
+}
+
+/* ─────────────────────────── 视图按钮 ─────────────────────────── */
+
+// 四个视图按钮（单选/分段控件）：一次只亮一个，点击立刻刷新预览
+function buildViews() {
+  const row = el("viewRow");
+  row.innerHTML = "";
+  VIEWS.forEach((v) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "opt" + (v.key === curView ? " on" : "");
+    b.dataset.v = v.key;
+    b.textContent = v.name;
+    b.addEventListener("click", () => {
+      curView = v.key;
+      [...row.querySelectorAll("button")].forEach((x) => x.classList.toggle("on", x.dataset.v === curView));
+      el("viewName").textContent = v.name;
+      fetchPreview();   // 视图切换不走防抖，立即刷新
+    });
+    row.appendChild(b);
+  });
+  el("viewName").textContent = VIEWS.find((v) => v.key === curView).name;
+}
+
+/* ─────────────────────────── 预览（/api/gear_svg） ─────────────────────────── */
+
+// 参数拼 URL（顺序与后端注释一致：m z ha c beta h x）
+function paramQS(p) {
+  return "m=" + p.m + "&z=" + p.z + "&ha=" + p.ha + "&c=" + p.c +
+         "&beta=" + p.beta + "&h=" + p.h + "&x=" + p.x;
+}
+function svgUrl(p) { return "/api/gear_svg?" + paramQS(p) + "&view=" + curView + "&n=1"; }
+
+function showPreviewError(msg) {
+  el("perr").textContent = "预览失败：" + msg;
+  el("perr").className = "bad";
+}
+function clearPreviewError() { el("perr").textContent = ""; el("perr").className = ""; }
+
+// 先 fetch 拿结果：成功才把可见 <img> 的 src 指过去（失败保留上一张图，只出红字）
+async function fetchPreview() {
+  const v = collect();
+  if (!v.ok) { showPreviewError(v.err); return; }
+  const url = svgUrl(v.p);
+  const my = ++seqPreview;
+  try {
+    const r = await fetch(url, { cache: "no-store" });
+    const text = await r.text();
+    if (my !== seqPreview) return;
+    if (!r.ok) {
+      let msg = "后端拒绝（HTTP " + r.status + "）";
+      try { const j = JSON.parse(text); msg = j.error || j.message || msg; } catch (e) { /* 非 JSON 就报状态码 */ }
+      showPreviewError(msg);
+      return;
+    }
+    clearPreviewError();
+    el("preview").src = url;   // src 指向 /api/gear_svg（浏览器对刚请求过的 URL 直接命中缓存）
+  } catch (e) {
+    if (my !== seqPreview) return;
+    showPreviewError("请求失败：" + e);
+  }
+}
+
+/* ─────────────────────────── 派生值（/api/gear_info） ─────────────────────────── */
+
+// 数字显示：整数不带小数点，其余最多 4 位小数（与 gear.rs 的 trim() 同口径）
+function fmt(v) {
+  if (typeof v !== "number" || !Number.isFinite(v)) return "?";
+  if (Math.abs(v - Math.round(v)) < 1e-9) return String(Math.round(v));
+  return v.toFixed(4).replace(/0+$/, "").replace(/\.$/, "");
+}
+
+// 信息行：分度圆 d / 齿顶圆 da / 齿根圆 df / 齿根圆角 ρ / 倒角 C（+ 齿距角）
+function renderInfo(j) {
+  const items = [
+    ["分度圆 d", j.d, " mm"],
+    ["齿顶圆 da", j.da, " mm"],
+    ["齿根圆 df", j.df, " mm"],
+    ["齿根圆角 ρ", j.rho, " mm"],
+    ["倒角 C", j.chamfer, ""],
+    ["齿距角", j.pitch_angle, "°"],
+  ];
+  el("info").innerHTML = items
+    .map(([k, val, unit]) => '<span><span class="k">' + k + "</span> = <b>" + fmt(val) + unit + "</b></span>")
+    .join("");
+}
+
+// 后端提示（notes）：逐条一行；错误用红色、普通提示用橙色
+function setNotes(list, isErr) {
+  const box = el("notes");
+  box.className = "hint" + (list && list.length ? (isErr ? " bad" : " warn") : "");
+  box.innerHTML = "";
+  (list || []).forEach((t) => {
+    const d = document.createElement("div");
+    d.textContent = (isErr ? "✗ " : "⚠ ") + t;
+    box.appendChild(d);
+  });
+}
+
+async function fetchInfo() {
+  const v = collect();
+  if (!v.ok) { el("info").innerHTML = ""; setNotes([v.err], true); return; }
+  const my = ++seqInfo;
+  try {
+    const r = await fetch("/api/gear_info?" + paramQS(v.p), { cache: "no-store" });
+    const j = await r.json();
+    if (my !== seqInfo) return;
+    if (!r.ok || j.ok === false) {
+      el("info").innerHTML = "";
+      setNotes(["派生值获取失败：" + (j.error || j.message || ("HTTP " + r.status))], true);
+      return;
+    }
+    renderInfo(j);
+    setNotes(j.notes || [], false);
+  } catch (e) {
+    if (my !== seqInfo) return;
+    setNotes(["派生值请求失败：" + e], true);
+  }
+}
+
+/* ─────────────────────────── 输入防抖 / 立即刷新 ─────────────────────────── */
+
+// 任何参数变化：立刻校验 + 同步下拉与倒角框，然后防抖刷预览(250ms)与派生值(300ms)
+function onInput() {
+  syncModuleSelect();
+  syncChamfer();
+  validateUI();
+  clearTimeout(tPreview); tPreview = setTimeout(fetchPreview, 250);
+  clearTimeout(tInfo);    tInfo = setTimeout(fetchInfo, 300);
+}
+
+// 失焦 / 回车：不等防抖，立即刷新一次
+function onCommit() {
+  clearTimeout(tPreview); clearTimeout(tInfo);
+  fetchPreview(); fetchInfo();
+}
+
+/* ─────────────────────────── 生成到图纸（/api/gear_export） ─────────────────────────── */
+
+async function exportToDrawing() {
+  const v = collect();
+  if (!v.ok) { validateUI(); return; }
+  el("status").textContent = "生成中…";
+  el("status").className = "";
+  try {
+    const r = await fetch("/api/gear_export", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      // beta 是度的十进制值（由度分秒换算），view 一起传；键名与 gear.rs 一致
+      body: JSON.stringify(Object.assign({}, v.p, { view: curView })),
+    });
+    const j = await r.json();
+    if (j.ok) {
+      const msg = j.message || "已生成到图纸";
+      el("status").textContent = msg;
+      el("status").className = "ok";
+      // 与零件库「零件出库」同款：成功后自动关窗；浏览器拒绝自关时提示手动切回
+      setTimeout(() => {
+        try { window.close(); } catch (e) { /* 被拒绝时忽略 */ }
+        el("status").textContent = msg + "（若本窗口未自动关闭，请 Alt+Tab 切回图纸继续）";
+      }, 300);
+    } else {
+      el("status").textContent = "失败：" + (j.error || j.message || "未知错误");
+      el("status").className = "bad";
+    }
+  } catch (e) {
+    el("status").textContent = "请求失败：" + e;
+    el("status").className = "bad";
+  }
+}
+
+/* ─────────────────────────── 心跳保活 ─────────────────────────── */
+
+// 心跳：告诉插件"齿轮窗口还开着"（避免重复开窗）；关闭时 bye=1
+function ping(bye) {
+  try { fetch("/api/page_ping?p=gear" + (bye ? "&bye=1" : ""), { cache: "no-store" }); } catch (e) {}
+}
+
+/* ─────────────────────────── 初始化 ─────────────────────────── */
+(async function init() {
+  // 初始化兜底：任何 JS 异常都写到状态行，避免"面板半渲染"看不出原因
+  window.addEventListener("error", (e) => {
+    const s = el("status");
+    s.textContent = "脚本错误：" + e.message;
+    s.className = "bad";
+  });
+
+  ping(false);
+  setInterval(() => ping(false), 5000);
+  window.addEventListener("beforeunload", () => ping(true));
+  window.addEventListener("pagehide", () => ping(true));
+
+  // 模数下拉：第一项「自定义」，其余标准系列
+  const sel = el("mSel");
+  sel.innerHTML = "";
+  const custom = document.createElement("option");
+  custom.value = "custom";
+  custom.textContent = "自定义";
+  sel.appendChild(custom);
+  MODULES.forEach((v) => {
+    const o = document.createElement("option");
+    o.value = String(v);
+    o.textContent = String(v);
+    sel.appendChild(o);
+  });
+  sel.addEventListener("change", () => {
+    if (sel.value !== "custom") el("m").value = sel.value;   // 选下拉 → 填数字框
+    onInput();
+  });
+
+  // 所有数值框：input 防抖、blur/Enter 立即刷新
+  ["m", "z", "ha", "c", "betaD", "betaM", "betaS", "h", "x"].forEach((id) => {
+    const n = el(id);
+    n.addEventListener("input", onInput);
+    n.addEventListener("change", onInput);
+    n.addEventListener("blur", onCommit);
+    n.addEventListener("keydown", (e) => { if (e.key === "Enter") onCommit(); });
+  });
+
+  el("out").addEventListener("click", exportToDrawing);
+
+  buildViews();
+  syncModuleSelect();
+  syncChamfer();
+  validateUI();
+  fetchPreview();
+  fetchInfo();
+})();
+</script>
+</body>
+</html>

@@ -33,7 +33,7 @@ def reader():
         q.put(line.strip())
 threading.Thread(target=reader, daemon=True).start()
 
-_id = [0]
+_id = [int(__import__('time').time()) % 1_000_000]  # 跨进程唯一，避免 request_id_reused
 def send(method, params=None, notify=False):
     msg = {"jsonrpc": "2.0", "method": method}
     if params is not None:
@@ -88,6 +88,9 @@ doc = rows[0]["document_id"]
 print(f"# session={sid} doc={doc} rev={rows[0]['revision']}")
 
 def show(d, tag=""):
+    if not isinstance(d, dict):
+        print(f"  {tag} ← {str(d)[:120]}")
+        return {}
     st = d.get("state") or {}
     cmd = st.get("command") or {}
     print(f"  {tag} status={d.get('status')} code={d.get('code')} err={d.get('error')} "
@@ -115,6 +118,12 @@ for raw in sys.stdin.read().splitlines():
                 req["point"] = [float(x) for x in parts[2].split(",")]
         elif kind == "text" or kind == "token":
             req["text"] = " ".join(parts[1:])
+        elif kind == "point":
+            # `input point 40,60` → 世界坐标点（ZOOM 窗口角点、拾取点等）
+            req["point"] = [float(x) for x in parts[1].split(",")] + [0.0]
+            req["space"] = "wcs"
+        elif kind == "enter":
+            pass  # 回车（kind=enter 本身即语义）
         d = call_tool("ocs_execute", {"ocs_session_id": sid, "request": req})
         show(d, f"input {arg!r}")
     elif op == "cancel":
