@@ -55,6 +55,8 @@ pub(crate) struct Dim2GbPlan {
     pub converted: usize,
     /// 其中：引线标注（Leader + MText）转换数。
     pub leaders: usize,
+    /// 其中：智能圆心标记（`CENTERMARK`）转换数。
+    pub marks: usize,
     /// 扫描到的原生标注总数。
     pub seen: usize,
     /// 跳过清单（每条 = 一个对象 + 原因）。
@@ -70,6 +72,12 @@ impl Dim2GbPlan {
         );
         if self.leaders > 0 {
             s.push_str(&format!("其中引线标注 {} 个。", self.leaders));
+        }
+        if self.marks > 0 {
+            s.push_str(&format!(
+                "其中智能圆心标记 {} 个（已换成 `3中心线层` 中心线）。",
+                self.marks
+            ));
         }
         if !self.skipped.is_empty() {
             s.push_str(&format!("跳过 {} 个：", self.skipped.len()));
@@ -1064,6 +1072,43 @@ pub(crate) fn plan(doc: &Doc, selected: &[Handle]) -> Dim2GbPlan {
         }
     }
 
+    // ── 智能圆心标记（`CENTERMARK`）→ OCSM 中心线（与 `ZX` 同款十字）──
+    //
+    // 智能标记落图只是**一个载波 LINE**（中心→中心的退化线），界面上的十字是渲染时现画的；
+    // 圆心与**半径**存在 XDATA（app `OCS_CENTERMARK`，签名 `CENTERMARK_ASSOCIATION`）
+    // —— acadrust 已实现解析，直接用。按用户约定出 `直径 + n×6` 的两条中心线（`3中心线层`），
+    // 删掉载波线。选中的“圈”就是该圆的（关联里的 `source.handle`）时也算选中。
+    //
+    // 老式 `DIMCENTER` 的两条散十字**不转**（无标记可辨识，无法与手画十字区分；
+    // 用户 2026-09-17 定案：只转 `CENTERMARK`）。
+    let marks: Vec<(Handle, acadrust::entities::CenterMarkAssociation)> = doc
+        .entities()
+        .filter_map(|e| {
+            let Entity::Line(l) = e else { return None };
+            let h = e.common().handle;
+            let assoc = acadrust::entities::CenterMarkAssociation::read(&l.common.extended_data)?;
+            let picked = selected.is_empty()
+                || selected.contains(&h)
+                || selected.contains(&assoc.source.handle);
+            picked.then_some((h, assoc))
+        })
+        .collect();
+    for (handle, assoc) in marks {
+        plan.seen += 1;
+        if !(assoc.radius.is_finite() && assoc.radius > 0.0) {
+            plan.skipped
+                .push("圆心标记（记录里的半径无效，已跳过）".to_string());
+            continue;
+        }
+        let center = to_arr(assoc.center);
+        let scale = crate::frame_scale_at(doc, center);
+        let segs = crate::centerline::cross_for_circle(center, assoc.radius, scale);
+        plan.adds.extend(crate::centerline::lines_of(&segs));
+        plan.removes.push(handle);
+        plan.converted += 1;
+        plan.marks += 1;
+    }
+
     let (styles, blocks, adds) = collector.drain();
     plan.styles = styles;
     if plan.converted > 0 {
@@ -1075,6 +1120,37 @@ pub(crate) fn plan(doc: &Doc, selected: &[Handle]) -> Dim2GbPlan {
     plan.blocks = blocks;
     plan.adds.extend(adds);
     plan
+}
+
+/// 造一个宿主风格的智能圆心标记“载波线”：中心→中心的退化 LINE + `OCS_CENTERMARK` XDATA。
+#[cfg(test)]
+fn center_mark_carrier(center: Vector3, radius: f64, source: Handle) -> Entity {
+    use acadrust::entities::{CenterMarkAssociation, CenterMarkSource, CenterMarkSourceKind};
+    let assoc = CenterMarkAssociation {
+        source: CenterMarkSource {
+            handle: source,
+            kind: CenterMarkSourceKind::Circle,
+            segment_index: 0,
+            pick_point: center,
+        },
+        plane_origin: center,
+        plane_x: Vector3::new(1.0, 0.0, 0.0),
+        plane_y: Vector3::new(0.0, 1.0, 0.0),
+        center,
+        radius,
+        cross_size: radius * 0.2,
+        cross_gap: radius * 0.1,
+        cross_size_relative: true,
+        cross_gap_relative: true,
+        extension_length: 0.0,
+        length_adjustments: [0.0; 4],
+        overshoots: [0.0; 4],
+        show_extensions: false,
+        associated: true,
+    };
+    let mut line = acadrust::entities::Line::from_points(center, center);
+    assoc.write(&mut line.common.extended_data);
+    Entity::Line(line)
 }
 
 fn entity_kind(e: &Entity) -> &'static str {
@@ -1359,6 +1435,84 @@ mod tests {
             .expect("参数 URL");
         let p = GuideParams::from_url(&url).expect("URL 可解析");
         assert_eq!(p.guide_type, GuideType::ArcLen, "{url}");
+    }
+
+    /// 智能圆心标记（`CENTERMARK`）→ 两条 `3中心线层` 中心线，删载波线。
+    /// 半径存在 XDATA（`OCS_CENTERMARK`），长度 = `直径 + n×6`（与 `ZX` 一致）。
+    #[test]
+    fn plan_converts_smart_center_mark_to_centerlines() {
+        let mut doc = Doc::default();
+        let center = Vector3::new(50.0, 50.0, 0.0);
+        let carrier = doc.add_entity(center_mark_carrier(center, 10.0, Handle::NULL)).unwrap();
+        let plan = plan(&doc, &[]);
+        assert_eq!(plan.converted, 1, "应转 1 个：{} ", plan.report());
+        assert_eq!(plan.marks, 1);
+        assert_eq!(plan.removes, vec![carrier], "载波线要删掉");
+        assert_eq!(plan.adds.len(), 2, "十字 = 两条");
+        for e in &plan.adds {
+            let Entity::Line(l) = e else {
+                panic!("应当是直线")
+            };
+            assert_eq!(l.common.layer, "3中心线层");
+            let len = ((l.end.x - l.start.x).powi(2) + (l.end.y - l.start.y).powi(2)).sqrt();
+            assert!(
+                (len - 26.0).abs() < 1e-9,
+                "Ø20 + 6×1 = 26（无图框 → n=1），得到 {len}"
+            );
+        }
+        assert!(plan.report().contains("圆心标记"), "{}", plan.report());
+    }
+
+    /// 选中“圈”本身（关联里的 `source.handle`）也应当能转。
+    #[test]
+    fn plan_converts_center_mark_when_its_circle_is_selected() {
+        let mut doc = Doc::default();
+        let circle = doc
+            .add_entity(Entity::Circle(acadrust::entities::Circle::from_center_radius(
+                Vector3::new(10.0, 10.0, 0.0),
+                5.0,
+            )))
+            .unwrap();
+        let carrier = doc
+            .add_entity(center_mark_carrier(Vector3::new(10.0, 10.0, 0.0), 5.0, circle))
+            .unwrap();
+        let plan = plan(&doc, &[circle]);
+        assert_eq!(plan.marks, 1, "选圆也能带上它的圆心标记");
+        assert_eq!(plan.removes, vec![carrier]);
+    }
+
+    /// 老式 `DIMCENTER` 的散十字 / 手画线：不带 `OCS_CENTERMARK` → 一动不一动。
+    #[test]
+    fn plan_leaves_plain_lines_and_legacy_crosses_alone() {
+        let mut doc = Doc::default();
+        let plain = doc
+            .add_entity(Entity::Line(acadrust::entities::Line::from_points(
+                Vector3::new(0.0, 0.0, 0.0),
+                Vector3::new(2.0, 0.0, 0.0),
+            )))
+            .unwrap();
+        assert!(doc.get_entity(plain).is_some());
+        let plan = plan(&doc, &[]);
+        assert_eq!(plan.converted, 0);
+        assert_eq!(plan.marks, 0);
+        assert!(plan.removes.is_empty(), "普通线不能被删：{:?}", plan.removes);
+        assert!(plan.adds.is_empty());
+        assert_eq!(plan.seen, 0);
+    }
+
+    /// 半径无效的关联记录：跳过并报原因，不删东西。
+    #[test]
+    fn plan_skips_center_mark_with_invalid_radius() {
+        let mut doc = Doc::default();
+        let carrier = doc
+            .add_entity(center_mark_carrier(Vector3::ZERO, 0.0, Handle::NULL))
+            .unwrap();
+        let plan = plan(&doc, &[]);
+        assert_eq!(plan.converted, 0);
+        assert!(plan.removes.is_empty());
+        assert_eq!(plan.skipped.len(), 1, "{:?}", plan.skipped);
+        assert!(plan.skipped[0].contains("圆心标记"), "{:?}", plan.skipped);
+        let _ = carrier;
     }
 
     /// 不支持的类型：跳过并给出原因，不阻断整批。
