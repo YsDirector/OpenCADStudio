@@ -55,9 +55,48 @@ pub const HELIX_SPACING: f64 = 5.0;
 
 // ─────────────────────────── 参数 ───────────────────────────
 
+/// 齿轮种类（外齿轮 = 一期；内齿轮 = 二期，用户 2026-09-17 给模板）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GearKind {
+    /// 外齿轮：齿顶圆在外、齿根圆在内（da > d > df）
+    External,
+    /// 内齿轮（齿圈）：齿顶圆在**内**、齿根圆在**外**（da < d < df），齿朝圆心长
+    Internal,
+}
+
+impl GearKind {
+    pub fn is_internal(self) -> bool {
+        matches!(self, GearKind::Internal)
+    }
+    pub fn label(self) -> &'static str {
+        match self {
+            GearKind::External => "外齿轮",
+            GearKind::Internal => "内齿轮",
+        }
+    }
+    pub fn key(self) -> &'static str {
+        match self {
+            GearKind::External => "external",
+            GearKind::Internal => "internal",
+        }
+    }
+    /// 解析种类名（命令行/HTTP 共用）。
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "int" | "internal" | "ring" | "内" | "内齿" | "内齿轮" | "齿圈" => {
+                Some(GearKind::Internal)
+            }
+            "ext" | "external" | "外" | "外齿" | "外齿轮" => Some(GearKind::External),
+            _ => None,
+        }
+    }
+}
+
 /// 齿轮几何参数（GUI / 命令行同一套）。
 #[derive(Debug, Clone, PartialEq)]
 pub struct GearParams {
+    /// 齿轮种类（外/内）
+    pub kind: GearKind,
     /// 法向模数 m（GB/T 1357 优先系列；斜齿轮时是 **Mn**）
     pub m: f64,
     /// 齿数 z
@@ -76,8 +115,17 @@ pub struct GearParams {
 
 impl Default for GearParams {
     fn default() -> Self {
-        // 与用户模板/DXF 完全一致的示例件
-        Self { m: 2.0, z: 40, ha: 1.0, c: 0.25, beta_deg: 0.0, h: 20.0, x: 0.0 }
+        // 与用户模板/DXF 完全一致的示例件（外齿轮 齿轮画法.dxf：m=2 z=40 h=20）
+        Self {
+            kind: GearKind::External,
+            m: 2.0,
+            z: 40,
+            ha: 1.0,
+            c: 0.25,
+            beta_deg: 0.0,
+            h: 20.0,
+            x: 0.0,
+        }
     }
 }
 
@@ -115,12 +163,68 @@ impl GearParams {
         self.m * (self.ha + self.c - self.x)
     }
     /// 齿顶圆直径 da。
+    ///
+    /// * 外齿轮：`d + 2ha`（在最外）
+    /// * 内齿轮：`d − 2ha`（在**最内** —— 齿朝圆心长，反解自模板：m2 z40 时 da=76）
     pub fn da(&self) -> f64 {
-        self.d() + 2.0 * self.ha_height()
+        if self.kind.is_internal() {
+            (self.d() - 2.0 * self.ha_height()).max(0.0)
+        } else {
+            self.d() + 2.0 * self.ha_height()
+        }
     }
     /// 齿根圆直径 df。
+    ///
+    /// * 外齿轮：`d − 2hf`（在内）
+    /// * 内齿轮：`d + 2hf`（在**外** —— 模板实测 85 = 80 + 2×1.25×2）
     pub fn df(&self) -> f64 {
-        (self.d() - 2.0 * self.hf_height()).max(0.0)
+        if self.kind.is_internal() {
+            self.d() + 2.0 * self.hf_height()
+        } else {
+            (self.d() - 2.0 * self.hf_height()).max(0.0)
+        }
+    }
+    /// 齿根过渡圆角的**圆心所在半径**。
+    ///
+    /// * 外齿轮：`rf + ρ`（圆心在齿根圆外，模板实测 38.26 = 37.5 + 0.76）
+    /// * 内齿轮：`rf − ρ`（圆心在齿根圆**内**，模板实测 41.74 = 42.5 − 0.76）
+    pub fn fillet_center_radius(&self) -> f64 {
+        let rf = self.df() / 2.0;
+        if self.kind.is_internal() {
+            rf - self.rho()
+        } else {
+            rf + self.rho()
+        }
+    }
+    /// 内齿轮的**齿槽**中心线到该半径处齿廓的夹角（弧度）。
+    ///
+    /// 关键结论（用户内齿轮模板反解 + 逐点核对）：**内齿轮的齿槽形状 = 同参数外齿轮的齿形** ——
+    /// 同一条渐开线、同一个 `ψ(R) = st/(2r) + (inv αt − inv αR)` 公式，
+    /// 只是这个角要从**齿槽中心线**量（外齿轮从**齿中心线**量）。
+    /// 模板核对：m2 z40 时 R=42.076 处 ψ=0.9869°（理论 0.987°）
+    pub fn space_half_angle(&self, radius: f64) -> f64 {
+        self.half_tooth_angle(radius)
+    }
+    /// 内齿轮简化的**齿顶**半角（齿中心线到齿顶弧末端，弧度）。
+    ///
+    /// 齿槽半角 ψ 大于齿距半角时（齿顶圆低于基圆，z ≲ 33 的常见内齿轮），
+    /// 齿廓到基圆就没了、用径向直线收到齿顶圆：此时弧半角按**基圆**处的 ψ 取。
+    pub fn internal_tip_half_angle(&self) -> f64 {
+        let ra = self.da() / 2.0;
+        let rb = self.db() / 2.0;
+        let pitch_half = self.pitch_angle() / 2.0;
+        (pitch_half - self.space_half_angle(ra.max(rb))).max(1e-6)
+    }
+    /// 内齿轮的齿廓/直线**有效起点半径**（渐开线能画到哪里）。
+    pub fn internal_flank_r_min(&self) -> f64 {
+        let ra = self.da() / 2.0;
+        let rb = self.db() / 2.0;
+        if ra >= rb {
+            ra
+        } else {
+            // 齿顶圆低于基圆：用基圆略上方起画（避开渐开线在基圆处的曲率奇异，同 fcgear 的 fs=0.01）
+            rb + 0.02 * (self.df() / 2.0 - rb)
+        }
     }
     /// 基圆直径 db = d·cosαt。
     pub fn db(&self) -> f64 {
@@ -143,9 +247,10 @@ impl GearParams {
     pub fn pitch_angle(&self) -> f64 {
         std::f64::consts::TAU / self.z as f64
     }
-    /// 齿厚半角 ψ(R)（弧度）：齿中心线到该半径处齿廓的夹角。
+    /// 齿厚半角 ψ(R)（弧度）：齿中心线（内齿轮时是**齿槽中心线**）到该半径处齿廓的夹角。
     ///
-    /// `ψ(R) = st/(2r) + (inv αt − inv αR)`，`αR = acos(rb/R)`。
+    /// `ψ(R) = st/(2r) + (inv αt − inv αR)`，`αR = acos(rb/R)`；`R < rb` 时按 rb 夹住
+    /// （渐开线不存在于基圆以内）。
     pub fn half_tooth_angle(&self, radius: f64) -> f64 {
         let r = self.d() / 2.0;
         let rb = self.db() / 2.0;
@@ -175,7 +280,14 @@ impl GearParams {
         if !(self.x.is_finite() && self.x.abs() <= 1.0) {
             return Err(format!("变位系数 Xn 超出范围（|Xn|≤1）：{}", self.x));
         }
-        if self.df() <= 1e-6 {
+        if self.kind.is_internal() {
+            if self.da() <= 1e-6 {
+                return Err("内齿轮齿顶圆直径非正（齿朝圆心长太长）：检查 m/z/ha*/Xn 组合。".into());
+            }
+            if self.da() / 2.0 >= self.df() / 2.0 {
+                return Err("内齿轮齿顶圆不小于齿根圆：检查 m/z/ha*/c* 组合。".into());
+            }
+        } else if self.df() <= 1e-6 {
             return Err("齿根圆直径非正：检查 m/z/ha*/c*/Xn 组合。".into());
         }
         if self.chamfer() * 2.0 >= self.h {
@@ -217,9 +329,62 @@ impl GearParams {
         if let Some(w) = self.root_style_note() {
             v.push(w);
         }
+        if self.kind.is_internal() && self.z >= 4 {
+            // 内齿轮的圆角是“解”出来的（不是模板那套先定起点的构造），解不出来才提示。
+            // 注意：不能把外齿轮的 root_style_note 用在内齿轮上 ——
+            // 外齿轮口径是“圆心在 rf+ρ”，内齿轮是“rf−ρ”，直接套会**假警报**（已踩）。
+            let s0 = self.pitch_angle() / 2.0;
+            let ok = solve_internal_fillet(self, s0, 1.0).is_some()
+                && solve_internal_fillet(self, s0, -1.0).is_some();
+            if !ok {
+                v.push(format!(
+                    "内齿轮齿根圆角无解（z={}、m={}）：rf−ρ={:.3} 与齿廓之间放不下 ρ={:.3} 的圆角，\
+                     已按无圆角画（齿廓末端径向直线落到齿根圆）。",
+                    self.z,
+                    trim(self.m),
+                    self.fillet_center_radius(),
+                    self.rho()
+                ));
+            }
+        }
+        if self.kind.is_internal() {
+            v.push(
+                "内齿轮剖视图按模板只画到**齿根圆**，不打剖面线 —— 齿圈外壁结构（轮缘/腹板/键槽等）".to_string()
+                    + "由用户/AI 按实际结构延伸，这样一张图能服务不同齿圈。延伸画法：从齿根线往外加厚齿圈"
+                    + "（轴向宽度保持 h），新轮廓落 1轮廓实线层、剖面线用 ANSI31 放 5剖面线层"
+                    + "（一个 HATCH 两个环，轴线上下各一环）。",
+            );
+        }
+        if self.internal_tip_falls_below_base() {
+            v.push(format!(
+                "内齿轮 z={} 时齿顶圆 da={:.3} 低于基圆 db={:.3}：真实齿顶由插齿刀刀尖包络成形（非渐开线），\
+                 本图按简化画法画「渐开线到基圆 → 径向直线到齿顶圆」。要精确齿顶画法请给模板。",
+                self.z,
+                self.da(),
+                self.db()
+            ));
+        }
+        if self.is_helical() && self.kind.is_internal() {
+            v.push(
+                "内齿轮斜齿：剖视图按轴向剖面画，未画三条螺旋线细实线（外齿轮模板侧视图才有，内齿轮模板没有侧视图）。"
+                    .to_string(),
+            );
+        }
         v
     }
+    /// 内齿轮：渐开线能不能画到齿顶圆（齿顶圆是不是低于基圆）。
+    ///
+    /// 内齿轮齿顶圆 `da = d − 2m`，而基圆 `db = d·cos20°` —— `da < db` ⇔ `z < 2/(1−cos20°) ≈ 33.2`，
+    /// 也就是说 **z ≤ 33 的内齿轮都是“齿顶圆低于基圆”**（内齿轮常用 z=24…40，正好落在两侧）。
+    /// 此时渐开线下不去，只能到基圆，再按径向直线收到齿顶圆（简化画法，会有提示）。
+    pub fn internal_tip_falls_below_base(&self) -> bool {
+        self.kind.is_internal() && self.da() / 2.0 < self.db() / 2.0 - 1e-9
+    }
+
     /// 齿根那一段用哪种画法（模板口径能不能解出来）。
+    ///
+    /// **只针对外齿轮**（内齿轮走 `solve_internal_fillet`，它的圆心在 rf−ρ、切点由解唯一确定，
+    /// 套用本函数会得出相反的结论 —— 已踩：内齿轮模板件会被报成"圆角无解"）。
     ///
     /// 模板（z=40）的构造要求“圆角圆心在 rf+ρ、且到齿廓起点距离 = ρ”，
     /// 这等价于三角形两边 `r_c = rf+ρ`、`r_s = 齿廓起点半径`、夹角未知——
@@ -241,8 +406,11 @@ impl GearParams {
         RootStyle::NoFillet
     }
 
-    /// 齿根降级的提示（要显示给人看；模板口径时返回 None）。
+    /// 齿根降级的提示（要显示给人看；模板口径时返回 None）。**内齿轮不走这条路**。
     pub fn root_style_note(&self) -> Option<String> {
+        if self.kind.is_internal() {
+            return None;
+        }
         let style = self.root_style();
         if style == RootStyle::TemplateArc {
             return None;
@@ -264,7 +432,11 @@ impl GearParams {
 
     /// 规格文本（块名/明细表用）。
     pub fn spec(&self) -> String {
-        let mut s = format!("m{} z{} h{}", trim(self.m), self.z, trim(self.h));
+        let mut s = String::new();
+        if self.kind.is_internal() {
+            s.push_str("内齿轮 ");
+        }
+        s.push_str(&format!("m{} z{} h{}", trim(self.m), self.z, trim(self.h)));
         if self.is_helical() {
             s.push_str(&format!(" β{}", trim(self.beta_deg)));
         }
@@ -327,6 +499,26 @@ impl GearView {
     pub const ALL: [GearView; 4] =
         [GearView::Section, GearView::Side, GearView::Simplified, GearView::Front];
 
+    /// 该视图在这个种类的齿轮下能不能生成。
+    ///
+    /// 内齿轮模板（`内齿轮.dxf`）只给了 **剖视图 + 端视图** 两个视图 ——
+    /// 按项目规矩「模板没有的画法不去猜」，其余两个视图在不给模板前不画。
+    pub fn available_for(self, kind: GearKind) -> bool {
+        match kind {
+            GearKind::External => true,
+            GearKind::Internal => matches!(self, GearView::Section | GearView::Front),
+        }
+    }
+
+    /// 人看的名字（内齿轮下 End 视图叫"端视图"更准确）
+    pub fn label_for(self, kind: GearKind) -> &'static str {
+        match (kind, self) {
+            (GearKind::Internal, GearView::Section) => "剖视图（齿圈内齿不剖）",
+            (GearKind::Internal, GearView::Front) => "端视图",
+            _ => self.label(),
+        }
+    }
+
     /// 解析视图名（中英文名都认；**不用数字别名**——那会和位置参数 `<m> <z> <h>` 冲突）。
     pub fn parse(s: &str) -> Result<Self, String> {
         let t = s.trim().to_ascii_lowercase();
@@ -341,9 +533,8 @@ impl GearView {
             "simplified" | "simple" | "简化" | "简化正视图" | "简化视图" => {
                 Some(GearView::Simplified)
             }
-            "front" | "regular" | "正视" | "正视图" | "常规" | "常规正视" | "常规正视图" => {
-                Some(GearView::Front)
-            }
+            "front" | "regular" | "正视" | "正视图" | "常规" | "常规正视" | "常规正视图" | "端视"
+            | "端视图" => Some(GearView::Front),
             _ => None,
         };
         hit.ok_or_else(|| {
@@ -538,19 +729,8 @@ fn make_flank(p: &GearParams, c: f64, sign: f64) -> Result<Flank, String> {
         let radius = rb + (ra - rb) * f;
         fit[i] = involute_point(p, radius, c, sign);
     }
-    // ② 弦长参数化 → clamped 节点（**11 个** = 7 控制点 + 3 次 + 1，与模板同构）
-    let mut knots = vec![0.0, 0.0, 0.0, 0.0];
-    let mut acc = 0.0;
-    for i in 0..4 {
-        acc += ((fit[i + 1][0] - fit[i][0]).powi(2) + (fit[i + 1][1] - fit[i][1]).powi(2)).sqrt();
-        if i < 3 {
-            knots.push(acc);
-        }
-    }
-    knots.extend_from_slice(&[acc; 4]);
-    debug_assert_eq!(knots.len(), 11);
-    // ③ 控制点
-    let ctrl = fit_cubic_bspline(&knots, &fit)?;
+    // ② 弦长参数化 → clamped 节点（**11 个** = 7 控制点 + 3 次 + 1，与模板同构）+ ③ 控制点
+    let (knots, ctrl) = fit_cubic_bspline_knots(&fit)?;
 
     // ④ 齿根那一段（三种画法，见 `RootStyle`）
     let start = fit[0];
@@ -664,6 +844,39 @@ fn flank_points(p: &GearParams, f: &Flank, seg: usize) -> Vec<[f64; 2]> {
     out
 }
 
+/// 由 5 个拟合点造 clamped 三次 B 样条：弦长参数化出 11 个节点，再解 7 个控制点。
+///
+/// 外齿轮（`make_flank`）与内齿轮（`make_flank_internal`）共用 —— 两边的实体结构完全同构，
+/// 差别只在拟合点取自哪条曲线段。
+fn fit_cubic_bspline_knots(fit: &[[f64; 2]; 5]) -> Result<(Vec<f64>, Vec<[f64; 2]>), String> {
+    let mut knots = vec![0.0, 0.0, 0.0, 0.0];
+    let mut acc = 0.0;
+    for i in 0..4 {
+        acc += ((fit[i + 1][0] - fit[i][0]).powi(2) + (fit[i + 1][1] - fit[i][1]).powi(2)).sqrt();
+        if i < 3 {
+            knots.push(acc);
+        }
+    }
+    knots.extend_from_slice(&[acc; 4]);
+    debug_assert_eq!(knots.len(), 11);
+    let ctrl = fit_cubic_bspline(&knots, fit)?;
+    Ok((knots, ctrl))
+}
+
+/// 一条齿廓 B 样条实体（外/内齿轮共用）。
+fn spline_entity(knots: &[f64], ctrl: &[[f64; 2]]) -> EntityType {
+    let mut sp = Spline::new();
+    sp.degree = 3;
+    sp.flags.planar = true;
+    sp.flags.rational = true; // 与模板一致：标 rational + 权重全 1（等价非有理）
+    sp.knots = knots.to_vec();
+    sp.control_points = ctrl.iter().map(|q| Vector3::new(q[0], q[1], 0.0)).collect();
+    sp.weights = vec![1.0; ctrl.len()];
+    sp.normal = Vector3::new(0.0, 0.0, 1.0);
+    set_layer(&mut sp, LAYER_MAIN);
+    EntityType::Spline(sp)
+}
+
 /// 齿根段的实体：圆角弧（模板/降级①）+ 降级时的**径向直线**；NoFillet 时只有直线。
 fn push_root_seg(out: &mut Vec<EntityType>, p: &GearParams, f: &Flank) {
     if f.style != RootStyle::NoFillet {
@@ -676,16 +889,7 @@ fn push_root_seg(out: &mut Vec<EntityType>, p: &GearParams, f: &Flank) {
 
 /// 一条齿廓对应的 B 样条实体。
 fn spline_of(f: &Flank) -> EntityType {
-    let mut sp = Spline::new();
-    sp.degree = 3;
-    sp.flags.planar = true;
-    sp.flags.rational = true; // 与模板一致：标 rational + 权重全 1（等价非有理）
-    sp.knots = f.knots.clone();
-    sp.control_points = f.ctrl.iter().map(|q| Vector3::new(q[0], q[1], 0.0)).collect();
-    sp.weights = vec![1.0; f.ctrl.len()];
-    sp.normal = Vector3::new(0.0, 0.0, 1.0);
-    set_layer(&mut sp, LAYER_MAIN);
-    EntityType::Spline(sp)
+    spline_entity(&f.knots, &f.ctrl)
 }
 
 // ─────────────────────────── 实体助手 ───────────────────────────
@@ -964,6 +1168,453 @@ fn section_hatch(h: f64, rf: f64, pattern_scale: f64) -> EntityType {
     EntityType::Hatch(hat)
 }
 
+// ─────────────────── 内齿轮（齿圈）—— 二期，用户 2026-09-17 给模板 ───────────────────
+//
+// 反解自 `~/桌面/OCSM/齿轮/内齿轮.dxf`（m=2 z=40，与外齿轮模板同参数，"镜像件"）。
+// 核心结论（逐点核对过）：**内齿轮的齿槽形状 = 同参数外齿轮的齿形** —— 同一条渐开线、
+// 同一个 ψ(R) 公式，只是 ψ 要从**齿槽中心线**量、材料在外侧。因此：
+//   * 齿顶圆 da = d − 2ha（最内）、齿根圆 df = d + 2hf（最外）；
+//   * 圆角圆心在 **rf − ρ**（外齿轮是 rf + ρ）；
+//   * 圆角切点是**解出来的**（不像外齿轮那样先定齿廓起点再解圆心）：
+//     解 `|P(R) + ρ·n(R)| = rf − ρ`；模板核对 R=42.076、圆心角 184.446°（实测 184.445°）。
+//   * 每齿 8 图元、拓扑与外齿轮同构（2 齿廓样条 + 2 圆角弧 + 2 齿根弧 + 2 齿顶弧）。
+
+/// 内齿轮一个**齿槽单侧**的构造结果。
+#[derive(Debug, Clone)]
+struct FlankInt {
+    knots: Vec<f64>,
+    ctrl: Vec<[f64; 2]>,
+    /// 齿廓在齿顶侧（内侧）的一端
+    tip: [f64; 2],
+    /// 齿廓在齿根圆角切点那一端
+    end: [f64; 2],
+    /// 齿根圆角圆心（在 rf − ρ 上）
+    fillet_c: [f64; 2],
+    /// 圆角与齿根圆的切点
+    root_pt: [f64; 2],
+    /// 圆角弧的起/讫角（相对圆角圆心，度，CCW）
+    fillet_a0: f64,
+    fillet_a1: f64,
+    /// 齿顶圆低于基圆时：从齿顶圆到齿廓起点的径向直线
+    radial_tip: Option<([f64; 2], [f64; 2])>,
+    /// 圆角无解时：从齿廓末端径向落到齿根圆的直线
+    radial_root: Option<([f64; 2], [f64; 2])>,
+    /// 圆角是否退化（无解 → 圆角 = 0）
+    no_fillet: bool,
+}
+
+/// 径向直线（或点）相对齿槽中心线的角度差（度）。
+fn ang_delta_deg(q: [f64; 2], base_deg: f64) -> f64 {
+    let a = q[1].atan2(q[0]).to_degrees() - base_deg;
+    let mut d = a % 360.0;
+    if d > 180.0 {
+        d -= 360.0;
+    }
+    if d <= -180.0 {
+        d += 360.0;
+    }
+    d
+}
+
+/// 解内齿轮齿根圆角的切点/圆心。返回 `(切点半径, 圆心, 切点)`。
+///
+/// 两个法向分支里取"圆心落在齿槽中心与齿廓之间"的那个（另一个会把圆角切到齿的另一侧）。
+fn solve_internal_fillet(p: &GearParams, s: f64, sign: f64) -> Option<(f64, [f64; 2], [f64; 2])> {
+    let rho = p.rho();
+    let r_c = p.fillet_center_radius();
+    let rf = p.df() / 2.0;
+    let r0 = p.internal_flank_r_min();
+    let r1 = rf - 1e-7;
+    if r1 <= r0 {
+        return None;
+    }
+    let s_deg = s.to_degrees();
+    let pt = |r: f64| involute_point(p, r, s, sign);
+    let normal = |r: f64| {
+        let d = 1e-5;
+        let a = pt((r - d).max(r0));
+        let b = pt((r + d).min(r1));
+        let (tx, ty) = (b[0] - a[0], b[1] - a[1]);
+        let l = (tx * tx + ty * ty).sqrt().max(1e-12);
+        (-ty / l, tx / l)
+    };
+    let mut best: Option<(f64, [f64; 2], f64)> = None;
+    const SCAN: usize = 2000;
+    for flip in [1.0f64, -1.0] {
+        let eval = |r: f64| -> ([f64; 2], f64) {
+            let q = pt(r);
+            let (nx, ny) = normal(r);
+            let f = [q[0] + rho * nx * flip, q[1] + rho * ny * flip];
+            (f, (f[0] * f[0] + f[1] * f[1]).sqrt() - r_c)
+        };
+        let mut prev: Option<(f64, f64)> = None;
+        for k in 0..=SCAN {
+            let r = r0 + (r1 - r0) * k as f64 / SCAN as f64;
+            let (_, e) = eval(r);
+            if let Some((rp, ep)) = prev {
+                if ep * e < 0.0 {
+                    let rr = rp - ep * (r - rp) / (e - ep);
+                    let (f, _) = eval(rr);
+                    let dc = ang_delta_deg(f, s_deg);
+                    // 判据（踩过两次坑才定下来）：圆心必须落在**它自己那个半径处齿槽的角范围**内，
+                    // 即 |dc| < ψ槽(|F|)。四个根（两个法向分支 × 两侧）里只有这一个稳：
+                    //   * 只按"离齿槽中心线更近"挑 → m=10 时并列挑错（根弧扫过整个齿）；
+                    //   * 按"与齿廓同侧"挑 → m=2 模板对、m=10 错（圆心确实会跨过齿槽中心线）。
+                    // 落在齿槽外 = 圆心跑进相邻齿的材料里，那种圆角是错的。
+                    let fc = (f[0] * f[0] + f[1] * f[1]).sqrt();
+                    let psi_c = p.space_half_angle(fc).to_degrees();
+                    if dc.abs() < psi_c - 1e-9
+                        && (best.is_none() || dc.abs() < best.as_ref().unwrap().2)
+                    {
+                        best = Some((rr, f, dc.abs()));
+                    }
+                }
+            }
+            prev = Some((r, e));
+        }
+    }
+    best.map(|(r, f, _)| (r, f, pt(r)))
+}
+
+/// 内齿轮一个齿槽单侧的齿廓 + 齿根圆角（`sign=+1` 为逆时针那侧）。
+fn make_flank_internal(p: &GearParams, s: f64, sign: f64) -> Result<FlankInt, String> {
+    let rho = p.rho();
+    let rf = p.df() / 2.0;
+    let ra = p.da() / 2.0;
+    let r_min = p.internal_flank_r_min();
+    let solved = solve_internal_fillet(p, s, sign);
+    let no_fillet = solved.is_none();
+    let (r_t, fillet_c, end) = match solved {
+        Some(t) => t,
+        None => {
+            // 退化：圆角 = 0 —— 齿廓画到齿根圆之前的某半径，再用径向直线落到齿根圆
+            let r_lim = (r_min + 0.5 * (rf - r_min)).min(rf - 1e-6);
+            let q = involute_point(p, r_lim, s, sign);
+            (r_lim, q, q)
+        }
+    };
+    // 5 个拟合点：从有效起点（齿顶圆，或降级时的基圆略上方）到圆角切点，半径等分
+    let mut fit = [[0.0f64; 2]; 5];
+    for (i, f) in [0.0, 0.25, 0.5, 0.75, 1.0].iter().enumerate() {
+        let radius = r_min + (r_t - r_min) * f;
+        fit[i] = involute_point(p, radius, s, sign);
+    }
+    let (knots, ctrl) = fit_cubic_bspline_knots(&fit)?;
+    let tip = fit[0];
+    let end = if no_fillet { fit[4] } else { end };
+    // 圆角与齿根圆的切点：圆心沿径向拉到 rf
+    let fc_len = (fillet_c[0] * fillet_c[0] + fillet_c[1] * fillet_c[1]).sqrt().max(1e-12);
+    let root_pt = [fillet_c[0] * rf / fc_len, fillet_c[1] * rf / fc_len];
+    let ang = |q: [f64; 2]| {
+        let v = (q[0] - fillet_c[0], q[1] - fillet_c[1]);
+        v.1.atan2(v.0).to_degrees()
+    };
+    // 圆角弧 CCW 方向（模板口径）：−1 侧 切点→齿根切点；+1 侧 齿根切点→切点
+    let (mut a0, mut a1) = if sign > 0.0 {
+        (ang(root_pt), ang(end))
+    } else {
+        (ang(end), ang(root_pt))
+    };
+    if (a1 - a0).rem_euclid(360.0) > 180.0 {
+        std::mem::swap(&mut a0, &mut a1);
+    }
+    // 齿顶圆低于基圆：齿廓到不了齿顶圆，用径向直线补一段（简化画法）
+    let radial_tip = if r_min > ra + 1e-12 {
+        let th = tip[1].atan2(tip[0]);
+        Some(([ra * th.cos(), ra * th.sin()], tip))
+    } else {
+        None
+    };
+    // 圆角退化：齿廓末端径向落到齿根圆
+    let radial_root = if no_fillet {
+        let th = end[1].atan2(end[0]);
+        Some((end, [rf * th.cos(), rf * th.sin()]))
+    } else {
+        None
+    };
+    Ok(FlankInt {
+        knots,
+        ctrl,
+        tip,
+        end,
+        fillet_c,
+        root_pt,
+        fillet_a0: a0,
+        fillet_a1: a1,
+        radial_tip,
+        radial_root,
+        no_fillet,
+    })
+}
+
+/// 内齿轮齿廓的实体（B 样条）。
+fn spline_of_int(f: &FlankInt) -> EntityType {
+    spline_entity(&f.knots, &f.ctrl)
+}
+
+/// 内齿轮的齿根那一段实体：径向直线（如有）+ 圆角弧（如有）。
+fn push_root_int(out: &mut Vec<EntityType>, p: &GearParams, f: &FlankInt) {
+    if let Some((a, b)) = f.radial_root {
+        out.push(line(a, b, LAYER_MAIN));
+    }
+    if !f.no_fillet {
+        out.push(arc_deg(f.fillet_c, p.rho(), f.fillet_a0, f.fillet_a1, LAYER_MAIN));
+    }
+}
+
+/// 内齿轮端视图（常规正视图）：**齿槽**按外齿轮齿形画，齿朝圆心。
+///
+/// 相位：齿槽中心在半个齿距处（模板：齿中心 0°、齿槽 4.5°），与外齿轮模板的相位约定同构。
+/// **不画分度圆**——内齿轮模板里没有（外齿轮模板有；模板是唯一权威）。
+fn front_internal(p: &GearParams, n: f64) -> Result<Vec<EntityType>, String> {
+    let ra = p.da() / 2.0;
+    let rf = p.df() / 2.0;
+    let pitch = p.pitch_angle();
+    let psi_tip = p.internal_tip_half_angle().to_degrees();
+    let mut out = Vec::with_capacity(p.z as usize * 8 + 4);
+    let s_first = pitch / 2.0;
+    for t in 0..p.z as usize {
+        let s = s_first + pitch * t as f64;
+        let s_deg = s.to_degrees();
+        let fl = make_flank_internal(p, s, 1.0)?; // 齿槽 +1 侧
+        let fr = make_flank_internal(p, s, -1.0)?; // 齿槽 −1 侧
+        let pitch_deg = pitch.to_degrees();
+        let tooth_c = s_deg + pitch_deg / 2.0;
+        // CCW 链：−1 侧齿廓（齿顶→圆角）→ 圆角 → 齿根弧半条
+        if let Some((a, b)) = fr.radial_tip {
+            out.push(line(a, b, LAYER_MAIN));
+        }
+        out.push(spline_of_int(&fr));
+        push_root_int(&mut out, p, &fr);
+        // 齿根弧两半：两端是两侧圆角的齿根切点。**按相对齿槽中心的偏移排序**取，不能按
+        // "−侧在前"写死 —— 圆心跨过齿槽中心线时（m=10 常见）两边会互换，写死会让根弧
+        // 反向扫掉一整圈（链条自检当场抓到 34.6mm 的"断链"）。
+        let (d_lo, d_hi) = {
+            let (a, b) = (ang_delta_deg(fr.root_pt, s_deg), ang_delta_deg(fl.root_pt, s_deg));
+            if a <= b {
+                (a, b)
+            } else {
+                (b, a)
+            }
+        };
+        out.push(arc_deg(
+            [0.0, 0.0],
+            rf,
+            near(s_deg + d_lo, s_deg - 1.0),
+            near(s_deg, s_deg - 1.0),
+            LAYER_MAIN,
+        ));
+        // 齿根弧另半条 → +1 侧圆角 → 齿廓（圆角→齿顶）
+        out.push(arc_deg(
+            [0.0, 0.0],
+            rf,
+            near(s_deg, s_deg + 1.0),
+            near(s_deg + d_hi, s_deg + 1.0),
+            LAYER_MAIN,
+        ));
+        push_root_int(&mut out, p, &fl);
+        out.push(spline_of_int(&fl));
+        if let Some((a, b)) = fl.radial_tip {
+            out.push(line(a, b, LAYER_MAIN));
+        }
+        // 齿顶弧：以齿中心线为界各半条（模板同构）
+        // 端点 = 齿中心 ± 齿顶半角 ψtip = pitch/2 − ψ槽 —— 注意不是 s ± ψtip！
+        // （走过坑：写成 s + ψtip 时齿顶弧起点错到齿的另一侧，链条在齿顶处拉出 1mm 直线）
+        out.push(arc_deg(
+            [0.0, 0.0],
+            ra,
+            near(tooth_c - psi_tip, tooth_c - 1.0),
+            near(tooth_c, tooth_c - 1.0),
+            LAYER_MAIN,
+        ));
+        out.push(arc_deg(
+            [0.0, 0.0],
+            ra,
+            near(tooth_c, tooth_c + 1.0),
+            near(tooth_c + psi_tip, tooth_c + 1.0),
+            LAYER_MAIN,
+        ));
+    }
+    // 十字中心线：模板实测长 91 = 齿根圆直径 85 + 1×6
+    out.extend(cross_centerlines([0.0, 0.0], p.df(), n));
+    Ok(out)
+}
+
+/// 内齿轮剖视图（模板结构，逐条对齐）。
+///
+/// 每半侧 10 条：端面（0→ra+C）+ 外侧端面（ra+C→rf）×2 端 + 齿顶线 + 齿根线 + 内孔壁 ×2 + 孔口 45° 倒角 ×2；
+/// 加 分度线 ×2（点划线，长 = h + 3n）+ 轴线 ×1（= h + 4n）。
+/// 共 23 条 —— 与用户「内齿轮使用示例.dxf」里那个块**完全一致**（20 粗实线 + 3 中心线）。
+/// **不打剖面线**（用户 2026-09-17 明确：齿圈外壁结构由用户/AI 在生产环境里延伸后再打）。
+fn section_internal(p: &GearParams, n: f64) -> Result<Vec<EntityType>, String> {
+    let ra = p.da() / 2.0;
+    let rf = p.df() / 2.0;
+    let hh = p.h / 2.0;
+    let c = p.chamfer();
+    let hc = hh - c;
+    let mut out = Vec::with_capacity(23);
+    for s in [1.0f64, -1.0] {
+        // 端面：0 → ra+C 与 ra+C → rf（模板把它画成两段）
+        out.push(line([-hh, 0.0], [-hh, s * (ra + c)], LAYER_MAIN));
+        out.push(line([-hh, s * (ra + c)], [-hh, s * rf], LAYER_MAIN));
+        out.push(line([hh, 0.0], [hh, s * (ra + c)], LAYER_MAIN));
+        out.push(line([hh, s * (ra + c)], [hh, s * rf], LAYER_MAIN));
+        // 齿顶线（内孔）与齿根线（外圆）
+        out.push(line([-hc, s * ra], [hc, s * ra], LAYER_MAIN));
+        out.push(line([-hh, s * rf], [hh, s * rf], LAYER_MAIN));
+        // 内孔壁
+        out.push(line([-hc, 0.0], [-hc, s * ra], LAYER_MAIN));
+        out.push(line([hc, 0.0], [hc, s * ra], LAYER_MAIN));
+        // 孔口 45° 倒角（C = round(0.6m)，与模板的 1×1 一致）
+        out.push(line([-hc, s * ra], [-hh, s * (ra + c)], LAYER_MAIN));
+        out.push(line([hc, s * ra], [hh, s * (ra + c)], LAYER_MAIN));
+    }
+    // 分度线（点划线）+ 轴线（中心线）—— 长度按模板的 +3n / +4n
+    let d2 = p.d() / 2.0;
+    let c3 = (p.h + 3.0 * n) / 2.0;
+    let c4 = (p.h + 4.0 * n) / 2.0;
+    out.push(line([-c3, d2], [c3, d2], LAYER_CENTER));
+    out.push(line([-c3, -d2], [c3, -d2], LAYER_CENTER));
+    out.push(line([-c4, 0.0], [c4, 0.0], LAYER_CENTER));
+    Ok(out)
+}
+
+/// 内齿轮端视图的闭合链采样（质量估算 / 连续性自检用）。
+///
+/// **必须与 `front_internal` 的实体顺序逐条对齐**（走过一次坑：自己另写一套弧方向，
+/// 结果根弧多扫一整圈、链条在齿顶到齿根之间拉出 5mm 直线，测试当场抓到）。
+fn internal_chain_points(p: &GearParams, seg: usize) -> Result<Vec<[f64; 2]>, String> {
+    let ra = p.da() / 2.0;
+    let rf = p.df() / 2.0;
+    let rho = p.rho();
+    let pitch = p.pitch_angle();
+    let psi_tip = p.internal_tip_half_angle().to_degrees();
+    let mut out: Vec<[f64; 2]> = Vec::new();
+    let arc_of = |c: [f64; 2], r: f64, a0: f64, a1: f64, out: &mut Vec<[f64; 2]>| {
+        let sweep = (a1 - a0).rem_euclid(360.0);
+        for k in 0..=seg {
+            let a = (a0 + sweep * k as f64 / seg as f64).to_radians();
+            out.push([c[0] + r * a.cos(), c[1] + r * a.sin()]);
+        }
+    };
+    let spline_pts = |f: &FlankInt, reverse: bool, out: &mut Vec<[f64; 2]>| {
+        let (t0, t1) = (f.knots[3], f.knots[7]);
+        let mut v = Vec::with_capacity(3 * seg + 1);
+        for k in 0..=3 * seg {
+            let u = t0 + (t1 - t0) * k as f64 / (3 * seg) as f64;
+            let mut q = [0.0f64; 2];
+            for (j, d) in f.ctrl.iter().enumerate() {
+                let w = basis(j, 3, u, &f.knots);
+                q[0] += w * d[0];
+                q[1] += w * d[1];
+            }
+            v.push(q);
+        }
+        if reverse {
+            v.reverse();
+        }
+        out.extend(v);
+    };
+    let s_first = pitch / 2.0;
+    for t in 0..p.z as usize {
+        let s = s_first + pitch * t as f64;
+        let s_deg = s.to_degrees();
+        let tooth_c = s_deg + pitch.to_degrees() / 2.0;
+        let fl = make_flank_internal(p, s, 1.0)?;
+        let fr = make_flank_internal(p, s, -1.0)?;
+        // 径向直线也要按 seg 插值（否则 3mm 的直线段会被连续性自检当成"断链"）
+        let seg_line = |a: [f64; 2], b: [f64; 2], out: &mut Vec<[f64; 2]>| {
+            for k in 0..=seg {
+                let t = k as f64 / seg as f64;
+                out.push([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]);
+            }
+        };
+        // −1 侧：径向直线（降级）→ 齿廓 → 圆角/径向落地 → 齿根弧两半
+        if let Some((a, b)) = fr.radial_tip {
+            seg_line(a, b, &mut out);
+        }
+        spline_pts(&fr, false, &mut out);
+        if !fr.no_fillet {
+            arc_of(fr.fillet_c, rho, fr.fillet_a0, fr.fillet_a1, &mut out);
+        }
+        if let Some((a, b)) = fr.radial_root {
+            seg_line(a, b, &mut out);
+        }
+        let (d_lo, d_hi) = {
+            let (a, b) = (ang_delta_deg(fr.root_pt, s_deg), ang_delta_deg(fl.root_pt, s_deg));
+            if a <= b {
+                (a, b)
+            } else {
+                (b, a)
+            }
+        };
+        arc_of(
+            [0.0, 0.0],
+            rf,
+            near(s_deg + d_lo, s_deg - 1.0),
+            near(s_deg, s_deg - 1.0),
+            &mut out,
+        );
+        arc_of(
+            [0.0, 0.0],
+            rf,
+            near(s_deg, s_deg + 1.0),
+            near(s_deg + d_hi, s_deg + 1.0),
+            &mut out,
+        );
+        // +1 侧：圆角 → 齿廓 → 径向直线（降级）
+        if let Some((a, b)) = fl.radial_root {
+            // +1 侧：链从齿根圆走向齿廓末端（入口在齿根圆上）
+            seg_line(b, a, &mut out);
+        }
+        if !fl.no_fillet {
+            arc_of(fl.fillet_c, rho, fl.fillet_a0, fl.fillet_a1, &mut out);
+        }
+        spline_pts(&fl, true, &mut out);
+        if let Some((a, b)) = fl.radial_tip {
+            seg_line(b, a, &mut out);
+        }
+        // 齿顶弧两半（端点 = 齿中心 ± ψtip，与 front_internal 一致）
+        arc_of(
+            [0.0, 0.0],
+            ra,
+            near(tooth_c - psi_tip, tooth_c - 1.0),
+            near(tooth_c, tooth_c - 1.0),
+            &mut out,
+        );
+        arc_of(
+            [0.0, 0.0],
+            ra,
+            near(tooth_c, tooth_c + 1.0),
+            near(tooth_c + psi_tip, tooth_c + 1.0),
+            &mut out,
+        );
+    }
+    Ok(out)
+}
+
+/// 内齿轮质量估算（kg）：齿圈材料 = π·rf² − 齿廓围成的面积（齿廓围的是空腔），× 宽度 × 钢 7.85e-6。
+///
+/// 注意：这是**齿高那一段齿圈**的质量（剖视图画到齿根圆为止的那部分），
+/// 真实齿圈还要加轮缘/腹板 —— 与模板"外壁留给用户"的口径一致。
+fn internal_weight_kg(p: &GearParams) -> String {
+    let rf = p.df() / 2.0;
+    let pts = match internal_chain_points(p, 8) {
+        Ok(v) => v,
+        Err(_) => return String::new(),
+    };
+    let n = pts.len();
+    let mut area = 0.0;
+    for i in 0..n {
+        let a = pts[i];
+        let b = pts[(i + 1) % n];
+        area += a[0] * b[1] - b[0] * a[1];
+    }
+    let void = (area / 2.0).abs();
+    let ring = (std::f64::consts::PI * rf * rf - void).max(0.0);
+    format!("{:.3}", ring * p.h * 7.85e-6)
+}
+
 // ─────────────────────────── 对外接口 ───────────────────────────
 
 /// OCSM 初始化检查（**插入前拦一下**，用户 2026-09-17 要求）。
@@ -1002,21 +1653,42 @@ pub fn ocsm_ready(doc: &ocs_plugin_api::host::acadrust::CadDocument) -> Result<(
 /// 不影响齿轮本身尺寸（齿轮始终按真实尺寸画，图框负责比例）。
 pub fn generate(p: &GearParams, view: GearView, n: f64) -> Result<GenPart, String> {
     p.validate()?;
-    let entities = match view {
-        GearView::Section => section_view(p, n)?,
-        GearView::Side => side_view(p, n)?,
-        GearView::Simplified => front_simplified(p, n)?,
-        GearView::Front => front_regular(p, n)?,
+    if !view.available_for(p.kind) {
+        return Err(format!(
+            "{}不提供「{}」视图 —— 用户给的模板（内齿轮.dxf）里只有**剖视图**和**端视图**两个视图；\n\
+             模板没有的画法不猜（避免出一张看起来对、实际没依据的图）。要用请先给对应模板。",
+            p.kind.label(),
+            view.label()
+        ));
+    }
+    let entities = match (p.kind, view) {
+        (GearKind::External, GearView::Section) => section_view(p, n)?,
+        (GearKind::External, GearView::Side) => side_view(p, n)?,
+        (GearKind::External, GearView::Simplified) => front_simplified(p, n)?,
+        (GearKind::External, GearView::Front) => front_regular(p, n)?,
+        (GearKind::Internal, GearView::Section) => section_internal(p, n)?,
+        (GearKind::Internal, GearView::Front) => front_internal(p, n)?,
+        (_, v) => {
+            return Err(format!(
+                "{}不提供「{}」视图（见上文）。",
+                p.kind.label(),
+                v.label()
+            ))
+        }
     };
     let bbox = bbox_of(&entities);
     Ok(GenPart {
         entities,
         meta: PartMeta {
             code: p.spec(),
-            name: format!("外齿轮（{}）", view.label()),
+            name: format!("{}（{}）", p.kind.label(), view.label_for(p.kind)),
             spec: p.spec(),
             material: String::new(),
-            weight: solid_weight_kg(p),
+            weight: if p.kind.is_internal() {
+                internal_weight_kg(p)
+            } else {
+                solid_weight_kg(p)
+            },
         },
         bbox,
     })
@@ -1131,7 +1803,11 @@ fn bbox_of(entities: &[EntityType]) -> [f64; 4] {
 /// 块名：`OCSM_GEAR_M2_Z40_H20_FRONT`（与标准件 `OCSM_<族>_<规格>_<视图>` 同风格）。
 /// 斜齿轮加 `_B<|β|>R|L`（右/左旋），变位加 `_X<Xn>`（负值用 `N` 前缀）。
 pub fn block_name(p: &GearParams, view: GearView) -> String {
-    let mut s = format!("OCSM_GEAR_M{}_Z{}", trim(p.m).replace('.', "_"), p.z);
+    let mut s = String::from("OCSM_GEAR");
+    if p.kind.is_internal() {
+        s.push_str("_INT"); // 内齿轮标记；外齿轮块名保持一期原样不变
+    }
+    s.push_str(&format!("_M{}_Z{}", trim(p.m).replace('.', "_"), p.z));
     if p.is_helical() {
         s.push_str(&format!(
             "_B{}{}",
@@ -1164,8 +1840,10 @@ pub struct GearRequest {
 
 /// 命令行/HTTP 参数解析（人侧 GUI 与 AI 侧共用同一套键名）。
 pub fn parse_request(raw: &str) -> Result<GearRequest, String> {
-    let usage = "用法：OCSMGEAR <模数m> <齿数z> [h=厚度] [ha=齿顶高系数] [c=顶隙系数] [beta=螺旋角(右旋为正)] [x=变位系数] \
-                 [view 剖视图|侧视图|简化正视图|常规正视图] [at x,y] [rot 度]。不带参数则打开齿轮窗口。";
+    let usage = "用法：OCSMGEAR [内齿轮|int] <模数m> <齿数z> [h=齿宽] [ha=齿顶高系数] [c=顶隙系数] [beta=螺旋角(右旋为正)] [x=变位系数] \
+                 [view 剖视图|侧视图|简化正视图|常规正视图|端视图] [at x,y] [rot 度]。\n\
+                 不带参数则打开齿轮窗口。内齿轮（齿圈）目前只有 剖视图 + 端视图（模板只有这两个）；\
+                 剖视图不画齿圈外壁与剖面线，由用户/AI 按实际齿圈结构延伸。";
     let toks: Vec<&str> = raw.split_whitespace().collect();
     if toks.is_empty() {
         return Err(usage.into());
@@ -1197,6 +1875,18 @@ pub fn parse_request(raw: &str) -> Result<GearRequest, String> {
             "z" | "齿数" => {
                 let v = num("z", val)?;
                 p.z = v.round() as u32;
+            }
+            "kind" | "type" | "种类" | "类型" => {
+                let v = match val {
+                    Some(v) => v.to_string(),
+                    None => {
+                        i += 1;
+                        toks.get(i).map(|s| s.to_string()).unwrap_or_default()
+                    }
+                };
+                p.kind = GearKind::parse(&v).ok_or_else(|| {
+                    format!("种类无法识别：`{}`。可用 internal|内齿轮、external|外齿轮。", v)
+                })?;
             }
             "h" | "厚度" => {
                 p.h = num("h", val)?;
@@ -1249,9 +1939,14 @@ pub fn parse_request(raw: &str) -> Result<GearRequest, String> {
             }
             "rot" | "角度" => rotation = num("rot", val)?,
             other => {
-                // 位置参数：第 1 个 m、第 2 个 z、第 3 个 h；也可以是中文视图名
+                // 位置参数：第 1 个 m、第 2 个 z、第 3 个 h；也可以是中文视图名/种类名
                 if let Ok(vw) = GearView::parse(other) {
                     view = Some(vw);
+                    i += 1;
+                    continue;
+                }
+                if let Some(k) = GearKind::parse(other) {
+                    p.kind = k;
                     i += 1;
                     continue;
                 }
@@ -1276,8 +1971,12 @@ pub fn parse_request(raw: &str) -> Result<GearRequest, String> {
         return Err(format!("至少要给模数 m 和齿数 z（例如 `OCSMGEAR 2 40 20`）。\n{}", usage));
     }
     if !h_given {
-        // 模板里 h=20 是用户给的；没给就按齿宽系数取 10m（够用且好认），并提示
-        p.h = (10.0 * p.m).max(1.0);
+        // 模板里 h 是用户给的：外齿轮模板 h=20（m=2，即 10m）、内齿轮模板 h=30（m=2，即 15m）
+        p.h = if p.kind.is_internal() {
+            (15.0 * p.m).max(1.0)
+        } else {
+            (10.0 * p.m).max(1.0)
+        };
     }
     if view.is_none() {
         // 中文位置参数形式：`OCSMGEAR 2 40 20 剖视图`
@@ -1315,13 +2014,20 @@ pub fn params_from_query(query: &str) -> Result<(GearParams, GearView, f64), Str
             .map(|(_, v)| v.to_string())
     };
     let f = |k: &str, d: f64| get(k).and_then(|v| v.parse::<f64>().ok()).unwrap_or(d);
+    let kind = match get("kind") {
+        Some(v) => GearKind::parse(&v)
+            .ok_or_else(|| format!("kind 无法识别：`{}`（可用 internal|内齿轮、external|外齿轮）。", v))?,
+        None => GearKind::External,
+    };
+    let m = f("m", 2.0);
     let p = GearParams {
-        m: f("m", 2.0),
+        kind,
+        m,
         z: f("z", 40.0).round() as u32,
         ha: f("ha", 1.0),
         c: f("c", 0.25),
         beta_deg: f("beta", 0.0),
-        h: f("h", 20.0),
+        h: f("h", if kind.is_internal() { 15.0 * m } else { 20.0 }),
         x: f("x", 0.0),
     };
     let view = GearView::parse(&get("view").unwrap_or_else(|| "section".into()))?;
@@ -1335,7 +2041,10 @@ pub fn info_json(query: &str) -> Result<String, String> {
     Ok(serde_json::json!({
         "ok": err.is_none(),
         "error": err,
+        "kind": p.kind.key(),
+        "kind_label": p.kind.label(),
         "view": view.key(),
+        "view_label": view.label_for(p.kind),
         "d": round4(p.d()),
         "da": round4(p.da()),
         "df": round4(p.df()),
@@ -1343,6 +2052,8 @@ pub fn info_json(query: &str) -> Result<String, String> {
         "mt": round4(p.mt()),
         "alpha_t": round4(p.alpha_t().to_degrees()),
         "rho": round4(p.rho()),
+        "fillet_center_r": round4(p.fillet_center_radius()),
+        "internal_tip_below_base": p.internal_tip_falls_below_base(),
         "chamfer": p.chamfer(),
         "pitch_angle": round4(p.pitch_angle().to_degrees()),
         "half_tooth_angle_tip": round4(p.half_tooth_angle(p.da() / 2.0).to_degrees()),
@@ -1521,7 +2232,16 @@ mod tests {
 
     /// 用户模板（齿轮画法.dxf）的实测数字 —— 这是本文件所有断言的依据。
     fn tmpl() -> GearParams {
-        GearParams { m: 2.0, z: 40, ha: 1.0, c: 0.25, beta_deg: 0.0, h: 20.0, x: 0.0 }
+        GearParams {
+            kind: GearKind::External,
+            m: 2.0,
+            z: 40,
+            ha: 1.0,
+            c: 0.25,
+            beta_deg: 0.0,
+            h: 20.0,
+            x: 0.0,
+        }
     }
 
     #[test]
@@ -1869,6 +2589,9 @@ mod tests {
     /// 把四个视图导出成 CSV（世界坐标），供人工/脚本与用户模板 `齿轮画法.dxf` 叠加比对。
     ///
     /// 跑法：`cargo test -p ocs_ocsm --lib gear::tests::dump_views_csv -- --ignored --nocapture`
+    ///
+    /// 输出目录用**持久目录** `~/桌面/OCSM/review/`（以前写 /tmp —— 重启就没了，
+    /// 2026-09-17 被清过一次，所有核对产物全丢）。
     /// 输出：`/tmp/gear_review/<view>.csv`（每行 `TYPE,layer,...`；样条已按真实曲线采样）。
     #[test]
     #[ignore]
@@ -1907,8 +2630,13 @@ mod tests {
                     _ => {}
                 }
             }
-            std::fs::write(format!("/tmp/gear_review/{tag}.csv"), out).unwrap();
-            println!("已导出 /tmp/gear_review/{tag}.csv（{} 实体）", part.entities.len());
+            let review_dir = std::path::PathBuf::from(format!(
+                "{}/桌面/OCSM/review",
+                std::env::var("HOME").unwrap_or_else(|_| "/tmp".into())
+            ));
+            std::fs::create_dir_all(&review_dir).unwrap();
+            std::fs::write(review_dir.join(format!("{tag}.csv")), out).unwrap();
+            println!("已导出 {}/{tag}.csv（{} 实体）", review_dir.display(), part.entities.len());
         }
         let p = tmpl();
         // 关键数字对账（与模板实测值同列）
@@ -1921,8 +2649,11 @@ mod tests {
             fr_start_radius(&p)
         );
         println!("（模板：ψ(ra)=1.0371°  r_start=38.1327  ψ(r_start)=3.0019°）");
-        let dir = std::path::Path::new("/tmp/gear_review");
-        std::fs::create_dir_all(dir).unwrap();
+        let dir = std::path::PathBuf::from(format!(
+            "{}/桌面/OCSM/review",
+            std::env::var("HOME").unwrap_or_else(|_| "/tmp".into())
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
         for view in GearView::ALL {
             let part = generate(&p, view, 1.0).unwrap();
             let mut out = String::new();
@@ -1982,6 +2713,54 @@ mod tests {
             let path = dir.join(format!("{}.csv", view.key()));
             std::fs::write(&path, out).unwrap();
             println!("已导出 {}（{} 实体）", path.display(), part.entities.len());
+        }
+        // 内齿轮：模板件（m2 z40 h30）+ 齿顶圆低于基圆的常用小齿数（z=24 / z=17）
+        for (tag, m, z, h) in [("int_m2_z40", 2.0, 40u32, 30.0), ("int_m10_z24", 10.0, 24, 60.0), ("int_m10_z17", 10.0, 17, 60.0)] {
+            let p = GearParams { kind: GearKind::Internal, m, z, h, ..GearParams::default() };
+            for view in [GearView::Front, GearView::Section] {
+                let part = generate(&p, view, 1.0).unwrap();
+                let mut out = String::new();
+                for e in &part.entities {
+                    match e {
+                        EntityType::Line(l) => out.push_str(&format!(
+                            "LINE,{},{:.6},{:.6},{:.6},{:.6}\n",
+                            l.common.layer, l.start.x, l.start.y, l.end.x, l.end.y
+                        )),
+                        EntityType::Arc(a) => out.push_str(&format!(
+                            "ARC,{},{:.6},{:.6},{:.6},{:.4},{:.4}\n",
+                            a.common.layer, a.center.x, a.center.y, a.radius,
+                            a.start_angle.to_degrees(), a.end_angle.to_degrees()
+                        )),
+                        EntityType::Spline(sp) => {
+                            let (t0, t1) = (sp.knots[3], sp.knots[sp.knots.len() - 4]);
+                            out.push_str(&format!("POLY,{},", sp.common.layer));
+                            for i in 0..=40 {
+                                let u = t0 + (t1 - t0) * i as f64 / 40.0;
+                                let mut q = [0.0f64; 2];
+                                for (j, d) in sp.control_points.iter().enumerate() {
+                                    let w = basis(j, 3, u, &sp.knots);
+                                    q[0] += w * d.x;
+                                    q[1] += w * d.y;
+                                }
+                                out.push_str(&format!("({:.6},{:.6})", q[0], q[1]));
+                            }
+                            out.push('\n');
+                        }
+                        _ => {}
+                    }
+                }
+                let path = dir.join(format!("{tag}_{}.csv", view.key()));
+                std::fs::write(&path, out).unwrap();
+                println!(
+                    "已导出 {}（{} 实体，提示 {} 条）",
+                    path.display(),
+                    part.entities.len(),
+                    p.notes().len()
+                );
+                for nt in p.notes() {
+                    println!("    提示：{nt}");
+                }
+            }
         }
     }
 
@@ -2109,5 +2888,198 @@ mod tests {
             EntityType::Hatch(h) => &h.common.layer,
             _ => "",
         }
+    }
+
+    // ─────────────────────────── 内齿轮（二期）───────────────────────────
+
+    /// 用户内齿轮模板件：`~/桌面/OCSM/齿轮/内齿轮.dxf` = m2 z40 h30（da=76 df=85 ρ=0.76）。
+    fn int_tmpl() -> GearParams {
+        GearParams { kind: GearKind::Internal, m: 2.0, z: 40, h: 30.0, ..GearParams::default() }
+    }
+
+    #[test]
+    fn internal_tmpl_diameters_match() {
+        let p = int_tmpl();
+        assert!((p.da() - 76.0).abs() < 1e-9, "da={}（模板 76）", p.da());
+        assert!((p.df() - 85.0).abs() < 1e-9, "df={}（模板 85）", p.df());
+        assert!((p.rho() - 0.76).abs() < 1e-9, "ρ=0.38m={}", p.rho());
+        assert!(
+            (p.fillet_center_radius() - 41.74).abs() < 1e-9,
+            "圆角圆心半径 {:.4}（模板实测 41.74 = rf − ρ）",
+            p.fillet_center_radius()
+        );
+        assert!(!p.internal_tip_falls_below_base(), "z=40：da=76 > db=75.18");
+    }
+
+    #[test]
+    fn internal_space_half_angle_matches_template() {
+        // 模板实测：R=42.076 处齿槽半角 0.9869°；齿顶弧半角 1.4578°（理论 1.462°）
+        let p = int_tmpl();
+        let psi = p.space_half_angle(42.076).to_degrees();
+        assert!((psi - 0.987).abs() < 0.002, "ψ(42.076)={psi}");
+        let tip = p.internal_tip_half_angle().to_degrees();
+        assert!((tip - 1.462).abs() < 0.01, "齿顶半角={tip}（模板 1.4578）");
+    }
+
+    #[test]
+    fn internal_fillet_solves_to_template_values() {
+        // 模板实测：切点 R=42.076、圆心半径 41.74、圆心角 4.445°（齿槽中心 4.5°，偏 0.055°）
+        let p = int_tmpl();
+        let s = p.pitch_angle() / 2.0;
+        let (r_t, f, tang) = solve_internal_fillet(&p, s, -1.0).expect("模板参数下圆角应有解");
+        assert!((r_t - 42.076).abs() < 0.003, "切点半径 {r_t}（模板 42.076）");
+        let fl = (f[0] * f[0] + f[1] * f[1]).sqrt();
+        assert!((fl - 41.74).abs() < 1e-6, "圆心半径 {fl}");
+        let a = f[1].atan2(f[0]).to_degrees().rem_euclid(360.0);
+        assert!((a - 4.445).abs() < 0.01, "圆心角 {a}（模板 4.445）");
+        let d = (tang[0] * tang[0] + tang[1] * tang[1]).sqrt();
+        assert!((d - r_t).abs() < 1e-9, "切点应在齿廓上");
+        let (_, f2, _) = solve_internal_fillet(&p, s, 1.0).unwrap();
+        let a2 = f2[1].atan2(f2[0]).to_degrees().rem_euclid(360.0);
+        assert!((a2 - 4.555).abs() < 0.01, "+1 侧圆心角 {a2}（模板 4.555）");
+        let sd = s.to_degrees();
+        assert!(((a - sd) + (a2 - sd)).abs() < 0.02, "两侧应对称");
+    }
+
+    #[test]
+    fn internal_front_entity_count_and_chain_continuity() {
+        let p = int_tmpl();
+        let part = generate(&p, GearView::Front, 1.0).unwrap();
+        let n_geo = part.entities.iter().filter(|e| !matches!(e, EntityType::Line(_))).count();
+        assert_eq!(n_geo, p.z as usize * 8, "每齿 8 图元（2 样条 + 2 圆角弧 + 2 齿根弧 + 2 齿顶弧）");
+        let pts = internal_chain_points(&p, 6).unwrap();
+        let ra = p.da() / 2.0;
+        let rf = p.df() / 2.0;
+        for w in pts.windows(2) {
+            let d = ((w[1][0] - w[0][0]).powi(2) + (w[1][1] - w[0][1]).powi(2)).sqrt();
+            assert!(d < 0.8, "链断了：{:.3}mm @ {:?}→{:?}", d, w[0], w[1]);
+        }
+        for q in &pts {
+            let r = (q[0] * q[0] + q[1] * q[1]).sqrt();
+            assert!(r > ra - 1e-6 && r < rf + 1e-6, "半径越界 {r}（应在 {ra}..{rf}）");
+        }
+    }
+
+    #[test]
+    fn internal_small_z_tip_below_base_degrades_with_warning() {
+        // z ≤ 33 的内齿轮齿顶圆低于基圆（渐开线下不去）→ 简化画法：径向直线 + 提示
+        for z in [33u32, 24, 17] {
+            let p = GearParams { kind: GearKind::Internal, m: 10.0, z, h: 60.0, ..GearParams::default() };
+            assert!(p.internal_tip_falls_below_base(), "z={z} 应低于基圆");
+            let part = generate(&p, GearView::Front, 1.0).unwrap();
+            let n_line = part.entities.iter().filter(|e| matches!(e, EntityType::Line(_))).count();
+            assert!(n_line >= p.z as usize * 2 + 2, "z={z} 应每齿多 2 条径向直线，实得 {n_line}");
+            assert!(
+                p.notes().iter().any(|s| s.contains("低于基圆")),
+                "z={z} 必须给提示（不能默默出图）"
+            );
+            // 采样要够密：模数 10 时齿廓有 ~18mm，seg=6 只有 18 个采样点（step 1.5mm），
+            // 会被下面的 0.9mm 阈值误判成"断链" —— 那是采样问题，不是几何问题。
+            let pts = internal_chain_points(&p, 24).unwrap();
+            let ra = p.da() / 2.0;
+            let rf = p.df() / 2.0;
+            for (wi, w) in pts.windows(2).enumerate() {
+                let d = ((w[1][0] - w[0][0]).powi(2) + (w[1][1] - w[0][1]).powi(2)).sqrt();
+                let r0 = (w[0][0] * w[0][0] + w[0][1] * w[0][1]).sqrt();
+                let r1 = (w[1][0] * w[1][0] + w[1][1] * w[1][1]).sqrt();
+                let a0 = w[0][1].atan2(w[0][0]).to_degrees();
+                let a1 = w[1][1].atan2(w[1][0]).to_degrees();
+                assert!(d < 0.9, "z={z} 链断了 @idx {wi}/{}：{d:.3}mm  r {r0:.3}→{r1:.3}  θ {a0:.3}→{a1:.3}", pts.len());
+            }
+            for q in &pts {
+                let r = (q[0] * q[0] + q[1] * q[1]).sqrt();
+                assert!(r > ra - 1e-6 && r < rf + 1e-6, "z={z} 半径越界 {r}");
+            }
+        }
+    }
+
+    #[test]
+    fn internal_section_is_template_block_no_hatch() {
+        // 用户「内齿轮使用示例.dxf」里的块 = 23 条线（20 轮廓 + 3 中心线），无剖面线
+        let p = int_tmpl();
+        let part = generate(&p, GearView::Section, 1.0).unwrap();
+        assert_eq!(part.entities.len(), 23);
+        assert!(part.entities.iter().all(|e| matches!(e, EntityType::Line(_))), "不能有 HATCH/圆弧");
+        assert_eq!(
+            part.entities
+                .iter()
+                .filter(|e| matches!(e, EntityType::Line(l) if l.common.layer == LAYER_CENTER))
+                .count(),
+            3,
+            "分度线 ×2 + 轴线 ×1"
+        );
+        let rf = p.df() / 2.0;
+        let roots: Vec<f64> = part
+            .entities
+            .iter()
+            .filter_map(|e| match e {
+                EntityType::Line(l) if (l.start.y.abs() - rf).abs() < 1e-9 => Some((l.end.x - l.start.x).abs()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(roots.len(), 2, "上下齿根线各一条");
+        for len in roots {
+            assert!((len - p.h).abs() < 1e-9, "齿根线长 {len} ≠ h={}", p.h);
+        }
+        let ra = p.da() / 2.0;
+        let tips: Vec<f64> = part
+            .entities
+            .iter()
+            .filter_map(|e| match e {
+                EntityType::Line(l)
+                    if (l.start.y.abs() - ra).abs() < 1e-9
+                        && (l.end.y.abs() - ra).abs() < 1e-9 =>
+                {
+                    Some((l.end.x - l.start.x).abs())
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(tips.len(), 2);
+        for len in tips {
+            assert!(
+                (len - (p.h - 2.0 * p.chamfer())).abs() < 1e-9,
+                "齿顶线长 {len}（模板 28 = h − 2C）"
+            );
+        }
+    }
+
+    #[test]
+    fn internal_views_without_template_are_rejected() {
+        let p = int_tmpl();
+        for v in [GearView::Side, GearView::Simplified] {
+            let e = generate(&p, v, 1.0).unwrap_err();
+            assert!(e.contains("模板"), "{v:?} 的报错应说明模板没有这个视图：{e}");
+        }
+    }
+
+    #[test]
+    fn internal_block_name_parse_and_notes() {
+        let p = int_tmpl();
+        assert_eq!(block_name(&p, GearView::Front), "OCSM_GEAR_INT_M2_Z40_H30_FRONT");
+        assert_eq!(block_name(&p, GearView::Section), "OCSM_GEAR_INT_M2_Z40_H30_SECTION");
+        // 外齿轮块名不能变（一期兼容）
+        assert_eq!(block_name(&tmpl(), GearView::Front), "OCSM_GEAR_M2_Z40_H20_FRONT");
+        assert_eq!(parse_request("int 2 40 30 view 端视图").unwrap().params.kind, GearKind::Internal);
+        assert_eq!(parse_request("内齿轮 2 40").unwrap().params.kind, GearKind::Internal);
+        assert_eq!(parse_request("m=2 z=40 kind=internal").unwrap().params.kind, GearKind::Internal);
+        assert_eq!(parse_request("2 40 20").unwrap().params.kind, GearKind::External);
+        // 默认齿宽：内齿轮 15m（模板 30 = 15×2）、外齿轮 10m（模板 20 = 10×2）
+        assert!((parse_request("int 2 40").unwrap().params.h - 30.0).abs() < 1e-9);
+        assert!((parse_request("2 40").unwrap().params.h - 20.0).abs() < 1e-9);
+        // 提示语必须告诉人"剖视图没打剖面线、齿圈外壁留给用户"
+        assert!(p.notes().iter().any(|s| s.contains("剖面线") && s.contains("齿圈")));
+    }
+
+    #[test]
+    fn internal_query_params_and_info() {
+        let (p, v, _) = params_from_query("kind=internal&m=2&z=40&view=front").unwrap();
+        assert_eq!(p.kind, GearKind::Internal);
+        assert_eq!(v, GearView::Front);
+        assert!((p.h - 30.0).abs() < 1e-9, "内齿轮默认齿宽 15m={}", p.h);
+        let j = info_json("kind=internal&m=2&z=40").unwrap();
+        assert!(j.contains("\"kind\":\"internal\""), "{j}");
+        assert!(j.contains("\"da\":76"), "{j}");
+        assert!(j.contains("\"df\":85"), "{j}");
     }
 }

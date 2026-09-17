@@ -1606,11 +1606,12 @@ impl OcsmPlugin {
         }));
     }
 
-    /// `OCSMGEAR` / `CL`：齿轮出图（一期：**外齿轮**）。
+    /// `OCSMGEAR` / `CL`：齿轮出图（外齿轮一期 / **内齿轮二期**）。
     ///
-    /// * 不带参数 = 人类侧：开齿轮窗口（参数表 + 4 个视图按钮 + 实时预览）+ 进放置态；
+    /// * 不带参数 = 人类侧：开齿轮窗口（参数表 + 视图按钮 + 实时预览）+ 进放置态；
     ///   窗口里点「生成到图纸」→ 回图纸点基点 → 移动光标旋转 → 再点落定。
-    /// * 带参数 = AI/MCP：`OCSMGEAR <m> <z> [h] [ha=..] [c=..] [beta=..] [x=..] [view 视图] [at x,y] [rot 度]`。
+    /// * 带参数 = AI/MCP：`OCSMGEAR [内齿轮|int] <m> <z> [h] [ha=..] [c=..] [beta=..] [x=..] [view 视图] [at x,y] [rot 度]`。
+    ///   内齿轮（齿圈）：`OCSMGEAR int 2 40 30 view 端视图`；只用 剖视图 + 端视图。
     fn cmd_gear(&self, host: &mut dyn HostApi, args: &str) {
         if !args.trim().is_empty() {
             let req = match crate::gear::parse_request(args) {
@@ -1666,7 +1667,7 @@ impl OcsmPlugin {
         };
         if open_gear_window(port, Some(host.tab_id())) {
             host.push_info(
-                "OCSM 齿轮（一期外齿轮）：已打开齿轮窗口。选视图 + 填参数点「生成到图纸」→ \
+                "OCSM 齿轮：已打开齿轮窗口（可切外齿轮/内齿轮）。选视图 + 填参数点「生成到图纸」→ \
                  回到图纸点击定位基点 → 移动光标旋转 → 再点击落定（可连续，Esc 结束）。",
             );
         } else {
