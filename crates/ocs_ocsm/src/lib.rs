@@ -455,6 +455,11 @@ pub(crate) fn open_gear_window(port: u16, tab: Option<u64>) -> bool {
     open_plugin_page(port, &with_tab("/gear", tab), "gear", 980, 940)
 }
 
+/// 打开**轴生成器**窗口（人用 GUI：段表 + 行文本双向同步 + 实时预览；AI 走命令行/HTTP 同一实现）。
+pub(crate) fn open_shaft_window(port: u16, tab: Option<u64>) -> bool {
+    open_plugin_page(port, &with_tab("/shaft", tab), "shaft", 1120, 940)
+}
+
 /// 打开**螺栓副装配**窗口（人用 GUI；AI 走命令行/HTTP 同一实现）。
 pub(crate) fn open_joint_window(port: u16, tab: Option<u64>) -> bool {
     open_plugin_page(port, &with_tab("/joint", tab), "joint", 1080, 900)
@@ -1724,24 +1729,62 @@ impl OcsmPlugin {
         }));
     }
 
-    /// `OCSMSHAFT`：轴生成器——行 DSL / JSON → 单视图侧视图。
+    /// `OCSMSHAFT`：轴生成器——行 DSL / JSON → 单视图侧视图（视图开关 `VIEW 常规|剖视|双`）。
     ///
-    /// 不带参数 = 打印用法；带参数 = 解析 → 校验/生成 → 按 `at`/`rot` 放置 →
-    /// 一次撤销直插（与 `OCSMCENTERLINE` 同一条落图路径：`add_entities`）。
-    /// 不标尺寸、不打剖面线；轮廓/端面/倒角/退刀槽/齿根线 `1轮廓实线层`、
-    /// 砂轮细线 `2细线层`、轴线与分度线 `3中心线层`。
+    /// * 不带参数 = 人类侧：开轴生成器窗口（段表 + 行文本双向同步 + 视图按钮 + 实时预览）+ 进放置态；
+    ///   窗口里点「生成到图纸」→ 回图纸点基点 → 移动光标旋转 → 再点落定。
+    /// * 带参数 = AI/MCP：`OCSMSHAFT <行 DSL 或 JSON>` 一行直插（与原来一致）。
+    /// 轮廓/端面/倒角 `1轮廓实线层`、螺纹小径/砂轮细线 `2细线层`、轴线与分度线
+    /// `3中心线层`、剖视剖面线 `5剖面线层`；不标尺寸。
+    /// **插入前先拦未初始化图纸**（`shaft::ocsm_ready`，与 OCSMGEAR 同口径）。
     fn cmd_shaft(&self, host: &mut dyn HostApi, args: &str) {
         if args.trim().is_empty() {
-            host.push_output(crate::shaft::USAGE);
+            // 人类侧：先确保服务在跑并开窗，然后进放置态
+            // —— 没初始化就拦下来（避免出“实线白中心线”的废图，与 OCSMGEAR 同口径）。
+            if let Err(msg) = crate::shaft::ocsm_ready(host.document()) {
+                host.push_error(&format!("OCSMSHAFT: {msg}"));
+                host.push_info("OCSMSHAFT：先运行 OCSM 初始化，再打开轴生成器窗口。");
+                return;
+            }
+            let Some(port) = self.ensure_guide_server(host) else {
+                host.push_error("OCSMSHAFT: 无法启动轴服务（宿主不支持 worker 请求）。");
+                return;
+            };
+            if open_shaft_window(port, Some(host.tab_id())) {
+                host.push_info(
+                    "OCSM 轴生成器：已打开窗口（段表 + 行文本双向同步 + 实时预览）。\
+                     点「生成到图纸」→ 回到图纸点击定位基点 → 移动光标旋转 → 再点击落定（可连续，Esc 结束）。",
+                );
+            } else {
+                host.push_info("OCSM 轴生成器：窗口已打开（Alt+Tab 切换过去）。");
+            }
+            let Some(sender) = host.plugin_request_sender() else {
+                return;
+            };
+            host.start_interactive(Box::new(PartPlace {
+                sender: std::sync::Arc::from(sender),
+                phase: std::cell::Cell::new(PlacePhase::Follow),
+                base: std::cell::Cell::new([0.0, 0.0, 0.0]),
+                what: "OCSM 轴",
+                where_to: "请在轴生成器窗口里点「生成到图纸」",
+            }));
             return;
         }
         let program = match crate::shaft::parse_program(args) {
             Ok(program) => program,
             Err(message) => {
                 host.push_error(&format!("OCSMSHAFT 参数无效：{message}"));
+                host.push_output(crate::shaft::USAGE);
                 return;
             }
         };
+        // 插之前先拦一道：与 OCSMGEAR 同口径 —— 没跑过 OCSM 初始化的图纸
+        // 不再自动补层，直接报错指路（避免出“实线白中心线”的废图）。
+        if let Err(msg) = crate::shaft::ocsm_ready(host.document()) {
+            host.push_error(&format!("OCSMSHAFT: {msg}"));
+            host.push_info("OCSMSHAFT：先运行 OCSM（或点功能区「图幅」组里的 OCSM 初始化），再直接插轴。");
+            return;
+        }
         let at = program.at.unwrap_or([0.0, 0.0]);
         let rot = program.rot.unwrap_or(0.0);
         // 图框比例在落点处查（与 D/GDIM/中心线同口径）；无图框 = 1.0。
@@ -1760,16 +1803,21 @@ impl OcsmPlugin {
             segment_count,
         } = shaft;
         let entities = crate::shaft::place(entities, at, rot);
-        crate::centerline::ensure_layers_before_draw(host);
         host.push_undo("OCSMSHAFT 轴");
         let count = entities.len();
         let _ = host.add_entities(entities);
         host.set_dirty();
+        let layers = if program.view.has_hatch() {
+            "1轮廓实线层 / 2细线层 / 3中心线层 / 5剖面线层"
+        } else {
+            "1轮廓实线层 / 2细线层 / 3中心线层"
+        };
         host.push_output(&format!(
-            "OCSMSHAFT：已生成轴（{} 段，总长 {}，最大 Ø{}，{count} 个图元）→ 1轮廓实线层 / 2细线层 / 3中心线层",
+            "OCSMSHAFT：已生成轴（{} 段，总长 {}，最大 Ø{}，{} 视图，{count} 个图元）→ {layers}",
             segment_count,
             crate::partgen_kit::trim(total_length),
             crate::partgen_kit::trim(max_diameter),
+            program.view.label(),
         ));
     }
 

@@ -2070,7 +2070,8 @@ fn round4(v: f64) -> f64 {
 }
 
 /// 把图元渲染成 SVG（预览用，仅支持 LINE/CIRCLE/ARC/SPLINE/HATCH 边界）。
-fn svg_of(entities: &[EntityType], size: f64) -> String {
+/// `pub(crate)`：轴生成器（`shaft.rs`）的 `/api/shaft_preview` 也走这一份渲染口径。
+pub(crate) fn svg_of(entities: &[EntityType], size: f64) -> String {
     let bb = bbox_of(entities);
     let (w, h) = (bb[2] - bb[0], bb[3] - bb[1]);
     let span = w.max(h).max(1.0) * 1.12;

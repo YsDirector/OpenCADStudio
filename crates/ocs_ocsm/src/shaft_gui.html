@@ -1,0 +1,770 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>OCSM 轴生成器</title>
+<style>
+  /* 样式与 gear_gui.html / parts_gui.html / joint_gui.html 同款：同一套配色、圆角与控件尺寸 */
+  :root { color-scheme: light; }
+  body { font-family: "Helvetica Neue", "PingFang SC", "Microsoft YaHei", sans-serif;
+         margin: 14px; background: #f4f6f8; color: #222; }
+  h1 { font-size: 16px; margin: 0 0 10px; }
+  .sub { font-size: 12px; color: #888; font-weight: 400; margin-left: 8px; }
+  .wrap { display: flex; flex-direction: column; gap: 12px; align-items: stretch; }
+  .card { background: #fff; border: 1px solid #d9dee5; border-radius: 8px; padding: 12px 14px; }
+  .card h2 { font-size: 13px; margin: 0 0 8px; color: #555; }
+  label { display: block; font-size: 12px; color: #666; margin: 8px 0 2px; }
+  select, input[type=number], input[type=text] { width: 100%; padding: 5px 6px; border: 1px solid #c6ccd4;
+           border-radius: 4px; font-size: 13px; box-sizing: border-box; background: #fff; }
+  input[disabled], select[disabled] { background: #f1f3f5; color: #888; cursor: not-allowed; }
+  .row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+  .btn { border: none; border-radius: 6px; padding: 9px 18px; font-size: 14px; cursor: pointer;
+         background: #1e6fff; color: #fff; margin-top: 12px; }
+  .btn[disabled] { background: #9db9e8; cursor: not-allowed; }
+  .btn.ghost { background: #e4e7ec; color: #333; margin-top: 0; padding: 5px 12px; font-size: 13px; }
+  .btn.ghost:hover { background: #d7dbe1; }
+  .btn.ghost.on { background: #1e6fff; color: #fff; }
+  .hint { font-size: 12px; color: #888; margin-top: 8px; line-height: 1.5; }
+  #status, #perr, #dslErr, #segErr { font-size: 13px; margin-top: 8px; min-height: 18px; white-space: pre-wrap; }
+  .ok { color: #1a7f37; } .bad { color: #d1242f; } .warn { color: #b26a00; }
+  code { background: #f1f3f5; padding: 1px 4px; border-radius: 3px; }
+  /* ── 预览区：深色底、居中、宽度自适应（与后端 SVG 的 #111 底色一致） ── */
+  #preview { display: block; width: 100%; max-height: 46vh; object-fit: contain;
+             border: 1px solid #e2e6ea; border-radius: 6px; background: #111; margin-top: 10px; }
+  /* ── 段表：横向可滚；行选中高亮；输入框紧凑 ── */
+  .tblwrap { overflow-x: auto; margin-top: 4px; }
+  table.seg { border-collapse: collapse; width: 100%; min-width: 860px; }
+  table.seg th, table.seg td { border: 1px solid #e2e6ea; padding: 4px 6px; font-size: 12.5px; vertical-align: top; }
+  table.seg th { background: #f6f8fa; color: #555; font-weight: 600; text-align: center; white-space: nowrap; }
+  table.seg tbody tr { cursor: pointer; }
+  table.seg tbody tr.sel { background: #eef4ff; }
+  table.seg tbody tr.bad { background: #fff0f0; }
+  table.seg td.idx { text-align: center; color: #888; padding-top: 12px; }
+  table.seg input[type=number] { width: 64px; padding: 3px 4px; font-size: 12.5px; }
+  table.seg td.feat .frow { display: flex; align-items: center; gap: 4px; margin: 1px 0; }
+  .chk { display: inline-flex; align-items: center; gap: 3px; margin: 0; font-size: 12px;
+         color: #555; white-space: nowrap; cursor: pointer; }
+  .chk input { margin: 0; }
+  /* ── 行文本区 ── */
+  #dsl { width: 100%; min-height: 132px; padding: 8px 9px; border: 1px solid #c6ccd4; border-radius: 6px;
+         font: 13px/1.55 ui-monospace, "SF Mono", Consolas, "Courier New", monospace;
+         box-sizing: border-box; resize: vertical; background: #fff; color: #222; }
+  #dsl.bad { border-color: #d1242f; }
+  /* ── 放置表单：标签在左、控件在右 ── */
+  .form { display: grid; grid-template-columns: 150px 1fr; gap: 8px 10px; align-items: start; }
+  .form > label { margin: 0; padding-top: 6px; }
+  .ctl { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+  .ctl input[type=number] { width: 110px; }
+  .unit { font-size: 12px; color: #888; }
+</style>
+</head>
+<body>
+<h1>OCSM 轴生成器<span class="sub">段表 ↔ 行文本双向同步 + 实时预览</span></h1>
+
+<div class="wrap">
+  <!-- ① 预览：轴侧视图（深色底，和齿轮窗口同一渲染口径） -->
+  <div class="card">
+    <h2>预览（侧视图 · <span id="viewName">常规</span>）</h2>
+    <img id="preview" alt="轴预览">
+    <div id="perr"></div>
+  </div>
+
+  <!-- ② 视图：常规 / 剖视 / 双（预览与导出都带 view 参数） -->
+  <div class="card">
+    <h2>视图（预览与生成都按这个走）</h2>
+    <div class="row" id="viewRow"></div>
+    <div class="hint">
+      <b>常规</b>（默认）= 只画外形可见线；<b>剖视</b> = 同一套轮廓 + ANSI31 剖面线
+      （<code>5剖面线层</code>）；<b>双</b> = 常规视图与剖视图并排一次生成。
+      行文本里也可写 <code>VIEW 剖视</code>（独立一行或段内关键字均可）。
+    </div>
+  </div>
+
+  <!-- ③ 段表：一行一段，从左到右拼接 -->
+  <div class="card">
+    <h2>轴段表（点选一行，再用按钮增删/搬移）</h2>
+    <div class="tblwrap">
+      <table class="seg" id="segTable">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>S 直径</th>
+            <th>E 直径</th>
+            <th>L 段长</th>
+            <th>CH 倒角</th>
+            <th>OV 越程槽</th>
+            <th>M 螺纹段</th>
+            <th>GEAR 齿轮段</th>
+          </tr>
+        </thead>
+        <tbody id="segBody"></tbody>
+      </table>
+    </div>
+    <div class="row">
+      <button type="button" class="btn ghost" id="addRow">+ 加行</button>
+      <button type="button" class="btn ghost" id="delRow">删行</button>
+      <button type="button" class="btn ghost" id="copyRow">复制行</button>
+      <button type="button" class="btn ghost" id="upRow">上移</button>
+      <button type="button" class="btn ghost" id="downRow">下移</button>
+    </div>
+    <div class="hint" id="segHint">
+      <code>E</code> 留空 = 圆柱段；<code>M</code> 螺纹段要求 S=E（不写值 = 小径 0.85d 简化画法，
+      <code>M1.5</code> = 螺距 P 精确小径）；退刀槽 <b>就是一小段小直径轴段</b>（例 <code>S24 E24 L5</code>）。
+    </div>
+    <div id="segErr"></div>
+  </div>
+
+  <!-- ④ 行文本：可粘贴/编辑；解析成功回填段表，失败标行号 -->
+  <div class="card">
+    <h2>行文本（可粘贴/编辑；解析成功自动回填段表，失败标行号与原因）</h2>
+    <textarea id="dsl" spellcheck="false"></textarea>
+    <div id="dslErr"></div>
+    <div class="hint" id="dslHint">
+      一行一段，从左到右拼接；多段可用 <code>|</code> 或换行分隔；大小写不敏感、段内关键字顺序无关。
+      例：<code>OCSMSHAFT S30 E30 L45 CH2@L | S40 E40 L7 M1.5 | S36 E36 L5 | GEAR M3 Z20 VIEW 剖视</code>；
+      <code>ES…</code> 旧写法已取消（退刀槽写小直径轴段）。
+    </div>
+  </div>
+
+  <!-- ⑤ 放置（可选）+ 生成到图纸 -->
+  <div class="card">
+    <h2>放置（可选）</h2>
+    <div class="form">
+      <label for="atx">落点 at</label>
+      <div class="ctl">
+        <input type="number" id="atx" placeholder="x">
+        <input type="number" id="aty" placeholder="y">
+        <span class="unit">mm（都留空 = 放置态：回图纸点基点 → 旋转 → 落定）</span>
+      </div>
+      <label for="rot">旋转 rot</label>
+      <div class="ctl"><input type="number" id="rot" placeholder="0"><span class="unit">°（逆时针）</span></div>
+    </div>
+    <button class="btn" id="out">生成到图纸</button>
+    <div id="status"></div>
+    <div class="hint">
+      生成物：轮廓/端面/倒角 → <code>1轮廓实线层</code>、螺纹小径/砂轮细线 → <code>2细线层</code>、
+      轴线/分度线 → <code>3中心线层</code>、剖视剖面线 → <code>5剖面线层</code>；
+      齿轮段与齿轮工具同口径：只画齿顶线 + 分度线，<b>不画齿根线</b>；
+      颜色/线型/线宽一律 <b>ByLayer</b>；<b>不含尺寸标注</b>。
+    </div>
+  </div>
+</div>
+
+<script>
+/* ─────────────────────────── 常量与状态 ─────────────────────────── */
+
+// 打开窗口时的示例（与 shaft.rs 文档注释里的 demo 一致）
+const DEMO = [
+  "S30 E30 L45 CH2@L",
+  "S40 E40 L30 CH2@R OV3",
+  "S50 E30 L20",
+  "S30 E30 L15 CH2@R",
+  "S40 E40 L7 M1.5",
+  "S36 E36 L5",
+  "GEAR M3 Z20",
+].join("\n");
+
+// 窗口钉在哪张图纸（插件开窗时写的 tab=）：生成到图纸时带回给插件，多张图不串。
+const TAB = new URLSearchParams(location.search).get("tab");
+const el = (id) => document.getElementById(id);
+
+// 视图开关（key 与 shaft.rs::ShaftView 对齐）：预览/导出都带 view 参数。
+const VIEWS = [
+  { key: "normal", name: "常规" },
+  { key: "section", name: "剖视" },
+  { key: "both", name: "双" },
+];
+
+let rows = [];              // 段表状态（一行一段）
+let sel = 0;                // 当前选中行
+let curView = "normal";     // 当前视图（默认常规）
+let seqPreview = 0;         // 过期响应丢弃序号
+let seqParse = 0;
+let tPreview = 0, tParse = 0;
+let blobUrl = null;         // 上一张预览图的 object URL
+let textDirty = false;      // 文本区改过、还没回填段表（生成前先解析一次）
+
+// 新行的默认值（空白模板）
+function blankRow() {
+  return {
+    s: "30", e: "", l: "10",
+    ch: { l: { on: false, c: "2" }, r: { on: false, c: "2" } },
+    ov: { l: { on: false, b1: "" }, r: { on: false, b1: "" } },
+    m: { on: false, p: "" },
+    gear: { on: false, m: "3", z: "20", h: "" },
+  };
+}
+
+/* ─────────────────────────── 工具 ─────────────────────────── */
+
+// 数字显示：整数不带小数点，其余抹尾零（与后端 trim 同口径）
+function fmt(v) {
+  if (typeof v !== "number" || !Number.isFinite(v)) return "?";
+  if (Math.abs(v - Math.round(v)) < 1e-9) return String(Math.round(v));
+  return v.toFixed(4).replace(/0+$/, "").replace(/\.$/, "");
+}
+
+function numOrNaN(v) {
+  const t = String(v == null ? "" : v).trim();
+  return t === "" ? NaN : Number(t);
+}
+
+function numTok(v) {
+  const n = numOrNaN(v);
+  return Number.isFinite(n) ? fmt(n) : String(v).trim();
+}
+
+const esc = (s) =>
+  String(s == null ? "" : s)
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+
+function showStatus(msg, bad) {
+  const s = el("status");
+  s.textContent = msg;
+  s.className = bad ? "bad" : "ok";
+}
+
+/* ─────────────────────────── 视图开关 ─────────────────────────── */
+
+function viewLabel(key) {
+  const v = VIEWS.find((x) => x.key === key);
+  return v ? v.name : "常规";
+}
+
+// 把 `VIEW …` 写回行文本（保留其它行/注释；常规 = 删掉那行）
+function setViewInText(key) {
+  const lines = el("dsl").value.split("\n");
+  const idx = lines.findIndex((l) => /^(VIEW|视图)(\s|[=:])/i.test(l.trim()));
+  if (key === "normal") {
+    if (idx >= 0) lines.splice(idx, 1);
+  } else {
+    const line = "VIEW " + viewLabel(key);
+    if (idx >= 0) lines[idx] = line;
+    else lines.unshift(line);
+  }
+  el("dsl").value = lines.join("\n");
+}
+
+function renderViews() {
+  const row = el("viewRow");
+  row.innerHTML = "";
+  for (const v of VIEWS) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "btn ghost" + (v.key === curView ? " on" : "");
+    b.textContent = v.name;
+    b.addEventListener("click", () => {
+      if (curView === v.key) return;
+      curView = v.key;
+      setViewInText(v.key);
+      renderViews();
+      schedulePreview();   // 视图切换不走防抖也行，但统一防抖避免连点
+    });
+    row.appendChild(b);
+  }
+  el("viewName").textContent = viewLabel(curView);
+}
+
+/* ─────────────────────────── 段表渲染 ─────────────────────────── */
+
+// 一行 → HTML（disabled 状态直接从状态算，勾选后重渲染即可同步界面）
+function rowHtml(r, i) {
+  const gearOn = r.gear.on;
+  const mOn = r.m.on;
+  const ovOn = r.ov.l.on || r.ov.r.on;
+  const ck = (v) => (v ? " checked" : "");
+  const dis = (v) => (v ? " disabled" : "");
+  const endCell = (kind, end, o) => {
+    const label = end.toUpperCase();
+    const extra = kind === "ov"
+      ? `<input type="number" step="0.1" min="0" data-f="ov.${end}.b1" value="${esc(o.b1)}" placeholder="默认"${dis(gearOn || mOn)}>`
+      : `<input type="number" step="0.1" min="0" data-f="ch.${end}.c" value="${esc(o.c)}" placeholder="2"${dis(gearOn)}>`;
+    const boxDis = kind === "ov" ? (gearOn || mOn) : gearOn;
+    return `<div class="frow"><label class="chk"><input type="checkbox" data-f="${kind}.${end}.on"${ck(o.on)}${dis(boxDis)}>${label}</label>${extra}</div>`;
+  };
+  return `<tr data-row="${i}" class="${i === sel ? "sel" : ""}">
+    <td class="idx">${i + 1}</td>
+    <td><input type="number" step="0.1" min="0" data-f="s" value="${esc(r.s)}"${dis(gearOn)}></td>
+    <td><input type="number" step="0.1" min="0" data-f="e" value="${esc(r.e)}" placeholder="= S"${dis(gearOn)}></td>
+    <td><input type="number" step="0.1" min="0" data-f="l" value="${esc(r.l)}"${dis(gearOn)}></td>
+    <td class="feat">${endCell("ch", "l", r.ch.l)}${endCell("ch", "r", r.ch.r)}</td>
+    <td class="feat">${endCell("ov", "l", r.ov.l)}${endCell("ov", "r", r.ov.r)}</td>
+    <td class="feat"><div class="frow"><label class="chk"><input type="checkbox" data-f="m.on"${ck(mOn)}${dis(gearOn || ovOn)}>M</label>
+      <input type="number" step="0.1" min="0" data-f="m.p" value="${esc(r.m.p)}" placeholder="0.85d"${dis(gearOn || ovOn)}></div></td>
+    <td class="feat"><div class="frow"><label class="chk"><input type="checkbox" data-f="gear.on"${ck(gearOn)}>GEAR</label></div>
+      <div class="frow"><span class="chk">m</span><input type="number" step="0.1" min="0" data-f="gear.m" value="${esc(r.gear.m)}"${dis(!gearOn)}>
+      <span class="chk">z</span><input type="number" step="1" min="2" data-f="gear.z" value="${esc(r.gear.z)}"${dis(!gearOn)}></div>
+      <div class="frow"><span class="chk">H</span><input type="number" step="0.1" min="0" data-f="gear.h" value="${esc(r.gear.h)}" placeholder="10m"${dis(!gearOn)}></div></td>
+  </tr>`;
+}
+
+function renderTable() {
+  el("segBody").innerHTML = rows.map((r, i) => rowHtml(r, i)).join("");
+  updateButtons();
+}
+
+// 特征互斥：GEAR 独占；M 与 OV 不能同段（与后端校验同口径）
+function enforceExclusive(r) {
+  if (r.gear.on) {
+    r.ch.l.on = r.ch.r.on = r.ov.l.on = r.ov.r.on = r.m.on = false;
+  }
+  if (r.m.on) {
+    r.ov.l.on = r.ov.r.on = false;
+    r.gear.on = false;
+  }
+  if (r.ov.l.on || r.ov.r.on) {
+    r.m.on = false;
+  }
+}
+
+/* ─────────────────────────── 段表 → 行文本 ─────────────────────────── */
+
+function rowToDsl(r) {
+  if (r.gear.on) {
+    let s = "GEAR M" + numTok(r.gear.m) + " Z" + numTok(r.gear.z);
+    if (String(r.gear.h).trim() !== "") s += " H" + numTok(r.gear.h);
+    return s;
+  }
+  let s = "S" + numTok(r.s);
+  if (String(r.e).trim() !== "" && numOrNaN(r.e) !== numOrNaN(r.s)) s += " E" + numTok(r.e);
+  s += " L" + numTok(r.l);
+  if (r.m.on) s += String(r.m.p).trim() === "" ? " M" : " M" + numTok(r.m.p);
+  for (const end of ["l", "r"]) {
+    const E = end.toUpperCase();
+    if (r.ch[end].on) s += " CH" + numTok(r.ch[end].c) + "@" + E;
+    if (r.ov[end].on) {
+      s += " OV" + (String(r.ov[end].b1).trim() === "" ? "" : numTok(r.ov[end].b1)) + "@" + E;
+    }
+  }
+  return s;
+}
+
+function regenText() {
+  el("dsl").value = rows.map(rowToDsl).join("\n");
+  el("dsl").classList.remove("bad");
+  el("dslErr").textContent = "";
+  textDirty = false;
+  schedulePreview();
+}
+
+/* ─────────────────────────── 行文本 → 段表 ─────────────────────────── */
+
+// 后端归一化模型的一段 → 表格行
+function rowFromSegment(seg) {
+  const r = blankRow();
+  if (seg.gear) {
+    r.gear.on = true;
+    r.gear.m = fmt(seg.gear.m);
+    r.gear.z = String(seg.gear.z);
+    r.gear.h = seg.gear.h === null || seg.gear.h === undefined ? "" : fmt(seg.gear.h);
+    return r;
+  }
+  r.s = fmt(seg.s);
+  r.e = fmt(seg.e);
+  r.l = fmt(seg.l);
+  const chs = seg.ch || [];
+  for (const c of chs) {
+    const end = (c.end || "R").toLowerCase();
+    if (r.ch[end]) { r.ch[end].on = true; r.ch[end].c = fmt(c.c); }
+  }
+  const ovs = seg.ov || [];
+  for (const o of ovs) {
+    const end = (o.end || "R").toLowerCase();
+    if (r.ov[end]) {
+      r.ov[end].on = true;
+      r.ov[end].b1 = o.b1 === null || o.b1 === undefined ? "" : fmt(o.b1);
+    }
+  }
+  if (seg.thread !== undefined && seg.thread !== null) {
+    r.m.on = true;
+    r.m.p = typeof seg.thread === "number" ? fmt(seg.thread) : "";
+  }
+  enforceExclusive(r);
+  return r;
+}
+
+function showDslError(msg) {
+  el("dslErr").textContent = msg;
+  el("dslErr").className = "bad";
+  el("dsl").classList.add("bad");
+  // 有行号就把那行选中（不抢焦点，避免打字时跳走）
+  const m = /第\s*(\d+)\s*行/.exec(msg);
+  if (m) {
+    const line = Math.max(1, Number(m[1]));
+    const lines = el("dsl").value.split("\n");
+    let start = 0;
+    for (let i = 0; i < line - 1 && i < lines.length; i++) start += lines[i].length + 1;
+    const end = start + (lines[line - 1] || "").length;
+    try { el("dsl").setSelectionRange(start, end); } catch (e) { /* 忽略 */ }
+  }
+}
+
+function clearDslError() {
+  el("dslErr").textContent = "";
+  el("dslErr").className = "";
+  el("dsl").classList.remove("bad");
+}
+
+// 文本区 → 解析 → 回填段表（返回是否成功）
+async function refreshFromText() {
+  const text = el("dsl").value;
+  const my = ++seqParse;
+  try {
+    const r = await fetch("/api/shaft_parse", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ dsl: text }),
+      cache: "no-store",
+    });
+    const j = await r.json();
+    if (my !== seqParse) return false;
+    if (!r.ok || j.ok === false) {
+      showDslError(j.error || j.message || ("解析失败（HTTP " + r.status + "）"));
+      return false;
+    }
+    clearDslError();
+    rows = (j.segments || []).map(rowFromSegment);
+    if (!rows.length) rows = [blankRow()];
+    if (j.at) { el("atx").value = fmt(j.at[0]); el("aty").value = fmt(j.at[1]); }
+    if (typeof j.rot === "number") el("rot").value = fmt(j.rot);
+    // 视图：以文本解析结果为准（文本里没 VIEW 就是常规）
+    if (typeof j.view === "string" && VIEWS.some((v) => v.key === j.view)) {
+      curView = j.view;
+    }
+    renderViews();
+    sel = Math.min(sel, rows.length - 1);
+    if (sel < 0) sel = 0;
+    renderTable();
+    textDirty = false;
+    schedulePreview();
+    return true;
+  } catch (e) {
+    if (my !== seqParse) return false;
+    showDslError("解析请求失败：" + e);
+    return false;
+  }
+}
+
+/* ─────────────────────────── 表格事件 ─────────────────────────── */
+
+function setField(r, path, value) {
+  const parts = path.split(".");
+  let obj = r;
+  for (let i = 0; i < parts.length - 1; i++) obj = obj[parts[i]];
+  obj[parts[parts.length - 1]] = value;
+}
+
+function onTableClick(e) {
+  const tr = e.target.closest("tr[data-row]");
+  if (!tr) return;
+  sel = Number(tr.dataset.row);
+  // 只换选中高亮、**不重渲染**：否则点进输入框会因重渲染丢焦点。
+  el("segBody").querySelectorAll("tr").forEach((x) => x.classList.toggle("sel", x === tr));
+  updateButtons();
+}
+
+function onTableInput(e) {
+  const tr = e.target.closest("tr[data-row]");
+  if (!tr) return;
+  const r = rows[Number(tr.dataset.row)];
+  if (!r) return;
+  const field = e.target.dataset.f;
+  if (!field) return;
+  const isCheck = e.target.type === "checkbox";
+  setField(r, field, isCheck ? e.target.checked : e.target.value);
+  if (isCheck) {
+    sel = Number(tr.dataset.row);
+    enforceExclusive(r);
+    renderTable();   // 勾选会改 disabled 状态 → 整表重渲染（点选不丢内容）
+  }
+  regenText();
+}
+
+function updateButtons() {
+  el("delRow").disabled = rows.length === 0;
+  el("upRow").disabled = sel <= 0;
+  el("downRow").disabled = sel >= rows.length - 1;
+}
+
+function onAddRow() {
+  rows.splice(sel + 1, 0, blankRow());
+  sel += 1;
+  renderTable();
+  regenText();
+  updateButtons();
+}
+
+function onDelRow() {
+  if (!rows.length) return;
+  if (rows.length === 1) {
+    rows[0] = blankRow();
+  } else {
+    rows.splice(sel, 1);
+    if (sel >= rows.length) sel = rows.length - 1;
+  }
+  renderTable();
+  regenText();
+  updateButtons();
+}
+
+function onCopyRow() {
+  if (!rows.length) return;
+  rows.splice(sel + 1, 0, JSON.parse(JSON.stringify(rows[sel])));
+  sel += 1;
+  renderTable();
+  regenText();
+  updateButtons();
+}
+
+function onMoveRow(delta) {
+  const to = sel + delta;
+  if (to < 0 || to >= rows.length) return;
+  const tmp = rows[sel];
+  rows[sel] = rows[to];
+  rows[to] = tmp;
+  sel = to;
+  renderTable();
+  regenText();
+  updateButtons();
+}
+
+/* ─────────────────────────── 预览（/api/shaft_preview） ─────────────────────────── */
+
+function showPreviewError(msg) {
+  el("perr").textContent = "预览失败：" + msg;
+  el("perr").className = "bad";
+}
+
+function clearPreviewError() {
+  el("perr").textContent = "";
+  el("perr").className = "";
+}
+
+// 出错时把 `第 N 段` 对应行标红（几何错误的定位）
+function markRowsFromError(msg) {
+  document.querySelectorAll("tr.bad").forEach((x) => x.classList.remove("bad"));
+  const m = /第\s*(\d+)\s*段/.exec(msg || "");
+  if (!m) return;
+  const tr = el("segBody").querySelector('tr[data-row="' + (Number(m[1]) - 1) + '"]');
+  if (tr) tr.classList.add("bad");
+}
+
+async function fetchPreview() {
+  const text = el("dsl").value;
+  const my = ++seqPreview;
+  try {
+    const r = await fetch("/api/shaft_preview", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ dsl: text, view: curView }),
+      cache: "no-store",
+    });
+    if (my !== seqPreview) return;
+    if (!r.ok) {
+      let msg = "HTTP " + r.status;
+      try {
+        const j = JSON.parse(await r.text());
+        msg = j.error || j.message || msg;
+      } catch (e) { /* 非 JSON 就报状态码 */ }
+      showPreviewError(msg);
+      markRowsFromError(msg);
+      return;
+    }
+    const svg = await r.text();
+    if (my !== seqPreview) return;
+    clearPreviewError();
+    markRowsFromError("");
+    const url = URL.createObjectURL(new Blob([svg], { type: "image/svg+xml" }));
+    if (blobUrl) URL.revokeObjectURL(blobUrl);
+    blobUrl = url;
+    el("preview").src = url;
+  } catch (e) {
+    if (my !== seqPreview) return;
+    showPreviewError("请求失败：" + e);
+  }
+}
+
+function schedulePreview() {
+  clearTimeout(tPreview);
+  tPreview = setTimeout(fetchPreview, 220);
+}
+
+/* ─────────────────────────── 段表 → JSON 模型 ─────────────────────────── */
+
+// 收集段表为 JSON 模型；非法输入写状态行并返回 null
+function modelFromRows() {
+  const segments = [];
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i];
+    const at = "第 " + (i + 1) + " 行：";
+    if (r.gear.on) {
+      const m = numOrNaN(r.gear.m);
+      const z = Math.round(numOrNaN(r.gear.z));
+      const hRaw = String(r.gear.h).trim();
+      const h = hRaw === "" ? null : numOrNaN(r.gear.h);
+      if (!(m > 0) || !Number.isFinite(z) || z < 2 || (h !== null && !(h > 0))) {
+        showStatus(at + "GEAR 参数非法（m > 0、z ≥ 2、H 留空 = 10m 或 > 0）。", true);
+        return null;
+      }
+      const gear = { m, z };
+      if (h !== null) gear.h = h;
+      segments.push({ gear });
+      continue;
+    }
+    const s = numOrNaN(r.s);
+    const l = numOrNaN(r.l);
+    if (!(s > 0) || !(l > 0)) {
+      showStatus(at + "S（起始直径）与 L（段长）必须是正数。", true);
+      return null;
+    }
+    const seg = { s, l };
+    const eRaw = String(r.e).trim();
+    const e = eRaw === "" ? s : numOrNaN(r.e);
+    if (!(e > 0)) {
+      showStatus(at + "E（终点直径）必须 > 0（留空 = 圆柱段）。", true);
+      return null;
+    }
+    if (e !== s) seg.e = e;
+    const fail = (why) => { showStatus(at + why, true); return null; };
+    const ch = [];
+    for (const end of ["l", "r"]) {
+      if (!r.ch[end].on) continue;
+      const c = numOrNaN(r.ch[end].c);
+      if (!(c > 0)) return fail("CH 倒角的 C 必须 > 0。");
+      ch.push({ c, end: end.toUpperCase() });
+    }
+    if (ch.length) seg.ch = ch;
+    const ov = [];
+    for (const end of ["l", "r"]) {
+      if (!r.ov[end].on) continue;
+      const b1Raw = String(r.ov[end].b1).trim();
+      if (b1Raw === "") ov.push({ end: end.toUpperCase() });
+      else {
+        const b1 = numOrNaN(r.ov[end].b1);
+        if (!(b1 > 0)) return fail("OV 越程槽的 b1 必须 > 0（留空 = 按直径查表）。");
+        ov.push({ b1, end: end.toUpperCase() });
+      }
+    }
+    if (ov.length) seg.ov = ov;
+    if (r.m.on) {
+      const pRaw = String(r.m.p).trim();
+      if (pRaw === "") seg.thread = true;
+      else {
+        const p = numOrNaN(r.m.p);
+        if (!(p > 0)) return fail("M 螺纹段的螺距 P 必须 > 0（留空 = 小径 0.85d 简化画法）。");
+        seg.thread = p;
+      }
+    }
+    segments.push(seg);
+  }
+  if (!segments.length) {
+    showStatus("至少要有一段（加行或粘贴行文本）。", true);
+    return null;
+  }
+  return { segments };
+}
+
+/* ─────────────────────────── 生成到图纸（/api/shaft_export） ─────────────────────────── */
+
+async function exportToDrawing() {
+  // 文本区刚改过还没回填 → 先解析一次，保证段表=文本
+  if (textDirty) {
+    const ok = await refreshFromText();
+    if (!ok) { showStatus("行文本还有解析错误，先改对再生成。", true); return; }
+  }
+  const model = modelFromRows();
+  if (!model) return;
+  model.view = curView;   // 视图随选择器走（预览/导出同一口径）
+  const xr = String(el("atx").value).trim();
+  const yr = String(el("aty").value).trim();
+  if (xr !== "" || yr !== "") {
+    if (xr === "" || yr === "") { showStatus("落点 at 的 x、y 要么都填，要么都留空。", true); return; }
+    const x = numOrNaN(xr), y = numOrNaN(yr);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) { showStatus("落点 at 坐标不是数字。", true); return; }
+    model.at = [x, y];
+  }
+  const rotRaw = String(el("rot").value).trim();
+  if (rotRaw !== "") {
+    const rot = numOrNaN(rotRaw);
+    if (!Number.isFinite(rot)) { showStatus("rot 不是数字。", true); return; }
+    model.rot = rot;
+  }
+  if (TAB) model.tab = Number(TAB);
+  showStatus("生成中…", false);
+  try {
+    const r = await fetch("/api/shaft_export", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(model),
+    });
+    const j = await r.json();
+    if (!r.ok || j.ok === false) {
+      const msg = j.error || j.message || ("HTTP " + r.status);
+      showStatus("失败：" + msg, true);
+      markRowsFromError(msg);
+      return;
+    }
+    const msg = j.message || "已生成到图纸";
+    showStatus(msg, false);
+    // 与齿轮/零件库同款：成功后自动关窗；被浏览器拒绝时提示手动切回
+    setTimeout(() => {
+      try { window.close(); } catch (e) { /* 忽略 */ }
+      showStatus(msg + "（若本窗口未自动关闭，请 Alt+Tab 切回图纸继续）", false);
+    }, 300);
+  } catch (e) {
+    showStatus("请求失败：" + e, true);
+  }
+}
+
+/* ─────────────────────────── 心跳保活 ─────────────────────────── */
+
+function ping(bye) {
+  try { fetch("/api/page_ping?p=shaft" + (bye ? "&bye=1" : ""), { cache: "no-store" }); } catch (e) {}
+}
+
+/* ─────────────────────────── 初始化 ─────────────────────────── */
+(async function init() {
+  window.addEventListener("error", (e) => showStatus("脚本错误：" + e.message, true));
+  ping(false);
+  setInterval(() => ping(false), 5000);
+  window.addEventListener("beforeunload", () => ping(true));
+  window.addEventListener("pagehide", () => ping(true));
+
+  // 段表事件（委托）：点选行；input/change 改状态
+  el("segBody").addEventListener("click", onTableClick);
+  el("segBody").addEventListener("input", onTableInput);
+  el("segBody").addEventListener("change", onTableInput);
+
+  el("addRow").addEventListener("click", onAddRow);
+  el("delRow").addEventListener("click", onDelRow);
+  el("copyRow").addEventListener("click", onCopyRow);
+  el("upRow").addEventListener("click", () => onMoveRow(-1));
+  el("downRow").addEventListener("click", () => onMoveRow(1));
+
+  // 行文本：改文本 → 防抖解析回填 + 预览；失焦/回车不等防抖
+  el("dsl").addEventListener("input", () => {
+    textDirty = true;
+    clearTimeout(tParse);
+    clearTimeout(tPreview);
+    tParse = setTimeout(refreshFromText, 300);
+    tPreview = setTimeout(fetchPreview, 250);
+  });
+  el("dsl").addEventListener("blur", () => {
+    clearTimeout(tParse);
+    clearTimeout(tPreview);
+    refreshFromText().then((ok) => { if (ok) fetchPreview(); });
+  });
+
+  el("out").addEventListener("click", exportToDrawing);
+
+  // 初始：示例文本 → 解析 → 回填段表 → 预览
+  renderViews();
+  el("dsl").value = DEMO;
+  const ok = await refreshFromText();
+  if (ok) await fetchPreview();
+  updateButtons();
+})();
+</script>
+</body>
+</html>

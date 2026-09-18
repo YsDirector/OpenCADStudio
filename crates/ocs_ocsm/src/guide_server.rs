@@ -357,6 +357,8 @@ fn page_label(path: &str) -> &'static str {
         "零件库"
     } else if path.starts_with("/gear") {
         "齿轮"
+    } else if path.starts_with("/shaft") {
+        "轴生成器"
     } else if path.starts_with("/joint") {
         "螺栓副装配"
     } else if path.starts_with("/rough") {
@@ -375,6 +377,7 @@ fn plugin_page_path(target: &str) -> Option<&'static str> {
         "/" | "/guide.html" | "/guide" => Some("/guide.html"),
         "/parts" | "/parts.html" => Some("/parts"),
         "/gear" | "/gear.html" => Some("/gear"),
+        "/shaft" | "/shaft.html" => Some("/shaft"),
         "/joint" | "/joint.html" => Some("/joint"),
         "/rough.html" | "/rough" => Some("/rough.html"),
         "/bom" | "/bom.html" => Some("/bom.html"),
@@ -468,6 +471,7 @@ fn page_ping_key_for(path: &str, target: &str, active_tab: Option<u64>) -> Optio
         "/bom.html" => Some("bom".to_string()),
         "/parts" => Some("parts".to_string()),
         "/gear" => Some("gear".to_string()),
+        "/shaft" => Some("shaft".to_string()),
         "/joint" => Some("joint".to_string()),
         "/rough.html" => Some("rough".to_string()),
         "/manual" => Some("manual".to_string()),
@@ -578,6 +582,7 @@ fn route(
         ("GET", t) if t.starts_with("/rough.html") => page_response(t, ROUGH_HTML),
         ("GET", t) if t.starts_with("/parts") => page_response(t, PARTS_HTML),
         ("GET", t) if t.starts_with("/gear") => page_response(t, GEAR_HTML),
+        ("GET", t) if t.starts_with("/shaft") => page_response(t, SHAFT_HTML),
         ("GET", t) if t.starts_with("/api/gear_svg") => {
             let q = t.split_once('?').map(|(_, q)| q).unwrap_or("");
             match crate::gear::preview_svg(q) {
@@ -593,6 +598,11 @@ fn route(
             }
         }
         ("POST", "/api/gear_export") => api_gear_export(body, &sender!()),
+        ("GET", t) if t.starts_with("/api/shaft_preview") => api_shaft_preview(t, &[]),
+        ("POST", "/api/shaft_preview") => api_shaft_preview("", body),
+        ("GET", t) if t.starts_with("/api/shaft_parse") => api_shaft_parse(t, &[]),
+        ("POST", "/api/shaft_parse") => api_shaft_parse("", body),
+        ("POST", "/api/shaft_export") => api_shaft_export(body, &sender!()),
         ("GET", t) if t.starts_with("/api/parts_ping") => {
             crate::page_window_ping("parts", t.contains("bye=1"));
             (200, json, r#"{"ok":true}"#.into())
@@ -3911,7 +3921,7 @@ pub const COMMAND_CATALOG: &[(&str, &str, &str)] = &[
     ("OCSMDIMGULIDE", "GDIM", "引导线标注：选引导线 → 配置窗口（尺寸/剖视/向视/局部放大/角度/弧长/焊接/引线/序号/公差/粗糙度/形位公差）"),
     ("OCSMCENTERLINE", "ZX", "中心线：点圆/圆弧 → 十字中心线；点两根直线 → 角平分线中心线（`3中心线层`，线长 = 直径/投影长 + 图框比例×6mm）"),
     ("OCSMGEAR", "", "齿轮（外齿轮 / 内齿轮（齿圈））：不带参数=开齿轮窗口（参数 + 视图按钮 + 实时预览）；带参数=一行直插（`OCSMGEAR 2 40 20 view 剖视图`、`OCSMGEAR int 2 40 30 view 端视图`）。内齿轮只有剖视图+端视图（用户模板只有这两个），且剖视图**不打剖面线**（齿圈外壁留用户延伸）"),
-    ("OCSMSHAFT", "", "轴生成器：行 DSL/JSON → 单视图侧视图（段拼接 + 端面倒角 + 砂轮越程槽 + 螺纹退刀槽 ES + 齿轮段 GEAR）；不带参数=打印用法。`OCSMSHAFT S30 E30 L45 CH2@L | S40 E40 L30 CH2@R OV3 | S40 E40 L12 ES5*3 | GEAR M3 Z20 at x,y rot 度`"),
+    ("OCSMSHAFT", "", "轴生成器：不带参数=开轴生成器窗口（段表 ↔ 行文本双向同步 + 实时预览 + 视图按钮）+ 放置态；带参数=行 DSL/JSON 一行直插（段拼接 + 端面倒角 + 砂轮越程槽 + 螺纹段 M + 齿轮段 GEAR + 视图 VIEW 常规|剖视|双；退刀槽就是一小段小直径轴段）。`OCSMSHAFT S30 E30 L45 CH2@L | S40 E40 L7 M1.5 | S36 E36 L5 | GEAR M3 Z20 VIEW 剖视 at x,y rot 度`"),
     ("OCSMEDIT", "ME", "改标注：选中 OCSM 生成的标注 → 配置窗口改参数 → 重生成"),
     ("OCSMRGH", "CC", "表面粗糙度：点选插入点 → 配置窗口（匿名块 + ATTDEF）"),
     ("OCSMDIM2GB", "D2G", "一键转国标：原生标注 → OCSM_GB 样式 + 匿名块；智能圆心标记（CENTERMARK）一并换成 `3中心线层` 中心线（Ø + 图框比例×6）"),
@@ -4456,6 +4466,229 @@ pub(crate) fn apply_gear_insert(
         "spec": req.params.spec(),
         "scale": n,
         "notes": req.params.notes(),
+    })
+    .to_string())
+}
+
+// ── 轴生成器（OCSMSHAFT）HTTP 入口 ────────────────────────────────────────
+
+/// 从 GUI/脚本请求里取出解析输入：
+/// * POST body 为 `{"dsl":"…"}` → 用 `dsl` 字符串；
+/// * POST body 为 JSON 模型 / 行 DSL → 原文；
+/// * GET `?dsl=…` → 百分号解码后的 DSL。
+fn shaft_input_text(target: &str, body: &[u8]) -> Result<String, String> {
+    if !body.is_empty() {
+        let text = std::str::from_utf8(body)
+            .map_err(|e| format!("请求不是 UTF-8：{e}"))?
+            .trim()
+            .to_string();
+        if text.starts_with('{') {
+            if let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) {
+                if let Some(dsl) = value.get("dsl").and_then(|d| d.as_str()) {
+                    return Ok(dsl.to_string());
+                }
+            }
+        }
+        return Ok(text);
+    }
+    let query = target.split_once('?').map(|(_, q)| q).unwrap_or("");
+    let raw = query
+        .split('&')
+        .filter_map(|kv| kv.split_once('='))
+        .find(|(k, _)| *k == "dsl")
+        .map(|(_, v)| v)
+        .unwrap_or("");
+    Ok(crate::guide_url::percent_decode(raw))
+}
+
+/// 从 GUI/脚本请求里取出视图参数（优先级：POST JSON 的 `view` > GET 查询串 `view`）。
+/// 返回 `None` = 请求没带视图参数（按 DSL/JSON 里的 `VIEW` 或默认常规）。
+fn shaft_input_view(target: &str, body: &[u8]) -> Result<Option<crate::shaft::ShaftView>, String> {
+    if !body.is_empty() {
+        if let Ok(value) = serde_json::from_slice::<serde_json::Value>(body) {
+            if let Some(view) = value.get("view") {
+                let text = view
+                    .as_str()
+                    .ok_or_else(|| "view 参数必须是字符串（normal/常规、section/剖视、both/双）".to_string())?;
+                return crate::shaft::ShaftView::parse(text)
+                    .map(Some)
+                    .map_err(|e| format!("view 参数：{e}"));
+            }
+        }
+        return Ok(None);
+    }
+    let query = target.split_once('?').map(|(_, q)| q).unwrap_or("");
+    let raw = query
+        .split('&')
+        .filter_map(|kv| kv.split_once('='))
+        .find(|(k, _)| *k == "view")
+        .map(|(_, v)| v);
+    match raw {
+        None => Ok(None),
+        Some(raw) => {
+            let text = crate::guide_url::percent_decode(raw);
+            crate::shaft::ShaftView::parse(&text)
+                .map(Some)
+                .map_err(|e| format!("view 参数：{e}"))
+        }
+    }
+}
+
+/// `GET/POST /api/shaft_preview`：解析 + 几何 → SVG（不碰图纸）。
+/// 请求里的 `view` 覆盖 DSL/JSON 里的视图（GUI 视图按钮走这个）。
+fn api_shaft_preview(target: &str, body: &[u8]) -> (u16, &'static str, String) {
+    let json = "application/json; charset=utf-8";
+    let result = shaft_input_text(target, body).and_then(|text| {
+        let mut program = crate::shaft::parse_program(&text)?;
+        if let Some(view) = shaft_input_view(target, body)? {
+            program.view = view;
+        }
+        crate::shaft::preview_svg(&program)
+    });
+    match result {
+        Ok(svg) => (200, "image/svg+xml; charset=utf-8", svg),
+        Err(e) => (
+            400,
+            json,
+            serde_json::json!({"ok": false, "error": e}).to_string(),
+        ),
+    }
+}
+
+/// `GET/POST /api/shaft_parse`：DSL/JSON → 归一化模型（GUI 行文本 → 段表回填用）。
+/// **只做解析层**：几何合法性由 `/api/shaft_preview` / `/api/shaft_export` 报。
+fn api_shaft_parse(target: &str, body: &[u8]) -> (u16, &'static str, String) {
+    let json = "application/json; charset=utf-8";
+    match shaft_input_text(target, body).and_then(|text| crate::shaft::parse_program(&text)) {
+        Ok(program) => (
+            200,
+            json,
+            serde_json::json!({
+                "ok": true,
+                "segments": program.segments,
+                "at": program.at,
+                "rot": program.rot,
+                "view": program.view.key(),
+                "view_label": program.view.label(),
+            })
+            .to_string(),
+        ),
+        Err(e) => (
+            400,
+            json,
+            serde_json::json!({"ok": false, "error": e}).to_string(),
+        ),
+    }
+}
+
+/// `POST /api/shaft_export`：GUI「生成到图纸」/ AI 插入。
+/// body = JSON 模型（可含 `at`/`rot`）：
+/// * 有 `at` → 直接在落点插入（一次事务）；
+/// * 没有 `at` → 建块 + 登记待放置件（回图纸点击定位基点 → 旋转 → 落定）。
+/// 插入前跑 `shaft::ocsm_ready` 拦未初始化图纸（与齿轮同判据）。
+fn api_shaft_export(body: &[u8], sender: &Arc<dyn PluginRequestSender>) -> (u16, &'static str, String) {
+    let json = "application/json; charset=utf-8";
+    match apply_shaft_export(sender, body) {
+        Ok(s) => (200, json, s),
+        Err(e) => (
+            400,
+            json,
+            serde_json::json!({"ok": false, "error": e}).to_string(),
+        ),
+    }
+}
+
+pub(crate) fn apply_shaft_export(
+    sender: &Arc<dyn PluginRequestSender>,
+    body: &[u8],
+) -> Result<String, String> {
+    let text = shaft_input_text("", body)?;
+    let mut program = crate::shaft::parse_program(&text)?;
+    if let Some(view) = shaft_input_view("", body)? {
+        program.view = view;
+    }
+    let doc = snapshot(sender)?;
+    crate::shaft::ocsm_ready(&doc)?;
+
+    // ① 显式落点（`at`）→ 直接插入，一次事务。
+    if let Some(at) = program.at {
+        let rot = program.rot.unwrap_or(0.0);
+        let n = frame_scale_at(&doc, [at[0], at[1], 0.0]);
+        let shaft = crate::shaft::build(&program, n)?;
+        let (segments, total, max_d) = (shaft.segment_count, shaft.total_length, shaft.max_diameter);
+        begin_undo(sender, "轴插入")?;
+        let entities = crate::shaft::place(shaft.entities, at, rot);
+        req_timed(sender, PluginRequest::AddEntities(entities), "AddEntities")?;
+        req_timed(sender, PluginRequest::BumpGeometry, "BumpGeometry")?;
+        mark_dirty(sender)?;
+        commit_undo(sender);
+        return Ok(serde_json::json!({
+            "ok": true,
+            "message": format!(
+                "已插入轴（{} 段，总长 {}，最大 Ø{}）于 ({:.3}, {:.3})",
+                segments,
+                crate::partgen_kit::trim(total),
+                crate::partgen_kit::trim(max_d),
+                at[0],
+                at[1]
+            ),
+            "segments": segments,
+            "total_length": total,
+            "max_diameter": max_d,
+            "at": at,
+            "rot": rot,
+        })
+        .to_string());
+    }
+
+    // ② 无落点 → 建块 + 登记待放置件（与齿轮/零件库同一条放置态通路）。
+    let n = gear_view_scale(&doc, crate::take_parts_point().unwrap_or([0.0, 0.0, 0.0]));
+    let shaft = crate::shaft::build(&program, n)?;
+    let (segments, total, max_d) = (shaft.segment_count, shaft.total_length, shaft.max_diameter);
+    let block = crate::shaft::block_name(&program);
+    let label = format!(
+        "轴（{} 段，总长 {}）",
+        segments,
+        crate::partgen_kit::trim(total)
+    );
+
+    begin_undo(sender, "轴出图")?;
+    let exists = snapshot(sender)?
+        .block_records
+        .iter()
+        .any(|b| b.name == block);
+    if !exists {
+        req_timed(
+            sender,
+            PluginRequest::AddBlockRecord {
+                name: block.clone(),
+                entities: shaft.entities.clone(),
+            },
+            "AddBlockRecord",
+        )?;
+    }
+    crate::set_pending_part(crate::PendingPart {
+        block: block.clone(),
+        meta_json: serde_json::json!({
+            "family": "shaft",
+            "segments": segments,
+            "total_length": total,
+            "max_diameter": max_d,
+        })
+        .to_string(),
+        label: label.clone(),
+    });
+    commit_undo(sender);
+    Ok(serde_json::json!({
+        "ok": true,
+        "message": format!(
+            "已生成{label}（最大 Ø{}）：切回图纸，鼠标上已带这张轴侧视图，左键点击定位基点 → 移动光标旋转 → 再点击落定（可连续，Esc 结束）。",
+            crate::partgen_kit::trim(max_d)
+        ),
+        "block": block,
+        "segments": segments,
+        "total_length": total,
+        "max_diameter": max_d,
     })
     .to_string())
 }
@@ -7360,6 +7593,8 @@ const ROUGH_HTML: &str = include_str!("rough_gui.html");
 const PARTS_HTML: &str = include_str!("parts_gui.html");
 /// 齿轮页（参数 + 视图选择 + 实时预览）。
 const GEAR_HTML: &str = include_str!("gear_gui.html");
+/// 轴生成器页（段表 ↔ 行文本双向同步 + 实时预览；`OCSMSHAFT` 不带参数时打开）。
+const SHAFT_HTML: &str = include_str!("shaft_gui.html");
 /// 螺栓副（件链装配）页：给人类用的 GUI（AI 走命令行/HTTP 同一套实现）。
 const JOINT_HTML: &str = include_str!("joint_gui.html");
 /// 命令手册页（人类侧命令目录 + 操作教程）：教程正文是**磁盘上的 md**（见 `manual_dirs()`），
@@ -8265,6 +8500,7 @@ mod tests {
             ("rough_gui", ROUGH_HTML),
             ("parts_gui", PARTS_HTML),
             ("gear_gui", GEAR_HTML),
+            ("shaft_gui", SHAFT_HTML),
             ("joint_gui", JOINT_HTML),
             ("manual_gui", MANUAL_HTML),
             ("bom_gui", BOM_HTML),
@@ -8283,6 +8519,40 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// 轴窗口：每个 `el("id")` 引用都必须在 HTML 里有对应元素；脚本过 `node --check`。
+    #[test]
+    fn shaft_gui_el_ids_exist_and_script_passes_node_check() {
+        let ids = el_id_references(SHAFT_HTML);
+        assert!(!ids.is_empty(), "应扫到 el(\"…\") 引用");
+        for id in &ids {
+            assert!(
+                SHAFT_HTML.contains(&format!("id=\"{id}\""))
+                    || SHAFT_HTML.contains(&format!("id='{id}'")),
+                "shaft_gui.html: JS 里用了 el(\"{id}\")，但没有这个 id 的元素（开局 TypeError）"
+            );
+        }
+        // node --check：语法错误能过静态 id 扫描但会在浏览器里炸；没装 node 就跳过。
+        let Some(script) = first_script(SHAFT_HTML) else {
+            panic!("shaft_gui.html 里找不到 <script> 块");
+        };
+        let path = std::env::temp_dir().join("ocsm_shaft_gui_check.js");
+        std::fs::write(&path, script).expect("写脚本临时文件");
+        let out = match std::process::Command::new("node")
+            .arg("--check")
+            .arg(&path)
+            .output()
+        {
+            Ok(o) => o,
+            Err(_) => return, // 无 node：跳过（不阻塞 CI）
+        };
+        assert!(
+            out.status.success(),
+            "shaft_gui.html 脚本 node --check 失败：\n{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
     }
 
     /// `addEventListener('<事件>', NAME)` 里的**裸标识符**回调（匿名/箭头函数、
@@ -8344,6 +8614,42 @@ mod tests {
             }
         }
         out
+    }
+
+    /// `el("id")` 引用的 id（shaft_gui.html 专用约定；guide_gui.html 的
+    /// `el('polygon', {…})` 是另一个 createElement 助手，不能混用同一扫描规则）。
+    fn el_id_references(html: &str) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        for quote in ['\'', '"'] {
+            let needle = format!("el({quote}");
+            for (i, _) in html.match_indices(&needle) {
+                // 挡住标识符尾巴（`model("x")`、`level("x")` 里的 `el(` 不算）。
+                if html[..i]
+                    .chars()
+                    .last()
+                    .is_some_and(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$')
+                {
+                    continue;
+                }
+                let rest = &html[i + needle.len()..];
+                let Some(end) = rest.find(quote) else { continue };
+                let id = &rest[..end];
+                if !id.is_empty()
+                    && !id.contains('+')
+                    && !out.iter().any(|v| v == id)
+                {
+                    out.push(id.to_string());
+                }
+            }
+        }
+        out
+    }
+
+    /// 抽第一个 `<script>…</script>` 正文（node --check 用）。
+    fn first_script(html: &str) -> Option<&str> {
+        let start = html.find("<script>")? + "<script>".len();
+        let end = html[start..].find("</script>")? + start;
+        Some(&html[start..end])
     }
 }
 
@@ -13090,6 +13396,107 @@ mod weld_tests {
         assert!(apply_part_export(&sender, br#"{"family":"nope","d":5,"l":25}"#).is_err());
     }
 
+    // ── 轴生成器（OCSMSHAFT）：页面 / 解析 / 预览 / 导出 ──────────────────
+
+    /// OCSM 初始化好的测试图（全部图层 + 中心线层挂 CENTER2）。
+    fn ocsm_layered_doc() -> acadrust::CadDocument {
+        let mut doc = acadrust::CadDocument::new();
+        for def in crate::layer_defs() {
+            let mut ly = acadrust::tables::Layer::new(&def.name);
+            ly.color = def.color;
+            ly.line_type = def.linetype;
+            ly.line_weight = def.lineweight;
+            ly.is_plottable = def.plottable;
+            doc.layers.add_or_replace(ly);
+        }
+        doc
+    }
+
+    #[test]
+    fn shaft_routes_serve_page_parse_and_preview() {
+        let mock = Arc::new(MockSender::new(acadrust::CadDocument::new()));
+        let server = spawn_fixed(mock.clone()).expect("spawn guide server");
+        let html = http_req(server.port, "GET", "/shaft", "");
+        assert!(html.contains("OCSM 轴生成器"), "轴窗口标题");
+        assert!(html.contains("/api/shaft_parse"), "解析端点");
+        assert!(html.contains("/api/shaft_preview"), "预览端点");
+        assert!(html.contains("/api/shaft_export"), "导出端点");
+        assert!(html.contains("生成到图纸"), "生成按钮");
+        assert!(
+            html.contains("加行") && html.contains("复制行") && html.contains("上移") && html.contains("下移"),
+            "段表增删/搬移按钮"
+        );
+        // 解析端点：DSL → 归一化模型（M1.5 → thread 数字；退刀槽就是小直径轴段）
+        let body = serde_json::json!({"dsl": "S40 E40 L7 M1.5\nS36 E36 L5"}).to_string();
+        let j = http_req(server.port, "POST", "/api/shaft_parse", &body);
+        let v: serde_json::Value = serde_json::from_str(&j).unwrap();
+        assert_eq!(v["ok"], true, "{j}");
+        assert_eq!(v["segments"].as_array().unwrap().len(), 2);
+        assert_eq!(v["segments"][0]["thread"], 1.5, "M1.5 → thread 数字");
+        assert_eq!(v["segments"][1]["s"], 36.0, "退刀槽用小直径轴段");
+        // ES 已取消 → 报错 + 指路
+        let bad = http_req(
+            server.port,
+            "POST",
+            "/api/shaft_parse",
+            &serde_json::json!({"dsl": "S30 E30 L10 ES5*3"}).to_string(),
+        );
+        assert!(bad.contains("`ES` 已取消") && bad.contains("S24 E24 L5"), "{bad}");
+        // 预览：SVG（细线层 = 螺纹小径；中心线层 = 轴线）
+        let svg = http_req(
+            server.port,
+            "POST",
+            "/api/shaft_preview",
+            &serde_json::json!({"dsl": "S40 E40 L7 M1.5\nS36 E36 L5"}).to_string(),
+        );
+        assert!(svg.contains("<svg") && svg.contains("#5aa0ff"), "{}", &svg[..160.min(svg.len())]);
+        // GET ?dsl= 也支持（外部脚本/链接用）
+        let svg2 = http_req(server.port, "GET", "/api/shaft_preview?dsl=S40%20E40%20L7%20M1.5", "");
+        assert!(svg2.contains("<svg"), "{}", &svg2[..160.min(svg2.len())]);
+        // 几何错误带「第 N 段」
+        let err = http_req(
+            server.port,
+            "POST",
+            "/api/shaft_preview",
+            &serde_json::json!({"dsl": "S30 E40 L10 M1.5"}).to_string(),
+        );
+        assert!(err.contains("第 1 段") && err.contains("圆柱"), "{err}");
+    }
+
+    #[test]
+    fn shaft_export_registers_pending_part_and_direct_insert() {
+        let _g = export_lock();
+        let mock = Arc::new(MockSender::new(ocsm_layered_doc()));
+        let sender: Arc<dyn PluginRequestSender> = mock.clone();
+        // 无 at → 建块 + 登记待放置件（GUI 放置态）
+        let body = serde_json::json!({"segments":[{"s":40,"l":7,"thread":1.5},{"s":36,"l":5}]}).to_string();
+        let resp = apply_shaft_export(&sender, body.as_bytes()).expect("出图");
+        assert!(resp.contains("\"ok\":true") && resp.contains("已生成轴"), "{resp}");
+        let block = crate::pending_block().expect("已登记待放置件");
+        assert!(block.starts_with("OCSM_SHAFT_"), "{block}");
+        assert!(
+            mock.block_entities(&block)
+                .iter()
+                .any(|e| matches!(e, acadrust::EntityType::Line(l) if l.common.layer == crate::partgen_kit::LAYER_THIN)),
+            "块里有螺纹小径细实线"
+        );
+        let label = crate::pending_part_label().expect("label");
+        assert!(label.contains("2 段"), "{label}");
+        // 同几何 → 同名块（块名只由几何决定；宿主里同名块会被 exists 检查复用）
+        let same = crate::shaft::block_name(&crate::shaft::parse_program(&body).unwrap());
+        assert_eq!(same, block, "同几何同名块");
+        // 有 at → 直接插入（不建块，一次事务）
+        let n_blocks = mock.blocks().len();
+        let direct = serde_json::json!({"segments":[{"s":40,"l":10}],"at":[100,50],"rot":30}).to_string();
+        let resp3 = apply_shaft_export(&sender, direct.as_bytes()).expect("直插");
+        assert!(resp3.contains("已插入轴") && resp3.contains("(100.000, 50.000)"), "{resp3}");
+        assert_eq!(mock.blocks().len(), n_blocks, "直插不建块");
+        // 未初始化图纸 → 与齿轮同口径拦下
+        let raw = Arc::new(MockSender::new(acadrust::CadDocument::new()));
+        let raw_sender: Arc<dyn PluginRequestSender> = raw.clone();
+        let err = apply_shaft_export(&raw_sender, br#"{"segments":[{"s":30,"l":10}]}"#).unwrap_err();
+        assert!(err.contains("OCSM 初始化"), "{err}");
+    }
 }
 
 
