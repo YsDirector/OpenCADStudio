@@ -1077,7 +1077,7 @@ fn axial_outline(p: &GearParams, steps: bool) -> Vec<EntityType> {
 }
 
 /// 侧视图：轴向投影（不剖）。β≠0 时加三条螺旋线细实线。
-fn side_view(p: &GearParams, n: f64) -> Result<Vec<EntityType>, String> {
+pub(crate) fn side_view(p: &GearParams, n: f64) -> Result<Vec<EntityType>, String> {
     let mut out = axial_outline(p, true);
     // 分度线（点划线）+ 轴线（中心线）
     let d2 = p.d() / 2.0;

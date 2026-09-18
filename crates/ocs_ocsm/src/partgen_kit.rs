@@ -105,9 +105,30 @@ pub fn hatch_ansi31_edges(edges: &[HatchEdge], angle_deg: f64, pattern_scale: f6
         "ANSI31",
         "ANSI Iron, Brick, Stone masonry",
         &[(45.0, -off, off)],
-        edges,
+        &[edges.to_vec()],
         angle_deg,
         pattern_scale,
+        false,
+    )
+}
+
+/// 与 [`hatch_ansi31_edges`] 同图案同开关，但边界是**多个独立环**（每个环一条
+/// BoundaryPath）。轴剖视用：轴线上/下各一环（`~/桌面/OCSM/review/轴剖视图.dxf`
+/// 右视图口径：一个 HATCH、2 环 21+21 边、flags=external|outermost）。
+pub fn hatch_ansi31_rings(
+    rings: &[Vec<HatchEdge>],
+    angle_deg: f64,
+    pattern_scale: f64,
+) -> EntityType {
+    let off = 2.245_064_030_267_288 * pattern_scale;
+    hatch_edges_with(
+        "ANSI31",
+        "ANSI Iron, Brick, Stone masonry",
+        &[(45.0, -off, off)],
+        rings,
+        angle_deg,
+        pattern_scale,
+        true,
     )
 }
 
@@ -122,9 +143,10 @@ pub fn hatch_ansi37_edges(edges: &[HatchEdge], angle_deg: f64, pattern_scale: f6
         "ANSI37",
         "ANSI Lead, Zinc, Magnesium, Sound/Heat/Elec Insulation",
         &[(45.0, -off, off), (135.0, -off, -off)],
-        edges,
+        &[edges.to_vec()],
         angle_deg,
         pattern_scale,
+        false,
     )
 }
 
@@ -148,12 +170,14 @@ fn hatch_edges_with(
     name: &str,
     description: &str,
     base_lines: &[(f64, f64, f64)],
-    edges: &[HatchEdge],
+    rings: &[Vec<HatchEdge>],
     angle_deg: f64,
     pattern_scale: f64,
+    outermost: bool,
 ) -> EntityType {
     use ocs_plugin_api::host::acadrust::entities::hatch::{
-        BoundaryEdge, BoundaryPath, CircularArcEdge, HatchPattern, HatchPatternLine, LineEdge,
+        BoundaryEdge, BoundaryPath, BoundaryPathFlags, CircularArcEdge, HatchPattern,
+        HatchPatternLine, LineEdge,
     };
     use ocs_plugin_api::host::acadrust::types::Vector2;
     let mut h = Hatch::new();
@@ -176,30 +200,42 @@ fn hatch_edges_with(
     // 与模板一致：记录值（读者以线角度为准）
     h.pattern_angle = rot;
     h.pattern_scale = pattern_scale;
-    let mut bp = BoundaryPath::new();
-    bp.flags.set_external(true);
-    for e in edges {
-        match *e {
-            HatchEdge::Line { a, b } => bp.add_edge(BoundaryEdge::Line(LineEdge {
-                start: Vector2::new(a[0], a[1]),
-                end: Vector2::new(b[0], b[1]),
-            })),
-            HatchEdge::Arc {
-                c,
-                r,
-                start_deg,
-                end_deg,
-                ccw,
-            } => bp.add_edge(BoundaryEdge::CircularArc(CircularArcEdge {
-                center: Vector2::new(c[0], c[1]),
-                radius: r,
-                start_angle: start_deg.to_radians(),
-                end_angle: end_deg.to_radians(),
-                counter_clockwise: ccw,
-            })),
+    for ring in rings {
+        let mut bp = BoundaryPath::new();
+        // 参考件口径（`轴剖视图.dxf`）：多环时 flags = EXTERNAL | OUTERMOST（DXF 17）；
+        // 单环保持既有 EXTERNAL（模板同构），不动老输出。
+        bp.flags = if outermost {
+            BoundaryPathFlags::from_bits(
+                BoundaryPathFlags::EXTERNAL.bits() | BoundaryPathFlags::OUTERMOST.bits(),
+            )
+        } else {
+            let mut flags = BoundaryPathFlags::new();
+            flags.set_external(true);
+            flags
+        };
+        for e in ring {
+            match *e {
+                HatchEdge::Line { a, b } => bp.add_edge(BoundaryEdge::Line(LineEdge {
+                    start: Vector2::new(a[0], a[1]),
+                    end: Vector2::new(b[0], b[1]),
+                })),
+                HatchEdge::Arc {
+                    c,
+                    r,
+                    start_deg,
+                    end_deg,
+                    ccw,
+                } => bp.add_edge(BoundaryEdge::CircularArc(CircularArcEdge {
+                    center: Vector2::new(c[0], c[1]),
+                    radius: r,
+                    start_angle: start_deg.to_radians(),
+                    end_angle: end_deg.to_radians(),
+                    counter_clockwise: ccw,
+                })),
+            }
         }
+        h.paths.push(bp);
     }
-    h.paths.push(bp);
     set_layer(&mut h, LAYER_HATCH);
     EntityType::Hatch(h)
 }

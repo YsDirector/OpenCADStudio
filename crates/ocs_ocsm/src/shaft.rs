@@ -41,7 +41,8 @@
 //! - `ES5*3` 这类旧写法会报错并指路（退刀槽现在用 `RL` 或小直径轴段表示）；
 //! - `GEAR M5 Z10 H20`：**齿轮段（直齿）**，分度圆 d = m·z 由参数导出、**不给
 //!   S/E**；H = 齿宽（省略 = 10m）；按齿轮工具 `side_view()` 的轴向投影口径：
-//!   **只画齿顶线（= 该段轮廓，粗实线）+ 分度线（`3中心线层` 点划线），不画齿根线**；
+//!   画齿顶轮廓（两端带轴向倒角 C = round(0.6m)，见下）+ 分度线（`3中心线层`
+//!   点划线），**常规视图不画齿根线**；剖视另画齿根线（齿部按不剖）；
 //!   齿形用 `OCSMGEAR` 单独出，这里不画齿、本期不做斜齿（`BETA…` 报「斜齿未实现」）；
 //! - `VIEW 常规|剖视|双`：视图开关（默认 `常规`）；独立一行或段内关键字都认
 //!   （`VIEW 剖视` / `VIEW=section`），只影响整体视图（`双` = 常规+剖视并排一次出）；
@@ -58,25 +59,28 @@
 //!
 //! ## 齿轮段画法口径（侧视图，与 `gear.rs::side_view()` 的轴向投影一致）
 //!
-//! 只画齿顶线 ra = d/2 + m（= `1轮廓实线层`，即该段上下轮廓）与分度线 r = d/2
-//! （`3中心线层`，点划线），上下各一条、画在齿顶线内部；**不画齿根线** —— 与齿轮
-//! 工具 `side_view()` 一模一样（它也只画齿顶轮廓 + 两条分度线 + 轴线）。派生尺寸
-//! 取 `gear.rs` 同口径（ha*=1、c*=0.25、Xn=0 → ra = da/2、rf = df/2），不自己另立
-//! 公式（rf 仍用于口径换算，只是不落图）。齿轮段与相邻段的过渡按台阶处理（不做
-//! 过渡圆角）；**相邻段轮廓半径 > ra 会盖住齿顶线**，报「第 N 段」；≤ ra 一律放行
-//! （不再受齿根圆 rf 限制）。
+//! 齿顶轮廓（= `1轮廓实线层`，即该段轮廓）两端各倒轴向倒角
+//! **C = round(0.6m)**（`gear.rs::GearParams::chamfer()`）：端面可见高 = ra − C，
+//! 齿顶面长 = 齿宽 − 2C，倒角斜线两端都画；倒角终点（台阶）竖线**只在常规
+//! 视图**画（半高 = ra，与 `side_view()` 的台阶线同）。另画分度线 r = d/2
+//! （`3中心线层`，点划线，不受倒角影响）。**常规视图不画齿根线** —— 与齿轮
+//! 工具 `side_view()` 一样；**剖视**按 `section_view()` 口径加齿根线
+//! ra→rf（`1轮廓实线层`，齿部按不剖，也是剖面线边界）。派生尺寸取 `gear.rs`
+//! 同口径（ha*=1、c*=0.25、Xn=0 → ra = da/2、rf = df/2），不自己另立公式。
+//! 齿轮段与相邻段的过渡按台阶处理（不做过渡圆角）；**相邻段轮廓半径 > ra
+//! 会盖住齿顶线**，报「第 N 段」；≤ ra 一律放行（不再受齿根圆 rf 限制）。
 //!
 //! ## 几何口径（单视图侧视图）
 //!
 //! 轴线 = x 轴（x 向右、y = 半径），第 1 段左端面在 x=0；上下对称：
 //! - 每段上下各一条线：圆柱 = 水平线，圆锥 = 斜线；
-//! - **每条段边界都画一条贯通轴线的竖线**（`1轮廓实线层`），包括直径没有
-//!   变化的分界；半高 = `min(左段端面实际半径, 右段端面实际半径)`（用户
-//!   2026-09-18 更正版口径）；端面有槽时取槽肩（圆角切点）高；
+//! - **常规视图**里每条段边界都画一条贯通轴线的竖线（`1轮廓实线层`），包括直径
+//!   没有变化的分界；半高 = `min(左段端面实际半径, 右段端面实际半径)`（用户
+//!   2026-09-18 更正版口径）；端面有槽时取槽肩（圆角切点）高；**剖视图不画**；
 //! - 段间端面 / 两端外端面用竖直线闭合（肩面仍从 `bottom` 画到 `top`）；
-//! - **倒角终点**（倒角根）也画贯通竖线，半高 = 倒角根半径；
-//! - **`OV` / `RL` 槽的起止**：槽肩面 / 槽底终止 / 斜壁终点各一条贯通竖线，
-//!   高度规则见 `build_geometry` 内的注释（用户版 `x=328 ±13.1、330.6 ±12.1、331 ±12.5`）；
+//! - **倒角终点**（倒角根）在常规视图也画贯通竖线，半高 = 倒角根半径；
+//! - **`OV` / `RL` 槽的起止**：常规视图里槽肩面 / 槽底终止 / 斜壁终点各画一条
+//!   贯通竖线，高度规则见 `build_geometry` 内的注释；剖视只画真实槽体；
 //! - **倒角贴端面凸角**：相邻段更大 → 倒角落在相邻（大）段一侧；相邻段更小或
 //!   本段是自由端 → 倒角落在本段一侧。这样 `S40 E40 L30 CH2@R OV3`（右端有
 //!   越程槽 + 相邻 φ50 台阶）里倒角落在 φ50 上，两个特征不重叠——这是本期的
@@ -91,12 +95,13 @@
 //!
 //! ## 视图口径（`VIEW`）
 //!
-//! * `常规`（默认）= 只画外形可见线（就是上面这套几何，无剖面线）；
-//! * `剖视` = **同一套轮廓 + 剖面线**：ANSI31、比例 1.0，落 `5剖面线层`，走
-//!   `partgen_kit::hatch_ansi31_edges` 通路；边界 = 轴剖面外轮廓 —— 上半轮廓
-//!   （左→右）→ 右端面 → 下半轮廓（右→左）→ 左端面，闭合成**一个简单环**
-//!   （上轮廓按 x 排序拼接，含倒角/台阶/越程槽圆角；内部有孔/齿槽时每个环
-//!   单独一条 BoundaryPath，采样折线时按 `dedup_ring` 口径去重点）；
+//! * `常规`（默认）= 只画外形可见线：真实几何 + **贯通竖线**（段边界 / 倒角终点 /
+//!   槽界线 / 齿轮台阶线），无剖面线；
+//! * `剖视` = **只画真实几何 + 剖面线**（不再画贯通竖线；用户 2026-09-18 定案）：
+//!   段间端面（环形面）、倒角斜线、槽的真实壁面、齿轮齿根线；ANSI31、比例 1.0，
+//!   落 `5剖面线层`，走 `partgen_kit::hatch_ansi31_rings` 通路；边界 = 上半边界
+//!   按 x 排序后拆成**上/下两个环**（参考件 `轴剖视图.dxf` 右视图：2 环 21+21 边）；
+//!   普通全螺纹段按**小径包络**、齿轮段按**齿根圆**取剖面线边界（牙顶/齿部不剖）；
 //! * `双` = 常规视图与剖视图并排一次生成（读取顺序：左常规、右剖视），
 //!   间距 = `max(总长 × 15%, 40 × 图框比例)`。
 //!
@@ -135,7 +140,7 @@ OCSMSHAFT 轴生成器：行 DSL / JSON → 单视图侧视图（段拼接 + 端
                例：S25 E25 L32 RL@L P1.5 / RL@L g1 2.5 g2 4.5 dg 22.7 r 0.8
                前置：该端相邻段更高（有台肩）、本段圆柱，否则报「第 N 段」
     GEAR M5 Z10 H20   齿轮段（直齿）：d=m·z 导出、不给 S/E；H = 齿宽（省略 = 10m）
-                      只画齿顶线（= 该段轮廓）+ 分度线（点划线），不画齿根线
+                      齿顶轮廓两端倒角 C=round(0.6m)；常规不画齿根、剖视画齿根
     VIEW 常规|剖视|双   视图：常规（默认，只看外形）/ 剖视（轮廓 + ANSI31 剖面线）/ 双（并排一次出）
     at x,y rot 度   放置（不写 = 原点、不转）
   例：OCSMSHAFT S30 E30 L45 CH2@L | S40 E40 L30 CH2@R OV3 | S50 E30 L20 | S30 E30 L15 CH2@R | S40 E40 L7 M1.5 | S36 E36 L5 | GEAR M3 Z20 VIEW 剖视 at 100,50 rot 30
@@ -162,8 +167,8 @@ fn end_cn(end: End) -> &'static str {
 
 /// 视图开关（用户 2026-09-18 定案）：`常规` / `剖视` / `双`。
 ///
-/// * `常规` = 只画外形可见线（默认，与原来完全一致）；
-/// * `剖视` = 同一套轮廓 + ANSI31 剖面线（`5剖面线层`）；
+/// * `常规` = 只画外形可见线（默认）；贯通竖线只属于常规视图；
+/// * `剖视` = **真实几何**（不含贯通竖线）+ ANSI31 剖面线（`5剖面线层`，上下两环）；
 /// * `双` = 常规视图与剖视图并排一次出（左常规、右剖视）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -500,6 +505,12 @@ impl Gear {
     /// 齿根圆半径 rf = df/2（外齿轮 = d/2 − 1.25m）。
     pub fn root_radius(&self) -> f64 {
         self.params().df() / 2.0
+    }
+
+    /// 轴向倒角 C = round(0.6m)（与 `gear.rs::GearParams::chamfer()` 同口径；
+    /// 小模数可能为 0 = 不倒角）。
+    pub fn chamfer(&self) -> f64 {
+        self.params().chamfer()
     }
 }
 
@@ -2135,11 +2146,18 @@ fn mirror_x(entity: EntityType, face_x: f64) -> EntityType {
     }
 }
 
-/// 一次构建出来的原始几何：常规视图轮廓 + 剖面线环（上半侧，左→右）。
+/// 一次构建出来的原始几何：两视图共用的真实几何 + 剖视用的剖面线环。
 struct Geometry {
+    /// 两个视图共用的**真实几何**（轮廓/端面/倒角/槽/螺纹线/齿轮倒角）；
+    /// 不含贯通竖线（那类只属于常规视图）。
     entities: Vec<EntityType>,
-    /// 上半外轮廓边界段（含直线/圆弧，已按 x 排好序）；剖视时镜像闭合成一个简单环。
-    ring: Vec<HatchEdge>,
+    /// 仅常规视图：段边界 / 倒角终点 / 槽肩、槽底、斜壁终点等**贯通竖线**
+    /// （`through_line`；用户 2026-09-18 定案只加在常规视图）。
+    through: Vec<EntityType>,
+    /// 仅剖视视图的真实几何：齿轮段齿根线（齿部按不剖，也是剖面线边界）。
+    section_lines: Vec<EntityType>,
+    /// 剖视剖面线边界：上半外轮廓边界（左→右），拆成上/下两个环。
+    profile: Vec<HatchEdge>,
     total_length: f64,
     max_diameter: f64,
     segment_count: usize,
@@ -2150,32 +2168,50 @@ struct Geometry {
 pub fn build(program: &Program, frame_scale: f64) -> Result<Shaft, String> {
     let Geometry {
         entities,
-        ring,
+        through,
+        section_lines,
+        profile,
         total_length: total,
         max_diameter,
         segment_count,
     } = build_geometry(program, frame_scale)?;
+    let rings = close_hatch_rings(profile, total);
     let hatch = || {
-        if ring.is_empty() {
+        if rings.is_empty() {
             Vec::new()
         } else {
-            // ANSI31 / 比例 1.0，一个简单环（走 partgen_kit 的既有 HATCH 通路）。
-            vec![crate::partgen_kit::hatch_ansi31_edges(&ring, 0.0, 1.0)]
+            // ANSI31 / 比例 1.0，轴线上/下两个环（走 partgen_kit 的既有 HATCH 通路）。
+            vec![crate::partgen_kit::hatch_ansi31_rings(&rings, 0.0, 1.0)]
         }
     };
-    let mut entities = entities;
-    match program.view {
-        ShaftView::Normal => {}
-        ShaftView::Section => entities.extend(hatch()),
+    let entities = match program.view {
+        ShaftView::Normal => {
+            let mut out = entities;
+            out.extend(through);
+            out
+        }
+        ShaftView::Section => {
+            let mut out = entities;
+            out.extend(section_lines);
+            out.extend(hatch());
+            out
+        }
         ShaftView::Both => {
             // 并排：左常规、右剖视；间距 = max(总长×15%, 40×图框比例)。
             let dx = total + both_view_gap(total, frame_scale);
-            let mut second: Vec<EntityType> =
-                entities.iter().cloned().map(|e| translate_x(e, dx)).collect();
-            second.extend(hatch().into_iter().map(|e| translate_x(e, dx)));
-            entities.extend(second);
+            let mut left = entities.clone();
+            left.extend(through);
+            let mut right: Vec<EntityType> = entities
+                .iter()
+                .cloned()
+                .map(|e| translate_x(e, dx))
+                .collect();
+            right.extend(section_lines.into_iter().map(|e| translate_x(e, dx)));
+            right.extend(hatch().into_iter().map(|e| translate_x(e, dx)));
+            left.extend(right);
+            left
         }
-    }
+    };
     Ok(Shaft {
         entities,
         total_length: total,
@@ -2215,6 +2251,14 @@ struct LocalThread {
     contour_end: f64,
     /// 小径细实线右端 x（螺尾起点，或斜壁与小径的交点）。
     minor_end: f64,
+}
+
+/// 该段是否为「普通全螺纹段」：`M` 段且没给 `TL`/`RL`（= 小径细实线贯穿整段的旧口径）。
+/// 剖面线边界对这类段按**小径包络**（牙顶区不剖，参考件 `轴剖视图.dxf` 右视图口径）。
+fn plain_thread(seg: &Segment) -> Option<&Thread> {
+    seg.thread
+        .as_ref()
+        .filter(|t| t.tl.is_none() && !t.relief)
 }
 
 /// 解析 → 校验 → 生成常规视图轮廓，并顺手记录剖面线环用的上半外轮廓段。
@@ -2314,7 +2358,12 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
     let mut own_ov = vec![[None::<f64>; 2]; count];
     let mut own_relief = vec![[None::<f64>; 2]; count];
     let mut entities: Vec<EntityType> = Vec::new();
-    // 剖面线环用的上半外轮廓段（含倒角/台阶/越程槽圆角），最后按 x 排序闭合。
+    // 贯通竖线（`through_line` 系列）：只属于常规视图。
+    let mut through: Vec<EntityType> = Vec::new();
+    // 仅剖视视图的真实几何（齿轮齿根线）。
+    let mut section_lines: Vec<EntityType> = Vec::new();
+    // 剖面线环用的上半外轮廓段（含倒角/台阶/越程槽圆角/螺纹小径包络/齿轮齿根），
+    // 最后按 x 排序拆成上/下两个环。
     let mut profile: Vec<HatchEdge> = Vec::new();
 
     // ── 齿轮段相邻直径检查（用户 2026-09-18 口径）：相邻半径 ≤ ra 放行；
@@ -2404,12 +2453,41 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
         // 该端面处两侧的轮廓半径。
         let ra = segs[i].outer_radius(End::R);
         let rb = segs[k].outer_radius(End::L);
+        // 齿轮端倒角 C = round(0.6m)（抄 `gear.rs::side_view()`）：端面可见高 = ra − C。
+        let gear_c_r = segs[i].gear.as_ref().map(Gear::chamfer).filter(|c| *c > 1e-9);
+        let gear_c_l = segs[k].gear.as_ref().map(Gear::chamfer).filter(|c| *c > 1e-9);
 
-        let mut bottom = ra.min(rb);
-        let mut top = ra.max(rb);
+        let mut bottom = (ra - gear_c_r.unwrap_or(0.0)).min(rb - gear_c_l.unwrap_or(0.0));
+        let mut top = (ra - gear_c_r.unwrap_or(0.0)).max(rb - gear_c_l.unwrap_or(0.0));
         let mut chamfer_lines: Option<([f64; 2], [f64; 2])> = None;
+        // 带 CH 倒角的落点段（用于判断剖面线边界是否由螺纹小径包络接管）。
+        let mut chamfer_land: Option<usize> = None;
         // 端面带槽时的贯通竖线半高（槽肩圆角切点）；None = 用 min(left_eff, right_eff)。
         let mut face_through_h: Option<f64> = None;
+
+        // ── 齿轮端倒角（两端都倒 C）：倒角斜线 + 台阶竖线（竖线只属常规视图）──
+        if let Some(c) = gear_c_r {
+            let contour = [x_face - c, ra];
+            let face_point = [x_face, ra - c];
+            entities.push(line(face_point, contour, LAYER_MAIN));
+            entities.push(line(
+                [face_point[0], -face_point[1]],
+                [contour[0], -contour[1]],
+                LAYER_MAIN,
+            ));
+            through_line(&mut through, contour[0], contour[1]);
+        }
+        if let Some(c) = gear_c_l {
+            let contour = [x_face + c, rb];
+            let face_point = [x_face, rb - c];
+            entities.push(line(face_point, contour, LAYER_MAIN));
+            entities.push(line(
+                [face_point[0], -face_point[1]],
+                [contour[0], -contour[1]],
+                LAYER_MAIN,
+            ));
+            through_line(&mut through, contour[0], contour[1]);
+        }
 
         if let Some(c) = chamfer {
             let requester = if ch_from_left { i } else { k };
@@ -2435,6 +2513,7 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
             }
             // 倒角贴**凸角**（大的一侧）；落在齿轮段那侧则冲突。
             let (land, _land_end) = if rb > ra { (k, End::L) } else { (i, End::R) };
+            chamfer_land = Some(land);
             if segs[land].gear.is_some() {
                 return Err(format!(
                     "第 {} 段：{}端倒角会落在第 {} 段齿轮段上（齿轮段不能倒角）",
@@ -2508,8 +2587,8 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
             let rg = segs[i].e / 2.0;
             let yb = rg - row.h;
             // 槽底终止 / 斜壁终点两条贯通竖线（槽肩那条 = 上面的段边界线）。
-            through_line(&mut entities, x_face - (row.b1 - row.h), yb);
-            through_line(&mut entities, x_face - row.b1, rg);
+            through_line(&mut through, x_face - (row.b1 - row.h), yb);
+            through_line(&mut through, x_face - row.b1, rg);
             let slope_x1 = x_face - (row.b1 - row.h);
             let groove_x1 = x_face - row.r;
             profile.push(lr_line([x_face - row.b1, rg], [slope_x1, yb]));
@@ -2561,8 +2640,8 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
             // 槽底终止 / 斜壁终点两条贯通竖线（槽肩那条 = 上面的段边界线）。
             let rg = segs[k].s / 2.0;
             let yb = rg - row.h;
-            through_line(&mut entities, x_face + (row.b1 - row.h), yb);
-            through_line(&mut entities, x_face + row.b1, rg);
+            through_line(&mut through, x_face + (row.b1 - row.h), yb);
+            through_line(&mut through, x_face + row.b1, rg);
             // 剖面线环：圆角 → 槽底 → 斜坡（上半侧，左→右）
             let slope_x1 = x_face + (row.b1 - row.h);
             profile.push(HatchEdge::Arc {
@@ -2608,8 +2687,8 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
             );
             // 槽底终止 / 斜壁终点两条贯通竖线（槽肩那条 = 上面的段边界线）。
             let rg = dims.dg / 2.0;
-            through_line(&mut entities, x_face - dims.g1, rg);
-            through_line(&mut entities, x_face - dims.g2, ra);
+            through_line(&mut through, x_face - dims.g1, rg);
+            through_line(&mut through, x_face - dims.g2, ra);
             // 剖面线环：斜壁 → 槽底 → 圆角（上半侧，左→右）
             profile.push(lr_line([x_face - dims.g2, ra], [x_face - dims.g1, rg]));
             profile.push(lr_line([x_face - dims.g1, rg], [x_face - dims.r, rg]));
@@ -2649,8 +2728,8 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
             );
             // 槽底终止 / 斜壁终点两条贯通竖线（槽肩那条 = 上面的段边界线）。
             let rg = dims.dg / 2.0;
-            through_line(&mut entities, x_face + dims.g1, rg);
-            through_line(&mut entities, x_face + dims.g2, rb);
+            through_line(&mut through, x_face + dims.g1, rg);
+            through_line(&mut through, x_face + dims.g2, rb);
             // 剖面线环：圆角 → 槽底 → 斜壁（上半侧，左→右）
             profile.push(HatchEdge::Arc {
                 c: [x_face + dims.r, tangent],
@@ -2708,11 +2787,23 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
         if let Some(tangent) = relief_face {
             left_eff = tangent;
         }
+        // 剖面线边界：齿轮端按齿根圆（齿部按不剖）；普通全螺纹段按小径包络
+        // （牙顶/牙底之间的牙型区不剖，参考件 `轴剖视图.dxf` 右视图口径）。
+        if let Some(gear) = &segs[i].gear {
+            left_eff = gear.root_radius();
+        } else if let Some(thread) = plain_thread(&segs[i]) {
+            left_eff = left_eff.min(thread.minor_radius(segs[i].s));
+        }
+        if let Some(gear) = &segs[k].gear {
+            right_eff = gear.root_radius();
+        } else if let Some(thread) = plain_thread(&segs[k]) {
+            right_eff = right_eff.min(thread.minor_radius(segs[k].s));
+        }
 
         // ── 段边界贯通竖线（用户 2026-09-18 更正版口径）：半高 = 该端面两侧
         //    实际轮廓半径的较小者；端面带槽时 = 槽肩（圆角切点）高。 ──
         through_line(
-            &mut entities,
+            &mut through,
             x_face,
             face_through_h.unwrap_or(left_eff.min(right_eff)),
         );
@@ -2733,9 +2824,12 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
                 [contour[0], -contour[1]],
                 LAYER_MAIN,
             ));
-            profile.push(lr_line(face_point, contour));
+            // 剖面线边界：倒角落在普通全螺纹段时由小径包络接管，不推整段倒角。
+            if chamfer_land.map_or(true, |land| plain_thread(&segs[land]).is_none()) {
+                profile.push(lr_line(face_point, contour));
+            }
             // 倒角终点（根）贯通竖线，半高 = 倒角根半径（用户版 x=2 ±14）。
-            through_line(&mut entities, contour[0], contour[1]);
+            through_line(&mut through, contour[0], contour[1]);
         }
     }
 
@@ -2743,7 +2837,25 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
     if segs[0].ov.iter().any(|o| o.end == End::L) {
         return Err("第 1 段：左端是自由端，越程槽没有台阶面".into());
     }
-    let left_face = if let Some(c) = segs[0].ch.iter().find(|c| c.end == End::L).map(|c| c.c) {
+    let left_face = if let Some(gear) = &segs[0].gear {
+        // 齿轮段自由端：端面可见高 = ra − C，齿顶轮廓两端倒角（`gear.rs::side_view()` 口径）。
+        let ra = gear.addendum_radius();
+        let c = gear.chamfer();
+        if c > 1e-9 {
+            let contour = [c, ra];
+            let face_point = [0.0, ra - c];
+            entities.push(line(face_point, contour, LAYER_MAIN));
+            entities.push(line(
+                [face_point[0], -face_point[1]],
+                [contour[0], -contour[1]],
+                LAYER_MAIN,
+            ));
+            through_line(&mut through, contour[0], contour[1]);
+            face_point[1]
+        } else {
+            ra
+        }
+    } else if let Some(c) = segs[0].ch.iter().find(|c| c.end == End::L).map(|c| c.c) {
         let radius = segs[0].s / 2.0;
         if c >= radius - 1e-12 {
             return Err(format!(
@@ -2768,9 +2880,12 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
             [contour[0], -contour[1]],
             LAYER_MAIN,
         ));
-        profile.push(lr_line(face_point, contour));
+        // 剖面线边界：普通全螺纹段由小径包络接管（与内端面同口径）。
+        if plain_thread(&segs[0]).is_none() {
+            profile.push(lr_line(face_point, contour));
+        }
         // 倒角终点（根）贯通竖线，半高 = 倒角根半径（用户版 x=2 ±14）。
-        through_line(&mut entities, contour[0], contour[1]);
+        through_line(&mut through, contour[0], contour[1]);
         face_point[1]
     } else {
         segs[0].outer_radius(End::L)
@@ -2794,6 +2909,24 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
             return Err(format!("第 {} 段：局部螺纹 TL/RL 的右端不能倒角 CH", last + 1));
         }
         tangent
+    } else if let Some(gear) = &segs[last].gear {
+        // 齿轮段自由端：端面可见高 = ra − C（与 `gear.rs::side_view()` 一致）。
+        let ra = gear.addendum_radius();
+        let c = gear.chamfer();
+        if c > 1e-9 {
+            let contour = [x_end - c, ra];
+            let face_point = [x_end, ra - c];
+            entities.push(line(face_point, contour, LAYER_MAIN));
+            entities.push(line(
+                [face_point[0], -face_point[1]],
+                [contour[0], -contour[1]],
+                LAYER_MAIN,
+            ));
+            through_line(&mut through, contour[0], contour[1]);
+            face_point[1]
+        } else {
+            ra
+        }
     } else if let Some(c) = segs[last]
         .ch
         .iter()
@@ -2826,9 +2959,12 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
             [contour[0], -contour[1]],
             LAYER_MAIN,
         ));
-        profile.push(lr_line(contour, face_point));
+        // 剖面线边界：普通全螺纹段由小径包络接管（与内端面同口径）。
+        if plain_thread(&segs[last]).is_none() {
+            profile.push(lr_line(contour, face_point));
+        }
         // 倒角终点（根）贯通竖线，半高 = 倒角根半径。
-        through_line(&mut entities, contour[0], contour[1]);
+        through_line(&mut through, contour[0], contour[1]);
         face_point[1]
     } else {
         segs[last].outer_radius(End::R)
@@ -2836,18 +2972,29 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
     entities.push(line([x_end, -right_face], [x_end, right_face], LAYER_MAIN));
 
     // ── 每段上下轮廓线（两端被倒角/越程槽吃掉多少已定）；
-    //    齿轮段 = 齿顶线（轮廓）+ 分度线（不画齿根线）；螺纹段另加小径细实线 ──
+    //    齿轮段 = 齿顶线（轮廓，两端带 C 倒角）+ 分度线；螺纹段另加小径细实线 ──
     for (index, seg) in segs.iter().enumerate() {
         if let Some(gear) = &seg.gear {
             let (x0, x1) = (x0s[index], x0s[index] + seg.l);
-            let (r, ra) = (gear.pitch_radius(), gear.addendum_radius());
-            // 齿顶线 = 该段轮廓（粗实线）
-            entities.push(line([x0, ra], [x1, ra], LAYER_MAIN));
-            entities.push(line([x0, -ra], [x1, -ra], LAYER_MAIN));
-            profile.push(lr_line([x0, ra], [x1, ra]));
-            // 分度线（点划线，3中心线层）
+            let (r, ra, rf) = (
+                gear.pitch_radius(),
+                gear.addendum_radius(),
+                gear.root_radius(),
+            );
+            // 齿顶面 = 齿宽两端缩进 C（用户口径：C = round(0.6m)，与 `gear.rs::side_view()` 同）。
+            let c = gear.chamfer();
+            let (ta, tb) = (x0 + c, x1 - c);
+            if tb - ta > 1e-9 {
+                entities.push(line([ta, ra], [tb, ra], LAYER_MAIN));
+                entities.push(line([ta, -ra], [tb, -ra], LAYER_MAIN));
+            }
+            // 分度线（点划线，3中心线层；不受倒角影响）
             entities.push(line([x0, r], [x1, r], LAYER_CENTER));
             entities.push(line([x0, -r], [x1, -r], LAYER_CENTER));
+            // 齿根线：与 `gear.rs::section_view()` 一致，只在剖视可见；也是剖面线边界。
+            section_lines.push(line([x0, rf], [x1, rf], LAYER_MAIN));
+            section_lines.push(line([x0, -rf], [x1, -rf], LAYER_MAIN));
+            profile.push(lr_line([x0, rf], [x1, rf]));
             continue;
         }
         let start_shift = own_ch[index][0]
@@ -2879,7 +3026,56 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
             let ye = radius_at(seg, x0s[index], xe);
             entities.push(line([xs, ys], [xe, ye], LAYER_MAIN));
             entities.push(line([xs, -ys], [xe, -ye], LAYER_MAIN));
-            profile.push(lr_line([xs, ys], [xe, ye]));
+            if plain_thread(seg).is_none() {
+                profile.push(lr_line([xs, ys], [xe, ye]));
+            }
+        }
+        // 普通全螺纹段的剖面线边界：按小径包络（牙顶区不剖），左/右端倒角
+        // 深入小径时沿倒角线收进去；与参考件 `轴剖视图.dxf` 右视图口径一致。
+        if let Some(thread) = plain_thread(seg) {
+            let (x0, x1) = (x0s[index], x0s[index] + seg.l);
+            let r = seg.s / 2.0;
+            let r1 = thread.minor_radius(seg.s);
+            let cut = (r - r1).max(0.0);
+            // 左端：倒角（贴本段时）与 r1 的交点；否则从小径线起。
+            let mut flat_start = x0;
+            if let Some(c) = own_ch[index][0] {
+                let face_y = r - c;
+                if face_y < r1 - 1e-12 {
+                    let x_cross = x0 + (c - cut);
+                    profile.push(lr_line([x0, face_y], [x_cross, r1]));
+                    flat_start = x_cross;
+                }
+            } else if own_ov[index][0].is_some() || own_relief[index][0].is_some() {
+                // 槽体边界已由端面循环推入；从小径线起（垂直落下去）。
+                flat_start = xs;
+                profile.push(HatchEdge::Line {
+                    a: [xs, r],
+                    b: [xs, r1],
+                });
+            }
+            // 右端：倒角（贴本段时）与 r1 的交点；否则到段末。
+            let mut flat_end = x1;
+            let mut right_piece: Option<([f64; 2], [f64; 2])> = None;
+            if let Some(c) = own_ch[index][1] {
+                let face_y = r - c;
+                if face_y < r1 - 1e-12 {
+                    flat_end = x1 - (c - cut);
+                    right_piece = Some(([flat_end, r1], [x1, face_y]));
+                }
+            } else if own_ov[index][1].is_some() || own_relief[index][1].is_some() {
+                flat_end = xe;
+                profile.push(HatchEdge::Line {
+                    a: [xe, r1],
+                    b: [xe, r],
+                });
+            }
+            if flat_end - flat_start > 1e-9 {
+                profile.push(lr_line([flat_start, r1], [flat_end, r1]));
+            }
+            if let Some((a, b)) = right_piece {
+                profile.push(lr_line(a, b));
+            }
         }
         // ── 螺纹段：`TL`/`RL` 局部螺纹（右端台肩），或旧口径整段全螺纹；
         //    小径细实线上下各一条（2细线层），左端按倒角内缩、右端止于螺尾/
@@ -2907,8 +3103,8 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
                             .map(|e| mirror_x(e, lay.face)),
                     );
                     // 槽底终止 / 斜壁终点两条贯通竖线（槽肩那条在端面循环按切点画）。
-                    through_line(&mut entities, lay.face - dims.g1, rg);
-                    through_line(&mut entities, lay.face - dims.g2, lay.r);
+                    through_line(&mut through, lay.face - dims.g1, rg);
+                    through_line(&mut through, lay.face - dims.g2, lay.r);
                     // 剖面线环（上半，左→右）：斜壁 → 槽底 → 圆角
                     profile.push(lr_line([lay.face - dims.g2, lay.r], [lay.face - dims.g1, rg]));
                     profile.push(lr_line([lay.face - dims.g1, rg], [lay.face - dims.r, rg]));
@@ -3000,27 +3196,29 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
         LAYER_CENTER,
     ));
 
-    // ── 剖面线环：上半轮廓（左→右）按 x 拼接后镜像闭合 ──
-    let ring = close_hatch_ring(profile, x_end, right_face, left_face);
+    // ── 剖面线环：上半边界（左→右）在 `build()` 里按 x 排序后拆成上/下两个环 ──
 
     Ok(Geometry {
         entities,
-        ring,
+        through,
+        section_lines,
+        profile,
         total_length: total,
         max_diameter,
         segment_count: count,
     })
 }
 
-/// 上半轮廓段按 x 排序后，镜像闭合成剖面线的**一个简单环**：
-/// 上半轮廓（左→右）→ 右端面 → 下半轮廓（右→左，镜像）→ 左端面。
-fn close_hatch_ring(
-    mut profile: Vec<HatchEdge>,
-    x_end: f64,
-    right_face: f64,
-    left_face: f64,
-) -> Vec<HatchEdge> {
+/// 上半剖面线边界（左→右）按 x 拼接后拆成**上/下两个简单环**：
+/// 上环 = 上半边界 → 右端面下到轴线 → 轴线回到左端 → 左端面上到上半边界；
+/// 下环 = 上环关于 x 轴的镜像反走。参考件 `轴剖视图.dxf` 右视图：一个 HATCH、2 环。
+///
+/// 端面的闭合高度直接取上半边界链两端点的 y（含齿轮齿根 / 螺纹小径包络 / 端面倒角）。
+fn close_hatch_rings(mut profile: Vec<HatchEdge>, x_end: f64) -> Vec<Vec<HatchEdge>> {
     profile.retain(|e| !edge_is_degenerate(e));
+    if profile.is_empty() {
+        return Vec::new();
+    }
     profile.sort_by(|a, b| {
         let (a0, a1) = edge_span(a);
         let (b0, b1) = edge_span(b);
@@ -3028,20 +3226,64 @@ fn close_hatch_ring(
             .unwrap_or(std::cmp::Ordering::Equal)
             .then(a1.partial_cmp(&b1).unwrap_or(std::cmp::Ordering::Equal))
     });
-    let mut ring = Vec::with_capacity(profile.len() * 2 + 2);
-    ring.extend(profile.iter().copied());
-    ring.push(HatchEdge::Line {
-        a: [x_end, right_face],
-        b: [x_end, -right_face],
+    let Some((left, right)) = hatch_chain_endpoints(&profile) else {
+        return Vec::new();
+    };
+    let mut upper = profile;
+    upper.push(HatchEdge::Line {
+        a: [x_end, right[1]],
+        b: [x_end, 0.0],
     });
-    for edge in profile.iter().rev() {
-        ring.push(mirror_reverse_edge(edge));
+    upper.push(HatchEdge::Line {
+        a: [x_end, 0.0],
+        b: [0.0, 0.0],
+    });
+    upper.push(HatchEdge::Line {
+        a: [0.0, 0.0],
+        b: [0.0, left[1]],
+    });
+    let lower: Vec<HatchEdge> = upper.iter().rev().map(mirror_reverse_edge).collect();
+    vec![upper, lower]
+}
+
+/// 上半剖面线链的最小/最大 x 端点（用于上/下环的端面闭合）。
+fn hatch_chain_endpoints(profile: &[HatchEdge]) -> Option<([f64; 2], [f64; 2])> {
+    let mut left: Option<[f64; 2]> = None;
+    let mut right: Option<[f64; 2]> = None;
+    for edge in profile {
+        for p in edge_endpoints(edge) {
+            if left.map_or(true, |q| p[0] < q[0]) {
+                left = Some(p);
+            }
+            if right.map_or(true, |q| p[0] > q[0]) {
+                right = Some(p);
+            }
+        }
     }
-    ring.push(HatchEdge::Line {
-        a: [0.0, -left_face],
-        b: [0.0, left_face],
-    });
-    ring
+    Some((left?, right?))
+}
+
+/// 边界段两端点（弧用起讫点）。
+fn edge_endpoints(edge: &HatchEdge) -> [[f64; 2]; 2] {
+    match *edge {
+        HatchEdge::Line { a, b } => [a, b],
+        HatchEdge::Arc {
+            c,
+            r,
+            start_deg,
+            end_deg,
+            ..
+        } => [
+            [
+                c[0] + r * start_deg.to_radians().cos(),
+                c[1] + r * start_deg.to_radians().sin(),
+            ],
+            [
+                c[0] + r * end_deg.to_radians().cos(),
+                c[1] + r * end_deg.to_radians().sin(),
+            ],
+        ],
+    }
 }
 
 /// 直线段按 x 方向排成左→右（竖直段不要用它，方向要按环的走向手写）。
@@ -4225,7 +4467,7 @@ GEAR M3 Z20";
                 _ => None,
             })
             .expect("剖视应有一个 HATCH");
-        assert_eq!(hatch.paths.len(), 1, "上半 + 镜像合成一个简单环");
+        assert_eq!(hatch.paths.len(), 2, "轴线上/下两个环（参考件口径）");
         let pts = |edge: &BoundaryEdge| -> ([f64; 2], [f64; 2]) {
             match edge {
                 BoundaryEdge::Line(e) => ([e.start.x, e.start.y], [e.end.x, e.end.y]),
@@ -4242,22 +4484,24 @@ GEAR M3 Z20";
                 other => panic!("剖面环只应有 LINE/ARC，得到 {other:?}"),
             }
         };
-        let mut prev: Option<[f64; 2]> = None;
-        for edge in &hatch.paths[0].edges {
-            let (a, b) = pts(edge);
-            if let Some(p) = prev {
-                assert!(
-                    near(p[0], a[0]) && near(p[1], a[1]),
-                    "剖面环断开：{p:?} → {a:?}"
-                );
+        for path in &hatch.paths {
+            let mut prev: Option<[f64; 2]> = None;
+            for edge in &path.edges {
+                let (a, b) = pts(edge);
+                if let Some(p) = prev {
+                    assert!(
+                        near(p[0], a[0]) && near(p[1], a[1]),
+                        "剖面环断开：{p:?} → {a:?}"
+                    );
+                }
+                prev = Some(b);
             }
-            prev = Some(b);
+            let last = prev.unwrap();
+            assert!(
+                near(last[0], 0.0) && near(last[1].abs(), 20.0),
+                "环回到左端面 (0,±20)：{last:?}"
+            );
         }
-        let last = prev.unwrap();
-        assert!(
-            near(last[0], 0.0) && near(last[1], 20.0),
-            "环回到左端面 (0,20)：{last:?}"
-        );
     }
 
     #[test]
@@ -4377,7 +4621,7 @@ GEAR M3 Z20";
                 _ => None,
             })
             .expect("剖视应有一个 HATCH");
-        assert_eq!(hatch.paths.len(), 1, "上半 + 镜像合成一个简单环");
+        assert_eq!(hatch.paths.len(), 2, "轴线上/下两个环（参考件口径）");
         let pts = |edge: &ocs_plugin_api::host::acadrust::entities::hatch::BoundaryEdge|
          -> ([f64; 2], [f64; 2]) {
             match edge {
@@ -4397,19 +4641,21 @@ GEAR M3 Z20";
                 other => panic!("剖面环只应有 LINE/ARC，得到 {other:?}"),
             }
         };
-        let mut prev: Option<[f64; 2]> = None;
-        for edge in &hatch.paths[0].edges {
-            let (a, b) = pts(edge);
-            if let Some(p) = prev {
-                assert!(
-                    near(p[0], a[0]) && near(p[1], a[1]),
-                    "剖面环断开：{p:?} → {a:?}"
-                );
+        for path in &hatch.paths {
+            let mut prev: Option<[f64; 2]> = None;
+            for edge in &path.edges {
+                let (a, b) = pts(edge);
+                if let Some(p) = prev {
+                    assert!(
+                        near(p[0], a[0]) && near(p[1], a[1]),
+                        "剖面环断开：{p:?} → {a:?}"
+                    );
+                }
+                prev = Some(b);
             }
-            prev = Some(b);
+            let last = prev.unwrap();
+            assert!(near(last[0], 0.0), "环回到左端面：{last:?}");
         }
-        let last = prev.unwrap();
-        assert!(near(last[0], 0.0), "环回到左端面：{last:?}");
     }
 
     /// 三种取参路径：① 显式 g1/g2/dg/r（dg 绝对值） ② P 查表 ③ P + 覆盖。
@@ -4711,8 +4957,8 @@ GEAR M3 Z20";
     }
 
     #[test]
-    fn gear_geometry_addendum_pitch_layers_without_root_line() {
-        // 第 1 段 Ø40，第 2 段齿轮 M3 Z20（x=20..50）：d=60、ra=33、rf=26.25（rf 不落图）
+    fn gear_geometry_addendum_chamfer_pitch_and_root_line_by_view() {
+        // 第 1 段 Ø40，第 2 段齿轮 M3 Z20（x=20..50）：d=60、ra=33、rf=26.25、C=2
         let program = parse_program("S40 E40 L20\nGEAR M3 Z20 H30").unwrap();
         let shaft = build(&program, 1.0).unwrap();
         let gear = program.segments[1].gear.unwrap();
@@ -4721,9 +4967,17 @@ GEAR M3 Z20";
             gear.addendum_radius(),
             gear.root_radius(),
         );
-        // 齿顶线 = 该段轮廓（粗实线，上下各一条）
-        assert!(has_line(&shaft, [20.0, ra], [50.0, ra]));
-        assert!(has_line(&shaft, [20.0, -ra], [50.0, -ra]));
+        // 齿顶面 = 齿宽两端各缩进 C = round(0.6m) = 2（与 gear.rs::side_view() 同）
+        assert!(has_line(&shaft, [22.0, ra], [48.0, ra]));
+        assert!(has_line(&shaft, [22.0, -ra], [48.0, -ra]));
+        // 四个 45° 倒角（端面点 ra−C=31 → 齿顶 ra=33）
+        assert!(has_line(&shaft, [20.0, 31.0], [22.0, 33.0]));
+        assert!(has_line(&shaft, [20.0, -31.0], [22.0, -33.0]));
+        assert!(has_line(&shaft, [48.0, 33.0], [50.0, 31.0]));
+        assert!(has_line(&shaft, [48.0, -33.0], [50.0, -31.0]));
+        // 台阶竖线（仅常规）：x=22/48、±ra
+        assert!(has_line(&shaft, [22.0, -33.0], [22.0, 33.0]));
+        assert!(has_line(&shaft, [48.0, -33.0], [48.0, 33.0]));
         let layer_of_y = |y: f64| -> Option<&str> {
             shaft.entities.iter().find_map(|e| match e {
                 EntityType::Line(l)
@@ -4741,16 +4995,25 @@ GEAR M3 Z20";
         assert!(has_line(&shaft, [20.0, r], [50.0, r]));
         assert!(has_line(&shaft, [20.0, -r], [50.0, -r]));
         assert_eq!(layer_of_y(r), Some(crate::partgen_kit::LAYER_CENTER));
-        // 齿根线：与 gear.rs::side_view() 一致，**不画**
-        assert!(!has_line(&shaft, [20.0, rf], [50.0, rf]), "不画齿根线");
-        assert!(!has_line(&shaft, [20.0, -rf], [50.0, -rf]), "不画齿根线");
+        // 齿根线：与 gear.rs::side_view() 一致，常规视图**不画**（剖视才画）
+        assert!(!has_line(&shaft, [20.0, rf], [50.0, rf]), "常规不画齿根线");
+        assert!(!has_line(&shaft, [20.0, -rf], [50.0, -rf]), "常规不画齿根线");
         assert_eq!(layer_of_y(rf), None, "齿根线上没有图元");
         // 分度圆半径 30 不是轮廓（轮廓在齿顶 33）
         assert!(!shaft.entities.iter().any(|e| matches!(e, EntityType::Line(l)
             if near(l.start.y, r) && near(l.end.y, r) && l.common.layer == crate::partgen_kit::LAYER_MAIN)));
-        // 端面：x=20 从 Ø40/2=20 到 ra=33；x=50 自由端面 ±33
-        assert!(has_line(&shaft, [20.0, 20.0], [20.0, 33.0]));
-        assert!(has_line(&shaft, [50.0, -33.0], [50.0, 33.0]));
+        // 端面：x=20 从 Ø40/2=20 到 ra−C=31；x=50 自由端面 ±31
+        assert!(has_line(&shaft, [20.0, 20.0], [20.0, 31.0]));
+        assert!(has_line(&shaft, [50.0, -31.0], [50.0, 31.0]));
+        // 剖视：齿根线可见（也是剖面线边界）
+        let section = build(
+            &parse_program("S40 E40 L20\nGEAR M3 Z20 H30 | VIEW 剖视").unwrap(),
+            1.0,
+        )
+        .unwrap();
+        assert!(has_line(&section, [20.0, rf], [50.0, rf]));
+        assert!(has_line(&section, [20.0, -rf], [50.0, -rf]));
+        assert!(!has_line(&section, [20.0, -31.0], [20.0, 31.0]), "剖视无贯通端面线");
         // 最大直径按齿顶圆算
         assert!(near(shaft.max_diameter, 66.0));
         assert!(near(shaft.total_length, 50.0));
@@ -4854,13 +5117,13 @@ GEAR M3 Z20";
                 _ => None,
             })
             .collect();
-        assert_eq!(hatches.len(), 1, "剖视只有一个 HATCH（一个简单环）");
+        assert_eq!(hatches.len(), 1, "剖视只有一个 HATCH（轴线上/下两环）");
         let h = hatches[0];
         assert_eq!(h.common.layer, crate::partgen_kit::LAYER_HATCH);
         assert_eq!(h.pattern.name, "ANSI31");
         assert_eq!(h.pattern_scale, 1.0);
-        assert_eq!(h.paths.len(), 1, "上半 + 镜像合成一个简单环");
-        // 边界首尾相接（每个 edge 的终点 = 下一个 edge 的起点）
+        assert_eq!(h.paths.len(), 2, "轴线上/下两个环（参考件口径）");
+        // 边界首尾相接（每个 edge 的终点 = 下一个 edge 的起点），两环都要闭合
         let pts = |edge: &BoundaryEdge| -> ([f64; 2], [f64; 2]) {
             match edge {
                 BoundaryEdge::Line(e) => ([e.start.x, e.start.y], [e.end.x, e.end.y]),
@@ -4877,36 +5140,35 @@ GEAR M3 Z20";
                 other => panic!("剖面环只应有 LINE/ARC，得到 {other:?}"),
             }
         };
-        let edges = &h.paths[0].edges;
-        assert!(edges.len() >= 8, "轮廓段数：{}", edges.len());
-        let mut prev: Option<[f64; 2]> = None;
-        let mut first: Option<[f64; 2]> = None;
-        for edge in edges {
-            let (a, b) = pts(edge);
-            if let Some(p) = prev {
-                assert!(near(p[0], a[0]) && near(p[1], a[1]), "边界断开：{p:?} → {a:?}");
-            } else {
-                first = Some(a);
-            }
-            prev = Some(b);
-        }
-        let start = first.unwrap();
-        let last = prev.unwrap();
-        assert!(
-            near(last[0], start[0]) && near(last[1], start[1]),
-            "环未闭合：{last:?} → {start:?}"
-        );
         // 环的 bbox 盖住整个轴剖面（总长 42，最大半径 25）
         let (mut x0, mut y0) = (f64::INFINITY, f64::INFINITY);
         let (mut x1, mut y1) = (f64::NEG_INFINITY, f64::NEG_INFINITY);
-        for edge in edges {
-            let (a, b) = pts(edge);
-            for p in [a, b] {
-                x0 = x0.min(p[0]);
-                x1 = x1.max(p[0]);
-                y0 = y0.min(p[1]);
-                y1 = y1.max(p[1]);
+        for path in &h.paths {
+            let edges = &path.edges;
+            assert!(edges.len() >= 8, "每环至少 8 段：{}", edges.len());
+            let mut prev: Option<[f64; 2]> = None;
+            let mut first: Option<[f64; 2]> = None;
+            for edge in edges {
+                let (a, b) = pts(edge);
+                if let Some(p) = prev {
+                    assert!(near(p[0], a[0]) && near(p[1], a[1]), "边界断开：{p:?} → {a:?}");
+                } else {
+                    first = Some(a);
+                }
+                prev = Some(b);
+                for p in [a, b] {
+                    x0 = x0.min(p[0]);
+                    x1 = x1.max(p[0]);
+                    y0 = y0.min(p[1]);
+                    y1 = y1.max(p[1]);
+                }
             }
+            let start = first.unwrap();
+            let last = prev.unwrap();
+            assert!(
+                near(last[0], start[0]) && near(last[1], start[1]),
+                "环未闭合：{last:?} → {start:?}"
+            );
         }
         assert!(
             near(x0, 0.0) && near(x1, 42.0) && near(y0, -25.0) && near(y1, 25.0),
@@ -4934,6 +5196,16 @@ GEAR M3 Z20";
         );
         assert!(has_line(&both, [60.0, 15.0], [80.0, 15.0]), "第二张轮廓右移 60");
         assert!(has_line(&both, [57.0, 0.0], [83.0, 0.0]), "第二张轴线");
+        // 双视图：左常规保留贯通竖线，右剖视不保留（用带段边界的轴验证）
+        let two = parse_program("S30 E30 L20 | S40 E40 L10 VIEW 双").unwrap();
+        let both2 = build(&two, 1.0).unwrap();
+        // 间距 = max(30×15%=4.5, 40) = 40 → 第二张 +70
+        assert!(has_line(&both2, [20.0, -15.0], [20.0, 15.0]), "左常规贯通竖线");
+        assert!(
+            !has_line(&both2, [90.0, -15.0], [90.0, 15.0]),
+            "右剖视不画贯通竖线"
+        );
+        assert!(has_line(&both2, [90.0, 15.0], [90.0, 20.0]), "右剖视真实端面");
         // 第二张的 HATCH 边界也右移 60
         let hatch = both
             .entities
@@ -5172,27 +5444,32 @@ GEAR M3 Z20";
             Some(LAYER_MAIN),
             "demo 锥面落 1轮廓实线层"
         );
-        // 小直径槽段 [140,145]：轮廓 18，端面 145 从 18 到齿顶 33
+        // 小直径槽段 [140,145]：轮廓 18，端面 145 从 18 到 ra−C=31（齿轮端倒角 C=2）
         assert!(has_line(&shaft, [140.0, 18.0], [145.0, 18.0]), "小直径槽段轮廓");
         assert!(
-            has_line(&shaft, [145.0, 18.0], [145.0, 33.0]),
-            "槽段端面从 18 到齿顶 33"
+            has_line(&shaft, [145.0, 18.0], [145.0, 31.0]),
+            "槽段端面从 18 到 ra−C=31"
         );
-        // 齿轮两线：齿顶（轮廓，±33）/ 分度（点划线，±30）；齿根线（±26.25）不画
-        assert!(has_line(&shaft, [145.0, 33.0], [175.0, 33.0]), "齿顶线");
+        assert!(has_line(&shaft, [145.0, 31.0], [147.0, 33.0]), "齿轮左端倒角");
+        assert!(has_line(&shaft, [173.0, 33.0], [175.0, 31.0]), "齿轮右端倒角");
+        // 齿轮：齿顶面（h−2C = 26，±33）/ 分度（点划线，±30）；常规视图齿根线（±26.25）不画
+        assert!(has_line(&shaft, [147.0, 33.0], [173.0, 33.0]), "齿顶面（缩进 2C）");
         assert!(has_line(&shaft, [145.0, 30.0], [175.0, 30.0]), "分度线");
         assert!(
             !has_line(&shaft, [145.0, 26.25], [175.0, 26.25]),
-            "齿根线不画（与 gear.rs::side_view 一致）"
+            "常规视图齿根线不画（与 gear.rs::side_view 一致）"
         );
         assert!(
             !has_line(&shaft, [145.0, -26.25], [175.0, -26.25]),
-            "下半齿根线也不画"
+            "常规视图下半齿根线也不画"
         );
         assert!(
-            has_line(&shaft, [175.0, -33.0], [175.0, 33.0]),
-            "齿轮自由端面"
+            has_line(&shaft, [175.0, -31.0], [175.0, 31.0]),
+            "齿轮自由端面 ±(ra−C)"
         );
+        // 齿轮端倒角的台阶竖线（±ra，仅常规视图）
+        assert!(has_line(&shaft, [147.0, -33.0], [147.0, 33.0]), "齿轮左台阶竖线");
+        assert!(has_line(&shaft, [173.0, -33.0], [173.0, 33.0]), "齿轮右台阶竖线");
         let layer_at = |x: f64, y: f64| -> Option<&str> {
             shaft.entities.iter().find_map(|e| match e {
                 EntityType::Line(l)
@@ -5207,7 +5484,7 @@ GEAR M3 Z20";
             layer_at(145.0, 30.0),
             Some(crate::partgen_kit::LAYER_CENTER)
         );
-        assert_eq!(layer_at(145.0, 26.25), None, "没有齿根线");
+        assert_eq!(layer_at(145.0, 26.25), None, "常规视图没有齿根线");
 
         let path = std::env::var("HOME")
             .map(std::path::PathBuf::from)
@@ -5219,17 +5496,28 @@ GEAR M3 Z20";
         assert!(file.is_file(), "demo CSV 已落盘：{}", file.display());
         assert!(csv.contains("LINE") && csv.contains("ARC"));
         assert!(csv.contains("3中心线层") && csv.contains("2细线层"));
-        // 59 = 旧 demo 44 + 局部螺纹新增 5（锥面上下 2 + 螺尾上下 2 + 分界竖线 1）
+        // 65 = 旧 demo 59 + 齿轮倒角 6（4 斜线 + 2 台阶竖线）；
+        // 旧 59 = 旧 demo 44 + 局部螺纹新增 5（锥面上下 2 + 螺尾上下 2 + 分界竖线 1）
         //      + 段边界贯通竖线 6 + 倒角终点竖线 3 + OV 槽两条界线 2 − OV 砂轮细线 1
-        assert_eq!(shaft.entities.len(), 59, "demo 图元数");
+        assert_eq!(shaft.entities.len(), 65, "demo 图元数");
 
-        // 剖视 diff：同一套轮廓 + 一个 HATCH（CSV 记 bbox 一行）；落盘供人工核对
+        // 剖视：真实几何 + 齿轮齿根线（2 条）+ 一个 HATCH（2 环）；不再画贯通竖线
         let section_program = parse_program(&format!("{DEMO}\nVIEW 剖视")).unwrap();
         let section = build(&section_program, 1.0).unwrap();
-        assert_eq!(section.entities.len(), shaft.entities.len() + 1);
+        // 65 − 13 贯通竖线 + 2 齿根线 + 1 HATCH = 55
+        assert_eq!(section.entities.len(), 55, "剖视图元数");
+        assert!(has_line(&section, [145.0, 26.25], [175.0, 26.25]), "剖视齿根线");
+        assert!(
+            !has_line(&section, [45.0, -15.0], [45.0, 15.0]),
+            "剖视不画贯通竖线"
+        );
+        assert!(
+            !has_line(&section, [75.0, -20.6], [75.0, 20.6]),
+            "剖视不画槽肩贯通竖线"
+        );
         let section_csv = entities_csv(&section.entities);
         assert!(
-            section_csv.contains("HATCH,0.000000,-33.000000,175.000000,33.000000,5剖面线层"),
+            section_csv.contains("HATCH,0.000000,-26.250000,175.000000,26.250000,5剖面线层"),
             "HATCH 一行记 bbox + 5剖面线层：{section_csv}"
         );
         let file = path.join("shaft_demo_section.csv");
@@ -5344,5 +5632,222 @@ GEAR M3 Z20";
         assert!(file.is_file(), "v2 CSV 已落盘：{}", file.display());
         // 45 = 基准 44 + x=327 那条（旧版 36 = 35 + 9 − 1）；逐图元 diff 见 compare_shaft.py
         assert_eq!(shaft.entities.len(), 45, "用户轴 v2 图元数");
+    }
+
+    // ── 剖视验收（参考件 `~/桌面/OCSM/review/轴剖视图.dxf`） ─────────────
+
+    /// 参考件由几何反推出的轴：总长 152、7 段、`M1.5` 为**普通全螺纹**（不是局部螺纹）、
+    /// 末段 `GEAR M3 Z20`（齿宽 30）。
+    const REVIEW_AXIS: &str =
+        "S30 E30 L45 CH2@L | S40 E40 L30 CH2@R OV3 | S50 E30 L20 | S30 E30 L15 CH2@R | S40 E40 L7 M1.5 | S36 E36 L5 | GEAR M3 Z20";
+
+    /// 剖视验收：常规/剖视两份几何 + 剖面线边界逐边落盘，供 `compare_section.py`
+    /// 与参考件两个视图逐图元对比。
+    #[test]
+    fn dump_section_review_csv() {
+        let program = parse_program(REVIEW_AXIS).expect("参考轴应能解析");
+        let normal = build(&program, 1.0).expect("参考轴常规视图应能出图");
+        let section = build(
+            &parse_program(&format!("{REVIEW_AXIS} | VIEW 剖视")).unwrap(),
+            1.0,
+        )
+        .expect("参考轴剖视应能出图");
+        assert!(near(normal.total_length, 152.0));
+        assert!(near(normal.max_diameter, 66.0));
+        assert_eq!(normal.segment_count, 7);
+
+        // ── 常规：贯通竖线仍在（用户 2026-09-18 定案保持）──
+        for (x, h) in [(2.0, 15.0), (45.0, 15.0), (72.0, 20.0), (72.4, 19.6), (75.0, 20.6),
+                       (77.0, 24.0), (95.0, 15.0), (110.0, 15.0), (112.0, 20.0),
+                       (117.0, 18.0), (122.0, 18.0)] {
+            assert!(
+                has_line(&normal, [x, -h], [x, h]),
+                "常规视图贯通竖线 x={x} ±{h}"
+            );
+        }
+        // 齿轮倒角台阶竖线（齿轮.rs::side_view() 的 ±ra 台阶线）：x=124/150、±33。
+        assert!(has_line(&normal, [124.0, -33.0], [124.0, 33.0]), "齿轮左台阶竖线");
+        assert!(has_line(&normal, [150.0, -33.0], [150.0, 33.0]), "齿轮右台阶竖线");
+        // 常规不画齿根线（与 gear.rs::side_view() 一致）
+        assert!(!has_line(&normal, [122.0, 26.25], [152.0, 26.25]));
+
+        // ── 剖视：不画贯通竖线，只留真实面/倒角/槽体 ──
+        for (x, h) in [(2.0, 15.0), (45.0, 15.0), (72.0, 20.0), (72.4, 19.6), (75.0, 20.6),
+                       (77.0, 24.0), (95.0, 15.0), (110.0, 15.0), (112.0, 20.0),
+                       (117.0, 18.0), (122.0, 18.0)] {
+            assert!(
+                !has_line(&section, [x, -h], [x, h]),
+                "剖视不应有贯通竖线 x={x} ±{h}"
+            );
+        }
+        // 真实几何保留：段间端面 / 倒角 / 槽 / 齿轮倒角 + 齿根线
+        assert!(has_line(&section, [45.0, 15.0], [45.0, 20.0]), "真实端面");
+        assert!(has_line(&section, [75.0, 20.6], [75.0, 22.0]), "槽肩面到圆角切点");
+        assert!(has_line(&section, [75.0, 22.0], [77.0, 24.0]), "倒角斜线");
+        assert!(has_line(&section, [110.0, 15.0], [110.0, 18.0]), "真实端面");
+        assert!(has_line(&section, [110.0, 18.0], [112.0, 20.0]), "倒角斜线");
+        assert!(has_line(&section, [122.0, 18.0], [122.0, 31.0]), "齿轮端面 18→ra−C");
+        assert!(has_line(&section, [122.0, 31.0], [124.0, 33.0]), "齿轮倒角斜线");
+        assert!(has_line(&section, [124.0, 33.0], [150.0, 33.0]), "齿顶面 h−2C");
+        assert!(has_line(&section, [150.0, 33.0], [152.0, 31.0]), "齿轮右倒角斜线");
+        assert!(has_line(&section, [122.0, 26.25], [152.0, 26.25]), "剖视齿根线");
+        assert!(has_line(&section, [152.0, -31.0], [152.0, 31.0]), "右端面");
+
+        // ── 剖面线：1 个 HATCH、2 环（轴线上/下）、flags = EXTERNAL|OUTERMOST ──
+        let hatch = section
+            .entities
+            .iter()
+            .find_map(|e| match e {
+                EntityType::Hatch(h) => Some(h),
+                _ => None,
+            })
+            .expect("剖视应有一个 HATCH");
+        assert_eq!(hatch.common.layer, crate::partgen_kit::LAYER_HATCH);
+        assert_eq!(hatch.pattern.name, "ANSI31");
+        assert_eq!(hatch.pattern_scale, 1.0);
+        assert_eq!(hatch.paths.len(), 2, "轴线上/下两个环（参考件右视图口径）");
+        for path in &hatch.paths {
+            assert!(path.flags.is_external() && path.flags.is_outermost());
+            assert_eq!(path.edges.len(), 21, "参考件每环 21 边");
+        }
+        // 参考件右视图的剖面线边界口径：螺纹段沿小径、齿轮段沿齿根、上环沿轴线闭合
+        let upper = &hatch.paths[0].edges;
+        let has_edge = |a: [f64; 2], b: [f64; 2]| {
+            upper.iter().any(|e| match e {
+                BoundaryEdge::Line(le) => {
+                    let (p, q) = ([le.start.x, le.start.y], [le.end.x, le.end.y]);
+                    (near(p[0], a[0]) && near(p[1], a[1]) && near(q[0], b[0]) && near(q[1], b[1]))
+                        || (near(p[0], b[0])
+                            && near(p[1], b[1])
+                            && near(q[0], a[0])
+                            && near(q[1], a[1]))
+                }
+                _ => false,
+            })
+        };
+        assert!(has_edge([111.188125, 19.188125], [117.0, 19.188125]), "边界沿螺纹小径");
+        assert!(has_edge([122.0, 26.25], [152.0, 26.25]), "边界沿齿轮齿根");
+        assert!(has_edge([0.0, 0.0], [152.0, 0.0]), "上环沿轴线闭合");
+
+        // ── 落盘（列格式同 shaft_demo.csv；HATCH 边界另落一份逐边 CSV）──
+        let dir = std::env::var("HOME")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|_| std::path::PathBuf::from("/tmp"))
+            .join("桌面/OCSM/review");
+        std::fs::create_dir_all(&dir).expect("建 review 目录");
+        std::fs::write(dir.join("section_review_regular.csv"), entities_csv(&normal.entities))
+            .expect("写 section_review_regular.csv");
+        std::fs::write(dir.join("section_review_section.csv"), entities_csv(&section.entities))
+            .expect("写 section_review_section.csv");
+        let mut hatch_csv =
+            String::from("path,edge,type,x1,y1,x2,y2,cx,cy,r,a0,a1,flags\n");
+        for (pi, path) in hatch.paths.iter().enumerate() {
+            let flags = path.flags.bits();
+            for (ei, edge) in path.edges.iter().enumerate() {
+                match edge {
+                    BoundaryEdge::Line(e) => hatch_csv.push_str(&format!(
+                        "{pi},{ei},LINE,{:.6},{:.6},{:.6},{:.6},,,,,,{flags}\n",
+                        e.start.x, e.start.y, e.end.x, e.end.y
+                    )),
+                    BoundaryEdge::CircularArc(a) => hatch_csv_arc(
+                        &mut hatch_csv,
+                        pi,
+                        ei,
+                        a.center.x,
+                        a.center.y,
+                        a.radius,
+                        a.start_angle.to_degrees(),
+                        a.end_angle.to_degrees(),
+                        flags,
+                    ),
+                    other => panic!("剖面边界只应有 LINE/ARC，得到 {other:?}"),
+                }
+            }
+        }
+        std::fs::write(dir.join("section_review_hatch.csv"), &hatch_csv)
+            .expect("写 section_review_hatch.csv");
+        std::fs::write(
+            dir.join("section_review_hatch_meta.csv"),
+            format!(
+                "pattern,{}\nscale,{}\nsolid,{}\npaths,{}\n",
+                hatch.pattern.name,
+                hatch.pattern_scale,
+                hatch.is_solid,
+                hatch.paths.len()
+            ),
+        )
+        .expect("写 section_review_hatch_meta.csv");
+        assert!(dir.join("section_review_regular.csv").is_file());
+        assert!(dir.join("section_review_section.csv").is_file());
+    }
+
+    fn hatch_csv_arc(
+        csv: &mut String,
+        pi: usize,
+        ei: usize,
+        cx: f64,
+        cy: f64,
+        r: f64,
+        a0: f64,
+        a1: f64,
+        flags: u32,
+    ) {
+        let sx = cx + r * a0.to_radians().cos();
+        let sy = cy + r * a0.to_radians().sin();
+        let ex = cx + r * a1.to_radians().cos();
+        let ey = cy + r * a1.to_radians().sin();
+        csv.push_str(&format!(
+            "{pi},{ei},ARC,{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.4},{:.4},{flags}\n",
+            sx, sy, ex, ey, cx, cy, r, a0, a1
+        ));
+    }
+
+    /// 齿轮段倒角口径自检：`GEAR M3 Z20` 在轴生成器里的齿顶倒角坐标，与
+    /// `gear.rs::side_view()` 同参数（m=3、z=20、h=30）的倒角/台阶部分数值一致。
+    #[test]
+    fn gear_segment_chamfer_matches_gear_side_view() {
+        let program = parse_program("S40 E40 L20\nGEAR M3 Z20 H30").unwrap();
+        let normal = build(&program, 1.0).unwrap();
+        let gear = program.segments[1].gear.unwrap();
+        let params = gear.params();
+        assert!(near(gear.chamfer(), 2.0), "C = round(0.6×3) = 2");
+        // gear.rs 侧视图局部坐标 → 轴里齿轮段 [20,50]：平移 +(20 + h/2) = +35
+        let view = crate::gear::side_view(&params, 1.0).unwrap();
+        let dx = 20.0 + params.h / 2.0;
+        let mut matched = 0;
+        for entity in &view {
+            if let EntityType::Line(l) = entity {
+                if l.common.layer != LAYER_MAIN {
+                    continue;
+                }
+                let a = [l.start.x + dx, l.start.y];
+                let b = [l.end.x + dx, l.end.y];
+                // 侧视图端面线 ±(ra−C) 在轴上只到邻段半径（20），不是全高；台阶/齿顶/倒角全高可比。
+                let is_end_face = near(l.start.x.abs(), params.h / 2.0)
+                    && near(l.end.x.abs(), params.h / 2.0)
+                    && (l.start.y - l.end.y).abs() > 1e-9;
+                if is_end_face {
+                    continue;
+                }
+                assert!(
+                    has_line(&normal, a, b),
+                    "gear.rs::side_view() 轮廓线 {a:?}–{b:?} 应在轴齿轮段里"
+                );
+                matched += 1;
+            }
+        }
+        assert_eq!(matched, 8, "齿顶面 2 + 倒角 4 + 台阶线 2");
+        // 台阶竖线（仅常规视图）：x=22/48、±ra
+        assert!(has_line(&normal, [22.0, -33.0], [22.0, 33.0]));
+        assert!(has_line(&normal, [48.0, -33.0], [48.0, 33.0]));
+        // 剖视不画台阶线，但齿根线 + 端面到 ra−C 在
+        let section = build(
+            &parse_program("S40 E40 L20\nGEAR M3 Z20 H30 | VIEW 剖视").unwrap(),
+            1.0,
+        )
+        .unwrap();
+        assert!(!has_line(&section, [22.0, -33.0], [22.0, 33.0]));
+        assert!(has_line(&section, [20.0, 20.0], [20.0, 31.0]));
+        assert!(has_line(&section, [20.0, 26.25], [50.0, 26.25]));
     }
 }
