@@ -43,11 +43,28 @@ use crate::partgen_kit::{arc, line, trim, LAYER_MAIN};
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct DetailParams {
     values: Vec<(String, f64)>,
+    /// 可选的**规格代号**（字符串参数；`6x23x26x6` 这类代号不能塞进 f64 表）。
+    spec: Option<String>,
 }
 
 impl DetailParams {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// 规格代号（字符串参数；`preview_svg` / CLI / GUI 都经它传入）。
+    pub fn spec(&self) -> Option<&str> {
+        self.spec.as_deref()
+    }
+
+    /// 设置规格代号（空串 = 清除）。
+    pub fn set_spec(&mut self, spec: impl Into<String>) {
+        let spec = spec.into();
+        self.spec = if spec.trim().is_empty() {
+            None
+        } else {
+            Some(spec.trim().to_string())
+        };
     }
 
     /// 旧入口的 `b1` 槽位 → 参数集（`None` = 空）。
@@ -138,10 +155,19 @@ pub trait DetailElement: Sync {
     }
     /// 目录 JSON 的补充字段（`free_d` / `bands` 等，GUI 自由输入表单用）。
     fn catalog_extra(&self) -> serde_json::Value;
+    /// 视图按钮的中文名覆盖（默认空 = 用 `partgen_kit::views_json` 的通用名）。
+    fn view_labels(&self) -> &'static [(&'static str, &'static str)] {
+        &[]
+    }
+    /// **规格代号入口**：把非数字的第二 token（`6x23x26x6`）交给族自己解析，
+    /// 返回 `(主参数 d, 预设参数)`。默认 `None` = 本族不认规格代号。
+    fn parse_spec_token(&self, _token: &str) -> Option<(f64, DetailParams)> {
+        None
+    }
 }
 
 /// 已登记的要素（新增要素往这里加一项）。
-pub static ELEMENTS: &[&dyn DetailElement] = &[&GRIND_OD, &THREAD_RELIEF];
+pub static ELEMENTS: &[&dyn DetailElement] = &[&GRIND_OD, &THREAD_RELIEF, &SPLINE_RECT];
 
 /// 族 id → 要素定义。
 pub fn find(family: &str) -> Option<&'static dyn DetailElement> {
@@ -156,6 +182,11 @@ pub fn is_detail(family: &str) -> bool {
 /// 族 → 视图 id（`partgen_more::family_views` 会先问这里）。
 pub fn family_views(family: &str) -> Vec<&'static str> {
     find(family).map(|e| e.views().to_vec()).unwrap_or_default()
+}
+
+/// 结构要素的「规格代号」入口（CLI `XL` 用）：族不认返回 None。
+pub fn parse_spec_token(family: &str, token: &str) -> Option<(f64, DetailParams)> {
+    find(family).and_then(|element| element.parse_spec_token(token))
 }
 
 /// 生成（找不到族报错）。
@@ -207,6 +238,20 @@ pub fn families_json() -> serde_json::Map<String, serde_json::Value> {
             "len_label": "b1（mm，留空 = 该 d 档默认）",
             "base_hint": element.base_hint(),
         });
+        // 视图按钮中文名可由族覆盖（花键：正视图/常规侧视图/侧剖视图）。
+        if !element.view_labels().is_empty() {
+            if let Some(views) = entry["views"].as_array_mut() {
+                for view in views.iter_mut() {
+                    if let Some(id) = view["id"].as_str() {
+                        if let Some((_, label)) =
+                            element.view_labels().iter().find(|(key, _)| *key == id)
+                        {
+                            view["name"] = serde_json::json!(label);
+                        }
+                    }
+                }
+            }
+        }
         if let (Some(obj), Some(extra)) = (entry.as_object_mut(), element.catalog_extra().as_object())
         {
             for (key, value) in extra {
@@ -237,16 +282,22 @@ pub fn preview_svg(query: &str) -> Option<Result<String, String>> {
     let family = get("family")?;
     let element = find(&family)?;
     Some((|| {
-        let d: f64 = get("d")
-            .ok_or("缺少参数 d")?
-            .parse()
-            .map_err(|_| "d 不是数字".to_string())?;
+        // `spec`（规格代号）可以替代 `d`（花键：d 由 N×d×D×B 派生）。
+        let spec = get("spec").filter(|s| !s.trim().is_empty());
+        let d: f64 = match get("d") {
+            Some(text) => text.parse().map_err(|_| "d 不是数字".to_string())?,
+            None if spec.is_some() => 0.0,
+            None => return Err("缺少参数 d（或 spec 规格代号）".to_string()),
+        };
         let view = get("view").unwrap_or_else(|| "main".to_string());
         let mut params = DetailParams::new();
+        if let Some(spec) = spec {
+            params.set_spec(spec);
+        }
         for (key, value) in &pairs {
-            // `family/d/view` 已单独取；`l` 是标准件的长度槽位（结构要素本就没有长度，
-            // 旧行为是忽略它）——三者不当参数。空值当没给（旧 `&b1=` 的行为）。
-            if matches!(*key, "family" | "d" | "view" | "l") || value.is_empty() {
+            // `family/d/view/l/spec` 已单独取；`l` 是标准件的长度槽位（结构要素里
+            // 需要长度的族用 `len`）——这些不当参数。空值当没给（旧 `&b1=` 的行为）。
+            if matches!(*key, "family" | "d" | "view" | "l" | "spec") || value.is_empty() {
                 continue;
             }
             let value: f64 = value
@@ -265,7 +316,7 @@ pub fn preview_svg(query: &str) -> Option<Result<String, String>> {
 }
 
 /// 图元包围盒（`[xmin, ymin, xmax, ymax]`）。圆弧按**落在弧上的**四个象限点精确取。
-fn entity_bbox(entities: &[EntityType]) -> [f64; 4] {
+pub(crate) fn entity_bbox(entities: &[EntityType]) -> [f64; 4] {
     let (mut x0, mut y0, mut x1, mut y1) =
         (f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
     let mut put = |x: f64, y: f64| {
@@ -1021,6 +1072,221 @@ impl DetailElement for ThreadRelief {
 }
 
 // ══════════════════════════════════════════════════════════════════════════
+// 矩形花键（GB/T 1144 规格代号；几何在 `spline.rs`，独立要素与轴段特征共用）
+// ══════════════════════════════════════════════════════════════════════════
+
+/// 族 id。
+pub const FAMILY_SPLINE_RECT: &str = "detail_spline_rect";
+
+/// 把主参数 `d`（小径）+ 参数解成 [`crate::spline::RectSpline`] 与满齿段长。
+///
+/// * `params.spec()` = 规格代号（`6x23x26x6`）优先；同时给了 `d` 必须一致；
+/// * 没 spec 时用数字参数 `n` / `big`（或 `D`）/ `b`，`de` 可选（查 GB/T 10952 表）；
+/// * `len`（或 `l`）= 满齿段长 L；正视图不需要。
+fn resolve_rect_spline(
+    d: f64,
+    params: &DetailParams,
+) -> Result<(crate::spline::RectSpline, Option<f64>), String> {
+    const KNOWN: [&str; 7] = ["n", "d", "big", "b", "de", "len", "l"];
+    let unknown: Vec<&str> = params
+        .keys()
+        .into_iter()
+        .filter(|key| !KNOWN.contains(key))
+        .collect();
+    if !unknown.is_empty() {
+        return Err(format!(
+            "矩形花键：不认识参数 {}（本族支持 规格代号 spec、L/len、de、N、D、B）",
+            unknown.join("、")
+        ));
+    }
+    let len = params.get("len").or_else(|| params.get("l"));
+    let de = params.get("de");
+    if let Some(spec) = params.spec() {
+        let spline = crate::spline::RectSpline::from_code(spec, de, len.unwrap_or(0.0))?;
+        if d.is_finite() && d > 0.0 && (d - spline.d).abs() > 1e-9 {
+            return Err(format!(
+                "矩形花键：规格 {spec} 的小径 d={} 与参数 d={} 不一致",
+                trim(spline.d),
+                trim(d)
+            ));
+        }
+        if let Some(n) = params.get("n") {
+            if n.fract().abs() > 1e-9 || n as u32 != spline.n {
+                return Err(format!(
+                    "矩形花键：规格 {spec} 的齿数 N={} 与参数 N={} 不一致",
+                    spline.n,
+                    trim(n)
+                ));
+            }
+        }
+        if let Some(big) = params.get("big").or_else(|| params.get("D")) {
+            if (big - spline.big).abs() > 1e-9 {
+                return Err(format!(
+                    "矩形花键：规格 {spec} 的大径 D={} 与参数 D={} 不一致",
+                    trim(spline.big),
+                    trim(big)
+                ));
+            }
+        }
+        if let Some(b) = params.get("b") {
+            if (b - spline.b).abs() > 1e-9 {
+                return Err(format!(
+                    "矩形花键：规格 {spec} 的键宽 B={} 与参数 B={} 不一致",
+                    trim(spline.b),
+                    trim(b)
+                ));
+            }
+        }
+        return Ok((spline, len));
+    }
+    let n_value = params.get("n").ok_or_else(|| {
+        format!("矩形花键：缺齿数 N（写法 `spec 6x23x26x6` 或数字参数 `N6 D26 B6 d23`）")
+    })?;
+    if n_value.fract().abs() > 1e-9 || !(3.0..=100.0).contains(&n_value) {
+        return Err(format!("矩形花键：齿数 N={} 必须取 3..=100 的整数", trim(n_value)));
+    }
+    let big = params
+        .get("big")
+        .or_else(|| params.get("D"))
+        .ok_or_else(|| "矩形花键：缺大径 D（数字参数写法 `D26`）".to_string())?;
+    let b = params
+        .get("b")
+        .ok_or_else(|| "矩形花键：缺键宽 B（数字参数写法 `B6`）".to_string())?;
+    if !d.is_finite() || d <= 0.0 {
+        return Err(format!("矩形花键：小径 d={} 必须是正数", trim(d)));
+    }
+    let de = match de {
+        Some(de) => de,
+        None => crate::spline::lookup_de(n_value as u32, d, big, b).ok_or_else(|| {
+            "矩形花键：该 N/d/D/B 不在 GB/T 10952-2005 表 1/表 2 里，de 查不到 —— 请给 de".to_string()
+        })?,
+    };
+    Ok((
+        crate::spline::RectSpline::new(n_value as u32, d, big, b, de, len.unwrap_or(0.0))?,
+        len,
+    ))
+}
+
+/// 矩形花键的要素定义（登记到 `ELEMENTS`）。
+pub struct SplineRect;
+
+/// 单例（`ELEMENTS` 里的引用）。
+pub static SPLINE_RECT: SplineRect = SplineRect;
+
+impl DetailElement for SplineRect {
+    fn family(&self) -> &'static str {
+        FAMILY_SPLINE_RECT
+    }
+
+    fn name(&self) -> &'static str {
+        "矩形花键"
+    }
+
+    fn code(&self) -> &'static str {
+        crate::spline::CODE
+    }
+
+    fn views(&self) -> &'static [&'static str] {
+        &["front", "side", "section"]
+    }
+
+    fn view_labels(&self) -> &'static [(&'static str, &'static str)] {
+        &[
+            ("front", "正视图（端视图）"),
+            ("side", "常规侧视图"),
+            ("section", "侧剖视图"),
+        ]
+    }
+
+    fn base_hint(&self) -> &'static str {
+        "基点 = 左端面与轴线交点（轴线为 x 轴；正视图 = 齿形中心）"
+    }
+
+    /// 历史 `b1` 槽位表达不了规格代号 —— 明确报错指路。
+    fn generate(&self, _d: f64, _b1: Option<f64>, _view: &str) -> Result<GenPart, String> {
+        Err("矩形花键请给规格代号：`XL detail_spline_rect 6x23x26x6 L30 [de 63] [view side|section|front]`"
+            .to_string())
+    }
+
+    fn generate_params(
+        &self,
+        d: f64,
+        params: &DetailParams,
+        view: &str,
+    ) -> Result<GenPart, String> {
+        let (spline, len) = resolve_rect_spline(d, params)?;
+        let (entities, spec_text) = match view {
+            "front" => (spline.front_view(), spline.code()),
+            "side" => {
+                let len = len.ok_or_else(|| {
+                    "矩形花键：常规侧视图需要 L（满齿段长，例 `L30` / `&len=30`）".to_string()
+                })?;
+                (spline.side_view(len), format!("{} L{}", spline.code(), trim(len)))
+            }
+            "section" => {
+                let len = len.ok_or_else(|| {
+                    "矩形花键：侧剖视图需要 L（满齿段长，例 `L30` / `&len=30`）".to_string()
+                })?;
+                (spline.section_view(len), format!("{} L{}", spline.code(), trim(len)))
+            }
+            other => return Err(format!("矩形花键：视图 {other} 尚未实现")),
+        };
+        let bbox = entity_bbox(&entities);
+        Ok(GenPart {
+            entities,
+            meta: PartMeta {
+                code: crate::spline::CODE.into(),
+                name: format!("矩形花键（{}）", self
+                    .view_labels()
+                    .iter()
+                    .find(|(key, _)| *key == view)
+                    .map(|(_, label)| *label)
+                    .unwrap_or(view)),
+                spec: spec_text,
+                material: String::new(),
+                weight: String::new(),
+            },
+            bbox,
+        })
+    }
+
+    fn parse_spec_token(&self, token: &str) -> Option<(f64, DetailParams)> {
+        let (_, d, _, _) = crate::spline::parse_code(token).ok()?;
+        let mut params = DetailParams::new();
+        params.set_spec(token);
+        Some((d, params))
+    }
+
+    fn catalog_extra(&self) -> serde_json::Value {
+        serde_json::json!({
+            "tree_dir": "结构要素/花键",
+            "d_label": "小径 d（mm；由规格代号派生，自定义规格时才自由输入）",
+            "default_d": 23,
+            "spec_label": "规格代号 N×d×D×B（下拉选择或自定义输入）",
+            "source": format!("{}（规格代号自带 N/d/D/B）；{} 表1/表2（de）；模板 矩形花键.dxf 逐图元反解", crate::spline::CODE, crate::spline::HOB_CODE),
+            "inputs": [
+                { "key": "len", "label": "L 满齿段长（mm，侧视/剖视必给）", "required": true, "placeholder": "例如 30" },
+                { "key": "de", "label": "de 滚刀外径覆盖（mm，留空 = 按规格查表）", "placeholder": "例如 63" },
+            ],
+            "specs": crate::spline::SPLINE_SPECS
+                .iter()
+                .map(|s| serde_json::json!({
+                    "code": s.code,
+                    "label": format!("{}{}", s.series, s.code),
+                    "n": s.n,
+                    "d": s.d_minor,
+                    "D": s.d_major,
+                    "B": s.b,
+                    "de": s.de,
+                    "series": s.series,
+                }))
+                .collect::<Vec<_>>(),
+            "sample": { "d": 23, "n": 6, "big": 26, "b": 6, "len": 30, "de": 63 },
+        })
+    }
+}
+
+// ══════════════════════════════════════════════════════════════════════════
 // 表 1（收尾 / 肩距）——下一轮「局部螺纹 + 收尾」用，先以数据存好
 // ══════════════════════════════════════════════════════════════════════════
 
@@ -1541,6 +1807,112 @@ mod tests {
             .expect("是结构要素")
             .expect("空值应忽略");
         assert!(svg.contains("d100 b1 10"), "{svg}");
+    }
+
+    // ── 矩形花键（GB/T 1144 规格代号 + GB/T 10952 de）─────────────────
+
+    /// 族接线：视图 / 目录（规格代号下拉 + L/de 输入）/ 文件树 / 三视图预览。
+    #[test]
+    fn spline_rect_registry_catalog_and_preview() {
+        assert!(is_detail(FAMILY_SPLINE_RECT));
+        assert_eq!(family_views(FAMILY_SPLINE_RECT), vec!["front", "side", "section"]);
+        // 规格代号入口（XL CLI 用）：解析出小径 d，并预设 spec
+        let (d, params) = parse_spec_token(FAMILY_SPLINE_RECT, "6x23x26x6").expect("认规格代号");
+        assert_eq!(d, 23.0);
+        assert_eq!(params.spec(), Some("6x23x26x6"));
+        assert!(parse_spec_token(FAMILY_SPLINE_RECT, "6x23x26").is_none());
+        assert!(parse_spec_token(FAMILY_GRIND_OD, "6x23x26x6").is_none());
+
+        let cat: serde_json::Value = serde_json::from_str(&crate::partgen::catalog_json()).unwrap();
+        let family = &cat["families"][FAMILY_SPLINE_RECT];
+        assert_eq!(family["kind"], "detail");
+        assert_eq!(family["tree_dir"], "结构要素/花键");
+        assert_eq!(family["free_d"], true);
+        assert_eq!(family["code"], "GB/T 1144-2001");
+        assert_eq!(family["specs"].as_array().unwrap().len(), 33, "轻 15 + 中 18");
+        assert_eq!(family["inputs"].as_array().unwrap().len(), 2);
+        assert_eq!(family["inputs"][0]["key"], "len");
+        assert_eq!(family["inputs"][0]["required"], true);
+        assert_eq!(family["inputs"][1]["key"], "de");
+        // 视图按钮中文名被族覆盖
+        let views: Vec<&str> = family["views"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(views, vec!["正视图（端视图）", "常规侧视图", "侧剖视图"]);
+        assert_eq!(family["sample"]["d"], 23.0);
+        let roots = cat["tree"].as_array().unwrap();
+        let root = roots.iter().find(|n| n["name"] == "结构要素").expect("结构要素根树");
+        let dir = root["children"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|n| n["name"] == "花键")
+            .expect("结构要素/花键");
+        assert_eq!(dir["children"][0]["name"], "矩形花键 GB/T 1144-2001");
+        assert_eq!(dir["children"][0]["family"], FAMILY_SPLINE_RECT);
+
+        // 预览：spec 可替代 d；L 走 `len`；de 可覆盖；三个视图都能出。
+        let svg = preview_svg("family=detail_spline_rect&spec=6x23x26x6&len=30&view=side")
+            .expect("是结构要素")
+            .expect("侧视图应能出图");
+        assert!(svg.contains("<svg") && svg.contains("6x23x26x6 L30"), "{svg}");
+        let svg = preview_svg("family=detail_spline_rect&spec=6x23x26x6&len=30&view=front")
+            .unwrap()
+            .unwrap();
+        assert!(svg.contains("<svg"), "正视图：{svg}");
+        let svg = preview_svg("family=detail_spline_rect&spec=6x23x26x6&len=30&de=71&view=section")
+            .unwrap()
+            .unwrap();
+        assert!(svg.contains("6x23x26x6 L30"), "剖视图 de 覆盖：{svg}");
+        let err = preview_svg("family=detail_spline_rect&spec=6x23x26x6&view=side")
+            .unwrap()
+            .expect_err("侧视图缺 L");
+        assert!(err.contains("L"), "{err}");
+        let err = preview_svg("family=detail_spline_rect&spec=6x11x14x3&len=20&view=side")
+            .unwrap()
+            .expect_err("表外规格缺 de");
+        assert!(err.contains("de"), "{err}");
+        let err = preview_svg("family=detail_spline_rect&spec=6x23x26x6&len=30&b1=3&view=side")
+            .unwrap()
+            .expect_err("花键不认 b1");
+        assert!(err.contains("不认识参数"), "{err}");
+        // 数字参数路线（XL CLI / MCP）：`d=23 N6 D26 B6 len30 de63`
+        let svg = preview_svg(
+            "family=detail_spline_rect&d=23&N=6&big=26&B=6&len=30&de=63&view=side",
+        )
+        .unwrap()
+        .unwrap();
+        assert!(svg.contains("6x23x26x6 L30"), "{svg}");
+    }
+
+    /// 三个视图生成：图元数 / 落层 / 侧剖视图的 HATCH 口径。
+    #[test]
+    fn spline_rect_views_generate() {
+        let mut params = DetailParams::new();
+        params.set_spec("6x23x26x6");
+        params.insert("len", 30.0);
+        let front = generate_params(FAMILY_SPLINE_RECT, 23.0, &params, "front").unwrap();
+        assert_eq!(front.meta.code, "GB/T 1144-2001");
+        assert_eq!(front.entities.len(), 26);
+        assert_eq!(front.meta.spec, "6x23x26x6");
+        let side = generate_params(FAMILY_SPLINE_RECT, 23.0, &params, "side").unwrap();
+        assert_eq!(side.entities.len(), 7);
+        assert_eq!(side.meta.spec, "6x23x26x6 L30");
+        let section = generate_params(FAMILY_SPLINE_RECT, 23.0, &params, "section").unwrap();
+        assert_eq!(section.entities.len(), 8, "7 线 + 1 HATCH");
+        assert!(section
+            .entities
+            .iter()
+            .any(|e| matches!(e, EntityType::Hatch(_))));
+        // 老 b1 入口明确报错指路
+        let err = SPLINE_RECT.generate(23.0, None, "front").unwrap_err();
+        assert!(err.contains("规格代号"), "{err}");
+        // spec 与 d 不一致报错
+        let err = generate_params(FAMILY_SPLINE_RECT, 26.0, &params, "side").unwrap_err();
+        assert!(err.contains("不一致"), "{err}");
     }
 
     /// 表 1（收尾/肩距）：已按数据存好，比例自检；P=1.75 的 `x一般` 用订正后的 4.3。

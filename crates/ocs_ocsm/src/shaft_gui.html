@@ -95,6 +95,7 @@
             <th>OV 越程槽</th>
             <th>M 螺纹段</th>
             <th>GEAR 齿轮段</th>
+            <th>SPLINE 花键段</th>
           </tr>
         </thead>
         <tbody id="segBody"></tbody>
@@ -111,7 +112,8 @@
       <code>E</code> 留空 = 圆柱段；<code>M</code> 螺纹段要求 S=E（不写值 = 小径 0.85d 简化画法，
       <code>M1.5</code> = 螺距 P 精确小径）；退刀槽 <b>就是一小段小直径轴段</b>（例 <code>S24 E24 L5</code>），
       或在行文本里写段级 <code>RL@L</code> / <code>RL@R</code>（任意圆柱段；给 <code>P</code> 查 GB/T 3 表 2，
-      或显式 <code>g1/g2/dg/r</code>）。
+      或显式 <code>g1/g2/dg/r</code>）。<b>SPLINE 矩形花键段</b>：规格代号 + 满齿段长
+      <code>L</code>（段长 = L + 收尾 l）+ 可选 <code>de</code> 覆盖；不能与 CH/OV/M/GEAR 同段。
     </div>
     <div id="segErr"></div>
   </div>
@@ -126,6 +128,7 @@
       例：<code>OCSMSHAFT S30 E30 L45 CH2@L | S40 E40 L7 M1.5 | S36 E36 L5 | GEAR M3 Z20 VIEW 剖视</code>；
       段级退刀槽：<code>S25 E25 L32 RL@L P1.5</code>（贴左端查表 2）或
       <code>RL@R g1 2.5 g2 4.5 dg 22.7 r 0.8</code>（显式尺寸）；<code>ES…</code> 旧写法已取消。
+      矩形花键段：<code>SPLINE 6x23x26x6 L30</code>（另可 <code>de 63</code> 覆盖；引入倒角在相邻段写 CH）。
     </div>
   </div>
 
@@ -148,6 +151,7 @@
       生成物：轮廓/端面/倒角/槽与边界竖线 → <code>1轮廓实线层</code>、螺纹小径/螺尾 → <code>2细线层</code>（磨外圆/OV 不画砂轮细线）、
       轴线/分度线 → <code>3中心线层</code>、剖视剖面线 → <code>5剖面线层</code>；
       齿轮段与齿轮工具同口径：只画齿顶线 + 分度线，<b>不画齿根线</b>；
+      花键段：大径线 + 小径细线 + 收尾弧（R=de/2）落 <code>2细线层</code>，剖视改轮廓线并打轴线↔小径剖面线；
       颜色/线型/线宽一律 <b>ByLayer</b>；<b>不含尺寸标注</b>。
     </div>
   </div>
@@ -195,6 +199,7 @@ function blankRow() {
     ov: { l: { on: false, b1: "" }, r: { on: false, b1: "" } },
     m: { on: false, p: "" },
     gear: { on: false, m: "3", z: "20", h: "" },
+    spline: { on: false, spec: "6x23x26x6", len: "30", de: "" },
   };
 }
 
@@ -274,6 +279,7 @@ function renderViews() {
 // 一行 → HTML（disabled 状态直接从状态算，勾选后重渲染即可同步界面）
 function rowHtml(r, i) {
   const gearOn = r.gear.on;
+  const splineOn = r.spline.on;
   const mOn = r.m.on;
   const ovOn = r.ov.l.on || r.ov.r.on;
   const ck = (v) => (v ? " checked" : "");
@@ -281,24 +287,28 @@ function rowHtml(r, i) {
   const endCell = (kind, end, o) => {
     const label = end.toUpperCase();
     const extra = kind === "ov"
-      ? `<input type="number" step="0.1" min="0" data-f="ov.${end}.b1" value="${esc(o.b1)}" placeholder="默认"${dis(gearOn || mOn)}>`
-      : `<input type="number" step="0.1" min="0" data-f="ch.${end}.c" value="${esc(o.c)}" placeholder="2"${dis(gearOn)}>`;
-    const boxDis = kind === "ov" ? (gearOn || mOn) : gearOn;
+      ? `<input type="number" step="0.1" min="0" data-f="ov.${end}.b1" value="${esc(o.b1)}" placeholder="默认"${dis(gearOn || mOn || splineOn)}>`
+      : `<input type="number" step="0.1" min="0" data-f="ch.${end}.c" value="${esc(o.c)}" placeholder="2"${dis(gearOn || splineOn)}>`;
+    const boxDis = kind === "ov" ? (gearOn || mOn || splineOn) : (gearOn || splineOn);
     return `<div class="frow"><label class="chk"><input type="checkbox" data-f="${kind}.${end}.on"${ck(o.on)}${dis(boxDis)}>${label}</label>${extra}</div>`;
   };
   return `<tr data-row="${i}" class="${i === sel ? "sel" : ""}">
     <td class="idx">${i + 1}</td>
-    <td><input type="number" step="0.1" min="0" data-f="s" value="${esc(r.s)}"${dis(gearOn)}></td>
-    <td><input type="number" step="0.1" min="0" data-f="e" value="${esc(r.e)}" placeholder="= S"${dis(gearOn)}></td>
+    <td><input type="number" step="0.1" min="0" data-f="s" value="${esc(r.s)}"${dis(gearOn || splineOn)}></td>
+    <td><input type="number" step="0.1" min="0" data-f="e" value="${esc(r.e)}" placeholder="= S"${dis(gearOn || splineOn)}></td>
     <td><input type="number" step="0.1" min="0" data-f="l" value="${esc(r.l)}"${dis(gearOn)}></td>
     <td class="feat">${endCell("ch", "l", r.ch.l)}${endCell("ch", "r", r.ch.r)}</td>
     <td class="feat">${endCell("ov", "l", r.ov.l)}${endCell("ov", "r", r.ov.r)}</td>
-    <td class="feat"><div class="frow"><label class="chk"><input type="checkbox" data-f="m.on"${ck(mOn)}${dis(gearOn || ovOn)}>M</label>
-      <input type="number" step="0.1" min="0" data-f="m.p" value="${esc(r.m.p)}" placeholder="0.85d"${dis(gearOn || ovOn)}></div></td>
-    <td class="feat"><div class="frow"><label class="chk"><input type="checkbox" data-f="gear.on"${ck(gearOn)}>GEAR</label></div>
+    <td class="feat"><div class="frow"><label class="chk"><input type="checkbox" data-f="m.on"${ck(mOn)}${dis(gearOn || ovOn || splineOn)}>M</label>
+      <input type="number" step="0.1" min="0" data-f="m.p" value="${esc(r.m.p)}" placeholder="0.85d"${dis(gearOn || ovOn || splineOn)}></div></td>
+    <td class="feat"><div class="frow"><label class="chk"><input type="checkbox" data-f="gear.on"${ck(gearOn)}${dis(splineOn)}>GEAR</label></div>
       <div class="frow"><span class="chk">m</span><input type="number" step="0.1" min="0" data-f="gear.m" value="${esc(r.gear.m)}"${dis(!gearOn)}>
       <span class="chk">z</span><input type="number" step="1" min="2" data-f="gear.z" value="${esc(r.gear.z)}"${dis(!gearOn)}></div>
       <div class="frow"><span class="chk">H</span><input type="number" step="0.1" min="0" data-f="gear.h" value="${esc(r.gear.h)}" placeholder="10m"${dis(!gearOn)}></div></td>
+    <td class="feat"><div class="frow"><label class="chk"><input type="checkbox" data-f="spline.on"${ck(splineOn)}${dis(gearOn)}>SPLINE</label></div>
+      <div class="frow"><input type="text" data-f="spline.spec" value="${esc(r.spline.spec)}" placeholder="6x23x26x6" style="width:96px"${dis(!splineOn)}></div>
+      <div class="frow"><span class="chk">L</span><input type="number" step="0.1" min="0" data-f="spline.len" value="${esc(r.spline.len)}" placeholder="满齿段长"${dis(!splineOn)}>
+      <span class="chk">de</span><input type="number" step="0.1" min="0" data-f="spline.de" value="${esc(r.spline.de)}" placeholder="查表" style="width:52px"${dis(!splineOn)}></div></td>
   </tr>`;
 }
 
@@ -307,14 +317,20 @@ function renderTable() {
   updateButtons();
 }
 
-// 特征互斥：GEAR 独占；M 与 OV 不能同段（与后端校验同口径）
+// 特征互斥：GEAR / SPLINE 独占；M 与 OV 不能同段（与后端校验同口径）
 function enforceExclusive(r) {
   if (r.gear.on) {
     r.ch.l.on = r.ch.r.on = r.ov.l.on = r.ov.r.on = r.m.on = false;
+    r.spline.on = false;
+  }
+  if (r.spline.on) {
+    r.ch.l.on = r.ch.r.on = r.ov.l.on = r.ov.r.on = r.m.on = false;
+    r.gear.on = false;
   }
   if (r.m.on) {
     r.ov.l.on = r.ov.r.on = false;
     r.gear.on = false;
+    r.spline.on = false;
   }
   if (r.ov.l.on || r.ov.r.on) {
     r.m.on = false;
@@ -327,6 +343,11 @@ function rowToDsl(r) {
   if (r.gear.on) {
     let s = "GEAR M" + numTok(r.gear.m) + " Z" + numTok(r.gear.z);
     if (String(r.gear.h).trim() !== "") s += " H" + numTok(r.gear.h);
+    return s;
+  }
+  if (r.spline.on) {
+    let s = "SPLINE " + String(r.spline.spec).trim() + " L" + numTok(r.spline.len);
+    if (String(r.spline.de).trim() !== "") s += " de" + numTok(r.spline.de);
     return s;
   }
   let s = "S" + numTok(r.s);
@@ -361,6 +382,13 @@ function rowFromSegment(seg) {
     r.gear.m = fmt(seg.gear.m);
     r.gear.z = String(seg.gear.z);
     r.gear.h = seg.gear.h === null || seg.gear.h === undefined ? "" : fmt(seg.gear.h);
+    return r;
+  }
+  if (seg.spline) {
+    r.spline.on = true;
+    r.spline.spec = seg.spline.spec || [seg.spline.n, fmt(seg.spline.d), fmt(seg.spline.big), fmt(seg.spline.b)].join("x");
+    r.spline.len = seg.spline.len === null || seg.spline.len === undefined ? "" : fmt(seg.spline.len);
+    r.spline.de = seg.spline.de === null || seg.spline.de === undefined ? "" : fmt(seg.spline.de);
     return r;
   }
   r.s = fmt(seg.s);
@@ -601,6 +629,21 @@ function modelFromRows() {
   for (let i = 0; i < rows.length; i++) {
     const r = rows[i];
     const at = "第 " + (i + 1) + " 行：";
+    if (r.spline.on) {
+      const spec = String(r.spline.spec).trim();
+      const len = numOrNaN(r.spline.len);
+      if (!spec) { showStatus(at + "SPLINE 规格代号不能为空（例 6x23x26x6）。", true); return null; }
+      if (!(len > 0)) { showStatus(at + "SPLINE 的 L（满齿段长）必须 > 0。", true); return null; }
+      const spline = { spec, len };
+      const deRaw = String(r.spline.de).trim();
+      if (deRaw !== "") {
+        const de = numOrNaN(r.spline.de);
+        if (!(de > 0)) { showStatus(at + "SPLINE 的 de 覆盖必须 > 0（留空 = 按规格查表）。", true); return null; }
+        spline.de = de;
+      }
+      segments.push({ spline });
+      continue;
+    }
     if (r.gear.on) {
       const m = numOrNaN(r.gear.m);
       const z = Math.round(numOrNaN(r.gear.z));

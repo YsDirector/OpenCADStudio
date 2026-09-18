@@ -3921,7 +3921,7 @@ pub const COMMAND_CATALOG: &[(&str, &str, &str)] = &[
     ("OCSMDIMGULIDE", "GDIM", "引导线标注：选引导线 → 配置窗口（尺寸/剖视/向视/局部放大/角度/弧长/焊接/引线/序号/公差/粗糙度/形位公差）"),
     ("OCSMCENTERLINE", "ZX", "中心线：点圆/圆弧 → 十字中心线；点两根直线 → 角平分线中心线（`3中心线层`，线长 = 直径/投影长 + 图框比例×6mm）"),
     ("OCSMGEAR", "", "齿轮（外齿轮 / 内齿轮（齿圈））：不带参数=开齿轮窗口（参数 + 视图按钮 + 实时预览）；带参数=一行直插（`OCSMGEAR 2 40 20 view 剖视图`、`OCSMGEAR int 2 40 30 view 端视图`）。内齿轮只有剖视图+端视图（用户模板只有这两个），且剖视图**不打剖面线**（齿圈外壁留用户延伸）"),
-    ("OCSMSHAFT", "", "轴生成器：不带参数=开轴生成器窗口（段表 ↔ 行文本双向同步 + 实时预览 + 视图按钮）+ 放置态；带参数=行 DSL/JSON 一行直插（段拼接 + 端面倒角 + 砂轮越程槽 + 螺纹段 M + 齿轮段 GEAR + 视图 VIEW 常规|剖视|双；退刀槽就是一小段小直径轴段）。`OCSMSHAFT S30 E30 L45 CH2@L | S40 E40 L7 M1.5 | S36 E36 L5 | GEAR M3 Z20 VIEW 剖视 at x,y rot 度`"),
+    ("OCSMSHAFT", "", "轴生成器：不带参数=开轴生成器窗口（段表 ↔ 行文本双向同步 + 实时预览 + 视图按钮）+ 放置态；带参数=行 DSL/JSON 一行直插（段拼接 + 端面倒角 + 砂轮越程槽 + 螺纹段 M + 齿轮段 GEAR + 矩形花键段 SPLINE + 视图 VIEW 常规|剖视|双；退刀槽就是一小段小直径轴段）。`OCSMSHAFT S30 E30 L45 CH2@L | S40 E40 L7 M1.5 | S36 E36 L5 | GEAR M3 Z20 VIEW 剖视 at x,y rot 度`；花键 `OCSMSHAFT SPLINE 6x23x26x6 L30`（可 `de 71` 覆盖）"),
     ("OCSMEDIT", "ME", "改标注：选中 OCSM 生成的标注 → 配置窗口改参数 → 重生成"),
     ("OCSMRGH", "CC", "表面粗糙度：点选插入点 → 配置窗口（匿名块 + ATTDEF）"),
     ("OCSMDIM2GB", "D2G", "一键转国标：原生标注 → OCSM_GB 样式 + 匿名块；智能圆心标记（CENTERMARK）一并换成 `3中心线层` 中心线（Ø + 图框比例×6）"),
@@ -4707,9 +4707,12 @@ fn apply_part_export(
         /// 结构要素可选 b1 覆盖（标准件忽略）。
         #[serde(default)]
         b1: Option<f64>,
-        /// 结构要素的通用数值参数（退刀槽 P/g1/g2/dg/r/alpha；标准件忽略）。
+        /// 结构要素的通用数值参数（退刀槽 P/g1/g2/dg/r/alpha；花键 N/D/B/de/len）。
         #[serde(default)]
         params: std::collections::BTreeMap<String, f64>,
+        /// 结构要素的规格代号（花键 `6x23x26x6`）。
+        #[serde(default)]
+        spec: Option<String>,
         #[serde(default = "default_view")]
         view: String,
     }
@@ -4718,6 +4721,9 @@ fn apply_part_export(
     }
     let req: Req = serde_json::from_slice(body).map_err(|e| format!("请求 JSON 无效: {e}"))?;
     let mut params = crate::detail::DetailParams::from_b1(req.b1);
+    if let Some(spec) = &req.spec {
+        params.set_spec(spec);
+    }
     for (key, value) in &req.params {
         params.insert(key, *value);
     }
@@ -4809,9 +4815,12 @@ pub(crate) fn apply_part_pick(
         /// 结构要素可选 b1 覆盖（标准件忽略）。
         #[serde(default)]
         b1: Option<f64>,
-        /// 结构要素的通用数值参数（退刀槽 P/g1/g2/dg/r/alpha；标准件忽略）。
+        /// 结构要素的通用数值参数（退刀槽 P/g1/g2/dg/r/alpha；花键 N/D/B/de/len）。
         #[serde(default)]
         params: std::collections::BTreeMap<String, f64>,
+        /// 结构要素的规格代号（花键 `6x23x26x6`）。
+        #[serde(default)]
+        spec: Option<String>,
         #[serde(default = "default_view")]
         view: String,
         /// 显式落点（MCP/AI 驱动）：同时给了 `x` 与 `y` 就不再取 GUI 点选的待放置点。
@@ -4830,6 +4839,9 @@ pub(crate) fn apply_part_pick(
     }
     let req: Req = serde_json::from_slice(body).map_err(|e| format!("请求 JSON 无效: {e}"))?;
     let mut params = crate::detail::DetailParams::from_b1(req.b1);
+    if let Some(spec) = &req.spec {
+        params.set_spec(spec);
+    }
     for (key, value) in &req.params {
         params.insert(key, *value);
     }
@@ -4841,8 +4853,15 @@ pub(crate) fn apply_part_pick(
         &req.view,
     )?;
 
-    // 块名：族 + 规格（去掉不合法字符，利于复用与排查）
-    let block = part_block_name(&req.family, &part.meta.spec);
+    // 块名：族 + 规格 + （多视图结构要素如花键）视图（去掉不合法字符，利于复用与排查）
+    let multi_view = crate::detail::find(&req.family)
+        .map(|element| element.views().len() > 1)
+        .unwrap_or(false);
+    let block = if multi_view {
+        part_block_name(&req.family, &format!("{} {}", part.meta.spec, req.view))
+    } else {
+        part_block_name(&req.family, &part.meta.spec)
+    };
 
     // 插入会建块 + 落 INSERT 实体 → 开事务，结束时 commit。
     begin_undo(sender, "零件插入")?;
@@ -13129,6 +13148,54 @@ mod weld_tests {
         assert!(bad.contains("error") && bad.contains("0.25"), "P 不在表 2 报错：{bad}");
         let bad = http_req(server.port, "GET", "/api/part_svg?family=detail_thread_relief&d=0&P=1.5", "");
         assert!(bad.contains("error"), "d=0 报错：{bad}");
+        // 结构要素（第三期：矩形花键 GB/T 1144-2001）：规格代号下拉/输入 + L(+de 覆盖)
+        assert!(
+            cat.contains("矩形花键 GB/T 1144-2001") && cat.contains("detail_spline_rect"),
+            "花键进了目录树"
+        );
+        assert!(
+            cat.contains("\"specs\"") && cat.contains("6x23x26x6") && cat.contains("\"key\":\"len\""),
+            "规格代号/L 面板数据进目录"
+        );
+        assert!(
+            html.contains("specFields") && html.contains("specSel") && html.contains("renderSpecFields"),
+            "规格代号下拉/自定义输入面板"
+        );
+        let svg = http_req(
+            server.port,
+            "GET",
+            "/api/part_svg?family=detail_spline_rect&spec=6x23x26x6&len=30&view=side",
+            "",
+        );
+        assert!(svg.contains("<svg") && svg.contains("6x23x26x6 L30"), "花键侧视预览：{svg}");
+        let svg = http_req(
+            server.port,
+            "GET",
+            "/api/part_svg?family=detail_spline_rect&spec=6x23x26x6&len=30&de=71&view=section",
+            "",
+        );
+        assert!(svg.contains("6x23x26x6 L30"), "花键剖视 + de 覆盖：{svg}");
+        let svg = http_req(
+            server.port,
+            "GET",
+            "/api/part_svg?family=detail_spline_rect&spec=6x23x26x6&view=front",
+            "",
+        );
+        assert!(svg.contains("<svg"), "花键正视图（无需 L）：{svg}");
+        let bad = http_req(
+            server.port,
+            "GET",
+            "/api/part_svg?family=detail_spline_rect&spec=6x23x26x6&view=side",
+            "",
+        );
+        assert!(bad.contains("error") && bad.contains("L"), "缺 L 报错：{bad}");
+        let bad = http_req(
+            server.port,
+            "GET",
+            "/api/part_svg?family=detail_spline_rect&spec=6x11x14x3&len=20",
+            "",
+        );
+        assert!(bad.contains("error") && bad.contains("de"), "表外规格缺 de 报错：{bad}");
         let svg = http_req(server.port, "GET", "/api/part_svg?family=hex_bolt_c&d=5&l=25&view=main", "");
         assert!(svg.contains("<svg") && svg.contains("M5x25"), "预览 SV");
         assert!(svg.contains("GB/T 5780-2016"), "标题含现行代号");
@@ -13236,6 +13303,46 @@ mod weld_tests {
         assert_eq!(meta["params"]["P"], 1.5);
         assert_eq!(meta["code"], "GB/T 3-1997");
         assert_eq!(meta["d"], 20.0);
+    }
+
+    /// 矩形花键（GB/T 1144）插入：`spec` 规格代号 + `params` 的 L/de；
+    /// 多视图结构要素的块名带视图后缀（side/section/front 不串块）。
+    #[test]
+    fn detail_spline_rect_pick_spec_params_and_meta() {
+        let mock = Arc::new(MockSender::new(acadrust::CadDocument::new()));
+        let sender: Arc<dyn PluginRequestSender> = mock.clone();
+        let body = br#"{"family":"detail_spline_rect","d":23,"spec":"6x23x26x6","params":{"len":30,"de":63},"x":0,"y":0,"view":"side"}"#;
+        let resp = apply_part_pick(&sender, body).expect("花键插入");
+        assert!(resp.contains("\"ok\":true") && resp.contains("6x23x26x6 L30"), "{resp}");
+        let inserts = mock.inserts();
+        assert_eq!(inserts.len(), 1, "只落一个 INSERT");
+        let (block, _, _) = &inserts[0];
+        assert!(block.starts_with("OCSM_DETAIL_SPLINE_RECT"), "{block}");
+        assert!(block.ends_with("_SIDE"), "多视图块名带视图后缀：{block}");
+        let ents = mock.block_entities(block);
+        assert_eq!(ents.len(), 7, "常规侧视图 7 条");
+        assert!(
+            ents.iter().any(|e| matches!(e, EntityType::Line(l)
+                if l.common.layer == crate::partgen_kit::LAYER_THIN)),
+            "侧视图有 2细线层小径线"
+        );
+        // 剖视图同名规格 → 另一个块（不串几何）
+        let section = br#"{"family":"detail_spline_rect","d":23,"spec":"6x23x26x6","params":{"len":30},"x":0,"y":0,"view":"section"}"#;
+        apply_part_pick(&sender, section).expect("花键剖视插入");
+        let inserts = mock.inserts();
+        assert_eq!(inserts.len(), 2);
+        assert!(inserts[1].0.ends_with("_SECTION"), "{}", inserts[1].0);
+        assert!(mock
+            .block_entities(&inserts[1].0)
+            .iter()
+            .any(|e| matches!(e, EntityType::Hatch(_))));
+        // xdata 台账：spec / params 可追溯
+        let writes = mock.url_writes.lock().unwrap();
+        let meta: serde_json::Value = serde_json::from_str(&writes[0].1).unwrap();
+        assert_eq!(meta["family"], "detail_spline_rect");
+        assert_eq!(meta["spec"], "6x23x26x6 L30");
+        assert_eq!(meta["params"]["len"], 30.0);
+        assert_eq!(meta["code"], "GB/T 1144-2001");
     }
 
     /// 外螺纹退刀槽出库：`params` 同样走 `apply_part_export`（建块 + 待放置）。
@@ -13472,6 +13579,19 @@ mod weld_tests {
         // 越界/未知族报错
         assert!(apply_part_export(&sender, br#"{"family":"hex_bolt_c","d":5,"l":9999}"#).is_err());
         assert!(apply_part_export(&sender, br#"{"family":"nope","d":5,"l":25}"#).is_err());
+        // 矩形花键（spec 规格代号 + len/de）：出库建块 + 待放置件（XL 入口）
+        let resp = apply_part_export(
+            &sender,
+            br#"{"family":"detail_spline_rect","d":23,"spec":"6x23x26x6","params":{"len":30,"de":63},"view":"side"}"#,
+        )
+        .expect("花键出库");
+        assert!(resp.contains("\"ok\":true"), "{resp}");
+        assert!(resp.contains("6x23x26x6"), "规格进回执：{resp}");
+        let block = crate::pending_block().expect("花键已登记待放置件");
+        assert!(block.starts_with("OCSM_DETAIL_SPLINE_RECT"), "{block}");
+        assert!(mock.block_entities(&block).len() >= 7, "花键块图元");
+        let label = crate::pending_part_label().expect("待放置件标签");
+        assert!(label.contains("矩形花键") && label.contains("6x23x26x6 L30"), "{label}");
     }
 
     // ── 轴生成器（OCSMSHAFT）：页面 / 解析 / 预览 / 导出 ──────────────────
@@ -13539,6 +13659,30 @@ mod weld_tests {
             &serde_json::json!({"dsl": "S30 E40 L10 M1.5"}).to_string(),
         );
         assert!(err.contains("第 1 段") && err.contains("圆柱"), "{err}");
+        // 矩形花键段：DSL → 模型（spline 字段）+ 预览（细线层收尾弧/小径线）
+        let body = serde_json::json!({"dsl": "SPLINE 6x23x26x6 L30 de71"}).to_string();
+        let j = http_req(server.port, "POST", "/api/shaft_parse", &body);
+        let v: serde_json::Value = serde_json::from_str(&j).unwrap();
+        assert_eq!(v["ok"], true, "{j}");
+        assert_eq!(v["segments"][0]["spline"]["de"], 71.0, "de 覆盖进模型：{j}");
+        let seg_len = v["segments"][0]["l"].as_f64().unwrap();
+        // de=71 覆盖后的收尾 l = √(1.5×(71−1.5)) = 10.2103 → 段长 = 40.2103
+        assert!((seg_len - 40.2103).abs() < 1e-3, "段长 = L+l，得到 {seg_len}");
+        let svg = http_req(
+            server.port,
+            "POST",
+            "/api/shaft_preview",
+            &serde_json::json!({"dsl": "SPLINE 6x23x26x6 L30", "view": "section"}).to_string(),
+        );
+        assert!(svg.contains("<svg") && svg.contains("#3fa13f"), "花键剖视预览（含剖面线）：{}", &svg[..160.min(svg.len())]);
+        // 花键段与 CH 同段 → 解析报错（引入倒角写相邻段）
+        let bad = http_req(
+            server.port,
+            "POST",
+            "/api/shaft_preview",
+            &serde_json::json!({"dsl": "SPLINE 6x23x26x6 L30 CH2@L"}).to_string(),
+        );
+        assert!(bad.contains("花键段") && bad.contains("倒角"), "{bad}");
     }
 
     #[test]

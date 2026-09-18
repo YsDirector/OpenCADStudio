@@ -66,8 +66,16 @@
         <select id="len"></select>
       </div>
       <div id="detailFields" style="display:none">
-        <label for="dnum" id="dLabel">轴径 d（mm，自由输入）</label>
-        <input id="dnum" type="number" step="0.1" min="0.01" value="100" />
+        <!-- 规格代号族（矩形花键）：下拉选表内规格，或选「自定义」自由输入。 -->
+        <div id="specFields" style="display:none">
+          <label for="specSel" id="specLabel">规格代号</label>
+          <select id="specSel"></select>
+          <input id="specText" type="text" placeholder="自定义规格，例 6x23x26x6" style="display:none" />
+        </div>
+        <div id="dFields">
+          <label for="dnum" id="dLabel">轴径 d（mm，自由输入）</label>
+          <input id="dnum" type="number" step="0.1" min="0.01" value="100" />
+        </div>
         <div id="b1Fields">
           <label for="b1num" id="b1Label">槽宽 b1 覆盖（mm，留空 = 该 d 档默认）</label>
           <input id="b1num" type="number" step="0.1" min="0.01" placeholder="留空 = 默认" />
@@ -94,7 +102,7 @@
 </div>
 
 <script>
-let catalog = null, cur = { family: "", d: 0, l: 0, b1: null, params: {}, view: "main" };
+let catalog = null, cur = { family: "", d: 0, l: 0, b1: null, params: {}, spec: "", view: "main" };
 const el = (id) => document.getElementById(id);
 // 本窗口钉在哪张图纸上（插件开窗时写的 `tab=`）：出库/插入都带回给插件，
 // 多张图各开窗口时不串图；旧窗口（图纸已关）会被插件明确拒绝。
@@ -164,6 +172,7 @@ function pickFamilyInner(id, row) {
   cur.family = id;
   cur.b1 = null;
   cur.params = {};
+  cur.spec = "";
   el("code").textContent = "　" + f.code + " ← " + f.iso;
   el("panel").style.display = "";
   el("tip").style.display = "none";
@@ -188,11 +197,15 @@ function pickFamilyInner(id, row) {
   cur.view = f.views[0].id;
   if (detail) {
     // 结构要素：自由输入 d（不是固定规格下拉）；参数面板由目录数据驱动
-    // （磨外圆只有 b1；退刀槽有 P/g1/g2/dg/r/alpha）。
+    // （磨外圆只有 b1；退刀槽有 P/g1/g2/dg/r/alpha；花键有 规格代号 + L + de）。
+    const hasSpecs = !!(f.specs && f.specs.length);
+    el("specFields").style.display = hasSpecs ? "" : "none";
+    el("dFields").style.display = hasSpecs ? "none" : "";
     el("dLabel").textContent = f.d_label || "参数 d（mm，自由输入）";
     el("dnum").value = f.default_d || 100;
     el("b1num").value = "";
     renderDetailInputs(f);
+    if (hasSpecs) renderSpecFields(f);
     onDetail();
     return;
   }
@@ -252,18 +265,75 @@ function collectParams(f, hint) {
     params[it.key] = v;
   }
   if (missing !== null) {
-    hint.textContent = "参数 " + missing + " 必给（退刀槽：表 2 单键 = 螺距 P）";
+    hint.textContent = "参数 " + missing + " 必给（花键：L 满齿段长；退刀槽：P）";
     el("preview").removeAttribute("src");
     return null;
   }
   return params;
 }
 
+// 规格代号族（花键）：下拉列目录 `specs`，最后一项 = 自定义输入。
+function renderSpecFields(f) {
+  const sel = el("specSel");
+  sel.innerHTML = "";
+  f.specs.forEach((s) => {
+    const o = document.createElement("option");
+    o.value = s.code;
+    o.textContent = s.code + "（" + s.series + "系列，de" + s.de + "）";
+    sel.appendChild(o);
+  });
+  const custom = document.createElement("option");
+  custom.value = "__custom__";
+  custom.textContent = "自定义规格…";
+  sel.appendChild(custom);
+  sel.value = f.specs[0].code;
+  el("specText").style.display = "none";
+  el("specText").value = "";
+}
+
+// 规格代号 → 小径 d（`6x23x26x6` 的第 2 个数；解析不了 = 0，由服务端报错）。
+function specMinorD(code) {
+  const parts = String(code).trim().split(/[xX×*＊\s]+/).filter((s) => s !== "");
+  if (parts.length !== 4) return 0;
+  const d = Number(parts[1]);
+  return isFinite(d) && d > 0 ? d : 0;
+}
+
+// 当前规格代号（下拉或自定义输入框）；统一成 `x` 写法（×/* 都收）。
+function currentSpecCode() {
+  const sel = el("specSel");
+  if (!sel || sel.style.display === "none") return "";
+  const raw = sel.value === "__custom__" ? el("specText").value : sel.value;
+  return String(raw).trim().replace(/[×＊*]/g, "x").replace(/\s+/g, "");
+}
+
 // 结构要素：d 自由输入；有 `inputs` 的族走通用参数，否则是老 b1 面板。
+// 有 `specs` 的族（花键）：d 由规格代号派生，规格代号随请求发给服务端。
 function onDetail() {
   const f = catalog.families[cur.family];
-  const d = Number(el("dnum").value);
   const hint = el("detailHint");
+  const hasSpecs = !!(f.specs && f.specs.length);
+  if (hasSpecs) {
+    cur.spec = currentSpecCode();
+    cur.d = specMinorD(cur.spec);
+    if (!cur.spec || cur.d <= 0) {
+      cur.params = {};
+      hint.textContent = "规格代号要写成 N×d×D×B（例 6x23x26x6）";
+      el("preview").removeAttribute("src");
+      return;
+    }
+    const hit = (f.specs || []).find((s) => s.code === cur.spec);
+    const params = collectParams(f, hint);
+    if (params === null) { cur.params = {}; return; }
+    cur.params = params;
+    hint.textContent = (hit ? "表内规格" : "表外规格（de 必给）")
+        + "：d=" + cur.d + "、D=" + (hit ? hit.D : "?") + "、B=" + (hit ? hit.B : "?")
+        + (hit ? "、de=" + hit.de : "")
+        + "；L 必给（侧视/剖视），de 留空 = 按规格查表";
+    update();
+    return;
+  }
+  const d = Number(el("dnum").value);
   cur.d = d;
   if (!isFinite(d) || d <= 0) {
     cur.b1 = null;
@@ -328,8 +398,13 @@ function onDia(size) {
 function update() {
   const f = catalog.families[cur.family];
   if (f && f.free_d) {
-    // 结构要素没有 l；b1 / 通用 params 都可能为空
-    let url = "/api/part_svg?family=" + cur.family + "&d=" + cur.d + "&view=" + cur.view;
+    // 结构要素没有 l；b1 / 通用 params / 规格代号（花键）都可能为空
+    let url = "/api/part_svg?family=" + cur.family + "&view=" + cur.view;
+    if (cur.spec) {
+      url += "&spec=" + encodeURIComponent(cur.spec);
+    } else {
+      url += "&d=" + cur.d;
+    }
     if (cur.b1 !== null && cur.b1 !== undefined && cur.b1 !== "") url += "&b1=" + cur.b1;
     Object.keys(cur.params || {}).forEach((k) => {
       url += "&" + encodeURIComponent(k) + "=" + cur.params[k];
@@ -388,6 +463,11 @@ function ping(bye) {
   el("len").addEventListener("change", () => { cur.l = Number(el("len").value); update(); });
   el("dnum").addEventListener("input", onDetail);
   el("b1num").addEventListener("input", onDetail);
+  el("specSel").addEventListener("change", () => {
+    el("specText").style.display = el("specSel").value === "__custom__" ? "" : "none";
+    onDetail();
+  });
+  el("specText").addEventListener("input", onDetail);
   el("out").addEventListener("click", outOfStock);
 })();
 </script>

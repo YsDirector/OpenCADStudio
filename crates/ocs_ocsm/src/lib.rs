@@ -35,6 +35,7 @@ mod partgen_b4;
 mod partgen_kit;
 mod partgen_more;
 mod shaft;
+mod spline;
 pub mod tolerance;
 
 
@@ -746,6 +747,8 @@ fn place_one(
 ///   例：`OCSMPART hex_bolt_c 10 95 at 150,30 rot 0`、`OCSMPART hex_bolt_ab 8 40`。
 /// - **结构要素**（`detail_*`）：没有长度 l，`<族> <d> [b1 <值>] [view <视图>] [at x,y] [rot 度]`
 ///   例：`OCSMPART detail_grind_od 100 b1 10 at 150,30 rot 0`（b1 缺省 = 该 d 档默认行）。
+/// - **矩形花键**（`detail_spline_rect`）：`<族> <规格代号> [L 满齿段长] [de 覆盖] [view 视图] [at x,y] [rot]`
+///   例：`XL detail_spline_rect 6x23x26x6 L30 de63 view side`（规格代号可自定义，de 表外规格必给）。
 /// - **外螺纹退刀槽**（`detail_thread_relief`）：`<族> <d> P <螺距> [g1 值 g2 值 dg 值 r 值 alpha 值] [at x,y] [rot 度]`
 ///   例：`OCSMPART detail_thread_relief 20 P 1.5`（P 必给，其余可选，见 `detail.rs` 表 2）。
 ///
@@ -758,11 +761,50 @@ struct PartsSpec {
     l: f64,
     /// 结构要素可选 b1 覆盖（标准件恒为 None）。
     b1: Option<f64>,
-    /// 结构要素的通用数值参数（退刀槽的 P/g1/g2/dg/r/alpha；标准件恒为空）。
+    /// 结构要素的通用数值参数（退刀槽的 P/g1/g2/dg/r/alpha；花键的 N/D/B/de/len）。
     params: std::collections::BTreeMap<String, f64>,
+    /// 结构要素的规格代号（花键 `6x23x26x6`）。
+    spec: Option<String>,
     view: String,
     at: Option<[f64; 2]>,
     rotation: Option<f64>,
+}
+
+/// 结构要素（花键）的额外参数键：`N6` / `N 6` / `D26` / `B6` / `L30` / `de63` / `spec=…`。
+/// 返回 `(规范键, 贴写值)`；贴写值为空串 = 值在下一个 token。`b1` 与退刀槽参数不走这里。
+fn split_detail_param(token: &str) -> Option<(&'static str, &str)> {
+    // 长前缀在前（`big` > `b`、`len` > `l`、`de` > `d`）；`b1` 是历史槽位，不拦截。
+    const KEYS: [(&str, &str); 8] = [
+        ("spec", "spec"),
+        ("big", "big"),
+        ("de", "de"),
+        ("len", "len"),
+        ("n", "n"),
+        ("d", "big"),
+        ("b", "b"),
+        ("l", "len"),
+    ];
+    if token == "b1" {
+        return None;
+    }
+    for (prefix, canonical) in KEYS {
+        if token == prefix {
+            return Some((canonical, ""));
+        }
+        if let Some(rest) = token.strip_prefix(prefix) {
+            let rest = rest.strip_prefix(['=', ':']).unwrap_or(rest);
+            if canonical == "spec" {
+                if !rest.is_empty() {
+                    return Some((canonical, rest));
+                }
+            } else if rest.chars().next().is_some_and(|c| {
+                c.is_ascii_digit() || c == '.' || c == '-' || c == '+'
+            }) {
+                return Some((canonical, rest));
+            }
+        }
+    }
+    None
 }
 
 impl PartsSpec {
@@ -773,22 +815,44 @@ impl PartsSpec {
             return None;
         }
         let family = family.to_ascii_lowercase();
-        let d: f64 = tokens.next()?.parse().ok()?;
-        if !(d.is_finite() && d > 0.0) {
-            return None;
-        }
-        // 结构要素（磨外圆等）没有长度，第二个数字参数后直接进关键字。
+        let second = tokens.next()?;
+        // 结构要素（磨外圆等）没有长度，第二个数字参数后直接进关键字；
+        // 花键的第二个参数是规格代号（`6x23x26x6`）—— 交给族解析。
         let detail = crate::detail::is_detail(&family);
+        // 结构要素的默认视图：老要素只有 `main`；花键（无 main）默认出侧视图。
+        let default_view = if detail {
+            let views = crate::detail::family_views(&family);
+            if views.contains(&"side") && !views.contains(&"main") {
+                "side"
+            } else {
+                "main"
+            }
+        } else {
+            "main"
+        };
         let mut spec = PartsSpec {
             family,
-            d,
+            d: 0.0,
             l: 0.0,
             b1: None,
             params: std::collections::BTreeMap::new(),
-            view: "main".to_string(),
+            spec: None,
+            view: default_view.to_string(),
             at: None,
             rotation: None,
         };
+        if let Ok(d) = second.parse::<f64>() {
+            if !(d.is_finite() && d > 0.0) {
+                return None;
+            }
+            spec.d = d;
+        } else if detail {
+            let (d, _) = crate::detail::parse_spec_token(&spec.family, second)?;
+            spec.d = d;
+            spec.spec = Some(second.to_string());
+        } else {
+            return None;
+        }
         if !detail {
             let l: f64 = tokens.next()?.parse().ok()?;
             if !(l.is_finite() && l > 0.0) {
@@ -798,7 +862,41 @@ impl PartsSpec {
         }
         while let Some(token) = tokens.next() {
             // 关键字大小写不敏感（宿主把整条命令交给插件时可能是大写）。
-            match token.to_ascii_lowercase().as_str() {
+            let lower = token.to_ascii_lowercase();
+            // 结构要素（花键）的额外参数：`L30` / `de63` / `N6 D26 B6` / `spec=…`。
+            if detail {
+                if let Some((key, attached)) = split_detail_param(&lower) {
+                    let value_text = if attached.is_empty() {
+                        tokens.next()?
+                    } else {
+                        attached
+                    };
+                    if key == "spec" {
+                        if value_text.is_empty() {
+                            return None;
+                        }
+                        spec.spec = Some(value_text.to_string());
+                    } else {
+                        let value: f64 = value_text.parse().ok()?;
+                        if !value.is_finite() {
+                            return None;
+                        }
+                        spec.params.insert(key.to_string(), value);
+                    }
+                    continue;
+                }
+                // 规格代号族的裸数字 = L（例 `XL detail_spline_rect 6x23x26x6 30`）。
+                if spec.spec.is_some() && !spec.params.contains_key("len") {
+                    if let Ok(value) = lower.parse::<f64>() {
+                        if !(value.is_finite() && value > 0.0) {
+                            return None;
+                        }
+                        spec.params.insert("len".to_string(), value);
+                        continue;
+                    }
+                }
+            }
+            match lower.as_str() {
                 // 结构要素的可选 b1 覆盖（标准件不认这个关键字）。
                 "b1" if detail => {
                     let b1: f64 = tokens.next()?.parse().ok()?;
@@ -865,6 +963,9 @@ impl PartsSpec {
         }
         if let Some(b1) = self.b1 {
             obj["b1"] = serde_json::json!(b1);
+        }
+        if let Some(spec) = &self.spec {
+            obj["spec"] = serde_json::json!(spec);
         }
         if !self.params.is_empty() {
             obj["params"] = serde_json::json!(self.params);
@@ -1859,6 +1960,8 @@ impl OcsmPlugin {
                          （例：OCSMPART hex_bolt_c 10 95 at 150,30 rot 0）；\
                          结构要素 `OCSMPART detail_grind_od <d> [b1 <值>] [at x,y] [rot 度]`\
                          （b1 缺省 = 该 d 档默认行）；\
+                         矩形花键 `OCSMPART detail_spline_rect <规格代号> L<满齿段长> [de <滚刀外径>] [view front|side|section]`\
+                         （例：OCSMPART detail_spline_rect 6x23x26x6 L30 view side）；\
                          外螺纹退刀槽 `OCSMPART detail_thread_relief <d> P <螺距> [g1 值 g2 值 dg 值 r 值 alpha 值] [at x,y] [rot 度]`\
                          （P 必给；不带参数则打开零件库窗口）。",
                     );
@@ -3891,6 +3994,49 @@ mod tests {
         assert_eq!(body["x"], 1.0);
         assert_eq!(body["y"], 2.0);
         assert_eq!(body["rotation"], 45.0);
+
+        // 矩形花键：第二个 token 是**规格代号**（非数字）→ 族解析出小径 d；
+        // `L30` / `de63` / `view side` 都认（大小写不敏感）。
+        let spec = PartsSpec::parse("DETAIL_SPLINE_RECT 6x23x26x6 L30 de63 view side").unwrap();
+        assert_eq!(spec.family, "detail_spline_rect");
+        assert_eq!(spec.d, 23.0);
+        assert_eq!(spec.spec.as_deref(), Some("6x23x26x6"));
+        assert_eq!(spec.params.get("len"), Some(&30.0));
+        assert_eq!(spec.params.get("de"), Some(&63.0));
+        assert_eq!(spec.view, "side");
+        let body: serde_json::Value = serde_json::from_str(&spec.to_body()).unwrap();
+        assert_eq!(body["spec"], "6x23x26x6");
+        assert_eq!(body["d"], 23.0);
+        assert_eq!(body["params"]["len"], 30.0);
+        assert_eq!(body["params"]["de"], 63.0);
+        // 不给 view → 花键默认侧视图（老要素仍默认 main）
+        assert_eq!(
+            PartsSpec::parse("detail_spline_rect 6x23x26x6 L30").unwrap().view,
+            "side"
+        );
+        assert_eq!(PartsSpec::parse("detail_grind_od 100").unwrap().view, "main");
+        // 裸数字 = L（规格代号族）：`XL detail_spline_rect 6x23x26x6 30`
+        let spec = PartsSpec::parse("detail_spline_rect 6x23x26x6 30 de63").unwrap();
+        assert_eq!(spec.params.get("len"), Some(&30.0));
+        assert_eq!(spec.params.get("de"), Some(&63.0));
+        assert_eq!(spec.d, 23.0);
+        // 贴写 / 空格混用 + `de` 不写值走查表
+        let spec = PartsSpec::parse("detail_spline_rect 6×23×26×6 L 30 de 71").unwrap();
+        assert_eq!(spec.d, 23.0);
+        assert_eq!(spec.params.get("len"), Some(&30.0));
+        assert_eq!(spec.params.get("de"), Some(&71.0));
+        // 数字参数路线：`d23 N6 D26 B6 L30`（不依赖规格代号）
+        let spec = PartsSpec::parse("detail_spline_rect 23 N6 D26 B6 L30").unwrap();
+        assert_eq!(spec.d, 23.0);
+        assert!(spec.spec.is_none());
+        assert_eq!(spec.params.get("n"), Some(&6.0));
+        assert_eq!(spec.params.get("big"), Some(&26.0), "D → big");
+        assert_eq!(spec.params.get("b"), Some(&6.0));
+        assert_eq!(spec.params.get("len"), Some(&30.0));
+        // 非结构要素的第二个 token 不是数字 → 仍回退 GUI（不误吞）
+        assert_eq!(PartsSpec::parse("hex_bolt_c abc 95"), None);
+        // 花键不认 b1，但解析不报错（到生成时统一报「不认识参数」）
+        assert!(PartsSpec::parse("detail_spline_rect 6x23x26x6 L30 b1 3").is_some());
     }
 
     fn parse_catalog_csv_skips_header_comments_and_blanks() {

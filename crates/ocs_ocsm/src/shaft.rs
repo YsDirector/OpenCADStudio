@@ -15,6 +15,7 @@
 //! S40 E40 L7 M1.5
 //! S36 E36 L5
 //! GEAR M3 Z20
+//! SPLINE 6x23x26x6 L30
 //! ```
 //!
 //! - `S` 起始直径（靠左）、`E` 终点直径（省略 = 圆柱段，`E=S`）、`L` 段长（必给）；
@@ -70,6 +71,21 @@
 //! 齿轮段与相邻段的过渡按台阶处理（不做过渡圆角）；**相邻段轮廓半径 > ra
 //! 会盖住齿顶线**，报「第 N 段」；≤ ra 一律放行（不再受齿根圆 rf 限制）。
 //!
+//! ## 花键段画法口径（`SPLINE`，与 `spline.rs` / 模板 `矩形花键.dxf` 同源）
+//!
+//! `SPLINE 6x23x26x6 L30 [de 71]`：规格代号自带 N/d/D/B（GB/T 1144-2001），
+//! `de` 查 GB/T 10952-2005 表 1/表 2（也可覆盖）。
+//! - 段长 = **L（满齿段长）+ l（收尾）**（`l = √(h(2R−h))`，R = de/2、h = (D−d)/2；
+//!   6×23×26×6 → l = 9.6047）；`s = e = D`，不给 S/E；
+//! - 大径线 `y=±D/2` 在 x=L 断开两段（满齿段 + 收尾段，与模板 [43]/[46] 同）；
+//! - 小径细线 `y=±d/2`（`2细线层`）从段左端面到 x=L；**收尾弧** R = de/2，
+//!   圆心 `(L, ±(d/2+R))`，与小径相切、与大径相交（模板交角 17.75°），
+//!   弧上/下两根细竖线在 x=L 与 x=L+l（`2细线层`）；
+//! - **不自动画引入倒角**：在相邻段写 `CH`（倒角贴花键凸角；模板的 φ22→φ26 C2
+//!   就是这种写法，允许 C 恰好吃满台阶）；花键段本身不能与 CH/OV/RL/M/GEAR 同段；
+//! - 剖视：小径线 / 收尾弧改 `1轮廓实线层`，剖面线按**轴线↔小径**两条带
+//!   （小径线 → 收尾弧 → 段右端面闭合；齿部按不剖，与独立要素同口径）。
+//!
 //! ## 几何口径（单视图侧视图）
 //!
 //! 轴线 = x 轴（x 向右、y = 半径），第 1 段左端面在 x=0；上下对称：
@@ -119,12 +135,12 @@ use serde::{Deserialize, Serialize};
 use crate::detail;
 use crate::gear::{GearKind, GearParams};
 use crate::partgen_kit::{
-    line, trim, HatchEdge, LAYER_CENTER, LAYER_HATCH, LAYER_MAIN, LAYER_THIN,
+    arc, line, trim, HatchEdge, LAYER_CENTER, LAYER_HATCH, LAYER_MAIN, LAYER_THIN,
 };
 
 /// `OCSMSHAFT` 不带参数时打开轴生成器窗口；命令行带参数时此处是用法说明。
 pub const USAGE: &str = "\
-OCSMSHAFT 轴生成器：行 DSL / JSON → 单视图侧视图（段拼接 + 端面倒角 + 砂轮越程槽 + 螺纹段 M + 齿轮段 GEAR）。
+OCSMSHAFT 轴生成器：行 DSL / JSON → 单视图侧视图（段拼接 + 端面倒角 + 砂轮越程槽 + 螺纹段 M + 齿轮段 GEAR + 花键段 SPLINE）。
 用法：OCSMSHAFT <行 DSL 或 JSON>
   行 DSL：一行一段，从左到右拼接；多段用 | 或换行分隔；大小写不敏感、段内关键字顺序无关
     S 起始直径（靠左）   E 终点直径（省略 = 圆柱段 E=S）   L 段长（必给；齿轮段用 H 代替）
@@ -141,6 +157,11 @@ OCSMSHAFT 轴生成器：行 DSL / JSON → 单视图侧视图（段拼接 + 端
                前置：该端相邻段更高（有台肩）、本段圆柱，否则报「第 N 段」
     GEAR M5 Z10 H20   齿轮段（直齿）：d=m·z 导出、不给 S/E；H = 齿宽（省略 = 10m）
                       齿顶轮廓两端倒角 C=round(0.6m)；常规不画齿根、剖视画齿根
+    SPLINE 6x23x26x6 L30   矩形花键段（GB/T 1144 规格代号）：大径线 + 小径细线
+                      （2细线层）+ 收尾弧 R=de/2（圆心 (L, ±(d/2+R))，末端 x=L+l，
+                      l=√(h(2R−h))，6×23×26×6 → l=9.6047）；段长 = L + l；
+                      不给 S/E；可 `de 71` 覆盖滚刀外径；不能与 CH/OV/RL/M/GEAR 同段
+                      （引入倒角由相邻段的 CH 表达）
     VIEW 常规|剖视|双   视图：常规（默认，只看外形）/ 剖视（轮廓 + ANSI31 剖面线）/ 双（并排一次出）
     at x,y rot 度   放置（不写 = 原点、不转）
   例：OCSMSHAFT S30 E30 L45 CH2@L | S40 E40 L30 CH2@R OV3 | S50 E30 L20 | S30 E30 L15 CH2@R | S40 E40 L7 M1.5 | S36 E36 L5 | GEAR M3 Z20 VIEW 剖视 at 100,50 rot 30
@@ -536,13 +557,22 @@ pub struct Segment {
     pub thread: Option<Thread>,
     /// 齿轮段参数（`None` = 普通轴段）。
     pub gear: Option<Gear>,
+    /// 矩形花键段（`SPLINE 6x23x26x6 L30`；`None` = 普通轴段）。
+    ///
+    /// `s`/`e` = 大径 D，`l` = 满齿段长 L + 收尾 l（见 `spline.rs` 的段长口径）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub spline: Option<crate::spline::RectSpline>,
 }
 
 impl Segment {
-    /// 某端的**外轮廓半径**（齿轮段 = 齿顶圆半径）。
+    /// 某端的**外轮廓半径**（齿轮段 = 齿顶圆半径；花键段 = 大径半径）。
     pub fn outer_radius(&self, end: End) -> f64 {
         if let Some(gear) = &self.gear {
             return gear.addendum_radius();
+        }
+        if let Some(spline) = &self.spline {
+            let _ = end;
+            return spline.major_radius();
         }
         match end {
             End::L => self.s / 2.0,
@@ -668,7 +698,7 @@ fn extract_view_directives<'a>(
 
 fn unknown_keyword(token: &str, label: &str) -> String {
     format!(
-        "{label}：不识别的关键字「{token}」（本期支持 S/E/L/CH/OV/M/TL/RO/SD/RL/GEAR/VIEW；RL 的尺寸参数 P/g1/g2/dg/r 跟在 RL 后面）"
+        "{label}：不识别的关键字「{token}」（本期支持 S/E/L/CH/OV/M/TL/RO/SD/RL/GEAR/SPLINE/VIEW；RL 的尺寸参数 P/g1/g2/dg/r 跟在 RL 后面）"
     )
 }
 
@@ -937,6 +967,10 @@ fn parse_segment(chunk: &str, label: &str, program: &mut Program) -> Result<Segm
     let mut gear_on = false;
     let (mut gear_m, mut gear_z, mut gear_h, mut gear_beta) = (None, None, None, None);
     let mut loose_gear_token: Option<String> = None;
+    // SPLINE 段（矩形花键）：`SPLINE <规格>` + `L<满齿段长>` + 可选 `de` 覆盖。
+    let mut spline_on = false;
+    let mut spline_spec: Option<String> = None;
+    let mut spline_de: Option<f64> = None;
     let mut index = 0;
     while index < tokens.len() {
         let token = tokens[index];
@@ -946,7 +980,42 @@ fn parse_segment(chunk: &str, label: &str, program: &mut Program) -> Result<Segm
             break;
         }
         let upper = token.to_ascii_uppercase();
-        if upper.starts_with("CH") {
+        // ── SPLINE（矩形花键段）：关键字 + 紧跟的规格代号；L/de 照常 ──
+        if upper == "SPLINE" || upper.starts_with("SPLINE=") || upper.starts_with("SPLINE:") {
+            if spline_on {
+                return Err(format!("{label}：关键字 SPLINE 重复"));
+            }
+            spline_on = true;
+            let rest = &token["SPLINE".len()..];
+            let rest = rest.strip_prefix(['=', ':']).unwrap_or(rest).trim();
+            if rest.is_empty() {
+                index += 1;
+                let spec = tokens.get(index).ok_or_else(|| {
+                    format!("{label}：关键字 SPLINE 缺少规格代号（写法 SPLINE 6x23x26x6 L30）")
+                })?;
+                spline_spec = Some((*spec).to_string());
+            } else {
+                spline_spec = Some(rest.to_string());
+            }
+        } else if upper.starts_with("DE") {
+            if !spline_on {
+                return Err(unknown_keyword(token, label));
+            }
+            if spline_de.is_some() {
+                return Err(format!("{label}：SPLINE 的 de 覆盖重复"));
+            }
+            let rest = &token[2..];
+            let rest = rest.strip_prefix(['=', ':']).unwrap_or(rest);
+            let value_text = if rest.is_empty() {
+                index += 1;
+                tokens
+                    .get(index)
+                    .ok_or_else(|| format!("{label}：关键字 de 缺少数值"))?
+            } else {
+                rest
+            };
+            spline_de = Some(parse_number(value_text, label, "de")?);
+        } else if upper.starts_with("CH") {
             let item = parse_ch(token, &token[2..], label)?;
             if ch.iter().any(|x| x.end == item.end) {
                 return Err(format!(
@@ -1125,6 +1194,53 @@ fn parse_segment(chunk: &str, label: &str, program: &mut Program) -> Result<Segm
         index += 1;
     }
     if !gear_on {
+        // ── SPLINE 段（矩形花键）：直径由规格代号导出（不给 S/E）；L 必给；
+        //    与 CH/OV/RL/M/GEAR 互斥（引入倒角由相邻段的 CH 表达，见 `spline.rs`）──
+        if spline_on {
+            if let Some(token) = loose_gear_token {
+                return Err(unknown_keyword(&token, label));
+            }
+            if !ch.is_empty() {
+                return Err(format!(
+                    "{label}：花键段不能与倒角 CH 同段（不自动画引入倒角；请在相邻轴段上写 CH）"
+                ));
+            }
+            if !ov.is_empty() {
+                return Err(format!("{label}：花键段不能与越程槽 OV 同段"));
+            }
+            if !relief_specs.is_empty() {
+                return Err(format!("{label}：花键段不能与退刀槽 RL 同段"));
+            }
+            if thread.is_some() || tl.is_some() || ro.is_some() || sd.is_some() {
+                return Err(format!("{label}：花键段不能与螺纹段 M/TL/RO/SD 同段"));
+            }
+            if s.is_some() || e.is_some() {
+                return Err(format!("{label}：花键段不给 S/E（直径由规格代号导出）"));
+            }
+            let spec = spline_spec.ok_or_else(|| {
+                format!("{label}：关键字 SPLINE 缺少规格代号（写法 SPLINE 6x23x26x6 L30）")
+            })?;
+            // 先校验规格代号 —— 比「缺 L」更切题（例如 `SPLINE L30` 里 L30 不是代号）。
+            if let Err(e) = crate::spline::parse_code(&spec) {
+                return Err(format!("{label}：{e}"));
+            }
+            let len = l.ok_or_else(|| {
+                format!("{label}：花键段缺少 L（满齿段长，例 `SPLINE 6x23x26x6 L30`）")
+            })?;
+            let spline = crate::spline::RectSpline::from_code(&spec, spline_de, len)
+                .map_err(|e| format!("{label}：{e}"))?;
+            return Ok(Segment {
+                s: spline.big,
+                e: spline.big,
+                l: spline.segment_len(),
+                ch: Vec::new(),
+                ov: Vec::new(),
+                relief: Vec::new(),
+                thread: None,
+                gear: None,
+                spline: Some(spline),
+            });
+        }
         // 没有 GEAR 的 Z/H/BETA 仍按不识别的关键字报（不静默忽略）。
         if let Some(token) = loose_gear_token {
             return Err(unknown_keyword(&token, label));
@@ -1187,6 +1303,7 @@ fn parse_segment(chunk: &str, label: &str, program: &mut Program) -> Result<Segm
             relief,
             thread,
             gear: None,
+            spline: None,
         });
     }
     // ── 齿轮段：直径由 M·Z 导出、长度用 H；CH/OV/M 同段冲突 ──
@@ -1246,6 +1363,7 @@ fn parse_segment(chunk: &str, label: &str, program: &mut Program) -> Result<Segm
         relief: Vec::new(),
         thread,
         gear: Some(gear),
+        spline: None,
     })
 }
 
@@ -1394,6 +1512,34 @@ struct JsonSegment {
     thread: Option<Thread>,
     #[serde(default)]
     gear: Option<JsonGear>,
+    /// 矩形花键段（`SPLINE`）：序列化回传 `{spec,len,de,...}` 或直接给 N/d/D/B。
+    #[serde(default)]
+    spline: Option<JsonSpline>,
+}
+
+/// JSON 形式的花键段：`{"spec":"6x23x26x6","len":30,"de":63}`；
+/// 序列化回传的是 `{n,d,big,b,de,len}`（`RectSpline` 的字段）。
+#[derive(serde::Deserialize)]
+struct JsonSpline {
+    #[serde(default)]
+    spec: Option<String>,
+    #[serde(default)]
+    n: Option<u32>,
+    /// 小径 d（`RectSpline` 字段）。
+    #[serde(default)]
+    d: Option<f64>,
+    /// 大径 D（`RectSpline` 字段）。
+    #[serde(default)]
+    big: Option<f64>,
+    /// 键宽 B。
+    #[serde(default)]
+    b: Option<f64>,
+    /// 滚刀外径 de。
+    #[serde(default)]
+    de: Option<f64>,
+    /// 满齿段长 L（别名 `l`/`L`）。
+    #[serde(default, alias = "l", alias = "L")]
+    len: Option<f64>,
 }
 
 #[derive(serde::Deserialize)]
@@ -1619,6 +1765,81 @@ fn parse_json(text: &str) -> Result<Program, String> {
                 "第 {number} 段：M 段右端的退刀槽收尾用 thread.relief 表示，不要再写段级 relief（端别 R）"
             ));
         }
+        // 花键段：直径由规格代号导出、长度 = L + 收尾 l；与 CH/OV/RL/M 同段冲突。
+        if let Some(js) = &item.spline {
+            if !ch.is_empty() {
+                return Err(format!("第 {number} 段：花键段不能与倒角 ch 同段（请在相邻轴段上写 ch）"));
+            }
+            if !ov.is_empty() {
+                return Err(format!("第 {number} 段：花键段不能与越程槽 ov 同段"));
+            }
+            if !relief.is_empty() {
+                return Err(format!("第 {number} 段：花键段不能与退刀槽 relief 同段"));
+            }
+            if thread.is_some() {
+                return Err(format!("第 {number} 段：花键段不能与螺纹段 m 同段"));
+            }
+            let len = js.len.ok_or_else(|| {
+                format!("第 {number} 段：花键段缺少 len（满齿段长 L，例 {{\"spec\":\"6x23x26x6\",\"len\":30}}")
+            })?;
+            let spline = if let Some(spec) = &js.spec {
+                crate::spline::RectSpline::from_code(spec, js.de, len)
+            } else {
+                let n = js.n.ok_or_else(|| format!("第 {number} 段：花键段缺 n（齿数）"))?;
+                let d = js.d.ok_or_else(|| format!("第 {number} 段：花键段缺 d（小径）"))?;
+                let big = js.big.ok_or_else(|| format!("第 {number} 段：花键段缺 big（大径 D）"))?;
+                let b = js.b.ok_or_else(|| format!("第 {number} 段：花键段缺 b（键宽 B）"))?;
+                let de = match js.de {
+                    Some(de) => de,
+                    None => crate::spline::lookup_de(n, d, big, b).ok_or_else(|| {
+                        format!("第 {number} 段：花键段 de 查不到（不在表 1/表 2），请显式给 de")
+                    })?,
+                };
+                crate::spline::RectSpline::new(n, d, big, b, de, len)
+            }
+            .map_err(|e| format!("第 {number} 段：{e}"))?;
+            if let Some(s) = item.s {
+                if (s - spline.big).abs() > 1e-9 {
+                    return Err(format!(
+                        "第 {number} 段：花键段的 s={} 应等于大径 D={}",
+                        trim(s),
+                        trim(spline.big)
+                    ));
+                }
+            }
+            if let Some(e) = item.e {
+                if (e - spline.big).abs() > 1e-9 {
+                    return Err(format!(
+                        "第 {number} 段：花键段的 e={} 应等于大径 D={}",
+                        trim(e),
+                        trim(spline.big)
+                    ));
+                }
+            }
+            if let Some(l) = item.l {
+                if (l - spline.segment_len()).abs() > 1e-9 {
+                    return Err(format!(
+                        "第 {number} 段：花键段的 l={} 应等于 L+l={}（L={} + 收尾 {})），",
+                        trim(l),
+                        trim(spline.segment_len()),
+                        trim(spline.len),
+                        trim(spline.runout())
+                    ));
+                }
+            }
+            segments.push(Segment {
+                s: spline.big,
+                e: spline.big,
+                l: spline.segment_len(),
+                ch: Vec::new(),
+                ov: Vec::new(),
+                relief: Vec::new(),
+                thread: None,
+                gear: None,
+                spline: Some(spline),
+            });
+            continue;
+        }
         // 齿轮段：直径由 m·z 导出、长度用 h；与 CH/OV/M 同段冲突。
         // （序列化回传的 s/e/l 允许出现，但要等于派生值，不允许相互矛盾。）
         if let Some(g) = &item.gear {
@@ -1687,6 +1908,7 @@ fn parse_json(text: &str) -> Result<Program, String> {
                 relief: Vec::new(),
                 thread,
                 gear: Some(gear),
+                spline: None,
             });
             continue;
         }
@@ -1705,6 +1927,7 @@ fn parse_json(text: &str) -> Result<Program, String> {
             relief,
             thread,
             gear: None,
+            spline: None,
         });
     }
     let view = match &raw.view {
@@ -2002,6 +2225,43 @@ pub fn validate(program: &Program) -> Result<(), String> {
                 return Err(format!("第 {number} 段：齿轮段不能与螺纹段 M 同段"));
             }
         }
+        // ── 矩形花键段（SPLINE）：直径由规格导出、段长 = L+l；与 CH/OV/RL/M/GEAR 互斥 ──
+        if let Some(spline) = &seg.spline {
+            if (seg.s - spline.big).abs() > 1e-9 || (seg.e - spline.big).abs() > 1e-9 {
+                return Err(format!(
+                    "第 {number} 段：花键段的 S/E={}/{} 应等于大径 D={}（由规格导出）",
+                    trim(seg.s),
+                    trim(seg.e),
+                    trim(spline.big)
+                ));
+            }
+            if (seg.l - spline.segment_len()).abs() > 1e-9 {
+                return Err(format!(
+                    "第 {number} 段：花键段段长 {} 应等于 L+l={}（L={} + 收尾 {}）",
+                    trim(seg.l),
+                    trim(spline.segment_len()),
+                    trim(spline.len),
+                    trim(spline.runout())
+                ));
+            }
+            if !seg.ch.is_empty() {
+                return Err(format!(
+                    "第 {number} 段：花键段不能与倒角 CH 同段（引入倒角写在相邻轴段上）"
+                ));
+            }
+            if !seg.ov.is_empty() {
+                return Err(format!("第 {number} 段：花键段不能与越程槽 OV 同段"));
+            }
+            if !seg.relief.is_empty() {
+                return Err(format!("第 {number} 段：花键段不能与退刀槽 RL 同段"));
+            }
+            if seg.thread.is_some() {
+                return Err(format!("第 {number} 段：花键段不能与螺纹段 M 同段"));
+            }
+            if seg.gear.is_some() {
+                return Err(format!("第 {number} 段：花键段不能与齿轮段 GEAR 同段"));
+            }
+        }
     }
     Ok(())
 }
@@ -2156,6 +2416,8 @@ struct Geometry {
     through: Vec<EntityType>,
     /// 仅剖视视图的真实几何：齿轮段齿根线（齿部按不剖，也是剖面线边界）。
     section_lines: Vec<EntityType>,
+    /// 仅常规视图：花键段的小径细线 / 收尾弧 / 两条细竖线（`2细线层`）。
+    spline_regular: Vec<EntityType>,
     /// 剖视剖面线边界：上半外轮廓边界（左→右），拆成上/下两个环。
     profile: Vec<HatchEdge>,
     total_length: f64,
@@ -2170,6 +2432,7 @@ pub fn build(program: &Program, frame_scale: f64) -> Result<Shaft, String> {
         entities,
         through,
         section_lines,
+        spline_regular,
         profile,
         total_length: total,
         max_diameter,
@@ -2188,6 +2451,7 @@ pub fn build(program: &Program, frame_scale: f64) -> Result<Shaft, String> {
         ShaftView::Normal => {
             let mut out = entities;
             out.extend(through);
+            out.extend(spline_regular);
             out
         }
         ShaftView::Section => {
@@ -2201,6 +2465,7 @@ pub fn build(program: &Program, frame_scale: f64) -> Result<Shaft, String> {
             let dx = total + both_view_gap(total, frame_scale);
             let mut left = entities.clone();
             left.extend(through);
+            left.extend(spline_regular);
             let mut right: Vec<EntityType> = entities
                 .iter()
                 .cloned()
@@ -2362,6 +2627,8 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
     let mut through: Vec<EntityType> = Vec::new();
     // 仅剖视视图的真实几何（齿轮齿根线）。
     let mut section_lines: Vec<EntityType> = Vec::new();
+    // 仅常规视图的花键细线（小径线 / 收尾弧 / 两条细竖线，2细线层）。
+    let mut spline_regular: Vec<EntityType> = Vec::new();
     // 剖面线环用的上半外轮廓段（含倒角/台阶/越程槽圆角/螺纹小径包络/齿轮齿根），
     // 最后按 x 排序拆成上/下两个环。
     let mut profile: Vec<HatchEdge> = Vec::new();
@@ -2500,7 +2767,11 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
                 ));
             }
             let delta = (ra - rb).abs();
-            if c >= delta - 1e-12 {
+            // 倒角贴**凸角**（大的一侧）；落在齿轮段那侧则冲突。
+            let (land, _land_end) = if rb > ra { (k, End::L) } else { (i, End::R) };
+            // 花键凸角允许「C = 全台阶」（模板 φ22→φ26 的 C2 就是如此，倒角正好吃掉台阶）。
+            let full_step_on_spline = segs[land].spline.is_some() && (c - delta).abs() < 1e-9;
+            if c >= delta - 1e-12 && !full_step_on_spline {
                 return Err(format!(
                     "第 {} 段：{}端倒角 C={} ≥ 端面直径变化量的一半（Ø{} → Ø{} 的 {}），端面被吃掉",
                     requester + 1,
@@ -2511,8 +2782,6 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
                     trim(delta)
                 ));
             }
-            // 倒角贴**凸角**（大的一侧）；落在齿轮段那侧则冲突。
-            let (land, _land_end) = if rb > ra { (k, End::L) } else { (i, End::R) };
             chamfer_land = Some(land);
             if segs[land].gear.is_some() {
                 return Err(format!(
@@ -2522,12 +2791,18 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
                     land + 1
                 ));
             }
+            if segs[land].spline.is_some() && land == i {
+                return Err(format!(
+                    "第 {} 段：倒角会落在花键段右端（收尾弧占有该端）—— 引入倒角请写在花键左端",
+                    requester + 1
+                ));
+            }
             let (contour, face_point) = if rb > ra {
                 chamfer_geom(&segs[k], x0s[k], End::L, c)
             } else {
                 chamfer_geom(&segs[i], x0s[i], End::R, c)
             };
-            if face_point[1] <= bottom + 1e-9 {
+            if face_point[1] <= bottom + 1e-9 && !full_step_on_spline {
                 return Err(format!(
                     "第 {} 段：{}端倒角与相邻面重叠（端面点 {} ≤ {}）",
                     requester + 1,
@@ -2787,26 +3062,43 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
         if let Some(tangent) = relief_face {
             left_eff = tangent;
         }
-        // 剖面线边界：齿轮端按齿根圆（齿部按不剖）；普通全螺纹段按小径包络
+        // 剖面线边界：齿轮端按齿根圆（齿部按不剖）；花键端按小径包络
+        // （轴线↔小径两条带，齿部不剖）；普通全螺纹段按小径包络
         // （牙顶/牙底之间的牙型区不剖，参考件 `轴剖视图.dxf` 右视图口径）。
-        if let Some(gear) = &segs[i].gear {
+        if let Some(spline) = &segs[i].spline {
+            // 花键右端 = 收尾弧终点，已回到大径 → 剖面边界取大径。
+            left_eff = spline.major_radius();
+        } else if let Some(gear) = &segs[i].gear {
             left_eff = gear.root_radius();
         } else if let Some(thread) = plain_thread(&segs[i]) {
             left_eff = left_eff.min(thread.minor_radius(segs[i].s));
         }
-        if let Some(gear) = &segs[k].gear {
+        if let Some(spline) = &segs[k].spline {
+            // 花键左端小径线起点 → 剖面边界取小径（齿部不剖）；
+            // 若左端倒角切到小径以下，剖面线沿倒角走到与小径的交点（保持链单调）。
+            let chamfer_below = chamfer_land == Some(k)
+                && chamfer_lines
+                    .map(|(_, face_point)| face_point[1] < spline.minor_radius() - 1e-12)
+                    .unwrap_or(false);
+            if !chamfer_below {
+                right_eff = spline.minor_radius();
+            }
+        } else if let Some(gear) = &segs[k].gear {
             right_eff = gear.root_radius();
         } else if let Some(thread) = plain_thread(&segs[k]) {
             right_eff = right_eff.min(thread.minor_radius(segs[k].s));
         }
 
         // ── 段边界贯通竖线（用户 2026-09-18 更正版口径）：半高 = 该端面两侧
-        //    实际轮廓半径的较小者；端面带槽时 = 槽肩（圆角切点）高。 ──
-        through_line(
-            &mut through,
-            x_face,
-            face_through_h.unwrap_or(left_eff.min(right_eff)),
-        );
+        //    实际轮廓半径的较小者；端面带槽时 = 槽肩（圆角切点）高。
+        //    花键段右端不画贯通竖线（模板那里是花键自己的两根细竖线）。──
+        if segs[i].spline.is_none() {
+            through_line(
+                &mut through,
+                x_face,
+                face_through_h.unwrap_or(left_eff.min(right_eff)),
+            );
+        }
 
         if top - bottom > 1e-9 {
             entities.push(line([x_face, bottom], [x_face, top], LAYER_MAIN));
@@ -2824,8 +3116,11 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
                 [contour[0], -contour[1]],
                 LAYER_MAIN,
             ));
-            // 剖面线边界：倒角落在普通全螺纹段时由小径包络接管，不推整段倒角。
-            if chamfer_land.map_or(true, |land| plain_thread(&segs[land]).is_none()) {
+            // 剖面线边界：倒角落在普通全螺纹段时由小径包络接管；
+            // 落在花键段时由花键段的小径包络接管（下面花键块里补倒角段）。
+            if chamfer_land.map_or(true, |land| {
+                plain_thread(&segs[land]).is_none() && segs[land].spline.is_none()
+            }) {
                 profile.push(lr_line(face_point, contour));
             }
             // 倒角终点（根）贯通竖线，半高 = 倒角根半径（用户版 x=2 ±14）。
@@ -2997,6 +3292,64 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
             profile.push(lr_line([x0, rf], [x1, rf]));
             continue;
         }
+        // ── 花键段（矩形花键）：小径细线 / 收尾弧 / 两根细竖线；
+        //    常规视图落 `2细线层`，剖视改 `1轮廓实线层`；剖面线边界 = 小径线 + 收尾弧。──
+        if let Some(spline) = &seg.spline {
+            let (x0, x1) = (x0s[index], x0s[index] + seg.l); // x1 = L + l
+            let (r, ra) = (spline.minor_radius(), spline.major_radius());
+            let xm1 = x0 + spline.len; // 满齿段右端 = 收尾起点
+            let l = spline.runout();
+            let rh = spline.hob_radius();
+            let a_end = spline.runout_end_angle();
+            // 大径线：满齿段与收尾段两段（模板 [43]/[44] + [46]/[47] 就在 x=L 断开）。
+            let xs = x0 + own_ch[index][0].unwrap_or(0.0);
+            if xm1 - xs > 1e-9 {
+                entities.push(line([xs, ra], [xm1, ra], LAYER_MAIN));
+                entities.push(line([xs, -ra], [xm1, -ra], LAYER_MAIN));
+            }
+            if x1 > xm1 + 1e-9 {
+                entities.push(line([xm1, ra], [x1, ra], LAYER_MAIN));
+                entities.push(line([xm1, -ra], [x1, -ra], LAYER_MAIN));
+            }
+            // 左端倒角（如落在本段）把细线起点内缩到倒角与小径的交点。
+            let left_inset = own_ch[index][0]
+                .map(|c| (c - (ra - r)).max(0.0))
+                .unwrap_or(0.0);
+            let xm0 = x0 + left_inset;
+            // 左端倒角（落在本段）切到小径以下：剖面线的倒角段只取到与小径的交点。
+            if let Some(c) = own_ch[index][0] {
+                let face_y = ra - c;
+                if face_y < r - 1e-12 && xm0 > x0 + 1e-12 {
+                    profile.push(lr_line([x0, face_y], [xm0, r]));
+                }
+            }
+            // 常规视图：小径细线 + 收尾弧（与小径相切、与大径相交）+ 两根细竖线。
+            spline_regular.push(line([xm0, r], [xm1, r], LAYER_THIN));
+            spline_regular.push(line([xm0, -r], [xm1, -r], LAYER_THIN));
+            spline_regular.push(arc([xm1, r + rh], rh, 270.0, 360.0 - a_end, LAYER_THIN));
+            spline_regular.push(arc([xm1, -(r + rh)], rh, a_end, 90.0, LAYER_THIN));
+            spline_regular.push(line([xm1, -ra], [xm1, ra], LAYER_THIN));
+            if index + 1 < count {
+                // 后面还有段：收尾终点细竖线（自由端时由右端面线闭合）。
+                spline_regular.push(line([xm1 + l, -ra], [xm1 + l, ra], LAYER_THIN));
+            }
+            // 剖视可见的小径线 / 收尾弧（`1轮廓实线层`）。
+            section_lines.push(line([xm0, r], [xm1, r], LAYER_MAIN));
+            section_lines.push(line([xm0, -r], [xm1, -r], LAYER_MAIN));
+            section_lines.push(arc([xm1, r + rh], rh, 270.0, 360.0 - a_end, LAYER_MAIN));
+            section_lines.push(arc([xm1, -(r + rh)], rh, a_end, 90.0, LAYER_MAIN));
+            // 剖面线边界：小径线 → 收尾弧（齿部不剖，与模板「只填轴线↔小径」同口径）。
+            profile.push(lr_line([xm0, r], [xm1, r]));
+            profile.push(HatchEdge::Arc {
+                c: [xm1, r + rh],
+                r: rh,
+                start_deg: 270.0,
+                end_deg: 360.0 - a_end,
+                ccw: true,
+            });
+            // 大径线/剖面线都已就位：不进入通用轮廓分支（通用会把大径线画成整段）。
+            continue;
+        }
         let start_shift = own_ch[index][0]
             .unwrap_or(0.0)
             .max(own_ov[index][0].unwrap_or(0.0))
@@ -3026,7 +3379,7 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
             let ye = radius_at(seg, x0s[index], xe);
             entities.push(line([xs, ys], [xe, ye], LAYER_MAIN));
             entities.push(line([xs, -ys], [xe, -ye], LAYER_MAIN));
-            if plain_thread(seg).is_none() {
+            if seg.spline.is_none() && plain_thread(seg).is_none() {
                 profile.push(lr_line([xs, ys], [xe, ye]));
             }
         }
@@ -3202,6 +3555,7 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
         entities,
         through,
         section_lines,
+        spline_regular,
         profile,
         total_length: total,
         max_diameter,
@@ -3679,7 +4033,7 @@ mod tests {
                     let ex = a.center.x + a.radius * a.end_angle.cos();
                     let ey = a.center.y + a.radius * a.end_angle.sin();
                     csv.push_str(&format!(
-                        "ARC,{:.6},{:.6},{:.6},{:.6},{},{:.6},{:.6},{:.6},{:.4},{:.4}\n",
+                        "ARC,{:.6},{:.6},{:.6},{:.6},{},{:.6},{:.6},{:.6},{:.6},{:.6}\n",
                         sx,
                         sy,
                         ex,
@@ -4198,6 +4552,7 @@ GEAR M3 Z20";
             relief: Vec::new(),
             thread: Some(Thread { pitch: Some(1.5), ..Thread::default() }),
             gear: None,
+            spline: None,
         };
         let err = validate(&Program {
             segments: vec![segment],
@@ -4954,6 +5309,228 @@ GEAR M3 Z20";
         assert!(err.contains("第 1 段"), "{err}");
         let err = parse_program("S30 E30 L10\nGEAR M3 Z20.5").unwrap_err();
         assert!(err.contains("第 2 段"), "{err}");
+    }
+
+    // ── 矩形花键段 SPLINE（GB/T 1144 规格代号） ────────────────────────
+
+    /// DSL：`SPLINE 6x23x26x6 L30 [de …]` → 大径 D、段长 = L + l；关键字位置无关。
+    #[test]
+    fn dsl_spline_parses_and_derives() {
+        let program = parse_program("SPLINE 6x23x26x6 L30").unwrap();
+        assert_eq!(program.segments.len(), 1);
+        let seg = &program.segments[0];
+        let sp = seg.spline.expect("花键段");
+        assert_eq!((sp.n, sp.d, sp.big, sp.b, sp.de, sp.len), (6, 23.0, 26.0, 6.0, 63.0, 30.0));
+        assert!(near(seg.s, 26.0) && near(seg.e, 26.0), "s=e=大径 D");
+        assert!(near(seg.l, 30.0 + sp.runout()), "段长 = L + l");
+        assert!(near(sp.runout(), 9.604_687));
+        // de 覆盖（贴写 / 空格 / `=`）；大小写 / 顺序无关
+        let with_de = parse_program("SPLINE 6x23x26x6 de71 L30").unwrap();
+        assert!(near(with_de.segments[0].spline.unwrap().de, 71.0));
+        let shuffled = parse_program("l30 spline 6x23x26x6").unwrap();
+        assert_eq!(shuffled.segments[0], program.segments[0]);
+        for text in ["SPLINE 6x23x26x6 L30 de 71", "SPLINE 6x23x26x6 L30 de=71", "SPLINE 6×23×26×6 L30"] {
+            assert!(parse_program(text).is_ok(), "{text}");
+        }
+        // 表外规格：不给 de 报错并指路；给了 de 可出图
+        let err = parse_program("SPLINE 6x11x14x3 L20").unwrap_err();
+        assert!(err.contains("de"), "{err}");
+        assert!(parse_program("SPLINE 6x11x14x3 L20 de63").is_ok());
+        // JSON 往返：序列化模型能原样解析回来
+        let json = serde_json::to_string(&program).unwrap();
+        assert!(json.contains("spline"), "{json}");
+        assert_eq!(parse_program(&json).unwrap(), program);
+        let dsl_from_gui = r#"{"segments":[{"spline":{"spec":"6x23x26x6","len":30,"de":71}}]}"#;
+        assert!(near(
+            parse_program(dsl_from_gui).unwrap().segments[0]
+                .spline
+                .unwrap()
+                .de,
+            71.0
+        ));
+    }
+
+    /// DSL 错误：缺规格/缺 L、不给 S/E、与 CH/OV/RL/M/GEAR 互斥、de ≤ D。
+    #[test]
+    fn dsl_spline_reports_errors() {
+        let cases: &[(&str, &str)] = &[
+            ("SPLINE 6x23x26x6", "缺少 L"),
+            ("SPLINE L30", "规格代号"),
+            ("SPLINE 6x23x26x6 S26 E26 L30", "不给 S/E"),
+            ("SPLINE 6x23x26x6 L30 CH2@L", "不能与倒角"),
+            ("SPLINE 6x23x26x6 L30 OV3", "不能与越程槽"),
+            ("SPLINE 6x23x26x6 L30 RL@L P1.5", "不能与退刀槽"),
+            ("SPLINE 6x23x26x6 L30 M1.5", "不能与螺纹"),
+            ("SPLINE 6x23x26x6 L30 GEAR M3 Z20", "齿轮段"),
+            ("SPLINE 6x23x26x6 L30 de26", "必须大于大径"),
+            ("SPLINE 6x23x26x6 L30 de63 de71", "de 覆盖重复"),
+        ];
+        for (text, needle) in cases {
+            let err = parse_program(text).unwrap_err();
+            assert!(err.contains(needle), "{text}: 期望含「{needle}」，得到 {err}");
+        }
+        // 花键段不能与倒角同段（引入倒角写在相邻段上）
+        let err = parse_program("SPLINE 6x23x26x6 L30 CH2").unwrap_err();
+        assert!(err.contains("相邻轴段") || err.contains("不能与倒角"), "{err}");
+    }
+
+    /// 单段花键轴：大径线 / 小径细线 / 收尾弧（圆心、相切、终点）/ 细竖线 / 端面。
+    #[test]
+    fn spline_segment_geometry_matches_template_group4() {
+        let program = parse_program("SPLINE 6x23x26x6 L30").unwrap();
+        let sp = program.segments[0].spline.unwrap();
+        let shaft = build(&program, 1.0).unwrap();
+        let (l, r, ra, rh) = (sp.len, sp.minor_radius(), sp.major_radius(), sp.hob_radius());
+        // 整个段长 = L + l；自由端面在 L+l
+        assert!(near(program.total_length(), l + sp.runout()));
+        assert!(has_line(&shaft, [0.0, -ra], [0.0, ra]), "左端面 ±D/2");
+        assert!(has_line(&shaft, [l + sp.runout(), -ra], [l + sp.runout(), ra]), "右端面");
+        // 大径线：满齿段 [0, L] 与收尾段 [L, L+l] 两段（模板 [43]/[46] 也在 x=L 断开）
+        assert!(has_line(&shaft, [0.0, ra], [l, ra]));
+        assert!(has_line(&shaft, [l, ra], [l + sp.runout(), ra]));
+        assert!(has_line(&shaft, [0.0, -ra], [l, -ra]));
+        assert!(has_line(&shaft, [l, -ra], [l + sp.runout(), -ra]));
+        // 小径细线 [0, L] 落 2细线层
+        assert_eq!(layer_of_line(&shaft, [0.0, r], [l, r]), Some(LAYER_THIN));
+        assert_eq!(layer_of_line(&shaft, [0.0, -r], [l, -r]), Some(LAYER_THIN));
+        // 收尾弧：上弧 270°→360°−a；下弧 a→90°（模板 [56]/[57] 同口径）
+        let a = sp.runout_end_angle();
+        assert!(near(a, 72.247_210));
+        assert!(has_arc(&shaft, [l, r + rh], rh, 270.0, 360.0 - a));
+        assert!(has_arc(&shaft, [l, -(r + rh)], rh, a, 90.0));
+        // 满齿终止细竖线 x=L，跨 ±D/2（模板 [42]）；自由端收尾终点由右端面闭合
+        assert_eq!(layer_of_line(&shaft, [l, -ra], [l, ra]), Some(LAYER_THIN));
+        // 尾端面是 1轮廓实线层
+        assert_eq!(
+            layer_of_line(&shaft, [l + sp.runout(), -ra], [l + sp.runout(), ra]),
+            Some(LAYER_MAIN)
+        );
+        // 剖视：小径线 / 收尾弧改 1轮廓实线层 + 轴线↔小径两条带 HATCH
+        let section = build(
+            &parse_program("SPLINE 6x23x26x6 L30 VIEW 剖视").unwrap(),
+            1.0,
+        )
+        .unwrap();
+        assert_eq!(layer_of_line(&section, [0.0, r], [l, r]), Some(LAYER_MAIN));
+        assert!(section
+            .entities
+            .iter()
+            .any(|e| matches!(e, EntityType::Hatch(_))));
+    }
+
+    /// 相邻段写 CH：倒角落在花键凸角上，小径细线跟着内缩到倒角与小径的交点。
+    #[test]
+    fn spline_segment_with_neighbor_chamfer() {
+        let program = parse_program("S22 E22 L5 CH2@R | SPLINE 6x23x26x6 L30").unwrap();
+        let shaft = build(&program, 1.0).unwrap();
+        let sp = program.segments[1].spline.unwrap();
+        let (r, ra) = (sp.minor_radius(), sp.major_radius());
+        // φ22 段右端面 x=5 高 ±11；倒角（贴花键一侧）(5,11)→(7,13)
+        assert!(has_line(&shaft, [5.0, -11.0], [5.0, 11.0]));
+        assert!(has_line(&shaft, [5.0, 11.0], [7.0, ra]));
+        // 小径细线从倒角与小径的交点 x=5+0.5 起，到满齿段右端 x=5+30
+        assert_eq!(layer_of_line(&shaft, [5.5, r], [35.0, r]), Some(LAYER_THIN));
+        assert!(near(5.5, 5.0 + 0.5), "内缩 = c − (R−r) = 0.5");
+        // 花键段右端后面还有别的段时，收尾终点细竖线在 L+l
+        let program = parse_program("SPLINE 6x23x26x6 L30 | S40 E40 L10").unwrap();
+        let shaft = build(&program, 1.0).unwrap();
+        let end = 30.0 + sp.runout();
+    }
+
+    /// HATCH 边界 → CSV（供 `compare_spline.py` 逐 LineEdge 对照）：
+    /// 首行 `# ANSI31 scale=1.0 angle=0.0 loops=2`，其余 `ring,edge,x1,y1,x2,y2`。
+    fn hatch_csv(entities: &[EntityType]) -> String {
+        use ocs_plugin_api::host::acadrust::entities::hatch::BoundaryEdge;
+        let Some(h) = entities.iter().find_map(|e| match e {
+            EntityType::Hatch(h) => Some(h),
+            _ => None,
+        }) else {
+            return String::new();
+        };
+        let mut csv = format!(
+            "# {} scale={} angle={} loops={}\n",
+            h.pattern.name,
+            h.pattern_scale,
+            h.pattern_angle.to_degrees(),
+            h.paths.len()
+        );
+        csv.push_str("ring,edge,x1,y1,x2,y2\n");
+        for (ring, path) in h.paths.iter().enumerate() {
+            for (edge, e) in path.edges.iter().enumerate() {
+                if let BoundaryEdge::Line(l) = e {
+                    csv.push_str(&format!(
+                        "{},{},{:.6},{:.6},{:.6},{:.6}\n",
+                        ring, edge, l.start.x, l.start.y, l.end.x, l.end.y
+                    ));
+                }
+            }
+        }
+        csv
+    }
+
+    /// 矩形花键回归样例 → `~/桌面/OCSM/review/spline_*.csv`（`compare_spline.py` 用）。
+    #[test]
+    fn spline_demo_csv_dump() {
+        let path = std::env::var("HOME")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|_| std::path::PathBuf::from("/tmp"))
+            .join("桌面/OCSM/review");
+        std::fs::create_dir_all(&path).expect("建 review 目录");
+
+        // 独立要素三个视图（L=30，局部原点 = 左端面/轴线）
+        for (view, file) in [
+            ("front", "spline_element_front.csv"),
+            ("side", "spline_element_side.csv"),
+            ("section", "spline_element_section.csv"),
+        ] {
+            let mut params = crate::detail::DetailParams::new();
+            params.set_spec("6x23x26x6");
+            if view != "front" {
+                params.insert("len", 30.0);
+            }
+            let part = crate::detail::generate_params(
+                crate::detail::FAMILY_SPLINE_RECT,
+                23.0,
+                &params,
+                view,
+            )
+            .unwrap_or_else(|e| panic!("{view} 生成失败：{e}"));
+            std::fs::write(path.join(file), entities_csv(&part.entities)).expect("写 CSV");
+            assert!(path.join(file).is_file());
+            if view == "section" {
+                std::fs::write(
+                    path.join("spline_element_section_hatch.csv"),
+                    hatch_csv(&part.entities),
+                )
+                .expect("写 HATCH CSV");
+            }
+        }
+
+        // 轴段特征（模板第 4 组的同局部系：x=0 = 左端面、y=0 = 轴线）
+        let normal = build(&parse_program("SPLINE 6x23x26x6 L30").unwrap(), 1.0).unwrap();
+        std::fs::write(path.join("spline_shaft_normal.csv"), entities_csv(&normal.entities))
+            .expect("写 CSV");
+        let section = build(
+            &parse_program("SPLINE 6x23x26x6 L30 VIEW 剖视").unwrap(),
+            1.0,
+        )
+        .unwrap();
+        std::fs::write(path.join("spline_shaft_section.csv"), entities_csv(&section.entities))
+            .expect("写 CSV");
+        std::fs::write(
+            path.join("spline_shaft_section_hatch.csv"),
+            hatch_csv(&section.entities),
+        )
+        .expect("写 HATCH CSV");
+        assert!(path.join("spline_shaft_normal.csv").is_file());
+        // 带 φ22 引入倒角 + 同径后续段的轴（对齐模板第 4 组的局部系：左端面 x=5 ↔ 模板 47.988）
+        let lead = build(
+            &parse_program("S22 E22 L5 CH2@R | SPLINE 6x23x26x6 L30 | S26 E26 L40").unwrap(),
+            1.0,
+        )
+        .unwrap();
+        std::fs::write(path.join("spline_shaft_with_lead.csv"), entities_csv(&lead.entities))
+            .expect("写 CSV");
     }
 
     #[test]
