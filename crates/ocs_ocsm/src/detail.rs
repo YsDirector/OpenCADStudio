@@ -1859,6 +1859,11 @@ mod tests {
             .expect("是结构要素")
             .expect("侧视图应能出图");
         assert!(svg.contains("<svg") && svg.contains("6x23x26x6 L30"), "{svg}");
+        // 表内规格不传 de 也能出图：自动查表结果与显式 de=63 完全一致（R=de/2、l 同式）。
+        let svg_de = preview_svg("family=detail_spline_rect&spec=6x23x26x6&len=30&de=63&view=side")
+            .unwrap()
+            .unwrap();
+        assert_eq!(svg, svg_de, "表内规格不传 de 应自动查表（等价于 de=63）");
         let svg = preview_svg("family=detail_spline_rect&spec=6x23x26x6&len=30&view=front")
             .unwrap()
             .unwrap();

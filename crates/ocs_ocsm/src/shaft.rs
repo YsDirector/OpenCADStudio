@@ -5350,6 +5350,33 @@ GEAR M3 Z20";
         ));
     }
 
+    /// 表内规格不传 de：轴段 DSL 与 JSON 模型都自动查 GB/T 10952 表并算 R/l；
+    /// 表外规格仍必须显式 de（独立要素入口另有等价回归，见 `detail.rs`）。
+    #[test]
+    fn spline_table_spec_without_de_auto_lookup() {
+        // ① DSL：SPLINE 6x23x26x6 L30 → de=63（R=31.5）、h=1.5、l=9.6047
+        let program = parse_program("SPLINE 6x23x26x6 L30").unwrap();
+        let sp = program.segments[0].spline.expect("花键段");
+        assert_eq!((sp.de, sp.hob_radius()), (63.0, 31.5), "de 查表 / R=de/2");
+        assert!(near(sp.depth(), 1.5) && near(sp.runout(), 9.604_687), "h / l 数值");
+        assert!(near(program.segments[0].l, 39.604_687), "段长 = L + l");
+        // ② JSON 模型（GUI 段表 → `/api/shaft_export` 的口径）：不传 de 同样查表
+        let json = r#"{"segments":[{"spline":{"spec":"6x28x32x7","len":30}}]}"#;
+        let sp = parse_program(json).unwrap().segments[0].spline.expect("花键段");
+        assert_eq!(sp.de, 71.0, "6x28x32x7 → de=71");
+        assert_eq!(sp.hob_radius(), 35.5, "R = de/2");
+        // h=2、l=√(2×(71−2))=11.747340
+        assert!(near(sp.depth(), 2.0) && near(sp.runout(), 11.747_340), "h / l 数值");
+        // ③ 表外规格行为不变：不传 de 报错指路；给了 de 才能出图
+        let err = parse_program(r#"{"segments":[{"spline":{"spec":"6x11x14x3","len":20}}]}"#)
+            .unwrap_err();
+        assert!(err.contains("de 查不到") && err.contains("请给 de 覆盖"), "{err}");
+        assert!(parse_program(
+            r#"{"segments":[{"spline":{"spec":"6x11x14x3","len":20,"de":63}}]}"#
+        )
+        .is_ok());
+    }
+
     /// DSL 错误：缺规格/缺 L、不给 S/E、与 CH/OV/RL/M/GEAR 互斥、de ≤ D。
     #[test]
     fn dsl_spline_reports_errors() {

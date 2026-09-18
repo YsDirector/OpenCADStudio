@@ -41,6 +41,8 @@
   table.seg tbody tr.bad { background: #fff0f0; }
   table.seg td.idx { text-align: center; color: #888; padding-top: 12px; }
   table.seg input[type=number] { width: 64px; padding: 3px 4px; font-size: 12.5px; }
+  table.seg select { width: 128px; padding: 3px 4px; font-size: 12px; }
+  .spline-derive { font-size: 11px; color: #888; white-space: nowrap; line-height: 1.5; }
   table.seg td.feat .frow { display: flex; align-items: center; gap: 4px; margin: 1px 0; }
   .chk { display: inline-flex; align-items: center; gap: 3px; margin: 0; font-size: 12px;
          color: #555; white-space: nowrap; cursor: pointer; }
@@ -95,7 +97,7 @@
             <th>OV 越程槽</th>
             <th>M 螺纹段</th>
             <th>GEAR 齿轮段</th>
-            <th>SPLINE 花键段</th>
+            <th>SPLINE 花键段（规格下拉）</th>
           </tr>
         </thead>
         <tbody id="segBody"></tbody>
@@ -112,8 +114,10 @@
       <code>E</code> 留空 = 圆柱段；<code>M</code> 螺纹段要求 S=E（不写值 = 小径 0.85d 简化画法，
       <code>M1.5</code> = 螺距 P 精确小径）；退刀槽 <b>就是一小段小直径轴段</b>（例 <code>S24 E24 L5</code>），
       或在行文本里写段级 <code>RL@L</code> / <code>RL@R</code>（任意圆柱段；给 <code>P</code> 查 GB/T 3 表 2，
-      或显式 <code>g1/g2/dg/r</code>）。<b>SPLINE 矩形花键段</b>：规格代号 + 满齿段长
-      <code>L</code>（段长 = L + 收尾 l）+ 可选 <code>de</code> 覆盖；不能与 CH/OV/M/GEAR 同段。
+      或显式 <code>g1/g2/dg/r</code>）。<b>SPLINE 矩形花键段</b>：规格代号从 GB/T 1144 规格表
+      （轻/中系列共 33 条）<b>下拉选择</b>，选中自动带出 d/D/B/de/h/l 派生值（de 框可改 = 覆盖）；
+      下拉末尾「自定义…」手输表外规格（表外必须给 <code>de</code>）。满齿段长 <code>L</code>
+      （段长 = L + 收尾 l）；不能与 CH/OV/M/GEAR 同段。
     </div>
     <div id="segErr"></div>
   </div>
@@ -128,7 +132,8 @@
       例：<code>OCSMSHAFT S30 E30 L45 CH2@L | S40 E40 L7 M1.5 | S36 E36 L5 | GEAR M3 Z20 VIEW 剖视</code>；
       段级退刀槽：<code>S25 E25 L32 RL@L P1.5</code>（贴左端查表 2）或
       <code>RL@R g1 2.5 g2 4.5 dg 22.7 r 0.8</code>（显式尺寸）；<code>ES…</code> 旧写法已取消。
-      矩形花键段：<code>SPLINE 6x23x26x6 L30</code>（另可 <code>de 63</code> 覆盖；引入倒角在相邻段写 CH）。
+      矩形花键段：<code>SPLINE 6x23x26x6 L30</code>（规格代号可在段表下拉选择/自定义；
+      表内规格 de 自动查表，<code>de 63</code> = 覆盖；表外规格必须给 de；引入倒角在相邻段写 CH）。
     </div>
   </div>
 
@@ -184,6 +189,8 @@ const VIEWS = [
 
 let rows = [];              // 段表状态（一行一段）
 let sel = 0;                // 当前选中行
+let splineSpecs = [];       // 矩形花键规格表（/api/parts → detail_spline_rect.specs）
+const SPLINE_CUSTOM = "__custom__";   // 下拉末尾「自定义规格…」的哨兵值
 let curView = "normal";     // 当前视图（默认常规）
 let seqPreview = 0;         // 过期响应丢弃序号
 let seqParse = 0;
@@ -226,6 +233,76 @@ const esc = (s) =>
   String(s == null ? "" : s)
     .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;");
+
+/* ─────────────────────────── 矩形花键规格表 ─────────────────────────── */
+
+// 规格表来源 = `/api/parts` 的 `families.detail_spline_rect.specs`（与零件库窗口同源，
+// 33 条 GB/T 1144 轻/中系列）；拿不到就退化成纯手输，不阻塞页面其余功能。
+async function loadSplineSpecs() {
+  try {
+    const cat = await (await fetch("/api/parts", { cache: "no-store" })).json();
+    const fam = cat && cat.families ? cat.families.detail_spline_rect : null;
+    splineSpecs = (fam && Array.isArray(fam.specs) ? fam.specs : [])
+      .filter((s) => s && typeof s.code === "string" && s.code !== "");
+  } catch (e) {
+    splineSpecs = [];
+  }
+}
+
+// 规格代号归一：×/＊/* → x、去空白、小写（与后端 parse_code 同口径）。
+function specNorm(s) {
+  return String(s == null ? "" : s).trim().toLowerCase()
+    .replace(/[×＊*]/g, "x").replace(/\s+/g, "");
+}
+
+// 规格代号 → 表内条目；找不到 = 表外规格 → 下拉落「自定义」。
+function splineSpecHit(spec) {
+  const key = specNorm(spec);
+  return key ? (splineSpecs.find((s) => s.code === key) || null) : null;
+}
+
+// 规格代号 → N×d×D×B（只用于界面显示派生值；几何合法性仍由后端校验）。
+function parseSpecDims(spec) {
+  const parts = String(spec == null ? "" : spec).trim().split(/[xX×＊*\s]+/).filter((s) => s !== "");
+  if (parts.length !== 4) return null;
+  const [n, d, big, b] = parts.map(Number);
+  if (![n, d, big, b].every((v) => Number.isFinite(v) && v > 0)) return null;
+  return { n, d, big, b };
+}
+
+// 段表里的派生值：d（小径）/ D（大径）/ B（键宽）/ de（滚刀）/ h（齿深）/ l（收尾长度）。
+// l = √(h(2R−h))、R = de/2（与 spline.rs::runout 同式），用户不用心算。
+function splineDerived(r) {
+  const spec = String(r.spline.spec).trim();
+  const hit = splineSpecHit(spec);
+  const dims = hit ? { d: hit.d, big: hit.D, b: hit.B } : parseSpecDims(spec);
+  if (!dims) {
+    return spec === ""
+      ? "自定义规格：手输 N×d×D×B（表外必须给 de）"
+      : "规格代号要写成 N×d×D×B（例 6x23x26x6）";
+  }
+  const deRaw = String(r.spline.de).trim();
+  const de = deRaw === "" ? (hit ? hit.de : NaN) : numOrNaN(r.spline.de);
+  const h = (dims.big - dims.d) / 2;
+  let out = "d" + fmt(dims.d) + " D" + fmt(dims.big) + " B" + fmt(dims.b) + " h" + fmt(h);
+  if (Number.isFinite(de) && de > 0) {
+    out += " de" + fmt(de) + " l" + fmt(Math.sqrt(Math.max(0, h * (de - h))));
+  } else {
+    out += " de?（表外必给） l?";
+  }
+  return out;
+}
+
+// 下拉选项：表内规格（带 de 提示）+ 末尾「自定义规格…」；规格表拿不到时只剩自定义项。
+function splineOptionsHtml(current) {
+  let out = "";
+  for (const s of splineSpecs) {
+    out += `<option value="${esc(s.code)}"${s.code === current ? " selected" : ""}>`
+      + `${esc(s.code)}（${esc(s.series)}系列，de${fmt(s.de)}）</option>`;
+  }
+  out += `<option value="${SPLINE_CUSTOM}"${current === SPLINE_CUSTOM ? " selected" : ""}>自定义规格…</option>`;
+  return out;
+}
 
 function showStatus(msg, bad) {
   const s = el("status");
@@ -280,6 +357,8 @@ function renderViews() {
 function rowHtml(r, i) {
   const gearOn = r.gear.on;
   const splineOn = r.spline.on;
+  const specHit = splineSpecHit(r.spline.spec);
+  const specSel = specHit ? specHit.code : SPLINE_CUSTOM;
   const mOn = r.m.on;
   const ovOn = r.ov.l.on || r.ov.r.on;
   const ck = (v) => (v ? " checked" : "");
@@ -306,9 +385,11 @@ function rowHtml(r, i) {
       <span class="chk">z</span><input type="number" step="1" min="2" data-f="gear.z" value="${esc(r.gear.z)}"${dis(!gearOn)}></div>
       <div class="frow"><span class="chk">H</span><input type="number" step="0.1" min="0" data-f="gear.h" value="${esc(r.gear.h)}" placeholder="10m"${dis(!gearOn)}></div></td>
     <td class="feat"><div class="frow"><label class="chk"><input type="checkbox" data-f="spline.on"${ck(splineOn)}${dis(gearOn)}>SPLINE</label></div>
-      <div class="frow"><input type="text" data-f="spline.spec" value="${esc(r.spline.spec)}" placeholder="6x23x26x6" style="width:96px"${dis(!splineOn)}></div>
+      <div class="frow"><select data-f="spline.spec" title="表内规格下拉；表外规格选「自定义…」"${dis(!splineOn)}>${splineOptionsHtml(specSel)}</select></div>
+      <div class="frow"><input type="text" data-f="spline.spec" value="${esc(r.spline.spec)}" placeholder="自定义 N×d×D×B" style="width:128px${specHit ? ";display:none" : ""}"${dis(!splineOn)}></div>
       <div class="frow"><span class="chk">L</span><input type="number" step="0.1" min="0" data-f="spline.len" value="${esc(r.spline.len)}" placeholder="满齿段长"${dis(!splineOn)}>
-      <span class="chk">de</span><input type="number" step="0.1" min="0" data-f="spline.de" value="${esc(r.spline.de)}" placeholder="查表" style="width:52px"${dis(!splineOn)}></div></td>
+      <span class="chk">de</span><input type="number" step="0.1" min="0" data-f="spline.de" value="${esc(r.spline.de)}" placeholder="${specHit ? fmt(specHit.de) : "表外必给"}" style="width:52px"${dis(!splineOn)}></div>
+      <div class="frow spline-derive" title="小径 d / 大径 D / 键宽 B / 滚刀直径 de / 齿深 h / 收尾长度 l">${esc(splineDerived(r))}</div></td>
   </tr>`;
 }
 
@@ -346,8 +427,16 @@ function rowToDsl(r) {
     return s;
   }
   if (r.spline.on) {
-    let s = "SPLINE " + String(r.spline.spec).trim() + " L" + numTok(r.spline.len);
-    if (String(r.spline.de).trim() !== "") s += " de" + numTok(r.spline.de);
+    const spec = String(r.spline.spec).trim();
+    let s = "SPLINE " + spec + " L" + numTok(r.spline.len);
+    const deRaw = String(r.spline.de).trim();
+    if (deRaw !== "") {
+      // 表内规格自动填进 de 框的查表值不必写进行文本（不写 de 后端也会查表）；
+      // 手改成别的值才算覆盖，写成 `de71` 这种可复制形式。
+      const hit = splineSpecHit(spec);
+      const isTableDefault = hit && Math.abs(numOrNaN(r.spline.de) - hit.de) < 1e-9;
+      if (!isTableDefault) s += " de" + numTok(r.spline.de);
+    }
     return s;
   }
   let s = "S" + numTok(r.s);
@@ -502,11 +591,31 @@ function onTableInput(e) {
   if (!r) return;
   const field = e.target.dataset.f;
   if (!field) return;
+  // 规格下拉：表内规格 → 自动填查表 de（仍可手改 = 覆盖）；「自定义…」→ 清空 de、露出文本框。
+  if (field === "spline.spec" && e.target.tagName === "SELECT") {
+    sel = Number(tr.dataset.row);
+    const hit = splineSpecHit(e.target.value);
+    if (e.target.value === SPLINE_CUSTOM || !hit) {
+      r.spline.spec = e.target.value === SPLINE_CUSTOM ? "" : String(e.target.value);
+      r.spline.de = "";
+    } else {
+      r.spline.spec = hit.code;
+      r.spline.de = fmt(hit.de);   // 自动生成：de = GB/T 10952 查表值
+    }
+    renderTable();
+    regenText();
+    return;
+  }
   const isCheck = e.target.type === "checkbox";
   setField(r, field, isCheck ? e.target.checked : e.target.value);
   if (isCheck) {
     sel = Number(tr.dataset.row);
     enforceExclusive(r);
+    // SPLINE 新勾上且规格在表内：de 也自动填查表值（仍可手改 = 覆盖）。
+    if (field === "spline.on" && r.spline.on) {
+      const hit = splineSpecHit(r.spline.spec);
+      if (hit && String(r.spline.de).trim() === "") r.spline.de = fmt(hit.de);
+    }
     renderTable();   // 勾选会改 disabled 状态 → 整表重渲染（点选不丢内容）
   }
   regenText();
@@ -639,7 +748,10 @@ function modelFromRows() {
       if (deRaw !== "") {
         const de = numOrNaN(r.spline.de);
         if (!(de > 0)) { showStatus(at + "SPLINE 的 de 覆盖必须 > 0（留空 = 按规格查表）。", true); return null; }
-        spline.de = de;
+        // 表内规格自动填的 de（= 查表值）不进模型：不传 de 后端同样查表；
+        // 改了才当覆盖传（与行文本口径一致）。
+        const hit = splineSpecHit(spec);
+        if (!(hit && Math.abs(de - hit.de) < 1e-9)) spline.de = de;
       }
       segments.push({ spline });
       continue;
@@ -804,8 +916,9 @@ function ping(bye) {
 
   el("out").addEventListener("click", exportToDrawing);
 
-  // 初始：示例文本 → 解析 → 回填段表 → 预览
+  // 初始：规格表（下拉数据源）→ 示例文本解析 → 回填段表 → 预览
   renderViews();
+  await loadSplineSpecs();
   el("dsl").value = DEMO;
   const ok = await refreshFromText();
   if (ok) await fetchPreview();

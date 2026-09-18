@@ -106,6 +106,9 @@ rm -rf "$HOME/.config/OpenCADStudio/plugins/opencad.layers_quick"
   取参优先级：显式 `g1/g2/dg/r`（`dg` 绝对直径）→ 给 `P` 查表 2 → 都不给报错；
   前置：该端相邻段更高（有台肩）、本段圆柱，否则报「第 N 段」+ 原因；
   例 `S25 E25 L32 RL@L P1.5`。旧写法一小段小直径轴段（例 `S24 E24 L5`）仍可用，`ES…` 会报错指路。
+  **`SPLINE` 矩形花键段**：窗口段表里规格代号从 GB/T 1144 规格表（轻 15 + 中 18 = 33 条）
+  下拉选择，选中自动带出 de（GB/T 10952 表 1/表 2）与 d/D/B/h/l 派生值（de 框可改 = 覆盖）；
+  下拉末尾「自定义…」支持表外规格（表外必须给 de）。例 `SPLINE 6x23x26x6 L30`（表内规格不写 de 也自动查表算 R/l）。
   **插入前也要先跑过 `OCSM` 初始化**（与齿轮同判据）。
 - 工具栏「标注」组有 **标注转GB**（🔁）按钮，等效输入 `D2G` / `OCSMDIM2GB`。
 - 输入 `D2G`（或 `OCSMDIM2GB`）→ **把宿主原生标注重建为 OCSM 的 GB 标准版**：
@@ -252,7 +255,8 @@ rm -rf "$HOME/.config/OpenCADStudio/plugins/opencad.layers_quick"
   规格总数 241（尺寸/长度系列来源见 `src/tables/*.json` 的 `source` 字段）。
 - **结构要素**（与标准件并列的「结构要素」树，`kind=detail`，d 自由输入）：
   第一期 `detail_grind_od`（磨外圆砂轮越程槽 GB/T 6403.5-2008，可选 `b1`）；
-  第二期 `detail_thread_relief`（外螺纹退刀槽 GB/T 3-1997 表 2，`P` 必给 + 可选 `g1/g2/dg/r/alpha`，斜壁 30° 下限）。
+  第二期 `detail_thread_relief`（外螺纹退刀槽 GB/T 3-1997 表 2，`P` 必给 + 可选 `g1/g2/dg/r/alpha`，斜壁 30° 下限）；
+  第三期 `detail_spline_rect`（矩形花键 GB/T 1144-2001，规格代号下拉/自定义，de 自动查 GB/T 10952 表 1/表 2）。
   一站式说明见 `handbook/03-标准件库.md`「结构要素」；数据与画法的唯一来源是 `src/detail.rs`（新增要素只需实现 `DetailElement` + 进 `ELEMENTS`）。
   注：GB/T 5782 A/B 级 = 5780 C级画法 + **头部垫圈面 dw×c**（主/俯视图画、左视图不画；
   用户 2026-09-15 看图定案，画法依据 164580 官方 CAD 图实测；详见 OCSMBOM-plan.md §27.5）。

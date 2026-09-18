@@ -8590,6 +8590,29 @@ mod tests {
         );
     }
 
+    /// 轴窗口行为冒烟（node + 最小 DOM 垫片 + fetch 桩）：锁住矩形花键规格下拉的
+    /// 交互契约——下拉选表内规格 → de 自动填 + 派生值 + 行文本同步；「自定义…」→
+    /// 文本框出现并手输；表外缺 de → 既有报错文案。node 缺失时跳过。
+    #[test]
+    fn shaft_gui_specs_dropdown_behavior_smoke_with_node() {
+        let manifest = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let js = manifest.join("tests/shaft_gui_smoke.mjs");
+        let html = manifest.join("src/shaft_gui.html");
+        if !js.exists() {
+            return;
+        }
+        let out = match std::process::Command::new("node").arg(&js).arg(&html).output() {
+            Ok(o) => o,
+            Err(_) => return, // 无 node：跳过（不阻塞 CI）
+        };
+        assert!(
+            out.status.success(),
+            "轴 GUI 行为冒烟失败：\n{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
     /// `addEventListener('<事件>', NAME)` 里的**裸标识符**回调（匿名/箭头函数、
     /// 属性访问 `a.b`、函数调用 `f(...)` 都不算）。
     fn js_handler_idents(html: &str) -> Vec<String> {
