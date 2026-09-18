@@ -24,6 +24,14 @@
 //! - `M` / `M1.5`：**螺纹段标记**（外螺纹侧视图）。不写值 = 简化画法小径 0.85d；
 //!   `M1.5` = 给螺距 P，小径 = d − 1.0825P（精确）；只能标在圆柱段（S=E）上，
 //!   与 `OV`/`GEAR` 同段报错、可与 `CH` 同段；
+//! - `M1.5 TL20`：**局部螺纹**（GB/T 3-1997 图 1 第一种形式）——完整螺纹长 20，
+//!   靠**段右端台肩**，自右向左布置：台肩面（既有端面线）→ 锥面过渡（长 a−x）
+//!   → 螺尾（细实线斜线，长 x）→ 分界竖线 → 完整螺纹（长 TL）；
+//!   `RO一般|RO短` = 收尾 x 档（默认一般）、`SD一般|SD长|SD短` = 肩距 a 档（默认一般）；
+//!   不给 `TL` = 整段全螺纹（旧行为，保持兼容）；
+//! - `M1.5 TL20 RL`：用 GB/T 3-1997 表 2 的**退刀槽**收尾（图 2 画法）：
+//!   台肩面 → R 圆角 → 槽底 dg/2 长 g1 → 30° 斜壁（g2 处接大径）；
+//!   `RL` 与 `RO`/`SD` 互斥（给了 `RL` 就不画收尾/肩距）；
 //! - **退刀槽不设专门关键字** —— 它就是一小段小直径轴段，例如螺纹段后的
 //!   `S24 E24 L5`（φ24 = 槽底、L5 = 槽宽）；`ES5*3` 这类旧写法会报错并指路；
 //! - `GEAR M5 Z10 H20`：**齿轮段（直齿）**，分度圆 d = m·z 由参数导出、**不给
@@ -88,11 +96,13 @@
 use ocs_plugin_api::host::acadrust::entities::hatch::BoundaryEdge;
 use ocs_plugin_api::host::acadrust::entities::{EntityType, Hatch};
 use ocs_plugin_api::host::acadrust::types::{Vector2, Vector3};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::detail;
 use crate::gear::{GearKind, GearParams};
-use crate::partgen_kit::{line, trim, HatchEdge, LAYER_CENTER, LAYER_HATCH, LAYER_MAIN, LAYER_THIN};
+use crate::partgen_kit::{
+    arc, line, trim, HatchEdge, LAYER_CENTER, LAYER_HATCH, LAYER_MAIN, LAYER_THIN,
+};
 
 /// `OCSMSHAFT` 不带参数时打开轴生成器窗口；命令行带参数时此处是用法说明。
 pub const USAGE: &str = "\
@@ -102,7 +112,12 @@ OCSMSHAFT 轴生成器：行 DSL / JSON → 单视图侧视图（段拼接 + 端
     S 起始直径（靠左）   E 终点直径（省略 = 圆柱段 E=S）   L 段长（必给；齿轮段用 H 代替）
     CH2@L / CH2@R   端面倒角 C2（@ 省略默认 R）    OV / OV3 / OV3@L   砂轮越程槽
     M / M1.5   螺纹段：不写值 = 小径 0.85d；M1.5 = 螺距 P，小径 = d − 1.0825P（只能圆柱段）
-               退刀槽 = 一小段小直径轴段（例 S24 E24 L5）；ES 已取消，写了会报错指路
+               不给 TL/RL = 整段全螺纹（旧行为）
+    M1.5 TL20  局部螺纹（GB/T 3-1997 图 1 第一种形式）：完整螺纹长 TL，靠段右端台肩，
+               自右向左 = 台肩面 + 锥面（a−x）+ 螺尾（细实线，x）+ 分界竖线 + 完整螺纹 TL
+               RO一般|RO短 收尾档（默认一般）   SD一般|SD长|SD短 肩距档（默认一般）
+    M1.5 TL20 RL  用 GB/T 3-1997 表 2 退刀槽收尾（图 2 画法，与 RO/SD 互斥）
+               退刀槽也可 = 一小段小直径轴段（例 S24 E24 L5）；ES 已取消，写了会报错指路
     GEAR M5 Z10 H20   齿轮段（直齿）：d=m·z 导出、不给 S/E；H = 齿宽（省略 = 10m）
                       只画齿顶线（= 该段轮廓）+ 分度线（点划线），不画齿根线
     VIEW 常规|剖视|双   视图：常规（默认，只看外形）/ 剖视（轮廓 + ANSI31 剖面线）/ 双（并排一次出）
@@ -215,14 +230,62 @@ pub struct Overtravel {
     pub end: End,
 }
 
+/// `RO` 收尾档位（GB/T 3-1997 表 1）：一般 x≈2.5P / 短 x≈1.25P。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RunoutGrade {
+    Normal,
+    Short,
+}
+
+/// `SD` 肩距档位（GB/T 3-1997 表 1）：一般 a≈3P / 长 a=4P / 短 a=2P。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ShoulderGrade {
+    Normal,
+    Long,
+    Short,
+}
+
 /// 螺纹段标记（外螺纹侧视图）：不写值 = 简化画法小径 0.85d；写螺距 = 精确小径。
+///
+/// `TL` / `RO` / `SD` / `RL` 四个新关键字（用户 2026-09-19 定稿）都收在这里；
+/// 不给 `TL` 也不给 `RL` 时 = 旧口径整段全螺纹（小径细实线贯穿该段，行为不变）。
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Thread {
     /// 螺距 P（> 0）；`None` = 不写值（小径按 0.85d 简化画法）。
     pub pitch: Option<f64>,
+    /// `TL` 完整螺纹长度（> 0）；`None` = 整段全螺纹（旧行为）。
+    pub tl: Option<f64>,
+    /// `RO` 收尾档位（GB/T 3 表 1；默认一般）。
+    pub runout: RunoutGrade,
+    /// `SD` 肩距档位（GB/T 3 表 1；默认一般）。
+    pub shoulder: ShoulderGrade,
+    /// `RL` = 用 GB/T 3 表 2 退刀槽收尾（与 `RO`/`SD` 互斥）。
+    pub relief: bool,
+}
+
+impl Default for Thread {
+    fn default() -> Self {
+        Thread {
+            pitch: None,
+            tl: None,
+            runout: RunoutGrade::Normal,
+            shoulder: ShoulderGrade::Normal,
+            relief: false,
+        }
+    }
 }
 
 impl Thread {
+    /// 只有螺距（或什么都不给）的旧形态：JSON 沿 `true` / 螺距数字序列化。
+    fn is_plain(&self) -> bool {
+        self.tl.is_none()
+            && self.runout == RunoutGrade::Normal
+            && self.shoulder == ShoulderGrade::Normal
+            && !self.relief
+    }
+
     /// 小径 d1：不写值 = 0.85d；写螺距 = d − 1.0825P（GB/T 192 基本尺寸口径）。
     pub fn minor_diameter(&self, d: f64) -> f64 {
         match self.pitch {
@@ -237,16 +300,191 @@ impl Thread {
     }
 }
 
-/// 把 `thread` 序列化成「`true`（简化）/ 螺距数字（精确）」两种形式（给 GUI/HTTP）。
+// ══════════════════════════════════════════════════════════════════════════
+// 数据：GB/T 3-1997 表 1（收尾 x / 肩距 a）与表 2（外螺纹退刀槽）
+// ══════════════════════════════════════════════════════════════════════════
+
+/// GB/T 3-1997 表 1 一行；**单键 = 螺距 P**（不依赖螺纹直径），单位 mm。
+///
+/// 出处：GB/T 3-1997《普通螺纹 收尾、肩距、退刀槽和倒角》（等同 ISO 3508:1976 /
+/// ISO 4755:1977）表 1；数值抄自 <https://www.164580.com/data/detail_148.html>
+/// （用户 2026-09-19 核对）。**订正记录**：该网页 P=1.75 行的 `x一般` 印成 1.3，
+/// 真标准为 **4.3**（前后档 3.8 / 5.0、比例 ≈2.5P 都印证 4.3）——本表取 4.3。
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct RunoutRow {
+    p: f64,
+    x_normal: f64,
+    x_short: f64,
+    a_normal: f64,
+    a_long: f64,
+    a_short: f64,
+}
+
+impl RunoutRow {
+    fn x(&self, grade: RunoutGrade) -> f64 {
+        match grade {
+            RunoutGrade::Normal => self.x_normal,
+            RunoutGrade::Short => self.x_short,
+        }
+    }
+
+    fn a(&self, grade: ShoulderGrade) -> f64 {
+        match grade {
+            ShoulderGrade::Normal => self.a_normal,
+            ShoulderGrade::Long => self.a_long,
+            ShoulderGrade::Short => self.a_short,
+        }
+    }
+}
+
+const RUNOUT_ROWS: &[RunoutRow] = &[
+    RunoutRow { p: 0.2, x_normal: 0.5, x_short: 0.25, a_normal: 0.6, a_long: 0.8, a_short: 0.4 },
+    RunoutRow { p: 0.25, x_normal: 0.6, x_short: 0.3, a_normal: 0.75, a_long: 1.0, a_short: 0.5 },
+    RunoutRow { p: 0.3, x_normal: 0.75, x_short: 0.4, a_normal: 0.9, a_long: 1.2, a_short: 0.6 },
+    RunoutRow { p: 0.35, x_normal: 0.9, x_short: 0.45, a_normal: 1.05, a_long: 1.4, a_short: 0.7 },
+    RunoutRow { p: 0.4, x_normal: 1.0, x_short: 0.5, a_normal: 1.2, a_long: 1.6, a_short: 0.8 },
+    RunoutRow { p: 0.45, x_normal: 1.1, x_short: 0.6, a_normal: 1.35, a_long: 1.8, a_short: 0.9 },
+    RunoutRow { p: 0.5, x_normal: 1.25, x_short: 0.7, a_normal: 1.5, a_long: 2.0, a_short: 1.0 },
+    RunoutRow { p: 0.6, x_normal: 1.5, x_short: 0.75, a_normal: 1.8, a_long: 2.4, a_short: 1.2 },
+    RunoutRow { p: 0.7, x_normal: 1.75, x_short: 0.9, a_normal: 2.1, a_long: 2.8, a_short: 1.4 },
+    RunoutRow { p: 0.75, x_normal: 1.9, x_short: 1.0, a_normal: 2.25, a_long: 3.0, a_short: 1.5 },
+    RunoutRow { p: 0.8, x_normal: 2.0, x_short: 1.0, a_normal: 2.4, a_long: 3.2, a_short: 1.6 },
+    RunoutRow { p: 1.0, x_normal: 2.5, x_short: 1.25, a_normal: 3.0, a_long: 4.0, a_short: 2.0 },
+    RunoutRow { p: 1.25, x_normal: 3.2, x_short: 1.6, a_normal: 4.0, a_long: 5.0, a_short: 2.5 },
+    RunoutRow { p: 1.5, x_normal: 3.8, x_short: 1.9, a_normal: 4.5, a_long: 6.0, a_short: 3.0 },
+    RunoutRow { p: 1.75, x_normal: 4.3, x_short: 2.2, a_normal: 5.3, a_long: 7.0, a_short: 3.5 },
+    RunoutRow { p: 2.0, x_normal: 5.0, x_short: 2.5, a_normal: 6.0, a_long: 8.0, a_short: 4.0 },
+    RunoutRow { p: 2.5, x_normal: 6.3, x_short: 3.2, a_normal: 7.5, a_long: 10.0, a_short: 5.0 },
+    RunoutRow { p: 3.0, x_normal: 7.5, x_short: 3.8, a_normal: 9.0, a_long: 12.0, a_short: 6.0 },
+    RunoutRow { p: 3.5, x_normal: 9.0, x_short: 4.5, a_normal: 10.5, a_long: 14.0, a_short: 7.0 },
+    RunoutRow { p: 4.0, x_normal: 10.0, x_short: 5.0, a_normal: 12.0, a_long: 16.0, a_short: 8.0 },
+    RunoutRow { p: 4.5, x_normal: 11.0, x_short: 5.5, a_normal: 13.5, a_long: 18.0, a_short: 9.0 },
+    RunoutRow { p: 5.0, x_normal: 12.5, x_short: 6.3, a_normal: 15.0, a_long: 20.0, a_short: 10.0 },
+    RunoutRow { p: 5.5, x_normal: 14.0, x_short: 7.0, a_normal: 16.5, a_long: 22.0, a_short: 11.0 },
+    RunoutRow { p: 6.0, x_normal: 15.0, x_short: 7.5, a_normal: 18.0, a_long: 24.0, a_short: 12.0 },
+];
+
+/// 螺距 P → 表 1 行（1e-9 容差；表里没有就报错并列出可用 P，**不插值/不外推**）。
+fn runout_row(p: f64) -> Result<&'static RunoutRow, String> {
+    if !p.is_finite() || p <= 0.0 {
+        return Err(format!("GB/T 3 表 1：螺距 P 必须是正数（收到 {}）", trim(p)));
+    }
+    RUNOUT_ROWS
+        .iter()
+        .find(|row| (row.p - p).abs() < 1e-9)
+        .ok_or_else(|| {
+            let choices = RUNOUT_ROWS
+                .iter()
+                .map(|row| trim(row.p))
+                .collect::<Vec<_>>()
+                .join("、");
+            format!(
+                "GB/T 3 表 1 没有螺距 P={}（可用 P = {}；不插值、不外推）",
+                trim(p),
+                choices
+            )
+        })
+}
+
+/// GB/T 3-1997 表 2（外螺纹退刀槽）一行；**单键 = 螺距 P**，单位 mm。
+///
+/// 出处：同表 1（GB/T 3-1997 / ISO 3508:1976 / ISO 4755:1977）表 2；表 2 **无 P=0.2**
+/// （从 0.25 起）。`dg = d − 减量`；`g1` = 台肩面到斜壁起点的槽底长度（含 R 圆角），
+/// `g2` = 台肩面到斜壁与大径交点的总宽。
+///
+/// **斜壁角自检口径**：任务书给的恒等式 `g2 = g1 + ((d−dg)/2)/tan30°` 只有当
+/// g1/g2 按公式同步取整时才精确；表 2 的 g1/g2 各自独立圆整 → 全表最大偏差
+/// **0.188 mm（P=6）**，反算斜壁角 28.30°…33.69°。画法按表值 `(g1,dg/2)→(g2,d/2)`
+/// 连直线（不硬拧 30°），自检测试按反算角 ≤4° 立断言，报告里已注明。
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct ReliefRow {
+    p: f64,
+    g2: f64,
+    g1: f64,
+    reduction: f64,
+    r: f64,
+}
+
+const RELIEF_ROWS: &[ReliefRow] = &[
+    ReliefRow { p: 0.25, g2: 0.75, g1: 0.4, reduction: 0.4, r: 0.12 },
+    ReliefRow { p: 0.3, g2: 0.9, g1: 0.5, reduction: 0.5, r: 0.16 },
+    ReliefRow { p: 0.35, g2: 1.05, g1: 0.6, reduction: 0.6, r: 0.16 },
+    ReliefRow { p: 0.4, g2: 1.2, g1: 0.6, reduction: 0.7, r: 0.2 },
+    ReliefRow { p: 0.45, g2: 1.35, g1: 0.7, reduction: 0.7, r: 0.2 },
+    ReliefRow { p: 0.5, g2: 1.5, g1: 0.8, reduction: 0.8, r: 0.2 },
+    ReliefRow { p: 0.6, g2: 1.8, g1: 0.9, reduction: 1.0, r: 0.4 },
+    ReliefRow { p: 0.7, g2: 2.1, g1: 1.1, reduction: 1.1, r: 0.4 },
+    ReliefRow { p: 0.75, g2: 2.25, g1: 1.2, reduction: 1.2, r: 0.4 },
+    ReliefRow { p: 0.8, g2: 2.4, g1: 1.3, reduction: 1.3, r: 0.4 },
+    ReliefRow { p: 1.0, g2: 3.0, g1: 1.6, reduction: 1.6, r: 0.6 },
+    ReliefRow { p: 1.25, g2: 3.75, g1: 2.0, reduction: 2.0, r: 0.6 },
+    ReliefRow { p: 1.5, g2: 4.5, g1: 2.5, reduction: 2.3, r: 0.8 },
+    ReliefRow { p: 1.75, g2: 5.25, g1: 3.0, reduction: 2.6, r: 1.0 },
+    ReliefRow { p: 2.0, g2: 6.0, g1: 3.4, reduction: 3.0, r: 1.0 },
+    ReliefRow { p: 2.5, g2: 7.5, g1: 4.4, reduction: 3.6, r: 1.2 },
+    ReliefRow { p: 3.0, g2: 9.0, g1: 5.2, reduction: 4.4, r: 1.6 },
+    ReliefRow { p: 3.5, g2: 10.5, g1: 6.2, reduction: 5.0, r: 1.6 },
+    ReliefRow { p: 4.0, g2: 12.0, g1: 7.0, reduction: 5.7, r: 2.0 },
+    ReliefRow { p: 4.5, g2: 13.5, g1: 8.0, reduction: 6.4, r: 2.5 },
+    ReliefRow { p: 5.0, g2: 15.0, g1: 9.0, reduction: 7.0, r: 2.5 },
+    ReliefRow { p: 5.5, g2: 17.5, g1: 11.0, reduction: 7.7, r: 3.2 },
+    ReliefRow { p: 6.0, g2: 18.0, g1: 11.0, reduction: 8.3, r: 3.2 },
+];
+
+/// 螺距 P → 表 2 行（1e-9 容差；表里没有就报错并列出可用 P，**不插值/不外推**）。
+fn relief_row(p: f64) -> Result<&'static ReliefRow, String> {
+    if !p.is_finite() || p <= 0.0 {
+        return Err(format!("GB/T 3 表 2：螺距 P 必须是正数（收到 {}）", trim(p)));
+    }
+    RELIEF_ROWS
+        .iter()
+        .find(|row| (row.p - p).abs() < 1e-9)
+        .ok_or_else(|| {
+            let choices = RELIEF_ROWS
+                .iter()
+                .map(|row| trim(row.p))
+                .collect::<Vec<_>>()
+                .join("、");
+            format!(
+                "GB/T 3 表 2 没有螺距 P={}（可用 P = {}；表 2 从 0.25 起，无 0.2；不插值、不外推）",
+                trim(p),
+                choices
+            )
+        })
+}
+
+/// 把 `thread` 序列化（给 GUI/HTTP）：
+/// - 旧形态（只有螺距 / 什么都不给）保持 `true` / 螺距数字，老 GUI 不受影响；
+/// - 带 `TL`/`RO`/`SD`/`RL` 时序列化成对象，保证 JSON 往返不丢新关键字。
 fn serialize_thread<S: serde::Serializer>(
     thread: &Option<Thread>,
     serializer: S,
 ) -> Result<S::Ok, S::Error> {
     match thread {
-        Some(Thread {
-            pitch: Some(pitch),
-        }) => serializer.serialize_f64(*pitch),
-        _ => serializer.serialize_bool(true),
+        None => serializer.serialize_none(),
+        Some(t) if t.is_plain() => match t.pitch {
+            Some(pitch) => serializer.serialize_f64(pitch),
+            None => serializer.serialize_bool(true),
+        },
+        Some(t) => {
+            let mut value = serde_json::Map::new();
+            if let Some(pitch) = t.pitch {
+                value.insert("pitch".into(), serde_json::json!(pitch));
+            }
+            if let Some(tl) = t.tl {
+                value.insert("tl".into(), serde_json::json!(tl));
+            }
+            if t.runout != RunoutGrade::Normal {
+                value.insert("runout".into(), serde_json::json!(t.runout));
+            }
+            if t.shoulder != ShoulderGrade::Normal {
+                value.insert("shoulder".into(), serde_json::json!(t.shoulder));
+            }
+            if t.relief {
+                value.insert("relief".into(), serde_json::json!(true));
+            }
+            serde_json::Value::Object(value).serialize(serializer)
+        }
     }
 }
 
@@ -447,7 +685,9 @@ fn extract_view_directives<'a>(
 }
 
 fn unknown_keyword(token: &str, label: &str) -> String {
-    format!("{label}：关键字「{token}」二期未实现（本期只支持 S/E/L/CH/OV/M/GEAR/VIEW）")
+    format!(
+        "{label}：关键字「{token}」二期未实现（本期只支持 S/E/L/CH/OV/M/TL/RO/SD/RL/GEAR/VIEW）"
+    )
 }
 
 fn starts_number(s: &str) -> bool {
@@ -567,7 +807,7 @@ fn es_cancelled(label: &str) -> String {
 fn parse_thread(rest: &str, label: &str) -> Result<Thread, String> {
     let rest = rest.strip_prefix(['=', ':']).unwrap_or(rest);
     if rest.is_empty() {
-        return Ok(Thread { pitch: None });
+        return Ok(Thread::default());
     }
     let pitch = parse_number(rest, label, "M")?;
     if pitch <= 0.0 {
@@ -578,7 +818,65 @@ fn parse_thread(rest: &str, label: &str) -> Result<Thread, String> {
     }
     Ok(Thread {
         pitch: Some(pitch),
+        ..Thread::default()
     })
+}
+
+/// `RO` 收尾档位：一般 / 短（英文 normal / short 也认；`=` `:` 可省）。
+fn parse_runout_grade(text: &str, label: &str) -> Result<RunoutGrade, String> {
+    let value = text.strip_prefix(['=', ':']).unwrap_or(text);
+    match value {
+        "" | "一般" | "normal" | "普通" => Ok(RunoutGrade::Normal),
+        "短" | "short" => Ok(RunoutGrade::Short),
+        other => Err(format!(
+            "{label}：收尾档位 RO「{other}」非法（GB/T 3 表 1 只有 一般 / 短，没有 长）"
+        )),
+    }
+}
+
+/// `SD` 肩距档位：一般 / 长 / 短（英文 normal / long / short 也认）。
+fn parse_shoulder_grade(text: &str, label: &str) -> Result<ShoulderGrade, String> {
+    let value = text.strip_prefix(['=', ':']).unwrap_or(text);
+    match value {
+        "" | "一般" | "normal" | "普通" => Ok(ShoulderGrade::Normal),
+        "长" | "long" => Ok(ShoulderGrade::Long),
+        "短" | "short" => Ok(ShoulderGrade::Short),
+        other => Err(format!(
+            "{label}：肩距档位 SD「{other}」非法（GB/T 3 表 1 只有 一般 / 长 / 短）"
+        )),
+    }
+}
+
+/// 档位关键字的尾巴是否像档位：空 / `=` `:` 起头 / 数字 / 中文 / 已知英文档位。
+/// 不像（例 `rot`、`SDX`）就交回 `unknown_keyword`，不吞掉普通单词。
+fn grade_tail_ok(rest: &str) -> bool {
+    let rest = rest.strip_prefix(['=', ':']).unwrap_or(rest);
+    rest.is_empty()
+        || starts_number(rest)
+        || !rest.is_ascii()
+        || matches!(
+            rest.to_ascii_lowercase().as_str(),
+            "normal" | "short" | "long" | "普通"
+        )
+}
+
+/// `TL` 的数值：`TL20` / `TL=20`；空值/非数报错。
+fn parse_thread_length(rest: &str, token: &str, label: &str) -> Result<f64, String> {
+    let rest = rest.strip_prefix(['=', ':']).unwrap_or(rest);
+    if rest.is_empty() {
+        return Err(format!("{label}：关键字 TL 缺少数值（写法 TL20）"));
+    }
+    if !starts_number(rest) {
+        return Err(unknown_keyword(token, label));
+    }
+    let value = parse_number(rest, label, "TL")?;
+    if value <= 0.0 {
+        return Err(format!(
+            "{label}：完整螺纹长度 TL={} 非法（必须 > 0；不给 TL = 整段全螺纹）",
+            trim(value)
+        ));
+    }
+    Ok(value)
 }
 
 fn parse_segment(chunk: &str, label: &str, program: &mut Program) -> Result<Segment, String> {
@@ -587,6 +885,12 @@ fn parse_segment(chunk: &str, label: &str, program: &mut Program) -> Result<Segm
     let mut ch: Vec<Chamfer> = Vec::new();
     let mut ov: Vec<Overtravel> = Vec::new();
     let mut thread: Option<Thread> = None;
+    // `M` 的局部螺纹扩展关键字（用户 2026-09-19 定稿）：`TL` / `RO` / `SD` / `RL`。
+    // 段内顺序无关；到段尾统一装进 [`Thread`] 并校验互斥。
+    let mut tl: Option<f64> = None;
+    let mut ro: Option<RunoutGrade> = None;
+    let mut sd: Option<ShoulderGrade> = None;
+    let mut rl = false;
     // GEAR 子关键字（M/Z/H/BETA）先收齐，段内顺序无关；没有 GEAR 时 M = 螺纹。
     // 先扫一遍段里有没有 GEAR：有 GEAR 时 M 一律按模数收（保持段内顺序无关）。
     let has_gear = tokens.iter().any(|t| t.eq_ignore_ascii_case("GEAR"));
@@ -623,6 +927,48 @@ fn parse_segment(chunk: &str, label: &str, program: &mut Program) -> Result<Segm
         } else if upper.starts_with("ES") {
             // ES 已取消：给指路提示（不静默丢特征，也不当成 E+S 乱解）。
             return Err(es_cancelled(label));
+        } else if upper.starts_with("TL") {
+            let item = parse_thread_length(&token[2..], token, label)?;
+            if tl.is_some() {
+                return Err(format!("{label}：关键字 TL 重复"));
+            }
+            tl = Some(item);
+        } else if upper.starts_with("RO") && grade_tail_ok(&token[2..]) {
+            if ro.is_some() {
+                return Err(format!("{label}：关键字 RO 重复"));
+            }
+            let rest = &token[2..];
+            let rest = rest.strip_prefix(['=', ':']).unwrap_or(rest);
+            if starts_number(rest) {
+                return Err(format!(
+                    "{label}：收尾档位 RO「{rest}」非法（只有 一般 / 短）"
+                ));
+            }
+            ro = Some(parse_runout_grade(rest, label)?);
+        } else if upper.starts_with("SD") && grade_tail_ok(&token[2..]) {
+            if sd.is_some() {
+                return Err(format!("{label}：关键字 SD 重复"));
+            }
+            let rest = &token[2..];
+            let rest = rest.strip_prefix(['=', ':']).unwrap_or(rest);
+            if starts_number(rest) {
+                return Err(format!(
+                    "{label}：肩距档位 SD「{rest}」非法（只有 一般 / 长 / 短）"
+                ));
+            }
+            sd = Some(parse_shoulder_grade(rest, label)?);
+        } else if upper == "RL" || upper.starts_with("RL=") || upper.starts_with("RL:") {
+            let rest = &token[2..];
+            let rest = rest.strip_prefix(['=', ':']).unwrap_or(rest);
+            if !rest.is_empty() {
+                return Err(format!(
+                    "{label}：关键字 RL 不带值（用 RL 表示用 GB/T 3 表 2 退刀槽收尾）"
+                ));
+            }
+            if rl {
+                return Err(format!("{label}：关键字 RL 重复"));
+            }
+            rl = true;
         } else if upper == "GEAR" {
             if gear_on {
                 return Err(format!("{label}：关键字 GEAR 重复"));
@@ -703,6 +1049,28 @@ fn parse_segment(chunk: &str, label: &str, program: &mut Program) -> Result<Segm
         if let Some(token) = loose_gear_token {
             return Err(unknown_keyword(&token, label));
         }
+        if tl.is_some() || ro.is_some() || sd.is_some() || rl {
+            if thread.is_none() {
+                return Err(format!(
+                    "{label}：关键字 TL/RO/SD/RL 是螺纹参数，需要与 M 同段（例 `M1.5 TL20 RO短 SD长`）"
+                ));
+            }
+            if rl && (ro.is_some() || sd.is_some()) {
+                return Err(format!(
+                    "{label}：RL（表 2 退刀槽收尾）与 RO/SD（螺尾/肩距）互斥，二选一"
+                ));
+            }
+            if let Some(t) = &mut thread {
+                t.tl = tl;
+                if let Some(ro) = ro {
+                    t.runout = ro;
+                }
+                if let Some(sd) = sd {
+                    t.shoulder = sd;
+                }
+                t.relief = rl;
+            }
+        }
         if thread.is_some() && !ov.is_empty() {
             return Err(format!("{label}：螺纹段 M 不能与越程槽 OV 同段"));
         }
@@ -738,6 +1106,11 @@ fn parse_segment(chunk: &str, label: &str, program: &mut Program) -> Result<Segm
     }
     if thread.is_some() {
         return Err(format!("{label}：齿轮段不能与螺纹段 M 同段"));
+    }
+    if tl.is_some() || ro.is_some() || sd.is_some() || rl {
+        return Err(format!(
+            "{label}：齿轮段不能与螺纹参数 TL/RO/SD/RL 同段（TL/RO/SD/RL 只属于 M）"
+        ));
     }
     let m = gear_m.ok_or_else(|| format!("{label}：关键字 GEAR 缺少 M（模数）"))?;
     let z = gear_z.ok_or_else(|| format!("{label}：关键字 GEAR 缺少 Z（齿数）"))?;
@@ -939,7 +1312,9 @@ struct JsonGear {
     beta: Option<f64>,
 }
 
-/// `thread` 允许：`true` / `1.5`（螺距）/ `{"p":1.5}` / `{"pitch":1.5}` / `"M1.5"`。
+/// `thread` 允许：`true` / `1.5`（螺距）/ `{"p":1.5}` / `{"pitch":1.5}` / `"M1.5"`，
+/// 以及带新关键字的对象：`{"p":1.5,"tl":20,"runout":"short","shoulder":"long","relief":false}`
+/// （`RO`/`SD`/`rl` 别名也认；档位中英文都收）。
 fn json_thread<'de, D>(de: D) -> Result<Option<Thread>, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -955,21 +1330,52 @@ where
             p: Option<f64>,
             #[serde(default)]
             pitch: Option<f64>,
+            #[serde(default)]
+            tl: Option<f64>,
+            #[serde(default, alias = "RO")]
+            runout: Option<String>,
+            #[serde(default, alias = "SD")]
+            shoulder: Option<String>,
+            #[serde(default)]
+            relief: Option<bool>,
+            #[serde(default)]
+            rl: Option<bool>,
         },
     }
     let raw = match Option::<Raw>::deserialize(de)? {
         None => return Ok(None),
         Some(raw) => raw,
     };
+    let make = |pitch: Option<f64>| Thread {
+        pitch,
+        ..Thread::default()
+    };
     match raw {
         Raw::On(false) => Ok(None),
-        Raw::On(true) => Ok(Some(Thread { pitch: None })),
-        Raw::Pitch(pitch) => Ok(Some(Thread {
-            pitch: Some(pitch),
-        })),
-        Raw::Obj { p, pitch } => Ok(Some(Thread {
-            pitch: p.or(pitch),
-        })),
+        Raw::On(true) => Ok(Some(make(None))),
+        Raw::Pitch(pitch) => Ok(Some(make(Some(pitch)))),
+        Raw::Obj {
+            p,
+            pitch,
+            tl,
+            runout,
+            shoulder,
+            relief,
+            rl,
+        } => {
+            let mut thread = make(p.or(pitch));
+            thread.tl = tl;
+            if let Some(text) = runout {
+                thread.runout = parse_runout_grade(&text, "JSON thread")
+                    .map_err(serde::de::Error::custom)?;
+            }
+            if let Some(text) = shoulder {
+                thread.shoulder = parse_shoulder_grade(&text, "JSON thread")
+                    .map_err(serde::de::Error::custom)?;
+            }
+            thread.relief = relief.or(rl).unwrap_or(false);
+            Ok(Some(thread))
+        }
         Raw::Text(text) => {
             let text = text.trim();
             let text = text
@@ -977,14 +1383,12 @@ where
                 .map(str::trim)
                 .unwrap_or(text);
             if text.is_empty() {
-                return Ok(Some(Thread { pitch: None }));
+                return Ok(Some(make(None)));
             }
             let pitch = text.parse::<f64>().map_err(|_| {
                 serde::de::Error::custom(format!("thread 字符串「{text}」不是螺距数字"))
             })?;
-            Ok(Some(Thread {
-                pitch: Some(pitch),
-            }))
+            Ok(Some(make(Some(pitch))))
         }
     }
 }
@@ -1276,6 +1680,88 @@ pub fn validate(program: &Program) -> Result<(), String> {
                     "第 {number} 段：螺纹段 M 不能与齿轮段 GEAR 同段"
                 ));
             }
+            // ── 局部螺纹（`TL` + `RO`/`SD` 或 `RL`）：表 1/表 2 查表 + 几何装得下 ──
+            let wants_local = thread.tl.is_some() || thread.relief;
+            if thread.relief
+                && (thread.runout != RunoutGrade::Normal
+                    || thread.shoulder != ShoulderGrade::Normal)
+            {
+                return Err(format!(
+                    "第 {number} 段：RL（表 2 退刀槽收尾）与 RO/SD（螺尾/肩距）互斥，二选一"
+                ));
+            }
+            if wants_local {
+                let pitch = thread.pitch.ok_or_else(|| {
+                    format!(
+                        "第 {number} 段：局部螺纹 TL/RL 必须给螺距（写法 M1.5 TL20；表 1/表 2 都按螺距查）"
+                    )
+                })?;
+                if thread.tl.is_some_and(|tl| !tl.is_finite() || tl <= 0.0) {
+                    return Err(format!("第 {number} 段：完整螺纹长度 TL 必须 > 0"));
+                }
+                let tl = thread.tl.unwrap_or(0.0);
+                if thread.relief {
+                    let row = relief_row(pitch).map_err(|e| format!("第 {number} 段：{e}"))?;
+                    let dg = seg.s - row.reduction;
+                    if dg <= 0.0 {
+                        return Err(format!(
+                            "第 {number} 段：退刀槽 dg = d − {} = {} ≤ 0（螺纹直径太小）",
+                            trim(row.reduction),
+                            trim(dg)
+                        ));
+                    }
+                    let r1 = thread.minor_radius(seg.s);
+                    if r1 <= dg / 2.0 + 1e-9 {
+                        return Err(format!(
+                            "第 {number} 段：退刀槽底 dg={} 不低于螺纹小径 d1={}（槽没切进牙底）",
+                            trim(dg),
+                            trim(r1 * 2.0)
+                        ));
+                    }
+                    let need = row.g2 + tl;
+                    if need > seg.l + 1e-9 {
+                        return Err(format!(
+                            "第 {number} 段：退刀槽 g2={} + 完整螺纹 TL={} = {} 超过段长 L={}",
+                            trim(row.g2),
+                            trim(tl),
+                            trim(need),
+                            trim(seg.l)
+                        ));
+                    }
+                } else {
+                    let row = runout_row(pitch).map_err(|e| format!("第 {number} 段：{e}"))?;
+                    let x = row.x(thread.runout);
+                    let a = row.a(thread.shoulder);
+                    if x > a + 1e-9 {
+                        return Err(format!(
+                            "第 {number} 段：收尾 x={}（RO）大于肩距 a={}（SD），档位不搭（把 SD 调大或 RO 调短）",
+                            trim(x),
+                            trim(a)
+                        ));
+                    }
+                    let need = a + tl;
+                    if need > seg.l + 1e-9 {
+                        return Err(format!(
+                            "第 {number} 段：肩距 a={} + 完整螺纹 TL={} = {} 超过段长 L={}",
+                            trim(a),
+                            trim(tl),
+                            trim(need),
+                            trim(seg.l)
+                        ));
+                    }
+                }
+                if seg.ch.iter().any(|c| c.end == End::R) {
+                    return Err(format!(
+                        "第 {number} 段：局部螺纹 TL/RL 的右端不能倒角 CH（会吃掉锥面/退刀槽的台肩角）"
+                    ));
+                }
+            } else if thread.runout != RunoutGrade::Normal
+                || thread.shoulder != ShoulderGrade::Normal
+            {
+                return Err(format!(
+                    "第 {number} 段：RO/SD 只在局部螺纹（给了 TL）时有意义——不给 TL = 整段全螺纹"
+                ));
+            }
         }
         if let Some(gear) = &seg.gear {
             gear.params()
@@ -1469,6 +1955,34 @@ fn both_view_gap(total_length: f64, frame_scale: f64) -> f64 {
     (0.15 * total_length).max(40.0 * frame_scale)
 }
 
+/// 一段局部螺纹（`M… TL…` 或 `M… RL`）的轴向布局：以段右端面（台肩）为基准。
+///
+/// 自右向左：`RL` = 台肩面 → R 圆角 → 槽底 `g1` → 斜壁（`g2` 处接大径）；
+/// `TL` = 肩距 `a`（锥面 `a−x` + 螺尾 `x`）→ 分界竖线 → 完整螺纹 `TL`。
+#[derive(Debug, Clone, Copy)]
+struct LocalThread {
+    /// 段右端面 x（台肩面）。
+    face: f64,
+    /// 螺纹大径半径（= 段半径）。
+    r: f64,
+    /// 螺纹小径半径（细实线所在半径）。
+    r1: f64,
+    /// 完整螺纹左端 x（`TL`；`RL` 不给 `TL` 时 = 段左端）。
+    full_start: f64,
+    /// 螺尾起点 x（锥面与螺尾交点）；`RL` 时不用。
+    runout_start: f64,
+    /// 完整螺纹 / 螺尾分界竖线 x；`RL` 时不用。
+    boundary: f64,
+    /// `RL`：表 2 退刀槽行（`None` = 螺尾画法）。
+    relief: Option<ReliefRow>,
+    /// `RL`：台肩面圆角切点半径 = `dg/2 + r`。
+    relief_tangent: f64,
+    /// 大径轮廓线右端 x（`RL` = `face − g2`；否则 = `face`）。
+    contour_end: f64,
+    /// 小径细实线右端 x（螺尾起点，或斜壁与小径的交点）。
+    minor_end: f64,
+}
+
 /// 解析 → 校验 → 生成常规视图轮廓，并顺手记录剖面线环用的上半外轮廓段。
 fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, String> {
     validate(program)?;
@@ -1487,6 +2001,62 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
         .iter()
         .map(|s| s.outer_radius(End::L).max(s.outer_radius(End::R)) * 2.0)
         .fold(0.0_f64, f64::max);
+
+    // ── 局部螺纹（`TL` 收尾 / `RL` 退刀槽）布局：贴段右端台肩布置；
+    //    不写 `TL` 也不写 `RL` 的 `M` 仍是旧口径（整段全螺纹）。 ──
+    let mut local_threads: Vec<Option<LocalThread>> = vec![None; count];
+    for (index, seg) in segs.iter().enumerate() {
+        let Some(thread) = &seg.thread else { continue };
+        if thread.tl.is_none() && !thread.relief {
+            continue;
+        }
+        let face = x0s[index] + seg.l;
+        let r = seg.s / 2.0;
+        let r1 = thread.minor_radius(seg.s);
+        let mut lay = LocalThread {
+            face,
+            r,
+            r1,
+            full_start: x0s[index],
+            runout_start: face,
+            boundary: face,
+            relief: None,
+            relief_tangent: 0.0,
+            contour_end: face,
+            minor_end: face,
+        };
+        if thread.relief {
+            let pitch = thread.pitch.ok_or_else(|| {
+                format!(
+                    "第 {} 段：局部螺纹 RL 必须给螺距（写法 M1.5 TL20 RL）",
+                    index + 1
+                )
+            })?;
+            let row = relief_row(pitch).map_err(|e| format!("第 {} 段：{e}", index + 1))?;
+            let rg = (seg.s - row.reduction) / 2.0;
+            lay.relief = Some(*row);
+            lay.relief_tangent = rg + row.r;
+            lay.contour_end = face - row.g2;
+            // 小径细实线与斜壁的交点（斜壁在 `g2−g1` 距离内从 `dg/2` 升到 `d/2`）。
+            lay.minor_end = face - row.g1 - (row.g2 - row.g1) * (r1 - rg) / (r - rg);
+            lay.full_start = match thread.tl {
+                Some(tl) => face - row.g2 - tl,
+                None => x0s[index],
+            };
+        } else {
+            let pitch = thread.pitch.ok_or_else(|| {
+                format!("第 {} 段：局部螺纹 TL 必须给螺距（写法 M1.5 TL20）", index + 1)
+            })?;
+            let row = runout_row(pitch).map_err(|e| format!("第 {} 段：{e}", index + 1))?;
+            let a = row.a(thread.shoulder);
+            let x = row.x(thread.runout);
+            lay.runout_start = face - (a - x);
+            lay.boundary = face - a;
+            lay.minor_end = lay.runout_start;
+            lay.full_start = lay.boundary - thread.tl.unwrap_or(0.0);
+        }
+        local_threads[index] = Some(lay);
+    }
 
     // 倒角 / 越程槽落在**本段自己**身上的量（决定本段轮廓线被吃掉多少）。
     let mut own_ch = vec![[None::<f64>; 2]; count]; // [左, 右]
@@ -1716,6 +2286,23 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
             profile.push(lr_line([slope_x1, yb], [x_face + row.b1, rg]));
         }
 
+        // ── 局部螺纹（TL/RL）右端接台肩：`RL` 时台肩根只画到圆角切点，
+        //    端面线 = 「相邻段半径 ↔ 圆角切点」；锥面/螺尾/槽体在段循环里画。 ──
+        let relief_face = local_threads[i]
+            .filter(|lay| lay.relief.is_some())
+            .map(|lay| lay.relief_tangent);
+        if let Some(tangent) = relief_face {
+            if chamfer_lines.is_some() {
+                return Err(format!(
+                    "第 {} 段：局部螺纹 TL/RL 的右端不能倒角 CH（相邻段倒角会落在这里）",
+                    i + 1
+                ));
+            }
+            let right_surface = if ov_l.is_some() { bottom } else { rb };
+            bottom = tangent.min(right_surface);
+            top = tangent.max(right_surface);
+        }
+
         // 上半轮廓在端面两侧的实际半径（决定剖面线环竖直段的走向）：
         // 倒角/越程槽会把这侧表面从原始半径上切掉一块。
         let mut left_eff = ra;
@@ -1732,6 +2319,9 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
         }
         if ov_l.is_some() {
             right_eff = bottom;
+        }
+        if let Some(tangent) = relief_face {
+            left_eff = tangent;
         }
 
         if top - bottom > 1e-9 {
@@ -1799,7 +2389,15 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
             last + 1
         ));
     }
-    let right_face = if let Some(c) = segs[last]
+    let relief_tail = local_threads[last]
+        .filter(|lay| lay.relief.is_some())
+        .map(|lay| lay.relief_tangent);
+    let right_face = if let Some(tangent) = relief_tail {
+        if segs[last].ch.iter().any(|c| c.end == End::R) {
+            return Err(format!("第 {} 段：局部螺纹 TL/RL 的右端不能倒角 CH", last + 1));
+        }
+        tangent
+    } else if let Some(c) = segs[last]
         .ch
         .iter()
         .find(|c| c.end == End::R)
@@ -1858,7 +2456,12 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
             .max(own_ov[index][0].unwrap_or(0.0));
         let end_shift = own_ch[index][1]
             .unwrap_or(0.0)
-            .max(own_ov[index][1].unwrap_or(0.0));
+            .max(own_ov[index][1].unwrap_or(0.0))
+            .max(
+                local_threads[index]
+                    .map(|lay| lay.face - lay.contour_end)
+                    .unwrap_or(0.0),
+            );
         if start_shift + end_shift > seg.l + 1e-9 {
             return Err(format!(
                 "第 {} 段：两端特征重叠（左 {} + 右 {} > 段长 {}）",
@@ -1877,9 +2480,116 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
             entities.push(line([xs, -ys], [xe, -ye], LAYER_MAIN));
             profile.push(lr_line([xs, ys], [xe, ye]));
         }
-        // ── 螺纹段：小径细实线上下各一条（2细线层），止于段末终止线；
-        //    同段端面倒角比小径深时改止于倒角斜线交点（不挑出材料外）。 ──
-        if let Some(thread) = &seg.thread {
+        // ── 螺纹段：`TL`/`RL` 局部螺纹（右端台肩），或旧口径整段全螺纹；
+        //    小径细实线上下各一条（2细线层），左端按倒角内缩、右端止于螺尾/
+        //    退刀槽斜壁；同段端面倒角比小径深时不挑出材料外。 ──
+        if let Some(lay) = local_threads[index] {
+            if own_ch[index][1].is_some() {
+                return Err(format!(
+                    "第 {} 段：局部螺纹 TL/RL 的右端不能倒角 CH",
+                    index + 1
+                ));
+            }
+            if own_ov[index][1].is_some() {
+                return Err(format!(
+                    "第 {} 段：局部螺纹 TL/RL 的右端不能有越程槽 OV",
+                    index + 1
+                ));
+            }
+            match lay.relief {
+                Some(row) => {
+                    // GB/T 3 表 2（图 2）：台肩面 → R 圆角 → 槽底 g1 → 斜壁（g2 接大径）。
+                    let rg = (seg.s - row.reduction) / 2.0;
+                    entities.push(arc(
+                        [lay.face - row.r, lay.relief_tangent],
+                        row.r,
+                        270.0,
+                        360.0,
+                        LAYER_MAIN,
+                    ));
+                    entities.push(arc(
+                        [lay.face - row.r, -lay.relief_tangent],
+                        row.r,
+                        0.0,
+                        90.0,
+                        LAYER_MAIN,
+                    ));
+                    entities.push(line(
+                        [lay.face - row.r, rg],
+                        [lay.face - row.g1, rg],
+                        LAYER_MAIN,
+                    ));
+                    entities.push(line(
+                        [lay.face - row.r, -rg],
+                        [lay.face - row.g1, -rg],
+                        LAYER_MAIN,
+                    ));
+                    entities.push(line(
+                        [lay.face - row.g1, rg],
+                        [lay.face - row.g2, lay.r],
+                        LAYER_MAIN,
+                    ));
+                    entities.push(line(
+                        [lay.face - row.g1, -rg],
+                        [lay.face - row.g2, -lay.r],
+                        LAYER_MAIN,
+                    ));
+                    // 剖面线环（上半，左→右）：斜壁 → 槽底 → 圆角
+                    profile.push(lr_line([lay.face - row.g2, lay.r], [lay.face - row.g1, rg]));
+                    profile.push(lr_line([lay.face - row.g1, rg], [lay.face - row.r, rg]));
+                    profile.push(HatchEdge::Arc {
+                        c: [lay.face - row.r, lay.relief_tangent],
+                        r: row.r,
+                        start_deg: 270.0,
+                        end_deg: 360.0,
+                        ccw: true,
+                    });
+                }
+                None => {
+                    // GB/T 3 图 1 第一种形式：锥面（粗实线）→ 螺尾（细实线）→ 完整螺纹。
+                    if lay.runout_start > lay.boundary + 1e-9 {
+                        entities.push(line(
+                            [lay.face, lay.r],
+                            [lay.runout_start, lay.r1],
+                            LAYER_MAIN,
+                        ));
+                        entities.push(line(
+                            [lay.face, -lay.r],
+                            [lay.runout_start, -lay.r1],
+                            LAYER_MAIN,
+                        ));
+                    }
+                    entities.push(line(
+                        [lay.runout_start, lay.r1],
+                        [lay.boundary, lay.r],
+                        LAYER_THIN,
+                    ));
+                    entities.push(line(
+                        [lay.runout_start, -lay.r1],
+                        [lay.boundary, -lay.r],
+                        LAYER_THIN,
+                    ));
+                    // 完整螺纹 / 螺尾分界竖线（图 1(a) 里那条短竖线，粗实线）。
+                    entities.push(line([lay.boundary, -lay.r], [lay.boundary, lay.r], LAYER_MAIN));
+                }
+            }
+            // 小径细实线：左端按本段左端倒角内缩，右端止于螺尾起点/斜壁交点。
+            let cut = lay.r - lay.r1;
+            let left_inset = own_ch[index][0]
+                .filter(|c| *c > cut + 1e-12)
+                .map(|c| c - cut)
+                .unwrap_or(0.0);
+            let xt0 = (x0s[index] + left_inset).max(lay.full_start);
+            let xt1 = lay.minor_end;
+            if xt1 - xt0 <= 1e-9 {
+                return Err(format!(
+                    "第 {} 段：局部螺纹装不下（小径细实线长 ≤ 0；TL/RL 与左端倒角/段长冲突）",
+                    index + 1
+                ));
+            }
+            entities.push(line([xt0, lay.r1], [xt1, lay.r1], LAYER_THIN));
+            entities.push(line([xt0, -lay.r1], [xt1, -lay.r1], LAYER_THIN));
+        } else if let Some(thread) = &seg.thread {
             let (x0, x1) = (x0s[index], x0s[index] + seg.l);
             let minor = thread.minor_radius(seg.s);
             let cut = seg.s / 2.0 - minor;
@@ -2310,6 +3020,19 @@ mod tests {
         deg.rem_euclid(360.0)
     }
 
+    /// 两点确定的 LINE 所在图层（找不到返回 None）。
+    fn layer_of_line(shaft: &Shaft, a: [f64; 2], b: [f64; 2]) -> Option<&str> {
+        shaft.entities.iter().find_map(|e| match e {
+            EntityType::Line(l) => {
+                let (p, q) = ([l.start.x, l.start.y], [l.end.x, l.end.y]);
+                let hit = (near(p[0], a[0]) && near(p[1], a[1]) && near(q[0], b[0]) && near(q[1], b[1]))
+                    || (near(p[0], b[0]) && near(p[1], b[1]) && near(q[0], a[0]) && near(q[1], a[1]));
+                hit.then(|| l.common.layer.as_str())
+            }
+            _ => None,
+        })
+    }
+
     fn layer_of(entity: &EntityType) -> &str {
         entity.common().layer.as_str()
     }
@@ -2389,7 +3112,7 @@ S30 E30 L45 CH2@L
 S40 E40 L30 CH2@R OV3
 S50 E30 L20
 S30 E30 L15 CH2@R
-S40 E40 L7 M1.5
+S40 E40 L30 M1.5 TL20
 S36 E36 L5
 GEAR M3 Z20";
 
@@ -2415,11 +3138,16 @@ GEAR M3 Z20";
         );
         // E 省略 = 圆柱段
         assert_eq!((program.segments[2].s, program.segments[2].e), (50.0, 30.0));
-        // M1.5：螺纹段，螺距 P=1.5（第 5 段）
+        // M1.5 TL20：局部螺纹，螺距 P=1.5、完整螺纹长 20（第 5 段）
         assert_eq!(
             program.segments[4].thread,
-            Some(Thread { pitch: Some(1.5) })
+            Some(Thread {
+                pitch: Some(1.5),
+                tl: Some(20.0),
+                ..Thread::default()
+            })
         );
+        assert!(!program.segments[4].thread.unwrap().relief);
         // 退刀槽 = 一小段小直径轴段（第 6 段 Ø36）
         assert_eq!(program.segments[5].s, 36.0);
         assert_eq!(program.segments[5].thread, None);
@@ -2495,7 +3223,7 @@ GEAR M3 Z20";
             .contains("rot"));
         // M 光杆现在是合法的螺纹段标记（不再报二期）
         let m = parse_program("S30 E30 L20 M").unwrap();
-        assert_eq!(m.segments[0].thread, Some(Thread { pitch: None }));
+        assert_eq!(m.segments[0].thread, Some(Thread { pitch: None, ..Thread::default() }));
     }
 
     #[test]
@@ -2505,7 +3233,7 @@ GEAR M3 Z20";
             {"s":40,"e":40,"l":30,"ch":{"c":2,"end":"R"},"ov":{"b1":3,"end":"R"}},
             {"s":50,"e":30,"l":20},
             {"s":30,"e":30,"l":15,"ch":[{"c":2,"end":"R"}]},
-            {"s":40,"e":40,"l":7,"thread":1.5},
+            {"s":40,"e":40,"l":30,"thread":{"p":1.5,"tl":20}},
             {"s":36,"e":36,"l":5},
             {"gear":{"m":3,"z":20}}
         ],"at":[10,20],"rot":90}"#;
@@ -2529,7 +3257,7 @@ GEAR M3 Z20";
             } else {
                 Some(1.5)
             };
-            assert_eq!(program.segments[0].thread, Some(Thread { pitch: want }));
+            assert_eq!(program.segments[0].thread, Some(Thread { pitch: want, ..Thread::default() }));
         }
         // JSON 里写旧 `es` 字段 → 报取消 + 指路
         let err = parse_program(r#"{"segments":[{"s":30,"l":10,"es":{"b":5,"h":3}}]}"#)
@@ -2543,8 +3271,22 @@ GEAR M3 Z20";
         // 序列化 → 再解析等于原 program（GUI 的 parse/export 走同一条路）。
         let program = parse_program(DEMO).unwrap();
         let json = serde_json::to_string(&program).unwrap();
-        assert!(json.contains("\"thread\":1.5"), "螺距序列化成数字：{json}");
+        assert!(json.contains("\"tl\":20"), "TL 序列化进 JSON：{json}");
+        assert!(json.contains("\"pitch\":1.5"), "{json}");
         assert_eq!(parse_program(&json).unwrap(), program);
+        // 只有螺距的旧形态仍序列化成数字（老 GUI/JSON 兼容）
+        let plain = parse_program("S40 E40 L30 M1.5").unwrap();
+        let plain_json = serde_json::to_string(&plain).unwrap();
+        assert!(plain_json.contains("\"thread\":1.5"), "{plain_json}");
+        assert_eq!(parse_program(&plain_json).unwrap(), plain);
+        // 局部螺纹 JSON 对象往返（新关键字不丢）
+        let rich = r#"{"segments":[{"s":40,"e":40,"l":30,"thread":{"p":1.5,"tl":20,"runout":"short","shoulder":"long"}},{"s":36,"e":36,"l":5}]}"#;
+        let program = parse_program(rich).unwrap();
+        let thread = program.segments[0].thread.unwrap();
+        assert_eq!(thread.tl, Some(20.0));
+        assert_eq!(thread.runout, RunoutGrade::Short);
+        assert_eq!(thread.shoulder, ShoulderGrade::Long);
+        assert_eq!(parse_program(&serde_json::to_string(&program).unwrap()).unwrap(), program);
         // 光杆 M 序列化成 true；再解析回来
         let program = parse_program("S30 E30 L20 M").unwrap();
         let json = serde_json::to_string(&program).unwrap();
@@ -2692,23 +3434,23 @@ GEAR M3 Z20";
     fn dsl_thread_parses_and_reports_errors() {
         // 光杆 M = 简化画法；M1.5 / M=1.5 = 螺距 P
         let program = parse_program("S30 E30 L20 M").unwrap();
-        assert_eq!(program.segments[0].thread, Some(Thread { pitch: None }));
+        assert_eq!(program.segments[0].thread, Some(Thread { pitch: None, ..Thread::default() }));
         let program = parse_program("S36 E36 L5 M1.5").unwrap();
         assert_eq!(
             program.segments[0].thread,
-            Some(Thread { pitch: Some(1.5) })
+            Some(Thread { pitch: Some(1.5), ..Thread::default() })
         );
         let program = parse_program("S36 E36 L5 M=1.5").unwrap();
         assert_eq!(
             program.segments[0].thread,
-            Some(Thread { pitch: Some(1.5) })
+            Some(Thread { pitch: Some(1.5), ..Thread::default() })
         );
         // 可与 CH 同段（螺纹端倒角是常规画法）、段内顺序无关
         let program = parse_program("S30 E30 L20 CH2@R M1.5").unwrap();
         assert_eq!(program.segments[0].ch, vec![Chamfer { c: 2.0, end: End::R }]);
         assert_eq!(
             program.segments[0].thread,
-            Some(Thread { pitch: Some(1.5) })
+            Some(Thread { pitch: Some(1.5), ..Thread::default() })
         );
         // 解析错误（行号 + 原因）
         let cases: &[(&str, &str)] = &[
@@ -2790,7 +3532,7 @@ GEAR M3 Z20";
             l: 20.0,
             ch: Vec::new(),
             ov: vec![Overtravel { b1: Some(3.0), end: End::R }],
-            thread: Some(Thread { pitch: Some(1.5) }),
+            thread: Some(Thread { pitch: Some(1.5), ..Thread::default() }),
             gear: None,
         };
         let err = validate(&Program {
@@ -2801,6 +3543,298 @@ GEAR M3 Z20";
         })
         .unwrap_err();
         assert!(err.contains("不能与越程槽"), "{err}");
+    }
+
+    // ── 局部螺纹 M + TL/RO/SD/RL（GB/T 3-1997 图 1 / 表 1 / 表 2） ────────
+
+    #[test]
+    fn thread_tables_lookup_and_pitch_errors() {
+        // 表 1 抽档（P=0.2 起；含订正的 P=1.75 x一般=4.3）
+        let row = runout_row(1.5).unwrap();
+        assert!(near(row.x_normal, 3.8) && near(row.x_short, 1.9));
+        assert!(near(row.a_normal, 4.5) && near(row.a_long, 6.0) && near(row.a_short, 3.0));
+        let row = runout_row(1.75).unwrap();
+        assert!(near(row.x_normal, 4.3), "P=1.75 x一般 = 4.3（订正网页笔误 1.3）");
+        let row = runout_row(0.2).unwrap();
+        assert!(near(row.x_normal, 0.5) && near(row.a_normal, 0.6));
+        let row = runout_row(6.0).unwrap();
+        assert!(near(row.x_normal, 15.0) && near(row.a_long, 24.0));
+        // 表 2 抽档（无 P=0.2）
+        let row = relief_row(1.5).unwrap();
+        assert!(
+            near(row.g1, 2.5)
+                && near(row.g2, 4.5)
+                && near(row.reduction, 2.3)
+                && near(row.r, 0.8)
+        );
+        let row = relief_row(0.25).unwrap();
+        assert!(
+            near(row.g1, 0.4)
+                && near(row.g2, 0.75)
+                && near(row.reduction, 0.4)
+                && near(row.r, 0.12)
+        );
+        let row = relief_row(6.0).unwrap();
+        assert!(
+            near(row.g1, 11.0)
+                && near(row.g2, 18.0)
+                && near(row.reduction, 8.3)
+                && near(row.r, 3.2)
+        );
+        // P 不在表里：表 1（1.6）；表 2（0.2 表 2 没有）
+        let err = runout_row(1.6).unwrap_err();
+        assert!(err.contains("表 1") && err.contains("P=1.6"), "{err}");
+        let err = relief_row(0.2).unwrap_err();
+        assert!(
+            err.contains("表 2") && err.contains("0.2") && err.contains("0.25"),
+            "{err}"
+        );
+        // 斜壁 30° 自检：任务书的 `g2 = g1 + ((d−dg)/2)/tan30°` 恒等式只有
+        // g1/g2 同步取整时才精确；表 2 各自圆整后反算角 28.30°…33.69°，
+        // 故按偏离 30° ≤4° 立断言（具体偏差见报告）。
+        let mut worst = 0.0_f64;
+        for row in RELIEF_ROWS {
+            let angle = ((row.reduction / 2.0) / (row.g2 - row.g1)).atan().to_degrees();
+            worst = worst.max((angle - 30.0).abs());
+            assert!(
+                (angle - 30.0).abs() <= 4.0,
+                "P={} 反算斜壁角 {angle:.2}° 偏离 30° 超过 4°",
+                trim(row.p)
+            );
+        }
+        assert!(worst > 0.0, "表值独立取整会带来非零偏差");
+    }
+
+    #[test]
+    fn dsl_local_thread_parses_with_grades_and_errors() {
+        // 基本：M1.5 TL20
+        let program = parse_program("S40 E40 L30 M1.5 TL20").unwrap();
+        let thread = program.segments[0].thread.unwrap();
+        assert_eq!(thread.pitch, Some(1.5));
+        assert_eq!(thread.tl, Some(20.0));
+        assert_eq!(thread.runout, RunoutGrade::Normal);
+        assert_eq!(thread.shoulder, ShoulderGrade::Normal);
+        assert!(!thread.relief);
+        // 段内顺序无关 + 档位 + `=` 写法
+        let program = parse_program("S40 E40 L30 RO短 TL20 M1.5 SD长").unwrap();
+        let thread = program.segments[0].thread.unwrap();
+        assert_eq!(thread.tl, Some(20.0));
+        assert_eq!(thread.runout, RunoutGrade::Short);
+        assert_eq!(thread.shoulder, ShoulderGrade::Long);
+        // RL；英文档位 / RO 光杆 = 一般
+        let program = parse_program("S40 E40 L30 M1.5 TL20 RL").unwrap();
+        assert!(program.segments[0].thread.unwrap().relief);
+        let program = parse_program("S40 E40 L30 M1.5 TL20 ROshort SDnormal").unwrap();
+        let thread = program.segments[0].thread.unwrap();
+        assert_eq!(thread.runout, RunoutGrade::Short);
+        assert_eq!(thread.shoulder, ShoulderGrade::Normal);
+        let program = parse_program("S40 E40 L30 M1.5 TL20 RO SD:短").unwrap();
+        let thread = program.segments[0].thread.unwrap();
+        assert_eq!(thread.runout, RunoutGrade::Normal);
+        assert_eq!(thread.shoulder, ShoulderGrade::Short);
+        // 错误：非法档位 / 缺值 / 重复 / 互斥 / 没 M / 齿轮段 / RL 带值 / rot 不吞
+        let cases: &[(&str, &str)] = &[
+            ("S40 E40 L30 M1.5 TL20 RO长", "RO"),
+            ("S40 E40 L30 M1.5 TL20 SD超", "SD"),
+            ("S40 E40 L30 M1.5 TL", "TL"),
+            ("S40 E40 L30 M1.5 TL0", "TL=0"),
+            ("S40 E40 L30 M1.5 TL20 TL15", "TL 重复"),
+            ("S40 E40 L30 M1.5 TL20 RO短 RO一般", "RO 重复"),
+            ("S40 E40 L30 M1.5 TL20 SD长 SD短", "SD 重复"),
+            ("S40 E40 L30 M1.5 TL20 RL RL", "RL 重复"),
+            ("S40 E40 L30 M1.5 TL20 RL RO短", "互斥"),
+            ("S40 E40 L30 M1.5 TL20 RL SD长", "互斥"),
+            ("S40 E40 L30 M1.5 TL20 RL=1", "不带值"),
+            ("S40 E40 L30 TL20", "需要与 M 同段"),
+            ("S40 E40 L30 RO短", "需要与 M 同段"),
+            ("S40 E40 L30 M1.5 TL20 RLx", "二期未实现"),
+            ("S40 E40 L30 M1.5 TL20 SD=2", "非法"),
+            ("GEAR M3 Z20 TL10", "齿轮段"),
+            ("S40 E40 L30 M1.5 TL20 rot", "rot"),
+        ];
+        for (text, needle) in cases {
+            let err = parse_program(text).unwrap_err();
+            assert!(err.contains(needle), "{text}: 期望含「{needle}」，得到 {err}");
+        }
+    }
+
+    #[test]
+    fn thread_local_runout_geometry_and_layers() {
+        // P=1.5 默认档：x=3.8 / a=4.5；d1 = 40 − 1.0825×1.5 = 38.37625（r1=19.188125）
+        // 布局：face=30、boundary=25.5、runout_start=29.3、full_start=5.5
+        let program = parse_program("S40 E40 L30 M1.5 TL20\nS36 E36 L5").unwrap();
+        let shaft = build(&program, 1.0).unwrap();
+        let r1 = (40.0 - 1.0825 * 1.5) / 2.0;
+        // 大径轮廓照旧贯穿整段（图 1 口径：大径线不断）
+        assert!(has_line(&shaft, [0.0, 20.0], [30.0, 20.0]));
+        // 锥面过渡（粗实线）：(30,20) → (29.3,r1)
+        assert_eq!(
+            layer_of_line(&shaft, [30.0, 20.0], [29.3, r1]),
+            Some(LAYER_MAIN),
+            "锥面 → 1轮廓实线层"
+        );
+        // 螺尾（细实线）：(29.3,r1) → (25.5,20)，上下对称
+        assert_eq!(
+            layer_of_line(&shaft, [29.3, r1], [25.5, 20.0]),
+            Some(LAYER_THIN),
+            "螺尾 → 2细线层"
+        );
+        assert!(has_line(&shaft, [29.3, -r1], [25.5, -20.0]));
+        // 完整螺纹 / 螺尾分界竖线（粗实线，全高）
+        assert_eq!(
+            layer_of_line(&shaft, [25.5, -20.0], [25.5, 20.0]),
+            Some(LAYER_MAIN),
+            "分界竖线 → 1轮廓实线层"
+        );
+        // 小径细实线：5.5 → 29.3（止于螺尾起点）
+        assert!(has_line(&shaft, [5.5, r1], [29.3, r1]));
+        assert!(has_line(&shaft, [5.5, -r1], [29.3, -r1]));
+        let thin = shaft.entities.iter().filter(|e| layer_of(e) == LAYER_THIN).count();
+        assert_eq!(thin, 4, "螺尾上下 2 + 小径上下 2");
+        // 台肩面仍在 30：18 ↔ 20
+        assert!(has_line(&shaft, [30.0, 18.0], [30.0, 20.0]));
+        // 档位效果：RO短 x=1.9、SD长 a=6 → 锥面 30→25.9、螺尾 25.9→24、细实线 4→25.9
+        let program = parse_program("S40 E40 L30 M1.5 TL20 RO短 SD长\nS36 E36 L5").unwrap();
+        let shaft = build(&program, 1.0).unwrap();
+        assert!(has_line(&shaft, [30.0, 20.0], [25.9, r1]));
+        assert!(has_line(&shaft, [25.9, r1], [24.0, 20.0]));
+        assert!(has_line(&shaft, [4.0, r1], [25.9, r1]));
+        // RO短 + SD短：x=1.9、a=3 → 锥面长 a−x=1.1（30→28.9）
+        let program = parse_program("S40 E40 L30 M1.5 TL20 RO短 SD短\nS36 E36 L5").unwrap();
+        let shaft = build(&program, 1.0).unwrap();
+        assert!(has_line(&shaft, [30.0, 20.0], [28.9, r1]));
+        assert!(has_line(&shaft, [28.9, r1], [27.0, 20.0]));
+        assert!(has_line(&shaft, [7.0, r1], [28.9, r1]));
+        // 不给 TL = 旧口径回归：整段小径细实线、没有锥面/螺尾/分界线
+        let program = parse_program("S40 E40 L30 M1.5\nS36 E36 L5").unwrap();
+        let shaft = build(&program, 1.0).unwrap();
+        assert!(has_line(&shaft, [0.0, r1], [30.0, r1]));
+        assert!(has_line(&shaft, [0.0, -r1], [30.0, -r1]));
+        assert!(!has_line(&shaft, [30.0, 20.0], [29.3, r1]), "旧口径没有锥面");
+        let thin = shaft.entities.iter().filter(|e| layer_of(e) == LAYER_THIN).count();
+        assert_eq!(thin, 2, "旧口径只有小径细实线上下各一条");
+    }
+
+    #[test]
+    fn thread_local_relief_geometry_and_mutual_exclusion() {
+        // P=1.5 表 2：g1=2.5 / g2=4.5 / 减量=2.3 / r=0.8；d=40 → dg=37.7、rg=18.85；
+        // 台肩圆角切点 = 18.85+0.8 = 19.65；face=30、完整螺纹 5.5→25.5
+        let program = parse_program("S40 E40 L30 M1.5 TL20 RL\nS36 E36 L5").unwrap();
+        let shaft = build(&program, 1.0).unwrap();
+        let r1 = (40.0 - 1.0825 * 1.5) / 2.0;
+        // 大径轮廓止于 g2 处：0 → 25.5
+        assert!(has_line(&shaft, [0.0, 20.0], [25.5, 20.0]));
+        // R 圆角（粗实线）：心 (29.2,19.65)、270°→360°
+        assert!(has_arc(&shaft, [29.2, 19.65], 0.8, 270.0, 360.0));
+        assert!(has_arc(&shaft, [29.2, -19.65], 0.8, 0.0, 90.0));
+        // 槽底 g1：29.2 → 27.5（y=18.85）；斜壁：27.5,18.85 → 25.5,20
+        assert!(has_line(&shaft, [29.2, 18.85], [27.5, 18.85]));
+        assert!(has_line(&shaft, [27.5, 18.85], [25.5, 20.0]));
+        assert!(has_line(&shaft, [27.5, -18.85], [25.5, -20.0]));
+        // 台肩面只画到圆角切点：18 → 19.65（不像螺尾那里画满 20）
+        assert!(has_line(&shaft, [30.0, 18.0], [30.0, 19.65]));
+        assert!(!has_line(&shaft, [30.0, 18.0], [30.0, 20.0]), "RL 槽根不留到 20");
+        // 小径细实线止于斜壁交点：5.5 → 26.911957…（y=r1）
+        let x_minor = 30.0 - 2.5 - 2.0 * (r1 - 18.85) / (20.0 - 18.85);
+        assert!(has_line(&shaft, [5.5, r1], [x_minor, r1]));
+        assert!(has_line(&shaft, [5.5, -r1], [x_minor, -r1]));
+        // RL 不画收尾/锥面/分界竖线：细实线只有小径上下两条
+        assert!(!has_line(&shaft, [29.3, r1], [25.5, 20.0]), "RL 不画螺尾斜线");
+        let thin = shaft.entities.iter().filter(|e| layer_of(e) == LAYER_THIN).count();
+        assert_eq!(thin, 2, "RL 只有小径细实线上下各一条");
+        // RL 不给 TL 也支持：整段圆柱上直接开槽，小径细实线从左端到斜壁交点
+        let program = parse_program("S40 E40 L30 M1.5 RL\nS36 E36 L5").unwrap();
+        let shaft = build(&program, 1.0).unwrap();
+        assert!(has_line(&shaft, [0.0, 20.0], [25.5, 20.0]));
+        assert!(has_line(&shaft, [0.0, r1], [x_minor, r1]));
+        assert!(has_line(&shaft, [0.0, -r1], [x_minor, -r1]));
+        // 段长吃不下：g2 + TL = 24.5 > 14
+        let program = parse_program("S40 E40 L14 M1.5 TL20 RL\nS36 E36 L5").unwrap();
+        let err = build(&program, 1.0).unwrap_err();
+        assert!(err.contains("第 1 段") && err.contains("超过段长"), "{err}");
+        // 互斥（JSON 路径也要拦）
+        let bad = r#"{"segments":[{"s":40,"l":30,"thread":{"p":1.5,"tl":20,"relief":true,"runout":"short"}}]}"#;
+        let program = parse_program(bad).unwrap();
+        let err = build(&program, 1.0).unwrap_err();
+        assert!(err.contains("第 1 段") && err.contains("互斥"), "{err}");
+        // 表 2 没有 P=0.2
+        let program = parse_program("S40 E40 L30 M0.2 TL20 RL\nS36 E36 L5").unwrap();
+        let err = build(&program, 1.0).unwrap_err();
+        assert!(err.contains("第 1 段") && err.contains("表 2"), "{err}");
+        // 剖视：RL 槽体也进剖面环（一个 HATCH、简单环、边界首尾相接）
+        let program =
+            parse_program("S40 E40 L30 M1.5 TL20 RL\nS36 E36 L5 VIEW 剖视").unwrap();
+        let section = build(&program, 1.0).unwrap();
+        let hatch = section
+            .entities
+            .iter()
+            .find_map(|e| match e {
+                EntityType::Hatch(h) => Some(h),
+                _ => None,
+            })
+            .expect("剖视应有一个 HATCH");
+        assert_eq!(hatch.paths.len(), 1, "上半 + 镜像合成一个简单环");
+        let pts = |edge: &BoundaryEdge| -> ([f64; 2], [f64; 2]) {
+            match edge {
+                BoundaryEdge::Line(e) => ([e.start.x, e.start.y], [e.end.x, e.end.y]),
+                BoundaryEdge::CircularArc(a) => (
+                    [
+                        a.center.x + a.radius * a.start_angle.cos(),
+                        a.center.y + a.radius * a.start_angle.sin(),
+                    ],
+                    [
+                        a.center.x + a.radius * a.end_angle.cos(),
+                        a.center.y + a.radius * a.end_angle.sin(),
+                    ],
+                ),
+                other => panic!("剖面环只应有 LINE/ARC，得到 {other:?}"),
+            }
+        };
+        let mut prev: Option<[f64; 2]> = None;
+        for edge in &hatch.paths[0].edges {
+            let (a, b) = pts(edge);
+            if let Some(p) = prev {
+                assert!(
+                    near(p[0], a[0]) && near(p[1], a[1]),
+                    "剖面环断开：{p:?} → {a:?}"
+                );
+            }
+            prev = Some(b);
+        }
+        let last = prev.unwrap();
+        assert!(
+            near(last[0], 0.0) && near(last[1], 20.0),
+            "环回到左端面 (0,20)：{last:?}"
+        );
+    }
+
+    #[test]
+    fn thread_local_fit_errors_point_at_segment() {
+        let cases: &[(&str, &str)] = &[
+            // a + TL = 24.5 > L=20
+            ("S40 E40 L20 M1.5 TL20\nS36 E36 L5", "超过段长"),
+            // x=3.8 > a=3.0（RO一般 + SD短）
+            (
+                "S40 E40 L30 M1.5 TL20 RO一般 SD短\nS36 E36 L5",
+                "大于肩距",
+            ),
+            // 没给螺距
+            ("S40 E40 L30 M TL20\nS36 E36 L5", "必须给螺距"),
+            // P 不在表 1
+            ("S40 E40 L30 M1.6 TL20\nS36 E36 L5", "表 1"),
+            // RO/SD 没 TL
+            ("S40 E40 L30 M1.5 RO短\nS36 E36 L5", "只在局部螺纹"),
+            // 本段右端倒角与 TL 冲突
+            ("S40 E40 L30 M1.5 TL20 CH2@R\nS36 E36 L5", "不能倒角"),
+            // 相邻段倒角落在本段右端
+            ("S40 E40 L30 M1.5 TL20\nS30 E30 L5 CH2@L", "不能倒角"),
+        ];
+        for (text, needle) in cases {
+            let program = parse_program(text).unwrap_or_else(|e| panic!("{text}: 解析失败 {e}"));
+            let err = build(&program, 1.0).unwrap_err();
+            assert!(err.contains("第 1 段"), "{text}: 应报第 1 段，得到 {err}");
+            assert!(err.contains(needle), "{text}: 期望含「{needle}」，得到 {err}");
+        }
     }
 
     // ── 齿轮段 GEAR ──────────────────────────────────────────────────────
@@ -3276,14 +4310,14 @@ GEAR M3 Z20";
     fn dump_demo_geometry_csv() {
         let program = parse_program(DEMO).unwrap();
         let shaft = build(&program, 1.0).unwrap();
-        assert!(near(shaft.total_length, 152.0));
+        assert!(near(shaft.total_length, 175.0));
         assert!(near(shaft.max_diameter, 66.0));
         assert_eq!(shaft.segment_count, 7);
 
         let csv = entities_csv(&shaft.entities);
 
         // 关键几何自检（demo 7 段：30 / 40（OV3 + φ50 台阶倒角）/ 锥 50→30 / 30 /
-        // 40（M1.5 螺纹段）/ 36（退刀槽）/ 齿轮段 M3 Z20（d=60、da=66、df=52.5 不落图））
+        // 40（M1.5 TL20 局部螺纹）/ 36（小直径槽段）/ 齿轮段 M3 Z20（d=60、da=66、df=52.5 不落图））
         assert!(has_line(&shaft, [72.0, 20.0], [57.0, 35.0]), "φ40 的 OV 砂轮细线");
         assert!(
             has_line(&shaft, [75.0, 22.0], [77.0, 24.0]),
@@ -3294,38 +4328,52 @@ GEAR M3 Z20";
             "前段 φ30 → φ40 台阶面"
         );
         assert!(has_line(&shaft, [110.0, 18.0], [112.0, 20.0]), "φ40 段左端 CH2");
-        // M1.5：轮廓到 117；小径 d1 = 40 − 1.0825×1.5 = 38.37625（r=19.188125）
-        // 细实线从倒角斜线交点 111.188125 起到终止线 117
+        // ── M1.5 TL20 局部螺纹（GB/T 3 图 1 第一种形式；P=1.5 → x=3.8、a=4.5）──
+        // 段 [110,140]：完整螺纹从 115.5 起；台肩面=140、分界=135.5、螺尾起点=139.3
         let r1 = (40.0 - 1.0825 * 1.5) / 2.0;
-        assert!(has_line(&shaft, [112.0, 20.0], [117.0, 20.0]), "螺纹段轮廓");
+        assert!(near(r1, 19.188125));
+        assert!(has_line(&shaft, [112.0, 20.0], [140.0, 20.0]), "螺纹段大径轮廓");
+        assert!(has_line(&shaft, [140.0, 20.0], [139.3, r1]), "锥面过渡（a−x=0.7）");
+        assert!(has_line(&shaft, [139.3, r1], [135.5, 20.0]), "螺尾细实线（x=3.8）");
         assert!(
-            has_line(&shaft, [111.188125, r1], [117.0, r1]),
-            "小径细实线（止于终止线）"
+            has_line(&shaft, [135.5, -20.0], [135.5, 20.0]),
+            "完整螺纹/螺尾分界竖线"
         );
-        assert!(has_line(&shaft, [111.188125, -r1], [117.0, -r1]), "下半小径细实线");
+        assert!(has_line(&shaft, [115.5, r1], [139.3, r1]), "小径细实线（止于螺尾起点）");
+        assert!(has_line(&shaft, [115.5, -r1], [139.3, -r1]));
         assert!(
-            has_line(&shaft, [117.0, 18.0], [117.0, 20.0]),
-            "螺纹终止线 = 既有台阶面（18 ↔ 20）"
+            has_line(&shaft, [140.0, 18.0], [140.0, 20.0]),
+            "螺纹终止台肩面（18 ↔ 20）"
         );
-        // 退刀槽 = 小直径轴段 Ø36；其轮廓 117→122
-        assert!(has_line(&shaft, [117.0, 18.0], [122.0, 18.0]), "退刀槽段轮廓");
+        assert_eq!(
+            layer_of_line(&shaft, [139.3, r1], [135.5, 20.0]),
+            Some(LAYER_THIN),
+            "demo 螺尾落 2细线层"
+        );
+        assert_eq!(
+            layer_of_line(&shaft, [140.0, 20.0], [139.3, r1]),
+            Some(LAYER_MAIN),
+            "demo 锥面落 1轮廓实线层"
+        );
+        // 小直径槽段 [140,145]：轮廓 18，端面 145 从 18 到齿顶 33
+        assert!(has_line(&shaft, [140.0, 18.0], [145.0, 18.0]), "小直径槽段轮廓");
         assert!(
-            has_line(&shaft, [122.0, 18.0], [122.0, 33.0]),
-            "退刀槽端面从 18 到齿顶 33"
+            has_line(&shaft, [145.0, 18.0], [145.0, 33.0]),
+            "槽段端面从 18 到齿顶 33"
         );
         // 齿轮两线：齿顶（轮廓，±33）/ 分度（点划线，±30）；齿根线（±26.25）不画
-        assert!(has_line(&shaft, [122.0, 33.0], [152.0, 33.0]), "齿顶线");
-        assert!(has_line(&shaft, [122.0, 30.0], [152.0, 30.0]), "分度线");
+        assert!(has_line(&shaft, [145.0, 33.0], [175.0, 33.0]), "齿顶线");
+        assert!(has_line(&shaft, [145.0, 30.0], [175.0, 30.0]), "分度线");
         assert!(
-            !has_line(&shaft, [122.0, 26.25], [152.0, 26.25]),
+            !has_line(&shaft, [145.0, 26.25], [175.0, 26.25]),
             "齿根线不画（与 gear.rs::side_view 一致）"
         );
         assert!(
-            !has_line(&shaft, [122.0, -26.25], [152.0, -26.25]),
+            !has_line(&shaft, [145.0, -26.25], [175.0, -26.25]),
             "下半齿根线也不画"
         );
         assert!(
-            has_line(&shaft, [152.0, -33.0], [152.0, 33.0]),
+            has_line(&shaft, [175.0, -33.0], [175.0, 33.0]),
             "齿轮自由端面"
         );
         let layer_at = |x: f64, y: f64| -> Option<&str> {
@@ -3339,10 +4387,10 @@ GEAR M3 Z20";
             })
         };
         assert_eq!(
-            layer_at(122.0, 30.0),
+            layer_at(145.0, 30.0),
             Some(crate::partgen_kit::LAYER_CENTER)
         );
-        assert_eq!(layer_at(122.0, 26.25), None, "没有齿根线");
+        assert_eq!(layer_at(145.0, 26.25), None, "没有齿根线");
 
         let path = std::env::var("HOME")
             .map(std::path::PathBuf::from)
@@ -3354,8 +4402,8 @@ GEAR M3 Z20";
         assert!(file.is_file(), "demo CSV 已落盘：{}", file.display());
         assert!(csv.contains("LINE") && csv.contains("ARC"));
         assert!(csv.contains("3中心线层") && csv.contains("2细线层"));
-        // 44 = 旧 demo 46 − 齿轮段齿根线 2（用户 2026-09-18：按 gear 工具口径去掉齿根线）
-        assert_eq!(shaft.entities.len(), 44, "demo 图元数");
+        // 49 = 旧 demo 44 + 局部螺纹新增 5（锥面上下 2 + 螺尾上下 2 + 分界竖线 1）
+        assert_eq!(shaft.entities.len(), 49, "demo 图元数");
 
         // 剖视 diff：同一套轮廓 + 一个 HATCH（CSV 记 bbox 一行）；落盘供人工核对
         let section_program = parse_program(&format!("{DEMO}\nVIEW 剖视")).unwrap();
@@ -3363,7 +4411,7 @@ GEAR M3 Z20";
         assert_eq!(section.entities.len(), shaft.entities.len() + 1);
         let section_csv = entities_csv(&section.entities);
         assert!(
-            section_csv.contains("HATCH,0.000000,-33.000000,152.000000,33.000000,5剖面线层"),
+            section_csv.contains("HATCH,0.000000,-33.000000,175.000000,33.000000,5剖面线层"),
             "HATCH 一行记 bbox + 5剖面线层：{section_csv}"
         );
         let file = path.join("shaft_demo_section.csv");

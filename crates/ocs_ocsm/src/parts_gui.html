@@ -68,8 +68,13 @@
       <div id="detailFields" style="display:none">
         <label for="dnum" id="dLabel">轴径 d（mm，自由输入）</label>
         <input id="dnum" type="number" step="0.1" min="0.01" value="100" />
-        <label for="b1num">槽宽 b1 覆盖（mm，留空 = 该 d 档默认）</label>
-        <input id="b1num" type="number" step="0.1" min="0.01" placeholder="留空 = 默认" />
+        <div id="b1Fields">
+          <label for="b1num" id="b1Label">槽宽 b1 覆盖（mm，留空 = 该 d 档默认）</label>
+          <input id="b1num" type="number" step="0.1" min="0.01" placeholder="留空 = 默认" />
+        </div>
+        <!-- 通用自由参数面板：按目录族条目的 `inputs` 动态生成
+             （磨外圆没有 inputs → 走上面的 b1 老面板；退刀槽有 P/g1/g2/dg/r/alpha） -->
+        <div id="paramFields"></div>
         <div class="hint" id="detailHint"></div>
       </div>
       <label>视图（出库哪个视图）</label>
@@ -89,7 +94,7 @@
 </div>
 
 <script>
-let catalog = null, cur = { family: "", d: 0, l: 0, b1: null, view: "main" };
+let catalog = null, cur = { family: "", d: 0, l: 0, b1: null, params: {}, view: "main" };
 const el = (id) => document.getElementById(id);
 // 本窗口钉在哪张图纸上（插件开窗时写的 `tab=`）：出库/插入都带回给插件，
 // 多张图各开窗口时不串图；旧窗口（图纸已关）会被插件明确拒绝。
@@ -158,6 +163,7 @@ function pickFamilyInner(id, row) {
   el("status").className = "";
   cur.family = id;
   cur.b1 = null;
+  cur.params = {};
   el("code").textContent = "　" + f.code + " ← " + f.iso;
   el("panel").style.display = "";
   el("tip").style.display = "none";
@@ -181,10 +187,12 @@ function pickFamilyInner(id, row) {
   });
   cur.view = f.views[0].id;
   if (detail) {
-    // 结构要素：自由输入 d（不是固定规格下拉）；b1 可留空 = 该 d 档默认
+    // 结构要素：自由输入 d（不是固定规格下拉）；参数面板由目录数据驱动
+    // （磨外圆只有 b1；退刀槽有 P/g1/g2/dg/r/alpha）。
     el("dLabel").textContent = f.d_label || "参数 d（mm，自由输入）";
     el("dnum").value = f.default_d || 100;
     el("b1num").value = "";
+    renderDetailInputs(f);
     onDetail();
     return;
   }
@@ -201,19 +209,86 @@ function pickFamilyInner(id, row) {
   onDia(f.sizes[0]);
 }
 
-// 结构要素：d 自由输入；b1 留空 = 该 d 档默认（档内可选值在 hint 里列出）。
+// 结构要素：参数面板按目录 `inputs` 动态生成（只建 DOM，值与错误处理在 onDetail）。
+function renderDetailInputs(f) {
+  const inputs = f.inputs || [];
+  el("b1Fields").style.display = inputs.length ? "none" : "";
+  const box = el("paramFields");
+  box.innerHTML = "";
+  inputs.forEach((it) => {
+    const lab = document.createElement("label");
+    lab.htmlFor = "p_" + it.key;
+    lab.textContent = it.label || it.key;
+    const inp = document.createElement("input");
+    inp.type = "number";
+    inp.step = "0.01";
+    inp.min = "0";
+    inp.id = "p_" + it.key;
+    inp.dataset.key = it.key;
+    inp.placeholder = it.placeholder || (it.required ? "必给" : "留空 = 默认");
+    inp.addEventListener("input", onDetail);
+    box.appendChild(lab);
+    box.appendChild(inp);
+  });
+}
+
+// 收集动态参数（留空跳过；必给项缺失/非数字 → 直接在提示行报错并清掉预览）。
+function collectParams(f, hint) {
+  const params = {};
+  let missing = null;
+  for (const it of f.inputs || []) {
+    const inp = el("p_" + it.key);
+    const raw = inp ? inp.value.trim() : "";
+    if (raw === "") {
+      if (it.required && missing === null) missing = it.key;
+      continue;
+    }
+    const v = Number(raw);
+    if (!isFinite(v)) {
+      hint.textContent = (it.label || it.key) + " 不是数字";
+      el("preview").removeAttribute("src");
+      return null;
+    }
+    params[it.key] = v;
+  }
+  if (missing !== null) {
+    hint.textContent = "参数 " + missing + " 必给（退刀槽：表 2 单键 = 螺距 P）";
+    el("preview").removeAttribute("src");
+    return null;
+  }
+  return params;
+}
+
+// 结构要素：d 自由输入；有 `inputs` 的族走通用参数，否则是老 b1 面板。
 function onDetail() {
   const f = catalog.families[cur.family];
   const d = Number(el("dnum").value);
-  const raw = el("b1num").value.trim();
-  cur.d = d;
-  cur.b1 = raw === "" ? null : Number(raw);
   const hint = el("detailHint");
+  cur.d = d;
   if (!isFinite(d) || d <= 0) {
+    cur.b1 = null;
+    cur.params = {};
     hint.textContent = "d 必须是正数";
     el("preview").removeAttribute("src");
     return;
   }
+  if (f.inputs && f.inputs.length) {
+    cur.b1 = null;
+    const params = collectParams(f, hint);
+    if (params === null) { cur.params = {}; return; }
+    cur.params = params;
+    const choices = (f.pitches || []).map((r) => r.P).join("、");
+    const row = (f.pitches || []).find((r) => Number(r.P) === Number(params.P));
+    hint.textContent = row
+        ? "P=" + row.P + "：g1=" + row.g1 + "、g2=" + row.g2 + "、dg=d−" + row.dg_reduction
+          + "、r=" + row.r + "；表 2 单键（P）：" + choices
+        : "P 必须是表 2 单键：" + choices;
+    update();
+    return;
+  }
+  const raw = el("b1num").value.trim();
+  cur.b1 = raw === "" ? null : Number(raw);
+  cur.params = {};
   const band = (f.bands || []).find((b) => {
     const loOk = b.lo_incl ? d >= b.lo : d > b.lo;
     const hiOk = b.hi == null ? true : (b.hi_incl ? d <= b.hi : d < b.hi);
@@ -253,9 +328,12 @@ function onDia(size) {
 function update() {
   const f = catalog.families[cur.family];
   if (f && f.free_d) {
-    // 结构要素没有 l；b1 留空时不拼进 URL（服务端取该 d 档默认行）
+    // 结构要素没有 l；b1 / 通用 params 都可能为空
     let url = "/api/part_svg?family=" + cur.family + "&d=" + cur.d + "&view=" + cur.view;
     if (cur.b1 !== null && cur.b1 !== undefined && cur.b1 !== "") url += "&b1=" + cur.b1;
+    Object.keys(cur.params || {}).forEach((k) => {
+      url += "&" + encodeURIComponent(k) + "=" + cur.params[k];
+    });
     el("preview").src = url;
   } else {
     el("preview").src = "/api/part_svg?family=" + cur.family + "&d=" + cur.d + "&l=" + cur.l + "&view=" + cur.view;

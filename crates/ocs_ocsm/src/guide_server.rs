@@ -3915,7 +3915,7 @@ pub const COMMAND_CATALOG: &[(&str, &str, &str)] = &[
     ("1 … 10", "数字键", "切当前图层；有选中对象时把对象移到该层"),
     ("OCSMFRAMEINIT", "TF", "图框：不带参数=打开图框选择窗口；带参数=一行直插（`TF a3_landscape 1:2 at 0,0 [rot 度]`）"),
     ("OCSMFRAMEINSERT", "", "按所选图框 + 比例插入（光标跟随，比例感知标注样式）；也可带参数直插（同 TF）"),
-    ("OCSMPART", "XL", "标准件/结构要素插入：不带参数=开零件库窗口（左「标准件」树 + 右「结构要素」树）+放置态；带参数=一行直插（标准件 `XL 族 d l [view …] [at x,y] [rot 度]`；结构要素 `XL detail_grind_od d [b1 值] [at x,y] [rot 度]`，d 自由输入）"),
+    ("OCSMPART", "XL", "标准件/结构要素插入：不带参数=开零件库窗口（左「标准件」树 + 右「结构要素」树）+放置态；带参数=一行直插（标准件 `XL 族 d l [view …] [at x,y] [rot 度]`；结构要素 `XL detail_grind_od d [b1 值] [at x,y] [rot 度]`；外螺纹退刀槽 `XL detail_thread_relief d P 螺距 [g1 值 g2 值 dg 值 r 值 alpha 值] [at x,y] [rot 度]`，d 自由输入）"),
     ("OCSMJOINT", "", "螺栓副装配：不带参数=开装配窗口+放置态；带参数=一行直装（件链算长度、遮挡裁剪、一次撤销）"),
     ("OCSMPOWERDIM", "D", "智能标注：拾取点模式标线性/对齐/半径/直径（Enter 切线段点选）"),
     ("OCSMDIMGULIDE", "GDIM", "引导线标注：选引导线 → 配置窗口（尺寸/剖视/向视/局部放大/角度/弧长/焊接/引线/序号/公差/粗糙度/形位公差）"),
@@ -4707,6 +4707,9 @@ fn apply_part_export(
         /// 结构要素可选 b1 覆盖（标准件忽略）。
         #[serde(default)]
         b1: Option<f64>,
+        /// 结构要素的通用数值参数（退刀槽 P/g1/g2/dg/r/alpha；标准件忽略）。
+        #[serde(default)]
+        params: std::collections::BTreeMap<String, f64>,
         #[serde(default = "default_view")]
         view: String,
     }
@@ -4714,11 +4717,15 @@ fn apply_part_export(
         "main".to_string()
     }
     let req: Req = serde_json::from_slice(body).map_err(|e| format!("请求 JSON 无效: {e}"))?;
-    let part = crate::partgen::generate_requested(
+    let mut params = crate::detail::DetailParams::from_b1(req.b1);
+    for (key, value) in &req.params {
+        params.insert(key, *value);
+    }
+    let part = crate::partgen::generate_requested_params(
         &req.family,
         req.d,
         req.l,
-        req.b1,
+        &params,
         &req.view,
     )?;
     let block = format!(
@@ -4755,6 +4762,7 @@ fn apply_part_export(
         "d": req.d,
         "l": req.l,
         "b1": req.b1,
+        "params": req.params,
     })
     .to_string();
     crate::set_pending_part(crate::PendingPart {
@@ -4801,6 +4809,9 @@ pub(crate) fn apply_part_pick(
         /// 结构要素可选 b1 覆盖（标准件忽略）。
         #[serde(default)]
         b1: Option<f64>,
+        /// 结构要素的通用数值参数（退刀槽 P/g1/g2/dg/r/alpha；标准件忽略）。
+        #[serde(default)]
+        params: std::collections::BTreeMap<String, f64>,
         #[serde(default = "default_view")]
         view: String,
         /// 显式落点（MCP/AI 驱动）：同时给了 `x` 与 `y` 就不再取 GUI 点选的待放置点。
@@ -4818,11 +4829,15 @@ pub(crate) fn apply_part_pick(
         "main".to_string()
     }
     let req: Req = serde_json::from_slice(body).map_err(|e| format!("请求 JSON 无效: {e}"))?;
-    let part = crate::partgen::generate_requested(
+    let mut params = crate::detail::DetailParams::from_b1(req.b1);
+    for (key, value) in &req.params {
+        params.insert(key, *value);
+    }
+    let part = crate::partgen::generate_requested_params(
         &req.family,
         req.d,
         req.l,
-        req.b1,
+        &params,
         &req.view,
     )?;
 
@@ -4884,6 +4899,7 @@ pub(crate) fn apply_part_pick(
         "d": req.d,
         "l": req.l,
         "b1": req.b1,
+        "params": req.params,
     })
     .to_string();
     let mut rec = ExtendedDataRecord::new("OCSM_PART");
@@ -13096,6 +13112,23 @@ mod weld_tests {
         assert!(bad.contains("error") && bad.contains("可选 b1"), "b1 不匹配报错：{bad}");
         let bad = http_req(server.port, "GET", "/api/part_svg?family=detail_grind_od&d=0", "");
         assert!(bad.contains("error"), "d=0 报错：{bad}");
+        // 结构要素（第二期：外螺纹退刀槽 GB/T 3-1997）：P 必给 + g1/g2/dg/r/alpha 自由覆盖
+        assert!(
+            cat.contains("外螺纹退刀槽 GB/T 3-1997") && cat.contains("detail_thread_relief"),
+            "退刀槽进了目录树"
+        );
+        assert!(cat.contains("\"key\":\"P\"") && cat.contains("\"pitches\""), "P 输入面板/数据进目录");
+        assert!(html.contains("paramFields") && html.contains("renderDetailInputs"), "通用自由参数面板");
+        let svg = http_req(server.port, "GET", "/api/part_svg?family=detail_thread_relief&d=20&P=1.5", "");
+        assert!(svg.contains("<svg") && svg.contains("d20 P1.5"), "退刀槽预览：{svg}");
+        let svg = http_req(server.port, "GET", "/api/part_svg?family=detail_thread_relief&d=20&P=1.5&g1=3", "");
+        assert!(svg.contains("g1 3"), "退刀槽 g1 覆盖：{svg}");
+        let bad = http_req(server.port, "GET", "/api/part_svg?family=detail_thread_relief&d=20", "");
+        assert!(bad.contains("error") && bad.contains("P"), "缺 P 报错：{bad}");
+        let bad = http_req(server.port, "GET", "/api/part_svg?family=detail_thread_relief&d=20&P=1.3", "");
+        assert!(bad.contains("error") && bad.contains("0.25"), "P 不在表 2 报错：{bad}");
+        let bad = http_req(server.port, "GET", "/api/part_svg?family=detail_thread_relief&d=0&P=1.5", "");
+        assert!(bad.contains("error"), "d=0 报错：{bad}");
         let svg = http_req(server.port, "GET", "/api/part_svg?family=hex_bolt_c&d=5&l=25&view=main", "");
         assert!(svg.contains("<svg") && svg.contains("M5x25"), "预览 SV");
         assert!(svg.contains("GB/T 5780-2016"), "标题含现行代号");
@@ -13172,6 +13205,51 @@ mod weld_tests {
         assert_eq!(meta["d"], 100.0);
         assert_eq!(meta["b1"], 8.0);
         assert_eq!(meta["code"], "GB/T 6403.5-2008");
+    }
+
+    /// 结构要素（外螺纹退刀槽 GB/T 3-1997）插入：P 走请求的 `params` 字段，
+    /// 锚点/旋转/落层/xdata 台账与磨外圆同通路。
+    #[test]
+    fn detail_thread_relief_pick_params_and_meta() {
+        let mock = Arc::new(MockSender::new(acadrust::CadDocument::new()));
+        let sender: Arc<dyn PluginRequestSender> = mock.clone();
+        let body = br#"{"family":"detail_thread_relief","d":20,"params":{"P":1.5},"x":10.0,"y":5.0,"rotation":0,"view":"main"}"#;
+        let resp = apply_part_pick(&sender, body).expect("退刀槽插入");
+        assert!(resp.contains("\"ok\":true"), "{resp}");
+        assert!(resp.contains("d20 P1.5"), "{resp}");
+        let inserts = mock.inserts();
+        assert_eq!(inserts.len(), 1, "只落一个 INSERT");
+        let (block, at, _) = &inserts[0];
+        assert!((at[0] - 10.0).abs() < 1e-9 && (at[1] - 5.0).abs() < 1e-9, "{at:?}");
+        assert!(block.contains("D20_P1_5"), "块名含规格：{block}");
+        let ents = mock.block_entities(block);
+        assert_eq!(ents.len(), 10, "上 5 + 下镜像 5");
+        assert!(
+            ents.iter().all(|e| e.common().layer == "1轮廓实线层"),
+            "全部 1轮廓实线层"
+        );
+        // xdata 台账：params.P 可追溯
+        let writes = mock.url_writes.lock().unwrap();
+        assert_eq!(writes.len(), 1, "写一条 OCSM_PART 记录");
+        let meta: serde_json::Value = serde_json::from_str(&writes[0].1).unwrap();
+        assert_eq!(meta["family"], "detail_thread_relief");
+        assert_eq!(meta["params"]["P"], 1.5);
+        assert_eq!(meta["code"], "GB/T 3-1997");
+        assert_eq!(meta["d"], 20.0);
+    }
+
+    /// 外螺纹退刀槽出库：`params` 同样走 `apply_part_export`（建块 + 待放置）。
+    #[test]
+    fn detail_thread_relief_export_with_params() {
+        let _g = export_lock();
+        let mock = Arc::new(MockSender::new(acadrust::CadDocument::new()));
+        let sender: Arc<dyn PluginRequestSender> = mock.clone();
+        let body = br#"{"family":"detail_thread_relief","d":20,"params":{"P":1.5,"g2":4.6},"view":"main"}"#;
+        let resp = apply_part_export(&sender, body).expect("退刀槽出库");
+        assert!(resp.contains("\"ok\":true"), "{resp}");
+        assert!(resp.contains("外螺纹退刀槽") && resp.contains("d20 P1.5 g1 2.5 g2 4.6"), "{resp}");
+        let ents = mock.block_entities("OCSM_DETAIL_THREAD_RELIEF_d20_P1_5_g1_2_5_g2_4_6_MAIN");
+        assert_eq!(ents.len(), 10, "上 5 + 下镜像 5");
     }
 
     /// GUI 实机自查用：把零件库窗口在固定端口上跑起来并**阻塞**，

@@ -1117,7 +1117,8 @@ pub fn size_row(family: &str, d: f64) -> Option<SizeRow> {
 ///
 /// 结构要素（`detail_*`）没有长度 l：本入口约定 `l` 槽位承载**可选 b1**
 ///（`l = 0` → 该 d 档默认行），方便预览/测试用一条统一入口；HTTP/CLI 侧
-/// 有显式 `b1` 字段，走 `generate_requested`。
+/// 有显式 `b1` 字段，走 `generate_requested`。外螺纹退刀槽需要 P（不是 b1），
+/// 走 `generate_requested_params`（本入口会明确报“需要 P”）。
 pub fn generate(family: &str, d: f64, l: f64, view: &str) -> Result<GenPart, String> {
     if let Some(result) = crate::detail::try_generate(family, d, (l > 0.0).then_some(l), view) {
         return result;
@@ -1159,15 +1160,28 @@ pub fn generate_requested(
     b1: Option<f64>,
     view: &str,
 ) -> Result<GenPart, String> {
+    generate_requested_params(family, d, l, &crate::detail::DetailParams::from_b1(b1), view)
+}
+
+/// 带**通用参数**的统一生成入口（第二期退刀槽的 `P/g1/g2/dg/r/alpha` 走这里；
+/// 标准件的参数集恒为空）。`b1` 与 `params` 合并，同名时 `params` 优先。
+pub fn generate_requested_params(
+    family: &str,
+    d: f64,
+    l: Option<f64>,
+    params: &crate::detail::DetailParams,
+    view: &str,
+) -> Result<GenPart, String> {
     if crate::detail::is_detail(family) {
-        return crate::detail::generate(family, d, b1, view);
+        return crate::detail::generate_params(family, d, params, view);
     }
     let l = l.ok_or_else(|| "缺少参数 l".to_string())?;
     generate(family, d, l, view)
 }
 
 /// URL 查询串（`family=hex_bolt_c&d=5&l=25&view=main`）→ 预览 SVG。
-/// 结构要素形如 `family=detail_grind_od&d=100[&b1=8]&view=main`（无 l）。
+/// 结构要素形如 `family=detail_grind_od&d=100[&b1=8]&view=main` 或
+/// `family=detail_thread_relief&d=20&P=1.5[&g1=…]&view=main`（无 l；参数自由带）。
 pub fn preview_svg(query: &str) -> Result<String, String> {
     if let Some(result) = crate::detail::preview_svg(query) {
         return result;
@@ -2017,11 +2031,11 @@ mod tests {
                 "{id} 的 views 与视图注册表不一致"
             );
             // 结构要素（detail_*）：**自由输入 d**、没有固定规格下拉；用目录里
-            // 第一档区间内的一个 d 试生成，不走下面的 sizes/lengths 校验。
+            // 族自报的示例（带 params）或第一档区间中点试生成，不走下面的 sizes/lengths 校验。
             if crate::detail::is_detail(id) {
-                let d = detail_sample_d(f);
+                let (d, params) = detail_sample(f);
                 for v in &views {
-                    crate::detail::generate(id, d, None, v)
+                    crate::detail::generate_params(id, d, &params, v)
                         .unwrap_or_else(|e| panic!("{id} d={d} {v} 生成失败: {e}"));
                 }
                 continue;
@@ -2060,23 +2074,42 @@ mod tests {
             "bearing_276",
             "bearing_297",
             "bearing_288",
-            // 结构要素（第一期：磨外圆）
+            // 结构要素（第一期磨外圆 + 第二期外螺纹退刀槽）
             "结构要素",
             "detail_grind_od",
             "磨外圆 GB/T 6403.5-2008",
+            "detail_thread_relief",
+            "外螺纹退刀槽 GB/T 3-1997",
         ] {
             assert!(tree.contains(needle), "树里缺 {needle}");
         }
     }
 
-    /// 目录里结构要素第一档取一个可生成的 d（自由输入，没有固定规格）。
-    fn detail_sample_d(f: &serde_json::Value) -> f64 {
+    /// 目录里结构要素的试生成样本：优先用族自报的 `sample`（新要素带参数，
+    /// 如退刀槽 `{"d":20,"P":1.5}`）；否则回落到第一档区间中点（磨外圆只有 b1）。
+    fn detail_sample(f: &serde_json::Value) -> (f64, crate::detail::DetailParams) {
+        if let Some(sample) = f.get("sample").and_then(|s| s.as_object()) {
+            let d = sample.get("d").and_then(|d| d.as_f64());
+            if let Some(d) = d {
+                let mut params = crate::detail::DetailParams::new();
+                for (key, value) in sample {
+                    if key == "d" {
+                        continue;
+                    }
+                    if let Some(value) = value.as_f64() {
+                        params.insert(key, value);
+                    }
+                }
+                return (d, params);
+            }
+        }
         let band = &f["bands"][0];
         let lo = band["lo"].as_f64().unwrap_or(1.0);
-        match band["hi"].as_f64() {
+        let d = match band["hi"].as_f64() {
             Some(hi) if hi.is_finite() => (lo.max(0.0) + hi) / 2.0,
             _ => lo.max(1.0) * 2.0,
-        }
+        };
+        (d, crate::detail::DetailParams::new())
     }
 
     /// 螺栓 ≠ 螺钉：两类东西，各有各的 kind 与树位置（用户 2026-09-16 明确）。

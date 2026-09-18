@@ -746,6 +746,8 @@ fn place_one(
 ///   例：`OCSMPART hex_bolt_c 10 95 at 150,30 rot 0`、`OCSMPART hex_bolt_ab 8 40`。
 /// - **结构要素**（`detail_*`）：没有长度 l，`<族> <d> [b1 <值>] [view <视图>] [at x,y] [rot 度]`
 ///   例：`OCSMPART detail_grind_od 100 b1 10 at 150,30 rot 0`（b1 缺省 = 该 d 档默认行）。
+/// - **外螺纹退刀槽**（`detail_thread_relief`）：`<族> <d> P <螺距> [g1 值 g2 值 dg 值 r 值 alpha 值] [at x,y] [rot 度]`
+///   例：`OCSMPART detail_thread_relief 20 P 1.5`（P 必给，其余可选，见 `detail.rs` 表 2）。
 ///
 /// 解析失败（或参数为空）返回 `None` → 回退到原 GUI（零件库窗口 + 鼠标放置）流程。
 #[derive(Debug, PartialEq)]
@@ -756,6 +758,8 @@ struct PartsSpec {
     l: f64,
     /// 结构要素可选 b1 覆盖（标准件恒为 None）。
     b1: Option<f64>,
+    /// 结构要素的通用数值参数（退刀槽的 P/g1/g2/dg/r/alpha；标准件恒为空）。
+    params: std::collections::BTreeMap<String, f64>,
     view: String,
     at: Option<[f64; 2]>,
     rotation: Option<f64>,
@@ -780,6 +784,7 @@ impl PartsSpec {
             d,
             l: 0.0,
             b1: None,
+            params: std::collections::BTreeMap::new(),
             view: "main".to_string(),
             at: None,
             rotation: None,
@@ -801,6 +806,15 @@ impl PartsSpec {
                         return None;
                     }
                     spec.b1 = Some(b1);
+                }
+                // 结构要素的通用数值参数（退刀槽：P 必给，g1/g2/dg/r/alpha 可选）。
+                // 不在这批关键字里的族会在生成时报“不认识参数 …”。
+                key if detail && matches!(key, "p" | "g1" | "g2" | "dg" | "r" | "alpha") => {
+                    let value: f64 = tokens.next()?.parse().ok()?;
+                    if !value.is_finite() {
+                        return None;
+                    }
+                    spec.params.insert(key.to_string(), value);
                 }
                 "view" | "--view" => {
                     let view = tokens.next()?;
@@ -851,6 +865,9 @@ impl PartsSpec {
         }
         if let Some(b1) = self.b1 {
             obj["b1"] = serde_json::json!(b1);
+        }
+        if !self.params.is_empty() {
+            obj["params"] = serde_json::json!(self.params);
         }
         if let Some([x, y]) = self.at {
             obj["x"] = serde_json::json!(x);
@@ -1840,7 +1857,9 @@ impl OcsmPlugin {
                         "OCSMPART 参数无效。用法：标准件 `OCSMPART <族> <d> <l> [view <视图>] [at x,y] [rot 度]`\
                          （例：OCSMPART hex_bolt_c 10 95 at 150,30 rot 0）；\
                          结构要素 `OCSMPART detail_grind_od <d> [b1 <值>] [at x,y] [rot 度]`\
-                         （b1 缺省 = 该 d 档默认行；不带参数则打开零件库窗口）。",
+                         （b1 缺省 = 该 d 档默认行）；\
+                         外螺纹退刀槽 `OCSMPART detail_thread_relief <d> P <螺距> [g1 值 g2 值 dg 值 r 值 alpha 值] [at x,y] [rot 度]`\
+                         （P 必给；不带参数则打开零件库窗口）。",
                     );
                     return;
                 }
@@ -3821,6 +3840,27 @@ mod tests {
         assert_eq!(body["b1"], 8.0);
         assert_eq!(body["x"], 1.0);
         assert_eq!(body["y"], 2.0);
+
+        // 外螺纹退刀槽：P 必给（通用 params），g1/g2/dg/r/alpha 可选；键大小写不敏感
+        let spec = PartsSpec::parse("DETAIL_THREAD_RELIEF 20 P 1.5").unwrap();
+        assert_eq!(spec.family, "detail_thread_relief");
+        assert_eq!(spec.params.get("p"), Some(&1.5));
+        assert_eq!(spec.b1, None);
+        let spec = PartsSpec::parse(
+            "detail_thread_relief 20 P 1.5 g1 2.5 g2 4.5 dg 17.7 r 0.8 alpha 30 at 10,20 rot 15",
+        )
+        .unwrap();
+        assert_eq!(spec.params.len(), 6);
+        assert_eq!(spec.params.get("alpha"), Some(&30.0));
+        assert_eq!(spec.at, Some([10.0, 20.0]));
+        assert_eq!(spec.rotation, Some(15.0));
+        let body: serde_json::Value = serde_json::from_str(&spec.to_body()).unwrap();
+        assert_eq!(body["family"], "detail_thread_relief");
+        assert_eq!(body["params"]["p"], 1.5);
+        assert_eq!(body["params"]["g1"], 2.5);
+        assert!(body.get("l").is_none(), "结构要素请求体不应带 l：{body}");
+        // 参数关键字只对结构要素开放：标准件写了 P 仍回退 GUI（不误吞）
+        assert_eq!(PartsSpec::parse("hex_bolt_c 10 95 p 1.5"), None);
 
         let spec = PartsSpec::parse("hex_bolt_c 10 95 view top at 150,30 rot 90").unwrap();
         assert_eq!(spec.view, "top");

@@ -246,6 +246,10 @@ rm -rf "$HOME/.config/OpenCADStudio/plugins/opencad.layers_quick"
   > 每族都有 "模板红 / 生成蓝" 叠合回归图与逐条数值断言。轴承与密封圈是**两参数件**（内径 + 宽度 B/T，或轴径 + 外径 D），
   > GUI 的长度下拉就是第二个参数。
   规格总数 241（尺寸/长度系列来源见 `src/tables/*.json` 的 `source` 字段）。
+- **结构要素**（与标准件并列的「结构要素」树，`kind=detail`，d 自由输入）：
+  第一期 `detail_grind_od`（磨外圆砂轮越程槽 GB/T 6403.5-2008，可选 `b1`）；
+  第二期 `detail_thread_relief`（外螺纹退刀槽 GB/T 3-1997 表 2，`P` 必给 + 可选 `g1/g2/dg/r/alpha`，斜壁 30° 下限）。
+  一站式说明见 `handbook/03-标准件库.md`「结构要素」；数据与画法的唯一来源是 `src/detail.rs`（新增要素只需实现 `DetailElement` + 进 `ELEMENTS`）。
   注：GB/T 5782 A/B 级 = 5780 C级画法 + **头部垫圈面 dw×c**（主/俯视图画、左视图不画；
   用户 2026-09-15 看图定案，画法依据 164580 官方 CAD 图实测；详见 OCSMBOM-plan.md §27.5）。
 - 自查工具：`tools/mpl_zh.py`（**matplotlib 中文字体开关**：不配的话标题/图例全是空心方框；

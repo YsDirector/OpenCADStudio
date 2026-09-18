@@ -34,6 +34,68 @@ use crate::partgen_kit::{arc, line, trim, LAYER_MAIN, LAYER_THIN};
 // 通用框架（一族 = 一个 DetailElement；新增要素只动本文件）
 // ══════════════════════════════════════════════════════════════════════════
 
+/// 结构要素的**通用数值参数**（键大小写不敏感，内部统一小写；保序便于错误信息稳定）。
+///
+/// 第一期磨外圆只有一个可选值 `b1`（历史槽位，仍走本结构）；第二期外螺纹退刀槽
+/// 用 `P`（必给）+ `g1/g2/dg/r/alpha`（可选覆盖）——不给每个要素单加一个字段。
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct DetailParams {
+    values: Vec<(String, f64)>,
+}
+
+impl DetailParams {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// 旧入口的 `b1` 槽位 → 参数集（`None` = 空）。
+    pub fn from_b1(b1: Option<f64>) -> Self {
+        let mut params = Self::new();
+        if let Some(value) = b1 {
+            params.insert("b1", value);
+        }
+        params
+    }
+
+    /// 从 `(键, 值)` 列表构造（测试与后续批量入口用；目前只在 `#[cfg(test)]` 里调用）。
+    #[allow(dead_code)]
+    pub fn from_pairs<K: Into<String>>(pairs: impl IntoIterator<Item = (K, f64)>) -> Self {
+        let mut params = Self::new();
+        for (key, value) in pairs {
+            params.insert(&key.into(), value);
+        }
+        params
+    }
+
+    /// 插入（键统一小写；同键覆盖原值）。
+    pub fn insert(&mut self, key: &str, value: f64) {
+        let key = key.to_ascii_lowercase();
+        if let Some(slot) = self.values.iter_mut().find(|(name, _)| *name == key) {
+            slot.1 = value;
+        } else {
+            self.values.push((key, value));
+        }
+    }
+
+    pub fn get(&self, key: &str) -> Option<f64> {
+        let key = key.to_ascii_lowercase();
+        self.values
+            .iter()
+            .find(|(name, _)| *name == key)
+            .map(|(_, value)| *value)
+    }
+
+    /// 历史 `b1` 槽位。
+    pub fn b1(&self) -> Option<f64> {
+        self.get("b1")
+    }
+
+    /// 全部键（小写，保持插入顺序）。
+    pub fn keys(&self) -> Vec<&str> {
+        self.values.iter().map(|(key, _)| key.as_str()).collect()
+    }
+}
+
 /// 一个「结构要素」族。每族自带数据表与画法；d 必给，`b1` 可选覆盖。
 pub trait DetailElement: Sync {
     /// 族 id（CLI / GUI / 树 / xdata 用）。
@@ -48,12 +110,36 @@ pub trait DetailElement: Sync {
     fn base_hint(&self) -> &'static str;
     /// 生成图元。`b1 = None` → 该 d 档默认行；`Some(b1)` → 档内按 b1 匹配（匹配不到报错）。
     fn generate(&self, d: f64, b1: Option<f64>, view: &str) -> Result<GenPart, String>;
+    /// **通用参数**入口（第二期起的新要素实现它；默认只认历史 `b1`）。
+    ///
+    /// 老要素（磨外圆）不必实现：默认实现把 `b1` 之外的键当错误报出来，
+    /// 保证「不认识 P/g1/… 的族」不会被静默按默认值出图。
+    fn generate_params(
+        &self,
+        d: f64,
+        params: &DetailParams,
+        view: &str,
+    ) -> Result<GenPart, String> {
+        let extra: Vec<&str> = params
+            .keys()
+            .into_iter()
+            .filter(|key| *key != "b1")
+            .collect();
+        if !extra.is_empty() {
+            return Err(format!(
+                "{}：不认识参数 {}（本族只支持 b1）",
+                self.name(),
+                extra.join("、")
+            ));
+        }
+        self.generate(d, params.b1(), view)
+    }
     /// 目录 JSON 的补充字段（`free_d` / `bands` 等，GUI 自由输入表单用）。
     fn catalog_extra(&self) -> serde_json::Value;
 }
 
 /// 已登记的要素（新增要素往这里加一项）。
-pub static ELEMENTS: &[&dyn DetailElement] = &[&GRIND_OD];
+pub static ELEMENTS: &[&dyn DetailElement] = &[&GRIND_OD, &THREAD_RELIEF];
 
 /// 族 id → 要素定义。
 pub fn find(family: &str) -> Option<&'static dyn DetailElement> {
@@ -72,6 +158,16 @@ pub fn family_views(family: &str) -> Vec<&'static str> {
 
 /// 生成（找不到族报错）。
 pub fn generate(family: &str, d: f64, b1: Option<f64>, view: &str) -> Result<GenPart, String> {
+    generate_params(family, d, &DetailParams::from_b1(b1), view)
+}
+
+/// 通用参数入口（外螺纹退刀槽等新要素；HTTP/CLI 的新参数都汇到这里）。
+pub fn generate_params(
+    family: &str,
+    d: f64,
+    params: &DetailParams,
+    view: &str,
+) -> Result<GenPart, String> {
     let element = find(family).ok_or_else(|| format!("结构要素族 {family} 尚未实现"))?;
     if !element.views().contains(&view) {
         return Err(format!(
@@ -80,7 +176,7 @@ pub fn generate(family: &str, d: f64, b1: Option<f64>, view: &str) -> Result<Gen
             element.views().join("/")
         ));
     }
-    element.generate(d, b1, view)
+    element.generate_params(d, params, view)
 }
 
 /// 生成（非结构要素族返回 None，交给标准件派发）。
@@ -120,15 +216,21 @@ pub fn families_json() -> serde_json::Map<String, serde_json::Value> {
     map
 }
 
-/// `/api/part_svg` 的**结构要素**分支（`family=…&d=…[&b1=…]&view=main`）。
+/// `/api/part_svg` 的**结构要素**分支（`family=…&d=…&view=main`）。
+///
+/// 除 `family` / `d` / `view` 外的键都当该族的参数（磨外圆的 `b1`、退刀槽的
+/// `P/g1/g2/dg/r/alpha`）交给 `generate_params`；参数不是数字直接报错。
 /// 返回 `None` = 不是结构要素，调用方走标准件分支。
 pub fn preview_svg(query: &str) -> Option<Result<String, String>> {
+    let pairs: Vec<(&str, &str)> = query
+        .split('&')
+        .filter_map(|kv| kv.split_once('='))
+        .collect();
     let get = |key: &str| {
-        query
-            .split('&')
-            .filter_map(|kv| kv.split_once('='))
+        pairs
+            .iter()
             .find(|(k, _)| *k == key)
-            .map(|(_, v)| v.to_string())
+            .map(|(_, v)| (*v).to_string())
     };
     let family = get("family")?;
     let element = find(&family)?;
@@ -137,12 +239,20 @@ pub fn preview_svg(query: &str) -> Option<Result<String, String>> {
             .ok_or("缺少参数 d")?
             .parse()
             .map_err(|_| "d 不是数字".to_string())?;
-        let b1 = match get("b1").as_deref() {
-            Some("") | None => None,
-            Some(text) => Some(text.parse::<f64>().map_err(|_| "b1 不是数字".to_string())?),
-        };
         let view = get("view").unwrap_or_else(|| "main".to_string());
-        let part = generate(element.family(), d, b1, &view)?;
+        let mut params = DetailParams::new();
+        for (key, value) in &pairs {
+            // `family/d/view` 已单独取；`l` 是标准件的长度槽位（结构要素本就没有长度，
+            // 旧行为是忽略它）——三者不当参数。空值当没给（旧 `&b1=` 的行为）。
+            if matches!(*key, "family" | "d" | "view" | "l") || value.is_empty() {
+                continue;
+            }
+            let value: f64 = value
+                .parse()
+                .map_err(|_| format!("参数 {key} 不是数字"))?;
+            params.insert(key, value);
+        }
+        let part = generate_params(element.family(), d, &params, &view)?;
         Ok(crate::partgen::to_svg(
             &part,
             &format!("{} {}", part.meta.code, part.meta.spec),
@@ -493,6 +603,417 @@ impl DetailElement for GrindOd {
 }
 
 // ══════════════════════════════════════════════════════════════════════════
+// 外螺纹退刀槽：数据表（GB/T 3-1997 表 2）
+// ══════════════════════════════════════════════════════════════════════════
+
+/// 族 id（CLI / GUI / 树 / xdata 用）。
+pub const FAMILY_THREAD_RELIEF: &str = "detail_thread_relief";
+
+/// 斜壁标称角（°，与**轴向**夹角）。GB/T 3-1997 表 2 注 3：
+/// 一般 30°，也允许 45° 或其他角度；本要素把 alpha 当**最小允许角**用。
+pub const DEFAULT_ALPHA_DEG: f64 = 30.0;
+
+/// 斜壁角的**取整容差**（°）。
+///
+/// 标准正文要求「过渡角 α 不应小于 30°」；表 2 的 g2(max)/g1(min) 是各自圆整的
+/// 极限值，拿它们反算的角最小 28.30°（P=0.45）、最大 33.69°（P=0.35），与标称
+/// 30° 最大差 1.70°。校验式取 `θ + 2° ≥ alpha`：默认 alpha=30° 时 23 行全部合法；
+/// 覆盖值把斜壁做平（θ < 28°）时报错。
+pub const WALL_ANGLE_TOL_DEG: f64 = 2.0;
+
+/// 示意螺纹段长度（mm）：图 2 里螺纹是继续向右延伸的，本要素固定画 5mm
+/// 示意段（不参与尺寸链；报告里已注明）。
+pub const THREAD_TAIL: f64 = 5.0;
+
+/// 表 2 的一行；**单键 = 螺距 P**（不依赖螺纹直径）。单位 mm。表头：
+/// `螺距 P | g2 (max) | g1 (min) | dg | r≈`。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ThreadReliefRow {
+    /// 螺距 P。
+    pub p: f64,
+    /// 退刀槽总宽 g2（台肩面 → 斜壁与螺纹大径 d 的交点）；表头标 **max**。
+    pub g2: f64,
+    /// 槽底平段终点 g1（台肩面 → 斜壁起点，含圆角段）；表头标 **min**。
+    pub g1: f64,
+    /// 直径减量 Δ：`dg = d − Δ`（表 2 的「dg」列印的是 `d−Δ`）。
+    pub dg_reduction: f64,
+    /// 槽底圆角半径 r（表头标 ≈）。
+    pub r: f64,
+}
+
+/// **GB/T 3-1997 表 2（外螺纹退刀槽）数据唯一来源**（改表只改这里）。
+///
+/// 出处：GB/T 3-1997《普通螺纹收尾、肩距、退刀槽和倒角》（等同 ISO 3508:1976 /
+/// ISO 4755:1977），表 2；数值抄自 <https://www.164580.com/data/detail_148.html>
+/// （用户 2026-09-19 核对与真标准一致）。单位 mm；23 行（P=0.25…6，**表 2 无 P=0.2**）。
+///
+/// 表头与正文注：`g2` 标 **max**、`g1` 标 **min**、`r≈`；正文「过渡角（α）不应小于 30°」；
+/// `dg` 公差 h13（d>3）/ h12（d≤3）。→ 本要素把 `alpha` 当**最小允许角**用。
+///
+/// **斜壁角自检的现实**：用户给的恒等式 `g2 ≈ g1 + ((d−dg)/2)/tan30°` 在
+/// g1/g2 同时按公式取整时精确；表 2 的 g1/g2 是各自独立圆整的**上下限值**，
+/// 取表中 g2(max)/g1(min) 反算的角最小 28.30°（P=0.45，比标称 30° 低 1.70°）
+/// → 全表最大偏差 **0.188mm**（P=6），只有 11/23 行落在 0.02 以内。
+/// 自检测试因此按表值实际精度 0.2mm 立断言，斜壁角按 `alpha − 2°` 校验
+/// （标准正文的 30° 下限在生产值上成立；表列极限值是圆整后的极值）。
+pub const THREAD_RELIEF_ROWS: &[ThreadReliefRow] = &[
+    ThreadReliefRow { p: 0.25, g2: 0.75, g1: 0.4, dg_reduction: 0.4, r: 0.12 },
+    ThreadReliefRow { p: 0.3, g2: 0.9, g1: 0.5, dg_reduction: 0.5, r: 0.16 },
+    ThreadReliefRow { p: 0.35, g2: 1.05, g1: 0.6, dg_reduction: 0.6, r: 0.16 },
+    ThreadReliefRow { p: 0.4, g2: 1.2, g1: 0.6, dg_reduction: 0.7, r: 0.2 },
+    ThreadReliefRow { p: 0.45, g2: 1.35, g1: 0.7, dg_reduction: 0.7, r: 0.2 },
+    ThreadReliefRow { p: 0.5, g2: 1.5, g1: 0.8, dg_reduction: 0.8, r: 0.2 },
+    ThreadReliefRow { p: 0.6, g2: 1.8, g1: 0.9, dg_reduction: 1.0, r: 0.4 },
+    ThreadReliefRow { p: 0.7, g2: 2.1, g1: 1.1, dg_reduction: 1.1, r: 0.4 },
+    ThreadReliefRow { p: 0.75, g2: 2.25, g1: 1.2, dg_reduction: 1.2, r: 0.4 },
+    ThreadReliefRow { p: 0.8, g2: 2.4, g1: 1.3, dg_reduction: 1.3, r: 0.4 },
+    ThreadReliefRow { p: 1.0, g2: 3.0, g1: 1.6, dg_reduction: 1.6, r: 0.6 },
+    ThreadReliefRow { p: 1.25, g2: 3.75, g1: 2.0, dg_reduction: 2.0, r: 0.6 },
+    ThreadReliefRow { p: 1.5, g2: 4.5, g1: 2.5, dg_reduction: 2.3, r: 0.8 },
+    ThreadReliefRow { p: 1.75, g2: 5.25, g1: 3.0, dg_reduction: 2.6, r: 1.0 },
+    ThreadReliefRow { p: 2.0, g2: 6.0, g1: 3.4, dg_reduction: 3.0, r: 1.0 },
+    ThreadReliefRow { p: 2.5, g2: 7.5, g1: 4.4, dg_reduction: 3.6, r: 1.2 },
+    ThreadReliefRow { p: 3.0, g2: 9.0, g1: 5.2, dg_reduction: 4.4, r: 1.6 },
+    ThreadReliefRow { p: 3.5, g2: 10.5, g1: 6.2, dg_reduction: 5.0, r: 1.6 },
+    ThreadReliefRow { p: 4.0, g2: 12.0, g1: 7.0, dg_reduction: 5.7, r: 2.0 },
+    ThreadReliefRow { p: 4.5, g2: 13.5, g1: 8.0, dg_reduction: 6.4, r: 2.5 },
+    ThreadReliefRow { p: 5.0, g2: 15.0, g1: 9.0, dg_reduction: 7.0, r: 2.5 },
+    ThreadReliefRow { p: 5.5, g2: 17.5, g1: 11.0, dg_reduction: 7.7, r: 3.2 },
+    ThreadReliefRow { p: 6.0, g2: 18.0, g1: 11.0, dg_reduction: 8.3, r: 3.2 },
+];
+
+/// 螺距 P → 表 2 行（1e-9 容差；表里没有就报错并列出可用 P，**不插值/不外推**）。
+pub fn thread_relief_row(p: f64) -> Result<&'static ThreadReliefRow, String> {
+    if !p.is_finite() || p <= 0.0 {
+        return Err(format!("外螺纹退刀槽：螺距 P 必须是正数（收到 {p}）"));
+    }
+    THREAD_RELIEF_ROWS
+        .iter()
+        .find(|row| (row.p - p).abs() < 1e-9)
+        .ok_or_else(|| {
+            let choices = THREAD_RELIEF_ROWS
+                .iter()
+                .map(|row| trim(row.p))
+                .collect::<Vec<_>>()
+                .join("、");
+            format!(
+                "外螺纹退刀槽：表 2 没有螺距 P={}（可用 P = {}；表 2 从 0.25 起，无 0.2）",
+                trim(p),
+                choices
+            )
+        })
+}
+
+/// 退刀槽实际尺寸（表值 + 可选覆盖），并附斜壁实际角供校验/台账。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ReliefDims {
+    pub p: f64,
+    pub d: f64,
+    /// 退刀槽直径（表值为 `d − 减量`）。
+    pub dg: f64,
+    pub g1: f64,
+    pub g2: f64,
+    pub r: f64,
+    /// 斜壁实际角（°，与轴线夹角；表值反算 ≈28.30°…33.69°）。
+    pub wall_angle_deg: f64,
+}
+
+/// 由 `d` + 参数解出退刀槽尺寸并做几何校验。
+///
+/// 参数：`P` 必给（表 2 单键）；`g1/g2/dg/r` 可选覆盖（给则覆盖表值）；
+/// `alpha` 可选（默认 30°，必须 ≥30°，实际斜壁角 `θ + WALL_ANGLE_TOL_DEG ≥ alpha`）。
+/// 其它键（如磨外圆的 `b1`）一律报错——不让笔误静默出图。
+pub fn relief_dims(d: f64, params: &DetailParams) -> Result<ReliefDims, String> {
+    const KNOWN: [&str; 6] = ["p", "g1", "g2", "dg", "r", "alpha"];
+    let unknown: Vec<&str> = params
+        .keys()
+        .into_iter()
+        .filter(|key| !KNOWN.contains(key))
+        .collect();
+    if !unknown.is_empty() {
+        return Err(format!(
+            "外螺纹退刀槽：不认识参数 {}（本族支持 P/g1/g2/dg/r/alpha）",
+            unknown.join("、")
+        ));
+    }
+    if !d.is_finite() || d <= 0.0 {
+        return Err(format!("外螺纹退刀槽：d 必须是正数（收到 {d}）"));
+    }
+    let p = params.get("P").ok_or_else(|| {
+        "外螺纹退刀槽：缺少螺距 P（写法 `XL detail_thread_relief <d> P <P>`）".to_string()
+    })?;
+    let row = thread_relief_row(p)?;
+    let dg = params.get("dg").unwrap_or(d - row.dg_reduction);
+    let g1 = params.get("g1").unwrap_or(row.g1);
+    let g2 = params.get("g2").unwrap_or(row.g2);
+    let r = params.get("r").unwrap_or(row.r);
+    let alpha = params.get("alpha").unwrap_or(DEFAULT_ALPHA_DEG);
+    for (name, value) in [("dg", dg), ("g1", g1), ("g2", g2), ("r", r)] {
+        if !value.is_finite() || value <= 0.0 {
+            return Err(format!("外螺纹退刀槽：{name} 必须是正数（收到 {value}）"));
+        }
+    }
+    if !alpha.is_finite() {
+        return Err("外螺纹退刀槽：alpha 不是有限数".to_string());
+    }
+    if alpha < DEFAULT_ALPHA_DEG {
+        return Err(format!(
+            "外螺纹退刀槽：alpha 必须 ≥ {}°（收到 {}°）—— 斜壁不能比 30° 更平",
+            trim(DEFAULT_ALPHA_DEG),
+            trim(alpha)
+        ));
+    }
+    if dg >= d {
+        return Err(format!(
+            "外螺纹退刀槽：dg（{}）必须小于螺纹大径 d（{}）",
+            trim(dg),
+            trim(d)
+        ));
+    }
+    if g2 <= g1 {
+        return Err(format!(
+            "外螺纹退刀槽：g2（{}）必须大于 g1（{}）",
+            trim(g2),
+            trim(g1)
+        ));
+    }
+    if g1 <= r {
+        return Err(format!(
+            "外螺纹退刀槽：g1（{}）必须大于圆角 r（{}），否则圆角与斜壁打架",
+            trim(g1),
+            trim(r)
+        ));
+    }
+    let half = (d - dg) / 2.0;
+    if r > half + 1e-9 {
+        return Err(format!(
+            "外螺纹退刀槽：圆角 r（{}）超过槽深 (d−dg)/2（{}），圆角伸到螺纹大径之外",
+            trim(r),
+            trim(half)
+        ));
+    }
+    let wall_angle_deg = (half / (g2 - g1)).atan().to_degrees();
+    if wall_angle_deg + WALL_ANGLE_TOL_DEG < alpha {
+        return Err(format!(
+            "外螺纹退刀槽：斜壁实际角 {:.2}° 小于 alpha {:.2}°（含表 2 取整容差 {:.0}°）—— 检查 g1/g2/dg 覆盖值",
+            wall_angle_deg, alpha, WALL_ANGLE_TOL_DEG
+        ));
+    }
+    Ok(ReliefDims {
+        p,
+        d,
+        dg,
+        g1,
+        g2,
+        r,
+        wall_angle_deg,
+    })
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// 外螺纹退刀槽：画法（图 2）
+// ══════════════════════════════════════════════════════════════════════════
+
+/// 退刀槽图元（照图 2 口径）：上半 5 条 + 下半镜像 5 条，全部 `1轮廓实线层`。
+///
+/// 锚点 = 台肩面与轴线交点 `(0,0)`，轴向向右为 `+x`、`y` 为半径：
+/// 台肩面竖线 `x=0`（`dg/2+r` → `d/2+r`）、R=r 圆角（心 `(r, dg/2+r)`，180°→270°）、
+/// 槽底 `y=dg/2`（`x=r…g1`）、30° 斜壁 `(g1,dg/2)→(g2,d/2)`、螺纹外圆示意段
+/// `y=d/2`（`x=g2…g2+THREAD_TAIL`）。
+///
+/// **台肩面只画到 `d/2+r`**（比螺纹大径高一个 r），与磨外圆要素的「台阶面到
+/// d/2+r」同口径；**螺纹示意段固定 5mm**（图 2 里螺纹继续延伸，本要素不闭环）。
+fn build_thread_relief(dims: &ReliefDims) -> GenPart {
+    let yb = dims.dg / 2.0; // 槽底半径
+    let yt = dims.d / 2.0; // 螺纹大径半径
+    let ys = yb + dims.r; // 台肩面下端（圆角切点）
+    let ytop = yt + dims.r; // 台肩面上端
+    let mut entities = Vec::with_capacity(10);
+
+    // 上半侧：台肩面 / R=r 圆角 / 槽底 / 斜壁 / 螺纹外圆示意段
+    entities.push(line([0.0, ys], [0.0, ytop], LAYER_MAIN));
+    entities.push(arc([dims.r, ys], dims.r, 180.0, 270.0, LAYER_MAIN));
+    entities.push(line([dims.r, yb], [dims.g1, yb], LAYER_MAIN));
+    entities.push(line([dims.g1, yb], [dims.g2, yt], LAYER_MAIN));
+    entities.push(line(
+        [dims.g2, yt],
+        [dims.g2 + THREAD_TAIL, yt],
+        LAYER_MAIN,
+    ));
+
+    // 下半侧：对 y 镜像
+    entities.push(line([0.0, -ys], [0.0, -ytop], LAYER_MAIN));
+    entities.push(arc([dims.r, -ys], dims.r, 90.0, 180.0, LAYER_MAIN));
+    entities.push(line([dims.r, -yb], [dims.g1, -yb], LAYER_MAIN));
+    entities.push(line([dims.g1, -yb], [dims.g2, -yt], LAYER_MAIN));
+    entities.push(line(
+        [dims.g2, -yt],
+        [dims.g2 + THREAD_TAIL, -yt],
+        LAYER_MAIN,
+    ));
+
+    let bbox = entity_bbox(&entities);
+    GenPart {
+        entities,
+        meta: PartMeta {
+            code: "GB/T 3-1997".into(),
+            name: "外螺纹退刀槽".into(),
+            spec: format!(
+                "d{} P{} g1 {} g2 {}",
+                trim(dims.d),
+                trim(dims.p),
+                trim(dims.g1),
+                trim(dims.g2)
+            ),
+            material: String::new(),
+            weight: String::new(),
+        },
+        bbox,
+    }
+}
+
+/// 外螺纹退刀槽的要素定义（登记到 `ELEMENTS`）。
+pub struct ThreadRelief;
+
+/// 单例（`ELEMENTS` 里的引用）。
+pub static THREAD_RELIEF: ThreadRelief = ThreadRelief;
+
+impl DetailElement for ThreadRelief {
+    fn family(&self) -> &'static str {
+        FAMILY_THREAD_RELIEF
+    }
+
+    fn name(&self) -> &'static str {
+        "外螺纹退刀槽"
+    }
+
+    fn code(&self) -> &'static str {
+        "GB/T 3-1997"
+    }
+
+    fn views(&self) -> &'static [&'static str] {
+        &["main"]
+    }
+
+    fn base_hint(&self) -> &'static str {
+        "基点 = 台肩面与轴线交点（轴线为 x 轴；d = 螺纹公称直径）"
+    }
+
+    /// 历史 `b1` 槽位表达不了必给的 P —— 明确报错指路（不让默认值静默出图）。
+    fn generate(&self, _d: f64, _b1: Option<f64>, _view: &str) -> Result<GenPart, String> {
+        Err("外螺纹退刀槽需要螺距 P：请用 `XL detail_thread_relief <d> P <P> [g1 值 …]`"
+            .to_string())
+    }
+
+    fn generate_params(
+        &self,
+        d: f64,
+        params: &DetailParams,
+        _view: &str,
+    ) -> Result<GenPart, String> {
+        Ok(build_thread_relief(&relief_dims(d, params)?))
+    }
+
+    fn catalog_extra(&self) -> serde_json::Value {
+        serde_json::json!({
+            "tree_dir": "结构要素/退刀槽",
+            "d_label": "螺纹公称直径 d（mm，自由输入）",
+            "default_d": 20,
+            "source": "GB/T 3-1997（ISO 3508:1976 / ISO 4755:1977）表 2；抄自 164580.com/data/detail_148.html（用户 2026-09-19 核对）",
+            "thread_tail": THREAD_TAIL,
+            // GUI 自由参数面板：id/必给/顺序全由这份数据驱动（磨外圆没有 inputs，仍走 b1）
+            "inputs": [
+                { "key": "P", "label": "螺距 P（mm，必给；表 2 单键）", "required": true, "placeholder": "例如 1.5" },
+                { "key": "g1", "label": "g1 覆盖（mm，留空 = 表值）" },
+                { "key": "g2", "label": "g2 覆盖（mm，留空 = 表值）" },
+                { "key": "dg", "label": "dg 覆盖（mm，留空 = d − 表值减量）" },
+                { "key": "r", "label": "r 覆盖（mm，留空 = 表值）" },
+                { "key": "alpha", "label": "斜壁最小角 α（°，默认 30，必须 ≥30）" },
+            ],
+            "pitches": THREAD_RELIEF_ROWS
+                .iter()
+                .map(|row| serde_json::json!({
+                    "P": row.p,
+                    "g2": row.g2,
+                    "g1": row.g1,
+                    "dg_reduction": row.dg_reduction,
+                    "r": row.r,
+                }))
+                .collect::<Vec<_>>(),
+            "sample": { "d": 20, "P": 1.5 },
+        })
+    }
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// 表 1（收尾 / 肩距）——下一轮「局部螺纹 + 收尾」用，先以数据存好
+// ══════════════════════════════════════════════════════════════════════════
+
+/// GB/T 3-1997 表 1（外螺纹收尾与肩距）一行；单位 mm。
+///
+/// 出处：GB/T 3-1997 表 1（ISO 3508/ISO 4755），抄自
+/// <https://www.164580.com/data/detail_148.html>（用户 2026-09-19 核对）。
+///
+/// **订正记录**：网页 P=1.75 行的 `x一般` 印成 **1.3**，用户核对真标准为 **4.3**
+/// （与参考比例 2.5P=4.375 及前后行 3.8 / 5.0 的序列一致）——本表已用 4.3。
+///
+/// 本文件目前只存数据 + 比例自检；画法在下一轮「局部螺纹 + 收尾/肩距」时再用。
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RunoutRow {
+    /// 螺距 P（表 1 从 0.2 起，比表 2 多一行 0.2）。
+    pub p: f64,
+    /// 收尾 x（一般）≈2.5P。
+    pub x_normal: f64,
+    /// 收尾 x（短）≈1.25P。
+    pub x_short: f64,
+    /// 肩距 a（一般）≈3P。
+    pub a_normal: f64,
+    /// 肩距 a（长）= 4P。
+    pub a_long: f64,
+    /// 肩距 a（短）= 2P。
+    pub a_short: f64,
+}
+
+/// GB/T 3-1997 表 1 数据（24 行，P=0.2…6）；本文件只存数据 + 比例自检，
+/// 画法在下一轮「局部螺纹 + 收尾/肩距」时再用。
+#[allow(dead_code)]
+pub const RUNOUT_ROWS: &[RunoutRow] = &[
+    RunoutRow { p: 0.2, x_normal: 0.5, x_short: 0.25, a_normal: 0.6, a_long: 0.8, a_short: 0.4 },
+    RunoutRow { p: 0.25, x_normal: 0.6, x_short: 0.3, a_normal: 0.75, a_long: 1.0, a_short: 0.5 },
+    RunoutRow { p: 0.3, x_normal: 0.75, x_short: 0.4, a_normal: 0.9, a_long: 1.2, a_short: 0.6 },
+    RunoutRow { p: 0.35, x_normal: 0.9, x_short: 0.45, a_normal: 1.05, a_long: 1.4, a_short: 0.7 },
+    RunoutRow { p: 0.4, x_normal: 1.0, x_short: 0.5, a_normal: 1.2, a_long: 1.6, a_short: 0.8 },
+    RunoutRow { p: 0.45, x_normal: 1.1, x_short: 0.6, a_normal: 1.35, a_long: 1.8, a_short: 0.9 },
+    RunoutRow { p: 0.5, x_normal: 1.25, x_short: 0.7, a_normal: 1.5, a_long: 2.0, a_short: 1.0 },
+    RunoutRow { p: 0.6, x_normal: 1.5, x_short: 0.75, a_normal: 1.8, a_long: 2.4, a_short: 1.2 },
+    RunoutRow { p: 0.7, x_normal: 1.75, x_short: 0.9, a_normal: 2.1, a_long: 2.8, a_short: 1.4 },
+    RunoutRow { p: 0.75, x_normal: 1.9, x_short: 1.0, a_normal: 2.25, a_long: 3.0, a_short: 1.5 },
+    RunoutRow { p: 0.8, x_normal: 2.0, x_short: 1.0, a_normal: 2.4, a_long: 3.2, a_short: 1.6 },
+    RunoutRow { p: 1.0, x_normal: 2.5, x_short: 1.25, a_normal: 3.0, a_long: 4.0, a_short: 2.0 },
+    RunoutRow { p: 1.25, x_normal: 3.2, x_short: 1.6, a_normal: 4.0, a_long: 5.0, a_short: 2.5 },
+    RunoutRow { p: 1.5, x_normal: 3.8, x_short: 1.9, a_normal: 4.5, a_long: 6.0, a_short: 3.0 },
+    // ↓ 网页此处 x一般 印 1.3，真标准 4.3（见 `RunoutRow` 文档注释的订正记录）
+    RunoutRow { p: 1.75, x_normal: 4.3, x_short: 2.2, a_normal: 5.3, a_long: 7.0, a_short: 3.5 },
+    RunoutRow { p: 2.0, x_normal: 5.0, x_short: 2.5, a_normal: 6.0, a_long: 8.0, a_short: 4.0 },
+    RunoutRow { p: 2.5, x_normal: 6.3, x_short: 3.2, a_normal: 7.5, a_long: 10.0, a_short: 5.0 },
+    RunoutRow { p: 3.0, x_normal: 7.5, x_short: 3.8, a_normal: 9.0, a_long: 12.0, a_short: 6.0 },
+    RunoutRow { p: 3.5, x_normal: 9.0, x_short: 4.5, a_normal: 10.5, a_long: 14.0, a_short: 7.0 },
+    RunoutRow { p: 4.0, x_normal: 10.0, x_short: 5.0, a_normal: 12.0, a_long: 16.0, a_short: 8.0 },
+    RunoutRow { p: 4.5, x_normal: 11.0, x_short: 5.5, a_normal: 13.5, a_long: 18.0, a_short: 9.0 },
+    RunoutRow { p: 5.0, x_normal: 12.5, x_short: 6.3, a_normal: 15.0, a_long: 20.0, a_short: 10.0 },
+    RunoutRow { p: 5.5, x_normal: 14.0, x_short: 7.0, a_normal: 16.5, a_long: 22.0, a_short: 11.0 },
+    RunoutRow { p: 6.0, x_normal: 15.0, x_short: 7.5, a_normal: 18.0, a_long: 24.0, a_short: 12.0 },
+];
+
+/// 螺距 P → 表 1 行（1e-9 容差；找不到返回 `None`，下一轮画收尾时再定报错口径）。
+/// 下一轮「局部螺纹 + 收尾」的入口，本轮只随数据一起备好。
+#[allow(dead_code)]
+pub fn runout_row(p: f64) -> Option<&'static RunoutRow> {
+    RUNOUT_ROWS.iter().find(|row| (row.p - p).abs() < 1e-9)
+}
+
+// ══════════════════════════════════════════════════════════════════════════
 // 测试
 // ══════════════════════════════════════════════════════════════════════════
 
@@ -745,5 +1266,311 @@ mod tests {
             .unwrap_err();
         assert!(err.contains("可选 b1"), "{err}");
         assert!(preview_svg("family=hex_bolt_c&d=5&l=25").is_none());
+    }
+
+    // ── 外螺纹退刀槽（GB/T 3-1997 表 2）──────────────────────────────────
+
+    /// 表 2：23 行、按 P 查表、demo 行数值；P=0.2 明确不在表里。
+    #[test]
+    fn thread_relief_table2_lookup() {
+        assert_eq!(THREAD_RELIEF_ROWS.len(), 23);
+        let row = thread_relief_row(1.5).expect("P=1.5 在表 2");
+        assert!(
+            near(row.g1, 2.5) && near(row.g2, 4.5) && near(row.dg_reduction, 2.3) && near(row.r, 0.8),
+            "d=20/P=1.5 行 {row:?}"
+        );
+        let row = thread_relief_row(0.25).expect("P=0.25 在表 2");
+        assert!(near(row.g1, 0.4) && near(row.g2, 0.75) && near(row.r, 0.12));
+        let row = thread_relief_row(6.0).expect("P=6 在表 2");
+        assert!(near(row.g1, 11.0) && near(row.g2, 18.0) && near(row.dg_reduction, 8.3));
+        // 表 2 从 0.25 起（无 0.2 行）——报错要列出可用 P
+        let err = thread_relief_row(0.2).expect_err("P=0.2 不在表 2");
+        assert!(err.contains("0.25") && err.contains("0.2"), "{err}");
+        assert!(thread_relief_row(1.3).is_err());
+        assert!(thread_relief_row(0.0).is_err());
+        assert!(thread_relief_row(f64::NAN).is_err());
+    }
+
+    /// 斜壁角自检（用户给的恒等式 `g2 ≈ g1 + ((d−dg)/2)/tan30°`）。
+    ///
+    /// 实测：表 2 的 g1/g2 是各自圆整的 min/max 极限值，恒等式**只有 11/23 行**
+    /// 落在 0.02 内，最大偏差 0.188mm（P=6）——所以 0.02 容差版本不能当全表断言；
+    /// 本测试按表值实际精度 0.2 立断言，并钉死最大偏差与最小斜壁角（表 2 正文
+    /// 要求过渡角 α ≥30°；表列极限值圆整后最低 28.30°，即“ 30° 为下限”的含意）。
+    #[test]
+    fn thread_relief_wall_angle_identity() {
+        let tan30 = DEFAULT_ALPHA_DEG.to_radians().tan();
+        let mut max_err = 0.0_f64;
+        let mut min_angle = f64::INFINITY;
+        let mut within_0_02 = 0;
+        for row in THREAD_RELIEF_ROWS {
+            let ideal = row.g1 + (row.dg_reduction / 2.0) / tan30;
+            let err = (row.g2 - ideal).abs();
+            max_err = max_err.max(err);
+            if err <= 0.02 {
+                within_0_02 += 1;
+            }
+            let angle = ((row.dg_reduction / 2.0) / (row.g2 - row.g1)).atan().to_degrees();
+            min_angle = min_angle.min(angle);
+            assert!(
+                angle + WALL_ANGLE_TOL_DEG >= DEFAULT_ALPHA_DEG,
+                "P={} 斜壁实际角 {angle:.3}° 低于 alpha−容差",
+                row.p
+            );
+        }
+        assert_eq!(within_0_02, 11, "容差 0.02 只对 11 行成立（表值各自取整）");
+        assert!((max_err - 0.188).abs() < 1e-3, "最大偏差 {max_err}（P=6）");
+        assert!((min_angle - 28.301).abs() < 1e-3, "最小斜壁角 {min_angle}°（P=0.45）");
+    }
+
+    /// 示例 d=20、P=1.5：逐图元核对图 2 口径（dg=17.7 / g1=2.5 / g2=4.5 / r=0.8）。
+    #[test]
+    fn thread_relief_geometry_d20_p1_5() {
+        let params = DetailParams::from_pairs([("P", 1.5)]);
+        let part = generate_params(FAMILY_THREAD_RELIEF, 20.0, &params, "main").expect("应能出图");
+        assert_eq!(part.entities.len(), 10, "上 5 + 下镜像 5");
+        assert!(
+            part.entities
+                .iter()
+                .all(|e| e.common().layer == LAYER_MAIN),
+            "全部 1轮廓实线层"
+        );
+        // 上半：台肩面 x=0（圆角切点 9.65 → 大径+ r = 10.8）
+        assert!(has_line(&part, [0.0, 9.65], [0.0, 10.8]), "台肩面");
+        assert!(has_arc(&part, [0.8, 9.65], 0.8, 180.0, 270.0), "上圆角");
+        assert!(has_line(&part, [0.8, 8.85], [2.5, 8.85]), "槽底");
+        assert!(has_line(&part, [2.5, 8.85], [4.5, 10.0]), "30° 斜壁");
+        assert!(has_line(&part, [4.5, 10.0], [9.5, 10.0]), "螺纹示意段 5mm");
+        // 下半：镜像
+        assert!(has_line(&part, [0.0, -9.65], [0.0, -10.8]));
+        assert!(has_arc(&part, [0.8, -9.65], 0.8, 90.0, 180.0));
+        assert!(has_line(&part, [0.8, -8.85], [2.5, -8.85]));
+        assert!(has_line(&part, [2.5, -8.85], [4.5, -10.0]));
+        assert!(has_line(&part, [4.5, -10.0], [9.5, -10.0]));
+        // 元数据 / 包围盒（含台肩面高出大径的一个 r）
+        assert_eq!(part.meta.code, "GB/T 3-1997");
+        assert_eq!(part.meta.name, "外螺纹退刀槽");
+        assert_eq!(part.meta.spec, "d20 P1.5 g1 2.5 g2 4.5");
+        assert_eq!(part.bbox, [0.0, -10.8, 9.5, 10.8]);
+        // 尺寸解算：dg=17.7，斜壁实际角 29.899°（表值取整，标称 30°）
+        let dims = relief_dims(20.0, &params).unwrap();
+        assert!(near(dims.dg, 17.7), "dg=17.7");
+        assert!((dims.wall_angle_deg - 29.899).abs() < 1e-3, "{}", dims.wall_angle_deg);
+    }
+
+    /// 覆盖参数与非法几何：P 必给/不在表、d≤0、alpha<30、g1/g2/r/dg 打架。
+    #[test]
+    fn thread_relief_overrides_and_rejects_bad_geometry() {
+        // P 必给
+        let err = relief_dims(20.0, &DetailParams::new()).expect_err("缺 P");
+        assert!(err.contains("P") && err.contains("detail_thread_relief"), "{err}");
+        // d ≤ 0 / 非数
+        assert!(relief_dims(0.0, &DetailParams::from_pairs([("P", 1.5)])).is_err());
+        assert!(relief_dims(f64::NAN, &DetailParams::from_pairs([("P", 1.5)])).is_err());
+        // alpha < 30 报错；alpha = 30 可以不写
+        let err = relief_dims(20.0, &DetailParams::from_pairs([("P", 1.5), ("alpha", 25.0)]))
+            .expect_err("alpha<30");
+        assert!(err.contains("alpha") && err.contains("30"), "{err}");
+        assert!(relief_dims(20.0, &DetailParams::from_pairs([("P", 1.5), ("alpha", 30.0)])).is_ok());
+        // 覆盖 dg：槽更深（斜壁更陡），合法
+        let dims = relief_dims(20.0, &DetailParams::from_pairs([("P", 1.5), ("dg", 16.0)])).unwrap();
+        assert!(near(dims.dg, 16.0));
+        assert!(near(dims.wall_angle_deg, 45.0), "{}", dims.wall_angle_deg);
+        // 覆盖 g2 过大 → 斜壁太平（11.8°）→ 报错
+        let err = relief_dims(20.0, &DetailParams::from_pairs([("P", 1.5), ("g2", 8.0)]))
+            .expect_err("斜壁太浅");
+        assert!(err.contains("斜壁") && err.contains("11.8"), "{err}");
+        // g2 ≤ g1 / g1 ≤ r / r 超过槽深 / dg ≥ d
+        assert!(relief_dims(20.0, &DetailParams::from_pairs([("P", 1.5), ("g2", 2.0)])).is_err());
+        assert!(relief_dims(20.0, &DetailParams::from_pairs([("P", 1.5), ("g1", 0.5)])).is_err());
+        assert!(relief_dims(20.0, &DetailParams::from_pairs([("P", 1.5), ("r", 1.2)])).is_err());
+        assert!(relief_dims(20.0, &DetailParams::from_pairs([("P", 1.5), ("dg", 20.0)])).is_err());
+        // 覆盖 g1/r 正常路径：几何跟着变
+        let part = generate_params(
+            FAMILY_THREAD_RELIEF,
+            20.0,
+            &DetailParams::from_pairs([("P", 1.5), ("g1", 3.0), ("r", 0.5)]),
+            "main",
+        )
+        .unwrap();
+        assert!(has_line(&part, [0.5, 8.85], [3.0, 8.85]), "新槽底");
+        assert!(has_arc(&part, [0.5, 9.35], 0.5, 180.0, 270.0), "新圆角");
+        // 历史 b1 槽位不能表达 P：明确报错（不静默用默认值）
+        assert!(generate(FAMILY_THREAD_RELIEF, 20.0, None, "main").is_err());
+        // 磨外圆的默认 generate_params 不认新参数
+        let err = generate_params(FAMILY_GRIND_OD, 100.0, &DetailParams::from_pairs([("P", 1.5)]), "main")
+            .expect_err("磨外圆不认 P");
+        assert!(err.contains("不认识参数"), "{err}");
+        // 退刀槽反过来不认 b1（防笔误静默出图）
+        let err = relief_dims(20.0, &DetailParams::from_pairs([("P", 1.5), ("b1", 3.0)]))
+            .expect_err("退刀槽不认 b1");
+        assert!(err.contains("不认识参数") && err.contains("b1"), "{err}");
+    }
+
+    /// 目录 / 文件树 / 预览 SVG 的接线（与磨外圆并列但在同一棵「结构要素」下）。
+    #[test]
+    fn thread_relief_registry_catalog_and_preview() {
+        assert!(is_detail(FAMILY_THREAD_RELIEF));
+        assert_eq!(family_views(FAMILY_THREAD_RELIEF), vec!["main"]);
+        let cat: serde_json::Value = serde_json::from_str(&crate::partgen::catalog_json()).unwrap();
+        let family = &cat["families"][FAMILY_THREAD_RELIEF];
+        assert_eq!(family["kind"], "detail");
+        assert_eq!(family["tree_dir"], "结构要素/退刀槽");
+        assert_eq!(family["free_d"], true);
+        assert_eq!(family["inputs"].as_array().unwrap().len(), 6, "自由参数面板");
+        assert_eq!(family["inputs"][0]["key"], "P");
+        assert_eq!(family["inputs"][0]["required"], true);
+        assert_eq!(family["pitches"].as_array().unwrap().len(), 23, "表 2 进目录");
+        assert_eq!(family["sample"]["d"], 20.0);
+        assert_eq!(family["sample"]["P"], 1.5);
+        let roots = cat["tree"].as_array().unwrap();
+        let root = roots
+            .iter()
+            .find(|n| n["name"] == "结构要素")
+            .expect("结构要素根树");
+        let dir = root["children"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|n| n["name"] == "退刀槽")
+            .expect("结构要素/退刀槽");
+        assert_eq!(dir["children"][0]["name"], "外螺纹退刀槽 GB/T 3-1997");
+        assert_eq!(dir["children"][0]["family"], FAMILY_THREAD_RELIEF);
+        // 预览：无 l，P 从 URL 参数进（大小写不敏感）；覆盖 g1 进几何
+        let svg = preview_svg("family=detail_thread_relief&d=20&P=1.5")
+            .expect("是结构要素")
+            .expect("d=20 P=1.5 应能出图");
+        assert!(svg.contains("<svg") && svg.contains("d20 P1.5 g1 2.5 g2 4.5"), "{svg}");
+        let svg = preview_svg("family=detail_thread_relief&d=20&P=1.5&g1=3")
+            .unwrap()
+            .unwrap();
+        assert!(svg.contains("g1 3"), "{svg}");
+        let err = preview_svg("family=detail_thread_relief&d=20")
+            .unwrap()
+            .expect_err("缺 P");
+        assert!(err.contains("P"), "{err}");
+        let err = preview_svg("family=detail_thread_relief&d=20&P=1.3")
+            .unwrap()
+            .expect_err("P 不在表 2");
+        assert!(err.contains("0.25"), "{err}");
+        let err = preview_svg("family=detail_thread_relief&d=20&P=x")
+            .unwrap()
+            .expect_err("P 不是数字");
+        assert!(err.contains("不是数字"), "{err}");
+        let err = preview_svg("family=detail_thread_relief&d=20&P=1.5&b1=3")
+            .unwrap()
+            .expect_err("退刀槽不认 b1");
+        assert!(err.contains("不认识参数"), "{err}");
+        // 空值 / 无关的 `l` 不当参数（旧行为：忽略）；磨外圆 b1=8 仍照旧
+        let svg = preview_svg("family=detail_grind_od&d=100&b1=&l=25")
+            .expect("是结构要素")
+            .expect("空值应忽略");
+        assert!(svg.contains("d100 b1 10"), "{svg}");
+    }
+
+    /// 表 1（收尾/肩距）：已按数据存好，比例自检；P=1.75 的 `x一般` 用订正后的 4.3。
+    #[test]
+    fn runout_table1_ratios_are_self_consistent() {
+        assert_eq!(RUNOUT_ROWS.len(), 24);
+        assert!(near(RUNOUT_ROWS[0].p, 0.2), "表 1 从 P=0.2 起");
+        for row in RUNOUT_ROWS {
+            // 表值是圆整到 0.05/0.1 的：x 一般/短 与 a 一般 用 0.2P 容差
+            // （实测最大偏差 0.25mm：x一般 P=3.5，a一般 P=1.25）
+            let tol = 0.2 * row.p + 1e-9;
+            assert!(
+                (row.x_normal - 2.5 * row.p).abs() <= tol,
+                "P={} x一般 {} vs 2.5P {}",
+                row.p,
+                row.x_normal,
+                2.5 * row.p
+            );
+            assert!(
+                (row.x_short - 1.25 * row.p).abs() <= tol,
+                "P={} x短 {} vs 1.25P {}",
+                row.p,
+                row.x_short,
+                1.25 * row.p
+            );
+            assert!(
+                (row.a_normal - 3.0 * row.p).abs() <= tol,
+                "P={} a一般 {} vs 3P {}",
+                row.p,
+                row.a_normal,
+                3.0 * row.p
+            );
+            // a长 = 4P、a短 = 2P 是全表精确值
+            assert!(near(row.a_long, 4.0 * row.p), "P={} a长 = 4P", row.p);
+            assert!(near(row.a_short, 2.0 * row.p), "P={} a短 = 2P", row.p);
+        }
+        // 订正记录：网页 P=1.75 的 x一般 印成 1.3，真标准为 4.3
+        let row = runout_row(1.75).expect("P=1.75 在表 1");
+        assert!(near(row.x_normal, 4.3), "P=1.75 x一般 应为 4.3（非 1.3）");
+        // 表 1 的 P 集合 ⊃ 表 2（多一行 0.2）
+        assert_eq!(RUNOUT_ROWS.len(), THREAD_RELIEF_ROWS.len() + 1);
+        assert!(runout_row(0.2).is_some() && thread_relief_row(0.2).is_err());
+    }
+
+    /// 示例几何 → `~/桌面/OCSM/review/relief_demo.csv`（列同 `shaft_demo.csv`）。
+    ///
+    /// 供人工/工具与 GB/T 3 图 2 逐图元叠合核对。
+    #[test]
+    fn thread_relief_demo_csv_dump() {
+        let part = generate_params(
+            FAMILY_THREAD_RELIEF,
+            20.0,
+            &DetailParams::from_pairs([("P", 1.5)]),
+            "main",
+        )
+        .unwrap();
+        let csv = entities_csv(&part.entities);
+        let path = std::env::var("HOME")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|_| std::path::PathBuf::from("/tmp"))
+            .join("桌面/OCSM/review");
+        std::fs::create_dir_all(&path).expect("建 review 目录");
+        let file = path.join("relief_demo.csv");
+        std::fs::write(&file, &csv).expect("写 relief_demo.csv");
+        assert!(file.is_file(), "demo CSV 已落盘：{}", file.display());
+        assert!(csv.contains("LINE") && csv.contains("ARC"), "{csv}");
+        assert_eq!(part.entities.len(), 10, "demo 图元数");
+        assert!(
+            csv.contains("ARC,0.000000,9.650000,0.800000,8.850000,1轮廓实线层,0.800000,9.650000,0.800000,180.0000,270.0000"),
+            "上圆角一行：{csv}"
+        );
+    }
+
+    /// 图元序列 → CSV（列：entity,x1,y1,x2,y2,layer,cx,cy,r,a0,a1）。
+    /// 与 `shaft.rs::tests::entities_csv` 同格式（本模块只出 LINE/ARC）。
+    fn entities_csv(entities: &[EntityType]) -> String {
+        let mut csv = String::from("entity,x1,y1,x2,y2,layer,cx,cy,r,a0,a1\n");
+        for entity in entities {
+            match entity {
+                EntityType::Line(l) => csv.push_str(&format!(
+                    "LINE,{:.6},{:.6},{:.6},{:.6},{},,,,,\n",
+                    l.start.x, l.start.y, l.end.x, l.end.y, l.common.layer
+                )),
+                EntityType::Arc(a) => {
+                    let sx = a.center.x + a.radius * a.start_angle.cos();
+                    let sy = a.center.y + a.radius * a.start_angle.sin();
+                    let ex = a.center.x + a.radius * a.end_angle.cos();
+                    let ey = a.center.y + a.radius * a.end_angle.sin();
+                    csv.push_str(&format!(
+                        "ARC,{:.6},{:.6},{:.6},{:.6},{},{:.6},{:.6},{:.6},{:.4},{:.4}\n",
+                        sx,
+                        sy,
+                        ex,
+                        ey,
+                        a.common.layer,
+                        a.center.x,
+                        a.center.y,
+                        a.radius,
+                        a.start_angle.to_degrees(),
+                        a.end_angle.to_degrees()
+                    ));
+                }
+                other => panic!("demo dump 只支持 LINE/ARC，得到 {other:?}"),
+            }
+        }
+        csv
     }
 }
