@@ -13165,7 +13165,7 @@ mod weld_tests {
     }
 
     /// 结构要素（磨外圆）插入：锚点 = 台阶面与轴线交点 (0,0)，rotation 度 → 弧度，
-    /// 块里 10 轮廓 + 1 砂轮细线，xdata 台账带 b1。
+    /// 块里 10 轮廓（砂轮细线已按用户 2026-09-18 定案去掉），xdata 台账带 b1。
     #[test]
     fn detail_grind_od_pick_anchor_rotation_and_layers() {
         let mock = Arc::new(MockSender::new(acadrust::CadDocument::new()));
@@ -13184,7 +13184,7 @@ mod weld_tests {
         );
         assert!(block.contains("D100_B1_8"), "块名含规格：{block}");
         let ents = mock.block_entities(block);
-        assert_eq!(ents.len(), 11, "10 轮廓 + 1 砂轮细线");
+        assert_eq!(ents.len(), 10, "10 轮廓；砂轮细线已按用户定案去掉");
         // 锚点 = 台阶面与轴线交点 (0,0)：上/下台阶面竖线各有一条端点落在锚点。
         let from_origin = ents
             .iter()

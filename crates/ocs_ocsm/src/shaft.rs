@@ -70,15 +70,23 @@
 //!
 //! 轴线 = x 轴（x 向右、y = 半径），第 1 段左端面在 x=0；上下对称：
 //! - 每段上下各一条线：圆柱 = 水平线，圆锥 = 斜线；
-//! - 段间端面 / 两端外端面用竖直线闭合（直径相同且无特征时不画）；
+//! - **每条段边界都画一条贯通轴线的竖线**（`1轮廓实线层`），包括直径没有
+//!   变化的分界；半高 = `min(左段端面实际半径, 右段端面实际半径)`（用户
+//!   2026-09-18 更正版口径）；端面有槽时取槽肩（圆角切点）高；
+//! - 段间端面 / 两端外端面用竖直线闭合（肩面仍从 `bottom` 画到 `top`）；
+//! - **倒角终点**（倒角根）也画贯通竖线，半高 = 倒角根半径；
+//! - **`OV` / `RL` 槽的起止**：槽肩面 / 槽底终止 / 斜壁终点各一条贯通竖线，
+//!   高度规则见 `build_geometry` 内的注释（用户版 `x=328 ±13.1、330.6 ±12.1、331 ±12.5`）；
 //! - **倒角贴端面凸角**：相邻段更大 → 倒角落在相邻（大）段一侧；相邻段更小或
 //!   本段是自由端 → 倒角落在本段一侧。这样 `S40 E40 L30 CH2@R OV3`（右端有
 //!   越程槽 + 相邻 φ50 台阶）里倒角落在 φ50 上，两个特征不重叠——这是本期的
 //!   定案口径（待用户复核）。
-//! - `OV` 复用 `detail.rs` 的查表与画法（R 圆角/槽底/45° 斜坡/砂轮细线），
-//!   只要求台阶面一侧更高、且槽落在圆柱端；
-//! - 落层：轮廓/端面/倒角 → `1轮廓实线层`；砂轮细线与**螺纹小径细实线** →
-//!   `2细线层`；轴线与分度线 → `3中心线层`（点划线，轴线长度 = 总长 +
+//! - `OV` 复用 `detail.rs` 的查表与画法（R 圆角/槽底/45° 斜坡），**不画砂轮细线**
+//!   （用户 2026-09-18 定案：那条 `2细线层` 青线属于标注，本图不该有；`detail.rs`
+//!   的独立「磨外圆」要素同口径也不画，见 `detail.rs` 顶部画法说明）；
+//! - 落层：轮廓/端面/倒角/槽/边界竖线 → `1轮廓实线层`；**螺纹小径/螺尾
+//!   细实线** → `2细线层`（螺纹线是几何线，保留；本轴无螺纹时自然为 0 条）；
+//!   轴线与分度线 → `3中心线层`（点划线，轴线长度 = 总长 +
 //!   图框比例 × 6，两端各半）；`剖视` 的剖面线 → `5剖面线层`。
 //!
 //! ## 视图口径（`VIEW`）
@@ -132,7 +140,7 @@ OCSMSHAFT 轴生成器：行 DSL / JSON → 单视图侧视图（段拼接 + 端
     at x,y rot 度   放置（不写 = 原点、不转）
   例：OCSMSHAFT S30 E30 L45 CH2@L | S40 E40 L30 CH2@R OV3 | S50 E30 L20 | S30 E30 L15 CH2@R | S40 E40 L7 M1.5 | S36 E36 L5 | GEAR M3 Z20 VIEW 剖视 at 100,50 rot 30
   JSON：{\"segments\":[{\"s\":30,\"e\":30,\"l\":45,\"ch\":[{\"c\":2,\"end\":\"L\"}]},{\"s\":30,\"e\":30,\"l\":20,\"thread\":1.5}],\"view\":\"section\",\"at\":[100,50],\"rot\":30}
-轮廓/端面/倒角 → 1轮廓实线层，砂轮细线/螺纹小径 → 2细线层，轴线/分度线 → 3中心线层，剖视剖面线 → 5剖面线层。";
+轮廓/端面/倒角/槽与边界竖线 → 1轮廓实线层，螺纹小径/螺尾 → 2细线层（OV 不画砂轮细线），轴线/分度线 → 3中心线层，剖视剖面线 → 5剖面线层。";
 
 // ══════════════════════════════════════════════════════════════════════════
 // 数据模型
@@ -2024,6 +2032,21 @@ fn chamfer_geom(seg: &Segment, x0: f64, end: End, c: f64) -> ([f64; 2], [f64; 2]
     }
 }
 
+/// **贯通轴线的段边界/特征界线竖线**（从 `-half` 到 `+half`，落 `1轮廓实线层`）。
+///
+/// 用户 2026-09-18 更正版口径（基准 `轴测试更正.dxf`）：
+/// * 每条段边界都画（直径不变的分界也画），半高 = `min(左段端半径, 右段端半径)`；
+/// * 倒角终点（倒角根）画，半高 = 倒角根半径；
+/// * 槽（OV/RL）的槽肩面 / 槽底终止 / 斜壁终点各画一条，槽肩半高 = 圆角切点
+///   半径（`d/2 + r − h` 或 `dg/2 + r`），槽底半高 = 槽底半径，斜壁终点
+///   半高 = 段（大径）半径。
+/// `half ≤ 0`（或非有限）不落图。
+fn through_line(entities: &mut Vec<EntityType>, x: f64, half: f64) {
+    if half.is_finite() && half > 1e-9 {
+        entities.push(line([x, -half], [x, half], LAYER_MAIN));
+    }
+}
+
 /// 某段某端**端面处实际轮廓半径**：段级退刀槽圆角切点 / 越程槽圆角切点 / 齿顶圆 /
 /// 普通半径。只用于齿轮相邻直径检查；落图的端面几何在 `build` 里另算。
 fn face_radius(seg: &Segment, end: End) -> f64 {
@@ -2385,6 +2408,8 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
         let mut bottom = ra.min(rb);
         let mut top = ra.max(rb);
         let mut chamfer_lines: Option<([f64; 2], [f64; 2])> = None;
+        // 端面带槽时的贯通竖线半高（槽肩圆角切点）；None = 用 min(left_eff, right_eff)。
+        let mut face_through_h: Option<f64> = None;
 
         if let Some(c) = chamfer {
             let requester = if ch_from_left { i } else { k };
@@ -2474,11 +2499,17 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
                 ));
             }
             bottom = fillet;
+            face_through_h = Some(fillet);
             own_ov[i][1] = Some(row.b1);
+            // `detail.rs` 的磨外圆槽体已按用户 2026-09-18 定案不含砂轮细线
+            // （`2细线层` 青线属标注；独立要素同口径），这里直接镜像。
             entities.extend(groove.into_iter().map(|e| mirror_x(e, x_face)));
             // 剖面线环：斜坡 → 槽底 → 圆角（上半侧，左→右）
             let rg = segs[i].e / 2.0;
             let yb = rg - row.h;
+            // 槽底终止 / 斜壁终点两条贯通竖线（槽肩那条 = 上面的段边界线）。
+            through_line(&mut entities, x_face - (row.b1 - row.h), yb);
+            through_line(&mut entities, x_face - row.b1, rg);
             let slope_x1 = x_face - (row.b1 - row.h);
             let groove_x1 = x_face - row.r;
             profile.push(lr_line([x_face - row.b1, rg], [slope_x1, yb]));
@@ -2523,11 +2554,16 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
                 ));
             }
             bottom = fillet;
+            face_through_h = Some(fillet);
             own_ov[k][0] = Some(row.b1);
+            // `detail.rs` 的磨外圆槽体已不含砂轮细线（同 ov_r 口径），直接平移。
             entities.extend(groove.into_iter().map(|e| translate_x(e, x_face)));
-            // 剖面线环：圆角 → 槽底 → 斜坡（上半侧，左→右）
+            // 槽底终止 / 斜壁终点两条贯通竖线（槽肩那条 = 上面的段边界线）。
             let rg = segs[k].s / 2.0;
             let yb = rg - row.h;
+            through_line(&mut entities, x_face + (row.b1 - row.h), yb);
+            through_line(&mut entities, x_face + row.b1, rg);
+            // 剖面线环：圆角 → 槽底 → 斜坡（上半侧，左→右）
             let slope_x1 = x_face + (row.b1 - row.h);
             profile.push(HatchEdge::Arc {
                 c: [x_face + row.r, fillet],
@@ -2563,14 +2599,18 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
                 ));
             }
             bottom = tangent;
+            face_through_h = Some(tangent);
             own_relief[i][1] = Some(dims.g2);
             entities.extend(
                 detail::relief_groove_entities(&dims)
                     .into_iter()
                     .map(|e| mirror_x(e, x_face)),
             );
-            // 剖面线环：斜壁 → 槽底 → 圆角（上半侧，左→右）
+            // 槽底终止 / 斜壁终点两条贯通竖线（槽肩那条 = 上面的段边界线）。
             let rg = dims.dg / 2.0;
+            through_line(&mut entities, x_face - dims.g1, rg);
+            through_line(&mut entities, x_face - dims.g2, ra);
+            // 剖面线环：斜壁 → 槽底 → 圆角（上半侧，左→右）
             profile.push(lr_line([x_face - dims.g2, ra], [x_face - dims.g1, rg]));
             profile.push(lr_line([x_face - dims.g1, rg], [x_face - dims.r, rg]));
             profile.push(HatchEdge::Arc {
@@ -2600,14 +2640,18 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
                 ));
             }
             bottom = tangent;
+            face_through_h = Some(tangent);
             own_relief[k][0] = Some(dims.g2);
             entities.extend(
                 detail::relief_groove_entities(&dims)
                     .into_iter()
                     .map(|e| translate_x(e, x_face)),
             );
-            // 剖面线环：圆角 → 槽底 → 斜壁（上半侧，左→右）
+            // 槽底终止 / 斜壁终点两条贯通竖线（槽肩那条 = 上面的段边界线）。
             let rg = dims.dg / 2.0;
+            through_line(&mut entities, x_face + dims.g1, rg);
+            through_line(&mut entities, x_face + dims.g2, rb);
+            // 剖面线环：圆角 → 槽底 → 斜壁（上半侧，左→右）
             profile.push(HatchEdge::Arc {
                 c: [x_face + dims.r, tangent],
                 r: dims.r,
@@ -2635,6 +2679,7 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
             let right_surface = if ov_l.is_some() { bottom } else { rb };
             bottom = tangent.min(right_surface);
             top = tangent.max(right_surface);
+            face_through_h = Some(tangent);
         }
 
         // 上半轮廓在端面两侧的实际半径（决定剖面线环竖直段的走向）：
@@ -2664,6 +2709,14 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
             left_eff = tangent;
         }
 
+        // ── 段边界贯通竖线（用户 2026-09-18 更正版口径）：半高 = 该端面两侧
+        //    实际轮廓半径的较小者；端面带槽时 = 槽肩（圆角切点）高。 ──
+        through_line(
+            &mut entities,
+            x_face,
+            face_through_h.unwrap_or(left_eff.min(right_eff)),
+        );
+
         if top - bottom > 1e-9 {
             entities.push(line([x_face, bottom], [x_face, top], LAYER_MAIN));
             entities.push(line([x_face, -bottom], [x_face, -top], LAYER_MAIN));
@@ -2681,6 +2734,8 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
                 LAYER_MAIN,
             ));
             profile.push(lr_line(face_point, contour));
+            // 倒角终点（根）贯通竖线，半高 = 倒角根半径（用户版 x=2 ±14）。
+            through_line(&mut entities, contour[0], contour[1]);
         }
     }
 
@@ -2714,6 +2769,8 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
             LAYER_MAIN,
         ));
         profile.push(lr_line(face_point, contour));
+        // 倒角终点（根）贯通竖线，半高 = 倒角根半径（用户版 x=2 ±14）。
+        through_line(&mut entities, contour[0], contour[1]);
         face_point[1]
     } else {
         segs[0].outer_radius(End::L)
@@ -2770,6 +2827,8 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
             LAYER_MAIN,
         ));
         profile.push(lr_line(contour, face_point));
+        // 倒角终点（根）贯通竖线，半高 = 倒角根半径。
+        through_line(&mut entities, contour[0], contour[1]);
         face_point[1]
     } else {
         segs[last].outer_radius(End::R)
@@ -2847,6 +2906,9 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
                             .into_iter()
                             .map(|e| mirror_x(e, lay.face)),
                     );
+                    // 槽底终止 / 斜壁终点两条贯通竖线（槽肩那条在端面循环按切点画）。
+                    through_line(&mut entities, lay.face - dims.g1, rg);
+                    through_line(&mut entities, lay.face - dims.g2, lay.r);
                     // 剖面线环（上半，左→右）：斜壁 → 槽底 → 圆角
                     profile.push(lr_line([lay.face - dims.g2, lay.r], [lay.face - dims.g1, rg]));
                     profile.push(lr_line([lay.face - dims.g1, rg], [lay.face - dims.r, rg]));
@@ -3635,7 +3697,7 @@ GEAR M3 Z20";
     fn preview_svg_renders_and_reports_errors() {
         let svg = preview_svg(&parse_program(DEMO).unwrap()).unwrap();
         assert!(svg.starts_with("<svg") || svg.contains("<svg"), "{svg}");
-        assert!(svg.contains("#5aa0ff"), "细线层颜色（螺纹小径/砂轮细线）");
+        assert!(svg.contains("#5aa0ff"), "细线层颜色（螺纹小径/螺尾）");
         assert!(svg.contains("#ff5555"), "中心线层颜色");
         // 剖视：HATCH 在预览里被裁成真实边界内的 45° 线（剖面线层绿色）
         let section = preview_svg(&parse_program("S30 E30 L20 VIEW 剖视").unwrap()).unwrap();
@@ -3662,7 +3724,8 @@ GEAR M3 Z20";
         // 台阶面 x=45：15 ↔ 20（上下两条）
         assert!(has_line(&shaft, [45.0, 15.0], [45.0, 20.0]));
         assert!(has_line(&shaft, [45.0, -15.0], [45.0, -20.0]));
-        // 圆锥末端 Ø30 与第 3 段 Ø30 相同 → 不画内部端面线；第 3 段轮廓继续到 80
+        // 圆锥末端 Ø30 与第 3 段 Ø30 相同 → 没有肩面，但段边界改用贯通竖线：x=65 ±15
+        assert!(has_line(&shaft, [65.0, -15.0], [65.0, 15.0]));
         assert!(has_line(&shaft, [65.0, 15.0], [80.0, 15.0]));
         assert!(has_line(&shaft, [80.0, -15.0], [80.0, 15.0]));
         // 轴两端外端面
@@ -3685,6 +3748,9 @@ GEAR M3 Z20";
         assert!(has_line(&shaft, [43.0, -15.0], [45.0, -13.0]));
         // 轮廓缩短到 2..43
         assert!(has_line(&shaft, [2.0, 15.0], [43.0, 15.0]));
+        // 倒角终点（根）贯通竖线（用户 2026-09-18 更正版）：x=2 / x=43 半高 = 15
+        assert!(has_line(&shaft, [2.0, -15.0], [2.0, 15.0]));
+        assert!(has_line(&shaft, [43.0, -15.0], [43.0, 15.0]));
     }
 
     #[test]
@@ -3695,11 +3761,15 @@ GEAR M3 Z20";
         // 端面 x=20 从 15 到 18（20−2）；倒角线 (20,18)→(22,20)
         assert!(has_line(&shaft, [20.0, 15.0], [20.0, 18.0]));
         assert!(has_line(&shaft, [20.0, 18.0], [22.0, 20.0]));
+        // 段边界贯通竖线：x=20、半高 = min(15, 18) = 15
+        assert!(has_line(&shaft, [20.0, -15.0], [20.0, 15.0]));
+        // 倒角终点（根）贯通竖线：x=22、半高 = 倒角根半径 20
+        assert!(has_line(&shaft, [22.0, -20.0], [22.0, 20.0]));
         // 第 2 段轮廓从 x=22 开始
         assert!(has_line(&shaft, [22.0, 20.0], [30.0, 20.0]));
-        // 等直径端面不画内部线：把 CH 挪到不产生倒角的地方仍然没有 x=20 的 15↔15 线
+        // 等直径分界也画贯通竖线（用户 2026-09-18 更正版：x=88 那种同径分界也有）
         let flat = build(&parse_program("S30 E30 L20\nS30 E30 L10").unwrap(), 1.0).unwrap();
-        assert!(!has_line(&flat, [20.0, -15.0], [20.0, 15.0]));
+        assert!(has_line(&flat, [20.0, -15.0], [20.0, 15.0]));
     }
 
     // ── 越程槽 ────────────────────────────────────────────────────────────
@@ -3722,19 +3792,37 @@ GEAR M3 Z20";
         assert!(has_line(&shaft, [20.0, fillet], [20.0, 30.0]));
         // 轮廓从 x=0 到槽的斜坡外侧（20−b1），不是到端面
         assert!(has_line(&shaft, [0.0, 25.0], [20.0 - b1, 25.0]));
-        // 砂轮细线：镜像后 45° 上扬到左上方，落 2细线层
-        assert!(has_line(
+        // 槽的三条贯通竖线（用户 2026-09-18 更正版）：槽肩（也是段边界线）/
+        // 槽底终止 / 斜壁终点，全落 1轮廓实线层。
+        assert_eq!(
+            layer_of_line(&shaft, [20.0, -fillet], [20.0, fillet]),
+            Some(LAYER_MAIN),
+            "槽肩贯通竖线"
+        );
+        assert_eq!(
+            layer_of_line(
+                &shaft,
+                [20.0 - b1 + h, -(25.0 - h)],
+                [20.0 - b1 + h, 25.0 - h]
+            ),
+            Some(LAYER_MAIN),
+            "槽底终止贯通竖线"
+        );
+        assert_eq!(
+            layer_of_line(&shaft, [20.0 - b1, -25.0], [20.0 - b1, 25.0]),
+            Some(LAYER_MAIN),
+            "斜壁终点贯通竖线"
+        );
+        // 本例无 M 段 → 整图 0 条 2细线层（只针对本用例；带螺纹的轴会有小径/螺尾线，
+        // 不是「OV 一概 0 条」的通用断言）。
+        let thin = shaft.entities.iter().filter(|e| layer_of(e) == LAYER_THIN).count();
+        assert_eq!(thin, 0, "本用例无 M 段，2细线层 应为 0 条（非通用断言）");
+        // 旧砂轮细线的 45° 尾线（模板尾长 15）不应再出现
+        assert!(!has_line(
             &shaft,
             [20.0 - b1, 25.0],
-            [20.0 - b1 - detail::WHEEL_TAIL, 25.0 + detail::WHEEL_TAIL]
+            [20.0 - b1 - 15.0, 25.0 + 15.0]
         ));
-        let thin: Vec<&str> = shaft
-            .entities
-            .iter()
-            .filter(|e| layer_of(e) == crate::partgen_kit::LAYER_THIN)
-            .map(layer_of)
-            .collect();
-        assert_eq!(thin.len(), 1, "砂轮细线只有一条且落 2细线层");
         // OV@L：地面 = 第 2 段，台阶 = 第 1 段
         let program = parse_program("S60 E60 L10\nS50 E50 L20 OV@L").unwrap();
         let shaft = build(&program, 1.0).unwrap();
@@ -3744,11 +3832,21 @@ GEAR M3 Z20";
         assert!(has_arc(&shaft, [10.0 + r, fillet], r, 180.0, 270.0));
         assert!(has_line(&shaft, [10.0, fillet], [10.0, 30.0]));
         assert!(has_line(&shaft, [10.0 + b1, 25.0], [30.0, 25.0]));
+        // 镜像到右端的三条贯通竖线 + 没有砂轮细线
+        assert!(has_line(&shaft, [10.0, -fillet], [10.0, fillet]));
         assert!(has_line(
             &shaft,
-            [10.0 + b1, 25.0],
-            [10.0 + b1 + detail::WHEEL_TAIL, 25.0 + detail::WHEEL_TAIL]
+            [10.0 + b1 - h, -(25.0 - h)],
+            [10.0 + b1 - h, 25.0 - h]
         ));
+        assert!(has_line(&shaft, [10.0 + b1, -25.0], [10.0 + b1, 25.0]));
+        assert!(!has_line(
+            &shaft,
+            [10.0 + b1, 25.0],
+            [10.0 + b1 + 15.0, 25.0 + 15.0]
+        ));
+        let thin = shaft.entities.iter().filter(|e| layer_of(e) == LAYER_THIN).count();
+        assert_eq!(thin, 0, "本用例无 M 段，OV@L 也 0 条（非通用断言）");
     }
 
     // ── 螺纹段 M ─────────────────────────────────────────────────────────
@@ -4084,6 +4182,10 @@ GEAR M3 Z20";
         // 台肩面只画到圆角切点：18 → 19.65（不像螺尾那里画满 20）
         assert!(has_line(&shaft, [30.0, 18.0], [30.0, 19.65]));
         assert!(!has_line(&shaft, [30.0, 18.0], [30.0, 20.0]), "RL 槽根不留到 20");
+        // 三条贯通竖线：槽肩（切线高 19.65）/ 槽底终止（27.5）/ 斜壁终点（25.5）
+        assert!(has_line(&shaft, [30.0, -19.65], [30.0, 19.65]), "槽肩贯通竖线");
+        assert!(has_line(&shaft, [27.5, -18.85], [27.5, 18.85]), "槽底终止贯通竖线");
+        assert!(has_line(&shaft, [25.5, -20.0], [25.5, 20.0]), "斜壁终点贯通竖线");
         // 小径细实线止于斜壁交点：5.5 → 26.911957…（y=r1）
         let x_minor = 30.0 - 2.5 - 2.0 * (r1 - 18.85) / (20.0 - 18.85);
         assert!(has_line(&shaft, [5.5, r1], [x_minor, r1]));
@@ -4212,6 +4314,22 @@ GEAR M3 Z20";
         assert!(has_line(&shaft, [12.5, -8.85], [14.5, -10.0]));
         // 台肩面 x=10：圆角切点 9.65 → 左邻半径 15
         assert!(has_line(&shaft, [10.0, 9.65], [10.0, 15.0]), "台肩面");
+        // 三条贯通竖线（用户 2026-09-18 更正版）：槽肩（= 段边界线）/ 槽底终止 / 斜壁终点
+        assert_eq!(
+            layer_of_line(&shaft, [10.0, -9.65], [10.0, 9.65]),
+            Some(LAYER_MAIN),
+            "槽肩贯通竖线"
+        );
+        assert_eq!(
+            layer_of_line(&shaft, [12.5, -8.85], [12.5, 8.85]),
+            Some(LAYER_MAIN),
+            "槽底终止贯通竖线"
+        );
+        assert_eq!(
+            layer_of_line(&shaft, [14.5, -10.0], [14.5, 10.0]),
+            Some(LAYER_MAIN),
+            "斜壁终点贯通竖线"
+        );
         // 槽体落层 = 1轮廓实线层（不是细线）
         assert_eq!(
             layer_of_line(&shaft, [10.8, 8.85], [12.5, 8.85]),
@@ -4232,6 +4350,10 @@ GEAR M3 Z20";
         assert!(has_line(&shaft, [39.2, 8.85], [37.5, 8.85]), "右端槽底");
         assert!(has_line(&shaft, [37.5, 8.85], [35.5, 10.0]), "右端斜壁");
         assert!(has_line(&shaft, [40.0, 9.65], [40.0, 15.0]), "右端台肩面");
+        // 右端槽的三条贯通竖线（镜像）
+        assert!(has_line(&shaft, [40.0, -9.65], [40.0, 9.65]), "右端槽肩贯通竖线");
+        assert!(has_line(&shaft, [37.5, -8.85], [37.5, 8.85]), "右端槽底终止竖线");
+        assert!(has_line(&shaft, [35.5, -10.0], [35.5, 10.0]), "右端斜壁终点竖线");
         // `RL` 省略端别 = 右端（既有默认）
         let bare = build(
             &parse_program("S30 E30 L10 | S20 E20 L30 RL P1.5 | S30 E30 L10").unwrap(),
@@ -4997,7 +5119,23 @@ GEAR M3 Z20";
 
         // 关键几何自检（demo 7 段：30 / 40（OV3 + φ50 台阶倒角）/ 锥 50→30 / 30 /
         // 40（M1.5 TL20 局部螺纹）/ 36（小直径槽段）/ 齿轮段 M3 Z20（d=60、da=66、df=52.5 不落图））
-        assert!(has_line(&shaft, [72.0, 20.0], [57.0, 35.0]), "φ40 的 OV 砂轮细线");
+        // OV3（φ40）：三条贯通竖线（槽肩 = 段边界 x=75）；砂轮细线不再画
+        assert!(
+            has_line(&shaft, [75.0, -20.6], [75.0, 20.6]),
+            "OV 槽肩贯通竖线（×20.6 = d/2+r−h）"
+        );
+        assert!(
+            has_line(&shaft, [72.4, -19.6], [72.4, 19.6]),
+            "OV 槽底终止贯通竖线"
+        );
+        assert!(
+            has_line(&shaft, [72.0, -20.0], [72.0, 20.0]),
+            "OV 斜壁终点贯通竖线"
+        );
+        assert!(
+            !has_line(&shaft, [72.0, 20.0], [57.0, 35.0]),
+            "OV 砂轮细线不再画（用户 2026-09-18 定案：青线属标注）"
+        );
         assert!(
             has_line(&shaft, [75.0, 22.0], [77.0, 24.0]),
             "φ50 台阶左端的 CH2（贴凸角）"
@@ -5081,8 +5219,9 @@ GEAR M3 Z20";
         assert!(file.is_file(), "demo CSV 已落盘：{}", file.display());
         assert!(csv.contains("LINE") && csv.contains("ARC"));
         assert!(csv.contains("3中心线层") && csv.contains("2细线层"));
-        // 49 = 旧 demo 44 + 局部螺纹新增 5（锥面上下 2 + 螺尾上下 2 + 分界竖线 1）
-        assert_eq!(shaft.entities.len(), 49, "demo 图元数");
+        // 59 = 旧 demo 44 + 局部螺纹新增 5（锥面上下 2 + 螺尾上下 2 + 分界竖线 1）
+        //      + 段边界贯通竖线 6 + 倒角终点竖线 3 + OV 槽两条界线 2 − OV 砂轮细线 1
+        assert_eq!(shaft.entities.len(), 59, "demo 图元数");
 
         // 剖视 diff：同一套轮廓 + 一个 HATCH（CSV 记 bbox 一行）；落盘供人工核对
         let section_program = parse_program(&format!("{DEMO}\nVIEW 剖视")).unwrap();
@@ -5129,5 +5268,81 @@ GEAR M3 Z20";
         std::fs::write(&file, &csv).expect("写 轴测试_RL.csv");
         assert!(file.is_file(), "RL 轴 CSV 已落盘：{}", file.display());
         assert!(csv.contains("LINE") && csv.contains("ARC"));
+    }
+
+    /// **验收基准**：用户手工更正版 `~/桌面/OCSM/review/轴测试更正.dxf`（44 图元）的
+    /// 输入轴（8 段 DSL，第 8 段 `OV@L`）。本测试把新几何落成
+    /// `~/桌面/OCSM/review/轴测试_v2.csv`，供 `compare_shaft.py` 与基准逐图元比对。
+    ///
+    /// 更正版相对旧版的差：+9 条贯通竖线（段边界 5 / 倒角终点 1 / OV 槽 3），
+    /// −1 条 OV 砂轮细线；本测试把这 10 条钉住。
+    #[test]
+    fn dump_user_axis_v2_csv() {
+        let text = "S28 E28 L55 CH2@L | S34 E34 L33 | S34 E35 L1 | S35 E35 L22 | S45 E45 L194 | S35 E35 L22 | S35 E34 L1 | S25 E25 L32 OV@L";
+        let program = parse_program(text).expect("用户轴应能解析");
+        let shaft = build(&program, 1.0).expect("用户轴应能出图");
+        assert_eq!(shaft.segment_count, 8);
+        assert!(near(shaft.total_length, 360.0));
+        // 用户更正版比旧版多的 9 条 `1轮廓实线层` 贯通竖线（逐条与 DXF 对齐）
+        for (x, h) in [
+            (2.0, 14.0),   // 倒角终点 = 倒角根半径（φ28/2）
+            (55.0, 14.0),  // 段1|2 分界 = min(14, 17)
+            (88.0, 17.0),  // 段2|3 分界（φ34→φ34，同径也画）
+            (89.0, 17.5),  // 段3|4 分界（1mm 锥段终点）
+            (111.0, 17.5), // 段4|5 分界 = min(17.5, 22.5)
+            (305.0, 17.5), // 段5|6 分界 = min(22.5, 17.5)
+            (328.0, 13.1), // OV 槽肩 = 台肩面 + 圆角切点（d/2−h+r）
+            (330.6, 12.1), // OV 槽底终止 = 台肩面 + b1−h
+            (331.0, 12.5), // OV 斜壁终点 = 台肩面 + b1
+        ] {
+            assert_eq!(
+                layer_of_line(&shaft, [x, -h], [x, h]),
+                Some(LAYER_MAIN),
+                "贯通竖线 x={x} ±{h} 应落 1轮廓实线层"
+            );
+        }
+        // 旧版那条 OV 砂轮细线（2细线层、45°、长 15）不再有 → **本轴（无 M 段）**
+        // 整图 0 条 2细线层（限定：带螺纹的轴仍有小径/螺尾细实线，见 demo 测试）
+        let thin = shaft.entities.iter().filter(|e| layer_of(e) == LAYER_THIN).count();
+        assert_eq!(thin, 0, "本轴无 M 段，2细线层 应为 0 条（非通用断言）");
+        assert!(
+            !has_line(&shaft, [331.0, 12.5], [346.0, 27.5]),
+            "OV 砂轮细线不再画"
+        );
+        // 既有几何回归（抽查更正版仍在的轮廓/圆角/端面）
+        assert!(has_line(&shaft, [0.0, 12.0], [2.0, 14.0]), "左端 C2 上斜线");
+        assert!(has_line(&shaft, [2.0, 14.0], [55.0, 14.0]), "φ28 轮廓");
+        assert!(has_line(&shaft, [55.0, 14.0], [55.0, 17.0]), "段1|2 肩面");
+        assert!(has_line(&shaft, [55.0, 17.0], [88.0, 17.0]), "φ34 轮廓");
+        assert!(has_line(&shaft, [88.0, 17.0], [89.0, 17.5]), "1mm 锥面");
+        assert!(has_line(&shaft, [111.0, 22.5], [305.0, 22.5]), "φ45 轮廓");
+        assert!(has_line(&shaft, [327.0, 17.5], [328.0, 17.0]), "段7 收锥");
+        assert!(has_line(&shaft, [328.0, 13.1], [328.0, 17.0]), "OV 台肩面");
+        assert!(has_arc(&shaft, [329.0, 13.1], 1.0, 180.0, 270.0), "OV 上圆角");
+        assert!(has_line(&shaft, [329.0, 12.1], [330.6, 12.1]), "OV 槽底");
+        assert!(has_line(&shaft, [330.6, 12.1], [331.0, 12.5]), "OV 斜坡");
+        assert!(has_line(&shaft, [331.0, 12.5], [360.0, 12.5]), "φ25 轮廓");
+        assert!(has_line(&shaft, [360.0, -12.5], [360.0, 12.5]), "右端面");
+        assert!(has_line(&shaft, [-3.0, 0.0], [363.0, 0.0]), "轴线");
+        // 文字规则「每条段边界都画」在 x=327（段6|7，Ø35→Ø35 锥段起点）也会画；
+        // 用户手工更正版漏了这条（如 x=88 同构却画了）。验收 diff 见报告：
+        // 新生成 45 = 基准 44 + 这一条（不为了对齐而删规则线）。
+        assert_eq!(
+            layer_of_line(&shaft, [327.0, -17.5], [327.0, 17.5]),
+            Some(LAYER_MAIN),
+            "段6|7 同径分界贯通竖线（基准漏画，本期按规则保留）"
+        );
+        // 落盘（列格式同 shaft_demo.csv / 轴测试_RL.csv）
+        let csv = entities_csv(&shaft.entities);
+        let path = std::env::var("HOME")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|_| std::path::PathBuf::from("/tmp"))
+            .join("桌面/OCSM/review");
+        std::fs::create_dir_all(&path).expect("建 review 目录");
+        let file = path.join("轴测试_v2.csv");
+        std::fs::write(&file, &csv).expect("写 轴测试_v2.csv");
+        assert!(file.is_file(), "v2 CSV 已落盘：{}", file.display());
+        // 45 = 基准 44 + x=327 那条（旧版 36 = 35 + 9 − 1）；逐图元 diff 见 compare_shaft.py
+        assert_eq!(shaft.entities.len(), 45, "用户轴 v2 图元数");
     }
 }

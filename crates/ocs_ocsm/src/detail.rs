@@ -7,14 +7,16 @@
 //! - 几何模板：`磨外圆_GB-T6403.5-2008.dxf`（1:1，逐图元反解核对；
 //!   d=100 → 最后一行 b1=10 / h=1.2 / r=3）。
 //!
-//! ## 画法（模板 `1轮廓实线层` + `2细线层` 逐图元反解）
+//! ## 画法（模板 `1轮廓实线层` 逐图元反解；`2细线层` 砂轮线不再画）
 //! 轴为 x 轴（x 向右、y = 半径），**锚点 = 台阶面与轴线交点 (0,0)**；上半侧 + 下半侧镜像：
 //! - 台阶面竖线 `x=0`：`y = 0 … d/2 + r`（模板 53 = 50 + 3）；
 //! - 圆角弧 `R=r`：圆心 `(r, d/2−h+r)`（模板 `(3, 51.8)`），与台阶面/槽底相切；
 //! - 槽底 `y = d/2−h`：`x = r … b1−h`（模板 48.8：x 3…8.8）；
 //! - 45° 斜线：`(b1−h, d/2−h) → (b1, d/2)`（模板 `(8.8,48.8) → (10,50)`）；
 //! - 右端竖线 `x=b1`：`y = 0 … ±d/2`（与"磨出的外圆"闭合）；
-//! - 砂轮细实线 1 条：从 `(b1, d/2)` 45° 上扬 `WHEEL_TAIL`（模板到 `(25,65)`，即 15）。
+//! - **不画**模板里的砂轮细实线（`2细线层`，从 `(b1, d/2)` 45° 上扬 15 的尾线）：
+//!   用户 2026-09-18 定案，青线属标注性质（覆盖「模板即权威」）；回归测试里
+//!   用 `15` 做「不应再出现」的负断言。
 //! - 自洽关系：`b1 = r + 平段 + h`（45° 段水平长 = h）。
 //! - **不画**模板里的 `10外部结构层` / `7标注层`。
 //!
@@ -28,7 +30,7 @@
 use ocs_plugin_api::host::acadrust::entities::EntityType;
 
 use crate::partgen::{GenPart, PartMeta};
-use crate::partgen_kit::{arc, line, trim, LAYER_MAIN, LAYER_THIN};
+use crate::partgen_kit::{arc, line, trim, LAYER_MAIN};
 
 // ══════════════════════════════════════════════════════════════════════════
 // 通用框架（一族 = 一个 DetailElement；新增要素只动本文件）
@@ -312,9 +314,6 @@ fn entity_bbox(entities: &[EntityType]) -> [f64; 4] {
 /// 族 id。
 pub const FAMILY_GRIND_OD: &str = "detail_grind_od";
 
-/// 砂轮细实线尾长（模板实测：从 `(b1, d/2)` 45° 上扬到 `(b1+15, d/2+15)`）。
-pub const WHEEL_TAIL: f64 = 15.0;
-
 /// 表的一行：一个 b1 方案。
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct GrooveRow {
@@ -472,7 +471,8 @@ pub fn row_for(d: f64, b1: Option<f64>) -> Result<&'static GrooveRow, String> {
 // ══════════════════════════════════════════════════════════════════════════
 
 /// 磨外圆图元（对照模板 `磨外圆_GB-T6403.5-2008.dxf` 逐图元）：
-/// `1轮廓实线层` 10 条（上半 5 + 下半镜像 5）+ `2细线层` 砂轮细线 1 条。
+/// `1轮廓实线层` 10 条（上半 5 + 下半镜像 5）。模板里的砂轮细实线（`2细线层`）
+/// 属标注性质，用户 2026-09-18 定案不画（覆盖「模板即权威」）。
 fn build_grind_od(d: f64, row: &GrooveRow) -> GenPart {
     let rg = d / 2.0; // 磨出的外圆半径
     let rs = rg + row.r; // 台阶面高度（模板 53 = 50 + 3；等价于圆角切点再往上 h）
@@ -496,13 +496,6 @@ fn build_grind_od(d: f64, row: &GrooveRow) -> GenPart {
     entities.push(line([xe, -yb], [b1, -rg], LAYER_MAIN));
     entities.push(line([b1, 0.0], [b1, -rg], LAYER_MAIN));
 
-    // 砂轮细实线（模板 (10,50) → (25,65)）
-    entities.push(line(
-        [b1, rg],
-        [b1 + WHEEL_TAIL, rg + WHEEL_TAIL],
-        LAYER_THIN,
-    ));
-
     let bbox = entity_bbox(&entities);
     GenPart {
         entities,
@@ -521,11 +514,12 @@ fn build_grind_od(d: f64, row: &GrooveRow) -> GenPart {
 ///
 /// 与 `build_grind_od` 的差别：只去掉**独立要素图自己的两条闭合线**
 /// （台阶面竖线 `x=0`、右端竖线 `x=b1`）——放进轴里那两条会变成内部线；
-/// 保留上半/下半的 R 圆角、槽底、45° 斜坡 + 砂轮细实线，落层与原来一致。
+/// 保留上半/下半的 R 圆角、槽底、45° 斜坡，落层与原来一致。
+/// （砂轮细线已在 [`build_grind_od`] 里按用户定案去掉，这里自然也没有。）
 ///
 /// 局部坐标与 `build_grind_od` 完全一致：台阶面 = `x=0`、槽向 `+x` 展开、
 /// 外圆 `y = ±d/2`；返回 `(图元, 数据行)`，图元顺序 = 上圆角/槽底/斜坡、
-/// 下圆角/槽底/斜坡、砂轮细线。
+/// 下圆角/槽底/斜坡。
 ///
 /// **不改 `build_grind_od` 的输出**（独立要素预览/DXF 不受影响）。
 pub fn groove_entities(
@@ -534,9 +528,9 @@ pub fn groove_entities(
 ) -> Result<(Vec<EntityType>, &'static GrooveRow), String> {
     let row = row_for(d, b1)?;
     let part = build_grind_od(d, row);
-    // build_grind_od 的固定顺序：上（台阶面/圆角/槽底/斜坡/右端）→ 下（同构）→ 砂轮细线；
-    // 丢弃 0/5（台阶面）与 4/9（右端闭合竖线）。
-    let keep = [1usize, 2, 3, 6, 7, 8, 10];
+    // build_grind_od 的固定顺序：上（台阶面/圆角/槽底/斜坡/右端）→ 下（同构）；
+    // 丢弃 0/5（台阶面）与 4/9（右端闭合竖线）。砂轮细线已按用户定案去掉。
+    let keep = [1usize, 2, 3, 6, 7, 8];
     let entities = keep
         .iter()
         .map(|&index| part.entities[index].clone())
@@ -1124,13 +1118,6 @@ mod tests {
         (a - b).abs() < 1e-6
     }
 
-    fn line_layer(e: &EntityType) -> Option<&str> {
-        match e {
-            EntityType::Line(_) => Some(e.common().layer.as_str()),
-            _ => None,
-        }
-    }
-
     fn has_line(part: &GenPart, a: [f64; 2], b: [f64; 2]) -> bool {
         part.entities.iter().any(|e| match e {
             EntityType::Line(l) => {
@@ -1210,26 +1197,21 @@ mod tests {
         assert!(row_for(25.0, Some(4.0)).is_err());
     }
 
-    /// 模板 d=100 档：图元数 / 落层 / 坐标与 DXF 逐图元一致。
+    /// 模板 d=100 档：图元数 / 落层 / 坐标与 DXF 逐图元一致（不再有砂轮细线）。
     #[test]
     fn template_d100_matches_dxf() {
         let part = generate(FAMILY_GRIND_OD, 100.0, None, "main").unwrap();
-        assert_eq!(part.entities.len(), 11, "10 轮廓 + 1 砂轮细线");
+        assert_eq!(part.entities.len(), 10, "10 条轮廓；砂轮细线已按用户定案去掉");
         let main = part
             .entities
             .iter()
             .filter(|e| e.common().layer == LAYER_MAIN)
             .count();
-        let thin = part
-            .entities
-            .iter()
-            .filter(|e| e.common().layer == LAYER_THIN)
-            .count();
-        assert_eq!((main, thin), (10, 1), "落层：轮廓 → 1轮廓实线层，细线 → 2细线层");
+        assert_eq!(main, 10, "落层：轮廓 → 1轮廓实线层（没有 2细线层）");
         assert!(part
             .entities
             .iter()
-            .all(|e| e.common().layer == LAYER_MAIN || e.common().layer == LAYER_THIN));
+            .all(|e| e.common().layer == LAYER_MAIN));
         // 图层风格：ByLayer
         assert!(part
             .entities
@@ -1248,15 +1230,12 @@ mod tests {
         assert!(has_line(&part, [3.0, -48.8], [8.8, -48.8]));
         assert!(has_line(&part, [8.8, -48.8], [10.0, -50.0]));
         assert!(has_line(&part, [10.0, 0.0], [10.0, -50.0]));
-        // 砂轮细线（模板 (10,50) → (25,65)）
-        assert!(has_line(&part, [10.0, 50.0], [25.0, 65.0]));
-        assert_eq!(line_layer(&part.entities[10]).unwrap_or(""), LAYER_THIN);
 
         // 规格文本 / 元数据
         assert_eq!(part.meta.code, "GB/T 6403.5-2008");
         assert_eq!(part.meta.spec, "d100 b1 10");
-        // 锚点 = 台阶面与轴线交点；包围盒盖住全部图元（含细线端点）
-        assert_eq!(part.bbox, [0.0, -53.0, 25.0, 65.0]);
+        // 锚点 = 台阶面与轴线交点；包围盒只盖轮廓（砂轮细线端点不再有）
+        assert_eq!(part.bbox, [0.0, -53.0, 10.0, 53.0]);
     }
 
     /// 其它 d：几何按公式走（不是写死 d=100 的那一组数）。
@@ -1269,7 +1248,6 @@ mod tests {
         assert!(has_line(&part, [3.0, 73.8], [8.8, 73.8]));
         assert!(has_line(&part, [8.8, 73.8], [10.0, 75.0]));
         assert!(has_line(&part, [10.0, 0.0], [10.0, 75.0]));
-        assert!(has_line(&part, [10.0, 75.0], [25.0, 90.0]));
 
         // d=8（≤10 → 最后一行 b1=1.6/h=0.2/r=0.5）：半径 4、台阶 4.5、圆心 (0.5,4.3)、槽底 3.8
         let part = generate(FAMILY_GRIND_OD, 8.0, None, "main").unwrap();
@@ -1278,7 +1256,6 @@ mod tests {
         assert!(has_line(&part, [0.5, 3.8], [1.4, 3.8]));
         assert!(has_line(&part, [1.4, 3.8], [1.6, 4.0]));
         assert!(has_line(&part, [1.6, 0.0], [1.6, 4.0]));
-        assert!(has_line(&part, [1.6, 4.0], [16.6, 19.0]));
 
         // 显式 b1 覆盖同样改几何：d=150 b1=8 → h=0.8/r=2、台阶 77、圆心 (2,76.2)、槽底 74.2
         let part = generate(FAMILY_GRIND_OD, 150.0, Some(8.0), "main").unwrap();
@@ -1286,7 +1263,6 @@ mod tests {
         assert!(has_arc(&part, [2.0, 76.2], 2.0, 180.0, 270.0));
         assert!(has_line(&part, [2.0, 74.2], [7.2, 74.2]));
         assert!(has_line(&part, [7.2, 74.2], [8.0, 75.0]));
-        assert!(has_line(&part, [8.0, 75.0], [23.0, 90.0]));
     }
 
     /// 表自洽：b1 = r + 平段 + h（平段 > 0）；d>0 全部落在某个档。
