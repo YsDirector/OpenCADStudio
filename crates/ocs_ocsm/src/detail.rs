@@ -628,7 +628,7 @@ pub const THREAD_TAIL: f64 = 5.0;
 /// 表 2 的一行；**单键 = 螺距 P**（不依赖螺纹直径）。单位 mm。表头：
 /// `螺距 P | g2 (max) | g1 (min) | dg | r≈`。
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct ThreadReliefRow {
+pub(crate) struct ThreadReliefRow {
     /// 螺距 P。
     pub p: f64,
     /// 退刀槽总宽 g2（台肩面 → 斜壁与螺纹大径 d 的交点）；表头标 **max**。
@@ -652,11 +652,12 @@ pub struct ThreadReliefRow {
 ///
 /// **斜壁角自检的现实**：用户给的恒等式 `g2 ≈ g1 + ((d−dg)/2)/tan30°` 在
 /// g1/g2 同时按公式取整时精确；表 2 的 g1/g2 是各自独立圆整的**上下限值**，
-/// 取表中 g2(max)/g1(min) 反算的角最小 28.30°（P=0.45，比标称 30° 低 1.70°）
-/// → 全表最大偏差 **0.188mm**（P=6），只有 11/23 行落在 0.02 以内。
+/// 取表中 g2(max)/g1(min) 反算的角最小 **28.30°**（P=0.45，比标称 30° 低 1.70°）、
+/// 最大 **33.69°**（P=0.35）→ 全表最大偏差 **0.188mm**（P=6），只有 11/23 行落在
+/// 0.02 以内。画法按表值 `(g1, dg/2) → (g2, d/2)` 连直线（**不硬拧 30°**），
 /// 自检测试因此按表值实际精度 0.2mm 立断言，斜壁角按 `alpha − 2°` 校验
 /// （标准正文的 30° 下限在生产值上成立；表列极限值是圆整后的极值）。
-pub const THREAD_RELIEF_ROWS: &[ThreadReliefRow] = &[
+pub(crate) const THREAD_RELIEF_ROWS: &[ThreadReliefRow] = &[
     ThreadReliefRow { p: 0.25, g2: 0.75, g1: 0.4, dg_reduction: 0.4, r: 0.12 },
     ThreadReliefRow { p: 0.3, g2: 0.9, g1: 0.5, dg_reduction: 0.5, r: 0.16 },
     ThreadReliefRow { p: 0.35, g2: 1.05, g1: 0.6, dg_reduction: 0.6, r: 0.16 },
@@ -682,8 +683,27 @@ pub const THREAD_RELIEF_ROWS: &[ThreadReliefRow] = &[
     ThreadReliefRow { p: 6.0, g2: 18.0, g1: 11.0, dg_reduction: 8.3, r: 3.2 },
 ];
 
+impl ThreadReliefRow {
+    /// 表行 + 螺纹大径 `d` → 实际退刀槽尺寸（`M` 段螺纹收尾无覆盖值时用）。
+    /// 与 [`relief_dims`] 同一口径：`dg = d − dg_reduction`，斜壁实际角按表值反算
+    /// （不硬拧 30°）。
+    pub(crate) fn dims(&self, d: f64) -> ReliefDims {
+        let dg = d - self.dg_reduction;
+        let half = (d - dg) / 2.0;
+        ReliefDims {
+            p: self.p,
+            d,
+            dg,
+            g1: self.g1,
+            g2: self.g2,
+            r: self.r,
+            wall_angle_deg: (half / (self.g2 - self.g1)).atan().to_degrees(),
+        }
+    }
+}
+
 /// 螺距 P → 表 2 行（1e-9 容差；表里没有就报错并列出可用 P，**不插值/不外推**）。
-pub fn thread_relief_row(p: f64) -> Result<&'static ThreadReliefRow, String> {
+pub(crate) fn thread_relief_row(p: f64) -> Result<&'static ThreadReliefRow, String> {
     if !p.is_finite() || p <= 0.0 {
         return Err(format!("外螺纹退刀槽：螺距 P 必须是正数（收到 {p}）"));
     }
@@ -705,8 +725,11 @@ pub fn thread_relief_row(p: f64) -> Result<&'static ThreadReliefRow, String> {
 }
 
 /// 退刀槽实际尺寸（表值 + 可选覆盖），并附斜壁实际角供校验/台账。
+///
+/// `p = 0` 是**段级显式尺寸**的占位（段级 RL 可以不给螺距，见
+/// [`relief_dims_explicit`]）；表 2 路径与独立要素路径的 `p` 都是真螺距。
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct ReliefDims {
+pub(crate) struct ReliefDims {
     pub p: f64,
     pub d: f64,
     /// 退刀槽直径（表值为 `d − 减量`）。
@@ -718,12 +741,12 @@ pub struct ReliefDims {
     pub wall_angle_deg: f64,
 }
 
-/// 由 `d` + 参数解出退刀槽尺寸并做几何校验。
+/// 由 `d` + 参数解出退刀槽尺寸并做几何校验（表 2 路径，`P` 必给）。
 ///
 /// 参数：`P` 必给（表 2 单键）；`g1/g2/dg/r` 可选覆盖（给则覆盖表值）；
 /// `alpha` 可选（默认 30°，必须 ≥30°，实际斜壁角 `θ + WALL_ANGLE_TOL_DEG ≥ alpha`）。
 /// 其它键（如磨外圆的 `b1`）一律报错——不让笔误静默出图。
-pub fn relief_dims(d: f64, params: &DetailParams) -> Result<ReliefDims, String> {
+pub(crate) fn relief_dims(d: f64, params: &DetailParams) -> Result<ReliefDims, String> {
     const KNOWN: [&str; 6] = ["p", "g1", "g2", "dg", "r", "alpha"];
     let unknown: Vec<&str> = params
         .keys()
@@ -748,38 +771,73 @@ pub fn relief_dims(d: f64, params: &DetailParams) -> Result<ReliefDims, String> 
     let g2 = params.get("g2").unwrap_or(row.g2);
     let r = params.get("r").unwrap_or(row.r);
     let alpha = params.get("alpha").unwrap_or(DEFAULT_ALPHA_DEG);
+    check_relief("外螺纹退刀槽", "螺纹大径", d, p, dg, g1, g2, r, alpha)
+}
+
+/// **段级退刀槽**（轴生成器 `RL@L/@R` 的显式尺寸路径）：不给 P 时 g1/g2/dg/r 全给。
+///
+/// `dg` 是**绝对直径**（表 2 的 `dg` 列是 `d−Δ`，口径一致）；校验与表 2 路径共用
+/// [`check_relief`]，所以 `dg < d`、`g2 > g1 > r`、圆角不超大径、斜壁角下限都照查。
+pub(crate) fn relief_dims_explicit(
+    d: f64,
+    g1: f64,
+    g2: f64,
+    dg: f64,
+    r: f64,
+) -> Result<ReliefDims, String> {
+    // p=0 = 段级显式尺寸占位（不再有螺距可查；调用方不需要 p）。
+    check_relief("段级退刀槽", "本段大径", d, 0.0, dg, g1, g2, r, DEFAULT_ALPHA_DEG)
+}
+
+/// 表 2 / 显式覆盖共用的几何校验：尺寸、圆角、槽深、斜壁角。
+/// `what` 只用于报错前缀（表 2 路径 =「外螺纹退刀槽」，段级 =「段级退刀槽」）；
+/// `big` = 大径的称呼（表 2 路径 =「螺纹大径」，段级 =「本段大径」）。
+fn check_relief(
+    what: &str,
+    big: &str,
+    d: f64,
+    p: f64,
+    dg: f64,
+    g1: f64,
+    g2: f64,
+    r: f64,
+    alpha: f64,
+) -> Result<ReliefDims, String> {
+    if !d.is_finite() || d <= 0.0 {
+        return Err(format!("{what}：d 必须是正数（收到 {d}）"));
+    }
     for (name, value) in [("dg", dg), ("g1", g1), ("g2", g2), ("r", r)] {
         if !value.is_finite() || value <= 0.0 {
-            return Err(format!("外螺纹退刀槽：{name} 必须是正数（收到 {value}）"));
+            return Err(format!("{what}：{name} 必须是正数（收到 {value}）"));
         }
     }
     if !alpha.is_finite() {
-        return Err("外螺纹退刀槽：alpha 不是有限数".to_string());
+        return Err(format!("{what}：alpha 不是有限数"));
     }
     if alpha < DEFAULT_ALPHA_DEG {
         return Err(format!(
-            "外螺纹退刀槽：alpha 必须 ≥ {}°（收到 {}°）—— 斜壁不能比 30° 更平",
+            "{what}：alpha 必须 ≥ {}°（收到 {}°）—— 斜壁不能比 30° 更平",
             trim(DEFAULT_ALPHA_DEG),
             trim(alpha)
         ));
     }
     if dg >= d {
         return Err(format!(
-            "外螺纹退刀槽：dg（{}）必须小于螺纹大径 d（{}）",
+            "{what}：dg（{}）必须小于{big} d（{}）",
             trim(dg),
             trim(d)
         ));
     }
     if g2 <= g1 {
         return Err(format!(
-            "外螺纹退刀槽：g2（{}）必须大于 g1（{}）",
+            "{what}：g2（{}）必须大于 g1（{}）",
             trim(g2),
             trim(g1)
         ));
     }
     if g1 <= r {
         return Err(format!(
-            "外螺纹退刀槽：g1（{}）必须大于圆角 r（{}），否则圆角与斜壁打架",
+            "{what}：g1（{}）必须大于圆角 r（{}），否则圆角与斜壁打架",
             trim(g1),
             trim(r)
         ));
@@ -787,7 +845,7 @@ pub fn relief_dims(d: f64, params: &DetailParams) -> Result<ReliefDims, String> 
     let half = (d - dg) / 2.0;
     if r > half + 1e-9 {
         return Err(format!(
-            "外螺纹退刀槽：圆角 r（{}）超过槽深 (d−dg)/2（{}），圆角伸到螺纹大径之外",
+            "{what}：圆角 r（{}）超过槽深 (d−dg)/2（{}），圆角伸到{big}之外",
             trim(r),
             trim(half)
         ));
@@ -795,7 +853,7 @@ pub fn relief_dims(d: f64, params: &DetailParams) -> Result<ReliefDims, String> 
     let wall_angle_deg = (half / (g2 - g1)).atan().to_degrees();
     if wall_angle_deg + WALL_ANGLE_TOL_DEG < alpha {
         return Err(format!(
-            "外螺纹退刀槽：斜壁实际角 {:.2}° 小于 alpha {:.2}°（含表 2 取整容差 {:.0}°）—— 检查 g1/g2/dg 覆盖值",
+            "{what}：斜壁实际角 {:.2}° 小于 alpha {:.2}°（含表 2 取整容差 {:.0}°）—— 检查 g1/g2/dg 覆盖值",
             wall_angle_deg, alpha, WALL_ANGLE_TOL_DEG
         ));
     }
@@ -824,6 +882,30 @@ pub fn relief_dims(d: f64, params: &DetailParams) -> Result<ReliefDims, String> 
 /// **台肩面只画到 `d/2+r`**（比螺纹大径高一个 r），与磨外圆要素的「台阶面到
 /// d/2+r」同口径；**螺纹示意段固定 5mm**（图 2 里螺纹继续延伸，本要素不闭环）。
 fn build_thread_relief(dims: &ReliefDims) -> GenPart {
+    let entities = build_thread_relief_entities(dims);
+    let bbox = entity_bbox(&entities);
+    GenPart {
+        entities,
+        meta: PartMeta {
+            code: "GB/T 3-1997".into(),
+            name: "外螺纹退刀槽".into(),
+            spec: format!(
+                "d{} P{} g1 {} g2 {}",
+                trim(dims.d),
+                trim(dims.p),
+                trim(dims.g1),
+                trim(dims.g2)
+            ),
+            material: String::new(),
+            weight: String::new(),
+        },
+        bbox,
+    }
+}
+
+/// 独立要素 `build_thread_relief` 的 10 条图元（顺序不变）：
+/// 上（台肩面/圆角/槽底/斜壁/螺纹示意段）→ 下（同构）。
+fn build_thread_relief_entities(dims: &ReliefDims) -> Vec<EntityType> {
     let yb = dims.dg / 2.0; // 槽底半径
     let yt = dims.d / 2.0; // 螺纹大径半径
     let ys = yb + dims.r; // 台肩面下端（圆角切点）
@@ -851,25 +933,24 @@ fn build_thread_relief(dims: &ReliefDims) -> GenPart {
         [dims.g2 + THREAD_TAIL, -yt],
         LAYER_MAIN,
     ));
+    entities
+}
 
-    let bbox = entity_bbox(&entities);
-    GenPart {
-        entities,
-        meta: PartMeta {
-            code: "GB/T 3-1997".into(),
-            name: "外螺纹退刀槽".into(),
-            spec: format!(
-                "d{} P{} g1 {} g2 {}",
-                trim(dims.d),
-                trim(dims.p),
-                trim(dims.g1),
-                trim(dims.g2)
-            ),
-            material: String::new(),
-            weight: String::new(),
-        },
-        bbox,
-    }
+/// 退刀槽**槽体**图元（轴生成器等复用；与 `build_thread_relief` 同一套画法/落层）。
+///
+/// 只去掉独立要素图自己的两条闭合线（台肩面竖线 `x=0`、螺纹示意段）——放进轴里
+/// 那些线由轴生成器的端面/轮廓线负责；保留上半/下半的 R 圆角、槽底、斜壁。
+/// 局部坐标与 `build_thread_relief` 完全一致：台肩面 = `x=0`、槽向 `+x` 展开、
+/// 大径 `y = ±d/2`；图元顺序 = 上圆角/槽底/斜壁、下圆角/槽底/斜壁。
+///
+/// **不改 `build_thread_relief` 的输出**（独立要素预览/DXF 不受影响）。
+pub(crate) fn relief_groove_entities(dims: &ReliefDims) -> Vec<EntityType> {
+    let part = build_thread_relief_entities(dims);
+    // 0/5 = 台肩面竖线；4/9 = 螺纹示意段（轴里由轮廓/端面线负责）。
+    [1usize, 2, 3, 6, 7, 8]
+        .iter()
+        .map(|&index| part[index].clone())
+        .collect()
 }
 
 /// 外螺纹退刀槽的要素定义（登记到 `ELEMENTS`）。
@@ -957,10 +1038,10 @@ impl DetailElement for ThreadRelief {
 /// **订正记录**：网页 P=1.75 行的 `x一般` 印成 **1.3**，用户核对真标准为 **4.3**
 /// （与参考比例 2.5P=4.375 及前后行 3.8 / 5.0 的序列一致）——本表已用 4.3。
 ///
-/// 本文件目前只存数据 + 比例自检；画法在下一轮「局部螺纹 + 收尾/肩距」时再用。
-#[allow(dead_code)]
+/// 本表与表 2 都只在本文件维护（**表归一**：轴生成器 `shaft.rs` 引用这里，
+/// 不再自带副本）；画法在轴生成器的局部螺纹里。
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct RunoutRow {
+pub(crate) struct RunoutRow {
     /// 螺距 P（表 1 从 0.2 起，比表 2 多一行 0.2）。
     pub p: f64,
     /// 收尾 x（一般）≈2.5P。
@@ -975,10 +1056,8 @@ pub struct RunoutRow {
     pub a_short: f64,
 }
 
-/// GB/T 3-1997 表 1 数据（24 行，P=0.2…6）；本文件只存数据 + 比例自检，
-/// 画法在下一轮「局部螺纹 + 收尾/肩距」时再用。
-#[allow(dead_code)]
-pub const RUNOUT_ROWS: &[RunoutRow] = &[
+/// GB/T 3-1997 表 1 数据（24 行，P=0.2…6）；**表归一后的唯一来源**。
+pub(crate) const RUNOUT_ROWS: &[RunoutRow] = &[
     RunoutRow { p: 0.2, x_normal: 0.5, x_short: 0.25, a_normal: 0.6, a_long: 0.8, a_short: 0.4 },
     RunoutRow { p: 0.25, x_normal: 0.6, x_short: 0.3, a_normal: 0.75, a_long: 1.0, a_short: 0.5 },
     RunoutRow { p: 0.3, x_normal: 0.75, x_short: 0.4, a_normal: 0.9, a_long: 1.2, a_short: 0.6 },
@@ -1006,11 +1085,31 @@ pub const RUNOUT_ROWS: &[RunoutRow] = &[
     RunoutRow { p: 6.0, x_normal: 15.0, x_short: 7.5, a_normal: 18.0, a_long: 24.0, a_short: 12.0 },
 ];
 
-/// 螺距 P → 表 1 行（1e-9 容差；找不到返回 `None`，下一轮画收尾时再定报错口径）。
-/// 下一轮「局部螺纹 + 收尾」的入口，本轮只随数据一起备好。
-#[allow(dead_code)]
-pub fn runout_row(p: f64) -> Option<&'static RunoutRow> {
+/// 螺距 P → 表 1 行（1e-9 容差；找不到返回 `None`，便于调用方自定报错口径）。
+pub(crate) fn runout_row(p: f64) -> Option<&'static RunoutRow> {
     RUNOUT_ROWS.iter().find(|row| (row.p - p).abs() < 1e-9)
+}
+
+/// 螺距 P → 表 1 行，查不到报错并列出可用 P（轴生成器局部螺纹走这里）。
+///
+/// 与 `detail_thread_relief` 的 `thread_relief_row` 同口径（1e-9 容差、不插值、
+/// 不外推）；表 1 从 P=0.2 起。
+pub(crate) fn runout_row_checked(p: f64) -> Result<&'static RunoutRow, String> {
+    if !p.is_finite() || p <= 0.0 {
+        return Err(format!("GB/T 3 表 1：螺距 P 必须是正数（收到 {}）", trim(p)));
+    }
+    runout_row(p).ok_or_else(|| {
+        let choices = RUNOUT_ROWS
+            .iter()
+            .map(|row| trim(row.p))
+            .collect::<Vec<_>>()
+            .join("、");
+        format!(
+            "GB/T 3 表 1 没有螺距 P={}（可用 P = {}；不插值、不外推）",
+            trim(p),
+            choices
+        )
+    })
 }
 
 // ══════════════════════════════════════════════════════════════════════════
