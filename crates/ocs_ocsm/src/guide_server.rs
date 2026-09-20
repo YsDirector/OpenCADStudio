@@ -3920,8 +3920,8 @@ pub const COMMAND_CATALOG: &[(&str, &str, &str)] = &[
     ("OCSMPOWERDIM", "D", "智能标注：拾取点模式标线性/对齐/半径/直径（Enter 切线段点选）"),
     ("OCSMDIMGULIDE", "GDIM", "引导线标注：选引导线 → 配置窗口（尺寸/剖视/向视/局部放大/角度/弧长/焊接/引线/序号/公差/粗糙度/形位公差）"),
     ("OCSMCENTERLINE", "ZX", "中心线：点圆/圆弧 → 十字中心线；点两根直线 → 角平分线中心线（`3中心线层`，线长 = 直径/投影长 + 图框比例×6mm）"),
-    ("OCSMGEAR", "", "齿轮（外齿轮 / 内齿轮（齿圈））：不带参数=开齿轮窗口（参数 + 视图按钮 + 实时预览）；带参数=一行直插（`OCSMGEAR 2 40 20 view 剖视图`、`OCSMGEAR int 2 40 30 view 端视图`）。内齿轮只有剖视图+端视图（用户模板只有这两个），且剖视图**不打剖面线**（齿圈外壁留用户延伸）"),
-    ("OCSMSHAFT", "", "轴生成器：不带参数=开轴生成器窗口（段表 ↔ 行文本双向同步 + 实时预览 + 视图按钮）+ 放置态；带参数=行 DSL/JSON 一行直插（段拼接 + 端面倒角 + 砂轮越程槽 + 螺纹段 M + 齿轮段 GEAR + 矩形花键段 SPLINE + 视图 VIEW 常规|剖视|双；退刀槽就是一小段小直径轴段）。`OCSMSHAFT S30 E30 L45 CH2@L | S40 E40 L7 M1.5 | S36 E36 L5 | GEAR M3 Z20 VIEW 剖视 at x,y rot 度`；花键 `OCSMSHAFT SPLINE 6x23x26x6 L30`（可 `de 71` 覆盖）"),
+    ("OCSMGEAR", "", "齿轮（外齿轮 / 内齿轮（齿圈））：不带参数=开齿轮窗口（参数 + 视图按钮 + 实时预览）；带参数=一行直插（`OCSMGEAR 2 40 20 view 剖视图`、`OCSMGEAR int 2 40 30 view 端视图`、`OCSMGEAR 2 40 20 alpha 25 view 剖视图`（可写 `α25`））。压力角 α 默认 20°，14.5/15/17.5/20/22.5/25/30/37.5/45 都可给（10°<α<50°；只进渐开线/基圆/齿厚公式，ha*/c*/ρ=0.38m 不随 α 自动变，老系统/45° 花键请手动给 ha*/c*）。内齿轮只有剖视图+端视图（用户模板只有这两个），且剖视图**不打剖面线**（齿圈外壁留用户延伸）"),
+    ("OCSMSHAFT", "", "轴生成器：不带参数=开轴生成器窗口（段表 ↔ 行文本双向同步 + 实时预览 + 视图按钮）+ 放置态；带参数=行 DSL/JSON 一行直插（段拼接 + 端面倒角 + 砂轮越程槽 + 螺纹段 M + 齿轮段 GEAR + 矩形花键段 SPLINE + 视图 VIEW 常规|剖视|双；退刀槽就是一小段小直径轴段）。`OCSMSHAFT S30 E30 L45 CH2@L | S40 E40 L7 M1.5 | S36 E36 L5 | GEAR M3 Z20 VIEW 剖视 at x,y rot 度`；齿轮段可 `GEAR M3 Z20 ALPHA25`（压力角默认 20°）；花键 `OCSMSHAFT SPLINE 6x23x26x6 L30`（可 `de 71` 覆盖）"),
     ("OCSMEDIT", "ME", "改标注：选中 OCSM 生成的标注 → 配置窗口改参数 → 重生成"),
     ("OCSMRGH", "CC", "表面粗糙度：点选插入点 → 配置窗口（匿名块 + ATTDEF）"),
     ("OCSMDIM2GB", "D2G", "一键转国标：原生标注 → OCSM_GB 样式 + 匿名块；智能圆心标记（CENTERMARK）一并换成 `3中心线层` 中心线（Ø + 图框比例×6）"),
@@ -4299,6 +4299,7 @@ fn gear_meta_json(p: &crate::gear::GearParams, view: crate::gear::GearView, part
         "weight": part.meta.weight,
         "m": p.m,
         "z": p.z,
+        "alpha": p.alpha_deg,
         "ha": p.ha,
         "c": p.c,
         "beta": p.beta_deg,
@@ -4318,6 +4319,8 @@ fn apply_gear_export(
     struct Req {
         m: f64,
         z: u32,
+        #[serde(default = "d_alpha")]
+        alpha: f64,
         #[serde(default = "d_ha")]
         ha: f64,
         #[serde(default = "d_c")]
@@ -4336,6 +4339,9 @@ fn apply_gear_export(
     }
     fn d_ha() -> f64 {
         1.0
+    }
+    fn d_alpha() -> f64 {
+        crate::gear::ALPHA_N_DEG
     }
     fn d_c() -> f64 {
         0.25
@@ -4356,6 +4362,7 @@ fn apply_gear_export(
         kind,
         m: req.m,
         z: req.z,
+        alpha_deg: req.alpha,
         ha: req.ha,
         c: req.c,
         beta_deg: req.beta,

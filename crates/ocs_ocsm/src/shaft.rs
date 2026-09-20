@@ -40,8 +40,9 @@
 //!   → 查表 2（可叠加覆盖）；③ 都不给 → 报错（表 2 以螺距为键，不猜）。
 //!   前置：该端相邻段更高（有台肩可退）、本段圆柱；否则报「第 N 段」+ 原因；
 //! - `ES5*3` 这类旧写法会报错并指路（退刀槽现在用 `RL` 或小直径轴段表示）；
-//! - `GEAR M5 Z10 H20`：**齿轮段（直齿）**，分度圆 d = m·z 由参数导出、**不给
-//!   S/E**；H = 齿宽（省略 = 10m）；按齿轮工具 `side_view()` 的轴向投影口径：
+//! - `GEAR M5 Z10 H20`（可 `ALPHA25`）：**齿轮段（直齿）**，分度圆 d = m·z 由参数导出、**不给
+//!   S/E**；H = 齿宽（省略 = 10m）；`ALPHA` = 基准齿形角（度，省略 20°，与 OCSMGEAR 同口径，
+//!   影响 db/齿厚）；按齿轮工具 `side_view()` 的轴向投影口径：
 //!   画齿顶轮廓（两端带轴向倒角 C = round(0.6m)，见下）+ 分度线（`3中心线层`
 //!   点划线），**常规视图不画齿根线**；剖视另画齿根线（齿部按不剖）；
 //!   齿形用 `OCSMGEAR` 单独出，这里不画齿、本期不做斜齿（`BETA…` 报「斜齿未实现」）；
@@ -68,6 +69,8 @@
 //! 工具 `side_view()` 一样；**剖视**按 `section_view()` 口径加齿根线
 //! ra→rf（`1轮廓实线层`，齿部按不剖，也是剖面线边界）。派生尺寸取 `gear.rs`
 //! 同口径（ha*=1、c*=0.25、Xn=0 → ra = da/2、rf = df/2），不自己另立公式。
+//! `ALPHA` = 基准齿形角（度，省略 20°）：按 `gear.rs` 口径进 `GearParams`，影响基圆 db/齿厚 st
+//! 等派生值（齿廓用 OCSMGEAR 单独出）；本侧视图只画齿顶/齿根轮廓，半径不由 α 决定。
 //! 齿轮段与相邻段的过渡按台阶处理（不做过渡圆角）；**相邻段轮廓半径 > ra
 //! 会盖住齿顶线**，报「第 N 段」；≤ ra 一律放行（不再受齿根圆 rf 限制）。
 //!
@@ -156,7 +159,8 @@ OCSMSHAFT 轴生成器：行 DSL / JSON → 单视图侧视图（段拼接 + 端
                例：S25 E25 L32 RL@L P1.5 / RL@L g1 2.5 g2 4.5 dg 22.7 r 0.8
                前置：该端相邻段更高（有台肩）、本段圆柱，否则报「第 N 段」
     GEAR M5 Z10 H20   齿轮段（直齿）：d=m·z 导出、不给 S/E；H = 齿宽（省略 = 10m）
-                      齿顶轮廓两端倒角 C=round(0.6m)；常规不画齿根、剖视画齿根
+                       ALPHA25 = 压力角 25°（省略 20°）；齿顶轮廓两端倒角 C=round(0.6m)
+                       常规不画齿根、剖视画齿根
     SPLINE 6x23x26x6 L30   矩形花键段（GB/T 1144 规格代号）：大径线 + 小径细线
                       （2细线层）+ 收尾弧 R=de/2（圆心 (L, ±(d/2+R))，末端 x=L+l，
                       l=√(h(2R−h))，6×23×26×6 → l=9.6047）；段长 = L + l；
@@ -493,6 +497,19 @@ pub struct Gear {
     /// 螺旋角 β（度）；本期只支持 0（斜齿 = 二期）。
     #[serde(rename = "beta")]
     pub beta_deg: f64,
+    /// 基准齿形角 α（度；默认 20°，JSON/DSL 可给 `ALPHA25`）。
+    /// 缺省值不写出（保持旧 JSON 与 DSL 文本不变）。
+    #[serde(rename = "alpha", skip_serializing_if = "alpha_is_default")]
+    pub alpha_deg: f64,
+}
+
+/// GEAR 段的默认压力角（与 `gear.rs::ALPHA_N_DEG` 同值）。
+fn default_alpha_deg() -> f64 {
+    crate::gear::ALPHA_N_DEG
+}
+
+fn alpha_is_default(value: &f64) -> bool {
+    (*value - default_alpha_deg()).abs() < 1e-9
 }
 
 impl Gear {
@@ -507,6 +524,7 @@ impl Gear {
             kind: GearKind::External,
             m: self.m,
             z: self.z,
+            alpha_deg: self.alpha_deg,
             beta_deg: self.beta_deg,
             h: self.width(),
             ..GearParams::default()
@@ -698,7 +716,7 @@ fn extract_view_directives<'a>(
 
 fn unknown_keyword(token: &str, label: &str) -> String {
     format!(
-        "{label}：不识别的关键字「{token}」（本期支持 S/E/L/CH/OV/M/TL/RO/SD/RL/GEAR/SPLINE/VIEW；RL 的尺寸参数 P/g1/g2/dg/r 跟在 RL 后面）"
+        "{label}：不识别的关键字「{token}」（本期支持 S/E/L/CH/OV/M/TL/RO/SD/RL/GEAR/SPLINE/VIEW；GEAR 子关键字 M/Z/H/BETA/ALPHA；RL 的尺寸参数 P/g1/g2/dg/r 跟在 RL 后面）"
     )
 }
 
@@ -965,7 +983,8 @@ fn parse_segment(chunk: &str, label: &str, program: &mut Program) -> Result<Segm
     // 先扫一遍段里有没有 GEAR：有 GEAR 时 M 一律按模数收（保持段内顺序无关）。
     let has_gear = tokens.iter().any(|t| t.eq_ignore_ascii_case("GEAR"));
     let mut gear_on = false;
-    let (mut gear_m, mut gear_z, mut gear_h, mut gear_beta) = (None, None, None, None);
+    let (mut gear_m, mut gear_z, mut gear_h, mut gear_beta, mut gear_alpha) =
+        (None, None, None, None, None);
     let mut loose_gear_token: Option<String> = None;
     // SPLINE 段（矩形花键）：`SPLINE <规格>` + `L<满齿段长>` + 可选 `de` 覆盖。
     let mut spline_on = false;
@@ -1164,6 +1183,13 @@ fn parse_segment(chunk: &str, label: &str, program: &mut Program) -> Result<Segm
             }
             gear_beta = Some(value);
             remember_loose_gear_token(&mut loose_gear_token, token);
+        } else if upper.starts_with("ALPHA") {
+            let value = parse_gear_number(token, 5, "ALPHA", label)?;
+            if gear_alpha.is_some() {
+                return Err(format!("{label}：关键字 ALPHA 重复"));
+            }
+            gear_alpha = Some(value);
+            remember_loose_gear_token(&mut loose_gear_token, token);
         } else if upper.starts_with('S') {
             if !looks_like_keyword_value(&token[1..]) {
                 return Err(unknown_keyword(token, label));
@@ -1348,6 +1374,7 @@ fn parse_segment(chunk: &str, label: &str, program: &mut Program) -> Result<Segm
         z,
         h: gear_h,
         beta_deg,
+        alpha_deg: gear_alpha.unwrap_or_else(default_alpha_deg),
     };
     let params = gear.params();
     params
@@ -1367,7 +1394,7 @@ fn parse_segment(chunk: &str, label: &str, program: &mut Program) -> Result<Segm
     })
 }
 
-/// GEAR 子关键字（M/Z/H/BETA）：`M=5` / `M5` 都收；缺值报错。
+/// GEAR 子关键字（M/Z/H/BETA/ALPHA）：`M=5` / `M5` 都收；缺值报错。
 fn parse_gear_value<'a>(
     token: &'a str,
     prefix_len: usize,
@@ -1581,6 +1608,9 @@ struct JsonGear {
     h: Option<f64>,
     #[serde(default)]
     beta: Option<f64>,
+    /// 基准齿形角 α（度）；缺省 = 20°。
+    #[serde(default)]
+    alpha: Option<f64>,
 }
 
 /// `thread` 允许：`true` / `1.5`（螺距）/ `{"p":1.5}` / `{"pitch":1.5}` / `"M1.5"`，
@@ -1860,6 +1890,7 @@ fn parse_json(text: &str) -> Result<Program, String> {
                 z: g.z,
                 h: g.h,
                 beta_deg: g.beta.unwrap_or(0.0),
+                alpha_deg: g.alpha.unwrap_or_else(default_alpha_deg),
             };
             if gear.beta_deg.abs() > 1e-9 {
                 return Err(format!(
@@ -5251,6 +5282,40 @@ GEAR M3 Z20";
         let gear = seg.gear.expect("齿轮段");
         assert_eq!((gear.m, gear.z), (3.0, 20));
         assert_eq!(gear.h, None);
+        assert!((gear.alpha_deg - 20.0).abs() < 1e-12, "GEAR 默认压力角 20°");
+        // ALPHA：`ALPHA25` / `ALPHA=30` / `alpha=22.5` 都收，进 GearParams（影响 db/齿厚）
+        for (text, want) in [
+            ("GEAR M3 Z20 ALPHA25", 25.0),
+            ("GEAR M3 Z20 ALPHA=30", 30.0),
+            ("ALPHA45 GEAR M3 Z20", 45.0),
+            ("GEAR M3 Z20 alpha=22.5", 22.5),
+        ] {
+            let g = parse_program(text).unwrap().segments[0].gear.unwrap();
+            assert!((g.alpha_deg - want).abs() < 1e-9, "{text} → α={}", g.alpha_deg);
+        }
+        // 压力角只进派生参数，不改分度圆；JSON 序列化默认 20° 不写出、非默认写出
+        let g25 = parse_program("GEAR M3 Z20 ALPHA25").unwrap().segments[0].gear.unwrap();
+        assert!((g25.pitch_radius() - 30.0).abs() < 1e-9, "d=m·z 与 α 无关");
+        let p25 = parse_program("GEAR M3 Z20 ALPHA25").unwrap();
+        let j25 = serde_json::to_string(&p25).unwrap();
+        assert!(j25.contains("\"alpha\":25"), "{j25}");
+        let p20 = parse_program("GEAR M3 Z20").unwrap();
+        let j20 = serde_json::to_string(&p20).unwrap();
+        assert!(!j20.contains("alpha"), "默认 α 不写出（旧 JSON 兼容）：{j20}");
+        assert_eq!(parse_program(&j25).unwrap(), p25, "带 α 的 JSON 往返要一致");
+        // JSON 手写段：alpha 可省（默认 20）、可给
+        let seg25 = parse_program(r#"{"segments":[{"gear":{"m":3,"z":20,"alpha":25}}]}"#)
+            .unwrap()
+            .segments[0]
+            .gear
+            .unwrap();
+        assert!((seg25.alpha_deg - 25.0).abs() < 1e-9);
+        let seg_def = parse_program(r#"{"segments":[{"gear":{"m":3,"z":20}}]}"#)
+            .unwrap()
+            .segments[0]
+            .gear
+            .unwrap();
+        assert!((seg_def.alpha_deg - 20.0).abs() < 1e-12, "JSON 缺 alpha → 20°");
         // H 显式 + BETA0（直齿）可写
         let program = parse_program("GEAR M5 Z10 H20 BETA0").unwrap();
         let seg = &program.segments[0];
@@ -5293,6 +5358,9 @@ GEAR M3 Z20";
             ("GEAR M3 Z20 E40", "不给 S/E"),
             ("GEAR M3 Z20 L30", "不要再给 L"),
             ("GEAR M3 Z20 BETA12", "本期只做直齿"),
+            ("GEAR M3 Z20 ALPHA0", "压力角 α 超出范围"),
+            ("GEAR M3 Z20 ALPHA60", "压力角 α 超出范围"),
+            ("GEAR M3 Z20 ALPHA25 ALPHA30", "关键字 ALPHA 重复"),
             ("GEAR M3 Z20 H0", "厚度 h 必须是正数"),
             ("GEAR M3 Z20 CH2", "不能与倒角"),
             ("GEAR M3 Z20 OV", "不能与越程槽"),

@@ -39,6 +39,8 @@
   .ctl input[type=number] { width: 120px; }
   #mSel { width: 190px; }
   #m { width: 110px; }
+  #alphaSel { width: 120px; }
+  #alpha { width: 90px; }
   .ctl.beta input[type=number] { width: 64px; }
   .unit { font-size: 12px; color: #888; }
   /* ── 派生值信息行 ── */
@@ -74,6 +76,17 @@
 
       <label for="z">齿数[z]</label>
       <div class="ctl"><input type="number" id="z" value="40" min="2" step="1"></div>
+
+      <label for="alpha">压力角[α]</label>
+      <div class="ctl">
+        <select id="alphaSel" title="常用压力角（GB/T 1356 默认 20°）；表外值直接改右边数字框"></select>
+        <input type="number" id="alpha" value="20" min="10.1" max="49.9" step="0.1"
+               title="度；默认 20°，常用 14.5/15/17.5/20/22.5/25/30/37.5/45（10°<α<50°）">
+        <span class="unit">°</span>
+        <div class="hint" id="alphaHint" style="flex-basis:100%; margin-top:2px">
+          默认 20°（GB/T 1356）；ha*/c*/齿根圆角 ρ=0.38m <b>不随 α 自动变</b>，14.5°/30°/45° 等系统请按所用标准手动改 ha*/c*（45° 花键常用 ha*≈0.5，本工具下限 0.5）
+        </div>
+      </div>
 
       <label for="ha">齿顶高系数[ha*]</label>
       <div class="ctl"><input type="number" id="ha" value="1" step="0.05"></div>
@@ -136,6 +149,10 @@
 
 // GB/T 1357 标准模数系列（GUI 直接全列，选它即填数字框）
 const MODULES = [0.5, 0.6, 0.7, 0.8, 1, 1.25, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10, 12, 16, 20, 25, 32, 40, 50];
+// 常用压力角（GB/T 1356 默认 20°；30/37.5/45 也列入快捷档，45° 花键要配小 ha*）。
+// 下拉只是快捷方式，右侧数字框可输任意 10°<α<50° 的值。
+const ALPHAS = [14.5, 15, 17.5, 20, 22.5, 25, 30, 37.5, 45];
+const ALPHA_DEFAULT = 20;
 // 两种齿轮：key 与 gear.rs 里 GearKind::key() 一致（external|internal）
 // hFactor = 齿宽默认系数：外 10m（模板 20 @ m=2）、内 15m（模板 30 @ m=2）
 const KINDS = [
@@ -155,6 +172,7 @@ const VIEWS = [
 let curKind = "external";         // 当前种类（默认外齿轮）
 let curView = "section";          // 当前选中视图（默认剖视图）
 let hTouched = false;             // 用户是否手动改过厚度 h（改过则切种类/改 m 不再自动回默认）
+let alphaTouched = false;         // 用户是否手动改过压力角 α（改过之后任何自动同步都不再重置，照 hTouched 口径）
 let seqPreview = 0, seqInfo = 0;  // 过期响应丢弃序号（快速连点时只认最后一次）
 let tPreview = 0, tInfo = 0;      // 防抖计时器（预览 250ms / 派生值 300ms）
 const el = (id) => document.getElementById(id);
@@ -191,6 +209,26 @@ function syncBetaHint() {
     : "右旋为正、左旋在度数里填负数；β≠0 = 斜齿轮：侧视图会加三条细实线";
 }
 
+// 压力角默认值（不随 m/种类变；保留函数是为了照 h 的“已手动修改”口径好扩展）
+function defaultAlpha() { return ALPHA_DEFAULT; }
+// 用户没手动改过 α 时写回默认 20°；force=true 则无条件写（初始化用）
+function syncDefaultAlpha(force) {
+  if (alphaTouched && !force) return;
+  el("alpha").value = fmt(defaultAlpha());
+}
+// 压力角下拉 ↔ 数字框联动：命中常用档就选它，否则选「自定义」
+function syncAlphaSelect() {
+  const a = num("alpha");
+  const hit = Number.isFinite(a) ? ALPHAS.find((v) => Math.abs(v - a) < 1e-9) : undefined;
+  el("alphaSel").value = hit ? String(hit) : "custom";
+}
+// 压力角提示：默认 20° + 系数不随 α 自动变的提醒；手动改过标「已手动修改」
+function syncAlphaHint() {
+  el("alphaHint").innerHTML = "默认 20°（GB/T 1356）；ha*/c*/齿根圆角 ρ=0.38m <b>不随 α 自动变</b>，"
+    + "14.5°/30°/45° 等系统请按所用标准手动改 ha*/c*（45° 花键常用 ha*≈0.5，本工具下限 0.5）"
+    + (alphaTouched ? " · 已手动修改" : "");
+}
+
 /* ─────────────────────────── 参数读取与校验 ─────────────────────────── */
 
 // 读一个数字框（空/非数字 → NaN）
@@ -206,17 +244,18 @@ function betaDeg() {
 
 // 收集当前参数：err 非空 = 非法（禁用主按钮、红字提示）；p 供 URL / POST JSON 用
 function collect() {
-  const m = num("m"), z = num("z"), ha = num("ha"), c = num("c"), h = num("h"), x = num("x");
+  const m = num("m"), z = num("z"), alpha = num("alpha"), ha = num("ha"), c = num("c"), h = num("h"), x = num("x");
   const beta = betaDeg();
   let err = "";
   if (!Number.isFinite(m) || m <= 0) err = "模数 m 必须是正数。";
   else if (!Number.isFinite(z) || z < 2) err = "齿数 z 不能小于 2。";
+  else if (!Number.isFinite(alpha) || alpha <= 10 || alpha >= 50) err = "压力角 α 超出范围（10°<α<50°）。";
   else if (!Number.isFinite(ha)) err = "齿顶高系数 ha* 必须是数字。";
   else if (!Number.isFinite(c)) err = "顶隙系数 c* 必须是数字。";
   else if (!Number.isFinite(beta)) err = "螺旋角 β 的度/分/秒都必须是数字。";
   else if (!Number.isFinite(h) || h <= 0) err = "厚度 h 必须是正数。";
   else if (!Number.isFinite(x)) err = "变位系数 Xn 必须是数字。";
-  return { ok: !err, err, p: { kind: curKind, m, z: Math.round(z), ha, c, beta, h, x } };
+  return { ok: !err, err, p: { kind: curKind, m, z: Math.round(z), alpha, ha, c, beta, h, x } };
 }
 
 // 每次输入都跑：校验按钮可用性 + 红字；顺带同步模数下拉与只读倒角框
@@ -309,8 +348,8 @@ function syncKindHint() {
     ? (curKind === "internal" ? "端视图" : "常规正视图")
     : ({ section: "剖视图", side: "侧视图", simplified: "简化正视图" }[curView] || "剖视图");
   const arg = v.ok
-    ? (curKind === "internal" ? "int" : "ext") + " " + fmt(v.p.m) + " " + v.p.z + " " + fmt(v.p.h)
-    : (curKind === "internal" ? "int" : "ext") + " <m> <z> <h>";
+    ? (curKind === "internal" ? "int" : "ext") + " " + fmt(v.p.m) + " " + v.p.z + " " + fmt(v.p.h) + " alpha " + fmt(v.p.alpha)
+    : (curKind === "internal" ? "int" : "ext") + " <m> <z> <h> alpha <α>";
   let html = "";
   if (curKind === "internal") {
     html += "内齿轮只有 <b>剖视图</b> 与 <b>端视图</b> 两个视图（侧视图/简化正视图无模板，不生成）；"
@@ -322,9 +361,9 @@ function syncKindHint() {
 
 /* ─────────────────────────── 预览（/api/gear_svg） ─────────────────────────── */
 
-// 参数拼 URL（顺序与后端注释一致：m z ha c beta h x）
+// 参数拼 URL（顺序与后端注释一致：m z alpha ha c beta h x）
 function paramQS(p) {
-  return "kind=" + p.kind + "&m=" + p.m + "&z=" + p.z + "&ha=" + p.ha + "&c=" + p.c +
+  return "kind=" + p.kind + "&m=" + p.m + "&z=" + p.z + "&alpha=" + p.alpha + "&ha=" + p.ha + "&c=" + p.c +
          "&beta=" + p.beta + "&h=" + p.h + "&x=" + p.x;
 }
 function svgUrl(p) { return "/api/gear_svg?" + paramQS(p) + "&view=" + curView + "&n=1"; }
@@ -374,6 +413,9 @@ function renderInfo(j) {
   const internal = j.kind === "internal";
   const items = [
     ["分度圆 d", j.d, " mm", ""],
+    ["压力角 α", j.alpha, "°", "基准齿形角（GB/T 1356 默认 20°）"],
+    ["端面压力角 αt", j.alpha_t, "°", "αt = atan(tan αn / cos β)；直齿 αt = αn"],
+    ["基圆 db", j.db, " mm", "db = d·cosαt"],
     [internal ? "齿顶圆 da（内）" : "齿顶圆 da", j.da, " mm",
       internal ? "内齿轮齿顶圆在里侧（da < d）" : ""],
     [internal ? "齿根圆 df（外）" : "齿根圆 df", j.df, " mm",
@@ -430,8 +472,11 @@ async function fetchInfo() {
 function onInput() {
   syncModuleSelect();
   syncChamfer();
-  syncDefaultH(false);   // 改 m 时：用户没手动改过 h → h 跟着 10m/15m 走；改过则保留
+  syncAlphaSelect();        // 压力角：数字框 → 下拉（命中常用档就选它，否则「自定义」）
+  syncDefaultH(false);      // 改 m 时：用户没手动改过 h → h 跟着 10m/15m 走；改过则保留
+  syncDefaultAlpha(false);  // 压力角：用户没手动改过 → 保持 20°；改过则保留（照 hTouched 口径）
   syncHRule();
+  syncAlphaHint();
   syncKindHint();
   validateUI();
   clearTimeout(tPreview); tPreview = setTimeout(fetchPreview, 250);
@@ -517,14 +562,41 @@ function ping(bye) {
     onInput();
   });
 
+  // 压力角下拉：第一项「自定义」，其余常用档（14.5/15/17.5/20/22.5/25）
+  const aSel = el("alphaSel");
+  aSel.innerHTML = "";
+  const aCustom = document.createElement("option");
+  aCustom.value = "custom";
+  aCustom.textContent = "自定义";
+  aSel.appendChild(aCustom);
+  ALPHAS.forEach((v) => {
+    const o = document.createElement("option");
+    o.value = String(v);
+    o.textContent = String(v) + "°";
+    aSel.appendChild(o);
+  });
+  aSel.addEventListener("change", () => {
+    if (aSel.value !== "custom") {
+      el("alpha").value = aSel.value;   // 选下拉 → 填数字框，并记为用户手动值
+      alphaTouched = true;
+    }
+    onInput();
+  });
+
   // 所有数值框：input 防抖、blur/Enter 立即刷新
-  ["m", "z", "ha", "c", "betaD", "betaM", "betaS", "h", "x"].forEach((id) => {
+  ["m", "z", "alpha", "ha", "c", "betaD", "betaM", "betaS", "h", "x"].forEach((id) => {
     const n = el(id);
     if (id === "h") {
       // 只要用户动过 h 就标记：之后切种类/改 m 不再自动覆盖
       const markTouched = () => { hTouched = true; };
       n.addEventListener("input", markTouched);
       n.addEventListener("change", markTouched);
+    }
+    if (id === "alpha") {
+      // 只要用户动过 α 就标记：之后切种类/改 m 不再自动回 20°（照 hTouched 口径）
+      const markAlpha = () => { alphaTouched = true; };
+      n.addEventListener("input", markAlpha);
+      n.addEventListener("change", markAlpha);
     }
     n.addEventListener("input", onInput);
     n.addEventListener("change", onInput);
@@ -538,7 +610,10 @@ function ping(bye) {
   syncModuleSelect();
   syncChamfer();
   syncDefaultH(false);
+  syncAlphaSelect();
+  syncDefaultAlpha(false);
   applyKindUI();
+  syncAlphaHint();
   validateUI();
   fetchPreview();
   fetchInfo();

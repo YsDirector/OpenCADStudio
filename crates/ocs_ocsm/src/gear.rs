@@ -8,7 +8,7 @@
 //!
 //! | 元素 | 规则 | 反解核对 |
 //! |---|---|---|
-//! | 齿廓 | 渐开线（α=20°），用 **clamped 3 次 B 样条** 表示，7 个控制点 | 全 80 条样条对理论渐开线最大偏差 **0.012°** |
+//! | 齿廓 | 渐开线（默认 α=20°，可用 `alpha=` 指定 14.5°/25° 等），用 **clamped 3 次 B 样条** 表示，7 个控制点 | 全 80 条样条对理论渐开线最大偏差 **0.012°** |
 //! | 拟合点 | 齿根圆角切点 + `r = rb + (ra−rb)·{¼,½,¾,1}` 共 5 点，**弦长参数化** | 模板 5 个拟合点半径 38.1327/38.6908/39.7939/40.8970/42.0001 |
 //! | 齿根过渡圆角 | ρ = **0.38m**（GB/T 1356），圆心在 `r = rf+ρ` 上、且到齿廓起点距离 = ρ | 模板圆心 r=38.2600 = rf+ρ；其弧终点与样条起点同一点 |
 //! | 齿顶弧 / 齿根弧 | 齿顶弧在**齿中心线**两侧各半条；齿根弧在**齿槽中心线**两侧各半条 | 每齿 8 个实体，40 齿 = 320 个 |
@@ -40,7 +40,7 @@ use crate::partgen::{GenPart, PartMeta, LAYER_CENTER, LAYER_MAIN, LAYER_THIN};
 /// 剖面线层（与 partgen_more/partgen_kit 同一层名）。
 pub const LAYER_HATCH: &str = "5剖面线层";
 
-/// 基准齿形角（GB/T 1356）。
+/// 默认基准齿形角（GB/T 1356 基本齿廓；`GearParams::alpha_deg` 缺省值）。
 pub const ALPHA_N_DEG: f64 = 20.0;
 /// 齿根过渡圆角系数 ρf = 0.38m（GB/T 1356；模板实测 0.76 = 0.38×2）。
 pub const RHO_RATIO: f64 = 0.38;
@@ -101,6 +101,8 @@ pub struct GearParams {
     pub m: f64,
     /// 齿数 z
     pub z: u32,
+    /// 基准齿形角 α（**度**；GB/T 1356 默认 20°，14.5°/25°/30°/37.5°/45° 等系统直接填）
+    pub alpha_deg: f64,
     /// 齿顶高系数 ha*
     pub ha: f64,
     /// 顶隙系数 c*
@@ -120,6 +122,7 @@ impl Default for GearParams {
             kind: GearKind::External,
             m: 2.0,
             z: 40,
+            alpha_deg: ALPHA_N_DEG,
             ha: 1.0,
             c: 0.25,
             beta_deg: 0.0,
@@ -130,9 +133,9 @@ impl Default for GearParams {
 }
 
 impl GearParams {
-    /// 基准齿形角（弧度）。
+    /// 法向基准齿形角 αn（弧度；来自 `alpha_deg`）。
     pub fn alpha_n(&self) -> f64 {
-        ALPHA_N_DEG.to_radians()
+        self.alpha_deg.to_radians()
     }
     /// 螺旋角（弧度，带正负）。
     pub fn beta(&self) -> f64 {
@@ -265,6 +268,12 @@ impl GearParams {
         if !(2..=1000).contains(&self.z) {
             return Err(format!("齿数 z 超出范围（2–1000）：{}", self.z));
         }
+        if !(self.alpha_deg.is_finite() && self.alpha_deg > 10.0 && self.alpha_deg < 50.0) {
+            return Err(format!(
+                "压力角 α 超出范围（10°<α<50°）：{}°",
+                self.alpha_deg
+            ));
+        }
         if !(self.ha.is_finite() && self.ha >= 0.5) {
             return Err("齿顶高系数 ha* 至少 0.5。".into());
         }
@@ -326,6 +335,37 @@ impl GearParams {
                 trim(self.x)
             ));
         }
+        if (self.alpha_deg - ALPHA_N_DEG).abs() > 1e-9 {
+            v.push(format!(
+                "非 20° 基准齿形角（α={}°）：α 已代入渐开线/基圆/齿厚公式（db=d·cosαt、ψ(R) 用 inv αt）；\
+                 ha*、c*、齿根圆角系数 ρ=0.38m 不随 α 自动改变（当前 ha*={}、c*={}、ρ={}），\
+                 14.5°/25° 等系统的系数、以及 30°/37.5°/45° 花键的短齿顶请按所用标准手动填 ha*/c*。",
+                trim(self.alpha_deg),
+                trim(self.ha),
+                trim(self.c),
+                trim(self.rho())
+            ));
+        }
+        if self.tooth_tip_crossed() {
+            v.push(format!(
+                "齿顶变尖/渐开线交叉：α={}° 配 ha*={} 时 ψ(da/2)={:.4}° ≤ 0 —— 两条齿廓在齿顶圆之前就相交，\
+                 「常规正视图」画不出真实渐开线齿廓（会报错；剖视/侧视/简化正视图不受影响）。\
+                 45° 花键通常配小齿顶高系数（例如 ha*=0.5；本工具 ha* 下限就是 0.5）；或减小 α/齿顶高、增大齿数。",
+                trim(self.alpha_deg),
+                trim(self.ha),
+                self.half_tooth_angle(self.da() / 2.0).to_degrees()
+            ));
+        }
+        if self.internal_tooth_crossed() {
+            v.push(format!(
+                "内齿轮齿槽过宽：α={}° 配 ha*={} 时齿槽半角 ψ(da/2)={:.4}° ≥ 半齿距 {:.4}° —— 相邻齿槽齿廓\
+                 在齿顶圆之前相交，「端视图」画不出真实齿廓（会报错；剖视图不受影响）。减小 ha*/α 或增大齿数。",
+                trim(self.alpha_deg),
+                trim(self.ha),
+                self.space_half_angle(self.da().max(self.db()) / 2.0).to_degrees(),
+                (self.pitch_angle() / 2.0).to_degrees()
+            ));
+        }
         if let Some(w) = self.root_style_note() {
             v.push(w);
         }
@@ -381,6 +421,44 @@ impl GearParams {
         self.kind.is_internal() && self.da() / 2.0 < self.db() / 2.0 - 1e-9
     }
 
+    /// 外齿轮：齿顶圆处两条渐开线齿廓是否已经相交（齿顶变尖）—— `ψ(da/2) ≤ 0`。
+    ///
+    /// 与齿数无关的大 α 判据：`2·ha*·tanα ≳ π/2`（ha*=1 时 α ≳ 38.15°），
+    /// 所以 45° 花键必须配小齿顶高系数（如 ha*=0.5）。内齿轮不适用（齿顶在里侧、
+    /// 用径向直线降级，`internal_tip_half_angle` 已做钳位）。
+    pub fn tooth_tip_crossed(&self) -> bool {
+        !self.kind.is_internal() && self.half_tooth_angle(self.da() / 2.0) <= 1e-9
+    }
+
+    /// 内齿轮的反向退化：齿槽半角 ≥ 半齿距时，相邻齿槽的齿廓在齿顶圆之前相交。
+    /// 与外齿轮的「齿顶变尖」互为镜像（大 α / 短齿距会触发，例如 α=45°、z=40、ha*=1）。
+    pub fn internal_tooth_crossed(&self) -> bool {
+        self.kind.is_internal()
+            && self.space_half_angle(self.da().max(self.db()) / 2.0)
+                >= self.pitch_angle() / 2.0 - 1e-9
+    }
+
+    /// 齿廓拟合点的**有效起点半径**（模板口径 = rb）：
+    /// 基圆落到齿根圆以内时（`rb < rf`，大压力角/小齿数，例如 z=40 时 α>20.36°），
+    /// 渐开线在根圆以内没有材料意义，拟合带改从**齿根圆**起算 —— 否则模板的 1/8 起点
+    /// 会掉进根圆里、圆角三角形必无解。默认 20° 的模板件 `rb=37.588 > rf=37.5`，
+    /// 取 rb、与加 α 参数前逐点一致。
+    pub fn flank_band_start(&self) -> f64 {
+        let rb = self.db() / 2.0;
+        let rf = self.df() / 2.0;
+        if rb < rf {
+            rf
+        } else {
+            rb
+        }
+    }
+
+    /// 齿廓第一个拟合点半径 = 有效起点 + (ra − 有效起点)/8（模板口径的 1/8 规律）。
+    pub fn flank_start_radius(&self) -> f64 {
+        let r0 = self.flank_band_start();
+        r0 + (self.da() / 2.0 - r0) * FIT_FRACTIONS[0]
+    }
+
     /// 齿根那一段用哪种画法（模板口径能不能解出来）。
     ///
     /// **只针对外齿轮**（内齿轮走 `solve_internal_fillet`，它的圆心在 rf−ρ、切点由解唯一确定，
@@ -391,10 +469,10 @@ impl GearParams {
     /// **可解条件 = |r_c − r_s| ≤ ρ**。齿数小的时候 r_s 比 r_c 高出超过 ρ，就无解了
     /// （用户 2026-09-17 实测 z=17 渲染异常）。
     pub fn root_style(&self) -> RootStyle {
-        let (rb, ra, rf) = (self.db() / 2.0, self.da() / 2.0, self.df() / 2.0);
+        let (rb, rf) = (self.db() / 2.0, self.df() / 2.0);
         let rho = self.rho();
         let r_c = rf + rho;
-        let r_s = rb + (ra - rb) * FIT_FRACTIONS[0];
+        let r_s = self.flank_start_radius();
         if (r_c - r_s).abs() <= rho {
             return RootStyle::TemplateArc;
         }
@@ -416,7 +494,7 @@ impl GearParams {
             return None;
         }
         let r_c = self.df() / 2.0 + self.rho();
-        let r_s = self.db() / 2.0 + (self.da() / 2.0 - self.db() / 2.0) * FIT_FRACTIONS[0];
+        let r_s = self.flank_start_radius();
         Some(format!(
             "齿根圆角无解：z={}、m={} 时齿廓起点半径 {:.3} 与圆角圆心半径 {:.3} 相差 {:.3} > 圆角半径 ρ={:.3}，\
              模板口径的 0.38m 圆角放不下。已按{}出图（想看真实根切曲线请用变位，或按 GB 允许的轻微根切另画）。",
@@ -437,6 +515,9 @@ impl GearParams {
             s.push_str("内齿轮 ");
         }
         s.push_str(&format!("m{} z{} h{}", trim(self.m), self.z, trim(self.h)));
+        if (self.alpha_deg - ALPHA_N_DEG).abs() > 1e-9 {
+            s.push_str(&format!(" α{}", trim(self.alpha_deg)));
+        }
         if self.is_helical() {
             s.push_str(&format!(" β{}", trim(self.beta_deg)));
         }
@@ -711,12 +792,13 @@ fn fit_cubic_bspline(knots: &[f64], fit: &[[f64; 2]; 5]) -> Result<Vec<[f64; 2]>
 fn make_flank(p: &GearParams, c: f64, sign: f64) -> Result<Flank, String> {
     let ra = p.da() / 2.0;
     let rf = p.df() / 2.0;
-    let rb = p.db() / 2.0;
+    let r_band0 = p.flank_band_start();
     let rho = p.rho();
     let r_c = rf + rho; // 圆角圆心半径（与齿根圆相切）
     let style = p.root_style();
 
-    // ① 5 个拟合点。模板口径：渐开线上 r = rb + (ra−rb)·{1/8,¼,½,¾,1}（反解自模板）。
+    // ① 5 个拟合点。模板口径：渐开线上 r = 有效起点 + (ra−有效起点)·{1/8,¼,½,¾,1}
+    //    （反解自模板；有效起点通常 = rb，仅 rb<rf 的大压力角下换成 rf，见 `flank_band_start`）。
     //    降级口径：齿廓只到**基圆**（下面用直线接），所以从 rb 起取 {0,¼,½,¾,1}。
     //    降级口径：齿廓只到**基圆略上方**（避开渐开线在基圆处的曲率奇异 —— 与 FreeCAD
     //    `fcgear` 的 fs=0.01 同一手法：起点正好落在基圆上时，插值样条会在起点附近“勾”回去）。
@@ -726,7 +808,7 @@ fn make_flank(p: &GearParams, c: f64, sign: f64) -> Result<Flank, String> {
     };
     let mut fit = [[0.0f64; 2]; 5];
     for (i, f) in fracs.iter().enumerate() {
-        let radius = rb + (ra - rb) * f;
+        let radius = r_band0 + (ra - r_band0) * f;
         fit[i] = involute_point(p, radius, c, sign);
     }
     // ② 弦长参数化 → clamped 节点（**11 个** = 7 控制点 + 3 次 + 1，与模板同构）+ ③ 控制点
@@ -911,6 +993,18 @@ fn arc_deg(c: [f64; 2], r: f64, a0: f64, a1: f64, layer: &str) -> EntityType {
     EntityType::Arc(a)
 }
 
+/// `arc_deg` 的 DXF 语义是 start→end **逆时针**扫：大压力角下齿根切点会越过
+/// 齿槽中心线（两个代表角的先后反过来），直接画会绕一整圈。取短弧（口径同
+/// `make_flank_internal` 的“短弧那一支”），端点仍是同两个点。
+/// 默认 20° 下跨度本来就小，等价于直接 `arc_deg`（行为不变）。
+fn short_arc_deg(c: [f64; 2], r: f64, a0: f64, a1: f64, layer: &str) -> EntityType {
+    if (a1 - a0).rem_euclid(360.0) > 180.0 {
+        arc_deg(c, r, a1, a0, layer)
+    } else {
+        arc_deg(c, r, a0, a1, layer)
+    }
+}
+
 fn circle(c: [f64; 2], r: f64, layer: &str) -> EntityType {
     let mut e = Circle::from_center_radius(Vector3::new(c[0], c[1], 0.0), r);
     set_layer(&mut e, layer);
@@ -958,6 +1052,16 @@ fn cross_centerlines(center: [f64; 2], dia: f64, n: f64) -> Vec<EntityType> {
 ///
 /// 齿中心线在 `pitch/2 + k·pitch`（模板实测：齿中心 4.5°+9k，齿槽中心 0°+9k）。
 fn front_regular(p: &GearParams, n: f64) -> Result<Vec<EntityType>, String> {
+    if p.tooth_tip_crossed() {
+        return Err(format!(
+            "α={}° 配 ha*={} 时齿顶变尖（ψ(da/2)={:.4}° ≤ 0）：两条渐开线在齿顶圆之前相交，\
+             常规正视图画不出真实齿廓。请减小 ha*（45° 花键常用 ha*=0.5；本工具下限 0.5）、减小 α 或增大齿数；\
+             剖视图/侧视图/简化正视图不受影响。",
+            trim(p.alpha_deg),
+            trim(p.ha),
+            p.half_tooth_angle(p.da() / 2.0).to_degrees()
+        ));
+    }
     let ra = p.da() / 2.0;
     let rf = p.df() / 2.0;
     let pitch = p.pitch_angle();
@@ -970,7 +1074,7 @@ fn front_regular(p: &GearParams, n: f64) -> Result<Vec<EntityType>, String> {
         let fl = make_flank(p, c, 1.0)?; // 该齿 +1 侧
         let fr = make_flank(p, c, -1.0)?; // 该齿 −1 侧
         // 齿根弧（前一个齿槽的半条）：从齿槽中心到本齿 −1 侧圆角切点
-        out.push(arc_deg(
+        out.push(short_arc_deg(
             [0.0, 0.0],
             rf,
             c_deg - pitch.to_degrees() / 2.0,
@@ -994,7 +1098,7 @@ fn front_regular(p: &GearParams, n: f64) -> Result<Vec<EntityType>, String> {
         } else {
             c_deg + pitch.to_degrees() / 2.0
         };
-        out.push(arc_deg(
+        out.push(short_arc_deg(
             [0.0, 0.0],
             rf,
             near(th_of(fl.root_pt), c_deg + 3.0),
@@ -1367,6 +1471,16 @@ fn push_root_int(out: &mut Vec<EntityType>, p: &GearParams, f: &FlankInt) {
 /// 相位：齿槽中心在半个齿距处（模板：齿中心 0°、齿槽 4.5°），与外齿轮模板的相位约定同构。
 /// **不画分度圆**——内齿轮模板里没有（外齿轮模板有；模板是唯一权威）。
 fn front_internal(p: &GearParams, n: f64) -> Result<Vec<EntityType>, String> {
+    if p.internal_tooth_crossed() {
+        return Err(format!(
+            "内齿轮 α={}° 配 ha*={} 时齿槽过宽（ψ(da/2)={:.4}° ≥ 半齿距 {:.4}°）：相邻齿槽的齿廓\
+             在齿顶圆之前相交，端视图画不出真实齿廓。请减小 ha*（短齿顶）、减小 α 或增大齿数；剖视图不受影响。",
+            trim(p.alpha_deg),
+            trim(p.ha),
+            p.space_half_angle(p.da().max(p.db()) / 2.0).to_degrees(),
+            (p.pitch_angle() / 2.0).to_degrees()
+        ));
+    }
     let ra = p.da() / 2.0;
     let rf = p.df() / 2.0;
     let pitch = p.pitch_angle();
@@ -1598,6 +1712,9 @@ fn internal_chain_points(p: &GearParams, seg: usize) -> Result<Vec<[f64; 2]>, St
 /// 注意：这是**齿高那一段齿圈**的质量（剖视图画到齿根圆为止的那部分），
 /// 真实齿圈还要加轮缘/腹板 —— 与模板"外壁留给用户"的口径一致。
 fn internal_weight_kg(p: &GearParams) -> String {
+    if p.internal_tooth_crossed() {
+        return String::new(); // 齿槽在齿顶前相交，面积无意义
+    }
     let rf = p.df() / 2.0;
     let pts = match internal_chain_points(p, 8) {
         Ok(v) => v,
@@ -1698,6 +1815,9 @@ pub fn generate(p: &GearParams, view: GearView, n: f64) -> Result<GenPart, Strin
 ///
 /// 一期不画轴孔，所以这里给的是**毛坯质量**（明细表里如需要请按实际孔型修正）。
 fn solid_weight_kg(p: &GearParams) -> String {
+    if p.tooth_tip_crossed() {
+        return String::new(); // 齿廓在齿顶前相交，面积无意义
+    }
     let ra = p.da() / 2.0;
     let rf = p.df() / 2.0;
     let pitch = p.pitch_angle();
@@ -1759,9 +1879,7 @@ fn arc_center(
 
 /// 齿廓起点（第一个拟合点）半径：rb + (ra−rb)/8。
 fn fr_start_radius(p: &GearParams) -> f64 {
-    let rb = p.db() / 2.0;
-    let ra = p.da() / 2.0;
-    rb + (ra - rb) * FIT_FRACTIONS[0]
+    p.flank_start_radius()
 }
 
 fn bbox_of(entities: &[EntityType]) -> [f64; 4] {
@@ -1808,6 +1926,10 @@ pub fn block_name(p: &GearParams, view: GearView) -> String {
         s.push_str("_INT"); // 内齿轮标记；外齿轮块名保持一期原样不变
     }
     s.push_str(&format!("_M{}_Z{}", trim(p.m).replace('.', "_"), p.z));
+    if (p.alpha_deg - ALPHA_N_DEG).abs() > 1e-9 {
+        // 非默认压力角必须进块名：否则 20° 与 25° 的同规格件会命中同名块（幂等复用会串图）
+        s.push_str(&format!("_A{}", trim(p.alpha_deg.abs()).replace('.', "_")));
+    }
     if p.is_helical() {
         s.push_str(&format!(
             "_B{}{}",
@@ -1830,7 +1952,7 @@ pub fn block_name(p: &GearParams, view: GearView) -> String {
         .collect()
 }
 
-/// 解析命令行参数：`<m> <z> [h=..|ha=..|c=..|beta=..|x=..] [view 名] [at x,y] [rot 度]`
+/// 解析命令行参数：`<m> <z> [h=..|alpha=..|ha=..|c=..|beta=..|x=..] [view 名] [at x,y] [rot 度]`
 pub struct GearRequest {
     pub params: GearParams,
     pub view: GearView,
@@ -1840,7 +1962,7 @@ pub struct GearRequest {
 
 /// 命令行/HTTP 参数解析（人侧 GUI 与 AI 侧共用同一套键名）。
 pub fn parse_request(raw: &str) -> Result<GearRequest, String> {
-    let usage = "用法：OCSMGEAR [内齿轮|int] <模数m> <齿数z> [h=齿宽] [ha=齿顶高系数] [c=顶隙系数] [beta=螺旋角(右旋为正)] [x=变位系数] \
+    let usage = "用法：OCSMGEAR [内齿轮|int] <模数m> <齿数z> [h=齿宽] [ha=齿顶高系数] [c=顶隙系数] [alpha=压力角(°,默认20) 或 α25] [beta=螺旋角(右旋为正)] [x=变位系数] \
                  [view 剖视图|侧视图|简化正视图|常规正视图|端视图] [at x,y] [rot 度]。\n\
                  不带参数则打开齿轮窗口。内齿轮（齿圈）目前只有 剖视图 + 端视图（模板只有这两个）；\
                  剖视图不画齿圈外壁与剖面线，由用户/AI 按实际齿圈结构延伸。";
@@ -1892,6 +2014,7 @@ pub fn parse_request(raw: &str) -> Result<GearRequest, String> {
                 p.h = num("h", val)?;
                 h_given = true;
             }
+            "alpha" | "α" | "压力角" => p.alpha_deg = num("alpha", val)?,
             "ha" | "ha*" => p.ha = num("ha", val)?,
             "c" | "c*" | "顶隙" => p.c = num("c", val)?,
             "beta" | "β" | "螺旋角" => p.beta_deg = num("beta", val)?,
@@ -1939,6 +2062,21 @@ pub fn parse_request(raw: &str) -> Result<GearRequest, String> {
             }
             "rot" | "角度" => rotation = num("rot", val)?,
             other => {
+                // `α25` / `alpha25` 这类紧凑写法（压力角；`α=25`/`alpha=25` 走上面的匹配臂）
+                let lower = other.to_ascii_lowercase();
+                if let Some(rest) = other
+                    .strip_prefix('α')
+                    .or_else(|| lower.strip_prefix("alpha"))
+                {
+                    let rest = rest.strip_prefix('=').unwrap_or(rest);
+                    if !rest.is_empty() {
+                        p.alpha_deg = rest
+                            .parse::<f64>()
+                            .map_err(|_| format!("alpha 需要数字，收到 `{}`", other))?;
+                        i += 1;
+                        continue;
+                    }
+                }
                 // 位置参数：第 1 个 m、第 2 个 z、第 3 个 h；也可以是中文视图名/种类名
                 if let Ok(vw) = GearView::parse(other) {
                     view = Some(vw);
@@ -1997,7 +2135,7 @@ pub fn parse_request(raw: &str) -> Result<GearRequest, String> {
 
 // ─────────────────────────── SVG 预览（GUI 用）─────────────────
 
-/// GUI 预览：`/api/gear_svg?m=2&z=40&h=20&ha=1&c=0.25&beta=0&x=0&view=section&n=1`
+/// GUI 预览：`/api/gear_svg?m=2&z=40&h=20&alpha=20&ha=1&c=0.25&beta=0&x=0&view=section&n=1`
 pub fn preview_svg(query: &str) -> Result<String, String> {
     let (p, view, n) = params_from_query(query)?;
     let part = generate(&p, view, n)?;
@@ -2024,6 +2162,7 @@ pub fn params_from_query(query: &str) -> Result<(GearParams, GearView, f64), Str
         kind,
         m,
         z: f("z", 40.0).round() as u32,
+        alpha_deg: f("alpha", ALPHA_N_DEG),
         ha: f("ha", 1.0),
         c: f("c", 0.25),
         beta_deg: f("beta", 0.0),
@@ -2050,6 +2189,7 @@ pub fn info_json(query: &str) -> Result<String, String> {
         "df": round4(p.df()),
         "db": round4(p.db()),
         "mt": round4(p.mt()),
+        "alpha": round4(p.alpha_deg),
         "alpha_t": round4(p.alpha_t().to_degrees()),
         "rho": round4(p.rho()),
         "fillet_center_r": round4(p.fillet_center_radius()),
@@ -2237,6 +2377,7 @@ mod tests {
             kind: GearKind::External,
             m: 2.0,
             z: 40,
+            alpha_deg: ALPHA_N_DEG,
             ha: 1.0,
             c: 0.25,
             beta_deg: 0.0,
@@ -2878,6 +3019,390 @@ mod tests {
         let p = tmpl();
         let w: f64 = solid_weight_kg(&p).parse().unwrap();
         assert!(w > 0.70 && w < 0.90, "毛坯质量 {:.3} kg 不合理（期望 0.77 左右）", w);
+    }
+
+    // ─────────────────────────── 压力角 α（新增参数）───────────────────────────
+
+    /// 图元几何指纹（FNV-1a 64；喂 Debug 文本）—— 给默认 20° 冻结回归用。
+    fn entity_fingerprint(entities: &[EntityType]) -> u64 {
+        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+        for e in entities {
+            for b in format!("{:?}", e).as_bytes() {
+                h ^= *b as u64;
+                h = h.wrapping_mul(0x0000_0100_0000_01b3);
+            }
+        }
+        h
+    }
+
+    /// 默认 20° 回归锁（用户要求）：
+    /// * 旧入口（位置参数 / JSON 默认 / `GearParams::default()`）都不传 α，必须还是 20°；
+    /// * 显式 `alpha 20` 与不传 α 生成的图元**逐字节一致**；
+    /// * 四个视图的几何指纹冻结在加 α 参数之前的值（防止默认路径被改漂）。
+    #[test]
+    fn default_alpha_is_20_and_geometry_is_frozen() {
+        let legacy = tmpl();
+        let implicit = parse_request("2 40 20").unwrap().params;
+        let query = params_from_query("m=2&z=40&h=20").unwrap().0;
+        for p in [&legacy, &implicit, &query] {
+            assert!((p.alpha_deg - 20.0).abs() < 1e-12, "缺省压力角必须是 20°");
+        }
+        assert_eq!(legacy, implicit, "位置参数入口的默认值应与结构体默认一致");
+        assert_eq!((legacy.m, legacy.z, legacy.alpha_deg), (query.m, query.z, query.alpha_deg));
+        assert_eq!(legacy.spec(), "m2 z40 h20", "默认 spec 不该带 α");
+        assert_eq!(block_name(&legacy, GearView::Front), "OCSM_GEAR_M2_Z40_H20_FRONT");
+        assert!(
+            !legacy.notes().iter().any(|n| n.contains("压力角") || n.contains("α")),
+            "默认 20° 不应有 α 提示"
+        );
+
+        // 冻结指纹（加入 α 参数前的实测值）—— 只锁「默认 20°」这条路径。
+        let frozen: [(&str, u64); 4] = [
+            ("section", 0x87f2_54a5_04ad_15cb),
+            ("side", 0x9456_abaa_3dac_27a2),
+            ("simplified", 0xb41f_3c28_b5bd_00d7),
+            ("front", 0xe678_a1e6_bf09_08a7),
+        ];
+        for (name, want) in frozen {
+            let view = GearView::parse(name).unwrap();
+            let a = generate(&legacy, view, 1.0).unwrap();
+            let b = generate(&implicit, view, 1.0).unwrap();
+            assert_eq!(
+                format!("{:?}", a.entities),
+                format!("{:?}", b.entities),
+                "{name}: 不传 α 与显式 alpha 20 必须逐字节一致"
+            );
+            let got = entity_fingerprint(&a.entities);
+            println!("FROZEN {name} = {:#018x} entities={}", got, a.entities.len());
+            assert_eq!(got, want, "{name}: 默认 20° 几何指纹漂了");
+        }
+    }
+
+    /// α=25° 自检：db=d·cosα、ψ(R) 解析值、齿顶弧端点、圆角切点，以及「α 改变确实改变几何」。
+    #[test]
+    fn alpha_25_changes_geometry_and_follows_formulas() {
+        let p20 = tmpl();
+        let p25 = GearParams { alpha_deg: 25.0, ..tmpl() };
+        p25.validate().unwrap();
+        let alpha = 25f64.to_radians();
+        // 基圆 db = d·cosα（直齿 αt = αn）
+        assert!((p25.alpha_t() - alpha).abs() < 1e-12, "直齿 αt 必须等于 αn");
+        assert!(
+            (p25.db() - p25.d() * alpha.cos()).abs() < 1e-12,
+            "db={} 应为 d·cosα={}",
+            p25.db(),
+            p25.d() * alpha.cos()
+        );
+        // ψ(R) = st/(2r) + (inv αt − inv αR) 的独立解析复算
+        let r = p25.d() / 2.0;
+        let alpha_r = (p25.db() / 2.0 / 42.0).acos();
+        let psi_want = p25.st() / (2.0 * r) + (alpha.tan() - alpha) - (alpha_r.tan() - alpha_r);
+        assert!(
+            (p25.half_tooth_angle(42.0) - psi_want).abs() < 1e-12,
+            "ψ(42)={}，解析值 {}",
+            p25.half_tooth_angle(42.0),
+            psi_want
+        );
+        // 齿顶弧端点 = 齿中心 ± ψ(ra)（模板相位：齿中心在半个齿距处）
+        let ra = p25.da() / 2.0;
+        let c_deg = (p25.pitch_angle() / 2.0).to_degrees();
+        let psi_end = p25.half_tooth_angle(ra).to_degrees();
+        let front = front_regular(&p25, 1.0).unwrap();
+        let tip_ok = front.iter().any(|e| match e {
+            EntityType::Arc(a) if (a.radius - ra).abs() < 1e-9 => {
+                let (s, t) = (a.start_angle.to_degrees(), a.end_angle.to_degrees());
+                ((s - (c_deg - psi_end)).abs() < 1e-9 && (t - c_deg).abs() < 1e-9)
+                    || ((s - c_deg).abs() < 1e-9 && (t - (c_deg + psi_end)).abs() < 1e-9)
+            }
+            _ => false,
+        });
+        assert!(tip_ok, "齿顶弧端点应 = 齿中心 ± ψ(ra)（ψ(ra)={psi_end}）");
+        // 齿根圆角：圆心在 rf+ρ、切点在 rf、齿廓起点到圆心 = ρ（模板口径不因 α 变）
+        let f = make_flank(&p25, p25.pitch_angle() / 2.0, 1.0).unwrap();
+        let rc = (f.fillet_c[0].powi(2) + f.fillet_c[1].powi(2)).sqrt();
+        assert!((rc - (p25.df() / 2.0 + p25.rho())).abs() < 1e-9, "圆角圆心半径 {rc}");
+        let d_r = ((f.start[0] - f.fillet_c[0]).powi(2) + (f.start[1] - f.fillet_c[1]).powi(2)).sqrt();
+        assert!((d_r - p25.rho()).abs() < 1e-9, "圆心到齿廓起点 {d_r} ≠ ρ");
+        // 「α 改变确实改变几何」
+        let a20 = format!("{:?}", generate(&p20, GearView::Front, 1.0).unwrap().entities);
+        let a25 = format!("{:?}", generate(&p25, GearView::Front, 1.0).unwrap().entities);
+        assert_ne!(a20, a25, "α=25 的齿廓必须与 20° 不同");
+        assert!((p20.db() - p25.db()).abs() > 1.0, "db 应随 α 变");
+        // 元数据 / 块名：非默认 α 要带上，避免与 20° 的同名块串图
+        assert_eq!(p25.spec(), "m2 z40 h20 α25");
+        assert_eq!(block_name(&p25, GearView::Front), "OCSM_GEAR_M2_Z40_A25_H20_FRONT");
+        assert!(
+            p25.notes().iter().any(|n| n.contains("不随 α 自动改变")),
+            "非 20° 必须提醒系数不自动变：{:?}",
+            p25.notes()
+        );
+        // 内齿轮同口径：db / 齿顶半角 / 端视图都随 α 变
+        let i20 = int_tmpl();
+        let i25 = GearParams { alpha_deg: 25.0, ..i20.clone() };
+        assert!((i25.db() - i20.db()).abs() > 1.0);
+        assert!((i25.internal_tip_half_angle() - i20.internal_tip_half_angle()).abs() > 1e-6);
+        assert_ne!(
+            format!("{:?}", front_internal(&i20, 1.0).unwrap()),
+            format!("{:?}", front_internal(&i25, 1.0).unwrap()),
+            "内齿轮端视图应随 α 变"
+        );
+    }
+
+    /// 14.5° 老系统可用；`alpha 25` / `alpha=25` / `α25` / `α=25` 四种入口都收。
+    #[test]
+    fn alpha_145_system_and_compact_alpha_forms() {
+        let p = GearParams { alpha_deg: 14.5, ..tmpl() };
+        p.validate().unwrap();
+        let a = 14.5f64.to_radians();
+        assert!((p.db() - 80.0 * a.cos()).abs() < 1e-12, "db = d·cos14.5");
+        // x=0 时分度圆齿厚 st = πm/2 与 α 无关；分度圆处 ψ = st/(2r) 与 α 无关（= 2.25°）
+        assert!((p.st() - std::f64::consts::PI).abs() < 1e-12);
+        let psi_pitch = p.half_tooth_angle(p.d() / 2.0).to_degrees();
+        assert!((psi_pitch - 2.25).abs() < 1e-9, "分度圆 ψ={psi_pitch}");
+        // 齿顶处 ψ 比 20° 更大（小压力角齿顶更宽、更不易变尖）
+        let p20 = tmpl();
+        assert!(
+            p.half_tooth_angle(p.da() / 2.0) > p20.half_tooth_angle(p20.da() / 2.0),
+            "14.5° 齿顶应比 20° 宽（ψ={} vs {}）",
+            p.half_tooth_angle(p.da() / 2.0).to_degrees(),
+            p20.half_tooth_angle(p20.da() / 2.0).to_degrees()
+        );
+        let _ = generate(&p, GearView::Front, 1.0).unwrap();
+        // 紧凑写法 / 显式写法
+        for form in ["2 40 20 alpha 25", "2 40 20 alpha=25", "2 40 20 α25", "2 40 20 α=25"] {
+            let r = parse_request(form).unwrap();
+            assert!((r.params.alpha_deg - 25.0).abs() < 1e-9, "{form}");
+        }
+        // 内齿轮入口也带 α
+        let r = parse_request("int 2 40 30 alpha 25 view 端视图").unwrap();
+        assert_eq!(r.params.kind, GearKind::Internal);
+        assert!((r.params.alpha_deg - 25.0).abs() < 1e-9);
+        assert!((r.params.h - 30.0).abs() < 1e-9);
+        // HTTP 查询串
+        let (q, v, _) = params_from_query("kind=internal&m=2&z=40&alpha=22.5&view=front").unwrap();
+        assert_eq!(v, GearView::Front);
+        assert!((q.alpha_deg - 22.5).abs() < 1e-9);
+        assert!((q.db() - 80.0 * 22.5f64.to_radians().cos()).abs() < 1e-12);
+        // 非法 α 全部拒绝（合理区间 10°<α<50°，30°/37.5°/45° 属合法）
+        for bad in [0.0, 5.0, 10.0, 50.0, 90.0, f64::NAN] {
+            assert!(
+                GearParams { alpha_deg: bad, ..tmpl() }.validate().is_err(),
+                "α={bad} 应拒绝"
+            );
+        }
+        // info JSON 带 alpha / alpha_t / db
+        let j = info_json("m=2&z=40&alpha=25").unwrap();
+        assert!(j.contains("\"alpha\":25"), "{j}");
+        assert!(j.contains("\"alpha_t\":25"), "{j}");
+        assert!(j.contains("\"db\":"), "{j}");
+    }
+
+    /// α=30°/45° 自检（渐开线花键常用）：db 随 α 明显变小；30° 全齿高可用；
+    /// 45° 全齿高（ha*=1）齿顶变尖 → 正视图必须**明确报错而不是出乱图**；
+    /// 45° 配短齿顶（ha*=0.5）几何正常；小齿数 + 大 α 降级逻辑不许崩。
+    #[test]
+    fn alpha_30_and_45_geometry_self_checks() {
+        // ── α=30°：db、拟合带（基圆已低于齿根圆）、齿顶弧端点、圆角口径 ──
+        let p30 = GearParams { alpha_deg: 30.0, ..tmpl() };
+        p30.validate().unwrap();
+        let a30 = 30f64.to_radians();
+        assert!(
+            (p30.db() - p30.d() * a30.cos()).abs() < 1e-12,
+            "db={} 应为 d·cos30={}",
+            p30.db(),
+            p30.d() * a30.cos()
+        );
+        assert!(
+            p30.db() / 2.0 < p30.df() / 2.0,
+            "30° 时基圆已经在齿根圆以内（大 α 特征）"
+        );
+        assert!((p30.flank_band_start() - p30.df() / 2.0).abs() < 1e-12, "拟合带应从齿根圆起");
+        assert!(!p30.tooth_tip_crossed(), "30° 全齿高不应变尖");
+        assert_eq!(p30.root_style(), RootStyle::TemplateArc, "30° 圆角应仍可解");
+        let f30 = make_flank(&p30, p30.pitch_angle() / 2.0, 1.0).unwrap();
+        let r_start30 = (f30.fit[0][0].powi(2) + f30.fit[0][1].powi(2)).sqrt();
+        assert!(
+            r_start30 >= p30.df() / 2.0 - 1e-9,
+            "齿廓起点 {r_start30} 不得落进齿根圆以内"
+        );
+        let front30 = front_regular(&p30, 1.0).unwrap();
+        let ra30 = p30.da() / 2.0;
+        let c30 = (p30.pitch_angle() / 2.0).to_degrees();
+        let psi30 = p30.half_tooth_angle(ra30).to_degrees();
+        assert!(psi30 > 0.0 && psi30 < 4.5, "ψ30(ra)={psi30}");
+        assert!(
+            front30.iter().any(|e| match e {
+                EntityType::Arc(a) if (a.radius - ra30).abs() < 1e-9 => {
+                    let (s, t) = (a.start_angle.to_degrees(), a.end_angle.to_degrees());
+                    ((s - (c30 - psi30)).abs() < 1e-9 && (t - c30).abs() < 1e-9)
+                        || ((s - c30).abs() < 1e-9 && (t - (c30 + psi30)).abs() < 1e-9)
+                }
+                _ => false,
+            }),
+            "30° 齿顶弧端点应 = 齿中心 ± ψ(ra)"
+        );
+        assert!(
+            front30
+                .iter()
+                .any(|e| matches!(e, EntityType::Arc(a) if (a.radius - p30.df() / 2.0).abs() < 1e-9)),
+            "应有半径 = rf 的齿根弧"
+        );
+        // 齿根弧端点 = 齿槽中心（0°、半个齿距 4.5°），不随 α 变（模板相位同构）
+        let root_ends: Vec<f64> = front30
+            .iter()
+            .filter_map(|e| match e {
+                EntityType::Arc(a) if (a.radius - p30.df() / 2.0).abs() < 1e-9 => {
+                    Some([a.start_angle.to_degrees(), a.end_angle.to_degrees()])
+                }
+                _ => None,
+            })
+            .flatten()
+            .collect();
+        let pitch_deg30 = p30.pitch_angle().to_degrees();
+        assert!(
+            root_ends.iter().any(|d| (d - 0.0).abs() < 1e-6)
+                && root_ends.iter().any(|d| (d - pitch_deg30).abs() < 1e-6),
+            "齿根弧应覆盖齿槽中心 0°/{pitch_deg30}°：{root_ends:?}"
+        );
+
+        // ── α=45° 全齿高：齿顶变尖，正视图报错、其它三视图照常 ──
+        let p45 = GearParams { alpha_deg: 45.0, ..tmpl() };
+        p45.validate().unwrap();
+        assert!(
+            (p45.db() - p45.d() * 45f64.to_radians().cos()).abs() < 1e-12,
+            "db = d·cos45"
+        );
+        assert!(p45.tooth_tip_crossed(), "45° 全齿高（ha*=1、z=40）应判为齿顶变尖");
+        assert!(p45.half_tooth_angle(p45.da() / 2.0) < 0.0, "ψ45(ra) 应为负");
+        let err = front_regular(&p45, 1.0).unwrap_err();
+        assert!(err.contains("齿顶变尖"), "报错要讲清原因：{err}");
+        for v in [GearView::Section, GearView::Side, GearView::Simplified] {
+            assert!(
+                !generate(&p45, v, 1.0).unwrap().entities.is_empty(),
+                "{v:?} 不该被齿顶变尖拦住"
+            );
+        }
+        assert!(
+            p45.notes().iter().any(|n| n.contains("齿顶变尖")),
+            "GUI 提示要说明 45° 全齿高的问题"
+        );
+        assert!(
+            p45.notes().iter().any(|n| n.contains("ha*=0.5")),
+            "提示要给出短齿顶系数指路"
+        );
+
+        // ── α=45° + 短齿顶 ha*=0.5（工具允许的最小齿顶高）：几何正常，齿顶弧端点仍 = 齿中心 ± ψ(ra) ──
+        let p45s = GearParams { alpha_deg: 45.0, ha: 0.5, ..tmpl() };
+        p45s.validate().unwrap();
+        assert!(!p45s.tooth_tip_crossed(), "ha*=0.5 时 45° 不应变尖");
+        assert!(
+            (p45s.db() - p45s.d() * 45f64.to_radians().cos()).abs() < 1e-12,
+            "db 与 ha* 无关"
+        );
+        let front45 = front_regular(&p45s, 1.0).unwrap();
+        let ra45 = p45s.da() / 2.0;
+        let c45 = (p45s.pitch_angle() / 2.0).to_degrees();
+        let psi45 = p45s.half_tooth_angle(ra45).to_degrees();
+        assert!(psi45 > 0.0, "ψ45(ra)={psi45}");
+        assert!(
+            front45.iter().any(|e| match e {
+                EntityType::Arc(a) if (a.radius - ra45).abs() < 1e-9 => {
+                    let (s, t) = (a.start_angle.to_degrees(), a.end_angle.to_degrees());
+                    ((s - (c45 - psi45)).abs() < 1e-9 && (t - c45).abs() < 1e-9)
+                        || ((s - c45).abs() < 1e-9 && (t - (c45 + psi45)).abs() < 1e-9)
+                }
+                _ => false,
+            }),
+            "45°+ha*=0.5 齿顶弧端点应 = 齿中心 ± ψ(ra)"
+        );
+        assert!(
+            front45
+                .iter()
+                .any(|e| matches!(e, EntityType::Arc(a) if (a.radius - p45s.df() / 2.0).abs() < 1e-9)),
+            "45°+ha*=0.5 应有半径 = rf 的齿根弧"
+        );
+
+        // ── 小齿数 + 大 α：降级逻辑不许崩（m=10 z=7）──
+        let small30 = GearParams { m: 10.0, z: 7, h: 20.0, alpha_deg: 30.0, ..GearParams::default() };
+        small30.validate().unwrap();
+        let v30 = generate(&small30, GearView::Front, 1.0).unwrap();
+        for e in &v30.entities {
+            if let EntityType::Arc(a) = e {
+                let span = (a.end_angle - a.start_angle).to_degrees().rem_euclid(360.0);
+                assert!(span < 180.0, "m10 z7 α30 弧张角异常 {span:.2}°（r={:.3}）", a.radius);
+            }
+        }
+        let small45 = GearParams { m: 10.0, z: 7, h: 20.0, alpha_deg: 45.0, ..GearParams::default() };
+        small45.validate().unwrap();
+        // 45° 全齿高在 z=7 会变尖 → 正视图明确报错；不出乱图、不 panic
+        if small45.tooth_tip_crossed() {
+            assert!(front_regular(&small45, 1.0).is_err());
+        } else {
+            let _ = front_regular(&small45, 1.0).unwrap();
+        }
+        for v in [GearView::Section, GearView::Side, GearView::Simplified] {
+            let _ = generate(&small45, v, 1.0).unwrap();
+        }
+        // 37.5° 全齿高在 z=40 也已临界变尖（ψ=−0.035°）→ 同样拦；说明区间不是写死的白名单
+        let p375 = GearParams { alpha_deg: 37.5, ..tmpl() };
+        p375.validate().unwrap();
+        assert!(p375.tooth_tip_crossed());
+        // 把 ha* 降低一点就能画
+        let p375ok = GearParams { alpha_deg: 37.5, ha: 0.9, ..tmpl() };
+        assert!(!p375ok.tooth_tip_crossed());
+        let _ = front_regular(&p375ok, 1.0).unwrap();
+
+        // ── 内齿轮同口径：30° 可出；45° 全齿高齿槽过宽 → 端视图明确报错、剖视图照常；
+        //    45°+ha*=0.5 可出且弧不绕圈 ──
+        let i30 = GearParams {
+            kind: GearKind::Internal,
+            m: 2.0,
+            z: 40,
+            h: 30.0,
+            alpha_deg: 30.0,
+            ..GearParams::default()
+        };
+        i30.validate().unwrap();
+        assert!(!i30.internal_tooth_crossed());
+        let v30 = generate(&i30, GearView::Front, 1.0).unwrap();
+        for e in &v30.entities {
+            if let EntityType::Arc(a) = e {
+                let span = (a.end_angle - a.start_angle).to_degrees().rem_euclid(360.0);
+                assert!(span < 180.0, "内齿轮 α=30 弧张角异常 {span:.2}°");
+            }
+        }
+        let i45 = GearParams {
+            kind: GearKind::Internal,
+            m: 2.0,
+            z: 40,
+            h: 30.0,
+            alpha_deg: 45.0,
+            ..GearParams::default()
+        };
+        i45.validate().unwrap();
+        assert!(i45.internal_tooth_crossed(), "45° 内齿轮全齿高应判齿槽过宽");
+        let err45 = front_internal(&i45, 1.0).unwrap_err();
+        assert!(err45.contains("齿槽过宽"), "内齿轮 45° 报错要讲清原因：{err45}");
+        assert!(i45.notes().iter().any(|n| n.contains("齿槽过宽")));
+        let _ = generate(&i45, GearView::Section, 1.0).unwrap();
+        let i45s = GearParams {
+            kind: GearKind::Internal,
+            m: 2.0,
+            z: 40,
+            h: 30.0,
+            alpha_deg: 45.0,
+            ha: 0.5,
+            ..GearParams::default()
+        };
+        i45s.validate().unwrap();
+        assert!(!i45s.internal_tooth_crossed());
+        let v45s = generate(&i45s, GearView::Front, 1.0).unwrap();
+        for e in &v45s.entities {
+            if let EntityType::Arc(a) = e {
+                let span = (a.end_angle - a.start_angle).to_degrees().rem_euclid(360.0);
+                assert!(span < 180.0, "内齿轮 α=45+ha*=0.5 弧张角异常 {span:.2}°");
+            }
+        }
     }
 
     fn layer_of(e: &EntityType) -> &str {
