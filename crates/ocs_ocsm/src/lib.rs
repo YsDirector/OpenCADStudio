@@ -26,6 +26,7 @@ mod dim2gb;
 mod gear;
 mod guide_server;
 mod guide_url;
+mod invol_spline;
 mod joint;
 mod partgen;
 mod partgen_b1;
@@ -749,6 +750,9 @@ fn place_one(
 ///   例：`OCSMPART detail_grind_od 100 b1 10 at 150,30 rot 0`（b1 缺省 = 该 d 档默认行）。
 /// - **矩形花键**（`detail_spline_rect`）：`<族> <规格代号> [L 满齿段长] [de 覆盖] [view 视图] [at x,y] [rot]`
 ///   例：`XL detail_spline_rect 6x23x26x6 L30 de63 view side`（规格代号可自定义，de 表外规格必给）。
+/// - **渐开线花键**（`detail_invol_spline`）：`<族> <预设代号> M<模数> Z<齿数> [X变位] [L 有效长度] [view 视图] [at x,y] [rot]`
+///   例：`XL detail_invol_spline GB30R M3 Z20 L30 view side`（预设代号 `GB30P/GB30R/GB375R/GB45R/DIN30`；
+///   正视图不需要 L）。
 /// - **外螺纹退刀槽**（`detail_thread_relief`）：`<族> <d> P <螺距> [g1 值 g2 值 dg 值 r 值 alpha 值] [at x,y] [rot 度]`
 ///   例：`OCSMPART detail_thread_relief 20 P 1.5`（P 必给，其余可选，见 `detail.rs` 表 2）。
 ///
@@ -770,11 +774,12 @@ struct PartsSpec {
     rotation: Option<f64>,
 }
 
-/// 结构要素（花键）的额外参数键：`N6` / `N 6` / `D26` / `B6` / `L30` / `de63` / `spec=…`。
+/// 结构要素（花键）的额外参数键：`N6` / `N 6` / `D26` / `B6` / `L30` / `de63` / `spec=…`；
+/// 渐开线花键还有 `M3` / `Z20` / `X0.2`。
 /// 返回 `(规范键, 贴写值)`；贴写值为空串 = 值在下一个 token。`b1` 与退刀槽参数不走这里。
 fn split_detail_param(token: &str) -> Option<(&'static str, &str)> {
     // 长前缀在前（`big` > `b`、`len` > `l`、`de` > `d`）；`b1` 是历史槽位，不拦截。
-    const KEYS: [(&str, &str); 8] = [
+    const KEYS: [(&str, &str); 11] = [
         ("spec", "spec"),
         ("big", "big"),
         ("de", "de"),
@@ -783,6 +788,9 @@ fn split_detail_param(token: &str) -> Option<(&'static str, &str)> {
         ("d", "big"),
         ("b", "b"),
         ("l", "len"),
+        ("m", "m"),
+        ("z", "z"),
+        ("x", "x"),
     ];
     if token == "b1" {
         return None;
@@ -1988,6 +1996,8 @@ impl OcsmPlugin {
                          （b1 缺省 = 该 d 档默认行）；\
                          矩形花键 `OCSMPART detail_spline_rect <规格代号> L<满齿段长> [de <滚刀外径>] [view front|side|section]`\
                          （例：OCSMPART detail_spline_rect 6x23x26x6 L30 view side）；\
+                         渐开线花键 `OCSMPART detail_invol_spline <预设代号> M<模数> Z<齿数> [X<变位>] [L<有效长度>] [view front|side|section]`\
+                         （例：OCSMPART detail_invol_spline GB30R M3 Z20 L30 view side；预设代号 GB30P/GB30R/GB375R/GB45R/DIN30）；\
                          外螺纹退刀槽 `OCSMPART detail_thread_relief <d> P <螺距> [g1 值 g2 值 dg 值 r 值 alpha 值] [at x,y] [rot 度]`\
                          （P 必给；不带参数则打开零件库窗口）。",
                     );
@@ -4159,6 +4169,31 @@ mod tests {
         assert_eq!(PartsSpec::parse("hex_bolt_c abc 95"), None);
         // 花键不认 b1，但解析不报错（到生成时统一报「不认识参数」）
         assert!(PartsSpec::parse("detail_spline_rect 6x23x26x6 L30 b1 3").is_some());
+
+        // 渐开线花键：第二个 token 是**预设代号**（`GB30R` 等）；`M3 Z20 X0.2 L30 view side` 都认。
+        let spec = PartsSpec::parse("DETAIL_INVOL_SPLINE GB30R M3 Z20 X0.2 L30 view side").unwrap();
+        assert_eq!(spec.family, "detail_invol_spline");
+        assert_eq!(spec.d, 0.0, "分度圆由 m·z 派生，主参数为 0");
+        assert_eq!(spec.spec.as_deref(), Some("GB30R"));
+        assert_eq!(spec.params.get("m"), Some(&3.0));
+        assert_eq!(spec.params.get("z"), Some(&20.0));
+        assert_eq!(spec.params.get("x"), Some(&0.2));
+        assert_eq!(spec.params.get("len"), Some(&30.0));
+        assert_eq!(spec.view, "side");
+        let body: serde_json::Value = serde_json::from_str(&spec.to_body()).unwrap();
+        assert_eq!(body["spec"], "GB30R");
+        assert_eq!(body["params"]["m"], 3.0);
+        assert_eq!(body["params"]["z"], 20.0);
+        assert_eq!(body["params"]["x"], 0.2);
+        assert_eq!(body["params"]["len"], 30.0);
+        // 空格写法 + DIN；不给 view → 默认侧视图；front 不写 L 也解析
+        let spec = PartsSpec::parse("detail_invol_spline DIN30 M 2 Z 18 L 20").unwrap();
+        assert_eq!(spec.spec.as_deref(), Some("DIN30"));
+        assert_eq!(spec.view, "side");
+        assert!(spec.params.get("x").is_none(), "x 可选");
+        assert!(PartsSpec::parse("detail_invol_spline GB30R M3 Z20 view front").is_some());
+        // 未知预设代号在解析层就回退 GUI（不静默按错误预设出图）
+        assert_eq!(PartsSpec::parse("detail_invol_spline GB99 M3 Z20"), None);
     }
 
     fn parse_catalog_csv_skips_header_comments_and_blanks() {

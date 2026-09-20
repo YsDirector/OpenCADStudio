@@ -200,7 +200,7 @@ function pickFamilyInner(id, row) {
     // （磨外圆只有 b1；退刀槽有 P/g1/g2/dg/r/alpha；花键有 规格代号 + L + de）。
     const hasSpecs = !!(f.specs && f.specs.length);
     el("specFields").style.display = hasSpecs ? "" : "none";
-    el("dFields").style.display = hasSpecs ? "none" : "";
+    el("dFields").style.display = (hasSpecs || f.hide_d) ? "none" : "";
     el("dLabel").textContent = f.d_label || "参数 d（mm，自由输入）";
     el("dnum").value = f.default_d || 100;
     el("b1num").value = "";
@@ -223,6 +223,7 @@ function pickFamilyInner(id, row) {
 }
 
 // 结构要素：参数面板按目录 `inputs` 动态生成（只建 DOM，值与错误处理在 onDetail）。
+// `type:"select"` = 下拉（标准/齿廓预设）；`options_by` + `depends_on` = 二级联动。
 function renderDetailInputs(f) {
   const inputs = f.inputs || [];
   el("b1Fields").style.display = inputs.length ? "none" : "";
@@ -232,6 +233,18 @@ function renderDetailInputs(f) {
     const lab = document.createElement("label");
     lab.htmlFor = "p_" + it.key;
     lab.textContent = it.label || it.key;
+    box.appendChild(lab);
+    if (it.type === "select") {
+      const sel = document.createElement("select");
+      sel.id = "p_" + it.key;
+      sel.dataset.key = it.key;
+      // inputs 顺序保证上级下拉（std）先建；options_by 由上级当前值过滤。
+      const dep = it.options_by ? el("p_" + (it.depends_on || "std")) : null;
+      fillDetailSelect(f, it, sel, dep ? dep.value : "");
+      sel.addEventListener("change", onDetail);
+      box.appendChild(sel);
+      return;
+    }
     const inp = document.createElement("input");
     inp.type = "number";
     inp.step = "0.01";
@@ -240,9 +253,46 @@ function renderDetailInputs(f) {
     inp.dataset.key = it.key;
     inp.placeholder = it.placeholder || (it.required ? "必给" : "留空 = 默认");
     inp.addEventListener("input", onDetail);
-    box.appendChild(lab);
     box.appendChild(inp);
   });
+}
+
+// 填下拉：`options` 固定选项；`options_by[上级值]` 联动选项（保留已选值，否则取 default）。
+function fillDetailSelect(f, it, sel, depValue) {
+  const opts = it.options_by ? (it.options_by[depValue] || []) : (it.options || []);
+  const prev = sel.value;
+  sel.innerHTML = "";
+  opts.forEach((o) => {
+    const op = document.createElement("option");
+    op.value = o.value;
+    op.textContent = o.label;
+    op.selected = o.value === prev;
+    sel.appendChild(op);
+  });
+  const values = opts.map((o) => o.value);
+  sel.value = values.includes(prev) ? prev
+      : (values.includes(it.default) ? it.default : (values[0] || ""));
+}
+
+// 上级下拉（std）变了：重建带 `options_by` 的下拉，保证值在同一标准内。
+function syncDetailSelects(f) {
+  for (const it of f.inputs || []) {
+    if (it.type !== "select" || !it.options_by) continue;
+    const sel = el("p_" + it.key);
+    const dep = el("p_" + (it.depends_on || "std"));
+    if (sel && dep) fillDetailSelect(f, it, sel, dep.value);
+  }
+}
+
+// 收集下拉值（标准/齿廓预设代号）。
+function collectSelects(f) {
+  const out = {};
+  for (const it of f.inputs || []) {
+    if (it.type !== "select") continue;
+    const sel = el("p_" + it.key);
+    if (sel) out[it.key] = sel.value;
+  }
+  return out;
 }
 
 // 收集动态参数（留空跳过；必给项缺失/非数字 → 直接在提示行报错并清掉预览）。
@@ -250,6 +300,7 @@ function collectParams(f, hint) {
   const params = {};
   let missing = null;
   for (const it of f.inputs || []) {
+    if (it.type === "select") continue; // 下拉（预设代号）走 collectSelects
     const inp = el("p_" + it.key);
     const raw = inp ? inp.value.trim() : "";
     if (raw === "") {
@@ -265,7 +316,8 @@ function collectParams(f, hint) {
     params[it.key] = v;
   }
   if (missing !== null) {
-    hint.textContent = "参数 " + missing + " 必给（花键：L 满齿段长；退刀槽：P）";
+    hint.textContent = "参数 " + missing + " 必给（"
+        + (f.invol_presets ? "渐开线花键：m / z" : "花键：L 满齿段长；退刀槽：P") + "）";
     el("preview").removeAttribute("src");
     return null;
   }
@@ -308,11 +360,34 @@ function currentSpecCode() {
 }
 
 // 结构要素：d 自由输入；有 `inputs` 的族走通用参数，否则是老 b1 面板。
-// 有 `specs` 的族（花键）：d 由规格代号派生，规格代号随请求发给服务端。
+// 有 `specs` 的族（矩形花键）：d 由规格代号派生，规格代号随请求发给服务端。
+// 有 `invol_presets` 的族（渐开线花键）：标准/齿廓两个下拉合成预设代号（spec），
+// m/z/x/L 走 params；派生值就地显示（与后端 invol_spline.rs 同公式）。
 function onDetail() {
   const f = catalog.families[cur.family];
   const hint = el("detailHint");
   const hasSpecs = !!(f.specs && f.specs.length);
+  if (f.invol_presets) {
+    syncDetailSelects(f);
+    const sels = collectSelects(f);
+    const code = sels.profile || "";
+    const preset = (f.invol_presets || []).find((p) => p.code === code);
+    if (!preset) {
+      cur.spec = "";
+      cur.params = {};
+      hint.textContent = "预设代号无效（标准/齿廓下拉重选）";
+      el("preview").removeAttribute("src");
+      return;
+    }
+    const params = collectParams(f, hint);
+    if (params === null) { cur.spec = ""; cur.params = {}; return; }
+    cur.spec = code;
+    cur.d = 0;
+    cur.params = params;
+    hint.textContent = involDerivedText(preset, params.m, params.z, params.x);
+    update();
+    return;
+  }
   if (hasSpecs) {
     cur.spec = currentSpecCode();
     cur.d = specMinorD(cur.spec);
@@ -374,6 +449,39 @@ function onDetail() {
   const choices = rows.map((r) => r.b1).join("、");
   hint.textContent = "该 d 属于「" + band.label + "」档；默认 b1=" + def + "；可选 b1=" + choices;
   update();
+}
+
+// 渐开线花键派生值：与 `invol_spline.rs` 同公式（d/db/da/df/ρf/cF；
+// DIN 另给 d_B 名义估算 m(z+2x) 并说明它只作身份显示）。
+function fmt(v) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return String(v);
+  return Math.abs(n - Math.round(n)) < 1e-9
+      ? String(Math.round(n))
+      : n.toFixed(4).replace(/0+$/, "").replace(/\.$/, "");
+}
+
+function involDerivedText(preset, m, z, x) {
+  const mv = Number(m);
+  const zv = Number(z);
+  if (!(mv > 0) || !(zv > 0)) {
+    return preset.code + "（" + preset.profile + "）：填 m / z 后显示派生值";
+  }
+  const xv = x === "" || x === undefined || !Number.isFinite(Number(x)) ? 0 : Number(x);
+  const a = preset.alpha * Math.PI / 180;
+  const d = mv * zv;
+  const dEff = d + 2 * xv * mv;
+  const db = d * Math.cos(a);
+  const da = dEff + 2 * preset.ha * mv;
+  const df = dEff - 2 * preset.hf * mv;
+  let s = preset.code + "（" + preset.profile + "）：d=" + fmt(d) + " db=" + fmt(db)
+      + " da=" + fmt(da) + " df=" + fmt(df) + " ρf=" + fmt(preset.rho * mv)
+      + " cF=" + fmt(preset.cf * mv);
+  if (preset.std === "DIN") {
+    s += "；d_B 名义估算 m(z+2x)=" + fmt(mv * (zv + 2 * xv))
+       + "（仅身份标识/显示，不参与几何；DIN 5480-2 查表未接入）";
+  }
+  return s;
 }
 
 function onDia(size) {

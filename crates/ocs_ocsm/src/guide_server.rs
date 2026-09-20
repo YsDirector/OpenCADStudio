@@ -3915,13 +3915,13 @@ pub const COMMAND_CATALOG: &[(&str, &str, &str)] = &[
     ("1 … 10", "数字键", "切当前图层；有选中对象时把对象移到该层"),
     ("OCSMFRAMEINIT", "TF", "图框：不带参数=打开图框选择窗口；带参数=一行直插（`TF a3_landscape 1:2 at 0,0 [rot 度]`）"),
     ("OCSMFRAMEINSERT", "", "按所选图框 + 比例插入（光标跟随，比例感知标注样式）；也可带参数直插（同 TF）"),
-    ("OCSMPART", "XL", "标准件/结构要素插入：不带参数=开零件库窗口（左「标准件」树 + 右「结构要素」树）+放置态；带参数=一行直插（标准件 `XL 族 d l [view …] [at x,y] [rot 度]`；结构要素 `XL detail_grind_od d [b1 值] [at x,y] [rot 度]`；外螺纹退刀槽 `XL detail_thread_relief d P 螺距 [g1 值 g2 值 dg 值 r 值 alpha 值] [at x,y] [rot 度]`，d 自由输入）"),
+    ("OCSMPART", "XL", "标准件/结构要素插入：不带参数=开零件库窗口（左「标准件」树 + 右「结构要素」树）+放置态；带参数=一行直插（标准件 `XL 族 d l [view …] [at x,y] [rot 度]`；结构要素 `XL detail_grind_od d [b1 值] [at x,y] [rot 度]`；外螺纹退刀槽 `XL detail_thread_relief d P 螺距 [g1 值 g2 值 dg 值 r 值 alpha 值] [at x,y] [rot 度]`；渐开线花键 `XL detail_invol_spline GB30R M3 Z20 [X0.2] L30 [view front|side|section]`，预设代号 GB30P/GB30R/GB375R/GB45R/DIN30）"),
     ("OCSMJOINT", "", "螺栓副装配：不带参数=开装配窗口+放置态；带参数=一行直装（件链算长度、遮挡裁剪、一次撤销）"),
     ("OCSMPOWERDIM", "D", "智能标注：拾取点模式标线性/对齐/半径/直径（Enter 切线段点选）"),
     ("OCSMDIMGULIDE", "GDIM", "引导线标注：选引导线 → 配置窗口（尺寸/剖视/向视/局部放大/角度/弧长/焊接/引线/序号/公差/粗糙度/形位公差）"),
     ("OCSMCENTERLINE", "ZX", "中心线：点圆/圆弧 → 十字中心线；点两根直线 → 角平分线中心线（`3中心线层`，线长 = 直径/投影长 + 图框比例×6mm）"),
     ("OCSMGEAR", "", "齿轮（外齿轮 / 内齿轮（齿圈））：不带参数=开齿轮窗口（参数 + 视图按钮 + 实时预览）；带参数=一行直插（`OCSMGEAR 2 40 20 view 剖视图`、`OCSMGEAR int 2 40 30 view 端视图`、`OCSMGEAR 2 40 20 alpha 25 view 剖视图`（可写 `α25`））。压力角 α 默认 20°，14.5/15/17.5/20/22.5/25/30/37.5/45 都可给（10°<α<50°；只进渐开线/基圆/齿厚公式，ha*/c*/ρ=0.38m 不随 α 自动变，老系统/45° 花键请手动给 ha*/c*）。内齿轮只有剖视图+端视图（用户模板只有这两个），且剖视图**不打剖面线**（齿圈外壁留用户延伸）"),
-    ("OCSMSHAFT", "", "轴生成器：不带参数=开轴生成器窗口（段表 ↔ 行文本双向同步 + 实时预览 + 视图按钮）+ 放置态；带参数=行 DSL/JSON 一行直插（段拼接 + 端面倒角 + 砂轮越程槽 + 螺纹段 M + 齿轮段 GEAR + 矩形花键段 SPLINE + 视图 VIEW 常规|剖视|双；退刀槽就是一小段小直径轴段）。`OCSMSHAFT S30 E30 L45 CH2@L | S40 E40 L7 M1.5 | S36 E36 L5 | GEAR M3 Z20 VIEW 剖视 at x,y rot 度`；齿轮段可 `GEAR M3 Z20 ALPHA25`（压力角默认 20°）；花键 `OCSMSHAFT SPLINE 6x23x26x6 L30`（可 `de 71` 覆盖）"),
+    ("OCSMSHAFT", "", "轴生成器：不带参数=开轴生成器窗口（段表 ↔ 行文本双向同步 + 实时预览 + 视图按钮）+ 放置态；带参数=行 DSL/JSON 一行直插（段拼接 + 端面倒角 + 砂轮越程槽 + 螺纹段 M + 齿轮段 GEAR + 矩形花键段 SPLINE + 渐开线花键段 INVOLSPLINE + 视图 VIEW 常规|剖视|双；退刀槽就是一小段小直径轴段）。`OCSMSHAFT S30 E30 L45 CH2@L | S40 E40 L7 M1.5 | S36 E36 L5 | GEAR M3 Z20 VIEW 剖视 at x,y rot 度`；齿轮段可 `GEAR M3 Z20 ALPHA25`（压力角默认 20°）；花键 `OCSMSHAFT SPLINE 6x23x26x6 L30`（可 `de 71` 覆盖，矩形花键）或 `OCSMSHAFT INVOLSPLINE GB30R M3 Z20 L30`（渐开线花键，预设 GB30P/GB30R/GB375R/GB45R/DIN30，`X0.2` 变位，`de63` 可选）"),
     ("OCSMEDIT", "ME", "改标注：选中 OCSM 生成的标注 → 配置窗口改参数 → 重生成"),
     ("OCSMRGH", "CC", "表面粗糙度：点选插入点 → 配置窗口（匿名块 + ATTDEF）"),
     ("OCSMDIM2GB", "D2G", "一键转国标：原生标注 → OCSM_GB 样式 + 匿名块；智能圆心标记（CENTERMARK）一并换成 `3中心线层` 中心线（Ø + 图框比例×6）"),
@@ -13226,6 +13226,51 @@ mod weld_tests {
             "",
         );
         assert!(bad.contains("error") && bad.contains("de"), "表外规格缺 de 报错：{bad}");
+        // 结构要素（第四期：渐开线花键 GB/T 3478.1 / DIN 5480）：GB/DIN + 齿廓下拉 + m/z/x/L
+        assert!(
+            cat.contains("渐开线花键 GB/T 3478.1-2008") && cat.contains("detail_invol_spline"),
+            "渐开线花键进了目录树"
+        );
+        assert!(
+            cat.contains("\"invol_presets\"") && cat.contains("\"hide_d\":true")
+                && cat.contains("GB30R") && cat.contains("DIN30"),
+            "标准/齿廓预设数据进目录"
+        );
+        let svg = http_req(
+            server.port,
+            "GET",
+            "/api/part_svg?family=detail_invol_spline&spec=GB30R&m=3&z=20&len=30&view=side",
+            "",
+        );
+        assert!(svg.contains("<svg") && svg.contains("GB 30圆齿根 m3 z20 L30"), "渐开线侧视预览：{svg}");
+        let svg = http_req(
+            server.port,
+            "GET",
+            "/api/part_svg?family=detail_invol_spline&spec=DIN30&m=2&z=18&x=0.2&len=20&view=section",
+            "",
+        );
+        assert!(svg.contains("DIN DIN30 m2 z18 x0.2 L20"), "渐开线 DIN 剖视：{svg}");
+        let svg = http_req(
+            server.port,
+            "GET",
+            "/api/part_svg?family=detail_invol_spline&spec=GB375R&m=1.5&z=30&view=front",
+            "",
+        );
+        assert!(svg.contains("<svg"), "渐开线正视图（无需 L）：{svg}");
+        let bad = http_req(
+            server.port,
+            "GET",
+            "/api/part_svg?family=detail_invol_spline&spec=GB30R&m=3&z=20&view=side",
+            "",
+        );
+        assert!(bad.contains("error") && bad.contains('L'), "渐开线缺 L 报错：{bad}");
+        let bad = http_req(
+            server.port,
+            "GET",
+            "/api/part_svg?family=detail_invol_spline&spec=DIN30&m=2&z=18&x=0.6&view=front",
+            "",
+        );
+        assert!(bad.contains("error") && bad.contains('x'), "DIN 变位越界报错：{bad}");
         let svg = http_req(server.port, "GET", "/api/part_svg?family=hex_bolt_c&d=5&l=25&view=main", "");
         assert!(svg.contains("<svg") && svg.contains("M5x25"), "预览 SV");
         assert!(svg.contains("GB/T 5780-2016"), "标题含现行代号");
@@ -13373,6 +13418,47 @@ mod weld_tests {
         assert_eq!(meta["spec"], "6x23x26x6 L30");
         assert_eq!(meta["params"]["len"], 30.0);
         assert_eq!(meta["code"], "GB/T 1144-2001");
+    }
+
+    /// 渐开线花键（GB/T 3478.1 / DIN 5480）插入：`spec`=预设代号 + `params` 的 m/z/x/len；
+    /// 多视图块名带视图后缀；DIN + 变位走同一通路；xdata 台账可追溯。
+    #[test]
+    fn detail_invol_spline_pick_preset_params_and_meta() {
+        let mock = Arc::new(MockSender::new(acadrust::CadDocument::new()));
+        let sender: Arc<dyn PluginRequestSender> = mock.clone();
+        let body = br#"{"family":"detail_invol_spline","d":0,"spec":"GB30R","params":{"m":3,"z":20,"len":30},"x":0,"y":0,"view":"side"}"#;
+        let resp = apply_part_pick(&sender, body).expect("渐开线花键插入");
+        assert!(resp.contains("\"ok\":true") && resp.contains("GB 30圆齿根 m3 z20 L30"), "{resp}");
+        let inserts = mock.inserts();
+        assert_eq!(inserts.len(), 1, "只落一个 INSERT");
+        let (block, _, _) = &inserts[0];
+        assert!(block.starts_with("OCSM_DETAIL_INVOL_SPLINE"), "{block}");
+        assert!(block.ends_with("_SIDE"), "多视图块名带视图后缀：{block}");
+        let ents = mock.block_entities(block);
+        assert_eq!(ents.len(), 7, "常规侧视图 7 条");
+        assert!(
+            ents.iter().any(|e| matches!(e, EntityType::Line(l)
+                if l.common.layer == crate::partgen_kit::LAYER_THIN)),
+            "侧视图有 2细线层小径线"
+        );
+        // DIN + 变位 + 剖视 → 另一个块（不串几何）
+        let din = br#"{"family":"detail_invol_spline","d":0,"spec":"DIN30","params":{"m":2,"z":18,"x":0.2,"len":20},"x":0,"y":0,"view":"section"}"#;
+        apply_part_pick(&sender, din).expect("DIN 剖视插入");
+        let inserts = mock.inserts();
+        assert_eq!(inserts.len(), 2);
+        assert!(inserts[1].0.ends_with("_SECTION"), "{}", inserts[1].0);
+        assert!(mock
+            .block_entities(&inserts[1].0)
+            .iter()
+            .any(|e| matches!(e, EntityType::Hatch(_))));
+        // xdata 台账：spec / params 可追溯
+        let writes = mock.url_writes.lock().unwrap();
+        let meta: serde_json::Value = serde_json::from_str(&writes[0].1).unwrap();
+        assert_eq!(meta["family"], "detail_invol_spline");
+        assert_eq!(meta["spec"], "GB 30圆齿根 m3 z20 L30");
+        assert_eq!(meta["params"]["m"], 3.0);
+        assert_eq!(meta["params"]["z"], 20.0);
+        assert_eq!(meta["code"], "GB/T 3478.1-2008");
     }
 
     /// 外螺纹退刀槽出库：`params` 同样走 `apply_part_export`（建块 + 待放置）。
@@ -13713,6 +13799,32 @@ mod weld_tests {
             &serde_json::json!({"dsl": "SPLINE 6x23x26x6 L30 CH2@L"}).to_string(),
         );
         assert!(bad.contains("花键段") && bad.contains("倒角"), "{bad}");
+        // 渐开线花键段（INVOLSPLINE）：DSL → 模型（invol_spline 字段）+ 预览（小径细线/剖面线）
+        let body = serde_json::json!({"dsl": "INVOLSPLINE DIN30 M2 Z18 X0.2 L20 de50"}).to_string();
+        let j = http_req(server.port, "POST", "/api/shaft_parse", &body);
+        let v: serde_json::Value = serde_json::from_str(&j).unwrap();
+        assert_eq!(v["ok"], true, "{j}");
+        assert_eq!(v["segments"][0]["invol_spline"]["code"], "DIN30", "预设代号进模型：{j}");
+        assert_eq!(v["segments"][0]["invol_spline"]["m"], 2.0, "{j}");
+        assert_eq!(v["segments"][0]["invol_spline"]["de"], 50.0, "{j}");
+        // da = 36+0.8+1.8 = 38.6；h=2、R=25 → l=√96=9.79796 → 段长 29.79796
+        let seg_len = v["segments"][0]["l"].as_f64().unwrap();
+        assert!((seg_len - 29.797_96).abs() < 1e-3, "段长 = L+l，得到 {seg_len}");
+        let svg = http_req(
+            server.port,
+            "POST",
+            "/api/shaft_preview",
+            &serde_json::json!({"dsl": "INVOLSPLINE GB30R M3 Z20 L30", "view": "section"}).to_string(),
+        );
+        assert!(svg.contains("<svg") && svg.contains("#3fa13f"), "渐开线花键剖视预览（含剖面线）：{}", &svg[..160.min(svg.len())]);
+        // 与 CH 同段 → 解析报错（引入倒角写相邻段）
+        let bad = http_req(
+            server.port,
+            "POST",
+            "/api/shaft_preview",
+            &serde_json::json!({"dsl": "INVOLSPLINE GB30R M3 Z20 L30 CH2@L"}).to_string(),
+        );
+        assert!(bad.contains("渐开线花键段") && bad.contains("倒角"), "{bad}");
     }
 
     #[test]

@@ -38,6 +38,13 @@ const SPECS = [
   { code: '8x52x58x10', label: '轻8x52x58x10', n: 8, d: 52, D: 58, B: 10, de: 90, series: '轻' },
 ];
 
+// 渐开线花键预设（与 detail.rs 目录 / invol_spline.rs 系数同形；只取测试用到的）
+const INVOL = [
+  { code: 'GB30R', std: 'GB', profile: '30圆齿根', alpha: 30, ha: 0.5, hf: 0.9, rho: 0.4, cf: 0.1 },
+  { code: 'GB30P', std: 'GB', profile: '30平齿根', alpha: 30, ha: 0.5, hf: 0.75, rho: 0.2, cf: 0.1 },
+  { code: 'DIN30', std: 'DIN', profile: 'DIN30', alpha: 30, ha: 0.45, hf: 0.55, rho: 0.16, cf: 0.1 },
+];
+
 // ── 最小 DOM 垫片 ────────────────────────────────────────────────
 function htmlDecode(s) {
   return String(s)
@@ -225,6 +232,14 @@ function segmentsFor(dsl) {
       });
       continue;
     }
+    const inv = /^INVOLSPLINE\s+(\S+)\s+M([\d.]+)\s+Z(\d+)(?:\s+X(-?[\d.]+))?\s+L([\d.]+)(?:\s+de\s*=?\s*([\d.]+))?/i.exec(line);
+    if (inv) {
+      const [, code, m, z, x, len, de] = inv;
+      const iv = { code, m: Number(m), z: Number(z), x: x !== undefined ? Number(x) : 0, len: Number(len) };
+      if (de !== undefined) iv.de = Number(de);
+      out.push({ invol_spline: iv });
+      continue;
+    }
     out.push({ s: 30, e: 30, l: 10 });
   }
   return out;
@@ -234,7 +249,13 @@ let lastParseDsl = '';
 global.fetch = async (u, opts = {}) => {
   const url = String(u);
   if (url.startsWith('/api/parts')) {
-    return jsonResp({ ok: true, families: { detail_spline_rect: { specs: SPECS } } });
+    return jsonResp({
+      ok: true,
+      families: {
+        detail_spline_rect: { specs: SPECS },
+        detail_invol_spline: { invol_presets: INVOL },
+      },
+    });
   }
   if (url.startsWith('/api/shaft_parse')) {
     const body = JSON.parse(opts.body || '{}');
@@ -367,6 +388,37 @@ const added = S.rows[S.rows.length - 1];
 check(added.spline.on && added.spline.spec === '6x23x26x6', '勾选后应有默认表内规格');
 check(added.spline.de === '63', `勾选 SPLINE 时 de 应自动填 63，实为 ${JSON.stringify(added.spline.de)}`);
 check(segBody._rows[segBody._rows.length - 1]._html.includes('de63'), '勾选后派生值应含 de63');
+
+// ⑦ 渐开线花键：预设下拉 + m/z/x/L 派生值 + DIN 联动 + JSON 模型
+const checkInvolDerive = (row, needle) => {
+  const m = row._html.match(/class="frow invol-derive"[^>]*>([^<]*)</);
+  const text = m ? m[1] : '';
+  check(text.includes(needle), `渐开线派生值应含 ${needle}：${text}`);
+};
+dslEl.value = 'INVOLSPLINE GB30R M3 Z20 L30 de70';
+await S.refreshFromText();
+check(S.rows.length === 1 && S.rows[0].invol.on, '“INVOLSPLINE …” 应回填出渐开线花键行');
+check(S.rows[0].invol.profile === 'GB30R', `回填预设代号：${S.rows[0].invol.profile}`);
+let irow = segBody._rows[0];
+checkInvolDerive(irow, 'da63');
+checkInvolDerive(irow, 'df54.6');
+checkInvolDerive(irow, 'l16.6241');
+check(dslEl.value.includes('INVOLSPLINE GB30R M3 Z20 L30 de70'), `行文本同步：${JSON.stringify(dslEl.value)}`);
+// 标准切 DIN → 齿廓自动 DIN30、派生值含 d_B 名义估算与说明
+const stdSel = irow._fields.find((f) => f.dataset.f === 'invol.std');
+check(!!stdSel && stdSel.options.some((o) => o.value === 'DIN'), '标准下拉应有 DIN');
+stdSel.value = 'DIN';
+segBody._fire('change', stdSel);
+await new Promise((r) => setImmediate(r));
+check(S.rows[0].invol.std === 'DIN' && S.rows[0].invol.profile === 'DIN30',
+  `DIN 联动齿廓，实为 ${S.rows[0].invol.std}/${S.rows[0].invol.profile}`);
+irow = segBody._rows[0];
+checkInvolDerive(irow, 'd_B');
+// JSON 模型：invol_spline 带 code/m/z/x/len/de
+const involModel = S.modelFromRows();
+check(!!involModel && !!involModel.segments[0].invol_spline, '模型应带 invol_spline');
+check(involModel && involModel.segments[0].invol_spline.code === 'DIN30'
+  && involModel.segments[0].invol_spline.de === 70, '模型 code/de 应为 DIN30/70');
 
 report();
 

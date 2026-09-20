@@ -2096,6 +2096,12 @@ mod tests {
                     if key == "d" {
                         continue;
                     }
+                    if key == "spec" {
+                        if let Some(spec) = value.as_str() {
+                            params.set_spec(spec);
+                        }
+                        continue;
+                    }
                     if let Some(value) = value.as_f64() {
                         params.insert(key, value);
                     }

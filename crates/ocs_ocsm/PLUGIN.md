@@ -97,7 +97,8 @@ rm -rf "$HOME/.config/OpenCADStudio/plugins/opencad.layers_quick"
   **精度是用户验证过的硬约束**（每齿 8 实体 / 齿廓 7 控制点，不要提高）。
   **插入前要先跑过 `OCSM` 初始化**，否则命令会拦截并提示缺什么（不然中心线会是实线白线）。
 - `OCSMSHAFT`：**轴生成器**——行 DSL / JSON → 单视图侧视图。不带参数 = 打开**轴生成器窗口**
-  （段表 ↔ 行文本双向同步：S/E/L + `CH` 倒角/`OV` 砂轮越程槽/`M` 螺纹段/`GEAR` 齿轮段；
+  （段表 ↔ 行文本双向同步：S/E/L + `CH` 倒角/`OV` 砂轮越程槽/`M` 螺纹段/`GEAR` 齿轮段/
+  `SPLINE` 矩形花键段/`INVOLSPLINE` 渐开线花键段；
   `+加行/删行/复制行/上移/下移`；实时预览；解析错误标行号与原因）+
   放置态（点「生成到图纸」→ 点基点 → 光标旋转 → 落定，可连续）；
   带参数 = 一行直插：`OCSMSHAFT S30 E30 L45 CH2@L | S40 E40 L7 M1.5 | S36 E36 L5 | GEAR M3 Z20 at 100,50 rot 30`
@@ -112,6 +113,10 @@ rm -rf "$HOME/.config/OpenCADStudio/plugins/opencad.layers_quick"
   **`SPLINE` 矩形花键段**：窗口段表里规格代号从 GB/T 1144 规格表（轻 15 + 中 18 = 33 条）
   下拉选择，选中自动带出 de（GB/T 10952 表 1/表 2）与 d/D/B/h/l 派生值（de 框可改 = 覆盖）；
   下拉末尾「自定义…」支持表外规格（表外必须给 de）。例 `SPLINE 6x23x26x6 L30`（表内规格不写 de 也自动查表算 R/l）。
+  **`INVOLSPLINE` 渐开线花键段**：`INVOLSPLINE GB30R M3 Z20 [X0.2] L30 [de63]`，
+  预设代号 `GB30P`/`GB30R`（默认）/`GB375R`/`GB45R`/`DIN30`（GB/T 3478.1-2008；DIN 5480-1:2015，h_fP*=0.55），
+  直径由 M/Z/X 导出；`de` 可选（给了才画收尾弧，段长 = L+l）；与 SPLINE/CH/OV/RL/M/GEAR 互斥。
+  段表列：标准下拉（GB/DIN）+ 齿廓下拉 + m/z/x/L，派生值 d/db/da/df/ρf/cF（DIN 另含 d_B 名义估算）实时显示。
   **插入前也要先跑过 `OCSM` 初始化**（与齿轮同判据）。
 - 工具栏「轴」组有 **轴生成器**（阶梯轴+中心线双色图标）按钮，等效输入 `OCSMSHAFT`（不带参数：打开轴生成器窗口 + 进入放置态，放置方式与 `XL` 相同）。
 - 工具栏「标注」组有 **标注转GB**（循环箭头双色图标）按钮，等效输入 `D2G` / `OCSMDIM2GB`。
@@ -261,6 +266,8 @@ rm -rf "$HOME/.config/OpenCADStudio/plugins/opencad.layers_quick"
   第一期 `detail_grind_od`（磨外圆砂轮越程槽 GB/T 6403.5-2008，可选 `b1`）；
   第二期 `detail_thread_relief`（外螺纹退刀槽 GB/T 3-1997 表 2，`P` 必给 + 可选 `g1/g2/dg/r/alpha`，斜壁 30° 下限）；
   第三期 `detail_spline_rect`（矩形花键 GB/T 1144-2001，规格代号下拉/自定义，de 自动查 GB/T 10952 表 1/表 2）。
+  第四期 `detail_invol_spline`（渐开线花键 GB/T 3478.1-2008 / DIN 5480-1:2015：标准+齿廓预设下拉、
+  m/z/x/L、派生值显示；`XL detail_invol_spline GB30R M3 Z20 L30 view side`；轴段 `INVOLSPLINE` 同语法）。
   一站式说明见 `handbook/03-标准件库.md`「结构要素」；数据与画法的唯一来源是 `src/detail.rs`（新增要素只需实现 `DetailElement` + 进 `ELEMENTS`）。
   注：GB/T 5782 A/B 级 = 5780 C级画法 + **头部垫圈面 dw×c**（主/俯视图画、左视图不画；
   用户 2026-09-15 看图定案，画法依据 164580 官方 CAD 图实测；详见 OCSMBOM-plan.md §27.5）。

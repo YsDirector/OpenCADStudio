@@ -30,7 +30,7 @@
 use ocs_plugin_api::host::acadrust::entities::EntityType;
 
 use crate::partgen::{GenPart, PartMeta};
-use crate::partgen_kit::{arc, line, trim, LAYER_MAIN};
+use crate::partgen_kit::{arc, hatch_ansi31_rings, line, trim, HatchEdge, LAYER_MAIN};
 
 // ══════════════════════════════════════════════════════════════════════════
 // 通用框架（一族 = 一个 DetailElement；新增要素只动本文件）
@@ -167,7 +167,8 @@ pub trait DetailElement: Sync {
 }
 
 /// 已登记的要素（新增要素往这里加一项）。
-pub static ELEMENTS: &[&dyn DetailElement] = &[&GRIND_OD, &THREAD_RELIEF, &SPLINE_RECT];
+pub static ELEMENTS: &[&dyn DetailElement] =
+    &[&GRIND_OD, &THREAD_RELIEF, &SPLINE_RECT, &INVOL_SPLINE];
 
 /// 族 id → 要素定义。
 pub fn find(family: &str) -> Option<&'static dyn DetailElement> {
@@ -1287,6 +1288,245 @@ impl DetailElement for SplineRect {
 }
 
 // ══════════════════════════════════════════════════════════════════════════
+// 渐开线花键（GB/T 3478.1-2008 / DIN 5480-1:2015；几何在 `invol_spline.rs`）
+// ══════════════════════════════════════════════════════════════════════════
+
+/// 族 id。
+pub const FAMILY_INVOL_SPLINE: &str = "detail_invol_spline";
+
+/// 把参数解成 [`crate::invol_spline::InvolParams`] 与有效长度 L。
+///
+/// * `params.spec()` = **预设代号**（`GB30R` 默认；另 `GB30P`/`GB375R`/`GB45R`/`DIN30`，
+///   也收 `GB` + 中文齿廓名）；
+/// * `m` / `z` 必给；`x` 可选（默认 0，DIN 要求 `x∈[−0.05, 0.45]`）；`len`（或 `l`）= L；
+/// * 主参数 `d`（分度圆）不是输入：正视图不需要 L，侧视/剖视才要。
+fn resolve_invol_spline(
+    d: f64,
+    params: &DetailParams,
+) -> Result<(crate::invol_spline::InvolParams, Option<f64>), String> {
+    use crate::invol_spline::{parse_preset_token, InvolParams};
+    const KNOWN: [&str; 4] = ["m", "z", "x", "len"];
+    let unknown: Vec<&str> = params
+        .keys()
+        .into_iter()
+        .filter(|key| !KNOWN.contains(key) && *key != "l")
+        .collect();
+    if !unknown.is_empty() {
+        return Err(format!(
+            "渐开线花键：不认识参数 {}（本族支持 预设代号 spec、M、Z、X、L）",
+            unknown.join("、")
+        ));
+    }
+    let token = params.spec().ok_or_else(|| {
+        "渐开线花键：缺预设代号（GB 默认 `GB30R`；另 `GB30P`/`GB375R`/`GB45R`/`DIN30`）".to_string()
+    })?;
+    let (std, profile) = parse_preset_token(token).ok_or_else(|| {
+        format!("渐开线花键：不认识的预设代号「{token}」（可用 GB30P/GB30R/GB375R/GB45R/DIN30）")
+    })?;
+    let m = params
+        .get("m")
+        .ok_or_else(|| "渐开线花键：缺模数 m（写法 `M3`）".to_string())?;
+    let z_value = params
+        .get("z")
+        .ok_or_else(|| "渐开线花键：缺齿数 z（写法 `Z20`）".to_string())?;
+    if z_value.fract().abs() > 1e-9 || !(3.0..=1000.0).contains(&z_value) {
+        return Err(format!(
+            "渐开线花键：齿数 z={} 必须取 3..=1000 的整数",
+            trim(z_value)
+        ));
+    }
+    let x = params.get("x").unwrap_or(0.0);
+    let p = InvolParams::from_preset(std, profile, m, z_value as u32)
+        .map_err(|e| format!("渐开线花键：{e}"))?
+        .with_x(x);
+    p.validate().map_err(|e| format!("渐开线花键：{e}"))?;
+    if d.is_finite() && d > 0.0 && (d - p.d()).abs() > 1e-9 {
+        return Err(format!(
+            "渐开线花键：分度圆 d={} 与 m·z={} 不一致（d 不单独输入）",
+            trim(d),
+            trim(p.d())
+        ));
+    }
+    let len = params.get("len").or_else(|| params.get("l"));
+    Ok((p, len))
+}
+
+/// 渐开线花键的要素定义（登记到 `ELEMENTS`）。
+pub struct InvolSpline;
+
+/// 单例。
+pub static INVOL_SPLINE: InvolSpline = InvolSpline;
+
+impl DetailElement for InvolSpline {
+    fn family(&self) -> &'static str {
+        FAMILY_INVOL_SPLINE
+    }
+
+    fn name(&self) -> &'static str {
+        "渐开线花键"
+    }
+
+    fn code(&self) -> &'static str {
+        crate::invol_spline::GB_CODE
+    }
+
+    fn views(&self) -> &'static [&'static str] {
+        &["front", "side", "section"]
+    }
+
+    fn view_labels(&self) -> &'static [(&'static str, &'static str)] {
+        &[
+            ("front", "正视图（端视图齿形）"),
+            ("side", "常规侧视图"),
+            ("section", "侧剖视图"),
+        ]
+    }
+
+    fn base_hint(&self) -> &'static str {
+        "基点 = 左端面与轴线交点（轴线为 x 轴；正视图 = 齿形中心）"
+    }
+
+    /// 历史 `b1` 槽位表达不了预设代号 —— 明确报错指路。
+    fn generate(&self, _d: f64, _b1: Option<f64>, _view: &str) -> Result<GenPart, String> {
+        Err("渐开线花键请给预设代号：`XL detail_invol_spline GB30R M3 Z20 [X0.2] L30 [view front|side|section]`"
+            .to_string())
+    }
+
+    fn generate_params(
+        &self,
+        d: f64,
+        params: &DetailParams,
+        view: &str,
+    ) -> Result<GenPart, String> {
+        let (spline, len) = resolve_invol_spline(d, params)?;
+        let (entities, spec_text) = match view {
+            "front" => (spline.front_view()?, spline.spec()),
+            "side" => {
+                let len = len.ok_or_else(|| {
+                    "渐开线花键：常规侧视图需要 L（有效长度，例 `L30` / `&len=30`）".to_string()
+                })?;
+                (
+                    spline.side_view(len),
+                    format!("{} L{}", spline.spec(), trim(len)),
+                )
+            }
+            "section" => {
+                let len = len.ok_or_else(|| {
+                    "渐开线花键：侧剖视图需要 L（有效长度，例 `L30` / `&len=30`）".to_string()
+                })?;
+                let mut entities = spline.section_view(len);
+                // 剖面线：轴线↔小径两条带（齿部按不剖）——与 `spline.rs` 侧剖口径一致；
+                // 模块的 `section_view` 只出轮廓线，剖面线由调用方补。
+                let rf = spline.df() / 2.0;
+                let upper = vec![
+                    HatchEdge::Line { a: [0.0, 0.0], b: [len, 0.0] },
+                    HatchEdge::Line { a: [len, 0.0], b: [len, rf] },
+                    HatchEdge::Line { a: [len, rf], b: [0.0, rf] },
+                    HatchEdge::Line { a: [0.0, rf], b: [0.0, 0.0] },
+                ];
+                let lower = vec![
+                    HatchEdge::Line { a: [0.0, 0.0], b: [0.0, -rf] },
+                    HatchEdge::Line { a: [0.0, -rf], b: [len, -rf] },
+                    HatchEdge::Line { a: [len, -rf], b: [len, 0.0] },
+                    HatchEdge::Line { a: [len, 0.0], b: [0.0, 0.0] },
+                ];
+                entities.push(hatch_ansi31_rings(&[upper, lower], 0.0, 1.0));
+                (
+                    entities,
+                    format!("{} L{}", spline.spec(), trim(len)),
+                )
+            }
+            other => return Err(format!("渐开线花键：视图 {other} 尚未实现")),
+        };
+        let bbox = entity_bbox(&entities);
+        Ok(GenPart {
+            entities,
+            meta: PartMeta {
+                code: spline.std.code().into(),
+                name: format!(
+                    "渐开线花键（{}）",
+                    self.view_labels()
+                        .iter()
+                        .find(|(key, _)| *key == view)
+                        .map(|(_, label)| *label)
+                        .unwrap_or(view)
+                ),
+                spec: spec_text,
+                material: String::new(),
+                weight: String::new(),
+            },
+            bbox,
+        })
+    }
+
+    fn parse_spec_token(&self, token: &str) -> Option<(f64, DetailParams)> {
+        crate::invol_spline::parse_preset_token(token)?;
+        let mut params = DetailParams::new();
+        params.set_spec(token);
+        // 分度圆由 m·z 派生，这里没有主参数 d（返回 0 = 由参数导出）。
+        Some((0.0, params))
+    }
+
+    fn catalog_extra(&self) -> serde_json::Value {
+        use crate::invol_spline::{preset_code, SplineStd};
+        let presets: Vec<serde_json::Value> = [SplineStd::GB, SplineStd::DIN]
+            .iter()
+            .flat_map(|std| {
+                std.presets().iter().map(move |p| {
+                    serde_json::json!({
+                        "code": preset_code(*std, p.profile).unwrap_or(""),
+                        "std": std.label(),
+                        "profile": p.profile,
+                        "alpha": p.alpha_deg,
+                        "ha": p.ha_star,
+                        "hf": p.hf_star,
+                        "rho": p.rho_star,
+                        "cf": p.c_f_star,
+                    })
+                })
+            })
+            .collect();
+        serde_json::json!({
+            "tree_dir": "结构要素/花键",
+            "hide_d": true,
+            "d_label": "分度圆 d = m·z（由模数/齿数派生，不单独输入）",
+            "default_d": 0,
+            "spec_label": "预设代号（GB30P/GB30R/GB375R/GB45R/DIN30）",
+            "source": format!(
+                "{}（图 2 基本齿廓 + 表 3~表 6）；{}（条 5.1：齿侧对中 h_fP=0.55m；DIN 5480-2 名义表核对）",
+                crate::invol_spline::GB_CODE,
+                crate::invol_spline::DIN_CODE
+            ),
+            "inputs": [
+                { "key": "std", "label": "标准预设", "type": "select",
+                  "options": [
+                    { "value": "GB", "label": "GB/T 3478.1-2008（默认）" },
+                    { "value": "DIN", "label": "DIN 5480-1:2015（h_fP=0.55m）" }
+                  ], "default": "GB" },
+                { "key": "profile", "label": "齿廓类型", "type": "select", "depends_on": "std",
+                  "options_by": {
+                    "GB": [
+                      { "value": "GB30P", "label": "30° 平齿根" },
+                      { "value": "GB30R", "label": "30° 圆齿根（默认）" },
+                      { "value": "GB375R", "label": "37.5° 圆齿根" },
+                      { "value": "GB45R", "label": "45° 圆齿根" }
+                    ],
+                    "DIN": [
+                      { "value": "DIN30", "label": "30° 圆齿根（滚刀基准，h_fP=0.55m）" }
+                    ]
+                  }, "default": "GB30R" },
+                { "key": "m", "label": "模数 m", "type": "number", "required": true, "placeholder": "例如 3" },
+                { "key": "z", "label": "齿数 z", "type": "number", "required": true, "placeholder": "例如 20" },
+                { "key": "x", "label": "变位系数 x（可选，DIN ∈ [−0.05, 0.45]）", "type": "number", "placeholder": "留空 = 0" },
+                { "key": "len", "label": "有效长度 L（mm，侧视/剖视必给）", "type": "number", "placeholder": "例如 30" }
+            ],
+            "invol_presets": presets,
+            "sample": { "d": 0, "spec": "GB30R", "m": 3, "z": 20, "x": 0, "len": 30 },
+        })
+    }
+}
+
+// ══════════════════════════════════════════════════════════════════════════
 // 表 1（收尾 / 肩距）——下一轮「局部螺纹 + 收尾」用，先以数据存好
 // ══════════════════════════════════════════════════════════════════════════
 
@@ -1851,8 +2091,18 @@ mod tests {
             .iter()
             .find(|n| n["name"] == "花键")
             .expect("结构要素/花键");
-        assert_eq!(dir["children"][0]["name"], "矩形花键 GB/T 1144-2001");
-        assert_eq!(dir["children"][0]["family"], FAMILY_SPLINE_RECT);
+        assert!(dir["children"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|n| n["name"] == "矩形花键 GB/T 1144-2001"
+                && n["family"] == FAMILY_SPLINE_RECT));
+        // 与渐开线花键并列（目录按族 id 排序：detail_invol_spline 在前）
+        assert!(dir["children"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|n| n["family"] == FAMILY_INVOL_SPLINE));
 
         // 预览：spec 可替代 d；L 走 `len`；de 可覆盖；三个视图都能出。
         let svg = preview_svg("family=detail_spline_rect&spec=6x23x26x6&len=30&view=side")
@@ -1917,6 +2167,147 @@ mod tests {
         assert!(err.contains("规格代号"), "{err}");
         // spec 与 d 不一致报错
         let err = generate_params(FAMILY_SPLINE_RECT, 26.0, &params, "side").unwrap_err();
+        assert!(err.contains("不一致"), "{err}");
+    }
+
+    // ── 渐开线花键（GB/T 3478.1 / DIN 5480-1；几何在 invol_spline.rs）──────
+
+    /// 族接线：视图 / 目录（标准+齿廓下拉 + m/z/x/L 输入 + 派生表）/ 文件树 / 三视图预览。
+    #[test]
+    fn invol_spline_registry_catalog_and_preview() {
+        assert!(is_detail(FAMILY_INVOL_SPLINE));
+        assert_eq!(
+            family_views(FAMILY_INVOL_SPLINE),
+            vec!["front", "side", "section"]
+        );
+        // 预设代号入口（XL CLI 用）：分度圆由 m·z 派生，d 返回 0 占位
+        let (d, params) = parse_spec_token(FAMILY_INVOL_SPLINE, "GB30R").expect("认预设代号");
+        assert_eq!(d, 0.0);
+        assert_eq!(params.spec(), Some("GB30R"));
+        assert!(parse_spec_token(FAMILY_INVOL_SPLINE, "GB99").is_none());
+        assert!(parse_spec_token(FAMILY_SPLINE_RECT, "GB30R").is_none());
+
+        let cat: serde_json::Value = serde_json::from_str(&crate::partgen::catalog_json()).unwrap();
+        let family = &cat["families"][FAMILY_INVOL_SPLINE];
+        assert_eq!(family["kind"], "detail");
+        assert_eq!(family["tree_dir"], "结构要素/花键");
+        assert_eq!(family["free_d"], true);
+        assert_eq!(family["hide_d"], true);
+        assert_eq!(family["code"], crate::invol_spline::GB_CODE);
+        assert_eq!(family["invol_presets"].as_array().unwrap().len(), 5);
+        // 输入顺序：std / profile / m / z / x / len；select 带 options/options_by
+        let inputs = family["inputs"].as_array().unwrap();
+        assert_eq!(inputs.len(), 6);
+        assert_eq!(inputs[0]["key"], "std");
+        assert_eq!(inputs[0]["type"], "select");
+        assert_eq!(inputs[1]["key"], "profile");
+        assert_eq!(inputs[1]["depends_on"], "std");
+        assert_eq!(inputs[1]["options_by"]["GB"].as_array().unwrap().len(), 4);
+        assert_eq!(inputs[1]["options_by"]["DIN"].as_array().unwrap().len(), 1);
+        assert_eq!(inputs[2]["key"], "m");
+        assert_eq!(inputs[2]["required"], true);
+        assert_eq!(inputs[3]["key"], "z");
+        assert_eq!(inputs[4]["key"], "x");
+        assert_eq!(inputs[5]["key"], "len");
+        // DIN 预设的系数（GUI 派生值用）：h_fP*=0.55、cF*=0.10
+        let din = family["invol_presets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["code"] == "DIN30")
+            .unwrap();
+        assert_eq!(din["hf"], 0.55);
+        assert_eq!(din["cf"], 0.10);
+        // 视图按钮中文名被族覆盖
+        let views: Vec<&str> = family["views"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(views, vec!["正视图（端视图齿形）", "常规侧视图", "侧剖视图"]);
+        // 树：与矩形花键并列
+        let roots = cat["tree"].as_array().unwrap();
+        let root = roots.iter().find(|n| n["name"] == "结构要素").expect("结构要素根树");
+        let dir = root["children"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|n| n["name"] == "花键")
+            .expect("结构要素/花键");
+        assert_eq!(dir["children"][1]["family"], FAMILY_SPLINE_RECT);
+        assert!(dir["children"][0]["name"].as_str().unwrap().contains("渐开线花键"));
+
+        // 预览：spec + m/z/x/len；三视图（front 不需要 L）。
+        let svg = preview_svg("family=detail_invol_spline&spec=GB30R&m=3&z=20&len=30&view=side")
+            .expect("是结构要素")
+            .expect("侧视图应能出图");
+        assert!(svg.contains("<svg") && svg.contains("GB 30圆齿根 m3 z20 L30"), "{svg}");
+        let svg = preview_svg("family=detail_invol_spline&spec=DIN30&m=2&z=18&x=0.2&len=20&view=section")
+            .unwrap()
+            .unwrap();
+        assert!(svg.contains("DIN DIN30 m2 z18 x0.2 L20"), "{svg}");
+        let svg = preview_svg("family=detail_invol_spline&spec=GB375R&m=1.5&z=30&view=front")
+            .unwrap()
+            .unwrap();
+        assert!(svg.contains("<svg"), "正视图（无需 L）：{svg}");
+        // 错误口径
+        let err = preview_svg("family=detail_invol_spline&spec=GB30R&z=20&view=front")
+            .unwrap()
+            .expect_err("缺 m");
+        assert!(err.contains('m') || err.contains('M'), "{err}");
+        let err = preview_svg("family=detail_invol_spline&spec=GB30R&m=3&z=20&view=side")
+            .unwrap()
+            .expect_err("侧视缺 L");
+        assert!(err.contains('L'), "{err}");
+        let err = preview_svg("family=detail_invol_spline&spec=DIN30&m=2&z=18&x=0.6&view=front")
+            .unwrap()
+            .expect_err("DIN x 越界");
+        assert!(err.contains('x'), "{err}");
+        let err = preview_svg("family=detail_invol_spline&spec=NOPE&m=3&z=20&view=front")
+            .unwrap()
+            .expect_err("未知预设");
+        assert!(err.contains("预设代号"), "{err}");
+        let err = preview_svg("family=detail_invol_spline&spec=GB30R&m=3&z=20&b1=3&view=front")
+            .unwrap()
+            .expect_err("不认 b1");
+        assert!(err.contains("不认识参数"), "{err}");
+    }
+
+    /// 三个视图生成：图元数 / 落层 / 剖视 HATCH；b1 老入口指路；d 与 m·z 一致性。
+    #[test]
+    fn invol_spline_views_generate() {
+        let mut params = DetailParams::new();
+        params.set_spec("GB30R");
+        params.insert("m", 3.0);
+        params.insert("z", 20.0);
+        params.insert("len", 30.0);
+        let front = generate_params(FAMILY_INVOL_SPLINE, 0.0, &params, "front").unwrap();
+        assert_eq!(front.meta.code, crate::invol_spline::GB_CODE);
+        assert_eq!(front.entities.len(), 20 * (2 * 12 + 2) + 2, "每齿 2×12 渐开线 + 2 弧 + 2 中心线");
+        assert_eq!(front.meta.spec, "GB 30圆齿根 m3 z20");
+        let side = generate_params(FAMILY_INVOL_SPLINE, 0.0, &params, "side").unwrap();
+        assert_eq!(side.entities.len(), 7);
+        assert_eq!(side.meta.spec, "GB 30圆齿根 m3 z20 L30");
+        let section = generate_params(FAMILY_INVOL_SPLINE, 0.0, &params, "section").unwrap();
+        assert_eq!(section.entities.len(), 8, "7 线 + 1 HATCH");
+        assert!(section
+            .entities
+            .iter()
+            .any(|e| matches!(e, EntityType::Hatch(_))));
+        // DIN：meta 用 DIN 标准号
+        let mut din = DetailParams::new();
+        din.set_spec("DIN30");
+        din.insert("m", 2.0);
+        din.insert("z", 18.0);
+        din.insert("x", 0.2);
+        let d = generate_params(FAMILY_INVOL_SPLINE, 0.0, &din, "front").unwrap();
+        assert_eq!(d.meta.code, crate::invol_spline::DIN_CODE);
+        // 老 b1 入口明确报错指路
+        let err = INVOL_SPLINE.generate(0.0, None, "front").unwrap_err();
+        assert!(err.contains("预设代号"), "{err}");
+        // d 与 m·z 不一致报错
+        let err = generate_params(FAMILY_INVOL_SPLINE, 99.0, &params, "front").unwrap_err();
         assert!(err.contains("不一致"), "{err}");
     }
 

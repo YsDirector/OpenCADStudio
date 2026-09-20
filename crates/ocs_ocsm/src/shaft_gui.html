@@ -33,7 +33,7 @@
              border: 1px solid #e2e6ea; border-radius: 6px; background: #111; margin-top: 10px; }
   /* ── 段表：横向可滚；行选中高亮；输入框紧凑 ── */
   .tblwrap { overflow-x: auto; margin-top: 4px; }
-  table.seg { border-collapse: collapse; width: 100%; min-width: 860px; }
+  table.seg { border-collapse: collapse; width: 100%; min-width: 1180px; }
   table.seg th, table.seg td { border: 1px solid #e2e6ea; padding: 4px 6px; font-size: 12.5px; vertical-align: top; }
   table.seg th { background: #f6f8fa; color: #555; font-weight: 600; text-align: center; white-space: nowrap; }
   table.seg tbody tr { cursor: pointer; }
@@ -97,7 +97,8 @@
             <th>OV 越程槽</th>
             <th>M 螺纹段</th>
             <th>GEAR 齿轮段</th>
-            <th>SPLINE 花键段（规格下拉）</th>
+            <th>SPLINE 矩形花键段（规格下拉）</th>
+          <th>INVOLSPLINE 渐开线花键段（GB/DIN 预设）</th>
           </tr>
         </thead>
         <tbody id="segBody"></tbody>
@@ -118,6 +119,10 @@
       （轻/中系列共 33 条）<b>下拉选择</b>，选中自动带出 d/D/B/de/h/l 派生值（de 框可改 = 覆盖）；
       下拉末尾「自定义…」手输表外规格（表外必须给 <code>de</code>）。满齿段长 <code>L</code>
       （段长 = L + 收尾 l）；不能与 CH/OV/M/GEAR 同段。
+      <b>INVOLSPLINE 渐开线花键段</b>：先选标准（<code>GB/T 3478.1</code> / <code>DIN 5480-1</code>）、
+      再选齿廓（GB 四种 / DIN 30°），填 <code>m/z</code>（<code>x</code> 可选，DIN 限 [−0.05, 0.45]）
+      与有效长度 <code>L</code>；派生值 d/db/da/df/ρf/cF 实时显示（DIN 另给 d_B 名义估算），
+      <code>de</code> 可选（给了才画收尾，段长 = L + l）；不能与 SPLINE/CH/OV/M/GEAR 同段。
       <b>GEAR 齿轮段</b>的 H = 齿宽（留空 10m）、α = 压力角（留空 20°）；
     </div>
     <div id="segErr"></div>
@@ -136,6 +141,9 @@
       <code>RL@R g1 2.5 g2 4.5 dg 22.7 r 0.8</code>（显式尺寸）；<code>ES…</code> 旧写法已取消。
       矩形花键段：<code>SPLINE 6x23x26x6 L30</code>（规格代号可在段表下拉选择/自定义；
       表内规格 de 自动查表，<code>de 63</code> = 覆盖；表外规格必须给 de；引入倒角在相邻段写 CH）。
+      渐开线花键段：<code>INVOLSPLINE GB30R M3 Z20 L30</code>（预设代号
+      <code>GB30P/GB30R/GB375R/GB45R/DIN30</code>；<code>X0.2</code> = 变位；
+      <code>de63</code> 可选 = 画收尾；引入倒角同样写在相邻段）。
     </div>
   </div>
 
@@ -192,6 +200,7 @@ const VIEWS = [
 let rows = [];              // 段表状态（一行一段）
 let sel = 0;                // 当前选中行
 let splineSpecs = [];       // 矩形花键规格表（/api/parts → detail_spline_rect.specs）
+let involPresets = [];      // 渐开线花键预设表（/api/parts → detail_invol_spline.invol_presets）
 const SPLINE_CUSTOM = "__custom__";   // 下拉末尾「自定义规格…」的哨兵值
 let curView = "normal";     // 当前视图（默认常规）
 let seqPreview = 0;         // 过期响应丢弃序号
@@ -209,6 +218,7 @@ function blankRow() {
     m: { on: false, p: "" },
     gear: { on: false, m: "3", z: "20", h: "", alpha: "" },
     spline: { on: false, spec: "6x23x26x6", len: "30", de: "" },
+    invol: { on: false, std: "GB", profile: "GB30R", m: "3", z: "20", x: "", len: "30", de: "" },
   };
 }
 
@@ -239,15 +249,20 @@ const esc = (s) =>
 /* ─────────────────────────── 矩形花键规格表 ─────────────────────────── */
 
 // 规格表来源 = `/api/parts` 的 `families.detail_spline_rect.specs`（与零件库窗口同源，
-// 33 条 GB/T 1144 轻/中系列）；拿不到就退化成纯手输，不阻塞页面其余功能。
+// 33 条 GB/T 1144 轻/中系列）与 `families.detail_invol_spline.invol_presets`（渐开线花键
+// 的 GB/DIN 预设系数）；拿不到就退化成纯手输/空下拉，不阻塞页面其余功能。
 async function loadSplineSpecs() {
   try {
     const cat = await (await fetch("/api/parts", { cache: "no-store" })).json();
     const fam = cat && cat.families ? cat.families.detail_spline_rect : null;
     splineSpecs = (fam && Array.isArray(fam.specs) ? fam.specs : [])
       .filter((s) => s && typeof s.code === "string" && s.code !== "");
+    const inv = cat && cat.families ? cat.families.detail_invol_spline : null;
+    involPresets = (inv && Array.isArray(inv.invol_presets) ? inv.invol_presets : [])
+      .filter((p) => p && typeof p.code === "string" && p.code !== "");
   } catch (e) {
     splineSpecs = [];
+    involPresets = [];
   }
 }
 
@@ -306,6 +321,62 @@ function splineOptionsHtml(current) {
   return out;
 }
 
+/* ─────────────────────────── 渐开线花键预设表（GB/DIN） ─────────────────────────── */
+
+// 目录表拿不到时的最小兜底（系数与 detail.rs / invol_spline.rs 同一套；正常路径用目录表）。
+const INVOL_FALLBACK = [
+  { code: "GB30P", std: "GB", profile: "30平齿根", alpha: 30, ha: 0.5, hf: 0.75, rho: 0.2, cf: 0.1 },
+  { code: "GB30R", std: "GB", profile: "30圆齿根", alpha: 30, ha: 0.5, hf: 0.9, rho: 0.4, cf: 0.1 },
+  { code: "GB375R", std: "GB", profile: "37.5圆齿根", alpha: 37.5, ha: 0.45, hf: 0.7, rho: 0.3, cf: 0.1 },
+  { code: "GB45R", std: "GB", profile: "45圆齿根", alpha: 45, ha: 0.4, hf: 0.6, rho: 0.25, cf: 0.1 },
+  { code: "DIN30", std: "DIN", profile: "DIN30", alpha: 30, ha: 0.45, hf: 0.55, rho: 0.16, cf: 0.1 },
+];
+
+function involList() {
+  return involPresets.length ? involPresets : INVOL_FALLBACK;
+}
+
+function involStdOptionsHtml(cur) {
+  const stds = [];
+  for (const p of involList()) if (!stds.includes(p.std)) stds.push(p.std);
+  return stds.map((s) => `<option value="${esc(s)}"${s === cur ? " selected" : ""}>`
+    + (s === "DIN" ? "DIN 5480-1:2015（h_fP=0.55m）" : "GB/T 3478.1-2008") + "</option>").join("");
+}
+
+function involProfileOptionsHtml(std, cur) {
+  return involList().filter((p) => p.std === std)
+    .map((p) => `<option value="${esc(p.code)}"${p.code === cur ? " selected" : ""}>`
+      + `${esc(p.code)}（${esc(p.profile)}）</option>`).join("");
+}
+
+// 渐开线花键段派生值：d/db/da/df/ρf/cF（与 invol_spline.rs 同公式）；
+// DIN 另给 d_B 名义估算 m(z+2x) 并注明只是身份显示；给了 de 再算收尾 l。
+function involDerived(r) {
+  const p = involList().find((x) => x.code === String(r.invol.profile).trim());
+  if (!p) return "预设代号无效";
+  const m = numOrNaN(r.invol.m);
+  const z = numOrNaN(r.invol.z);
+  if (!(m > 0) || !(z > 0)) return p.code + "：填 m / z 后显示派生值";
+  const x = String(r.invol.x).trim() === "" ? 0 : numOrNaN(r.invol.x);
+  const a = p.alpha * Math.PI / 180;
+  const d = m * z;
+  const dEff = d + 2 * x * m;
+  const db = d * Math.cos(a);
+  const da = dEff + 2 * p.ha * m;
+  const df = dEff - 2 * p.hf * m;
+  let out = "d" + fmt(d) + " db" + fmt(db) + " da" + fmt(da) + " df" + fmt(df)
+      + " ρf" + fmt(p.rho * m) + " cF" + fmt(p.cf * m);
+  if (p.std === "DIN") out += " d_B≈" + fmt(m * (z + 2 * x)) + "（名义，仅显示）";
+  const de = numOrNaN(r.invol.de);
+  if (Number.isFinite(de) && de > 0) {
+    const h = (da - df) / 2;
+    out += " de" + fmt(de) + " l" + fmt(Math.sqrt(Math.max(0, h * (de - h))));
+  } else {
+    out += " de可选 l=0";
+  }
+  return out;
+}
+
 function showStatus(msg, bad) {
   const s = el("status");
   s.textContent = msg;
@@ -359,6 +430,7 @@ function renderViews() {
 function rowHtml(r, i) {
   const gearOn = r.gear.on;
   const splineOn = r.spline.on;
+  const involOn = r.invol.on;
   const specHit = splineSpecHit(r.spline.spec);
   const specSel = specHit ? specHit.code : SPLINE_CUSTOM;
   const mOn = r.m.on;
@@ -368,31 +440,40 @@ function rowHtml(r, i) {
   const endCell = (kind, end, o) => {
     const label = end.toUpperCase();
     const extra = kind === "ov"
-      ? `<input type="number" step="0.1" min="0" data-f="ov.${end}.b1" value="${esc(o.b1)}" placeholder="默认"${dis(gearOn || mOn || splineOn)}>`
-      : `<input type="number" step="0.1" min="0" data-f="ch.${end}.c" value="${esc(o.c)}" placeholder="2"${dis(gearOn || splineOn)}>`;
-    const boxDis = kind === "ov" ? (gearOn || mOn || splineOn) : (gearOn || splineOn);
+      ? `<input type="number" step="0.1" min="0" data-f="ov.${end}.b1" value="${esc(o.b1)}" placeholder="默认"${dis(gearOn || mOn || splineOn || involOn)}>`
+      : `<input type="number" step="0.1" min="0" data-f="ch.${end}.c" value="${esc(o.c)}" placeholder="2"${dis(gearOn || splineOn || involOn)}>`;
+    const boxDis = kind === "ov" ? (gearOn || mOn || splineOn || involOn) : (gearOn || splineOn || involOn);
     return `<div class="frow"><label class="chk"><input type="checkbox" data-f="${kind}.${end}.on"${ck(o.on)}${dis(boxDis)}>${label}</label>${extra}</div>`;
   };
   return `<tr data-row="${i}" class="${i === sel ? "sel" : ""}">
     <td class="idx">${i + 1}</td>
-    <td><input type="number" step="0.1" min="0" data-f="s" value="${esc(r.s)}"${dis(gearOn || splineOn)}></td>
-    <td><input type="number" step="0.1" min="0" data-f="e" value="${esc(r.e)}" placeholder="= S"${dis(gearOn || splineOn)}></td>
-    <td><input type="number" step="0.1" min="0" data-f="l" value="${esc(r.l)}"${dis(gearOn)}></td>
+    <td><input type="number" step="0.1" min="0" data-f="s" value="${esc(r.s)}"${dis(gearOn || splineOn || involOn)}></td>
+    <td><input type="number" step="0.1" min="0" data-f="e" value="${esc(r.e)}" placeholder="= S"${dis(gearOn || splineOn || involOn)}></td>
+    <td><input type="number" step="0.1" min="0" data-f="l" value="${esc(r.l)}"${dis(gearOn || splineOn || involOn)}></td>
     <td class="feat">${endCell("ch", "l", r.ch.l)}${endCell("ch", "r", r.ch.r)}</td>
     <td class="feat">${endCell("ov", "l", r.ov.l)}${endCell("ov", "r", r.ov.r)}</td>
-    <td class="feat"><div class="frow"><label class="chk"><input type="checkbox" data-f="m.on"${ck(mOn)}${dis(gearOn || ovOn || splineOn)}>M</label>
-      <input type="number" step="0.1" min="0" data-f="m.p" value="${esc(r.m.p)}" placeholder="0.85d"${dis(gearOn || ovOn || splineOn)}></div></td>
-    <td class="feat"><div class="frow"><label class="chk"><input type="checkbox" data-f="gear.on"${ck(gearOn)}${dis(splineOn)}>GEAR</label></div>
+    <td class="feat"><div class="frow"><label class="chk"><input type="checkbox" data-f="m.on"${ck(mOn)}${dis(gearOn || ovOn || splineOn || involOn)}>M</label>
+      <input type="number" step="0.1" min="0" data-f="m.p" value="${esc(r.m.p)}" placeholder="0.85d"${dis(gearOn || ovOn || splineOn || involOn)}></div></td>
+    <td class="feat"><div class="frow"><label class="chk"><input type="checkbox" data-f="gear.on"${ck(gearOn)}${dis(splineOn || involOn)}>GEAR</label></div>
       <div class="frow"><span class="chk">m</span><input type="number" step="0.1" min="0" data-f="gear.m" value="${esc(r.gear.m)}"${dis(!gearOn)}>
       <span class="chk">z</span><input type="number" step="1" min="2" data-f="gear.z" value="${esc(r.gear.z)}"${dis(!gearOn)}></div>
       <div class="frow"><span class="chk">H</span><input type="number" step="0.1" min="0" data-f="gear.h" value="${esc(r.gear.h)}" placeholder="10m"${dis(!gearOn)}>
       <span class="chk">α</span><input type="number" step="0.5" min="10.1" max="49.9" data-f="gear.alpha" value="${esc(r.gear.alpha)}" placeholder="20" title="基准齿形角，度（省略 = 20°，可给 10°<α<50°）" style="width:58px"${dis(!gearOn)}></div></td>
-    <td class="feat"><div class="frow"><label class="chk"><input type="checkbox" data-f="spline.on"${ck(splineOn)}${dis(gearOn)}>SPLINE</label></div>
+    <td class="feat"><div class="frow"><label class="chk"><input type="checkbox" data-f="spline.on"${ck(splineOn)}${dis(gearOn || involOn)}>SPLINE</label></div>
       <div class="frow"><select data-f="spline.spec" title="表内规格下拉；表外规格选「自定义…」"${dis(!splineOn)}>${splineOptionsHtml(specSel)}</select></div>
       <div class="frow"><input type="text" data-f="spline.spec" value="${esc(r.spline.spec)}" placeholder="自定义 N×d×D×B" style="width:128px${specHit ? ";display:none" : ""}"${dis(!splineOn)}></div>
       <div class="frow"><span class="chk">L</span><input type="number" step="0.1" min="0" data-f="spline.len" value="${esc(r.spline.len)}" placeholder="满齿段长"${dis(!splineOn)}>
       <span class="chk">de</span><input type="number" step="0.1" min="0" data-f="spline.de" value="${esc(r.spline.de)}" placeholder="${specHit ? fmt(specHit.de) : "表外必给"}" style="width:52px"${dis(!splineOn)}></div>
       <div class="frow spline-derive" title="小径 d / 大径 D / 键宽 B / 滚刀直径 de / 齿深 h / 收尾长度 l">${esc(splineDerived(r))}</div></td>
+    <td class="feat"><div class="frow"><label class="chk"><input type="checkbox" data-f="invol.on"${ck(involOn)}${dis(gearOn || splineOn || mOn || ovOn)}>INVOL</label></div>
+      <div class="frow"><select data-f="invol.std" title="标准预设：GB/T 3478.1-2008 或 DIN 5480-1:2015"${dis(!involOn)}>${involStdOptionsHtml(r.invol.std)}</select></div>
+      <div class="frow"><select data-f="invol.profile" title="齿廓类型（GB 四种 / DIN 30°）"${dis(!involOn)}>${involProfileOptionsHtml(r.invol.std, r.invol.profile)}</select></div>
+      <div class="frow"><span class="chk">m</span><input type="number" step="0.1" min="0" data-f="invol.m" value="${esc(r.invol.m)}"${dis(!involOn)}>
+      <span class="chk">z</span><input type="number" step="1" min="3" data-f="invol.z" value="${esc(r.invol.z)}"${dis(!involOn)}>
+      <span class="chk">x</span><input type="number" step="0.05" data-f="invol.x" value="${esc(r.invol.x)}" placeholder="0" style="width:52px"${dis(!involOn)}></div>
+      <div class="frow"><span class="chk">L</span><input type="number" step="0.1" min="0" data-f="invol.len" value="${esc(r.invol.len)}" placeholder="有效长度"${dis(!involOn)}>
+      <span class="chk">de</span><input type="number" step="0.1" min="0" data-f="invol.de" value="${esc(r.invol.de)}" placeholder="可选" style="width:48px"${dis(!involOn)}></div>
+      <div class="frow invol-derive" title="d/db/da/df/ρf/cF（与 invol_spline.rs 同公式）；DIN 另给 d_B 名义估算；给了 de 再算收尾 l">${esc(involDerived(r))}</div></td>
   </tr>`;
 }
 
@@ -401,20 +482,28 @@ function renderTable() {
   updateButtons();
 }
 
-// 特征互斥：GEAR / SPLINE 独占；M 与 OV 不能同段（与后端校验同口径）
+// 特征互斥：GEAR / SPLINE / INVOLSPLINE 各自独占；M 与 OV 不能同段（与后端校验同口径）
 function enforceExclusive(r) {
   if (r.gear.on) {
     r.ch.l.on = r.ch.r.on = r.ov.l.on = r.ov.r.on = r.m.on = false;
     r.spline.on = false;
+    r.invol.on = false;
   }
   if (r.spline.on) {
     r.ch.l.on = r.ch.r.on = r.ov.l.on = r.ov.r.on = r.m.on = false;
     r.gear.on = false;
+    r.invol.on = false;
+  }
+  if (r.invol.on) {
+    r.ch.l.on = r.ch.r.on = r.ov.l.on = r.ov.r.on = r.m.on = false;
+    r.gear.on = false;
+    r.spline.on = false;
   }
   if (r.m.on) {
     r.ov.l.on = r.ov.r.on = false;
     r.gear.on = false;
     r.spline.on = false;
+    r.invol.on = false;
   }
   if (r.ov.l.on || r.ov.r.on) {
     r.m.on = false;
@@ -441,6 +530,14 @@ function rowToDsl(r) {
       const isTableDefault = hit && Math.abs(numOrNaN(r.spline.de) - hit.de) < 1e-9;
       if (!isTableDefault) s += " de" + numTok(r.spline.de);
     }
+    return s;
+  }
+  if (r.invol.on) {
+    const code = String(r.invol.profile).trim();
+    let s = "INVOLSPLINE " + code + " M" + numTok(r.invol.m) + " Z" + numTok(r.invol.z);
+    if (String(r.invol.x).trim() !== "") s += " X" + numTok(r.invol.x);
+    s += " L" + numTok(r.invol.len);
+    if (String(r.invol.de).trim() !== "") s += " de" + numTok(r.invol.de);
     return s;
   }
   let s = "S" + numTok(r.s);
@@ -483,6 +580,19 @@ function rowFromSegment(seg) {
     r.spline.spec = seg.spline.spec || [seg.spline.n, fmt(seg.spline.d), fmt(seg.spline.big), fmt(seg.spline.b)].join("x");
     r.spline.len = seg.spline.len === null || seg.spline.len === undefined ? "" : fmt(seg.spline.len);
     r.spline.de = seg.spline.de === null || seg.spline.de === undefined ? "" : fmt(seg.spline.de);
+    return r;
+  }
+  if (seg.invol_spline) {
+    r.invol.on = true;
+    const iv = seg.invol_spline;
+    const p = involList().find((x) => x.code === iv.code);
+    r.invol.std = p ? p.std : "GB";
+    r.invol.profile = iv.code || "GB30R";
+    r.invol.m = fmt(iv.m);
+    r.invol.z = String(iv.z);
+    r.invol.x = Math.abs(iv.x || 0) < 1e-12 ? "" : fmt(iv.x);
+    r.invol.len = iv.len === null || iv.len === undefined ? "" : fmt(iv.len);
+    r.invol.de = iv.de === null || iv.de === undefined ? "" : fmt(iv.de);
     return r;
   }
   r.s = fmt(seg.s);
@@ -607,6 +717,16 @@ function onTableInput(e) {
       r.spline.spec = hit.code;
       r.spline.de = fmt(hit.de);   // 自动生成：de = GB/T 10952 查表值
     }
+    renderTable();
+    regenText();
+    return;
+  }
+  // 标准下拉（INVOLSPLINE）：切标准 → 齿廓下拉重建为该标准的第一个预设。
+  if (field === "invol.std" && e.target.tagName === "SELECT") {
+    sel = Number(tr.dataset.row);
+    r.invol.std = e.target.value;
+    const first = involList().find((p) => p.std === r.invol.std);
+    r.invol.profile = first ? first.code : "";
     renderTable();
     regenText();
     return;
@@ -759,6 +879,30 @@ function modelFromRows() {
         if (!(hit && Math.abs(de - hit.de) < 1e-9)) spline.de = de;
       }
       segments.push({ spline });
+      continue;
+    }
+    if (r.invol.on) {
+      const code = String(r.invol.profile).trim();
+      const m = numOrNaN(r.invol.m);
+      const z = Math.round(numOrNaN(r.invol.z));
+      const len = numOrNaN(r.invol.len);
+      const xRaw = String(r.invol.x).trim();
+      const x = xRaw === "" ? null : numOrNaN(r.invol.x);
+      if (!code) { showStatus(at + "INVOLSPLINE 预设代号不能为空（例 GB30R）。", true); return null; }
+      if (!(m > 0) || !Number.isFinite(z) || z < 3 || (x !== null && !Number.isFinite(x))) {
+        showStatus(at + "INVOLSPLINE 参数非法（m > 0、z ≥ 3、x 留空 = 0）。", true);
+        return null;
+      }
+      if (!(len > 0)) { showStatus(at + "INVOLSPLINE 的 L（有效长度）必须 > 0。", true); return null; }
+      const invol = { code, m, z, len };
+      if (x !== null) invol.x = x;
+      const deRaw = String(r.invol.de).trim();
+      if (deRaw !== "") {
+        const de = numOrNaN(r.invol.de);
+        if (!(de > 0)) { showStatus(at + "INVOLSPLINE 的 de 必须 > 0（留空 = 不画收尾）。", true); return null; }
+        invol.de = de;
+      }
+      segments.push({ invol_spline: invol });
       continue;
     }
     if (r.gear.on) {
