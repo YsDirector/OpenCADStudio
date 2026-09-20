@@ -1538,11 +1538,11 @@ impl DetailElement for InvolSpline {
             "default_d": 0,
             "spec_label": "预设代号（GB30P/GB30R/GB375R/GB45R/DIN30）",
             "source": format!(
-                "{}（图 2 基本齿廓 + 表 3~表 6）；{}（条 5.1：齿侧对中 h_fP=0.55m）；DIN 5480-2 名义表（618 行；m=1.5 缺，m=5 已剔除）",
+                "{}（图 2 基本齿廓 + 表 3~表 6）；{}（条 5.1：齿侧对中 h_fP=0.55m）；DIN 5480-2 名义表（674 行；m=1.5 已补入，m=5 已剔除）",
                 crate::invol_spline::GB_CODE,
                 crate::invol_spline::DIN_CODE
             ),
-            "din_notes": "DIN 5480-2 名义表：618 行；m=1.5 缺失（p23/p24 源图空表框）、m=5 已剔除（p35 渲染缺陷）；x=(d_B−m(z+1.1))/(2m) 为反推关系",
+            "din_notes": "DIN 5480-2 名义表：674 行；m=1.5 由用户截图补入（56 行）、m=5 已剔除（p35 渲染缺陷）；x=(d_B−m(z+1.1))/(2m) 为反推关系",
             "din_nominal": din_nominal,
             "inputs": [
                 { "key": "std", "label": "标准预设", "type": "select",
@@ -2260,12 +2260,15 @@ mod tests {
         assert_eq!(inputs[6]["key"], "len");
         // DIN 5480-2 名义表进了目录（GUI 的 d_B 候选/自动带出用）
         let nominal = family["din_nominal"].as_array().unwrap();
-        assert_eq!(nominal.len(), 618, "入库 618 行");
+        assert_eq!(nominal.len(), 674, "入库 674 行（旧 618 + m=1.5 56）");
         assert!(
             nominal.iter().any(|r| r["db"] == 40.0 && r["m"] == 2.0 && r["z"] == 18),
             "p27 m=2 d_B=40 z=18 应在候选里"
         );
-        assert!(family["din_notes"].as_str().unwrap().contains("m=1.5"));
+        assert!(
+            family["din_notes"].as_str().unwrap().contains("m=1.5")
+                && family["din_notes"].as_str().unwrap().contains("补入")
+        );
         // DIN 预设的系数（GUI 派生值用）：h_fP*=0.55、cF*=0.10
         let din = family["invol_presets"]
             .as_array()
@@ -2324,10 +2327,14 @@ mod tests {
             .unwrap()
             .unwrap_err();
         assert!(err.contains("组合不一致"), "{err}");
-        let err = preview_svg("family=detail_invol_spline&spec=DIN30&db=20&m=1.5&view=front")
+        // m=1.5 现已由用户截图补入：d_B20+m1.5 → 查表 z=12、x=0.175/1.5=0.1167
+        let svg = preview_svg("family=detail_invol_spline&spec=DIN30&db=20&m=1.5&view=front")
             .unwrap()
-            .unwrap_err();
-        assert!(err.contains("该档位数据缺失") && err.contains("空表框"), "{err}");
+            .unwrap();
+        assert!(
+            svg.contains("z12 x0.1167 d_B20") && svg.contains("查表命中 p1 m=1.5"),
+            "m=1.5 查表命中：{svg}"
+        );
         let err = preview_svg("family=detail_invol_spline&spec=GB30R&db=40&m=2&z=18&view=front")
             .unwrap()
             .unwrap_err();

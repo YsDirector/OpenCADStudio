@@ -37,13 +37,13 @@
 //!
 //! ## DIN 5480-2 名义表（`d_B` 查表，本轮主路径）
 //!
-//! 数据入库为 `assets/din5480_2_nominal.csv`（618 行；源 665 行中剔除 p35/m=5 整页 47 行，
-//! 原因与 m=1.5 缺失见 `assets/din5480_2_notes.md`）。按基准直径 [`lookup_by_d_b`]：
-//! 同一 `d_B` 可能有多个 `z/x₁` 变体（表格事实，返回多行）；找不到时列附近候选；缺失档位
-//! （m=1.5 空表框 / m=5 已剔除）明确报「该档位数据缺失」。
+//! 数据入库为 `assets/din5480_2_nominal.csv`（674 行 = 旧 618 行 + m=1.5 56 行；旧行中剔除
+//! p35/m=5 整页 47 行，m=1.5 由用户截图补入，见 `assets/din5480_2_notes.md`）。按基准直径
+//! [`lookup_by_d_b`]：同一 `d_B` 可能有多个 `z/x₁` 变体（表格事实，返回多行）；找不到时列附近
+//! 候选；已剔除档位（仅 m=5）明确报「该档位数据缺失」。
 //!
 //! `x_from_d_b(d_B, m, z) = (d_B − m(z + 1.1)) / (2m)` 是**从 OCR 名义表反推并经全表校验**
-//! 的关系（等价 `d_B = d + 1.1m + 2x·m`、`z_B = z + 1.1 + 2x`；618 行逐行残差 0），
+//! 的关系（等价 `d_B = d + 1.1m + 2x·m`、`z_B = z + 1.1 + 2x`；674 行逐行残差 0），
 //! **不是标准原文公式**；[`resolve_din_by_d_b`] 用它把 `DB`+（M 或 Z）补成全参数，
 //! 并在 `DB+M+Z` 三参齐给时与表值互相印证。
 //!
@@ -262,11 +262,12 @@ pub fn parse_preset_token(token: &str) -> Option<(SplineStd, &'static str)> {
 
 // ──────────────── DIN 5480-2 名义表（`d_B` 查表；数据 = assets/din5480_2_nominal.csv） ────────────────
 
-/// 入库名义表（`crates/ocs_ocsm/assets/din5480_2_nominal.csv`，**618 行**）。
+/// 入库名义表（`crates/ocs_ocsm/assets/din5480_2_nominal.csv`，**674 行** = 旧 618 行 + m=1.5 56 行）。
 ///
 /// 来源 `DIN5480-2_名义表_续2_merged.csv`（665 行）剔除 p35（m=5）整页 47 行
-/// （源图数据区渲染缺陷、双源 OCR 互不一致）；`flags/source` 列原样保留便于追溯，
-/// 运行时不展示。剔除原因与 m=1.5（p23/p24 空表框）缺失说明见 `assets/din5480_2_notes.md`。
+/// （源图数据区渲染缺陷、双源 OCR 互不一致）；m=1.5 由用户截图 OCR 补入（r15 的 `d_b` 按
+/// 该行 flags 反推修正）。`flags/source` 列原样保留便于追溯，运行时不展示。
+/// 说明见 `assets/din5480_2_notes.md`。
 const DIN5480_2_CSV: &str = include_str!("../assets/din5480_2_nominal.csv");
 
 /// 名义表一行（只保留主路径需要的列；`flags/source` 留作追溯）。
@@ -303,12 +304,8 @@ const DIN_M_TOL: f64 = 1e-9;
 /// 表值 `x₁·m` 最多 4 位小数（x 往返误差 ≤ 5e-5/m）；1e-4 足以判同。
 const DIN_X_TOL: f64 = 1e-4;
 
-/// 已知**缺失/剔除**的模数档及原因（有据可查的两档）。
+/// 已知**缺失/剔除**的模数档及原因（仅 m=5 一档；m=1.5 已由用户截图补入）。
 pub const DIN_MISSING_MODULES: &[(f64, &str)] = &[
-    (
-        1.5,
-        "该档位数据缺失（源图空表框）：p23/p24 的 m=1.5 名义表在 doc88 为空表框，待另找来源",
-    ),
     (
         5.0,
         "该档位数据缺失（已整页剔除）：p35 的 m=5 源图数据区渲染缺陷、双源 OCR 互不一致",
@@ -422,7 +419,7 @@ fn din5480_match(d_b: f64, m: Option<f64>) -> Vec<Din5480Row> {
 ///
 /// * 命中可能**多行** —— 同一 `d_B` 有多个 `z/x₁` 变体是表格事实（如 p21 m=1.25、p25 m=1.75）；
 /// * 找不到时列出该 `d_B` 附近候选（同 m 优先；缺失档退全表）；
-/// * `m=1.5`（p23/p24 源图空表框）与 `m=5`（p35 已剔除）明确报「该档位数据缺失」。
+/// * `m=5`（p35 已剔除）明确报「该档位数据缺失」；`m=1.5` 已由用户截图补入，可正常命中。
 pub fn lookup_by_d_b(d_b: f64, m: Option<f64>) -> Result<Vec<Din5480Row>, String> {
     if !(d_b.is_finite() && d_b > 0.0) {
         return Err(format!("DIN 5480-2 查表：d_B={} 必须是正数。", trim(d_b)));
@@ -509,7 +506,7 @@ fn din5480_miss_message(d_b: f64, m: Option<f64>) -> String {
 /// DIN 5480-2 基准直径反解变位系数：
 /// `x = (d_B − m(z + 1.1)) / (2m)`，等价 `d_B = d + 1.1m + 2x·m`（`z_B = z + 1.1 + 2x`）。
 ///
-/// **口径**：这是从 OCR 名义表反推并经**全表校验**的关系 —— 已解析 618 行逐行
+/// **口径**：这是从 OCR 名义表反推并经**全表校验**的关系 —— 已解析 674 行逐行
 /// `|x₁·m − (d_B − m(z+1.1))/2| = 0`（被剔除的 p35 除外）；**不是标准原文公式**，
 /// 引用时以 DIN 5480-2 表值与检验表为准。
 pub fn x_from_d_b(d_b: f64, m: f64, z: u32) -> f64 {
@@ -1532,7 +1529,11 @@ mod tests {
     #[test]
     fn din5480_table_shape_and_formula_holds_for_every_row() {
         let rows = din5480_rows();
-        assert_eq!(rows.len(), 618, "入库 618 行（源 665 行剔除 p35/m=5 的 47 行）");
+        assert_eq!(
+            rows.len(),
+            674,
+            "入库 674 行（旧 618 = 665−47（p35/m=5）；+ m=1.5 用户截图 56）"
+        );
         assert!(rows.iter().all(|r| r.page != 35), "p35（m=5）整页已剔除");
         assert!(rows.iter().all(|r| (r.m - 5.0).abs() > 1e-9), "不该再有 m=5 残行");
         for r in rows {
@@ -1566,9 +1567,90 @@ mod tests {
             assert!((d_b_from_x(r.m, r.z, x) - r.d_b).abs() < 1e-9, "正反变换不闭合");
         }
         let mods = din5480_modules();
-        assert_eq!(mods.len(), 14, "已入库 14 个模数档：{mods:?}");
-        assert!(!mods.iter().any(|m| (*m - 1.5).abs() < 1e-9), "m=1.5 未入库");
+        assert_eq!(mods.len(), 15, "已入库 15 个模数档：{mods:?}");
+        assert!(mods.iter().any(|m| (*m - 1.5).abs() < 1e-9), "m=1.5 已补入");
         assert!(!mods.iter().any(|m| (*m - 5.0).abs() < 1e-9), "m=5 已剔除");
+    }
+
+    /// m=1.5（用户截图补入，page=1/table_no=14）抽样：查表命中 + `x_from_d_b` 与表值一致。
+    #[test]
+    fn din5480_m15_lookup_hits_and_x_from_d_b_matches_table() {
+        // (d_B, z, 表 x₁·m)：首行 / r15（d_b 已按 flags 修正）/ 末行。
+        let cases: [(f64, u32, f64); 3] = [(12.0, 6, 0.675), (26.0, 16, 0.175), (110.0, 72, 0.175)];
+        for (d_b, z, x_m) in cases {
+            let rows = lookup_by_d_b(d_b, Some(1.5)).expect("m=1.5 应有数据");
+            let r = rows
+                .iter()
+                .find(|r| r.z == z)
+                .unwrap_or_else(|| panic!("m=1.5 d_B={d_b} 应命中 z={z}"));
+            assert_eq!((r.page, r.table_no), (1, 14), "用户截图 1 / 表 14");
+            assert!((r.x_m - x_m).abs() < 1e-9, "x₁·m={}", r.x_m);
+            let x = x_from_d_b(r.d_b, r.m, r.z);
+            assert!((x - r.x).abs() < 1e-9, "x_from_d_b 与表值 x 不一致");
+            assert!((d_b_from_x(r.m, r.z, x) - r.d_b).abs() < 1e-9, "正反变换不闭合");
+            let (p, o) = resolve_din_by_d_b(d_b, Some(1.5), Some(z), None).expect("三参应查表");
+            assert!(matches!(o, D_bOrigin::Table(_)));
+            assert!((p.x - r.x).abs() < 1e-9);
+            assert_eq!(p.d_b, Some(d_b));
+        }
+        // r15：修正后的 d_b 与 d·cos30 表值口径一致；原读 29,785 仍保留在 flags 里。
+        let r15 = din5480_rows()
+            .iter()
+            .find(|r| (r.m - 1.5).abs() < 1e-9 && r.z == 16 && (r.d_b - 26.0).abs() < 1e-9)
+            .expect("r15（d_B=26,z=16）");
+        assert!((r15.base_dia - 20.7846).abs() < 1e-9);
+        assert!(r15.flags.contains("29,785"), "原读保留在 flags：{}", r15.flags);
+    }
+
+    /// 名义表 4 条恒等式（`d_f2=d_B`、`d_a1=d_B−0.2m`、`d_a2=d−0.9m+2x₁m`、
+    /// `d_f1=d−1.1m+2x₁m`）全表（674 行）复核，违例必须为 0；m=1.5 行 56/56 成立。
+    #[test]
+    fn din5480_four_identities_hold_for_every_row() {
+        let tol = 5e-3; // 表值最细 2 位小数 → 半个末位
+        let (mut n, mut n15) = (0usize, 0usize);
+        let mut viol: Vec<String> = Vec::new();
+        for (i, line) in DIN5480_2_CSV.lines().enumerate() {
+            if line.trim().is_empty() || line.starts_with('#') {
+                continue;
+            }
+            let f = split_csv_line(line);
+            if f.first().map(|s| s.trim()) == Some("page") {
+                continue;
+            }
+            let m = csv_decimal(&f[1]).expect("m");
+            let d_b = csv_decimal(&f[3]).expect("d_B");
+            let z = f[4].trim().parse::<u32>().expect("z");
+            let d = csv_decimal(&f[5]).expect("d");
+            let x_m = csv_decimal(&f[7]).expect("x1_m");
+            let d_f2 = csv_decimal(&f[9]).expect("d_f2");
+            let d_a2 = csv_decimal(&f[12]).expect("d_a2");
+            let d_a1 = csv_decimal(&f[13]).expect("d_a1");
+            let d_f1 = csv_decimal(&f[15]).expect("d_f1");
+            n += 1;
+            if (m - 1.5).abs() < DIN_M_TOL {
+                n15 += 1;
+            }
+            let checks = [
+                ("d_f2=d_B", d_f2 - d_b),
+                ("d_a1=d_B−0.2m", d_a1 - (d_b - 0.2 * m)),
+                ("d_a2=d−0.9m+2x₁m", d_a2 - (d - 0.9 * m + 2.0 * x_m)),
+                ("d_f1=d−1.1m+2x₁m", d_f1 - (d - 1.1 * m + 2.0 * x_m)),
+            ];
+            for (name, res) in checks {
+                if res.abs() > tol {
+                    viol.push(format!(
+                        "第 {} 行 p{} m{} z{}：{name} 残差 {res}",
+                        i + 1,
+                        f[0],
+                        f[1],
+                        z
+                    ));
+                }
+            }
+        }
+        assert_eq!(n, 674, "全表 674 行");
+        assert_eq!(n15, 56, "m=1.5 56 行");
+        assert!(viol.is_empty(), "恒等式违例 {} 条：{viol:?}", viol.len());
     }
 
     /// 查表命中：抽各档（含多行 z/x₁ 变体）；按 d_B+m / d_B+z 补全。
@@ -1623,7 +1705,7 @@ mod tests {
         assert!(e.contains("多个 m 变体") && e.contains("0.75") && e.contains("0.8"), "{e}");
     }
 
-    /// 未命中：附近候选；缺失档位（m=1.5 空表框、m=5 已剔除）明确报数据缺失。
+    /// 未命中：附近候选；剔除档位（m=5）明确报数据缺失；m=1.5 现已可命中。
     #[test]
     fn din5480_lookup_miss_lists_candidates_and_missing_modules() {
         let e = lookup_by_d_b(41.0, Some(2.0)).unwrap_err();
@@ -1632,11 +1714,10 @@ mod tests {
         assert!(e.contains("m=2"), "{e}");
         let e = lookup_by_d_b(1_000.0, None).unwrap_err();
         assert!(e.contains("附近候选"), "不给 m 也要给候选：{e}");
-        // m=1.5：源图空表框
-        let e = lookup_by_d_b(20.0, Some(1.5)).unwrap_err();
+        // m=1.5：已由用户截图补入（d_B=20 → z=12 唯一，可直接命中）
         assert!(
-            e.contains("该档位数据缺失") && e.contains("源图空表框"),
-            "m=1.5 应报空表框：{e}"
+            lookup_by_d_b(20.0, Some(1.5)).is_ok(),
+            "m=1.5 已补入，不该再报缺失"
         );
         // m=5：p35 已整页剔除
         let e = lookup_by_d_b(50.0, Some(5.0)).unwrap_err();

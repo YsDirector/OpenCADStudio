@@ -185,7 +185,7 @@ OCSMSHAFT 轴生成器：行 DSL / JSON → 单视图侧视图（段拼接 + 端
     INVOLSPLINE GB30R M3 Z20 L30   渐开线花键段（GB/T 3478.1 / DIN 5480）：预设代号
                       GB30P/GB30R（默认）/GB375R/GB45R/DIN30；直径由 M/Z/X 或 DB 导出（不给 S/E）；
                       `X0.2` = 变位（DIN ∈ [−0.05, 0.45]）；DIN 可写 `DB40`（基准直径），
-                      M/Z 可缺一项由 DIN 5480-2 名义表补全（m=1.5 缺、m=5 已剔除）；
+                      M/Z 可缺一项由 DIN 5480-2 名义表补全（m=1.5 已补入、m=5 已剔除）；
                       `de63` 可选（给了才画收尾弧，段长 = L + l；不给 de 段长 = L）；
                       不能与 SPLINE/CH/OV/RL/M/GEAR 同段
     VIEW 常规|剖视|双   视图：常规（默认，只看外形）/ 剖视（轮廓 + ANSI31 剖面线）/ 双（并排一次出）
@@ -6171,11 +6171,19 @@ GEAR M3 Z20";
         assert_eq!(parse_program(gui).unwrap(), program);
         let gui2 = r#"{"segments":[{"invol_spline":{"std":"DIN","profile":"30R","db":40,"z":18,"l":30}}]}"#;
         assert_eq!(parse_program(gui2).unwrap(), program);
-        // 不一致 / 缺失档 / GB 带 DB 的报错口径
+        // m=1.5 现已入库：DB20+M1.5 → z=12、取表值 x=0.175/1.5=0.1167
+        let program15 = parse_program("INVOLSPLINE DIN30 DB20 M1.5 L30").unwrap();
+        let iv15 = program15.segments[0].invol_spline.as_ref().unwrap();
+        assert_eq!(iv15.params.z, 12, "m=1.5 d_B=20 → z=12");
+        assert!(
+            (iv15.params.x - 0.175 / 1.5).abs() < 1e-9,
+            "取表值 x={}",
+            iv15.params.x
+        );
+        assert_eq!(iv15.params.d_b, Some(20.0));
+        // 不一致 / 剔除档 / GB 带 DB 的报错口径
         for (text, needle) in [
             ("INVOLSPLINE DIN30 DB40 M2 Z14 L30", "组合不一致"),
-            ("INVOLSPLINE DIN30 DB20 M1.5 L30", "该档位数据缺失"),
-            ("INVOLSPLINE DIN30 DB20 M1.5 L30", "空表框"),
             ("INVOLSPLINE DIN30 DB50 M5 L30", "剔除"),
             ("INVOLSPLINE GB30R DB40 M2 Z18 L30", "只适用于 DIN"),
             ("INVOLSPLINE DIN30 DB40 L30", "请再给"),

@@ -13238,7 +13238,7 @@ mod weld_tests {
         );
         assert!(
             cat.contains("\"din_nominal\"") && cat.contains("\"din_notes\"")
-                && cat.contains("m=1.5"),
+                && cat.contains("m=1.5") && cat.contains("补入"),
             "DIN 5480-2 名义表候选进目录（GUI 的 d_B 下拉/自动带出）"
         );
         let svg = http_req(
@@ -13265,15 +13265,18 @@ mod weld_tests {
             svg.contains("z18 x0.45 d_B40") && svg.contains("查表命中 p27 m=2"),
             "d_B 查表预览：{svg}"
         );
-        let bad = http_req(
+        // m=1.5 现已由用户截图补入：d_B20+m1.5 → 查表 z=12、x=0.175/1.5=0.1167
+        let svg = http_req(
             server.port,
             "GET",
             "/api/part_svg?family=detail_invol_spline&spec=DIN30&db=20&m=1.5&view=front",
             "",
         );
         assert!(
-            bad.contains("error") && bad.contains("该档位数据缺失") && bad.contains("空表框"),
-            "m=1.5 缺失档位提示：{bad}"
+            svg.contains("<svg")
+                && svg.contains("z12 x0.1167 d_B20")
+                && svg.contains("查表命中 p1 m=1.5"),
+            "m=1.5 查表命中：{svg}"
         );
         let svg = http_req(
             server.port,
@@ -13493,13 +13496,16 @@ mod weld_tests {
             "d_B 查表 meta：{resp}"
         );
         assert_eq!(mock.inserts().len(), 3, "d_B 路径也落一个 INSERT");
-        // 组合不一致 / 缺失档位在出库层报错
+        // 组合不一致报错；m=1.5 已由用户截图补入（db+m → z=12、x=0.175/1.5）
         let bad = br#"{"family":"detail_invol_spline","d":0,"spec":"DIN30","params":{"db":40,"m":2,"z":14,"len":20},"view":"side"}"#;
         let err = apply_part_pick(&sender, bad).unwrap_err();
         assert!(err.contains("组合不一致"), "{err}");
-        let miss = br#"{"family":"detail_invol_spline","d":0,"spec":"DIN30","params":{"db":20,"m":1.5,"len":20},"view":"side"}"#;
-        let err = apply_part_pick(&sender, miss).unwrap_err();
-        assert!(err.contains("该档位数据缺失") && err.contains("空表框"), "{err}");
+        let ok15 = br#"{"family":"detail_invol_spline","d":0,"spec":"DIN30","params":{"db":20,"m":1.5,"len":20},"view":"side"}"#;
+        let resp = apply_part_pick(&sender, ok15).expect("m=1.5 查表插入");
+        assert!(
+            resp.contains("z12 x0.1167 d_B20 L20（查表命中 p1 m=1.5）"),
+            "m=1.5 查表 meta：{resp}"
+        );
     }
 
     /// 外螺纹退刀槽出库：`params` 同样走 `apply_part_export`（建块 + 待放置）。
