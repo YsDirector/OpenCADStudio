@@ -1383,6 +1383,15 @@ impl BuiltinPlugin for OcsmPlugin {
                             })],
                         },
                         RibbonGroup {
+                            title: "轴",
+                            tools: vec![RibbonItem::LargeTool(ToolDef {
+                                id: "OCSMSHAFT",
+                                label: "轴生成器",
+                                icon: IconKind::Glyph("🔧"),
+                                event: ModuleEvent::Command("OCSMSHAFT".to_string()),
+                            })],
+                        },
+                        RibbonGroup {
                             title: "标注",
                             tools: vec![
                                 RibbonItem::LargeTool(ToolDef {
@@ -3887,6 +3896,66 @@ export_plugin!(OcsmPlugin);
 
 #[cfg(test)]
 mod tests {
+    // ── 功能区注册（按钮 ↔ 命令前缀两处同步） ─────────────────────
+    #[test]
+    fn ribbon_registers_shaft_button_and_command_prefixes_match_manifest() {
+        // 按钮口径与「齿轮」一致：id = 命令名、label = 显示名、event = Command(id)；
+        // 点击即 `OCSMSHAFT`（不带参数 = 开轴生成器窗口 + 放置态，不是直插）。
+        let module = OcsmPlugin.ribbon();
+        let mut found = false;
+        for group in module.ribbon_groups() {
+            for item in &group.tools {
+                if let RibbonItem::LargeTool(t) = item {
+                    if t.id == "OCSMSHAFT" {
+                        assert_eq!(group.title, "轴");
+                        assert_eq!(t.label, "轴生成器");
+                        assert!(matches!(
+                            &t.event,
+                            ModuleEvent::Command(c) if c == "OCSMSHAFT"
+                        ));
+                        found = true;
+                    }
+                }
+            }
+        }
+        assert!(found, "功能区缺少「轴生成器」按钮（OCSMSHAFT）");
+        assert!(
+            MANIFEST.command_prefixes.contains(&"OCSMSHAFT"),
+            "MANIFEST.command_prefixes 缺少 OCSMSHAFT"
+        );
+
+        // src/lib.rs 的 MANIFEST 与 plugin.toml 是两处维护（部署时 sed 只替换
+        // rustc/acadrust 占位符）——命令前缀必须两处一致，否则会出现
+        // “命令能用但按钮不显示 / 按钮点了没命令”的不对称。
+        let toml = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/plugin.toml"))
+            .expect("读 plugin.toml");
+        let prefix_line = toml
+            .lines()
+            .find(|l| l.trim_start().starts_with("command_prefixes"))
+            .expect("plugin.toml 缺 command_prefixes");
+        let list = prefix_line
+            .split_once('[')
+            .and_then(|(_, r)| r.split_once(']'))
+            .map(|(l, _)| l)
+            .expect("command_prefixes 不是数组");
+        let mut in_toml: Vec<String> = list
+            .split(',')
+            .map(|s| s.trim().trim_matches('"').to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+        let mut expected: Vec<String> = MANIFEST
+            .command_prefixes
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        in_toml.sort();
+        expected.sort();
+        assert_eq!(
+            in_toml, expected,
+            "plugin.toml 与 MANIFEST.command_prefixes 不同步"
+        );
+    }
+
     // ── 标准件库扫描 ──────────────────────────────────────────────
     #[test]
     fn parse_part_stem_splits_three_parts() {

@@ -110,6 +110,7 @@ rm -rf "$HOME/.config/OpenCADStudio/plugins/opencad.layers_quick"
   下拉选择，选中自动带出 de（GB/T 10952 表 1/表 2）与 d/D/B/h/l 派生值（de 框可改 = 覆盖）；
   下拉末尾「自定义…」支持表外规格（表外必须给 de）。例 `SPLINE 6x23x26x6 L30`（表内规格不写 de 也自动查表算 R/l）。
   **插入前也要先跑过 `OCSM` 初始化**（与齿轮同判据）。
+- 工具栏「轴」组有 **轴生成器**（🔧）按钮，等效输入 `OCSMSHAFT`（不带参数：打开轴生成器窗口 + 进入放置态，放置方式与 `XL` 相同）。
 - 工具栏「标注」组有 **标注转GB**（🔁）按钮，等效输入 `D2G` / `OCSMDIM2GB`。
 - 输入 `D2G`（或 `OCSMDIM2GB`）→ **把宿主原生标注重建为 OCSM 的 GB 标准版**：
   有选中只转选中集，无选中扫全图（模型空间）。产物 = OCSM_GB_x{图框比例}
@@ -353,4 +354,4 @@ cargo test -p ocs_plugin_api            # API：IPC round-trip 等（串行 --te
   键入坐标（宿主 entity-pick 步骤语义）。
 - 缩放标注样式 `OCSM_GB_x{scale}` 由 TF 插入时创建；旧图（样式缺失）回退 `OCSM_GB`
   并在提示中说明（请重新插入图框或运行 OCSM）。
-- 有 ribbon 页（图框/标注两组）。
+- 功能区共 5 组：图框 / 中心线 / 齿轮 / 轴 / 标注。
