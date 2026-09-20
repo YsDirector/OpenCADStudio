@@ -110,8 +110,8 @@ rm -rf "$HOME/.config/OpenCADStudio/plugins/opencad.layers_quick"
   下拉选择，选中自动带出 de（GB/T 10952 表 1/表 2）与 d/D/B/h/l 派生值（de 框可改 = 覆盖）；
   下拉末尾「自定义…」支持表外规格（表外必须给 de）。例 `SPLINE 6x23x26x6 L30`（表内规格不写 de 也自动查表算 R/l）。
   **插入前也要先跑过 `OCSM` 初始化**（与齿轮同判据）。
-- 工具栏「轴」组有 **轴生成器**（🔧）按钮，等效输入 `OCSMSHAFT`（不带参数：打开轴生成器窗口 + 进入放置态，放置方式与 `XL` 相同）。
-- 工具栏「标注」组有 **标注转GB**（🔁）按钮，等效输入 `D2G` / `OCSMDIM2GB`。
+- 工具栏「轴」组有 **轴生成器**（阶梯轴+中心线双色图标）按钮，等效输入 `OCSMSHAFT`（不带参数：打开轴生成器窗口 + 进入放置态，放置方式与 `XL` 相同）。
+- 工具栏「标注」组有 **标注转GB**（循环箭头双色图标）按钮，等效输入 `D2G` / `OCSMDIM2GB`。
 - 输入 `D2G`（或 `OCSMDIM2GB`）→ **把宿主原生标注重建为 OCSM 的 GB 标准版**：
   有选中只转选中集，无选中扫全图（模型空间）。产物 = OCSM_GB_x{图框比例}
   标注样式 + `7标注层`（线性/对齐用原生 `DIMENSION`；直径/半径/角度/弧长用
@@ -326,7 +326,7 @@ rm -rf "$HOME/.config/OpenCADStudio/plugins/opencad.layers_quick"
 | `CommitEntities(Vec<EntityType>)` | 一步提交**多个**实体并继续（映射宿主 `CmdResult::CommitEntities`） |
 | `CommitEntitiesAndExit(Vec<EntityType>)` | 一步提交多个实体并结束（映射 `CmdResult::CommitEntitiesAndExit`）—— 与单实体版本共用同一套撤销分组（一个 Ctrl+Z 一起回去），不需要为了“一步一实体”把复合几何塞进匿名块 |
 
-功能区也加了一组「中心线」（⊕ 按钮，等效 `ZX`）。
+功能区也加了一组「中心线」（圆+点划线十字双色图标，等效 `ZX`）。
 
 宿主侧配套：`CadCommand` 新增 `plugin_preview_entity` / `entity_pick_applies_osnap` /
 `inject_pick_snap`；`InteractiveEvent` 增 `snapped` 字段与 `Text`/`MouseMove` 变体；
@@ -354,4 +354,4 @@ cargo test -p ocs_plugin_api            # API：IPC round-trip 等（串行 --te
   键入坐标（宿主 entity-pick 步骤语义）。
 - 缩放标注样式 `OCSM_GB_x{scale}` 由 TF 插入时创建；旧图（样式缺失）回退 `OCSM_GB`
   并在提示中说明（请重新插入图框或运行 OCSM）。
-- 功能区共 5 组：图框 / 中心线 / 齿轮 / 轴 / 标注。
+- 功能区共 5 组：图框 / 中心线 / 齿轮 / 轴 / 标注；按钮图标为一套自绘的**双色扁平化 SVG**（24×24 网格、1.625 线宽、圆角端点，主色 token `#B4B6B9` + 强调色 token `#6DB7ED`，宿主按当前主题解析为文字色/主色并重上色），随 `.so` 内嵌分发。

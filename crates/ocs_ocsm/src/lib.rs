@@ -1336,6 +1336,23 @@ fn refresh_edit_links(host: &mut dyn HostApi, port: u16) {
     }
 }
 
+// ── 功能区图标：双色扁平化 SVG ──────────────────────────────────
+//
+// 24×24 网格，主结构色 `#B4B6B9`、强调色 `#6DB7ED`；宿主 `icons::semantic()`
+// （src/ui/icons.rs）按当前主题把这两个 token 解析为「文字色 / 主色」，因此同一套
+// 图在深色与浅色主题下都清晰。SVG 用 `include_bytes!` 编译进 .so，部署不需要
+// 额外资源文件（tools/deploy_plugin.sh 只拷贝 .so / plugin.toml / handbook）。
+const ICON_FRAME: IconKind = IconKind::Svg(include_bytes!("../assets/icons/frame.svg"));
+const ICON_CENTERLINE: IconKind =
+    IconKind::Svg(include_bytes!("../assets/icons/centerline.svg"));
+const ICON_GEAR: IconKind = IconKind::Svg(include_bytes!("../assets/icons/gear.svg"));
+const ICON_SHAFT: IconKind = IconKind::Svg(include_bytes!("../assets/icons/shaft.svg"));
+const ICON_POWERDIM: IconKind =
+    IconKind::Svg(include_bytes!("../assets/icons/powerdim.svg"));
+const ICON_DIMGUIDE: IconKind =
+    IconKind::Svg(include_bytes!("../assets/icons/dimguide.svg"));
+const ICON_DIM2GB: IconKind = IconKind::Svg(include_bytes!("../assets/icons/dim2gb.svg"));
+
 impl BuiltinPlugin for OcsmPlugin {
     fn manifest(&self) -> &'static PluginManifest {
         &MANIFEST
@@ -1360,7 +1377,7 @@ impl BuiltinPlugin for OcsmPlugin {
                             tools: vec![RibbonItem::LargeTool(ToolDef {
                                 id: "OCSMFRAMEINIT",
                                 label: "插入图幅",
-                                icon: IconKind::Glyph("▣"),
+                                icon: ICON_FRAME,
                                 event: ModuleEvent::Command("OCSMFRAMEINIT".to_string()),
                             })],
                         },
@@ -1369,7 +1386,7 @@ impl BuiltinPlugin for OcsmPlugin {
                             tools: vec![RibbonItem::LargeTool(ToolDef {
                                 id: "OCSMCENTERLINE",
                                 label: "中心线",
-                                icon: IconKind::Glyph("⊕"),
+                                icon: ICON_CENTERLINE,
                                 event: ModuleEvent::Command("OCSMCENTERLINE".to_string()),
                             })],
                         },
@@ -1378,7 +1395,7 @@ impl BuiltinPlugin for OcsmPlugin {
                             tools: vec![RibbonItem::LargeTool(ToolDef {
                                 id: "OCSMGEAR",
                                 label: "齿轮",
-                                icon: IconKind::Glyph("⚙"),
+                                icon: ICON_GEAR,
                                 event: ModuleEvent::Command("OCSMGEAR".to_string()),
                             })],
                         },
@@ -1387,7 +1404,7 @@ impl BuiltinPlugin for OcsmPlugin {
                             tools: vec![RibbonItem::LargeTool(ToolDef {
                                 id: "OCSMSHAFT",
                                 label: "轴生成器",
-                                icon: IconKind::Glyph("🔧"),
+                                icon: ICON_SHAFT,
                                 event: ModuleEvent::Command("OCSMSHAFT".to_string()),
                             })],
                         },
@@ -1397,19 +1414,19 @@ impl BuiltinPlugin for OcsmPlugin {
                                 RibbonItem::LargeTool(ToolDef {
                                     id: "OCSMPOWERDIM",
                                     label: "智能标注",
-                                    icon: IconKind::Glyph("📐"),
+                                    icon: ICON_POWERDIM,
                                     event: ModuleEvent::Command("OCSMPOWERDIM".to_string()),
                                 }),
                                 RibbonItem::LargeTool(ToolDef {
                                     id: "OCSMDIMGULIDE",
                                     label: "尺寸引导",
-                                    icon: IconKind::Glyph("🖱️"),
+                                    icon: ICON_DIMGUIDE,
                                     event: ModuleEvent::Command("OCSMDIMGULIDE".to_string()),
                                 }),
                                 RibbonItem::LargeTool(ToolDef {
                                     id: "OCSMDIM2GB",
                                     label: "标注转GB",
-                                    icon: IconKind::Glyph("🔁"),
+                                    icon: ICON_DIM2GB,
                                     event: ModuleEvent::Command("OCSMDIM2GB".to_string()),
                                 }),
                             ],
@@ -3954,6 +3971,42 @@ mod tests {
             in_toml, expected,
             "plugin.toml 与 MANIFEST.command_prefixes 不同步"
         );
+    }
+
+    #[test]
+    fn ribbon_tool_icons_are_two_colour_svg() {
+        // 所有功能区按钮的图标必须是内嵌的双色 SVG（主 #B4B6B9 / 强调 #6DB7ED），
+        // 不允许回退到 emoji/字形：字形无法双色，且在 Web 构建的 Fira Sans 下会变豆腐块。
+        let module = OcsmPlugin.ribbon();
+        let mut checked = 0usize;
+        for group in module.ribbon_groups() {
+            for item in &group.tools {
+                if let RibbonItem::LargeTool(t) = item {
+                    match t.icon {
+                        IconKind::Svg(bytes) => {
+                            assert!(!bytes.is_empty(), "{} 图标字节为空", t.id);
+                            let text = std::str::from_utf8(bytes)
+                                .unwrap_or_else(|_| panic!("{} 图标不是 UTF-8 SVG", t.id));
+                            assert!(
+                                text.contains("viewBox=\"0 0 24 24\""),
+                                "{} 图标不是 24×24 网格",
+                                t.id
+                            );
+                            assert!(
+                                text.contains("#B4B6B9") && text.contains("#6DB7ED"),
+                                "{} 图标缺主色/强调色 token",
+                                t.id
+                            );
+                        }
+                        IconKind::Glyph(g) => {
+                            panic!("{} 仍是字形图标（{g}），应为双色 SVG", t.id)
+                        }
+                    }
+                    checked += 1;
+                }
+            }
+        }
+        assert_eq!(checked, 7, "功能区应有 7 个 LargeTool 按钮（当前 {checked}）");
     }
 
     // ── 标准件库扫描 ──────────────────────────────────────────────
