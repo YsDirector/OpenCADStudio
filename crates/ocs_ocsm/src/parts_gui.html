@@ -252,7 +252,22 @@ function renderDetailInputs(f) {
     inp.id = "p_" + it.key;
     inp.dataset.key = it.key;
     inp.placeholder = it.placeholder || (it.required ? "必给" : "留空 = 默认");
-    inp.addEventListener("input", onDetail);
+    // 渐开线花键的 d_B：挂 DIN 5480-2 名义表候选（datalist），选/输入后自动带出 m/z/x。
+    if (it.key === "db" && Array.isArray(f.din_nominal) && f.din_nominal.length) {
+      const dl = document.createElement("datalist");
+      dl.id = "p_db_list";
+      dinDbValues(f).forEach((v) => {
+        const o = document.createElement("option");
+        o.value = String(v);
+        dl.appendChild(o);
+      });
+      box.appendChild(dl);
+      inp.setAttribute("list", "p_db_list");
+      inp.addEventListener("input", () => { fillDinDb(f); onDetail(); });
+      inp.addEventListener("change", () => { fillDinDb(f); onDetail(); });
+    } else {
+      inp.addEventListener("input", onDetail);
+    }
     box.appendChild(inp);
   });
 }
@@ -381,10 +396,11 @@ function onDetail() {
     }
     const params = collectParams(f, hint);
     if (params === null) { cur.spec = ""; cur.params = {}; return; }
+    if (preset.std !== "DIN" && params.db !== undefined) delete params.db; // d_B 只属 DIN
     cur.spec = code;
     cur.d = 0;
     cur.params = params;
-    hint.textContent = involDerivedText(preset, params.m, params.z, params.x);
+    hint.textContent = involDerivedText(preset, params.m, params.z, params.x, params.db, f);
     update();
     return;
   }
@@ -451,6 +467,34 @@ function onDetail() {
   update();
 }
 
+// DIN 5480-2 名义表（catalog.families.detail_invol_spline.din_nominal）候选 d_B 列表。
+function dinDbValues(f) {
+  return [...new Set((f.din_nominal || []).map((r) => Number(r.db)))]
+    .filter((v) => Number.isFinite(v))
+    .sort((a, b) => a - b);
+}
+
+// 选了 d_B → 自动带出 m/z/x（唯一命中；有多个 z 变体时只填 m 并保留 z 供手选）。
+function fillDinDb(f) {
+  const pv = (key) => el("p_" + key);
+  const std = pv("std");
+  const db = pv("db");
+  const mIn = pv("m");
+  const zIn = pv("z");
+  if (!std || !db || !mIn || !zIn || std.value !== "DIN") return;
+  const v = Number(String(db.value).trim());
+  if (!(v > 0)) return;
+  const hits = (f.din_nominal || []).filter((r) => Math.abs(Number(r.db) - v) < 1e-6);
+  if (!hits.length) return;
+  const ms = [...new Set(hits.map((r) => Number(r.m)))];
+  const zs = [...new Set(hits.map((r) => Number(r.z)))];
+  if (ms.length === 1) mIn.value = fmt(ms[0]);
+  if (zs.length === 1) zIn.value = String(zs[0]);
+  const hit = hits.length === 1 ? hits[0]
+    : hits.find((r) => Number(mIn.value) === Number(r.m) && Number(zIn.value) === Number(r.z));
+  if (hit) pv("x").value = fmt(hit.x);
+}
+
 // 渐开线花键派生值：与 `invol_spline.rs` 同公式（d/db/da/df/ρf/cF；
 // DIN 另给 d_B 名义估算 m(z+2x) 并说明它只作身份显示）。
 function fmt(v) {
@@ -461,11 +505,12 @@ function fmt(v) {
       : n.toFixed(4).replace(/0+$/, "").replace(/\.$/, "");
 }
 
-function involDerivedText(preset, m, z, x) {
+function involDerivedText(preset, m, z, x, d_b, f) {
   const mv = Number(m);
   const zv = Number(z);
   if (!(mv > 0) || !(zv > 0)) {
-    return preset.code + "（" + preset.profile + "）：填 m / z 后显示派生值";
+    return preset.code + "（" + preset.profile + "）：填 m / z 后显示派生值"
+        + (preset.std === "DIN" ? "（给 d_B 可由 DIN 5480-2 表自动带出）" : "");
   }
   const xv = x === "" || x === undefined || !Number.isFinite(Number(x)) ? 0 : Number(x);
   const a = preset.alpha * Math.PI / 180;
@@ -474,12 +519,21 @@ function involDerivedText(preset, m, z, x) {
   const db = d * Math.cos(a);
   const da = dEff + 2 * preset.ha * mv;
   const df = dEff - 2 * preset.hf * mv;
-  let s = preset.code + "（" + preset.profile + "）：d=" + fmt(d) + " db=" + fmt(db)
+  let s = preset.code + "（" + preset.profile + "）：m=" + fmt(mv) + " z=" + zv
+      + " x=" + fmt(xv) + " d=" + fmt(d) + " db=" + fmt(db)
       + " da=" + fmt(da) + " df=" + fmt(df) + " ρf=" + fmt(preset.rho * mv)
       + " cF=" + fmt(preset.cf * mv);
   if (preset.std === "DIN") {
-    s += "；d_B 名义估算 m(z+2x)=" + fmt(mv * (zv + 2 * xv))
-       + "（仅身份标识/显示，不参与几何；DIN 5480-2 查表未接入）";
+    const raw = d_b === undefined || d_b === null || String(d_b).trim() === "" ? NaN : Number(d_b);
+    if (Number.isFinite(raw) && raw > 0) {
+      const hits = ((f && f.din_nominal) || []).filter((r) => Math.abs(Number(r.db) - raw) < 1e-6);
+      const hit = hits.find((r) => Number(r.m) === mv && Number(r.z) === zv
+          && Math.abs(Number(r.x) - xv) < 5e-4);
+      s += "; d_B=" + fmt(raw)
+        + (hit ? "（查表命中 p" + hit.page + " m=" + fmt(hit.m) + "）" : "（由公式解出，未命中表）");
+    } else {
+      s += "; d_B=—（填 d_B 可从 DIN 5480-2 表自动带出 m/z/x）";
+    }
   }
   return s;
 }

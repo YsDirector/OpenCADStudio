@@ -45,6 +45,13 @@ const INVOL = [
   { code: 'DIN30', std: 'DIN', profile: 'DIN30', alpha: 30, ha: 0.45, hf: 0.55, rho: 0.16, cf: 0.1 },
 ];
 
+// DIN 5480-2 名义表候选（与 detail.rs 目录 din_nominal 同形；只取测试用到的行）。
+const DIN_NOMINAL = [
+  { db: 40, m: 2, z: 18, x: 0.45, page: 27 },
+  { db: 45, m: 3, z: 13, x: 0.45, page: 31 },
+  { db: 45, m: 3, z: 14, x: -0.05, page: 31 },
+];
+
 // ── 最小 DOM 垫片 ────────────────────────────────────────────────
 function htmlDecode(s) {
   return String(s)
@@ -253,7 +260,7 @@ global.fetch = async (u, opts = {}) => {
       ok: true,
       families: {
         detail_spline_rect: { specs: SPECS },
-        detail_invol_spline: { invol_presets: INVOL },
+        detail_invol_spline: { invol_presets: INVOL, din_nominal: DIN_NOMINAL },
       },
     });
   }
@@ -414,6 +421,24 @@ check(S.rows[0].invol.std === 'DIN' && S.rows[0].invol.profile === 'DIN30',
   `DIN 联动齿廓，实为 ${S.rows[0].invol.std}/${S.rows[0].invol.profile}`);
 irow = segBody._rows[0];
 checkInvolDerive(irow, 'd_B');
+// d_B（DIN 5480-2 查表）：填 DB40 → 自动带出 m/z/x、行文本带 DB40、JSON 带 d_b
+const dbField = irow._fields.find((f) => f.dataset.f === 'invol.db');
+check(!!dbField, '缺 d_B 输入框');
+dbField.value = '40';
+segBody._fire('change', dbField);
+await new Promise((r) => setImmediate(r));
+check(S.rows[0].invol.m === '2' && S.rows[0].invol.z === '18'
+  && Math.abs(Number(S.rows[0].invol.x) - 0.45) < 1e-9,
+  `d_B=40 应带出 m2/z18/x0.45，实为 ${S.rows[0].invol.m}/${S.rows[0].invol.z}/${S.rows[0].invol.x}`);
+check(dslEl.value.includes('INVOLSPLINE DIN30 DB40')
+  && dslEl.value.includes('M2') && dslEl.value.includes('Z18'),
+  `行文本应带 DB40/M2/Z18：${JSON.stringify(dslEl.value)}`);
+irow = segBody._rows[0];
+checkInvolDerive(irow, '查表命中 p27 m=2');
+const dinModel = S.modelFromRows();
+check(!!dinModel && dinModel.segments[0].invol_spline.d_b === 40
+  && dinModel.segments[0].invol_spline.z === 18,
+  'JSON 模型应带 d_b=40 与补出的 z=18');
 // JSON 模型：invol_spline 带 code/m/z/x/len/de
 const involModel = S.modelFromRows();
 check(!!involModel && !!involModel.segments[0].invol_spline, '模型应带 invol_spline');

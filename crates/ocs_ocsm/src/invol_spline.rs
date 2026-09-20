@@ -35,8 +35,21 @@
 //! z=34 → `d_f1=17.00+0.45−0.55=16.90`、z=10 → `5.00+0.45−0.55=4.90`（`d_a1` 亦为 17.90 / 5.90，
 //! 均见表 `DIN5480-2_名义表.csv` p.11）；旧值 hf*=0.60 会差 0.1m（16.85），故按任务改用基准 0.55。
 //!
-//! ⚠ `d_B`（基准直径）只作身份标识与显示：本轮**不查表**（DIN 5480-2 的 `d_B×z→m/x` 表还在 OCR），
-//! [`InvolParams::d_b`] 字段留给外部传入/回填；[`InvolParams::d_b_estimate`] 只给 `m(z+2x)` 名义显示值。
+//! ## DIN 5480-2 名义表（`d_B` 查表，本轮主路径）
+//!
+//! 数据入库为 `assets/din5480_2_nominal.csv`（618 行；源 665 行中剔除 p35/m=5 整页 47 行，
+//! 原因与 m=1.5 缺失见 `assets/din5480_2_notes.md`）。按基准直径 [`lookup_by_d_b`]：
+//! 同一 `d_B` 可能有多个 `z/x₁` 变体（表格事实，返回多行）；找不到时列附近候选；缺失档位
+//! （m=1.5 空表框 / m=5 已剔除）明确报「该档位数据缺失」。
+//!
+//! `x_from_d_b(d_B, m, z) = (d_B − m(z + 1.1)) / (2m)` 是**从 OCR 名义表反推并经全表校验**
+//! 的关系（等价 `d_B = d + 1.1m + 2x·m`、`z_B = z + 1.1 + 2x`；618 行逐行残差 0），
+//! **不是标准原文公式**；[`resolve_din_by_d_b`] 用它把 `DB`+（M 或 Z）补成全参数，
+//! 并在 `DB+M+Z` 三参齐给时与表值互相印证。
+//!
+//! ⚠ `d_B` 只参与**名义值选择/显示与一致性校验**，不改变几何公式（几何仍由 m/z/x 决定）；
+//! [`InvolParams::d_b`] 存查表/公式得到的基准直径，[`InvolParams::d_b_estimate`] 是旧的
+//! `m(z+2x)` 名义估算（保留兼容，非 `d_B` 定义式）。
 //!
 //! # 二、几何
 //!
@@ -56,6 +69,8 @@
 //! * 十字中心线长度 = `大径+6`（与 `spline.rs` 正视图一致）。
 
 #![allow(dead_code)] // 注册/接线由后续改动负责，本轮只交付模块
+
+use std::sync::OnceLock;
 
 use ocs_plugin_api::host::acadrust::entities::EntityType;
 
@@ -243,6 +258,463 @@ pub fn parse_preset_token(token: &str) -> Option<(SplineStd, &'static str)> {
         _ => return None,
     };
     Some((SplineStd::GB, profile))
+}
+
+// ──────────────── DIN 5480-2 名义表（`d_B` 查表；数据 = assets/din5480_2_nominal.csv） ────────────────
+
+/// 入库名义表（`crates/ocs_ocsm/assets/din5480_2_nominal.csv`，**618 行**）。
+///
+/// 来源 `DIN5480-2_名义表_续2_merged.csv`（665 行）剔除 p35（m=5）整页 47 行
+/// （源图数据区渲染缺陷、双源 OCR 互不一致）；`flags/source` 列原样保留便于追溯，
+/// 运行时不展示。剔除原因与 m=1.5（p23/p24 空表框）缺失说明见 `assets/din5480_2_notes.md`。
+const DIN5480_2_CSV: &str = include_str!("../assets/din5480_2_nominal.csv");
+
+/// 名义表一行（只保留主路径需要的列；`flags/source` 留作追溯）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct Din5480Row {
+    /// 源 PDF 页码（DIN 5480-2:2015-03）。
+    pub page: u16,
+    /// 模数 m。
+    pub m: f64,
+    /// 页内表号（`Table_N`）。
+    pub table_no: u32,
+    /// **基准直径 `d_B`**（本表主键维度）。
+    pub d_b: f64,
+    /// 齿数 z。
+    pub z: u32,
+    /// 分度圆直径 `d = m·z`。
+    pub d: f64,
+    /// **基圆直径**（CSV 的 `d_b` 列 = `d·cos30°`；与基准直径 `d_B` 同名不同义）。
+    pub base_dia: f64,
+    /// 变位量 `x₁·m`（CSV 的 `x1_m` 列）。
+    pub x_m: f64,
+    /// 变位系数 `x₁ = (x₁·m)/m`（由表列派生）。
+    pub x: f64,
+    /// OCR 质量标记（原样保留，运行时不展示）。
+    pub flags: String,
+    /// OCR 来源（`A+B` / `A续2+B续2` 等；原样保留，运行时不展示）。
+    pub source: String,
+}
+
+/// 查表数值容差：`d_B` 表值是整数，允许输入 1e-3 误差。
+const DIN_D_B_TOL: f64 = 1e-3;
+/// 查表模数容差。
+const DIN_M_TOL: f64 = 1e-9;
+/// 表值 `x₁·m` 最多 4 位小数（x 往返误差 ≤ 5e-5/m）；1e-4 足以判同。
+const DIN_X_TOL: f64 = 1e-4;
+
+/// 已知**缺失/剔除**的模数档及原因（有据可查的两档）。
+pub const DIN_MISSING_MODULES: &[(f64, &str)] = &[
+    (
+        1.5,
+        "该档位数据缺失（源图空表框）：p23/p24 的 m=1.5 名义表在 doc88 为空表框，待另找来源",
+    ),
+    (
+        5.0,
+        "该档位数据缺失（已整页剔除）：p35 的 m=5 源图数据区渲染缺陷、双源 OCR 互不一致",
+    ),
+];
+
+static DIN5480_TABLE: OnceLock<Vec<Din5480Row>> = OnceLock::new();
+
+/// 入库名义表（懒加载；解析不了会 panic —— 数据随二进制编译，属构建错误）。
+pub fn din5480_rows() -> &'static [Din5480Row] {
+    DIN5480_TABLE.get_or_init(|| {
+        parse_din5480_csv(DIN5480_2_CSV)
+            .unwrap_or_else(|e| panic!("DIN 5480-2 名义表入库数据损坏：{e}"))
+    })
+}
+
+/// 已入库模数档（升序；缺档见 [`DIN_MISSING_MODULES`]）。
+pub fn din5480_modules() -> Vec<f64> {
+    let mut v: Vec<f64> = din5480_rows().iter().map(|r| r.m).collect();
+    v.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    v.dedup_by(|a, b| (*a - *b).abs() < DIN_M_TOL);
+    v
+}
+
+/// 拆分一行 CSV（本表十进制逗号字段被双引号包住；无转义引号）。
+fn split_csv_line(line: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let mut quoted = false;
+    for ch in line.chars() {
+        match ch {
+            '"' => quoted = !quoted,
+            ',' if !quoted => out.push(std::mem::take(&mut cur)),
+            _ => cur.push(ch),
+        }
+    }
+    out.push(cur);
+    out
+}
+
+/// 十进制字段（CSV 用逗号作小数点）。
+fn csv_decimal(s: &str) -> Option<f64> {
+    let t = s.trim().replace(',', ".");
+    t.parse::<f64>().ok().filter(|v| v.is_finite())
+}
+
+/// 解析入库 CSV（跳过 `#` 注释与表头；缺列/坏值 → 带行号报错）。
+fn parse_din5480_csv(text: &str) -> Result<Vec<Din5480Row>, String> {
+    let mut rows = Vec::new();
+    for (i, line) in text.lines().enumerate() {
+        let n = i + 1;
+        if line.trim().is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let f = split_csv_line(line);
+        if f.first().map(|s| s.trim()) == Some("page") {
+            continue; // 表头
+        }
+        if f.len() < 19 {
+            return Err(format!("第 {n} 行只有 {} 列（应有 19 列）", f.len()));
+        }
+        let page = f[0]
+            .trim()
+            .parse::<u16>()
+            .map_err(|_| format!("第 {n} 行 page「{}」非法", f[0]))?;
+        let m = csv_decimal(&f[1]).ok_or_else(|| format!("第 {n} 行 m「{}」非法", f[1]))?;
+        let table_no = f[2]
+            .trim()
+            .parse::<u32>()
+            .map_err(|_| format!("第 {n} 行 table_no「{}」非法", f[2]))?;
+        let d_b = csv_decimal(&f[3]).ok_or_else(|| format!("第 {n} 行 d_B「{}」非法", f[3]))?;
+        let z = f[4]
+            .trim()
+            .parse::<u32>()
+            .map_err(|_| format!("第 {n} 行 z「{}」非法", f[4]))?;
+        let d = csv_decimal(&f[5]).ok_or_else(|| format!("第 {n} 行 d「{}」非法", f[5]))?;
+        let base_dia =
+            csv_decimal(&f[6]).ok_or_else(|| format!("第 {n} 行 d_b「{}」非法", f[6]))?;
+        let x_m = csv_decimal(&f[7]).ok_or_else(|| format!("第 {n} 行 x1_m「{}」非法", f[7]))?;
+        if m <= 0.0 {
+            return Err(format!("第 {n} 行 m={m} 非正"));
+        }
+        rows.push(Din5480Row {
+            page,
+            m,
+            table_no,
+            d_b,
+            z,
+            d,
+            base_dia,
+            x_m,
+            x: x_m / m,
+            flags: f[17].trim().to_string(),
+            source: f[18].trim().to_string(),
+        });
+    }
+    Ok(rows)
+}
+
+/// 命中 `(d_B, m?)` 的原始行（不产生错误文案；[`lookup_by_d_b`] 的错误路径也用它）。
+fn din5480_match(d_b: f64, m: Option<f64>) -> Vec<Din5480Row> {
+    din5480_rows()
+        .iter()
+        .filter(|r| (r.d_b - d_b).abs() < DIN_D_B_TOL)
+        .filter(|r| m.is_none_or(|m| (r.m - m).abs() < DIN_M_TOL))
+        .cloned()
+        .collect()
+}
+
+/// **DIN 5480-2 名义表查表**：按基准直径 `d_B`（可再限定模数 `m`）返回名义行。
+///
+/// * 命中可能**多行** —— 同一 `d_B` 有多个 `z/x₁` 变体是表格事实（如 p21 m=1.25、p25 m=1.75）；
+/// * 找不到时列出该 `d_B` 附近候选（同 m 优先；缺失档退全表）；
+/// * `m=1.5`（p23/p24 源图空表框）与 `m=5`（p35 已剔除）明确报「该档位数据缺失」。
+pub fn lookup_by_d_b(d_b: f64, m: Option<f64>) -> Result<Vec<Din5480Row>, String> {
+    if !(d_b.is_finite() && d_b > 0.0) {
+        return Err(format!("DIN 5480-2 查表：d_B={} 必须是正数。", trim(d_b)));
+    }
+    if let Some(m) = m {
+        if !(m.is_finite() && m > 0.0) {
+            return Err(format!("DIN 5480-2 查表：m={} 必须是正数。", trim(m)));
+        }
+    }
+    let mut hits = din5480_match(d_b, m);
+    hits.sort_by(|a, b| a.z.cmp(&b.z).then(a.m.partial_cmp(&b.m).unwrap()));
+    if hits.is_empty() {
+        Err(din5480_miss_message(d_b, m))
+    } else {
+        Ok(hits)
+    }
+}
+
+/// 未命中的错误文案：缺失档位说明 + 附近候选。
+fn din5480_miss_message(d_b: f64, m: Option<f64>) -> String {
+    let mut msg = format!("DIN 5480-2 查表：d_B={}", trim(d_b));
+    if let Some(m) = m {
+        msg.push_str(&format!("（m={}）", trim(m)));
+    }
+    msg.push_str(" 无命中");
+    if let Some(m) = m {
+        if let Some((_, why)) = DIN_MISSING_MODULES
+            .iter()
+            .find(|(mm, _)| (*mm - m).abs() < DIN_M_TOL)
+        {
+            msg.push_str(&format!("：{why}。"));
+        } else if !din5480_modules()
+            .iter()
+            .any(|mm| (mm - m).abs() < DIN_M_TOL)
+        {
+            let list = din5480_modules()
+                .iter()
+                .map(|v| trim(*v))
+                .collect::<Vec<_>>()
+                .join("、");
+            msg.push_str(&format!(
+                "；表中没有 m={} 档（已入库档位：{}）。",
+                trim(m),
+                list
+            ));
+        } else {
+            msg.push('。');
+        }
+    } else {
+        msg.push('。');
+    }
+    // 附近候选：同 m（若给了 m）按 |Δd_B| 取最近的 5 个不同 d_B；缺失档退全表。
+    let mut pool: Vec<&Din5480Row> = din5480_rows()
+        .iter()
+        .filter(|r| m.is_none_or(|m| (r.m - m).abs() < DIN_M_TOL))
+        .collect();
+    if pool.is_empty() {
+        pool = din5480_rows().iter().collect();
+    }
+    pool.sort_by(|a, b| {
+        (a.d_b - d_b)
+            .abs()
+            .partial_cmp(&(b.d_b - d_b).abs())
+            .unwrap()
+    });
+    let mut seen: Vec<f64> = Vec::new();
+    let mut cands: Vec<String> = Vec::new();
+    for r in pool {
+        if seen.iter().any(|v| (*v - r.d_b).abs() < DIN_D_B_TOL) {
+            continue;
+        }
+        seen.push(r.d_b);
+        cands.push(format!("d_B={}（m={}）", trim(r.d_b), trim(r.m)));
+        if cands.len() >= 5 {
+            break;
+        }
+    }
+    if !cands.is_empty() {
+        msg.push_str(&format!("附近候选：{}。", cands.join("、")));
+    }
+    msg
+}
+
+/// DIN 5480-2 基准直径反解变位系数：
+/// `x = (d_B − m(z + 1.1)) / (2m)`，等价 `d_B = d + 1.1m + 2x·m`（`z_B = z + 1.1 + 2x`）。
+///
+/// **口径**：这是从 OCR 名义表反推并经**全表校验**的关系 —— 已解析 618 行逐行
+/// `|x₁·m − (d_B − m(z+1.1))/2| = 0`（被剔除的 p35 除外）；**不是标准原文公式**，
+/// 引用时以 DIN 5480-2 表值与检验表为准。
+pub fn x_from_d_b(d_b: f64, m: f64, z: u32) -> f64 {
+    (d_b - m * (z as f64 + 1.1)) / (2.0 * m)
+}
+
+/// 由 `m/z/x` 正算基准直径 `d_B = m(z + 1.1 + 2x)`（[`x_from_d_b`] 的逆）。
+pub fn d_b_from_x(m: f64, z: u32, x: f64) -> f64 {
+    m * (z as f64 + 1.1 + 2.0 * x)
+}
+
+/// `d_B` 补全的来源（派生值显示用）。
+#[derive(Debug, Clone, PartialEq)]
+pub enum D_bOrigin {
+    /// 查表命中该行。
+    Table(Din5480Row),
+    /// 公式解出（未命中表）。
+    Formula,
+}
+
+impl D_bOrigin {
+    /// 给用户看的来源说明（GUI/命令行派生值文本用）。
+    pub fn note(&self) -> String {
+        match self {
+            Self::Table(r) => format!("查表命中 p{} m={}", r.page, trim(r.m)),
+            Self::Formula => "由公式解出，未命中表".to_string(),
+        }
+    }
+}
+
+/// 用 `d_B` 补全/校验 DIN 参数（`m/z/x` 缺哪项补哪项；主路径入口）。
+///
+/// 组合（`GB` 无 `d_B`，调用方先自行拒绝）：
+/// * `d_B + m + z`：公式解 `x`；并核对表中同 `(m, z)` 的 `d_B` 是否含给定值（不一致报错）；
+/// * `d_B + m`：查表补 `z`（同 `d_B` 有多 `z` 变体时报候选要 `Z`）；
+/// * `d_B + z`：查表补 `m`（多 `m` 变体时报候选）；
+/// * 只给 `d_B`：查表补 `m/z`（多命中报行列表）。
+///
+/// 命中表行时 `x` 取表值（精度优先），来源 [`D_bOrigin::Table`]；否则来源
+/// [`D_bOrigin::Formula`]（`d_B` 取输入值）。
+pub fn resolve_din_by_d_b(
+    d_b: f64,
+    m: Option<f64>,
+    z: Option<u32>,
+    x: Option<f64>,
+) -> Result<(InvolParams, D_bOrigin), String> {
+    if !(d_b.is_finite() && d_b > 0.0) {
+        return Err(format!("DIN 5480：d_B={} 必须是正数。", trim(d_b)));
+    }
+    if let Some(m) = m {
+        if !(m.is_finite() && m > 0.0) {
+            return Err(format!("DIN 5480：m={} 必须是正数。", trim(m)));
+        }
+    }
+    match (m, z) {
+        (Some(m), Some(z)) => resolve_with_m_z(d_b, m, z, x),
+        (Some(m), None) => {
+            let mut hits = din5480_match(d_b, Some(m));
+            if hits.is_empty() {
+                return Err(lookup_by_d_b(d_b, Some(m)).unwrap_err());
+            }
+            let mut zs: Vec<u32> = hits.iter().map(|r| r.z).collect();
+            zs.sort_unstable();
+            zs.dedup();
+            if zs.len() > 1 {
+                return Err(format!(
+                    "DIN 5480：d_B={}、m={} 有多个 z 变体：{}；请再给 Z（同一 d_B 多个 z/x₁ 是表格事实）。",
+                    trim(d_b),
+                    trim(m),
+                    join_rows(&hits)
+                ));
+            }
+            hits.sort_by_key(|r| r.z);
+            row_to_params(hits.remove(0))
+        }
+        (None, Some(z)) => {
+            let hits: Vec<Din5480Row> = din5480_match(d_b, None)
+                .into_iter()
+                .filter(|r| r.z == z)
+                .collect();
+            if hits.is_empty() {
+                return Err(lookup_by_d_b(d_b, None).unwrap_err());
+            }
+            let mut ms: Vec<f64> = hits.iter().map(|r| r.m).collect();
+            ms.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            ms.dedup_by(|a, b| (*a - *b).abs() < DIN_M_TOL);
+            if ms.len() > 1 {
+                return Err(format!(
+                    "DIN 5480：d_B={}、z={} 有多个 m 变体：{}；请再给 M。",
+                    trim(d_b),
+                    z,
+                    join_rows(&hits)
+                ));
+            }
+            row_to_params(hits[0].clone())
+        }
+        (None, None) => {
+            let hits = din5480_match(d_b, None);
+            if hits.is_empty() {
+                return Err(lookup_by_d_b(d_b, None).unwrap_err());
+            }
+            if hits.len() > 1 {
+                return Err(format!(
+                    "DIN 5480：d_B={} 命中 {} 行（同一 d_B 多个 m/z/x₁ 变体）：{}；请再给 M 和/或 Z。",
+                    trim(d_b),
+                    hits.len(),
+                    join_rows(&hits)
+                ));
+            }
+            row_to_params(hits[0].clone())
+        }
+    }
+}
+
+/// 表行 → 参数（用表值 `x`，来源 [`D_bOrigin::Table`]）。
+fn row_to_params(row: Din5480Row) -> Result<(InvolParams, D_bOrigin), String> {
+    let p = InvolParams::din(row.m, row.z, row.x)
+        .map_err(|e| {
+            format!(
+                "DIN 5480：查表行 p{} m={} z={} x={} 不自洽：{e}",
+                row.page,
+                trim(row.m),
+                row.z,
+                trim(row.x)
+            )
+        })?
+        .with_d_b(row.d_b);
+    Ok((p, D_bOrigin::Table(row)))
+}
+
+/// `d_B + m + z`：`x` 由公式解出；若表中 `(m, z)` 存在，则核对 `d_B` 是否一致。
+fn resolve_with_m_z(
+    d_b: f64,
+    m: f64,
+    z: u32,
+    x: Option<f64>,
+) -> Result<(InvolParams, D_bOrigin), String> {
+    let x = match x {
+        Some(x) => {
+            let expected = d_b_from_x(m, z, x);
+            if (expected - d_b).abs() > DIN_D_B_TOL {
+                return Err(format!(
+                    "DIN 5480：d_B={}、m={}、z={}、x={} 不自洽（由 x 正算 d_B={}）。",
+                    trim(d_b),
+                    trim(m),
+                    z,
+                    trim(x),
+                    trim(expected)
+                ));
+            }
+            x
+        }
+        None => x_from_d_b(d_b, m, z),
+    };
+    // 表内同 (m, z) 的 d_B 必须包含给定量 —— 否则是 d_B/m/z 组合不一致。
+    let same_z: Vec<&Din5480Row> = din5480_rows()
+        .iter()
+        .filter(|r| (r.m - m).abs() < DIN_M_TOL && r.z == z)
+        .collect();
+    if !same_z.is_empty() && !same_z.iter().any(|r| (r.d_b - d_b).abs() < DIN_D_B_TOL) {
+        let list = same_z
+            .iter()
+            .map(|r| format!("d_B={}（x={}）", trim(r.d_b), trim(r.x)))
+            .collect::<Vec<_>>()
+            .join("、");
+        return Err(format!(
+            "DIN 5480：d_B={}、m={}、z={} 组合不一致 —— 表中 m={}、z={} 为 {}；请核对 DB/M/Z，或去掉 DB 改走 M/Z/X。",
+            trim(d_b),
+            trim(m),
+            z,
+            trim(m),
+            z,
+            list
+        ));
+    }
+    if !(-0.05 - 1e-9..=0.45 + 1e-9).contains(&x) {
+        return Err(format!(
+            "DIN 5480：由 d_B={}、m={}、z={} 解出 x={}，超出 x∈[−0.05, 0.45]（DIN 5480-1）。",
+            trim(d_b),
+            trim(m),
+            z,
+            trim(x)
+        ));
+    }
+    let p = InvolParams::din(m, z, x)
+        .map_err(|e| format!("DIN 5480：{e}"))?
+        .with_d_b(d_b);
+    // 命中同 (m, z, d_B) 的表行 → 用表值 x（精度优先）并标注来源。
+    if let Some(row) = same_z
+        .iter()
+        .find(|r| (r.d_b - d_b).abs() < DIN_D_B_TOL && (r.x - x).abs() < DIN_X_TOL)
+    {
+        let p = p.with_x(row.x);
+        p.validate().map_err(|e| format!("DIN 5480：{e}"))?;
+        return Ok((p, D_bOrigin::Table((*row).clone())));
+    }
+    Ok((p, D_bOrigin::Formula))
+}
+
+/// 行列表（错误信息里的候选展示）。
+fn join_rows(rows: &[Din5480Row]) -> String {
+    rows.iter()
+        .map(|r| format!("m={} z={} x={}", trim(r.m), r.z, trim(r.x)))
+        .collect::<Vec<_>>()
+        .join("、")
 }
 
 // ─────────────────────────── 参数 ───────────────────────────
@@ -444,7 +916,8 @@ impl InvolParams {
         }
     }
 
-    /// DIN 基准直径 d_B 的名义显示值 `m(z+2x)`（**不是查表值**，完整表待 OCR）。
+    /// 旧的 DIN 名义估算 `m(z+2x)`（= `d + 2x·m`，相当于 `d_B − 1.1m`）；
+    /// **不是** `d_B` 定义式。新代码用 [`x_from_d_b`] / [`d_b_from_x`] / [`lookup_by_d_b`]。
     pub fn d_b_estimate(&self) -> f64 {
         self.m * (self.z as f64 + 2.0 * self.x)
     }
@@ -541,6 +1014,9 @@ impl InvolParams {
         );
         if self.x.abs() > 1e-12 {
             s.push_str(&format!(" x{}", trim(self.x)));
+        }
+        if let Some(d_b) = self.d_b {
+            s.push_str(&format!(" d_B{}", trim(d_b)));
         }
         s
     }
@@ -1048,6 +1524,159 @@ mod tests {
         // de ≤ da 报错
         let e = p.runout_length(p.da()).unwrap_err();
         assert!(e.contains("de"), "{e}");
+    }
+
+    // ── DIN 5480-2 名义表（d_B 查表）──
+
+    /// 入库形状 + 全表反推公式 `x_from_d_b` 与表值逐行一致（含 d=m·z、基圆列）。
+    #[test]
+    fn din5480_table_shape_and_formula_holds_for_every_row() {
+        let rows = din5480_rows();
+        assert_eq!(rows.len(), 618, "入库 618 行（源 665 行剔除 p35/m=5 的 47 行）");
+        assert!(rows.iter().all(|r| r.page != 35), "p35（m=5）整页已剔除");
+        assert!(rows.iter().all(|r| (r.m - 5.0).abs() > 1e-9), "不该再有 m=5 残行");
+        for r in rows {
+            assert!(
+                (r.d - r.m * r.z as f64).abs() < 1e-9,
+                "p{} m{} z{}：d≠m·z",
+                r.page,
+                trim(r.m),
+                r.z
+            );
+            // 基圆列（CSV 的 d_b = d·cos30°）是排版值，精度 3 位 → 容差 0.05。
+            assert!(
+                (r.base_dia - r.d * 30f64.to_radians().cos()).abs() < 0.05,
+                "p{} 基圆列 d_b 与 d·cos30 偏离过大：{} vs {}",
+                r.page,
+                r.base_dia,
+                r.d * 30f64.to_radians().cos()
+            );
+            // 任务指定公式：x = (d_B − m(z+1.1)) / (2m)，与表列 x1_m/m 逐行一致。
+            let x = x_from_d_b(r.d_b, r.m, r.z);
+            assert!(
+                (x - r.x).abs() < 1e-9,
+                "p{} m{} z{} d_B{}：x_from_d_b={} 表 x={}",
+                r.page,
+                trim(r.m),
+                r.z,
+                trim(r.d_b),
+                x,
+                r.x
+            );
+            assert!((d_b_from_x(r.m, r.z, x) - r.d_b).abs() < 1e-9, "正反变换不闭合");
+        }
+        let mods = din5480_modules();
+        assert_eq!(mods.len(), 14, "已入库 14 个模数档：{mods:?}");
+        assert!(!mods.iter().any(|m| (*m - 1.5).abs() < 1e-9), "m=1.5 未入库");
+        assert!(!mods.iter().any(|m| (*m - 5.0).abs() < 1e-9), "m=5 已剔除");
+    }
+
+    /// 查表命中：抽各档（含多行 z/x₁ 变体）；按 d_B+m / d_B+z 补全。
+    #[test]
+    fn din5480_lookup_hits_samples_and_multi_row_variants() {
+        // 各档抽一行：m0.5→p11 z10 x0.45；m1→p19 z16 x0.45；m1.25→p21 z10 x0.05；
+        // m1.75→p25 z6；m2→p27 z18 x0.45；m10→p41 z44 x−0.05。
+        let cases: [(f64, f64, u32, u16); 6] = [
+            (0.5, 6.0, 10, 11),
+            (1.0, 18.0, 16, 19),
+            (1.25, 14.0, 10, 21),
+            (1.75, 13.0, 6, 25),
+            (2.0, 40.0, 18, 27),
+            (10.0, 450.0, 44, 41),
+        ];
+        for (m, d_b, z, page) in cases {
+            let rows = lookup_by_d_b(d_b, Some(m)).expect("应命中");
+            assert!(
+                rows.iter().any(|r| r.z == z && r.page == page),
+                "m={} d_B={} 应命中 p{} z={}：{:?}",
+                m,
+                d_b,
+                page,
+                z,
+                rows.iter().map(|r| (r.page, r.z)).collect::<Vec<_>>()
+            );
+            // 每条命中行都满足 d_B 反解式（表值精度）。
+            for r in &rows {
+                assert!((x_from_d_b(r.d_b, r.m, r.z) - r.x).abs() < 1e-9);
+            }
+            // 只给 d_B + m → 补 z；只给 d_B + z → 补 m。
+            let (p1, o1) = resolve_din_by_d_b(d_b, Some(m), None, None).expect("d_B+m 应补 z");
+            assert_eq!(p1.z, z, "d_B+m 补出的 z");
+            assert!(matches!(o1, D_bOrigin::Table(_)));
+            let (p2, o2) = resolve_din_by_d_b(d_b, None, Some(z), None).expect("d_B+z 应补 m");
+            assert!((p2.m - m).abs() < 1e-9, "d_B+z 补出的 m");
+            assert!(matches!(o2, D_bOrigin::Table(_)));
+        }
+        // 多行变体：p31 m=3 d_B=45 → z=13(x0.45) 与 z=14(x−0.05)，返回两行。
+        let rows = lookup_by_d_b(45.0, Some(3.0)).unwrap();
+        assert_eq!(rows.len(), 2, "同一 d_B 多个 z/x₁ 是表格事实");
+        assert_eq!(rows.iter().map(|r| r.z).collect::<Vec<_>>(), vec![13, 14]);
+        assert!((rows[0].x - 0.45).abs() < 1e-9 && (rows[1].x + 0.05).abs() < 1e-9);
+        // 只给 d_B（不给 m）也会命中的是**跨模数**的多行（45 在多个 m 档都有）；
+        // 补全时多行 → 报候选要 M/Z。
+        assert!(lookup_by_d_b(45.0, None).unwrap().len() >= 2);
+        let e = resolve_din_by_d_b(45.0, None, None, None).unwrap_err();
+        assert!(e.contains("多个") && e.contains("m=3 z=13") && e.contains("m=3 z=14"), "{e}");
+        let e = resolve_din_by_d_b(45.0, Some(3.0), None, None).unwrap_err();
+        assert!(e.contains("多个 z 变体") && e.contains("请再给 Z"), "{e}");
+        let e = resolve_din_by_d_b(6.0, None, Some(6), None).unwrap_err();
+        assert!(e.contains("多个 m 变体") && e.contains("0.75") && e.contains("0.8"), "{e}");
+    }
+
+    /// 未命中：附近候选；缺失档位（m=1.5 空表框、m=5 已剔除）明确报数据缺失。
+    #[test]
+    fn din5480_lookup_miss_lists_candidates_and_missing_modules() {
+        let e = lookup_by_d_b(41.0, Some(2.0)).unwrap_err();
+        assert!(e.contains("附近候选"), "{e}");
+        assert!(e.contains("d_B=40") && e.contains("d_B=42"), "应列出附近 40/42：{e}");
+        assert!(e.contains("m=2"), "{e}");
+        let e = lookup_by_d_b(1_000.0, None).unwrap_err();
+        assert!(e.contains("附近候选"), "不给 m 也要给候选：{e}");
+        // m=1.5：源图空表框
+        let e = lookup_by_d_b(20.0, Some(1.5)).unwrap_err();
+        assert!(
+            e.contains("该档位数据缺失") && e.contains("源图空表框"),
+            "m=1.5 应报空表框：{e}"
+        );
+        // m=5：p35 已整页剔除
+        let e = lookup_by_d_b(50.0, Some(5.0)).unwrap_err();
+        assert!(
+            e.contains("该档位数据缺失") && e.contains("剔除"),
+            "m=5 应报已剔除：{e}"
+        );
+        // 未收录档位（如 m=0.9）列出已入库档位
+        let e = lookup_by_d_b(10.0, Some(0.9)).unwrap_err();
+        assert!(e.contains("表中没有 m=0.9") && e.contains("已入库档位"), "{e}");
+        // 非法输入
+        assert!(lookup_by_d_b(-1.0, None).unwrap_err().contains("正数"));
+        assert!(lookup_by_d_b(10.0, Some(0.0)).unwrap_err().contains("正数"));
+    }
+
+    /// `d_B + m + z` 互相印证：命中表行 → Table；表无此 (m,z) → Formula；不一致/越界报错。
+    #[test]
+    fn din5480_resolve_cross_checks_d_b_m_z() {
+        // p27 m=2 d_B=40 z=18 x=0.45：查表命中。
+        let (p, o) = resolve_din_by_d_b(40.0, Some(2.0), Some(18), None).unwrap();
+        assert!((p.x - 0.45).abs() < 1e-9 && p.z == 18 && (p.m - 2.0).abs() < 1e-9);
+        assert!((p.d() - 36.0).abs() < 1e-9 && p.d_b == Some(40.0));
+        assert!(matches!(&o, D_bOrigin::Table(r) if r.page == 27), "{o:?}");
+        assert_eq!(o.note(), "查表命中 p27 m=2");
+        // 表里没有 (m=2, z=19)：公式解出，未命中表。
+        let (p, o) = resolve_din_by_d_b(41.0, Some(2.0), Some(19), None).unwrap();
+        assert!((p.x - 0.2).abs() < 1e-9, "x={}", p.x);
+        assert_eq!(o.note(), "由公式解出，未命中表");
+        // 组合不一致：表中 m=2 z=14 → d_B=30（x−0.05）/32（x0.45），给 40 报错。
+        let e = resolve_din_by_d_b(40.0, Some(2.0), Some(14), None).unwrap_err();
+        assert!(
+            e.contains("组合不一致") && e.contains("d_B=30") && e.contains("d_B=32"),
+            "{e}"
+        );
+        // x 与 d_B 不自洽：m2 z18 x0.2 → d_B=38.6，却给 40。
+        let e = resolve_din_by_d_b(40.0, Some(2.0), Some(18), Some(0.2)).unwrap_err();
+        assert!(e.contains("不自洽"), "{e}");
+        // d_B 反解越界（x>0.45）。
+        let e = resolve_din_by_d_b(100.0, Some(2.0), Some(10), None).unwrap_err();
+        assert!(e.contains("超出") && e.contains("0.45"), "{e}");
     }
 
     // ── CSV dump（示例件，供人工审图）──

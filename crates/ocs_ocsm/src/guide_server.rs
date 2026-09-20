@@ -13236,6 +13236,11 @@ mod weld_tests {
                 && cat.contains("GB30R") && cat.contains("DIN30"),
             "标准/齿廓预设数据进目录"
         );
+        assert!(
+            cat.contains("\"din_nominal\"") && cat.contains("\"din_notes\"")
+                && cat.contains("m=1.5"),
+            "DIN 5480-2 名义表候选进目录（GUI 的 d_B 下拉/自动带出）"
+        );
         let svg = http_req(
             server.port,
             "GET",
@@ -13250,6 +13255,26 @@ mod weld_tests {
             "",
         );
         assert!(svg.contains("DIN DIN30 m2 z18 x0.2 L20"), "渐开线 DIN 剖视：{svg}");
+        let svg = http_req(
+            server.port,
+            "GET",
+            "/api/part_svg?family=detail_invol_spline&spec=DIN30&db=40&m=2&len=20&view=side",
+            "",
+        );
+        assert!(
+            svg.contains("z18 x0.45 d_B40") && svg.contains("查表命中 p27 m=2"),
+            "d_B 查表预览：{svg}"
+        );
+        let bad = http_req(
+            server.port,
+            "GET",
+            "/api/part_svg?family=detail_invol_spline&spec=DIN30&db=20&m=1.5&view=front",
+            "",
+        );
+        assert!(
+            bad.contains("error") && bad.contains("该档位数据缺失") && bad.contains("空表框"),
+            "m=1.5 缺失档位提示：{bad}"
+        );
         let svg = http_req(
             server.port,
             "GET",
@@ -13459,6 +13484,22 @@ mod weld_tests {
         assert_eq!(meta["params"]["m"], 3.0);
         assert_eq!(meta["params"]["z"], 20.0);
         assert_eq!(meta["code"], "GB/T 3478.1-2008");
+        drop(writes);
+        // DIN 5480-2 查表路径：只给 db + m → z/x 由表补全，spec 带数据来源
+        let db = br#"{"family":"detail_invol_spline","d":0,"spec":"DIN30","params":{"db":40,"m":2,"len":20},"x":0,"y":0,"view":"side"}"#;
+        let resp = apply_part_pick(&sender, db).expect("d_B 查表插入");
+        assert!(
+            resp.contains("DIN DIN30 m2 z18 x0.45 d_B40 L20（查表命中 p27 m=2）"),
+            "d_B 查表 meta：{resp}"
+        );
+        assert_eq!(mock.inserts().len(), 3, "d_B 路径也落一个 INSERT");
+        // 组合不一致 / 缺失档位在出库层报错
+        let bad = br#"{"family":"detail_invol_spline","d":0,"spec":"DIN30","params":{"db":40,"m":2,"z":14,"len":20},"view":"side"}"#;
+        let err = apply_part_pick(&sender, bad).unwrap_err();
+        assert!(err.contains("组合不一致"), "{err}");
+        let miss = br#"{"family":"detail_invol_spline","d":0,"spec":"DIN30","params":{"db":20,"m":1.5,"len":20},"view":"side"}"#;
+        let err = apply_part_pick(&sender, miss).unwrap_err();
+        assert!(err.contains("该档位数据缺失") && err.contains("空表框"), "{err}");
     }
 
     /// 外螺纹退刀槽出库：`params` 同样走 `apply_part_export`（建块 + 待放置）。

@@ -1294,18 +1294,20 @@ impl DetailElement for SplineRect {
 /// 族 id。
 pub const FAMILY_INVOL_SPLINE: &str = "detail_invol_spline";
 
-/// 把参数解成 [`crate::invol_spline::InvolParams`] 与有效长度 L。
+/// 把参数解成 [`crate::invol_spline::InvolParams`]、有效长度 L 与数据来源说明。
 ///
 /// * `params.spec()` = **预设代号**（`GB30R` 默认；另 `GB30P`/`GB375R`/`GB45R`/`DIN30`，
 ///   也收 `GB` + 中文齿廓名）；
-/// * `m` / `z` 必给；`x` 可选（默认 0，DIN 要求 `x∈[−0.05, 0.45]`）；`len`（或 `l`）= L；
-/// * 主参数 `d`（分度圆）不是输入：正视图不需要 L，侧视/剖视才要。
+/// * GB：`m` / `z` 必给，`x` 可选（默认 0）；
+/// * DIN：给 `db`（基准直径 `d_B`）时 `m`/`z` 可缺一项，由 DIN 5480-2 名义表补全；
+///   三参齐给时用 `x=(d_B−m(z+1.1))/(2m)` 解 `x` 并与表值互相印证；
+/// * `len`（或 `l`）= L；主参数 `d`（分度圆）不是输入：正视图不需要 L，侧视/剖视才要。
 fn resolve_invol_spline(
     d: f64,
     params: &DetailParams,
-) -> Result<(crate::invol_spline::InvolParams, Option<f64>), String> {
-    use crate::invol_spline::{parse_preset_token, InvolParams};
-    const KNOWN: [&str; 4] = ["m", "z", "x", "len"];
+) -> Result<(crate::invol_spline::InvolParams, Option<f64>, Option<String>), String> {
+    use crate::invol_spline::{parse_preset_token, resolve_din_by_d_b, InvolParams, SplineStd};
+    const KNOWN: [&str; 5] = ["m", "z", "x", "len", "db"];
     let unknown: Vec<&str> = params
         .keys()
         .into_iter()
@@ -1313,7 +1315,7 @@ fn resolve_invol_spline(
         .collect();
     if !unknown.is_empty() {
         return Err(format!(
-            "渐开线花键：不认识参数 {}（本族支持 预设代号 spec、M、Z、X、L）",
+            "渐开线花键：不认识参数 {}（本族支持 预设代号 spec、M、Z、X、DB、L）",
             unknown.join("、")
         ));
     }
@@ -1323,23 +1325,50 @@ fn resolve_invol_spline(
     let (std, profile) = parse_preset_token(token).ok_or_else(|| {
         format!("渐开线花键：不认识的预设代号「{token}」（可用 GB30P/GB30R/GB375R/GB45R/DIN30）")
     })?;
-    let m = params
-        .get("m")
-        .ok_or_else(|| "渐开线花键：缺模数 m（写法 `M3`）".to_string())?;
-    let z_value = params
-        .get("z")
-        .ok_or_else(|| "渐开线花键：缺齿数 z（写法 `Z20`）".to_string())?;
-    if z_value.fract().abs() > 1e-9 || !(3.0..=1000.0).contains(&z_value) {
-        return Err(format!(
-            "渐开线花键：齿数 z={} 必须取 3..=1000 的整数",
-            trim(z_value)
-        ));
-    }
-    let x = params.get("x").unwrap_or(0.0);
-    let p = InvolParams::from_preset(std, profile, m, z_value as u32)
-        .map_err(|e| format!("渐开线花键：{e}"))?
-        .with_x(x);
-    p.validate().map_err(|e| format!("渐开线花键：{e}"))?;
+    let m = params.get("m");
+    let z_value = params.get("z");
+    let x = params.get("x");
+    let (p, source) = if let Some(d_b) = params.get("db") {
+        if std != SplineStd::DIN {
+            return Err(format!(
+                "渐开线花键：DB（基准直径 d_B={}）只适用于 DIN 5480-2（GB/T 3478.1 无此参数）",
+                trim(d_b)
+            ));
+        }
+        let z = match z_value {
+            Some(z) => {
+                if z.fract().abs() > 1e-9 || !(3.0..=1000.0).contains(&z) {
+                    return Err(format!(
+                        "渐开线花键：齿数 z={} 必须取 3..=1000 的整数",
+                        trim(z)
+                    ));
+                }
+                Some(z as u32)
+            }
+            None => None,
+        };
+        let (p, origin) = resolve_din_by_d_b(d_b, m, z, x)
+            .map_err(|e| format!("渐开线花键：{e}"))?;
+        (p, Some(origin.note()))
+    } else {
+        let m = m.ok_or_else(|| {
+            "渐开线花键：缺模数 m（写法 `M3`；DIN 可给 `DB40` 由查表补全）".to_string()
+        })?;
+        let z_value = z_value.ok_or_else(|| {
+            "渐开线花键：缺齿数 z（写法 `Z20`；DIN 可给 `DB40` 由查表补全）".to_string()
+        })?;
+        if z_value.fract().abs() > 1e-9 || !(3.0..=1000.0).contains(&z_value) {
+            return Err(format!(
+                "渐开线花键：齿数 z={} 必须取 3..=1000 的整数",
+                trim(z_value)
+            ));
+        }
+        let p = InvolParams::from_preset(std, profile, m, z_value as u32)
+            .map_err(|e| format!("渐开线花键：{e}"))?
+            .with_x(x.unwrap_or(0.0));
+        p.validate().map_err(|e| format!("渐开线花键：{e}"))?;
+        (p, None)
+    };
     if d.is_finite() && d > 0.0 && (d - p.d()).abs() > 1e-9 {
         return Err(format!(
             "渐开线花键：分度圆 d={} 与 m·z={} 不一致（d 不单独输入）",
@@ -1348,7 +1377,7 @@ fn resolve_invol_spline(
         ));
     }
     let len = params.get("len").or_else(|| params.get("l"));
-    Ok((p, len))
+    Ok((p, len, source))
 }
 
 /// 渐开线花键的要素定义（登记到 `ELEMENTS`）。
@@ -1398,8 +1427,8 @@ impl DetailElement for InvolSpline {
         params: &DetailParams,
         view: &str,
     ) -> Result<GenPart, String> {
-        let (spline, len) = resolve_invol_spline(d, params)?;
-        let (entities, spec_text) = match view {
+        let (spline, len, d_b_note) = resolve_invol_spline(d, params)?;
+        let (entities, mut spec_text) = match view {
             "front" => (spline.front_view()?, spline.spec()),
             "side" => {
                 let len = len.ok_or_else(|| {
@@ -1438,6 +1467,10 @@ impl DetailElement for InvolSpline {
             }
             other => return Err(format!("渐开线花键：视图 {other} 尚未实现")),
         };
+        // DIN 查表路径：把数据来源（查表命中 pNN / 公式解出）写进规格文本（GUI/spec 显示用）。
+        if let Some(note) = d_b_note {
+            spec_text.push_str(&format!("（{note}）"));
+        }
         let bbox = entity_bbox(&entities);
         Ok(GenPart {
             entities,
@@ -1486,6 +1519,18 @@ impl DetailElement for InvolSpline {
                 })
             })
             .collect();
+        let din_nominal: Vec<serde_json::Value> = crate::invol_spline::din5480_rows()
+            .iter()
+            .map(|r| {
+                serde_json::json!({
+                    "db": r.d_b,
+                    "m": r.m,
+                    "z": r.z,
+                    "x": r.x,
+                    "page": r.page,
+                })
+            })
+            .collect();
         serde_json::json!({
             "tree_dir": "结构要素/花键",
             "hide_d": true,
@@ -1493,10 +1538,12 @@ impl DetailElement for InvolSpline {
             "default_d": 0,
             "spec_label": "预设代号（GB30P/GB30R/GB375R/GB45R/DIN30）",
             "source": format!(
-                "{}（图 2 基本齿廓 + 表 3~表 6）；{}（条 5.1：齿侧对中 h_fP=0.55m；DIN 5480-2 名义表核对）",
+                "{}（图 2 基本齿廓 + 表 3~表 6）；{}（条 5.1：齿侧对中 h_fP=0.55m）；DIN 5480-2 名义表（618 行；m=1.5 缺，m=5 已剔除）",
                 crate::invol_spline::GB_CODE,
                 crate::invol_spline::DIN_CODE
             ),
+            "din_notes": "DIN 5480-2 名义表：618 行；m=1.5 缺失（p23/p24 源图空表框）、m=5 已剔除（p35 渲染缺陷）；x=(d_B−m(z+1.1))/(2m) 为反推关系",
+            "din_nominal": din_nominal,
             "inputs": [
                 { "key": "std", "label": "标准预设", "type": "select",
                   "options": [
@@ -1515,8 +1562,9 @@ impl DetailElement for InvolSpline {
                       { "value": "DIN30", "label": "30° 圆齿根（滚刀基准，h_fP=0.55m）" }
                     ]
                   }, "default": "GB30R" },
-                { "key": "m", "label": "模数 m", "type": "number", "required": true, "placeholder": "例如 3" },
-                { "key": "z", "label": "齿数 z", "type": "number", "required": true, "placeholder": "例如 20" },
+                { "key": "db", "label": "基准直径 d_B（仅 DIN；从表里选候选）", "type": "number", "datalist": "din_nominal", "placeholder": "例如 40（DIN 5480-2 查表）" },
+                { "key": "m", "label": "模数 m（DIN 给 d_B 时可由查表补全）", "type": "number", "placeholder": "例如 3" },
+                { "key": "z", "label": "齿数 z（DIN 给 d_B 时可由查表补全）", "type": "number", "placeholder": "例如 20" },
                 { "key": "x", "label": "变位系数 x（可选，DIN ∈ [−0.05, 0.45]）", "type": "number", "placeholder": "留空 = 0" },
                 { "key": "len", "label": "有效长度 L（mm，侧视/剖视必给）", "type": "number", "placeholder": "例如 30" }
             ],
@@ -2195,20 +2243,29 @@ mod tests {
         assert_eq!(family["hide_d"], true);
         assert_eq!(family["code"], crate::invol_spline::GB_CODE);
         assert_eq!(family["invol_presets"].as_array().unwrap().len(), 5);
-        // 输入顺序：std / profile / m / z / x / len；select 带 options/options_by
+        // 输入顺序：std / profile / db / m / z / x / len；select 带 options/options_by
         let inputs = family["inputs"].as_array().unwrap();
-        assert_eq!(inputs.len(), 6);
+        assert_eq!(inputs.len(), 7);
         assert_eq!(inputs[0]["key"], "std");
         assert_eq!(inputs[0]["type"], "select");
         assert_eq!(inputs[1]["key"], "profile");
         assert_eq!(inputs[1]["depends_on"], "std");
         assert_eq!(inputs[1]["options_by"]["GB"].as_array().unwrap().len(), 4);
         assert_eq!(inputs[1]["options_by"]["DIN"].as_array().unwrap().len(), 1);
-        assert_eq!(inputs[2]["key"], "m");
-        assert_eq!(inputs[2]["required"], true);
-        assert_eq!(inputs[3]["key"], "z");
-        assert_eq!(inputs[4]["key"], "x");
-        assert_eq!(inputs[5]["key"], "len");
+        assert_eq!(inputs[2]["key"], "db", "DIN 基准直径输入（数据表驱动）");
+        assert_eq!(inputs[2]["datalist"], "din_nominal");
+        assert_eq!(inputs[3]["key"], "m");
+        assert_eq!(inputs[4]["key"], "z");
+        assert_eq!(inputs[5]["key"], "x");
+        assert_eq!(inputs[6]["key"], "len");
+        // DIN 5480-2 名义表进了目录（GUI 的 d_B 候选/自动带出用）
+        let nominal = family["din_nominal"].as_array().unwrap();
+        assert_eq!(nominal.len(), 618, "入库 618 行");
+        assert!(
+            nominal.iter().any(|r| r["db"] == 40.0 && r["m"] == 2.0 && r["z"] == 18),
+            "p27 m=2 d_B=40 z=18 应在候选里"
+        );
+        assert!(family["din_notes"].as_str().unwrap().contains("m=1.5"));
         // DIN 预设的系数（GUI 派生值用）：h_fP*=0.55、cF*=0.10
         let din = family["invol_presets"]
             .as_array()
@@ -2247,6 +2304,34 @@ mod tests {
             .unwrap()
             .unwrap();
         assert!(svg.contains("DIN DIN30 m2 z18 x0.2 L20"), "{svg}");
+        // DIN 5480-2 查表（主路径）：d_B+m → 补 z、取表值 x、spec 带来源
+        let svg = preview_svg("family=detail_invol_spline&spec=DIN30&db=40&m=2&len=20&view=side")
+            .unwrap()
+            .unwrap();
+        assert!(
+            svg.contains("DIN DIN30 m2 z18 x0.45 d_B40 L20（查表命中 p27 m=2）"),
+            "d_B 查表命中：{svg}"
+        );
+        let svg = preview_svg("family=detail_invol_spline&spec=DIN30&db=40&z=18&view=front")
+            .unwrap()
+            .unwrap();
+        assert!(svg.contains("m2 z18") && svg.contains("查表命中"), "d_B+z 补 m：{svg}");
+        let err = preview_svg("family=detail_invol_spline&spec=DIN30&db=41&m=2&z=19&view=front")
+            .unwrap()
+            .unwrap();
+        assert!(err.contains("由公式解出，未命中表"), "公式路径：{err}");
+        let err = preview_svg("family=detail_invol_spline&spec=DIN30&db=40&m=2&z=14&view=front")
+            .unwrap()
+            .unwrap_err();
+        assert!(err.contains("组合不一致"), "{err}");
+        let err = preview_svg("family=detail_invol_spline&spec=DIN30&db=20&m=1.5&view=front")
+            .unwrap()
+            .unwrap_err();
+        assert!(err.contains("该档位数据缺失") && err.contains("空表框"), "{err}");
+        let err = preview_svg("family=detail_invol_spline&spec=GB30R&db=40&m=2&z=18&view=front")
+            .unwrap()
+            .unwrap_err();
+        assert!(err.contains("只适用于 DIN"), "{err}");
         let svg = preview_svg("family=detail_invol_spline&spec=GB375R&m=1.5&z=30&view=front")
             .unwrap()
             .unwrap();
