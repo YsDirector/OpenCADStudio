@@ -589,6 +589,9 @@ pub struct InvolSeg {
     pub len: f64,
     /// 滚刀外径 de（`None` = 不画收尾）。
     pub de: Option<f64>,
+    /// `CHECK` 时的 DIN 5480-2 检验尺寸摘要（M₁/M₂/D_M/k/W_k + 来源）；
+    /// `None` = 未开 CHECK（默认行为不变）。JSON 里 skip_serializing_if。
+    pub inspection: Option<String>,
 }
 
 impl InvolSeg {
@@ -606,7 +609,7 @@ impl InvolSeg {
         if let Some(de) = de {
             params.runout_length(de)?;
         }
-        Ok(Self { code, params, len, de })
+        Ok(Self { code, params, len, de, inspection: None })
     }
 
     /// 收尾长度 l（无 de = 0）。
@@ -632,11 +635,11 @@ impl InvolSeg {
     }
 }
 
-/// `InvolSeg` 的 JSON 形状：`{code,m,z,x,len,de,d_b}`（几何参数从 code+m/z/x 重算，不序列化）。
+/// `InvolSeg` 的 JSON 形状：`{code,m,z,x,len,de,d_b[,inspection]}`（几何参数从 code+m/z/x 重算，不序列化）。
 impl serde::Serialize for InvolSeg {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         use serde::ser::SerializeStruct;
-        let mut st = serializer.serialize_struct("InvolSeg", 7)?;
+        let mut st = serializer.serialize_struct("InvolSeg", 8)?;
         st.serialize_field("code", &self.code)?;
         st.serialize_field("m", &self.params.m)?;
         st.serialize_field("z", &self.params.z)?;
@@ -644,8 +647,28 @@ impl serde::Serialize for InvolSeg {
         st.serialize_field("len", &self.len)?;
         st.serialize_field("de", &self.de)?;
         st.serialize_field("d_b", &self.params.d_b)?;
+        if self.inspection.is_some() {
+            st.serialize_field("inspection", &self.inspection)?;
+        }
         st.end()
     }
+}
+
+/// `INVOLSPLINE ... CHECK`：DIN 预设算检验尺寸摘要；GB 明确报错（不静默忽略）。
+fn invol_check_note(invol: &InvolSeg, label: &str, keyword: &str) -> Result<String, String> {
+    use crate::invol_spline::SplineStd;
+    let p = &invol.params;
+    if p.std != SplineStd::DIN {
+        return Err(format!(
+            "{label}：{keyword} CHECK：检验尺寸表（DIN 5480-2）只适用于 DIN30 预设"
+        ));
+    }
+    let d_b = p
+        .d_b
+        .unwrap_or_else(|| crate::invol_spline::d_b_from_x(p.m, p.z, p.x));
+    let r = crate::invol_spline::inspection_query(d_b, p.m, p.z)
+        .map_err(|e| format!("{label}：{keyword} CHECK：{e}"))?;
+    Ok(crate::invol_spline::inspection_summary(&r))
 }
 
 /// 一段轴（从左到右）。
@@ -1105,6 +1128,8 @@ fn parse_segment(chunk: &str, label: &str, program: &mut Program) -> Result<Segm
     let (mut invol_m, mut invol_z, mut invol_x) = (None, None, None);
     let mut invol_d_b: Option<f64> = None;
     let mut invol_de: Option<f64> = None;
+    // `INVOLSPLINE ... CHECK`：附带 DIN 5480-2 检验尺寸（默认关，行为不变）。
+    let mut invol_check = false;
     let mut index = 0;
     while index < tokens.len() {
         let token = tokens[index];
@@ -1166,6 +1191,9 @@ fn parse_segment(chunk: &str, label: &str, program: &mut Program) -> Result<Segm
                 rest
             };
             invol_d_b = Some(parse_number(value_text, label, "DB")?);
+        } else if has_invol && upper == "CHECK" {
+            // 必须在 `upper.starts_with("CH")`（倒角）之前截住，否则 CHECK 会被当成 CH。
+            invol_check = true;
         } else if upper.starts_with("DE") {
             if !spline_on && !invol_on {
                 return Err(unknown_keyword(token, label));
@@ -1464,8 +1492,11 @@ fn parse_segment(chunk: &str, label: &str, program: &mut Program) -> Result<Segm
             let len = l.ok_or_else(|| {
                 format!("{label}：渐开线花键段缺少 L（有效长度，例 `INVOLSPLINE GB30R M3 Z20 L30`）")
             })?;
-            let invol = InvolSeg::new(code, params, len, invol_de)
+            let mut invol = InvolSeg::new(code, params, len, invol_de)
                 .map_err(|e| format!("{label}：{e}"))?;
+            if invol_check {
+                invol.inspection = Some(invol_check_note(&invol, label, "INVOLSPLINE")?);
+            }
             let d = invol.major_radius() * 2.0;
             return Ok(Segment {
                 s: d,
@@ -1841,6 +1872,9 @@ struct JsonInvolSpline {
     /// 滚刀外径 de（可选）。
     #[serde(default)]
     de: Option<f64>,
+    /// `CHECK`：附带 DIN 5480-2 检验尺寸（M₁/M₂/D_M/k/W_k）；默认关。
+    #[serde(default)]
+    check: Option<bool>,
 }
 
 /// JSON 形式的花键段：`{"spec":"6x23x26x6","len":30,"de":63}`；
@@ -2162,8 +2196,15 @@ fn parse_json(text: &str) -> Result<Program, String> {
                     "第 {number} 段：渐开线花键段缺少 len（有效长度 L，例 {{\"code\":\"GB30R\",\"m\":3,\"z\":20,\"len\":30}}）"
                 )
             })?;
-            let invol = InvolSeg::new(code, params, len, ji.de)
+            let mut invol = InvolSeg::new(code, params, len, ji.de)
                 .map_err(|e| format!("第 {number} 段：{e}"))?;
+            if ji.check.unwrap_or(false) {
+                invol.inspection = Some(invol_check_note(
+                    &invol,
+                    &format!("第 {number} 段"),
+                    "INVOLSPLINE",
+                )?);
+            }
             let d = invol.major_radius() * 2.0;
             if let Some(s) = item.s {
                 if (s - d).abs() > 1e-9 {

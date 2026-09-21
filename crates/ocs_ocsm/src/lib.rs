@@ -750,10 +750,10 @@ fn place_one(
 ///   例：`OCSMPART detail_grind_od 100 b1 10 at 150,30 rot 0`（b1 缺省 = 该 d 档默认行）。
 /// - **矩形花键**（`detail_spline_rect`）：`<族> <规格代号> [L 满齿段长] [de 覆盖] [view 视图] [at x,y] [rot]`
 ///   例：`XL detail_spline_rect 6x23x26x6 L30 de63 view side`（规格代号可自定义，de 表外规格必给）。
-/// - **渐开线花键**（`detail_invol_spline`）：`<族> <预设代号> M<模数> Z<齿数> [X变位] [DB基准直径] [L 有效长度] [view 视图] [at x,y] [rot]`
+/// - **渐开线花键**（`detail_invol_spline`）：`<族> <预设代号> M<模数> Z<齿数> [X变位] [DB基准直径] [L 有效长度] [CHECK] [view 视图] [at x,y] [rot]`
 ///   例：`XL detail_invol_spline GB30R M3 Z20 L30 view side`、`XL detail_invol_spline DIN30 DB40 M2 L30 view side`
 ///   （预设代号 `GB30P/GB30R/GB375R/GB45R/DIN30`；DIN 给 `DB` 后 `M`/`Z` 可缺一项，由 DIN 5480-2 表补全；
-///   正视图不需要 L）。
+///   正视图不需要 L；`CHECK` 时 DIN 预设附带检验尺寸 M₁/M₂/D_M/k/W_k，默认不开、行为不变）。
 /// - **外螺纹退刀槽**（`detail_thread_relief`）：`<族> <d> P <螺距> [g1 值 g2 值 dg 值 r 值 alpha 值] [at x,y] [rot 度]`
 ///   例：`OCSMPART detail_thread_relief 20 P 1.5`（P 必给，其余可选，见 `detail.rs` 表 2）。
 ///
@@ -780,9 +780,10 @@ struct PartsSpec {
 /// 返回 `(规范键, 贴写值)`；贴写值为空串 = 值在下一个 token。`b1` 与退刀槽参数不走这里。
 fn split_detail_param(token: &str) -> Option<(&'static str, &str)> {
     // 长前缀在前（`big` > `b`、`len` > `l`、`de`/`db` > `d`）；`b1` 是历史槽位，不拦截。
-    const KEYS: [(&str, &str); 13] = [
+    const KEYS: [(&str, &str); 14] = [
         ("spec", "spec"),
         ("big", "big"),
+        ("check", "check"),
         ("de", "de"),
         ("db", "db"),
         ("d_b", "db"),
@@ -877,6 +878,19 @@ impl PartsSpec {
             // 结构要素（花键）的额外参数：`L30` / `de63` / `N6 D26 B6` / `spec=…`。
             if detail {
                 if let Some((key, attached)) = split_detail_param(&lower) {
+                    // `CHECK`：裸写 = 1；也收 `check=1` / `check:0`（值不占下一个 token）。
+                    if key == "check" {
+                        let value: f64 = if attached.is_empty() {
+                            1.0
+                        } else {
+                            attached.parse().ok()?
+                        };
+                        if !value.is_finite() {
+                            return None;
+                        }
+                        spec.params.insert(key.to_string(), value);
+                        continue;
+                    }
                     let value_text = if attached.is_empty() {
                         tokens.next()?
                     } else {
@@ -1999,7 +2013,7 @@ impl OcsmPlugin {
                          （b1 缺省 = 该 d 档默认行）；\
                          矩形花键 `OCSMPART detail_spline_rect <规格代号> L<满齿段长> [de <滚刀外径>] [view front|side|section]`\
                          （例：OCSMPART detail_spline_rect 6x23x26x6 L30 view side）；\
-                         渐开线花键 `OCSMPART detail_invol_spline <预设代号> M<模数> Z<齿数> [X<变位>] [DB<基准直径>] [L<有效长度>] [view front|side|section]`\
+                         渐开线花键 `OCSMPART detail_invol_spline <预设代号> M<模数> Z<齿数> [X<变位>] [DB<基准直径>] [L<有效长度>] [CHECK] [view front|side|section]`\
                          （例：OCSMPART detail_invol_spline GB30R M3 Z20 L30 view side；DIN 给 DB40 后 M/Z 可缺一项，\
                          由 DIN 5480-2 名义表补全；预设代号 GB30P/GB30R/GB375R/GB45R/DIN30）；\
                          外螺纹退刀槽 `OCSMPART detail_thread_relief <d> P <螺距> [g1 值 g2 值 dg 值 r 值 alpha 值] [at x,y] [rot 度]`\
@@ -4207,6 +4221,13 @@ mod tests {
         assert_eq!(spec.params.get("db"), Some(&40.0));
         assert_eq!(spec.params.get("z"), Some(&18.0));
         assert!(spec.params.get("m").is_none(), "给 DB+Z 时 M 可由查表补全");
+        // `CHECK`：裸写 = 1、check=0 可关；不进几何参数、默认不开行为不变。
+        let spec = PartsSpec::parse("detail_invol_spline DIN30 DB6 M0.5 Z10 L20 CHECK").unwrap();
+        assert_eq!(spec.params.get("check"), Some(&1.0));
+        let body: serde_json::Value = serde_json::from_str(&spec.to_body()).unwrap();
+        assert_eq!(body["params"]["check"], 1.0);
+        let spec = PartsSpec::parse("detail_invol_spline DIN30 DB6 M0.5 Z10 L20 check=0").unwrap();
+        assert_eq!(spec.params.get("check"), Some(&0.0));
         assert!(PartsSpec::parse("detail_invol_spline GB30R M3 Z20 view front").is_some());
         // 未知预设代号在解析层就回退 GUI（不静默按错误预设出图）
         assert_eq!(PartsSpec::parse("detail_invol_spline GB99 M3 Z20"), None);

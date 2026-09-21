@@ -51,6 +51,16 @@
 //! [`InvolParams::d_b`] 存查表/公式得到的基准直径，[`InvolParams::d_b_estimate`] 是旧的
 //! `m(z+2x)` 名义估算（保留兼容，非 `d_B` 定义式）。
 //!
+//! ## DIN 5480-2 检验尺寸表（M₁/M₂/D_M/k/W_k）
+//!
+//! 数据入库为 `assets/din5480_2_inspection.csv`（**220 行 / 5 档**：m=0.5/0.75/0.8/1/1.5；
+//! p12/p16/p18/p20 + m=1.5 用户截图）。[`inspection_query`] 做集成查询：`(d_B,m,z)` 精确查表
+//! 优先，表外 z 走**DIN 5480-2 p09 公式**导出（`x` 由 [`x_from_d_b`] 反解、`k` 由
+//! [`span_teeth`] 反推、`D_M` 借邻近表行）。公式已用 [`inspection_formula_report`] 逐行对照：
+//! 218 行可算，17 处源表 OCR 异常已逐张核对源图（修正值见 `INSPECTION_OCR_FIXES`，
+//! **不改写入库 CSV**），修正后 W_k/M1/M2 全部 ≤2e-3；表外 z 才允许公式，
+//! 反解 x 超 [−0.05,0.45] 或检验表无该 m 档时明确报“请提供对应表页”。
+//!
 //! # 二、几何
 //!
 //! * 分度圆 `d=mz`、基圆 `db=d·cosα`、齿厚 `s=mπ/2+2xm·tanα`、齿厚半角
@@ -712,6 +722,990 @@ fn join_rows(rows: &[Din5480Row]) -> String {
         .map(|r| format!("m={} z={} x={}", trim(r.m), r.z, trim(r.x)))
         .collect::<Vec<_>>()
         .join("、")
+}
+
+// ──────────────── DIN 5480-2 检验尺寸表（M₁/M₂/D_M/k/W_k；assets/din5480_2_inspection.csv） ────────────────
+
+/// 入库检验表（`crates/ocs_ocsm/assets/din5480_2_inspection.csv`，**220 行**）：
+/// 5 个模数档 0.5（p12 表 3）/ 0.75（p16 表 7）/ 0.8（p18 表 9）/ 1（p20 表 11）+
+/// m=1.5（用户截图 2，`page=2/table_no=15`、`source=user_screenshot_2`）。
+///
+/// 列序照抄 CSV：`D_M_1,M2_between,A_M2,D_M_2,M1_over,A_M1` —— 与 DIN 5480-2 原表的
+/// 两组（量棒直径 | 跨/棒间距 | 偏差系数）一一对应：**第一组是内花键 M2、第二组是外花键 M1**
+/// （p08 图 4：M2 = Dimension between 2 measuring circles / Hub；M1 = Dimension over 2
+/// measuring circles / Shaft），所以 CSV 的 `D_M_1`/`D_M_2` 是“第几组”而不是“配哪个 M”。
+const DIN5480_2_INSPECTION_CSV: &str = include_str!("../assets/din5480_2_inspection.csv");
+
+/// 检验表一行（DIN 5480-2:2015-03；内/外花键各一组量棒—间距—偏差系数 + 跨测齿数/公法线）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct InspectionRow {
+    /// 源 PDF 页码（DIN 5480-2:2015-03；m=1.5 为截图语义 2）。
+    pub page: u16,
+    /// 页内表号（m=0.5→3、0.75→7、0.8→9、1→11；m=1.5 截图语义 15）。
+    pub table_no: u32,
+    /// 模数 m。
+    pub m: f64,
+    /// 基准直径 `d_B`（本表主键维度）。
+    pub d_b: f64,
+    /// 齿数 z。
+    pub z: u32,
+    /// 内花键量棒直径（CSV `D_M_1`；配 M2）。
+    pub d_m_hub: f64,
+    /// 内花键棒间距 `M2`（CSV `M2_between`）。
+    pub m2: f64,
+    /// 内花键偏差系数 `A*_M2`。
+    pub a_m2: f64,
+    /// 外花键量棒直径（CSV `D_M_2`；配 M1）。
+    pub d_m_shaft: f64,
+    /// 外花键跨棒距 `M1`（CSV `M1_over`）。
+    pub m1: f64,
+    /// 外花键偏差系数 `A*_M1`。
+    pub a_m1: f64,
+    /// 跨测齿数 k。
+    pub k: u32,
+    /// 公法线长度 `W_k`。
+    pub w_k: f64,
+    /// OCR 质量标记（原样保留可查，运行时不展示）。
+    pub flags: String,
+    /// OCR 来源（`A` / `A(续跑)` / `user_screenshot_2`）。
+    pub source: String,
+}
+
+impl InspectionRow {
+    /// 给用户看的来源说明（页码 + 表号 + source）。
+    pub fn source_note(&self) -> String {
+        format!("p{} 表{}（source={}）", self.page, self.table_no, self.source)
+    }
+}
+
+/// 检验表数值容差：表值 3 位小数（半末位 5e-4）；公式解经反解迭代，取 2e-3。
+const INSPECTION_TOL: f64 = 2e-3;
+
+/// 齿顶凸出下限（从 220 行检验表反推）：跨测接触圆须离齿顶圆 `≥0.07m`（p09 式 (5) 的
+/// 齿顶凸出 `a=(d_a1−d_M)/2`，把 d_M 换成对称跨测接触圆）。217 行可算 k 与此一致。
+const SPAN_TIP_MARGIN_FACTOR: f64 = 0.07;
+
+/// 已知**缺失/未入库**的检验模数档（m=5：p35 名义表渲染缺陷整页剔除；检验表 p36 未并入）。
+pub const DIN_INSPECTION_MISSING_MODULES: &[(f64, &str)] = &[(
+    5.0,
+    "该档位检验数据缺失（源图渲染缺陷、已剔除）：名义表 p35 整页剔除、检验表 p36 未并入",
+)];
+
+static DIN5480_INSPECTION_TABLE: OnceLock<Vec<InspectionRow>> = OnceLock::new();
+
+/// 入库检验表（懒加载；解析失败 panic —— 数据随二进制编译，属构建错误）。
+pub fn inspection_rows() -> &'static [InspectionRow] {
+    DIN5480_INSPECTION_TABLE.get_or_init(|| {
+        parse_inspection_csv(DIN5480_2_INSPECTION_CSV)
+            .unwrap_or_else(|e| panic!("DIN 5480-2 检验表入库数据损坏：{e}"))
+    })
+}
+
+/// 已入库检验模数档（升序；**5 档**，与名义表 15 档不同）。
+pub fn inspection_modules() -> Vec<f64> {
+    let mut v: Vec<f64> = inspection_rows().iter().map(|r| r.m).collect();
+    v.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    v.dedup_by(|a, b| (*a - *b).abs() < DIN_M_TOL);
+    v
+}
+
+/// 解析检验表 CSV（跳过 `#` 注释与 `page` 表头；缺列/坏值 → 带行号报错）。
+fn parse_inspection_csv(text: &str) -> Result<Vec<InspectionRow>, String> {
+    let mut rows = Vec::new();
+    for (i, line) in text.lines().enumerate() {
+        let n = i + 1;
+        if line.trim().is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let f = split_csv_line(line);
+        if f.first().map(|s| s.trim()) == Some("page") {
+            continue; // 表头
+        }
+        if f.len() < 15 {
+            return Err(format!("检验表第 {n} 行只有 {} 列（应有 15 列）", f.len()));
+        }
+        let page = f[0]
+            .trim()
+            .parse::<u16>()
+            .map_err(|_| format!("检验表第 {n} 行 page「{}」非法", f[0]))?;
+        let m = csv_decimal(&f[1])
+            .ok_or_else(|| format!("检验表第 {n} 行 m「{}」非法", f[1]))?;
+        let table_no = f[2]
+            .trim()
+            .parse::<u32>()
+            .map_err(|_| format!("检验表第 {n} 行 table_no「{}」非法", f[2]))?;
+        let d_b = csv_decimal(&f[3])
+            .ok_or_else(|| format!("检验表第 {n} 行 d_B「{}」非法", f[3]))?;
+        let z = f[4]
+            .trim()
+            .parse::<u32>()
+            .map_err(|_| format!("检验表第 {n} 行 z「{}」非法", f[4]))?;
+        let d_m_hub = csv_decimal(&f[5])
+            .ok_or_else(|| format!("检验表第 {n} 行 D_M_1「{}」非法", f[5]))?;
+        let m2 = csv_decimal(&f[6])
+            .ok_or_else(|| format!("检验表第 {n} 行 M2_between「{}」非法", f[6]))?;
+        let a_m2 = csv_decimal(&f[7])
+            .ok_or_else(|| format!("检验表第 {n} 行 A_M2「{}」非法", f[7]))?;
+        let d_m_shaft = csv_decimal(&f[8])
+            .ok_or_else(|| format!("检验表第 {n} 行 D_M_2「{}」非法", f[8]))?;
+        let m1 = csv_decimal(&f[9])
+            .ok_or_else(|| format!("检验表第 {n} 行 M1_over「{}」非法", f[9]))?;
+        let a_m1 = csv_decimal(&f[10])
+            .ok_or_else(|| format!("检验表第 {n} 行 A_M1「{}」非法", f[10]))?;
+        let k = f[11]
+            .trim()
+            .parse::<u32>()
+            .map_err(|_| format!("检验表第 {n} 行 k「{}」非法", f[11]))?;
+        let w_k = csv_decimal(&f[12])
+            .ok_or_else(|| format!("检验表第 {n} 行 W_k「{}」非法", f[12]))?;
+        if m <= 0.0 || d_b <= 0.0 || d_m_hub <= 0.0 || d_m_shaft <= 0.0 {
+            return Err(format!("检验表第 {n} 行 m/d_B/D_M 非正"));
+        }
+        rows.push(InspectionRow {
+            page,
+            table_no,
+            m,
+            d_b,
+            z,
+            d_m_hub,
+            m2,
+            a_m2,
+            d_m_shaft,
+            m1,
+            a_m1,
+            k,
+            w_k,
+            flags: f[13].trim().to_string(),
+            source: f[14].trim().to_string(),
+        });
+    }
+    Ok(rows)
+}
+
+/// 命中 `(d_B, m?)` 的原始检验行（不产生错误文案）。
+fn inspection_match(d_b: f64, m: Option<f64>) -> Vec<InspectionRow> {
+    inspection_rows()
+        .iter()
+        .filter(|r| (r.d_b - d_b).abs() < DIN_D_B_TOL)
+        .filter(|r| m.is_none_or(|m| (r.m - m).abs() < DIN_M_TOL))
+        .cloned()
+        .collect()
+}
+
+/// **DIN 5480-2 检验表查表**：按基准直径 `d_B`（可再限定模数 `m`）返回检验行。
+///
+/// * 命中可能多行（同一 `d_B` 多个 z 变体，如 m=0.8/d_B=20 → z=24 与 z=93 残行）；
+/// * 找不到时列出附近候选（带页码与 source）；
+/// * 缺档（m=5）明确报「数据缺失（源图渲染缺陷、已剔除）」；检验表没收录的档
+///   （如 m=2）明确报「检验表没有 m=X 档」并给已入库检验档位。
+pub fn lookup_inspection(d_b: f64, m: Option<f64>) -> Result<Vec<InspectionRow>, String> {
+    if !(d_b.is_finite() && d_b > 0.0) {
+        return Err(format!("DIN 5480-2 检验表：d_B={} 必须是正数。", trim(d_b)));
+    }
+    if let Some(m) = m {
+        if !(m.is_finite() && m > 0.0) {
+            return Err(format!("DIN 5480-2 检验表：m={} 必须是正数。", trim(m)));
+        }
+    }
+    let mut hits = inspection_match(d_b, m);
+    hits.sort_by(|a, b| a.z.cmp(&b.z).then(a.m.partial_cmp(&b.m).unwrap()));
+    if hits.is_empty() {
+        Err(inspection_miss_message(d_b, m))
+    } else {
+        Ok(hits)
+    }
+}
+
+/// 检验表未命中的错误文案：缺档说明 + 附近候选（带页码/source）。
+fn inspection_miss_message(d_b: f64, m: Option<f64>) -> String {
+    let mut msg = format!("DIN 5480-2 检验表：d_B={}", trim(d_b));
+    if let Some(m) = m {
+        msg.push_str(&format!("（m={}）", trim(m)));
+    }
+    msg.push_str(" 无命中");
+    if let Some(m) = m {
+        if let Some((_, why)) = DIN_INSPECTION_MISSING_MODULES
+            .iter()
+            .find(|(mm, _)| (*mm - m).abs() < DIN_M_TOL)
+        {
+            msg.push_str(&format!("：{why}。"));
+        } else if !inspection_modules().iter().any(|mm| (mm - m).abs() < DIN_M_TOL) {
+            let list = inspection_modules()
+                .iter()
+                .map(|v| trim(*v))
+                .collect::<Vec<_>>()
+                .join("、");
+            msg.push_str(&format!(
+                "；检验表没有 m={} 档（已入库检验档位：{}；检验表仅覆盖 0.5/0.75/0.8/1/1.5，\
+                 其余档名义表有但检验表未并入，需另找表页）。",
+                trim(m),
+                list
+            ));
+        } else {
+            msg.push('。');
+        }
+    } else {
+        msg.push('。');
+    }
+    // 附近候选：同 m（若给了 m）按 |Δd_B| 取最近的 5 个不同 d_B；无同 m 行则退全表。
+    let mut pool: Vec<&InspectionRow> = inspection_rows()
+        .iter()
+        .filter(|r| m.is_none_or(|m| (r.m - m).abs() < DIN_M_TOL))
+        .collect();
+    if pool.is_empty() {
+        pool = inspection_rows().iter().collect();
+    }
+    pool.sort_by(|a, b| {
+        (a.d_b - d_b)
+            .abs()
+            .partial_cmp(&(b.d_b - d_b).abs())
+            .unwrap()
+    });
+    let mut seen: Vec<f64> = Vec::new();
+    let mut cands: Vec<String> = Vec::new();
+    for r in pool {
+        if seen.iter().any(|v| (*v - r.d_b).abs() < DIN_D_B_TOL) {
+            continue;
+        }
+        seen.push(r.d_b);
+        cands.push(format!(
+            "d_B={}（m={}，{}）",
+            trim(r.d_b),
+            trim(r.m),
+            r.source_note()
+        ));
+        if cands.len() >= 5 {
+            break;
+        }
+    }
+    if !cands.is_empty() {
+        msg.push_str(&format!("附近候选：{}。", cands.join("、")));
+    }
+    msg
+}
+
+/// 按 `(d_B, m, z)` 精确取一行检验值；同一 `(d_B, m)` 有多个 z 变体时列出可选 z 与来源。
+pub fn inspection_for(d_b: f64, m: f64, z: u32) -> Result<InspectionRow, String> {
+    let rows = lookup_inspection(d_b, Some(m))?;
+    if let Some(r) = rows.iter().find(|r| r.z == z) {
+        return Ok(r.clone());
+    }
+    let list = rows
+        .iter()
+        .map(|r| format!("z={}（{}）", r.z, r.source_note()))
+        .collect::<Vec<_>>()
+        .join("、");
+    Err(format!(
+        "DIN 5480-2 检验表：d_B={}、m={} 命中 {} 行但没有 z={}；同组的 z 变体：{}。",
+        trim(d_b),
+        trim(m),
+        rows.len(),
+        z,
+        list
+    ))
+}
+
+/// `m` 由名义表反查的检验查询：`(d_B, z)` 唯一定位 m 后走 [`inspection_for`]。
+pub fn inspection_for_d_b_z(d_b: f64, z: u32) -> Result<InspectionRow, String> {
+    if !(d_b.is_finite() && d_b > 0.0) {
+        return Err(format!("DIN 5480-2 检验表：d_B={} 必须是正数。", trim(d_b)));
+    }
+    let mut ms: Vec<f64> = din5480_rows()
+        .iter()
+        .filter(|r| (r.d_b - d_b).abs() < DIN_D_B_TOL && r.z == z)
+        .map(|r| r.m)
+        .collect();
+    ms.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    ms.dedup_by(|a, b| (*a - *b).abs() < DIN_M_TOL);
+    match ms.as_slice() {
+        [] => Err(format!(
+            "DIN 5480-2 检验表：名义表里没有 d_B={}、z={} 的行，无法反查 m；请直接给 m\
+             （数据来源：DIN 5480-2 名义表 674 行 + 检验表 220 行）。",
+            trim(d_b),
+            z
+        )),
+        [m] => inspection_for(d_b, *m, z),
+        many => Err(format!(
+            "DIN 5480-2 检验表：d_B={}、z={} 在名义表有多个 m 变体：{}；请直接给 m。",
+            trim(d_b),
+            z,
+            many.iter().map(|m| trim(*m)).collect::<Vec<_>>().join("、")
+        )),
+    }
+}
+
+/// `inv α = tanα − α` 的反解（bisection；α 解在 (−1.4, 1.4) 内才有值）。
+fn inv_solve(v: f64) -> Option<f64> {
+    if !v.is_finite() {
+        return None;
+    }
+    let (mut lo, mut hi) = (-1.4f64, 1.4f64);
+    if inv(lo) > v || inv(hi) < v {
+        return None;
+    }
+    for _ in 0..200 {
+        let mid = 0.5 * (lo + hi);
+        if inv(mid) < v {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    Some(0.5 * (lo + hi))
+}
+
+/// **公法线长度**（表行逐行反推验证的公式，α=30°）：
+/// `W_k = m·cosα·[(k−0.5)π + z·inv α] + 2·x·m·sinα`。
+pub fn base_tangent_length(m: f64, z: u32, x: f64, k: u32) -> f64 {
+    let a = 30f64.to_radians();
+    m * a.cos()
+        * ((k as f64 - 0.5) * std::f64::consts::PI + z as f64 * inv(a))
+        + 2.0 * x * m * a.sin()
+}
+
+/// **跨测齿数 k**（从 220 行检验表反推）：取最大 k 使对称跨测接触圆
+/// `d_M = 2·√(r_b² + (W_k/2)²)` 与齿顶圆 `d_a1` 留出 `≥ 0.07m` 齿顶凸出
+/// （`a = (d_a1 − d_M)/2 ≥ 0.07m`）。表内可算的 **217 行 217/217** 一致；
+/// 另 3 行为 k/z 的 OCR 残值（p18 z=35 的 k=63、z=93/97 重复残行）。
+pub fn span_teeth(m: f64, z: u32, x: f64) -> Result<u32, String> {
+    if !(m.is_finite() && m > 0.0) {
+        return Err(format!("DIN 5480-2 检验：m={} 必须是正数（跨测齿数 k）。", trim(m)));
+    }
+    if !(3..=1000).contains(&z) {
+        return Err(format!("DIN 5480-2 检验：齿数 z={} 超出范围（3..=1000）。", z));
+    }
+    if !x.is_finite() {
+        return Err(format!("DIN 5480-2 检验：变位系数 x={} 必须是有限数。", trim(x)));
+    }
+    let a = 30f64.to_radians();
+    let d = m * z as f64;
+    let rb = d * a.cos() / 2.0;
+    let d_a1 = d + 2.0 * x * m + 0.9 * m;
+    let limit = d_a1 - 2.0 * SPAN_TIP_MARGIN_FACTOR * m;
+    let mut best: Option<u32> = None;
+    for k in 1..z {
+        let w = base_tangent_length(m, z, x, k);
+        let d_m = 2.0 * (rb * rb + (w / 2.0) * (w / 2.0)).sqrt();
+        if d_m <= limit {
+            best = Some(k);
+        } else {
+            break;
+        }
+    }
+    best.ok_or_else(|| {
+        format!(
+            "DIN 5480-2 检验：m={}、z={}、x={} 没有可用的跨测齿数 k（齿数太小，接触圆超出齿顶圆）。",
+            trim(m),
+            z,
+            trim(x)
+        )
+    })
+}
+
+/// 量棒中心圆半径与奇/偶齿修正因子（DIN 5480-2 p09 式 (1)~(4)/(7)~(10)）：
+/// `invδ = invα + s/d ∓ D_M/d_b`（外花键取 `−π/z` 项再 `+D`；内花键 `−D`），
+/// `r_M = d_b/(2·cosδ)`；奇数齿的测量距离含 `cos(π/(2z))` 因子。
+fn ball_center_radius(
+    m: f64,
+    z: u32,
+    x: f64,
+    d_m: f64,
+    internal: bool,
+) -> Result<(f64, f64), String> {
+    if !(m.is_finite() && m > 0.0) {
+        return Err(format!("DIN 5480-2 检验：m={} 必须是正数（棒间距/跨棒距）。", trim(m)));
+    }
+    if !(3..=1000).contains(&z) {
+        return Err(format!("DIN 5480-2 检验：齿数 z={} 超出范围（3..=1000）。", z));
+    }
+    if !x.is_finite() {
+        return Err(format!("DIN 5480-2 检验：变位系数 x={} 必须是有限数。", trim(x)));
+    }
+    if !(d_m.is_finite() && d_m > 0.0) {
+        return Err(format!("DIN 5480-2 检验：量棒直径 D_M={} 必须是正数。", trim(d_m)));
+    }
+    let a = 30f64.to_radians();
+    let d = m * z as f64;
+    let db = d * a.cos();
+    let s = std::f64::consts::PI * m / 2.0 + 2.0 * x * m * a.tan();
+    if !(db > 0.0 && s > 0.0) {
+        return Err(format!(
+            "DIN 5480-2 检验：m={}、z={}、x={} 的几何量非正（d_b={}、s={}）。",
+            trim(m),
+            z,
+            trim(x),
+            trim(db),
+            trim(s)
+        ));
+    }
+    let inv_delta = if internal {
+        inv(a) + s / d - d_m / db
+    } else {
+        inv(a) + s / d - std::f64::consts::PI / z as f64 + d_m / db
+    };
+    let delta = inv_solve(inv_delta).ok_or_else(|| {
+        format!(
+            "DIN 5480-2 检验：invδ={inv_delta} 在范围内无解（m={}、z={}、x={}、D_M={}），\
+             请核对量棒/参数。",
+            trim(m),
+            z,
+            trim(x),
+            trim(d_m)
+        )
+    })?;
+    let r_m = db / (2.0 * delta.cos());
+    let fac = if z % 2 == 0 {
+        1.0
+    } else {
+        (std::f64::consts::PI / (2.0 * z as f64)).cos()
+    };
+    Ok((r_m, fac))
+}
+
+/// **外花键跨棒距 M1**（over 2 measuring circles）：偶齿 `2·r_M + D_M`，
+/// 奇齿 `2·r_M·cos(π/(2z)) + D_M`。
+pub fn measure_over_balls(m: f64, z: u32, x: f64, d_m: f64) -> Result<f64, String> {
+    let (r_m, fac) = ball_center_radius(m, z, x, d_m, false)?;
+    Ok(2.0 * r_m * fac + d_m)
+}
+
+/// **内花键棒间距 M2**（between 2 measuring circles）：偶齿 `2·r_M − D_M`，
+/// 奇齿 `2·r_M·cos(π/(2z)) − D_M`（`e = s = πm/2 + 2xm·tanα`）。
+pub fn measure_between_balls(m: f64, z: u32, x: f64, d_m: f64) -> Result<f64, String> {
+    let (r_m, fac) = ball_center_radius(m, z, x, d_m, true)?;
+    Ok(2.0 * r_m * fac - d_m)
+}
+
+/// 检验值查询结果：`row` 为 `Some` = 精确查表命中，`None` = 公式导出（自定义 z）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct InspectionResult {
+    /// 基准直径 `d_B`。
+    pub d_b: f64,
+    /// 模数 m。
+    pub m: f64,
+    /// 齿数 z。
+    pub z: u32,
+    /// 变位系数 x（查表命中 = 由 d_B 反解；公式路径 = 由 d_B 反解）。
+    pub x: f64,
+    /// 内花键量棒直径（配 M2）。
+    pub d_m_hub: f64,
+    /// 内花键棒间距 M2。
+    pub m2: f64,
+    /// 内花键偏差系数（表行才有；公式路径借用邻近行）。
+    pub a_m2: Option<f64>,
+    /// 外花键量棒直径（配 M1）。
+    pub d_m_shaft: f64,
+    /// 外花键跨棒距 M1。
+    pub m1: f64,
+    /// 外花键偏差系数。
+    pub a_m1: Option<f64>,
+    /// 跨测齿数 k。
+    pub k: u32,
+    /// 公法线长度 W_k。
+    pub w_k: f64,
+    /// 精确命中的检验表行（公式路径为 `None`）。
+    pub row: Option<InspectionRow>,
+    /// 来源说明（查表页/source 或「公式导出」）。
+    pub source: String,
+    /// 附加提示（脚注 a、公式借用邻近行的 D_M 等）。
+    pub notes: Vec<String>,
+}
+
+impl InspectionResult {
+    /// 是否精确查表命中（`false` = 公式导出）。
+    pub fn from_table(&self) -> bool {
+        self.row.is_some()
+    }
+}
+
+/// 公式路径借用 D_M 的邻近行（同 m、|Δz| 最小、同距取小 z）。
+fn nearest_inspection_row(m: f64, z: u32) -> Option<InspectionRow> {
+    inspection_rows()
+        .iter()
+        .filter(|r| (r.m - m).abs() < DIN_M_TOL)
+        .min_by(|a, b| {
+            let da = (a.z as f64 - z as f64).abs();
+            let db = (b.z as f64 - z as f64).abs();
+            da.partial_cmp(&db).unwrap().then(a.z.cmp(&b.z))
+        })
+        .cloned()
+}
+
+/// **检验值查询**：先按 `(d_B, m, z)` 精确查表；不在表里（自定义 z）则用公式导出
+/// （`x` 由 [`x_from_d_b`] 反解、`k` 由 [`span_teeth`]、D_M 取邻近表行）。
+/// 公式在全部可算表行上逐行对照通过（见 [`inspection_formula_report`]），否则报
+/// 「该 z 不在表中、公式未验证通过，请提供对应表页」。
+pub fn inspection_query(d_b: f64, m: f64, z: u32) -> Result<InspectionResult, String> {
+    if !(d_b.is_finite() && d_b > 0.0) {
+        return Err(format!("DIN 5480-2 检验表：d_B={} 必须是正数。", trim(d_b)));
+    }
+    if !(m.is_finite() && m > 0.0) {
+        return Err(format!("DIN 5480-2 检验表：m={} 必须是正数。", trim(m)));
+    }
+    if !(3..=1000).contains(&z) {
+        return Err(format!("DIN 5480-2 检验表：齿数 z={} 超出范围（3..=1000）。", z));
+    }
+    // ① 精确查表。
+    if let Some(row) = inspection_match(d_b, Some(m)).into_iter().find(|r| r.z == z) {
+        let mut notes = Vec::new();
+        if row.flags.contains("footnote_marker") {
+            notes.push(
+                "该表行带 a 脚注：测量点靠近齿根圆角或齿顶边缘，测量值不可靠（DIN 5480-2 表注）；\
+                 棒间距/跨棒距 M1/M2 优先。"
+                    .to_string(),
+            );
+        }
+        return Ok(InspectionResult {
+            d_b: row.d_b,
+            m: row.m,
+            z: row.z,
+            x: x_from_d_b(row.d_b, row.m, row.z),
+            d_m_hub: row.d_m_hub,
+            m2: row.m2,
+            a_m2: Some(row.a_m2),
+            d_m_shaft: row.d_m_shaft,
+            m1: row.m1,
+            a_m1: Some(row.a_m1),
+            k: row.k,
+            w_k: row.w_k,
+            source: format!("查表 {}", row.source_note()),
+            row: Some(row),
+            notes,
+        });
+    }
+    // ② 公式导出（自定义 z）。
+    if !inspection_formula_validated() {
+        return Err(format!(
+            "DIN 5480-2 检验表：z={z} 不在表中、公式未验证通过，请提供对应表页。"
+        ));
+    }
+    let near = nearest_inspection_row(m, z).ok_or_else(|| {
+        format!(
+            "DIN 5480-2 检验表：z={z} 不在表中，且公式不可用（缺量棒直径 D_M）——{}\
+             请提供对应表页。",
+            inspection_miss_message(d_b, Some(m))
+        )
+    })?;
+    let x = x_from_d_b(d_b, m, z);
+    if !(-0.05 - 1e-9..=0.45 + 1e-9).contains(&x) {
+        return Err(format!(
+            "DIN 5480-2 检验表：z={z} 不在表中；由 d_B={}、m={} 反解 x={} 超出 x∈[−0.05, 0.45]\
+             （DIN 5480-1），公式不可用 —— 请提供对应表页\
+             （数据来源：检验表 220 行 / p12·p16·p18·p20 + m=1.5 截图）。",
+            trim(d_b),
+            trim(m),
+            trim(x)
+        ));
+    }
+    let k = span_teeth(m, z, x)?;
+    let w_k = base_tangent_length(m, z, x, k);
+    let m1 = measure_over_balls(m, z, x, near.d_m_shaft)?;
+    let m2 = measure_between_balls(m, z, x, near.d_m_hub)?;
+    Ok(InspectionResult {
+        d_b,
+        m,
+        z,
+        x,
+        d_m_hub: near.d_m_hub,
+        m2,
+        a_m2: Some(near.a_m2),
+        d_m_shaft: near.d_m_shaft,
+        m1,
+        a_m1: Some(near.a_m1),
+        k,
+        w_k,
+        row: None,
+        source: format!("公式导出（z={z} 不在检验表中）"),
+        notes: vec![
+            format!(
+                "公式已与检验表逐行对照：可算 218/220 行，W_k/M1/M2 残差 ≤{}（17 处源表 OCR 异常已按源图核对）。",
+                trim(INSPECTION_TOL)
+            ),
+            format!(
+                "量棒直径借用邻近表行 {}：D_M_hub={}、D_M_shaft={}；k={k} 由跨测齿数规则反推。",
+                near.source_note(),
+                trim(near.d_m_hub),
+                trim(near.d_m_shaft)
+            ),
+        ],
+    })
+}
+
+/// 单行检验结果摘要（GUI/命令行 info 用；含来源）。
+pub fn inspection_summary(r: &InspectionResult) -> String {
+    format!(
+        "M1={}（D_M={}） M2={}（D_M={}） k={} W_k={}；{}",
+        trim(r.m1),
+        trim(r.d_m_shaft),
+        trim(r.m2),
+        trim(r.d_m_hub),
+        r.k,
+        trim(r.w_k),
+        r.source
+    )
+}
+
+/// `/api/invol_check`：`?db=40&m=2&z=18[&check=1]` → 检验值 JSON。
+/// 不给 `check`（或 `check=0`）时**只认精确查表命中**；`check=1`/`CHECK` 才允许公式导出。
+pub fn inspection_json(query: &str) -> Result<String, String> {
+    let param = |key: &str| {
+        query
+            .split('&')
+            .filter_map(|kv| kv.split_once('='))
+            .find(|(k, _)| *k == key)
+            .map(|(_, v)| v)
+    };
+    let db = param("db")
+        .or_else(|| param("d_b"))
+        .and_then(|v| v.parse::<f64>().ok())
+        .ok_or_else(|| "invol_check：缺 db（基准直径 d_B，例 ?db=40&m=2&z=18）".to_string())?;
+    let m = param("m")
+        .and_then(|v| v.parse::<f64>().ok())
+        .ok_or_else(|| "invol_check：缺 m（模数，例 ?db=40&m=2&z=18）".to_string())?;
+    let z = param("z")
+        .and_then(|v| v.parse::<u32>().ok())
+        .ok_or_else(|| "invol_check：缺 z（齿数，例 ?db=40&m=2&z=18）".to_string())?;
+    let check = param("check").is_some_and(|v| !(v == "0" || v.eq_ignore_ascii_case("false")));
+    if !check && inspection_match(db, Some(m)).iter().all(|r| r.z != z) {
+        return Err(format!(
+            "{}（公式导出请加 check=1 / CHECK）",
+            inspection_miss_message(db, Some(m))
+        ));
+    }
+    let r = inspection_query(db, m, z)?;
+    let mut obj = serde_json::json!({
+        "ok": true,
+        "from_table": r.from_table(),
+        "db": r.d_b,
+        "m": r.m,
+        "z": r.z,
+        "x": r.x,
+        "d_m_hub": r.d_m_hub,
+        "m2": r.m2,
+        "a_m2": r.a_m2,
+        "d_m_shaft": r.d_m_shaft,
+        "m1": r.m1,
+        "a_m1": r.a_m1,
+        "k": r.k,
+        "w_k": r.w_k,
+        "source": r.source,
+        "notes": r.notes,
+    });
+    if let Some(row) = &r.row {
+        obj["page"] = serde_json::json!(row.page);
+        obj["table_no"] = serde_json::json!(row.table_no);
+        obj["row_source"] = serde_json::json!(row.source);
+        obj["flags"] = serde_json::json!(row.flags);
+    }
+    Ok(obj.to_string())
+}
+
+/// 检验表一行（含公式算值）的逐行残差。
+#[derive(Debug, Clone, PartialEq)]
+pub struct InspectionResidual {
+    /// 源页码。
+    pub page: u16,
+    /// 页内表号。
+    pub table_no: u32,
+    /// OCR 来源。
+    pub source: String,
+    /// 模数。
+    pub m: f64,
+    /// 基准直径。
+    pub d_b: f64,
+    /// 齿数。
+    pub z: u32,
+    /// 名义表反查的 x（`None` = 名义表无该 (m,d_B,z)，如 z=93/97 残行）。
+    pub x: Option<f64>,
+    /// 表值 W_k / M1 / M2。
+    pub w_k_table: f64,
+    /// 表值 M1。
+    pub m1_table: f64,
+    /// 表值 M2。
+    pub m2_table: f64,
+    /// 公式算值。
+    pub w_k_calc: Option<f64>,
+    /// 公式算值 M1。
+    pub m1_calc: Option<f64>,
+    /// 公式算值 M2。
+    pub m2_calc: Option<f64>,
+    /// 残差（表值 − 算值，绝对值）。
+    pub w_k_residual: Option<f64>,
+    /// M1 残差。
+    pub m1_residual: Option<f64>,
+    /// M2 残差。
+    pub m2_residual: Option<f64>,
+    /// 异常说明（空串 = 通过）。
+    pub note: String,
+}
+
+/// 逐行残差报告汇总。
+#[derive(Debug, Clone, PartialEq)]
+pub struct InspectionFormulaReport {
+    /// 入库总行数。
+    pub total: usize,
+    /// 有名义 x、可做公式对照的行数。
+    pub checked: usize,
+    /// 无名义 x 被跳过的行 `(page, d_B, z)`。
+    pub skipped: Vec<(u16, f64, u32)>,
+    /// 原始残差 ≤ 容差的行数（W_k / M1 / M2）。
+    pub w_k_pass: usize,
+    /// M1 通过行数。
+    pub m1_pass: usize,
+    /// M2 通过行数。
+    pub m2_pass: usize,
+    /// 通过行的最大残差。
+    pub max_w_k_residual: f64,
+    /// 通过行的最大 M1 残差。
+    pub max_m1_residual: f64,
+    /// 通过行的最大 M2 残差。
+    pub max_m2_residual: f64,
+    /// > 容差的源数据异常（含源图核对后的修正说明，未改写 CSV）。
+    pub anomalies: Vec<String>,
+    /// 公式是否全表验证通过（异常均有源图核对修正且修正后通过）。
+    pub validated: bool,
+    /// 一行摘要。
+    pub summary: String,
+}
+
+/// 已按源图人工核对的 OCR 异常（17 处：16 处量棒直径/表值 + 1 处 k）：
+/// `(page, m, d_B, z, 字段, 源图正确值)`。字段 = `d_m_hub`/`d_m_shaft`/`m2`/`k`。
+/// **不改写入库 CSV**，只用于残差报告的「修正后复核」与公式可信度判定。
+const INSPECTION_OCR_FIXES: &[(u16, f64, f64, u32, &str, f64)] = &[
+    (16, 0.75, 25.0, 32, "d_m_shaft", 1.55),
+    (16, 0.75, 28.0, 36, "d_m_shaft", 1.55),
+    (16, 0.75, 32.0, 41, "d_m_shaft", 1.55),
+    (16, 0.75, 34.0, 44, "d_m_shaft", 1.55),
+    (16, 0.75, 37.0, 48, "d_m_shaft", 1.55),
+    (16, 0.75, 38.0, 49, "d_m_shaft", 1.55),
+    (16, 0.75, 42.0, 54, "d_m_shaft", 1.55),
+    (16, 0.75, 45.0, 58, "d_m_shaft", 1.55),
+    (16, 0.75, 48.0, 62, "d_m_shaft", 1.55),
+    (18, 0.8, 17.0, 20, "d_m_hub", 1.55),
+    (18, 0.8, 28.0, 34, "d_m_hub", 1.55),
+    (18, 0.8, 34.0, 41, "d_m_hub", 1.55),
+    (18, 0.8, 36.0, 44, "d_m_hub", 1.55),
+    (18, 0.8, 45.0, 55, "d_m_hub", 1.55),
+    (18, 0.8, 52.0, 64, "d_m_hub", 1.55),
+    (20, 1.0, 10.0, 8, "m2", 5.583),
+    (18, 0.8, 29.0, 35, "k", 6.0),
+];
+
+/// 查找源图核对修正记录。
+fn inspection_ocr_fix(
+    page: u16,
+    m: f64,
+    d_b: f64,
+    z: u32,
+) -> Option<&'static (u16, f64, f64, u32, &'static str, f64)> {
+    INSPECTION_OCR_FIXES.iter().find(|(p, mm, db, zz, _, _)| {
+        *p == page
+            && (*mm - m).abs() < DIN_M_TOL
+            && (*db - d_b).abs() < DIN_D_B_TOL
+            && *zz == z
+    })
+}
+
+/// 220 行逐行残差（表值 vs 公式值；`x` 由名义表反查）。
+pub fn inspection_residuals() -> Vec<InspectionResidual> {
+    let mut out = Vec::with_capacity(inspection_rows().len());
+    for row in inspection_rows() {
+        let nom = din5480_rows().iter().find(|r| {
+            (r.m - row.m).abs() < DIN_M_TOL
+                && (r.d_b - row.d_b).abs() < DIN_D_B_TOL
+                && r.z == row.z
+        });
+        let mut res = InspectionResidual {
+            page: row.page,
+            table_no: row.table_no,
+            source: row.source.clone(),
+            m: row.m,
+            d_b: row.d_b,
+            z: row.z,
+            x: nom.map(|r| r.x),
+            w_k_table: row.w_k,
+            m1_table: row.m1,
+            m2_table: row.m2,
+            w_k_calc: None,
+            m1_calc: None,
+            m2_calc: None,
+            w_k_residual: None,
+            m1_residual: None,
+            m2_residual: None,
+            note: String::new(),
+        };
+        let Some(x) = res.x else {
+            res.note = "名义表无该 (m,d_B,z)（z 疑 OCR 残行，不参与公式对照）".to_string();
+            out.push(res);
+            continue;
+        };
+        let w = base_tangent_length(row.m, row.z, x, row.k);
+        let m1 = measure_over_balls(row.m, row.z, x, row.d_m_shaft);
+        let m2 = measure_between_balls(row.m, row.z, x, row.d_m_hub);
+        res.w_k_calc = Some(w);
+        res.w_k_residual = Some((w - row.w_k).abs());
+        match m1 {
+            Ok(v) => {
+                res.m1_calc = Some(v);
+                res.m1_residual = Some((v - row.m1).abs());
+            }
+            Err(e) => res.note.push_str(&format!("M1 计算失败：{e} ")),
+        }
+        match m2 {
+            Ok(v) => {
+                res.m2_calc = Some(v);
+                res.m2_residual = Some((v - row.m2).abs());
+            }
+            Err(e) => res.note.push_str(&format!("M2 计算失败：{e} ")),
+        }
+        // 异常标注 + 源图核对修正复核。
+        let mut bad = Vec::new();
+        if res.w_k_residual.is_some_and(|r| r > INSPECTION_TOL) {
+            bad.push("W_k");
+        }
+        if res.m1_residual.is_some_and(|r| r > INSPECTION_TOL) {
+            bad.push("M1");
+        }
+        if res.m2_residual.is_some_and(|r| r > INSPECTION_TOL) {
+            bad.push("M2");
+        }
+        if !bad.is_empty() {
+            match inspection_ocr_fix(row.page, row.m, row.d_b, row.z) {
+                Some((_, _, _, _, field, value)) => {
+                    // 用源图正确值重算该字段。
+                    let fixed = match *field {
+                        "d_m_shaft" => Some(
+                            measure_over_balls(row.m, row.z, x, *value)
+                                .map(|v| (v - row.m1).abs())
+                                .unwrap_or((*value - row.m1).abs()),
+                        ),
+                        "d_m_hub" => Some(
+                            measure_between_balls(row.m, row.z, x, *value)
+                                .map(|v| (v - row.m2).abs())
+                                .unwrap_or((*value - row.m2).abs()),
+                        ),
+                        "m2" => res.m2_calc.map(|calc| (calc - *value).abs()),
+                        "k" => Some((base_tangent_length(row.m, row.z, x, *value as u32) - row.w_k).abs()),
+                        _ => None,
+                    };
+                    let fixed_ok = fixed.is_some_and(|r| r <= INSPECTION_TOL);
+                    res.note = format!(
+                        "源表 OCR 异常（{} 与公式不一致）：{} 印为 {}、源图为 {}；修正后{}。",
+                        bad.join("/"),
+                        field,
+                        if *field == "k" {
+                            row.k.to_string()
+                        } else {
+                            trim(match *field {
+                                "d_m_shaft" => row.d_m_shaft,
+                                "d_m_hub" => row.d_m_hub,
+                                "m2" => row.m2,
+                                _ => row.k as f64,
+                            })
+                        },
+                        trim(*value),
+                        if fixed_ok { "通过（≤2e-3）" } else { "仍不一致" }
+                    );
+                }
+                None => {
+                    res.note = format!("与公式不一致（{}，无源图核对记录）", bad.join("/"));
+                }
+            }
+        }
+        out.push(res);
+    }
+    out
+}
+
+static INSPECTION_FORMULA_REPORT: OnceLock<InspectionFormulaReport> = OnceLock::new();
+
+/// 220 行逐行对照报告（缓存；含最大残差、异常清单与“公式已验证”判定）。
+pub fn inspection_formula_report() -> &'static InspectionFormulaReport {
+    INSPECTION_FORMULA_REPORT.get_or_init(|| {
+        let residuals = inspection_residuals();
+        let mut report = InspectionFormulaReport {
+            total: residuals.len(),
+            checked: 0,
+            skipped: Vec::new(),
+            w_k_pass: 0,
+            m1_pass: 0,
+            m2_pass: 0,
+            max_w_k_residual: 0.0,
+            max_m1_residual: 0.0,
+            max_m2_residual: 0.0,
+            anomalies: Vec::new(),
+            validated: true,
+            summary: String::new(),
+        };
+        for r in &residuals {
+            let Some(_) = r.x else {
+                report.skipped.push((r.page, r.d_b, r.z));
+                continue;
+            };
+            report.checked += 1;
+            if let Some(v) = r.w_k_residual {
+                if v <= INSPECTION_TOL {
+                    report.w_k_pass += 1;
+                    report.max_w_k_residual = report.max_w_k_residual.max(v);
+                }
+            }
+            if let Some(v) = r.m1_residual {
+                if v <= INSPECTION_TOL {
+                    report.m1_pass += 1;
+                    report.max_m1_residual = report.max_m1_residual.max(v);
+                }
+            }
+            if let Some(v) = r.m2_residual {
+                if v <= INSPECTION_TOL {
+                    report.m2_pass += 1;
+                    report.max_m2_residual = report.max_m2_residual.max(v);
+                }
+            }
+            if !r.note.is_empty() {
+                let fix_ok = inspection_ocr_fix(r.page, r.m, r.d_b, r.z)
+                    .is_some_and(|(_, _, _, _, _, _)| r.note.contains("修正后通过"));
+                if !fix_ok {
+                    report.validated = false;
+                }
+                report.anomalies.push(format!(
+                    "p{} d_B={} m={} z={}（{}）：{}",
+                    r.page,
+                    trim(r.d_b),
+                    trim(r.m),
+                    r.z,
+                    r.source,
+                    r.note
+                ));
+            }
+        }
+        report.summary = format!(
+            "DIN 5480-2 检验表逐行对照：{} 行（可算 {}，跳过 {} 行无名义 x）；W_k {}/{} 行、\
+             M1 {}/{} 行、M2 {}/{} 行残差 ≤{}（max W_k {:.4} / M1 {:.4} / M2 {:.4}）；\
+             源数据 OCR 异常 {} 处（已按源图核对、未改写 CSV，修正后全部 ≤{}）：公式{}。",
+            report.total,
+            report.checked,
+            report.skipped.len(),
+            report.w_k_pass,
+            report.checked,
+            report.m1_pass,
+            report.checked,
+            report.m2_pass,
+            report.checked,
+            trim(INSPECTION_TOL),
+            report.max_w_k_residual,
+            report.max_m1_residual,
+            report.max_m2_residual,
+            report.anomalies.len(),
+            trim(INSPECTION_TOL),
+            if report.validated { "验证通过" } else { "未通过" }
+        );
+        report
+    })
+}
+
+/// 公式是否已通过 220 行逐行对照（未通过时 [`inspection_query`] 拒绝自定义 z）。
+pub fn inspection_formula_validated() -> bool {
+    inspection_formula_report().validated
 }
 
 // ─────────────────────────── 参数 ───────────────────────────
@@ -1758,6 +2752,228 @@ mod tests {
         // d_B 反解越界（x>0.45）。
         let e = resolve_din_by_d_b(100.0, Some(2.0), Some(10), None).unwrap_err();
         assert!(e.contains("超出") && e.contains("0.45"), "{e}");
+    }
+
+    // ── DIN 5480-2 检验表（M₁/M₂/D_M/k/W_k）──
+
+    /// 入库形状：220 行 / 5 档 / 页表号 / flags 保留 / 首行数值。
+    #[test]
+    fn din5480_inspection_table_shape_and_parse() {
+        let rows = inspection_rows();
+        assert_eq!(rows.len(), 220, "检验表入库 220 行（164 + m=1.5 截图 56）");
+        assert_eq!(inspection_modules(), vec![0.5, 0.75, 0.8, 1.0, 1.5]);
+        assert!(!rows.iter().any(|r| (r.m - 5.0).abs() < 1e-9), "m=5 未入库");
+        let pages: std::collections::BTreeSet<(u16, u32)> =
+            rows.iter().map(|r| (r.page, r.table_no)).collect();
+        for want in [(12, 3), (16, 7), (18, 9), (20, 11), (2, 15)] {
+            assert!(pages.contains(&want), "应有 p{}/表{}：{pages:?}", want.0, want.1);
+        }
+        // flags 原样保留：m=1.5 的 15 处粘连 k 修正记录可查。
+        assert!(
+            rows.iter()
+                .any(|r| r.flags.contains("row:vote_suspect:k:expected=10")),
+            "m=1.5 的 k 修正 flags 应保留"
+        );
+        assert!(rows.iter().any(|r| r.source == "user_screenshot_2"));
+        // 首行（p12 m=0.5 d_B=6 z=10）。
+        let r = rows.first().expect("非空");
+        assert_eq!((r.page, r.table_no, r.z), (12, 3, 10));
+        assert!((r.m - 0.5).abs() < 1e-9 && (r.d_b - 6.0).abs() < 1e-9);
+        assert!((r.d_m_hub - 1.0).abs() < 1e-9 && (r.m2 - 3.796).abs() < 1e-9);
+        assert!((r.a_m2 - 2.01).abs() < 1e-9);
+        assert!((r.d_m_shaft - 1.55).abs() < 1e-9 && (r.m1 - 8.215).abs() < 1e-9);
+        assert!((r.a_m1 - 1.14).abs() < 1e-9);
+        assert_eq!(r.k, 3);
+        assert!((r.w_k - 3.859).abs() < 1e-9);
+        assert_eq!(r.source_note(), "p12 表3（source=A）");
+    }
+
+    /// 查表：各档抽样命中 / 多行变体 / 缺档与未收录档位 / 附近候选带 source。
+    #[test]
+    fn din5480_inspection_lookup_hits_multirow_and_missing() {
+        // 5 档各抽一行（值直接来自 CSV）。
+        let cases: [(f64, f64, u32, f64, f64, u32, f64); 5] = [
+            (0.5, 6.0, 10, 8.215, 3.796, 3, 3.859),
+            (0.75, 6.0, 6, 11.061, 2.674, 2, 3.608),
+            (0.8, 6.0, 6, 9.784, 2.837, 2, 3.648),
+            (1.0, 8.0, 6, 14.388, 3.910, 2, 4.810),
+            (1.5, 12.0, 6, 20.173, 6.180, 2, 7.216),
+        ];
+        for (m, d_b, z, m1, m2, k, w_k) in cases {
+            let r = inspection_for(d_b, m, z)
+                .unwrap_or_else(|e| panic!("m={m} d_B={d_b} z={z}：{e}"));
+            assert!((r.m1 - m1).abs() < 1e-9 && (r.m2 - m2).abs() < 1e-9, "{r:?}");
+            assert_eq!(r.k, k);
+            assert!((r.w_k - w_k).abs() < 1e-9, "{r:?}");
+            let hits = lookup_inspection(d_b, Some(m)).expect("应命中");
+            assert!(hits.iter().any(|h| h.z == z && h.page == r.page));
+        }
+        // 多行变体：m=0.8/d_B=20 → z=24 与 OCR 残行 z=93。
+        let rows = lookup_inspection(20.0, Some(0.8)).unwrap();
+        assert_eq!(rows.len(), 2, "{rows:?}");
+        assert_eq!(rows.iter().map(|r| r.z).collect::<Vec<_>>(), vec![24, 93]);
+        // 不给 m 也能命中（跨 m 同 d_B）并带 page/source。
+        let all = lookup_inspection(6.0, None).unwrap();
+        assert!(all.len() >= 2 && all.iter().all(|r| !r.source.is_empty()));
+        // 未命中 → 附近候选带页码/source。
+        let e = lookup_inspection(41.0, Some(1.0)).unwrap_err();
+        assert!(e.contains("附近候选") && e.contains("source="), "{e}");
+        // 缺档 m=5：明确“数据缺失（源图渲染缺陷、已剔除）”。
+        let e = lookup_inspection(50.0, Some(5.0)).unwrap_err();
+        assert!(
+            e.contains("检验数据缺失") && e.contains("渲染缺陷") && e.contains("剔除"),
+            "{e}"
+        );
+        // 检验表未收录档位（m=2）：给已入库检验档位。
+        let e = lookup_inspection(10.0, Some(2.0)).unwrap_err();
+        assert!(
+            e.contains("检验表没有 m=2") && e.contains("0.5、0.75、0.8、1、1.5"),
+            "{e}"
+        );
+        // 非法输入。
+        assert!(lookup_inspection(-1.0, None).unwrap_err().contains("正数"));
+        assert!(lookup_inspection(10.0, Some(0.0)).unwrap_err().contains("正数"));
+    }
+
+    /// `inspection_for` 精确取值 + 由名义表反查 m 的 `inspection_for_d_b_z`。
+    #[test]
+    fn din5480_inspection_exact_for_and_d_b_z() {
+        let r = inspection_for(6.0, 0.5, 10).unwrap();
+        assert!((r.m1 - 8.215).abs() < 1e-9 && (r.m2 - 3.796).abs() < 1e-9);
+        assert_eq!(r.source_note(), "p12 表3（source=A）");
+        // 同一 (d_B,m) 没有 z=11 → 报错列可选 z 与来源。
+        let e = inspection_for(6.0, 0.5, 11).unwrap_err();
+        assert!(e.contains("没有 z=11") && e.contains("z=10") && e.contains("source="), "{e}");
+        // 反查 m：名义表 d_B=6 z=10 → m=0.5。
+        let r2 = inspection_for_d_b_z(6.0, 10).unwrap();
+        assert_eq!(r, r2);
+        let e = inspection_for_d_b_z(6.0, 11).unwrap_err();
+        assert!(e.contains("无法反查"), "{e}");
+    }
+
+    /// 220 行逐行公式对照（残差报告）：W_k/M1/M2 与表值、异常清单与验证结论。
+    #[test]
+    fn din5480_inspection_formulas_match_every_row() {
+        let report = inspection_formula_report();
+        assert_eq!(report.total, 220);
+        assert_eq!(report.checked, 218, "z=93/97 两条 OCR 残行无名义 x");
+        assert_eq!(report.skipped.len(), 2);
+        assert_eq!(report.w_k_pass, 217, "{}", report.summary);
+        assert_eq!(report.m1_pass, 209, "{}", report.summary);
+        assert_eq!(report.m2_pass, 211, "{}", report.summary);
+        assert_eq!(report.anomalies.len(), 17, "{}", report.summary);
+        assert!(report.validated, "{}", report.summary);
+        assert!(report.max_w_k_residual <= INSPECTION_TOL, "{}", report.summary);
+        assert!(report.max_m1_residual <= INSPECTION_TOL, "{}", report.summary);
+        assert!(report.max_m2_residual <= INSPECTION_TOL, "{}", report.summary);
+        // 残差报告里对源数据 OCR 异常的具体说明。
+        let res = inspection_residuals();
+        assert_eq!(res.len(), 220);
+        let k_row = res
+            .iter()
+            .find(|r| r.page == 18 && (r.d_b - 29.0).abs() < 1e-9 && r.z == 35)
+            .expect("k=63 异常行");
+        assert!(
+            k_row.note.contains("W_k") && k_row.note.contains("源图") && k_row.note.contains("6"),
+            "{k_row:?}"
+        );
+        let d_row = res
+            .iter()
+            .find(|r| r.page == 16 && (r.d_b - 37.0).abs() < 1e-9 && r.z == 48)
+            .expect("p16 D_M 异常行");
+        assert!(
+            d_row.note.contains("d_m_shaft") && d_row.note.contains("1.55"),
+            "{d_row:?}"
+        );
+        let m2_row = res
+            .iter()
+            .find(|r| r.page == 20 && (r.d_b - 10.0).abs() < 1e-9 && r.z == 8)
+            .expect("p20 M2 异常行");
+        assert!(
+            m2_row.note.contains("m2") && m2_row.note.contains("5.583"),
+            "{m2_row:?}"
+        );
+    }
+
+    /// 跨测齿数 k 规则：表内可算的 217 行 217/217 命中（k=63 行为 OCR 残值）。
+    #[test]
+    fn din5480_inspection_span_teeth_rule_matches_table() {
+        let mut ok = 0usize;
+        for row in inspection_rows() {
+            let Some(nom) = din5480_rows().iter().find(|r| {
+                (r.m - row.m).abs() < 1e-9 && (r.d_b - row.d_b).abs() < 1e-9 && r.z == row.z
+            }) else {
+                continue; // z=93/97
+            };
+            let k = span_teeth(row.m, row.z, nom.x)
+                .unwrap_or_else(|e| panic!("p{} z={}：{e}", row.page, row.z));
+            if row.k > 30 {
+                assert_eq!(k, 6, "p{} z={} 的 k=63 应反推为 6", row.page, row.z);
+                continue;
+            }
+            assert_eq!(
+                k, row.k,
+                "p{} m={} d_B={} z={}：表 k={}、规则 k={}",
+                row.page, row.m, row.d_b, row.z, row.k, k
+            );
+            ok += 1;
+        }
+        assert_eq!(ok, 217);
+    }
+
+    /// 自定义 z（不在表里）：公式算 W_k/M1/M2（含奇数齿修正）；不可算时明确报错。
+    #[test]
+    fn din5480_inspection_custom_z_formula_and_errors() {
+        // m=0.5 检验表只覆盖偶 z；d_B=11.25,m=0.5,z=21 → x=0.2 由公式导出。
+        let r = inspection_query(11.25, 0.5, 21).unwrap();
+        assert!(r.row.is_none() && !r.from_table());
+        assert!((r.x - 0.2).abs() < 1e-9, "x={}", r.x);
+        assert_eq!(r.k, 4);
+        assert!((r.w_k - 5.35).abs() < 1e-4, "W_k={}", r.w_k);
+        assert!((r.m1 - 12.763_794).abs() < 1e-4, "M1={}", r.m1);
+        assert!((r.m2 - 8.996_690).abs() < 1e-4, "M2={}", r.m2);
+        assert!((r.d_m_shaft - 1.2).abs() < 1e-9 && (r.d_m_hub - 1.0).abs() < 1e-9);
+        assert!(r.source.contains("公式") && r.source.contains("不在检验表"));
+        assert!(r.notes.iter().any(|n| n.contains("逐行对照")));
+        assert!(r.notes.iter().any(|n| n.contains("邻近表行")));
+        // 偶数齿表内命中对照（查表优先）。
+        let t = inspection_query(6.0, 0.5, 10).unwrap();
+        assert!(t.from_table());
+        assert!((t.m1 - 8.215).abs() < 1e-9 && (t.m2 - 3.796).abs() < 1e-9 && t.k == 3);
+        // 奇数齿修正与偶数齿不同：同一 (11.25,0.5,20) 用偶齿公式。
+        let even = inspection_query(11.0, 0.5, 20).unwrap();
+        assert!(even.from_table());
+        assert!(even.m1 != r.m1, "20 与 21 齿的 M1 不应相等");
+        // x 超界 → 明确报“请提供对应表页”。
+        let e = inspection_query(6.6, 0.5, 21).unwrap_err();
+        assert!(e.contains("超出") && e.contains("请提供对应表页"), "{e}");
+        // 检验表没有 m=2 档 → 公式缺 D_M，明确报缺档。
+        let e = inspection_query(22.1, 2.0, 21).unwrap_err();
+        assert!(e.contains("检验表没有 m=2") && e.contains("请提供对应表页"), "{e}");
+    }
+
+    /// `/api/invol_check` JSON：默认只查表；`check=1` 才公式导出。
+    #[test]
+    fn din5480_inspection_json_check_switch() {
+        let j = inspection_json("db=6&m=0.5&z=10").unwrap();
+        let v: serde_json::Value = serde_json::from_str(&j).unwrap();
+        assert_eq!(v["ok"], true);
+        assert_eq!(v["from_table"], true);
+        assert_eq!(v["page"], 12);
+        assert_eq!(v["table_no"], 3);
+        assert_eq!(v["row_source"], "A");
+        assert!((v["m1"].as_f64().unwrap() - 8.215).abs() < 1e-9);
+        assert!(v["source"].as_str().unwrap().contains("查表 p12"));
+        // 不开关：z 不在表 → 报错并提示 check=1。
+        let e = inspection_json("db=11.25&m=0.5&z=21").unwrap_err();
+        assert!(e.contains("check=1") && e.contains("无命中"), "{e}");
+        // 开关：公式导出。
+        let j = inspection_json("db=11.25&m=0.5&z=21&check=1").unwrap();
+        let v: serde_json::Value = serde_json::from_str(&j).unwrap();
+        assert_eq!(v["from_table"], false);
+        assert_eq!(v["k"], 4);
+        assert!((v["m1"].as_f64().unwrap() - 12.763_794).abs() < 1e-4);
+        assert!(v["source"].as_str().unwrap().contains("公式"));
     }
 
     // ── CSV dump（示例件，供人工审图）──

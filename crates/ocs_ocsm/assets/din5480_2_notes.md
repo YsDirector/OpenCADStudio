@@ -3,7 +3,7 @@
 - 版本：DIN 5480-2:2015-03（名义尺寸表 + 检验尺寸表）。
 - 入库文件：
   - `crates/ocs_ocsm/assets/din5480_2_nominal.csv`（**674 行**；`invol_spline.rs` 用 `include_str!` 编译进插件，主路径查表用）。
-  - `crates/ocs_ocsm/assets/din5480_2_inspection.csv`（**220 行**；检验尺寸数据入库，尚未接入代码）。
+  - `crates/ocs_ocsm/assets/din5480_2_inspection.csv`（**220 行**；检验尺寸数据，已接入 `invol_spline.rs` 的解析/查询/公式路径）。
 - 源文件：
   - 名义表：`~/桌面/OCSM/review/花键标准资料/DIN5480-2_名义表_续2_merged.csv`（665 数据行）+ `DIN5480-2_m15_名义表.csv`（用户截图 1，56 行）。
   - 检验表：`DIN5480-2_检验表_merged.csv`（p12/p16/p18/p20，164 行）+ `DIN5480-2_m15_检验表.csv`（用户截图 2，56 行）。
@@ -85,3 +85,31 @@ x₁ = (d_B − m(z + 1.1)) / (2m)
   命中可能多行；未命中列附近候选；剔除档位（m=5）明确报错；m=1.5 已可正常命中。
 - `resolve_din_by_d_b(d_b, m?, z?, x?)`：`DB+M` 补 `Z`、`DB+Z` 补 `M`、
   `DB+M+Z` 公式解 `x` 并与表值互相印证；结果带来源（查表行 / 公式）。
+
+## 检验尺寸表接入（2026-09-21）
+
+- 解析：`inspection_rows()` / `inspection_modules()`（`InspectionRow` 保留 `flags`/`source`）；
+  列语义按原表：CSV 第一组 `D_M_1/M2_between/A_M2` 是**内花键 M2**（棒间距），
+  第二组 `D_M_2/M1_over/A_M1` 是**外花键 M1**（跨棒距）——原表列头两组
+  `D_M | M | A*` 对应 p08 图 4。
+- 查询：`lookup_inspection(d_b, m?)`（多行/附近候选/缺档）、`inspection_for(d_b,m,z)`、
+  `inspection_for_d_b_z(d_b,z)`（m 由名义表反查）、`inspection_query(d_b,m,z)`
+  （查表优先，表外 z 走公式）、`inspection_json` → `GET /api/invol_check?db=..&m=..&z=..[&check=1]`。
+  所有错误信息带页/表号/source。
+- 公式（DIN 5480-2 p09 式 (1)~(11)，α=30°）：
+  `W_k = m·cosα[(k−0.5)π + z·invα] + 2·x·m·sinα`；
+  外花键 `invδ = invα + s/d − π/z + D_M/d_b`、内花键 `invδ = invα + s/d − D_M/d_b`（e=s），
+  `r_M = d_b/(2cosδ)`；偶数齿 `M1 = 2r_M + D_M` / `M2 = 2r_M − D_M`，
+  奇数齿再乘 `cos(π/(2z))`。
+- 逐行对照（`inspection_formula_report()`，容差 2e-3）：220 行中 218 行可算
+  （z=93/97 两条 OCR 残行无名义 x）；W_k 217/218、M1 209/218、M2 211/218 直接通过；
+  **17 处源表 OCR 异常**（p16 9 处 `D_M_2` 印 1.65/1.85 应为 1.55；p18 6 处 `D_M_1` 同；
+  p20 z=8 一处 `M2` 印 5.983 应为 5.583）与 1 处 `k`（p18 z=35 印 63 应为 6）
+  已逐张核对源图（p16/p18/p20 截图），修正后 17/17 ≤2e-3 → `validated=true`。
+  **入库 CSV 未改写**，修正值存于 `invol_spline.rs` 的 `INSPECTION_OCR_FIXES` 常量。
+- 表外自定义 z：`x` 由 `x_from_d_b` 反解（超 [−0.05,0.45] → 明确报“请提供对应表页”）、
+  `k` 由“接触圆离齿顶 ≥0.07m”规则反推（表内 217 行 217/217 命中）、
+  `D_M` 借用同 m 最邻近表行；结果带“公式导出/邻近行”来源说明。
+- 露面：`XL detail_invol_spline ... CHECK` 与 `INVOLSPLINE ... CHECK` 把
+  `inspection_summary`（M1/M2/D_M/k/W_k + 来源）附到 spec/模型；默认不开、既有行为不变。
+  两个 GUI（parts/shaft）派生值面板按 `din_inspection` 表同步显示检验值。

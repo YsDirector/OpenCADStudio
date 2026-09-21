@@ -597,6 +597,14 @@ fn route(
                 Err(e) => (400, json, serde_json::json!({"ok": false, "error": e}).to_string()),
             }
         }
+        // DIN 5480-2 检验尺寸（M₁/M₂/D_M/k/W_k）：默认只查表；`&check=1` 才公式导出。
+        ("GET", t) if t.starts_with("/api/invol_check") => {
+            let q = t.split_once('?').map(|(_, q)| q).unwrap_or("");
+            match crate::invol_spline::inspection_json(q) {
+                Ok(s) => (200, json, s),
+                Err(e) => (400, json, serde_json::json!({"ok": false, "error": e}).to_string()),
+            }
+        }
         ("POST", "/api/gear_export") => api_gear_export(body, &sender!()),
         ("GET", t) if t.starts_with("/api/shaft_preview") => api_shaft_preview(t, &[]),
         ("POST", "/api/shaft_preview") => api_shaft_preview("", body),
@@ -13506,6 +13514,16 @@ mod weld_tests {
             resp.contains("z12 x0.1167 d_B20 L20（查表命中 p1 m=1.5）"),
             "m=1.5 查表 meta：{resp}"
         );
+        // CHECK：DIN 检验尺寸（M1/M2/D_M/k/W_k）只在开关时附到 spec，默认行为不变。
+        let chk = br#"{"family":"detail_invol_spline","d":0,"spec":"DIN30","params":{"db":6,"m":0.5,"z":10,"len":20,"check":1},"view":"side"}"#;
+        let resp = apply_part_pick(&sender, chk).expect("CHECK 插入");
+        assert!(
+            resp.contains("M1=8.215") && resp.contains("M2=3.796") && resp.contains("查表 p12"),
+            "CHECK 检验 meta：{resp}"
+        );
+        let no = br#"{"family":"detail_invol_spline","d":0,"spec":"DIN30","params":{"db":6,"m":0.5,"z":10,"len":20},"view":"side"}"#;
+        let resp = apply_part_pick(&sender, no).expect("不开 CHECK 插入");
+        assert!(!resp.contains("M1="), "不开 CHECK 不应带检验值：{resp}");
     }
 
     /// 外螺纹退刀槽出库：`params` 同样走 `apply_part_export`（建块 + 待放置）。
@@ -13872,6 +13890,59 @@ mod weld_tests {
             &serde_json::json!({"dsl": "INVOLSPLINE GB30R M3 Z20 L30 CH2@L"}).to_string(),
         );
         assert!(bad.contains("渐开线花键段") && bad.contains("倒角"), "{bad}");
+        // CHECK：DIN 检验尺寸进模型（默认不开则没有 inspection 字段）；GB+CHECK 报错。
+        let body = serde_json::json!({"dsl": "INVOLSPLINE DIN30 DB6 M0.5 Z10 L20 CHECK"})
+            .to_string();
+        let j = http_req(server.port, "POST", "/api/shaft_parse", &body);
+        let v: serde_json::Value = serde_json::from_str(&j).unwrap();
+        assert_eq!(v["ok"], true, "{j}");
+        let note = v["segments"][0]["invol_spline"]["inspection"]
+            .as_str()
+            .unwrap_or("");
+        assert!(note.contains("M1=8.215") && note.contains("查表 p12"), "{j}");
+        let body = serde_json::json!({"dsl": "INVOLSPLINE DIN30 DB6 M0.5 Z10 L20"})
+            .to_string();
+        let j = http_req(server.port, "POST", "/api/shaft_parse", &body);
+        let v: serde_json::Value = serde_json::from_str(&j).unwrap();
+        assert!(v["segments"][0]["invol_spline"]["inspection"].is_null(), "默认不带 CHECK：{j}");
+        let bad = http_req(
+            server.port,
+            "POST",
+            "/api/shaft_parse",
+            &serde_json::json!({"dsl": "INVOLSPLINE GB30R M3 Z20 L30 CHECK"}).to_string(),
+        );
+        assert!(bad.contains("只适用于 DIN30"), "{bad}");
+    }
+
+    /// `/api/invol_check`：默认只查表；`check=1` 才公式导出（含缺档错误）。
+    #[test]
+    fn invol_check_route_serves_inspection_and_check_switch() {
+        let mock = Arc::new(MockSender::new(acadrust::CadDocument::new()));
+        let server = spawn_fixed(mock).expect("spawn guide server");
+        let j = http_req(server.port, "GET", "/api/invol_check?db=6&m=0.5&z=10", "");
+        let v: serde_json::Value = serde_json::from_str(&j).unwrap();
+        assert_eq!(v["ok"], true);
+        assert_eq!(v["from_table"], true);
+        assert_eq!(v["page"], 12);
+        assert!((v["m1"].as_f64().unwrap() - 8.215).abs() < 1e-9);
+        assert!(v["source"].as_str().unwrap().contains("查表 p12"));
+        // 不开 CHECK：未命中 → 报错提示。
+        let e = http_req(server.port, "GET", "/api/invol_check?db=11.25&m=0.5&z=21", "");
+        assert!(e.contains("\"ok\":false") && e.contains("check=1"), "{e}");
+        // 开 CHECK：公式导出（自定义奇数 z）。
+        let j = http_req(
+            server.port,
+            "GET",
+            "/api/invol_check?db=11.25&m=0.5&z=21&check=1",
+            "",
+        );
+        let v: serde_json::Value = serde_json::from_str(&j).unwrap();
+        assert_eq!(v["from_table"], false);
+        assert_eq!(v["k"], 4);
+        assert!((v["m1"].as_f64().unwrap() - 12.763_794).abs() < 1e-4);
+        // 缺档：m=5 明确“数据缺失”。
+        let e = http_req(server.port, "GET", "/api/invol_check?db=50&m=5&z=20&check=1", "");
+        assert!(e.contains("数据缺失") && e.contains("剔除"), "{e}");
     }
 
     #[test]

@@ -203,6 +203,7 @@ let sel = 0;                // 当前选中行
 let splineSpecs = [];       // 矩形花键规格表（/api/parts → detail_spline_rect.specs）
 let involPresets = [];      // 渐开线花键预设表（/api/parts → detail_invol_spline.invol_presets）
 let involDinNominal = [];   // DIN 5480-2 名义表候选（/api/parts → detail_invol_spline.din_nominal）
+let involDinInspection = []; // DIN 5480-2 检验表（/api/parts → detail_invol_spline.din_inspection；M1/M2/D_M/k/W_k）
 const SPLINE_CUSTOM = "__custom__";   // 下拉末尾「自定义规格…」的哨兵值
 let curView = "normal";     // 当前视图（默认常规）
 let seqPreview = 0;         // 过期响应丢弃序号
@@ -264,6 +265,8 @@ async function loadSplineSpecs() {
       .filter((p) => p && typeof p.code === "string" && p.code !== "");
     involDinNominal = (inv && Array.isArray(inv.din_nominal) ? inv.din_nominal : [])
       .filter((r) => r && Number.isFinite(Number(r.db)) && Number.isFinite(Number(r.m)));
+    involDinInspection = (inv && Array.isArray(inv.din_inspection) ? inv.din_inspection : [])
+      .filter((r) => r && Number.isFinite(Number(r.db)) && Number.isFinite(Number(r.m)));
     const dl = el("dinDbList");
     if (dl) {
       dl.innerHTML = "";
@@ -277,6 +280,7 @@ async function loadSplineSpecs() {
     splineSpecs = [];
     involPresets = [];
     involDinNominal = [];
+    involDinInspection = [];
   }
 }
 
@@ -415,6 +419,19 @@ function involDerived(r) {
           && Math.abs(Number(row.x) - x) < 5e-4);
       out += " d_B" + fmt(raw)
         + (hit ? "（查表命中 p" + hit.page + " m=" + fmt(hit.m) + "）" : "（由公式解出，未命中表）");
+      // 检验尺寸（与 parts_gui 同口径）：精确 (d_B,m,z) 查表才显值；否则提示走 CHECK/公式。
+      const insp = involDinInspection.find((row) =>
+        Math.abs(Number(row.db) - raw) < 1e-6
+        && Math.abs(Number(row.m) - m) < 1e-9
+        && Number(row.z) === z);
+      if (insp) {
+        out += " 检验 M1" + fmt(insp.m1) + "（D_M" + fmt(insp.dm_shaft) + "）"
+          + " M2" + fmt(insp.m2) + "（D_M" + fmt(insp.dm_hub) + "）"
+          + " k" + insp.k + " W_k" + fmt(insp.wk)
+          + "（p" + insp.page + "·" + insp.source + "）";
+      } else {
+        out += " 检验该 z 不在表（CHECK/公式：/api/invol_check?check=1）";
+      }
     } else {
       out += " d_B?（DIN 5480-2 查表：填 d_B 自动带出 m/z/x）";
     }

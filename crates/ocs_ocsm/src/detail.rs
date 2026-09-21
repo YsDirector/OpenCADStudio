@@ -1307,7 +1307,7 @@ fn resolve_invol_spline(
     params: &DetailParams,
 ) -> Result<(crate::invol_spline::InvolParams, Option<f64>, Option<String>), String> {
     use crate::invol_spline::{parse_preset_token, resolve_din_by_d_b, InvolParams, SplineStd};
-    const KNOWN: [&str; 5] = ["m", "z", "x", "len", "db"];
+    const KNOWN: [&str; 6] = ["m", "z", "x", "len", "db", "check"];
     let unknown: Vec<&str> = params
         .keys()
         .into_iter()
@@ -1315,7 +1315,7 @@ fn resolve_invol_spline(
         .collect();
     if !unknown.is_empty() {
         return Err(format!(
-            "渐开线花键：不认识参数 {}（本族支持 预设代号 spec、M、Z、X、DB、L）",
+            "渐开线花键：不认识参数 {}（本族支持 预设代号 spec、M、Z、X、DB、L、CHECK）",
             unknown.join("、")
         ));
     }
@@ -1328,7 +1328,7 @@ fn resolve_invol_spline(
     let m = params.get("m");
     let z_value = params.get("z");
     let x = params.get("x");
-    let (p, source) = if let Some(d_b) = params.get("db") {
+    let (p, mut source) = if let Some(d_b) = params.get("db") {
         if std != SplineStd::DIN {
             return Err(format!(
                 "渐开线花键：DB（基准直径 d_B={}）只适用于 DIN 5480-2（GB/T 3478.1 无此参数）",
@@ -1375,6 +1375,25 @@ fn resolve_invol_spline(
             trim(d),
             trim(p.d())
         ));
+    }
+    // `CHECK`：DIN 预设附带检验尺寸（M1/M2/D_M/k/W_k），默认不开则完全保持既有行为。
+    if params.get("check").is_some_and(|v| v != 0.0) {
+        if p.std != SplineStd::DIN {
+            return Err(
+                "渐开线花键 CHECK：检验尺寸表（DIN 5480-2）只适用于 DIN30 预设".to_string(),
+            );
+        }
+        let d_b = p
+            .d_b
+            .unwrap_or_else(|| crate::invol_spline::d_b_from_x(p.m, p.z, p.x));
+        let r = crate::invol_spline::inspection_query(d_b, p.m, p.z)
+            .map_err(|e| format!("渐开线花键 CHECK：{e}"))?;
+        let mut note = source.unwrap_or_default();
+        if !note.is_empty() {
+            note.push('；');
+        }
+        note.push_str(&crate::invol_spline::inspection_summary(&r));
+        source = Some(note);
     }
     let len = params.get("len").or_else(|| params.get("l"));
     Ok((p, len, source))
@@ -1531,6 +1550,25 @@ impl DetailElement for InvolSpline {
                 })
             })
             .collect();
+        let din_inspection: Vec<serde_json::Value> = crate::invol_spline::inspection_rows()
+            .iter()
+            .map(|r| {
+                serde_json::json!({
+                    "db": r.d_b,
+                    "m": r.m,
+                    "z": r.z,
+                    "dm_hub": r.d_m_hub,
+                    "m2": r.m2,
+                    "dm_shaft": r.d_m_shaft,
+                    "m1": r.m1,
+                    "k": r.k,
+                    "wk": r.w_k,
+                    "page": r.page,
+                    "table": r.table_no,
+                    "source": r.source,
+                })
+            })
+            .collect();
         serde_json::json!({
             "tree_dir": "结构要素/花键",
             "hide_d": true,
@@ -1538,12 +1576,13 @@ impl DetailElement for InvolSpline {
             "default_d": 0,
             "spec_label": "预设代号（GB30P/GB30R/GB375R/GB45R/DIN30）",
             "source": format!(
-                "{}（图 2 基本齿廓 + 表 3~表 6）；{}（条 5.1：齿侧对中 h_fP=0.55m）；DIN 5480-2 名义表（674 行；m=1.5 已补入，m=5 已剔除）",
+                "{}（图 2 基本齿廓 + 表 3~表 6）；{}（条 5.1：齿侧对中 h_fP=0.55m）；DIN 5480-2 名义表（674 行；m=1.5 已补入，m=5 已剔除）+ 检验表（220 行；M₁/M₂/D_M/k/W_k）",
                 crate::invol_spline::GB_CODE,
                 crate::invol_spline::DIN_CODE
             ),
-            "din_notes": "DIN 5480-2 名义表：674 行；m=1.5 由用户截图补入（56 行）、m=5 已剔除（p35 渲染缺陷）；x=(d_B−m(z+1.1))/(2m) 为反推关系",
+            "din_notes": "DIN 5480-2 名义表：674 行；m=1.5 由用户截图补入（56 行）、m=5 已剔除（p35 渲染缺陷）；x=(d_B−m(z+1.1))/(2m) 为反推关系。检验表：220 行（p12/16/18/20 + m=1.5 截图），5 档 0.5/0.75/0.8/1/1.5；查表外 z 走公式（220 行逐行对照验证）",
             "din_nominal": din_nominal,
+            "din_inspection": din_inspection,
             "inputs": [
                 { "key": "std", "label": "标准预设", "type": "select",
                   "options": [
@@ -2268,6 +2307,17 @@ mod tests {
         assert!(
             family["din_notes"].as_str().unwrap().contains("m=1.5")
                 && family["din_notes"].as_str().unwrap().contains("补入")
+        );
+        // DIN 5480-2 检验表也进目录（parts/shaft 两 GUI 派生值面板用）。
+        let insp = family["din_inspection"].as_array().unwrap();
+        assert_eq!(insp.len(), 220, "检验表 220 行进目录");
+        assert!(
+            insp.iter().any(|r| r["db"] == 6.0
+                && r["m"] == 0.5
+                && r["z"] == 10
+                && (r["m1"].as_f64().unwrap() - 8.215).abs() < 1e-9
+                && r["source"] == "A"),
+            "p12 d_B=6 z=10 应在检验候选里"
         );
         // DIN 预设的系数（GUI 派生值用）：h_fP*=0.55、cF*=0.10
         let din = family["invol_presets"]

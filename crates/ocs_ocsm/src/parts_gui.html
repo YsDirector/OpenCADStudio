@@ -531,8 +531,18 @@ function involDerivedText(preset, m, z, x, d_b, f) {
           && Math.abs(Number(r.x) - xv) < 5e-4);
       s += "; d_B=" + fmt(raw)
         + (hit ? "（查表命中 p" + hit.page + " m=" + fmt(hit.m) + "）" : "（由公式解出，未命中表）");
+      // 检验尺寸（与 shaft_gui 同口径）：精确 (d_B,m,z) 查表才显值；否则提示走 CHECK/公式。
+      const insp = ((f && f.din_inspection) || []).find((r) =>
+        Math.abs(Number(r.db) - raw) < 1e-6 && Math.abs(Number(r.m) - mv) < 1e-9 && Number(r.z) === zv);
+      if (insp) {
+        s += "; 检验 M1=" + fmt(insp.m1) + "（D_M=" + fmt(insp.dm_shaft) + "） M2=" + fmt(insp.m2)
+          + "（D_M=" + fmt(insp.dm_hub) + "） k=" + insp.k + " W_k=" + fmt(insp.wk)
+          + "（p" + insp.page + "·" + insp.source + "）";
+      } else {
+        s += "; 检验该 z 不在表（CHECK/公式：/api/invol_check?check=1）";
+      }
     } else {
-      s += "; d_B=—（填 d_B 可从 DIN 5480-2 表自动带出 m/z/x）";
+      s += "; d_B=—（填 d_B 可从 DIN 5480-2 表自动带出 m/z/x 与检验值）";
     }
   }
   return s;
