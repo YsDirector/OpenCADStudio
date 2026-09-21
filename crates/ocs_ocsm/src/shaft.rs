@@ -44,7 +44,7 @@
 //! - `GEAR M5 Z10 H20`（可 `ALPHA25`）：**齿轮段（直齿）**，分度圆 d = m·z 由参数导出、**不给
 //!   S/E**；H = 齿宽（省略 = 10m）；`ALPHA` = 基准齿形角（度，省略 20°，与 OCSMGEAR 同口径，
 //!   影响 db/齿厚）；按齿轮工具 `side_view()` 的轴向投影口径：
-//!   画齿顶轮廓（两端带轴向倒角 C = round(0.6m)，见下）+ 分度线（`3中心线层`
+//!   画齿顶轮廓（端面倒角 C = round(0.6m) 按**单侧规则**，见下）+ 分度线（`3中心线层`
 //!   点划线），**常规视图不画齿根线**；剖视另画齿根线（齿部按不剖）；
 //!   齿形用 `OCSMGEAR` 单独出，这里不画齿、本期不做斜齿（`BETA…` 报「斜齿未实现」）；
 //! - `VIEW 常规|剖视|双`：视图开关（默认 `常规`）；独立一行或段内关键字都认
@@ -62,9 +62,11 @@
 //!
 //! ## 齿轮段画法口径（侧视图，与 `gear.rs::side_view()` 的轴向投影一致）
 //!
-//! 齿顶轮廓（= `1轮廓实线层`，即该段轮廓）两端各倒轴向倒角
-//! **C = round(0.6m)**（`gear.rs::GearParams::chamfer()`）：端面可见高 = ra − C，
-//! 齿顶面长 = 齿宽 − 2C，倒角斜线两端都画；倒角终点（台阶）竖线**只在常规
+//! 齿顶轮廓（= `1轮廓实线层`，即该段轮廓）的端面倒角
+//! **C = round(0.6m)**（`gear.rs::GearParams::chamfer()`）**按单侧规则**：该侧
+//! 是自由端或邻段外轮廓更小（台阶向下）才倒；邻段更大（肩部）或齐平（端面齐平、
+//! 无外角）不倒 —— 轴上的齿轮/花键段不照搬独立齿轮生成器的两端都倒。
+//! 端面可见高 = ra − C，倒角斜线只贴该侧端面；倒角终点（台阶）竖线**只在常规
 //! 视图**画（半高 = ra，与 `side_view()` 的台阶线同）。另画分度线 r = d/2
 //! （`3中心线层`，点划线，不受倒角影响）。**常规视图不画齿根线** —— 与齿轮
 //! 工具 `side_view()` 一样；**剖视**按 `section_view()` 口径加齿根线
@@ -105,6 +107,9 @@
 //!   不给 de 时段长 = L、端面直接收口；
 //! - 大径线 `y=±da/2`（有 de 时在 x=L 断开两段）；小径细线 `y=±df/2`（`2细线层`）
 //!   从段左端面到 x=L；剖视把小径线/收尾弧改 `1轮廓实线层`，剖面线按轴线↔小径两条带；
+//! - **端面自动倒角** C = round(0.6m)（花键体系没有单独的端面倒角数据，沿用齿轮口径）
+//!   按**单侧规则**加在大径与端面交角：自由端 / 邻段更小侧才倒；邻段更大/齐平侧不倒。
+//!   给了 `de` 时右端是滚刀收尾（收尾弧占住端面），不叠加端面倒角；
 //! - 相位/齿形由 `invol_spline.rs` 负责（端视图真实渐开线，轴侧视只表达轮廓）；
 //! - 不能与 `SPLINE`/CH/OV/RL/M/GEAR 同段（引入倒角由相邻段的 CH 表达）。
 //!
@@ -3105,6 +3110,35 @@ fn is_spline_seg(seg: &Segment) -> bool {
     seg.spline.is_some() || seg.invol_spline.is_some()
 }
 
+/// 轴上齿轮/渐开线花键段的端面自动倒角 C = round(0.6m)
+/// （与 `gear.rs::GearParams::chamfer()` 同口径；花键体系没有单独的端面倒角数据，沿用同口径）。
+///
+/// 渐开线花键给了 `de` 时右端是滚刀收尾（收尾弧占住端面），不叠加端面倒角。
+fn auto_face_chamfer(seg: &Segment, end: End) -> Option<f64> {
+    let c = if let Some(gear) = &seg.gear {
+        gear.chamfer()
+    } else if let Some(invol) = &seg.invol_spline {
+        if end == End::R && invol.de.is_some() {
+            return None;
+        }
+        (crate::gear::CHAMFER_RATIO * invol.params.m).round()
+    } else {
+        return None;
+    };
+    (c > 1e-9).then_some(c)
+}
+
+/// 端面自动倒角的**单侧规则**（用户 2026-09-21 定案）：自由端（无邻段）或
+/// 邻段外轮廓更小（台阶向下）→ 加；邻段更大（肩部）/ 相等（端面齐平、无外角）→ 不加。
+fn side_auto_chamfer(c: Option<f64>, own_r: f64, neighbor_r: Option<f64>) -> Option<f64> {
+    let c = c?;
+    match neighbor_r {
+        None => Some(c),
+        Some(r) if r < own_r - 1e-12 => Some(c),
+        Some(_) => None,
+    }
+}
+
 /// 解析 → 校验 → 生成常规视图轮廓，并顺手记录剖面线环用的上半外轮廓段。
 fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, String> {
     validate(program)?;
@@ -3299,20 +3333,30 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
         // 该端面处两侧的轮廓半径。
         let ra = segs[i].outer_radius(End::R);
         let rb = segs[k].outer_radius(End::L);
-        // 齿轮端倒角 C = round(0.6m)（抄 `gear.rs::side_view()`）：端面可见高 = ra − C。
-        let gear_c_r = segs[i].gear.as_ref().map(Gear::chamfer).filter(|c| *c > 1e-9);
-        let gear_c_l = segs[k].gear.as_ref().map(Gear::chamfer).filter(|c| *c > 1e-9);
+        // 齿轮/渐开线花键端面自动倒角 C = round(0.6m)：按单侧规则决定该端倒不倒
+        //（自由端/邻段更小 → 倒；邻段更大/齐平 → 不倒；用户 CH 已占该侧时让位）。
+        let user_land = chamfer.map(|_| if rb > ra { k } else { i });
+        let auto_c_r = if user_land == Some(i) {
+            None
+        } else {
+            side_auto_chamfer(auto_face_chamfer(&segs[i], End::R), ra, Some(rb))
+        };
+        let auto_c_l = if user_land == Some(k) {
+            None
+        } else {
+            side_auto_chamfer(auto_face_chamfer(&segs[k], End::L), rb, Some(ra))
+        };
 
-        let mut bottom = (ra - gear_c_r.unwrap_or(0.0)).min(rb - gear_c_l.unwrap_or(0.0));
-        let mut top = (ra - gear_c_r.unwrap_or(0.0)).max(rb - gear_c_l.unwrap_or(0.0));
+        let mut bottom = (ra - auto_c_r.unwrap_or(0.0)).min(rb - auto_c_l.unwrap_or(0.0));
+        let mut top = (ra - auto_c_r.unwrap_or(0.0)).max(rb - auto_c_l.unwrap_or(0.0));
         let mut chamfer_lines: Option<([f64; 2], [f64; 2])> = None;
         // 带 CH 倒角的落点段（用于判断剖面线边界是否由螺纹小径包络接管）。
         let mut chamfer_land: Option<usize> = None;
         // 端面带槽时的贯通竖线半高（槽肩圆角切点）；None = 用 min(left_eff, right_eff)。
         let mut face_through_h: Option<f64> = None;
 
-        // ── 齿轮端倒角（两端都倒 C）：倒角斜线 + 台阶竖线（竖线只属常规视图）──
-        if let Some(c) = gear_c_r {
+        // ── 端面自动倒角（斜线 + 台阶竖线；竖线只属常规视图）──
+        if let Some(c) = auto_c_r {
             let contour = [x_face - c, ra];
             let face_point = [x_face, ra - c];
             entities.push(line(face_point, contour, LAYER_MAIN));
@@ -3322,8 +3366,9 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
                 LAYER_MAIN,
             ));
             through_line(&mut through, contour[0], contour[1]);
+            own_ch[i][1] = Some(c);
         }
-        if let Some(c) = gear_c_l {
+        if let Some(c) = auto_c_l {
             let contour = [x_face + c, rb];
             let face_point = [x_face, rb - c];
             entities.push(line(face_point, contour, LAYER_MAIN));
@@ -3333,6 +3378,7 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
                 LAYER_MAIN,
             ));
             through_line(&mut through, contour[0], contour[1]);
+            own_ch[k][0] = Some(c);
         }
 
         if let Some(c) = chamfer {
@@ -3654,6 +3700,12 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
             } else {
                 invol.minor_radius()
             };
+            // 右端自动倒角切到小径以下时，剖面线边界沿倒角斜线走到交点。
+            if let Some(c) = own_ch[i][1] {
+                if ra - c < invol.minor_radius() - 1e-12 {
+                    left_eff = ra - c;
+                }
+            }
         } else if let Some(gear) = &segs[i].gear {
             left_eff = gear.root_radius();
         } else if let Some(thread) = plain_thread(&segs[i]) {
@@ -3670,13 +3722,15 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
                 right_eff = spline.minor_radius();
             }
         } else if let Some(invol) = &segs[k].invol_spline {
-            let chamfer_below = chamfer_land == Some(k)
-                && chamfer_lines
-                    .map(|(_, face_point)| face_point[1] < invol.minor_radius() - 1e-12)
-                    .unwrap_or(false);
-            if !chamfer_below {
-                right_eff = invol.minor_radius();
-            }
+            // 左端倒角（用户 CH 或自动）切到小径以下时，剖面线边界沿倒角斜线走到交点。
+            let below = own_ch[k][0]
+                .map(|c| rb - c < invol.minor_radius() - 1e-12)
+                .unwrap_or(false);
+            right_eff = if below {
+                rb - own_ch[k][0].unwrap()
+            } else {
+                invol.minor_radius()
+            };
         } else if let Some(gear) = &segs[k].gear {
             right_eff = gear.root_radius();
         } else if let Some(thread) = plain_thread(&segs[k]) {
@@ -3726,24 +3780,24 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
     if segs[0].ov.iter().any(|o| o.end == End::L) {
         return Err("第 1 段：左端是自由端，越程槽没有台阶面".into());
     }
-    let left_face = if let Some(gear) = &segs[0].gear {
-        // 齿轮段自由端：端面可见高 = ra − C，齿顶轮廓两端倒角（`gear.rs::side_view()` 口径）。
-        let ra = gear.addendum_radius();
-        let c = gear.chamfer();
-        if c > 1e-9 {
-            let contour = [c, ra];
-            let face_point = [0.0, ra - c];
-            entities.push(line(face_point, contour, LAYER_MAIN));
-            entities.push(line(
-                [face_point[0], -face_point[1]],
-                [contour[0], -contour[1]],
-                LAYER_MAIN,
-            ));
-            through_line(&mut through, contour[0], contour[1]);
-            face_point[1]
-        } else {
-            ra
-        }
+    let left_face = if let Some(c) = side_auto_chamfer(
+        auto_face_chamfer(&segs[0], End::L),
+        segs[0].outer_radius(End::L),
+        None,
+    ) {
+        // 齿轮/渐开线花键段自由端（轴头）：端面可见高 = ra − C（单侧规则：自由端加）。
+        let ra = segs[0].outer_radius(End::L);
+        let contour = [c, ra];
+        let face_point = [0.0, ra - c];
+        entities.push(line(face_point, contour, LAYER_MAIN));
+        entities.push(line(
+            [face_point[0], -face_point[1]],
+            [contour[0], -contour[1]],
+            LAYER_MAIN,
+        ));
+        through_line(&mut through, contour[0], contour[1]);
+        own_ch[0][0] = Some(c);
+        face_point[1]
     } else if let Some(c) = segs[0].ch.iter().find(|c| c.end == End::L).map(|c| c.c) {
         let radius = segs[0].s / 2.0;
         if c >= radius - 1e-12 {
@@ -3798,24 +3852,24 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
             return Err(format!("第 {} 段：局部螺纹 TL/RL 的右端不能倒角 CH", last + 1));
         }
         tangent
-    } else if let Some(gear) = &segs[last].gear {
-        // 齿轮段自由端：端面可见高 = ra − C（与 `gear.rs::side_view()` 一致）。
-        let ra = gear.addendum_radius();
-        let c = gear.chamfer();
-        if c > 1e-9 {
-            let contour = [x_end - c, ra];
-            let face_point = [x_end, ra - c];
-            entities.push(line(face_point, contour, LAYER_MAIN));
-            entities.push(line(
-                [face_point[0], -face_point[1]],
-                [contour[0], -contour[1]],
-                LAYER_MAIN,
-            ));
-            through_line(&mut through, contour[0], contour[1]);
-            face_point[1]
-        } else {
-            ra
-        }
+    } else if let Some(c) = side_auto_chamfer(
+        auto_face_chamfer(&segs[last], End::R),
+        segs[last].outer_radius(End::R),
+        None,
+    ) {
+        // 齿轮/渐开线花键段自由端：端面可见高 = ra − C（单侧规则：自由端加）。
+        let ra = segs[last].outer_radius(End::R);
+        let contour = [x_end - c, ra];
+        let face_point = [x_end, ra - c];
+        entities.push(line(face_point, contour, LAYER_MAIN));
+        entities.push(line(
+            [face_point[0], -face_point[1]],
+            [contour[0], -contour[1]],
+            LAYER_MAIN,
+        ));
+        through_line(&mut through, contour[0], contour[1]);
+        own_ch[last][1] = Some(c);
+        face_point[1]
     } else if let Some(c) = segs[last]
         .ch
         .iter()
@@ -3870,9 +3924,11 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
                 gear.addendum_radius(),
                 gear.root_radius(),
             );
-            // 齿顶面 = 齿宽两端缩进 C（用户口径：C = round(0.6m)，与 `gear.rs::side_view()` 同）。
-            let c = gear.chamfer();
-            let (ta, tb) = (x0 + c, x1 - c);
+            // 齿顶面两端按**已生效的端面自动倒角**缩进（单侧规则：自由端/邻段更小才缩）。
+            let (ta, tb) = (
+                x0 + own_ch[index][0].unwrap_or(0.0),
+                x1 - own_ch[index][1].unwrap_or(0.0),
+            );
             if tb - ta > 1e-9 {
                 entities.push(line([ta, ra], [tb, ra], LAYER_MAIN));
                 entities.push(line([ta, -ra], [tb, -ra], LAYER_MAIN));
@@ -3944,41 +4000,45 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
             // 大径线/剖面线都已就位：不进入通用轮廓分支（通用会把大径线画成整段）。
             continue;
         }
-        // ── 渐开线花键段（INVOLSPLINE）：小径细线 +（给了 de）收尾弧；
-        //    常规视图落 `2细线层`，剖视改 `1轮廓实线层`；剖面线边界 = 小径线 + 收尾弧。──
+        // ── 渐开线花键段（INVOLSPLINE）：小径细线 +（给了 de）收尾弧；端面自动
+        //    倒角按单侧规则（自由端/邻段更小）；常规视图落 `2细线层`，剖视改
+        //    `1轮廓实线层`；剖面线边界 = 小径线 + 收尾弧。──
         if let Some(invol) = &seg.invol_spline {
             let (x0, x1) = (x0s[index], x0s[index] + seg.l); // x1 = L + l
             let (r, ra) = (invol.minor_radius(), invol.major_radius());
             let xm1 = x0 + invol.len; // 满齿段右端 = 收尾起点
-            // 大径线：满齿段；有 de 时再一段收尾段。
-            let xs = x0 + own_ch[index][0].unwrap_or(0.0);
-            if xm1 - xs > 1e-9 {
-                entities.push(line([xs, ra], [xm1, ra], LAYER_MAIN));
-                entities.push(line([xs, -ra], [xm1, -ra], LAYER_MAIN));
+            // 本段两端已生效的端面自动倒角（单侧规则；有 de 时右端不倒 → 0）。
+            let c_l = own_ch[index][0].unwrap_or(0.0);
+            let c_r = own_ch[index][1].unwrap_or(0.0);
+            // 大径线：满齿段；有 de 时再一段收尾段（两端按倒角缩进）。
+            let (xs, xe) = (x0 + c_l, x1 - c_r);
+            if xm1.min(xe) - xs > 1e-9 {
+                entities.push(line([xs, ra], [xm1.min(xe), ra], LAYER_MAIN));
+                entities.push(line([xs, -ra], [xm1.min(xe), -ra], LAYER_MAIN));
             }
-            if x1 > xm1 + 1e-9 {
-                entities.push(line([xm1, ra], [x1, ra], LAYER_MAIN));
-                entities.push(line([xm1, -ra], [x1, -ra], LAYER_MAIN));
+            if xe > xm1 + 1e-9 {
+                entities.push(line([xm1, ra], [xe, ra], LAYER_MAIN));
+                entities.push(line([xm1, -ra], [xe, -ra], LAYER_MAIN));
             }
-            // 左端倒角（相邻段的 CH 落在本段）把细线起点内缩到倒角与小径的交点。
-            let left_inset = own_ch[index][0]
-                .map(|c| (c - (ra - r)).max(0.0))
-                .unwrap_or(0.0);
+            // 端面倒角把细线/剖面线端点内缩到倒角与小径的交点。
+            let left_inset = (c_l - (ra - r)).max(0.0);
             let xm0 = x0 + left_inset;
-            if let Some(c) = own_ch[index][0] {
-                let face_y = ra - c;
-                if face_y < r - 1e-12 && xm0 > x0 + 1e-12 {
-                    profile.push(lr_line([x0, face_y], [xm0, r]));
-                }
+            let right_inset = (c_r - (ra - r)).max(0.0);
+            let xml = xm1 - right_inset;
+            if c_l > 1e-9 && ra - c_l < r - 1e-12 && xm0 > x0 + 1e-12 {
+                profile.push(lr_line([x0, ra - c_l], [xm0, r]));
+            }
+            if c_r > 1e-9 && ra - c_r < r - 1e-12 && xml < x1 - 1e-12 {
+                profile.push(lr_line([xml, r], [x1, ra - c_r]));
             }
             // 常规视图：小径细线（只到 L；无 de 时就是整段）。
-            spline_regular.push(line([xm0, r], [xm1, r], LAYER_THIN));
-            spline_regular.push(line([xm0, -r], [xm1, -r], LAYER_THIN));
+            spline_regular.push(line([xm0, r], [xml, r], LAYER_THIN));
+            spline_regular.push(line([xm0, -r], [xml, -r], LAYER_THIN));
             // 剖视可见的小径线 / 收尾弧（`1轮廓实线层`）。
-            section_lines.push(line([xm0, r], [xm1, r], LAYER_MAIN));
-            section_lines.push(line([xm0, -r], [xm1, -r], LAYER_MAIN));
+            section_lines.push(line([xm0, r], [xml, r], LAYER_MAIN));
+            section_lines.push(line([xm0, -r], [xml, -r], LAYER_MAIN));
             // 剖面线边界：小径线 →（有 de）收尾弧（齿部不剖，同 SPLINE 口径）。
-            profile.push(lr_line([xm0, r], [xm1, r]));
+            profile.push(lr_line([xm0, r], [xml, r]));
             if let Some(de) = invol.de {
                 let l = invol.runout();
                 let rh = de / 2.0;
@@ -6344,7 +6404,8 @@ GEAR M3 Z20";
         );
     }
 
-    /// 轴段几何：无 de（段长 = L、端面收口）/ 有 de（收尾弧 + 段长 = L+l）/ 剖视 HATCH。
+    /// 轴段几何：无 de（段长 = L、端面收口）/ 有 de（收尾弧 + 段长 = L+l）/ 剖视 HATCH；
+    /// 无用户 CH 时按**单侧规则**自动倒角（自由端 → 两端加）。
     #[test]
     fn invol_spline_segment_geometry_with_and_without_de() {
         // ── 无 de ──
@@ -6352,10 +6413,14 @@ GEAR M3 Z20";
         let shaft = build(&program, 1.0).unwrap();
         let iv = program.segments[0].invol_spline.as_ref().unwrap();
         let (r, ra) = (iv.minor_radius(), iv.major_radius());
+        let c = (crate::gear::CHAMFER_RATIO * iv.params.m).round();
+        assert!(near(c, 2.0), "C = round(0.6×3) = 2");
         assert!(near(program.total_length(), 30.0));
-        assert!(has_line(&shaft, [0.0, -ra], [0.0, ra]), "左端面 ±da/2");
-        assert!(has_line(&shaft, [30.0, -ra], [30.0, ra]), "右端面收口");
-        assert!(has_line(&shaft, [0.0, ra], [30.0, ra]));
+        assert!(has_line(&shaft, [0.0, -(ra - c)], [0.0, ra - c]), "左端面 ±(da/2−C)");
+        assert!(has_line(&shaft, [30.0, -(ra - c)], [30.0, ra - c]), "右端面收口 ±(da/2−C)");
+        assert!(has_line(&shaft, [0.0, ra - c], [c, ra]), "左端自动倒角斜线");
+        assert!(has_line(&shaft, [30.0 - c, ra], [30.0, ra - c]), "右端自动倒角斜线");
+        assert!(has_line(&shaft, [c, ra], [30.0 - c, ra]), "大径线两端缩 C");
         assert_eq!(layer_of_line(&shaft, [0.0, r], [30.0, r]), Some(LAYER_THIN));
         assert_eq!(layer_of_line(&shaft, [0.0, -r], [30.0, -r]), Some(LAYER_THIN));
         assert!(
@@ -6380,9 +6445,12 @@ GEAR M3 Z20";
         // h = (da−df)/2 = 4.2；l = √(4.2×(70−4.2)) = 16.6241
         assert!((l - 16.624_1).abs() < 1e-3, "l={l}");
         assert!(near(program.total_length(), total));
-        assert!(has_line(&shaft, [0.0, ra], [30.0, ra]), "满齿段大径线");
+        // 左自由端自动倒角；右端是滚刀收尾（de）→ 不叠加端面倒角
+        assert!(has_line(&shaft, [0.0, ra - c], [c, ra]), "左端自动倒角斜线");
+        assert!(has_line(&shaft, [0.0, -(ra - c)], [0.0, ra - c]), "左端面 ±(da/2−C)");
+        assert!(has_line(&shaft, [c, ra], [30.0, ra]), "满齿段大径线（左端缩 C）");
         assert!(has_line(&shaft, [30.0, ra], [total, ra]), "收尾段大径线");
-        assert!(has_line(&shaft, [total, -ra], [total, ra]), "收尾终点端面");
+        assert!(has_line(&shaft, [total, -ra], [total, ra]), "收尾终点端面（不收倒角）");
         let a = iv.params.runout_end_angle(70.0).unwrap();
         assert!(has_arc(&shaft, [30.0, r + rh], rh, 270.0, 360.0 - a), "上收尾弧");
         assert!(has_arc(&shaft, [30.0, -(r + rh)], rh, a, 90.0), "下收尾弧");
@@ -6574,6 +6642,173 @@ GEAR M3 Z20";
         let program = parse_program("S40 E40 L20 CH2@R\nGEAR M3 Z20").unwrap();
         let err = build(&program, 1.0).unwrap_err();
         assert!(err.contains("齿轮段"), "{err}");
+    }
+
+    /// 轴上齿轮/渐开线花键端面自动倒角的**单侧规则**（用户 2026-09-21 定案）：
+    /// 自由端 / 邻段更小 → 加；邻段更大（肩部）/ 相等（齐平无外角）→ 不加。
+    #[test]
+    fn end_chamfer_one_sided_rule_on_shaft() {
+        // ── ① 自由端（轴头/轴尾）→ 加：`GEAR` 单段两端都倒 ──
+        let program = parse_program("GEAR M3 Z20 H30").unwrap();
+        let gear = program.segments[0].gear.unwrap();
+        let (ra, c) = (gear.addendum_radius(), gear.chamfer());
+        assert!(near(c, 2.0), "C = round(0.6×3) = 2");
+        let shaft = build(&program, 1.0).unwrap();
+        assert!(has_line(&shaft, [0.0, ra - c], [c, ra]), "左自由端倒角斜线");
+        assert!(has_line(&shaft, [30.0 - c, ra], [30.0, ra - c]), "右自由端倒角斜线");
+        assert!(has_line(&shaft, [c, ra], [30.0 - c, ra]), "齿顶面两端缩 C");
+
+        // ── ② 邻段更小（台阶向下）→ 加 ──
+        let shaft = build(
+            &parse_program("S40 E40 L20\nGEAR M3 Z20 H30").unwrap(),
+            1.0,
+        )
+        .unwrap();
+        assert!(has_line(&shaft, [20.0, ra - c], [20.0 + c, ra]), "邻段更小 → 左侧加");
+        assert!(has_line(&shaft, [20.0 + c, ra], [50.0 - c, ra]), "齿顶面左端缩 C");
+
+        // ── ③ 邻段相等（端面齐平、无外角）→ 不加 ──
+        let shaft = build(
+            &parse_program("S66 E66 L20\nGEAR M3 Z20 H30").unwrap(),
+            1.0,
+        )
+        .unwrap();
+        assert!(
+            !has_line(&shaft, [20.0, ra - c], [20.0 + c, ra]),
+            "齐平侧不许有倒角斜线"
+        );
+        assert!(
+            !has_line(&shaft, [20.0 + c, -ra], [20.0 + c, ra]),
+            "齐平侧无倒角根竖线"
+        );
+        assert!(has_line(&shaft, [20.0, ra], [50.0 - c, ra]), "齿顶面从端面直起");
+
+        // `GEAR` 段相邻半径 > ra 仍被既有校验拦住（见上条测试），更大侧分支在
+        // `GEAR` 上不可达；用渐开线花键段验证“更大/齐平”两侧。
+        // ── `INVOLSPLINE GB30R M3 Z20`：da/2 = 31.5、C = round(0.6×3) = 2 ──
+        let program = parse_program("INVOLSPLINE GB30R M3 Z20 L30").unwrap();
+        let iv = program.segments[0].invol_spline.as_ref().unwrap();
+        let (sr, sc) = (
+            iv.major_radius(),
+            (crate::gear::CHAMFER_RATIO * iv.params.m).round(),
+        );
+        assert!(near(sr, 31.5) && near(sc, 2.0), "da/2={sr}，C={sc}");
+        // 自由端 → 两端加
+        let shaft = build(&program, 1.0).unwrap();
+        assert!(has_line(&shaft, [0.0, sr - sc], [sc, sr]), "花键左自由端倒角");
+        assert!(
+            has_line(&shaft, [30.0 - sc, sr], [30.0, sr - sc]),
+            "花键右自由端倒角"
+        );
+
+        // ── ④ 邻段更小（Ø40 < da63）→ 加 ──
+        let shaft = build(
+            &parse_program("S40 E40 L20\nINVOLSPLINE GB30R M3 Z20 L30").unwrap(),
+            1.0,
+        )
+        .unwrap();
+        assert!(
+            has_line(&shaft, [20.0, sr - sc], [20.0 + sc, sr]),
+            "花键邻段更小 → 加"
+        );
+        assert!(
+            has_line(&shaft, [20.0 + sc, sr], [50.0 - sc, sr]),
+            "大径线左端缩 C"
+        );
+
+        // ── ⑤ 邻段更大（Ø70 > da63，肩部）→ 不加；右端自由仍倒 ──
+        let shaft = build(
+            &parse_program("S70 E70 L20\nINVOLSPLINE GB30R M3 Z20 L30").unwrap(),
+            1.0,
+        )
+        .unwrap();
+        assert!(
+            !has_line(&shaft, [20.0, sr - sc], [20.0 + sc, sr]),
+            "肩部侧不许有倒角斜线"
+        );
+        assert!(
+            !has_line(&shaft, [20.0 + sc, -sr], [20.0 + sc, sr]),
+            "肩部侧无倒角根竖线"
+        );
+        assert!(
+            has_line(&shaft, [20.0, sr], [50.0 - sc, sr]),
+            "大径线从端面直起"
+        );
+        assert!(
+            has_line(&shaft, [50.0 - sc, sr], [50.0, sr - sc]),
+            "右自由端倒角仍在"
+        );
+
+        // ── ⑥ 邻段相等（Ø63 = da）→ 不加 ──
+        let shaft = build(
+            &parse_program("S63 E63 L20\nINVOLSPLINE GB30R M3 Z20 L30").unwrap(),
+            1.0,
+        )
+        .unwrap();
+        assert!(
+            !has_line(&shaft, [20.0, sr - sc], [20.0 + sc, sr]),
+            "齐平侧不许有倒角斜线"
+        );
+        assert!(has_line(&shaft, [20.0, sr], [50.0 - sc, sr]), "大径线从端面直起");
+    }
+
+    /// 单侧规则的组合冒烟：齿轮/花键 × 自由/更小/更大/相等 × 有无 de × 左右位置，
+    /// 构建不许 panic / 报错。
+    #[test]
+    fn end_chamfer_rule_combinations_build() {
+        for text in [
+            "GEAR M3 Z20 H30",
+            "S40 E40 L20\nGEAR M3 Z20 H30",
+            "S66 E66 L20\nGEAR M3 Z20 H30",
+            "GEAR M3 Z20 H30\nS40 E40 L20",
+            "INVOLSPLINE GB30R M3 Z20 L30",
+            "INVOLSPLINE GB30R M3 Z20 L30 de70",
+            "S40 E40 L20\nINVOLSPLINE GB30R M3 Z20 L30",
+            "S70 E70 L20\nINVOLSPLINE GB30R M3 Z20 L30",
+            "S63 E63 L20\nINVOLSPLINE GB30R M3 Z20 L30",
+            "S40 E40 L20\nINVOLSPLINE GB30R M3 Z20 L30 de70",
+            "S70 E70 L20\nINVOLSPLINE GB30R M3 Z20 L30 de70",
+            "INVOLSPLINE GB30R M3 Z20 L30\nS40 E40 L20",
+            "INVOLSPLINE GB30R M3 Z20 L30 de70\nS40 E40 L20",
+            "S22 E22 L5 CH2@R\nINVOLSPLINE GB30R M3 Z20 L30",
+        ] {
+            let program = parse_program(text).unwrap_or_else(|e| panic!("{text}: {e}"));
+            let shaft = build(&program, 1.0).unwrap_or_else(|e| panic!("{text}: {e}"));
+            assert!(!shaft.entities.is_empty(), "{text}");
+        }
+    }
+
+    /// 回归：独立齿轮生成器（`gear.rs::side_view()`）是独立零件、两端都是自由外角，
+    /// **仍两端都倒** —— 轴上单侧规则不反向影响它。
+    #[test]
+    fn independent_gear_generator_still_chamfers_both_ends() {
+        let p = crate::gear::GearParams { m: 3.0, z: 20, h: 30.0, ..Default::default() };
+        let ra = p.da() / 2.0;
+        let c = p.chamfer();
+        let (hh, hc, hi) = (15.0, 15.0 - c, ra - c);
+        let v = crate::gear::side_view(&p, 1.0).unwrap();
+        let has = |a: [f64; 2], b: [f64; 2]| {
+            v.iter().any(|e| match e {
+                EntityType::Line(l) => {
+                    let (p0, p1) = ([l.start.x, l.start.y], [l.end.x, l.end.y]);
+                    (near(p0[0], a[0])
+                        && near(p0[1], a[1])
+                        && near(p1[0], b[0])
+                        && near(p1[1], b[1]))
+                        || (near(p0[0], b[0])
+                            && near(p0[1], b[1])
+                            && near(p1[0], a[0])
+                            && near(p1[1], a[1]))
+                }
+                _ => false,
+            })
+        };
+        assert!(has([-hh, hi], [-hc, ra]), "左端倒角斜线");
+        assert!(has([hc, ra], [hh, hi]), "右端倒角斜线");
+        assert!(has([-hh, -hi], [-hc, -ra]), "左下倒角斜线");
+        assert!(has([hc, -ra], [hh, -hi]), "右下倒角斜线");
+        assert!(has([-hh, -hi], [-hh, hi]), "左端面 ±(ra−C)");
+        assert!(has([hh, -hi], [hh, hi]), "右端面 ±(ra−C)");
     }
 
     // ── 视图 VIEW（常规 / 剖视 / 双） ────────────────────────────────────
