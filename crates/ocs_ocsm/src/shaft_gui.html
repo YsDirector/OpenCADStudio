@@ -25,7 +25,9 @@
   .btn.ghost:hover { background: #d7dbe1; }
   .btn.ghost.on { background: #1e6fff; color: #fff; }
   .hint { font-size: 12px; color: #888; margin-top: 8px; line-height: 1.5; }
-  #status, #perr, #dslErr, #segErr { font-size: 13px; margin-top: 8px; min-height: 18px; white-space: pre-wrap; }
+  #status, #perr, #dslErr, #segErr, #exprErr { font-size: 13px; margin-top: 8px; min-height: 18px; white-space: pre-wrap; }
+  #exprInput { flex: 1 1 420px; width: auto; }
+  #exprErr:empty { min-height: 0; margin-top: 0; }
   .ok { color: #1a7f37; } .bad { color: #d1242f; } .warn { color: #b26a00; }
   code { background: #f1f3f5; padding: 1px 4px; border-radius: 3px; }
   /* ── 预览区：深色底、居中、宽度自适应（与后端 SVG 的 #111 底色一致） ── */
@@ -113,6 +115,13 @@
       <button type="button" class="btn ghost" id="upRow">上移</button>
       <button type="button" class="btn ghost" id="downRow">下移</button>
     </div>
+    <!-- 表达式互通：齿轮窗口复制来的轴段表达式（GEAR / INVOLSPLINE 一行）粘贴即成段 -->
+    <div class="row" style="margin-top:8px">
+      <input type="text" id="exprInput" placeholder="粘贴齿轮/花键表达式（例 GEAR M3 Z20 H20 ALPHA20；INVOLSPLINE GB30R M3 Z20 L30）">
+      <button type="button" class="btn ghost" id="exprAdd">解析并加段</button>
+      <button type="button" class="btn ghost" id="openGear">打开齿轮生成器</button>
+    </div>
+    <div class="hint" id="exprErr"></div>
     <div class="hint" id="segHint">
       <code>E</code> 留空 = 圆柱段；<code>M</code> 螺纹段要求 S=E（不写值 = 小径 0.85d 简化画法，
       <code>M1.5</code> = 螺距 P 精确小径）；退刀槽 <b>就是一小段小直径轴段</b>（例 <code>S24 E24 L5</code>），
@@ -129,7 +138,10 @@
       ANSI 另示 P/Ps、Do/Dri/Di/Dre、DFe/DFi、Sv/cF（标准为英制，输出已换算 mm）），
       <code>de</code> 可选（给了才画收尾，段长 = L + l）；不能与 SPLINE/CH/OV/M/GEAR 同段。
       <b>GEAR 齿轮段</b>的 H = 齿宽（留空 10m）、α = 压力角（留空 20°）；
-      <b>TODO</b>：GEAR 段目前只支持模数制 M（径节制 DP 走 <code>OCSMGEAR</code> 齿轮工具，端/侧/剖视共用几何）。
+      <b>TODO</b>：GEAR 段目前只支持模数制 M（径节制 DP 走 <code>OCSMGEAR</code> 齿轮工具，端/侧/剖视共用几何）。<br>
+      <b>表达式互通</b>：齿轮窗口的「轴生成器表达式」可直接粘贴到上面的表达式框或某行的 GEAR/INVOLSPLINE 输入框
+      （自动解析成段表；允许 <code>OCSMGEAR</code>/<code>OCSMSHAFT</code> 前缀、中文空格与多余空格）；
+      「打开齿轮生成器」一键开齿轮窗口。轴段只做外齿轮/外花键，内齿表达式不能用在轴上。
     </div>
     <div id="segErr"></div>
   </div>
@@ -150,7 +162,8 @@
       渐开线花键段：<code>INVOLSPLINE GB30R M3 Z20 L30</code>（预设代号
       <code>GB30P/GB30R/GB375R/GB45R/DIN30/NFP/NFR/ANSI30P/ANSI30PM/ANSI30R/ANSI375R/ANSI45R</code>，
       或体系标识 <code>GB/DIN/NF/ANSI</code>；
-      <code>X0.2</code> = 变位（ANSI 不允许）；ANSI 径节写 <code>P8</code>（或 M 槽位 = P）；
+      <code>X0.2</code> = 变位（ANSI 不允许）；ANSI 径节写在 M 槽位（<code>M8</code>，ANSI 下 M = 径节 P；
+      <code>P8</code> 会被 <code>RL</code> 的 P 参数分支拦下）；
       <code>de63</code> 可选 = 画收尾；引入倒角同样写在相邻段）。
     </div>
   </div>
@@ -216,6 +229,7 @@ const SPLINE_CUSTOM = "__custom__";   // 下拉末尾「自定义规格…」的
 let curView = "normal";     // 当前视图（默认常规）
 let seqPreview = 0;         // 过期响应丢弃序号
 let seqParse = 0;
+let seqExpr = 0;            // 表达式粘贴解析的独立序号（不与行文本解析互相作废）
 let tPreview = 0, tParse = 0;
 let blobUrl = null;         // 上一张预览图的 object URL
 let textDirty = false;      // 文本区改过、还没回填段表（生成前先解析一次）
@@ -724,7 +738,9 @@ function rowToDsl(r) {
     let s = "INVOLSPLINE " + code;
     if (isDin && String(r.invol.db).trim() !== "") s += " DB" + numTok(r.invol.db);
     if (isNf && String(r.invol.db).trim() !== "") s += " A" + numTok(r.invol.db);
-    if (String(r.invol.m).trim() !== "") s += (isAnsi ? " P" : " M") + numTok(r.invol.m);
+    // ANSI：shaft.rs 的 P8 写法会被 RL 参数（P/g1/g2/dg/r）分支先截住而报错，
+    // 用它明确接受的 M 槽位写径节（ANSI 下 M 槽位 = 径节 P）。
+    if (String(r.invol.m).trim() !== "") s += " M" + numTok(r.invol.m);
     if (String(r.invol.z).trim() !== "") s += " Z" + numTok(r.invol.z);
     if (!isAnsi && String(r.invol.x).trim() !== "") s += " X" + numTok(r.invol.x);
     s += " L" + numTok(r.invol.len);
@@ -875,6 +891,122 @@ async function refreshFromText() {
     if (my !== seqParse) return false;
     showDslError("解析请求失败：" + e);
     return false;
+  }
+}
+
+/* ─────────────────────────── 表达式互通（齿轮/花键 → 粘贴成段） ─────────────────────────── */
+
+// 粘贴表达式归一化：中文/全角空格→半角、折叠连续空白、剥命令名前缀（OCSMGEAR/OCSMSHAFT）。
+// 只做「喂给 shaft.rs 解析器前」的清洗；段语法本身仍以 /api/shaft_parse（shaft.rs）为准。
+function normalizeExpression(text) {
+  let t = String(text == null ? "" : text);
+  t = t.replace(/\r\n?/g, "\n");
+  t = t.replace(/[\u3000\u00a0\u2000-\u200a\u202f\u205f\u1680]/g, " ");
+  t = t.replace(/^\s*(?:OCSMGEAR|OCSMSHAFT)\b\s*/i, "");
+  return t
+    .split("\n")
+    .map((line) => line.replace(/[ \t]+/g, " ").trim())
+    .join("\n")
+    .trim();
+}
+
+// 像不像一条齿轮/花键段表达式（决定是否拦截粘贴去解析，而不是当普通数字/文本贴进输入框）。
+function looksLikeExpression(text) {
+  return /^\s*(?:OCSMGEAR|OCSMSHAFT|GEAR|INVOLSPLINE|SPLINE)\b/i.test(String(text == null ? "" : text));
+}
+
+// OCSMGEAR 自带命令行语法（`OCSMGEAR <m> <z> …`）与轴段语法不同；剥掉命令名后若以
+// int/ext/内齿轮/花键/纯数字开头，就是误贴了 CLI —— 给专门指路，别只报「不识别的关键字」。
+function looksLikeGearCli(text) {
+  const first = (normalizeExpression(text).split(/\s+/)[0] || "").toLowerCase();
+  return ["int", "ext", "internal", "external", "内齿轮", "外齿轮", "花键", "内花键", "外花键"].indexOf(first) >= 0
+    || /^[-+]?\d+(\.\d+)?$/.test(first);
+}
+
+function showExprError(msg) {
+  el("exprErr").textContent = msg;
+  el("exprErr").className = "bad";
+}
+
+function clearExprError() {
+  el("exprErr").textContent = "";
+  el("exprErr").className = "";
+}
+
+// 表达式 → 段模型：复用后端 `/api/shaft_parse`（即 shaft.rs 的段解析器），前端不另写语法。
+// 返回 { ok:true, rows, view } 或 { ok:false, error }；错误里带「第 N 段：…」定位。
+async function parseExpressionToRows(text) {
+  const dsl = normalizeExpression(text);
+  if (!dsl) return { ok: false, error: "粘贴内容为空。" };
+  const my = ++seqExpr;
+  try {
+    const r = await fetch("/api/shaft_parse", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ dsl }),
+      cache: "no-store",
+    });
+    const j = await r.json();
+    if (my !== seqExpr) return { ok: false, error: "已被新的解析请求取代。" };
+    if (!r.ok || j.ok === false) {
+      let msg = j.error || j.message || ("解析失败（HTTP " + r.status + "）");
+      if (/OCSMGEAR/i.test(String(text)) && looksLikeGearCli(text)) {
+        msg += "（检测到 OCSMGEAR 命令行语法：轴生成器只接受轴段表达式，例 `GEAR M3 Z20 H20 ALPHA20` 或 `INVOLSPLINE GB30R M3 Z20 L30`）";
+      }
+      return { ok: false, error: "表达式解析失败：" + msg };
+    }
+    return { ok: true, rows: (j.segments || []).map(rowFromSegment) };
+  } catch (e) {
+    return { ok: false, error: "表达式解析请求失败：" + e };
+  }
+}
+
+// 解析结果写回段表：append = 末尾加段（表达式框，连续补段）；replace = 整行替换（齿轮输入框粘贴）。
+function insertParsedRows(parsed, at, mode) {
+  const list = parsed && parsed.length ? parsed : [blankRow()];
+  if (mode === "replace") rows.splice(at, 1, ...list);
+  else rows.splice(at, 0, ...list);
+  sel = mode === "replace" ? Math.min(at, rows.length - 1) : Math.min(at + list.length - 1, rows.length - 1);
+  if (sel < 0) sel = 0;
+  renderTable();
+  regenText();
+  updateButtons();
+}
+
+// 表达式框「解析并加段」：成功的段追到段表末尾，清空输入框。
+async function addExpressionFromInput() {
+  const res = await parseExpressionToRows(el("exprInput").value);
+  if (!res.ok) { showExprError(res.error); return; }
+  clearExprError();
+  insertParsedRows(res.rows, rows.length, "append");
+  el("exprInput").value = "";
+}
+
+// 在段表的 GEAR/INVOLSPLINE 输入框里粘贴整条表达式：整行替换成解析出的段；
+// 不是表达式（例如纯数字）则放行，照常粘贴进当前输入框。
+async function onSegmentPaste(e) {
+  const tr = e.target.closest ? e.target.closest("tr[data-row]") : null;
+  if (!tr) return;
+  const field = e.target.dataset ? e.target.dataset.f || "" : "";
+  if (!(field.indexOf("gear.") === 0 || field.indexOf("invol.") === 0)) return;
+  const text = e.clipboardData ? e.clipboardData.getData("text") : "";
+  if (!looksLikeExpression(text)) return;
+  if (e.preventDefault) e.preventDefault();
+  const at = Number(tr.dataset.row);
+  const res = await parseExpressionToRows(text);
+  if (!res.ok) { showExprError(res.error); return; }
+  clearExprError();
+  insertParsedRows(res.rows, at, "replace");
+}
+
+// 打开齿轮生成器：GET /gear 不带 app=1 → guide server 的 upgrade_external_page
+// 会补一个 chromium --app 独立窗口（已开着则只弹「已在新窗口打开」提示，不重复开）。
+function openGearWindow() {
+  try {
+    const w = window.open("/gear", "_blank");
+    if (!w) window.location.href = "/gear";
+  } catch (e) {
+    window.location.href = "/gear";
   }
 }
 
@@ -1305,6 +1437,19 @@ function ping(bye) {
   });
 
   el("out").addEventListener("click", exportToDrawing);
+
+  // 表达式互通：表达式框（粘贴/回车/按钮 → 末尾加段）+ 段表齿轮输入框整行替换 + 开齿轮窗口
+  el("exprAdd").addEventListener("click", addExpressionFromInput);
+  el("openGear").addEventListener("click", openGearWindow);
+  el("exprInput").addEventListener("keydown", (e) => { if (e.key === "Enter") addExpressionFromInput(); });
+  el("exprInput").addEventListener("paste", (e) => {
+    const text = e.clipboardData ? e.clipboardData.getData("text") : "";
+    if (!looksLikeExpression(text)) return;
+    if (e.preventDefault) e.preventDefault();
+    el("exprInput").value = text;
+    addExpressionFromInput();
+  });
+  el("segBody").addEventListener("paste", onSegmentPaste);
 
   // 初始：规格表（下拉数据源）→ 示例文本解析 → 回填段表 → 预览
   renderViews();

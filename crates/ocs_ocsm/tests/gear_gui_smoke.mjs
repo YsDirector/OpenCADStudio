@@ -151,6 +151,43 @@ try { el('sysSel')._fire('change', el('sysSel')); } catch (e) { errors.push('体
 await flush();
 check(el('mLabel').style.display !== 'none' && el('dpLabel').style.display === 'none', '切回 M 应恢复模数行');
 
+// ①.6 轴生成器表达式（齿轮模式）：轴段语法一行、不带 view/at；复制按钮写入剪贴板
+// （DOM 垫片不会读 HTML 默认值，这里补上齿轮模式的其余默认项）
+el('ha').value = '1';
+el('c').value = '0.25';
+el('betaD').value = '0';
+el('betaM').value = '0';
+el('betaS').value = '0';
+el('x').value = '0';
+el('m').value = '3';
+el('z').value = '20';
+el('h').value = '30';
+el('alpha').value = '20';
+try { el('m')._fire('input', el('m')); } catch (e) { errors.push('表达式同步异常: ' + e); }
+await flush();
+check(el('exprPreview').value === 'GEAR M3 Z20 H30 ALPHA20',
+  '齿轮表达式应为 GEAR M3 Z20 H30 ALPHA20，实际 ' + JSON.stringify(el('exprPreview').value));
+check(el('exprHint').textContent.includes('可直接粘贴'), '齿轮表达式提示应说明可直接粘贴：' + el('exprHint').textContent);
+check(!/view|\bat\b/i.test(el('exprPreview').value), '表达式不应带 view/at：' + el('exprPreview').value);
+Object.defineProperty(globalThis, 'navigator', {
+  value: { clipboard: { writeText: async (t) => { globalThis.__copied = t; } } },
+  configurable: true,
+});
+globalThis.__copied = '';
+el('exprCopy')._fire('click', el('exprCopy'));
+await flush();
+check(globalThis.__copied === 'GEAR M3 Z20 H30 ALPHA20',
+  '复制按钮应写入剪贴板，实际 ' + JSON.stringify(globalThis.__copied));
+
+// ①.7 DP 径节制：轴段 GEAR 只认 M，表达式按 m = 25.4/DP 换算
+el('sysSel').value = 'DP';
+el('dp').value = '8';
+try { el('sysSel')._fire('change', el('sysSel')); } catch (e) { errors.push('DP 表达式同步异常: ' + e); }
+await flush();
+check(el('exprPreview').value === 'GEAR M3.175 Z20 H31.75 ALPHA20',
+  'DP 表达式应按 m=25.4/DP 换算，实际 ' + JSON.stringify(el('exprPreview').value));
+check(el('exprHint').textContent.includes('25.4/DP'), 'DP 表达式提示应说明换算：' + el('exprHint').textContent);
+
 // ② 花键模式 + GB：花键行显示、d_B 行隐藏
 el('stdSel').value = 'GB';
 el('splineMode').checked = true;
@@ -197,12 +234,30 @@ check(el('hfLabel').style.display === 'none', 'ANSI 下 hf 行应隐藏（Table 
 check(el('rhoLabel').style.display === 'none', 'ANSI 下 rho 行应隐藏');
 check(el('cfLabel').style.display === 'none', 'ANSI 下 cf 行应隐藏');
 check(el('profileSel').value === 'ANSI30P', 'ANSI 默认齿廓应为 ANSI30P，实际 ' + el('profileSel').value);
+// ANSI 表达式：shaft.rs 的 P8 写法会被 RL 参数分支先截住，用 M 槽位写径节
+check(el('exprPreview').value === 'INVOLSPLINE ANSI30P M3.75 Z19 L31.75',
+  'ANSI 表达式应用 M 槽位写径节，实际 ' + JSON.stringify(el('exprPreview').value));
+check(el('exprHint').textContent.includes('M 槽位'), 'ANSI 表达式提示应说明 M 槽位：' + el('exprHint').textContent);
 
 // ③.9 花键视图按钮（用户定案：内花键同内齿轮，无侧视图）
 // 先回 GB（视图规则与体系无关），锁外花键 = 剖视/侧视/端视
 el('stdSel').value = 'GB';
 try { el('stdSel')._fire('change', el('stdSel')); } catch (e) { errors.push('GB 回切异常: ' + e); }
 await flush();
+
+// ③.95 轴生成器表达式（花键模式）：INVOLSPLINE 轴段语法；复制成功
+el('m').value = '3';
+el('z').value = '20';
+el('h').value = '30';
+try { el('m')._fire('input', el('m')); } catch (e) { errors.push('花键表达式同步异常: ' + e); }
+await flush();
+check(el('exprPreview').value === 'INVOLSPLINE GB30R M3 Z20 L30',
+  '花键表达式应为 INVOLSPLINE GB30R M3 Z20 L30，实际 ' + JSON.stringify(el('exprPreview').value));
+globalThis.__copied = '';
+el('exprCopy')._fire('click', el('exprCopy'));
+await flush();
+check(globalThis.__copied === 'INVOLSPLINE GB30R M3 Z20 L30',
+  '复制按钮应写入花键表达式，实际 ' + JSON.stringify(globalThis.__copied));
 const viewBtns = () => el('viewRow').children.map((b) => b.textContent);
 const kindBtns = () => el('kindRow').children;
 check(viewBtns().join('|') === '剖视图|侧视图|端视图', '外花键应有三视图按钮，实际 ' + viewBtns().join('|'));
@@ -222,6 +277,8 @@ if (intKindBtn) {
   check(viewBtns().join('|') === '剖视图（齿圈内齿不剖）|端视图', '内花键应只留 剖视图 + 端视图，实际 ' + viewBtns().join('|'));
   check(el('viewName').textContent === '剖视图（齿圈内齿不剖）', '内花键不可用侧视图时应自动回剖视图，实际 ' + el('viewName').textContent);
   check(el('kindHint').innerHTML.includes('不存在侧视图'), '内花键提示应写明无侧视图：' + el('kindHint').innerHTML);
+  check(el('exprHint').textContent.includes('不能在轴上使用'), '内花键表达式应标注「不能在轴上使用」：' + el('exprHint').textContent);
+  check(el('exprPreview').value.indexOf('INVOLSPLINE GB30R') === 0, '内花键表达式仍应给出参数（只作记录）：' + el('exprPreview').value);
 }
 // 切回外花键：恢复三视图
 const extKindBtn = kindBtns().find((b) => b.dataset.k === 'external');

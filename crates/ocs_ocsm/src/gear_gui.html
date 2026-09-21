@@ -26,6 +26,11 @@
   .btn[disabled] { background: #9db9e8; cursor: not-allowed; }
   .hint { font-size: 12px; color: #888; margin-top: 8px; line-height: 1.5; }
   #status, #perr { font-size: 13px; margin-top: 8px; min-height: 18px; }
+  /* ── 轴生成器表达式预览：只读框 + 复制按钮（与命令行提示共用同一份参数快照） ── */
+  .ctl.expr { flex-wrap: nowrap; margin-top: 4px; }
+  #exprPreview { flex: 1 1 auto; width: auto; font: 12.5px ui-monospace, "SF Mono", Consolas, "Courier New", monospace; }
+  .btn.mini { margin-top: 0; padding: 5px 12px; font-size: 13px; flex: none; }
+  .btn.mini[disabled] { background: #9db9e8; cursor: not-allowed; }
   .ok { color: #1a7f37; } .bad { color: #d1242f; } .warn { color: #b26a00; }
   code { background: #f1f3f5; padding: 1px 4px; border-radius: 3px; }
   /* ── 预览区：深色底、居中、宽度自适应（与后端 SVG 的 #111 底色一致） ── */
@@ -190,6 +195,14 @@
 
     <!-- ②.5 种类说明 + 命令行等价用法：切种类/改参数/切视图时同步刷新 -->
     <div class="hint" id="kindHint"></div>
+
+    <!-- ②.6 轴生成器表达式：与上面的命令行提示同源；复制后到轴生成器粘贴即成段 -->
+    <label for="exprPreview">轴生成器表达式（一行轴段语法，复制后到轴生成器粘贴）</label>
+    <div class="ctl expr">
+      <input type="text" id="exprPreview" readonly spellcheck="false">
+      <button type="button" class="btn mini" id="exprCopy">复制表达式</button>
+    </div>
+    <div class="hint" id="exprHint"></div>
 
     <!-- ③ 信息行：后端算出的派生值 + 提示（notes） -->
     <div class="info" id="info"></div>
@@ -600,6 +613,7 @@ function fillNfA() {
   const zs = [...new Set(hits.map((r) => Number(r.z)))];
   if (ms.length === 1) el("m").value = fmt(ms[0]);
   if (zs.length === 1) el("z").value = String(zs[0]);
+  syncKindHint();   // A 自动带出 m/z 后，表达式/命令行提示立即跟上
 }
 
 // 从 `/api/parts` 取花键预设与 DIN 名义表（与 shaft_gui 同源）；失败退兜底表。
@@ -689,42 +703,125 @@ function applyKindUI() {
   syncKindHint();
 }
 
-// 命令行等价用法 + 模式语义说明（随模式/种类/参数/视图同步）
-function syncKindHint() {
-  const v = collect();
-  const viewCn = viewLabel(curView, curKind);
-  let html = "";
+// 参数 → 「OCSMGEAR 命令行等价」与「轴生成器轴段表达式」两份快照：共用同一份 collect()
+// 结果（v.p），提示与表达式不会各取各的而格式漂移。expr 是轴生成器段语法的一行，
+// 不带 view/at（那是视图/插入参数，不是段参数）；内齿/变位/斜齿在轴上表达不了的另行告警。
+// 返回 { cli, expr, notes, warnings }：cli 不含 view（由 syncKindHint 统一补）。
+function equivalence(v) {
+  const notes = [], warnings = [];
   if (isSpline()) {
     const db = String(el("db").value).trim();
     const isNf = el("stdSel").value === "NF";
-    let arg = "花键 " + (curKind === "internal" ? "内花键 " : "") + "std=" + el("stdSel").value;
-    if (el("stdSel").value === "ANSI") arg += " profile=" + el("profileSel").value;
-    if (db !== "") arg += (isNf ? " a=" : " db=") + db;
-    if (v.ok && v.p.p !== undefined) arg += " P" + fmt(v.p.p);
-    else if (v.ok && v.p.m !== undefined) arg += " " + fmt(v.p.m);
-    if (v.ok && v.p.z !== undefined) arg += " " + v.p.z;
-    arg += " view " + viewCn;
+    let cli = "花键 " + (curKind === "internal" ? "内花键 " : "") + "std=" + el("stdSel").value;
+    if (el("stdSel").value === "ANSI") cli += " profile=" + el("profileSel").value;
+    if (db !== "") cli += (isNf ? " a=" : " db=") + db;
+    if (v.ok && v.p.p !== undefined) cli += " P" + fmt(v.p.p);
+    else if (v.ok && v.p.m !== undefined) cli += " " + fmt(v.p.m);
+    if (v.ok && v.p.z !== undefined) cli += " " + v.p.z;
+    if (curKind === "internal") warnings.push("内花键不能在轴上使用（轴上没有内花键）：本表达式只作记录，别粘到轴生成器。");
+    let expr = "";
+    if (v.ok) {
+      const p = v.p;
+      // 与 shaft.rs 的 INVOLSPLINE 子关键字对齐：M/Z/X/L（GB/DIN/NF）、P/Z/L（ANSI）、
+      // DB（DIN 基准直径）、A（NF 公称直径）；预设代号直接沿用齿廓下拉（GB30R/DIN30/NFP/ANSI30P…）。
+      expr = "INVOLSPLINE " + String(p.profile || p.std || "").trim();
+      if (p.std === "ANSI") {
+        // shaft.rs 的 `P8` 写法会先被 RL 参数（P/g1/g2/dg/r）分支截住而报错；
+        // ANSI 下 M 槽位就是径节 P（parser 注释口径），所以用 `M8` 这种写法。
+        if (p.p !== undefined) expr += " M" + fmt(p.p);
+      } else {
+        if (p.db !== undefined) expr += (p.std === "NF" ? " A" : " DB") + fmt(p.db);
+        if (p.m !== undefined) expr += " M" + fmt(p.m);
+        if (p.x !== undefined && Math.abs(p.x) > 1e-12) expr += " X" + fmt(p.x);
+      }
+      if (p.z !== undefined) expr += " Z" + p.z;
+      if (p.h !== undefined) expr += " L" + fmt(p.h);
+      if (p.std === "ANSI") notes.push("ANSI 径节制：轴段 INVOLSPLINE 用 M 槽位写径节 P（如 M8 即 P8；P8 写法当前会被 RL 参数分支拦下）。");
+    }
+    return { cli, expr, notes, warnings };
+  }
+  const cli = v.ok
+    ? (curKind === "internal" ? "int" : "ext") + (v.p.std === "DP"
+        ? " std=DP dp=" + fmt(v.p.dp) + " " + v.p.z + " " + fmt(v.p.h) + " alpha " + fmt(v.p.alpha)
+        : " " + fmt(v.p.m) + " " + v.p.z + " " + fmt(v.p.h) + " alpha " + fmt(v.p.alpha))
+    : (curKind === "internal" ? "int" : "ext") + " <m> <z> <h> alpha <α>";
+  if (curKind === "internal") warnings.push("内齿轮（齿圈）不能在轴上使用（轴上没有内齿）：本表达式只作记录，别粘到轴生成器。");
+  let expr = "";
+  if (v.ok) {
+    const p = v.p;
+    // DP 的 collect() 会删掉 p.m（只留 dp 原值）：表达式按 m = 25.4/DP 换算。
+    const meff = p.std === "DP" ? 25.4 / p.dp : p.m;
+    // shaft.rs 的 GEAR 子关键字只有 M/Z/H/BETA/ALPHA；变位 X 在轴段 GEAR 里不存在，
+    // 所以这里不写 X（写了轴侧会明确报错），只在提示里说明按 Xn=0 处理。
+    expr = "GEAR M" + fmt(meff) + " Z" + p.z + " H" + fmt(p.h) + " ALPHA" + fmt(p.alpha);
+    if (p.std === "DP") notes.push("径节制 DP：轴段 GEAR 只认模数 M，表达式已按 m = 25.4/DP = " + fmt(meff) + " 换算。");
+    if (Math.abs(p.x) > 1e-12) warnings.push("变位系数 Xn=" + fmt(p.x) + "：轴段 GEAR 不支持变位（粘贴后按 Xn=0 画），齿形请用 OCSMGEAR 单独出。");
+    if (Math.abs(p.beta) > 1e-12) warnings.push("斜齿 β=" + fmt(p.beta) + "°：轴段 GEAR 只做直齿（BETA 会报「斜齿未实现」），表达式按直齿给出。");
+  }
+  return { cli, expr, notes, warnings };
+}
+
+// 表达式预览 + 提示（由 syncKindHint 在参数/模式/种类/视图变化时同步调用）
+function syncExpr(v, eq) {
+  el("exprPreview").value = eq && eq.expr ? eq.expr : "";
+  el("exprCopy").disabled = !(eq && eq.expr);
+  const hint = el("exprHint");
+  const msgs = [];
+  if (!(v && v.ok)) msgs.push("参数不合法（见上方红字），先修正后才会给出表达式。");
+  else msgs.push("可直接粘贴到轴生成器的表达式框或 GEAR/INVOLSPLINE 输入框（不含 view/at 等插入参数）。");
+  if (eq) msgs.push(...(eq.notes || []), ...(eq.warnings || []));
+  hint.textContent = msgs.join(" ");
+  hint.className = "hint" + (eq && eq.warnings && eq.warnings.length ? " bad" : "");
+}
+
+// 复制表达式：优先 navigator.clipboard；不可用/被拒绝时回退「选中文本 + 提示 Ctrl+C」。
+async function copyExpr() {
+  const box = el("exprPreview");
+  const text = box.value;
+  if (!text) return;
+  let ok = false;
+  try {
+    if (typeof navigator !== "undefined" && navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(text);
+      ok = true;
+    }
+  } catch (e) { ok = false; }
+  const hint = el("exprHint");
+  if (ok) {
+    hint.className = "hint ok";
+    hint.textContent = "已复制：" + text + "（粘贴到轴生成器段表的表达式框或齿轮齿形输入框即可成段）";
+    return;
+  }
+  try { box.focus(); if (box.select) box.select(); } catch (e) { /* 忽略 */ }
+  hint.className = "hint warn";
+  hint.textContent = "剪贴板不可用，已选中表达式——请按 Ctrl+C 手动复制。";
+}
+
+// 命令行等价用法 + 模式语义说明 + 轴生成器表达式（随模式/种类/参数/视图同步）
+function syncKindHint() {
+  const v = collect();
+  const viewCn = viewLabel(curView, curKind);
+  const eq = equivalence(v);
+  let html = "";
+  if (isSpline()) {
     html += "花键模式：几何全在 <code>invol_spline.rs</code> 引擎（GB/DIN 预设 + DIN 5480-2 / NF E22-141 查表；ANSI 径节 P + Table 2 五列公式）；"
          + "不给基准直径时用 m/z（DIN 由 m/z/x 正算 d_B，NF 由 m/z/x 正算 A，ANSI 由 P 直接算）。<br>";
     if (curKind === "internal") {
       html += "内花键与内齿轮同口径：只有 <b>剖视图 + 端视图</b>（无侧视图，用户定案「内花键剖视图和内齿轮一样，不存在侧视图」）；"
            + "剖视图按齿圈内齿不剖画（端面/齿顶线/齿根线/内孔壁/孔口倒角 + 分度线/轴线），<b>不打剖面线</b>，外壁留你延伸。<br>";
     }
-    html += "命令行等价用法：<code>OCSMGEAR " + arg + "</code>";
+    html += "命令行等价用法：<code>OCSMGEAR " + eq.cli + " view " + viewCn + "</code>";
     el("kindHint").innerHTML = html;
+    syncExpr(v, eq);
     return;
   }
-  const arg = v.ok
-    ? (curKind === "internal" ? "int" : "ext") + (v.p.std === "DP"
-        ? " std=DP dp=" + fmt(v.p.dp) + " " + v.p.z + " " + fmt(v.p.h) + " alpha " + fmt(v.p.alpha)
-        : " " + fmt(v.p.m) + " " + v.p.z + " " + fmt(v.p.h) + " alpha " + fmt(v.p.alpha))
-    : (curKind === "internal" ? "int" : "ext") + " <m> <z> <h> alpha <α>";
   if (curKind === "internal") {
     html += "内齿轮只有 <b>剖视图</b> 与 <b>端视图</b> 两个视图（侧视图/简化正视图无模板，不生成）；"
          + "齿顶圆在<b>内</b>、齿根圆在<b>外</b>（da &lt; d &lt; df）。<br>";
   }
-  html += "命令行等价用法：<code>OCSMGEAR " + arg + " view " + viewCn + "</code>";
+  html += "命令行等价用法：<code>OCSMGEAR " + eq.cli + " view " + viewCn + "</code>";
   el("kindHint").innerHTML = html;
+  syncExpr(v, eq);
 }
 
 /* ─────────────────────────── 预览（/api/gear_svg） ─────────────────────────── */
@@ -1047,12 +1144,14 @@ function ping(bye) {
   });
 
   el("out").addEventListener("click", exportToDrawing);
+  el("exprCopy").addEventListener("click", copyExpr);
   // 齿轮体系（M/DP）：切体系 → 显隐 m/dp、重算倒角与默认 h、立即刷新
   el("sysSel").addEventListener("change", () => {
     syncSplineUI();
     syncModuleSelect();
     syncChamfer();
     syncDefaultH(false);
+    syncKindHint();   // 表达式/命令行提示跟随体系（M/DP）
     validateUI();
     onCommit();
   });
@@ -1074,10 +1173,12 @@ function ping(bye) {
     syncSplineUI();
     syncProfileSelect();
     if (isSpline()) applySplinePreset();
+    syncKindHint();   // 表达式/命令行提示跟随标准号
     onCommit();
   });
   el("profileSel").addEventListener("change", () => {
     if (isSpline()) applySplinePreset();
+    syncKindHint();   // 表达式/命令行提示跟随齿廓代号（GB30R/DIN30/NFP/ANSI30P…）
     onCommit();
   });
 

@@ -43,6 +43,7 @@ const INVOL = [
   { code: 'GB30R', std: 'GB', profile: '30圆齿根', alpha: 30, ha: 0.5, hf: 0.9, rho: 0.4, cf: 0.1 },
   { code: 'GB30P', std: 'GB', profile: '30平齿根', alpha: 30, ha: 0.5, hf: 0.75, rho: 0.2, cf: 0.1 },
   { code: 'DIN30', std: 'DIN', profile: 'DIN30', alpha: 30, ha: 0.45, hf: 0.55, rho: 0.16, cf: 0.1 },
+  { code: 'ANSI30P', std: 'ANSI', profile: 'ANSI30平齿根齿侧', alpha: 30, ha: 0.5, hf: 0.675, rho: 0, cf: 0 },
 ];
 
 // DIN 5480-2 名义表候选（与 detail.rs 目录 din_nominal 同形；只取测试用到的行）。
@@ -92,7 +93,10 @@ function mkEl(id) {
       contains(c) { return this._on.has(c); },
     },
     addEventListener(ev, fn) { (this._handlers[ev] ||= []).push(fn); },
-    _fire(ev, target) { (this._handlers[ev] || []).forEach((f) => f({ target, type: ev })); },
+    _fire(ev, target, extra) {
+      const e = Object.assign({ target, type: ev }, extra || {});
+      (this._handlers[ev] || []).forEach((f) => f(e));
+    },
     appendChild(c) { this.children.push(c); return c; },
     removeChild(c) { this.children = this.children.filter((x) => x !== c); },
     querySelectorAll(sel) {
@@ -221,7 +225,7 @@ function textResp(text, status = 200) {
   return { ok: status < 400, status, text: async () => text, json: async () => JSON.parse(text) };
 }
 
-// DSL → 归一化段模型（够本测试用：花键行按规格表查 de，其它行给一个圆柱段）。
+// DSL → 归一化段模型（够本测试用：花键行按规格表查 de，齿轮/渐开线行按真实子关键字回填）。
 function segmentsFor(dsl) {
   const out = [];
   for (const raw of String(dsl).split(/[\n|]/)) {
@@ -239,15 +243,53 @@ function segmentsFor(dsl) {
       });
       continue;
     }
-    const inv = /^INVOLSPLINE\s+(\S+)\s+M([\d.]+)\s+Z(\d+)(?:\s+X(-?[\d.]+))?\s+L([\d.]+)(?:\s+de\s*=?\s*([\d.]+))?/i.exec(line);
+    // GEAR 段（与 shaft.rs 子关键字 M/Z/H/ALPHA 对齐；H/ALPHA 可省）
+    const gr = /^GEAR\b(.*)$/i.exec(line);
+    if (gr) {
+      if (!/\bZ\s*=?\s*\d+/i.test(gr[1])) {
+        return { error: '第 1 行（第 1 段）：关键字 GEAR 缺少 Z（齿数）' };
+      }
+      const g = {
+        m: Number(/\bM\s*=?\s*(-?[\d.]+)/i.exec(gr[1])[1]),
+        z: Number(/\bZ\s*=?\s*(\d+)/i.exec(gr[1])[1]),
+        h: null,
+        alpha: null,
+      };
+      const h = /\bH\s*=?\s*(-?[\d.]+)/i.exec(gr[1]);
+      if (h) g.h = Number(h[1]);
+      const al = /\bALPHA\s*=?\s*(-?[\d.]+)/i.exec(gr[1]);
+      if (al) g.alpha = Number(al[1]);
+      out.push({ gear: g });
+      continue;
+    }
+    const inv = /^INVOLSPLINE\s+(\S+)(.*)$/i.exec(line);
     if (inv) {
-      const [, code, m, z, x, len, de] = inv;
-      const iv = { code, m: Number(m), z: Number(z), x: x !== undefined ? Number(x) : 0, len: Number(len) };
-      if (de !== undefined) iv.de = Number(de);
+      const code = inv[1];
+      const rest = inv[2];
+      const mhit = /\b(?:M|P)\s*=?\s*([\d.]+)/i.exec(rest);
+      const zhit = /\bZ\s*=?\s*(\d+)/i.exec(rest);
+      const lhit = /\bL\s*=?\s*([\d.]+)/i.exec(rest);
+      const xhit = /\bX\s*=?\s*(-?[\d.]+)/i.exec(rest);
+      const dbhit = /\b(?:DB|A)\s*=?\s*([\d.]+)/i.exec(rest);
+      const dehit = /\bde\s*=?\s*([\d.]+)/i.exec(rest);
+      const iv = { code, m: mhit ? Number(mhit[1]) : null, z: zhit ? Number(zhit[1]) : null, x: xhit ? Number(xhit[1]) : 0, len: lhit ? Number(lhit[1]) : null };
+      if (/^ANSI/i.test(code) && mhit) {
+        // 真后端：ANSI 序列化回来 m=25.4/P（mm），pitch=P 原值优先用于显示/编辑。
+        iv.pitch = Number(mhit[1]);
+        iv.m = 25.4 / iv.pitch;
+      }
+      if (dbhit) iv.d_b = Number(dbhit[1]);
+      if (dehit) iv.de = Number(dehit[1]);
       out.push({ invol_spline: iv });
       continue;
     }
-    out.push({ s: 30, e: 30, l: 10 });
+    // 普通轴段（S/E/L…）：本测试不细解，给一个圆柱段
+    if (/^S\s*=?\s*[\d.]/i.test(line)) {
+      out.push({ s: 30, e: 30, l: 10 });
+      continue;
+    }
+    // 其它开头（纯数字/int/ext/中文体系名…）= OCSMGEAR CLI 误贴或非法段：复刻后端的“不识别的关键字”。
+    return { error: `第 1 行（第 1 段）：不识别的关键字「${line.split(/\s+/)[0]}」` };
   }
   return out;
 }
@@ -278,7 +320,9 @@ global.fetch = async (u, opts = {}) => {
           + 'de 查不到 —— 请给 de 覆盖（例 `de 63`）。',
       }, 400);
     }
-    return jsonResp({ ok: true, segments: segmentsFor(dsl), at: null, rot: null, view: 'normal' });
+    const parsed = segmentsFor(dsl);
+    if (parsed.error) return jsonResp({ ok: false, error: parsed.error }, 400);
+    return jsonResp({ ok: true, segments: parsed, at: null, rot: null, view: 'normal' });
   }
   if (url.startsWith('/api/shaft_preview')) {
     return textResp('<svg xmlns="http://www.w3.org/2000/svg"><line x1="0" y1="0" x2="1" y2="1"/></svg>');
@@ -445,6 +489,110 @@ check(!!involModel && !!involModel.segments[0].invol_spline, '模型应带 invol
 check(involModel && involModel.segments[0].invol_spline.code === 'DIN30'
   && involModel.segments[0].invol_spline.de === 70, '模型 code/de 应为 DIN30/70');
 
+// ⑧ 表达式互通（齿轮/花键窗口 → 轴生成器粘贴）：往返一致 + 容错 + 错误定位 + 开窗
+const elv = (id) => document.getElementById(id);
+const tick = async (n = 3) => { for (let i = 0; i < n; i++) await new Promise((r) => setImmediate(r)); };
+
+// ⑧.1 表达式框：OCSMGEAR 前缀 + 中文空格 + 多空格清洗后解析，GEAR 段追到末尾
+// （字面量与 gear_gui_smoke.mjs 断言的齿轮窗口产出一致 = 两端往返契约）
+dslEl.value = 'S30 E30 L10';
+await S.refreshFromText();
+const rowsBeforeExpr = S.rows.length;
+elv('exprInput').value = 'OCSMGEAR\u3000GEAR\u3000M3\u3000Z20\u3000H30\u3000ALPHA20';
+elv('exprAdd').click();
+await tick();
+check(lastParseDsl === 'GEAR M3 Z20 H30 ALPHA20',
+  `清洗后应剥命令名/中文空格并折叠多空格，实为 ${JSON.stringify(lastParseDsl)}`);
+check(S.rows.length === rowsBeforeExpr + 1, '表达式框应追加一段');
+const gw = S.rows[S.rows.length - 1];
+check(gw.gear.on && gw.gear.m === '3' && gw.gear.z === '20' && gw.gear.h === '30' && gw.gear.alpha === '20',
+  `GEAR 段参数应与齿轮侧一致：${JSON.stringify(gw.gear)}`);
+check(dslEl.value.includes('GEAR M3 Z20 H30 ALPHA20'), `行文本应同步：${JSON.stringify(dslEl.value)}`);
+check(elv('exprInput').value === '', '加段后表达式框应清空');
+check(elv('exprErr').textContent === '', '成功时不应有错误：' + elv('exprErr').textContent);
+
+// ⑧.2 在 GEAR 输入框里粘贴整条表达式 → 整行替换（参数以粘贴的表达式为准）
+const grow = segBody._rows[S.rows.length - 1];
+const gearMInput = grow._fields.find((f) => f.dataset.f === 'gear.m');
+check(!!gearMInput, 'GEAR 行应有 m 输入框');
+let prevented = false;
+segBody._fire('paste', gearMInput, {
+  clipboardData: { getData: () => 'GEAR M5 Z10 H50 ALPHA25' },
+  preventDefault: () => { prevented = true; },
+});
+await tick();
+check(prevented, '识别为表达式时应 preventDefault（不让原文贴进数字框）');
+check(S.rows.length === rowsBeforeExpr + 1, '粘贴表达式应整行替换而非多加行');
+const g2 = S.rows[S.rows.length - 1];
+check(g2.gear.on && g2.gear.m === '5' && g2.gear.z === '10' && g2.gear.h === '50' && g2.gear.alpha === '25',
+  `替换后参数应为粘贴值：${JSON.stringify(g2.gear)}`);
+
+// ⑧.3 纯数字粘贴不拦截（仍走输入框原生粘贴）
+prevented = false;
+segBody._fire('paste', gearMInput, {
+  clipboardData: { getData: () => '5' },
+  preventDefault: () => { prevented = true; },
+});
+check(!prevented, '纯数字粘贴不应被表达式拦截');
+
+// ⑧.4 INVOLSPLINE（花键）往返：预设代号/M/Z/X/L 回填一致
+const rowsBeforeInvol = S.rows.length;
+elv('exprInput').value = 'INVOLSPLINE\u3000GB30R\u3000M3\u3000Z20\u3000X0.2\u3000L30';
+elv('exprAdd').click();
+await tick();
+const iw = S.rows[S.rows.length - 1];
+check(S.rows.length === rowsBeforeInvol + 1 && iw.invol.on, '应加出 INVOLSPLINE 段');
+check(iw.invol.profile === 'GB30R' && iw.invol.m === '3' && iw.invol.z === '20'
+  && Math.abs(Number(iw.invol.x) - 0.2) < 1e-9 && iw.invol.len === '30',
+  `INVOLSPLINE 参数应与齿轮侧一致：${JSON.stringify({ profile: iw.invol.profile, m: iw.invol.m, z: iw.invol.z, x: iw.invol.x, len: iw.invol.len })}`);
+check(dslEl.value.includes('INVOLSPLINE GB30R M3 Z20 X0.2 L30'), `行文本应同步：${JSON.stringify(dslEl.value)}`);
+
+// ⑧.5 解析失败：明确错误 + 段定位，且不改段表
+const rowsBeforeBad = S.rows.length;
+elv('exprInput').value = 'GEAR M3';
+elv('exprAdd').click();
+await tick();
+check(elv('exprErr').textContent.includes('GEAR 缺少 Z'),
+  '解析失败应显示后端明确错误：' + elv('exprErr').textContent);
+check(elv('exprErr').textContent.includes('第 1'), '错误应指出段位置：' + elv('exprErr').textContent);
+check(S.rows.length === rowsBeforeBad, '解析失败不应改段表');
+
+// ⑧.6 OCSMGEAR 命令行语法误贴 → 专门指路（仍带后端段定位）
+elv('exprInput').value = 'OCSMGEAR 3 20 30';
+elv('exprAdd').click();
+await tick();
+check(elv('exprErr').textContent.includes('OCSMGEAR 命令行语法'),
+  '误贴 CLI 应给专门指路：' + elv('exprErr').textContent);
+check(elv('exprErr').textContent.includes('第 1'), '错误仍应带段定位：' + elv('exprErr').textContent);
+
+// ⑧.7 表达式框直接粘贴（Ctrl+V）也立即解析并加段
+const rowsBeforePaste = S.rows.length;
+prevented = false;
+elv('exprInput')._fire('paste', elv('exprInput'), {
+  clipboardData: { getData: () => 'GEAR M4 Z12 H24' },
+  preventDefault: () => { prevented = true; },
+});
+await tick();
+check(prevented && S.rows.length === rowsBeforePaste + 1, '表达式框粘贴应被拦截并加段');
+check(S.rows[S.rows.length - 1].gear.m === '4', '粘贴的 GEAR 段参数应回填');
+
+// ⑧.8 打开齿轮生成器：window.open("/gear")（guide server 会补 app 窗口）
+let opened = null;
+global.window.open = (u) => { opened = u; return {}; };
+elv('openGear').click();
+check(opened === '/gear', '打开齿轮生成器应 window.open("/gear")，实际 ' + opened);
+
+// ⑧.9 ANSI：齿轮窗口用 M 槽位写径节（M8 = P8）；回写行文本不得变回 parser 不认的 P8
+elv('exprInput').value = 'INVOLSPLINE ANSI30P M8 Z20 L30';
+elv('exprAdd').click();
+await tick();
+const aw = S.rows[S.rows.length - 1];
+check(aw.invol.on && aw.invol.profile === 'ANSI30P' && aw.invol.m === '8',
+  `ANSI 段应回填 M8（显示为径节原值）：${JSON.stringify({ profile: aw.invol.profile, m: aw.invol.m })}`);
+check(dslEl.value.includes('INVOLSPLINE ANSI30P M8 Z20 L30'),
+  `ANSI 行文本应仍是 M8，实为 ${JSON.stringify(dslEl.value)}`);
+check(!/ANSI30P\s+P8/i.test(dslEl.value), 'ANSI 行文本不应输出 P8（会被 RL 参数分支拦下）');
+
 report();
 
 function report() {
@@ -452,6 +600,6 @@ function report() {
     console.error('轴 GUI 冒烟失败：\n- ' + errors.join('\n- '));
     process.exit(1);
   }
-  console.log('轴 GUI 冒烟通过：规格下拉 / de 自动填 / 派生值 / 自定义手输 / 表外缺 de 报错');
+  console.log('轴 GUI 冒烟通过：规格下拉 / de 自动填 / 派生值 / 自定义手输 / 表外缺 de 报错 / 表达式粘贴往返');
   process.exit(0);
 }
