@@ -275,22 +275,30 @@ function kindName(k) {
 function kindSub(k) {
   if (!isSpline()) return k.sub;
   return k.key === "internal"
-    ? "内花键：材料在外、齿朝内（外侧齿根/里侧齿顶）；侧视/剖视是缺模板依据的草案"
+    ? "内花键：材料在外、齿朝内；同内齿轮只有 剖视图 + 端视图，无侧视图"
     : "外花键：齿朝外（大径/小径按 GB 表 3 或 DIN 名义表公式）";
 }
-// 该视图在给定模式/种类下可生成吗：花键只有 端视图/侧视图/剖视图（无简化正视图）；
+// 该视图在给定模式/种类下可生成吗：花键外花键 = 端视图/侧视图/剖视图；
+// 内花键与内齿轮同口径 = 剖视图 + 端视图（无侧视图/简化正视图）；
 // 齿轮仍按原口径（内齿轮只有剖视 + 端视）。
 function viewAvailable(key, kind) {
   const v = viewOf(key);
   if (!v) return false;
-  if (isSpline()) return ["section", "side", "front"].indexOf(key) >= 0;
+  if (isSpline()) {
+    if (kind === "internal") return ["section", "front"].indexOf(key) >= 0;
+    return ["section", "side", "front"].indexOf(key) >= 0;
+  }
   return v.kinds.indexOf(kind) >= 0;
 }
 // 视图显示名：齿轮内齿圈下 section/front 用 internalName；花键统一用花键叫法
+// （内花键 section 与内齿轮同名「剖视图（齿圈内齿不剖）」）
 function viewLabel(key, kind) {
   const v = viewOf(key);
   if (!v) return "";
-  if (isSpline()) return ({ section: "剖视图", side: "侧视图", front: "端视图" })[key] || v.name;
+  if (isSpline()) {
+    if (kind === "internal") return ({ section: "剖视图（齿圈内齿不剖）", front: "端视图" })[key] || v.name;
+    return ({ section: "剖视图", side: "侧视图", front: "端视图" })[key] || v.name;
+  }
   return kind === "internal" && v.internalName ? v.internalName : v.name;
 }
 
@@ -318,10 +326,10 @@ function syncDefaultH(force) {
   const v = defaultH();
   if (Number.isFinite(v)) el("h").value = fmt(v);
 }
-// 厚度/有效长度提示（花键模式 = 侧视/剖视的有效长度 L）。
+// 厚度/有效长度提示（花键模式：外花键 = 侧视/剖视、内花键 = 剖视的有效长度 L）。
 function syncHRule() {
   if (isSpline()) {
-    el("hRule").textContent = "花键有效长度 L（侧视/剖视用；端视图不需要）" + (hTouched ? " · 已手动修改" : "");
+    el("hRule").textContent = "花键有效长度 L（" + (curKind === "internal" ? "剖视" : "侧视/剖视") + "用；端视图不需要）" + (hTouched ? " · 已手动修改" : "");
     return;
   }
   el("hRule").textContent = (curKind === "internal" ? "默认 15m（模板 30 @ m=2）" : "默认 10m（模板 20 @ m=2）")
@@ -698,6 +706,10 @@ function syncKindHint() {
     arg += " view " + viewCn;
     html += "花键模式：几何全在 <code>invol_spline.rs</code> 引擎（GB/DIN 预设 + DIN 5480-2 / NF E22-141 查表；ANSI 径节 P + Table 2 五列公式）；"
          + "不给基准直径时用 m/z（DIN 由 m/z/x 正算 d_B，NF 由 m/z/x 正算 A，ANSI 由 P 直接算）。<br>";
+    if (curKind === "internal") {
+      html += "内花键与内齿轮同口径：只有 <b>剖视图 + 端视图</b>（无侧视图，用户定案「内花键剖视图和内齿轮一样，不存在侧视图」）；"
+           + "剖视图按齿圈内齿不剖画（端面/齿顶线/齿根线/内孔壁/孔口倒角 + 分度线/轴线），<b>不打剖面线</b>，外壁留你延伸。<br>";
+    }
     html += "命令行等价用法：<code>OCSMGEAR " + arg + "</code>";
     el("kindHint").innerHTML = html;
     return;

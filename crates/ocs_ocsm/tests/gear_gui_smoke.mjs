@@ -99,7 +99,7 @@ const INFO = {
   ok: true, mode: 'spline', kind: 'internal', kind_label: '内花键', view: 'front',
   std: 'GB', std_code: 'GB/T 3478.1-2008', profile: '30圆齿根', m: 3, z: 20, x: 0, alpha: 30,
   d: 60, db: 51.9615, da: 65.4, df: 57.344, d_b: null, origin: null, rho: 1.2, cf: 0.3,
-  internal_major: 65.4, internal_minor: 57.344, block: 'B', spec: 'S', notes: ['内花键草案'],
+  internal_major: 65.4, internal_minor: 57.344, block: 'B', spec: 'S', notes: ['内花键无侧视图（同内齿轮：剖视 + 端视）'],
 };
 global.fetch = async (u) => {
   const t = String(u);
@@ -197,6 +197,39 @@ check(el('hfLabel').style.display === 'none', 'ANSI 下 hf 行应隐藏（Table 
 check(el('rhoLabel').style.display === 'none', 'ANSI 下 rho 行应隐藏');
 check(el('cfLabel').style.display === 'none', 'ANSI 下 cf 行应隐藏');
 check(el('profileSel').value === 'ANSI30P', 'ANSI 默认齿廓应为 ANSI30P，实际 ' + el('profileSel').value);
+
+// ③.9 花键视图按钮（用户定案：内花键同内齿轮，无侧视图）
+// 先回 GB（视图规则与体系无关），锁外花键 = 剖视/侧视/端视
+el('stdSel').value = 'GB';
+try { el('stdSel')._fire('change', el('stdSel')); } catch (e) { errors.push('GB 回切异常: ' + e); }
+await flush();
+const viewBtns = () => el('viewRow').children.map((b) => b.textContent);
+const kindBtns = () => el('kindRow').children;
+check(viewBtns().join('|') === '剖视图|侧视图|端视图', '外花键应有三视图按钮，实际 ' + viewBtns().join('|'));
+// 选中侧视图 → 切内花键：不可用视图自动回剖视，按钮只剩 剖视 + 端视
+const sideBtn = el('viewRow').children.find((b) => b.textContent === '侧视图');
+check(!!sideBtn, '外花键应有侧视图按钮');
+if (sideBtn) {
+  sideBtn.click();
+  await flush();
+  check(el('viewName').textContent === '侧视图', '点侧视图后当前视图应为侧视图，实际 ' + el('viewName').textContent);
+}
+const intKindBtn = kindBtns().find((b) => b.dataset.k === 'internal');
+check(!!intKindBtn, '应有内花键（内齿轮）种类按钮');
+if (intKindBtn) {
+  intKindBtn.click();
+  await flush();
+  check(viewBtns().join('|') === '剖视图（齿圈内齿不剖）|端视图', '内花键应只留 剖视图 + 端视图，实际 ' + viewBtns().join('|'));
+  check(el('viewName').textContent === '剖视图（齿圈内齿不剖）', '内花键不可用侧视图时应自动回剖视图，实际 ' + el('viewName').textContent);
+  check(el('kindHint').innerHTML.includes('不存在侧视图'), '内花键提示应写明无侧视图：' + el('kindHint').innerHTML);
+}
+// 切回外花键：恢复三视图
+const extKindBtn = kindBtns().find((b) => b.dataset.k === 'external');
+if (extKindBtn) {
+  extKindBtn.click();
+  await flush();
+  check(viewBtns().join('|') === '剖视图|侧视图|端视图', '切回外花键应恢复三视图，实际 ' + viewBtns().join('|'));
+}
 
 // ④ 防抖回调可跑（collect/renderInfo 不抛）
 for (const t of timers.splice(0)) {

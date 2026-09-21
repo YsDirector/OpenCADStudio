@@ -1824,7 +1824,7 @@ impl OcsmPlugin {
     /// * 不带参数 = 人类侧：开齿轮/花键窗口（模式复选框 + 参数表 + 视图按钮 + 实时预览）+ 进放置态；
     ///   窗口里点「生成到图纸」→ 回图纸点基点 → 移动光标旋转 → 再点落定。
     /// * 带参数 = AI/MCP：齿轮 `OCSMGEAR [内齿轮|int] <m> <z> [h] [ha=..] [c=..] [beta=..] [x=..] [view 视图] [at x,y] [rot 度]`；
-    ///   花键 `OCSMGEAR 花键 [内花键] [std=GB|DIN] [profile=GB30R] [db=40] [hf=..] [rho=..] [cf=..] <m> <z> [x=..] [h=..] [view 端视图|侧视图|剖视图]`。
+    ///   花键 `OCSMGEAR 花键 [内花键] [std=GB|DIN] [profile=GB30R] [db=40] [hf=..] [rho=..] [cf=..] <m> <z> [x=..] [h=..] [view 端视图|侧视图|剖视图]`（内花键与内齿轮同口径：只有 端视图|剖视图，无侧视图）。
     ///   内齿轮（齿圈）：`OCSMGEAR int 2 40 30 view 端视图`；只用 剖视图 + 端视图。GB 无 d_B；DIN 的 d_B 是主参数。
     fn cmd_gear(&self, host: &mut dyn HostApi, args: &str) {
         if !args.trim().is_empty() {

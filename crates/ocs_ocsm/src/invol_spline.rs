@@ -50,9 +50,12 @@
 //! * DIN：内花键齿根 `d_f2 = d_B`、齿顶 `d_a2 = d − 0.9m + 2x·m`（674 行名义表恒等式，
 //!   见 `din5480_four_identities_hold_for_every_row`）。
 //!
-//! **⚠ 内花键侧视/剖视画法缺模板依据**（用户尚未给图）：本模块只出草案 —— 大径/小径两条矩形
-//! 轮廓 + 齿顶线（细线/剖视实线），剖视剖面线两环（齿顶圆↔齿根圆），与内齿轮剖视“只画到齿根圆、
-//! 外壁留用户延伸”的口径一致；真实画法待用户提供模板后替换。
+//! **内花键与内齿轮同口径**（用户定案：「内花键剖视图和内齿轮一样，不存在侧视图」）：
+//! 可用视图 = **剖视图 + 端视图**，**没有侧视图**（也没有简化正视图）。端视图由本模块
+//! [`InvolParams::front_view`] 出图；剖视图按 `gear.rs` 内齿轮剖视模板
+//! （`internal_bore_section`：端面/齿顶线/齿根线/内孔壁/孔口倒角 + 分度线/轴线，
+//! **不打剖面线**、齿圈外壁留用户延伸）出图 —— 本模块不再出旧的「两条矩形轮廓 + 剖面线两环」草案。
+//! [`InvolParams::side_view`] 遇到内花键**明确报错**（不静默忽略、不出乱图）。
 //!
 //! ## DIN 5480-2 名义表（`d_B` 查表，本轮主路径）
 //!
@@ -3673,7 +3676,7 @@ impl InvolParams {
         }
     }
 
-    /// **内花键端视图草案**（材料在外侧、齿朝内）：
+    /// **内花键端视图**（材料在外侧、齿朝内；与 `gear.rs` 内齿轮端视同口径）：
     ///
     /// * 渐开线与同参数外花键**同一条**：内花键的**齿槽** = 外花键的**齿形**，
     ///   凹槽心线与外花键齿心线同相（`(k+0.5)·360°/z`），ψ(R) 同式；
@@ -3745,17 +3748,12 @@ impl InvolParams {
 
     // ── 侧视图（矩形 + 小径线）──
 
-    /// 侧视轮廓：矩形 `L × 大径` + 小径线（小径线落 `minor_layer`，由调用方定线型）。
+    /// 外花键侧视/剖视轮廓：矩形 `L × 大径 da` + 小径线 `df`（落 `minor_layer`）。
     ///
-    /// **内花键侧视/剖视是草案**（用户尚未给模板）：口径同内齿轮剖视 —— 只画到**外侧齿根圆**
-    /// （矩形 `L × D_ei/d_f2`）+ **里侧齿顶线**（D_ii/d_a2，落 `minor_layer`），
-    /// 齿圈外壁留用户按实际结构延伸（见 `gear.rs` 内齿轮）。
-    pub fn side_view_on(&self, len: f64, minor_layer: &str) -> Vec<EntityType> {
-        let (ra, rf) = if self.internal {
-            (self.internal_root_radius(), self.internal_tip_radius())
-        } else {
-            (self.da() / 2.0, self.df() / 2.0)
-        };
+    /// 内花键的可用视图与内齿轮一致（剖视 + 端视，**无侧视**）；本方法只服务外花键，
+    /// 内花键请走 `gear.rs` 的齿圈剖视模板 `internal_bore_section`。
+    fn side_view_on(&self, len: f64, minor_layer: &str) -> Vec<EntityType> {
+        let (ra, rf) = (self.da() / 2.0, self.df() / 2.0);
         vec![
             line([0.0, -ra], [0.0, ra], LAYER_MAIN),
             line([len, -ra], [len, ra], LAYER_MAIN),
@@ -3768,13 +3766,28 @@ impl InvolParams {
     }
 
     /// 常规侧视图（小径线 `2细线层`）。
-    pub fn side_view(&self, len: f64) -> Vec<EntityType> {
-        self.side_view_on(len, LAYER_THIN)
+    ///
+    /// **内花键无侧视图**（用户定案：同内齿轮）→ 明确报错，不出旧的「两条矩形轮廓」草案。
+    pub fn side_view(&self, len: f64) -> Result<Vec<EntityType>, String> {
+        if self.internal {
+            return Err(crate::gear::internal_spline_no_side_view_msg().to_string());
+        }
+        Ok(self.side_view_on(len, LAYER_THIN))
     }
 
-    /// 侧剖视图（小径线 `1轮廓实线层`；不含剖面线，由调用方按需补）。
-    pub fn section_view(&self, len: f64) -> Vec<EntityType> {
-        self.side_view_on(len, LAYER_MAIN)
+    /// 外花键侧剖轮廓（小径线 `1轮廓实线层`；不含剖面线，由调用方补）。
+    ///
+    /// 内花键剖视图走 `gear.rs` 的内齿轮剖视模板（`internal_bore_section`：端面/齿顶线/
+    /// 齿根线/内孔壁/孔口倒角 + 分度线/轴线，不打剖面线）—— 引擎侧不再出内花键剖视草案。
+    pub fn section_view(&self, len: f64) -> Result<Vec<EntityType>, String> {
+        if self.internal {
+            return Err(
+                "内花键剖视图按内齿轮口径出图（齿圈内齿不剖：端面/齿顶线/齿根线/内孔壁/孔口倒角 \
+                 + 分度线/轴线，不打剖面线），由 gear.rs 的 internal_bore_section 模板生成，不在引擎侧出图。"
+                    .to_string(),
+            );
+        }
+        Ok(self.side_view_on(len, LAYER_MAIN))
     }
 
     // ── 收尾 ──
@@ -3975,18 +3988,11 @@ mod tests {
         assert!(radii.iter().any(|r| near(*r, p.internal_major_dia() / 2.0)));
         assert!(radii.iter().any(|r| near(*r, p.internal_minor_dia() / 2.0)));
         assert!(!radii.iter().any(|r| near(*r, p.da() / 2.0)));
-        // 侧视草案：外轮廓 = D_ei/2，细线 = D_ii/2。
-        let side = p.side_view(30.0);
-        assert!(has_line(
-            &side,
-            [0.0, -p.internal_major_dia() / 2.0],
-            [30.0, -p.internal_major_dia() / 2.0]
-        ));
-        assert!(has_line(
-            &side,
-            [0.0, p.internal_minor_dia() / 2.0],
-            [30.0, p.internal_minor_dia() / 2.0]
-        ));
+        // 内花键无侧视图（用户定案：同内齿轮）→ 明确报错；剖视走 gear.rs 内齿轮模板，引擎侧不出草案。
+        let e = p.side_view(30.0).unwrap_err();
+        assert!(e.contains("内花键不提供") && e.contains("侧视图"), "{e}");
+        let e = p.section_view(30.0).unwrap_err();
+        assert!(e.contains("内齿轮口径"), "{e}");
         // 外花键行为不变（da/df 口径）。
         let ext = InvolParams::gb("30圆齿根", 3.0, 20).unwrap();
         assert!(near(ext.da(), 63.0) && near(ext.df(), 54.6));
@@ -4197,8 +4203,8 @@ mod tests {
         let p = InvolParams::gb("30圆齿根", 3.0, 20).unwrap();
         let len = 30.0;
         let (ra, rf) = (p.da() / 2.0, p.df() / 2.0);
-        let side = p.side_view(len);
-        let section = p.section_view(len);
+        let side = p.side_view(len).unwrap();
+        let section = p.section_view(len).unwrap();
         assert_eq!(side.len(), 7);
         assert_eq!(section.len(), 7);
         for es in [&side, &section] {
@@ -4804,7 +4810,7 @@ mod tests {
             for e in p.front_view().unwrap() {
                 out.push_str(&csv_row(case, "front", &e));
             }
-            for e in p.side_view(30.0) {
+            for e in p.side_view(30.0).unwrap() {
                 out.push_str(&csv_row(case, "side", &e));
             }
             for e in p.runout_arcs(30.0, de, LAYER_THIN).unwrap() {
@@ -4987,7 +4993,7 @@ mod tests {
             "D=A−2m={}",
             pi.internal_minor_dia()
         );
-        // 端视图/侧视/剖视都走共用通路（不另开一套）。
+        // 端视图走共用通路；内花键无侧视图、剖视由 gear.rs 模板出图（引擎 side/section 明确报错）。
         let front = pi.front_view().unwrap();
         let radii: Vec<f64> = front
             .iter()
@@ -4998,12 +5004,13 @@ mod tests {
             .collect();
         assert!(radii.iter().any(|r| near(*r, 40.0)), "外侧齿根弧 = A/2");
         assert!(radii.iter().any(|r| near(*r, (80.0 - 7.5) / 2.0)), "里侧齿顶弧 = D/2");
-        let side = pi.side_view(30.0);
-        assert!(has_line(&side, [0.0, -40.0], [0.0, 40.0]));
-        let section = pi.section_view(30.0);
-        assert_eq!(section.len(), 7);
+        // 内花键无侧视图（用户定案：同内齿轮）→ 明确报错；剖视走 gear.rs 内齿轮模板。
+        let e = pi.side_view(30.0).unwrap_err();
+        assert!(e.contains("内花键不提供") && e.contains("侧视图"), "{e}");
+        let e = pi.section_view(30.0).unwrap_err();
+        assert!(e.contains("内齿轮口径"), "{e}");
         // 外花键侧视 = da/df 口径。
-        let ext_side = p.side_view(30.0);
+        let ext_side = p.side_view(30.0).unwrap();
         assert!(has_line(&ext_side, [0.0, -40.0], [0.0, 40.0]));
         assert!(has_line(&ext_side, [0.0, -p.df() / 2.0], [30.0, -p.df() / 2.0]));
         p.front_view().unwrap();
@@ -5445,8 +5452,8 @@ mod tests {
         assert!(front.iter().any(|x| matches!(x, EntityType::Arc(a) if near(a.radius, p.da() / 2.0))));
         assert!(near(p.r_involute_start(), p.ansi_form_dia_external() / 2.0));
         // 侧视/剖视走共用通路。
-        assert_eq!(p.side_view(30.0).len(), 7);
-        assert_eq!(p.section_view(30.0).len(), 7);
+        assert_eq!(p.side_view(30.0).unwrap().len(), 7);
+        assert_eq!(p.section_view(30.0).unwrap().len(), 7);
         // 内花键走共用通路：外侧齿根弧 = Dri/2、里侧齿顶弧 = Di/2。
         let pi = p.clone().with_internal(true);
         pi.validate().unwrap();

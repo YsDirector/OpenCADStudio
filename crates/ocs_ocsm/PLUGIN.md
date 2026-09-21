@@ -273,7 +273,7 @@ rm -rf "$HOME/.config/OpenCADStudio/plugins/opencad.layers_quick"
   第三期 `detail_spline_rect`（矩形花键 GB/T 1144-2001，规格代号下拉/自定义，de 自动查 GB/T 10952 表 1/表 2）。
   第四期 `detail_invol_spline`（渐开线花键 GB/T 3478.1-2008 / DIN 5480-1:2015，**旧入口**）：
   **主入口已改为齿轮生成器 `OCSMGEAR` 的「花键模式」**（口复选框：标准/齿廓/d_B/hf*/ρf*/cF*，
-  「齿轮种类」开关复用为外/内花键；内花键侧视/剖视是缺模板依据的草案）；几何全在
+  「齿轮种类」开关复用为外/内花键；内花键与内齿轮同口径，只有 剖视图 + 端视图、无侧视图）；几何全在
   `src/invol_spline.rs` 共用引擎（DIN 5480-2 名义表 674 行入库；d_B 为主参数，m/z 可缺一个；
   GB 无 d_B、给了报错）；`x=(d_B−m(z+1.1))/(2m)` 是从表反推并经全表校验的关系，非标准原文；
   轴段 `INVOLSPLINE` 同引擎、只做外花键）。

@@ -3928,7 +3928,7 @@ pub const COMMAND_CATALOG: &[(&str, &str, &str)] = &[
     ("OCSMPOWERDIM", "D", "智能标注：拾取点模式标线性/对齐/半径/直径（Enter 切线段点选）"),
     ("OCSMDIMGULIDE", "GDIM", "引导线标注：选引导线 → 配置窗口（尺寸/剖视/向视/局部放大/角度/弧长/焊接/引线/序号/公差/粗糙度/形位公差）"),
     ("OCSMCENTERLINE", "ZX", "中心线：点圆/圆弧 → 十字中心线；点两根直线 → 角平分线中心线（`3中心线层`，线长 = 直径/投影长 + 图框比例×6mm）"),
-    ("OCSMGEAR", "", "齿轮（外齿轮 / 内齿轮（齿圈））+ 渐开线花键（花键模式）：不带参数=开齿轮/花键窗口（模式复选框 + 参数 + 视图按钮 + 实时预览）；带参数=一行直插（`OCSMGEAR 2 40 20 view 剖视图`、`OCSMGEAR int 2 40 30 view 端视图`；花键：`OCSMGEAR 花键 [内花键] std=DIN [profile=DIN30] db=40 2 18 h=30 view 端视图`，预设代号 GB30P/GB30R/GB375R/GB45R/DIN30 可直接代 std+profile）。齿轮模式只认 模数/齿数/压力角/变位系数 等常规项，给标准号或 d_B 明确报错。花键模式：GB 无基准直径（给 d_B 报错）；DIN 的 d_B 是主参数（d_B+m/d_B+z/m+z 三种给法，表外按公式推并标注来源），内/外花键用同一「齿轮种类」开关。内花键侧视/剖视是缺模板依据的草案（外侧齿根线 + 里侧齿顶线 + 两环剖面线）、齿圈外壁留用户延伸"),
+    ("OCSMGEAR", "", "齿轮（外齿轮 / 内齿轮（齿圈））+ 渐开线花键（花键模式）：不带参数=开齿轮/花键窗口（模式复选框 + 参数 + 视图按钮 + 实时预览）；带参数=一行直插（`OCSMGEAR 2 40 20 view 剖视图`、`OCSMGEAR int 2 40 30 view 端视图`；花键：`OCSMGEAR 花键 [内花键] std=DIN [profile=DIN30] db=40 2 18 h=30 view 端视图`，预设代号 GB30P/GB30R/GB375R/GB45R/DIN30 可直接代 std+profile）。齿轮模式只认 模数/齿数/压力角/变位系数 等常规项，给标准号或 d_B 明确报错。花键模式：GB 无基准直径（给 d_B 报错）；DIN 的 d_B 是主参数（d_B+m/d_B+z/m+z 三种给法，表外按公式推并标注来源），内/外花键用同一「齿轮种类」开关。内花键与内齿轮同口径（用户定案「内花键剖视图和内齿轮一样，不存在侧视图」）：只有 剖视图 + 端视图，无侧视图；剖视图齿圈内齿不剖（端面/齿顶线/齿根线/内孔壁/孔口倒角 + 分度线/轴线，不打剖面线），齿圈外壁留用户延伸"),
     ("OCSMSHAFT", "", "轴生成器：不带参数=开轴生成器窗口（段表 ↔ 行文本双向同步 + 实时预览 + 视图按钮）+ 放置态；带参数=行 DSL/JSON 一行直插（段拼接 + 端面倒角 + 砂轮越程槽 + 螺纹段 M + 齿轮段 GEAR + 矩形花键段 SPLINE + 渐开线花键段 INVOLSPLINE + 视图 VIEW 常规|剖视|双；退刀槽就是一小段小直径轴段）。`OCSMSHAFT S30 E30 L45 CH2@L | S40 E40 L7 M1.5 | S36 E36 L5 | GEAR M3 Z20 VIEW 剖视 at x,y rot 度`；齿轮段可 `GEAR M3 Z20 ALPHA25`（压力角默认 20°）；花键 `OCSMSHAFT SPLINE 6x23x26x6 L30`（可 `de 71` 覆盖，矩形花键）或 `OCSMSHAFT INVOLSPLINE GB30R M3 Z20 L30`（渐开线花键，预设 GB30P/GB30R/GB375R/GB45R/DIN30，`X0.2` 变位，`de63` 可选）"),
     ("OCSMEDIT", "ME", "改标注：选中 OCSM 生成的标注 → 配置窗口改参数 → 重生成"),
     ("OCSMRGH", "CC", "表面粗糙度：点选插入点 → 配置窗口（匿名块 + ATTDEF）"),
@@ -4544,7 +4544,7 @@ fn apply_gear_export(
             "{} {}（{}）",
             if p.is_spline() { p.spline_kind_label() } else { "外齿轮" },
             part.meta.spec,
-            if p.is_spline() { view.label_for_spline() } else { view.label() }
+            if p.is_spline() { view.label_for_spline(p.kind) } else { view.label() }
         ),
     });
     commit_undo(sender);
@@ -4559,7 +4559,7 @@ fn apply_gear_export(
             "已生成{} {}（{}）：切回图纸，鼠标上已带这个视图，左键点击定位基点 → 移动光标旋转 → 再点击落定（可连续，Esc 结束）。",
             if p.is_spline() { p.spline_kind_label() } else { "外齿轮" },
             part.meta.spec,
-            if p.is_spline() { view.label_for_spline() } else { view.label() }
+            if p.is_spline() { view.label_for_spline(p.kind) } else { view.label() }
         ),
         "block": block,
         "spec": part.meta.spec,
@@ -4626,7 +4626,7 @@ pub(crate) fn apply_gear_insert(
             "已插入{} {}（{}）于 ({:.3}, {:.3})",
             if req.params.is_spline() { req.params.spline_kind_label() } else { "外齿轮" },
             part.meta.spec,
-            if req.params.is_spline() { req.view.label_for_spline() } else { req.view.label() },
+            if req.params.is_spline() { req.view.label_for_spline(req.params.kind) } else { req.view.label() },
             at[0],
             at[1]
         ),
@@ -14176,7 +14176,7 @@ mod weld_tests {
     }
 
     /// OCSMGEAR 花键模式 HTTP 通路：齿轮模式拒绝标准号/d_B、GB 下 d_B 统一文案、
-    /// DIN 三种给法、内花键草案、生成到图纸（块名/台账）。
+    /// DIN 三种给法、内花键视图规则（剖视+端视、无侧视）、生成到图纸（块名/台账）。
     #[test]
     fn gear_spline_routes_gb_db_din_modes_and_internal_export() {
         let mock = Arc::new(MockSender::new(ocsm_layered_doc()));
@@ -14205,11 +14205,27 @@ mod weld_tests {
         assert_eq!(v["ok"], true, "{j}");
         assert_eq!(v["z"], 18);
         assert!(v["origin"].as_str().unwrap().contains("查表命中 p27"), "{j}");
-        // 内花键端视图预览 + info 带缺模板依据的草案提示
+        // 内花键端视图预览 + info 带「同内齿轮口径、无侧视图」提示
         let svg = http_req(
             server.port,
             "GET",
             "/api/gear_svg?mode=spline&std=GB&profile=GB30R&m=3&z=20&kind=internal&h=30&view=front",
+            "",
+        );
+        assert!(svg.contains("<svg"), "{}", &svg[..160.min(svg.len())]);
+        // 内花键请求侧视图 → 同内齿轮风格明确报错（不静默、不出乱图）
+        let e = http_req(
+            server.port,
+            "GET",
+            "/api/gear_svg?mode=spline&std=GB&profile=GB30R&m=3&z=20&kind=internal&h=30&view=side",
+            "",
+        );
+        assert!(e.contains("内花键不提供") && e.contains("不存在侧视图"), "{e}");
+        // 内花键剖视图：内齿轮同模板（23 条线、无 HATCH）
+        let svg = http_req(
+            server.port,
+            "GET",
+            "/api/gear_svg?mode=spline&std=GB&profile=GB30R&m=3&z=20&kind=internal&h=30&view=section",
             "",
         );
         assert!(svg.contains("<svg"), "{}", &svg[..160.min(svg.len())]);
@@ -14221,7 +14237,8 @@ mod weld_tests {
         );
         let v: serde_json::Value = serde_json::from_str(&j).unwrap();
         assert_eq!(v["kind_label"], "内花键");
-        assert!(v["notes"].as_array().unwrap().iter().any(|n| n.as_str().unwrap().contains("草案")));
+        assert!(v["notes"].as_array().unwrap().iter().any(|n| n.as_str().unwrap().contains("不存在侧视图")));
+        assert_eq!(v["view_label"], "剖视图（齿圈内齿不剖）", "默认 view 是 section，内花键用内齿轮叫法");
         // 生成到图纸：花键模式走 apply_gear_export（块名 OCSM_SPLINE_…、台账 mode=spline）
         let body = serde_json::json!({
             "mode":"spline", "std":"DIN", "profile":"DIN30", "db":40, "m":2,

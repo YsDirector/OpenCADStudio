@@ -1494,7 +1494,7 @@ impl DetailElement for InvolSpline {
                     "渐开线花键：常规侧视图需要 L（有效长度，例 `L30` / `&len=30`）".to_string()
                 })?;
                 (
-                    spline.side_view(len),
+                    spline.side_view(len)?,
                     format!("{} L{}", spline.spec(), trim(len)),
                 )
             }
@@ -1502,7 +1502,7 @@ impl DetailElement for InvolSpline {
                 let len = len.ok_or_else(|| {
                     "渐开线花键：侧剖视图需要 L（有效长度，例 `L30` / `&len=30`）".to_string()
                 })?;
-                let mut entities = spline.section_view(len);
+                let mut entities = spline.section_view(len)?;
                 // 剖面线：轴线↔小径两条带（齿部按不剖）——与 `spline.rs` 侧剖口径一致；
                 // 模块的 `section_view` 只出轮廓线，剖面线由调用方补。
                 let rf = spline.df() / 2.0;

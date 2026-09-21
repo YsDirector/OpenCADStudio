@@ -124,7 +124,8 @@ JSON `pitch=16`，同时显示换算后的节圆 mm），不再使用"数值口�
   代号 `ANSI30P/ANSI30PM/ANSI30R/ANSI375R/ANSI45R`；裸 `ANSI`/`ANSI B92.1` 取默认 A。
 - `ansi_pitches()` 径节系列；`ansi_sv_min()`、`ansi_form_dia_external()/internal()`、`ansi_fillet_radius()`。
 - `resolve_spline(ANSI, …)`：要求 `P`（第 5 槽）与 `z`；给 `d_B`/`A` 报 `ANSI_D_B_MSG`；
-  ANSI 无变位（x≠0 报错）。端视/侧视/剖视/内花键/CHECK 全走既有共用通路（没有另开视图代码）。
+  ANSI 无变位（x≠0 报错）。端视/侧视/剖视/内花键/CHECK 均复用既有共用通路（没有另开视图代码）；
+  内花键与内齿轮同口径只出 剖视图 + 端视图，无侧视图（侧视图/剖视图由齿轮侧 `GearView` 过滤）。
 
 ## 遗留
 
