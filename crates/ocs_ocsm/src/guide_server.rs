@@ -13698,7 +13698,7 @@ mod weld_tests {
         assert!(block.starts_with("OCSM_DETAIL_INVOL_SPLINE"), "{block}");
         assert!(block.ends_with("_SIDE"), "多视图块名带视图后缀：{block}");
         let ents = mock.block_entities(block);
-        assert_eq!(ents.len(), 7, "常规侧视图 7 条");
+        assert_eq!(ents.len(), 9, "常规侧视图 9 条（含分度圆两条）");
         assert!(
             ents.iter().any(|e| matches!(e, EntityType::Line(l)
                 if l.common.layer == crate::partgen_kit::LAYER_THIN)),

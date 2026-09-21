@@ -96,7 +96,7 @@ rm -rf "$HOME/.config/OpenCADStudio/plugins/opencad.layers_quick"
   齿根圆角 0.38m、轴向倒角 round(0.6m)、剖视图上下两环剖面线；斜齿轮侧视图三条细实线 90°−β、间距 5k）。
   窗口参数区新增「轴生成器表达式」只读框 +「复制表达式」（与既有「命令行等价提示」同源）：
   内容 = 轴段语法一行 —— 齿轮 `GEAR M3 Z20 H20 ALPHA20`、花键 `INVOLSPLINE GB30R M3 Z20 L30`
-  （DIN 带 `DB40`、NF 带 `A80`、ANSI 用 M 槽位写径节如 `M8`（`P8` 会被 RL 的 P 参数分支拦下），
+  （DIN 带 `DB40`、NF 带 `A80`、ANSI 用 `DP<A/B>` 写径节原值如 `DP5/10`（B=Ps=2P；`P5/10` 也可），
   变位非 0 才带 `X`）；复制后到轴生成器粘贴即成段。
   内齿轮/内花键标注「不能在轴上使用」（轴上没有内齿）；轴段 `GEAR` 不认变位/斜齿，
   DP 径节制按 `m=25.4/DP` 换算写入；不自动带 `view`/`at`（那是插入参数）。

@@ -101,7 +101,7 @@
 //! /`GB375R`/`GB45R`/`DIN30`/`NFP`/`NFR`（GB/T 3478.1-2008；DIN 5480-1:2015，h_fP*=0.55；NF E22-141 α=20°）自带
 //! α/ha*/hf*/ρf*，直径由 `M/Z/X`（或 DB/A）导出（**不给 S/E**）：`s = e = da`；
 //! **体系也可显式写标识**（`INVOLSPLINE DIN M2 Z18`、`INVOLSPLINE NF A80 M3.75`；NF 已入库，
-//! ANSI 用 `P8` 径节（或 M 槽位 = P，x 不允许））。
+//! ANSI 用 `P5/10`（A/B 成对：A=径节 P、B=Ps=2A；`DP5` 与齿轮侧 `DP8` 同义，x 不允许））。
 //! - `L` = 有效长度（满齿段长）；`de`（滚刀外径）**可选**：给了才画收尾弧，
 //!   段长 = L + l（`l = √(h(2R−h))`、R = de/2、h = (da−df)/2，与 `SPLINE` 同式）；
 //!   不给 de 时段长 = L、端面直接收口；
@@ -196,7 +196,8 @@ OCSMSHAFT 轴生成器：行 DSL / JSON → 单视图侧视图（段拼接 + 端
                       `X0.2` = 变位（DIN ∈ [−0.05, 0.45]）；DIN 可写 `DB40`（基准直径）、
                       NF 可写 `A80`（公称直径主参数），M/Z 可缺一项由名义/尺寸表补全
                       （DIN：m=1.5/m=5 均已补入；NF：尺寸表 288 行）；
-                      ANSI 是径节制：`P8`（或 M 槽位 = 径节 P），x 不允许；
+                      ANSI 是径节制：`P5/10`（A/B 成对，A=P、B=Ps=2P；也收 `DP5`，
+                      与齿轮侧 `DP8` 同义），x 不允许；
                       `de63` 可选（给了才画收尾弧，段长 = L + l；不给 de 段长 = L）；
                       不能与 SPLINE/CH/OV/RL/M/GEAR 同段
     VIEW 常规|剖视|双   视图：常规（默认，只看外形）/ 剖视（轮廓 + ANSI31 剖面线）/ 双（并排一次出）
@@ -866,7 +867,7 @@ fn extract_view_directives<'a>(
 
 fn unknown_keyword(token: &str, label: &str) -> String {
     format!(
-        "{label}：不识别的关键字「{token}」（本期支持 S/E/L/CH/OV/M/TL/RO/SD/RL/GEAR/SPLINE/INVOLSPLINE/VIEW；GEAR 子关键字 M/Z/H/BETA/ALPHA；INVOLSPLINE 子关键字 M/Z/X/DB/L/de；RL 的尺寸参数 P/g1/g2/dg/r 跟在 RL 后面）"
+        "{label}：不识别的关键字「{token}」（本期支持 S/E/L/CH/OV/M/TL/RO/SD/RL/GEAR/SPLINE/INVOLSPLINE/VIEW；GEAR 子关键字 M/Z/H/BETA/ALPHA；INVOLSPLINE 子关键字 M/Z/X/DB/A/P/DP/L/de；RL 的尺寸参数 P/g1/g2/dg/r 跟在 RL 后面）"
     )
 }
 
@@ -1335,6 +1336,36 @@ fn parse_segment(chunk: &str, label: &str, program: &mut Program) -> Result<Segm
                 r: None,
             });
             pending_relief = Some(relief_specs.len() - 1);
+        } else if has_invol
+            && upper.starts_with('P')
+            && starts_number(
+                token[1..]
+                    .strip_prefix(['=', ':'])
+                    .unwrap_or(&token[1..]),
+            )
+        {
+            // ANSI 径节：`P5/10`（A/B 成对，B=Ps=2A）或 `P8`（裸数字，系列在 resolve 阶段校验）。
+            // **必须排在 RL 的 `P` 参数分支之前**：INVOLSPLINE 段里 P 是径节、不是退刀槽螺距；
+            // 否则会被 `relief_param_key` 当 RL 参数截住报「参数 p 要跟在 RL 后面」。
+            let value = parse_invol_pitch(token, 1, "P", label)?;
+            if invol_m.is_some() {
+                return Err(format!("{label}：关键字 P/M/DP（径节/模数）重复"));
+            }
+            invol_m = Some(value);
+        } else if has_invol
+            && upper.starts_with("DP")
+            && starts_number(
+                token[2..]
+                    .strip_prefix(['=', ':'])
+                    .unwrap_or(&token[2..]),
+            )
+        {
+            // 轴段 `DP<值>`：与齿轮侧 `DP8` 同义（ANSI 径节 P 原值；`DP5/10` 也收）。
+            let value = parse_invol_pitch(token, 2, "DP", label)?;
+            if invol_m.is_some() {
+                return Err(format!("{label}：关键字 P/M/DP（径节/模数）重复"));
+            }
+            invol_m = Some(value);
         } else if let Some((key, attached)) = relief_param_key(token) {
             // `P1.5` / `g1=2.5` / `g1 2.5`：一律绑定到最近一个 RL。
             let spec_index = pending_relief.ok_or_else(|| {
@@ -1366,20 +1397,6 @@ fn parse_segment(chunk: &str, label: &str, program: &mut Program) -> Result<Segm
             gear_on = true;
         } else if upper.starts_with("GEAR") {
             return Err(unknown_keyword(token, label));
-        } else if has_invol
-            && upper.starts_with('P')
-            && starts_number(
-                token[1..]
-                    .strip_prefix(['=', ':'])
-                    .unwrap_or(&token[1..]),
-            )
-        {
-            // ANSI 径节：`P8` / `P=8`（与 `M` 同槽位；生成时按体系解释）。
-            let value = parse_gear_number(token, 1, "P", label)?;
-            if invol_m.is_some() {
-                return Err(format!("{label}：关键字 P/M（径节/模数）重复"));
-            }
-            invol_m = Some(value);
         } else if upper.starts_with('M') {
             if has_invol {
                 let value = parse_gear_number(token, 1, "M", label)?;
@@ -1749,6 +1766,19 @@ fn parse_gear_value<'a>(
 fn parse_gear_number(token: &str, prefix_len: usize, what: &str, label: &str) -> Result<f64, String> {
     let rest = parse_gear_value(token, prefix_len, what, label)?;
     parse_number(rest, label, what)
+}
+
+/// INVOLSPLINE 的径节参数（`P5/10`（A/B，B=Ps=2A）/ `P8` / `DP5`）：
+/// 语法与 `B==2A` 在此校验；**17 项系列在 `resolve_spline`/`validate` 阶段统一校验**
+/// （这样 `INVOLSPLINE … RL@L P1.5` 仍先报互斥，而不是被径节系列拦截）。
+fn parse_invol_pitch(
+    token: &str,
+    prefix_len: usize,
+    what: &str,
+    label: &str,
+) -> Result<f64, String> {
+    let rest = parse_gear_value(token, prefix_len, what, label)?;
+    crate::invol_spline::parse_ansi_pitch_syntax(rest).map_err(|e| format!("{label}：{e}"))
 }
 
 /// 没有 GEAR 时记住第一个 Z/H/BETA 原文（到段尾统一报不识别的关键字/缺 GEAR）。
@@ -6260,6 +6290,43 @@ GEAR M3 Z20";
         assert_eq!(parse_program(split).unwrap().segments[0], program.segments[0]);
     }
 
+    /// ANSI 径节分支：`P5/10`（A/B）与 `DP5` 都解析；`P`/`DP` 不再被 RL 参数分支截住；
+    /// 表达式往返：齿轮侧产出 `DP<A/B>`，轴侧解析一致。
+    #[test]
+    fn dsl_invol_spline_ansi_pitch_ab_and_dp() {
+        for text in [
+            "INVOLSPLINE ANSI30P P5/10 Z20 L30",
+            "INVOLSPLINE ANSI30P DP5 Z20 L30",
+            "INVOLSPLINE ANSI30P DP5/10 Z20 L30",
+            "INVOLSPLINE ANSI30P P=5/10 Z20 L30",
+            "INVOLSPLINE ANSI30P M5 Z20 L30", // 旧 M 槽位兼容
+        ] {
+            let p = parse_program(text).unwrap_or_else(|e| panic!("{text}: {e}"));
+            let iv = p.segments[0].invol_spline.as_ref().expect("INVOLSPLINE 段");
+            assert_eq!(iv.params.std, crate::invol_spline::SplineStd::ANSI, "{text}");
+            assert_eq!(iv.params.ansi_p(), 5.0, "{text}");
+            assert!((iv.params.m - 25.4 / 5.0).abs() < 1e-12, "{text}");
+        }
+        // A/B 的 B != 2A → 语法期报错（说明 Ps 恒为 2P）
+        let e = parse_program("INVOLSPLINE ANSI30P P5/11 Z20 L30").unwrap_err();
+        assert!(e.contains("Ps 恒为 2P"), "{e}");
+        // 系列外：resolve 期报错并列 17 项 A/B
+        let e = parse_program("INVOLSPLINE ANSI30P P2 Z20 L30").unwrap_err();
+        assert!(
+            e.contains("标准系列") && e.contains("2.5/5") && e.contains("128/256"),
+            "{e}"
+        );
+        // 版本不重复：轴段错误只有一层 `ANSI B92.1：`
+        assert!(e.matches("ANSI B92.1：").count() <= 1, "{e}");
+        // 纯 RL 段的 P 查表仍不受影响（分支顺序修复不误伤）
+        let p = parse_program("S25 E25 L32 RL@L P1.5").unwrap();
+        assert_eq!(p.segments[0].relief.len(), 1);
+        assert_eq!(p.segments[0].relief[0].p, Some(1.5));
+        // 退刀槽与 INVOLSPLINE 混用：仍报互斥（不再被 RL 参数截住）
+        let e = parse_program("INVOLSPLINE ANSI30P Z20 L30 RL@L P1.5").unwrap_err();
+        assert!(e.contains("不能与退刀槽"), "{e}");
+    }
+
     /// DSL 错误：缺预设/M/Z/L、与 SPLINE/CH/OV/RL/M/GEAR 互斥、de ≤ da、DIN x 越界。
     #[test]
     fn dsl_invol_spline_reports_errors() {
@@ -6271,7 +6338,7 @@ GEAR M3 Z20";
             ("INVOLSPLINE GB30R M3 Z20 L30 S63 E63", "不给 S/E"),
             ("INVOLSPLINE GB30R M3 Z20 L30 CH2@L", "不能与倒角"),
             ("INVOLSPLINE GB30R M3 Z20 L30 OV3", "不能与越程槽"),
-            ("INVOLSPLINE GB30R M3 Z20 L30 RL@L P1.5", "不能与退刀槽"),
+            ("INVOLSPLINE ANSI30P Z20 L30 RL@L P1.5", "不能与退刀槽"),
             ("INVOLSPLINE GB30R M3 Z20 L30 SPLINE 6x23x26x6", "不能与矩形花键"),
             ("INVOLSPLINE GB30R M3 Z20 L30 de60", "必须大于"),
             ("INVOLSPLINE GB30R M3 Z20 L30 de63 de64", "de 覆盖重复"),

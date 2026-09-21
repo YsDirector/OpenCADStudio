@@ -1647,6 +1647,8 @@ impl DetailElement for InvolSpline {
             "din_nominal": din_nominal,
             "din_inspection": din_inspection,
             "nf_nominal": nf_nominal,
+            // ANSI 径节 17 项的 A/B 写法（gear_gui 下拉选项；Ps=2P）。
+            "ansi_pitches": crate::invol_spline::ansi_pitch_labels(),
             "inputs": [
                 { "key": "std", "label": "标准预设", "type": "select",
                   "options": [
@@ -1686,7 +1688,7 @@ impl DetailElement for InvolSpline {
                 { "key": "z", "label": "齿数 z（DIN 给 d_B / NF 给 A 时可由查表补全）", "type": "number", "placeholder": "例如 20" },
                 { "key": "x", "label": "变位系数 x（可选，DIN ∈ [−0.05, 0.45]）", "type": "number", "placeholder": "留空 = 0（NF 默认 0.8）" },
                 { "key": "len", "label": "有效长度 L（mm，侧视/剖视必给）", "type": "number", "placeholder": "例如 30" },
-                { "key": "p", "label": "径节 P（仅 ANSI；第 5 参槽位同义，x 不允许）", "type": "number", "placeholder": "例如 8（径节 P，Ps=2P）",
+                { "key": "p", "label": "径节 P（仅 ANSI；标准写法 A/B，如 2.5/5，Ps 恒为 2P）", "type": "number", "placeholder": "例如 8（也可写 A/B：8/16）",
                   "show_when": { "key": "std", "values": ["ANSI"] } }
             ],
             "invol_presets": presets,
@@ -2565,10 +2567,10 @@ mod tests {
         assert_eq!(front.entities.len(), 20 * (2 * 12 + 2) + 2, "每齿 2×12 渐开线 + 2 弧 + 2 中心线");
         assert_eq!(front.meta.spec, "GB 30圆齿根 m3 z20");
         let side = generate_params(FAMILY_INVOL_SPLINE, 0.0, &params, "side").unwrap();
-        assert_eq!(side.entities.len(), 7);
+        assert_eq!(side.entities.len(), 9, "矩形 4 + 小径 2 + 轴线 1 + 分度圆 2");
         assert_eq!(side.meta.spec, "GB 30圆齿根 m3 z20 L30");
         let section = generate_params(FAMILY_INVOL_SPLINE, 0.0, &params, "section").unwrap();
-        assert_eq!(section.entities.len(), 8, "7 线 + 1 HATCH");
+        assert_eq!(section.entities.len(), 10, "9 线 + 1 HATCH");
         assert!(section
             .entities
             .iter()

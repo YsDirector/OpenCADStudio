@@ -221,7 +221,7 @@ try { el('db')._fire('change', el('db')); } catch (e) { errors.push('A 自动带
 await flush();
 check(Math.abs(numOf('m') - 3.75) < 1e-9, 'A80 应带出 m=3.75，实际 ' + numOf('m'));
 check(el('z').value === '19', 'A80 应带出 z=19，实际 ' + el('z').value);
-// ANSI：基准直径行隐藏；输入切到径节 P（m 行显示且标签为径节[P]），hf/rho/cf 隐藏。
+// ANSI：基准直径行隐藏；径节输入切到 17 项 A/B 下拉 + 自定义；hf/rho/cf 隐藏。
 el('stdSel').value = 'ANSI';
 try { el('stdSel')._fire('change', el('stdSel')); } catch (e) { errors.push('ANSI 切换异常: ' + e); }
 await flush();
@@ -234,10 +234,32 @@ check(el('hfLabel').style.display === 'none', 'ANSI 下 hf 行应隐藏（Table 
 check(el('rhoLabel').style.display === 'none', 'ANSI 下 rho 行应隐藏');
 check(el('cfLabel').style.display === 'none', 'ANSI 下 cf 行应隐藏');
 check(el('profileSel').value === 'ANSI30P', 'ANSI 默认齿廓应为 ANSI30P，实际 ' + el('profileSel').value);
-// ANSI 表达式：shaft.rs 的 P8 写法会被 RL 参数分支先截住，用 M 槽位写径节
-check(el('exprPreview').value === 'INVOLSPLINE ANSI30P M3.75 Z19 L31.75',
-  'ANSI 表达式应用 M 槽位写径节，实际 ' + JSON.stringify(el('exprPreview').value));
-check(el('exprHint').textContent.includes('M 槽位'), 'ANSI 表达式提示应说明 M 槽位：' + el('exprHint').textContent);
+// 下拉 17 项 A/B（+ 自定义）：选中给 P/Ps 与 m=25.4/P 提示
+const pitchOpts = el('mSel').children.map((o) => o.value).filter((v) => v !== 'custom');
+check(pitchOpts.length === 17, 'ANSI 径节下拉应有 17 项，实际 ' + pitchOpts.length);
+check(pitchOpts[0] === '2.5/5' && pitchOpts[16] === '128/256',
+  'ANSI 下拉首尾应为 2.5/5 与 128/256，实际 ' + pitchOpts.slice(0, 2).join('|'));
+el('mSel').value = '5/10';
+el('mSel')._fire('change', el('mSel'));
+await flush();
+check(Math.abs(numOf('m') - 5) < 1e-9, '选 5/10 应把数字框填 P=5，实际 ' + el('m').value);
+check(el('ansiPitchHint').textContent.includes('P=5') && el('ansiPitchHint').textContent.includes('Ps=10'),
+  'ANSI hint 应显示 P=5（Ps=10）：' + el('ansiPitchHint').textContent);
+check(el('ansiPitchHint').textContent.includes('25.4/P') && el('ansiPitchHint').textContent.includes('5.08'),
+  'ANSI hint 应显示 m=25.4/P=5.08：' + el('ansiPitchHint').textContent);
+// 系列外自定义 P → collect 红字列 17 项
+el('m').value = '3.75';
+el('m')._fire('input', el('m'));
+await flush();
+check(el('warn').textContent.includes('标准系列') && el('warn').textContent.includes('2.5/5'),
+  '系列外应红字列 17 项：' + el('warn').textContent);
+// ANSI 表达式：DP 写径节原值 A/B（不再换算成 M）
+el('m').value = '5';
+el('m')._fire('input', el('m'));
+await flush();
+check(el('exprPreview').value === 'INVOLSPLINE ANSI30P DP5/10 Z19 L50.8',
+  'ANSI 表达式应用 DP5/10 写径节原值，实际 ' + JSON.stringify(el('exprPreview').value));
+check(el('exprHint').textContent.includes('DP'), 'ANSI 表达式提示应说明 DP：' + el('exprHint').textContent);
 
 // ③.9 花键视图按钮（用户定案：内花键同内齿轮，无侧视图）
 // 先回 GB（视图规则与体系无关），锁外花键 = 剖视/侧视/端视

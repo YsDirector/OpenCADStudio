@@ -266,17 +266,19 @@ function segmentsFor(dsl) {
     if (inv) {
       const code = inv[1];
       const rest = inv[2];
-      const mhit = /\b(?:M|P)\s*=?\s*([\d.]+)/i.exec(rest);
+      const mhit = /\bDP\s*=?\s*([\d.]+(?:\/[\d.]+)?)/i.exec(rest)
+        || /\b(?:M|P)\s*=?\s*([\d.]+(?:\/[\d.]+)?)/i.exec(rest);
       const zhit = /\bZ\s*=?\s*(\d+)/i.exec(rest);
       const lhit = /\bL\s*=?\s*([\d.]+)/i.exec(rest);
       const xhit = /\bX\s*=?\s*(-?[\d.]+)/i.exec(rest);
       const dbhit = /\b(?:DB|A)\s*=?\s*([\d.]+)/i.exec(rest);
       const dehit = /\bde\s*=?\s*([\d.]+)/i.exec(rest);
-      const iv = { code, m: mhit ? Number(mhit[1]) : null, z: zhit ? Number(zhit[1]) : null, x: xhit ? Number(xhit[1]) : 0, len: lhit ? Number(lhit[1]) : null };
-      if (/^ANSI/i.test(code) && mhit) {
-        // 真后端：ANSI 序列化回来 m=25.4/P（mm），pitch=P 原值优先用于显示/编辑。
-        iv.pitch = Number(mhit[1]);
-        iv.m = 25.4 / iv.pitch;
+      // A/B 写法取分子 A（= 径节 P）；真后端：ANSI 序列化回来 m=25.4/P（mm），pitch=P 原值优先。
+      const mval = mhit ? Number(String(mhit[1]).split('/')[0]) : null;
+      const iv = { code, m: mval, z: zhit ? Number(zhit[1]) : null, x: xhit ? Number(xhit[1]) : 0, len: lhit ? Number(lhit[1]) : null };
+      if (/^ANSI/i.test(code) && mval) {
+        iv.pitch = mval;
+        iv.m = 25.4 / mval;
       }
       if (dbhit) iv.d_b = Number(dbhit[1]);
       if (dehit) iv.de = Number(dehit[1]);
@@ -582,16 +584,22 @@ global.window.open = (u) => { opened = u; return {}; };
 elv('openGear').click();
 check(opened === '/gear', '打开齿轮生成器应 window.open("/gear")，实际 ' + opened);
 
-// ⑧.9 ANSI：齿轮窗口用 M 槽位写径节（M8 = P8）；回写行文本不得变回 parser 不认的 P8
-elv('exprInput').value = 'INVOLSPLINE ANSI30P M8 Z20 L30';
+// ⑧.9 ANSI 径节：`DP<A/B>` 原值往返（P 分支顺序已修；旧 M 槽位仍兼容）
+elv('exprInput').value = 'INVOLSPLINE ANSI30P DP5/10 Z20 L30';
 elv('exprAdd').click();
 await tick();
 const aw = S.rows[S.rows.length - 1];
-check(aw.invol.on && aw.invol.profile === 'ANSI30P' && aw.invol.m === '8',
-  `ANSI 段应回填 M8（显示为径节原值）：${JSON.stringify({ profile: aw.invol.profile, m: aw.invol.m })}`);
-check(dslEl.value.includes('INVOLSPLINE ANSI30P M8 Z20 L30'),
-  `ANSI 行文本应仍是 M8，实为 ${JSON.stringify(dslEl.value)}`);
-check(!/ANSI30P\s+P8/i.test(dslEl.value), 'ANSI 行文本不应输出 P8（会被 RL 参数分支拦下）');
+check(aw.invol.on && aw.invol.profile === 'ANSI30P' && Math.abs(Number(aw.invol.m) - 5) < 1e-9,
+  `ANSI 段应回填径节原值 P=5：${JSON.stringify({ profile: aw.invol.profile, m: aw.invol.m })}`);
+check(dslEl.value.includes('INVOLSPLINE ANSI30P DP5/10 Z20 L30'),
+  `ANSI 行文本应为 DP5/10，实为 ${JSON.stringify(dslEl.value)}`);
+check(!/ANSI30P\s+M5\b/i.test(dslEl.value), 'ANSI 行文本不应再换算成 M5');
+// 旧 M8 槽位仍能解析，但回写行文本归一为 DP8/16（保留 DP 原值）
+elv('exprInput').value = 'INVOLSPLINE ANSI30P M8 Z20 L30';
+elv('exprAdd').click();
+await tick();
+check(dslEl.value.includes('INVOLSPLINE ANSI30P DP8/16 Z20 L30'),
+  `旧 M8 应兼容解析且回写为 DP8/16，实为 ${JSON.stringify(dslEl.value)}`);
 
 report();
 

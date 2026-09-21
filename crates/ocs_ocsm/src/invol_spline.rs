@@ -382,6 +382,100 @@ fn parse_ansi_pitches(text: &str) -> Result<Vec<AnsiPitch>, String> {
     Ok(rows)
 }
 
+/// 按 P 在 17 项系列里查（相对容差 1e-9）；找不到返回 `None`。
+pub fn ansi_pitch_row(p: f64) -> Option<&'static AnsiPitch> {
+    ansi_pitches()
+        .iter()
+        .find(|r| p.is_finite() && (r.p - p).abs() <= 1e-9 * r.p.abs().max(1.0))
+}
+
+/// 17 项系列的 `A/B` 写法列表（`2.5/5`、`3/6` … `128/256`；错误文案/GUI 共用）。
+pub fn ansi_pitch_labels() -> Vec<&'static str> {
+    ansi_pitches().iter().map(|r| r.label.as_str()).collect()
+}
+
+/// 径节写法统一说明（报错/GUI 提示共用）：`A/B` 成对写法。
+pub const ANSI_PITCH_FORM_MSG: &str =
+    "径节写法应为 A/B（如 2.5/5、3/6…128/256），Ps 恒为 2P";
+
+/// 解析 ANSI 径节写法：**只校验语法**（`A/B` 的 `B == 2A`，或裸数字为正数），
+/// **不查 17 项系列** —— 系列由 [`InvolParams::validate`] 统一把关，这样轴段
+/// `INVOLSPLINE … RL@L P1.5` 仍先报「不能与退刀槽同段」而不是被径节系列拦截。
+///
+/// 返回 `P`（= A）；错误带 `ANSI B92.1：` 前缀。
+pub fn parse_ansi_pitch_syntax(text: &str) -> Result<f64, String> {
+    let s = text.trim();
+    if s.is_empty() {
+        return Err(format!("ANSI B92.1：缺径节 P（{ANSI_PITCH_FORM_MSG}）。"));
+    }
+    if let Some((a, b)) = s.split_once('/') {
+        if b.contains('/') {
+            return Err(format!(
+                "ANSI B92.1：径节「{s}」格式不对（{ANSI_PITCH_FORM_MSG}）。"
+            ));
+        }
+        let (a_txt, b_txt) = (a.trim(), b.trim());
+        let a: f64 = a_txt.parse().map_err(|_| {
+            format!("ANSI B92.1：径节「{s}」的分子 A 不是数字（{ANSI_PITCH_FORM_MSG}）。")
+        })?;
+        let b: f64 = b_txt.parse().map_err(|_| {
+            format!("ANSI B92.1：径节「{s}」的分母 B 不是数字（{ANSI_PITCH_FORM_MSG}）。")
+        })?;
+        if !(a.is_finite() && a > 0.0) || !(b.is_finite() && b > 0.0) {
+            return Err(format!(
+                "ANSI B92.1：径节 A/B 的 A、B 都必须是正数；收到「{s}」。"
+            ));
+        }
+        if (b - 2.0 * a).abs() > 1e-9 * (2.0 * a).abs().max(1.0) {
+            return Err(format!(
+                "ANSI B92.1：径节写法 A/B 的 B 是 stub pitch Ps，标准中 Ps 恒为 2P；\
+                 收到 {}/{}，应写 {}/{}。",
+                trim(a),
+                trim(b),
+                trim(a),
+                trim(2.0 * a)
+            ));
+        }
+        return Ok(a);
+    }
+    let p: f64 = s
+        .parse()
+        .map_err(|_| format!("ANSI B92.1：径节「{s}」不是数字（{ANSI_PITCH_FORM_MSG}）。"))?;
+    if !(p.is_finite() && p > 0.0) {
+        return Err(format!("ANSI B92.1：径节 P={} 必须是正数。", trim(p)));
+    }
+    Ok(p)
+}
+
+/// 17 项系列校验：不在系列里报错，并把 17 项按 `A/B` 形式列出来。
+pub fn ansi_pitch_series_check(p: f64) -> Result<(), String> {
+    if ansi_pitch_row(p).is_some() {
+        return Ok(());
+    }
+    Err(format!(
+        "ANSI B92.1：径节 P={} 不在标准系列（17 项：{}）；{}。",
+        trim(p),
+        ansi_pitch_labels().join("、"),
+        ANSI_PITCH_FORM_MSG
+    ))
+}
+
+/// 全量解析径节：语法（`B==2A`）+ 17 项系列校验；入口层（CLI/查询串/GUI）用。
+pub fn parse_ansi_pitch(text: &str) -> Result<f64, String> {
+    let p = parse_ansi_pitch_syntax(text)?;
+    ansi_pitch_series_check(p)?;
+    Ok(p)
+}
+
+/// 给已带前缀的 ANSI 报错补 `ANSI B92.1：`（不重复补）。
+fn ansi_prefixed(e: String) -> String {
+    if e.starts_with(ANSI_CODE) {
+        e
+    } else {
+        format!("{ANSI_CODE}：{e}")
+    }
+}
+
 /// ANSI B92.1 Table 2 的五个公式列（p10；A–E）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AnsiColumn {
@@ -1272,7 +1366,8 @@ pub fn resolve_spline(
             return Err(ANSI_D_B_MSG.to_string());
         }
         let p = m.ok_or_else(|| {
-            "ANSI B92.1：缺径节 P（写法 `P8` / `pitch=8`；也兼容把值放在 `m=` 槽位）".to_string()
+            "ANSI B92.1：缺径节 P（写法 `P5/10`（A/B）或 `P8`（裸数字，需在 17 项系列）；也兼容 `pitch=5/10` 与 `m=` 槽位）"
+                .to_string()
         })?;
         let z = z.ok_or_else(|| "ANSI B92.1：缺齿数 N（写法 `Z20`）".to_string())?;
         if let Some(xv) = x {
@@ -1283,7 +1378,7 @@ pub fn resolve_spline(
                 ));
             }
         }
-        let p = InvolParams::ansi(profile, p, z).map_err(|e| format!("ANSI B92.1：{e}"))?;
+        let p = InvolParams::ansi(profile, p, z)?;
         return Ok((p, None));
     }
     // NF：`d_b` 槽位 = 公称直径 A（NF 主参数）。
@@ -1318,7 +1413,7 @@ pub fn resolve_spline(
         SplineStd::GB => "GB/T 3478：缺模数 m（写法 `M3`）".to_string(),
         SplineStd::DIN => "DIN 5480：缺模数 m（给 m 与 z，或给基准直径 d_B 由表补全）".to_string(),
         SplineStd::NF => "NF E22-141：缺模数 m（给 A 与 m，或给 A 与 z）".to_string(),
-        SplineStd::ANSI => "ANSI B92.1：缺径节 P（写法 `P8` / `pitch=8`）".to_string(),
+        SplineStd::ANSI => "ANSI B92.1：缺径节 P（写法 `P5/10`（A/B）或 `P8`）".to_string(),
     })?;
     let z = z.ok_or_else(|| match std {
         SplineStd::GB => "GB/T 3478：缺齿数 z（写法 `Z20`）".to_string(),
@@ -3061,12 +3156,13 @@ impl InvolParams {
     /// [`ansi_profile_name`] 可由「压力角 + 齿根型式 + 配合方式」拿到合法齿廓名。
     pub fn ansi(profile: &str, p: f64, z: u32) -> Result<Self, String> {
         if !(p.is_finite() && p > 0.0) {
-            return Err(format!("径节 P={} 必须是正数。", trim(p)));
+            return Err(ansi_prefixed(format!("径节 P={} 必须是正数。", trim(p))));
         }
         // 构造即用 mm 模数；`pitch` 回填原值（`ansi_p()` 优先用它，避免整数/小数往返丢精度）。
-        let mut q = Self::from_preset(SplineStd::ANSI, profile, ANSI_INCH_MM / p, z)?;
+        let mut q = Self::from_preset(SplineStd::ANSI, profile, ANSI_INCH_MM / p, z)
+            .map_err(ansi_prefixed)?;
         q.pitch = Some(p);
-        q.validate()?;
+        q.validate().map_err(ansi_prefixed)?;
         Ok(q)
     }
 
@@ -3482,12 +3578,11 @@ impl InvolParams {
         }
         if self.std == SplineStd::ANSI {
             let p = self.ansi_p();
-            if !(p.is_finite() && (2.5 - 1e-9..=128.0 + 1e-9).contains(&p)) {
-                return Err(format!(
-                    "ANSI B92.1：径节 P={} 超出标准范围（2.5/5 – 128/256）。",
-                    trim(p)
-                ));
+            if !(p.is_finite() && p > 0.0) {
+                return Err(format!("ANSI B92.1：径节 P={} 必须是正数。", trim(p)));
             }
+            // 系列校验：错误把 17 项按 A/B 形式列出（不再只报范围端点）。
+            ansi_pitch_series_check(p)?;
             if self.ansi_column().is_none() {
                 return Err(format!(
                     "ANSI B92.1：齿廓「{}」不是 Table 2 五列之一（用 `ANSI30P`/`ANSI30PM`/\
@@ -3803,7 +3898,8 @@ impl InvolParams {
     /// 内花键请走 `gear.rs` 的齿圈剖视模板 `internal_bore_section`。
     fn side_view_on(&self, len: f64, minor_layer: &str) -> Vec<EntityType> {
         let (ra, rf) = (self.da() / 2.0, self.df() / 2.0);
-        vec![
+        let d2 = self.d() / 2.0;
+        let mut out = vec![
             line([0.0, -ra], [0.0, ra], LAYER_MAIN),
             line([len, -ra], [len, ra], LAYER_MAIN),
             line([0.0, ra], [len, ra], LAYER_MAIN),
@@ -3811,7 +3907,12 @@ impl InvolParams {
             line([0.0, -rf], [len, -rf], minor_layer),
             line([0.0, rf], [len, rf], minor_layer),
             line([-3.0, 0.0], [len + 3.0, 0.0], LAYER_CENTER),
-        ]
+        ];
+        // 分度圆两条（点划线）：与齿轮侧视图同口径 —— 长度 = 该视图轮廓 `[0, len]`。
+        // 外花键侧视/剖视都走这里；内花键剖视走 `gear.rs::internal_bore_section`（已含）。
+        out.push(line([0.0, d2], [len, d2], LAYER_CENTER));
+        out.push(line([0.0, -d2], [len, -d2], LAYER_CENTER));
+        out
     }
 
     /// 常规侧视图（小径线 `2细线层`）。
@@ -4246,33 +4347,45 @@ mod tests {
         assert_eq!(e.len(), 20 * (2 * INVOLUTE_SEGMENTS + 2) + 2);
     }
 
-    /// 侧视图/剖视图：矩形 + 小径线图层不同；坐标口径。
+    /// 侧视图/剖视图：矩形 + 小径线图层不同；坐标口径；
+    /// 外加分度圆两条（`3中心线层`，与齿轮侧视图同口径）。
     #[test]
     fn side_view_rectangle_and_minor_layers() {
         let p = InvolParams::gb("30圆齿根", 3.0, 20).unwrap();
         let len = 30.0;
-        let (ra, rf) = (p.da() / 2.0, p.df() / 2.0);
+        let (ra, rf, d2) = (p.da() / 2.0, p.df() / 2.0, p.d() / 2.0);
         let side = p.side_view(len).unwrap();
         let section = p.section_view(len).unwrap();
-        assert_eq!(side.len(), 7);
-        assert_eq!(section.len(), 7);
+        assert_eq!(side.len(), 9, "矩形 4 + 小径 2 + 轴线 1 + 分度圆 2");
+        assert_eq!(section.len(), 9);
         for es in [&side, &section] {
             assert!(has_line(es, [0.0, -ra], [0.0, ra]));
             assert!(has_line(es, [len, -ra], [len, ra]));
             assert!(has_line(es, [0.0, ra], [len, ra]));
             assert!(has_line(es, [0.0, -rf], [len, -rf]));
             assert!(has_line(es, [-3.0, 0.0], [len + 3.0, 0.0]));
+            // 分度圆两条：`3中心线层`，y=±d/2，长度 = 该视图轮廓 `[0, len]`。
+            assert!(has_line(es, [0.0, d2], [len, d2]), "上侧分度线");
+            assert!(has_line(es, [0.0, -d2], [len, -d2]), "下侧分度线");
         }
+        // 与齿轮侧视图的**唯一区别**：花键侧视有小径（齿根圆）两条 `2细线层`。
         assert_eq!(
             line_layer_at(&side, rf),
             Some(LAYER_THIN),
-            "常规侧视小径细线"
+            "常规侧视上侧小径细线"
+        );
+        assert_eq!(
+            line_layer_at(&side, -rf),
+            Some(LAYER_THIN),
+            "常规侧视下侧小径细线"
         );
         assert_eq!(
             line_layer_at(&section, rf),
             Some(LAYER_MAIN),
             "剖视小径轮廓线"
         );
+        assert_eq!(line_layer_at(&side, d2), Some(LAYER_CENTER), "分度圆中心线层");
+        assert_eq!(line_layer_at(&side, -d2), Some(LAYER_CENTER));
         assert_eq!(line_layer_at(&side, ra), Some(LAYER_MAIN), "大径始终轮廓线");
     }
 
@@ -5359,6 +5472,44 @@ mod tests {
         }
     }
 
+    /// 径节写法：接受 `A/B`（B==2A）与裸数字（17 项系列内）；系列外报错把 17 项按 A/B 列出；
+    /// 重复 `ANSI B92.1：` 前缀已修。
+    #[test]
+    fn ansi_pitch_ab_parse_and_series_errors() {
+        // A/B 与裸数字（系列内）
+        assert!((parse_ansi_pitch("2.5/5").unwrap() - 2.5).abs() < 1e-12);
+        assert!((parse_ansi_pitch("128/256").unwrap() - 128.0).abs() < 1e-12);
+        assert!((parse_ansi_pitch("8").unwrap() - 8.0).abs() < 1e-12);
+        assert!((parse_ansi_pitch(" 5 / 10 ").unwrap() - 5.0).abs() < 1e-12);
+        // B != 2A：明确说明 Ps 恒为 2P，并给出应写形式
+        let e = parse_ansi_pitch("5/11").unwrap_err();
+        assert!(e.contains("Ps 恒为 2P") && e.contains("5/10"), "{e}");
+        // 系列外（裸数字 / 合法 A/B）：列 17 项 A/B
+        let e = parse_ansi_pitch("2").unwrap_err();
+        assert!(
+            e.contains("不在标准系列") && e.contains("2.5/5") && e.contains("128/256")
+                && e.contains("Ps 恒为 2P"),
+            "{e}"
+        );
+        let e = parse_ansi_pitch("7/14").unwrap_err();
+        assert!(e.contains("不在标准系列") && e.contains("3/6"), "{e}");
+        // 语法错：空/非数/多斜杠/非正
+        for bad in ["", "abc", "5/10/15", "0/0", "-2"] {
+            assert!(parse_ansi_pitch(bad).is_err(), "{bad} 应报错");
+        }
+        // 重复前缀修复：resolve_spline 的系列错误只带一个 `ANSI B92.1：`
+        let e = resolve_spline(SplineStd::ANSI, "ANSI30P", None, Some(2.0), Some(20), None)
+            .unwrap_err();
+        assert_eq!(e.matches("ANSI B92.1：").count(), 1, "{e}");
+        assert!(e.contains("标准系列"), "{e}");
+        // InvolParams::ansi 同样只有一层前缀，且合法系列值可用
+        let e = InvolParams::ansi("ANSI30平齿根齿侧", 2.0, 20).unwrap_err();
+        assert_eq!(e.matches("ANSI B92.1：").count(), 1, "{e}");
+        let ok = InvolParams::ansi("ANSI30平齿根齿侧", 5.0, 20).unwrap();
+        assert_eq!(ok.pitch, Some(5.0));
+        assert!((ok.m - 25.4 / 5.0).abs() < 1e-12);
+    }
+
     /// Table 2 五列公式（P=16、N=30 同时覆盖 5 列；cF 取 min 0.002 in 夹取）。
     /// 标准公式/印出值是英寸；引擎输出 mm，断言时 ÷25.4 回英寸再比。
     #[test]
@@ -5656,9 +5807,9 @@ mod tests {
         assert!(front.iter().any(|x| matches!(x, EntityType::Arc(a) if near(a.radius, p.df() / 2.0))));
         assert!(front.iter().any(|x| matches!(x, EntityType::Arc(a) if near(a.radius, p.da() / 2.0))));
         assert!(near(p.r_involute_start(), p.ansi_form_dia_external() / 2.0));
-        // 侧视/剖视走共用通路。
-        assert_eq!(p.side_view(30.0).unwrap().len(), 7);
-        assert_eq!(p.section_view(30.0).unwrap().len(), 7);
+        // 侧视/剖视走共用通路（矩形 4 + 小径 2 + 轴线 1 + 分度圆 2 = 9）。
+        assert_eq!(p.side_view(30.0).unwrap().len(), 9);
+        assert_eq!(p.section_view(30.0).unwrap().len(), 9);
         // 内花键走共用通路：外侧齿根弧 = Dri/2、里侧齿顶弧 = Di/2。
         let pi = p.clone().with_internal(true);
         pi.validate().unwrap();
