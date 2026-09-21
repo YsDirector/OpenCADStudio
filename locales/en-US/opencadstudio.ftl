@@ -57,6 +57,13 @@ options =
     .default-application = Default Application
     .iced-theme = Iced theme:
     .theme = Theme
+    .right-click-customization = Right-click Customization
+    .right-click-in-drawing-area = Right-click in drawing area
+    .hold-duration = Hold duration
+    .right-click-mode-help = Shortcut menu: right-click always opens the menu. Time-sensitive: a quick click is Enter, holding longer opens the menu (SHORTCUTMENUDURATION).
+    .right-click-mode-shortcut-menu = Shortcut menu
+    .right-click-mode-time-sensitive = Time-sensitive (quick click = Enter)
+    .right-click-mode-enter-first = Enter first, second click = menu
 
 command-line =
     .ready = Open CAD Studio ready.
@@ -244,6 +251,7 @@ command-move =
            *[other] { $count } objects
         }]:
     .target = MOVE  Specify destination  [base { $x },{ $y }]:
+    .displacement = MOVE  Specify displacement:
 
 command-copy =
     .array-count = COPY  Enter number of items to array:
@@ -258,6 +266,8 @@ command-copy =
             [one] { $count } copy so far
            *[other] { $count } copies so far
         } | Array | Enter=done | base { $x },{ $y }]:
+    .displacement = COPY  Specify displacement:
+    .mode = COPY  Enter a copy mode option [Single/Multiple] <Multiple>:
 
 common =
     .none-use-shortcuts-set-key-command =   (none — use: SHORTCUTS SET <key> <command>)
@@ -2118,7 +2128,7 @@ common =
     .sectionplane-specify-through-point = SECTIONPLANE  Specify through point:
     .setbylayer-no-properties-required-changes = SETBYLAYER: no properties required changes.
     .setbylayer-reset-entity-entities-to-bylayer = SETBYLAYER: reset __ocs_fmt_0__ entity/entities to ByLayer.
-    .setvar-cetransparency-ltscale-celtscale-pdmode-pdsize-textsize-orthomode-fillmode-mirrtext-frame-imageframe-pdfframe-wipeoutframe-xclipframe-pointcloudclipframe-zoomwheel-zoomfactor-cursorsize-pickbox-cursortype-snapang-textfill-clipromptlines-commandlinefadetime-attreq-attdia-dimassoc-dimcontinuemode-constraintsolvemode-constraintinfer-constraintbardisplay-angbase-angdir-sketchinc-skpoly-sktolerance-donutid-donutod-centerexe-centerlayer-centerltype-centerltscale-centerltypefile-centercrosssize-centercrossgap-centermarkexe-colortheme-selectionarea-selectionareaopacity-selectioneffect-selectioneffectcolor-windowsareacolor-crossingareacolor-selectionpreview-gripsize-gripcolor-griphot-griphover-gripobjlimit-clayer-celtype-textstyle-read-only = SETVAR: CETRANSPARENCY LTSCALE CELTSCALE PDMODE PDSIZE TEXTSIZE ORTHOMODE FILLMODE MIRRTEXT FRAME IMAGEFRAME PDFFRAME WIPEOUTFRAME XCLIPFRAME POINTCLOUDCLIPFRAME ZOOMWHEEL ZOOMFACTOR CURSORSIZE PICKBOX CURSORTYPE SNAPANG TEXTFILL CLIPROMPTLINES COMMANDLINEFADETIME ATTREQ ATTDIA DIMASSOC DIMCONTINUEMODE CONSTRAINTSOLVEMODE CONSTRAINTINFER CONSTRAINTBARDISPLAY ANGBASE ANGDIR SKETCHINC SKPOLY SKTOLERANCE DONUTID DONUTOD CENTEREXE CENTERLAYER CENTERLTYPE CENTERLTSCALE CENTERLTYPEFILE CENTERCROSSSIZE CENTERCROSSGAP CENTERMARKEXE COLORTHEME SELECTIONAREA SELECTIONAREAOPACITY SELECTIONEFFECT SELECTIONEFFECTCOLOR WINDOWSAREACOLOR CROSSINGAREACOLOR SELECTIONPREVIEW GRIPSIZE GRIPCOLOR GRIPHOT GRIPHOVER GRIPOBJLIMIT | CLAYER CELTYPE TEXTSTYLE (read-only)
+    .setvar-cetransparency-ltscale-celtscale-pdmode-pdsize-textsize-orthomode-fillmode-mirrtext-frame-imageframe-pdfframe-wipeoutframe-xclipframe-pointcloudclipframe-zoomwheel-zoomfactor-cursorsize-pickbox-cursortype-snapang-textfill-clipromptlines-commandlinefadetime-attreq-attdia-dimassoc-dimcontinuemode-constraintsolvemode-constraintinfer-constraintbardisplay-angbase-angdir-sketchinc-skpoly-sktolerance-donutid-donutod-centerexe-centerlayer-centerltype-centerltscale-centerltypefile-centercrosssize-centercrossgap-centermarkexe-colortheme-selectionarea-selectionareaopacity-selectioneffect-selectioneffectcolor-windowsareacolor-crossingareacolor-selectionpreview-gripsize-gripcolor-griphot-griphover-gripobjlimit-clayer-celtype-textstyle-read-only = SETVAR: CETRANSPARENCY LTSCALE CELTSCALE PDMODE PDSIZE TEXTSIZE ORTHOMODE FILLMODE MIRRTEXT FRAME IMAGEFRAME PDFFRAME WIPEOUTFRAME XCLIPFRAME POINTCLOUDCLIPFRAME ZOOMWHEEL ZOOMFACTOR SHORTCUTMENU SHORTCUTMENUDURATION CURSORSIZE PICKBOX CURSORTYPE SNAPANG TEXTFILL CLIPROMPTLINES COMMANDLINEFADETIME ATTREQ ATTDIA DIMASSOC DIMCONTINUEMODE CONSTRAINTSOLVEMODE CONSTRAINTINFER CONSTRAINTBARDISPLAY ANGBASE ANGDIR SKETCHINC SKPOLY SKTOLERANCE DONUTID DONUTOD CENTEREXE CENTERLAYER CENTERLTYPE CENTERLTSCALE CENTERLTYPEFILE CENTERCROSSSIZE CENTERCROSSGAP CENTERMARKEXE COLORTHEME SELECTIONAREA SELECTIONAREAOPACITY SELECTIONEFFECT SELECTIONEFFECTCOLOR WINDOWSAREACOLOR CROSSINGAREACOLOR SELECTIONPREVIEW GRIPSIZE GRIPCOLOR GRIPHOT GRIPHOVER GRIPOBJLIMIT | CLAYER CELTYPE TEXTSTYLE (read-only)
     .shell-supports-rectangular-boxes-circular-cylinders-and-spheres = SHELL supports rectangular boxes, circular cylinders, and spheres.
     .shell-solid-updated = SHELL: solid updated.
     .splinedit-fit-data-add-delete-move-purge-tangents-exit-exit = SPLINEDIT  Fit data [Add/Delete/Move/Purge/Tangents/eXit] <eXit>:
@@ -2825,6 +2835,34 @@ draw =
     .wpolygon = WPolygon
     .cpolygon = CPolygon
     .remove = Remove
+    .pline-specify-starting-width = PLINE  Specify starting width <__ocs_arg_w__>:
+    .pline-specify-ending-width = PLINE  Specify ending width <__ocs_arg_w__>:
+    .pline-specify-starting-half-width = PLINE  Specify starting half-width <__ocs_arg_w__>:
+    .pline-specify-ending-half-width = PLINE  Specify ending half-width <__ocs_arg_w__>:
+    .pline-line-specify-next-point = PLINE (Line)  Specify next point:
+    .pline-arc-specify-endpoint-of-arc = PLINE (Arc)  Specify endpoint of arc:
+    .pline-specify-length-of-line = PLINE  Specify length of line:
+    .pline-specify-included-angle = PLINE  Specify included angle:
+    .pline-specify-endpoint-of-arc = PLINE  Specify endpoint of arc:
+    .pline-specify-center-point-of-arc = PLINE  Specify center point of arc:
+    .pline-specify-radius-of-arc = PLINE  Specify radius of arc:
+    .pline-specify-direction-of-chord-for-arc = PLINE  Specify direction of chord for arc:
+    .pline-specify-length-of-chord = PLINE  Specify length of chord:
+    .pline-specify-tangent-direction-for-the-start-point-of-arc = PLINE  Specify tangent direction for the start point of arc:
+    .pline-specify-second-point-on-arc = PLINE  Specify second point on arc:
+    .halfwidth = Halfwidth
+    .center-keyword = CEnter
+    .close-keyword = CLose
+    .second-pt = Second pt
+    .arc-specify-start-point-of-arc = ARC  Specify start point of arc:
+    .arc-specify-second-point-of-arc = ARC  Specify second point of arc:
+    .arc-specify-end-point-of-arc = ARC  Specify end point of arc:
+    .arc-specify-center-point-of-arc = ARC  Specify center point of arc:
+    .arc-specify-included-angle = ARC  Specify included angle:
+    .arc-specify-length-of-chord = ARC  Specify length of chord:
+    .arc-specify-tangent-direction-for-the-start-point-of-arc = ARC  Specify tangent direction for the start point of arc:
+    .arc-specify-radius-of-arc = ARC  Specify radius of arc:
+    .chord-length = chord Length
 
 modify =
     .count-objects =  (__ocs_arg_count__ objects)
@@ -2977,6 +3015,13 @@ modify =
     .tol-scale-dimtfac = Tol. scale (DIMTFAC)
     .trim = Trim
     .exit = eXit
+    .area-keyword = ARea
+    .displacement = Displacement
+    .mode-keyword = mOde
+    .array-keyword = Array
+    .use-first-point-as-displacement = Use first point as displacement
+    .offset-erase-source-object-after-offsetting = OFFSET  Erase source object after offsetting? [Yes/No] <No>:
+    .offset-enter-layer-option-for-offset-objects = OFFSET  Enter layer option for offset objects [Current/Source] <Source>:
 
 groups =
     .group-enter-group-name-name = GROUP  Enter group name [__ocs_arg_name__]:
@@ -4153,7 +4198,7 @@ view =
     .cmd-not-yet-implemented = __ocs_fmt_0__: not yet implemented.
     .viewport-s-in-layout = __ocs_fmt_0__ viewport(s) in layout "__ocs_fmt_1__":
 
-    .ucs-option-world-view-3point-z-x-y-origin-save-delete-or-name = UCS  option [World/View/3Point/Z/X/Y/Origin/Save/Delete] or name:
+    .ucs-option-world-view-3point-z-x-y-origin-save-delete-or-name = UCS  option [Face/OBject/World/View/3Point/Z/X/Y/Origin/Save/Delete] or name:
     .ucs-specify-new-origin = UCS  specify new origin:
     .ucs-specify-point-on-positive-x-axis = UCS  specify point on positive X axis:
     .ucs-specify-point-in-positive-xy-plane = UCS  specify point in positive XY plane:
@@ -5044,6 +5089,8 @@ plot =
     .plot-style-table-pen-assignments = Plot style table (pen assignments)
     .plot-transparency = Plot transparency
     .plot-upside-down = Plot upside-down
+    .named-plot-style-tables-stb-are-not-supported-yet-name = Named plot style tables (.stb) are not supported yet: __ocs_fmt_0__
+    .name-was-not-found-in-the-plot-styles-folder-folder = __ocs_fmt_0__ was not found in the plot styles folder (__ocs_fmt_1__).
     .preview = Preview
     .printer-plotter = Printer / plotter
     .properties = Properties…
@@ -5055,6 +5102,34 @@ plot =
     .system-default-printer = System default printer
     .what-to-plot = What to plot
     .x-mm = X (mm)
+    .select-drawing-to-import-page-setups-from = Select Drawing to Import Page Setups From
+    .drawings-and-templates = Drawings and templates
+    .psetupin-count-page-setup-s-imported-replaced-replaced = PSETUPIN: __ocs_fmt_0__ page setup(s) imported, __ocs_fmt_1__ replaced.
+    .psetupin-error = PSETUPIN: __ocs_fmt_0__
+    .psetupin-no-page-setup-named-want-in-file = PSETUPIN: no page setup named "__ocs_fmt_0__" in __ocs_fmt_1__.
+    .psetupin-nothing-to-import-from-file = PSETUPIN: nothing to import from __ocs_fmt_0__.
+    .no-named-page-setups-in-this-drawing = No named page setups in this drawing.
+    .import-ellipsis = Import…
+    .show-the-page-setup-for-new-layouts = Show the page setup for new layouts
+    .x-in = X (in)
+    .y-in = Y (in)
+    .hide-paperspace-objects = Hide paperspace objects
+    .save-changes-to-layout = Save changes to layout
+    .printer-does-not-support-sheet-switched-to-its-default-sheet-default-paperupdate-1 = __ocs_fmt_0__ does not support __ocs_fmt_1__; switched to its default sheet __ocs_fmt_2__ (PAPERUPDATE = 1).
+    .printer-does-not-support-sheet-the-sheet-is-kept-paperupdate-0 = __ocs_fmt_0__ does not support __ocs_fmt_1__; the sheet is kept (PAPERUPDATE = 0).
+    .printer-the-printer-reports-no-sheets-the-paper-catalogue-is-used = __ocs_fmt_0__: the printer reports no sheets; the paper catalogue is used.
+    .printer-count-sheet-s-reported = __ocs_fmt_0__: __ocs_fmt_1__ sheet(s) reported
+    .default-sheet-sheet = Default sheet: __ocs_fmt_0__
+    .default-sheet-not-reported = Default sheet: not reported
+    .default-printer-name = Default printer: __ocs_fmt_0__
+    .default-printer-none-reported-by-the-system = Default printer: none reported by the system
+    .printers-none-listed-by-the-system = Printers: none listed by the system
+    .printers-count = Printers (__ocs_fmt_0__):
+    .could-not-list-printers-error = Could not list printers: __ocs_fmt_0__
+    .plots-go-through-the-pdf-application-command = Plots go through the PDF application: __ocs_fmt_0__
+    .plots-go-straight-to-the-printer-no-pdf-application-registers-a-print-verb = Plots go straight to the printer (no PDF application registers a print verb).
+    .via-the-pdf-application = via the PDF application
+    .direct-print = direct print
     .y-mm = Y (mm)
 
 manage =
@@ -5266,6 +5341,19 @@ ui =
     .what-s-new = What's new
     .width-value = Width: __ocs_arg_value__
     .working = Working…
+    .recent-input = Recent Input
+    .copy-with-base-point = Copy with Base Point
+    .undo-label = Undo __ocs_arg_label__
+    .redo-label = Redo __ocs_arg_label__
+    .copy-selection = Copy Selection
+    .isolate = Isolate
+    .deselect-all = Deselect All
+    .options-ellipsis = Options...
+    .base-point = Base Point
+    .snap-overrides = Snap Overrides
+    .mid-between-2-points = Mid Between 2 Points
+    .osnap-settings = Osnap Settings...
+    .snap-override-none-next-pick-only = Snap override: None (next pick only).
 
 dimstyle =
     .keep-text-between-extension-lines = Always keep text between extension lines

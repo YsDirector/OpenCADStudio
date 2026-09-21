@@ -134,6 +134,24 @@ struct Operation {
 fn failure(code: &str, error: impl ToString) -> Value {
     json!({"ok":false,"status":"failed","code":code,"error":error.to_string()})
 }
+/// `{"op":"open","name":"plan.dwg","data_base64":"…"}`: the web build has no
+/// filesystem path to open, so the caller sends the file itself. `name` is
+/// reduced to its file name; it labels the tab and the recent-files entry.
+fn open_bytes_request(req: &Value) -> Result<(String, Vec<u8>), Value> {
+    use base64::Engine as _;
+    let name = string(req, "name")?;
+    let name = name.rsplit(['/', '\\']).next().unwrap_or(name);
+    if name.is_empty() {
+        return Err(failure("invalid_request", "Missing name"));
+    }
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(req["data_base64"].as_str().unwrap_or_default())
+        .map_err(|e| failure("invalid_request", format!("data_base64: {e}")))?;
+    if bytes.is_empty() {
+        return Err(failure("invalid_request", "data_base64 is empty"));
+    }
+    Ok((name.to_string(), bytes))
+}
 fn string<'a>(req: &'a Value, key: &str) -> Result<&'a str, Value> {
     req[key]
         .as_str()
@@ -224,6 +242,26 @@ fn command_category(name: &str) -> &'static str {
     } else if name.starts_with("DIM") || ["LEADER", "MLEADER", "TOLERANCE"].contains(&name) {
         "annotate"
     } else if [
+        "GEOMCONSTRAINT",
+        "GCCOINCIDENT",
+        "GCCOLLINEAR",
+        "GCPERPENDICULAR",
+        "QCONSTRAINT",
+        "PCONSTRAINT",
+        "GCHORIZONTAL",
+        "VCONSTRAINT",
+        "ECONSTRAINT",
+        "GCEQUAL",
+        "TCONSTRAINT",
+        "GCCONCENTRIC",
+        "NRCONSTRAINT",
+        "LCONSTRAINT",
+        "DELCONSTRAINT",
+    ]
+    .contains(&name)
+    {
+        "parametric"
+    } else if [
         "BOX",
         "CYLINDER",
         "CONE",
@@ -292,11 +330,18 @@ fn active_command_metadata(command: &dyn crate::command::CadCommand) -> Value {
         accepts.push("entity");
     }
     if accepts.is_empty() && !command.needs_tangent_pick() {
-        accepts.push(match command.input_kind() {
+        let kind = match command.input_kind() {
             InputKind::Point => "point",
             InputKind::SingleToken => "token",
             InputKind::FreeText => "text",
-        });
+        };
+        // A point step that also takes keyword letters (MOVE/COPY's base
+        // point with [Displacement]) reports SingleToken so the letters reach
+        // the command line, but it still takes a point.
+        if command.point_step_accepts_keywords() && kind != "point" {
+            accepts.push("point");
+        }
+        accepts.push(kind);
     }
     if options.iter().any(|option| !option.keyword.is_empty()) && !accepts.contains(&"token") {
         accepts.push("token");
@@ -724,6 +769,24 @@ impl OpenCADStudio {
         let i = self.active_tab;
         Ok(match req["op"].as_str().unwrap_or("") {
             "new" => self.update(Message::TabNew),
+            "open" if req.get("data_base64").is_some() => {
+                let (name, bytes) = open_bytes_request(req)?;
+                #[cfg(target_arch = "wasm32")]
+                {
+                    if self.opening.is_some() {
+                        return Err(failure("busy", "Another drawing is still opening"));
+                    }
+                    self.open_web_bytes(name, bytes)
+                }
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    let _ = (name, bytes);
+                    return Err(failure(
+                        "invalid_request",
+                        "data_base64 is for the web build; supply path",
+                    ));
+                }
+            }
             "open" => self.update(Message::OpenExternal(std::path::PathBuf::from(string(
                 req, "path",
             )?))),
@@ -851,8 +914,17 @@ impl OpenCADStudio {
                     .main_window
                     .ok_or_else(|| failure("gui_required", "Capture requires a GUI window"))?;
                 let path = string(req, "path")?.to_owned();
-                iced::window::screenshot(window)
-                    .map(move |s| Message::ControlScreenshot(path.clone(), Some(s)))
+                // A minimized window has a 0x0 surface and the renderer
+                // panics reading it back, so report instead of capturing.
+                iced::window::size(window).then(move |size| {
+                    let path = path.clone();
+                    if size.width <= 0.0 || size.height <= 0.0 {
+                        Task::done(Message::ControlScreenshot(path, None))
+                    } else {
+                        iced::window::screenshot(window)
+                            .map(move |s| Message::ControlScreenshot(path.clone(), Some(s)))
+                    }
+                })
             }
             "stop" => {
                 self.control.enabled = false;
@@ -1047,7 +1119,8 @@ impl OpenCADStudio {
         screenshot: Option<iced::window::Screenshot>,
     ) {
         let result = (|| -> Result<Value, String> {
-            let s = screenshot.ok_or("Renderer did not return an image")?;
+            let s = screenshot
+                .ok_or("The window is minimized or has no size; restore it and capture again")?;
             let requested_scope = self
                 .control
                 .pending
@@ -1482,6 +1555,75 @@ mod tests {
             1
         );
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn open_from_bytes_validates_the_request() {
+        let ok = open_bytes_request(&json!({"name":"C:\\plans\\plan.dwg","data_base64":"AAEC"}));
+        assert_eq!(ok, Ok(("plan.dwg".to_string(), vec![0, 1, 2])));
+        for (req, error) in [
+            (json!({"data_base64":"AAEC"}), "Missing name"),
+            (json!({"name":"dir/","data_base64":"AAEC"}), "Missing name"),
+            (
+                json!({"name":"a.dwg","data_base64":""}),
+                "data_base64 is empty",
+            ),
+        ] {
+            assert_eq!(
+                open_bytes_request(&req).unwrap_err()["error"],
+                error,
+                "{req}"
+            );
+        }
+        let bad = open_bytes_request(&json!({"name":"a.dwg","data_base64":"not base64!"}));
+        assert_eq!(bad.unwrap_err()["code"], "invalid_request");
+    }
+    #[test]
+    fn open_from_bytes_is_refused_natively_without_touching_documents() {
+        let mut app = OpenCADStudio::new_for_test();
+        request(&mut app, json!({"op":"new"}));
+        let tabs = app.tabs.len();
+        let reply = request(
+            &mut app,
+            json!({"op":"open","name":"a.dxf","data_base64":"AAEC"}),
+        );
+        assert_eq!(reply["code"], "invalid_request", "{reply}");
+        assert_eq!(app.tabs.len(), tabs);
+        assert!(app.opening.is_none());
+    }
+
+    #[test]
+    fn point_steps_that_take_keywords_accept_points() {
+        let mut app = OpenCADStudio::new_for_test();
+        request(&mut app, json!({"op":"new"}));
+        request(&mut app, json!({"op":"run","cmd":"CIRCLE 0,0 3"}));
+        request(&mut app, json!({"op":"select","type":"CIRCLE"}));
+        let started = request(&mut app, json!({"op":"start","cmd":"MOVE"}));
+        assert_eq!(started["status"], "waiting_input", "{started}");
+        let command = &started["state"]["command"];
+        let accepts = command["accepts"].as_array().unwrap();
+        assert!(accepts.contains(&json!("point")), "{command}");
+        assert!(accepts.contains(&json!("token")), "{command}");
+        assert_eq!(command["input_example"]["kind"], "point");
+        let base = request(
+            &mut app,
+            json!({"op":"input","kind":"point","point":[0.,0.,0.]}),
+        );
+        assert_eq!(base["status"], "waiting_input", "{base}");
+        let moved = request(
+            &mut app,
+            json!({"op":"input","kind":"point","point":[0.,-10.,0.]}),
+        );
+        assert_eq!(moved["status"], "completed", "{moved}");
+        let circle = app.tabs[app.active_tab]
+            .scene
+            .document
+            .entities()
+            .find_map(|e| match e {
+                acadrust::EntityType::Circle(c) => Some(c.center.y),
+                _ => None,
+            });
+        assert_eq!(circle, Some(-10.0));
     }
 
     #[test]

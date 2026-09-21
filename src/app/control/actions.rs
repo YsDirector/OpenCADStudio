@@ -122,6 +122,7 @@ impl OpenCADStudio {
                 PropValue::ReadOnly(v)|PropValue::ReadOnlyWithTooltip{value:v,..}=>("readonly",json!(v),Value::Null),
                 PropValue::EditText(v)=>("number",json!(v),Value::Null),
                 PropValue::PlainText(v)=>("text",json!(v),Value::Null),
+                PropValue::Hyperlink(v)=>("hyperlink",json!(v),Value::Null),
                 PropValue::Choice{selected,options}=>("choice",json!(selected),json!(options)),
                 PropValue::EditChoice{value,options}=>("editable_choice",json!(value),json!(options)),
                 PropValue::LayerChoice(v)=>("layer",json!(v),Value::Null),
@@ -157,7 +158,10 @@ impl OpenCADStudio {
             .map(str::to_owned)
             .unwrap_or_else(|| req["value"].to_string());
         Ok(match p.value {
-            PropValue::EditText(_) | PropValue::PlainText(_) | PropValue::EditChoice { .. } => {
+            PropValue::EditText(_)
+            | PropValue::PlainText(_)
+            | PropValue::Hyperlink(_)
+            | PropValue::EditChoice { .. } => {
                 let input = self.update(Message::PropGeomInput {
                     field: p.field,
                     value,
@@ -267,7 +271,8 @@ impl OpenCADStudio {
             "mtext_cancel" => Message::MTextCancel,
             "text_input" => Message::TextInlineInput(string(req, "value")?.into()),
             "text_commit" => Message::TextInlineOk,
-            "pointer_move" | "pointer_press" | "pointer_release" => {
+            "pointer_move" | "pointer_press" | "pointer_release" | "pointer_right_press"
+            | "pointer_right_release" => {
                 let x = req["x"]
                     .as_f64()
                     .filter(|v| v.is_finite())
@@ -289,6 +294,10 @@ impl OpenCADStudio {
                 let event = match name {
                     "pointer_press" => self.update(Message::ViewportLeftPress),
                     "pointer_release" => self.update(Message::ViewportLeftRelease),
+                    // Right button: the context menu / Enter behaviour chosen in
+                    // Options (see `Message::ViewportRightRelease`).
+                    "pointer_right_press" => self.update(Message::ViewportRightPress),
+                    "pointer_right_release" => self.update(Message::ViewportRightRelease),
                     _ => Task::none(),
                 };
                 return Ok(Task::batch([move_task, event]));

@@ -90,9 +90,11 @@ fn reorder_insertion_index(from: usize, to: usize, after: bool, len: usize) -> O
 }
 
 mod command;
+mod context_menu;
 mod dialog;
 mod dynamic;
 mod file;
+mod page_setup_import;
 mod pi;
 mod style;
 mod util;
@@ -176,6 +178,10 @@ impl OpenCADStudio {
             self.drafting_settings_state = None;
             self.drafting_settings_saved = None;
         }
+        if self.active_modal == Some(Options) {
+            self.options_saved = None;
+            self.options_close_confirm = false;
+        }
         #[cfg(not(target_arch = "wasm32"))]
         if self.active_modal == Some(FileInUse) {
             self.pending_save_failure = None;
@@ -201,6 +207,13 @@ impl OpenCADStudio {
                 self.attr_editor_tab = crate::ui::window::attribute_editor::AttrTab::Attribute;
             }
             Some(GeometricTolerance) => self.geometric_tolerance = None,
+            Some(Hyperlink) => {
+                self.hyperlink_editor_handles.clear();
+                self.hyperlink_editor_url.clear();
+                self.hyperlink_editor_description.clear();
+                self.hyperlink_editor_mixed = false;
+                self.hyperlink_editor_dirty = false;
+            }
             // Closing (✕) discards edits made since the last Apply — matching the
             // style editors. Committing happens only through the Apply button.
             Some(Aliases) => {
@@ -303,6 +316,14 @@ impl OpenCADStudio {
             }
             if is_modal_blocked_key_msg(&msg) {
                 return Task::none();
+            }
+        }
+        // The open right-click context menu owns the keyboard the same way:
+        // arrows / Enter / mnemonic letters drive it, any other key closes it
+        // and falls through to the command line (the behaviour of commercial solutions).
+        if self.context_menu_open() {
+            if let Some(task) = self.intercept_context_menu_key(&msg) {
+                return task;
             }
         }
         let task = self.update_inner(msg);
@@ -762,6 +783,14 @@ impl OpenCADStudio {
                     .unwrap_or("Snap");
                 self.command_line
                     .push_info(crate::tf!("Snap override: {label} (next pick only).").as_ref());
+                Task::none()
+            }
+
+            Message::SnapOverrideNone => {
+                self.snap_override_popup = None;
+                self.snapper.set_override_none();
+                self.command_line
+                    .push_info(crate::t!("Snap override: None (next pick only).").as_ref());
                 Task::none()
             }
 
@@ -1607,8 +1636,7 @@ impl OpenCADStudio {
             Message::ClearScene => {
                 let i = self.active_tab;
                 self.push_undo_snapshot(i, "CLEAR");
-                self.tabs[i].scene.clear();
-                crate::io::linetypes::populate_document(&mut self.tabs[i].scene.document);
+                self.tabs[i].scene.reset_to_new_drawing();
                 self.tabs[i].properties = PropertiesPanel::empty();
                 let doc_layers = self.tabs[i].scene.document.layers.clone();
                 let vp_info = self.tabs[i].scene.viewport_list();
@@ -2494,6 +2522,10 @@ impl OpenCADStudio {
                 self.xref_manager.refresh_open = false;
                 Task::none()
             }
+            Message::XrefHelpOpen => {
+                self.active_modal = Some(super::ModalKind::XrefHelp);
+                Task::none()
+            }
             Message::XrefManagerDismissMenus => {
                 self.xref_manager.attach_open = false;
                 self.xref_manager.refresh_open = false;
@@ -2578,6 +2610,7 @@ impl OpenCADStudio {
                             if is_dwg {
                                 return self.update(Message::OpenRecent(std::path::PathBuf::from(found)));
                             } else {
+                                #[cfg(not(target_arch = "wasm32"))]
                                 let _ = open::that_detached(&found);
                             }
                         } else {
@@ -3652,6 +3685,10 @@ impl OpenCADStudio {
                     return Task::none();
                 }
                 let was_click = !sel.right_dragging;
+                // How long the button was held, for the time-sensitive mode.
+                let held_ms = sel
+                    .right_press_time
+                    .map_or(0, |t| t.elapsed().as_millis() as i32);
                 sel.right_down = false;
                 sel.right_press_pos = None;
                 sel.right_press_time = None;
@@ -3676,21 +3713,43 @@ impl OpenCADStudio {
                     drop(sel);
                     return self.update(Message::CommandFinalize);
                 }
-                // A right-click (no orbit). While a command is active the first
-                // right-click acts as Enter (commit / close); a second
-                // consecutive right-click opens the context menu instead. When
-                // idle it always opens the menu. (Right-drag, handled above,
-                // always orbits.) Any other interaction — a left-click pick or a
-                // new command — resets the cycle so the next right-click is Enter.
-                if self.tabs[i].active_cmd.is_some() && !sel.right_click_entered {
+                // A right-click. What it does is the user's choice (Options →
+                // User Preferences, SHORTCUTMENU in commercial solutions):
+                //  • Shortcut menu — always open the context menu, whose
+                //    default row (Enter / Repeat) sits under the pointer.
+                //  • Time-sensitive — a quick click is Enter while a command
+                //    runs (repeat the last command when idle); a held click
+                //    opens the menu.
+                //  • Enter first — while a command is active the first
+                //    right-click acts as Enter and a second consecutive one
+                //    opens the menu; idle always opens the menu. Any other
+                //    interaction — a left-click pick or a new command — resets
+                //    that cycle so the next right-click is Enter again.
+                let has_cmd = self.tabs[i].active_cmd.is_some();
+                let open_menu = match self.right_click_mode {
+                    super::settings::RightClickMode::ShortcutMenu => true,
+                    super::settings::RightClickMode::TimeSensitive => {
+                        held_ms >= self.right_click_hold_ms
+                    }
+                    super::settings::RightClickMode::EnterFirst => {
+                        !(has_cmd && !sel.right_click_entered)
+                    }
+                };
+                if !open_menu {
                     sel.right_click_entered = true;
                     drop(sel);
+                    // CommandFinalize is Enter during a command and "repeat
+                    // the last command" when idle — exactly the quick
+                    // right-click.
                     return self.update(Message::CommandFinalize);
                 }
                 sel.right_click_entered = false;
-                sel.context_menu = Some(click_pos);
-                sel.draworder_submenu = false;
-                Task::none()
+                sel.open_context_menu(click_pos);
+                drop(sel);
+                // Take the keyboard away from the command-line field so keys
+                // reach the menu through the global subscription; the field
+                // is re-focused when the menu closes.
+                self.unfocus_widgets()
             }
 
             Message::ViewportMiddlePress => self.on_viewport_middle_press(),
@@ -4219,6 +4278,106 @@ impl OpenCADStudio {
                 }
                 Task::none()
             }
+            Message::PropHyperlinkOpen => {
+                let i = self.active_tab;
+                let handles = self.property_target_handles(i);
+                if handles.is_empty() {
+                    return Task::none();
+                }
+                let mut first: Option<(String, String)> = None;
+                let mut mixed = false;
+                for handle in &handles {
+                    let Some(entity) = self.tabs[i].scene.document.get_entity(*handle) else {
+                        continue;
+                    };
+                    let current = (
+                        crate::scene::pe_url_of(entity).unwrap_or_default().to_owned(),
+                        crate::scene::pe_url_description_of(entity)
+                            .unwrap_or_default()
+                            .to_owned(),
+                    );
+                    if first.as_ref().is_some_and(|value| value != &current) {
+                        mixed = true;
+                    } else if first.is_none() {
+                        first = Some(current);
+                    }
+                }
+                let (url, description) = if mixed {
+                    (String::new(), String::new())
+                } else {
+                    first.unwrap_or_default()
+                };
+                self.hyperlink_editor_handles = handles;
+                self.hyperlink_editor_url = url;
+                self.hyperlink_editor_description = description;
+                self.hyperlink_editor_mixed = mixed;
+                self.hyperlink_editor_dirty = false;
+                self.active_modal = Some(crate::app::ModalKind::Hyperlink);
+                Task::none()
+            }
+            Message::HyperlinkUrlChanged(value) => {
+                self.hyperlink_editor_url = value;
+                self.hyperlink_editor_dirty = true;
+                Task::none()
+            }
+            Message::HyperlinkDescriptionChanged(value) => {
+                self.hyperlink_editor_description = value;
+                self.hyperlink_editor_dirty = true;
+                Task::none()
+            }
+            Message::HyperlinkApply => {
+                if !self.hyperlink_editor_dirty {
+                    self.close_active_modal();
+                    return Task::none();
+                }
+                let url = self.hyperlink_editor_url.trim().to_owned();
+                if self.hyperlink_editor_mixed && url.is_empty() {
+                    self.command_line.push_info(
+                        crate::t!("Enter a URL, or use Remove to clear all hyperlinks.").as_ref(),
+                    );
+                    return Task::none();
+                }
+                let description = self.hyperlink_editor_description.trim().to_owned();
+                let values = if url.is_empty() {
+                    None
+                } else {
+                    let mut values = vec![acadrust::xdata::XDataValue::String(url)];
+                    if !description.is_empty() {
+                        values.push(acadrust::xdata::XDataValue::String(description));
+                    }
+                    Some(values)
+                };
+                let i = self.active_tab;
+                let handles = self.hyperlink_editor_handles.clone();
+                self.apply_property_op(i, "HYPERLINK", &handles, |app, handle| {
+                    crate::scene::view::dispatch::set_entity_xdata(
+                        &mut app.tabs[i].scene.document,
+                        handle,
+                        "PE_URL",
+                        values.clone(),
+                    );
+                });
+                self.close_active_modal();
+                Task::none()
+            }
+            Message::HyperlinkRemove => {
+                let i = self.active_tab;
+                let handles = self.hyperlink_editor_handles.clone();
+                self.apply_property_op(i, "HYPERLINK", &handles, |app, handle| {
+                    crate::scene::view::dispatch::set_entity_xdata(
+                        &mut app.tabs[i].scene.document,
+                        handle,
+                        "PE_URL",
+                        None,
+                    );
+                });
+                self.close_active_modal();
+                Task::none()
+            }
+            Message::HyperlinkCancel => {
+                self.close_active_modal();
+                Task::none()
+            }
             Message::AnnoObjectScaleToggle(name) => {
                 let i = self.active_tab;
                 if let Some(entity) = self.anno_object_scale_target {
@@ -4727,6 +4886,36 @@ impl OpenCADStudio {
                     if state.snap_equal {
                         state.snap_x_input = value;
                     }
+                }
+                Task::none()
+            }
+            Message::DraftingSettingsGridXChanged(value) => {
+                if let Some(state) = &mut self.drafting_settings_state {
+                    state.grid_x_input = value;
+                }
+                Task::none()
+            }
+            Message::DraftingSettingsGridYChanged(value) => {
+                if let Some(state) = &mut self.drafting_settings_state {
+                    state.grid_y_input = value;
+                }
+                Task::none()
+            }
+            Message::DraftingSettingsGridMajorChanged(value) => {
+                if let Some(state) = &mut self.drafting_settings_state {
+                    state.grid_major_input = value;
+                }
+                Task::none()
+            }
+            Message::DraftingSettingsToggleAdaptiveGrid => {
+                if let Some(state) = &mut self.drafting_settings_state {
+                    state.grid_adaptive = !state.grid_adaptive;
+                }
+                Task::none()
+            }
+            Message::DraftingSettingsToggleBeyondLimits => {
+                if let Some(state) = &mut self.drafting_settings_state {
+                    state.grid_beyond_limits = !state.grid_beyond_limits;
                 }
                 Task::none()
             }
@@ -5440,12 +5629,9 @@ impl OpenCADStudio {
                 self.post_editor_closed(committed)
             }
 
-            Message::DrawOrderSubmenuToggle => {
-                let i = self.active_tab;
-                let mut sel = self.tabs[i].scene.selection.borrow_mut();
-                sel.draworder_submenu = !sel.draworder_submenu;
-                Task::none()
-            }
+            Message::ContextMenuPick(action) => self.on_context_menu_pick(action),
+            Message::ContextMenuSubmenuToggle(id) => self.on_context_menu_submenu_toggle(id),
+            Message::ContextMenuNavigate(nav) => self.on_context_menu_navigate(nav),
 
             Message::DrawOrderPickRef(above) => {
                 let i = self.active_tab;
@@ -7017,7 +7203,35 @@ impl OpenCADStudio {
             }
             // ── Options / About windows ───────────────────────────────────
             Message::OptionsOpen => {
-                self.active_modal = Some(super::ModalKind::Options);
+                self.options_open();
+                Task::none()
+            }
+            Message::OptionsApply => {
+                self.options_apply();
+                Task::none()
+            }
+            Message::OptionsOk => {
+                self.options_apply();
+                self.options_forget();
+                self.close_active_modal();
+                Task::none()
+            }
+            Message::OptionsClose => {
+                if !self.options_close_confirm && self.options_dirty() {
+                    self.options_close_confirm = true;
+                    return Task::none();
+                }
+                self.options_discard();
+                self.close_active_modal();
+                Task::none()
+            }
+            Message::OptionsCloseDiscard => {
+                self.options_discard();
+                self.close_active_modal();
+                Task::none()
+            }
+            Message::OptionsCloseKeep => {
+                self.options_close_confirm = false;
                 Task::none()
             }
 
@@ -7126,6 +7340,39 @@ impl OpenCADStudio {
                 self.sync_model_space_theme(true);
                 self.persist_settings_if_changed();
                 Task::none()
+            }
+
+            Message::BgPickerOpen(target) => {
+                self.bg_picker = Some(target);
+                Task::none()
+            }
+
+            Message::BgPickerCancel => {
+                self.bg_picker = None;
+                Task::none()
+            }
+
+            Message::BgPickerSubmit(color) => {
+                // Hand the result to the same handler the typed hex field
+                // uses, so the wheel and the field cannot drift apart on
+                // validation, persistence or the MatchTheme fallback.
+                let hex = crate::app::config::rgb_to_hex([
+                    (color.r * 255.0).round() as u8,
+                    (color.g * 255.0).round() as u8,
+                    (color.b * 255.0).round() as u8,
+                ]);
+                match self.bg_picker.take() {
+                    Some(crate::app::BgTarget::Model) => {
+                        Task::done(Message::ModelSpaceBgChanged(hex))
+                    }
+                    Some(crate::app::BgTarget::Paper) => {
+                        Task::done(Message::PaperSpaceBgChanged(hex))
+                    }
+                    Some(crate::app::BgTarget::Desk) => {
+                        Task::done(Message::DeskSpaceBgChanged(hex))
+                    }
+                    None => Task::none(),
+                }
             }
 
             Message::ModelSpaceBgChanged(hex) => {
@@ -7298,6 +7545,12 @@ impl OpenCADStudio {
                 Task::none()
             }
 
+            Message::PageSetupImportFile(path) => self.on_page_setup_import_file(path),
+            Message::PageSetupOnNewLayoutChanged(enabled) => {
+                self.plot_dialog.page_setup_on_new_layout = enabled;
+                self.persist_settings_if_changed();
+                Task::none()
+            }
             Message::BackupOnSaveChanged(enabled) => {
                 self.backup_on_save = enabled;
                 self.persist_settings_if_changed();
@@ -7336,6 +7589,18 @@ impl OpenCADStudio {
 
             Message::ZoomFactorChanged(factor) => {
                 self.zoom_factor = factor.clamp(3, 100);
+                self.persist_settings_if_changed();
+                Task::none()
+            }
+
+            Message::RightClickModeChanged(mode) => {
+                self.right_click_mode = mode;
+                self.persist_settings_if_changed();
+                Task::none()
+            }
+
+            Message::RightClickHoldMsChanged(ms) => {
+                self.right_click_hold_ms = super::settings::clamp_right_click_hold_ms(ms);
                 self.persist_settings_if_changed();
                 Task::none()
             }
@@ -7582,6 +7847,10 @@ impl OpenCADStudio {
             Message::CloseModal => {
                 if self.active_modal == Some(super::ModalKind::RecoveryPrompt) {
                     return self.update(Message::RecoveryDecline);
+                }
+                // The Options window's × and Esc behave like its Close button.
+                if self.active_modal == Some(super::ModalKind::Options) {
+                    return self.update(Message::OptionsClose);
                 }
                 // Closing the shortcut editor with un-applied rows needs an
                 // explicit discard; a second close attempt (or the overlay's
@@ -8811,7 +9080,7 @@ impl OpenCADStudio {
             Message::PlotStyleLoad => {
                 Task::perform(crate::io::pick_plot_style(), Message::PlotStyleLoaded)
             }
-            Message::PlotStyleLoaded(Some(table)) => {
+            Message::PlotStyleLoaded(Ok(Some(table))) => {
                 if table.is_stb {
                     self.command_line.push_error(
                         crate::t!(
@@ -8823,6 +9092,8 @@ impl OpenCADStudio {
                 }
                 self.plot_dialog.style_name = table.name.clone();
                 self.plot_dialog.style_missing = false;
+                self.plot_dialog.style_error = None;
+                self.report_plot_style_warnings(&table);
                 self.command_line.push_output(
                     crate::tf!(
                         "Plot style '{}' loaded ({} color entries).",
@@ -8839,7 +9110,15 @@ impl OpenCADStudio {
                 self.plot_dialog.plot_styles = crate::io::plot_style::available_ctb_names();
                 Task::none()
             }
-            Message::PlotStyleLoaded(None) => Task::none(),
+            Message::PlotStyleLoaded(Ok(None)) => Task::none(),
+            Message::PlotStyleLoaded(Err(error)) => {
+                // The file the user pointed at could not be read: say why,
+                // in the dialog as well as on the command line.
+                self.command_line.push_error(&error);
+                self.plot_dialog.style_missing = true;
+                self.plot_dialog.style_error = Some(error);
+                Task::none()
+            }
             Message::PlotStyleClear => {
                 self.active_plot_style = None;
                 self.plot_dialog.style_name.clear();
@@ -8866,12 +9145,15 @@ impl OpenCADStudio {
                     if needs_load {
                         match crate::io::plot_style::PlotStyleTable::load_named(&selected_style) {
                             Ok(table) => {
+                                self.report_plot_style_warnings(&table);
                                 self.active_plot_style = Some(table);
                                 self.plot_dialog.style_missing = false;
+                                self.plot_dialog.style_error = None;
                             }
                             Err(error) => {
                                 self.plot_dialog.style_missing = true;
                                 self.command_line.push_error(&error);
+                                self.plot_dialog.style_error = Some(error);
                                 return Task::none();
                             }
                         }

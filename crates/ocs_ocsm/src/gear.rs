@@ -4288,11 +4288,18 @@ mod tests {
         );
 
         // 冻结指纹（加入 α 参数前的实测值）—— 只锁「默认 20°」这条路径。
+        //
+        // ⚠️ 指纹哈希的是 `format!("{:?}", 图元)`（见 `entity_fingerprint`），所以
+        // **随 acadrust 的结构体字段漂移**：2026-09-21 上游把 acadrust 从 `8a28c21` 升到
+        // `5b682ed`，其中 `EntityCommon` 新增 `raw_record: Option<Arc<RawRecord>>`（serde 跳过，
+        // 但 **Debug 会打印**）→ 每个图元的 Debug 串都变，四个指纹全漂。
+        // 已按新旧几何未变的前提下重新冻结（图元数不变：section 14 / side / simplified / front）。
+        // 下次升 acadrust 若再漂，先确认几何真的没变（比对图元数与关键坐标）再改这里的常数。
         let frozen: [(&str, u64); 4] = [
-            ("section", 0x87f2_54a5_04ad_15cb),
-            ("side", 0x9456_abaa_3dac_27a2),
-            ("simplified", 0xb41f_3c28_b5bd_00d7),
-            ("front", 0xe678_a1e6_bf09_08a7),
+            ("section", 0x723163d7dfa02d27),
+            ("side", 0xdb9046b86e5a3e94),
+            ("simplified", 0x39e0cbb64e6195cd),
+            ("front", 0xbb4f49b5f2d49d91),
         ];
         for (name, want) in frozen {
             let view = GearView::parse(name).unwrap();

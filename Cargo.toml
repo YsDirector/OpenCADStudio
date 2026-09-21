@@ -1,6 +1,6 @@
 [package]
 name = "OpenCADStudio"
-version = "2026.37.0"
+version = "2026.38.0"
 edition = "2021"
 build = "build.rs"
 default-run = "OpenCADStudio"
@@ -35,9 +35,9 @@ rfd = "0.17"
 clap = { version = "4", features = ["derive", "string"] }
 env_logger = "0.11"
 log = "0.4"
-acadrust = { git = "https://github.com/HakanSeven12/cadcodec.git", rev = "8a28c21", features = ["serde"] }
-cadkernel = { git = "https://github.com/HakanSeven12/cadkernel.git", rev = "35aa7a5", features = ["acis", "offset"] }
-cadkernel-constraints = { git = "https://github.com/HakanSeven12/cadkernel.git", rev = "35aa7a5" }
+acadrust = { git = "https://github.com/HakanSeven12/cadcodec.git", rev = "5b682ed", features = ["serde"] }
+cadkernel = { git = "https://github.com/HakanSeven12/cadkernel.git", rev = "6f046af", features = ["acis", "offset"] }
+cadkernel-constraints = { git = "https://github.com/HakanSeven12/cadkernel.git", rev = "6f046af" }
 dwg-thumbnailer = { path = "crates/dwg-thumbnailer" }
 flate2 = "1"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "bmp", "tiff"] }
@@ -57,6 +57,7 @@ ttf-parser = "0.25"
 cosmic-text = "0.15"
 unicode-bidi = "0.3"
 lyon_tessellation = "1.0.20"
+pollster = "0.4"
 
 [dev-dependencies]
 fluent-syntax = "0.12"
@@ -87,7 +88,7 @@ iced_widget = { git = "https://github.com/iced-rs/iced.git", rev = "23604ff22ab0
 # 同步规则：**上游升 rev 时跟着升**，但 URL 必须保持镜像；`Cargo.lock` 里 acadrust 的
 # source 应显示 ghfast.top（不是 github.com）。
 [patch."https://github.com/HakanSeven12/cadcodec.git"]
-acadrust = { git = "https://ghfast.top/https://github.com/HakanSeven12/cadcodec.git", rev = "8a28c21" }
+acadrust = { git = "https://ghfast.top/https://github.com/HakanSeven12/cadcodec.git", rev = "5b682ed" }
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 getrandom = "0.3"
 ocs_plugin_api = { path = "crates/ocs_plugin_api", features = ["host"] }

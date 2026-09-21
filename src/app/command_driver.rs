@@ -150,9 +150,14 @@ impl OpenCADStudio {
                     entity, target.handle, target.grip_id,
                 )).unwrap_or_default()
         }).collect();
+        let retain_size = self.constraint_solve_mode
+            && !driven_refs.is_empty()
+            && driven_refs.iter().all(|reference| reference.marker.is_some());
         let solved = self.tabs[i].scene.solve_parametric_constraints_preview(
-            &touched, &driven_refs,
-            self.constraint_solve_mode && !driven_refs.is_empty(), &self.grip_originals,
+            &touched,
+            &driven_refs,
+            retain_size,
+            &self.grip_originals,
         );
         for (handle, entity) in solved {
             if let Some(slot) = self.tabs[i].scene.document.get_entity_mut(handle) {
@@ -176,6 +181,9 @@ impl OpenCADStudio {
 
     pub(super) fn cancel_active_grip_edit(&mut self) -> bool {
         let i = self.active_tab;
+        // Grip-menu toggles live only as long as the gesture.
+        self.tabs[i].grip_copy = false;
+        self.tabs[i].grip_base_pending = false;
         let had_grip = self.tabs[i].active_grip.take().is_some()
             || self.grip_add_provisional.is_some()
             || !self.grip_preview_handles.is_empty()
@@ -759,6 +767,21 @@ impl OpenCADStudio {
                     if self.command_point_allowed(i, wcs) {
                         self.last_point = Some(wcs);
                         self.push_ucs_to_cmd(i);
+                        // A typed coordinate at an object prompt is a pick at
+                        // that point, as in the reference.
+                        let picks_entity = self.tabs[i]
+                            .active_cmd
+                            .as_ref()
+                            .is_some_and(|command| command.typed_point_picks_entity());
+                        if picks_entity {
+                            let owner = self.tabs[i]
+                                .current_parametric_scope()
+                                .owner_handle(&self.tabs[i].scene.document);
+                            let handle =
+                                entity_at_typed_point(&self.tabs[i].scene.document, owner, wcs)
+                                    .unwrap_or(Handle::NULL);
+                            return self.feed_command(StepInput::EntityPick(handle, wcs));
+                        }
                         return self.feed_command(StepInput::Point(wcs));
                     }
                     return Task::none();
@@ -783,6 +806,9 @@ impl OpenCADStudio {
             }
             return Task::none();
         }
+        // Keywords, distances and points fed here (option buttons, the
+        // context menu, scripts) join the Recent Input list like typed ones.
+        self.command_line.record_recent_input(token);
         let is_mtp = token.trim_start_matches('_').eq_ignore_ascii_case("MTP")
             || token.trim_start_matches('_').eq_ignore_ascii_case("M2P");
         if is_mtp {
@@ -914,6 +940,9 @@ impl OpenCADStudio {
         );
         let task = self.apply_cmd_result_inner(result);
         let i = self.active_tab;
+        // A transparent zoom that just finished hands control back to the
+        // command it interrupted before the "command ended" bookkeeping below.
+        self.resume_transparent_parent(i);
         let preview_hidden = self.tabs[i]
             .active_cmd
             .as_ref()
@@ -1386,6 +1415,38 @@ impl OpenCADStudio {
         }
         self.refresh_properties();
         Task::none()
+    }
+
+    /// Bring back the command a transparent zoom parked, once the zoom is
+    /// over (no command active any more). No-op otherwise.
+    pub(in crate::app) fn resume_transparent_parent(&mut self, i: usize) {
+        if !self.tabs[i].transparent_resume {
+            return;
+        }
+        if self.tabs[i].active_cmd.is_some() {
+            // The transparent prompt is still up (or the parent was already
+            // restored by a Cancel).
+            if self.tabs[i].suspended_cmd.is_none() {
+                self.tabs[i].transparent_resume = false;
+            }
+            return;
+        }
+        self.tabs[i].transparent_resume = false;
+        let Some(parent) = self.tabs[i].suspended_cmd.take() else {
+            return;
+        };
+        self.tabs[i].active_cmd = Some(parent);
+        let prompt = self.tabs[i].active_cmd.as_ref().map(|c| c.prompt());
+        if let Some(p) = prompt {
+            self.command_line.push_info(&p);
+        }
+        let opts = self.tabs[i]
+            .active_cmd
+            .as_ref()
+            .map(|c| c.options())
+            .unwrap_or_default();
+        self.command_line.set_step_options(opts);
+        self.refresh_active_cmd_preview(i);
     }
 
     pub(in crate::app) fn start_mtp_modifier(&mut self, i: usize) {
@@ -3136,17 +3197,48 @@ impl OpenCADStudio {
                 driving_param,
                 label,
             } => {
+                use crate::scene::parametric_constraints::ConstraintKind;
+                // GCSMOOTH and FXCONSTRAINT re-prompt after a rejected pick.
+                let keep_command = self.tabs[i].active_cmd.as_ref().is_some_and(|command| {
+                    (kind == ConstraintKind::Smooth && command.name() == "GCSMOOTH")
+                        || (kind == ConstraintKind::Fixed && command.name() == "FXCONSTRAINT")
+                });
                 if let Err(message) = self.tabs[i].scene.validate_parametric_constraint(
                     kind,
                     &refs,
                     driving_param.as_ref(),
                 ) {
-                    self.tabs[i].active_cmd = None;
+                    if !keep_command {
+                        self.tabs[i].active_cmd = None;
+                    }
                     self.tabs[i].snap_result = None;
                     self.command_line.push_error(message);
+                    if keep_command {
+                        if let Some(prompt) =
+                            self.tabs[i].active_cmd.as_ref().map(|command| command.prompt())
+                        {
+                            self.command_line.push_info(&prompt);
+                        }
+                    }
                     return Task::none();
                 }
                 let scope = self.tabs[i].current_parametric_scope();
+                if kind == ConstraintKind::Fixed
+                    && self.tabs[i]
+                        .scene
+                        .parametric_constraint_set(scope)
+                        .is_some_and(|set| {
+                            set.constraints.iter().any(|existing| {
+                                existing.enabled && existing.kind == kind && existing.refs == refs
+                            })
+                        })
+                {
+                    self.tabs[i].active_cmd = None;
+                    self.tabs[i].snap_result = None;
+                    self.command_line
+                        .push_error("The constraint already exists on the selected objects.");
+                    return Task::none();
+                }
                 let constraints_before = self.tabs[i]
                     .scene
                     .parametric_constraint_set(scope)
@@ -3183,6 +3275,572 @@ impl OpenCADStudio {
                 self.tabs[i].active_cmd = None;
                 self.tabs[i].snap_result = None;
                 self.command_line.push_output("Constraint applied.");
+                self.refresh_properties();
+                if let Some(pd) = pending {
+                    self.commit_undo_delta(i, pd);
+                }
+            }
+            CmdResult::AddEqualConstraint {
+                first,
+                others,
+                multiple,
+                label,
+            } => {
+                use crate::modules::parametric::EqualConstraintCommand;
+                use crate::scene::parametric_constraints::{
+                    equal_size, equal_size_follower, ConstraintKind, EqualSize, ParametricRef,
+                };
+
+                let scope = self.tabs[i].current_parametric_scope();
+                // Enter ends a Multiple flow with the reference's summary line.
+                let finishing = multiple && others.is_empty();
+                let mut followers: Vec<ParametricRef> = Vec::new();
+                for other in others {
+                    let refs = [first, other];
+                    if other == first
+                        || self
+                            .tabs[i]
+                            .scene
+                            .validate_parametric_constraint(ConstraintKind::Equal, &refs, None)
+                            .is_err()
+                        || equal_size_follower(&self.tabs[i].scene.document, first, other)
+                            .is_none()
+                    {
+                        self.command_line
+                            .push_error(EqualConstraintCommand::INVALID_OBJECT);
+                        continue;
+                    }
+                    let exists = self.tabs[i]
+                        .scene
+                        .parametric_constraint_set(scope)
+                        .is_some_and(|set| {
+                            set.constraints.iter().any(|existing| {
+                                existing.enabled
+                                    && existing.kind == ConstraintKind::Equal
+                                    && (existing.refs == refs || existing.refs == [other, first])
+                            })
+                        });
+                    if exists {
+                        self.command_line
+                            .push_error("The constraint already exists on the selected objects.");
+                        continue;
+                    }
+                    followers.push(other);
+                }
+                if multiple && !finishing {
+                    if let Some(prompt) =
+                        self.tabs[i].active_cmd.as_ref().map(|command| command.prompt())
+                    {
+                        self.command_line.push_info(&prompt);
+                    }
+                } else {
+                    self.tabs[i].active_cmd = None;
+                }
+                self.tabs[i].snap_result = None;
+                if finishing {
+                    let summary = match equal_size(&self.tabs[i].scene.document, first) {
+                        Some(EqualSize::Radius(_)) => "Radius of objects made equal",
+                        _ => "Length of objects made equal",
+                    };
+                    self.command_line.push_output(summary);
+                }
+                if followers.is_empty() {
+                    return Task::none();
+                }
+                let constraints_before = self.tabs[i]
+                    .scene
+                    .parametric_constraint_set(scope)
+                    .cloned()
+                    .unwrap_or_else(|| {
+                        crate::scene::parametric_constraints::ParametricConstraintSet::new(scope)
+                    });
+                let mut touched = vec![first.entity];
+                for follower in &followers {
+                    if !touched.contains(&follower.entity) {
+                        touched.push(follower.entity);
+                    }
+                }
+                let pending = self.begin_undo(i, label, touched.len(), true);
+                self.tabs[i]
+                    .scene
+                    .record_undo_parametric_constraints_before(scope, constraints_before);
+                // The reference resizes the follower in place — its start (a
+                // circle its center) and direction stay, only its length or
+                // radius takes the first object's — so do that first and let
+                // the relation then hold what already fits.
+                for follower in &followers {
+                    if let Some(resized) =
+                        equal_size_follower(&self.tabs[i].scene.document, first, *follower)
+                    {
+                        self.tabs[i].scene.update_entity(resized);
+                    }
+                    let id = self.tabs[i]
+                        .scene
+                        .parametric_constraint_set_mut(scope)
+                        .add(ConstraintKind::Equal, vec![first, *follower], None);
+                    self.tabs[i].scene.note_parametric_constraint_applied(
+                        scope,
+                        id,
+                        self.constraint_bar_display,
+                    );
+                }
+                let changes = touched
+                    .into_iter()
+                    .map(|handle| (handle, crate::scene::ChangeKind::Modified))
+                    .collect::<Vec<_>>();
+                self.tabs[i].scene.bump_entities_with_parametric_policy(
+                    &changes,
+                    &[],
+                    self.constraint_solve_mode,
+                );
+                self.tabs[i].dirty = true;
+                self.refresh_properties();
+                if let Some(pd) = pending {
+                    self.commit_undo_delta(i, pd);
+                }
+            }
+            CmdResult::AddFixedConstraint(pick) => {
+                use crate::modules::parametric::FixConstraintCommand;
+                use crate::scene::parametric_constraints::{
+                    nearest_parametric_point, nearest_parametric_point_on_entity,
+                    parametric_curve_ref_for_pick, ConstraintKind,
+                };
+
+                let scope = self.tabs[i].current_parametric_scope();
+                let document = &self.tabs[i].scene.document;
+                let world =
+                    acadrust::types::Vector3::new(pick.point.x, pick.point.y, pick.point.z);
+                let resolved = match (pick.whole_curve, pick.handle) {
+                    (true, Some(handle)) => {
+                        parametric_curve_ref_for_pick(document, scope, handle, world)
+                            .ok_or(FixConstraintCommand::INVALID_OBJECT)
+                    }
+                    (true, None) => Err(FixConstraintCommand::NO_OBJECT),
+                    (false, Some(handle)) => {
+                        nearest_parametric_point_on_entity(document, scope, handle, world)
+                            .ok_or(FixConstraintCommand::INVALID_OBJECT)
+                    }
+                    (false, None) => nearest_parametric_point(document, scope, world, None)
+                        .ok_or(FixConstraintCommand::NO_POINT),
+                };
+                // An off-plane or 3D curve is "not a valid object" to the
+                // reference, not a solver limitation.
+                let resolved = resolved.and_then(|reference| {
+                    let supported = !pick.whole_curve
+                        || self.tabs[i]
+                            .scene
+                            .validate_parametric_constraint(
+                                ConstraintKind::Fixed,
+                                &[reference],
+                                None,
+                            )
+                            .is_ok();
+                    supported
+                        .then_some(reference)
+                        .ok_or(FixConstraintCommand::INVALID_OBJECT)
+                });
+                return match resolved {
+                    Ok(reference) => self.apply_cmd_result(CmdResult::AddParametricConstraint {
+                        kind: ConstraintKind::Fixed,
+                        refs: vec![reference],
+                        driving_param: None,
+                        label: "Fixed constraint",
+                    }),
+                    // A miss re-prompts: `ReportError` keeps the command.
+                    Err(message) => {
+                        self.apply_cmd_result(CmdResult::ReportError(message.to_string()))
+                    }
+                };
+            }
+            CmdResult::CheckHorizontalPoint { kind, pick } => {
+                use crate::modules::parametric::HorizontalConstraintCommand;
+                use crate::scene::parametric_constraints::nearest_parametric_point;
+
+                // The reference rejects a missed first point right away and
+                // asks for it again; a hit moves on to the second point.
+                let scope = self.tabs[i].current_parametric_scope();
+                let found = nearest_parametric_point(
+                    &self.tabs[i].scene.document,
+                    scope,
+                    acadrust::types::Vector3::new(pick.point.x, pick.point.y, pick.point.z),
+                    None,
+                )
+                .is_some();
+                if !found {
+                    self.command_line
+                        .push_error("No valid constraint point found.");
+                }
+                let command = HorizontalConstraintCommand::resume(kind, found.then_some(pick));
+                self.command_line
+                    .push_info(&crate::command::CadCommand::prompt(&command));
+                self.tabs[i].active_cmd = Some(Box::new(command));
+                self.tabs[i].snap_result = None;
+                return Task::none();
+            }
+            CmdResult::AddHorizontalConstraint {
+                kind,
+                selection,
+                direction,
+                label,
+            } => {
+                use crate::command::{EntityTransform, HorizontalConstraintSelection};
+                use crate::modules::parametric::HorizontalConstraintCommand;
+                use crate::scene::parametric_constraints::{
+                    nearest_parametric_point, nearest_parametric_point_on_entity, resolve_point,
+                    ConstraintKind, DirectionalAxis, ParametricRef,
+                };
+
+                let vertical = kind == ConstraintKind::Vertical;
+                let axis = if vertical { "Vertical" } else { "Horizontal" };
+                let scope = self.tabs[i].current_parametric_scope();
+                let to_world = |point: glam::DVec3| {
+                    acadrust::types::Vector3::new(point.x, point.y, point.z)
+                };
+                let (refs, initial_fixed) = match selection {
+                    HorizontalConstraintSelection::Reference(reference) => {
+                        // The reference turns the object about its first
+                        // vertex: a line's start, the picked polyline
+                        // segment's first vertex, a text's insertion point,
+                        // an ellipse's center.
+                        let initial_fixed = match reference.directional_axis() {
+                            Some(DirectionalAxis::EllipseMajor | DirectionalAxis::EllipseMinor) => {
+                                vec![ParametricRef::center(reference.entity)]
+                            }
+                            Some(DirectionalAxis::TextBaseline) => {
+                                vec![ParametricRef::point(reference.entity, 0)]
+                            }
+                            None => vec![ParametricRef::point(
+                                reference.entity,
+                                reference.segment_index().map_or(0, |index| index as i32),
+                            )],
+                        };
+                        (vec![reference], initial_fixed)
+                    }
+                    HorizontalConstraintSelection::Points(first, second) => {
+                        let resolve = |pick: crate::command::CoincidentPick| {
+                            if let Some(handle) = pick.handle {
+                                nearest_parametric_point_on_entity(
+                                    &self.tabs[i].scene.document,
+                                    scope,
+                                    handle,
+                                    to_world(pick.point),
+                                )
+                            } else {
+                                nearest_parametric_point(
+                                    &self.tabs[i].scene.document,
+                                    scope,
+                                    to_world(pick.point),
+                                    None,
+                                )
+                            }
+                        };
+                        // A miss asks for that point again, keeping a good
+                        // first pick; the same point twice asks for another
+                        // second point — the reference's own re-prompts.
+                        let (first_ref, second_ref) = match (resolve(first), resolve(second)) {
+                            (Some(first_ref), Some(second_ref)) if first_ref != second_ref => {
+                                (first_ref, second_ref)
+                            }
+                            (first_ref, second_ref) => {
+                                let (message, keep_first) = if first_ref.is_none() {
+                                    ("No valid constraint point found.", None)
+                                } else if second_ref.is_none() {
+                                    ("No valid constraint point found.", Some(first))
+                                } else {
+                                    (
+                                        "The object or point is already selected. Select a different object or constraint point.",
+                                        Some(first),
+                                    )
+                                };
+                                let command = HorizontalConstraintCommand::resume(kind, keep_first);
+                                self.command_line.push_error(message);
+                                self.command_line
+                                    .push_info(&crate::command::CadCommand::prompt(&command));
+                                self.tabs[i].active_cmd = Some(Box::new(command));
+                                self.tabs[i].snap_result = None;
+                                return Task::none();
+                            }
+                        };
+                        (vec![first_ref, second_ref], vec![first_ref])
+                    }
+                };
+                let axis_length = direction.x.hypot(direction.y);
+                if axis_length <= 1.0e-12 {
+                    self.command_line.push_error(&format!(
+                        "{axis}: the current UCS {} axis is not supported.",
+                        if vertical { "Y" } else { "X" }
+                    ));
+                    return Task::none();
+                }
+                let direction = acadrust::types::Vector3::new(
+                    direction.x / axis_length,
+                    direction.y / axis_length,
+                    0.0,
+                );
+                if let Err(message) =
+                    self.tabs[i].scene.validate_parametric_constraint(kind, &refs, None)
+                {
+                    self.command_line.push_error(message);
+                    return Task::none();
+                }
+                if self
+                    .tabs[i]
+                    .scene
+                    .parametric_constraint_set(scope)
+                    .is_some_and(|set| set.contains_axis_constraint(kind, &refs, direction))
+                {
+                    self.tabs[i].active_cmd = None;
+                    self.tabs[i].snap_result = None;
+                    self.command_line
+                        .push_error("The constraint already exists on the selected objects.");
+                    return Task::none();
+                }
+                let constraints_before = self.tabs[i]
+                    .scene
+                    .parametric_constraint_set(scope)
+                    .cloned()
+                    .unwrap_or_else(|| {
+                        crate::scene::parametric_constraints::ParametricConstraintSet::new(scope)
+                    });
+                let mut touched = Vec::new();
+                for reference in &refs {
+                    if !touched.contains(&reference.entity) {
+                        touched.push(reference.entity);
+                    }
+                }
+                let pending = self.begin_undo(i, label, touched.len(), true);
+                self.tabs[i]
+                    .scene
+                    .record_undo_parametric_constraints_before(scope, constraints_before);
+                // Two points on different objects: the reference slides the
+                // second object rigidly onto the axis through the first
+                // point instead of re-solving its shape, so move it first
+                // and let the constraint then hold what already fits.
+                if let [first_ref, second_ref] = refs.as_slice() {
+                    if first_ref.entity != second_ref.entity {
+                        let position = |reference: &ParametricRef| {
+                            self.tabs[i]
+                                .scene
+                                .document
+                                .get_entity(reference.entity)
+                                .zip(reference.marker)
+                                .and_then(|(entity, marker)| resolve_point(entity, marker))
+                        };
+                        if let (Some(first_point), Some(second_point)) =
+                            (position(first_ref), position(second_ref))
+                        {
+                            let normal = (-direction.y, direction.x);
+                            let offset = (second_point.x - first_point.x) * normal.0
+                                + (second_point.y - first_point.y) * normal.1;
+                            if offset.abs() > 1.0e-9 {
+                                self.tabs[i].scene.transform_entities(
+                                    &[second_ref.entity],
+                                    &EntityTransform::Translate(glam::DVec3::new(
+                                        -offset * normal.0,
+                                        -offset * normal.1,
+                                        0.0,
+                                    )),
+                                );
+                            }
+                        }
+                    }
+                }
+                // The solver cannot start from an axis lying exactly across
+                // the datum (its equations are singular there), so turn the
+                // object onto the axis about its anchor first — the
+                // reference turns it about that anchor too — and let the
+                // constraint hold what already fits.
+                if let Some((handle, anchor, end, vertex)) =
+                    crate::scene::parametric_constraints::axis_alignment_target(
+                        &self.tabs[i].scene.document,
+                        &refs,
+                    )
+                {
+                    let axis = (end.x - anchor.x, end.y - anchor.y);
+                    let length = axis.0.hypot(axis.1);
+                    let target = if axis.0 * direction.x + axis.1 * direction.y >= 0.0 {
+                        (direction.x, direction.y)
+                    } else {
+                        (-direction.x, -direction.y)
+                    };
+                    let angle = (axis.0 * target.1 - axis.1 * target.0)
+                        .atan2(axis.0 * target.0 + axis.1 * target.1);
+                    if length > 1.0e-9 && angle.abs() > 1.0e-9 {
+                        match vertex {
+                            Some(index) => {
+                                let moved =
+                                    self.tabs[i].scene.document.get_entity(handle).cloned();
+                                if let Some(mut entity) = moved {
+                                    if crate::scene::parametric_constraints::set_polyline_vertex(
+                                        &mut entity,
+                                        index,
+                                        anchor.x + length * target.0,
+                                        anchor.y + length * target.1,
+                                    ) {
+                                        self.tabs[i].scene.update_entity(entity);
+                                    }
+                                }
+                            }
+                            None => self.tabs[i].scene.transform_entities(
+                                &[handle],
+                                &EntityTransform::Rotate {
+                                    center: glam::DVec3::new(anchor.x, anchor.y, anchor.z),
+                                    axis: glam::DVec3::Z,
+                                    angle_rad: angle,
+                                },
+                            ),
+                        }
+                    }
+                }
+                let id = self.tabs[i]
+                    .scene
+                    .parametric_constraint_set_mut(scope)
+                    .add_axis_constraint(kind, refs, direction);
+                self.tabs[i].scene.note_parametric_constraint_applied(
+                    scope,
+                    id,
+                    self.constraint_bar_display,
+                );
+                let changes = touched
+                    .into_iter()
+                    .map(|handle| (handle, crate::scene::ChangeKind::Modified))
+                    .collect::<Vec<_>>();
+                self.tabs[i].scene.bump_entities_with_parametric_policy(
+                    &changes,
+                    &initial_fixed,
+                    self.constraint_solve_mode,
+                );
+                self.tabs[i].dirty = true;
+                self.tabs[i].active_cmd = None;
+                self.tabs[i].snap_result = None;
+                self.command_line
+                    .push_output(&format!("{axis} constraint applied."));
+                self.refresh_properties();
+                if let Some(pd) = pending {
+                    self.commit_undo_delta(i, pd);
+                }
+            }
+            CmdResult::AddSymmetricConstraint {
+                selection,
+                axis,
+                label,
+            } => {
+                use crate::command::SymmetricConstraintSelection;
+                use crate::scene::parametric_constraints::ConstraintKind;
+
+                let scope = self.tabs[i].current_parametric_scope();
+                let to_world = |point: glam::DVec3| {
+                    acadrust::types::Vector3::new(point.x, point.y, point.z)
+                };
+                let resolve_point = |pick: crate::command::CoincidentPick| {
+                    if let Some(handle) = pick.handle {
+                        crate::scene::parametric_constraints::nearest_parametric_point_on_entity(
+                            &self.tabs[i].scene.document,
+                            scope,
+                            handle,
+                            to_world(pick.point),
+                        )
+                    } else {
+                        crate::scene::parametric_constraints::nearest_parametric_point(
+                            &self.tabs[i].scene.document,
+                            scope,
+                            to_world(pick.point),
+                            None,
+                        )
+                    }
+                };
+                let (first, second) = match selection {
+                    SymmetricConstraintSelection::Objects(first, second) => (first, second),
+                    SymmetricConstraintSelection::Points(first, second) => {
+                        let (Some(first), Some(second)) =
+                            (resolve_point(first), resolve_point(second))
+                        else {
+                            self.command_line.push_error(
+                                "Symmetric: select supported endpoints, centers, midpoints, or vertices.",
+                            );
+                            return Task::none();
+                        };
+                        (first, second)
+                    }
+                };
+                if first == second
+                    || axis.entity == first.entity
+                    || axis.entity == second.entity
+                {
+                    self.command_line
+                        .push_error("Symmetric: select two different references and a separate line axis.");
+                    return Task::none();
+                }
+                let refs = vec![first, second, axis];
+                if let Err(message) = self.tabs[i].scene.validate_parametric_constraint(
+                    ConstraintKind::Symmetric,
+                    &refs,
+                    None,
+                ) {
+                    self.command_line.push_error(message);
+                    return Task::none();
+                }
+                let duplicate = self.tabs[i]
+                    .scene
+                    .parametric_constraint_set(scope)
+                    .is_some_and(|set| {
+                        set.constraints.iter().any(|constraint| {
+                            constraint.enabled
+                                && constraint.kind == ConstraintKind::Symmetric
+                                && matches!(constraint.refs.as_slice(), [a, b, m]
+                                    if *m == axis
+                                        && ((*a == first && *b == second)
+                                            || (*a == second && *b == first)))
+                        })
+                    });
+                if duplicate {
+                    self.tabs[i].active_cmd = None;
+                    self.tabs[i].snap_result = None;
+                    self.command_line
+                        .push_error("The constraint already exists on the selected objects.");
+                    return Task::none();
+                }
+                let constraints_before = self.tabs[i]
+                    .scene
+                    .parametric_constraint_set(scope)
+                    .cloned()
+                    .unwrap_or_else(|| {
+                        crate::scene::parametric_constraints::ParametricConstraintSet::new(scope)
+                    });
+                let mut touched = Vec::new();
+                for reference in &refs {
+                    if !touched.contains(&reference.entity) {
+                        touched.push(reference.entity);
+                    }
+                }
+                let pending = self.begin_undo(i, label, touched.len(), true);
+                self.tabs[i]
+                    .scene
+                    .record_undo_parametric_constraints_before(scope, constraints_before);
+                let id = self.tabs[i].scene.parametric_constraint_set_mut(scope).add(
+                    ConstraintKind::Symmetric,
+                    refs,
+                    None,
+                );
+                self.tabs[i].scene.note_parametric_constraint_applied(
+                    scope,
+                    id,
+                    self.constraint_bar_display,
+                );
+                let changes = touched
+                    .into_iter()
+                    .map(|handle| (handle, crate::scene::ChangeKind::Modified))
+                    .collect::<Vec<_>>();
+                self.tabs[i].scene.bump_entities_with_initial_parametric_policy(
+                    &changes,
+                    &[first, axis],
+                    false,
+                );
+                self.tabs[i].dirty = true;
+                self.tabs[i].active_cmd = None;
+                self.tabs[i].snap_result = None;
+                self.command_line
+                    .push_output("Symmetric constraint applied.");
                 self.refresh_properties();
                 if let Some(pd) = pending {
                     self.commit_undo_delta(i, pd);
@@ -3239,7 +3897,7 @@ impl OpenCADStudio {
                     .into_iter()
                     .map(|handle| (handle, crate::scene::ChangeKind::Modified))
                     .collect::<Vec<_>>();
-                self.tabs[i].scene.bump_entities_with_parametric_policy(
+                self.tabs[i].scene.bump_entities_with_initial_parametric_policy(
                     &changes,
                     &[first_fixed, second_start],
                     true,
@@ -3290,6 +3948,88 @@ impl OpenCADStudio {
                     .record_undo_parametric_constraints_before(scope, constraints_before);
                 let id = self.tabs[i].scene.parametric_constraint_set_mut(scope).add(
                     ConstraintKind::Tangent,
+                    refs,
+                    None,
+                );
+                self.tabs[i].scene.note_parametric_constraint_applied(
+                    scope,
+                    id,
+                    self.constraint_bar_display,
+                );
+                let changes = touched
+                    .into_iter()
+                    .map(|handle| (handle, crate::scene::ChangeKind::Modified))
+                    .collect::<Vec<_>>();
+                self.tabs[i].scene.bump_entities_with_initial_parametric_policy(
+                    &changes,
+                    &[first],
+                    true,
+                );
+                self.tabs[i].dirty = true;
+                self.tabs[i].active_cmd = None;
+                self.tabs[i].snap_result = None;
+                self.command_line.push_output("Constraint applied.");
+                self.refresh_properties();
+                if let Some(pd) = pending {
+                    self.commit_undo_delta(i, pd);
+                }
+            }
+            CmdResult::AddConcentricConstraint {
+                first,
+                second,
+                label,
+            } => {
+                use crate::scene::parametric_constraints::ConstraintKind;
+
+                let refs = vec![first, second];
+                if let Err(message) = self.tabs[i].scene.validate_parametric_constraint(
+                    ConstraintKind::Concentric,
+                    &refs,
+                    None,
+                ) {
+                    self.tabs[i].active_cmd = None;
+                    self.tabs[i].snap_result = None;
+                    self.command_line.push_error(message);
+                    return Task::none();
+                }
+                let scope = self.tabs[i].current_parametric_scope();
+                let duplicate = self.tabs[i]
+                    .scene
+                    .parametric_constraint_set(scope)
+                    .is_some_and(|set| {
+                        set.constraints.iter().any(|constraint| {
+                            constraint.enabled
+                                && constraint.kind == ConstraintKind::Concentric
+                                && matches!(constraint.refs.as_slice(), [a, b]
+                                    if (*a == first && *b == second)
+                                        || (*a == second && *b == first))
+                        })
+                    });
+                if duplicate {
+                    self.tabs[i].active_cmd = None;
+                    self.tabs[i].snap_result = None;
+                    self.command_line
+                        .push_output("The Concentric constraint already exists.");
+                    return Task::none();
+                }
+                let constraints_before = self.tabs[i]
+                    .scene
+                    .parametric_constraint_set(scope)
+                    .cloned()
+                    .unwrap_or_else(|| {
+                        crate::scene::parametric_constraints::ParametricConstraintSet::new(scope)
+                    });
+                let touched = if first.entity == second.entity {
+                    vec![first.entity]
+                } else {
+                    vec![first.entity, second.entity]
+                };
+                let pending = self.begin_undo(i, label, touched.len(), true);
+                self.tabs[i]
+                    .scene
+                    .record_undo_parametric_constraints_before(scope, constraints_before);
+                let id = self.tabs[i].scene.parametric_constraint_set_mut(scope).add(
+                    ConstraintKind::Concentric,
                     refs,
                     None,
                 );
@@ -6596,6 +7336,12 @@ impl OpenCADStudio {
                         }
                     }
                 }
+                {
+                    let tab = &mut self.tabs[i];
+                    if let Some(command) = tab.active_cmd.as_mut() {
+                        command.on_document_undone(&tab.scene.document);
+                    }
+                }
                 let prompt = self.tabs[i].active_cmd.as_ref().map(|c| c.prompt());
                 if let Some(p) = prompt {
                     self.command_line.push_info(&p);
@@ -7042,6 +7788,40 @@ impl OpenCADStudio {
 /// returning the new root handle. `allocate_handle` advances the document's
 /// handle counter — `next_handle()` only peeks, so reusing it would hand every
 /// object the same handle and collapse the dictionary chain.
+/// The entity a typed coordinate lands on while an object is asked for:
+/// the nearest planar curve of the edited space within a small share of
+/// that space's extent, the way a pick box takes the object under a click.
+fn entity_at_typed_point(
+    document: &acadrust::CadDocument,
+    owner: Handle,
+    point: glam::DVec3,
+) -> Option<Handle> {
+    let mut extent = 0.0f64;
+    let mut nearest: Option<(f64, Handle)> = None;
+    for entity in document.entities() {
+        let common = entity.common();
+        if common.owner_handle != owner {
+            continue;
+        }
+        let bounds = entity.as_entity().bounding_box();
+        extent = extent
+            .max((bounds.max.x - bounds.min.x).abs())
+            .max((bounds.max.y - bounds.min.y).abs());
+        let Some(distance) =
+            crate::scene::viewport_dimension_pick::planar_pick_distance(entity, point)
+        else {
+            continue;
+        };
+        if nearest.is_none_or(|(best, _)| distance < best) {
+            nearest = Some((distance, common.handle));
+        }
+    }
+    let tolerance = (extent * 0.002).max(1.0e-9);
+    nearest
+        .filter(|(distance, _)| *distance <= tolerance)
+        .map(|(_, handle)| handle)
+}
+
 fn recreate_ext_subtree(
     doc: &mut acadrust::CadDocument,
     cap: &crate::app::ClipExtObjects,
@@ -8401,6 +9181,162 @@ mod parametric_constraint_undo_tests {
             1,
             "redo should restore the constraint record"
         );
+    }
+
+    #[test]
+    fn perpendicular_initial_solve_rotates_parallel_second_line_in_kernel() {
+        let mut app = OpenCADStudio::new_for_test();
+        let _ = app.automation_op(r#"{"op":"new"}"#);
+        let first = add_line(&mut app, 0.0, 0.0, 10.0, 0.0);
+        let second = add_line(&mut app, 20.0, 0.0, 30.0, 0.0);
+
+        let _ = app.apply_cmd_result(CmdResult::AddPerpendicularConstraint {
+            first: ParametricRef::whole(first),
+            second: ParametricRef::whole(second),
+            first_fixed: ParametricRef::whole(first),
+            second_start: ParametricRef::point(second, 0),
+            label: "Perpendicular constraint",
+        });
+
+        let line = |handle| match app.tabs[app.active_tab].scene.document.get_entity(handle) {
+            Some(acadrust::EntityType::Line(line)) => line.clone(),
+            other => panic!("expected a Line, got {other:?}"),
+        };
+        let fixed = line(first);
+        let moving = line(second);
+        assert_eq!(fixed.start, acadrust::types::Vector3::new(0.0, 0.0, 0.0));
+        assert_eq!(fixed.end, acadrust::types::Vector3::new(10.0, 0.0, 0.0));
+        assert!((moving.start - acadrust::types::Vector3::new(20.0, 0.0, 0.0)).length() < 1.0e-9);
+        assert!((moving.length() - 10.0).abs() < 1.0e-7);
+        assert!(
+            (fixed.end - fixed.start)
+                .dot(&(moving.end - moving.start))
+                .abs()
+                < 1.0e-7,
+            "fixed={fixed:?}, moving={moving:?}"
+        );
+    }
+
+    #[test]
+    fn horizontal_initial_solve_uses_the_captured_axis_in_kernel() {
+        let mut app = OpenCADStudio::new_for_test();
+        let _ = app.automation_op(r#"{"op":"new"}"#);
+        let handle = add_line(&mut app, 0.0, 0.0, 5.0, 2.0);
+        let (original_start, original_end, original_length) = match app.tabs[app.active_tab]
+            .scene
+            .document
+            .get_entity(handle)
+        {
+            Some(acadrust::EntityType::Line(line)) => (line.start, line.end, line.length()),
+            other => panic!("expected a Line, got {other:?}"),
+        };
+        let direction = acadrust::types::Vector3::new(3.0, 4.0, 0.0).normalize();
+
+        let _ = app.apply_cmd_result(CmdResult::AddHorizontalConstraint {
+            kind: crate::scene::parametric_constraints::ConstraintKind::Horizontal,
+            selection: crate::command::HorizontalConstraintSelection::Reference(
+                ParametricRef::whole(handle),
+            ),
+            direction,
+            label: "Horizontal constraint",
+        });
+
+        let line = match app.tabs[app.active_tab].scene.document.get_entity(handle) {
+            Some(acadrust::EntityType::Line(line)) => line,
+            other => panic!("expected a Line, got {other:?}"),
+        };
+        let solved = (line.end - line.start).normalize();
+        assert!(solved.cross(&direction).length() < 1.0e-7);
+        assert!((line.length() - original_length).abs() < 1.0e-7);
+        let constraint = &app.tabs[app.active_tab]
+            .scene
+            .parametric_constraint_set(ParametricScope::ModelSpace)
+            .unwrap()
+            .constraints[0];
+        assert_eq!(constraint.axis_direction, Some(direction));
+
+        app.undo_steps(1);
+        let line = match app.tabs[app.active_tab].scene.document.get_entity(handle) {
+            Some(acadrust::EntityType::Line(line)) => line,
+            other => panic!("expected a Line after undo, got {other:?}"),
+        };
+        assert_eq!((line.start, line.end), (original_start, original_end));
+        assert_eq!(
+            app.tabs[app.active_tab]
+                .scene
+                .parametric_constraint_set(ParametricScope::ModelSpace)
+                .map(|set| set.constraints.len())
+                .unwrap_or(0),
+            0
+        );
+
+        app.redo_steps(1);
+        let line = match app.tabs[app.active_tab].scene.document.get_entity(handle) {
+            Some(acadrust::EntityType::Line(line)) => line,
+            other => panic!("expected a Line after redo, got {other:?}"),
+        };
+        assert!((line.end - line.start).normalize().cross(&direction).length() < 1.0e-7);
+    }
+
+    #[test]
+    fn horizontal_two_point_solve_keeps_the_first_point_fixed() {
+        let mut app = OpenCADStudio::new_for_test();
+        let _ = app.automation_op(r#"{"op":"new"}"#);
+        let first = add_line(&mut app, 0.0, 0.0, 0.0, 5.0);
+        let second = add_line(&mut app, 8.0, 3.0, 8.0, 7.0);
+        let pick = |handle, point| crate::command::CoincidentPick {
+            handle: Some(handle),
+            point,
+            whole_curve: false,
+        };
+
+        let _ = app.apply_cmd_result(CmdResult::AddHorizontalConstraint {
+            kind: crate::scene::parametric_constraints::ConstraintKind::Horizontal,
+            selection: crate::command::HorizontalConstraintSelection::Points(
+                pick(first, glam::DVec3::ZERO),
+                pick(second, glam::DVec3::new(8.0, 3.0, 0.0)),
+            ),
+            direction: acadrust::types::Vector3::UNIT_X,
+            label: "Horizontal constraint",
+        });
+
+        let line = |handle| match app.tabs[app.active_tab].scene.document.get_entity(handle) {
+            Some(acadrust::EntityType::Line(line)) => line,
+            other => panic!("expected a Line, got {other:?}"),
+        };
+        assert_eq!(line(first).start, acadrust::types::Vector3::ZERO);
+        assert!(line(second).start.y.abs() < 1.0e-8);
+    }
+
+    #[test]
+    fn horizontal_minor_axis_rotates_an_ellipse_around_its_center() {
+        let mut app = OpenCADStudio::new_for_test();
+        let _ = app.automation_op(r#"{"op":"new"}"#);
+        let mut ellipse = acadrust::entities::Ellipse::default();
+        ellipse.center = acadrust::types::Vector3::new(3.0, 7.0, 0.0);
+        ellipse.major_axis = acadrust::types::Vector3::new(3.0, 4.0, 0.0);
+        ellipse.minor_axis_ratio = 0.4;
+        let handle = app.tabs[app.active_tab]
+            .scene
+            .add_entity(acadrust::EntityType::Ellipse(ellipse));
+
+        let _ = app.apply_cmd_result(CmdResult::AddHorizontalConstraint {
+            kind: crate::scene::parametric_constraints::ConstraintKind::Horizontal,
+            selection: crate::command::HorizontalConstraintSelection::Reference(
+                ParametricRef::ellipse_minor_axis(handle),
+            ),
+            direction: acadrust::types::Vector3::UNIT_X,
+            label: "Horizontal constraint",
+        });
+
+        let ellipse = match app.tabs[app.active_tab].scene.document.get_entity(handle) {
+            Some(acadrust::EntityType::Ellipse(ellipse)) => ellipse,
+            other => panic!("expected an Ellipse, got {other:?}"),
+        };
+        assert!((ellipse.center - acadrust::types::Vector3::new(3.0, 7.0, 0.0)).length() < 1.0e-9);
+        assert!(ellipse.major_axis.x.abs() < 1.0e-7);
+        assert!((ellipse.major_axis.length() - 5.0).abs() < 1.0e-7);
+        assert!((ellipse.minor_axis_ratio - 0.4).abs() < 1.0e-9);
     }
 
     /// Drawing commands must not create parametric constraints implicitly.

@@ -57,6 +57,13 @@ options =
     .default-application = 預設應用程式
     .iced-theme = Iced 主題：
     .theme = 主題
+    .right-click-customization = 右鍵自訂
+    .right-click-in-drawing-area = 在繪圖區域按右鍵
+    .hold-duration = 按住時間
+    .right-click-mode-help = 快捷功能表：按右鍵一律開啟功能表。時間敏感：快速按一下等於 Enter，長按開啟功能表 (SHORTCUTMENUDURATION)。
+    .right-click-mode-shortcut-menu = 快捷功能表
+    .right-click-mode-time-sensitive = 時間敏感（快速按一下 = Enter）
+    .right-click-mode-enter-first = 先 Enter，第二次按一下 = 功能表
 
 command-line =
     .ready = Open CAD Studio 已就緒。
@@ -244,6 +251,7 @@ command-move =
            *[other] { $count } 個物件
         }]：
     .target = MOVE  指定目標點  [基點 { $x },{ $y }]：
+    .displacement = MOVE  指定位移:
 
 command-copy =
     .array-count = COPY  輸入陣列項目數：
@@ -258,6 +266,8 @@ command-copy =
             [one] 目前 { $count } 個複本
            *[other] 目前 { $count } 個複本
         } | 陣列 | Enter=完成 | 基準點 { $x },{ $y }]：
+    .displacement = COPY  指定位移:
+    .mode = COPY  輸入複製模式選項 [Single/Multiple] <Multiple>:
 
 common =
     .jogged-radius = 折彎半徑
@@ -2117,7 +2127,7 @@ common =
     .sectionplane-specify-through-point = SECTIONPLANE  Specify through point:
     .setbylayer-no-properties-required-changes = SETBYLAYER: no properties required changes.
     .setbylayer-reset-entity-entities-to-bylayer = SETBYLAYER: reset __ocs_fmt_0__ entity/entities to ByLayer.
-    .setvar-cetransparency-ltscale-celtscale-pdmode-pdsize-textsize-orthomode-fillmode-mirrtext-frame-imageframe-pdfframe-wipeoutframe-xclipframe-pointcloudclipframe-zoomwheel-zoomfactor-cursorsize-pickbox-cursortype-snapang-textfill-clipromptlines-commandlinefadetime-attreq-attdia-dimassoc-dimcontinuemode-constraintsolvemode-constraintinfer-constraintbardisplay-angbase-angdir-sketchinc-skpoly-sktolerance-donutid-donutod-centerexe-centerlayer-centerltype-centerltscale-centerltypefile-centercrosssize-centercrossgap-centermarkexe-colortheme-selectionarea-selectionareaopacity-selectioneffect-selectioneffectcolor-windowsareacolor-crossingareacolor-selectionpreview-gripsize-gripcolor-griphot-griphover-gripobjlimit-clayer-celtype-textstyle-read-only = SETVAR: CETRANSPARENCY LTSCALE CELTSCALE PDMODE PDSIZE TEXTSIZE ORTHOMODE FILLMODE MIRRTEXT FRAME IMAGEFRAME PDFFRAME WIPEOUTFRAME XCLIPFRAME POINTCLOUDCLIPFRAME ZOOMWHEEL ZOOMFACTOR CURSORSIZE PICKBOX CURSORTYPE SNAPANG TEXTFILL CLIPROMPTLINES COMMANDLINEFADETIME ATTREQ ATTDIA DIMASSOC DIMCONTINUEMODE CONSTRAINTSOLVEMODE CONSTRAINTINFER CONSTRAINTBARDISPLAY ANGBASE ANGDIR SKETCHINC SKPOLY SKTOLERANCE DONUTID DONUTOD CENTEREXE CENTERLAYER CENTERLTYPE CENTERLTSCALE CENTERLTYPEFILE CENTERCROSSSIZE CENTERCROSSGAP CENTERMARKEXE COLORTHEME SELECTIONAREA SELECTIONAREAOPACITY SELECTIONEFFECT SELECTIONEFFECTCOLOR WINDOWSAREACOLOR CROSSINGAREACOLOR SELECTIONPREVIEW GRIPSIZE GRIPCOLOR GRIPHOT GRIPHOVER GRIPOBJLIMIT | CLAYER CELTYPE TEXTSTYLE (read-only)
+    .setvar-cetransparency-ltscale-celtscale-pdmode-pdsize-textsize-orthomode-fillmode-mirrtext-frame-imageframe-pdfframe-wipeoutframe-xclipframe-pointcloudclipframe-zoomwheel-zoomfactor-cursorsize-pickbox-cursortype-snapang-textfill-clipromptlines-commandlinefadetime-attreq-attdia-dimassoc-dimcontinuemode-constraintsolvemode-constraintinfer-constraintbardisplay-angbase-angdir-sketchinc-skpoly-sktolerance-donutid-donutod-centerexe-centerlayer-centerltype-centerltscale-centerltypefile-centercrosssize-centercrossgap-centermarkexe-colortheme-selectionarea-selectionareaopacity-selectioneffect-selectioneffectcolor-windowsareacolor-crossingareacolor-selectionpreview-gripsize-gripcolor-griphot-griphover-gripobjlimit-clayer-celtype-textstyle-read-only = SETVAR: CETRANSPARENCY LTSCALE CELTSCALE PDMODE PDSIZE TEXTSIZE ORTHOMODE FILLMODE MIRRTEXT FRAME IMAGEFRAME PDFFRAME WIPEOUTFRAME XCLIPFRAME POINTCLOUDCLIPFRAME ZOOMWHEEL ZOOMFACTOR SHORTCUTMENU SHORTCUTMENUDURATION CURSORSIZE PICKBOX CURSORTYPE SNAPANG TEXTFILL CLIPROMPTLINES COMMANDLINEFADETIME ATTREQ ATTDIA DIMASSOC DIMCONTINUEMODE CONSTRAINTSOLVEMODE CONSTRAINTINFER CONSTRAINTBARDISPLAY ANGBASE ANGDIR SKETCHINC SKPOLY SKTOLERANCE DONUTID DONUTOD CENTEREXE CENTERLAYER CENTERLTYPE CENTERLTSCALE CENTERLTYPEFILE CENTERCROSSSIZE CENTERCROSSGAP CENTERMARKEXE COLORTHEME SELECTIONAREA SELECTIONAREAOPACITY SELECTIONEFFECT SELECTIONEFFECTCOLOR WINDOWSAREACOLOR CROSSINGAREACOLOR SELECTIONPREVIEW GRIPSIZE GRIPCOLOR GRIPHOT GRIPHOVER GRIPOBJLIMIT | CLAYER CELTYPE TEXTSTYLE (read-only)
     .shell-supports-rectangular-boxes-circular-cylinders-and-spheres = SHELL supports rectangular boxes, circular cylinders, and spheres.
     .shell-solid-updated = SHELL: solid updated.
     .splinedit-fit-data-add-delete-move-purge-tangents-exit-exit = SPLINEDIT  Fit data [Add/Delete/Move/Purge/Tangents/eXit] <eXit>:
@@ -2823,6 +2833,34 @@ draw =
     .wpolygon = WPolygon
     .cpolygon = CPolygon
     .remove = 移除
+    .pline-specify-starting-width = PLINE  指定起點寬度 <__ocs_arg_w__>:
+    .pline-specify-ending-width = PLINE  指定端點寬度 <__ocs_arg_w__>:
+    .pline-specify-starting-half-width = PLINE  指定起點半寬 <__ocs_arg_w__>:
+    .pline-specify-ending-half-width = PLINE  指定端點半寬 <__ocs_arg_w__>:
+    .pline-line-specify-next-point = PLINE (直線)  指定下一點:
+    .pline-arc-specify-endpoint-of-arc = PLINE (弧)  指定弧的端點:
+    .pline-specify-length-of-line = PLINE  指定直線的長度:
+    .pline-specify-included-angle = PLINE  指定夾角:
+    .pline-specify-endpoint-of-arc = PLINE  指定弧的端點:
+    .pline-specify-center-point-of-arc = PLINE  指定弧的圓心:
+    .pline-specify-radius-of-arc = PLINE  指定弧的半徑:
+    .pline-specify-direction-of-chord-for-arc = PLINE  指定弧的弦方向:
+    .pline-specify-length-of-chord = PLINE  指定弦長:
+    .pline-specify-tangent-direction-for-the-start-point-of-arc = PLINE  指定弧起點的切線方向:
+    .pline-specify-second-point-on-arc = PLINE  指定弧上的第二點:
+    .halfwidth = 半寬
+    .center-keyword = 圓心
+    .close-keyword = 閉合
+    .second-pt = 第二點
+    .arc-specify-start-point-of-arc = ARC  指定弧的起點:
+    .arc-specify-second-point-of-arc = ARC  指定弧的第二點:
+    .arc-specify-end-point-of-arc = ARC  指定弧的端點:
+    .arc-specify-center-point-of-arc = ARC  指定弧的圓心:
+    .arc-specify-included-angle = ARC  指定夾角:
+    .arc-specify-length-of-chord = ARC  指定弦長:
+    .arc-specify-tangent-direction-for-the-start-point-of-arc = ARC  指定弧起點的切線方向:
+    .arc-specify-radius-of-arc = ARC  指定弧的半徑:
+    .chord-length = 弦長
 
 modify =
     .add-vertex = 新增頂點
@@ -2975,6 +3013,13 @@ modify =
     .tol-scale-dimtfac = 公差比例 (DIMTFAC)
     .trim = 修剪
     .exit = 退出
+    .area-keyword = 面積
+    .displacement = 位移
+    .mode-keyword = 模式
+    .array-keyword = 陣列
+    .use-first-point-as-displacement = 將第一點用作位移
+    .offset-erase-source-object-after-offsetting = OFFSET  偏移後是否刪除來源物件? [Yes/No] <No>:
+    .offset-enter-layer-option-for-offset-objects = OFFSET  輸入偏移物件的圖層選項 [Current/Source] <Source>:
 
 groups =
     .group-enter-group-name-name = GROUP  輸入組名 [__ocs_arg_name__]：
@@ -5038,6 +5083,8 @@ plot =
     .plot-style-table-pen-assignments = 列印樣式表（筆指定）
     .plot-transparency = 列印透明度
     .plot-upside-down = 上下顛倒列印
+    .named-plot-style-tables-stb-are-not-supported-yet-name = 尚不支援具名出圖型式表 (.stb)：__ocs_fmt_0__
+    .name-was-not-found-in-the-plot-styles-folder-folder = 在出圖型式資料夾 (__ocs_fmt_1__) 中找不到 __ocs_fmt_0__。
     .preview = 預覽
     .printer-plotter = 印表機/繪圖儀
     .properties = 特性…
@@ -5049,6 +5096,34 @@ plot =
     .system-default-printer = 系統預設印表機
     .what-to-plot = 列印內容
     .x-mm = X (毫米)
+    .select-drawing-to-import-page-setups-from = 選擇要從中匯入頁面設定的圖面
+    .drawings-and-templates = 圖面與樣板
+    .psetupin-count-page-setup-s-imported-replaced-replaced = PSETUPIN：已匯入 __ocs_fmt_0__ 個頁面設定，取代 __ocs_fmt_1__ 個。
+    .psetupin-error = PSETUPIN：__ocs_fmt_0__
+    .psetupin-no-page-setup-named-want-in-file = PSETUPIN：__ocs_fmt_1__ 中沒有名為「__ocs_fmt_0__」的頁面設定。
+    .psetupin-nothing-to-import-from-file = PSETUPIN：__ocs_fmt_0__ 中沒有可匯入的內容。
+    .no-named-page-setups-in-this-drawing = 此圖面中沒有具名的頁面設定。
+    .import-ellipsis = 匯入…
+    .show-the-page-setup-for-new-layouts = 為新配置顯示頁面設定
+    .x-in = X（英吋）
+    .y-in = Y（英吋）
+    .hide-paperspace-objects = 隱藏圖紙空間物件
+    .save-changes-to-layout = 將變更儲存到配置
+    .printer-does-not-support-sheet-switched-to-its-default-sheet-default-paperupdate-1 = __ocs_fmt_0__ 不支援 __ocs_fmt_1__；已切換至其預設圖紙 __ocs_fmt_2__（PAPERUPDATE = 1）。
+    .printer-does-not-support-sheet-the-sheet-is-kept-paperupdate-0 = __ocs_fmt_0__ 不支援 __ocs_fmt_1__；保留原圖紙（PAPERUPDATE = 0）。
+    .printer-the-printer-reports-no-sheets-the-paper-catalogue-is-used = __ocs_fmt_0__：印表機未回報任何紙張；使用紙張目錄。
+    .printer-count-sheet-s-reported = __ocs_fmt_0__：回報了 __ocs_fmt_1__ 種紙張
+    .default-sheet-sheet = 預設紙張：__ocs_fmt_0__
+    .default-sheet-not-reported = 預設紙張：未回報
+    .default-printer-name = 預設印表機：__ocs_fmt_0__
+    .default-printer-none-reported-by-the-system = 預設印表機：系統未回報
+    .printers-none-listed-by-the-system = 印表機：系統未列出任何印表機
+    .printers-count = 印表機（__ocs_fmt_0__）：
+    .could-not-list-printers-error = 無法列出印表機：__ocs_fmt_0__
+    .plots-go-through-the-pdf-application-command = 列印透過 PDF 應用程式進行：__ocs_fmt_0__
+    .plots-go-straight-to-the-printer-no-pdf-application-registers-a-print-verb = 列印直接送到印表機（沒有 PDF 應用程式註冊列印命令）。
+    .via-the-pdf-application = 透過 PDF 應用程式
+    .direct-print = 直接列印
     .y-mm = Y (毫米)
 
 manage =
@@ -5260,6 +5335,19 @@ ui =
     .what-s-new = 更新內容
     .width-value = 寬度：__ocs_arg_value__
     .working = 正在處理…
+    .recent-input = 最近的輸入
+    .copy-with-base-point = 帶基準點複製
+    .undo-label = 復原 __ocs_arg_label__
+    .redo-label = 重做 __ocs_arg_label__
+    .copy-selection = 複製選取
+    .isolate = 隔離
+    .deselect-all = 全部取消選取
+    .options-ellipsis = 選項...
+    .base-point = 基準點
+    .snap-overrides = 鎖點取代
+    .mid-between-2-points = 兩點之間的中點
+    .osnap-settings = 物件鎖點設定...
+    .snap-override-none-next-pick-only = 鎖點取代：無（僅下一次點選）。
 
 dimstyle =
     .keep-text-between-extension-lines = 始終將文字置於尺寸界線之間

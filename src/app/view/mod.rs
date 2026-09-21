@@ -444,18 +444,32 @@ impl OpenCADStudio {
                         );
                         axes = (ux.as_vec3(), uy.as_vec3(), uz.as_vec3());
                     }
+                    // BUG FIX: the display step used to ignore GRIDUNIT entirely
+                    // (hardcoded 1.0 base). It now resizes from the DSettings
+                    // grid spacing, and honors "Display grid beyond Limits".
+                    let (step_x, step_y) = crate::ui::overlay::compute_grid_steps(
+                        self.grid_spacing_x,
+                        self.grid_spacing_y,
+                        cam.distance,
+                        cam.fov_y,
+                        bounds,
+                        self.grid_adaptive,
+                    );
+                    let limits = if self.grid_beyond_limits {
+                        None
+                    } else {
+                        tab.scene.grid_limits_for_viewport(handle)
+                    };
                     crate::ui::overlay::GridParams {
                         view_rot: cam.view_proj_rte(bounds),
                         eye: cam.eye(),
                         bounds,
-                        step: crate::ui::overlay::compute_grid_step(
-                            cam.distance,
-                            cam.fov_y,
-                            bounds,
-                        ),
+                        step_x,
+                        step_y,
+                        major_every: self.grid_major_every,
                         origin,
                         axes,
-                        limits: tab.scene.grid_limits_for_viewport(handle),
+                        limits,
                     }
                 })
                 .collect();
@@ -598,7 +612,8 @@ bg={bg_ms:.1}ms n={view_count}"
             };
             let control_polygon = tab.selected_handle.and_then(|handle| {
                 let spline = match tab.scene.document.get_entity(handle) {
-                    Some(acadrust::EntityType::Spline(spline)) if spline.cv_frame_visible => spline,
+                    Some(acadrust::EntityType::Spline(spline))
+                        if crate::entities::spline::shows_control_vertices(spline) => spline,
                     _ => return None,
                 };
                 if tab
@@ -820,6 +835,23 @@ bg={bg_ms:.1}ms n={view_count}"
                 .active_cmd
                 .as_ref()
                 .is_some_and(|cmd| !cmd.needs_entity_pick() && !cmd.is_selection_gathering());
+            let constraint_cursor_badge = if is_paper {
+                None
+            } else {
+                tab.scene.hover_highlight.and_then(|handle| {
+                    tab.scene
+                        .parametric_constraint_set(tab.current_parametric_scope())
+                        .and_then(|set| {
+                            set.constraints_touching(handle)
+                                .find(|constraint| {
+                                    constraint.kind
+                                        == crate::scene::parametric_constraints::ConstraintKind::Concentric
+                                })
+                                .or_else(|| set.constraints_touching(handle).next())
+                        })
+                        .map(|constraint| constraint.kind.glyph_symbol().to_string())
+                })
+            };
             let constraint_glyphs: Vec<(
                 iced::Point,
                 [f32; 2],
@@ -837,6 +869,7 @@ bg={bg_ms:.1}ms n={view_count}"
                         sel_ref.vp_size,
                         self.show_constraint_values,
                         self.constraint_bar_display,
+                        self.constraint_bar_mode,
                     )
                     .into_iter()
                     .map(|(id, point, direction, label, is_conflicting, hover_points)| {
@@ -902,6 +935,7 @@ bg={bg_ms:.1}ms n={view_count}"
                 constraint_glyphs,
                 self.constraint_glyph_tooltip
                     .map(|kind| crate::t!(kind.label()).into_owned()),
+                constraint_cursor_badge,
             )
         };
 
@@ -1609,7 +1643,7 @@ bg={bg_ms:.1}ms n={view_count}"
                     crate::ui::command_line::history_max_height(self.win_size.1),
                 ) + 72.0
             } else {
-                34.0
+                34.0 + self.command_line.overlay_lines_height()
             };
             // Quick Properties: stay near the selection cursor, flipping around
             // it as needed to remain inside the visible drawing area.
@@ -1758,37 +1792,17 @@ bg={bg_ms:.1}ms n={view_count}"
             // the cursor position (canvas-relative) anchors the menu under
             // the cursor instead of drifting into window-relative space.
             if !tab.is_start {
-                let (ctx_pos, draworder_open) = {
+                let (ctx_pos, highlighted) = {
                     let sel = tab.scene.selection.borrow();
-                    (sel.context_menu, sel.draworder_submenu)
+                    (sel.context_menu, sel.context_menu_ui.highlighted)
                 };
                 if let Some(p) = ctx_pos {
-                    let has_cmd = tab.active_cmd.is_some();
-                    // Same guard as typed MTP/M2P and SnapOverrideMtp.
-                    let has_point_step = tab.active_cmd.as_ref().is_some_and(|c| {
-                        (!c.input_kind().wants_text() || c.point_step_accepts_keywords())
-                            && !c.needs_entity_pick()
-                    });
-                    let has_selection = !tab.scene.selected.is_empty();
-                    let isolation_active = tab.scene.is_isolation_active();
-                    let last_cmds: Vec<String> = self
-                        .command_line
-                        .recent_commands
-                        .iter()
-                        .rev()
-                        .take(3)
-                        .cloned()
-                        .collect();
+                    let menu = self.current_context_menu();
                     viewport_stack = viewport_stack.push(viewport_context_menu_overlay(
                         p,
                         command_line_inset,
-                        has_cmd,
-                        has_selection,
-                        tab.scene.selected_constraint,
-                        isolation_active,
-                        last_cmds,
-                        draworder_open,
-                        has_point_step,
+                        &menu,
+                        highlighted,
                     ));
                 }
             }
@@ -1833,6 +1847,7 @@ bg={bg_ms:.1}ms n={view_count}"
                 crate::ui::dock::PanelId::BlockPalette => self.show_block_palette,
                 crate::ui::dock::PanelId::Pi => self.show_pi_panel,
                 crate::ui::dock::PanelId::ExternalReferences => self.show_external_references,
+                crate::ui::dock::PanelId::Browser => self.show_browser,
             }
         };
         let edge_stack = |side: crate::app::config::DockSide| -> Option<Element<'_, Message>> {
@@ -2928,6 +2943,12 @@ impl OpenCADStudio {
                 auto_collapse,
                 tab.xref_missing,
                 &tab.scene.document,
+            ),
+            crate::ui::dock::PanelId::Browser => crate::ui::window::browser::view(
+                &tab.scene.document,
+                tab.sketch_session.as_ref().map(|session| session.name.as_str()),
+                width,
+                auto_collapse,
             ),
         };
         let divider = dock_divider(id);

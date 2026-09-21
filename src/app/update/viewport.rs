@@ -1924,18 +1924,25 @@ impl OpenCADStudio {
             // content), so snap / hit-test / preview run exactly like the
             // main model view — no paper projection, tracks pan/zoom/twist.
             let cursor_world = self.cursor_model_point(i, &edit_cam, p, bounds);
-            let (view_rot, eye, grid_spacing) = match &edit_cam {
+        let (gx, gy, adaptive) = (self.grid_spacing_x, self.grid_spacing_y, self.grid_adaptive);
+        let visible_step = |distance: f32, fov_y: f32| {
+            let (sx, sy) = crate::ui::overlay::compute_grid_steps(
+                gx, gy, distance, fov_y, bounds, adaptive,
+            );
+            sx.max(sy)
+        };
+        let (view_rot, eye, grid_spacing) = match &edit_cam {
                 Some(cam) => (
                     cam.view_proj_rte(bounds),
                     cam.eye(),
-                    crate::ui::overlay::compute_grid_step(cam.distance, cam.fov_y, bounds),
+                    visible_step(cam.distance, cam.fov_y),
                 ),
                 None => {
                     let cam = self.tabs[i].scene.camera.borrow();
                     (
                         cam.view_proj_rte(bounds),
                         cam.eye(),
-                        crate::ui::overlay::compute_grid_step(cam.distance, cam.fov_y, bounds),
+                        visible_step(cam.distance, cam.fov_y),
                     )
                 }
             };
@@ -2808,18 +2815,26 @@ impl OpenCADStudio {
         // Object/grid snap, same path as an entity grip or command drag: the
         // dragged UCS point sticks to endpoints/midpoints/grid under the cursor,
         // and the snap marker is published via `snap_result`.
+        let (dgx, dgy, dadaptive) =
+            (self.grid_spacing_x, self.grid_spacing_y, self.grid_adaptive);
+        let dvisible_step = |distance: f32, fov_y: f32| {
+            let (sx, sy) = crate::ui::overlay::compute_grid_steps(
+                dgx, dgy, distance, fov_y, bounds, dadaptive,
+            );
+            sx.max(sy)
+        };
         let (view_rot, eye, grid_spacing) = match &edit_cam {
             Some(cam) => (
                 cam.view_proj_rte(bounds),
                 cam.eye(),
-                crate::ui::overlay::compute_grid_step(cam.distance, cam.fov_y, bounds),
+                dvisible_step(cam.distance, cam.fov_y),
             ),
             None => {
                 let cam = self.tabs[i].scene.camera.borrow();
                 (
                     cam.view_proj_rte(bounds),
                     cam.eye(),
-                    crate::ui::overlay::compute_grid_step(cam.distance, cam.fov_y, bounds),
+                    dvisible_step(cam.distance, cam.fov_y),
                 )
             }
         };
@@ -3056,6 +3071,7 @@ impl OpenCADStudio {
             vp_size,
             self.show_constraint_values,
             self.constraint_bar_display,
+            self.constraint_bar_mode,
             cursor,
         )?;
         let set = self.tabs[i].scene.parametric_constraint_set(scope)?;
@@ -3456,102 +3472,21 @@ impl OpenCADStudio {
                 let mut sel = self.tabs[i].scene.selection.borrow_mut();
                 sel.clear_left_selection_gesture();
             }
+            // Grip-menu Base Point: this click re-bases the gesture at the
+            // cursor instead of placing anything.
+            if self.tabs[i].grip_base_pending {
+                self.tabs[i].grip_base_pending = false;
+                if let Some(active) = self.tabs[i].active_grip.as_mut() {
+                    active.origin_world = active.last_world;
+                }
+                return Task::none();
+            }
             let moved = grip.last_world != grip.origin_world;
             if is_click && !moved {
                 // Engaging click — stay hot, wait for the placement click.
                 return Task::none();
             }
-            if matches!(
-                grip.mode,
-                GripEditMode::Lengthen
-                    | GripEditMode::Radius
-                    | GripEditMode::ArcLength
-                    | GripEditMode::RectangleWidth
-                    | GripEditMode::RectangleHeight
-                    | GripEditMode::MoveParallel
-            ) {
-                self.grip_pending = None;
-                self.command_line.input.clear();
-            }
-            let added_vertex_focus = grip.targets.iter().find_map(|target| {
-                let original = self
-                    .grip_originals
-                    .iter()
-                    .find(|(handle, _)| *handle == target.handle)
-                    .map(|(_, entity)| entity)?;
-                let current = self.tabs[i].scene.document.get_entity(target.handle)?;
-                is_added_polyline_vertex(original, current, target.grip_id)
-                    .then_some(target.grip_id)
-            });
-            // Keep originals available until every history shape has a valid
-            // final display. A rejected rebuild cancels the entire gesture.
-            let history_handles: Vec<_> = self
-                .grip_preview_handles
-                .iter()
-                .copied()
-                .filter(|handle| {
-                    self.tabs[i]
-                        .scene
-                        .document
-                        .solid_history_operation(*handle)
-                        .is_some()
-                })
-                .collect();
-            for handle in history_handles {
-                if !self.tabs[i].scene.finalize_solid_history(handle) {
-                    self.cancel_active_grip_edit();
-                    self.command_line.push_error(crate::t!("The edited shape could not be displayed; the original geometry was restored.").as_ref());
-                    self.refresh_properties();
-                    return Task::none();
-                }
-            }
-            self.tabs[i].active_grip = None;
-            // Commit the grip drag as one undoable group, then put every
-            // edited entity back into the resident tessellation.
-            let handles = std::mem::take(&mut self.grip_preview_handles);
-            let originals = std::mem::take(&mut self.grip_originals);
-            let history_originals = std::mem::take(&mut self.grip_history_originals);
-            let dirty_before = self.grip_dirty_before.take().unwrap_or(self.tabs[i].dirty);
-            if !handles.is_empty() {
-                if !originals.is_empty() {
-                    self.push_entity_group_history(
-                        i,
-                        "GRIP",
-                        originals
-                            .into_iter()
-                            .map(|(handle, entity)| (handle, std::sync::Arc::new(entity)))
-                            .collect(),
-                        history_originals
-                            .into_iter()
-                            .flat_map(|(_, objects)| objects)
-                            .collect(),
-                        dirty_before,
-                    );
-                    self.tabs[i].dirty = true;
-                }
-                self.grip_reference_wires.clear();
-                self.grip_text_verts = Vec::new();
-                self.grip_text_slide = false;
-                for &handle in &handles {
-                    self.tabs[i].scene.preview_hidden.remove(&handle);
-                }
-                self.tabs[i].scene.clear_preview_wire();
-                let changes: Vec<_> = handles
-                    .into_iter()
-                    .map(|handle| (handle, crate::scene::ChangeKind::Modified))
-                    .collect();
-                self.tabs[i].scene.bump_entities_after_parametric_solve(&changes);
-            }
-            // Placement confirmed — keep the just-added leader.
-            self.grip_add_provisional = None;
-            self.tabs[i].snap_result = None;
-            if let Some(vertex_id) = added_vertex_focus {
-                self.tabs[i].properties.prop_vertex = vertex_id;
-                self.tabs[i].properties.prop_vertex_indicator_active = true;
-                crate::scene::view::dispatch::set_prop_current_vertex(vertex_id);
-            }
-            self.refresh_properties();
-            return Task::none();
+            return self.commit_active_grip_edit();
         }
 
         // Map the release point into the active Model tile so the
@@ -4697,6 +4632,7 @@ properties={:.1}ms picked={}",
                                 canvas_sz,
                                 self.show_constraint_values,
                                 self.constraint_bar_display,
+                                self.constraint_bar_mode,
                                 p_full,
                             )
                         })
@@ -5629,9 +5565,10 @@ properties={:.1}ms picked={}",
         }
         let eye_dir = r_ucs.transform_vector3(region.snap_direction());
 
-        // Faces snap to a canonical upright orientation (never upside
-        // down); edges/corners keep the current up-sense so they spin
-        // smoothly around the clicked feature.
+        // Faces and edges/corners all snap deterministically (world +Z
+        // horizon, north +Y for top/bottom) so a cube click is repeatable
+        // and matches the turntable orbit; snap_to_direction preserves an
+        // intentional upside-down sense by sign-flipping only.
         let is_face = matches!(region, scene::CubeRegion::Face(_));
         if self.tabs[i].scene.active_viewport.is_some() {
             if is_face {
@@ -6151,24 +6088,7 @@ properties={:.1}ms picked={}",
                     if let acadrust::objects::ObjectType::Layout(l) = obj {
                         if l.name == new_name {
                             l.flags = layout_flags;
-                            l.min_limits = (0.0, 0.0);
-                            l.max_limits = (297.0, 210.0);
-                            l.min_extents = (0.0, 0.0, 0.0);
-                            l.max_extents = (297.0, 210.0, 0.0);
-                            l.paper_width = 297.0;
-                            l.paper_height = 210.0;
-                            l.plot_paper_units = 1;
-                            l.plot_scale_numerator = 1.0;
-                            l.plot_scale_denominator = 1.0;
-                            l.plot_scale_type = 16;
-                            l.plot_scale_factor = 1.0;
-                            l.plot_type = 5;
-                            l.plot_flags.use_standard_scale = true;
-                            l.plot_flags.print_lineweights = true;
-                            l.plot_flags.plot_plot_styles = !plot_style.is_empty();
-                            l.plot_flags.show_plot_styles = !plot_style.is_empty();
-                            l.plot_style_sheet = plot_style;
-                            l.paper_size = "ISO_A4_(297.00_x_210.00_MM)".into();
+                            crate::scene::apply_default_page_setup(l, &plot_style);
                             break;
                         }
                     }
@@ -6182,6 +6102,12 @@ properties={:.1}ms picked={}",
                     crate::tf!("Layout \"{new_name}\" created — use MVIEW to add a viewport")
                         .as_ref(),
                 );
+                // The option that greets every new layout with its page setup.
+                let switch_task = if self.plot_dialog.page_setup_on_new_layout {
+                    Task::batch([switch_task, self.on_plot_dialog_open()])
+                } else {
+                    switch_task
+                };
                 self.tabs[i].dirty = true;
                 return Task::batch([cancel_task, switch_task]);
             }
@@ -6258,6 +6184,164 @@ properties={:.1}ms picked={}",
         }
         Task::none()
     }
+
+    /// Commit the active grip edit at its current (already applied) position:
+    /// one undoable group per gesture, every edited entity back into the
+    /// resident tessellation. With the grip-menu Copy toggle on, the
+    /// originals are put back and the moved shapes are added as new
+    /// entities, and the grip stays hot for the next copy.
+    pub(in crate::app) fn commit_active_grip_edit(&mut self) -> Task<Message> {
+        let i = self.active_tab;
+        let Some(grip) = self.tabs[i].active_grip.clone() else {
+            return Task::none();
+        };
+        if grip.last_world == grip.origin_world {
+            // Nothing placed yet — the grip simply stays hot.
+            return Task::none();
+        }
+        if self.tabs[i].grip_copy {
+            return self.commit_active_grip_edit_as_copy(grip);
+        }
+        self.tabs[i].grip_base_pending = false;
+        if matches!(
+            grip.mode,
+            GripEditMode::Lengthen
+                | GripEditMode::Radius
+                | GripEditMode::ArcLength
+                | GripEditMode::RectangleWidth
+                | GripEditMode::RectangleHeight
+                | GripEditMode::MoveParallel
+        ) {
+            self.grip_pending = None;
+            self.command_line.input.clear();
+        }
+        let added_vertex_focus = grip.targets.iter().find_map(|target| {
+            let original = self
+                .grip_originals
+                .iter()
+                .find(|(handle, _)| *handle == target.handle)
+                .map(|(_, entity)| entity)?;
+            let current = self.tabs[i].scene.document.get_entity(target.handle)?;
+            is_added_polyline_vertex(original, current, target.grip_id)
+                .then_some(target.grip_id)
+        });
+        // Keep originals available until every history shape has a valid
+        // final display. A rejected rebuild cancels the entire gesture.
+        let history_handles: Vec<_> = self
+            .grip_preview_handles
+            .iter()
+            .copied()
+            .filter(|handle| {
+                self.tabs[i]
+                    .scene
+                    .document
+                    .solid_history_operation(*handle)
+                    .is_some()
+            })
+            .collect();
+        for handle in history_handles {
+            if !self.tabs[i].scene.finalize_solid_history(handle) {
+                self.cancel_active_grip_edit();
+                self.command_line.push_error(crate::t!("The edited shape could not be displayed; the original geometry was restored.").as_ref());
+                self.refresh_properties();
+                return Task::none();
+            }
+        }
+        self.tabs[i].active_grip = None;
+        // Commit the grip drag as one undoable group, then put every
+        // edited entity back into the resident tessellation.
+        let handles = std::mem::take(&mut self.grip_preview_handles);
+        let originals = std::mem::take(&mut self.grip_originals);
+        let history_originals = std::mem::take(&mut self.grip_history_originals);
+        let dirty_before = self.grip_dirty_before.take().unwrap_or(self.tabs[i].dirty);
+        if !handles.is_empty() {
+            if !originals.is_empty() {
+                self.push_entity_group_history(
+                    i,
+                    "GRIP",
+                    originals
+                        .into_iter()
+                        .map(|(handle, entity)| (handle, std::sync::Arc::new(entity)))
+                        .collect(),
+                    history_originals
+                        .into_iter()
+                        .flat_map(|(_, objects)| objects)
+                        .collect(),
+                    dirty_before,
+                );
+                self.tabs[i].dirty = true;
+            }
+            self.grip_reference_wires.clear();
+            self.grip_text_verts = Vec::new();
+            self.grip_text_slide = false;
+            for &handle in &handles {
+                self.tabs[i].scene.preview_hidden.remove(&handle);
+            }
+            self.tabs[i].scene.clear_preview_wire();
+            let changes: Vec<_> = handles
+                .into_iter()
+                .map(|handle| (handle, crate::scene::ChangeKind::Modified))
+                .collect();
+            self.tabs[i].scene.bump_entities_after_parametric_solve(&changes);
+        }
+        // Placement confirmed — keep the just-added leader.
+        self.grip_add_provisional = None;
+        self.tabs[i].snap_result = None;
+        if let Some(vertex_id) = added_vertex_focus {
+            self.tabs[i].properties.prop_vertex = vertex_id;
+            self.tabs[i].properties.prop_vertex_indicator_active = true;
+            crate::scene::view::dispatch::set_prop_current_vertex(vertex_id);
+        }
+        self.refresh_properties();
+        Task::none()
+    }
+
+    /// Grip-menu Copy: leave the originals where they were and add the
+    /// edited shapes as new entities, then re-arm the same grip at its
+    /// origin so the next placement makes another copy (grip Copy, as in commercial solutions).
+    fn commit_active_grip_edit_as_copy(&mut self, grip: GripEdit) -> Task<Message> {
+        let i = self.active_tab;
+        let handles = std::mem::take(&mut self.grip_preview_handles);
+        let originals = std::mem::take(&mut self.grip_originals);
+        let _ = std::mem::take(&mut self.grip_history_originals);
+        self.grip_dirty_before = None;
+        self.grip_add_provisional = None;
+        self.grip_reference_wires.clear();
+        self.grip_text_verts = Vec::new();
+        self.grip_text_slide = false;
+        for &handle in &handles {
+            self.tabs[i].scene.preview_hidden.remove(&handle);
+        }
+        self.tabs[i].scene.clear_preview_wire();
+        if !originals.is_empty() {
+            self.push_undo_snapshot(i, "GRIP");
+            let mut restored = Vec::with_capacity(originals.len());
+            for (handle, original) in &originals {
+                let Some(moved) = self.tabs[i].scene.document.get_entity(*handle).cloned() else {
+                    continue;
+                };
+                if self.tabs[i].scene.update_entity(original.clone()) {
+                    restored.push((*handle, crate::scene::ChangeKind::Modified));
+                }
+                self.tabs[i].scene.add_entity_clone(moved);
+            }
+            self.tabs[i].scene.bump_entities_after_parametric_solve(&restored);
+            self.finish_pending_history(i);
+            self.tabs[i].dirty = true;
+        }
+        self.tabs[i].snap_result = None;
+        // Re-arm: the grip sits at its origin again over the restored shape.
+        let mut again = grip;
+        let delta = again.last_world - again.origin_world;
+        again.last_world = again.origin_world;
+        for target in &mut again.targets {
+            target.last_world -= delta;
+        }
+        self.tabs[i].active_grip = Some(again);
+        self.refresh_properties();
+        Task::none()
+    }
+
 }
 
 #[cfg(test)]
@@ -6645,6 +6729,7 @@ mod selection_preview_tests {
             (800.0, 600.0),
             true,
             3,
+            4095,
         )[0].1;
         let point = (-30..=30).find_map(|y| {
             (-30..=30).find_map(|x| {

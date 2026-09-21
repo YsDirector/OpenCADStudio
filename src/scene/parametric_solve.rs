@@ -17,7 +17,7 @@ use cadkernel_constraints::constraints::curve_generic::{BoundedArcValue, CurveVa
 use cadkernel_constraints::constraints::point_line::{
     CenterOfGravity, Difference, Equal, EqualLineLength, MidpointOnLine, P2PDistance,
     Parallel as ParallelConstraint, Perpendicular as PerpendicularConstraint, PointOnLine,
-    ProjectedDistance, ProjectedDistanceAlongLine,
+    ProjectedDistance, ProjectedDistanceAlongLine, SymmetricLineDirections,
 };
 use cadkernel_constraints::constraints::Constraint;
 use cadkernel_constraints::geo::{
@@ -28,6 +28,7 @@ use cadkernel_constraints::solvers::dogleg::solve_dl;
 use cadkernel_constraints::solvers::lm::solve_lm;
 use cadkernel_constraints::solvers::SolveStatus;
 use cadkernel_constraints::system::System;
+use cadkernel_constraints::util::ParamId;
 
 use super::named_parameters::ParameterTable;
 use super::parametric_constraints::{
@@ -184,6 +185,16 @@ fn register_entity(
     handle: Handle,
 ) -> Option<EntityGeom> {
     let entity = document.get_entity(handle)?;
+    register_entity_geom(sys, handle, entity)
+}
+
+/// `register_entity` for an entity value that isn't the document's — the
+/// retained pre-edit original a persistent `Fixed` pins to.
+fn register_entity_geom(
+    sys: &mut System,
+    handle: Handle,
+    entity: &EntityType,
+) -> Option<EntityGeom> {
     match entity {
         EntityType::Point(point) => Some(EntityGeom::Point(GPoint::new(
             sys.add_param(point.location.x, false),
@@ -513,6 +524,12 @@ fn resolve_constraint_point(
     if let Some(point) = geometry.point_for_marker(marker) {
         return Some(point);
     }
+    if let Some(segment) = reference
+        .segment_center_index()
+        .and_then(|index| geometry.arc_segment(index))
+    {
+        return Some(segment.arc.circle.center);
+    }
 
     let midpoint_line = reference
         .segment_midpoint_index()
@@ -794,6 +811,175 @@ fn refs_share_supported_plane(document: &acadrust::CadDocument, refs: &[Parametr
     plane_z.is_some()
 }
 
+fn concentric_reference_geometry(
+    document: &acadrust::CadDocument,
+    reference: ParametricRef,
+) -> Option<(Vector3, cadkernel::space::Plane)> {
+    let marker = reference.marker?;
+    if marker != -3 && reference.segment_center_index().is_none() {
+        return None;
+    }
+    let entity = document.get_entity(reference.entity)?;
+    let center = super::parametric_constraints::resolve_point(entity, marker)?;
+    let plane = crate::entities::curve::entity_curve(entity)?.plane;
+    Some((center, plane))
+}
+
+fn concentric_refs_share_plane(
+    document: &acadrust::CadDocument,
+    refs: &[ParametricRef],
+) -> bool {
+    let [first, second] = refs else {
+        return false;
+    };
+    if first == second {
+        return false;
+    }
+    let Some((first_center, first_plane)) = concentric_reference_geometry(document, *first) else {
+        return false;
+    };
+    let Some((second_center, second_plane)) = concentric_reference_geometry(document, *second)
+    else {
+        return false;
+    };
+    let (Some(first_normal), Some(second_normal)) = (first_plane.normal(), second_plane.normal())
+    else {
+        return false;
+    };
+    let parallel = (first_normal[0] * second_normal[0]
+        + first_normal[1] * second_normal[1]
+        + first_normal[2] * second_normal[2])
+        .abs()
+        >= 1.0 - 1.0e-9;
+    let points = [
+        first_plane.origin,
+        second_plane.origin,
+        [first_center.x, first_center.y, first_center.z],
+        [second_center.x, second_center.y, second_center.z],
+    ];
+    let tolerance = cadkernel::space::coplanarity_tolerance(&points);
+    parallel
+        && first_plane
+            .distance_to(second_plane.origin)
+            .is_some_and(|distance| distance.abs() <= tolerance)
+        && first_plane
+            .distance_to([second_center.x, second_center.y, second_center.z])
+            .is_some_and(|distance| distance.abs() <= tolerance)
+}
+
+fn ref_is_driven(driven: &[ParametricRef], reference: ParametricRef) -> bool {
+    driven.iter().any(|candidate| {
+        candidate.entity == reference.entity
+            && (candidate.marker == reference.marker || candidate.marker.is_none())
+    })
+}
+
+fn apply_spatial_concentric_constraints(
+    document: &acadrust::CadDocument,
+    set: &ParametricConstraintSet,
+    driven_refs: &[ParametricRef],
+    initial_fixed_refs: &[ParametricRef],
+    results: &mut Vec<(Handle, EntityType)>,
+) {
+    let current_entity = |handle: Handle, results: &[(Handle, EntityType)]| {
+        results
+            .iter()
+            .rev()
+            .find(|(candidate, _)| *candidate == handle)
+            .map(|(_, entity)| entity.clone())
+            .or_else(|| document.get_entity(handle).cloned())
+    };
+
+    let mut handles = Vec::<Handle>::new();
+    let mut relations = Vec::new();
+    let mut fixed = Vec::new();
+    let mut points = Vec::new();
+    for constraint in set.constraints.iter().filter(|constraint| {
+        constraint.enabled
+            && constraint.kind == ConstraintKind::Concentric
+            && !refs_share_supported_plane(document, &constraint.refs)
+            && concentric_refs_share_plane(document, &constraint.refs)
+    }) {
+        let [first, second] = constraint.refs.as_slice() else {
+            continue;
+        };
+        if first.entity == second.entity {
+            continue;
+        }
+        let (Some(first_entity), Some(second_entity)) = (
+            current_entity(first.entity, results),
+            current_entity(second.entity, results),
+        ) else {
+            continue;
+        };
+        let (Some(first_marker), Some(second_marker)) = (first.marker, second.marker) else {
+            continue;
+        };
+        let (Some(first_center), Some(second_center)) = (
+            super::parametric_constraints::resolve_point(&first_entity, first_marker),
+            super::parametric_constraints::resolve_point(&second_entity, second_marker),
+        ) else {
+            continue;
+        };
+        let first_index = handles
+            .iter()
+            .position(|handle| *handle == first.entity)
+            .unwrap_or_else(|| {
+                handles.push(first.entity);
+                handles.len() - 1
+            });
+        let second_index = handles
+            .iter()
+            .position(|handle| *handle == second.entity)
+            .unwrap_or_else(|| {
+                handles.push(second.entity);
+                handles.len() - 1
+            });
+        let first_point = [first_center.x, first_center.y, first_center.z];
+        let second_point = [second_center.x, second_center.y, second_center.z];
+        relations.push((first_index, first_point, second_index, second_point));
+        points.extend([first_point, second_point]);
+        if ref_is_driven(driven_refs, *first) || ref_is_driven(initial_fixed_refs, *first) {
+            fixed.push(first_index);
+        }
+        if ref_is_driven(driven_refs, *second) || ref_is_driven(initial_fixed_refs, *second) {
+            fixed.push(second_index);
+        }
+    }
+    if relations.is_empty() {
+        return;
+    }
+    fixed.sort_unstable();
+    fixed.dedup();
+    let tolerance = cadkernel::space::coplanarity_tolerance(&points).max(MOVE_EPS);
+    let Some(translations) = cadkernel::space::solve_rigid_point_coincidence(
+        handles.len(),
+        &relations,
+        &fixed,
+        tolerance,
+    ) else {
+        return;
+    };
+    for (handle, translation) in handles.into_iter().zip(translations) {
+        let translation = glam::DVec3::from_array(translation);
+        if translation.length() <= tolerance {
+            continue;
+        }
+        let Some(mut entity) = current_entity(handle, results) else {
+            continue;
+        };
+        crate::scene::view::dispatch::apply_transform(
+            &mut entity,
+            &crate::command::EntityTransform::Translate(translation),
+        );
+        if let Some((_, current)) = results.iter_mut().find(|(candidate, _)| *candidate == handle) {
+            *current = entity;
+        } else {
+            results.push((handle, entity));
+        }
+    }
+}
+
 fn resolved_target(params: &ParameterTable, constraint: &ParametricConstraint) -> Option<f64> {
     let value = constraint.driving_param.as_ref()?.resolve(params).ok()?;
     if !value.is_finite() {
@@ -852,6 +1038,86 @@ fn retained_tangent_side(
     Some(dx * (center[1] - y1) - dy * (center[0] - x1) >= 0.0)
 }
 
+/// A solve result with no extent left — the only way the solver could
+/// honour every constraint after an edit that contradicted them.
+fn collapsed_by_solve(entity: &EntityType) -> bool {
+    const EPS: f64 = 1.0e-9;
+    match entity {
+        EntityType::Line(line) => (line.end - line.start).length() <= EPS,
+        EntityType::Circle(circle) => circle.radius <= EPS,
+        EntityType::Arc(arc) => arc.radius <= EPS,
+        _ => false,
+    }
+}
+
+/// The kernel parameters a `Fixed` constraint on `r` holds in place: a
+/// polyline segment's endpoints (plus center/radius for an arc segment), one
+/// addressable point, or every intrinsic parameter of a whole entity. Arc
+/// pins its five intrinsic params only — `start`/`end` are already tied to
+/// those by the arc-rules `CurveValue` constraints `solve_scope` adds;
+/// Ellipse likewise pins center + radmin, `focus1` being tied to `center`
+/// by the ellipse-rules `Difference` constraints.
+fn fixed_pin_params(
+    document: &acadrust::CadDocument,
+    sys: &mut System,
+    cache: &mut HashMap<Handle, EntityGeom>,
+    r: ParametricRef,
+) -> Vec<ParamId> {
+    if let Some(index) = r.segment_index() {
+        let Some(geometry) = resolve_ref(document, sys, cache, r) else {
+            return Vec::new();
+        };
+        if let Some(line) = geometry.line_segment(index) {
+            return vec![line.p1.x, line.p1.y, line.p2.x, line.p2.y];
+        }
+        return geometry
+            .arc_segment(index)
+            .map(|segment| {
+                let arc = segment.arc;
+                vec![
+                    arc.start.x,
+                    arc.start.y,
+                    arc.end.x,
+                    arc.end.y,
+                    arc.circle.center.x,
+                    arc.circle.center.y,
+                    arc.circle.rad,
+                ]
+            })
+            .unwrap_or_default();
+    }
+    if r.marker.is_some() {
+        return resolve_constraint_point(document, sys, cache, r)
+            .map(|point| vec![point.x, point.y])
+            .unwrap_or_default();
+    }
+    match resolve_ref(document, sys, cache, r) {
+        Some(EntityGeom::Point(point)) => vec![point.x, point.y],
+        Some(EntityGeom::Polyline { points, .. }) => {
+            points.iter().flat_map(|point| [point.x, point.y]).collect()
+        }
+        Some(EntityGeom::TextLine(line))
+        | Some(EntityGeom::Line(line))
+        | Some(EntityGeom::Ray(line))
+        | Some(EntityGeom::XLine(line)) => vec![line.p1.x, line.p1.y, line.p2.x, line.p2.y],
+        Some(EntityGeom::Circle(circle)) => vec![circle.center.x, circle.center.y, circle.rad],
+        Some(EntityGeom::Arc(arc)) => vec![
+            arc.circle.center.x,
+            arc.circle.center.y,
+            arc.circle.rad,
+            arc.start_angle,
+            arc.end_angle,
+        ],
+        Some(EntityGeom::Ellipse(ellipse)) => {
+            vec![ellipse.center.x, ellipse.center.y, ellipse.radmin]
+        }
+        Some(EntityGeom::Spline { curve, .. }) => {
+            curve.poles.iter().flat_map(|point| [point.x, point.y]).collect()
+        }
+        None => Vec::new(),
+    }
+}
+
 /// Builds the kernel equations for one constraint. Unsupported references or
 /// invalid dimensional targets produce no equations.
 fn build_constraint(
@@ -862,6 +1128,7 @@ fn build_constraint(
     c: &ParametricConstraint,
     tangent_side: Option<bool>,
     tangent_point: Option<ParametricRef>,
+    originals: &HashMap<Handle, std::sync::Arc<EntityType>>,
 ) -> Vec<Rc<dyn Constraint>> {
     if !c.enabled || !refs_share_supported_plane(document, &c.refs) {
         return Vec::new();
@@ -901,6 +1168,37 @@ fn build_constraint(
     let point_ref = |sys: &mut System, cache: &mut HashMap<_, _>, r: ParametricRef| {
         resolve_constraint_point(document, sys, cache, r)
     };
+    let directional_line =
+        |sys: &mut System, cache: &mut HashMap<_, _>, r: ParametricRef| {
+            let geometry = resolve_ref(document, sys, cache, r)?;
+            let minor_axis = matches!(
+                r.directional_axis(),
+                Some(super::parametric_constraints::DirectionalAxis::EllipseMinor)
+            );
+            let line = match geometry {
+                EntityGeom::TextLine(line)
+                    if matches!(
+                        r.directional_axis(),
+                        Some(super::parametric_constraints::DirectionalAxis::TextBaseline)
+                    ) => line,
+                EntityGeom::Line(line) | EntityGeom::Ray(line) | EntityGeom::XLine(line)
+                    if r.marker.is_none() => line,
+                EntityGeom::Polyline { .. } => geometry.line_segment(r.segment_index()?)?,
+                EntityGeom::Ellipse(ellipse)
+                    if matches!(
+                        r.directional_axis(),
+                        Some(
+                            super::parametric_constraints::DirectionalAxis::EllipseMajor
+                                | super::parametric_constraints::DirectionalAxis::EllipseMinor
+                        )
+                    ) => GLine {
+                        p1: ellipse.center,
+                        p2: ellipse.focus1,
+                    },
+                _ => return None,
+            };
+            Some((line, minor_axis))
+        };
 
     let point_on_bounded_arc = |sys: &mut System, point: GPoint, arc: GArc| {
         let initial = BoundedArcValue::initial_parameter(sys.store(), point, arc);
@@ -933,30 +1231,49 @@ fn build_constraint(
         ConstraintKind::Coincident | ConstraintKind::Concentric | ConstraintKind::CenterPoint => {
             point_pair_equal(sys, cache, &c.refs)
         }
-        ConstraintKind::Horizontal => match c.refs.as_slice() {
-            [r] => whole_line(sys, cache, *r)
-                .map(|line| {
-                    vec![Rc::new(Equal::new(line.p1.y, line.p2.y, 1.0)) as Rc<dyn Constraint>]
-                })
-                .unwrap_or_default(),
-            [a, b] => match (point_ref(sys, cache, *a), point_ref(sys, cache, *b)) {
-                (Some(a), Some(b)) => vec![Rc::new(Equal::new(a.y, b.y, 1.0))],
+        ConstraintKind::Horizontal | ConstraintKind::Vertical => {
+            let fallback = if c.kind == ConstraintKind::Vertical {
+                Vector3::UNIT_Y
+            } else {
+                Vector3::UNIT_X
+            };
+            let direction = c.axis_direction.unwrap_or(fallback);
+            let length = direction.x.hypot(direction.y);
+            let (dx, dy) = if length > 1.0e-12 {
+                (direction.x / length, direction.y / length)
+            } else {
+                (fallback.x, fallback.y)
+            };
+            let datum = GLine {
+                p1: GPoint::new(sys.add_param(0.0, true), sys.add_param(0.0, true)),
+                p2: GPoint::new(sys.add_param(dx, true), sys.add_param(dy, true)),
+            };
+            match c.refs.as_slice() {
+                [reference] => directional_line(sys, cache, *reference)
+                    .map(|(line, minor_axis)| {
+                        if minor_axis {
+                            vec![Rc::new(PerpendicularConstraint::new(
+                                sys.store(),
+                                line,
+                                datum,
+                            )) as Rc<dyn Constraint>]
+                        } else {
+                            vec![Rc::new(ParallelConstraint::new(sys.store(), line, datum))
+                                as Rc<dyn Constraint>]
+                        }
+                    })
+                    .unwrap_or_default(),
+                [a, b] => match (point_ref(sys, cache, *a), point_ref(sys, cache, *b)) {
+                    (Some(a), Some(b)) => vec![Rc::new(ParallelConstraint::new(
+                        sys.store(),
+                        GLine { p1: a, p2: b },
+                        datum,
+                    ))],
+                    _ => Vec::new(),
+                },
                 _ => Vec::new(),
-            },
-            _ => Vec::new(),
-        },
-        ConstraintKind::Vertical => match c.refs.as_slice() {
-            [r] => whole_line(sys, cache, *r)
-                .map(|line| {
-                    vec![Rc::new(Equal::new(line.p1.x, line.p2.x, 1.0)) as Rc<dyn Constraint>]
-                })
-                .unwrap_or_default(),
-            [a, b] => match (point_ref(sys, cache, *a), point_ref(sys, cache, *b)) {
-                (Some(a), Some(b)) => vec![Rc::new(Equal::new(a.x, b.x, 1.0))],
-                _ => Vec::new(),
-            },
-            _ => Vec::new(),
-        },
+            }
+        }
         ConstraintKind::Parallel => {
             let [a, b] = c.refs.as_slice() else {
                 return Vec::new();
@@ -972,39 +1289,6 @@ fn build_constraint(
             let [a, b] = c.refs.as_slice() else {
                 return Vec::new();
             };
-            let directional_line =
-                |sys: &mut System, cache: &mut HashMap<_, _>, r: ParametricRef| {
-                    let geometry = resolve_ref(document, sys, cache, r)?;
-                    let minor_axis = matches!(
-                        r.directional_axis(),
-                        Some(super::parametric_constraints::DirectionalAxis::EllipseMinor)
-                    );
-                    let line = match geometry {
-                        EntityGeom::TextLine(line)
-                            if matches!(
-                                r.directional_axis(),
-                                Some(super::parametric_constraints::DirectionalAxis::TextBaseline)
-                            ) => line,
-                        EntityGeom::Line(line) | EntityGeom::Ray(line) | EntityGeom::XLine(line)
-                            if r.marker.is_none() => line,
-                        EntityGeom::Polyline { .. } => {
-                            geometry.line_segment(r.segment_index()?)?
-                        }
-                        EntityGeom::Ellipse(ellipse)
-                            if matches!(
-                                r.directional_axis(),
-                                Some(
-                                    super::parametric_constraints::DirectionalAxis::EllipseMajor
-                                        | super::parametric_constraints::DirectionalAxis::EllipseMinor
-                                )
-                            ) => GLine {
-                                p1: ellipse.center,
-                                p2: ellipse.focus1,
-                            },
-                        _ => return None,
-                    };
-                    Some((line, minor_axis))
-                };
             let (Some((fixed, fixed_minor)), Some((moving, moving_minor))) =
                 (directional_line(sys, cache, *a), directional_line(sys, cache, *b))
             else {
@@ -1171,192 +1455,121 @@ fn build_constraint(
             let [a, b, m] = c.refs.as_slice() else {
                 return Vec::new();
             };
-            let (Some(pa), Some(pb), Some(mirror)) = (
-                point_ref(sys, cache, *a),
-                point_ref(sys, cache, *b),
-                whole_line(sys, cache, *m),
+            let Some(mirror) = whole_line(sys, cache, *m) else {
+                return Vec::new();
+            };
+            if let (Some(pa), Some(pb)) =
+                (point_ref(sys, cache, *a), point_ref(sys, cache, *b))
+            {
+                let pair = GLine { p1: pa, p2: pb };
+                return vec![
+                    Rc::new(MidpointOnLine::new(pair, mirror)),
+                    Rc::new(PerpendicularConstraint::new(sys.store(), pair, mirror)),
+                ];
+            }
+            let (Some(first), Some(second)) = (
+                resolve_ref(document, sys, cache, *a),
+                resolve_ref(document, sys, cache, *b),
             ) else {
                 return Vec::new();
             };
-            let pair = GLine { p1: pa, p2: pb };
-            vec![
-                Rc::new(MidpointOnLine::new(pair, mirror)),
-                Rc::new(PerpendicularConstraint::new(sys.store(), pair, mirror)),
-            ]
+            match (
+                as_circle_or_line(first, *a),
+                as_circle_or_line(second, *b),
+            ) {
+                (CircleOrLine::Line(first), CircleOrLine::Line(second)) => {
+                    vec![Rc::new(SymmetricLineDirections::new(
+                        sys.store(),
+                        first,
+                        second,
+                        mirror,
+                    ))]
+                }
+                (CircleOrLine::Circle(first), CircleOrLine::Circle(second)) => {
+                    let centers = GLine {
+                        p1: first.center,
+                        p2: second.center,
+                    };
+                    vec![
+                        Rc::new(MidpointOnLine::new(centers, mirror)),
+                        Rc::new(PerpendicularConstraint::new(
+                            sys.store(),
+                            centers,
+                            mirror,
+                        )),
+                        Rc::new(Equal::new(second.rad, first.rad, 1.0)),
+                    ]
+                }
+                (CircleOrLine::Ellipse(first), CircleOrLine::Ellipse(second)) => {
+                    let centers = GLine {
+                        p1: first.center,
+                        p2: second.center,
+                    };
+                    let first_axis = GLine {
+                        p1: first.center,
+                        p2: first.focus1,
+                    };
+                    let second_axis = GLine {
+                        p1: second.center,
+                        p2: second.focus1,
+                    };
+                    vec![
+                        Rc::new(MidpointOnLine::new(centers, mirror)),
+                        Rc::new(PerpendicularConstraint::new(
+                            sys.store(),
+                            centers,
+                            mirror,
+                        )),
+                        Rc::new(SymmetricLineDirections::new(
+                            sys.store(),
+                            first_axis,
+                            second_axis,
+                            mirror,
+                        )),
+                        Rc::new(EqualMajorAxesConic::new(
+                            GConic::Ellipse(first),
+                            GConic::Ellipse(second),
+                        )),
+                        Rc::new(Equal::new(second.radmin, first.radmin, 1.0)),
+                    ]
+                }
+                _ => Vec::new(),
+            }
         }
         ConstraintKind::Fixed => {
             let Some(r) = c.refs.first() else {
                 return Vec::new();
             };
-            if r.segment_index().is_some() {
-                let Some(line) = whole_line(sys, cache, *r) else {
-                    return Vec::new();
-                };
-                let (x1, y1, x2, y2) = {
-                    let store = sys.store();
-                    (
-                        store.get(line.p1.x),
-                        store.get(line.p1.y),
-                        store.get(line.p2.x),
-                        store.get(line.p2.y),
-                    )
-                };
-                return vec![
-                    Rc::new(Equal::new(line.p1.x, sys.add_param(x1, true), 1.0)),
-                    Rc::new(Equal::new(line.p1.y, sys.add_param(y1, true), 1.0)),
-                    Rc::new(Equal::new(line.p2.x, sys.add_param(x2, true), 1.0)),
-                    Rc::new(Equal::new(line.p2.y, sys.add_param(y2, true), 1.0)),
-                ];
-            }
-            if r.marker.is_some() {
-                let Some(point) = point_ref(sys, cache, *r) else {
-                    return Vec::new();
-                };
-                let (x, y) = {
-                    let store = sys.store();
-                    (store.get(point.x), store.get(point.y))
-                };
-                return vec![
-                    Rc::new(Equal::new(point.x, sys.add_param(x, true), 1.0)),
-                    Rc::new(Equal::new(point.y, sys.add_param(y, true), 1.0)),
-                ];
-            }
-            let Some(geom) = resolve_ref(document, sys, cache, *r) else {
-                return Vec::new();
-            };
-            match geom {
-                EntityGeom::Point(point) => {
-                    let (x, y) = {
+            let pinned = fixed_pin_params(document, sys, cache, *r);
+            // A persistent Fixed holds the *pre-edit* geometry: after MOVE /
+            // STRETCH / a grip drag the entity in `document` is already
+            // displaced, so the target comes from the caller's retained
+            // original when there is one — the entity's own live values
+            // otherwise (a freshly applied Fixed pins where it stands).
+            let mut targets: Option<Vec<f64>> = None;
+            if let Some(original) = originals.get(&r.entity) {
+                let mut original_cache = HashMap::new();
+                if let Some(geometry) = register_entity_geom(sys, r.entity, original.as_ref()) {
+                    original_cache.insert(r.entity, geometry);
+                    let params = fixed_pin_params(document, sys, &mut original_cache, *r);
+                    if params.len() == pinned.len() {
                         let store = sys.store();
-                        (store.get(point.x), store.get(point.y))
-                    };
-                    vec![
-                        Rc::new(Equal::new(point.x, sys.add_param(x, true), 1.0)),
-                        Rc::new(Equal::new(point.y, sys.add_param(y, true), 1.0)),
-                    ]
-                }
-                EntityGeom::Polyline { points, .. } => {
-                    let values: Vec<_> = points
-                        .iter()
-                        .map(|point| {
-                            let store = sys.store();
-                            (point, store.get(point.x), store.get(point.y))
-                        })
-                        .collect();
-                    values
-                        .into_iter()
-                        .flat_map(|(point, x, y)| {
-                            [
-                                Rc::new(Equal::new(point.x, sys.add_param(x, true), 1.0))
-                                    as Rc<dyn Constraint>,
-                                Rc::new(Equal::new(point.y, sys.add_param(y, true), 1.0))
-                                    as Rc<dyn Constraint>,
-                            ]
-                        })
-                        .collect()
-                }
-                EntityGeom::TextLine(l)
-                | EntityGeom::Line(l)
-                | EntityGeom::Ray(l)
-                | EntityGeom::XLine(l) => {
-                    let (x1, y1, x2, y2) = {
-                        let store = sys.store();
-                        (
-                            store.get(l.p1.x),
-                            store.get(l.p1.y),
-                            store.get(l.p2.x),
-                            store.get(l.p2.y),
-                        )
-                    };
-                    vec![
-                        Rc::new(Equal::new(l.p1.x, sys.add_param(x1, true), 1.0)),
-                        Rc::new(Equal::new(l.p1.y, sys.add_param(y1, true), 1.0)),
-                        Rc::new(Equal::new(l.p2.x, sys.add_param(x2, true), 1.0)),
-                        Rc::new(Equal::new(l.p2.y, sys.add_param(y2, true), 1.0)),
-                    ]
-                }
-                EntityGeom::Circle(circ) => {
-                    let (cx, cy, r) = {
-                        let store = sys.store();
-                        (
-                            store.get(circ.center.x),
-                            store.get(circ.center.y),
-                            store.get(circ.rad),
-                        )
-                    };
-                    vec![
-                        Rc::new(Equal::new(circ.center.x, sys.add_param(cx, true), 1.0)),
-                        Rc::new(Equal::new(circ.center.y, sys.add_param(cy, true), 1.0)),
-                        Rc::new(Equal::new(circ.rad, sys.add_param(r, true), 1.0)),
-                    ]
-                }
-                // Pinning the 5 intrinsic params (center, radius, both
-                // angles) is enough — `start`/`end` are already tied to
-                // those via the arc-rules `CurveValue` constraints
-                // `solve_scope` adds for every arc, so pinning them too
-                // would just be redundant.
-                EntityGeom::Arc(a) => {
-                    let (cx, cy, r, sa, ea) = {
-                        let store = sys.store();
-                        (
-                            store.get(a.circle.center.x),
-                            store.get(a.circle.center.y),
-                            store.get(a.circle.rad),
-                            store.get(a.start_angle),
-                            store.get(a.end_angle),
-                        )
-                    };
-                    vec![
-                        Rc::new(Equal::new(a.circle.center.x, sys.add_param(cx, true), 1.0)),
-                        Rc::new(Equal::new(a.circle.center.y, sys.add_param(cy, true), 1.0)),
-                        Rc::new(Equal::new(a.circle.rad, sys.add_param(r, true), 1.0)),
-                        Rc::new(Equal::new(a.start_angle, sys.add_param(sa, true), 1.0)),
-                        Rc::new(Equal::new(a.end_angle, sys.add_param(ea, true), 1.0)),
-                    ]
-                }
-                // Pinning center + radmin is enough — `focus1` is already
-                // tied to `center` by the ellipse-rules `Difference`
-                // constraints `solve_scope` adds for every registered
-                // ellipse (see this module's doc comment), so with `center`
-                // pinned here too, pinning `focus1` again would just be
-                // redundant (same reasoning as Arc's `Fixed` arm above).
-                EntityGeom::Ellipse(el) => {
-                    let (cx, cy, b) = {
-                        let store = sys.store();
-                        (
-                            store.get(el.center.x),
-                            store.get(el.center.y),
-                            store.get(el.radmin),
-                        )
-                    };
-                    vec![
-                        Rc::new(Equal::new(el.center.x, sys.add_param(cx, true), 1.0)),
-                        Rc::new(Equal::new(el.center.y, sys.add_param(cy, true), 1.0)),
-                        Rc::new(Equal::new(el.radmin, sys.add_param(b, true), 1.0)),
-                    ]
-                }
-                EntityGeom::Spline { curve, .. } => {
-                    let values: Vec<_> = curve
-                        .poles
-                        .iter()
-                        .map(|point| {
-                            let store = sys.store();
-                            (point, store.get(point.x), store.get(point.y))
-                        })
-                        .collect();
-                    values
-                        .into_iter()
-                        .flat_map(|(point, x, y)| {
-                            [
-                                Rc::new(Equal::new(point.x, sys.add_param(x, true), 1.0))
-                                    as Rc<dyn Constraint>,
-                                Rc::new(Equal::new(point.y, sys.add_param(y, true), 1.0))
-                                    as Rc<dyn Constraint>,
-                            ]
-                        })
-                        .collect()
+                        targets = Some(params.iter().map(|param| store.get(*param)).collect());
+                    }
                 }
             }
+            let targets = targets.unwrap_or_else(|| {
+                let store = sys.store();
+                pinned.iter().map(|param| store.get(*param)).collect()
+            });
+            pinned
+                .into_iter()
+                .zip(targets)
+                .map(|(param, value)| {
+                    Rc::new(Equal::new(param, sys.add_param(value, true), 1.0))
+                        as Rc<dyn Constraint>
+                })
+                .collect()
         }
         ConstraintKind::Distance => {
             let [a, b] = c.refs.as_slice() else {
@@ -1697,26 +1910,167 @@ fn build_constraint(
     }
 }
 
-fn smooth_target_jet(entity: &EntityType, marker: i32) -> Option<cadkernel::space::CurveJet> {
-    let parameter = match marker {
-        0 => 0.0,
-        1 => 1.0,
-        _ => return None,
-    };
-    let curve = crate::entities::curve::entity_curve(entity)?;
-    if curve.is_closed() {
-        return None;
+fn smooth_refs(refs: &[ParametricRef]) -> Option<(ParametricRef, ParametricRef, ParametricRef)> {
+    match refs {
+        [source, target_endpoint] => Some((
+            *source,
+            *target_endpoint,
+            ParametricRef::whole(target_endpoint.entity),
+        )),
+        [source, target_endpoint, target_curve]
+            if target_endpoint.entity == target_curve.entity =>
+        {
+            Some((*source, *target_endpoint, *target_curve))
+        }
+        _ => None,
     }
-    let step = if marker == 0 { 1.0e-4 } else { -1.0e-4 };
+}
+
+fn smooth_target_planar_curve(
+    entity: &EntityType,
+    curve_reference: ParametricRef,
+) -> Option<cadkernel::space::PlanarCurve> {
+    let planar = crate::entities::curve::entity_curve(entity)?;
+    let Some(segment) = curve_reference.segment_index() else {
+        return (!planar.is_closed()).then_some(planar);
+    };
+    let curve = planar.curve.segments().into_iter().nth(segment)?;
+    Some(cadkernel::space::PlanarCurve::new(planar.plane, curve))
+}
+
+fn smooth_endpoint_parameter(
+    entity: &EntityType,
+    endpoint_reference: ParametricRef,
+    curve: &cadkernel::space::PlanarCurve,
+) -> Option<f64> {
+    let marker = endpoint_reference.marker?;
+    let endpoint = super::parametric_constraints::resolve_point(entity, marker)?;
+    let endpoint = cadkernel::space::Vec3::new(endpoint.x, endpoint.y, endpoint.z);
+    let start = cadkernel::space::Vec3::from(curve.point_at(0.0));
+    let end = cadkernel::space::Vec3::from(curve.point_at(1.0));
+    Some(if endpoint.distance(start) <= endpoint.distance(end) {
+        0.0
+    } else {
+        1.0
+    })
+}
+
+fn smooth_target_jet(
+    entity: &EntityType,
+    endpoint_reference: ParametricRef,
+    curve_reference: ParametricRef,
+) -> Option<cadkernel::space::CurveJet> {
+    if curve_reference.segment_index().is_none() {
+        if let EntityType::Spline(spline) = entity {
+            let endpoint = match endpoint_reference.marker {
+                Some(0) => cadkernel::space::SplineEnd::Start,
+                Some(1) => cadkernel::space::SplineEnd::End,
+                _ => return None,
+            };
+            let nurbs = crate::entities::spline::nurbs3(spline)?;
+            return cadkernel::space::CurveJet::from_nurbs(&nurbs, endpoint);
+        }
+    }
+
+    let curve = smooth_target_planar_curve(entity, curve_reference)?;
+    let parameter = smooth_endpoint_parameter(entity, endpoint_reference, &curve)?;
+
     let point = curve.point_at(parameter);
     let tangent = curve.tangent_at(parameter);
-    let next = curve.point_at(parameter + step);
-    let third = curve.point_at(parameter + 2.0 * step);
-    Some(cadkernel::space::CurveJet {
-        point,
-        tangent,
-        curvature: cadkernel::space::curve::curvature_through(point, next, third),
-    })
+    match &curve.curve {
+        cadkernel::geom2d::Curve::Line(_) => {
+            cadkernel::space::CurveJet::linear(point, tangent)
+        }
+        cadkernel::geom2d::Curve::Arc(arc) => cadkernel::space::CurveJet::circular(
+            point,
+            tangent,
+            curve.plane.point_at(arc.centre),
+        ),
+        _ => None,
+    }
+}
+
+fn smooth_spline_plane(spline: &acadrust::entities::Spline) -> Option<cadkernel::space::Plane> {
+    let source = if crate::entities::spline::uses_fit_method(spline) {
+        &spline.fit_points
+    } else {
+        &spline.control_points
+    };
+    let origin = source.first()?;
+    let origin_vector = cadkernel::space::Vec3::new(origin.x, origin.y, origin.z);
+    let along = source
+        .iter()
+        .skip(1)
+        .map(|point| cadkernel::space::Vec3::new(point.x, point.y, point.z) - origin_vector)
+        .find(|vector| vector.length_squared() > 1.0e-24)?;
+    let normal = source
+        .iter()
+        .skip(1)
+        .map(|point| cadkernel::space::Vec3::new(point.x, point.y, point.z) - origin_vector)
+        .map(|vector| along.cross(vector))
+        .find(|vector| vector.length_squared() > 1.0e-24)?;
+    let plane = cadkernel::space::Plane::orthonormal(
+        origin_vector.to_array(),
+        along.to_array(),
+        normal.to_array(),
+    )?;
+    let points: Vec<_> = source.iter().map(|point| [point.x, point.y, point.z]).collect();
+    let tolerance = cadkernel::space::coplanarity_tolerance(&points);
+    source
+        .iter()
+        .all(|point| plane.contains([point.x, point.y, point.z], tolerance))
+        .then_some(plane)
+}
+
+fn smooth_entity_plane(
+    entity: &EntityType,
+    curve_reference: ParametricRef,
+) -> Option<cadkernel::space::Plane> {
+    if let EntityType::Spline(spline) = entity {
+        return crate::entities::curve::entity_curve(entity)
+            .map(|curve| curve.plane)
+            .or_else(|| smooth_spline_plane(spline));
+    }
+    smooth_target_planar_curve(entity, curve_reference).map(|curve| curve.plane)
+}
+
+fn smooth_refs_share_plane(
+    document: &acadrust::CadDocument,
+    source_ref: ParametricRef,
+    target_curve_ref: ParametricRef,
+) -> bool {
+    let Some(source_entity) = document.get_entity(source_ref.entity) else {
+        return false;
+    };
+    let Some(source_plane) = smooth_entity_plane(source_entity, ParametricRef::whole(source_ref.entity))
+    else {
+        return false;
+    };
+    let Some(target_entity) = document.get_entity(target_curve_ref.entity) else {
+        return false;
+    };
+    let Some(target_plane) = smooth_entity_plane(target_entity, target_curve_ref) else {
+        return false;
+    };
+    let points = [source_plane.origin, target_plane.origin];
+    let tolerance = cadkernel::space::coplanarity_tolerance(&points);
+    if let EntityType::Line(line) = target_entity {
+        return source_plane
+            .contains([line.start.x, line.start.y, line.start.z], tolerance)
+            && source_plane
+                .contains([line.end.x, line.end.y, line.end.z], tolerance);
+    }
+    let (Some(source_normal), Some(target_normal)) =
+        (source_plane.normal(), target_plane.normal())
+    else {
+        return false;
+    };
+    cadkernel::space::Vec3::from(source_normal)
+        .cross(cadkernel::space::Vec3::from(target_normal))
+        .length()
+        <= 1.0e-9
+        && source_plane.contains(target_plane.origin, tolerance)
+        && target_plane.contains(source_plane.origin, tolerance)
 }
 
 fn apply_smooth_constraints(
@@ -1729,7 +2083,9 @@ fn apply_smooth_constraints(
         .iter()
         .filter(|constraint| constraint.enabled && constraint.kind == ConstraintKind::Smooth)
     {
-        let [source_ref, target_ref] = constraint.refs.as_slice() else {
+        let Some((source_ref, target_ref, target_curve_ref)) =
+            smooth_refs(&constraint.refs)
+        else {
             continue;
         };
         let source = results
@@ -1750,10 +2106,7 @@ fn apply_smooth_constraints(
             Some(1) => cadkernel::space::SplineEnd::End,
             _ => continue,
         };
-        let Some(target_marker) = target_ref.marker else {
-            continue;
-        };
-        let Some(target_jet) = smooth_target_jet(&target, target_marker) else {
+        let Some(target_jet) = smooth_target_jet(&target, target_ref, target_curve_ref) else {
             continue;
         };
         let Some(curve) = crate::entities::spline::nurbs3(&spline) else {
@@ -1830,6 +2183,29 @@ fn retained_radius(entity: &EntityType) -> Option<f64> {
     }
 }
 
+/// Hold the distance between two points at `length`.
+///
+/// `P2PDistance` divides by the current distance, so a zero-length segment
+/// gives the solver a NaN Jacobian. Keep coincident endpoints together with
+/// per-axis differences instead.
+fn retain_segment_length(
+    sys: &mut System,
+    a: GPoint,
+    b: GPoint,
+    current_length: f64,
+    length: f64,
+) {
+    if current_length > f64::EPSILON && length > f64::EPSILON {
+        let target = sys.add_param(length, true);
+        sys.add_constraint(Rc::new(P2PDistance::new(a, b, target)));
+        return;
+    }
+    let dx = sys.add_param(0.0, true);
+    let dy = sys.add_param(0.0, true);
+    sys.add_constraint(Rc::new(Difference::new(a.x, b.x, dx)));
+    sys.add_constraint(Rc::new(Difference::new(a.y, b.y, dy)));
+}
+
 /// Visit vertices and segments in stored drawing order, including the closing edge last.
 fn polyline_ref_order(
     document: &acadrust::CadDocument,
@@ -1842,6 +2218,7 @@ fn polyline_ref_order(
     }
     let position = if let Some(index) = reference.segment_index()
         .or_else(|| reference.segment_midpoint_index())
+        .or_else(|| reference.segment_center_index())
     {
         2 * index + 1
     } else {
@@ -1868,7 +2245,21 @@ fn constrained_line_axes(constraints: &[&ParametricConstraint]) -> HashMap<Param
     for c in constraints.iter().filter(|c| c.enabled) {
         if let [reference] = c.refs.as_slice() {
             if matches!(c.kind, ConstraintKind::Horizontal | ConstraintKind::Vertical) {
-                axes.insert(*reference, c.kind == ConstraintKind::Vertical);
+                let fallback = if c.kind == ConstraintKind::Vertical {
+                    Vector3::UNIT_Y
+                } else {
+                    Vector3::UNIT_X
+                };
+                let direction = c.axis_direction.unwrap_or(fallback);
+                let length = direction.x.hypot(direction.y);
+                if length > 1.0e-12 {
+                    let (x, y) = (direction.x.abs() / length, direction.y.abs() / length);
+                    if x >= 1.0 - 1.0e-10 {
+                        axes.insert(*reference, false);
+                    } else if y >= 1.0 - 1.0e-10 {
+                        axes.insert(*reference, true);
+                    }
+                }
             }
         }
     }
@@ -1905,6 +2296,7 @@ fn solve_scope(
     retain_lengths: bool,
     retained_before: &HashMap<Handle, std::sync::Arc<EntityType>>,
     initial_fixed_refs: &[ParametricRef],
+    originals: &HashMap<Handle, std::sync::Arc<EntityType>>,
 ) -> Option<SolveResult> {
     let params = if set.local_parameters.is_empty() {
         drawing_params
@@ -1914,6 +2306,36 @@ fn solve_scope(
     let mut sys = System::new();
     let mut cache: HashMap<Handle, EntityGeom> = HashMap::new();
     let constraints = constraints_in_drawing_order(document, set);
+    // A persistent Fixed outranks any edit: a point it holds is never a
+    // driven grip / STRETCH anchor, and a moved entity it holds gets no
+    // temporary whole-entity pin — the Fixed one, targeting the retained
+    // original, pulls it back instead (a MOVE leaves a fixed object, or the
+    // fixed points of a partly fixed one, where they were).
+    let fixed_refs: Vec<ParametricRef> = constraints
+        .iter()
+        .filter(|c| c.enabled && c.kind == ConstraintKind::Fixed)
+        .filter_map(|c| c.refs.first().copied())
+        .collect();
+    let held_by_fixed = |r: &ParametricRef| {
+        fixed_refs.iter().any(|f| {
+            f.entity == r.entity
+                && (f.marker.is_none()
+                    || f.marker == r.marker
+                    || f.segment_index().is_some_and(|index| {
+                        matches!(r.marker, Some(marker)
+                            if marker == index as i32 || marker == index as i32 + 1)
+                    }))
+        })
+    };
+    // A moved entity a Fixed holds only in part gets no temporary pin and
+    // (below) no size retention, so its free points simply stay where the
+    // edit put them while the fixed ones pull their own coordinates back —
+    // a MOVE on a line with one fixed end stretches the line instead of
+    // sliding it — and any other constraint on it reconciles the rest.
+    let driven_refs: Vec<ParametricRef> =
+        driven_refs.iter().copied().filter(|r| !held_by_fixed(r)).collect();
+    let driven_refs = driven_refs.as_slice();
+    let fixed_touches = |handle: Handle| fixed_refs.iter().any(|f| f.entity == handle);
     let line_axes = if retain_lengths { HashMap::new() } else { constrained_line_axes(&constraints) };
     // Map partition-local kernel rows back to persistent constraint IDs by Rc identity.
     let mut owner: Vec<(Rc<dyn Constraint>, ConstraintId)> = Vec::new();
@@ -1955,6 +2377,7 @@ fn solve_scope(
             c,
             tangent_side,
             tangent_point,
+            originals,
         ) {
             owner.push((constraint.clone(), c.id));
             sys.add_constraint(constraint);
@@ -1962,20 +2385,98 @@ fn solve_scope(
     }
 
     // Ordered two-object constraints use the first pick as a reference for
-    // their initial placement. Build temporary Fixed equations into this
-    // solve only; they are deliberately omitted from `owner` and from the
-    // persistent constraint set/native graph.
-    for reference in initial_fixed_refs {
+    // their initial placement. Temporary Fixed equations stay out of `owner`
+    // and the persistent native graph. Symmetric references are handled as
+    // exact driven anchors below, so they are excluded from this approximate
+    // equality-equation path.
+    let symmetric_constraints = constraints
+        .iter()
+        .filter(|constraint| {
+            constraint.enabled
+                && constraint.kind == ConstraintKind::Symmetric
+                && constraint.refs.len() == 3
+        })
+        .collect::<Vec<_>>();
+    let temporary_fixed_refs = initial_fixed_refs
+        .iter()
+        .copied()
+        .filter(|reference| {
+            !symmetric_constraints
+                .iter()
+                .any(|constraint| constraint.refs.contains(reference))
+        })
+        .collect::<Vec<_>>();
+    for reference in &temporary_fixed_refs {
+        if fixed_touches(reference.entity) {
+            continue;
+        }
+        // A transformed entity with a Horizontal/Vertical relation keeps
+        // only its end point where the transform put it; the rest re-aligns
+        // to the axis at the retained length (a rotated vertical line stays
+        // vertical below its moved end, as in the reference) instead of the
+        // whole-entity pin contradicting the axis and failing the solve.
+        let axis_pin = reference.marker.is_none().then(|| {
+            constraints.iter().find_map(|c| {
+                (c.enabled && matches!(c.kind, ConstraintKind::Horizontal | ConstraintKind::Vertical))
+                    .then(|| c.refs.iter().find(|r| r.entity == reference.entity))
+                    .flatten()
+                    .map(|r| match r.directional_axis() {
+                        Some(super::parametric_constraints::DirectionalAxis::TextBaseline) => {
+                            ParametricRef::point(r.entity, 0)
+                        }
+                        Some(_) => ParametricRef::center(r.entity),
+                        None => ParametricRef::point(
+                            r.entity,
+                            r.segment_index().map_or(1, |index| index as i32 + 1),
+                        ),
+                    })
+            })
+        })
+        .flatten();
+        let pinned = axis_pin.unwrap_or(*reference);
+        // The re-aligned entity keeps the length the transform gave it (a
+        // scaled vertical line stays scaled), not its pre-edit length.
+        if axis_pin.is_some() {
+            let segment = reference
+                .segment_index()
+                .or_else(|| {
+                    constraints.iter().find_map(|c| {
+                        c.refs
+                            .iter()
+                            .find(|r| r.entity == reference.entity)
+                            .and_then(|r| r.segment_index())
+                    })
+                });
+            let line = resolve_ref(document, &mut sys, &mut cache, *reference).and_then(|geometry| {
+                match (&geometry, segment) {
+                    (EntityGeom::Polyline { .. }, Some(index)) => geometry.line_segment(index),
+                    (EntityGeom::Line(line) | EntityGeom::Ray(line) | EntityGeom::XLine(line), _) => {
+                        Some(*line)
+                    }
+                    _ => None,
+                }
+            });
+            if let Some(line) = line {
+                let length = {
+                    let store = sys.store();
+                    let dx = store.get(line.p2.x) - store.get(line.p1.x);
+                    let dy = store.get(line.p2.y) - store.get(line.p1.y);
+                    (dx * dx + dy * dy).sqrt()
+                };
+                retain_segment_length(&mut sys, line.p1, line.p2, length, length);
+            }
+        }
         let temporary = ParametricConstraint {
             id: ConstraintId::MAX,
             kind: ConstraintKind::Fixed,
-            refs: vec![*reference],
+            refs: vec![pinned],
             driving_param: None,
             enabled: true,
             native_origin: None,
             rigid_points: Vec::new(),
             distance_direction_type: distance_direction_type::UNDIRECTED,
             distance_direction: None,
+            axis_direction: None,
             angle_sector: angle_sector::PARALLEL_COUNTERCLOCKWISE,
         };
         for constraint in build_constraint(
@@ -1986,6 +2487,7 @@ fn solve_scope(
             &temporary,
             None,
             None,
+            &HashMap::new(),
         ) {
             sys.add_constraint(constraint);
         }
@@ -1993,11 +2495,110 @@ fn solve_scope(
 
     let has_smooth = constraints.iter()
         .any(|constraint| constraint.enabled && constraint.kind == ConstraintKind::Smooth);
-    if cache.is_empty() && !has_smooth {
+    let has_spatial_concentric = constraints.iter().any(|constraint| {
+        constraint.enabled
+            && constraint.kind == ConstraintKind::Concentric
+            && !refs_share_supported_plane(document, &constraint.refs)
+            && concentric_refs_share_plane(document, &constraint.refs)
+    });
+    if cache.is_empty() && !has_smooth && !has_spatial_concentric {
         return None;
     }
 
     let mut anchors = driven_refs.to_vec();
+    for constraint in &symmetric_constraints {
+        if let Some(axis) = constraint.refs.get(2).copied() {
+            if !anchors.contains(&axis) {
+                anchors.push(axis);
+            }
+        }
+        for reference in initial_fixed_refs {
+            if constraint.refs[..2].contains(reference) && !anchors.contains(reference) {
+                anchors.push(*reference);
+            }
+        }
+    }
+    // Equal: the side that is not being edited follows the other's length
+    // or radius the way the reference does it — its start (a circle its
+    // center) and direction stay and only its end moves — so its size is
+    // not retained below, its other points are held and its direction is
+    // kept while the edit lasts. A chain of Equal relations follows along.
+    let edited = |handle: Handle| {
+        driven_refs.iter().any(|reference| reference.entity == handle)
+            || initial_fixed_refs.iter().any(|reference| reference.entity == handle)
+    };
+    let mut equal_followers: Vec<ParametricRef> = Vec::new();
+    let mut moving: Vec<Handle> = cache.keys().copied().filter(|handle| edited(*handle)).collect();
+    loop {
+        let before = equal_followers.len();
+        for constraint in &constraints {
+            if !constraint.enabled || constraint.kind != ConstraintKind::Equal {
+                continue;
+            }
+            let [a, b] = constraint.refs.as_slice() else { continue };
+            let follower = match (moving.contains(&a.entity), moving.contains(&b.entity)) {
+                (true, false) => *b,
+                (false, true) => *a,
+                _ => continue,
+            };
+            if !equal_followers.contains(&follower) {
+                equal_followers.push(follower);
+                moving.push(follower.entity);
+            }
+        }
+        if equal_followers.len() == before {
+            break;
+        }
+    }
+    for follower in &equal_followers {
+        let Some(geometry) = resolve_ref(document, &mut sys, &mut cache, *follower) else {
+            continue;
+        };
+        let mut hold = |anchor: ParametricRef| {
+            if !anchors.contains(&anchor) {
+                anchors.push(anchor);
+            }
+        };
+        let line = match &geometry {
+            EntityGeom::Line(line) => Some(*line),
+            EntityGeom::Polyline { .. } => follower
+                .segment_index()
+                .and_then(|index| geometry.line_segment(index)),
+            _ => None,
+        };
+        match &geometry {
+            EntityGeom::Circle(_) | EntityGeom::Arc(_) => {
+                hold(ParametricRef::center(follower.entity));
+            }
+            EntityGeom::Line(_) => hold(ParametricRef::point(follower.entity, 0)),
+            EntityGeom::Polyline { points, .. } => {
+                let moving_vertex = follower
+                    .segment_index()
+                    .map(|index| (index + 1) % points.len().max(1));
+                for index in (0..points.len()).filter(|index| Some(*index) != moving_vertex) {
+                    hold(ParametricRef::point(follower.entity, index as i32));
+                }
+            }
+            _ => {}
+        }
+        if let Some(line) = line {
+            let (dx, dy) = {
+                let store = sys.store();
+                (
+                    store.get(line.p2.x) - store.get(line.p1.x),
+                    store.get(line.p2.y) - store.get(line.p1.y),
+                )
+            };
+            if dx.hypot(dy) > f64::EPSILON {
+                let datum = GLine {
+                    p1: GPoint::new(sys.add_param(0.0, true), sys.add_param(0.0, true)),
+                    p2: GPoint::new(sys.add_param(dx, true), sys.add_param(dy, true)),
+                };
+                let parallel = ParallelConstraint::new(sys.store(), line, datum);
+                sys.add_constraint(Rc::new(parallel));
+            }
+        }
+    }
     if !retain_lengths {
         let mut axis_lines: Vec<_> = line_axes.into_iter().filter_map(|(reference, vertical)| {
             let geometry = cache.get(&reference.entity)?;
@@ -2121,9 +2722,17 @@ fn solve_scope(
     // endpoints. Other edits can retain line lengths as well.
     if retain_size {
         for (handle, geom) in &cache {
-            if initial_fixed_refs
-                .iter()
-                .any(|reference| reference.entity == *handle)
+            // A Fixed entity's size is whatever its pins say: whole → all
+            // pinned anyway, partial → the reference lets it resize (MOVE
+            // on a one-end-fixed line shortens it).
+            if fixed_touches(*handle)
+                || initial_fixed_refs
+                    .iter()
+                    .any(|reference| reference.entity == *handle && reference.marker.is_none())
+                || symmetric_constraints.iter().any(|constraint| {
+                    constraint.refs.get(2).is_some_and(|axis| axis.entity == *handle)
+                })
+                || equal_followers.iter().any(|follower| follower.entity == *handle)
             {
                 continue;
             }
@@ -2139,8 +2748,7 @@ fn solve_scope(
                         .get(handle)
                         .and_then(|entity| retained_line_length(entity, None))
                         .unwrap_or(current_length);
-                    let target = sys.add_param(length, true);
-                    sys.add_constraint(Rc::new(P2PDistance::new(line.p1, line.p2, target)));
+                    retain_segment_length(&mut sys, line.p1, line.p2, current_length, length);
                 }
                 EntityGeom::Polyline {
                     points,
@@ -2169,8 +2777,7 @@ fn solve_scope(
                             .get(handle)
                             .and_then(|entity| retained_line_length(entity, Some(index)))
                             .unwrap_or(current_length);
-                        let target = sys.add_param(length, true);
-                        sys.add_constraint(Rc::new(P2PDistance::new(a, b, target)));
+                        retain_segment_length(&mut sys, a, b, current_length, length);
                     }
                 }
                 EntityGeom::Circle(circle) => {
@@ -2284,6 +2891,18 @@ fn solve_scope(
         let EntityGeom::Ellipse(el) = geom else {
             continue;
         };
+        let symmetric = set.constraints.iter().any(|constraint| {
+            constraint.enabled
+                && constraint.kind == ConstraintKind::Symmetric
+                && constraint.refs.get(..2).is_some_and(|references| {
+                    references.iter().any(|reference| {
+                        reference.entity == *handle && reference.marker.is_none()
+                    })
+                })
+        });
+        if symmetric {
+            continue;
+        }
         let (cx, cy, fx, fy) = {
             let store = sys.store();
             (
@@ -2295,7 +2914,12 @@ fn solve_scope(
         };
         let directional = set.constraints.iter().any(|constraint| {
             constraint.enabled
-                && constraint.kind == ConstraintKind::Perpendicular
+                && matches!(
+                    constraint.kind,
+                    ConstraintKind::Horizontal
+                        | ConstraintKind::Vertical
+                        | ConstraintKind::Perpendicular
+                )
                 && constraint.refs.iter().any(|reference| {
                     reference.entity == *handle && reference.directional_axis().is_some()
                 })
@@ -2336,7 +2960,12 @@ fn solve_scope(
         };
         let directional = set.constraints.iter().any(|constraint| {
             constraint.enabled
-                && constraint.kind == ConstraintKind::Perpendicular
+                && matches!(
+                    constraint.kind,
+                    ConstraintKind::Horizontal
+                        | ConstraintKind::Vertical
+                        | ConstraintKind::Perpendicular
+                )
                 && constraint.refs.iter().any(|reference| {
                     reference.entity == *handle
                         && matches!(
@@ -2346,8 +2975,8 @@ fn solve_scope(
                 })
         });
         if directional && !retain_size {
-            let length = sys.add_param((x2 - x1).hypot(y2 - y1), true);
-            sys.add_constraint(Rc::new(P2PDistance::new(line.p1, line.p2, length)));
+            let length = (x2 - x1).hypot(y2 - y1);
+            retain_segment_length(&mut sys, line.p1, line.p2, length, length);
         } else if !directional {
             let dx = sys.add_param(x2 - x1, true);
             let dy = sys.add_param(y2 - y1, true);
@@ -2821,8 +3450,8 @@ fn solve_scope(
                 }
             }
             (EntityType::Spline(spline), EntityGeom::Spline { curve, control_z }) => {
-                let mut changed =
-                    spline.fit_points.len() > 0 || spline.control_points.len() != curve.poles.len();
+                let mut changed = crate::entities::spline::uses_fit_method(spline)
+                    || spline.control_points.len() != curve.poles.len();
                 let control_points: Vec<_> = curve
                     .poles
                     .iter()
@@ -2839,11 +3468,25 @@ fn solve_scope(
                     .collect();
                 if changed {
                     let mut updated = spline.clone();
+                    if crate::entities::spline::uses_fit_method(spline) {
+                        updated.cv_frame_visible = true;
+                    }
                     updated.degree = curve.degree as i32;
                     updated.knots = curve.knots.clone();
                     updated.control_points = control_points;
                     updated.weights = curve.weights.iter().map(|id| store.get(*id)).collect();
-                    updated.fit_points.clear();
+                    if !updated.fit_points.is_empty() {
+                        if let (Some(first), Some(point)) =
+                            (updated.fit_points.first_mut(), updated.control_points.first())
+                        {
+                            *first = *point;
+                        }
+                        if let (Some(last), Some(point)) =
+                            (updated.fit_points.last_mut(), updated.control_points.last())
+                        {
+                            *last = *point;
+                        }
+                    }
                     updated.begin_tangent = Vector3::ZERO;
                     updated.end_tangent = Vector3::ZERO;
                     updated.flags.rational = updated
@@ -2859,6 +3502,13 @@ fn solve_scope(
         }
     }
     apply_smooth_constraints(document, set, &mut results);
+    apply_spatial_concentric_constraints(
+        document,
+        set,
+        driven_refs,
+        initial_fixed_refs,
+        &mut results,
+    );
     Some((results, dof, conflicts))
 }
 
@@ -2871,13 +3521,8 @@ impl Scene {
         refs: &[ParametricRef],
         driving_param: Option<&super::named_parameters::DrivingValue>,
     ) -> Result<(), &'static str> {
-        if !refs_share_supported_plane(&self.document, refs) {
-            return Err(
-                "Constraint references must be supported entities on the same world-XY plane.",
-            );
-        }
         if kind == ConstraintKind::Smooth {
-            let [source_ref, target_ref] = refs else {
+            let Some((source_ref, target_ref, target_curve_ref)) = smooth_refs(refs) else {
                 return Err("Smooth requires one spline endpoint and one target endpoint.");
             };
             if source_ref.entity == target_ref.entity {
@@ -2895,13 +3540,16 @@ impl Scene {
                 Some(1) => cadkernel::space::SplineEnd::End,
                 _ => return Err("Smooth requires a spline endpoint."),
             };
-            let Some(target_marker) = target_ref.marker else {
+            let Some(_) = target_ref.marker else {
                 return Err("Smooth requires a target endpoint.");
             };
             let Some(target) = self.document.get_entity(target_ref.entity) else {
                 return Err("Smooth target does not exist.");
             };
-            let Some(target_jet) = smooth_target_jet(target, target_marker) else {
+            if !smooth_refs_share_plane(&self.document, source_ref, target_curve_ref) {
+                return Err("Smooth requires both curves to lie on the same plane.");
+            }
+            let Some(target_jet) = smooth_target_jet(target, target_ref, target_curve_ref) else {
                 return Err("The selected target does not support endpoint smoothing.");
             };
             let Some(curve) = crate::entities::spline::nurbs3(spline) else {
@@ -2911,6 +3559,26 @@ impl Scene {
                 return Err("The selected spline cannot satisfy curvature continuity.");
             }
             return Ok(());
+        }
+        if kind == ConstraintKind::Concentric {
+            if !concentric_refs_share_plane(&self.document, refs) {
+                return Err(
+                    "Concentric requires two supported circular curves on the same plane.",
+                );
+            }
+            if !refs_share_supported_plane(&self.document, refs) {
+                if refs[0].entity == refs[1].entity {
+                    return Err(
+                        "Concentric cannot move two curved segments of the same object on this plane.",
+                    );
+                }
+                return Ok(());
+            }
+        }
+        if !refs_share_supported_plane(&self.document, refs) {
+            return Err(
+                "Constraint references must be supported entities on the same world-XY plane.",
+            );
         }
         let validation_target = match driving_param {
             Some(super::named_parameters::DrivingValue::Named(name))
@@ -2930,6 +3598,7 @@ impl Scene {
             rigid_points: Vec::new(),
             distance_direction_type: 0,
             distance_direction: None,
+            axis_direction: None,
             angle_sector: angle_sector::PARALLEL_COUNTERCLOCKWISE,
         };
         let mut system = System::new();
@@ -2942,6 +3611,7 @@ impl Scene {
             &candidate,
             None,
             None,
+            &HashMap::new(),
         )
         .is_empty()
         {
@@ -3039,22 +3709,25 @@ impl Scene {
             }
         }
 
+        // Pre-edit images of everything this transaction touched: what a
+        // persistent Fixed pins to, and (under CONSTRAINTSOLVEMODE) what
+        // sizes are retained from.
+        let mut originals: HashMap<Handle, std::sync::Arc<EntityType>> = self
+            .undo_recording
+            .as_ref()
+            .into_iter()
+            .flat_map(|recording| recording.before.iter())
+            .filter_map(|(handle, entity)| {
+                entity
+                    .as_ref()
+                    .map(|entity| (*handle, std::sync::Arc::clone(entity)))
+            })
+            .collect();
+        for (handle, entity) in retained_originals {
+            originals.insert(*handle, std::sync::Arc::new(entity.clone()));
+        }
         let retained_before: HashMap<Handle, std::sync::Arc<EntityType>> = if retain_size {
-            let mut retained: HashMap<Handle, std::sync::Arc<EntityType>> = self
-                .undo_recording
-                .as_ref()
-                .into_iter()
-                .flat_map(|recording| recording.before.iter())
-                .filter_map(|(handle, entity)| {
-                    entity
-                        .as_ref()
-                        .map(|entity| (*handle, std::sync::Arc::clone(entity)))
-                })
-                .collect();
-            for (handle, entity) in retained_originals {
-                retained.insert(*handle, std::sync::Arc::new(entity.clone()));
-            }
-            retained
+            originals.clone()
         } else {
             HashMap::new()
         };
@@ -3078,6 +3751,7 @@ impl Scene {
                 true,
                 &retained_before,
                 initial_fixed_refs,
+                &originals,
             ) else {
                 continue;
             };
@@ -3089,6 +3763,19 @@ impl Scene {
                 self.parametric_constraints[i].conflicts.clear();
             }
             for (handle, new_entity) in solved {
+                // An edit the constraints can only satisfy by collapsing the
+                // entity (a rotated line whose start is fixed and direction
+                // constrained) is refused: the entity goes back to its
+                // pre-edit shape, as the reference does.
+                let new_entity = match originals.get(&handle) {
+                    Some(original)
+                        if collapsed_by_solve(&new_entity)
+                            && !collapsed_by_solve(original.as_ref()) =>
+                    {
+                        original.as_ref().clone()
+                    }
+                    _ => new_entity,
+                };
                 if let Some(before) = self.document.get_entity_arc(handle) {
                     self.record_undo_before(handle, Some(before));
                 }
@@ -3139,6 +3826,7 @@ impl Scene {
                 false,
                 &retained_before,
                 &[],
+                &retained_before,
             )
             else {
                 continue;
@@ -3158,6 +3846,17 @@ mod tests {
     use super::Scene;
     use acadrust::entities::EntityType;
     use acadrust::types::Vector3;
+
+    fn spatial_circle(center: Vector3, radius: f64) -> acadrust::entities::Circle {
+        let normal = Vector3::UNIT_Y;
+        let (x, y, z) = crate::scene::view::transform::wcs_point_to_ocs(
+            (center.x, center.y, center.z),
+            (normal.x, normal.y, normal.z),
+        );
+        let mut circle = acadrust::entities::Circle::from_coords(x, y, z, radius);
+        circle.normal = normal;
+        circle
+    }
 
     #[test]
     fn polyline_constraint_order_follows_stored_vertices_for_open_and_closed_polylines() {
@@ -3819,5 +4518,174 @@ mod tests {
         assert!((jet.point[1] - 1.0).abs() < 1e-9);
         assert!(jet.tangent[1].abs() < 1e-9, "jet={jet:?}");
         assert!(cadkernel::space::Vec3::from(jet.curvature).length() < 5e-3);
+    }
+
+    #[test]
+    fn smooth_constraint_uses_the_selected_polyline_arc_curvature() {
+        let mut scene = Scene::new();
+        let mut target = acadrust::entities::LwPolyline::new();
+        target.vertices = vec![
+            acadrust::entities::LwVertex::with_bulge(
+                acadrust::types::Vector2::new(0.0, 0.0),
+                1.0,
+            ),
+            acadrust::entities::LwVertex::from_coords(10.0, 0.0),
+        ];
+        let target = scene.add_entity(EntityType::LwPolyline(target));
+        let mut spline = acadrust::entities::Spline::new();
+        spline.degree = 3;
+        spline.control_points = vec![
+            Vector3::new(2.0, 1.0, 0.0),
+            Vector3::new(3.0, 2.0, 0.0),
+            Vector3::new(4.0, 3.0, 0.0),
+            Vector3::new(5.0, 3.0, 0.0),
+        ];
+        spline.knots = cadkernel::space::clamped_uniform_knots(3, 4);
+        let spline = scene.add_entity(EntityType::Spline(spline));
+        scene
+            .parametric_constraint_set_mut(ParametricScope::ModelSpace)
+            .add(
+                ConstraintKind::Smooth,
+                vec![
+                    ParametricRef::point(spline, 0),
+                    ParametricRef::point(target, 0),
+                    ParametricRef::segment(target, 0),
+                ],
+                None,
+            );
+
+        scene.bump_entities(&[(target, super::ChangeKind::Modified)]);
+
+        let EntityType::Spline(spline) = scene.document.get_entity(spline).unwrap() else {
+            panic!("expected spline");
+        };
+        let curve = crate::entities::spline::nurbs3(spline).unwrap();
+        let jet =
+            cadkernel::space::CurveJet::from_nurbs(&curve, cadkernel::space::SplineEnd::Start)
+                .unwrap();
+        assert!(cadkernel::space::Vec3::from(jet.point).length() < 1.0e-9);
+        assert!(jet.tangent[0].abs() < 1.0e-9, "jet={jet:?}");
+        assert!(
+            (cadkernel::space::Vec3::from(jet.curvature).length() - 0.2).abs() < 2.0e-4,
+            "jet={jet:?}"
+        );
+    }
+
+    #[test]
+    fn smooth_constraint_accepts_a_stale_normal_on_an_arbitrary_plane() {
+        let mut scene = Scene::new();
+        let target = scene.add_entity(EntityType::Line(
+            acadrust::entities::Line::from_points(
+                Vector3::new(0.0, 0.0, 1.0),
+                Vector3::new(5.0, 0.0, 1.0),
+            ),
+        ));
+        let mut source = acadrust::entities::Spline::new();
+        source.degree = 3;
+        source.normal = Vector3::UNIT_Z;
+        source.control_points = vec![
+            Vector3::new(1.0, 0.0, 0.0),
+            Vector3::new(2.0, 0.0, 2.0),
+            Vector3::new(4.0, 0.0, 2.0),
+            Vector3::new(5.0, 0.0, 3.0),
+        ];
+        source.knots = cadkernel::space::clamped_uniform_knots(3, 4);
+        let source = scene.add_entity(EntityType::Spline(source));
+        let refs = vec![
+            ParametricRef::point(source, 0),
+            ParametricRef::point(target, 0),
+        ];
+        assert!(scene
+            .validate_parametric_constraint(ConstraintKind::Smooth, &refs, None)
+            .is_ok());
+        scene
+            .parametric_constraint_set_mut(ParametricScope::ModelSpace)
+            .add(ConstraintKind::Smooth, refs, None);
+
+        scene.bump_entities(&[(target, super::ChangeKind::Modified)]);
+
+        let EntityType::Spline(source) = scene.document.get_entity(source).unwrap() else {
+            panic!("expected spline");
+        };
+        let curve = crate::entities::spline::nurbs3(source).unwrap();
+        let jet =
+            cadkernel::space::CurveJet::from_nurbs(&curve, cadkernel::space::SplineEnd::Start)
+                .unwrap();
+        assert!(cadkernel::space::Vec3::from(jet.point)
+            .distance(cadkernel::space::Vec3::new(0.0, 0.0, 1.0))
+            < 1.0e-9);
+        assert!(jet.tangent[1].abs() < 1.0e-9 && jet.tangent[2].abs() < 1.0e-9);
+    }
+
+    #[test]
+    fn spatial_concentric_initial_solve_keeps_the_first_circle_fixed() {
+        let mut scene = Scene::new();
+        let first = scene.add_entity(EntityType::Circle(spatial_circle(Vector3::ZERO, 2.0)));
+        let second = scene.add_entity(EntityType::Circle(spatial_circle(
+            Vector3::new(5.0, 0.0, 3.0),
+            4.0,
+        )));
+        let first_ref = ParametricRef::center(first);
+        let second_ref = ParametricRef::center(second);
+        scene
+            .parametric_constraint_set_mut(ParametricScope::ModelSpace)
+            .add(
+                ConstraintKind::Concentric,
+                vec![first_ref, second_ref],
+                None,
+            );
+
+        scene.bump_entities_with_initial_parametric_policy(
+            &[
+                (first, super::ChangeKind::Modified),
+                (second, super::ChangeKind::Modified),
+            ],
+            &[first_ref],
+            true,
+        );
+
+        let EntityType::Circle(first_circle) = scene.document.get_entity(first).unwrap() else {
+            panic!("expected circle");
+        };
+        let EntityType::Circle(second_circle) = scene.document.get_entity(second).unwrap() else {
+            panic!("expected circle");
+        };
+        assert!(first_circle.center_wcs().length() < 1.0e-9);
+        assert!(second_circle.center_wcs().length() < 1.0e-9);
+        assert!((second_circle.radius - 4.0).abs() < 1.0e-12);
+    }
+
+    #[test]
+    fn spatial_concentric_chain_follows_the_driven_end() {
+        let mut scene = Scene::new();
+        let handles = [1.0, 2.0, 3.0].map(|radius| {
+            scene.add_entity(EntityType::Circle(spatial_circle(Vector3::ZERO, radius)))
+        });
+        let set = scene.parametric_constraint_set_mut(ParametricScope::ModelSpace);
+        set.add(
+            ConstraintKind::Concentric,
+            vec![ParametricRef::center(handles[0]), ParametricRef::center(handles[1])],
+            None,
+        );
+        set.add(
+            ConstraintKind::Concentric,
+            vec![ParametricRef::center(handles[1]), ParametricRef::center(handles[2])],
+            None,
+        );
+        let driven_center = Vector3::new(8.0, 0.0, -3.0);
+        *scene.document.get_entity_mut(handles[2]).unwrap() =
+            EntityType::Circle(spatial_circle(driven_center, 3.0));
+
+        scene.bump_entities_with_parametric_driven(
+            &[(handles[2], super::ChangeKind::Modified)],
+            &[ParametricRef::whole(handles[2])],
+        );
+
+        for handle in handles {
+            let EntityType::Circle(circle) = scene.document.get_entity(handle).unwrap() else {
+                panic!("expected circle");
+            };
+            assert!((circle.center_wcs() - driven_center).length() < 1.0e-9);
+        }
     }
 }

@@ -48,15 +48,18 @@ pub enum PanelId {
     /// in the dock, and it renders natively on both X11 and Wayland.
     Pi,
     ExternalReferences,
+    /// Outline of the drawing's origin planes, open sketch and solid bodies.
+    Browser,
 }
 
 impl PanelId {
     /// Every dockable panel, in stable order (settings healing iterates this).
-    pub const ALL: [PanelId; 4] = [
+    pub const ALL: [PanelId; 5] = [
         PanelId::Properties,
         PanelId::BlockPalette,
         PanelId::Pi,
         PanelId::ExternalReferences,
+        PanelId::Browser,
     ];
 
     /// Localized-friendly display name used by the collapsed/edge chrome.
@@ -66,6 +69,7 @@ impl PanelId {
             PanelId::BlockPalette => "Block Palette",
             PanelId::Pi => "Pi 助手",
             PanelId::ExternalReferences => "External References",
+            PanelId::Browser => "Browser",
         }
     }
 
@@ -77,6 +81,7 @@ impl PanelId {
             // A chat column should not steal the drawing area by default.
             PanelId::Pi => 340.0,
             PanelId::ExternalReferences => 460.0,
+            PanelId::Browser => 230.0,
         }
     }
 

@@ -33,6 +33,7 @@ impl OpenCADStudio {
             Some(K::ScaleManager) => crate::tr!("modal", "scale-manager"),
             Some(K::AnnoObjectScale) => crate::tr!("modal", "annotation-object-scale"),
             Some(K::OcsmFramePicker) => "OCSM 图框插入".to_string(),
+            Some(K::Hyperlink) => crate::t!("Hyperlink").into_owned(),
             Some(K::InsertTable) => crate::t!("Insert Table").into_owned(),
             Some(K::DataLinkManager) => crate::t!("Data Link Manager").into_owned(),
             Some(K::DataExtraction) => crate::t!("Data Extraction Wizard").into_owned(),
@@ -57,6 +58,7 @@ impl OpenCADStudio {
             Some(K::MissingFonts) => crate::t!("Missing fonts").into_owned(),
             Some(K::RecoveryPrompt) => crate::tr!("modal", "recovery-prompt"),
             Some(K::GpuWarning) => crate::tr!("gpu", "title"),
+            Some(K::XrefHelp) => crate::t!("Reference Manager Help").into_owned(),
             None => String::new(),
         }
     }
@@ -67,7 +69,7 @@ impl OpenCADStudio {
         sized_flow(
             extra,
             940,
-            620,
+            690,
             |flow| {
                 crate::ui::window::plot::view_window(
                     &self.plot_dialog,
@@ -85,6 +87,9 @@ impl OpenCADStudio {
         Some(match self.active_modal? {
             super::super::ModalKind::About => {
                 automatic_flow(ex, crate::ui::window::about::view_window)
+            }
+            super::super::ModalKind::XrefHelp => {
+                automatic_flow(ex, crate::ui::window::xref_help::view_window)
             }
             super::super::ModalKind::Shortcuts => {
                 // Keys claimed by two rows — the cells turn red and a
@@ -261,7 +266,10 @@ impl OpenCADStudio {
                     },
                 )
             }
-            super::super::ModalKind::Options => sized_flow(
+            super::super::ModalKind::Options => {
+                let dirty = self.options_dirty();
+                let close_confirm = self.options_close_confirm;
+                sized_flow(
                 ex,
                 880,
                 620,
@@ -285,6 +293,7 @@ impl OpenCADStudio {
                         crate::ui::window::options::AppPrefs {
                             savetime_min: self.savetime_min,
                             backup_on_save: self.backup_on_save,
+                            page_setup_on_new_layout: self.plot_dialog.page_setup_on_new_layout,
                             textfill: crate::scene::text::sdf_atlas::textfill(),
                             cliprompt_lines: self.cliprompt_lines,
                             commandline_fade_ms: self.commandline_fade_ms,
@@ -298,6 +307,8 @@ impl OpenCADStudio {
                             show_viewcube: self.show_viewcube,
                             show_ucs_icon: self.show_ucs_icon,
                             ucs_icon_at_origin: self.ucs_icon_at_origin,
+                            right_click_mode: self.right_click_mode,
+                            right_click_hold_ms: self.right_click_hold_ms,
                         },
                         crate::ui::window::options::spacemouse::view(
                             self.spacemouse_preferences, self.spacemouse.status(),
@@ -353,10 +364,14 @@ impl OpenCADStudio {
                         &self.model_bg_input,
                         &self.paper_bg_input,
                         &self.desk_bg_input,
+                        self.bg_picker,
+                        dirty,
+                        close_confirm,
                         flow,
                     )
                 },
-            ),
+                )
+            }
             super::super::ModalKind::DraftingSettings => {
                 let state = self.drafting_settings_state.as_ref();
                 let dirty = self.drafting_settings_dirty();
@@ -1670,6 +1685,14 @@ impl OpenCADStudio {
                     )
                 },
             ),
+            super::super::ModalKind::Hyperlink => sized_flow(ex, 560, 260, |flow| {
+                hyperlink_dialog_window(
+                    &self.hyperlink_editor_url,
+                    &self.hyperlink_editor_description,
+                    self.hyperlink_editor_mixed,
+                    flow,
+                )
+            }),
             super::super::ModalKind::AttributeEditor => {
                 let doc = &self.tabs[self.active_tab].scene.document;
                 let layers: Vec<String> = doc.layers.iter().map(|l| l.name.clone()).collect();
@@ -1800,6 +1823,80 @@ fn dialog_muted_text_style(theme: &Theme) -> iced::widget::text::Style {
     iced::widget::text::Style {
         color: Some(theme.palette().background.base.text.scale_alpha(0.68)),
     }
+}
+
+fn hyperlink_dialog_window<'a>(
+    url: &'a str,
+    description: &'a str,
+    mixed: bool,
+    sizing: crate::ui::modal::ModalSizing,
+) -> Element<'a, Message> {
+    let label = |value: Cow<'static, str>| {
+        text(value)
+            .size(11)
+            .style(dialog_muted_text_style)
+            .width(90)
+    };
+    let mut items: Vec<Element<'a, Message>> = Vec::new();
+    if mixed {
+        items.push(
+            text(t!("Selected objects have different hyperlink values."))
+                .size(11)
+                .style(dialog_muted_text_style)
+                .into(),
+        );
+        items.push(Space::new().height(8).into());
+    }
+    items.push(
+        row![
+            label(t!("URL:")),
+            iced::widget::text_input("https://", url)
+                .on_input(Message::HyperlinkUrlChanged)
+                .size(13)
+                .padding([5, 8])
+                .width(Fill),
+        ]
+        .spacing(8)
+        .align_y(iced::Alignment::Center)
+        .width(sizing.width)
+        .into(),
+    );
+    items.push(Space::new().height(8).into());
+    items.push(
+        row![
+            label(t!("Description:")),
+            iced::widget::text_input("", description)
+                .on_input(Message::HyperlinkDescriptionChanged)
+                .size(13)
+                .padding([5, 8])
+                .width(Fill),
+        ]
+        .spacing(8)
+        .align_y(iced::Alignment::Center)
+        .width(sizing.width)
+        .into(),
+    );
+    items.push(Space::new().height(Fill).into());
+    items.push(
+        row![
+            dialog_button(t!("Remove"), Message::HyperlinkRemove, button::danger),
+            Space::new().width(Fill),
+            dialog_button(t!("Cancel"), Message::HyperlinkCancel, button::secondary),
+            Space::new().width(8),
+            dialog_button(t!("OK"), Message::HyperlinkApply, button::primary),
+        ]
+        .align_y(iced::Alignment::Center)
+        .into(),
+    );
+    container(
+        column(items)
+            .spacing(0)
+            .width(sizing.width)
+            .height(sizing.height),
+    )
+    .style(dialog_body_style)
+    .padding([14, 16])
+    .into()
 }
 
 /// Compact Save-As options dialog: pick the format/version and a default file

@@ -18,6 +18,7 @@ mod dimension_preview_tests;
 mod document;
 mod drafting_settings;
 pub(crate) mod expr_eval;
+mod options_session;
 mod find_replace;
 pub(crate) mod helpers;
 mod history;
@@ -88,6 +89,17 @@ pub const HOVER_DWELL_MS: u128 = 500;
 /// Dense resident sets also retain the previous rollover while moving; this
 /// threshold gates that extra redraw-avoidance behavior.
 pub const HOVER_DWELL_DENSE_WIRES: usize = 50_000;
+
+/// Keyboard navigation inside the open right-click context menu.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ContextMenuNav {
+    Up,
+    Down,
+    /// Pick the highlighted row (or the default row when none is highlighted).
+    Enter,
+    /// Pick the next row whose mnemonic letter matches.
+    Mnemonic(char),
+}
 
 /// Open multi-functional-grip popup state.
 #[derive(Clone, Debug)]
@@ -523,6 +535,10 @@ pub(super) struct OpenCADStudio {
     double_click_block_refedit: bool,
     /// Open ATTEDIT when double-clicking a block with attributes.
     double_click_block_attedit: bool,
+    /// What a right-click in the drawing area does (SHORTCUTMENU).
+    right_click_mode: settings::RightClickMode,
+    /// Time-sensitive right-click hold threshold, ms (SHORTCUTMENUDURATION).
+    right_click_hold_ms: i32,
     /// Selected-object count past which grips stop being generated
     /// (GRIPOBJLIMIT, 0..=32767; 0 = no limit).
     grip_object_limit: i32,
@@ -547,10 +563,23 @@ pub(super) struct OpenCADStudio {
     snap_angle_deg: f32,
     /// Show grid lines in the viewport (F7).
     show_grid: bool,
+    /// GRIDUNIT X/Y display spacing backing the DSettings grid-resize inputs.
+    pub grid_spacing_x: f32,
+    pub grid_spacing_y: f32,
+    /// GRIDMAJOR: every Nth line draws as a brighter major line.
+    pub grid_major_every: u32,
+    /// Adaptive grid: scale GRIDUNIT up by 5x steps to stay readable.
+    pub grid_adaptive: bool,
+    /// Display the grid beyond LIMITS (infinite) instead of clipping to them.
+    pub grid_beyond_limits: bool,
     /// Dynamic input overlay (F12): show coordinate tooltip near cursor.
     dyn_input: bool,
     /// Currently visible page in the application Options dialog.
     options_tab: crate::ui::window::options::OptionsTab,
+    /// The Options window's commit point (see `options_session`).
+    options_saved: Option<options_session::OptionsSnapshot>,
+    /// Close was pressed with unapplied changes; the discard guard is up.
+    options_close_confirm: bool,
     spacemouse: crate::input::spacemouse::Service,
     spacemouse_preferences: crate::input::spacemouse::Preferences,
     spacemouse_paused: bool,
@@ -583,6 +612,7 @@ pub(super) struct OpenCADStudio {
     pub constraint_solve_mode: bool,
     pub constraint_infer: bool,
     pub constraint_bar_display: i16,
+    pub constraint_bar_mode: i16,
     /// Minutes between autosaves to a `.sv$` recovery file (SAVETIME command);
     /// 0 disables autosave.
     pub savetime_min: i32,
@@ -716,6 +746,12 @@ pub(super) struct OpenCADStudio {
     pub(crate) show_block_palette: bool,
     /// Docked External References panel visibility (EXTERNALREFERENCES).
     pub(crate) show_external_references: bool,
+    /// Whether the Browser panel is shown. Off until BROWSER opens it, so
+    /// the default layout is unchanged for existing users.
+    pub(crate) show_browser: bool,
+    /// Which viewport background the colour wheel is editing, or `None` when
+    /// it is closed. One slot, because only one wheel can be open at a time.
+    pub(crate) bg_picker: Option<BgTarget>,
     /// General edge-stack dock layout for the side panels.
     pub(crate) dock: crate::ui::dock::DockState,
     /// Which panel is currently floated at full height (hovered, or a pinned
@@ -779,6 +815,12 @@ pub(super) struct OpenCADStudio {
     /// The open in-canvas modal dialog, if any (Plan B: shared overlay instead
     /// of OS windows).
     active_modal: Option<ModalKind>,
+    /// Selection and staged values owned by the Properties hyperlink dialog.
+    hyperlink_editor_handles: Vec<acadrust::Handle>,
+    hyperlink_editor_url: String,
+    hyperlink_editor_description: String,
+    hyperlink_editor_mixed: bool,
+    hyperlink_editor_dirty: bool,
     pending_startup_modals: std::collections::VecDeque<ModalKind>,
     /// What is drawing the scene, once the first frame has told us. Drives
     /// the graphics warning (popup, status-bar pill, command line).
@@ -1424,6 +1466,14 @@ pub struct SaveOutcome {
     refreshed_preview: Option<Option<acadrust::Preview>>,
     result: Result<(), crate::io::SaveFailure>,
 }
+/// Which viewport background a colour-wheel session is editing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BgTarget {
+    Model,
+    Paper,
+    Desk,
+}
+
 /// Active page in the shared CAD colour picker.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ColorPickerTab {
@@ -1847,6 +1897,8 @@ pub enum ModalKind {
     AnnoObjectScale,
     /// OCSMechanical 图框选择对话框（插件 opencad.ocsm 触发）。
     OcsmFramePicker,
+    /// URL/description collection editor opened by the Hyperlink property row.
+    Hyperlink,
     InsertTable,
     DataLinkManager,
     DataExtraction,
@@ -1854,6 +1906,8 @@ pub enum ModalKind {
     /// means and what usually fixes it. Queued once per verdict; the status
     /// bar's ⚠ pill reopens it.
     GpuWarning,
+    /// Reference Manager help window (toolbar Help button).
+    XrefHelp,
 }
 
 /// A property group controlled by a layer state's restore mask.
@@ -2051,6 +2105,8 @@ pub enum Message {
     /// Mid Between 2 Points from the snap menu: modal 2-pick modifier over
     /// the active point prompt.
     SnapOverrideMtp,
+    /// Snap Overrides ▸ None: the next pick ignores object snaps.
+    SnapOverrideNone,
     /// Close the one-shot snap override menu without picking.
     SnapOverrideClose,
     /// Open a path from the Start tab's recent-documents list (skips the
@@ -2131,6 +2187,12 @@ pub enum Message {
     ModelSpaceModeChanged(config::ModelSpaceMode),
     /// Change Model Space custom background color as hex or empty for default.
     ModelSpaceBgChanged(String),
+    /// Open the colour wheel on one of the viewport backgrounds.
+    BgPickerOpen(BgTarget),
+    /// Dismiss the wheel, changing nothing.
+    BgPickerCancel,
+    /// Accept the wheel's colour for whichever background it was opened on.
+    BgPickerSubmit(iced::Color),
     /// Change Paper Space custom sheet background color as hex or empty for default.
     PaperSpaceBgChanged(String),
     /// Change Paper Space desk surround background (#RRGGBB).
@@ -2172,6 +2234,10 @@ pub enum Message {
     SaveTimeChanged(i32),
     /// Toggle keeping a `.bak` copy when overwriting a drawing (ISAVEBAK).
     BackupOnSaveChanged(bool),
+    /// A drawing was picked to import page setups from (`PSETUPIN`).
+    PageSetupImportFile(std::path::PathBuf),
+    /// Options: open the Plot / Page Setup dialog for every new layout.
+    PageSetupOnNewLayoutChanged(bool),
     /// Toggle filled TrueType glyphs (TEXTFILL).
     TextFillChanged(bool),
     /// Change how many prompt lines sit above the command window (CLIPROMPTLINES).
@@ -2182,6 +2248,10 @@ pub enum Message {
     ZoomWheelReversedChanged(bool),
     /// Change how far one wheel notch zooms (ZOOMFACTOR, 3..=100).
     ZoomFactorChanged(i32),
+    /// Options → User Preferences: right-click behaviour (SHORTCUTMENU).
+    RightClickModeChanged(settings::RightClickMode),
+    /// Options → User Preferences: time-sensitive hold threshold, ms.
+    RightClickHoldMsChanged(i32),
     /// Toggle TEXTEDIT ending after one object (TEXTEDITMODE).
     TextEditModeChanged(bool),
     /// Toggle continued dimensions inheriting the base style (DIMCONTINUEMODE).
@@ -2476,6 +2546,8 @@ pub enum Message {
     XrefManagerRefreshMenu,
     /// Toggle the Change Path dropdown menu.
     XrefManagerPathMenu,
+    /// Open the Reference Manager help window.
+    XrefHelpOpen,
     /// Close all palette dropdown menus (overlay dismissal).
     XrefManagerDismissMenus,
     /// Open the file picker for Select New Path (anchor entry).
@@ -2681,6 +2753,13 @@ pub enum Message {
     ScaleManagerOpen,
     /// Open the Annotation Object Scale dialog for the current single selection.
     AnnoObjectScaleOpen,
+    /// Open and edit the selected objects' PE_URL hyperlink collection.
+    PropHyperlinkOpen,
+    HyperlinkUrlChanged(String),
+    HyperlinkDescriptionChanged(String),
+    HyperlinkApply,
+    HyperlinkRemove,
+    HyperlinkCancel,
     /// Toggle whether the dialog's object has a representation for this scale.
     AnnoObjectScaleToggle(String),
     /// Select a scale row in the manager (loads it into the editor).
@@ -2793,6 +2872,11 @@ pub enum Message {
     DraftingSettingsToggleSnap,
     DraftingSettingsSnapXChanged(String),
     DraftingSettingsSnapYChanged(String),
+    DraftingSettingsGridXChanged(String),
+    DraftingSettingsGridYChanged(String),
+    DraftingSettingsGridMajorChanged(String),
+    DraftingSettingsToggleAdaptiveGrid,
+    DraftingSettingsToggleBeyondLimits,
     DraftingSettingsToggleEqualSnap,
     DraftingSettingsToggleIsometric,
     DraftingSettingsSetIsoPlane(crate::app::settings::IsoPlane),
@@ -2814,6 +2898,14 @@ pub enum Message {
     DraftingSettingsClose,
     DraftingSettingsCloseDiscard,
     DraftingSettingsCloseKeep,
+    /// Options window: commit the changes made so far.
+    OptionsApply,
+    /// Options window: commit and close.
+    OptionsOk,
+    /// Options window: close, asking first when changes would be lost.
+    OptionsClose,
+    OptionsCloseDiscard,
+    OptionsCloseKeep,
     AutoConstrainSelectRow(usize),
     AutoConstrainToggleKind(settings::AutoConstraintKind),
     AutoConstrainMoveUp,
@@ -3310,9 +3402,15 @@ pub enum Message {
     TextInlineInput(String),
     /// Commit the editor: create or update the TEXT entity.
     TextInlineOk,
-    // ── Draw Order context menu ─────────────────────────────────────────
-    /// Toggle the Draw Order sub-items in the viewport context menu.
-    DrawOrderSubmenuToggle,
+    // ── Viewport right-click context menu ───────────────────────────────
+    /// A context-menu row was picked (mouse or keyboard). Closes the menu and
+    /// runs the row's action through the same message the equivalent typed
+    /// input / shortcut would have produced.
+    ContextMenuPick(crate::ui::popup::context_menu::MenuAction),
+    /// Expand / collapse an accordion submenu of the open context menu.
+    ContextMenuSubmenuToggle(crate::ui::popup::context_menu::SubmenuId),
+    /// Keyboard navigation inside the open context menu.
+    ContextMenuNavigate(ContextMenuNav),
     /// Begin an interactive reference-object pick to move the current
     /// selection above (`true`) or below (`false`) the picked object.
     DrawOrderPickRef(bool),
@@ -3409,7 +3507,9 @@ pub enum Message {
     /// Open file dialog to load a CTB/STB plot style table.
     PlotStyleLoad,
     /// Callback when the user picks (or cancels) a CTB/STB file.
-    PlotStyleLoaded(Option<crate::io::plot_style::PlotStyleTable>),
+    /// The Load… picker finished: a table, nothing (cancelled), or why the
+    /// file could not be read.
+    PlotStyleLoaded(Result<Option<crate::io::plot_style::PlotStyleTable>, String>),
     /// Clear the active plot style table.
     PlotStyleClear,
     /// Open/close the Plot Style panel.
@@ -3841,6 +3941,8 @@ impl OpenCADStudio {
             pick_box: 3,
             double_click_block_refedit: false,
             double_click_block_attedit: true,
+            right_click_mode: settings::RightClickMode::ShortcutMenu,
+            right_click_hold_ms: 250,
             grip_object_limit: settings::DEFAULT_GRIP_OBJECT_LIMIT,
             ncopy_bind: false,
             cursor_type: settings::CursorType::Crosshair,
@@ -3853,8 +3955,15 @@ impl OpenCADStudio {
             iso_plane: settings::IsoPlane::Left,
             snap_angle_deg: 0.0,
             show_grid: false,
+            grid_spacing_x: 10.0,
+            grid_spacing_y: 10.0,
+            grid_major_every: 5,
+            grid_adaptive: true,
+            grid_beyond_limits: true,
             dyn_input: true,
             options_tab: crate::ui::window::options::OptionsTab::General,
+            options_saved: None,
+            options_close_confirm: false,
             spacemouse: {
                 let service = crate::input::spacemouse::Service::default();
                 service.set_actions(navigation::actions());
@@ -3881,6 +3990,7 @@ impl OpenCADStudio {
             constraint_solve_mode: true,
             constraint_infer: false,
             constraint_bar_display: 3,
+            constraint_bar_mode: 4095,
             savetime_min: 10,
             default_bg_color: None,
             default_paper_bg_color: None,
@@ -3925,6 +4035,8 @@ impl OpenCADStudio {
             show_pi_panel: false,
             show_block_palette: false,
             show_external_references: false,
+            show_browser: false,
+            bg_picker: None,
             block_palette: Default::default(),
             xref_manager: Default::default(),
             dock: Default::default(),
@@ -3954,6 +4066,11 @@ impl OpenCADStudio {
             active_modal: None,
             ocsm_frame_picker: None,
             ocsm_pending_frame_selection: None,
+            hyperlink_editor_handles: Vec::new(),
+            hyperlink_editor_url: String::new(),
+            hyperlink_editor_description: String::new(),
+            hyperlink_editor_mixed: false,
+            hyperlink_editor_dirty: false,
             pending_startup_modals: std::collections::VecDeque::new(),
             gpu_status: crate::scene::pipeline::GpuStatus::Unknown,
             gpu_status_generation: 0,
@@ -4367,6 +4484,17 @@ impl OpenCADStudio {
         // `--read-only` disables saving. `--script` queues command lines.
         let cfg = crate::cli::gui_config();
         s.read_only = cfg.read_only;
+        // GPU backend / renderer fallback: the resolver ran before iced
+        // booted, so surface its verdict here where the user can see it.
+        if let Some(notice) = cfg.gpu_fallback_notice {
+            s.command_line.push_warning(&notice);
+            crate::scene::pipeline::report_gpu_line(&format!("[gpu] {notice}"));
+        }
+        if cfg.gpu_compat_auto {
+            let notice = crate::gpu_backend::compat_notice();
+            s.command_line.push_warning(&notice);
+            crate::scene::pipeline::report_gpu_line(&format!("[gpu] {notice}"));
+        }
         let cli_open: Task<Message> = if !cfg.files.is_empty() {
             Task::batch(
                 cfg.files

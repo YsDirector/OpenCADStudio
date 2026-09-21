@@ -602,6 +602,9 @@ pub(super) fn on_ribbon_tool_click(&mut self, tool_id: String, event: ModuleEven
                     PanelId::ExternalReferences => {
                         self.show_external_references = false;
                     }
+                    PanelId::Browser => {
+                        self.show_browser = false;
+                    }
                     PanelId::Properties => {
                         self.show_properties = false;
                         self.ribbon.set_properties(false);
@@ -713,6 +716,7 @@ pub(super) fn on_ribbon_tool_click(&mut self, tool_id: String, event: ModuleEven
             PanelId::BlockPalette => self.show_block_palette,
             PanelId::Pi => self.show_pi_panel,
             PanelId::ExternalReferences => self.show_external_references,
+            PanelId::Browser => self.show_browser,
         }
     }
 

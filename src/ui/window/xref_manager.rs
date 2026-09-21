@@ -9,6 +9,7 @@ use crate::app::Message;
 use crate::io::xref::collect_entries_with_prev;
 use crate::io::xref_model::{normalize_lexical, Pathtype, RefKind, RefStatus, RefType, ReferenceEntry};
 use crate::ui::ROW_H;
+use crate::ui::style::common::muted_style;
 use acadrust::CadDocument;
 use iced::widget::{button, column, container, mouse_area, row, scrollable, text, tooltip};
 use iced::Padding;
@@ -21,6 +22,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 /// exist. Mutating affordances stay compiled but render disabled; the
 /// read-only list renders everywhere.
 const IS_WASM: bool = cfg!(target_arch = "wasm32");
+
+
 
 /// Font size for table cells (mirrors `layers.rs`).
 const FONT_SZ: f32 = ROW_H * 0.42; // ≈11 px at ROW_H=26
@@ -784,9 +787,12 @@ impl XrefManagerPanel {
                 )
             }
         };
-        let help = toolbar_tip(
+        // Help opens a modal window explaining the manager (and its web
+        // shortcomings): the old disabled tip could never be clicked, and
+        // an anchored dropdown squeezes the text into the toolbar's width.
+        let help = toolbar_btn(
             crate::t!("Help").into_owned(),
-            crate::t!("Reference Manager — select rows, then Detach, Unload, Reload, Bind, Overlay, or a Change Path mode.").into_owned(),
+            Some(Message::XrefHelpOpen),
             false,
         );
         let toolbar = container(
@@ -1280,12 +1286,6 @@ fn format_date(modified: Option<SystemTime>) -> String {
 }
 
 // ── Widget helpers (layers.rs conventions) ────────────────────────────────
-
-fn muted_style(theme: &Theme) -> iced::widget::text::Style {
-    iced::widget::text::Style {
-        color: Some(theme.palette().background.base.text.scale_alpha(0.68)),
-    }
-}
 
 fn row_button_style(selected: bool, index: usize) -> impl Fn(&Theme, button::Status) -> button::Style {
     move |theme: &Theme, status: button::Status| {
