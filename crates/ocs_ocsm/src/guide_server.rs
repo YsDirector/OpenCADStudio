@@ -14170,9 +14170,14 @@ mod weld_tests {
         assert_eq!(v["from_table"], false);
         assert_eq!(v["k"], 4);
         assert!((v["m1"].as_f64().unwrap() - 12.763_794).abs() < 1e-4);
-        // 缺档：m=5 明确“数据缺失”。
-        let e = http_req(server.port, "GET", "/api/invol_check?db=50&m=5&z=20&check=1", "");
-        assert!(e.contains("数据缺失") && e.contains("剔除"), "{e}");
+        // m=5：用户截图已补入（名义表 47 + 检验表 47），精确查表命中（k 按修正表=2）。
+        let j = http_req(server.port, "GET", "/api/invol_check?db=50&m=5&z=8", "");
+        let v: serde_json::Value = serde_json::from_str(&j).unwrap();
+        assert_eq!(v["from_table"], true);
+        assert_eq!(v["page"], 36);
+        assert_eq!(v["table_no"], 27);
+        assert_eq!(v["k"], 2);
+        assert!((v["m1"].as_f64().unwrap() - 68.226).abs() < 1e-9);
     }
 
     /// OCSMGEAR 花键模式 HTTP 通路：齿轮模式拒绝标准号/d_B、GB 下 d_B 统一文案、

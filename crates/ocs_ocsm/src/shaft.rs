@@ -195,7 +195,7 @@ OCSMSHAFT 轴生成器：行 DSL / JSON → 单视图侧视图（段拼接 + 端
                       或体系标识 GB/DIN/NF/ANSI；直径由 M/Z/X 或 DB/A 导出（不给 S/E）；
                       `X0.2` = 变位（DIN ∈ [−0.05, 0.45]）；DIN 可写 `DB40`（基准直径）、
                       NF 可写 `A80`（公称直径主参数），M/Z 可缺一项由名义/尺寸表补全
-                      （DIN：m=1.5 已补入、m=5 已剔除；NF：尺寸表 288 行）；
+                      （DIN：m=1.5/m=5 均已补入；NF：尺寸表 288 行）；
                       ANSI 是径节制：`P8`（或 M 槽位 = 径节 P），x 不允许；
                       `de63` 可选（给了才画收尾弧，段长 = L + l；不给 de 段长 = L）；
                       不能与 SPLINE/CH/OV/RL/M/GEAR 同段
@@ -6328,9 +6328,19 @@ GEAR M3 Z20";
             iv15.params.x
         );
         assert_eq!(iv15.params.d_b, Some(20.0));
-        // 不一致 / 剔除档 / GB 带 DB 的报错口径
+        // m=5 已由用户截图补入：DB50+M5 → z=8、取表值 x=2.25/5=0.45
+        let program_m5 = parse_program("INVOLSPLINE DIN30 DB50 M5 L30").unwrap();
+        let iv_m5 = program_m5.segments[0].invol_spline.as_ref().unwrap();
+        assert_eq!(iv_m5.params.z, 8, "m=5 d_B=50 → z=8");
+        assert!(
+            (iv_m5.params.x - 0.45).abs() < 1e-9,
+            "取表值 x={}",
+            iv_m5.params.x
+        );
+        assert_eq!(iv_m5.params.d_b, Some(50.0));
+        // 不一致 / 不可行 / GB 带 DB 的报错口径
         for (text, needle) in [
-            ("INVOLSPLINE DIN30 DB50 M5 L30", "剔除"),
+            ("INVOLSPLINE DIN30 DB1 M5 L30", "可行齿数"),
             ("INVOLSPLINE GB30R DB40 M2 Z18 L30", "本体系不用 d_B"),
             ("INVOLSPLINE DIN30 DB40 L30", "请再给"),
         ] {

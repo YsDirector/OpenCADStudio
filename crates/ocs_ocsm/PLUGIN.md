@@ -119,8 +119,8 @@ rm -rf "$HOME/.config/OpenCADStudio/plugins/opencad.layers_quick"
   （GB/T 3478.1-2008；DIN 5480-1:2015，h_fP*=0.55），直径由 M/Z/X（或 DB）导出；
   `de` 可选（给了才画收尾弧，段长 = L+l）；与 SPLINE/CH/OV/RL/M/GEAR 互斥；只做外花键。
   段表列：标准下拉（GB/DIN）+ 齿廓下拉 + m/z/x/L；DIN 另加 d_B 输入（候选来自
-  DIN 5480-2 名义表，618 行内建于 `assets/din5480_2_nominal.csv`；**m=1.5 缺（p23/p24 空表框）、
-  m=5 已剔除（p35 渲染缺陷）**），选/填 d_B 自动带出 m/z/x，派生值 `d_B/d/z/m/x` 与
+  DIN 5480-2 名义表，721 行内建于 `assets/din5480_2_nominal.csv`（旧 618 + m=1.5 截
+  图 56 + m=5 截图 47；m=5 的 2 处 z 解析期按代码修正表生效）），选/填 d_B 自动带出 m/z/x，派生值 `d_B/d/z/m/x` 与
   `d/db/da/df/ρf/cF` 实时显示并注明来源（查表命中 pNN / 公式解出）。
   **插入前也要先跑过 `OCSM` 初始化**（与齿轮同判据）。
 - 工具栏「轴」组有 **轴生成器**（阶梯轴+中心线双色图标）按钮，等效输入 `OCSMSHAFT`（不带参数：打开轴生成器窗口 + 进入放置态，放置方式与 `XL` 相同）。
@@ -274,7 +274,7 @@ rm -rf "$HOME/.config/OpenCADStudio/plugins/opencad.layers_quick"
   第四期 `detail_invol_spline`（渐开线花键 GB/T 3478.1-2008 / DIN 5480-1:2015，**旧入口**）：
   **主入口已改为齿轮生成器 `OCSMGEAR` 的「花键模式」**（口复选框：标准/齿廓/d_B/hf*/ρf*/cF*，
   「齿轮种类」开关复用为外/内花键；内花键与内齿轮同口径，只有 剖视图 + 端视图、无侧视图）；几何全在
-  `src/invol_spline.rs` 共用引擎（DIN 5480-2 名义表 674 行入库；d_B 为主参数，m/z 可缺一个；
+  `src/invol_spline.rs` 共用引擎（DIN 5480-2 名义表 721 行入库；d_B 为主参数，m/z 可缺一个；
   GB 无 d_B、给了报错）；`x=(d_B−m(z+1.1))/(2m)` 是从表反推并经全表校验的关系，非标准原文；
   轴段 `INVOLSPLINE` 同引擎、只做外花键）。
   一站式说明见 `handbook/03-标准件库.md`「结构要素」；数据与画法的唯一来源是 `src/detail.rs`（新增要素只需实现 `DetailElement` + 进 `ELEMENTS`）。
