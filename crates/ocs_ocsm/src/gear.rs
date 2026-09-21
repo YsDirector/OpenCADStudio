@@ -2296,10 +2296,95 @@ fn spline_section_hatch(p: &crate::invol_spline::InvolParams, len: f64) -> Entit
     hatch_ansi31_rings(&[upper, lower], 0.0, 1.0)
 }
 
+/// 外花键轴向视图（GEAR 侧视/剖视共用）：**两端倒角**，口径照齿轮 [`axial_outline`]。
+///
+/// 与齿轮的几何差异只有基点：花键以自身左端面为 `x=0`（`0..L`），齿轮以齿宽中心为原点；
+/// 倒角三角完全同口径：`C = round(0.6m)`、端面高 `ra−C`、齿顶面长 `L−2C`，倒角斜线 + 台阶竖线
+/// （`steps=true` 侧视图画；剖视图按齿轮 `section_view` 口径不画这两条棱边）。
+/// 中心线（分度线 ×2 + 轴线）长度 = `L + CENTER_OVERHANG×n`（两端各 3n），绕 `L/2` 对称，
+/// 与齿轮 `side_view`/`section_view` 的 `cl = p.h + CENTER_OVERHANG * n` 同一算法。
+fn spline_axial_view(
+    ra: f64,
+    rf: f64,
+    pitch_dia: f64,
+    len: f64,
+    c: f64,
+    n: f64,
+    minor_layer: &str,
+    steps: bool,
+) -> Vec<EntityType> {
+    let mut out = Vec::with_capacity(15);
+    let hi = ra - c; // 倒角后端面半高
+    // 端面线（两端，±(ra−C) 高）
+    out.push(line([0.0, -hi], [0.0, hi], LAYER_MAIN));
+    out.push(line([len, -hi], [len, hi], LAYER_MAIN));
+    // 倒角台阶线（±ra 高）—— 侧视图画，剖视图不画（同齿轮）
+    if steps {
+        out.push(line([c, -ra], [c, ra], LAYER_MAIN));
+        out.push(line([len - c, -ra], [len - c, ra], LAYER_MAIN));
+    }
+    // 齿顶面（±ra，长 L−2C）
+    out.push(line([c, ra], [len - c, ra], LAYER_MAIN));
+    out.push(line([c, -ra], [len - c, -ra], LAYER_MAIN));
+    // 四个 45° 倒角
+    out.push(line([0.0, hi], [c, ra], LAYER_MAIN));
+    out.push(line([len - c, ra], [len, hi], LAYER_MAIN));
+    out.push(line([0.0, -hi], [c, -ra], LAYER_MAIN));
+    out.push(line([len - c, -ra], [len, -hi], LAYER_MAIN));
+    // 小径线（侧视 = 2细线层 / 剖视 = 1轮廓实线层）
+    out.push(line([0.0, -rf], [len, -rf], minor_layer));
+    out.push(line([0.0, rf], [len, rf], minor_layer));
+    // 分度线 ×2 + 轴线：长度 = L + CENTER_OVERHANG×n（两端各 3n），与齿轮中心线同一算法
+    let cl = len + CENTER_OVERHANG * n;
+    let (x0, x1) = (len / 2.0 - cl / 2.0, len / 2.0 + cl / 2.0);
+    let d2 = pitch_dia / 2.0;
+    out.push(line([x0, d2], [x1, d2], LAYER_CENTER));
+    out.push(line([x0, -d2], [x1, -d2], LAYER_CENTER));
+    out.push(line([x0, 0.0], [x1, 0.0], LAYER_CENTER));
+    out
+}
+
+/// 外花键轴向视图入口：先按齿轮 `validate()` 同口径校验倒角（C 太大/N 不小于齿顶半径直接报错），
+/// 再按 `steps` 出侧视（含台阶竖线）或剖视（剖视另加剖面线，见调用方）。
+fn external_spline_axial_view(
+    engine: &crate::invol_spline::InvolParams,
+    len: f64,
+    n: f64,
+    minor_layer: &str,
+    steps: bool,
+) -> Result<Vec<EntityType>, String> {
+    let c = spline_chamfer(engine);
+    let ra = engine.da() / 2.0;
+    if c * 2.0 >= len {
+        return Err(format!(
+            "外花键轴向倒角 C=round(0.6m)={:.0} 太大（有效长度 L={}）——加大 L 或减小模数（同齿轮校验口径）。",
+            c,
+            trim(len)
+        ));
+    }
+    if c >= ra {
+        return Err(format!(
+            "外花键轴向倒角 C={:.0} 不小于大径半径 da/2={}，无法画图（同齿轮口径）。",
+            c,
+            trim(ra)
+        ));
+    }
+    Ok(spline_axial_view(
+        ra,
+        engine.df() / 2.0,
+        engine.d(),
+        len,
+        c,
+        n,
+        minor_layer,
+        steps,
+    ))
+}
+
 /// **花键模式出图**（齿轮生成器入口）：几何全在 `invol_spline.rs`，这里只组织视图/meta/块名。
 ///
 /// 视图：`端视图` = 真实渐开线端面齿廓（内/外花键各自几何）；
-/// `剖视图` 外花键 = 轴向轮廓 + 剖面线，内花键 = 内齿轮齿圈剖视模板（[`internal_bore_section`]，不打剖面线）；
+/// `剖视图` 外花键 = 两端倒角的轴向轮廓 + 剖面线，内花键 = 内齿轮齿圈剖视模板（[`internal_bore_section`]，不打剖面线）；
 /// `侧视图` 只服务外花键（内花键无侧视图，明确报错）；`简化正视图` 无花键画法，不提供。
 fn generate_spline(p: &GearParams, view: GearView, n: f64) -> Result<GenPart, String> {
     let (engine, origin) = p.spline_engine()?;
@@ -2320,7 +2405,8 @@ fn generate_spline(p: &GearParams, view: GearView, n: f64) -> Result<GenPart, St
     let len = p.h;
     let entities = match view {
         GearView::Front => engine.front_view()?,
-        GearView::Side => engine.side_view(len)?,
+        // 花键是独立零件（两侧都是自由外角）：照齿轮侧视图**两端都倒角**（口径见 `spline_axial_view`）。
+        GearView::Side => external_spline_axial_view(&engine, len, n, LAYER_THIN, true)?,
         GearView::Section => {
             if engine.internal {
                 // 内花键剖视 = 内齿轮那套（齿圈内齿不剖、不打剖面线、不画齿圈外壁），同一模板换齿形参数。
@@ -2351,7 +2437,8 @@ fn generate_spline(p: &GearParams, view: GearView, n: f64) -> Result<GenPart, St
                     n,
                 )
             } else {
-                let mut v = engine.section_view(len)?;
+                // 剖视同齿轮 `section_view`：倒角照画，但不画两条台阶竖线（全剖时该棱边按惯例省略）。
+                let mut v = external_spline_axial_view(&engine, len, n, LAYER_MAIN, false)?;
                 v.push(spline_section_hatch(&engine, len));
                 v
             }
@@ -5153,6 +5240,150 @@ mod tests {
             })
             .count();
         assert_eq!(pitch_lines, 2, "内花键剖视分度圆两条");
+    }
+
+    /// ① 花键分度线两端各外延 `CENTER_OVERHANG/2×n`（=3n，与齿轮同算法）：
+    /// 外花键侧视/剖视对照外齿轮 `side_view` 的 `cl = h + CENTER_OVERHANG * n`，轴线与分度线同长；
+    /// 内花键剖视走内齿轮共用模板（`len+3n` / 轴线 `len+4n`），逐条与 `internal_bore_section` 一致。
+    #[test]
+    fn spline_pitch_lines_extend_both_ends_like_gear() {
+        let n = 2.0;
+        // 外齿轮基准：分度线长度 = h + CENTER_OVERHANG×n（gear.rs::side_view 的 cl）。
+        let pg = tmpl();
+        let gear = side_view(&pg, n).unwrap();
+        let gear_pitch: Vec<f64> = gear
+            .iter()
+            .filter_map(|e| match e {
+                EntityType::Line(l)
+                    if l.common.layer == LAYER_CENTER
+                        && (l.start.y - pg.d() / 2.0).abs() < 1e-9 =>
+                {
+                    Some((l.end.x - l.start.x).abs())
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(gear_pitch, vec![pg.h + CENTER_OVERHANG * n], "齿轮分度线口径");
+
+        // 外花键（GB30R m3 z20 h30）：侧视 + 剖视都套齿轮同一算法。
+        let mut p = spline_tmpl(crate::invol_spline::SplineStd::GB);
+        p.spline.as_mut().unwrap().m = Some(3.0);
+        p.spline.as_mut().unwrap().z = Some(20);
+        let (engine, _) = p.spline_engine().unwrap();
+        let d2 = engine.d() / 2.0;
+        let want = p.h + CENTER_OVERHANG * n;
+        let over = CENTER_OVERHANG * n / 2.0; // 每端外延 3n
+        for view in [GearView::Side, GearView::Section] {
+            let part = generate(&p, view, n).unwrap();
+            let (mut pitch, mut axis) = (Vec::new(), Vec::new());
+            for e in &part.entities {
+                if let EntityType::Line(l) = e {
+                    if (l.start.y - l.end.y).abs() > 1e-9 {
+                        continue;
+                    }
+                    let len = (l.end.x - l.start.x).abs();
+                    let x0 = l.start.x.min(l.end.x);
+                    if (l.start.y.abs() - d2).abs() < 1e-9 {
+                        assert!((len - want).abs() < 1e-9, "{view:?} 分度线长 {len} 应为 L+6n={want}");
+                        assert!((x0 + over).abs() < 1e-9, "{view:?} 分度线左端应外延 3n");
+                        pitch.push(len);
+                    } else if l.start.y.abs() < 1e-9 {
+                        assert!((len - want).abs() < 1e-9, "{view:?} 轴线长 {len} 应与分度线同口径");
+                        axis.push(len);
+                    }
+                }
+            }
+            assert_eq!((pitch.len(), axis.len()), (2, 1), "{view:?} 分度线 ×2 + 轴线 ×1");
+        }
+
+        // 内花键剖视 = 内齿轮共用模板：同一函数逐条一致，分度线长 = L+3n（模板口径）。
+        let pi = GearParams { kind: GearKind::Internal, ..p.clone() };
+        let (ei, _) = pi.spline_engine().unwrap();
+        let se = generate(&pi, GearView::Section, n).unwrap().entities;
+        let tpl = internal_bore_section(
+            0.0,
+            ei.internal_tip_radius(),
+            ei.internal_root_radius(),
+            ei.d(),
+            pi.h,
+            spline_chamfer(&ei),
+            n,
+        );
+        assert_eq!(format!("{se:?}"), format!("{tpl:?}"), "内花键剖视 = 内齿轮共用模板");
+        for e in &se {
+            if let EntityType::Line(l) = e {
+                if l.common.layer == LAYER_CENTER
+                    && (l.start.y - l.end.y).abs() < 1e-9
+                    && (l.start.y.abs() - ei.d() / 2.0).abs() < 1e-9
+                {
+                    let len = (l.end.x - l.start.x).abs();
+                    assert!((len - (pi.h + 3.0 * n)).abs() < 1e-9, "内花键剖视分度线 = L+3n，实得 {len}");
+                }
+            }
+        }
+    }
+
+    /// ② GEAR 花键两端都倒角（口径照齿轮侧视图）：`C=round(0.6m)`、端面高 `ra−C`、齿顶面长 `L−2C`、
+    /// 倒角斜线；台阶竖线只侧视（同齿轮）；内花键剖视按内齿顶口径由共用模板两端倒角。
+    #[test]
+    fn gear_spline_chamfers_both_ends() {
+        let n = 1.0;
+        let mut p = spline_tmpl(crate::invol_spline::SplineStd::GB); // m3 z20 h30
+        p.spline.as_mut().unwrap().m = Some(3.0);
+        p.spline.as_mut().unwrap().z = Some(20);
+        let (engine, _) = p.spline_engine().unwrap();
+        let (ra, rf) = (engine.da() / 2.0, engine.df() / 2.0);
+        let c = spline_chamfer(&engine);
+        assert!((c - 2.0).abs() < 1e-9, "GB m3 → C=round(0.6×3)=2，实得 {c}");
+        let hi = ra - c;
+        let has = |es: &[EntityType], a: [f64; 2], b: [f64; 2]| {
+            es.iter().any(|e| match e {
+                EntityType::Line(l) => {
+                    let s = [l.start.x, l.start.y];
+                    let t = [l.end.x, l.end.y];
+                    let near = |q: [f64; 2], w: [f64; 2]| {
+                        (q[0] - w[0]).abs() < 1e-9 && (q[1] - w[1]).abs() < 1e-9
+                    };
+                    (near(s, a) && near(t, b)) || (near(s, b) && near(t, a))
+                }
+                _ => false,
+            })
+        };
+        for (view, steps) in [(GearView::Side, true), (GearView::Section, false)] {
+            let es = generate(&p, view, n).unwrap().entities;
+            // 端面高 ra−C（两端各一条）
+            assert!(has(&es, [0.0, -hi], [0.0, hi]), "{view:?} 左端面高应为 ra−C");
+            assert!(has(&es, [p.h, -hi], [p.h, hi]), "{view:?} 右端面高应为 ra−C");
+            // 齿顶面长 L−2C
+            assert!(has(&es, [c, ra], [p.h - c, ra]), "{view:?} 齿顶面长应为 L−2C");
+            // 两端倒角斜线（上下各 2 条）
+            assert!(
+                has(&es, [0.0, hi], [c, ra]) && has(&es, [p.h - c, ra], [p.h, hi]),
+                "{view:?} 上侧两端应有倒角斜线"
+            );
+            assert!(
+                has(&es, [0.0, -hi], [c, -ra]) && has(&es, [p.h - c, -ra], [p.h, -hi]),
+                "{view:?} 下侧两端应有倒角斜线"
+            );
+            // 台阶竖线（±ra 高）：侧视有、剖视无（同齿轮 side_view / section_view）
+            let step_l = has(&es, [c, -ra], [c, ra]);
+            let step_r = has(&es, [p.h - c, -ra], [p.h - c, ra]);
+            assert_eq!(step_l && step_r, steps, "{view:?} 台阶竖线口径应同齿轮（侧视有、剖视无）");
+            // 小径线满长（±rf），不受端部倒角影响
+            assert!(
+                has(&es, [0.0, rf], [p.h, rf]) && has(&es, [0.0, -rf], [p.h, -rf]),
+                "{view:?} 小径线应满长"
+            );
+        }
+        // 内花键剖视：两端孔口倒角（共用模板，内齿顶口径 D_ii/2）各断言一次。
+        let pi = GearParams { kind: GearKind::Internal, ..p.clone() };
+        let (ei, _) = pi.spline_engine().unwrap();
+        let (ib, ic) = (ei.internal_tip_radius(), spline_chamfer(&ei));
+        let es = generate(&pi, GearView::Section, n).unwrap().entities;
+        for s in [1.0f64, -1.0] {
+            assert!(has(&es, [0.0, s * (ib + ic)], [ic, s * ib]), "内花键左端孔口倒角（s={s}）");
+            assert!(has(&es, [pi.h - ic, s * ib], [pi.h, s * (ib + ic)]), "内花键右端孔口倒角（s={s}）");
+        }
     }
 
     /// 花键模式 CLI 解析（`OCSMGEAR 花键 …`）：预设代号隐式开模式、GB 下 d_B 统一文案、内花键 kind。

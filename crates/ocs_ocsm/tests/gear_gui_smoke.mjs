@@ -2,8 +2,9 @@
 //
 // 目的：锁住「齿轮 / 花键」模式切换的交互契约（node --check 与 el("id") 静态扫描查不出）：
 //   ① 默认齿轮模式：标准号/齿廓/d_B/hf/ρf/cF 行隐藏，c/β/倒角行显示；
-//   ② 勾「花键模式」+ GB：花键行显示、GB 下 **d_B 行隐藏**（GB 无基准直径概念）；
-//   ③ 切 DIN：d_B 行显示、齿廓切到 DIN30、预设系数写回；
+//   ② 勾「花键模式」+ GB：花键行显示、GB 下 **d_B 行隐藏**（GB 无基准直径概念），
+//      **模数 m 行显示**（GB 为 m/z/x 驱动，没模数没法用）；
+//   ③ 切 DIN：d_B 行显示、m 行显示（d_B+m）、齿廓切到 DIN30、预设系数写回；
 //   ④ 全程无异常，防抖回调能跑。
 //
 // 用法：node gear_gui_smoke.mjs <gear_gui.html 路径>
@@ -203,12 +204,15 @@ check(el('dbLabel').style.display === 'none', 'GB 下 d_B 行应隐藏（本体�
 check(el('cLabel').style.display === 'none', '花键模式下顶隙行应隐藏');
 check(el('profileSel').value === 'GB30R', 'GB 默认齿廓应为 GB30R，实际 ' + el('profileSel').value);
 check(Math.abs(numOf('hf') - 0.9) < 1e-9, 'GB30R hf 预设应 0.9，实际 ' + numOf('hf'));
+check(el('mLabel').style.display !== 'none', 'GB 花键必须显示模数 m 行（m/z/x 驱动）');
+check(el('mLabel').textContent.includes('模数'), 'GB 花键模数标签应为模数[m/Mn]：' + el('mLabel').textContent);
 
 // ③ 切 DIN：d_B 行显示；齿廓 DIN30 + 系数预设
 el('stdSel').value = 'DIN';
 try { el('stdSel')._fire('change', el('stdSel')); } catch (e) { errors.push('标准切换异常: ' + e); }
 await flush();
 check(el('dbLabel').style.display !== 'none', 'DIN 下 d_B 行应显示');
+check(el('mLabel').style.display !== 'none', 'DIN 下模数 m 行应显示（d_B + m 两参数体系）');
 check(el('profileSel').value === 'DIN30', 'DIN 齿廓应 DIN30，实际 ' + el('profileSel').value);
 check(Math.abs(numOf('hf') - 0.55) < 1e-9, 'DIN30 hf 预设应 0.55');
 
@@ -221,6 +225,7 @@ check(el('dbLabel').textContent.includes('公称直径 A'), 'NF 标签应为公�
 check(el('stdHint').textContent.includes('A 主参数'), 'NF 提示应含「A 主参数」：' + el('stdHint').textContent);
 check(el('profileSel').value === 'NFP', 'NF 默认齿廓应为 NFP，实际 ' + el('profileSel').value);
 check(Math.abs(numOf('hf') - 1.0) < 1e-9, 'NFP hf 预设应 1.0，实际 ' + numOf('hf'));
+check(el('mLabel').style.display !== 'none', 'NF 下模数 m 行应显示（A + m 两参数体系）');
 el('db').value = '80';
 try { el('db')._fire('change', el('db')); } catch (e) { errors.push('A 自动带出异常: ' + e); }
 await flush();
