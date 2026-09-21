@@ -91,8 +91,16 @@ const PARTS = {
         { code: 'ANSI375R', std: 'ANSI', profile: 'ANSI37.5圆齿根齿侧', alpha: 37.5, ha: 0.5, hf: 0.65, rho: 0, cf: 0 },
         { code: 'ANSI45R', std: 'ANSI', profile: 'ANSI45圆齿根齿侧', alpha: 45, ha: 0.5, hf: 0.5, rho: 0, cf: 0 },
       ],
+      // 各体系候选（与 invol_spline.rs / detail.rs catalog 同形）
+      gb_modules: [0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2, 2.5, 3, 4, 5, 6, 8, 10],
+      din_modules: [0.5, 0.6, 0.75, 0.8, 1, 1.25, 1.5, 1.75, 2, 2.5, 3, 4, 5, 6, 8, 10],
+      nf_modules: [0.5, 0.75, 1, 1.25, 1.667, 2.5, 3.75, 5, 7.5, 10],
       din_nominal: [{ db: 40, m: 2, z: 18, x: 0.45, page: 27 }],
-      nf_nominal: [{ a: 80, m: 3.75, z: 19, x: 0.967, page: 21 }],
+      nf_nominal: [
+        { a: 80, m: 3.75, z: 19, x: 0.967, page: 21 },
+        { a: 45, m: 1.667, z: 27, x: 0.8, page: 21 },
+        { a: 240, m: 7.5, z: 32, x: 0.8, page: 22 },
+      ],
     },
   },
 };
@@ -345,6 +353,67 @@ if (extKindBtn) {
   await flush();
   check(viewBtns().join('|') === '剖视图|侧视图|端视图', '切回外花键应恢复三视图，实际 ' + viewBtns().join('|'));
 }
+
+// ③.8 ② 齿数锁定：DIN/NF 下 z 只读且由 (d_B/A, m) 联动；GB/ANSI 不锁。
+// ③  ③ 模数候选按体系取表：GB 表 2 15 种 / DIN 名义表 / NF 尺寸表（含 1.667/3.75/7.5）。
+// 先回 GB：z 不锁 + 15 项候选（不含 GB/T 1357 的 0.7）
+el('stdSel').value = 'GB';
+try { el('stdSel')._fire('change', el('stdSel')); } catch (e) { errors.push('GB 回切异常: ' + e); }
+await flush();
+check(el('z').readOnly !== true, 'GB 下 z 不应只读');
+check(!el('zLabel').textContent.includes('决定'), 'GB 下 z 标签不应带“决定”提示：' + el('zLabel').textContent);
+let mods = el('mSel').children.map((o) => o.value).filter((v) => v !== 'custom');
+check(mods.length === 15, 'GB 花键模数候选应 15 项，实际 ' + mods.length + '：' + mods.join('|'));
+check(mods.indexOf('0.7') < 0, 'GB 候选不应含 GB/T 1357 的 0.7');
+check(mods.includes('0.25') && mods.includes('10'), 'GB 候选应含 0.25 与 10：' + mods.join('|'));
+// DIN：z 只读；d_B=40 + m=2 → z=18；改 m → z 跟随重算
+el('stdSel').value = 'DIN';
+try { el('stdSel')._fire('change', el('stdSel')); } catch (e) { errors.push('DIN 锁定切换异常: ' + e); }
+await flush();
+check(el('z').readOnly === true, 'DIN 下 z 应只读');
+check(el('zLabel').textContent.includes('决定'), 'DIN 下 z 标签应说明由 d_B 与 m 决定：' + el('zLabel').textContent);
+mods = el('mSel').children.map((o) => o.value).filter((v) => v !== 'custom');
+check(mods.includes('0.6') && mods.includes('0.8'), 'DIN 候选应含名义表实际档 0.6/0.8：' + mods.join('|'));
+check(mods.indexOf('1.667') < 0, 'DIN 候选不应含 NF 特有档 1.667');
+el('db').value = '40';
+el('m').value = '2';
+try { el('db')._fire('change', el('db')); } catch (e) { errors.push('DIN d_B 联动异常: ' + e); }
+await flush();
+check(el('z').value === '18', 'DIN d_B=40/m=2 应联动 z=18，实际 ' + el('z').value);
+el('m').value = '2.5';
+try { el('m')._fire('input', el('m')); } catch (e) { errors.push('DIN m 联动异常: ' + e); }
+await flush();
+check(el('z').value === '15', 'DIN d_B=40/m=2.5 应联动 z=15，实际 ' + el('z').value);
+check(el('z').readOnly === true, 'DIN 改 m 后 z 仍应只读');
+// NF：候选含 1.667/3.75/7.5 且不含 GB/DIN 特有档；A=80 带出 m=3.75/z=19；
+// 体系外模数（3）红字指出来源表。
+el('stdSel').value = 'NF';
+try { el('stdSel')._fire('change', el('stdSel')); } catch (e) { errors.push('NF 锁定切换异常: ' + e); }
+await flush();
+check(el('z').readOnly === true, 'NF 下 z 应只读');
+mods = el('mSel').children.map((o) => o.value).filter((v) => v !== 'custom');
+check(mods.includes('1.667') && mods.includes('3.75') && mods.includes('7.5'),
+  'NF 候选应含 1.667/3.75/7.5：' + mods.join('|'));
+for (const ban of ['0.6', '0.8', '1.5', '1.75', '3', '4', '6', '8']) {
+  check(mods.indexOf(ban) < 0, 'NF 候选不应含 GB/DIN 特有档 ' + ban);
+}
+el('db').value = '80';
+try { el('db')._fire('change', el('db')); } catch (e) { errors.push('NF A 联动异常: ' + e); }
+await flush();
+check(el('m').value === '3.75' && el('z').value === '19',
+  'NF A=80 应带出 m=3.75、z=19，实际 ' + el('m').value + '/' + el('z').value);
+el('m').value = '3';
+try { el('m')._fire('input', el('m')); } catch (e) { errors.push('NF 体系外模数异常: ' + e); }
+await flush();
+check(el('warn').textContent.includes('不在') && el('warn').textContent.includes('NF E22-141'),
+  '体系外模数应红字指出来源表：' + el('warn').textContent);
+check(el('warn').textContent.includes('1.667'), '报错应列出 NF 可用值：' + el('warn').textContent);
+// ANSI：z 不锁
+el('stdSel').value = 'ANSI';
+try { el('stdSel')._fire('change', el('stdSel')); } catch (e) { errors.push('ANSI 锁定切换异常: ' + e); }
+await flush();
+check(el('z').readOnly !== true, 'ANSI 下 z 不应只读');
+check(!el('zLabel').textContent.includes('决定'), 'ANSI 下 z 标签不应带“决定”提示：' + el('zLabel').textContent);
 
 // ④ 防抖回调可跑（collect/renderInfo 不抛）
 for (const t of timers.splice(0)) {

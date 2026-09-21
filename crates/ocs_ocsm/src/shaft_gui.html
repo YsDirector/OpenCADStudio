@@ -16,7 +16,8 @@
   label { display: block; font-size: 12px; color: #666; margin: 8px 0 2px; }
   select, input[type=number], input[type=text] { width: 100%; padding: 5px 6px; border: 1px solid #c6ccd4;
            border-radius: 4px; font-size: 13px; box-sizing: border-box; background: #fff; }
-  input[disabled], select[disabled] { background: #f1f3f5; color: #888; cursor: not-allowed; }
+  input[disabled], select[disabled], input[readonly] { background: #f1f3f5; color: #888; cursor: not-allowed; }
+  input[readonly] { cursor: default; }
   .row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
   .btn { border: none; border-radius: 6px; padding: 9px 18px; font-size: 14px; cursor: pointer;
          background: #1e6fff; color: #fff; margin-top: 12px; }
@@ -133,7 +134,11 @@
       <b>INVOLSPLINE 渐开线花键段</b>：先选体系（<code>GB/T 3478.1</code> / <code>DIN 5480-1</code> /
       <code>NF E22-141</code>（A 主参数，已入库）/ <code>ANSI B92.1</code>（径节 P，公式驱动））、
       再选齿廓（GB 四种 / DIN 30° / NF 平·圆齿根 / ANSI Table 2 五列），
-      GB/DIN/NF 填 <code>m/z</code>（<code>x</code> 可选，DIN 限 [−0.05, 0.45]），ANSI 填 <code>P/z</code>（径节，标准写法 <code>A/B</code>，如 5/10；x 不允许），
+      GB 填 <code>m/z</code>（<code>x</code> 可选）；<b>DIN/NF 只填模数 m 与基准直径（DIN <code>d_B</code> / NF <code>A</code>）
+      两参数，齿数 z 由二者联动决定、行内只读</b>（显式给 z 且不符时以 d_B/A 为准重算并提示；
+      <code>x</code> 可选，DIN 限 [−0.05, 0.45]）；模数必须取各体系自己表里的档（GB/T 3478.1 表 2 15 种、
+      DIN 5480-2 名义表实际 m 列、NF E22-141 尺寸表实际 m 列，NF 含 1.667/3.75/7.5），体系外模数会明确报错。
+      ANSI 填 <code>P/z</code>（径节，标准写法 <code>A/B</code>，如 5/10；x 不允许），
       与有效长度 <code>L</code>；派生值 d/db/da/df/ρf/cF 实时显示（DIN 可给 d_B、NF 可给 A 由表自动带出另一项；
       ANSI 另示 P/Ps、Do/Dri/Di/Dre、DFe/DFi、Sv/cF（标准为英制，输出已换算 mm）），
       <code>de</code> 可选（给了才画收尾，段长 = L + l）；不能与 SPLINE/CH/OV/M/GEAR 同段。
@@ -458,6 +463,54 @@ function involProfileOptionsHtml(std, cur) {
       + `${esc(p.code)}（${esc(p.profile)}）</option>`).join("");
 }
 
+/* ── DIN/NF：齿数由 (d_B/A, m) 决定（行内 z 只读 + 联动回填）── */
+
+// 由基准直径（DIN d_B / NF A）与模数 m 推 z（与 gear_gui / 引擎 derive_z_from_bench_m 同口径）：
+// 表内直查优先（多变体取 |x| 最小 / 最接近 NF 主系列 x=0.8；current 命中表内变体则保留）；表外按公式区间取整。
+function deriveBenchZ(std, bench, m, current) {
+  if (!Number.isFinite(bench) || bench <= 0 || !Number.isFinite(m) || m <= 0) return NaN;
+  const key = std === "NF" ? "a" : "db";
+  const rows = (std === "NF" ? involNfNominal : involDinNominal)
+    .filter((r) => Math.abs(Number(r[key]) - bench) < 1e-6 && Math.abs(Number(r.m) - m) < 1e-9);
+  const cand = [...new Set(rows.map((r) => Number(r.z)))].filter((v) => v >= 3 && v <= 1000).sort((a, b) => a - b);
+  const xOf = (z) => std === "NF" ? (bench - m * (z + 0.4)) / (2 * m) : (bench - m * (z + 1.1)) / (2 * m);
+  if (cand.length) {
+    if (Number.isFinite(current) && cand.indexOf(current) >= 0) return current;   // 表内显式变体：保留
+    if (cand.length === 1) return cand[0];
+    if (std === "NF") return cand.reduce((a, b) => Math.abs(xOf(a) - 0.8) <= Math.abs(xOf(b) - 0.8) ? a : b);
+    return cand.reduce((a, b) => Math.abs(xOf(a)) <= Math.abs(xOf(b)) ? a : b);
+  }
+  if (std === "DIN") {
+    const lo = Math.ceil(bench / m - 2.0 - 1e-9), hi = Math.floor(bench / m - 1.0 + 1e-9);
+    if (hi < lo || hi < 3 || lo > 1000) return NaN;
+    let best = NaN;
+    for (let z = Math.max(3, lo); z <= Math.min(1000, hi); z++) {
+      if (!Number.isFinite(best) || Math.abs(xOf(z)) < Math.abs(xOf(best)) - 1e-12) best = z;
+    }
+    return best;
+  }
+  // NF 表外：主系列 x=0.8 → z = round(A/m − 2.0)。
+  const z = Math.round(bench / m - 2.0);
+  return z >= 1 && z <= 1000 ? z : NaN;
+}
+
+// 行内 z：DIN/NF 时由 (d_B/A, m) 重算并写回模型（GUI 不接受单独编辑）。
+function syncInvolZ(r) {
+  const p = involList().find((x) => x.code === String(r.invol.profile).trim());
+  if (!p || (p.std !== "DIN" && p.std !== "NF")) return;
+  const z = deriveBenchZ(p.std, numOrNaN(r.invol.db), numOrNaN(r.invol.m), numOrNaN(r.invol.z));
+  if (Number.isFinite(z)) r.invol.z = String(z);
+}
+
+// 把联动后的 z 写进行内输入框（不整表重渲染，保住焦点）。
+function updateInvolZInput(tr, r) {
+  if (!tr) return;
+  let input = null;
+  try { input = tr.querySelector ? tr.querySelector('[data-f="invol.z"]') : null; } catch (e) { input = null; }
+  if (!input && tr._fields) input = tr._fields.find((f) => f.dataset && f.dataset.f === "invol.z");
+  if (input) input.value = r.invol.z;
+}
+
 // 渐开线花键段派生值：d/db/da/df/ρf/cF（与 invol_spline.rs 同公式）；
 // DIN 另给 d_B 名义估算 m(z+2x) 并注明只是身份显示；给了 de 再算收尾 l。
 function involDerived(r) {
@@ -530,6 +583,8 @@ function involDerived(r) {
     const src = hit ? (row ? "查表命中 p" + row.page + " m=" + fmt(row.m) : "由公式解出，未命中表")
                     : "由 m/z/x 正算 A=m(z+2x+0.4)";
     out += " A" + fmt(aNf) + "（" + src + "）";
+    // NF 显式 N 与 (A, m) 不符时后端给 Adjusted 提示（不静默改）——同 DIN 显示在派生值行。
+    if (r.invol.d_b_note) out += "；" + r.invol.d_b_note;
   } else if (p.std === "DIN") {
     const raw = numOrNaN(r.invol.db);
     if (Number.isFinite(raw) && raw > 0) {
@@ -625,6 +680,7 @@ function rowHtml(r, i) {
   const involStd = involPreset ? involPreset.std : (/din/i.test(String(r.invol.profile)) ? "DIN" : "GB");
   const involBench = involStd === "DIN" || involStd === "NF";
   const involAnsi = involStd === "ANSI";
+  const involZLocked = involStd === "DIN" || involStd === "NF";   // z 由 (d_B/A, m) 决定，只读
   const involBenchLabel = involStd === "NF" ? "A" : "d_B";
   const involBenchList = involStd === "NF" ? "nfAList" : "dinDbList";
   const specHit = splineSpecHit(r.spline.spec);
@@ -665,7 +721,7 @@ function rowHtml(r, i) {
       <div class="frow"><select data-f="invol.std" title="标准预设：GB/T 3478.1-2008 或 DIN 5480-1:2015"${dis(!involOn)}>${involStdOptionsHtml(r.invol.std)}</select></div>
       <div class="frow"><select data-f="invol.profile" title="齿廓类型（GB 四种 / DIN 30°）"${dis(!involOn)}>${involProfileOptionsHtml(r.invol.std, r.invol.profile)}</select></div>
       <div class="frow"><span class="chk">${involAnsi ? "P" : "m"}</span><input type="number" step="${involAnsi ? "0.5" : "0.1"}" min="0" data-f="invol.m" value="${esc(r.invol.m)}"${involAnsi ? ' title="ANSI 径节 P"' : ""}${dis(!involOn)}>
-      <span class="chk">z</span><input type="number" step="1" min="3" data-f="invol.z" value="${esc(r.invol.z)}"${dis(!involOn)}>
+      <span class="chk">z</span><input type="number" step="1" min="3" data-f="invol.z" value="${esc(r.invol.z)}"${involZLocked ? ` readonly="readonly" title="由${involStd === "NF" ? "公称直径 A" : "基准直径 d_B"}与模数 m 决定，不单独编辑"` : ""}${dis(!involOn)}>
       ${involAnsi ? "" : `<span class="chk">x</span><input type="number" step="0.05" data-f="invol.x" value="${esc(r.invol.x)}" placeholder="0" style="width:52px"${dis(!involOn)}>`}</div>
       ${involBench ? `<div class="frow"><span class="chk">${involBenchLabel}</span><input type="number" step="0.1" min="0" data-f="invol.db" value="${esc(r.invol.db)}" list="${involBenchList}" placeholder="${involStd === "NF" ? "NF 查表" : "DIN 查表"}" style="width:64px"${dis(!involOn)}></div>` : ""}
       <div class="frow"><span class="chk">L</span><input type="number" step="0.1" min="0" data-f="invol.len" value="${esc(r.invol.len)}" placeholder="有效长度"${dis(!involOn)}>
@@ -815,6 +871,8 @@ function rowFromSegment(seg) {
     r.invol.d_b_note = iv.d_b_note || "";
     r.invol.len = iv.len === null || iv.len === undefined ? "" : fmt(iv.len);
     r.invol.de = iv.de === null || iv.de === undefined ? "" : fmt(iv.de);
+    // DIN/NF：解析回来的显式 z 若与 (d_B/A, m) 推导不符（且不是表内变体）→ 以基准直径为准回填。
+    syncInvolZ(r);
     return r;
   }
   r.s = fmt(seg.s);
@@ -1060,13 +1118,16 @@ function onTableInput(e) {
     return;
   }
   if (field === "invol.db") {
-    // DIN 5480-2：输入/选择 d_B → 失焦（change）时自动带出 m/z/x；NF 同槽位是 A（带出 m/z）。
+    // DIN 5480-2：输入/选择 d_B → 失焦（change）时自动带出 m/x；NF 同槽位是 A（带出 m/x）。
+    // 齿数 z 不再单独编辑：change 后用 (d_B/A, m) 联动重算并回填。
     r.invol.db = e.target.value;
     if (e.type === "change") {
       fillDinDb(r);
       fillNfA(r);
-      renderTable();
     }
+    syncInvolZ(r);
+    updateInvolZInput(tr, r);
+    if (e.type === "change") renderTable();
     regenText();
     return;
   }
@@ -1076,12 +1137,18 @@ function onTableInput(e) {
     r.invol.std = e.target.value;
     const first = involList().find((p) => p.std === r.invol.std);
     r.invol.profile = first ? first.code : "";
+    syncInvolZ(r);
     renderTable();
     regenText();
     return;
   }
   const isCheck = e.target.type === "checkbox";
   setField(r, field, isCheck ? e.target.checked : e.target.value);
+  if (!isCheck && field === "invol.m") {
+    // DIN/NF：改模数 → z 立即由 (d_B/A, m) 联动（z 框只读）。
+    syncInvolZ(r);
+    updateInvolZInput(tr, r);
+  }
   if (isCheck) {
     sel = Number(tr.dataset.row);
     enforceExclusive(r);
@@ -1090,6 +1157,7 @@ function onTableInput(e) {
       const hit = splineSpecHit(r.spline.spec);
       if (hit && String(r.spline.de).trim() === "") r.spline.de = fmt(hit.de);
     }
+    if (field === "invol.on" && r.invol.on) syncInvolZ(r);
     renderTable();   // 勾选会改 disabled 状态 → 整表重渲染（点选不丢内容）
   }
   regenText();

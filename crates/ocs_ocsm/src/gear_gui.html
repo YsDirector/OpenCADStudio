@@ -16,7 +16,8 @@
   label { display: block; font-size: 12px; color: #666; margin: 8px 0 2px; }
   select, input[type=number], input[type=text] { width: 100%; padding: 5px 6px; border: 1px solid #c6ccd4;
            border-radius: 4px; font-size: 13px; box-sizing: border-box; background: #fff; }
-  input[disabled] { background: #f1f3f5; color: #777; cursor: not-allowed; }
+  input[disabled], input[readonly] { background: #f1f3f5; color: #777; cursor: not-allowed; }
+  input[readonly] { cursor: default; }
   .row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
   .opt { padding: 5px 10px; border: 1px solid #c6ccd4; border-radius: 5px;
          background: #fafbfc; cursor: pointer; font-size: 13px; user-select: none; }
@@ -102,7 +103,7 @@
 
       <label id="dbLabel">基准直径 d_B</label>
       <div class="ctl" id="dbCtl">
-        <input type="number" id="db" min="0" step="0.5" list="dinDbList" placeholder="DIN 5480-2 查表（可空，由 m/z 正算）">
+        <input type="number" id="db" min="0" step="0.5" list="dinDbList" placeholder="DIN 5480-2 查表（必给；z 由 d_B 与 m 决定）">
         <datalist id="dinDbList"></datalist>
         <datalist id="nfAList"></datalist>
         <div class="hint" id="dbHint" style="flex-basis:100%; margin:0">
@@ -135,7 +136,7 @@
         <span class="hint" style="margin:0">m = 25.4/DP（径节系列下拉暂不做，可输入任意 DP）</span>
       </div>
 
-      <label for="z">齿数[z]</label>
+      <label for="z" id="zLabel">齿数[z]</label>
       <div class="ctl"><input type="number" id="z" value="40" min="2" step="1"></div>
 
       <label for="alpha">压力角[α]</label>
@@ -225,8 +226,17 @@
 <script>
 /* ─────────────────────────── 常量与状态 ─────────────────────────── */
 
-// GB/T 1357 标准模数系列（GUI 直接全列，选它即填数字框）
+// GB/T 1357 标准模数系列（普通齿轮用；花键模式按体系换成各自标准表）
 const MODULES = [0.5, 0.6, 0.7, 0.8, 1, 1.25, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10, 12, 16, 20, 25, 32, 40, 50];
+// 花键各体系模数候选兜底（与 invol_spline.rs 的 GB_MODULES / CSV 实际 m 列同值；
+// 正经路径从 /api/parts 的 gb_modules/din_modules/nf_modules 取，避免两处漂移）：
+//  * GB  = GB/T 3478.1-2008 表 2（15 种：第 1 系列优先 + 第 2 系列）；
+//  * DIN = DIN 5480-2 名义表实际 m 列；
+//  * NF  = NF E22-141 尺寸表实际 m 列（含 1.667/3.75/7.5，且不含 GB/DIN 特有档）；
+//  * ANSI = 17 项径节 A/B（见 ANSI_PITCH_FALLBACK）。
+const GB_MODULE_FALLBACK = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2, 2.5, 3, 4, 5, 6, 8, 10];
+const DIN_MODULE_FALLBACK = [0.5, 0.6, 0.75, 0.8, 1, 1.25, 1.5, 1.75, 2, 2.5, 3, 4, 5, 6, 8, 10];
+const NF_MODULE_FALLBACK = [0.5, 0.75, 1, 1.25, 1.667, 2.5, 3.75, 5, 7.5, 10];
 // 常用压力角（GB/T 1356 默认 20°；30/37.5/45 也列入快捷档，45° 花键要配小 ha*）。
 // 下拉只是快捷方式，右侧数字框可输任意 10°<α<50° 的值。
 const ALPHAS = [14.5, 15, 17.5, 20, 22.5, 25, 30, 37.5, 45];
@@ -267,6 +277,9 @@ const INVOL_FALLBACK = [
 let involPresets = [];            // 目录表预设（拿不到就空，用 INVOL_FALLBACK）
 let involDinNominal = [];         // DIN 5480-2 名义表候选（d_B datalist）
 let involNfNominal = [];          // NF E22-141 尺寸表候选（A datalist）
+let involGbModules = [];          // GB/T 3478.1 表 2 模数候选（catalog gb_modules）
+let involDinModules = [];         // DIN 5480-2 名义表实际 m 列（catalog din_modules）
+let involNfModules = [];          // NF E22-141 尺寸表实际 m 列（catalog nf_modules）
 // ANSI B92.1 径节 17 项（A/B = P/Ps，Ps=2P）；正常从 `/api/parts` 取，拿不到用这份兜底
 // （与 invol_spline.rs 的 ansi_pitches() / assets/ansi_b921_formulas.csv 同源）。
 const ANSI_PITCH_FALLBACK = [
@@ -276,6 +289,22 @@ const ANSI_PITCH_FALLBACK = [
 let involAnsiPitches = [];        // ANSI 径节 A/B 候选（拿不到就空，用 ANSI_PITCH_FALLBACK）
 const ansiPitchList = () => (involAnsiPitches.length ? involAnsiPitches : ANSI_PITCH_FALLBACK);
 const ansiPitchP = (label) => parseFloat(String(label).split("/")[0]);
+// 当前体系（GB/DIN/NF）的模数候选：优先 catalog 实际值；DIN/NF 缺目录时退各自 CSV 同值兜底。
+function splineModuleList(std) {
+  if (std === "GB") return involGbModules.length ? involGbModules : GB_MODULE_FALLBACK;
+  if (std === "DIN") return involDinModules.length ? involDinModules : DIN_MODULE_FALLBACK;
+  if (std === "NF") return involNfModules.length ? involNfModules : NF_MODULE_FALLBACK;
+  return [];
+}
+// 体系候选来源（报错/标题要说清“来自哪张表”）。
+function moduleSourceOf(std) {
+  return ({
+    GB: "GB/T 3478.1-2008 表 2（15 种）",
+    DIN: "DIN 5480-2 名义表实际 m 列",
+    NF: "NF E22-141 尺寸表实际 m 列",
+    ANSI: "ANSI B92.1 径节 17 项（P/Ps=A/B）",
+  })[std] || "";
+}
 const ansiPairLabel = (p) => fmt(p) + "/" + fmt(2 * p);
 const isAnsiMode = () => isSpline() && el("stdSel").value === "ANSI";
 const involList = () => (involPresets.length ? involPresets : INVOL_FALLBACK);
@@ -445,8 +474,15 @@ function collect() {
     else if (!Number.isFinite(cfv) || cfv < 0) err = "齿形裕度系数 cF* 不能为负。";
     else if (!Number.isFinite(h) || h <= 0) err = "有效长度 L 必须是正数。";
     else if (!Number.isFinite(x)) err = "变位系数 Xn 必须是数字。";
-    else if ((std === "DIN" || isNf) && db === "" && (!Number.isFinite(m) || !Number.isFinite(z))) {
-      err = (isNf ? "NF 花键：给 A 与 m，或给 A 与 z" : "DIN 花键：给 m 与 z，或给 d_B 由表补全") + "（三者可少一个）。";
+    else if (Number.isFinite(m) && m > 0 && !splineModuleList(std).some((v) => Math.abs(v - m) < 1e-9)) {
+      // 体系不支持的模数：明确报错并指出可用值来自哪张表（与后端 module_series_check 同一口径）。
+      err = "模数 m=" + fmt(m) + " 不在 " + moduleSourceOf(std) + " 的可用系列（"
+          + splineModuleList(std).map(fmt).join("、") + "）。";
+    } else if ((std === "DIN" || isNf) && (db === "" || !Number.isFinite(m) || m <= 0 || !(z >= 3))) {
+      // z 已由 (d_B/A, m) 联动锁定：这里只提示必须给齐这两个输入。
+      err = isNf
+        ? "NF 花键：给公称直径 A 与模数 m（齿数 N 由 A 与 m 决定）。"
+        : "DIN 花键：给基准直径 d_B 与模数 m（齿数 z 由 d_B 与 m 决定）。";
     } else if (db === "" && (!Number.isFinite(m) || m <= 0 || !Number.isFinite(z) || z < 3)) {
       err = "花键：不给 " + (isNf ? "A" : "d_B") + " 时必须给 m 与 z。";
     } else if (db !== "" && std === "GB") {
@@ -507,18 +543,23 @@ function rebuildMSel(mode) {
     });
     sel.title = "ANSI B92.1 径节 17 项：A/B = P/Ps（Ps 恒为 2P）";
   } else {
-    MODULES.forEach((v) => {
+    // 花键模式按体系列该体系实际候选（GB 表 2 / DIN·NF 表实际 m 列）；普通齿轮仍是 GB/T 1357。
+    const list = mode === "gear" ? MODULES : splineModuleList(mode);
+    list.forEach((v) => {
       const o = document.createElement("option");
       o.value = String(v);
       o.textContent = String(v);
       sel.appendChild(o);
     });
-    sel.title = "GB/T 1357 标准模数系列（第一/第二系列）";
+    sel.title = mode === "gear"
+      ? "GB/T 1357 标准模数系列（第一/第二系列）"
+      : moduleSourceOf(mode) + "（可用：" + list.map(fmt).join("、") + "）";
   }
 }
 function syncModuleSelect() {
   const ansi = isAnsiMode();
-  rebuildMSel(ansi ? "ansi" : "module");
+  const std = isSpline() ? el("stdSel").value : "gear";
+  rebuildMSel(ansi ? "ansi" : std);
   const m = effM();
   if (!isSpline() && el("sysSel").value === "DP" && Number.isFinite(m)) el("m").value = fmt(m);
   const hint = el("ansiPitchHint");
@@ -536,7 +577,8 @@ function syncModuleSelect() {
     }
     return;
   }
-  const hit = Number.isFinite(m) ? MODULES.find((v) => Math.abs(v - m) < 1e-9) : undefined;
+  const list = isSpline() ? splineModuleList(std) : MODULES;
+  const hit = Number.isFinite(m) ? list.find((v) => Math.abs(v - m) < 1e-9) : undefined;
   el("mSel").value = hit ? String(hit) : "custom";
 }
 
@@ -587,16 +629,16 @@ function syncSplineUI() {
     if (!bench) el("db").value = ""; // 不在页面上传
     el("dbLabel").textContent = std === "NF" ? "公称直径 A（NF）" : "基准直径 d_B";
     el("db").placeholder = std === "NF"
-      ? "NF E22-141 查表（可空，由 m/z 正算）"
-      : "DIN 5480-2 查表（可空，由 m/z 正算）";
+      ? "NF E22-141 查表（必给；N 由 A 与 m 决定）"
+      : "DIN 5480-2 查表（必给；z 由 d_B 与 m 决定）";
     el("db").setAttribute("list", std === "NF" ? "nfAList" : "dinDbList");
     el("dbHint").textContent = std === "NF"
-      ? "A 是 NF E22-141 的主参数（A=m(z+2x+0.4)，α=20°）；给 A 后 m 或 z 可空一个，由表定另一个。"
-      : "d_B 只属于 DIN 5480；GB/T 3478 下不给（本体系不用 d_B）。DIN 给 d_B 后 m 或 z 可空一个：由表定另一个。";
+      ? "A 是 NF E22-141 的主参数（A=m(N+2x+0.4)，α=20°）；必须给 A 与 m（N 由二者决定，不单独编辑）。"
+      : "d_B 只属于 DIN 5480；必须给 d_B 与 m（z 由二者决定，不单独编辑）；GB/T 3478 下不给。";
     el("stdHint").textContent = ({
-      GB: "GB/T 3478.1：模数制，不用 d_B；给 d_B 会明确报错。",
-      DIN: "DIN 5480-1：d_B 主参数（可给 m 或 z 推导）。",
-      NF: "NF E22-141：A 主参数（α=20°；尺寸表 p18/p20/p21/p22 共 288 行已入库）。",
+      GB: "GB/T 3478.1：模数制，不用 d_B；给 d_B 会明确报错；模数取表 2 的 15 种。",
+      DIN: "DIN 5480-1：d_B 主参数；齿数 z 由 (d_B, m) 决定（输入框已锁定）；模数取 DIN 5480-2 名义表实际 m 列。",
+      NF: "NF E22-141：A 主参数（α=20°；尺寸表 p18/p20/p21/p22 共 288 行已入库）；齿数 N 由 (A, m) 决定（输入框已锁定）；模数取尺寸表实际 m 列。",
       ANSI: "ANSI B92.1：径节制公式驱动（径节 P + Table 2 五列，标准为英制、引擎换算 mm）；径节写 A/B（2.5/5、3/6…128/256），Ps 恒为 2P；x 不允许；rf 无标准值（切于齿根过渡弧）。",
     })[std] || "";
   } else {
@@ -605,6 +647,7 @@ function syncSplineUI() {
     showRow("m", !dp);
     showRow("dp", dp);
   }
+  syncLockedZ();   // DIN/NF：z 只读 + 由 (d_B/A, m) 联动回填；GB/ANSI 解除。
 }
 
 // 齿廓下拉：按标准填预设代号（保留当前选择，否则取第一个）。
@@ -669,18 +712,69 @@ function fillNfAList() {
     });
 }
 
-// NF：选了 A → 自动带出 m/z（唯一命中才填，多档/多 N 时保留供手选）。
-function fillNfA() {
-  if (el("stdSel").value !== "NF") return;
+// 齿数是否由 (d_B/A, m) 锁定（DIN/NF；GB/ANSI 不锁）。
+function isZLocked() {
+  if (!isSpline()) return false;
+  const std = el("stdSel").value;
+  return std === "DIN" || std === "NF";
+}
+// 由基准直径（DIN d_B / NF A）与模数 m 推 z（与后端 derive_z_from_bench_m 同口径）：
+// 表内直查优先（多变体取 |x| 最小 / 最接近 NF 主系列 x=0.8；current 命中表内变体则保留）；
+// 表外按公式区间取整。非法/推不出 → NaN。
+function deriveBenchZ(std, bench, m, current) {
+  if (!Number.isFinite(bench) || bench <= 0 || !Number.isFinite(m) || m <= 0) return NaN;
+  const key = std === "NF" ? "a" : "db";
+  const rows = (std === "NF" ? involNfNominal : involDinNominal)
+    .filter((r) => Math.abs(Number(r[key]) - bench) < 1e-6 && Math.abs(Number(r.m) - m) < 1e-9);
+  const cand = [...new Set(rows.map((r) => Number(r.z)))].filter((v) => v >= 3 && v <= 1000).sort((a, b) => a - b);
+  const xOf = (z) => std === "NF" ? (bench - m * (z + 0.4)) / (2 * m) : (bench - m * (z + 1.1)) / (2 * m);
+  if (cand.length) {
+    if (Number.isFinite(current) && cand.indexOf(current) >= 0) return current;   // 表内显式变体：保留
+    if (cand.length === 1) return cand[0];
+    if (std === "NF") return cand.reduce((a, b) => Math.abs(xOf(a) - 0.8) <= Math.abs(xOf(b) - 0.8) ? a : b);
+    return cand.reduce((a, b) => Math.abs(xOf(a)) <= Math.abs(xOf(b)) ? a : b);
+  }
+  if (std === "DIN") {
+    const lo = Math.ceil(bench / m - 2.0 - 1e-9), hi = Math.floor(bench / m - 1.0 + 1e-9);
+    if (hi < lo || hi < 3 || lo > 1000) return NaN;
+    let best = NaN;
+    for (let z = Math.max(3, lo); z <= Math.min(1000, hi); z++) {
+      if (!Number.isFinite(best) || Math.abs(xOf(z)) < Math.abs(xOf(best)) - 1e-12) best = z;
+    }
+    return best;
+  }
+  // NF 表外：主系列 x=0.8 → z = round(A/m − 2.0)。
+  const z = Math.round(bench / m - 2.0);
+  return z >= 1 && z <= 1000 ? z : NaN;
+}
+// DIN/NF：齿数框只读 + 由 (d_B/A, m) 联动回填；GB/ANSI 解除只读。
+function syncLockedZ() {
+  const locked = isZLocked();
+  const zEl = el("z");
+  const std = el("stdSel").value;
+  zEl.readOnly = locked;
+  zEl.title = locked
+    ? "由" + (std === "NF" ? "公称直径 A" : "基准直径 d_B") + "与模数 m 联动计算（表内直查；表外按公式区间取整），不单独编辑。"
+    : "";
+  el("zLabel").textContent = "齿数[z]" + (locked ? "（由 " + (std === "NF" ? "A 与 m" : "d_B 与 m") + "决定）" : "");
+  if (!locked) return;
+  const z = deriveBenchZ(std, num("db"), num("m"), num("z"));
+  if (Number.isFinite(z)) zEl.value = String(z);
+}
+// 选了基准直径（DIN d_B / NF A）→ 唯一 m 时自动带出；z 随后由 (d_B/A, m) 联动回填。
+function fillBench() {
+  const on = isSpline();
+  const std = on ? el("stdSel").value : "";
   const v = Number(String(el("db").value).trim());
-  if (!(v > 0)) return;
-  const hits = involNfNominal.filter((r) => Math.abs(Number(r.a) - v) < 1e-6);
-  if (!hits.length) return;
-  const ms = [...new Set(hits.map((r) => Number(r.m)))];
-  const zs = [...new Set(hits.map((r) => Number(r.z)))];
-  if (ms.length === 1) el("m").value = fmt(ms[0]);
-  if (zs.length === 1) el("z").value = String(zs[0]);
-  syncKindHint();   // A 自动带出 m/z 后，表达式/命令行提示立即跟上
+  const rows = std === "NF" ? involNfNominal : (std === "DIN" ? involDinNominal : []);
+  if (v > 0) {
+    const key = std === "NF" ? "a" : "db";
+    const hits = rows.filter((r) => Math.abs(Number(r[key]) - v) < 1e-6);
+    const ms = [...new Set(hits.map((r) => Number(r.m)))].filter(Number.isFinite);
+    if (ms.length === 1) el("m").value = fmt(ms[0]);
+  }
+  syncLockedZ();
+  syncKindHint();   // 自动带出后，表达式/命令行提示立即跟上
 }
 
 // 从 `/api/parts` 取花键预设与 DIN 名义表（与 shaft_gui 同源）；失败退兜底表。
@@ -694,12 +788,20 @@ async function loadInvolCatalog() {
       .filter((r) => r && Number.isFinite(Number(r.db)));
     involNfNominal = (inv && Array.isArray(inv.nf_nominal) ? inv.nf_nominal : [])
       .filter((r) => r && Number.isFinite(Number(r.a)));
+    const mods = (arr) => (Array.isArray(arr) ? arr : [])
+      .map(Number).filter((v) => Number.isFinite(v) && v > 0).sort((a, b) => a - b);
+    involGbModules = mods(inv && inv.gb_modules);
+    involDinModules = mods(inv && inv.din_modules);
+    involNfModules = mods(inv && inv.nf_modules);
     involAnsiPitches = (inv && Array.isArray(inv.ansi_pitches) ? inv.ansi_pitches : [])
       .filter((v) => typeof v === "string" && /^[0-9.]+\/[0-9.]+$/.test(v));
   } catch (e) {
     involPresets = [];
     involDinNominal = [];
     involNfNominal = [];
+    involGbModules = [];
+    involDinModules = [];
+    involNfModules = [];
     involAnsiPitches = [];
   }
   el("mSel").dataset.mode = "";   // 目录到货后重建 ANSI A/B 选项
@@ -1200,13 +1302,14 @@ function ping(bye) {
       n.addEventListener("input", markAlpha);
       n.addEventListener("change", markAlpha);
     }
+    if (id === "db") {
+      // 选了 d_B（DIN）/ A（NF）→ 唯一 m 时自动带出；z 随后由 (d_B/A, m) 联动回填。
+      // 先于 onInput 注册，保证 onInput 里 syncLockedZ 看到的是带出后的 m。
+      n.addEventListener("input", fillBench);
+      n.addEventListener("change", fillBench);
+    }
     n.addEventListener("input", onInput);
     n.addEventListener("change", onInput);
-    if (id === "db") {
-      // NF：选了公称直径 A → 自动带出 m/z（唯一命中）；DIN 仍走 d_B 候选。
-      n.addEventListener("input", fillNfA);
-      n.addEventListener("change", fillNfA);
-    }
     n.addEventListener("blur", onCommit);
     n.addEventListener("keydown", (e) => { if (e.key === "Enter") onCommit(); });
   });
@@ -1260,6 +1363,8 @@ function ping(bye) {
   syncDefaultAlpha(false);
   syncSplineUI();
   await loadInvolCatalog();
+  syncModuleSelect();   // 目录到货后按体系重建模数/径节候选
+  syncLockedZ();        // DIN/NF：用目录表联动回填只读 z
   applyKindUI();
   syncAlphaHint();
   validateUI();

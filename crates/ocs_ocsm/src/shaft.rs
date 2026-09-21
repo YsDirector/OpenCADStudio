@@ -6344,6 +6344,10 @@ GEAR M3 Z20";
             ("INVOLSPLINE GB30R M3 Z20 L30 de63 de64", "de 覆盖重复"),
             ("INVOLSPLINE DIN30 M2 Z18 X0.6 L20", "x"),
             ("INVOLSPLINE GB30R M3 Z20 L30 M1.5", "M 重复"),
+            // 体系不支持的模数：轴段命令行侧也明确报错并指出来源表。
+            ("INVOLSPLINE GB30R M0.7 Z20 L30", "表 2"),
+            ("INVOLSPLINE NFP A80 M2 Z19 L30", "NF E22-141"),
+            ("INVOLSPLINE DIN30 DB40 M0.7 L30", "din5480_2_nominal.csv"),
         ];
         for (text, needle) in cases {
             let err = parse_program(text).unwrap_err();

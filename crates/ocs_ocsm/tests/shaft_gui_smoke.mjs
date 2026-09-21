@@ -43,6 +43,7 @@ const INVOL = [
   { code: 'GB30R', std: 'GB', profile: '30圆齿根', alpha: 30, ha: 0.5, hf: 0.9, rho: 0.4, cf: 0.1 },
   { code: 'GB30P', std: 'GB', profile: '30平齿根', alpha: 30, ha: 0.5, hf: 0.75, rho: 0.2, cf: 0.1 },
   { code: 'DIN30', std: 'DIN', profile: 'DIN30', alpha: 30, ha: 0.45, hf: 0.55, rho: 0.16, cf: 0.1 },
+  { code: 'NFP', std: 'NF', profile: 'NF平齿根', alpha: 20, ha: 0.2, hf: 1.0, rho: 0.3, cf: 0.1 },
   { code: 'ANSI30P', std: 'ANSI', profile: 'ANSI30平齿根齿侧', alpha: 30, ha: 0.5, hf: 0.675, rho: 0, cf: 0 },
 ];
 
@@ -52,6 +53,7 @@ const DIN_NOMINAL = [
   { db: 45, m: 3, z: 13, x: 0.45, page: 31 },
   { db: 45, m: 3, z: 14, x: -0.05, page: 31 },
 ];
+const NF_NOMINAL = [{ a: 80, m: 3.75, z: 19, x: 0.967, page: 21 }];
 
 // ── 最小 DOM 垫片 ────────────────────────────────────────────────
 function htmlDecode(s) {
@@ -159,6 +161,7 @@ function parseFieldTag(tagHtml, tagName) {
   f.type = attrs.type || (tagName === 'SELECT' ? 'select-one' : 'text');
   f.value = attrs.value !== undefined ? attrs.value : '';
   f.disabled = /\bdisabled\b/.test(attrsText);
+  f.readOnly = /\breadonly\b/.test(attrsText);
   f.checked = /\bchecked\b/.test(attrsText);
   if (tagName === 'SELECT') {
     f.options = [];
@@ -304,7 +307,7 @@ global.fetch = async (u, opts = {}) => {
       ok: true,
       families: {
         detail_spline_rect: { specs: SPECS },
-        detail_invol_spline: { invol_presets: INVOL, din_nominal: DIN_NOMINAL },
+        detail_invol_spline: { invol_presets: INVOL, din_nominal: DIN_NOMINAL, nf_nominal: NF_NOMINAL },
       },
     });
   }
@@ -481,6 +484,34 @@ check(dslEl.value.includes('INVOLSPLINE DIN30 DB40')
   `行文本应带 DB40/M2/Z18：${JSON.stringify(dslEl.value)}`);
 irow = segBody._rows[0];
 checkInvolDerive(irow, '查表命中 p27 m=2');
+// ② DIN：z 由 (d_B, m) 锁定（行内只读 + 联动回填）；改 m 立即重算；显式 z 不符以 d_B 为准。
+const zin = irow._fields.find((f) => f.dataset.f === 'invol.z');
+check(!!zin && zin.readOnly === true, 'DIN 行 z 输入框应只读');
+check(zin && zin.value === '18', `DIN d_B=40/m=2 联动 z 应为 18，实为 ${zin && zin.value}`);
+const min2 = irow._fields.find((f) => f.dataset.f === 'invol.m');
+min2.value = '3';
+segBody._fire('input', min2);
+await new Promise((r) => setImmediate(r));
+check(S.rows[0].invol.z === '12', `DIN 改 m=3 后 z 应由 (d_B,m) 重算为 12，实为 ${S.rows[0].invol.z}`);
+const zin2 = segBody._rows[0]._fields.find((f) => f.dataset.f === 'invol.z');
+check(!!zin2 && zin2.value === '12', `只读 z 框应同步为 12，实为 ${zin2 && zin2.value}`);
+check(dslEl.value.includes('Z12'), `行文本应同步 Z12：${JSON.stringify(dslEl.value)}`);
+// 显式 z 与 (d_B, m) 推导不符 → 解析/回填时以 d_B 为准（沿用后端 Adjust 口径）。
+dslEl.value = 'INVOLSPLINE DIN30 DB40 M2 Z14 L30';
+await S.refreshFromText();
+check(S.rows[0].invol.z === '18', `显式 Z14 应按 d_B=40/m=2 修正为 18，实为 ${S.rows[0].invol.z}`);
+// NF：A=80/m=3.75 → N=19；z 也只读。
+dslEl.value = 'INVOLSPLINE NFP A80 M3.75 Z14 L30';
+await S.refreshFromText();
+check(S.rows[0].invol.profile === 'NFP', `应回填 NFP：${S.rows[0].invol.profile}`);
+check(S.rows[0].invol.z === '19', `NF 显式 N=14 应按 A=80/m=3.75 修正为 19，实为 ${S.rows[0].invol.z}`);
+const nfz = segBody._rows[0]._fields.find((f) => f.dataset.f === 'invol.z');
+check(!!nfz && nfz.readOnly === true, 'NF 行 z 输入框应只读');
+check(nfz && nfz.value === '19', `NF 只读 z 框应为 19，实为 ${nfz && nfz.value}`);
+// 回到 DIN 行做剩余断言（模型 code/de 等）
+dslEl.value = 'INVOLSPLINE DIN30 DB40 M2 L30 de70';
+await S.refreshFromText();
+irow = segBody._rows[0];
 const dinModel = S.modelFromRows();
 check(!!dinModel && dinModel.segments[0].invol_spline.d_b === 40
   && dinModel.segments[0].invol_spline.z === 18,

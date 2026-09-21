@@ -5034,18 +5034,23 @@ mod tests {
         // A/B 的 B != 2A → 语法报错说明 Ps=2P
         let e = params_from_query("mode=spline&std=ANSI&p=5/11&z=20").unwrap_err();
         assert!(e.contains("Ps 恒为 2P"), "{e}");
-        let (p, _, _) = params_from_query("mode=spline&std=NF&m=3&z=20").unwrap();
+        // NF 模数只能取 NF E22-141 尺寸表实际 m 列（3.75 在表内；3.0 不是 NF 档位）。
+        let (p, _, _) = params_from_query("mode=spline&std=NF&m=3.75&z=19").unwrap();
         let s = p.spline.as_ref().expect("NF 花键应该可用");
         assert_eq!(s.std, crate::invol_spline::SplineStd::NF);
-        let (p, _, _) = params_from_query("mode=spline&std=NF&a=66&m=3&z=20").unwrap();
+        let (p, _, _) = params_from_query("mode=spline&std=NF&a=80&m=3.75&z=19").unwrap();
         let (e, _) = p.spline_engine().unwrap();
-        assert_eq!((e.m, e.z), (3.0, 20));
-        assert_eq!(e.a, Some(66.0), "A 主参数应回填");
-        // 命令行：`花键 std=NF a=66 3 20`（关键字式）与 `A66` 贴写都收。
-        for text in ["花键 std=NF a=66 3 20", "花键 std=NF A66 3 20", "花键 NFP A66 3 20"] {
+        assert_eq!((e.m, e.z), (3.75, 19));
+        assert_eq!(e.a, Some(80.0), "A 主参数应回填");
+        // 命令行：`花键 std=NF a=80 3.75 19`（关键字式）与 `A80` 贴写都收。
+        for text in [
+            "花键 std=NF a=80 3.75 19",
+            "花键 std=NF A80 3.75 19",
+            "花键 NFP A80 3.75 19",
+        ] {
             let r = parse_request(text).unwrap_or_else(|e| panic!("{text}: {e}"));
             let (e, _) = r.params.spline_engine().unwrap_or_else(|e| panic!("{text}: {e}"));
-            assert_eq!(e.a, Some(66.0), "{text}");
+            assert_eq!(e.a, Some(80.0), "{text}");
             assert_eq!(e.std, crate::invol_spline::SplineStd::NF, "{text}");
         }
         // A 槽位在 GB 下报统一文案；M/DP 是齿轮体系，花键模式直接报错。
@@ -5502,6 +5507,11 @@ mod tests {
         // GB + d_B（花键模式）→ 统一文案
         let e = parse_request("花键 GB30R db=40 3 20 h=30").unwrap_err();
         assert_eq!(e, crate::invol_spline::GB_D_B_MSG, "{e}");
+        // 体系不支持的模数：命令行侧也明确报错并指出来源表（GUI 侧同一入口）。
+        let e = parse_request("花键 GB30R 0.7 20 h=30").unwrap_err();
+        assert!(e.contains("表 2") && e.contains("0.75"), "{e}");
+        let e = parse_request("花键 NFP a=80 2 19 h=30").unwrap_err();
+        assert!(e.contains("NF E22-141") && e.contains("尺寸表"), "{e}");
         // 内花键：复用「内齿轮」位置参数（同一套 toggle）
         let req = parse_request("花键 内花键 GB30R 3 20 h=30").unwrap();
         assert_eq!(req.params.kind, GearKind::Internal);

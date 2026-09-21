@@ -125,6 +125,15 @@ pub const ANSI_DEFAULT_PROFILE: &str = "ANSI30平齿根齿侧";
 /// 端视图每条渐开线齿廓的折线段数（真实渐开线采样；折线保形、实体数可控）。
 pub const INVOLUTE_SEGMENTS: usize = 12;
 
+/// **GB/T 3478.1-2008 表 2 模数系列（15 种，第 1 系列优先 + 第 2 系列）**。
+///
+/// 第 1 系列（优先采用）：0.25、0.5、1、1.5、2、2.5、3、5、10；
+/// 第 2 系列：0.75、1.25、1.75、4、6、8。
+/// （表 2 原文分两列；`0.25` 亦在表内，共 15 种。数值顺序升序，来源见 `索引_GB3478.md` p06/p07。）
+pub const GB_MODULES: &[f64] = &[
+    0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0, 4.0, 5.0, 6.0, 8.0, 10.0,
+];
+
 // ─────────────────────────── 标准 / 预设 ───────────────────────────
 
 /// 花键体系（**显式参数标识**：不再从 `d_B` 反推）。
@@ -1134,6 +1143,8 @@ pub fn resolve_din_by_d_b(
         if !(m.is_finite() && m > 0.0) {
             return Err(format!("DIN 5480：m={} 必须是正数。", trim(m)));
         }
+        // 模数必须来自 DIN 5480-2 名义表的实际 m 列（候选随表走，避免系列漂移）。
+        module_series_check(SplineStd::DIN, m)?;
     }
     match (m, z) {
         (Some(m), Some(z)) => resolve_with_m_z(d_b, m, z, x),
@@ -1232,12 +1243,46 @@ fn resolve_with_z(d_b: f64, z: u32) -> Result<(InvolParams, D_bOrigin), String> 
 }
 
 /// `d_B + m + z`：`x` 由公式解出；不兼容时以 `d_B` 为准重算 z（保留 m）并明文提示。
+///
+/// `d_B` 为主参数：显式 `z` 与 `(d_B, m)` 推导不符、且不在 `(d_B, m)` 表内变体里时，
+/// **按 `d_B` 取推导 z** 并附明文提示（不静默改）。
 fn resolve_with_m_z(
     d_b: f64,
     m: f64,
     z: u32,
     x: Option<f64>,
 ) -> Result<(InvolParams, D_bOrigin), String> {
+    let (z_canon, _) = derive_z_from_bench_m(SplineStd::DIN, d_b, m)?;
+    let in_table_for_z = din5480_rows()
+        .iter()
+        .any(|r| (r.m - m).abs() < DIN_M_TOL && r.z == z && (r.d_b - d_b).abs() < DIN_D_B_TOL);
+    if z != z_canon && !in_table_for_z {
+        let x2 = x_from_d_b(d_b, m, z_canon);
+        let z_lo = d_b / m - 2.0;
+        let z_hi = d_b / m - 1.0;
+        let mut note = format!(
+            "按基准直径 d_B={} 取 z={}（与输入 z={} 不符，d_B 为主参数；z 由 d_B 与 m 决定；\
+             由 d_B=m(z+1.1+2x)、x∈[−0.05,0.45] 得 z∈[{:.4},{:.4}]）",
+            trim(d_b),
+            z_canon,
+            z,
+            z_lo,
+            z_hi
+        );
+        if let Some(xi) = x {
+            if (xi - x2).abs() > DIN_X_TOL {
+                note.push_str(&format!(
+                    "；同时按 d_B 取 x={}（与输入 x={} 不符）",
+                    trim(x2),
+                    trim(xi)
+                ));
+            }
+        }
+        let p = InvolParams::din(m, z_canon, x2)
+            .map_err(|e| format!("DIN 5480：{e}"))?
+            .with_d_b(d_b);
+        return Ok((p, D_bOrigin::Adjusted(note)));
+    }
     let x_formula = x_from_d_b(d_b, m, z);
     let in_range = (-0.05 - 1e-9..=0.45 + 1e-9).contains(&x_formula);
     if in_range {
@@ -1360,6 +1405,12 @@ pub fn resolve_spline(
         }
         None => profile,
     };
+    // 体系模数校验：显式给的 m 必须在该体系候选里（表外推导的 m 不拦；ANSI 在校验径节时统一处理）。
+    if std != SplineStd::ANSI {
+        if let Some(mv) = m {
+            module_series_check(std, mv)?;
+        }
+    }
     // ANSI：公式驱动 —— 第 5 参槽位 = 径节 P；无 d_B/A、无变位。
     if std == SplineStd::ANSI {
         if d_b.is_some() {
@@ -1627,6 +1678,58 @@ pub fn nf_e22141_modules() -> Vec<f64> {
     v.sort_by(|a, b| a.partial_cmp(b).unwrap());
     v.dedup_by(|a, b| (*a - *b).abs() < NF_M_TOL);
     v
+}
+
+/// 体系支持的模数/径节候选（来源固定；GUI 下拉与报错文案共用）。
+///
+/// * GB：`GB/T 3478.1-2008 表 2` 的 15 种（第 1 系列优先 + 第 2 系列）；
+/// * DIN：`assets/din5480_2_nominal.csv` 实际出现的 `m` 列（16 档）；
+/// * NF：`assets/nf_e22141_dims.csv` 实际出现的 `m` 列（10 档，含 1.667/3.75/7.5）；
+/// * ANSI：径节 `P` 17 项（`assets/ansi_b921_formulas.csv`；单位每英寸齿数，不是模数）。
+pub fn module_candidates(std: SplineStd) -> Vec<f64> {
+    match std {
+        SplineStd::GB => GB_MODULES.to_vec(),
+        SplineStd::DIN => din5480_modules(),
+        SplineStd::NF => nf_e22141_modules(),
+        SplineStd::ANSI => ansi_pitches().iter().map(|r| r.p).collect(),
+    }
+}
+
+/// 体系候选值的**来源说明**（报错文案要指出“来自哪张表”）。
+pub fn module_source(std: SplineStd) -> &'static str {
+    match std {
+        SplineStd::GB => {
+            "GB/T 3478.1-2008 表 2（15 种：第 1 系列 0.25/0.5/1/1.5/2/2.5/3/5/10 + 第 2 系列 0.75/1.25/1.75/4/6/8）"
+        }
+        SplineStd::DIN => "DIN 5480-2 名义表（assets/din5480_2_nominal.csv 实际 m 列）",
+        SplineStd::NF => "NF E22-141 尺寸表（assets/nf_e22141_dims.csv 实际 m 列）",
+        SplineStd::ANSI => "ANSI B92.1 径节 17 项（assets/ansi_b921_formulas.csv，P/Ps=A/B）",
+    }
+}
+
+/// **体系模数校验**：不在该体系候选里 → 明确报错并指出来源表与可用值。
+/// ANSI 走 [`ansi_pitch_series_check`]（径节不是模数）。
+pub fn module_series_check(std: SplineStd, m: f64) -> Result<(), String> {
+    if std == SplineStd::ANSI {
+        return ansi_pitch_series_check(m);
+    }
+    if !(m.is_finite() && m > 0.0) {
+        return Err(format!("{}：模数 m={} 必须是正数。", std.code(), trim(m)));
+    }
+    let list = module_candidates(std);
+    if list
+        .iter()
+        .any(|v| (v - m).abs() <= 1e-9 * v.abs().max(1.0))
+    {
+        return Ok(());
+    }
+    Err(format!(
+        "{}：模数 m={} 不在体系可用系列（来源：{}；可用值：{}）。",
+        std.code(),
+        trim(m),
+        module_source(std),
+        list.iter().map(|v| trim(*v)).collect::<Vec<_>>().join("、")
+    ))
 }
 
 fn nf_field_get(row: &NfE22141Row, field: NfField) -> Option<f64> {
@@ -1917,6 +2020,108 @@ fn derive_nf_z_from_a_m(a: f64, m: f64, prefer: Option<u32>, x: Option<f64>) -> 
     Ok((z as u32, z_lo_f, z_hi_f))
 }
 
+/// **由基准直径（DIN `d_B` / NF `A`）与模数 `m` 推导齿数 `z`**（DIN/NF 联动锁定齿数的唯一入口）。
+///
+/// * 表内直查优先：命中 `(d_B/A, m)` 的 `z` 唯一 → 用它；同一 `(d_B/A, m)` 多个 `z` 变体
+///   （表格事实）→ 取 |x| 最小者（DIN；NF 取最接近表内主系列 x=0.8 者）；
+/// * 表外按公式区间取整：DIN `d_B=m(z+1.1+2x)`、`x∈[−0.05,0.45]`；NF `A=m(N+2x+0.4)`、主系列 x=0.8；
+/// * 返回 `(z, 来源说明)`；GB/ANSI 无此概念 → 报错。
+///
+/// 口径与图形界面一致：GUI 把这个 `z` 回填到只读齿数框，命令行显式给 `z` 时由
+/// [`resolve_din_by_d_b`]/[`resolve_nf_by_a`] 与推导值比对，不符则以基准直径为准并明文提示。
+pub fn derive_z_from_bench_m(std: SplineStd, bench: f64, m: f64) -> Result<(u32, String), String> {
+    if !(bench.is_finite() && bench > 0.0) {
+        return Err(format!(
+            "{}：基准直径/公称直径={} 必须是正数。",
+            std.code(),
+            trim(bench)
+        ));
+    }
+    if !(m.is_finite() && m > 0.0) {
+        return Err(format!("{}：模数 m={} 必须是正数。", std.code(), trim(m)));
+    }
+    match std {
+        SplineStd::DIN => {
+            let mut zs: Vec<u32> = din5480_match(bench, Some(m)).iter().map(|r| r.z).collect();
+            zs.sort_unstable();
+            zs.dedup();
+            if zs.is_empty() {
+                let (z, z_lo, z_hi) = derive_z_from_d_b_m(bench, m, None)?;
+                return Ok((z, format!(
+                    "表外推导：d_B={}、m={} 不在 DIN 5480-2 名义表；由 d_B=m(z+1.1+2x)、x∈[−0.05,0.45] 得 z∈[{:.4},{:.4}]，取 z={}（x={}）",
+                    trim(bench), trim(m), z_lo, z_hi, z, trim(x_from_d_b(bench, m, z))
+                )));
+            }
+            let z = zs
+                .iter()
+                .copied()
+                .min_by(|&a, &b| {
+                    x_from_d_b(bench, m, a)
+                        .abs()
+                        .partial_cmp(&x_from_d_b(bench, m, b).abs())
+                        .unwrap()
+                        .then(a.cmp(&b))
+                })
+                .expect("zs 非空");
+            let note = if zs.len() == 1 {
+                format!("查表命中 d_B={}、m={} → z={}", trim(bench), trim(m), z)
+            } else {
+                let variants = zs
+                    .iter()
+                    .map(|v| format!("z={}（x={}）", v, trim(x_from_d_b(bench, m, *v))))
+                    .collect::<Vec<_>>()
+                    .join("、");
+                format!(
+                    "查表命中 d_B={}、m={} 的多个 z 变体（{}），按 |x| 最小取 z={}",
+                    trim(bench), trim(m), variants, z
+                )
+            };
+            Ok((z, note))
+        }
+        SplineStd::NF => {
+            let mut zs: Vec<u32> = nf_match(bench, Some(m)).iter().map(|r| r.z).collect();
+            zs.sort_unstable();
+            zs.dedup();
+            if zs.is_empty() {
+                let (z, z_lo, z_hi) = derive_nf_z_from_a_m(bench, m, None, None)?;
+                return Ok((z, format!(
+                    "表外推导：A={}、m={} 不在 NF E22-141 尺寸表；按主系列 x=0.8 取 N={}（表内 x∈[0.6,0.967] 时 N∈[{:.4},{:.4}]）",
+                    trim(bench), trim(m), z, z_lo, z_hi
+                )));
+            }
+            let z = zs
+                .iter()
+                .copied()
+                .min_by(|&a, &b| {
+                    (x_from_a(bench, m, a) - 0.8)
+                        .abs()
+                        .partial_cmp(&(x_from_a(bench, m, b) - 0.8).abs())
+                        .unwrap()
+                        .then(a.cmp(&b))
+                })
+                .expect("zs 非空");
+            let note = if zs.len() == 1 {
+                format!("查表命中 A={}、m={} → N={}", trim(bench), trim(m), z)
+            } else {
+                let variants = zs
+                    .iter()
+                    .map(|v| format!("N={}（x={}）", v, trim(x_from_a(bench, m, *v))))
+                    .collect::<Vec<_>>()
+                    .join("、");
+                format!(
+                    "查表命中 A={}、m={} 的多个 N 变体（{}），按最接近主系列 x=0.8 取 N={}",
+                    trim(bench), trim(m), variants, z
+                )
+            };
+            Ok((z, note))
+        }
+        _ => Err(format!(
+            "{} 不使用基准直径推齿数（GB 用 m/z/x，ANSI 用径节 P 与齿数 N）。",
+            std.label()
+        )),
+    }
+}
+
 /// 用 `A` 补全/校验 NF 参数（`m/N/x` 缺哪项补哪项；主路径入口）。
 ///
 /// **`A` 是主参数**（NF E22-141 p07：`A = m(N+2x+0.4)`）：
@@ -1938,11 +2143,37 @@ pub fn resolve_nf_by_a(
         if !(m.is_finite() && m > 0.0) {
             return Err(format!("NF E22-141：m={} 必须是正数。", trim(m)));
         }
+        // 模数必须来自 NF E22-141 尺寸表的实际 m 列（与 GB/DIN 系列不同）。
+        module_series_check(SplineStd::NF, m)?;
     }
     match (m, z) {
         (Some(m), Some(z)) => {
-            let x_formula = x_from_a(a, m, z);
+            // A 为主参数：N 由 (A, m) 推导；输入 N 不符且不是表内变体 → 以 A 为准重算并明文提示。
+            let (z_canon, _) = derive_z_from_bench_m(SplineStd::NF, a, m)?;
             let row = nf_match(a, Some(m)).into_iter().find(|r| r.z == z);
+            if z != z_canon && row.is_none() {
+                let x2 = x_from_a(a, m, z_canon);
+                let mut note = format!(
+                    "按公称直径 A={} 取 N={}（与输入 N={} 不符，A 为主参数；N 由 A 与 m 决定）",
+                    trim(a), z_canon, z
+                );
+                if let Some(xi) = x {
+                    if (xi - x2).abs() > NF_X_TOL {
+                        note.push_str(&format!(
+                            "；同时按 A 取 x={}（与输入 x={} 不符）",
+                            trim(x2),
+                            trim(xi)
+                        ));
+                    }
+                }
+                let p = InvolParams::from_preset(SplineStd::NF, profile, m, z_canon)
+                    .map_err(|e| format!("NF E22-141：{e}"))?
+                    .with_x(x2)
+                    .with_a(a);
+                p.validate().map_err(|e| format!("NF E22-141：{e}"))?;
+                return Ok((p, D_bOrigin::Adjusted(note)));
+            }
+            let x_formula = x_from_a(a, m, z);
             let (xv, origin) = match row {
                 Some(row) => {
                     let with_fixes = if row.fixes.is_empty() {
@@ -3887,6 +4118,10 @@ impl InvolParams {
                 LAYER_MAIN,
             ));
         }
+        // 分度圆（`3中心线层`）：与外花键端视同口径 —— 半径 = 分度圆半径 d/2
+        // （GB `m·z`、DIN/NF 各自 `d()`、ANSI `D=N/P` 在引擎内部就是 `d()`）。
+        // 内齿轮仍按模板不画；矩形花键模板没有；本件只补「内花键端视」这一处。
+        out.push(circle([0.0, 0.0], self.d() / 2.0, LAYER_CENTER));
         // 十字中心线：长度 = 外侧齿根直径 D_ei + 6n（与内齿轮用齿根圆同口径，走齿轮 `centerline_len`）。
         out.extend(crate::gear::cross_centerlines(
             [0.0, 0.0],
@@ -4130,9 +4365,19 @@ mod tests {
             p.d(),
             p.internal_major_dia()
         );
-        // 端视图：每齿 2×12 渐开线 + 槽底弧 + 齿顶弧 = 26 图元/齿 + 2 中心线（内花键不画分度圆）。
+        // 端视图：每齿 2×12 渐开线 + 槽底弧 + 齿顶弧 = 26 图元/齿 + 分度圆 1 + 2 中心线。
         let front = p.front_view(1.0).unwrap();
-        assert_eq!(front.len(), 20 * (2 * INVOLUTE_SEGMENTS + 2) + 2);
+        assert_eq!(front.len(), 20 * (2 * INVOLUTE_SEGMENTS + 2) + 3);
+        // 内花键端视也画分度圆（`3中心线层`、半径 d/2）。
+        let pitch_circles: Vec<f64> = front
+            .iter()
+            .filter_map(|e| match e {
+                EntityType::Circle(c) if c.common.layer == LAYER_CENTER => Some(c.radius),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(pitch_circles.len(), 1, "内花键端视分度圆 1 条");
+        assert!(near(pitch_circles[0], p.d() / 2.0), "半径 = d/2");
         // 弧半径 = D_ei/2（外侧齿槽底）与 D_ii/2（里侧齿顶）；不能出现外花键的 da/df 半径。
         let radii: Vec<f64> = front
             .iter()
@@ -4400,9 +4645,10 @@ mod tests {
         assert!((crate::gear::centerline_len(d_ei, 2.0) - 77.4).abs() < 1e-9, "n=2 → 77.4");
     }
 
-    /// ③ 外花键端视画分度圆（`3中心线层`，半径按体系是分度圆半径），内花键不画（同内齿轮）。
+    /// ③ 花键端视画分度圆（`3中心线层`，半径按体系是分度圆半径）：外花键 + **内花键**都画；
+    /// 内齿轮仍按模板不画（本测试只锁花键，不碰 `gear.rs` 内齿轮口径）。
     #[test]
-    fn external_spline_front_has_pitch_circle() {
+    fn spline_front_has_pitch_circle() {
         let p = InvolParams::gb("30圆齿根", 3.0, 20).unwrap();
         let e = p.front_view(1.0).unwrap();
         let circles: Vec<&ocs_plugin_api::host::acadrust::entities::Circle> = e
@@ -4424,10 +4670,31 @@ mod tests {
             "ANSI 分度圆 = D/2 = {}",
             pa.d() / 2.0
         );
-        // 内花键（同内齿轮）不画分度圆
+        // 内花键端视也画分度圆（用户 2026-09-21 后定案；半径 = d/2）。
         let pi = p.clone().with_internal(true);
         let ei = pi.front_view(1.0).unwrap();
-        assert!(!ei.iter().any(|x| matches!(x, EntityType::Circle(_))), "内花键不画分度圆");
+        let icircles: Vec<&ocs_plugin_api::host::acadrust::entities::Circle> = ei
+            .iter()
+            .filter_map(|x| match x {
+                EntityType::Circle(c) if c.common.layer == LAYER_CENTER => Some(c),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(icircles.len(), 1, "内花键端视分度圆 1 条");
+        assert!(
+            (icircles[0].radius - pi.d() / 2.0).abs() < 1e-12,
+            "内花键分度圆半径 = d/2 = {}",
+            pi.d() / 2.0
+        );
+        // ANSI 内花键：D=N/P（引擎内部 d()）→ D/2。
+        let pia = pa.clone().with_internal(true);
+        let eai = pia.front_view(1.0).unwrap();
+        assert!(
+            eai.iter().any(|x| matches!(x, EntityType::Circle(c)
+                if c.common.layer == LAYER_CENTER && (c.radius - pia.d() / 2.0).abs() < 1e-12)),
+            "ANSI 内花键分度圆 = D/2 = {}",
+            pia.d() / 2.0
+        );
     }
 
     /// 侧视图/剖视图：矩形 + 小径线图层不同；坐标口径；
@@ -4921,6 +5188,135 @@ mod tests {
         let (p, origin) =
             resolve_spline(SplineStd::GB, "GB30R", None, Some(3.0), Some(20), None).unwrap();
         assert!(p.d_b.is_none() && origin.is_none());
+    }
+
+    /// ③ 四个体系的模数/径节候选来源：GB 表 2 15 种、DIN/NF 来自各自 CSV 实际 m 列、ANSI 17 项。
+    #[test]
+    fn module_candidates_follow_each_standard_table() {
+        // GB：GB/T 3478.1-2008 表 2，15 种（第 1 系列优先 + 第 2 系列）。
+        assert_eq!(GB_MODULES.len(), 15);
+        assert_eq!(
+            module_candidates(SplineStd::GB),
+            vec![
+                0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0, 4.0, 5.0, 6.0, 8.0, 10.0
+            ]
+        );
+        // DIN：din5480_2_nominal.csv 实际 m 列（16 档），候选随表走、不另写系列。
+        let din = module_candidates(SplineStd::DIN);
+        assert_eq!(din, din5480_modules(), "DIN 候选必须来自名义表实际 m 列");
+        assert_eq!(din.len(), 16);
+        // NF：nf_e22141_dims.csv 实际 m 列（10 档；含 1.667/3.75/7.5，不含 GB/DIN 特有档）。
+        let nf = module_candidates(SplineStd::NF);
+        assert_eq!(nf, nf_e22141_modules());
+        assert_eq!(
+            nf,
+            vec![0.5, 0.75, 1.0, 1.25, 1.667, 2.5, 3.75, 5.0, 7.5, 10.0]
+        );
+        for want in [1.667, 3.75, 7.5] {
+            assert!(nf.iter().any(|v| (v - want).abs() < 1e-9), "NF 应含 {want}");
+        }
+        for ban in [0.6, 0.8, 1.5, 1.75, 3.0, 4.0, 6.0, 8.0] {
+            assert!(
+                !nf.iter().any(|v| (v - ban).abs() < 1e-9),
+                "NF 不应含 GB/DIN 特有档 {ban}"
+            );
+            assert!(
+                din.iter().any(|v| (v - ban).abs() < 1e-9)
+                    || GB_MODULES.iter().any(|v| (v - ban).abs() < 1e-9),
+                "{ban} 应在 GB/DIN 候选里"
+            );
+        }
+        // ANSI：17 项径节。
+        assert_eq!(module_candidates(SplineStd::ANSI).len(), 17);
+        assert_eq!(ansi_pitches().len(), 17);
+        // 来源文案各自点到表。
+        assert!(module_source(SplineStd::GB).contains("GB/T 3478.1-2008 表 2"));
+        assert!(module_source(SplineStd::DIN).contains("din5480_2_nominal.csv"));
+        assert!(module_source(SplineStd::NF).contains("nf_e22141_dims.csv"));
+        assert!(module_source(SplineStd::ANSI).contains("ansi_b921_formulas.csv"));
+    }
+
+    /// 体系外模数：GB/DIN/NF 在 `resolve_spline` 明确报错（给出来源表与可用值）；
+    /// 命令行与 GUI 共用同一入口，所以这条错误文案两侧一致。
+    #[test]
+    fn unsupported_module_errors_point_to_source_table() {
+        // GB 没有 0.7（GB/T 1357 有，花键表 2 没有）。
+        let e =
+            resolve_spline(SplineStd::GB, "GB30R", None, Some(0.7), Some(20), None).unwrap_err();
+        assert!(
+            e.contains("GB/T 3478.1-2008") && e.contains("表 2") && e.contains("0.75"),
+            "{e}"
+        );
+        assert!(e.contains("不在体系可用系列"), "{e}");
+        // DIN 没有 0.7；报错列出名义表实际 m 列。
+        let e = resolve_spline(SplineStd::DIN, "DIN30", Some(40.0), Some(0.7), None, None)
+            .unwrap_err();
+        assert!(
+            e.contains("DIN 5480-2 名义表") && e.contains("din5480_2_nominal.csv"),
+            "{e}"
+        );
+        // NF 没有 2.0（GB/DIN 有）——必须按 NF 表报错，并给出 NF 特有档位。
+        let e = resolve_spline(SplineStd::NF, "NFP", Some(80.0), Some(2.0), None, None)
+            .unwrap_err();
+        assert!(
+            e.contains("NF E22-141") && e.contains("nf_e22141_dims.csv"),
+            "{e}"
+        );
+        assert!(
+            e.contains("1.667") && e.contains("3.75") && e.contains("7.5"),
+            "{e}"
+        );
+        // 合法值通过。
+        assert!(resolve_spline(SplineStd::NF, "NFP", None, Some(1.667), Some(45), None).is_ok());
+    }
+
+    /// ② DIN/NF：z 由 (d_B/A, m) 推导；显式 z 不符 → 以基准直径为准重算并明文提示。
+    #[test]
+    fn din_nf_z_derived_and_mismatch_recalculated() {
+        // DIN 表内唯一：d_B=40、m=2 → z=18（表内直查）。
+        let (z, note) = derive_z_from_bench_m(SplineStd::DIN, 40.0, 2.0).unwrap();
+        assert_eq!(z, 18);
+        assert!(note.contains("查表命中"), "{note}");
+        // DIN 表外：d_B=41、m=2 → z=19（公式区间取整）。
+        let (z, note) = derive_z_from_bench_m(SplineStd::DIN, 41.0, 2.0).unwrap();
+        assert_eq!(z, 19);
+        assert!(note.contains("表外推导"), "{note}");
+        // 显式 z 不符 → 按 d_B 重算（沿用 Adjusted 口径）。
+        let (p, o) =
+            resolve_spline(SplineStd::DIN, "DIN30", Some(40.0), Some(2.0), Some(14), None)
+                .unwrap();
+        assert_eq!(p.z, 18);
+        assert!(
+            matches!(&o, Some(D_bOrigin::Adjusted(n))
+                if n.contains("d_B 为主参数") && n.contains("与输入 z=14 不符")),
+            "{o:?}"
+        );
+        // DIN 表内其它变体：显式 z 命中表行（45/3 → 13 或 14）→ 保留输入。
+        let (p13, _) =
+            resolve_spline(SplineStd::DIN, "DIN30", Some(45.0), Some(3.0), Some(13), None)
+                .unwrap();
+        assert_eq!(p13.z, 13);
+        // NF 表内：A=80、m=3.75 → N=19。
+        let (z, note) = derive_z_from_bench_m(SplineStd::NF, 80.0, 3.75).unwrap();
+        assert_eq!(z, 19);
+        assert!(note.contains("查表命中"), "{note}");
+        // NF 显式 N 不符 → 按 A 重算 + 提示。
+        let (p, o) =
+            resolve_spline(SplineStd::NF, "NFP", Some(80.0), Some(3.75), Some(14), None)
+                .unwrap();
+        assert_eq!(p.z, 19, "按 A=80、m=3.75 取 N=19");
+        assert!(
+            matches!(&o, Some(D_bOrigin::Adjusted(n))
+                if n.contains("A 为主参数") && n.contains("与输入 N=14 不符")),
+            "{o:?}"
+        );
+        // NF 表外：A=81、m=3.75 → 主系列 x=0.8 推 N=20。
+        let (z, note) = derive_z_from_bench_m(SplineStd::NF, 81.0, 3.75).unwrap();
+        assert_eq!(z, 20);
+        assert!(note.contains("表外推导"), "{note}");
+        // GB/ANSI 无此概念。
+        assert!(derive_z_from_bench_m(SplineStd::GB, 40.0, 2.0).is_err());
+        assert!(derive_z_from_bench_m(SplineStd::ANSI, 40.0, 2.0).is_err());
     }
 
     // ── DIN 5480-2 检验表（M₁/M₂/D_M/k/W_k）──
@@ -5498,9 +5894,13 @@ mod tests {
         assert_eq!(p.z, 19);
         assert!(matches!(origin, Some(D_bOrigin::NfTable(_))), "{origin:?}");
         let (p, origin) =
-            resolve_spline(SplineStd::NF, "NF", None, Some(3.0), Some(20), None).unwrap();
+            resolve_spline(SplineStd::NF, "NF", None, Some(3.75), Some(19), None).unwrap();
         assert!(matches!(origin, Some(D_bOrigin::ComputedA)), "{origin:?}");
-        assert!((p.a.unwrap() - 3.0 * (20.0 + 1.6 + 0.4)).abs() < 1e-9, "A={:?}", p.a);
+        assert!(
+            (p.a.unwrap() - 3.75 * (19.0 + 1.6 + 0.4)).abs() < 1e-9,
+            "A={:?}",
+            p.a
+        );
 
         // ANSI：可用（第 5 槽 = 径节 P；无 d_B 来源，恒 None）。
         let (p, origin) =

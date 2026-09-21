@@ -1391,6 +1391,9 @@ fn resolve_invol_spline(
                 .map_err(|e| format!("渐开线花键：{e}"))?;
             (p, None)
         } else {
+            // 模数必须来自该体系自己的表（与 gear/shaft 的 `resolve_spline` 同一报错文案）。
+            crate::invol_spline::module_series_check(std, m)
+                .map_err(|e| format!("渐开线花键：{e}"))?;
             let is_nf = std == SplineStd::NF;
             let xv = if is_nf { x.unwrap_or(0.8) } else { x.unwrap_or(0.0) };
             let mut p = InvolParams::from_preset(std, profile, m, z_value as u32)
@@ -1647,6 +1650,16 @@ impl DetailElement for InvolSpline {
             "din_nominal": din_nominal,
             "din_inspection": din_inspection,
             "nf_nominal": nf_nominal,
+            // 各体系模数/径节候选（GUI 下拉与“体系不支持的模数”报错共用；来源见 invol_spline.rs）。
+            "gb_modules": crate::invol_spline::GB_MODULES,
+            "din_modules": crate::invol_spline::din5480_modules(),
+            "nf_modules": crate::invol_spline::nf_e22141_modules(),
+            "module_sources": {
+                "GB": crate::invol_spline::module_source(SplineStd::GB),
+                "DIN": crate::invol_spline::module_source(SplineStd::DIN),
+                "NF": crate::invol_spline::module_source(SplineStd::NF),
+                "ANSI": crate::invol_spline::module_source(SplineStd::ANSI),
+            },
             // ANSI 径节 17 项的 A/B 写法（gear_gui 下拉选项；Ps=2P）。
             "ansi_pitches": crate::invol_spline::ansi_pitch_labels(),
             "inputs": [
@@ -2492,10 +2505,11 @@ mod tests {
             .unwrap_err();
         assert!(err.contains("本体系不用 d_B"), "GB 无基准直径概念：{err}");
         // 体系显式：NF 已入库（A 主参数）；ANSI 也已接入（第 5 参槽位 = 径节 P）
-        let svg = preview_svg("family=detail_invol_spline&spec=NF&m=3&z=20&len=30&view=side")
+        // NF 模数必须取尺寸表实际 m 列（3.75 在表内；3.0 不是 NF 档位）。
+        let svg = preview_svg("family=detail_invol_spline&spec=NF&m=3.75&z=16&len=30&view=side")
             .unwrap()
             .unwrap();
-        assert!(svg.contains("NF NF平齿根 m3 z20") && svg.contains("A66")
+        assert!(svg.contains("NF NF平齿根 m3.75 z16") && svg.contains("A67.5")
             && svg.contains("由 m/z/x 正算 A"), "NF：{svg}");
         let svg = preview_svg("family=detail_invol_spline&spec=NFP&a=80&m=3.75&view=front")
             .unwrap()
