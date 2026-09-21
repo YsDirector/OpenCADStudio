@@ -207,6 +207,9 @@ el('stdSel').value = 'GB';
 el('splineMode').checked = true;
 try { el('splineMode')._fire('change', el('splineMode')); } catch (e) { errors.push('模式切换异常: ' + e); }
 await flush();
+check(el('alpha').readOnly === true, '花键模式 α 应由齿廓预设决定（只读）');
+check(el('hf').readOnly === true, '花键模式 hf 应由齿廓预设决定（只读）');
+check(el('x').readOnly !== true, 'GB 下 x 是自变量，不应只读');
 check(el('stdLabel').style.display !== 'none', '花键模式下标准号行应显示');
 check(el('dbLabel').style.display === 'none', 'GB 下 d_B 行应隐藏（本体系不用 d_B）');
 check(el('cLabel').style.display === 'none', '花键模式下顶隙行应隐藏');
@@ -371,6 +374,7 @@ el('stdSel').value = 'DIN';
 try { el('stdSel')._fire('change', el('stdSel')); } catch (e) { errors.push('DIN 锁定切换异常: ' + e); }
 await flush();
 check(el('z').readOnly === true, 'DIN 下 z 应只读');
+check(el('x').readOnly === true, 'DIN 下 x 是因变量（由 d_B、m、z 解出），应只读');
 check(el('zLabel').textContent.includes('决定'), 'DIN 下 z 标签应说明由 d_B 与 m 决定：' + el('zLabel').textContent);
 mods = el('mSel').children.map((o) => o.value).filter((v) => v !== 'custom');
 check(mods.includes('0.6') && mods.includes('0.8'), 'DIN 候选应含名义表实际档 0.6/0.8：' + mods.join('|'));
@@ -380,6 +384,7 @@ el('m').value = '2';
 try { el('db')._fire('change', el('db')); } catch (e) { errors.push('DIN d_B 联动异常: ' + e); }
 await flush();
 check(el('z').value === '18', 'DIN d_B=40/m=2 应联动 z=18，实际 ' + el('z').value);
+check(Math.abs(numOf('x') - 0.45) < 1e-9, 'DIN d_B=40/m=2/z=18 应显示表值 x=0.45，实际 ' + el('x').value);
 el('m').value = '2.5';
 try { el('m')._fire('input', el('m')); } catch (e) { errors.push('DIN m 联动异常: ' + e); }
 await flush();
@@ -391,6 +396,7 @@ el('stdSel').value = 'NF';
 try { el('stdSel')._fire('change', el('stdSel')); } catch (e) { errors.push('NF 锁定切换异常: ' + e); }
 await flush();
 check(el('z').readOnly === true, 'NF 下 z 应只读');
+check(el('x').readOnly === true, 'NF 下 x 是因变量（由 A、m、N 解出），应只读');
 mods = el('mSel').children.map((o) => o.value).filter((v) => v !== 'custom');
 check(mods.includes('1.667') && mods.includes('3.75') && mods.includes('7.5'),
   'NF 候选应含 1.667/3.75/7.5：' + mods.join('|'));
@@ -402,6 +408,7 @@ try { el('db')._fire('change', el('db')); } catch (e) { errors.push('NF A 联动
 await flush();
 check(el('m').value === '3.75' && el('z').value === '19',
   'NF A=80 应带出 m=3.75、z=19，实际 ' + el('m').value + '/' + el('z').value);
+check(Math.abs(numOf('x') - 0.9667) < 1e-3, 'NF A=80/m=3.75/N=19 应显示公式解 x≈0.967，实际 ' + el('x').value);
 el('m').value = '3';
 try { el('m')._fire('input', el('m')); } catch (e) { errors.push('NF 体系外模数异常: ' + e); }
 await flush();

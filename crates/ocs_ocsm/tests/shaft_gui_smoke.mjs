@@ -488,6 +488,9 @@ checkInvolDerive(irow, '查表命中 p27 m=2');
 const zin = irow._fields.find((f) => f.dataset.f === 'invol.z');
 check(!!zin && zin.readOnly === true, 'DIN 行 z 输入框应只读');
 check(zin && zin.value === '18', `DIN d_B=40/m=2 联动 z 应为 18，实为 ${zin && zin.value}`);
+const xin = irow._fields.find((f) => f.dataset.f === 'invol.x');
+check(!!xin && xin.readOnly === true, 'DIN 行 x 输入框（因变量）应只读');
+check(xin && Math.abs(Number(xin.value) - 0.45) < 1e-9, `DIN x 框应显示表值 0.45，实为 ${xin && xin.value}`);
 const min2 = irow._fields.find((f) => f.dataset.f === 'invol.m');
 min2.value = '3';
 segBody._fire('input', min2);
@@ -508,6 +511,9 @@ check(S.rows[0].invol.z === '19', `NF 显式 N=14 应按 A=80/m=3.75 修正为 1
 const nfz = segBody._rows[0]._fields.find((f) => f.dataset.f === 'invol.z');
 check(!!nfz && nfz.readOnly === true, 'NF 行 z 输入框应只读');
 check(nfz && nfz.value === '19', `NF 只读 z 框应为 19，实为 ${nfz && nfz.value}`);
+const nfx = segBody._rows[0]._fields.find((f) => f.dataset.f === 'invol.x');
+check(!!nfx && nfx.readOnly === true, 'NF 行 x 输入框（因变量）应只读');
+check(nfx && Math.abs(Number(nfx.value) - 0.9667) < 1e-3, `NF x 框应显示公式解 0.967，实为 ${nfx && nfx.value}`);
 // 回到 DIN 行做剩余断言（模型 code/de 等）
 dslEl.value = 'INVOLSPLINE DIN30 DB40 M2 L30 de70';
 await S.refreshFromText();

@@ -140,7 +140,7 @@ pub const GB_MODULES: &[f64] = &[
 ///
 /// * `GB` = GB/T 3478.1-2008（模数制，**不允许 d_B**）；
 /// * `DIN` = DIN 5480-1:2015（`d_B` 主参数）；
-/// * `NF` = NF E22-141（法国，**也含 d_B**；数据未入库，本轮只报错）；
+/// * `NF` = NF E22-141（法国，**也含基准直径主参数 `A`**；尺寸表 288 行已入库）；
 /// * `ANSI` = ANSI B92.1（公式驱动：径节 P + Table 2 五列；数据 `assets/ansi_b921_formulas.csv`）。
 #[allow(clippy::upper_case_acronyms)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -306,6 +306,10 @@ pub const NF_PRESETS: &[InvolPreset] = &[
 /// GB 体系误给 `d_B`/`A` 的**统一报错文案**（GB/T 3478 没有基准直径这个概念）。
 pub const GB_D_B_MSG: &str =
     "基准直径 d_B 是 DIN 5480 的概念，GB/T 3478 体系请给 m 与 z（本体系不用 d_B）";
+
+/// 非 ANSI 体系误给径节的**统一报错文案**（P/Ps 是 ANSI B92.1 的径节制写法）。
+pub const PITCH_ONLY_ANSI_MSG: &str =
+    "径节 P/Ps 是 ANSI B92.1 的写法（P=每英寸齿数、Ps=2P）；GB/DIN/NF 用模数 m（写法 `M…`），不要给径节 P/DP";
 
 /// ANSI B92.1 误给 `d_B`/`A` 的报错文案（径节制用径节 P/Ps，不用基准直径 `d_B`/`A`）。
 pub const ANSI_D_B_MSG: &str =
@@ -3736,6 +3740,24 @@ impl InvolParams {
         self.internal_minor_dia() / 2.0
     }
 
+    /// 内花键渐开线有效区间的起点半径与是否退化为径向直线：
+    /// `r_inner = max(D_ii/2, db/2[, DFi/2])`；`radial_only = r_inner ≥ D_ei/2`
+    /// （材料带内没有可用渐开线：非 ANSI 为基圆超过外侧齿根，ANSI 为 form 直径 `DFi ≥ Dri`）。
+    /// 端视图 / 计算书 / GUI 提示共用这一份口径。
+    pub fn internal_involute_band(&self) -> (f64, bool) {
+        let rb = self.db() / 2.0;
+        let mut r_inner = self.internal_tip_radius().max(rb);
+        if self.std == SplineStd::ANSI {
+            r_inner = r_inner.max(self.ansi_form_dia_internal() / 2.0);
+        }
+        let r_root = self.internal_root_radius();
+        if r_inner >= r_root - 1e-9 {
+            (r_root, true)
+        } else {
+            (r_inner, false)
+        }
+    }
+
     /// 旧的 DIN 名义估算 `m(z+2x)`（= `d + 2x·m`，相当于 `d_B − 1.1m`）；
     /// **不是** `d_B` 定义式。新代码用 [`x_from_d_b`] / [`d_b_from_x`] / [`lookup_by_d_b`]。
     pub fn d_b_estimate(&self) -> f64 {
@@ -4014,21 +4036,17 @@ impl InvolParams {
     }
 
     /// 内花键单侧齿廓：从里侧齿顶（或基圆）到外侧齿根。
+    /// 起点/降级口径统一走 [`InvolParams::internal_involute_band`]（与端视图/计算书同源）。
     fn push_flank_internal(
         &self,
         out: &mut Vec<EntityType>,
         center_rad: f64,
         sign: f64,
-        rb: f64,
         r_tip: f64,
         r_root: f64,
     ) {
         // 渐开线起点：ANSI 用 form diameter `DFi`（Table 2）；其余体系用 max(齿顶, 基圆)。
-        let r0 = if self.std == SplineStd::ANSI {
-            r_tip.max(rb).max(self.ansi_form_dia_internal() / 2.0)
-        } else {
-            r_tip.max(rb)
-        };
+        let (r0, _) = self.internal_involute_band();
         let w = if self.std == SplineStd::ANSI {
             self.ansi_sv_min()
         } else {
@@ -4064,12 +4082,12 @@ impl InvolParams {
     fn front_view_internal(&self, n: f64) -> Result<Vec<EntityType>, String> {
         let r_root = self.internal_root_radius();
         let r_tip = self.internal_tip_radius();
-        let rb = self.db() / 2.0;
-        let r_inner = if self.std == SplineStd::ANSI {
-            r_tip.max(rb).max(self.ansi_form_dia_internal() / 2.0)
-        } else {
-            r_tip.max(rb)
-        };
+        // 降级：材料带 [r_tip, r_root] 内没有可用渐开线 ——
+        //   * 非 ANSI：基圆已到/超过外侧齿根（rb ≥ D_ei/2）；
+        //   * ANSI：form 直径 DFi ≥ Dri（P=128 等细径节 + cF 下夹取时，公式值可高于齿根）。
+        // 此时把渐开线起点夹到外侧齿根，整条齿廓退化为从齿顶到齿根的径向直线
+        // （ψ 按齿根处取值，与齿根弧端点连续；同 `gear.rs` 内齿轮「基圆以下用径向直线」口径）。
+        let (r_inner, radial_only) = self.internal_involute_band();
         let pitch = self.pitch_angle();
         let pitch_half = pitch / 2.0;
         let psi_inner = self.internal_half_space_angle(r_inner);
@@ -4097,8 +4115,20 @@ impl InvolParams {
         for k in 0..self.z {
             // 齿槽心线（与同参数外花键的齿心线同相：同一条渐开线）。
             let c = pitch * (k as f64 + 0.5);
-            self.push_flank_internal(&mut out, c, 1.0, rb, r_tip, r_root);
-            self.push_flank_internal(&mut out, c, -1.0, rb, r_tip, r_root);
+            if radial_only {
+                // 无渐开线段：两侧各一条径向直线（齿顶 → 外侧齿根）。
+                for sign in [1.0, -1.0] {
+                    let th = c + sign * psi_root;
+                    out.push(line(
+                        [r_tip * th.cos(), r_tip * th.sin()],
+                        [r_root * th.cos(), r_root * th.sin()],
+                        LAYER_MAIN,
+                    ));
+                }
+            } else {
+                self.push_flank_internal(&mut out, c, 1.0, r_tip, r_root);
+                self.push_flank_internal(&mut out, c, -1.0, r_tip, r_root);
+            }
             // 齿槽底弧（外侧大径）：c ± ψ(r_root)
             out.push(arc(
                 [0.0, 0.0],
@@ -4682,14 +4712,34 @@ pub fn build_report(params: &InvolParams, origin: Option<&D_bOrigin>, h: f64) ->
     md.push_str(&format!("| 齿根圆角 ρf | {} mm |\n", trim(e.rho_f())));
     md.push_str(&format!("| 齿形裕度 cF | {} mm |\n", trim(e.c_f())));
     md.push_str(&format!("| 顶隙 c | {} mm |\n", trim(e.clearance())));
-    md.push_str(&format!(
-        "| 渐开线起始圆 d_involute_start | {} mm |\n",
-        trim(e.d_involute_start())
-    ));
-    md.push_str(&format!(
-        "| 渐开线终止圆 d_involute_end（=da） | {} mm |\n",
-        trim(e.d_involute_end())
-    ));
+    if e.internal {
+        // 内花键：渐开线有效区间在 [max(D_ii, db[, DFi]), D_ei]（外侧齿根），不是外花键的 [max(df, db), da]。
+        // 与 `front_view_internal` 同走 `internal_involute_band()`：若已到/超过外侧齿根则端视径向降级。
+        let (r_in, radial_only) = e.internal_involute_band();
+        let note = if radial_only {
+            "（已到/超过外侧齿根：材料带内无渐开线，端视图按径向直线降级）"
+        } else {
+            ""
+        };
+        md.push_str(&format!(
+            "| 渐开线有效起始圆（内花键 max(D_ii, db, DFi)） | {} mm{} |\n",
+            trim(2.0 * r_in),
+            note
+        ));
+        md.push_str(&format!(
+            "| 渐开线终止（外侧齿根 D_ei） | {} mm |\n",
+            trim(e.internal_major_dia())
+        ));
+    } else {
+        md.push_str(&format!(
+            "| 渐开线起始圆 d_involute_start | {} mm |\n",
+            trim(e.d_involute_start())
+        ));
+        md.push_str(&format!(
+            "| 渐开线终止圆 d_involute_end（=da） | {} mm |\n",
+            trim(e.d_involute_end())
+        ));
+    }
     if let Some(d_b) = e.d_b {
         md.push_str(&format!("| 基准直径 d_B | {} mm |\n", trim(d_b)));
     }
@@ -6916,5 +6966,352 @@ mod tests {
             md.contains("检验表逐行对照") && md.contains("验证通过"),
             "{md}"
         );
+    }
+    // ── 2026-09 审计回归：跨体系核心量 / 内花键降级 / 报告口径 / 全表对账 ──
+
+    /// 图元坐标键（跨体系逐条比较用；1e-9 以内视为同值）。
+    fn entity_key(e: &EntityType) -> String {
+        match e {
+            EntityType::Line(l) => format!(
+                "L {:.9},{:.9} {:.9},{:.9} {}",
+                l.start.x, l.start.y, l.end.x, l.end.y, l.common.layer
+            ),
+            EntityType::Arc(a) => format!(
+                "A {:.9},{:.9} r{:.9} {:.9} {:.9} {}",
+                a.center.x, a.center.y, a.radius, a.start_angle, a.end_angle, a.common.layer
+            ),
+            EntityType::Circle(c) => format!(
+                "C {:.9},{:.9} r{:.9} {}",
+                c.center.x, c.center.y, c.radius, c.common.layer
+            ),
+            other => format!("{other:?}"),
+        }
+    }
+
+    /// 跨体系数学核心必须逐值相等：同 (m,z,x,α) 下 `d/db/s/ψ(R)`（GB 30° 与 DIN 30°）；
+    /// 系数对齐后 `da/df/起始圆/终止圆/GB 表 3 form 直径` 与端视图图元也逐条相等。
+    #[test]
+    fn cross_system_involute_core_is_identical() {
+        let (m, z, x) = (4.0, 15u32, 0.3);
+        let gb = InvolParams::gb("30平齿根", m, z).unwrap().with_x(x);
+        let din = InvolParams::din(m, z, x).unwrap();
+        let d = m * z as f64;
+        let alpha = 30f64.to_radians();
+        for p in [&gb, &din] {
+            assert!(near(p.d(), d), "d");
+            assert!(near(p.db(), d * alpha.cos()), "db");
+            assert!(
+                near(p.s(), std::f64::consts::PI * m / 2.0 + 2.0 * x * m * alpha.tan()),
+                "s"
+            );
+        }
+        // ψ(R) 在渐开线区间内逐值相等（含 R<db 的夹取口径）
+        for r in [p_small(&gb), gb.db() / 2.0, 30.0, 35.0, 40.0, 45.0] {
+            assert!(
+                near(gb.half_tooth_angle(r), din.half_tooth_angle(r)),
+                "ψ({r}) 跨体系不等"
+            );
+        }
+        // 系数对齐（GB30平齿根 → DIN30 的 ha/hf/ρf/cF）后所有导出几何量一致。
+        let gb_aligned = gb.clone().with_coeffs(0.45, 0.55, 0.16, 0.10);
+        for (a, b, name) in [
+            (gb_aligned.da(), din.da(), "da"),
+            (gb_aligned.df(), din.df(), "df"),
+            (gb_aligned.r_involute_start(), din.r_involute_start(), "起始圆"),
+            (gb_aligned.r_involute_end(), din.r_involute_end(), "终止圆"),
+            (gb_aligned.gb_form_dia_max(), din.gb_form_dia_max(), "form 直径"),
+        ] {
+            assert!(near(a, b), "{name}: GB {a} ≠ DIN {b}");
+        }
+        // 端视图图元逐条一致（393 条）。
+        let eg = gb_aligned.front_view(1.0).unwrap();
+        let ed = din.front_view(1.0).unwrap();
+        assert_eq!(eg.len(), ed.len(), "端视图图元数");
+        for (i, (a, b)) in eg.iter().zip(ed.iter()).enumerate() {
+            assert_eq!(entity_key(a), entity_key(b), "端视图第 {i} 条图元不一致");
+        }
+        // NF（α=20°）与直齿轮共用同一 ψ(R)/db/st 口径。
+        let nf = InvolParams::from_preset(SplineStd::NF, "NF平齿根", m, z)
+            .unwrap()
+            .with_x(x);
+        let gear = crate::gear::GearParams {
+            kind: crate::gear::GearKind::External,
+            m,
+            z,
+            alpha_deg: 20.0,
+            ha: 1.0,
+            c: 0.25,
+            beta_deg: 0.0,
+            h: 20.0,
+            x,
+            spline: None,
+            std: crate::gear::GearStd::M,
+            dp: None,
+        };
+        assert!(near(nf.db(), gear.db()), "NF/齿轮 db");
+        assert!(near(nf.s(), gear.st()), "NF/齿轮 s");
+        for r in [32.0, 35.0, 40.0, 45.0] {
+            assert!(
+                near(nf.half_tooth_angle(r), gear.half_tooth_angle(r)),
+                "NF/齿轮 ψ({r})"
+            );
+        }
+    }
+
+    /// 起始半径辅助（GB 30 平齿根 m4 z15 的 df>db 情形取齿根）。
+    fn p_small(p: &InvolParams) -> f64 {
+        p.r_involute_start().min(p.db() / 2.0 + 1.0)
+    }
+
+    /// 内花键「材料带内无渐开线」降级：基圆超过外侧齿根（GB 45° 小齿数）或 ANSI
+    /// `DFi ≥ Dri`（细径节 + cF 下夹取）时，端视图退化为径向直线，不再画反向渐开线。
+    #[test]
+    fn internal_no_involute_band_degrades_to_radial_lines() {
+        // GB 45圆齿根 m10 z4：齿顶高于基圆（rb=14.14 < r_tip=16.81）；GB 内花键
+        // D_ei = m(z+1.2) 恒大于 db，不会出现「材料带内无渐开线」——该组锁“正常出渐开线”
+        // 这一支不被降级误伤。
+        let p = InvolParams::gb("45圆齿根", 10.0, 4)
+            .unwrap()
+            .with_internal(true);
+        p.validate().unwrap();
+        assert!(p.db() / 2.0 < p.internal_root_radius());
+        let fv = p.front_view(1.0).unwrap();
+        assert!(fv.len() > 4 * 4 + 3, "正常内花键应含渐开线段");
+
+        // ANSI P=128、N=200：DFi=39.9875 > Dri=39.9554（Table 2 公式 + cF 下夹取）。
+        let a = InvolParams::ansi("ANSI30平齿根齿侧", 128.0, 200).unwrap();
+        assert!(a.ansi_form_dia_internal() > a.internal_major_dia() + 1e-9);
+        let ai = a.clone().with_internal(true);
+        let af = ai.front_view(1.0).unwrap();
+        assert_eq!(af.len(), 4 * 200 + 3, "ANSI 细径节降级后每齿 4 图元");
+        let rr = ai.internal_root_radius();
+        for e in &af {
+            if let EntityType::Line(l) = e {
+                if l.common.layer != LAYER_MAIN {
+                    continue;
+                }
+                assert!(
+                    l.start.x.hypot(l.start.y) <= rr + 1e-9
+                        && l.end.x.hypot(l.end.y) <= rr + 1e-9,
+                    "不得有超出外侧齿根的渐开线端点"
+                );
+            }
+        }
+    }
+
+    /// 计算书内花键口径：渐开线有效区间用 `max(D_ii, db)` 与外侧齿根 `D_ei`，
+    /// 不再打印外花键的 `d_involute_end（=da）`（与端视图/JSON 同源）。
+    #[test]
+    fn report_internal_uses_internal_involute_bounds() {
+        let pi = InvolParams::gb("30圆齿根", 3.0, 20)
+            .unwrap()
+            .with_internal(true);
+        let md = build_report(&pi, None, 30.0);
+        assert!(md.contains("渐开线有效起始圆（内花键 max(D_ii, db, DFi)）"), "{md}");
+        let start = 2.0 * (pi.internal_minor_dia() / 2.0).max(pi.db() / 2.0);
+        assert!(
+            md.contains(&format!("| 渐开线有效起始圆（内花键 max(D_ii, db, DFi)） | {} mm |", trim(start))),
+            "缺内部起始圆 {start}：\n{md}"
+        );
+        assert!(
+            md.contains(&format!(
+                "| 渐开线终止（外侧齿根 D_ei） | {} mm |",
+                trim(pi.internal_major_dia())
+            )),
+            "缺外侧齿根：\n{md}"
+        );
+        assert!(!md.contains("d_involute_end（=da）"), "内花键不应出现外花键终止圆：\n{md}");
+        // 外花键口径不变。
+        let pe = InvolParams::gb("30圆齿根", 3.0, 20).unwrap();
+        let me = build_report(&pe, None, 30.0);
+        assert!(me.contains("d_involute_end（=da）"), "{me}");
+        assert!(!me.contains("渐开线有效起始圆（内花键"), "{me}");
+    }
+
+    /// NF 尺寸表全 288 行逐行对账（独立复算 d/db/s/sB/齿根圆/R/Ri/h/D，不借用引擎几何）：
+    /// 除 9 行「疑原表印误」外残差都在排版精度内（m=1.667=5/3 档放宽到 0.012）。
+    #[test]
+    fn nf_e22141_all_rows_formula_reconcile() {
+        use std::f64::consts::PI;
+        let a20 = 20f64.to_radians();
+        let inv20 = a20.tan() - a20;
+        let is_suspect = |r: &NfE22141Row, col: &str| -> bool {
+            NF_SUSPECTED_SOURCE_ERRORS.iter().any(|(p, m, a, z, c, _)| {
+                *p == r.page
+                    && (*m - r.m).abs() < NF_M_TOL
+                    && (*a - r.a).abs() < NF_A_TOL
+                    && *z == r.z
+                    && (*c).starts_with(col)
+            })
+        };
+        let mut checked = 0usize;
+        let mut suspects = 0usize;
+        let mut worst = 0.0f64;
+        for r in nf_e22141_rows() {
+            // p18 行只有 D 列；其余列按需对。
+            let x = x_from_a(r.a, r.m, r.z);
+            assert!((a_from_x(r.m, r.z, x) - r.a).abs() < 1e-9, "A 反变换");
+            // 列容差按源表排版精度：d/dB/s/sB/x ≤3 位小数、p18 的 D 与齿根圆/圆角只印 1~2 位。
+            let tol_of = |col: &str| -> f64 {
+                let t = match col {
+                    "分度圆直径d" => 0.02,
+                    "dB(基圆)" => 0.03,
+                    "变位系数x" => 0.004,
+                    "分度圆弧齿厚s" => 0.004,
+                    "sB(基圆弧齿厚)" => 0.004,
+                    "外花键齿根圆角半径(平齿根)" | "外花键齿根圆角半径(圆齿根)" => 0.06,
+                    "外花键齿顶倒角高度" => 0.06,
+                    _ => 0.6, // 平齿根齿根圆/圆齿根齿根圆/D(内花键小径)：只印到 1 位或整数
+                };
+                t + if (r.m - 1.667).abs() < 1e-6 { 0.01 } else { 0.0 }
+            };
+            let mut check = |col: &str, got: Option<f64>, want: f64| {                let Some(v) = got else { return };
+                let res = (v - want).abs();
+                if res > tol_of(col) {
+                    assert!(
+                        is_suspect(r, col),
+                        "p{} m{} A{} N{} {col}：表 {v} vs 算 {want} 残差 {res}",
+                        r.page,
+                        trim(r.m),
+                        trim(r.a),
+                        r.z
+                    );
+                    suspects += 1;
+                } else {
+                    worst = worst.max(res);
+                }
+                checked += 1;
+            };
+            check("分度圆直径d", r.d, r.m * r.z as f64);
+            check("dB(基圆)", r.base_dia, r.m * r.z as f64 * a20.cos());
+            check("变位系数x", r.x, x);
+            check("分度圆弧齿厚s", r.s, r.m * (PI / 2.0 + 2.0 * x * a20.tan()));
+            check("sB(基圆弧齿厚)", r.s_b,
+                r.m * a20.cos() * (PI / 2.0 + r.z as f64 * inv20 + 2.0 * x * a20.tan()),
+            );
+            check("平齿根齿根圆", r.flat_root, r.a - 2.4 * r.m);
+            check("齿根圆直径(圆齿根)", r.round_root, r.a - 2.694 * r.m);
+            check("外花键齿根圆角半径(平齿根)", r.r, 0.3 * r.m);
+            check("外花键齿根圆角半径(圆齿根)", r.r_i, 0.528 * r.m);
+            check("外花键齿顶倒角高度", r.h, 0.1 * r.m.max(1.0));
+            check("D(内花键小径)", r.internal_tip, r.a - 2.0 * r.m);
+        }
+        assert!(checked >= 288, "应逐列对账（至少 288 格）：{checked}");
+        assert_eq!(suspects, 9, "疑原表印误应恰好 9 格（NF_SUSPECTED_SOURCE_ERRORS）");
+        // 未命中印误清单的格都在各自列容差内（最宽 0.6 为只印到个位的齿根圆列）。
+        assert!(worst <= 0.6, "非印误格最大残差 {worst} 超出排版精度");
+    }
+
+    /// DIN 名义表全 721 行：`e₂/s₁`、`d_b=d·cos30°`、`d_B=d+1.1m+2x₁m` 三式逐行对账
+    /// （含 m=5 两处 z 修正；容差按表值排版精度）。
+    #[test]
+    fn din5480_all_rows_e2_and_bench_identity() {
+        let tol_e2 = 1e-3; // e₂ 印 3~4 位小数
+        let mut n = 0usize;
+        let mut viol: Vec<String> = Vec::new();
+        for (i, line) in DIN5480_2_CSV.lines().enumerate() {
+            if line.trim().is_empty() || line.starts_with('#') {
+                continue;
+            }
+            let f = split_csv_line(line);
+            if f.first().map(|s| s.trim()) == Some("page") {
+                continue;
+            }
+            let page = f[0].trim().parse::<u16>().expect("page");
+            let m = csv_decimal(&f[1]).expect("m");
+            let table_no = f[2].trim().parse::<u32>().expect("table_no");
+            let d_b = csv_decimal(&f[3]).expect("d_B");
+            let z = din5480_m5_fix_z(page, table_no, d_b, f[4].trim().parse::<u32>().expect("z"));
+            let d = csv_decimal(&f[5]).expect("d");
+            let base = csv_decimal(&f[6]).expect("d_b");
+            let xm = csv_decimal(&f[7]).expect("x1_m");
+            let e2 = csv_decimal(&f[8]).expect("e2_s1");
+            n += 1;
+            let a = 30f64.to_radians();
+            for (name, res) in [
+                ("e₂", e2 - (m * std::f64::consts::PI / 2.0 + 2.0 * xm * a.tan())),
+                ("d_b", base - d * a.cos()),
+                ("d_B", d_b - (d + 1.1 * m + 2.0 * xm)),
+            ] {
+                // d_b 列排版精度较粗（个别行只印 2 位小数），用 0.05 口径与既有测试一致。
+                let t = if name == "d_b" { 0.05 } else if name == "e₂" { tol_e2 } else { 1e-9 };
+                if res.abs() > t {
+                    viol.push(format!("第 {} 行 p{} {name} 残差 {res}", i + 1, page));
+                }
+            }
+        }
+        assert_eq!(n, 721, "全表 721 行");
+        assert!(viol.is_empty(), "{} 条违例：{viol:?}", viol.len());
+    }
+
+    /// 小齿数外部渐开线降级：`rb > rf` 时从齿根圆到基圆补径向直线（GB 30° z=6）；
+    /// 奇数齿相位：齿心线 `(k+0.5)·360/z`、齿槽心线 `k·360/z`（z=21 逐条核）。
+    #[test]
+    fn external_small_z_radial_fallback_and_odd_z_phase() {
+        let p = InvolParams::gb("30圆齿根", 2.0, 6).unwrap();
+        assert!(p.db() / 2.0 > p.df() / 2.0 + 1e-9, "该组应走 rb>rf 降级");
+        let fv = p.front_view(1.0).unwrap();
+        // 每齿 2×12 渐开线折线 + 2 条径向直线 + 2 弧 = 28；加 分度圆 1 + 中心线 2。
+        assert_eq!(fv.len(), 6 * (2 * INVOLUTE_SEGMENTS + 4) + 3);
+        let (rf, rb) = (p.df() / 2.0, p.db() / 2.0);
+        let th = p.half_tooth_angle(rb);
+        let c = p.pitch_angle() * 0.5;
+        let a = [rf * (c + th).cos(), rf * (c + th).sin()];
+        let b = [rb * (c + th).cos(), rb * (c + th).sin()];
+        assert!(has_line(&fv, a, b), "应有齿根→基圆的径向直线");
+
+        let odd = InvolParams::gb("30圆齿根", 3.0, 21).unwrap();
+        let e = odd.front_view(1.0).unwrap();
+        assert_eq!(e.len(), 21 * (2 * INVOLUTE_SEGMENTS + 2) + 3);
+        let tips = arc_centers_at(&e, odd.da() / 2.0);
+        let roots = arc_centers_at(&e, odd.df() / 2.0);
+        assert_eq!((tips.len(), roots.len()), (21, 21));
+        // 齿心线 = (k+0.5)·360/21 = 8.5714 + k·17.1429（规范化后比对）
+        let pitch = 360.0 / 21.0;
+        for k in 0..21usize {
+            let want_tip = (pitch * (k as f64 + 0.5)).rem_euclid(360.0);
+            assert!(
+                tips.iter().any(|(c, _)| (c - want_tip).abs() < 1e-9),
+                "z=21 齿顶弧中心 {want_tip} 缺"
+            );
+            let want_root = (pitch * k as f64).rem_euclid(360.0);
+            assert!(
+                roots.iter().any(|(c, _)| (c - want_root).abs() < 1e-9),
+                "z=21 齿根弧中心 {want_root} 缺"
+            );
+        }
+    }
+
+    /// 体系不支持的参数必须明确拒绝（不静默忽略）：跨体系齿廓代号、GB/ANSI 给 d_B/A、
+    /// ANSI 给 x、ANSI 45° 低径节、GB/DIN/NF 给径节 —— 各自点名理由与来源。
+    #[test]
+    fn cross_system_parameter_rejections() {
+        // 齿廓代号与体系不符。
+        let e = resolve_spline(SplineStd::DIN, "GB30R", None, Some(2.0), Some(18), None)
+            .unwrap_err();
+        assert!(e.contains("属于") && e.contains("GB/T 3478") && e.contains("DIN 5480"), "{e}");
+        let e = resolve_spline(SplineStd::GB, "DIN30", None, Some(3.0), Some(20), None)
+            .unwrap_err();
+        assert!(e.contains("属于") && e.contains("DIN 5480") && e.contains("GB/T 3478"), "{e}");
+        // GB 给 d_B/A。
+        let e = resolve_spline(SplineStd::GB, "GB30R", Some(40.0), Some(3.0), Some(20), None)
+            .unwrap_err();
+        assert_eq!(e, GB_D_B_MSG, "{e}");
+        // ANSI 给 d_B/A、给 x、45° 低径节。
+        let e = resolve_spline(SplineStd::ANSI, "ANSI30P", Some(40.0), Some(8.0), Some(20), None)
+            .unwrap_err();
+        assert_eq!(e, ANSI_D_B_MSG, "{e}");
+        let e = resolve_spline(SplineStd::ANSI, "ANSI30P", None, Some(8.0), Some(20), Some(0.1))
+            .unwrap_err();
+        assert!(e.contains("不使用变位系数"), "{e}");
+        let e = InvolParams::ansi("ANSI45圆齿根齿侧", 8.0, 20).unwrap_err();
+        assert!(e.contains("10/20") && e.contains("128/256"), "{e}");
+        // NF α 不可覆盖（引擎桥 + CLI 两侧；引擎级见 gear 测试）；validate 本身只查范围。
+        let e = InvolParams::from_preset(SplineStd::NF, "NF平齿根", 3.75, 19)
+            .unwrap()
+            .with_alpha_deg(60.0)
+            .validate()
+            .unwrap_err();
+        assert!(e.contains("压力角") && e.contains("10°<α<50°"), "{e}");
     }
 }

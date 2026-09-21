@@ -1169,6 +1169,8 @@ fn parse_segment(chunk: &str, label: &str, program: &mut Program) -> Result<Segm
     let mut invol_on = false;
     let mut invol_spec: Option<String> = None;
     let (mut invol_m, mut invol_z, mut invol_x) = (None, None, None);
+    // `P`/`DP` 写法进来的值（径节，只属 ANSI）；与 `M`（模数）不同槽位，供体系校验。
+    let mut invol_pitch: Option<f64> = None;
     let mut invol_d_b: Option<f64> = None;
     let mut invol_de: Option<f64> = None;
     // `INVOLSPLINE ... CHECK`：附带 DIN 5480-2 检验尺寸（默认关，行为不变）。
@@ -1370,6 +1372,7 @@ fn parse_segment(chunk: &str, label: &str, program: &mut Program) -> Result<Segm
             if invol_m.is_some() {
                 return Err(format!("{label}：关键字 P/M/DP（径节/模数）重复"));
             }
+            invol_pitch = Some(value);
             invol_m = Some(value);
         } else if has_invol
             && upper.starts_with("DP")
@@ -1384,6 +1387,7 @@ fn parse_segment(chunk: &str, label: &str, program: &mut Program) -> Result<Segm
             if invol_m.is_some() {
                 return Err(format!("{label}：关键字 P/M/DP（径节/模数）重复"));
             }
+            invol_pitch = Some(value);
             invol_m = Some(value);
         } else if let Some((key, attached)) = relief_param_key(token) {
             // `P1.5` / `g1=2.5` / `g1 2.5`：一律绑定到最近一个 RL。
@@ -1556,7 +1560,20 @@ fn parse_segment(chunk: &str, label: &str, program: &mut Program) -> Result<Segm
                 std,
                 profile,
                 invol_d_b,
-                invol_m,
+                if std == crate::invol_spline::SplineStd::ANSI {
+                    // ANSI：P 优先；`M` 槽位在 ANSI 下也按径节 P 解释。
+                    invol_pitch.or(invol_m)
+                } else {
+                    // 径节 P/DP 只属 ANSI；GB/DIN/NF 收到 → 明确拒绝（不把 P 当模数）。
+                    if invol_pitch.is_some() {
+                        return Err(format!(
+                            "{label}：{} 体系：{}。",
+                            std.code(),
+                            crate::invol_spline::PITCH_ONLY_ANSI_MSG
+                        ));
+                    }
+                    invol_m
+                },
                 invol_z,
                 invol_x,
             )
@@ -2275,6 +2292,14 @@ fn parse_json(text: &str) -> Result<Program, String> {
                 if std == crate::invol_spline::SplineStd::ANSI {
                     ji.pitch.or(ji.m)
                 } else {
+                    // 径节 P/DP 只属 ANSI；GB/DIN/NF 收到 → 明确拒绝（不把 P 当模数）。
+                    if ji.pitch.is_some() {
+                        return Err(format!(
+                            "第 {number} 段：{} 体系：{}。",
+                            std.code(),
+                            crate::invol_spline::PITCH_ONLY_ANSI_MSG
+                        ));
+                    }
                     ji.m
                 },
                 ji.z,
@@ -2294,6 +2319,8 @@ fn parse_json(text: &str) -> Result<Program, String> {
                     invol.d_b_note = Some(o.note());
                 }
             }
+            // 与 DSL 入口同一口径：计算书（`… report`）复用同一次解析的来源，不重新另算。
+            invol.d_b_origin = origin;
             if ji.check.unwrap_or(false) {
                 invol.inspection = Some(invol_check_note(
                     &invol,
@@ -7827,5 +7854,71 @@ GEAR M3 Z20";
         let md = build_report(&program).unwrap();
         assert!(md.contains("A = m(N + 2x + 0.4)"), "{md}");
         assert!(md.contains("NF E22-141 p07"), "{md}");
+    }
+
+    /// 径节 P/DP 只属 ANSI：GB/DIN/NF 的 INVOLSPLINE（DSL 与 JSON 两侧）都明确拒绝，
+    /// 不得把 P 当模数用；ANSI 合法路径仍可用。
+    #[test]
+    fn invol_pitch_rejected_outside_ansi() {
+        for raw in [
+            "INVOLSPLINE GB30R P8 Z20 L30",
+            "INVOLSPLINE DIN30 DB40 P8 L30",
+            "INVOLSPLINE NFP A80 P8 L30",
+            "INVOLSPLINE GB30R DP8 Z20 L30",
+        ] {
+            let e = parse_program(raw).unwrap_err();
+            assert!(
+                e.contains("径节 P/Ps 是 ANSI B92.1"),
+                "`{raw}` 应报径节只属 ANSI：{e}"
+            );
+        }
+        // `M` 与 `P` 同时给：先报关键字重复（同槽位，不静默取其一）。
+        let e = parse_program("INVOLSPLINE NFP A80 M3.75 P8 L30").unwrap_err();
+        assert!(e.contains("关键字 P/M/DP（径节/模数）重复"), "{e}");
+        for json in [
+            r#"{"segments":[{"invol_spline":{"code":"GB30R","m":3,"pitch":8,"z":20,"len":30}}]}"#,
+            r#"{"segments":[{"invol_spline":{"code":"DIN30","db":40,"pitch":8,"len":30}}]}"#,
+        ] {
+            let e = parse_program(json).unwrap_err();
+            assert!(e.contains("径节 P/Ps 是 ANSI B92.1"), "{json} → {e}");
+            assert!(e.contains("GB/T 3478") || e.contains("DIN 5480"), "{e}");
+        }
+        // ANSI：P 槽位正常工作（P=8 → m=3.175）。
+        let p = parse_program("INVOLSPLINE ANSI30P P8 Z20 L30").unwrap();
+        let iv = p.segments[0].invol_spline.as_ref().unwrap();
+        assert_eq!(iv.params.std, crate::invol_spline::SplineStd::ANSI);
+        assert!((iv.params.m - 25.4 / 8.0).abs() < 1e-12);
+        let pj = parse_program(r#"{"segments":[{"invol_spline":{"code":"ANSI30P","pitch":8,"z":20,"len":30}}]}"#)
+            .unwrap();
+        assert!((pj.segments[0].invol_spline.as_ref().unwrap().params.m - 25.4 / 8.0).abs() < 1e-12);
+    }
+
+    /// 三入口一致：同一 DIN 花键的 DSL 与 JSON 解析结果（含 `d_B` 来源）逐项相同，
+    /// 计算书里的「基准直径来源」不再因 JSON 入口而丢失。
+    #[test]
+    fn invol_json_and_dsl_share_report_origin() {
+        let dsl = parse_program("INVOLSPLINE DIN30 DB40 M2 Z18 L30").unwrap();
+        let json = parse_program(
+            r#"{"segments":[{"invol_spline":{"code":"DIN30","db":40,"m":2,"z":18,"len":30}}]}"#,
+        )
+        .unwrap();
+        let a = dsl.segments[0].invol_spline.as_ref().unwrap();
+        let b = json.segments[0].invol_spline.as_ref().unwrap();
+        assert_eq!(a.params, b.params, "DSL/JSON 参数应一致");
+        assert_eq!(
+            a.d_b_origin.as_ref().map(|o| o.note()),
+            b.d_b_origin.as_ref().map(|o| o.note()),
+            "DSL/JSON 的 d_B 来源应一致"
+        );
+        assert!(a.d_b_origin.as_ref().unwrap().note().contains("查表命中 p27"));
+        let md_a = build_report(&dsl).unwrap();
+        let md_b = build_report(&json).unwrap();
+        assert_eq!(md_a, md_b, "同一模型的 DSL/JSON 计算书应逐字相同");
+        assert!(md_b.contains("查表命中 p27 m=2"), "{md_b}");
+        assert!(!md_b.contains("不适用（GB/ANSI 无 d_B/A 主参数）"), "{md_b}");
+        // 表外推导（Adjusted）同样保留明文提示。
+        let adj = parse_program("INVOLSPLINE DIN30 DB40 M2 Z14 L30").unwrap();
+        let md = build_report(&adj).unwrap();
+        assert!(md.contains("按基准直径 d_B=40 取 z=18") && md.contains("与输入 z=14 不符"), "{md}");
     }
 }

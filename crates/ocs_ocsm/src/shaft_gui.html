@@ -494,21 +494,40 @@ function deriveBenchZ(std, bench, m, current) {
   return z >= 1 && z <= 1000 ? z : NaN;
 }
 
-// 行内 z：DIN/NF 时由 (d_B/A, m) 重算并写回模型（GUI 不接受单独编辑）。
+// 因变量 x（DIN/NF）：`x=(d_B/A − m(z+1.1|0.4))/(2m)`；表内命中 (d_B/A, m, z) 时优先用表值。
+function deriveBenchX(std, bench, m, z) {
+  if (!Number.isFinite(bench) || bench <= 0 || !Number.isFinite(m) || m <= 0 || !(z > 0)) return NaN;
+  const key = std === "NF" ? "a" : "db";
+  const hit = (std === "NF" ? involNfNominal : involDinNominal)
+    .find((r) => Math.abs(Number(r[key]) - bench) < 1e-6
+      && Math.abs(Number(r.m) - m) < 1e-9
+      && Number(r.z) === z
+      && Number.isFinite(Number(r.x)));
+  if (hit) return Number(hit.x);
+  return std === "NF" ? (bench - m * (z + 0.4)) / (2 * m) : (bench - m * (z + 1.1)) / (2 * m);
+}
+
+// 行内 z/x：DIN/NF 时由 (d_B/A, m) 重算并写回模型（GUI 不接受单独编辑 —— z/x 都是因变量）。
 function syncInvolZ(r) {
   const p = involList().find((x) => x.code === String(r.invol.profile).trim());
   if (!p || (p.std !== "DIN" && p.std !== "NF")) return;
   const z = deriveBenchZ(p.std, numOrNaN(r.invol.db), numOrNaN(r.invol.m), numOrNaN(r.invol.z));
   if (Number.isFinite(z)) r.invol.z = String(z);
+  const x = deriveBenchX(p.std, numOrNaN(r.invol.db), numOrNaN(r.invol.m), numOrNaN(r.invol.z));
+  if (Number.isFinite(x)) r.invol.x = fmt(x);
 }
 
-// 把联动后的 z 写进行内输入框（不整表重渲染，保住焦点）。
+// 把联动后的 z/x 写进行内输入框（不整表重渲染，保住焦点）。
 function updateInvolZInput(tr, r) {
   if (!tr) return;
-  let input = null;
-  try { input = tr.querySelector ? tr.querySelector('[data-f="invol.z"]') : null; } catch (e) { input = null; }
-  if (!input && tr._fields) input = tr._fields.find((f) => f.dataset && f.dataset.f === "invol.z");
-  if (input) input.value = r.invol.z;
+  const set = (f, value) => {
+    let input = null;
+    try { input = tr.querySelector ? tr.querySelector('[data-f="' + f + '"]') : null; } catch (e) { input = null; }
+    if (!input && tr._fields) input = tr._fields.find((x) => x.dataset && x.dataset.f === f);
+    if (input) input.value = value;
+  };
+  set("invol.z", r.invol.z);
+  set("invol.x", r.invol.x);
 }
 
 // 渐开线花键段派生值：d/db/da/df/ρf/cF（与 invol_spline.rs 同公式）；
@@ -722,7 +741,7 @@ function rowHtml(r, i) {
       <div class="frow"><select data-f="invol.profile" title="齿廓类型（GB 四种 / DIN 30°）"${dis(!involOn)}>${involProfileOptionsHtml(r.invol.std, r.invol.profile)}</select></div>
       <div class="frow"><span class="chk">${involAnsi ? "P" : "m"}</span><input type="number" step="${involAnsi ? "0.5" : "0.1"}" min="0" data-f="invol.m" value="${esc(r.invol.m)}"${involAnsi ? ' title="ANSI 径节 P"' : ""}${dis(!involOn)}>
       <span class="chk">z</span><input type="number" step="1" min="3" data-f="invol.z" value="${esc(r.invol.z)}"${involZLocked ? ` readonly="readonly" title="由${involStd === "NF" ? "公称直径 A" : "基准直径 d_B"}与模数 m 决定，不单独编辑"` : ""}${dis(!involOn)}>
-      ${involAnsi ? "" : `<span class="chk">x</span><input type="number" step="0.05" data-f="invol.x" value="${esc(r.invol.x)}" placeholder="0" style="width:52px"${dis(!involOn)}>`}</div>
+      ${involAnsi ? "" : `<span class="chk">x</span><input type="number" step="0.05" data-f="invol.x" value="${esc(r.invol.x)}" placeholder="0" style="width:52px"${involZLocked ? ` readonly="readonly" title="因变量：由${involStd === "NF" ? "A" : "d_B"}、m、z 按${involStd === "NF" ? "NF p07" : "DIN 5480-2"}公式解出（显示用，不可编辑）"` : ""}${dis(!involOn)}>`}</div>
       ${involBench ? `<div class="frow"><span class="chk">${involBenchLabel}</span><input type="number" step="0.1" min="0" data-f="invol.db" value="${esc(r.invol.db)}" list="${involBenchList}" placeholder="${involStd === "NF" ? "NF 查表" : "DIN 查表"}" style="width:64px"${dis(!involOn)}></div>` : ""}
       <div class="frow"><span class="chk">L</span><input type="number" step="0.1" min="0" data-f="invol.len" value="${esc(r.invol.len)}" placeholder="有效长度"${dis(!involOn)}>
       <span class="chk">de</span><input type="number" step="0.1" min="0" data-f="invol.de" value="${esc(r.invol.de)}" placeholder="可选" style="width:48px"${dis(!involOn)}></div>

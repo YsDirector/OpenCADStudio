@@ -413,7 +413,7 @@ function syncAlphaSelect() {
 // 压力角提示：齿轮默认 20° + 系数不随 α 自动变的提醒；花键模式由齿廓预设控制。
 function syncAlphaHint() {
   if (isSpline()) {
-    el("alphaHint").innerHTML = "花键基本齿廓压力角（GB：30/37.5/45°；DIN：30°；NF：20°；ANSI 由 Table 2 齿廓列决定）；切齿廓会自动带出预设值，可手动覆盖（ANSI 由 profile 决定，覆盖无效）。"
+    el("alphaHint").innerHTML = "花键基本齿廓压力角由齿廓预设决定（GB：30/37.5/45°；DIN：30°；NF：20°；ANSI 由 Table 2 齿廓列决定）；切齿廓自动带出，<b>不可覆盖</b>（显式给不一致的 α 会被后端拒绝）。"
       + (alphaTouched ? " · 已手动修改" : "");
     return;
   }
@@ -465,6 +465,7 @@ function collect() {
     const benchName = isNf ? "公称直径 A" : "基准直径 d_B";
     const db = String(el("db").value).trim();
     const dbv = db === "" ? NaN : Number(db);
+    const xLocked = std === "DIN" || isNf;   // x 是因变量（由 d_B/A、m、z 解出）
     const hfv = num("hf"), rhov = num("rho"), cfv = num("cf");
     if (db !== "" && (!Number.isFinite(dbv) || dbv <= 0)) err = benchName + " 必须是正数（或留空）。";
     else if (!Number.isFinite(alpha) || alpha <= 10 || alpha >= 50) err = "压力角 α 超出范围（10°<α<50°）。";
@@ -473,7 +474,7 @@ function collect() {
     else if (!Number.isFinite(rhov) || rhov < 0) err = "齿根圆角系数 ρf* 不能为负。";
     else if (!Number.isFinite(cfv) || cfv < 0) err = "齿形裕度系数 cF* 不能为负。";
     else if (!Number.isFinite(h) || h <= 0) err = "有效长度 L 必须是正数。";
-    else if (!Number.isFinite(x)) err = "变位系数 Xn 必须是数字。";
+    else if (!xLocked && !Number.isFinite(x)) err = "变位系数 Xn 必须是数字。";
     else if (Number.isFinite(m) && m > 0 && !splineModuleList(std).some((v) => Math.abs(v - m) < 1e-9)) {
       // 体系不支持的模数：明确报错并指出可用值来自哪张表（与后端 module_series_check 同一口径）。
       err = "模数 m=" + fmt(m) + " 不在 " + moduleSourceOf(std) + " 的可用系列（"
@@ -488,9 +489,10 @@ function collect() {
     } else if (db !== "" && std === "GB") {
       err = "GB/T 3478 没有基准直径 d_B 这个概念（d_B 只属 DIN 5480）。";
     }
-    // 花键模式：隐藏框（c/β）不传；std/profile/db 系数都传给后端
+    // 花键模式：隐藏框（c/β）不传；std/profile/db 系数都传给后端；x 只在有值时传（锁定态由 syncLockedZ 回填）。
     const p = { mode: "spline", kind: curKind, std, profile: el("profileSel").value,
-                alpha, ha, hf: hfv, rho: rhov, cf: cfv, h, x };
+                alpha, ha, hf: hfv, rho: rhov, cf: cfv, h };
+    if (Number.isFinite(x)) p.x = x;
     if (db !== "") p.db = dbv;
     if (Number.isFinite(m) && m > 0) p.m = m;
     if (Number.isFinite(z) && z >= 2) p.z = Math.round(z);
@@ -647,7 +649,16 @@ function syncSplineUI() {
     showRow("m", !dp);
     showRow("dp", dp);
   }
-  syncLockedZ();   // DIN/NF：z 只读 + 由 (d_B/A, m) 联动回填；GB/ANSI 解除。
+  // 因变量（α / ha* / hf* / ρf* / cF*）由齿廓预设决定：花键模式显示但只读；齿轮模式解禁。
+  for (const id of ["alpha", "ha", "hf", "rho", "cf"]) {
+    const n = el(id);
+    if (!n) continue;
+    n.readOnly = on;
+    n.title = on
+      ? "由齿廓预设决定（显示用，不可编辑；GB 30/37.5/45°、DIN 30°、NF 20°、ANSI 由 Table 2 列）"
+      : "";
+  }
+  syncLockedZ();   // DIN/NF：z/x 只读 + 由 (d_B/A, m) 联动回填；GB/ANSI 解除。
 }
 
 // 齿廓下拉：按标准填预设代号（保留当前选择，否则取第一个）。
@@ -748,18 +759,52 @@ function deriveBenchZ(std, bench, m, current) {
   return z >= 1 && z <= 1000 ? z : NaN;
 }
 // DIN/NF：齿数框只读 + 由 (d_B/A, m) 联动回填；GB/ANSI 解除只读。
+// 同时把因变量 x 也置只读并按 (d_B/A, m, z) 回填（x 不是独立自变量）。
+let benchXLocked = false;   // 上一次 x 是否处于因变量锁定态（切回 GB/ANSI 时清掉回填值）
 function syncLockedZ() {
   const locked = isZLocked();
   const zEl = el("z");
+  const xEl = el("x");
   const std = el("stdSel").value;
+  const bench = std === "NF" ? "公称直径 A" : "基准直径 d_B";
   zEl.readOnly = locked;
   zEl.title = locked
-    ? "由" + (std === "NF" ? "公称直径 A" : "基准直径 d_B") + "与模数 m 联动计算（表内直查；表外按公式区间取整），不单独编辑。"
+    ? "由" + bench + "与模数 m 联动计算（表内直查；表外按公式区间取整），不单独编辑。"
     : "";
   el("zLabel").textContent = "齿数[z]" + (locked ? "（由 " + (std === "NF" ? "A 与 m" : "d_B 与 m") + "决定）" : "");
+  if (xEl) {
+    xEl.readOnly = locked;
+    xEl.title = locked
+      ? "因变量：由 " + (std === "NF" ? "A" : "d_B") + "、m、z 按 " + (std === "NF" ? "NF p07" : "DIN 5480-2") + " 公式解出（显示用，不可编辑）。"
+      : "";
+    // 从 DIN/NF 切回 GB/ANSI：把回填的因变量 x 复位为独立自变量的默认值 0。
+    if (!locked && benchXLocked) xEl.value = "0";
+  }
+  benchXLocked = locked;
   if (!locked) return;
   const z = deriveBenchZ(std, num("db"), num("m"), num("z"));
   if (Number.isFinite(z)) zEl.value = String(z);
+  if (xEl) {
+    const x = deriveBenchX(std, num("db"), num("m"), Number(zEl.value));
+    if (Number.isFinite(x)) {
+      xEl.value = fmt(x);
+    } else {
+      xEl.value = "";
+    }
+  }
+}
+// 因变量 x：DIN `x=(d_B−m(z+1.1))/(2m)`、NF `x=(A−m(N+0.4))/(2m)`；
+// 表内命中 (d_B/A, m, z) 时优先用表值（与后端 resolve_* 同口径）。
+function deriveBenchX(std, bench, m, z) {
+  if (!Number.isFinite(bench) || bench <= 0 || !Number.isFinite(m) || m <= 0 || !(z > 0)) return NaN;
+  const key = std === "NF" ? "a" : "db";
+  const hit = (std === "NF" ? involNfNominal : involDinNominal)
+    .find((r) => Math.abs(Number(r[key]) - bench) < 1e-6
+      && Math.abs(Number(r.m) - m) < 1e-9
+      && Number(r.z) === z
+      && Number.isFinite(Number(r.x)));
+  if (hit) return Number(hit.x);
+  return std === "NF" ? (bench - m * (z + 0.4)) / (2 * m) : (bench - m * (z + 1.1)) / (2 * m);
 }
 // 选了基准直径（DIN d_B / NF A）→ 唯一 m 时自动带出；z 随后由 (d_B/A, m) 联动回填。
 function fillBench() {
