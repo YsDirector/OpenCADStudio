@@ -108,13 +108,26 @@ use crate::partgen_kit::{arc, line, trim, LAYER_CENTER, LAYER_MAIN, LAYER_THIN};
 pub const GB_CODE: &str = "GB/T 3478.1-2008";
 /// DIN 5480-1:2015 标准号。
 pub const DIN_CODE: &str = "DIN 5480-1:2015";
+/// NF E22-141（法国）标准号 —— **数据未入库**（见 [`NF_NOT_LOADED_MSG`]）。
+pub const NF_CODE: &str = "NF E22-141";
+/// ANSI B92.1 标准号 —— **未实现**（见 [`ANSI_NOT_IMPLEMENTED_MSG`]）。
+pub const ANSI_CODE: &str = "ANSI B92.1";
+/// NF/ANSI 无预设表时的占位齿廓名（只作显示/错误文案，不参与几何）。
+pub const NF_DEFAULT_PROFILE: &str = "NF E22-141";
+/// ANSI 占位齿廓名。
+pub const ANSI_DEFAULT_PROFILE: &str = "ANSI B92.1";
 
 /// 端视图每条渐开线齿廓的折线段数（真实渐开线采样；折线保形、实体数可控）。
 pub const INVOLUTE_SEGMENTS: usize = 12;
 
 // ─────────────────────────── 标准 / 预设 ───────────────────────────
 
-/// 花键标准（ANSI 预留，后续加 `Ansi` 变体与预设表即可）。
+/// 花键体系（**显式参数标识**：不再从 `d_B` 反推）。
+///
+/// * `GB` = GB/T 3478.1-2008（模数制，**不允许 d_B**）；
+/// * `DIN` = DIN 5480-1:2015（`d_B` 主参数）；
+/// * `NF` = NF E22-141（法国，**也含 d_B**；数据未入库，本轮只报错）；
+/// * `ANSI` = ANSI B92.1（径节系列；未实现，本轮只报错）。
 #[allow(clippy::upper_case_acronyms)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SplineStd {
@@ -122,6 +135,10 @@ pub enum SplineStd {
     GB,
     /// DIN 5480-1:2015。
     DIN,
+    /// NF E22-141（法国；数据未入库）。
+    NF,
+    /// ANSI B92.1（未实现）。
+    ANSI,
 }
 
 impl SplineStd {
@@ -130,22 +147,32 @@ impl SplineStd {
         match self {
             Self::GB => GB_CODE,
             Self::DIN => DIN_CODE,
+            Self::NF => NF_CODE,
+            Self::ANSI => ANSI_CODE,
         }
     }
 
-    /// 短标签（图纸标注/文件名用）。
+    /// 短标签（图纸标注/块名/文件名用）。
     pub fn label(self) -> &'static str {
         match self {
             Self::GB => "GB",
             Self::DIN => "DIN",
+            Self::NF => "NF",
+            Self::ANSI => "ANSI",
         }
     }
 
-    /// 该标准下的预设列表。
+    /// 该标准是否**使用基准直径 d_B**（DIN 5480 / NF E22-141；GB/ANSI 不允许）。
+    pub fn uses_d_b(self) -> bool {
+        matches!(self, Self::DIN | Self::NF)
+    }
+
+    /// 该标准下的预设列表（NF/ANSI 无预设立即空表）。
     pub fn presets(self) -> &'static [InvolPreset] {
         match self {
             Self::GB => GB_PRESETS,
             Self::DIN => DIN_PRESETS,
+            Self::NF | Self::ANSI => &[],
         }
     }
 }
@@ -232,11 +259,24 @@ pub const DIN_PRESETS: &[InvolPreset] = &[InvolPreset {
 pub const GB_D_B_MSG: &str =
     "基准直径 d_B 是 DIN 5480 的概念，GB/T 3478 体系请给 m 与 z（本体系不用 d_B）";
 
+/// ANSI B92.1 误给 `d_B` 的报错文案（径节制不用 d_B，且 ANSI 未实现）。
+pub const ANSI_D_B_MSG: &str = "ANSI B92.1 不使用基准直径 d_B（径节制用径节 P/Ps 与压力角）；\
+且 ANSI B92.1 未实现（径节系列与方法已有，待接入）";
+
+/// NF E22-141 数据未入库的统一文案（体系已识别，但尺寸表未抄）。
+pub const NF_NOT_LOADED_MSG: &str =
+    "NF E22-141 数据未入库（尺寸表待抄，页图已在 ~/桌面/OCSM/review/花键标准资料/）";
+
+/// ANSI B92.1 未实现的统一文案。
+pub const ANSI_NOT_IMPLEMENTED_MSG: &str = "ANSI B92.1 未实现（径节系列与方法已有，待接入）";
+
 /// 标准下的默认齿廓名（不给 profile 时用）。
 pub fn default_profile(std: SplineStd) -> &'static str {
     match std {
         SplineStd::GB => "30圆齿根",
         SplineStd::DIN => "DIN30",
+        SplineStd::NF => NF_DEFAULT_PROFILE,
+        SplineStd::ANSI => ANSI_DEFAULT_PROFILE,
     }
 }
 
@@ -284,12 +324,25 @@ pub fn preset_code(std: SplineStd, profile: &str) -> Option<&'static str> {
 /// 预设代号 → `(标准, 齿廓名)`；收 `GB30P`/`GB30R`/`GB375R`/`GB45R`/`DIN30`，
 /// 也收 GB + 中文齿廓名（`GB30圆齿根`）；`GB` / `DIN` 裸写取各自默认齿廓
 /// （GB → `30圆齿根`，DIN → `DIN30`）。
+///
+/// **体系标识**也在这里收（显式标识，不靠 `d_B` 反推）：
+/// `NF` / `NFE22141` / `NF E22-141` → [`SplineStd::NF`]（数据未入库），
+/// `ANSI` / `ANSI B92.1` → [`SplineStd::ANSI`]（未实现）；
+/// `M` / `DP` 是**齿轮**体系标识，这里**不收**（由 `gear.rs` 解析）。
 pub fn parse_preset_token(token: &str) -> Option<(SplineStd, &'static str)> {
     let t = token.trim().replace([' ', '\u{3000}', '°'], "");
     if t.is_empty() {
         return None;
     }
     let upper = t.to_ascii_uppercase();
+    // NF E22-141 / ANSI B92.1（连字符/空格/点不敏感）—— 先于 GB/DIN 前缀判断。
+    let key: String = upper.chars().filter(|c| c.is_ascii_alphanumeric()).collect();
+    if key == "NF" || key.starts_with("NFE22") {
+        return Some((SplineStd::NF, NF_DEFAULT_PROFILE));
+    }
+    if key == "ANSI" || key.starts_with("ANSIB92") {
+        return Some((SplineStd::ANSI, ANSI_DEFAULT_PROFILE));
+    }
     if let Some(rest) = upper.strip_prefix("DIN") {
         return match rest {
             "" | "30" | "30R" | "DIN30" => Some((SplineStd::DIN, "DIN30")),
@@ -858,6 +911,9 @@ fn row_to_params(row: Din5480Row) -> Result<(InvolParams, D_bOrigin), String> {
 
 /// **通用花键参数解析**（齿轮生成器花键模式 / 轴段 / 测试共用）：
 ///
+/// **体系由 `std` 显式给出**（不再从 `d_B` 反推）：
+/// * `NF`：数据未入库，直接报 [`NF_NOT_LOADED_MSG`]（即便给 `d_B` 也不静默）；
+/// * `ANSI`：未实现，直接报 [`ANSI_NOT_IMPLEMENTED_MSG`]（误给 `d_B` 时报 [`ANSI_D_B_MSG`]）；
 /// * `d_B` 给了：只有 DIN 有这个概念 —— GB 直接报 [`GB_D_B_MSG`]；DIN 走 [`resolve_din_by_d_b`]；
 /// * 不给 `d_B`：GB/DIN 都要 `m` 与 `z`（缺哪项报哪项）；DIN 另外由 `m/z/x` 正算 `d_B` 并回填
 ///   （来源 [`D_bOrigin::Computed`]），**不报“模数齿数与基准直径不匹配”**。
@@ -871,6 +927,18 @@ pub fn resolve_spline(
     z: Option<u32>,
     x: Option<f64>,
 ) -> Result<(InvolParams, Option<D_bOrigin>), String> {
+    // 体系先行：NF/ANSI 数据未入库/未实现 —— 明确报错，不给假结果。
+    match std {
+        SplineStd::NF => return Err(NF_NOT_LOADED_MSG.to_string()),
+        SplineStd::ANSI => {
+            return Err(if d_b.is_some() {
+                ANSI_D_B_MSG.to_string()
+            } else {
+                ANSI_NOT_IMPLEMENTED_MSG.to_string()
+            });
+        }
+        SplineStd::GB | SplineStd::DIN => {}
+    }
     let profile = if profile.trim().is_empty() {
         default_profile(std)
     } else {
@@ -900,10 +968,14 @@ pub fn resolve_spline(
     let m = m.ok_or_else(|| match std {
         SplineStd::GB => "GB/T 3478：缺模数 m（写法 `M3`）".to_string(),
         SplineStd::DIN => "DIN 5480：缺模数 m（给 m 与 z，或给基准直径 d_B 由表补全）".to_string(),
+        SplineStd::NF => NF_NOT_LOADED_MSG.to_string(),
+        SplineStd::ANSI => ANSI_NOT_IMPLEMENTED_MSG.to_string(),
     })?;
     let z = z.ok_or_else(|| match std {
         SplineStd::GB => "GB/T 3478：缺齿数 z（写法 `Z20`）".to_string(),
         SplineStd::DIN => "DIN 5480：缺齿数 z（给 m 与 z，或给基准直径 d_B 由表补全）".to_string(),
+        SplineStd::NF => NF_NOT_LOADED_MSG.to_string(),
+        SplineStd::ANSI => ANSI_NOT_IMPLEMENTED_MSG.to_string(),
     })?;
     let mut p = InvolParams::from_preset(std, profile, m, z)?
         .with_x(x.unwrap_or(0.0));
@@ -2125,7 +2197,8 @@ impl InvolParams {
     pub fn internal_major_dia(&self) -> f64 {
         match self.std {
             SplineStd::GB => self.d_eff() + 2.0 * self.hf_star * self.m,
-            SplineStd::DIN => self
+            // DIN 5480 恒等式；NF/ANSI 无几何口径（构造入口已拦），兜底同 DIN 避免 panic。
+            SplineStd::DIN | SplineStd::NF | SplineStd::ANSI => self
                 .d_b
                 .unwrap_or_else(|| d_b_from_x(self.m, self.z, self.x)),
         }
@@ -2136,7 +2209,8 @@ impl InvolParams {
     pub fn internal_minor_dia(&self) -> f64 {
         match self.std {
             SplineStd::GB => self.gb_form_dia_max() + 2.0 * self.c_f(),
-            SplineStd::DIN => self.d_eff() - 0.9 * self.m,
+            // DIN 口径；NF/ANSI 无几何口径（构造入口已拦），兜底同 DIN 避免 panic。
+            SplineStd::DIN | SplineStd::NF | SplineStd::ANSI => self.d_eff() - 0.9 * self.m,
         }
     }
 
@@ -2814,7 +2888,14 @@ mod tests {
         assert_eq!(parse_preset_token("GB37.5圆齿根").unwrap().1, "37.5圆齿根");
         assert_eq!(parse_preset_token("GB375R").unwrap().1, "37.5圆齿根");
         assert_eq!(parse_preset_token("din30r").unwrap().0, SplineStd::DIN);
-        for bad in ["", "GB99", "DIN99", "ANSI", "GB30x"] {
+        // 体系标识（显式，不再靠 d_B 反推）：NF/ANSI 也认（数据未入库/未实现由 resolve 报）
+        assert_eq!(parse_preset_token("NF").unwrap().0, SplineStd::NF);
+        assert_eq!(parse_preset_token("NFE22141").unwrap().0, SplineStd::NF);
+        assert_eq!(parse_preset_token("NF E22-141").unwrap().0, SplineStd::NF);
+        assert_eq!(parse_preset_token("ANSI").unwrap().0, SplineStd::ANSI);
+        assert_eq!(parse_preset_token("ANSI B92.1").unwrap().0, SplineStd::ANSI);
+        // M/DP 是齿轮体系，不是花键预设
+        for bad in ["", "GB99", "DIN99", "GB30x", "M", "DP"] {
             assert!(parse_preset_token(bad).is_none(), "{bad} 应拒绝");
         }
     }
@@ -3536,5 +3617,56 @@ mod tests {
         let path = dir.join("invol_spline_demo.csv");
         std::fs::write(&path, out).expect("写 invol_spline_demo.csv");
         assert!(path.exists());
+    }
+
+    // ── 体系显式标识（本轮核心：不再从 d_B 反推体系）──
+
+    /// 花键四体系 + gear 的 M/DP 解析；NF/ANSI 的「未入库/未实现」文案与 d_B 规则。
+    #[test]
+    fn explicit_system_identifiers_and_d_b_rules() {
+        // 花键体系：GB/DIN/NF/ANSI 都能从标识单独解析（与 GB30R/DIN30 预设代号并存兼容）。
+        assert_eq!(parse_preset_token("GB").unwrap().0, SplineStd::GB);
+        assert_eq!(parse_preset_token("DIN").unwrap().0, SplineStd::DIN);
+        assert_eq!(parse_preset_token("NF").unwrap().0, SplineStd::NF);
+        assert_eq!(parse_preset_token("NFE22141").unwrap().0, SplineStd::NF);
+        assert_eq!(parse_preset_token("ANSI").unwrap().0, SplineStd::ANSI);
+        assert_eq!(parse_preset_token("GB30R").unwrap().0, SplineStd::GB);
+        assert_eq!(parse_preset_token("DIN30").unwrap().0, SplineStd::DIN);
+        // 体系属性：d_B 只属 DIN/NF。
+        assert!(SplineStd::DIN.uses_d_b() && SplineStd::NF.uses_d_b());
+        assert!(!SplineStd::GB.uses_d_b() && !SplineStd::ANSI.uses_d_b());
+
+        // GB/ANSI：d_B 一律不允许（GB 沿统一文案；ANSI 另附未实现）。
+        let e = resolve_spline(SplineStd::GB, "GB30R", Some(40.0), Some(3.0), Some(20), None)
+            .unwrap_err();
+        assert_eq!(e, GB_D_B_MSG, "{e}");
+        let e = resolve_spline(SplineStd::ANSI, "ANSI", Some(40.0), None, None, None).unwrap_err();
+        assert_eq!(e, ANSI_D_B_MSG, "{e}");
+        assert!(e.contains("d_B") && e.contains("未实现"), "{e}");
+
+        // NF：不管是否给 d_B，明确「数据未入库」（不静默、不假装）。
+        let want_nf = NF_NOT_LOADED_MSG;
+        assert!(want_nf.contains("NF E22-141") && want_nf.contains("数据未入库"));
+        let e = resolve_spline(SplineStd::NF, "NF", None, Some(3.0), Some(20), None).unwrap_err();
+        assert_eq!(e, want_nf, "{e}");
+        let e = resolve_spline(SplineStd::NF, "NF", Some(40.0), Some(2.0), Some(18), None)
+            .unwrap_err();
+        assert_eq!(e, want_nf, "{e}");
+
+        // ANSI：不给 d_B → 未实现文案。
+        let e = resolve_spline(SplineStd::ANSI, "ANSI", None, Some(3.0), Some(20), None)
+            .unwrap_err();
+        assert_eq!(e, ANSI_NOT_IMPLEMENTED_MSG, "{e}");
+        assert!(e.contains("径节系列与方法已有"), "{e}");
+
+        // 合法路径不被误拦：GB/DIN 正常出参数。
+        let (p, origin) =
+            resolve_spline(SplineStd::GB, "GB30R", None, Some(3.0), Some(20), None).unwrap();
+        assert_eq!(p.std, SplineStd::GB);
+        assert!(origin.is_none() && p.d_b.is_none());
+        let (p, origin) =
+            resolve_spline(SplineStd::DIN, "DIN30", None, Some(2.0), Some(18), Some(0.2)).unwrap();
+        assert_eq!(p.std, SplineStd::DIN);
+        assert!(matches!(origin, Some(D_bOrigin::Computed)) && p.d_b.is_some());
     }
 }

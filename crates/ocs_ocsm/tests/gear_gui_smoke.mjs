@@ -82,6 +82,8 @@ const PARTS = {
         { code: 'GB375R', std: 'GB', profile: '37.5圆齿根', alpha: 37.5, ha: 0.45, hf: 0.7, rho: 0.3, cf: 0.1 },
         { code: 'GB45R', std: 'GB', profile: '45圆齿根', alpha: 45, ha: 0.4, hf: 0.6, rho: 0.25, cf: 0.1 },
         { code: 'DIN30', std: 'DIN', profile: 'DIN30', alpha: 30, ha: 0.45, hf: 0.55, rho: 0.16, cf: 0.1 },
+        { code: 'NF', std: 'NF', profile: 'NF E22-141（数据未入库）', alpha: 30, ha: 0.5, hf: 0.75, rho: 0.2, cf: 0.1 },
+        { code: 'ANSI', std: 'ANSI', profile: 'ANSI B92.1（未实现）', alpha: 20, ha: 1, hf: 1.25, rho: 0.38, cf: 0.25 },
       ],
       din_nominal: [{ db: 40, m: 2, z: 18, x: 0.45, page: 27 }],
     },
@@ -120,10 +122,28 @@ await flush();
 const el = (id) => document.getElementById(id);
 const numOf = (id) => parseFloat(el(id).value);
 
-// ① 默认齿轮模式：c/beta/chamfer 行在，花键行不在
+// ① 默认齿轮模式：c/beta/chamfer/sys 行在，花键行不在；M 体系显示模数行、隐藏径节行
 check(el('stdLabel').style.display === 'none', '齿轮模式下标准号行应隐藏');
 check(el('cLabel').style.display !== 'none', '齿轮模式下顶隙行应显示');
 check(el('hfLabel').style.display === 'none', '齿轮模式下 hf 行应隐藏');
+check(el('sysLabel').style.display !== 'none', '齿轮模式下体系行应显示');
+check(el('mLabel').style.display !== 'none', 'M 体系应显示模数行');
+check(el('dpLabel').style.display === 'none', 'M 体系应隐藏径节行');
+
+// ①.5 切 DP：径节行显示、模数行隐藏；倒角按 m=25.4/DP 换算
+el('sysSel').value = 'DP';
+el('dp').value = '8';
+try { el('sysSel')._fire('change', el('sysSel')); } catch (e) { errors.push('体系切换异常: ' + e); }
+await flush();
+check(el('dpLabel').style.display !== 'none', 'DP 体系应显示径节行');
+check(el('mLabel').style.display === 'none', 'DP 体系应隐藏模数行');
+check(Math.abs(numOf('m') - 3.175) < 1e-9, 'DP8 应换算 m=3.175，实际 ' + numOf('m'));
+check(el('chamfer').value === '2', 'DP8 → C=round(0.6×3.175)=2，实际 ' + el('chamfer').value);
+// 切回 M
+el('sysSel').value = 'M';
+try { el('sysSel')._fire('change', el('sysSel')); } catch (e) { errors.push('体系回切异常: ' + e); }
+await flush();
+check(el('mLabel').style.display !== 'none' && el('dpLabel').style.display === 'none', '切回 M 应恢复模数行');
 
 // ② 花键模式 + GB：花键行显示、d_B 行隐藏
 el('stdSel').value = 'GB';
@@ -143,6 +163,20 @@ await flush();
 check(el('dbLabel').style.display !== 'none', 'DIN 下 d_B 行应显示');
 check(el('profileSel').value === 'DIN30', 'DIN 齿廓应 DIN30，实际 ' + el('profileSel').value);
 check(Math.abs(numOf('hf') - 0.55) < 1e-9, 'DIN30 hf 预设应 0.55');
+
+// ③.5 NF/ANSI：d_B 行隐藏 + 明确提示（不假装能用）；齿廓选项存在
+el('stdSel').value = 'NF';
+try { el('stdSel')._fire('change', el('stdSel')); } catch (e) { errors.push('NF 切换异常: ' + e); }
+await flush();
+check(el('dbLabel').style.display === 'none', 'NF 下 d_B 行应隐藏（数据未入库）');
+check(el('stdHint').textContent.includes('数据未入库'), 'NF 提示应含「数据未入库」：' + el('stdHint').textContent);
+check(el('profileSel').value === 'NF', 'NF 齿廓应为 NF，实际 ' + el('profileSel').value);
+el('stdSel').value = 'ANSI';
+try { el('stdSel')._fire('change', el('stdSel')); } catch (e) { errors.push('ANSI 切换异常: ' + e); }
+await flush();
+check(el('dbLabel').style.display === 'none', 'ANSI 下 d_B 行应隐藏');
+check(el('stdHint').textContent.includes('未实现'), 'ANSI 提示应含「未实现」：' + el('stdHint').textContent);
+check(el('profileSel').value === 'ANSI', 'ANSI 齿廓应为 ANSI，实际 ' + el('profileSel').value);
 
 // ④ 防抖回调可跑（collect/renderInfo 不抛）
 for (const t of timers.splice(0)) {

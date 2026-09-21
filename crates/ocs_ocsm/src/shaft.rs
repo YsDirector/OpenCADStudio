@@ -97,6 +97,8 @@
 //! DIN 5480-2 名义表补全；`x=(d_B−m(z+1.1))/(2m)` 为表反推关系）：预设代号 `GB30P`/`GB30R`（默认）
 //! /`GB375R`/`GB45R`/`DIN30`（GB/T 3478.1-2008；DIN 5480-1:2015，h_fP*=0.55）自带
 //! α/ha*/hf*/ρf*，直径由 `M/Z/X`（或 DB）导出（**不给 S/E**）：`s = e = da`；
+//! **体系也可显式写标识**（`INVOLSPLINE DIN M2 Z18`、`INVOLSPLINE GB M3 Z20`；NF/ANSI 可识别但
+//! 报数据未入库/未实现，不静默）。
 //! - `L` = 有效长度（满齿段长）；`de`（滚刀外径）**可选**：给了才画收尾弧，
 //!   段长 = L + l（`l = √(h(2R−h))`、R = de/2、h = (da−df)/2，与 `SPLINE` 同式）；
 //!   不给 de 时段长 = L、端面直接收口；
@@ -183,9 +185,11 @@ OCSMSHAFT 轴生成器：行 DSL / JSON → 单视图侧视图（段拼接 + 端
                       不给 S/E；可 `de 71` 覆盖滚刀外径；不能与 CH/OV/RL/M/GEAR 同段
                       （引入倒角由相邻段的 CH 表达）
     INVOLSPLINE GB30R M3 Z20 L30   渐开线花键段（GB/T 3478.1 / DIN 5480）：预设代号
-                      GB30P/GB30R（默认）/GB375R/GB45R/DIN30；直径由 M/Z/X 或 DB 导出（不给 S/E）；
+                      GB30P/GB30R（默认）/GB375R/GB45R/DIN30，或体系标识 GB/DIN/NF/ANSI；
+                      直径由 M/Z/X 或 DB 导出（不给 S/E）；
                       `X0.2` = 变位（DIN ∈ [−0.05, 0.45]）；DIN 可写 `DB40`（基准直径），
                       M/Z 可缺一项由 DIN 5480-2 名义表补全（m=1.5 已补入、m=5 已剔除）；
+                      NF/ANSI 会明确报「数据未入库/未实现」；
                       `de63` 可选（给了才画收尾弧，段长 = L + l；不给 de 段长 = L）；
                       不能与 SPLINE/CH/OV/RL/M/GEAR 同段
     VIEW 常规|剖视|双   视图：常规（默认，只看外形）/ 剖视（轮廓 + ANSI31 剖面线）/ 双（并排一次出）
@@ -1464,7 +1468,8 @@ fn parse_segment(chunk: &str, label: &str, program: &mut Program) -> Result<Segm
             })?;
             let (std, profile) = crate::invol_spline::parse_preset_token(&spec).ok_or_else(|| {
                 format!(
-                    "{label}：不认识的预设代号「{spec}」（可用 GB30P/GB30R/GB375R/GB45R/DIN30）"
+                    "{label}：不认识的体系标识/预设代号「{spec}」\
+                     （可用 GB30P/GB30R/GB375R/GB45R/DIN30，或体系标识 GB/DIN/NF/ANSI）"
                 )
             })?;
             let (params, origin) = crate::invol_spline::resolve_spline(
@@ -2161,7 +2166,8 @@ fn parse_json(text: &str) -> Result<Program, String> {
                 })?;
             let (std, profile) = crate::invol_spline::parse_preset_token(&token).ok_or_else(|| {
                 format!(
-                    "第 {number} 段：不认识的预设代号「{token}」（可用 GB30P/GB30R/GB375R/GB45R/DIN30）"
+                    "第 {number} 段：不认识的体系标识/预设代号「{token}」\
+                     （可用 GB30P/GB30R/GB375R/GB45R/DIN30，或体系标识 GB/DIN/NF/ANSI）"
                 )
             })?;
             let (params, origin) = crate::invol_spline::resolve_spline(

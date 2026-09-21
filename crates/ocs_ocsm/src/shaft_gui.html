@@ -120,11 +120,14 @@
       （轻/中系列共 33 条）<b>下拉选择</b>，选中自动带出 d/D/B/de/h/l 派生值（de 框可改 = 覆盖）；
       下拉末尾「自定义…」手输表外规格（表外必须给 <code>de</code>）。满齿段长 <code>L</code>
       （段长 = L + 收尾 l）；不能与 CH/OV/M/GEAR 同段。
-      <b>INVOLSPLINE 渐开线花键段</b>：先选标准（<code>GB/T 3478.1</code> / <code>DIN 5480-1</code>）、
+      <b>INVOLSPLINE 渐开线花键段</b>：先选体系（<code>GB/T 3478.1</code> / <code>DIN 5480-1</code> /
+      <code>NF E22-141</code>（数据未入库）/ <code>ANSI B92.1</code>（未实现））、
       再选齿廓（GB 四种 / DIN 30°），填 <code>m/z</code>（<code>x</code> 可选，DIN 限 [−0.05, 0.45]）
       与有效长度 <code>L</code>；派生值 d/db/da/df/ρf/cF 实时显示（DIN 另给 d_B 名义估算），
       <code>de</code> 可选（给了才画收尾，段长 = L + l）；不能与 SPLINE/CH/OV/M/GEAR 同段。
+      NF/ANSI 选中后会明确报「数据未入库/未实现」（不假装能用）。
       <b>GEAR 齿轮段</b>的 H = 齿宽（留空 10m）、α = 压力角（留空 20°）；
+      <b>TODO</b>：GEAR 段目前只支持模数制 M（径节制 DP 走 <code>OCSMGEAR</code> 齿轮工具，端/侧/剖视共用几何）。
     </div>
     <div id="segErr"></div>
   </div>
@@ -143,7 +146,8 @@
       矩形花键段：<code>SPLINE 6x23x26x6 L30</code>（规格代号可在段表下拉选择/自定义；
       表内规格 de 自动查表，<code>de 63</code> = 覆盖；表外规格必须给 de；引入倒角在相邻段写 CH）。
       渐开线花键段：<code>INVOLSPLINE GB30R M3 Z20 L30</code>（预设代号
-      <code>GB30P/GB30R/GB375R/GB45R/DIN30</code>；<code>X0.2</code> = 变位；
+      <code>GB30P/GB30R/GB375R/GB45R/DIN30</code>，或体系标识 <code>GB/DIN/NF/ANSI</code>；
+      <code>X0.2</code> = 变位；
       <code>de63</code> 可选 = 画收尾；引入倒角同样写在相邻段）。
     </div>
   </div>
@@ -383,8 +387,15 @@ function fillDinDb(r) {
 function involStdOptionsHtml(cur) {
   const stds = [];
   for (const p of involList()) if (!stds.includes(p.std)) stds.push(p.std);
+  // NF/ANSI 可识别但数据未入库/未实现：保留选项，选中后后端报明确错误（不假装能用）。
+  const labels = {
+    GB: "GB/T 3478.1-2008",
+    DIN: "DIN 5480-1:2015（h_fP=0.55m）",
+    NF: "NF E22-141（数据未入库）",
+    ANSI: "ANSI B92.1（未实现）",
+  };
   return stds.map((s) => `<option value="${esc(s)}"${s === cur ? " selected" : ""}>`
-    + (s === "DIN" ? "DIN 5480-1:2015（h_fP=0.55m）" : "GB/T 3478.1-2008") + "</option>").join("");
+    + (labels[s] || esc(s)) + "</option>").join("");
 }
 
 function involProfileOptionsHtml(std, cur) {

@@ -97,6 +97,69 @@ impl GearKind {
     }
 }
 
+/// 齿轮体系（**显式参数标识**）：普通模数制 / 径节制。
+///
+/// * `M` = 模数制（输入模数 `m`；默认）；
+/// * `DP` = 径节制（输入径节 `DP`，`m = 25.4/DP`）—— 块名/spec 保留 **DP 原值**，
+///   避免与同模数的模数制件串块。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GearStd {
+    /// 模数制（m）。
+    M,
+    /// 径节制（DP；`m = 25.4/DP`）。
+    DP,
+}
+
+impl GearStd {
+    /// 短标签（块名/spec/JSON 用）。
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::M => "M",
+            Self::DP => "DP",
+        }
+    }
+
+    /// 英文键（查询串/JSON）。
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::M => "M",
+            Self::DP => "DP",
+        }
+    }
+
+    /// 体系标识解析（大小写/空格不敏感）：`M`/`module`/`模数`/`模数制`、`DP`/`径节`/`径节制`。
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "m" | "module" | "modul" | "模数" | "模数制" => Some(Self::M),
+            "dp" | "径节" | "径节制" => Some(Self::DP),
+            _ => None,
+        }
+    }
+}
+
+impl Default for GearStd {
+    fn default() -> Self {
+        Self::M
+    }
+}
+
+/// 径节基准（1 in = 25.4 mm）：`m = 25.4/DP`。
+pub const DP_BASE: f64 = 25.4;
+
+/// 径节 → 模数：`m = 25.4/DP`。
+pub fn m_from_dp(dp: f64) -> f64 {
+    DP_BASE / dp
+}
+
+/// 模数 → 径节：`DP = 25.4/m`（换算显示用）。
+pub fn dp_from_m(m: f64) -> f64 {
+    DP_BASE / m
+}
+
+/// `M` 与 `DP` 同给的统一报错文案（互斥；不静默取其一）。
+pub const M_DP_CONFLICT_MSG: &str =
+    "M 与 DP 同给：模数制与径节制只能选一个（M 用 m，DP 用 DP=25.4/m）。";
+
 /// 齿轮几何参数（GUI / 命令行同一套）。
 #[derive(Debug, Clone, PartialEq)]
 pub struct GearParams {
@@ -122,13 +185,19 @@ pub struct GearParams {
     /// 齿轮模式不允许标准号/基准直径；花键模式的 m/z/× 以 [`SplineOpts`] 里的 Optional 为准
     /// （齿轮模式的 m/z 保持必给）。
     pub spline: Option<SplineOpts>,
+    /// 齿轮体系（`M` 模数制 / `DP` 径节制；花键模式下不用，恒 `M`）。
+    pub std: GearStd,
+    /// **径节 DP 原值**（`std == DP` 时必给；`m` 字段恒存有效模数 `25.4/DP`）。
+    /// 块名/spec/JSON 用这个原值，避免与同模数的模数制件串块。
+    pub dp: Option<f64>,
 }
 
 /// 花键模式参数（齿轮生成器「花键模式」复选框后面那组输入）。
 ///
-/// * `std`：GB/T 3478.1-2008 / DIN 5480-1:2015（ANSI B92.1 预留，无数据表）；
+/// * `std`：**显式体系标识** —— GB/T 3478.1-2008 / DIN 5480-1:2015 /
+///   NF E22-141（数据未入库）/ ANSI B92.1（未实现）；NF/ANSI 由 `resolve_spline` 统一报错；
 /// * `profile`：齿廓代号（空 = 标准默认）；
-/// * `d_b`：**DIN 主参数**（GB 给 d_B 直接报错）；
+/// * `d_b`：**DIN 主参数**（GB/ANSI 给 d_B 直接报错；NF 也含 d_B 但数据未入库）；
 /// * `m`/`z`/`x`：`None` = 未给（DIN 可由 `d_B` 查表/推导补全）；
 /// * 系数 `alpha_deg`/`ha_star`/`hf_star`/`rho_star`/`c_f_star`：`None` = 用预设，`Some` = 覆盖。
 #[derive(Debug, Clone, PartialEq)]
@@ -176,28 +245,42 @@ impl Default for SplineOpts {
 }
 
 impl SplineOpts {
-    /// 解析花键标准名：`GB` / `GB/T 3478.1` / `DIN` / `DIN 5480`（大小写/空格/斜杠不敏感）。
-    /// ANSI B92.1 返回特定错误（未实现，不静默）。
+    /// 解析花键**体系标识**：`GB` / `GB/T 3478.1` / `DIN` / `DIN 5480` / `NF` / `NF E22-141` /
+    /// `ANSI` / `ANSI B92.1`（大小写/空格/斜杠不敏感）。
+    /// `NF`/`ANSI` 也返回对应体系 —— 数据未入库/未实现由 [`crate::invol_spline::resolve_spline`]
+    /// 统一报错（不在这里静默掉）。`M`/`DP` 是**齿轮**体系，报错指路。
     pub fn parse_std(s: &str) -> Result<crate::invol_spline::SplineStd, String> {
-        let t = s.trim().to_ascii_uppercase();
-        if t.contains("ANSI") || t.contains("B92") {
-            return Err(
-                "ANSI B92.1 尚未实现（缺 ANSI 预设/名义表数据）；当前可用 GB/T 3478.1 与 DIN 5480-1。"
-                    .to_string(),
-            );
-        }
-        let key: String = t.chars().filter(|c| c.is_ascii_alphanumeric()).collect();
+        use crate::invol_spline::SplineStd;
+        let key: String = s
+            .trim()
+            .to_ascii_uppercase()
+            .chars()
+            .filter(|c| c.is_ascii_alphanumeric())
+            .collect();
         match key.as_str() {
-            "GB" | "GBT3478" | "GBT34781" | "GB3478" | "GB34781" => {
-                Ok(crate::invol_spline::SplineStd::GB)
+            "M" | "MODULE" | "MODUL" | "DP" => {
+                return Err(format!(
+                    "`{s}` 是齿轮体系（M = 模数制 / DP = 径节制），不是花键体系；\
+                     花键体系可用 GB / DIN / NF / ANSI。"
+                ));
             }
-            "DIN" | "DIN5480" | "DIN54801" | "DIN5480TEIL1" => {
-                Ok(crate::invol_spline::SplineStd::DIN)
-            }
-            _ => Err(format!(
-                "花键标准号无法识别：`{s}`（可用 GB / GB/T 3478.1 / DIN / DIN 5480）。"
-            )),
+            _ => {}
         }
+        if key == "GB" || key.starts_with("GBT3478") {
+            return Ok(SplineStd::GB);
+        }
+        if key == "DIN" || key.starts_with("DIN5480") {
+            return Ok(SplineStd::DIN);
+        }
+        if key == "NF" || key.starts_with("NFE22") {
+            return Ok(SplineStd::NF);
+        }
+        if key == "ANSI" || key.starts_with("ANSIB92") {
+            return Ok(SplineStd::ANSI);
+        }
+        Err(format!(
+            "花键体系标识无法识别：`{s}`（可用 GB / GB/T 3478.1 / DIN / DIN 5480 / NF / NF E22-141 / ANSI / ANSI B92.1）。"
+        ))
     }
 }
 
@@ -215,6 +298,8 @@ impl Default for GearParams {
             h: 20.0,
             x: 0.0,
             spline: None,
+            std: GearStd::M,
+            dp: None,
         }
     }
 }
@@ -227,6 +312,14 @@ impl GearParams {
     /// 螺旋角（弧度，带正负）。
     pub fn beta(&self) -> f64 {
         self.beta_deg.to_radians()
+    }
+    /// 是否径节制（DP）。
+    pub fn is_dp(&self) -> bool {
+        self.std == GearStd::DP
+    }
+    /// 径节原值（DP 体系必给；M 体系为 `None`）。
+    pub fn dp_value(&self) -> Option<f64> {
+        self.dp
     }
     /// 是否斜齿轮。
     pub fn is_helical(&self) -> bool {
@@ -352,6 +445,25 @@ impl GearParams {
         if !(self.m.is_finite() && self.m > 0.0) {
             return Err("模数 m 必须是正数。".into());
         }
+        if self.is_dp() {
+            let dp = self.dp.ok_or_else(|| {
+                "径节制（std=DP）缺径节值 DP（写法 `dp=8` / `DP8`；m = 25.4/DP）。".to_string()
+            })?;
+            if !(dp.is_finite() && dp > 0.0) {
+                return Err(format!("径节 DP={} 必须是正数。", trim(dp)));
+            }
+            let m = m_from_dp(dp);
+            if (self.m - m).abs() > 1e-9 * m.max(1.0) {
+                return Err(format!(
+                    "径节制：DP={} 对应 m=25.4/DP={}，与当前 m={} 不符（DP 体系不要另给 m）。",
+                    trim(dp),
+                    trim(m),
+                    trim(self.m)
+                ));
+            }
+        } else if self.dp.is_some() {
+            return Err(M_DP_CONFLICT_MSG.to_string());
+        }
         if !(2..=1000).contains(&self.z) {
             return Err(format!("齿数 z 超出范围（2–1000）：{}", self.z));
         }
@@ -401,6 +513,15 @@ impl GearParams {
     /// 生成后的提示（不阻断，只提醒）。
     pub fn notes(&self) -> Vec<String> {
         let mut v = Vec::new();
+        if self.is_dp() {
+            let dp = self.dp.unwrap_or_else(|| dp_from_m(self.m));
+            v.push(format!(
+                "径节制（{} DP）：m = 25.4/DP = {}；块名/规格按 **DP 原值** 出，避免与同模数 {} 的模数制件串块。",
+                trim(dp),
+                trim(self.m),
+                trim(self.m)
+            ));
+        }
         if self.z < 17 && self.x.abs() < 1e-9 {
             v.push(format!(
                 "齿数 z={} < 17 且未变位：实际滚齿会有根切，本视图未画根切（如需要请给变位或根切画法模板）。",
@@ -595,13 +716,19 @@ impl GearParams {
         ))
     }
 
-    /// 规格文本（块名/明细表用）。
+    /// 规格文本（块名/明细表用）。DP 体系保留 **DP 原值**（附换算模数）。
     pub fn spec(&self) -> String {
         let mut s = String::new();
         if self.kind.is_internal() {
             s.push_str("内齿轮 ");
         }
-        s.push_str(&format!("m{} z{} h{}", trim(self.m), self.z, trim(self.h)));
+        if self.is_dp() {
+            let dp = self.dp.unwrap_or_else(|| dp_from_m(self.m));
+            s.push_str(&format!("DP{}（m{}）", trim(dp), trim(self.m)));
+        } else {
+            s.push_str(&format!("m{}", trim(self.m)));
+        }
+        s.push_str(&format!(" z{} h{}", self.z, trim(self.h)));
         if (self.alpha_deg - ALPHA_N_DEG).abs() > 1e-9 {
             s.push_str(&format!(" α{}", trim(self.alpha_deg)));
         }
@@ -2242,7 +2369,8 @@ fn bbox_of(entities: &[EntityType]) -> [f64; 4] {
 }
 
 /// 块名：`OCSM_GEAR_M2_Z40_H20_FRONT`（与标准件 `OCSM_<族>_<规格>_<视图>` 同风格）。
-/// 斜齿轮加 `_B<|β|>R|L`（右/左旋），变位加 `_X<Xn>`（负值用 `N` 前缀）。
+/// 斜齿轮加 `_B<|β|>R|L`（右/左旋），变位加 `_X<Xn>`（负值用 `N` 前缀）；
+/// 径节制用 `_DP<原值>` 代替 `_M<换算模数>`（同模数不同来源不串块）。
 pub fn block_name(p: &GearParams, view: GearView) -> String {
     if p.is_spline() {
         // 参数给全时用引擎算出的 m/z/x/d_B（与 spline_block_name 同名）；
@@ -2282,7 +2410,13 @@ pub fn block_name(p: &GearParams, view: GearView) -> String {
     if p.kind.is_internal() {
         s.push_str("_INT"); // 内齿轮标记；外齿轮块名保持一期原样不变
     }
-    s.push_str(&format!("_M{}_Z{}", trim(p.m).replace('.', "_"), p.z));
+    if p.is_dp() {
+        // 径节制：块名保留 DP 原值（不写换算后的 m，避免与同模数的模数制件同名串块）。
+        let dp = p.dp.unwrap_or_else(|| dp_from_m(p.m));
+        s.push_str(&format!("_DP{}_Z{}", trim(dp).replace('.', "_"), p.z));
+    } else {
+        s.push_str(&format!("_M{}_Z{}", trim(p.m).replace('.', "_"), p.z));
+    }
     if (p.alpha_deg - ALPHA_N_DEG).abs() > 1e-9 {
         // 非默认压力角必须进块名：否则 20° 与 25° 的同规格件会命中同名块（幂等复用会串图）
         s.push_str(&format!("_A{}", trim(p.alpha_deg.abs()).replace('.', "_")));
@@ -2309,14 +2443,43 @@ pub fn block_name(p: &GearParams, view: GearView) -> String {
         .collect()
 }
 
-/// 花键模式没显式给标准号时的推断：齿廓代号自带标准（GB30R→GB、DIN30→DIN）；
-/// 给了 `d_B` 只能走 DIN；否则 GB（默认）。
-pub fn default_spline_std(profile: &str, d_b: Option<f64>) -> crate::invol_spline::SplineStd {
+/// 体系标识写入（同一行写两个不同的花键体系 → 报错，不静默覆盖）。
+fn set_spline_std_once(
+    slot: &mut Option<crate::invol_spline::SplineStd>,
+    std: crate::invol_spline::SplineStd,
+) -> Result<(), String> {
+    match *slot {
+        Some(old) if old != std => Err(format!(
+            "同一行出现两个体系的标识：{} 与 {}（体系只能写一个）。",
+            old.label(),
+            std.label()
+        )),
+        _ => {
+            *slot = Some(std);
+            Ok(())
+        }
+    }
+}
+
+/// 齿轮体系标识写入（`M` 与 `DP` 互斥；同值重复不报）。
+fn set_gear_std_once(slot: &mut Option<GearStd>, std: GearStd) -> Result<(), String> {
+    match *slot {
+        Some(old) if old != std => Err(M_DP_CONFLICT_MSG.to_string()),
+        _ => {
+            *slot = Some(std);
+            Ok(())
+        }
+    }
+}
+
+/// 花键模式没显式给体系标识时的默认：齿廓代号/体系标识自带标准（GB30R→GB、DIN→DIN、
+/// NF→NF、ANSI→ANSI）；否则 GB（默认）。
+///
+/// **不再从 `d_B` 反推体系**（用户定案）：给 `d_B` 而不显式写 `std=DIN`/`std=NF` 时按 GB
+/// 处理并报 [`crate::invol_spline::GB_D_B_MSG`]（体系必须显式声明）。
+pub fn default_spline_std(profile: &str) -> crate::invol_spline::SplineStd {
     if let Some((std, _)) = crate::invol_spline::parse_preset_token(profile) {
         return std;
-    }
-    if d_b.is_some() {
-        return crate::invol_spline::SplineStd::DIN;
     }
     crate::invol_spline::SplineStd::GB
 }
@@ -2334,8 +2497,9 @@ pub struct GearRequest {
 pub fn parse_request(raw: &str) -> Result<GearRequest, String> {
     let usage = "用法：OCSMGEAR [内齿轮|int] <模数m> <齿数z> [h=齿宽] [ha=齿顶高系数] [c=顶隙系数] [alpha=压力角(°,默认20) 或 α25] [beta=螺旋角(右旋为正)] [x=变位系数] \
                  [view 剖视图|侧视图|简化正视图|常规正视图|端视图] [at x,y] [rot 度]。\n\
-                 花键模式：`OCSMGEAR 花键 [内花键] [std=GB|DIN] [profile=GB30R] [db=40] [hf=0.9] [rho=0.4] [cf=0.1] <m> <z> [x=..] [h=..] [view 端视图|侧视图|剖视图]`；\
-                 花键参数也可用预设代号（GB30P/GB30R/GB375R/GB45R/DIN30）代替 std+profile。\n\
+                 齿轮体系：默认 M 模数制；径节制写 `std=DP dp=8`（或 `DP8`），此时位置参数 = `<齿数z> <齿宽h>`，m=25.4/DP。\n\
+                 花键模式：`OCSMGEAR 花键 [内花键] [std=GB|DIN|NF|ANSI] [profile=GB30R] [db=40] [hf=0.9] [rho=0.4] [cf=0.1] <m> <z> [x=..] [h=..] [view 端视图|侧视图|剖视图]`；\
+                 花键参数也可用预设代号（GB30P/GB30R/GB375R/GB45R/DIN30）代替 std+profile；NF/ANSI 会明确报数据未入库/未实现。\n\
                  不带参数则打开齿轮窗口。内齿轮（齿圈）目前只有 剖视图 + 端视图（模板只有这两个）；\
                  剖视图不画齿圈外壁与剖面线，由用户/AI 按实际齿圈结构延伸。";
     let toks: Vec<&str> = raw.split_whitespace().collect();
@@ -2358,20 +2522,26 @@ pub fn parse_request(raw: &str) -> Result<GearRequest, String> {
     let mut sp_hf: Option<f64> = None;
     let mut sp_rho: Option<f64> = None;
     let mut sp_cf: Option<f64> = None;
+    // 齿轮体系（显式标识）：M = 模数制（默认），DP = 径节制（`DP8`/`dp=8`）。
+    let mut gear_std: Option<GearStd> = None;
+    let mut gear_dp: Option<f64> = None;
     let mut m_given = false;
     let mut z_given = false;
     let mut alpha_given = false;
     let mut ha_given = false;
     let mut x_given = false;
-    // 花键模式识别：预设代号（GB30R 等）或裸 `GB`/`DIN`
-    let mut spline_spec_token = |tok: &str, spline_on: &mut bool, sp_std: &mut Option<crate::invol_spline::SplineStd>, sp_profile: &mut String| {
+    // 位置参数缓存：齿轮 M = [m,z,h]；齿轮 DP = [z,h]（`DP` 值走标识/键）；花键 = [m,z,h]。
+    // 体系标识可能出现在位置参数之后，所以先缓存、解析完再按体系回填。
+    let mut pos_vals: Vec<f64> = Vec::new();
+    // 花键模式识别：预设代号（GB30R 等）、体系标识（GB/DIN/NF/ANSI）或裸 `GB`/`DIN`
+    let mut spline_spec_token = |tok: &str, spline_on: &mut bool, sp_std: &mut Option<crate::invol_spline::SplineStd>, sp_profile: &mut String| -> Result<bool, String> {
         if let Some((std, profile)) = crate::invol_spline::parse_preset_token(tok) {
+            set_spline_std_once(sp_std, std)?;
             *spline_on = true;
-            *sp_std = Some(std);
             *sp_profile = profile.to_string();
-            return true;
+            return Ok(true);
         }
-        false
+        Ok(false)
     };
     while i < toks.len() {
         let t = toks[i];
@@ -2388,8 +2558,27 @@ pub fn parse_request(raw: &str) -> Result<GearRequest, String> {
         };
         match key.to_ascii_lowercase().as_str() {
             "m" | "模数" => {
-                p.m = num("m", val)?;
-                m_given = true;
+                // 裸 `M`（后面不是数字）= **模数制体系标识**；`M3`/`m=3`/`m 3` 仍是模数。
+                let next_numeric = val.is_some()
+                    || toks
+                        .get(i + 1)
+                        .is_some_and(|s| s.trim().parse::<f64>().is_ok());
+                if val.is_none() && !next_numeric {
+                    set_gear_std_once(&mut gear_std, GearStd::M)?;
+                } else {
+                    let text = match val {
+                        Some(v) => v.to_string(),
+                        None => {
+                            i += 1;
+                            toks.get(i).map(|s| s.to_string()).unwrap_or_default()
+                        }
+                    };
+                    p.m = text
+                        .trim()
+                        .parse::<f64>()
+                        .map_err(|_| format!("m 需要数字，收到 `{text}`"))?;
+                    m_given = true;
+                }
             }
             "z" | "齿数" => {
                 let v = num("z", val)?;
@@ -2413,7 +2602,7 @@ pub fn parse_request(raw: &str) -> Result<GearRequest, String> {
                     return Err(format!("模式无法识别：`{v}`（可用 gear|齿轮、spline|花键）。"));
                 }
             }
-            "std" | "standard" | "标准" | "标准号" => {
+            "std" | "standard" | "标准" | "标准号" | "体系" | "system" => {
                 let v = match val {
                     Some(v) => v.to_string(),
                     None => {
@@ -2421,8 +2610,22 @@ pub fn parse_request(raw: &str) -> Result<GearRequest, String> {
                         toks.get(i).map(|s| s.to_string()).unwrap_or_default()
                     }
                 };
-                sp_std = Some(SplineOpts::parse_std(&v)?);
-                // 不自动切花键模式：模式由 `花键`/`mode=spline` 显式开（齿轮模式给标准号要报错）。
+                // M/DP = 齿轮体系；GB/DIN/NF/ANSI = 花键体系。同一行两个 → `set_*_once` 报错。
+                if let Some(gs) = GearStd::parse(&v) {
+                    set_gear_std_once(&mut gear_std, gs)?;
+                } else {
+                    let s = SplineOpts::parse_std(&v)?;
+                    set_spline_std_once(&mut sp_std, s)?;
+                }
+                // 不自动切花键模式：模式由 `花键`/`mode=spline` 显式开（齿轮模式给花键标准号要报错）。
+            }
+            "dp" | "径节" | "径节制" => {
+                let v = num("dp", val)?;
+                if !(v.is_finite() && v > 0.0) {
+                    return Err(format!("径节 DP={} 必须是正数。", trim(v)));
+                }
+                set_gear_std_once(&mut gear_std, GearStd::DP)?;
+                gear_dp = Some(v);
             }
             "profile" | "齿廓" | "齿廓类型" => {
                 let v = match val {
@@ -2545,44 +2748,43 @@ pub fn parse_request(raw: &str) -> Result<GearRequest, String> {
                     i += 1;
                     continue;
                 }
-                // 花键模式开关键字 / 标准名 / 预设代号（`花键`、`spline`、`GB`、`DIN`、`GB30R`、`DIN30`）
+                // 花键模式开关键字 / 体系标识 / 预设代号（`花键`、`spline`、`GB`、`DIN`、`NF`、`ANSI`、`GB30R`、`DIN30`）
                 let lower_tok = other.to_ascii_lowercase();
                 if matches!(lower_tok.as_str(), "spline" | "花键" | "invol" | "involute") {
                     spline_on = true;
                     i += 1;
                     continue;
                 }
-                if lower_tok.contains("ansi") || lower_tok.contains("b92") {
-                    return Err(SplineOpts::parse_std(other).unwrap_err());
-                }
-                if matches!(lower_tok.as_str(), "gb" | "din") {
-                    sp_std = Some(SplineOpts::parse_std(other)?);
-                    spline_on = true;
+                if spline_spec_token(other, &mut spline_on, &mut sp_std, &mut sp_profile)? {
                     i += 1;
                     continue;
                 }
-                if spline_spec_token(other, &mut spline_on, &mut sp_std, &mut sp_profile) {
-                    i += 1;
-                    continue;
+                // 齿轮体系标识：`DP8` 贴写（裸 `DP`/`dp 8` 走上方的 `dp` 键，裸 `M` 走 `m` 键）。
+                if let Some(rest) = lower_tok
+                    .strip_prefix("dp")
+                    .map(|r| r.strip_prefix(['=', ':']).unwrap_or(r))
+                {
+                    if !rest.is_empty() {
+                        let v: f64 = rest
+                            .parse()
+                            .map_err(|_| format!("径节 DP 需要数字，收到 `{other}`"))?;
+                        if !(v.is_finite() && v > 0.0) {
+                            return Err(format!("径节 DP={} 必须是正数。", trim(v)));
+                        }
+                        set_gear_std_once(&mut gear_std, GearStd::DP)?;
+                        gear_dp = Some(v);
+                        i += 1;
+                        continue;
+                    }
                 }
                 let v = other
                     .parse::<f64>()
                     .map_err(|_| format!("无法识别的参数 `{}`。\n{}", other, usage))?;
-                match positional {
-                    0 => {
-                        p.m = v;
-                        m_given = true;
-                    }
-                    1 => {
-                        p.z = v.round() as u32;
-                        z_given = true;
-                    }
-                    2 => {
-                        p.h = v;
-                        h_given = true;
-                    }
-                    _ => return Err(format!("多余的参数 `{}`。\n{}", other, usage)),
+                if positional >= 3 {
+                    return Err(format!("多余的参数 `{}`。\n{}", other, usage));
                 }
+                // 位置参数缓存：语义按体系在后文回填（M = [m,z,h]，DP = [z,h]）。
+                pos_vals.push(v);
                 positional += 1;
             }
         }
@@ -2591,12 +2793,44 @@ pub fn parse_request(raw: &str) -> Result<GearRequest, String> {
     if positional < 2 && (raw.contains("m=") || raw.contains("z=")) == false && toks.len() < 2 {
         return Err(format!("至少要给模数 m 和齿数 z（例如 `OCSMGEAR 2 40 20`）。\n{}", usage));
     }
+    // ── 同一行两个体系 → 报错（体系只能写一个）；随后按体系回填位置参数 ──
+    let any_gear_id = gear_std.is_some() || gear_dp.is_some();
+    if sp_std.is_some() && any_gear_id {
+        return Err(format!(
+            "同一行出现两个体系的标识：{} 与 {}（体系只能写一个）。",
+            sp_std.map(|s| s.label()).unwrap_or("GB"),
+            gear_std.map(|g| g.label()).unwrap_or("DP")
+        ));
+    }
     if spline_on {
+        if any_gear_id {
+            return Err(format!(
+                "同一行出现两个体系的标识：{} 是齿轮体系（M = 模数制 / DP = 径节制），不能与花键体系（GB/DIN/NF/ANSI）同用。",
+                gear_std.map(|g| g.label()).unwrap_or("DP")
+            ));
+        }
+        // 花键位置参数 = [m, z, h]（与旧行为一致）。
+        if let Some(v) = pos_vals.first() {
+            if !m_given {
+                p.m = *v;
+                m_given = true;
+            }
+        }
+        if let Some(v) = pos_vals.get(1) {
+            if !z_given {
+                p.z = v.round() as u32;
+                z_given = true;
+            }
+        }
+        if let Some(v) = pos_vals.get(2) {
+            p.h = *v;
+            h_given = true;
+        }
         if sp_std.is_none() && sp_profile.is_empty() {
-            // 只写了 `花键` 没写标准/代号：默认 GB 默认齿廓（与 GUI 一致）。
+            // 只写了 `花键` 没写体系/代号：默认 GB 默认齿廓（与 GUI 一致）。
             sp_std = Some(crate::invol_spline::SplineStd::GB);
         }
-        let std = sp_std.unwrap_or_else(|| default_spline_std(&sp_profile, sp_d_b));
+        let std = sp_std.unwrap_or_else(|| default_spline_std(&sp_profile));
         let opts = SplineOpts {
             std,
             profile: sp_profile,
@@ -2624,6 +2858,63 @@ pub fn parse_request(raw: &str) -> Result<GearRequest, String> {
                 "齿轮模式不认花键参数（齿廓/hf/ρf/cf）；要用花键请在窗口勾选「花键模式」（命令行加 `花键`）。"
                     .to_string(),
             );
+        }
+        // 齿轮体系落地：DP → **位置参数 = [z, h]**（DP 值走 `DP8`/`dp=8`），m = 25.4/DP；
+        // M → 位置参数 = [m, z, h]（与旧行为一致）。
+        let is_dp = gear_std == Some(GearStd::DP) || gear_dp.is_some();
+        if is_dp {
+            if gear_std == Some(GearStd::M) {
+                return Err(M_DP_CONFLICT_MSG.to_string());
+            }
+            let dp = gear_dp.ok_or_else(|| {
+                "径节制 DP：缺径节值（写法 `DP8` 或 `dp=8`）。".to_string()
+            })?;
+            if !(dp.is_finite() && dp > 0.0) {
+                return Err(format!("径节 DP={} 必须是正数。", trim(dp)));
+            }
+            if m_given {
+                return Err(
+                    "DP 体系用径节 DP 定模数（m = 25.4/DP），不要再给 m。".to_string(),
+                );
+            }
+            if pos_vals.len() > 2 {
+                return Err(format!(
+                    "径节制位置参数最多 2 个（<齿数z> <齿宽h>），多给了 {} 个。\n{}",
+                    pos_vals.len() - 2,
+                    usage
+                ));
+            }
+            if let Some(v) = pos_vals.first() {
+                if !z_given {
+                    p.z = v.round() as u32;
+                    z_given = true;
+                }
+            }
+            if let Some(v) = pos_vals.get(1) {
+                p.h = *v;
+                h_given = true;
+            }
+            p.std = GearStd::DP;
+            p.dp = Some(dp);
+            p.m = m_from_dp(dp);
+        } else {
+            if let Some(v) = pos_vals.first() {
+                if !m_given {
+                    p.m = *v;
+                    m_given = true;
+                }
+            }
+            if let Some(v) = pos_vals.get(1) {
+                if !z_given {
+                    p.z = v.round() as u32;
+                    z_given = true;
+                }
+            }
+            if let Some(v) = pos_vals.get(2) {
+                p.h = *v;
+                h_given = true;
+            }
+            p.std = gear_std.unwrap_or(GearStd::M);
         }
     }
     if !h_given {
@@ -2688,9 +2979,18 @@ pub fn params_from_query(query: &str) -> Result<(GearParams, GearView, f64), Str
         "spline" | "花键" | "invol" | "involute"
     );
     let p = if is_spline {
-        let std = match get("std") {
-            Some(v) if !v.trim().is_empty() => SplineOpts::parse_std(&v)?,
-            _ => default_spline_std(&get("profile").unwrap_or_default(), opt_f("db").or_else(|| opt_f("d_b"))),
+        let std_raw = get("std");
+        let std = match std_raw.as_deref() {
+            Some(v) if !v.trim().is_empty() => {
+                if let Some(gs) = GearStd::parse(v) {
+                    return Err(format!(
+                        "花键模式不认齿轮体系 `{}`（M = 模数制 / DP = 径节制）；花键体系可用 GB / DIN / NF / ANSI。",
+                        gs.label()
+                    ));
+                }
+                SplineOpts::parse_std(v)?
+            }
+            _ => default_spline_std(&get("profile").unwrap_or_default()),
         };
         let opts = SplineOpts {
             std,
@@ -2717,10 +3017,22 @@ pub fn params_from_query(query: &str) -> Result<(GearParams, GearView, f64), Str
             h: f("h", 10.0 * m),
             x: opts.x.unwrap_or(0.0),
             spline: Some(opts),
+            std: GearStd::M,
+            dp: None,
         }
     } else {
-        if get("std").is_some_and(|v| !v.trim().is_empty()) {
-            return Err(gear_mode_std_error());
+        // 体系：`std=M|DP`；`dp=<值>` 本身也能定 DP 体系（M 与 DP 同给 → 报错）。
+        let std_raw = get("std").filter(|v| !v.trim().is_empty());
+        let mut gear_std = match std_raw.as_deref() {
+            Some(v) => GearStd::parse(v).ok_or_else(gear_mode_std_error)?,
+            None => GearStd::M,
+        };
+        let dp_in = opt_f("dp").or_else(|| opt_f("径节"));
+        if dp_in.is_some() {
+            if std_raw.is_some() && gear_std == GearStd::M {
+                return Err(M_DP_CONFLICT_MSG.to_string());
+            }
+            gear_std = GearStd::DP;
         }
         if get("db").is_some() || get("d_b").is_some() {
             return Err(gear_mode_db_error());
@@ -2734,7 +3046,22 @@ pub fn params_from_query(query: &str) -> Result<(GearParams, GearView, f64), Str
                 "齿轮模式不认花键参数（齿廓/hf/ρf/cf）；要用花键请勾选「花键模式」。".to_string(),
             );
         }
-        let m = f("m", 2.0);
+        let (m, dp_value) = if gear_std == GearStd::DP {
+            let dp = dp_in.ok_or_else(|| {
+                "径节制 DP：缺径节值（写法 `std=DP&dp=8`）。".to_string()
+            })?;
+            if !(dp.is_finite() && dp > 0.0) {
+                return Err(format!("径节 DP={} 必须是正数。", trim(dp)));
+            }
+            if get("m").is_some() {
+                return Err(
+                    "DP 体系用径节 DP 定模数（m = 25.4/DP），不要再给 m。".to_string(),
+                );
+            }
+            (m_from_dp(dp), Some(dp))
+        } else {
+            (f("m", 2.0), None)
+        };
         GearParams {
             kind,
             m,
@@ -2746,6 +3073,8 @@ pub fn params_from_query(query: &str) -> Result<(GearParams, GearView, f64), Str
             h: f("h", if kind.is_internal() { 15.0 * m } else { 20.0 }),
             x: f("x", 0.0),
             spline: None,
+            std: gear_std,
+            dp: dp_value,
         }
     };
     // 花键模式：在查询解析阶段就把 `d_B`/GB/系数问题拦出来（报错文案与出图/信息行一致）。
@@ -2756,16 +3085,20 @@ pub fn params_from_query(query: &str) -> Result<(GearParams, GearView, f64), Str
 }
 
 /// 齿轮模式给标准号的报错（不静默忽略；与花键模式 `std` 区分开）。
+///
+/// 用户定案文案：**模数制齿轮不使用标准号与基准直径**（GB/T 3478.1 / DIN 5480 /
+/// NF E22-141 / ANSI B92.1 都是花键体系）。
 pub fn gear_mode_std_error() -> String {
-    "齿轮模式不认标准号（GB/T 3478.1 / DIN 5480 是**花键**体系）；要用花键请在窗口勾选「花键模式」\
+    "模数制齿轮不使用标准号与基准直径 —— 齿轮模式不认标准号（GB/T 3478.1 / DIN 5480-1 / \
+     NF E22-141 / ANSI B92.1 是**花键**体系）；要用花键请在窗口勾选「花键模式」\
      （命令行加 `花键` 或 `mode=spline`）。"
         .to_string()
 }
 
-/// 齿轮模式给 `d_B` 的报错（沿用 GB 口径：d_B 是 DIN 5480 花键的概念）。
+/// 齿轮模式给 `d_B` 的报错（用户定案文案：模数制齿轮不使用标准号与基准直径）。
 pub fn gear_mode_db_error() -> String {
-    "齿轮模式不认基准直径 d_B（基准直径 d_B 是 DIN 5480 花键的概念）；要用花键请在窗口勾选「花键模式」\
-     （命令行加 `花键` 或 `mode=spline`）。"
+    "模数制齿轮不使用标准号与基准直径 —— 齿轮模式不认基准直径 d_B（d_B 是 DIN 5480 / \
+     NF E22-141 花键体系的概念）；要用花键请在窗口勾选「花键模式」（命令行加 `花键` 或 `mode=spline`）。"
         .to_string()
 }
 
@@ -2780,6 +3113,9 @@ pub fn info_json(query: &str) -> Result<String, String> {
         "ok": err.is_none(),
         "error": err,
         "mode": "gear",
+        "std": p.std.label(),
+        "dp": p.dp,
+        "m": round4(p.m),
         "kind": p.kind.key(),
         "kind_label": p.kind.label(),
         "view": view.key(),
@@ -3048,6 +3384,8 @@ mod tests {
             h: 20.0,
             x: 0.0,
             spline: None,
+            std: GearStd::M,
+            dp: None,
         }
     }
 
@@ -4312,9 +4650,13 @@ mod tests {
         assert!(e.contains("齿轮模式不认标准号"), "{e}");
         let e = params_from_query("m=2&z=40&db=40").unwrap_err();
         assert!(e.contains("齿轮模式不认基准直径"), "{e}");
-        // ANSI 预留：明确未实现
+        // ANSI/NF 体系：明确未实现/未入库（体系可识别，不给假结果）
         let e = params_from_query("mode=spline&std=ANSI&m=3&z=20").unwrap_err();
-        assert!(e.contains("ANSI") && e.contains("尚未实现"), "{e}");
+        assert_eq!(e, crate::invol_spline::ANSI_NOT_IMPLEMENTED_MSG, "{e}");
+        let e = params_from_query("mode=spline&std=ANSI&db=40&m=3&z=20").unwrap_err();
+        assert_eq!(e, crate::invol_spline::ANSI_D_B_MSG, "{e}");
+        let e = params_from_query("mode=spline&std=NF&m=3&z=20").unwrap_err();
+        assert_eq!(e, crate::invol_spline::NF_NOT_LOADED_MSG, "{e}");
     }
 
     /// DIN 三种给法与“以 d_B 为准”：引擎已在 invol_spline 侧锁住，这里锁齿轮桥接与 meta。
@@ -4477,5 +4819,153 @@ mod tests {
                 && v["inspection"].as_str().unwrap().contains("M1=8.215"),
             "内花键检验应同时给 M2/M1：{j}"
         );
+    }
+
+    // ── 齿轮体系（M/DP，本轮新增）──
+
+    /// M/DP 体系标识解析、DP↔m 换算、块名/spec 保留 DP 原值、M+DP 互斥。
+    #[test]
+    fn gear_system_m_dp_identifiers_conversion_and_block_name() {
+        // 标识解析（大小写/中文）。
+        assert_eq!(GearStd::parse("M"), Some(GearStd::M));
+        assert_eq!(GearStd::parse("module"), Some(GearStd::M));
+        assert_eq!(GearStd::parse("模数制"), Some(GearStd::M));
+        assert_eq!(GearStd::parse("DP"), Some(GearStd::DP));
+        assert_eq!(GearStd::parse("径节"), Some(GearStd::DP));
+        assert_eq!(GearStd::parse("径节制"), Some(GearStd::DP));
+        assert_eq!(GearStd::parse("GB"), None);
+        // 换算：m = 25.4/DP 双向。
+        assert!((m_from_dp(8.0) - 3.175).abs() < 1e-12);
+        assert!((m_from_dp(10.0) - 2.54).abs() < 1e-12);
+        assert!((dp_from_m(3.175) - 8.0).abs() < 1e-12);
+        // DP 参数构造 + 校验。
+        let p = GearParams {
+            std: GearStd::DP,
+            dp: Some(8.0),
+            m: m_from_dp(8.0),
+            z: 40,
+            h: 20.0,
+            ..GearParams::default()
+        };
+        p.validate().unwrap();
+        assert!(p.is_dp() && p.dp_value() == Some(8.0));
+        assert!(p.spec().starts_with("DP8（m3.175）"), "{}", p.spec());
+        // 块名保留 DP 原值（不与同模数模数制件串块）。
+        let dp_block = block_name(&p, GearView::Front);
+        assert!(dp_block.contains("_DP8_Z40"), "{dp_block}");
+        assert!(!dp_block.contains("_M3_175"), "{dp_block}");
+        let m_block = block_name(
+            &GearParams { m: 3.175, z: 40, h: 20.0, ..GearParams::default() },
+            GearView::Front,
+        );
+        assert_ne!(dp_block, m_block);
+        // M+DP 同给 → 互斥；DP 缺值 / DP 与 m 不符 → 拒绝。
+        let bad = GearParams {
+            std: GearStd::M,
+            dp: Some(8.0),
+            m: 3.175,
+            z: 40,
+            h: 20.0,
+            ..GearParams::default()
+        };
+        assert!(bad.validate().unwrap_err().contains("M 与 DP"));
+        let bad = GearParams {
+            std: GearStd::DP,
+            dp: None,
+            m: 3.175,
+            z: 40,
+            h: 20.0,
+            ..GearParams::default()
+        };
+        assert!(bad.validate().unwrap_err().contains("缺径节值"));
+        let bad = GearParams {
+            std: GearStd::DP,
+            dp: Some(8.0),
+            m: 3.0,
+            z: 40,
+            h: 20.0,
+            ..GearParams::default()
+        };
+        assert!(bad.validate().unwrap_err().contains("25.4/DP"));
+    }
+
+    /// 命令行/查询串：M/DP 显式标识、DP 位置参数 = [z,h]、M+DP 互斥、d_B 拦截、
+    /// 花键体系显式（只给 d_B 不再反推 DIN）。
+    #[test]
+    fn gear_system_parse_request_and_query_dp_rules() {
+        // `std=DP dp=8`：m 由 DP 换算。
+        let r = parse_request("std=DP dp=8 z=40 h=20").unwrap();
+        assert_eq!(r.params.std, GearStd::DP);
+        assert_eq!(r.params.dp, Some(8.0));
+        assert!((r.params.m - 3.175).abs() < 1e-12);
+        // `DP8` 贴写 + 位置参数 = [z, h]（DP 不写 m）。
+        let r = parse_request("DP8 40 20").unwrap();
+        assert_eq!(r.params.std, GearStd::DP);
+        assert_eq!(r.params.dp, Some(8.0));
+        assert_eq!(r.params.z, 40);
+        assert!((r.params.h - 20.0).abs() < 1e-12);
+        // 裸 `M` = 模数制标识；`m=3` 仍是模数。
+        let r = parse_request("M z=40 h=20").unwrap();
+        assert_eq!(r.params.std, GearStd::M);
+        assert_eq!(parse_request("m=3 z=40 h=20").unwrap().params.m, 3.0);
+        // M 与 DP 同给 → 报错。
+        for raw in ["std=M dp=8 z=40", "DP8 std=M z=40", "M dp=8 z=40"] {
+            let e = parse_request(raw).unwrap_err();
+            assert!(e.contains("M 与 DP"), "{raw} → {e}");
+        }
+        // DP 体系不许再给 m；DP 缺径节值。
+        assert!(parse_request("std=DP dp=8 m=3.175 z=40")
+            .unwrap_err()
+            .contains("不要再给 m"));
+        assert!(parse_request("std=DP z=40").unwrap_err().contains("缺径节值"));
+        // 查询串同口径。
+        let (p, _, _) = params_from_query("kind=external&std=DP&dp=8&z=40&h=20").unwrap();
+        assert_eq!(p.std, GearStd::DP);
+        assert_eq!(p.dp, Some(8.0));
+        assert!((p.m - 25.4 / 8.0).abs() < 1e-12);
+        // info JSON 保留 DP 原值；preview/generate 与 M 模式共用几何。
+        let j = info_json("std=DP&dp=8&z=40&h=20&view=section").unwrap();
+        let v: serde_json::Value = serde_json::from_str(&j).unwrap();
+        assert_eq!(v["std"], "DP");
+        assert_eq!(v["dp"], 8.0);
+        assert!((v["m"].as_f64().unwrap() - 3.175).abs() < 1e-12);
+        assert!(v["block"].as_str().unwrap().contains("_DP8_Z40"), "{j}");
+        assert!(v["spec"].as_str().unwrap().starts_with("DP8（m3.175）"), "{j}");
+        assert!(preview_svg("std=DP&dp=8&z=40&h=20&view=section")
+            .unwrap()
+            .contains("<svg"));
+        assert!(params_from_query("m=2&z=40&std=DP&dp=8")
+            .unwrap_err()
+            .contains("不要再给 m"));
+        assert!(params_from_query("std=M&dp=8&z=40")
+            .unwrap_err()
+            .contains("M 与 DP"));
+        assert!(params_from_query("std=DP&z=40")
+            .unwrap_err()
+            .contains("缺径节值"));
+        // d_B 在 M/DP 下都报错（M 的文案含用户定案句）。
+        let e = params_from_query("m=2&z=40&std=M&db=40").unwrap_err();
+        assert!(e.contains("齿轮模式不认基准直径") && e.contains("模数制齿轮不使用标准号与基准直径"), "{e}");
+        assert!(parse_request("std=DP dp=8 z=40 db=40")
+            .unwrap_err()
+            .contains("齿轮模式不认基准直径"));
+        // 齿轮模式给花键标准号 → 拒绝（保留旧行为）。
+        assert!(parse_request("2 40 20 std=GB")
+            .unwrap_err()
+            .contains("齿轮模式不认标准号"));
+        // 花键体系必须显式：只给 d_B 不再反推 DIN（默认 GB → GB_D_B_MSG）。
+        let e = parse_request("花键 db=40 m=2 z=18").unwrap_err();
+        assert_eq!(e, crate::invol_spline::GB_D_B_MSG, "{e}");
+        let e = params_from_query("mode=spline&db=40&m=2&z=18").unwrap_err();
+        assert_eq!(e, crate::invol_spline::GB_D_B_MSG, "{e}");
+        // 显式 DIN 才走查表。
+        let r = parse_request("花键 std=DIN db=40 m=2").unwrap();
+        assert_eq!(r.params.spline.as_ref().unwrap().std, crate::invol_spline::SplineStd::DIN);
+        // 同一行两个花键体系 → 报错；花键模式拒绝齿轮体系。
+        assert!(parse_request("花键 GB30R std=DIN m=2 z=18")
+            .unwrap_err()
+            .contains("同一行出现两个体系的标识"));
+        let e = parse_request("花键 std=DP dp=8 z=40").unwrap_err();
+        assert!(e.contains("齿轮体系") && e.contains("花键体系"), "{e}");
     }
 }

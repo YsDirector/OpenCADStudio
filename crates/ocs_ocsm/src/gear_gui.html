@@ -72,8 +72,9 @@
       <div class="ctl">
         <label class="chk"><input type="checkbox" id="splineMode"> 花键模式（渐开线花键）</label>
         <div class="hint" id="modeHint" style="flex-basis:100%; margin:0">
-          不勾选 = 普通齿轮（只能用 模数/齿数/压力角/变位系数 等常规输入；给标准号或 d_B 会明确报错）；
-          勾选 = 渐开线花键（GB/T 3478.1 / DIN 5480），内/外花键仍用下面的「齿轮种类」开关切换。
+          不勾选 = 普通齿轮（体系下拉 M 模数制 / DP 径节制；给花键标准号或 d_B 会明确报错）；
+          勾选 = 渐开线花键（GB/DIN/NF/ANSI 四种体系，内/外花键仍用下面的「齿轮种类」开关切换）。
+          NF 数据未入库、ANSI 未实现，选中会明确报错（不假装能用）。
         </div>
       </div>
 
@@ -85,8 +86,10 @@
         <select id="stdSel">
           <option value="GB">GB/T 3478.1-2008（无基准直径概念）</option>
           <option value="DIN">DIN 5480-1:2015（d_B 主参数）</option>
-          <option value="ANSI" disabled>ANSI B92.1（未实现，缺数据表）</option>
+          <option value="NF">NF E22-141（数据未入库）</option>
+          <option value="ANSI">ANSI B92.1（未实现）</option>
         </select>
+        <div class="hint" id="stdHint" style="flex-basis:100%; margin:0"></div>
       </div>
 
       <label id="profileLabel">花键齿廓类型</label>
@@ -101,10 +104,27 @@
         </div>
       </div>
 
-      <label for="mSel">模数[m/Mn]</label>
-      <div class="ctl">
+      <label id="sysLabel" for="sysSel">齿轮体系</label>
+      <div class="ctl" id="sysCtl">
+        <select id="sysSel">
+          <option value="M">M 模数制（输入模数 m）</option>
+          <option value="DP">DP 径节制（输入径节 DP，m = 25.4/DP）</option>
+        </select>
+        <div class="hint" id="sysHint" style="flex-basis:100%; margin:0">
+          模数制用 m；径节制用 DP（块名/规格保留 DP 原值，避免与同模数件串块）。M 与 DP 只能选一个。
+        </div>
+      </div>
+
+      <label for="mSel" id="mLabel">模数[m/Mn]</label>
+      <div class="ctl" id="mCtl">
         <select id="mSel" title="GB/T 1357 标准模数系列（第一/第二系列）"></select>
         <input type="number" id="m" value="2" min="0.01" step="0.01" title="可直接手填非标准模数">
+      </div>
+
+      <label for="dp" id="dpLabel">径节[DP]</label>
+      <div class="ctl" id="dpCtl">
+        <input type="number" id="dp" value="8" min="0.01" step="0.25" placeholder="任意 DP（系列待定）">
+        <span class="hint" style="margin:0">m = 25.4/DP（径节系列下拉暂不做，可输入任意 DP）</span>
       </div>
 
       <label for="z">齿数[z]</label>
@@ -219,6 +239,9 @@ const INVOL_FALLBACK = [
   { code: "GB375R", std: "GB", profile: "37.5圆齿根", alpha: 37.5, ha: 0.45, hf: 0.7, rho: 0.3, cf: 0.1 },
   { code: "GB45R", std: "GB", profile: "45圆齿根", alpha: 45, ha: 0.4, hf: 0.6, rho: 0.25, cf: 0.1 },
   { code: "DIN30", std: "DIN", profile: "DIN30", alpha: 30, ha: 0.45, hf: 0.55, rho: 0.16, cf: 0.1 },
+  // NF/ANSI：体系可识别但数据未入库/未实现 —— 保留选项，后端给明确错误（不假装能用）。
+  { code: "NF", std: "NF", profile: "NF E22-141（数据未入库）", alpha: 30, ha: 0.5, hf: 0.75, rho: 0.2, cf: 0.1 },
+  { code: "ANSI", std: "ANSI", profile: "ANSI B92.1（未实现）", alpha: 20, ha: 1, hf: 1.25, rho: 0.38, cf: 0.25 },
 ];
 let involPresets = [];            // 目录表预设（拿不到就空，用 INVOL_FALLBACK）
 let involDinNominal = [];         // DIN 5480-2 名义表候选（d_B datalist）
@@ -265,9 +288,17 @@ function viewLabel(key, kind) {
 
 // 齿宽默认值：外齿轮 10m、内齿轮 15m（m 非法时返回 NaN）
 function defaultH() {
-  const m = num("m");
+  const m = effM();
   if (!Number.isFinite(m) || m <= 0) return NaN;
   return kindOf().hFactor * m;
+}
+// 有效模数：M 模式 = m 输入框；DP 模式 = 25.4/DP（径节输入框）。
+function effM() {
+  if (!isSpline() && el("sysSel").value === "DP") {
+    const dp = num("dp");
+    return Number.isFinite(dp) && dp > 0 ? 25.4 / dp : NaN;
+  }
+  return num("m");
 }
 // 用户没手动改过 h 时写回默认值；force=true 则无条件写（初始化用）
 function syncDefaultH(force) {
@@ -363,7 +394,12 @@ function collect() {
     if (Number.isFinite(z) && z >= 2) p.z = Math.round(z);
     return { ok: !err, err, p };
   }
-  if (!Number.isFinite(m) || m <= 0) err = "模数 m 必须是正数。";
+  // 齿轮体系：M 用 m 输入框，DP 用 dp 输入框（m = 25.4/DP）；M 与 DP 只能选一个。
+  const sys = el("sysSel").value;
+  const dpv = num("dp");
+  const meff = sys === "DP" ? (Number.isFinite(dpv) && dpv > 0 ? 25.4 / dpv : NaN) : m;
+  if (sys === "DP" && (!Number.isFinite(dpv) || dpv <= 0)) err = "径节 DP 必须是正数。";
+  else if (sys !== "DP" && (!Number.isFinite(m) || m <= 0)) err = "模数 m 必须是正数。";
   else if (!Number.isFinite(z) || z < 2) err = "齿数 z 不能小于 2。";
   else if (!Number.isFinite(alpha) || alpha <= 10 || alpha >= 50) err = "压力角 α 超出范围（10°<α<50°）。";
   else if (!Number.isFinite(ha)) err = "齿顶高系数 ha* 必须是数字。";
@@ -371,7 +407,9 @@ function collect() {
   else if (!Number.isFinite(beta)) err = "螺旋角 β 的度/分/秒都必须是数字。";
   else if (!Number.isFinite(h) || h <= 0) err = "厚度 h 必须是正数。";
   else if (!Number.isFinite(x)) err = "变位系数 Xn 必须是数字。";
-  return { ok: !err, err, p: { kind: curKind, m, z: Math.round(z), alpha, ha, c, beta, h, x, x_given: true } };
+  const p = { kind: curKind, std: sys, m: meff, z: Math.round(z), alpha, ha, c, beta, h, x, x_given: true };
+  if (sys === "DP") { p.dp = dpv; delete p.m; }   // DP 不传 m（后端按 m=25.4/DP 换算；传 m 直接报错）
+  return { ok: !err, err, p };
 }
 
 // 每次输入都跑：校验按钮可用性 + 红字；顺带同步模数下拉与只读倒角框
@@ -382,16 +420,17 @@ function validateUI() {
   return v;
 }
 
-// 模数下拉 ↔ 数字框联动：数字命中系列就选它，否则显示「自定义」
+// 模数下拉 ↔ 数字框联动：数字命中系列就选它，否则显示「自定义」；DP 体系用换算模数。
 function syncModuleSelect() {
-  const m = num("m");
+  const m = effM();
+  if (!isSpline() && el("sysSel").value === "DP" && Number.isFinite(m)) el("m").value = fmt(m);
   const hit = Number.isFinite(m) ? MODULES.find((v) => Math.abs(v - m) < 1e-9) : undefined;
   el("mSel").value = hit ? String(hit) : "custom";
 }
 
 // 轴向倒角只读框：C = round(0.6m)，随模数实时更新（与 gear.rs 的 chamfer() 同口径）
 function syncChamfer() {
-  const m = num("m");
+  const m = effM();
   el("chamfer").value = Number.isFinite(m) && m > 0 ? String(Math.round(0.6 * m)) : "—";
 }
 
@@ -399,7 +438,7 @@ function syncChamfer() {
 
 // 行 id 前缀（HTML 里 label=…Label、div=…Ctl）。花键专用行与齿轮专用行互斥显示。
 const SPLINE_ROWS = ["std", "profile", "db", "hf", "rho", "cf"];
-const GEAR_ROWS = ["c", "beta", "chamfer"];
+const GEAR_ROWS = ["c", "beta", "chamfer", "sys"];
 function showRow(prefix, on) {
   const lab = el(prefix + "Label"), ctl = el(prefix + "Ctl");
   if (lab) lab.style.display = on ? "" : "none";
@@ -415,9 +454,23 @@ function syncSplineUI() {
   el("hLabel").textContent = on ? "有效长度[L]" : "厚度[h]";
   el("ha").title = on ? "齿顶高系数 ha*（按体系预设，可覆盖）" : "齿顶高系数 ha*";
   if (on) {
-    const gb = el("stdSel").value === "GB";
-    if (gb) el("db").value = ""; // GB 没有基准直径：清掉残留值（不在页面上传）
-    showRow("db", !gb); // GB 不给 d_B
+    showRow("m", false);
+    showRow("dp", false);
+    const std = el("stdSel").value;
+    // d_B 只属 DIN（NF 也含 d_B 但数据未入库；GB/ANSI 本体系不用）：仅 DIN 显示。
+    showRow("db", std === "DIN");
+    if (std !== "DIN") el("db").value = ""; // 不在页面上传
+    el("stdHint").textContent = ({
+      GB: "GB/T 3478.1：模数制，不用 d_B；给 d_B 会明确报错。",
+      DIN: "DIN 5480-1：d_B 主参数（可给 m 或 z 推导）。",
+      NF: "NF E22-141：数据未入库（尺寸表待抄，页图已在 ~/桌面/OCSM/review/花键标准资料/）——不可出图。",
+      ANSI: "ANSI B92.1：未实现（径节系列与方法已有，待接入）——不可出图。",
+    })[std] || "";
+  } else {
+    // 齿轮体系：M 显示模数行，DP 显示径节行（m = 25.4/DP）。
+    const dp = el("sysSel").value === "DP";
+    showRow("m", !dp);
+    showRow("dp", dp);
   }
 }
 
@@ -570,7 +623,9 @@ function syncKindHint() {
     return;
   }
   const arg = v.ok
-    ? (curKind === "internal" ? "int" : "ext") + " " + fmt(v.p.m) + " " + v.p.z + " " + fmt(v.p.h) + " alpha " + fmt(v.p.alpha)
+    ? (curKind === "internal" ? "int" : "ext") + (v.p.std === "DP"
+        ? " std=DP dp=" + fmt(v.p.dp) + " " + v.p.z + " " + fmt(v.p.h) + " alpha " + fmt(v.p.alpha)
+        : " " + fmt(v.p.m) + " " + v.p.z + " " + fmt(v.p.h) + " alpha " + fmt(v.p.alpha))
     : (curKind === "internal" ? "int" : "ext") + " <m> <z> <h> alpha <α>";
   if (curKind === "internal") {
     html += "内齿轮只有 <b>剖视图</b> 与 <b>端视图</b> 两个视图（侧视图/简化正视图无模板，不生成）；"
@@ -593,8 +648,12 @@ function paramQS(p) {
     push("h", p.h); push("x", p.x);
     return q;
   }
-  return "kind=" + p.kind + "&m=" + p.m + "&z=" + p.z + "&alpha=" + p.alpha + "&ha=" + p.ha + "&c=" + p.c +
-         "&beta=" + p.beta + "&h=" + p.h + "&x=" + p.x;
+  let q = "kind=" + p.kind + "&std=" + (p.std || "M");
+  const push = (k, v) => { if (v !== undefined && v !== null && v !== "") q += "&" + k + "=" + v; };
+  push("dp", p.dp); push("m", p.m); push("z", p.z);
+  push("alpha", p.alpha); push("ha", p.ha); push("c", p.c);
+  push("beta", p.beta); push("h", p.h); push("x", p.x);
+  return q;
 }
 function svgUrl(p) { return "/api/gear_svg?" + paramQS(p) + "&view=" + curView + "&n=1"; }
 
@@ -642,6 +701,10 @@ function renderInfo(j) {
   if (j.mode === "spline") { renderSplineInfo(j); return; }
   const internal = j.kind === "internal";
   const items = [
+    ["体系", j.std || "M", "", j.std === "DP" ? "径节制：m = 25.4/DP" : "模数制（输入模数 m）"],
+  ];
+  if (j.std === "DP") items.push(["径节 DP", j.dp, "", "DP 原值；m = 25.4/DP"], ["模数 m（换算）", j.m, " mm", "由 DP 换算"]);
+  items.push(
     ["分度圆 d", j.d, " mm", ""],
     ["压力角 α", j.alpha, "°", "基准齿形角（GB/T 1356 默认 20°）"],
     ["端面压力角 αt", j.alpha_t, "°", "αt = atan(tan αn / cos β)；直齿 αt = αn"],
@@ -651,7 +714,7 @@ function renderInfo(j) {
     [internal ? "齿根圆 df（外）" : "齿根圆 df", j.df, " mm",
       internal ? "内齿轮齿根圆在外侧（df > d，齿圈外壁从这里往外延伸）" : ""],
     ["齿根圆角 ρ", j.rho, " mm", ""],
-  ];
+  );
   if (internal) {
     items.push(["圆角圆心半径 rc", j.fillet_center_r, " mm",
       "齿根圆角圆心所在半径：内齿轮 rc = rf − ρ（外齿轮是 rf + ρ）"]);
@@ -864,6 +927,15 @@ function ping(bye) {
   });
 
   el("out").addEventListener("click", exportToDrawing);
+  // 齿轮体系（M/DP）：切体系 → 显隐 m/dp、重算倒角与默认 h、立即刷新
+  el("sysSel").addEventListener("change", () => {
+    syncSplineUI();
+    syncModuleSelect();
+    syncChamfer();
+    syncDefaultH(false);
+    validateUI();
+    onCommit();
+  });
 
   // 模式复选框：进/出花键模式（重建种类文案/视图按钮/显隐与预设）
   el("splineMode").addEventListener("change", () => {
