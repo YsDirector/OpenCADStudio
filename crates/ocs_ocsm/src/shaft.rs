@@ -99,7 +99,7 @@
 //! /`GB375R`/`GB45R`/`DIN30`/`NFP`/`NFR`（GB/T 3478.1-2008；DIN 5480-1:2015，h_fP*=0.55；NF E22-141 α=20°）自带
 //! α/ha*/hf*/ρf*，直径由 `M/Z/X`（或 DB/A）导出（**不给 S/E**）：`s = e = da`；
 //! **体系也可显式写标识**（`INVOLSPLINE DIN M2 Z18`、`INVOLSPLINE NF A80 M3.75`；NF 已入库，
-//! ANSI 未实现）。
+//! ANSI 用 `P8` 径节（或 M 槽位 = P，x 不允许））。
 //! - `L` = 有效长度（满齿段长）；`de`（滚刀外径）**可选**：给了才画收尾弧，
 //!   段长 = L + l（`l = √(h(2R−h))`、R = de/2、h = (da−df)/2，与 `SPLINE` 同式）；
 //!   不给 de 时段长 = L、端面直接收口；
@@ -185,13 +185,13 @@ OCSMSHAFT 轴生成器：行 DSL / JSON → 单视图侧视图（段拼接 + 端
                       l=√(h(2R−h))，6×23×26×6 → l=9.6047）；段长 = L + l；
                       不给 S/E；可 `de 71` 覆盖滚刀外径；不能与 CH/OV/RL/M/GEAR 同段
                       （引入倒角由相邻段的 CH 表达）
-    INVOLSPLINE GB30R M3 Z20 L30   渐开线花键段（GB/T 3478.1 / DIN 5480 / NF E22-141）：预设代号
-                      GB30P/GB30R（默认）/GB375R/GB45R/DIN30/NFP/NFR，或体系标识 GB/DIN/NF/ANSI；
-                      直径由 M/Z/X 或 DB/A 导出（不给 S/E）；
+    INVOLSPLINE GB30R M3 Z20 L30   渐开线花键段（GB/T 3478.1 / DIN 5480 / NF E22-141 / ANSI B92.1）：预设代号
+                      GB30P/GB30R（默认）/GB375R/GB45R/DIN30/NFP/NFR/ANSI30P/ANSI30PM/ANSI30R/ANSI375R/ANSI45R，
+                      或体系标识 GB/DIN/NF/ANSI；直径由 M/Z/X 或 DB/A 导出（不给 S/E）；
                       `X0.2` = 变位（DIN ∈ [−0.05, 0.45]）；DIN 可写 `DB40`（基准直径）、
                       NF 可写 `A80`（公称直径主参数），M/Z 可缺一项由名义/尺寸表补全
                       （DIN：m=1.5 已补入、m=5 已剔除；NF：尺寸表 288 行）；
-                      ANSI 明确报「未实现」；
+                      ANSI 是径节制：`P8`（或 M 槽位 = 径节 P），x 不允许；
                       `de63` 可选（给了才画收尾弧，段长 = L + l；不给 de 段长 = L）；
                       不能与 SPLINE/CH/OV/RL/M/GEAR 同段
     VIEW 常规|剖视|双   视图：常规（默认，只看外形）/ 剖视（轮廓 + ANSI31 剖面线）/ 双（并排一次出）
@@ -647,11 +647,12 @@ impl InvolSeg {
 impl serde::Serialize for InvolSeg {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         use serde::ser::SerializeStruct;
-        let mut st = serializer.serialize_struct("InvolSeg", 10)?;
+        let mut st = serializer.serialize_struct("InvolSeg", 11)?;
         st.serialize_field("code", &self.code)?;
         st.serialize_field("m", &self.params.m)?;
         st.serialize_field("z", &self.params.z)?;
         st.serialize_field("x", &self.params.x)?;
+        st.serialize_field("pitch", &self.params.pitch)?;
         st.serialize_field("len", &self.len)?;
         st.serialize_field("de", &self.de)?;
         // DIN 的 d_B 与 NF 的 A 同一槽位：只序列化实际有值的那个，避免回传时双字段冲突。
@@ -1360,6 +1361,20 @@ fn parse_segment(chunk: &str, label: &str, program: &mut Program) -> Result<Segm
             gear_on = true;
         } else if upper.starts_with("GEAR") {
             return Err(unknown_keyword(token, label));
+        } else if has_invol
+            && upper.starts_with('P')
+            && starts_number(
+                token[1..]
+                    .strip_prefix(['=', ':'])
+                    .unwrap_or(&token[1..]),
+            )
+        {
+            // ANSI 径节：`P8` / `P=8`（与 `M` 同槽位；生成时按体系解释）。
+            let value = parse_gear_number(token, 1, "P", label)?;
+            if invol_m.is_some() {
+                return Err(format!("{label}：关键字 P/M（径节/模数）重复"));
+            }
+            invol_m = Some(value);
         } else if upper.starts_with('M') {
             if has_invol {
                 let value = parse_gear_number(token, 1, "M", label)?;
@@ -1878,9 +1893,12 @@ struct JsonInvolSpline {
     std: Option<String>,
     #[serde(default)]
     profile: Option<String>,
-    /// 模数 m（DIN 给 `d_b` 时可由查表补全）。
+    /// 模数 m（DIN 给 `d_b` 时可由查表补全；ANSI 时此槽位 = 径节 P，也可用 `pitch` 显式给）。
     #[serde(default)]
     m: Option<f64>,
+    /// ANSI 径节 P（显式字段；与 `m` 槽位同义，优先）。
+    #[serde(default)]
+    pitch: Option<f64>,
     /// 齿数 z（DIN 给 `d_b` 时可由查表补全）。
     #[serde(default)]
     z: Option<u32>,
@@ -2198,7 +2216,11 @@ fn parse_json(text: &str) -> Result<Program, String> {
                 std,
                 profile,
                 ji.d_b,
-                ji.m,
+                if std == crate::invol_spline::SplineStd::ANSI {
+                    ji.pitch.or(ji.m)
+                } else {
+                    ji.m
+                },
                 ji.z,
                 ji.x,
             )

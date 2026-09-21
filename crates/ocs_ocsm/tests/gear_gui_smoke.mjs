@@ -84,7 +84,11 @@ const PARTS = {
         { code: 'DIN30', std: 'DIN', profile: 'DIN30', alpha: 30, ha: 0.45, hf: 0.55, rho: 0.16, cf: 0.1 },
         { code: 'NFP', std: 'NF', profile: 'NF平齿根', alpha: 20, ha: 0.2, hf: 1.0, rho: 0.3, cf: 0.1 },
         { code: 'NFR', std: 'NF', profile: 'NF圆齿根', alpha: 20, ha: 0.2, hf: 1.147, rho: 0.528, cf: 0.1 },
-        { code: 'ANSI', std: 'ANSI', profile: 'ANSI B92.1（未实现）', alpha: 20, ha: 1, hf: 1.25, rho: 0.38, cf: 0.25 },
+        { code: 'ANSI30P', std: 'ANSI', profile: 'ANSI30平齿根齿侧', alpha: 30, ha: 0.5, hf: 0.675, rho: 0, cf: 0 },
+        { code: 'ANSI30PM', std: 'ANSI', profile: 'ANSI30平齿根外径', alpha: 30, ha: 0.5, hf: 0.5, rho: 0, cf: 0 },
+        { code: 'ANSI30R', std: 'ANSI', profile: 'ANSI30圆齿根齿侧', alpha: 30, ha: 0.5, hf: 0.9, rho: 0, cf: 0 },
+        { code: 'ANSI375R', std: 'ANSI', profile: 'ANSI37.5圆齿根齿侧', alpha: 37.5, ha: 0.5, hf: 0.65, rho: 0, cf: 0 },
+        { code: 'ANSI45R', std: 'ANSI', profile: 'ANSI45圆齿根齿侧', alpha: 45, ha: 0.5, hf: 0.5, rho: 0, cf: 0 },
       ],
       din_nominal: [{ db: 40, m: 2, z: 18, x: 0.45, page: 27 }],
       nf_nominal: [{ a: 80, m: 3.75, z: 19, x: 0.967, page: 21 }],
@@ -180,13 +184,19 @@ try { el('db')._fire('change', el('db')); } catch (e) { errors.push('A 自动带
 await flush();
 check(Math.abs(numOf('m') - 3.75) < 1e-9, 'A80 应带出 m=3.75，实际 ' + numOf('m'));
 check(el('z').value === '19', 'A80 应带出 z=19，实际 ' + el('z').value);
-// ANSI：基准直径行隐藏 + 明确未实现
+// ANSI：基准直径行隐藏；输入切到径节 P（m 行显示且标签为径节[P]），hf/rho/cf 隐藏。
 el('stdSel').value = 'ANSI';
 try { el('stdSel')._fire('change', el('stdSel')); } catch (e) { errors.push('ANSI 切换异常: ' + e); }
 await flush();
 check(el('dbLabel').style.display === 'none', 'ANSI 下基准直径行应隐藏');
-check(el('stdHint').textContent.includes('未实现'), 'ANSI 提示应含「未实现」：' + el('stdHint').textContent);
-check(el('profileSel').value === 'ANSI', 'ANSI 齿廓应为 ANSI，实际 ' + el('profileSel').value);
+check(el('stdHint').textContent.includes('径节 P'), 'ANSI 提示应含「径节 P」：' + el('stdHint').textContent);
+check(!el('stdHint').textContent.includes('未实现'), 'ANSI 提示不应再含「未实现」：' + el('stdHint').textContent);
+check(el('mLabel').style.display !== 'none', 'ANSI 下应显示径节输入行（m 行）');
+check(el('mLabel').textContent.includes('径节[P]'), 'ANSI 标签应为径节[P]：' + el('mLabel').textContent);
+check(el('hfLabel').style.display === 'none', 'ANSI 下 hf 行应隐藏（Table 2 公式算）');
+check(el('rhoLabel').style.display === 'none', 'ANSI 下 rho 行应隐藏');
+check(el('cfLabel').style.display === 'none', 'ANSI 下 cf 行应隐藏');
+check(el('profileSel').value === 'ANSI30P', 'ANSI 默认齿廓应为 ANSI30P，实际 ' + el('profileSel').value);
 
 // ④ 防抖回调可跑（collect/renderInfo 不抛）
 for (const t of timers.splice(0)) {

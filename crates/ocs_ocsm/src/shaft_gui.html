@@ -371,6 +371,11 @@ const INVOL_FALLBACK = [
   { code: "DIN30", std: "DIN", profile: "DIN30", alpha: 30, ha: 0.45, hf: 0.55, rho: 0.16, cf: 0.1 },
   { code: "NFP", std: "NF", profile: "NF平齿根", alpha: 20, ha: 0.2, hf: 1.0, rho: 0.3, cf: 0.1 },
   { code: "NFR", std: "NF", profile: "NF圆齿根", alpha: 20, ha: 0.2, hf: 1.147, rho: 0.528, cf: 0.1 },
+  { code: "ANSI30P", std: "ANSI", profile: "ANSI30平齿根齿侧", alpha: 30, ha: 0.5, hf: 0.675, rho: 0, cf: 0 },
+  { code: "ANSI30PM", std: "ANSI", profile: "ANSI30平齿根外径", alpha: 30, ha: 0.5, hf: 0.5, rho: 0, cf: 0 },
+  { code: "ANSI30R", std: "ANSI", profile: "ANSI30圆齿根齿侧", alpha: 30, ha: 0.5, hf: 0.9, rho: 0, cf: 0 },
+  { code: "ANSI375R", std: "ANSI", profile: "ANSI37.5圆齿根齿侧", alpha: 37.5, ha: 0.5, hf: 0.65, rho: 0, cf: 0 },
+  { code: "ANSI45R", std: "ANSI", profile: "ANSI45圆齿根齿侧", alpha: 45, ha: 0.5, hf: 0.5, rho: 0, cf: 0 },
 ];
 
 function involList() {
@@ -420,12 +425,12 @@ function fillNfA(r) {
 function involStdOptionsHtml(cur) {
   const stds = [];
   for (const p of involList()) if (!stds.includes(p.std)) stds.push(p.std);
-  // NF/ANSI 可识别但数据未入库/未实现：保留选项，选中后后端报明确错误（不假装能用）。
+  // ANSI 已接入（径节 P + Table 2 五列）：
   const labels = {
     GB: "GB/T 3478.1-2008",
     DIN: "DIN 5480-1:2015（h_fP=0.55m）",
     NF: "NF E22-141（A 主参数，已入库）",
-    ANSI: "ANSI B92.1（未实现）",
+    ANSI: "ANSI B92.1（径节 P，公式驱动）",
   };
   return stds.map((s) => `<option value="${esc(s)}"${s === cur ? " selected" : ""}>`
     + (labels[s] || esc(s)) + "</option>").join("");
@@ -444,7 +449,44 @@ function involDerived(r) {
   if (!p) return "预设代号无效";
   const m = numOrNaN(r.invol.m);
   const z = numOrNaN(r.invol.z);
-  if (!(m > 0) || !(z > 0)) return p.code + "：填 m / z 后显示派生值";
+  if (!(m > 0) || !(z > 0)) return p.code + "：填 " + (p.std === "ANSI" ? "P" : "m") + " / z 后显示派生值";
+  if (p.std === "ANSI") {
+    // ANSI Table 2：D=N/P、Do=(N+1)/P、Dri/Di/Dre 按列公式、cF=0.001D 夹取、Sv 随 φD；
+    // rf 标准未给值，按切于齿根的过渡弧构造（无标准数值依据）。
+    const P = m, mEff = 1 / P;
+    const D = z / P, Db = D * Math.cos(a);
+    const cF = Math.min(0.010, Math.max(0.002, 0.001 * D));
+    const isFlatMajor = p.profile.indexOf("30平齿根外径") >= 0;
+    const isFillet30 = p.profile.indexOf("30圆齿根") >= 0;
+    const is375 = p.profile.indexOf("37.5") >= 0;
+    const is45 = p.profile.indexOf("45") >= 0;
+    const kDre = isFillet30 ? (P > 12 ? 2.0 : 1.8) : (is375 ? 1.3 : (is45 ? 1.0 : 1.35));
+    const kDri = isFlatMajor ? 1.0 : (isFillet30 ? 1.8 : (is375 ? 1.6 : (is45 ? 1.4 : 1.35)));
+    const kDi = is375 ? 0.8 : (is45 ? 0.6 : 1.0);
+    const Do = (z + 1) / P, Dri = (z + kDri) / P, Di = (z - kDi) / P, Dre = (z - kDre) / P;
+    const DFe = Di - 2 * cF;
+    const DFi = isFlatMajor ? (z + 0.8) / P - 0.004 + 2 * cF : (z + 1) / P + 2 * cF;
+    const sv = (is375 ? 0.5 * Math.PI + 0.1 : (is45 ? 0.5 * Math.PI + 0.2 : 0.5 * Math.PI)) / P;
+    const rs = DFe / 2, rf = Dre / 2, rb = Db / 2;
+    let rho = 0;
+    if (rs > rf && rs > rb) {
+      const sinA = Math.sqrt((rs * rs - rb * rb) / (rs * rs));
+      rho = (rs * rs - rf * rf) / (2 * (rf + rs * sinA));
+    }
+    let out = "P" + fmt(P) + "/Ps" + fmt(2 * P) + " N" + fmt(z)
+      + " D" + fmt(D) + " Db" + fmt(Db) + " Do" + fmt(Do)
+      + " Dri" + fmt(Dri) + " Di" + fmt(Di) + " Dre" + fmt(Dre)
+      + " DFe" + fmt(DFe) + " DFi" + fmt(DFi)
+      + " cF" + fmt(cF) + " Sv" + fmt(sv) + " ρf" + fmt(rho) + "（无标准值）";
+    const de = numOrNaN(r.invol.de);
+    if (Number.isFinite(de) && de > 0) {
+      const h = (Do - Dre) / 2;
+      out += " de" + fmt(de) + " l" + fmt(Math.sqrt(Math.max(0, h * (de - h))));
+    } else {
+      out += " de可选 l=0";
+    }
+    return out;
+  }
   const x = String(r.invol.x).trim() === "" ? 0 : numOrNaN(r.invol.x);
   const a = p.alpha * Math.PI / 180;
   const d = m * z;
@@ -564,6 +606,7 @@ function rowHtml(r, i) {
   const involPreset = involList().find((x) => x.code === String(r.invol.profile).trim());
   const involStd = involPreset ? involPreset.std : (/din/i.test(String(r.invol.profile)) ? "DIN" : "GB");
   const involBench = involStd === "DIN" || involStd === "NF";
+  const involAnsi = involStd === "ANSI";
   const involBenchLabel = involStd === "NF" ? "A" : "d_B";
   const involBenchList = involStd === "NF" ? "nfAList" : "dinDbList";
   const specHit = splineSpecHit(r.spline.spec);
@@ -603,9 +646,9 @@ function rowHtml(r, i) {
     <td class="feat"><div class="frow"><label class="chk"><input type="checkbox" data-f="invol.on"${ck(involOn)}${dis(gearOn || splineOn || mOn || ovOn)}>INVOL</label></div>
       <div class="frow"><select data-f="invol.std" title="标准预设：GB/T 3478.1-2008 或 DIN 5480-1:2015"${dis(!involOn)}>${involStdOptionsHtml(r.invol.std)}</select></div>
       <div class="frow"><select data-f="invol.profile" title="齿廓类型（GB 四种 / DIN 30°）"${dis(!involOn)}>${involProfileOptionsHtml(r.invol.std, r.invol.profile)}</select></div>
-      <div class="frow"><span class="chk">m</span><input type="number" step="0.1" min="0" data-f="invol.m" value="${esc(r.invol.m)}"${dis(!involOn)}>
+      <div class="frow"><span class="chk">${involAnsi ? "P" : "m"}</span><input type="number" step="${involAnsi ? "0.5" : "0.1"}" min="0" data-f="invol.m" value="${esc(r.invol.m)}"${involAnsi ? ' title="ANSI 径节 P"' : ""}${dis(!involOn)}>
       <span class="chk">z</span><input type="number" step="1" min="3" data-f="invol.z" value="${esc(r.invol.z)}"${dis(!involOn)}>
-      <span class="chk">x</span><input type="number" step="0.05" data-f="invol.x" value="${esc(r.invol.x)}" placeholder="0" style="width:52px"${dis(!involOn)}></div>
+      ${involAnsi ? "" : `<span class="chk">x</span><input type="number" step="0.05" data-f="invol.x" value="${esc(r.invol.x)}" placeholder="0" style="width:52px"${dis(!involOn)}>`}</div>
       ${involBench ? `<div class="frow"><span class="chk">${involBenchLabel}</span><input type="number" step="0.1" min="0" data-f="invol.db" value="${esc(r.invol.db)}" list="${involBenchList}" placeholder="${involStd === "NF" ? "NF 查表" : "DIN 查表"}" style="width:64px"${dis(!involOn)}></div>` : ""}
       <div class="frow"><span class="chk">L</span><input type="number" step="0.1" min="0" data-f="invol.len" value="${esc(r.invol.len)}" placeholder="有效长度"${dis(!involOn)}>
       <span class="chk">de</span><input type="number" step="0.1" min="0" data-f="invol.de" value="${esc(r.invol.de)}" placeholder="可选" style="width:48px"${dis(!involOn)}></div>
@@ -673,12 +716,13 @@ function rowToDsl(r) {
     const preset = involList().find((x) => x.code === code) || {};
     const isDin = preset.std === "DIN";
     const isNf = preset.std === "NF";
+    const isAnsi = preset.std === "ANSI";
     let s = "INVOLSPLINE " + code;
     if (isDin && String(r.invol.db).trim() !== "") s += " DB" + numTok(r.invol.db);
     if (isNf && String(r.invol.db).trim() !== "") s += " A" + numTok(r.invol.db);
-    if (String(r.invol.m).trim() !== "") s += " M" + numTok(r.invol.m);
+    if (String(r.invol.m).trim() !== "") s += (isAnsi ? " P" : " M") + numTok(r.invol.m);
     if (String(r.invol.z).trim() !== "") s += " Z" + numTok(r.invol.z);
-    if (String(r.invol.x).trim() !== "") s += " X" + numTok(r.invol.x);
+    if (!isAnsi && String(r.invol.x).trim() !== "") s += " X" + numTok(r.invol.x);
     s += " L" + numTok(r.invol.len);
     if (String(r.invol.de).trim() !== "") s += " de" + numTok(r.invol.de);
     return s;
@@ -731,7 +775,11 @@ function rowFromSegment(seg) {
     const p = involList().find((x) => x.code === iv.code);
     r.invol.std = p ? p.std : "GB";
     r.invol.profile = iv.code || "GB30R";
-    r.invol.m = iv.m === null || iv.m === undefined ? "" : fmt(iv.m);
+    // ANSI：序列化回来的是 m=1/P；显示/编辑用 P（`iv.pitch` 优先）。
+    const ansi = p && p.std === "ANSI";
+    r.invol.m = ansi
+      ? (iv.pitch !== null && iv.pitch !== undefined ? fmt(iv.pitch) : (iv.m ? fmt(1 / iv.m) : ""))
+      : (iv.m === null || iv.m === undefined ? "" : fmt(iv.m));
     r.invol.z = iv.z === null || iv.z === undefined ? "" : String(iv.z);
     r.invol.x = Math.abs(iv.x || 0) < 1e-12 ? "" : fmt(iv.x);
     r.invol.db = iv.d_b === null || iv.d_b === undefined ? "" : fmt(iv.d_b);
@@ -1049,6 +1097,7 @@ function modelFromRows() {
       const preset = involList().find((p) => p.code === code) || null;
       const isDin = preset ? preset.std === "DIN" : /^din/i.test(code);
       const isNf = preset ? preset.std === "NF" : /^nf/i.test(code);
+      const isAnsi = preset ? preset.std === "ANSI" : /^ansi/i.test(code);
       if (!code) { showStatus(at + "INVOLSPLINE 预设代号不能为空（例 GB30R）。", true); return null; }
       if (d_b !== null && (!(isDin || isNf) || !(d_b > 0))) {
         showStatus(at + "INVOLSPLINE 的基准直径只用于 DIN（d_B）/ NF（A）且必须 > 0（留空 = 不给）。", true);
@@ -1057,7 +1106,13 @@ function modelFromRows() {
       const mOk = Number.isFinite(m) && m > 0;
       const zOk = Number.isFinite(z) && z >= 3;
       const xOk = x === null || Number.isFinite(x);
-      if (d_b !== null) {
+      if (isAnsi) {
+        // ANSI：第 5 槽 = 径节 P；x 不参与（也不传）。
+        if (!mOk || !zOk) {
+          showStatus(at + "ANSI 参数非法（径节 P > 0、齿数 N ≥ 3）。", true);
+          return null;
+        }
+      } else if (d_b !== null) {
         // DB/A 路径：m/z 可缺一项（后端查表补全），填了就必须合法。
         if ((mOk === false && String(r.invol.m).trim() !== "")
             || (zOk === false && String(r.invol.z).trim() !== "") || !xOk) {
@@ -1073,7 +1128,7 @@ function modelFromRows() {
       if (d_b !== null) invol.d_b = d_b;
       if (mOk) invol.m = m;
       if (zOk) invol.z = z;
-      if (x !== null) invol.x = x;
+      if (x !== null && !isAnsi) invol.x = x;
       const deRaw = String(r.invol.de).trim();
       if (deRaw !== "") {
         const de = numOrNaN(r.invol.de);

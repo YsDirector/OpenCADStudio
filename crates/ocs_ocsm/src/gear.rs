@@ -28,9 +28,9 @@
 //!
 //! * 齿轮：外齿轮（β≠0 斜齿轮、Xn≠0 变位）+ 内齿轮（齿圈，模板只给剖视/端视）；
 //! * **花键模式**（`GearParams.spline = Some(..)`，GUI 顶部复选框）：渐开线花键（GB/T 3478.1 /
-//!   DIN 5480），几何全在 `invol_spline.rs` **共用引擎**；本体只负责视图组织 / 块名 / meta。
+//!   DIN 5480 / NF E22-141 / ANSI B92.1），几何全在 `invol_spline.rs` **共用引擎**；本体只负责视图组织 / 块名 / meta。
 //!   花键复用同一套「外/内」toggle（外花键/内花键）；内花键侧视/剖视是**缺模板依据的草案**
-//!   （见 `GearParams::spline_notes`）。ANSI B92.1 未实现（缺数据表，给 `std=ANSI` 明确报错）。
+//!   （见 `GearParams::spline_notes`）。
 
 use ocs_plugin_api::host::acadrust::entities::hatch::{
     BoundaryEdge, BoundaryPath, HatchPattern, HatchPatternLine, LineEdge,
@@ -195,11 +195,12 @@ pub struct GearParams {
 /// 花键模式参数（齿轮生成器「花键模式」复选框后面那组输入）。
 ///
 /// * `std`：**显式体系标识** —— GB/T 3478.1-2008 / DIN 5480-1:2015 /
-///   NF E22-141（已入库，A 为主参数；兼容旧字段名 `d_b`）/ ANSI B92.1（未实现）；
+///   NF E22-141（已入库，A 为主参数；兼容旧字段名 `d_b`）/ ANSI B92.1（径节 P，公式驱动）；
 /// * `profile`：齿廓代号（空 = 标准默认）；
 /// * `d_b`：**基准直径主参数槽位**——DIN 是 `d_B`、NF 是公称直径 `A`（GB/ANSI 给值直接报错）；
 /// * `m`/`z`/`x`：`None` = 未给（DIN 可由 `d_B` 查表/推导补全）；
-/// * 系数 `alpha_deg`/`ha_star`/`hf_star`/`rho_star`/`c_f_star`：`None` = 用预设，`Some` = 覆盖。
+///   **ANSI 下 `m` 槽位收径节 P**（`pitch` 字段可显式替代），`x` 不允许；
+/// * 系数 `alpha_deg`/`ha_star`/`hf_star`/`rho_star`/`c_f_star`：`None` = 用预设，`Some` = 覆盖（ANSI 不允许覆盖）。
 #[derive(Debug, Clone, PartialEq)]
 pub struct SplineOpts {
     /// 标准体系（GB/T 3478.1 / DIN 5480-1）。
@@ -247,7 +248,7 @@ impl Default for SplineOpts {
 impl SplineOpts {
     /// 解析花键**体系标识**：`GB` / `GB/T 3478.1` / `DIN` / `DIN 5480` / `NF` / `NF E22-141` /
     /// `ANSI` / `ANSI B92.1`（大小写/空格/斜杠不敏感）。
-    /// `NF`/`ANSI` 也返回对应体系 —— 未实现/查表错误由 [`crate::invol_spline::resolve_spline`]
+    /// `NF`/`ANSI` 也返回对应体系 —— 查表/参数错误由 [`crate::invol_spline::resolve_spline`]
     /// 统一报错（不在这里静默掉）。`M`/`DP` 是**齿轮**体系，报错指路。
     pub fn parse_std(s: &str) -> Result<crate::invol_spline::SplineStd, String> {
         use crate::invol_spline::SplineStd;
@@ -799,6 +800,13 @@ impl GearParams {
             || s.rho_star.is_some()
             || s.c_f_star.is_some()
         {
+            if s.std == crate::invol_spline::SplineStd::ANSI {
+                return Err(
+                    "ANSI B92.1：压力角/系数由 Table 2 五列固定（选对应 profile），\
+                     不要再覆盖 alpha/ha*/hf*/rho*/cf*。"
+                        .to_string(),
+                );
+            }
             let (a0, ha0, hf0, rho0, cf0) = (
                 p.alpha_deg,
                 p.ha_star,
@@ -848,7 +856,17 @@ impl GearParams {
         if let Some(code) = crate::invol_spline::preset_code(p.std, p.profile) {
             s.push_str(&format!("_{code}"));
         }
-        s.push_str(&format!("_M{}_Z{}", trim(p.m).replace('.', "_"), p.z));
+        if p.std == crate::invol_spline::SplineStd::ANSI {
+            let pv = p.ansi_p();
+            s.push_str(&format!(
+                "_P{}_PS{}_N{}",
+                trim(pv).replace('.', "_"),
+                trim(2.0 * pv).replace('.', "_"),
+                p.z
+            ));
+        } else {
+            s.push_str(&format!("_M{}_Z{}", trim(p.m).replace('.', "_"), p.z));
+        }
         if p.x.abs() > 1e-9 {
             s.push_str(&format!(
                 "_X{}{}",
@@ -891,6 +909,16 @@ impl GearParams {
             v.push(format!(
                 "GB/T 3478 基本齿廓不含变位；当前按 x={} 计入几何（公式与 DIN 同式）。",
                 trim(p.x)
+            ));
+        }
+        if p.std == crate::invol_spline::SplineStd::ANSI {
+            v.push(format!(
+                "ANSI B92.1：公式驱动（径节 P={}、Ps={}；Table 2 五列）。rf 标准没有给值\
+                 （p14 明确圆齿根曲率不能用给定半径规定），当前 ρf={} 是切于齿根的过渡弧构造、\
+                 无标准数值依据；径节/直径为英制数值口径。",
+                trim(p.ansi_p()),
+                trim(2.0 * p.ansi_p()),
+                trim(p.rho_f())
             ));
         }
         v
@@ -2501,9 +2529,9 @@ pub fn parse_request(raw: &str) -> Result<GearRequest, String> {
                  [view 剖视图|侧视图|简化正视图|常规正视图|端视图] [at x,y] [rot 度]。\n\
                  齿轮体系：默认 M 模数制；径节制写 `std=DP dp=8`（或 `DP8`），此时位置参数 = `<齿数z> <齿宽h>`，m=25.4/DP。\n\
                  花键模式：`OCSMGEAR 花键 [内花键] [std=GB|DIN|NF|ANSI] [profile=GB30R] [db=40] [hf=0.9] [rho=0.4] [cf=0.1] <m> <z> [x=..] [h=..] [view 端视图|侧视图|剖视图]`；\
-                 花键参数也可用预设代号（GB30P/GB30R/GB375R/GB45R/DIN30/NFP/NFR）代替 std+profile；
+                 花键参数也可用预设代号（GB30P/GB30R/GB375R/GB45R/DIN30/NFP/NFR/ANSI30P/ANSI30PM/ANSI30R/ANSI375R/ANSI45R）代替 std+profile；
                  花键模式：`db=40` 是 DIN 的 d_B，NF 用 `a=66`（或 `公称直径=66`，也兼容 `db=` 当 A）；
-                 NF 已入库（尺寸表 p18/p20/p21/p22，288 行）；ANSI 未实现。\n\
+                 ANSI 是径节制：写 `P8`（或 `pitch=8`；也兼容把值放在 m 槽位），位置参数 = <径节P> <齿数N> <有效长度L>，x 不允许。\n\
                  不带参数则打开齿轮窗口。内齿轮（齿圈）目前只有 剖视图 + 端视图（模板只有这两个）；\
                  剖视图不画齿圈外壁与剖面线，由用户/AI 按实际齿圈结构延伸。";
     let toks: Vec<&str> = raw.split_whitespace().collect();
@@ -2523,6 +2551,7 @@ pub fn parse_request(raw: &str) -> Result<GearRequest, String> {
     let mut sp_std: Option<crate::invol_spline::SplineStd> = None;
     let mut sp_profile = String::new();
     let mut sp_d_b: Option<f64> = None;
+    let mut sp_pitch: Option<f64> = None; // ANSI 径节 P（`P8`/`pitch=8`；兼容 m 槽位）
     let mut sp_hf: Option<f64> = None;
     let mut sp_rho: Option<f64> = None;
     let mut sp_cf: Option<f64> = None;
@@ -2643,6 +2672,13 @@ pub fn parse_request(raw: &str) -> Result<GearRequest, String> {
             }
             "db" | "d_b" | "基准直径" => {
                 sp_d_b = Some(num("db", val)?);
+            }
+            "p" | "pitch" | "径节P" => {
+                let v = num("pitch", val)?;
+                if !(v.is_finite() && v > 0.0) {
+                    return Err(format!("径节 P={} 必须是正数。", trim(v)));
+                }
+                sp_pitch = Some(v);
             }
             "a" | "公称直径" => {
                 sp_d_b = Some(num("公称直径 A", val)?);
@@ -2784,6 +2820,25 @@ pub fn parse_request(raw: &str) -> Result<GearRequest, String> {
                         continue;
                     }
                 }
+                // ANSI 径节贴写：`P8` / `P=8`（与 NF 的 `A66` 同型；不自动开新体系）。
+                if let Some(rest) = lower_tok
+                    .strip_prefix('p')
+                    .map(|r| r.strip_prefix(['=', ':']).unwrap_or(r))
+                {
+                    if !rest.is_empty()
+                        && rest.chars().next().is_some_and(|c| c.is_ascii_digit() || c == '.')
+                    {
+                        let v: f64 = rest
+                            .parse()
+                            .map_err(|_| format!("径节 P 需要数字，收到 `{other}`"))?;
+                        if !(v.is_finite() && v > 0.0) {
+                            return Err(format!("径节 P={} 必须是正数。", trim(v)));
+                        }
+                        sp_pitch = Some(v);
+                        i += 1;
+                        continue;
+                    }
+                }
                 // NF 公称直径贴写：`A66` / `A=66`（`a=66` / `公称直径=66` 走上面的键臂）。
                 if let Some(rest) = lower_tok
                     .strip_prefix('a')
@@ -2857,11 +2912,25 @@ pub fn parse_request(raw: &str) -> Result<GearRequest, String> {
             sp_std = Some(crate::invol_spline::SplineStd::GB);
         }
         let std = sp_std.unwrap_or_else(|| default_spline_std(&sp_profile));
+        // ANSI：`P8`/`pitch=8` 优先；否则位置参数第 1 个就是径节 P（与 m 槽位同义）。
+        let ansi_pitch = if std == crate::invol_spline::SplineStd::ANSI {
+            sp_pitch.or_else(|| m_given.then_some(p.m))
+        } else {
+            None
+        };
+        if let Some(pv) = ansi_pitch {
+            // ANSI 的有效模数 m = 1/P（供 h 默认值与块名换算用）。
+            p.m = 1.0 / pv;
+        }
         let opts = SplineOpts {
             std,
             profile: sp_profile,
             d_b: sp_d_b,
-            m: m_given.then_some(p.m),
+            m: if std == crate::invol_spline::SplineStd::ANSI {
+                ansi_pitch
+            } else {
+                m_given.then_some(p.m)
+            },
             z: z_given.then_some(p.z),
             x: x_given.then_some(p.x),
             alpha_deg: alpha_given.then_some(p.alpha_deg),
@@ -3018,11 +3087,18 @@ pub fn params_from_query(query: &str) -> Result<(GearParams, GearView, f64), Str
             }
             _ => default_spline_std(&get("profile").unwrap_or_default()),
         };
+        let m_or_p = if std == crate::invol_spline::SplineStd::ANSI {
+            opt_f("p")
+                .or_else(|| opt_f("pitch"))
+                .or_else(|| opt_f("m"))
+        } else {
+            opt_f("m")
+        };
         let opts = SplineOpts {
             std,
             profile: get("profile").unwrap_or_default(),
             d_b: opt_f("db").or_else(|| opt_f("d_b")).or_else(|| opt_f("a")).or_else(|| opt_f("A")),
-            m: opt_f("m"),
+            m: m_or_p,
             z: opt_f("z").map(|v| v.round() as u32),
             x: opt_f("x"),
             alpha_deg: opt_f("alpha"),
@@ -3222,6 +3298,12 @@ fn spline_info_json(p: &GearParams, view: GearView) -> Result<String, String> {
         "origin": origin.as_ref().map(|o| o.note()),
         "rho": round4(engine.rho_f()),
         "cf": round4(engine.c_f()),
+        // ANSI 专用（其余体系为 null）：P/Ps、DFe/DFi、Sv min。
+        "pitch": if engine.std == crate::invol_spline::SplineStd::ANSI { Some(round4(engine.ansi_p())) } else { None },
+        "ps": if engine.std == crate::invol_spline::SplineStd::ANSI { Some(round4(2.0 * engine.ansi_p())) } else { None },
+        "dfe": if engine.std == crate::invol_spline::SplineStd::ANSI { Some(round4(engine.ansi_form_dia_external())) } else { None },
+        "dfi": if engine.std == crate::invol_spline::SplineStd::ANSI { Some(round4(engine.ansi_form_dia_internal())) } else { None },
+        "sv_min": if engine.std == crate::invol_spline::SplineStd::ANSI { Some(round4(engine.ansi_sv_min())) } else { None },
         "internal_major": round4(engine.internal_major_dia()),
         "internal_minor": round4(engine.internal_minor_dia()),
         "inspection": inspection,
@@ -4677,9 +4759,14 @@ mod tests {
         assert!(e.contains("齿轮模式不认标准号"), "{e}");
         let e = params_from_query("m=2&z=40&db=40").unwrap_err();
         assert!(e.contains("齿轮模式不认基准直径"), "{e}");
-        // ANSI 体系：明确未实现（不给假结果）；NF 已入库（无 A 时由 m/z/x 正算 A）。
-        let e = params_from_query("mode=spline&std=ANSI&m=3&z=20").unwrap_err();
-        assert_eq!(e, crate::invol_spline::ANSI_NOT_IMPLEMENTED_MSG, "{e}");
+        // ANSI 可用（`m` 槽位 = 径节 P）；给 d_B 报径节制文案；NF 已入库（无 A 时由 m/z/x 正算 A）。
+        let (p, _, _) = params_from_query("mode=spline&std=ANSI&m=3&z=20").unwrap();
+        let sa = p.spline.as_ref().expect("ANSI 花键应该可用");
+        assert_eq!(sa.std, crate::invol_spline::SplineStd::ANSI);
+        let (ea, oa) = p.spline_engine().unwrap();
+        assert_eq!(ea.pitch, Some(3.0));
+        assert!((ea.d() - 20.0 / 3.0).abs() < 1e-12, "D=N/P");
+        assert!(oa.is_none());
         let e = params_from_query("mode=spline&std=ANSI&db=40&m=3&z=20").unwrap_err();
         assert_eq!(e, crate::invol_spline::ANSI_D_B_MSG, "{e}");
         let (p, _, _) = params_from_query("mode=spline&std=NF&m=3&z=20").unwrap();

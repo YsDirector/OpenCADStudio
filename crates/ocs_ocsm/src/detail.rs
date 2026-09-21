@@ -1308,7 +1308,7 @@ fn resolve_invol_spline(
     params: &DetailParams,
 ) -> Result<(crate::invol_spline::InvolParams, Option<f64>, Option<String>), String> {
     use crate::invol_spline::{parse_preset_token, resolve_din_by_d_b, InvolParams, SplineStd};
-    const KNOWN: [&str; 7] = ["m", "z", "x", "len", "db", "a", "check"];
+    const KNOWN: [&str; 9] = ["m", "z", "x", "len", "db", "a", "check", "p", "pitch"];
     let unknown: Vec<&str> = params
         .keys()
         .into_iter()
@@ -1321,21 +1321,22 @@ fn resolve_invol_spline(
         ));
     }
     let token = params.spec().ok_or_else(|| {
-        "渐开线花键：缺预设代号（GB 默认 `GB30R`；另 `GB30P`/`GB375R`/`GB45R`/`DIN30`/`NFP`/`NFR`）".to_string()
+        "渐开线花键：缺预设代号（GB 默认 `GB30R`；另 `GB30P`/`GB375R`/`GB45R`/`DIN30`/`NFP`/`NFR`；\
+         ANSI 用 `ANSI30P`/`ANSI30PM`/`ANSI30R`/`ANSI375R`/`ANSI45R`）".to_string()
     })?;
     let (std, profile) = parse_preset_token(token).ok_or_else(|| {
-        format!("渐开线花键：不认识的预设代号「{token}」（可用 GB30P/GB30R/GB375R/GB45R/DIN30/NFP/NFR，或体系标识 NF/ANSI）")
+        format!("渐开线花键：不认识的预设代号「{token}」（可用 GB30P/GB30R/GB375R/GB45R/DIN30/NFP/NFR/\
+                 ANSI30P/ANSI30PM/ANSI30R/ANSI375R/ANSI45R，或体系标识 NF/ANSI）")
     })?;
-    // ANSI 未实现 —— 明确报错；NF 已入库，走正常分支。
-    if std == SplineStd::ANSI {
-        let msg = if params.get("db").is_some() || params.get("a").is_some() {
-            crate::invol_spline::ANSI_D_B_MSG
-        } else {
-            crate::invol_spline::ANSI_NOT_IMPLEMENTED_MSG
-        };
-        return Err(format!("渐开线花键：{msg}"));
-    }
-    let m = params.get("m");
+    // 第 5 参 `m` 槽位：ANSI 收**径节 P**（兼容 `P=`/`pitch=` 键）；其余体系 = 模数 m。
+    let m = if std == SplineStd::ANSI {
+        params
+            .get("p")
+            .or_else(|| params.get("pitch"))
+            .or_else(|| params.get("m"))
+    } else {
+        params.get("m")
+    };
     let z_value = params.get("z");
     let x = params.get("x");
     // 基准直径主参数：DIN 用 `db`（d_B），NF 用 `a`（A，兼容 `db` 键传入）。
@@ -1344,6 +1345,10 @@ fn resolve_invol_spline(
         if std == SplineStd::GB {
             // GB/T 3478 没有基准直径这个概念：统一文案，不静默忽略。
             return Err(format!("渐开线花键：{}", crate::invol_spline::GB_D_B_MSG));
+        }
+        if std == SplineStd::ANSI {
+            // ANSI 径节制：不用 d_B/A，改用 P（`P8`/`p=8`）。
+            return Err(format!("渐开线花键：{}", crate::invol_spline::ANSI_D_B_MSG));
         }
         let z = match z_value {
             Some(z) => {
@@ -1380,22 +1385,29 @@ fn resolve_invol_spline(
                 trim(z_value)
             ));
         }
-        let is_nf = std == SplineStd::NF;
-        let xv = if is_nf { x.unwrap_or(0.8) } else { x.unwrap_or(0.0) };
-        let mut p = InvolParams::from_preset(std, profile, m, z_value as u32)
-            .map_err(|e| format!("渐开线花键：{e}"))?
-            .with_x(xv);
-        if is_nf {
-            let a = crate::invol_spline::a_from_x(p.m, p.z, p.x);
-            p = p.with_a(a);
-        }
-        p.validate().map_err(|e| format!("渐开线花键：{e}"))?;
-        let src = if is_nf {
-            Some("由 m/z/x 正算 A=m(z+2x+0.4)".to_string())
+        if std == SplineStd::ANSI {
+            // ANSI 公式驱动：m 槽位 = 径节 P；无变位。
+            let p = InvolParams::ansi(profile, m, z_value as u32)
+                .map_err(|e| format!("渐开线花键：{e}"))?;
+            (p, None)
         } else {
-            None
-        };
-        (p, src)
+            let is_nf = std == SplineStd::NF;
+            let xv = if is_nf { x.unwrap_or(0.8) } else { x.unwrap_or(0.0) };
+            let mut p = InvolParams::from_preset(std, profile, m, z_value as u32)
+                .map_err(|e| format!("渐开线花键：{e}"))?
+                .with_x(xv);
+            if is_nf {
+                let a = crate::invol_spline::a_from_x(p.m, p.z, p.x);
+                p = p.with_a(a);
+            }
+            p.validate().map_err(|e| format!("渐开线花键：{e}"))?;
+            let src = if is_nf {
+                Some("由 m/z/x 正算 A=m(z+2x+0.4)".to_string())
+            } else {
+                None
+            };
+            (p, src)
+        }
     };
     if d.is_finite() && d > 0.0 && (d - p.d()).abs() > 1e-9 {
         return Err(format!(
@@ -1549,7 +1561,7 @@ impl DetailElement for InvolSpline {
 
     fn catalog_extra(&self) -> serde_json::Value {
         use crate::invol_spline::{preset_code, SplineStd};
-        let presets: Vec<serde_json::Value> = [SplineStd::GB, SplineStd::DIN, SplineStd::NF]
+        let presets: Vec<serde_json::Value> = [SplineStd::GB, SplineStd::DIN, SplineStd::NF, SplineStd::ANSI]
             .iter()
             .flat_map(|std| {
                 std.presets().iter().map(move |p| {
@@ -1565,13 +1577,6 @@ impl DetailElement for InvolSpline {
                     })
                 })
             })
-            .chain([
-                // ANSI：体系可识别但未实现 —— 保留选项以便前端给出明确错误（不假装能用）。
-                serde_json::json!({
-                    "code": "ANSI", "std": "ANSI", "profile": "ANSI B92.1（未实现）",
-                    "alpha": 20.0, "ha": 1.0, "hf": 1.25, "rho": 0.38, "cf": 0.25,
-                }),
-            ])
             .collect();
         let din_nominal: Vec<serde_json::Value> = crate::invol_spline::din5480_rows()
             .iter()
@@ -1632,12 +1637,13 @@ impl DetailElement for InvolSpline {
             "default_d": 0,
             "spec_label": "预设代号（GB30P/GB30R/GB375R/GB45R/DIN30/NFP/NFR）",
             "source": format!(
-                "{}（图 2 基本齿廓 + 表 3~表 6）；{}（条 5.1：齿侧对中 h_fP=0.55m）；NF E22-141（中文译本 p18/p20/p21/p22，288 行：α=20°、A=m(N+2x+0.4)、D=A−2m）；DIN 5480-2 名义表（674 行；m=1.5 已补入，m=5 已剔除）+ 检验表（220 行；M₁/M₂/D_M/k/W_k）",
+                "{}（图 2 基本齿廓 + 表 3~表 6）；{}（条 5.1：齿侧对中 h_fP=0.55m）；NF E22-141（中文译本 p18/p20/p21/p22，288 行：α=20°、A=m(N+2x+0.4)、D=A−2m）；ANSI B92.1-1970 (R1993)（公式驱动：径节 17 项 + Table 2 五列；D=N/P、Do=(N+1)/P、cF=0.001D 夹取）；DIN 5480-2 名义表（674 行；m=1.5 已补入，m=5 已剔除）+ 检验表（220 行；M₁/M₂/D_M/k/W_k）",
                 crate::invol_spline::GB_CODE,
                 crate::invol_spline::DIN_CODE
             ),
             "din_notes": "DIN 5480-2 名义表：674 行；m=1.5 由用户截图补入（56 行）、m=5 已剔除（p35 渲染缺陷）；x=(d_B−m(z+1.1))/(2m) 为反推关系。检验表：220 行（p12/16/18/20 + m=1.5 截图），5 档 0.5/0.75/0.8/1/1.5；查表外 z 走公式（220 行逐行对照验证）",
             "nf_notes": "NF E22-141：288 行（p18 拉削内花键 144 + p20 39 + p21 49 + p22 56）；A=m(N+2x+0.4)、D=A−2m、db=d·cos20°；17 处 OCR 错格走代码修正表（不改 CSV），9 行疑原表印误只标注；m=0.75/3.75/7.50 的次系列 x=0.633/0.967 交替是真实设计值",
+            "ansi_notes": "ANSI B92.1-1970 (R1993) 公式驱动：径节 17 项 + Table 2 五列（30°平/齿侧、30°平/外径、30°圆/齿侧、37.5°圆/齿侧、45°圆/齿侧）；D=N/P、Db=D·cosφD、p=π/P、Do=(N+1)/P、Dre 三段、Sv min 随 φD、cF=0.001D 夹取；rf 标准未给值（p14），引擎按切于齿根的过渡弧构造（无标准数值依据）；抽样 73 行复算见 assets/ansi_b921_notes.md",
             "din_nominal": din_nominal,
             "din_inspection": din_inspection,
             "nf_nominal": nf_nominal,
@@ -1647,7 +1653,7 @@ impl DetailElement for InvolSpline {
                     { "value": "GB", "label": "GB/T 3478.1-2008（默认）" },
                     { "value": "DIN", "label": "DIN 5480-1:2015（h_fP=0.55m）" },
                     { "value": "NF", "label": "NF E22-141（A 主参数，已入库）" },
-                    { "value": "ANSI", "label": "ANSI B92.1（未实现）" }
+                    { "value": "ANSI", "label": "ANSI B92.1（径节 P + Table 2 五列）" }
                   ], "default": "GB" },
                 { "key": "profile", "label": "齿廓类型", "type": "select", "depends_on": "std",
                   "options_by": {
@@ -1665,7 +1671,11 @@ impl DetailElement for InvolSpline {
                       { "value": "NFR", "label": "NF 圆齿根（df=A−2.694m）" }
                     ],
                     "ANSI": [
-                      { "value": "ANSI", "label": "ANSI B92.1（未实现）" }
+                      { "value": "ANSI30P", "label": "30° 平齿根 · 齿侧配合（Table 2-A）" },
+                      { "value": "ANSI30PM", "label": "30° 平齿根 · 外径配合（Table 2-B）" },
+                      { "value": "ANSI30R", "label": "30° 圆齿根 · 齿侧配合（Table 2-C）" },
+                      { "value": "ANSI375R", "label": "37.5° 圆齿根 · 齿侧配合（Table 2-D）" },
+                      { "value": "ANSI45R", "label": "45° 圆齿根 · 齿侧配合（Table 2-E）" }
                     ]
                   }, "default": "GB30R" },
                 { "key": "db", "label": "基准直径 d_B（仅 DIN；从表里选候选）", "type": "number", "datalist": "din_nominal", "placeholder": "例如 40（DIN 5480-2 查表）",
@@ -1675,7 +1685,9 @@ impl DetailElement for InvolSpline {
                 { "key": "m", "label": "模数 m（DIN 给 d_B / NF 给 A 时可由查表补全）", "type": "number", "placeholder": "例如 3" },
                 { "key": "z", "label": "齿数 z（DIN 给 d_B / NF 给 A 时可由查表补全）", "type": "number", "placeholder": "例如 20" },
                 { "key": "x", "label": "变位系数 x（可选，DIN ∈ [−0.05, 0.45]）", "type": "number", "placeholder": "留空 = 0（NF 默认 0.8）" },
-                { "key": "len", "label": "有效长度 L（mm，侧视/剖视必给）", "type": "number", "placeholder": "例如 30" }
+                { "key": "len", "label": "有效长度 L（mm，侧视/剖视必给）", "type": "number", "placeholder": "例如 30" },
+                { "key": "p", "label": "径节 P（仅 ANSI；第 5 参槽位同义，x 不允许）", "type": "number", "placeholder": "例如 8（径节 P，Ps=2P）",
+                  "show_when": { "key": "std", "values": ["ANSI"] } }
             ],
             "invol_presets": presets,
             "sample": { "d": 0, "spec": "GB30R", "m": 3, "z": 20, "x": 0, "len": 30 },
@@ -2351,10 +2363,10 @@ mod tests {
         assert_eq!(family["free_d"], true);
         assert_eq!(family["hide_d"], true);
         assert_eq!(family["code"], crate::invol_spline::GB_CODE);
-        assert_eq!(family["invol_presets"].as_array().unwrap().len(), 8, "GB 4 + DIN 1 + NF 2 + ANSI 占位 1");
-        // 输入顺序：std / profile / db / a / m / z / x / len；select 带 options/options_by
+        assert_eq!(family["invol_presets"].as_array().unwrap().len(), 12, "GB 4 + DIN 1 + NF 2 + ANSI 5");
+        // 输入顺序：std / profile / db / a / m / z / x / len / p（p 仅 ANSI 显示）
         let inputs = family["inputs"].as_array().unwrap();
-        assert_eq!(inputs.len(), 8);
+        assert_eq!(inputs.len(), 9);
         assert_eq!(inputs[0]["key"], "std");
         assert_eq!(inputs[0]["type"], "select");
         assert_eq!(inputs[1]["key"], "profile");
@@ -2363,7 +2375,7 @@ mod tests {
         assert_eq!(inputs[1]["options_by"]["DIN"].as_array().unwrap().len(), 1);
         assert_eq!(inputs[0]["options"].as_array().unwrap().len(), 4, "GB/DIN/NF/ANSI");
         assert_eq!(inputs[1]["options_by"]["NF"].as_array().unwrap().len(), 2, "NFP/NFR");
-        assert_eq!(inputs[1]["options_by"]["ANSI"].as_array().unwrap().len(), 1);
+        assert_eq!(inputs[1]["options_by"]["ANSI"].as_array().unwrap().len(), 5);
         assert_eq!(inputs[2]["key"], "db", "DIN 基准直径输入（数据表驱动）");
         assert_eq!(inputs[2]["datalist"], "din_nominal");
         assert_eq!(inputs[3]["key"], "a", "NF 公称直径 A 输入");
@@ -2372,6 +2384,7 @@ mod tests {
         assert_eq!(inputs[5]["key"], "z");
         assert_eq!(inputs[6]["key"], "x");
         assert_eq!(inputs[7]["key"], "len");
+        assert_eq!(inputs[8]["key"], "p", "ANSI 径节 P 输入（show_when=ANSI）");
         // DIN 5480-2 名义表进了目录（GUI 的 d_B 候选/自动带出用）
         let nominal = family["din_nominal"].as_array().unwrap();
         assert_eq!(nominal.len(), 674, "入库 674 行（旧 618 + m=1.5 56）");
@@ -2476,7 +2489,7 @@ mod tests {
             .unwrap()
             .unwrap_err();
         assert!(err.contains("本体系不用 d_B"), "GB 无基准直径概念：{err}");
-        // 体系显式：NF 已入库（A 主参数）；ANSI 未实现（d_B 情形 ANSI 专门文案）
+        // 体系显式：NF 已入库（A 主参数）；ANSI 也已接入（第 5 参槽位 = 径节 P）
         let svg = preview_svg("family=detail_invol_spline&spec=NF&m=3&z=20&len=30&view=side")
             .unwrap()
             .unwrap();
@@ -2491,14 +2504,25 @@ mod tests {
             .unwrap()
             .unwrap_err();
         assert!(err.contains("A=0") && err.contains("正数"), "NF 非法 A 应报错：{err}");
-        let err = preview_svg("family=detail_invol_spline&spec=ANSI&m=3&z=20&len=30&view=side")
+        // ANSI：`m` 槽位 = 径节 P；spec 用 P/Ps 标识；内花键/三视图共用通路。
+        let svg = preview_svg("family=detail_invol_spline&spec=ANSI30P&m=8&z=20&len=30&view=side")
             .unwrap()
-            .unwrap_err();
-        assert!(err.contains("未实现"), "ANSI：{err}");
+            .unwrap();
+        assert!(
+            svg.contains("ANSI ANSI30平齿根齿侧 P8/Ps16 N20 L30"),
+            "ANSI：{svg}"
+        );
+        let svg = preview_svg("family=detail_invol_spline&spec=ANSI&p=8&z=20&view=front")
+            .unwrap()
+            .unwrap();
+        assert!(svg.contains("P8/Ps16 N20") && svg.contains("<svg"), "ANSI front：{svg}");
         let err = preview_svg("family=detail_invol_spline&spec=ANSI&db=40&view=side")
             .unwrap()
             .unwrap_err();
-        assert!(err.contains("不使用基准直径") && err.contains("未实现"), "ANSI+d_B：{err}");
+        assert!(
+            err.contains("不使用基准直径") && !err.contains("未实现"),
+            "ANSI+d_B：{err}"
+        );
         let svg = preview_svg("family=detail_invol_spline&spec=GB375R&m=1.5&z=30&view=front")
             .unwrap()
             .unwrap();
