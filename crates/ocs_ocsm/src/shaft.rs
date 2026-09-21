@@ -6446,6 +6446,30 @@ GEAR M3 Z20";
             e.contains("标准系列") && e.contains("2.5/5") && e.contains("128/256"),
             "{e}"
         );
+        // Table 2 每列适用径节范围（用户定案 A）：命令行/DSL 侧与引擎同一文案。
+        // A 列 30°平齿根/齿侧 2.5/5—32/64：40/80 超上限；B 列 30°平齿根/外径 3/6—16/32：20/40 超上限。
+        let e = parse_program("INVOLSPLINE ANSI30P P40/80 Z20 L30").unwrap_err();
+        assert!(
+            e.contains("ANSI B92.1 Table 2")
+                && e.contains("30° 平齿根 / 齿侧配合")
+                && e.contains("2.5/5 — 32/64")
+                && e.contains("40/80")
+                && e.contains("超出上限"),
+            "{e}"
+        );
+        let e = parse_program("INVOLSPLINE ANSI30PM P20/40 Z20 L30").unwrap_err();
+        assert!(
+            e.contains("30° 平齿根 / 外径配合")
+                && e.contains("3/6 — 16/32")
+                && e.contains("20/40"),
+            "{e}"
+        );
+        // 45° E 列：8/16 低于下限 10/20（原 45° 下限校验并入）。
+        let e = parse_program("INVOLSPLINE ANSI45R P8/16 Z20 L30").unwrap_err();
+        assert!(
+            e.contains("10/20 — 128/256") && e.contains("8/16") && e.contains("低于下限"),
+            "{e}"
+        );
         // 版本不重复：轴段错误只有一层 `ANSI B92.1：`
         assert!(e.matches("ANSI B92.1：").count() <= 1, "{e}");
         // 纯 RL 段的 P 查表仍不受影响（分支顺序修复不误伤）

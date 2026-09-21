@@ -403,6 +403,27 @@ function involList() {
   return involPresets.length ? involPresets : INVOL_FALLBACK;
 }
 
+// ANSI B92.1 Table 2 五列各自的适用径节范围（P 含端点；Ps=2P）——与 invol_spline.rs 的
+// AnsiColumn::pitch_range / ansi_column_pitch_check 同源（用户定案 A：按列强制）。
+// 注意 Table 3 的 Sv min 公式适用面比每列更宽（17 项全印），本表不用于卡 Sv。
+const ANSI_TABLE2_RANGES = {
+  ANSI30P:  { desc: "30° 平齿根 / 齿侧配合",   lo: 2.5, hi: 32,  label: "2.5/5 — 32/64" },
+  ANSI30PM: { desc: "30° 平齿根 / 外径配合",   lo: 3,   hi: 16,  label: "3/6 — 16/32" },
+  ANSI30R:  { desc: "30° 圆齿根 / 齿侧配合",   lo: 2.5, hi: 48,  label: "2.5/5 — 48/96" },
+  ANSI375R: { desc: "37.5° 圆齿根 / 齿侧配合", lo: 2.5, hi: 48,  label: "2.5/5 — 48/96" },
+  ANSI45R:  { desc: "45° 圆齿根 / 齿侧配合",   lo: 10,  hi: 128, label: "10/20 — 128/256" },
+};
+const ansiColumnRange = (code) => ANSI_TABLE2_RANGES[code] || null;
+// 列范围校验：越界返回与后端/命令行同一个文案；合法（含未知代号）返回 ""。
+function ansiPitchRangeErr(code, p) {
+  const r = ansiColumnRange(code);
+  if (!r || !(p > 0)) return "";
+  const pair = fmt(p) + "/" + fmt(2 * p);
+  if (p < r.lo - 1e-9) return "ANSI B92.1 Table 2「" + r.desc + "」列的适用径节为 " + r.label + "，收到 " + pair + "（低于下限）。";
+  if (p > r.hi + 1e-9) return "ANSI B92.1 Table 2「" + r.desc + "」列的适用径节为 " + r.label + "，收到 " + pair + "（超出上限）。";
+  return "";
+}
+
 /* ── DIN 5480-2 名义表（d_B 查表）── */
 
 // 候选 d_B：递增去重（目录拿不到时为空，退化为纯手输）。
@@ -1344,6 +1365,9 @@ function modelFromRows() {
           showStatus(at + "ANSI 参数非法（径节 P > 0、齿数 N ≥ 3）。", true);
           return null;
         }
+        // Table 2 每列适用径节范围（与后端/命令行同一文案）。
+        const rerr = ansiPitchRangeErr(code, m);
+        if (rerr) { showStatus(at + rerr, true); return null; }
       } else if (d_b !== null) {
         // DB/A 路径：m/z 可缺一项（后端查表补全），填了就必须合法。
         if ((mOk === false && String(r.invol.m).trim() !== "")

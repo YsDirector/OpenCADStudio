@@ -76,6 +76,13 @@ ANSI B92.1 是**公式驱动**体系（Table 2 给公式，不逐齿数印尺寸
 语义即外径配合时把内花键 form diameter 压到配合直径以下）——本引擎按原式字面实现，但输入边界
 统一换算成 mm（`−0.004 in = −0.1016 mm`，见 §5）。
 
+**范围强制（用户定案 A）**：`AnsiColumn::pitch_range()` / `ansi_column_pitch_check()` 按上表每列
+适用径节（上下界**含端点**）校验，越界报错点名「列 + 范围原文 + 收到的 P/Ps」——由
+`InvolParams::validate` 统一把关，CLI/DSL/查询串/两个 GUI 同一文案；原只查 45° 下限的特例已并入。
+**与 Table 3 的区别**：Table 3 把 `Ps`/`p`/`Sv min` 对 17 项径节**全印满**，`Sv min` 公式适用面
+比 Table 2 单列更宽 —— `ansi_sv_min_formula(α, P)` 直接从 (α, P) 算，**不受列界约束**
+（`ansi_sample_check_csv_all_73_rows` 用它复算 17 项印出值）。
+
 ## rf（齿根圆角）—— 无标准数值依据
 
 - p14「Fillets and Chamfers」原文明确：圆齿根 `The curvature along any generated fillet varies and

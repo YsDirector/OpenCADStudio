@@ -307,6 +307,34 @@ function moduleSourceOf(std) {
 }
 const ansiPairLabel = (p) => fmt(p) + "/" + fmt(2 * p);
 const isAnsiMode = () => isSpline() && el("stdSel").value === "ANSI";
+// ANSI B92.1 Table 2 五列各自的适用径节范围（P 含端点；Ps=2P）——与 invol_spline.rs 的
+// AnsiColumn::pitch_range 同源（用户定案 A：按列强制）。注意 Table 3 的 Sv min 公式适用面
+// 比每列更宽（17 项全印），不要拿本表去卡 Sv。
+const ANSI_TABLE2_RANGES = {
+  ANSI30P:  { desc: "30° 平齿根 / 齿侧配合",   lo: 2.5, hi: 32,  label: "2.5/5 — 32/64" },
+  ANSI30PM: { desc: "30° 平齿根 / 外径配合",   lo: 3,   hi: 16,  label: "3/6 — 16/32" },
+  ANSI30R:  { desc: "30° 圆齿根 / 齿侧配合",   lo: 2.5, hi: 48,  label: "2.5/5 — 48/96" },
+  ANSI375R: { desc: "37.5° 圆齿根 / 齿侧配合", lo: 2.5, hi: 48,  label: "2.5/5 — 48/96" },
+  ANSI45R:  { desc: "45° 圆齿根 / 齿侧配合",   lo: 10,  hi: 128, label: "10/20 — 128/256" },
+};
+// 当前 ANSI 列的范围（未知代号返回 null）。
+const ansiColumnRange = (code) => ANSI_TABLE2_RANGES[code] || null;
+// 当前列适用径节的 17 项子集（不选列/未知代号 = 全 17 项），供下拉过滤。
+function ansiPitchLabelsForColumn(code) {
+  const r = ansiColumnRange(code);
+  const all = ansiPitchList();
+  if (!r) return all;
+  return all.filter((l) => { const p = ansiPitchP(l); return p >= r.lo - 1e-9 && p <= r.hi + 1e-9; });
+}
+// 列范围校验：越界返回与后端同一个文案（collect 红字用）；合法返回 ""。
+function ansiPitchRangeErr(code, p) {
+  const r = ansiColumnRange(code);
+  if (!r || !(p > 0)) return "";
+  const pair = ansiPairLabel(p);
+  if (p < r.lo - 1e-9) return "ANSI B92.1 Table 2「" + r.desc + "」列的适用径节为 " + r.label + "，收到 " + pair + "（低于下限）。";
+  if (p > r.hi + 1e-9) return "ANSI B92.1 Table 2「" + r.desc + "」列的适用径节为 " + r.label + "，收到 " + pair + "（超出上限）。";
+  return "";
+}
 const involList = () => (involPresets.length ? involPresets : INVOL_FALLBACK);
 // 花键模式开关（复选框）
 const isSpline = () => el("splineMode").checked;
@@ -456,6 +484,7 @@ function collect() {
       else if (!Number.isFinite(z) || z < 3) aerr = "ANSI 齿数 N 不能小于 3。";
       else if (!Number.isFinite(h) || h <= 0) aerr = "有效长度 L 必须是正数。";
       else if (!el("profileSel").value) aerr = "ANSI 请选择 Table 2 齿廓（压力角/齿根型式/配合方式）。";
+      else aerr = ansiPitchRangeErr(el("profileSel").value, pv);   // Table 2 每列适用径节范围
       // 径节统一走 `pitch`（A/B 原值，如 `5/10`）：预览/信息查询串与导出 JSON 共用同一把钥匙，
       // 后端 `/api/gear_svg`、`/api/gear_info`、`/api/gear_export` 都按 `pitch` 解析（不再各写一套）。
       const p = { mode: "spline", kind: curKind, std, profile: el("profileSel").value, pitch: ansiPairLabel(pv), h };
@@ -535,15 +564,19 @@ function rebuildMSel(mode) {
   custom.value = "custom";
   custom.textContent = "自定义";
   sel.appendChild(custom);
-  if (mode === "ansi") {
-    ansiPitchList().forEach((label) => {
+  if (mode.indexOf("ansi") === 0) {
+    // 候选按当前列过滤（用户定案 A）：如 A 列只列 2.5/5…32/64；数字框仍可自定义 P。
+    const colCode = mode.slice("ansi:".length);
+    const range = ansiColumnRange(colCode);
+    ansiPitchLabelsForColumn(colCode).forEach((label) => {
       const o = document.createElement("option");
       o.value = label;
       const pv = ansiPitchP(label);
       o.textContent = label + "（P=" + fmt(pv) + "，m=" + fmt(25.4 / pv) + " mm）";
       sel.appendChild(o);
     });
-    sel.title = "ANSI B92.1 径节 17 项：A/B = P/Ps（Ps 恒为 2P）";
+    sel.title = "ANSI B92.1 径节" + (range ? "（当前列 " + range.label + "）" : "（17 项）")
+      + "：A/B = P/Ps（Ps 恒为 2P）";
   } else {
     // 花键模式按体系列该体系实际候选（GB 表 2 / DIN·NF 表实际 m 列）；普通齿轮仍是 GB/T 1357。
     const list = mode === "gear" ? MODULES : splineModuleList(mode);
@@ -561,21 +594,25 @@ function rebuildMSel(mode) {
 function syncModuleSelect() {
   const ansi = isAnsiMode();
   const std = isSpline() ? el("stdSel").value : "gear";
-  rebuildMSel(ansi ? "ansi" : std);
+  // mode 键带上当前列代号：换齿廓列时强制重建过滤后的候选。
+  rebuildMSel(ansi ? "ansi:" + el("profileSel").value : std);
   const m = effM();
   if (!isSpline() && el("sysSel").value === "DP" && Number.isFinite(m)) el("m").value = fmt(m);
   const hint = el("ansiPitchHint");
   if (hint) hint.style.display = ansi ? "" : "none";
   if (ansi) {
     const p = num("m");
+    const range = ansiColumnRange(el("profileSel").value);
+    const rtxt = range ? "当前 Table 2 列（" + range.desc + "）适用 " + range.label + "。" : "";
     if (Number.isFinite(p) && p > 0) {
       const label = ansiPairLabel(p);
-      el("mSel").value = ansiPitchList().indexOf(label) >= 0 ? label : "custom";
+      el("mSel").value = ansiPitchLabelsForColumn(el("profileSel").value).indexOf(label) >= 0 ? label : "custom";
       hint.textContent = "P=" + fmt(p) + "（Ps=" + fmt(2 * p) + "）；m = 25.4/P = " + fmt(25.4 / p)
-        + " mm（节圆 φ = m·z）。标准写法 A/B（如 " + ansiPairLabel(p) + "），Ps 恒为 2P。";
+        + " mm（节圆 φ = m·z）。标准写法 A/B（如 " + ansiPairLabel(p) + "），Ps 恒为 2P。" + rtxt;
     } else {
       el("mSel").value = "custom";
-      hint.textContent = "ANSI 径节从下拉选 17 项 A/B（如 2.5/5、8/16），或在数字框自定义 P；Ps 恒为 2P，m = 25.4/P。";
+      hint.textContent = "ANSI 径节从下拉选当前列适用的 A/B" + (range ? "（" + range.label + "）" : "")
+        + "，或在数字框输入 P；Ps 恒为 2P，m = 25.4/P。" + rtxt;
     }
     return;
   }
@@ -1396,6 +1433,7 @@ function ping(bye) {
   });
   el("profileSel").addEventListener("change", () => {
     if (isSpline()) applySplinePreset();
+    syncModuleSelect();   // ANSI：换齿廓列 → 重建该列的径节候选（过滤）与范围提示
     syncKindHint();   // 表达式/命令行提示跟随齿廓代号（GB30R/DIN30/NFP/ANSI30P…）
     onCommit();
   });

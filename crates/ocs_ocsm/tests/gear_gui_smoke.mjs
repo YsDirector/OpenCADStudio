@@ -255,11 +255,37 @@ check(el('hfLabel').style.display === 'none', 'ANSI 下 hf 行应隐藏（Table 
 check(el('rhoLabel').style.display === 'none', 'ANSI 下 rho 行应隐藏');
 check(el('cfLabel').style.display === 'none', 'ANSI 下 cf 行应隐藏');
 check(el('profileSel').value === 'ANSI30P', 'ANSI 默认齿廓应为 ANSI30P，实际 ' + el('profileSel').value);
-// 下拉 17 项 A/B（+ 自定义）：选中给 P/Ps 与 m=25.4/P 提示
+// 下拉按当前列过滤（用户定案 A）：默认 ANSI30P（A 列 2.5/5—32/64）应 12 项。
 const pitchOpts = el('mSel').children.map((o) => o.value).filter((v) => v !== 'custom');
-check(pitchOpts.length === 17, 'ANSI 径节下拉应有 17 项，实际 ' + pitchOpts.length);
-check(pitchOpts[0] === '2.5/5' && pitchOpts[16] === '128/256',
-  'ANSI 下拉首尾应为 2.5/5 与 128/256，实际 ' + pitchOpts.slice(0, 2).join('|'));
+check(pitchOpts.length === 12, 'ANSI30P 径节下拉应按列过滤为 12 项，实际 ' + pitchOpts.length);
+check(pitchOpts[0] === '2.5/5' && pitchOpts[11] === '32/64',
+  'ANSI30P 下拉应 2.5/5…32/64，实际 ' + pitchOpts[0] + '|' + pitchOpts[pitchOpts.length - 1]);
+// 列界外自定义 P → 与后端同一文案；生成按钮禁用
+el('m').value = '40';
+el('m')._fire('input', el('m'));
+await flush();
+check(el('warn').textContent.includes('ANSI B92.1 Table 2')
+  && el('warn').textContent.includes('30° 平齿根 / 齿侧配合')
+  && el('warn').textContent.includes('2.5/5 — 32/64')
+  && el('warn').textContent.includes('40/80') && el('warn').textContent.includes('超出上限'),
+  'A 列 P=40/80 应红字点名 Table 2 列与范围：' + el('warn').textContent);
+check(el('out').disabled === true, '列界外应禁用生成按钮');
+// 换 45° 列（E 10/20—128/256，11 项）；8/16 低于下限
+el('profileSel').value = 'ANSI45R';
+el('profileSel')._fire('change', el('profileSel'));
+await flush();
+const opts45 = el('mSel').children.map((o) => o.value).filter((v) => v !== 'custom');
+check(opts45.length === 11 && opts45[0] === '10/20' && opts45[10] === '128/256',
+  'ANSI45R 下拉应过滤为 11 项 10/20…128/256，实际 ' + opts45.length + '：' + opts45.join('|'));
+el('m').value = '8';
+el('m')._fire('input', el('m'));
+await flush();
+check(el('warn').textContent.includes('10/20 — 128/256') && el('warn').textContent.includes('8/16')
+  && el('warn').textContent.includes('低于下限'), '45° 列 P=8/16 应低于下限：' + el('warn').textContent);
+// 回 A 列继续原流程
+el('profileSel').value = 'ANSI30P';
+el('profileSel')._fire('change', el('profileSel'));
+await flush();
 el('mSel').value = '5/10';
 el('mSel')._fire('change', el('mSel'));
 await flush();

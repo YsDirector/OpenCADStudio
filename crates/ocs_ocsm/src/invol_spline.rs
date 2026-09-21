@@ -518,6 +518,82 @@ impl AnsiColumn {
             _ => None,
         }
     }
+
+    /// 该列在 **Table 2 表头**给出的**适用径节范围**（P 值，上下界含端点；`P/Ps` 写法见
+    /// [`Self::range_label`]）。用户定案 A：按列强制（更忠实标准原文）。
+    ///
+    /// **勿与 Table 3 混淆**：Table 2 的范围只约束**该列的基本尺寸公式/几何**；Table 3
+    /// 是公式/数值表，把 `Ps`/`p`/`Sv min` 对 17 项径节全部印出，其适用面比每列更宽 ——
+    /// 所以 `Sv min` 走 [`ansi_sv_min_formula`]，**不**受本范围约束。
+    pub fn pitch_range(&self) -> (f64, f64) {
+        match self {
+            // 30° 平齿根 齿侧配合：2.5/5 — 32/64
+            Self::A30FlatSide => (2.5, 32.0),
+            // 30° 平齿根 外径配合：3/6 — 16/32
+            Self::B30FlatMajor => (3.0, 16.0),
+            // 30° 圆齿根 齿侧配合：2.5/5 — 48/96
+            Self::C30FilletSide => (2.5, 48.0),
+            // 37.5° 圆齿根 齿侧配合：2.5/5 — 48/96
+            Self::D375FilletSide => (2.5, 48.0),
+            // 45° 圆齿根 齿侧配合：10/20 — 128/256
+            Self::E45FilletSide => (10.0, 128.0),
+        }
+    }
+
+    /// 列名（压力角 + 齿根型式 + 配合方式；Table 2 表头口径），报错点名用。
+    pub fn desc(&self) -> &'static str {
+        match self {
+            Self::A30FlatSide => "30° 平齿根 / 齿侧配合",
+            Self::B30FlatMajor => "30° 平齿根 / 外径配合",
+            Self::C30FilletSide => "30° 圆齿根 / 齿侧配合",
+            Self::D375FilletSide => "37.5° 圆齿根 / 齿侧配合",
+            Self::E45FilletSide => "45° 圆齿根 / 齿侧配合",
+        }
+    }
+
+    /// 适用径节的 `P/Ps` 范围写法（Table 2 表头原文，含端点）。
+    pub fn range_label(&self) -> &'static str {
+        match self {
+            Self::A30FlatSide => "2.5/5 — 32/64",
+            Self::B30FlatMajor => "3/6 — 16/32",
+            Self::C30FilletSide => "2.5/5 — 48/96",
+            Self::D375FilletSide => "2.5/5 — 48/96",
+            Self::E45FilletSide => "10/20 — 128/256",
+        }
+    }
+}
+
+/// `P/Ps` 成对写法（优先取 17 项系列里的标准 label，系列外退化为 `P/2P`）。
+fn ansi_pair_label(p: f64) -> String {
+    ansi_pitch_row(p)
+        .map(|r| r.label.clone())
+        .unwrap_or_else(|| format!("{}/{}", trim(p), trim(2.0 * p)))
+}
+
+/// 按所选 Table 2 列的**适用径节范围**校验 P（上下界含端点；越界报错点名列与范围原文）。
+///
+/// 这是 [`InvolParams::validate`] 的 ANSI 分支唯一入口：原来只查 45° 下限的特例已并入本函数
+/// （五列统一走 [`AnsiColumn::pitch_range`]）。
+///
+/// 注意 [`ansi_sv_min_formula`] 不调用本函数 —— Table 3 的 `Sv min` 适用面更宽（见其注释）。
+pub fn ansi_column_pitch_check(col: AnsiColumn, p: f64) -> Result<(), String> {
+    let (lo, hi) = col.pitch_range();
+    // 系列里的径节都是精确十进制值，1e-9 相对容差只兜浮点往返。
+    let eps = 1e-9 * p.abs().max(1.0);
+    let side = if p < lo - eps {
+        "低于下限"
+    } else if p > hi + eps {
+        "超出上限"
+    } else {
+        return Ok(());
+    };
+    Err(format!(
+        "ANSI B92.1 Table 2「{}」列的适用径节为 {}，收到 {}（{}）。",
+        col.desc(),
+        col.range_label(),
+        ansi_pair_label(p),
+        side
+    ))
 }
 
 /// ANSI `cF`（Table 2；标准为英寸常量，本函数入参/返回均 mm）：
@@ -525,6 +601,28 @@ impl AnsiColumn {
 /// 只有上下限换算 → `cF_mm = clamp(0.001·D_mm, 0.0508, 0.254)`。
 pub fn ansi_c_f(d_mm: f64) -> f64 {
     (0.001 * d_mm).clamp(0.0508, 0.254)
+}
+
+/// ANSI **`Sv min`（最小有效齿槽宽）的 Table 3 公式**（`alpha_deg` 取 30° / 37.5° / 45°；
+/// 入参 P、返回 mm）。
+///
+/// Table 2 与 Table 3 的口径区别（易混，写死在此）：
+/// * **Table 2** 表头给的是**每个列**（压力角 + 齿根型式 + 配合方式）自己的**适用径节范围**，
+///   由 [`AnsiColumn::pitch_range`] / [`ansi_column_pitch_check`] 强制；
+/// * **Table 3** 是公式/数值表，把 `Ps`/`p`/`Sv min` 对 **17 项径节全部印满**（比每列上界更宽），
+///   即 `Sv min` 公式适用面比 Table 2 单列更宽 —— 因此本函数从 (α, P) 直接算，
+///   **不选列、不受列界约束**（`ansi_sample_check_csv_all_73_rows` 用它复算 17 项印出值）。
+///
+/// 公式：30° `π/(2P)`、37.5° `(0.5π+0.1)/P`、45° `(0.5π+0.2)/P`（标准英寸值；输出 mm）。
+pub fn ansi_sv_min_formula(alpha_deg: f64, p: f64) -> f64 {
+    let k = if (alpha_deg - 37.5).abs() < 1e-9 {
+        0.1
+    } else if (alpha_deg - 45.0).abs() < 1e-9 {
+        0.2
+    } else {
+        0.0
+    };
+    (0.5 * std::f64::consts::PI + k) * (ANSI_INCH_MM / p)
 }
 
 /// ANSI 齿根型式（Table 2 列：平齿根 / 圆齿根）。
@@ -3636,17 +3734,13 @@ impl InvolParams {
         }
     }
 
-    /// ANSI `Sv min`（最小有效齿槽宽，Table 2）：30° `π/(2P)`；37.5° `(0.5π+0.1)/P`；
+    /// ANSI `Sv min`（最小有效齿槽宽）：30° `π/(2P)`；37.5° `(0.5π+0.1)/P`；
     /// 45° `(0.5π+0.2)/P`（标准英寸值；本函数返回值 mm，= 原式 ×25.4 = `(0.5π+k)·m`）。
+    ///
+    /// 口径：走 [`ansi_sv_min_formula`]（**Table 3** 公式，17 项径节全印、适用面比 Table 2
+    /// 每列适用范围更宽）；本方法在已选列/已校验的参数上取值，但公式本身不受列界约束。
     pub fn ansi_sv_min(&self) -> f64 {
-        let k = if (self.alpha_deg - 37.5).abs() < 1e-9 {
-            0.1
-        } else if (self.alpha_deg - 45.0).abs() < 1e-9 {
-            0.2
-        } else {
-            0.0
-        };
-        (0.5 * std::f64::consts::PI + k) * self.m
+        ansi_sv_min_formula(self.alpha_deg, self.ansi_p())
     }
 
     /// ANSI `Dre = (N−k)/P` 的 `k`（Table 2 三段：`≤12/24` / `≥16/32` / 45° 的 `≥10/20`）。
@@ -3836,25 +3930,24 @@ impl InvolParams {
             }
             // 系列校验：错误把 17 项按 A/B 形式列出（不再只报范围端点）。
             ansi_pitch_series_check(p)?;
-            if self.ansi_column().is_none() {
-                return Err(format!(
-                    "ANSI B92.1：齿廓「{}」不是 Table 2 五列之一（用 `ANSI30P`/`ANSI30PM`/\
-                     `ANSI30R`/`ANSI375R`/`ANSI45R`）。",
-                    self.profile
-                ));
-            }
+            let col = match self.ansi_column() {
+                Some(c) => c,
+                None => {
+                    return Err(format!(
+                        "ANSI B92.1：齿廓「{}」不是 Table 2 五列之一（用 `ANSI30P`/`ANSI30PM`/\
+                         `ANSI30R`/`ANSI375R`/`ANSI45R`）。",
+                        self.profile
+                    ));
+                }
+            };
             if self.x.abs() > 1e-12 {
                 return Err(format!(
                     "ANSI B92.1：不使用变位系数 x（Table 2 基本尺寸无 x 项）；收到 x={}。",
                     trim(self.x)
                 ));
             }
-            if self.alpha_deg >= 45.0 - 1e-9 && p < 10.0 - 1e-9 {
-                return Err(format!(
-                    "ANSI B92.1：45° 花键径节范围 10/20–128/256，P={} 不适用。",
-                    trim(p)
-                ));
-            }
+            // Table 2 每列各自的适用径节范围（用户定案 A）；原 45° 下限特例已并入。
+            ansi_column_pitch_check(col, p)?;
         }
         if self.df() <= 1e-9 {
             return Err(format!(
@@ -6686,23 +6779,36 @@ mod tests {
             let alpha_raw = f[6];
             let quantity = f[7];
             let printed: f64 = f[8].parse().unwrap_or_else(|_| panic!("第 {} 行印出值", i + 1));
-            // 印出值只有 Ps/p/Sv 三种量（都与齿数无关，z 任取 20）；按压力角选 Table 2 列。
-            let profile = if alpha_raw.starts_with("37.5") {
-                "ANSI37.5圆齿根齿侧"
+            // 印出值只有 Ps/p/Sv 三种量（都与齿数无关，z 任取 20）。
+            // Table 3 与 Table 2 口径区别（详见 ansi_sv_min_formula 注释）：
+            //  * Ps/p 与齿廓列无关，按 P 选一个列界覆盖它的列构造参数即可；
+            //  * Sv min 走 Table 3 公式 ansi_sv_min_formula —— 17 项径节全印，不受 Table 2 列界约束。
+            let alpha = if alpha_raw.starts_with("37.5") {
+                37.5
             } else if alpha_raw.starts_with("45") {
-                "ANSI45圆齿根齿侧"
+                45.0
             } else {
-                "ANSI30平齿根齿侧"
+                30.0
             };
-            let q = InvolParams::ansi(profile, p, 20)
-                .unwrap_or_else(|e| panic!("第 {} 行（{profile} P={p}）：{e}", i + 1));
             // 引擎输出 mm：Ps 无量纲（原值）；p=π·m；Sv min 为长度。全部 ÷25.4 回英寸。
-            let got_in = if quantity.starts_with("Ps") {
-                2.0 * q.ansi_p()
-            } else if quantity.starts_with("p ") {
-                PI * q.m / IN
+            let got_in = if quantity.starts_with("Ps") || quantity.starts_with("p ") {
+                // Ps/p 与列无关：选一个适用径节含 p 的列（A 2.5–32 / C 2.5–48 / E 10–128）。
+                let profile = if p <= 32.0 + 1e-9 {
+                    "ANSI30平齿根齿侧"
+                } else if p <= 48.0 + 1e-9 {
+                    "ANSI30圆齿根齿侧"
+                } else {
+                    "ANSI45圆齿根齿侧"
+                };
+                let q = InvolParams::ansi(profile, p, 20)
+                    .unwrap_or_else(|e| panic!("第 {} 行（{profile} P={p}）：{e}", i + 1));
+                if quantity.starts_with("Ps") {
+                    2.0 * q.ansi_p()
+                } else {
+                    PI * q.m / IN
+                }
             } else if quantity.starts_with("Sv") {
-                q.ansi_sv_min() / IN
+                ansi_sv_min_formula(alpha, p) / IN
             } else {
                 panic!("第 {} 行未知量「{quantity}」", i + 1);
             };
@@ -6775,6 +6881,108 @@ mod tests {
         assert!((big.c_f() - 0.010 * IN).abs() < 1e-12, "cF max");
     }
 
+    /// 用户定案 A：**Table 2 五列各自适用径节范围**（上下界含端点）在引擎入口强制；
+    /// 越界错误点名「列名 + 范围原文 + 收到的 P/Ps」；原来的 45° 下限特例已并入同一逻辑。
+    #[test]
+    fn ansi_table2_columns_enforce_pitch_ranges() {
+        // 每列：范围端点（含）必须通过；界外报错文案含列名、范围原文与「低于下限/超出上限」。
+        for (col, lo, hi) in [
+            (AnsiColumn::A30FlatSide, 2.5, 32.0),
+            (AnsiColumn::B30FlatMajor, 3.0, 16.0),
+            (AnsiColumn::C30FilletSide, 2.5, 48.0),
+            (AnsiColumn::D375FilletSide, 2.5, 48.0),
+            (AnsiColumn::E45FilletSide, 10.0, 128.0),
+        ] {
+            assert_eq!(col.pitch_range(), (lo, hi), "{col:?} 范围");
+            ansi_column_pitch_check(col, lo).unwrap();
+            ansi_column_pitch_check(col, hi).unwrap();
+            for (bad, side) in [(lo - 1.0, "低于下限"), (hi + 1.0, "超出上限")] {
+                let e = ansi_column_pitch_check(col, bad).unwrap_err();
+                assert!(
+                    e.contains("ANSI B92.1 Table 2")
+                        && e.contains(col.desc())
+                        && e.contains(col.range_label())
+                        && e.contains(side),
+                    "{col:?} P={bad}: {e}"
+                );
+            }
+        }
+        // A 列（30° 平齿根 / 齿侧配合）：32/64 通过、40/80 拒（超上限）；2.5/5 通过、2/4 拒（系列外）。
+        assert!(InvolParams::ansi("ANSI30平齿根齿侧", 32.0, 20).is_ok());
+        let e = InvolParams::ansi("ANSI30平齿根齿侧", 40.0, 20).unwrap_err();
+        assert!(
+            e.contains("30° 平齿根 / 齿侧配合")
+                && e.contains("2.5/5 — 32/64")
+                && e.contains("40/80")
+                && e.contains("超出上限"),
+            "{e}"
+        );
+        assert!(InvolParams::ansi("ANSI30平齿根齿侧", 2.5, 20).is_ok());
+        let e = InvolParams::ansi("ANSI30平齿根齿侧", 2.0, 20).unwrap_err();
+        assert!(e.contains("不在标准系列") && e.contains("2.5/5"), "{e}");
+        // B 列（30° 平齿根 / 外径配合）：16/32 通过、20/40 拒；下限 3/6 通过、2.5/5 拒（在系列内 → 列范围报错）。
+        assert!(InvolParams::ansi("ANSI30平齿根外径", 16.0, 20).is_ok());
+        let e = InvolParams::ansi("ANSI30平齿根外径", 20.0, 20).unwrap_err();
+        assert!(
+            e.contains("30° 平齿根 / 外径配合")
+                && e.contains("3/6 — 16/32")
+                && e.contains("20/40")
+                && e.contains("超出上限"),
+            "{e}"
+        );
+        assert!(InvolParams::ansi("ANSI30平齿根外径", 3.0, 20).is_ok());
+        let e = InvolParams::ansi("ANSI30平齿根外径", 2.5, 20).unwrap_err();
+        assert!(
+            e.contains("3/6 — 16/32") && e.contains("2.5/5") && e.contains("低于下限"),
+            "{e}"
+        );
+        // C/D 列（30°/37.5° 圆齿根）：48/96 通过、64/128 拒（超上限）。
+        for profile in ["ANSI30圆齿根齿侧", "ANSI37.5圆齿根齿侧"] {
+            assert!(InvolParams::ansi(profile, 48.0, 20).is_ok(), "{profile}");
+            let e = InvolParams::ansi(profile, 64.0, 20).unwrap_err();
+            assert!(
+                e.contains("圆齿根 / 齿侧配合")
+                    && e.contains("2.5/5 — 48/96")
+                    && e.contains("64/128")
+                    && e.contains("超出上限"),
+                "{profile}: {e}"
+            );
+        }
+        // E 列（45° 圆齿根）：10/20 通过、8/16 拒；128/256 上端通过；>128（非系列值）直查也要点名范围。
+        assert!(InvolParams::ansi("ANSI45圆齿根齿侧", 10.0, 20).is_ok());
+        assert!(InvolParams::ansi("ANSI45圆齿根齿侧", 128.0, 20).is_ok());
+        let e = InvolParams::ansi("ANSI45圆齿根齿侧", 8.0, 20).unwrap_err();
+        assert!(
+            e.contains("45° 圆齿根 / 齿侧配合")
+                && e.contains("10/20 — 128/256")
+                && e.contains("8/16")
+                && e.contains("低于下限"),
+            "{e}"
+        );
+        let e = ansi_column_pitch_check(AnsiColumn::E45FilletSide, 200.0).unwrap_err();
+        assert!(e.contains("128/256") && e.contains("超出上限"), "{e}");
+    }
+
+    /// Table 3 的 `Sv min` 不被 Table 2 每列范围约束：17 项径节全印，公式直算
+    /// （30° 在 A 列上界 32 之外仍有印出值）；与列几何入口的拒绝形成对照。
+    #[test]
+    fn ansi_table3_sv_min_is_not_gated_by_table2_columns() {
+        use std::f64::consts::PI;
+        for p in [2.5, 32.0, 40.0, 48.0, 64.0, 128.0] {
+            let got = ansi_sv_min_formula(30.0, p) / ANSI_INCH_MM;
+            assert!((got - 0.5 * PI / p).abs() < 1e-12, "30° P={p}");
+        }
+        assert!(
+            (ansi_sv_min_formula(37.5, 128.0) / ANSI_INCH_MM - (0.5 * PI + 0.1) / 128.0).abs()
+                < 1e-12
+        );
+        assert!(
+            (ansi_sv_min_formula(45.0, 2.5) / ANSI_INCH_MM - (0.5 * PI + 0.2) / 2.5).abs() < 1e-12
+        );
+        // 对照：同 P=40 走列几何入口会被 A 列的 Table 2 范围拒绝（Table 2 ≠ Table 3 口径）。
+        assert!(InvolParams::ansi("ANSI30平齿根齿侧", 40.0, 20).is_err());
+    }
+
     /// 单位口径：标准英制 → 引擎 mm（1 in = 25.4 mm；D = N/P in → ×25.4）。
     #[test]
     fn ansi_mm_unit_magnitude() {
@@ -6793,7 +7001,8 @@ mod tests {
         // 圆周齿距 p = π/P in → π·m mm。
         assert!((PI * p16.m - PI * 25.4 / 16.0).abs() < 1e-12);
         // cF 夹取边界（mm）：D<2 in → 0.0508；D>10 in → 0.254；中段 0.001·D_mm。
-        let small = InvolParams::ansi("ANSI30平齿根齿侧", 128.0, 30).unwrap(); // D=0.234 in
+        // P=128 只在 45° E 列（10/20–128/256）范围内；cF 只与 D=N/P 有关，与列无关。
+        let small = InvolParams::ansi("ANSI45圆齿根齿侧", 128.0, 30).unwrap(); // D=0.234 in
         assert!((small.c_f() - 0.0508).abs() < 1e-12, "cF min: {}", small.c_f());
         let mid = InvolParams::ansi("ANSI30平齿根齿侧", 8.0, 40).unwrap(); // D=5 in=127 mm
         assert!((mid.c_f() - 0.127).abs() < 1e-12, "cF mid: {}", mid.c_f());
@@ -7078,8 +7287,8 @@ mod tests {
         let fv = p.front_view(1.0).unwrap();
         assert!(fv.len() > 4 * 4 + 3, "正常内花键应含渐开线段");
 
-        // ANSI P=128、N=200：DFi=39.9875 > Dri=39.9554（Table 2 公式 + cF 下夹取）。
-        let a = InvolParams::ansi("ANSI30平齿根齿侧", 128.0, 200).unwrap();
+        // ANSI P=128、N=200（45° E 列，10/20–128/256）：DFi > Dri（Table 2 公式 + cF 下夹取）。
+        let a = InvolParams::ansi("ANSI45圆齿根齿侧", 128.0, 200).unwrap();
         assert!(a.ansi_form_dia_internal() > a.internal_major_dia() + 1e-9);
         let ai = a.clone().with_internal(true);
         let af = ai.front_view(1.0).unwrap();

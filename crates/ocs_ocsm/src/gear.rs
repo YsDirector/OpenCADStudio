@@ -6131,6 +6131,32 @@ mod tests {
             assert_eq!(engine.std, crate::invol_spline::SplineStd::ANSI);
             assert!((engine.ansi_p() - 5.0).abs() < 1e-12, "{raw}");
         }
+        // Table 2 每列适用径节范围（用户定案 A）：命令行与 GUI 查询串两侧与引擎同一文案。
+        // A 列 30°平/齿侧 2.5/5—32/64：40/80 超上限；B 列 30°平/外径 3/6—16/32：20/40 超上限。
+        let e = parse_request("花键 ANSI30P 40 20 h=30").unwrap_err();
+        assert!(
+            e.contains("ANSI B92.1 Table 2")
+                && e.contains("30° 平齿根 / 齿侧配合")
+                && e.contains("2.5/5 — 32/64")
+                && e.contains("40/80")
+                && e.contains("超出上限"),
+            "{e}"
+        );
+        let e = params_from_query("mode=spline&std=ANSI&profile=ANSI30PM&pitch=20/40&z=20&h=30")
+            .unwrap_err();
+        assert!(
+            e.contains("30° 平齿根 / 外径配合")
+                && e.contains("3/6 — 16/32")
+                && e.contains("20/40")
+                && e.contains("超出上限"),
+            "{e}"
+        );
+        // 45° E 列 8/16 低于下限 10/20（原 45° 下限校验并入）。
+        let e = parse_request("花键 ANSI45R 8 20 h=30").unwrap_err();
+        assert!(
+            e.contains("10/20 — 128/256") && e.contains("8/16") && e.contains("低于下限"),
+            "{e}"
+        );
     }
 
     /// 压力角由齿廓预设固定：GB/DIN/NF 给不一致的 α 必须拒绝；一致（等价没给）可过。
@@ -6197,7 +6223,8 @@ mod tests {
             h: 30.0,
             spline: Some(SplineOpts {
                 std: crate::invol_spline::SplineStd::ANSI,
-                profile: "ANSI30平齿根齿侧".to_string(),
+                // P=128 只在 45° E 列（10/20—128/256）范围内；内部降级条件与压力角无关。
+                profile: "ANSI45圆齿根齿侧".to_string(),
                 m: Some(128.0),
                 z: Some(200),
                 ..SplineOpts::default()

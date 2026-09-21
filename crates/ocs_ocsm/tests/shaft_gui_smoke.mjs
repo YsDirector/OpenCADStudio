@@ -631,6 +631,17 @@ check(aw.invol.on && aw.invol.profile === 'ANSI30P' && Math.abs(Number(aw.invol.
 check(dslEl.value.includes('INVOLSPLINE ANSI30P DP5/10 Z20 L30'),
   `ANSI 行文本应为 DP5/10，实为 ${JSON.stringify(dslEl.value)}`);
 check(!/ANSI30P\s+M5\b/i.test(dslEl.value), 'ANSI 行文本不应再换算成 M5');
+// Table 2 每列适用径节范围（用户定案 A）：A 列 2.5/5—32/64，40/80 超上限 → 本地面板即拒，
+// 文案与后端/命令行同一点名列与范围。
+elv('exprInput').value = 'INVOLSPLINE ANSI30P DP40/80 Z20 L30';
+elv('exprAdd').click();
+await tick();
+check(S.rows[S.rows.length - 1].invol.profile === 'ANSI30P', 'ANSI30P 行应能加入（列界在本地面板校验）');
+check(S.modelFromRows() === null, 'A 列 P=40/80 本地面板应拒绝出模型');
+const rangeStatus = elv('status').textContent;
+check(rangeStatus.includes('ANSI B92.1 Table 2') && rangeStatus.includes('2.5/5 — 32/64')
+  && rangeStatus.includes('40/80') && rangeStatus.includes('超出上限'),
+  '本地拒绝文案应点名 Table 2 列与范围：' + rangeStatus);
 // 旧 M8 槽位仍能解析，但回写行文本归一为 DP8/16（保留 DP 原值）
 elv('exprInput').value = 'INVOLSPLINE ANSI30P M8 Z20 L30';
 elv('exprAdd').click();
