@@ -3587,6 +3587,295 @@ pub(crate) fn svg_of(entities: &[EntityType], size: f64) -> String {
     )
 }
 
+// ─────────────────────── 计算书（命令入口 `OCSMGEAR … report`） ───────────────────────
+
+/// 从 `OCSMGEAR` 原始参数里摘出计算书关键字：`REPORT`（stdout）与
+/// `REPORT=<path>` / `REPORT-OUT=<path>`（可选写文件；大小写不敏感）。
+///
+/// 返回 `(去掉报告关键字后的参数, 是否请求报告, 报告输出路径)`。
+/// 没有报告关键字时原样返回（不重排空白/换行，轴段 DSL/JSON 不受影响）；
+/// 轴段 DSL 多行文本保留行结构（每行只丢 `report` token），不会把段拼错。
+/// 命令入口：`OCSMGEAR … report` / `OCSMSHAFT INVOLSPLINE … report`。
+pub fn split_report_args(raw: &str) -> (String, bool, Option<String>) {
+    let mut want = false;
+    let mut out_path: Option<String> = None;
+    // 先扫描：没有报告关键字就原样返回，避免动 JSON/DSL 的任何空白。
+    for tok in raw.split_whitespace() {
+        let lower = tok.to_ascii_lowercase();
+        if lower == "report" || lower.starts_with("report=") || lower.starts_with("report-out=") {
+            want = true;
+        }
+    }
+    if !want {
+        return (raw.to_string(), false, None);
+    }
+    let mut lines: Vec<String> = Vec::new();
+    for line in raw.lines() {
+        let mut kept: Vec<&str> = Vec::new();
+        for tok in line.split_whitespace() {
+            let lower = tok.to_ascii_lowercase();
+            if lower == "report" {
+                continue;
+            }
+            if lower.starts_with("report=") || lower.starts_with("report-out=") {
+                if let Some((_, v)) = tok.split_once('=') {
+                    if !v.is_empty() {
+                        out_path = Some(v.to_string());
+                    }
+                }
+                continue;
+            }
+            kept.push(tok);
+        }
+        lines.push(kept.join(" "));
+    }
+    (lines.join("\n"), true, out_path)
+}
+
+/// 计算书步骤表一行（列：步骤/公式/代入/结果/依据来源）。
+fn report_row(
+    n: &mut usize,
+    name: &str,
+    formula: &str,
+    subst: &str,
+    result: &str,
+    source: &str,
+) -> String {
+    *n += 1;
+    format!(
+        "| {} | {} | {} | {} | {} | {} |\n",
+        *n, name, formula, subst, result, source
+    )
+}
+
+/// 普通齿轮（M/DP，外/内）计算书：输入参数 → 逐步计算（公式+代入+结果+来源）→
+/// 派生几何 → 数据来源与校验（恒等式残差）。纯数据、无 IO。
+fn gear_report(p: &GearParams) -> String {
+    let mut md = String::new();
+    md.push_str(&format!(
+        "# {} {} 计算书\n\n",
+        p.kind.label(),
+        if p.std == GearStd::DP {
+            "（径节制 DP）"
+        } else {
+            "（模数制 M）"
+        }
+    ));
+    md.push_str("- 单位口径：长度 mm，角度 °；DP 体系 m = 25.4/DP。\n\n");
+
+    md.push_str("## 1. 输入参数\n\n| 输入 | 原值 | 说明 |\n|---|---|---|\n");
+    if p.std == GearStd::DP {
+        md.push_str(&format!(
+            "| 径节 DP | {} | m = 25.4/DP |\n",
+            trim(p.dp.unwrap_or(0.0))
+        ));
+        md.push_str(&format!("| 模数 m（换算） | {} mm | 25.4/DP |\n", trim(p.m)));
+    } else {
+        md.push_str(&format!("| 模数 m | {} mm | 模数制 |\n", trim(p.m)));
+    }
+    md.push_str(&format!("| 齿数 z | {} | — |\n", p.z));
+    md.push_str(&format!("| 压力角 αn | {}° | — |\n", trim(p.alpha_deg)));
+    md.push_str(&format!(
+        "| 齿顶高/顶隙/变位系数 | ha*={}、c*={}、x={} | — |\n",
+        trim(p.ha),
+        trim(p.c),
+        trim(p.x)
+    ));
+    md.push_str(&format!("| 螺旋角 β | {}° | — |\n", trim(p.beta_deg)));
+    md.push_str(&format!("| 厚度 h | {} mm | — |\n\n", trim(p.h)));
+
+    md.push_str("## 2. 逐步计算\n\n");
+    md.push_str("| # | 步骤 | 公式（符号含义） | 代入 | 结果 | 依据来源 |\n");
+    md.push_str("|---|---|---|---|---|---|\n");
+    let mut n = 0usize;
+    let mut steps = String::new();
+    {
+        let mut s = |name: &str, formula: &str, subst: &str, result: &str, source: &str| {
+            steps.push_str(&report_row(&mut n, name, formula, subst, result, source));
+        };
+        if p.std == GearStd::DP {
+            s(
+                "径节换算",
+                "m = 25.4 / DP（DP 径节，1/in）",
+                &format!("25.4 / {}", trim(p.dp.unwrap_or(0.0))),
+                &format!("{} mm", trim(p.m)),
+                "径节制定义（与 OCSMGEAR 同口径）",
+            );
+        }
+        if p.is_helical() {
+            s(
+                "端面换算",
+                "mt = m / cosβ；αt = atan(tanαn / cosβ)",
+                &format!("m={}，β={}°，αn={}°", trim(p.m), trim(p.beta_deg), trim(p.alpha_deg)),
+                &format!("mt={} mm，αt={}°", trim(p.mt()), trim(p.alpha_t().to_degrees())),
+                "斜齿轮端面几何（与 gear.rs 同式）",
+            );
+        } else {
+            s(
+                "端面参数",
+                "直齿：mt = m；αt = αn",
+                &format!("β=0，m={}，αn={}°", trim(p.m), trim(p.alpha_deg)),
+                &format!("mt={} mm，αt={}°", trim(p.mt()), trim(p.alpha_t().to_degrees())),
+                "直齿退化为法向参数",
+            );
+        }
+        s(
+            "分度圆直径",
+            "d = mt·z（mt 端面模数，z 齿数）",
+            &format!("{} × {}", trim(p.mt()), p.z),
+            &format!("{} mm", trim(p.d())),
+            "齿轮几何（与 OCSMGEAR 同式）",
+        );
+        s(
+            "基圆直径",
+            "db = d·cosαt",
+            &format!("{} × cos {}°", trim(p.d()), trim(p.alpha_t().to_degrees())),
+            &format!("{} mm", trim(p.db())),
+            "渐开线基圆定义",
+        );
+        s(
+            "齿顶高",
+            "ha = m·(ha* + x)",
+            &format!("{} × ({} + {})", trim(p.m), trim(p.ha), trim(p.x)),
+            &format!("{} mm", trim(p.ha_height())),
+            "齿轮齿顶高公式",
+        );
+        s(
+            "齿根高",
+            "hf = m·(ha* + c* − x)",
+            &format!(
+                "{} × ({} + {} − {})",
+                trim(p.m),
+                trim(p.ha),
+                trim(p.c),
+                trim(p.x)
+            ),
+            &format!("{} mm", trim(p.hf_height())),
+            "齿轮齿根高公式",
+        );
+        s(
+            "齿顶圆直径",
+            if p.kind.is_internal() {
+                "da = d − 2ha（内齿轮齿顶朝圆心）"
+            } else {
+                "da = d + 2ha"
+            },
+            &format!(
+                "{} {} 2×{}",
+                trim(p.d()),
+                if p.kind.is_internal() { "−" } else { "+" },
+                trim(p.ha_height())
+            ),
+            &format!("{} mm", trim(p.da())),
+            "齿轮几何（与 OCSMGEAR 同式）",
+        );
+        s(
+            "齿根圆直径",
+            if p.kind.is_internal() {
+                "df = d + 2hf（内齿轮齿根在外）"
+            } else {
+                "df = d − 2hf"
+            },
+            &format!(
+                "{} {} 2×{}",
+                trim(p.d()),
+                if p.kind.is_internal() { "+" } else { "−" },
+                trim(p.hf_height())
+            ),
+            &format!("{} mm", trim(p.df())),
+            "齿轮几何（与 OCSMGEAR 同式）",
+        );
+        s(
+            "端面分度圆齿厚",
+            "st = πm/(2cosβ) + 2x·m·tanαn",
+            &format!(
+                "π×{}/(2cos{}°) + 2×{}×{}×tan{}°",
+                trim(p.m),
+                trim(p.beta_deg),
+                trim(p.x),
+                trim(p.m),
+                trim(p.alpha_deg)
+            ),
+            &format!("{} mm", trim(p.st())),
+            "齿轮齿厚公式（与 OCSMGEAR 同式）",
+        );
+        s(
+            "齿根圆角半径",
+            "ρ = 0.38·m",
+            &format!("0.38 × {}", trim(p.m)),
+            &format!("{} mm", trim(p.rho())),
+            "OCSMGEAR 齿根圆角口径（模板反解）",
+        );
+        s(
+            "轴向倒角",
+            "C = round(0.6·m)",
+            &format!("round(0.6 × {})", trim(p.m)),
+            &format!("{} mm", trim(p.chamfer())),
+            "OCSMGEAR 倒角口径（模板反解）",
+        );
+    }
+    md.push_str(&steps);
+    md.push('\n');
+
+    md.push_str("## 3. 派生几何\n\n| 量 | 值 |\n|---|---|\n");
+    md.push_str(&format!("| 分度圆 d | {} mm |\n", trim(p.d())));
+    md.push_str(&format!("| 基圆 db | {} mm |\n", trim(p.db())));
+    md.push_str(&format!("| 齿顶圆 da | {} mm |\n", trim(p.da())));
+    md.push_str(&format!("| 齿根圆 df | {} mm |\n", trim(p.df())));
+    md.push_str(&format!("| 端面模数 mt | {} mm |\n", trim(p.mt())));
+    md.push_str(&format!(
+        "| 端面压力角 αt | {}° |\n",
+        trim(p.alpha_t().to_degrees())
+    ));
+    md.push_str(&format!(
+        "| 齿距角 | {}° |\n",
+        trim(p.pitch_angle().to_degrees())
+    ));
+    md.push('\n');
+
+    md.push_str("## 4. 检验尺寸\n\n");
+    md.push_str("齿轮模式无入库检验尺寸表（检验表属 DIN 5480-2 花键体系）。\n\n");
+
+    md.push_str("## 5. 数据来源与校验\n\n");
+    md.push_str(
+        "- 数据来源：OCSM 齿轮引擎（`gear.rs`），与 OCSMGEAR/GUI 同一套公式；未二次手算。\n",
+    );
+    if p.std == GearStd::DP {
+        md.push_str(&format!(
+            "- 径节制：m = 25.4/DP = {}（原值 DP={}）；块名/规格按 DP 原值出。\n",
+            trim(p.m),
+            trim(p.dp.unwrap_or(0.0))
+        ));
+    }
+    let res_d = (p.d() - p.mt() * p.z as f64).abs();
+    let res_db = (p.db() - p.d() * p.alpha_t().cos()).abs();
+    md.push_str(&format!(
+        "- 恒等式自检（定义式，残差应 0）：|d−mt·z|={:.2e}、|db−d·cosαt|={:.2e}；违例 0。\n",
+        res_d, res_db
+    ));
+    for note in p.notes() {
+        md.push_str(&format!("- 提示：{note}\n"));
+    }
+    md
+}
+
+/// **齿轮/花键计算书入口**（纯数据、无 IO）：
+/// * 花键模式 → 复用 [`crate::invol_spline::build_report`]（含 d_B/A 来源与 DIN 检验尺寸）；
+/// * 普通齿轮（M/DP、内/外）→ 本文件 [`gear_report`]。
+/// 命令入口：`OCSMGEAR … report`（可选 `report=<path>` 写文件）。
+pub fn build_report(p: &GearParams) -> Result<String, String> {
+    if p.is_spline() {
+        let (engine, origin) = p.spline_engine()?;
+        return Ok(crate::invol_spline::build_report(
+            &engine,
+            origin.as_ref(),
+            p.h,
+        ));
+    }
+    p.validate()?;
+    Ok(gear_report(p))
+}
+
 // ─────────────────────────── 测试 ───────────────────────────
 
 #[cfg(test)]
@@ -5700,5 +5989,33 @@ mod tests {
             .contains("同一行出现两个体系的标识"));
         let e = parse_request("花键 std=DP dp=8 z=40").unwrap_err();
         assert!(e.contains("齿轮体系") && e.contains("花键体系"), "{e}");
+    }
+
+    /// `OCSMGEAR … report` 的命令解析层：关键字摘除（大小写/`report-out=`）
+    /// + 齿轮 M 计算书四要素（公式/代入/结果/依据来源）。
+    #[test]
+    fn report_keyword_parsing_and_gear_report_four_elements() {
+        let (clean, want, out) = split_report_args(
+            "花键 GB30R m=3 z=20 h=30 REPORT report-out=/tmp/ocsm_report.md",
+        );
+        assert!(want);
+        assert_eq!(out.as_deref(), Some("/tmp/ocsm_report.md"));
+        assert!(!clean.to_lowercase().contains("report"), "{clean}");
+        assert!(clean.contains("GB30R") && clean.contains("h=30"), "{clean}");
+        // 没有 report 时原样返回（不动 JSON/DSL 空白）。
+        let raw = "{\"segments\": []}";
+        let (same, want2, out2) = split_report_args(raw);
+        assert_eq!(same, raw);
+        assert!(!want2 && out2.is_none());
+        // 齿轮 M 计算书四要素。
+        let req = parse_request("2 40 20").unwrap();
+        let md = build_report(&req.params).unwrap();
+        for needle in ["d = mt·z", "2 × 40", "80 mm", "OCSMGEAR"] {
+            assert!(md.contains(needle), "齿轮计算书缺 `{needle}`：\n{md}");
+        }
+        // DP：换算步骤与 DP 来源在。
+        let req = parse_request("std=DP dp=8 20 40").unwrap();
+        let md = build_report(&req.params).unwrap();
+        assert!(md.contains("25.4 / 8") && md.contains("3.175"), "{md}");
     }
 }

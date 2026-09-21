@@ -201,6 +201,9 @@ OCSMSHAFT 轴生成器：行 DSL / JSON → 单视图侧视图（段拼接 + 端
                       `de63` 可选（给了才画收尾弧，段长 = L + l；不给 de 段长 = L）；
                       不能与 SPLINE/CH/OV/RL/M/GEAR 同段
     VIEW 常规|剖视|双   视图：常规（默认，只看外形）/ 剖视（轮廓 + ANSI31 剖面线）/ 双（并排一次出）
+    REPORT          计算书：段末加 `REPORT`（大小写不敏感）—— 不插图，直接输出 Markdown
+                    计算书（含 INVOLSPLINE 段的公式/代入数值/结果/依据来源 + DIN 检验尺寸）；
+                    `REPORT=<路径>` / `REPORT-OUT=<路径>` 另写文件
     at x,y rot 度   放置（不写 = 原点、不转）
   例：OCSMSHAFT S30 E30 L45 CH2@L | S40 E40 L30 CH2@R OV3 | S50 E30 L20 | S30 E30 L15 CH2@R | S40 E40 L7 M1.5 | S36 E36 L5 | GEAR M3 Z20 VIEW 剖视 at 100,50 rot 30
   JSON：{\"segments\":[{\"s\":30,\"e\":30,\"l\":45,\"ch\":[{\"c\":2,\"end\":\"L\"}]},{\"s\":30,\"e\":30,\"l\":20,\"thread\":1.5}],\"view\":\"section\",\"at\":[100,50],\"rot\":30}
@@ -591,7 +594,7 @@ impl Gear {
 ///
 /// 几何在 `invol_spline.rs`；`de`（滚刀外径）可选：给 `de` 才画收尾弧
 /// （段长 = L + l）；不给 `de` 则段长 = L、不画收尾。
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct InvolSeg {
     /// 预设代号（`GB30R` 等；GUI 从目录表按代号取系数）。
     pub code: String,
@@ -606,6 +609,9 @@ pub struct InvolSeg {
     pub inspection: Option<String>,
     /// `d_B` 补全/推导/按 d_B 重算的来源提示（DIN；`None` = 无/查表直命中）。JSON 里 skip_serializing_if。
     pub d_b_note: Option<String>,
+    /// 解析时 `resolve_spline` 给出的基准直径来源（查表行/公式/推导/纠偏）；
+    /// 供计算书（`OCSMSHAFT … report`）复用，不序列化。
+    pub d_b_origin: Option<crate::invol_spline::D_bOrigin>,
 }
 
 impl InvolSeg {
@@ -623,7 +629,7 @@ impl InvolSeg {
         if let Some(de) = de {
             params.runout_length(de)?;
         }
-        Ok(Self { code, params, len, de, inspection: None, d_b_note: None })
+        Ok(Self { code, params, len, de, inspection: None, d_b_note: None, d_b_origin: None })
     }
 
     /// 收尾长度 l（无 de = 0）。
@@ -646,6 +652,19 @@ impl InvolSeg {
     /// 小径半径 df/2。
     pub fn minor_radius(&self) -> f64 {
         self.params.df() / 2.0
+    }
+}
+
+impl PartialEq for InvolSeg {
+    /// 只比几何/模型字段；`d_b_origin`（计算书用来源）不参与相等性，
+    /// 这样 JSON 序列化→反解析（自定义 Serialize 不带该字段）仍与原值相等。
+    fn eq(&self, other: &Self) -> bool {
+        self.code == other.code
+            && self.params == other.params
+            && self.len == other.len
+            && self.de == other.de
+            && self.inspection == other.inspection
+            && self.d_b_note == other.d_b_note
     }
 }
 
@@ -1554,6 +1573,8 @@ fn parse_segment(chunk: &str, label: &str, program: &mut Program) -> Result<Segm
                     invol.d_b_note = Some(o.note());
                 }
             }
+            // 计算书入口（`… report`）要复用同一次解析的来源，不重新另算。
+            invol.d_b_origin = origin;
             if invol_check {
                 invol.inspection = Some(invol_check_note(&invol, label, "INVOLSPLINE")?);
             }
@@ -4600,6 +4621,88 @@ pub fn block_name(program: &Program) -> String {
 pub fn preview_svg(program: &Program) -> Result<String, String> {
     let shaft = build(program, 1.0)?;
     Ok(crate::gear::svg_of(&preview_entities(&shaft.entities), 460.0))
+}
+
+/// **轴段计算书**（纯数据、无 IO）：段清单总览 + 每个 `INVOLSPLINE` 段的完整花键
+/// 计算书（复用 [`crate::invol_spline::build_report`]，含 d_B/A 来源与 DIN 检验尺寸）。
+/// 命令入口：`OCSMSHAFT … report`（可选 `report=<path>` 写文件）。
+pub fn build_report(program: &Program) -> Result<String, String> {
+    let built = build(program, 1.0)?;
+    let mut md = String::new();
+    md.push_str("# 轴段计算书\n\n");
+    md.push_str(&format!(
+        "- 视图：{}（{}）\n- 段数：{}；总长：{} mm；最大直径：{} mm\n\n",
+        program.view.key(),
+        program.view.label(),
+        built.segment_count,
+        trim(built.total_length),
+        trim(built.max_diameter)
+    ));
+    md.push_str("## 1. 段清单\n\n| # | 类型 | 关键参数 | 长度 mm | 外径 mm |\n|---|---|---|---|---|\n");
+    for (i, seg) in program.segments.iter().enumerate() {
+        let (kind, params) = if let Some(g) = &seg.gear {
+            let gp = g.params();
+            (
+                "齿轮段",
+                format!("m={} z={} α={}°", trim(gp.m), gp.z, trim(gp.alpha_deg)),
+            )
+        } else if let Some(s) = &seg.spline {
+            (
+                "矩形花键段",
+                format!("N={} d={} D={} B={}", s.n, trim(s.d), trim(s.big), trim(s.b)),
+            )
+        } else if let Some(iv) = &seg.invol_spline {
+            (
+                "渐开线花键段",
+                format!(
+                    "{} {} m={} z={} x={}",
+                    iv.code,
+                    iv.params.std.label(),
+                    trim(iv.params.m),
+                    iv.params.z,
+                    trim(iv.params.x)
+                ),
+            )
+        } else if let Some(t) = &seg.thread {
+            (
+                "螺纹段",
+                format!(
+                    "P={}",
+                    t.pitch.map(trim).unwrap_or_else(|| "简化0.85d".into())
+                ),
+            )
+        } else {
+            (
+                "普通段",
+                format!("S={} E={}", trim(seg.s), trim(seg.e)),
+            )
+        };
+        md.push_str(&format!(
+            "| {} | {} | {} | {} | {} |\n",
+            i + 1,
+            kind,
+            params,
+            trim(seg.l),
+            trim(seg.outer_radius(End::L) * 2.0)
+        ));
+    }
+    md.push('\n');
+    md.push_str("## 2. 渐开线花键段计算书\n\n");
+    let mut any = false;
+    for seg in program.segments.iter() {
+        let Some(iv) = &seg.invol_spline else { continue };
+        any = true;
+        md.push_str(&crate::invol_spline::build_report(
+            &iv.params,
+            iv.d_b_origin.as_ref(),
+            iv.len,
+        ));
+        md.push('\n');
+    }
+    if !any {
+        md.push_str("（本程序没有 INVOLSPLINE 段。）\n");
+    }
+    Ok(md)
 }
 
 /// ANSI31 基准线间距（与 `partgen_kit::hatch_ansi31_edges` 的 offset 同源）。
@@ -7701,5 +7804,28 @@ GEAR M3 Z20";
         assert!(!has_line(&section, [22.0, -33.0], [22.0, 33.0]));
         assert!(has_line(&section, [20.0, 20.0], [20.0, 31.0]));
         assert!(has_line(&section, [20.0, 26.25], [50.0, 26.25]));
+    }
+
+    /// `INVOLSPLINE … report` 命令入口解析层：摘关键字 → 解析 → 计算书；
+    /// 报告含 d_B 推导口径与来源（查表命中）。
+    #[test]
+    fn report_keyword_parses_involspline_and_builds_report() {
+        let raw = "INVOLSPLINE DIN30 DB40 M2 L30 report";
+        let (clean, want, out) = crate::gear::split_report_args(raw);
+        assert!(want && out.is_none());
+        assert!(!clean.to_lowercase().contains("report"), "{clean}");
+        let program = parse_program(&clean).unwrap();
+        let md = build_report(&program).unwrap();
+        assert!(
+            md.contains("# 轴段计算书") && md.contains("## 2. 渐开线花键段计算书"),
+            "{md}"
+        );
+        assert!(md.contains("d_B = d + 1.1m + 2x₁m"), "{md}");
+        assert!(md.contains("查表命中 p"), "{md}");
+        // NF A 主参数同样进计算书。
+        let program = parse_program("INVOLSPLINE NFP A80 M3.75 L30").unwrap();
+        let md = build_report(&program).unwrap();
+        assert!(md.contains("A = m(N + 2x + 0.4)"), "{md}");
+        assert!(md.contains("NF E22-141 p07"), "{md}");
     }
 }

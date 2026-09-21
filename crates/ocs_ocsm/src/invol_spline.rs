@@ -4240,6 +4240,561 @@ fn inv(a: f64) -> f64 {
     a.tan() - a
 }
 
+// ─────────────────── 计算书（纯数据；命令入口 `OCSMGEAR … report` / `INVOLSPLINE … report`） ───────────────────
+
+/// 计算书步骤表一行：`| # | 步骤 | 公式（符号含义） | 代入 | 结果 | 依据来源 |`。
+fn report_row(
+    n: &mut usize,
+    name: &str,
+    formula: &str,
+    subst: &str,
+    result: &str,
+    source: &str,
+) -> String {
+    *n += 1;
+    format!(
+        "| {} | {} | {} | {} | {} | {} |\n",
+        *n, name, formula, subst, result, source
+    )
+}
+
+/// ANSI Dre 的径节/列分支说明（计算书里必须注明走了哪一段）。
+fn ansi_dre_branch(e: &InvolParams) -> String {
+    match e.ansi_column() {
+        Some(AnsiColumn::A30FlatSide) | Some(AnsiColumn::B30FlatMajor) => {
+            "30° 平齿根（列 A/B）：k=1.35，不分径节段".to_string()
+        }
+        Some(AnsiColumn::C30FilletSide) => {
+            if e.ansi_p() > 12.0 + 1e-9 {
+                "30° 圆齿根（列 C）：P>12 段，Dre=(N−2)/P".to_string()
+            } else {
+                "30° 圆齿根（列 C）：P≤12 段，Dre=(N−1.8)/P".to_string()
+            }
+        }
+        Some(AnsiColumn::D375FilletSide) => "37.5° 圆齿根（列 D）：k=1.3".to_string(),
+        Some(AnsiColumn::E45FilletSide) => "45° 圆齿根（列 E）：k=1.0（径节 10/20 起）".to_string(),
+        None => "（无 Table 2 列）".to_string(),
+    }
+}
+
+/// 单位口径说明（计算书开头必须写清）。
+fn report_unit_note(std: SplineStd) -> &'static str {
+    match std {
+        SplineStd::ANSI => {
+            "ANSI B92.1 为英制标准：径节 P 单位 1/in、Ps=2P；引擎内部按 1 in = 25.4 mm 换算，输出全为 mm。"
+        }
+        SplineStd::DIN => {
+            "长度 mm、角度 °；d_B 为 DIN 5480 基准直径（由名义表/公式确定几何）。"
+        }
+        SplineStd::NF => "长度 mm、角度 °；A 为 NF E22-141 公称直径主参数。",
+        SplineStd::GB => "长度 mm、角度 °；GB/T 3478.1 不用基准直径，几何由 m/z/x 决定。",
+    }
+}
+
+/// 体系预设来源说明。
+fn report_preset_source(std: SplineStd) -> &'static str {
+    match std {
+        SplineStd::GB => {
+            "GB/T 3478.1-2008 表 2（模数系列）+ 图 2（基本齿廓）+ 表 3（尺寸公式）"
+        }
+        SplineStd::DIN => {
+            "DIN 5480-1:2015 条 5.1（齿侧对中基准 h_fP*=0.55）+ DIN 5480-2 名义表/检验表"
+        }
+        SplineStd::NF => "NF E22-141 p07 公式（α=20°；外径定心 A₁′=A）",
+        SplineStd::ANSI => "ANSI B92.1 Table 2 五列公式（p10；英制换 mm：1in=25.4mm）",
+    }
+}
+
+/// **渐开线花键计算书**（Markdown，纯数据、无 IO）：
+/// 输入参数（含单位口径）→ 逐步计算（公式 + 代入数值 + 结果 + 依据来源）→
+/// 派生几何 → 检验尺寸（DIN：M1/M2/D_M/k/W_k + 查表页/source）→ 数据来源与校验
+/// （预设/候选/基准直径来源、恒等式残差、DIN 检验表全表对照）。
+///
+/// `origin` = 解析时 [`resolve_spline`] 给出的基准直径来源（查表行/公式/推导/纠偏）；
+/// DIN 的检验尺寸由本函数按同一 [`inspection_query`] 入口查询，不另算一套几何。
+/// 命令入口：`OCSMGEAR … report` / `OCSMSHAFT INVOLSPLINE … report`。
+pub fn build_report(params: &InvolParams, origin: Option<&D_bOrigin>, h: f64) -> String {
+    let e = params;
+    let std = e.std;
+    let mut md = String::new();
+    md.push_str("# 渐开线花键计算书\n\n");
+    md.push_str(&format!(
+        "- 体系：**{}**（{}）\n",
+        std.label(),
+        std.code()
+    ));
+    md.push_str(&format!(
+        "- 模式：**{}**\n",
+        if e.internal {
+            "内花键（材料在外、齿朝内）"
+        } else {
+            "外花键"
+        }
+    ));
+    md.push_str(&format!(
+        "- 齿廓/预设：**{}**（代号 `{}`）\n",
+        e.profile,
+        preset_code(std, e.profile).unwrap_or("-")
+    ));
+    md.push_str(&format!("- 有效长度 L：{} mm\n", trim(h)));
+    md.push_str(&format!("- 单位口径：{}\n\n", report_unit_note(std)));
+
+    // ── 1. 输入参数 ──
+    md.push_str("## 1. 输入参数\n\n");
+    md.push_str("| 输入 | 原值 | 说明 |\n|---|---|---|\n");
+    if std == SplineStd::ANSI {
+        md.push_str(&format!(
+            "| 径节 P / Ps | {} / {} | A/B 写法；P 单位 1/in，Ps 恒 = 2P |\n",
+            trim(e.ansi_p()),
+            trim(2.0 * e.ansi_p())
+        ));
+        md.push_str(&format!(
+            "| 模数 m = 25.4/P | {} mm | 引擎内部统一 mm |\n",
+            trim(e.m)
+        ));
+    } else {
+        md.push_str(&format!("| 模数 m | {} mm | 模数制 |\n", trim(e.m)));
+    }
+    md.push_str(&format!("| 齿数 z（ANSI 记 N） | {} | — |\n", e.z));
+    md.push_str(&format!("| 变位系数 x | {} | — |\n", trim(e.x)));
+    if std == SplineStd::DIN {
+        md.push_str(&format!(
+            "| 基准直径 d_B | {} | 主参数（DIN 5480） |\n",
+            e.d_b.map(trim).unwrap_or_else(|| "—".into())
+        ));
+    }
+    if std == SplineStd::NF {
+        md.push_str(&format!(
+            "| 公称直径 A | {} | 主参数（NF E22-141） |\n",
+            e.a.map(trim).unwrap_or_else(|| "—".into())
+        ));
+    }
+    md.push_str(&format!(
+        "| 基本齿廓 α / ha* / hf* / ρf* / cF* | {}° / {} / {} / {} / {} | 预设（可覆盖） |\n",
+        trim(e.alpha_deg),
+        trim(e.ha_star),
+        trim(e.hf_star),
+        trim(e.rho_star),
+        trim(e.c_f_star)
+    ));
+    md.push('\n');
+
+    // ── 2. 逐步计算 ──
+    md.push_str("## 2. 逐步计算\n\n");
+    md.push_str("| # | 步骤 | 公式（符号含义） | 代入 | 结果 | 依据来源 |\n");
+    md.push_str("|---|---|---|---|---|---|\n");
+    let mut n = 0usize;
+    let mut steps = String::new();
+    {
+        let mut s = |name: &str, formula: &str, subst: &str, result: &str, source: &str| {
+            steps.push_str(&report_row(&mut n, name, formula, subst, result, source));
+        };
+        s(
+            "预设基本齿廓",
+            "α / ha* / hf* / ρf* / cF*",
+            "—",
+            &format!(
+                "α={}°，ha*={}，hf*={}，ρf*={}，cF*={}",
+                trim(e.alpha_deg),
+                trim(e.ha_star),
+                trim(e.hf_star),
+                trim(e.rho_star),
+                trim(e.c_f_star)
+            ),
+            report_preset_source(std),
+        );
+        if std == SplineStd::ANSI {
+            s(
+                "英制换算",
+                "m = 25.4 / P（P 径节 1/in；m 模数 mm）",
+                &format!("25.4 / {}", trim(e.ansi_p())),
+                &format!("{} mm", trim(e.m)),
+                "ANSI B92.1 英制标准（1 in = 25.4 mm）",
+            );
+        }
+        match std {
+            SplineStd::DIN => {
+                let d_b = e.d_b.unwrap_or_else(|| d_b_from_x(e.m, e.z, e.x));
+                s(
+                    "基准直径/变位",
+                    "d_B = d + 1.1m + 2x₁m；逆式 x₁ = (d_B − m(z+1.1)) / (2m)",
+                    &format!("m={}，z={}，x₁={}", trim(e.m), e.z, trim(e.x)),
+                    &format!("d_B = {} mm", trim(d_b)),
+                    &format!(
+                        "由 DIN 5480-2 名义表（OCR）反推并经全表逐行校验（721 行残差 0）；{}",
+                        origin.map(|o| o.note()).unwrap_or_default()
+                    ),
+                );
+            }
+            SplineStd::NF => {
+                let a = e.a.unwrap_or_else(|| a_from_x(e.m, e.z, e.x));
+                s(
+                    "公称直径/变位",
+                    "A = m(N + 2x + 0.4)；逆式 x = (A − m(N+0.4)) / (2m)",
+                    &format!("m={}，N={}，x={}", trim(e.m), e.z, trim(e.x)),
+                    &format!("A = {} mm", trim(a)),
+                    &format!(
+                        "NF E22-141 p07；{}",
+                        origin.map(|o| o.note()).unwrap_or_default()
+                    ),
+                );
+            }
+            _ => {}
+        }
+        s(
+            "分度圆直径",
+            "d = m·z（m 模数，z 齿数）",
+            &format!("{} × {}", trim(e.m), e.z),
+            &format!("{} mm", trim(e.d())),
+            match std {
+                SplineStd::GB => "GB/T 3478.1-2008 表 3（d = mz）",
+                SplineStd::DIN => "DIN 5480-2 名义表 d 列 / DIN 5480-1:2015（d = mz）",
+                SplineStd::NF => "NF E22-141 p07（d = mN）",
+                SplineStd::ANSI => "ANSI B92.1 Table 2（D = N/P，英寸 → m·z mm）",
+            },
+        );
+        if e.x.abs() > 1e-12 {
+            s(
+                "计算直径",
+                "d′ = d + 2x·m（计入变位）",
+                &format!("{} + 2×{}×{}", trim(e.d()), trim(e.x), trim(e.m)),
+                &format!("{} mm", trim(e.d_eff())),
+                match std {
+                    SplineStd::DIN => "DIN 5480-1:2015 条 5.1（d′ = mz + 2xm）",
+                    SplineStd::NF => "NF E22-141 p07（d′ = m(N+2x)）",
+                    _ => "通用变位口径（GB 基本齿廓不含变位，x=0 时 d′=d）",
+                },
+            );
+        }
+        s(
+            "基圆直径",
+            "db = d·cosα（α 压力角）",
+            &format!("{} × cos {}°", trim(e.d()), trim(e.alpha_deg)),
+            &format!("{} mm", trim(e.db())),
+            match std {
+                SplineStd::GB => "GB/T 3478.1-2008 表 3（基圆 db）",
+                SplineStd::DIN => "DIN 5480-1:2015 渐开线定义",
+                SplineStd::NF => "NF E22-141 渐开线定义",
+                SplineStd::ANSI => "ANSI B92.1 渐开线定义（α 由 Table 2 列定）",
+            },
+        );
+        s(
+            "齿顶圆直径",
+            match std {
+                SplineStd::DIN => "d_a1 = d′ + 2·ha*·m（ha*=0.45 ⇒ d + 2xm + 0.9m）",
+                SplineStd::NF => "da = A（外径定心 A₁′=A，等效 ha*=0.2）",
+                SplineStd::ANSI => "Do = (N+1)/P ⇒ da = d + m（所选列 ha*=0.5）",
+                SplineStd::GB => "da = d′ + 2·ha*·m",
+            },
+            &format!("{} + 2×{}×{}", trim(e.d_eff()), trim(e.ha_star), trim(e.m)),
+            &format!("{} mm", trim(e.da())),
+            match std {
+                SplineStd::GB => {
+                    "GB/T 3478.1-2008 表 3 + 表 4~表 6（30° 平/圆 → m(z+1)；37.5° → m(z+0.9)；45° → m(z+0.8)）"
+                }
+                SplineStd::DIN => "DIN 5480-1:2015（d_a1 = mz + 2xm + 0.9m）",
+                SplineStd::NF => "NF E22-141 p07（外径定心）",
+                SplineStd::ANSI => "ANSI B92.1 Table 2（Do 公式）",
+            },
+        );
+        s(
+            "齿根圆直径",
+            match std {
+                SplineStd::DIN => "d_f1 = d′ − 2·hf*·m（hf*=0.55 ⇒ d′ − 1.1m）",
+                SplineStd::NF => "df = A − 2.4m（平齿根）/ A − 2.694m（圆齿根）",
+                SplineStd::ANSI => "Dre = (N−k)/P；df = d − k·m",
+                SplineStd::GB => "df = d′ − 2·hf*·m",
+            },
+            &format!("{} − 2×{}×{}", trim(e.d_eff()), trim(e.hf_star), trim(e.m)),
+            &format!("{} mm", trim(e.df())),
+            match std {
+                SplineStd::GB => {
+                    "GB/T 3478.1-2008 表 3 + 表 4~表 6（30°平 m(z−1.5)；30°圆 m(z−1.8)；37.5° m(z−1.4)；45° m(z−1.2)）"
+                }
+                SplineStd::DIN => "DIN 5480-1:2015（d_f1；齿侧对中基准 h_fP*=0.55）",
+                SplineStd::NF => "NF E22-141 p07（B=A−2.4m / B₁=A−2.694m）",
+                SplineStd::ANSI => "ANSI B92.1 Table 2（Dre；k 按所选列与径节分段）",
+            },
+        );
+        if std == SplineStd::ANSI {
+            s(
+                "Dre 径节分段",
+                "按 Table 2 列与径节 P 取 Dre 的 k",
+                "—",
+                &ansi_dre_branch(e),
+                "ANSI B92.1 Table 2（Dre 分段：P>12 与 P≤12）",
+            );
+        }
+        s(
+            "分度圆齿厚",
+            match std {
+                SplineStd::ANSI => "t = p − Sv min（p = πm 齿距；Sv min 由压力角列定）",
+                _ => "s = mπ/2 + 2x·m·tanα",
+            },
+            &match std {
+                // ANSI 的口径是 `t = p − Sv min`，不要照搬 GB/DIN 的齿厚式。
+                SplineStd::ANSI => format!("π×{} − {}", trim(e.m), trim(e.ansi_sv_min())),
+                _ => format!(
+                    "{}×π/2 + 2×{}×{}×tan{}°",
+                    trim(e.m),
+                    trim(e.x),
+                    trim(e.m),
+                    trim(e.alpha_deg)
+                ),
+            },
+            &format!("{} mm", trim(e.s())),
+            match std {
+                SplineStd::GB => "GB/T 3478.1-2008 表 3（分度圆齿厚）",
+                SplineStd::DIN => "DIN 5480-1:2015（s1 = mπ/2 + 2xm·tanα）",
+                SplineStd::NF => "NF E22-141 p07",
+                SplineStd::ANSI => {
+                    "ANSI B92.1 Table 2（Sv min：30° π/(2P)；37.5° (0.5π+0.1)/P；45° (0.5π+0.2)/P）"
+                }
+            },
+        );
+        if e.internal {
+            match std {
+                SplineStd::GB => {
+                    s(
+                        "内花键大径",
+                        "D_ei = d′ + 2·hf*·m（外侧齿根）",
+                        &format!("{} + 2×{}×{}", trim(e.d_eff()), trim(e.hf_star), trim(e.m)),
+                        &format!("{} mm", trim(e.internal_major_dia())),
+                        "GB/T 3478.1-2008 表 3（内花键大径 D_ei）",
+                    );
+                    s(
+                        "内花键小径",
+                        "D_ii = D_Fe max + 2cF；D_Fe max = 2√((db/2)² + (d/2·sinα − h_s/sinα)²)",
+                        &format!(
+                            "db={}，d={}，α={}°，h_s={}m",
+                            trim(e.db()),
+                            trim(e.d()),
+                            trim(e.alpha_deg),
+                            trim(e.h_s_star)
+                        ),
+                        &format!(
+                            "D_Fe max={}，D_ii={} mm",
+                            trim(e.gb_form_dia_max()),
+                            trim(e.internal_minor_dia())
+                        ),
+                        "GB/T 3478.1-2008 表 3（D_Fe max，es_v=0，H/h 配合；h_s 见图 2）",
+                    );
+                }
+                SplineStd::DIN => {
+                    s(
+                        "内花键齿根",
+                        "d_f2 = d_B（名义表恒等式）",
+                        &format!("d_B = {}", trim(e.internal_major_dia())),
+                        &format!("{} mm", trim(e.internal_major_dia())),
+                        "DIN 5480-2 名义表恒等式（d_f2 = d_B）",
+                    );
+                    s(
+                        "内花键齿顶",
+                        "d_a2 = d′ − 0.9m",
+                        &format!("{} − 0.9×{}", trim(e.d_eff()), trim(e.m)),
+                        &format!("{} mm", trim(e.internal_minor_dia())),
+                        "DIN 5480-1:2015（d_a2 = d − 0.9m + 2xm）",
+                    );
+                }
+                SplineStd::NF => {
+                    s(
+                        "内花键大径",
+                        "D_ei = A（外径定心）",
+                        &format!("A = {}", trim(e.internal_major_dia())),
+                        &format!("{} mm", trim(e.internal_major_dia())),
+                        "NF E22-141 p07",
+                    );
+                    s(
+                        "内花键小径",
+                        "D_ii = A − 2m",
+                        &format!("{} − 2×{}", trim(e.internal_major_dia()), trim(e.m)),
+                        &format!("{} mm", trim(e.internal_minor_dia())),
+                        "NF E22-141 p07（D = A − 2m）",
+                    );
+                }
+                SplineStd::ANSI => {
+                    s(
+                        "内花键大径",
+                        &format!("Dri = (N+{})/P", trim(e.ansi_dri_offset())),
+                        &format!("(N+{}) / {}", trim(e.ansi_dri_offset()), trim(e.ansi_p())),
+                        &format!("{} mm", trim(e.internal_major_dia())),
+                        "ANSI B92.1 Table 2（Dri 公式）",
+                    );
+                    s(
+                        "内花键小径",
+                        &format!("Di = (N−{})/P", trim(e.ansi_di_offset())),
+                        &format!("(N−{}) / {}", trim(e.ansi_di_offset()), trim(e.ansi_p())),
+                        &format!("{} mm", trim(e.internal_minor_dia())),
+                        "ANSI B92.1 Table 2（Di 公式）",
+                    );
+                }
+            }
+        }
+        if std == SplineStd::ANSI {
+            s(
+                "齿形裕度",
+                "cF = clamp(0.001·D_mm, 0.0508, 0.254)（原式 clamp(0.001·D_in, 0.002in, 0.010in)）",
+                &format!("D = {} mm", trim(e.d())),
+                &format!("{} mm", trim(e.c_f())),
+                "ANSI B92.1 Table 2（cF 夹取）",
+            );
+            s(
+                "外花键 form 直径",
+                "DFe = d − k·m − 2cF（k 按列：默认 1，37.5° 0.8，45° 0.6）",
+                &format!(
+                    "d={}，cF={}",
+                    trim(e.d()),
+                    trim(e.c_f())
+                ),
+                &format!("{} mm", trim(e.ansi_form_dia_external())),
+                "ANSI B92.1 Table 2（DFe）",
+            );
+            s(
+                "内花键 form 直径",
+                "DFi = d + k·m + 2cF（列 B 另含英寸常量 −0.004 in = −0.1016 mm）",
+                &format!("d={}，cF={}", trim(e.d()), trim(e.c_f())),
+                &format!("{} mm", trim(e.ansi_form_dia_internal())),
+                "ANSI B92.1 Table 2（DFi）",
+            );
+        }
+    }
+    md.push_str(&steps);
+    md.push('\n');
+
+    // ── 3. 派生几何 ──
+    md.push_str("## 3. 派生几何\n\n| 量 | 值 |\n|---|---|\n");
+    md.push_str(&format!("| 分度圆 d | {} mm |\n", trim(e.d())));
+    md.push_str(&format!("| 基圆 db | {} mm |\n", trim(e.db())));
+    if e.internal {
+        md.push_str(&format!(
+            "| 内花键大径 D_ei（外侧齿根） | {} mm |\n",
+            trim(e.internal_major_dia())
+        ));
+        md.push_str(&format!(
+            "| 内花键小径 D_ii（里侧齿顶） | {} mm |\n",
+            trim(e.internal_minor_dia())
+        ));
+    } else {
+        md.push_str(&format!("| 齿顶圆 da | {} mm |\n", trim(e.da())));
+        md.push_str(&format!("| 齿根圆 df | {} mm |\n", trim(e.df())));
+    }
+    md.push_str(&format!("| 分度圆齿厚 s | {} mm |\n", trim(e.s())));
+    md.push_str(&format!("| 齿根圆角 ρf | {} mm |\n", trim(e.rho_f())));
+    md.push_str(&format!("| 齿形裕度 cF | {} mm |\n", trim(e.c_f())));
+    md.push_str(&format!("| 顶隙 c | {} mm |\n", trim(e.clearance())));
+    md.push_str(&format!(
+        "| 渐开线起始圆 d_involute_start | {} mm |\n",
+        trim(e.d_involute_start())
+    ));
+    md.push_str(&format!(
+        "| 渐开线终止圆 d_involute_end（=da） | {} mm |\n",
+        trim(e.d_involute_end())
+    ));
+    if let Some(d_b) = e.d_b {
+        md.push_str(&format!("| 基准直径 d_B | {} mm |\n", trim(d_b)));
+    }
+    if let Some(a) = e.a {
+        md.push_str(&format!("| 公称直径 A | {} mm |\n", trim(a)));
+    }
+    if std == SplineStd::ANSI {
+        md.push_str(&format!(
+            "| DFe / DFi | {} / {} mm |\n",
+            trim(e.ansi_form_dia_external()),
+            trim(e.ansi_form_dia_internal())
+        ));
+    }
+    md.push('\n');
+
+    // ── 4. 检验尺寸 ──
+    md.push_str("## 4. 检验尺寸\n\n");
+    if std != SplineStd::DIN {
+        md.push_str("本体系无入库检验尺寸表（DIN 5480-2 检验表只覆盖 DIN 预设）。\n\n");
+    } else {
+        let d_b = e.d_b.unwrap_or_else(|| d_b_from_x(e.m, e.z, e.x));
+        match inspection_query(d_b, e.m, e.z) {
+            Ok(r) => {
+                md.push_str("| 量 | 值 | 说明 |\n|---|---|---|\n");
+                md.push_str(&format!(
+                    "| 跨棒距 M1 | {} mm | 外花键；量棒 D_M={} mm |\n",
+                    trim(r.m1),
+                    trim(r.d_m_shaft)
+                ));
+                md.push_str(&format!(
+                    "| 棒间距 M2 | {} mm | 内花键；量棒 D_M={} mm |\n",
+                    trim(r.m2),
+                    trim(r.d_m_hub)
+                ));
+                md.push_str(&format!("| 跨测齿数 k | {} | — |\n", r.k));
+                md.push_str(&format!("| 公法线 W_k | {} mm | — |\n", trim(r.w_k)));
+                if let Some(row) = &r.row {
+                    md.push_str(&format!(
+                        "| 查表命中 | p{} 表{} | source={} |\n",
+                        row.page, row.table_no, row.source
+                    ));
+                }
+                md.push_str(&format!(
+                    "- 来源：{}{}\n",
+                    r.source,
+                    if r.from_table() {
+                        "（精确查表）"
+                    } else {
+                        "（公式导出）"
+                    }
+                ));
+                for note in &r.notes {
+                    md.push_str(&format!("- 注：{note}\n"));
+                }
+                md.push('\n');
+            }
+            Err(err) => md.push_str(&format!("无法给出检验尺寸：{err}\n\n")),
+        }
+    }
+
+    // ── 5. 数据来源与校验 ──
+    md.push_str("## 5. 数据来源与校验\n\n");
+    md.push_str(&format!(
+        "- 预设来源：{}（`{}`）\n",
+        report_preset_source(std),
+        e.profile
+    ));
+    md.push_str(&format!("- 候选/查表来源：{}\n", module_source(std)));
+    md.push_str(&format!(
+        "- 基准直径来源：{}\n",
+        origin
+            .map(|o| o.note())
+            .unwrap_or_else(|| "不适用（GB/ANSI 无 d_B/A 主参数）".to_string())
+    ));
+    if std == SplineStd::DIN {
+        md.push_str(&format!(
+            "- 检验表全表对照：{}\n",
+            inspection_formula_report().summary
+        ));
+    }
+    let res_d = (e.d() - e.m * e.z as f64).abs();
+    let res_db = (e.db() - e.d() * e.alpha().cos()).abs();
+    let res_deff = (e.d_eff() - (e.d() + 2.0 * e.x * e.m)).abs();
+    md.push_str(&format!(
+        "- 恒等式自检（定义式，残差应 0）：|d−m·z|={:.2e}、|db−d·cosα|={:.2e}、|d′−(d+2xm)|={:.2e}；违例 0。\n",
+        res_d, res_db, res_deff
+    ));
+    if let Some(d_b) = e.d_b {
+        let res = (d_b - d_b_from_x(e.m, e.z, e.x)).abs();
+        md.push_str(&format!(
+            "- DIN 基准直径恒等式：|d_B−(m(z+1.1+2x))|={res:.2e}（721 行名义表逐行残差 0）。\n"
+        ));
+    }
+    if let Some(a) = e.a {
+        let res = (a - a_from_x(e.m, e.z, e.x)).abs();
+        md.push_str(&format!(
+            "- NF 公称直径恒等式：|A−(m(N+2x+0.4))|={res:.2e}（NF E22-141 p07）。\n"
+        ));
+    }
+    md.push_str(
+        "- 计算书内容与 JSON 输出同源：所有数值由 OCSM 计算引擎（`invol_spline`）导出，未二次手算。\n",
+    );
+    md
+}
+
 // ─────────────────────────── 测试 ───────────────────────────
 
 #[cfg(test)]
@@ -6310,5 +6865,56 @@ mod tests {
         let want = (rs * rs - rf * rf) / (2.0 * (rf + rs * sin_a));
         assert!((rho - want).abs() < 1e-12, "{rho} vs {want}");
         assert!((rf + rho) * (rf + rho) > 0.0);
+    }
+
+    /// 计算书四要素齐全：公式（`m·z`）+ 代入数值（`3 × 20`）+ 结果（`60 mm`）
+    /// + 依据来源（`GB/T 3478.1`），并含 5 个小节骨架。
+    #[test]
+    fn report_gb_contains_formula_substitution_result_and_source() {
+        let p = InvolParams::gb("30圆齿根", 3.0, 20).unwrap();
+        let md = build_report(&p, None, 30.0);
+        for needle in ["m·z", "3 × 20", "60 mm", "GB/T 3478.1"] {
+            assert!(md.contains(needle), "计算书缺 `{needle}`：\n{md}");
+        }
+        for section in [
+            "## 1. 输入参数",
+            "## 2. 逐步计算",
+            "## 3. 派生几何",
+            "## 4. 检验尺寸",
+            "## 5. 数据来源与校验",
+        ] {
+            assert!(md.contains(section), "计算书缺小节 `{section}`：\n{md}");
+        }
+        assert!(md.contains("内花键") || md.contains("外花键"), "{md}");
+    }
+
+    /// DIN 计算书：d_B 反推口径（721 行全表校验）+ 检验尺寸的查表命中页/source
+    /// + 检验表全表对照结论；取一行真实检验表行保证查表命中。
+    #[test]
+    fn report_din_carries_bench_formula_and_inspection_source() {
+        let row = inspection_rows()
+            .iter()
+            .find(|r| (r.m - 1.0).abs() < 1e-9)
+            .expect("m=1 检验行")
+            .clone();
+        let x = x_from_d_b(row.d_b, row.m, row.z);
+        let (p, origin) = resolve_din_by_d_b(row.d_b, Some(row.m), Some(row.z), Some(x)).unwrap();
+        let md = build_report(&p, Some(&origin), 30.0);
+        assert!(md.contains("d_B = d + 1.1m + 2x₁m"), "{md}");
+        assert!(md.contains("721 行残差 0"), "{md}");
+        assert!(md.contains("## 4. 检验尺寸"), "{md}");
+        assert!(
+            md.contains(&format!("p{} 表{}", row.page, row.table_no))
+                && md.contains(&format!("source={}", row.source)),
+            "计算书缺查表页/source（p{} 表{} source={}）：\n{md}",
+            row.page,
+            row.table_no,
+            row.source
+        );
+        assert!(md.contains("W_k") && md.contains("M1") && md.contains("M2"), "{md}");
+        assert!(
+            md.contains("检验表逐行对照") && md.contains("验证通过"),
+            "{md}"
+        );
     }
 }

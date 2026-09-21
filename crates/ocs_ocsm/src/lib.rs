@@ -1826,8 +1826,36 @@ impl OcsmPlugin {
     /// * 带参数 = AI/MCP：齿轮 `OCSMGEAR [内齿轮|int] <m> <z> [h] [ha=..] [c=..] [beta=..] [x=..] [view 视图] [at x,y] [rot 度]`；
     ///   花键 `OCSMGEAR 花键 [内花键] [std=GB|DIN] [profile=GB30R] [db=40] [hf=..] [rho=..] [cf=..] <m> <z> [x=..] [h=..] [view 端视图|侧视图|剖视图]`（内花键与内齿轮同口径：只有 端视图|剖视图，无侧视图）。
     ///   内齿轮（齿圈）：`OCSMGEAR int 2 40 30 view 端视图`；只用 剖视图 + 端视图。GB 无 d_B；DIN 的 d_B 是主参数。
+    /// * **计算书**：`OCSMGEAR … report [report=<path>]` —— 纯计算不插图，输出 Markdown
+    ///   计算书（输入参数含单位口径 + 逐步计算：公式/代入/结果/依据来源 + 派生几何 +
+    ///   检验尺寸含查表页/source + 数据来源与校验）；`report=<path>` 另写文件。
     fn cmd_gear(&self, host: &mut dyn HostApi, args: &str) {
         if !args.trim().is_empty() {
+            // 计算书出口：`OCSMGEAR … report [report=<path>]` —— 纯计算，不插图。
+            // 结果经 `host.push_output` 落到命令行/MCP 可读输出；给了路径则另写文件。
+            let (args_wo, want_report, report_out) = crate::gear::split_report_args(args);
+            if want_report {
+                let req = match crate::gear::parse_request(&args_wo) {
+                    Ok(r) => r,
+                    Err(msg) => {
+                        host.push_error(&msg);
+                        return;
+                    }
+                };
+                match crate::gear::build_report(&req.params) {
+                    Ok(md) => {
+                        if let Some(path) = &report_out {
+                            match std::fs::write(path, &md) {
+                                Ok(()) => host.push_info(&format!("OCSMGEAR：计算书已写入 {path}")),
+                                Err(e) => host.push_error(&format!("OCSMGEAR 计算书写文件失败：{e}")),
+                            }
+                        }
+                        host.push_output(&md);
+                    }
+                    Err(e) => host.push_error(&format!("OCSMGEAR 计算书：{e}")),
+                }
+                return;
+            }
             let req = match crate::gear::parse_request(args) {
                 Ok(r) => r,
                 Err(msg) => {
@@ -1904,6 +1932,9 @@ impl OcsmPlugin {
     /// * 不带参数 = 人类侧：开轴生成器窗口（段表 + 行文本双向同步 + 视图按钮 + 实时预览）+ 进放置态；
     ///   窗口里点「生成到图纸」→ 回图纸点基点 → 移动光标旋转 → 再点落定。
     /// * 带参数 = AI/MCP：`OCSMSHAFT <行 DSL 或 JSON>` 一行直插（与原来一致）。
+    /// * **计算书**：段末（或整体）加 `report`：`OCSMSHAFT INVOLSPLINE DIN30 DB40 M2 L30 report`
+    ///   —— 纯计算不插图，输出 Markdown 计算书（含 INVOLSPLINE 段的公式/代入/结果/来源
+    ///   与 DIN 检验尺寸）；`report=<path>` 另写文件。
     /// 轮廓/端面/倒角/槽与边界竖线 `1轮廓实线层`、螺纹小径/螺尾 `2细线层`
     /// （磨外圆/OV 不画砂轮细线）、轴线与分度线
     /// `3中心线层`、剖视剖面线 `5剖面线层`；不标尺寸。
@@ -1939,6 +1970,31 @@ impl OcsmPlugin {
                 what: "OCSM 轴",
                 where_to: "请在轴生成器窗口里点「生成到图纸」",
             }));
+            return;
+        }
+        // 计算书出口：`OCSMSHAFT … report [report=<path>]` —— 纯计算，不插图（不过 OCSM 初始化检查）。
+        let (args_wo, want_report, report_out) = crate::gear::split_report_args(args);
+        if want_report {
+            let program = match crate::shaft::parse_program(&args_wo) {
+                Ok(program) => program,
+                Err(message) => {
+                    host.push_error(&format!("OCSMSHAFT 参数无效：{message}"));
+                    host.push_output(crate::shaft::USAGE);
+                    return;
+                }
+            };
+            match crate::shaft::build_report(&program) {
+                Ok(md) => {
+                    if let Some(path) = &report_out {
+                        match std::fs::write(path, &md) {
+                            Ok(()) => host.push_info(&format!("OCSMSHAFT：计算书已写入 {path}")),
+                            Err(e) => host.push_error(&format!("OCSMSHAFT 计算书写文件失败：{e}")),
+                        }
+                    }
+                    host.push_output(&md);
+                }
+                Err(e) => host.push_error(&format!("OCSMSHAFT 计算书：{e}")),
+            }
             return;
         }
         let program = match crate::shaft::parse_program(args) {
@@ -5126,6 +5182,8 @@ mod tests {
     #[derive(Default)]
     struct UndoOrderSpy {
         log: Vec<String>,
+        outputs: Vec<String>,
+        errors: Vec<String>,
         doc: ocs_plugin_api::host::CadDocument,
     }
     /// 空的只读文档视图（HostApi 要求实现 DocumentReader）。
@@ -5180,8 +5238,12 @@ mod tests {
         }
         fn set_dirty(&mut self) {}
         fn push_info(&mut self, _msg: &str) {}
-        fn push_output(&mut self, _msg: &str) {}
-        fn push_error(&mut self, _msg: &str) {}
+        fn push_output(&mut self, msg: &str) {
+            self.outputs.push(msg.to_string());
+        }
+        fn push_error(&mut self, msg: &str) {
+            self.errors.push(msg.to_string());
+        }
         fn start_interactive(
             &mut self,
             _command: Box<dyn ocs_plugin_api::host::InteractiveCommand>,
@@ -5251,6 +5313,26 @@ mod tests {
             "{:?}",
             host.log
         );
+    }
+
+    /// 计算书命令入口（命令解析层，不必真连宿主）：`OCSMGEAR … report` 与
+    /// `OCSMSHAFT INVOLSPLINE … report` 把 Markdown 推到输出；四要素齐全。
+    #[test]
+    fn gear_and_shaft_report_commands_emit_markdown() {
+        let mut host = UndoOrderSpy::default();
+        OcsmPlugin.cmd_gear(&mut host, "花键 GB30R m=3 z=20 h=30 report");
+        assert!(host.errors.is_empty(), "{:?}", host.errors);
+        let md = host.outputs.join("\n");
+        for needle in ["m·z", "3 × 20", "60 mm", "GB/T 3478.1"] {
+            assert!(md.contains(needle), "OCSMGEAR report 缺 `{needle}`：\n{md}");
+        }
+
+        let mut host = UndoOrderSpy::default();
+        OcsmPlugin.cmd_shaft(&mut host, "INVOLSPLINE DIN30 DB40 M2 L30 report");
+        assert!(host.errors.is_empty(), "{:?}", host.errors);
+        let md = host.outputs.join("\n");
+        assert!(md.contains("# 轴段计算书"), "{md}");
+        assert!(md.contains("d_B = d + 1.1m + 2x₁m"), "{md}");
     }
     // ── 标准件放置：两段式（定位基点 → 绕基点旋转 → 落定）──────────────────
 
