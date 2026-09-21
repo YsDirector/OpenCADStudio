@@ -294,11 +294,11 @@ function viewLabel(key, kind) {
   return kind === "internal" && v.internalName ? v.internalName : v.name;
 }
 
-// 齿宽默认值：外齿轮 10m、内齿轮 15m（m 非法时返回 NaN）；ANSI 径节制按 10/P（英寸口径）。
+// 齿宽默认值：外齿轮 10m、内齿轮 15m（m 非法时返回 NaN）；ANSI 径节制按 10·m = 10·25.4/P（mm）。
 function defaultH() {
   if (isSpline() && el("stdSel").value === "ANSI") {
     const pv = num("m");
-    return Number.isFinite(pv) && pv > 0 ? 10.0 / pv : NaN;
+    return Number.isFinite(pv) && pv > 0 ? 10.0 * 25.4 / pv : NaN;
   }
   const m = effM();
   if (!Number.isFinite(m) || m <= 0) return NaN;
@@ -492,7 +492,7 @@ function syncSplineUI() {
     showRow("rho", !ansi);
     showRow("cf", !ansi);
     el("mLabel").textContent = ansi ? "径节[P]" : "模数[m/Mn]";
-    el("m").title = ansi ? "ANSI 径节 P（每英寸齿数；Ps=2P）" : "";
+    el("m").title = ansi ? "ANSI 径节 P（每英寸齿数；Ps=2P）；引擎按 m=25.4/P 换算 mm" : "";
     // 基准直径行：DIN 用 d_B、NF 用公称直径 A；GB/ANSI 本体系不用。
     const bench = std === "DIN" || std === "NF";
     showRow("db", bench);
@@ -509,7 +509,7 @@ function syncSplineUI() {
       GB: "GB/T 3478.1：模数制，不用 d_B；给 d_B 会明确报错。",
       DIN: "DIN 5480-1：d_B 主参数（可给 m 或 z 推导）。",
       NF: "NF E22-141：A 主参数（α=20°；尺寸表 p18/p20/p21/p22 共 288 行已入库）。",
-      ANSI: "ANSI B92.1：径节制公式驱动（径节 P + Table 2 五列）；Ps=2P；x 不允许；rf 无标准值（切于齿根过渡弧）。",
+      ANSI: "ANSI B92.1：径节制公式驱动（径节 P + Table 2 五列，标准为英制、引擎换算 mm）；Ps=2P；x 不允许；rf 无标准值（切于齿根过渡弧）。",
     })[std] || "";
   } else {
     // 齿轮体系：M 显示模数行，DP 显示径节行（m = 25.4/DP）。
@@ -818,9 +818,9 @@ function renderSplineInfo(j) {
   ];
   if (ansi) {
     items.push(
-      ["径节 P", j.pitch, "", "ANSI 径节（每英寸齿数）"],
+      ["径节 P", j.pitch, "（节圆 φ" + fmt(j.d) + " mm）", "径节原值（每英寸齿数；Ps=2P）；节圆已换算 mm"],
       ["stub pitch Ps", j.ps, "", "Ps = 2P（只用于标识显示）"],
-      ["模数 m（=1/P）", j.m, "", "引擎按 m=1/P 换算"],
+      ["换算模数 m", j.m, " mm", "m = 25.4/P（引擎内部/输出统一 mm）"],
     );
   } else {
     items.push(["模数 m", j.m, " mm", ""]);
@@ -839,13 +839,13 @@ function renderSplineInfo(j) {
   if (ansi) {
     items.push(
       ["外花键 form DFe", j.dfe, "", "Table 2 渐开线起始圆（外花键）"],
-      ["内花键 form DFi", j.dfi, "", "Table 2 渐开线起始圆（内花键；B 列含 −0.004）"],
+      ["内花键 form DFi", j.dfi, "", "Table 2 渐开线起始圆（内花键；B 列含 −0.004 in = −0.1016 mm，输出 mm）"],
       ["有效齿槽宽 Sv min", j.sv_min, "", "Table 2；基本齿厚 t = p − Sv"],
     );
   }
   items.push(
     ["齿根圆角 ρf", j.rho, "", ansi ? "无标准数值依据（切于齿根过渡弧构造）" : "ρf*·m"],
-    ["齿形裕度 cF", j.cf, "", ansi ? "cF=0.001D，max 0.010 / min 0.002（Table 2）" : "cF*·m"],
+    ["齿形裕度 cF", j.cf, "", ansi ? "cF=0.001D（Table 2；标准英寸常量 min 0.002 in=0.0508 mm、max 0.010 in=0.254 mm；输出 mm）" : "cF*·m"],
   );
   if (j.d_b !== null && j.d_b !== undefined) items.push(["基准直径 d_B", j.d_b, " mm", "DIN 主参数（GB 无此概念）"]);
   if (j.a !== null && j.a !== undefined) items.push(["公称直径 A", j.a, " mm", "NF E22-141 主参数（A=m(z+2x+0.4)）"]);

@@ -2,6 +2,7 @@
 # 印出值 = p11 Table 3 (Basic Dimensions for Involute Splines) 的 OCR 结果(多变体投票)
 # 复算公式 = p10 Table 2 (见 ANSI-B92.1_数据.md 第3节), pi = 3.1415927 (Table 2 表内注)
 # residual = printed_value - recomputed_value
+# 单位：以下 printed_value / recomputed_value 均为标准英寸值；测试把引擎 mm 输出 ÷25.4 回英寸再比（见 invol_spline.rs 单测）
 row_id,source_page,source_table,pitch,P,Ps,pressure_angle_deg,quantity,printed_value,formula,recomputed_value,residual,abs_residual,flag
 1,p11,Table 3,2.5/5,2.5,5,30/37.5/45 (all),Ps (stub pitch),5,2P,5.0000000,+0.0000000,0.0000000,OK(4位小数舍入内)
 2,p11,Table 3,2.5/5,2.5,5,30/37.5/45 (all),p (circular pitch),1.2566,pi/P,1.2566371,-0.0000371,0.0000371,OK(4位小数舍入内)

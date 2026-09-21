@@ -1643,7 +1643,7 @@ impl DetailElement for InvolSpline {
             ),
             "din_notes": "DIN 5480-2 名义表：674 行；m=1.5 由用户截图补入（56 行）、m=5 已剔除（p35 渲染缺陷）；x=(d_B−m(z+1.1))/(2m) 为反推关系。检验表：220 行（p12/16/18/20 + m=1.5 截图），5 档 0.5/0.75/0.8/1/1.5；查表外 z 走公式（220 行逐行对照验证）",
             "nf_notes": "NF E22-141：288 行（p18 拉削内花键 144 + p20 39 + p21 49 + p22 56）；A=m(N+2x+0.4)、D=A−2m、db=d·cos20°；17 处 OCR 错格走代码修正表（不改 CSV），9 行疑原表印误只标注；m=0.75/3.75/7.50 的次系列 x=0.633/0.967 交替是真实设计值",
-            "ansi_notes": "ANSI B92.1-1970 (R1993) 公式驱动：径节 17 项 + Table 2 五列（30°平/齿侧、30°平/外径、30°圆/齿侧、37.5°圆/齿侧、45°圆/齿侧）；D=N/P、Db=D·cosφD、p=π/P、Do=(N+1)/P、Dre 三段、Sv min 随 φD、cF=0.001D 夹取；rf 标准未给值（p14），引擎按切于齿根的过渡弧构造（无标准数值依据）；抽样 73 行复算见 assets/ansi_b921_notes.md",
+            "ansi_notes": "ANSI B92.1-1970 (R1993) 公式驱动：径节 17 项 + Table 2 五列（30°平/齿侧、30°平/外径、30°圆/齿侧、37.5°圆/齿侧、45°圆/齿侧）；D=N/P、Db=D·cosφD、p=π/P、Do=(N+1)/P、Dre 三段、Sv min 随 φD、cF=0.001D 夹取；rf 标准未给值（p14），引擎按切于齿根的过渡弧构造（无标准数值依据）；**标准为英制，引擎内部/输出统一 mm（m=25.4/P，cF 夹取 0.0508~0.254 mm）**；抽样 73 行复算见 assets/ansi_b921_notes.md",
             "din_nominal": din_nominal,
             "din_inspection": din_inspection,
             "nf_nominal": nf_nominal,
@@ -2509,7 +2509,9 @@ mod tests {
             .unwrap()
             .unwrap();
         assert!(
-            svg.contains("ANSI ANSI30平齿根齿侧 P8/Ps16 N20 L30"),
+            svg.contains("ANSI ANSI30平齿根齿侧 P8/Ps16 N20")
+                && svg.contains("节圆 φ63.5")
+                && svg.contains("L30"),
             "ANSI：{svg}"
         );
         let svg = preview_svg("family=detail_invol_spline&spec=ANSI&p=8&z=20&view=front")

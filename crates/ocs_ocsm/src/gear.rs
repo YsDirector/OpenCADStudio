@@ -913,11 +913,14 @@ impl GearParams {
         }
         if p.std == crate::invol_spline::SplineStd::ANSI {
             v.push(format!(
-                "ANSI B92.1：公式驱动（径节 P={}、Ps={}；Table 2 五列）。rf 标准没有给值\
-                 （p14 明确圆齿根曲率不能用给定半径规定），当前 ρf={} 是切于齿根的过渡弧构造、\
-                 无标准数值依据；径节/直径为英制数值口径。",
+                "ANSI B92.1：公式驱动（径节 P={}、Ps={}；Table 2 五列），节圆 φ{} mm。\
+                 标准是英制：引擎内部已按 1 in=25.4 mm 换算（直径/DFe/DFi/cF/p 输出均 mm；\
+                 DFi 的 −0.004 in=−0.1016 mm、cF 夹取 0.002~0.010 in=0.0508~0.254 mm）。\
+                 rf 标准没有给值（p14 明确圆齿根曲率不能用给定半径规定），当前 ρf={} 是切于齿根的\
+                 过渡弧构造、无标准数值依据。",
                 trim(p.ansi_p()),
                 trim(2.0 * p.ansi_p()),
+                trim(p.d()),
                 trim(p.rho_f())
             ));
         }
@@ -2420,7 +2423,21 @@ pub fn block_name(p: &GearParams, view: GearView) -> String {
         if let Some(d_b) = s.d_b {
             name.push_str(&format!("_DB{}", trim(d_b).replace('.', "_")));
         }
-        name.push_str(&format!("_M{}_Z{}", trim(p.m).replace('.', "_"), p.z));
+        if s.std == crate::invol_spline::SplineStd::ANSI {
+            // ANSI：块名保留径节原值 `_P<P>_PS<2P>_N<z>`（与 `spline_block_name` 同口径）。
+            if let Some(pv) = s.m {
+                name.push_str(&format!(
+                    "_P{}_PS{}_N{}",
+                    trim(pv).replace('.', "_"),
+                    trim(2.0 * pv).replace('.', "_"),
+                    p.z
+                ));
+            } else {
+                name.push_str(&format!("_M{}_Z{}", trim(p.m).replace('.', "_"), p.z));
+            }
+        } else {
+            name.push_str(&format!("_M{}_Z{}", trim(p.m).replace('.', "_"), p.z));
+        }
         if p.x.abs() > 1e-9 {
             name.push_str(&format!(
                 "_X{}{}",
@@ -2919,8 +2936,8 @@ pub fn parse_request(raw: &str) -> Result<GearRequest, String> {
             None
         };
         if let Some(pv) = ansi_pitch {
-            // ANSI 的有效模数 m = 1/P（供 h 默认值与块名换算用）。
-            p.m = 1.0 / pv;
+            // ANSI 的有效模数 m = 25.4/P（mm；供 h 默认值与块名换算用）。
+            p.m = 25.4 / pv;
         }
         let opts = SplineOpts {
             std,
@@ -3107,7 +3124,13 @@ pub fn params_from_query(query: &str) -> Result<(GearParams, GearView, f64), Str
             rho_star: opt_f("rho"),
             c_f_star: opt_f("cf"),
         };
-        let m = opts.m.unwrap_or(2.0);
+        // ANSI：第 5 参 m 槽位 = 径节 P；GearParams.m 存换算后 mm 模数 25.4/P（与 parse_request 一致）。
+        let m_or_p = opts.m.unwrap_or(2.0);
+        let m = if std == crate::invol_spline::SplineStd::ANSI {
+            crate::invol_spline::ANSI_INCH_MM / m_or_p
+        } else {
+            m_or_p
+        };
         GearParams {
             kind,
             m,
@@ -4765,7 +4788,8 @@ mod tests {
         assert_eq!(sa.std, crate::invol_spline::SplineStd::ANSI);
         let (ea, oa) = p.spline_engine().unwrap();
         assert_eq!(ea.pitch, Some(3.0));
-        assert!((ea.d() - 20.0 / 3.0).abs() < 1e-12, "D=N/P");
+        assert!((ea.d() / 25.4 - 20.0 / 3.0).abs() < 1e-12, "D 回英寸应 = N/P");
+        assert!((ea.d() - 20.0 * 25.4 / 3.0).abs() < 1e-12, "D=N/P×25.4（mm）");
         assert!(oa.is_none());
         let e = params_from_query("mode=spline&std=ANSI&db=40&m=3&z=20").unwrap_err();
         assert_eq!(e, crate::invol_spline::ANSI_D_B_MSG, "{e}");

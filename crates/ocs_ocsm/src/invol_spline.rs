@@ -313,6 +313,10 @@ pub fn default_profile(std: SplineStd) -> &'static str {
 /// 入库径节系列（`assets/ansi_b921_formulas.csv`，**17 项**；p08/p09/p11 三处互证）。
 const ANSI_B921_CSV: &str = include_str!("../assets/ansi_b921_formulas.csv");
 
+/// 英寸 → 毫米换算（ANSI B92.1 是英制标准：P 为每英寸齿数、表值为英寸；
+/// 引擎内部与输出统一 mm，和 GB/DIN/NF 一致）。
+pub const ANSI_INCH_MM: f64 = 25.4;
+
 /// ANSI B92.1 径节系列一行（`P` 入 Table 2 公式；`Ps = 2P` 只用于标识显示）。
 #[derive(Debug, Clone, PartialEq)]
 pub struct AnsiPitch {
@@ -379,7 +383,7 @@ fn parse_ansi_pitches(text: &str) -> Result<Vec<AnsiPitch>, String> {
 pub enum AnsiColumn {
     /// A：30° 平齿根 齿侧配合（`Dre` 第 1/2 段 `(N−1.35)/P`）。
     A30FlatSide,
-    /// B：30° 平齿根 **外径配合**（`DFi` 含英寸常量 `−0.004`）。
+    /// B：30° 平齿根 **外径配合**（`DFi` 含英寸常量 `−0.004 in = −0.1016 mm`）。
     B30FlatMajor,
     /// C：30° 圆齿根 齿侧配合（`Dre` 分 `(N−1.8)/P` 与 `(N−2)/P` 两段）。
     C30FilletSide,
@@ -405,9 +409,11 @@ impl AnsiColumn {
     }
 }
 
-/// ANSI `cF = 0.001·D`，max 0.010、min 0.002（Table 2；英寸常量，数值口径）。
-pub fn ansi_c_f(d: f64) -> f64 {
-    (0.001 * d).clamp(0.002, 0.010)
+/// ANSI `cF`（Table 2；标准为英寸常量，本函数入参/返回均 mm）：
+/// 原式 `cF_in = clamp(0.001·D_in, 0.002, 0.010)`；夹取是线性的，`0.001·D` 与单位无关，
+/// 只有上下限换算 → `cF_mm = clamp(0.001·D_mm, 0.0508, 0.254)`。
+pub fn ansi_c_f(d_mm: f64) -> f64 {
+    (0.001 * d_mm).clamp(0.0508, 0.254)
 }
 
 /// ANSI 齿根型式（Table 2 列：平齿根 / 圆齿根）。
@@ -1205,7 +1211,7 @@ fn row_to_params(row: Din5480Row) -> Result<(InvolParams, D_bOrigin), String> {
 /// **体系由 `std` 显式给出**（不再从 `d_B` 反推）：
 /// * `NF`：走独立分支 —— 第 3 参 `d_b` 槽位收 **公称直径 A**（NF 的基准直径主参数），
 ///   由 [`resolve_nf_by_a`] 查表/推导；A + m 或 A + z 可缺一项；
-/// * `ANSI`：走独立分支 —— **第 5 参 `m` 槽位收径节 `P`**（不是模数；引擎内 `m = 1/P`），
+/// * `ANSI`：走独立分支 —— **第 5 参 `m` 槽位收径节 `P`**（不是模数；引擎内 `m = 25.4/P`，mm），
 ///   `z` = 齿数 N；误给 `d_B`/A 报 [`ANSI_D_B_MSG`]；ANSI 无变位（x≠0 报错）；
 /// * `d_B` 给了：只有 DIN 有这个概念 —— GB 直接报 [`GB_D_B_MSG`]；DIN 走 [`resolve_din_by_d_b`]；
 /// * 不给 `d_B`：GB/DIN/NF 都要 `m` 与 `z`（缺哪项报哪项）；DIN 由 `m/z/x` 正算 `d_B`、NF 由
@@ -2924,12 +2930,12 @@ pub fn inspection_formula_validated() -> bool {
 /// 渐开线花键几何参数（预设 + 逐个覆盖）。
 #[derive(Debug, Clone, PartialEq)]
 pub struct InvolParams {
-    /// 模数 m（ANSI 下 `m = 1/P`，由径节换算）。
+    /// 模数 m（ANSI 下 `m = 25.4/P`，由径节换算；引擎内部与输出统一 mm）。
     pub m: f64,
     /// 齿数 z。
     pub z: u32,
     /// **ANSI B92.1 径节 P**（`std=ANSI` 时 `Some`；仅用于 `P/Ps` 标识与 Table 2 分段；
-    /// `m = 1/P`）。
+    /// 引擎内 `m = 25.4/P`（mm））。
     pub pitch: Option<f64>,
     /// 变位系数 x（GB 通常 0；DIN 见 `x·m` 范围）。
     pub x: f64,
@@ -2995,15 +3001,18 @@ impl InvolParams {
         Ok(p)
     }
 
-    /// ANSI B92.1-1970 (R1993) 构造：`p` = 径节 P，`z` = 齿数 N（`m = 1/P`，无变位）。
+    /// ANSI B92.1-1970 (R1993) 构造：`p` = 径节 P，`z` = 齿数 N（无变位）。
     ///
+    /// 标准公式是英寸口径（`D = N/P` 英寸）；引擎内部统一 mm：`m = 25.4/P`，
+    /// 因而 `D/Do/Dri/Di/Dre/DFe/DFi/p` 等输出全为 mm。
     /// `profile` 必须是 Table 2 五列之一（见 [`ANSI_PRESETS`]）；用
     /// [`ansi_profile_name`] 可由「压力角 + 齿根型式 + 配合方式」拿到合法齿廓名。
     pub fn ansi(profile: &str, p: f64, z: u32) -> Result<Self, String> {
         if !(p.is_finite() && p > 0.0) {
             return Err(format!("径节 P={} 必须是正数。", trim(p)));
         }
-        let mut q = Self::from_preset(SplineStd::ANSI, profile, 1.0 / p, z)?;
+        // 构造即用 mm 模数；`pitch` 回填原值（`ansi_p()` 优先用它，避免整数/小数往返丢精度）。
+        let mut q = Self::from_preset(SplineStd::ANSI, profile, ANSI_INCH_MM / p, z)?;
         q.pitch = Some(p);
         q.validate()?;
         Ok(q)
@@ -3017,7 +3026,7 @@ impl InvolParams {
         self
     }
 
-    /// 覆盖/回填 ANSI 径节 P（`m` 不变；调用方自行保证 `m=1/P`）。
+    /// 覆盖/回填 ANSI 径节 P（**不改 `m`**；调用方自行保证 `m = 25.4/P`）。
     pub fn with_pitch(mut self, p: f64) -> Self {
         self.pitch = Some(p);
         self
@@ -3118,8 +3127,8 @@ impl InvolParams {
         self.rho_star * self.m
     }
 
-    /// 齿形裕度 `cF = c_f_star·m`；ANSI 为 `cF = 0.001D`（max 0.010、min 0.002，Table 2；
-    /// 英寸常量，数值口径）。
+    /// 齿形裕度 `cF = c_f_star·m`；ANSI 为 `cF = clamp(0.001·D, 0.002 in, 0.010 in)`
+    /// = `clamp(0.001·D_mm, 0.0508, 0.254)`（Table 2；D 与返回值均 mm）。
     pub fn c_f(&self) -> f64 {
         if self.std == SplineStd::ANSI {
             return ansi_c_f(self.d());
@@ -3230,9 +3239,9 @@ impl InvolParams {
 
     // ── ANSI B92.1-1970 (R1993) 专用导出量（公式驱动；Table 2）──
 
-    /// ANSI 径节 `P`（`std=ANSI` 时由 `pitch` 存；兼容由 `m` 反算）。
+    /// ANSI 径节 `P`（`std=ANSI` 时由 `pitch` 存；兼容由 mm 模数 `m = 25.4/P` 反算）。
     pub fn ansi_p(&self) -> f64 {
-        self.pitch.unwrap_or_else(|| 1.0 / self.m)
+        self.pitch.unwrap_or(ANSI_INCH_MM / self.m)
     }
 
     /// ANSI Table 2 列（profile 不是 ANSI 列的返回 `None`）。
@@ -3245,7 +3254,7 @@ impl InvolParams {
     }
 
     /// ANSI `Sv min`（最小有效齿槽宽，Table 2）：30° `π/(2P)`；37.5° `(0.5π+0.1)/P`；
-    /// 45° `(0.5π+0.2)/P`。
+    /// 45° `(0.5π+0.2)/P`（标准英寸值；本函数返回值 mm，= 原式 ×25.4 = `(0.5π+k)·m`）。
     pub fn ansi_sv_min(&self) -> f64 {
         let k = if (self.alpha_deg - 37.5).abs() < 1e-9 {
             0.1
@@ -3306,11 +3315,11 @@ impl InvolParams {
         base - 2.0 * self.c_f()
     }
 
-    /// ANSI 内花键 form diameter `DFi`（Table 2；列 B 含英寸常量 `−0.004`）。
+    /// ANSI 内花键 form diameter `DFi`（Table 2；列 B 含英寸常量 `−0.004 in = −0.1016 mm`）。
     pub fn ansi_form_dia_internal(&self) -> f64 {
         match self.ansi_column() {
             Some(AnsiColumn::B30FlatMajor) => {
-                self.d() + 0.8 * self.m - 0.004 + 2.0 * self.c_f()
+                self.d() + 0.8 * self.m - 0.1016 + 2.0 * self.c_f()
             }
             _ => self.d() + self.m + 2.0 * self.c_f(),
         }
@@ -3484,13 +3493,15 @@ impl InvolParams {
         let head = if self.internal { "内花键 " } else { "" };
         let mut s = if self.std == SplineStd::ANSI {
             let p = self.ansi_p();
+            // P/Ps 保留标准原值（照 DP 先例）；附录圆 mm（内部统一 mm，避免误读）。
             format!(
-                "{head}{} {} P{}/Ps{} N{}",
+                "{head}{} {} P{}/Ps{} N{}（节圆 φ{}）",
                 self.std.label(),
                 self.profile,
                 trim(p),
                 trim(2.0 * p),
-                self.z
+                self.z,
+                trim(self.d())
             )
         } else {
             format!(
@@ -5088,7 +5099,8 @@ mod tests {
             resolve_spline(SplineStd::ANSI, "ANSI", None, Some(8.0), Some(20), None).unwrap();
         assert_eq!(p.std, SplineStd::ANSI);
         assert_eq!(p.pitch, Some(8.0));
-        assert!(origin.is_none() && (p.d() - 20.0 / 8.0).abs() < 1e-12);
+        // P8,N20 → 2.5 in = 63.5 mm（内部/输出 mm）。
+        assert!(origin.is_none() && (p.d() - 63.5).abs() < 1e-12, "D={}", p.d());
         assert!(p.spec().contains("P8/Ps16"), "{}", p.spec());
 
         // 合法路径不被误拦：GB/DIN 正常出参数。
@@ -5135,14 +5147,16 @@ mod tests {
         }
     }
 
-    /// Table 2 五列公式（P=16、N=30 同时覆盖 5 列；cF 取 min 0.002 夹取）。
+    /// Table 2 五列公式（P=16、N=30 同时覆盖 5 列；cF 取 min 0.002 in 夹取）。
+    /// 标准公式/印出值是英寸；引擎输出 mm，断言时 ÷25.4 回英寸再比。
     #[test]
     fn ansi_table2_basic_formulas_and_columns() {
         use std::f64::consts::PI;
+        const IN: f64 = ANSI_INCH_MM;
         let (p, z) = (16.0, 30u32);
-        let m = 1.0 / p;
-        let (n, d, c) = (z as f64, z as f64 / p, ansi_c_f(z as f64 / p));
-        assert!((c - 0.002).abs() < 1e-12, "cF 下夹取");
+        let m_in = 1.0 / p;
+        let (n, d_in, c_in) = (z as f64, z as f64 / p, ansi_c_f(z as f64 * IN / p) / IN);
+        assert!((c_in - 0.002).abs() < 1e-12, "cF 下夹取");
         // (profile, α, Dri k, Di k, Dre k, DFi 手工式)
         let cases: [(&str, f64, f64, f64, f64, Option<f64>); 5] = [
             ("ANSI30平齿根齿侧", 30.0, 1.35, 1.0, 1.35, None),
@@ -5155,20 +5169,32 @@ mod tests {
             let q = InvolParams::ansi(profile, p, z).unwrap();
             assert_eq!(q.ansi_column(), AnsiColumn::from_profile(profile));
             assert!((q.alpha_deg - alpha).abs() < 1e-12, "{profile} α");
-            assert!((q.d() - d).abs() < 1e-12, "{profile} D");
-            assert!((q.db() - d * alpha.to_radians().cos()).abs() < 1e-12, "{profile} Db");
-            assert!((q.da() - (n + 1.0) / p).abs() < 1e-12, "{profile} Do");
-            assert!((q.c_f() - c).abs() < 1e-12, "{profile} cF");
-            assert!((q.internal_major_dia() - (n + dri_k) / p).abs() < 1e-12, "{profile} Dri");
-            assert!((q.internal_minor_dia() - (n - di_k) / p).abs() < 1e-12, "{profile} Di");
-            assert!((q.df() - (n - dre_k) / p).abs() < 1e-12, "{profile} Dre");
-            let dfi = match dfi_b {
-                Some(k) => (n + k) / p - 0.004 + 2.0 * c,
-                None => (n + 1.0) / p + 2.0 * c,
-            };
-            assert!((q.ansi_form_dia_internal() - dfi).abs() < 1e-12, "{profile} DFi");
+            assert!((q.d() / IN - d_in).abs() < 1e-12, "{profile} D");
             assert!(
-                (q.ansi_form_dia_external() - ((n - di_k) / p - 2.0 * c)).abs() < 1e-12,
+                (q.db() / IN - d_in * alpha.to_radians().cos()).abs() < 1e-12,
+                "{profile} Db"
+            );
+            assert!((q.da() / IN - (n + 1.0) / p).abs() < 1e-12, "{profile} Do");
+            assert!((q.c_f() / IN - c_in).abs() < 1e-12, "{profile} cF");
+            assert!(
+                (q.internal_major_dia() / IN - (n + dri_k) / p).abs() < 1e-12,
+                "{profile} Dri"
+            );
+            assert!(
+                (q.internal_minor_dia() / IN - (n - di_k) / p).abs() < 1e-12,
+                "{profile} Di"
+            );
+            assert!((q.df() / IN - (n - dre_k) / p).abs() < 1e-12, "{profile} Dre");
+            let dfi_in = match dfi_b {
+                Some(k) => (n + k) / p - 0.004 + 2.0 * c_in,
+                None => (n + 1.0) / p + 2.0 * c_in,
+            };
+            assert!(
+                (q.ansi_form_dia_internal() / IN - dfi_in).abs() < 1e-12,
+                "{profile} DFi"
+            );
+            assert!(
+                (q.ansi_form_dia_external() / IN - ((n - di_k) / p - 2.0 * c_in)).abs() < 1e-12,
                 "{profile} DFe"
             );
             // Sv min / 基本齿厚 t = p − Sv
@@ -5179,18 +5205,20 @@ mod tests {
             } else {
                 0.0
             };
-            let sv = (0.5 * PI + k) * m;
-            assert!((q.ansi_sv_min() - sv).abs() < 1e-12, "{profile} Sv");
-            assert!((q.s() - (PI * m - sv)).abs() < 1e-12, "{profile} t");
-            assert!((q.s() + q.ansi_sv_min() - PI * m).abs() < 1e-12, "{profile} t+Sv=p");
+            let sv_in = (0.5 * PI + k) * m_in;
+            assert!((q.ansi_sv_min() / IN - sv_in).abs() < 1e-12, "{profile} Sv");
+            assert!((q.s() / IN - (PI * m_in - sv_in)).abs() < 1e-12, "{profile} t");
+            assert!((q.s() + q.ansi_sv_min() - PI * q.m).abs() < 1e-12, "{profile} t+Sv=p");
         }
     }
 
     /// 回归：`ANSI-B92.1_抽样校验.csv` 全 73 行复算（容差 6e-5；含 128/256 印 0.0246 的存疑行）。
+    /// 语料是标准印出的**英寸值**；断言时把引擎 mm 输出 ÷25.4 回英寸再比。
     #[test]
     fn ansi_sample_check_csv_all_73_rows() {
         use std::f64::consts::PI;
         const SAMPLE: &str = include_str!("../assets/ansi_b921_sample_check.csv");
+        const IN: f64 = ANSI_INCH_MM;
         let (mut checked, mut suspect) = (0usize, 0usize);
         let mut max_res = 0.0f64;
         for (i, line) in SAMPLE.lines().enumerate() {
@@ -5207,23 +5235,27 @@ mod tests {
             let alpha_raw = f[6];
             let quantity = f[7];
             let printed: f64 = f[8].parse().unwrap_or_else(|_| panic!("第 {} 行印出值", i + 1));
-            let got = if quantity.starts_with("Ps") {
-                2.0 * p
+            // 印出值只有 Ps/p/Sv 三种量（都与齿数无关，z 任取 20）；按压力角选 Table 2 列。
+            let profile = if alpha_raw.starts_with("37.5") {
+                "ANSI37.5圆齿根齿侧"
+            } else if alpha_raw.starts_with("45") {
+                "ANSI45圆齿根齿侧"
+            } else {
+                "ANSI30平齿根齿侧"
+            };
+            let q = InvolParams::ansi(profile, p, 20)
+                .unwrap_or_else(|e| panic!("第 {} 行（{profile} P={p}）：{e}", i + 1));
+            // 引擎输出 mm：Ps 无量纲（原值）；p=π·m；Sv min 为长度。全部 ÷25.4 回英寸。
+            let got_in = if quantity.starts_with("Ps") {
+                2.0 * q.ansi_p()
             } else if quantity.starts_with("p ") {
-                PI / p
+                PI * q.m / IN
             } else if quantity.starts_with("Sv") {
-                let k = if alpha_raw.starts_with("37.5") {
-                    0.1
-                } else if alpha_raw.starts_with("45") {
-                    0.2
-                } else {
-                    0.0
-                };
-                (0.5 * PI + k) / p
+                q.ansi_sv_min() / IN
             } else {
                 panic!("第 {} 行未知量「{quantity}」", i + 1);
             };
-            let res = (printed - got).abs();
+            let res = (printed - got_in).abs();
             max_res = max_res.max(res);
             assert!(
                 res <= 6e-5,
@@ -5233,7 +5265,7 @@ mod tests {
                 p,
                 res,
                 printed,
-                got
+                got_in
             );
             if res > 5e-5 {
                 suspect += 1;
@@ -5252,42 +5284,78 @@ mod tests {
     }
 
     /// `Dre` 三段分界（12/24、16/32、10/20）与 `cF` 的 max/min 夹取。
+    /// 标准分界/印出值是英寸；引擎输出 mm，断言时 ÷25.4 回英寸。
     #[test]
     fn ansi_dre_segments_and_cf_clamps() {
+        const IN: f64 = ANSI_INCH_MM;
         let z = 20u32;
         // 30°圆齿根 C 列：P=12 用 (N−1.8)/P；P=16 起用 (N−2)/P。
         let c12 = InvolParams::ansi("ANSI30圆齿根齿侧", 12.0, z).unwrap();
-        assert!((c12.df() - (z as f64 - 1.8) / 12.0).abs() < 1e-12);
+        assert!((c12.df() / IN - (z as f64 - 1.8) / 12.0).abs() < 1e-12);
         let c16 = InvolParams::ansi("ANSI30圆齿根齿侧", 16.0, z).unwrap();
-        assert!((c16.df() - (z as f64 - 2.0) / 16.0).abs() < 1e-12);
+        assert!((c16.df() / IN - (z as f64 - 2.0) / 16.0).abs() < 1e-12);
         // A/B 列不随径节分段。
         for p in [2.5, 12.0, 16.0, 32.0] {
             let a = InvolParams::ansi("ANSI30平齿根齿侧", p, z).unwrap();
-            assert!((a.df() - (z as f64 - 1.35) / p).abs() < 1e-12, "A P={p}");
+            assert!((a.df() / IN - (z as f64 - 1.35) / p).abs() < 1e-12, "A P={p}");
         }
         // D 列也不分段。
         for p in [2.5, 16.0, 48.0] {
             let d = InvolParams::ansi("ANSI37.5圆齿根齿侧", p, z).unwrap();
-            assert!((d.df() - (z as f64 - 1.3) / p).abs() < 1e-12, "D P={p}");
+            assert!((d.df() / IN - (z as f64 - 1.3) / p).abs() < 1e-12, "D P={p}");
         }
         // 45° E 列：第三段 (N−1)/P，10/20 及更细都适用。
         for p in [10.0, 16.0, 128.0] {
             let e = InvolParams::ansi("ANSI45圆齿根齿侧", p, z).unwrap();
-            assert!((e.df() - (z as f64 - 1.0) / p).abs() < 1e-12, "E P={p}");
+            assert!((e.df() / IN - (z as f64 - 1.0) / p).abs() < 1e-12, "E P={p}");
         }
         // 45° 在 P<10 不适用（Table 2 E 范围 10/20–128/256）。
         let e = InvolParams::ansi("ANSI45圆齿根齿侧", 8.0, z).unwrap_err();
         assert!(e.contains("10/20"), "{e}");
-        // cF 夹取：min 0.002（D<2）、中段 0.001D、max 0.010（D>10）。
-        assert!((ansi_c_f(1.0) - 0.002).abs() < 1e-12);
-        assert!((ansi_c_f(5.0) - 0.005).abs() < 1e-12);
-        assert!((ansi_c_f(100.0) - 0.010).abs() < 1e-12);
+        // cF 夹取（入参/返回 mm）：min 0.002 in（D<2 in）、中段 0.001·D、max 0.010 in（D>10 in）。
+        assert!((ansi_c_f(1.0 * IN) - 0.002 * IN).abs() < 1e-12);
+        assert!((ansi_c_f(5.0 * IN) - 0.005 * IN).abs() < 1e-12);
+        assert!((ansi_c_f(100.0 * IN) - 0.010 * IN).abs() < 1e-12);
         let small = InvolParams::ansi("ANSI45圆齿根齿侧", 128.0, 100).unwrap();
-        assert!((small.c_f() - 0.002).abs() < 1e-12, "cF min");
-        let mid = InvolParams::ansi("ANSI30平齿根齿侧", 8.0, 40).unwrap(); // D=5
-        assert!((mid.c_f() - 0.005).abs() < 1e-12, "cF 中段");
-        let big = InvolParams::ansi("ANSI30平齿根齿侧", 2.5, 30).unwrap(); // D=12
-        assert!((big.c_f() - 0.010).abs() < 1e-12, "cF max");
+        assert!((small.c_f() - 0.002 * IN).abs() < 1e-12, "cF min");
+        let mid = InvolParams::ansi("ANSI30平齿根齿侧", 8.0, 40).unwrap(); // D=5 in
+        assert!((mid.c_f() - 0.005 * IN).abs() < 1e-12, "cF 中段");
+        let big = InvolParams::ansi("ANSI30平齿根齿侧", 2.5, 30).unwrap(); // D=12 in
+        assert!((big.c_f() - 0.010 * IN).abs() < 1e-12, "cF max");
+    }
+
+    /// 单位口径：标准英制 → 引擎 mm（1 in = 25.4 mm；D = N/P in → ×25.4）。
+    #[test]
+    fn ansi_mm_unit_magnitude() {
+        use std::f64::consts::PI;
+        // 任务书点名量级：P=16,N=30 → 47.625 mm；P=8,N=30 → 95.25 mm。
+        let p16 = InvolParams::ansi("ANSI30平齿根齿侧", 16.0, 30).unwrap();
+        assert!((p16.m - 25.4 / 16.0).abs() < 1e-12, "m={}", p16.m);
+        assert!((p16.d() - 47.625).abs() < 1e-12, "D={}", p16.d());
+        assert!(
+            p16.spec().contains("P16/Ps32 N30（节圆 φ47.625）"),
+            "{}",
+            p16.spec()
+        );
+        let p8 = InvolParams::ansi("ANSI30平齿根齿侧", 8.0, 30).unwrap();
+        assert!((p8.d() - 95.25).abs() < 1e-12, "D={}", p8.d());
+        // 圆周齿距 p = π/P in → π·m mm。
+        assert!((PI * p16.m - PI * 25.4 / 16.0).abs() < 1e-12);
+        // cF 夹取边界（mm）：D<2 in → 0.0508；D>10 in → 0.254；中段 0.001·D_mm。
+        let small = InvolParams::ansi("ANSI30平齿根齿侧", 128.0, 30).unwrap(); // D=0.234 in
+        assert!((small.c_f() - 0.0508).abs() < 1e-12, "cF min: {}", small.c_f());
+        let mid = InvolParams::ansi("ANSI30平齿根齿侧", 8.0, 40).unwrap(); // D=5 in=127 mm
+        assert!((mid.c_f() - 0.127).abs() < 1e-12, "cF mid: {}", mid.c_f());
+        let big = InvolParams::ansi("ANSI30平齿根齿侧", 2.5, 30).unwrap(); // D=12 in
+        assert!((big.c_f() - 0.254).abs() < 1e-12, "cF max: {}", big.c_f());
+        // DFi(B) 的 −0.004 in = −0.1016 mm。
+        let b = InvolParams::ansi("ANSI30平齿根外径", 8.0, 30).unwrap();
+        let want = (30.0 + 0.8) * 25.4 / 8.0 - 0.1016 + 2.0 * b.c_f();
+        assert!(
+            (b.ansi_form_dia_internal() - want).abs() < 1e-12,
+            "DFi={}",
+            b.ansi_form_dia_internal()
+        );
     }
 
     /// 压力角/齿根型式/配合方式 → 预设名（非法组合拒绝）；五列代号往返。
@@ -5354,7 +5422,9 @@ mod tests {
         assert_eq!(p.pitch, Some(8.0));
         assert!(o.is_none());
         assert!(p.spec().contains("P8/Ps16") && p.spec().contains("N20"), "{}", p.spec());
-        assert!((p.d() - 2.5).abs() < 1e-12);
+        assert!(p.spec().contains("（节圆 φ63.5）"), "{}", p.spec());
+        // P8,N20 → 2.5 in = 63.5 mm（引擎内部/输出 mm）。
+        assert!((p.d() - 63.5).abs() < 1e-12, "D={}", p.d());
         // d_B/A → ANSI_D_B_MSG（不含「未实现」字样）。
         let e = resolve_spline(SplineStd::ANSI, "ANSI", Some(40.0), Some(8.0), Some(20), None)
             .unwrap_err();
