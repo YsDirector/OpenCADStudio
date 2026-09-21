@@ -24,9 +24,13 @@
 //! 最佳平衡，试过更高精度电脑带不动。本实现保持同一实体数/点数，只把拟合点取在**精确**
 //! 渐开线上（模板自身的点上误差约 0.01mm，本实现 ≤3µm，同一量级）。
 //!
-//! # 一期范围
+//! # 范围（齿轮 + 花键）
 //!
-//! 外齿轮；支持 β≠0（斜齿轮，端面参数换算 + 侧视三细线）与 Xn≠0（变位）。**内齿轮二期**。
+//! * 齿轮：外齿轮（β≠0 斜齿轮、Xn≠0 变位）+ 内齿轮（齿圈，模板只给剖视/端视）；
+//! * **花键模式**（`GearParams.spline = Some(..)`，GUI 顶部复选框）：渐开线花键（GB/T 3478.1 /
+//!   DIN 5480），几何全在 `invol_spline.rs` **共用引擎**；本体只负责视图组织 / 块名 / meta。
+//!   花键复用同一套「外/内」toggle（外花键/内花键）；内花键侧视/剖视是**缺模板依据的草案**
+//!   （见 `GearParams::spline_notes`）。ANSI B92.1 未实现（缺数据表，给 `std=ANSI` 明确报错）。
 
 use ocs_plugin_api::host::acadrust::entities::hatch::{
     BoundaryEdge, BoundaryPath, HatchPattern, HatchPatternLine, LineEdge,
@@ -36,6 +40,7 @@ use ocs_plugin_api::host::acadrust::types::{Color, LineWeight, Vector2, Vector3}
 use ocs_plugin_api::host::acadrust::EntityType;
 
 use crate::partgen::{GenPart, PartMeta, LAYER_CENTER, LAYER_MAIN, LAYER_THIN};
+use crate::partgen_kit::{hatch_ansi31_rings, HatchEdge};
 
 /// 剖面线层（与 partgen_more/partgen_kit 同一层名）。
 pub const LAYER_HATCH: &str = "5剖面线层";
@@ -83,10 +88,10 @@ impl GearKind {
     /// 解析种类名（命令行/HTTP 共用）。
     pub fn parse(s: &str) -> Option<Self> {
         match s.trim().to_ascii_lowercase().as_str() {
-            "int" | "internal" | "ring" | "内" | "内齿" | "内齿轮" | "齿圈" => {
+            "int" | "internal" | "ring" | "内" | "内齿" | "内齿轮" | "内花键" | "齿圈" => {
                 Some(GearKind::Internal)
             }
-            "ext" | "external" | "外" | "外齿" | "外齿轮" => Some(GearKind::External),
+            "ext" | "external" | "外" | "外齿" | "外齿轮" | "外花键" => Some(GearKind::External),
             _ => None,
         }
     }
@@ -95,7 +100,7 @@ impl GearKind {
 /// 齿轮几何参数（GUI / 命令行同一套）。
 #[derive(Debug, Clone, PartialEq)]
 pub struct GearParams {
-    /// 齿轮种类（外/内）
+    /// 齿轮种类（外/内）——花键模式下复用为**外花键/内花键**开关。
     pub kind: GearKind,
     /// 法向模数 m（GB/T 1357 优先系列；斜齿轮时是 **Mn**）
     pub m: f64,
@@ -105,14 +110,95 @@ pub struct GearParams {
     pub alpha_deg: f64,
     /// 齿顶高系数 ha*
     pub ha: f64,
-    /// 顶隙系数 c*
+    /// 顶隙系数 c*（仅齿轮模式；花键模式用 [`SplineOpts::hf_star`]）
     pub c: f64,
     /// 螺旋角 β（**度**，右旋为正、左旋为负；0 = 直齿）
     pub beta_deg: f64,
-    /// 齿轮厚度（轴向宽度）h
+    /// 齿轮厚度（轴向宽度）h；花键模式下 = 有效长度 L
     pub h: f64,
-    /// 变位系数 Xn
+    /// 变位系数 Xn（花键模式下 DIN 可用；GB 通常 0）
     pub x: f64,
+    /// **花键模式**（`Some` = 渐开线花键，`None` = 普通齿轮）。
+    /// 齿轮模式不允许标准号/基准直径；花键模式的 m/z/× 以 [`SplineOpts`] 里的 Optional 为准
+    /// （齿轮模式的 m/z 保持必给）。
+    pub spline: Option<SplineOpts>,
+}
+
+/// 花键模式参数（齿轮生成器「花键模式」复选框后面那组输入）。
+///
+/// * `std`：GB/T 3478.1-2008 / DIN 5480-1:2015（ANSI B92.1 预留，无数据表）；
+/// * `profile`：齿廓代号（空 = 标准默认）；
+/// * `d_b`：**DIN 主参数**（GB 给 d_B 直接报错）；
+/// * `m`/`z`/`x`：`None` = 未给（DIN 可由 `d_B` 查表/推导补全）；
+/// * 系数 `alpha_deg`/`ha_star`/`hf_star`/`rho_star`/`c_f_star`：`None` = 用预设，`Some` = 覆盖。
+#[derive(Debug, Clone, PartialEq)]
+pub struct SplineOpts {
+    /// 标准体系（GB/T 3478.1 / DIN 5480-1）。
+    pub std: crate::invol_spline::SplineStd,
+    /// 齿廓代号或中文齿廓名；空 = 标准默认齿廓。
+    pub profile: String,
+    /// DIN 5480 基准直径 d_B（主参数）。
+    pub d_b: Option<f64>,
+    /// 模数 m（`None` = 未给）。
+    pub m: Option<f64>,
+    /// 齿数 z（`None` = 未给）。
+    pub z: Option<u32>,
+    /// 变位系数 x（`None` = 0 / 由 d_B 定）。
+    pub x: Option<f64>,
+    /// 压力角覆盖（None = 预设）。
+    pub alpha_deg: Option<f64>,
+    /// 齿顶高系数覆盖。
+    pub ha_star: Option<f64>,
+    /// 齿根高系数覆盖。
+    pub hf_star: Option<f64>,
+    /// 齿根圆角系数覆盖。
+    pub rho_star: Option<f64>,
+    /// 齿形裕度系数覆盖。
+    pub c_f_star: Option<f64>,
+}
+
+impl Default for SplineOpts {
+    fn default() -> Self {
+        Self {
+            std: crate::invol_spline::SplineStd::GB,
+            profile: String::new(),
+            d_b: None,
+            m: None,
+            z: None,
+            x: None,
+            alpha_deg: None,
+            ha_star: None,
+            hf_star: None,
+            rho_star: None,
+            c_f_star: None,
+        }
+    }
+}
+
+impl SplineOpts {
+    /// 解析花键标准名：`GB` / `GB/T 3478.1` / `DIN` / `DIN 5480`（大小写/空格/斜杠不敏感）。
+    /// ANSI B92.1 返回特定错误（未实现，不静默）。
+    pub fn parse_std(s: &str) -> Result<crate::invol_spline::SplineStd, String> {
+        let t = s.trim().to_ascii_uppercase();
+        if t.contains("ANSI") || t.contains("B92") {
+            return Err(
+                "ANSI B92.1 尚未实现（缺 ANSI 预设/名义表数据）；当前可用 GB/T 3478.1 与 DIN 5480-1。"
+                    .to_string(),
+            );
+        }
+        let key: String = t.chars().filter(|c| c.is_ascii_alphanumeric()).collect();
+        match key.as_str() {
+            "GB" | "GBT3478" | "GBT34781" | "GB3478" | "GB34781" => {
+                Ok(crate::invol_spline::SplineStd::GB)
+            }
+            "DIN" | "DIN5480" | "DIN54801" | "DIN5480TEIL1" => {
+                Ok(crate::invol_spline::SplineStd::DIN)
+            }
+            _ => Err(format!(
+                "花键标准号无法识别：`{s}`（可用 GB / GB/T 3478.1 / DIN / DIN 5480）。"
+            )),
+        }
+    }
 }
 
 impl Default for GearParams {
@@ -128,6 +214,7 @@ impl Default for GearParams {
             beta_deg: 0.0,
             h: 20.0,
             x: 0.0,
+            spline: None,
         }
     }
 }
@@ -528,6 +615,159 @@ impl GearParams {
     }
 }
 
+// ─────────────────────── 花键模式（OCSMGEAR「花键」复选框） ───────────────────────
+
+impl GearParams {
+    /// 是否花键模式。
+    pub fn is_spline(&self) -> bool {
+        self.spline.is_some()
+    }
+
+    /// 花键模式下 kind 的中文名（外花键/内花键）。
+    pub fn spline_kind_label(&self) -> &'static str {
+        if self.kind.is_internal() {
+            "内花键"
+        } else {
+            "外花键"
+        }
+    }
+
+    /// 花键参数 → 引擎 [`crate::invol_spline::InvolParams`]（齿轮模式调用会报错）。
+    ///
+    /// 齿轮模式给标准号/`d_B` 已在解析层拦；花键模式：`d_B` 交给引擎（只有 DIN 有），
+    /// 预设系数可逐个覆盖，最后套内/外花键并整体校验。
+    pub fn spline_engine(
+        &self,
+    ) -> Result<
+        (
+            crate::invol_spline::InvolParams,
+            Option<crate::invol_spline::D_bOrigin>,
+        ),
+        String,
+    > {
+        let s = self
+            .spline
+            .as_ref()
+            .ok_or_else(|| "齿轮模式不是花键（请先勾选「花键模式」再给标准号/d_B）。".to_string())?;
+        if self.beta_deg.abs() > 1e-9 {
+            return Err(format!(
+                "渐开线花键为直齿（β 必须为 0）；收到 β={}°。",
+                trim(self.beta_deg)
+            ));
+        }
+        if !(self.h.is_finite() && self.h > 0.0) {
+            return Err("花键厚度/有效长度 h 必须是正数。".to_string());
+        }
+        let (mut p, origin) = crate::invol_spline::resolve_spline(
+            s.std,
+            &s.profile,
+            s.d_b,
+            s.m,
+            s.z,
+            s.x,
+        )?;
+        if s.alpha_deg.is_some()
+            || s.ha_star.is_some()
+            || s.hf_star.is_some()
+            || s.rho_star.is_some()
+            || s.c_f_star.is_some()
+        {
+            let (a0, ha0, hf0, rho0, cf0) = (
+                p.alpha_deg,
+                p.ha_star,
+                p.hf_star,
+                p.rho_star,
+                p.c_f_star,
+            );
+            p = p
+                .with_alpha_deg(s.alpha_deg.unwrap_or(a0))
+                .with_coeffs(
+                    s.ha_star.unwrap_or(ha0),
+                    s.hf_star.unwrap_or(hf0),
+                    s.rho_star.unwrap_or(rho0),
+                    s.c_f_star.unwrap_or(cf0),
+                );
+        }
+        p = p.with_internal(self.kind.is_internal());
+        p.validate().map_err(|e| format!("{e}"))?;
+        Ok((p, origin))
+    }
+
+    /// 花键规格文本（引擎 `spec` + `L` + d_B 来源）。
+    pub fn spline_spec(
+        &self,
+        p: &crate::invol_spline::InvolParams,
+        origin: Option<&crate::invol_spline::D_bOrigin>,
+    ) -> String {
+        let mut s = p.spec();
+        s.push_str(&format!(" L{}", trim(self.h)));
+        if let Some(o) = origin {
+            s.push_str(&format!("（{}）", o.note()));
+        }
+        s
+    }
+
+    /// 花键块名：`OCSM_SPLINE[_INT]_<标准>_<齿廓>_M<m>_Z<z>[_X<x>][_DB<d_B>]_H<h>_<VIEW>`。
+    pub fn spline_block_name(
+        &self,
+        p: &crate::invol_spline::InvolParams,
+        view: GearView,
+    ) -> String {
+        let mut s = String::from("OCSM_SPLINE");
+        if self.kind.is_internal() {
+            s.push_str("_INT");
+        }
+        s.push_str(&format!("_{}", p.std.label()));
+        if let Some(code) = crate::invol_spline::preset_code(p.std, p.profile) {
+            s.push_str(&format!("_{code}"));
+        }
+        s.push_str(&format!("_M{}_Z{}", trim(p.m).replace('.', "_"), p.z));
+        if p.x.abs() > 1e-9 {
+            s.push_str(&format!(
+                "_X{}{}",
+                if p.x < 0.0 { "N" } else { "" },
+                trim(p.x.abs()).replace('.', "_")
+            ));
+        }
+        if let Some(d_b) = p.d_b {
+            s.push_str(&format!("_DB{}", trim(d_b).replace('.', "_")));
+        }
+        s.push_str(&format!("_H{}", trim(self.h).replace('.', "_")));
+        s.push('_');
+        s.push_str(&view.key().to_ascii_uppercase());
+        s.chars()
+            .map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' { c } else { '_' })
+            .collect()
+    }
+
+    /// 花键提示（不阻断；内花键缺模板/齿顶低于基圆/GB 变位等）。
+    pub fn spline_notes(&self, p: &crate::invol_spline::InvolParams) -> Vec<String> {
+        let mut v = Vec::new();
+        if p.internal {
+            v.push(
+                "内花键：齿朝内、材料在外。**侧视/剖视画法缺模板依据**（当前是草案：外侧齿根线 + \
+                 里侧齿顶线 + 剖面线两环，齿圈外壁留你按实际结构延伸）；请提供内花键模板以替换草案。"
+                    .to_string(),
+            );
+            if p.internal_tip_radius() < p.db() / 2.0 - 1e-9 {
+                v.push(format!(
+                    "内花键小径 D_ii={} 低于基圆 db={}：真实齿顶由插齿/拉刀包络（非渐开线），\
+                     草案按「渐开线到基圆 → 径向直线到齿顶」简化。",
+                    trim(p.internal_minor_dia()),
+                    trim(p.db())
+                ));
+            }
+        }
+        if p.std == crate::invol_spline::SplineStd::GB && p.x.abs() > 1e-9 {
+            v.push(format!(
+                "GB/T 3478 基本齿廓不含变位；当前按 x={} 计入几何（公式与 DIN 同式）。",
+                trim(p.x)
+            ));
+        }
+        v
+    }
+}
+
 /// 渐开线展角函数 inv α = tanα − α。
 fn inv(a: f64) -> f64 {
     a.tan() - a
@@ -597,6 +837,24 @@ impl GearView {
             (GearKind::Internal, GearView::Section) => "剖视图（齿圈内齿不剖）",
             (GearKind::Internal, GearView::Front) => "端视图",
             _ => self.label(),
+        }
+    }
+
+    /// 花键模式可用视图：端视图 / 侧视图 / 剖视图。
+    ///
+    /// 花键不是齿轮：没有分度圆简化正视图这一说（外花键简化正视图无画法依据，不做）。
+    /// 内花键的侧视/剖视**是缺模板依据的草案**（与大径/小径两条轮廓 + 剖面线两环同口径）。
+    pub fn available_for_spline(self) -> bool {
+        !matches!(self, GearView::Simplified)
+    }
+
+    /// 花键下的视图名（外/内花键都用同一套；剖视/侧视为轴向轮廓）。
+    pub fn label_for_spline(self) -> &'static str {
+        match self {
+            GearView::Front => "端视图",
+            GearView::Side => "侧视图",
+            GearView::Section => "剖视图",
+            GearView::Simplified => "简化正视图",
         }
     }
 
@@ -1769,6 +2027,9 @@ pub fn ocsm_ready(doc: &ocs_plugin_api::host::acadrust::CadDocument) -> Result<(
 /// `n` = 视图比例系数（图框 `比例` 属性，1:2 → 2.0）：只影响中心线/螺旋线的伸出与间距，
 /// 不影响齿轮本身尺寸（齿轮始终按真实尺寸画，图框负责比例）。
 pub fn generate(p: &GearParams, view: GearView, n: f64) -> Result<GenPart, String> {
+    if p.is_spline() {
+        return generate_spline(p, view, n);
+    }
     p.validate()?;
     if !view.available_for(p.kind) {
         return Err(format!(
@@ -1806,6 +2067,68 @@ pub fn generate(p: &GearParams, view: GearView, n: f64) -> Result<GenPart, Strin
             } else {
                 solid_weight_kg(p)
             },
+        },
+        bbox,
+    })
+}
+
+/// 花键模式的剖面线：外花键 = 轴线↔齿根圆两环（齿部按不剖）；内花键 = 齿顶圆↔齿根圆两环
+/// （材料在外侧；齿圈外壁留用户延伸，同内齿轮剖视口径）。x 跨度 = 有效长度 L。
+fn spline_section_hatch(p: &crate::invol_spline::InvolParams, len: f64) -> EntityType {
+    let (r_in, r_out) = if p.internal {
+        (p.internal_tip_radius(), p.internal_root_radius())
+    } else {
+        (0.0, p.df() / 2.0)
+    };
+    let upper = vec![
+        HatchEdge::Line { a: [0.0, r_in], b: [len, r_in] },
+        HatchEdge::Line { a: [len, r_in], b: [len, r_out] },
+        HatchEdge::Line { a: [len, r_out], b: [0.0, r_out] },
+        HatchEdge::Line { a: [0.0, r_out], b: [0.0, r_in] },
+    ];
+    let lower = vec![
+        HatchEdge::Line { a: [0.0, -r_in], b: [0.0, -r_out] },
+        HatchEdge::Line { a: [0.0, -r_out], b: [len, -r_out] },
+        HatchEdge::Line { a: [len, -r_out], b: [len, -r_in] },
+        HatchEdge::Line { a: [len, -r_in], b: [0.0, -r_in] },
+    ];
+    hatch_ansi31_rings(&[upper, lower], 0.0, 1.0)
+}
+
+/// **花键模式出图**（齿轮生成器入口）：几何全在 `invol_spline.rs`，这里只组织视图/meta/块名。
+///
+/// 视图：`端视图` = 真实渐开线端面齿廓（内/外花键各自几何）；`侧视图`/`剖视图` = 轴向轮廓
+/// （内花键为草案，见 [`GearParams::spline_notes`]）；`简化正视图` 无花键画法，不提供。
+fn generate_spline(p: &GearParams, view: GearView, n: f64) -> Result<GenPart, String> {
+    let (engine, origin) = p.spline_engine()?;
+    if !view.available_for_spline() {
+        return Err(format!(
+            "花键不提供「{}」视图 —— 花键只有 端视图 / 侧视图 / 剖视图 三个视图（端视图=真实渐开线齿廓；\
+             侧视/剖视=轴向轮廓，内花键为缺模板依据的草案）。",
+            view.label()
+        ));
+    }
+    let len = p.h;
+    let entities = match view {
+        GearView::Front => engine.front_view()?,
+        GearView::Side => engine.side_view(len),
+        GearView::Section => {
+            let mut v = engine.section_view(len);
+            v.push(spline_section_hatch(&engine, len));
+            v
+        }
+        _ => unreachable!("available_for_spline 已拦住"),
+    };
+    let _ = n; // 花键剖面线比例固定 1.0（不随图框比例缩，与轴段/结构要素同口径）
+    let bbox = bbox_of(&entities);
+    Ok(GenPart {
+        entities,
+        meta: PartMeta {
+            code: engine.std.code().into(),
+            name: format!("{}（{}）", p.spline_kind_label(), view.label_for_spline()),
+            spec: p.spline_spec(&engine, origin.as_ref()),
+            material: String::new(),
+            weight: String::new(),
         },
         bbox,
     })
@@ -1921,6 +2244,40 @@ fn bbox_of(entities: &[EntityType]) -> [f64; 4] {
 /// 块名：`OCSM_GEAR_M2_Z40_H20_FRONT`（与标准件 `OCSM_<族>_<规格>_<视图>` 同风格）。
 /// 斜齿轮加 `_B<|β|>R|L`（右/左旋），变位加 `_X<Xn>`（负值用 `N` 前缀）。
 pub fn block_name(p: &GearParams, view: GearView) -> String {
+    if p.is_spline() {
+        // 参数给全时用引擎算出的 m/z/x/d_B（与 spline_block_name 同名）；
+        // 参数未给全（GUI 渐进输入/预览）时用选项占位，保证同参数稳定同名。
+        if let Ok((engine, _)) = p.spline_engine() {
+            return p.spline_block_name(&engine, view);
+        }
+        let s = p.spline.as_ref().unwrap();
+        let mut name = String::from("OCSM_SPLINE");
+        if p.kind.is_internal() {
+            name.push_str("_INT");
+        }
+        name.push_str(&format!("_{}", s.std.label()));
+        if !s.profile.trim().is_empty() {
+            name.push_str(&format!("_{}", s.profile.trim()));
+        }
+        if let Some(d_b) = s.d_b {
+            name.push_str(&format!("_DB{}", trim(d_b).replace('.', "_")));
+        }
+        name.push_str(&format!("_M{}_Z{}", trim(p.m).replace('.', "_"), p.z));
+        if p.x.abs() > 1e-9 {
+            name.push_str(&format!(
+                "_X{}{}",
+                if p.x < 0.0 { "N" } else { "" },
+                trim(p.x.abs()).replace('.', "_")
+            ));
+        }
+        name.push_str(&format!("_H{}", trim(p.h).replace('.', "_")));
+        name.push('_');
+        name.push_str(&view.key().to_ascii_uppercase());
+        return name
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' { c } else { '_' })
+            .collect();
+    }
     let mut s = String::from("OCSM_GEAR");
     if p.kind.is_internal() {
         s.push_str("_INT"); // 内齿轮标记；外齿轮块名保持一期原样不变
@@ -1952,7 +2309,20 @@ pub fn block_name(p: &GearParams, view: GearView) -> String {
         .collect()
 }
 
+/// 花键模式没显式给标准号时的推断：齿廓代号自带标准（GB30R→GB、DIN30→DIN）；
+/// 给了 `d_B` 只能走 DIN；否则 GB（默认）。
+pub fn default_spline_std(profile: &str, d_b: Option<f64>) -> crate::invol_spline::SplineStd {
+    if let Some((std, _)) = crate::invol_spline::parse_preset_token(profile) {
+        return std;
+    }
+    if d_b.is_some() {
+        return crate::invol_spline::SplineStd::DIN;
+    }
+    crate::invol_spline::SplineStd::GB
+}
+
 /// 解析命令行参数：`<m> <z> [h=..|alpha=..|ha=..|c=..|beta=..|x=..] [view 名] [at x,y] [rot 度]`
+#[derive(Debug)]
 pub struct GearRequest {
     pub params: GearParams,
     pub view: GearView,
@@ -1964,6 +2334,8 @@ pub struct GearRequest {
 pub fn parse_request(raw: &str) -> Result<GearRequest, String> {
     let usage = "用法：OCSMGEAR [内齿轮|int] <模数m> <齿数z> [h=齿宽] [ha=齿顶高系数] [c=顶隙系数] [alpha=压力角(°,默认20) 或 α25] [beta=螺旋角(右旋为正)] [x=变位系数] \
                  [view 剖视图|侧视图|简化正视图|常规正视图|端视图] [at x,y] [rot 度]。\n\
+                 花键模式：`OCSMGEAR 花键 [内花键] [std=GB|DIN] [profile=GB30R] [db=40] [hf=0.9] [rho=0.4] [cf=0.1] <m> <z> [x=..] [h=..] [view 端视图|侧视图|剖视图]`；\
+                 花键参数也可用预设代号（GB30P/GB30R/GB375R/GB45R/DIN30）代替 std+profile。\n\
                  不带参数则打开齿轮窗口。内齿轮（齿圈）目前只有 剖视图 + 端视图（模板只有这两个）；\
                  剖视图不画齿圈外壁与剖面线，由用户/AI 按实际齿圈结构延伸。";
     let toks: Vec<&str> = raw.split_whitespace().collect();
@@ -1977,6 +2349,30 @@ pub fn parse_request(raw: &str) -> Result<GearRequest, String> {
     let mut rotation = 0.0;
     let mut positional = 0usize;
     let mut i = 0usize;
+    // 花键模式（`花键`/`mode=spline`）与花键专用输入；提供给/未提供分清楚：
+    // `d_B + m` 与 `d_B + z` 两种给法靠“没给的那个是 None”区分。
+    let mut spline_on = false;
+    let mut sp_std: Option<crate::invol_spline::SplineStd> = None;
+    let mut sp_profile = String::new();
+    let mut sp_d_b: Option<f64> = None;
+    let mut sp_hf: Option<f64> = None;
+    let mut sp_rho: Option<f64> = None;
+    let mut sp_cf: Option<f64> = None;
+    let mut m_given = false;
+    let mut z_given = false;
+    let mut alpha_given = false;
+    let mut ha_given = false;
+    let mut x_given = false;
+    // 花键模式识别：预设代号（GB30R 等）或裸 `GB`/`DIN`
+    let mut spline_spec_token = |tok: &str, spline_on: &mut bool, sp_std: &mut Option<crate::invol_spline::SplineStd>, sp_profile: &mut String| {
+        if let Some((std, profile)) = crate::invol_spline::parse_preset_token(tok) {
+            *spline_on = true;
+            *sp_std = Some(std);
+            *sp_profile = profile.to_string();
+            return true;
+        }
+        false
+    };
     while i < toks.len() {
         let t = toks[i];
         let (key, val) = t.split_once('=').map(|(a, b)| (a, Some(b))).unwrap_or((t, None));
@@ -1993,12 +2389,14 @@ pub fn parse_request(raw: &str) -> Result<GearRequest, String> {
         match key.to_ascii_lowercase().as_str() {
             "m" | "模数" => {
                 p.m = num("m", val)?;
+                m_given = true;
             }
             "z" | "齿数" => {
                 let v = num("z", val)?;
                 p.z = v.round() as u32;
+                z_given = true;
             }
-            "kind" | "type" | "种类" | "类型" => {
+            "mode" | "模式" => {
                 let v = match val {
                     Some(v) => v.to_string(),
                     None => {
@@ -2006,19 +2404,66 @@ pub fn parse_request(raw: &str) -> Result<GearRequest, String> {
                         toks.get(i).map(|s| s.to_string()).unwrap_or_default()
                     }
                 };
-                p.kind = GearKind::parse(&v).ok_or_else(|| {
-                    format!("种类无法识别：`{}`。可用 internal|内齿轮、external|外齿轮。", v)
-                })?;
+                let lv = v.trim().to_ascii_lowercase();
+                if matches!(lv.as_str(), "spline" | "花键" | "invol" | "involute") {
+                    spline_on = true;
+                } else if matches!(lv.as_str(), "gear" | "齿轮") {
+                    spline_on = false;
+                } else {
+                    return Err(format!("模式无法识别：`{v}`（可用 gear|齿轮、spline|花键）。"));
+                }
+            }
+            "std" | "standard" | "标准" | "标准号" => {
+                let v = match val {
+                    Some(v) => v.to_string(),
+                    None => {
+                        i += 1;
+                        toks.get(i).map(|s| s.to_string()).unwrap_or_default()
+                    }
+                };
+                sp_std = Some(SplineOpts::parse_std(&v)?);
+                // 不自动切花键模式：模式由 `花键`/`mode=spline` 显式开（齿轮模式给标准号要报错）。
+            }
+            "profile" | "齿廓" | "齿廓类型" => {
+                let v = match val {
+                    Some(v) => v.to_string(),
+                    None => {
+                        i += 1;
+                        toks.get(i).map(|s| s.to_string()).unwrap_or_default()
+                    }
+                };
+                sp_profile = v;
+            }
+            "db" | "d_b" | "基准直径" => {
+                sp_d_b = Some(num("db", val)?);
+            }
+            "hf" | "hf*" | "齿根高" => {
+                sp_hf = Some(num("hf", val)?);
+            }
+            "rho" | "ρf" | "ρf*" | "齿根圆角" => {
+                sp_rho = Some(num("rho", val)?);
+            }
+            "cf" | "cf*" | "齿形裕度" => {
+                sp_cf = Some(num("cf", val)?);
             }
             "h" | "厚度" => {
                 p.h = num("h", val)?;
                 h_given = true;
             }
-            "alpha" | "α" | "压力角" => p.alpha_deg = num("alpha", val)?,
-            "ha" | "ha*" => p.ha = num("ha", val)?,
+            "alpha" | "α" | "压力角" => {
+                p.alpha_deg = num("alpha", val)?;
+                alpha_given = true;
+            }
+            "ha" | "ha*" => {
+                p.ha = num("ha", val)?;
+                ha_given = true;
+            }
             "c" | "c*" | "顶隙" => p.c = num("c", val)?,
             "beta" | "β" | "螺旋角" => p.beta_deg = num("beta", val)?,
-            "x" | "xn" | "变位" => p.x = num("x", val)?,
+            "x" | "xn" | "变位" => {
+                p.x = num("x", val)?;
+                x_given = true;
+            }
             "view" | "视图" => {
                 // 支持 `view=front`、`view front`、`view=剖视图`
                 let name = match val {
@@ -2061,6 +2506,18 @@ pub fn parse_request(raw: &str) -> Result<GearRequest, String> {
                 at = Some([x, y]);
             }
             "rot" | "角度" => rotation = num("rot", val)?,
+            "kind" | "type" | "种类" | "类型" => {
+                let v = match val {
+                    Some(v) => v.to_string(),
+                    None => {
+                        i += 1;
+                        toks.get(i).map(|s| s.to_string()).unwrap_or_default()
+                    }
+                };
+                p.kind = GearKind::parse(&v).ok_or_else(|| {
+                    format!("种类无法识别：`{}`。可用 internal|内齿轮（花键模式下 = 内花键）、external|外齿轮。", v)
+                })?;
+            }
             other => {
                 // `α25` / `alpha25` 这类紧凑写法（压力角；`α=25`/`alpha=25` 走上面的匹配臂）
                 let lower = other.to_ascii_lowercase();
@@ -2088,12 +2545,38 @@ pub fn parse_request(raw: &str) -> Result<GearRequest, String> {
                     i += 1;
                     continue;
                 }
+                // 花键模式开关键字 / 标准名 / 预设代号（`花键`、`spline`、`GB`、`DIN`、`GB30R`、`DIN30`）
+                let lower_tok = other.to_ascii_lowercase();
+                if matches!(lower_tok.as_str(), "spline" | "花键" | "invol" | "involute") {
+                    spline_on = true;
+                    i += 1;
+                    continue;
+                }
+                if lower_tok.contains("ansi") || lower_tok.contains("b92") {
+                    return Err(SplineOpts::parse_std(other).unwrap_err());
+                }
+                if matches!(lower_tok.as_str(), "gb" | "din") {
+                    sp_std = Some(SplineOpts::parse_std(other)?);
+                    spline_on = true;
+                    i += 1;
+                    continue;
+                }
+                if spline_spec_token(other, &mut spline_on, &mut sp_std, &mut sp_profile) {
+                    i += 1;
+                    continue;
+                }
                 let v = other
                     .parse::<f64>()
                     .map_err(|_| format!("无法识别的参数 `{}`。\n{}", other, usage))?;
                 match positional {
-                    0 => p.m = v,
-                    1 => p.z = v.round() as u32,
+                    0 => {
+                        p.m = v;
+                        m_given = true;
+                    }
+                    1 => {
+                        p.z = v.round() as u32;
+                        z_given = true;
+                    }
                     2 => {
                         p.h = v;
                         h_given = true;
@@ -2107,6 +2590,41 @@ pub fn parse_request(raw: &str) -> Result<GearRequest, String> {
     }
     if positional < 2 && (raw.contains("m=") || raw.contains("z=")) == false && toks.len() < 2 {
         return Err(format!("至少要给模数 m 和齿数 z（例如 `OCSMGEAR 2 40 20`）。\n{}", usage));
+    }
+    if spline_on {
+        if sp_std.is_none() && sp_profile.is_empty() {
+            // 只写了 `花键` 没写标准/代号：默认 GB 默认齿廓（与 GUI 一致）。
+            sp_std = Some(crate::invol_spline::SplineStd::GB);
+        }
+        let std = sp_std.unwrap_or_else(|| default_spline_std(&sp_profile, sp_d_b));
+        let opts = SplineOpts {
+            std,
+            profile: sp_profile,
+            d_b: sp_d_b,
+            m: m_given.then_some(p.m),
+            z: z_given.then_some(p.z),
+            x: x_given.then_some(p.x),
+            alpha_deg: alpha_given.then_some(p.alpha_deg),
+            ha_star: ha_given.then_some(p.ha),
+            hf_star: sp_hf,
+            rho_star: sp_rho,
+            c_f_star: sp_cf,
+        };
+        p.spline = Some(opts);
+        // 花键模式下 `c`/`beta` 不参与几何；β 由 spline_engine 报错拦截。
+    } else {
+        if sp_std.is_some() {
+            return Err(gear_mode_std_error());
+        }
+        if sp_d_b.is_some() {
+            return Err(gear_mode_db_error());
+        }
+        if !sp_profile.is_empty() || sp_hf.is_some() || sp_rho.is_some() || sp_cf.is_some() {
+            return Err(
+                "齿轮模式不认花键参数（齿廓/hf/ρf/cf）；要用花键请在窗口勾选「花键模式」（命令行加 `花键`）。"
+                    .to_string(),
+            );
+        }
     }
     if !h_given {
         // 模板里 h 是用户给的：外齿轮模板 h=20（m=2，即 10m）、内齿轮模板 h=30（m=2，即 15m）
@@ -2124,6 +2642,10 @@ pub fn parse_request(raw: &str) -> Result<GearRequest, String> {
                 break;
             }
         }
+    }
+    // 花键模式：入口就把 d_B/GB/系数/查表问题拦出来（不拖到出图阶段）。
+    if p.is_spline() {
+        p.spline_engine()?;
     }
     Ok(GearRequest {
         params: p,
@@ -2152,34 +2674,112 @@ pub fn params_from_query(query: &str) -> Result<(GearParams, GearView, f64), Str
             .map(|(_, v)| v.to_string())
     };
     let f = |k: &str, d: f64| get(k).and_then(|v| v.parse::<f64>().ok()).unwrap_or(d);
+    let opt_f = |k: &str| get(k).and_then(|v| v.trim().parse::<f64>().ok());
     let kind = match get("kind") {
         Some(v) => GearKind::parse(&v)
             .ok_or_else(|| format!("kind 无法识别：`{}`（可用 internal|内齿轮、external|外齿轮）。", v))?,
         None => GearKind::External,
     };
-    let m = f("m", 2.0);
-    let p = GearParams {
-        kind,
-        m,
-        z: f("z", 40.0).round() as u32,
-        alpha_deg: f("alpha", ALPHA_N_DEG),
-        ha: f("ha", 1.0),
-        c: f("c", 0.25),
-        beta_deg: f("beta", 0.0),
-        h: f("h", if kind.is_internal() { 15.0 * m } else { 20.0 }),
-        x: f("x", 0.0),
-    };
     let view = GearView::parse(&get("view").unwrap_or_else(|| "section".into()))?;
-    Ok((p, view, f("n", 1.0)))
+    let n = f("n", 1.0);
+    let mode = get("mode").unwrap_or_default();
+    let is_spline = matches!(
+        mode.trim().to_ascii_lowercase().as_str(),
+        "spline" | "花键" | "invol" | "involute"
+    );
+    let p = if is_spline {
+        let std = match get("std") {
+            Some(v) if !v.trim().is_empty() => SplineOpts::parse_std(&v)?,
+            _ => default_spline_std(&get("profile").unwrap_or_default(), opt_f("db").or_else(|| opt_f("d_b"))),
+        };
+        let opts = SplineOpts {
+            std,
+            profile: get("profile").unwrap_or_default(),
+            d_b: opt_f("db").or_else(|| opt_f("d_b")),
+            m: opt_f("m"),
+            z: opt_f("z").map(|v| v.round() as u32),
+            x: opt_f("x"),
+            alpha_deg: opt_f("alpha"),
+            ha_star: opt_f("ha"),
+            hf_star: opt_f("hf"),
+            rho_star: opt_f("rho"),
+            c_f_star: opt_f("cf"),
+        };
+        let m = opts.m.unwrap_or(2.0);
+        GearParams {
+            kind,
+            m,
+            z: opts.z.unwrap_or(40),
+            alpha_deg: opts.alpha_deg.unwrap_or(ALPHA_N_DEG),
+            ha: opts.ha_star.unwrap_or(1.0),
+            c: 0.25,
+            beta_deg: f("beta", 0.0),
+            h: f("h", 10.0 * m),
+            x: opts.x.unwrap_or(0.0),
+            spline: Some(opts),
+        }
+    } else {
+        if get("std").is_some_and(|v| !v.trim().is_empty()) {
+            return Err(gear_mode_std_error());
+        }
+        if get("db").is_some() || get("d_b").is_some() {
+            return Err(gear_mode_db_error());
+        }
+        if get("profile").is_some()
+            || get("hf").is_some()
+            || get("rho").is_some()
+            || get("cf").is_some()
+        {
+            return Err(
+                "齿轮模式不认花键参数（齿廓/hf/ρf/cf）；要用花键请勾选「花键模式」。".to_string(),
+            );
+        }
+        let m = f("m", 2.0);
+        GearParams {
+            kind,
+            m,
+            z: f("z", 40.0).round() as u32,
+            alpha_deg: f("alpha", ALPHA_N_DEG),
+            ha: f("ha", 1.0),
+            c: f("c", 0.25),
+            beta_deg: f("beta", 0.0),
+            h: f("h", if kind.is_internal() { 15.0 * m } else { 20.0 }),
+            x: f("x", 0.0),
+            spline: None,
+        }
+    };
+    // 花键模式：在查询解析阶段就把 `d_B`/GB/系数问题拦出来（报错文案与出图/信息行一致）。
+    if is_spline {
+        p.spline_engine()?;
+    }
+    Ok((p, view, n))
 }
 
-/// `/api/gear_info`：派生尺寸 + 提示（GUI 信息行用）。
+/// 齿轮模式给标准号的报错（不静默忽略；与花键模式 `std` 区分开）。
+pub fn gear_mode_std_error() -> String {
+    "齿轮模式不认标准号（GB/T 3478.1 / DIN 5480 是**花键**体系）；要用花键请在窗口勾选「花键模式」\
+     （命令行加 `花键` 或 `mode=spline`）。"
+        .to_string()
+}
+
+/// 齿轮模式给 `d_B` 的报错（沿用 GB 口径：d_B 是 DIN 5480 花键的概念）。
+pub fn gear_mode_db_error() -> String {
+    "齿轮模式不认基准直径 d_B（基准直径 d_B 是 DIN 5480 花键的概念）；要用花键请在窗口勾选「花键模式」\
+     （命令行加 `花键` 或 `mode=spline`）。"
+        .to_string()
+}
+
+/// `/api/gear_info`：派生尺寸 + 提示（GUI 信息行用）。花键模式走 [`spline_info_json`]。
 pub fn info_json(query: &str) -> Result<String, String> {
     let (p, view, _) = params_from_query(query)?;
+    if p.is_spline() {
+        return spline_info_json(&p, view);
+    }
     let err = p.validate().err();
     Ok(serde_json::json!({
         "ok": err.is_none(),
         "error": err,
+        "mode": "gear",
         "kind": p.kind.key(),
         "kind_label": p.kind.label(),
         "view": view.key(),
@@ -2201,6 +2801,70 @@ pub fn info_json(query: &str) -> Result<String, String> {
         "block": block_name(&p, view),
         "spec": p.spec(),
         "notes": p.notes(),
+    })
+    .to_string())
+}
+
+/// 花键模式的 `/api/gear_info`：引擎派生值 + d_B 来源 + 提示。失败也返回 JSON（GUI 显示红字）。
+fn spline_info_json(p: &GearParams, view: GearView) -> Result<String, String> {
+    let (engine, origin) = match p.spline_engine() {
+        Ok(v) => v,
+        Err(e) => {
+            return Ok(serde_json::json!({
+                "ok": false,
+                "error": e,
+                "mode": "spline",
+                "kind": p.kind.key(),
+                "kind_label": p.spline_kind_label(),
+                "view": view.key(),
+                "view_label": view.label_for_spline(),
+            })
+            .to_string())
+        }
+    };
+    let (da, df) = if engine.internal {
+        (engine.internal_major_dia(), engine.internal_minor_dia())
+    } else {
+        (engine.da(), engine.df())
+    };
+    // DIN 花键：能算就算检验尺寸（M2 = 内花键棒间距）——不阻断 info，仅作附加信息。
+    let inspection = if engine.std == crate::invol_spline::SplineStd::DIN {
+        engine
+            .d_b
+            .and_then(|db| crate::invol_spline::inspection_query(db, engine.m, engine.z).ok())
+            .map(|r| crate::invol_spline::inspection_summary(&r))
+    } else {
+        None
+    };
+    Ok(serde_json::json!({
+        "ok": true,
+        "error": null,
+        "mode": "spline",
+        "kind": p.kind.key(),
+        "kind_label": p.spline_kind_label(),
+        "view": view.key(),
+        "view_label": view.label_for_spline(),
+        "std": engine.std.label(),
+        "std_code": engine.std.code(),
+        "profile": engine.profile,
+        "m": engine.m,
+        "z": engine.z,
+        "x": round4(engine.x),
+        "alpha": round4(engine.alpha_deg),
+        "d": round4(engine.d()),
+        "db": round4(engine.db()),
+        "da": round4(da),
+        "df": round4(df),
+        "d_b": engine.d_b.map(round4),
+        "origin": origin.as_ref().map(|o| o.note()),
+        "rho": round4(engine.rho_f()),
+        "cf": round4(engine.c_f()),
+        "internal_major": round4(engine.internal_major_dia()),
+        "internal_minor": round4(engine.internal_minor_dia()),
+        "inspection": inspection,
+        "block": p.spline_block_name(&engine, view),
+        "spec": p.spline_spec(&engine, origin.as_ref()),
+        "notes": p.spline_notes(&engine),
     })
     .to_string())
 }
@@ -2383,6 +3047,7 @@ mod tests {
             beta_deg: 0.0,
             h: 20.0,
             x: 0.0,
+            spline: None,
         }
     }
 
@@ -2968,10 +3633,10 @@ mod tests {
     fn block_name_is_sanitized_and_stable() {
         let p = tmpl();
         assert_eq!(block_name(&p, GearView::Front), "OCSM_GEAR_M2_Z40_H20_FRONT");
-        let h = GearParams { beta_deg: -8.5, x: 0.3, ..p };
+        let h = GearParams { beta_deg: -8.5, x: 0.3, ..p.clone() };
         let nm = block_name(&h, GearView::Side);
         assert_eq!(nm, "OCSM_GEAR_M2_Z40_B8_5L_X0_3_H20_SIDE", "{}", nm);
-        let h2 = GearParams { beta_deg: 8.0, x: -0.25, ..p };
+        let h2 = GearParams { beta_deg: 8.0, x: -0.25, ..p.clone() };
         assert_eq!(
             block_name(&h2, GearView::Front),
             "OCSM_GEAR_M2_Z40_B8R_XN0_25_H20_FRONT"
@@ -3607,5 +4272,210 @@ mod tests {
         assert!(j.contains("\"kind\":\"internal\""), "{j}");
         assert!(j.contains("\"da\":76"), "{j}");
         assert!(j.contains("\"df\":85"), "{j}");
+    }
+
+    // ─────────────────────── 花键模式（齿轮侧入口） ───────────────────────
+
+    /// 花键模式参数骨架。
+    fn spline_tmpl(std: crate::invol_spline::SplineStd) -> GearParams {
+        GearParams {
+            kind: GearKind::External,
+            m: 3.0,
+            z: 20,
+            h: 30.0,
+            spline: Some(SplineOpts { std, ..SplineOpts::default() }),
+            ..GearParams::default()
+        }
+    }
+
+    /// GB 下 `d_B` 必须报统一文案（齿轮花键模式、CLI、查询串）；齿轮模式给标准号/d_B 也报错。
+    #[test]
+    fn spline_mode_gb_rejects_d_b_and_gear_mode_rejects_spline_input() {
+        // GB + d_B（走引擎）
+        let mut p = spline_tmpl(crate::invol_spline::SplineStd::GB);
+        if let Some(s) = p.spline.as_mut() {
+            s.d_b = Some(40.0);
+            s.m = Some(3.0);
+            s.z = Some(20);
+        }
+        let e = p.spline_engine().unwrap_err();
+        assert_eq!(e, crate::invol_spline::GB_D_B_MSG, "{e}");
+        // GB + d_B（查询串）
+        let e = params_from_query("mode=spline&std=GB&db=40&m=3&z=20").unwrap_err();
+        assert_eq!(e, crate::invol_spline::GB_D_B_MSG, "{e}");
+        // 齿轮模式给标准号/d_B → 明确报错（不静默忽略）
+        let e = parse_request("2 40 20 std=DIN").unwrap_err();
+        assert!(e.contains("齿轮模式不认标准号"), "{e}");
+        let e = parse_request("2 40 20 db=40").unwrap_err();
+        assert!(e.contains("齿轮模式不认基准直径"), "{e}");
+        let e = params_from_query("m=2&z=40&std=DIN").unwrap_err();
+        assert!(e.contains("齿轮模式不认标准号"), "{e}");
+        let e = params_from_query("m=2&z=40&db=40").unwrap_err();
+        assert!(e.contains("齿轮模式不认基准直径"), "{e}");
+        // ANSI 预留：明确未实现
+        let e = params_from_query("mode=spline&std=ANSI&m=3&z=20").unwrap_err();
+        assert!(e.contains("ANSI") && e.contains("尚未实现"), "{e}");
+    }
+
+    /// DIN 三种给法与“以 d_B 为准”：引擎已在 invol_spline 侧锁住，这里锁齿轮桥接与 meta。
+    #[test]
+    fn spline_mode_din_three_ways_and_adjust_note() {
+        let mk = |f: &dyn Fn(&mut SplineOpts)| {
+            let mut p = spline_tmpl(crate::invol_spline::SplineStd::DIN);
+            f(p.spline.as_mut().unwrap());
+            p
+        };
+        // d_B + m → 查表补 z=18、x=0.45（表值）
+        let p = mk(&|s| {
+            s.profile = "DIN30".into();
+            s.d_b = Some(40.0);
+            s.m = Some(2.0);
+        });
+        let (e, o) = p.spline_engine().unwrap();
+        assert_eq!((e.m, e.z), (2.0, 18));
+        assert!((e.x - 0.45).abs() < 1e-9);
+        assert!(matches!(o.unwrap(), crate::invol_spline::D_bOrigin::Table(_)));
+        assert_eq!(p.spline_block_name(&e, GearView::Front), "OCSM_SPLINE_DIN_DIN30_M2_Z18_X0_45_DB40_H30_FRONT");
+        assert_eq!(p.spline_spec(&e, None), "DIN DIN30 m2 z18 x0.45 d_B40 L30");
+        // d_B + z → 查表补 m=2
+        let p = mk(&|s| {
+            s.d_b = Some(40.0);
+            s.z = Some(18);
+        });
+        let (e, o) = p.spline_engine().unwrap();
+        assert_eq!(e.m, 2.0);
+        assert!(matches!(o.unwrap(), crate::invol_spline::D_bOrigin::Table(_)));
+        // m + z（无 d_B）→ d_B 由公式算出并显示，不报“不匹配”
+        let p = mk(&|s| {
+            s.m = Some(2.0);
+            s.z = Some(18);
+            s.x = Some(0.2);
+        });
+        let (e, o) = p.spline_engine().unwrap();
+        assert!((e.d_b.unwrap() - 39.0).abs() < 1e-9);
+        assert!(matches!(o.unwrap(), crate::invol_spline::D_bOrigin::Computed));
+        // 三者都给且不相容 → 以 d_B 为准重算 z，提示不静默
+        let p = mk(&|s| {
+            s.d_b = Some(40.0);
+            s.m = Some(2.0);
+            s.z = Some(14);
+        });
+        let (e, o) = p.spline_engine().unwrap();
+        assert_eq!(e.z, 18);
+        let note = o.unwrap().note();
+        assert!(note.contains("按基准直径 d_B=40 取 z=18") && note.contains("与输入 z=14 不符"), "{note}");
+    }
+
+    /// 花键模式出图：外花键三视图、内花键端视图/剖视草案（半径互换 + 两环剖面线）、块名与提示。
+    #[test]
+    fn spline_mode_generates_views_and_internal_draft() {
+        // 外花键 DIN：端视图真实渐开线、剖视有剖面线（轴线↔df 两环）
+        let mut p = spline_tmpl(crate::invol_spline::SplineStd::DIN);
+        p.spline.as_mut().unwrap().d_b = Some(40.0);
+        p.spline.as_mut().unwrap().m = Some(2.0);
+        p.h = 30.0;
+        let front = generate(&p, GearView::Front, 1.0).unwrap();
+        assert_eq!(front.meta.code, crate::invol_spline::DIN_CODE);
+        assert_eq!(front.meta.name, "外花键（端视图）");
+        assert!(front.meta.spec.contains("d_B40") && front.meta.spec.contains("查表命中 p27"));
+        let section = generate(&p, GearView::Section, 1.0).unwrap();
+        assert!(section.entities.iter().any(|e| matches!(e, EntityType::Hatch(_))));
+        assert_eq!(block_name(&p, GearView::Section), p.spline_block_name(&p.spline_engine().unwrap().0, GearView::Section));
+        // 简化正视图：花键没有这个画法
+        let e = generate(&p, GearView::Simplified, 1.0).unwrap_err();
+        assert!(e.contains("花键不提供"), "{e}");
+
+        // 内花键：同一 d_B/m/z，端视图半径互换；剖视剖面线环在 D_ii↔D_ei
+        let mut pi = p.clone();
+        pi.kind = GearKind::Internal;
+        let (engine, _) = pi.spline_engine().unwrap();
+        assert!(engine.internal);
+        let ifront = generate(&pi, GearView::Front, 1.0).unwrap();
+        let radii: Vec<f64> = ifront
+            .entities
+            .iter()
+            .filter_map(|e| match e {
+                EntityType::Arc(a) => Some(a.radius),
+                _ => None,
+            })
+            .collect();
+        assert!(radii.iter().any(|r| (r - engine.internal_major_dia() / 2.0).abs() < 1e-9));
+        assert!(radii.iter().any(|r| (r - engine.internal_minor_dia() / 2.0).abs() < 1e-9));
+        assert!(!radii.iter().any(|r| (r - engine.da() / 2.0).abs() < 1e-9));
+        let isec = generate(&pi, GearView::Section, 1.0).unwrap();
+        assert!(isec.entities.iter().any(|e| matches!(e, EntityType::Hatch(_))));
+        // 缺模板依据的草案提示必须告知用户
+        assert!(pi
+            .spline_notes(&engine)
+            .iter()
+            .any(|n| n.contains("缺模板依据") || n.contains("草案")));
+        // 外花键没有内花键提示
+        assert!(!p.spline_notes(&p.spline_engine().unwrap().0).iter().any(|n| n.contains("内花键")));
+    }
+
+    /// 花键模式 CLI 解析（`OCSMGEAR 花键 …`）：预设代号隐式开模式、GB 下 d_B 统一文案、内花键 kind。
+    #[test]
+    fn spline_mode_cli_parse_request() {
+        let req = parse_request("花键 DIN30 db=40 2 h=30 view 端视图").unwrap();
+        let s = req.params.spline.as_ref().unwrap();
+        assert_eq!(s.std, crate::invol_spline::SplineStd::DIN);
+        assert_eq!(s.d_b, Some(40.0));
+        assert_eq!(s.m, Some(2.0));
+        assert_eq!(s.z, None, "CLI 没给 Z 就应是 None（由 d_B+m 查表）");
+        assert_eq!(req.view, GearView::Front);
+        assert_eq!(req.params.spline_engine().unwrap().0.z, 18);
+        // 预设代号 / 标准名隐式开模式
+        let req = parse_request("花键 GB30R 3 20 h=30 view 侧视图").unwrap();
+        // 预设代号归一为齿廓名（引擎口径）；块名仍带 GB30R 代号
+        assert_eq!(req.params.spline.as_ref().unwrap().profile, "30圆齿根");
+        let (e, o) = req.params.spline_engine().unwrap();
+        assert!(e.d_b.is_none() && o.is_none(), "GB 无 d_B（无来源）");
+        assert_eq!(
+            req.params.spline_block_name(&e, req.view),
+            "OCSM_SPLINE_GB_GB30R_M3_Z20_H30_SIDE"
+        );
+        // GB + d_B（花键模式）→ 统一文案
+        let e = parse_request("花键 GB30R db=40 3 20 h=30").unwrap_err();
+        assert_eq!(e, crate::invol_spline::GB_D_B_MSG, "{e}");
+        // 内花键：复用「内齿轮」位置参数（同一套 toggle）
+        let req = parse_request("花键 内花键 GB30R 3 20 h=30").unwrap();
+        assert_eq!(req.params.kind, GearKind::Internal);
+    }
+
+    /// 花键模式 GUI 查询链：`/api/gear_svg` / `/api/gear_info` 的 mode/std/db 解析与 info 字段。
+    #[test]
+    fn spline_mode_query_info_and_preview() {
+        let svg = preview_svg("mode=spline&std=GB&profile=GB30R&m=3&z=20&h=30&view=side").unwrap();
+        assert!(svg.contains("<svg"), "{svg}");
+        let j = info_json("mode=spline&std=GB&profile=GB30R&m=3&z=20&h=30&view=front").unwrap();
+        let v: serde_json::Value = serde_json::from_str(&j).unwrap();
+        assert_eq!(v["mode"], "spline");
+        assert_eq!(v["std"], "GB");
+        assert_eq!(v["profile"], "30圆齿根");
+        assert_eq!(v["d_b"], serde_json::Value::Null);
+        assert!((v["da"].as_f64().unwrap() - 63.0).abs() < 1e-9);
+        assert!((v["df"].as_f64().unwrap() - 54.6).abs() < 1e-9);
+        // DIN d_B+m：info 显示补全的 z/x 与来源
+        let j = info_json("mode=spline&std=DIN&profile=DIN30&db=40&m=2&h=30&view=front").unwrap();
+        let v: serde_json::Value = serde_json::from_str(&j).unwrap();
+        assert_eq!(v["ok"], true);
+        assert_eq!(v["z"], 18);
+        assert!((v["x"].as_f64().unwrap() - 0.45).abs() < 1e-9);
+        assert!(v["origin"].as_str().unwrap().contains("查表命中 p27"));
+        // 内花键 info：da/df 换义为 大径 D_ei / 小径 D_ii
+        let j = info_json("mode=spline&std=GB&profile=GB30R&m=3&z=20&kind=internal&h=30").unwrap();
+        let v: serde_json::Value = serde_json::from_str(&j).unwrap();
+        assert_eq!(v["kind_label"], "内花键");
+        assert!((v["internal_major"].as_f64().unwrap() - 65.4).abs() < 1e-9);
+        assert!(v["internal_minor"].as_f64().unwrap() < 60.0);
+        assert!(v["notes"].as_array().unwrap().iter().any(|n| n.as_str().unwrap().contains("草案")));
+        // DIN 花键 info：附检验尺寸（M2 = 内花键棒间距）
+        let j = info_json("mode=spline&std=DIN&profile=DIN30&db=6&m=0.5&z=10&kind=internal&h=20").unwrap();
+        let v: serde_json::Value = serde_json::from_str(&j).unwrap();
+        assert!(
+            v["inspection"].as_str().unwrap().contains("M2=3.796")
+                && v["inspection"].as_str().unwrap().contains("M1=8.215"),
+            "内花键检验应同时给 M2/M1：{j}"
+        );
     }
 }

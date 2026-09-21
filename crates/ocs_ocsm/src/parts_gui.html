@@ -223,17 +223,21 @@ function pickFamilyInner(id, row) {
 }
 
 // 结构要素：参数面板按目录 `inputs` 动态生成（只建 DOM，值与错误处理在 onDetail）。
-// `type:"select"` = 下拉（标准/齿廓预设）；`options_by` + `depends_on` = 二级联动。
+// `type:"select"` = 下拉（标准/齿廓预设）；`options_by` + `depends_on` = 二级联动；
+// `show_when` = 按上级下拉值显隐（渐开线花键的 d_B 只在 DIN 下显示）。
+const detailInputEls = {}; // key → [label, 控件]（show_when 显隐用）
 function renderDetailInputs(f) {
   const inputs = f.inputs || [];
   el("b1Fields").style.display = inputs.length ? "none" : "";
   const box = el("paramFields");
   box.innerHTML = "";
+  Object.keys(detailInputEls).forEach((k) => delete detailInputEls[k]);
   inputs.forEach((it) => {
     const lab = document.createElement("label");
     lab.htmlFor = "p_" + it.key;
     lab.textContent = it.label || it.key;
     box.appendChild(lab);
+    detailInputEls[it.key] = [lab];
     if (it.type === "select") {
       const sel = document.createElement("select");
       sel.id = "p_" + it.key;
@@ -243,6 +247,7 @@ function renderDetailInputs(f) {
       fillDetailSelect(f, it, sel, dep ? dep.value : "");
       sel.addEventListener("change", onDetail);
       box.appendChild(sel);
+      detailInputEls[it.key].push(sel);
       return;
     }
     const inp = document.createElement("input");
@@ -252,6 +257,7 @@ function renderDetailInputs(f) {
     inp.id = "p_" + it.key;
     inp.dataset.key = it.key;
     inp.placeholder = it.placeholder || (it.required ? "必给" : "留空 = 默认");
+    detailInputEls[it.key].push(inp);
     // 渐开线花键的 d_B：挂 DIN 5480-2 名义表候选（datalist），选/输入后自动带出 m/z/x。
     if (it.key === "db" && Array.isArray(f.din_nominal) && f.din_nominal.length) {
       const dl = document.createElement("datalist");
@@ -270,6 +276,18 @@ function renderDetailInputs(f) {
     }
     box.appendChild(inp);
   });
+  syncDetailVisibility(f);
+}
+
+// `show_when`：上级下拉当前值在 `values` 里才显示该行（d_B 仅 DIN）。
+function syncDetailVisibility(f) {
+  for (const it of f.inputs || []) {
+    const sw = it.show_when;
+    if (!sw) continue;
+    const dep = el("p_" + sw.key);
+    const on = dep && (sw.values || []).indexOf(dep.value) >= 0;
+    (detailInputEls[it.key] || []).forEach((e) => { e.style.display = on ? "" : "none"; });
+  }
 }
 
 // 填下拉：`options` 固定选项；`options_by[上级值]` 联动选项（保留已选值，否则取 default）。
@@ -384,6 +402,7 @@ function onDetail() {
   const hasSpecs = !!(f.specs && f.specs.length);
   if (f.invol_presets) {
     syncDetailSelects(f);
+    syncDetailVisibility(f);   // GB 下隐藏 d_B（本体系没有基准直径）
     const sels = collectSelects(f);
     const code = sels.profile || "";
     const preset = (f.invol_presets || []).find((p) => p.code === code);

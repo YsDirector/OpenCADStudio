@@ -1,7 +1,9 @@
 //! **渐开线花键**（GB/T 3478.1-2008 / DIN 5480-1:2015）—— 核心几何 + 预设表 + 视图图元。
 //!
-//! 本轮范围：**外花键**（端视图真实渐开线齿廓 / 侧视轮廓 / 收尾弧）+ 预设表 + 数值接口。
-//! 内花键只留 [`InvolParams::internal_tip_dia`] 数值接口（不出几何）；ANSI 预设未做。
+//! 本模块是**共用计算引擎**：换算（`d_B ↔ m/z/x`）、DIN 5480-2 名义表/检验表、GB/DIN 预设、
+//! 端视图（真实渐开线齿廓）、侧视/剖视轮廓、收尾弧与数值接口都在这里；
+//! **入口按齿轮生成器组织**（`gear.rs` 的花键模式复用本引擎），轴段 `INVOLSPLINE` 也复用本引擎。
+//! 外花键与内花键（材料在外侧、齿朝内）都支持；ANSI B92.1 预设未做（缺数据表）。
 //! 注册点（`lib.rs` / `guide_server.rs` / 两个 GUI / 手册）由后续接线方另行接入，本文件只交付模块本体。
 //!
 //! # 一、口径（权威公式）
@@ -34,6 +36,22 @@
 //! `hf*=0.55` 与 DIN 5480-2 名义表逐行吻合：m=0.5 的表里 x·m=0.225（x=0.45）时，
 //! z=34 → `d_f1=17.00+0.45−0.55=16.90`、z=10 → `5.00+0.45−0.55=4.90`（`d_a1` 亦为 17.90 / 5.90，
 //! 均见表 `DIN5480-2_名义表.csv` p.11）；旧值 hf*=0.60 会差 0.1m（16.85），故按任务改用基准 0.55。
+//!
+//! ## 内花键（GB 表 3，p09/p10 图 2）
+//!
+//! 内花键 = 材料在外侧、齿朝内；渐开线同一条（内花键**齿槽** = 同参数外花键**齿形**，
+//! 与 `gear.rs` 内齿轮同口径），只是从**齿槽中心线**量齿厚半角 ψ(R)。直径口径：
+//!
+//! * GB：内花键大径（外侧齿根）`D_ei = m(z+1.5)/(z+1.8)/(z+1.4)/(z+1.2)`（表 3）；
+//!   内花键小径（里侧齿顶）`D_ii = D_Fe max + 2C_F`，其中 `C_F=0.1m`、
+//!   `D_Fe max = 2√((0.5D_b)² + (0.5D·sinα_D − (h_s − 0.5es_v/tanα_D)/sinα_D)²)`，
+//!   H/h 配合取 `es_v=0`；`h_s` 见图 2：30° 平/圆 0.6m、37.5° 0.55m、45° 0.5m（从基准线往下量）。
+//! * DIN：内花键齿根 `d_f2 = d_B`、齿顶 `d_a2 = d − 0.9m + 2x·m`（674 行名义表恒等式，
+//!   见 `din5480_four_identities_hold_for_every_row`）。
+//!
+//! **⚠ 内花键侧视/剖视画法缺模板依据**（用户尚未给图）：本模块只出草案 —— 大径/小径两条矩形
+//! 轮廓 + 齿顶线（细线/剖视实线），剖视剖面线两环（齿顶圆↔齿根圆），与内齿轮剖视“只画到齿根圆、
+//! 外壁留用户延伸”的口径一致；真实画法待用户提供模板后替换。
 //!
 //! ## DIN 5480-2 名义表（`d_B` 查表，本轮主路径）
 //!
@@ -149,9 +167,12 @@ pub struct InvolPreset {
     pub rho_star: f64,
     /// 齿形裕度系数 cF*（GB 全为 0.1；DIN 取基础齿廓顶隙 c = h_fP*−h_aP* = 0.10）。
     pub c_f_star: f64,
+    /// GB 图 2 的 `h_s`（从基准线往下量，用于 `D_Fe max` 公式）：30° 0.6、37.5° 0.55、45° 0.5。
+    /// DIN 名义表/检验表口径不依赖它（DIN 内花键直接用 `d_f2=d_B`、`d_a2=d−0.9m+2xm`）。
+    pub h_s_star: f64,
 }
 
-/// **GB/T 3478.1-2008 预设表**（图 2 基本齿廓 + 表 4~表 6 大径公式）。
+/// **GB/T 3478.1-2008 预设表**（图 2 基本齿廓 + 表 4~表 6 大径公式；h_s 见图 2）。
 pub const GB_PRESETS: &[InvolPreset] = &[
     InvolPreset {
         std: SplineStd::GB,
@@ -161,6 +182,7 @@ pub const GB_PRESETS: &[InvolPreset] = &[
         hf_star: 0.75,
         rho_star: 0.2,
         c_f_star: 0.1,
+        h_s_star: 0.6,
     },
     InvolPreset {
         std: SplineStd::GB,
@@ -170,6 +192,7 @@ pub const GB_PRESETS: &[InvolPreset] = &[
         hf_star: 0.9,
         rho_star: 0.4,
         c_f_star: 0.1,
+        h_s_star: 0.6,
     },
     InvolPreset {
         std: SplineStd::GB,
@@ -179,6 +202,7 @@ pub const GB_PRESETS: &[InvolPreset] = &[
         hf_star: 0.7,
         rho_star: 0.3,
         c_f_star: 0.1,
+        h_s_star: 0.55,
     },
     InvolPreset {
         std: SplineStd::GB,
@@ -188,6 +212,7 @@ pub const GB_PRESETS: &[InvolPreset] = &[
         hf_star: 0.6,
         rho_star: 0.25,
         c_f_star: 0.1,
+        h_s_star: 0.5,
     },
 ];
 
@@ -200,7 +225,20 @@ pub const DIN_PRESETS: &[InvolPreset] = &[InvolPreset {
     hf_star: 0.55,
     rho_star: 0.16,
     c_f_star: 0.10,
+    h_s_star: 0.6,
 }];
+
+/// GB 体系误给 `d_B` 的**统一报错文案**（GB/T 3478 没有基准直径这个概念）。
+pub const GB_D_B_MSG: &str =
+    "基准直径 d_B 是 DIN 5480 的概念，GB/T 3478 体系请给 m 与 z（本体系不用 d_B）";
+
+/// 标准下的默认齿廓名（不给 profile 时用）。
+pub fn default_profile(std: SplineStd) -> &'static str {
+    match std {
+        SplineStd::GB => "30圆齿根",
+        SplineStd::DIN => "DIN30",
+    }
+}
 
 /// 齿廓名规范化（去空白/度符号、转小写）：`"30° 圆齿根"` 与 `"30圆齿根"` 等价。
 fn norm_profile(s: &str) -> String {
@@ -528,13 +566,19 @@ pub fn d_b_from_x(m: f64, z: u32, x: f64) -> f64 {
     m * (z as f64 + 1.1 + 2.0 * x)
 }
 
-/// `d_B` 补全的来源（派生值显示用）。
+/// `d_B` 补全/推导的来源（派生值显示用）。
 #[derive(Debug, Clone, PartialEq)]
 pub enum D_bOrigin {
     /// 查表命中该行。
     Table(Din5480Row),
-    /// 公式解出（未命中表）。
+    /// 公式解出（未命中表；`d_B+m+z` 相容路径）。
     Formula,
+    /// 无 `d_B` 输入，由 `m/z/x` 正算 `d_B`（`m+z` 路径）。
+    Computed,
+    /// 表外由 `d_B` 公式**推导** z/m（附可行区间依据）。
+    Derived(String),
+    /// `d_B` 为主参数、输入 m/z/x 与其不符 → 按 `d_B` 重算（附明文提示）。
+    Adjusted(String),
 }
 
 impl D_bOrigin {
@@ -543,20 +587,68 @@ impl D_bOrigin {
         match self {
             Self::Table(r) => format!("查表命中 p{} m={}", r.page, trim(r.m)),
             Self::Formula => "由公式解出，未命中表".to_string(),
+            Self::Computed => "由 m/z/x 正算 d_B=m(z+1.1+2x)".to_string(),
+            Self::Derived(n) | Self::Adjusted(n) => n.clone(),
         }
     }
 }
 
+/// 由 `d_B + m` 反求齿数 z：`d_B=m(z+1.1+2x)`、`x∈[−0.05,0.45]`
+/// → `z∈[d_B/m−2.0, d_B/m−1.0]`；区间内多个整数时，`prefer` 给定就取离它最近的，
+/// 否则取 |x| 最小（x 最接近 0）的。返回 `(z, 区间下界, 区间上界)`。
+fn derive_z_from_d_b_m(
+    d_b: f64,
+    m: f64,
+    prefer: Option<u32>,
+) -> Result<(u32, f64, f64), String> {
+    if !(m.is_finite() && m > 0.0) {
+        return Err(format!("DIN 5480：m={} 必须是正数。", trim(m)));
+    }
+    let ratio = d_b / m;
+    let z_lo_f = ratio - 2.0;
+    let z_hi_f = ratio - 1.0;
+    let z_lo = (z_lo_f - 1e-9).ceil();
+    let z_hi = (z_hi_f + 1e-9).floor();
+    if z_hi < z_lo || z_hi < 3.0 || z_lo > 1000.0 {
+        return Err(format!(
+            "DIN 5480：由 d_B={}、m={} 与 x∈[−0.05,0.45] 得不到可行齿数（z∈[{:.4},{:.4}]）——请核对 d_B 与 m。",
+            trim(d_b),
+            trim(m),
+            z_lo_f,
+            z_hi_f
+        ));
+    }
+    let candidates: Vec<u32> = (z_lo.max(3.0) as u32..=z_hi.min(1000.0) as u32).collect();
+    let best = candidates
+        .iter()
+        .copied()
+        .min_by(|&a, &b| {
+            let xa = x_from_d_b(d_b, m, a).abs();
+            let xb = x_from_d_b(d_b, m, b).abs();
+            match prefer {
+                Some(pz) => (a as i64 - pz as i64)
+                    .abs()
+                    .cmp(&(b as i64 - pz as i64).abs())
+                    .then(xa.partial_cmp(&xb).unwrap())
+                    .then(a.cmp(&b)),
+                None => xa.partial_cmp(&xb).unwrap().then(a.cmp(&b)),
+            }
+        })
+        .expect("候选非空");
+    Ok((best, z_lo_f, z_hi_f))
+}
+
 /// 用 `d_B` 补全/校验 DIN 参数（`m/z/x` 缺哪项补哪项；主路径入口）。
 ///
-/// 组合（`GB` 无 `d_B`，调用方先自行拒绝）：
-/// * `d_B + m + z`：公式解 `x`；并核对表中同 `(m, z)` 的 `d_B` 是否含给定值（不一致报错）；
-/// * `d_B + m`：查表补 `z`（同 `d_B` 有多 `z` 变体时报候选要 `Z`）；
-/// * `d_B + z`：查表补 `m`（多 `m` 变体时报候选）；
-/// * 只给 `d_B`：查表补 `m/z`（多命中报行列表）。
+/// **`d_B` 是主参数**（用户定案）：
+/// * `d_B + m + z`：`x=(d_B−m(z+1.1))/(2m)`，在 [−0.05,0.45] 内就认（命中表行时用表值 x）；
+///   不在范围内 → **按 `d_B` 重算 z**（保留 m）并明文提示，不报“组合不一致”；
+///   `x` 输入与 `d_B` 不符时也明文提示后**按 `d_B` 取 x**；
+/// * `d_B + m`：查表补 `z`；表外按公式推 z（标注“推导值、未命中表”+ 区间依据）；
+/// * `d_B + z`：查表补 `m`；表外按公式给名义 m（取 x=0）并标注来源；
+/// * 只给 `d_B`：查表补 `m/z`（多命中报候选）。
 ///
-/// 命中表行时 `x` 取表值（精度优先），来源 [`D_bOrigin::Table`]；否则来源
-/// [`D_bOrigin::Formula`]（`d_B` 取输入值）。
+/// 命中表行时 `x` 取表值（精度优先），来源 [`D_bOrigin::Table`]；否则 [`D_bOrigin::Formula`]。
 pub fn resolve_din_by_d_b(
     d_b: f64,
     m: Option<f64>,
@@ -573,46 +665,8 @@ pub fn resolve_din_by_d_b(
     }
     match (m, z) {
         (Some(m), Some(z)) => resolve_with_m_z(d_b, m, z, x),
-        (Some(m), None) => {
-            let mut hits = din5480_match(d_b, Some(m));
-            if hits.is_empty() {
-                return Err(lookup_by_d_b(d_b, Some(m)).unwrap_err());
-            }
-            let mut zs: Vec<u32> = hits.iter().map(|r| r.z).collect();
-            zs.sort_unstable();
-            zs.dedup();
-            if zs.len() > 1 {
-                return Err(format!(
-                    "DIN 5480：d_B={}、m={} 有多个 z 变体：{}；请再给 Z（同一 d_B 多个 z/x₁ 是表格事实）。",
-                    trim(d_b),
-                    trim(m),
-                    join_rows(&hits)
-                ));
-            }
-            hits.sort_by_key(|r| r.z);
-            row_to_params(hits.remove(0))
-        }
-        (None, Some(z)) => {
-            let hits: Vec<Din5480Row> = din5480_match(d_b, None)
-                .into_iter()
-                .filter(|r| r.z == z)
-                .collect();
-            if hits.is_empty() {
-                return Err(lookup_by_d_b(d_b, None).unwrap_err());
-            }
-            let mut ms: Vec<f64> = hits.iter().map(|r| r.m).collect();
-            ms.sort_by(|a, b| a.partial_cmp(b).unwrap());
-            ms.dedup_by(|a, b| (*a - *b).abs() < DIN_M_TOL);
-            if ms.len() > 1 {
-                return Err(format!(
-                    "DIN 5480：d_B={}、z={} 有多个 m 变体：{}；请再给 M。",
-                    trim(d_b),
-                    z,
-                    join_rows(&hits)
-                ));
-            }
-            row_to_params(hits[0].clone())
-        }
+        (Some(m), None) => resolve_with_m(d_b, m),
+        (None, Some(z)) => resolve_with_z(d_b, z),
         (None, None) => {
             let hits = din5480_match(d_b, None);
             if hits.is_empty() {
@@ -631,6 +685,161 @@ pub fn resolve_din_by_d_b(
     }
 }
 
+/// `d_B + m`：查表补 z；表外按公式推 z。
+fn resolve_with_m(d_b: f64, m: f64) -> Result<(InvolParams, D_bOrigin), String> {
+    let mut hits = din5480_match(d_b, Some(m));
+    let mut zs: Vec<u32> = hits.iter().map(|r| r.z).collect();
+    zs.sort_unstable();
+    zs.dedup();
+    if zs.len() > 1 {
+        return Err(format!(
+            "DIN 5480：d_B={}、m={} 有多个 z 变体：{}；请再给 Z（同一 d_B 多个 z/x₁ 是表格事实）。",
+            trim(d_b),
+            trim(m),
+            join_rows(&hits)
+        ));
+    }
+    if zs.len() == 1 {
+        hits.sort_by_key(|r| r.z);
+        return row_to_params(hits.remove(0));
+    }
+    // 已知缺失档位（m=5 整页剔除）：明确报“数据缺失”，不用公式静默推导。
+    if DIN_MISSING_MODULES
+        .iter()
+        .any(|(mm, _)| (*mm - m).abs() < DIN_M_TOL)
+    {
+        return Err(din5480_miss_message(d_b, Some(m)));
+    }
+    // 表外：按公式推 z 并标注区间依据。
+    let (z, z_lo, z_hi) = derive_z_from_d_b_m(d_b, m, None)?;
+    let x = x_from_d_b(d_b, m, z);
+    let note = format!(
+        "推导值、未命中表：d_B={}、m={} 不在 DIN 5480-2 名义表；由 d_B=m(z+1.1+2x)、x∈[−0.05,0.45] 得 z∈[{:.4},{:.4}]，取 z={}（x={}）",
+        trim(d_b),
+        trim(m),
+        z_lo,
+        z_hi,
+        z,
+        trim(x)
+    );
+    let p = InvolParams::din(m, z, x)
+        .map_err(|e| format!("DIN 5480：{e}"))?
+        .with_d_b(d_b);
+    Ok((p, D_bOrigin::Derived(note)))
+}
+
+/// `d_B + z`：查表补 m；表外按公式给名义 m（取 x=0）并标注来源。
+fn resolve_with_z(d_b: f64, z: u32) -> Result<(InvolParams, D_bOrigin), String> {
+    let hits: Vec<Din5480Row> = din5480_match(d_b, None)
+        .into_iter()
+        .filter(|r| r.z == z)
+        .collect();
+    if !hits.is_empty() {
+        let mut ms: Vec<f64> = hits.iter().map(|r| r.m).collect();
+        ms.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        ms.dedup_by(|a, b| (*a - *b).abs() < DIN_M_TOL);
+        if ms.len() > 1 {
+            return Err(format!(
+                "DIN 5480：d_B={}、z={} 有多个 m 变体：{}；请再给 M。",
+                trim(d_b),
+                z,
+                join_rows(&hits)
+            ));
+        }
+        return row_to_params(hits[0].clone());
+    }
+    // 表外：由 d_B=m(z+1.1+2x) 取 x=0 得名义 m = d_B/(z+1.1)。
+    let m = d_b / (z as f64 + 1.1);
+    let m_lo = d_b / (z as f64 + 2.0);
+    let m_hi = d_b / (z as f64 + 1.0);
+    let note = format!(
+        "推导值、未命中表：d_B={}、z={} 不在 DIN 5480-2 名义表；由 d_B=m(z+1.1+2x) 取 x=0 得 m={}（可行区间 m∈[{:.4},{:.4}]）",
+        trim(d_b),
+        z,
+        trim(m),
+        m_lo,
+        m_hi
+    );
+    let p = InvolParams::din(m, z, 0.0)
+        .map_err(|e| format!("DIN 5480：{e}"))?
+        .with_d_b(d_b);
+    Ok((p, D_bOrigin::Derived(note)))
+}
+
+/// `d_B + m + z`：`x` 由公式解出；不兼容时以 `d_B` 为准重算 z（保留 m）并明文提示。
+fn resolve_with_m_z(
+    d_b: f64,
+    m: f64,
+    z: u32,
+    x: Option<f64>,
+) -> Result<(InvolParams, D_bOrigin), String> {
+    let x_formula = x_from_d_b(d_b, m, z);
+    let in_range = (-0.05 - 1e-9..=0.45 + 1e-9).contains(&x_formula);
+    if in_range {
+        // 命中同 (m, z, d_B) 的表行 → 用表值 x（精度优先）。
+        let row = din5480_rows()
+            .iter()
+            .find(|r| (r.m - m).abs() < DIN_M_TOL && r.z == z && (r.d_b - d_b).abs() < DIN_D_B_TOL)
+            .cloned();
+        let (xv, origin) = match row {
+            Some(row) => {
+                let origin = match x {
+                    Some(xi) if (xi - row.x).abs() > DIN_X_TOL => D_bOrigin::Adjusted(format!(
+                        "查表命中 p{} m={}；按基准直径 d_B={} 取 x={}（与输入 x={} 不符，d_B 为主参数）",
+                        row.page,
+                        trim(row.m),
+                        trim(d_b),
+                        trim(row.x),
+                        trim(xi)
+                    )),
+                    _ => D_bOrigin::Table(row.clone()),
+                };
+                (row.x, origin)
+            }
+            None => {
+                let origin = match x {
+                    Some(xi) if (xi - x_formula).abs() > DIN_X_TOL => D_bOrigin::Adjusted(format!(
+                        "按基准直径 d_B={} 取 x={}（与输入 x={} 不符，d_B 为主参数）",
+                        trim(d_b),
+                        trim(x_formula),
+                        trim(xi)
+                    )),
+                    _ => D_bOrigin::Formula,
+                };
+                (x_formula, origin)
+            }
+        };
+        let p = InvolParams::din(m, z, xv)
+            .map_err(|e| format!("DIN 5480：{e}"))?
+            .with_d_b(d_b);
+        return Ok((p, origin));
+    }
+    // 不相容 → 以 d_B 为准，保留 m 重算 z。
+    let (z2, z_lo, z_hi) = derive_z_from_d_b_m(d_b, m, Some(z))?;
+    let x2 = x_from_d_b(d_b, m, z2);
+    let mut note = format!(
+        "按基准直径 d_B={} 取 z={}（与输入 z={} 不符，d_B 为主参数；由 d_B=m(z+1.1+2x)、x∈[−0.05,0.45] 得 z∈[{:.4},{:.4}]）",
+        trim(d_b),
+        z2,
+        z,
+        z_lo,
+        z_hi
+    );
+    if let Some(xi) = x {
+        if (xi - x2).abs() > DIN_X_TOL {
+            note.push_str(&format!(
+                "；同时按 d_B 取 x={}（与输入 x={} 不符）",
+                trim(x2),
+                trim(xi)
+            ));
+        }
+    }
+    let p = InvolParams::din(m, z2, x2)
+        .map_err(|e| format!("DIN 5480：{e}"))?
+        .with_d_b(d_b);
+    Ok((p, D_bOrigin::Adjusted(note)))
+}
+
 /// 表行 → 参数（用表值 `x`，来源 [`D_bOrigin::Table`]）。
 fn row_to_params(row: Din5480Row) -> Result<(InvolParams, D_bOrigin), String> {
     let p = InvolParams::din(row.m, row.z, row.x)
@@ -647,73 +856,64 @@ fn row_to_params(row: Din5480Row) -> Result<(InvolParams, D_bOrigin), String> {
     Ok((p, D_bOrigin::Table(row)))
 }
 
-/// `d_B + m + z`：`x` 由公式解出；若表中 `(m, z)` 存在，则核对 `d_B` 是否一致。
-fn resolve_with_m_z(
-    d_b: f64,
-    m: f64,
-    z: u32,
+/// **通用花键参数解析**（齿轮生成器花键模式 / 轴段 / 测试共用）：
+///
+/// * `d_B` 给了：只有 DIN 有这个概念 —— GB 直接报 [`GB_D_B_MSG`]；DIN 走 [`resolve_din_by_d_b`]；
+/// * 不给 `d_B`：GB/DIN 都要 `m` 与 `z`（缺哪项报哪项）；DIN 另外由 `m/z/x` 正算 `d_B` 并回填
+///   （来源 [`D_bOrigin::Computed`]），**不报“模数齿数与基准直径不匹配”**。
+///
+/// 返回 `(参数, d_B 来源)`；GB 的来源恒为 `None`。
+pub fn resolve_spline(
+    std: SplineStd,
+    profile: &str,
+    d_b: Option<f64>,
+    m: Option<f64>,
+    z: Option<u32>,
     x: Option<f64>,
-) -> Result<(InvolParams, D_bOrigin), String> {
-    let x = match x {
-        Some(x) => {
-            let expected = d_b_from_x(m, z, x);
-            if (expected - d_b).abs() > DIN_D_B_TOL {
+) -> Result<(InvolParams, Option<D_bOrigin>), String> {
+    let profile = if profile.trim().is_empty() {
+        default_profile(std)
+    } else {
+        profile
+    };
+    // 收“齿廓代号”（GB30R/DIN30/GB375R…）与中文/英文齿廓名（30圆齿根…）；代号必须与 std 一致。
+    let profile = match parse_preset_token(profile) {
+        Some((pstd, name)) => {
+            if pstd != std {
                 return Err(format!(
-                    "DIN 5480：d_B={}、m={}、z={}、x={} 不自洽（由 x 正算 d_B={}）。",
-                    trim(d_b),
-                    trim(m),
-                    z,
-                    trim(x),
-                    trim(expected)
+                    "齿廓代号「{profile}」属于 {}，与所选标准 {} 不符。",
+                    pstd.code(),
+                    std.code()
                 ));
             }
-            x
+            name
         }
-        None => x_from_d_b(d_b, m, z),
+        None => profile,
     };
-    // 表内同 (m, z) 的 d_B 必须包含给定量 —— 否则是 d_B/m/z 组合不一致。
-    let same_z: Vec<&Din5480Row> = din5480_rows()
-        .iter()
-        .filter(|r| (r.m - m).abs() < DIN_M_TOL && r.z == z)
-        .collect();
-    if !same_z.is_empty() && !same_z.iter().any(|r| (r.d_b - d_b).abs() < DIN_D_B_TOL) {
-        let list = same_z
-            .iter()
-            .map(|r| format!("d_B={}（x={}）", trim(r.d_b), trim(r.x)))
-            .collect::<Vec<_>>()
-            .join("、");
-        return Err(format!(
-            "DIN 5480：d_B={}、m={}、z={} 组合不一致 —— 表中 m={}、z={} 为 {}；请核对 DB/M/Z，或去掉 DB 改走 M/Z/X。",
-            trim(d_b),
-            trim(m),
-            z,
-            trim(m),
-            z,
-            list
-        ));
+    if let Some(d_b) = d_b {
+        if std != SplineStd::DIN {
+            return Err(GB_D_B_MSG.to_string());
+        }
+        let (p, origin) = resolve_din_by_d_b(d_b, m, z, x)?;
+        return Ok((p, Some(origin)));
     }
-    if !(-0.05 - 1e-9..=0.45 + 1e-9).contains(&x) {
-        return Err(format!(
-            "DIN 5480：由 d_B={}、m={}、z={} 解出 x={}，超出 x∈[−0.05, 0.45]（DIN 5480-1）。",
-            trim(d_b),
-            trim(m),
-            z,
-            trim(x)
-        ));
+    let m = m.ok_or_else(|| match std {
+        SplineStd::GB => "GB/T 3478：缺模数 m（写法 `M3`）".to_string(),
+        SplineStd::DIN => "DIN 5480：缺模数 m（给 m 与 z，或给基准直径 d_B 由表补全）".to_string(),
+    })?;
+    let z = z.ok_or_else(|| match std {
+        SplineStd::GB => "GB/T 3478：缺齿数 z（写法 `Z20`）".to_string(),
+        SplineStd::DIN => "DIN 5480：缺齿数 z（给 m 与 z，或给基准直径 d_B 由表补全）".to_string(),
+    })?;
+    let mut p = InvolParams::from_preset(std, profile, m, z)?
+        .with_x(x.unwrap_or(0.0));
+    p.validate().map_err(|e| format!("{e}"))?;
+    if std == SplineStd::DIN {
+        let d_b = d_b_from_x(p.m, p.z, p.x);
+        p = p.with_d_b(d_b);
+        return Ok((p, Some(D_bOrigin::Computed)));
     }
-    let p = InvolParams::din(m, z, x)
-        .map_err(|e| format!("DIN 5480：{e}"))?
-        .with_d_b(d_b);
-    // 命中同 (m, z, d_B) 的表行 → 用表值 x（精度优先）并标注来源。
-    if let Some(row) = same_z
-        .iter()
-        .find(|r| (r.d_b - d_b).abs() < DIN_D_B_TOL && (r.x - x).abs() < DIN_X_TOL)
-    {
-        let p = p.with_x(row.x);
-        p.validate().map_err(|e| format!("DIN 5480：{e}"))?;
-        return Ok((p, D_bOrigin::Table((*row).clone())));
-    }
-    Ok((p, D_bOrigin::Formula))
+    Ok((p, None))
 }
 
 /// 行列表（错误信息里的候选展示）。
@@ -1735,10 +1935,14 @@ pub struct InvolParams {
     pub profile: &'static str,
     /// DIN 5480 基准直径 d_B（身份标识/显示；`None` = 未给，外部传入/回填）。
     pub d_b: Option<f64>,
+    /// 内花键（hub）：材料在外侧、齿朝内（`false` = 外花键，齿朝外）。
+    pub internal: bool,
+    /// GB 图 2 的 `h_s`（从预设带入；仅 `D_Fe max` 公式用）。
+    pub h_s_star: f64,
 }
 
 impl InvolParams {
-    /// 由预设构造（`x=0`、`d_b=None`），立即校验。
+    /// 由预设构造（`x=0`、`d_b=None`、外花键），立即校验。
     pub fn from_preset(std: SplineStd, profile: &str, m: f64, z: u32) -> Result<Self, String> {
         let preset = preset(std, profile)?;
         let p = Self {
@@ -1753,6 +1957,8 @@ impl InvolParams {
             std,
             profile: preset.profile,
             d_b: None,
+            internal: false,
+            h_s_star: preset.h_s_star,
         };
         p.validate()?;
         Ok(p)
@@ -1794,9 +2000,15 @@ impl InvolParams {
         self
     }
 
-    /// 外部传入/回填 DIN 基准直径 d_B（只影响显示，不参与几何）。
+    /// 外部传入/回填 DIN 基准直径 d_B（身份标识/显示；DIN 内花键几何也直接用它 `d_f2=d_B`）。
     pub fn with_d_b(mut self, d_b: f64) -> Self {
         self.d_b = Some(d_b);
+        self
+    }
+
+    /// 切换内花键（`true`）/外花键（`false`）。
+    pub fn with_internal(mut self, internal: bool) -> Self {
+        self.internal = internal;
         self
     }
 
@@ -1898,13 +2110,44 @@ impl InvolParams {
         self.da()
     }
 
-    /// 内花键齿顶圆（**接口，本轮不出几何**）：GB = `m(z+1.5)/(z+1.8)/(z+1.4)/(z+1.2)`，
-    /// 即 `d′+2·hf*·m`；DIN 按侧配合名义 `d_a2 = d_a1 = d′+0.9m`。
-    pub fn internal_tip_dia(&self) -> f64 {
+    /// GB 表 3 `D_Fe max`（外花键渐开线起始圆直径最大值，`es_v=0`，H/h 配合）：
+    /// `2√((0.5D_b)² + (0.5D·sinα − h_s/sinα)²)`（GB/T 3478.1 表 3 p10，注 2）。
+    pub fn gb_form_dia_max(&self) -> f64 {
+        let d = self.d();
+        let db = self.db();
+        let a = self.alpha();
+        let t = 0.5 * d * a.sin() - self.h_s_star * self.m / a.sin();
+        2.0 * ((0.5 * db).powi(2) + t * t).sqrt()
+    }
+
+    /// **内花键大径**（外侧齿根 / 齿槽底）：GB 表 3 `D_ei = m(z+1.5)/(z+1.8)/(z+1.4)/(z+1.2)`；
+    /// DIN = `d_f2 = d_B = m(z+1.1+2x)`（674 行名义表恒等式）。
+    pub fn internal_major_dia(&self) -> f64 {
         match self.std {
             SplineStd::GB => self.d_eff() + 2.0 * self.hf_star * self.m,
-            SplineStd::DIN => self.d_eff() + 0.9 * self.m,
+            SplineStd::DIN => self
+                .d_b
+                .unwrap_or_else(|| d_b_from_x(self.m, self.z, self.x)),
         }
+    }
+
+    /// **内花键小径**（里侧齿顶）：GB 表 3 `D_ii = D_Fe max + 2C_F`；
+    /// DIN = `d_a2 = d − 0.9m + 2xm`。
+    pub fn internal_minor_dia(&self) -> f64 {
+        match self.std {
+            SplineStd::GB => self.gb_form_dia_max() + 2.0 * self.c_f(),
+            SplineStd::DIN => self.d_eff() - 0.9 * self.m,
+        }
+    }
+
+    /// 内花键外侧齿根半径（= `internal_major_dia()/2`）。
+    pub fn internal_root_radius(&self) -> f64 {
+        self.internal_major_dia() / 2.0
+    }
+
+    /// 内花键里侧齿顶半径（= `internal_minor_dia()/2`）。
+    pub fn internal_tip_radius(&self) -> f64 {
+        self.internal_minor_dia() / 2.0
     }
 
     /// 旧的 DIN 名义估算 `m(z+2x)`（= `d + 2x·m`，相当于 `d_B − 1.1m`）；
@@ -1991,18 +2234,32 @@ impl InvolParams {
                 trim(self.df())
             ));
         }
+        // 内花键：外侧齿根 > 里侧齿顶；两条轮廓都必须是正数。
+        if self.internal {
+            if self.internal_minor_dia() <= 1e-9 {
+                return Err(format!(
+                    "内花键：小径 D_ii={} 非正（检查 m/z/x/系数组合）。",
+                    trim(self.internal_minor_dia())
+                ));
+            }
+            if self.internal_major_dia() <= self.internal_minor_dia() + 1e-9 {
+                return Err(format!(
+                    "内花键：大径 D_ei={} 不大于小径 D_ii={}。",
+                    trim(self.internal_major_dia()),
+                    trim(self.internal_minor_dia())
+                ));
+            }
+        }
         Ok(())
     }
 
     /// 规格文本（块名/明细表用）。
     pub fn spec(&self) -> String {
-        let mut s = format!(
-            "{} {} m{} z{}",
-            self.std.label(),
-            self.profile,
-            trim(self.m),
-            self.z
-        );
+        let mut s = if self.internal {
+            format!("内花键 {} {} m{} z{}", self.std.label(), self.profile, trim(self.m), self.z)
+        } else {
+            format!("{} {} m{} z{}", self.std.label(), self.profile, trim(self.m), self.z)
+        };
         if self.x.abs() > 1e-12 {
             s.push_str(&format!(" x{}", trim(self.x)));
         }
@@ -2050,8 +2307,12 @@ impl InvolParams {
     /// 端视图：真实渐开线齿廓 + 齿顶/齿根弧 + 十字中心线。
     ///
     /// 相位：齿槽心线 `0°+k·360°/z`，齿心线 `180°/z+k·360°/z`。
+    /// 内花键（[`InvolParams::internal`]）走 [`InvolParams::front_view_internal`]。
     pub fn front_view(&self) -> Result<Vec<EntityType>, String> {
         self.validate()?;
+        if self.internal {
+            return self.front_view_internal();
+        }
         if self.tooth_tip_crossed() {
             return Err(format!(
                 "{} {}：齿顶变尖（ψ(da/2)={:.4}° ≤ 0），两条渐开线在齿顶圆之前相交，\
@@ -2106,12 +2367,117 @@ impl InvolParams {
         Ok(out)
     }
 
+    /// 内花键单侧齿廓：从里侧齿顶（或基圆）到外侧齿根。
+    fn push_flank_internal(
+        &self,
+        out: &mut Vec<EntityType>,
+        center_rad: f64,
+        sign: f64,
+        rb: f64,
+        r_tip: f64,
+        r_root: f64,
+    ) {
+        // 基圆高于齿顶：先沿半径从齿顶圆接到基圆（渐开线从基圆才开始）。
+        if rb > r_tip + 1e-9 {
+            let th = center_rad + sign * self.half_tooth_angle(rb);
+            out.push(line(
+                [r_tip * th.cos(), r_tip * th.sin()],
+                [rb * th.cos(), rb * th.sin()],
+                LAYER_MAIN,
+            ));
+        }
+        let r0 = r_tip.max(rb);
+        let n = INVOLUTE_SEGMENTS;
+        for i in 0..n {
+            let ra = r0 + (r_root - r0) * i as f64 / n as f64;
+            let rb2 = r0 + (r_root - r0) * (i + 1) as f64 / n as f64;
+            out.push(line(
+                self.flank_point(ra, center_rad, sign),
+                self.flank_point(rb2, center_rad, sign),
+                LAYER_MAIN,
+            ));
+        }
+    }
+
+    /// **内花键端视图草案**（材料在外侧、齿朝内）：
+    ///
+    /// * 渐开线与同参数外花键**同一条**：内花键的**齿槽** = 外花键的**齿形**，
+    ///   凹槽心线与外花键齿心线同相（`(k+0.5)·360°/z`），ψ(R) 同式；
+    /// * 外侧齿槽底弧在 `internal_major_dia()/2`、里侧齿顶弧在 `internal_minor_dia()/2`；
+    /// * 齿顶圆低于基圆时，齿廓到基圆后径向直线收到齿顶（同 `gear.rs` 内齿轮口径）。
+    fn front_view_internal(&self) -> Result<Vec<EntityType>, String> {
+        let r_root = self.internal_root_radius();
+        let r_tip = self.internal_tip_radius();
+        let rb = self.db() / 2.0;
+        let r_inner = r_tip.max(rb);
+        let pitch = self.pitch_angle();
+        let pitch_half = pitch / 2.0;
+        let psi_inner = self.half_tooth_angle(r_inner);
+        if psi_inner >= pitch_half - 1e-9 {
+            return Err(format!(
+                "{} {} 内花键：齿槽过宽（ψ={:.4}° ≥ 半齿距 {:.4}°），相邻齿槽的齿廓在齿顶之前相交，\
+                 端视图画不出真实齿廓；请减小 hf*/α 或增大齿数。",
+                self.std.label(),
+                self.profile,
+                psi_inner.to_degrees(),
+                pitch_half.to_degrees()
+            ));
+        }
+        let psi_root = self.half_tooth_angle(r_root);
+        if psi_root <= 1e-9 {
+            return Err(format!(
+                "{} {} 内花键：齿槽在齿根处已相交（ψ(D_ei/2)={:.4}° ≤ 0），端视图画不出真实齿廓；\
+                 请减小齿槽宽（如减小 hf* 或调整 x）。",
+                self.std.label(),
+                self.profile,
+                psi_root.to_degrees()
+            ));
+        }
+        let mut out = Vec::with_capacity(self.z as usize * (2 * INVOLUTE_SEGMENTS + 4) + 2);
+        for k in 0..self.z {
+            // 齿槽心线（与同参数外花键的齿心线同相：同一条渐开线）。
+            let c = pitch * (k as f64 + 0.5);
+            self.push_flank_internal(&mut out, c, 1.0, rb, r_tip, r_root);
+            self.push_flank_internal(&mut out, c, -1.0, rb, r_tip, r_root);
+            // 齿槽底弧（外侧大径）：c ± ψ(r_root)
+            out.push(arc(
+                [0.0, 0.0],
+                r_root,
+                (c - psi_root).to_degrees(),
+                (c + psi_root).to_degrees(),
+                LAYER_MAIN,
+            ));
+            // 齿顶弧（里侧小径）：中心 = c + 齿距/2，半角 = 半齿距 − ψ(inner)
+            let tooth_c = c + pitch_half;
+            let psi_tip = pitch_half - psi_inner;
+            out.push(arc(
+                [0.0, 0.0],
+                r_tip,
+                (tooth_c - psi_tip).to_degrees(),
+                (tooth_c + psi_tip).to_degrees(),
+                LAYER_MAIN,
+            ));
+        }
+        // 十字中心线：长度 = 大径 + 6（内花键用外侧齿根，与内齿轮用齿根圆同口径）。
+        let half = r_root + 3.0;
+        out.push(line([-half, 0.0], [half, 0.0], LAYER_CENTER));
+        out.push(line([0.0, -half], [0.0, half], LAYER_CENTER));
+        Ok(out)
+    }
+
     // ── 侧视图（矩形 + 小径线）──
 
     /// 侧视轮廓：矩形 `L × 大径` + 小径线（小径线落 `minor_layer`，由调用方定线型）。
+    ///
+    /// **内花键侧视/剖视是草案**（用户尚未给模板）：口径同内齿轮剖视 —— 只画到**外侧齿根圆**
+    /// （矩形 `L × D_ei/d_f2`）+ **里侧齿顶线**（D_ii/d_a2，落 `minor_layer`），
+    /// 齿圈外壁留用户按实际结构延伸（见 `gear.rs` 内齿轮）。
     pub fn side_view_on(&self, len: f64, minor_layer: &str) -> Vec<EntityType> {
-        let ra = self.da() / 2.0;
-        let rf = self.df() / 2.0;
+        let (ra, rf) = if self.internal {
+            (self.internal_root_radius(), self.internal_tip_radius())
+        } else {
+            (self.da() / 2.0, self.df() / 2.0)
+        };
         vec![
             line([0.0, -ra], [0.0, ra], LAYER_MAIN),
             line([len, -ra], [len, ra], LAYER_MAIN),
@@ -2276,10 +2642,19 @@ mod tests {
             assert!(near(p.c_f(), 0.1 * m), "{profile} cF");
             assert!(near(p.s(), std::f64::consts::PI * m / 2.0), "{profile} s");
             assert!(near(p.tooth_depth(), (p.da() - p.df()) / 2.0));
+            // GB 内花键：大径 D_ei = m(z+df_c)（表 3），小径 D_ii = D_Fe max + 2C_F
             assert!(
-                near(p.internal_tip_dia(), m * (z as f64 + df_c)),
-                "{profile} Dii"
+                near(p.internal_major_dia(), m * (z as f64 + df_c)),
+                "{profile} D_ei"
             );
+            let p_int = p.clone().with_internal(true);
+            p_int.validate().unwrap();
+            assert!(near(p_int.internal_major_dia(), p.internal_major_dia()));
+            assert!(near(
+                p_int.internal_minor_dia(),
+                p.gb_form_dia_max() + 2.0 * p.c_f()
+            ));
+            assert!(p_int.internal_minor_dia() < p_int.internal_major_dia());
             // 齿顶/渐开线终止、起始圆
             assert!(near(p.d_involute_end(), p.da()), "{profile} 终止圆 = da");
             assert!(
@@ -2288,6 +2663,83 @@ mod tests {
             );
             p.validate().unwrap();
         }
+    }
+
+    /// 内花键：GB 表 3 直径（D_ei / D_ii=D_Fe+2C_F）、DIN d_f2/d_a2、端视图几何（半径互换）、
+    /// 侧视草案的外/内半径。
+    #[test]
+    fn internal_spline_diameters_and_views() {
+        // GB30R m3 z20：D_ei=65.4，D_ii=D_Fe max+2C_F，且位于 d=60 两侧。
+        let p = InvolParams::gb("30圆齿根", 3.0, 20)
+            .unwrap()
+            .with_internal(true);
+        p.validate().unwrap();
+        assert!(near(p.internal_major_dia(), 3.0 * (20.0 + 1.8)));
+        assert!(near(p.internal_minor_dia(), p.gb_form_dia_max() + 0.6));
+        assert!(
+            p.internal_minor_dia() < p.d() && p.d() < p.internal_major_dia(),
+            "D_ii={} d={} D_ei={}",
+            p.internal_minor_dia(),
+            p.d(),
+            p.internal_major_dia()
+        );
+        // 端视图：每齿 2×12 渐开线 + 槽底弧 + 齿顶弧 = 26 图元/齿 + 2 中心线。
+        let front = p.front_view().unwrap();
+        assert_eq!(front.len(), 20 * (2 * INVOLUTE_SEGMENTS + 2) + 2);
+        // 弧半径 = D_ei/2（外侧齿槽底）与 D_ii/2（里侧齿顶）；不能出现外花键的 da/df 半径。
+        let radii: Vec<f64> = front
+            .iter()
+            .filter_map(|e| match e {
+                EntityType::Arc(a) => Some(a.radius),
+                _ => None,
+            })
+            .collect();
+        assert!(radii.iter().any(|r| near(*r, p.internal_major_dia() / 2.0)));
+        assert!(radii.iter().any(|r| near(*r, p.internal_minor_dia() / 2.0)));
+        assert!(!radii.iter().any(|r| near(*r, p.da() / 2.0)));
+        // 侧视草案：外轮廓 = D_ei/2，细线 = D_ii/2。
+        let side = p.side_view(30.0);
+        assert!(has_line(
+            &side,
+            [0.0, -p.internal_major_dia() / 2.0],
+            [30.0, -p.internal_major_dia() / 2.0]
+        ));
+        assert!(has_line(
+            &side,
+            [0.0, p.internal_minor_dia() / 2.0],
+            [30.0, p.internal_minor_dia() / 2.0]
+        ));
+        // 外花键行为不变（da/df 口径）。
+        let ext = InvolParams::gb("30圆齿根", 3.0, 20).unwrap();
+        assert!(near(ext.da(), 63.0) && near(ext.df(), 54.6));
+        assert!(!ext.internal);
+
+        // DIN m2 z18 x0.45：内花键 d_f2=d_B=40、d_a2=d−0.9m+2xm=36。
+        let d = InvolParams::din(2.0, 18, 0.45)
+            .unwrap()
+            .with_d_b(40.0)
+            .with_internal(true);
+        d.validate().unwrap();
+        assert!(near(d.internal_major_dia(), 40.0));
+        assert!(near(d.internal_minor_dia(), 36.0));
+        let dfront = d.front_view().unwrap();
+        assert!(dfront
+            .iter()
+            .any(|e| matches!(e, EntityType::Arc(a) if near(a.radius, 20.0))));
+        assert!(dfront
+            .iter()
+            .any(|e| matches!(e, EntityType::Arc(a) if near(a.radius, 18.0))));
+
+        // 齿顶低于基圆的内花键：允许径向直线降级（45° 小齿数），不报错。
+        let p45 = InvolParams::gb("45圆齿根", 2.0, 8)
+            .unwrap()
+            .with_internal(true);
+        if p45.internal_tip_radius() < p45.db() / 2.0 {
+            assert!(p45.front_view().is_ok(), "低齿顶应走径向直线降级");
+        }
+
+        // GB DB 文案常量与报错链接（齿轮/轴/结构要素三处共用）。
+        assert!(GB_D_B_MSG.contains("DIN 5480") && GB_D_B_MSG.contains("GB/T 3478"));
     }
 
     /// DIN：hf*=0.55（齿侧对中基准）、公式与 DIN 5480-2 名义表逐行吻合；x 边界 [−0.05, 0.45]。
@@ -2740,18 +3192,77 @@ mod tests {
         let (p, o) = resolve_din_by_d_b(41.0, Some(2.0), Some(19), None).unwrap();
         assert!((p.x - 0.2).abs() < 1e-9, "x={}", p.x);
         assert_eq!(o.note(), "由公式解出，未命中表");
-        // 组合不一致：表中 m=2 z=14 → d_B=30（x−0.05）/32（x0.45），给 40 报错。
-        let e = resolve_din_by_d_b(40.0, Some(2.0), Some(14), None).unwrap_err();
+        // d_B 为主参数：输入 m/z 与 d_B 不相容（x 越界）→ 按 d_B 重算 z（保留 m），明文提示。
+        let (p, o) = resolve_din_by_d_b(40.0, Some(2.0), Some(14), None).unwrap();
+        assert_eq!(p.z, 18, "按 d_B=40、m=2 取 z=18");
+        assert!((p.x - 0.45).abs() < 1e-9);
         assert!(
-            e.contains("组合不一致") && e.contains("d_B=30") && e.contains("d_B=32"),
-            "{e}"
+            matches!(&o, D_bOrigin::Adjusted(n)
+                if n.contains("按基准直径 d_B=40 取 z=18")
+                    && n.contains("与输入 z=14 不符")
+                    && n.contains("d_B 为主参数")),
+            "{o:?}"
         );
-        // x 与 d_B 不自洽：m2 z18 x0.2 → d_B=38.6，却给 40。
-        let e = resolve_din_by_d_b(40.0, Some(2.0), Some(18), Some(0.2)).unwrap_err();
-        assert!(e.contains("不自洽"), "{e}");
-        // d_B 反解越界（x>0.45）。
-        let e = resolve_din_by_d_b(100.0, Some(2.0), Some(10), None).unwrap_err();
-        assert!(e.contains("超出") && e.contains("0.45"), "{e}");
+        // x 输入与 d_B 不符：按 d_B 取 x（保留命中表行的来源），明文提示。
+        let (p, o) = resolve_din_by_d_b(40.0, Some(2.0), Some(18), Some(0.2)).unwrap();
+        assert!((p.x - 0.45).abs() < 1e-9, "按 d_B 取表值 x=0.45，不用输入 x=0.2");
+        assert!(
+            matches!(&o, D_bOrigin::Adjusted(n)
+                if n.contains("查表命中 p27") && n.contains("与输入 x=0.2 不符")),
+            "{o:?}"
+        );
+        // 输入 z 超界（x>0.45）：表里 (m=2, d_B=100) 唯一行 z=48 → 按 d_B 重算。
+        let (p, o) = resolve_din_by_d_b(100.0, Some(2.0), Some(10), None).unwrap();
+        assert_eq!(p.z, 48);
+        assert!(matches!(&o, D_bOrigin::Adjusted(n) if n.contains("取 z=48")));
+        // d_B+m 表外 → 公式推 z（标注“推导值、未命中表”+区间依据）。
+        let (p, o) = resolve_din_by_d_b(41.0, Some(2.0), None, None).unwrap();
+        assert_eq!(p.z, 19);
+        assert!((p.x - 0.2).abs() < 1e-9, "x={}", p.x);
+        assert!(
+            matches!(&o, D_bOrigin::Derived(n)
+                if n.contains("推导值、未命中表")
+                    && n.contains("z∈[18.5000,19.5000]")
+                    && n.contains("取 z=19")),
+            "{o:?}"
+        );
+        // d_B+z 表外 → 公式给名义 m（取 x=0）并标注来源/可行区间。
+        let (p, o) = resolve_din_by_d_b(41.0, None, Some(19), None).unwrap();
+        assert!((p.m - 41.0 / 20.1).abs() < 1e-12, "m={}", p.m);
+        assert!(p.x.abs() < 1e-12);
+        assert!(
+            matches!(&o, D_bOrigin::Derived(n)
+                if n.contains("推导值、未命中表")
+                    && n.contains("取 x=0")
+                    && n.contains("可行区间 m∈")),
+            "{o:?}"
+        );
+        // 已知缺失档位 m=5：仍然明确报“数据缺失”，不用公式静默推导。
+        let e = resolve_din_by_d_b(50.0, Some(5.0), None, None).unwrap_err();
+        assert!(e.contains("该档位数据缺失") && e.contains("剔除"), "{e}");
+    }
+
+    /// GB 体系没有基准直径概念：`resolve_spline` 给 d_B 必须报统一文案；
+    /// DIN 不给 d_B 时由 m/z/x 正算 d_B（来源 Computed）。
+    #[test]
+    fn resolve_spline_gb_rejects_d_b_and_din_computes_d_b() {
+        let e = resolve_spline(SplineStd::GB, "GB30R", Some(40.0), Some(3.0), Some(20), None)
+            .unwrap_err();
+        assert_eq!(e, GB_D_B_MSG, "{e}");
+        let e = resolve_spline(SplineStd::GB, "30圆齿根", Some(40.0), None, None, None)
+            .unwrap_err();
+        assert_eq!(e, GB_D_B_MSG, "{e}");
+        // DIN：m+z（无 d_B）→ 由 d_B=m(z+1.1+2x) 正算并回填，不报“不匹配”。
+        let (p, origin) =
+            resolve_spline(SplineStd::DIN, "DIN30", None, Some(2.0), Some(18), Some(0.2))
+                .unwrap();
+        assert!((p.d_b.unwrap() - 39.0).abs() < 1e-9, "d_B=m(z+1.1+2x)=2×(18+1.1+0.4)=39.0");
+        assert!(matches!(origin, Some(D_bOrigin::Computed)), "{origin:?}");
+        assert_eq!(origin.unwrap().note(), "由 m/z/x 正算 d_B=m(z+1.1+2x)");
+        // GB：m+z 正常，d_b 保持 None（无此概念）。
+        let (p, origin) =
+            resolve_spline(SplineStd::GB, "GB30R", None, Some(3.0), Some(20), None).unwrap();
+        assert!(p.d_b.is_none() && origin.is_none());
     }
 
     // ── DIN 5480-2 检验表（M₁/M₂/D_M/k/W_k）──

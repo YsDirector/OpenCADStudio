@@ -114,10 +114,10 @@ rm -rf "$HOME/.config/OpenCADStudio/plugins/opencad.layers_quick"
   下拉选择，选中自动带出 de（GB/T 10952 表 1/表 2）与 d/D/B/h/l 派生值（de 框可改 = 覆盖）；
   下拉末尾「自定义…」支持表外规格（表外必须给 de）。例 `SPLINE 6x23x26x6 L30`（表内规格不写 de 也自动查表算 R/l）。
   **`INVOLSPLINE` 渐开线花键段**：`INVOLSPLINE GB30R M3 Z20 [X0.2] L30 [de63]`（GB）/
-  `INVOLSPLINE DIN30 DB40 M2 L30`（DIN，DB 基准直径；`DB40`+`M` 或 `DB40`+`Z` 可缺一项由 DIN 5480-2 表补全，
-  也收 `DB 40`/`DB=40`），预设代号 `GB30P`/`GB30R`（默认）/`GB375R`/`GB45R`/`DIN30`
+  `INVOLSPLINE DIN30 DB40 M2 L30`（DIN，DB 基准直径：d_B 为主参数，m/z 可缺一项由表/公式定；
+  三者不相容时按 d_B 重算并提示，也收 `DB 40`/`DB=40`），预设代号 `GB30P`/`GB30R`（默认）/`GB375R`/`GB45R`/`DIN30`
   （GB/T 3478.1-2008；DIN 5480-1:2015，h_fP*=0.55），直径由 M/Z/X（或 DB）导出；
-  `de` 可选（给了才画收尾弧，段长 = L+l）；与 SPLINE/CH/OV/RL/M/GEAR 互斥。
+  `de` 可选（给了才画收尾弧，段长 = L+l）；与 SPLINE/CH/OV/RL/M/GEAR 互斥；只做外花键。
   段表列：标准下拉（GB/DIN）+ 齿廓下拉 + m/z/x/L；DIN 另加 d_B 输入（候选来自
   DIN 5480-2 名义表，618 行内建于 `assets/din5480_2_nominal.csv`；**m=1.5 缺（p23/p24 空表框）、
   m=5 已剔除（p35 渲染缺陷）**），选/填 d_B 自动带出 m/z/x，派生值 `d_B/d/z/m/x` 与
@@ -271,10 +271,12 @@ rm -rf "$HOME/.config/OpenCADStudio/plugins/opencad.layers_quick"
   第一期 `detail_grind_od`（磨外圆砂轮越程槽 GB/T 6403.5-2008，可选 `b1`）；
   第二期 `detail_thread_relief`（外螺纹退刀槽 GB/T 3-1997 表 2，`P` 必给 + 可选 `g1/g2/dg/r/alpha`，斜壁 30° 下限）；
   第三期 `detail_spline_rect`（矩形花键 GB/T 1144-2001，规格代号下拉/自定义，de 自动查 GB/T 10952 表 1/表 2）。
-  第四期 `detail_invol_spline`（渐开线花键 GB/T 3478.1-2008 / DIN 5480-1:2015：标准+齿廓预设下拉、
-  m/z/x/L + DIN 的 **d_B 基准直径查表**（DIN 5480-2 名义表 618 行入库，`DB40` 可代 M/Z 之一；
-  `x=(d_B−m(z+1.1))/(2m)` 为从表反推并经全表校验的关系，非标准原文；m=1.5 缺失、m=5 已剔除）、
-  派生值显示并注明数据来源；`XL detail_invol_spline DIN30 DB40 M2 L30 view side`；轴段 `INVOLSPLINE` 同语法）。
+  第四期 `detail_invol_spline`（渐开线花键 GB/T 3478.1-2008 / DIN 5480-1:2015，**旧入口**）：
+  **主入口已改为齿轮生成器 `OCSMGEAR` 的「花键模式」**（口复选框：标准/齿廓/d_B/hf*/ρf*/cF*，
+  「齿轮种类」开关复用为外/内花键；内花键侧视/剖视是缺模板依据的草案）；几何全在
+  `src/invol_spline.rs` 共用引擎（DIN 5480-2 名义表 674 行入库；d_B 为主参数，m/z 可缺一个；
+  GB 无 d_B、给了报错）；`x=(d_B−m(z+1.1))/(2m)` 是从表反推并经全表校验的关系，非标准原文；
+  轴段 `INVOLSPLINE` 同引擎、只做外花键）。
   一站式说明见 `handbook/03-标准件库.md`「结构要素」；数据与画法的唯一来源是 `src/detail.rs`（新增要素只需实现 `DetailElement` + 进 `ELEMENTS`）。
   注：GB/T 5782 A/B 级 = 5780 C级画法 + **头部垫圈面 dw×c**（主/俯视图画、左视图不画；
   用户 2026-09-15 看图定案，画法依据 164580 官方 CAD 图实测；详见 OCSMBOM-plan.md §27.5）。

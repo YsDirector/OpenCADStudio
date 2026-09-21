@@ -3928,7 +3928,7 @@ pub const COMMAND_CATALOG: &[(&str, &str, &str)] = &[
     ("OCSMPOWERDIM", "D", "智能标注：拾取点模式标线性/对齐/半径/直径（Enter 切线段点选）"),
     ("OCSMDIMGULIDE", "GDIM", "引导线标注：选引导线 → 配置窗口（尺寸/剖视/向视/局部放大/角度/弧长/焊接/引线/序号/公差/粗糙度/形位公差）"),
     ("OCSMCENTERLINE", "ZX", "中心线：点圆/圆弧 → 十字中心线；点两根直线 → 角平分线中心线（`3中心线层`，线长 = 直径/投影长 + 图框比例×6mm）"),
-    ("OCSMGEAR", "", "齿轮（外齿轮 / 内齿轮（齿圈））：不带参数=开齿轮窗口（参数 + 视图按钮 + 实时预览）；带参数=一行直插（`OCSMGEAR 2 40 20 view 剖视图`、`OCSMGEAR int 2 40 30 view 端视图`、`OCSMGEAR 2 40 20 alpha 25 view 剖视图`（可写 `α25`））。压力角 α 默认 20°，14.5/15/17.5/20/22.5/25/30/37.5/45 都可给（10°<α<50°；只进渐开线/基圆/齿厚公式，ha*/c*/ρ=0.38m 不随 α 自动变，老系统/45° 花键请手动给 ha*/c*）。内齿轮只有剖视图+端视图（用户模板只有这两个），且剖视图**不打剖面线**（齿圈外壁留用户延伸）"),
+    ("OCSMGEAR", "", "齿轮（外齿轮 / 内齿轮（齿圈））+ 渐开线花键（花键模式）：不带参数=开齿轮/花键窗口（模式复选框 + 参数 + 视图按钮 + 实时预览）；带参数=一行直插（`OCSMGEAR 2 40 20 view 剖视图`、`OCSMGEAR int 2 40 30 view 端视图`；花键：`OCSMGEAR 花键 [内花键] std=DIN [profile=DIN30] db=40 2 18 h=30 view 端视图`，预设代号 GB30P/GB30R/GB375R/GB45R/DIN30 可直接代 std+profile）。齿轮模式只认 模数/齿数/压力角/变位系数 等常规项，给标准号或 d_B 明确报错。花键模式：GB 无基准直径（给 d_B 报错）；DIN 的 d_B 是主参数（d_B+m/d_B+z/m+z 三种给法，表外按公式推并标注来源），内/外花键用同一「齿轮种类」开关。内花键侧视/剖视是缺模板依据的草案（外侧齿根线 + 里侧齿顶线 + 两环剖面线）、齿圈外壁留用户延伸"),
     ("OCSMSHAFT", "", "轴生成器：不带参数=开轴生成器窗口（段表 ↔ 行文本双向同步 + 实时预览 + 视图按钮）+ 放置态；带参数=行 DSL/JSON 一行直插（段拼接 + 端面倒角 + 砂轮越程槽 + 螺纹段 M + 齿轮段 GEAR + 矩形花键段 SPLINE + 渐开线花键段 INVOLSPLINE + 视图 VIEW 常规|剖视|双；退刀槽就是一小段小直径轴段）。`OCSMSHAFT S30 E30 L45 CH2@L | S40 E40 L7 M1.5 | S36 E36 L5 | GEAR M3 Z20 VIEW 剖视 at x,y rot 度`；齿轮段可 `GEAR M3 Z20 ALPHA25`（压力角默认 20°）；花键 `OCSMSHAFT SPLINE 6x23x26x6 L30`（可 `de 71` 覆盖，矩形花键）或 `OCSMSHAFT INVOLSPLINE GB30R M3 Z20 L30`（渐开线花键，预设 GB30P/GB30R/GB375R/GB45R/DIN30，`X0.2` 变位，`de63` 可选）"),
     ("OCSMEDIT", "ME", "改标注：选中 OCSM 生成的标注 → 配置窗口改参数 → 重生成"),
     ("OCSMRGH", "CC", "表面粗糙度：点选插入点 → 配置窗口（匿名块 + ATTDEF）"),
@@ -4297,23 +4297,53 @@ pub(crate) fn gear_view_scale(doc: &acadrust::CadDocument, pt: [f64; 3]) -> f64 
 
 /// `OCSM_PART` 台账记录（明细表/球标直接取用）。
 fn gear_meta_json(p: &crate::gear::GearParams, view: crate::gear::GearView, part: &crate::partgen::GenPart) -> String {
+    let spline = p.spline.as_ref();
+    // 花键模式：写引擎解析后的实际值（d_B 补全后的 m/z/x 与预设 α/ha*），不是 GUI 占位值。
+    let engine = if p.is_spline() {
+        p.spline_engine().ok().map(|(e, _)| e)
+    } else {
+        None
+    };
+    let (m, z, alpha, ha, x, d_b) = match &engine {
+        Some(e) => (
+            e.m,
+            e.z,
+            e.alpha_deg,
+            e.ha_star,
+            e.x,
+            e.d_b.or_else(|| spline.and_then(|s| s.d_b)),
+        ),
+        None => (
+            p.m,
+            p.z,
+            p.alpha_deg,
+            p.ha,
+            p.x,
+            spline.and_then(|s| s.d_b),
+        ),
+    };
     serde_json::json!({
         "family": "gear",
+        "mode": if p.is_spline() { "spline" } else { "gear" },
         "view": view.key(),
-        "code": p.spec(),
+        "code": if p.is_spline() { part.meta.code.clone() } else { p.spec() },
         "name": part.meta.name,
         "spec": part.meta.spec,
         "material": part.meta.material,
         "weight": part.meta.weight,
-        "m": p.m,
-        "z": p.z,
-        "alpha": p.alpha_deg,
-        "ha": p.ha,
+        "m": m,
+        "z": z,
+        "alpha": alpha,
+        "ha": ha,
         "c": p.c,
         "beta": p.beta_deg,
         "h": p.h,
-        "x": p.x,
+        "x": x,
         "chamfer": p.chamfer(),
+        "std": spline.map(|s| s.std.label()),
+        "profile": engine.as_ref().map(|e| e.profile).or_else(|| spline.map(|s| s.profile.as_str())),
+        "d_b": d_b,
+        "internal": p.kind.is_internal(),
     })
     .to_string()
 }
@@ -4325,12 +4355,15 @@ fn apply_gear_export(
 ) -> Result<String, String> {
     #[derive(serde::Deserialize)]
     struct Req {
-        m: f64,
-        z: u32,
-        #[serde(default = "d_alpha")]
-        alpha: f64,
-        #[serde(default = "d_ha")]
-        ha: f64,
+        /// 普通齿轮必须给；花键模式可缺（给 `db` 时 m/z 可缺一个）
+        #[serde(default)]
+        m: Option<f64>,
+        #[serde(default)]
+        z: Option<u32>,
+        #[serde(default)]
+        alpha: Option<f64>,
+        #[serde(default)]
+        ha: Option<f64>,
         #[serde(default = "d_c")]
         c: f64,
         #[serde(default)]
@@ -4344,12 +4377,28 @@ fn apply_gear_export(
         /// "internal"/"内齿轮" → 内齿轮（齿圈）；不传 = 外齿轮
         #[serde(default)]
         kind: Option<String>,
-    }
-    fn d_ha() -> f64 {
-        1.0
-    }
-    fn d_alpha() -> f64 {
-        crate::gear::ALPHA_N_DEG
+        /// "spline"/"花键" → 花键模式
+        #[serde(default)]
+        mode: Option<String>,
+        /// 花键标准（`GB`/`DIN`）
+        #[serde(default)]
+        std: Option<String>,
+        /// 花键齿廓代号
+        #[serde(default)]
+        profile: Option<String>,
+        /// 基准直径 d_B（花键/DIN）
+        #[serde(default)]
+        db: Option<f64>,
+        /// 花键系数覆盖
+        #[serde(default)]
+        hf: Option<f64>,
+        #[serde(default)]
+        rho: Option<f64>,
+        #[serde(default)]
+        cf: Option<f64>,
+        /// `x` 是否显式给出（花键 GUI 总是给 x；默认 true，不丢用户输入）
+        #[serde(default)]
+        x_given: Option<bool>,
     }
     fn d_c() -> f64 {
         0.25
@@ -4366,16 +4415,67 @@ fn apply_gear_export(
             .ok_or_else(|| format!("齿轮种类无法识别：`{s}`（可用 internal|内齿轮、external|外齿轮）。"))?,
         None => crate::gear::GearKind::External,
     };
-    let p = crate::gear::GearParams {
-        kind,
-        m: req.m,
-        z: req.z,
-        alpha_deg: req.alpha,
-        ha: req.ha,
-        c: req.c,
-        beta_deg: req.beta,
-        h: req.h,
-        x: req.x,
+    let is_spline = matches!(
+        req.mode.as_deref().map(|s| s.trim().to_ascii_lowercase()),
+        Some(ref s) if matches!(s.as_str(), "spline" | "花键" | "invol" | "involute")
+    );
+    let p = if is_spline {
+        let std = match req.std.as_deref() {
+            Some(v) if !v.trim().is_empty() => crate::gear::SplineOpts::parse_std(v)?,
+            _ => crate::gear::default_spline_std(
+                req.profile.as_deref().unwrap_or(""),
+                req.db,
+            ),
+        };
+        let opts = crate::gear::SplineOpts {
+            std,
+            profile: req.profile.clone().unwrap_or_default(),
+            d_b: req.db,
+            m: req.m,
+            z: req.z,
+            x: req.x_given.unwrap_or(true).then_some(req.x),
+            alpha_deg: req.alpha,
+            ha_star: req.ha,
+            hf_star: req.hf,
+            rho_star: req.rho,
+            c_f_star: req.cf,
+        };
+        crate::gear::GearParams {
+            kind,
+            m: req.m.unwrap_or(2.0),
+            z: req.z.unwrap_or(40),
+            alpha_deg: req.alpha.unwrap_or(crate::gear::ALPHA_N_DEG),
+            ha: req.ha.unwrap_or(1.0),
+            c: req.c,
+            beta_deg: req.beta,
+            h: req.h,
+            x: req.x,
+            spline: Some(opts),
+        }
+    } else {
+        if req.std.as_deref().is_some_and(|v| !v.trim().is_empty()) {
+            return Err(crate::gear::gear_mode_std_error());
+        }
+        if req.db.is_some() {
+            return Err(crate::gear::gear_mode_db_error());
+        }
+        if req.profile.is_some() || req.hf.is_some() || req.rho.is_some() || req.cf.is_some() {
+            return Err(
+                "齿轮模式不认花键参数（齿廓/hf/ρf/cf）；要用花键请勾选「花键模式」。".to_string(),
+            );
+        }
+        crate::gear::GearParams {
+            kind,
+            m: req.m.ok_or("齿轮模式缺 m（模数）")?,
+            z: req.z.ok_or("齿轮模式缺 z（齿数）")?,
+            alpha_deg: req.alpha.unwrap_or(crate::gear::ALPHA_N_DEG),
+            ha: req.ha.unwrap_or(1.0),
+            c: req.c,
+            beta_deg: req.beta,
+            h: req.h,
+            x: req.x,
+            spline: None,
+        }
     };
     let view = crate::gear::GearView::parse(&req.view)?;
     let doc = snapshot(sender)?;
@@ -4397,19 +4497,30 @@ fn apply_gear_export(
     crate::set_pending_part(crate::PendingPart {
         block: block.clone(),
         meta_json: gear_meta_json(&p, view, &part),
-        label: format!("外齿轮 {}（{}）", p.spec(), view.label()),
+        label: format!(
+            "{} {}（{}）",
+            if p.is_spline() { p.spline_kind_label() } else { "外齿轮" },
+            part.meta.spec,
+            if p.is_spline() { view.label_for_spline() } else { view.label() }
+        ),
     });
     commit_undo(sender);
+    let notes = if p.is_spline() {
+        p.spline_engine().map(|(e, _)| p.spline_notes(&e)).unwrap_or_default()
+    } else {
+        p.notes()
+    };
     Ok(serde_json::json!({
         "ok": true,
         "message": format!(
-            "已生成外齿轮 {}（{}）：切回图纸，鼠标上已带这个视图，左键点击定位基点 → 移动光标旋转 → 再点击落定（可连续，Esc 结束）。",
-            p.spec(),
-            view.label()
+            "已生成{} {}（{}）：切回图纸，鼠标上已带这个视图，左键点击定位基点 → 移动光标旋转 → 再点击落定（可连续，Esc 结束）。",
+            if p.is_spline() { p.spline_kind_label() } else { "外齿轮" },
+            part.meta.spec,
+            if p.is_spline() { view.label_for_spline() } else { view.label() }
         ),
         "block": block,
-        "spec": p.spec(),
-        "notes": p.notes(),
+        "spec": part.meta.spec,
+        "notes": notes,
     })
     .to_string())
 }
@@ -4469,9 +4580,10 @@ pub(crate) fn apply_gear_insert(
     Ok(serde_json::json!({
         "ok": true,
         "message": format!(
-            "已插入外齿轮 {}（{}）于 ({:.3}, {:.3})",
-            req.params.spec(),
-            req.view.label(),
+            "已插入{} {}（{}）于 ({:.3}, {:.3})",
+            if req.params.is_spline() { req.params.spline_kind_label() } else { "外齿轮" },
+            part.meta.spec,
+            if req.params.is_spline() { req.view.label_for_spline() } else { req.view.label() },
             at[0],
             at[1]
         ),
@@ -8605,6 +8717,53 @@ mod tests {
         );
     }
 
+    /// 齿轮/花键窗口：每个 `el("id")` 引用都必须在 HTML 里有对应元素；脚本过 `node --check`。
+    #[test]
+    fn gear_gui_el_ids_exist_and_script_passes_node_check() {
+        let ids = el_id_references(GEAR_HTML);
+        assert!(!ids.is_empty(), "应扫到 el(\"…\") 引用");
+        for id in &ids {
+            assert!(
+                GEAR_HTML.contains(&format!("id=\"{id}\"")) || GEAR_HTML.contains(&format!("id='{id}'")),
+                "gear_gui.html: JS 里用了 el(\"{id}\")，但没有这个 id 的元素（开局 TypeError）"
+            );
+        }
+        // 花键模式关键控件/函数必须在页面上（防后续重构把入口弄丢）。
+        for key in [
+            "splineMode",
+            "stdSel",
+            "profileSel",
+            "db",
+            "hf",
+            "rho",
+            "cf",
+            "dinDbList",
+            "syncSplineUI",
+            "applySplinePreset",
+        ] {
+            assert!(GEAR_HTML.contains(key), "gear_gui.html 缺花键模式要素：{key}");
+        }
+        let Some(script) = first_script(GEAR_HTML) else {
+            panic!("gear_gui.html 里找不到 <script> 块");
+        };
+        let path = std::env::temp_dir().join("ocsm_gear_gui_check.js");
+        std::fs::write(&path, script).expect("写脚本临时文件");
+        let out = match std::process::Command::new("node")
+            .arg("--check")
+            .arg(&path)
+            .output()
+        {
+            Ok(o) => o,
+            Err(_) => return, // 无 node：跳过（不阻塞 CI）
+        };
+        assert!(
+            out.status.success(),
+            "gear_gui.html 脚本 node --check 失败：\n{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
     /// 轴窗口行为冒烟（node + 最小 DOM 垫片 + fetch 桩）：锁住矩形花键规格下拉的
     /// 交互契约——下拉选表内规格 → de 自动填 + 派生值 + 行文本同步；「自定义…」→
     /// 文本框出现并手输；表外缺 de → 既有报错文案。node 缺失时跳过。
@@ -8623,6 +8782,28 @@ mod tests {
         assert!(
             out.status.success(),
             "轴 GUI 行为冒烟失败：\n{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    /// 齿轮/花键窗口行为冒烟（node + 最小 DOM 垫片 + fetch 桩）：锁住「模式复选框」切换、
+    /// GB 下 d_B 行隐藏、DIN 下 d_B 行显示与齿廓预设写回。node 缺失时跳过。
+    #[test]
+    fn gear_gui_spline_mode_smoke_with_node() {
+        let manifest = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let js = manifest.join("tests/gear_gui_smoke.mjs");
+        let html = manifest.join("src/gear_gui.html");
+        if !js.exists() {
+            return;
+        }
+        let out = match std::process::Command::new("node").arg(&js).arg(&html).output() {
+            Ok(o) => o,
+            Err(_) => return, // 无 node：跳过（不阻塞 CI）
+        };
+        assert!(
+            out.status.success(),
+            "齿轮/花键 GUI 行为冒烟失败：\n{}{}",
             String::from_utf8_lossy(&out.stdout),
             String::from_utf8_lossy(&out.stderr)
         );
@@ -13504,10 +13685,13 @@ mod weld_tests {
             "d_B 查表 meta：{resp}"
         );
         assert_eq!(mock.inserts().len(), 3, "d_B 路径也落一个 INSERT");
-        // 组合不一致报错；m=1.5 已由用户截图补入（db+m → z=12、x=0.175/1.5）
-        let bad = br#"{"family":"detail_invol_spline","d":0,"spec":"DIN30","params":{"db":40,"m":2,"z":14,"len":20},"view":"side"}"#;
-        let err = apply_part_pick(&sender, bad).unwrap_err();
-        assert!(err.contains("组合不一致"), "{err}");
+        // d_B 为主参数：输入 z 与 d_B 不符 → 按 d_B 重算 z（不报“组合不一致”）；m=1.5 已由用户截图补入
+        let adjusted = br#"{"family":"detail_invol_spline","d":0,"spec":"DIN30","params":{"db":40,"m":2,"z":14,"len":20},"view":"side"}"#;
+        let resp = apply_part_pick(&sender, adjusted).expect("d_B 主参数调整 z 插入");
+        assert!(
+            resp.contains("按基准直径 d_B=40 取 z=18") && resp.contains("d_B 为主参数"),
+            "调整提示：{resp}"
+        );
         let ok15 = br#"{"family":"detail_invol_spline","d":0,"spec":"DIN30","params":{"db":20,"m":1.5,"len":20},"view":"side"}"#;
         let resp = apply_part_pick(&sender, ok15).expect("m=1.5 查表插入");
         assert!(
@@ -13943,6 +14127,72 @@ mod weld_tests {
         // 缺档：m=5 明确“数据缺失”。
         let e = http_req(server.port, "GET", "/api/invol_check?db=50&m=5&z=20&check=1", "");
         assert!(e.contains("数据缺失") && e.contains("剔除"), "{e}");
+    }
+
+    /// OCSMGEAR 花键模式 HTTP 通路：齿轮模式拒绝标准号/d_B、GB 下 d_B 统一文案、
+    /// DIN 三种给法、内花键草案、生成到图纸（块名/台账）。
+    #[test]
+    fn gear_spline_routes_gb_db_din_modes_and_internal_export() {
+        let mock = Arc::new(MockSender::new(ocsm_layered_doc()));
+        let server = spawn_fixed(mock.clone()).expect("spawn guide server");
+        // 齿轮模式给标准号/d_B → 明确报错（不静默忽略）
+        let e = http_req(server.port, "GET", "/api/gear_svg?m=2&z=40&std=DIN", "");
+        assert!(e.contains("齿轮模式不认标准号"), "{e}");
+        let e = http_req(server.port, "GET", "/api/gear_svg?m=2&z=40&db=40", "");
+        assert!(e.contains("齿轮模式不认基准直径"), "{e}");
+        // GB 花键 + d_B → 统一文案（GB/T 3478 没有基准直径概念）
+        let e = http_req(
+            server.port,
+            "GET",
+            "/api/gear_svg?mode=spline&std=GB&db=40&m=3&z=20&view=front",
+            "",
+        );
+        assert!(e.contains("GB/T 3478") && e.contains("本体系不用 d_B"), "{e}");
+        // DIN d_B+m → 查表补 z；info 带来源
+        let j = http_req(
+            server.port,
+            "GET",
+            "/api/gear_info?mode=spline&std=DIN&db=40&m=2&h=30&view=front",
+            "",
+        );
+        let v: serde_json::Value = serde_json::from_str(&j).unwrap();
+        assert_eq!(v["ok"], true, "{j}");
+        assert_eq!(v["z"], 18);
+        assert!(v["origin"].as_str().unwrap().contains("查表命中 p27"), "{j}");
+        // 内花键端视图预览 + info 带缺模板依据的草案提示
+        let svg = http_req(
+            server.port,
+            "GET",
+            "/api/gear_svg?mode=spline&std=GB&profile=GB30R&m=3&z=20&kind=internal&h=30&view=front",
+            "",
+        );
+        assert!(svg.contains("<svg"), "{}", &svg[..160.min(svg.len())]);
+        let j = http_req(
+            server.port,
+            "GET",
+            "/api/gear_info?mode=spline&std=GB&profile=GB30R&m=3&z=20&kind=internal&h=30",
+            "",
+        );
+        let v: serde_json::Value = serde_json::from_str(&j).unwrap();
+        assert_eq!(v["kind_label"], "内花键");
+        assert!(v["notes"].as_array().unwrap().iter().any(|n| n.as_str().unwrap().contains("草案")));
+        // 生成到图纸：花键模式走 apply_gear_export（块名 OCSM_SPLINE_…、台账 mode=spline）
+        let body = serde_json::json!({
+            "mode":"spline", "std":"DIN", "profile":"DIN30", "db":40, "m":2,
+            "h":30, "kind":"internal", "view":"section"
+        })
+        .to_string();
+        let sender: Arc<dyn PluginRequestSender> = mock.clone();
+        let resp = apply_gear_export(&sender, body.as_bytes()).expect("花键内花键出库");
+        assert!(resp.contains("\"ok\":true"), "{resp}");
+        assert!(resp.contains("内花键"), "{resp}");
+        let block = crate::pending_block().expect("花键已登记待放置件");
+        assert!(block.starts_with("OCSM_SPLINE_INT_DIN_DIN30"), "{block}");
+        assert!(block.ends_with("_SECTION"), "{block}");
+        // 齿轮模式给 d_B 的导出也拒绝
+        let bad = serde_json::json!({"m":2,"z":40,"h":20,"db":40}).to_string();
+        let e = apply_gear_export(&sender, bad.as_bytes()).unwrap_err();
+        assert!(e.contains("齿轮模式不认基准直径"), "{e}");
     }
 
     #[test]

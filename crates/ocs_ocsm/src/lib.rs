@@ -1819,12 +1819,13 @@ impl OcsmPlugin {
         }));
     }
 
-    /// `OCSMGEAR`：齿轮出图（外齿轮 / 内齿轮）。
+    /// `OCSMGEAR`：齿轮/渐开线花键出图（外齿轮 / 内齿轮 / 花键模式）。
     ///
-    /// * 不带参数 = 人类侧：开齿轮窗口（参数表 + 视图按钮 + 实时预览）+ 进放置态；
+    /// * 不带参数 = 人类侧：开齿轮/花键窗口（模式复选框 + 参数表 + 视图按钮 + 实时预览）+ 进放置态；
     ///   窗口里点「生成到图纸」→ 回图纸点基点 → 移动光标旋转 → 再点落定。
-    /// * 带参数 = AI/MCP：`OCSMGEAR [内齿轮|int] <m> <z> [h] [ha=..] [c=..] [beta=..] [x=..] [view 视图] [at x,y] [rot 度]`。
-    ///   内齿轮（齿圈）：`OCSMGEAR int 2 40 30 view 端视图`；只用 剖视图 + 端视图。
+    /// * 带参数 = AI/MCP：齿轮 `OCSMGEAR [内齿轮|int] <m> <z> [h] [ha=..] [c=..] [beta=..] [x=..] [view 视图] [at x,y] [rot 度]`；
+    ///   花键 `OCSMGEAR 花键 [内花键] [std=GB|DIN] [profile=GB30R] [db=40] [hf=..] [rho=..] [cf=..] <m> <z> [x=..] [h=..] [view 端视图|侧视图|剖视图]`。
+    ///   内齿轮（齿圈）：`OCSMGEAR int 2 40 30 view 端视图`；只用 剖视图 + 端视图。GB 无 d_B；DIN 的 d_B 是主参数。
     fn cmd_gear(&self, host: &mut dyn HostApi, args: &str) {
         if !args.trim().is_empty() {
             let req = match crate::gear::parse_request(args) {
@@ -1880,7 +1881,7 @@ impl OcsmPlugin {
         };
         if open_gear_window(port, Some(host.tab_id())) {
             host.push_info(
-                "OCSM 齿轮：已打开齿轮窗口（可切外齿轮/内齿轮）。选视图 + 填参数点「生成到图纸」→ \
+                "OCSM 齿轮/花键：已打开窗口（顶部可勾选「花键模式」；齿轮下可切外/内齿轮）。选视图 + 填参数点「生成到图纸」→ \
                  回到图纸点击定位基点 → 移动光标旋转 → 再点击落定（可连续，Esc 结束）。",
             );
         } else {

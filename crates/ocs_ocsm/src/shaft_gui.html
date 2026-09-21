@@ -221,7 +221,7 @@ function blankRow() {
     m: { on: false, p: "" },
     gear: { on: false, m: "3", z: "20", h: "", alpha: "" },
     spline: { on: false, spec: "6x23x26x6", len: "30", de: "" },
-    invol: { on: false, std: "GB", profile: "GB30R", m: "3", z: "20", x: "", db: "", len: "30", de: "" },
+    invol: { on: false, std: "GB", profile: "GB30R", m: "3", z: "20", x: "", db: "", len: "30", de: "", d_b_note: "" },
   };
 }
 
@@ -419,6 +419,7 @@ function involDerived(r) {
           && Math.abs(Number(row.x) - x) < 5e-4);
       out += " d_B" + fmt(raw)
         + (hit ? "（查表命中 p" + hit.page + " m=" + fmt(hit.m) + "）" : "（由公式解出，未命中表）");
+      if (r.invol.d_b_note) out += "；" + r.invol.d_b_note;
       // 检验尺寸（与 parts_gui 同口径）：精确 (d_B,m,z) 查表才显值；否则提示走 CHECK/公式。
       const insp = involDinInspection.find((row) =>
         Math.abs(Number(row.db) - raw) < 1e-6
@@ -500,6 +501,9 @@ function rowHtml(r, i) {
   const gearOn = r.gear.on;
   const splineOn = r.spline.on;
   const involOn = r.invol.on;
+  // 渐开线花键：GB/T 3478 没有基准直径概念 —— std 不是 DIN 时不显示 d_B 输入框。
+  const involPreset = involList().find((x) => x.code === String(r.invol.profile).trim());
+  const involDin = involPreset ? involPreset.std === "DIN" : /din/i.test(String(r.invol.profile));
   const specHit = splineSpecHit(r.spline.spec);
   const specSel = specHit ? specHit.code : SPLINE_CUSTOM;
   const mOn = r.m.on;
@@ -540,7 +544,7 @@ function rowHtml(r, i) {
       <div class="frow"><span class="chk">m</span><input type="number" step="0.1" min="0" data-f="invol.m" value="${esc(r.invol.m)}"${dis(!involOn)}>
       <span class="chk">z</span><input type="number" step="1" min="3" data-f="invol.z" value="${esc(r.invol.z)}"${dis(!involOn)}>
       <span class="chk">x</span><input type="number" step="0.05" data-f="invol.x" value="${esc(r.invol.x)}" placeholder="0" style="width:52px"${dis(!involOn)}></div>
-      <div class="frow"><span class="chk">d_B</span><input type="number" step="0.1" min="0" data-f="invol.db" value="${esc(r.invol.db)}" list="dinDbList" placeholder="DIN 查表" style="width:64px"${dis(!involOn)}></div>
+      ${involDin ? `<div class="frow"><span class="chk">d_B</span><input type="number" step="0.1" min="0" data-f="invol.db" value="${esc(r.invol.db)}" list="dinDbList" placeholder="DIN 查表" style="width:64px"${dis(!involOn)}></div>` : ""}
       <div class="frow"><span class="chk">L</span><input type="number" step="0.1" min="0" data-f="invol.len" value="${esc(r.invol.len)}" placeholder="有效长度"${dis(!involOn)}>
       <span class="chk">de</span><input type="number" step="0.1" min="0" data-f="invol.de" value="${esc(r.invol.de)}" placeholder="可选" style="width:48px"${dis(!involOn)}></div>
       <div class="frow invol-derive" title="d/db/da/df/ρf/cF（与 invol_spline.rs 同公式）；DIN 另给 d_B 名义估算；给了 de 再算收尾 l">${esc(involDerived(r))}</div></td>
@@ -666,6 +670,7 @@ function rowFromSegment(seg) {
     r.invol.z = iv.z === null || iv.z === undefined ? "" : String(iv.z);
     r.invol.x = Math.abs(iv.x || 0) < 1e-12 ? "" : fmt(iv.x);
     r.invol.db = iv.d_b === null || iv.d_b === undefined ? "" : fmt(iv.d_b);
+    r.invol.d_b_note = iv.d_b_note || "";
     r.invol.len = iv.len === null || iv.len === undefined ? "" : fmt(iv.len);
     r.invol.de = iv.de === null || iv.de === undefined ? "" : fmt(iv.de);
     return r;

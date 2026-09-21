@@ -1330,10 +1330,8 @@ fn resolve_invol_spline(
     let x = params.get("x");
     let (p, mut source) = if let Some(d_b) = params.get("db") {
         if std != SplineStd::DIN {
-            return Err(format!(
-                "渐开线花键：DB（基准直径 d_B={}）只适用于 DIN 5480-2（GB/T 3478.1 无此参数）",
-                trim(d_b)
-            ));
+            // GB/T 3478 没有基准直径这个概念：统一文案，不静默忽略。
+            return Err(format!("渐开线花键：{}", crate::invol_spline::GB_D_B_MSG));
         }
         let z = match z_value {
             Some(z) => {
@@ -1601,7 +1599,8 @@ impl DetailElement for InvolSpline {
                       { "value": "DIN30", "label": "30° 圆齿根（滚刀基准，h_fP=0.55m）" }
                     ]
                   }, "default": "GB30R" },
-                { "key": "db", "label": "基准直径 d_B（仅 DIN；从表里选候选）", "type": "number", "datalist": "din_nominal", "placeholder": "例如 40（DIN 5480-2 查表）" },
+                { "key": "db", "label": "基准直径 d_B（仅 DIN；从表里选候选）", "type": "number", "datalist": "din_nominal", "placeholder": "例如 40（DIN 5480-2 查表）",
+                  "show_when": { "key": "std", "values": ["DIN"] } },
                 { "key": "m", "label": "模数 m（DIN 给 d_B 时可由查表补全）", "type": "number", "placeholder": "例如 3" },
                 { "key": "z", "label": "齿数 z（DIN 给 d_B 时可由查表补全）", "type": "number", "placeholder": "例如 20" },
                 { "key": "x", "label": "变位系数 x（可选，DIN ∈ [−0.05, 0.45]）", "type": "number", "placeholder": "留空 = 0" },
@@ -2373,10 +2372,14 @@ mod tests {
             .unwrap()
             .unwrap();
         assert!(err.contains("由公式解出，未命中表"), "公式路径：{err}");
-        let err = preview_svg("family=detail_invol_spline&spec=DIN30&db=40&m=2&z=14&view=front")
+        // d_B 为主参数：输入 z 与 d_B 不符 → 按 d_B 重算 z 并明文提示（不报“组合不一致”）。
+        let svg = preview_svg("family=detail_invol_spline&spec=DIN30&db=40&m=2&z=14&view=front")
             .unwrap()
-            .unwrap_err();
-        assert!(err.contains("组合不一致"), "{err}");
+            .unwrap();
+        assert!(
+            svg.contains("按基准直径 d_B=40 取 z=18") && svg.contains("d_B 为主参数"),
+            "d_B 主参数重算：{svg}"
+        );
         // m=1.5 现已由用户截图补入：d_B20+m1.5 → 查表 z=12、x=0.175/1.5=0.1167
         let svg = preview_svg("family=detail_invol_spline&spec=DIN30&db=20&m=1.5&view=front")
             .unwrap()
@@ -2388,7 +2391,7 @@ mod tests {
         let err = preview_svg("family=detail_invol_spline&spec=GB30R&db=40&m=2&z=18&view=front")
             .unwrap()
             .unwrap_err();
-        assert!(err.contains("只适用于 DIN"), "{err}");
+        assert!(err.contains("本体系不用 d_B"), "GB 无基准直径概念：{err}");
         let svg = preview_svg("family=detail_invol_spline&spec=GB375R&m=1.5&z=30&view=front")
             .unwrap()
             .unwrap();

@@ -37,6 +37,9 @@
   .ctl { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
   .ctl select, .ctl input { flex: none; }
   .ctl input[type=number] { width: 120px; }
+  .chk { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: #333;
+         margin: 0; padding-top: 4px; cursor: pointer; }
+  .chk input[type=checkbox] { width: 15px; height: 15px; margin: 0; }
   #mSel { width: 190px; }
   #m { width: 110px; }
   #alphaSel { width: 120px; }
@@ -50,7 +53,7 @@
 </style>
 </head>
 <body>
-<h1>OCSM 齿轮<span class="sub">外齿轮 / 内齿轮（齿圈）</span><span class="sub" id="pageSub"></span></h1>
+<h1>OCSM 齿轮 / 花键<span class="sub" id="pageSub">外齿轮 / 内齿轮（齿圈）</span><span class="sub" id="modeSub"></span></h1>
 
 <div class="wrap">
   <!-- ① 上部预览区：当前选中视图（大图位，深色底） -->
@@ -65,8 +68,38 @@
   <div class="card">
     <h2>几何参数</h2>
     <div class="form">
+      <label>模式</label>
+      <div class="ctl">
+        <label class="chk"><input type="checkbox" id="splineMode"> 花键模式（渐开线花键）</label>
+        <div class="hint" id="modeHint" style="flex-basis:100%; margin:0">
+          不勾选 = 普通齿轮（只能用 模数/齿数/压力角/变位系数 等常规输入；给标准号或 d_B 会明确报错）；
+          勾选 = 渐开线花键（GB/T 3478.1 / DIN 5480），内/外花键仍用下面的「齿轮种类」开关切换。
+        </div>
+      </div>
+
       <label>齿轮种类</label>
       <div class="ctl" id="kindRow"></div>
+
+      <label id="stdLabel">花键标准号</label>
+      <div class="ctl" id="stdCtl">
+        <select id="stdSel">
+          <option value="GB">GB/T 3478.1-2008（无基准直径概念）</option>
+          <option value="DIN">DIN 5480-1:2015（d_B 主参数）</option>
+          <option value="ANSI" disabled>ANSI B92.1（未实现，缺数据表）</option>
+        </select>
+      </div>
+
+      <label id="profileLabel">花键齿廓类型</label>
+      <div class="ctl" id="profileCtl"><select id="profileSel"></select></div>
+
+      <label id="dbLabel">基准直径 d_B</label>
+      <div class="ctl" id="dbCtl">
+        <input type="number" id="db" min="0" step="0.5" list="dinDbList" placeholder="DIN 5480-2 查表（可空，由 m/z 正算）">
+        <datalist id="dinDbList"></datalist>
+        <div class="hint" id="dbHint" style="flex-basis:100%; margin:0">
+          d_B 只属于 DIN 5480；GB/T 3478 下不给（本体系不用 d_B）。DIN 给 d_B 后 m 或 z 可空一个：由表定另一个。
+        </div>
+      </div>
 
       <label for="mSel">模数[m/Mn]</label>
       <div class="ctl">
@@ -91,11 +124,11 @@
       <label for="ha">齿顶高系数[ha*]</label>
       <div class="ctl"><input type="number" id="ha" value="1" step="0.05"></div>
 
-      <label for="c">顶隙系数[c*]</label>
-      <div class="ctl"><input type="number" id="c" value="0.25" step="0.05"></div>
+      <label for="c" id="cLabel">顶隙系数[c*]</label>
+      <div class="ctl" id="cCtl"><input type="number" id="c" value="0.25" step="0.05"></div>
 
-      <label for="betaD">螺旋角[β]</label>
-      <div class="ctl beta">
+      <label for="betaD" id="betaLabel">螺旋角[β]</label>
+      <div class="ctl beta" id="betaCtl">
         <input type="number" id="betaD" value="0" step="1" title="度（左旋填负数）">
         <span class="unit">°</span>
         <input type="number" id="betaM" value="0" min="0" step="1" title="分">
@@ -107,18 +140,27 @@
         </div>
       </div>
 
-      <label for="h">厚度[h]</label>
+      <label for="h" id="hLabel">厚度[h]</label>
       <div class="ctl">
         <input type="number" id="h" value="20" min="0.01" step="1">
         <span class="unit">mm</span>
         <span class="hint" id="hRule" style="margin:0">默认 10m（模板 20 @ m=2）</span>
       </div>
 
-      <label for="chamfer">轴向倒角距离[d]</label>
-      <div class="ctl">
+      <label for="chamfer" id="chamferLabel">轴向倒角距离[d]</label>
+      <div class="ctl" id="chamferCtl">
         <input type="text" id="chamfer" value="1" disabled>
         <span class="hint" style="margin:0">自动 = round(0.6m)（用户定案）</span>
       </div>
+
+      <label id="hfLabel">花键齿根高系数[hf*]</label>
+      <div class="ctl" id="hfCtl"><input type="number" id="hf" value="0.9" step="0.01"></div>
+
+      <label id="rhoLabel">花键齿根圆角系数[ρf*]</label>
+      <div class="ctl" id="rhoCtl"><input type="number" id="rho" value="0.4" step="0.01"></div>
+
+      <label id="cfLabel">花键齿形裕度系数[cF*]</label>
+      <div class="ctl" id="cfCtl"><input type="number" id="cf" value="0.1" step="0.01"></div>
 
       <label for="x">变位系数[Xn]</label>
       <div class="ctl"><input type="number" id="x" value="0" step="0.05"></div>
@@ -169,6 +211,20 @@ const VIEWS = [
   { key: "simplified", name: "简化正视图", kinds: ["external"] },
   { key: "front", name: "常规正视图", internalName: "端视图", kinds: ["external", "internal"] },
 ];
+// 花键齿廓预设：正常从 `/api/parts`（detail_invol_spline.invol_presets）取；拿不到时用这份兜底
+// （系数与 invol_spline.rs 的 `GB_PRESETS`/`DIN_PRESETS` 同一套）。
+const INVOL_FALLBACK = [
+  { code: "GB30P", std: "GB", profile: "30平齿根", alpha: 30, ha: 0.5, hf: 0.75, rho: 0.2, cf: 0.1 },
+  { code: "GB30R", std: "GB", profile: "30圆齿根", alpha: 30, ha: 0.5, hf: 0.9, rho: 0.4, cf: 0.1 },
+  { code: "GB375R", std: "GB", profile: "37.5圆齿根", alpha: 37.5, ha: 0.45, hf: 0.7, rho: 0.3, cf: 0.1 },
+  { code: "GB45R", std: "GB", profile: "45圆齿根", alpha: 45, ha: 0.4, hf: 0.6, rho: 0.25, cf: 0.1 },
+  { code: "DIN30", std: "DIN", profile: "DIN30", alpha: 30, ha: 0.45, hf: 0.55, rho: 0.16, cf: 0.1 },
+];
+let involPresets = [];            // 目录表预设（拿不到就空，用 INVOL_FALLBACK）
+let involDinNominal = [];         // DIN 5480-2 名义表候选（d_B datalist）
+const involList = () => (involPresets.length ? involPresets : INVOL_FALLBACK);
+// 花键模式开关（复选框）
+const isSpline = () => el("splineMode").checked;
 let curKind = "external";         // 当前种类（默认外齿轮）
 let curView = "section";          // 当前选中视图（默认剖视图）
 let hTouched = false;             // 用户是否手动改过厚度 h（改过则切种类/改 m 不再自动回默认）
@@ -180,10 +236,32 @@ const el = (id) => document.getElementById(id);
 // 种类/视图查询 + h 默认值（切种类、改 m、渲染提示时共用）
 const kindOf = () => KINDS.find((k) => k.key === curKind) || KINDS[0];
 const viewOf = (key) => VIEWS.find((v) => v.key === key);
-// 该视图在给定种类下可生成吗（内齿轮只有剖视图 + 端视图）
-const viewAvailable = (key, kind) => { const v = viewOf(key); return !!v && v.kinds.indexOf(kind) >= 0; };
-// 视图显示名：内齿轮下 section/front 用 internalName（与 gear.rs label_for 同口径）
-const viewLabel = (key, kind) => { const v = viewOf(key); if (!v) return ""; return kind === "internal" && v.internalName ? v.internalName : v.name; };
+// 花键模式下种类改名/改说明（同一套 toggle：外花键 / 内花键）
+function kindName(k) {
+  if (!isSpline()) return k.name;
+  return k.key === "internal" ? "内花键" : "外花键";
+}
+function kindSub(k) {
+  if (!isSpline()) return k.sub;
+  return k.key === "internal"
+    ? "内花键：材料在外、齿朝内（外侧齿根/里侧齿顶）；侧视/剖视是缺模板依据的草案"
+    : "外花键：齿朝外（大径/小径按 GB 表 3 或 DIN 名义表公式）";
+}
+// 该视图在给定模式/种类下可生成吗：花键只有 端视图/侧视图/剖视图（无简化正视图）；
+// 齿轮仍按原口径（内齿轮只有剖视 + 端视）。
+function viewAvailable(key, kind) {
+  const v = viewOf(key);
+  if (!v) return false;
+  if (isSpline()) return ["section", "side", "front"].indexOf(key) >= 0;
+  return v.kinds.indexOf(kind) >= 0;
+}
+// 视图显示名：齿轮内齿圈下 section/front 用 internalName；花键统一用花键叫法
+function viewLabel(key, kind) {
+  const v = viewOf(key);
+  if (!v) return "";
+  if (isSpline()) return ({ section: "剖视图", side: "侧视图", front: "端视图" })[key] || v.name;
+  return kind === "internal" && v.internalName ? v.internalName : v.name;
+}
 
 // 齿宽默认值：外齿轮 10m、内齿轮 15m（m 非法时返回 NaN）
 function defaultH() {
@@ -197,8 +275,12 @@ function syncDefaultH(force) {
   const v = defaultH();
   if (Number.isFinite(v)) el("h").value = fmt(v);
 }
-// 厚度框旁的默认规则提示（10m / 15m；手动改过后标「已手动修改」）
+// 厚度/有效长度提示（花键模式 = 侧视/剖视的有效长度 L）。
 function syncHRule() {
+  if (isSpline()) {
+    el("hRule").textContent = "花键有效长度 L（侧视/剖视用；端视图不需要）" + (hTouched ? " · 已手动修改" : "");
+    return;
+  }
   el("hRule").textContent = (curKind === "internal" ? "默认 15m（模板 30 @ m=2）" : "默认 10m（模板 20 @ m=2）")
     + (hTouched ? " · 已手动修改" : "");
 }
@@ -209,10 +291,11 @@ function syncBetaHint() {
     : "右旋为正、左旋在度数里填负数；β≠0 = 斜齿轮：侧视图会加三条细实线";
 }
 
-// 压力角默认值（不随 m/种类变；保留函数是为了照 h 的“已手动修改”口径好扩展）
+// 压力角默认值（不随 m/种类变；花键模式由齿廓预设控制，不走这里）
 function defaultAlpha() { return ALPHA_DEFAULT; }
-// 用户没手动改过 α 时写回默认 20°；force=true 则无条件写（初始化用）
+// 用户没手动改过 α 时写回默认 20°；force=true 则无条件写（初始化用）；花键模式不改。
 function syncDefaultAlpha(force) {
+  if (isSpline()) return;
   if (alphaTouched && !force) return;
   el("alpha").value = fmt(defaultAlpha());
 }
@@ -222,8 +305,13 @@ function syncAlphaSelect() {
   const hit = Number.isFinite(a) ? ALPHAS.find((v) => Math.abs(v - a) < 1e-9) : undefined;
   el("alphaSel").value = hit ? String(hit) : "custom";
 }
-// 压力角提示：默认 20° + 系数不随 α 自动变的提醒；手动改过标「已手动修改」
+// 压力角提示：齿轮默认 20° + 系数不随 α 自动变的提醒；花键模式由齿廓预设控制。
 function syncAlphaHint() {
+  if (isSpline()) {
+    el("alphaHint").innerHTML = "花键基本齿廓压力角（GB：30/37.5/45°；DIN：30°）；切齿廓会自动带出预设值，可手动覆盖。"
+      + (alphaTouched ? " · 已手动修改" : "");
+    return;
+  }
   el("alphaHint").innerHTML = "默认 20°（GB/T 1356）；ha*/c*/齿根圆角 ρ=0.38m <b>不随 α 自动变</b>，"
     + "14.5°/30°/45° 等系统请按所用标准手动改 ha*/c*（45° 花键常用 ha*≈0.5，本工具下限 0.5）"
     + (alphaTouched ? " · 已手动修改" : "");
@@ -242,11 +330,39 @@ function betaDeg() {
   return sign * (Math.abs(d) + mm / 60 + s / 3600);
 }
 
-// 收集当前参数：err 非空 = 非法（禁用主按钮、红字提示）；p 供 URL / POST JSON 用
+// 收集当前参数：err 非空 = 非法（禁用主按钮、红字提示）；p 供 URL / POST JSON 用。
+// 花键模式：m/z 可空（DIN 给 d_B 时可省一个），但至少要能定出 m/z；标准/d_B 只在花键模式出现。
 function collect() {
   const m = num("m"), z = num("z"), alpha = num("alpha"), ha = num("ha"), c = num("c"), h = num("h"), x = num("x");
   const beta = betaDeg();
   let err = "";
+  if (isSpline()) {
+    const db = String(el("db").value).trim();
+    const dbv = db === "" ? NaN : Number(db);
+    const hfv = num("hf"), rhov = num("rho"), cfv = num("cf");
+    if (db !== "" && (!Number.isFinite(dbv) || dbv <= 0)) err = "基准直径 d_B 必须是正数（或留空）。";
+    else if (!Number.isFinite(alpha) || alpha <= 10 || alpha >= 50) err = "压力角 α 超出范围（10°<α<50°）。";
+    else if (!Number.isFinite(ha)) err = "齿顶高系数 ha* 必须是数字。";
+    else if (!Number.isFinite(hfv) || hfv <= 0) err = "齿根高系数 hf* 必须是正数。";
+    else if (!Number.isFinite(rhov) || rhov < 0) err = "齿根圆角系数 ρf* 不能为负。";
+    else if (!Number.isFinite(cfv) || cfv < 0) err = "齿形裕度系数 cF* 不能为负。";
+    else if (!Number.isFinite(h) || h <= 0) err = "有效长度 L 必须是正数。";
+    else if (!Number.isFinite(x)) err = "变位系数 Xn 必须是数字。";
+    else if (el("stdSel").value === "DIN" && db === "" && (!Number.isFinite(m) || !Number.isFinite(z))) {
+      err = "DIN 花键：给 m 与 z，或给 d_B 由表补全（三者可少一个）。";
+    } else if (db === "" && (!Number.isFinite(m) || m <= 0 || !Number.isFinite(z) || z < 3)) {
+      err = "花键：不给 d_B 时必须给 m 与 z。";
+    } else if (db !== "" && el("stdSel").value === "GB") {
+      err = "GB/T 3478 没有基准直径 d_B 这个概念（d_B 只属 DIN 5480）。";
+    }
+    // 花键模式：隐藏框（c/β）不传；std/profile/db 系数都传给后端
+    const p = { mode: "spline", kind: curKind, std: el("stdSel").value, profile: el("profileSel").value,
+                alpha, ha, hf: hfv, rho: rhov, cf: cfv, h, x };
+    if (db !== "") p.db = dbv;
+    if (Number.isFinite(m) && m > 0) p.m = m;
+    if (Number.isFinite(z) && z >= 2) p.z = Math.round(z);
+    return { ok: !err, err, p };
+  }
   if (!Number.isFinite(m) || m <= 0) err = "模数 m 必须是正数。";
   else if (!Number.isFinite(z) || z < 2) err = "齿数 z 不能小于 2。";
   else if (!Number.isFinite(alpha) || alpha <= 10 || alpha >= 50) err = "压力角 α 超出范围（10°<α<50°）。";
@@ -255,7 +371,7 @@ function collect() {
   else if (!Number.isFinite(beta)) err = "螺旋角 β 的度/分/秒都必须是数字。";
   else if (!Number.isFinite(h) || h <= 0) err = "厚度 h 必须是正数。";
   else if (!Number.isFinite(x)) err = "变位系数 Xn 必须是数字。";
-  return { ok: !err, err, p: { kind: curKind, m, z: Math.round(z), alpha, ha, c, beta, h, x } };
+  return { ok: !err, err, p: { kind: curKind, m, z: Math.round(z), alpha, ha, c, beta, h, x, x_given: true } };
 }
 
 // 每次输入都跑：校验按钮可用性 + 红字；顺带同步模数下拉与只读倒角框
@@ -277,6 +393,97 @@ function syncModuleSelect() {
 function syncChamfer() {
   const m = num("m");
   el("chamfer").value = Number.isFinite(m) && m > 0 ? String(Math.round(0.6 * m)) : "—";
+}
+
+/* ─────────────────────── 花键模式 UI（标准/齿廓/d_B/系数） ─────────────────────── */
+
+// 行 id 前缀（HTML 里 label=…Label、div=…Ctl）。花键专用行与齿轮专用行互斥显示。
+const SPLINE_ROWS = ["std", "profile", "db", "hf", "rho", "cf"];
+const GEAR_ROWS = ["c", "beta", "chamfer"];
+function showRow(prefix, on) {
+  const lab = el(prefix + "Label"), ctl = el(prefix + "Ctl");
+  if (lab) lab.style.display = on ? "" : "none";
+  if (ctl) ctl.style.display = on ? "" : "none";
+}
+
+// 花键 UI 显隐/标签：花键模式只留 std/profile/db/hf/rho/cf；齿轮模式只留 c/beta/chamfer；
+// GB 下 d_B 不显示（用户定案：GB 体系没有基准直径这个概念）。
+function syncSplineUI() {
+  const on = isSpline();
+  SPLINE_ROWS.forEach((id) => showRow(id, on));
+  GEAR_ROWS.forEach((id) => showRow(id, !on));
+  el("hLabel").textContent = on ? "有效长度[L]" : "厚度[h]";
+  el("ha").title = on ? "齿顶高系数 ha*（按体系预设，可覆盖）" : "齿顶高系数 ha*";
+  if (on) {
+    const gb = el("stdSel").value === "GB";
+    if (gb) el("db").value = ""; // GB 没有基准直径：清掉残留值（不在页面上传）
+    showRow("db", !gb); // GB 不给 d_B
+  }
+}
+
+// 齿廓下拉：按标准填预设代号（保留当前选择，否则取第一个）。
+function syncProfileSelect() {
+  const std = el("stdSel").value;
+  const sel = el("profileSel");
+  const prev = sel.value;
+  const list = involList().filter((p) => p.std === std);
+  sel.innerHTML = "";
+  list.forEach((p) => {
+    const o = document.createElement("option");
+    o.value = p.code;
+    o.textContent = p.code + "（" + p.profile + "）";
+    sel.appendChild(o);
+  });
+  const codes = list.map((p) => p.code);
+  const prefer = std === "DIN" ? "DIN30" : "GB30R";
+  sel.value = codes.indexOf(prev) >= 0 ? prev : (codes.indexOf(prefer) >= 0 ? prefer : (codes[0] || ""));
+}
+
+// 齿廓预设 → α/ha*/hf*/ρf*/cF* 填框（算“系统预设值”，不算用户手动改 α）。
+function applySplinePreset() {
+  if (!isSpline()) return;
+  const p = involList().find((x) => x.code === el("profileSel").value);
+  if (!p) return;
+  el("alpha").value = fmt(p.alpha);
+  el("ha").value = fmt(p.ha);
+  el("hf").value = fmt(p.hf);
+  el("rho").value = fmt(p.rho);
+  el("cf").value = fmt(p.cf);
+  alphaTouched = false;
+  syncAlphaSelect();
+}
+
+// DIN 5480-2 名义表候选（datalist）；目录拿不到就空。
+function fillDinDbList() {
+  const dl = el("dinDbList");
+  if (!dl) return;
+  dl.innerHTML = "";
+  [...new Set(involDinNominal.map((r) => Number(r.db)))]
+    .filter((v) => Number.isFinite(v))
+    .sort((a, b) => a - b)
+    .forEach((v) => {
+      const o = document.createElement("option");
+      o.value = String(v);
+      dl.appendChild(o);
+    });
+}
+
+// 从 `/api/parts` 取花键预设与 DIN 名义表（与 shaft_gui 同源）；失败退兜底表。
+async function loadInvolCatalog() {
+  try {
+    const cat = await (await fetch("/api/parts", { cache: "no-store" })).json();
+    const inv = cat && cat.families ? cat.families.detail_invol_spline : null;
+    involPresets = (inv && Array.isArray(inv.invol_presets) ? inv.invol_presets : [])
+      .filter((p) => p && typeof p.code === "string" && p.code !== "");
+    involDinNominal = (inv && Array.isArray(inv.din_nominal) ? inv.din_nominal : [])
+      .filter((r) => r && Number.isFinite(Number(r.db)));
+  } catch (e) {
+    involPresets = [];
+    involDinNominal = [];
+  }
+  fillDinDbList();
+  syncProfileSelect();
+  applySplinePreset();
 }
 
 /* ─────────────────────────── 视图按钮 ─────────────────────────── */
@@ -314,7 +521,7 @@ function buildKinds() {
     b.type = "button";
     b.className = "opt" + (k.key === curKind ? " on" : "");
     b.dataset.k = k.key;
-    b.textContent = k.name;
+    b.textContent = kindName(k);
     b.addEventListener("click", () => {
       if (curKind === k.key) return;
       curKind = k.key;
@@ -329,28 +536,42 @@ function buildKinds() {
   });
 }
 
-// 种类相关 UI：标题/副标题/视图按钮/默认 h 提示/命令行提示（切种类时统一刷新）
+// 种类相关 UI：标题/副标题/视图按钮/默认 h 提示/命令行提示（切种类/切模式时统一刷新）
 function applyKindUI() {
   const k = kindOf();
-  // 标题固定写工具名（两种齿轮都支持，不能只写一种），当前种类放副标题里
-  el("pageSub").textContent = "· 当前：" + k.name + " · " + k.sub;
-  document.title = "OCSM 齿轮（外齿轮 / 内齿轮）";
+  const spline = isSpline();
+  // 标题固定写工具名（两种模式都支持，当前模式/种类放副标题里）
+  el("pageSub").textContent = spline ? "渐开线花键（GB/T 3478.1 / DIN 5480）" : "齿轮（外齿轮 / 内齿轮（齿圈））";
+  el("modeSub").textContent = "· 当前：" + (spline ? "花键模式 · " : "齿轮模式 · ") + kindName(k);
+  document.title = spline ? "OCSM 齿轮 / 花键（渐开线花键）" : "OCSM 齿轮（外齿轮 / 内齿轮）";
+  buildKinds();
   buildViews();
   syncHRule();
   syncBetaHint();
   syncKindHint();
 }
 
-// 命令行等价用法 + 内齿轮语义说明（随种类/参数/视图同步）
+// 命令行等价用法 + 模式语义说明（随模式/种类/参数/视图同步）
 function syncKindHint() {
   const v = collect();
-  const viewCn = curView === "front"
-    ? (curKind === "internal" ? "端视图" : "常规正视图")
-    : ({ section: "剖视图", side: "侧视图", simplified: "简化正视图" }[curView] || "剖视图");
+  const viewCn = viewLabel(curView, curKind);
+  let html = "";
+  if (isSpline()) {
+    const db = String(el("db").value).trim();
+    let arg = "花键 " + (curKind === "internal" ? "内花键 " : "") + "std=" + el("stdSel").value;
+    if (db !== "") arg += " db=" + db;
+    if (v.ok && v.p.m !== undefined) arg += " " + fmt(v.p.m);
+    if (v.ok && v.p.z !== undefined) arg += " " + v.p.z;
+    arg += " view " + viewCn;
+    html += "花键模式：几何全在 <code>invol_spline.rs</code> 引擎（GB/DIN 预设 + DIN 5480-2 查表）；"
+         + "不给 d_B 时用 m/z（DIN 会由 m/z/x 正算 d_B）。<br>";
+    html += "命令行等价用法：<code>OCSMGEAR " + arg + "</code>";
+    el("kindHint").innerHTML = html;
+    return;
+  }
   const arg = v.ok
     ? (curKind === "internal" ? "int" : "ext") + " " + fmt(v.p.m) + " " + v.p.z + " " + fmt(v.p.h) + " alpha " + fmt(v.p.alpha)
     : (curKind === "internal" ? "int" : "ext") + " <m> <z> <h> alpha <α>";
-  let html = "";
   if (curKind === "internal") {
     html += "内齿轮只有 <b>剖视图</b> 与 <b>端视图</b> 两个视图（侧视图/简化正视图无模板，不生成）；"
          + "齿顶圆在<b>内</b>、齿根圆在<b>外</b>（da &lt; d &lt; df）。<br>";
@@ -361,8 +582,17 @@ function syncKindHint() {
 
 /* ─────────────────────────── 预览（/api/gear_svg） ─────────────────────────── */
 
-// 参数拼 URL（顺序与后端注释一致：m z alpha ha c beta h x）
+// 参数拼 URL：花键模式（mode=spline&std=…&db=…&m=…&z=…&alpha=…&ha=…&hf=…&rho=…&cf=…&h=…&x=…）；
+// 齿轮模式保持原有键序（m z alpha ha c beta h x）。空值跳过（DIN 允许 m/z 缺一个）。
 function paramQS(p) {
+  if (p.mode === "spline") {
+    let q = "mode=spline&kind=" + p.kind + "&std=" + p.std + "&profile=" + encodeURIComponent(p.profile || "");
+    const push = (k, v) => { if (v !== undefined && v !== null && v !== "") q += "&" + k + "=" + v; };
+    push("db", p.db); push("m", p.m); push("z", p.z);
+    push("alpha", p.alpha); push("ha", p.ha); push("hf", p.hf); push("rho", p.rho); push("cf", p.cf);
+    push("h", p.h); push("x", p.x);
+    return q;
+  }
   return "kind=" + p.kind + "&m=" + p.m + "&z=" + p.z + "&alpha=" + p.alpha + "&ha=" + p.ha + "&c=" + p.c +
          "&beta=" + p.beta + "&h=" + p.h + "&x=" + p.x;
 }
@@ -407,9 +637,9 @@ function fmt(v) {
   return v.toFixed(4).replace(/0+$/, "").replace(/\.$/, "");
 }
 
-// 信息行：分度圆 d / 齿顶圆 da / 齿根圆 df / 齿根圆角 ρ / 倒角 C（+ 齿距角）
-// 内齿轮额外：齿顶圆标「（内）」、齿根圆标「（外）」、圆角圆心半径 fillet_center_r（rf−ρ）
+// 信息行：齿轮 = 分度圆/齿顶/齿根/ρ/倒角/齿距角；花键 = 引擎派生值 + d_B 来源。
 function renderInfo(j) {
+  if (j.mode === "spline") { renderSplineInfo(j); return; }
   const internal = j.kind === "internal";
   const items = [
     ["分度圆 d", j.d, " mm", ""],
@@ -427,6 +657,34 @@ function renderInfo(j) {
       "齿根圆角圆心所在半径：内齿轮 rc = rf − ρ（外齿轮是 rf + ρ）"]);
   }
   items.push(["倒角 C", j.chamfer, "", ""], ["齿距角", j.pitch_angle, "°", ""]);
+  el("info").innerHTML = items
+    .map(([k, val, unit, tip]) =>
+      '<span' + (tip ? ' title="' + tip + '"' : "") + '><span class="k">' + k + "</span> = <b>" + fmt(val) + unit + "</b></span>")
+    .join("");
+}
+
+// 花键信息行：m/z/x、d_B（含来源）、d/db、大径/小径（内花键外/里侧）、ρf/cF、标准/齿廓。
+function renderSplineInfo(j) {
+  const internal = j.kind === "internal";
+  const items = [
+    ["标准", j.std_code, "", "GB/T 3478.1-2008 / DIN 5480-1:2015"],
+    ["齿廓", j.profile, "", ""],
+    ["模数 m", j.m, " mm", ""],
+    ["齿数 z", j.z, "", ""],
+    ["变位系数 x", j.x, "", "DIN x∈[−0.05, 0.45]"],
+    ["压力角 α", j.alpha, "°", "花键基本齿廓压力角"],
+    ["分度圆 d", j.d, " mm", "d = m·z"],
+    ["基圆 db", j.db, " mm", "db = d·cosα"],
+    [internal ? "大径 D_ei（外侧齿根）" : "大径 da", j.da, " mm",
+      internal ? "GB 表 3 / DIN d_f2=d_B" : "GB 表 3 / DIN d_a1"],
+    [internal ? "小径 D_ii（里侧齿顶）" : "小径 df", j.df, " mm",
+      internal ? "GB D_Fe max+2C_F / DIN d_a2" : "GB 表 3 / DIN d_f1"],
+    ["齿根圆角 ρf", j.rho, " mm", "ρf*·m"],
+    ["齿形裕度 cF", j.cf, " mm", "cF*·m"],
+  ];
+  if (j.d_b !== null && j.d_b !== undefined) items.push(["基准直径 d_B", j.d_b, " mm", "DIN 主参数（GB 无此概念）"]);
+  if (j.origin) items.push(["d_B 来源", j.origin, "", "查表 / 推导 / 按 d_B 重算 的来源说明"]);
+  if (j.inspection) items.push(["检验尺寸", j.inspection, "", "DIN 5480-2：M1 外花键跨棒距 / M2 内花键棒间距 / k 跨测齿数 / W_k 公法线"]);
   el("info").innerHTML = items
     .map(([k, val, unit, tip]) =>
       '<span' + (tip ? ' title="' + tip + '"' : "") + '><span class="k">' + k + "</span> = <b>" + fmt(val) + unit + "</b></span>")
@@ -468,13 +726,14 @@ async function fetchInfo() {
 
 /* ─────────────────────────── 输入防抖 / 立即刷新 ─────────────────────────── */
 
-// 任何参数变化：立刻校验 + 同步下拉/倒角框/默认 h/提示，然后防抖刷预览(250ms)与派生值(300ms)
+// 任何参数变化：立刻校验 + 同步下拉/显隐/默认 h/提示，然后防抖刷预览(250ms)与派生值(300ms)
 function onInput() {
+  syncSplineUI();           // 模式显隐（含 GB 下隐藏 d_B）
   syncModuleSelect();
   syncChamfer();
   syncAlphaSelect();        // 压力角：数字框 → 下拉（命中常用档就选它，否则「自定义」）
   syncDefaultH(false);      // 改 m 时：用户没手动改过 h → h 跟着 10m/15m 走；改过则保留
-  syncDefaultAlpha(false);  // 压力角：用户没手动改过 → 保持 20°；改过则保留（照 hTouched 口径）
+  syncDefaultAlpha(false);  // 齿轮模式：未手动改过 α → 保持 20°；花键模式不动（预设驱动）
   syncHRule();
   syncAlphaHint();
   syncKindHint();
@@ -583,8 +842,8 @@ function ping(bye) {
     onInput();
   });
 
-  // 所有数值框：input 防抖、blur/Enter 立即刷新
-  ["m", "z", "alpha", "ha", "c", "betaD", "betaM", "betaS", "h", "x"].forEach((id) => {
+  // 所有数值框：input 防抖、blur/Enter 立即刷新（hf/rho/cf 是花键系数）
+  ["m", "z", "alpha", "ha", "c", "betaD", "betaM", "betaS", "h", "x", "hf", "rho", "cf", "db"].forEach((id) => {
     const n = el(id);
     if (id === "h") {
       // 只要用户动过 h 就标记：之后切种类/改 m 不再自动覆盖
@@ -606,12 +865,38 @@ function ping(bye) {
 
   el("out").addEventListener("click", exportToDrawing);
 
+  // 模式复选框：进/出花键模式（重建种类文案/视图按钮/显隐与预设）
+  el("splineMode").addEventListener("change", () => {
+    syncSplineUI();
+    syncProfileSelect();
+    if (isSpline()) applySplinePreset();
+    if (!viewAvailable(curView, curKind)) curView = "section";
+    syncDefaultH(false);
+    syncAlphaHint();
+    applyKindUI();
+    validateUI();
+    onCommit();
+  });
+  // 花键标准/齿廓下拉：换标准重建齿廓；换齿廓带出预设系数
+  el("stdSel").addEventListener("change", () => {
+    syncSplineUI();
+    syncProfileSelect();
+    if (isSpline()) applySplinePreset();
+    onCommit();
+  });
+  el("profileSel").addEventListener("change", () => {
+    if (isSpline()) applySplinePreset();
+    onCommit();
+  });
+
   buildKinds();
   syncModuleSelect();
   syncChamfer();
   syncDefaultH(false);
   syncAlphaSelect();
   syncDefaultAlpha(false);
+  syncSplineUI();
+  await loadInvolCatalog();
   applyKindUI();
   syncAlphaHint();
   validateUI();
