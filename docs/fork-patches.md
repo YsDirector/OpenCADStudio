@@ -5,12 +5,17 @@
 > 宿主侧改动，供**每次同步上游后照单核对**，避免补丁被合掉却无人发现。
 >
 > 上游：`origin` = HakanSeven12/OpenCADStudio（经 ghfast 镜像）
-> 最近同步点：`5200ef5d`（Merge upstream **`65c0fe54`**，213 提交，执行记录见 §0.11）
-> 台账基准：`git diff origin/main..HEAD`（**64 文件 / +13943 −101**，不含插件 crate；
-> 含 `crates/ocs_ocsm*` 则为 156 文件 / +82077 −101）
-> ⚠️ 上一次同步点 `d4007055`（上游 v2026.37 `fc1788df`）→ 本次之前上游又走了 213 提交。
+> 最近同步点：`fd0f5dc2`（Merge tag **`v2026.38`** = 上游 `0d023d26`，**148 提交**，执行记录见 §0.12）
+> 台账基准：`git diff v2026.38..HEAD -- src/ crates/ocs_plugin_api Cargo.toml tests/`
+> （**46 文件 / +11093 −103**，不含插件 crate；含 `crates/ocs_ocsm*` 则为 186 文件 / +114306 −107）
+> ⚠️ 上一个同步点 `5200ef5d`（Merge 上游 `65c0fe54`，213 提交，见 §0.11）→ 本次之前上游又走了 148 提交。
 >
-> **2026-09-17 状态刷新（本次调查顺便核实）**：
+> **2026-09-21 状态刷新**：
+> * `§0.6/§0.7/§0.9/§0.10` 的分支仍在 `prf`、上游 PR 仍未开（同 §0.11 记录）。
+> * ⚠️ **上游首次动了插件面**（`crates/ocs_plugin_api` 的 `process.rs`/`process/v4.rs`，纯重构去重）
+>   → 「插件 API 上游永远不碰」这个假设作废，详见 §0.12。
+>
+> **2026-09-17 状态刷新（保留备查）**：
 > * §0.6 / §0.7 / §0.9 的分支**都已推到 `prf` 远端，但上游 PR 未开** ——
 >   `gh pr list --author YsDirector -R HakanSeven12/OpenCADStudio --state all` 只有已合并的
 >   **#1234 / #1235**（2026-09-13T18:14:50Z）。要发 PR 直接用各节的 compare 链接
@@ -268,7 +273,77 @@ OCS_SMOKE_PLUGIN=$PWD/target/release/libocs_ocsm.so \
 > `tests/parametric_constraints_solve.rs`（改名）、删 `tests/sketch_constraints_xrecord_roundtrip.rs`、
 > 加 `tests/pdf_export_images_check.rs`、新增 `crates/plugin-template-api2`。
 
-## 1. 补丁总表（基准：上游 `65c0fe54` → HEAD，**62 文件 / +13770 −100**，不含插件 crate）
+## 0.12 上游同步执行记录（2026-09-21，**v2026.38 / 148 提交**）
+
+> 同步点：上游 tag `v2026.38`（`0d023d26`，2026-09-20T15:45Z，周发布流程）→ **合并提交 `fd0f5dc2`**。
+> 安全网：tag `presync-342d6505` + 分支 `pre-sync-2026-09-21`（合并前 `342d6505`）。
+> 范围：`v2026.37..v2026.38` 共 372 提交 / 388 文件 / +117831 −15473，但 fork 上次已吃到 `65c0fe54`
+> → **本次新增 = 148 提交 / 184 文件 / +38372 −2619**。`origin/main` 已领先 tag **23 提交**，本次不追。
+>
+> **7 个冲突的处置（比上次预案的 8 个更少，但首次出现插件面冲突）**：
+>
+> | 文件 | 冲突 | 处置 |
+> |---|---|---|
+> | `Cargo.lock` | 1 | acadrust source 行 = 「镜像 URL + 新 rev」：`ghfast.top…?rev=5b682ed#5b682ed6…` |
+> | `crates/ocs_plugin_api/src/process/v4.rs` | 1 | **取上游**：上游把 `call_timeout`/`request_timeout`/`base_max_floor`/`request_kind` 搬进 `process.rs`；fork 的 3 个变体（`WantsTextInput`/`WantsMouseMove`/`EntityPickOsnap`）已在 `process.rs` 的共享 helper 里（自动合并保住），v4.rs 的本地副本整段删 |
+> | `src/app/commands/mod.rs` | 1 | 并集：上游 `'PAN`/`'ZOOM` 透明前缀（`quoted`）+ fork `plugin_wins`（顺序：剥前缀 → 判插件 → 查别名） |
+> | `src/app/mod.rs` | 2 块 | 并集：`ModalKind::OcsmFramePicker` + `ModalKind::Hyperlink`；两个 `ocsm_*` 初始化 + 5 个 `hyperlink_editor_*` |
+> | `src/app/update/mod.rs` | 1 块 | 并集：`mod pi;` + `mod page_setup_import;` |
+> | `src/app/view/modal.rs` | 1 块 | 并集：`OcsmFramePicker` 标题 + 上游 `Hyperlink` 标题 |
+> | `src/ui/dock.rs` | 1 块 | 并集：保留 `for id in PanelId::ALL`，**把上游新变体 `PanelId::Browser` 补进 `PanelId::ALL`**（`[PanelId; 4]` → `[PanelId; 5]`） |
+>
+> **两处非冲突但必须手工修的**：
+> 1. `Cargo.toml`：上游把 acadrust 从 `8a28c21` 升到 `5b682ed` → 镜像 `[patch]` 段跟升同一 rev（URL 保持
+>    `ghfast.top`）；顺带把 `crates/plugin-template-api2`、`docs/plugin-template-v2` 的样例 rev 也升齐。
+> 2. `crates/ocs_ocsm/src/gear.rs` 的 `default_alpha_is_20_and_geometry_is_frozen`：acadrust `5b682ed` 给
+>    `EntityCommon` 新增 `raw_record: Option<Arc<RawRecord>>`（serde skip、**Debug 会打印**）→ 靠
+>    `format!("{:?}", 图元)` 哈希的四个冻结指纹全漂。图元数未变（section 14）下重新冻结：
+>    `section 0x723163d7dfa02d27` / `side 0xdb9046b86e5a3e94` / `simplified 0x39e0cbb64e6195cd` /
+>    `front 0xbb4f49b5f2d49d91`，并在测试注释里写明「升 acadrust 会漂、先验几何再改」。
+>
+> **⚠️ 坑（本次唯一一个）**：acadrust 给实体结构体加字段 = 插件里所有「Debug 串哈希」型冻结测试都会漂，
+> 而 `cargo check` **看不见** → 同步后必须跑 `cargo test -p ocs_ocsm`。
+>
+> **验证**：`cargo check --lib` ✅（58s，acadrust/cadkernel 经 ghfast 拉到）·
+> `--lib dimtmove` **6 passed** ✅ · `--test dim_leader_render_check` **1 passed** ✅ ·
+> `cargo test -p ocs_ocsm` **559 passed / 0 failed / 25 ignored** ✅ ·
+> release 双产物重编 ✅（宿主 2m16s / 插件 50s）·
+> `OCS_SMOKE_PLUGIN=… installed_plugin_registers_its_ribbon` **1 passed** ✅ ·
+> 宿主全量 `cargo test --lib`（`LC_ALL=C LANG=C`）**1546 passed / 1 failed / 18 ignored** —— 唯一失败见 §0.13（**上游自带**）。
+> `tools/deploy_plugin.sh --skip-build` 已跑：装机 `plugin.toml` 的 `acadrust_source` 已刷成 `…?rev=5b682ed#…`
+> （不刷会被宿主的 API≥4 指纹门禁**静默拒载**）。
+>
+> **上游本次顺带做的**（备案，无需动作）：新增 `src/ui/window/browser.rs`（Browser 面板：原点三平面/sketch/
+> Solid3D 体）、`src/gpu_backend.rs`（GPU 探测 + 自动回退）、`src/ui/popup/context_menu.rs` +
+> `src/app/update/context_menu.rs`（右键菜单重做）、参数化约束 6 个新模块（symmetric/equal/concentric/fixed/
+> horizontal/smooth/constraint_bar）、plot 家族（`windows_media.rs`/`page_setup_import.rs`/`plotvars.rs`/
+> PSETUPIN/页面设置单位）、Nix flake（`flake.nix`/`.envrc`）、`.github/workflows/web-check.yml`（wasm32 type-check）；
+> 行为变更：**对象捕捉默认开启**、等轴测草图仅会话内。
+>
+> **盯防清单（本次双方都改过的 20 个文件，只有 7 个真冲突）**：`Cargo.toml`、
+> `crates/ocs_plugin_api/src/process.rs`（+`process/v4.rs`）、`src/app/commands/{display,mod}.rs`、
+> `src/app/control/mod.rs`、`src/app/document.rs`、`src/app/mod.rs`、`src/app/update/{dialog,mod,viewport}.rs`、
+> `src/app/view/{mod,modal}.rs`、`src/command.rs`、`src/entities/{dimension,text_support}.rs`、`src/lib.rs`、
+> `src/scene/mod.rs`、`src/ui/{dock,overlay}.rs`。
+> 其中 `src/app/update/dialog.rs`、`update/viewport.rs`、`view/mod.rs`、`scene/mod.rs` **自动合并成功**
+> （上次这四个都在冲突名单里）。
+
+## 0.13 上游待修：v2026.38 自带 1 个失败的单测（**非 fork 引入**）
+
+```bash
+LC_ALL=C cargo test -p OpenCADStudio --lib \
+  scene::parametric_constraints::tests::arc_grips_drive_center_start_and_end_but_not_midpoint
+# FAILED：left = ParametricRef { entity: Handle(8), marker: None }（`ParametricRef::whole`）
+#          right = ParametricRef { entity: Handle(8), marker: Some(0) }（测试期待的 `point(handle,0)`）
+```
+
+- **归属证据**：`src/scene/parametric_constraints.rs` 在 fork 侧**零改动**（`git diff v2026.38..HEAD --` 为空）；
+  实现改动来自上游 `9aadc97c`（*feat: complete symmetric constraint behavior*）——它把 Arc/Circle/Ellipse 的
+  grip 反查一律改成 `ParametricRef::whole(handle)`，但**没同步改该测试**；`origin/main` 上同样未修。
+- **判断**：实现是新的、测试是旧的（stale test）→ 正确修法是改测试，不是改实现。
+- **处置（本次）**：不动上游文件，仅登记；若要提上游，建议 PR：把该测试的 arc 断言改成 `ParametricRef::whole(handle)`。
+
+## 1. 补丁总表（基准：上游 tag `v2026.38` = `0d023d26` → 合并 `fd0f5dc2`，**46 文件 / +11093 −103**，不含插件 crate）
 
 > A–E 组的行数是 v2026.36 基准时的记录（功能性描述仍适用）；F 组为 2026-09-16 新增。
 
@@ -366,6 +441,10 @@ OCS_SMOKE_PLUGIN=$PWD/target/release/libocs_ocsm.so \
   → 实体 API 未破坏。这符合本节原定规则「上游更新 rev 时同步升 rev 并重跑插件测试」。
 - **合并注意**：上游更新 acadrust rev 时，需确认插件依赖的实体 API（ATTDEF/块/标注字段）
   没变；必要时同步升 rev 并重跑插件测试。**不要**让上游覆盖成本地的镜像 URL（网络环境原因）。
+- **2026-09-21（v2026.38）：rev `8a28c21` → `5b682ed`**（acadrust 0.5.5，上游这次升了 30 个提交，
+  内容以 DWG/DXF IO 修复为主）。三处一起升：根 `Cargo.toml`、`[patch]` 镜像段、`Cargo.lock` 的 source 行
+  （`ghfast.top…?rev=5b682ed#5b682ed66ea2c89be8142c8dd83d83774fc3de08`）。**副作用**：`EntityCommon` 新增
+  `raw_record` 字段 → 见 §0.12 的 gear 指纹重冻结。升级后必须重跑 `tools/deploy_plugin.sh`（指纹门禁）。
 
 ### F-1 `src/ui/` 等 — 内建 Pi 助手面板（fork 本地，2026-09-16）
 
@@ -374,7 +453,8 @@ OCS_SMOKE_PLUGIN=$PWD/target/release/libocs_ocsm.so \
   **未改任何插件 ABI**（`ocs_plugin_api` 仍是 v5；`cc5ec098` 的 v7 追加已随 `a4f122ec` 删除）。
 - **接点清单**（同步上游后逐项核对，缺一即面板报错或丢失；行号为 2026-09-16 的值，
   实际以符号名搜索 `PanelId::Pi` / `pi_poll` / `PiPanelState` / `on_pi_msg` 为准）：
-  1. `src/ui/dock.rs`：`PanelId::Pi` 变体、`ALL: [PanelId; 3]`、`title()`、`default_width()` 340、
+  1. `src/ui/dock.rs`：`PanelId::Pi` 变体、`PanelId::ALL`（2026-09-21 起为 `[PanelId; 5]`，含上游的
+     `ExternalReferences` 与 `Browser`）、`title()`、`default_width()` 340、
      `min_width()` 150、`max_width()` 1200、`max_fraction()` 0.4、`auto_collapse` 默认 `true`（钉住）。
   2. `src/app/view/mod.rs`：`expanded_panel` 的 `PanelId::Pi` 分支（L1863）、收边/占用分支（L2945）、
      `pi_poll` 订阅（L2589：`show_pi_panel && worker.is_some()` 时 100ms）。
