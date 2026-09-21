@@ -122,11 +122,12 @@
       下拉末尾「自定义…」手输表外规格（表外必须给 <code>de</code>）。满齿段长 <code>L</code>
       （段长 = L + 收尾 l）；不能与 CH/OV/M/GEAR 同段。
       <b>INVOLSPLINE 渐开线花键段</b>：先选体系（<code>GB/T 3478.1</code> / <code>DIN 5480-1</code> /
-      <code>NF E22-141</code>（A 主参数，已入库）/ <code>ANSI B92.1</code>（未实现））、
-      再选齿廓（GB 四种 / DIN 30° / NF 平·圆齿根），填 <code>m/z</code>（<code>x</code> 可选，DIN 限 [−0.05, 0.45]）
-      与有效长度 <code>L</code>；派生值 d/db/da/df/ρf/cF 实时显示（DIN 可给 d_B、NF 可给 A 由表自动带出另一项），
+      <code>NF E22-141</code>（A 主参数，已入库）/ <code>ANSI B92.1</code>（径节 P，公式驱动））、
+      再选齿廓（GB 四种 / DIN 30° / NF 平·圆齿根 / ANSI Table 2 五列），
+      GB/DIN/NF 填 <code>m/z</code>（<code>x</code> 可选，DIN 限 [−0.05, 0.45]），ANSI 填 <code>P/z</code>（径节，x 不允许），
+      与有效长度 <code>L</code>；派生值 d/db/da/df/ρf/cF 实时显示（DIN 可给 d_B、NF 可给 A 由表自动带出另一项；
+      ANSI 另示 P/Ps、Do/Dri/Di/Dre、DFe/DFi、Sv/cF），
       <code>de</code> 可选（给了才画收尾，段长 = L + l）；不能与 SPLINE/CH/OV/M/GEAR 同段。
-      ANSI 选中后会明确报「未实现」（不假装能用）。
       <b>GEAR 齿轮段</b>的 H = 齿宽（留空 10m）、α = 压力角（留空 20°）；
       <b>TODO</b>：GEAR 段目前只支持模数制 M（径节制 DP 走 <code>OCSMGEAR</code> 齿轮工具，端/侧/剖视共用几何）。
     </div>
@@ -147,8 +148,9 @@
       矩形花键段：<code>SPLINE 6x23x26x6 L30</code>（规格代号可在段表下拉选择/自定义；
       表内规格 de 自动查表，<code>de 63</code> = 覆盖；表外规格必须给 de；引入倒角在相邻段写 CH）。
       渐开线花键段：<code>INVOLSPLINE GB30R M3 Z20 L30</code>（预设代号
-      <code>GB30P/GB30R/GB375R/GB45R/DIN30</code>，或体系标识 <code>GB/DIN/NF/ANSI</code>；
-      <code>X0.2</code> = 变位；
+      <code>GB30P/GB30R/GB375R/GB45R/DIN30/NFP/NFR/ANSI30P/ANSI30PM/ANSI30R/ANSI375R/ANSI45R</code>，
+      或体系标识 <code>GB/DIN/NF/ANSI</code>；
+      <code>X0.2</code> = 变位（ANSI 不允许）；ANSI 径节写 <code>P8</code>（或 M 槽位 = P）；
       <code>de63</code> 可选 = 画收尾；引入倒角同样写在相邻段）。
     </div>
   </div>
@@ -453,8 +455,9 @@ function involDerived(r) {
   if (p.std === "ANSI") {
     // ANSI Table 2：D=N/P、Do=(N+1)/P、Dri/Di/Dre 按列公式、cF=0.001D 夹取、Sv 随 φD；
     // rf 标准未给值，按切于齿根的过渡弧构造（无标准数值依据）。
-    const P = m, mEff = 1 / P;
-    const D = z / P, Db = D * Math.cos(a);
+    const P = m;
+    const aa = p.alpha * Math.PI / 180;
+    const D = z / P, Db = D * Math.cos(aa);
     const cF = Math.min(0.010, Math.max(0.002, 0.001 * D));
     const isFlatMajor = p.profile.indexOf("30平齿根外径") >= 0;
     const isFillet30 = p.profile.indexOf("30圆齿根") >= 0;
