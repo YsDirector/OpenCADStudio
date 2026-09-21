@@ -107,7 +107,7 @@ use std::sync::OnceLock;
 
 use ocs_plugin_api::host::acadrust::entities::EntityType;
 
-use crate::partgen_kit::{arc, line, trim, LAYER_CENTER, LAYER_MAIN, LAYER_THIN};
+use crate::partgen_kit::{arc, circle, line, trim, LAYER_CENTER, LAYER_MAIN, LAYER_THIN};
 
 /// GB/T 3478.1-2008 标准号（默认预设）。
 pub const GB_CODE: &str = "GB/T 3478.1-2008";
@@ -3715,14 +3715,16 @@ impl InvolParams {
         }
     }
 
-    /// 端视图：真实渐开线齿廓 + 齿顶/齿根弧 + 十字中心线。
+    /// 端视图：真实渐开线齿廓 + 齿顶/齿根弧 + 分度圆（`3中心线层`）+ 十字中心线。
     ///
     /// 相位：齿槽心线 `0°+k·360°/z`，齿心线 `180°/z+k·360°/z`。
     /// 内花键（[`InvolParams::internal`]）走 [`InvolParams::front_view_internal`]。
-    pub fn front_view(&self) -> Result<Vec<EntityType>, String> {
+    /// `n` = 视图比例：十字中心线长度 = [`crate::gear::centerline_len`]`(特征直径, n)`
+    /// （与齿轮常规端视 / `OCSMCENTERLINE` 同一函数）。
+    pub fn front_view(&self, n: f64) -> Result<Vec<EntityType>, String> {
         self.validate()?;
         if self.internal {
-            return self.front_view_internal();
+            return self.front_view_internal(n);
         }
         if self.tooth_tip_crossed() {
             return Err(format!(
@@ -3771,10 +3773,12 @@ impl InvolParams {
                 LAYER_MAIN,
             ));
         }
-        // 十字中心线：长度 = 大径 + 6（与 `spline.rs` 一致）。
-        let half = ra + 3.0;
-        out.push(line([-half, 0.0], [half, 0.0], LAYER_CENTER));
-        out.push(line([0.0, -half], [0.0, half], LAYER_CENTER));
+        // 分度圆（`3中心线层`）：与外齿轮常规端视同口径。
+        // GB/DIN/NF 用分度圆直径 `d = m·z`；ANSI 的 `D = N/P` 在引擎内部就是 `d()`
+        // （构造时 `m = 25.4/P`），同一出口 —— 不另写第二套半径口径。
+        out.push(circle([0.0, 0.0], self.d() / 2.0, LAYER_CENTER));
+        // 十字中心线：长度 = 大径 da + 6n（走齿轮同一函数 `centerline_len`）。
+        out.extend(crate::gear::cross_centerlines([0.0, 0.0], self.da(), n));
         Ok(out)
     }
 
@@ -3826,7 +3830,7 @@ impl InvolParams {
     ///   凹槽心线与外花键齿心线同相（`(k+0.5)·360°/z`），ψ(R) 同式；
     /// * 外侧齿槽底弧在 `internal_major_dia()/2`、里侧齿顶弧在 `internal_minor_dia()/2`；
     /// * 齿顶圆低于基圆时，齿廓到基圆后径向直线收到齿顶（同 `gear.rs` 内齿轮口径）。
-    fn front_view_internal(&self) -> Result<Vec<EntityType>, String> {
+    fn front_view_internal(&self, n: f64) -> Result<Vec<EntityType>, String> {
         let r_root = self.internal_root_radius();
         let r_tip = self.internal_tip_radius();
         let rb = self.db() / 2.0;
@@ -3883,10 +3887,12 @@ impl InvolParams {
                 LAYER_MAIN,
             ));
         }
-        // 十字中心线：长度 = 大径 + 6（内花键用外侧齿根，与内齿轮用齿根圆同口径）。
-        let half = r_root + 3.0;
-        out.push(line([-half, 0.0], [half, 0.0], LAYER_CENTER));
-        out.push(line([0.0, -half], [0.0, half], LAYER_CENTER));
+        // 十字中心线：长度 = 外侧齿根直径 D_ei + 6n（与内齿轮用齿根圆同口径，走齿轮 `centerline_len`）。
+        out.extend(crate::gear::cross_centerlines(
+            [0.0, 0.0],
+            self.internal_major_dia(),
+            n,
+        ));
         Ok(out)
     }
 
@@ -4124,8 +4130,8 @@ mod tests {
             p.d(),
             p.internal_major_dia()
         );
-        // 端视图：每齿 2×12 渐开线 + 槽底弧 + 齿顶弧 = 26 图元/齿 + 2 中心线。
-        let front = p.front_view().unwrap();
+        // 端视图：每齿 2×12 渐开线 + 槽底弧 + 齿顶弧 = 26 图元/齿 + 2 中心线（内花键不画分度圆）。
+        let front = p.front_view(1.0).unwrap();
         assert_eq!(front.len(), 20 * (2 * INVOLUTE_SEGMENTS + 2) + 2);
         // 弧半径 = D_ei/2（外侧齿槽底）与 D_ii/2（里侧齿顶）；不能出现外花键的 da/df 半径。
         let radii: Vec<f64> = front
@@ -4156,7 +4162,7 @@ mod tests {
         d.validate().unwrap();
         assert!(near(d.internal_major_dia(), 40.0));
         assert!(near(d.internal_minor_dia(), 36.0));
-        let dfront = d.front_view().unwrap();
+        let dfront = d.front_view(1.0).unwrap();
         assert!(dfront
             .iter()
             .any(|e| matches!(e, EntityType::Arc(a) if near(a.radius, 20.0))));
@@ -4169,7 +4175,7 @@ mod tests {
             .unwrap()
             .with_internal(true);
         if p45.internal_tip_radius() < p45.db() / 2.0 {
-            assert!(p45.front_view().is_ok(), "低齿顶应走径向直线降级");
+            assert!(p45.front_view(1.0).is_ok(), "低齿顶应走径向直线降级");
         }
 
         // GB DB 文案常量与报错链接（齿轮/轴/结构要素三处共用）。
@@ -4290,7 +4296,7 @@ mod tests {
     #[test]
     fn front_view_phase_tooth_count_and_involute() {
         let p = InvolParams::gb("30圆齿根", 3.0, 20).unwrap();
-        let e = p.front_view().unwrap();
+        let e = p.front_view(1.0).unwrap();
         let (ra, rf) = (p.da() / 2.0, p.df() / 2.0);
         let tips = arc_centers_at(&e, ra);
         let roots = arc_centers_at(&e, rf);
@@ -4342,9 +4348,86 @@ mod tests {
         });
         assert!(last.is_some(), "渐开线末点应落在齿顶圆上");
         assert!(near(q1[0].hypot(q1[1]), ra));
-        // 实体数：每齿 2×12 折线 + 2 弧，加 2 中心线（本件 db<df 无径向直线）
+        // 实体数：每齿 2×12 折线 + 2 弧，加分度圆 1 + 中心线 2（本件 db<df 无径向直线）
         assert!(p.db() / 2.0 < rf);
-        assert_eq!(e.len(), 20 * (2 * INVOLUTE_SEGMENTS + 2) + 2);
+        assert_eq!(e.len(), 20 * (2 * INVOLUTE_SEGMENTS + 2) + 3);
+    }
+
+    /// ②花键端视十字线长度 = `da + 6n`（走齿轮 `centerline_len`，不留硬编码）：
+    /// n=1 与 n=2 都成立；外花键 n=2 → 63+12 = **75**，内花键（D_ei=65.4）n=2 → **77.4**。
+    #[test]
+    fn front_view_cross_centerlines_follow_6n_like_gear() {
+        let p = InvolParams::gb("30圆齿根", 3.0, 20).unwrap();
+        let (da, _) = (p.da(), p.df());
+        for n in [1.0, 2.0] {
+            let e = p.front_view(n).unwrap();
+            let lens: Vec<f64> = e
+                .iter()
+                .filter_map(|x| match x {
+                    EntityType::Line(l) if l.common.layer == LAYER_CENTER => Some(
+                        ((l.end.x - l.start.x).powi(2) + (l.end.y - l.start.y).powi(2)).sqrt(),
+                    ),
+                    _ => None,
+                })
+                .collect();
+            let want = crate::gear::centerline_len(da, n);
+            assert_eq!(lens.len(), 2, "外花键十字线两条（分度圆是 Circle 不算）");
+            for len in lens {
+                assert!((len - want).abs() < 1e-9, "n={n}：十字线长 {len} ≠ da+6n={want}");
+            }
+        }
+        assert!((crate::gear::centerline_len(da, 2.0) - 75.0).abs() < 1e-9, "n=2 → 75");
+
+        let pi = p.clone().with_internal(true);
+        let d_ei = pi.internal_major_dia();
+        for n in [1.0, 2.0] {
+            let e = pi.front_view(n).unwrap();
+            let lens: Vec<f64> = e
+                .iter()
+                .filter_map(|x| match x {
+                    EntityType::Line(l) if l.common.layer == LAYER_CENTER => Some(
+                        ((l.end.x - l.start.x).powi(2) + (l.end.y - l.start.y).powi(2)).sqrt(),
+                    ),
+                    _ => None,
+                })
+                .collect();
+            let want = crate::gear::centerline_len(d_ei, n);
+            assert_eq!(lens.len(), 2);
+            for len in lens {
+                assert!((len - want).abs() < 1e-9, "内花键 n={n}：{len} ≠ D_ei+6n={want}");
+            }
+        }
+        assert!((crate::gear::centerline_len(d_ei, 2.0) - 77.4).abs() < 1e-9, "n=2 → 77.4");
+    }
+
+    /// ③ 外花键端视画分度圆（`3中心线层`，半径按体系是分度圆半径），内花键不画（同内齿轮）。
+    #[test]
+    fn external_spline_front_has_pitch_circle() {
+        let p = InvolParams::gb("30圆齿根", 3.0, 20).unwrap();
+        let e = p.front_view(1.0).unwrap();
+        let circles: Vec<&ocs_plugin_api::host::acadrust::entities::Circle> = e
+            .iter()
+            .filter_map(|x| match x {
+                EntityType::Circle(c) if c.common.layer == LAYER_CENTER => Some(c),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(circles.len(), 1, "外花键端视分度圆 1 条");
+        assert!((circles[0].radius - p.d() / 2.0).abs() < 1e-12, "半径 = d/2");
+        assert!((circles[0].center.x).abs() < 1e-12 && (circles[0].center.y).abs() < 1e-12);
+        // ANSI：分度圆用 D（= N/P，引擎内部 d()，mm）→ D/2；不能是别的半径。
+        let pa = InvolParams::ansi("ANSI30平齿根齿侧", 8.0, 20).unwrap();
+        let ea = pa.front_view(1.0).unwrap();
+        assert!(
+            ea.iter().any(|x| matches!(x, EntityType::Circle(c)
+                if c.common.layer == LAYER_CENTER && (c.radius - pa.d() / 2.0).abs() < 1e-12)),
+            "ANSI 分度圆 = D/2 = {}",
+            pa.d() / 2.0
+        );
+        // 内花键（同内齿轮）不画分度圆
+        let pi = p.clone().with_internal(true);
+        let ei = pi.front_view(1.0).unwrap();
+        assert!(!ei.iter().any(|x| matches!(x, EntityType::Circle(_))), "内花键不画分度圆");
     }
 
     /// 侧视图/剖视图：矩形 + 小径线图层不同；坐标口径；
@@ -5125,7 +5208,7 @@ mod tests {
         let din = InvolParams::din(2.0, 18, 0.2).unwrap();
         let mut out = String::from("entity,x1,y1,x2,y2,layer,cx,cy,r,a0,a1\n");
         for (case, p, de) in [("GB", &gb, 80.0), ("DIN", &din, 50.0)] {
-            for e in p.front_view().unwrap() {
+            for e in p.front_view(1.0).unwrap() {
                 out.push_str(&csv_row(case, "front", &e));
             }
             for e in p.side_view(30.0).unwrap() {
@@ -5312,7 +5395,7 @@ mod tests {
             pi.internal_minor_dia()
         );
         // 端视图走共用通路；内花键无侧视图、剖视由 gear.rs 模板出图（引擎 side/section 明确报错）。
-        let front = pi.front_view().unwrap();
+        let front = pi.front_view(1.0).unwrap();
         let radii: Vec<f64> = front
             .iter()
             .filter_map(|e| match e {
@@ -5331,7 +5414,7 @@ mod tests {
         let ext_side = p.side_view(30.0).unwrap();
         assert!(has_line(&ext_side, [0.0, -40.0], [0.0, 40.0]));
         assert!(has_line(&ext_side, [0.0, -p.df() / 2.0], [30.0, -p.df() / 2.0]));
-        p.front_view().unwrap();
+        p.front_view(1.0).unwrap();
     }
 
     /// `A`（基准直径槽位）在 GB/ANSI 下报错（各自文案），NF/DIN 允许。
@@ -5803,7 +5886,7 @@ mod tests {
             resolve_spline(SplineStd::ANSI, "ANSI", None, Some(8.0), Some(20), Some(0.1)).unwrap_err();
         assert!(e.contains("不使用变位系数"), "{e}");
         // 端视：齿根弧、齿顶弧、研开线起点按 DFe。
-        let front = p.front_view().unwrap();
+        let front = p.front_view(1.0).unwrap();
         assert!(front.iter().any(|x| matches!(x, EntityType::Arc(a) if near(a.radius, p.df() / 2.0))));
         assert!(front.iter().any(|x| matches!(x, EntityType::Arc(a) if near(a.radius, p.da() / 2.0))));
         assert!(near(p.r_involute_start(), p.ansi_form_dia_external() / 2.0));
@@ -5813,7 +5896,7 @@ mod tests {
         // 内花键走共用通路：外侧齿根弧 = Dri/2、里侧齿顶弧 = Di/2。
         let pi = p.clone().with_internal(true);
         pi.validate().unwrap();
-        let fi = pi.front_view().unwrap();
+        let fi = pi.front_view(1.0).unwrap();
         assert!(fi.iter().any(|x| matches!(x, EntityType::Arc(a) if near(a.radius, pi.internal_major_dia() / 2.0))));
         assert!(fi.iter().any(|x| matches!(x, EntityType::Arc(a) if near(a.radius, pi.internal_minor_dia() / 2.0))));
         // 过渡圆角（无标准数值依据）：圆心半径 rf+ρ 且到 form 起点距离 = ρ

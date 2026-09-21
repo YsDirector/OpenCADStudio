@@ -95,12 +95,32 @@ pub enum HatchEdge {
     },
 }
 
+/// ANSI31 图案定义的**基准垂直间距**（0.125″ = 3.175 mm）——宿主反旋转 offset 后读出的 `|dy|`。
+pub const ANSI31_SPACING_MM: f64 = 3.175;
+
+/// 某 `pattern_scale` 下剖面线的**垂直距离**（mm）= 宿主 `scene/entity.rs::family_from_stored_line`
+/// 读出的 `|dy|`。
+///
+/// **全库唯一口径**：出图（[`hatch_ansi31_edges`] / [`hatch_ansi31_rings`] / [`hatch_ansi37_edges`]）
+/// 与预览（`partgen::hatch_svg_lines`、`gear::svg_of`）都从这里取，禁止再各写 3.175/45° 的第二套。
+pub fn hatch_perpendicular_spacing(pattern_scale: f64) -> f64 {
+    ANSI31_SPACING_MM * pattern_scale
+}
+
+/// ANSI31 图案 45° 基准下 offset 矢量分量 = 垂距/√2。
+///
+/// 世界向量写成 `(-c, +c)` 时宿主反旋转后 `dx = 0`、`|dy| = 垂距`；写成 `(+c, +c)` 会
+/// `dy = 0` → 宿主画成实心（见 [`hatch_edges_with`] 的写法硬约束①）。
+pub fn hatch_offset_component(pattern_scale: f64) -> f64 {
+    hatch_perpendicular_spacing(pattern_scale) / std::f64::consts::SQRT_2
+}
+
 /// 用任意（直线/圆弧）边界画 ANSI31（5剖面线层）。
 ///
 /// **模板里「深沟球轴承 GB/T 276」「密封圈 FB」的剖面线边界带圆弧**（滚道弧/唇口圆弧），
 /// 纯折线版本（`hatch_ansi31_scaled`）画不了，用这个。
 pub fn hatch_ansi31_edges(edges: &[HatchEdge], angle_deg: f64, pattern_scale: f64) -> EntityType {
-    let off = 2.245_064_030_267_288 * pattern_scale;
+    let off = hatch_offset_component(pattern_scale);
     hatch_edges_with(
         "ANSI31",
         "ANSI Iron, Brick, Stone masonry",
@@ -120,7 +140,7 @@ pub fn hatch_ansi31_rings(
     angle_deg: f64,
     pattern_scale: f64,
 ) -> EntityType {
-    let off = 2.245_064_030_267_288 * pattern_scale;
+    let off = hatch_offset_component(pattern_scale);
     hatch_edges_with(
         "ANSI31",
         "ANSI Iron, Brick, Stone masonry",
@@ -138,7 +158,7 @@ pub fn hatch_ansi31_rings(
 /// 密封圈 FB 型的唇口橡胶两片在模板里就是 `ANSI37`（金属骨架两片是 `ANSI31`），
 /// 两者同名同边界、只差图案 —— 不能都用 ANSI31（视觉上少一个方向）。
 pub fn hatch_ansi37_edges(edges: &[HatchEdge], angle_deg: f64, pattern_scale: f64) -> EntityType {
-    let off = 2.245_064_030_267_288 * pattern_scale;
+    let off = hatch_offset_component(pattern_scale);
     hatch_edges_with(
         "ANSI37",
         "ANSI Lead, Zinc, Magnesium, Sound/Heat/Elec Insulation",
@@ -157,7 +177,7 @@ pub fn hatch_ansi37_edges(edges: &[HatchEdge], angle_deg: f64, pattern_scale: f6
 /// **① offset 必须是「世界坐标向量」，且让宿主反旋转后得到 dx≈0 / |dy|=线间距。**
 /// 宿主与预览都按 `scene/entity.rs::family_from_stored_line` 的读法：
 /// `dx = off.x·cos(a)+off.y·sin(a)`（沿线位移）、`dy = -off.x·sin(a)+off.y·cos(a)`（垂距）。
-/// 对 ANSI31（a=45°）基准 offset 必须是 **(-off, +off)**（off = 3.175 mm × pattern_scale）：
+/// 对 ANSI31（a=45°）基准 offset 必须是 **(-off, +off)**（off = [`hatch_offset_component`]）：
 /// 反旋转后 dx=0、dy=+off ✓；写成 (+off,+off) 会得到 dx=off、**dy=0 → 间距塔缩 → 宿主渲染成**
 /// **实心填充**（用户 2026-09-17 报的“轴承剖面线变纯色填充”就是这个，根因是本文件 refactor 时丢了负号）。
 ///
@@ -386,6 +406,7 @@ pub fn dump_svg(part: &GenPart, path: &str) -> std::io::Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use super::HatchEdge;
     use ocs_plugin_api::host::acadrust::EntityType;
 
     /// 剖面线写入的**全局护栏**（管住整库的剖面线，2026-09-17 用户报"轴承剖面线渲染成纯色填充"后加）。
@@ -397,6 +418,35 @@ mod tests {
     ///    （把 ANSI31 基准 offset 写成 (+off,+off) 就会这样）。
     /// ③ **方向烘焙在线角度里**（模板实测存法）：`line.angle = 45°/135° + dir`，
     ///    且 `pattern_angle = dir`（记录值）；只改 pattern_angle 不改线角度，OCS 里四片会同向。
+    /// 剖面线间距的**唯一口径**函数（出图与预览共用）：
+    /// `hatch_perpendicular_spacing` = 宿主读出的 |dy|；`hatch_offset_component` = 垂距/√2。
+    #[test]
+    fn hatch_spacing_helpers_are_single_source() {
+        assert!((super::hatch_perpendicular_spacing(1.0) - 3.175).abs() < 1e-12);
+        assert!(
+            (super::hatch_offset_component(1.0) - 3.175 / std::f64::consts::SQRT_2).abs() < 1e-12
+        );
+        // 齿轮/花键口径 3.0mm：图案比例 = 3.0/3.175 → offset 分量 = 3.0/√2、垂距 = 3.0。
+        let scale = 3.0 / super::ANSI31_SPACING_MM;
+        assert!((super::hatch_perpendicular_spacing(scale) - 3.0).abs() < 1e-12);
+        assert!(
+            (super::hatch_offset_component(scale) - 3.0 / std::f64::consts::SQRT_2).abs() < 1e-12
+        );
+        // 实体图案定义必须与函数同值（出图路径走的就是这两个函数）。
+        let ring = vec![HatchEdge::Line {
+            a: [0.0, 0.0],
+            b: [10.0, 0.0],
+        }];
+        let h = super::hatch_ansi31_rings(&[ring], 0.0, scale);
+        let EntityType::Hatch(hat) = h else {
+            panic!("应为 HATCH")
+        };
+        let ln = &hat.pattern.lines[0];
+        let dy = (-ln.offset.x * ln.angle.sin() + ln.offset.y * ln.angle.cos()).abs();
+        assert!((dy - super::hatch_perpendicular_spacing(hat.pattern_scale)).abs() < 1e-12);
+        assert!((dy - 3.0).abs() < 1e-12, "齿轮口径垂距应为 3.0mm，实得 {dy}");
+    }
+
     #[test]
     fn hatch_patterns_are_readable_by_host() {
         let cases = [

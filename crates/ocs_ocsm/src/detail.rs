@@ -1488,7 +1488,7 @@ impl DetailElement for InvolSpline {
     ) -> Result<GenPart, String> {
         let (spline, len, d_b_note) = resolve_invol_spline(d, params)?;
         let (entities, mut spec_text) = match view {
-            "front" => (spline.front_view()?, spline.spec()),
+            "front" => (spline.front_view(1.0)?, spline.spec()),
             "side" => {
                 let len = len.ok_or_else(|| {
                     "渐开线花键：常规侧视图需要 L（有效长度，例 `L30` / `&len=30`）".to_string()
@@ -1518,7 +1518,7 @@ impl DetailElement for InvolSpline {
                     HatchEdge::Line { a: [len, -rf], b: [len, 0.0] },
                     HatchEdge::Line { a: [len, 0.0], b: [0.0, 0.0] },
                 ];
-                entities.push(hatch_ansi31_rings(&[upper, lower], 0.0, 1.0));
+                entities.push(hatch_ansi31_rings(&[upper, lower], 0.0, crate::gear::HATCH_PATTERN_SCALE));
                 (
                     entities,
                     format!("{} L{}", spline.spec(), trim(len)),
@@ -2564,7 +2564,7 @@ mod tests {
         params.insert("len", 30.0);
         let front = generate_params(FAMILY_INVOL_SPLINE, 0.0, &params, "front").unwrap();
         assert_eq!(front.meta.code, crate::invol_spline::GB_CODE);
-        assert_eq!(front.entities.len(), 20 * (2 * 12 + 2) + 2, "每齿 2×12 渐开线 + 2 弧 + 2 中心线");
+        assert_eq!(front.entities.len(), 20 * (2 * 12 + 2) + 3, "每齿 2×12 渐开线 + 2 弧 + 分度圆 1 + 2 中心线");
         assert_eq!(front.meta.spec, "GB 30圆齿根 m3 z20");
         let side = generate_params(FAMILY_INVOL_SPLINE, 0.0, &params, "side").unwrap();
         assert_eq!(side.entities.len(), 9, "矩形 4 + 小径 2 + 轴线 1 + 分度圆 2");

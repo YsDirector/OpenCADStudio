@@ -1289,6 +1289,71 @@ pub fn clip_line_to_polygon(
     segs
 }
 
+/// 把 HATCH 的图案线渲染成 SVG 线段（`to_svg` 与 `gear::svg_of` **共用同一个函数**）。
+///
+/// 与宿主 `scene/entity.rs::family_from_stored_line` **同一读法**：`pattern.lines` 的
+/// `angle` 已是最终角度，`offset` 是世界向量 → `(dx, dy) = (沿线位移, 垂直距离)`，
+/// `pattern_scale` 只作记录。因此预览与出图共用同一份图案定义，
+/// 不再各自写 45°/3.175 的第二套口径。
+/// 边界支持直线/折线/圆弧（圆弧按 [`boundary_polygon`] 的 8 段近似）。
+pub fn hatch_svg_lines(
+    h: &ocs_plugin_api::host::acadrust::entities::Hatch,
+    tx: &dyn Fn(f64) -> f64,
+    ty: &dyn Fn(f64) -> f64,
+    stroke: &str,
+    stroke_width: f64,
+) -> String {
+    let mut out = String::new();
+    for path in &h.paths {
+        let poly = boundary_polygon(path);
+        if poly.len() < 3 {
+            continue;
+        }
+        let (mut x0, mut y0, mut x1, mut y1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
+        for (x, y) in &poly {
+            x0 = x0.min(*x);
+            y0 = y0.min(*y);
+            x1 = x1.max(*x);
+            y1 = y1.max(*y);
+        }
+        for ln in &h.pattern.lines {
+            let (ca, sa) = (ln.angle.cos(), ln.angle.sin());
+            let dir = (ca, sa);
+            // 图案定义的 offset 本身就是**世界向量**（宿主 `family_from_stored_line` 也这么读）：
+            // 线族 = 过基点 + k·offset、方向 dir。直接用它排线时，
+            // 线间垂直距离 = offset 的垂直分量 = 宿主读出的 |dy| —— 预览与出图同源。
+            // （旧写法把 offset 反旋转成坐标后再当世界向量用，45° 时垂距被少算 √2。）
+            let step = (ln.offset.x, ln.offset.y);
+            let space = step.0.hypot(step.1);
+            if space < 1e-6 {
+                continue;
+            }
+            // 沿线间距 step 排线，覆盖边界包围盒（投影到 step 方向）
+            let ext = ((x1 - x0).hypot(y1 - y0)) + (x1 - x0).abs() + (y1 - y0).abs();
+            let n = (ext / space).ceil().min(2000.0) as i64;
+            let phase = if ln.base_point.x.abs() + ln.base_point.y.abs() > 1e-12 {
+                ln.base_point.x * step.0 + ln.base_point.y * step.1
+            } else {
+                0.0
+            };
+            let k0 = -n - (phase / space).floor() as i64;
+            for k in k0..=(k0 + 2 * n) {
+                let (px, py) = (k as f64 * step.0, k as f64 * step.1);
+                for (a, b) in clip_line_to_polygon((px, py), dir, &poly) {
+                    out.push_str(&format!(
+                        "<line x1=\"{:.2}\" y1=\"{:.2}\" x2=\"{:.2}\" y2=\"{:.2}\" stroke=\"{stroke}\" stroke-width=\"{stroke_width}\"/>",
+                        tx(a.0),
+                        ty(a.1),
+                        tx(b.0),
+                        ty(b.1)
+                    ));
+                }
+            }
+        }
+    }
+    out
+}
+
 /// 单个视图 → 独立 SVG（宽高像素由 `px_w`/`px_h` 控制）。
 pub fn to_svg(part: &GenPart, title: &str, px_w: f64, px_h: f64) -> String {
     let [x0, y0, x1, y1] = part.bbox;
@@ -1351,52 +1416,7 @@ pub fn to_svg(part: &GenPart, title: &str, px_w: f64, px_h: f64) -> String {
                     a.radius * k, a.radius * k
                 ));
             }
-            EntityType::Hatch(h) => {
-                // 预览：按 ANSI31 图案定义画**45° 剖面线**并裁剪到边界多边形内。
-                // 与宿主同语义（`scene/entity.rs::family_from_stored_line`）：`pattern.lines` 的
-                // angle 是弧度、offset 是世界单位偏移 → 预览与落图看到的一致（不再画半透明填充，
-                // 免得"预览看着像实心/落图是实心"误导人）。
-                for path in &h.paths {
-                    let poly = boundary_polygon(path);
-                    if poly.len() < 3 {
-                        continue;
-                    }
-                    let (mut x0, mut y0, mut x1, mut y1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
-                    for (x, y) in &poly {
-                        x0 = x0.min(*x);
-                        y0 = y0.min(*y);
-                        x1 = x1.max(*x);
-                        y1 = y1.max(*y);
-                    }
-                    for ln in &h.pattern.lines {
-                        let (ca, sa) = (ln.angle.cos(), ln.angle.sin());
-                        let dir = (ca, sa);
-                        let step = (ln.offset.x * ca + ln.offset.y * sa, -ln.offset.x * sa + ln.offset.y * ca);
-                        let space = step.0.hypot(step.1);
-                        if space < 1e-6 {
-                            continue;
-                        }
-                        // 沿线间距 step 排线，覆盖边界包围盒（投影到 step 方向）
-                        let ext = ((x1 - x0).hypot(y1 - y0)) + (x1 - x0).abs() + (y1 - y0).abs();
-                        let n = (ext / space).ceil().min(2000.0) as i64;
-                        let phase = if ln.base_point.x.abs() + ln.base_point.y.abs() > 1e-12 {
-                            ln.base_point.x * step.0 + ln.base_point.y * step.1
-                        } else {
-                            0.0
-                        };
-                        let k0 = -n - (phase / space).floor() as i64;
-                        for k in k0..=(k0 + 2 * n) {
-                            let (px, py) = (k as f64 * step.0, k as f64 * step.1);
-                            for (a, b) in clip_line_to_polygon((px, py), dir, &poly) {
-                                out.push_str(&format!(
-                                    "<line x1=\"{:.2}\" y1=\"{:.2}\" x2=\"{:.2}\" y2=\"{:.2}\" stroke=\"#b8860b\" stroke-width=\"1.1\"/>",
-                                    tx(a.0), ty(a.1), tx(b.0), ty(b.1)
-                                ));
-                            }
-                        }
-                    }
-                }
-            }
+            EntityType::Hatch(h) => out.push_str(&hatch_svg_lines(h, &tx, &ty, "#b8860b", 1.1)),
             EntityType::LwPolyline(pl) => {
                 let d: Vec<String> = pl
                     .vertices

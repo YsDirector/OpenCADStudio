@@ -13,7 +13,7 @@
 //! | 齿根过渡圆角 | ρ = **0.38m**（GB/T 1356），圆心在 `r = rf+ρ` 上、且到齿廓起点距离 = ρ | 模板圆心 r=38.2600 = rf+ρ；其弧终点与样条起点同一点 |
 //! | 齿顶弧 / 齿根弧 | 齿顶弧在**齿中心线**两侧各半条；齿根弧在**齿槽中心线**两侧各半条 | 每齿 8 个实体，40 齿 = 320 个 |
 //! | 分度圆 | 点划线（3中心线层）圆 | 簇3/簇4 都在 3中心线层 |
-//! | 剖视图剖面线 | ANSI31、比例 1.0、角度 0，**一个 HATCH 两个边界环**（轴线上下各一环，范围 = 齿根圆↔轴线） | 模板 HATCH 2 个路径，y∈[22.58,60.08] 与 [60.08,97.58] |
+//! | 剖视图剖面线 | ANSI31、比例 **0.9448818897637796 = 3.0/3.175**（垂距 **3.0mm**，用户定案）、角度 0，**一个 HATCH 两个边界环**（轴线上下各一环，flags=17） | 模板 HATCH offset 分量 ±3.0/√2 |
 //! | 轴向倒角 | C = **round(0.6m)**（用户定案 2026-09-17），45°，落在齿顶圆柱两端 | 模板 C=1 = round(0.6×2) |
 //! | 中心线 | 长度 = 直径/长度 + **6n**（n=视图比例），与 `OCSMCENTERLINE` 同一口径 | 簇4 十字 = da+6；模板另两处 da+4/h+4 属手绘偏差，统一取 6n |
 //! | 螺旋线（斜齿轮） | **侧视图**里三条平行的 2细线层细实线，与中心线夹角 = 90°−β，间距 k×5mm，左旋 `\\` 右旋 `/` | 用户 2026-09-17 口述规则 |
@@ -32,18 +32,22 @@
 //!   花键复用同一套「外/内」toggle（外花键/内花键）；内花键与内齿轮同口径：**只有剖视图 + 端视图**，
 //!   **无侧视图**（用户定案「内花键剖视图和内齿轮一样，不存在侧视图」，见 `GearParams::spline_notes`）。
 
-use ocs_plugin_api::host::acadrust::entities::hatch::{
-    BoundaryEdge, BoundaryPath, HatchPattern, HatchPatternLine, LineEdge,
-};
 use ocs_plugin_api::host::acadrust::entities::{Arc, Circle, Hatch, Line, Spline};
-use ocs_plugin_api::host::acadrust::types::{Color, LineWeight, Vector2, Vector3};
+use ocs_plugin_api::host::acadrust::types::{Color, LineWeight, Vector3};
 use ocs_plugin_api::host::acadrust::EntityType;
 
-use crate::partgen::{GenPart, PartMeta, LAYER_CENTER, LAYER_MAIN, LAYER_THIN};
+use crate::partgen::{hatch_svg_lines, GenPart, PartMeta, LAYER_CENTER, LAYER_MAIN, LAYER_THIN};
 use crate::partgen_kit::{hatch_ansi31_rings, HatchEdge};
 
 /// 剖面线层（与 partgen_more/partgen_kit 同一层名）。
 pub const LAYER_HATCH: &str = "5剖面线层";
+
+/// 齿轮/花键剖面线的**垂直距离** = 3.0 mm（用户定案，照模板 `齿轮画法.dxf`）。
+///
+/// 模板 HATCH 的比例就是 0.9448818897637796 = 3.0/3.175，offset 分量 ±3.0/√2。
+pub const HATCH_SPACING_MM: f64 = 3.0;
+/// 3.0 mm 垂距对应的 ANSI31 `pattern_scale` = `HATCH_SPACING_MM / partgen_kit::ANSI31_SPACING_MM`。
+pub const HATCH_PATTERN_SCALE: f64 = HATCH_SPACING_MM / crate::partgen_kit::ANSI31_SPACING_MM;
 
 /// 默认基准齿形角（GB/T 1356 基本齿廓；`GearParams::alpha_deg` 缺省值）。
 pub const ALPHA_N_DEG: f64 = 20.0;
@@ -1483,7 +1487,7 @@ impl_common_layer!(
 );
 
 /// 十字中心线（长度 = 直径 + 6n，与 OCSMCENTERLINE 同规则）。
-fn cross_centerlines(center: [f64; 2], dia: f64, n: f64) -> Vec<EntityType> {
+pub(crate) fn cross_centerlines(center: [f64; 2], dia: f64, n: f64) -> Vec<EntityType> {
     let half = centerline_len(dia, n) / 2.0;
     vec![
         line([center[0] - half, center[1]], [center[0] + half, center[1]], LAYER_CENTER),
@@ -1671,50 +1675,24 @@ fn section_view(p: &GearParams, n: f64) -> Result<Vec<EntityType>, String> {
     out.push(line([-cl / 2.0, -d2], [cl / 2.0, -d2], LAYER_CENTER));
     out.push(line([-cl / 2.0, 0.0], [cl / 2.0, 0.0], LAYER_CENTER));
     // 剖面线：一个 HATCH、两个边界环（齿根圆 ↔ 轴线，上下各一环）—— 齿部按不剖
-    out.push(section_hatch(p.h, rf, 1.0));
+    out.push(section_hatch(p.h, rf));
     Ok(out)
 }
 
-/// 剖面线（ANSI31，比例 1.0，角度 0；两个矩形环）。
+/// 剖面线（ANSI31，一个 HATCH 两个边界环：轴线上下各一环）。
 ///
-/// **写法硬约束**（与 `partgen_kit` 一致，别再改回去）：ANSI31 的基准线角度 45°、
-/// offset 必须写成 `(-off, +off)`（off = 3.175×scale），这样宿主反旋转后
-/// dx≈0、|dy|=间距；写成 `(+off,+off)` 会让宿主渲染成实心填充。
-fn section_hatch(h: f64, rf: f64, pattern_scale: f64) -> EntityType {
-    let mut hat = Hatch::new();
-    let mut pat = HatchPattern::new("ANSI31");
-    pat.description = "ANSI Iron, Brick, Stone masonry".into();
-    let off = 3.175 * pattern_scale;
-    pat.add_line(HatchPatternLine {
-        angle: 45.0f64.to_radians(),
-        base_point: Vector2::new(0.0, 0.0),
-        offset: Vector2::new(-off, off),
-        dash_lengths: Vec::new(),
-    });
-    hat.pattern = pat;
-    hat.is_solid = false;
-    hat.pattern_angle = 0.0;
-    hat.pattern_scale = pattern_scale;
-    // 两个环：下（−rf→0）与上（0→+rf），x 覆盖整个厚度
-    for (y0, y1) in [(-rf, 0.0), (0.0, rf)] {
-        let mut bp = BoundaryPath::new();
-        bp.flags.set_external(true);
-        let pts = [
-            [-h / 2.0, y0],
-            [h / 2.0, y0],
-            [h / 2.0, y1],
-            [-h / 2.0, y1],
-        ];
-        for i in 0..4 {
-            bp.add_edge(BoundaryEdge::Line(LineEdge {
-                start: Vector2::new(pts[i][0], pts[i][1]),
-                end: Vector2::new(pts[(i + 1) % 4][0], pts[(i + 1) % 4][1]),
-            }));
-        }
-        hat.paths.push(bp);
-    }
-    set_layer(&mut hat, LAYER_HATCH);
-    EntityType::Hatch(hat)
+/// 间距口径见 [`HATCH_SPACING_MM`]：走 `partgen_kit::hatch_ansi31_rings`（预览读的是同一份
+/// 图案定义），环 flags = EXTERNAL|OUTERMOST（与花键 flags=17 同口径）。
+fn section_hatch(h: f64, rf: f64) -> EntityType {
+    let ring = |y0: f64, y1: f64| {
+        vec![
+            HatchEdge::Line { a: [-h / 2.0, y0], b: [h / 2.0, y0] },
+            HatchEdge::Line { a: [h / 2.0, y0], b: [h / 2.0, y1] },
+            HatchEdge::Line { a: [h / 2.0, y1], b: [-h / 2.0, y1] },
+            HatchEdge::Line { a: [-h / 2.0, y1], b: [-h / 2.0, y0] },
+        ]
+    };
+    hatch_ansi31_rings(&[ring(-rf, 0.0), ring(0.0, rf)], 0.0, HATCH_PATTERN_SCALE)
 }
 
 // ─────────────────── 内齿轮（齿圈）—— 二期，用户 2026-09-17 给模板 ───────────────────
@@ -2305,7 +2283,7 @@ fn spline_section_hatch(p: &crate::invol_spline::InvolParams, len: f64) -> Entit
         HatchEdge::Line { a: [len, -r_out], b: [len, -r_in] },
         HatchEdge::Line { a: [len, -r_in], b: [0.0, -r_in] },
     ];
-    hatch_ansi31_rings(&[upper, lower], 0.0, 1.0)
+    hatch_ansi31_rings(&[upper, lower], 0.0, HATCH_PATTERN_SCALE)
 }
 
 /// 外花键轴向视图（GEAR 侧视/剖视共用）：**两端倒角**，口径照齿轮 [`axial_outline`]。
@@ -2416,7 +2394,7 @@ fn generate_spline(p: &GearParams, view: GearView, n: f64) -> Result<GenPart, St
     }
     let len = p.h;
     let entities = match view {
-        GearView::Front => engine.front_view()?,
+        GearView::Front => engine.front_view(n)?,
         // 花键是独立零件（两侧都是自由外角）：照齿轮侧视图**两端都倒角**（口径见 `spline_axial_view`）。
         GearView::Side => external_spline_axial_view(&engine, len, n, LAYER_THIN, true)?,
         GearView::Section => {
@@ -3596,79 +3574,9 @@ pub(crate) fn svg_of(entities: &[EntityType], size: f64) -> String {
                 ));
             }
             EntityType::Hatch(hh) => {
-                // 预览要把**图案线**画出来（只画边界的话剖视图看着是空的）：
-                // 本插件的剖面线环都是轴对齐矩形 → 按 45° 间距裁剪即可，不需要通用多边形裁剪。
-                for path in &hh.paths {
-                    let mut xs: Vec<f64> = Vec::new();
-                    let mut ys: Vec<f64> = Vec::new();
-                    for edge in &path.edges {
-                        if let BoundaryEdge::Line(le) = edge {
-                            xs.push(le.start.x);
-                            ys.push(le.start.y);
-                            xs.push(le.end.x);
-                            ys.push(le.end.y);
-                        }
-                    }
-                    if xs.is_empty() {
-                        continue;
-                    }
-                    let (x0, x1) = (xs.iter().cloned().fold(f64::INFINITY, f64::min), xs.iter().cloned().fold(f64::NEG_INFINITY, f64::max));
-                    let (y0, y1) = (ys.iter().cloned().fold(f64::INFINITY, f64::min), ys.iter().cloned().fold(f64::NEG_INFINITY, f64::max));
-                    // ANSI31：45°，间距 = 3.175 × pattern_scale
-                    let step = 3.175 * hh.pattern_scale.max(0.05);
-                    let diag = (x1 - x0) + (y1 - y0);
-                    let n = (diag / step).ceil() as i32 + 2;
-                    let color = color(LAYER_HATCH);
-                    let mut segs = String::new();
-                    for k in -n..=n {
-                        // 直线 x + y = c，c 扫描过整个包围盒
-                        let c = (x0 + y0) + step * k as f64;
-                        let (mut ax, mut ay) = (x0, c - x0);
-                        let (mut bx, mut by) = (x1, c - x1);
-                        // 裁剪到矩形
-                        let clip = |px: f64, py: f64, ox: f64, oy: f64| -> (f64, f64) {
-                            // 沿方向 (ox,oy) 从 (px,py) 推 t 使点落在盒内
-                            let mut t0 = f64::NEG_INFINITY;
-                            let mut t1 = f64::INFINITY;
-                            for (p, o, lo, hi) in [
-                                (px, ox, x0, x1),
-                                (py, oy, y0, y1),
-                            ] {
-                                if o.abs() < 1e-12 {
-                                    if p < lo || p > hi {
-                                        return (f64::NAN, f64::NAN);
-                                    }
-                                } else {
-                                    let (ta, tb) = ((lo - p) / o, (hi - p) / o);
-                                    t0 = t0.max(ta.min(tb));
-                                    t1 = t1.min(ta.max(tb));
-                                }
-                            }
-                            if t0 > t1 {
-                                return (f64::NAN, f64::NAN);
-                            }
-                            (t0, t1)
-                        };
-                        // 方向 = (-1, 1)/√2（45°）
-                        let (dx, dy) = (-1.0f64 / 2f64.sqrt(), 1.0 / 2f64.sqrt());
-                        let (ta, tb) = clip(ax, ay, dx, dy);
-                        if ta.is_nan() {
-                            continue;
-                        }
-                        ax += dx * ta;
-                        ay += dy * ta;
-                        bx = ax + dx * (tb - ta);
-                        by = ay + dy * (tb - ta);
-                        segs.push_str(&format!(
-                            "<line x1='{:.2}' y1='{:.2}' x2='{:.2}' y2='{:.2}' stroke='{color}' stroke-width='0.7'/>\n",
-                            tx(ax),
-                            ty(ay),
-                            tx(bx),
-                            ty(by)
-                        ));
-                    }
-                    body.push_str(&segs);
-                }
+                // 预览与出图同源：`partgen::hatch_svg_lines` 直接读图案定义（与宿主同一读法），
+                // 不再另写 45°/3.175 的第二套口径。
+                body.push_str(&hatch_svg_lines(hh, &tx, &ty, color(LAYER_HATCH), 0.7));
             }
             _ => {}
         }
@@ -3684,6 +3592,7 @@ pub(crate) fn svg_of(entities: &[EntityType], size: f64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ocs_plugin_api::host::acadrust::entities::hatch::BoundaryEdge;
 
     /// 用户模板（齿轮画法.dxf）的实测数字 —— 这是本文件所有断言的依据。
     fn tmpl() -> GearParams {
@@ -3841,8 +3750,15 @@ mod tests {
             .expect("有剖面线");
         assert_eq!(hat.paths.len(), 2, "轴线上下一共两个边界环（模板同构）");
         assert_eq!(hat.common.layer, LAYER_HATCH);
-        assert!((hat.pattern_scale - 1.0).abs() < 1e-9);
+        assert!((hat.pattern_scale - HATCH_PATTERN_SCALE).abs() < 1e-12);
         assert_eq!(hat.pattern.name, "ANSI31");
+        // ① 垂距 = 3.0mm（从 offset 反算：dy = −ox·sin a + oy·cos a）；环 flags = external|outermost（同花键）。
+        let ln = &hat.pattern.lines[0];
+        let dy = (-ln.offset.x * ln.angle.sin() + ln.offset.y * ln.angle.cos()).abs();
+        assert!((dy - HATCH_SPACING_MM).abs() < 1e-9, "剖面线垂距 {dy} ≠ 3.0mm");
+        for path in &hat.paths {
+            assert_eq!(path.flags.bits() & 0x11, 0x11, "flags=external|outermost（同花键）");
+        }
         // 齿根线 ±37.5、长度 = h
         let root_lines = v
             .iter()
@@ -3853,6 +3769,118 @@ mod tests {
             .filter(|l| (l.start.y.abs() - 37.5).abs() < 1e-9 && (l.end.y.abs() - 37.5).abs() < 1e-9)
             .count();
         assert_eq!(root_lines, 2, "上下齿根线");
+    }
+
+    /// 从任意 HATCH 反算宿主读出的垂直距离（`scene/entity.rs` 同一公式）。
+    fn host_hatch_dy(e: &EntityType) -> f64 {
+        let EntityType::Hatch(h) = e else {
+            panic!("应为 HATCH")
+        };
+        let ln = &h.pattern.lines[0];
+        (-ln.offset.x * ln.angle.sin() + ln.offset.y * ln.angle.cos()).abs()
+    }
+
+    /// ① 剖面线垂距 3.0mm 全体系覆盖：外齿轮 / 外花键 / 矩形花键侧剖；
+    /// 内齿圈（内齿轮 + 内花键）按用户定案不剖 → 无 HATCH（保持）。
+    #[test]
+    fn hatch_spacing_is_3mm_across_gear_and_splines() {
+        // 外齿轮剖视（用户实测旧口径 3.175×√2 = 4.4901mm 的那处）
+        let g = generate(&tmpl(), GearView::Section, 1.0).unwrap();
+        let gh = g
+            .entities
+            .iter()
+            .find(|e| matches!(e, EntityType::Hatch(_)))
+            .expect("外齿轮剖视有剖面线");
+        assert!((host_hatch_dy(gh) - HATCH_SPACING_MM).abs() < 1e-9, "齿轮垂距");
+        // 外花键剖视（gear.rs 花键模式）
+        let mut p = spline_tmpl(crate::invol_spline::SplineStd::GB);
+        p.spline.as_mut().unwrap().m = Some(3.0);
+        p.spline.as_mut().unwrap().z = Some(20);
+        let s = generate(&p, GearView::Section, 1.0).unwrap();
+        let sh = s
+            .entities
+            .iter()
+            .find(|e| matches!(e, EntityType::Hatch(_)))
+            .expect("外花键剖视有剖面线");
+        assert!((host_hatch_dy(sh) - HATCH_SPACING_MM).abs() < 1e-9, "花键垂距");
+        // 矩形花键侧剖（spline.rs 同一口径）
+        let rs = crate::spline::RectSpline::from_code("6x23x26x6", None, 30.0).unwrap();
+        let rh = rs
+            .section_view(30.0)
+            .into_iter()
+            .find(|e| matches!(e, EntityType::Hatch(_)))
+            .expect("矩形花键侧剖有剖面线");
+        assert!((host_hatch_dy(&rh) - HATCH_SPACING_MM).abs() < 1e-9, "矩形花键垂距");
+        // 内齿圈：内齿轮 + 内花键剖视都不打剖面线
+        let pi = GearParams { kind: GearKind::Internal, ..tmpl() };
+        assert!(!generate(&pi, GearView::Section, 1.0)
+            .unwrap()
+            .entities
+            .iter()
+            .any(|e| matches!(e, EntityType::Hatch(_))), "内齿轮不剖");
+        let psi = GearParams { kind: GearKind::Internal, ..p.clone() };
+        assert!(!generate(&psi, GearView::Section, 1.0)
+            .unwrap()
+            .entities
+            .iter()
+            .any(|e| matches!(e, EntityType::Hatch(_))), "内花键不剖");
+    }
+
+    /// ① 预览 = 出图：`svg_of` 的剖面线垂距（像素换算回 mm）
+    /// 与 HATCH offset 反算值一致（3.0mm）；预览直接读同一份图案定义。
+    #[test]
+    fn hatch_preview_spacing_matches_export() {
+        let p = tmpl();
+        let entities = section_view(&p, 1.0).unwrap();
+        let hat = entities
+            .iter()
+            .find_map(|e| match e {
+                EntityType::Hatch(h) => Some(h),
+                _ => None,
+            })
+            .unwrap();
+        let ln = &hat.pattern.lines[0];
+        let dy = (-ln.offset.x * ln.angle.sin() + ln.offset.y * ln.angle.cos()).abs();
+        assert!((dy - HATCH_SPACING_MM).abs() < 1e-9, "出图垂距 {dy}");
+
+        // 解析预览里剖面线层（#3fa13f）的线段中点/方向，按法向投影测相邻线垂距。
+        let svg = svg_of(&entities, 460.0);
+        let mut mids: Vec<(f64, f64, f64, f64)> = Vec::new();
+        for piece in svg.split("<line ").skip(1) {
+            if !piece.contains("#3fa13f") {
+                continue;
+            }
+            let attr = |name: &str| -> f64 {
+                let k = format!("{name}=\"");
+                let s = piece.find(&k).unwrap() + k.len();
+                let e = piece[s..].find('"').unwrap() + s;
+                piece[s..e].parse().unwrap()
+            };
+            let (x1, y1, x2, y2) = (attr("x1"), attr("y1"), attr("x2"), attr("y2"));
+            let (dx, dyv) = (x2 - x1, y2 - y1);
+            let len = dx.hypot(dyv);
+            mids.push(((x1 + x2) / 2.0, (y1 + y2) / 2.0, dx / len, dyv / len));
+        }
+        assert!(mids.len() > 4, "预览应有剖面线线段，实得 {}", mids.len());
+        let (nx, ny) = (-mids[0].3, mids[0].2); // 法向
+        let mut ts: Vec<f64> = mids.iter().map(|m| m.0 * nx + m.1 * ny).collect();
+        ts.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        // 上下两环在轴线处共线 -> 同一无限直线会出两次，坐标只保留 2 位小数；
+        // 先按容差去重，再测相邻线的垂距。
+        let mut uniq: Vec<f64> = Vec::new();
+        for t in ts {
+            if uniq.last().is_none_or(|p| (t - p).abs() > 0.05) {
+                uniq.push(t);
+            }
+        }
+        let bb = bbox_of(&entities);
+        let span = (bb[2] - bb[0]).max(bb[3] - bb[1]).max(1.0) * 1.12;
+        let s = 460.0 / span;
+        assert!(uniq.len() > 4, "预览剖面线条数太少：{}", uniq.len());
+        for w in uniq.windows(2) {
+            let mm = (w[1] - w[0]) / s;
+            assert!((mm - HATCH_SPACING_MM).abs() < 0.02, "预览垂距 {mm}mm ≠ 3.0mm");
+        }
     }
 
     #[test]
@@ -4393,9 +4421,10 @@ mod tests {
         // `5b682ed`，其中 `EntityCommon` 新增 `raw_record: Option<Arc<RawRecord>>`（serde 跳过，
         // 但 **Debug 会打印**）→ 每个图元的 Debug 串都变，四个指纹全漂。
         // 已按新旧几何未变的前提下重新冻结（图元数不变：section 14 / side / simplified / front）。
+        // 2026-09 用户定案：剖视剖面线口径改为 3.0mm（HATCH 图元改了 offset/scale）→ section 指纹重冻。
         // 下次升 acadrust 若再漂，先确认几何真的没变（比对图元数与关键坐标）再改这里的常数。
         let frozen: [(&str, u64); 4] = [
-            ("section", 0x723163d7dfa02d27),
+            ("section", 0xfccdf1d19555193c),
             ("side", 0xdb9046b86e5a3e94),
             ("simplified", 0x39e0cbb64e6195cd),
             ("front", 0xbb4f49b5f2d49d91),

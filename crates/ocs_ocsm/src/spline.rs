@@ -700,7 +700,7 @@ impl RectSpline {
                 b: [0.0, 0.0],
             },
         ];
-        out.push(hatch_ansi31_rings(&[upper, lower], 0.0, 1.0));
+        out.push(hatch_ansi31_rings(&[upper, lower], 0.0, crate::gear::HATCH_PATTERN_SCALE));
         out
     }
 }
@@ -823,6 +823,11 @@ mod tests {
         // 中心线 ±16（D+6 = 32）
         assert!(has_line(&e, [-16.0, 0.0], [16.0, 0.0]));
         assert!(has_line(&e, [0.0, -16.0], [0.0, 16.0]));
+        // 用户定案：矩形花键端视**不画分度圆**（模板无；外花键才有）。
+        assert!(
+            !e.iter().any(|x| matches!(x, EntityType::Circle(_))),
+            "矩形花键端视不画分度圆"
+        );
     }
 
     /// 常规侧视图：矩形 L×D + 小径细线（2细线层）+ 中心线（L+6）。
@@ -849,7 +854,7 @@ mod tests {
         assert_eq!(layer([-3.0, 0.0], [33.0, 0.0]), Some(LAYER_CENTER));
     }
 
-    /// 侧剖视图：小径线改 1轮廓实线层；HATCH = ANSI31 / scale 1.0 / 2 环 × 4 LineEdge / flags 17。
+    /// 侧剖视图：小径线改 1轮廓实线层；HATCH = ANSI31 / 垂距 3.0mm（= 齿轮/花键统一口径）/ 2 环 × 4 LineEdge / flags 17。
     #[test]
     fn section_view_hatch_matches_template() {
         let sp = RectSpline::from_code("6x23x26x6", None, 30.0).unwrap();
@@ -864,7 +869,11 @@ mod tests {
             .expect("应有 HATCH");
         assert_eq!(hatch.common.layer, "5剖面线层");
         assert_eq!(hatch.pattern.name, "ANSI31");
-        assert_eq!(hatch.pattern_scale, 1.0);
+        assert!((hatch.pattern_scale - crate::gear::HATCH_PATTERN_SCALE).abs() < 1e-12);
+        // 垂距 = 3.0mm（宿主反旋转 offset 的 |dy|）。
+        let ln = &hatch.pattern.lines[0];
+        let dy = (-ln.offset.x * ln.angle.sin() + ln.offset.y * ln.angle.cos()).abs();
+        assert!((dy - crate::gear::HATCH_SPACING_MM).abs() < 1e-9, "垂距 {dy} ≠ 3.0mm");
         assert_eq!(hatch.paths.len(), 2, "轴线上下两条带");
         for path in &hatch.paths {
             assert_eq!(path.edges.len(), 4, "每环 4 条 LineEdge");
