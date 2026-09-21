@@ -104,6 +104,7 @@
         <tbody id="segBody"></tbody>
       </table>
       <datalist id="dinDbList"></datalist>
+      <datalist id="nfAList"></datalist>
     </div>
     <div class="row">
       <button type="button" class="btn ghost" id="addRow">+ 加行</button>
@@ -121,11 +122,11 @@
       下拉末尾「自定义…」手输表外规格（表外必须给 <code>de</code>）。满齿段长 <code>L</code>
       （段长 = L + 收尾 l）；不能与 CH/OV/M/GEAR 同段。
       <b>INVOLSPLINE 渐开线花键段</b>：先选体系（<code>GB/T 3478.1</code> / <code>DIN 5480-1</code> /
-      <code>NF E22-141</code>（数据未入库）/ <code>ANSI B92.1</code>（未实现））、
-      再选齿廓（GB 四种 / DIN 30°），填 <code>m/z</code>（<code>x</code> 可选，DIN 限 [−0.05, 0.45]）
-      与有效长度 <code>L</code>；派生值 d/db/da/df/ρf/cF 实时显示（DIN 另给 d_B 名义估算），
+      <code>NF E22-141</code>（A 主参数，已入库）/ <code>ANSI B92.1</code>（未实现））、
+      再选齿廓（GB 四种 / DIN 30° / NF 平·圆齿根），填 <code>m/z</code>（<code>x</code> 可选，DIN 限 [−0.05, 0.45]）
+      与有效长度 <code>L</code>；派生值 d/db/da/df/ρf/cF 实时显示（DIN 可给 d_B、NF 可给 A 由表自动带出另一项），
       <code>de</code> 可选（给了才画收尾，段长 = L + l）；不能与 SPLINE/CH/OV/M/GEAR 同段。
-      NF/ANSI 选中后会明确报「数据未入库/未实现」（不假装能用）。
+      ANSI 选中后会明确报「未实现」（不假装能用）。
       <b>GEAR 齿轮段</b>的 H = 齿宽（留空 10m）、α = 压力角（留空 20°）；
       <b>TODO</b>：GEAR 段目前只支持模数制 M（径节制 DP 走 <code>OCSMGEAR</code> 齿轮工具，端/侧/剖视共用几何）。
     </div>
@@ -207,6 +208,7 @@ let sel = 0;                // 当前选中行
 let splineSpecs = [];       // 矩形花键规格表（/api/parts → detail_spline_rect.specs）
 let involPresets = [];      // 渐开线花键预设表（/api/parts → detail_invol_spline.invol_presets）
 let involDinNominal = [];   // DIN 5480-2 名义表候选（/api/parts → detail_invol_spline.din_nominal）
+let involNfNominal = [];    // NF E22-141 尺寸表候选（/api/parts → detail_invol_spline.nf_nominal）
 let involDinInspection = []; // DIN 5480-2 检验表（/api/parts → detail_invol_spline.din_inspection；M1/M2/D_M/k/W_k）
 const SPLINE_CUSTOM = "__custom__";   // 下拉末尾「自定义规格…」的哨兵值
 let curView = "normal";     // 当前视图（默认常规）
@@ -269,6 +271,8 @@ async function loadSplineSpecs() {
       .filter((p) => p && typeof p.code === "string" && p.code !== "");
     involDinNominal = (inv && Array.isArray(inv.din_nominal) ? inv.din_nominal : [])
       .filter((r) => r && Number.isFinite(Number(r.db)) && Number.isFinite(Number(r.m)));
+    involNfNominal = (inv && Array.isArray(inv.nf_nominal) ? inv.nf_nominal : [])
+      .filter((r) => r && Number.isFinite(Number(r.a)) && Number.isFinite(Number(r.m)));
     involDinInspection = (inv && Array.isArray(inv.din_inspection) ? inv.din_inspection : [])
       .filter((r) => r && Number.isFinite(Number(r.db)) && Number.isFinite(Number(r.m)));
     const dl = el("dinDbList");
@@ -280,10 +284,23 @@ async function loadSplineSpecs() {
         dl.appendChild(o);
       });
     }
+    const dlA = el("nfAList");
+    if (dlA) {
+      dlA.innerHTML = "";
+      [...new Set(involNfNominal.map((r) => Number(r.a)))]
+        .filter((v) => Number.isFinite(v))
+        .sort((a, b) => a - b)
+        .forEach((v) => {
+          const o = document.createElement("option");
+          o.value = String(v);
+          dlA.appendChild(o);
+        });
+    }
   } catch (e) {
     splineSpecs = [];
     involPresets = [];
     involDinNominal = [];
+    involNfNominal = [];
     involDinInspection = [];
   }
 }
@@ -352,6 +369,8 @@ const INVOL_FALLBACK = [
   { code: "GB375R", std: "GB", profile: "37.5圆齿根", alpha: 37.5, ha: 0.45, hf: 0.7, rho: 0.3, cf: 0.1 },
   { code: "GB45R", std: "GB", profile: "45圆齿根", alpha: 45, ha: 0.4, hf: 0.6, rho: 0.25, cf: 0.1 },
   { code: "DIN30", std: "DIN", profile: "DIN30", alpha: 30, ha: 0.45, hf: 0.55, rho: 0.16, cf: 0.1 },
+  { code: "NFP", std: "NF", profile: "NF平齿根", alpha: 20, ha: 0.2, hf: 1.0, rho: 0.3, cf: 0.1 },
+  { code: "NFR", std: "NF", profile: "NF圆齿根", alpha: 20, ha: 0.2, hf: 1.147, rho: 0.528, cf: 0.1 },
 ];
 
 function involList() {
@@ -384,6 +403,20 @@ function fillDinDb(r) {
   if (hit) r.invol.x = fmt(hit.x);
 }
 
+// NF：选了公称直径 A → 自动带出 m/z（唯一命中才填）。
+function fillNfA(r) {
+  const preset = involList().find((p) => p.code === String(r.invol.profile).trim());
+  if (!preset || preset.std !== "NF") return;
+  const v = numOrNaN(r.invol.db);
+  if (!(v > 0)) return;
+  const hits = involNfNominal.filter((x) => Math.abs(Number(x.a) - v) < 1e-6);
+  if (!hits.length) return;
+  const ms = [...new Set(hits.map((x) => Number(x.m)))];
+  const zs = [...new Set(hits.map((x) => Number(x.z)))];
+  if (ms.length === 1) r.invol.m = fmt(ms[0]);
+  if (zs.length === 1) r.invol.z = String(zs[0]);
+}
+
 function involStdOptionsHtml(cur) {
   const stds = [];
   for (const p of involList()) if (!stds.includes(p.std)) stds.push(p.std);
@@ -391,7 +424,7 @@ function involStdOptionsHtml(cur) {
   const labels = {
     GB: "GB/T 3478.1-2008",
     DIN: "DIN 5480-1:2015（h_fP=0.55m）",
-    NF: "NF E22-141（数据未入库）",
+    NF: "NF E22-141（A 主参数，已入库）",
     ANSI: "ANSI B92.1（未实现）",
   };
   return stds.map((s) => `<option value="${esc(s)}"${s === cur ? " selected" : ""}>`
@@ -422,7 +455,22 @@ function involDerived(r) {
   let out = "m" + fmt(m) + " z" + fmt(z) + " x" + fmt(x) + " d" + fmt(d)
       + " db" + fmt(db) + " da" + fmt(da) + " df" + fmt(df)
       + " ρf" + fmt(p.rho * m) + " cF" + fmt(p.cf * m);
-  if (p.std === "DIN") {
+  if (p.std === "NF") {
+    // NF：A 是主参数（A=m(z+2x+0.4)）；给了 A → x 由公式解，da=A、df=A−2.4m/2.694m。
+    const rawA = numOrNaN(r.invol.db);
+    const hit = Number.isFinite(rawA) && rawA > 0;
+    const xv = hit ? (rawA - m * (z + 0.4)) / (2 * m) : x;
+    const aNf = hit ? rawA : m * (z + 2 * x + 0.4);
+    const dEff2 = aNf - 0.4 * m;
+    out = "m" + fmt(m) + " z" + fmt(z) + " x" + fmt(xv) + " d" + fmt(d)
+      + " db" + fmt(db) + " da" + fmt(dEff2 + 2 * p.ha * m) + " df" + fmt(dEff2 - 2 * p.hf * m)
+      + " ρf" + fmt(p.rho * m) + " cF" + fmt(p.cf * m);
+    const row = involNfNominal.find((y) => Math.abs(Number(y.a) - aNf) < 1e-6
+        && Number(y.m) === m && Number(y.z) === z);
+    const src = hit ? (row ? "查表命中 p" + row.page + " m=" + fmt(row.m) : "由公式解出，未命中表")
+                    : "由 m/z/x 正算 A=m(z+2x+0.4)";
+    out += " A" + fmt(aNf) + "（" + src + "）";
+  } else if (p.std === "DIN") {
     const raw = numOrNaN(r.invol.db);
     if (Number.isFinite(raw) && raw > 0) {
       const hits = involDinNominal.filter((row) => Math.abs(Number(row.db) - raw) < 1e-6);
@@ -512,9 +560,12 @@ function rowHtml(r, i) {
   const gearOn = r.gear.on;
   const splineOn = r.spline.on;
   const involOn = r.invol.on;
-  // 渐开线花键：GB/T 3478 没有基准直径概念 —— std 不是 DIN 时不显示 d_B 输入框。
+  // 渐开线花键：GB/T 3478 没有基准直径概念 —— DIN 显示 d_B、NF 显示公称直径 A。
   const involPreset = involList().find((x) => x.code === String(r.invol.profile).trim());
-  const involDin = involPreset ? involPreset.std === "DIN" : /din/i.test(String(r.invol.profile));
+  const involStd = involPreset ? involPreset.std : (/din/i.test(String(r.invol.profile)) ? "DIN" : "GB");
+  const involBench = involStd === "DIN" || involStd === "NF";
+  const involBenchLabel = involStd === "NF" ? "A" : "d_B";
+  const involBenchList = involStd === "NF" ? "nfAList" : "dinDbList";
   const specHit = splineSpecHit(r.spline.spec);
   const specSel = specHit ? specHit.code : SPLINE_CUSTOM;
   const mOn = r.m.on;
@@ -555,7 +606,7 @@ function rowHtml(r, i) {
       <div class="frow"><span class="chk">m</span><input type="number" step="0.1" min="0" data-f="invol.m" value="${esc(r.invol.m)}"${dis(!involOn)}>
       <span class="chk">z</span><input type="number" step="1" min="3" data-f="invol.z" value="${esc(r.invol.z)}"${dis(!involOn)}>
       <span class="chk">x</span><input type="number" step="0.05" data-f="invol.x" value="${esc(r.invol.x)}" placeholder="0" style="width:52px"${dis(!involOn)}></div>
-      ${involDin ? `<div class="frow"><span class="chk">d_B</span><input type="number" step="0.1" min="0" data-f="invol.db" value="${esc(r.invol.db)}" list="dinDbList" placeholder="DIN 查表" style="width:64px"${dis(!involOn)}></div>` : ""}
+      ${involBench ? `<div class="frow"><span class="chk">${involBenchLabel}</span><input type="number" step="0.1" min="0" data-f="invol.db" value="${esc(r.invol.db)}" list="${involBenchList}" placeholder="${involStd === "NF" ? "NF 查表" : "DIN 查表"}" style="width:64px"${dis(!involOn)}></div>` : ""}
       <div class="frow"><span class="chk">L</span><input type="number" step="0.1" min="0" data-f="invol.len" value="${esc(r.invol.len)}" placeholder="有效长度"${dis(!involOn)}>
       <span class="chk">de</span><input type="number" step="0.1" min="0" data-f="invol.de" value="${esc(r.invol.de)}" placeholder="可选" style="width:48px"${dis(!involOn)}></div>
       <div class="frow invol-derive" title="d/db/da/df/ρf/cF（与 invol_spline.rs 同公式）；DIN 另给 d_B 名义估算；给了 de 再算收尾 l">${esc(involDerived(r))}</div></td>
@@ -619,9 +670,12 @@ function rowToDsl(r) {
   }
   if (r.invol.on) {
     const code = String(r.invol.profile).trim();
-    const isDin = (involList().find((x) => x.code === code) || {}).std === "DIN";
+    const preset = involList().find((x) => x.code === code) || {};
+    const isDin = preset.std === "DIN";
+    const isNf = preset.std === "NF";
     let s = "INVOLSPLINE " + code;
     if (isDin && String(r.invol.db).trim() !== "") s += " DB" + numTok(r.invol.db);
+    if (isNf && String(r.invol.db).trim() !== "") s += " A" + numTok(r.invol.db);
     if (String(r.invol.m).trim() !== "") s += " M" + numTok(r.invol.m);
     if (String(r.invol.z).trim() !== "") s += " Z" + numTok(r.invol.z);
     if (String(r.invol.x).trim() !== "") s += " X" + numTok(r.invol.x);
@@ -813,10 +867,11 @@ function onTableInput(e) {
     return;
   }
   if (field === "invol.db") {
-    // DIN 5480-2：输入/选择 d_B → 失焦（change）时自动带出 m/z/x 并重渲染派生值。
+    // DIN 5480-2：输入/选择 d_B → 失焦（change）时自动带出 m/z/x；NF 同槽位是 A（带出 m/z）。
     r.invol.db = e.target.value;
     if (e.type === "change") {
       fillDinDb(r);
+      fillNfA(r);
       renderTable();
     }
     regenText();
@@ -993,23 +1048,24 @@ function modelFromRows() {
       const d_b = dbRaw === "" ? null : numOrNaN(r.invol.db);
       const preset = involList().find((p) => p.code === code) || null;
       const isDin = preset ? preset.std === "DIN" : /^din/i.test(code);
+      const isNf = preset ? preset.std === "NF" : /^nf/i.test(code);
       if (!code) { showStatus(at + "INVOLSPLINE 预设代号不能为空（例 GB30R）。", true); return null; }
-      if (d_b !== null && (!isDin || !(d_b > 0))) {
-        showStatus(at + "INVOLSPLINE 的 d_B 只用于 DIN 且必须 > 0（留空 = 不给基准直径）。", true);
+      if (d_b !== null && (!(isDin || isNf) || !(d_b > 0))) {
+        showStatus(at + "INVOLSPLINE 的基准直径只用于 DIN（d_B）/ NF（A）且必须 > 0（留空 = 不给）。", true);
         return null;
       }
       const mOk = Number.isFinite(m) && m > 0;
       const zOk = Number.isFinite(z) && z >= 3;
       const xOk = x === null || Number.isFinite(x);
       if (d_b !== null) {
-        // DB 路径：m/z 可缺一项（后端查表补全），填了就必须合法。
+        // DB/A 路径：m/z 可缺一项（后端查表补全），填了就必须合法。
         if ((mOk === false && String(r.invol.m).trim() !== "")
             || (zOk === false && String(r.invol.z).trim() !== "") || !xOk) {
-          showStatus(at + "INVOLSPLINE 参数非法（m > 0、z ≥ 3、x 留空 = 0；给 DB 时 m/z 可缺一项）。", true);
+          showStatus(at + "INVOLSPLINE 参数非法（m > 0、z ≥ 3、x 留空 = 0；给 DB/A 时 m/z 可缺一项）。", true);
           return null;
         }
       } else if (!mOk || !zOk || !xOk) {
-        showStatus(at + "INVOLSPLINE 参数非法（m > 0、z ≥ 3、x 留空 = 0；DIN 可给 DB 由查表补全）。", true);
+        showStatus(at + "INVOLSPLINE 参数非法（m > 0、z ≥ 3、x 留空 = 0；DIN 可给 DB、NF 可给 A 由查表补全）。", true);
         return null;
       }
       if (!(len > 0)) { showStatus(at + "INVOLSPLINE 的 L（有效长度）必须 > 0。", true); return null; }

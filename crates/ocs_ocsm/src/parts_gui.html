@@ -271,6 +271,19 @@ function renderDetailInputs(f) {
       inp.setAttribute("list", "p_db_list");
       inp.addEventListener("input", () => { fillDinDb(f); onDetail(); });
       inp.addEventListener("change", () => { fillDinDb(f); onDetail(); });
+    } else if (it.key === "a" && Array.isArray(f.nf_nominal) && f.nf_nominal.length) {
+      // NF E22-141 的公称直径 A：挂 NF 尺寸表候选，选/输入后自动带出 m/z。
+      const dl = document.createElement("datalist");
+      dl.id = "p_a_list";
+      nfAValues(f).forEach((v) => {
+        const o = document.createElement("option");
+        o.value = String(v);
+        dl.appendChild(o);
+      });
+      box.appendChild(dl);
+      inp.setAttribute("list", "p_a_list");
+      inp.addEventListener("input", () => { fillNfA(f); onDetail(); });
+      inp.addEventListener("change", () => { fillNfA(f); onDetail(); });
     } else {
       inp.addEventListener("input", onDetail);
     }
@@ -402,7 +415,7 @@ function onDetail() {
   const hasSpecs = !!(f.specs && f.specs.length);
   if (f.invol_presets) {
     syncDetailSelects(f);
-    syncDetailVisibility(f);   // GB 下隐藏 d_B（本体系没有基准直径）
+    syncDetailVisibility(f);   // 按 std 值显隐 d_B（DIN）/ A（NF）/ 齿廓参数
     const sels = collectSelects(f);
     const code = sels.profile || "";
     const preset = (f.invol_presets || []).find((p) => p.code === code);
@@ -415,11 +428,14 @@ function onDetail() {
     }
     const params = collectParams(f, hint);
     if (params === null) { cur.spec = ""; cur.params = {}; return; }
-    if (preset.std !== "DIN" && params.db !== undefined) delete params.db; // d_B 只属 DIN
+    // d_B 只属 DIN；A 只属 NF。
+    if (preset.std !== "DIN" && params.db !== undefined) delete params.db;
+    if (preset.std !== "NF" && params.a !== undefined) delete params.a;
     cur.spec = code;
     cur.d = 0;
     cur.params = params;
-    hint.textContent = involDerivedText(preset, params.m, params.z, params.x, params.db, f);
+    const bench = preset.std === "NF" ? params.a : params.db;
+    hint.textContent = involDerivedText(preset, params.m, params.z, params.x, bench, f);
     update();
     return;
   }
@@ -514,6 +530,31 @@ function fillDinDb(f) {
   if (hit) pv("x").value = fmt(hit.x);
 }
 
+// NF E22-141 尺寸表（catalog.families.detail_invol_spline.nf_nominal）候选 A 列表。
+function nfAValues(f) {
+  return [...new Set((f.nf_nominal || []).map((r) => Number(r.a)))]
+    .filter((v) => Number.isFinite(v))
+    .sort((a, b) => a - b);
+}
+
+// 选了公称直径 A → 自动带出 m/z（唯一命中才填；同一 A 多档/多 N 时保留供手选）。
+function fillNfA(f) {
+  const pv = (key) => el("p_" + key);
+  const std = pv("std");
+  const aIn = pv("a");
+  const mIn = pv("m");
+  const zIn = pv("z");
+  if (!std || !aIn || !mIn || !zIn || std.value !== "NF") return;
+  const v = Number(String(aIn.value).trim());
+  if (!(v > 0)) return;
+  const hits = (f.nf_nominal || []).filter((r) => Math.abs(Number(r.a) - v) < 1e-6);
+  if (!hits.length) return;
+  const ms = [...new Set(hits.map((r) => Number(r.m)))];
+  const zs = [...new Set(hits.map((r) => Number(r.z)))];
+  if (ms.length === 1) mIn.value = fmt(ms[0]);
+  if (zs.length === 1) zIn.value = String(zs[0]);
+}
+
 // 渐开线花键派生值：与 `invol_spline.rs` 同公式（d/db/da/df/ρf/cF；
 // DIN 另给 d_B 名义估算 m(z+2x) 并说明它只作身份显示）。
 function fmt(v) {
@@ -529,12 +570,25 @@ function involDerivedText(preset, m, z, x, d_b, f) {
   const zv = Number(z);
   if (!(mv > 0) || !(zv > 0)) {
     return preset.code + "（" + preset.profile + "）：填 m / z 后显示派生值"
-        + (preset.std === "DIN" ? "（给 d_B 可由 DIN 5480-2 表自动带出）" : "");
+        + (preset.std === "DIN" ? "（给 d_B 可由 DIN 5480-2 表自动带出）"
+           : preset.std === "NF" ? "（给公称直径 A 可由 NF E22-141 表自动带出另一项）" : "");
   }
-  const xv = x === "" || x === undefined || !Number.isFinite(Number(x)) ? 0 : Number(x);
+  const isNf = preset.std === "NF";
+  // NF：A 是主参数 —— 给了 A 时 x 由公式解（A 为主），否则由 m/z/x 正算 A。
+  let aNf = NaN;
+  let xv = x === "" || x === undefined || !Number.isFinite(Number(x)) ? (isNf ? 0.8 : 0) : Number(x);
+  if (isNf) {
+    const rawA = d_b === undefined || d_b === null || String(d_b).trim() === "" ? NaN : Number(d_b);
+    if (Number.isFinite(rawA) && rawA > 0) {
+      aNf = rawA;
+      xv = (rawA - mv * (zv + 0.4)) / (2 * mv);
+    } else {
+      aNf = mv * (zv + 2 * xv + 0.4);
+    }
+  }
   const a = preset.alpha * Math.PI / 180;
   const d = mv * zv;
-  const dEff = d + 2 * xv * mv;
+  const dEff = isNf && Number.isFinite(aNf) ? aNf - 0.4 * mv : d + 2 * xv * mv;
   const db = d * Math.cos(a);
   const da = dEff + 2 * preset.ha * mv;
   const df = dEff - 2 * preset.hf * mv;
@@ -542,6 +596,17 @@ function involDerivedText(preset, m, z, x, d_b, f) {
       + " x=" + fmt(xv) + " d=" + fmt(d) + " db=" + fmt(db)
       + " da=" + fmt(da) + " df=" + fmt(df) + " ρf=" + fmt(preset.rho * mv)
       + " cF=" + fmt(preset.cf * mv);
+  if (isNf) {
+    const rawA = Number(aNf);
+    const hits = ((f && f.nf_nominal) || []).filter((r) => Math.abs(Number(r.a) - rawA) < 1e-6);
+    const hit = hits.find((r) => Number(r.m) === mv && Number(r.z) === zv);
+    const src = (d_b !== undefined && d_b !== null && String(d_b).trim() !== "")
+      ? (hit ? "查表命中 p" + hit.page + " m=" + fmt(hit.m) + " z=" + hit.z
+             : "由公式解出，未命中表")
+      : "由 m/z/x 正算 A=m(z+2x+0.4)";
+    s += "; A=" + fmt(rawA) + "（" + src + "）";
+    return s;
+  }
   if (preset.std === "DIN") {
     const raw = d_b === undefined || d_b === null || String(d_b).trim() === "" ? NaN : Number(d_b);
     if (Number.isFinite(raw) && raw > 0) {

@@ -82,10 +82,12 @@ const PARTS = {
         { code: 'GB375R', std: 'GB', profile: '37.5圆齿根', alpha: 37.5, ha: 0.45, hf: 0.7, rho: 0.3, cf: 0.1 },
         { code: 'GB45R', std: 'GB', profile: '45圆齿根', alpha: 45, ha: 0.4, hf: 0.6, rho: 0.25, cf: 0.1 },
         { code: 'DIN30', std: 'DIN', profile: 'DIN30', alpha: 30, ha: 0.45, hf: 0.55, rho: 0.16, cf: 0.1 },
-        { code: 'NF', std: 'NF', profile: 'NF E22-141（数据未入库）', alpha: 30, ha: 0.5, hf: 0.75, rho: 0.2, cf: 0.1 },
+        { code: 'NFP', std: 'NF', profile: 'NF平齿根', alpha: 20, ha: 0.2, hf: 1.0, rho: 0.3, cf: 0.1 },
+        { code: 'NFR', std: 'NF', profile: 'NF圆齿根', alpha: 20, ha: 0.2, hf: 1.147, rho: 0.528, cf: 0.1 },
         { code: 'ANSI', std: 'ANSI', profile: 'ANSI B92.1（未实现）', alpha: 20, ha: 1, hf: 1.25, rho: 0.38, cf: 0.25 },
       ],
       din_nominal: [{ db: 40, m: 2, z: 18, x: 0.45, page: 27 }],
+      nf_nominal: [{ a: 80, m: 3.75, z: 19, x: 0.967, page: 21 }],
     },
   },
 };
@@ -164,17 +166,25 @@ check(el('dbLabel').style.display !== 'none', 'DIN 下 d_B 行应显示');
 check(el('profileSel').value === 'DIN30', 'DIN 齿廓应 DIN30，实际 ' + el('profileSel').value);
 check(Math.abs(numOf('hf') - 0.55) < 1e-9, 'DIN30 hf 预设应 0.55');
 
-// ③.5 NF/ANSI：d_B 行隐藏 + 明确提示（不假装能用）；齿廓选项存在
+// ③.5 NF：A 行显示、标签为公称直径 A；齿廓 NFP、预设系数；A=80 自动带出 m/z。
 el('stdSel').value = 'NF';
 try { el('stdSel')._fire('change', el('stdSel')); } catch (e) { errors.push('NF 切换异常: ' + e); }
 await flush();
-check(el('dbLabel').style.display === 'none', 'NF 下 d_B 行应隐藏（数据未入库）');
-check(el('stdHint').textContent.includes('数据未入库'), 'NF 提示应含「数据未入库」：' + el('stdHint').textContent);
-check(el('profileSel').value === 'NF', 'NF 齿廓应为 NF，实际 ' + el('profileSel').value);
+check(el('dbLabel').style.display !== 'none', 'NF 下 A（基准直径）行应显示');
+check(el('dbLabel').textContent.includes('公称直径 A'), 'NF 标签应为公称直径 A：' + el('dbLabel').textContent);
+check(el('stdHint').textContent.includes('A 主参数'), 'NF 提示应含「A 主参数」：' + el('stdHint').textContent);
+check(el('profileSel').value === 'NFP', 'NF 默认齿廓应为 NFP，实际 ' + el('profileSel').value);
+check(Math.abs(numOf('hf') - 1.0) < 1e-9, 'NFP hf 预设应 1.0，实际 ' + numOf('hf'));
+el('db').value = '80';
+try { el('db')._fire('change', el('db')); } catch (e) { errors.push('A 自动带出异常: ' + e); }
+await flush();
+check(Math.abs(numOf('m') - 3.75) < 1e-9, 'A80 应带出 m=3.75，实际 ' + numOf('m'));
+check(el('z').value === '19', 'A80 应带出 z=19，实际 ' + el('z').value);
+// ANSI：基准直径行隐藏 + 明确未实现
 el('stdSel').value = 'ANSI';
 try { el('stdSel')._fire('change', el('stdSel')); } catch (e) { errors.push('ANSI 切换异常: ' + e); }
 await flush();
-check(el('dbLabel').style.display === 'none', 'ANSI 下 d_B 行应隐藏');
+check(el('dbLabel').style.display === 'none', 'ANSI 下基准直径行应隐藏');
 check(el('stdHint').textContent.includes('未实现'), 'ANSI 提示应含「未实现」：' + el('stdHint').textContent);
 check(el('profileSel').value === 'ANSI', 'ANSI 齿廓应为 ANSI，实际 ' + el('profileSel').value);
 

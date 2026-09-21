@@ -74,7 +74,7 @@
         <div class="hint" id="modeHint" style="flex-basis:100%; margin:0">
           不勾选 = 普通齿轮（体系下拉 M 模数制 / DP 径节制；给花键标准号或 d_B 会明确报错）；
           勾选 = 渐开线花键（GB/DIN/NF/ANSI 四种体系，内/外花键仍用下面的「齿轮种类」开关切换）。
-          NF 数据未入库、ANSI 未实现，选中会明确报错（不假装能用）。
+          NF 已入库（公称直径 A 主参数，p18/p20/p21/p22 共 288 行）；ANSI 未实现（选中会明确报错）。
         </div>
       </div>
 
@@ -86,7 +86,7 @@
         <select id="stdSel">
           <option value="GB">GB/T 3478.1-2008（无基准直径概念）</option>
           <option value="DIN">DIN 5480-1:2015（d_B 主参数）</option>
-          <option value="NF">NF E22-141（数据未入库）</option>
+          <option value="NF">NF E22-141（A 主参数，已入库）</option>
           <option value="ANSI">ANSI B92.1（未实现）</option>
         </select>
         <div class="hint" id="stdHint" style="flex-basis:100%; margin:0"></div>
@@ -99,8 +99,10 @@
       <div class="ctl" id="dbCtl">
         <input type="number" id="db" min="0" step="0.5" list="dinDbList" placeholder="DIN 5480-2 查表（可空，由 m/z 正算）">
         <datalist id="dinDbList"></datalist>
+        <datalist id="nfAList"></datalist>
         <div class="hint" id="dbHint" style="flex-basis:100%; margin:0">
-          d_B 只属于 DIN 5480；GB/T 3478 下不给（本体系不用 d_B）。DIN 给 d_B 后 m 或 z 可空一个：由表定另一个。
+          d_B 只属于 DIN 5480；NF E22-141 用公称直径 A。GB/T 3478 下不给（本体系没有基准直径）。
+          给 d_B / A 后 m 或 z 可空一个：由表定另一个。
         </div>
       </div>
 
@@ -239,12 +241,14 @@ const INVOL_FALLBACK = [
   { code: "GB375R", std: "GB", profile: "37.5圆齿根", alpha: 37.5, ha: 0.45, hf: 0.7, rho: 0.3, cf: 0.1 },
   { code: "GB45R", std: "GB", profile: "45圆齿根", alpha: 45, ha: 0.4, hf: 0.6, rho: 0.25, cf: 0.1 },
   { code: "DIN30", std: "DIN", profile: "DIN30", alpha: 30, ha: 0.45, hf: 0.55, rho: 0.16, cf: 0.1 },
-  // NF/ANSI：体系可识别但数据未入库/未实现 —— 保留选项，后端给明确错误（不假装能用）。
-  { code: "NF", std: "NF", profile: "NF E22-141（数据未入库）", alpha: 30, ha: 0.5, hf: 0.75, rho: 0.2, cf: 0.1 },
+  // NF 已入库（A 主参数）；ANSI 未实现 —— 保留选项，后端给明确错误（不假装能用）。
+  { code: "NFP", std: "NF", profile: "NF平齿根", alpha: 20, ha: 0.2, hf: 1.0, rho: 0.3, cf: 0.1 },
+  { code: "NFR", std: "NF", profile: "NF圆齿根", alpha: 20, ha: 0.2, hf: 1.147, rho: 0.528, cf: 0.1 },
   { code: "ANSI", std: "ANSI", profile: "ANSI B92.1（未实现）", alpha: 20, ha: 1, hf: 1.25, rho: 0.38, cf: 0.25 },
 ];
 let involPresets = [];            // 目录表预设（拿不到就空，用 INVOL_FALLBACK）
 let involDinNominal = [];         // DIN 5480-2 名义表候选（d_B datalist）
+let involNfNominal = [];          // NF E22-141 尺寸表候选（A datalist）
 const involList = () => (involPresets.length ? involPresets : INVOL_FALLBACK);
 // 花键模式开关（复选框）
 const isSpline = () => el("splineMode").checked;
@@ -368,10 +372,13 @@ function collect() {
   const beta = betaDeg();
   let err = "";
   if (isSpline()) {
+    const std = el("stdSel").value;
+    const isNf = std === "NF";
+    const benchName = isNf ? "公称直径 A" : "基准直径 d_B";
     const db = String(el("db").value).trim();
     const dbv = db === "" ? NaN : Number(db);
     const hfv = num("hf"), rhov = num("rho"), cfv = num("cf");
-    if (db !== "" && (!Number.isFinite(dbv) || dbv <= 0)) err = "基准直径 d_B 必须是正数（或留空）。";
+    if (db !== "" && (!Number.isFinite(dbv) || dbv <= 0)) err = benchName + " 必须是正数（或留空）。";
     else if (!Number.isFinite(alpha) || alpha <= 10 || alpha >= 50) err = "压力角 α 超出范围（10°<α<50°）。";
     else if (!Number.isFinite(ha)) err = "齿顶高系数 ha* 必须是数字。";
     else if (!Number.isFinite(hfv) || hfv <= 0) err = "齿根高系数 hf* 必须是正数。";
@@ -379,15 +386,15 @@ function collect() {
     else if (!Number.isFinite(cfv) || cfv < 0) err = "齿形裕度系数 cF* 不能为负。";
     else if (!Number.isFinite(h) || h <= 0) err = "有效长度 L 必须是正数。";
     else if (!Number.isFinite(x)) err = "变位系数 Xn 必须是数字。";
-    else if (el("stdSel").value === "DIN" && db === "" && (!Number.isFinite(m) || !Number.isFinite(z))) {
-      err = "DIN 花键：给 m 与 z，或给 d_B 由表补全（三者可少一个）。";
+    else if ((std === "DIN" || isNf) && db === "" && (!Number.isFinite(m) || !Number.isFinite(z))) {
+      err = (isNf ? "NF 花键：给 A 与 m，或给 A 与 z" : "DIN 花键：给 m 与 z，或给 d_B 由表补全") + "（三者可少一个）。";
     } else if (db === "" && (!Number.isFinite(m) || m <= 0 || !Number.isFinite(z) || z < 3)) {
-      err = "花键：不给 d_B 时必须给 m 与 z。";
-    } else if (db !== "" && el("stdSel").value === "GB") {
+      err = "花键：不给 " + (isNf ? "A" : "d_B") + " 时必须给 m 与 z。";
+    } else if (db !== "" && std === "GB") {
       err = "GB/T 3478 没有基准直径 d_B 这个概念（d_B 只属 DIN 5480）。";
     }
     // 花键模式：隐藏框（c/β）不传；std/profile/db 系数都传给后端
-    const p = { mode: "spline", kind: curKind, std: el("stdSel").value, profile: el("profileSel").value,
+    const p = { mode: "spline", kind: curKind, std, profile: el("profileSel").value,
                 alpha, ha, hf: hfv, rho: rhov, cf: cfv, h, x };
     if (db !== "") p.db = dbv;
     if (Number.isFinite(m) && m > 0) p.m = m;
@@ -457,13 +464,22 @@ function syncSplineUI() {
     showRow("m", false);
     showRow("dp", false);
     const std = el("stdSel").value;
-    // d_B 只属 DIN（NF 也含 d_B 但数据未入库；GB/ANSI 本体系不用）：仅 DIN 显示。
-    showRow("db", std === "DIN");
-    if (std !== "DIN") el("db").value = ""; // 不在页面上传
+    // 基准直径行：DIN 用 d_B、NF 用公称直径 A；GB/ANSI 本体系不用。
+    const bench = std === "DIN" || std === "NF";
+    showRow("db", bench);
+    if (!bench) el("db").value = ""; // 不在页面上传
+    el("dbLabel").textContent = std === "NF" ? "公称直径 A（NF）" : "基准直径 d_B";
+    el("db").placeholder = std === "NF"
+      ? "NF E22-141 查表（可空，由 m/z 正算）"
+      : "DIN 5480-2 查表（可空，由 m/z 正算）";
+    el("db").setAttribute("list", std === "NF" ? "nfAList" : "dinDbList");
+    el("dbHint").textContent = std === "NF"
+      ? "A 是 NF E22-141 的主参数（A=m(z+2x+0.4)，α=20°）；给 A 后 m 或 z 可空一个，由表定另一个。"
+      : "d_B 只属于 DIN 5480；GB/T 3478 下不给（本体系不用 d_B）。DIN 给 d_B 后 m 或 z 可空一个：由表定另一个。";
     el("stdHint").textContent = ({
       GB: "GB/T 3478.1：模数制，不用 d_B；给 d_B 会明确报错。",
       DIN: "DIN 5480-1：d_B 主参数（可给 m 或 z 推导）。",
-      NF: "NF E22-141：数据未入库（尺寸表待抄，页图已在 ~/桌面/OCSM/review/花键标准资料/）——不可出图。",
+      NF: "NF E22-141：A 主参数（α=20°；尺寸表 p18/p20/p21/p22 共 288 行已入库）。",
       ANSI: "ANSI B92.1：未实现（径节系列与方法已有，待接入）——不可出图。",
     })[std] || "";
   } else {
@@ -488,7 +504,7 @@ function syncProfileSelect() {
     sel.appendChild(o);
   });
   const codes = list.map((p) => p.code);
-  const prefer = std === "DIN" ? "DIN30" : "GB30R";
+  const prefer = std === "DIN" ? "DIN30" : (std === "NF" ? "NFP" : "GB30R");
   sel.value = codes.indexOf(prev) >= 0 ? prev : (codes.indexOf(prefer) >= 0 ? prefer : (codes[0] || ""));
 }
 
@@ -521,6 +537,34 @@ function fillDinDbList() {
     });
 }
 
+// NF E22-141 公称直径 A 候选（datalist）；目录拿不到就空。
+function fillNfAList() {
+  const dl = el("nfAList");
+  if (!dl) return;
+  dl.innerHTML = "";
+  [...new Set(involNfNominal.map((r) => Number(r.a)))]
+    .filter((v) => Number.isFinite(v))
+    .sort((a, b) => a - b)
+    .forEach((v) => {
+      const o = document.createElement("option");
+      o.value = String(v);
+      dl.appendChild(o);
+    });
+}
+
+// NF：选了 A → 自动带出 m/z（唯一命中才填，多档/多 N 时保留供手选）。
+function fillNfA() {
+  if (el("stdSel").value !== "NF") return;
+  const v = Number(String(el("db").value).trim());
+  if (!(v > 0)) return;
+  const hits = involNfNominal.filter((r) => Math.abs(Number(r.a) - v) < 1e-6);
+  if (!hits.length) return;
+  const ms = [...new Set(hits.map((r) => Number(r.m)))];
+  const zs = [...new Set(hits.map((r) => Number(r.z)))];
+  if (ms.length === 1) el("m").value = fmt(ms[0]);
+  if (zs.length === 1) el("z").value = String(zs[0]);
+}
+
 // 从 `/api/parts` 取花键预设与 DIN 名义表（与 shaft_gui 同源）；失败退兜底表。
 async function loadInvolCatalog() {
   try {
@@ -530,11 +574,15 @@ async function loadInvolCatalog() {
       .filter((p) => p && typeof p.code === "string" && p.code !== "");
     involDinNominal = (inv && Array.isArray(inv.din_nominal) ? inv.din_nominal : [])
       .filter((r) => r && Number.isFinite(Number(r.db)));
+    involNfNominal = (inv && Array.isArray(inv.nf_nominal) ? inv.nf_nominal : [])
+      .filter((r) => r && Number.isFinite(Number(r.a)));
   } catch (e) {
     involPresets = [];
     involDinNominal = [];
+    involNfNominal = [];
   }
   fillDinDbList();
+  fillNfAList();
   syncProfileSelect();
   applySplinePreset();
 }
@@ -611,13 +659,14 @@ function syncKindHint() {
   let html = "";
   if (isSpline()) {
     const db = String(el("db").value).trim();
+    const isNf = el("stdSel").value === "NF";
     let arg = "花键 " + (curKind === "internal" ? "内花键 " : "") + "std=" + el("stdSel").value;
-    if (db !== "") arg += " db=" + db;
+    if (db !== "") arg += (isNf ? " a=" : " db=") + db;
     if (v.ok && v.p.m !== undefined) arg += " " + fmt(v.p.m);
     if (v.ok && v.p.z !== undefined) arg += " " + v.p.z;
     arg += " view " + viewCn;
-    html += "花键模式：几何全在 <code>invol_spline.rs</code> 引擎（GB/DIN 预设 + DIN 5480-2 查表）；"
-         + "不给 d_B 时用 m/z（DIN 会由 m/z/x 正算 d_B）。<br>";
+    html += "花键模式：几何全在 <code>invol_spline.rs</code> 引擎（GB/DIN 预设 + DIN 5480-2 / NF E22-141 查表）；"
+         + "不给基准直径时用 m/z（DIN 由 m/z/x 正算 d_B，NF 由 m/z/x 正算 A）。<br>";
     html += "命令行等价用法：<code>OCSMGEAR " + arg + "</code>";
     el("kindHint").innerHTML = html;
     return;
@@ -643,7 +692,7 @@ function paramQS(p) {
   if (p.mode === "spline") {
     let q = "mode=spline&kind=" + p.kind + "&std=" + p.std + "&profile=" + encodeURIComponent(p.profile || "");
     const push = (k, v) => { if (v !== undefined && v !== null && v !== "") q += "&" + k + "=" + v; };
-    push("db", p.db); push("m", p.m); push("z", p.z);
+    push(p.std === "NF" ? "a" : "db", p.db); push("m", p.m); push("z", p.z);
     push("alpha", p.alpha); push("ha", p.ha); push("hf", p.hf); push("rho", p.rho); push("cf", p.cf);
     push("h", p.h); push("x", p.x);
     return q;
@@ -746,7 +795,8 @@ function renderSplineInfo(j) {
     ["齿形裕度 cF", j.cf, " mm", "cF*·m"],
   ];
   if (j.d_b !== null && j.d_b !== undefined) items.push(["基准直径 d_B", j.d_b, " mm", "DIN 主参数（GB 无此概念）"]);
-  if (j.origin) items.push(["d_B 来源", j.origin, "", "查表 / 推导 / 按 d_B 重算 的来源说明"]);
+  if (j.a !== null && j.a !== undefined) items.push(["公称直径 A", j.a, " mm", "NF E22-141 主参数（A=m(z+2x+0.4)）"]);
+  if (j.origin) items.push(["基准直径来源", j.origin, "", "查表 / 推导 / 按基准直径重算 的来源说明"]);
   if (j.inspection) items.push(["检验尺寸", j.inspection, "", "DIN 5480-2：M1 外花键跨棒距 / M2 内花键棒间距 / k 跨测齿数 / W_k 公法线"]);
   el("info").innerHTML = items
     .map(([k, val, unit, tip]) =>
@@ -922,6 +972,11 @@ function ping(bye) {
     }
     n.addEventListener("input", onInput);
     n.addEventListener("change", onInput);
+    if (id === "db") {
+      // NF：选了公称直径 A → 自动带出 m/z（唯一命中）；DIN 仍走 d_B 候选。
+      n.addEventListener("input", fillNfA);
+      n.addEventListener("change", fillNfA);
+    }
     n.addEventListener("blur", onCommit);
     n.addEventListener("keydown", (e) => { if (e.key === "Enter") onCommit(); });
   });

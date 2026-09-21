@@ -94,11 +94,12 @@
 //!
 //! `INVOLSPLINE GB30R M3 Z20 [X0.2] L30 [de63]`（GB）/
 //! `INVOLSPLINE DIN30 DB40 M2 L30`（DIN，`DB` = 基准直径 `d_B`，`M`/`Z` 可缺一项由
-//! DIN 5480-2 名义表补全；`x=(d_B−m(z+1.1))/(2m)` 为表反推关系）：预设代号 `GB30P`/`GB30R`（默认）
-//! /`GB375R`/`GB45R`/`DIN30`（GB/T 3478.1-2008；DIN 5480-1:2015，h_fP*=0.55）自带
-//! α/ha*/hf*/ρf*，直径由 `M/Z/X`（或 DB）导出（**不给 S/E**）：`s = e = da`；
-//! **体系也可显式写标识**（`INVOLSPLINE DIN M2 Z18`、`INVOLSPLINE GB M3 Z20`；NF/ANSI 可识别但
-//! 报数据未入库/未实现，不静默）。
+//! DIN 5480-2 名义表补全；`x=(d_B−m(z+1.1))/(2m)` 为表反推关系）/ `INVOLSPLINE NFP A80 M3.75 L30`
+//! （NF E22-141，`A` = 公称直径主参数，`M`/`Z` 可缺一项由 NF 尺寸表补全）：预设代号 `GB30P`/`GB30R`（默认）
+//! /`GB375R`/`GB45R`/`DIN30`/`NFP`/`NFR`（GB/T 3478.1-2008；DIN 5480-1:2015，h_fP*=0.55；NF E22-141 α=20°）自带
+//! α/ha*/hf*/ρf*，直径由 `M/Z/X`（或 DB/A）导出（**不给 S/E**）：`s = e = da`；
+//! **体系也可显式写标识**（`INVOLSPLINE DIN M2 Z18`、`INVOLSPLINE NF A80 M3.75`；NF 已入库，
+//! ANSI 未实现）。
 //! - `L` = 有效长度（满齿段长）；`de`（滚刀外径）**可选**：给了才画收尾弧，
 //!   段长 = L + l（`l = √(h(2R−h))`、R = de/2、h = (da−df)/2，与 `SPLINE` 同式）；
 //!   不给 de 时段长 = L、端面直接收口；
@@ -184,12 +185,13 @@ OCSMSHAFT 轴生成器：行 DSL / JSON → 单视图侧视图（段拼接 + 端
                       l=√(h(2R−h))，6×23×26×6 → l=9.6047）；段长 = L + l；
                       不给 S/E；可 `de 71` 覆盖滚刀外径；不能与 CH/OV/RL/M/GEAR 同段
                       （引入倒角由相邻段的 CH 表达）
-    INVOLSPLINE GB30R M3 Z20 L30   渐开线花键段（GB/T 3478.1 / DIN 5480）：预设代号
-                      GB30P/GB30R（默认）/GB375R/GB45R/DIN30，或体系标识 GB/DIN/NF/ANSI；
-                      直径由 M/Z/X 或 DB 导出（不给 S/E）；
-                      `X0.2` = 变位（DIN ∈ [−0.05, 0.45]）；DIN 可写 `DB40`（基准直径），
-                      M/Z 可缺一项由 DIN 5480-2 名义表补全（m=1.5 已补入、m=5 已剔除）；
-                      NF/ANSI 会明确报「数据未入库/未实现」；
+    INVOLSPLINE GB30R M3 Z20 L30   渐开线花键段（GB/T 3478.1 / DIN 5480 / NF E22-141）：预设代号
+                      GB30P/GB30R（默认）/GB375R/GB45R/DIN30/NFP/NFR，或体系标识 GB/DIN/NF/ANSI；
+                      直径由 M/Z/X 或 DB/A 导出（不给 S/E）；
+                      `X0.2` = 变位（DIN ∈ [−0.05, 0.45]）；DIN 可写 `DB40`（基准直径）、
+                      NF 可写 `A80`（公称直径主参数），M/Z 可缺一项由名义/尺寸表补全
+                      （DIN：m=1.5 已补入、m=5 已剔除；NF：尺寸表 288 行）；
+                      ANSI 明确报「未实现」；
                       `de63` 可选（给了才画收尾弧，段长 = L + l；不给 de 段长 = L）；
                       不能与 SPLINE/CH/OV/RL/M/GEAR 同段
     VIEW 常规|剖视|双   视图：常规（默认，只看外形）/ 剖视（轮廓 + ANSI31 剖面线）/ 双（并排一次出）
@@ -641,18 +643,24 @@ impl InvolSeg {
     }
 }
 
-/// `InvolSeg` 的 JSON 形状：`{code,m,z,x,len,de,d_b[,inspection][,d_b_note]}`（几何参数从 code+m/z/x 重算，不序列化）。
+/// `InvolSeg` 的 JSON 形状：`{code,m,z,x,len,de,d_b|a[,inspection][,d_b_note]}`（几何参数从 code+m/z/x 重算，不序列化）。
 impl serde::Serialize for InvolSeg {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         use serde::ser::SerializeStruct;
-        let mut st = serializer.serialize_struct("InvolSeg", 9)?;
+        let mut st = serializer.serialize_struct("InvolSeg", 10)?;
         st.serialize_field("code", &self.code)?;
         st.serialize_field("m", &self.params.m)?;
         st.serialize_field("z", &self.params.z)?;
         st.serialize_field("x", &self.params.x)?;
         st.serialize_field("len", &self.len)?;
         st.serialize_field("de", &self.de)?;
-        st.serialize_field("d_b", &self.params.d_b)?;
+        // DIN 的 d_B 与 NF 的 A 同一槽位：只序列化实际有值的那个，避免回传时双字段冲突。
+        if self.params.d_b.is_some() {
+            st.serialize_field("d_b", &self.params.d_b)?;
+        }
+        if self.params.a.is_some() {
+            st.serialize_field("a", &self.params.a)?;
+        }
         if self.d_b_note.is_some() {
             st.serialize_field("d_b_note", &self.d_b_note)?;
         }
@@ -1185,9 +1193,9 @@ fn parse_segment(chunk: &str, label: &str, program: &mut Program) -> Result<Segm
                 spline_spec = Some(rest.to_string());
             }
         } else if has_invol && upper.starts_with("DB") {
-            // 渐开线花键基准直径：`DB40` / `DB 40` / `DB=40`（只对 DIN 有意义，生成时校验）。
+            // 渐开线花键基准直径：`DB40` / `DB 40` / `DB=40`（DIN 的 d_B，生成时校验）。
             if invol_d_b.is_some() {
-                return Err(format!("{label}：关键字 DB 重复"));
+                return Err(format!("{label}：关键字 DB/A（基准直径）重复"));
             }
             let rest = &token[2..];
             let rest = rest.strip_prefix(['=', ':']).unwrap_or(rest);
@@ -1200,6 +1208,22 @@ fn parse_segment(chunk: &str, label: &str, program: &mut Program) -> Result<Segm
                 rest
             };
             invol_d_b = Some(parse_number(value_text, label, "DB")?);
+        } else if has_invol && upper.starts_with('A') && !upper.starts_with("ALPHA") {
+            // NF 公称直径 A：`A80` / `A 80` / `A=80`（与 DIN 的 DB 同一槽位，生成时按体系解释）。
+            if invol_d_b.is_some() {
+                return Err(format!("{label}：关键字 A/DB（基准直径）重复"));
+            }
+            let rest = &token[1..];
+            let rest = rest.strip_prefix(['=', ':']).unwrap_or(rest);
+            let value_text = if rest.is_empty() {
+                index += 1;
+                tokens
+                    .get(index)
+                    .ok_or_else(|| format!("{label}：关键字 A 缺少数值"))?
+            } else {
+                rest
+            };
+            invol_d_b = Some(parse_number(value_text, label, "A")?);
         } else if has_invol && upper == "CHECK" {
             // 必须在 `upper.starts_with("CH")`（倒角）之前截住，否则 CHECK 会被当成 CH。
             invol_check = true;
@@ -1469,7 +1493,7 @@ fn parse_segment(chunk: &str, label: &str, program: &mut Program) -> Result<Segm
             let (std, profile) = crate::invol_spline::parse_preset_token(&spec).ok_or_else(|| {
                 format!(
                     "{label}：不认识的体系标识/预设代号「{spec}」\
-                     （可用 GB30P/GB30R/GB375R/GB45R/DIN30，或体系标识 GB/DIN/NF/ANSI）"
+                     （可用 GB30P/GB30R/GB375R/GB45R/DIN30/NFP/NFR，或体系标识 GB/DIN/NF/ANSI）"
                 )
             })?;
             let (params, origin) = crate::invol_spline::resolve_spline(
@@ -1862,8 +1886,8 @@ struct JsonInvolSpline {
     z: Option<u32>,
     #[serde(default)]
     x: Option<f64>,
-    /// DIN 5480-2 基准直径 d_B（别名 `db`/`d_B`）。
-    #[serde(default, alias = "db", alias = "d_B")]
+    /// 基准直径主参数：DIN 的 `d_B`（别名 `db`/`d_B`）或 NF 的公称直径 `A`（别名 `a`）。
+    #[serde(default, alias = "db", alias = "d_B", alias = "a")]
     d_b: Option<f64>,
     /// 满齿段长 L（别名 `l`/`L`）。
     #[serde(default, alias = "l", alias = "L")]
@@ -2167,7 +2191,7 @@ fn parse_json(text: &str) -> Result<Program, String> {
             let (std, profile) = crate::invol_spline::parse_preset_token(&token).ok_or_else(|| {
                 format!(
                     "第 {number} 段：不认识的体系标识/预设代号「{token}」\
-                     （可用 GB30P/GB30R/GB375R/GB45R/DIN30，或体系标识 GB/DIN/NF/ANSI）"
+                     （可用 GB30P/GB30R/GB375R/GB45R/DIN30/NFP/NFR，或体系标识 GB/DIN/NF/ANSI）"
                 )
             })?;
             let (params, origin) = crate::invol_spline::resolve_spline(
@@ -6252,6 +6276,50 @@ GEAR M3 Z20";
         // DB 但 M/Z 全缺且命中多行 → 列候选（d_B=45 跨 m 多行）
         let err = parse_program("INVOLSPLINE DIN30 DB45 L30").unwrap_err();
         assert!(err.contains("多个") && err.contains("m=3"), "{err}");
+    }
+
+    /// `INVOLSPLINE NFP A80 M3.75 L30`：NF 已入库（A 主参数）；A+m 补 N、A+z 补 m；JSON 携带 a。
+    #[test]
+    fn dsl_invol_spline_nf_a_lookup() {
+        let program = parse_program("INVOLSPLINE NFP A80 M3.75 L30").unwrap();
+        let iv = program.segments[0].invol_spline.as_ref().unwrap();
+        assert_eq!(iv.code, "NFP");
+        assert_eq!(iv.params.std, crate::invol_spline::SplineStd::NF);
+        assert!((iv.params.m - 3.75).abs() < 1e-9);
+        assert_eq!(iv.params.z, 19, "A=80 m=3.75 → N=19");
+        let x_want = (80.0 - 3.75 * 19.0 - 1.5) / 7.5;
+        assert!((iv.params.x - x_want).abs() < 1e-12, "x 由 A 公式解");
+        assert_eq!(iv.params.a, Some(80.0));
+        assert!(
+            (iv.params.da() - 80.0).abs() < 1e-9
+                && (iv.params.df() - (80.0 - 2.4 * 3.75)).abs() < 1e-9,
+            "NF da=A、df=A−2.4m"
+        );
+        // A+Z 补 m（同一段相等）；`INVOLSPLINE NF A80 M3.75 L30`（只写体系标识）也应可用。
+        assert_eq!(
+            parse_program("INVOLSPLINE NF A80 Z19 L30").unwrap().segments[0],
+            program.segments[0]
+        );
+        assert!(parse_program("INVOLSPLINE NF A80 M3.75 L30").is_ok());
+        // JSON 往返携带 a（不写 d_b）。
+        let json = serde_json::to_string(&program).unwrap();
+        assert!(json.contains("\"a\":80.0") && !json.contains("\"d_b\""), "{json}");
+        assert_eq!(parse_program(&json).unwrap(), program);
+        // GUI 模型 JSON 也收 `a` 键。
+        let gui = r#"{"segments":[{"invol_spline":{"code":"NFP","a":80,"m":3.75,"len":30}}]}"#;
+        assert_eq!(parse_program(gui).unwrap(), program);
+        // A 只对 NF/DIN：GB 给 A 报统一文案。
+        let err = parse_program("INVOLSPLINE GB30R A80 M3 Z20 L30").unwrap_err();
+        assert!(err.contains("本体系不用 d_B"), "{err}");
+        // 表外 A=81 → 主系列 x=0.8 推 N=20（推导值、未命中表）。
+        let p3 = parse_program("INVOLSPLINE NFP A81 M3.75 L30").unwrap();
+        let iv3 = p3.segments[0].invol_spline.as_ref().unwrap();
+        assert_eq!(iv3.params.z, 20);
+        assert!(
+            iv3.d_b_note.as_deref().is_some_and(|n| n.contains("推导值、未命中表")),
+            "{:?}",
+            iv3.d_b_note
+        );
     }
 
     /// 轴段几何：无 de（段长 = L、端面收口）/ 有 de（收尾弧 + 段长 = L+l）/ 剖视 HATCH。

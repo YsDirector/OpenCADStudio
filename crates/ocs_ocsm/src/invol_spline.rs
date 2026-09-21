@@ -108,12 +108,12 @@ use crate::partgen_kit::{arc, line, trim, LAYER_CENTER, LAYER_MAIN, LAYER_THIN};
 pub const GB_CODE: &str = "GB/T 3478.1-2008";
 /// DIN 5480-1:2015 标准号。
 pub const DIN_CODE: &str = "DIN 5480-1:2015";
-/// NF E22-141（法国）标准号 —— **数据未入库**（见 [`NF_NOT_LOADED_MSG`]）。
+/// NF E22-141（法国）标准号 —— 数据已入库（尺寸表 p18/p20/p21/p22，288 行）。
 pub const NF_CODE: &str = "NF E22-141";
 /// ANSI B92.1 标准号 —— **未实现**（见 [`ANSI_NOT_IMPLEMENTED_MSG`]）。
 pub const ANSI_CODE: &str = "ANSI B92.1";
-/// NF/ANSI 无预设表时的占位齿廓名（只作显示/错误文案，不参与几何）。
-pub const NF_DEFAULT_PROFILE: &str = "NF E22-141";
+/// NF 默认齿廓名（`NF平齿根` = 外径定心基准；另 `NF圆齿根`）。
+pub const NF_DEFAULT_PROFILE: &str = "NF平齿根";
 /// ANSI 占位齿廓名。
 pub const ANSI_DEFAULT_PROFILE: &str = "ANSI B92.1";
 
@@ -162,17 +162,18 @@ impl SplineStd {
         }
     }
 
-    /// 该标准是否**使用基准直径 d_B**（DIN 5480 / NF E22-141；GB/ANSI 不允许）。
+    /// 该标准是否**使用基准直径主参数**（DIN 5480 用 `d_B`、NF E22-141 用 `A`；GB/ANSI 不允许）。
     pub fn uses_d_b(self) -> bool {
         matches!(self, Self::DIN | Self::NF)
     }
 
-    /// 该标准下的预设列表（NF/ANSI 无预设立即空表）。
+    /// 该标准下的预设列表（ANSI 无预设立即空表）。
     pub fn presets(self) -> &'static [InvolPreset] {
         match self {
             Self::GB => GB_PRESETS,
             Self::DIN => DIN_PRESETS,
-            Self::NF | Self::ANSI => &[],
+            Self::NF => NF_PRESETS,
+            Self::ANSI => &[],
         }
     }
 }
@@ -255,17 +256,46 @@ pub const DIN_PRESETS: &[InvolPreset] = &[InvolPreset {
     h_s_star: 0.6,
 }];
 
-/// GB 体系误给 `d_B` 的**统一报错文案**（GB/T 3478 没有基准直径这个概念）。
+/// **NF E22-141 预设表**（p07 公式：α=20°；`A₁′=A` 外径定心 / `A₂′=A−0.2m` 齿面定心，
+/// 本预设默认外径定心；`B=A−2.4m` 平齿根、`B₁=A−2.694m` 圆齿根；
+/// `R=0.3m`、`R₁=0.528m`、`h=0.1·max(m,1)`、`D=A−2m`）。
+///
+/// 口径换算（引擎 `d_eff = d+2xm = A−0.4m`）：
+/// * da = A → `ha*=0.2`；
+/// * df(平) = A−2.4m → `hf*=1.0`，`ρf*=0.3`；
+/// * df(圆) = A−2.694m → `hf*=1.147`，`ρf*=0.528`。
+///
+/// `c_f_star` NF 几何不用（内花键小径直接用 `D=A−2m`），保留 0.1 仅供显示/与 GB 同构。
+pub const NF_PRESETS: &[InvolPreset] = &[
+    InvolPreset {
+        std: SplineStd::NF,
+        profile: "NF平齿根",
+        alpha_deg: 20.0,
+        ha_star: 0.2,
+        hf_star: 1.0,
+        rho_star: 0.3,
+        c_f_star: 0.1,
+        h_s_star: 0.6,
+    },
+    InvolPreset {
+        std: SplineStd::NF,
+        profile: "NF圆齿根",
+        alpha_deg: 20.0,
+        ha_star: 0.2,
+        hf_star: 1.147,
+        rho_star: 0.528,
+        c_f_star: 0.1,
+        h_s_star: 0.6,
+    },
+];
+
+/// GB 体系误给 `d_B`/`A` 的**统一报错文案**（GB/T 3478 没有基准直径这个概念）。
 pub const GB_D_B_MSG: &str =
     "基准直径 d_B 是 DIN 5480 的概念，GB/T 3478 体系请给 m 与 z（本体系不用 d_B）";
 
-/// ANSI B92.1 误给 `d_B` 的报错文案（径节制不用 d_B，且 ANSI 未实现）。
+/// ANSI B92.1 误给 `d_B`/`A` 的报错文案（径节制不用 d_B，且 ANSI 未实现）。
 pub const ANSI_D_B_MSG: &str = "ANSI B92.1 不使用基准直径 d_B（径节制用径节 P/Ps 与压力角）；\
 且 ANSI B92.1 未实现（径节系列与方法已有，待接入）";
-
-/// NF E22-141 数据未入库的统一文案（体系已识别，但尺寸表未抄）。
-pub const NF_NOT_LOADED_MSG: &str =
-    "NF E22-141 数据未入库（尺寸表待抄，页图已在 ~/桌面/OCSM/review/花键标准资料/）";
 
 /// ANSI B92.1 未实现的统一文案。
 pub const ANSI_NOT_IMPLEMENTED_MSG: &str = "ANSI B92.1 未实现（径节系列与方法已有，待接入）";
@@ -316,6 +346,8 @@ pub fn preset_code(std: SplineStd, profile: &str) -> Option<&'static str> {
             (SplineStd::GB, "30圆齿根") => "GB30R",
             (SplineStd::GB, "37.5圆齿根") => "GB375R",
             (SplineStd::GB, "45圆齿根") => "GB45R",
+            (SplineStd::NF, "NF平齿根") => "NFP",
+            (SplineStd::NF, "NF圆齿根") => "NFR",
             _ => "DIN30",
         }
     })
@@ -326,7 +358,8 @@ pub fn preset_code(std: SplineStd, profile: &str) -> Option<&'static str> {
 /// （GB → `30圆齿根`，DIN → `DIN30`）。
 ///
 /// **体系标识**也在这里收（显式标识，不靠 `d_B` 反推）：
-/// `NF` / `NFE22141` / `NF E22-141` → [`SplineStd::NF`]（数据未入库），
+/// `NF` / `NFE22141` / `NF E22-141` → [`SplineStd::NF`]（默认 `NF平齿根`），
+/// 也收 `NFP`/`NF平齿根` 与 `NFR`/`NF圆齿根`；
 /// `ANSI` / `ANSI B92.1` → [`SplineStd::ANSI`]（未实现）；
 /// `M` / `DP` 是**齿轮**体系标识，这里**不收**（由 `gear.rs` 解析）。
 pub fn parse_preset_token(token: &str) -> Option<(SplineStd, &'static str)> {
@@ -337,6 +370,13 @@ pub fn parse_preset_token(token: &str) -> Option<(SplineStd, &'static str)> {
     let upper = t.to_ascii_uppercase();
     // NF E22-141 / ANSI B92.1（连字符/空格/点不敏感）—— 先于 GB/DIN 前缀判断。
     let key: String = upper.chars().filter(|c| c.is_ascii_alphanumeric()).collect();
+    if let Some(rest) = upper.strip_prefix("NF") {
+        match rest.trim_start_matches([' ', '\u{3000}']) {
+            "P" | "平" | "平齿根" => return Some((SplineStd::NF, "NF平齿根")),
+            "R" | "圆" | "圆齿根" => return Some((SplineStd::NF, "NF圆齿根")),
+            _ => {}
+        }
+    }
     if key == "NF" || key.starts_with("NFE22") {
         return Some((SplineStd::NF, NF_DEFAULT_PROFILE));
     }
@@ -619,7 +659,7 @@ pub fn d_b_from_x(m: f64, z: u32, x: f64) -> f64 {
     m * (z as f64 + 1.1 + 2.0 * x)
 }
 
-/// `d_B` 补全/推导的来源（派生值显示用）。
+/// 基准直径主参数补全/推导的来源（DIN `d_B` / NF `A`；派生值显示用）。
 #[derive(Debug, Clone, PartialEq)]
 pub enum D_bOrigin {
     /// 查表命中该行。
@@ -632,6 +672,10 @@ pub enum D_bOrigin {
     Derived(String),
     /// `d_B` 为主参数、输入 m/z/x 与其不符 → 按 `d_B` 重算（附明文提示）。
     Adjusted(String),
+    /// NF E22-141 尺寸表命中（`A` 为主参数）。
+    NfTable(NfE22141Row),
+    /// NF 无 `A` 输入，由 `m/z/x` 正算 `A`（`m+z` 路径）。
+    ComputedA,
 }
 
 impl D_bOrigin {
@@ -642,6 +686,13 @@ impl D_bOrigin {
             Self::Formula => "由公式解出，未命中表".to_string(),
             Self::Computed => "由 m/z/x 正算 d_B=m(z+1.1+2x)".to_string(),
             Self::Derived(n) | Self::Adjusted(n) => n.clone(),
+            Self::NfTable(r) => format!(
+                "查表命中 p{} m={} A={}",
+                r.page,
+                trim(r.m),
+                trim(r.a)
+            ),
+            Self::ComputedA => "由 m/z/x 正算 A=m(z+2x+0.4)".to_string(),
         }
     }
 }
@@ -912,13 +963,14 @@ fn row_to_params(row: Din5480Row) -> Result<(InvolParams, D_bOrigin), String> {
 /// **通用花键参数解析**（齿轮生成器花键模式 / 轴段 / 测试共用）：
 ///
 /// **体系由 `std` 显式给出**（不再从 `d_B` 反推）：
-/// * `NF`：数据未入库，直接报 [`NF_NOT_LOADED_MSG`]（即便给 `d_B` 也不静默）；
-/// * `ANSI`：未实现，直接报 [`ANSI_NOT_IMPLEMENTED_MSG`]（误给 `d_B` 时报 [`ANSI_D_B_MSG`]）；
+/// * `NF`：走独立分支 —— 第 3 参 `d_b` 槽位收 **公称直径 A**（NF 的基准直径主参数），
+///   由 [`resolve_nf_by_a`] 查表/推导；A + m 或 A + z 可缺一项；
+/// * `ANSI`：未实现，直接报 [`ANSI_NOT_IMPLEMENTED_MSG`]（误给 `d_B`/A 时报 [`ANSI_D_B_MSG`]）；
 /// * `d_B` 给了：只有 DIN 有这个概念 —— GB 直接报 [`GB_D_B_MSG`]；DIN 走 [`resolve_din_by_d_b`]；
-/// * 不给 `d_B`：GB/DIN 都要 `m` 与 `z`（缺哪项报哪项）；DIN 另外由 `m/z/x` 正算 `d_B` 并回填
-///   （来源 [`D_bOrigin::Computed`]），**不报“模数齿数与基准直径不匹配”**。
+/// * 不给 `d_B`：GB/DIN/NF 都要 `m` 与 `z`（缺哪项报哪项）；DIN 由 `m/z/x` 正算 `d_B`、NF 由
+///   `m/z/x` 正算 A（来源 [`D_bOrigin::Computed`] / [`D_bOrigin::ComputedA`]）。
 ///
-/// 返回 `(参数, d_B 来源)`；GB 的来源恒为 `None`。
+/// 返回 `(参数, 基准直径来源)`；GB 的来源恒为 `None`。
 pub fn resolve_spline(
     std: SplineStd,
     profile: &str,
@@ -927,24 +979,20 @@ pub fn resolve_spline(
     z: Option<u32>,
     x: Option<f64>,
 ) -> Result<(InvolParams, Option<D_bOrigin>), String> {
-    // 体系先行：NF/ANSI 数据未入库/未实现 —— 明确报错，不给假结果。
-    match std {
-        SplineStd::NF => return Err(NF_NOT_LOADED_MSG.to_string()),
-        SplineStd::ANSI => {
-            return Err(if d_b.is_some() {
-                ANSI_D_B_MSG.to_string()
-            } else {
-                ANSI_NOT_IMPLEMENTED_MSG.to_string()
-            });
-        }
-        SplineStd::GB | SplineStd::DIN => {}
+    // 体系先行：NF 已入库；ANSI 未实现 —— 明确报错，不给假结果。
+    if std == SplineStd::ANSI {
+        return Err(if d_b.is_some() {
+            ANSI_D_B_MSG.to_string()
+        } else {
+            ANSI_NOT_IMPLEMENTED_MSG.to_string()
+        });
     }
     let profile = if profile.trim().is_empty() {
         default_profile(std)
     } else {
         profile
     };
-    // 收“齿廓代号”（GB30R/DIN30/GB375R…）与中文/英文齿廓名（30圆齿根…）；代号必须与 std 一致。
+    // 收“齿廓代号”（GB30R/DIN30/NFP/NFR…）与中文/英文齿廓名；代号必须与 std 一致。
     let profile = match parse_preset_token(profile) {
         Some((pstd, name)) => {
             if pstd != std {
@@ -958,6 +1006,27 @@ pub fn resolve_spline(
         }
         None => profile,
     };
+    // NF：`d_b` 槽位 = 公称直径 A（NF 主参数）。
+    if std == SplineStd::NF {
+        if let Some(a) = d_b {
+            let (p, origin) = resolve_nf_by_a(a, m, z, x, profile)?;
+            return Ok((p, Some(origin)));
+        }
+        let m = m.ok_or_else(|| {
+            "NF E22-141：缺模数 m（给 A 与 m，或给 A 与 z 由表/公式推导另一项）".to_string()
+        })?;
+        let z = z.ok_or_else(|| {
+            "NF E22-141：缺齿数 N（给 A 与 N，或给 A 与 m 由表/公式推导另一项）".to_string()
+        })?;
+        let xv = x.unwrap_or(0.8);
+        let a = a_from_x(m, z, xv);
+        let p = InvolParams::from_preset(SplineStd::NF, profile, m, z)
+            .map_err(|e| format!("NF E22-141：{e}"))?
+            .with_x(xv)
+            .with_a(a);
+        p.validate().map_err(|e| format!("NF E22-141：{e}"))?;
+        return Ok((p, Some(D_bOrigin::ComputedA)));
+    }
     if let Some(d_b) = d_b {
         if std != SplineStd::DIN {
             return Err(GB_D_B_MSG.to_string());
@@ -968,13 +1037,13 @@ pub fn resolve_spline(
     let m = m.ok_or_else(|| match std {
         SplineStd::GB => "GB/T 3478：缺模数 m（写法 `M3`）".to_string(),
         SplineStd::DIN => "DIN 5480：缺模数 m（给 m 与 z，或给基准直径 d_B 由表补全）".to_string(),
-        SplineStd::NF => NF_NOT_LOADED_MSG.to_string(),
+        SplineStd::NF => "NF E22-141：缺模数 m（给 A 与 m，或给 A 与 z）".to_string(),
         SplineStd::ANSI => ANSI_NOT_IMPLEMENTED_MSG.to_string(),
     })?;
     let z = z.ok_or_else(|| match std {
         SplineStd::GB => "GB/T 3478：缺齿数 z（写法 `Z20`）".to_string(),
         SplineStd::DIN => "DIN 5480：缺齿数 z（给 m 与 z，或给基准直径 d_B 由表补全）".to_string(),
-        SplineStd::NF => NF_NOT_LOADED_MSG.to_string(),
+        SplineStd::NF => "NF E22-141：缺齿数 N（给 A 与 N，或给 A 与 m）".to_string(),
         SplineStd::ANSI => ANSI_NOT_IMPLEMENTED_MSG.to_string(),
     })?;
     let mut p = InvolParams::from_preset(std, profile, m, z)?
@@ -994,6 +1063,623 @@ fn join_rows(rows: &[Din5480Row]) -> String {
         .map(|r| format!("m={} z={} x={}", trim(r.m), r.z, trim(r.x)))
         .collect::<Vec<_>>()
         .join("、")
+}
+
+// ──────────────── NF E22-141 尺寸表（`A` 查表；数据 = assets/nf_e22141_dims.csv） ────────────────
+
+/// 入库尺寸表（`crates/ocs_ocsm/assets/nf_e22141_dims.csv`，**288 行**：
+/// p18 拉削内花键 144 + p20 尺寸表(m=0.50~1.25) 39 + p21 尺寸表(m=1.667~3.75) 49 +
+/// p22 尺寸表(m=5.00~10.00) 56）。
+///
+/// 来源：`~/桌面/OCSM/review/花键标准资料/NF-E22-141_尺寸表.csv`（docin 抓的 NF E22-141
+/// 中文译本 p18/p20/p21/p22 的 OCR 抄录）；`page/table_no/source/flags` 原样保留。
+/// **已知 OCR 错格**经逐张核对源图后进 [`NF_OCR_FIXES`]（运行期应用，不改写入库 CSV）；
+/// **9 行疑原表印误**见 [`NF_SUSPECTED_SOURCE_ERRORS`]，只标注不改值。
+/// 完整说明见 `assets/nf_e22141_notes.md`。
+const NF_E22141_CSV: &str = include_str!("../assets/nf_e22141_dims.csv");
+
+/// 查表 `A` 容差：表值是整数（个别一位小数），允许输入 1e-3 误差。
+const NF_A_TOL: f64 = 1e-3;
+/// 查表模数容差。
+const NF_M_TOL: f64 = 1e-9;
+/// 表值 `x` 判同容差（表值最多 3 位小数）。
+const NF_X_TOL: f64 = 1e-4;
+/// 表值 `x` 与 A 公式判同容差：m=1.667 = 5/3 的舍入（`m·z` 与 `m(z+2x+0.4)`
+/// 都最多偏 ~3.6e-3），排版精度下的等价值。
+const NF_X_MATCH_TOL: f64 = 5e-3;
+
+/// NF 尺寸表一行（保留主路径需要的列；`flags/source` 留作追溯）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct NfE22141Row {
+    /// 源图页码（18/20/21/22）。
+    pub page: u16,
+    /// 页内表号/子表（`尺寸表(m=0.50~1.25)` 或 `p18L`/`p18R`）。
+    pub table_no: String,
+    /// OCR 来源（`p20`/`p18L`/`p21`/`p22`）。
+    pub source: String,
+    /// 模数 m。
+    pub m: f64,
+    /// **公称直径 `A`（主参数；NF 的基准直径）**。
+    pub a: f64,
+    /// 齿数 N。
+    pub z: u32,
+    /// 分度圆直径 `d = m·z`（p18 行只有 D 列，为 `None`）。
+    pub d: Option<f64>,
+    /// 基圆直径（CSV 的 `dB` 列 = `d·cos20°`；**不是** DIN 的基准直径 `d_B`）。
+    pub base_dia: Option<f64>,
+    /// 变位系数 `x = (A − m(z+0.4))/(2m)`。
+    pub x: Option<f64>,
+    /// 分度圆弧齿厚 `s`。
+    pub s: Option<f64>,
+    /// 基圆弧齿厚 `sB`。
+    pub s_b: Option<f64>,
+    /// 外花键齿根圆（平齿根）`A−2.4m`。
+    pub flat_root: Option<f64>,
+    /// 外花键齿根圆（圆齿根）`A−2.694m`。
+    pub round_root: Option<f64>,
+    /// 外花键齿顶倒角高度 `h=0.1·max(m,1)`。
+    pub h: Option<f64>,
+    /// 外花键齿根圆角半径（平齿根）`R=0.3m`。
+    pub r: Option<f64>,
+    /// 外花键齿根圆角半径（圆齿根）`Ri=0.528m`。
+    pub r_i: Option<f64>,
+    /// 内花键齿顶圆（小径）`D = A−2m`（CSV 列名为“齿根圆直径D(拉削内花键)”，
+    /// 对照 p07 公式实为小径 D；p18 拉削内花键表）。
+    pub internal_tip: Option<f64>,
+    /// 内花键槽底圆角半径（平根齿）。
+    pub hub_fillet: Option<f64>,
+    /// OCR 质量标记（原样保留，运行时不展示）。
+    pub flags: String,
+    /// 已应用的 OCR 修正（人类可读，如 `x 0.967→0.633`；空 = 未修）。
+    pub fixes: Vec<String>,
+}
+
+/// NF 表中可被 OCR 修正的列。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NfField {
+    /// 齿数 N（列 5）。
+    Z,
+    /// 变位系数 x（列 8）。
+    X,
+    /// 分度圆弧齿厚 s（列 11）。
+    S,
+    /// 基圆弧齿厚 sB（列 12）。
+    SB,
+    /// 分度圆直径 d（列 9）。
+    PitchD,
+    /// 基圆直径 dB = d·cos20°（列 10）。
+    BaseDia,
+    /// 内花键小径 D（列 6，p18）。
+    InternalD,
+    /// 外花键齿根圆（平齿根）（列 7）。
+    FlatRoot,
+    /// 外花键齿根圆（圆齿根）（列 15）。
+    RoundRoot,
+    /// 外花键齿顶倒角高度 h（列 16）。
+    H,
+}
+
+/// 一条 OCR 修正：`key = (page, m, A, field)`；`printed → fixed`。
+///
+/// 入库 CSV 保留印刷原值，运行期查表/推导时按本表修正（既有 DIN `INSPECTION_OCR_FIXES` 惯例）。
+#[derive(Debug, Clone, Copy)]
+pub struct NfOcrFix {
+    /// 源图页码。
+    pub page: u16,
+    /// 模数 m。
+    pub m: f64,
+    /// 公称直径 A。
+    pub a: f64,
+    /// 被修正的列。
+    pub field: NfField,
+    /// OCR 读到的印刷值（用于核对确实命中原行原格）。
+    pub printed: f64,
+    /// 修正值（依据见 `basis`）。
+    pub fixed: f64,
+    /// 判定依据（源图/表内自洽关系）。
+    pub basis: &'static str,
+}
+
+/// **NF E22-141 已知 OCR 错格修正表**（不篡改入库 CSV；逐条注明依据）。
+///
+/// 其中 m=3.75/7.50 的 `x=0.633/0.967` 交替本身是**次系列真实设计值**（任务明确），
+/// 本表只修「整格读错/丢首位字母/跨格粘连」与「相邻两行局部互换」这类 OCR 错误；
+/// 值本身可疑、无法与 OCR 区分开的 9 行见 [`NF_SUSPECTED_SOURCE_ERRORS`]，**不改**。
+pub const NF_OCR_FIXES: &[NfOcrFix] = &[
+    NfOcrFix { page: 22, m: 5.00, a: 105.0, field: NfField::Z, printed: 192.0, fixed: 19.0,
+        basis: "192 = 19 与邻格尾数 2 粘连；p18 同 (m,A) N=19，且 d=95、sB=11.447 按 z=19 自洽" },
+    NfOcrFix { page: 21, m: 1.667, a: 45.0, field: NfField::PitchD, printed: 4.667, fixed: 41.667,
+        basis: "印 4.667 丢首位 1；表内 dB=39.154=41.667·cos20° 佐证" },
+    NfOcrFix { page: 21, m: 2.50, a: 100.0, field: NfField::BaseDia, printed: 85.271, fixed: 89.271,
+        basis: "印 85.271，末位 5↔9；d·cos20°=95·cos20°=89.271" },
+    NfOcrFix { page: 21, m: 3.75, a: 80.0, field: NfField::PitchD, printed: 7.25, fixed: 71.25,
+        basis: "印 7.25 丢首位 1；m·z=71.25" },
+    NfOcrFix { page: 21, m: 3.75, a: 130.0, field: NfField::PitchD, printed: 23.75, fixed: 123.75,
+        basis: "印 23.75 丢首位 1；m·z=123.75，dB=116.287 佐证" },
+    NfOcrFix { page: 21, m: 3.75, a: 130.0, field: NfField::BaseDia, printed: 116.287877, fixed: 116.287,
+        basis: "印 116.287877（跨格粘连尾数 877）；123.75·cos20°=116.287" },
+    NfOcrFix { page: 21, m: 3.75, a: 130.0, field: NfField::X, printed: 0.967, fixed: 0.633,
+        basis: "印 0.967（与 A=140 行局部互换）；A 方程与 sB=8.892 反推 0.633" },
+    NfOcrFix { page: 21, m: 3.75, a: 130.0, field: NfField::S, printed: 8.530, fixed: 7.618,
+        basis: "印 8.530 随错位 x=0.967；x=0.633 时 s=m(π/2+2x·tan20)=7.618（同行 sB 已自洽）" },
+    NfOcrFix { page: 21, m: 3.75, a: 140.0, field: NfField::X, printed: 0.633, fixed: 0.967,
+        basis: "印 0.633（与 A=130 行局部互换）；A 方程与 sB=9.854 反推 0.967" },
+    NfOcrFix { page: 21, m: 3.75, a: 140.0, field: NfField::S, printed: 7.618, fixed: 8.530,
+        basis: "印 7.618 随错位 x=0.633；x=0.967 时 s=8.530" },
+    NfOcrFix { page: 22, m: 5.00, a: 110.0, field: NfField::PitchD, printed: 0.0, fixed: 100.0,
+        basis: "印 00 丢首位 1；m·z=100，dB=93.969 佐证" },
+    NfOcrFix { page: 22, m: 5.00, a: 110.0, field: NfField::SB, printed: 1.517, fixed: 11.517,
+        basis: "印 1.517 丢首位 1；公式值 sB=m·cos20°·(π/2+z·inv20+2x·tan20)=11.517" },
+    NfOcrFix { page: 22, m: 5.00, a: 120.0, field: NfField::SB, printed: 1.657, fixed: 11.657,
+        basis: "印 1.657 丢首位 1；公式值 sB=11.657" },
+    NfOcrFix { page: 22, m: 7.50, a: 240.0, field: NfField::X, printed: 0.633, fixed: 0.8,
+        basis: "印 0.633（与 A=260 行局部互换）；A 方程与同行 s=16.149/sB=18.326 反推 0.8" },
+    NfOcrFix { page: 22, m: 7.50, a: 260.0, field: NfField::X, printed: 0.800, fixed: 0.633,
+        basis: "印 0.800（与 A=240 行局部互换）；A 方程与同行 s=15.237/sB=17.784 反推 0.633" },
+    NfOcrFix { page: 22, m: 10.00, a: 160.0, field: NfField::PitchD, printed: 40.0, fixed: 140.0,
+        basis: "印 40 丢首位 1；m·z=140，dB=131.557 佐证" },
+    NfOcrFix { page: 22, m: 10.00, a: 160.0, field: NfField::RoundRoot, printed: 83.06, fixed: 133.06,
+        basis: "印 83.060 丢首位 1；A−2.694m=133.060" },
+];
+
+/// **9 行「疑原表印误」**（`page, m, A, z, 列, 说明`）：数据不改，只在注释/notes 标注。
+///
+/// 这些行的异常无法用“丢首位/跨格粘连/相邻互换”解释（同表其余行该列均符合公式），
+/// 且 p20 m=0.50 A=10 的 dB 字形已核对为印刷的 6（非 8 的误读），故按疑原表/译本印误处理。
+pub const NF_SUSPECTED_SOURCE_ERRORS: &[(u16, f64, f64, u32, &str, &str)] = &[
+    (18, 3.75, 130.0, 33, "D(内花键小径)", "印 132.5；A−2m=122.5，恰为 A=140 行的值，疑该列局部错行"),
+    (18, 3.75, 140.0, 35, "D(内花键小径)", "印 142.5；A−2m=132.5，与上行同型错位"),
+    (20, 0.50, 10.0, 18, "dB(基圆)", "印 6.457；字形核对为 6（非 8 误读）但 d·cos20°=8.457，疑原表/译本错误"),
+    (21, 2.50, 20.0, 6, "平齿根齿根圆", "印 15；A−2.4m=14，同表其余行均符合公式"),
+    (21, 2.50, 20.0, 6, "sB(基圆弧齿厚)", "印 5.628；公式值 5.268"),
+    (22, 7.50, 120.0, 14, "dB(基圆)", "印 96.668；d·cos20°=98.668，同行其余列自洽"),
+    (22, 10.00, 160.0, 14, "sB(基圆弧齿厚)", "印 22.94；公式值 22.194，疑错位/印刷错误"),
+    (22, 10.00, 190.0, 17, "平齿根齿根圆", "印 176；A−2.4m=166；与 A=200 行连续 +10，疑原表印刷错位"),
+    (22, 10.00, 200.0, 18, "平齿根齿根圆", "印 186；A−2.4m=176；与 A=190 行连续 +10，疑原表印刷错位"),
+];
+
+static NF_E22141_TABLE: OnceLock<Vec<NfE22141Row>> = OnceLock::new();
+
+/// 入库尺寸表（懒加载；解析不了会 panic —— 数据随二进制编译，属构建错误）。
+pub fn nf_e22141_rows() -> &'static [NfE22141Row] {
+    NF_E22141_TABLE
+        .get_or_init(|| parse_nf_csv(NF_E22141_CSV).unwrap_or_else(|e| panic!("NF E22-141 尺寸表入库数据损坏：{e}")))
+}
+
+/// 已入库模数档（升序；0.50…10.00 共 10 档）。
+pub fn nf_e22141_modules() -> Vec<f64> {
+    let mut v: Vec<f64> = nf_e22141_rows().iter().map(|r| r.m).collect();
+    v.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    v.dedup_by(|a, b| (*a - *b).abs() < NF_M_TOL);
+    v
+}
+
+fn nf_field_get(row: &NfE22141Row, field: NfField) -> Option<f64> {
+    match field {
+        NfField::Z => Some(row.z as f64),
+        NfField::X => row.x,
+        NfField::S => row.s,
+        NfField::SB => row.s_b,
+        NfField::PitchD => row.d,
+        NfField::BaseDia => row.base_dia,
+        NfField::InternalD => row.internal_tip,
+        NfField::FlatRoot => row.flat_root,
+        NfField::RoundRoot => row.round_root,
+        NfField::H => row.h,
+    }
+}
+
+fn nf_field_set(row: &mut NfE22141Row, field: NfField, value: f64) {
+    match field {
+        NfField::Z => row.z = value.round() as u32,
+        NfField::X => row.x = Some(value),
+        NfField::S => row.s = Some(value),
+        NfField::SB => row.s_b = Some(value),
+        NfField::PitchD => row.d = Some(value),
+        NfField::BaseDia => row.base_dia = Some(value),
+        NfField::InternalD => row.internal_tip = Some(value),
+        NfField::FlatRoot => row.flat_root = Some(value),
+        NfField::RoundRoot => row.round_root = Some(value),
+        NfField::H => row.h = Some(value),
+    }
+}
+
+/// 对一行应用 [`NF_OCR_FIXES`]（key = page/m/A；仅当当前值与 `printed` 一致时应用）。
+fn nf_apply_fixes(row: &mut NfE22141Row) {
+    for fix in NF_OCR_FIXES {
+        if row.page != fix.page
+            || (row.m - fix.m).abs() > NF_M_TOL
+            || (row.a - fix.a).abs() > NF_A_TOL
+        {
+            continue;
+        }
+        let Some(cur) = nf_field_get(row, fix.field) else { continue };
+        if (cur - fix.printed).abs() < 1e-6 {
+            nf_field_set(row, fix.field, fix.fixed);
+            row.fixes.push(format!(
+                "{} {}→{}",
+                match fix.field {
+                    NfField::Z => "z",
+                    NfField::X => "x",
+                    NfField::S => "s",
+                    NfField::SB => "sB",
+                    NfField::PitchD => "d",
+                    NfField::BaseDia => "dB",
+                    NfField::InternalD => "D",
+                    NfField::FlatRoot => "c4(平齿根)",
+                    NfField::RoundRoot => "c12(圆齿根)",
+                    NfField::H => "h",
+                },
+                trim(fix.printed),
+                trim(fix.fixed)
+            ));
+        }
+    }
+}
+
+/// 解析 NF 入库 CSV（跳过 `#` 注释与 `page` 表头；缺列/坏值 → 带行号报错）。
+fn parse_nf_csv(text: &str) -> Result<Vec<NfE22141Row>, String> {
+    let mut rows = Vec::new();
+    for (i, line) in text.lines().enumerate() {
+        let n = i + 1;
+        if line.trim().is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let f = split_csv_line(line);
+        if f.first().map(|s| s.trim()) == Some("page") {
+            continue; // 表头
+        }
+        if f.len() < 7 {
+            return Err(format!("NF 第 {n} 行只有 {} 列（至少应有 page/table/source/m/A/N 7 列）", f.len()));
+        }
+        let f: Vec<String> = f.into_iter().chain(std::iter::repeat(String::new())).take(19).collect();
+        let page = f[0]
+            .trim()
+            .parse::<u16>()
+            .map_err(|_| format!("NF 第 {n} 行 page「{}」非法", f[0]))?;
+        let m = csv_decimal(&f[3]).ok_or_else(|| format!("NF 第 {n} 行 m「{}」非法", f[3]))?;
+        let a = csv_decimal(&f[4]).ok_or_else(|| format!("NF 第 {n} 行 A「{}」非法", f[4]))?;
+        let z = f[5]
+            .trim()
+            .parse::<u32>()
+            .map_err(|_| format!("NF 第 {n} 行 N「{}」非法", f[5]))?;
+        if !(m.is_finite() && m > 0.0) {
+            return Err(format!("NF 第 {n} 行 m={m} 非正"));
+        }
+        if !(a.is_finite() && a > 0.0) {
+            return Err(format!("NF 第 {n} 行 A={a} 非正"));
+        }
+        if z == 0 {
+            return Err(format!("NF 第 {n} 行 N=0 非法"));
+        }
+        let opt = |idx: usize| csv_decimal(&f[idx]);
+        let mut row = NfE22141Row {
+            page,
+            table_no: f[1].trim().to_string(),
+            source: f[2].trim().to_string(),
+            m,
+            a,
+            z,
+            d: opt(9),
+            base_dia: opt(10),
+            x: opt(8),
+            s: opt(11),
+            s_b: opt(12),
+            flat_root: opt(7),
+            round_root: opt(15),
+            h: opt(16),
+            r: opt(13),
+            r_i: opt(14),
+            internal_tip: opt(6),
+            hub_fillet: opt(17),
+            flags: f[18].trim().to_string(),
+            fixes: Vec::new(),
+        };
+        nf_apply_fixes(&mut row);
+        rows.push(row);
+    }
+    Ok(rows)
+}
+
+/// 命中 `(A, m?)` 的原始行（不产生错误文案；已按 `(m,z)` 去重，优先保留信息全的行）。
+fn nf_match(a: f64, m: Option<f64>) -> Vec<NfE22141Row> {
+    let mut hits: Vec<NfE22141Row> = nf_e22141_rows()
+        .iter()
+        .filter(|r| (r.a - a).abs() < NF_A_TOL)
+        .filter(|r| m.is_none_or(|m| (r.m - m).abs() < NF_M_TOL))
+        .cloned()
+        .collect();
+    // 同一 `(m,z)` 在 p18（只有 D 列）与 p20/p21/p22（整行）各出现一次：保留更全的一行。
+    let mut out: Vec<NfE22141Row> = Vec::new();
+    for r in hits.drain(..) {
+        match out.iter_mut().find(|o| {
+            (o.m - r.m).abs() < NF_M_TOL && o.z == r.z
+        }) {
+            Some(o) => {
+                if nf_row_weight(&r) > nf_row_weight(o) {
+                    *o = r;
+                }
+            }
+            None => out.push(r),
+        }
+    }
+    out.sort_by(|x, y| x.z.cmp(&y.z).then(x.m.partial_cmp(&y.m).unwrap()));
+    out
+}
+
+/// 行信息量（非空列数）：用于 p18/整行重复行去重。
+fn nf_row_weight(r: &NfE22141Row) -> usize {
+    [
+        r.d.is_some(),
+        r.base_dia.is_some(),
+        r.x.is_some(),
+        r.s.is_some(),
+        r.s_b.is_some(),
+        r.flat_root.is_some(),
+        r.round_root.is_some(),
+    ]
+    .iter()
+    .filter(|v| **v)
+    .count()
+}
+
+fn nf_join_rows(rows: &[NfE22141Row]) -> String {
+    rows.iter()
+        .map(|r| format!("A={} m={} N={} x={}", trim(r.a), trim(r.m), r.z, r.x.map(trim).unwrap_or_default()))
+        .collect::<Vec<_>>()
+        .join("、")
+}
+
+/// **NF E22-141 尺寸表查表**：按公称直径 `A`（可再限定模数 `m`）返回名义行。
+///
+/// * 命中可能多行 —— 同一 `A` 的多个 `m`（不给 m 时）或同一 `(m,A)` 的多个 N 变体；
+/// * 找不到时列出附近候选（`A=…（m=…）`）；
+/// * p18 的拉削内花键行只有 `D=A−2m`，与 p20/p21/p22 同 `(m,A,N)` 行合并时保留信息全的后者。
+pub fn lookup_by_a(a: f64, m: Option<f64>) -> Result<Vec<NfE22141Row>, String> {
+    if !(a.is_finite() && a > 0.0) {
+        return Err(format!("NF E22-141 查表：A={} 必须是正数。", trim(a)));
+    }
+    if let Some(m) = m {
+        if !(m.is_finite() && m > 0.0) {
+            return Err(format!("NF E22-141 查表：m={} 必须是正数。", trim(m)));
+        }
+    }
+    let hits = nf_match(a, m);
+    if hits.is_empty() {
+        Err(nf_miss_message(a, m))
+    } else {
+        Ok(hits)
+    }
+}
+
+/// 未命中的错误文案：已入库档位 + 附近候选。
+fn nf_miss_message(a: f64, m: Option<f64>) -> String {
+    let mut msg = format!("NF E22-141 查表：A={}", trim(a));
+    if let Some(m) = m {
+        msg.push_str(&format!("（m={}）", trim(m)));
+    }
+    msg.push_str(" 无命中");
+    if let Some(m) = m {
+        if !nf_e22141_modules().iter().any(|mm| (mm - m).abs() < NF_M_TOL) {
+            let list = nf_e22141_modules().iter().map(|v| trim(*v)).collect::<Vec<_>>().join("、");
+            msg.push_str(&format!("；表中没有 m={} 档（已入库档位：{}）。", trim(m), list));
+        } else {
+            msg.push('。');
+        }
+    } else {
+        msg.push('。');
+    }
+    // 附近候选：同 m（若给了 m）按 |ΔA| 取最近的 5 个不同 A；无同 m 行则退全表。
+    let mut pool: Vec<&NfE22141Row> = nf_e22141_rows()
+        .iter()
+        .filter(|r| m.is_none_or(|m| (r.m - m).abs() < NF_M_TOL))
+        .collect();
+    if pool.is_empty() {
+        pool = nf_e22141_rows().iter().collect();
+    }
+    pool.sort_by(|x, y| (x.a - a).abs().partial_cmp(&(y.a - a).abs()).unwrap());
+    let mut seen: Vec<(i64, i64)> = Vec::new();
+    let mut cands: Vec<String> = Vec::new();
+    for r in pool {
+        let key = ((r.m * 1000.0).round() as i64, (r.a * 1000.0).round() as i64);
+        if seen.contains(&key) {
+            continue;
+        }
+        seen.push(key);
+        cands.push(format!("A={}（m={}）", trim(r.a), trim(r.m)));
+        if cands.len() >= 5 {
+            break;
+        }
+    }
+    if !cands.is_empty() {
+        msg.push_str(&format!("附近候选：{}。", cands.join("、")));
+    }
+    msg
+}
+
+/// NF E22-141 齿形变位系数（p07 公式）：
+/// `x = (A − m(N + 0.4)) / (2m)`；逆式 `A = m(N + 2x + 0.4)`。
+pub fn x_from_a(a: f64, m: f64, z: u32) -> f64 {
+    (a - m * (z as f64 + 0.4)) / (2.0 * m)
+}
+
+/// 由 `m/z/x` 正算公称直径 `A = m(N + 2x + 0.4)`（[`x_from_a`] 的逆）。
+pub fn a_from_x(m: f64, z: u32, x: f64) -> f64 {
+    m * (z as f64 + 2.0 * x + 0.4)
+}
+
+/// 表行 → 参数（`x` 由 `A` 公式解出 —— A 是主参数；表值 x 另见 [`NfE22141Row::x`]）。
+fn nf_row_to_params(row: NfE22141Row, profile: &str) -> Result<(InvolParams, D_bOrigin), String> {
+    let xv = x_from_a(row.a, row.m, row.z);
+    let p = InvolParams::from_preset(SplineStd::NF, profile, row.m, row.z)
+        .map_err(|e| format!("NF E22-141：查表行 p{} m={} N={}：{e}", row.page, trim(row.m), row.z))?
+        .with_x(xv)
+        .with_a(row.a);
+    p.validate().map_err(|e| format!("NF E22-141：{e}"))?;
+    Ok((p, D_bOrigin::NfTable(row)))
+}
+
+/// 由 `A + m` 反求齿数 N：`A=m(N+2x+0.4)`、主系列 `x=0.8`
+/// → `N = A/m − 2.0`；表外取最接近的整数（标注推导值）。返回 `(N, 区间下界, 区间上界)`。
+fn derive_nf_z_from_a_m(a: f64, m: f64, prefer: Option<u32>, x: Option<f64>) -> Result<(u32, f64, f64), String> {
+    if !(m.is_finite() && m > 0.0) {
+        return Err(format!("NF E22-141：m={} 必须是正数。", trim(m)));
+    }
+    let x0 = x.unwrap_or(0.8);
+    let z_lo_f = (a - m * (0.4 + 2.0 * 0.967)) / m - 1e-9;
+    let z_hi_f = (a - m * (0.4 + 2.0 * 0.6)) / m + 1e-9;
+    let nominal = (a / m - 0.4 - 2.0 * x0).round();
+    let z = match prefer {
+        Some(pz) => pz as f64,
+        None => nominal,
+    };
+    if !(1.0..=1000.0).contains(&z) {
+        return Err(format!(
+            "NF E22-141：由 A={}、m={} 取 x={} 得 N={} 超出 1..=1000（表内 x∈[0.6,0.967]）——请核对 A 与 m。",
+            trim(a), trim(m), trim(x0), z
+        ));
+    }
+    Ok((z as u32, z_lo_f, z_hi_f))
+}
+
+/// 用 `A` 补全/校验 NF 参数（`m/N/x` 缺哪项补哪项；主路径入口）。
+///
+/// **`A` 是主参数**（NF E22-141 p07：`A = m(N+2x+0.4)`）：
+/// * `A + m + N`：`x=(A−m(N+0.4))/(2m)`；查表命中取表值 x（与公式不符时明文提示后按 A 取表值/公式）；
+/// * `A + m`：查表补 N（同 A 多个 N 变体时列候选）；表外按主系列 x=0.8 推 N 并标注来源；
+/// * `A + N`：查表补 m；表外按 x=0.8 给名义 `m = A/(N+2)` 并标注来源；
+/// * 只给 `A`：查表补 `m/N`（多命中列候选）。
+pub fn resolve_nf_by_a(
+    a: f64,
+    m: Option<f64>,
+    z: Option<u32>,
+    x: Option<f64>,
+    profile: &str,
+) -> Result<(InvolParams, D_bOrigin), String> {
+    if !(a.is_finite() && a > 0.0) {
+        return Err(format!("NF E22-141：A={} 必须是正数。", trim(a)));
+    }
+    if let Some(m) = m {
+        if !(m.is_finite() && m > 0.0) {
+            return Err(format!("NF E22-141：m={} 必须是正数。", trim(m)));
+        }
+    }
+    match (m, z) {
+        (Some(m), Some(z)) => {
+            let x_formula = x_from_a(a, m, z);
+            let row = nf_match(a, Some(m)).into_iter().find(|r| r.z == z);
+            let (xv, origin) = match row {
+                Some(row) => {
+                    let with_fixes = if row.fixes.is_empty() {
+                        String::new()
+                    } else {
+                        format!("（OCR 修正：{}）", row.fixes.join("、"))
+                    };
+                    let origin = match x {
+                        Some(xi) if (xi - x_formula).abs() > NF_X_TOL => D_bOrigin::Adjusted(format!(
+                            "查表命中 p{} m={} A={}{}；按 A 取 x={}（与输入 x={} 不符，A 为主参数）",
+                            row.page, trim(row.m), trim(a), with_fixes, trim(x_formula), trim(xi)
+                        )),
+                        _ if row.x.is_some_and(|v| (v - x_formula).abs() > NF_X_MATCH_TOL) => {
+                            D_bOrigin::Adjusted(format!(
+                                "查表命中 p{} m={} A={}{}；表值 x={} 与 A 公式解 x={} 不符（超排版精度），按 A 取公式解",
+                                row.page, trim(row.m), trim(a), with_fixes,
+                                row.x.map(trim).unwrap_or_default(), trim(x_formula)
+                            ))
+                        }
+                        _ => D_bOrigin::NfTable(row),
+                    };
+                    (x_formula, origin)
+                }
+                None => {
+                    let origin = match x {
+                        Some(xi) if (xi - x_formula).abs() > NF_X_TOL => D_bOrigin::Adjusted(format!(
+                            "按公称直径 A={} 取 x={}（与输入 x={} 不符，A 为主参数）",
+                            trim(a), trim(x_formula), trim(xi)
+                        )),
+                        _ => D_bOrigin::Formula,
+                    };
+                    (x_formula, origin)
+                }
+            };
+            let p = InvolParams::from_preset(SplineStd::NF, profile, m, z)
+                .map_err(|e| format!("NF E22-141：{e}"))?
+                .with_x(xv)
+                .with_a(a);
+            p.validate().map_err(|e| format!("NF E22-141：{e}"))?;
+            Ok((p, origin))
+        }
+        (Some(m), None) => {
+            let hits = nf_match(a, Some(m));
+            let mut zs: Vec<u32> = hits.iter().map(|r| r.z).collect();
+            zs.sort_unstable();
+            zs.dedup();
+            if zs.len() > 1 {
+                return Err(format!(
+                    "NF E22-141：A={}、m={} 有多个 N 变体：{}；请再给 N。",
+                    trim(a), trim(m), nf_join_rows(&hits)
+                ));
+            }
+            if zs.len() == 1 {
+                let row = hits.into_iter().next().expect("zs 非空");
+                return nf_row_to_params(row, profile);
+            }
+            // 表外：主系列 x=0.8 → A=m(N+2)。
+            let (z, z_lo, z_hi) = derive_nf_z_from_a_m(a, m, None, x)?;
+            let xv = x.unwrap_or(0.8);
+            let note = format!(
+                "推导值、未命中表：A={}、m={} 不在 NF E22-141 尺寸表；按主系列 x={} 取 N={}（表内 x∈[0.6,0.967] 时 N∈[{:.4},{:.4}]）",
+                trim(a), trim(m), trim(xv), z, z_lo, z_hi
+            );
+            let p = InvolParams::from_preset(SplineStd::NF, profile, m, z)
+                .map_err(|e| format!("NF E22-141：{e}"))?
+                .with_x(xv)
+                .with_a(a);
+            p.validate().map_err(|e| format!("NF E22-141：{e}"))?;
+            Ok((p, D_bOrigin::Derived(note)))
+        }
+        (None, Some(z)) => {
+            let hits: Vec<NfE22141Row> = nf_match(a, None).into_iter().filter(|r| r.z == z).collect();
+            if !hits.is_empty() {
+                let mut ms: Vec<f64> = hits.iter().map(|r| r.m).collect();
+                ms.sort_by(|x, y| x.partial_cmp(y).unwrap());
+                ms.dedup_by(|x, y| (*x - *y).abs() < NF_M_TOL);
+                if ms.len() > 1 {
+                    return Err(format!(
+                        "NF E22-141：A={}、N={} 有多个 m 变体：{}；请再给 M。",
+                        trim(a), z, nf_join_rows(&hits)
+                    ));
+                }
+                return nf_row_to_params(hits[0].clone(), profile);
+            }
+            // 表外：主系列 x=0.8 → m = A/(N+2)。
+            let xv = x.unwrap_or(0.8);
+            let m = a / (z as f64 + 2.0 * xv + 0.4);
+            let note = format!(
+                "推导值、未命中表：A={}、N={} 不在 NF E22-141 尺寸表；按 x={} 取名义 m=A/(N+2x+0.4)={}",
+                trim(a), z, trim(xv), trim(m)
+            );
+            let p = InvolParams::from_preset(SplineStd::NF, profile, m, z)
+                .map_err(|e| format!("NF E22-141：{e}"))?
+                .with_x(xv)
+                .with_a(a);
+            p.validate().map_err(|e| format!("NF E22-141：{e}"))?;
+            Ok((p, D_bOrigin::Derived(note)))
+        }
+        (None, None) => {
+            let hits = nf_match(a, None);
+            if hits.is_empty() {
+                return Err(nf_miss_message(a, None));
+            }
+            if hits.len() > 1 {
+                return Err(format!(
+                    "NF E22-141：A={} 命中 {} 行：{}；请再给 M 和/或 N。",
+                    trim(a), hits.len(), nf_join_rows(&hits)
+                ));
+            }
+            nf_row_to_params(hits.into_iter().next().expect("非空"), profile)
+        }
+    }
 }
 
 // ──────────────── DIN 5480-2 检验尺寸表（M₁/M₂/D_M/k/W_k；assets/din5480_2_inspection.csv） ────────────────
@@ -2007,6 +2693,8 @@ pub struct InvolParams {
     pub profile: &'static str,
     /// DIN 5480 基准直径 d_B（身份标识/显示；`None` = 未给，外部传入/回填）。
     pub d_b: Option<f64>,
+    /// NF E22-141 公称直径 `A`（NF 的基准直径主参数；`None` = 未给）。
+    pub a: Option<f64>,
     /// 内花键（hub）：材料在外侧、齿朝内（`false` = 外花键，齿朝外）。
     pub internal: bool,
     /// GB 图 2 的 `h_s`（从预设带入；仅 `D_Fe max` 公式用）。
@@ -2014,7 +2702,7 @@ pub struct InvolParams {
 }
 
 impl InvolParams {
-    /// 由预设构造（`x=0`、`d_b=None`、外花键），立即校验。
+    /// 由预设构造（`x=0`、`d_b=None`、`a=None`、外花键），立即校验。
     pub fn from_preset(std: SplineStd, profile: &str, m: f64, z: u32) -> Result<Self, String> {
         let preset = preset(std, profile)?;
         let p = Self {
@@ -2029,6 +2717,7 @@ impl InvolParams {
             std,
             profile: preset.profile,
             d_b: None,
+            a: None,
             internal: false,
             h_s_star: preset.h_s_star,
         };
@@ -2075,6 +2764,12 @@ impl InvolParams {
     /// 外部传入/回填 DIN 基准直径 d_B（身份标识/显示；DIN 内花键几何也直接用它 `d_f2=d_B`）。
     pub fn with_d_b(mut self, d_b: f64) -> Self {
         self.d_b = Some(d_b);
+        self
+    }
+
+    /// 外部传入/回填 NF 公称直径 `A`（身份标识/显示；NF 内花键几何也直接用它）。
+    pub fn with_a(mut self, a: f64) -> Self {
+        self.a = Some(a);
         self
     }
 
@@ -2193,24 +2888,26 @@ impl InvolParams {
     }
 
     /// **内花键大径**（外侧齿根 / 齿槽底）：GB 表 3 `D_ei = m(z+1.5)/(z+1.8)/(z+1.4)/(z+1.2)`；
-    /// DIN = `d_f2 = d_B = m(z+1.1+2x)`（674 行名义表恒等式）。
+    /// DIN = `d_f2 = d_B = m(z+1.1+2x)`（674 行名义表恒等式）；NF = `A`（p07 外径定心 `A₁″=A`）。
     pub fn internal_major_dia(&self) -> f64 {
         match self.std {
             SplineStd::GB => self.d_eff() + 2.0 * self.hf_star * self.m,
-            // DIN 5480 恒等式；NF/ANSI 无几何口径（构造入口已拦），兜底同 DIN 避免 panic。
-            SplineStd::DIN | SplineStd::NF | SplineStd::ANSI => self
+            SplineStd::NF => self.a.unwrap_or_else(|| a_from_x(self.m, self.z, self.x)),
+            // DIN 5480 恒等式；ANSI 无几何口径（构造入口已拦），兜底同 DIN 避免 panic。
+            SplineStd::DIN | SplineStd::ANSI => self
                 .d_b
                 .unwrap_or_else(|| d_b_from_x(self.m, self.z, self.x)),
         }
     }
 
     /// **内花键小径**（里侧齿顶）：GB 表 3 `D_ii = D_Fe max + 2C_F`；
-    /// DIN = `d_a2 = d − 0.9m + 2xm`。
+    /// DIN = `d_a2 = d − 0.9m + 2xm`；NF = `D = A − 2m`（p07 公式）。
     pub fn internal_minor_dia(&self) -> f64 {
         match self.std {
             SplineStd::GB => self.gb_form_dia_max() + 2.0 * self.c_f(),
-            // DIN 口径；NF/ANSI 无几何口径（构造入口已拦），兜底同 DIN 避免 panic。
-            SplineStd::DIN | SplineStd::NF | SplineStd::ANSI => self.d_eff() - 0.9 * self.m,
+            SplineStd::NF => self.internal_major_dia() - 2.0 * self.m,
+            // DIN 口径；ANSI 无几何口径（构造入口已拦），兜底同 DIN 避免 panic。
+            SplineStd::DIN | SplineStd::ANSI => self.d_eff() - 0.9 * self.m,
         }
     }
 
@@ -2337,7 +3034,11 @@ impl InvolParams {
         if self.x.abs() > 1e-12 {
             s.push_str(&format!(" x{}", trim(self.x)));
         }
-        if let Some(d_b) = self.d_b {
+        if self.std == SplineStd::NF {
+            if let Some(a) = self.a {
+                s.push_str(&format!(" A{}", trim(a)));
+            }
+        } else if let Some(d_b) = self.d_b {
             s.push_str(&format!(" d_B{}", trim(d_b)));
         }
         s
@@ -3619,9 +4320,236 @@ mod tests {
         assert!(path.exists());
     }
 
+    // ── NF E22-141 尺寸表（A 主参数；数据 = assets/nf_e22141_dims.csv）──
+
+    /// 入库形状：288 行 / 10 档 / 17 处 OCR 修正全部生效 / x 公式逐行一致（288 行）。
+    #[test]
+    fn nf_e22141_table_shape_and_x_formula_for_every_row() {
+        let rows = nf_e22141_rows();
+        assert_eq!(rows.len(), 288, "入库 288 行（p18 144 + p20 39 + p21 49 + p22 56）");
+        let mods = nf_e22141_modules();
+        assert_eq!(mods.len(), 10, "10 个模数档：{mods:?}");
+        for want in [0.5, 0.75, 1.0, 1.25, 1.667, 2.5, 3.75, 5.0, 7.5, 10.0] {
+            assert!(mods.iter().any(|m| (*m - want).abs() < 1e-9), "缺 m={want}");
+        }
+        // 17 处 OCR 修正在解析时逐条生效（且命中行数与修正表条数一致）。
+        let fixes: usize = rows.iter().map(|r| r.fixes.len()).sum();
+        assert_eq!(fixes, NF_OCR_FIXES.len(), "OCR 修正应逐条生效");
+        // 打印行（p22 m=5 A=105）修正后 N=19；x 互换修正后满足 A 方程。
+        let r105 = rows
+            .iter()
+            .find(|r| (r.m - 5.0).abs() < 1e-9 && (r.a - 105.0).abs() < 1e-9)
+            .expect("m=5 A=105");
+        assert_eq!(r105.z, 19, "z=192 是 OCR 粘连，应修为 19");
+        let r130 = rows
+            .iter()
+            .find(|r| r.page == 21 && (r.m - 3.75).abs() < 1e-9 && (r.a - 130.0).abs() < 1e-9)
+            .expect("p21 m=3.75 A=130");
+        assert!((r130.x.unwrap() - 0.633).abs() < 1e-9, "x 互换修正");
+        assert!((r130.s.unwrap() - 7.618).abs() < 1e-9, "s 随修正后的 x");
+        // x 公式与表值逐行一致（288 行；容差 5e-3 = m=1.667=5/3 的排版精度）。
+        let mut max_res = 0.0f64;
+        let mut max_a_res = 0.0f64;
+        let mut checked = 0usize;
+        for r in rows {
+            let x = x_from_a(r.a, r.m, r.z);
+            if let Some(xv) = r.x {
+                max_res = max_res.max((xv - x).abs());
+                checked += 1;
+            }
+            max_a_res = max_a_res.max((a_from_x(r.m, r.z, x) - r.a).abs());
+        }
+        assert_eq!(checked, 144, "288 行中 144 行是 p18 内花键行（无 x 列）");
+        assert!(max_res <= 5e-3, "x 公式最大残差 {max_res}");
+        assert!(max_a_res <= 5e-3, "A 正反变换最大残差 {max_a_res}");
+        // 9 行疑原表印误：值原样保留（D=132.5 不得被修成 122.5）。
+        assert_eq!(NF_SUSPECTED_SOURCE_ERRORS.len(), 9);
+        let d130 = rows
+            .iter()
+            .find(|r| r.page == 18 && (r.a - 130.0).abs() < 1e-9)
+            .expect("p18 m=3.75 A=130");
+        assert!((d130.internal_tip.unwrap() - 132.5).abs() < 1e-9, "印误值保留");
+    }
+
+    /// 查表：各 m 抽样命中（含 p18/p20 重复行的去重）、A+m / A+z 推导、未命中文案。
+    #[test]
+    fn nf_e22141_lookup_hits_each_module_and_derivations() {
+        // (m, A, N, 表 x，None = p18 行由公式解）：p20 m=0.5/A=10/N=18；m=1.25/A=12/N=8/x=0.6；
+        // p21 m=1.667/A=45/N=25（d OCR 修正）；m=2.5/A=100/N=38；m=3.75/A=80/N=19/x=0.967；
+        // p22 m=5/A=105/N=19（z OCR 修正）；m=7.5/A=240/N=30/x=0.8（互换修正）；m=10/A=160/N=14。
+        let cases: [(f64, f64, u32, Option<f64>); 8] = [
+            (0.5, 10.0, 18, Some(0.8)),
+            (1.25, 12.0, 8, Some(0.6)),
+            (1.667, 45.0, 25, Some(0.8)),
+            (2.5, 100.0, 38, Some(0.8)),
+            (3.75, 80.0, 19, Some(0.967)),
+            (5.0, 105.0, 19, Some(0.8)),
+            (7.5, 240.0, 30, Some(0.8)),
+            (10.0, 160.0, 14, Some(0.8)),
+        ];
+        for (m, a, z, x) in cases {
+            let rows = lookup_by_a(a, Some(m)).unwrap_or_else(|e| panic!("m={m} A={a}：{e}"));
+            let r = rows
+                .iter()
+                .find(|r| r.z == z)
+                .unwrap_or_else(|| panic!("m={m} A={a} 应命中 N={z}：{:?}", rows.iter().map(|r| r.z).collect::<Vec<_>>()));
+            if let Some(xv) = x {
+                assert!((r.x.unwrap() - xv).abs() < 1e-9, "m={m} A={a} x={:?}", r.x);
+            }
+            // A + m 查表补 N；命中一行且就是该 N。
+            let hits = lookup_by_a(a, Some(m)).unwrap();
+            assert!(hits.iter().any(|h| h.z == z));
+        }
+        // p18/p20 重复行去重：A=4 m=0.5 在 p18 与 p20 各一行 → 留信息全的 p20 行（有 x）。
+        let r4 = lookup_by_a(4.0, Some(0.5)).unwrap();
+        assert_eq!(r4.len(), 1, "同 (m,A,N) 重复行应去重：{r4:?}");
+        assert!(r4[0].x.is_some() && r4[0].page == 20, "{r4:?}");
+        // 未命中：附近候选 + 列出已入库档位。
+        let e = lookup_by_a(81.0, Some(3.75)).unwrap_err();
+        assert!(e.contains("附近候选") && e.contains("A=80"), "{e}");
+        let e = lookup_by_a(81.0, Some(0.9)).unwrap_err();
+        assert!(e.contains("表中没有 m=0.9") && e.contains("已入库档位"), "{e}");
+        assert!(lookup_by_a(-1.0, None).unwrap_err().contains("正数"));
+        assert!(lookup_by_a(10.0, Some(0.0)).unwrap_err().contains("正数"));
+    }
+
+    /// `A + m` / `A + N` 表外推导 + `A` 与输入 x 不符时按 A 提示（D_bOrigin 语义）。
+    #[test]
+    fn nf_e22141_resolve_derivations_and_adjustments() {
+        // 表内 A+m+N：x 由 A 公式解出（A 为主参数），来源 NfTable。
+        let (p, o) = resolve_nf_by_a(80.0, Some(3.75), Some(19), None, "NF平齿根").unwrap();
+        assert!((p.x - x_from_a(80.0, 3.75, 19)).abs() < 1e-12 && p.a == Some(80.0));
+        assert!((p.da() - 80.0).abs() < 1e-9 && (p.df() - (80.0 - 2.4 * 3.75)).abs() < 1e-9);
+        assert!(matches!(&o, D_bOrigin::NfTable(r) if r.page == 21), "{o:?}");
+        assert!(o.note().contains("查表命中 p21") && o.note().contains("A=80"), "{}", o.note());
+        // 表内 A+m：唯一 N 变体 → 直接命中。
+        let (p, o) = resolve_nf_by_a(80.0, Some(3.75), None, None, "NF平齿根").unwrap();
+        assert_eq!(p.z, 19);
+        assert!(matches!(o, D_bOrigin::NfTable(_)));
+        // 表内 A+z：唯一 m 变体 → 直接命中。
+        let (p, o) = resolve_nf_by_a(80.0, None, Some(19), None, "NF平齿根").unwrap();
+        assert!((p.m - 3.75).abs() < 1e-9);
+        assert!(matches!(o, D_bOrigin::NfTable(_)));
+        // 表外 A+m：按主系列 x=0.8 推 N = A/m − 2。
+        let (p, o) = resolve_nf_by_a(81.0, Some(3.75), None, None, "NF平齿根").unwrap();
+        assert_eq!(p.z, 20, "81/3.75−2=19.6 → 20");
+        assert!((p.x - 0.8).abs() < 1e-12);
+        assert!(
+            matches!(&o, D_bOrigin::Derived(n) if n.contains("推导值、未命中表") && n.contains("N=20")),
+            "{o:?}"
+        );
+        // 表外 A+z：按 x=0.8 给名义 m = A/(N+2x+0.4)。
+        let (p, o) = resolve_nf_by_a(81.0, None, Some(19), None, "NF平齿根").unwrap();
+        assert!((p.m - 81.0 / 21.0).abs() < 1e-12, "m={}", p.m);
+        assert!((p.x - 0.8).abs() < 1e-12);
+        assert!(
+            matches!(&o, D_bOrigin::Derived(n) if n.contains("推导值、未命中表") && n.contains("A/(N+2x+0.4)")),
+            "{o:?}"
+        );
+        // A 为主参数：输入 x 与 A 不符 → 按 A 取 x 并明文提示。
+        let (p, o) = resolve_nf_by_a(80.0, Some(3.75), Some(19), Some(0.633), "NF平齿根").unwrap();
+        assert!((p.x - x_from_a(80.0, 3.75, 19)).abs() < 1e-12, "按 A 取公式解 x");
+        assert!(
+            matches!(&o, D_bOrigin::Adjusted(n) if n.contains("A 为主参数") && n.contains("与输入 x=0.633 不符")),
+            "{o:?}"
+        );
+        // 只给 A 且多命中 → 列候选要 M/N。
+        let e = resolve_nf_by_a(80.0, None, None, None, "NF平齿根").unwrap_err();
+        assert!(e.contains("命中") && e.contains("请再给 M"), "{e}");
+        // 非法 A/m。
+        assert!(resolve_nf_by_a(0.0, Some(2.0), Some(18), None, "NF平齿根").unwrap_err().contains("正数"));
+        assert!(resolve_nf_by_a(80.0, Some(-1.0), None, None, "NF平齿根").unwrap_err().contains("正数"));
+    }
+
+    /// NF 几何：α=20°/da=A/df=平 A−2.4m、圆 A−2.694m；内花键 D=A−2m；三视图走共用通路。
+    #[test]
+    fn nf_e22141_geometry_internal_and_views() {
+        let (p, _) = resolve_nf_by_a(80.0, Some(3.75), Some(19), None, "NF平齿根").unwrap();
+        assert!((p.alpha_deg - 20.0).abs() < 1e-12, "α=20°");
+        assert!((p.d() - 3.75 * 19.0).abs() < 1e-9);
+        assert!((p.db() - p.d() * (20f64).to_radians().cos()).abs() < 1e-9);
+        assert!((p.da() - 80.0).abs() < 1e-9, "外径定心 da=A（ha*=0.2）");
+        assert!((p.df() - (80.0 - 2.4 * 3.75)).abs() < 1e-9, "平齿根 df=A−2.4m");
+        assert!((p.rho_f() - 0.3 * 3.75).abs() < 1e-9, "R=0.3m");
+        let round = "NF圆齿根";
+        let (pr, _) = resolve_nf_by_a(80.0, Some(3.75), Some(19), None, round).unwrap();
+        assert!((pr.df() - (80.0 - 2.694 * 3.75)).abs() < 1e-9, "圆齿根 df=A−2.694m");
+        assert!((pr.rho_f() - 0.528 * 3.75).abs() < 1e-9, "Ri=0.528m");
+        // 内花键（外径定心）：大径=A、小径 D=A−2m。
+        let pi = p.clone().with_internal(true);
+        pi.validate().unwrap();
+        assert!((pi.internal_major_dia() - 80.0).abs() < 1e-9, "A₁″=A");
+        assert!(
+            (pi.internal_minor_dia() - (80.0 - 2.0 * 3.75)).abs() < 1e-9,
+            "D=A−2m={}",
+            pi.internal_minor_dia()
+        );
+        // 端视图/侧视/剖视都走共用通路（不另开一套）。
+        let front = pi.front_view().unwrap();
+        let radii: Vec<f64> = front
+            .iter()
+            .filter_map(|e| match e {
+                EntityType::Arc(a) => Some(a.radius),
+                _ => None,
+            })
+            .collect();
+        assert!(radii.iter().any(|r| near(*r, 40.0)), "外侧齿根弧 = A/2");
+        assert!(radii.iter().any(|r| near(*r, (80.0 - 7.5) / 2.0)), "里侧齿顶弧 = D/2");
+        let side = pi.side_view(30.0);
+        assert!(has_line(&side, [0.0, -40.0], [0.0, 40.0]));
+        let section = pi.section_view(30.0);
+        assert_eq!(section.len(), 7);
+        // 外花键侧视 = da/df 口径。
+        let ext_side = p.side_view(30.0);
+        assert!(has_line(&ext_side, [0.0, -40.0], [0.0, 40.0]));
+        assert!(has_line(&ext_side, [0.0, -p.df() / 2.0], [30.0, -p.df() / 2.0]));
+        p.front_view().unwrap();
+    }
+
+    /// `A`（基准直径槽位）在 GB/ANSI/M/DP 下仍报错，NF/DIN 允许。
+    #[test]
+    fn nf_e22141_a_slot_only_allowed_for_nf_and_din() {
+        // GB：统一文案；ANSI：未实现文案。
+        let e = resolve_spline(SplineStd::GB, "GB30R", Some(66.0), Some(3.0), Some(20), None)
+            .unwrap_err();
+        assert_eq!(e, GB_D_B_MSG, "{e}");
+        let e = resolve_spline(SplineStd::ANSI, "ANSI", Some(66.0), Some(3.0), Some(20), None)
+            .unwrap_err();
+        assert_eq!(e, ANSI_D_B_MSG, "{e}");
+        let e = resolve_spline(SplineStd::ANSI, "ANSI", None, Some(3.0), Some(20), None)
+            .unwrap_err();
+        assert_eq!(e, ANSI_NOT_IMPLEMENTED_MSG, "{e}");
+        // NF/DIN：同一槽位各自可用（NF=A，DIN=d_B）。
+        let (p, o) = resolve_spline(SplineStd::NF, "NF", Some(80.0), Some(3.75), Some(19), None)
+            .unwrap();
+        assert_eq!(p.a, Some(80.0));
+        assert!(matches!(o, Some(D_bOrigin::NfTable(_))));
+        let (pd, od) =
+            resolve_spline(SplineStd::DIN, "DIN30", Some(40.0), Some(2.0), Some(18), None)
+                .unwrap();
+        assert_eq!(pd.d_b, Some(40.0));
+        assert!(matches!(od, Some(D_bOrigin::Table(_))));
+    }
+
+    /// 预设代号/`parse_preset_token`：NF 别名 + NFP/NFR 齿廓。
+    #[test]
+    fn nf_e22141_preset_tokens_and_codes() {
+        assert_eq!(parse_preset_token("NF").unwrap(), (SplineStd::NF, "NF平齿根"));
+        assert_eq!(parse_preset_token("NFE22141").unwrap(), (SplineStd::NF, "NF平齿根"));
+        assert_eq!(parse_preset_token("NF E22-141").unwrap(), (SplineStd::NF, "NF平齿根"));
+        assert_eq!(parse_preset_token("NFP").unwrap(), (SplineStd::NF, "NF平齿根"));
+        assert_eq!(parse_preset_token("NFR").unwrap(), (SplineStd::NF, "NF圆齿根"));
+        assert_eq!(parse_preset_token("NF圆齿根").unwrap(), (SplineStd::NF, "NF圆齿根"));
+        assert_eq!(preset_code(SplineStd::NF, "NF平齿根"), Some("NFP"));
+        assert_eq!(preset_code(SplineStd::NF, "NF圆齿根"), Some("NFR"));
+        // 预设表 ∅ 只在 ANSI；NF 两个齿廓。
+        assert_eq!(SplineStd::NF.presets().len(), 2);
+        assert!(SplineStd::ANSI.presets().is_empty());
+    }
+
     // ── 体系显式标识（本轮核心：不再从 d_B 反推体系）──
 
-    /// 花键四体系 + gear 的 M/DP 解析；NF/ANSI 的「未入库/未实现」文案与 d_B 规则。
+    /// 花键四体系 + gear 的 M/DP 解析；NF 可用（A 主参数）/ANSI 未实现与 d_B 规则。
     #[test]
     fn explicit_system_identifiers_and_d_b_rules() {
         // 花键体系：GB/DIN/NF/ANSI 都能从标识单独解析（与 GB30R/DIN30 预设代号并存兼容）。
@@ -3644,14 +4572,21 @@ mod tests {
         assert_eq!(e, ANSI_D_B_MSG, "{e}");
         assert!(e.contains("d_B") && e.contains("未实现"), "{e}");
 
-        // NF：不管是否给 d_B，明确「数据未入库」（不静默、不假装）。
-        let want_nf = NF_NOT_LOADED_MSG;
-        assert!(want_nf.contains("NF E22-141") && want_nf.contains("数据未入库"));
-        let e = resolve_spline(SplineStd::NF, "NF", None, Some(3.0), Some(20), None).unwrap_err();
-        assert_eq!(e, want_nf, "{e}");
-        let e = resolve_spline(SplineStd::NF, "NF", Some(40.0), Some(2.0), Some(18), None)
-            .unwrap_err();
-        assert_eq!(e, want_nf, "{e}");
+        // NF：已入库 —— A 主参数；A+m+z 走查表，A+m 查表补 N，无 A 时由 m/z/x 正算 A。
+        let (p, origin) =
+            resolve_spline(SplineStd::NF, "NF", Some(80.0), Some(3.75), Some(19), None).unwrap();
+        assert_eq!(p.std, SplineStd::NF);
+        assert_eq!(p.a, Some(80.0));
+        assert!((p.x - x_from_a(80.0, 3.75, 19)).abs() < 1e-12, "A 主参数 → x 由公式解");
+        assert!(matches!(&origin, Some(D_bOrigin::NfTable(r)) if r.page == 21), "{origin:?}");
+        let (p, origin) =
+            resolve_spline(SplineStd::NF, "NF", Some(80.0), Some(3.75), None, None).unwrap();
+        assert_eq!(p.z, 19);
+        assert!(matches!(origin, Some(D_bOrigin::NfTable(_))), "{origin:?}");
+        let (p, origin) =
+            resolve_spline(SplineStd::NF, "NF", None, Some(3.0), Some(20), None).unwrap();
+        assert!(matches!(origin, Some(D_bOrigin::ComputedA)), "{origin:?}");
+        assert!((p.a.unwrap() - 3.0 * (20.0 + 1.6 + 0.4)).abs() < 1e-9, "A={:?}", p.a);
 
         // ANSI：不给 d_B → 未实现文案。
         let e = resolve_spline(SplineStd::ANSI, "ANSI", None, Some(3.0), Some(20), None)

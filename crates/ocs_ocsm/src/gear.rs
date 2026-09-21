@@ -195,9 +195,9 @@ pub struct GearParams {
 /// 花键模式参数（齿轮生成器「花键模式」复选框后面那组输入）。
 ///
 /// * `std`：**显式体系标识** —— GB/T 3478.1-2008 / DIN 5480-1:2015 /
-///   NF E22-141（数据未入库）/ ANSI B92.1（未实现）；NF/ANSI 由 `resolve_spline` 统一报错；
+///   NF E22-141（已入库，A 为主参数；兼容旧字段名 `d_b`）/ ANSI B92.1（未实现）；
 /// * `profile`：齿廓代号（空 = 标准默认）；
-/// * `d_b`：**DIN 主参数**（GB/ANSI 给 d_B 直接报错；NF 也含 d_B 但数据未入库）；
+/// * `d_b`：**基准直径主参数槽位**——DIN 是 `d_B`、NF 是公称直径 `A`（GB/ANSI 给值直接报错）；
 /// * `m`/`z`/`x`：`None` = 未给（DIN 可由 `d_B` 查表/推导补全）；
 /// * 系数 `alpha_deg`/`ha_star`/`hf_star`/`rho_star`/`c_f_star`：`None` = 用预设，`Some` = 覆盖。
 #[derive(Debug, Clone, PartialEq)]
@@ -206,7 +206,7 @@ pub struct SplineOpts {
     pub std: crate::invol_spline::SplineStd,
     /// 齿廓代号或中文齿廓名；空 = 标准默认齿廓。
     pub profile: String,
-    /// DIN 5480 基准直径 d_B（主参数）。
+    /// DIN 5480 基准直径 d_B（主参数）；NF 时此槽位收公称直径 A。
     pub d_b: Option<f64>,
     /// 模数 m（`None` = 未给）。
     pub m: Option<f64>,
@@ -247,7 +247,7 @@ impl Default for SplineOpts {
 impl SplineOpts {
     /// 解析花键**体系标识**：`GB` / `GB/T 3478.1` / `DIN` / `DIN 5480` / `NF` / `NF E22-141` /
     /// `ANSI` / `ANSI B92.1`（大小写/空格/斜杠不敏感）。
-    /// `NF`/`ANSI` 也返回对应体系 —— 数据未入库/未实现由 [`crate::invol_spline::resolve_spline`]
+    /// `NF`/`ANSI` 也返回对应体系 —— 未实现/查表错误由 [`crate::invol_spline::resolve_spline`]
     /// 统一报错（不在这里静默掉）。`M`/`DP` 是**齿轮**体系，报错指路。
     pub fn parse_std(s: &str) -> Result<crate::invol_spline::SplineStd, String> {
         use crate::invol_spline::SplineStd;
@@ -856,7 +856,9 @@ impl GearParams {
                 trim(p.x.abs()).replace('.', "_")
             ));
         }
-        if let Some(d_b) = p.d_b {
+        if let Some(a) = p.a {
+            s.push_str(&format!("_A{}", trim(a).replace('.', "_")));
+        } else if let Some(d_b) = p.d_b {
             s.push_str(&format!("_DB{}", trim(d_b).replace('.', "_")));
         }
         s.push_str(&format!("_H{}", trim(self.h).replace('.', "_")));
@@ -2499,7 +2501,9 @@ pub fn parse_request(raw: &str) -> Result<GearRequest, String> {
                  [view 剖视图|侧视图|简化正视图|常规正视图|端视图] [at x,y] [rot 度]。\n\
                  齿轮体系：默认 M 模数制；径节制写 `std=DP dp=8`（或 `DP8`），此时位置参数 = `<齿数z> <齿宽h>`，m=25.4/DP。\n\
                  花键模式：`OCSMGEAR 花键 [内花键] [std=GB|DIN|NF|ANSI] [profile=GB30R] [db=40] [hf=0.9] [rho=0.4] [cf=0.1] <m> <z> [x=..] [h=..] [view 端视图|侧视图|剖视图]`；\
-                 花键参数也可用预设代号（GB30P/GB30R/GB375R/GB45R/DIN30）代替 std+profile；NF/ANSI 会明确报数据未入库/未实现。\n\
+                 花键参数也可用预设代号（GB30P/GB30R/GB375R/GB45R/DIN30/NFP/NFR）代替 std+profile；
+                 花键模式：`db=40` 是 DIN 的 d_B，NF 用 `a=66`（或 `公称直径=66`，也兼容 `db=` 当 A）；
+                 NF 已入库（尺寸表 p18/p20/p21/p22，288 行）；ANSI 未实现。\n\
                  不带参数则打开齿轮窗口。内齿轮（齿圈）目前只有 剖视图 + 端视图（模板只有这两个）；\
                  剖视图不画齿圈外壁与剖面线，由用户/AI 按实际齿圈结构延伸。";
     let toks: Vec<&str> = raw.split_whitespace().collect();
@@ -2640,6 +2644,9 @@ pub fn parse_request(raw: &str) -> Result<GearRequest, String> {
             "db" | "d_b" | "基准直径" => {
                 sp_d_b = Some(num("db", val)?);
             }
+            "a" | "公称直径" => {
+                sp_d_b = Some(num("公称直径 A", val)?);
+            }
             "hf" | "hf*" | "齿根高" => {
                 sp_hf = Some(num("hf", val)?);
             }
@@ -2773,6 +2780,25 @@ pub fn parse_request(raw: &str) -> Result<GearRequest, String> {
                         }
                         set_gear_std_once(&mut gear_std, GearStd::DP)?;
                         gear_dp = Some(v);
+                        i += 1;
+                        continue;
+                    }
+                }
+                // NF 公称直径贴写：`A66` / `A=66`（`a=66` / `公称直径=66` 走上面的键臂）。
+                if let Some(rest) = lower_tok
+                    .strip_prefix('a')
+                    .map(|r| r.strip_prefix(['=', ':']).unwrap_or(r))
+                {
+                    if !rest.is_empty()
+                        && rest.chars().next().is_some_and(|c| c.is_ascii_digit() || c == '.')
+                    {
+                        let v: f64 = rest
+                            .parse()
+                            .map_err(|_| format!("公称直径 A 需要数字，收到 `{other}`"))?;
+                        if !(v.is_finite() && v > 0.0) {
+                            return Err(format!("公称直径 A={} 必须是正数。", trim(v)));
+                        }
+                        sp_d_b = Some(v);
                         i += 1;
                         continue;
                     }
@@ -2995,7 +3021,7 @@ pub fn params_from_query(query: &str) -> Result<(GearParams, GearView, f64), Str
         let opts = SplineOpts {
             std,
             profile: get("profile").unwrap_or_default(),
-            d_b: opt_f("db").or_else(|| opt_f("d_b")),
+            d_b: opt_f("db").or_else(|| opt_f("d_b")).or_else(|| opt_f("a")).or_else(|| opt_f("A")),
             m: opt_f("m"),
             z: opt_f("z").map(|v| v.round() as u32),
             x: opt_f("x"),
@@ -3192,6 +3218,7 @@ fn spline_info_json(p: &GearParams, view: GearView) -> Result<String, String> {
         "da": round4(da),
         "df": round4(df),
         "d_b": engine.d_b.map(round4),
+        "a": engine.a.map(round4),
         "origin": origin.as_ref().map(|o| o.note()),
         "rho": round4(engine.rho_f()),
         "cf": round4(engine.c_f()),
@@ -4650,13 +4677,32 @@ mod tests {
         assert!(e.contains("齿轮模式不认标准号"), "{e}");
         let e = params_from_query("m=2&z=40&db=40").unwrap_err();
         assert!(e.contains("齿轮模式不认基准直径"), "{e}");
-        // ANSI/NF 体系：明确未实现/未入库（体系可识别，不给假结果）
+        // ANSI 体系：明确未实现（不给假结果）；NF 已入库（无 A 时由 m/z/x 正算 A）。
         let e = params_from_query("mode=spline&std=ANSI&m=3&z=20").unwrap_err();
         assert_eq!(e, crate::invol_spline::ANSI_NOT_IMPLEMENTED_MSG, "{e}");
         let e = params_from_query("mode=spline&std=ANSI&db=40&m=3&z=20").unwrap_err();
         assert_eq!(e, crate::invol_spline::ANSI_D_B_MSG, "{e}");
-        let e = params_from_query("mode=spline&std=NF&m=3&z=20").unwrap_err();
-        assert_eq!(e, crate::invol_spline::NF_NOT_LOADED_MSG, "{e}");
+        let (p, _, _) = params_from_query("mode=spline&std=NF&m=3&z=20").unwrap();
+        let s = p.spline.as_ref().expect("NF 花键应该可用");
+        assert_eq!(s.std, crate::invol_spline::SplineStd::NF);
+        let (p, _, _) = params_from_query("mode=spline&std=NF&a=66&m=3&z=20").unwrap();
+        let (e, _) = p.spline_engine().unwrap();
+        assert_eq!((e.m, e.z), (3.0, 20));
+        assert_eq!(e.a, Some(66.0), "A 主参数应回填");
+        // 命令行：`花键 std=NF a=66 3 20`（关键字式）与 `A66` 贴写都收。
+        for text in ["花键 std=NF a=66 3 20", "花键 std=NF A66 3 20", "花键 NFP A66 3 20"] {
+            let r = parse_request(text).unwrap_or_else(|e| panic!("{text}: {e}"));
+            let (e, _) = r.params.spline_engine().unwrap_or_else(|e| panic!("{text}: {e}"));
+            assert_eq!(e.a, Some(66.0), "{text}");
+            assert_eq!(e.std, crate::invol_spline::SplineStd::NF, "{text}");
+        }
+        // A 槽位在 GB 下报统一文案；M/DP 是齿轮体系，花键模式直接报错。
+        let e = params_from_query("mode=spline&std=GB&a=66&m=3&z=20").unwrap_err();
+        assert_eq!(e, crate::invol_spline::GB_D_B_MSG, "{e}");
+        for bad in ["M", "DP"] {
+            let e = params_from_query(&format!("mode=spline&std={bad}&a=66&m=3&z=20")).unwrap_err();
+            assert!(e.contains("齿轮体系"), "std={bad}：{e}");
+        }
     }
 
     /// DIN 三种给法与“以 d_B 为准”：引擎已在 invol_spline 侧锁住，这里锁齿轮桥接与 meta。
