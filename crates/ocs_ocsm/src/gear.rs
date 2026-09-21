@@ -4922,6 +4922,22 @@ mod tests {
         }
     }
 
+    /// ANSI 径节两种来源都要能出图（后端解析口径）：`m=` 槽位（裸数字 P）与 `pitch=`（A/B 原值）。
+    #[test]
+    fn ansi_pitch_m_slot_and_pitch_key_both_render_svg() {
+        let m_form = "mode=spline&std=ANSI&m=5&z=20&h=50&view=section";
+        let pitch_form = "mode=spline&std=ANSI&pitch=5/10&z=20&h=50&view=section";
+        let (pa, _, _) = params_from_query(m_form).unwrap();
+        assert_eq!(pa.spline_engine().unwrap().0.ansi_p(), 5.0, "m 槽位 = 径节 P");
+        let (pb, _, _) = params_from_query(pitch_form).unwrap();
+        assert_eq!(pb.spline_engine().unwrap().0.ansi_p(), 5.0, "pitch=A/B 的 A 就是 P");
+        assert!(preview_svg(m_form).unwrap().contains("<svg"), "m 槽位应能出图");
+        assert!(
+            preview_svg(pitch_form).unwrap().contains("<svg"),
+            "pitch=5/10（A/B）应能出图"
+        );
+    }
+
     /// DIN 三种给法与“以 d_B 为准”：引擎已在 invol_spline 侧锁住，这里锁齿轮桥接与 meta。
     #[test]
     fn spline_mode_din_three_ways_and_adjust_note() {

@@ -4391,6 +4391,12 @@ fn apply_gear_export(
         /// 花键齿廓代号
         #[serde(default)]
         profile: Option<String>,
+        /// ANSI 径节 A/B 原值（`"pitch":"5/10"`；与预览/信息查询串同一把钥匙）
+        #[serde(default)]
+        pitch: Option<String>,
+        /// 兼容旧键：裸数字 P（等价 `pitch`；仅 ANSI 花键生效）
+        #[serde(default)]
+        p: Option<f64>,
         /// 基准直径 d_B（花键/DIN）
         #[serde(default)]
         db: Option<f64>,
@@ -4440,11 +4446,24 @@ fn apply_gear_export(
             Some(v) if !v.trim().is_empty() => crate::gear::SplineOpts::parse_std(v)?,
             _ => crate::gear::default_spline_std(req.profile.as_deref().unwrap_or("")),
         };
+        // ANSI 径节：`pitch`（A/B 原值）优先，其次兼容裸数字 `p`，最后退 `m` 槽位
+        // （与 `params_from_query` 同一口径；非 ANSI 体系不看这两个键）。
+        let ansi_pitch = if std == crate::invol_spline::SplineStd::ANSI {
+            match req.pitch.as_deref().map(str::trim).filter(|v| !v.is_empty()) {
+                Some(v) => Some(crate::invol_spline::parse_ansi_pitch(v)?),
+                None => match req.p {
+                    Some(v) => Some(crate::invol_spline::parse_ansi_pitch(&crate::gear::trim(v))?),
+                    None => None,
+                },
+            }
+        } else {
+            None
+        };
         let opts = crate::gear::SplineOpts {
             std,
             profile: req.profile.clone().unwrap_or_default(),
             d_b: req.db,
-            m: req.m,
+            m: ansi_pitch.or(req.m),
             z: req.z,
             x: req.x_given.unwrap_or(true).then_some(req.x),
             alpha_deg: req.alpha,
@@ -14257,6 +14276,40 @@ mod weld_tests {
         let block = crate::pending_block().expect("花键已登记待放置件");
         assert!(block.starts_with("OCSM_SPLINE_INT_DIN_DIN30"), "{block}");
         assert!(block.ends_with("_SECTION"), "{block}");
+        // ANSI：预览/信息两口径（`m=` 槽位与 `pitch=` A/B）都出图；export body 也认 `pitch`。
+        let svg = http_req(
+            server.port,
+            "GET",
+            "/api/gear_svg?mode=spline&std=ANSI&m=5&z=20&h=50&view=section",
+            "",
+        );
+        assert!(svg.contains("<svg"), "{}", &svg[..120.min(svg.len())]);
+        let svg = http_req(
+            server.port,
+            "GET",
+            "/api/gear_svg?mode=spline&std=ANSI&pitch=5/10&z=20&h=50&view=section",
+            "",
+        );
+        assert!(svg.contains("<svg"), "pitch=A/B 应能出图：{}", &svg[..120.min(svg.len())]);
+        let j = http_req(
+            server.port,
+            "GET",
+            "/api/gear_info?mode=spline&std=ANSI&pitch=5/10&z=20&h=50",
+            "",
+        );
+        let v: serde_json::Value = serde_json::from_str(&j).unwrap();
+        assert_eq!(v["pitch"], 5.0, "{j}");
+        assert_eq!(v["pitch_label"], "5/10", "{j}");
+        let ansi_body = serde_json::json!({
+            "mode":"spline", "std":"ANSI", "profile":"ANSI30P",
+            "pitch":"5/10", "z":20, "h":50, "view":"section"
+        })
+        .to_string();
+        let resp = apply_gear_export(&sender, ansi_body.as_bytes())
+            .expect("ANSI 径节出库（pitch=A/B）——修复前这里会报缺径节 P");
+        assert!(resp.contains("\"ok\":true"), "{resp}");
+        let block = crate::pending_block().expect("ANSI 已登记待放置件");
+        assert!(block.contains("_P5_PS10_N20"), "{block}");
         // 径节制出库（JSON POST）：std=DP + dp，块名保留 DP 原值
         let dp_body = serde_json::json!({"std":"DP","dp":8,"z":40,"h":20,"view":"section"}).to_string();
         let resp = apply_gear_export(&sender, dp_body.as_bytes()).expect("径节制出库");

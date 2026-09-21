@@ -427,7 +427,9 @@ function collect() {
       else if (!Number.isFinite(z) || z < 3) aerr = "ANSI 齿数 N 不能小于 3。";
       else if (!Number.isFinite(h) || h <= 0) aerr = "有效长度 L 必须是正数。";
       else if (!el("profileSel").value) aerr = "ANSI 请选择 Table 2 齿廓（压力角/齿根型式/配合方式）。";
-      const p = { mode: "spline", kind: curKind, std, profile: el("profileSel").value, p: pv, h };
+      // 径节统一走 `pitch`（A/B 原值，如 `5/10`）：预览/信息查询串与导出 JSON 共用同一把钥匙，
+      // 后端 `/api/gear_svg`、`/api/gear_info`、`/api/gear_export` 都按 `pitch` 解析（不再各写一套）。
+      const p = { mode: "spline", kind: curKind, std, profile: el("profileSel").value, pitch: ansiPairLabel(pv), h };
       if (Number.isFinite(z) && z >= 2) p.z = Math.round(z);
       return { ok: !aerr, err: aerr, p };
     }
@@ -780,7 +782,7 @@ function equivalence(v) {
     let cli = "花键 " + (curKind === "internal" ? "内花键 " : "") + "std=" + el("stdSel").value;
     if (el("stdSel").value === "ANSI") cli += " profile=" + el("profileSel").value;
     if (db !== "") cli += (isNf ? " a=" : " db=") + db;
-    if (v.ok && v.p.p !== undefined) cli += " P" + fmt(v.p.p) + "/" + fmt(2 * v.p.p);
+    if (v.ok && v.p.pitch) cli += " P" + v.p.pitch;
     else if (v.ok && v.p.m !== undefined) cli += " " + fmt(v.p.m);
     if (v.ok && v.p.z !== undefined) cli += " " + v.p.z;
     if (curKind === "internal") warnings.push("内花键不能在轴上使用（轴上没有内花键）：本表达式只作记录，别粘到轴生成器。");
@@ -793,7 +795,7 @@ function equivalence(v) {
       if (p.std === "ANSI") {
         // 轴段用 `DP<A/B>` 写径节原值（P/Ps，Ps=2P），不再换算成 mm 模数；
         // parser 已把 `has_invol && P` 分支排到 RL 参数分支之前，`P5/10` 也能直接解析。
-        if (p.p !== undefined) expr += " DP" + fmt(p.p) + "/" + fmt(2 * p.p);
+        if (p.pitch) expr += " DP" + p.pitch;
       } else {
         if (p.db !== undefined) expr += (p.std === "NF" ? " A" : " DB") + fmt(p.db);
         if (p.m !== undefined) expr += " M" + fmt(p.m);
@@ -891,14 +893,17 @@ function syncKindHint() {
 
 /* ─────────────────────────── 预览（/api/gear_svg） ─────────────────────────── */
 
-// 参数拼 URL：花键模式（mode=spline&std=…&db=…&m=…&z=…&alpha=…&ha=…&hf=…&rho=…&cf=…&h=…&x=…）；
-// 齿轮模式保持原有键序（m z alpha ha c beta h x）。空值跳过（DIN 允许 m/z 缺一个）。
+// 参数拼 URL：花键模式（mode=spline&std=…&db=…&m=…&z=…&alpha=…&ha=…&hf=…&rho=…&cf=…&h=…&x=…；
+// ANSI 用 `pitch=A/B` 原值，如 `pitch=5/10`）；齿轮模式保持原有键序（m z alpha ha c beta h x）。
+// 空值跳过（DIN 允许 m/z 缺一个）。
 function paramQS(p) {
   if (p.mode === "spline") {
     let q = "mode=spline&kind=" + p.kind + "&std=" + p.std + "&profile=" + encodeURIComponent(p.profile || "");
     const push = (k, v) => { if (v !== undefined && v !== null && v !== "") q += "&" + k + "=" + v; };
     push(p.std === "NF" ? "a" : "db", p.db);
-    push(p.std === "ANSI" ? "p" : "m", p.std === "ANSI" ? p.p : p.m);
+    // ANSI 径节发 A/B 原值（`pitch=5/10`）：`/` 在查询值里是合法字符，直接发原文，
+    // 后端 parse_ansi_pitch 原样接收（若发 `%2F` 就需要后端解码，两边只留这一套写法）。
+    push(p.std === "ANSI" ? "pitch" : "m", p.std === "ANSI" ? p.pitch : p.m);
     push("z", p.z);
     push("alpha", p.alpha); push("ha", p.ha); push("hf", p.hf); push("rho", p.rho); push("cf", p.cf);
     push("h", p.h); push("x", p.x);

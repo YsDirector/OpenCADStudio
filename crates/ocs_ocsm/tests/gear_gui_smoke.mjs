@@ -101,8 +101,10 @@ const INFO = {
   d: 60, db: 51.9615, da: 65.4, df: 57.344, d_b: null, origin: null, rho: 1.2, cf: 0.3,
   internal_major: 65.4, internal_minor: 57.344, block: 'B', spec: 'S', notes: ['内花键无侧视图（同内齿轮：剖视 + 端视）'],
 };
-global.fetch = async (u) => {
+const fetchLog = [];
+global.fetch = async (u, opts) => {
   const t = String(u);
+  fetchLog.push({ url: t, body: opts && opts.body ? String(opts.body) : null });
   if (t.startsWith('/api/parts')) {
     return { ok: true, json: async () => PARTS, text: async () => JSON.stringify(PARTS) };
   }
@@ -110,6 +112,9 @@ global.fetch = async (u) => {
     return { ok: true, json: async () => INFO, text: async () => JSON.stringify(INFO) };
   }
   if (t.startsWith('/api/gear_svg')) return { ok: true, text: async () => '<svg></svg>' };
+  if (t === '/api/gear_export') {
+    return { ok: true, json: async () => ({ ok: true, message: '已生成' }), text: async () => '{"ok":true}' };
+  }
   if (t.startsWith('/api/page_ping')) return { ok: true, json: async () => ({}), text: async () => '{}' };
   return { ok: false, json: async () => ({ ok: false }), text: async () => '' };
 };
@@ -260,6 +265,32 @@ await flush();
 check(el('exprPreview').value === 'INVOLSPLINE ANSI30P DP5/10 Z19 L50.8',
   'ANSI 表达式应用 DP5/10 写径节原值，实际 ' + JSON.stringify(el('exprPreview').value));
 check(el('exprHint').textContent.includes('DP'), 'ANSI 表达式提示应说明 DP：' + el('exprHint').textContent);
+
+// ── ANSI 接线回归（用户实测「缺径节 P」的断点）：选完径节后，预览/信息查询串与导出 body
+// 必须带 A/B 原值 `pitch=5/10`，而不是被 collect/paramQS/导出 schema 丢在半路。
+fetchLog.length = 0;   // 只看这次「选完径节」之后的请求
+try { el('m')._fire('blur', el('m')); } catch (e) { errors.push('ANSI 预览触发异常: ' + e); }
+await flush();
+const ansiSvg = fetchLog.filter((f) => f.url.startsWith('/api/gear_svg')).pop();
+check(!!ansiSvg, 'ANSI 选完径节后应发起预览请求（collect 不能拦成缺径节）');
+check(!!ansiSvg && !ansiSvg.url.includes('%2F') && ansiSvg.url.includes('pitch=5/10'),
+  '预览查询串应带 pitch=5/10（A/B 原值），实际 ' + (ansiSvg ? ansiSvg.url : '(无请求)'));
+const ansiInfo = fetchLog.filter((f) => f.url.startsWith('/api/gear_info')).pop();
+check(!!ansiInfo && ansiInfo.url.includes('pitch=5/10'),
+  '派生值查询串应带 pitch=5/10，实际 ' + (ansiInfo ? ansiInfo.url : '(无请求)'));
+check(!el('warn').textContent.includes('缺径节') && !el('perr').textContent.includes('缺径节'),
+  '选完径节不应再出现「缺径节 P」：warn=' + el('warn').textContent + ' perr=' + el('perr').textContent);
+// 导出 body：与 collect()/paramQS 同一把钥匙（此前 Req 无 pitch 字段，后端收到 None 才报缺径节）
+try { el('out')._fire('click', el('out')); } catch (e) { errors.push('ANSI 导出触发异常: ' + e); }
+await flush();
+const ansiExport = fetchLog.filter((f) => f.url === '/api/gear_export').pop();
+check(!!ansiExport, 'ANSI 导出应发起 POST /api/gear_export');
+if (ansiExport) {
+  let body = null;
+  try { body = JSON.parse(ansiExport.body); } catch (e) { /* 下面断言报错 */ }
+  check(!!body && body.pitch === '5/10', '导出 body 应带 "pitch":"5/10"，实际 ' + ansiExport.body);
+  check(!!body && body.m === undefined, 'ANSI 不应把 P 塞进 m 槽位（避免两侧各写一套）');
+}
 
 // ③.9 花键视图按钮（用户定案：内花键同内齿轮，无侧视图）
 // 先回 GB（视图规则与体系无关），锁外花键 = 剖视/侧视/端视
