@@ -55,6 +55,16 @@ pub const CHAMFER_RATIO: f64 = 0.6;
 pub const FIT_FRACTIONS: [f64; 5] = [0.125, 0.25, 0.5, 0.75, 1.0];
 /// 中心线伸出量系数：长度 = 被标注长度 + 6n（与 OCSMCENTERLINE 同口径）。
 pub const CENTER_OVERHANG: f64 = 6.0;
+
+/// 中心线（分度线/轴线/十字线）总长 = 特征长 + [`CENTER_OVERHANG`]×n（两端各 3n）。
+///
+/// **全口径唯一入口**：外齿轮 / 内齿轮 / 外花键 / 内花键的轴向视图都调它，
+/// 禁止各处再写 `… + 6.0 * n` / `… + 3.0 * n`（用户 2026-09-21 定案：内外统一 6n，
+/// 原内齿轮模板的 `L+3n`/`L+4n` 作废）。
+pub fn centerline_len(feature_len: f64, n: f64) -> f64 {
+    feature_len + CENTER_OVERHANG * n
+}
+
 /// 斜齿轮侧视图三条细实线的间距 = HELIX_SPACING×k（k = 视图比例）。
 pub const HELIX_SPACING: f64 = 5.0;
 
@@ -1474,7 +1484,7 @@ impl_common_layer!(
 
 /// 十字中心线（长度 = 直径 + 6n，与 OCSMCENTERLINE 同规则）。
 fn cross_centerlines(center: [f64; 2], dia: f64, n: f64) -> Vec<EntityType> {
-    let half = (dia + CENTER_OVERHANG * n) / 2.0;
+    let half = centerline_len(dia, n) / 2.0;
     vec![
         line([center[0] - half, center[1]], [center[0] + half, center[1]], LAYER_CENTER),
         line([center[0], center[1] - half], [center[0], center[1] + half], LAYER_CENTER),
@@ -1620,7 +1630,7 @@ pub(crate) fn side_view(p: &GearParams, n: f64) -> Result<Vec<EntityType>, Strin
     let mut out = axial_outline(p, true);
     // 分度线（点划线）+ 轴线（中心线）
     let d2 = p.d() / 2.0;
-    let cl = p.h + CENTER_OVERHANG * n;
+    let cl = centerline_len(p.h, n);
     out.push(line([-cl / 2.0, d2], [cl / 2.0, d2], LAYER_CENTER));
     out.push(line([-cl / 2.0, -d2], [cl / 2.0, -d2], LAYER_CENTER));
     out.push(line([-cl / 2.0, 0.0], [cl / 2.0, 0.0], LAYER_CENTER));
@@ -1652,7 +1662,7 @@ fn section_view(p: &GearParams, n: f64) -> Result<Vec<EntityType>, String> {
     let mut out = axial_outline(p, false);
     let rf = p.df() / 2.0;
     let d2 = p.d() / 2.0;
-    let cl = p.h + CENTER_OVERHANG * n;
+    let cl = centerline_len(p.h, n);
     // 齿根线（剖切后可见，长度 = h）—— 齿部按不剖（GB/T 4459.2）：只在齿根圆之间打剖面线
     out.push(line([-p.h / 2.0, rf], [p.h / 2.0, rf], LAYER_MAIN));
     out.push(line([-p.h / 2.0, -rf], [p.h / 2.0, -rf], LAYER_MAIN));
@@ -1992,7 +2002,9 @@ fn front_internal(p: &GearParams, n: f64) -> Result<Vec<EntityType>, String> {
 /// **内齿圈剖视图的共用模板**（内齿轮与内花键同构，逐条对齐用户「内齿轮使用示例.dxf」）。
 ///
 /// 每半侧 10 条：端面（0→ra+C）+ 外侧端面（ra+C→rf）×2 端 + 齿顶线 + 齿根线 + 内孔壁 ×2 + 孔口 45° 倒角 ×2；
-/// 加 分度线 ×2（点划线，长 = len + 3n）+ 轴线 ×1（= len + 4n）。共 23 条（20 粗实线 + 3 中心线）。
+/// 加 分度线 ×2（点划线）+ 轴线 ×1，长度都 = [`centerline_len`]`(len, n)` = `len + 6n`
+/// （两端各 3n，绕长度中心对称；用户 2026-09-21 定案，与外齿轮/外花键全口径统一）。
+/// 共 23 条（20 粗实线 + 3 中心线）。
 /// **不打剖面线**（用户 2026-09-17 明确：齿圈外壁结构由用户/AI 在生产环境里延伸后再打）、**不画齿圈外壁**。
 ///
 /// 内齿轮与内花键只在齿形参数上不同：`ra_bore` = 里侧齿顶半径（内齿轮 `da/2`；
@@ -2025,14 +2037,14 @@ fn internal_bore_section(
         out.push(line([x0 + c, s * ra_bore], [x0, s * (ra_bore + c)], LAYER_MAIN));
         out.push(line([x0 + len - c, s * ra_bore], [x0 + len, s * (ra_bore + c)], LAYER_MAIN));
     }
-    // 分度线（点划线）+ 轴线（中心线）—— 长度按模板的 +3n / +4n，绕长度中心对称
+    // 分度线（点划线）+ 轴线（中心线）：长度 = centerline_len(len, n) = len + 6n（两端各 3n），
+    // 绕长度中心对称。用户 2026-09-21 定案：与外齿轮/外花键统一（原模板口径 L+3n/L+4n 作废）。
     let d2 = pitch_dia / 2.0;
-    let c3 = (len + 3.0 * n) / 2.0;
-    let c4 = (len + 4.0 * n) / 2.0;
+    let half = centerline_len(len, n) / 2.0;
     let xm = x0 + len / 2.0;
-    out.push(line([xm - c3, d2], [xm + c3, d2], LAYER_CENTER));
-    out.push(line([xm - c3, -d2], [xm + c3, -d2], LAYER_CENTER));
-    out.push(line([xm - c4, 0.0], [xm + c4, 0.0], LAYER_CENTER));
+    out.push(line([xm - half, d2], [xm + half, d2], LAYER_CENTER));
+    out.push(line([xm - half, -d2], [xm + half, -d2], LAYER_CENTER));
+    out.push(line([xm - half, 0.0], [xm + half, 0.0], LAYER_CENTER));
     out
 }
 
@@ -2334,8 +2346,8 @@ fn spline_axial_view(
     // 小径线（侧视 = 2细线层 / 剖视 = 1轮廓实线层）
     out.push(line([0.0, -rf], [len, -rf], minor_layer));
     out.push(line([0.0, rf], [len, rf], minor_layer));
-    // 分度线 ×2 + 轴线：长度 = L + CENTER_OVERHANG×n（两端各 3n），与齿轮中心线同一算法
-    let cl = len + CENTER_OVERHANG * n;
+    // 分度线 ×2 + 轴线：长度 = centerline_len(len, n) = L + 6n（两端各 3n），与齿轮中心线同一算法
+    let cl = centerline_len(len, n);
     let (x0, x1) = (len / 2.0 - cl / 2.0, len / 2.0 + cl / 2.0);
     let d2 = pitch_dia / 2.0;
     out.push(line([x0, d2], [x1, d2], LAYER_CENTER));
@@ -5243,8 +5255,8 @@ mod tests {
     }
 
     /// ① 花键分度线两端各外延 `CENTER_OVERHANG/2×n`（=3n，与齿轮同算法）：
-    /// 外花键侧视/剖视对照外齿轮 `side_view` 的 `cl = h + CENTER_OVERHANG * n`，轴线与分度线同长；
-    /// 内花键剖视走内齿轮共用模板（`len+3n` / 轴线 `len+4n`），逐条与 `internal_bore_section` 一致。
+    /// 外花键侧视/剖视对照外齿轮 `side_view` 的 `centerline_len`，轴线与分度线同长；
+    /// 内花键剖视走内齿轮共用模板，统一 = `centerline_len(L, n)` = `L + 6n`（用户 2026-09-21 定案）。
     #[test]
     fn spline_pitch_lines_extend_both_ends_like_gear() {
         let n = 2.0;
@@ -5263,7 +5275,7 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert_eq!(gear_pitch, vec![pg.h + CENTER_OVERHANG * n], "齿轮分度线口径");
+        assert_eq!(gear_pitch, vec![centerline_len(pg.h, n)], "齿轮分度线口径");
 
         // 外花键（GB30R m3 z20 h30）：侧视 + 剖视都套齿轮同一算法。
         let mut p = spline_tmpl(crate::invol_spline::SplineStd::GB);
@@ -5271,7 +5283,7 @@ mod tests {
         p.spline.as_mut().unwrap().z = Some(20);
         let (engine, _) = p.spline_engine().unwrap();
         let d2 = engine.d() / 2.0;
-        let want = p.h + CENTER_OVERHANG * n;
+        let want = centerline_len(p.h, n);
         let over = CENTER_OVERHANG * n / 2.0; // 每端外延 3n
         for view in [GearView::Side, GearView::Section] {
             let part = generate(&p, view, n).unwrap();
@@ -5296,7 +5308,7 @@ mod tests {
             assert_eq!((pitch.len(), axis.len()), (2, 1), "{view:?} 分度线 ×2 + 轴线 ×1");
         }
 
-        // 内花键剖视 = 内齿轮共用模板：同一函数逐条一致，分度线长 = L+3n（模板口径）。
+        // 内花键剖视 = 内齿轮共用模板：同一函数逐条一致；分度线/轴线统一 = L + 6n（用户 2026-09-21 定案）。
         let pi = GearParams { kind: GearKind::Internal, ..p.clone() };
         let (ei, _) = pi.spline_engine().unwrap();
         let se = generate(&pi, GearView::Section, n).unwrap().entities;
@@ -5310,16 +5322,67 @@ mod tests {
             n,
         );
         assert_eq!(format!("{se:?}"), format!("{tpl:?}"), "内花键剖视 = 内齿轮共用模板");
+        let want_i = centerline_len(pi.h, n);
+        let mut n_i = 0;
         for e in &se {
             if let EntityType::Line(l) = e {
-                if l.common.layer == LAYER_CENTER
-                    && (l.start.y - l.end.y).abs() < 1e-9
-                    && (l.start.y.abs() - ei.d() / 2.0).abs() < 1e-9
-                {
+                if l.common.layer == LAYER_CENTER && (l.start.y - l.end.y).abs() < 1e-9 {
                     let len = (l.end.x - l.start.x).abs();
-                    assert!((len - (pi.h + 3.0 * n)).abs() < 1e-9, "内花键剖视分度线 = L+3n，实得 {len}");
+                    let x0 = l.start.x.min(l.end.x);
+                    assert!((len - want_i).abs() < 1e-9, "内花键剖视中心线 = L+6n={want_i}，实得 {len}");
+                    assert!((x0 + over).abs() < 1e-9, "内花键剖视中心线左端应外延 3n");
+                    n_i += 1;
                 }
             }
+        }
+        assert_eq!(n_i, 3, "内花键剖视分度线 ×2 + 轴线 ×1");
+    }
+
+    /// **四方统一**（用户 2026-09-21 定案「内外都是两端各 3n，齿轮也是，全部保持统一」）：
+    /// 外齿轮 / 内齿轮 / 外花键 / 内花键的轴向视图，`3中心线层` 的分度线 ×2 + 轴线 ×1
+    /// 长度都 = [`centerline_len`]`(特征长, n)` = 特征长 + 6n（两端各 3n），并用**同一个函数**断言。
+    #[test]
+    fn centerline_overhang_is_uniform_6n_for_all_gear_and_spline_views() {
+        let n = 2.0;
+        let pg = tmpl();
+        let pi = int_tmpl();
+        let mut pse = spline_tmpl(crate::invol_spline::SplineStd::GB);
+        pse.spline.as_mut().unwrap().m = Some(3.0);
+        pse.spline.as_mut().unwrap().z = Some(20);
+        let psi = GearParams { kind: GearKind::Internal, ..pse.clone() };
+        let cases: [(&str, &GearParams, GearView); 6] = [
+            ("外齿轮侧视", &pg, GearView::Side),
+            ("外齿轮剖视", &pg, GearView::Section),
+            ("内齿轮剖视", &pi, GearView::Section),
+            ("外花键侧视", &pse, GearView::Side),
+            ("外花键剖视", &pse, GearView::Section),
+            ("内花键剖视", &psi, GearView::Section),
+        ];
+        for (label, p, view) in cases {
+            let part = generate(p, view, n).unwrap();
+            let want = centerline_len(p.h, n); // 同一函数：四方共用
+            // 轴类视图基点：齿轮绕齿宽中心（x=0），花键以左端面为 x=0。
+            let center = if p.spline.is_some() { p.h / 2.0 } else { 0.0 };
+            let mut seen = 0;
+            for e in &part.entities {
+                let EntityType::Line(l) = e else { continue };
+                if l.common.layer != LAYER_CENTER || (l.start.y - l.end.y).abs() > 1e-9 {
+                    continue;
+                }
+                let (a, b) = (l.start.x.min(l.end.x), l.start.x.max(l.end.x));
+                assert!(
+                    (b - a - want).abs() < 1e-9,
+                    "{label}：中心线长 {} ≠ centerline_len(h, n)={want}",
+                    b - a
+                );
+                assert!(
+                    (a - (center - want / 2.0)).abs() < 1e-9
+                        && (b - (center + want / 2.0)).abs() < 1e-9,
+                    "{label}：应绕特征中心 {center} 对称、两端各 3n（实得 {a}..{b}）"
+                );
+                seen += 1;
+            }
+            assert_eq!(seen, 3, "{label}：分度线 ×2 + 轴线 ×1");
         }
     }
 
