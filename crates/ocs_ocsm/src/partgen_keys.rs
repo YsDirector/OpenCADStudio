@@ -17,8 +17,12 @@
 //! 3. **剖面线间距全局 3.0 mm**（与齿轮/花键/轴生成器统一；**不**照模板的 0.794/3.175）。
 //! 4. **1096 表第三列就是 `L`**（源图 PNG 表头"L/2提示"是 OCR 误读）；L 取值按
 //!    [`KEY_1096_L_SERIES`] + `L < 10b` 校验，档位默认 L 取表内该档值（PNG 第三列）。
-//! 5. **1096 倒角 `c = 0.2` 固定**（GB/T 1096 表 1 的 `s` 其实是"按 b 分档的范围"，
-//!    见 [`KEY_1096_CHAMFER_RANGES`]，只作 notes 留档，不据此改画法）。
+//! 5. **1096 倒角按 b 分档、默认取该档范围下限**（用户 2026-09 新定案）：档位 = GB/T 1096
+//!    表 1 `s` 行（见 [`KEY_1096_CHAMFER_RANGES`]），每档 `c_min/c_max` 落在
+//!    `tables/partsKey1096{A,B,C}.json` 每行；实画取值由 [`CHAMFER_1096_PICK`] 一处切换
+//!    （min/max/mid，默认 min）。与 1097 的 `C` 取表内下限同口径。
+//!    ⚠️ specimen（b=2）按新口径 = **0.16**，模板 DXF 画的是 0.2（在该档 0.16~0.25 内，
+//!    属模板取中间值）→ **已知 0.04mm 有意偏差**（举证页偏差④），**不要**为对齐模板改回 0.2。
 //! 6. **1097 中央 `d0` 孔是"起键螺纹孔"** —— 它是**键自身**用于起键（撬出）的孔，
 //!    **与轴无关**；**不是**把键固定到轴上的孔（反解报告 §3.5 的"固定用"推断**已作废**）。
 //!    两端 `d1` 通孔 + `D×h1` 沉孔照源图（孔位 ±L1/2、距端面 L3）。
@@ -72,11 +76,9 @@ use ocs_plugin_api::host::acadrust::entities::EntityType;
 // 常量（用户口径与源图推导）
 // ══════════════════════════════════════════════════════════════════════════
 
-/// 1096 倒角：用户拍板固定 0.2（不按 b 分档）。
-pub const C_1096: f64 = 0.2;
-
-/// GB/T 1096 表 1 `s`（倒角）= **按 b 分档的范围**——只作 notes 留档；
-/// 用户已定 1096 倒角固定 [`C_1096`]，**不要**据此改画法。
+/// GB/T 1096-2003 表 1 `s`（倒角或倒圆）= **按 b 分档的范围**（`(b_lo, b_hi, 范围原文)`）。
+/// 每行的 `c_min/c_max` 存在 JSON（`partsKey1096{A,B,C}.json`）；这里是档位边界与
+/// 可读范围原文的唯一声明，实画取值策略见 [`CHAMFER_1096_PICK`]。
 pub const KEY_1096_CHAMFER_RANGES: &[(f64, f64, &str)] = &[
     (2.0, 4.0, "0.16~0.25"),
     (5.0, 8.0, "0.25~0.40"),
@@ -86,6 +88,60 @@ pub const KEY_1096_CHAMFER_RANGES: &[(f64, f64, &str)] = &[
     (56.0, 70.0, "1.60~2.00"),
     (80.0, 100.0, "2.50~3.00"),
 ];
+
+/// 1096 倒角实画取值策略。
+///
+/// **用户 2026-09 定案：取该档范围下限**（依据：1097 的 C 表给 `0.25~0.4`、图面就画下限
+/// 0.25 → 两族同口径）。将来要改上限/中间值，**只改 [`CHAMFER_1096_PICK`] 一处**。
+///
+/// `Max`/`Mid` 当前不被生产代码构造（默认 `Min`），仅在测试里验证可切换性；
+/// 非测试构建下允许 dead_code，勿删（它们是“一处切换”的入口）。
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChamferPick {
+    /// 取范围下限（当前默认）
+    Min,
+    /// 取范围上限
+    Max,
+    /// 取范围内中点
+    Mid,
+}
+
+/// 倒角实画取值策略（默认 `Min` = 该档范围下限，与 1097 的 C 取下限同口径）。
+pub const CHAMFER_1096_PICK: ChamferPick = ChamferPick::Min;
+
+/// 按指定策略从档位范围取实画倒角值（测试可直接传 `Max`/`Mid` 验证可切换）。
+pub fn chamfer_1096_from_range_pick(c_min: f64, c_max: f64, pick: ChamferPick) -> f64 {
+    match pick {
+        ChamferPick::Min => c_min,
+        ChamferPick::Max => c_max,
+        ChamferPick::Mid => (c_min + c_max) / 2.0,
+    }
+}
+
+/// 按当前 [`CHAMFER_1096_PICK`] 取实画倒角值。
+pub fn chamfer_1096_from_range(c_min: f64, c_max: f64) -> f64 {
+    chamfer_1096_from_range_pick(c_min, c_max, CHAMFER_1096_PICK)
+}
+
+/// 1096 数据行 → 实画倒角 `c`（默认该档范围下限）。
+pub fn chamfer_1096(row: &Key1096Row) -> f64 {
+    // 数据自检：行的 b 必须落在 [`KEY_1096_CHAMFER_RANGES`] 的某一档（JSON 与档位表漂移时 debug 构建报错）。
+    debug_assert!(
+        chamfer_1096_range_for(row.b).is_some(),
+        "b={} 不在倒角档位表内",
+        row.b
+    );
+    chamfer_1096_from_range(row.c_min, row.c_max)
+}
+
+/// 某 `b` 的倒角档 `(b_lo, b_hi, 范围原文)`；不在任何档（例：b=9、b=55）→ `None`。
+pub fn chamfer_1096_range_for(b: f64) -> Option<(f64, f64, &'static str)> {
+    KEY_1096_CHAMFER_RANGES
+        .iter()
+        .copied()
+        .find(|(lo, hi, _)| b >= *lo - 1e-9 && b <= *hi + 1e-9)
+}
 
 /// GB/T 1096-2003 表 1 长度 L 标准系列。
 ///
@@ -154,6 +210,10 @@ pub struct Key1096Row {
     pub h: f64,
     /// 源图第三列 = 该档默认 L（"L/2提示"是 OCR 误读）。
     pub l: f64,
+    /// 倒角范围下限（GB/T 1096 表 1 `s`，按 b 分档；**实画值默认取它**）。
+    pub c_min: f64,
+    /// 倒角范围上限（实画改取上限/中点的切换点见 [`CHAMFER_1096_PICK`]）。
+    pub c_max: f64,
     /// **仅 A 型**：源图印刷的 h（末 4 行为 32/20/22/25，疑源图误印）；B/C 型无。
     #[serde(default)]
     pub h_printed: Option<f64>,
@@ -306,7 +366,9 @@ fn sizes_1096(ty: KeyType) -> Vec<serde_json::Value> {
                 "l_min": allowed.first().copied().unwrap_or(def),
                 "l_max": allowed.last().copied().unwrap_or(def),
                 "lengths": lengths,
-                "extra": format!("h={}；默认 L={}", trim(r.h), trim(def)),
+                "extra": format!(
+                    "h={}；c={}（按 b 分档取范围下限）；默认 L={}",
+                    trim(r.h), trim(chamfer_1096(r)), trim(def)),
             })
         })
         .collect()
@@ -356,15 +418,16 @@ fn type_group_1097() -> serde_json::Value {
 
 /// 1096 族条目的 notes（倒角分档范围、h 误印、L 系列口径）。
 fn notes_1096() -> Vec<String> {
-    // 倒角范围从唯一数据源 `KEY_1096_CHAMFER_RANGES` 拼出（用户口径固定 0.2，范围只留档）。
+    // 倒角档位从唯一数据源 `KEY_1096_CHAMFER_RANGES` 拼出；实画取值默认该档下限。
     let ranges: Vec<String> = KEY_1096_CHAMFER_RANGES
         .iter()
         .map(|(lo, hi, r)| format!("b={}~{} {}", trim(*lo), trim(*hi), r))
         .collect();
     let mut notes = vec![
         format!(
-            "倒角 c 固定 0.2（用户拍板）。注意：GB/T 1096 表 1 的 s（倒角）是按 b 分档的范围：{}\
-             —— 供日后调整参考。",
+            "倒角 c 按 b 分档取**范围下限**（用户 2026-09 定案；档位与范围来自 GB/T 1096 表 1 s 行，\
+             每行 c_min/c_max 在 JSON，实画取值切换点 = CHAMFER_1096_PICK）：{}。\
+             注：specimen b=2 → 0.16；模板 DXF 画 0.2（在 0.16~0.25 内的中间值），属已知有意偏差。",
             ranges.join("；")
         ),
         "L：GB/T 1096-2003 表 1 系列（6、8 依据用户素材补充；在线 L 行自 10 起）；\
@@ -686,7 +749,7 @@ fn gen_1096(ty: KeyType, b: f64, l: f64, view: &str) -> Result<GenPart, String> 
         .ok_or_else(|| format!("GB/T 1096-2003 数据表里没有 b={}", trim(b)))?;
     let l = if l > 0.0 { l } else { row.l };
     check_length_1096(b, l)?;
-    let (h, c) = (row.h, C_1096);
+    let (h, c) = (row.h, chamfer_1096(row));
     let entities = match view {
         "main" => main_1096(ty, b, h, l, c),
         "top" => top_1096(ty, b, l, c),
@@ -1242,29 +1305,32 @@ mod tests {
 
     // ── 1096 specimen b=2、h=2、L=6（模板坐标见 平键_几何反解.md §2）──
 
-    fn exp_1096_main(ty: KeyType) -> Vec<EntityType> {
+    fn exp_1096_main(ty: KeyType, c: f64) -> Vec<EntityType> {
+        let h = 2.0;
+        let hi = h - c;
         let outline: Vec<[f64; 2]> = match ty {
             KeyType::A => vec![
-                [0.0, 0.2], [0.2, 0.0], [5.8, 0.0], [6.0, 0.2],
-                [6.0, 1.8], [5.8, 2.0], [0.2, 2.0], [0.0, 1.8],
+                [0.0, c], [c, 0.0], [6.0 - c, 0.0], [6.0, c],
+                [6.0, hi], [6.0 - c, h], [c, h], [0.0, hi],
             ],
             KeyType::B => vec![
-                [0.0, 0.2], [0.0, 0.0], [6.0, 0.0], [6.0, 0.2],
-                [6.0, 1.8], [6.0, 2.0], [0.0, 2.0], [0.0, 1.8],
+                [0.0, c], [0.0, 0.0], [6.0, 0.0], [6.0, c],
+                [6.0, hi], [6.0, h], [0.0, h], [0.0, hi],
             ],
             KeyType::C => vec![
-                [0.0, 0.2], [0.2, 0.0], [6.0, 0.0], [6.0, 0.2],
-                [6.0, 1.8], [6.0, 2.0], [0.2, 2.0], [0.0, 1.8],
+                [0.0, c], [c, 0.0], [6.0, 0.0], [6.0, c],
+                [6.0, hi], [6.0, h], [c, h], [0.0, hi],
             ],
         };
         vec![
             polyline(&outline, true, LAYER_MAIN),
-            line([0.0, 0.2], [6.0, 0.2], LAYER_MAIN),
-            line([6.0, 1.8], [0.0, 1.8], LAYER_MAIN),
+            line([0.0, c], [6.0, c], LAYER_MAIN),
+            line([6.0, hi], [0.0, hi], LAYER_MAIN),
         ]
     }
 
-    fn exp_1096_top(ty: KeyType) -> Vec<EntityType> {
+    fn exp_1096_top(ty: KeyType, c: f64) -> Vec<EntityType> {
+        let ri = 1.0 - c; // b=2 → R−c
         let mut en = vec![line([-3.0, 0.0], [9.0, 0.0], LAYER_CENTER)];
         match ty {
             KeyType::A => {
@@ -1272,16 +1338,16 @@ mod tests {
                 en.push(arc([5.0, 0.0], 1.0, 270.0, 90.0, LAYER_MAIN));
                 en.push(line([1.0, -1.0], [5.0, -1.0], LAYER_MAIN));
                 en.push(line([5.0, 1.0], [1.0, 1.0], LAYER_MAIN));
-                en.push(line([1.0, -0.8], [5.0, -0.8], LAYER_MAIN));
-                en.push(line([1.0, 0.8], [5.0, 0.8], LAYER_MAIN));
-                en.push(arc([1.0, 0.0], 0.8, 90.0, 270.0, LAYER_MAIN));
-                en.push(arc([5.0, 0.0], 0.8, 270.0, 90.0, LAYER_MAIN));
+                en.push(line([1.0, -ri], [5.0, -ri], LAYER_MAIN));
+                en.push(line([5.0, ri], [1.0, ri], LAYER_MAIN));
+                en.push(arc([1.0, 0.0], ri, 90.0, 270.0, LAYER_MAIN));
+                en.push(arc([5.0, 0.0], ri, 270.0, 90.0, LAYER_MAIN));
             }
             KeyType::B => {
                 en.push(line([0.0, -1.0], [6.0, -1.0], LAYER_MAIN));
                 en.push(line([6.0, 1.0], [0.0, 1.0], LAYER_MAIN));
-                en.push(line([0.0, -0.8], [6.0, -0.8], LAYER_MAIN));
-                en.push(line([0.0, 0.8], [6.0, 0.8], LAYER_MAIN));
+                en.push(line([0.0, -ri], [6.0, -ri], LAYER_MAIN));
+                en.push(line([0.0, ri], [6.0, ri], LAYER_MAIN));
                 en.push(line([6.0, 1.0], [6.0, -1.0], LAYER_MAIN));
                 en.push(line([0.0, 1.0], [0.0, -1.0], LAYER_MAIN));
             }
@@ -1289,19 +1355,19 @@ mod tests {
                 en.push(arc([1.0, 0.0], 1.0, 90.0, 270.0, LAYER_MAIN));
                 en.push(line([1.0, -1.0], [6.0, -1.0], LAYER_MAIN));
                 en.push(line([6.0, 1.0], [1.0, 1.0], LAYER_MAIN));
-                en.push(line([1.0, -0.8], [6.0, -0.8], LAYER_MAIN));
-                en.push(line([1.0, 0.8], [6.0, 0.8], LAYER_MAIN));
-                en.push(arc([1.0, 0.0], 0.8, 90.0, 270.0, LAYER_MAIN));
+                en.push(line([1.0, -ri], [6.0, -ri], LAYER_MAIN));
+                en.push(line([1.0, ri], [6.0, ri], LAYER_MAIN));
+                en.push(arc([1.0, 0.0], ri, 90.0, 270.0, LAYER_MAIN));
                 en.push(line([6.0, 1.0], [6.0, -1.0], LAYER_MAIN));
             }
         }
         en
     }
 
-    fn exp_1096_section() -> Vec<EntityType> {
+    fn exp_1096_section(c: f64) -> Vec<EntityType> {
         let pts = vec![
-            [0.0, 0.2], [0.2, 0.0], [1.8, 0.0], [2.0, 0.2],
-            [2.0, 1.8], [1.8, 2.0], [0.2, 2.0], [0.0, 1.8],
+            [0.0, c], [c, 0.0], [2.0 - c, 0.0], [2.0, c],
+            [2.0, 2.0 - c], [2.0 - c, 2.0], [c, 2.0], [0.0, 2.0 - c],
         ];
         vec![
             polyline(&pts, true, LAYER_MAIN),
@@ -1312,20 +1378,77 @@ mod tests {
 
     #[test]
     fn template_1096_specimen_b2_h2_l6() {
+        // b=2 的倒角档 = 0.16~0.25（GB/T 1096 表 1 `s` 行）；用户 2026-09 口径取**下限 0.16**。
+        // 注意：源模板 DXF 画的是 0.2（在 0.16~0.25 区间内的中间值）→ 已知 0.04mm 有意偏差（举证页偏差④）。
+        let c = 0.16;
+        let row = row_1096(KeyType::A, 2.0).unwrap();
+        assert!(row.c_min <= c && c <= row.c_max, "specimen 的 c 应落在倒角档区间内");
+        assert!((c - row.c_min).abs() < 1e-12, "本库口径：c 取档位下限");
+        assert!(0.2 > row.c_min && 0.2 < row.c_max, "模板的 0.2 在区间内但非下限（分歧留档）");
         for (fam, ty) in [
             ("key_1096_a", KeyType::A),
             ("key_1096_b", KeyType::B),
             ("key_1096_c", KeyType::C),
         ] {
             let main = gen_all(fam, 2.0, 6.0, "main").unwrap();
-            assert_template(&main, &exp_1096_main(ty), &format!("{fam} 主视图"));
+            assert_template(&main, &exp_1096_main(ty, c), &format!("{fam} 主视图"));
             let top = gen_all(fam, 2.0, 6.0, "top").unwrap();
-            assert_template(&top, &exp_1096_top(ty), &format!("{fam} 俯视图"));
+            assert_template(&top, &exp_1096_top(ty, c), &format!("{fam} 俯视图"));
             let sec = gen_all(fam, 2.0, 6.0, "section").unwrap();
-            assert_template(&sec, &exp_1096_section(), &format!("{fam} 剖视图"));
+            assert_template(&sec, &exp_1096_section(c), &format!("{fam} 剖视图"));
             // 剖视图三型逐图元同构（源图实测）。
             assert_eq!(main.meta.spec, "2×2×6", "{fam} 规格文本");
         }
+    }
+
+    /// 倒角按 b 分档 + 默认取档位下限（与 1097 C 同口径）；上下限/中间值可一处切换。
+    #[test]
+    fn chamfer_1096_bands_lower_bound() {
+        // 档位边界与范围原文（GB/T 1096 表 1 s 行）
+        assert_eq!(chamfer_1096_range_for(2.0), Some((2.0, 4.0, "0.16~0.25")));
+        assert_eq!(chamfer_1096_range_for(8.0), Some((5.0, 8.0, "0.25~0.40")));
+        assert_eq!(chamfer_1096_range_for(9.0), None, "b=9 不在任何档");
+        assert_eq!(chamfer_1096_range_for(55.0), None, "b=55 不在任何档");
+        assert_eq!(chamfer_1096_range_for(100.0), Some((80.0, 100.0, "2.50~3.00")));
+        // 默认策略 = 下限；Max/Mid 可切换（改 CHAMFER_1096_PICK 一处）
+        assert_eq!(CHAMFER_1096_PICK, ChamferPick::Min);
+        assert!((chamfer_1096_from_range(0.16, 0.25) - 0.16).abs() < 1e-12);
+        assert!((chamfer_1096_from_range_pick(0.16, 0.25, ChamferPick::Max) - 0.25).abs() < 1e-12);
+        assert!((chamfer_1096_from_range_pick(0.16, 0.25, ChamferPick::Mid) - 0.205).abs() < 1e-12);
+        // 三型 20 档逐行：JSON 的 c_min/c_max = 档位范围，实画 c = 下限
+        for ty in [KeyType::A, KeyType::B, KeyType::C] {
+            let table = table_1096(ty);
+            assert_eq!(table.rows.len(), 20);
+            for r in &table.rows {
+                let (lo, hi, range) = chamfer_1096_range_for(r.b)
+                    .unwrap_or_else(|| panic!("b={} 无倒角档", r.b));
+                assert!(lo <= r.b && r.b <= hi && !range.is_empty());
+                let (want_min, want_max) = match r.b as i64 {
+                    2..=4 => (0.16, 0.25),
+                    5..=8 => (0.25, 0.40),
+                    10..=18 => (0.40, 0.60),
+                    20..=32 => (0.60, 0.80),
+                    36..=50 => (1.00, 1.20),
+                    other => panic!("测试未覆盖 b={other}"),
+                };
+                assert!((r.c_min - want_min).abs() < 1e-12 && (r.c_max - want_max).abs() < 1e-12,
+                    "b={} 的 JSON c_min/c_max 与表 1 s 行不符", r.b);
+                assert!((chamfer_1096(r) - want_min).abs() < 1e-12, "b={} 应取档位下限", r.b);
+            }
+        }
+        // 指名档位断言（用户点名）：b=20 → 0.60、b=50 → 1.00；几何真的按 c 画
+        assert!((chamfer_1096(row_1096(KeyType::A, 20.0).unwrap()) - 0.60).abs() < 1e-12);
+        assert!((chamfer_1096(row_1096(KeyType::A, 50.0).unwrap()) - 1.00).abs() < 1e-12);
+        let p = gen_all("key_1096_a", 20.0, 0.0, "section").unwrap();
+        let pl = p
+            .entities
+            .iter()
+            .find_map(|e| match e {
+                EntityType::LwPolyline(pl) => Some(pl),
+                _ => None,
+            })
+            .expect("剖视图应有轮廓多段线");
+        assert!((pl.vertices[0].location.y - 0.60).abs() < 1e-12, "b=20 剖视图倒角应为 0.60");
     }
 
     // ── 1097 specimen b=8、h=7、L=100（模板见 平键_几何反解.md §3）──
@@ -1590,6 +1713,12 @@ mod tests {
             let table = table_1096(ty);
             assert_eq!(table.rows.len(), 20, "{fam} 应 20 档");
             for r in &table.rows {
+                // 倒角：每一档实画值 = 该档范围下限（用户 2026-09 新口径）。
+                assert!(
+                    (chamfer_1096(r) - r.c_min).abs() < 1e-12,
+                    "{fam} b={} 实画倒角应取档位下限",
+                    r.b
+                );
                 for view in family_views(fam) {
                     let p = gen_all(fam, r.b, 0.0, view)
                         .unwrap_or_else(|e| panic!("{fam} b={} {view}: {e}", r.b));
@@ -1701,6 +1830,11 @@ mod tests {
         assert_eq!(fams["key_1096_a"]["views"][2]["id"], "section");
         assert_eq!(fams["key_1097_a"]["views"][1]["id"], "top");
         assert_eq!(fams["key_1096_a"]["type_group"][1]["id"], "key_1096_b");
+        // 倒角按 b 分档（用户 2026-09）：notes 说“范围下限”，sizes.extra 带实画 c。
+        let notes_1096 = fams["key_1096_a"]["notes"].as_array().unwrap();
+        assert!(notes_1096.iter().any(|n| n.as_str().unwrap_or("").contains("范围下限")));
+        assert!(fams["key_1096_a"]["sizes"][0]["extra"].as_str().unwrap().contains("c=0.16"));
+        assert!(fams["key_1096_a"]["sizes"][16]["extra"].as_str().unwrap().contains("c=1"));
         // 1097 下拉：b=8 的首个 lengths 是合法默认 70；全部 < 10b。
         let s8 = &fams["key_1097_a"]["sizes"][0];
         assert_eq!(s8["d"], 8.0);
