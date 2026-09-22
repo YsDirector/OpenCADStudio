@@ -84,6 +84,16 @@
 //! W_k/M1/M2 全部 ≤2e-3；表外 z 才允许公式，
 //! 反解 x 超 [−0.05,0.45] 或检验表无该 m 档时明确报“请提供对应表页”。
 //!
+//! ## NF E22-141 检查尺寸/公差/配合表
+//!
+//! 数据入库为 `assets/nf_e22141_check.csv`（**399 行 / 10 张表**：p23–p25 检查尺寸、
+//! p26 计算标准-设计尺寸、p27 计算标准-检查尺寸、p29 xm 变动值（微米）、
+//! p31 配合表、p32/p33 检查尺寸公差值、p35 F/F1/G/G1 偏差值；页清单见
+//! `NF-E22-141_检查公差_页清单.md`）。[`nf_check_by_a_m`] / [`nf_check_by_a_n`] 按
+//! `(A, m)` 或 `(A, N)` 取该档检查行（p29 的 A 是直径范围 → 区间包含）；查表命中行
+//! 原样携带 `flags`（可疑格只标不改）。[`build_report`] 第 4 节对 NF 输出上述检查量、
+//! 偏差行（微米，上/下）与页码/表名/source。
+//!
 //! # 二、几何
 //!
 //! * 分度圆 `d=mz`、基圆 `db=d·cosα`、齿厚 `s=mπ/2+2xm·tanα`、齿厚半角
@@ -2390,6 +2400,359 @@ pub fn resolve_nf_by_a(
     }
 }
 
+// ──────────────── NF E22-141 检查尺寸/公差/配合表（assets/nf_e22141_check.csv） ────────────────
+
+/// 入库检查表（`crates/ocs_ocsm/assets/nf_e22141_check.csv`，**399 行 / 10 张表**）：
+/// p23 检查尺寸(m=0.50~1.25) 39 + p24 检查尺寸(m=1.667~3.75) 49 +
+/// p25 检查尺寸(m=5.00~10.00) 56 + p26 计算标准-设计尺寸(m=1.00) 48 +
+/// p27 计算标准-检查尺寸(m=1.00) 49 + p29 公差值-xm的变动值(微米) 14 +
+/// p31 配合表(m=0.50~1.25) 39 + p32 检查尺寸的公差值(m=1.667~2.50) 28 +
+/// p33 检查尺寸的公差值(m=3.75~5.00) 45 + p35 F,F1,G,G1的偏差值(微米) 32。
+///
+/// 来源：`~/桌面/OCSM/review/花键标准资料/NF-E22-141_检查公差表.csv`（页清单见同名
+/// `_页清单.md`）。`page/table_no/source/section/flags` 原样保留；**可疑格只标不改**
+/// （未读行与反推值都在 `flags`），仅 1 处与主尺寸表同源的粘连错格进 [`NF_CHECK_OCR_FIXES`]
+/// —— 与主尺寸表 [`NF_OCR_FIXES`] 同一惯例（CSV 不动，修正只在解析期生效）。
+const NF_E22141_CHECK_CSV: &str = include_str!("../assets/nf_e22141_check.csv");
+
+/// NF 检查表一行（45 列；各表共用列位，空列 = `None`/空串）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct NfCheckRow {
+    /// 源图页码（23/24/25/26/27/29/31/32/33/35）。
+    pub page: u16,
+    /// 页内表名（如 `检查尺寸(m=0.50~1.25)`、`配合表(m=0.50~1.25)`）。
+    pub table_no: String,
+    /// OCR 来源（`p23`…`p35`）。
+    pub source: String,
+    /// 页内子表/分区（如 `m=1.00|m=1.25:L(m=1.0)`、`检查尺寸`）。
+    pub section: String,
+    /// 有效模数：优先 `m` 列；`m` 列为空时取 `section` 末尾 `(m=X)`（p31–p35 偏差表）。
+    pub m: Option<f64>,
+    /// `m` 是否来自 `section`（偏差表左右子表标注）。
+    pub m_from_section: bool,
+    /// 原始 `A` 格（可为 `4~15` 范围 / `110,120,…` 列表 —— p29；这些行 `a` 为 `None`）。
+    pub a_raw: String,
+    /// 数值 `A`（范围/列表格为 `None`，匹配走 [`nf_check_a_matches`]）。
+    pub a: Option<f64>,
+    /// 齿数 N（偏差表有；p29 为空）。
+    pub n: Option<u32>,
+    /// p23–p25/p27 检查尺寸列：跨齿数 K。
+    pub k: Option<f64>,
+    /// K 齿公法线 E。
+    pub e: Option<f64>,
+    /// 外花键量棒直径 U。
+    pub u: Option<f64>,
+    /// 外花键跨量棒距 F。
+    pub f: Option<f64>,
+    /// 外花键跨量棒距 F1。
+    pub f1: Option<f64>,
+    /// 内花键量棒直径 V。
+    pub v: Option<f64>,
+    /// 内花键量棒削边尺寸 V1。
+    pub v1: Option<f64>,
+    /// 内花键量棒跨距 G。
+    pub g: Option<f64>,
+    /// 内花键量棒跨距 G1。
+    pub g1: Option<f64>,
+    /// p26 计算标准-设计尺寸列：齿根圆（平齿根）B。
+    pub b: Option<f64>,
+    /// 变位系数 x。
+    pub x: Option<f64>,
+    /// 分度圆直径 d。
+    pub d: Option<f64>,
+    /// 基圆直径 dB。
+    pub db: Option<f64>,
+    /// 分度圆弧齿厚 s。
+    pub s: Option<f64>,
+    /// 基圆弧齿厚 sB。
+    pub sb: Option<f64>,
+    /// 齿根圆角半径 Rf（平齿根）。
+    pub rf: Option<f64>,
+    /// 齿根圆角半径 Rr（圆齿根）。
+    pub rr: Option<f64>,
+    /// 齿根圆（圆齿根）B2。
+    pub b2: Option<f64>,
+    /// 齿顶倒角高度 h。
+    pub h: Option<f64>,
+    /// 槽底圆角半径 ri。
+    pub ri: Option<f64>,
+    /// p27 右侧 7 列（表头未辨认，位置命名 q1..q7）。
+    pub q: [Option<f64>; 7],
+    /// p29/p31–p35 偏差列（每格 `+上偏差/下偏差`，微米）。
+    pub dev: [String; 10],
+    /// OCR 质量标记（原样保留；可疑格 + 反推值都在这里）。
+    pub flags: String,
+    /// 已应用的 OCR 修正（人类可读，如 `N 192→19`；空 = 未修）。
+    pub fixes: Vec<String>,
+}
+
+/// 一条 NF 检查表 OCR 修正：`key = (page, m, A)`；CSV 原值保留，解析时按 key 修正。
+#[derive(Debug, Clone, Copy)]
+pub struct NfCheckFix {
+    /// 源图页码。
+    pub page: u16,
+    /// 模数 m。
+    pub m: f64,
+    /// 公称直径 A。
+    pub a: f64,
+    /// OCR 读到的印刷 N（用于核对确实命中原行原格）。
+    pub printed_n: u32,
+    /// 修正后的 N。
+    pub fixed_n: u32,
+    /// 判定依据（表内自洽关系 / 主尺寸表同一错格）。
+    pub basis: &'static str,
+}
+
+/// **NF E22-141 检查表已知 OCR 错格修正表**（不篡改入库 CSV；逐条注明依据）。
+pub const NF_CHECK_OCR_FIXES: &[NfCheckFix] = &[NfCheckFix {
+    page: 25,
+    m: 5.0,
+    a: 105.0,
+    printed_n: 192,
+    fixed_n: 19,
+    basis: "192=19 与邻格尾数 2 粘连；同行 E=40.968 按 N=19 公式自洽；主尺寸表 p22 同一错格已在 NF_OCR_FIXES 修",
+}];
+
+impl NfCheckRow {
+    /// 给用户看的来源说明（页码 + 表名 + source + 页内子表）。
+    pub fn source_note(&self) -> String {
+        format!(
+            "p{} 表{}（source={}；{}）",
+            self.page, self.table_no, self.source, self.section
+        )
+    }
+
+    /// 是否为检查尺寸行（p23–p25/p27：有 K/E/U/F/V/G 任一列）。
+    pub fn has_check_dims(&self) -> bool {
+        self.k.is_some()
+            || self.e.is_some()
+            || self.u.is_some()
+            || self.f.is_some()
+            || self.f1.is_some()
+            || self.v.is_some()
+            || self.v1.is_some()
+            || self.g.is_some()
+            || self.g1.is_some()
+    }
+
+    /// 是否为偏差行（p29/p31–p35：有 dev1..dev10 任一格）。
+    pub fn has_deviations(&self) -> bool {
+        self.dev.iter().any(|s| !s.is_empty())
+    }
+}
+
+/// 从 `section`（如 `m=1.00|m=1.25:L(m=1.0)`）末尾的 `(m=X)` 提取有效模数（p31–p35）。
+fn nf_check_section_m(section: &str) -> Option<f64> {
+    let start = section.rfind("(m=")? + 3;
+    let rest = &section[start..];
+    let end = rest.find(')')?;
+    rest[..end]
+        .trim()
+        .parse::<f64>()
+        .ok()
+        .filter(|v| v.is_finite() && *v > 0.0)
+}
+
+/// 解析 NF 检查表 CSV（跳过 `#` 注释与 `page` 表头；缺列/坏值 → 带行号报错）。
+fn parse_nf_check_csv(text: &str) -> Result<Vec<NfCheckRow>, String> {
+    let mut rows = Vec::new();
+    for (i, line) in text.lines().enumerate() {
+        let n = i + 1;
+        if line.trim().is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let f = split_csv_line(line);
+        if f.first().map(|s| s.trim()) == Some("page") {
+            continue; // 表头
+        }
+        if f.len() < 45 {
+            return Err(format!("NF 检查表第 {n} 行只有 {} 列（应有 45 列）", f.len()));
+        }
+        let page = f[0]
+            .trim()
+            .parse::<u16>()
+            .map_err(|_| format!("NF 检查表第 {n} 行 page「{}」非法", f[0]))?;
+        let section = f[3].trim().to_string();
+        let m_col = f[4].trim();
+        let (m, m_from_section) = if m_col.is_empty() {
+            (nf_check_section_m(&section), true)
+        } else {
+            (csv_decimal(m_col), false)
+        };
+        if let Some(m) = m {
+            if !(m.is_finite() && m > 0.0) {
+                return Err(format!("NF 检查表第 {n} 行 m={m} 非正"));
+            }
+        }
+        // A 用普通 f64 解析（不能用 csv_decimal：`110,120` 会被误当成小数点）；
+        // `4~15`/`10-35` 这类范围原样保留、查询时按区间包含匹配。
+        let a_raw = f[5].trim().to_string();
+        let a = a_raw.parse::<f64>().ok().filter(|v| v.is_finite() && *v > 0.0);
+        let n_teeth = f[6].trim().parse::<u32>().ok();
+        let opt = |idx: usize| -> Option<f64> {
+            let s = f[idx].trim();
+            if s.is_empty() {
+                None
+            } else {
+                csv_decimal(s)
+            }
+        };
+        let mut q: [Option<f64>; 7] = [None; 7];
+        for (j, slot) in q.iter_mut().enumerate() {
+            *slot = opt(27 + j);
+        }
+        let dev: [String; 10] = std::array::from_fn(|j| f[34 + j].trim().to_string());
+        rows.push(NfCheckRow {
+            page,
+            table_no: f[1].trim().to_string(),
+            source: f[2].trim().to_string(),
+            section,
+            m,
+            m_from_section,
+            a_raw,
+            a,
+            n: n_teeth,
+            k: opt(18),
+            e: opt(19),
+            u: opt(20),
+            f: opt(21),
+            f1: opt(22),
+            v: opt(23),
+            v1: opt(24),
+            g: opt(25),
+            g1: opt(26),
+            b: opt(7),
+            x: opt(8),
+            d: opt(9),
+            db: opt(10),
+            s: opt(11),
+            sb: opt(12),
+            rf: opt(13),
+            rr: opt(14),
+            b2: opt(15),
+            h: opt(16),
+            ri: opt(17),
+            q,
+            dev,
+            flags: f[44].trim().to_string(),
+            fixes: Vec::new(),
+        });
+        nf_check_apply_fixes(rows.last_mut().expect("刚 push"));
+    }
+    Ok(rows)
+}
+
+/// 对一行应用 [`NF_CHECK_OCR_FIXES`]（key = page/m/A；仅当当前 N 与 `printed_n` 一致时应用）。
+fn nf_check_apply_fixes(row: &mut NfCheckRow) {
+    for fix in NF_CHECK_OCR_FIXES {
+        if row.page != fix.page {
+            continue;
+        }
+        let (Some(m), Some(a)) = (row.m, row.a) else { continue };
+        if (m - fix.m).abs() > NF_M_TOL || (a - fix.a).abs() > NF_A_TOL {
+            continue;
+        }
+        if row.n == Some(fix.printed_n) {
+            row.n = Some(fix.fixed_n);
+            row.fixes.push(format!("N {}→{}", fix.printed_n, fix.fixed_n));
+        }
+    }
+}
+
+static NF_E22141_CHECK_TABLE: OnceLock<Vec<NfCheckRow>> = OnceLock::new();
+
+/// 入库检查表（懒加载；解析失败 panic —— 数据随二进制编译，属构建错误）。
+pub fn nf_check_rows() -> &'static [NfCheckRow] {
+    NF_E22141_CHECK_TABLE.get_or_init(|| {
+        parse_nf_check_csv(NF_E22141_CHECK_CSV)
+            .unwrap_or_else(|e| panic!("NF E22-141 检查表入库数据损坏：{e}"))
+    })
+}
+
+/// 入库检查表按 `(page, table_no)` 的分组统计（首见顺序；页清单核对/测试用）。
+pub fn nf_check_tables() -> Vec<(u16, String, usize)> {
+    let mut out: Vec<(u16, String, usize)> = Vec::new();
+    for r in nf_check_rows() {
+        match out
+            .iter_mut()
+            .find(|(p, t, _)| *p == r.page && *t == r.table_no)
+        {
+            Some((_, _, n)) => *n += 1,
+            None => out.push((r.page, r.table_no.clone(), 1)),
+        }
+    }
+    out
+}
+
+/// `4~15` / `10-35` 形式的直径范围（两端互换时按小-大返回）。
+fn nf_check_range(raw: &str) -> Option<(f64, f64)> {
+    if let Some((l, r)) = raw.split_once('~') {
+        let lo = l.trim().parse::<f64>().ok()?;
+        let hi = r.trim().parse::<f64>().ok()?;
+        return Some(if lo <= hi { (lo, hi) } else { (hi, lo) });
+    }
+    // 首个非首位 `-` 作分隔（p29 的 `10-35`；值均为正）。
+    let idx = raw.char_indices().skip(1).find(|(_, c)| *c == '-')?.0;
+    let lo = raw[..idx].trim().parse::<f64>().ok()?;
+    let hi = raw[idx + 1..].trim().parse::<f64>().ok()?;
+    Some(if lo <= hi { (lo, hi) } else { (hi, lo) })
+}
+
+/// `A` 格是否含给定直径：数值相等（[`NF_A_TOL`]）/ 范围包含 / 逗号列表逐项相等。
+fn nf_check_a_matches(row: &NfCheckRow, a: f64) -> bool {
+    if let Some(av) = row.a {
+        return (av - a).abs() < NF_A_TOL;
+    }
+    let raw = row.a_raw.trim();
+    if raw.is_empty() {
+        return false;
+    }
+    if let Some((lo, hi)) = nf_check_range(raw) {
+        return a >= lo - NF_A_TOL && a <= hi + NF_A_TOL;
+    }
+    if raw.contains(',') {
+        return raw
+            .split(',')
+            .filter_map(|t| t.trim().parse::<f64>().ok())
+            .any(|v| (v - a).abs() < NF_A_TOL);
+    }
+    false
+}
+
+/// **NF E22-141 检查表按 `(A, m)` 查询**：返回该公称直径/模数档的检查尺寸、设计尺寸、
+/// 公差与配合行（p23–p27/p29/p31–p35）。p29 的 `A` 是直径范围 → 按区间包含匹配；
+/// 无命中返回空 `Vec`（报告侧另给覆盖率说明）。
+pub fn nf_check_by_a_m(a: f64, m: f64) -> Vec<NfCheckRow> {
+    nf_check_rows()
+        .iter()
+        .filter(|r| r.m.is_some_and(|mm| (mm - m).abs() < NF_M_TOL))
+        .filter(|r| nf_check_a_matches(r, a))
+        .cloned()
+        .collect()
+}
+
+/// **NF E22-141 检查表按 `(A, N)` 查询**（不限定 m）：返回该直径/齿数档的检查/公差行。
+/// 无命中也返回空 `Vec`（与 [`nf_check_by_a_m`] 一致，错误文案由调用方决定）。
+pub fn nf_check_by_a_n(a: f64, n: u32) -> Vec<NfCheckRow> {
+    nf_check_rows()
+        .iter()
+        .filter(|r| r.n == Some(n))
+        .filter(|r| nf_check_a_matches(r, a))
+        .cloned()
+        .collect()
+}
+
+/// 报告小表辅助：`Some` 时追加 `| label | value |` 行，返回是否有值。
+fn nf_check_push_row(md: &mut String, label: &str, v: Option<f64>) -> bool {
+    match v {
+        Some(v) => {
+            md.push_str(&format!("| {label} | {} |\n", trim(v)));
+            true
+        }
+        None => false,
+    }
+}
+
 // ──────────────── DIN 5480-2 检验尺寸表（M₁/M₂/D_M/k/W_k；assets/din5480_2_inspection.csv） ────────────────
 
 /// 入库检验表（`crates/ocs_ocsm/assets/din5480_2_inspection.csv`，**267 行**）：
@@ -4430,11 +4793,13 @@ fn report_preset_source(std: SplineStd) -> &'static str {
 
 /// **渐开线花键计算书**（Markdown，纯数据、无 IO）：
 /// 输入参数（含单位口径）→ 逐步计算（公式 + 代入数值 + 结果 + 依据来源）→
-/// 派生几何 → 检验尺寸（DIN：M1/M2/D_M/k/W_k + 查表页/source）→ 数据来源与校验
-/// （预设/候选/基准直径来源、恒等式残差、DIN 检验表全表对照）。
+/// 派生几何 → 检验尺寸（DIN：M1/M2/D_M/k/W_k + 查表页/source；
+/// NF：K/E/U/F/F1/V/V1/G/G1 + p26 设计尺寸 + p29/p31–p35 偏差行 + 查表页/source/表名）
+/// → 数据来源与校验（预设/候选/基准直径来源、恒等式残差、DIN 检验表全表对照）。
 ///
 /// `origin` = 解析时 [`resolve_spline`] 给出的基准直径来源（查表行/公式/推导/纠偏）；
-/// DIN 的检验尺寸由本函数按同一 [`inspection_query`] 入口查询，不另算一套几何。
+/// DIN 的检验尺寸由本函数按同一 [`inspection_query`] 入口查询，不另算一套几何；
+/// NF 按 [`nf_check_by_a_m`] 查检查表原样输出（可疑格保留在 `flags`）。
 /// 命令入口：`OCSMGEAR … report` / `OCSMSHAFT INVOLSPLINE … report`。
 pub fn build_report(params: &InvolParams, origin: Option<&D_bOrigin>, h: f64) -> String {
     let e = params;
@@ -4850,8 +5215,117 @@ pub fn build_report(params: &InvolParams, origin: Option<&D_bOrigin>, h: f64) ->
 
     // ── 4. 检验尺寸 ──
     md.push_str("## 4. 检验尺寸\n\n");
-    if std != SplineStd::DIN {
-        md.push_str("本体系无入库检验尺寸表（DIN 5480-2 检验表只覆盖 DIN 预设）。\n\n");
+    if std == SplineStd::NF {
+        let a = e.a.unwrap_or_else(|| a_from_x(e.m, e.z, e.x));
+        let all = nf_check_by_a_m(a, e.m);
+        let rows: Vec<NfCheckRow> = all
+            .iter()
+            .filter(|r| r.n.is_none() || r.n == Some(e.z))
+            .cloned()
+            .collect();
+        if rows.is_empty() {
+            if all.is_empty() {
+                md.push_str(&format!(
+                    "NF E22-141 检查表没有该档（A={}、m={}、N={}）；已入库检查表覆盖 \
+                     p23–p27/p29/p31–p33/p35（`assets/nf_e22141_check.csv`，399 行）。\n\n",
+                    trim(a),
+                    trim(e.m),
+                    e.z
+                ));
+            } else {
+                let mut ns: Vec<u32> = all.iter().filter_map(|r| r.n).collect();
+                ns.sort_unstable();
+                ns.dedup();
+                md.push_str(&format!(
+                    "NF E22-141 检查表：A={}、m={} 有行但 N={} 未命中；同档 N 变体：{}。\n\n",
+                    trim(a),
+                    trim(e.m),
+                    e.z,
+                    ns.iter().map(|v| v.to_string()).collect::<Vec<_>>().join("、")
+                ));
+            }
+        } else {
+            md.push_str(&format!(
+                "NF E22-141 检查表命中 {} 行（`assets/nf_e22141_check.csv`，共 {} 行/10 张表；\
+                 页清单 `NF-E22-141_检查公差_页清单.md`）。\n\n",
+                rows.len(),
+                nf_check_rows().len()
+            ));
+            // 检查尺寸（p23–p25/p27；p27 另带 q1..q7 位置列）。
+            for r in rows.iter().filter(|r| r.has_check_dims()) {
+                md.push_str(&format!(
+                    "### p{} {}（source={}；{}）\n\n",
+                    r.page, r.table_no, r.source, r.section
+                ));
+                md.push_str("| 量 | 值 |\n|---|---|\n");
+                let mut any = false;
+                for (label, v) in [
+                    ("跨齿数 K", r.k),
+                    ("K 齿公法线 E", r.e),
+                    ("外花键量棒直径 U", r.u),
+                    ("外花键跨量棒距 F", r.f),
+                    ("外花键跨量棒距 F1", r.f1),
+                    ("内花键量棒直径 V", r.v),
+                    ("内花键量棒削边 V1", r.v1),
+                    ("内花键量棒跨距 G", r.g),
+                    ("内花键量棒跨距 G1", r.g1),
+                ] {
+                    any |= nf_check_push_row(&mut md, label, v);
+                }
+                for (i, qv) in r.q.iter().enumerate() {
+                    any |= nf_check_push_row(&mut md, &format!("q{}（表头未辨认）", i + 1), *qv);
+                }
+                if !any {
+                    md.push_str("| — | — |\n");
+                }
+                md.push('\n');
+            }
+            // 计算标准-设计尺寸（p26）。
+            for r in rows.iter().filter(|r| r.page == 26) {
+                md.push_str(&format!(
+                    "### p{} {}（source={}；{}）\n\n",
+                    r.page, r.table_no, r.source, r.section
+                ));
+                md.push_str("| 量 | 值 |\n|---|---|\n");
+                let mut any = false;
+                for (label, v) in [
+                    ("分度圆 d", r.d),
+                    ("基圆 dB", r.db),
+                    ("变位系数 x", r.x),
+                    ("分度圆弧齿厚 s", r.s),
+                    ("基圆弧齿厚 sB", r.sb),
+                    ("齿根圆 B（平齿根）", r.b),
+                    ("齿根圆 B2（圆齿根）", r.b2),
+                    ("齿根圆角 Rf", r.rf),
+                    ("齿根圆角 Rr", r.rr),
+                    ("齿顶倒角高度 h", r.h),
+                    ("槽底圆角 ri", r.ri),
+                ] {
+                    any |= nf_check_push_row(&mut md, label, v);
+                }
+                if !any {
+                    md.push_str("| — | — |\n");
+                }
+                md.push('\n');
+            }
+            // 公差/配合偏差（p29/p31–p35；每格 `+上偏差/下偏差`，微米）。
+            for r in rows.iter().filter(|r| r.has_deviations()) {
+                let devs = r
+                    .dev
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, s)| !s.is_empty())
+                    .map(|(i, s)| format!("dev{}={s}", i + 1))
+                    .collect::<Vec<_>>()
+                    .join("、");
+                md.push_str(&format!("- 偏差（微米，上/下）：{devs}；{}。\n", r.source_note()));
+            }
+            md.push('\n');
+        }
+    } else if std != SplineStd::DIN {
+        md.push_str(
+            "本体系无入库检验尺寸表（DIN 5480-2 检验表覆盖 DIN 预设；NF E22-141 检查表覆盖 NF）。\n\n",
+        );
     } else {
         let d_b = e.d_b.unwrap_or_else(|| d_b_from_x(e.m, e.z, e.x));
         match inspection_query(d_b, e.m, e.z) {
@@ -7409,6 +7883,269 @@ mod tests {
         assert_eq!(suspects, 9, "疑原表印误应恰好 9 格（NF_SUSPECTED_SOURCE_ERRORS）");
         // 未命中印误清单的格都在各自列容差内（最宽 0.6 为只印到个位的齿根圆列）。
         assert!(worst <= 0.6, "非印误格最大残差 {worst} 超出排版精度");
+    }
+
+    // ── NF E22-141 检查尺寸/公差/配合表（assets/nf_e22141_check.csv）──
+
+    /// 检查表入库形状：399 行 / 10 张表，行数与表名逐张与 `_页清单.md` 一致；
+    /// 开头 40 行 `#` 注释与表头都不进数据（页号从 p23 起）；偏差表模数从 `section` 解出。
+    #[test]
+    fn nf_check_table_shape_and_tables() {
+        let rows = nf_check_rows();
+        assert_eq!(rows.len(), 399, "入库 399 行（页清单合计）");
+        let want: &[(u16, &str, usize)] = &[
+            (23, "检查尺寸(m=0.50~1.25)", 39),
+            (24, "检查尺寸(m=1.667~3.75)", 49),
+            (25, "检查尺寸(m=5.00~10.00)", 56),
+            (26, "计算标准-设计尺寸(m=1.00)", 48),
+            (27, "计算标准-检查尺寸(m=1.00)", 49),
+            (29, "公差值-xm的变动值(微米)", 14),
+            (31, "配合表(m=0.50~1.25)", 39),
+            (32, "检查尺寸的公差值(m=1.667~2.50)", 28),
+            (33, "检查尺寸的公差值(m=3.75~5.00)", 45),
+            (35, "F,F1,G,G1的偏差值(微米)", 32),
+        ];
+        let tables = nf_check_tables();
+        assert_eq!(tables.len(), want.len(), "10 张表：{tables:?}");
+        for (i, (p, name, n)) in want.iter().enumerate() {
+            assert_eq!(tables[i].0, *p, "第 {i} 张表页号");
+            assert_eq!(tables[i].1, *name, "第 {i} 张表名");
+            assert_eq!(tables[i].2, *n, "第 {i} 张表行数");
+        }
+        // `#` 注释/表头不得混入（注释 40 行全在数据前；页清单合计 399）。
+        assert!(rows.iter().all(|r| r.page >= 23 && !r.table_no.starts_with('#')));
+        // 分类计数：检查尺寸 193（p23/24/25/27）+ 设计尺寸 48（p26）+ 偏差 158（p29/31/32/33/35）。
+        assert_eq!(rows.iter().filter(|r| r.has_check_dims()).count(), 193);
+        assert_eq!(rows.iter().filter(|r| r.page == 26).count(), 48);
+        assert_eq!(rows.iter().filter(|r| r.has_deviations()).count(), 158);
+        // flags 原样保留：页清单总计 201 行带 flags（p23–p29 的 merged/recheck 也计入）。
+        assert_eq!(rows.iter().filter(|r| !r.flags.is_empty()).count(), 201);
+        // 1 处与主尺寸表同源的粘连错格在解析期修正（CSV 原值不动）。
+        assert_eq!(
+            rows.iter().map(|r| r.fixes.len()).sum::<usize>(),
+            NF_CHECK_OCR_FIXES.len(),
+            "OCR 修正应逐条生效：{NF_CHECK_OCR_FIXES:?}"
+        );
+        let p25_105 = rows
+            .iter()
+            .find(|r| r.page == 25 && r.a == Some(105.0))
+            .expect("p25 A=105");
+        assert_eq!(p25_105.n, Some(19), "N 192→19（与主表 p22 同一错格）");
+        assert_eq!(p25_105.fixes, vec!["N 192→19".to_string()]);
+        // 检查尺寸表模数在 `m` 列；偏差表在 `section` 末尾的 `(m=X)`。
+        let p23 = rows.iter().find(|r| r.page == 23).expect("p23 首行");
+        assert_eq!(p23.m, Some(0.5));
+        assert!(!p23.m_from_section);
+        let p31 = rows.iter().find(|r| r.page == 31).expect("p31 首行");
+        assert_eq!(p31.m, Some(0.5));
+        assert!(p31.m_from_section, "偏差表模数应从 section 解出：{p31:?}");
+        // 页清单把 p31–p35 拆成左右子表：按 `section` 逐个子表核行数。
+        let section_rows = |section: &str| rows.iter().filter(|r| r.section == section).count();
+        for (section, n) in [
+            ("m=0.50|m=0.75:L(m=0.5)", 9),
+            ("m=0.50|m=0.75:R(m=0.75)", 9),
+            ("m=1.00|m=1.25:L(m=1.0)", 10),
+            ("m=1.00|m=1.25:R(m=1.25)", 11),
+            ("m=1.667|m=2.50:L(m=1.667)", 11),
+            ("m=1.667|m=2.50:R(m=2.5)", 17),
+            ("m=3.75|m=5.00:L(m=3.75)", 21),
+            ("m=3.75|m=5.00:R(m=5.0)", 24),
+            ("m=7.50|m=10.00:L(m=7.5)", 15),
+            ("m=7.50|m=10.00:R(m=10.0)", 17),
+        ] {
+            assert_eq!(section_rows(section), n, "子表 {section} 行数");
+        }
+        // 列名逐列照抄源表头（解析按列位，列序变了必须报错）。
+        let header = NF_E22141_CHECK_CSV
+            .lines()
+            .find(|l| !l.trim().is_empty() && !l.starts_with('#'))
+            .expect("CSV 表头");
+        let cols = split_csv_line(header);
+        assert_eq!(cols.len(), 45, "45 列：{cols:?}");
+        let want_cols = [
+            "page", "table_no", "source", "section", "m", "A", "N", "B", "x", "d", "dB",
+            "s", "sB", "Rf", "Rr", "B2", "h", "ri", "K", "E", "U", "F", "F1", "V",
+            "V1", "G", "G1", "q1", "q2", "q3", "q4", "q5", "q6", "q7", "dev1",
+            "dev2", "dev3", "dev4", "dev5", "dev6", "dev7", "dev8", "dev9", "dev10",
+            "flags",
+        ];
+        for (i, (got, want)) in cols.iter().zip(want_cols).enumerate() {
+            assert_eq!(got.trim(), want, "第 {i} 列名");
+        }
+    }
+
+    /// 抽样查询：p23/p26/p27 检查行、p31 配合行、p29 范围 A 行都能按 (A,m)/(A,N) 命中。
+    #[test]
+    fn nf_check_lookup_hits_samples() {
+        // p23 m=0.50 A=4 N=6：检查尺寸 K/E/U/F/V/V1/G/G1。
+        let p23 = nf_check_by_a_m(4.0, 0.5)
+            .into_iter()
+            .find(|r| r.page == 23)
+            .expect("p23 A=4 m=0.5");
+        assert_eq!(p23.k, Some(2.0));
+        assert!((p23.e.unwrap() - 2.530).abs() < 1e-9);
+        assert!((p23.u.unwrap() - 0.90).abs() < 1e-9);
+        assert!((p23.f.unwrap() - 4.702).abs() < 1e-9);
+        assert!((p23.v.unwrap() - 1.0).abs() < 1e-9);
+        assert!((p23.v1.unwrap() - 0.84).abs() < 1e-9);
+        assert!((p23.g1.unwrap() - 2.033).abs() < 1e-9);
+        // (A,N) 查询不限 m。
+        assert!(nf_check_by_a_n(4.0, 6)
+            .iter()
+            .any(|r| r.page == 23 && r.m == Some(0.5)));
+        // p26 m=1.00 A=8 N=6 设计尺寸。
+        let p26 = nf_check_by_a_m(8.0, 1.0)
+            .into_iter()
+            .find(|r| r.page == 26)
+            .expect("p26 A=8 m=1");
+        assert!((p26.b.unwrap() - 5.6).abs() < 1e-9);
+        assert!((p26.x.unwrap() - 0.800).abs() < 1e-9);
+        assert!((p26.d.unwrap() - 6.0).abs() < 1e-9);
+        assert!((p26.db.unwrap() - 5.638156).abs() < 1e-9);
+        assert!((p26.b2.unwrap() - 5.306).abs() < 1e-9);
+        // p27 m=1.00 A=8 N=6：q1..q7 位置列。
+        let p27 = nf_check_by_a_m(8.0, 1.0)
+            .into_iter()
+            .find(|r| r.page == 27)
+            .expect("p27 A=8 m=1");
+        assert!((p27.e.unwrap() - 5.059463).abs() < 1e-9);
+        assert_eq!(p27.q[0], Some(1.0));
+        assert!((p27.q[1].unwrap() - 1.462).abs() < 1e-9);
+        assert!((p27.q[5].unwrap() - 2.712).abs() < 1e-9);
+        // p31 配合表（m 由 section 解出）：A=4 N=6 dev1=+68/0。
+        let p31 = nf_check_by_a_m(4.0, 0.5)
+            .into_iter()
+            .find(|r| r.page == 31)
+            .expect("p31 A=4 m=0.5");
+        assert_eq!(p31.dev[0], "+68/0");
+        assert_eq!(p31.dev[2], "-89/-148");
+        // p29 的 A 是直径范围（4~15 含 5）；m=0.50。
+        let p29 = nf_check_by_a_m(5.0, 0.5)
+            .into_iter()
+            .find(|r| r.page == 29)
+            .expect("p29 范围 4~15 含 A=5");
+        assert_eq!(p29.a_raw, "4~15");
+        assert_eq!(p29.dev[0], "+25/0");
+        // 范围外/表外无命中（返回空 Vec，由报告侧给覆盖率说明）。
+        assert!(nf_check_by_a_m(1000.0, 0.5).is_empty());
+        assert!(nf_check_by_a_n(1000.0, 6).is_empty());
+    }
+
+    /// 与主尺寸表 `nf_e22141_dims.csv` 按 `(m,A,N)` 交叉：三重命中 311、主表缺 72（p26/p27 的
+    /// 中间/次系列）、A 命中但 N 不一致 2（只报告不改）、p29 范围行 14；命中行 d 逐行一致。
+    #[test]
+    fn nf_check_cross_main_dims() {
+        let mut exact = 0usize;
+        let mut absent = 0usize;
+        let mut n_mismatch = 0usize;
+        let mut ranged = 0usize;
+        let mut d_checked = 0usize;
+        let mut d_bad = 0usize;
+        let mut mismatch_list = Vec::new();
+        for r in nf_check_rows() {
+            let (Some(a), Some(n)) = (r.a, r.n) else {
+                ranged += 1;
+                continue;
+            };
+            let Some(m) = r.m else { continue };
+            let hits: Vec<&NfE22141Row> = nf_e22141_rows()
+                .iter()
+                .filter(|d| {
+                    (d.m - m).abs() < NF_M_TOL && (d.a - a).abs() < NF_A_TOL && d.z == n
+                })
+                .collect();
+            match hits.first() {
+                Some(_) => {
+                    exact += 1;
+                    // 同一 (m,A,N) 可能有 p18（只有 D 列）与 p20/p21/p22（整行）两条：
+                    // 带 d 的那条对 d。
+                    if let Some(cd) = r.d {
+                        let ds: Vec<f64> = hits.iter().filter_map(|d| d.d).collect();
+                        if !ds.is_empty() {
+                            d_checked += 1;
+                            if !ds.iter().any(|md| (cd - md).abs() <= 5e-4) {
+                                d_bad += 1;
+                            }
+                        }
+                    }
+                }
+                None => {
+                    let a_hit = nf_e22141_rows().iter().any(|d| {
+                        (d.m - m).abs() < NF_M_TOL && (d.a - a).abs() < NF_A_TOL
+                    });
+                    if a_hit {
+                        n_mismatch += 1;
+                        mismatch_list.push(format!(
+                            "p{} m={} A={} N={}",
+                            r.page,
+                            trim(m),
+                            trim(a),
+                            n
+                        ));
+                    } else {
+                        absent += 1;
+                    }
+                }
+            }
+        }
+        assert_eq!(ranged, 14, "p29 的 A 为范围/列表");
+        assert_eq!(exact, 311, "与主尺寸表 (m,A,N) 三重命中");
+        assert_eq!(absent, 72, "p26/p27 的中间系列 A 在主表没有");
+        assert_eq!(n_mismatch, 2, "A 命中但 N 不一致：{}", mismatch_list.join("；"));
+        assert_eq!(d_checked, 12, "检查表带 d 的命中行（p26 两块）");
+        assert_eq!(d_bad, 0, "命中的 d 应逐行一致");
+        // 两处 N 不一致保留 OCR 原值（只报告）：p24 m=1.667 A=55、p25 m=7.50 A=180。
+        assert!(mismatch_list
+            .iter()
+            .any(|s| s.contains("p24") && s.contains("1.667") && s.contains("A=55")));
+        assert!(mismatch_list
+            .iter()
+            .any(|s| s.contains("p25") && s.contains("7.5") && s.contains("A=180")));
+    }
+
+    /// NF 计算书第 4 节：输出检查尺寸（K/E/U/F…）+ p26 设计尺寸 + 偏差行（微米，上/下）
+    /// + 页/表/source 来源；表外档明确报“没有该档”而不是静默。
+    #[test]
+    fn report_nf_carries_check_dimensions_and_source() {
+        // m=3.75 A=80 N=19：p24 检查尺寸 + p33/p29 偏差行命中。
+        let (p, origin) = resolve_nf_by_a(80.0, Some(3.75), Some(19), None, "NF平齿根").unwrap();
+        let md = build_report(&p, Some(&origin), 30.0);
+        assert!(md.contains("## 4. 检验尺寸"), "{md}");
+        assert!(md.contains("NF E22-141 检查表命中"), "{md}");
+        assert!(md.contains("assets/nf_e22141_check.csv"), "{md}");
+        for needle in [
+            "p24",
+            "检查尺寸(m=1.667~3.75)",
+            "source=p24",
+            "跨齿数 K",
+            "K 齿公法线 E",
+            "外花键跨量棒距 F",
+            "p33",
+            "检查尺寸的公差值(m=3.75~5.00)",
+            "p29",
+            "dev1=",
+        ] {
+            assert!(md.contains(needle), "NF 计算书缺 `{needle}`：\n{md}");
+        }
+        // m=1.0 A=8 N=6：p23 检查尺寸 + p26 设计尺寸 + p27 检查尺寸(q 列) + p31 配合表 + p29 范围。
+        let (p1, _) = resolve_nf_by_a(8.0, Some(1.0), Some(6), None, "NF平齿根").unwrap();
+        let md1 = build_report(&p1, None, 30.0);
+        for needle in [
+            "p23",
+            "检查尺寸(m=0.50~1.25)",
+            "计算标准-设计尺寸(m=1.00)",
+            "计算标准-检查尺寸(m=1.00)",
+            "配合表(m=0.50~1.25)",
+            "q1（表头未辨认）",
+            "dev1=+68/0",
+            "source=p31",
+        ] {
+            assert!(md1.contains(needle), "NF 计算书缺 `{needle}`：\n{md1}");
+        }
+        // 表外档（A=1000 超出 p29 各范围）→ 明确“没有该档”。
+        let (p2, _) = resolve_nf_by_a(1000.0, Some(3.75), None, None, "NF平齿根").unwrap();
+        let md2 = build_report(&p2, None, 30.0);
+        assert!(md2.contains("NF E22-141 检查表没有该档"), "{md2}");
     }
 
     /// DIN 名义表全 721 行：`e₂/s₁`、`d_b=d·cos30°`、`d_B=d+1.1m+2x₁m` 三式逐行对账
