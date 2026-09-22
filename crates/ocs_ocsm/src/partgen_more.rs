@@ -833,12 +833,14 @@ pub fn families_json() -> serde_json::Map<String, serde_json::Value> {
 
 /// 派发（三族 × 三视图）。未命中返回 None，由调用方给通用错误。
 pub fn generate(family: &str, d: f64, l: f64, view: &str) -> Option<Result<GenPart, String>> {
-    // 第四批起的族自带完整实现（含视图校验），先问它们（partgen_b1…b4 的 `generate`）
+    // 第四批起的族自带完整实现（含视图校验），先问它们（partgen_b1…b4 的 `generate`；
+    // 平键 partgen_keys 同批走同一入口）
     for f in [
         crate::partgen_b1::generate,
         crate::partgen_b2::generate,
         crate::partgen_b3::generate,
         crate::partgen_b4::generate,
+        crate::partgen_keys::generate,
     ] {
         if let Some(r) = f(family, d, l, view) {
             return Some(r);
@@ -1697,6 +1699,7 @@ pub fn family_views(family: &str) -> Vec<&'static str> {
         crate::partgen_b2::family_views,
         crate::partgen_b3::family_views,
         crate::partgen_b4::family_views,
+        crate::partgen_keys::family_views,
     ] {
         let views = f(family);
         if !views.is_empty() {

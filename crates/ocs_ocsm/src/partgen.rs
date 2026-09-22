@@ -852,6 +852,7 @@ pub fn catalog_json() -> String {
         .chain(crate::partgen_b2::families_json())
         .chain(crate::partgen_b3::families_json())
         .chain(crate::partgen_b4::families_json())
+        .chain(crate::partgen_keys::families_json())
         .chain(crate::detail::families_json())
     {
         fam_map.insert(k, v);
@@ -1060,6 +1061,9 @@ pub fn family_kind(family: &str) -> &'static str {
         "washer"
     } else if family.starts_with("pin_") {
         "pin"
+    } else if family.starts_with("key_") {
+        // 平键（GB/T 1096/1097）：键不是销、也不是紧固螺纹件，单独一类。
+        "key"
     } else if family.starts_with("ring_") {
         "ring"
     } else if family.starts_with("bearing_") {
@@ -1129,6 +1133,7 @@ pub fn generate(family: &str, d: f64, l: f64, view: &str) -> Result<GenPart, Str
         crate::partgen_b2::generate,
         crate::partgen_b3::generate,
         crate::partgen_b4::generate,
+        crate::partgen_keys::generate,
     ] {
         if let Some(r) = f(family, d, l, view) {
             return r;

@@ -3923,7 +3923,7 @@ pub const COMMAND_CATALOG: &[(&str, &str, &str)] = &[
     ("1 … 10", "数字键", "切当前图层；有选中对象时把对象移到该层"),
     ("OCSMFRAMEINIT", "TF", "图框：不带参数=打开图框选择窗口；带参数=一行直插（`TF a3_landscape 1:2 at 0,0 [rot 度]`）"),
     ("OCSMFRAMEINSERT", "", "按所选图框 + 比例插入（光标跟随，比例感知标注样式）；也可带参数直插（同 TF）"),
-    ("OCSMPART", "XL", "标准件/结构要素插入：不带参数=开零件库窗口（左「标准件」树 + 右「结构要素」树）+放置态；带参数=一行直插（标准件 `XL 族 d l [view …] [at x,y] [rot 度]`；结构要素 `XL detail_grind_od d [b1 值] [at x,y] [rot 度]`；外螺纹退刀槽 `XL detail_thread_relief d P 螺距 [g1 值 g2 值 dg 值 r 值 alpha 值] [at x,y] [rot 度]`；渐开线花键 `XL detail_invol_spline GB30R M3 Z20 [X0.2] L30 [view front|side|section]`，预设代号 GB30P/GB30R/GB375R/GB45R/DIN30）"),
+    ("OCSMPART", "XL", "标准件/结构要素插入：不带参数=开零件库窗口（左「标准件」树 + 右「结构要素」树）+放置态；带参数=一行直插（标准件 `XL 族 d l [view …] [at x,y] [rot 度]`；结构要素 `XL detail_grind_od d [b1 值] [at x,y] [rot 度]`；外螺纹退刀槽 `XL detail_thread_relief d P 螺距 [g1 值 g2 值 dg 值 r 值 alpha 值] [at x,y] [rot 度]`；渐开线花键 `XL detail_invol_spline GB30R M3 Z20 [X0.2] L30 [view front|side|section]`，预设代号 GB30P/GB30R/GB375R/GB45R/DIN30；平键 `XL key_1096_{a|b|c} b L`、`XL key_1097_{a|b} b L`（d 槽位=键宽 b，L 省略/0=该档默认，L 须 ∈ 标准系列且 L<10b））"),
     ("OCSMJOINT", "", "螺栓副装配：不带参数=开装配窗口+放置态；带参数=一行直装（件链算长度、遮挡裁剪、一次撤销）"),
     ("OCSMPOWERDIM", "D", "智能标注：拾取点模式标线性/对齐/半径/直径（Enter 切线段点选）"),
     ("OCSMDIMGULIDE", "GDIM", "引导线标注：选引导线 → 配置窗口（尺寸/剖视/向视/局部放大/角度/弧长/焊接/引线/序号/公差/粗糙度/形位公差）"),
@@ -8779,6 +8779,45 @@ mod tests {
         );
     }
 
+    /// 零件库窗口：每个 `el("id")` 引用都必须在 HTML 里有对应元素；脚本过 `node --check`。
+    /// （平键新增 `typeFields/typeSel` 型别下拉后补，与轴/齿轮窗口同一道护栏。）
+    #[test]
+    fn parts_gui_el_ids_exist_and_script_passes_node_check() {
+        let ids = el_id_references(PARTS_HTML);
+        assert!(!ids.is_empty(), "应扫到 el(\"…\") 引用");
+        for id in &ids {
+            assert!(
+                PARTS_HTML.contains(&format!("id=\"{id}\""))
+                    || PARTS_HTML.contains(&format!("id='{id}'")),
+                "parts_gui.html: JS 里用了 el(\"{id}\")，但没有这个 id 的元素（开局 TypeError）"
+            );
+        }
+        // 平键型别下拉的关键控件/数据键（防后续重构把入口弄丢）。
+        for key in ["typeFields", "typeSel", "type_group", "pickFamily"] {
+            assert!(PARTS_HTML.contains(key), "parts_gui.html 缺平键型别下拉要素：{key}");
+        }
+        // node --check：语法错误能过静态 id 扫描但会在浏览器里炸；没装 node 就跳过。
+        let Some(script) = first_script(PARTS_HTML) else {
+            panic!("parts_gui.html 里找不到 <script> 块");
+        };
+        let path = std::env::temp_dir().join("ocsm_parts_gui_check.js");
+        std::fs::write(&path, script).expect("写脚本临时文件");
+        let out = match std::process::Command::new("node")
+            .arg("--check")
+            .arg(&path)
+            .output()
+        {
+            Ok(o) => o,
+            Err(_) => return, // 无 node：跳过（不阻塞 CI）
+        };
+        assert!(
+            out.status.success(),
+            "parts_gui.html 脚本 node --check 失败：\n{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
     /// 齿轮/花键窗口：每个 `el("id")` 引用都必须在 HTML 里有对应元素；脚本过 `node --check`。
     #[test]
     fn gear_gui_el_ids_exist_and_script_passes_node_check() {
@@ -8847,6 +8886,29 @@ mod tests {
         assert!(
             out.status.success(),
             "轴 GUI 行为冒烟失败：\n{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    /// 标准件库窗口行为冒烟（node + 最小 DOM 垫片 + fetch 桩）：锁住平键「型别下拉（A/B/C）」
+    /// 的交互契约——目录 `type_group` → 下拉渲染；change 切族 → 树高亮/视图/规格联动；
+    /// 无 `type_group` 的族隐藏下拉。node 缺失时跳过。
+    #[test]
+    fn parts_gui_type_dropdown_smoke_with_node() {
+        let manifest = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let js = manifest.join("tests/parts_gui_smoke.mjs");
+        let html = manifest.join("src/parts_gui.html");
+        if !js.exists() {
+            return;
+        }
+        let out = match std::process::Command::new("node").arg(&js).arg(&html).output() {
+            Ok(o) => o,
+            Err(_) => return, // 无 node：跳过（不阻塞 CI）
+        };
+        assert!(
+            out.status.success(),
+            "标准件库 GUI 行为冒烟失败：\n{}{}",
             String::from_utf8_lossy(&out.stdout),
             String::from_utf8_lossy(&out.stderr)
         );
@@ -8953,6 +9015,10 @@ mod tests {
                 let rest = &html[i + needle.len()..];
                 let Some(end) = rest.find(quote) else { continue };
                 let id = &rest[..end];
+                // 动态拼接（`el("p_" + it.key)`）不是静态 id，跳过（parts_gui 的参数面板用）。
+                if rest[end + 1..].trim_start().starts_with('+') {
+                    continue;
+                }
                 if !id.is_empty()
                     && !id.contains('+')
                     && !out.iter().any(|v| v == id)
@@ -13579,6 +13645,32 @@ mod weld_tests {
         }
         // 视图名中文文案（GUI 按钮）
         assert!(cat.contains("剖视图") && cat.contains("俯视图"), "视图名文案缺失");
+        // 平键五族（GB/T 1096 A/B/C + GB/T 1097 A/B）：目录登记 + 型别下拉 + 预览/校验
+        for fam in ["key_1096_a", "key_1096_b", "key_1096_c", "key_1097_a", "key_1097_b"] {
+            assert!(cat.contains(fam), "目录缺平键族 {fam}");
+        }
+        assert!(cat.contains("\"type_group\"") && cat.contains("A型（双圆头）"), "型别下拉数据缺失");
+        assert!(html.contains("typeFields") && html.contains("typeSel"), "平键型别下拉控件缺失");
+        for (fam, d, l, views) in [
+            ("key_1096_a", 4.0, 8.0, vec!["main", "top", "section"]),
+            ("key_1096_b", 2.0, 6.0, vec!["main", "top", "section"]),
+            ("key_1096_c", 2.0, 6.0, vec!["main", "top", "section"]),
+            ("key_1097_a", 8.0, 70.0, vec!["main", "top"]),
+            ("key_1097_b", 8.0, 70.0, vec!["main", "top"]),
+        ] {
+            for view in views {
+                let u = format!("/api/part_svg?family={fam}&d={d}&l={l}&view={view}");
+                let svg = http_req(server.port, "GET", &u, "");
+                assert!(svg.contains("<svg") && !svg.contains("\"error\""), "{fam}/{view} 预览：{svg}");
+                assert!(svg.contains("GB/T 109"), "{fam}/{view} 标题：{svg}");
+            }
+        }
+        let bad = http_req(server.port, "GET", "/api/part_svg?family=key_1096_a&d=2&l=6&view=end", "");
+        assert!(bad.contains("error"), "平键不支持视图应报错：{bad}");
+        let bad = http_req(server.port, "GET", "/api/part_svg?family=key_1097_a&d=8&l=100&view=main", "");
+        assert!(bad.contains("error") && bad.contains("10"), "1097 L=100 对 b=8 应报 L<10b：{bad}");
+        let svg = http_req(server.port, "GET", "/api/part_svg?family=key_1097_a&d=8&l=0&view=main", "");
+        assert!(svg.contains("8×7×70"), "1097 b=8 省略 L 应默认 70：{svg}");
         // 销族树标签
         assert!(cat.contains("圆柱销 A型 GB/T 119.1-2000") && cat.contains("内螺纹圆柱销 GB/T 120.1-2000"));
         // 螺栓副 GUI 页：关键控件都在（件链编辑器 / 实时预览 / 装配按钮 / 防松模板）

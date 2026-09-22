@@ -34,6 +34,7 @@ mod partgen_b2;
 mod partgen_b3;
 mod partgen_b4;
 mod partgen_kit;
+mod partgen_keys;
 mod partgen_more;
 mod shaft;
 mod spline;
@@ -756,6 +757,9 @@ fn place_one(
 ///   正视图不需要 L；`CHECK` 时 DIN 预设附带检验尺寸 M₁/M₂/D_M/k/W_k，默认不开、行为不变。
 /// - **外螺纹退刀槽**（`detail_thread_relief`）：`<族> <d> P <螺距> [g1 值 g2 值 dg 值 r 值 alpha 值] [at x,y] [rot 度]`
 ///   例：`OCSMPART detail_thread_relief 20 P 1.5`（P 必给，其余可选，见 `detail.rs` 表 2）。
+/// - **平键**（`key_1096_{a,b,c}` = GB/T 1096 三型；`key_1097_{a,b}` = GB/T 1097 两型）：
+///   `<族> <b> <L> [view 视图] [at x,y] [rot 度]`（`d` 槽位承载键宽 b，h 查表派生；`l=0` = 该档默认 L）
+///   例：`OCSMPART key_1096_a 4 8`（b=4、L=8）、`OCSMPART key_1096_b 22 0`、`OCSMPART key_1097_b 10 100`。
 ///
 /// 解析失败（或参数为空）返回 `None` → 回退到原 GUI（零件库窗口 + 鼠标放置）流程。
 #[derive(Debug, PartialEq)]
@@ -2075,7 +2079,10 @@ impl OcsmPlugin {
                          由 DIN 5480-2 名义表补全；预设代号 GB30P/GB30R/GB375R/GB45R/DIN30/NFP/NFR/ANSI30P/ANSI30PM/ANSI30R/ANSI375R/ANSI45R，体系标识 GB/DIN/NF/ANSI；\
                          ANSI 径节制用 `P<径节>`，x 不允许）；\
                          外螺纹退刀槽 `OCSMPART detail_thread_relief <d> P <螺距> [g1 值 g2 值 dg 值 r 值 alpha 值] [at x,y] [rot 度]`\
-                         （P 必给；不带参数则打开零件库窗口）。",
+                         （P 必给）；\
+                         平键 `OCSMPART key_1096_{a|b|c} <b> <L> [view main|top|section]`、`OCSMPART key_1097_{a|b} <b> <L> [view main|top]`\
+                         （例：OCSMPART key_1096_a 4 8、OCSMPART key_1097_b 10 100；L 省略/0 = 该档默认，L 须 ∈ 标准系列且 L<10b）；\
+                         不带参数则打开零件库窗口。",
                     );
                     return;
                 }

@@ -60,6 +60,11 @@
     <h2>规格与视图</h2>
     <div id="panel" style="display:none">
       <div id="stdFields">
+        <!-- 型别下拉（平键 A/B/C）：按目录 `type_group` 渲染；切型别 = 切族（同一尺寸表、不同端型画法）。 -->
+        <div id="typeFields" style="display:none">
+          <label for="typeSel">型别</label>
+          <select id="typeSel"></select>
+        </div>
         <label for="dia">公称直径</label>
         <select id="dia"></select>
         <label for="len" id="lenLabel">长度 l（mm，仅列该直径标准长度系列）</label>
@@ -104,6 +109,8 @@
 <script>
 let catalog = null, cur = { family: "", d: 0, l: 0, b1: null, params: {}, spec: "", view: "main" };
 const el = (id) => document.getElementById(id);
+// 族 id → 树节点（型别下拉切族时同步左侧高亮；不必依赖 CSS 选择器）。
+const treeRows = {};
 // 本窗口钉在哪张图纸上（插件开窗时写的 `tab=`）：出库/插入都带回给插件，
 // 多张图各开窗口时不串图；旧窗口（图纸已关）会被插件明确拒绝。
 const TAB = new URLSearchParams(location.search).get("tab");
@@ -134,9 +141,9 @@ function buildTree(ul, nodes, path) {
         row.querySelector(".tw").textContent = li.classList.contains("collapsed") ? "▸" : "▾";
       });
     } else if (n.family && n.implemented !== false) {
+      treeRows[n.family] = row;
+      row.dataset.family = n.family;
       row.addEventListener("click", () => {
-        document.querySelectorAll(".node.sel").forEach((x) => x.classList.remove("sel"));
-        row.classList.add("sel");
         pickFamily(n.family);
       });
       if (!cur.family) setTimeout(() => pickFamily(n.family, row), 0);
@@ -147,6 +154,10 @@ function buildTree(ul, nodes, path) {
 
 function pickFamily(id, row) {
   try {
+    // 树节点可由 family 反查（型别下拉换族时也把左侧树高亮跟着切）。
+    if (!row && treeRows[id]) row = treeRows[id];
+    Object.keys(treeRows).forEach((f) => treeRows[f].classList.remove("sel"));
+    if (row) row.classList.add("sel");
     pickFamilyInner(id, row);
   } catch (e) {
     // 数据异常（例如某族的 views 为空）不再静默死面板，直接把原因写在状态行
@@ -156,10 +167,6 @@ function pickFamily(id, row) {
 }
 
 function pickFamilyInner(id, row) {
-  if (row) {
-    document.querySelectorAll(".node.sel").forEach((x) => x.classList.remove("sel"));
-    row.classList.add("sel");
-  }
   const f = catalog.families[id];
   if (!f) return;
   if (!f.views || !f.views.length) {
@@ -177,6 +184,20 @@ function pickFamilyInner(id, row) {
   el("panel").style.display = "";
   el("tip").style.display = "none";
   el("baseHint").textContent = f.base_hint || "基点 = 头部支承面 × 轴线";
+  // 型别下拉（目录 `type_group`；平键族有，其它族无 → 隐藏）。
+  const typeGroup = f.type_group || [];
+  el("typeFields").style.display = typeGroup.length ? "" : "none";
+  if (typeGroup.length) {
+    const tsel = el("typeSel");
+    tsel.innerHTML = "";
+    typeGroup.forEach((t) => {
+      const o = document.createElement("option");
+      o.value = t.id;
+      o.textContent = t.name;
+      tsel.appendChild(o);
+    });
+    tsel.value = id;
+  }
   const detail = !!f.free_d;
   el("stdFields").style.display = detail ? "none" : "";
   el("detailFields").style.display = detail ? "" : "none";
@@ -762,6 +783,9 @@ function ping(bye) {
     onDetail();
   });
   el("specText").addEventListener("input", onDetail);
+  el("typeSel").addEventListener("change", () => {
+    if (el("typeSel").value !== cur.family) pickFamily(el("typeSel").value);
+  });
   el("out").addEventListener("click", outOfStock);
 })();
 </script>
