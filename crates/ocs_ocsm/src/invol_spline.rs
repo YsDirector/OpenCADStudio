@@ -2411,7 +2411,8 @@ pub fn resolve_nf_by_a(
 ///
 /// 来源：`~/桌面/OCSM/review/花键标准资料/NF-E22-141_检查公差表.csv`（页清单见同名
 /// `_页清单.md`）。`page/table_no/source/section/flags` 原样保留；**可疑格只标不改**
-/// （未读行与反推值都在 `flags`），仅 1 处与主尺寸表同源的粘连错格进 [`NF_CHECK_OCR_FIXES`]
+/// （未读行与反推值都在 `flags`），仅 2 处错格进 [`NF_CHECK_OCR_FIXES`]
+/// （1 处主尺寸表同源粘连，1 处看图裁决末位 1 被吃掉）
 /// —— 与主尺寸表 [`NF_OCR_FIXES`] 同一惯例（CSV 不动，修正只在解析期生效）。
 const NF_E22141_CHECK_CSV: &str = include_str!("../assets/nf_e22141_check.csv");
 
@@ -2504,14 +2505,24 @@ pub struct NfCheckFix {
 }
 
 /// **NF E22-141 检查表已知 OCR 错格修正表**（不篡改入库 CSV；逐条注明依据）。
-pub const NF_CHECK_OCR_FIXES: &[NfCheckFix] = &[NfCheckFix {
-    page: 25,
-    m: 5.0,
-    a: 105.0,
-    printed_n: 192,
-    fixed_n: 19,
-    basis: "192=19 与邻格尾数 2 粘连；同行 E=40.968 按 N=19 公式自洽；主尺寸表 p22 同一错格已在 NF_OCR_FIXES 修",
-}];
+pub const NF_CHECK_OCR_FIXES: &[NfCheckFix] = &[
+    NfCheckFix {
+        page: 25,
+        m: 5.0,
+        a: 105.0,
+        printed_n: 192,
+        fixed_n: 19,
+        basis: "192=19 与邻格尾数 2 粘连；同行 E=40.968 按 N=19 公式自洽；主尺寸表 p22 同一错格已在 NF_OCR_FIXES 修",
+    },
+    NfCheckFix {
+        page: 24,
+        m: 1.667,
+        a: 55.0,
+        printed_n: 3,
+        fixed_n: 31,
+        basis: "看图裁决：印刷 N=31，末位 1 被 OCR 吃掉；同页 m=2.50 A=55 的 N=20 是另一行，不合并",
+    },
+];
 
 impl NfCheckRow {
     /// 给用户看的来源说明（页码 + 表名 + source + 页内子表）。
@@ -8031,8 +8042,8 @@ mod tests {
         assert!(nf_check_by_a_n(1000.0, 6).is_empty());
     }
 
-    /// 与主尺寸表 `nf_e22141_dims.csv` 按 `(m,A,N)` 交叉：三重命中 311、主表缺 72（p26/p27 的
-    /// 中间/次系列）、A 命中但 N 不一致 2（只报告不改）、p29 范围行 14；命中行 d 逐行一致。
+    /// 与主尺寸表 `nf_e22141_dims.csv` 按 `(m,A,N)` 交叉：三重命中 312、主表缺 72（p26/p27 的
+    /// 中间/次系列）、A 命中但 N 不一致 1（p25，只报告不改）、p29 范围行 14；命中行 d 逐行一致。
     #[test]
     fn nf_check_cross_main_dims() {
         let mut exact = 0usize;
@@ -8089,15 +8100,21 @@ mod tests {
             }
         }
         assert_eq!(ranged, 14, "p29 的 A 为范围/列表");
-        assert_eq!(exact, 311, "与主尺寸表 (m,A,N) 三重命中");
+        assert_eq!(exact, 312, "与主尺寸表 (m,A,N) 三重命中");
         assert_eq!(absent, 72, "p26/p27 的中间系列 A 在主表没有");
-        assert_eq!(n_mismatch, 2, "A 命中但 N 不一致：{}", mismatch_list.join("；"));
+        assert_eq!(n_mismatch, 1, "A 命中但 N 不一致：{}", mismatch_list.join("；"));
         assert_eq!(d_checked, 12, "检查表带 d 的命中行（p26 两块）");
         assert_eq!(d_bad, 0, "命中的 d 应逐行一致");
-        // 两处 N 不一致保留 OCR 原值（只报告）：p24 m=1.667 A=55、p25 m=7.50 A=180。
-        assert!(mismatch_list
-            .iter()
-            .any(|s| s.contains("p24") && s.contains("1.667") && s.contains("A=55")));
+        // p24 m=1.667 A=55 的印刷 N=31 被 OCR 吃成 3：解析期按 NF_CHECK_OCR_FIXES 修正后
+        // 与主尺寸表一致，故不再计入不一致；CSV 原值 3 保留。
+        let p24_55 = nf_check_rows()
+            .into_iter()
+            .find(|r| r.page == 24 && r.m == Some(1.667) && r.a == Some(55.0))
+            .expect("p24 m=1.667 A=55");
+        assert_eq!(p24_55.n, Some(31), "看图裁决 N 3→31");
+        assert!(p24_55.fixes.iter().any(|f| f == "N 3→31"), "{:?}", p24_55.fixes);
+        // p25 m=7.50 A=180 印刷 N=35 保留原值（只报告）：该行夹在 A=260 与 A=300 之间，
+        // A 疑为原版误印，N 不动。
         assert!(mismatch_list
             .iter()
             .any(|s| s.contains("p25") && s.contains("7.5") && s.contains("A=180")));
