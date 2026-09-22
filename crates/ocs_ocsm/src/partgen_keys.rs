@@ -11,9 +11,10 @@
 //!
 //! 1. **1097 起键螺纹孔的小径 3/4 圈**：源图画在 `4虚线层`，本库改到 **`2细线层`（细实线）**；
 //!    其余一律照源图（**不**按 GB/T 4459.1 大改）。⚠️
-//! 2. **1097 主视图剖切**：源图的"右半剖 + 45° 断裂折线"是规范画法 → **照抄**：
-//!    右半 x>0 全剖（材料打剖面线），左半为外形，左端孔用虚线；
-//!    断裂边界 = x=-x_break 竖线 + 上下折线（见 [`BREAK_GAP`]/[`BREAK_RUN`]）。
+//! 2. **1097 主视图剖切**：右半 x>0 全剖（材料打剖面线），左半为外形，左端孔用虚线。
+//!    **分界线（用户 2026-09 画法修正）**：改用规范 **45° 断裂折线**、画在 **`2细线层`**（细实线）；
+//!    不再照抄源图那条 `1轮廓实线层` 的“竖线 + 端部小台阶”（手工痕迹）。
+//!    推广规则与形态见 [`BREAK_GAP`]/[`BREAK_AMP`] 与 `break_1097()`。
 //! 3. **剖面线间距全局 3.0 mm**（与齿轮/花键/轴生成器统一；**不**照模板的 0.794/3.175）。
 //! 4. **1096 表第三列就是 `L`**（源图 PNG 表头"L/2提示"是 OCR 误读）；L 取值按
 //!    [`KEY_1096_L_SERIES`] + `L < 10b` 校验，档位默认 L 取表内该档值（PNG 第三列）。
@@ -154,11 +155,16 @@ pub const KEY_1096_L_SERIES: &[f64] = &[
     250.0, 280.0, 320.0, 360.0, 400.0,
 ];
 
-/// 1097 主视图局部剖断裂线：距左端 d1 孔外缘的间隙（源图 specimen：
-/// L1=60、D=6 → x_break=−(L1/2−D/2−1)=−26）。
+/// 1097 断裂分界线的 x 基准：距左侧 d1 沉孔外缘（D/2）的间隙。
+/// **定案（2026-09 用户画法修正）**：断裂线位于左侧 d1 孔（沉孔外缘）与中央起键孔之间，
+/// 与沉孔外缘留 [`BREAK_GAP`]；specimen：L1=60、D=6 → x = −(30−3−1) = −26。
+///（原注释称“按 specimen 推导的临时规则”，现按用户定案升格为正式推广规则。）
 const BREAK_GAP: f64 = 1.0;
-/// 1097 断裂线上下折线沿 x 的伸出量（源图 specimen：−26 → −24）。
-const BREAK_RUN: f64 = 2.0;
+
+/// 45° 断裂折线的振幅（mm）：4 段斜线以 xb 为中心摆动（xb→xb+a→xb→xb−a→xb），
+/// 每段 `|dx| = |dy| = BREAK_AMP`（严格 45°）。取 0.5 使最左峰值距沉孔外缘仍有
+/// `BREAK_GAP − BREAK_AMP = 0.5mm` 净距，不压到左侧孔的虚线。
+const BREAK_AMP: f64 = 0.5;
 
 /// 螺纹小径简化系数：0.85 × d0/2（报告 §3 实测）。
 const MINOR_THREAD_FACTOR: f64 = 0.85;
@@ -464,7 +470,9 @@ pub fn families_json() -> serde_json::Map<String, serde_json::Value> {
         let mut v = vec![
             "中央 d0 孔是键自身的**起键（撬出）用螺纹孔，与轴无关** —— 不是把键固定到轴上的孔。"
                 .to_string(),
-            "主视图照源图：右半剖 + 左半外形 + 45° 断裂折线（用户拍板为规范画法）。".to_string(),
+            "主视图：右半剖 + 左半外形；分界线 = 2细线层 细实线 + 规范 45° 断裂折线\
+             （用户 2026-09 画法修正；源图粗线竖线+端部台阶是手工痕迹，不再照抄）。"
+                .to_string(),
             "螺纹小径 3/4 圈在 2细线层（用户拍板；源图在 4虚线层）。".to_string(),
             "L：GB/T 1097-2003 标准系列 25、28、…、400（易紧通 info_42177 长度行实测），\
              约束 L < 10·b（注③；>400 按 GB/T 321 R20 选取）；下拉列该 b 的全部合法 L。"
@@ -889,18 +897,37 @@ fn gen_1097(ty: KeyType, b: f64, l: f64, view: &str) -> Result<GenPart, String> 
     })
 }
 
-/// 1097 主视图（源图 = 右半剖 + 左半外形 + 断裂折线；用户拍板照抄）。
+/// 1097 主视图（右半剖 + 左半外形；分界线 = `2细线层` 规范 45° 断裂折线，用户 2026-09 修正）。
 ///
 /// 图元顺序照源图（WCS，已去镜像重复）；坐标详见反解报告 §3.2/§3.4。
+/// 1097 主视图断裂分界线（用户 2026-09 定案）：`2细线层` 细实线 + 规范 45° 折线。
+///
+/// 形态（自底边到顶边）：`(xb,0) → (xb,y0) → [4 段 45° 折线 xb→xb+a→xb→xb−a→xb] → (xb,h)`，
+/// 其中 `y0=(h−4a)/2`；两端短竖线接在顶/底边上，中段严格 45°。
+/// 推广规则（用户定案）：`xb = −(L1/2 − D/2 − BREAK_GAP)`（位于左 d1 沉孔外缘与中央起键孔之间）。
+fn break_1097(r: &Key1097Row) -> Vec<[f64; 2]> {
+    let xb = -(r.l1 / 2.0 - r.d_sink / 2.0 - BREAK_GAP);
+    let a = BREAK_AMP;
+    let y0 = (r.h - 4.0 * a) / 2.0;
+    vec![
+        [xb, 0.0],
+        [xb, y0],
+        [xb + a, y0 + a],
+        [xb, y0 + 2.0 * a],
+        [xb - a, y0 + 3.0 * a],
+        [xb, y0 + 4.0 * a],
+        [xb, r.h],
+    ]
+}
+
 fn main_1097(ty: KeyType, r: &Key1097Row, l: f64) -> Vec<EntityType> {
     let (h, c) = (r.h, r.c);
     let (xh, d0, d1, d) = (r.l1 / 2.0, r.d0, r.d1, r.d_sink);
     let (h1, c1, l0) = (r.h1, r.c1, r.l0);
     let rcs = d0 / 2.0 - c1 * 60f64.to_radians().tan(); // 锪锥小端半径
     let y0 = h - l0; // 起键孔底（当前各档 L0=h → 通高）
-    // 断裂线：源图 specimen L1=60、D=6 → 26；按"d1 孔外缘偏 1mm"推广（大 D 档不会落进孔里）。
+    // 断裂分界线：2细线层 + 规范 45° 折线（推广规则 xb = L1/2 − D/2 − BREAK_GAP，见 break_1097）。
     let xb = xh - d / 2.0 - BREAK_GAP;
-    let xf = xb - BREAK_RUN;
     let mut en = vec![
         line([0.0, -3.0], [0.0, h + 3.0], LAYER_CENTER),
         line([xh, -3.0], [xh, h + 3.0], LAYER_CENTER),
@@ -998,17 +1025,15 @@ fn main_1097(ty: KeyType, r: &Key1097Row, l: f64) -> Vec<EntityType> {
         ],
         KeyType::C => unreachable!("GB/T 1097 没有 C 型"),
     };
-    let left = vec![
-        [-xf, h],
-        [-xb, h - c],
-        [-xb, c],
-        [-xf, 0.0],
-        [-d0 / 2.0, 0.0],
-        [-d0 / 2.0, h],
-    ];
+    // 左中材料：左缘 = 45° 断裂折线（细实线，只画线不填充），右缘 = 中央孔壁；
+    // 顶/底边已由左半外形多段线覆盖 → 不再重复画闭合粗轮廓（旧实现把三者合成一条 1轮廓实线层 闭合线）。
+    let break_pts = break_1097(r);
+    let mut left_loop = break_pts.clone();
+    left_loop.push([-d0 / 2.0, h]);
+    left_loop.push([-d0 / 2.0, 0.0]);
     en.push(polyline(&mid, true, LAYER_MAIN));
     en.push(polyline(&right, true, LAYER_MAIN));
-    en.push(polyline(&left, true, LAYER_MAIN));
+    en.push(polyline(&break_pts, false, LAYER_THIN));
     // 中央孔右半 + 左端孔远侧隐藏线 + 右端孔远侧可见轮廓 + 沉孔底（镜像对的 WCS 坐标）。
     en.push(polyline(
         &[[rcs, y0], [rcs, h - c1], [0.0, h - c1]],
@@ -1072,7 +1097,7 @@ fn main_1097(ty: KeyType, r: &Key1097Row, l: f64) -> Vec<EntityType> {
     // 3 片剖面线（中段 / 右端 / 左中），间距统一 3.0mm。
     en.push(hatch_ansi31_scaled(&mid, 0.0, hatch_scale_3mm()));
     en.push(hatch_ansi31_scaled(&right, 0.0, hatch_scale_3mm()));
-    en.push(hatch_ansi31_scaled(&left, 0.0, hatch_scale_3mm()));
+    en.push(hatch_ansi31_scaled(&left_loop, 0.0, hatch_scale_3mm()));
     en
 }
 
@@ -1460,7 +1485,21 @@ mod tests {
         let rcs = d0 / 2.0 - c1 * 60f64.to_radians().tan();
         let y0 = h - l0;
         let xb = xh - d / 2.0 - BREAK_GAP;
-        let xf = xb - BREAK_RUN;
+        // 断裂分界线（本次修正）：2细线层 + 45° 折线（自底边到顶边，与生产规则同式）。
+        let ba = BREAK_AMP;
+        let by0 = (h - 4.0 * ba) / 2.0;
+        let brk = vec![
+            [-xb, 0.0],
+            [-xb, by0],
+            [-(xb - ba), by0 + ba],
+            [-xb, by0 + 2.0 * ba],
+            [-(xb + ba), by0 + 3.0 * ba],
+            [-xb, by0 + 4.0 * ba],
+            [-xb, h],
+        ];
+        let mut left_loop = brk.clone();
+        left_loop.push([-d0 / 2.0, h]);
+        left_loop.push([-d0 / 2.0, 0.0]);
         let mid = vec![
             [d0 / 2.0, 0.0], [d0 / 2.0, h], [xh - d / 2.0, h],
             [xh - d / 2.0, h - h1], [xh - d1 / 2.0, h - h1], [xh - d1 / 2.0, 0.0],
@@ -1469,10 +1508,6 @@ mod tests {
             [xh + d1 / 2.0, 0.0], [xh + d1 / 2.0, h - h1], [xh + d / 2.0, h - h1],
             [xh + d / 2.0, h], [l / 2.0 - c, h], [l / 2.0, h - c],
             [l / 2.0, c], [l / 2.0 - c, 0.0],
-        ];
-        let left = vec![
-            [-xf, h], [-xb, h - c], [-xb, c], [-xf, 0.0],
-            [-d0 / 2.0, 0.0], [-d0 / 2.0, h],
         ];
         vec![
             line([0.0, -3.0], [0.0, h + 3.0], LAYER_CENTER),
@@ -1497,7 +1532,7 @@ mod tests {
             line([-l / 2.0, c], [-xb, c], LAYER_MAIN),
             polyline(&mid, true, LAYER_MAIN),
             polyline(&right, true, LAYER_MAIN),
-            polyline(&left, true, LAYER_MAIN),
+            polyline(&brk, false, LAYER_THIN),
             polyline(&[[rcs, y0], [rcs, h - c1], [0.0, h - c1]], false, LAYER_MAIN),
             polyline(&[[rcs, h - c1], [d0 / 2.0, h], [d0 / 2.0, y0]], false, LAYER_MAIN),
             polyline(
@@ -1515,7 +1550,7 @@ mod tests {
             ),
             hatch_ansi31_scaled(&mid, 0.0, 3.0 / ANSI31_SPACING_MM),
             hatch_ansi31_scaled(&right, 0.0, 3.0 / ANSI31_SPACING_MM),
-            hatch_ansi31_scaled(&left, 0.0, 3.0 / ANSI31_SPACING_MM),
+            hatch_ansi31_scaled(&left_loop, 0.0, 3.0 / ANSI31_SPACING_MM),
         ]
     }
 
@@ -1526,7 +1561,21 @@ mod tests {
         let rcs = d0 / 2.0 - c1 * 60f64.to_radians().tan();
         let y0 = h - l0;
         let xb = xh - d / 2.0 - BREAK_GAP;
-        let xf = xb - BREAK_RUN;
+        // 断裂分界线（本次修正）：2细线层 + 45° 折线（自底边到顶边，与生产规则同式）。
+        let ba = BREAK_AMP;
+        let by0 = (h - 4.0 * ba) / 2.0;
+        let brk = vec![
+            [-xb, 0.0],
+            [-xb, by0],
+            [-(xb - ba), by0 + ba],
+            [-xb, by0 + 2.0 * ba],
+            [-(xb + ba), by0 + 3.0 * ba],
+            [-xb, by0 + 4.0 * ba],
+            [-xb, h],
+        ];
+        let mut left_loop = brk.clone();
+        left_loop.push([-d0 / 2.0, h]);
+        left_loop.push([-d0 / 2.0, 0.0]);
         let mid = vec![
             [d0 / 2.0, 0.0], [d0 / 2.0, h], [xh - d / 2.0, h],
             [xh - d / 2.0, h - h1], [xh - d1 / 2.0, h - h1], [xh - d1 / 2.0, 0.0],
@@ -1534,10 +1583,6 @@ mod tests {
         let right = vec![
             [xh + d1 / 2.0, 0.0], [xh + d1 / 2.0, h - h1], [xh + d / 2.0, h - h1],
             [xh + d / 2.0, h], [l / 2.0, h], [l / 2.0, 0.0],
-        ];
-        let left = vec![
-            [-xf, h], [-xb, h - c], [-xb, c], [-xf, 0.0],
-            [-d0 / 2.0, 0.0], [-d0 / 2.0, h],
         ];
         vec![
             line([0.0, -3.0], [0.0, h + 3.0], LAYER_CENTER),
@@ -1558,7 +1603,7 @@ mod tests {
             line([-l / 2.0, c], [-xb, c], LAYER_MAIN),
             polyline(&mid, true, LAYER_MAIN),
             polyline(&right, true, LAYER_MAIN),
-            polyline(&left, true, LAYER_MAIN),
+            polyline(&brk, false, LAYER_THIN),
             polyline(&[[rcs, y0], [rcs, h - c1], [0.0, h - c1]], false, LAYER_MAIN),
             polyline(&[[rcs, h - c1], [d0 / 2.0, h], [d0 / 2.0, y0]], false, LAYER_MAIN),
             polyline(
@@ -1573,7 +1618,7 @@ mod tests {
             polyline(&[[-l / 2.0, 0.0], [-l / 2.0, h], [l / 2.0, h], [l / 2.0, 0.0]], true, LAYER_MAIN),
             hatch_ansi31_scaled(&mid, 0.0, 3.0 / ANSI31_SPACING_MM),
             hatch_ansi31_scaled(&right, 0.0, 3.0 / ANSI31_SPACING_MM),
-            hatch_ansi31_scaled(&left, 0.0, 3.0 / ANSI31_SPACING_MM),
+            hatch_ansi31_scaled(&left_loop, 0.0, 3.0 / ANSI31_SPACING_MM),
         ]
     }
 
@@ -1668,6 +1713,64 @@ mod tests {
         // 公共入口：specimen 尺寸除 L 外都应能出（L=100 被注③挡住，见 length 测试）。
         let p = gen_all("key_1097_a", 8.0, 70.0, "top").unwrap();
         assert_eq!(p.meta.spec, "8×7×70");
+    }
+
+    /// 1097 断裂分界线（用户 2026-09 画法修正）：必在 `2细线层`；形态 = 2 端竖线 + 4 段严格 45°
+    /// 折线；端点在 xb=−(L1/2−D/2−BREAK_GAP)；其余几何（实体数/棱线端点/剖面线片数）不受影响。
+    #[test]
+    fn break_line_1097_is_thin_45deg_zigzag() {
+        for (fam, ty) in [("key_1097_a", KeyType::A), ("key_1097_b", KeyType::B)] {
+            let row = row_1097(ty, 8.0).unwrap();
+            for (l, who) in [(100.0, "specimen L=100"), (70.0, "合法 L=70")] {
+                let ents = main_1097(ty, row, l);
+                // 主视图只有一条 `2细线层` 图元 = 分界线（其余线在 1/3/4/5 层）。
+                let thin: Vec<_> = ents
+                    .iter()
+                    .filter_map(|e| match e {
+                        EntityType::LwPolyline(pl) if pl.common.layer == LAYER_THIN => Some(pl),
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(thin.len(), 1, "{fam} {who}：分界线应唯一且在 2细线层");
+                let pl = thin[0];
+                assert!(!pl.is_closed, "{fam} {who}：断裂线应为开口折线");
+                let pts: Vec<(f64, f64)> = pl
+                    .vertices
+                    .iter()
+                    .map(|v| (v.location.x, v.location.y))
+                    .collect();
+                assert_eq!(pts.len(), 7, "{fam} {who}：2 端竖线 + 4 段45° → 7 顶点");
+                let xb = -(row.l1 / 2.0 - row.d_sink / 2.0 - BREAK_GAP);
+                assert!((pts[0].0 - xb).abs() < 1e-12 && pts[0].1.abs() < 1e-12, "起点在底边");
+                assert!(
+                    (pts[6].0 - xb).abs() < 1e-12 && (pts[6].1 - row.h).abs() < 1e-12,
+                    "终点在顶边"
+                );
+                for i in 0..6 {
+                    let (dx, dy) = (pts[i + 1].0 - pts[i].0, pts[i + 1].1 - pts[i].1);
+                    if i == 0 || i == 5 {
+                        assert!(dx.abs() < 1e-12 && dy.abs() > 0.0, "端段应为竖线（i={i}）");
+                    } else {
+                        assert!(
+                            (dx.abs() - BREAK_AMP).abs() < 1e-12
+                                && (dy.abs() - BREAK_AMP).abs() < 1e-12,
+                            "斜段应为严格45°：|dx|=|dy|=BREAK_AMP（i={i}，实得 {dx}/{dy}）"
+                        );
+                    }
+                }
+                // 倒角棱线仍止于分界线（其余几何不受影响）。
+                assert!(
+                    ents.iter().any(|e| matches!(e, EntityType::Line(ln)
+                        if (ln.end.x - xb).abs() < 1e-12
+                            && (ln.start.y - (row.h - row.c)).abs() < 1e-12)),
+                    "{fam} {who}：上倒角棱线应止于断裂线 xb"
+                );
+                let want = if ty == KeyType::A { 23 } else { 22 };
+                assert_eq!(ents.len(), want, "{fam} {who}：实体数应与修正前一致");
+                let hatches = ents.iter().filter(|e| matches!(e, EntityType::Hatch(_))).count();
+                assert_eq!(hatches, 3, "{fam}：3 片剖面线不变");
+            }
+        }
     }
 
     /// 3/4 螺纹小径圈必须在 `2细线层`（用户口径①；源图在 4虚线层），缺口右下 0°→270°。
