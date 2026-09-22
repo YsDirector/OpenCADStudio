@@ -73,10 +73,9 @@ global.setTimeout = (fn) => { timers.push(fn); return timers.length; };
 global.clearTimeout = () => {};
 global.setInterval = () => 0;
 
-// ── /api/parts 桩（预设 + DIN 名义表，同目录数据形状） ──
+// ── /api/parts 桩（预设 + DIN 名义表，同目录数据形状；引擎数据在顶层 spline_engine） ──
 const PARTS = {
-  families: {
-    detail_invol_spline: {
+  spline_engine: {
       invol_presets: [
         { code: 'GB30P', std: 'GB', profile: '30平齿根', alpha: 30, ha: 0.5, hf: 0.75, rho: 0.2, cf: 0.1 },
         { code: 'GB30R', std: 'GB', profile: '30圆齿根', alpha: 30, ha: 0.5, hf: 0.9, rho: 0.4, cf: 0.1 },
@@ -101,7 +100,6 @@ const PARTS = {
         { a: 45, m: 1.667, z: 27, x: 0.8, page: 21 },
         { a: 240, m: 7.5, z: 32, x: 0.8, page: 22 },
       ],
-    },
   },
 };
 const INFO = {

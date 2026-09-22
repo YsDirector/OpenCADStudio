@@ -282,13 +282,13 @@ rm -rf "$HOME/.config/OpenCADStudio/plugins/opencad.layers_quick"
   第一期 `detail_grind_od`（磨外圆砂轮越程槽 GB/T 6403.5-2008，可选 `b1`）；
   第二期 `detail_thread_relief`（外螺纹退刀槽 GB/T 3-1997 表 2，`P` 必给 + 可选 `g1/g2/dg/r/alpha`，斜壁 30° 下限）；
   第三期 `detail_spline_rect`（矩形花键 GB/T 1144-2001，规格代号下拉/自定义，de 自动查 GB/T 10952 表 1/表 2）。
-  第四期 `detail_invol_spline`（渐开线花键 GB/T 3478.1-2008 / DIN 5480-1:2015，**旧入口**）：
-  **主入口已改为齿轮生成器 `OCSMGEAR` 的「花键模式」**（口复选框：标准/齿廓/d_B/hf*/ρf*/cF*，
+  渐开线花键（GB/T 3478.1-2008 / DIN 5480-1:2015）：**XL 旧入口已于 2026-09-22 移除，
+  渐开线花键只在齿轮生成器里生成**——入口是 `OCSMGEAR` 的「花键模式」（复选框：标准/齿廓/d_B/hf*/ρf*/cF*，
   「齿轮种类」开关复用为外/内花键；内花键与内齿轮同口径，只有 剖视图 + 端视图、无侧视图）；几何全在
   `src/invol_spline.rs` 共用引擎（DIN 5480-2 名义表 721 行入库；d_B 为主参数，m/z 可缺一个；
   GB 无 d_B、给了报错）；`x=(d_B−m(z+1.1))/(2m)` 是从表反推并经全表校验的关系，非标准原文；
   轴段 `INVOLSPLINE` 同引擎、只做外花键）。
-  一站式说明见 `handbook/03-标准件库.md`「结构要素」；数据与画法的唯一来源是 `src/detail.rs`（新增要素只需实现 `DetailElement` + 进 `ELEMENTS`）。
+  一站式说明见 `handbook/03-标准件库.md`「结构要素」；结构要素的数据与画法唯一来源是 `src/detail.rs`（新增要素只需实现 `DetailElement` + 进 `ELEMENTS`）；渐开线花键引擎与目录数据在 `src/invol_spline.rs`，经目录顶层 `spline_engine` 下发给齿轮/轴 GUI。
   注：GB/T 5782 A/B 级 = 5780 C级画法 + **头部垫圈面 dw×c**（主/俯视图画、左视图不画；
   用户 2026-09-15 看图定案，画法依据 164580 官方 CAD 图实测；详见 OCSMBOM-plan.md §27.5）。
 - 自查工具：`tools/mpl_zh.py`（**matplotlib 中文字体开关**：不配的话标题/图例全是空心方框；

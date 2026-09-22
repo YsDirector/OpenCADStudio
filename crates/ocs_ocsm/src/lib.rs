@@ -751,10 +751,8 @@ fn place_one(
 ///   例：`OCSMPART detail_grind_od 100 b1 10 at 150,30 rot 0`（b1 缺省 = 该 d 档默认行）。
 /// - **矩形花键**（`detail_spline_rect`）：`<族> <规格代号> [L 满齿段长] [de 覆盖] [view 视图] [at x,y] [rot]`
 ///   例：`XL detail_spline_rect 6x23x26x6 L30 de63 view side`（规格代号可自定义，de 表外规格必给）。
-/// - **渐开线花键**（`detail_invol_spline`）：`<族> <预设代号或体系标识> M<模数> Z<齿数> [X变位] [DB基准直径] [L 有效长度] [CHECK] [view 视图] [at x,y] [rot]`
-///   例：`XL detail_invol_spline GB30R M3 Z20 L30 view side`、`XL detail_invol_spline DIN30 DB40 M2 L30 view side`
-///   （预设代号 `GB30P/GB30R/GB375R/GB45R/DIN30/NFP/NFR/ANSI30P/ANSI30PM/ANSI30R/ANSI375R/ANSI45R`，也可写体系标识 `GB`/`DIN`/`NF`/`ANSI`；DIN 给 `DB` 后 `M`/`Z` 可缺一项，由 DIN 5480-2 表补全；ANSI 用 `P<径节>`（或 `M` 槽位 = P）；
-///   正视图不需要 L；`CHECK` 时 DIN 预设附带检验尺寸 M₁/M₂/D_M/k/W_k，默认不开、行为不变。
+/// - **渐开线花键**：**只在 OCSMGEAR 的花键模式生成**（XL/结构要素旧入口已移除；
+///   引擎仍在 `invol_spline.rs`，轴段 `INVOLSPLINE` 与齿轮花键模式共用）。
 /// - **外螺纹退刀槽**（`detail_thread_relief`）：`<族> <d> P <螺距> [g1 值 g2 值 dg 值 r 值 alpha 值] [at x,y] [rot 度]`
 ///   例：`OCSMPART detail_thread_relief 20 P 1.5`（P 必给，其余可选，见 `detail.rs` 表 2）。
 /// - **平键**（`key_1096_{a,b,c}` = GB/T 1096 三型；`key_1097_{a,b}` = GB/T 1097 两型）：
@@ -779,26 +777,19 @@ struct PartsSpec {
     rotation: Option<f64>,
 }
 
-/// 结构要素（花键）的额外参数键：`N6` / `N 6` / `D26` / `B6` / `L30` / `de63` / `spec=…`；
-/// 渐开线花键还有 `M3` / `Z20` / `X0.2` / `DB40`（基准直径）。
+/// 结构要素（矩形花键）的额外参数键：`N6` / `N 6` / `D26` / `B6` / `L30` / `de63` / `spec=…`；
 /// 返回 `(规范键, 贴写值)`；贴写值为空串 = 值在下一个 token。`b1` 与退刀槽参数不走这里。
 fn split_detail_param(token: &str) -> Option<(&'static str, &str)> {
     // 长前缀在前（`big` > `b`、`len` > `l`、`de`/`db` > `d`）；`b1` 是历史槽位，不拦截。
-    const KEYS: [(&str, &str); 14] = [
+    const KEYS: [(&str, &str); 8] = [
         ("spec", "spec"),
         ("big", "big"),
-        ("check", "check"),
         ("de", "de"),
-        ("db", "db"),
-        ("d_b", "db"),
         ("len", "len"),
         ("n", "n"),
         ("d", "big"),
         ("b", "b"),
         ("l", "len"),
-        ("m", "m"),
-        ("z", "z"),
-        ("x", "x"),
     ];
     if token == "b1" {
         return None;
@@ -882,19 +873,6 @@ impl PartsSpec {
             // 结构要素（花键）的额外参数：`L30` / `de63` / `N6 D26 B6` / `spec=…`。
             if detail {
                 if let Some((key, attached)) = split_detail_param(&lower) {
-                    // `CHECK`：裸写 = 1；也收 `check=1` / `check:0`（值不占下一个 token）。
-                    if key == "check" {
-                        let value: f64 = if attached.is_empty() {
-                            1.0
-                        } else {
-                            attached.parse().ok()?
-                        };
-                        if !value.is_finite() {
-                            return None;
-                        }
-                        spec.params.insert(key.to_string(), value);
-                        continue;
-                    }
                     let value_text = if attached.is_empty() {
                         tokens.next()?
                     } else {
@@ -2074,10 +2052,6 @@ impl OcsmPlugin {
                          （b1 缺省 = 该 d 档默认行）；\
                          矩形花键 `OCSMPART detail_spline_rect <规格代号> L<满齿段长> [de <滚刀外径>] [view front|side|section]`\
                          （例：OCSMPART detail_spline_rect 6x23x26x6 L30 view side）；\
-                         渐开线花键 `OCSMPART detail_invol_spline <预设代号或体系标识> M<模数> Z<齿数> [X<变位>] [DB<基准直径>] [P<径节>] [L<有效长度>] [CHECK] [view front|side|section]`\
-                         （例：OCSMPART detail_invol_spline GB30R M3 Z20 L30 view side；DIN 给 DB40 后 M/Z 可缺一项，\
-                         由 DIN 5480-2 名义表补全；预设代号 GB30P/GB30R/GB375R/GB45R/DIN30/NFP/NFR/ANSI30P/ANSI30PM/ANSI30R/ANSI375R/ANSI45R，体系标识 GB/DIN/NF/ANSI；\
-                         ANSI 径节制用 `P<径节>`，x 不允许）；\
                          外螺纹退刀槽 `OCSMPART detail_thread_relief <d> P <螺距> [g1 值 g2 值 dg 值 r 值 alpha 值] [at x,y] [rot 度]`\
                          （P 必给）；\
                          平键 `OCSMPART key_1096_{a|b|c} <b> <L> [view main|top|section]`、`OCSMPART key_1097_{a|b} <b> <L> [view main|top]`\
@@ -4253,49 +4227,11 @@ mod tests {
         // 花键不认 b1，但解析不报错（到生成时统一报「不认识参数」）
         assert!(PartsSpec::parse("detail_spline_rect 6x23x26x6 L30 b1 3").is_some());
 
-        // 渐开线花键：第二个 token 是**预设代号**（`GB30R` 等）；`M3 Z20 X0.2 L30 view side` 都认。
-        let spec = PartsSpec::parse("DETAIL_INVOL_SPLINE GB30R M3 Z20 X0.2 L30 view side").unwrap();
-        assert_eq!(spec.family, "detail_invol_spline");
-        assert_eq!(spec.d, 0.0, "分度圆由 m·z 派生，主参数为 0");
-        assert_eq!(spec.spec.as_deref(), Some("GB30R"));
-        assert_eq!(spec.params.get("m"), Some(&3.0));
-        assert_eq!(spec.params.get("z"), Some(&20.0));
-        assert_eq!(spec.params.get("x"), Some(&0.2));
-        assert_eq!(spec.params.get("len"), Some(&30.0));
-        assert_eq!(spec.view, "side");
-        let body: serde_json::Value = serde_json::from_str(&spec.to_body()).unwrap();
-        assert_eq!(body["spec"], "GB30R");
-        assert_eq!(body["params"]["m"], 3.0);
-        assert_eq!(body["params"]["z"], 20.0);
-        assert_eq!(body["params"]["x"], 0.2);
-        assert_eq!(body["params"]["len"], 30.0);
-        // 空格写法 + DIN；不给 view → 默认侧视图；front 不写 L 也解析
-        let spec = PartsSpec::parse("detail_invol_spline DIN30 M 2 Z 18 L 20").unwrap();
-        assert_eq!(spec.spec.as_deref(), Some("DIN30"));
-        assert_eq!(spec.view, "side");
-        assert!(spec.params.get("x").is_none(), "x 可选");
-        // DIN 基准直径 DB：贴写/空格都收，params 带 db（M/Z 可缺一项）
-        let spec = PartsSpec::parse("DETAIL_INVOL_SPLINE DIN30 DB40 M2 L30").unwrap();
-        assert_eq!(spec.spec.as_deref(), Some("DIN30"));
-        assert_eq!(spec.params.get("db"), Some(&40.0));
-        assert_eq!(spec.params.get("m"), Some(&2.0));
-        assert!(spec.params.get("z").is_none(), "给 DB+M 时 Z 可由查表补全");
-        let body: serde_json::Value = serde_json::from_str(&spec.to_body()).unwrap();
-        assert_eq!(body["params"]["db"], 40.0);
-        let spec = PartsSpec::parse("detail_invol_spline DIN30 db 40 z 18 L30").unwrap();
-        assert_eq!(spec.params.get("db"), Some(&40.0));
-        assert_eq!(spec.params.get("z"), Some(&18.0));
-        assert!(spec.params.get("m").is_none(), "给 DB+Z 时 M 可由查表补全");
-        // `CHECK`：裸写 = 1、check=0 可关；不进几何参数、默认不开行为不变。
-        let spec = PartsSpec::parse("detail_invol_spline DIN30 DB6 M0.5 Z10 L20 CHECK").unwrap();
-        assert_eq!(spec.params.get("check"), Some(&1.0));
-        let body: serde_json::Value = serde_json::from_str(&spec.to_body()).unwrap();
-        assert_eq!(body["params"]["check"], 1.0);
-        let spec = PartsSpec::parse("detail_invol_spline DIN30 DB6 M0.5 Z10 L20 check=0").unwrap();
-        assert_eq!(spec.params.get("check"), Some(&0.0));
-        assert!(PartsSpec::parse("detail_invol_spline GB30R M3 Z20 view front").is_some());
-        // 未知预设代号在解析层就回退 GUI（不静默按错误预设出图）
-        assert_eq!(PartsSpec::parse("detail_invol_spline GB99 M3 Z20"), None);
+        // 渐开线花键的 XL 入口已移除：不再作为结构要素族解析（唯一入口 = OCSMGEAR 花键模式）。
+        assert_eq!(
+            PartsSpec::parse("detail_invol_spline GB30R M3 Z20 L30 view side"),
+            None
+        );
     }
 
     fn parse_catalog_csv_skips_header_comments_and_blanks() {

@@ -942,7 +942,14 @@ pub fn catalog_json() -> String {
     for (path, family, implemented) in leaves {
         insert_tree_leaf(&mut tree, &path, &family, implemented);
     }
-    serde_json::json!({ "tree": tree, "families": families }).to_string()
+    // 渐开线花键引擎数据（预设/DIN·NF 名义表/检验表/模数候选）：齿轮生成器与轴生成器共用。
+    // 它是**引擎数据**、不是上架族——XL 结构要素里的渐开线花键入口已移除，避免两个生成入口。
+    serde_json::json!({
+        "tree": tree,
+        "families": families,
+        "spline_engine": crate::invol_spline::catalog_payload(),
+    })
+    .to_string()
 }
 
 /// 把 `/`（或 `>`）分隔的路径切成段。**代号里的斜杠不能当分隔符**：

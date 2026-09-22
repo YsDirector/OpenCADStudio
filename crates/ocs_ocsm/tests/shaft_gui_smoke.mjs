@@ -307,8 +307,8 @@ global.fetch = async (u, opts = {}) => {
       ok: true,
       families: {
         detail_spline_rect: { specs: SPECS },
-        detail_invol_spline: { invol_presets: INVOL, din_nominal: DIN_NOMINAL, nf_nominal: NF_NOMINAL },
       },
+      spline_engine: { invol_presets: INVOL, din_nominal: DIN_NOMINAL, nf_nominal: NF_NOMINAL },
     });
   }
   if (url.startsWith('/api/shaft_parse')) {

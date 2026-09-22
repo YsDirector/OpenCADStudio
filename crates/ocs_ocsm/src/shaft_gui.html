@@ -226,10 +226,10 @@ const VIEWS = [
 let rows = [];              // 段表状态（一行一段）
 let sel = 0;                // 当前选中行
 let splineSpecs = [];       // 矩形花键规格表（/api/parts → detail_spline_rect.specs）
-let involPresets = [];      // 渐开线花键预设表（/api/parts → detail_invol_spline.invol_presets）
-let involDinNominal = [];   // DIN 5480-2 名义表候选（/api/parts → detail_invol_spline.din_nominal）
-let involNfNominal = [];    // NF E22-141 尺寸表候选（/api/parts → detail_invol_spline.nf_nominal）
-let involDinInspection = []; // DIN 5480-2 检验表（/api/parts → detail_invol_spline.din_inspection；M1/M2/D_M/k/W_k）
+let involPresets = [];      // 渐开线花键预设表（/api/parts → spline_engine.invol_presets）
+let involDinNominal = [];   // DIN 5480-2 名义表候选（/api/parts → spline_engine.din_nominal）
+let involNfNominal = [];    // NF E22-141 尺寸表候选（/api/parts → spline_engine.nf_nominal）
+let involDinInspection = []; // DIN 5480-2 检验表（/api/parts → spline_engine.din_inspection；M1/M2/D_M/k/W_k）
 const SPLINE_CUSTOM = "__custom__";   // 下拉末尾「自定义规格…」的哨兵值
 let curView = "normal";     // 当前视图（默认常规）
 let seqPreview = 0;         // 过期响应丢弃序号
@@ -279,7 +279,7 @@ const esc = (s) =>
 /* ─────────────────────────── 矩形花键规格表 ─────────────────────────── */
 
 // 规格表来源 = `/api/parts` 的 `families.detail_spline_rect.specs`（与零件库窗口同源，
-// 33 条 GB/T 1144 轻/中系列）与 `families.detail_invol_spline.invol_presets`（渐开线花键
+// 33 条 GB/T 1144 轻/中系列）与 `spline_engine.invol_presets`（渐开线花键引擎
 // 的 GB/DIN 预设系数）；拿不到就退化成纯手输/空下拉，不阻塞页面其余功能。
 async function loadSplineSpecs() {
   try {
@@ -287,7 +287,7 @@ async function loadSplineSpecs() {
     const fam = cat && cat.families ? cat.families.detail_spline_rect : null;
     splineSpecs = (fam && Array.isArray(fam.specs) ? fam.specs : [])
       .filter((s) => s && typeof s.code === "string" && s.code !== "");
-    const inv = cat && cat.families ? cat.families.detail_invol_spline : null;
+    const inv = cat && cat.spline_engine ? cat.spline_engine : null;
     involPresets = (inv && Array.isArray(inv.invol_presets) ? inv.invol_presets : [])
       .filter((p) => p && typeof p.code === "string" && p.code !== "");
     involDinNominal = (inv && Array.isArray(inv.din_nominal) ? inv.din_nominal : [])

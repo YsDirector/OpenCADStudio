@@ -244,33 +244,16 @@ function pickFamilyInner(id, row) {
 }
 
 // 结构要素：参数面板按目录 `inputs` 动态生成（只建 DOM，值与错误处理在 onDetail）。
-// `type:"select"` = 下拉（标准/齿廓预设）；`options_by` + `depends_on` = 二级联动；
-// `show_when` = 按上级下拉值显隐（渐开线花键的 d_B 只在 DIN 下显示）。
-const detailInputEls = {}; // key → [label, 控件]（show_when 显隐用）
 function renderDetailInputs(f) {
   const inputs = f.inputs || [];
   el("b1Fields").style.display = inputs.length ? "none" : "";
   const box = el("paramFields");
   box.innerHTML = "";
-  Object.keys(detailInputEls).forEach((k) => delete detailInputEls[k]);
   inputs.forEach((it) => {
     const lab = document.createElement("label");
     lab.htmlFor = "p_" + it.key;
     lab.textContent = it.label || it.key;
     box.appendChild(lab);
-    detailInputEls[it.key] = [lab];
-    if (it.type === "select") {
-      const sel = document.createElement("select");
-      sel.id = "p_" + it.key;
-      sel.dataset.key = it.key;
-      // inputs 顺序保证上级下拉（std）先建；options_by 由上级当前值过滤。
-      const dep = it.options_by ? el("p_" + (it.depends_on || "std")) : null;
-      fillDetailSelect(f, it, sel, dep ? dep.value : "");
-      sel.addEventListener("change", onDetail);
-      box.appendChild(sel);
-      detailInputEls[it.key].push(sel);
-      return;
-    }
     const inp = document.createElement("input");
     inp.type = "number";
     inp.step = "0.01";
@@ -278,88 +261,9 @@ function renderDetailInputs(f) {
     inp.id = "p_" + it.key;
     inp.dataset.key = it.key;
     inp.placeholder = it.placeholder || (it.required ? "必给" : "留空 = 默认");
-    detailInputEls[it.key].push(inp);
-    // 渐开线花键的 d_B：挂 DIN 5480-2 名义表候选（datalist），选/输入后自动带出 m/z/x。
-    if (it.key === "db" && Array.isArray(f.din_nominal) && f.din_nominal.length) {
-      const dl = document.createElement("datalist");
-      dl.id = "p_db_list";
-      dinDbValues(f).forEach((v) => {
-        const o = document.createElement("option");
-        o.value = String(v);
-        dl.appendChild(o);
-      });
-      box.appendChild(dl);
-      inp.setAttribute("list", "p_db_list");
-      inp.addEventListener("input", () => { fillDinDb(f); onDetail(); });
-      inp.addEventListener("change", () => { fillDinDb(f); onDetail(); });
-    } else if (it.key === "a" && Array.isArray(f.nf_nominal) && f.nf_nominal.length) {
-      // NF E22-141 的公称直径 A：挂 NF 尺寸表候选，选/输入后自动带出 m/z。
-      const dl = document.createElement("datalist");
-      dl.id = "p_a_list";
-      nfAValues(f).forEach((v) => {
-        const o = document.createElement("option");
-        o.value = String(v);
-        dl.appendChild(o);
-      });
-      box.appendChild(dl);
-      inp.setAttribute("list", "p_a_list");
-      inp.addEventListener("input", () => { fillNfA(f); onDetail(); });
-      inp.addEventListener("change", () => { fillNfA(f); onDetail(); });
-    } else {
-      inp.addEventListener("input", onDetail);
-    }
+    inp.addEventListener("input", onDetail);
     box.appendChild(inp);
   });
-  syncDetailVisibility(f);
-}
-
-// `show_when`：上级下拉当前值在 `values` 里才显示该行（d_B 仅 DIN）。
-function syncDetailVisibility(f) {
-  for (const it of f.inputs || []) {
-    const sw = it.show_when;
-    if (!sw) continue;
-    const dep = el("p_" + sw.key);
-    const on = dep && (sw.values || []).indexOf(dep.value) >= 0;
-    (detailInputEls[it.key] || []).forEach((e) => { e.style.display = on ? "" : "none"; });
-  }
-}
-
-// 填下拉：`options` 固定选项；`options_by[上级值]` 联动选项（保留已选值，否则取 default）。
-function fillDetailSelect(f, it, sel, depValue) {
-  const opts = it.options_by ? (it.options_by[depValue] || []) : (it.options || []);
-  const prev = sel.value;
-  sel.innerHTML = "";
-  opts.forEach((o) => {
-    const op = document.createElement("option");
-    op.value = o.value;
-    op.textContent = o.label;
-    op.selected = o.value === prev;
-    sel.appendChild(op);
-  });
-  const values = opts.map((o) => o.value);
-  sel.value = values.includes(prev) ? prev
-      : (values.includes(it.default) ? it.default : (values[0] || ""));
-}
-
-// 上级下拉（std）变了：重建带 `options_by` 的下拉，保证值在同一标准内。
-function syncDetailSelects(f) {
-  for (const it of f.inputs || []) {
-    if (it.type !== "select" || !it.options_by) continue;
-    const sel = el("p_" + it.key);
-    const dep = el("p_" + (it.depends_on || "std"));
-    if (sel && dep) fillDetailSelect(f, it, sel, dep.value);
-  }
-}
-
-// 收集下拉值（标准/齿廓预设代号）。
-function collectSelects(f) {
-  const out = {};
-  for (const it of f.inputs || []) {
-    if (it.type !== "select") continue;
-    const sel = el("p_" + it.key);
-    if (sel) out[it.key] = sel.value;
-  }
-  return out;
 }
 
 // 收集动态参数（留空跳过；必给项缺失/非数字 → 直接在提示行报错并清掉预览）。
@@ -367,7 +271,6 @@ function collectParams(f, hint) {
   const params = {};
   let missing = null;
   for (const it of f.inputs || []) {
-    if (it.type === "select") continue; // 下拉（预设代号）走 collectSelects
     const inp = el("p_" + it.key);
     const raw = inp ? inp.value.trim() : "";
     if (raw === "") {
@@ -383,8 +286,7 @@ function collectParams(f, hint) {
     params[it.key] = v;
   }
   if (missing !== null) {
-    hint.textContent = "参数 " + missing + " 必给（"
-        + (f.invol_presets ? "渐开线花键：m / z" : "花键：L 满齿段长；退刀槽：P") + "）";
+    hint.textContent = "参数 " + missing + " 必给（花键：L 满齿段长；退刀槽：P）";
     el("preview").removeAttribute("src");
     return null;
   }
@@ -428,46 +330,10 @@ function currentSpecCode() {
 
 // 结构要素：d 自由输入；有 `inputs` 的族走通用参数，否则是老 b1 面板。
 // 有 `specs` 的族（矩形花键）：d 由规格代号派生，规格代号随请求发给服务端。
-// 有 `invol_presets` 的族（渐开线花键）：标准/齿廓两个下拉合成预设代号（spec），
-// m/z/x/L 走 params；派生值就地显示（与后端 invol_spline.rs 同公式）。
 function onDetail() {
   const f = catalog.families[cur.family];
   const hint = el("detailHint");
   const hasSpecs = !!(f.specs && f.specs.length);
-  if (f.invol_presets) {
-    syncDetailSelects(f);
-    syncDetailVisibility(f);   // 按 std 值显隐 d_B（DIN）/ A（NF）/ 齿廓参数
-    const sels = collectSelects(f);
-    const code = sels.profile || "";
-    const preset = (f.invol_presets || []).find((p) => p.code === code);
-    if (!preset) {
-      cur.spec = "";
-      cur.params = {};
-      hint.textContent = "预设代号无效（标准/齿廓下拉重选）";
-      el("preview").removeAttribute("src");
-      return;
-    }
-    const params = collectParams(f, hint);
-    if (params === null) { cur.spec = ""; cur.params = {}; return; }
-    // ANSI：径节 P 槽位为准（m 槽位同义）；d_B/A 只属 DIN/NF。
-    if (preset.std === "ANSI") delete params.m;
-    if (preset.std !== "DIN" && params.db !== undefined) delete params.db;
-    if (preset.std !== "NF" && params.a !== undefined) delete params.a;
-    if (preset.std !== "ANSI" && params.p !== undefined) delete params.p;
-    if (preset.std === "ANSI" && !(Number(params.p) > 0)) {
-      hint.textContent = "ANSI：径节 P 必给（Table 2 用）";
-      el("preview").removeAttribute("src");
-      return;
-    }
-    cur.spec = code;
-    cur.d = 0;
-    cur.params = params;
-    const bench = preset.std === "NF" ? params.a : params.db;
-    const mForText = preset.std === "ANSI" ? params.p : params.m;
-    hint.textContent = involDerivedText(preset, mForText, params.z, params.x, bench, f);
-    update();
-    return;
-  }
   if (hasSpecs) {
     cur.spec = currentSpecCode();
     cur.d = specMinorD(cur.spec);
@@ -529,166 +395,6 @@ function onDetail() {
   const choices = rows.map((r) => r.b1).join("、");
   hint.textContent = "该 d 属于「" + band.label + "」档；默认 b1=" + def + "；可选 b1=" + choices;
   update();
-}
-
-// DIN 5480-2 名义表（catalog.families.detail_invol_spline.din_nominal）候选 d_B 列表。
-function dinDbValues(f) {
-  return [...new Set((f.din_nominal || []).map((r) => Number(r.db)))]
-    .filter((v) => Number.isFinite(v))
-    .sort((a, b) => a - b);
-}
-
-// 选了 d_B → 自动带出 m/z/x（唯一命中；有多个 z 变体时只填 m 并保留 z 供手选）。
-function fillDinDb(f) {
-  const pv = (key) => el("p_" + key);
-  const std = pv("std");
-  const db = pv("db");
-  const mIn = pv("m");
-  const zIn = pv("z");
-  if (!std || !db || !mIn || !zIn || std.value !== "DIN") return;
-  const v = Number(String(db.value).trim());
-  if (!(v > 0)) return;
-  const hits = (f.din_nominal || []).filter((r) => Math.abs(Number(r.db) - v) < 1e-6);
-  if (!hits.length) return;
-  const ms = [...new Set(hits.map((r) => Number(r.m)))];
-  const zs = [...new Set(hits.map((r) => Number(r.z)))];
-  if (ms.length === 1) mIn.value = fmt(ms[0]);
-  if (zs.length === 1) zIn.value = String(zs[0]);
-  const hit = hits.length === 1 ? hits[0]
-    : hits.find((r) => Number(mIn.value) === Number(r.m) && Number(zIn.value) === Number(r.z));
-  if (hit) pv("x").value = fmt(hit.x);
-}
-
-// NF E22-141 尺寸表（catalog.families.detail_invol_spline.nf_nominal）候选 A 列表。
-function nfAValues(f) {
-  return [...new Set((f.nf_nominal || []).map((r) => Number(r.a)))]
-    .filter((v) => Number.isFinite(v))
-    .sort((a, b) => a - b);
-}
-
-// 选了公称直径 A → 自动带出 m/z（唯一命中才填；同一 A 多档/多 N 时保留供手选）。
-function fillNfA(f) {
-  const pv = (key) => el("p_" + key);
-  const std = pv("std");
-  const aIn = pv("a");
-  const mIn = pv("m");
-  const zIn = pv("z");
-  if (!std || !aIn || !mIn || !zIn || std.value !== "NF") return;
-  const v = Number(String(aIn.value).trim());
-  if (!(v > 0)) return;
-  const hits = (f.nf_nominal || []).filter((r) => Math.abs(Number(r.a) - v) < 1e-6);
-  if (!hits.length) return;
-  const ms = [...new Set(hits.map((r) => Number(r.m)))];
-  const zs = [...new Set(hits.map((r) => Number(r.z)))];
-  if (ms.length === 1) mIn.value = fmt(ms[0]);
-  if (zs.length === 1) zIn.value = String(zs[0]);
-}
-
-// 渐开线花键派生值：与 `invol_spline.rs` 同公式（d/db/da/df/ρf/cF；
-// DIN 另给 d_B 名义估算 m(z+2x) 并说明它只作身份显示）。
-function fmt(v) {
-  const n = Number(v);
-  if (!Number.isFinite(n)) return String(v);
-  return Math.abs(n - Math.round(n)) < 1e-9
-      ? String(Math.round(n))
-      : n.toFixed(4).replace(/0+$/, "").replace(/\.$/, "");
-}
-
-function involDerivedText(preset, m, z, x, d_b, f) {
-  const mv = Number(m);
-  const zv = Number(z);
-  if (!(mv > 0) || !(zv > 0)) {
-    return preset.code + "（" + preset.profile + "）：" + (preset.std === "ANSI" ? "填 P" : "填 m") + " / z 后显示派生值"
-        + (preset.std === "DIN" ? "（给 d_B 可由 DIN 5480-2 表自动带出）"
-           : preset.std === "NF" ? "（给公称直径 A 可由 NF E22-141 表自动带出另一项）" 
-           : preset.std === "ANSI" ? "（径节 P + Table 2 五列公式）" : "");
-  }
-  if (preset.std === "ANSI") {
-    // ANSI Table 2：标准公式/印出值是英制（D=N/P 英寸）；引擎与显示统一 mm（×25.4）：
-    // M=25.4/P；Do=(N+1)M、Dri/Di/Dre 按列公式×M、cF=clamp(0.001·D_mm, 0.0508, 0.254)、
-    // DFi(B) 的 −0.004 in=−0.1016、Sv 随 φD 后×M；rf 标准未给值（切于齿根过渡弧构造）。
-    const P = mv, M = 25.4 / P, zz = zv, aa = preset.alpha * Math.PI / 180;
-    const D = zz * M, Db = D * Math.cos(aa);
-    const cF = Math.min(0.254, Math.max(0.0508, 0.001 * D));
-    const isFlatMajor = preset.profile.indexOf("30平齿根外径") >= 0;
-    const isFillet30 = preset.profile.indexOf("30圆齿根") >= 0;
-    const is375 = preset.profile.indexOf("37.5") >= 0;
-    const is45 = preset.profile.indexOf("45") >= 0;
-    const kDre = isFillet30 ? (P > 12 ? 2.0 : 1.8) : (is375 ? 1.3 : (is45 ? 1.0 : 1.35));
-    const kDri = isFlatMajor ? 1.0 : (isFillet30 ? 1.8 : (is375 ? 1.6 : (is45 ? 1.4 : 1.35)));
-    const kDi = is375 ? 0.8 : (is45 ? 0.6 : 1.0);
-    const Do = (zz + 1) * M, Dri = (zz + kDri) * M, Di = (zz - kDi) * M, Dre = (zz - kDre) * M;
-    const DFe = Di - 2 * cF;
-    const DFi = isFlatMajor ? (zz + 0.8) * M - 0.1016 + 2 * cF : (zz + 1) * M + 2 * cF;
-    const sv = (is375 ? 0.5 * Math.PI + 0.1 : (is45 ? 0.5 * Math.PI + 0.2 : 0.5 * Math.PI)) * M;
-    const rs = DFe / 2, rf2 = Dre / 2, rb = Db / 2;
-    let rho = 0;
-    if (rs > rf2 && rs > rb) {
-      rho = (rs * rs - rf2 * rf2) / (2 * (rf2 + rs * Math.sqrt((rs * rs - rb * rb) / (rs * rs))));
-    }
-    return preset.code + "（" + preset.profile + "）：P=" + fmt(P) + "/Ps" + fmt(2 * P) + " z=" + zz
-      + " D=" + fmt(D) + " Db=" + fmt(Db) + " Do=" + fmt(Do)
-      + " Dri=" + fmt(Dri) + " Di=" + fmt(Di) + " Dre=" + fmt(Dre)
-      + " DFe=" + fmt(DFe) + " DFi=" + fmt(DFi)
-      + " cF=" + fmt(cF) + " Sv=" + fmt(sv) + " ρf=" + fmt(rho) + "（mm；ρf 无标准值）";
-  }
-  const isNf = preset.std === "NF";
-  // NF：A 是主参数 —— 给了 A 时 x 由公式解（A 为主），否则由 m/z/x 正算 A。
-  let aNf = NaN;
-  let xv = x === "" || x === undefined || !Number.isFinite(Number(x)) ? (isNf ? 0.8 : 0) : Number(x);
-  if (isNf) {
-    const rawA = d_b === undefined || d_b === null || String(d_b).trim() === "" ? NaN : Number(d_b);
-    if (Number.isFinite(rawA) && rawA > 0) {
-      aNf = rawA;
-      xv = (rawA - mv * (zv + 0.4)) / (2 * mv);
-    } else {
-      aNf = mv * (zv + 2 * xv + 0.4);
-    }
-  }
-  const a = preset.alpha * Math.PI / 180;
-  const d = mv * zv;
-  const dEff = isNf && Number.isFinite(aNf) ? aNf - 0.4 * mv : d + 2 * xv * mv;
-  const db = d * Math.cos(a);
-  const da = dEff + 2 * preset.ha * mv;
-  const df = dEff - 2 * preset.hf * mv;
-  let s = preset.code + "（" + preset.profile + "）：m=" + fmt(mv) + " z=" + zv
-      + " x=" + fmt(xv) + " d=" + fmt(d) + " db=" + fmt(db)
-      + " da=" + fmt(da) + " df=" + fmt(df) + " ρf=" + fmt(preset.rho * mv)
-      + " cF=" + fmt(preset.cf * mv);
-  if (isNf) {
-    const rawA = Number(aNf);
-    const hits = ((f && f.nf_nominal) || []).filter((r) => Math.abs(Number(r.a) - rawA) < 1e-6);
-    const hit = hits.find((r) => Number(r.m) === mv && Number(r.z) === zv);
-    const src = (d_b !== undefined && d_b !== null && String(d_b).trim() !== "")
-      ? (hit ? "查表命中 p" + hit.page + " m=" + fmt(hit.m) + " z=" + hit.z
-             : "由公式解出，未命中表")
-      : "由 m/z/x 正算 A=m(z+2x+0.4)";
-    s += "; A=" + fmt(rawA) + "（" + src + "）";
-    return s;
-  }
-  if (preset.std === "DIN") {
-    const raw = d_b === undefined || d_b === null || String(d_b).trim() === "" ? NaN : Number(d_b);
-    if (Number.isFinite(raw) && raw > 0) {
-      const hits = ((f && f.din_nominal) || []).filter((r) => Math.abs(Number(r.db) - raw) < 1e-6);
-      const hit = hits.find((r) => Number(r.m) === mv && Number(r.z) === zv
-          && Math.abs(Number(r.x) - xv) < 5e-4);
-      s += "; d_B=" + fmt(raw)
-        + (hit ? "（查表命中 p" + hit.page + " m=" + fmt(hit.m) + "）" : "（由公式解出，未命中表）");
-      // 检验尺寸（与 shaft_gui 同口径）：精确 (d_B,m,z) 查表才显值；否则提示走 CHECK/公式。
-      const insp = ((f && f.din_inspection) || []).find((r) =>
-        Math.abs(Number(r.db) - raw) < 1e-6 && Math.abs(Number(r.m) - mv) < 1e-9 && Number(r.z) === zv);
-      if (insp) {
-        s += "; 检验 M1=" + fmt(insp.m1) + "（D_M=" + fmt(insp.dm_shaft) + "） M2=" + fmt(insp.m2)
-          + "（D_M=" + fmt(insp.dm_hub) + "） k=" + insp.k + " W_k=" + fmt(insp.wk)
-          + "（p" + insp.page + "·" + insp.source + "）";
-      } else {
-        s += "; 检验该 z 不在表（CHECK/公式：/api/invol_check?check=1）";
-      }
-    } else {
-      s += "; d_B=—（填 d_B 可从 DIN 5480-2 表自动带出 m/z/x 与检验值）";
-    }
-  }
-  return s;
 }
 
 function onDia(size) {

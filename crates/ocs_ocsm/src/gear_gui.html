@@ -257,7 +257,7 @@ const VIEWS = [
   { key: "simplified", name: "简化正视图", kinds: ["external"] },
   { key: "front", name: "常规正视图", internalName: "端视图", kinds: ["external", "internal"] },
 ];
-// 花键齿廓预设：正常从 `/api/parts`（detail_invol_spline.invol_presets）取；拿不到时用这份兜底
+// 花键齿廓预设：正常从 `/api/parts`（spline_engine.invol_presets，引擎数据）取；拿不到时用这份兜底
 // （系数与 invol_spline.rs 的 `GB_PRESETS`/`DIN_PRESETS` 同一套）。
 const INVOL_FALLBACK = [
   { code: "GB30P", std: "GB", profile: "30平齿根", alpha: 30, ha: 0.5, hf: 0.75, rho: 0.2, cf: 0.1 },
@@ -863,7 +863,7 @@ function fillBench() {
 async function loadInvolCatalog() {
   try {
     const cat = await (await fetch("/api/parts", { cache: "no-store" })).json();
-    const inv = cat && cat.families ? cat.families.detail_invol_spline : null;
+    const inv = cat && cat.spline_engine ? cat.spline_engine : null;
     involPresets = (inv && Array.isArray(inv.invol_presets) ? inv.invol_presets : [])
       .filter((p) => p && typeof p.code === "string" && p.code !== "");
     involDinNominal = (inv && Array.isArray(inv.din_nominal) ? inv.din_nominal : [])
