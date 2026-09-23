@@ -131,9 +131,10 @@
       （轻/中系列共 33 条）<b>下拉选择</b>，选中自动带出 d/D/B/de/h/l 派生值（de 框可改 = 覆盖）；
       下拉末尾「自定义…」手输表外规格（表外必须给 <code>de</code>）。满齿段长 <code>L</code>
       （段长 = L + 收尾 l）；不能与 CH/OV/M/GEAR 同段。
-      <b>平键（轴槽）</b>：段表的 <b>KEY 列</b>（与螺纹/花键同级的段类型）—— 勾选后给键型 A/C（B 型键槽已撤）、
-      键长 L、位置中置/端置；<b>b×h 与 t1 由该段直径 d 查 GB/T 1095 自动定、只读显示</b>（
-      b×h 由 d 定；显式覆盖也必须落在该轴径档的标准配对）；与 GEAR / SPLINE / M / OV 互斥。
+      <b>平键（轴槽）</b>：段表的 <b>KEY 列</b>（与螺纹/花键同级的段类型）—— 勾选后给键型 A/B/C、键长 L（所选键型的键长）、位置中置/端置；
+      <b>b×h 与 t1 由该段直径 d 查 GB/T 1095 自动定、只读显示</b>（显式覆盖也必须落在该轴径档标准配对）；
+      槽长按型别折算（B：中置 +b / 端置 +b/2；C：中置 +b/2 / 端置不折算）。
+      显示口径：<b>中置常规侧视恒显示 A（双圆头）</b>，<b>端置 B/C 显示 C（单圆头）</b>。与 GEAR / SPLINE / M / OV 互斥。
       <b>GEAR 齿轮段</b>的 H = 齿宽（留空 10m）、α = 压力角（留空 20°）；
       <b>TODO</b>：GEAR 段目前只支持模数制 M（径节制 DP 走 <code>OCSMGEAR</code> 齿轮工具，端/侧/剖视共用几何）。<br>
       <b>表达式互通</b>：齿轮窗口的「轴生成器表达式」可直接粘贴到上面的表达式框或某行的 GEAR 输入框
@@ -312,15 +313,35 @@ function keyLengthOptionsHtml(r) {
 }
 
 // 段表 KEY 列：只读派生 —— 由轴段直径 d 查 GB/T 1095 得 b×h（与 t1）。
+// 所选键型键长 → 显示/开槽折算长度（与后端 Keyway::effective_len 同口径）：
+// 圆弧端半径 b/2 会吃直段：中置显示 A（A 不折算 / B +b / C +b/2）；端置显示 C（B +b/2 / C 与 A 不折算）。
+function keyEffectiveLen(kind, place, l, b) {
+  if (place === "mid" && kind === "B") return l + b;
+  if (place === "mid" && kind === "C") return l + b / 2;
+  if (place === "end" && kind === "B") return l + b / 2;
+  return l;
+}
+
+function keySlotLen(kind, place, l, b, t1) {
+  const eff = keyEffectiveLen(kind, place, l, b);
+  return place === "end" ? eff + t1 : eff;
+}
+
 function keyDeriveHtml(r) {
   const d = numOrNaN(r.s);
   const range = shaftKeyRange(r.key.kind, d);
   if (!range) return "d" + (Number.isFinite(d) ? fmt(d) : "?") + " 不在 GB/T 1095 选型表";
-  const size = keySizeRow(r.key.kind, Number(range.b));
-  const bTxt = "b" + fmt(range.b) + "×h" + (size && size.h !== undefined ? fmt(size.h) : "?");
-  const t1Txt = range.t1 !== undefined ? " t1=" + fmt(range.t1) : "";
+  const b = Number(range.b);
+  const t1 = range.t1 !== undefined ? Number(range.t1) : NaN;
+  const size = keySizeRow(r.key.kind, b);
+  const hTxt = size && size.h !== undefined ? "×h" + fmt(size.h) : "×h?";
+  let txt = "d" + fmt(d) + " → b" + fmt(b) + hTxt + (Number.isFinite(t1) ? " t1=" + fmt(t1) : "");
+  const l = numOrNaN(r.key.l);
+  if (l > 0 && Number.isFinite(b)) {
+    txt += " · 槽长 " + fmt(keySlotLen(r.key.kind, r.key.place, l, b, Number.isFinite(t1) ? t1 : 0));
+  }
   const over = String(r.key.b).trim() !== "" || String(r.key.h).trim() !== "" ? "（覆盖）" : "";
-  return "d" + fmt(d) + " → " + bTxt + t1Txt + over;
+  return txt + over;
 }
 
 // 段表 KEY 列状态归一：勾上后若 L 不在该 b 的合法系列里，取第一个合法值。
@@ -465,7 +486,7 @@ function rowHtml(r, i) {
     <td class="feat"><div class="frow"><label class="chk"><input type="checkbox" data-f="m.on"${ck(mOn)}${dis(gearOn || ovOn || splineOn || keyOn)}>M</label>
       <input type="number" step="0.1" min="0" data-f="m.p" value="${esc(r.m.p)}" placeholder="0.85d"${dis(gearOn || ovOn || splineOn || keyOn)}></div></td>
     <td class="feat"><div class="frow"><label class="chk"><input type="checkbox" data-f="key.on"${ck(keyOn)}${dis(gearOn || splineOn || mOn || ovOn)}>KEY</label>
-      <select data-f="key.kind" title="键型 A/C（B 型键槽已撤；复用 GB/T 1096 平键族 key_1096_a/c）"${dis(!keyOn)}><option value="A"${r.key.kind === "A" ? " selected" : ""}>A</option><option value="C"${r.key.kind === "C" ? " selected" : ""}>C</option></select>
+      <select data-f="key.kind" title="键型 A/B/C（复用 GB/T 1096 平键族 key_1096_a/b/c；槽长会自动按型别折算）"${dis(!keyOn)}><option value="A"${r.key.kind === "A" ? " selected" : ""}>A</option><option value="B"${r.key.kind === "B" ? " selected" : ""}>B</option><option value="C"${r.key.kind === "C" ? " selected" : ""}>C</option></select>
       <select data-f="key.place" title="位置：中置 = 槽两端封闭（居中于净圆柱）；端置 = 开在轴首/末段自由端（槽长 = 键长 + t1）"${dis(!keyOn)}><option value="mid"${r.key.place !== "end" ? " selected" : ""}>中置</option><option value="end"${r.key.place === "end" ? " selected" : ""}>端置</option></select></div>
       <div class="frow"><span class="chk">L</span><select data-f="key.l"${dis(!keyOn)}>${keyLengthOptionsHtml(r)}</select>
       <span class="chk key-derive" title="由轴段直径查 GB/T 1095 得 b×h；t1 按 b 查表">${keyDeriveHtml(r)}</span></div>

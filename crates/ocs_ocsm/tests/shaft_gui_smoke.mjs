@@ -44,11 +44,13 @@ const SPECS = [
 const KEY_SIZES = [
   { d: 8, b: 8, h: 7, label: 'b=8×h=7', l_min: 6, l_max: 79, lengths: [18, 6, 8, 10, 12, 14, 16, 20, 22, 25], extra: 'h=7；c=0.25（按 b 分档取范围下限）；默认 L=18' },
   { d: 10, b: 10, h: 8, label: 'b=10×h=8', l_min: 6, l_max: 99, lengths: [22, 6, 8, 10, 12, 14, 16, 18, 20, 25], extra: 'h=8；c=0.4（按 b 分档取范围下限）；默认 L=22' },
+  { d: 14, b: 14, h: 9, label: 'b=14×h=9', l_min: 6, l_max: 139, lengths: [32, 6, 8, 10, 12, 14, 16, 18, 20, 22, 25, 28], extra: 'h=9；c=0.4；默认 L=32' },
 ];
 const KEY_RANGES = [
   { d_lo: 6, d_hi: 8, lo_inclusive: true, b: 2, t1: 1.2 },
   { d_lo: 22, d_hi: 30, lo_inclusive: false, b: 8, t1: 4 },
   { d_lo: 30, d_hi: 38, lo_inclusive: false, b: 10, t1: 5 },
+  { d_lo: 44, d_hi: 50, lo_inclusive: false, b: 14, t1: 5.5 },
 ];
 
 // ── 最小 DOM 垫片 ────────────────────────────────────────────────
@@ -277,7 +279,12 @@ function segmentsFor(dsl) {
     }
     // 普通轴段（S/E/L…）：本测试不细解 S/E/L，给一个圆柱段；KEY 子关键字回填 keyway（与后端同形）。
     if (/^S\s*=?\s*[\d.]/i.test(line)) {
-      const seg = { s: 30, e: 30, l: 10 };
+      // 保留 S/E/L 真值（KEY 折算探针需要真实轴径；缺省回退 30/30/10）。
+      const sm = /\bS\s*=?\s*([\d.]+)/i.exec(line);
+      const em = /\bE\s*=?\s*([\d.]+)/i.exec(line);
+      const lm = /\bL\s*=?\s*([\d.]+)/i.exec(line);
+      const s0 = sm ? Number(sm[1]) : 30;
+      const seg = { s: s0, e: em ? Number(em[1]) : s0, l: lm ? Number(lm[1]) : 10 };
       const km = /\bKEY\s+([ABC])\s+(?:KL\s*=?\s*)?([\d.]+)/i.exec(line);
       if (km) {
         seg.keyway = {
@@ -619,21 +626,34 @@ check(!!keyLenF && keyLenF.options.some((o) => o.value === '18'),
 check(dslEl.value.includes('KEY A 18') && !/\bb\d/.test(dslEl.value),
   '自动 b×h 不写进 DSL（由后端按 d 定）：' + JSON.stringify(dslEl.value));
 check(!!krow._fields.find((f) => f.dataset.f === 'key.l' && f.disabled === false), 'KEY 段 L 可选');
-// B 型槽已撤：键型下拉只有 A/C（不提供 B）。
-check(keyKindF.options.every((o) => o.value !== 'B'), '键型下拉不应再有 B 型（B 型无键槽）');
-check(keyKindF.options.some((o) => o.value === 'A') && keyKindF.options.some((o) => o.value === 'C'),
-  '键型下拉应保留 A/C：' + JSON.stringify(keyKindF.options.map((o) => o.value)));
-// 改键型 C + 端置 → DSL 同步。
-keyKindF.value = 'C';
-segBody._fire('input', keyKindF);
-await tick();
-check(S.rows[0].key.kind === 'C' && dslEl.value.includes('KEY C 18'),
-  '改键型 C 应同步：' + JSON.stringify(dslEl.value));
+// A/B/C 三型都可选（用户口径恢复）；槽长按型别折算显示。
+check(keyKindF.options.map((o) => o.value).join(',') === 'A,B,C',
+  '键型下拉应为 A/B/C：' + JSON.stringify(keyKindF.options.map((o) => o.value)));
+// d45 → b14、t1=5.5（t1≠b/2，便于区分折算）；B 20：中置 20+14=34、端置 20+7+5.5=32.5。
+dslEl.value = 'S45 E45 L80 KEY B 20 | S20 E20 L10';
+await S.refreshFromText();
+S.sel = 0;
+krow = segBody._rows[0];
+check(krow._html.includes('b14×h9') && krow._html.includes('槽长 34'),
+  '中置 B 折算 +b：20+14=34：' + krow._html.slice(0, 400));
 segBody._rows[0]._fields.find((f) => f.dataset.f === 'key.place').value = 'end';
 segBody._fire('input', segBody._rows[0]._fields.find((f) => f.dataset.f === 'key.place'));
 await tick();
-check(S.rows[0].key.place === 'end' && dslEl.value.includes('KEY C 18 @端'),
-  '改端置应同步 @端：' + JSON.stringify(dslEl.value));
+krow = segBody._rows[0];
+check(krow._html.includes('槽长 32.5'),
+  '端置 B 折算 +b/2+t1：20+7+5.5=32.5：' + krow._html.slice(0, 400));
+// C 型中置 20+7=27；C 端置 20+5.5=25.5。
+segBody._rows[0]._fields.find((f) => f.dataset.f === 'key.kind').value = 'C';
+segBody._fire('input', segBody._rows[0]._fields.find((f) => f.dataset.f === 'key.kind'));
+await tick();
+segBody._rows[0]._fields.find((f) => f.dataset.f === 'key.place').value = 'mid';
+segBody._fire('input', segBody._rows[0]._fields.find((f) => f.dataset.f === 'key.place'));
+await tick();
+check(segBody._rows[0]._html.includes('槽长 27'), '中置 C 折算 +b/2：20+7=27：' + segBody._rows[0]._html.slice(0, 400));
+segBody._rows[0]._fields.find((f) => f.dataset.f === 'key.place').value = 'end';
+segBody._fire('input', segBody._rows[0]._fields.find((f) => f.dataset.f === 'key.place'));
+await tick();
+check(segBody._rows[0]._html.includes('槽长 25.5'), '端置 C 不折算+t1：20+5.5=25.5：' + segBody._rows[0]._html.slice(0, 400));
 // 互斥：GEAR / SPLINE 段 → KEY 勾选禁用；KEY 段 → GEAR / SPLINE 勾选禁用（与 M/OV 同口径 enforceExclusive）。
 dslEl.value = 'GEAR M3 Z20 H30';
 await S.refreshFromText();
