@@ -44,7 +44,8 @@
 //!   `MARK KIND M… Z… ALPHA… X… DA… DF… BETA… H…`（顺序稳定、解析无序）：
 //!   * `MARK` = `GEAR`（齿轮）/ `SPLINE`（渐开线花键）—— **画法开关，不是分类标签**：
 //!     决定**常规侧视图**是否画内侧直径（外齿 = 齿根圆；内齿 = 里侧齿顶）的
-//!     `2细线层`（青色 ACI 4）细实线：`GEAR` 画 / `SPLINE` 不画（花键制图口径）；
+//!     `2细线层`（青色 ACI 4）细实线：`SPLINE` 画小径细实线 / `GEAR` 不画
+//!     （既有齿轮口径「无齿根线」；`gear.rs` `helix_lines_only_for_helical_and_follow_hand_rule` + handbook 16 §九）；
 //!   * `KIND` = `EX`/`IN`（外/内；缺省 EX）；`X` = 变位系数（缺省 0）；
 //!     `DA`/`DF` = 大径/小径（可省，按 `GearParams` 推：ha*=1、c*=0.25）；
 //!   * 旧写法 `GEAR M5 Z10 H20`（可 `ALPHA25`）**继续可用**（等价 `GEAR EX … X0`）；
@@ -74,8 +75,8 @@
 //! 端面可见高 = ra − C，倒角斜线只贴该侧端面；倒角终点（台阶）竖线**只在常规
 //! 视图**画（半高 = ra，与 `side_view()` 的台阶线同）。另画分度线 r = d/2
 //! （`3中心线层`，点划线，不受倒角影响）。**内侧直径线按 MARK 开关**：
-//! `GEAR` 常规侧视图画外齿齿根圆 / 内齿里侧齿顶圆的 `2细线层` 青色细实线
-//! （用户 2026-09-23 定案）；`SPLINE` 不画（花键制图口径）；**剖视/双视图两标记都画**
+//! `SPLINE` 常规侧视图画外齿小径 / 内齿里侧齿顶的 `2细线层` 青色细实线；`GEAR` 不画
+//! （既有齿轮口径「无齿根线」）；**剖视/双视图两标记都画**
 //! 内侧线（`1轮廓实线层`，齿部按不剖，也是剖面线边界）。派生尺寸取 `gear.rs`
 //! 同口径（ha*=1、c*=0.25；旧写法 Xn=0 → ra = da/2、rf = df/2；统一表达式的
 //! `DA/DF` 为大径/小径，内齿时 `DA` = 外侧齿根、`DF` = 里侧齿顶），不自己另立公式。
@@ -3559,11 +3560,12 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
             entities.push(line([x0, r], [x1, r], LAYER_CENTER));
             entities.push(line([x0, -r], [x1, -r], LAYER_CENTER));
             // 内侧直径线（外齿 = 齿根圆 / 内齿 = 里侧齿顶）：剖视恒画（`1轮廓实线层`，齿部按不剖，
-            // 也是剖面线边界）；**常规侧视图按 MARK 开关** —— GEAR 画 `2细线层`（青色 ACI 4）、
-            // SPLINE 不画（花键制图口径；用户 2026-09-23 定案）。
+            // 也是剖面线边界）；**常规侧视图按 MARK 开关** —— `SPLINE`（渐开线花键）画 `2细线层`
+            // （青色 ACI 4）小径细实线、`GEAR`（齿轮）不画（既有齿轮口径「无齿根线」；
+            // `gear.rs:4364` 既有测试 + handbook 16 §九「花键有小径细实线、齿轮没有」）。
             section_lines.push(line([x0, rf], [x1, rf], LAYER_MAIN));
             section_lines.push(line([x0, -rf], [x1, -rf], LAYER_MAIN));
-            if !gear.involute {
+            if gear.involute {
                 spline_regular.push(line([x0, rf], [x1, rf], LAYER_THIN));
                 spline_regular.push(line([x0, -rf], [x1, -rf], LAYER_THIN));
             }
@@ -5968,12 +5970,13 @@ GEAR M3 Z20";
         assert!(has_line(&shaft, [20.0, r], [50.0, r]));
         assert!(has_line(&shaft, [20.0, -r], [50.0, -r]));
         assert_eq!(layer_of_y(r), Some(crate::partgen_kit::LAYER_CENTER));
-        // 内侧直径线（齿根圆）：统一表达式的 MARK 画法开关 —— GEAR 常规侧视图**画**
-        // 2细线层青色细实线（用户 2026-09-23 定案）；SPLINE 不画；剖视两标记都画。
-        assert!(has_line(&shaft, [20.0, rf], [50.0, rf]), "GEAR 常规画齿根细实线");
-        assert!(has_line(&shaft, [20.0, -rf], [50.0, -rf]), "GEAR 常规画齿根细实线");
-        assert_eq!(layer_of_y(rf), Some(LAYER_THIN), "齿根细实线落 2细线层");
-        // 2细线层定义 = ACI 4（青）+ Continuous（层色可断言）。
+        // 内侧直径线（齿根圆）：统一表达式的 MARK 画法开关 —— 既有口径（`gear.rs:4364` 测试 +
+        // handbook 16 §九）：**花键（SPLINE）常规侧视图画小径细实线，齿轮（GEAR）不画（无齿根线）**；
+        // 剖视两标记都画。本用例是 GEAR → 常规必须**没有**这条线。
+        assert!(!has_line(&shaft, [20.0, rf], [50.0, rf]), "GEAR 常规不画齿根细实线");
+        assert!(!has_line(&shaft, [20.0, -rf], [50.0, -rf]), "GEAR 常规不画齿根细实线");
+        assert_eq!(layer_of_y(rf), None, "GEAR 齿根圆上无图元");
+        // 2细线层定义 = ACI 4（青）+ Continuous（层色可断言；SPLINE 小径线会用这条层）。
         let thin = crate::layer_defs()
             .into_iter()
             .find(|l| l.name == LAYER_THIN)
@@ -6004,8 +6007,9 @@ GEAR M3 Z20";
         assert!(near(shaft.total_length, 50.0));
     }
 
-    /// 统一表达式 MARK 画法开关（用户 2026-09-23）：同一组参数下，`GEAR` 与 `SPLINE` 的
-    /// **常规侧视图差异恰为两处内侧直径细实线**（`2细线层`；其余图元逐条一致）；
+    /// 统一表达式 MARK 画法开关（方向修正 2026-09-23：以既有口径为准）：同一组参数下，
+    /// `GEAR` 与 `SPLINE` 的**常规侧视图差异恰为两处小径/齿根细实线**（`SPLINE` 有、`GEAR` 没有；
+    /// `2细线层`，位置 = `DF/2`）；其余图元逐条一致。
     /// **剖视两标记图元完全一致**（都画内侧线 `1轮廓实线层`）。
     #[test]
     fn unified_marker_toggles_root_thin_line_in_regular_view() {
@@ -6019,13 +6023,16 @@ GEAR M3 Z20";
         let sg = build(&g, 1.0).unwrap();
         let ss = build(&s, 1.0).unwrap();
         let rf = 52.5 / 2.0;
-        // 常规：GEAR 有两条 2细线层齿根线，SPLINE 没有。
-        assert!(has_line(&sg, [0.0, rf], [30.0, rf]) && has_line(&sg, [0.0, -rf], [30.0, -rf]));
-        assert!(!has_line(&ss, [0.0, rf], [30.0, rf]) && !has_line(&ss, [0.0, -rf], [30.0, -rf]));
-        assert_eq!(layer_of_line(&sg, [0.0, rf], [30.0, rf]), Some(LAYER_THIN));
+        // 常规：SPLINE 有两条 2细线层小径线（位置 = DF/2），GEAR 没有（齿轮「无齿根线」）。
+        assert!(has_line(&ss, [0.0, rf], [30.0, rf]) && has_line(&ss, [0.0, -rf], [30.0, -rf]),
+            "SPLINE 常规画小径细实线");
+        assert!(!has_line(&sg, [0.0, rf], [30.0, rf]) && !has_line(&sg, [0.0, -rf], [30.0, -rf]),
+            "GEAR 常规不画齿根细实线");
+        assert_eq!(layer_of_line(&ss, [0.0, rf], [30.0, rf]), Some(LAYER_THIN), "小径线落 2细线层");
+        assert_eq!(layer_of_line(&sg, [0.0, rf], [30.0, rf]), None, "GEAR 该位置无图元");
         let thin_count = |sh: &Shaft| sh.entities.iter().filter(|e| layer_of(e) == LAYER_THIN).count();
-        assert_eq!(thin_count(&sg), 2, "GEAR 常规恰 2 条细实线（上/下齿根）");
-        assert_eq!(thin_count(&ss), 0, "SPLINE 常规不画内侧细实线");
+        assert_eq!(thin_count(&ss), 2, "SPLINE 常规恰 2 条细实线（上/下小径）");
+        assert_eq!(thin_count(&sg), 0, "GEAR 常规不画内侧细实线");
         // 除那两条细线外，两个常规视图逐条一致。
         let rest = |sh: &Shaft| -> Vec<String> {
             let mut v: Vec<String> = entities_csv(&sh.entities)
@@ -6070,23 +6077,20 @@ GEAR M3 Z20";
         let g = p.segments[0].gear.unwrap();
         assert!(g.involute && p.segments[0].spline.is_none());
         assert!((g.major_radius() - 31.5).abs() < 1e-9 && (g.minor_radius() - 27.3).abs() < 1e-9);
-        // 内齿：DA=外侧齿根（大径）、DF=里侧齿顶（小径）；外轮廓取 DA，GEAR 常规画内孔细实线。
+        // 内齿：DA=外侧齿根（大径）、DF=里侧齿顶（小径）；外轮廓取 DA；GEAR 常规不画内孔线、剖视画。
         let p = parse_program("GEAR IN M3 Z20 ALPHA20 X0 DA67.5 DF54 BETA0 H30").unwrap();
         let g = p.segments[0].gear.unwrap();
         assert_eq!(g.kind, GearKind::Internal);
         assert!((p.segments[0].outer_radius(End::L) - 33.75).abs() < 1e-9);
         let sh = build(&p, 1.0).unwrap();
         assert!(has_line(&sh, [2.0, 33.75], [28.0, 33.75]), "内齿外轮廓 = 大径（自由端自动倒角 C=2）");
-        assert!(has_line(&sh, [0.0, 27.0], [30.0, 27.0]), "内齿内孔线 = 小径");
-        assert_eq!(
-            layer_of_line(&sh, [0.0, 27.0], [30.0, 27.0]),
-            Some(LAYER_THIN),
-            "GEAR IN 常规内孔细实线"
-        );
-        // SPLINE IN 同参数：常规不画内孔线（MARK 开关），剖视有。
+        assert!(!has_line(&sh, [0.0, 27.0], [30.0, 27.0]), "GEAR IN 常规不画内孔线（无齿根线）");
+        let gsec = build(&parse_program("GEAR IN M3 Z20 ALPHA20 X0 DA67.5 DF54 BETA0 H30 | VIEW 剖视").unwrap(), 1.0).unwrap();
+        assert_eq!(layer_of_line(&gsec, [0.0, 27.0], [30.0, 27.0]), Some(LAYER_MAIN), "GEAR IN 剖视画内孔线");
+        // SPLINE IN 同参数：常规画小径细实线（MARK 开关），剖视也有。
         let p2 = parse_program("SPLINE IN M3 Z20 ALPHA30 X0 DA67.5 DF54 BETA0 H30").unwrap();
         let s2 = build(&p2, 1.0).unwrap();
-        assert!(!has_line(&s2, [0.0, 27.0], [30.0, 27.0]), "SPLINE IN 常规不画内孔线");
+        assert_eq!(layer_of_line(&s2, [0.0, 27.0], [30.0, 27.0]), Some(LAYER_THIN), "SPLINE IN 常规画小径细实线");
         let sc = build(&parse_program("SPLINE IN M3 Z20 ALPHA30 X0 DA67.5 DF54 BETA0 H30 | VIEW 剖视").unwrap(), 1.0).unwrap();
         assert!(has_line(&sc, [0.0, 27.0], [30.0, 27.0]), "SPLINE IN 剖视画内孔线");
         // 矩形花键不受影响：`SPLINE <规格>` 仍是 spline 段（不是齿形段）。
@@ -6625,16 +6629,16 @@ GEAR M3 Z20";
         );
         assert!(has_line(&shaft, [145.0, 31.0], [147.0, 33.0]), "齿轮左端倒角");
         assert!(has_line(&shaft, [173.0, 33.0], [175.0, 31.0]), "齿轮右端倒角");
-        // 齿轮：齿顶面（h−2C = 26，±33）/ 分度（点划线，±30）；常规视图齿根细实线（±26.25，GEAR 画）
+        // 齿轮：齿顶面（h−2C = 26，±33）/ 分度（点划线，±30）；GEAR 常规视图不画齿根细实线（±26.25）
         assert!(has_line(&shaft, [147.0, 33.0], [173.0, 33.0]), "齿顶面（缩进 2C）");
         assert!(has_line(&shaft, [145.0, 30.0], [175.0, 30.0]), "分度线");
         assert!(
-            has_line(&shaft, [145.0, 26.25], [175.0, 26.25]),
-            "GEAR 常规视图画齿根细实线（2细线层，用户 2026-09-23 定案）"
+            !has_line(&shaft, [145.0, 26.25], [175.0, 26.25]),
+            "GEAR 常规视图不画齿根细实线（齿轮「无齿根线」）"
         );
         assert!(
-            has_line(&shaft, [145.0, -26.25], [175.0, -26.25]),
-            "GEAR 常规视图下半齿根细实线也画"
+            !has_line(&shaft, [145.0, -26.25], [175.0, -26.25]),
+            "GEAR 常规视图下半也不画"
         );
         assert!(
             has_line(&shaft, [175.0, -31.0], [175.0, 31.0]),
@@ -6657,7 +6661,7 @@ GEAR M3 Z20";
             layer_at(145.0, 30.0),
             Some(crate::partgen_kit::LAYER_CENTER)
         );
-        assert_eq!(layer_at(145.0, 26.25), Some(LAYER_THIN), "GEAR 常规视图齿根细实线（2细线层）");
+        assert_eq!(layer_at(145.0, 26.25), None, "GEAR 常规视图无齿根细实线");
 
         let path = std::env::var("HOME")
             .map(std::path::PathBuf::from)
@@ -6672,8 +6676,8 @@ GEAR M3 Z20";
         // 65 = 旧 demo 59 + 齿轮倒角 6（4 斜线 + 2 台阶竖线）；
         // 旧 59 = 旧 demo 44 + 局部螺纹新增 5（锥面上下 2 + 螺尾上下 2 + 分界竖线 1）
         //      + 段边界贯通竖线 6 + 倒角终点竖线 3 + OV 槽两条界线 2 − OV 砂轮细线 1
-        // 统一表达式（2026-09-23）：GEAR 常规侧视图加齿根细实线 +2 = 67。
-        assert_eq!(shaft.entities.len(), 67, "demo 图元数");
+        // 统一表达式（2026-09-23，方向修正）：GEAR 常规**不画**内侧细实线；图元数 = 65。
+        assert_eq!(shaft.entities.len(), 65, "demo 图元数");
 
         // 剖视：真实几何 + 齿轮齿根线（2 条）+ 一个 HATCH（2 环）；不再画贯通竖线
         let section_program = parse_program(&format!("{DEMO}\nVIEW 剖视")).unwrap();
@@ -6842,9 +6846,9 @@ GEAR M3 Z20";
         // 齿轮倒角台阶竖线（齿轮.rs::side_view() 的 ±ra 台阶线）：x=124/150、±33。
         assert!(has_line(&normal, [124.0, -33.0], [124.0, 33.0]), "齿轮左台阶竖线");
         assert!(has_line(&normal, [150.0, -33.0], [150.0, 33.0]), "齿轮右台阶竖线");
-        // GEAR 常规画齿根细实线（2细线层，用户 2026-09-23 定案）
-        assert!(has_line(&normal, [122.0, 26.25], [152.0, 26.25]), "GEAR 常规画齿根细实线");
-        assert_eq!(layer_of_line(&normal, [122.0, 26.25], [152.0, 26.25]), Some(LAYER_THIN));
+        // GEAR 常规不画齿根细实线（齿轮「无齿根线」；花键才有小径细实线）
+        assert!(!has_line(&normal, [122.0, 26.25], [152.0, 26.25]), "GEAR 常规无齿根细实线");
+        assert_eq!(layer_of_line(&normal, [122.0, 26.25], [152.0, 26.25]), None);
 
         // ── 剖视：不画贯通竖线，只留真实面/倒角/槽体 ──
         for (x, h) in [(2.0, 15.0), (45.0, 15.0), (72.0, 20.0), (72.4, 19.6), (75.0, 20.6),

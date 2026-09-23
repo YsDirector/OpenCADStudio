@@ -1059,7 +1059,7 @@ function equivalence(v) {
     const expr = fresh && typeof info.expr === "string" ? info.expr : "";
     if (!expr) notes.push("正在按标准计算 DA/DF（轴生成器表达式稍后刷新）…");
     notes.push("统一齿形表达式：齿轮/花键同一套轴段语法，DA/DF 由标准算出，可直接粘贴到轴生成器；"
-      + "MARK=GEAR 常规侧视图画齿根细实线、SPLINE 不画。");
+      + "MARK=SPLINE 常规侧视图画小径细实线、GEAR 不画（齿轮「无齿根线」）。");
     return { cli, expr, notes, warnings };
   }
   const cli = v.ok
