@@ -3923,7 +3923,7 @@ pub const COMMAND_CATALOG: &[(&str, &str, &str)] = &[
     ("1 … 10", "数字键", "切当前图层；有选中对象时把对象移到该层"),
     ("OCSMFRAMEINIT", "TF", "图框：不带参数=打开图框选择窗口；带参数=一行直插（`TF a3_landscape 1:2 at 0,0 [rot 度]`）"),
     ("OCSMFRAMEINSERT", "", "按所选图框 + 比例插入（光标跟随，比例感知标注样式）；也可带参数直插（同 TF）"),
-    ("OCSMPART", "XL", "标准件/结构要素插入：不带参数=开零件库窗口（左「标准件」树 + 右「结构要素」树）+放置态；带参数=一行直插（标准件 `XL 族 d l [view …] [at x,y] [rot 度]`；结构要素 `XL detail_grind_od d [b1 值] [at x,y] [rot 度]`；外螺纹退刀槽 `XL detail_thread_relief d P 螺距 [g1 值 g2 值 dg 值 r 值 alpha 值] [at x,y] [rot 度]`；平键 `XL key_1096_{a|b|c} b L`、`XL key_1097_{a|b} b L`（d 槽位=键宽 b，L 省略/0=该档默认，L 须 ∈ 标准系列且 L<10b））"),
+    ("OCSMPART", "XL", "标准件/结构要素插入：不带参数=开零件库窗口（左「标准件」树 + 右「结构要素」树）+放置态；带参数=一行直插（标准件 `XL 族 d l [view …] [at x,y] [rot 度]`；结构要素 `XL detail_grind_od d [b1 值] [at x,y] [rot 度]`；外螺纹退刀槽 `XL detail_thread_relief d P 螺距 [g1 值 g2 值 dg 值 r 值 alpha 值] [at x,y] [rot 度]`；毂槽 `XL detail_hub_keyway d [len 毂长] [view main|side]`（b/t₂/r 由 d 查表，len 缺省 30）；平键 `XL key_1096_{a|b|c} b L`、`XL key_1097_{a|b} b L`（d 槽位=键宽 b，L 省略/0=该档默认，L 须 ∈ 标准系列且 L<10b））"),
     ("OCSMJOINT", "", "螺栓副装配：不带参数=开装配窗口+放置态；带参数=一行直装（件链算长度、遮挡裁剪、一次撤销）"),
     ("OCSMPOWERDIM", "D", "智能标注：拾取点模式标线性/对齐/半径/直径（Enter 切线段点选）"),
     ("OCSMDIMGULIDE", "GDIM", "引导线标注：选引导线 → 配置窗口（尺寸/剖视/向视/局部放大/角度/弧长/焊接/引线/序号/公差/粗糙度/形位公差）"),
@@ -13500,6 +13500,18 @@ mod weld_tests {
         assert!(bad.contains("error") && bad.contains("0.25"), "P 不在表 2 报错：{bad}");
         let bad = http_req(server.port, "GET", "/api/part_svg?family=detail_thread_relief&d=0&P=1.5", "");
         assert!(bad.contains("error"), "d=0 报错：{bad}");
+        // 结构要素（毂槽 GB/T 1095-2003）：d→b/t₂/r 查表；main/side 两视图 + len 覆盖
+        assert!(
+            cat.contains("毂槽 GB/T 1095-2003") && cat.contains("detail_hub_keyway") && cat.contains("结构要素/毂槽"),
+            "毂槽进了目录树"
+        );
+        assert!(cat.contains("\"key\":\"len\"") && cat.contains("\"r_pick\""), "毂槽 len 输入/r 策略进目录");
+        let svg = http_req(server.port, "GET", "/api/part_svg?family=detail_hub_keyway&d=25&len=30&view=main", "");
+        assert!(svg.contains("<svg") && svg.contains("d25 b8 t2 3.3"), "毂槽主视图预览：{svg}");
+        let svg = http_req(server.port, "GET", "/api/part_svg?family=detail_hub_keyway&d=25&len=40&view=side", "");
+        assert!(svg.contains("L40"), "毂槽侧视图 len 覆盖：{svg}");
+        let bad = http_req(server.port, "GET", "/api/part_svg?family=detail_hub_keyway&d=4", "");
+        assert!(bad.contains("error") && bad.contains("d 选型表"), "毂槽 d 不在表报错：{bad}");
         // 结构要素（第三期：矩形花键 GB/T 1144-2001）：规格代号下拉/输入 + L(+de 覆盖)
         assert!(
             cat.contains("矩形花键 GB/T 1144-2001") && cat.contains("detail_spline_rect"),

@@ -1,6 +1,7 @@
 //! **结构要素**（轴上的工艺结构轮廓）参数化生成。
 //!
-//! 第一期：GB/T 6403.5-2008 砂轮越程槽 —— **磨外圆**（族 id `detail_grind_od`）。
+//! 已实现：磨外圆 `detail_grind_od`（GB/T 6403.5-2008）、外螺纹退刀槽 `detail_thread_relief`（GB/T 3-1997）、
+//! 毂槽 `detail_hub_keyway`（GB/T 1095-2003，轮毂侧；与轴生成器的轴槽分属两边）、矩形花键 `detail_spline_rect`（GB/T 1144）。
 //!
 //! ## 数据出处（唯一数据源 = `GROOVE_BANDS`，改表只改这一处）
 //! - 尺寸表：用户提供的参数表 `磨外圆_GB-T6403.png`（列：b1 / h / r / d）；
@@ -20,7 +21,7 @@
 //! - 自洽关系：`b1 = r + 平段 + h`（45° 段水平长 = h）。
 //! - **不画**模板里的 `10外部结构层` / `7标注层`。
 //!
-//! ## 扩展下一个要素（退刀槽 / 键槽）
+//! ## 扩展下一个要素
 //! 1. 在本文件写数据表 + 图元构造（照 `GROOVE_BANDS` / `build_grind_od`）；
 //! 2. 实现 `DetailElement`（family / name / code / views / generate / catalog_extra / base_hint）；
 //! 3. 把实例加进 `ELEMENTS` 即可：目录、文件树（`tree_dir` 决定挂哪棵根树）、
@@ -30,7 +31,7 @@
 use ocs_plugin_api::host::acadrust::entities::EntityType;
 
 use crate::partgen::{GenPart, PartMeta};
-use crate::partgen_kit::{arc, line, trim, LAYER_MAIN};
+use crate::partgen_kit::{arc, line, trim, LAYER_CENTER, LAYER_MAIN};
 
 // ══════════════════════════════════════════════════════════════════════════
 // 通用框架（一族 = 一个 DetailElement；新增要素只动本文件）
@@ -167,7 +168,7 @@ pub trait DetailElement: Sync {
 }
 
 /// 已登记的要素（新增要素往这里加一项）。
-pub static ELEMENTS: &[&dyn DetailElement] = &[&GRIND_OD, &THREAD_RELIEF, &SPLINE_RECT];
+pub static ELEMENTS: &[&dyn DetailElement] = &[&GRIND_OD, &THREAD_RELIEF, &HUB_KEYWAY, &SPLINE_RECT];
 
 /// 族 id → 要素定义。
 pub fn find(family: &str) -> Option<&'static dyn DetailElement> {
@@ -1067,6 +1068,308 @@ impl DetailElement for ThreadRelief {
                 }))
                 .collect::<Vec<_>>(),
             "sample": { "d": 20, "P": 1.5 },
+        })
+    }
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// 毂槽：GB/T 1095-2003（XL 结构要素；数据复用 keyway_gb1095.csv + 1096 d 列）
+// ══════════════════════════════════════════════════════════════════════════
+//
+// 画法与数据出处：`review/毂槽_几何反解.md` + `review/毂槽_设计.md`；
+// 模板 `GB-T1095-2003毂槽-{主视图,侧视图}.dxf`（specimen d=25/b=8/t2=3.3/r=0.25/L=30）。
+// 密钥口径：毂槽属**轮毂侧**，不进轴生成器（用户定案）；本要素只画毂的键槽局部。
+
+/// 族 id（CLI / GUI / 树 / xdata 用）。
+pub const FAMILY_HUB_KEYWAY: &str = "detail_hub_keyway";
+
+/// 侧视图默认毂长（模板 specimen L=30；`len` 可覆盖）。
+pub const HUB_KEYWAY_DEFAULT_LEN: f64 = 30.0;
+
+/// 模板保真层：键槽轮廓（主视图的壁/槽底/圆角、侧视图整个局部轮廓）在模板里落默认 `0` 层；
+/// 主视图孔圆落 `1轮廓实线层`。若要统一到 OCSM 五层，只改这一处常量。
+pub const HUB_KEYWAY_EDGE_LAYER: &str = "0";
+
+/// 圆角 `r` 取值策略（GB/T 1095 表 1 给的是范围，如 b=8 → 0.16~0.25）。
+///
+/// **用户模板 specimen（b=8）画 r=0.25 = 该档 r_max**（标注文字覆盖 `rmin`，语义有歧义）→
+/// 本要素默认取 **Max** 照模板；要改 r_min/中值只改 [`HUB_KEYWAY_R_PICK`] 一处。
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HubKeywayRPick {
+    Min,
+    Max,
+    Mid,
+}
+
+/// 圆角取值策略（默认 `Max` = 模板口径）。
+pub const HUB_KEYWAY_R_PICK: HubKeywayRPick = HubKeywayRPick::Max;
+
+/// 按策略从表 1 的 r 范围取实画圆角（测试可直接传三档验证可切换）。
+pub fn hub_keyway_r_from_range(r_min: f64, r_max: f64, pick: HubKeywayRPick) -> f64 {
+    match pick {
+        HubKeywayRPick::Min => r_min,
+        HubKeywayRPick::Max => r_max,
+        HubKeywayRPick::Mid => (r_min + r_max) / 2.0,
+    }
+}
+
+/// 毂槽解算结果（两视图共用）。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct HubKeywayGeom {
+    /// 孔径 d。
+    pub d: f64,
+    /// 键宽 b（按 GB/T 1095 d 列从 d 定）。
+    pub b: f64,
+    /// 毂槽深 t₂（表 1，按 b 查）。
+    pub t2: f64,
+    /// 表 1 的 r 范围 + [`HUB_KEYWAY_R_PICK`] 取出的实画圆角。
+    pub r_corner: f64,
+    /// 孔面与槽壁交点高 `√(R²−(b/2)²)`。
+    pub y_wall: f64,
+    /// 该交点的半角 `atan2(y_wall, b/2)`（°，主视图孔弧用）。
+    pub phi_deg: f64,
+    /// 毂长（侧视图矩形长）。
+    pub len: f64,
+}
+
+/// `d` + 参数 → 毂槽几何（`len` 可选，默认 [`HUB_KEYWAY_DEFAULT_LEN`]）。
+///
+/// 数据：`d → b` 走 1979 GB/T 1095 d 列（`partgen_keys::key_1096_b_for_shaft`）；
+/// `b → t₂/r` 走 `assets/keyway_gb1095.csv`（唯一数据源，b=100 的 t₂ 已按官方修正为 19.5）。
+pub fn hub_keyway_geom(d: f64, params: &DetailParams) -> Result<HubKeywayGeom, String> {
+    // `b1` 是 `partgen::generate(family,d,l,view)` 统一入口的长度槽位（旧框架把 l 当 b1 传）；
+    // 本族把它当 `len` 别名。
+    const KNOWN: [&str; 3] = ["len", "l", "b1"];
+    let unknown: Vec<&str> = params
+        .keys()
+        .into_iter()
+        .filter(|key| !KNOWN.contains(key))
+        .collect();
+    if !unknown.is_empty() {
+        return Err(format!(
+            "毂槽：不认识参数 {}（本族只支持 len 毂长；b/t₂/r 由 d 查表）",
+            unknown.join("、")
+        ));
+    }
+    if !d.is_finite() || d <= 0.0 {
+        return Err(format!("毂槽：孔径 d 必须是正数（收到 {d}）"));
+    }
+    let b = crate::partgen_keys::key_1096_b_for_shaft(d).ok_or_else(|| {
+        format!(
+            "毂槽：d={} 不在 GB/T 1095 的 d 选型表（6…500）里，无法按孔径定键宽 b",
+            trim(d)
+        )
+    })?;
+    let rows = crate::shaft::keyway_gb1095_rows()
+        .map_err(|e| format!("毂槽：GB/T 1095 表读取失败：{e}"))?;
+    let row = rows
+        .iter()
+        .find(|row| (row.b - b).abs() < 1e-9)
+        .ok_or_else(|| format!("毂槽：GB/T 1095 表里没有 b={} 这一档", trim(b)))?;
+    let r_corner = hub_keyway_r_from_range(row.r_min, row.r_max, HUB_KEYWAY_R_PICK);
+    let len = params
+        .get("len")
+        .or_else(|| params.get("l"))
+        .or_else(|| params.get("b1"))
+        .unwrap_or(HUB_KEYWAY_DEFAULT_LEN);
+    let r = d / 2.0;
+    let half = b / 2.0;
+    if half >= r - 1e-9 {
+        return Err(format!(
+            "毂槽：键宽 b={} ≥ 孔径 d={}（槽切穿孔壁），d 与表 1 不符",
+            trim(b),
+            trim(d)
+        ));
+    }
+    if !(r_corner > 0.0) || r_corner >= half - 1e-9 {
+        return Err(format!(
+            "毂槽：圆角 r={} 必须 >0 且 < b/2={}（表 1 的 r 范围异常）",
+            trim(r_corner),
+            trim(half)
+        ));
+    }
+    if !(row.t2 > 0.0) {
+        return Err(format!("毂槽：表 1 的 t₂={} 必须 >0", trim(row.t2)));
+    }
+    if !len.is_finite() || len <= 0.0 {
+        return Err(format!("毂槽：毂长 len={} 必须是正数", trim(len)));
+    }
+    let y_wall = (r * r - half * half).sqrt();
+    // 槽底圆角不得越过孔壁交点：R+t₂−r ≥ y_wall（等价 t₂ + sag ≥ r）。
+    if r + row.t2 - r_corner < y_wall - 1e-9 {
+        return Err(format!(
+            "毂槽：槽底 R+t₂−r={} 低于孔壁交点 {}（表 1 数据/圆角取值异常）",
+            trim(r + row.t2 - r_corner),
+            trim(y_wall)
+        ));
+    }
+    let phi_deg = (y_wall / half).atan().to_degrees();
+    Ok(HubKeywayGeom {
+        d,
+        b,
+        t2: row.t2,
+        r_corner,
+        y_wall,
+        phi_deg,
+        len,
+    })
+}
+
+/// 主视图（孔端面）图元（顺序照模板 dump）：
+/// 中心线 ×2（3 层）→ 右壁 → 孔圆弧（1轮廓实线层）→ 左壁 → 左圆角 → 槽底 → 右圆角（0 层）。
+fn build_hub_keyway_main(g: &HubKeywayGeom) -> Vec<EntityType> {
+    let r = g.d / 2.0;
+    let over = r + 3.0; // 中心线两端各伸出 3（与轴槽/既有口径一致）
+    let half = g.b / 2.0;
+    let floor_y = r + g.t2;
+    let wall_top = floor_y - g.r_corner;
+    let floor_half = half - g.r_corner;
+    let mut out = Vec::with_capacity(8);
+    out.push(line([-over, 0.0], [over, 0.0], LAYER_CENTER));
+    out.push(line([0.0, -over], [0.0, over], LAYER_CENTER));
+    out.push(line([half, g.y_wall], [half, wall_top], HUB_KEYWAY_EDGE_LAYER));
+    out.push(arc(
+        [0.0, 0.0],
+        r,
+        180.0 - g.phi_deg,
+        360.0 + g.phi_deg,
+        LAYER_MAIN,
+    ));
+    out.push(line([-half, g.y_wall], [-half, wall_top], HUB_KEYWAY_EDGE_LAYER));
+    out.push(arc(
+        [-floor_half, wall_top],
+        g.r_corner,
+        90.0,
+        180.0,
+        HUB_KEYWAY_EDGE_LAYER,
+    ));
+    out.push(line(
+        [-floor_half, floor_y],
+        [floor_half, floor_y],
+        HUB_KEYWAY_EDGE_LAYER,
+    ));
+    out.push(arc(
+        [floor_half, wall_top],
+        g.r_corner,
+        0.0,
+        90.0,
+        HUB_KEYWAY_EDGE_LAYER,
+    ));
+    out
+}
+
+/// 侧视图（纵向剖）图元（顺序照模板 dump）：
+/// 下母线 → 右端面 → 槽底母线 → 左端面 → sagitta 线（0 层）→ 轴线中心线（3 层）。
+fn build_hub_keyway_side(g: &HubKeywayGeom) -> Vec<EntityType> {
+    let r = g.d / 2.0;
+    let floor_y = r + g.t2;
+    let mut out = Vec::with_capacity(6);
+    out.push(line([0.0, -r], [g.len, -r], HUB_KEYWAY_EDGE_LAYER));
+    out.push(line([g.len, -r], [g.len, floor_y], HUB_KEYWAY_EDGE_LAYER));
+    out.push(line([g.len, floor_y], [0.0, floor_y], HUB_KEYWAY_EDGE_LAYER));
+    out.push(line([0.0, floor_y], [0.0, -r], HUB_KEYWAY_EDGE_LAYER));
+    out.push(line([0.0, g.y_wall], [g.len, g.y_wall], HUB_KEYWAY_EDGE_LAYER));
+    out.push(line([-3.0, 0.0], [g.len + 3.0, 0.0], LAYER_CENTER));
+    out
+}
+
+/// 组装 `GenPart`（两视图共用）。
+fn build_hub_keyway(g: &HubKeywayGeom, view: &str, view_label: &str) -> GenPart {
+    let entities = match view {
+        "main" => build_hub_keyway_main(g),
+        _ => build_hub_keyway_side(g),
+    };
+    let bbox = entity_bbox(&entities);
+    GenPart {
+        entities,
+        meta: PartMeta {
+            code: "GB/T 1095-2003".into(),
+            name: format!("毂槽（{view_label}）"),
+            spec: format!(
+                "d{} b{} t2 {} r{} L{}",
+                trim(g.d),
+                trim(g.b),
+                trim(g.t2),
+                trim(g.r_corner),
+                trim(g.len)
+            ),
+            material: String::new(),
+            weight: String::new(),
+        },
+        bbox,
+    }
+}
+
+/// 毂槽的要素定义（登记到 `ELEMENTS`）。
+pub struct HubKeyway;
+
+/// 单例（`ELEMENTS` 里的引用）。
+pub static HUB_KEYWAY: HubKeyway = HubKeyway;
+
+impl DetailElement for HubKeyway {
+    fn family(&self) -> &'static str {
+        FAMILY_HUB_KEYWAY
+    }
+
+    fn name(&self) -> &'static str {
+        "毂槽"
+    }
+
+    fn code(&self) -> &'static str {
+        "GB/T 1095-2003"
+    }
+
+    fn views(&self) -> &'static [&'static str] {
+        &["main", "side"]
+    }
+
+    fn view_labels(&self) -> &'static [(&'static str, &'static str)] {
+        &[("main", "主视图（孔端面）"), ("side", "侧视图（纵向剖）")]
+    }
+
+    fn base_hint(&self) -> &'static str {
+        "主视图基点 = 孔心；侧视图基点 = 左端面×轴线（d = 孔径；键槽开口朝 +Y）"
+    }
+
+    /// 历史 `b1` 槽位在本族按**毂长 len** 解释（`partgen::generate(family,d,l,view)` 的统一入口用；
+    /// HTTP/CLI 的显式长度走 `len` 参数）。
+    fn generate(&self, d: f64, b1: Option<f64>, view: &str) -> Result<GenPart, String> {
+        let mut params = DetailParams::new();
+        if let Some(len) = b1 {
+            params.insert("len", len);
+        }
+        self.generate_params(d, &params, view)
+    }
+
+    fn generate_params(
+        &self,
+        d: f64,
+        params: &DetailParams,
+        view: &str,
+    ) -> Result<GenPart, String> {
+        let g = hub_keyway_geom(d, params)?;
+        let label = self
+            .view_labels()
+            .iter()
+            .find(|(key, _)| *key == view)
+            .map(|(_, label)| *label)
+            .unwrap_or(view);
+        Ok(build_hub_keyway(&g, view, label))
+    }
+
+    fn catalog_extra(&self) -> serde_json::Value {
+        serde_json::json!({
+            "tree_dir": "结构要素/毂槽",
+            "d_label": "孔径 d（mm，自由输入；b/t₂/r 由 GB/T 1095 查表）",
+            "default_d": 25,
+            "len_label": "毂长 len（mm，默认 30）",
+            "source": "GB/T 1095-2003 表 1；数据复用 assets/keyway_gb1095.csv（b→t₂/r）+ 1979 d 列；模板 GB-T1095-2003毂槽-{主视图,侧视图}.dxf 逐图元反解",
+            "r_pick": format!("{:?}", HUB_KEYWAY_R_PICK),
+            "inputs": [
+                { "key": "len", "label": "毂长 len（mm，留空 = 默认 30）", "placeholder": "30" },
+            ],
+            "sample": { "d": 25, "len": 30 },
         })
     }
 }
@@ -2027,5 +2330,196 @@ mod tests {
             }
         }
         csv
+    }
+
+    // ── 毂槽（GB/T 1095-2003）──────────────────────────────────────────
+
+    fn line_on(part: &GenPart, a: [f64; 2], b: [f64; 2], layer: &str) -> bool {
+        part.entities.iter().any(|e| match e {
+            EntityType::Line(l) => {
+                let (p, q) = ([l.start.x, l.start.y], [l.end.x, l.end.y]);
+                let hit = (near(p[0], a[0]) && near(p[1], a[1]) && near(q[0], b[0]) && near(q[1], b[1]))
+                    || (near(p[0], b[0]) && near(p[1], b[1]) && near(q[0], a[0]) && near(q[1], a[1]));
+                hit && l.common.layer == layer
+            }
+            _ => false,
+        })
+    }
+
+    fn arc_on(part: &GenPart, c: [f64; 2], r: f64, a0: f64, a1: f64, layer: &str) -> bool {
+        part.entities.iter().any(|e| match e {
+            EntityType::Arc(a) => {
+                near(a.center.x, c[0])
+                    && near(a.center.y, c[1])
+                    && near(a.radius, r)
+                    && (a.start_angle.to_degrees() - a0).abs() < 1e-3
+                    && (a.end_angle.to_degrees() - a1).abs() < 1e-3
+                    && a.common.layer == layer
+            }
+            _ => false,
+        })
+    }
+
+    /// 模板 specimen（d=25 → b=8、t₂=3.3、r=0.25）两视图逐图元对照（1e-5/1e-3 容差）。
+    #[test]
+    fn hub_keyway_template_matches_dxf_both_views() {
+        let params = DetailParams::new();
+        let main = generate_params(FAMILY_HUB_KEYWAY, 25.0, &params, "main").unwrap();
+        let side = generate_params(FAMILY_HUB_KEYWAY, 25.0, &params, "side").unwrap();
+        assert_eq!(main.entities.len(), 8, "主视图 8 图元（模板 LINE5+ARC3）");
+        assert_eq!(side.entities.len(), 6, "侧视图 6 图元（模板 LINE6）");
+        // 模板标注 4 条不落图；两视图均无 HATCH。
+        for part in [&main, &side] {
+            assert!(!part.entities.iter().any(|e| matches!(e, EntityType::Hatch(_))));
+            assert!(!part.entities.iter().any(|e| e.common().layer == "7标注层"));
+        }
+        // 主视图：中心线（3 层，±(R+3)=15.5）
+        assert!(line_on(&main, [-15.5, 0.0], [15.5, 0.0], "3中心线层"));
+        assert!(line_on(&main, [0.0, -15.5], [0.0, 15.5], "3中心线层"));
+        // 孔圆弧（1轮廓实线层）：模板 a0=108.662925 / a1=431.337075
+        assert!(arc_on(&main, [0.0, 0.0], 12.5, 108.662925, 431.337075, "1轮廓实线层"));
+        // 键槽轮廓（0 层，照模板）：两壁 / 槽底 / 两圆角
+        assert!(line_on(&main, [4.0, 11.842719], [4.0, 15.55], "0"));
+        assert!(line_on(&main, [-4.0, 11.842719], [-4.0, 15.55], "0"));
+        assert!(line_on(&main, [-3.75, 15.8], [3.75, 15.8], "0"));
+        assert!(arc_on(&main, [-3.75, 15.55], 0.25, 90.0, 180.0, "0"));
+        assert!(arc_on(&main, [3.75, 15.55], 0.25, 0.0, 90.0, "0"));
+        // 侧视图（基点 = 左端面×轴线；L=30）：矩形 + sagitta 线（0 层）+ 中心线（3 层）
+        assert!(line_on(&side, [0.0, -12.5], [30.0, -12.5], "0"));
+        assert!(line_on(&side, [30.0, -12.5], [30.0, 15.8], "0"));
+        assert!(line_on(&side, [30.0, 15.8], [0.0, 15.8], "0"));
+        assert!(line_on(&side, [0.0, 15.8], [0.0, -12.5], "0"));
+        assert!(line_on(&side, [0.0, 11.842719], [30.0, 11.842719], "0"));
+        assert!(line_on(&side, [-3.0, 0.0], [33.0, 0.0], "3中心线层"));
+    }
+
+    /// 26 档 d→b→t₂/r 遍历契约 + 两视图几何自洽（含 b>50 的 6 档）。
+    #[test]
+    fn hub_keyway_26_bands_contract() {
+        let ranges = crate::partgen_keys::key_1096_shaft_ranges();
+        assert_eq!(ranges.len(), 26);
+        let rows = crate::shaft::keyway_gb1095_rows().unwrap();
+        for (lo, hi, incl, b) in ranges {
+            let d = if incl { lo } else { (lo + hi) / 2.0 };
+            let g = hub_keyway_geom(d, &DetailParams::new())
+                .unwrap_or_else(|e| panic!("d={d} 应能出图：{e}"));
+            assert!(near(g.b, b), "d={d} 应配 b={b}，实为 {}", g.b);
+            let row = rows.iter().find(|r| (r.b - b).abs() < 1e-9).unwrap();
+            assert!(near(g.t2, row.t2), "d={d} t₂ 应查表 {}", row.t2);
+            assert!(near(g.r_corner, row.r_max), "d={d} r 取 r_max（模板口径）");
+            let r = d / 2.0;
+            assert!(near(g.y_wall, (r * r - (b / 2.0) * (b / 2.0)).sqrt()));
+            assert!(g.y_wall > 0.0 && g.phi_deg > 0.0 && g.phi_deg < 90.0);
+            // 主视图：孔弧角度对称（a0−180 == 360−a1）；槽轮廓落在包络内。
+            let main = build_hub_keyway_main(&g);
+            assert!(near(180.0 - g.phi_deg, 180.0 - g.phi_deg));
+            assert!(near((360.0 + g.phi_deg) - 360.0, g.phi_deg));
+            for e in &main {
+                match e {
+                    EntityType::Line(l) if l.common.layer != LAYER_CENTER => {
+                        for p in [[l.start.x, l.start.y], [l.end.x, l.end.y]] {
+                            assert!(p[0].abs() <= b / 2.0 + 1e-9, "d={d} 槽轮廓越出 b/2");
+                            assert!(p[1] >= g.y_wall - 1e-9 && p[1] <= r + g.t2 + 1e-9);
+                        }
+                    }
+                    // 孔圆弧（LAYER_MAIN，半径 R）不属槽轮廓，跳过；槽圆角在 EDGE 层。
+                    EntityType::Arc(a)
+                        if a.common.layer != LAYER_CENTER && a.common.layer != LAYER_MAIN =>
+                    {
+                        assert!(a.center.x.abs() + a.radius <= b / 2.0 + 1e-9, "d={d} 圆角越出 b/2");
+                        assert!(a.center.y + a.radius <= r + g.t2 + 1e-9);
+                    }
+                    _ => {}
+                }
+            }
+            // 侧视图：sagitta 线与孔壁交点一致；矩形长度 = len。
+            let side_part = build_hub_keyway(&g, "side", "侧视图");
+            assert!(line_on(
+                &side_part,
+                [0.0, g.y_wall],
+                [g.len, g.y_wall],
+                HUB_KEYWAY_EDGE_LAYER
+            ));
+        }
+    }
+
+    /// r 策略三档可切换（默认 Max 照模板）；非法参数/孔径明确报错。
+    #[test]
+    fn hub_keyway_r_pick_and_errors() {
+        assert!(near(hub_keyway_r_from_range(0.16, 0.25, HubKeywayRPick::Min), 0.16));
+        assert!(near(hub_keyway_r_from_range(0.16, 0.25, HubKeywayRPick::Max), 0.25));
+        assert!(near(hub_keyway_r_from_range(0.16, 0.25, HubKeywayRPick::Mid), 0.205));
+        assert_eq!(HUB_KEYWAY_R_PICK, HubKeywayRPick::Max);
+        assert!(near(
+            hub_keyway_geom(25.0, &DetailParams::new()).unwrap().r_corner,
+            0.25
+        ));
+        // d 不在选型表 / 额外参数 / len 非法
+        let e = hub_keyway_geom(4.0, &DetailParams::new()).unwrap_err();
+        assert!(e.contains("不在 GB/T 1095"), "{e}");
+        let mut p = DetailParams::new();
+        p.insert("foo", 1.0);
+        let e = hub_keyway_geom(25.0, &p).unwrap_err();
+        assert!(e.contains("不认识参数"), "{e}");
+        for bad in [0.0, -5.0, f64::NAN] {
+            let mut p = DetailParams::new();
+            p.insert("len", bad);
+            assert!(hub_keyway_geom(25.0, &p).is_err(), "len={bad} 应报错");
+        }
+    }
+
+    /// 毂侧列核对（只读复用 `assets/keyway_gb1095.csv`，来源 = 三来源校验的 `键槽_GB1095_表_v2.csv`）：
+    /// t₂ 及其极限偏差、r 范围、毂宽度偏差 D10/JS9/P9 全表有值 + 抽样逐格核对。
+    #[test]
+    fn hub_keyway_data_columns_match_gb1095() {
+        let rows = crate::shaft::keyway_gb1095_rows().unwrap();
+        assert_eq!(rows.len(), 26);
+        for r in &rows {
+            assert!(r.t2.is_finite() && r.t2_up.is_finite() && r.t2_low.is_finite());
+            assert!(r.r_min.is_finite() && r.r_max.is_finite() && r.r_min < r.r_max);
+            assert!(r.b_d10.0.is_finite() && r.b_d10.1.is_finite());
+            assert!(r.b_js9.0.is_finite() && r.b_js9.1.is_finite());
+            assert!(r.b_p9.0.is_finite() && r.b_p9.1.is_finite());
+        }
+        let b8 = rows.iter().find(|r| near(r.b, 8.0)).unwrap();
+        assert!(near(b8.t2, 3.3) && near(b8.t2_up, 0.2) && near(b8.t2_low, 0.0));
+        assert!(near(b8.r_min, 0.16) && near(b8.r_max, 0.25), "b=8 模板圆角取 r_max=0.25");
+        assert!(near(b8.b_d10.0, 0.098) && near(b8.b_d10.1, 0.04), "毂松 = D10");
+        assert!(near(b8.b_js9.0, 0.018) && near(b8.b_js9.1, -0.018), "毂正常 = JS9");
+        assert!(near(b8.b_p9.0, -0.015) && near(b8.b_p9.1, -0.051), "毂紧密 = P9");
+        let b100 = rows.iter().find(|r| near(r.b, 100.0)).unwrap();
+        assert!(near(b100.t2, 19.5), "b=100 的 t₂ 取官方 19.5（主源 19.4 仅留 flags）");
+    }
+
+    /// XL 注册/目录/树/两条生成入口 + 预览（照既有结构要素的接线口径）。
+    #[test]
+    fn hub_keyway_registered_in_xl_catalog() {
+        assert!(is_detail(FAMILY_HUB_KEYWAY));
+        assert_eq!(family_views(FAMILY_HUB_KEYWAY), vec!["main", "side"]);
+        let cat: serde_json::Value =
+            serde_json::from_str(&crate::partgen::catalog_json()).unwrap();
+        let fam = &cat["families"][FAMILY_HUB_KEYWAY];
+        assert_eq!(fam["tree_dir"], "结构要素/毂槽");
+        assert_eq!(fam["views"].as_array().unwrap().len(), 2);
+        assert_eq!(fam["inputs"][0]["key"], "len");
+        assert_eq!(fam["sample"]["d"], 25);
+        assert!(cat["tree"].to_string().contains(FAMILY_HUB_KEYWAY));
+        // 通用参数入口：len=40 的侧视图
+        let p = generate_params(
+            FAMILY_HUB_KEYWAY,
+            25.0,
+            &DetailParams::from_pairs([("len", 40.0)]),
+            "side",
+        )
+        .unwrap();
+        assert!(has_line(&p, [0.0, -12.5], [40.0, -12.5]));
+        // `partgen::generate` 的统一入口：l 槽位在本族按 len
+        let p2 = crate::partgen::generate(FAMILY_HUB_KEYWAY, 25.0, 40.0, "main").unwrap();
+        assert_eq!(p2.entities.len(), 8);
+        // URL 预览入口（结构要素分支）
+        let svg = preview_svg("family=detail_hub_keyway&d=25&len=30&view=side")
+            .unwrap()
+            .unwrap();
+        assert!(svg.contains("<svg"), "预览应出 SVG");
     }
 }

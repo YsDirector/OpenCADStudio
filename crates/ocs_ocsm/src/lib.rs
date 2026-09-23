@@ -766,6 +766,8 @@ fn place_one(
 ///   引擎仍在 `invol_spline.rs`）。
 /// - **外螺纹退刀槽**（`detail_thread_relief`）：`<族> <d> P <螺距> [g1 值 g2 值 dg 值 r 值 alpha 值] [at x,y] [rot 度]`
 ///   例：`OCSMPART detail_thread_relief 20 P 1.5`（P 必给，其余可选，见 `detail.rs` 表 2）。
+/// - **毂槽**（`detail_hub_keyway`，GB/T 1095-2003）：`<族> <d> [len 毂长] [view main|side] [at x,y] [rot 度]`
+///   例：`OCSMPART detail_hub_keyway 25 len 30 view main`（b/t₂/r 由 d 查表；len 缺省 30）。
 /// - **平键**（`key_1096_{a,b,c}` = GB/T 1096 三型；`key_1097_{a,b}` = GB/T 1097 两型）：
 ///   `<族> <b> <L> [view 视图] [at x,y] [rot 度]`（`d` 槽位承载键宽 b，h 查表派生；`l=0` = 该档默认 L）
 ///   例：`OCSMPART key_1096_a 4 8`（b=4、L=8）、`OCSMPART key_1096_b 22 0`、`OCSMPART key_1097_b 10 100`。
@@ -2064,6 +2066,8 @@ impl OcsmPlugin {
                          （例：OCSMPART detail_spline_rect 6x23x26x6 L30 view side）；\
                          外螺纹退刀槽 `OCSMPART detail_thread_relief <d> P <螺距> [g1 值 g2 值 dg 值 r 值 alpha 值] [at x,y] [rot 度]`\
                          （P 必给）；\
+                         毂槽 `OCSMPART detail_hub_keyway <d> [len 毂长] [view main|side]`\
+                         （例：OCSMPART detail_hub_keyway 25 len 30 view main；b/t₂/r 由 d 查表，len 缺省 30）；\
                          平键 `OCSMPART key_1096_{a|b|c} <b> <L> [view main|top|section]`、`OCSMPART key_1097_{a|b} <b> <L> [view main|top]`\
                          （例：OCSMPART key_1096_a 4 8、OCSMPART key_1097_b 10 100；L 省略/0 = 该档默认，L 须 ∈ 标准系列且 L<10b）；\
                          不带参数则打开零件库窗口。",
