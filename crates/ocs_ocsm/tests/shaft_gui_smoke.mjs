@@ -619,21 +619,21 @@ check(!!keyLenF && keyLenF.options.some((o) => o.value === '18'),
 check(dslEl.value.includes('KEY A 18') && !/\bb\d/.test(dslEl.value),
   '自动 b×h 不写进 DSL（由后端按 d 定）：' + JSON.stringify(dslEl.value));
 check(!!krow._fields.find((f) => f.dataset.f === 'key.l' && f.disabled === false), 'KEY 段 L 可选');
-// 改键型 B + 端置 → DSL 同步；B/端置警示可见（不阻止）。
-keyKindF.value = 'B';
+// B 型槽已撤：键型下拉只有 A/C（不提供 B）。
+check(keyKindF.options.every((o) => o.value !== 'B'), '键型下拉不应再有 B 型（B 型无键槽）');
+check(keyKindF.options.some((o) => o.value === 'A') && keyKindF.options.some((o) => o.value === 'C'),
+  '键型下拉应保留 A/C：' + JSON.stringify(keyKindF.options.map((o) => o.value)));
+// 改键型 C + 端置 → DSL 同步。
+keyKindF.value = 'C';
 segBody._fire('input', keyKindF);
 await tick();
-krow = segBody._rows[0];
-check(S.rows[0].key.kind === 'B' && dslEl.value.includes('KEY B 18'),
-  '改键型应同步：' + JSON.stringify(dslEl.value));
+check(S.rows[0].key.kind === 'C' && dslEl.value.includes('KEY C 18'),
+  '改键型 C 应同步：' + JSON.stringify(dslEl.value));
 segBody._rows[0]._fields.find((f) => f.dataset.f === 'key.place').value = 'end';
 segBody._fire('input', segBody._rows[0]._fields.find((f) => f.dataset.f === 'key.place'));
 await tick();
-krow = segBody._rows[0];
-check(S.rows[0].key.place === 'end' && dslEl.value.includes('KEY B 18 @端'),
+check(S.rows[0].key.place === 'end' && dslEl.value.includes('KEY C 18 @端'),
   '改端置应同步 @端：' + JSON.stringify(dslEl.value));
-check(krow._html.includes('短一个半径'), 'B 型端置应给“短一个半径”可见提示');
-check(!krow._fields.some((f) => f.dataset.f === 'key.kind' && f.disabled), 'B 型端置不应被阻止');
 // 互斥：GEAR / SPLINE 段 → KEY 勾选禁用；KEY 段 → GEAR / SPLINE 勾选禁用（与 M/OV 同口径 enforceExclusive）。
 dslEl.value = 'GEAR M3 Z20 H30';
 await S.refreshFromText();

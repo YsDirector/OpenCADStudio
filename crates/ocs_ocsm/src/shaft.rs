@@ -55,11 +55,12 @@
 //!     齿形关键字（M/Z/EX/IN/DA/DF…）才是渐开线花键齿形段。
 //! - `KEY A 18`：**轴槽**（GB/T 1095-2003 平键键槽，本期只做轴槽）——
 //!   **轴段类型**（与螺纹/矩形花键并列，进段表 KEY 列）：键型 `A/B/C`（复用 GB/T 1096
-//!   平键族口径）+ 键长 `L`（标准 L 系列；中置槽长 = L，端置 `@端` 槽长 = L + t₁）+
+//!   平键族口径；键槽侧只做 A/C）+ 键长 `L`（标准 L 系列；中置槽长 = L，端置 `@端` 槽长 = L + t₁）+
 //!   位置中置/端置；**键尺寸 `b×h` 由该段直径 d 查 GB/T 1095 d 列自动定**（h 跟 b 走；
 //!   显式 `b8h7` 只作校验，必须落在该轴径档标准配对）。`t1` 省略按 b 查表；
-//!   与 GEAR / SPLINE / M / OV / RL 互斥。端置槽端由铣刀铣出 → 圆弧，配 C 型（单圆头）；
-//!   B 型双平头会形成方形盲孔（加工不出来），要用 B 需把键短一个半径。
+//!   与 GEAR / SPLINE / M / OV / RL 互斥。端置槽端由铣刀铣出 → 圆弧，配 C 型（单圆头）。
+//!   **B 型键槽已撤**（方形盲孔加工困难，现实中不存在）：传入 B 明确报错并指路——
+//!   要用长度为 L_B 的 B 型键，中置用 A（输入 L = L_B + b）、端置用 C（输入 L = L_B + b/2）。
 //!   侧视图叠画键 + 剖视缺口含 sagitta 线，见文件中部「轴槽（GB/T 1095）」节
 //!   与 `review/键槽_设计.md`。
 //! - `VIEW 常规|剖视`：视图开关（默认 `常规`）；独立一行或段内关键字都认
@@ -189,11 +190,11 @@ OCSMSHAFT 轴生成器：行 DSL / JSON → 单视图侧视图（段拼接 + 端
                       （引入倒角由相邻段的 CH 表达）
     KEY A 18      轴槽（GB/T 1095-2003 平键键槽，本期只做轴槽，不毂槽）——轴段类型，进段表 KEY 列：
                   只能挂在光圆柱段上（与 GEAR/SPLINE/M/TL/RL/OV 互斥）
-                  键型 A/B/C + 键长 L（平键族标准系列，L<10b）+ 位置中置/端置（槽长 = L / L+t1）
+                  键型 A/C（B 型键槽已撤）+ 键长 L（平键族标准系列，L<10b）+ 位置中置/端置（槽长 = L / L+t1）
                   b×h 由本段直径 d 查 GB/T 1095 d 列自动定（h 跟 b 走）；t1 按 b 查 GB/T 1095 表
                   显式覆盖写 b8h7：必须落在该轴径档的标准配对上，否则明确报错
-                  端置槽端为圆弧（配 C 型单圆头键）；B 型双平头会形成方形盲孔（加工不出来）
-                  —— 要用 B 型需把键短一个半径
+                  端置槽端为圆弧（配 C 型单圆头键）；B 型键槽已撤（方形盲孔加工困难）
+                  —— 要用 B 型键：中置用 A（输入 L = L_B + b）、端置用 C（输入 L = L_B + b/2）
                   例：KEY A 18 ／ KEY C 14 @端 ／ KEY A 18 b8h7
                   侧视图叠画键 + 剖视缺口含 sagitta 线；不生成尺寸标注
     VIEW 常规|剖视   视图：常规（默认，只看外形）/ 剖视（轮廓 + ANSI31 剖面线）
@@ -450,8 +451,9 @@ impl KeywayPlace {
     }
 }
 
-/// 平键型别（复用 GB/T 1096 平键族 `key_1096_a/_b/_c` 的型别口径）：
-/// `A` = 双圆头 / `B` = 双平头 / `C` = 单圆头（左圆右方）。
+/// 平键型别（复用 GB/T 1096 平键族型别口径）：
+/// `A` = 双圆头 / `C` = 单圆头（左圆右方）——**键槽侧只做 A/C**；
+/// `B` = 双平头（平键族标准件仍保留，但**没有键槽**：方形盲孔加工困难），传入时明确报错并指路。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub enum KeyKind {
     A,
@@ -510,7 +512,7 @@ impl KeyKind {
 ///
 /// 交互口径（用户 2026-09-23 定案）：轴槽是**轴段类型**（与螺纹/矩形花键并列），
 /// 轴段表列 = 键型 + 键长 L + 位置；**键尺寸 b×h 由该轴段直径 d 自动确定**。
-/// * `kind` = 键型 A/B/C（复用平键族 `key_1096_a/_b/_c` 的型别与尺寸口径）；
+/// * `kind` = 键型 A/C（复用平键族型别口径；B 型键槽已撤、传入报错指路）；
 /// * `b` 省略 = 按该段直径 d 查 `assets/key1096_shaft_ranges.csv`（GB/T 1095 d 列，**选型依据**）；
 ///   显式给了 b 也必须等于该轴径档的标准 b，否则明确报错（不许静默接受非法组合）；
 /// * `h` 可选，只作 b×h 配对校验（h 跟 b 走，不允许自由组合）；
@@ -1059,7 +1061,7 @@ fn extract_view_directives<'a>(
 
 fn unknown_keyword(token: &str, label: &str) -> String {
     format!(
-        "{label}：不识别的关键字「{token}」（本期支持 S/E/L/CH/OV/M/TL/RO/SD/RL/GEAR/SPLINE/KEY/VIEW；齿形段子关键字 M/Z/H/BETA/ALPHA/EX/IN/X/DA/DF（SPLINE + 齿形关键字 = 渐开线花键）；RL 的尺寸参数 P/g1/g2/dg/r 跟在 RL 后面；轴槽子关键字 = 键型 A/B/C + 键尺寸 b…/h…（可连写 `b8h7`）+ 键长（裸数字或 KL…）+ @中/@端（可选 t1））"
+        "{label}：不识别的关键字「{token}」（本期支持 S/E/L/CH/OV/M/TL/RO/SD/RL/GEAR/SPLINE/KEY/VIEW；齿形段子关键字 M/Z/H/BETA/ALPHA/EX/IN/X/DA/DF（SPLINE + 齿形关键字 = 渐开线花键）；RL 的尺寸参数 P/g1/g2/dg/r 跟在 RL 后面；轴槽子关键字 = 键型 A/C（B 型键槽已撤）+ 键尺寸 b…/h…（可连写 `b8h7`）+ 键长（裸数字或 KL…）+ @中/@端（可选 t1））"
     )
 }
 
@@ -1343,7 +1345,7 @@ fn set_relief_param(
     Ok(())
 }
 
-/// KEY 子关键字（`parse_segment` 用）：键型 A/B/C、键长（裸数字或 `KL…`）、
+/// KEY 子关键字（`parse_segment` 用）：键型 A/C（B 型会被拒绝并指路）、键长（裸数字或 `KL…`）、
 /// 键尺寸 `b…`/`h…`（`b8h7` 可连写）、`t1`、`@中|@端`。
 /// `LA`/`LC` 是旧“槽长”写法，识别后**明确报错**（不静默改语义）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1447,8 +1449,17 @@ fn assemble_keyway(
         return Ok(None);
     }
     let kind = key_kind.ok_or_else(|| {
-        format!("{label}：KEY 缺少键型（A/B/C；例 `KEY A 18`）")
+        format!("{label}：KEY 缺少键型（A/C；例 `KEY A 18`）")
     })?;
+    // B 型平键**没有键槽**（方形盲孔加工困难）——键槽侧只做 A/C，传入 B 明确报错并指路。
+    if kind == KeyKind::B {
+        return Err(format!(
+            "{label}：B 型平键本身没有键槽（方形盲孔加工困难，现实中不存在 B 型键槽）——\
+             要用 B 型键，请改用 A 型（中置）/ C 型（端置）键槽，并按手册折算键长：\
+             中置用 A，输入 L = L_B + b；端置用 C，输入 L = L_B + b/2\
+             （b = 键宽，见 handbook 03-标准件库「轴槽」节）"
+        ));
+    }
     // b 给了就必须在平键族表里；h 给了一般要求与 b 配对。
     if let Some(b) = key_b {
         let std_h = crate::partgen_keys::key_1096_h(kind.key_type(), b).ok_or_else(|| {
@@ -1492,7 +1503,7 @@ fn parse_segment(chunk: &str, label: &str, program: &mut Program) -> Result<Segm
     let mut ch: Vec<Chamfer> = Vec::new();
     let mut ov: Vec<Overtravel> = Vec::new();
     let mut thread: Option<Thread> = None;
-    // 轴槽 KEY（GB/T 1095）：**轴段类型**（与 M/SPLINE 同级）= 键型 A/B/C + 键长 L + 位置；
+    // 轴槽 KEY（GB/T 1095）：**轴段类型**（与 M/SPLINE 同级）= 键型 A/C（B 型键槽已撤）+ 键长 L + 位置；
     // b×h 由该段直径 d 查 GB/T 1095 d 列自动定（b/h 可选、只作校验/覆盖）。
     let mut key_on = false;
     let mut key_kind: Option<KeyKind> = None;
@@ -2260,7 +2271,7 @@ struct JsonSegment {
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 struct JsonKeyway {
-    /// 键型 A/B/C（别名 `kind`）。
+    /// 键型 A/C（B 型键槽已撤；别名 `kind`）。
     #[serde(rename = "type", alias = "kind")]
     kind: String,
     /// 键长 L（标准系列；别名 `len`）。
@@ -2937,6 +2948,12 @@ pub fn validate(program: &Program) -> Result<(), String> {
         }
         // ── 轴槽 KEY（GB/T 1095）：结构、装得下、端置位置（几何定位在 `keyway_geom`）──
         if let Some(keyway) = &seg.keyway {
+            if keyway.kind == KeyKind::B {
+                return Err(format!(
+                    "第 {number} 段：B 型平键本身没有键槽（方形盲孔加工困难）——\
+                     请改用 A 型（中置）/ C 型（端置），并按手册折算键长：L_A = L_B + b，L_C = L_B + b/2"
+                ));
+            }
             if seg.gear.is_some() || seg.spline.is_some() {
                 return Err(format!(
                     "第 {number} 段：轴槽 KEY 不能与齿轮/花键段同段"
@@ -3412,13 +3429,8 @@ fn emit_key_overlay(out: &mut Vec<EntityType>, kg: &KeywayGeom, frame_scale: f64
                         out.push(line([x, -(rk + over)], [x, rk + over], LAYER_CENTER));
                     }
                 }
-                // B 型（双平头）：L×b 矩形；两端面竖线（槽壁处）。
-                KeyKind::B => {
-                    out.push(line([xa, rk], [xb, rk], LAYER_MAIN));
-                    out.push(line([xa, -rk], [xb, -rk], LAYER_MAIN));
-                    out.push(line([xa, -rk], [xa, rk], LAYER_MAIN));
-                    out.push(line([xb, -rk], [xb, rk], LAYER_MAIN));
-                }
+                // B 型：**已撤**（无键槽；上游 assemble/validate 已明确报错并指路）——防御性不画。
+                KeyKind::B => {}
                 // C 型（单圆头，左圆右方）：左半圆 + 右平头端线。
                 KeyKind::C => {
                     let ca = xa + rk;
@@ -3459,13 +3471,8 @@ fn emit_key_overlay(out: &mut Vec<EntityType>, kg: &KeywayGeom, frame_scale: f64
                         out.push(line([x, -(rk + over)], [x, rk + over], LAYER_CENTER));
                     }
                 }
-                // B 型：双平头矩形；两端面竖线。
-                KeyKind::B => {
-                    out.push(line([x_flat, rk], [x_inner, rk], LAYER_MAIN));
-                    out.push(line([x_flat, -rk], [x_inner, -rk], LAYER_MAIN));
-                    out.push(line([x_flat, -rk], [x_flat, rk], LAYER_MAIN));
-                    out.push(line([x_inner, -rk], [x_inner, rk], LAYER_MAIN));
-                }
+                // B 型：**已撤**（无键槽；上游 assemble/validate 已明确报错并指路）——防御性不画。
+                KeyKind::B => {}
                 // C 型（模板 C2）：平端朝开口（不画端线）+ 内端圆头。
                 KeyKind::C => {
                     let ci = x_inner - sgn * rk;
@@ -3476,8 +3483,8 @@ fn emit_key_overlay(out: &mut Vec<EntityType>, kg: &KeywayGeom, frame_scale: f64
                     out.push(line([ci, -(rk + over)], [ci, rk + over], LAYER_CENTER));
                 }
             }
-            // 40° 导入斜线（层 0；x 跨度 = t₁，y 偏移 = (b/2)·tan20°）——平端型 B/C 才有。
-            if !matches!(kg.kind, KeyKind::A) {
+            // 40° 导入斜线（层 0；x 跨度 = t₁，y 偏移 = (b/2)·tan20°）——C 型（平端朝开口）才有。
+            if kg.kind == KeyKind::C {
                 let dy = rk * tan20;
                 out.push(line([x_flat, rk], [face, rk + dy], "0"));
                 out.push(line([x_flat, -rk], [face, -rk - dy], "0"));
@@ -4373,6 +4380,8 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
     if let Some(kw) = key_end_left {
         let kg = keyway_geom(&segs[0], kw, 0.0, 0, count, "第 1 段")?;
         let c = segs[0].ch.iter().find(|c| c.end == End::L).map(|c| c.c);
+        // face_lo 统一为“端面下端点”的 y（负值），无倒角时为 -R；
+        // （旧 bug：无倒角分支用 -R 又被 -face_lo 取反，画成 [0,+R]→[0,floor]，左上角凸出且下半未封闭。）
         let face_lo = if let Some(c) = c {
             let (contour, face_point) = chamfer_geom(&segs[0], 0.0, End::L, c);
             // 下倒角两视图共用；上倒角只常规视图（剖视里被槽切掉）。
@@ -4386,13 +4395,13 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
             // 倒角边要在模板 C1 的下环里出现。
             keyway_plain_extra.push(lr_line(face_point, contour));
             through_line(&mut through, contour[0], contour[1]);
-            face_point[1]
+            -face_point[1]
         } else {
             -segs[0].outer_radius(End::L)
         };
         // 常规视图：完整端面线；剖视：下段到槽底 + 上段槽底→sagitta（模板 C1）。
-        keyway_normal.push(line([0.0, face_lo], [0.0, -face_lo], LAYER_MAIN));
-        section_lines.push(line([0.0, -face_lo], [0.0, kg.floor], LAYER_MAIN));
+        keyway_normal.push(line([0.0, -face_lo], [0.0, face_lo], LAYER_MAIN));
+        section_lines.push(line([0.0, face_lo], [0.0, kg.floor], LAYER_MAIN));
         section_lines.push(line([0.0, kg.floor], [0.0, kg.y_sag], LAYER_MAIN));
     } else {
     let left_face = if let Some(c) = side_auto_chamfer(
@@ -8775,9 +8784,9 @@ GEAR M3 Z20";
     }
 
     #[test]
-    fn keyway_section_template_all_three_kinds() {
-        // 剖视缺口只随位置（中置/端置）变，与键型无关：三型各测一遍，4 簇零多零少。
-        for kind in [KeyKind::A, KeyKind::B, KeyKind::C] {
+    fn keyway_section_template_ac_kinds() {
+        // 剖视缺口只随位置（中置/端置）变，与键型无关：A/C 两型（B 型槽已撤）各测一遍，4 簇零多零少。
+        for kind in [KeyKind::A, KeyKind::C] {
             assert_view_matches_template(
                 &template_shaft_mid(kind),
                 ShaftView::Section,
@@ -8797,13 +8806,6 @@ GEAR M3 Z20";
 
     #[test]
     fn keyway_other_combinations_are_coherent() {
-        // B 中置：矩形键（2 线 + 2 端线），无弧。
-        let mut p = template_shaft_mid(KeyKind::B);
-        p.view = ShaftView::Normal;
-        let shaft = build(&p, 1.0).unwrap();
-        assert_eq!(count_kind(&shaft.entities, "ARC"), 0, "B 型无弧");
-        assert!(line_hit(&shaft.entities, [12.0, 4.0], [30.0, 4.0], LAYER_MAIN), "B 上边");
-        assert!(line_hit(&shaft.entities, [12.0, -4.0], [12.0, 4.0], LAYER_MAIN), "B 左端线");
         // C 中置：单圆头（1 弧 + 右端线）。
         let mut p = template_shaft_mid(KeyKind::C);
         p.view = ShaftView::Normal;
@@ -8811,16 +8813,10 @@ GEAR M3 Z20";
         assert_eq!(count_kind(&shaft.entities, "ARC"), 1, "C 型 1 弧");
         assert!(arc_hit(&shaft.entities, [16.0, 0.0], 4.0, 90.0, 270.0, LAYER_MAIN), "C 左半圆");
         assert!(line_hit(&shaft.entities, [30.0, -4.0], [30.0, 4.0], LAYER_MAIN), "C 右端线");
-        // A 端置：双圆头（2 弧）；B 端置：矩形（0 弧）+ 40° 导入线。
+        // A 端置：双圆头（2 弧）+ 40° 导入线（平端型口径）。
         let mut p = template_shaft_end(KeyKind::A);
         p.view = ShaftView::Normal;
         assert_eq!(count_kind(&build(&p, 1.0).unwrap().entities, "ARC"), 2, "A 端 2 弧");
-        let mut p = template_shaft_end(KeyKind::B);
-        p.view = ShaftView::Normal;
-        let shaft = build(&p, 1.0).unwrap();
-        assert_eq!(count_kind(&shaft.entities, "ARC"), 0, "B 端无弧");
-        let dy = 4.0 * 20.0_f64.to_radians().tan();
-        assert!(line_hit(&shaft.entities, [4.0, 4.0], [0.0, 4.0 + dy], "0"), "B 端 40°");
         // 平端偏置/40° 跨度 = t₁（≠b/2 的探针：d45 → b14、t1=5.5、b/2=7）。
         let probe = parse_program("S45 E45 L80 KEY C 32 @端 b14h9 | S20 E20 L10").unwrap();
         let mut p = probe.clone();
@@ -8847,5 +8843,149 @@ GEAR M3 Z20";
         assert!(line_hit(&shaft.entities, [-6.0, 0.0], [76.0, 0.0], LAYER_CENTER), "轴中");
         // 键竖中：A 型弧心 ±(b/2+6)。
         assert!(line_hit(&shaft.entities, [16.0, -10.0], [16.0, 10.0], LAYER_CENTER), "键竖中");
+    }
+
+    // ── B 型键槽已撤（#1）+ 端置剖视端面闭合/包络（#2）──────────────
+
+    #[test]
+    fn b_type_keyway_is_rejected_with_pointer() {
+        let e = parse_program("S25 E25 L40 KEY B 18").unwrap_err();
+        assert!(e.contains("B 型平键本身没有键槽"), "{e}");
+        assert!(e.contains("方形盲孔"), "{e}");
+        assert!(e.contains("A 型（中置）") && e.contains("C 型（端置）"), "{e}");
+        assert!(e.contains("L_B + b"), "{e}");
+        // JSON 同样拒绝（parse 层 assemble_keyway 拦截）。
+        let e = parse_program(
+            r#"{"segments":[{"s":25,"e":25,"l":40,"keyway":{"type":"B","l":18}}]}"#,
+        )
+        .unwrap_err();
+        assert!(e.contains("B 型平键本身没有键槽"), "{e}");
+        // 平键族本身不受影响：key_1096_b 仍是标准件（可正常出图）。
+        assert!(crate::partgen_keys::key_1096_h(crate::partgen_keys::KeyType::B, 8.0).is_some());
+        assert!(crate::partgen_keys::family_parts("key_1096_b").is_some());
+    }
+
+    #[test]
+    fn b_key_maps_to_ac_keyway_length() {
+        // B 型键（双平头）折算（槽端为圆弧铣刀，半径 b/2 会吃掉直段）：
+        //   中置 → A 型：两端圆弧共吃 b → 输入 L_A = L_B + b（直段 L_A − b = L_B）；
+        //   端置 → C 型：单圆头吃 b/2 → 输入 L_C = L_B + b/2（平端到弧心 = L_C − b/2 = L_B）。
+        for (l_b, d, b) in [(10.0_f64, 25.0_f64, 8.0_f64), (18.0, 45.0, 14.0)] {
+            let l_a = l_b + b;
+            let kw = parse_program(&format!("S{d} E{d} L80 KEY A {l_a}"))
+                .unwrap()
+                .segments[0]
+                .keyway
+                .unwrap();
+            let b_auto = keyway_b(&kw, d).unwrap();
+            assert!(near(b_auto, b));
+            assert!(near(kw.l - b_auto, l_b), "中置直段 = L_A − b = L_B");
+            // 几何：A 型弧心距 = L_A − b = L_B（无倒角段，槽心中置）。
+            let mut p = parse_program(&format!("S{d} E{d} L80 KEY A {l_a}")).unwrap();
+            p.view = ShaftView::Normal;
+            let shaft = build(&p, 1.0).unwrap();
+            let ca = 40.0 - l_b / 2.0;
+            let cb = 40.0 + l_b / 2.0;
+            assert!(arc_hit(&shaft.entities, [ca, 0.0], b_auto / 2.0, 90.0, 270.0, LAYER_MAIN), "A 左弧心");
+            assert!(arc_hit(&shaft.entities, [cb, 0.0], b_auto / 2.0, 270.0, 450.0, LAYER_MAIN), "A 右弧心");
+            // 端置 C：L_C = L_B + b/2；平端到弧心 = L_B。
+            let l_c = l_b + b / 2.0;
+            let text_end = format!("S{d} E{d} L80 KEY C {l_c} @端 | S20 E20 L10");
+            let kw = parse_program(&text_end)
+                .unwrap()
+                .segments[0]
+                .keyway
+                .unwrap();
+            assert!(near(kw.l - b_auto / 2.0, l_b), "端置直段 = L_C − b/2 = L_B");
+            // 几何：C 型内端弧心 x = 端面 + t1 + L_C − b/2 = t1 + L_B。
+            let t1 = keyway_t1(b_auto, None).unwrap();
+            let mut p = parse_program(&text_end).unwrap();
+            p.view = ShaftView::Normal;
+            let shaft = build(&p, 1.0).unwrap();
+            assert!(
+                arc_hit(&shaft.entities, [t1 + l_b, 0.0], b_auto / 2.0, 270.0, 450.0, LAYER_MAIN),
+                "C 内端弧心 = t1 + L_B"
+            );
+            // 边界：不给圆弧留量（L_C = L_B）→ 平端到弧心 = L_B − b/2 < L_B，塞不进去。
+            let kw = parse_program(&format!("S{d} E{d} L80 KEY C {l_b} @端 | S20 E20 L10"))
+                .unwrap()
+                .segments[0]
+                .keyway
+                .unwrap();
+            assert!(kw.l - b_auto / 2.0 < l_b - 1e-9, "少一档端置直段不足");
+        }
+    }
+
+    #[test]
+    fn keyway_section_end_face_closes_without_chamfer() {
+        // #2：端置 + 剖视、无倒角端 —— 端面必须从轴底 −R 封到槽底（旧 bug：face_lo 符号错，
+        // 画成 [0,+R]→[0,floor]，左上角凸出且下半端面未封闭）。
+        let mut p = parse_program("S25 E25 L40 KEY C 14 @端 | S30 E30 L30").unwrap();
+        p.view = ShaftView::Section;
+        let shaft = build(&p, 1.0).unwrap();
+        let (r, t1) = (12.5_f64, 4.0_f64);
+        let floor = r - t1;
+        let sag = r - (r * r - (8.0_f64 / 2.0) * (8.0 / 2.0)).sqrt();
+        // 端面下半：−R → 槽底；端面上半：槽底 → sagitta（闭合由这 3 段 + 槽底/闭端壁构成）。
+        assert!(line_hit(&shaft.entities, [0.0, -r], [0.0, floor], LAYER_MAIN), "端面下半封到槽底");
+        assert!(line_hit(&shaft.entities, [0.0, floor], [0.0, r - sag], LAYER_MAIN), "端面上半到 sagitta");
+        assert!(!line_hit(&shaft.entities, [0.0, r], [0.0, floor], LAYER_MAIN), "不应有左上角凸出线段");
+    }
+
+    #[test]
+    fn keyway_section_entities_stay_inside_shaft_envelope() {
+        // #2 不变量：剖视里除中心线外，所有图元（缺口/sagitta/hatch 边界）必须落在轴轮廓 bbox 内。
+        let cases: &[(&str, f64, f64, f64)] = &[
+            // (DSL, x_min, x_max, r_max)
+            ("S25 E25 L40 KEY C 14 @端 | S30 E30 L30", 0.0, 70.0, 15.0),
+            ("S25 E25 L40 CH2@L KEY C 14 @端 | S30 E30 L30", 0.0, 70.0, 15.0),
+            ("S50 E50 L60 KEY C 18 @端 | S30 E30 L30", 0.0, 90.0, 25.0),
+            ("S50 E50 L20 | S30 E30 L60 KEY C 18 @端", 0.0, 80.0, 25.0),
+            ("S25 E25 L40 KEY A 18 | S30 E30 L30", 0.0, 70.0, 15.0),
+            ("S45 E45 L60 CH3@L KEY A 25 | S25 E25 L20", 0.0, 80.0, 22.5),
+        ];
+        for (text, x0, x1, rmax) in cases {
+            let mut p = parse_program(text).unwrap_or_else(|e| panic!("{text}: {e}"));
+            p.view = ShaftView::Section;
+            let shaft = build(&p, 1.0).unwrap_or_else(|e| panic!("{text}: {e}"));
+            for e in &shaft.entities {
+                match e {
+                    EntityType::Line(l) if l.common.layer != LAYER_CENTER => {
+                        for pt in [[l.start.x, l.start.y], [l.end.x, l.end.y]] {
+                            assert!(
+                                pt[0] >= x0 - 1e-6 && pt[0] <= x1 + 1e-6
+                                    && pt[1] >= -rmax - 1e-6 && pt[1] <= rmax + 1e-6,
+                                "{text}：线段端点 {pt:?} 越出轴包络 x[{x0},{x1}] y±{rmax}"
+                            );
+                        }
+                    }
+                    EntityType::Arc(a) if a.common.layer != LAYER_CENTER => {
+                        assert!(
+                            a.center.x - a.radius >= x0 - 1e-6
+                                && a.center.x + a.radius <= x1 + 1e-6
+                                && a.center.y - a.radius >= -rmax - 1e-6
+                                && a.center.y + a.radius <= rmax + 1e-6,
+                            "{text}：圆弧越出轴包络"
+                        );
+                    }
+                    EntityType::Hatch(h) => {
+                        for path in &h.paths {
+                            for edge in &path.edges {
+                                if let BoundaryEdge::Line(el) = edge {
+                                    for pt in [[el.start.x, el.start.y], [el.end.x, el.end.y]] {
+                                        assert!(
+                                            pt[0] >= x0 - 1e-6 && pt[0] <= x1 + 1e-6
+                                                && pt[1] >= -rmax - 1e-6 && pt[1] <= rmax + 1e-6,
+                                            "{text}：hatch 边界 {pt:?} 越出轴包络"
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
     }
 }
