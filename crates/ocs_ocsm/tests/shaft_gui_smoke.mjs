@@ -46,9 +46,9 @@ const KEY_SIZES = [
   { d: 10, b: 10, h: 8, label: 'b=10×h=8', l_min: 6, l_max: 99, lengths: [22, 6, 8, 10, 12, 14, 16, 18, 20, 25], extra: 'h=8；c=0.4（按 b 分档取范围下限）；默认 L=22' },
 ];
 const KEY_RANGES = [
-  { d_lo: 6, d_hi: 8, lo_inclusive: true, b: 2 },
-  { d_lo: 22, d_hi: 30, lo_inclusive: false, b: 8 },
-  { d_lo: 30, d_hi: 38, lo_inclusive: false, b: 10 },
+  { d_lo: 6, d_hi: 8, lo_inclusive: true, b: 2, t1: 1.2 },
+  { d_lo: 22, d_hi: 30, lo_inclusive: false, b: 8, t1: 4 },
+  { d_lo: 30, d_hi: 38, lo_inclusive: false, b: 10, t1: 5 },
 ];
 
 // ── 最小 DOM 垫片 ────────────────────────────────────────────────
@@ -600,70 +600,53 @@ check(ig.on && ig.mark === 'GEAR' && ig.kind === 'IN' && Math.abs(Number(ig.da) 
 check(dslEl.value.includes('GEAR IN M3 Z20 ALPHA20 DA67.5 DF54 H30'),
   `内齿行文本应回写：${JSON.stringify(dslEl.value)}`);
 
-// ⑧.11 平键选项卡（轴槽）：段表回填 → 面板四项（键型/键尺寸 b×h/键长/位置）→ 行文本/JSON 往返。
-dslEl.value = 'S25 E25 L40 CH2@L KEY A 18 b8h7 | S30 E30 L30';
+// ⑧.11 KEY 平键轴槽（段类型，与 M/SPLINE 同级）：b×h 由轴径自动定、只读；与 GEAR/SPLINE 互斥。
+dslEl.value = 'S25 E25 L40 CH2@L KEY A 18 | S30 E30 L30';
 await S.refreshFromText();
-// 面板编辑的是当前选中段：点选第 1 段（前面的用例可能把 sel 留在其它行）。
 S.sel = 0;
 check(S.rows.length === 2 && S.rows[0].key.on && S.rows[0].key.kind === 'A'
-  && S.rows[0].key.b === '8' && S.rows[0].key.l === '18' && S.rows[0].key.place === 'mid',
-  'KEY 行应回填平键面板字段：' + JSON.stringify(S.rows[0].key));
-check(dslEl.value.includes('KEY A 18 b8h7'), '行文本应回写 KEY A 18 b8h7：' + JSON.stringify(dslEl.value));
-const keyModel = S.modelFromRows();
-check(!!keyModel && keyModel.segments[0].keyway && keyModel.segments[0].keyway.type === 'A'
-  && keyModel.segments[0].keyway.b === 8 && keyModel.segments[0].keyway.h === 7
-  && keyModel.segments[0].keyway.place === 'mid',
-  '平键进 JSON 模型（type/b/h/place）：' + JSON.stringify(keyModel && keyModel.segments[0]));
-// 面板：第 1 段 d25 → 推荐 b8（仅辅助），键尺寸下拉 b8×h7、键长候选来自平键族；面板回填 A/中置。
-const keyKind = elv('keyKind');
-const keySize = elv('keySize');
-const keyLen = elv('keyLen');
-const keyPlace = elv('keyPlace');
-check(keyKind.value === 'A' && keyPlace.value === 'mid', '面板应回填 A/中置：' + keyKind.value + '/' + keyPlace.value);
-check(keySize.children.length >= 2 && keySize.value === '8'
-  && keySize.children.some((o) => o.textContent === 'b8×h7'),
-  '键尺寸下拉应是平键族 b×h 配对：' + JSON.stringify(keySize.children.map((o) => o.textContent)) + ' value=' + keySize.value);
-check(keyLen.children.length > 0 && keyLen.value === '18',
-  '键长下拉应有平键族 L 候选且默认 18：' + JSON.stringify(keyLen.children.map((o) => o.value)) + ' value=' + keyLen.value);
-check(elv('keyDerive').textContent.includes('b8×h7') && elv('keyDerive').textContent.includes('仅辅助'),
-  '派生应显示 b8×h7 与“按轴径推荐（仅辅助）”：' + elv('keyDerive').textContent);
-// 改键型 B + 端置 → 行文本同步 @端；B 型端置给可见提示（不阻止）。
-keyKind.value = 'B';
-keyKind._fire('change', keyKind);
+  && S.rows[0].key.l === '18' && S.rows[0].key.place === 'mid' && S.rows[0].key.b === '',
+  'KEY 行应回填段表（b 省略 = 由轴径自动定）：' + JSON.stringify(S.rows[0].key));
+let krow = segBody._rows[0];
+check(krow._html.includes('b8×h7') && krow._html.includes('t1=4'),
+  'KEY 列应只读显示由 d25 查得的 b8×h7 / t1=4：' + krow._html.slice(0, 400));
+const keyKindF = krow._fields.find((f) => f.dataset.f === 'key.kind');
+const keyLenF = krow._fields.find((f) => f.dataset.f === 'key.l');
+const keyPlaceF = krow._fields.find((f) => f.dataset.f === 'key.place');
+check(!!keyKindF && !!keyLenF && !!keyPlaceF, 'KEY 列应有 键型 / 键长 L / 位置 三个字段');
+check(!!keyLenF && keyLenF.options.some((o) => o.value === '18'),
+  '键长下拉应有平键族 L 候选：' + JSON.stringify(keyLenF && keyLenF.options.map((o) => o.value)));
+check(dslEl.value.includes('KEY A 18') && !/\bb\d/.test(dslEl.value),
+  '自动 b×h 不写进 DSL（由后端按 d 定）：' + JSON.stringify(dslEl.value));
+check(!!krow._fields.find((f) => f.dataset.f === 'key.l' && f.disabled === false), 'KEY 段 L 可选');
+// 改键型 B + 端置 → DSL 同步；B/端置警示可见（不阻止）。
+keyKindF.value = 'B';
+segBody._fire('input', keyKindF);
 await tick();
-check(S.rows[0].key.kind === 'B' && dslEl.value.includes('KEY B 18 b8h7'),
-  '面板改 B 型应同步行文本：' + JSON.stringify(dslEl.value));
-keyPlace.value = 'end';
-keyPlace._fire('change', keyPlace);
+krow = segBody._rows[0];
+check(S.rows[0].key.kind === 'B' && dslEl.value.includes('KEY B 18'),
+  '改键型应同步：' + JSON.stringify(dslEl.value));
+segBody._rows[0]._fields.find((f) => f.dataset.f === 'key.place').value = 'end';
+segBody._fire('input', segBody._rows[0]._fields.find((f) => f.dataset.f === 'key.place'));
 await tick();
-check(S.rows[0].key.place === 'end' && dslEl.value.includes('KEY B 18 @端 b8h7'),
-  '面板改端置应同步 @端：' + JSON.stringify(dslEl.value));
-check(elv('keyHint').className.includes('warn') && elv('keyHint').textContent.includes('短一个半径'),
-  'B 型端置应给“方形盲孔/短一个半径”可见提示：' + elv('keyHint').textContent);
-check(keyKind.disabled === false && keyPlace.disabled === false, 'B 型端置不应被阻止');
-// 键尺寸下拉 → 行文本同步（b10×h8）；改回 b8×h7。
-keySize.value = '10';
-keySize._fire('change', keySize);
-await tick();
-check(S.rows[0].key.b === '10' && dslEl.value.includes('b10h8'), '键尺寸改 b10×h8 应同步：' + JSON.stringify(dslEl.value));
-keySize.value = '8';
-keySize._fire('change', keySize);
-await tick();
-check(S.rows[0].key.b === '8' && dslEl.value.includes('b8h7'), '键尺寸改回 b8×h7：' + JSON.stringify(dslEl.value));
-// 高级 t1 覆盖 → 行文本同步；清空恢复默认。
-elv('keyT1').value = '5';
-elv('keyT1')._fire('input', elv('keyT1'));
-await tick();
-check(dslEl.value.includes('t1 5') && S.rows[0].key.t1 === '5', '高级 t1 覆盖应同步：' + JSON.stringify(dslEl.value));
-elv('keyT1').value = '';
-elv('keyT1')._fire('input', elv('keyT1'));
-await tick();
-check(!dslEl.value.includes('t1 5'), '清空 t1 覆盖应回到默认：' + JSON.stringify(dslEl.value));
-// GEAR 段不能挂平键 → 面板禁用并说明。
+krow = segBody._rows[0];
+check(S.rows[0].key.place === 'end' && dslEl.value.includes('KEY B 18 @端'),
+  '改端置应同步 @端：' + JSON.stringify(dslEl.value));
+check(krow._html.includes('短一个半径'), 'B 型端置应给“短一个半径”可见提示');
+check(!krow._fields.some((f) => f.dataset.f === 'key.kind' && f.disabled), 'B 型端置不应被阻止');
+// 互斥：GEAR / SPLINE 段 → KEY 勾选禁用；KEY 段 → GEAR / SPLINE 勾选禁用（与 M/OV 同口径 enforceExclusive）。
 dslEl.value = 'GEAR M3 Z20 H30';
 await S.refreshFromText();
-check(elv('keyKind').disabled === true, 'GEAR 段应禁用平键面板');
-check(elv('keyHint').textContent.includes('GEAR'), '禁用时应说明原因：' + elv('keyHint').textContent);
+check(segBody._rows[0]._fields.some((f) => f.dataset.f === 'key.on' && f.disabled), 'GEAR 段应禁用 KEY 勾选');
+dslEl.value = 'SPLINE 6x23x26x6 L30';
+await S.refreshFromText();
+check(segBody._rows[0]._fields.some((f) => f.dataset.f === 'key.on' && f.disabled), 'SPLINE 段应禁用 KEY 勾选');
+dslEl.value = 'S25 E25 L40 CH2@L KEY A 18 | S30 E30 L30';
+await S.refreshFromText();
+krow = segBody._rows[0];
+check(krow._fields.some((f) => f.dataset.f === 'gear.on' && f.disabled)
+  && krow._fields.some((f) => f.dataset.f === 'spline.on' && f.disabled),
+  'KEY 段应禁用 GEAR / SPLINE 勾选');
 report();
 
 function report() {

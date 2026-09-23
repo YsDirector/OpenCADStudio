@@ -53,14 +53,15 @@
 //!     齿形用 `OCSMGEAR` 单独出，这里不画齿、本期不做斜齿（`BETA…` 报「斜齿未实现」）；
 //!   * 矩形花键 `SPLINE 6x23x26x6 L30`（GB/T 1144）与齿形段共存：`SPLINE` 后跟
 //!     齿形关键字（M/Z/EX/IN/DA/DF…）才是渐开线花键齿形段。
-//! - `KEY A 18 b8h7`：**轴槽**（GB/T 1095-2003 平键键槽，本期只做轴槽）——
-//!   圆柱段上的一个槽；四项输入 = 键型 `A/B/C`（复用 GB/T 1096 平键族口径）+ 键尺寸
-//!   `b×h`（标准配对；`b8h7` 或只写 `b8`，h 跟 b 走）+ 键长 `L`
-//!   （标准 L 系列；中置槽长 = L，端置 `@端` 槽长 = L + t₁）+ 位置中置/端置；
-//!   `t1` 可覆盖（缺省按 b 查 GB/T 1095 表）；轴径 d 只做“推荐 b”辅助提示。
-//!   端置槽端由圆弧铣刀铣出 → 配 C 型（单圆头）；B 型双平头会形成方形盲孔（加工不出来），
-//!   要用 B 型需把键短一个半径。侧视图叠画键 + 剖视缺口含 sagitta 线，见文件中部
-//!   「轴槽（GB/T 1095）」节与 `review/键槽_设计.md`。
+//! - `KEY A 18`：**轴槽**（GB/T 1095-2003 平键键槽，本期只做轴槽）——
+//!   **轴段类型**（与螺纹/矩形花键并列，进段表 KEY 列）：键型 `A/B/C`（复用 GB/T 1096
+//!   平键族口径）+ 键长 `L`（标准 L 系列；中置槽长 = L，端置 `@端` 槽长 = L + t₁）+
+//!   位置中置/端置；**键尺寸 `b×h` 由该段直径 d 查 GB/T 1095 d 列自动定**（h 跟 b 走；
+//!   显式 `b8h7` 只作校验，必须落在该轴径档标准配对）。`t1` 省略按 b 查表；
+//!   与 GEAR / SPLINE / M / OV / RL 互斥。端置槽端由铣刀铣出 → 圆弧，配 C 型（单圆头）；
+//!   B 型双平头会形成方形盲孔（加工不出来），要用 B 需把键短一个半径。
+//!   侧视图叠画键 + 剖视缺口含 sagitta 线，见文件中部「轴槽（GB/T 1095）」节
+//!   与 `review/键槽_设计.md`。
 //! - `VIEW 常规|剖视`：视图开关（默认 `常规`）；独立一行或段内关键字都认
 //!   （`VIEW 剖视` / `VIEW=section`），只影响整体视图（**双视图已于 2026-09-23 移除**，
 //!   旧 `VIEW 双` 明确报错、不静默降级）；
@@ -186,15 +187,14 @@ OCSMSHAFT 轴生成器：行 DSL / JSON → 单视图侧视图（段拼接 + 端
                       l=√(h(2R−h))，6×23×26×6 → l=9.6047）；段长 = L + l；
                       不给 S/E；可 `de 71` 覆盖滚刀外径；不能与 CH/OV/RL/M/GEAR 同段
                       （引入倒角由相邻段的 CH 表达）
-    KEY A 18 b8h7   轴槽（GB/T 1095-2003 平键键槽，本期只做轴槽，不毂槽）：
+    KEY A 18      轴槽（GB/T 1095-2003 平键键槽，本期只做轴槽，不毂槽）——轴段类型，进段表 KEY 列：
                   只能挂在光圆柱段上（与 GEAR/SPLINE/M/TL/RL/OV 互斥）
-                  四项输入 = 键型 A/B/C（复用 GB/T 1096 平键族口径）+ 键尺寸 b×h（标准配对，
-                  h 跟 b 走；写 b8h7 或只写 b8）+ 键长 L（标准系列，L<10b）+
-                  位置：中置（槽长 = L）/ 端置 @端（开在轴首/末段自由端，槽长 = L + t1）
-                  t1 省略 = 按 b 查 GB/T 1095 表；轴径 d 只做“推荐 b”辅助提示
+                  键型 A/B/C + 键长 L（平键族标准系列，L<10b）+ 位置中置/端置（槽长 = L / L+t1）
+                  b×h 由本段直径 d 查 GB/T 1095 d 列自动定（h 跟 b 走）；t1 按 b 查 GB/T 1095 表
+                  显式覆盖写 b8h7：必须落在该轴径档的标准配对上，否则明确报错
                   端置槽端为圆弧（配 C 型单圆头键）；B 型双平头会形成方形盲孔（加工不出来）
                   —— 要用 B 型需把键短一个半径
-                  例：KEY A 18 b8h7 ／ KEY C 14 @端 b8h7 ／ KEY B 20 b10 t1 5
+                  例：KEY A 18 ／ KEY C 14 @端 ／ KEY A 18 b8h7
                   侧视图叠画键 + 剖视缺口含 sagitta 线；不生成尺寸标注
     VIEW 常规|剖视   视图：常规（默认，只看外形）/ 剖视（轮廓 + ANSI31 剖面线）
                      （双视图已于 2026-09-23 移除；旧 `VIEW 双` 明确报错）
@@ -508,24 +508,27 @@ impl KeyKind {
 
 /// 轴槽（GB/T 1095-2003 平键键槽；本期只画轴槽 t₁，毂槽 t₂ 只入库不画）。
 ///
-/// 交互口径（用户 2026-09-23 定案）：平键选项卡四项输入 = 键型 + 键尺寸 b×h + 键长 L + 位置；
+/// 交互口径（用户 2026-09-23 定案）：轴槽是**轴段类型**（与螺纹/矩形花键并列），
+/// 轴段表列 = 键型 + 键长 L + 位置；**键尺寸 b×h 由该轴段直径 d 自动确定**。
 /// * `kind` = 键型 A/B/C（复用平键族 `key_1096_a/_b/_c` 的型别与尺寸口径）；
-/// * `b` = 键宽（**必给**）；`h` 不再自由输入，由平键族按 b 成对确定
-///   （DSL/JSON 里给 h 则与族表校验，不一致明确报错）；
+/// * `b` 省略 = 按该段直径 d 查 `assets/key1096_shaft_ranges.csv`（GB/T 1095 d 列，**选型依据**）；
+///   显式给了 b 也必须等于该轴径档的标准 b，否则明确报错（不许静默接受非法组合）；
+/// * `h` 可选，只作 b×h 配对校验（h 跟 b 走，不允许自由组合）；
 /// * `l` = **键长**（GB/T 1096 标准 L 系列；中置槽长 = L；端置槽长 = L + t₁，模板 LC 口径）；
 /// * `place` 决定槽在段上的位置（中置 = 该段「倒角根↔段末」净圆柱的中点；端置 = 开在轴端）；
 /// * `t1` 省略 = 按 `b` 查 `assets/keyway_gb1095.csv`（GB/T 1095-2003 表 1）。
-///
-/// 交互提示：轴径 d 只按 1979 d 列给「推荐 b」（`assets/key1096_shaft_ranges.csv`，仅辅助、
-/// 非选型依据；键尺寸以 b×h 为准）。
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize)]
 pub struct Keyway {
     #[serde(rename = "type")]
     pub kind: KeyKind,
     pub l: f64,
     pub place: KeywayPlace,
-    /// 键宽 b（必给；h 由平键族按 b 配对，不存进模型）。
-    pub b: f64,
+    /// 键宽 b：省略 = 按该段直径查 GB/T 1095 d 列；给了必须等于该轴径档的标准 b。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub b: Option<f64>,
+    /// 键高 h：可选（只作 b×h 配对校验；省略 = 按 b 由平键族派生）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub h: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub t1: Option<f64>,
 }
@@ -537,6 +540,34 @@ impl Keyway {
             KeywayPlace::Mid => self.l,
             KeywayPlace::End => self.l + t1,
         }
+    }
+}
+
+/// 键宽 b：**按轴段直径 d 查 GB/T 1095 d 列**（主路径）；显式 b 必须等于该轴径档的标准 b。
+pub fn keyway_b(keyway: &Keyway, shaft_d: f64) -> Result<f64, String> {
+    let std_b = crate::partgen_keys::key_1096_b_for_shaft(shaft_d).ok_or_else(|| {
+        format!(
+            "轴径 d={} 不在 GB/T 1095 的 d 选型表（6…500）里，无法按轴径确定键尺寸 b×h",
+            trim(shaft_d)
+        )
+    })?;
+    let std_h = crate::partgen_keys::key_1096_h(keyway.kind.key_type(), std_b).ok_or_else(|| {
+        format!(
+            "轴径 d={} 按 GB/T 1095 应配 b={}，但超出平键族表范围（GB/T 1096 表 b=2…50）",
+            trim(shaft_d),
+            trim(std_b)
+        )
+    })?;
+    match keyway.b {
+        None => Ok(std_b),
+        Some(b) if (b - std_b).abs() < 1e-9 => Ok(b),
+        Some(b) => Err(format!(
+            "轴径 d={} 按 GB/T 1095 应配 b={}×h={}；显式 b={} 不是该轴径档的标准键尺寸（不许自由组合）",
+            trim(shaft_d),
+            trim(std_b),
+            trim(std_h),
+            trim(b)
+        )),
     }
 }
 
@@ -1394,9 +1425,9 @@ fn parse_keyway_place(text: &str) -> Result<KeywayPlace, String> {
 
 /// KEY 子关键字 → [`Keyway`]（DSL 与 JSON 共用；无任何参数 = 无轴槽）。
 ///
-/// 四项：`key_kind`（A/B/C）、**键尺寸 `key_b`（必给）**、`key_len`（键长 L，必给）、
-/// `key_place`（省 = 中置）；`key_h` 可选，只作**配对校验**（h 跟 b 走，不允许自由组合）；
-/// `t1` 可选（省 = 按 b 查 GB/T 1095 表）。
+/// 三项（段类型）：`key_kind`（A/B/C）、`key_len`（键长 L，必给）、`key_place`（省 = 中置）；
+/// `key_b`/`key_h` **可选**：省略 = 按轴段直径查 GB/T 1095 d 列（主路径）；给了就校验
+/// 家族存在性与 b×h 配对（与轴径档的一致性在 `keyway_b`/`validate` 查）。
 fn assemble_keyway(
     key_kind: Option<KeyKind>,
     key_len: Option<f64>,
@@ -1416,31 +1447,28 @@ fn assemble_keyway(
         return Ok(None);
     }
     let kind = key_kind.ok_or_else(|| {
-        format!("{label}：KEY 缺少键型（A/B/C；例 `KEY A 18 b8h7`）")
+        format!("{label}：KEY 缺少键型（A/B/C；例 `KEY A 18`）")
     })?;
-    let b = key_b.ok_or_else(|| {
-        format!(
-            "{label}：KEY 缺少键尺寸 b×h（例 `KEY A 18 b8h7`；h 跟 b 走，可省略但给了就要配对）"
-        )
-    })?;
-    // b 必须在所选型别的平键族表里（同时给出标准 h 供配对校验）。
-    let std_h = crate::partgen_keys::key_1096_h(kind.key_type(), b).ok_or_else(|| {
-        format!(
-            "{label}：{} 的平键族表里没有 b={}（GB/T 1096 表 b=2…50）",
-            kind.cn(),
-            trim(b)
-        )
-    })?;
-    if let Some(h) = key_h {
-        if (h - std_h).abs() > 1e-9 {
-            return Err(format!(
-                "{label}：键尺寸 b{}×h{} 不是标准配对（{} 的 b={} 应配 h={}）；h 跟 b 走，不能自由组合",
-                trim(b),
-                trim(h),
+    // b 给了就必须在平键族表里；h 给了一般要求与 b 配对。
+    if let Some(b) = key_b {
+        let std_h = crate::partgen_keys::key_1096_h(kind.key_type(), b).ok_or_else(|| {
+            format!(
+                "{label}：{} 的平键族表里没有 b={}（GB/T 1096 表 b=2…50）",
                 kind.cn(),
-                trim(b),
-                trim(std_h)
-            ));
+                trim(b)
+            )
+        })?;
+        if let Some(h) = key_h {
+            if (h - std_h).abs() > 1e-9 {
+                return Err(format!(
+                    "{label}：键尺寸 b{}×h{} 不是标准配对（{} 的 b={} 应配 h={}）；h 跟 b 走，不能自由组合",
+                    trim(b),
+                    trim(h),
+                    kind.cn(),
+                    trim(b),
+                    trim(std_h)
+                ));
+            }
         }
     }
     let l = key_len.ok_or_else(|| {
@@ -1452,7 +1480,8 @@ fn assemble_keyway(
         kind,
         l,
         place: key_place.unwrap_or(KeywayPlace::Mid),
-        b,
+        b: key_b,
+        h: key_h,
         t1: key_t1,
     }))
 }
@@ -1463,7 +1492,8 @@ fn parse_segment(chunk: &str, label: &str, program: &mut Program) -> Result<Segm
     let mut ch: Vec<Chamfer> = Vec::new();
     let mut ov: Vec<Overtravel> = Vec::new();
     let mut thread: Option<Thread> = None;
-    // 轴槽 KEY（GB/T 1095）：平键选项卡三项 = 键型 A/B/C + 键长 L + 位置；b/t1 可选。
+    // 轴槽 KEY（GB/T 1095）：**轴段类型**（与 M/SPLINE 同级）= 键型 A/B/C + 键长 L + 位置；
+    // b×h 由该段直径 d 查 GB/T 1095 d 列自动定（b/h 可选、只作校验/覆盖）。
     let mut key_on = false;
     let mut key_kind: Option<KeyKind> = None;
     let mut key_len: Option<f64> = None;
@@ -2239,9 +2269,10 @@ struct JsonKeyway {
     /// 位置：`mid`/`end`（中文「中/端」也认）；省 = 中置。
     #[serde(default)]
     place: Option<String>,
-    /// 键宽 b（键尺寸 b×h 的 b，**必给**；h 由平键族按 b 配对）。
-    b: f64,
-    /// 键高 h（可选，只作配对校验：与族表不一致明确报错）。
+    /// 键宽 b（可选：省略 = 按所在轴段直径查 GB/T 1095 d 列；给了必须等于该档标准 b）。
+    #[serde(default)]
+    b: Option<f64>,
+    /// 键高 h（可选，只作 b×h 配对校验）。
     #[serde(default)]
     h: Option<f64>,
     /// 显式 t₁（缺省 = 按 b 查 GB/T 1095 表）。
@@ -2523,7 +2554,7 @@ fn parse_json(text: &str) -> Result<Program, String> {
                 assemble_keyway(
                     Some(kind),
                     k.l,
-                    Some(k.b),
+                    k.b,
                     k.h,
                     k.t1,
                     place,
@@ -2926,13 +2957,28 @@ pub fn validate(program: &Program) -> Result<(), String> {
             if !keyway.l.is_finite() || keyway.l <= 0.0 {
                 return Err(format!("第 {number} 段：轴槽键长 L={} 必须 > 0", trim(keyway.l)));
             }
-            let b = keyway.b;
+            let b = keyway_b(keyway, seg.s).map_err(|e| format!("第 {number} 段：{e}"))?;
             if crate::partgen_keys::key_1096_h(keyway.kind.key_type(), b).is_none() {
                 return Err(format!(
                     "第 {number} 段：{} 的平键族表里没有 b={}（GB/T 1096 表 b=2…50）",
                     keyway.kind.cn(),
                     trim(b)
                 ));
+            }
+            // h 给了就必须与 b 配对（h 跟 b 走，不允许自由组合）。
+            if let Some(h) = keyway.h {
+                let std_h = crate::partgen_keys::key_1096_h(keyway.kind.key_type(), b)
+                    .expect("上面已判族表有 b");
+                if (h - std_h).abs() > 1e-9 {
+                    return Err(format!(
+                        "第 {number} 段：键尺寸 b{}×h{} 不是标准配对（{} 的 b={} 应配 h={}）",
+                        trim(b),
+                        trim(h),
+                        keyway.kind.cn(),
+                        trim(b),
+                        trim(std_h)
+                    ));
+                }
             }
             crate::partgen_keys::check_length_1096(b, keyway.l)
                 .map_err(|e| format!("第 {number} 段：轴槽：{e}"))?;
@@ -3276,7 +3322,7 @@ fn keyway_geom(
     count: usize,
     label: &str,
 ) -> Result<KeywayGeom, String> {
-    let b = kw.b;
+    let b = keyway_b(kw, seg.s).map_err(|e| format!("{label}：{e}"))?;
     if crate::partgen_keys::key_1096_h(kw.kind.key_type(), b).is_none() {
         return Err(format!(
             "{label}：{} 的平键族表里没有 b={}（GB/T 1096 表 b=2…50）",
@@ -5320,7 +5366,7 @@ pub fn build_report(program: &Program) -> Result<String, String> {
         } else {
             let mut params = format!("S={} E={}", trim(seg.s), trim(seg.e));
             if let Some(keyway) = &seg.keyway {
-                let b = keyway.b;
+                let b = keyway_b(keyway, seg.s).unwrap_or(f64::NAN);
                 let t1 = keyway_t1(b, keyway.t1)
                     .map(trim)
                     .unwrap_or_else(|_| "?".into());
@@ -8491,8 +8537,17 @@ GEAR M3 Z20";
         assert_eq!(kw.kind, KeyKind::A);
         assert!(near(kw.l, 18.0) && near(kw.slot_len(4.0), 18.0));
         assert_eq!(kw.place, KeywayPlace::Mid);
-        assert!(near(kw.b, 8.0), "键尺寸 b×h 的 b 必给");
+        assert!(near(kw.b.unwrap(), 8.0), "显式 b8 覆盖");
+        assert!(near(keyway_b(&kw, 25.0).unwrap(), 8.0), "d25 档标准 b=8");
         assert!(near(keyway_t1(8.0, None).unwrap(), 4.0), "b8 → t1=4");
+        // b 省略 = 按轴段直径自动定（主路径）。
+        let kw_auto = parse_program("S25 E25 L40 CH2@L KEY A 18")
+            .unwrap()
+            .segments[0]
+            .keyway
+            .unwrap();
+        assert_eq!(kw_auto.b, None);
+        assert!(near(keyway_b(&kw_auto, 25.0).unwrap(), 8.0), "d25 → b8（GB/T 1095 d 列）");
         // 平键族数据复用：b 必须在所选型别表里（h 配对），L 走族表系列与 L<10b。
         assert!(near(
             crate::partgen_keys::key_1096_h(KeyKind::A.key_type(), 8.0).unwrap(),
@@ -8503,7 +8558,7 @@ GEAR M3 Z20";
         // 键长别名 `KL18`；b 可只给 b（h 跟 b 走）；t1 覆盖。
         let p = parse_program("S25 E25 L40 KEY A KL18 b10 t1 5").unwrap();
         let kw = p.segments[0].keyway.unwrap();
-        assert!(near(kw.l, 18.0) && near(kw.b, 10.0) && near(kw.t1.unwrap(), 5.0));
+        assert!(near(kw.l, 18.0) && near(kw.b.unwrap(), 10.0) && near(kw.t1.unwrap(), 5.0));
         // h 给了就必须配对（b8→h7）；不配对明确报错。
         let e = parse_program("S25 E25 L40 KEY A 18 b8h10").unwrap_err();
         assert!(e.contains("不是标准配对") && e.contains("h=7"), "{e}");
@@ -8514,10 +8569,10 @@ GEAR M3 Z20";
             .keyway
             .unwrap();
         assert_eq!(kw.place, KeywayPlace::End);
-        assert!(near(kw.b, 8.0));
-        assert!(near(keyway_t1(kw.b, None).unwrap(), 4.0));
+        assert!(near(kw.b.unwrap(), 8.0));
+        assert!(near(keyway_t1(kw.b.unwrap(), None).unwrap(), 4.0));
         assert!(near(kw.slot_len(4.0), 18.0), "14 + 4 = 18");
-        // 轴径推荐表（仅辅助，非选型依据）：26 档；d=6 → b2、d=25 → b8；d 太小 → None。
+        // 轴径选型表（**选型依据**）：26 档；d=6 → b2、d=25 → b8；d 太小 → None。
         assert_eq!(crate::partgen_keys::key_1096_shaft_ranges().len(), 26);
         assert!(near(crate::partgen_keys::key_1096_b_for_shaft(6.0).unwrap(), 2.0));
         assert!(near(crate::partgen_keys::key_1096_b_for_shaft(25.0).unwrap(), 8.0));
@@ -8553,11 +8608,12 @@ GEAR M3 Z20";
         let kw = p.segments[0].keyway.unwrap();
         assert_eq!(kw.kind, KeyKind::C);
         assert_eq!(kw.place, KeywayPlace::End);
-        // 缺 b → 报错（键尺寸以 b×h 为准，不再由轴径推 b）。
-        assert!(parse_program(
-            r#"{"segments":[{"s":25,"e":25,"l":40,"keyway":{"type":"A","l":18}}]}"#
+        // 缺 b → 合法（b 由轴段直径自动定）；显式 b×h 不配对才报错。
+        let p = parse_program(
+            r#"{"segments":[{"s":25,"e":25,"l":40,"keyway":{"type":"A","l":18}}]}"#,
         )
-        .is_err());
+        .unwrap();
+        assert_eq!(p.segments[0].keyway.unwrap().b, None, "JSON 省略 b = 按轴径自动定");
         // b×h 不配对 → 报错。
         let e = parse_program(
             r#"{"segments":[{"s":25,"e":25,"l":40,"keyway":{"type":"A","l":18,"b":8,"h":10}}]}"#,
@@ -8580,13 +8636,10 @@ GEAR M3 Z20";
         // 旧写法 LA/LC 明确报错（不静默）。
         let e = parse_program("S25 E25 L40 KEY b8 LA18").unwrap_err();
         assert!(e.contains("旧") && e.contains("LA"), "{e}");
-        // 缺键型/键尺寸/键长；非法键型/位置；b×h 不配对。
+        // 缺键型/键长；非法键型/位置；b×h 不配对（b 可省 = 按轴径自动定）。
         assert!(parse_program("S25 E25 L40 KEY 18 b8")
             .unwrap_err()
             .contains("缺少键型"));
-        assert!(parse_program("S25 E25 L40 KEY A 18")
-            .unwrap_err()
-            .contains("缺少键尺寸"));
         assert!(parse_program("S25 E25 L40 KEY A b8h7")
             .unwrap_err()
             .contains("缺少键长"));
@@ -8638,6 +8691,50 @@ GEAR M3 Z20";
         // b 超出 GB/T 1096 平键族（b≤50）。
         let e = parse_program("S25 E25 L40 KEY A 18 b56h32").unwrap_err();
         assert!(e.contains("没有 b=56"), "{e}");
+        // 显式 b 必须落在该轴径档的标准配对上（d25 → b8；给 b10 明确报错，不许静默接受）。
+        let e = build(&parse_program("S25 E25 L40 KEY A 18 b10h8").unwrap(), 1.0).unwrap_err();
+        assert!(e.contains("应配 b=8") && e.contains("不许自由组合"), "{e}");
+        let e = build(&parse_program("S25 E25 L40 KEY A 18 b8").unwrap(), 1.0);
+        assert!(e.is_ok(), "d25 + b8 是标准配对，应通过：{e:?}");
+        // 轴径不在 GB/T 1095 d 选型表（4 < 6）→ 明确报错。
+        let e = build(&parse_program("S4 E4 L12 KEY A 8").unwrap(), 1.0).unwrap_err();
+        assert!(e.contains("d 选型表"), "{e}");
+    }
+
+    #[test]
+    fn keyway_bxh_from_shaft_diameter_26_bands() {
+        // GB/T 1095 d 列 26 档：每个区间的代表 d → 标准 b（h 由平键族按 b 配对）。
+        let rows = crate::partgen_keys::key_1096_shaft_ranges();
+        assert_eq!(rows.len(), 26, "GB/T 1095 d 列 26 档");
+        for (lo, hi, incl, b) in rows {
+            let d = if incl { lo } else { (lo + hi) / 2.0 };
+            let got = crate::partgen_keys::key_1096_b_for_shaft(d)
+                .unwrap_or_else(|| panic!("d={d} 应命中区间 {lo}~{hi}"));
+            assert!(near(got, b), "d={d} 应配 b={b}，实为 {got}");
+            if b <= 50.0 {
+                assert!(
+                    crate::partgen_keys::key_1096_h(crate::partgen_keys::KeyType::A, b).is_some(),
+                    "b={b} 应在平键族表内"
+                );
+            }
+        }
+        // 区间左端口径：6 含在首档；8 仍在 >6~8（b2）；10 → b3。
+        assert!(near(crate::partgen_keys::key_1096_b_for_shaft(6.0).unwrap(), 2.0));
+        assert!(near(crate::partgen_keys::key_1096_b_for_shaft(8.0).unwrap(), 2.0));
+        assert!(near(crate::partgen_keys::key_1096_b_for_shaft(10.0).unwrap(), 3.0));
+        // 该档标准配对显式给：通过；邻档 b：明确报错（不静默接受）。
+        let p = parse_program("S25 E25 L40 KEY A 18 b8h7").unwrap();
+        assert!(near(
+            keyway_b(p.segments[0].keyway.as_ref().unwrap(), 25.0).unwrap(),
+            8.0
+        ));
+        let p = parse_program("S25 E25 L40 KEY A 18 b10h8").unwrap();
+        let e = build(&p, 1.0).unwrap_err();
+        assert!(e.contains("应配 b=8") && e.contains("不许自由组合"), "{e}");
+        // 每档都能按轴径自动定出 b（不显式给 b 也合法）。
+        let p = parse_program("S25 E25 L40 CH2@L KEY A 18").unwrap();
+        assert_eq!(p.segments[0].keyway.unwrap().b, None);
+        assert!(build(&p, 1.0).is_ok());
     }
 
     #[test]

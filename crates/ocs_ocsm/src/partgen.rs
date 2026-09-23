@@ -857,6 +857,26 @@ pub fn catalog_json() -> String {
     {
         fam_map.insert(k, v);
     }
+    // 轴槽段类型显示用：给平键族的 `shaft_ranges` 每行补 `t1`（按 b 查 GB/T 1095 表；
+    // 唯一数据源 = shaft.rs 的 `assets/keyway_gb1095.csv`），避免 GUI 另写一份 t1 表。
+    for id in ["key_1096_a", "key_1096_b", "key_1096_c"] {
+        if let Some(ranges) = fam_map
+            .get_mut(id)
+            .and_then(|v| v.as_object_mut())
+            .and_then(|o| o.get_mut("shaft_ranges"))
+            .and_then(|v| v.as_array_mut())
+        {
+            for row in ranges.iter_mut() {
+                if let Some(obj) = row.as_object_mut() {
+                    if let Some(b) = obj.get("b").and_then(|v| v.as_f64()) {
+                        if let Ok(t1) = crate::shaft::keyway_t1(b, None) {
+                            obj.insert("t1".to_string(), serde_json::json!(t1));
+                        }
+                    }
+                }
+            }
+        }
+    }
     // 每族补一个 kind 字段（bolt/nut/washer/pin/other）：GUI 与 AI 都靠它分组，
     // 不用去猜族名前缀（`family_kind` 是唯一判据来源）。
     let families = {
