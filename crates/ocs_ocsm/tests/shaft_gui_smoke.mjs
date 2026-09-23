@@ -7,7 +7,8 @@
 //      `SPLINE 6x28x32x7 L30`（自动填的 de 不写进行文本；改了才算覆盖）；
 //   ③ 选「自定义…」→ 文本框出现并接受手输，de 清空；
 //   ④ 表外规格缺 de → 沿用后端既有报错文案（桩里复刻 spline.rs 的报错）显示在 dslErr；
-//   ⑤ JSON 模型里表内规格不显式带 de（后端仍会查表）。
+//   ⑤ JSON 模型里表内规格不显式带 de（后端仍会查表）；
+//   ⑥ 渐开线花键轴段 INVOLSPLINE 已撤：段表面板/行文本/表达式框都拒绝（唯一入口 = OCSMGEAR 花键模式）。
 //
 // 用法：node shaft_gui_smoke.mjs <shaft_gui.html 路径>
 
@@ -37,23 +38,6 @@ const SPECS = [
   { code: '6x28x32x7', label: '轻6x28x32x7', n: 6, d: 28, D: 32, B: 7, de: 71, series: '轻' },
   { code: '8x52x58x10', label: '轻8x52x58x10', n: 8, d: 52, D: 58, B: 10, de: 90, series: '轻' },
 ];
-
-// 渐开线花键预设（与 detail.rs 目录 / invol_spline.rs 系数同形；只取测试用到的）
-const INVOL = [
-  { code: 'GB30R', std: 'GB', profile: '30圆齿根', alpha: 30, ha: 0.5, hf: 0.9, rho: 0.4, cf: 0.1 },
-  { code: 'GB30P', std: 'GB', profile: '30平齿根', alpha: 30, ha: 0.5, hf: 0.75, rho: 0.2, cf: 0.1 },
-  { code: 'DIN30', std: 'DIN', profile: 'DIN30', alpha: 30, ha: 0.45, hf: 0.55, rho: 0.16, cf: 0.1 },
-  { code: 'NFP', std: 'NF', profile: 'NF平齿根', alpha: 20, ha: 0.2, hf: 1.0, rho: 0.3, cf: 0.1 },
-  { code: 'ANSI30P', std: 'ANSI', profile: 'ANSI30平齿根齿侧', alpha: 30, ha: 0.5, hf: 0.675, rho: 0, cf: 0 },
-];
-
-// DIN 5480-2 名义表候选（与 detail.rs 目录 din_nominal 同形；只取测试用到的行）。
-const DIN_NOMINAL = [
-  { db: 40, m: 2, z: 18, x: 0.45, page: 27 },
-  { db: 45, m: 3, z: 13, x: 0.45, page: 31 },
-  { db: 45, m: 3, z: 14, x: -0.05, page: 31 },
-];
-const NF_NOMINAL = [{ a: 80, m: 3.75, z: 19, x: 0.967, page: 21 }];
 
 // ── 最小 DOM 垫片 ────────────────────────────────────────────────
 function htmlDecode(s) {
@@ -228,7 +212,7 @@ function textResp(text, status = 200) {
   return { ok: status < 400, status, text: async () => text, json: async () => JSON.parse(text) };
 }
 
-// DSL → 归一化段模型（够本测试用：花键行按规格表查 de，齿轮/渐开线行按真实子关键字回填）。
+// DSL → 归一化段模型（够本测试用：花键行按规格表查 de，齿轮行按真实子关键字回填；INVOLSPLINE 视为非法段）。
 function segmentsFor(dsl) {
   const out = [];
   for (const raw of String(dsl).split(/[\n|]/)) {
@@ -265,29 +249,6 @@ function segmentsFor(dsl) {
       out.push({ gear: g });
       continue;
     }
-    const inv = /^INVOLSPLINE\s+(\S+)(.*)$/i.exec(line);
-    if (inv) {
-      const code = inv[1];
-      const rest = inv[2];
-      const mhit = /\bDP\s*=?\s*([\d.]+(?:\/[\d.]+)?)/i.exec(rest)
-        || /\b(?:M|P)\s*=?\s*([\d.]+(?:\/[\d.]+)?)/i.exec(rest);
-      const zhit = /\bZ\s*=?\s*(\d+)/i.exec(rest);
-      const lhit = /\bL\s*=?\s*([\d.]+)/i.exec(rest);
-      const xhit = /\bX\s*=?\s*(-?[\d.]+)/i.exec(rest);
-      const dbhit = /\b(?:DB|A)\s*=?\s*([\d.]+)/i.exec(rest);
-      const dehit = /\bde\s*=?\s*([\d.]+)/i.exec(rest);
-      // A/B 写法取分子 A（= 径节 P）；真后端：ANSI 序列化回来 m=25.4/P（mm），pitch=P 原值优先。
-      const mval = mhit ? Number(String(mhit[1]).split('/')[0]) : null;
-      const iv = { code, m: mval, z: zhit ? Number(zhit[1]) : null, x: xhit ? Number(xhit[1]) : 0, len: lhit ? Number(lhit[1]) : null };
-      if (/^ANSI/i.test(code) && mval) {
-        iv.pitch = mval;
-        iv.m = 25.4 / mval;
-      }
-      if (dbhit) iv.d_b = Number(dbhit[1]);
-      if (dehit) iv.de = Number(dehit[1]);
-      out.push({ invol_spline: iv });
-      continue;
-    }
     // 普通轴段（S/E/L…）：本测试不细解，给一个圆柱段
     if (/^S\s*=?\s*[\d.]/i.test(line)) {
       out.push({ s: 30, e: 30, l: 10 });
@@ -308,7 +269,6 @@ global.fetch = async (u, opts = {}) => {
       families: {
         detail_spline_rect: { specs: SPECS },
       },
-      spline_engine: { invol_presets: INVOL, din_nominal: DIN_NOMINAL, nf_nominal: NF_NOMINAL },
     });
   }
   if (url.startsWith('/api/shaft_parse')) {
@@ -445,90 +405,17 @@ check(added.spline.on && added.spline.spec === '6x23x26x6', '勾选后应有默�
 check(added.spline.de === '63', `勾选 SPLINE 时 de 应自动填 63，实为 ${JSON.stringify(added.spline.de)}`);
 check(segBody._rows[segBody._rows.length - 1]._html.includes('de63'), '勾选后派生值应含 de63');
 
-// ⑦ 渐开线花键：预设下拉 + m/z/x/L 派生值 + DIN 联动 + JSON 模型
-const checkInvolDerive = (row, needle) => {
-  const m = row._html.match(/class="frow invol-derive"[^>]*>([^<]*)</);
-  const text = m ? m[1] : '';
-  check(text.includes(needle), `渐开线派生值应含 ${needle}：${text}`);
-};
-dslEl.value = 'INVOLSPLINE GB30R M3 Z20 L30 de70';
-await S.refreshFromText();
-check(S.rows.length === 1 && S.rows[0].invol.on, '“INVOLSPLINE …” 应回填出渐开线花键行');
-check(S.rows[0].invol.profile === 'GB30R', `回填预设代号：${S.rows[0].invol.profile}`);
-let irow = segBody._rows[0];
-checkInvolDerive(irow, 'da63');
-checkInvolDerive(irow, 'df54.6');
-checkInvolDerive(irow, 'l16.6241');
-check(dslEl.value.includes('INVOLSPLINE GB30R M3 Z20 L30 de70'), `行文本同步：${JSON.stringify(dslEl.value)}`);
-// 标准切 DIN → 齿廓自动 DIN30、派生值含 d_B 名义估算与说明
-const stdSel = irow._fields.find((f) => f.dataset.f === 'invol.std');
-check(!!stdSel && stdSel.options.some((o) => o.value === 'DIN'), '标准下拉应有 DIN');
-stdSel.value = 'DIN';
-segBody._fire('change', stdSel);
-await new Promise((r) => setImmediate(r));
-check(S.rows[0].invol.std === 'DIN' && S.rows[0].invol.profile === 'DIN30',
-  `DIN 联动齿廓，实为 ${S.rows[0].invol.std}/${S.rows[0].invol.profile}`);
-irow = segBody._rows[0];
-checkInvolDerive(irow, 'd_B');
-// d_B（DIN 5480-2 查表）：填 DB40 → 自动带出 m/z/x、行文本带 DB40、JSON 带 d_b
-const dbField = irow._fields.find((f) => f.dataset.f === 'invol.db');
-check(!!dbField, '缺 d_B 输入框');
-dbField.value = '40';
-segBody._fire('change', dbField);
-await new Promise((r) => setImmediate(r));
-check(S.rows[0].invol.m === '2' && S.rows[0].invol.z === '18'
-  && Math.abs(Number(S.rows[0].invol.x) - 0.45) < 1e-9,
-  `d_B=40 应带出 m2/z18/x0.45，实为 ${S.rows[0].invol.m}/${S.rows[0].invol.z}/${S.rows[0].invol.x}`);
-check(dslEl.value.includes('INVOLSPLINE DIN30 DB40')
-  && dslEl.value.includes('M2') && dslEl.value.includes('Z18'),
-  `行文本应带 DB40/M2/Z18：${JSON.stringify(dslEl.value)}`);
-irow = segBody._rows[0];
-checkInvolDerive(irow, '查表命中 p27 m=2');
-// ② DIN：z 由 (d_B, m) 锁定（行内只读 + 联动回填）；改 m 立即重算；显式 z 不符以 d_B 为准。
-const zin = irow._fields.find((f) => f.dataset.f === 'invol.z');
-check(!!zin && zin.readOnly === true, 'DIN 行 z 输入框应只读');
-check(zin && zin.value === '18', `DIN d_B=40/m=2 联动 z 应为 18，实为 ${zin && zin.value}`);
-const xin = irow._fields.find((f) => f.dataset.f === 'invol.x');
-check(!!xin && xin.readOnly === true, 'DIN 行 x 输入框（因变量）应只读');
-check(xin && Math.abs(Number(xin.value) - 0.45) < 1e-9, `DIN x 框应显示表值 0.45，实为 ${xin && xin.value}`);
-const min2 = irow._fields.find((f) => f.dataset.f === 'invol.m');
-min2.value = '3';
-segBody._fire('input', min2);
-await new Promise((r) => setImmediate(r));
-check(S.rows[0].invol.z === '12', `DIN 改 m=3 后 z 应由 (d_B,m) 重算为 12，实为 ${S.rows[0].invol.z}`);
-const zin2 = segBody._rows[0]._fields.find((f) => f.dataset.f === 'invol.z');
-check(!!zin2 && zin2.value === '12', `只读 z 框应同步为 12，实为 ${zin2 && zin2.value}`);
-check(dslEl.value.includes('Z12'), `行文本应同步 Z12：${JSON.stringify(dslEl.value)}`);
-// 显式 z 与 (d_B, m) 推导不符 → 解析/回填时以 d_B 为准（沿用后端 Adjust 口径）。
-dslEl.value = 'INVOLSPLINE DIN30 DB40 M2 Z14 L30';
-await S.refreshFromText();
-check(S.rows[0].invol.z === '18', `显式 Z14 应按 d_B=40/m=2 修正为 18，实为 ${S.rows[0].invol.z}`);
-// NF：A=80/m=3.75 → N=19；z 也只读。
-dslEl.value = 'INVOLSPLINE NFP A80 M3.75 Z14 L30';
-await S.refreshFromText();
-check(S.rows[0].invol.profile === 'NFP', `应回填 NFP：${S.rows[0].invol.profile}`);
-check(S.rows[0].invol.z === '19', `NF 显式 N=14 应按 A=80/m=3.75 修正为 19，实为 ${S.rows[0].invol.z}`);
-const nfz = segBody._rows[0]._fields.find((f) => f.dataset.f === 'invol.z');
-check(!!nfz && nfz.readOnly === true, 'NF 行 z 输入框应只读');
-check(nfz && nfz.value === '19', `NF 只读 z 框应为 19，实为 ${nfz && nfz.value}`);
-const nfx = segBody._rows[0]._fields.find((f) => f.dataset.f === 'invol.x');
-check(!!nfx && nfx.readOnly === true, 'NF 行 x 输入框（因变量）应只读');
-check(nfx && Math.abs(Number(nfx.value) - 0.9667) < 1e-3, `NF x 框应显示公式解 0.967，实为 ${nfx && nfx.value}`);
-// 回到 DIN 行做剩余断言（模型 code/de 等）
-dslEl.value = 'INVOLSPLINE DIN30 DB40 M2 L30 de70';
-await S.refreshFromText();
-irow = segBody._rows[0];
-const dinModel = S.modelFromRows();
-check(!!dinModel && dinModel.segments[0].invol_spline.d_b === 40
-  && dinModel.segments[0].invol_spline.z === 18,
-  'JSON 模型应带 d_b=40 与补出的 z=18');
-// JSON 模型：invol_spline 带 code/m/z/x/len/de
-const involModel = S.modelFromRows();
-check(!!involModel && !!involModel.segments[0].invol_spline, '模型应带 invol_spline');
-check(involModel && involModel.segments[0].invol_spline.code === 'DIN30'
-  && involModel.segments[0].invol_spline.de === 70, '模型 code/de 应为 DIN30/70');
+// ⑦ 渐开线花键轴段（INVOLSPLINE）已撤（唯一入口 = OCSMGEAR 花键模式）：面板/行文本不再接受
+check(segBody._rows.every((r) => !r._html.includes('invol')), '段表不应再有 INVOLSPLINE 列/字段');
+const rowsBeforeGone = S.rows.length;
+dslEl.value = 'INVOLSPLINE GB30R M3 Z20 L30';
+const okGone = await S.refreshFromText();
+check(okGone === false, '“INVOLSPLINE …” 行文本应解析失败');
+check(dslErr.textContent.includes('不识别的关键字') && dslErr.textContent.includes('INVOLSPLINE'),
+  '错误应点名不识别的关键字 INVOLSPLINE：' + dslErr.textContent);
+check(S.rows.length === rowsBeforeGone, '解析失败不应改段表');
 
-// ⑧ 表达式互通（齿轮/花键窗口 → 轴生成器粘贴）：往返一致 + 容错 + 错误定位 + 开窗
+// ⑧ 表达式互通（齿轮窗口 → 轴生成器粘贴）：往返一致 + 容错 + 错误定位 + 开窗
 const elv = (id) => document.getElementById(id);
 const tick = async (n = 3) => { for (let i = 0; i < n; i++) await new Promise((r) => setImmediate(r)); };
 
@@ -574,18 +461,6 @@ segBody._fire('paste', gearMInput, {
 });
 check(!prevented, '纯数字粘贴不应被表达式拦截');
 
-// ⑧.4 INVOLSPLINE（花键）往返：预设代号/M/Z/X/L 回填一致
-const rowsBeforeInvol = S.rows.length;
-elv('exprInput').value = 'INVOLSPLINE\u3000GB30R\u3000M3\u3000Z20\u3000X0.2\u3000L30';
-elv('exprAdd').click();
-await tick();
-const iw = S.rows[S.rows.length - 1];
-check(S.rows.length === rowsBeforeInvol + 1 && iw.invol.on, '应加出 INVOLSPLINE 段');
-check(iw.invol.profile === 'GB30R' && iw.invol.m === '3' && iw.invol.z === '20'
-  && Math.abs(Number(iw.invol.x) - 0.2) < 1e-9 && iw.invol.len === '30',
-  `INVOLSPLINE 参数应与齿轮侧一致：${JSON.stringify({ profile: iw.invol.profile, m: iw.invol.m, z: iw.invol.z, x: iw.invol.x, len: iw.invol.len })}`);
-check(dslEl.value.includes('INVOLSPLINE GB30R M3 Z20 X0.2 L30'), `行文本应同步：${JSON.stringify(dslEl.value)}`);
-
 // ⑧.5 解析失败：明确错误 + 段定位，且不改段表
 const rowsBeforeBad = S.rows.length;
 elv('exprInput').value = 'GEAR M3';
@@ -621,33 +496,14 @@ global.window.open = (u) => { opened = u; return {}; };
 elv('openGear').click();
 check(opened === '/gear', '打开齿轮生成器应 window.open("/gear")，实际 ' + opened);
 
-// ⑧.9 ANSI 径节：`DP<A/B>` 原值往返（P 分支顺序已修；旧 M 槽位仍兼容）
-elv('exprInput').value = 'INVOLSPLINE ANSI30P DP5/10 Z20 L30';
+// ⑧.9 INVOLSPLINE 轴段已撤：表达式框粘贴同样拒绝（护栏）
+const rowsBeforeInvolGone = S.rows.length;
+elv('exprInput').value = 'INVOLSPLINE GB30R M3 Z20 L30';
 elv('exprAdd').click();
 await tick();
-const aw = S.rows[S.rows.length - 1];
-check(aw.invol.on && aw.invol.profile === 'ANSI30P' && Math.abs(Number(aw.invol.m) - 5) < 1e-9,
-  `ANSI 段应回填径节原值 P=5：${JSON.stringify({ profile: aw.invol.profile, m: aw.invol.m })}`);
-check(dslEl.value.includes('INVOLSPLINE ANSI30P DP5/10 Z20 L30'),
-  `ANSI 行文本应为 DP5/10，实为 ${JSON.stringify(dslEl.value)}`);
-check(!/ANSI30P\s+M5\b/i.test(dslEl.value), 'ANSI 行文本不应再换算成 M5');
-// Table 2 每列适用径节范围（用户定案 A）：A 列 2.5/5—32/64，40/80 超上限 → 本地面板即拒，
-// 文案与后端/命令行同一点名列与范围。
-elv('exprInput').value = 'INVOLSPLINE ANSI30P DP40/80 Z20 L30';
-elv('exprAdd').click();
-await tick();
-check(S.rows[S.rows.length - 1].invol.profile === 'ANSI30P', 'ANSI30P 行应能加入（列界在本地面板校验）');
-check(S.modelFromRows() === null, 'A 列 P=40/80 本地面板应拒绝出模型');
-const rangeStatus = elv('status').textContent;
-check(rangeStatus.includes('ANSI B92.1 Table 2') && rangeStatus.includes('2.5/5 — 32/64')
-  && rangeStatus.includes('40/80') && rangeStatus.includes('超出上限'),
-  '本地拒绝文案应点名 Table 2 列与范围：' + rangeStatus);
-// 旧 M8 槽位仍能解析，但回写行文本归一为 DP8/16（保留 DP 原值）
-elv('exprInput').value = 'INVOLSPLINE ANSI30P M8 Z20 L30';
-elv('exprAdd').click();
-await tick();
-check(dslEl.value.includes('INVOLSPLINE ANSI30P DP8/16 Z20 L30'),
-  `旧 M8 应兼容解析且回写为 DP8/16，实为 ${JSON.stringify(dslEl.value)}`);
+check(elv('exprErr').textContent.includes('不识别的关键字') && elv('exprErr').textContent.includes('INVOLSPLINE'),
+  '表达式框应拒绝 INVOLSPLINE：' + elv('exprErr').textContent);
+check(S.rows.length === rowsBeforeInvolGone, '被拒的表达式不应加段');
 
 report();
 
@@ -656,6 +512,6 @@ function report() {
     console.error('轴 GUI 冒烟失败：\n- ' + errors.join('\n- '));
     process.exit(1);
   }
-  console.log('轴 GUI 冒烟通过：规格下拉 / de 自动填 / 派生值 / 自定义手输 / 表外缺 de 报错 / 表达式粘贴往返');
+  console.log('轴 GUI 冒烟通过：规格下拉 / de 自动填 / 派生值 / 自定义手输 / 表外缺 de 报错 / 表达式粘贴往返 / INVOLSPLINE 已撤护栏');
   process.exit(0);
 }

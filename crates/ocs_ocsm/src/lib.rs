@@ -751,8 +751,8 @@ fn place_one(
 ///   例：`OCSMPART detail_grind_od 100 b1 10 at 150,30 rot 0`（b1 缺省 = 该 d 档默认行）。
 /// - **矩形花键**（`detail_spline_rect`）：`<族> <规格代号> [L 满齿段长] [de 覆盖] [view 视图] [at x,y] [rot]`
 ///   例：`XL detail_spline_rect 6x23x26x6 L30 de63 view side`（规格代号可自定义，de 表外规格必给）。
-/// - **渐开线花键**：**只在 OCSMGEAR 的花键模式生成**（XL/结构要素旧入口已移除；
-///   引擎仍在 `invol_spline.rs`，轴段 `INVOLSPLINE` 与齿轮花键模式共用）。
+/// - **渐开线花键**：**只在 OCSMGEAR 的花键模式生成**（XL 旧入口与轴段 `INVOLSPLINE` 均已移除；
+///   引擎仍在 `invol_spline.rs`）。
 /// - **外螺纹退刀槽**（`detail_thread_relief`）：`<族> <d> P <螺距> [g1 值 g2 值 dg 值 r 值 alpha 值] [at x,y] [rot 度]`
 ///   例：`OCSMPART detail_thread_relief 20 P 1.5`（P 必给，其余可选，见 `detail.rs` 表 2）。
 /// - **平键**（`key_1096_{a,b,c}` = GB/T 1096 三型；`key_1097_{a,b}` = GB/T 1097 两型）：
@@ -1914,9 +1914,8 @@ impl OcsmPlugin {
     /// * 不带参数 = 人类侧：开轴生成器窗口（段表 + 行文本双向同步 + 视图按钮 + 实时预览）+ 进放置态；
     ///   窗口里点「生成到图纸」→ 回图纸点基点 → 移动光标旋转 → 再点落定。
     /// * 带参数 = AI/MCP：`OCSMSHAFT <行 DSL 或 JSON>` 一行直插（与原来一致）。
-    /// * **计算书**：段末（或整体）加 `report`：`OCSMSHAFT INVOLSPLINE DIN30 DB40 M2 L30 report`
-    ///   —— 纯计算不插图，输出 Markdown 计算书（含 INVOLSPLINE 段的公式/代入/结果/来源
-    ///   与 DIN 检验尺寸）；`report=<path>` 另写文件。
+    /// * **计算书**：段末（或整体）加 `report`：`OCSMSHAFT SPLINE 6x23x26x6 L30 report`
+    ///   —— 纯计算不插图，输出 Markdown 段清单（类型/关键参数/长度/外径）；`report=<path>` 另写文件。
     /// 轮廓/端面/倒角/槽与边界竖线 `1轮廓实线层`、螺纹小径/螺尾 `2细线层`
     /// （磨外圆/OV 不画砂轮细线）、轴线与分度线
     /// `3中心线层`、剖视剖面线 `5剖面线层`；不标尺寸。
@@ -5259,7 +5258,7 @@ mod tests {
     }
 
     /// 计算书命令入口（命令解析层，不必真连宿主）：`OCSMGEAR … report` 与
-    /// `OCSMSHAFT INVOLSPLINE … report` 把 Markdown 推到输出；四要素齐全。
+    /// `OCSMSHAFT SPLINE … report` 把 Markdown 推到输出；`INVOLSPLINE` 轴段已撤，命令同样拒绝。
     #[test]
     fn gear_and_shaft_report_commands_emit_markdown() {
         let mut host = UndoOrderSpy::default();
@@ -5271,11 +5270,20 @@ mod tests {
         }
 
         let mut host = UndoOrderSpy::default();
-        OcsmPlugin.cmd_shaft(&mut host, "INVOLSPLINE DIN30 DB40 M2 L30 report");
+        OcsmPlugin.cmd_shaft(&mut host, "SPLINE 6x23x26x6 L30 report");
         assert!(host.errors.is_empty(), "{:?}", host.errors);
         let md = host.outputs.join("\n");
-        assert!(md.contains("# 轴段计算书"), "{md}");
-        assert!(md.contains("d_B = d + 1.1m + 2x₁m"), "{md}");
+        assert!(md.contains("# 轴段计算书") && md.contains("矩形花键段"), "{md}");
+        // 渐开线花键轴段已撤：report 命令同样不再接受 INVOLSPLINE。
+        let mut host = UndoOrderSpy::default();
+        OcsmPlugin.cmd_shaft(&mut host, "INVOLSPLINE GB30R M3 Z20 L30 report");
+        assert!(
+            host.errors
+                .iter()
+                .any(|e| e.contains("INVOLSPLINE") && e.contains("不识别的关键字")),
+            "{:?}",
+            host.errors
+        );
     }
     // ── 标准件放置：两段式（定位基点 → 绕基点旋转 → 落定）──────────────────
 

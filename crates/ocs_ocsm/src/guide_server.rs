@@ -3929,7 +3929,7 @@ pub const COMMAND_CATALOG: &[(&str, &str, &str)] = &[
     ("OCSMDIMGULIDE", "GDIM", "引导线标注：选引导线 → 配置窗口（尺寸/剖视/向视/局部放大/角度/弧长/焊接/引线/序号/公差/粗糙度/形位公差）"),
     ("OCSMCENTERLINE", "ZX", "中心线：点圆/圆弧 → 十字中心线；点两根直线 → 角平分线中心线（`3中心线层`，线长 = 直径/投影长 + 图框比例×6mm）"),
     ("OCSMGEAR", "", "齿轮（外齿轮 / 内齿轮（齿圈））+ 渐开线花键（花键模式）：不带参数=开齿轮/花键窗口（模式复选框 + 参数 + 视图按钮 + 实时预览）；带参数=一行直插（`OCSMGEAR 2 40 20 view 剖视图`、`OCSMGEAR int 2 40 30 view 端视图`；花键：`OCSMGEAR 花键 [内花键] std=DIN [profile=DIN30] db=40 2 18 h=30 view 端视图`，预设代号 GB30P/GB30R/GB375R/GB45R/DIN30 可直接代 std+profile）。齿轮模式只认 模数/齿数/压力角/变位系数 等常规项，给标准号或 d_B 明确报错。花键模式：GB 无基准直径（给 d_B 报错）；DIN 的 d_B 是主参数（d_B+m/d_B+z/m+z 三种给法，表外按公式推并标注来源），内/外花键用同一「齿轮种类」开关。内花键与内齿轮同口径（用户定案「内花键剖视图和内齿轮一样，不存在侧视图」）：只有 剖视图 + 端视图，无侧视图；剖视图齿圈内齿不剖（端面/齿顶线/齿根线/内孔壁/孔口倒角 + 分度线/轴线，不打剖面线），齿圈外壁留用户延伸。计算书：命令加 `REPORT`（如 `OCSMGEAR 花键 std=DIN db=40 2 18 h=30 REPORT`）—— 纯计算不插图，输出含公式/代入数值/结果/依据来源的 Markdown 计算书，`REPORT=路径` 另写文件"),
-    ("OCSMSHAFT", "", "轴生成器：不带参数=开轴生成器窗口（段表 ↔ 行文本双向同步 + 实时预览 + 视图按钮）+ 放置态；带参数=行 DSL/JSON 一行直插（段拼接 + 端面倒角 + 砂轮越程槽 + 螺纹段 M + 齿轮段 GEAR + 矩形花键段 SPLINE + 渐开线花键段 INVOLSPLINE + 视图 VIEW 常规|剖视|双；退刀槽就是一小段小直径轴段）。`OCSMSHAFT S30 E30 L45 CH2@L | S40 E40 L7 M1.5 | S36 E36 L5 | GEAR M3 Z20 VIEW 剖视 at x,y rot 度`；齿轮段可 `GEAR M3 Z20 ALPHA25`（压力角默认 20°）；花键 `OCSMSHAFT SPLINE 6x23x26x6 L30`（可 `de 71` 覆盖，矩形花键）或 `OCSMSHAFT INVOLSPLINE GB30R M3 Z20 L30`（渐开线花键，预设 GB30P/GB30R/GB375R/GB45R/DIN30，`X0.2` 变位，`de63` 可选）。计算书：命令加 `REPORT`（如 `OCSMSHAFT INVOLSPLINE DIN30 DB40 M2 L30 REPORT`）—— 纯计算不插图，输出含公式/代入数值/结果/依据来源的 Markdown 计算书，`REPORT=路径` 另写文件"),
+    ("OCSMSHAFT", "", "轴生成器：不带参数=开轴生成器窗口（段表 ↔ 行文本双向同步 + 实时预览 + 视图按钮）+ 放置态；带参数=行 DSL/JSON 一行直插（段拼接 + 端面倒角 + 砂轮越程槽 + 螺纹段 M + 齿轮段 GEAR + 矩形花键段 SPLINE + 视图 VIEW 常规|剖视|双；退刀槽就是一小段小直径轴段）。`OCSMSHAFT S30 E30 L45 CH2@L | S40 E40 L7 M1.5 | S36 E36 L5 | GEAR M3 Z20 VIEW 剖视 at x,y rot 度`；齿轮段可 `GEAR M3 Z20 ALPHA25`（压力角默认 20°）；花键 `OCSMSHAFT SPLINE 6x23x26x6 L30`（可 `de 71` 覆盖，矩形花键）。渐开线花键只在 OCSMGEAR 花键模式生成（轴段 INVOLSPLINE 已撤）。计算书：命令加 `REPORT`（如 `OCSMSHAFT SPLINE 6x23x26x6 L30 REPORT`）—— 纯计算不插图，输出段清单 Markdown 计算书，`REPORT=路径` 另写文件"),
     ("OCSMEDIT", "ME", "改标注：选中 OCSM 生成的标注 → 配置窗口改参数 → 重生成"),
     ("OCSMRGH", "CC", "表面粗糙度：点选插入点 → 配置窗口（匿名块 + ATTDEF）"),
     ("OCSMDIM2GB", "D2G", "一键转国标：原生标注 → OCSM_GB 样式 + 匿名块；智能圆心标记（CENTERMARK）一并换成 `3中心线层` 中心线（Ø + 图框比例×6）"),
@@ -14077,54 +14077,14 @@ mod weld_tests {
             &serde_json::json!({"dsl": "SPLINE 6x23x26x6 L30 CH2@L"}).to_string(),
         );
         assert!(bad.contains("花键段") && bad.contains("倒角"), "{bad}");
-        // 渐开线花键段（INVOLSPLINE）：DSL → 模型（invol_spline 字段）+ 预览（小径细线/剖面线）
-        let body = serde_json::json!({"dsl": "INVOLSPLINE DIN30 M2 Z18 X0.2 L20 de50"}).to_string();
-        let j = http_req(server.port, "POST", "/api/shaft_parse", &body);
-        let v: serde_json::Value = serde_json::from_str(&j).unwrap();
-        assert_eq!(v["ok"], true, "{j}");
-        assert_eq!(v["segments"][0]["invol_spline"]["code"], "DIN30", "预设代号进模型：{j}");
-        assert_eq!(v["segments"][0]["invol_spline"]["m"], 2.0, "{j}");
-        assert_eq!(v["segments"][0]["invol_spline"]["de"], 50.0, "{j}");
-        // da = 36+0.8+1.8 = 38.6；h=2、R=25 → l=√96=9.79796 → 段长 29.79796
-        let seg_len = v["segments"][0]["l"].as_f64().unwrap();
-        assert!((seg_len - 29.797_96).abs() < 1e-3, "段长 = L+l，得到 {seg_len}");
-        let svg = http_req(
-            server.port,
-            "POST",
-            "/api/shaft_preview",
-            &serde_json::json!({"dsl": "INVOLSPLINE GB30R M3 Z20 L30", "view": "section"}).to_string(),
-        );
-        assert!(svg.contains("<svg") && svg.contains("#3fa13f"), "渐开线花键剖视预览（含剖面线）：{}", &svg[..160.min(svg.len())]);
-        // 与 CH 同段 → 解析报错（引入倒角写相邻段）
-        let bad = http_req(
-            server.port,
-            "POST",
-            "/api/shaft_preview",
-            &serde_json::json!({"dsl": "INVOLSPLINE GB30R M3 Z20 L30 CH2@L"}).to_string(),
-        );
-        assert!(bad.contains("渐开线花键段") && bad.contains("倒角"), "{bad}");
-        // CHECK：DIN 检验尺寸进模型（默认不开则没有 inspection 字段）；GB+CHECK 报错。
-        let body = serde_json::json!({"dsl": "INVOLSPLINE DIN30 DB6 M0.5 Z10 L20 CHECK"})
-            .to_string();
-        let j = http_req(server.port, "POST", "/api/shaft_parse", &body);
-        let v: serde_json::Value = serde_json::from_str(&j).unwrap();
-        assert_eq!(v["ok"], true, "{j}");
-        let note = v["segments"][0]["invol_spline"]["inspection"]
-            .as_str()
-            .unwrap_or("");
-        assert!(note.contains("M1=8.215") && note.contains("查表 p12"), "{j}");
-        let body = serde_json::json!({"dsl": "INVOLSPLINE DIN30 DB6 M0.5 Z10 L20"})
-            .to_string();
-        let j = http_req(server.port, "POST", "/api/shaft_parse", &body);
-        let v: serde_json::Value = serde_json::from_str(&j).unwrap();
-        assert!(v["segments"][0]["invol_spline"]["inspection"].is_null(), "默认不带 CHECK：{j}");
+        // 渐开线花键轴段（INVOLSPLINE）已撤：轴段不再接受（唯一入口 = OCSMGEAR 花键模式）。
         let bad = http_req(
             server.port,
             "POST",
             "/api/shaft_parse",
-            &serde_json::json!({"dsl": "INVOLSPLINE GB30R M3 Z20 L30 CHECK"}).to_string(),
+            &serde_json::json!({"dsl": "INVOLSPLINE GB30R M3 Z20 L30"}).to_string(),
         );
-        assert!(bad.contains("只适用于 DIN30"), "{bad}");
+        assert!(bad.contains("不识别的关键字") && bad.contains("INVOLSPLINE"), "{bad}");
     }
 
     /// `/api/invol_check`：默认只查表；`check=1` 才公式导出（含缺档错误）。

@@ -134,7 +134,7 @@ x₁ = (d_B − m(z + 1.1)) / (2m)
 - 表外自定义 z：`x` 由 `x_from_d_b` 反解（超 [−0.05,0.45] → 明确报“请提供对应表页”）、
   `k` 由“接触圆离齿顶 ≥0.07m”规则反推（表内 264 行 264/264 命中）、
   `D_M` 借用同 m 最邻近表行；结果带“公式导出/邻近行”来源说明。
-- 露面：`INVOLSPLINE ... CHECK` 与 `OCSMGEAR` 花键模式的 CHECK 把
-  `inspection_summary`（M1/M2/D_M/k/W_k + 来源）附到模型/spec；默认不开、既有行为不变。
-  （XL `detail_invol_spline` 入口已于 2026-09-22 移除。）轴 GUI（shaft_gui）派生值面板
-  按目录顶层 `spline_engine.din_inspection` 表同步显示检验值。
+- 露面：`OCSMGEAR` 花键模式的 CHECK 把 `inspection_summary`（M1/M2/D_M/k/W_k + 来源）
+  附到 spec/模型；默认不开、既有行为不变。
+  （XL `detail_invol_spline` 与轴段 `INVOLSPLINE` 均已于 2026-09-22 移除；齿轮 GUI 花键模式
+  按目录顶层 `spline_engine.din_inspection` 表显示检验值。）

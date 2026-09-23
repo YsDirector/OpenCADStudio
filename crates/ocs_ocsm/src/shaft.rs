@@ -16,7 +16,6 @@
 //! S36 E36 L5
 //! GEAR M3 Z20
 //! SPLINE 6x23x26x6 L30
-//! INVOLSPLINE GB30R M3 Z20 L30
 //! ```
 //!
 //! - `S` 起始直径（靠左）、`E` 终点直径（省略 = 圆柱段，`E=S`）、`L` 段长（必给）；
@@ -92,27 +91,6 @@
 //! - 剖视：小径线 / 收尾弧改 `1轮廓实线层`，剖面线按**轴线↔小径**两条带
 //!   （小径线 → 收尾弧 → 段右端面闭合；齿部按不剖，与独立要素同口径）。
 //!
-//! ## 渐开线花键段画法口径（`INVOLSPLINE`，与 `invol_spline.rs` 同源）
-//!
-//! `INVOLSPLINE GB30R M3 Z20 [X0.2] L30 [de63]`（GB）/
-//! `INVOLSPLINE DIN30 DB40 M2 L30`（DIN，`DB` = 基准直径 `d_B`，`M`/`Z` 可缺一项由
-//! DIN 5480-2 名义表补全；`x=(d_B−m(z+1.1))/(2m)` 为表反推关系）/ `INVOLSPLINE NFP A80 M3.75 L30`
-//! （NF E22-141，`A` = 公称直径主参数，`M`/`Z` 可缺一项由 NF 尺寸表补全）：预设代号 `GB30P`/`GB30R`（默认）
-//! /`GB375R`/`GB45R`/`DIN30`/`NFP`/`NFR`（GB/T 3478.1-2008；DIN 5480-1:2015，h_fP*=0.55；NF E22-141 α=20°）自带
-//! α/ha*/hf*/ρf*，直径由 `M/Z/X`（或 DB/A）导出（**不给 S/E**）：`s = e = da`；
-//! **体系也可显式写标识**（`INVOLSPLINE DIN M2 Z18`、`INVOLSPLINE NF A80 M3.75`；NF 已入库，
-//! ANSI 用 `P5/10`（A/B 成对：A=径节 P、B=Ps=2A；`DP5` 与齿轮侧 `DP8` 同义，x 不允许））。
-//! - `L` = 有效长度（满齿段长）；`de`（滚刀外径）**可选**：给了才画收尾弧，
-//!   段长 = L + l（`l = √(h(2R−h))`、R = de/2、h = (da−df)/2，与 `SPLINE` 同式）；
-//!   不给 de 时段长 = L、端面直接收口；
-//! - 大径线 `y=±da/2`（有 de 时在 x=L 断开两段）；小径细线 `y=±df/2`（`2细线层`）
-//!   从段左端面到 x=L；剖视把小径线/收尾弧改 `1轮廓实线层`，剖面线按轴线↔小径两条带；
-//! - **端面自动倒角** C = round(0.6m)（花键体系没有单独的端面倒角数据，沿用齿轮口径）
-//!   按**单侧规则**加在大径与端面交角：自由端 / 邻段更小侧才倒；邻段更大/齐平侧不倒。
-//!   给了 `de` 时右端是滚刀收尾（收尾弧占住端面），不叠加端面倒角；
-//! - 相位/齿形由 `invol_spline.rs` 负责（端视图真实渐开线，轴侧视只表达轮廓）；
-//! - 不能与 `SPLINE`/CH/OV/RL/M/GEAR 同段（引入倒角由相邻段的 CH 表达）。
-//!
 //! ## 几何口径（单视图侧视图）
 //!
 //! 轴线 = x 轴（x 向右、y = 半径），第 1 段左端面在 x=0；上下对称：
@@ -167,7 +145,7 @@ use crate::partgen_kit::{
 
 /// `OCSMSHAFT` 不带参数时打开轴生成器窗口；命令行带参数时此处是用法说明。
 pub const USAGE: &str = "\
-OCSMSHAFT 轴生成器：行 DSL / JSON → 单视图侧视图（段拼接 + 端面倒角 + 砂轮越程槽 + 螺纹段 M + 齿轮段 GEAR + 花键段 SPLINE/INVOLSPLINE）。
+OCSMSHAFT 轴生成器：行 DSL / JSON → 单视图侧视图（段拼接 + 端面倒角 + 砂轮越程槽 + 螺纹段 M + 齿轮段 GEAR + 矩形花键段 SPLINE）。
 用法：OCSMSHAFT <行 DSL 或 JSON>
   行 DSL：一行一段，从左到右拼接；多段用 | 或换行分隔；大小写不敏感、段内关键字顺序无关
     S 起始直径（靠左）   E 终点直径（省略 = 圆柱段 E=S）   L 段长（必给；齿轮段用 H 代替）
@@ -190,19 +168,9 @@ OCSMSHAFT 轴生成器：行 DSL / JSON → 单视图侧视图（段拼接 + 端
                       l=√(h(2R−h))，6×23×26×6 → l=9.6047）；段长 = L + l；
                       不给 S/E；可 `de 71` 覆盖滚刀外径；不能与 CH/OV/RL/M/GEAR 同段
                       （引入倒角由相邻段的 CH 表达）
-    INVOLSPLINE GB30R M3 Z20 L30   渐开线花键段（GB/T 3478.1 / DIN 5480 / NF E22-141 / ANSI B92.1）：预设代号
-                      GB30P/GB30R（默认）/GB375R/GB45R/DIN30/NFP/NFR/ANSI30P/ANSI30PM/ANSI30R/ANSI375R/ANSI45R，
-                      或体系标识 GB/DIN/NF/ANSI；直径由 M/Z/X 或 DB/A 导出（不给 S/E）；
-                      `X0.2` = 变位（DIN ∈ [−0.05, 0.45]）；DIN 可写 `DB40`（基准直径）、
-                      NF 可写 `A80`（公称直径主参数），M/Z 可缺一项由名义/尺寸表补全
-                      （DIN：m=1.5/m=5 均已补入；NF：尺寸表 288 行）；
-                      ANSI 是径节制：`P5/10`（A/B 成对，A=P、B=Ps=2P；也收 `DP5`，
-                      与齿轮侧 `DP8` 同义），x 不允许；
-                      `de63` 可选（给了才画收尾弧，段长 = L + l；不给 de 段长 = L）；
-                      不能与 SPLINE/CH/OV/RL/M/GEAR 同段
     VIEW 常规|剖视|双   视图：常规（默认，只看外形）/ 剖视（轮廓 + ANSI31 剖面线）/ 双（并排一次出）
     REPORT          计算书：段末加 `REPORT`（大小写不敏感）—— 不插图，直接输出 Markdown
-                    计算书（含 INVOLSPLINE 段的公式/代入数值/结果/依据来源 + DIN 检验尺寸）；
+                    计算书（段清单 + 总长/最大直径）；
                     `REPORT=<路径>` / `REPORT-OUT=<路径>` 另写文件
     at x,y rot 度   放置（不写 = 原点、不转）
   例：OCSMSHAFT S30 E30 L45 CH2@L | S40 E40 L30 CH2@R OV3 | S50 E30 L20 | S30 E30 L15 CH2@R | S40 E40 L7 M1.5 | S36 E36 L5 | GEAR M3 Z20 VIEW 剖视 at 100,50 rot 30
@@ -590,130 +558,6 @@ impl Gear {
     }
 }
 
-/// 渐开线花键段（`INVOLSPLINE GB30R M3 Z20 [X0.2] L30 [de63]`）。
-///
-/// 几何在 `invol_spline.rs`；`de`（滚刀外径）可选：给 `de` 才画收尾弧
-/// （段长 = L + l）；不给 `de` 则段长 = L、不画收尾。
-#[derive(Debug, Clone)]
-pub struct InvolSeg {
-    /// 预设代号（`GB30R` 等；GUI 从目录表按代号取系数）。
-    pub code: String,
-    /// 已校验的几何参数（不序列化；GUI 用 code + m/z/x 自行算派生值）。
-    pub params: crate::invol_spline::InvolParams,
-    /// 满齿段长 L。
-    pub len: f64,
-    /// 滚刀外径 de（`None` = 不画收尾）。
-    pub de: Option<f64>,
-    /// `CHECK` 时的 DIN 5480-2 检验尺寸摘要（M₁/M₂/D_M/k/W_k + 来源）；
-    /// `None` = 未开 CHECK（默认行为不变）。JSON 里 skip_serializing_if。
-    pub inspection: Option<String>,
-    /// `d_B` 补全/推导/按 d_B 重算的来源提示（DIN；`None` = 无/查表直命中）。JSON 里 skip_serializing_if。
-    pub d_b_note: Option<String>,
-    /// 解析时 `resolve_spline` 给出的基准直径来源（查表行/公式/推导/纠偏）；
-    /// 供计算书（`OCSMSHAFT … report`）复用，不序列化。
-    pub d_b_origin: Option<crate::invol_spline::D_bOrigin>,
-}
-
-impl InvolSeg {
-    /// 构造并校验（`de` 给定时必须大于大径 da）。
-    pub fn new(
-        code: String,
-        params: crate::invol_spline::InvolParams,
-        len: f64,
-        de: Option<f64>,
-    ) -> Result<Self, String> {
-        params.validate()?;
-        if !(len.is_finite() && len > 0.0) {
-            return Err(format!("渐开线花键：L={len} 必须是正数"));
-        }
-        if let Some(de) = de {
-            params.runout_length(de)?;
-        }
-        Ok(Self { code, params, len, de, inspection: None, d_b_note: None, d_b_origin: None })
-    }
-
-    /// 收尾长度 l（无 de = 0）。
-    pub fn runout(&self) -> f64 {
-        self.de
-            .map(|de| self.params.runout_length(de).unwrap_or(0.0))
-            .unwrap_or(0.0)
-    }
-
-    /// 段长 = L + l。
-    pub fn segment_len(&self) -> f64 {
-        self.len + self.runout()
-    }
-
-    /// 大径半径 da/2（外轮廓）。
-    pub fn major_radius(&self) -> f64 {
-        self.params.da() / 2.0
-    }
-
-    /// 小径半径 df/2。
-    pub fn minor_radius(&self) -> f64 {
-        self.params.df() / 2.0
-    }
-}
-
-impl PartialEq for InvolSeg {
-    /// 只比几何/模型字段；`d_b_origin`（计算书用来源）不参与相等性，
-    /// 这样 JSON 序列化→反解析（自定义 Serialize 不带该字段）仍与原值相等。
-    fn eq(&self, other: &Self) -> bool {
-        self.code == other.code
-            && self.params == other.params
-            && self.len == other.len
-            && self.de == other.de
-            && self.inspection == other.inspection
-            && self.d_b_note == other.d_b_note
-    }
-}
-
-/// `InvolSeg` 的 JSON 形状：`{code,m,z,x,len,de,d_b|a[,inspection][,d_b_note]}`（几何参数从 code+m/z/x 重算，不序列化）。
-impl serde::Serialize for InvolSeg {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        use serde::ser::SerializeStruct;
-        let mut st = serializer.serialize_struct("InvolSeg", 11)?;
-        st.serialize_field("code", &self.code)?;
-        st.serialize_field("m", &self.params.m)?;
-        st.serialize_field("z", &self.params.z)?;
-        st.serialize_field("x", &self.params.x)?;
-        st.serialize_field("pitch", &self.params.pitch)?;
-        st.serialize_field("len", &self.len)?;
-        st.serialize_field("de", &self.de)?;
-        // DIN 的 d_B 与 NF 的 A 同一槽位：只序列化实际有值的那个，避免回传时双字段冲突。
-        if self.params.d_b.is_some() {
-            st.serialize_field("d_b", &self.params.d_b)?;
-        }
-        if self.params.a.is_some() {
-            st.serialize_field("a", &self.params.a)?;
-        }
-        if self.d_b_note.is_some() {
-            st.serialize_field("d_b_note", &self.d_b_note)?;
-        }
-        if self.inspection.is_some() {
-            st.serialize_field("inspection", &self.inspection)?;
-        }
-        st.end()
-    }
-}
-
-/// `INVOLSPLINE ... CHECK`：DIN 预设算检验尺寸摘要；GB 明确报错（不静默忽略）。
-fn invol_check_note(invol: &InvolSeg, label: &str, keyword: &str) -> Result<String, String> {
-    use crate::invol_spline::SplineStd;
-    let p = &invol.params;
-    if p.std != SplineStd::DIN {
-        return Err(format!(
-            "{label}：{keyword} CHECK：检验尺寸表（DIN 5480-2）只适用于 DIN30 预设"
-        ));
-    }
-    let d_b = p
-        .d_b
-        .unwrap_or_else(|| crate::invol_spline::d_b_from_x(p.m, p.z, p.x));
-    let r = crate::invol_spline::inspection_query(d_b, p.m, p.z)
-        .map_err(|e| format!("{label}：{keyword} CHECK：{e}"))?;
-    Ok(crate::invol_spline::inspection_summary(&r))
-}
-
 /// 一段轴（从左到右）。
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct Segment {
@@ -741,11 +585,6 @@ pub struct Segment {
     /// `s`/`e` = 大径 D，`l` = 满齿段长 L + 收尾 l（见 `spline.rs` 的段长口径）。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub spline: Option<crate::spline::RectSpline>,
-    /// 渐开线花键段（`INVOLSPLINE GB30R M3 Z20 L30`；`None` = 普通轴段）。
-    ///
-    /// `s`/`e` = 大径 da，`l` = 满齿段长 L + 收尾 l（有 `de` 时）。
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub invol_spline: Option<InvolSeg>,
 }
 
 impl Segment {
@@ -757,10 +596,6 @@ impl Segment {
         if let Some(spline) = &self.spline {
             let _ = end;
             return spline.major_radius();
-        }
-        if let Some(invol) = &self.invol_spline {
-            let _ = end;
-            return invol.major_radius();
         }
         match end {
             End::L => self.s / 2.0,
@@ -886,7 +721,7 @@ fn extract_view_directives<'a>(
 
 fn unknown_keyword(token: &str, label: &str) -> String {
     format!(
-        "{label}：不识别的关键字「{token}」（本期支持 S/E/L/CH/OV/M/TL/RO/SD/RL/GEAR/SPLINE/INVOLSPLINE/VIEW；GEAR 子关键字 M/Z/H/BETA/ALPHA；INVOLSPLINE 子关键字 M/Z/X/DB/A/P/DP/L/de；RL 的尺寸参数 P/g1/g2/dg/r 跟在 RL 后面）"
+        "{label}：不识别的关键字「{token}」（本期支持 S/E/L/CH/OV/M/TL/RO/SD/RL/GEAR/SPLINE/VIEW；GEAR 子关键字 M/Z/H/BETA/ALPHA；RL 的尺寸参数 P/g1/g2/dg/r 跟在 RL 后面）"
     )
 }
 
@@ -1160,21 +995,6 @@ fn parse_segment(chunk: &str, label: &str, program: &mut Program) -> Result<Segm
     let mut spline_on = false;
     let mut spline_spec: Option<String> = None;
     let mut spline_de: Option<f64> = None;
-    // INVOLSPLINE 段（渐开线花键）：`INVOLSPLINE <预设代号>` + `M/Z/X` + `L` + 可选 `de`。
-    // 先扫一遍段里有没有 INVOLSPLINE：有它时 M/Z 一律按花键参数收（与 GEAR 同理）。
-    let has_invol = tokens.iter().any(|t| {
-        let u = t.to_ascii_uppercase();
-        u == "INVOLSPLINE" || u.starts_with("INVOLSPLINE=") || u.starts_with("INVOLSPLINE:")
-    });
-    let mut invol_on = false;
-    let mut invol_spec: Option<String> = None;
-    let (mut invol_m, mut invol_z, mut invol_x) = (None, None, None);
-    // `P`/`DP` 写法进来的值（径节，只属 ANSI）；与 `M`（模数）不同槽位，供体系校验。
-    let mut invol_pitch: Option<f64> = None;
-    let mut invol_d_b: Option<f64> = None;
-    let mut invol_de: Option<f64> = None;
-    // `INVOLSPLINE ... CHECK`：附带 DIN 5480-2 检验尺寸（默认关，行为不变）。
-    let mut invol_check = false;
     let mut index = 0;
     while index < tokens.len() {
         let token = tokens[index];
@@ -1184,27 +1004,7 @@ fn parse_segment(chunk: &str, label: &str, program: &mut Program) -> Result<Segm
             break;
         }
         let upper = token.to_ascii_uppercase();
-        // ── INVOLSPLINE（渐开线花键段）：关键字 + 紧跟的预设代号；M/Z/X/L/de 照常 ──
-        if upper == "INVOLSPLINE"
-            || upper.starts_with("INVOLSPLINE=")
-            || upper.starts_with("INVOLSPLINE:")
-        {
-            if invol_on {
-                return Err(format!("{label}：关键字 INVOLSPLINE 重复"));
-            }
-            invol_on = true;
-            let rest = &token["INVOLSPLINE".len()..];
-            let rest = rest.strip_prefix(['=', ':']).unwrap_or(rest).trim();
-            if rest.is_empty() {
-                index += 1;
-                let spec = tokens.get(index).ok_or_else(|| {
-                    format!("{label}：关键字 INVOLSPLINE 缺少预设代号（写法 INVOLSPLINE GB30R M3 Z20 L30）")
-                })?;
-                invol_spec = Some((*spec).to_string());
-            } else {
-                invol_spec = Some(rest.to_string());
-            }
-        } else if upper == "SPLINE" || upper.starts_with("SPLINE=") || upper.starts_with("SPLINE:") {
+        if upper == "SPLINE" || upper.starts_with("SPLINE=") || upper.starts_with("SPLINE:") {
             if spline_on {
                 return Err(format!("{label}：关键字 SPLINE 重复"));
             }
@@ -1220,46 +1020,11 @@ fn parse_segment(chunk: &str, label: &str, program: &mut Program) -> Result<Segm
             } else {
                 spline_spec = Some(rest.to_string());
             }
-        } else if has_invol && upper.starts_with("DB") {
-            // 渐开线花键基准直径：`DB40` / `DB 40` / `DB=40`（DIN 的 d_B，生成时校验）。
-            if invol_d_b.is_some() {
-                return Err(format!("{label}：关键字 DB/A（基准直径）重复"));
-            }
-            let rest = &token[2..];
-            let rest = rest.strip_prefix(['=', ':']).unwrap_or(rest);
-            let value_text = if rest.is_empty() {
-                index += 1;
-                tokens
-                    .get(index)
-                    .ok_or_else(|| format!("{label}：关键字 DB 缺少数值"))?
-            } else {
-                rest
-            };
-            invol_d_b = Some(parse_number(value_text, label, "DB")?);
-        } else if has_invol && upper.starts_with('A') && !upper.starts_with("ALPHA") {
-            // NF 公称直径 A：`A80` / `A 80` / `A=80`（与 DIN 的 DB 同一槽位，生成时按体系解释）。
-            if invol_d_b.is_some() {
-                return Err(format!("{label}：关键字 A/DB（基准直径）重复"));
-            }
-            let rest = &token[1..];
-            let rest = rest.strip_prefix(['=', ':']).unwrap_or(rest);
-            let value_text = if rest.is_empty() {
-                index += 1;
-                tokens
-                    .get(index)
-                    .ok_or_else(|| format!("{label}：关键字 A 缺少数值"))?
-            } else {
-                rest
-            };
-            invol_d_b = Some(parse_number(value_text, label, "A")?);
-        } else if has_invol && upper == "CHECK" {
-            // 必须在 `upper.starts_with("CH")`（倒角）之前截住，否则 CHECK 会被当成 CH。
-            invol_check = true;
         } else if upper.starts_with("DE") {
-            if !spline_on && !invol_on {
+            if !spline_on {
                 return Err(unknown_keyword(token, label));
             }
-            if spline_de.is_some() || invol_de.is_some() {
+            if spline_de.is_some() {
                 return Err(format!("{label}：花键的 de 覆盖重复"));
             }
             let rest = &token[2..];
@@ -1273,11 +1038,7 @@ fn parse_segment(chunk: &str, label: &str, program: &mut Program) -> Result<Segm
                 rest
             };
             let value = parse_number(value_text, label, "de")?;
-            if spline_on {
-                spline_de = Some(value);
-            } else {
-                invol_de = Some(value);
-            }
+            spline_de = Some(value);
         } else if upper.starts_with("CH") {
             let item = parse_ch(token, &token[2..], label)?;
             if ch.iter().any(|x| x.end == item.end) {
@@ -1357,38 +1118,6 @@ fn parse_segment(chunk: &str, label: &str, program: &mut Program) -> Result<Segm
                 r: None,
             });
             pending_relief = Some(relief_specs.len() - 1);
-        } else if has_invol
-            && upper.starts_with('P')
-            && starts_number(
-                token[1..]
-                    .strip_prefix(['=', ':'])
-                    .unwrap_or(&token[1..]),
-            )
-        {
-            // ANSI 径节：`P5/10`（A/B 成对，B=Ps=2A）或 `P8`（裸数字，系列在 resolve 阶段校验）。
-            // **必须排在 RL 的 `P` 参数分支之前**：INVOLSPLINE 段里 P 是径节、不是退刀槽螺距；
-            // 否则会被 `relief_param_key` 当 RL 参数截住报「参数 p 要跟在 RL 后面」。
-            let value = parse_invol_pitch(token, 1, "P", label)?;
-            if invol_m.is_some() {
-                return Err(format!("{label}：关键字 P/M/DP（径节/模数）重复"));
-            }
-            invol_pitch = Some(value);
-            invol_m = Some(value);
-        } else if has_invol
-            && upper.starts_with("DP")
-            && starts_number(
-                token[2..]
-                    .strip_prefix(['=', ':'])
-                    .unwrap_or(&token[2..]),
-            )
-        {
-            // 轴段 `DP<值>`：与齿轮侧 `DP8` 同义（ANSI 径节 P 原值；`DP5/10` 也收）。
-            let value = parse_invol_pitch(token, 2, "DP", label)?;
-            if invol_m.is_some() {
-                return Err(format!("{label}：关键字 P/M/DP（径节/模数）重复"));
-            }
-            invol_pitch = Some(value);
-            invol_m = Some(value);
         } else if let Some((key, attached)) = relief_param_key(token) {
             // `P1.5` / `g1=2.5` / `g1 2.5`：一律绑定到最近一个 RL。
             let spec_index = pending_relief.ok_or_else(|| {
@@ -1421,15 +1150,7 @@ fn parse_segment(chunk: &str, label: &str, program: &mut Program) -> Result<Segm
         } else if upper.starts_with("GEAR") {
             return Err(unknown_keyword(token, label));
         } else if upper.starts_with('M') {
-            if has_invol {
-                let value = parse_gear_number(token, 1, "M", label)?;
-                if invol_m.is_some() {
-                    return Err(format!(
-                        "{label}：关键字 M 重复（INVOLSPLINE 段里的 M 是模数；螺纹 M 不能与它同段）"
-                    ));
-                }
-                invol_m = Some(value);
-            } else if has_gear {
+            if has_gear {
                 let value = parse_gear_number(token, 1, "M", label)?;
                 if gear_m.is_some() {
                     return Err(format!(
@@ -1444,32 +1165,15 @@ fn parse_segment(chunk: &str, label: &str, program: &mut Program) -> Result<Segm
                 thread = Some(parse_thread(&token[1..], label)?);
             }
         } else if upper.starts_with('Z') {
-            if has_invol {
-                let rest = parse_gear_value(token, 1, "Z", label)?;
-                let value: u32 = rest.parse().map_err(|_| {
-                    format!("{label}：关键字 Z 的值「{rest}」不是正整数（齿数 z 必须是整数）")
-                })?;
-                if invol_z.is_some() {
-                    return Err(format!("{label}：关键字 Z 重复"));
-                }
-                invol_z = Some(value);
-            } else {
-                let rest = parse_gear_value(token, 1, "Z", label)?;
-                let value: u32 = rest.parse().map_err(|_| {
-                    format!("{label}：关键字 Z 的值「{rest}」不是正整数（齿数 z 必须是整数）")
-                })?;
-                if gear_z.is_some() {
-                    return Err(format!("{label}：关键字 Z 重复"));
-                }
-                gear_z = Some(value);
-                remember_loose_gear_token(&mut loose_gear_token, token);
+            let rest = parse_gear_value(token, 1, "Z", label)?;
+            let value: u32 = rest.parse().map_err(|_| {
+                format!("{label}：关键字 Z 的值「{rest}」不是正整数（齿数 z 必须是整数）")
+            })?;
+            if gear_z.is_some() {
+                return Err(format!("{label}：关键字 Z 重复"));
             }
-        } else if has_invol && upper.starts_with('X') {
-            let value = parse_gear_number(token, 1, "X", label)?;
-            if invol_x.is_some() {
-                return Err(format!("{label}：关键字 X 重复"));
-            }
-            invol_x = Some(value);
+            gear_z = Some(value);
+            remember_loose_gear_token(&mut loose_gear_token, token);
         } else if upper.starts_with('H') {
             let value = parse_gear_number(token, 1, "H", label)?;
             if gear_h.is_some() {
@@ -1521,94 +1225,6 @@ fn parse_segment(chunk: &str, label: &str, program: &mut Program) -> Result<Segm
         index += 1;
     }
     if !gear_on {
-        // ── INVOLSPLINE 段（渐开线花键）：预设代号 + M/Z/X 导出直径（不给 S/E）；L 必给；
-        //    与 SPLINE/CH/OV/RL/M/GEAR 互斥（引入倒角由相邻段的 CH 表达，同 SPLINE）。──
-        if invol_on {
-            if spline_on {
-                return Err(format!("{label}：渐开线花键段不能与矩形花键 SPLINE 同段"));
-            }
-            if let Some(token) = loose_gear_token {
-                return Err(unknown_keyword(&token, label));
-            }
-            if !ch.is_empty() {
-                return Err(format!(
-                    "{label}：渐开线花键段不能与倒角 CH 同段（不自动画引入倒角；请在相邻轴段上写 CH）"
-                ));
-            }
-            if !ov.is_empty() {
-                return Err(format!("{label}：渐开线花键段不能与越程槽 OV 同段"));
-            }
-            if !relief_specs.is_empty() {
-                return Err(format!("{label}：渐开线花键段不能与退刀槽 RL 同段"));
-            }
-            if thread.is_some() || tl.is_some() || ro.is_some() || sd.is_some() {
-                return Err(format!("{label}：渐开线花键段不能与螺纹段 M/TL/RO/SD 同段"));
-            }
-            if s.is_some() || e.is_some() {
-                return Err(format!("{label}：渐开线花键段不给 S/E（直径由预设导出）"));
-            }
-            let spec = invol_spec.ok_or_else(|| {
-                format!("{label}：关键字 INVOLSPLINE 缺少预设代号（写法 INVOLSPLINE GB30R M3 Z20 L30）")
-            })?;
-            let (std, profile) = crate::invol_spline::parse_preset_token(&spec).ok_or_else(|| {
-                format!(
-                    "{label}：不认识的体系标识/预设代号「{spec}」\
-                     （可用 GB30P/GB30R/GB375R/GB45R/DIN30/NFP/NFR，或体系标识 GB/DIN/NF/ANSI）"
-                )
-            })?;
-            let (params, origin) = crate::invol_spline::resolve_spline(
-                std,
-                profile,
-                invol_d_b,
-                if std == crate::invol_spline::SplineStd::ANSI {
-                    // ANSI：P 优先；`M` 槽位在 ANSI 下也按径节 P 解释。
-                    invol_pitch.or(invol_m)
-                } else {
-                    // 径节 P/DP 只属 ANSI；GB/DIN/NF 收到 → 明确拒绝（不把 P 当模数）。
-                    if invol_pitch.is_some() {
-                        return Err(format!(
-                            "{label}：{} 体系：{}。",
-                            std.code(),
-                            crate::invol_spline::PITCH_ONLY_ANSI_MSG
-                        ));
-                    }
-                    invol_m
-                },
-                invol_z,
-                invol_x,
-            )
-            .map_err(|e| format!("{label}：{e}"))?;
-            let code = crate::invol_spline::preset_code(std, profile).unwrap_or("").to_string();
-            let len = l.ok_or_else(|| {
-                format!("{label}：渐开线花键段缺少 L（有效长度，例 `INVOLSPLINE GB30R M3 Z20 L30`）")
-            })?;
-            let mut invol = InvolSeg::new(code, params, len, invol_de)
-                .map_err(|e| format!("{label}：{e}"))?;
-            // DIN d_B 的补全/推导/重算来源写进 JSON（GUI 派生值行用）；查表直命中不附。
-            if let Some(o) = &origin {
-                if !matches!(o, crate::invol_spline::D_bOrigin::Table(_)) {
-                    invol.d_b_note = Some(o.note());
-                }
-            }
-            // 计算书入口（`… report`）要复用同一次解析的来源，不重新另算。
-            invol.d_b_origin = origin;
-            if invol_check {
-                invol.inspection = Some(invol_check_note(&invol, label, "INVOLSPLINE")?);
-            }
-            let d = invol.major_radius() * 2.0;
-            return Ok(Segment {
-                s: d,
-                e: d,
-                l: invol.segment_len(),
-                ch: Vec::new(),
-                ov: Vec::new(),
-                relief: Vec::new(),
-                thread: None,
-                gear: None,
-                spline: None,
-                invol_spline: Some(invol),
-            });
-        }
         // ── SPLINE 段（矩形花键）：直径由规格代号导出（不给 S/E）；L 必给；
         //    与 CH/OV/RL/M/GEAR 互斥（引入倒角由相邻段的 CH 表达，见 `spline.rs`）──
         if spline_on {
@@ -1654,7 +1270,6 @@ fn parse_segment(chunk: &str, label: &str, program: &mut Program) -> Result<Segm
                 thread: None,
                 gear: None,
                 spline: Some(spline),
-                invol_spline: None,
             });
         }
         // 没有 GEAR 的 Z/H/BETA 仍按不识别的关键字报（不静默忽略）。
@@ -1720,7 +1335,6 @@ fn parse_segment(chunk: &str, label: &str, program: &mut Program) -> Result<Segm
             thread,
             gear: None,
             spline: None,
-            invol_spline: None,
         });
     }
     // ── 齿轮段：直径由 M·Z 导出、长度用 H；CH/OV/M 同段冲突 ──
@@ -1782,7 +1396,6 @@ fn parse_segment(chunk: &str, label: &str, program: &mut Program) -> Result<Segm
         thread,
         gear: Some(gear),
         spline: None,
-        invol_spline: None,
     })
 }
 
@@ -1804,19 +1417,6 @@ fn parse_gear_value<'a>(
 fn parse_gear_number(token: &str, prefix_len: usize, what: &str, label: &str) -> Result<f64, String> {
     let rest = parse_gear_value(token, prefix_len, what, label)?;
     parse_number(rest, label, what)
-}
-
-/// INVOLSPLINE 的径节参数（`P5/10`（A/B，B=Ps=2A）/ `P8` / `DP5`）：
-/// 语法与 `B==2A` 在此校验；**17 项系列在 `resolve_spline`/`validate` 阶段统一校验**
-/// （这样 `INVOLSPLINE … RL@L P1.5` 仍先报互斥，而不是被径节系列拦截）。
-fn parse_invol_pitch(
-    token: &str,
-    prefix_len: usize,
-    what: &str,
-    label: &str,
-) -> Result<f64, String> {
-    let rest = parse_gear_value(token, prefix_len, what, label)?;
-    crate::invol_spline::parse_ansi_pitch_syntax(rest).map_err(|e| format!("{label}：{e}"))
 }
 
 /// 没有 GEAR 时记住第一个 Z/H/BETA 原文（到段尾统一报不识别的关键字/缺 GEAR）。
@@ -1947,48 +1547,6 @@ struct JsonSegment {
     /// 矩形花键段（`SPLINE`）：序列化回传 `{spec,len,de,...}` 或直接给 N/d/D/B。
     #[serde(default)]
     spline: Option<JsonSpline>,
-    /// 渐开线花键段（`INVOLSPLINE`）：`{code,m,z,x,len,de}`。
-    #[serde(default)]
-    invol_spline: Option<JsonInvolSpline>,
-}
-
-/// JSON 形式的渐开线花键段：`{"code":"GB30R","m":3,"z":20,"x":0.2,"len":30,"de":63}`；
-/// `de` 可选（不给 = 不画收尾）；也收分开的 `std` + `profile`（拼成预设代号）。
-/// DIN 可只给 `d_b` + `m`/`z`（另一项由 DIN 5480-2 名义表补全；`d_b` 别名 `db`/`d_B`）；
-/// 给了 `d_b` 时 `m`/`z` 可缺一项。
-#[derive(serde::Deserialize)]
-struct JsonInvolSpline {
-    #[serde(default)]
-    code: Option<String>,
-    #[serde(default, alias = "preset")]
-    preset_code: Option<String>,
-    #[serde(default)]
-    std: Option<String>,
-    #[serde(default)]
-    profile: Option<String>,
-    /// 模数 m（DIN 给 `d_b` 时可由查表补全；ANSI 时此槽位 = 径节 P，也可用 `pitch` 显式给）。
-    #[serde(default)]
-    m: Option<f64>,
-    /// ANSI 径节 P（显式字段；与 `m` 槽位同义，优先）。
-    #[serde(default)]
-    pitch: Option<f64>,
-    /// 齿数 z（DIN 给 `d_b` 时可由查表补全）。
-    #[serde(default)]
-    z: Option<u32>,
-    #[serde(default)]
-    x: Option<f64>,
-    /// 基准直径主参数：DIN 的 `d_B`（别名 `db`/`d_B`）或 NF 的公称直径 `A`（别名 `a`）。
-    #[serde(default, alias = "db", alias = "d_B", alias = "a")]
-    d_b: Option<f64>,
-    /// 满齿段长 L（别名 `l`/`L`）。
-    #[serde(default, alias = "l", alias = "L")]
-    len: Option<f64>,
-    /// 滚刀外径 de（可选）。
-    #[serde(default)]
-    de: Option<f64>,
-    /// `CHECK`：附带 DIN 5480-2 检验尺寸（M₁/M₂/D_M/k/W_k）；默认关。
-    #[serde(default)]
-    check: Option<bool>,
 }
 
 /// JSON 形式的花键段：`{"spec":"6x23x26x6","len":30,"de":63}`；
@@ -2243,135 +1801,6 @@ fn parse_json(text: &str) -> Result<Program, String> {
             ));
         }
         // 花键段：直径由规格代号导出、长度 = L + 收尾 l；与 CH/OV/RL/M 同段冲突。
-        // 渐开线花键段：预设代号 + m/z/x 导出直径，长度 = L + 收尾（给 de 时）；与 CH/OV/RL/M/GEAR/SPLINE 同段冲突。
-        if let Some(ji) = &item.invol_spline {
-            if item.spline.is_some() {
-                return Err(format!("第 {number} 段：渐开线花键段不能与矩形花键 spline 同段"));
-            }
-            if !ch.is_empty() {
-                return Err(format!(
-                    "第 {number} 段：渐开线花键段不能与倒角 ch 同段（请在相邻轴段上写 ch）"
-                ));
-            }
-            if !ov.is_empty() {
-                return Err(format!("第 {number} 段：渐开线花键段不能与越程槽 ov 同段"));
-            }
-            if !relief.is_empty() {
-                return Err(format!("第 {number} 段：渐开线花键段不能与退刀槽 relief 同段"));
-            }
-            if thread.is_some() {
-                return Err(format!("第 {number} 段：渐开线花键段不能与螺纹段 m 同段"));
-            }
-            if item.gear.is_some() {
-                return Err(format!("第 {number} 段：渐开线花键段不能与齿轮段 gear 同段"));
-            }
-            let token = ji
-                .code
-                .clone()
-                .or_else(|| ji.preset_code.clone())
-                .or_else(|| match (&ji.std, &ji.profile) {
-                    (Some(std), Some(profile)) => Some(format!("{std}{profile}")),
-                    (None, Some(profile)) => Some(profile.clone()),
-                    _ => None,
-                })
-                .ok_or_else(|| {
-                    format!(
-                        "第 {number} 段：渐开线花键段缺预设代号 code（例 {{\"code\":\"GB30R\",\"m\":3,\"z\":20,\"len\":30}}）"
-                    )
-                })?;
-            let (std, profile) = crate::invol_spline::parse_preset_token(&token).ok_or_else(|| {
-                format!(
-                    "第 {number} 段：不认识的体系标识/预设代号「{token}」\
-                     （可用 GB30P/GB30R/GB375R/GB45R/DIN30/NFP/NFR，或体系标识 GB/DIN/NF/ANSI）"
-                )
-            })?;
-            let (params, origin) = crate::invol_spline::resolve_spline(
-                std,
-                profile,
-                ji.d_b,
-                if std == crate::invol_spline::SplineStd::ANSI {
-                    ji.pitch.or(ji.m)
-                } else {
-                    // 径节 P/DP 只属 ANSI；GB/DIN/NF 收到 → 明确拒绝（不把 P 当模数）。
-                    if ji.pitch.is_some() {
-                        return Err(format!(
-                            "第 {number} 段：{} 体系：{}。",
-                            std.code(),
-                            crate::invol_spline::PITCH_ONLY_ANSI_MSG
-                        ));
-                    }
-                    ji.m
-                },
-                ji.z,
-                ji.x,
-            )
-            .map_err(|e| format!("第 {number} 段：{e}"))?;
-            let code = crate::invol_spline::preset_code(std, profile).unwrap_or("").to_string();
-            let len = ji.len.ok_or_else(|| {
-                format!(
-                    "第 {number} 段：渐开线花键段缺少 len（有效长度 L，例 {{\"code\":\"GB30R\",\"m\":3,\"z\":20,\"len\":30}}）"
-                )
-            })?;
-            let mut invol = InvolSeg::new(code, params, len, ji.de)
-                .map_err(|e| format!("第 {number} 段：{e}"))?;
-            if let Some(o) = &origin {
-                if !matches!(o, crate::invol_spline::D_bOrigin::Table(_)) {
-                    invol.d_b_note = Some(o.note());
-                }
-            }
-            // 与 DSL 入口同一口径：计算书（`… report`）复用同一次解析的来源，不重新另算。
-            invol.d_b_origin = origin;
-            if ji.check.unwrap_or(false) {
-                invol.inspection = Some(invol_check_note(
-                    &invol,
-                    &format!("第 {number} 段"),
-                    "INVOLSPLINE",
-                )?);
-            }
-            let d = invol.major_radius() * 2.0;
-            if let Some(s) = item.s {
-                if (s - d).abs() > 1e-9 {
-                    return Err(format!(
-                        "第 {number} 段：渐开线花键段的 s={} 应等于大径 da={}",
-                        trim(s),
-                        trim(d)
-                    ));
-                }
-            }
-            if let Some(e) = item.e {
-                if (e - d).abs() > 1e-9 {
-                    return Err(format!(
-                        "第 {number} 段：渐开线花键段的 e={} 应等于大径 da={}",
-                        trim(e),
-                        trim(d)
-                    ));
-                }
-            }
-            if let Some(l) = item.l {
-                if (l - invol.segment_len()).abs() > 1e-9 {
-                    return Err(format!(
-                        "第 {number} 段：渐开线花键段的 l={} 应等于 L+l={}（L={} + 收尾 {}）",
-                        trim(l),
-                        trim(invol.segment_len()),
-                        trim(invol.len),
-                        trim(invol.runout())
-                    ));
-                }
-            }
-            segments.push(Segment {
-                s: d,
-                e: d,
-                l: invol.segment_len(),
-                ch: Vec::new(),
-                ov: Vec::new(),
-                relief: Vec::new(),
-                thread: None,
-                gear: None,
-                spline: None,
-                invol_spline: Some(invol),
-            });
-            continue;
-        }
         if let Some(js) = &item.spline {
             if !ch.is_empty() {
                 return Err(format!("第 {number} 段：花键段不能与倒角 ch 同段（请在相邻轴段上写 ch）"));
@@ -2443,7 +1872,6 @@ fn parse_json(text: &str) -> Result<Program, String> {
                 thread: None,
                 gear: None,
                 spline: Some(spline),
-                invol_spline: None,
             });
             continue;
         }
@@ -2517,7 +1945,6 @@ fn parse_json(text: &str) -> Result<Program, String> {
                 thread,
                 gear: Some(gear),
                 spline: None,
-                invol_spline: None,
             });
             continue;
         }
@@ -2537,7 +1964,6 @@ fn parse_json(text: &str) -> Result<Program, String> {
             thread,
             gear: None,
             spline: None,
-            invol_spline: None,
         });
     }
     let view = match &raw.view {
@@ -2872,52 +2298,7 @@ pub fn validate(program: &Program) -> Result<(), String> {
                 return Err(format!("第 {number} 段：花键段不能与齿轮段 GEAR 同段"));
             }
         }
-        // ── 渐开线花键段（INVOLSPLINE）：直径由预设导出、段长 = L+l（有 de 时）；
-        //    与 CH/OV/RL/M/GEAR/SPLINE 互斥（同 SPLINE）。──
-        if let Some(invol) = &seg.invol_spline {
-            invol
-                .params
-                .validate()
-                .map_err(|e| format!("第 {number} 段：{e}"))?;
-            let d = invol.major_radius() * 2.0;
-            if (seg.s - d).abs() > 1e-9 || (seg.e - d).abs() > 1e-9 {
-                return Err(format!(
-                    "第 {number} 段：渐开线花键段的 S/E={}/{} 应等于大径 da={}（由预设导出）",
-                    trim(seg.s),
-                    trim(seg.e),
-                    trim(d)
-                ));
-            }
-            if (seg.l - invol.segment_len()).abs() > 1e-9 {
-                return Err(format!(
-                    "第 {number} 段：渐开线花键段段长 {} 应等于 L+l={}（L={} + 收尾 {}）",
-                    trim(seg.l),
-                    trim(invol.segment_len()),
-                    trim(invol.len),
-                    trim(invol.runout())
-                ));
-            }
-            if !seg.ch.is_empty() {
-                return Err(format!(
-                    "第 {number} 段：渐开线花键段不能与倒角 CH 同段（引入倒角写在相邻轴段上）"
-                ));
-            }
-            if !seg.ov.is_empty() {
-                return Err(format!("第 {number} 段：渐开线花键段不能与越程槽 OV 同段"));
-            }
-            if !seg.relief.is_empty() {
-                return Err(format!("第 {number} 段：渐开线花键段不能与退刀槽 RL 同段"));
-            }
-            if seg.thread.is_some() {
-                return Err(format!("第 {number} 段：渐开线花键段不能与螺纹段 M 同段"));
-            }
-            if seg.gear.is_some() {
-                return Err(format!("第 {number} 段：渐开线花键段不能与齿轮段 GEAR 同段"));
-            }
-            if seg.spline.is_some() {
-                return Err(format!("第 {number} 段：渐开线花键段不能与矩形花键 SPLINE 同段"));
-            }
-        }
+
     }
     Ok(())
 }
@@ -3182,24 +2563,15 @@ fn plain_thread(seg: &Segment) -> Option<&Thread> {
         .filter(|t| t.tl.is_none() && !t.relief)
 }
 
-/// 是否花键段（矩形 `SPLINE` 或渐开线 `INVOLSPLINE`）：几何上一律禁止 CH，
-/// 剖面线按“齿部不剖、小径包络”处理。
+/// 是否矩形花键段（`SPLINE`）：几何上一律禁止 CH，剖面线按“齿部不剖、小径包络”处理。
 fn is_spline_seg(seg: &Segment) -> bool {
-    seg.spline.is_some() || seg.invol_spline.is_some()
+    seg.spline.is_some()
 }
 
-/// 轴上齿轮/渐开线花键段的端面自动倒角 C = round(0.6m)
-/// （与 `gear.rs::GearParams::chamfer()` 同口径；花键体系没有单独的端面倒角数据，沿用同口径）。
-///
-/// 渐开线花键给了 `de` 时右端是滚刀收尾（收尾弧占住端面），不叠加端面倒角。
-fn auto_face_chamfer(seg: &Segment, end: End) -> Option<f64> {
+/// 轴上齿轮段的端面自动倒角 C = round(0.6m)（与 `gear.rs::GearParams::chamfer()` 同口径）。
+fn auto_face_chamfer(seg: &Segment, _end: End) -> Option<f64> {
     let c = if let Some(gear) = &seg.gear {
         gear.chamfer()
-    } else if let Some(invol) = &seg.invol_spline {
-        if end == End::R && invol.de.is_some() {
-            return None;
-        }
-        (crate::gear::CHAMFER_RATIO * invol.params.m).round()
     } else {
         return None;
     };
@@ -3771,19 +3143,6 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
         if let Some(spline) = &segs[i].spline {
             // 花键右端 = 收尾弧终点，已回到大径 → 剖面边界取大径。
             left_eff = spline.major_radius();
-        } else if let Some(invol) = &segs[i].invol_spline {
-            // 渐开线花键右端：有 de 时收尾弧回到大径；无 de 时端面就是小径线终点。
-            left_eff = if invol.de.is_some() {
-                invol.major_radius()
-            } else {
-                invol.minor_radius()
-            };
-            // 右端自动倒角切到小径以下时，剖面线边界沿倒角斜线走到交点。
-            if let Some(c) = own_ch[i][1] {
-                if ra - c < invol.minor_radius() - 1e-12 {
-                    left_eff = ra - c;
-                }
-            }
         } else if let Some(gear) = &segs[i].gear {
             left_eff = gear.root_radius();
         } else if let Some(thread) = plain_thread(&segs[i]) {
@@ -3799,16 +3158,6 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
             if !chamfer_below {
                 right_eff = spline.minor_radius();
             }
-        } else if let Some(invol) = &segs[k].invol_spline {
-            // 左端倒角（用户 CH 或自动）切到小径以下时，剖面线边界沿倒角斜线走到交点。
-            let below = own_ch[k][0]
-                .map(|c| rb - c < invol.minor_radius() - 1e-12)
-                .unwrap_or(false);
-            right_eff = if below {
-                rb - own_ch[k][0].unwrap()
-            } else {
-                invol.minor_radius()
-            };
         } else if let Some(gear) = &segs[k].gear {
             right_eff = gear.root_radius();
         } else if let Some(thread) = plain_thread(&segs[k]) {
@@ -4075,69 +3424,6 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
                 end_deg: 360.0 - a_end,
                 ccw: true,
             });
-            // 大径线/剖面线都已就位：不进入通用轮廓分支（通用会把大径线画成整段）。
-            continue;
-        }
-        // ── 渐开线花键段（INVOLSPLINE）：小径细线 +（给了 de）收尾弧；端面自动
-        //    倒角按单侧规则（自由端/邻段更小）；常规视图落 `2细线层`，剖视改
-        //    `1轮廓实线层`；剖面线边界 = 小径线 + 收尾弧。──
-        if let Some(invol) = &seg.invol_spline {
-            let (x0, x1) = (x0s[index], x0s[index] + seg.l); // x1 = L + l
-            let (r, ra) = (invol.minor_radius(), invol.major_radius());
-            let xm1 = x0 + invol.len; // 满齿段右端 = 收尾起点
-            // 本段两端已生效的端面自动倒角（单侧规则；有 de 时右端不倒 → 0）。
-            let c_l = own_ch[index][0].unwrap_or(0.0);
-            let c_r = own_ch[index][1].unwrap_or(0.0);
-            // 大径线：满齿段；有 de 时再一段收尾段（两端按倒角缩进）。
-            let (xs, xe) = (x0 + c_l, x1 - c_r);
-            if xm1.min(xe) - xs > 1e-9 {
-                entities.push(line([xs, ra], [xm1.min(xe), ra], LAYER_MAIN));
-                entities.push(line([xs, -ra], [xm1.min(xe), -ra], LAYER_MAIN));
-            }
-            if xe > xm1 + 1e-9 {
-                entities.push(line([xm1, ra], [xe, ra], LAYER_MAIN));
-                entities.push(line([xm1, -ra], [xe, -ra], LAYER_MAIN));
-            }
-            // 端面倒角把细线/剖面线端点内缩到倒角与小径的交点。
-            let left_inset = (c_l - (ra - r)).max(0.0);
-            let xm0 = x0 + left_inset;
-            let right_inset = (c_r - (ra - r)).max(0.0);
-            let xml = xm1 - right_inset;
-            if c_l > 1e-9 && ra - c_l < r - 1e-12 && xm0 > x0 + 1e-12 {
-                profile.push(lr_line([x0, ra - c_l], [xm0, r]));
-            }
-            if c_r > 1e-9 && ra - c_r < r - 1e-12 && xml < x1 - 1e-12 {
-                profile.push(lr_line([xml, r], [x1, ra - c_r]));
-            }
-            // 常规视图：小径细线（只到 L；无 de 时就是整段）。
-            spline_regular.push(line([xm0, r], [xml, r], LAYER_THIN));
-            spline_regular.push(line([xm0, -r], [xml, -r], LAYER_THIN));
-            // 剖视可见的小径线 / 收尾弧（`1轮廓实线层`）。
-            section_lines.push(line([xm0, r], [xml, r], LAYER_MAIN));
-            section_lines.push(line([xm0, -r], [xml, -r], LAYER_MAIN));
-            // 剖面线边界：小径线 →（有 de）收尾弧（齿部不剖，同 SPLINE 口径）。
-            profile.push(lr_line([xm0, r], [xml, r]));
-            if let Some(de) = invol.de {
-                let l = invol.runout();
-                let rh = de / 2.0;
-                let a_end = invol.params.runout_end_angle(de)?;
-                spline_regular.push(arc([xm1, r + rh], rh, 270.0, 360.0 - a_end, LAYER_THIN));
-                spline_regular.push(arc([xm1, -(r + rh)], rh, a_end, 90.0, LAYER_THIN));
-                spline_regular.push(line([xm1, -ra], [xm1, ra], LAYER_THIN));
-                if index + 1 < count {
-                    // 后面还有段：收尾终点细竖线（自由端时由右端面线闭合）。
-                    spline_regular.push(line([xm1 + l, -ra], [xm1 + l, ra], LAYER_THIN));
-                }
-                section_lines.push(arc([xm1, r + rh], rh, 270.0, 360.0 - a_end, LAYER_MAIN));
-                section_lines.push(arc([xm1, -(r + rh)], rh, a_end, 90.0, LAYER_MAIN));
-                profile.push(HatchEdge::Arc {
-                    c: [xm1, r + rh],
-                    r: rh,
-                    start_deg: 270.0,
-                    end_deg: 360.0 - a_end,
-                    ccw: true,
-                });
-            }
             // 大径线/剖面线都已就位：不进入通用轮廓分支（通用会把大径线画成整段）。
             continue;
         }
@@ -4650,8 +3936,7 @@ pub fn preview_svg(program: &Program) -> Result<String, String> {
     Ok(crate::gear::svg_of(&preview_entities(&shaft.entities), 460.0))
 }
 
-/// **轴段计算书**（纯数据、无 IO）：段清单总览 + 每个 `INVOLSPLINE` 段的完整花键
-/// 计算书（复用 [`crate::invol_spline::build_report`]，含 d_B/A 来源与 DIN 检验尺寸）。
+/// **轴段计算书**（纯数据、无 IO）：段清单总览（类型/关键参数/长度/外径）。
 /// 命令入口：`OCSMSHAFT … report`（可选 `report=<path>` 写文件）。
 pub fn build_report(program: &Program) -> Result<String, String> {
     let built = build(program, 1.0)?;
@@ -4678,18 +3963,6 @@ pub fn build_report(program: &Program) -> Result<String, String> {
                 "矩形花键段",
                 format!("N={} d={} D={} B={}", s.n, trim(s.d), trim(s.big), trim(s.b)),
             )
-        } else if let Some(iv) = &seg.invol_spline {
-            (
-                "渐开线花键段",
-                format!(
-                    "{} {} m={} z={} x={}",
-                    iv.code,
-                    iv.params.std.label(),
-                    trim(iv.params.m),
-                    iv.params.z,
-                    trim(iv.params.x)
-                ),
-            )
         } else if let Some(t) = &seg.thread {
             (
                 "螺纹段",
@@ -4714,21 +3987,6 @@ pub fn build_report(program: &Program) -> Result<String, String> {
         ));
     }
     md.push('\n');
-    md.push_str("## 2. 渐开线花键段计算书\n\n");
-    let mut any = false;
-    for seg in program.segments.iter() {
-        let Some(iv) = &seg.invol_spline else { continue };
-        any = true;
-        md.push_str(&crate::invol_spline::build_report(
-            &iv.params,
-            iv.d_b_origin.as_ref(),
-            iv.len,
-        ));
-        md.push('\n');
-    }
-    if !any {
-        md.push_str("（本程序没有 INVOLSPLINE 段。）\n");
-    }
     Ok(md)
 }
 
@@ -5426,7 +4684,6 @@ GEAR M3 Z20";
             thread: Some(Thread { pitch: Some(1.5), ..Thread::default() }),
             gear: None,
             spline: None,
-            invol_spline: None,
         };
         let err = validate(&Program {
             segments: vec![segment],
@@ -6375,332 +5632,6 @@ GEAR M3 Z20";
         let end = 30.0 + sp.runout();
     }
 
-    // ── 渐开线花键段（INVOLSPLINE）───────────────────────────────
-
-    /// DSL：预设代号 + M/Z/X/L + 可选 de；直径由预设导出；JSON 往返。
-    #[test]
-    fn dsl_invol_spline_parses_and_derives() {
-        let program = parse_program("INVOLSPLINE GB30R M3 Z20 L30").unwrap();
-        assert_eq!(program.segments.len(), 1);
-        let seg = &program.segments[0];
-        let iv = seg.invol_spline.as_ref().expect("渐开线花键段");
-        assert_eq!(iv.code, "GB30R");
-        assert!(near(iv.params.m, 3.0) && iv.params.z == 20 && near(iv.params.x, 0.0));
-        assert!(iv.de.is_none(), "de 可选：不给 = 不画收尾");
-        assert!(near(seg.s, 63.0) && near(seg.e, 63.0), "s=e=da（GB30R m3 z20 → 63）");
-        assert!(near(seg.l, 30.0), "不给 de 时段长 = L");
-        assert!(near(iv.params.da(), 63.0) && near(iv.params.df(), 54.6));
-        // 大小写 / 顺序无关；`INVOLSPLINE=…` 也收（子关键字值要贴写：M3/Z20/L30）
-        let shuffled = parse_program("L30 involspline gb30r z20 M3").unwrap();
-        assert_eq!(shuffled.segments[0], program.segments[0]);
-        assert!(parse_program("INVOLSPLINE=GB30R M3 Z20 L30").is_ok());
-        // DIN + 变位 + de：da = mz+2xm+0.9m、df = mz+2xm−1.1m
-        let p2 = parse_program("INVOLSPLINE DIN30 M2 Z18 X0.2 L20 de50").unwrap();
-        let iv2 = p2.segments[0].invol_spline.as_ref().unwrap();
-        assert_eq!(iv2.code, "DIN30");
-        assert!(near(iv2.params.da(), 38.6) && near(iv2.params.df(), 34.6));
-        assert!(
-            (iv2.runout() - (2.0_f64 * 48.0).sqrt()).abs() < 1e-9,
-            "l=√(h(2R−h))，h=2、R=25：{}",
-            iv2.runout()
-        );
-        assert!(near(p2.segments[0].l, 20.0 + iv2.runout()), "段长 = L + l");
-        // GB 变位不受 DIN 范围限制（x=1.5 合法）
-        assert!(parse_program("INVOLSPLINE GB30R M3 Z20 X1.5 L30").is_ok());
-        // JSON 往返：结构与 DSL 解析一致（序列化 {code,m,z,x,len,de}）
-        let json = serde_json::to_string(&program).unwrap();
-        assert!(json.contains("invol_spline") && json.contains("\"code\":\"GB30R\""), "{json}");
-        assert_eq!(parse_program(&json).unwrap(), program);
-        // GUI 口径：直接给 JSON 模型
-        let gui = r#"{"segments":[{"invol_spline":{"code":"DIN30","m":2,"z":18,"x":0.2,"len":20,"de":50}}]}"#;
-        let g = parse_program(gui).unwrap();
-        assert_eq!(g.segments[0], p2.segments[0]);
-        // 也收分开的 std + profile（拼成预设代号）
-        let split = r#"{"segments":[{"invol_spline":{"std":"GB","profile":"30R","m":3,"z":20,"len":30}}]}"#;
-        assert_eq!(parse_program(split).unwrap().segments[0], program.segments[0]);
-    }
-
-    /// ANSI 径节分支：`P5/10`（A/B）与 `DP5` 都解析；`P`/`DP` 不再被 RL 参数分支截住；
-    /// 表达式往返：齿轮侧产出 `DP<A/B>`，轴侧解析一致。
-    #[test]
-    fn dsl_invol_spline_ansi_pitch_ab_and_dp() {
-        for text in [
-            "INVOLSPLINE ANSI30P P5/10 Z20 L30",
-            "INVOLSPLINE ANSI30P DP5 Z20 L30",
-            "INVOLSPLINE ANSI30P DP5/10 Z20 L30",
-            "INVOLSPLINE ANSI30P P=5/10 Z20 L30",
-            "INVOLSPLINE ANSI30P M5 Z20 L30", // 旧 M 槽位兼容
-        ] {
-            let p = parse_program(text).unwrap_or_else(|e| panic!("{text}: {e}"));
-            let iv = p.segments[0].invol_spline.as_ref().expect("INVOLSPLINE 段");
-            assert_eq!(iv.params.std, crate::invol_spline::SplineStd::ANSI, "{text}");
-            assert_eq!(iv.params.ansi_p(), 5.0, "{text}");
-            assert!((iv.params.m - 25.4 / 5.0).abs() < 1e-12, "{text}");
-        }
-        // A/B 的 B != 2A → 语法期报错（说明 Ps 恒为 2P）
-        let e = parse_program("INVOLSPLINE ANSI30P P5/11 Z20 L30").unwrap_err();
-        assert!(e.contains("Ps 恒为 2P"), "{e}");
-        // 系列外：resolve 期报错并列 17 项 A/B
-        let e = parse_program("INVOLSPLINE ANSI30P P2 Z20 L30").unwrap_err();
-        assert!(
-            e.contains("标准系列") && e.contains("2.5/5") && e.contains("128/256"),
-            "{e}"
-        );
-        // Table 2 每列适用径节范围（用户定案 A）：命令行/DSL 侧与引擎同一文案。
-        // A 列 30°平齿根/齿侧 2.5/5—32/64：40/80 超上限；B 列 30°平齿根/外径 3/6—16/32：20/40 超上限。
-        let e = parse_program("INVOLSPLINE ANSI30P P40/80 Z20 L30").unwrap_err();
-        assert!(
-            e.contains("ANSI B92.1 Table 2")
-                && e.contains("30° 平齿根 / 齿侧配合")
-                && e.contains("2.5/5 — 32/64")
-                && e.contains("40/80")
-                && e.contains("超出上限"),
-            "{e}"
-        );
-        let e = parse_program("INVOLSPLINE ANSI30PM P20/40 Z20 L30").unwrap_err();
-        assert!(
-            e.contains("30° 平齿根 / 外径配合")
-                && e.contains("3/6 — 16/32")
-                && e.contains("20/40"),
-            "{e}"
-        );
-        // 45° E 列：8/16 低于下限 10/20（原 45° 下限校验并入）。
-        let e = parse_program("INVOLSPLINE ANSI45R P8/16 Z20 L30").unwrap_err();
-        assert!(
-            e.contains("10/20 — 128/256") && e.contains("8/16") && e.contains("低于下限"),
-            "{e}"
-        );
-        // 版本不重复：轴段错误只有一层 `ANSI B92.1：`
-        assert!(e.matches("ANSI B92.1：").count() <= 1, "{e}");
-        // 纯 RL 段的 P 查表仍不受影响（分支顺序修复不误伤）
-        let p = parse_program("S25 E25 L32 RL@L P1.5").unwrap();
-        assert_eq!(p.segments[0].relief.len(), 1);
-        assert_eq!(p.segments[0].relief[0].p, Some(1.5));
-        // 退刀槽与 INVOLSPLINE 混用：仍报互斥（不再被 RL 参数截住）
-        let e = parse_program("INVOLSPLINE ANSI30P Z20 L30 RL@L P1.5").unwrap_err();
-        assert!(e.contains("不能与退刀槽"), "{e}");
-    }
-
-    /// DSL 错误：缺预设/M/Z/L、与 SPLINE/CH/OV/RL/M/GEAR 互斥、de ≤ da、DIN x 越界。
-    #[test]
-    fn dsl_invol_spline_reports_errors() {
-        let cases: &[(&str, &str)] = &[
-            ("INVOLSPLINE GB30R M3 Z20", "缺少 L"),
-            ("INVOLSPLINE GB99 M3 Z20 L30", "预设代号"),
-            ("INVOLSPLINE GB30R Z20 L30", "缺模数"),
-            ("INVOLSPLINE GB30R M3 L30", "缺齿数"),
-            ("INVOLSPLINE GB30R M3 Z20 L30 S63 E63", "不给 S/E"),
-            ("INVOLSPLINE GB30R M3 Z20 L30 CH2@L", "不能与倒角"),
-            ("INVOLSPLINE GB30R M3 Z20 L30 OV3", "不能与越程槽"),
-            ("INVOLSPLINE ANSI30P Z20 L30 RL@L P1.5", "不能与退刀槽"),
-            ("INVOLSPLINE GB30R M3 Z20 L30 SPLINE 6x23x26x6", "不能与矩形花键"),
-            ("INVOLSPLINE GB30R M3 Z20 L30 de60", "必须大于"),
-            ("INVOLSPLINE GB30R M3 Z20 L30 de63 de64", "de 覆盖重复"),
-            ("INVOLSPLINE DIN30 M2 Z18 X0.6 L20", "x"),
-            ("INVOLSPLINE GB30R M3 Z20 L30 M1.5", "M 重复"),
-            // 体系不支持的模数：轴段命令行侧也明确报错并指出来源表。
-            ("INVOLSPLINE GB30R M0.7 Z20 L30", "表 2"),
-            ("INVOLSPLINE NFP A80 M2 Z19 L30", "NF E22-141"),
-            ("INVOLSPLINE DIN30 DB40 M0.7 L30", "din5480_2_nominal.csv"),
-        ];
-        for (text, needle) in cases {
-            let err = parse_program(text).unwrap_err();
-            assert!(err.contains(needle), "{text}: 期望含「{needle}」，得到 {err}");
-        }
-        // JSON：与齿轮段同段在解析层就拒绝
-        let err = parse_program(
-            r#"{"segments":[{"invol_spline":{"code":"GB30R","m":3,"z":20,"len":30},"gear":{"m":3,"z":20}}]}"#,
-        )
-        .unwrap_err();
-        assert!(err.contains("不能与齿轮段"), "{err}");
-        // JSON：GB 给 d_b → 统一文案（DSL/JSON 都不静默忽略）
-        let err = parse_program(
-            r#"{"segments":[{"invol_spline":{"code":"GB30R","d_b":40,"m":3,"z":20,"len":30}}]}"#,
-        )
-        .unwrap_err();
-        assert!(err.contains("本体系不用 d_B"), "{err}");
-    }
-
-    /// `INVOLSPLINE DIN30 DB40 M2 L30`：DB+M 补 z、取表值 x、JSON/DSL 同口径。
-    #[test]
-    fn dsl_invol_spline_db_lookup_and_json() {
-        let program = parse_program("INVOLSPLINE DIN30 DB40 M2 L30").unwrap();
-        let iv = program.segments[0].invol_spline.as_ref().unwrap();
-        assert_eq!(iv.code, "DIN30");
-        assert!((iv.params.m - 2.0).abs() < 1e-9);
-        assert_eq!(iv.params.z, 18, "p27 m=2 d_B=40 → z=18");
-        assert!((iv.params.x - 0.45).abs() < 1e-9, "取表值 x=0.45");
-        assert_eq!(iv.params.d_b, Some(40.0));
-        assert!(near(program.total_length(), 30.0));
-        // DB+Z 补 M（同一段应完全相等）
-        let program2 = parse_program("INVOLSPLINE DIN30 DB40 Z18 L30").unwrap();
-        assert_eq!(program2.segments[0], program.segments[0]);
-        // JSON 往返带 d_b；GUI 模型（别名 db / d_B）同口径
-        let json = serde_json::to_string(&program).unwrap();
-        assert!(json.contains("\"d_b\":40.0"), "{json}");
-        assert_eq!(parse_program(&json).unwrap(), program);
-        let gui = r#"{"segments":[{"invol_spline":{"code":"DIN30","d_b":40,"m":2,"len":30}}]}"#;
-        assert_eq!(parse_program(gui).unwrap(), program);
-        let gui2 = r#"{"segments":[{"invol_spline":{"std":"DIN","profile":"30R","db":40,"z":18,"l":30}}]}"#;
-        assert_eq!(parse_program(gui2).unwrap(), program);
-        // m=1.5 现已入库：DB20+M1.5 → z=12、取表值 x=0.175/1.5=0.1167
-        let program15 = parse_program("INVOLSPLINE DIN30 DB20 M1.5 L30").unwrap();
-        let iv15 = program15.segments[0].invol_spline.as_ref().unwrap();
-        assert_eq!(iv15.params.z, 12, "m=1.5 d_B=20 → z=12");
-        assert!(
-            (iv15.params.x - 0.175 / 1.5).abs() < 1e-9,
-            "取表值 x={}",
-            iv15.params.x
-        );
-        assert_eq!(iv15.params.d_b, Some(20.0));
-        // m=5 已由用户截图补入：DB50+M5 → z=8、取表值 x=2.25/5=0.45
-        let program_m5 = parse_program("INVOLSPLINE DIN30 DB50 M5 L30").unwrap();
-        let iv_m5 = program_m5.segments[0].invol_spline.as_ref().unwrap();
-        assert_eq!(iv_m5.params.z, 8, "m=5 d_B=50 → z=8");
-        assert!(
-            (iv_m5.params.x - 0.45).abs() < 1e-9,
-            "取表值 x={}",
-            iv_m5.params.x
-        );
-        assert_eq!(iv_m5.params.d_b, Some(50.0));
-        // 不一致 / 不可行 / GB 带 DB 的报错口径
-        for (text, needle) in [
-            ("INVOLSPLINE DIN30 DB1 M5 L30", "可行齿数"),
-            ("INVOLSPLINE GB30R DB40 M2 Z18 L30", "本体系不用 d_B"),
-            ("INVOLSPLINE DIN30 DB40 L30", "请再给"),
-        ] {
-            let err = parse_program(text).unwrap_err();
-            assert!(err.contains(needle), "{text}: 期望含「{needle}」，得到 {err}");
-        }
-        // d_B 为主参数：DB40+M2+Z14（x 会越界）→ 按 d_B 取 z=18，不报错，note 进 JSON。
-        let adjusted = parse_program("INVOLSPLINE DIN30 DB40 M2 Z14 L30").unwrap();
-        let ia = adjusted.segments[0].invol_spline.as_ref().unwrap();
-        assert_eq!(ia.params.z, 18);
-        assert!(
-            ia.d_b_note.as_deref().is_some_and(|n| n.contains("按基准直径 d_B=40 取 z=18")),
-            "{:?}",
-            ia.d_b_note
-        );
-        // d_B+m 表外 → 公式推 z，note 标注“推导值、未命中表”。
-        let derived = parse_program("INVOLSPLINE DIN30 DB41 M2 L30").unwrap();
-        let idr = derived.segments[0].invol_spline.as_ref().unwrap();
-        assert_eq!(idr.params.z, 19);
-        assert!(
-            idr.d_b_note.as_deref().is_some_and(|n| n.contains("推导值、未命中表")),
-            "{:?}",
-            idr.d_b_note
-        );
-        // DB 但 M/Z 全缺且命中多行 → 列候选（d_B=45 跨 m 多行）
-        let err = parse_program("INVOLSPLINE DIN30 DB45 L30").unwrap_err();
-        assert!(err.contains("多个") && err.contains("m=3"), "{err}");
-    }
-
-    /// `INVOLSPLINE NFP A80 M3.75 L30`：NF 已入库（A 主参数）；A+m 补 N、A+z 补 m；JSON 携带 a。
-    #[test]
-    fn dsl_invol_spline_nf_a_lookup() {
-        let program = parse_program("INVOLSPLINE NFP A80 M3.75 L30").unwrap();
-        let iv = program.segments[0].invol_spline.as_ref().unwrap();
-        assert_eq!(iv.code, "NFP");
-        assert_eq!(iv.params.std, crate::invol_spline::SplineStd::NF);
-        assert!((iv.params.m - 3.75).abs() < 1e-9);
-        assert_eq!(iv.params.z, 19, "A=80 m=3.75 → N=19");
-        let x_want = (80.0 - 3.75 * 19.0 - 1.5) / 7.5;
-        assert!((iv.params.x - x_want).abs() < 1e-12, "x 由 A 公式解");
-        assert_eq!(iv.params.a, Some(80.0));
-        assert!(
-            (iv.params.da() - 80.0).abs() < 1e-9
-                && (iv.params.df() - (80.0 - 2.4 * 3.75)).abs() < 1e-9,
-            "NF da=A、df=A−2.4m"
-        );
-        // A+Z 补 m（同一段相等）；`INVOLSPLINE NF A80 M3.75 L30`（只写体系标识）也应可用。
-        assert_eq!(
-            parse_program("INVOLSPLINE NF A80 Z19 L30").unwrap().segments[0],
-            program.segments[0]
-        );
-        assert!(parse_program("INVOLSPLINE NF A80 M3.75 L30").is_ok());
-        // JSON 往返携带 a（不写 d_b）。
-        let json = serde_json::to_string(&program).unwrap();
-        assert!(json.contains("\"a\":80.0") && !json.contains("\"d_b\""), "{json}");
-        assert_eq!(parse_program(&json).unwrap(), program);
-        // GUI 模型 JSON 也收 `a` 键。
-        let gui = r#"{"segments":[{"invol_spline":{"code":"NFP","a":80,"m":3.75,"len":30}}]}"#;
-        assert_eq!(parse_program(gui).unwrap(), program);
-        // A 只对 NF/DIN：GB 给 A 报统一文案。
-        let err = parse_program("INVOLSPLINE GB30R A80 M3 Z20 L30").unwrap_err();
-        assert!(err.contains("本体系不用 d_B"), "{err}");
-        // 表外 A=81 → 主系列 x=0.8 推 N=20（推导值、未命中表）。
-        let p3 = parse_program("INVOLSPLINE NFP A81 M3.75 L30").unwrap();
-        let iv3 = p3.segments[0].invol_spline.as_ref().unwrap();
-        assert_eq!(iv3.params.z, 20);
-        assert!(
-            iv3.d_b_note.as_deref().is_some_and(|n| n.contains("推导值、未命中表")),
-            "{:?}",
-            iv3.d_b_note
-        );
-    }
-
-    /// 轴段几何：无 de（段长 = L、端面收口）/ 有 de（收尾弧 + 段长 = L+l）/ 剖视 HATCH；
-    /// 无用户 CH 时按**单侧规则**自动倒角（自由端 → 两端加）。
-    #[test]
-    fn invol_spline_segment_geometry_with_and_without_de() {
-        // ── 无 de ──
-        let program = parse_program("INVOLSPLINE GB30R M3 Z20 L30").unwrap();
-        let shaft = build(&program, 1.0).unwrap();
-        let iv = program.segments[0].invol_spline.as_ref().unwrap();
-        let (r, ra) = (iv.minor_radius(), iv.major_radius());
-        let c = (crate::gear::CHAMFER_RATIO * iv.params.m).round();
-        assert!(near(c, 2.0), "C = round(0.6×3) = 2");
-        assert!(near(program.total_length(), 30.0));
-        assert!(has_line(&shaft, [0.0, -(ra - c)], [0.0, ra - c]), "左端面 ±(da/2−C)");
-        assert!(has_line(&shaft, [30.0, -(ra - c)], [30.0, ra - c]), "右端面收口 ±(da/2−C)");
-        assert!(has_line(&shaft, [0.0, ra - c], [c, ra]), "左端自动倒角斜线");
-        assert!(has_line(&shaft, [30.0 - c, ra], [30.0, ra - c]), "右端自动倒角斜线");
-        assert!(has_line(&shaft, [c, ra], [30.0 - c, ra]), "大径线两端缩 C");
-        assert_eq!(layer_of_line(&shaft, [0.0, r], [30.0, r]), Some(LAYER_THIN));
-        assert_eq!(layer_of_line(&shaft, [0.0, -r], [30.0, -r]), Some(LAYER_THIN));
-        assert!(
-            !shaft.entities.iter().any(|e| matches!(e, EntityType::Arc(a) if a.radius > ra)),
-            "无 de 不画收尾弧"
-        );
-        // 剖视：小径线改轮廓 + HATCH
-        let section = build(
-            &parse_program("INVOLSPLINE GB30R M3 Z20 L30 VIEW 剖视").unwrap(),
-            1.0,
-        )
-        .unwrap();
-        assert_eq!(layer_of_line(&section, [0.0, r], [30.0, r]), Some(LAYER_MAIN));
-        assert!(section.entities.iter().any(|e| matches!(e, EntityType::Hatch(_))));
-
-        // ── 有 de ──
-        let program = parse_program("INVOLSPLINE GB30R M3 Z20 L30 de70").unwrap();
-        let shaft = build(&program, 1.0).unwrap();
-        let iv = program.segments[0].invol_spline.as_ref().unwrap();
-        let (l, rh) = (iv.runout(), 35.0);
-        let total = 30.0 + l;
-        // h = (da−df)/2 = 4.2；l = √(4.2×(70−4.2)) = 16.6241
-        assert!((l - 16.624_1).abs() < 1e-3, "l={l}");
-        assert!(near(program.total_length(), total));
-        // 左自由端自动倒角；右端是滚刀收尾（de）→ 不叠加端面倒角
-        assert!(has_line(&shaft, [0.0, ra - c], [c, ra]), "左端自动倒角斜线");
-        assert!(has_line(&shaft, [0.0, -(ra - c)], [0.0, ra - c]), "左端面 ±(da/2−C)");
-        assert!(has_line(&shaft, [c, ra], [30.0, ra]), "满齿段大径线（左端缩 C）");
-        assert!(has_line(&shaft, [30.0, ra], [total, ra]), "收尾段大径线");
-        assert!(has_line(&shaft, [total, -ra], [total, ra]), "收尾终点端面（不收倒角）");
-        let a = iv.params.runout_end_angle(70.0).unwrap();
-        assert!(has_arc(&shaft, [30.0, r + rh], rh, 270.0, 360.0 - a), "上收尾弧");
-        assert!(has_arc(&shaft, [30.0, -(r + rh)], rh, a, 90.0), "下收尾弧");
-        assert_eq!(layer_of_line(&shaft, [30.0, -ra], [30.0, ra]), Some(LAYER_THIN));
-        // 剖视也有 HATCH（小径线 → 收尾弧闭合）
-        let section = build(
-            &parse_program("INVOLSPLINE GB30R M3 Z20 L30 de70 VIEW 剖视").unwrap(),
-            1.0,
-        )
-        .unwrap();
-        assert!(section.entities.iter().any(|e| matches!(e, EntityType::Hatch(_))));
-    }
-
-    /// HATCH 边界 → CSV（供 `compare_spline.py` 逐 LineEdge 对照）：
-    /// 首行 `# ANSI31 scale=1.0 angle=0.0 loops=2`，其余 `ring,edge,x1,y1,x2,y2`。
     fn hatch_csv(entities: &[EntityType]) -> String {
         use ocs_plugin_api::host::acadrust::entities::hatch::BoundaryEdge;
         let Some(h) = entities.iter().find_map(|e| match e {
@@ -6918,73 +5849,6 @@ GEAR M3 Z20";
         );
         assert!(has_line(&shaft, [20.0, ra], [50.0 - c, ra]), "齿顶面从端面直起");
 
-        // `GEAR` 段相邻半径 > ra 仍被既有校验拦住（见上条测试），更大侧分支在
-        // `GEAR` 上不可达；用渐开线花键段验证“更大/齐平”两侧。
-        // ── `INVOLSPLINE GB30R M3 Z20`：da/2 = 31.5、C = round(0.6×3) = 2 ──
-        let program = parse_program("INVOLSPLINE GB30R M3 Z20 L30").unwrap();
-        let iv = program.segments[0].invol_spline.as_ref().unwrap();
-        let (sr, sc) = (
-            iv.major_radius(),
-            (crate::gear::CHAMFER_RATIO * iv.params.m).round(),
-        );
-        assert!(near(sr, 31.5) && near(sc, 2.0), "da/2={sr}，C={sc}");
-        // 自由端 → 两端加
-        let shaft = build(&program, 1.0).unwrap();
-        assert!(has_line(&shaft, [0.0, sr - sc], [sc, sr]), "花键左自由端倒角");
-        assert!(
-            has_line(&shaft, [30.0 - sc, sr], [30.0, sr - sc]),
-            "花键右自由端倒角"
-        );
-
-        // ── ④ 邻段更小（Ø40 < da63）→ 加 ──
-        let shaft = build(
-            &parse_program("S40 E40 L20\nINVOLSPLINE GB30R M3 Z20 L30").unwrap(),
-            1.0,
-        )
-        .unwrap();
-        assert!(
-            has_line(&shaft, [20.0, sr - sc], [20.0 + sc, sr]),
-            "花键邻段更小 → 加"
-        );
-        assert!(
-            has_line(&shaft, [20.0 + sc, sr], [50.0 - sc, sr]),
-            "大径线左端缩 C"
-        );
-
-        // ── ⑤ 邻段更大（Ø70 > da63，肩部）→ 不加；右端自由仍倒 ──
-        let shaft = build(
-            &parse_program("S70 E70 L20\nINVOLSPLINE GB30R M3 Z20 L30").unwrap(),
-            1.0,
-        )
-        .unwrap();
-        assert!(
-            !has_line(&shaft, [20.0, sr - sc], [20.0 + sc, sr]),
-            "肩部侧不许有倒角斜线"
-        );
-        assert!(
-            !has_line(&shaft, [20.0 + sc, -sr], [20.0 + sc, sr]),
-            "肩部侧无倒角根竖线"
-        );
-        assert!(
-            has_line(&shaft, [20.0, sr], [50.0 - sc, sr]),
-            "大径线从端面直起"
-        );
-        assert!(
-            has_line(&shaft, [50.0 - sc, sr], [50.0, sr - sc]),
-            "右自由端倒角仍在"
-        );
-
-        // ── ⑥ 邻段相等（Ø63 = da）→ 不加 ──
-        let shaft = build(
-            &parse_program("S63 E63 L20\nINVOLSPLINE GB30R M3 Z20 L30").unwrap(),
-            1.0,
-        )
-        .unwrap();
-        assert!(
-            !has_line(&shaft, [20.0, sr - sc], [20.0 + sc, sr]),
-            "齐平侧不许有倒角斜线"
-        );
-        assert!(has_line(&shaft, [20.0, sr], [50.0 - sc, sr]), "大径线从端面直起");
     }
 
     /// 单侧规则的组合冒烟：齿轮/花键 × 自由/更小/更大/相等 × 有无 de × 左右位置，
@@ -6996,16 +5860,6 @@ GEAR M3 Z20";
             "S40 E40 L20\nGEAR M3 Z20 H30",
             "S66 E66 L20\nGEAR M3 Z20 H30",
             "GEAR M3 Z20 H30\nS40 E40 L20",
-            "INVOLSPLINE GB30R M3 Z20 L30",
-            "INVOLSPLINE GB30R M3 Z20 L30 de70",
-            "S40 E40 L20\nINVOLSPLINE GB30R M3 Z20 L30",
-            "S70 E70 L20\nINVOLSPLINE GB30R M3 Z20 L30",
-            "S63 E63 L20\nINVOLSPLINE GB30R M3 Z20 L30",
-            "S40 E40 L20\nINVOLSPLINE GB30R M3 Z20 L30 de70",
-            "S70 E70 L20\nINVOLSPLINE GB30R M3 Z20 L30 de70",
-            "INVOLSPLINE GB30R M3 Z20 L30\nS40 E40 L20",
-            "INVOLSPLINE GB30R M3 Z20 L30 de70\nS40 E40 L20",
-            "S22 E22 L5 CH2@R\nINVOLSPLINE GB30R M3 Z20 L30",
         ] {
             let program = parse_program(text).unwrap_or_else(|e| panic!("{text}: {e}"));
             let shaft = build(&program, 1.0).unwrap_or_else(|e| panic!("{text}: {e}"));
@@ -7857,92 +6711,36 @@ GEAR M3 Z20";
         assert!(has_line(&section, [20.0, 26.25], [50.0, 26.25]));
     }
 
-    /// `INVOLSPLINE … report` 命令入口解析层：摘关键字 → 解析 → 计算书；
-    /// 报告含 d_B 推导口径与来源（查表命中）。
+    /// `… report` 命令入口解析层：摘关键字 → 解析 → 段清单计算书。
+    /// 渐开线花键段已撤（轴段不再有 INVOLSPLINE），计算书只输出段清单。
     #[test]
-    fn report_keyword_parses_involspline_and_builds_report() {
-        let raw = "INVOLSPLINE DIN30 DB40 M2 L30 report";
+    fn report_keyword_parses_and_builds_segment_list() {
+        let raw = "SPLINE 6x23x26x6 L30 report";
         let (clean, want, out) = crate::gear::split_report_args(raw);
         assert!(want && out.is_none());
         assert!(!clean.to_lowercase().contains("report"), "{clean}");
         let program = parse_program(&clean).unwrap();
         let md = build_report(&program).unwrap();
-        assert!(
-            md.contains("# 轴段计算书") && md.contains("## 2. 渐开线花键段计算书"),
-            "{md}"
-        );
-        assert!(md.contains("d_B = d + 1.1m + 2x₁m"), "{md}");
-        assert!(md.contains("查表命中 p"), "{md}");
-        // NF A 主参数同样进计算书。
-        let program = parse_program("INVOLSPLINE NFP A80 M3.75 L30").unwrap();
-        let md = build_report(&program).unwrap();
-        assert!(md.contains("A = m(N + 2x + 0.4)"), "{md}");
-        assert!(md.contains("NF E22-141 p07"), "{md}");
+        assert!(md.contains("# 轴段计算书"), "{md}");
+        assert!(md.contains("矩形花键段") && md.contains("N=6"), "{md}");
+        assert!(!md.contains("渐开线花键"), "计算书不应再有渐开线花键段：{md}");
     }
 
-    /// 径节 P/DP 只属 ANSI：GB/DIN/NF 的 INVOLSPLINE（DSL 与 JSON 两侧）都明确拒绝，
-    /// 不得把 P 当模数用；ANSI 合法路径仍可用。
+    /// 护栏：轴生成器的 INVOLSPLINE 段已撤 —— DSL/JSON 两侧都不再接受，
+    /// 序列化也不会再出现 `invol_spline` 字段（渐开线花键唯一入口 = OCSMGEAR 花键模式）。
     #[test]
-    fn invol_pitch_rejected_outside_ansi() {
-        for raw in [
-            "INVOLSPLINE GB30R P8 Z20 L30",
-            "INVOLSPLINE DIN30 DB40 P8 L30",
-            "INVOLSPLINE NFP A80 P8 L30",
-            "INVOLSPLINE GB30R DP8 Z20 L30",
-        ] {
-            let e = parse_program(raw).unwrap_err();
-            assert!(
-                e.contains("径节 P/Ps 是 ANSI B92.1"),
-                "`{raw}` 应报径节只属 ANSI：{e}"
-            );
-        }
-        // `M` 与 `P` 同时给：先报关键字重复（同槽位，不静默取其一）。
-        let e = parse_program("INVOLSPLINE NFP A80 M3.75 P8 L30").unwrap_err();
-        assert!(e.contains("关键字 P/M/DP（径节/模数）重复"), "{e}");
-        for json in [
-            r#"{"segments":[{"invol_spline":{"code":"GB30R","m":3,"pitch":8,"z":20,"len":30}}]}"#,
-            r#"{"segments":[{"invol_spline":{"code":"DIN30","db":40,"pitch":8,"len":30}}]}"#,
-        ] {
-            let e = parse_program(json).unwrap_err();
-            assert!(e.contains("径节 P/Ps 是 ANSI B92.1"), "{json} → {e}");
-            assert!(e.contains("GB/T 3478") || e.contains("DIN 5480"), "{e}");
-        }
-        // ANSI：P 槽位正常工作（P=8 → m=3.175）。
-        let p = parse_program("INVOLSPLINE ANSI30P P8 Z20 L30").unwrap();
-        let iv = p.segments[0].invol_spline.as_ref().unwrap();
-        assert_eq!(iv.params.std, crate::invol_spline::SplineStd::ANSI);
-        assert!((iv.params.m - 25.4 / 8.0).abs() < 1e-12);
-        let pj = parse_program(r#"{"segments":[{"invol_spline":{"code":"ANSI30P","pitch":8,"z":20,"len":30}}]}"#)
-            .unwrap();
-        assert!((pj.segments[0].invol_spline.as_ref().unwrap().params.m - 25.4 / 8.0).abs() < 1e-12);
-    }
-
-    /// 三入口一致：同一 DIN 花键的 DSL 与 JSON 解析结果（含 `d_B` 来源）逐项相同，
-    /// 计算书里的「基准直径来源」不再因 JSON 入口而丢失。
-    #[test]
-    fn invol_json_and_dsl_share_report_origin() {
-        let dsl = parse_program("INVOLSPLINE DIN30 DB40 M2 Z18 L30").unwrap();
-        let json = parse_program(
-            r#"{"segments":[{"invol_spline":{"code":"DIN30","db":40,"m":2,"z":18,"len":30}}]}"#,
+    fn involspline_shaft_segment_removed() {
+        let e = parse_program("INVOLSPLINE GB30R M3 Z20 L30").unwrap_err();
+        assert!(e.contains("INVOLSPLINE") && e.contains("不识别的关键字"), "{e}");
+        let e = parse_program(
+            r#"{"segments":[{"invol_spline":{"code":"GB30R","m":3,"z":20,"len":30}}]}"#,
         )
-        .unwrap();
-        let a = dsl.segments[0].invol_spline.as_ref().unwrap();
-        let b = json.segments[0].invol_spline.as_ref().unwrap();
-        assert_eq!(a.params, b.params, "DSL/JSON 参数应一致");
-        assert_eq!(
-            a.d_b_origin.as_ref().map(|o| o.note()),
-            b.d_b_origin.as_ref().map(|o| o.note()),
-            "DSL/JSON 的 d_B 来源应一致"
-        );
-        assert!(a.d_b_origin.as_ref().unwrap().note().contains("查表命中 p27"));
-        let md_a = build_report(&dsl).unwrap();
-        let md_b = build_report(&json).unwrap();
-        assert_eq!(md_a, md_b, "同一模型的 DSL/JSON 计算书应逐字相同");
-        assert!(md_b.contains("查表命中 p27 m=2"), "{md_b}");
-        assert!(!md_b.contains("不适用（GB/ANSI 无 d_B/A 主参数）"), "{md_b}");
-        // 表外推导（Adjusted）同样保留明文提示。
-        let adj = parse_program("INVOLSPLINE DIN30 DB40 M2 Z14 L30").unwrap();
-        let md = build_report(&adj).unwrap();
-        assert!(md.contains("按基准直径 d_B=40 取 z=18") && md.contains("与输入 z=14 不符"), "{md}");
+        .unwrap_err();
+        assert!(e.contains("缺少 s") || e.contains("缺少 l"), "{e}");
+        let json = serde_json::to_string(&parse_program("SPLINE 6x23x26x6 L30").unwrap()).unwrap();
+        assert!(!json.contains("invol_spline"), "{json}");
+        // GEAR 段不受牵连，照常可用。
+        let gear = parse_program("GEAR M3 Z20 H30").unwrap();
+        assert!(gear.segments[0].gear.is_some());
     }
 }

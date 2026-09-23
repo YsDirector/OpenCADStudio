@@ -302,9 +302,10 @@ check(el('warn').textContent.includes('标准系列') && el('warn').textContent.
 el('m').value = '5';
 el('m')._fire('input', el('m'));
 await flush();
-check(el('exprPreview').value === 'INVOLSPLINE ANSI30P DP5/10 Z19 L50.8',
-  'ANSI 表达式应用 DP5/10 写径节原值，实际 ' + JSON.stringify(el('exprPreview').value));
-check(el('exprHint').textContent.includes('DP'), 'ANSI 表达式提示应说明 DP：' + el('exprHint').textContent);
+check(el('exprPreview').value === '',
+  'INVOLSPLINE 轴段已撤：花键模式不应给出轴段表达式，实际 ' + JSON.stringify(el('exprPreview').value));
+check(el('exprHint').textContent.includes('轴生成器已撤掉 INVOLSPLINE'),
+  '应提示轴生成器已撤掉 INVOLSPLINE：' + el('exprHint').textContent);
 
 // ── ANSI 接线回归（用户实测「缺径节 P」的断点）：选完径节后，预览/信息查询串与导出 body
 // 必须带 A/B 原值 `pitch=5/10`，而不是被 collect/paramQS/导出 schema 丢在半路。
@@ -338,19 +339,17 @@ el('stdSel').value = 'GB';
 try { el('stdSel')._fire('change', el('stdSel')); } catch (e) { errors.push('GB 回切异常: ' + e); }
 await flush();
 
-// ③.95 轴生成器表达式（花键模式）：INVOLSPLINE 轴段语法；复制成功
+// ③.95 轴生成器表达式（花键模式）：INVOLSPLINE 轴段已撤 → 不再给表达式（护栏）
 el('m').value = '3';
 el('z').value = '20';
 el('h').value = '30';
 try { el('m')._fire('input', el('m')); } catch (e) { errors.push('花键表达式同步异常: ' + e); }
 await flush();
-check(el('exprPreview').value === 'INVOLSPLINE GB30R M3 Z20 L30',
-  '花键表达式应为 INVOLSPLINE GB30R M3 Z20 L30，实际 ' + JSON.stringify(el('exprPreview').value));
-globalThis.__copied = '';
-el('exprCopy')._fire('click', el('exprCopy'));
-await flush();
-check(globalThis.__copied === 'INVOLSPLINE GB30R M3 Z20 L30',
-  '复制按钮应写入花键表达式，实际 ' + JSON.stringify(globalThis.__copied));
+check(el('exprPreview').value === '',
+  '花键模式不应再给 INVOLSPLINE 轴段表达式，实际 ' + JSON.stringify(el('exprPreview').value));
+check(el('exprCopy').disabled === true, '表达式为空时复制按钮应禁用');
+check(el('exprHint').textContent.includes('轴生成器已撤掉 INVOLSPLINE'),
+  '应提示轴生成器已撤掉 INVOLSPLINE：' + el('exprHint').textContent);
 const viewBtns = () => el('viewRow').children.map((b) => b.textContent);
 const kindBtns = () => el('kindRow').children;
 check(viewBtns().join('|') === '剖视图|侧视图|端视图', '外花键应有三视图按钮，实际 ' + viewBtns().join('|'));
@@ -371,7 +370,7 @@ if (intKindBtn) {
   check(el('viewName').textContent === '剖视图（齿圈内齿不剖）', '内花键不可用侧视图时应自动回剖视图，实际 ' + el('viewName').textContent);
   check(el('kindHint').innerHTML.includes('不存在侧视图'), '内花键提示应写明无侧视图：' + el('kindHint').innerHTML);
   check(el('exprHint').textContent.includes('不能在轴上使用'), '内花键表达式应标注「不能在轴上使用」：' + el('exprHint').textContent);
-  check(el('exprPreview').value.indexOf('INVOLSPLINE GB30R') === 0, '内花键表达式仍应给出参数（只作记录）：' + el('exprPreview').value);
+  check(el('exprPreview').value === '', '内花键也不应给出 INVOLSPLINE 轴段表达式：' + el('exprPreview').value);
 }
 // 切回外花键：恢复三视图
 const extKindBtn = kindBtns().find((b) => b.dataset.k === 'external');

@@ -961,6 +961,7 @@ function applyKindUI() {
 // 参数 → 「OCSMGEAR 命令行等价」与「轴生成器轴段表达式」两份快照：共用同一份 collect()
 // 结果（v.p），提示与表达式不会各取各的而格式漂移。expr 是轴生成器段语法的一行，
 // 不带 view/at（那是视图/插入参数，不是段参数）；内齿/变位/斜齿在轴上表达不了的另行告警。
+// 渐开线花键的轴段 `INVOLSPLINE` 已撤（用户定案：只在齿轮生成器生成），花键模式不再给轴段表达式。
 // 返回 { cli, expr, notes, warnings }：cli 不含 view（由 syncKindHint 统一补）。
 function equivalence(v) {
   const notes = [], warnings = [];
@@ -974,26 +975,9 @@ function equivalence(v) {
     else if (v.ok && v.p.m !== undefined) cli += " " + fmt(v.p.m);
     if (v.ok && v.p.z !== undefined) cli += " " + v.p.z;
     if (curKind === "internal") warnings.push("内花键不能在轴上使用（轴上没有内花键）：本表达式只作记录，别粘到轴生成器。");
-    let expr = "";
-    if (v.ok) {
-      const p = v.p;
-      // 与 shaft.rs 的 INVOLSPLINE 子关键字对齐：M/Z/X/L（GB/DIN/NF）、P/Z/L（ANSI）、
-      // DB（DIN 基准直径）、A（NF 公称直径）；预设代号直接沿用齿廓下拉（GB30R/DIN30/NFP/ANSI30P…）。
-      expr = "INVOLSPLINE " + String(p.profile || p.std || "").trim();
-      if (p.std === "ANSI") {
-        // 轴段用 `DP<A/B>` 写径节原值（P/Ps，Ps=2P），不再换算成 mm 模数；
-        // parser 已把 `has_invol && P` 分支排到 RL 参数分支之前，`P5/10` 也能直接解析。
-        if (p.pitch) expr += " DP" + p.pitch;
-      } else {
-        if (p.db !== undefined) expr += (p.std === "NF" ? " A" : " DB") + fmt(p.db);
-        if (p.m !== undefined) expr += " M" + fmt(p.m);
-        if (p.x !== undefined && Math.abs(p.x) > 1e-12) expr += " X" + fmt(p.x);
-      }
-      if (p.z !== undefined) expr += " Z" + p.z;
-      if (p.h !== undefined) expr += " L" + fmt(p.h);
-      if (p.std === "ANSI") notes.push("ANSI 径节制：轴段 INVOLSPLINE 用 DP 写径节原值（A/B，如 DP2.5/5；Ps 恒为 2P）。");
-    }
-    return { cli, expr, notes, warnings };
+    // 轴段 INVOLSPLINE 已撤：不再给「轴生成器轴段表达式」，只保留 OCSMGEAR 命令行等价。
+    notes.push("轴生成器已撤掉 INVOLSPLINE 渐开线花键段：渐开线花键只在 OCSMGEAR 花键模式生成，本快照不能粘到轴生成器。");
+    return { cli, expr: "", notes, warnings };
   }
   const cli = v.ok
     ? (curKind === "internal" ? "int" : "ext") + (v.p.std === "DP"
@@ -1023,7 +1007,7 @@ function syncExpr(v, eq) {
   const hint = el("exprHint");
   const msgs = [];
   if (!(v && v.ok)) msgs.push("参数不合法（见上方红字），先修正后才会给出表达式。");
-  else msgs.push("可直接粘贴到轴生成器的表达式框或 GEAR/INVOLSPLINE 输入框（不含 view/at 等插入参数）。");
+  else msgs.push("可直接粘贴到轴生成器的表达式框或 GEAR 输入框（不含 view/at 等插入参数）。");
   if (eq) msgs.push(...(eq.notes || []), ...(eq.warnings || []));
   hint.textContent = msgs.join(" ");
   hint.className = "hint" + (eq && eq.warnings && eq.warnings.length ? " bad" : "");
