@@ -1483,6 +1483,9 @@ impl BuiltinPlugin for OcsmPlugin {
             None => (raw, ""),
         };
         let upper = name.to_ascii_uppercase();
+        // 新建空图纸 → 自动 OCSM 初始化（旧图不动作）。必须在具体命令分发**前**：
+        // OCSMGEAR/OCSMSHAFT 的 `ocsm_ready` 拦截这时就能看到刚建好的图层/样式。
+        self.auto_init_new_document(host, &upper);
         match upper.as_str() {
             "OCSM" => {
                 self.cmd_init(host);
@@ -1597,9 +1600,59 @@ impl BuiltinPlugin for OcsmPlugin {
     }
 }
 
+/// 自动初始化要跳过的命令（命令名已大写）：文档生命周期 / 帮助 / 全局设置类。
+///
+/// 与宿主 `start_allowed`（`src/app/commands/mod.rs`）同口径：这些命令在
+/// 欢迎（Start）标签页也允许执行，不能拿它们当作「当前有真实图纸」的信号去
+/// 初始化；`OCSM` 本身跳过是因为它自己就会初始化（否则一条命令两个撤销点）。
+fn auto_init_skipped_command(upper: &str) -> bool {
+    upper == "OCSM"
+        || upper.starts_with("OPEN_RECENT")
+        || matches!(
+            upper,
+            "NEW" | "OPEN" | "EXIT" | "QUIT" | "REPORT" | "CHANGELOG" | "ABOUT"
+                | "PLUGINS" | "PLUGINMANAGER" | "DONATE" | "WEBVERSION" | "HELP"
+                | "OCSMHELP" | "OH" | "PERF" | "CUI" | "ALIASEDIT" | "CUILOAD"
+                | "CUIIMPORT" | "OPTIONS" | "OP"
+        )
+}
+
+/// 「新建空图纸」判据（安全第一，宿主没有「文档新建/打开」事件时的严格启发式）：
+///
+/// - 存过盘 / 打开 / 另存过的一律不动（`path.is_some()`，**空文件也算老图**）；
+/// - 有任何实体一律不动；
+/// - 有任何 OCSM 痕迹（10 层里任一层，或 `OCSM_GB` 文字/标注样式）视为老图不动。
+///
+/// 三条全满足才算「新建空图纸」——宁可漏初始化（用户可手打 `OCSM`），不可误伤旧图。
+pub(crate) fn is_new_blank_drawing(
+    doc: &acadrust::CadDocument,
+    path: Option<&std::path::Path>,
+) -> bool {
+    if path.is_some() || doc.entity_count() > 0 {
+        return false;
+    }
+    let ocsm_layer = layer_defs()
+        .iter()
+        .any(|def| doc.layers.iter().any(|ly| ly.name.eq_ignore_ascii_case(&def.name)));
+    let ocsm_style = doc
+        .text_styles
+        .iter()
+        .any(|s| s.name.eq_ignore_ascii_case("OCSM_GB"))
+        || doc
+            .dim_styles
+            .iter()
+            .any(|s| s.name.eq_ignore_ascii_case("OCSM_GB"));
+    !ocsm_layer && !ocsm_style
+}
+
 impl OcsmPlugin {
     /// `OCSM`：初始化图层 + 线型 + 文字样式 + 标注样式（幂等）。
     fn cmd_init(&self, host: &mut dyn HostApi) {
+        self.init_ocsm_tables(host);
+    }
+
+    /// 表初始化主体：手动 `OCSM` 与新建图纸自动初始化**共用同一条路径**。
+    fn init_ocsm_tables(&self, host: &mut dyn HostApi) {
         // 表变更（线型/图层/文字样式/标注样式）宿主不会自动入撤销栈：命令必须
         // 自己声明撤销点，否则 AI/MCP 驱动初始化后 Ctrl+Z 与 MCP `op:"undo"` 都撤不掉。
         host.push_undo("OCSM 初始化");
@@ -1612,6 +1665,28 @@ impl OcsmPlugin {
         host.push_output(&format!(
             "OCSM 初始化完成：新增图层 {layers} 个、线型 {lt} 个、文字样式 {styles} 个（OCSM_GB）、标注样式 {dim_styles} 个（OCSM_GB，当前样式）。数字键 1-10、TF、D 已就绪。"
         ));
+    }
+
+    /// 新建空图纸 → 在第一条命令分发前自动跑一遍 OCSM 初始化（旧图纸不动作）。
+    ///
+    /// 宿主没有「文档新建/打开」事件（见 `handbook/01`），只能在每条命令
+    /// `dispatch` 时用 [`is_new_blank_drawing`] 判一次；初始化后图层已在，
+    /// 下一条命令判据不再成立（幂等）。初始化走 [`Self::init_ocsm_tables`]，
+    /// 与手动 `OCSM` 同一个撤销点、同一套产物。
+    fn auto_init_new_document(&self, host: &mut dyn HostApi, upper: &str) {
+        if auto_init_skipped_command(upper) {
+            return;
+        }
+        // 先看路径：老图（含空的已存盘图）直接返回，不取文档快照。
+        let path = host.document_path(host.tab_id());
+        if path.is_some() {
+            return;
+        }
+        if !is_new_blank_drawing(host.document(), path.as_deref()) {
+            return;
+        }
+        host.push_info("新建图纸：自动执行 OCSM 初始化（旧图纸不会自动初始化）。");
+        self.init_ocsm_tables(host);
     }
 
     /// `OCSMDIMGULIDE` / `GDIM`：选中引导线 → 启动标注更新服务器 →
@@ -5142,7 +5217,15 @@ mod tests {
         log: Vec<String>,
         outputs: Vec<String>,
         errors: Vec<String>,
+        infos: Vec<String>,
+        undo: Vec<String>,
         doc: ocs_plugin_api::host::CadDocument,
+        path: Option<std::path::PathBuf>,
+        // ensure_* 收到的 defs（自动初始化 vs 手动 OCSM 逐项对比用）。
+        linetypes: Vec<ocs_plugin_api::host::LinetypeDef>,
+        layers: Vec<ocs_plugin_api::host::LayerDef>,
+        text_styles: Vec<ocs_plugin_api::host::TextStyleDef>,
+        dim_styles: Vec<ocs_plugin_api::host::DimStyleDef>,
     }
     /// 空的只读文档视图（HostApi 要求实现 DocumentReader）。
     struct SpyReader;
@@ -5192,10 +5275,13 @@ mod tests {
             false
         }
         fn push_undo(&mut self, label: &str) {
+            self.undo.push(label.to_string());
             self.log.push(format!("push_undo:{label}"));
         }
         fn set_dirty(&mut self) {}
-        fn push_info(&mut self, _msg: &str) {}
+        fn push_info(&mut self, msg: &str) {
+            self.infos.push(msg.to_string());
+        }
         fn push_output(&mut self, msg: &str) {
             self.outputs.push(msg.to_string());
         }
@@ -5224,24 +5310,93 @@ mod tests {
         ) -> &mut (dyn std::any::Any + Send + Sync) {
             Box::leak(init())
         }
+        fn document_path(&self, _tab_id: u64) -> Option<std::path::PathBuf> {
+            self.path.clone()
+        }
         fn document_reader(&self) -> Box<dyn ocs_plugin_api::host::DocumentReader + '_> {
             Box::new(SpyReader)
         }
-        fn ensure_linetypes(&mut self, _defs: Vec<ocs_plugin_api::host::LinetypeDef>) -> usize {
+        fn ensure_linetypes(&mut self, defs: Vec<ocs_plugin_api::host::LinetypeDef>) -> usize {
             self.log.push("ensure_linetypes".into());
-            0
+            let mut created = 0;
+            for def in &defs {
+                if self
+                    .doc
+                    .line_types
+                    .iter()
+                    .any(|l| l.name.eq_ignore_ascii_case(&def.name))
+                {
+                    continue;
+                }
+                self.doc
+                    .line_types
+                    .add_or_replace(acadrust::tables::LineType::new(&def.name));
+                created += 1;
+            }
+            self.linetypes.extend(defs);
+            created
         }
-        fn ensure_layers(&mut self, _defs: Vec<ocs_plugin_api::host::LayerDef>) -> usize {
+        fn ensure_layers(&mut self, defs: Vec<ocs_plugin_api::host::LayerDef>) -> usize {
             self.log.push("ensure_layers".into());
-            0
+            let mut created = 0;
+            for def in &defs {
+                if self
+                    .doc
+                    .layers
+                    .iter()
+                    .any(|l| l.name.eq_ignore_ascii_case(&def.name))
+                {
+                    continue;
+                }
+                self.doc
+                    .layers
+                    .add_or_replace(acadrust::tables::Layer::new(&def.name));
+                created += 1;
+            }
+            self.layers.extend(defs);
+            created
         }
-        fn ensure_text_styles(&mut self, _defs: Vec<ocs_plugin_api::host::TextStyleDef>) -> usize {
+        fn ensure_text_styles(&mut self, defs: Vec<ocs_plugin_api::host::TextStyleDef>) -> usize {
             self.log.push("ensure_text_styles".into());
-            0
+            let mut created = 0;
+            for def in &defs {
+                if self
+                    .doc
+                    .text_styles
+                    .iter()
+                    .any(|s| s.name.eq_ignore_ascii_case(&def.name))
+                {
+                    continue;
+                }
+                self.doc
+                    .text_styles
+                    .add_or_replace(acadrust::tables::TextStyle::new(&def.name));
+                created += 1;
+            }
+            self.text_styles.extend(defs);
+            created
         }
-        fn ensure_dim_styles(&mut self, _defs: Vec<ocs_plugin_api::host::DimStyleDef>) -> usize {
+        fn ensure_dim_styles(&mut self, defs: Vec<ocs_plugin_api::host::DimStyleDef>) -> usize {
             self.log.push("ensure_dim_styles".into());
-            0
+            let mut created = 0;
+            for def in &defs {
+                if !self
+                    .doc
+                    .dim_styles
+                    .iter()
+                    .any(|s| s.name.eq_ignore_ascii_case(&def.name))
+                {
+                    self.doc
+                        .dim_styles
+                        .add_or_replace(acadrust::tables::DimStyle::new(&def.name));
+                    created += 1;
+                }
+                if def.make_current {
+                    self.doc.header.current_dimstyle_name = def.name.clone();
+                }
+            }
+            self.dim_styles.extend(defs);
+            created
         }
     }
 
@@ -5270,6 +5425,172 @@ mod tests {
             Some("push_undo:OCSM 智能标注"),
             "{:?}",
             host.log
+        );
+    }
+
+    // ── 新建空图纸自动初始化（宿主无「文档新建/打开」事件 → 严格启发式）──
+
+    /// 门禁纯函数：路径 / 实体 / OCSM 痕迹任一命中就不算新图。
+    #[test]
+    fn is_new_blank_drawing_is_strict() {
+        let doc = acadrust::CadDocument::new();
+        assert!(is_new_blank_drawing(&doc, None), "空 + 无路径 + 无 OCSM → 新图");
+        assert!(
+            !is_new_blank_drawing(&doc, Some(std::path::Path::new("/tmp/old.dwg"))),
+            "存过盘的旧图（哪怕空）→ 不动"
+        );
+
+        let mut with_entity = acadrust::CadDocument::new();
+        let _ = with_entity.add_entity(EntityType::Point(acadrust::entities::Point::new()));
+        assert!(!is_new_blank_drawing(&with_entity, None), "有实体 → 不动");
+
+        let mut with_layer = acadrust::CadDocument::new();
+        with_layer
+            .layers
+            .add_or_replace(acadrust::tables::Layer::new("1轮廓实线层"));
+        assert!(!is_new_blank_drawing(&with_layer, None), "有 OCSM 图层 → 旧图");
+
+        let mut with_style = acadrust::CadDocument::new();
+        with_style
+            .text_styles
+            .add_or_replace(acadrust::tables::TextStyle::new("OCSM_GB"));
+        assert!(!is_new_blank_drawing(&with_style, None), "有 OCSM_GB 文字样式 → 旧图");
+
+        let mut with_dim = acadrust::CadDocument::new();
+        with_dim
+            .dim_styles
+            .add_or_replace(acadrust::tables::DimStyle::new("OCSM_GB"));
+        assert!(!is_new_blank_drawing(&with_dim, None), "有 OCSM_GB 标注样式 → 旧图");
+
+        let mut custom_layer = acadrust::CadDocument::new();
+        custom_layer
+            .layers
+            .add_or_replace(acadrust::tables::Layer::new("用户自建层"));
+        assert!(
+            is_new_blank_drawing(&custom_layer, None),
+            "只有自定义层不算 OCSM 痕迹"
+        );
+    }
+
+    /// 空文档上跑任意普通命令 → 自动初始化，且 ensure_* 的 defs 与顺序和
+    /// 手动 `OCSM` **逐项一致**（复用同一 `init_ocsm_tables`，不复制产物）。
+    #[test]
+    fn auto_init_empty_new_drawing_matches_manual_ocsm() {
+        // `refresh_doc_save_state` 写进程级 DOC_SAVE_STATE：与其它全局态测试串行。
+        let _g = global_state_test_lock();
+        let mut auto = UndoOrderSpy::default();
+        assert!(
+            !OcsmPlugin.dispatch(&mut auto, "ZOOM"),
+            "自动初始化不吞命令（ZOOM 仍由宿主执行）"
+        );
+
+        let mut manual = UndoOrderSpy::default();
+        assert!(OcsmPlugin.dispatch(&mut manual, "OCSM"));
+
+        // 产物逐项一致：同一个撤销点 + 同四张表的确保序列。
+        assert_eq!(auto.undo, manual.undo);
+        assert_eq!(auto.linetypes, manual.linetypes);
+        assert_eq!(auto.layers, manual.layers);
+        assert_eq!(auto.text_styles, manual.text_styles);
+        assert_eq!(auto.dim_styles, manual.dim_styles);
+        assert_eq!(auto.outputs, manual.outputs);
+        assert_eq!(auto.outputs.len(), 1, "完成行只报一次");
+        assert_eq!(auto.infos.len(), 1, "自动路径给一条来源提示");
+        assert!(manual.infos.is_empty(), "手动 OCSM 不应报自动初始化提示");
+        assert_eq!(auto.undo, vec!["OCSM 初始化"]);
+
+        // 实际落表也一致（桩按宿主 ensure 口径真的写表）。
+        let layer_names = |d: &ocs_plugin_api::host::CadDocument| {
+            let mut v: Vec<String> = d.layers.iter().map(|l| l.name.clone()).collect();
+            v.sort();
+            v
+        };
+        assert_eq!(layer_names(&auto.doc), layer_names(&manual.doc));
+        assert_eq!(
+            auto.doc.header.current_dimstyle_name,
+            manual.doc.header.current_dimstyle_name
+        );
+
+        // 关键产物断言（图层/样式/状态位）。
+        let names: Vec<&str> = auto.layers.iter().map(|d| d.name.as_str()).collect();
+        assert_eq!(
+            names,
+            vec![
+                "1轮廓实线层", "2细线层", "3中心线层", "4虚线层", "5剖面线层",
+                "6文字层", "7标注层", "8符号标注层", "9双点划线层", "10引导线层",
+            ]
+        );
+        let center = auto.layers.iter().find(|d| d.name == "3中心线层").unwrap();
+        assert_eq!(center.linetype, "CENTER2", "中心线层必须挂点划线");
+        let guide = auto.layers.iter().find(|d| d.name == "10引导线层").unwrap();
+        assert!(guide.off && guide.lineweight == LineWeight::from_value(0), "引导线层默认关、0mm");
+        let ts = &auto.text_styles[0];
+        assert_eq!(ts.name, "OCSM_GB");
+        assert_eq!((ts.height, ts.width_factor), (3.5, 0.7));
+        let ds = &auto.dim_styles[0];
+        assert_eq!(ds.name, "OCSM_GB");
+        assert!(ds.make_current, "初始化后 OCSM_GB 应为当前标注样式（状态位）");
+        // 线型先于图层：DWG 写出时层引用的线型名必须已在表里。
+        assert_eq!(auto.log.first().map(String::as_str), Some("push_undo:OCSM 初始化"));
+        assert_eq!(auto.log.get(1).map(String::as_str), Some("ensure_linetypes"));
+        assert_eq!(auto.log.get(2).map(String::as_str), Some("ensure_layers"));
+    }
+
+    /// 旧图/有内容的图一律不动：含「有内容无 OCSM」与「空白但存过盘」两类。
+    #[test]
+    fn auto_init_leaves_old_or_non_empty_documents_alone() {
+        let _g = global_state_test_lock();
+        // 有一点内容但不含 OCSM 内容的旧图（无路径）。
+        let mut dirty_old = UndoOrderSpy::default();
+        let _ = dirty_old
+            .doc
+            .add_entity(EntityType::Point(acadrust::entities::Point::new()));
+        assert!(!OcsmPlugin.dispatch(&mut dirty_old, "ZOOM"));
+        assert!(dirty_old.undo.is_empty() && dirty_old.layers.is_empty());
+        assert!(dirty_old.infos.is_empty());
+
+        // 空白但保存/另存过的旧图（有路径）。
+        let mut saved_empty = UndoOrderSpy::default();
+        saved_empty.path = Some(std::path::PathBuf::from("/tmp/old_empty.dwg"));
+        assert!(!OcsmPlugin.dispatch(&mut saved_empty, "ZOOM"));
+        assert!(saved_empty.undo.is_empty() && saved_empty.layers.is_empty());
+
+        // 空但有 OCSM 图层的旧图（初始化过又清空实体）。
+        let mut initialized = UndoOrderSpy::default();
+        initialized
+            .doc
+            .layers
+            .add_or_replace(acadrust::tables::Layer::new("1轮廓实线层"));
+        assert!(!OcsmPlugin.dispatch(&mut initialized, "ZOOM"));
+        assert!(initialized.undo.is_empty() && initialized.layers.is_empty());
+    }
+
+    /// 幂等（触发两次 == 一次）+ 生命周期命令/手动 `OCSM` 不叠加。
+    #[test]
+    fn auto_init_is_idempotent_and_skips_lifecycle_commands() {
+        let _g = global_state_test_lock();
+        let mut host = UndoOrderSpy::default();
+        assert!(!OcsmPlugin.dispatch(&mut host, "ZOOM"));
+        assert!(!OcsmPlugin.dispatch(&mut host, "LINE"));
+        assert_eq!(host.undo, vec!["OCSM 初始化"], "两次触发只应一个撤销点");
+        assert_eq!(host.outputs.len(), 1);
+        assert_eq!(host.infos.len(), 1);
+        assert_eq!(host.layers.len(), 10, "第二次不应重发 defs");
+
+        // 生命周期/帮助/设置类命令（欢迎页也走插件的那些）不触发。
+        let mut life = UndoOrderSpy::default();
+        for cmd in ["NEW", "OPEN", "QUIT", "HELP", "OPTIONS", "OPEN_RECENT:/tmp/x.dwg"] {
+            assert!(!OcsmPlugin.dispatch(&mut life, cmd), "{cmd}");
+        }
+        assert!(life.undo.is_empty() && life.layers.is_empty(), "生命周期命令不初始化");
+
+        // 手动 `OCSM`：只跑一次初始化，不叠加自动路径（不双撤销点）。
+        let mut manual = UndoOrderSpy::default();
+        assert!(OcsmPlugin.dispatch(&mut manual, "OCSM"));
+        assert_eq!(manual.undo, vec!["OCSM 初始化"]);
+        assert!(
+            manual.outputs.len() == 1 && manual.infos.is_empty(),
+            "手动 OCSM 只报完成行"
         );
     }
 
