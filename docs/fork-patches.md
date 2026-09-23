@@ -428,6 +428,14 @@ LC_ALL=C cargo test -p OpenCADStudio --lib \
 - **IPC**：`PluginRequest/PluginResponse` **末尾追加**变体（bincode discriminant 稳定）；
   类型：`LayerDef`/`LinetypeDef`/`TextStyleDef`/`DimStyleDef`/`FrameItem`/`FrameSelection`/
   `ImportFrameBlockRequest`。
+- **`DimStyleDef` 类型专属 DIMVAR 补全（2026-09-23）**：`host.rs` 追加 `dimlfac`（线性比例，144）、
+  `dimtfac`（公差字高，146）、`dimazin`（角度消零，79）、`dimfrac`（角度小数制，276）、
+  `dimtmove`（文字移动，279）；默认值 1.0 / 1.0 / 0 / 0 / 0。
+  **为什么**：宿主 `ensure_dim_styles` 对 def 未列字段从**当前样式**继承 → 外来图档（`TH_GBDIM`/
+  `块内标注`……）的旧值会漏进 `OCSM_GB`，线性（dimlfac）/角度（dimazin+dimfrac）标注表现为
+  “样式丢失”。插件 `dim_style_defs()` 已把它们显式钉死为黄金模板值。
+  **合并注意**：字段追加在 `DimStyleDef` 中 `dimpost` 之后、`annotative` 之前（bincode 位置固定）；
+  上游若改该结构，核对这 5 个字段、`Default` 与宿主映射（`src/app/plugin_host.rs::ensure_dim_styles`）别被覆盖。
 - **合并注意**：若上游也改 `crates/ocs_plugin_api`，**优先取上游**，再把本组的追加项补回
   （追加在枚举/方法末尾，保持既有次序）。
 

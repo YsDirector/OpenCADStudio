@@ -246,6 +246,14 @@ pub(crate) fn dim_style_defs() -> Vec<DimStyleDef> {
         dimlwe: -1,
         dimtxsty: "OCSM_GB".into(),
         dimpost: String::new(),
+        // 类型专属 DIMVAR（黄金模板 OCSM_GB 实测值）：显式钉死，不再从当前样式继承——
+        // 否则外来图档（TH_GBDIM/块内标注……）的旧值会漏进 OCSM_GB，
+        // 表现为线性（dimlfac）/角度（dimazin/dimfrac）标注“样式丢失”。
+        dimlfac: 1.0,
+        dimtfac: 1.0,
+        dimazin: 0,
+        dimfrac: 0,
+        dimtmove: 0,
         annotative: false,
     }]
 }
@@ -4563,6 +4571,13 @@ mod tests {
         assert_eq!(d.dimlwe, -1);
         // 字体必须是 OCSM_GB（project.md：标注字体换成 OCSM_GB）。
         assert_eq!(d.dimtxsty, "OCSM_GB");
+        // 类型专属 DIMVAR：与黄金模板 OCSM_GB 一致（线性 dimlfac / 角度 dimazin+dimfrac /
+        // 公差 dimtfac / 直径半径 dimtmove）——显式钉死，防被模板继承值污染。
+        assert_eq!(d.dimlfac, 1.0, "线性比例因子");
+        assert_eq!(d.dimtfac, 1.0, "公差字高比例");
+        assert_eq!(d.dimazin, 0, "角度消零");
+        assert_eq!(d.dimfrac, 0, "角度小数制");
+        assert_eq!(d.dimtmove, 0, "文字移动");
         assert!(!d.annotative);
     }
 
@@ -4572,6 +4587,12 @@ mod tests {
         assert_eq!(s.name, "OCSM_GB_x2");
         assert_eq!(s.dimscale, 2.0);
         assert_eq!(s.dimtxt, 2.5); // 尺寸不变，由 dimscale 放大
+        // 类型专属 DIMVAR 也要随缩放样式一起带上（否则框内线性/角度又会“丢样式”）。
+        assert_eq!(s.dimlfac, 1.0);
+        assert_eq!(s.dimtfac, 1.0);
+        assert_eq!(s.dimazin, 0);
+        assert_eq!(s.dimfrac, 0);
+        assert_eq!(s.dimtmove, 0);
         assert!(!s.make_current);
         let s = scaled_dim_style_def(0.5);
         assert_eq!(s.name, "OCSM_GB_x0.5");
@@ -4579,6 +4600,29 @@ mod tests {
         assert_eq!(trim_scale(1.0), "1");
         assert_eq!(trim_scale(2.5), "2.5");
         assert_eq!(trim_scale(0.125), "0.125");
+    }
+
+    /// 防再丢：按标注类型锁死 OCSM_GB 的关键 DIMVAR（线性 / 角度）。
+    /// 黄金参照 = 用户模板 `轴生成器-普通平键.dxf` / `GB-T1095-2003毂槽-*.dxf` 里的
+    /// OCSM_GB 记录（`ezdxf` dump）；容差 1e-9（浮点）。
+    #[test]
+    fn dim_style_def_pins_linear_and_angular_vars() {
+        let d = &dim_style_defs()[0];
+        // 线性专用：小数位、单位制、比例因子、整体比例、前后缀。
+        assert_eq!(d.dimdec, 2, "DIMDEC（线性小数位）");
+        assert_eq!(d.dimlunit, 2, "DIMLUNIT（十进制）");
+        assert!((d.dimlfac - 1.0).abs() < 1e-9, "DIMLFAC（线性比例）");
+        assert!((d.dimscale - 1.0).abs() < 1e-9, "DIMSCALE（整体比例）");
+        assert_eq!(d.dimpost, "", "DIMPOST（前后缀）");
+        // 角度专用：小数位、单位、消零、小数制。
+        assert_eq!(d.dimadec, 0, "DIMADEC（角度小数位）");
+        assert_eq!(d.dimaunit, 0, "DIMAUNIT（度）");
+        assert_eq!(d.dimazin, 0, "DIMAZIN（角度消零）");
+        assert_eq!(d.dimfrac, 0, "DIMFRAC（角度小数制）");
+        // 公差 / 直径半径也顺带锁住（任务同一批“类型专属”字段）。
+        assert!((d.dimtfac - 1.0).abs() < 1e-9, "DIMTFAC（公差字高比例）");
+        assert_eq!(d.dimtmove, 0, "DIMTMOVE（文字移动）");
+        assert_eq!(d.dimjust, 0, "DIMJUST（文字水平位置）");
     }
 
     // ── frame 比例感知 ───────────────────────────────────────────────────────

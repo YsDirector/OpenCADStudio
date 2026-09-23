@@ -354,6 +354,11 @@ mod tests {
             dimlwe: -1,
             dimtxsty: "OCSM_GB".into(),
             dimpost: String::new(),
+            dimlfac: 1.0,
+            dimtfac: 0.71,
+            dimazin: 0,
+            dimfrac: 0,
+            dimtmove: 0,
             annotative: false,
         }
     }

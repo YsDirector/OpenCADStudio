@@ -31,6 +31,7 @@ use ocs_plugin_api::host::acadrust::xdata::XDataValue;
 use ocs_plugin_api::host::{DimStyleDef, PluginRequestError, PluginRequestSender};
 use ocs_plugin_api::ipc::protocol::{PluginRequest, PluginResponse};
 
+use crate::LineGeom;
 use crate::guide_server as gs;
 use crate::guide_url::{
     AngleMode, DatumVersion, FlipDir, GuideParams, GuideType, LinearSub, SectionSide, WeldParams,
@@ -645,12 +646,10 @@ fn convert_one(
 
     match dim {
         Dimension::Linear(l) => {
-            let sub = pick_linear_sub(
-                dim,
-                l.first_point,
-                l.second_point,
-                base.actual_measurement,
-            );
+            // 参考测量值用实体几何（尊重 rotation / normal），不用 base.actual_measurement：
+            // 外来图档（AutoCAD）里组 42 可能是旧值或被 DIMLFAC/视口缩放过，
+            // 会让子类型选择与几何自检都踩空（用户报「线性标注样式丢失」）。
+            let sub = pick_linear_sub(dim, l.first_point, l.second_point, l.measurement());
             convert_linear(
                 c, doc, base, l.first_point, l.second_point, l.definition_point, sub, &style,
             )
@@ -709,10 +708,33 @@ fn convert_one(
             convert_radial(c, doc, base, center, rim, true, &style).map(Some)
         }
         Dimension::Angular2Ln(g) => {
-            let vertex = g.angle_vertex;
-            let ray1 = g.second_point;
-            let ray2 = pick_second_ray(base, vertex, ray1, g.definition_point, g.dimension_arc);
-            convert_angular(c, doc, base, vertex, ray1, ray2, g.dimension_arc, &style)
+            // 两条边的真实顶点 = 两直线交点（acadrust 语义：first/second 是第 1 条边
+            // 的两端，angle_vertex/definition_point 是第 2 条边的两端）。OCSM 自己生成的
+            // 两条边共顶点，交点即顶点、行为不变；外来图档的两条边一般不共点，取
+            // angle_vertex 当顶点会把角算错（用户报「角度标注样式丢失」）。
+            let line1 = LineGeom {
+                start: to_arr(g.first_point),
+                end: to_arr(g.second_point),
+            };
+            let line2 = LineGeom {
+                start: to_arr(g.angle_vertex),
+                end: to_arr(g.definition_point),
+            };
+            let (vertex, ray2) = match crate::line_intersection_vertex(&line1, &line2) {
+                Some(v) => (v, g.definition_point),
+                // 平行/退化：沿用旧写法（以 angle_vertex 为顶点，在 16/10 里挑第二边）。
+                None => (
+                    g.angle_vertex,
+                    pick_second_ray(
+                        base,
+                        g.angle_vertex,
+                        g.second_point,
+                        g.definition_point,
+                        g.dimension_arc,
+                    ),
+                ),
+            };
+            convert_angular(c, doc, base, vertex, g.second_point, ray2, g.dimension_arc, &style)
                 .map(Some)
         }
         Dimension::Angular3Pt(g) => {
@@ -1002,7 +1024,16 @@ pub(crate) fn plan(doc: &Doc, selected: &[Handle]) -> Dim2GbPlan {
             // 几何自检：线性/对齐测量值必须一致；角度允许补角（原标注画的是优角时）。
             if let Some(entity) = &out {
                 if let Entity::Dimension(new) = entity {
-                    let before = dim.base().actual_measurement;
+                    // 参考测量值取源实体自身几何：外来图档里 base.actual_measurement
+                    // 可能是旧值（甚至角度按弧度存），直接比会把能转的线性/角度标注
+                    // 全部拒掉（用户报「样式部分丢失」）；几何是重建的真实依据。
+                    let before = match &dim {
+                        Dimension::Linear(l) => l.measurement(),
+                        Dimension::Aligned(a) => a.measurement(),
+                        Dimension::Angular2Ln(g) => g.measurement_degrees(),
+                        Dimension::Angular3Pt(g) => g.measurement_degrees(),
+                        _ => dim.base().actual_measurement,
+                    };
                     let after = new.base().actual_measurement;
                     let tol = before.abs() * 1e-6 + 1e-9;
                     let ok = match dim {
@@ -1385,6 +1416,109 @@ mod tests {
         assert_eq!(plan.converted, 1, "角度转换成功: {:?}", plan.skipped);
         let text = block_text(&plan.blocks[0]);
         assert_eq!(text, "90°", "用户所见文字原样保留");
+    }
+
+    /// 外来图档角度标注：组 42 按**弧度**存（0.9599=55°），两条边不共顶点。
+    /// 修复前 `pick_second_ray` 按「度」比较选错边（36.67°）并自检失败跳过；
+    /// 修复后按两线交点取顶点、按几何量重建 55°（用户报「角度样式丢失」）。
+    #[test]
+    fn plan_angular_radian_measurement_converts_by_geometry() {
+        let mut g = DimensionAngular2Ln::default();
+        // line1 竖直（90°）：first→second；line2 35°：angle_vertex→definition_point。
+        g.first_point = Vector3::new(600.0, 40.0, 0.0);
+        g.second_point = Vector3::new(600.0, 135.853_960_445_034_43, 0.0);
+        g.angle_vertex = Vector3::new(600.0, 40.0, 0.0);
+        g.definition_point = Vector3::new(668.485_271_599_475, 87.953_903_430_291_79, 0.0);
+        g.dimension_arc = Vector3::new(717.069_714_094_604_1, 197.251_916_240_068_85, 0.0);
+        g.base.definition_point = g.dimension_arc;
+        g.base.text_middle_point = Vector3::new(650.0, 110.0, 0.0);
+        g.base.actual_measurement = 0.959_931_088_596_879_3; // 55°（弧度口径）
+        g.base.style_name = "Standard".into();
+        let doc = doc_with(vec![Entity::Dimension(Dimension::Angular2Ln(g))]);
+
+        let plan = plan(&doc, &[]);
+        assert_eq!(
+            plan.converted, 1,
+            "外来弧度口径角度也应转换: {:?}",
+            plan.skipped
+        );
+        let Entity::Dimension(new) = &plan.adds[0] else {
+            panic!("期望角度 DIMENSION")
+        };
+        assert_eq!(new.base().style_name, "OCSM_GB", "角度也盖上 OCSM_GB");
+        assert_eq!(new.base().common.layer, "7标注层");
+        assert!(
+            (new.base().actual_measurement - 55.0).abs() < 1e-6,
+            "按几何重建 55°，实际 {}",
+            new.base().actual_measurement
+        );
+    }
+
+    /// 两线各自有独立端点的外来写法：必须按**两线交点**取顶点。
+    /// 修复前以 angle_vertex 当顶点把 40° 算成 42.84° 并自检失败跳过。
+    #[test]
+    fn plan_angular_non_vertex_lines_use_intersection() {
+        let mut g = DimensionAngular2Ln::default();
+        g.first_point = Vector3::new(114.706, 17.534, 0.0);
+        g.second_point = Vector3::new(110.707, 18.990, 0.0);
+        g.angle_vertex = Vector3::new(114.706, 9.534, 0.0);
+        g.definition_point = Vector3::new(110.707, 8.078, 0.0);
+        g.dimension_arc = Vector3::new(104.824, 13.981, 0.0);
+        g.base.definition_point = g.dimension_arc;
+        g.base.text_middle_point = Vector3::new(107.0, 13.0, 0.0);
+        g.base.actual_measurement = 40.0;
+        g.base.style_name = "Standard".into();
+        let doc = doc_with(vec![Entity::Dimension(Dimension::Angular2Ln(g))]);
+
+        let plan = plan(&doc, &[]);
+        assert_eq!(
+            plan.converted, 1,
+            "两线不共顶点的 40° 也应转换: {:?}",
+            plan.skipped
+        );
+        let Entity::Dimension(new) = &plan.adds[0] else {
+            panic!("期望角度 DIMENSION")
+        };
+        assert!(
+            (new.base().actual_measurement - 40.0).abs() < 0.5,
+            "按交点重建 ≈40°，实际 {}",
+            new.base().actual_measurement
+        );
+    }
+
+    /// 外来线性标注：组 42 是旧值/被缩放过（1150），几何与块内文字都是 550。
+    /// 修复前自检拿 1150 比 550 → 跳过；修复后按几何重建、文字保持用户所见。
+    #[test]
+    fn plan_linear_stale_measurement_uses_geometry() {
+        let mut l = DimensionLinear::horizontal(
+            Vector3::new(650.0, 0.0, 0.0),
+            Vector3::new(1200.0, 0.0, 0.0),
+        );
+        l.definition_point = Vector3::new(1199.999_999_999_999_5, -281.265_506_070_485_1, 0.0);
+        l.base.definition_point = l.definition_point;
+        l.base.text_middle_point = Vector3::new(925.0, -270.0, 0.0);
+        l.base.actual_measurement = 1150.0; // 旧值（与几何不符）
+        l.base.text = "550".into();
+        l.base.style_name = "Standard".into();
+        let doc = doc_with(vec![Entity::Dimension(Dimension::Linear(l))]);
+
+        let plan = plan(&doc, &[]);
+        assert_eq!(
+            plan.converted, 1,
+            "陈旧测量值的线性标注也应按几何转换: {:?}",
+            plan.skipped
+        );
+        let Entity::Dimension(new) = &plan.adds[0] else {
+            panic!("期望线性 DIMENSION")
+        };
+        assert_eq!(new.base().style_name, "OCSM_GB", "线性盖 OCSM_GB");
+        assert_eq!(new.base().common.layer, "7标注层");
+        assert!(
+            (new.base().actual_measurement - 550.0).abs() < 1e-6,
+            "按几何 550，实际 {}",
+            new.base().actual_measurement
+        );
+        assert_eq!(new.base().text, "550", "用户所见的文字保持");
     }
 
     /// 弧长标注：走 apply_arclen（收集器 AddEntities 通道）+ 建块。

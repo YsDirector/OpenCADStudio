@@ -634,6 +634,17 @@ pub struct DimStyleDef {
     pub dimtxsty: String,
     /// Text suffix / postfix (DIMPOST, code 3).
     pub dimpost: String,
+    /// Linear measurement scale factor (DIMLFAC, code 144). 1.0 = model units as-is.
+    pub dimlfac: f64,
+    /// Tolerance text height factor (DIMTFAC, code 146).
+    pub dimtfac: f64,
+    /// Angular zero suppression (DIMAZIN, code 79): 0 = off, 2 = trailing, 3 = leading+trailing.
+    pub dimazin: i16,
+    /// Angular fraction format (DIMFRAC, code 276): 0 = decimal degrees.
+    pub dimfrac: i16,
+    /// Text movement when the value is dragged off the dimension line (DIMTMOVE, code 279):
+    /// 0 = keep the text with the dimension line, 1 = add a leader, 2 = free text.
+    pub dimtmove: i16,
     /// Annotative: entities using this style scale with the annotation scale
     /// instead of DIMSCALE. Mutually exclusive with a positive `dimscale`.
     pub annotative: bool,
@@ -676,6 +687,11 @@ impl Default for DimStyleDef {
             dimlwe: -1,
             dimtxsty: String::new(),
             dimpost: String::new(),
+            dimlfac: 1.0,
+            dimtfac: 1.0,
+            dimazin: 0,
+            dimfrac: 0,
+            dimtmove: 0,
             annotative: false,
         }
     }

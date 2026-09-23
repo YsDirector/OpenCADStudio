@@ -713,6 +713,14 @@ impl HostApi for HostSession<'_> {
             style.dimzin = def.dimzin;
             style.dimaunit = def.dimaunit;
             style.dimadec = def.dimadec;
+            // ── Type-specific vars (linear / angular / tolerance / text movement) ──
+            // Pinned explicitly so a document whose current style carries non-GB
+            // values (imported drawings, TH_GBDIM, …) cannot leak into OCSM_GB.
+            style.dimlfac = def.dimlfac;
+            style.dimtfac = def.dimtfac;
+            style.dimazin = def.dimazin;
+            style.dimfrac = def.dimfrac;
+            style.dimtmove = def.dimtmove;
             // ── Tolerances ──
             style.dimtol = def.dimtol;
             style.dimtp = def.dimtp;
@@ -1405,6 +1413,12 @@ mod tests {
             dimlwe: -1,
             dimtxsty: "OCSM_GB".into(),
             dimpost: String::new(),
+            // 非默认值：证明宿主映射真的把这 5 个类型专属 DIMVAR 写进样式表。
+            dimlfac: 2.5,
+            dimtfac: 0.71,
+            dimazin: 2,
+            dimfrac: 1,
+            dimtmove: 1,
             annotative: false,
         };
         let i = 0;
@@ -1423,6 +1437,13 @@ mod tests {
         assert_eq!(style.dimclrd, 130);
         assert_eq!(style.dimclrt, 3);
         assert_eq!(style.dimtxsty, "OCSM_GB");
+        // 类型专属 DIMVAR（线性/角度/公差/文字移动）必须由 def 明确写入，
+        // 不能从当前样式继承 —— 否则外来图档的旧值会漏进 OCSM_GB。
+        assert_eq!(style.dimlfac, 2.5, "DIMLFAC from def");
+        assert_eq!(style.dimtfac, 0.71, "DIMTFAC from def");
+        assert_eq!(style.dimazin, 2, "DIMAZIN from def");
+        assert_eq!(style.dimfrac, 1, "DIMFRAC from def");
+        assert_eq!(style.dimtmove, 1, "DIMTMOVE from def");
         let th = doc
             .text_styles
             .get("OCSM_GB")
