@@ -120,8 +120,9 @@
 //!   的独立「磨外圆」要素同口径也不画，见 `detail.rs` 顶部画法说明）；
 //! - 落层：轮廓/端面/倒角/槽/边界竖线 → `1轮廓实线层`；**螺纹小径/螺尾
 //!   细实线** → `2细线层`（螺纹线是几何线，保留；本轴无螺纹时自然为 0 条）；
-//!   轴线与分度线 → `3中心线层`（点划线，轴线长度 = 总长 +
-//!   图框比例 × 6，两端各半）；`剖视` 的剖面线 → `5剖面线层`。
+//!   轴线与分度线 → `3中心线层`（点划线；轴线长度 = 总长 +
+//!   图框比例 × 6，两端各半；齿形段分度线长度 = 段长 + 图框比例 × 6，两端各半
+//!   —— 与齿轮生成器 `gear::centerline_len` 同一口径）；`剖视` 的剖面线 → `5剖面线层`。
 //!
 //! ## 视图口径（`VIEW`）
 //!
@@ -3556,9 +3557,13 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
                 entities.push(line([ta, ra], [tb, ra], LAYER_MAIN));
                 entities.push(line([ta, -ra], [tb, -ra], LAYER_MAIN));
             }
-            // 分度线（点划线，3中心线层；不受倒角影响）
-            entities.push(line([x0, r], [x1, r], LAYER_CENTER));
-            entities.push(line([x0, -r], [x1, -r], LAYER_CENTER));
+            // 分度线（点划线，3中心线层；不受倒角影响）—— 凸出量与齿轮生成器中心线**同一口径**：
+            // 总长 = 特征长 + `CENTER_OVERHANG`×n（两端各 3n），绕段中心对称（`gear::centerline_len`，
+            // 与 `gear.rs::side_view` / `spline_axial_view` / `internal_bore_section` 同一函数）。
+            let cl = crate::gear::centerline_len(seg.l, frame_scale);
+            let xm = x0 + seg.l / 2.0;
+            entities.push(line([xm - cl / 2.0, r], [xm + cl / 2.0, r], LAYER_CENTER));
+            entities.push(line([xm - cl / 2.0, -r], [xm + cl / 2.0, -r], LAYER_CENTER));
             // 内侧直径线（外齿 = 齿根圆 / 内齿 = 里侧齿顶）：剖视恒画（`1轮廓实线层`，齿部按不剖，
             // 也是剖面线边界）；**常规侧视图按 MARK 开关** —— `SPLINE`（渐开线花键）画 `2细线层`
             // （青色 ACI 4）小径细实线、`GEAR`（齿轮）不画（既有齿轮口径「无齿根线」；
@@ -5958,17 +5963,17 @@ GEAR M3 Z20";
                 EntityType::Line(l)
                     if near(l.start.y, y)
                         && near(l.end.y, y)
-                        && near(l.start.x, 20.0)
-                        && near(l.end.x, 50.0) =>
+                        && near(l.start.x, 17.0)
+                        && near(l.end.x, 53.0) =>
                 {
                     Some(l.common.layer.as_str())
                 }
                 _ => None,
             })
         };
-        // 分度线 → 3中心线层（点划线）
-        assert!(has_line(&shaft, [20.0, r], [50.0, r]));
-        assert!(has_line(&shaft, [20.0, -r], [50.0, -r]));
+        // 分度线 → 3中心线层（点划线）；凸出量 = 3n 每端（与 `gear::centerline_len` 同口径）
+        assert!(has_line(&shaft, [17.0, r], [53.0, r]));
+        assert!(has_line(&shaft, [17.0, -r], [53.0, -r]));
         assert_eq!(layer_of_y(r), Some(crate::partgen_kit::LAYER_CENTER));
         // 内侧直径线（齿根圆）：统一表达式的 MARK 画法开关 —— 既有口径（`gear.rs:4364` 测试 +
         // handbook 16 §九）：**花键（SPLINE）常规侧视图画小径细实线，齿轮（GEAR）不画（无齿根线）**；
@@ -6005,6 +6010,94 @@ GEAR M3 Z20";
         // 最大直径按齿顶圆算
         assert!(near(shaft.max_diameter, 66.0));
         assert!(near(shaft.total_length, 50.0));
+    }
+
+    /// 跨模块一致性（用户报 bug）：轴侧齿形段的两条 `3中心线层` 分度线，凸出量必须与
+    /// GEAR 生成器中心线**同一口径** `gear::centerline_len(L, n) = L + 6n`（两端各 3n，
+    /// `gear.rs:61/68`）。外/内齿轮与外/内花键（SPLINE 标记）都查；与 GEAR 生成器同参数
+    /// 视图（外齿 `side_view` / 内齿 `generate(Section)`）的 x 范围逐个对齐（容差 1e-6）。
+    #[test]
+    fn tooth_pitch_lines_match_gear_centerline_overhang() {
+        fn pitch_range(entities: &[EntityType], d2: f64) -> (f64, f64) {
+            entities
+                .iter()
+                .find_map(|e| match e {
+                    EntityType::Line(l)
+                        if l.common.layer == LAYER_CENTER
+                            && (l.start.y - d2).abs() < 1e-9
+                            && (l.start.y - l.end.y).abs() < 1e-9 =>
+                    {
+                        Some((l.start.x.min(l.end.x), l.start.x.max(l.end.x)))
+                    }
+                    _ => None,
+                })
+                .expect("应有一条分度线")
+        }
+        let n = 1.0;
+        let cases: [(&str, bool); 4] = [
+            ("GEAR EX M3 Z20 ALPHA20 X0 DA66 DF52.5 BETA0 H30", false),
+            ("SPLINE EX M3 Z20 ALPHA30 X0 DA63 DF54.6 BETA0 H30", false),
+            ("GEAR IN M3 Z20 ALPHA20 X0 DA67.5 DF54 BETA0 H30", true),
+            ("SPLINE IN M3 Z20 ALPHA30 X0 DA65.4 DF57.3436 BETA0 H30", true),
+        ];
+        for (expr, internal) in cases {
+            for view in ["", " | VIEW 剖视", " | VIEW 双"] {
+            let program = parse_program(&format!("{expr}{view}")).unwrap();
+            let g = program.segments[0].gear.unwrap();
+            assert_eq!(g.kind.is_internal(), internal, "{expr}{view}");
+            let shaft = build(&program, n).unwrap();
+            let d2 = g.pitch_radius();
+            let (sx0, sx1) = pitch_range(&shaft.entities, d2);
+            // 轴侧单独断言：凸出量 = 3n/端，总长 = L + 6n，图层不变。
+            let over = crate::gear::CENTER_OVERHANG * n / 2.0; // 3n
+            let want = crate::gear::centerline_len(g.width(), n);
+            assert!((sx0 + over).abs() < 1e-6, "{expr}{view}: 左端应凸出 3n，实得 {sx0}");
+            assert!(
+                (sx1 - (g.width() + over)).abs() < 1e-6,
+                "{expr}{view}: 右端应凸出 3n，实得 {sx1}"
+            );
+            assert!(
+                ((sx1 - sx0) - want).abs() < 1e-6,
+                "{expr}{view}: 分度线长应为 L+6n={want}"
+            );
+            assert_eq!(
+                layer_of_line(&shaft, [sx0, d2], [sx1, d2]),
+                Some(LAYER_CENTER),
+                "{expr}{view}"
+            );
+            // 跨模块：GEAR 生成器同参数视图的 x 范围（轴侧以段左端 0、齿轮以中心 0，
+            // 齿轮侧平移段半长后应逐值相等）。
+            let gp = GearParams {
+                kind: g.kind,
+                m: g.m,
+                z: g.z,
+                alpha_deg: g.alpha_deg,
+                beta_deg: 0.0,
+                h: g.width(),
+                x: g.x,
+                ..GearParams::default()
+            };
+            let gear_entities = if internal {
+                crate::gear::generate(&gp, crate::gear::GearView::Section, n)
+                    .unwrap()
+                    .entities
+            } else {
+                crate::gear::side_view(&gp, n).unwrap()
+            };
+            let (gx0, gx1) = pitch_range(&gear_entities, d2);
+            let shift = g.width() / 2.0;
+            assert!(
+                (sx0 - (gx0 + shift)).abs() < 1e-6,
+                "{expr}{view}: 左端与 GEAR 不一致 {sx0} vs {}",
+                gx0 + shift
+            );
+            assert!(
+                (sx1 - (gx1 + shift)).abs() < 1e-6,
+                "{expr}{view}: 右端与 GEAR 不一致 {sx1} vs {}",
+                gx1 + shift
+            );
+            }
+        }
     }
 
     /// 统一表达式 MARK 画法开关（方向修正 2026-09-23：以既有口径为准）：同一组参数下，
@@ -6631,7 +6724,7 @@ GEAR M3 Z20";
         assert!(has_line(&shaft, [173.0, 33.0], [175.0, 31.0]), "齿轮右端倒角");
         // 齿轮：齿顶面（h−2C = 26，±33）/ 分度（点划线，±30）；GEAR 常规视图不画齿根细实线（±26.25）
         assert!(has_line(&shaft, [147.0, 33.0], [173.0, 33.0]), "齿顶面（缩进 2C）");
-        assert!(has_line(&shaft, [145.0, 30.0], [175.0, 30.0]), "分度线");
+        assert!(has_line(&shaft, [142.0, 30.0], [178.0, 30.0]), "分度线（凸出 3n/端，与 GEAR 同口径）");
         assert!(
             !has_line(&shaft, [145.0, 26.25], [175.0, 26.25]),
             "GEAR 常规视图不画齿根细实线（齿轮「无齿根线」）"
@@ -6658,7 +6751,7 @@ GEAR M3 Z20";
             })
         };
         assert_eq!(
-            layer_at(145.0, 30.0),
+            layer_at(142.0, 30.0),
             Some(crate::partgen_kit::LAYER_CENTER)
         );
         assert_eq!(layer_at(145.0, 26.25), None, "GEAR 常规视图无齿根细实线");
