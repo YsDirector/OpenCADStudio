@@ -1880,27 +1880,27 @@ pub fn catalog_payload() -> serde_json::Value {
             })
         })
         .collect();
-    // NF 候选按 `(m,A,N)` 去重（p18 与 p20/21/22 重复行只留信息全的，与引擎查表同口径）。
-    let mut nf_nominal: Vec<serde_json::Value> = Vec::new();
-    for r in nf_e22141_rows() {
-        if nf_nominal.iter().any(|v| {
-            (v["m"].as_f64().unwrap_or(f64::NAN) - r.m).abs() < 1e-9
-                && (v["a"].as_f64().unwrap_or(f64::NAN) - r.a).abs() < 1e-9
-                && v["z"].as_u64() == Some(r.z as u64)
-        }) {
-            continue;
-        }
-        nf_nominal.push(serde_json::json!({
-            "a": r.a,
-            "m": r.m,
-            "z": r.z,
-            "x": r.x,
-            "page": r.page,
-            "source": r.source,
-            "table": r.table_no,
-            "fixes": r.fixes,
-        }));
-    }
+    // NF 名义表**整表下发（288 行）**：包含 p18 与 p20/21/22 的 (m,A,N) 重复变体。
+    // 不在载荷层去重有两层原因：
+    //   ① GUI 的候选列表按「当前 m」过滤后再用 Set 去重显示，重复行无害；
+    //   ② 去重若保留先出现的 p18 行（无 x 列，JSON 里 `x:null`），会盖掉 p20+ 的 x 表值，
+    //      前端 `deriveBenchX` 的 `Number(null)===0` 会让只读 x 显示 0（已有护栏在测）。
+    // 引擎查表 `lookup_by_a()` 自己按 (m,A,N) 去重并优先留信息全的行（既有行为）。
+    let nf_nominal: Vec<serde_json::Value> = nf_e22141_rows()
+        .iter()
+        .map(|r| {
+            serde_json::json!({
+                "a": r.a,
+                "m": r.m,
+                "z": r.z,
+                "x": r.x,
+                "page": r.page,
+                "source": r.source,
+                "table": r.table_no,
+                "fixes": r.fixes,
+            })
+        })
+        .collect();
     let din_inspection: Vec<serde_json::Value> = inspection_rows()
         .iter()
         .map(|r| {
@@ -6961,6 +6961,59 @@ mod tests {
             .find(|r| r.page == 18 && (r.a - 130.0).abs() < 1e-9)
             .expect("p18 m=3.75 A=130");
         assert!((d130.internal_tip.unwrap() - 132.5).abs() < 1e-9, "印误值保留");
+    }
+
+    /// 目录载荷：NF 名义表**整表 288 行**下发（不在载荷层按 (m,A,N) 去重），
+    /// 且逐 m 的 A 候选集合与 `assets/nf_e22141_dims.csv` 完全一致（含 1.667/3.75/7.5）；
+    /// `partgen::catalog_json()`（=/api/parts 顶层 `spline_engine`）同样 288 条。
+    #[test]
+    fn catalog_payload_nf_nominal_full_288_and_per_module_a_sets() {
+        use std::collections::{BTreeMap, BTreeSet};
+        let p = catalog_payload();
+        let nf = p["nf_nominal"].as_array().expect("catalog_payload 缺 nf_nominal 数组");
+        assert_eq!(nf.len(), 288, "NF 名义表应整表下发（p18 144 + p20 39 + p21 49 + p22 56）");
+        // 载荷 (m→A 集合) 与 CSV 直读集合逐条一致（值乘 1000 取整，避开浮点键）。
+        let key = |v: f64| (v * 1000.0).round() as i64;
+        let mut payload: BTreeMap<i64, BTreeSet<i64>> = BTreeMap::new();
+        for r in nf {
+            let m = key(r["m"].as_f64().expect("nf_nominal[m] 非数字"));
+            let a = key(r["a"].as_f64().expect("nf_nominal[a] 非数字"));
+            payload.entry(m).or_default().insert(a);
+        }
+        let mut table: BTreeMap<i64, BTreeSet<i64>> = BTreeMap::new();
+        for r in nf_e22141_rows() {
+            table.entry(key(r.m)).or_default().insert(key(r.a));
+        }
+        assert_eq!(payload, table, "载荷 (m,A) 集合应与 CSV 完全一致");
+        // 逐 m 的 A 个数清单（用户要求；改表改错在这里报出来）。
+        let want_counts: [(i64, usize); 10] = [
+            (500, 9),
+            (750, 9),
+            (1000, 10),
+            (1250, 11),
+            (1667, 11),
+            (2500, 17),
+            (3750, 21),
+            (5000, 24),
+            (7500, 15),
+            (10000, 17),
+        ];
+        for (m, n) in want_counts {
+            let got = payload.get(&m).map(|s| s.len()).unwrap_or(0);
+            assert_eq!(got, n, "m={} 的 A 候选应 {n} 个（实际 {got}）", m as f64 / 1000.0);
+        }
+        let all_a: BTreeSet<i64> = payload.values().flatten().copied().collect();
+        assert_eq!(all_a.len(), 48, "全部 A 候选去重后应 48 个");
+        // 完整链路：`/api/parts` 顶层 `spline_engine` 里也必须是 288 条（前端 `involNfNominal` 的输入）。
+        let cat: serde_json::Value =
+            serde_json::from_str(&crate::partgen::catalog_json()).expect("catalog_json 应是 JSON");
+        let via_api = cat["spline_engine"]["nf_nominal"]
+            .as_array()
+            .expect("catalog_json.spline_engine.nf_nominal");
+        assert_eq!(via_api.len(), 288, "catalog_json 的 spline_engine.nf_nominal 应 288 条");
+        // DIN 回归对照：名义表 721 行整表下发（前端 dinDbList 的输入）。
+        let din = cat["spline_engine"]["din_nominal"].as_array().expect("din_nominal");
+        assert_eq!(din.len(), din5480_rows().len(), "DIN 名义表应整表下发");
     }
 
     /// 查表：各 m 抽样命中（含 p18/p20 重复行的去重）、A+m / A+z 推导、未命中文案。

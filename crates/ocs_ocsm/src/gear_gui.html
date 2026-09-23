@@ -110,6 +110,7 @@
           d_B 只属于 DIN 5480；NF E22-141 用公称直径 A。GB/T 3478 下不给（本体系没有基准直径）。
           给 d_B / A 后 m 或 z 可空一个：由表定另一个。
         </div>
+        <div class="hint warn" id="dbListHint" style="flex-basis:100%; margin:0"></div>
       </div>
 
       <label id="sysLabel" for="sysSel">齿轮体系</label>
@@ -671,6 +672,10 @@ function syncSplineUI() {
       ? "NF E22-141 查表（必给；N 由 A 与 m 决定）"
       : "DIN 5480-2 查表（必给；z 由 d_B 与 m 决定）";
     el("db").setAttribute("list", std === "NF" ? "nfAList" : "dinDbList");
+    // 候选列表按当前 m 过滤（m 空/表外列全表）；非基准体系清掉回落提示。
+    if (bench) fillBenchList(std);
+    else benchFallbackMsg = "";
+    syncBenchHint(bench ? std : "");
     el("dbHint").textContent = std === "NF"
       ? "A 是 NF E22-141 的主参数（A=m(N+2x+0.4)，α=20°）；必须给 A 与 m（N 由二者决定，不单独编辑）。"
       : "d_B 只属于 DIN 5480；必须给 d_B 与 m（z 由二者决定，不单独编辑）；GB/T 3478 下不给。";
@@ -730,34 +735,85 @@ function applySplinePreset() {
   syncAlphaSelect();
 }
 
-// DIN 5480-2 名义表候选（datalist）；目录拿不到就空。
-function fillDinDbList() {
-  const dl = el("dinDbList");
-  if (!dl) return;
-  dl.innerHTML = "";
-  [...new Set(involDinNominal.map((r) => Number(r.db)))]
-    .filter((v) => Number.isFinite(v))
-    .sort((a, b) => a - b)
-    .forEach((v) => {
-      const o = document.createElement("option");
-      o.value = String(v);
-      dl.appendChild(o);
-    });
+// ── 基准直径候选（DIN d_B / NF A）：datalist 只列**当前 m** 的表内值 ──
+// m 空或不在表内 → 列全表（保留「先填 d_B/A、由表带出 m」的用法）。
+// 数据逐条来自 assets/din5480_2_nominal.csv / assets/nf_e22141_dims.csv（catalog 载荷），不插值。
+const BENCH_META = {
+  DIN: { key: "db", name: "d_B", list: "dinDbList", table: "DIN 5480-2 名义表" },
+  NF: { key: "a", name: "A", list: "nfAList", table: "NF E22-141 尺寸表" },
+};
+let benchFallbackMsg = "";   // 最近一次 m 变化触发的回落说明（可见提示，优先显示）
+function benchRows(std) {
+  const rows = std === "NF" ? involNfNominal : (std === "DIN" ? involDinNominal : []);
+  const mv = Number(el("m").value);
+  const inTable = Number.isFinite(mv) && mv > 0
+    && rows.some((r) => Math.abs(Number(r.m) - mv) < 1e-9);
+  return { rows: inTable ? rows.filter((r) => Math.abs(Number(r.m) - mv) < 1e-9) : rows, inTable, m: mv };
 }
-
-// NF E22-141 公称直径 A 候选（datalist）；目录拿不到就空。
-function fillNfAList() {
-  const dl = el("nfAList");
-  if (!dl) return;
-  dl.innerHTML = "";
-  [...new Set(involNfNominal.map((r) => Number(r.a)))]
+// 当前 m 下的候选直径值（升序去重；m 不在表内 → 全表值）。
+function benchValues(std) {
+  const b = benchRows(std);
+  const key = BENCH_META[std].key;
+  const vals = [...new Set(b.rows.map((r) => Number(r[key])))]
     .filter((v) => Number.isFinite(v))
-    .sort((a, b) => a - b)
-    .forEach((v) => {
-      const o = document.createElement("option");
-      o.value = String(v);
-      dl.appendChild(o);
-    });
+    .sort((a, c) => a - c);
+  return { ...b, vals };
+}
+// 重建 datalist（只列当前 m 的合法值）；返回候选信息供联动/回落复用。
+function fillBenchList(std) {
+  const dl = el(BENCH_META[std].list);
+  if (!dl) return benchValues(std);
+  const b = benchValues(std);
+  dl.innerHTML = "";
+  b.vals.forEach((v) => {
+    const o = document.createElement("option");
+    o.value = String(v);
+    dl.appendChild(o);
+  });
+  return b;
+}
+// DIN 5480-2 名义表 d_B 候选（datalist）；目录拿不到就空。
+function fillDinDbList() { return fillBenchList("DIN"); }
+// NF E22-141 公称直径 A 候选（datalist）；目录拿不到就空。
+function fillNfAList() { return fillBenchList("NF"); }
+
+// 基准直径行的可见提示：回落信息优先，否则说明当前 m 的候选范围（DIN/NF）。
+function syncBenchHint(std) {
+  const h = el("dbListHint");
+  if (!h) return;
+  if (!isSpline() || !BENCH_META[std]) {
+    h.className = "hint warn";
+    h.textContent = "";
+    return;
+  }
+  const meta = BENCH_META[std];
+  if (benchFallbackMsg) {
+    h.className = "hint warn";
+    h.textContent = benchFallbackMsg;
+    return;
+  }
+  const b = benchValues(std);
+  h.className = "hint";
+  h.textContent = b.inTable
+    ? "当前 m=" + fmt(b.m) + "：" + meta.name + " 候选 " + b.vals.length + " 个（来自 " + meta.table + "；改 m 立即重列）"
+    : meta.name + " 候选 " + b.vals.length + " 个（未选 m 或 m 不在表内：先列全表，选定 m 后自动缩小）";
+}
+// m 变化/切体系时：当前 d_B/A 不在该 m 的候选里 → 回落到**最近的合法表值**并给可见提示
+// （不静默保留非法组合；只在 m 提交/切换时触发，不在 A 输入途中打断用户）。
+function syncBenchFallback(std) {
+  if (!isSpline() || !BENCH_META[std]) { benchFallbackMsg = ""; return; }
+  const meta = BENCH_META[std];
+  const b = benchValues(std);
+  const cur = Number(String(el("db").value).trim());
+  if (!b.inTable || !b.vals.length || !(cur > 0) || b.vals.some((v) => Math.abs(v - cur) < 1e-6)) {
+    benchFallbackMsg = "";
+    return;
+  }
+  const fb = b.vals.reduce((a, c) => (Math.abs(c - cur) < Math.abs(a - cur) - 1e-12 ? c : a));
+  el("db").value = fmt(fb);
+  benchFallbackMsg = "⚠ 已从 " + meta.name + "=" + fmt(cur) + " 回落到 " + meta.name + "=" + fmt(fb)
+    + "（最近合法值）：该值不在 m=" + fmt(b.m) + " 的 " + meta.table + " 候选里（该 m 有 "
+    + b.vals.length + " 个合法值）。";
 }
 
 // 齿数是否由 (d_B/A, m) 锁定（DIN/NF；GB/ANSI 不锁）。
@@ -839,7 +895,8 @@ function deriveBenchX(std, bench, m, z) {
     .find((r) => Math.abs(Number(r[key]) - bench) < 1e-6
       && Math.abs(Number(r.m) - m) < 1e-9
       && Number(r.z) === z
-      && Number.isFinite(Number(r.x)));
+      // 载荷含 p18 重复行（x 列缺省 → JSON null）；`Number(null)===0` 会假命中，必须显式排除。
+      && r.x !== null && r.x !== undefined && Number.isFinite(Number(r.x)));
   if (hit) return Number(hit.x);
   return std === "NF" ? (bench - m * (z + 0.4)) / (2 * m) : (bench - m * (z + 1.1)) / (2 * m);
 }
@@ -889,6 +946,7 @@ async function loadInvolCatalog() {
   el("mSel").dataset.mode = "";   // 目录到货后重建 ANSI A/B 选项
   fillDinDbList();
   fillNfAList();
+  syncBenchHint(el("stdSel").value);
   syncProfileSelect();
   applySplinePreset();
 }
@@ -1329,6 +1387,7 @@ function ping(bye) {
       // ANSI 下拉值是 A/B（如 5/10），数字框只收 P 数值；其余体系直接填模数值。
       el("m").value = isAnsiMode() ? fmt(ansiPitchP(sel.value)) : sel.value;
     }
+    syncBenchFallback(el("stdSel").value);   // 下拉选定 m：非法 A/d_B 立即回落 + 提示
     onInput();
   });
 
@@ -1370,9 +1429,17 @@ function ping(bye) {
     }
     if (id === "db") {
       // 选了 d_B（DIN）/ A（NF）→ 唯一 m 时自动带出；z 随后由 (d_B/A, m) 联动回填。
-      // 先于 onInput 注册，保证 onInput 里 syncLockedZ 看到的是带出后的 m。
+      // 先于 onInput 注册，保证 onInput 里 syncLockedZ 看到的是带出后的 m；
+      // 用户一改直径就清回落提示（重新按候选说明）。
+      n.addEventListener("input", () => { benchFallbackMsg = ""; });
+      n.addEventListener("change", () => { benchFallbackMsg = ""; });
       n.addEventListener("input", fillBench);
       n.addEventListener("change", fillBench);
+    }
+    if (id === "m") {
+      // m 提交（blur/Enter/下拉）→ 当前 A/d_B 不在该 m 的表内候选里就回落 + 可见提示；
+      // input 只重列候选，不打断用户输入 m 的过程。
+      n.addEventListener("change", () => syncBenchFallback(el("stdSel").value));
     }
     n.addEventListener("input", onInput);
     n.addEventListener("change", onInput);
@@ -1395,6 +1462,7 @@ function ping(bye) {
 
   // 模式复选框：进/出花键模式（重建种类文案/视图按钮/显隐与预设）
   el("splineMode").addEventListener("change", () => {
+    syncBenchFallback(el("stdSel").value);   // 进/出花键：按新体系检查 A/d_B 合法性
     syncSplineUI();
     syncProfileSelect();
     if (isSpline()) applySplinePreset();
@@ -1408,6 +1476,7 @@ function ping(bye) {
   });
   // 花键标准/齿廓下拉：换标准重建齿廓；换齿廓带出预设系数
   el("stdSel").addEventListener("change", () => {
+    syncBenchFallback(el("stdSel").value);   // 切体系：d_B/A 换表，非法值回落 + 提示
     syncSplineUI();
     syncProfileSelect();
     if (isSpline()) applySplinePreset();

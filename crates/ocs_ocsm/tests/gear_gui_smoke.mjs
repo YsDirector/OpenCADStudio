@@ -10,6 +10,7 @@
 // 用法：node gear_gui_smoke.mjs <gear_gui.html 路径>
 
 import fs from 'node:fs';
+import path from 'node:path';
 
 const htmlPath = process.argv[2];
 if (!htmlPath) {
@@ -23,6 +24,53 @@ if (!m) {
   process.exit(2);
 }
 const script = m[1];
+
+// ── 真实表数据：直接读与 Rust 侧 include_str! 同一批 CSV（避免桩与表漂移）──
+// 与 Rust split_csv_line/csv_decimal 同口径：引号内的逗号不拆，十进制逗号转点。
+function splitCsvLine(line) {
+  const out = []; let cur = ''; let quoted = false;
+  for (const ch of line) {
+    if (ch === '"') quoted = !quoted;
+    else if (ch === ',' && !quoted) { out.push(cur); cur = ''; }
+    else cur += ch;
+  }
+  out.push(cur);
+  return out;
+}
+const dec = (s) => {
+  const t = String(s).trim();
+  if (t === '') return null;   // 与 Rust csv_decimal 同口径：空格子解析失败（非 0）
+  const v = Number(t.replace(',', '.'));
+  return Number.isFinite(v) ? v : null;
+};
+function readCsv(file) {
+  return fs.readFileSync(file, 'utf8').split('\n')
+    .filter((line) => line.trim() !== '' && !line.startsWith('#'))
+    .map((line) => splitCsvLine(line.trimEnd()))
+    .filter((f) => f[0].trim() !== 'page');
+}
+const csvDir = path.join(path.dirname(path.resolve(htmlPath)), '..', 'assets');
+// NF E22-141 尺寸表：page,table_no,source,m,A,N,…,x(第 9 列)；x 缺省 = p18 行。
+const NF_CSV = readCsv(path.join(csvDir, 'nf_e22141_dims.csv')).map((f) => ({
+  a: dec(f[4]), m: dec(f[3]), z: Number(f[5]), x: dec(f[8]), page: Number(f[0]),
+}));
+// DIN 5480-2 名义表：page,m,table_no,d_B,z,…,x1_m(第 8 列，x_m)；载荷里 x=x_m/m。
+const DIN_CSV = readCsv(path.join(csvDir, 'din5480_2_nominal.csv')).map((f) => {
+  const m = dec(f[1]);
+  return { db: dec(f[3]), m, z: Number(f[4]), x: dec(f[7]) / m, page: Number(f[0]) };
+});
+// 逐 m 的候选集合（升序去重），测试与页面 datalist 逐项对比。
+const byModule = (rows, key) => {
+  const map = new Map();
+  for (const r of rows) {
+    const k = String(Number(r.m));
+    if (!map.has(k)) map.set(k, new Set());
+    map.get(k).add(Number(r[key]));
+  }
+  return new Map([...map].map(([k, set]) => [k, [...set].sort((a, b) => a - b)]));
+};
+const NF_BY_M = byModule(NF_CSV, 'a');
+const DIN_BY_M = byModule(DIN_CSV, 'db');
 
 const errors = [];
 const check = (cond, msg) => { if (!cond) errors.push(msg); };
@@ -73,7 +121,7 @@ global.setTimeout = (fn) => { timers.push(fn); return timers.length; };
 global.clearTimeout = () => {};
 global.setInterval = () => 0;
 
-// ── /api/parts 桩（预设 + DIN 名义表，同目录数据形状；引擎数据在顶层 spline_engine） ──
+// ── /api/parts 桩（预设 + 真实 DIN/NF 名义表，与 assets CSV 同源；引擎数据在顶层 spline_engine） ──
 const PARTS = {
   spline_engine: {
       invol_presets: [
@@ -94,12 +142,8 @@ const PARTS = {
       gb_modules: [0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2, 2.5, 3, 4, 5, 6, 8, 10],
       din_modules: [0.5, 0.6, 0.75, 0.8, 1, 1.25, 1.5, 1.75, 2, 2.5, 3, 4, 5, 6, 8, 10],
       nf_modules: [0.5, 0.75, 1, 1.25, 1.667, 2.5, 3.75, 5, 7.5, 10],
-      din_nominal: [{ db: 40, m: 2, z: 18, x: 0.45, page: 27 }],
-      nf_nominal: [
-        { a: 80, m: 3.75, z: 19, x: 0.967, page: 21 },
-        { a: 45, m: 1.667, z: 27, x: 0.8, page: 21 },
-        { a: 240, m: 7.5, z: 32, x: 0.8, page: 22 },
-      ],
+      din_nominal: DIN_CSV,
+      nf_nominal: NF_CSV,
   },
 };
 const INFO = {
@@ -235,11 +279,25 @@ check(el('stdHint').textContent.includes('A 主参数'), 'NF 提示应含「A �
 check(el('profileSel').value === 'NFP', 'NF 默认齿廓应为 NFP，实际 ' + el('profileSel').value);
 check(Math.abs(numOf('hf') - 1.0) < 1e-9, 'NFP hf 预设应 1.0，实际 ' + numOf('hf'));
 check(el('mLabel').style.display !== 'none', 'NF 下模数 m 行应显示（A + m 两参数体系）');
-el('db').value = '80';
-try { el('db')._fire('change', el('db')); } catch (e) { errors.push('A 自动带出异常: ' + e); }
+// 新联动顺序：先定 m（下拉），A 候选只列该 m 的表内值；A=80 在 m=3.75 下带出 z=19、表值 x=0.967。
+el('mSel').value = '3.75';
+try { el('mSel')._fire('change', el('mSel')); } catch (e) { errors.push('NF m 选择异常: ' + e); }
 await flush();
-check(Math.abs(numOf('m') - 3.75) < 1e-9, 'A80 应带出 m=3.75，实际 ' + numOf('m'));
-check(el('z').value === '19', 'A80 应带出 z=19，实际 ' + el('z').value);
+check(Math.abs(numOf('m') - 3.75) < 1e-9, 'mSel 选 3.75 应填 m=3.75，实际 ' + el('m').value);
+el('db').value = '80';
+try { el('db')._fire('change', el('db')); } catch (e) { errors.push('NF A 联动异常: ' + e); }
+await flush();
+check(el('m').value === '3.75' && el('z').value === '19',
+  'NF m=3.75/A=80 应带出 z=19，实际 ' + el('m').value + '/' + el('z').value);
+check(Math.abs(numOf('x') - 0.967) < 1e-3,
+  'NF A=80/m=3.75/N=19 应显示表值 x=0.967（p18 空 x 行不得盖成 0），实际 ' + el('x').value);
+// 按 m 过滤：datalist 只列当前 m 的 A（m=3.75 → 21 个 30..150；不含 m=5 的 160）。
+const a375 = el('nfAList').children.map((o) => Number(o.value)).sort((a, b) => a - b);
+check(a375.length === 21 && a375[0] === 30 && a375[20] === 150,
+  'NF m=3.75 的 A 候选应 21 个（30..150），实际 ' + a375.length + '：' + a375.join('|'));
+check(a375.indexOf(160) < 0, 'NF m=3.75 的 A 候选不应含 m=5 的 160：' + a375.join('|'));
+check(el('dbListHint').textContent.includes('候选 21 个'),
+  '候选提示应写出 m=3.75 的 21 个：' + el('dbListHint').textContent);
 // ANSI：基准直径行隐藏；径节输入切到 17 项 A/B 下拉 + 自定义；hf/rho/cf 隐藏。
 el('stdSel').value = 'ANSI';
 try { el('stdSel')._fire('change', el('stdSel')); } catch (e) { errors.push('ANSI 切换异常: ' + e); }
@@ -411,8 +469,31 @@ check(Math.abs(numOf('x') - 0.45) < 1e-9, 'DIN d_B=40/m=2/z=18 应显示表值 x
 el('m').value = '2.5';
 try { el('m')._fire('input', el('m')); } catch (e) { errors.push('DIN m 联动异常: ' + e); }
 await flush();
-check(el('z').value === '15', 'DIN d_B=40/m=2.5 应联动 z=15，实际 ' + el('z').value);
+check(el('z').value === '14', 'DIN d_B=40/m=2.5 应联动表内 z=14，实际 ' + el('z').value);
 check(el('z').readOnly === true, 'DIN 改 m 后 z 仍应只读');
+// DIN 逐 m 断言：16 档 m 的 d_B 候选集合 == CSV 该 m 的 d_B 集合（721 行 / 89 个去重）。
+for (const [mk, wantDb] of DIN_BY_M) {
+  el('m').value = mk;
+  try { el('m')._fire('change', el('m')); } catch (e) { errors.push('DIN m=' + mk + ' 切换异常: ' + e); }
+  await flush();
+  const gotDb = el('dinDbList').children.map((o) => Number(o.value)).sort((a, b) => a - b);
+  check(JSON.stringify(gotDb) === JSON.stringify(wantDb),
+    'DIN m=' + mk + ' 的 d_B 候选应 CSV 集合 ' + wantDb.join('|') + '，实际 ' + gotDb.join('|'));
+}
+// DIN 回落：m=0.5 的 d_B 最大 40，d_B=41 应回落到 40 + 可见提示。
+el('m').value = '2';
+el('m')._fire('change', el('m'));
+await flush();
+el('db').value = '41';
+el('db')._fire('change', el('db'));
+await flush();
+check(el('db').value === '41', 'A/d_B 输入完成后不立即回落（回落只在 m 变化时）：' + el('db').value);
+el('m').value = '0.5';
+el('m')._fire('change', el('m'));
+await flush();
+check(el('db').value === '40', 'DIN m=0.5 时 d_B=41 应回落到最近合法值 40，实际 ' + el('db').value);
+check(el('dbListHint').textContent.includes('回落') && el('dbListHint').textContent.includes('d_B=41')
+  && el('dbListHint').textContent.includes('d_B=40'), 'DIN 回落应有可见提示：' + el('dbListHint').textContent);
 // NF：候选含 1.667/3.75/7.5 且不含 GB/DIN 特有档；A=80 带出 m=3.75/z=19；
 // 体系外模数（3）红字指出来源表。
 el('stdSel').value = 'NF';
@@ -426,12 +507,45 @@ check(mods.includes('1.667') && mods.includes('3.75') && mods.includes('7.5'),
 for (const ban of ['0.6', '0.8', '1.5', '1.75', '3', '4', '6', '8']) {
   check(mods.indexOf(ban) < 0, 'NF 候选不应含 GB/DIN 特有档 ' + ban);
 }
+el('mSel').value = '3.75';
+try { el('mSel')._fire('change', el('mSel')); } catch (e) { errors.push('NF m 选择异常: ' + e); }
+await flush();
 el('db').value = '80';
 try { el('db')._fire('change', el('db')); } catch (e) { errors.push('NF A 联动异常: ' + e); }
 await flush();
 check(el('m').value === '3.75' && el('z').value === '19',
-  'NF A=80 应带出 m=3.75、z=19，实际 ' + el('m').value + '/' + el('z').value);
-check(Math.abs(numOf('x') - 0.9667) < 1e-3, 'NF A=80/m=3.75/N=19 应显示公式解 x≈0.967，实际 ' + el('x').value);
+  'NF m=3.75/A=80 应带出 z=19，实际 ' + el('m').value + '/' + el('z').value);
+check(Math.abs(numOf('x') - 0.967) < 1e-3,
+  'NF A=80/m=3.75/N=19 应显示表值 x=0.967（p18 空 x 行不得盖成 0），实际 ' + el('x').value);
+// NF 逐 m 断言：10 档 m 的 A 候选集合 == CSV 该 m 的 A 集合（含 1.667/3.75/7.5，不许插值/自编）。
+for (const [mk, wantA] of NF_BY_M) {
+  el('m').value = mk;
+  try { el('m')._fire('change', el('m')); } catch (e) { errors.push('NF m=' + mk + ' 切换异常: ' + e); }
+  await flush();
+  const gotA = el('nfAList').children.map((o) => Number(o.value)).sort((a, b) => a - b);
+  check(JSON.stringify(gotA) === JSON.stringify(wantA),
+    'NF m=' + mk + ' 的 A 候选应 CSV 集合 ' + wantA.join('|') + '，实际 ' + gotA.join('|'));
+}
+// NF 回落：A=81 不在表内 → m 改到 1.667 时回落到该 m 最近的合法值 60 + 可见提示。
+el('m').value = '3.75';
+el('m')._fire('change', el('m'));
+await flush();
+el('db').value = '81';
+el('db')._fire('change', el('db'));
+await flush();
+check(el('db').value === '81', 'A 输入完成后不立即回落（回落只在 m 变化时）：' + el('db').value);
+el('m').value = '1.667';
+el('m')._fire('change', el('m'));
+await flush();
+check(el('db').value === '60', 'NF m=1.667 时 A=81 应回落到最近合法值 60，实际 ' + el('db').value);
+check(el('dbListHint').textContent.includes('回落') && el('dbListHint').textContent.includes('A=81')
+  && el('dbListHint').textContent.includes('A=60'), 'NF 回落应有可见提示：' + el('dbListHint').textContent);
+check(el('z').value !== '' && Number.isFinite(Number(el('z').value)),
+  '回落后的 z 仍应是派生数字：' + el('z').value);
+el('db').value = '45';
+el('db')._fire('change', el('db'));
+await flush();
+check(!el('dbListHint').textContent.includes('回落'), '选回合法 A 后不应保留回落提示：' + el('dbListHint').textContent);
 el('m').value = '3';
 try { el('m')._fire('input', el('m')); } catch (e) { errors.push('NF 体系外模数异常: ' + e); }
 await flush();
