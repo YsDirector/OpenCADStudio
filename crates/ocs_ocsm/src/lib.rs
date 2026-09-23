@@ -1380,6 +1380,7 @@ const ICON_POWERDIM: IconKind =
 const ICON_DIMGUIDE: IconKind =
     IconKind::Svg(include_bytes!("../assets/icons/dimguide.svg"));
 const ICON_DIM2GB: IconKind = IconKind::Svg(include_bytes!("../assets/icons/dim2gb.svg"));
+const ICON_PARTS: IconKind = IconKind::Svg(include_bytes!("../assets/icons/parts.svg"));
 
 impl BuiltinPlugin for OcsmPlugin {
     fn manifest(&self) -> &'static PluginManifest {
@@ -1434,6 +1435,15 @@ impl BuiltinPlugin for OcsmPlugin {
                                 label: "轴生成器",
                                 icon: ICON_SHAFT,
                                 event: ModuleEvent::Command("OCSMSHAFT".to_string()),
+                            })],
+                        },
+                        RibbonGroup {
+                            title: "标准件",
+                            tools: vec![RibbonItem::LargeTool(ToolDef {
+                                id: "OCSMPART",
+                                label: "标准件库",
+                                icon: ICON_PARTS,
+                                event: ModuleEvent::Command("OCSMPART".to_string()),
                             })],
                         },
                         RibbonGroup {
@@ -4352,7 +4362,40 @@ mod tests {
                 }
             }
         }
-        assert_eq!(checked, 7, "功能区应有 7 个 LargeTool 按钮（当前 {checked}）");
+        assert_eq!(checked, 8, "功能区应有 8 个 LargeTool 按钮（当前 {checked}）");
+    }
+
+    /// XL/`OCSMPART` 按钮：点击（不带参数）开「OCSM 标准件库」窗口 + 放置态。
+    /// id/label/组/事件 + 图标非空都锁住，避免以后再出现「命令能用但按钮不见了」。
+    #[test]
+    fn ribbon_registers_parts_button_open_library() {
+        let module = OcsmPlugin.ribbon();
+        let mut found = false;
+        for group in module.ribbon_groups() {
+            for item in &group.tools {
+                if let RibbonItem::LargeTool(t) = item {
+                    if t.id == "OCSMPART" {
+                        assert_eq!(group.title, "标准件");
+                        assert_eq!(t.label, "标准件库");
+                        assert!(matches!(
+                            &t.event,
+                            ModuleEvent::Command(c) if c == "OCSMPART"
+                        ));
+                        match t.icon {
+                            IconKind::Svg(bytes) => assert!(!bytes.is_empty()),
+                            IconKind::Glyph(g) => panic!("标准件库按钮仍是字形图标（{g}）"),
+                        }
+                        found = true;
+                    }
+                }
+            }
+        }
+        assert!(found, "功能区缺少「标准件库」按钮（OCSMPART / XL）");
+        assert!(
+            MANIFEST.command_prefixes.contains(&"OCSMPART")
+                && MANIFEST.command_prefixes.contains(&"XL"),
+            "MANIFEST.command_prefixes 缺少 OCSMPART/XL"
+        );
     }
 
     // ── 标准件库扫描 ──────────────────────────────────────────────
