@@ -9248,9 +9248,9 @@ mod integration {
 
 
     /// 进程级串行锁：`set_pending_part` 是全局状态，多个导出测试并行会互相覆盖（曾致偶发失败）。
+    /// 与 `lib.rs` 的 `global_state_test_lock()` 同一把锁（跨模块共享，不要各自新建）。
     fn export_lock() -> std::sync::MutexGuard<'static, ()> {
-        static L: std::sync::Mutex<()> = std::sync::Mutex::new(());
-        L.lock().unwrap_or_else(|e| e.into_inner())
+        crate::global_state_test_lock()
     }
 
     // ── 明细表网页编辑端到端（bom.html 四端点，2026-09-16）────────────────
@@ -10765,6 +10765,7 @@ mod rough_tests {
 
     #[test]
     fn joint_place_registers_preview_block_and_pending_chain() {
+        let _g = export_lock();   // PENDING_JOINT 全局：与全部导出/选取测试共用一把锁
         // GUI 点「装配到图纸」：建预览块（整链几何）+ 登记待放置件链；**不落件**（等图纸点选）
         let mock = std::sync::Arc::new(MockSender::new(acadrust::CadDocument::new()));
         let sender: std::sync::Arc<dyn PluginRequestSender> = mock.clone();
@@ -10805,6 +10806,7 @@ mod rough_tests {
 
     #[test]
     fn mutating_apis_declare_undo_before_writing() {
+        let _g = export_lock();   // apply_part_pick/export 写 PENDING_PART 与 parts_point_slot（进程级全局）
         // 宿主不会替插件命令入撤销栈（2026-09-15 契约缺口）：每个改文档的入口
         // 必须先 PushUndo，否则 MCP/AI 驱动后 Ctrl+Z 撤不掉。
         let mock = std::sync::Arc::new(MockSender::new(acadrust::CadDocument::new()));
@@ -13629,6 +13631,7 @@ mod weld_tests {
     /// 块里 10 轮廓（砂轮细线已按用户 2026-09-18 定案去掉），xdata 台账带 b1。
     #[test]
     fn detail_grind_od_pick_anchor_rotation_and_layers() {
+        let _g = export_lock();   // parts_point_slot 进程级全局
         let mock = Arc::new(MockSender::new(acadrust::CadDocument::new()));
         let sender: Arc<dyn PluginRequestSender> = mock.clone();
         let body = br#"{"family":"detail_grind_od","d":100,"b1":8,"x":120.5,"y":-33.25,"rotation":30,"view":"main"}"#;
@@ -13672,6 +13675,7 @@ mod weld_tests {
     /// 锚点/旋转/落层/xdata 台账与磨外圆同通路。
     #[test]
     fn detail_thread_relief_pick_params_and_meta() {
+        let _g = export_lock();   // parts_point_slot 进程级全局
         let mock = Arc::new(MockSender::new(acadrust::CadDocument::new()));
         let sender: Arc<dyn PluginRequestSender> = mock.clone();
         let body = br#"{"family":"detail_thread_relief","d":20,"params":{"P":1.5},"x":10.0,"y":5.0,"rotation":0,"view":"main"}"#;
@@ -13703,6 +13707,7 @@ mod weld_tests {
     /// 多视图结构要素的块名带视图后缀（side/section/front 不串块）。
     #[test]
     fn detail_spline_rect_pick_spec_params_and_meta() {
+        let _g = export_lock();   // parts_point_slot 进程级全局
         let mock = Arc::new(MockSender::new(acadrust::CadDocument::new()));
         let sender: Arc<dyn PluginRequestSender> = mock.clone();
         let body = br#"{"family":"detail_spline_rect","d":23,"spec":"6x23x26x6","params":{"len":30,"de":63},"x":0,"y":0,"view":"side"}"#;
@@ -13799,6 +13804,7 @@ mod weld_tests {
 
     #[test]
     fn part_pick_builds_block_inserts_at_point_and_records_meta() {
+        let _g = export_lock();   // parts_point_slot 进程级全局
         let mock = Arc::new(MockSender::new(acadrust::CadDocument::new()));
         *crate::parts_point_slot().lock().unwrap() = Some([10.0, 20.0, 0.0]);
         let body = br#"{"family":"hex_bolt_c","d":5,"l":25,"view":"main"}"#;
@@ -14127,6 +14133,7 @@ mod weld_tests {
     /// DIN 三种给法、内花键视图规则（剖视+端视、无侧视）、生成到图纸（块名/台账）。
     #[test]
     fn gear_spline_routes_gb_db_din_modes_and_internal_export() {
+        let _g = export_lock();   // apply_gear_export 写 PENDING_PART（进程级全局）
         let mock = Arc::new(MockSender::new(ocsm_layered_doc()));
         let server = spawn_fixed(mock.clone()).expect("spawn guide server");
         // 齿轮模式给标准号/d_B → 明确报错（不静默忽略）

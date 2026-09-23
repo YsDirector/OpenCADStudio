@@ -605,6 +605,17 @@ pub(crate) struct PendingPart {
 static PENDING_PART: std::sync::OnceLock<std::sync::Mutex<Option<PendingPart>>> =
     std::sync::OnceLock::new();
 
+/// **测试用进程级串行锁**：`PENDING_PART` / `PENDING_JOINT` / `parts_point_slot` 等是进程级
+/// 全局状态，测试并行时会互相覆盖（曾致 `shaft_export_registers_pending_part_and_direct_insert`
+/// 偶发读到别的测试注册的块）。**任何读/写这些全局的测试都必须持本锁**；跨模块共享
+/// （`guide_server::integration::export_lock()` 委托到这里），不要各自新建局部锁。
+/// 锁只用于测试：生产路径不获取，不存在与业务锁的嵌套。
+#[cfg(test)]
+pub(crate) fn global_state_test_lock() -> std::sync::MutexGuard<'static, ()> {
+    static L: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    L.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 fn pending_slot() -> &'static std::sync::Mutex<Option<PendingPart>> {
     PENDING_PART.get_or_init(|| std::sync::Mutex::new(None))
 }
@@ -4404,6 +4415,7 @@ mod tests {
 
     #[test]
     fn frame_dir_prefers_env_override() {
+        let _g = global_state_test_lock();   // OCSM_FRAME_DIR 是进程级环境变量
         // OCSM_FRAME_DIR 优先于安装目录解析。
         unsafe { std::env::set_var("OCSM_FRAME_DIR", "/tmp/ocsm-frames") };
         assert_eq!(frame_dir(), std::path::PathBuf::from("/tmp/ocsm-frames"));
@@ -5345,6 +5357,7 @@ mod tests {
 
     #[test]
     fn part_place_is_two_stage_with_rotation_preview() {
+        let _g = global_state_test_lock();   // PENDING_PART 进程级全局（与导出测试共用一把锁）
         let rec = std::sync::Arc::new(RecordingSender::new());
         let sender: std::sync::Arc<dyn PluginRequestSender> = rec.clone();
         set_pending_part(PendingPart {

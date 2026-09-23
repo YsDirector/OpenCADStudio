@@ -152,6 +152,33 @@ const INFO = {
   d: 60, db: 51.9615, da: 65.4, df: 57.344, d_b: null, origin: null, rho: 1.2, cf: 0.3,
   internal_major: 65.4, internal_minor: 57.344, block: 'B', spec: 'S', notes: ['内花键无侧视图（同内齿轮：剖视 + 端视）'],
 };
+// 花键模式的 info 桩：按查询串回填 m/z/x/kind/std，并给出统一齿形表达式（真实数值由 Rust 往返测试覆盖）。
+const SPLINE_INFO_BASE = {
+  ok: true, error: null, mode: 'spline', view: 'front', view_label: '端视图',
+  std_code: 'GB/T 3478.1-2008', profile: '30圆齿根', d: 60, db: 51.9615,
+  d_b: null, a: null, origin: null, rho: 1.2, cf: 0.3, pitch: null, ps: null, pitch_label: null,
+  dfe: null, dfi: null, sv_min: null, internal_major: 65.4, internal_minor: 57.3436,
+  inspection: null, block: 'B', spec: 'S', notes: [],
+};
+function splineInfoFor(url) {
+  const q = new URL(url, 'http://x').searchParams;
+  const kind = q.get('kind') || 'external';
+  const std = q.get('std') || 'GB';
+  const m = Number(q.get('m')) || 3;
+  const z = Number(q.get('z')) || 20;
+  const x = Number(q.get('x')) || 0;
+  const alpha = Number(q.get('alpha')) || 30;
+  const h = Number(q.get('h')) || 30;
+  const internal = kind === 'internal';
+  const da = internal ? 65.4 : 63;
+  const df = internal ? 57.3436 : 54.6;
+  return {
+    ...SPLINE_INFO_BASE, kind, kind_label: internal ? '内花键' : '外花键', std, m, z, x, alpha,
+    da, df,
+    expr: 'SPLINE ' + (internal ? 'IN' : 'EX') + ' M' + m + ' Z' + z + ' ALPHA' + alpha
+      + ' X' + x + ' DA' + da + ' DF' + df + ' BETA0 H' + h,
+  };
+}
 const fetchLog = [];
 global.fetch = async (u, opts) => {
   const t = String(u);
@@ -160,7 +187,8 @@ global.fetch = async (u, opts) => {
     return { ok: true, json: async () => PARTS, text: async () => JSON.stringify(PARTS) };
   }
   if (t.startsWith('/api/gear_info')) {
-    return { ok: true, json: async () => INFO, text: async () => JSON.stringify(INFO) };
+    const info = t.includes('mode=spline') ? splineInfoFor(t) : INFO;
+    return { ok: true, json: async () => info, text: async () => JSON.stringify(info) };
   }
   if (t.startsWith('/api/gear_svg')) return { ok: true, text: async () => '<svg></svg>' };
   if (t === '/api/gear_export') {
@@ -221,8 +249,8 @@ el('h').value = '30';
 el('alpha').value = '20';
 try { el('m')._fire('input', el('m')); } catch (e) { errors.push('表达式同步异常: ' + e); }
 await flush();
-check(el('exprPreview').value === 'GEAR M3 Z20 H30 ALPHA20',
-  '齿轮表达式应为 GEAR M3 Z20 H30 ALPHA20，实际 ' + JSON.stringify(el('exprPreview').value));
+check(el('exprPreview').value === 'GEAR EX M3 Z20 ALPHA20 X0 DA66 DF52.5 BETA0 H30',
+  '齿轮表达式应为统一格式 GEAR EX … DA66 DF52.5 …，实际 ' + JSON.stringify(el('exprPreview').value));
 check(el('exprHint').textContent.includes('可直接粘贴'), '齿轮表达式提示应说明可直接粘贴：' + el('exprHint').textContent);
 check(!/view|\bat\b/i.test(el('exprPreview').value), '表达式不应带 view/at：' + el('exprPreview').value);
 Object.defineProperty(globalThis, 'navigator', {
@@ -232,7 +260,7 @@ Object.defineProperty(globalThis, 'navigator', {
 globalThis.__copied = '';
 el('exprCopy')._fire('click', el('exprCopy'));
 await flush();
-check(globalThis.__copied === 'GEAR M3 Z20 H30 ALPHA20',
+check(globalThis.__copied === 'GEAR EX M3 Z20 ALPHA20 X0 DA66 DF52.5 BETA0 H30',
   '复制按钮应写入剪贴板，实际 ' + JSON.stringify(globalThis.__copied));
 
 // ①.7 DP 径节制：轴段 GEAR 只认 M，表达式按 m = 25.4/DP 换算
@@ -240,8 +268,8 @@ el('sysSel').value = 'DP';
 el('dp').value = '8';
 try { el('sysSel')._fire('change', el('sysSel')); } catch (e) { errors.push('DP 表达式同步异常: ' + e); }
 await flush();
-check(el('exprPreview').value === 'GEAR M3.175 Z20 H31.75 ALPHA20',
-  'DP 表达式应按 m=25.4/DP 换算，实际 ' + JSON.stringify(el('exprPreview').value));
+check(el('exprPreview').value === 'GEAR EX M3.175 Z20 ALPHA20 X0 DA69.85 DF55.5625 BETA0 H31.75',
+  'DP 表达式应按 m=25.4/DP 换算成 M，实际 ' + JSON.stringify(el('exprPreview').value));
 check(el('exprHint').textContent.includes('25.4/DP'), 'DP 表达式提示应说明换算：' + el('exprHint').textContent);
 
 // ② 花键模式 + GB：花键行显示、d_B 行隐藏
@@ -301,6 +329,13 @@ check(a375.length === 21 && a375[0] === 30 && a375[20] === 150,
 check(a375.indexOf(160) < 0, 'NF m=3.75 的 A 候选不应含 m=5 的 160：' + a375.join('|'));
 check(el('dbListHint').textContent.includes('候选 21 个'),
   '候选提示应写出 m=3.75 的 21 个：' + el('dbListHint').textContent);
+// 花键统一表达式（用户报的「花键模式没有轴生成器表达式」）：info 到达后非空、可复制。
+try { el('m')._fire('blur', el('m')); } catch (e) { errors.push('NF 表达式刷新异常: ' + e); }
+await flush();
+check(el('exprPreview').value.startsWith('SPLINE ') && el('exprPreview').value.includes('Z19'),
+  'NF 花键应给出统一齿形表达式（含当前 z=19），实际 ' + JSON.stringify(el('exprPreview').value));
+check(el('exprCopy').disabled === false, 'NF 花键表达式非空时复制按钮应可用');
+check(el('exprHint').textContent.includes('统一齿形表达式'), 'NF 花键应提示统一齿形表达式：' + el('exprHint').textContent);
 // ANSI：基准直径行隐藏；径节输入切到 17 项 A/B 下拉 + 自定义；hf/rho/cf 隐藏。
 el('stdSel').value = 'ANSI';
 try { el('stdSel')._fire('change', el('stdSel')); } catch (e) { errors.push('ANSI 切换异常: ' + e); }
@@ -363,10 +398,14 @@ check(el('warn').textContent.includes('标准系列') && el('warn').textContent.
 el('m').value = '5';
 el('m')._fire('input', el('m'));
 await flush();
-check(el('exprPreview').value === '',
-  'INVOLSPLINE 轴段已撤：花键模式不应给出轴段表达式，实际 ' + JSON.stringify(el('exprPreview').value));
-check(el('exprHint').textContent.includes('轴生成器已撤掉 INVOLSPLINE'),
-  '应提示轴生成器已撤掉 INVOLSPLINE：' + el('exprHint').textContent);
+// ANSI 统一表达式：info.expr（引擎 DA/DF）而非旧的空表达式。
+try { el('m')._fire('blur', el('m')); } catch (e) { errors.push('ANSI 表达式刷新异常: ' + e); }
+await flush();
+check(el('exprPreview').value.startsWith('SPLINE '),
+  'ANSI 花键应给出统一齿形表达式，实际 ' + JSON.stringify(el('exprPreview').value));
+check(el('exprCopy').disabled === false, '花键表达式非空时复制按钮应可用');
+check(el('exprHint').textContent.includes('统一齿形表达式'),
+  '花键应提示统一齿形表达式：' + el('exprHint').textContent);
 
 // ── ANSI 接线回归（用户实测「缺径节 P」的断点）：选完径节后，预览/信息查询串与导出 body
 // 必须带 A/B 原值 `pitch=5/10`，而不是被 collect/paramQS/导出 schema 丢在半路。
@@ -409,12 +448,19 @@ el('m').value = '3';
 el('z').value = '20';
 el('h').value = '30';
 try { el('m')._fire('input', el('m')); } catch (e) { errors.push('花键表达式同步异常: ' + e); }
+try { el('m')._fire('blur', el('m')); } catch (e) { errors.push('花键表达式刷新异常: ' + e); }
 await flush();
-check(el('exprPreview').value === '',
-  '花键模式不应再给 INVOLSPLINE 轴段表达式，实际 ' + JSON.stringify(el('exprPreview').value));
-check(el('exprCopy').disabled === true, '表达式为空时复制按钮应禁用');
-check(el('exprHint').textContent.includes('轴生成器已撤掉 INVOLSPLINE'),
-  '应提示轴生成器已撤掉 INVOLSPLINE：' + el('exprHint').textContent);
+// 花键统一表达式（用户报的「花键模式没有轴生成器表达式」）：非空、可复制、提示统一语法。
+check(el('exprPreview').value.startsWith('SPLINE '),
+  'GB 花键应给出统一齿形表达式，实际 ' + JSON.stringify(el('exprPreview').value));
+check(el('exprCopy').disabled === false, '花键表达式非空时复制按钮应可用');
+check(el('exprHint').textContent.includes('统一齿形表达式'),
+  '应提示统一齿形表达式：' + el('exprHint').textContent);
+globalThis.__copied = '';
+el('exprCopy')._fire('click', el('exprCopy'));
+await flush();
+check(globalThis.__copied.startsWith('SPLINE ') && globalThis.__copied === el('exprPreview').value,
+  '花键表达式应可复制且与预览一致，实际 ' + JSON.stringify(globalThis.__copied));
 const viewBtns = () => el('viewRow').children.map((b) => b.textContent);
 const kindBtns = () => el('kindRow').children;
 check(viewBtns().join('|') === '剖视图|侧视图|端视图', '外花键应有三视图按钮，实际 ' + viewBtns().join('|'));
@@ -434,8 +480,8 @@ if (intKindBtn) {
   check(viewBtns().join('|') === '剖视图（齿圈内齿不剖）|端视图', '内花键应只留 剖视图 + 端视图，实际 ' + viewBtns().join('|'));
   check(el('viewName').textContent === '剖视图（齿圈内齿不剖）', '内花键不可用侧视图时应自动回剖视图，实际 ' + el('viewName').textContent);
   check(el('kindHint').innerHTML.includes('不存在侧视图'), '内花键提示应写明无侧视图：' + el('kindHint').innerHTML);
-  check(el('exprHint').textContent.includes('不能在轴上使用'), '内花键表达式应标注「不能在轴上使用」：' + el('exprHint').textContent);
-  check(el('exprPreview').value === '', '内花键也不应给出 INVOLSPLINE 轴段表达式：' + el('exprPreview').value);
+  check(el('exprHint').textContent.includes('最小口径'), '内花键应提示轴上最小绘制口径：' + el('exprHint').textContent);
+  check(el('exprPreview').value.startsWith('SPLINE IN '), '内花键也应给出统一表达式（SPLINE IN）：' + el('exprPreview').value);
 }
 // 切回外花键：恢复三视图
 const extKindBtn = kindBtns().find((b) => b.dataset.k === 'external');

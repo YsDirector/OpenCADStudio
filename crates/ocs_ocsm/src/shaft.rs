@@ -40,12 +40,18 @@
 //!   → 查表 2（可叠加覆盖）；③ 都不给 → 报错（表 2 以螺距为键，不猜）。
 //!   前置：该端相邻段更高（有台肩可退）、本段圆柱；否则报「第 N 段」+ 原因；
 //! - `ES5*3` 这类旧写法会报错并指路（退刀槽现在用 `RL` 或小直径轴段表示）；
-//! - `GEAR M5 Z10 H20`（可 `ALPHA25`）：**齿轮段（直齿）**，分度圆 d = m·z 由参数导出、**不给
-//!   S/E**；H = 齿宽（省略 = 10m）；`ALPHA` = 基准齿形角（度，省略 20°，与 OCSMGEAR 同口径，
-//!   影响 db/齿厚）；按齿轮工具 `side_view()` 的轴向投影口径：
-//!   画齿顶轮廓（端面倒角 C = round(0.6m) 按**单侧规则**，见下）+ 分度线（`3中心线层`
-//!   点划线），**常规视图不画齿根线**；剖视另画齿根线（齿部按不剖）；
-//!   齿形用 `OCSMGEAR` 单独出，这里不画齿、本期不做斜齿（`BETA…` 报「斜齿未实现」）；
+//! - **齿形段（齿轮/渐开线花键统一表达式，2026-09-23 用户定案）**：
+//!   `MARK KIND M… Z… ALPHA… X… DA… DF… BETA… H…`（顺序稳定、解析无序）：
+//!   * `MARK` = `GEAR`（齿轮）/ `SPLINE`（渐开线花键）—— **画法开关，不是分类标签**：
+//!     决定**常规侧视图**是否画内侧直径（外齿 = 齿根圆；内齿 = 里侧齿顶）的
+//!     `2细线层`（青色 ACI 4）细实线：`GEAR` 画 / `SPLINE` 不画（花键制图口径）；
+//!   * `KIND` = `EX`/`IN`（外/内；缺省 EX）；`X` = 变位系数（缺省 0）；
+//!     `DA`/`DF` = 大径/小径（可省，按 `GearParams` 推：ha*=1、c*=0.25）；
+//!   * 旧写法 `GEAR M5 Z10 H20`（可 `ALPHA25`）**继续可用**（等价 `GEAR EX … X0`）；
+//!   * `H` = 齿宽（省略 = 10m）；分度圆 d = m·z 由参数导出、**不给 S/E**；
+//!     齿形用 `OCSMGEAR` 单独出，这里不画齿、本期不做斜齿（`BETA…` 报「斜齿未实现」）；
+//!   * 矩形花键 `SPLINE 6x23x26x6 L30`（GB/T 1144）与齿形段共存：`SPLINE` 后跟
+//!     齿形关键字（M/Z/EX/IN/DA/DF…）才是渐开线花键齿形段。
 //! - `VIEW 常规|剖视|双`：视图开关（默认 `常规`）；独立一行或段内关键字都认
 //!   （`VIEW 剖视` / `VIEW=section`），只影响整体视图（`双` = 常规+剖视并排一次出）；
 //! - 多段可用 `|` 或换行分隔；行尾可跟放置参数 `at x,y rot 度`；
@@ -67,10 +73,12 @@
 //! 无外角）不倒 —— 轴上的齿轮/花键段不照搬独立齿轮生成器的两端都倒。
 //! 端面可见高 = ra − C，倒角斜线只贴该侧端面；倒角终点（台阶）竖线**只在常规
 //! 视图**画（半高 = ra，与 `side_view()` 的台阶线同）。另画分度线 r = d/2
-//! （`3中心线层`，点划线，不受倒角影响）。**常规视图不画齿根线** —— 与齿轮
-//! 工具 `side_view()` 一样；**剖视**按 `section_view()` 口径加齿根线
-//! ra→rf（`1轮廓实线层`，齿部按不剖，也是剖面线边界）。派生尺寸取 `gear.rs`
-//! 同口径（ha*=1、c*=0.25、Xn=0 → ra = da/2、rf = df/2），不自己另立公式。
+//! （`3中心线层`，点划线，不受倒角影响）。**内侧直径线按 MARK 开关**：
+//! `GEAR` 常规侧视图画外齿齿根圆 / 内齿里侧齿顶圆的 `2细线层` 青色细实线
+//! （用户 2026-09-23 定案）；`SPLINE` 不画（花键制图口径）；**剖视/双视图两标记都画**
+//! 内侧线（`1轮廓实线层`，齿部按不剖，也是剖面线边界）。派生尺寸取 `gear.rs`
+//! 同口径（ha*=1、c*=0.25；旧写法 Xn=0 → ra = da/2、rf = df/2；统一表达式的
+//! `DA/DF` 为大径/小径，内齿时 `DA` = 外侧齿根、`DF` = 里侧齿顶），不自己另立公式。
 //! `ALPHA` = 基准齿形角（度，省略 20°）：按 `gear.rs` 口径进 `GearParams`，影响基圆 db/齿厚 st
 //! 等派生值（齿廓用 OCSMGEAR 单独出）；本侧视图只画齿顶/齿根轮廓，半径不由 α 决定。
 //! 齿轮段与相邻段的过渡按台阶处理（不做过渡圆角）；**相邻段轮廓半径 > ra
@@ -490,7 +498,10 @@ fn serialize_thread<S: serde::Serializer>(
     }
 }
 
-/// 齿轮段参数（本期：**外齿轮、直齿**）。派生尺寸统一走 [`GearParams`]（gear.rs 口径）。
+/// 齿形段参数（齿轮/渐开线花键**统一表达式**；派生尺寸统一走 [`GearParams`]）。
+///
+/// 九项字段：`MARK`（[`Gear::involute`]）`KIND`（[`Gear::kind`]）`M Z ALPHA X DA DF BETA` + 轴段 `H`。
+/// `DA`/`DF` 恒为**大径/小径**（外齿 = 齿顶/齿根；内齿 = 外侧齿根/里侧齿顶），可显式覆盖。
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize)]
 pub struct Gear {
     /// 模数 m（> 0）。
@@ -506,6 +517,34 @@ pub struct Gear {
     /// 缺省值不写出（保持旧 JSON 与 DSL 文本不变）。
     #[serde(rename = "alpha", skip_serializing_if = "alpha_is_default")]
     pub alpha_deg: f64,
+    /// 齿形标记：`false` = 齿轮 `GEAR`（常规侧视图**画**内侧直径细实线）、
+    /// `true` = 渐开线花键 `SPLINE`（不画，花键制图口径）。**参与几何输出**，随 DSL/JSON 往返。
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub involute: bool,
+    /// 内/外齿（`GEAR IN`/`EX`）；旧写法无 = 外。
+    #[serde(default, skip_serializing_if = "kind_is_external")]
+    pub kind: GearKind,
+    /// 变位系数 Xn（`X`；旧写法无 = 0）。
+    #[serde(default, skip_serializing_if = "x_is_zero")]
+    pub x: f64,
+    /// 大径（外齿齿顶圆 / 内齿外侧齿根）；`None` = 按 m/z/x 推。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub da: Option<f64>,
+    /// 小径（外齿齿根圆 / 内齿里侧齿顶）；`None` = 按 m/z/x 推。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub df: Option<f64>,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
+fn kind_is_external(kind: &GearKind) -> bool {
+    !kind.is_internal()
+}
+
+fn x_is_zero(value: &f64) -> bool {
+    value.abs() < 1e-12
 }
 
 /// GEAR 段的默认压力角（与 `gear.rs::ALPHA_N_DEG` 同值）。
@@ -523,38 +562,67 @@ impl Gear {
         self.h.unwrap_or(10.0 * self.m)
     }
 
-    /// 与 `gear.rs` 同口径的齿轮参数（外齿轮、ha*=1、c*=0.25、Xn=0、直齿）。
+    /// 与 `gear.rs` 同口径的齿轮参数（ha*=1、c*=0.25、直齿；kind/x 随表达式）。
     pub fn params(&self) -> GearParams {
         GearParams {
-            kind: GearKind::External,
+            kind: self.kind,
             m: self.m,
             z: self.z,
             alpha_deg: self.alpha_deg,
             beta_deg: self.beta_deg,
             h: self.width(),
+            x: self.x,
             ..GearParams::default()
         }
     }
 
-    /// 分度圆半径 r = d/2（= m·z/2）。
+    /// 分度圆半径 r = d/2（= m·z/2；变位不改变分度圆）。
     pub fn pitch_radius(&self) -> f64 {
         self.params().d() / 2.0
     }
 
-    /// 齿顶圆半径 ra = da/2（外齿轮 = d/2 + m）。
-    pub fn addendum_radius(&self) -> f64 {
-        self.params().da() / 2.0
+    /// **大径半径**：显式 `DA` 优先；否则外齿 = 齿顶圆 da、内齿 = 外侧齿根 df。
+    pub fn major_radius(&self) -> f64 {
+        if let Some(v) = self.da {
+            return v / 2.0;
+        }
+        let p = self.params();
+        (if self.kind.is_internal() { p.df() } else { p.da() }) / 2.0
     }
 
-    /// 齿根圆半径 rf = df/2（外齿轮 = d/2 − 1.25m）。
+    /// **小径半径**：显式 `DF` 优先；否则外齿 = 齿根圆 df、内齿 = 里侧齿顶 da。
+    pub fn minor_radius(&self) -> f64 {
+        if let Some(v) = self.df {
+            return v / 2.0;
+        }
+        let p = self.params();
+        (if self.kind.is_internal() { p.da() } else { p.df() }) / 2.0
+    }
+
+    /// 外轮廓半径（= 大径；旧名保留，外部调用/测试沿用）。
+    pub fn addendum_radius(&self) -> f64 {
+        self.major_radius()
+    }
+
+    /// 内侧直径半径（外齿 = 齿根圆；内齿 = 里侧齿顶；旧名保留）。
     pub fn root_radius(&self) -> f64 {
-        self.params().df() / 2.0
+        self.minor_radius()
     }
 
     /// 轴向倒角 C = round(0.6m)（与 `gear.rs::GearParams::chamfer()` 同口径；
     /// 小模数可能为 0 = 不倒角）。
     pub fn chamfer(&self) -> f64 {
         self.params().chamfer()
+    }
+}
+
+/// 齿形段的剖面线边界半径：外齿 = 小径（齿根圆，齿部按不剖）；内齿 = 大径
+/// （最小实现按实体段近似，不挖内孔 —— 报告已注明）。
+fn hatch_bound_radius(gear: &Gear) -> f64 {
+    if gear.kind.is_internal() {
+        gear.major_radius()
+    } else {
+        gear.minor_radius()
     }
 }
 
@@ -588,10 +656,10 @@ pub struct Segment {
 }
 
 impl Segment {
-    /// 某端的**外轮廓半径**（齿轮段 = 齿顶圆半径；花键段 = 大径半径）。
+    /// 某端的**外轮廓半径**（齿形段 = 大径/2；矩形花键段 = 大径半径）。
     pub fn outer_radius(&self, end: End) -> f64 {
         if let Some(gear) = &self.gear {
-            return gear.addendum_radius();
+            return gear.major_radius();
         }
         if let Some(spline) = &self.spline {
             let _ = end;
@@ -721,8 +789,44 @@ fn extract_view_directives<'a>(
 
 fn unknown_keyword(token: &str, label: &str) -> String {
     format!(
-        "{label}：不识别的关键字「{token}」（本期支持 S/E/L/CH/OV/M/TL/RO/SD/RL/GEAR/SPLINE/VIEW；GEAR 子关键字 M/Z/H/BETA/ALPHA；RL 的尺寸参数 P/g1/g2/dg/r 跟在 RL 后面）"
+        "{label}：不识别的关键字「{token}」（本期支持 S/E/L/CH/OV/M/TL/RO/SD/RL/GEAR/SPLINE/VIEW；齿形段子关键字 M/Z/H/BETA/ALPHA/EX/IN/X/DA/DF（SPLINE + 齿形关键字 = 渐开线花键）；RL 的尺寸参数 P/g1/g2/dg/r 跟在 RL 后面）"
     )
+}
+
+/// 齿形段大径/小径合法性（DSL 解析与 JSON 反序列化共用）：正数且 `DA > DF`。
+fn validate_tooth_radii(gear: &Gear, label: &str) -> Result<(), String> {
+    let (ra, rf) = (gear.major_radius(), gear.minor_radius());
+    if !(ra.is_finite() && ra > 0.0 && rf.is_finite() && rf > 0.0) {
+        return Err(format!(
+            "{label}：齿形段的大径 DA={}、小径 DF={} 必须是正数",
+            trim(ra * 2.0),
+            trim(rf * 2.0)
+        ));
+    }
+    if ra <= rf + 1e-9 {
+        return Err(format!(
+            "{label}：齿形段的大径 DA={} 必须大于小径 DF={}（外齿：DA=齿顶圆；内齿：DA=外侧齿根）",
+            trim(ra * 2.0),
+            trim(rf * 2.0)
+        ));
+    }
+    Ok(())
+}
+
+/// `SPLINE` 后跟的 token 是否是**齿形段关键字**（`M*`/`Z*`/`EX`/`IN`/`X*`/`DA*`/`DF*`/`ALPHA*`/`BETA*`/`H*`）。
+/// 用于区分「渐开线花键齿形段 `SPLINE M3 Z20 …`」与「矩形花键 `SPLINE 6x23x26x6 L30`」（后者原样不动）。
+fn tooth_keyword_token(tok: &str) -> bool {
+    let u = tok.to_ascii_uppercase();
+    u == "EX"
+        || u == "IN"
+        || u.starts_with('M')
+        || u.starts_with('Z')
+        || u.starts_with('X')
+        || u.starts_with('H')
+        || u.starts_with("DA")
+        || u.starts_with("DF")
+        || u.starts_with("BETA")
+        || u.starts_with("ALPHA")
 }
 
 fn starts_number(s: &str) -> bool {
@@ -984,12 +1088,23 @@ fn parse_segment(chunk: &str, label: &str, program: &mut Program) -> Result<Segm
     // `P` / `g1` / `g2` / `dg` / `r` 参数跟在某个 `RL` 后面，绑定到最近一个 RL。
     let mut relief_specs: Vec<Relief> = Vec::new();
     let mut pending_relief: Option<usize> = None;
-    // GEAR 子关键字（M/Z/H/BETA）先收齐，段内顺序无关；没有 GEAR 时 M = 螺纹。
-    // 先扫一遍段里有没有 GEAR：有 GEAR 时 M 一律按模数收（保持段内顺序无关）。
-    let has_gear = tokens.iter().any(|t| t.eq_ignore_ascii_case("GEAR"));
+    // GEAR/SPLINE(渐开线齿形段) 子关键字（M/Z/H/BETA/ALPHA/X/DA/DF/EX/IN）先收齐，段内顺序无关；
+    // 没有齿形标记时 M = 螺纹。先扫一遍段里有没有齿形标记：有时 M 一律按模数收（保持段内顺序无关）。
+    // 注意：`SPLINE 6x23x26x6 L30` 是矩形花键（GB/T 1144），其后跟齿形关键字（M/Z/EX/IN/DA/DF…）
+    // 才是渐开线花键齿形段（用户 2026-09-23 统一表达式）。
+    let has_gear = tokens.iter().enumerate().any(|(i, t)| {
+        t.eq_ignore_ascii_case("GEAR")
+            || (t.eq_ignore_ascii_case("SPLINE")
+                && tokens.get(i + 1).copied().map(tooth_keyword_token).unwrap_or(false))
+    });
     let mut gear_on = false;
+    let mut gear_involute = false;
+    let mut gear_internal = false;
     let (mut gear_m, mut gear_z, mut gear_h, mut gear_beta, mut gear_alpha) =
         (None, None, None, None, None);
+    let mut gear_x: Option<f64> = None;
+    let mut gear_da: Option<f64> = None;
+    let mut gear_df: Option<f64> = None;
     let mut loose_gear_token: Option<String> = None;
     // SPLINE 段（矩形花键）：`SPLINE <规格>` + `L<满齿段长>` + 可选 `de` 覆盖。
     let mut spline_on = false;
@@ -1005,20 +1120,31 @@ fn parse_segment(chunk: &str, label: &str, program: &mut Program) -> Result<Segm
         }
         let upper = token.to_ascii_uppercase();
         if upper == "SPLINE" || upper.starts_with("SPLINE=") || upper.starts_with("SPLINE:") {
-            if spline_on {
-                return Err(format!("{label}：关键字 SPLINE 重复"));
-            }
-            spline_on = true;
-            let rest = &token["SPLINE".len()..];
-            let rest = rest.strip_prefix(['=', ':']).unwrap_or(rest).trim();
-            if rest.is_empty() {
-                index += 1;
-                let spec = tokens.get(index).ok_or_else(|| {
-                    format!("{label}：关键字 SPLINE 缺少规格代号（写法 SPLINE 6x23x26x6 L30）")
-                })?;
-                spline_spec = Some((*spec).to_string());
+            // `SPLINE` + 齿形关键字 = 渐开线花键齿形段；否则是矩形花键规格代号（原样保留）。
+            let involute_form = upper == "SPLINE"
+                && tokens.get(index + 1).copied().map(tooth_keyword_token).unwrap_or(false);
+            if involute_form {
+                if gear_on {
+                    return Err(format!("{label}：关键字 GEAR/SPLINE 重复"));
+                }
+                gear_on = true;
+                gear_involute = true;
             } else {
-                spline_spec = Some(rest.to_string());
+                if spline_on {
+                    return Err(format!("{label}：关键字 SPLINE 重复"));
+                }
+                spline_on = true;
+                let rest = &token["SPLINE".len()..];
+                let rest = rest.strip_prefix(['=', ':']).unwrap_or(rest).trim();
+                if rest.is_empty() {
+                    index += 1;
+                    let spec = tokens.get(index).ok_or_else(|| {
+                        format!("{label}：关键字 SPLINE 缺少规格代号（写法 SPLINE 6x23x26x6 L30）")
+                    })?;
+                    spline_spec = Some((*spec).to_string());
+                } else {
+                    spline_spec = Some(rest.to_string());
+                }
             }
         } else if upper.starts_with("DE") {
             if !spline_on {
@@ -1149,6 +1275,35 @@ fn parse_segment(chunk: &str, label: &str, program: &mut Program) -> Result<Segm
             gear_on = true;
         } else if upper.starts_with("GEAR") {
             return Err(unknown_keyword(token, label));
+        } else if upper == "EX" || upper == "IN" {
+            if !gear_on {
+                return Err(unknown_keyword(token, label));
+            }
+            gear_internal = upper == "IN";
+        } else if upper.starts_with("DA") {
+            if !gear_on {
+                return Err(unknown_keyword(token, label));
+            }
+            if gear_da.is_some() {
+                return Err(format!("{label}：关键字 DA 重复"));
+            }
+            gear_da = Some(parse_gear_number(token, 2, "DA", label)?);
+        } else if upper.starts_with("DF") {
+            if !gear_on {
+                return Err(unknown_keyword(token, label));
+            }
+            if gear_df.is_some() {
+                return Err(format!("{label}：关键字 DF 重复"));
+            }
+            gear_df = Some(parse_gear_number(token, 2, "DF", label)?);
+        } else if upper.starts_with('X') {
+            if !gear_on {
+                return Err(unknown_keyword(token, label));
+            }
+            if gear_x.is_some() {
+                return Err(format!("{label}：关键字 X 重复"));
+            }
+            gear_x = Some(parse_gear_number(token, 1, "X", label)?);
         } else if upper.starts_with('M') {
             if has_gear {
                 let value = parse_gear_number(token, 1, "M", label)?;
@@ -1380,11 +1535,21 @@ fn parse_segment(chunk: &str, label: &str, program: &mut Program) -> Result<Segm
         h: gear_h,
         beta_deg,
         alpha_deg: gear_alpha.unwrap_or_else(default_alpha_deg),
+        involute: gear_involute,
+        kind: if gear_internal {
+            GearKind::Internal
+        } else {
+            GearKind::External
+        },
+        x: gear_x.unwrap_or(0.0),
+        da: gear_da,
+        df: gear_df,
     };
     let params = gear.params();
     params
         .validate()
         .map_err(|e| format!("{label}：齿轮段：{e}"))?;
+    validate_tooth_radii(&gear, label)?;
     let d = params.d();
     Ok(Segment {
         s: d,
@@ -1616,6 +1781,21 @@ struct JsonGear {
     /// 基准齿形角 α（度）；缺省 = 20°。
     #[serde(default)]
     alpha: Option<f64>,
+    /// 齿形标记：缺省 `false` = GEAR（常规侧视图画内侧细实线）；
+    /// `true` = SPLINE（渐开线花键，不画）。
+    #[serde(default)]
+    involute: Option<bool>,
+    /// 内/外（`"internal"`/`"external"`；缺省 external）。
+    #[serde(default)]
+    kind: Option<String>,
+    /// 变位系数（缺省 0）。
+    #[serde(default)]
+    x: Option<f64>,
+    /// 大径 / 小径（缺省按 m/z/x 推）。
+    #[serde(default)]
+    da: Option<f64>,
+    #[serde(default)]
+    df: Option<f64>,
 }
 
 /// `thread` 允许：`true` / `1.5`（螺距）/ `{"p":1.5}` / `{"pitch":1.5}` / `"M1.5"`，
@@ -1890,12 +2070,25 @@ fn parse_json(text: &str) -> Result<Program, String> {
             if thread.is_some() {
                 return Err(format!("第 {number} 段：齿轮段不能与螺纹段 m 同段"));
             }
+            let kind = match g.kind.as_deref() {
+                None => GearKind::External,
+                Some(k) => GearKind::parse(k).ok_or_else(|| {
+                    format!(
+                        "第 {number} 段：齿轮段的 kind「{k}」非法（应为 external/internal）"
+                    )
+                })?,
+            };
             let gear = Gear {
                 m: g.m,
                 z: g.z,
                 h: g.h,
                 beta_deg: g.beta.unwrap_or(0.0),
                 alpha_deg: g.alpha.unwrap_or_else(default_alpha_deg),
+                involute: g.involute.unwrap_or(false),
+                kind,
+                x: g.x.unwrap_or(0.0),
+                da: g.da,
+                df: g.df,
             };
             if gear.beta_deg.abs() > 1e-9 {
                 return Err(format!(
@@ -1907,6 +2100,7 @@ fn parse_json(text: &str) -> Result<Program, String> {
             params
                 .validate()
                 .map_err(|e| format!("第 {number} 段：齿轮段：{e}"))?;
+            validate_tooth_radii(&gear, &format!("第 {number} 段"))?;
             let d = params.d();
             if let Some(s) = item.s {
                 if (s - d).abs() > 1e-9 {
@@ -2251,6 +2445,7 @@ pub fn validate(program: &Program) -> Result<(), String> {
             gear.params()
                 .validate()
                 .map_err(|e| format!("第 {number} 段：齿轮段：{e}"))?;
+            validate_tooth_radii(gear, &format!("第 {number} 段"))?;
             if !seg.ch.is_empty() {
                 return Err(format!("第 {number} 段：齿轮段不能与倒角 CH 同段"));
             }
@@ -3144,7 +3339,7 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
             // 花键右端 = 收尾弧终点，已回到大径 → 剖面边界取大径。
             left_eff = spline.major_radius();
         } else if let Some(gear) = &segs[i].gear {
-            left_eff = gear.root_radius();
+            left_eff = hatch_bound_radius(gear);
         } else if let Some(thread) = plain_thread(&segs[i]) {
             left_eff = left_eff.min(thread.minor_radius(segs[i].s));
         }
@@ -3159,7 +3354,7 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
                 right_eff = spline.minor_radius();
             }
         } else if let Some(gear) = &segs[k].gear {
-            right_eff = gear.root_radius();
+            right_eff = hatch_bound_radius(gear);
         } else if let Some(thread) = plain_thread(&segs[k]) {
             right_eff = right_eff.min(thread.minor_radius(segs[k].s));
         }
@@ -3348,10 +3543,10 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
             let (x0, x1) = (x0s[index], x0s[index] + seg.l);
             let (r, ra, rf) = (
                 gear.pitch_radius(),
-                gear.addendum_radius(),
-                gear.root_radius(),
+                gear.major_radius(),
+                gear.minor_radius(),
             );
-            // 齿顶面两端按**已生效的端面自动倒角**缩进（单侧规则：自由端/邻段更小才缩）。
+            // 大径面（外齿齿顶面 / 内齿外侧齿根面）两端按**已生效的端面自动倒角**缩进。
             let (ta, tb) = (
                 x0 + own_ch[index][0].unwrap_or(0.0),
                 x1 - own_ch[index][1].unwrap_or(0.0),
@@ -3363,10 +3558,18 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
             // 分度线（点划线，3中心线层；不受倒角影响）
             entities.push(line([x0, r], [x1, r], LAYER_CENTER));
             entities.push(line([x0, -r], [x1, -r], LAYER_CENTER));
-            // 齿根线：与 `gear.rs::section_view()` 一致，只在剖视可见；也是剖面线边界。
+            // 内侧直径线（外齿 = 齿根圆 / 内齿 = 里侧齿顶）：剖视恒画（`1轮廓实线层`，齿部按不剖，
+            // 也是剖面线边界）；**常规侧视图按 MARK 开关** —— GEAR 画 `2细线层`（青色 ACI 4）、
+            // SPLINE 不画（花键制图口径；用户 2026-09-23 定案）。
             section_lines.push(line([x0, rf], [x1, rf], LAYER_MAIN));
             section_lines.push(line([x0, -rf], [x1, -rf], LAYER_MAIN));
-            profile.push(lr_line([x0, rf], [x1, rf]));
+            if !gear.involute {
+                spline_regular.push(line([x0, rf], [x1, rf], LAYER_THIN));
+                spline_regular.push(line([x0, -rf], [x1, -rf], LAYER_THIN));
+            }
+            // 剖面线边界：外齿按齿根圆（齿部不剖）；内齿按大径（最小实现：按实体段近似，不挖内孔）。
+            let bound = hatch_bound_radius(gear);
+            profile.push(lr_line([x0, bound], [x1, bound]));
             continue;
         }
         // ── 花键段（矩形花键）：小径细线 / 收尾弧 / 两根细竖线；
@@ -5765,10 +5968,22 @@ GEAR M3 Z20";
         assert!(has_line(&shaft, [20.0, r], [50.0, r]));
         assert!(has_line(&shaft, [20.0, -r], [50.0, -r]));
         assert_eq!(layer_of_y(r), Some(crate::partgen_kit::LAYER_CENTER));
-        // 齿根线：与 gear.rs::side_view() 一致，常规视图**不画**（剖视才画）
-        assert!(!has_line(&shaft, [20.0, rf], [50.0, rf]), "常规不画齿根线");
-        assert!(!has_line(&shaft, [20.0, -rf], [50.0, -rf]), "常规不画齿根线");
-        assert_eq!(layer_of_y(rf), None, "齿根线上没有图元");
+        // 内侧直径线（齿根圆）：统一表达式的 MARK 画法开关 —— GEAR 常规侧视图**画**
+        // 2细线层青色细实线（用户 2026-09-23 定案）；SPLINE 不画；剖视两标记都画。
+        assert!(has_line(&shaft, [20.0, rf], [50.0, rf]), "GEAR 常规画齿根细实线");
+        assert!(has_line(&shaft, [20.0, -rf], [50.0, -rf]), "GEAR 常规画齿根细实线");
+        assert_eq!(layer_of_y(rf), Some(LAYER_THIN), "齿根细实线落 2细线层");
+        // 2细线层定义 = ACI 4（青）+ Continuous（层色可断言）。
+        let thin = crate::layer_defs()
+            .into_iter()
+            .find(|l| l.name == LAYER_THIN)
+            .expect("2细线层定义");
+        assert_eq!(
+            thin.color,
+            ocs_plugin_api::host::acadrust::types::Color::from_index(4),
+            "2细线层应为青色 ACI 4"
+        );
+        assert_eq!(thin.linetype, "Continuous", "2细线层应为细实线 Continuous");
         // 分度圆半径 30 不是轮廓（轮廓在齿顶 33）
         assert!(!shaft.entities.iter().any(|e| matches!(e, EntityType::Line(l)
             if near(l.start.y, r) && near(l.end.y, r) && l.common.layer == crate::partgen_kit::LAYER_MAIN)));
@@ -5787,6 +6002,104 @@ GEAR M3 Z20";
         // 最大直径按齿顶圆算
         assert!(near(shaft.max_diameter, 66.0));
         assert!(near(shaft.total_length, 50.0));
+    }
+
+    /// 统一表达式 MARK 画法开关（用户 2026-09-23）：同一组参数下，`GEAR` 与 `SPLINE` 的
+    /// **常规侧视图差异恰为两处内侧直径细实线**（`2细线层`；其余图元逐条一致）；
+    /// **剖视两标记图元完全一致**（都画内侧线 `1轮廓实线层`）。
+    #[test]
+    fn unified_marker_toggles_root_thin_line_in_regular_view() {
+        let base = "M3 Z20 ALPHA20 X0 DA66 DF52.5 BETA0 H30";
+        let g = parse_program(&format!("GEAR EX {base}")).unwrap();
+        let s = parse_program(&format!("SPLINE EX {base}")).unwrap();
+        // 标记与字段经 DSL 保留。
+        assert!(!g.segments[0].gear.unwrap().involute, "GEAR 标记");
+        assert!(s.segments[0].gear.unwrap().involute, "SPLINE 标记");
+        assert_eq!(s.segments[0].gear.unwrap().kind, GearKind::External);
+        let sg = build(&g, 1.0).unwrap();
+        let ss = build(&s, 1.0).unwrap();
+        let rf = 52.5 / 2.0;
+        // 常规：GEAR 有两条 2细线层齿根线，SPLINE 没有。
+        assert!(has_line(&sg, [0.0, rf], [30.0, rf]) && has_line(&sg, [0.0, -rf], [30.0, -rf]));
+        assert!(!has_line(&ss, [0.0, rf], [30.0, rf]) && !has_line(&ss, [0.0, -rf], [30.0, -rf]));
+        assert_eq!(layer_of_line(&sg, [0.0, rf], [30.0, rf]), Some(LAYER_THIN));
+        let thin_count = |sh: &Shaft| sh.entities.iter().filter(|e| layer_of(e) == LAYER_THIN).count();
+        assert_eq!(thin_count(&sg), 2, "GEAR 常规恰 2 条细实线（上/下齿根）");
+        assert_eq!(thin_count(&ss), 0, "SPLINE 常规不画内侧细实线");
+        // 除那两条细线外，两个常规视图逐条一致。
+        let rest = |sh: &Shaft| -> Vec<String> {
+            let mut v: Vec<String> = entities_csv(&sh.entities)
+                .lines()
+                .filter(|l| !l.contains(LAYER_THIN))
+                .map(str::to_string)
+                .collect();
+            v.sort();
+            v
+        };
+        assert_eq!(rest(&sg), rest(&ss), "除内侧细实线外常规视图应完全一致");
+        // 剖视：两标记都画内侧线，图元完全一致。
+        let vg = build(&parse_program(&format!("GEAR EX {base} | VIEW 剖视")).unwrap(), 1.0).unwrap();
+        let vs = build(&parse_program(&format!("SPLINE EX {base} | VIEW 剖视")).unwrap(), 1.0).unwrap();
+        assert_eq!(layer_of_line(&vg, [0.0, rf], [30.0, rf]), Some(LAYER_MAIN));
+        assert_eq!(layer_of_line(&vs, [0.0, rf], [30.0, rf]), Some(LAYER_MAIN));
+        assert_eq!(entities_csv(&vg.entities), entities_csv(&vs.entities), "剖视两标记应完全一致");
+    }
+
+    /// 轴侧统一齿形段：新格式 / 旧格式（兼容）/ 缺 DA/DF 回推 / 内齿 / JSON 往返 / 矩形花键不变。
+    #[test]
+    fn unified_tooth_segment_parse_compat_and_json() {
+        // 新格式外齿：显式 DA/DF 直接用。
+        let p = parse_program("GEAR EX M3 Z20 ALPHA20 X0.2 DA66 DF52.5 BETA0 H30").unwrap();
+        let g = p.segments[0].gear.unwrap();
+        assert!(!g.involute && g.kind == GearKind::External);
+        assert!((g.x - 0.2).abs() < 1e-12);
+        assert!((g.major_radius() - 33.0).abs() < 1e-9 && (g.minor_radius() - 26.25).abs() < 1e-9);
+        // 旧格式：仍可解析，DA/DF 按 ha*=1/c*=0.25、X 缺省 0 推。
+        let p = parse_program("GEAR M3 Z20 H30 ALPHA20").unwrap();
+        let g = p.segments[0].gear.unwrap();
+        assert!(!g.involute && g.kind == GearKind::External && g.x.abs() < 1e-12);
+        assert!((g.major_radius() - 33.0).abs() < 1e-9);
+        assert!((g.minor_radius() - 26.25).abs() < 1e-9);
+        // 缺 DA/DF 回推（X≠0）：d′=m(z+2x)=61.2 → DA=67.2、DF=53.7（±2m / −2.5m）。
+        let p = parse_program("GEAR EX M3 Z20 X0.2 H30").unwrap();
+        let g = p.segments[0].gear.unwrap();
+        assert!((g.major_radius() - (61.2 + 6.0) / 2.0).abs() < 1e-9, "DA 回推");
+        assert!((g.minor_radius() - (61.2 - 7.5) / 2.0).abs() < 1e-9, "DF 回推");
+        // SPLINE + 齿形关键字 = 渐开线花键段（不是矩形花键）；显式 DA/DF 原样。
+        let p = parse_program("SPLINE EX M3 Z20 ALPHA30 X0 DA63 DF54.6 BETA0 H30").unwrap();
+        let g = p.segments[0].gear.unwrap();
+        assert!(g.involute && p.segments[0].spline.is_none());
+        assert!((g.major_radius() - 31.5).abs() < 1e-9 && (g.minor_radius() - 27.3).abs() < 1e-9);
+        // 内齿：DA=外侧齿根（大径）、DF=里侧齿顶（小径）；外轮廓取 DA，GEAR 常规画内孔细实线。
+        let p = parse_program("GEAR IN M3 Z20 ALPHA20 X0 DA67.5 DF54 BETA0 H30").unwrap();
+        let g = p.segments[0].gear.unwrap();
+        assert_eq!(g.kind, GearKind::Internal);
+        assert!((p.segments[0].outer_radius(End::L) - 33.75).abs() < 1e-9);
+        let sh = build(&p, 1.0).unwrap();
+        assert!(has_line(&sh, [2.0, 33.75], [28.0, 33.75]), "内齿外轮廓 = 大径（自由端自动倒角 C=2）");
+        assert!(has_line(&sh, [0.0, 27.0], [30.0, 27.0]), "内齿内孔线 = 小径");
+        assert_eq!(
+            layer_of_line(&sh, [0.0, 27.0], [30.0, 27.0]),
+            Some(LAYER_THIN),
+            "GEAR IN 常规内孔细实线"
+        );
+        // SPLINE IN 同参数：常规不画内孔线（MARK 开关），剖视有。
+        let p2 = parse_program("SPLINE IN M3 Z20 ALPHA30 X0 DA67.5 DF54 BETA0 H30").unwrap();
+        let s2 = build(&p2, 1.0).unwrap();
+        assert!(!has_line(&s2, [0.0, 27.0], [30.0, 27.0]), "SPLINE IN 常规不画内孔线");
+        let sc = build(&parse_program("SPLINE IN M3 Z20 ALPHA30 X0 DA67.5 DF54 BETA0 H30 | VIEW 剖视").unwrap(), 1.0).unwrap();
+        assert!(has_line(&sc, [0.0, 27.0], [30.0, 27.0]), "SPLINE IN 剖视画内孔线");
+        // 矩形花键不受影响：`SPLINE <规格>` 仍是 spline 段（不是齿形段）。
+        let p = parse_program("SPLINE 6x23x26x6 L30").unwrap();
+        assert!(p.segments[0].gear.is_none() && p.segments[0].spline.is_some());
+        // JSON 往返：新字段（marker/kind/x/da/df）全部保留。
+        let p = parse_program("SPLINE IN M3 Z20 ALPHA30 X0.3 DA67.5 DF54 BETA0 H30").unwrap();
+        let back = parse_json(&serde_json::to_string(&p).unwrap()).unwrap();
+        assert_eq!(p, back, "统一齿形段 JSON 往返应逐字段一致");
+        // 校验：DA ≤ DF 报错；DA 重复报错；无标记时 X/DA/DF 仍是未知关键字（不静默）。
+        assert!(parse_program("GEAR EX M3 Z20 DA50 DF60 H30").unwrap_err().contains("必须大于小径"));
+        assert!(parse_program("GEAR EX M3 Z20 DA66 DA66 H30").unwrap_err().contains("DA 重复"));
+        assert!(parse_program("X0.3").unwrap_err().contains("不识别的关键字"));
     }
 
     #[test]
@@ -6312,16 +6625,16 @@ GEAR M3 Z20";
         );
         assert!(has_line(&shaft, [145.0, 31.0], [147.0, 33.0]), "齿轮左端倒角");
         assert!(has_line(&shaft, [173.0, 33.0], [175.0, 31.0]), "齿轮右端倒角");
-        // 齿轮：齿顶面（h−2C = 26，±33）/ 分度（点划线，±30）；常规视图齿根线（±26.25）不画
+        // 齿轮：齿顶面（h−2C = 26，±33）/ 分度（点划线，±30）；常规视图齿根细实线（±26.25，GEAR 画）
         assert!(has_line(&shaft, [147.0, 33.0], [173.0, 33.0]), "齿顶面（缩进 2C）");
         assert!(has_line(&shaft, [145.0, 30.0], [175.0, 30.0]), "分度线");
         assert!(
-            !has_line(&shaft, [145.0, 26.25], [175.0, 26.25]),
-            "常规视图齿根线不画（与 gear.rs::side_view 一致）"
+            has_line(&shaft, [145.0, 26.25], [175.0, 26.25]),
+            "GEAR 常规视图画齿根细实线（2细线层，用户 2026-09-23 定案）"
         );
         assert!(
-            !has_line(&shaft, [145.0, -26.25], [175.0, -26.25]),
-            "常规视图下半齿根线也不画"
+            has_line(&shaft, [145.0, -26.25], [175.0, -26.25]),
+            "GEAR 常规视图下半齿根细实线也画"
         );
         assert!(
             has_line(&shaft, [175.0, -31.0], [175.0, 31.0]),
@@ -6344,7 +6657,7 @@ GEAR M3 Z20";
             layer_at(145.0, 30.0),
             Some(crate::partgen_kit::LAYER_CENTER)
         );
-        assert_eq!(layer_at(145.0, 26.25), None, "常规视图没有齿根线");
+        assert_eq!(layer_at(145.0, 26.25), Some(LAYER_THIN), "GEAR 常规视图齿根细实线（2细线层）");
 
         let path = std::env::var("HOME")
             .map(std::path::PathBuf::from)
@@ -6359,7 +6672,8 @@ GEAR M3 Z20";
         // 65 = 旧 demo 59 + 齿轮倒角 6（4 斜线 + 2 台阶竖线）；
         // 旧 59 = 旧 demo 44 + 局部螺纹新增 5（锥面上下 2 + 螺尾上下 2 + 分界竖线 1）
         //      + 段边界贯通竖线 6 + 倒角终点竖线 3 + OV 槽两条界线 2 − OV 砂轮细线 1
-        assert_eq!(shaft.entities.len(), 65, "demo 图元数");
+        // 统一表达式（2026-09-23）：GEAR 常规侧视图加齿根细实线 +2 = 67。
+        assert_eq!(shaft.entities.len(), 67, "demo 图元数");
 
         // 剖视：真实几何 + 齿轮齿根线（2 条）+ 一个 HATCH（2 环）；不再画贯通竖线
         let section_program = parse_program(&format!("{DEMO}\nVIEW 剖视")).unwrap();
@@ -6528,8 +6842,9 @@ GEAR M3 Z20";
         // 齿轮倒角台阶竖线（齿轮.rs::side_view() 的 ±ra 台阶线）：x=124/150、±33。
         assert!(has_line(&normal, [124.0, -33.0], [124.0, 33.0]), "齿轮左台阶竖线");
         assert!(has_line(&normal, [150.0, -33.0], [150.0, 33.0]), "齿轮右台阶竖线");
-        // 常规不画齿根线（与 gear.rs::side_view() 一致）
-        assert!(!has_line(&normal, [122.0, 26.25], [152.0, 26.25]));
+        // GEAR 常规画齿根细实线（2细线层，用户 2026-09-23 定案）
+        assert!(has_line(&normal, [122.0, 26.25], [152.0, 26.25]), "GEAR 常规画齿根细实线");
+        assert_eq!(layer_of_line(&normal, [122.0, 26.25], [152.0, 26.25]), Some(LAYER_THIN));
 
         // ── 剖视：不画贯通竖线，只留真实面/倒角/槽体 ──
         for (x, h) in [(2.0, 15.0), (45.0, 15.0), (72.0, 20.0), (72.4, 19.6), (75.0, 20.6),

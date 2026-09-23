@@ -230,22 +230,31 @@ function segmentsFor(dsl) {
       });
       continue;
     }
-    // GEAR 段（与 shaft.rs 子关键字 M/Z/H/ALPHA 对齐；H/ALPHA 可省）
-    const gr = /^GEAR\b(.*)$/i.exec(line);
-    if (gr) {
-      if (!/\bZ\s*=?\s*\d+/i.test(gr[1])) {
-        return { error: '第 1 行（第 1 段）：关键字 GEAR 缺少 Z（齿数）' };
+    // GEAR / SPLINE(渐开线齿形段) 段（与 shaft.rs 子关键字对齐；EX/IN/X/DA/DF/H/ALPHA 可省）。
+    // 矩形花键已在上面的规格分支拦下，这里只处理“SPLINE + 齿形关键字”。
+    const gr = /^(GEAR|SPLINE)\b(.*)$/i.exec(line);
+    if (gr && (gr[1].toUpperCase() === 'GEAR' || /^\s*(EX|IN|M|Z|X|DA|DF|ALPHA|BETA|H)\b/i.test(gr[2]))) {
+      if (!/\bZ\s*=?\s*\d+/i.test(gr[2])) {
+        return { error: `第 1 行（第 1 段）：关键字 ${gr[1].toUpperCase()} 缺少 Z（齿数）` };
       }
       const g = {
-        m: Number(/\bM\s*=?\s*(-?[\d.]+)/i.exec(gr[1])[1]),
-        z: Number(/\bZ\s*=?\s*(\d+)/i.exec(gr[1])[1]),
+        involute: gr[1].toUpperCase() === 'SPLINE',
+        kind: /\bIN\b/i.test(gr[2]) ? 'internal' : 'external',
+        m: Number(/\bM\s*=?\s*(-?[\d.]+)/i.exec(gr[2])[1]),
+        z: Number(/\bZ\s*=?\s*(\d+)/i.exec(gr[2])[1]),
         h: null,
         alpha: null,
       };
-      const h = /\bH\s*=?\s*(-?[\d.]+)/i.exec(gr[1]);
+      const h = /\bH\s*=?\s*(-?[\d.]+)/i.exec(gr[2]);
       if (h) g.h = Number(h[1]);
-      const al = /\bALPHA\s*=?\s*(-?[\d.]+)/i.exec(gr[1]);
+      const al = /\bALPHA\s*=?\s*(-?[\d.]+)/i.exec(gr[2]);
       if (al) g.alpha = Number(al[1]);
+      const xv = /\bX\s*=?\s*(-?[\d.]+)/i.exec(gr[2]);
+      if (xv && Number(xv[1]) !== 0) g.x = Number(xv[1]);
+      const dav = /\bDA\s*=?\s*(-?[\d.]+)/i.exec(gr[2]);
+      if (dav) g.da = Number(dav[1]);
+      const dfv = /\bDF\s*=?\s*(-?[\d.]+)/i.exec(gr[2]);
+      if (dfv) g.df = Number(dfv[1]);
       out.push({ gear: g });
       continue;
     }
@@ -504,6 +513,31 @@ await tick();
 check(elv('exprErr').textContent.includes('不识别的关键字') && elv('exprErr').textContent.includes('INVOLSPLINE'),
   '表达式框应拒绝 INVOLSPLINE：' + elv('exprErr').textContent);
 check(S.rows.length === rowsBeforeInvolGone, '被拒的表达式不应加段');
+
+// ⑧.10 统一齿形段（齿轮/花键同一套）粘贴：SPLINE(渐开线) + EX/IN + X/DA/DF 全保留，
+// 再回写行文本 → 与粘贴的几何参数一致（MARK 参与几何，不能只在解析层丢）。
+const rowsBeforeUnified = S.rows.length;
+elv('exprInput').value = 'OCSMGEAR SPLINE EX M3 Z20 ALPHA30 X0.3 DA66 DF52.5 H30';
+elv('exprAdd').click();
+await tick();
+check(elv('exprErr').textContent === '', '统一花键表达式应解析成功：' + elv('exprErr').textContent);
+check(S.rows.length === rowsBeforeUnified + 1, '统一花键表达式应加一段');
+const ug = S.rows[S.rows.length - 1].gear;
+check(ug.on && ug.mark === 'SPLINE' && ug.kind === 'EX',
+  `统一花键段应保留 MARK/KIND：${JSON.stringify(ug)}`);
+check(Math.abs(Number(ug.x) - 0.3) < 1e-9 && Math.abs(Number(ug.da) - 66) < 1e-9 && Math.abs(Number(ug.df) - 52.5) < 1e-9,
+  `统一花键段应保留 X/DA/DF：${JSON.stringify(ug)}`);
+check(dslEl.value.includes('SPLINE EX M3 Z20 ALPHA30 X0.3 DA66 DF52.5 H30'),
+  `行文本应回写统一齿形段：${JSON.stringify(dslEl.value)}`);
+// 内齿 + GEAR 标记：IN 与 GEAR 也保留。
+elv('exprInput').value = 'GEAR IN M3 Z20 ALPHA20 X0 DA67.5 DF54 H30';
+elv('exprAdd').click();
+await tick();
+const ig = S.rows[S.rows.length - 1].gear;
+check(ig.on && ig.mark === 'GEAR' && ig.kind === 'IN' && Math.abs(Number(ig.da) - 67.5) < 1e-9,
+  `内齿统一段应保留 GEAR/IN/DA：${JSON.stringify(ig)}`);
+check(dslEl.value.includes('GEAR IN M3 Z20 ALPHA20 DA67.5 DF54 H30'),
+  `内齿行文本应回写：${JSON.stringify(dslEl.value)}`);
 
 report();
 

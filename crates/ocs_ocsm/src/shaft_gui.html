@@ -222,7 +222,7 @@ function blankRow() {
     ch: { l: { on: false, c: "2" }, r: { on: false, c: "2" } },
     ov: { l: { on: false, b1: "" }, r: { on: false, b1: "" } },
     m: { on: false, p: "" },
-    gear: { on: false, m: "3", z: "20", h: "", alpha: "" },
+    gear: { on: false, mark: "GEAR", kind: "EX", m: "3", z: "20", x: "", da: "", df: "", h: "", alpha: "" },
     spline: { on: false, spec: "6x23x26x6", len: "30", de: "" },
   };
 }
@@ -397,10 +397,15 @@ function rowHtml(r, i) {
     <td class="feat">${endCell("ov", "l", r.ov.l)}${endCell("ov", "r", r.ov.r)}</td>
     <td class="feat"><div class="frow"><label class="chk"><input type="checkbox" data-f="m.on"${ck(mOn)}${dis(gearOn || ovOn || splineOn)}>M</label>
       <input type="number" step="0.1" min="0" data-f="m.p" value="${esc(r.m.p)}" placeholder="0.85d"${dis(gearOn || ovOn || splineOn)}></div></td>
-    <td class="feat"><div class="frow"><label class="chk"><input type="checkbox" data-f="gear.on"${ck(gearOn)}${dis(splineOn)}>GEAR</label></div>
+    <td class="feat"><div class="frow"><label class="chk"><input type="checkbox" data-f="gear.on"${ck(gearOn)}${dis(splineOn)}>GEAR</label>
+      <select data-f="gear.mark" title="MARK 画法开关：GEAR 常规侧视图画内侧直径细实线；SPLINE（渐开线花键）不画"${dis(!gearOn)}><option value="GEAR"${r.gear.mark === "GEAR" ? " selected" : ""}>GEAR</option><option value="SPLINE"${r.gear.mark === "SPLINE" ? " selected" : ""}>SPLINE</option></select>
+      <select data-f="gear.kind" title="内/外齿（IN = 内齿轮/内花键）"${dis(!gearOn)}><option value="EX"${r.gear.kind === "EX" ? " selected" : ""}>EX</option><option value="IN"${r.gear.kind === "IN" ? " selected" : ""}>IN</option></select></div>
       <div class="frow"><span class="chk">m</span><input type="number" step="0.1" min="0" data-f="gear.m" value="${esc(r.gear.m)}"${dis(!gearOn)}>
-      <span class="chk">z</span><input type="number" step="1" min="2" data-f="gear.z" value="${esc(r.gear.z)}"${dis(!gearOn)}></div>
-      <div class="frow"><span class="chk">H</span><input type="number" step="0.1" min="0" data-f="gear.h" value="${esc(r.gear.h)}" placeholder="10m"${dis(!gearOn)}>
+      <span class="chk">z</span><input type="number" step="1" min="2" data-f="gear.z" value="${esc(r.gear.z)}"${dis(!gearOn)}>
+      <span class="chk">X</span><input type="number" step="0.05" data-f="gear.x" value="${esc(r.gear.x)}" placeholder="0" style="width:52px"${dis(!gearOn)}></div>
+      <div class="frow"><span class="chk">DA</span><input type="number" step="0.1" min="0" data-f="gear.da" value="${esc(r.gear.da)}" placeholder="推" style="width:64px"${dis(!gearOn)}>
+      <span class="chk">DF</span><input type="number" step="0.1" min="0" data-f="gear.df" value="${esc(r.gear.df)}" placeholder="推" style="width:64px"${dis(!gearOn)}>
+      <span class="chk">H</span><input type="number" step="0.1" min="0" data-f="gear.h" value="${esc(r.gear.h)}" placeholder="10m" style="width:52px"${dis(!gearOn)}>
       <span class="chk">α</span><input type="number" step="0.5" min="10.1" max="49.9" data-f="gear.alpha" value="${esc(r.gear.alpha)}" placeholder="20" title="基准齿形角，度（省略 = 20°，可给 10°<α<50°）" style="width:58px"${dis(!gearOn)}></div></td>
     <td class="feat"><div class="frow"><label class="chk"><input type="checkbox" data-f="spline.on"${ck(splineOn)}${dis(gearOn)}>SPLINE</label></div>
       <div class="frow"><select data-f="spline.spec" title="表内规格下拉；表外规格选「自定义…」"${dis(!splineOn)}>${splineOptionsHtml(specSel)}</select></div>
@@ -440,9 +445,26 @@ function enforceExclusive(r) {
 
 function rowToDsl(r) {
   if (r.gear.on) {
-    let s = "GEAR M" + numTok(r.gear.m) + " Z" + numTok(r.gear.z);
-    if (String(r.gear.h).trim() !== "") s += " H" + numTok(r.gear.h);
+    const mark = r.gear.mark === "SPLINE" ? "SPLINE" : "GEAR";
+    const internal = r.gear.kind === "IN";
+    const x = String(r.gear.x).trim();
+    const da = String(r.gear.da).trim();
+    const df = String(r.gear.df).trim();
+    const hasNew = mark === "SPLINE" || internal || x !== "" || da !== "" || df !== "";
+    if (!hasNew) {
+      // 旧紧凑写法保持字节不变（向后兼容；轴侧解析默认 EX/X0/DA/DF 推）。
+      let s = "GEAR M" + numTok(r.gear.m) + " Z" + numTok(r.gear.z);
+      if (String(r.gear.h).trim() !== "") s += " H" + numTok(r.gear.h);
+      if (String(r.gear.alpha).trim() !== "") s += " ALPHA" + numTok(r.gear.alpha);
+      return s;
+    }
+    // 统一齿形段：MARK KIND M Z ALPHA X DA DF [H]（BETA 轴侧固定 0，不在此编辑）。
+    let s = mark + " " + (internal ? "IN" : "EX") + " M" + numTok(r.gear.m) + " Z" + numTok(r.gear.z);
     if (String(r.gear.alpha).trim() !== "") s += " ALPHA" + numTok(r.gear.alpha);
+    if (x !== "") s += " X" + numTok(r.gear.x);
+    if (da !== "") s += " DA" + numTok(r.gear.da);
+    if (df !== "") s += " DF" + numTok(r.gear.df);
+    if (String(r.gear.h).trim() !== "") s += " H" + numTok(r.gear.h);
     return s;
   }
   if (r.spline.on) {
@@ -487,8 +509,13 @@ function rowFromSegment(seg) {
   const r = blankRow();
   if (seg.gear) {
     r.gear.on = true;
+    r.gear.mark = seg.gear.involute ? "SPLINE" : "GEAR";
+    r.gear.kind = seg.gear.kind === "internal" ? "IN" : "EX";
     r.gear.m = fmt(seg.gear.m);
     r.gear.z = String(seg.gear.z);
+    r.gear.x = seg.gear.x === null || seg.gear.x === undefined || Math.abs(seg.gear.x) < 1e-12 ? "" : fmt(seg.gear.x);
+    r.gear.da = seg.gear.da === null || seg.gear.da === undefined ? "" : fmt(seg.gear.da);
+    r.gear.df = seg.gear.df === null || seg.gear.df === undefined ? "" : fmt(seg.gear.df);
     r.gear.h = seg.gear.h === null || seg.gear.h === undefined ? "" : fmt(seg.gear.h);
     r.gear.alpha = seg.gear.alpha === null || seg.gear.alpha === undefined ? "" : fmt(seg.gear.alpha);
     return r;
@@ -907,6 +934,14 @@ function modelFromRows() {
       const gear = { m, z };
       if (h !== null) gear.h = h;
       if (alpha !== null) gear.alpha = alpha;
+      if (r.gear.mark === "SPLINE") gear.involute = true;
+      if (r.gear.kind === "IN") gear.kind = "internal";
+      const xRaw = String(r.gear.x).trim();
+      const daRaw = String(r.gear.da).trim();
+      const dfRaw = String(r.gear.df).trim();
+      if (xRaw !== "") gear.x = numOrNaN(r.gear.x);
+      if (daRaw !== "") gear.da = numOrNaN(r.gear.da);
+      if (dfRaw !== "") gear.df = numOrNaN(r.gear.df);
       segments.push({ gear });
       continue;
     }

@@ -55,19 +55,29 @@ pub(crate) fn bom_dir() -> PathBuf {
             return PathBuf::from(dir);
         }
     }
-    let mut args = std::env::args();
-    while let Some(arg) = args.next() {
-        if arg == "--ocs-plugin-runner" {
-            if let (Some(_socket), Some(lib)) = (args.next(), args.next()) {
-                let p = PathBuf::from(lib);
-                if let Some(dir) = p.parent() {
-                    return dir.join("bom");
-                }
-            }
-            break;
-        }
+    // 测试二进制可以从任意 CWD 启动（直接跑 `target/debug/deps/ocs_ocsm-…`）；
+    // 固定用 crate 内的 `bom/`：既不把 `settings.json` 写进调用目录，也不因 CWD 变化找不到模板块
+    // （2026-09-23 flaky 排查附带；生产走下面的 `--ocs-plugin-runner` 分支）。
+    #[cfg(test)]
+    {
+        return PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("bom");
     }
-    PathBuf::from("bom")
+    #[cfg(not(test))]
+    {
+        let mut args = std::env::args();
+        while let Some(arg) = args.next() {
+            if arg == "--ocs-plugin-runner" {
+                if let (Some(_socket), Some(lib)) = (args.next(), args.next()) {
+                    let p = PathBuf::from(lib);
+                    if let Some(dir) = p.parent() {
+                        return dir.join("bom");
+                    }
+                }
+                break;
+            }
+        }
+        PathBuf::from("bom")
+    }
 }
 
 /// 明细表配置（`bom/settings.json`）。

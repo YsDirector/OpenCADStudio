@@ -75,9 +75,11 @@ pub const HELIX_SPACING: f64 = 5.0;
 // ─────────────────────────── 参数 ───────────────────────────
 
 /// 齿轮种类（外齿轮 = 一期；内齿轮 = 二期，用户 2026-09-17 给模板）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum GearKind {
     /// 外齿轮：齿顶圆在外、齿根圆在内（da > d > df）
+    #[default]
     External,
     /// 内齿轮（齿圈）：齿顶圆在**内**、齿根圆在**外**（da < d < df），齿朝圆心长
     Internal,
@@ -3488,6 +3490,8 @@ pub fn info_json(query: &str) -> Result<String, String> {
         "internal_tip_below_base": p.internal_tip_falls_below_base(),
         "chamfer": p.chamfer(),
         "pitch_angle": round4(p.pitch_angle().to_degrees()),
+        // 统一齿形表达式（齿轮/花键共用；齿轮生成器两种模式都输出它，见 `tooth_expr`）。
+        "expr": gear_tooth_expr(&p),
         "half_tooth_angle_tip": round4(p.half_tooth_angle(p.da() / 2.0).to_degrees()),
         "helical": p.is_helical(),
         "block": block_name(&p, view),
@@ -3564,6 +3568,8 @@ fn spline_info_json(p: &GearParams, view: GearView) -> Result<String, String> {
         "sv_min": if engine.std == crate::invol_spline::SplineStd::ANSI { Some(round4(engine.ansi_sv_min())) } else { None },
         "internal_major": round4(engine.internal_major_dia()),
         "internal_minor": round4(engine.internal_minor_dia()),
+        // 统一齿形表达式（花键模式也走同一套；DA/DF 由引擎各体系公式算出）。
+        "expr": spline_tooth_expr(&engine, p.kind, p.h),
         "inspection": inspection,
         "block": p.spline_block_name(&engine, view),
         "spec": p.spline_spec(&engine, origin.as_ref()),
@@ -3574,6 +3580,64 @@ fn spline_info_json(p: &GearParams, view: GearView) -> Result<String, String> {
 
 fn round4(v: f64) -> f64 {
     (v * 1e4).round() / 1e4
+}
+
+// ─────────────────────── 统一齿形表达式（齿轮 / 花键共用） ───────────────────────
+
+/// 统一齿形段表达式：`MARK KIND M… Z… ALPHA… X… DA… DF… BETA… H…`。
+///
+/// * `MARK` = `GEAR`（齿轮）/ `SPLINE`（渐开线花键）—— **画法开关**：决定轴生成器
+///   **常规侧视图**是否画内侧直径的青色细实线（`2细线层`；外齿 = 齿根圆 df，内齿 = 里侧齿顶圆）。
+///   因此它必须随 DSL/JSON/表达式往返保留。
+/// * `KIND` = `EX`/`IN`；`DA`/`DF` 恒为**大径/小径**（外齿 = 齿顶/齿根；内齿 = 外侧齿根/里侧齿顶）——
+///   与 `/api/gear_info` 的 `da`/`df` 同口径。
+/// * `BETA` 轴段当前只支持 0（斜齿未实现，非 0 由轴侧明确报错）。
+/// * `H` 是轴段尺寸（齿轮模式 = 厚度 h，花键模式 = 有效长度 L），必须保留，否则粘贴不成段。
+pub fn tooth_expr(
+    mark: &str,
+    kind: GearKind,
+    m: f64,
+    z: u32,
+    alpha_deg: f64,
+    x: f64,
+    major: f64,
+    minor: f64,
+    beta_deg: f64,
+    h: f64,
+) -> String {
+    format!(
+        "{} {} M{} Z{} ALPHA{} X{} DA{} DF{} BETA{} H{}",
+        mark,
+        if kind.is_internal() { "IN" } else { "EX" },
+        trim(m),
+        z,
+        trim(alpha_deg),
+        trim(x),
+        trim(major),
+        trim(minor),
+        trim(beta_deg),
+        trim(h)
+    )
+}
+
+/// 齿轮模式的统一表达式（内齿时 DA/DF 按大径/小径转换：DA = df、DF = da）。
+pub fn gear_tooth_expr(p: &GearParams) -> String {
+    let (major, minor) = if p.kind.is_internal() {
+        (p.df(), p.da())
+    } else {
+        (p.da(), p.df())
+    };
+    tooth_expr("GEAR", p.kind, p.m, p.z, p.alpha_deg, p.x, major, minor, p.beta_deg, p.h)
+}
+
+/// 花键模式的统一表达式（DA/DF 用引擎口径：外花键 da/df；内花键大径 D_ei / 小径 D_ii）。
+pub fn spline_tooth_expr(e: &crate::invol_spline::InvolParams, kind: GearKind, h: f64) -> String {
+    let (major, minor) = if e.internal {
+        (e.internal_major_dia(), e.internal_minor_dia())
+    } else {
+        (e.da(), e.df())
+    };
+    tooth_expr("SPLINE", kind, e.m, e.z, e.alpha_deg, e.x, major, minor, 0.0, h)
 }
 
 /// 把图元渲染成 SVG（预览用，仅支持 LINE/CIRCLE/ARC/SPLINE/HATCH 边界）。
@@ -6288,6 +6352,125 @@ mod tests {
         let md = build_report(&p).unwrap();
         assert!(md.contains(&format!("| 内花键大径 D_ei（外侧齿根） | {} mm |", trim(engine.internal_major_dia()))), "{md}");
         assert!(md.contains(&format!("| 内花键小径 D_ii（里侧齿顶） | {} mm |", trim(engine.internal_minor_dia()))), "{md}");
+    }
+
+    /// 统一齿形表达式：九项 + H；DA/DF = 大径/小径；齿轮/花键同格式；四个示例串钉死。
+    #[test]
+    fn unified_tooth_expr_format_and_examples() {
+        // 外齿轮 m3 z20（ha*=1、c*=0.25、x=0）：d=60、da=66、df=52.5。
+        let p = GearParams { kind: GearKind::External, m: 3.0, z: 20, h: 30.0, ..GearParams::default() };
+        assert_eq!(gear_tooth_expr(&p), "GEAR EX M3 Z20 ALPHA20 X0 DA66 DF52.5 BETA0 H30");
+        // 内齿轮同参数：DA=大径=df=67.5、DF=小径=da=54。
+        let p = GearParams { kind: GearKind::Internal, m: 3.0, z: 20, h: 30.0, ..GearParams::default() };
+        assert_eq!(gear_tooth_expr(&p), "GEAR IN M3 Z20 ALPHA20 X0 DA67.5 DF54 BETA0 H30");
+        // 外花键 GB30R m3 z20 x0：da=63、df=54.6。
+        let (e, k) = spline_expr_case(false);
+        assert_eq!(
+            spline_tooth_expr(&e, k, 30.0),
+            "SPLINE EX M3 Z20 ALPHA30 X0 DA63 DF54.6 BETA0 H30"
+        );
+        // 内花键同参数：DA=大径 D_ei=65.4、DF=小径 D_ii=gb_form+2cF。
+        let (e, k) = spline_expr_case(true);
+        assert_eq!(
+            spline_tooth_expr(&e, k, 30.0),
+            "SPLINE IN M3 Z20 ALPHA30 X0 DA65.4 DF57.3436 BETA0 H30"
+        );
+        // info JSON 两模式都带 expr（GUI 直接显示这个串）。
+        let j: serde_json::Value = serde_json::from_str(
+            &info_json("m=3&z=20&h=30").unwrap(),
+        )
+        .unwrap();
+        assert_eq!(j["mode"], "gear");
+        assert_eq!(j["expr"], "GEAR EX M3 Z20 ALPHA20 X0 DA66 DF52.5 BETA0 H30");
+        let j: serde_json::Value = serde_json::from_str(
+            &info_json("mode=spline&std=GB&profile=GB30R&m=3&z=20&h=30").unwrap(),
+        )
+        .unwrap();
+        assert_eq!(j["mode"], "spline");
+        assert_eq!(j["expr"], "SPLINE EX M3 Z20 ALPHA30 X0 DA63 DF54.6 BETA0 H30");
+    }
+
+    /// 构造统一表达式测试用的 GB30R m3 z20 引擎参数（外/内）。
+    fn spline_expr_case(internal: bool) -> (crate::invol_spline::InvolParams, GearKind) {
+        let kind = if internal { GearKind::Internal } else { GearKind::External };
+        let p = GearParams {
+            kind,
+            m: 3.0,
+            z: 20,
+            h: 30.0,
+            spline: Some(SplineOpts {
+                std: crate::invol_spline::SplineStd::GB,
+                profile: "30圆齿根".to_string(),
+                m: Some(3.0),
+                z: Some(20),
+                ..SplineOpts::default()
+            }),
+            ..GearParams::default()
+        };
+        let (e, _) = p.spline_engine().unwrap();
+        (e, kind)
+    }
+
+    /// 统一表达式**往返**：CLI/GUI 的 `expr` → 轴段解析 → 几何一致
+    /// （m/z/α/x/DA/DF/内/外/标记）；齿轮模式 + 花键四体系，每个体系外/内各一例。
+    #[test]
+    fn unified_tooth_expr_round_trips_gear_and_spline_four_standards() {
+        let near = |a: f64, b: f64| (a - b).abs() < 1e-3; // 表达式按 4 位小数发射
+        // ── 齿轮模式（外/内）──
+        for (cli, internal) in [("m=3 z=20 h=30", false), ("int m=3 z=20 h=30", true)] {
+            let r = parse_request(cli).unwrap_or_else(|e| panic!("{cli}: {e}"));
+            let expr = gear_tooth_expr(&r.params);
+            assert!(expr.starts_with("GEAR "), "{expr}");
+            let sp = crate::shaft::parse_program(&expr).unwrap_or_else(|e| panic!("{expr}: {e}"));
+            let g = sp.segments[0].gear.expect("轴侧应解析出齿形段");
+            assert_eq!(g.kind.is_internal(), internal, "{cli}: {expr}");
+            assert!(!g.involute, "{cli}: {expr}");
+            assert!(near(g.m, r.params.m) && g.z == r.params.z, "{cli}: {expr}");
+            assert!(near(g.alpha_deg, r.params.alpha_deg) && near(g.x, r.params.x), "{cli}: {expr}");
+            let (da, df) = if internal {
+                (r.params.df(), r.params.da())
+            } else {
+                (r.params.da(), r.params.df())
+            };
+            assert!(near(g.major_radius() * 2.0, da), "{cli}: {expr}");
+            assert!(near(g.minor_radius() * 2.0, df), "{cli}: {expr}");
+        }
+        // ── 花键四体系（每个体系外/内各一例）──
+        let cases = [
+            ("花键 GB30R 3 20 h=30", "花键 内花键 GB30R 3 20 h=30"),
+            (
+                "花键 DIN30 db=40 m=2 z=18 x=0.45 h=30",
+                "花键 内花键 DIN30 db=40 m=2 z=18 x=0.45 h=30",
+            ),
+            ("花键 NFP a=80 m=3.75 h=30", "花键 内花键 NFP a=80 m=3.75 h=30"),
+            (
+                "花键 ANSI30P p=5/10 5 20 h=30",
+                "花键 内花键 ANSI30P p=5/10 5 20 h=30",
+            ),
+        ];
+        for (ext, int) in cases {
+            for (cli, internal) in [(ext, false), (int, true)] {
+                let r = parse_request(cli).unwrap_or_else(|e| panic!("{cli}: {e}"));
+                let (engine, _) = r.params.spline_engine().unwrap_or_else(|e| panic!("{cli}: {e}"));
+                assert_eq!(engine.internal, internal, "{cli}");
+                let expr = spline_tooth_expr(&engine, r.params.kind, r.params.h);
+                assert!(expr.starts_with("SPLINE "), "{cli}: {expr}");
+                let sp = crate::shaft::parse_program(&expr)
+                    .unwrap_or_else(|e| panic!("{cli}: {expr}: {e}"));
+                let g = sp.segments[0].gear.expect("轴侧应解析出齿形段");
+                assert!(g.involute, "{cli}: {expr}");
+                assert_eq!(g.kind.is_internal(), internal, "{cli}: {expr}");
+                assert!(near(g.m, engine.m) && g.z == engine.z, "{cli}: {expr}");
+                assert!(near(g.alpha_deg, engine.alpha_deg) && near(g.x, engine.x), "{cli}: {expr}");
+                let (da, df) = if internal {
+                    (engine.internal_major_dia(), engine.internal_minor_dia())
+                } else {
+                    (engine.da(), engine.df())
+                };
+                assert!(near(g.major_radius() * 2.0, da), "{cli}: {expr}");
+                assert!(near(g.minor_radius() * 2.0, df), "{cli}: {expr}");
+            }
+        }
     }
 
     /// 三入口一致：命令行 `OCSMGEAR 花键 …` 与 GUI 查询串 `/api/gear_*` 解析出的引擎参数
