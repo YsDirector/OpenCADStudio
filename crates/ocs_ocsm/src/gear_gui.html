@@ -193,7 +193,7 @@
       <div class="ctl" id="cfCtl"><input type="number" id="cf" value="0.1" step="0.01"></div>
 
       <label for="x">变位系数[Xn]</label>
-      <div class="ctl"><input type="number" id="x" value="0" step="0.05"></div>
+      <div class="ctl"><input type="number" id="x" value="0" step="0.05"><div class="hint" id="xHint" style="flex-basis:100%; margin:0"></div></div>
     </div>
 
     <!-- ②.5 种类说明 + 命令行等价用法：切种类/改参数/切视图时同步刷新 -->
@@ -496,6 +496,7 @@ function collect() {
     const db = String(el("db").value).trim();
     const dbv = db === "" ? NaN : Number(db);
     const xLocked = std === "DIN" || isNf;   // x 是因变量（由 d_B/A、m、z 解出）
+    const gbLocked = std === "GB";           // GB 不变位：x 恒为 0（后端也拒绝非零）
     const hfv = num("hf"), rhov = num("rho"), cfv = num("cf");
     if (db !== "" && (!Number.isFinite(dbv) || dbv <= 0)) err = benchName + " 必须是正数（或留空）。";
     else if (!Number.isFinite(alpha) || alpha <= 10 || alpha >= 50) err = "压力角 α 超出范围（10°<α<50°）。";
@@ -522,7 +523,8 @@ function collect() {
     // 花键模式：隐藏框（c/β）不传；std/profile/db 系数都传给后端；x 只在有值时传（锁定态由 syncLockedZ 回填）。
     const p = { mode: "spline", kind: curKind, std, profile: el("profileSel").value,
                 alpha, ha, hf: hfv, rho: rhov, cf: cfv, h };
-    if (Number.isFinite(x)) p.x = x;
+    if (gbLocked) p.x = 0;                    // GB 模型 x 恒 0（输入框已锁死，这里兜底）
+    else if (Number.isFinite(x)) p.x = x;
     if (db !== "") p.db = dbv;
     if (Number.isFinite(m) && m > 0) p.m = m;
     if (Number.isFinite(z) && z >= 2) p.z = Math.round(z);
@@ -700,7 +702,15 @@ function syncSplineUI() {
       ? "由齿廓预设决定（显示用，不可编辑；GB 30/37.5/45°、DIN 30°、NF 20°、ANSI 由 Table 2 列）"
       : "";
   }
-  syncLockedZ();   // DIN/NF：z/x 只读 + 由 (d_B/A, m) 联动回填；GB/ANSI 解除。
+  // GB/T 3478.1 基本齿廓不含变位（用户定案 2026-09-23）：GB 花键下 x 恒为 0 且锁死，
+  // 并在提示区写明；DIN/NF 仍是 (d_B/A, m) 派生的只读因变量，齿轮/ANSI 不受影响。
+  const xh = el("xHint");
+  if (xh) {
+    xh.textContent = on && el("stdSel").value === "GB"
+      ? "GB/T 3478 不变位：x 恒为 0，不可编辑（基本齿廓只有 ha*/hf*/ρf*/cF*）。"
+      : "";
+  }
+  syncLockedZ();   // DIN/NF：z/x 只读 + 由 (d_B/A, m) 联动回填；GB 下 x 恒 0 锁死。
 }
 
 // 齿廓下拉：按标准填预设代号（保留当前选择，否则取第一个）。
@@ -851,14 +861,15 @@ function deriveBenchZ(std, bench, m, current) {
   const z = Math.round(bench / m - 2.0);
   return z >= 1 && z <= 1000 ? z : NaN;
 }
-// DIN/NF：齿数框只读 + 由 (d_B/A, m) 联动回填；GB/ANSI 解除只读。
-// 同时把因变量 x 也置只读并按 (d_B/A, m, z) 回填（x 不是独立自变量）。
+// DIN/NF：齿数框只读 + 由 (d_B/A, m) 联动回填；GB/ANSI 不锁 z。
+// GB：x 恒为 0 且锁死（GB/T 3478 基本齿廓不含变位）；DIN/NF 下 x 是由 (d_B/A, m, z) 解出的只读因变量。
 let benchXLocked = false;   // 上一次 x 是否处于因变量锁定态（切回 GB/ANSI 时清掉回填值）
 function syncLockedZ() {
+  const std = el("stdSel").value;
+  const gbLocked = isSpline() && std === "GB";   // GB 不变位：x 恒 0
   const locked = isZLocked();
   const zEl = el("z");
   const xEl = el("x");
-  const std = el("stdSel").value;
   const bench = std === "NF" ? "公称直径 A" : "基准直径 d_B";
   zEl.readOnly = locked;
   zEl.title = locked
@@ -866,12 +877,13 @@ function syncLockedZ() {
     : "";
   el("zLabel").textContent = "齿数[z]" + (locked ? "（由 " + (std === "NF" ? "A 与 m" : "d_B 与 m") + "决定）" : "");
   if (xEl) {
-    xEl.readOnly = locked;
+    xEl.readOnly = locked || gbLocked;
     xEl.title = locked
       ? "因变量：由 " + (std === "NF" ? "A" : "d_B") + "、m、z 按 " + (std === "NF" ? "NF p07" : "DIN 5480-2") + " 公式解出（显示用，不可编辑）。"
-      : "";
-    // 从 DIN/NF 切回 GB/ANSI：把回填的因变量 x 复位为独立自变量的默认值 0。
-    if (!locked && benchXLocked) xEl.value = "0";
+      : (gbLocked ? "GB/T 3478 基本齿廓不含变位：x 恒为 0（不可编辑）。" : "");
+    // GB：强制回 0（模型不变位）；从 DIN/NF 切回 GB/ANSI：把回填的因变量 x 复位为 0。
+    if (gbLocked) xEl.value = "0";
+    else if (!locked && benchXLocked) xEl.value = "0";
   }
   benchXLocked = locked;
   if (!locked) return;

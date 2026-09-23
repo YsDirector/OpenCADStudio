@@ -966,7 +966,7 @@ impl GearParams {
         }
         if p.std == crate::invol_spline::SplineStd::GB && p.x.abs() > 1e-9 {
             v.push(format!(
-                "GB/T 3478 基本齿廓不含变位；当前按 x={} 计入几何（公式与 DIN 同式）。",
+                "GB/T 3478 基本齿廓不含变位；此处为内部构造路径，按 x={} 计入几何（命令行/GUI 入口已明确拒绝 x≠0）。",
                 trim(p.x)
             ));
         }
@@ -2746,6 +2746,7 @@ pub fn parse_request(raw: &str) -> Result<GearRequest, String> {
                  齿轮体系：默认 M 模数制；径节制写 `std=DP dp=8`（或 `DP8`），此时位置参数 = `<齿数z> <齿宽h>`，m=25.4/DP。\n\
                  花键模式：`OCSMGEAR 花键 [内花键] [std=GB|DIN|NF|ANSI] [profile=GB30R] [db=40] [hf=0.9] [rho=0.4] [cf=0.1] <m> <z> [x=..] [h=..] [view 端视图|侧视图|剖视图]`；\
                  花键模式 α 由齿廓预设固定（GB 30/37.5/45°、DIN 30°、NF 20°、ANSI Table 2 列），不可覆盖；径节 P/Ps 只属 ANSI（GB/DIN/NF 给 P 会报错）；\
+                 GB/T 3478 基本齿廓不含变位（x 恒为 0，给非零 x 明确报错；GUI 花键模式下 x 已锁死）；\
                  内花键与内齿轮同口径：只有 `view 端视图|剖视图`（无侧视图，用户定案）；\
                  花键参数也可用预设代号（GB30P/GB30R/GB375R/GB45R/DIN30/NFP/NFR/ANSI30P/ANSI30PM/ANSI30R/ANSI375R/ANSI45R）代替 std+profile；
                  花键模式：`db=40` 是 DIN 的 d_B，NF 用 `a=66`（或 `公称直径=66`，也兼容 `db=` 当 A）；
@@ -5367,6 +5368,14 @@ mod tests {
         // GB + d_B（查询串）
         let e = params_from_query("mode=spline&std=GB&db=40&m=3&z=20").unwrap_err();
         assert_eq!(e, crate::invol_spline::GB_D_B_MSG, "{e}");
+        // GB + 非零 x：CLI/查询串都走统一报错（GUI 花键模式下 x 已锁 0）。
+        let e = parse_request("花键 GB30P 3 20 x=0.2 h=30").unwrap_err();
+        assert!(e.contains(crate::invol_spline::GB_X_MSG), "{e}");
+        let e = params_from_query("mode=spline&std=GB&m=3&z=20&x=0.2&h=30").unwrap_err();
+        assert!(e.contains(crate::invol_spline::GB_X_MSG), "{e}");
+        // GB + x=0：正常解析（x 省略与 0 等价）。
+        let r = parse_request("花键 GB30P 3 20 x=0 h=30").unwrap();
+        assert!(r.params.spline_engine().is_ok(), "GB x=0 应可用");
         // 齿轮模式给标准号/d_B → 明确报错（不静默忽略）
         let e = parse_request("2 40 20 std=DIN").unwrap_err();
         assert!(e.contains("齿轮模式不认标准号"), "{e}");
@@ -6295,8 +6304,8 @@ mod tests {
                 "mode=spline&std=NF&profile=NFP&db=80&m=3.75&h=30",
             ),
             (
-                "花键 GB30P 3 20 x=0.2 h=30",
-                "mode=spline&std=GB&profile=GB30P&m=3&z=20&x=0.2&h=30",
+                "花键 GB30P 3 20 h=30",
+                "mode=spline&std=GB&profile=GB30P&m=3&z=20&h=30",
             ),
             (
                 "花键 ANSI30P p=5/10 5 20 h=30",

@@ -251,7 +251,10 @@ try { el('splineMode')._fire('change', el('splineMode')); } catch (e) { errors.p
 await flush();
 check(el('alpha').readOnly === true, '花键模式 α 应由齿廓预设决定（只读）');
 check(el('hf').readOnly === true, '花键模式 hf 应由齿廓预设决定（只读）');
-check(el('x').readOnly !== true, 'GB 下 x 是自变量，不应只读');
+check(el('x').readOnly === true, 'GB 下 x 应锁死（GB/T 3478 基本齿廓不含变位）');
+check(el('x').value === '0', 'GB 下 x 应恒为 0，实际 ' + el('x').value);
+check(el('xHint').textContent.includes('GB/T 3478') && el('xHint').textContent.includes('不可编辑'),
+  'GB 下应有「不变位、x 不可编辑」提示：' + el('xHint').textContent);
 check(el('stdLabel').style.display !== 'none', '花键模式下标准号行应显示');
 check(el('dbLabel').style.display === 'none', 'GB 下 d_B 行应隐藏（本体系不用 d_B）');
 check(el('cLabel').style.display === 'none', '花键模式下顶隙行应隐藏');
@@ -392,10 +395,14 @@ if (ansiExport) {
 }
 
 // ③.9 花键视图按钮（用户定案：内花键同内齿轮，无侧视图）
-// 先回 GB（视图规则与体系无关），锁外花键 = 剖视/侧视/端视
+// 先回 GB（视图规则与体系无关），锁外花键 = 剖视/侧视/端视。
+// 同时验证：DIN/NF 里回填的 x 不泄漏到 GB —— 切回 GB 后 x 复位 0 并锁死。
 el('stdSel').value = 'GB';
 try { el('stdSel')._fire('change', el('stdSel')); } catch (e) { errors.push('GB 回切异常: ' + e); }
 await flush();
+check(el('x').readOnly === true, '从 DIN/NF 切回 GB 后 x 仍应锁死');
+check(el('x').value === '0', '切回 GB 后 x 应复位为 0，实际 ' + el('x').value);
+check(el('xHint').textContent.includes('不可编辑'), '切回 GB 后 x 提示应恢复：' + el('xHint').textContent);
 
 // ③.95 轴生成器表达式（花键模式）：INVOLSPLINE 轴段已撤 → 不再给表达式（护栏）
 el('m').value = '3';
@@ -558,6 +565,14 @@ try { el('stdSel')._fire('change', el('stdSel')); } catch (e) { errors.push('ANS
 await flush();
 check(el('z').readOnly !== true, 'ANSI 下 z 不应只读');
 check(!el('zLabel').textContent.includes('决定'), 'ANSI 下 z 标签不应带“决定”提示：' + el('zLabel').textContent);
+check(el('x').readOnly !== true, 'ANSI 下 x 不应锁死（仅 GB 花键锁 x）');
+
+// GB 的 x 锁定只在花键模式生效：退出花键模式（回齿轮）后 x 解禁可编辑，提示清空。
+el('splineMode').checked = false;
+try { el('splineMode')._fire('change', el('splineMode')); } catch (e) { errors.push('退出花键模式异常: ' + e); }
+await flush();
+check(el('x').readOnly !== true, '齿轮模式 x 不应锁死（GB 锁 x 只在花键模式生效）');
+check(el('xHint').textContent === '', '齿轮模式 x 提示应清空：' + el('xHint').textContent);
 
 // ④ 防抖回调可跑（collect/renderInfo 不抛）
 for (const t of timers.splice(0)) {

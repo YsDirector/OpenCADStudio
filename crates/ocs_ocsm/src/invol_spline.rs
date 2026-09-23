@@ -317,6 +317,11 @@ pub const NF_PRESETS: &[InvolPreset] = &[
 pub const GB_D_B_MSG: &str =
     "基准直径 d_B 是 DIN 5480 的概念，GB/T 3478 体系请给 m 与 z（本体系不用 d_B）";
 
+/// GB 体系误给非零变位系数 `x` 的**统一报错文案**（GB/T 3478 基本齿廓不含变位）。
+/// 与 [`GB_D_B_MSG`] / [`PITCH_ONLY_ANSI_MSG`] 同一口径：体系没有的参数在入口层明确拒绝。
+pub const GB_X_MSG: &str =
+    "变位系数 x 是 DIN 5480/NF E22-141 的概念，GB/T 3478 基本齿廓不含变位（x 恒为 0）；请去掉 x（齿轮生成器已锁死为 0）";
+
 /// 非 ANSI 体系误给径节的**统一报错文案**（P/Ps 是 ANSI B92.1 的径节制写法）。
 pub const PITCH_ONLY_ANSI_MSG: &str =
     "径节 P/Ps 是 ANSI B92.1 的写法（P=每英寸齿数、Ps=2P）；GB/DIN/NF 用模数 m（写法 `M…`），不要给径节 P/DP";
@@ -1486,6 +1491,7 @@ fn row_to_params(row: Din5480Row) -> Result<(InvolParams, D_bOrigin), String> {
 /// * `ANSI`：走独立分支 —— **第 5 参 `m` 槽位收径节 `P`**（不是模数；引擎内 `m = 25.4/P`，mm），
 ///   `z` = 齿数 N；误给 `d_B`/A 报 [`ANSI_D_B_MSG`]；ANSI 无变位（x≠0 报错）；
 /// * `d_B` 给了：只有 DIN 有这个概念 —— GB 直接报 [`GB_D_B_MSG`]；DIN 走 [`resolve_din_by_d_b`]；
+/// * GB 给非零 `x`：直接报 [`GB_X_MSG`]（基本齿廓无变位；GUI 已锁死为 0）；
 /// * 不给 `d_B`：GB/DIN/NF 都要 `m` 与 `z`（缺哪项报哪项）；DIN 由 `m/z/x` 正算 `d_B`、NF 由
 ///   `m/z/x` 正算 A（来源 [`D_bOrigin::Computed`] / [`D_bOrigin::ComputedA`]）。
 ///
@@ -1571,6 +1577,15 @@ pub fn resolve_spline(
         }
         let (p, origin) = resolve_din_by_d_b(d_b, m, z, x)?;
         return Ok((p, Some(origin)));
+    }
+    // GB/T 3478.1 基本齿廓不含变位：入口层明确拒绝非零 x（与 d_B/径节口径一致）。
+    // 不在 `InvolParams::validate` 里拦：引擎原语仍可被内部数学对照测试用 `with_x` 构造。
+    if std == SplineStd::GB {
+        if let Some(xv) = x {
+            if xv.abs() > 1e-12 {
+                return Err(format!("{GB_X_MSG}（收到 x={}）", trim(xv)));
+            }
+        }
     }
     let m = m.ok_or_else(|| match std {
         SplineStd::GB => "GB/T 3478：缺模数 m（写法 `M3`）".to_string(),
@@ -6474,6 +6489,37 @@ mod tests {
         let (p, origin) =
             resolve_spline(SplineStd::GB, "GB30R", None, Some(3.0), Some(20), None).unwrap();
         assert!(p.d_b.is_none() && origin.is_none());
+    }
+
+    /// GB/T 3478.1 基本齿廓不含变位：入口层拒绝非零 x（x=0/省略等价通过）；DIN/NF 不受影响。
+    #[test]
+    fn resolve_spline_gb_rejects_nonzero_x_but_allows_zero() {
+        // x 省略 / x=0：两者等价，GB 模型 x 恒 0。
+        for x in [None, Some(0.0)] {
+            let (p, o) =
+                resolve_spline(SplineStd::GB, "GB30R", None, Some(3.0), Some(20), x).unwrap();
+            assert_eq!(p.std, SplineStd::GB);
+            assert!(p.x.abs() < 1e-12, "GB x 应恒 0，实际 {}", p.x);
+            assert!(o.is_none());
+        }
+        // 非零 x：明确报错，沿用 GB 统一文案口径（点名标准 + 给收到值）。
+        for bad in [0.2, -0.05, 1.0] {
+            let e = resolve_spline(SplineStd::GB, "GB30R", None, Some(3.0), Some(20), Some(bad))
+                .unwrap_err();
+            assert!(e.contains(GB_X_MSG), "{e}");
+            assert!(e.contains("收到"), "{e}");
+        }
+        // DIN/NF 的 x 行为不变（仍是几何自变量/主系列参数）；ANSI 仍拒非零 x（原有口径）。
+        let (pd, _) =
+            resolve_spline(SplineStd::DIN, "DIN30", None, Some(2.0), Some(18), Some(0.2))
+                .unwrap();
+        assert!((pd.x - 0.2).abs() < 1e-12);
+        let (pn, _) =
+            resolve_spline(SplineStd::NF, "NFP", None, Some(2.5), Some(20), Some(0.2)).unwrap();
+        assert!((pn.x - 0.2).abs() < 1e-12);
+        let e = resolve_spline(SplineStd::ANSI, "ANSI30P", None, Some(5.0), Some(20), Some(0.2))
+            .unwrap_err();
+        assert!(e.contains("不使用变位系数 x"), "{e}");
     }
 
     /// ③ 四个体系的模数/径节候选来源：GB 表 2 15 种、DIN/NF 来自各自 CSV 实际 m 列、ANSI 17 项。
