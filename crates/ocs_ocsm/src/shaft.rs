@@ -53,14 +53,16 @@
 //!     齿形用 `OCSMGEAR` 单独出，这里不画齿、本期不做斜齿（`BETA…` 报「斜齿未实现」）；
 //!   * 矩形花键 `SPLINE 6x23x26x6 L30`（GB/T 1144）与齿形段共存：`SPLINE` 后跟
 //!     齿形关键字（M/Z/EX/IN/DA/DF…）才是渐开线花键齿形段。
-//! - `KEY A 18`：**轴槽**（GB/T 1095-2003 平键键槽，本期只做轴槽）——
+//! - `KEY A 18 [双槽]`：**轴槽**（GB/T 1095-2003 平键键槽，本期只做轴槽）——
 //!   **轴段类型**（与螺纹/矩形花键并列，进段表 KEY 列）：键型 `A/B/C`（复用 GB/T 1096
 //!   平键族口径；键槽侧只做 A/C）+ 键长 `L`（标准 L 系列；中置槽长 = L，端置 `@端` 槽长 = L + t₁）+
 //!   位置中置/端置；**键尺寸 `b×h` 由该段直径 d 查 GB/T 1095 d 列自动定**（h 跟 b 走；
 //!   显式 `b8h7` 只作校验，必须落在该轴径档标准配对）。`t1` 省略按 b 查表；
 //!   与 GEAR / SPLINE / M / OV / RL 互斥。显示：中置恒显示 A（双圆头）；端置 B/C 显示 C（单圆头）。
 //!   长度按所选键型自动折算（槽端圆弧吃直段）：中置 B +b / C +b/2；端置 B +b/2 / C 不折算；
-//!   实际槽长 = 折算长度（端置再 + t₁）。详见 `Keyway::effective_len` 与 handbook 03。
+//!   实际槽长 = 折算长度（端置再 + t₁）。可选 `双槽`（`DOUBLE` 别名）：绕轴心 180° 对置的
+//!   第二个槽，**仅剖视图体现**（常规侧视不变），可承受转矩约为单键联接的 **1.5 倍**；
+//!   剖视剖面线按“上下两环各带一个缺口”对称分区。详见 `Keyway` 与 handbook 03。
 //!   侧视图叠画键 + 剖视缺口含 sagitta 线，见文件中部「轴槽（GB/T 1095）」节
 //!   与 `review/键槽_设计.md`。
 //! - `VIEW 常规|剖视`：视图开关（默认 `常规`）；独立一行或段内关键字都认
@@ -195,6 +197,8 @@ OCSMSHAFT 轴生成器：行 DSL / JSON → 单视图侧视图（段拼接 + 端
                   显式覆盖写 b8h7：必须落在该轴径档的标准配对上，否则明确报错
                   显示：中置恒显示 A；端置 B/C 显示 C（C 端弧由铣刀铣出）
                   折算：中置 B +b / C +b/2；端置 B +b/2 / C 不折算；端置槽长再 +t1
+                  可选 双槽（DOUBLE 别名）：绕轴心 180° 对置，仅剖视图体现（常规侧视不变），
+                  可承受转矩约为单键联接的 1.5 倍；剖视剖面线上下两环各带一个缺口
                   例：KEY A 18 ／ KEY C 14 @端 ／ KEY A 18 b8h7
                   侧视图叠画键 + 剖视缺口含 sagitta 线；不生成尺寸标注
     VIEW 常规|剖视   视图：常规（默认，只看外形）/ 剖视（轮廓 + ANSI31 剖面线）
@@ -533,6 +537,12 @@ pub struct Keyway {
     pub h: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub t1: Option<f64>,
+    /// **双键槽**（可选项，用户 2026-09-23）：绕轴心 180° 对置的第二个槽；
+    /// * **仅剖视图体现**（常规侧视图不受影响）；
+    /// * 可承受转矩约为单键联接的 **1.5 倍**（AI 手册口径）；
+    /// * 剖视剖面线按“上下两环各带一个缺口”分区（对称镜像，不再去缺口）。
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub double: bool,
 }
 
 impl Keyway {
@@ -1373,6 +1383,8 @@ enum KeyParam {
     H,
     T1,
     Place,
+    /// 双键槽开关：`双槽` / `DOUBLE`。
+    Double,
     LegacyLa,
     LegacyLc,
 }
@@ -1402,6 +1414,9 @@ fn split_bh(text: &str) -> Option<(&str, &str)> {
 fn key_param_key(token: &str) -> Option<(KeyParam, &str)> {
     if let Some(rest) = token.strip_prefix('@') {
         return Some((KeyParam::Place, rest));
+    }
+    if token == "双槽" || token.eq_ignore_ascii_case("DOUBLE") {
+        return Some((KeyParam::Double, token));
     }
     let upper = token.to_ascii_uppercase();
     if matches!(upper.as_str(), "A" | "B" | "C") {
@@ -1454,6 +1469,7 @@ fn assemble_keyway(
     key_h: Option<f64>,
     key_t1: Option<f64>,
     key_place: Option<KeywayPlace>,
+    key_double: bool,
     label: &str,
 ) -> Result<Option<Keyway>, String> {
     let any_param = key_kind.is_some()
@@ -1461,7 +1477,8 @@ fn assemble_keyway(
         || key_b.is_some()
         || key_h.is_some()
         || key_t1.is_some()
-        || key_place.is_some();
+        || key_place.is_some()
+        || key_double;
     if !any_param {
         return Ok(None);
     }
@@ -1503,6 +1520,7 @@ fn assemble_keyway(
         b: key_b,
         h: key_h,
         t1: key_t1,
+        double: key_double,
     }))
 }
 
@@ -1521,6 +1539,7 @@ fn parse_segment(chunk: &str, label: &str, program: &mut Program) -> Result<Segm
     let mut key_h: Option<f64> = None;
     let mut key_t1: Option<f64> = None;
     let mut key_place: Option<KeywayPlace> = None;
+    let mut key_double = false;
     // `M` 的局部螺纹扩展关键字（用户 2026-09-19 定稿）：`TL` / `RO` / `SD` / `RL`。
     // 段内顺序无关；到段尾统一装进 [`Thread`] 并校验互斥。
     let mut tl: Option<f64> = None;
@@ -1621,6 +1640,7 @@ fn parse_segment(chunk: &str, label: &str, program: &mut Program) -> Result<Segm
                 KeyParam::H => "h",
                 KeyParam::T1 => "t1",
                 KeyParam::Place => "@中/@端",
+                KeyParam::Double => "双槽",
                 KeyParam::LegacyLa => "LA",
                 KeyParam::LegacyLc => "LC",
             };
@@ -1640,6 +1660,12 @@ fn parse_segment(chunk: &str, label: &str, program: &mut Program) -> Result<Segm
                 attached.strip_prefix(['=', ':']).unwrap_or(attached)
             };
             match param {
+                KeyParam::Double => {
+                    if key_double {
+                        return Err(format!("{label}：KEY 参数 双槽 重复"));
+                    }
+                    key_double = true;
+                }
                 KeyParam::Place => {
                     let value = parse_keyway_place(value_text)
                         .map_err(|e| format!("{label}：{e}"))?;
@@ -1924,7 +1950,7 @@ fn parse_segment(chunk: &str, label: &str, program: &mut Program) -> Result<Segm
         index += 1;
     }
     // ── KEY 轴槽（GB/T 1095）：组装子关键字；键型/键尺寸 b×h/键长必给。──
-    let keyway = assemble_keyway(key_kind, key_len, key_b, key_h, key_t1, key_place, label)?;
+    let keyway = assemble_keyway(key_kind, key_len, key_b, key_h, key_t1, key_place, key_double, label)?;
     if keyway.is_some() && (gear_on || spline_on) {
         return Err(format!("{label}：轴槽 KEY 不能与齿轮/花键段同段"));
     }
@@ -2298,6 +2324,9 @@ struct JsonKeyway {
     /// 显式 t₁（缺省 = 按 b 查 GB/T 1095 表）。
     #[serde(default)]
     t1: Option<f64>,
+    /// 双键槽（绕轴心 180° 对置；仅剖视图体现；约 1.5 倍单键转矩）。
+    #[serde(default)]
+    double: bool,
 }
 
 /// JSON 形式的花键段：`{"spec":"6x23x26x6","len":30,"de":63}`；
@@ -2578,6 +2607,7 @@ fn parse_json(text: &str) -> Result<Program, String> {
                     k.h,
                     k.t1,
                     place,
+                    k.double,
                     &format!("第 {number} 段"),
                 )?
             }
@@ -3023,6 +3053,13 @@ pub fn validate(program: &Program) -> Result<(), String> {
                     trim(sag)
                 ));
             }
+            if t1 >= r - 1e-9 {
+                return Err(format!(
+                    "第 {number} 段：轴槽槽深 t1={} ≥ 轴半径 R={}（槽切过轴线，剖视上下环分区不成立）",
+                    trim(t1),
+                    trim(r)
+                ));
+            }
             let slot_len = keyway.slot_len(t1, b);
             let x0 = x0s[index];
             let ch_l = keyway_chamfer(seg, End::L);
@@ -3306,6 +3343,8 @@ fn keyway_chamfer(seg: &Segment, end: End) -> f64 {
 #[derive(Debug, Clone, Copy)]
 struct KeywayGeom {
     kind: KeyKind,
+    /// 双键槽（绕轴心 180° 对置；仅剖视图体现）。
+    double: bool,
     b: f64,
     /// 显示/渲染长度 = `Keyway::effective_len(b)`（B/C 已按圆弧端折算；见模型注释）。
     l: f64,
@@ -3388,6 +3427,7 @@ fn keyway_geom(
     };
     Ok(KeywayGeom {
         kind: kw.kind,
+        double: kw.double,
         b,
         l: kw.effective_len(b),
         slot_len,
@@ -4357,30 +4397,47 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
         .filter(|k| k.place == KeywayPlace::End);
     if let Some(kw) = key_end_left {
         let kg = keyway_geom(&segs[0], kw, 0.0, 0, count, "第 1 段")?;
+        let double = kw.double;
         let c = segs[0].ch.iter().find(|c| c.end == End::L).map(|c| c.c);
         // face_lo 统一为“端面下端点”的 y（负值），无倒角时为 -R；
         // （旧 bug：无倒角分支用 -R 又被 -face_lo 取反，画成 [0,+R]→[0,floor]，左上角凸出且下半未封闭。）
         let face_lo = if let Some(c) = c {
             let (contour, face_point) = chamfer_geom(&segs[0], 0.0, End::L, c);
-            // 下倒角两视图共用；上倒角只常规视图（剖视里被槽切掉）。
-            entities.push(line(
-                [face_point[0], -face_point[1]],
-                [contour[0], -contour[1]],
-                LAYER_MAIN,
-            ));
+            if double {
+                // 双槽：下倒角也被下槽切掉 —— 只常规视图画（剖视不画、下环不注册）。
+                keyway_normal.push(line(
+                    [face_point[0], -face_point[1]],
+                    [contour[0], -contour[1]],
+                    LAYER_MAIN,
+                ));
+            } else {
+                // 下倒角两视图共用；上倒角只常规视图（剖视里被槽切掉）。
+                entities.push(line(
+                    [face_point[0], -face_point[1]],
+                    [contour[0], -contour[1]],
+                    LAYER_MAIN,
+                ));
+                // 下环（对称半边）的倒角边：上倒角在剖视里被切掉，但下半边没有槽，
+                // 倒角边要在模板 C1 的下环里出现。
+                keyway_plain_extra.push(lr_line(face_point, contour));
+            }
             keyway_normal.push(line(face_point, contour, LAYER_MAIN));
-            // 下环（对称半边）的倒角边：上倒角在剖视里被切掉，但下半边没有槽，
-            // 倒角边要在模板 C1 的下环里出现。
-            keyway_plain_extra.push(lr_line(face_point, contour));
             through_line(&mut through, contour[0], contour[1]);
             -face_point[1]
         } else {
             -segs[0].outer_radius(End::L)
         };
-        // 常规视图：完整端面线；剖视：下段到槽底 + 上段槽底→sagitta（模板 C1）。
+        // 常规视图：完整端面线；剖视：单槽 = 下段到槽底 + 上段槽底→sagitta（模板 C1）；
+        // 双槽 = 下槽边 + 中带 + 上槽边（外圆两端都被槽切掉）。
         keyway_normal.push(line([0.0, -face_lo], [0.0, face_lo], LAYER_MAIN));
-        section_lines.push(line([0.0, face_lo], [0.0, kg.floor], LAYER_MAIN));
-        section_lines.push(line([0.0, kg.floor], [0.0, kg.y_sag], LAYER_MAIN));
+        if double {
+            section_lines.push(line([0.0, -kg.y_sag], [0.0, -kg.floor], LAYER_MAIN));
+            section_lines.push(line([0.0, -kg.floor], [0.0, kg.floor], LAYER_MAIN));
+            section_lines.push(line([0.0, kg.floor], [0.0, kg.y_sag], LAYER_MAIN));
+        } else {
+            section_lines.push(line([0.0, face_lo], [0.0, kg.floor], LAYER_MAIN));
+            section_lines.push(line([0.0, kg.floor], [0.0, kg.y_sag], LAYER_MAIN));
+        }
     } else {
     let left_face = if let Some(c) = side_auto_chamfer(
         auto_face_chamfer(&segs[0], End::L),
@@ -4462,23 +4519,39 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
             &format!("第 {} 段", last + 1),
         )?;
         let c = segs[last].ch.iter().find(|c| c.end == End::R).map(|c| c.c);
+        let double = kw.double;
         let face_hi = if let Some(c) = c {
             let (contour, face_point) = chamfer_geom(&segs[last], x0s[last], End::R, c);
-            entities.push(line(
-                [face_point[0], -face_point[1]],
-                [contour[0], -contour[1]],
-                LAYER_MAIN,
-            ));
+            if double {
+                // 双槽：下倒角也被下槽切掉 —— 只常规视图画（剖视不画、下环不注册）。
+                keyway_normal.push(line(
+                    [face_point[0], -face_point[1]],
+                    [contour[0], -contour[1]],
+                    LAYER_MAIN,
+                ));
+            } else {
+                entities.push(line(
+                    [face_point[0], -face_point[1]],
+                    [contour[0], -contour[1]],
+                    LAYER_MAIN,
+                ));
+                keyway_plain_extra.push(lr_line(face_point, contour));
+            }
             keyway_normal.push(line(face_point, contour, LAYER_MAIN));
-            keyway_plain_extra.push(lr_line(face_point, contour));
             through_line(&mut through, contour[0], contour[1]);
             face_point[1]
         } else {
             segs[last].outer_radius(End::R)
         };
         keyway_normal.push(line([x_end, -face_hi], [x_end, face_hi], LAYER_MAIN));
-        section_lines.push(line([x_end, -face_hi], [x_end, kg.floor], LAYER_MAIN));
-        section_lines.push(line([x_end, kg.floor], [x_end, kg.y_sag], LAYER_MAIN));
+        if double {
+            section_lines.push(line([x_end, -kg.y_sag], [x_end, -kg.floor], LAYER_MAIN));
+            section_lines.push(line([x_end, -kg.floor], [x_end, kg.floor], LAYER_MAIN));
+            section_lines.push(line([x_end, kg.floor], [x_end, kg.y_sag], LAYER_MAIN));
+        } else {
+            section_lines.push(line([x_end, -face_hi], [x_end, kg.floor], LAYER_MAIN));
+            section_lines.push(line([x_end, kg.floor], [x_end, kg.y_sag], LAYER_MAIN));
+        }
     } else {
     let relief_tail = local_threads[last]
         .filter(|lay| lay.relief.is_some())
@@ -4659,15 +4732,27 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
             let xs = x0s[index] + keyway_chamfer(seg, End::L);
             let xe = x0s[index] + seg.l - keyway_chamfer(seg, End::R);
             if xe - xs > 1e-9 {
-                entities.push(line([xs, -kg.r], [xe, -kg.r], LAYER_MAIN));
+                if kg.double {
+                    // 双槽：下轮廓在剖视里也按槽拆（镜像槽），常规仍整段。
+                    keyway_normal.push(line([xs, -kg.r], [xe, -kg.r], LAYER_MAIN));
+                } else {
+                    entities.push(line([xs, -kg.r], [xe, -kg.r], LAYER_MAIN));
+                }
                 keyway_normal.push(line([xs, kg.r], [xe, kg.r], LAYER_MAIN));
             }
-            // 剖面线的下环 = “无键槽”的对称上半边界（键槽只在轴的上半边，模板 C0/C1：
-            // 下环不复制缺口）；`keyway_notch` 记下缺口专用边，`keyway_plain` 给平顶线跨度。
-            keyway_plain.push((xs, xe, kg.r));
+            // 剖面线分区：
+            // * 单槽：下环 = “无键槽”的对称上半边界（键槽只在轴上半边，模板 C0/C1 下环不复制缺口）
+            //   → `keyway_notch` 记缺口边、`keyway_plain` 给平顶线跨度；
+            // * 双槽：几何关于轴线对称 → 下环直接镜像上环（缺口保留），因此不注册 notch/plain。
+            if !kg.double {
+                keyway_plain.push((xs, xe, kg.r));
+            }
+            let register_notch = !kg.double;
             let mut notch = |edge: HatchEdge| {
                 profile.push(edge);
-                keyway_notch.push(edge);
+                if register_notch {
+                    keyway_notch.push(edge);
+                }
             };
             match kg.place {
                 KeywayPlace::Mid => {
@@ -4681,6 +4766,19 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
                     section_lines.push(line([kg.slot0, kg.floor], [kg.slot1, kg.floor], LAYER_MAIN));
                     section_lines.push(line([kg.slot1, kg.floor], [kg.slot1, kg.r], LAYER_MAIN));
                     section_lines.push(line([kg.slot0, kg.y_sag], [kg.slot1, kg.y_sag], LAYER_MAIN));
+                    if kg.double {
+                        // 双槽：绕轴心 180° 对置 —— 下槽逐线镜像（含槽底与 sagitta 线）。
+                        if kg.slot0 - xs > 1e-9 {
+                            section_lines.push(line([xs, -kg.r], [kg.slot0, -kg.r], LAYER_MAIN));
+                        }
+                        if xe - kg.slot1 > 1e-9 {
+                            section_lines.push(line([kg.slot1, -kg.r], [xe, -kg.r], LAYER_MAIN));
+                        }
+                        section_lines.push(line([kg.slot0, -kg.r], [kg.slot0, -kg.floor], LAYER_MAIN));
+                        section_lines.push(line([kg.slot0, -kg.floor], [kg.slot1, -kg.floor], LAYER_MAIN));
+                        section_lines.push(line([kg.slot1, -kg.floor], [kg.slot1, -kg.r], LAYER_MAIN));
+                        section_lines.push(line([kg.slot0, -kg.y_sag], [kg.slot1, -kg.y_sag], LAYER_MAIN));
+                    }
                     // hatch 边界（上半，左→右）：顶左 → 壁下 → 槽底 → 壁上 → 顶右。
                     notch(lr_line([xs, kg.r], [kg.slot0, kg.r]));
                     notch(HatchEdge::Line {
@@ -4710,6 +4808,20 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
                                 [kg.face + kg.t1, kg.y_sag],
                                 LAYER_MAIN,
                             ));
+                            if kg.double {
+                                // 双槽：下槽镜像（开口端在端面、闭端壁同 x）。
+                                if xe - kg.wall > 1e-9 {
+                                    section_lines.push(line([kg.wall, -kg.r], [xe, -kg.r], LAYER_MAIN));
+                                }
+                                section_lines.push(line([kg.wall, -kg.r], [kg.wall, -kg.floor], LAYER_MAIN));
+                                section_lines.push(line([kg.face, -kg.floor], [kg.wall, -kg.floor], LAYER_MAIN));
+                                section_lines.push(line([kg.face, -kg.y_sag], [kg.wall, -kg.y_sag], LAYER_MAIN));
+                                section_lines.push(line(
+                                    [kg.face + kg.t1, -kg.floor],
+                                    [kg.face + kg.t1, -kg.y_sag],
+                                    LAYER_MAIN,
+                                ));
+                            }
                             notch(lr_line([kg.face, kg.floor], [kg.wall, kg.floor]));
                             notch(HatchEdge::Line {
                                 a: [kg.wall, kg.floor],
@@ -4729,6 +4841,20 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
                                 [kg.face - kg.t1, kg.y_sag],
                                 LAYER_MAIN,
                             ));
+                            if kg.double {
+                                // 双槽：下槽镜像（开口端在右端面、闭端壁同 x）。
+                                if kg.wall - xs > 1e-9 {
+                                    section_lines.push(line([xs, -kg.r], [kg.wall, -kg.r], LAYER_MAIN));
+                                }
+                                section_lines.push(line([kg.wall, -kg.floor], [kg.wall, -kg.r], LAYER_MAIN));
+                                section_lines.push(line([kg.wall, -kg.floor], [kg.face, -kg.floor], LAYER_MAIN));
+                                section_lines.push(line([kg.wall, -kg.y_sag], [kg.face, -kg.y_sag], LAYER_MAIN));
+                                section_lines.push(line(
+                                    [kg.face - kg.t1, -kg.floor],
+                                    [kg.face - kg.t1, -kg.y_sag],
+                                    LAYER_MAIN,
+                                ));
+                            }
                             notch(lr_line([xs, kg.r], [kg.wall, kg.r]));
                             notch(HatchEdge::Line {
                                 a: [kg.wall, kg.r],
@@ -8982,5 +9108,212 @@ GEAR M3 Z20";
                 }
             }
         }
+    }
+
+    // ── 双键槽（可选项，仅剖视体现；2026-09-23）────────────────────────
+
+    /// HATCH 的每条 path 顶点（本用例键槽相关边界全是直线边）。
+    fn hatch_path_points(h: &Hatch) -> Vec<Vec<[f64; 2]>> {
+        h.paths
+            .iter()
+            .map(|path| {
+                path.edges
+                    .iter()
+                    .filter_map(|e| match e {
+                        BoundaryEdge::Line(l) => Some([l.start.x, l.start.y]),
+                        _ => None,
+                    })
+                    .collect()
+            })
+            .collect()
+    }
+
+    /// 点是否在 path 多边形内（奇偶规则；顶点按 HATCH 环顺序给出）。
+    fn point_in_polygon(p: [f64; 2], poly: &[[f64; 2]]) -> bool {
+        let mut inside = false;
+        let n = poly.len();
+        for i in 0..n {
+            let a = poly[i];
+            let b = poly[(i + 1) % n];
+            if ((a[1] > p[1]) != (b[1] > p[1]))
+                && (p[0] < (b[0] - a[0]) * (p[1] - a[1]) / (b[1] - a[1]) + a[0])
+            {
+                inside = !inside;
+            }
+        }
+        inside
+    }
+
+    /// 剖面线是否覆盖该点（任意 path 内即算填充）。
+    fn hatch_filled(entities: &[EntityType], p: [f64; 2]) -> bool {
+        entities.iter().any(|e| match e {
+            EntityType::Hatch(h) => hatch_path_points(h)
+                .iter()
+                .any(|poly| poly.len() >= 3 && point_in_polygon(p, poly)),
+            _ => false,
+        })
+    }
+
+    /// 某图元是否有关于轴线（y=0）的镜像对应图元（中心线除外）。
+    fn has_mirror_counterpart(entities: &[EntityType], e: &EntityType) -> bool {
+        match e {
+            EntityType::Line(l) if l.common.layer != LAYER_CENTER => line_hit(
+                entities,
+                [l.start.x, -l.start.y],
+                [l.end.x, -l.end.y],
+                &l.common.layer,
+            ),
+            EntityType::Arc(a) if a.common.layer != LAYER_CENTER => arc_hit(
+                entities,
+                [a.center.x, -a.center.y],
+                a.radius,
+                180.0 - a.end_angle.to_degrees(),
+                180.0 - a.start_angle.to_degrees(),
+                &a.common.layer,
+            ),
+            EntityType::Hatch(h) => {
+                let got = hatch_edges(entities);
+                h.paths.iter().all(|path| {
+                    path.edges.iter().all(|ed| match ed {
+                        BoundaryEdge::Line(el) => got.iter().any(|g| {
+                            segment_eq(
+                                [g[0], g[1]],
+                                [g[2], g[3]],
+                                [el.start.x, -el.start.y],
+                                [el.end.x, -el.end.y],
+                            )
+                        }),
+                        _ => true,
+                    })
+                })
+            }
+            _ => true,
+        }
+    }
+
+    #[test]
+    fn keyway_double_dsl_json_and_normal_view_unchanged() {
+        // DSL：`双槽` / `DOUBLE` 两种写法；JSON 往返 `"double":true`。
+        let kw = parse_program("S25 E25 L40 KEY A 18 双槽").unwrap().segments[0]
+            .keyway
+            .unwrap();
+        assert!(kw.double, "DSL 双槽");
+        let kw2 = parse_program("S25 E25 L40 KEY A 18 DOUBLE").unwrap().segments[0]
+            .keyway
+            .unwrap();
+        assert!(kw2.double, "DSL DOUBLE 别名");
+        let json = serde_json::to_string(&parse_program("S25 E25 L40 KEY A 18 双槽").unwrap())
+            .unwrap();
+        assert!(json.contains("\"double\":true"), "{json}");
+        let back = parse_program(&json).unwrap();
+        assert!(back.segments[0].keyway.unwrap().double);
+        let p = parse_program(
+            r#"{"segments":[{"s":25,"e":25,"l":40,"keyway":{"type":"A","l":18,"double":true}}]}"#,
+        )
+        .unwrap();
+        assert!(p.segments[0].keyway.unwrap().double);
+        // **常规侧视图不受双槽影响**（用户口径：仅剖视体现）：中置/端置输出逐图元一致。
+        for (single, double) in [
+            ("S25 E25 L40 KEY A 18", "S25 E25 L40 KEY A 18 双槽"),
+            (
+                "S25 E25 L40 KEY C 14 @端 | S30 E30 L30",
+                "S25 E25 L40 KEY C 14 @端 双槽 | S30 E30 L30",
+            ),
+        ] {
+            let mut a = parse_program(single).unwrap();
+            let mut b = parse_program(double).unwrap();
+            a.view = ShaftView::Normal;
+            b.view = ShaftView::Normal;
+            let sa = build(&a, 1.0).unwrap();
+            let sb = build(&b, 1.0).unwrap();
+            // 逐图元集合一致（双槽只在剖视加线；常规下轮廓改由 keyway_normal 承载，
+            // 与单槽共用 entities 的差别仅在拼接顺序，故按排序后比较）。
+            let mut la: Vec<String> = entities_csv(&sa.entities).lines().map(String::from).collect();
+            let mut lb: Vec<String> = entities_csv(&sb.entities).lines().map(String::from).collect();
+            la.sort();
+            lb.sort();
+            assert_eq!(la, lb, "常规视图不应因双槽改变：{single}");
+        }
+    }
+
+    #[test]
+    fn keyway_double_section_is_mirror_symmetric() {
+        // 剖视：双槽绕轴心 180° 对置 → 除中心线外每个图元都有 y→−y 的镜像对应。
+        let cases = [
+            "S25 E25 L40 KEY A 18 双槽",
+            "S25 E25 L40 CH2@L KEY C 14 @端 双槽 | S30 E30 L30",
+            "S30 E30 L20 | S25 E25 L40 KEY B 10 @端 双槽",
+        ];
+        for text in cases {
+            let mut p = parse_program(text).unwrap();
+            p.view = ShaftView::Section;
+            let shaft = build(&p, 1.0).unwrap();
+            for e in &shaft.entities {
+                assert!(
+                    has_mirror_counterpart(&shaft.entities, e),
+                    "{text}：图元缺镜像对应：{e:?}"
+                );
+            }
+            // 镜像对至少成对出现（说明确实多出一套槽线）。
+            let lines = count_kind(&shaft.entities, "LINE");
+            assert!(lines > 0);
+        }
+    }
+
+    #[test]
+    fn keyway_double_hatch_partition_invariants() {
+        // 剖面线分区：中带（两槽之间）必须有剖面线；两槽区内不得有；两侧材料必须有。
+        // d25：R=12.5、b=8、t1=4 → floor=8.5、y_sag≈11.843；中置槽 [12,30]；端置 wall=18。
+        let cases: &[(&str, [f64; 2], [f64; 2], [f64; 2], [f64; 2], [f64; 2])] = &[
+            // (DSL, 中带点, 上槽内点, 下槽内点, 上材料点, 下材料点)
+            (
+                "S25 E25 L40 KEY A 18 双槽",
+                [20.0, 1.0],
+                [20.0, 10.5],
+                [20.0, -10.5],
+                [8.0, 11.0],
+                [8.0, -11.0],
+            ),
+            (
+                "S25 E25 L40 KEY C 14 @端 双槽 | S30 E30 L30",
+                [10.0, 1.0],
+                [10.0, 10.5],
+                [10.0, -10.5],
+                [25.0, 11.0],
+                [25.0, -11.0],
+            ),
+            (
+                "S25 E25 L40 CH2@L KEY C 14 @端 双槽 | S30 E30 L30",
+                [10.0, 1.0],
+                [10.0, 10.5],
+                [10.0, -10.5],
+                [25.0, 11.0],
+                [25.0, -11.0],
+            ),
+            (
+                "S30 E30 L20 | S25 E25 L40 KEY C 14 @端 双槽",
+                [50.0, 1.0],
+                [50.0, 10.5],
+                [50.0, -10.5],
+                [30.0, 11.0],
+                [30.0, -11.0],
+            ),
+        ];
+        for (text, mid_band, top_slot, bot_slot, top_mat, bot_mat) in cases {
+            let mut p = parse_program(text).unwrap();
+            p.view = ShaftView::Section;
+            let shaft = build(&p, 1.0).unwrap();
+            assert!(hatch_filled(&shaft.entities, *mid_band), "{text}：中带漏填充");
+            assert!(!hatch_filled(&shaft.entities, *top_slot), "{text}：上槽区不得有剖面线");
+            assert!(!hatch_filled(&shaft.entities, *bot_slot), "{text}：下槽区不得有剖面线");
+            assert!(hatch_filled(&shaft.entities, *top_mat), "{text}：上材料区漏填充");
+            assert!(hatch_filled(&shaft.entities, *bot_mat), "{text}：下材料区漏填充");
+        }
+        // 单槽回归：下材料区（原本下环不复制缺口）必须仍被填充。
+        let mut p = parse_program("S25 E25 L40 KEY A 18").unwrap();
+        p.view = ShaftView::Section;
+        let single = build(&p, 1.0).unwrap();
+        assert!(hatch_filled(&single.entities, [20.0, -10.5]), "单槽下材料区应填充");
+        assert!(!hatch_filled(&single.entities, [20.0, 10.5]), "单槽上槽区不得有剖面线");
     }
 }

@@ -300,6 +300,7 @@ function segmentsFor(dsl) {
         }
         const tm = /\bt1\s*=?\s*([\d.]+)/i.exec(line);
         if (tm) seg.keyway.t1 = Number(tm[1]);
+        if (/双槽|\bDOUBLE\b/i.test(line)) seg.keyway.double = true;
       }
       out.push(seg);
       continue;
@@ -654,6 +655,18 @@ segBody._rows[0]._fields.find((f) => f.dataset.f === 'key.place').value = 'end';
 segBody._fire('input', segBody._rows[0]._fields.find((f) => f.dataset.f === 'key.place'));
 await tick();
 check(segBody._rows[0]._html.includes('槽长 25.5'), '端置 C 不折算+t1：20+5.5=25.5：' + segBody._rows[0]._html.slice(0, 400));
+// 双槽开关（可选项）：默认关；勾选 → 行文本/模型往返；仅剖视体现（GUI 只是开关透传）。
+const dblF = segBody._rows[0]._fields.find((f) => f.dataset.f === 'key.double');
+check(!!dblF && !dblF.checked, 'KEY 列应有「双槽」勾选框且默认关');
+dblF.checked = true;
+segBody._fire('input', dblF);
+await tick();
+check(S.rows[0].key.double === true && dslEl.value.includes('双槽'),
+  '勾选双槽应同步行文本：' + JSON.stringify(dslEl.value));
+const dm = S.modelFromRows();
+check(!!dm && dm.segments[0].keyway && dm.segments[0].keyway.double === true,
+  '双槽应进 JSON 模型：' + JSON.stringify(dm && dm.segments[0]));
+check(segBody._rows[0]._html.includes('双槽'), 'KEY 单元格应带回显勾选态');
 // 互斥：GEAR / SPLINE 段 → KEY 勾选禁用；KEY 段 → GEAR / SPLINE 勾选禁用（与 M/OV 同口径 enforceExclusive）。
 dslEl.value = 'GEAR M3 Z20 H30';
 await S.refreshFromText();

@@ -134,7 +134,9 @@
       <b>平键（轴槽）</b>：段表的 <b>KEY 列</b>（与螺纹/花键同级的段类型）—— 勾选后给键型 A/B/C、键长 L（所选键型的键长）、位置中置/端置；
       <b>b×h 与 t1 由该段直径 d 查 GB/T 1095 自动定、只读显示</b>（显式覆盖也必须落在该轴径档标准配对）；
       槽长按型别折算（B：中置 +b / 端置 +b/2；C：中置 +b/2 / 端置不折算）。
-      显示口径：<b>中置常规侧视恒显示 A（双圆头）</b>，<b>端置 B/C 显示 C（单圆头）</b>。与 GEAR / SPLINE / M / OV 互斥。
+      显示口径：<b>中置常规侧视恒显示 A（双圆头）</b>，<b>端置 B/C 显示 C（单圆头）</b>。
+      <b>双槽</b> = 绕轴心 180° 对置的第二个槽，<b>仅剖视图体现</b>（常规侧视不变；可承受转矩约为单键联接的 1.5 倍）。
+      与 GEAR / SPLINE / M / OV 互斥。
       <b>GEAR 齿轮段</b>的 H = 齿宽（留空 10m）、α = 压力角（留空 20°）；
       <b>TODO</b>：GEAR 段目前只支持模数制 M（径节制 DP 走 <code>OCSMGEAR</code> 齿轮工具，端/侧/剖视共用几何）。<br>
       <b>表达式互通</b>：齿轮窗口的「轴生成器表达式」可直接粘贴到上面的表达式框或某行的 GEAR 输入框
@@ -224,7 +226,7 @@ function blankRow() {
     ch: { l: { on: false, c: "2" }, r: { on: false, c: "2" } },
     ov: { l: { on: false, b1: "" }, r: { on: false, b1: "" } },
     m: { on: false, p: "" },
-    key: { on: false, kind: "A", l: "", place: "mid", b: "", h: "", t1: "" },
+    key: { on: false, kind: "A", l: "", place: "mid", b: "", h: "", t1: "", double: false },
     gear: { on: false, mark: "GEAR", kind: "EX", m: "3", z: "20", x: "", da: "", df: "", h: "", alpha: "" },
     spline: { on: false, spec: "6x23x26x6", len: "30", de: "" },
   };
@@ -489,6 +491,7 @@ function rowHtml(r, i) {
       <select data-f="key.kind" title="键型 A/B/C（复用 GB/T 1096 平键族 key_1096_a/b/c；槽长会自动按型别折算）"${dis(!keyOn)}><option value="A"${r.key.kind === "A" ? " selected" : ""}>A</option><option value="B"${r.key.kind === "B" ? " selected" : ""}>B</option><option value="C"${r.key.kind === "C" ? " selected" : ""}>C</option></select>
       <select data-f="key.place" title="位置：中置 = 槽两端封闭（居中于净圆柱）；端置 = 开在轴首/末段自由端（槽长 = 键长 + t1）"${dis(!keyOn)}><option value="mid"${r.key.place !== "end" ? " selected" : ""}>中置</option><option value="end"${r.key.place === "end" ? " selected" : ""}>端置</option></select></div>
       <div class="frow"><span class="chk">L</span><select data-f="key.l"${dis(!keyOn)}>${keyLengthOptionsHtml(r)}</select>
+      <label class="chk" title="双键槽：绕轴心 180° 对置（仅剖视图体现；可承受转矩约为单键联接的 1.5 倍）"><input type="checkbox" data-f="key.double"${ck(r.key.double)}${dis(!keyOn)}>双槽</label>
       <span class="chk key-derive" title="由轴段直径查 GB/T 1095 得 b×h；t1 按 b 查表">${keyDeriveHtml(r)}</span></div>
       </td>
     <td class="feat"><div class="frow"><label class="chk"><input type="checkbox" data-f="gear.on"${ck(gearOn)}${dis(splineOn || keyOn)}>GEAR</label>
@@ -612,6 +615,7 @@ function rowToDsl(r) {
       if (String(r.key.h).trim() !== "") s += "h" + numTok(r.key.h);
     }
     if (String(r.key.t1).trim() !== "") s += " t1 " + numTok(r.key.t1);
+    if (r.key.double) s += " 双槽";
   }
   return s;
 }
@@ -678,6 +682,7 @@ function rowFromSegment(seg) {
     r.key.b = seg.keyway.b === null || seg.keyway.b === undefined ? "" : fmt(seg.keyway.b);
     r.key.h = seg.keyway.h === null || seg.keyway.h === undefined ? "" : fmt(seg.keyway.h);
     r.key.t1 = seg.keyway.t1 === null || seg.keyway.t1 === undefined ? "" : fmt(seg.keyway.t1);
+    r.key.double = !!seg.keyway.double;
   }
   enforceExclusive(r);
   return r;
@@ -1164,6 +1169,7 @@ function modelFromRows() {
         if (!(t1 > 0)) return fail("平键的 t1 覆盖必须 > 0（留空 = 按 b 查 GB/T 1095 表）。");
         keyway.t1 = t1;
       }
+      if (r.key.double) keyway.double = true;
       seg.keyway = keyway;
     }
     segments.push(seg);
