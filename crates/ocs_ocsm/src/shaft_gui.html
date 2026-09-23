@@ -74,13 +74,13 @@
     <div id="perr"></div>
   </div>
 
-  <!-- ② 视图：常规 / 剖视 / 双（预览与导出都带 view 参数） -->
+  <!-- ② 视图：常规 / 剖视（预览与导出都带 view 参数；双视图已移除） -->
   <div class="card">
     <h2>视图（预览与生成都按这个走）</h2>
     <div class="row" id="viewRow"></div>
     <div class="hint">
       <b>常规</b>（默认）= 只画外形可见线；<b>剖视</b> = 同一套轮廓 + ANSI31 剖面线
-      （<code>5剖面线层</code>）；<b>双</b> = 常规视图与剖视图并排一次生成。
+      （<code>5剖面线层</code>）。双视图已移除（旧 <code>VIEW 双</code> 明确报错）。
       行文本里也可写 <code>VIEW 剖视</code>（独立一行或段内关键字均可）。
     </div>
   </div>
@@ -121,6 +121,8 @@
     </div>
     <div class="hint" id="exprErr"></div>
     <div class="hint" id="segHint">
+      <b>打开即为空表</b>：点上方「+ 加行」添加第一段（用 M/GEAR/SPLINE 等段型），
+      或把表达式粘贴到下方「行文本」/「粘贴齿轮表达式」框。<br>
       <code>E</code> 留空 = 圆柱段；<code>M</code> 螺纹段要求 S=E（不写值 = 小径 0.85d 简化画法，
       <code>M1.5</code> = 螺距 P 精确小径）；退刀槽 <b>就是一小段小直径轴段</b>（例 <code>S24 E24 L5</code>），
       或在行文本里写段级 <code>RL@L</code> / <code>RL@R</code>（任意圆柱段；给 <code>P</code> 查 GB/T 3 表 2，
@@ -181,26 +183,17 @@
 <script>
 /* ─────────────────────────── 常量与状态 ─────────────────────────── */
 
-// 打开窗口时的示例（与 shaft.rs 文档注释里的 demo 一致）
-const DEMO = [
-  "S30 E30 L45 CH2@L",
-  "S40 E40 L30 CH2@R OV3",
-  "S50 E30 L20",
-  "S30 E30 L15 CH2@R",
-  "S40 E40 L7 M1.5",
-  "S36 E36 L5",
-  "GEAR M3 Z20",
-].join("\n");
+// 打开窗口即为**空段表**（用户 2026-09-23 定案：不再预填示例轴特征；
+// 点「+ 加行」添加第一段，或粘贴表达式）。
 
 // 窗口钉在哪张图纸（插件开窗时写的 tab=）：生成到图纸时带回给插件，多张图不串。
 const TAB = new URLSearchParams(location.search).get("tab");
 const el = (id) => document.getElementById(id);
 
-// 视图开关（key 与 shaft.rs::ShaftView 对齐）：预览/导出都带 view 参数。
+// 视图开关（key 与 shaft.rs::ShaftView 对齐）：预览/导出都带 view 参数；双视图已移除。
 const VIEWS = [
   { key: "normal", name: "常规" },
   { key: "section", name: "剖视" },
-  { key: "both", name: "双" },
 ];
 
 let rows = [];              // 段表状态（一行一段）
@@ -417,7 +410,13 @@ function rowHtml(r, i) {
 }
 
 function renderTable() {
-  el("segBody").innerHTML = rows.map((r, i) => rowHtml(r, i)).join("");
+  if (!rows.length) {
+    el("segBody").innerHTML =
+      '<tr><td colspan="9" class="empty-guide">暂无轴段：点上方「+ 加行」添加第一段，' +
+      '或把表达式粘贴到下方文本框 / 表达式框。</td></tr>';
+  } else {
+    el("segBody").innerHTML = rows.map((r, i) => rowHtml(r, i)).join("");
+  }
   updateButtons();
 }
 
@@ -576,6 +575,16 @@ function clearDslError() {
 // 文本区 → 解析 → 回填段表（返回是否成功）
 async function refreshFromText() {
   const text = el("dsl").value;
+  if (text.trim() === "") {
+    // 空行文本 = 空段表（打开即空；用户清空后也回到空表，不请求后端）
+    rows = [];
+    sel = 0;
+    clearDslError();
+    renderTable();
+    textDirty = false;
+    schedulePreview();
+    return true;
+  }
   const my = ++seqParse;
   try {
     const r = await fetch("/api/shaft_parse", {
@@ -592,7 +601,6 @@ async function refreshFromText() {
     }
     clearDslError();
     rows = (j.segments || []).map(rowFromSegment);
-    if (!rows.length) rows = [blankRow()];
     if (j.at) { el("atx").value = fmt(j.at[0]); el("aty").value = fmt(j.at[1]); }
     if (typeof j.rot === "number") el("rot").value = fmt(j.rot);
     // 视图：以文本解析结果为准（文本里没 VIEW 就是常规）
@@ -791,8 +799,13 @@ function updateButtons() {
 }
 
 function onAddRow() {
-  rows.splice(sel + 1, 0, blankRow());
-  sel += 1;
+  if (!rows.length) {
+    rows.push(blankRow());   // 空表：第一段落在 0 行
+    sel = 0;
+  } else {
+    rows.splice(sel + 1, 0, blankRow());
+    sel += 1;
+  }
   renderTable();
   regenText();
   updateButtons();
@@ -855,6 +868,13 @@ function markRowsFromError(msg) {
 
 async function fetchPreview() {
   const text = el("dsl").value;
+  if (text.trim() === "") {
+    // 空段表：不请求后端，给中性提示（打开即空表；不报红）
+    clearPreviewError();
+    el("perr").textContent = "段表为空：点「+ 加行」添加第一段，或把表达式粘贴到下方文本框 / 表达式框。";
+    el("perr").className = "";
+    return;
+  }
   const my = ++seqPreview;
   try {
     const r = await fetch("/api/shaft_preview", {
@@ -1104,13 +1124,15 @@ function ping(bye) {
   });
   el("segBody").addEventListener("paste", onSegmentPaste);
 
-  // 初始：规格表（下拉数据源）→ 示例文本解析 → 回填段表 → 预览
+  // 初始：规格表（下拉数据源）→ **空段表**（不预填示例；加行/粘贴表达式开始）
   renderViews();
   await loadSplineSpecs();
-  el("dsl").value = DEMO;
-  const ok = await refreshFromText();
-  if (ok) await fetchPreview();
+  rows = [];
+  sel = 0;
+  clearDslError();
+  renderTable();
   updateButtons();
+  await fetchPreview();   // 空表 → 中性提示（不请求后端）
 })();
 </script>
 </body>

@@ -53,8 +53,9 @@
 //!     齿形用 `OCSMGEAR` 单独出，这里不画齿、本期不做斜齿（`BETA…` 报「斜齿未实现」）；
 //!   * 矩形花键 `SPLINE 6x23x26x6 L30`（GB/T 1144）与齿形段共存：`SPLINE` 后跟
 //!     齿形关键字（M/Z/EX/IN/DA/DF…）才是渐开线花键齿形段。
-//! - `VIEW 常规|剖视|双`：视图开关（默认 `常规`）；独立一行或段内关键字都认
-//!   （`VIEW 剖视` / `VIEW=section`），只影响整体视图（`双` = 常规+剖视并排一次出）；
+//! - `VIEW 常规|剖视`：视图开关（默认 `常规`）；独立一行或段内关键字都认
+//!   （`VIEW 剖视` / `VIEW=section`），只影响整体视图（**双视图已于 2026-09-23 移除**，
+//!   旧 `VIEW 双` 明确报错、不静默降级）；
 //! - 多段可用 `|` 或换行分隔；行尾可跟放置参数 `at x,y rot 度`；
 //! - 解析错误报「第 N 行（第 k 段）：…」，几何错误报「第 N 段：…」。
 //!
@@ -76,7 +77,7 @@
 //! 视图**画（半高 = ra，与 `side_view()` 的台阶线同）。另画分度线 r = d/2
 //! （`3中心线层`，点划线，不受倒角影响）。**内侧直径线按 MARK 开关**：
 //! `SPLINE` 常规侧视图画外齿小径 / 内齿里侧齿顶的 `2细线层` 青色细实线；`GEAR` 不画
-//! （既有齿轮口径「无齿根线」）；**剖视/双视图两标记都画**
+//! （既有齿轮口径「无齿根线」）；**剖视两标记都画**
 //! 内侧线（`1轮廓实线层`，齿部按不剖，也是剖面线边界）。派生尺寸取 `gear.rs`
 //! 同口径（ha*=1、c*=0.25；旧写法 Xn=0 → ra = da/2、rf = df/2；统一表达式的
 //! `DA/DF` 为大径/小径，内齿时 `DA` = 外侧齿根、`DF` = 里侧齿顶），不自己另立公式。
@@ -132,9 +133,8 @@
 //!   段间端面（环形面）、倒角斜线、槽的真实壁面、齿轮齿根线；ANSI31、比例 1.0，
 //!   落 `5剖面线层`，走 `partgen_kit::hatch_ansi31_rings` 通路；边界 = 上半边界
 //!   按 x 排序后拆成**上/下两个环**（参考件 `轴剖视图.dxf` 右视图：2 环 21+21 边）；
-//!   普通全螺纹段按**小径包络**、齿轮段按**齿根圆**取剖面线边界（牙顶/齿部不剖）；
-//! * `双` = 常规视图与剖视图并排一次生成（读取顺序：左常规、右剖视），
-//!   间距 = `max(总长 × 15%, 40 × 图框比例)`。
+//!   普通全螺纹段按**小径包络**、齿轮段按**齿根圆**取剖面线边界（牙顶/齿部不剖）。
+//!   （旧的 `双` = 常规+剖视并排**已于 2026-09-23 移除**：`VIEW 双` 明确报错。）
 //!
 //! ## JSON（同一模型，给 GUI/HTTP：`/api/shaft_parse` / `/api/shaft_preview` / `/api/shaft_export`）
 //!
@@ -178,7 +178,8 @@ OCSMSHAFT 轴生成器：行 DSL / JSON → 单视图侧视图（段拼接 + 端
                       l=√(h(2R−h))，6×23×26×6 → l=9.6047）；段长 = L + l；
                       不给 S/E；可 `de 71` 覆盖滚刀外径；不能与 CH/OV/RL/M/GEAR 同段
                       （引入倒角由相邻段的 CH 表达）
-    VIEW 常规|剖视|双   视图：常规（默认，只看外形）/ 剖视（轮廓 + ANSI31 剖面线）/ 双（并排一次出）
+    VIEW 常规|剖视   视图：常规（默认，只看外形）/ 剖视（轮廓 + ANSI31 剖面线）
+                     （双视图已于 2026-09-23 移除；旧 `VIEW 双` 明确报错）
     REPORT          计算书：段末加 `REPORT`（大小写不敏感）—— 不插图，直接输出 Markdown
                     计算书（段清单 + 总长/最大直径）；
                     `REPORT=<路径>` / `REPORT-OUT=<路径>` 另写文件
@@ -205,17 +206,15 @@ fn end_cn(end: End) -> &'static str {
     }
 }
 
-/// 视图开关（用户 2026-09-18 定案）：`常规` / `剖视` / `双`。
+/// 视图开关（用户 2026-09-18 定案；**双视图已于 2026-09-23 移除**）：`常规` / `剖视`。
 ///
 /// * `常规` = 只画外形可见线（默认）；贯通竖线只属于常规视图；
-/// * `剖视` = **真实几何**（不含贯通竖线）+ ANSI31 剖面线（`5剖面线层`，上下两环）；
-/// * `双` = 常规视图与剖视图并排一次出（左常规、右剖视）。
+/// * `剖视` = **真实几何**（不含贯通竖线）+ ANSI31 剖面线（`5剖面线层`，上下两环）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ShaftView {
     Normal,
     Section,
-    Both,
 }
 
 impl Default for ShaftView {
@@ -230,7 +229,6 @@ impl ShaftView {
         match self {
             ShaftView::Normal => "normal",
             ShaftView::Section => "section",
-            ShaftView::Both => "both",
         }
     }
 
@@ -239,16 +237,15 @@ impl ShaftView {
         match self {
             ShaftView::Normal => "常规",
             ShaftView::Section => "剖视",
-            ShaftView::Both => "双",
         }
     }
 
-    /// 是否带剖面线（`剖视` / `双`）。
+    /// 是否带剖面线（只有 `剖视`）。
     pub fn has_hatch(self) -> bool {
-        matches!(self, ShaftView::Section | ShaftView::Both)
+        matches!(self, ShaftView::Section)
     }
 
-    pub const ALL: [ShaftView; 3] = [ShaftView::Normal, ShaftView::Section, ShaftView::Both];
+    pub const ALL: [ShaftView; 2] = [ShaftView::Normal, ShaftView::Section];
 
     /// 解析视图名（中英文都认；`view=` / `视图` 前缀也剥掉）。
     pub fn parse(s: &str) -> Result<Self, String> {
@@ -265,12 +262,20 @@ impl ShaftView {
             "section" | "cut" | "剖" | "剖视" | "剖视图" | "剖面" | "剖开" => {
                 Some(ShaftView::Section)
             }
-            "both" | "dual" | "双" | "双视图" | "并排" | "常规+剖视" | "两个" => Some(ShaftView::Both),
+            // 双视图用户 2026-09-23 定案移除：点名报错，不静默降级成常规
+            // （风格同撤掉轴段 INVOLSPLINE 时的“不识别的关键字 + 原因/指路”）。
+            "both" | "dual" | "双" | "双视图" | "并排" | "常规+剖视" | "两个" => {
+                return Err(format!(
+                    "不识别的视图名「{}」：双视图已移除（用户 2026-09-23 定案）——\
+                     轴生成器只支持 常规/剖视 两个视图；原 `VIEW 双` 的并排输出已撤（需要并排请分别出两次图）。",
+                    s.trim()
+                ));
+            }
             _ => None,
         };
         hit.ok_or_else(|| {
             format!(
-                "视图名无法识别：`{}`。可用：normal|常规、section|剖视、both|双。",
+                "视图名无法识别：`{}`。可用：normal|常规、section|剖视。",
                 s.trim()
             )
         })
@@ -680,7 +685,7 @@ pub struct Program {
     pub segments: Vec<Segment>,
     pub at: Option<[f64; 2]>,
     pub rot: Option<f64>,
-    /// 视图（默认 `常规`）；`serde` 里序列化成 `normal`/`section`/`both`。
+    /// 视图（默认 `常规`）；`serde` 里序列化成 `normal`/`section`（`both` 已移除）。
     #[serde(default)]
     pub view: ShaftView,
 }
@@ -762,7 +767,7 @@ fn extract_view_directives<'a>(
         if upper == "VIEW" || token == "视图" {
             index += 1;
             name = Some(tokens.get(index).copied().ok_or_else(|| {
-                format!("{label}：关键字 VIEW 缺少视图名（常规/剖视/双）")
+                format!("{label}：关键字 VIEW 缺少视图名（常规/剖视）")
             })?);
         } else if let Some(rest) = upper.strip_prefix("VIEW") {
             name = rest.strip_prefix(['=', ':']);
@@ -1684,7 +1689,7 @@ struct JsonProgram {
     at: Option<[f64; 2]>,
     #[serde(default)]
     rot: Option<f64>,
-    /// 视图：`normal|section|both` 或中文名；缺省 = 常规。
+    /// 视图：`normal|section` 或中文名；缺省 = 常规（`both`/`双` 已移除：明确报错）。
     #[serde(default)]
     view: Option<String>,
 }
@@ -2572,8 +2577,7 @@ fn face_radius(seg: &Segment, end: End) -> f64 {
     seg.outer_radius(end)
 }
 
-/// 沿 x 平移（`双` 视图把第二张整体右移；Hatch 的边界段同步平移，
-/// 图案 offset 是世界坐标下的周期量，不用改）。
+/// 沿 x 平移（Hatch 的边界段同步平移，图案 offset 是世界坐标下的周期量，不用改）。
 fn translate_x(entity: EntityType, dx: f64) -> EntityType {
     match entity {
         EntityType::Line(mut l) => {
@@ -2660,7 +2664,7 @@ struct Geometry {
 }
 
 /// 解析 → 校验 → 生成（`frame_scale` 用于轴线 `6n` 伸出量；无图框传 1.0）。
-/// 返回的图元已按 `program.view` 组合（常规 / 剖视 / 双）。
+/// 返回的图元已按 `program.view` 组合（常规 / 剖视；双视图已移除）。
 pub fn build(program: &Program, frame_scale: f64) -> Result<Shaft, String> {
     let Geometry {
         entities,
@@ -2694,22 +2698,6 @@ pub fn build(program: &Program, frame_scale: f64) -> Result<Shaft, String> {
             out.extend(hatch());
             out
         }
-        ShaftView::Both => {
-            // 并排：左常规、右剖视；间距 = max(总长×15%, 40×图框比例)。
-            let dx = total + both_view_gap(total, frame_scale);
-            let mut left = entities.clone();
-            left.extend(through);
-            left.extend(spline_regular);
-            let mut right: Vec<EntityType> = entities
-                .iter()
-                .cloned()
-                .map(|e| translate_x(e, dx))
-                .collect();
-            right.extend(section_lines.into_iter().map(|e| translate_x(e, dx)));
-            right.extend(hatch().into_iter().map(|e| translate_x(e, dx)));
-            left.extend(right);
-            left
-        }
     };
     Ok(Shaft {
         entities,
@@ -2717,11 +2705,6 @@ pub fn build(program: &Program, frame_scale: f64) -> Result<Shaft, String> {
         max_diameter,
         segment_count,
     })
-}
-
-/// `双` 视图两视图之间的间距口径：`max(总长 × 15%, 40 × 图框比例)`。
-fn both_view_gap(total_length: f64, frame_scale: f64) -> f64 {
-    (0.15 * total_length).max(40.0 * frame_scale)
 }
 
 /// 一段局部螺纹（`M… TL…` 或 `M… RL`）的轴向布局：以段右端面（台肩）为基准。
@@ -6041,7 +6024,7 @@ GEAR M3 Z20";
             ("SPLINE IN M3 Z20 ALPHA30 X0 DA65.4 DF57.3436 BETA0 H30", true),
         ];
         for (expr, internal) in cases {
-            for view in ["", " | VIEW 剖视", " | VIEW 双"] {
+            for view in ["", " | VIEW 剖视"] {
             let program = parse_program(&format!("{expr}{view}")).unwrap();
             let g = program.segments[0].gear.unwrap();
             assert_eq!(g.kind.is_internal(), internal, "{expr}{view}");
@@ -6310,7 +6293,7 @@ GEAR M3 Z20";
         assert!(has([hh, -hi], [hh, hi]), "右端面 ±(ra−C)");
     }
 
-    // ── 视图 VIEW（常规 / 剖视 / 双） ────────────────────────────────────
+    // ── 视图 VIEW（常规 / 剖视；双视图已于 2026-09-23 移除） ────────────
 
     #[test]
     fn dsl_view_parses_default_inline_standalone_and_json() {
@@ -6319,7 +6302,6 @@ GEAR M3 Z20";
         // 独立一行 / 段内关键字 / = 或 : / 中文或英文
         for (text, want) in [
             ("VIEW 剖视\nS30 E30 L10", ShaftView::Section),
-            ("S30 E30 L10 VIEW 双", ShaftView::Both),
             ("VIEW=section S30 E30 L10", ShaftView::Section),
             ("S30 E30 L10 视图:剖视图", ShaftView::Section),
             ("VIEW 常规\nS30 E30 L10", ShaftView::Normal),
@@ -6327,7 +6309,7 @@ GEAR M3 Z20";
         ] {
             assert_eq!(parse_program(text).unwrap().view, want, "{text}");
         }
-        // 所有键可解析回自身
+        // 所有键可解析回自身（现在只有 normal/section）
         for view in ShaftView::ALL {
             assert_eq!(ShaftView::parse(view.key()).unwrap(), view);
         }
@@ -6336,7 +6318,7 @@ GEAR M3 Z20";
         assert_eq!(program.view, ShaftView::Section);
         assert_eq!(program.segments.len(), 2);
         // JSON 同名字段：英文键或中文名
-        for view in ["section", "剖视", "both", "双", "normal"] {
+        for view in ["section", "剖视", "normal", "常规"] {
             let text = format!(r#"{{"segments":[{{"s":30,"l":10}}],"view":"{view}"}}"#);
             assert_eq!(
                 parse_program(&text).unwrap().view,
@@ -6344,16 +6326,17 @@ GEAR M3 Z20";
             );
         }
         // 序列化回传（GUI/HTTP）：view 键可来回
-        let program = parse_program("VIEW 双\nS30 E30 L10").unwrap();
+        let program = parse_program("VIEW 剖视\nS30 E30 L10").unwrap();
         let json = serde_json::to_string(&program).unwrap();
-        assert!(json.contains("\"view\":\"both\""), "{json}");
+        assert!(json.contains("\"view\":\"section\""), "{json}");
         assert_eq!(parse_program(&json).unwrap(), program);
         // 错误：视图名非法 / 缺名 / 冲突
         let err = parse_program("VIEW 隐藏\nS30 E30 L10").unwrap_err();
         assert!(err.contains("视图名无法识别"), "{err}");
+        assert!(err.contains("可用：normal|常规、section|剖视"), "{err}");
         let err = parse_program("VIEW\nS30 E30 L10").unwrap_err();
         assert!(err.contains("缺少视图名"), "{err}");
-        let err = parse_program("VIEW 剖视\nS30 E30 L10\nVIEW 双").unwrap_err();
+        let err = parse_program("VIEW 常规\nS30 E30 L10\nVIEW 剖视").unwrap_err();
         assert!(err.contains("重复且冲突"), "{err}");
         // 块名把视图算进去（常规 ≠ 剖视）
         let normal = parse_program("S30 E30 L10").unwrap();
@@ -6446,60 +6429,32 @@ GEAR M3 Z20";
         );
     }
 
+    /// 双视图已移除（用户 2026-09-23 定案）：DSL/JSON 都给**明确报错**，
+    /// 不静默降级成常规（风格同撤掉轴段 `INVOLSPLINE` 的“点名报错”）。
     #[test]
-    fn both_view_places_section_side_by_side_with_gap_rule() {
-        // 短轴：间距 = max(20×15%=3, 40×1) 取 40 → 第二张起点 x = 20 + 40 = 60
-        let program = parse_program("S30 E30 L20 VIEW 双").unwrap();
-        let normal = build(
-            &Program {
-                view: ShaftView::Normal,
-                ..program.clone()
-            },
-            1.0,
-        )
-        .unwrap();
-        let both = build(&program, 1.0).unwrap();
-        assert_eq!(
-            both.entities.len(),
-            normal.entities.len() * 2 + 1,
-            "常规×2 + 一个 HATCH"
-        );
-        assert!(has_line(&both, [60.0, 15.0], [80.0, 15.0]), "第二张轮廓右移 60");
-        assert!(has_line(&both, [57.0, 0.0], [83.0, 0.0]), "第二张轴线");
-        // 双视图：左常规保留贯通竖线，右剖视不保留（用带段边界的轴验证）
-        let two = parse_program("S30 E30 L20 | S40 E40 L10 VIEW 双").unwrap();
-        let both2 = build(&two, 1.0).unwrap();
-        // 间距 = max(30×15%=4.5, 40) = 40 → 第二张 +70
-        assert!(has_line(&both2, [20.0, -15.0], [20.0, 15.0]), "左常规贯通竖线");
-        assert!(
-            !has_line(&both2, [90.0, -15.0], [90.0, 15.0]),
-            "右剖视不画贯通竖线"
-        );
-        assert!(has_line(&both2, [90.0, 15.0], [90.0, 20.0]), "右剖视真实端面");
-        // 第二张的 HATCH 边界也右移 60
-        let hatch = both
-            .entities
-            .iter()
-            .find_map(|e| match e {
-                EntityType::Hatch(h) => Some(h),
-                _ => None,
-            })
-            .expect("双视图要有一个 HATCH");
-        let mut min_x = f64::INFINITY;
-        for path in &hatch.paths {
-            for edge in &path.edges {
-                if let BoundaryEdge::Line(e) = edge {
-                    min_x = min_x.min(e.start.x).min(e.end.x);
-                }
-            }
+    fn view_both_removed_errors_clearly() {
+        for text in [
+            "S30 E30 L10 VIEW 双",
+            "VIEW 双\nS30 E30 L10",
+            "S30 E30 L10 VIEW both",
+            "S30 E30 L10 视图:并排",
+        ] {
+            let err = parse_program(text).unwrap_err();
+            assert!(err.contains("双视图已移除"), "{text}: {err}");
+            assert!(err.contains("常规/剖视"), "{text}: {err}");
         }
-        assert!(near(min_x, 60.0), "HATCH 边界右移：min_x={min_x}");
-        // 长轴：间距 = 总长×15%（400 → 60）
-        let long = parse_program("S30 E30 L400 VIEW 双").unwrap();
-        let both_long = build(&long, 1.0).unwrap();
-        assert!(
-            has_line(&both_long, [460.0, 15.0], [860.0, 15.0]),
-            "总长 400 时间距 = 60（15%）"
+        // JSON 同口径
+        let err = parse_program(r#"{"segments":[{"s":30,"l":10}],"view":"both"}"#)
+            .unwrap_err();
+        assert!(err.contains("双视图已移除"), "{err}");
+        // 常规/剖视行为不受影响
+        assert_eq!(
+            parse_program("S30 E30 L10 VIEW 剖视").unwrap().view,
+            ShaftView::Section
+        );
+        assert_eq!(
+            parse_program("VIEW 常规\nS30 E30 L10").unwrap().view,
+            ShaftView::Normal
         );
     }
 

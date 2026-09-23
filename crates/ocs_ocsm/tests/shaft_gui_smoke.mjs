@@ -327,6 +327,28 @@ const segBody = document.getElementById('segBody');
 check(!!S, '探针 __shaft 未挂上（脚本初始化崩溃？）');
 if (!S) report();
 
+// ⓪ 打开即为空段表（用户 2026-09-23 定案：不再预填示例轴特征）；视图按钮只有 常规/剖视。
+check(S.rows.length === 0, '打开轴生成器应为空段表，实为 ' + S.rows.length);
+check(segBody._rows.length === 0, '段表 DOM 应为空，实为 ' + segBody._rows.length);
+check(dslEl.value === '', '行文本应为空，实为 ' + JSON.stringify(dslEl.value));
+check(!segBody._innerHTML.includes('S30 E30 L45'), '不应预填示例轴特征');
+const viewNames = document.getElementById('viewRow').children.map((b) => b.textContent);
+check(viewNames.join('|') === '常规|剖视', '视图按钮应只有 常规|剖视（双视图已移除），实为 ' + viewNames.join('|'));
+// 空表 →「+ 加行」→ 第一段 → 可生成模型（空表可用性）
+document.getElementById('addRow').click();
+await new Promise((r) => setImmediate(r));
+check(S.rows.length === 1 && segBody._rows.length === 1, '空表点「+ 加行」应加出第一段');
+const firstModel = S.modelFromRows();
+check(
+  !!firstModel && firstModel.segments.length === 1
+    && firstModel.segments[0].s === 30 && firstModel.segments[0].l === 10,
+  '加第一段后应能生成模型（S30 L10）：' + JSON.stringify(firstModel)
+);
+// 回到空表（后面用例自己设置行文本）
+dslEl.value = '';
+await S.refreshFromText();
+check(S.rows.length === 0, '清空行文本应回到空表');
+
 check(S.specs.length === SPECS.length, `/api/parts 规格未加载（${S.specs.length}）`);
 
 // ① 段表 SPLINE 列是下拉，选项 = 表内规格 + 「自定义规格…」
