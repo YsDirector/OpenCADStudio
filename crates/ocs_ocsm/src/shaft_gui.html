@@ -99,6 +99,7 @@
             <th>CH 倒角</th>
             <th>OV 越程槽</th>
             <th>M 螺纹段</th>
+            <th>平键</th>
             <th>GEAR 齿轮段</th>
             <th>SPLINE 矩形花键段（规格下拉）</th>
           </tr>
@@ -130,6 +131,9 @@
       （轻/中系列共 33 条）<b>下拉选择</b>，选中自动带出 d/D/B/de/h/l 派生值（de 框可改 = 覆盖）；
       下拉末尾「自定义…」手输表外规格（表外必须给 <code>de</code>）。满齿段长 <code>L</code>
       （段长 = L + 收尾 l）；不能与 CH/OV/M/GEAR 同段。
+      <b>平键（轴槽）</b>：详见下方「平键选项卡」（选当前段 → 键型 A/B/C、键尺寸 b×h、键长 L、
+      位置中置/端置；t1 默认按 b 查 GB/T 1095 表，高级里可覆盖；轴径只给“推荐 b”辅助提示）；
+      只能挂光圆柱段，与 M/OV/GEAR/SPLINE 互斥。
       <b>GEAR 齿轮段</b>的 H = 齿宽（留空 10m）、α = 压力角（留空 20°）；
       <b>TODO</b>：GEAR 段目前只支持模数制 M（径节制 DP 走 <code>OCSMGEAR</code> 齿轮工具，端/侧/剖视共用几何）。<br>
       <b>表达式互通</b>：齿轮窗口的「轴生成器表达式」可直接粘贴到上面的表达式框或某行的 GEAR 输入框
@@ -137,6 +141,50 @@
       「打开齿轮生成器」一键开齿轮窗口。轴段只做外齿轮/外矩形花键，内齿表达式不能用在轴上；渐开线花键请用齿轮生成器的花键模式。
     </div>
     <div id="segErr"></div>
+  </div>
+
+  <!-- ③b 平键选项卡：编辑当前选中轴段的轴槽（键型 / 键长 / 位置） -->
+  <div class="card" id="keyCard">
+    <h2>平键选项卡（轴槽）<span class="sub" id="keySegLabel">未选中段</span></h2>
+    <div class="form">
+      <label for="keyKind">键型</label>
+      <div class="ctl">
+        <select id="keyKind">
+          <option value="">无（本段不插平键）</option>
+          <option value="A">A 型（双圆头）</option>
+          <option value="B">B 型（双平头）</option>
+          <option value="C">C 型（单圆头）</option>
+        </select>
+        <span class="unit">复用 GB/T 1096 平键族 key_1096_a/b/c</span>
+      </div>
+      <label for="keySize">键尺寸 b×h</label>
+      <div class="ctl">
+        <select id="keySize"></select>
+        <span class="unit">mm（GB/T 1096 平键族标准配对；h 跟 b 走，不允许自由组合）</span>
+      </div>
+      <label for="keyLen">键长 L</label>
+      <div class="ctl">
+        <select id="keyLen"></select>
+        <span class="unit">mm（GB/T 1096 标准系列 ∩ L&lt;10b）</span>
+      </div>
+      <label for="keyPlace">位置</label>
+      <div class="ctl">
+        <select id="keyPlace">
+          <option value="mid">中置（居中于本段「倒角根↔段末」净圆柱）</option>
+          <option value="end">端置（开在轴首/末段自由端；槽长 = 键长 + t1）</option>
+        </select>
+      </div>
+      <label>派生</label>
+      <div class="ctl"><span class="unit" id="keyDerive">—</span></div>
+    </div>
+    <details id="keyAdv">
+      <summary style="cursor:pointer;font-size:12px;color:#666">高级：t1 覆盖（默认按 b 查 GB/T 1095 表）</summary>
+      <div class="form" style="margin-top:8px">
+        <label for="keyT1">槽深 t1</label>
+        <div class="ctl"><input type="number" step="0.1" min="0" id="keyT1" placeholder="留空 = 按 b 查 GB/T 1095 表"><span class="unit">mm</span></div>
+      </div>
+    </details>
+    <div class="hint" id="keyHint">选中一个光圆柱段，再选键型/键长/位置；预览里常规视图画键、剖视图画槽（含 sagitta 线）。</div>
   </div>
 
   <!-- ④ 行文本：可粘贴/编辑；解析成功回填段表，失败标行号 -->
@@ -199,6 +247,10 @@ const VIEWS = [
 let rows = [];              // 段表状态（一行一段）
 let sel = 0;                // 当前选中行
 let splineSpecs = [];       // 矩形花键规格表（/api/parts → detail_spline_rect.specs）
+// 平键族数据（/api/parts → key_1096_a/_b/_c）：A/B/C → {sizes, ranges}；
+// sizes = 每档 {d(=b), label, lengths(L 系列∩L<10b), l_min/l_max, extra(h/c)}；
+// ranges = 轴径→键宽选型区间（1979 d 列，仅初选）。
+let keyCatalog = {};
 const SPLINE_CUSTOM = "__custom__";   // 下拉末尾「自定义规格…」的哨兵值
 let curView = "normal";     // 当前视图（默认常规）
 let seqPreview = 0;         // 过期响应丢弃序号
@@ -215,6 +267,7 @@ function blankRow() {
     ch: { l: { on: false, c: "2" }, r: { on: false, c: "2" } },
     ov: { l: { on: false, b1: "" }, r: { on: false, b1: "" } },
     m: { on: false, p: "" },
+    key: { on: false, kind: "A", l: "18", place: "mid", b: "", t1: "" },
     gear: { on: false, mark: "GEAR", kind: "EX", m: "3", z: "20", x: "", da: "", df: "", h: "", alpha: "" },
     spline: { on: false, spec: "6x23x26x6", len: "30", de: "" },
   };
@@ -251,12 +304,42 @@ const esc = (s) =>
 async function loadSplineSpecs() {
   try {
     const cat = await (await fetch("/api/parts", { cache: "no-store" })).json();
-    const fam = cat && cat.families ? cat.families.detail_spline_rect : null;
-    splineSpecs = (fam && Array.isArray(fam.specs) ? fam.specs : [])
+    const fam = cat && cat.families ? cat.families : {};
+    const splineFam = fam.detail_spline_rect;
+    splineSpecs = (splineFam && Array.isArray(splineFam.specs) ? splineFam.specs : [])
       .filter((s) => s && typeof s.code === "string" && s.code !== "");
+    keyCatalog = {};
+    for (const [kind, id] of [["A", "key_1096_a"], ["B", "key_1096_b"], ["C", "key_1096_c"]]) {
+      const f = fam[id];
+      if (f) {
+        keyCatalog[kind] = {
+          sizes: Array.isArray(f.sizes) ? f.sizes : [],
+          ranges: Array.isArray(f.shaft_ranges) ? f.shaft_ranges : [],
+        };
+      }
+    }
   } catch (e) {
     splineSpecs = [];
+    keyCatalog = {};
   }
+}
+
+// 轴径 d → 标准键宽 b（平键族 shaft_ranges；d 不在区间 → NaN）。
+function shaftKeyB(kind, d) {
+  const cat = keyCatalog[kind];
+  if (!cat || !Number.isFinite(d)) return NaN;
+  const hit = cat.ranges.find((r) => {
+    const ge = r.lo_inclusive ? d >= r.d_lo - 1e-9 : d > r.d_lo + 1e-9;
+    return ge && d <= r.d_hi + 1e-9;
+  });
+  return hit ? Number(hit.b) : NaN;
+}
+
+// 平键族某型别的 b 档（含 L 系列候选与 h/c 附加说明）。
+function keySizeRow(kind, b) {
+  const cat = keyCatalog[kind];
+  if (!cat || !Number.isFinite(b)) return null;
+  return cat.sizes.find((s) => Math.abs(Number(s.d) - b) < 1e-9) || null;
 }
 
 // 规格代号归一：×/＊/* → x、去空白、小写（与后端 parse_code 同口径）。
@@ -363,10 +446,18 @@ function renderViews() {
 
 /* ─────────────────────────── 段表渲染 ─────────────────────────── */
 
+// 段表里的平键摘要（详细编辑在下方「平键选项卡」面板）。
+function keyTag(r) {
+  if (!r.key.on) return "—";
+  const place = r.key.place === "end" ? "端置" : "中置";
+  return esc(r.key.kind + "型 · L" + numTok(r.key.l) + " · " + place);
+}
+
 // 一行 → HTML（disabled 状态直接从状态算，勾选后重渲染即可同步界面）
 function rowHtml(r, i) {
   const gearOn = r.gear.on;
   const splineOn = r.spline.on;
+  const keyOn = r.key.on;
   const specHit = splineSpecHit(r.spline.spec);
   const specSel = specHit ? specHit.code : SPLINE_CUSTOM;
   const mOn = r.m.on;
@@ -388,8 +479,9 @@ function rowHtml(r, i) {
     <td><input type="number" step="0.1" min="0" data-f="l" value="${esc(r.l)}"${dis(gearOn || splineOn)}></td>
     <td class="feat">${endCell("ch", "l", r.ch.l)}${endCell("ch", "r", r.ch.r)}</td>
     <td class="feat">${endCell("ov", "l", r.ov.l)}${endCell("ov", "r", r.ov.r)}</td>
-    <td class="feat"><div class="frow"><label class="chk"><input type="checkbox" data-f="m.on"${ck(mOn)}${dis(gearOn || ovOn || splineOn)}>M</label>
-      <input type="number" step="0.1" min="0" data-f="m.p" value="${esc(r.m.p)}" placeholder="0.85d"${dis(gearOn || ovOn || splineOn)}></div></td>
+    <td class="feat"><div class="frow"><label class="chk"><input type="checkbox" data-f="m.on"${ck(mOn)}${dis(gearOn || ovOn || splineOn || keyOn)}>M</label>
+      <input type="number" step="0.1" min="0" data-f="m.p" value="${esc(r.m.p)}" placeholder="0.85d"${dis(gearOn || ovOn || splineOn || keyOn)}></div></td>
+    <td class="feat"><div class="frow"><span class="key-tag" title="平键轴槽（GB/T 1095）：在下方「平键选项卡」里选择键型 / 键长 / 位置">${keyTag(r)}</span></div></td>
     <td class="feat"><div class="frow"><label class="chk"><input type="checkbox" data-f="gear.on"${ck(gearOn)}${dis(splineOn)}>GEAR</label>
       <select data-f="gear.mark" title="MARK 画法开关：SPLINE（渐开线花键）常规侧视图画小径细实线；GEAR（齿轮）不画"${dis(!gearOn)}><option value="GEAR"${r.gear.mark === "GEAR" ? " selected" : ""}>GEAR</option><option value="SPLINE"${r.gear.mark === "SPLINE" ? " selected" : ""}>SPLINE</option></select>
       <select data-f="gear.kind" title="内/外齿（IN = 内齿轮/内花键）"${dis(!gearOn)}><option value="EX"${r.gear.kind === "EX" ? " selected" : ""}>EX</option><option value="IN"${r.gear.kind === "IN" ? " selected" : ""}>IN</option></select></div>
@@ -412,12 +504,13 @@ function rowHtml(r, i) {
 function renderTable() {
   if (!rows.length) {
     el("segBody").innerHTML =
-      '<tr><td colspan="9" class="empty-guide">暂无轴段：点上方「+ 加行」添加第一段，' +
+      '<tr><td colspan="10" class="empty-guide">暂无轴段：点上方「+ 加行」添加第一段，' +
       '或把表达式粘贴到下方文本框 / 表达式框。</td></tr>';
   } else {
     el("segBody").innerHTML = rows.map((r, i) => rowHtml(r, i)).join("");
   }
   updateButtons();
+  renderKeyPanel();
 }
 
 // 特征互斥：GEAR / SPLINE 各自独占；M 与 OV 不能同段（与后端校验同口径）
@@ -425,19 +518,149 @@ function enforceExclusive(r) {
   if (r.gear.on) {
     r.ch.l.on = r.ch.r.on = r.ov.l.on = r.ov.r.on = r.m.on = false;
     r.spline.on = false;
+    r.key.on = false;
   }
   if (r.spline.on) {
     r.ch.l.on = r.ch.r.on = r.ov.l.on = r.ov.r.on = r.m.on = false;
     r.gear.on = false;
+    r.key.on = false;
   }
   if (r.m.on) {
     r.ov.l.on = r.ov.r.on = false;
     r.gear.on = false;
     r.spline.on = false;
+    r.key.on = false;
+  }
+  if (r.key.on) {
+    r.ov.l.on = r.ov.r.on = false;
+    r.m.on = false;
+    r.gear.on = false;
+    r.spline.on = false;
   }
   if (r.ov.l.on || r.ov.r.on) {
     r.m.on = false;
+    r.key.on = false;
   }
+}
+
+/* ─────────────────── 平键选项卡（轴槽） ─────────────────── */
+
+// 当前选中段是否可以挂轴槽（光圆柱段；与 M/OV/GEAR/SPLINE 互斥）。
+function keyBlockReason(r) {
+  if (!r) return "先加一段并选中。";
+  if (r.gear.on) return "GEAR 段不能挂平键（与齿轮段互斥）。";
+  if (r.spline.on) return "SPLINE 花键段不能挂平键。";
+  if (r.m.on) return "螺纹段 M 不能挂平键。";
+  if (r.ov.l.on || r.ov.r.on) return "越程槽 OV 段不能挂平键。";
+  const s = numOrNaN(r.s);
+  const eRaw = String(r.e).trim();
+  const e = eRaw === "" ? s : numOrNaN(r.e);
+  if (!(s > 0) || !(e > 0) || Math.abs(s - e) > 1e-9) return "平键只能挂光圆柱段（S = E）。";
+  return "";
+}
+
+// 平键面板重绘：与当前选中段联动；无可挂时禁用并说明。
+function renderKeyPanel() {
+  const r = rows[sel];
+  const kindSel = el("keyKind");
+  const sizeSel = el("keySize");
+  const lenSel = el("keyLen");
+  const placeSel = el("keyPlace");
+  const t1In = el("keyT1");
+  const derive = el("keyDerive");
+  const hint = el("keyHint");
+  el("keySegLabel").textContent = r ? "当前：第 " + (sel + 1) + " 段" : "未选中段";
+  const blocked = keyBlockReason(r);
+  const k = r && r.key ? r.key : { on: false, kind: "A", l: "18", place: "mid", b: "", t1: "" };
+  kindSel.value = k.on ? k.kind : "";
+  placeSel.value = k.place === "end" ? "end" : "mid";
+  t1In.value = k.t1;
+  const d = r ? numOrNaN(r.s) : NaN;
+  // 键尺寸 b×h：主输入；候选 = 平键族 20 档标准配对（h 跟 b 走）。
+  const sizes = (keyCatalog[k.kind] && keyCatalog[k.kind].sizes) || [];
+  sizeSel.innerHTML = "";
+  for (const s of sizes) {
+    const o = document.createElement("option");
+    o.value = fmt(s.b !== undefined ? s.b : s.d);
+    o.textContent = (s.b !== undefined ? "b" + fmt(s.b) : "b" + fmt(s.d))
+      + "×h" + (s.h !== undefined ? fmt(s.h) : "?");
+    sizeSel.appendChild(o);
+  }
+  if (!sizeSel.value && sizes.length) sizeSel.value = fmt(sizes[0].b !== undefined ? sizes[0].b : sizes[0].d);
+  // 按轴径推荐（1979 d 列，仅辅助）：无选择时默认用推荐；有选择时只作提示。
+  const rec = shaftKeyB(k.kind, d);
+  if (String(k.b).trim() === "") {
+    const pick = Number.isFinite(rec) && sizes.some((s) => Math.abs(Number(s.b !== undefined ? s.b : s.d) - rec) < 1e-9)
+      ? rec : (sizes.length ? Number(sizes[0].b !== undefined ? sizes[0].b : sizes[0].d) : NaN);
+    k.b = Number.isFinite(pick) ? fmt(pick) : "";
+  }
+  if (Number.isFinite(Number(k.b))) sizeSel.value = fmt(Number(k.b));
+  const b = numOrNaN(k.b);
+  const sizeRow = keySizeRow(k.kind, b);
+  const lengths = sizeRow && Array.isArray(sizeRow.lengths) ? sizeRow.lengths : [];
+  lenSel.innerHTML = "";
+  for (const L of lengths) {
+    const o = document.createElement("option");
+    o.value = fmt(L);
+    o.textContent = fmt(L);
+    lenSel.appendChild(o);
+  }
+  if (lengths.length && !lengths.some((L) => Math.abs(Number(L) - Number(k.l)) < 1e-9)) {
+    k.l = fmt(lengths[0]);
+  }
+  lenSel.value = k.l;
+  const dis = blocked !== "" || !k.on;
+  kindSel.disabled = blocked !== "";
+  sizeSel.disabled = blocked !== "" || sizes.length === 0;
+  lenSel.disabled = dis || lengths.length === 0;
+  placeSel.disabled = dis;
+  t1In.disabled = dis;
+  if (blocked) {
+    derive.textContent = blocked;
+  } else if (!k.on) {
+    derive.textContent = "本段未插平键。";
+  } else if (sizeRow) {
+    const hTxt = sizeRow.extra ? sizeRow.extra + "；" : "";
+    const recTxt = Number.isFinite(rec)
+      ? "按轴径 d" + fmt(d) + " 推荐 b" + fmt(rec) + "（1979 d 列，仅辅助；键尺寸以 b×h 为准）；"
+      : "轴径 d" + (Number.isFinite(d) ? fmt(d) : "?") + " 不在推荐表；";
+    derive.textContent = "键尺寸 b" + fmt(sizeRow.b !== undefined ? sizeRow.b : sizeRow.d)
+      + "×h" + fmt(sizeRow.h !== undefined ? sizeRow.h : "?") + "；" + hTxt + recTxt
+      + "t1 与端置槽长由后端按 GB/T 1095 表查。";
+  } else {
+    derive.textContent = "平键族没有这档 b（请选标准 b×h 配对）。";
+  }
+  // B 型 + 端置：不阻止（仍可画），但给可见工程提示。
+  const bEnd = !blocked && k.on && k.kind === "B" && placeSel.value === "end";
+  if (blocked) {
+    hint.className = "hint warn";
+    hint.textContent = blocked;
+  } else if (bEnd) {
+    hint.className = "hint warn";
+    hint.textContent = "⚠️ 端置槽端由圆盘/键槽铣刀铣出，必为圆弧，配 C 型（单圆头）最合适；"
+      + "B 型（双平头）会形成方形盲孔，加工不出来 ✗ —— 要用 B 型请把键短一个半径 b/2 后再塞入 ✓。";
+  } else {
+    hint.className = "hint";
+    hint.textContent = "位置：中置 = 槽两端封闭（居中于本段「倒角根↔段末」净圆柱）；"
+      + "端置 = 开在轴首/末段自由端（槽长 = 键长 + t1；槽端由铣刀铣出 → 圆弧，配 C 型单圆头）。不生成尺寸标注。";
+  }
+}
+
+// 面板改动 → 写回当前段 → 重绘表格标签 + 同步行文本/预览。
+function onKeyPanelChange() {
+  const r = rows[sel];
+  if (!r) return;
+  const kind = el("keyKind").value;
+  r.key.on = kind !== "";
+  if (kind) r.key.kind = kind;
+  r.key.place = el("keyPlace").value === "end" ? "end" : "mid";
+  r.key.l = el("keyLen").value || r.key.l;
+  r.key.b = el("keySize").value;
+  r.key.t1 = el("keyT1").value;
+  enforceExclusive(r);
+  renderKeyPanel();
+  renderTable();
+  regenText();
 }
 
 /* ─────────────────────────── 段表 → 行文本 ─────────────────────────── */
@@ -489,6 +712,17 @@ function rowToDsl(r) {
     if (r.ov[end].on) {
       s += " OV" + (String(r.ov[end].b1).trim() === "" ? "" : numTok(r.ov[end].b1)) + "@" + E;
     }
+  }
+  if (r.key.on) {
+    s += " KEY " + r.key.kind + " " + numTok(r.key.l);
+    if (r.key.place === "end") s += " @端";
+    const b = numOrNaN(r.key.b);
+    if (Number.isFinite(b)) {
+      const size = keySizeRow(r.key.kind, b);
+      const hTxt = size && size.h !== undefined ? "h" + numTok(size.h) : "";
+      s += " b" + numTok(b) + hTxt;
+    }
+    if (String(r.key.t1).trim() !== "") s += " t1 " + numTok(r.key.t1);
   }
   return s;
 }
@@ -545,6 +779,15 @@ function rowFromSegment(seg) {
   if (seg.thread !== undefined && seg.thread !== null) {
     r.m.on = true;
     r.m.p = typeof seg.thread === "number" ? fmt(seg.thread) : "";
+  }
+  if (seg.keyway) {
+    r.key.on = true;
+    const kind = seg.keyway.type || seg.keyway.kind || "A";
+    r.key.kind = String(kind).toUpperCase();
+    r.key.l = fmt(seg.keyway.l);
+    r.key.place = seg.keyway.place === "end" ? "end" : "mid";
+    r.key.b = seg.keyway.b === null || seg.keyway.b === undefined ? "" : fmt(seg.keyway.b);
+    r.key.t1 = seg.keyway.t1 === null || seg.keyway.t1 === undefined ? "" : fmt(seg.keyway.t1);
   }
   enforceExclusive(r);
   return r;
@@ -753,6 +996,7 @@ function onTableClick(e) {
   // 只换选中高亮、**不重渲染**：否则点进输入框会因重渲染丢焦点。
   el("segBody").querySelectorAll("tr").forEach((x) => x.classList.toggle("sel", x === tr));
   updateButtons();
+  renderKeyPanel();
 }
 
 function onTableInput(e) {
@@ -1009,6 +1253,22 @@ function modelFromRows() {
         seg.thread = p;
       }
     }
+    if (r.key.on) {
+      const kl = numOrNaN(r.key.l);
+      const b = numOrNaN(r.key.b);
+      if (!(kl > 0)) return fail("平键的键长 L 必须 > 0（GB/T 1096 标准系列）。");
+      if (!(b > 0)) return fail("平键的键尺寸 b×h 必须选标准配对（b 必给）。");
+      const keyway = { type: r.key.kind, l: kl, place: r.key.place === "end" ? "end" : "mid", b };
+      const size = keySizeRow(r.key.kind, b);
+      if (size && size.h !== undefined) keyway.h = Number(size.h);
+      const t1Raw = String(r.key.t1).trim();
+      if (t1Raw !== "") {
+        const t1 = numOrNaN(r.key.t1);
+        if (!(t1 > 0)) return fail("平键的 t1 覆盖必须 > 0（留空 = 按 b 查 GB/T 1095 表）。");
+        keyway.t1 = t1;
+      }
+      seg.keyway = keyway;
+    }
     segments.push(seg);
   }
   if (!segments.length) {
@@ -1127,6 +1387,11 @@ function ping(bye) {
   // 初始：规格表（下拉数据源）→ **空段表**（不预填示例；加行/粘贴表达式开始）
   renderViews();
   await loadSplineSpecs();
+  // 平键选项卡（轴槽）：键型 / 键尺寸 b×h / 键长 / 位置 + 高级 t1 覆盖 → 写回当前段
+  for (const id of ["keyKind", "keySize", "keyLen", "keyPlace", "keyT1"]) {
+    el(id).addEventListener("change", onKeyPanelChange);
+    el(id).addEventListener("input", onKeyPanelChange);
+  }
   rows = [];
   sel = 0;
   clearDslError();

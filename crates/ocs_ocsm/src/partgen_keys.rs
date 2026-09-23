@@ -367,7 +367,9 @@ fn sizes_1096(ty: KeyType) -> Vec<serde_json::Value> {
             lengths.extend(allowed.iter().copied().filter(|v| (*v - def).abs() > 1e-9));
             serde_json::json!({
                 "d": r.b,
-                "label": format!("b={}（h={}）", trim(r.b), trim(r.h)),
+                "b": r.b,
+                "h": r.h,
+                "label": format!("b={}×h={}", trim(r.b), trim(r.h)),
                 "pitch": 0.0,
                 "l_min": allowed.first().copied().unwrap_or(def),
                 "l_max": allowed.last().copied().unwrap_or(def),
@@ -521,6 +523,13 @@ pub fn families_json() -> serde_json::Map<String, serde_json::Value> {
                 "type_group": type_group_1096(),
                 "notes": notes_1096(),
                 "source": table_1096(ty).source,
+                // 轴径 → 键宽选型区间（1979 d 列；仅初选；轴生成器平键面板用）。
+                "shaft_ranges": key_1096_shaft_ranges()
+                    .iter()
+                    .map(|(lo, hi, incl, b)| serde_json::json!({
+                        "d_lo": lo, "d_hi": hi, "lo_inclusive": incl, "b": b
+                    }))
+                    .collect::<Vec<_>>(),
             }),
         );
     }
@@ -632,6 +641,55 @@ pub fn check_length_1096(b: f64, l: f64) -> Result<(), String> {
         ));
     }
     Ok(())
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// 轴径 → 键宽推荐（GB/T 1095-1979 的 d 列；**仅辅助提示**）
+// ══════════════════════════════════════════════════════════════════════
+
+/// GB/T 1095-1979「轴的公称直径 d」区间 → 键宽 b（`(d_lo, d_hi, d_lo_inclusive, b)`）。
+///
+/// **仅供轴槽“按轴径推荐 b”的辅助提示**（键尺寸以 b×h 为准，不用它选型/校验）；
+/// 2003 版已取消 d 列，
+/// 键槽尺寸（t₁/t₂）数据不依赖它。数据 = `assets/key1096_shaft_ranges.csv`
+/// （由已三来源校验的 `review/键槽_GB1095_表_v2.csv` d 列入库）。
+const KEY1096_SHAFT_RANGES_CSV: &str = include_str!("../assets/key1096_shaft_ranges.csv");
+
+/// 解析选型表（26 档；生产路径 `key_1096_b_for_shaft` 不返回错误，测试断言正确性）。
+pub fn key_1096_shaft_ranges() -> Vec<(f64, f64, bool, f64)> {
+    let mut out = Vec::new();
+    for line in KEY1096_SHAFT_RANGES_CSV
+        .lines()
+        .filter(|l| !l.trim().is_empty() && !l.starts_with('#'))
+        .skip(1)
+    {
+        let v: Vec<&str> = line.split(',').collect();
+        if v.len() < 4 {
+            continue;
+        }
+        let num = |i: usize| v[i].trim().parse::<f64>().unwrap_or(f64::NAN);
+        out.push((num(0), num(1), v[2].trim() == "1", num(3)));
+    }
+    out
+}
+
+/// 轴径 d → 标准键宽 b（1979 d 列；d 不在区间内 → `None`）。
+/// 区间口径：左端仅首行（6~8）含 6（`d_lo_inclusive`）；其余为 `d_lo < d ≤ d_hi`。
+pub fn key_1096_b_for_shaft(d: f64) -> Option<f64> {
+    key_1096_shaft_ranges().into_iter().find_map(|(lo, hi, incl, b)| {
+        let ge = if incl { d >= lo - 1e-9 } else { d > lo + 1e-9 };
+        (ge && d <= hi + 1e-9).then_some(b)
+    })
+}
+
+/// 平键族某型别/键宽 b 的键高 h（b 不在该型别表 → `None`）。
+pub fn key_1096_h(ty: KeyType, b: f64) -> Option<f64> {
+    row_1096(ty, b).map(|r| r.h)
+}
+
+/// 平键族某型别/键宽 b 的该档默认键长 L（源图表内值）。
+pub fn key_1096_default_l(ty: KeyType, b: f64) -> Option<f64> {
+    row_1096(ty, b).map(key_1096_legal_default)
 }
 
 /// 1097 长度系列（数据源 = `partsKey1097{A,B}.json` 的 `l_series`；两表必须一致，测试有护栏）。
