@@ -1086,9 +1086,14 @@ pub const FAMILY_HUB_KEYWAY: &str = "detail_hub_keyway";
 /// 侧视图默认毂长（模板 specimen L=30；`len` 可覆盖）。
 pub const HUB_KEYWAY_DEFAULT_LEN: f64 = 30.0;
 
-/// 模板保真层：键槽轮廓（主视图的壁/槽底/圆角、侧视图整个局部轮廓）在模板里落默认 `0` 层；
-/// 主视图孔圆落 `1轮廓实线层`。若要统一到 OCSM 五层，只改这一处常量。
-pub const HUB_KEYWAY_EDGE_LAYER: &str = "0";
+/// 键槽轮廓层（主视图的壁/槽底/圆角、侧视图整个局部轮廓）：
+/// **统一到 OCSM 五层 = `1轮廓实线层`**（用户 2026-09-23 定案 A）。
+///
+/// **有意偏差**：模板 `GB-T1095-2003毂槽-*.dxf` 把键槽轮廓画在默认 `0` 层（随手未分配），
+/// 本库按全仓口径（图元只落 OCSM 五层）统一到 `LAYER_MAIN`；模板对照测试对
+/// 「模板 `0` 层 ↔ 本库 `1轮廓实线层`」做归一化映射（见 `毂槽_对模板举证.md`）。
+/// 孔圆本就在 `1轮廓实线层`、中心线 `3中心线层`，保持不变。
+pub const HUB_KEYWAY_EDGE_LAYER: &str = LAYER_MAIN;
 
 /// 圆角 `r` 取值策略（GB/T 1095 表 1 给的是范围，如 b=8 → 0.16~0.25）。
 ///
@@ -2368,6 +2373,15 @@ mod tests {
         let side = generate_params(FAMILY_HUB_KEYWAY, 25.0, &params, "side").unwrap();
         assert_eq!(main.entities.len(), 8, "主视图 8 图元（模板 LINE5+ARC3）");
         assert_eq!(side.entities.len(), 6, "侧视图 6 图元（模板 LINE6）");
+        // 层归一化（用户定案 A）：模板把键槽轮廓画在 0 层（随手未分配），本库统一到五层
+        // → 比对时把模板 `0` 层映射成 `1轮廓实线层`；本库输出不得再出现 0 层。
+        let tpl_layer = |t: &'static str| -> &'static str { if t == "0" { LAYER_MAIN } else { t } };
+        for part in [&main, &side] {
+            assert!(
+                !part.entities.iter().any(|e| e.common().layer == "0"),
+                "本库毂槽不得再用模板的 0 层（统一到 OCSM 五层）"
+            );
+        }
         // 模板标注 4 条不落图；两视图均无 HATCH。
         for part in [&main, &side] {
             assert!(!part.entities.iter().any(|e| matches!(e, EntityType::Hatch(_))));
@@ -2379,17 +2393,17 @@ mod tests {
         // 孔圆弧（1轮廓实线层）：模板 a0=108.662925 / a1=431.337075
         assert!(arc_on(&main, [0.0, 0.0], 12.5, 108.662925, 431.337075, "1轮廓实线层"));
         // 键槽轮廓（0 层，照模板）：两壁 / 槽底 / 两圆角
-        assert!(line_on(&main, [4.0, 11.842719], [4.0, 15.55], "0"));
-        assert!(line_on(&main, [-4.0, 11.842719], [-4.0, 15.55], "0"));
-        assert!(line_on(&main, [-3.75, 15.8], [3.75, 15.8], "0"));
-        assert!(arc_on(&main, [-3.75, 15.55], 0.25, 90.0, 180.0, "0"));
-        assert!(arc_on(&main, [3.75, 15.55], 0.25, 0.0, 90.0, "0"));
+        assert!(line_on(&main, [4.0, 11.842719], [4.0, 15.55], tpl_layer("0")));
+        assert!(line_on(&main, [-4.0, 11.842719], [-4.0, 15.55], tpl_layer("0")));
+        assert!(line_on(&main, [-3.75, 15.8], [3.75, 15.8], tpl_layer("0")));
+        assert!(arc_on(&main, [-3.75, 15.55], 0.25, 90.0, 180.0, tpl_layer("0")));
+        assert!(arc_on(&main, [3.75, 15.55], 0.25, 0.0, 90.0, tpl_layer("0")));
         // 侧视图（基点 = 左端面×轴线；L=30）：矩形 + sagitta 线（0 层）+ 中心线（3 层）
-        assert!(line_on(&side, [0.0, -12.5], [30.0, -12.5], "0"));
-        assert!(line_on(&side, [30.0, -12.5], [30.0, 15.8], "0"));
-        assert!(line_on(&side, [30.0, 15.8], [0.0, 15.8], "0"));
-        assert!(line_on(&side, [0.0, 15.8], [0.0, -12.5], "0"));
-        assert!(line_on(&side, [0.0, 11.842719], [30.0, 11.842719], "0"));
+        assert!(line_on(&side, [0.0, -12.5], [30.0, -12.5], tpl_layer("0")));
+        assert!(line_on(&side, [30.0, -12.5], [30.0, 15.8], tpl_layer("0")));
+        assert!(line_on(&side, [30.0, 15.8], [0.0, 15.8], tpl_layer("0")));
+        assert!(line_on(&side, [0.0, 15.8], [0.0, -12.5], tpl_layer("0")));
+        assert!(line_on(&side, [0.0, 11.842719], [30.0, 11.842719], tpl_layer("0")));
         assert!(line_on(&side, [-3.0, 0.0], [33.0, 0.0], "3中心线层"));
     }
 
@@ -2422,9 +2436,10 @@ mod tests {
                             assert!(p[1] >= g.y_wall - 1e-9 && p[1] <= r + g.t2 + 1e-9);
                         }
                     }
-                    // 孔圆弧（LAYER_MAIN，半径 R）不属槽轮廓，跳过；槽圆角在 EDGE 层。
+                    // 孔圆弧（圆心在孔心、半径 R）不属槽轮廓，跳过；槽圆角按坐标查包络。
                     EntityType::Arc(a)
-                        if a.common.layer != LAYER_CENTER && a.common.layer != LAYER_MAIN =>
+                        if a.common.layer != LAYER_CENTER
+                            && !(a.center.x.abs() < 1e-9 && a.center.y.abs() < 1e-9) =>
                     {
                         assert!(a.center.x.abs() + a.radius <= b / 2.0 + 1e-9, "d={d} 圆角越出 b/2");
                         assert!(a.center.y + a.radius <= r + g.t2 + 1e-9);
