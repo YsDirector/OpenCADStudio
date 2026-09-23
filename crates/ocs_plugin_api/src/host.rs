@@ -36,6 +36,22 @@ use crate::ipc::protocol::{PluginRequest, PluginResponse};
 /// Out-of-process V4 plugins implement this; in-process hosts may return `None`.
 pub trait PluginRequestSender: Send + Sync {
     fn request(&self, req: PluginRequest) -> Result<PluginResponse, PluginRequestError>;
+
+    /// Like [`request`](Self::request), but routes the request to an explicit
+    /// document tab (`None` = the host's active tab). The plain [`request`]
+    /// sends to the tab the sender was obtained from — pinned at dispatch /
+    /// `on_load` time — which is the wrong document when a *notification*
+    /// (e.g. `SelectionChangedV4` for a freshly created drawing) names another
+    /// tab. Out-of-process V4 senders override this; in-process senders keep
+    /// the default (they have a single live document).
+    fn request_for_tab(
+        &self,
+        tab_id: Option<u64>,
+        req: PluginRequest,
+    ) -> Result<PluginResponse, PluginRequestError> {
+        let _ = tab_id;
+        self.request(req)
+    }
 }
 
 /// Error returned when a plugin worker thread cannot issue a host request.

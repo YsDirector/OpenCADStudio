@@ -1290,6 +1290,57 @@ fn build_guide_radial(
     dim
 }
 
+/// GDIM 生成前的基建幂等补齐：OCSM 十层 / `OCSM_GB` 文字样式 / 基线 `OCSM_GB`
+/// 标注样式。
+///
+/// 旧图（从没跑过 OCSM）直接跑 GDIM 时，**线性标注是原生 DIMENSION**：宿主按
+/// `style_name` 在标注样式表解析样式，样式缺失时连 XDATA DSTYLE 覆盖一并被忽略、
+/// 整套退回宿主默认（实测箭头 0.18×0.132，GB 应为 2.25×1.833）；角度/半径/直径
+/// 是匿名块形态（几何已烘焙）所以看不出。D2G 在 `cmd_dim2gb`
+/// （`crates/ocs_ocsm/src/lib.rs:2018` `ensure_layers`/`ensure_text_styles` +
+/// `crates/ocs_ocsm/src/dim2gb.rs:1144` 基线标注样式）已有同款基建补齐，
+/// 这里给 GDIM 补上同一套（缺失才发请求，已初始化图纸零开销）。
+fn ensure_ocsm_base_infra(
+    sender: &Arc<dyn PluginRequestSender>,
+    doc: &acadrust::CadDocument,
+) -> Result<(), String> {
+    let has_all_layers = crate::layer_defs()
+        .iter()
+        .all(|def| doc.layers.iter().any(|l| l.name.eq_ignore_ascii_case(&def.name)));
+    if !has_all_layers {
+        req_timed(
+            sender,
+            PluginRequest::EnsureLayers(crate::layer_defs()),
+            "EnsureLayers",
+        )?;
+    }
+    if !doc
+        .text_styles
+        .iter()
+        .any(|s| s.name.eq_ignore_ascii_case("OCSM_GB"))
+    {
+        req_timed(
+            sender,
+            PluginRequest::EnsureTextStyles(crate::text_style_defs()),
+            "EnsureTextStyles",
+        )?;
+    }
+    if !doc
+        .dim_styles
+        .iter()
+        .any(|s| s.name.eq_ignore_ascii_case("OCSM_GB"))
+    {
+        if let Some(base) = crate::dim_style_defs().into_iter().next() {
+            req_timed(
+                sender,
+                PluginRequest::EnsureDimStyles(vec![base]),
+                "EnsureDimStyles",
+            )?;
+        }
+    }
+    Ok(())
+}
+
 /// frame 比例感知的标注样式（与 PowerDim::resolve_style 同逻辑）：检查
 /// `pt` 是否在 TF 图幅块内，返回对应缩放样式名；样式缺失时经 sender 向宿主
 /// 创建 `OCSM_GB_x{scale}`（确保生成标注能应用文字/箭头缩放）。
@@ -3399,6 +3450,9 @@ fn do_apply_inner(
         return Err("引导线顶点不足（需至少 2 个）".into());
     }
     let (p1, p2) = (pts[0], pts[1]);
+    // 旧图（没跑过 OCSM）的基线基建补齐（幂等，已初始化图纸零请求）——
+    // 线性标注是原生 DIMENSION，缺 OCSM_GB 时宿主解析不到样式会整套退回默认。
+    ensure_ocsm_base_infra(sender, &doc)?;
     // 按引导线第一点 P1 判定图幅缩放，创建/选用对应样式（文字/箭头缩放）。
     let style = ensure_style_for_point(sender, &doc, p1)?;
 
@@ -9201,6 +9255,13 @@ impl PluginRequestSender for MockSender {
                     .extend(defs.iter().map(|d| format!("ltype:{}", d.name)));
                 Ok(P::Ok)
             }
+            R::EnsureDimStyles(defs) => {
+                self.ensures
+                    .lock()
+                    .unwrap()
+                    .extend(defs.iter().map(|d| format!("dim:{}", d.name)));
+                Ok(P::Count(0))
+            }
             R::PushUndo { label } => {
                 self.undos.lock().unwrap().push(label);
                 Ok(P::Ok)
@@ -9675,13 +9736,104 @@ mod integration {
         assert!(rv2["dimension_handle"].is_string());
 
         let doc = mock.doc.lock().unwrap();
+        let dim = doc
+            .entities()
+            .find_map(|e| match e {
+                EntityType::Dimension(d) => Some(d),
+                _ => None,
+            })
+            .expect("文档中应出现标注实体");
+        assert_eq!(dim.base().style_name, "OCSM_GB", "线性标注必须落 OCSM_GB");
+        assert_eq!(dim.base().common.layer, "7标注层", "线性标注必须落 7标注层");
         assert!(
-            doc.entities().any(|e| matches!(e, EntityType::Dimension(_))),
-            "文档中应出现标注实体"
+            !dim.base().style_name.is_empty()
+                && !dim.base().style_name.eq_ignore_ascii_case("Standard"),
+            "负断言：不得退化成 OCS 默认样式"
         );
+        // 旧图没基建 → GDIM 必须先补 OCSM_GB 文字/标注样式 + 图层（否则原生
+        // DIMENSION 解析不到样式，渲染退回宿主默认）。
+        let ensures = mock.ensures.lock().unwrap().clone();
+        assert!(ensures.iter().any(|e| e == "text:OCSM_GB"), "{ensures:?}");
+        assert!(ensures.iter().any(|e| e == "dim:OCSM_GB"), "{ensures:?}");
+        assert!(ensures.iter().any(|e| e == "layer:7标注层"), "{ensures:?}");
         assert!(
             !doc.entities().any(|e| matches!(e, EntityType::Line(_))),
             "引导线应被删除"
+        );
+    }
+
+    /// 三种线性子类型（对齐/水平/竖直）经完整 GDIM 生成路径 → OCSM_GB + 7标注层。
+    /// 裸文档（无 OCSM 基建）是重点：旧图直接跑 GDIM 的情形。
+    #[test]
+    fn gdim_linear_subtypes_land_on_ocsm_gb_layer() {
+        for sub in ["A", "H", "V"] {
+            let mut doc = acadrust::CadDocument::new();
+            let mut line = Line {
+                common: Default::default(),
+                start: Vector3::new(0.0, 0.0, 0.0),
+                end: Vector3::new(40.0, 30.0, 0.0),
+                thickness: 0.0,
+                normal: Vector3::new(0.0, 0.0, 1.0),
+            };
+            line.common.layer = "10引导线层".into();
+            let gh = doc.add_entity(EntityType::Line(line)).unwrap();
+            let mock = std::sync::Arc::new(MockSender::new(doc));
+            let sender: std::sync::Arc<dyn PluginRequestSender> = mock.clone();
+            let body = serde_json::json!({
+                "handle": format!("{:#X}", u64::from(gh)),
+                "url": format!("http://127.0.0.1:23751/DIM/LINEAR/{sub}/10"),
+            })
+            .to_string();
+            let out = do_apply_inner(&sender, body.as_bytes(), true)
+                .unwrap_or_else(|e| panic!("sub={sub} apply 失败: {e}"));
+            assert!(out.contains("OCSM_GB"), "sub={sub}: {out}");
+
+            let doc = mock.doc.lock().unwrap();
+            let dim = doc
+                .entities()
+                .find_map(|e| match e {
+                    EntityType::Dimension(d) => Some(d),
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("sub={sub} 应生成标注"));
+            assert_eq!(dim.base().style_name, "OCSM_GB", "sub={sub}");
+            assert_eq!(dim.base().common.layer, "7标注层", "sub={sub}");
+            assert!(
+                !dim.base().style_name.trim().is_empty()
+                    && !dim.base().style_name.eq_ignore_ascii_case("Standard"),
+                "sub={sub} 负断言：不得退化成 OCS 默认样式"
+            );
+        }
+    }
+
+    /// 基建补齐幂等：已初始化（十层 + OCSM_GB 文字/标注样式）→ 零请求。
+    #[test]
+    fn gdim_base_infra_is_idempotent_when_ocsm_present() {
+        let bare = std::sync::Arc::new(MockSender::new(acadrust::CadDocument::new()));
+        let sender: std::sync::Arc<dyn PluginRequestSender> = bare.clone();
+        let doc = bare.doc.lock().unwrap().clone();
+        ensure_ocsm_base_infra(&sender, &doc).expect("缺基建时应补齐");
+        let ensures = bare.ensures.lock().unwrap().clone();
+        assert!(ensures.iter().any(|e| e == "text:OCSM_GB"), "{ensures:?}");
+        assert!(ensures.iter().any(|e| e == "dim:OCSM_GB"), "{ensures:?}");
+        assert!(ensures.iter().any(|e| e == "layer:7标注层"), "{ensures:?}");
+
+        let mut doc = acadrust::CadDocument::new();
+        for def in crate::layer_defs() {
+            doc.layers
+                .add_or_replace(acadrust::tables::Layer::new(&def.name));
+        }
+        doc.text_styles
+            .add_or_replace(acadrust::tables::TextStyle::new("OCSM_GB"));
+        doc.dim_styles
+            .add_or_replace(acadrust::tables::DimStyle::new("OCSM_GB"));
+        let ready = std::sync::Arc::new(MockSender::new(doc));
+        let sender: std::sync::Arc<dyn PluginRequestSender> = ready.clone();
+        let doc = ready.doc.lock().unwrap().clone();
+        ensure_ocsm_base_infra(&sender, &doc).expect("已初始化不应报错");
+        assert!(
+            ready.ensures.lock().unwrap().is_empty(),
+            "已初始化图纸不得再发 ensure 请求"
         );
     }
 
@@ -9888,6 +10040,11 @@ mod integration {
         assert_eq!(d.base.user_text.as_deref(), Some("45°"));
         assert_eq!(d.base.common.layer, "7标注层");
         assert_eq!(d.base.style_name, "OCSM_GB");
+        assert!(
+            !d.base.style_name.trim().is_empty()
+                && !d.base.style_name.eq_ignore_ascii_case("Standard"),
+            "角度负断言：不得退化成 OCS 默认样式"
+        );
         // 顶点/两边：first=p1, second=p2, angle_vertex=p1, definition=p0。
         assert!((d.first_point.x).abs() < 1e-9 && (d.first_point.y).abs() < 1e-9);
         assert!((d.second_point.x - 50.0).abs() < 1e-6 && (d.second_point.y - 50.0).abs() < 1e-6);

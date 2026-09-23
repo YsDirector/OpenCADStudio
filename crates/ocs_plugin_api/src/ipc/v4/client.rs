@@ -385,6 +385,15 @@ impl PluginRequestSender for V4PluginRequestSender {
         send_plugin_request(&self.shared, Some(self.tab_id), req)
             .map_err(|e| PluginRequestError(e.to_string()))
     }
+
+    fn request_for_tab(
+        &self,
+        tab_id: Option<u64>,
+        req: PluginRequest,
+    ) -> Result<PluginResponse, PluginRequestError> {
+        send_plugin_request(&self.shared, tab_id, req)
+            .map_err(|e| PluginRequestError(e.to_string()))
+    }
 }
 
 impl HostApi for V4PluginHostApi {

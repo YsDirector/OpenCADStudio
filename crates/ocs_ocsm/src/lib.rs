@@ -1466,12 +1466,27 @@ impl BuiltinPlugin for OcsmPlugin {
         Box::new(OcsmModule)
     }
 
-    /// 宿主通知（API v4+）：只用来维护「当前活跃图纸」。
+    /// 宿主通知（API v4+）：维护「当前活跃图纸」，并驱动新建空图自动初始化。
     ///
     /// `SelectionChangedV4` / `DocumentTabClosed` 是宿主主动推的（不靠命令），
     /// 所以用户**只切标签页不跑命令**时插件也知道现在看的是哪张图；图纸被关掉
     /// 时也能立刻拒绝那张图上的窗口请求（而不是干等 5 s 超时）。
+    /// `SelectionChangedV4`（建图/切图）与 `DocumentChangedV4` 都触发一次
+    /// 「新建空图」检查 → 是则经 `on_load` 缓存的 sender 立即初始化，不等命令。
+    fn on_load(&mut self, host: &mut dyn HostApi) {
+        // API v5：拿通知路径要用的 worker sender + 记下启动页 tab id。
+        crate::on_load_auto_init(host);
+    }
+
     fn on_notification(&mut self, _command_id: Option<u64>, notification: HostNotification) {
+        // 建图/切图/文档变化 → 不等命令，立即查一次「新建空图」并初始化。
+        match &notification {
+            HostNotification::SelectionChangedV4 { tab_id, .. }
+            | HostNotification::DocumentChangedV4 { tab_id, .. } => {
+                crate::maybe_auto_init_after_notification(*tab_id);
+            }
+            _ => {}
+        }
         crate::on_host_notification(&notification);
     }
 
@@ -1653,6 +1668,170 @@ pub(crate) fn is_new_blank_drawing(
     !ocsm_layer && !ocsm_style
 }
 
+/// 自动初始化来源提示：命令入口与通知入口共用（逐字一致）。
+const AUTO_INIT_INFO: &str = "新建图纸：自动执行 OCSM 初始化（旧图纸不会自动初始化）。";
+
+/// 初始化完成行：手动 `OCSM` 与两条自动路径共用（逐字一致）。
+fn ocsm_init_done_line(layers: usize, linetypes: usize, styles: usize, dim_styles: usize) -> String {
+    format!(
+        "OCSM 初始化完成：新增图层 {layers} 个、线型 {linetypes} 个、文字样式 {styles} 个（OCSM_GB）、标注样式 {dim_styles} 个（OCSM_GB，当前样式）。数字键 1-10、TF、D 已就绪。"
+    )
+}
+
+/// 通知路径（`maybe_auto_init_after_notification`）的进程级状态。
+struct AutoInitState {
+    /// `on_load` 缓存的 sender：工作线程用它发宿主请求（不必等命令）。
+    sender: Option<std::sync::Arc<dyn PluginRequestSender>>,
+    /// 插件启动时所在的标签页（欢迎/Start 页）：通知路径不初始化欢迎页。
+    boot_tab: Option<u64>,
+    /// 已检查过的标签页：同一张图的多次通知只起一次工作线程（幂等 + 防抖）。
+    checked: std::collections::BTreeSet<u64>,
+    /// 正在初始化的标签页：命令入口先让路，避免两条路径对同一张图各推一个撤销点。
+    in_flight: std::collections::BTreeSet<u64>,
+}
+
+static AUTO_INIT_STATE: std::sync::Mutex<AutoInitState> = std::sync::Mutex::new(AutoInitState {
+    sender: None,
+    boot_tab: None,
+    checked: std::collections::BTreeSet::new(),
+    in_flight: std::collections::BTreeSet::new(),
+});
+
+fn auto_init_state_lock() -> std::sync::MutexGuard<'static, AutoInitState> {
+    AUTO_INIT_STATE.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// 工作线程退出时解除 `in_flight`（包括 panic 展开）。
+struct InFlightGuard(u64);
+
+impl Drop for InFlightGuard {
+    fn drop(&mut self) {
+        auto_init_state_lock().in_flight.remove(&self.0);
+    }
+}
+
+/// `BuiltinPlugin::on_load`（API v5）：缓存通知路径用的 sender + 启动页 tab id。
+pub(crate) fn on_load_auto_init(host: &mut dyn HostApi) {
+    let boot_tab = host.tab_id();
+    let sender = host
+        .plugin_request_sender()
+        .map(std::sync::Arc::<dyn PluginRequestSender>::from);
+    let mut st = auto_init_state_lock();
+    st.sender = sender;
+    st.boot_tab = Some(boot_tab);
+}
+
+/// 宿主通知（切图/选择变化/文档变化）后检查目标图是否新建空图 → 不等命令立即初始化。
+///
+/// 判据与命令入口 `auto_init_new_document` 完全一致（三门一条不放宽），区别只是
+/// 由通知驱动。`DocumentChangedV4` 目前只在插件经 HostSession 改文档时广播，
+/// `SelectionChangedV4` 在建图/切图时就会到，所以两条都接。
+pub(crate) fn maybe_auto_init_after_notification(tab_id: u64) {
+    let sender = {
+        let mut st = auto_init_state_lock();
+        if st.boot_tab == Some(tab_id) {
+            return; // 欢迎页没有“新建图纸”语义
+        }
+        let Some(sender) = st.sender.clone() else {
+            return; // 不在插件进程里（或 on_load 未跑）：等命令入口兜底
+        };
+        if !st.checked.insert(tab_id) {
+            return; // 这张图已经查过/正在查
+        }
+        st.in_flight.insert(tab_id);
+        sender
+    };
+    // 工作线程：`on_notification` 在 runner 主线程上，不能阻塞等宿主 drain。
+    let spawned = std::thread::Builder::new()
+        .name("ocsm-autoinit".into())
+        .spawn(move || {
+            let _guard = InFlightGuard(tab_id);
+            auto_init_document_via_sender(&*sender, tab_id);
+        });
+    if spawned.is_err() {
+        // 起线程失败 → 撤销防重标记，下一次通知还能再试。
+        let mut st = auto_init_state_lock();
+        st.checked.remove(&tab_id);
+        st.in_flight.remove(&tab_id);
+    }
+}
+
+/// 经 `sender` 对 `tab_id` 执行「新建空图 → OCSM 初始化」，返回是否初始化。
+///
+/// 判据与命令入口完全一致（路径 / 实体 / OCSM 痕迹三门），产物与手动 `OCSM`
+/// 同序列同文案：PushInfo → PushUndo → 线型 → 图层 → 文字样式 → 标注样式 → 完成行。
+pub(crate) fn auto_init_document_via_sender(
+    sender: &dyn PluginRequestSender,
+    tab_id: u64,
+) -> bool {
+    use ocs_plugin_api::ipc::protocol::{PluginRequest, PluginResponse};
+    // 1) 路径门：存过盘 / 打开过的一律不动（空文件也算老图）。
+    let path = match sender.request_for_tab(Some(tab_id), PluginRequest::DocumentPath { tab_id }) {
+        Ok(PluginResponse::DocumentPath(path)) => path,
+        _ => return false,
+    };
+    if path.is_some() {
+        return false;
+    }
+    // 2) 文档快照门：有任何实体 / 任何 OCSM 痕迹 → 旧图不动。
+    let doc = match sender.request_for_tab(Some(tab_id), PluginRequest::DocumentSnapshot) {
+        Ok(PluginResponse::Document(doc)) => doc,
+        _ => return false,
+    };
+    if !is_new_blank_drawing(&doc, None) {
+        return false;
+    }
+    // 3) 表初始化：与 `init_ocsm_tables` 同序列同产物。
+    let count = |resp: Result<PluginResponse, ocs_plugin_api::host::PluginRequestError>| match resp {
+        Ok(PluginResponse::Count(n)) => Some(n),
+        _ => None,
+    };
+    let _ = sender.request_for_tab(
+        Some(tab_id),
+        PluginRequest::PushInfo(AUTO_INIT_INFO.to_string()),
+    );
+    if sender
+        .request_for_tab(
+            Some(tab_id),
+            PluginRequest::PushUndo {
+                label: "OCSM 初始化".to_string(),
+            },
+        )
+        .is_err()
+    {
+        return false;
+    }
+    let Some(linetypes) = count(sender.request_for_tab(
+        Some(tab_id),
+        PluginRequest::EnsureLinetypes(linetype_defs()),
+    )) else {
+        return false;
+    };
+    let Some(layers) = count(sender.request_for_tab(
+        Some(tab_id),
+        PluginRequest::EnsureLayers(layer_defs()),
+    )) else {
+        return false;
+    };
+    let Some(styles) = count(sender.request_for_tab(
+        Some(tab_id),
+        PluginRequest::EnsureTextStyles(text_style_defs()),
+    )) else {
+        return false;
+    };
+    let Some(dim_styles) = count(sender.request_for_tab(
+        Some(tab_id),
+        PluginRequest::EnsureDimStyles(dim_style_defs()),
+    )) else {
+        return false;
+    };
+    let _ = sender.request_for_tab(
+        Some(tab_id),
+        PluginRequest::PushOutput(ocsm_init_done_line(layers, linetypes, styles, dim_styles)),
+    );
+    true
+}
+
 impl OcsmPlugin {
     /// `OCSM`：初始化图层 + 线型 + 文字样式 + 标注样式（幂等）。
     fn cmd_init(&self, host: &mut dyn HostApi) {
@@ -1670,9 +1849,7 @@ impl OcsmPlugin {
         let styles = host.ensure_text_styles(text_style_defs());
         // 标注样式（参数取自标注示例.dwg 的 Mechanical，字体换成 OCSM_GB）。
         let dim_styles = host.ensure_dim_styles(dim_style_defs());
-        host.push_output(&format!(
-            "OCSM 初始化完成：新增图层 {layers} 个、线型 {lt} 个、文字样式 {styles} 个（OCSM_GB）、标注样式 {dim_styles} 个（OCSM_GB，当前样式）。数字键 1-10、TF、D 已就绪。"
-        ));
+        host.push_output(&ocsm_init_done_line(layers, lt, styles, dim_styles));
     }
 
     /// 新建空图纸 → 在第一条命令分发前自动跑一遍 OCSM 初始化（旧图纸不动作）。
@@ -1685,15 +1862,20 @@ impl OcsmPlugin {
         if auto_init_skipped_command(upper) {
             return;
         }
+        let tab = host.tab_id();
+        // 通知路径正在初始化这张图 → 让路（同一次初始化，不叠撤销点）。
+        if auto_init_state_lock().in_flight.contains(&tab) {
+            return;
+        }
         // 先看路径：老图（含空的已存盘图）直接返回，不取文档快照。
-        let path = host.document_path(host.tab_id());
+        let path = host.document_path(tab);
         if path.is_some() {
             return;
         }
         if !is_new_blank_drawing(host.document(), path.as_deref()) {
             return;
         }
-        host.push_info("新建图纸：自动执行 OCSM 初始化（旧图纸不会自动初始化）。");
+        host.push_info(AUTO_INIT_INFO);
         self.init_ocsm_tables(host);
     }
 
@@ -5636,6 +5818,353 @@ mod tests {
             manual.outputs.len() == 1 && manual.infos.is_empty(),
             "手动 OCSM 只报完成行"
         );
+    }
+
+    // ── 通知路径：建图/切图通知 → 不等命令自动初始化 ──────────────────────
+
+    /// 通知路径测试用宿主替身：模拟 DocumentPath/DocumentSnapshot + ensure_* 落表，
+    /// 记录请求序列、路由 tab、收到的 defs（与手动路径逐项对比）。
+    #[derive(Default)]
+    struct AutoInitSender {
+        doc: std::sync::Mutex<ocs_plugin_api::host::CadDocument>,
+        path: std::sync::Mutex<Option<std::path::PathBuf>>,
+        reqs: std::sync::Mutex<Vec<String>>,
+        routed_tabs: std::sync::Mutex<Vec<Option<u64>>>,
+        infos: std::sync::Mutex<Vec<String>>,
+        outputs: std::sync::Mutex<Vec<String>>,
+        linetypes: std::sync::Mutex<Vec<ocs_plugin_api::host::LinetypeDef>>,
+        layers: std::sync::Mutex<Vec<ocs_plugin_api::host::LayerDef>>,
+        text_styles: std::sync::Mutex<Vec<ocs_plugin_api::host::TextStyleDef>>,
+        dim_styles: std::sync::Mutex<Vec<ocs_plugin_api::host::DimStyleDef>>,
+    }
+
+    impl AutoInitSender {
+        fn req_names(&self) -> Vec<String> {
+            self.reqs.lock().unwrap().clone()
+        }
+        fn with_doc(doc: ocs_plugin_api::host::CadDocument) -> std::sync::Arc<Self> {
+            let s = AutoInitSender::default();
+            *s.doc.lock().unwrap() = doc;
+            std::sync::Arc::new(s)
+        }
+    }
+
+    impl PluginRequestSender for AutoInitSender {
+        fn request(
+            &self,
+            req: ocs_plugin_api::ipc::protocol::PluginRequest,
+        ) -> Result<
+            ocs_plugin_api::ipc::protocol::PluginResponse,
+            ocs_plugin_api::host::PluginRequestError,
+        > {
+            // 普通路径不带 tab（宿主按“当前图”处理）；通知路径才会覆盖。
+            self.request_for_tab(None, req)
+        }
+
+        fn request_for_tab(
+            &self,
+            tab_id: Option<u64>,
+            req: ocs_plugin_api::ipc::protocol::PluginRequest,
+        ) -> Result<
+            ocs_plugin_api::ipc::protocol::PluginResponse,
+            ocs_plugin_api::host::PluginRequestError,
+        > {
+            use ocs_plugin_api::ipc::protocol::{PluginRequest as R, PluginResponse as P};
+            self.routed_tabs.lock().unwrap().push(tab_id);
+            match req {
+                R::DocumentPath { .. } => Ok(P::DocumentPath(
+                    self.path
+                        .lock()
+                        .unwrap()
+                        .clone()
+                        .map(|p| p.into_os_string()),
+                )),
+                R::DocumentSnapshot => Ok(P::Document(Box::new(self.doc.lock().unwrap().clone()))),
+                R::PushInfo(msg) => {
+                    self.reqs.lock().unwrap().push("push_info".into());
+                    self.infos.lock().unwrap().push(msg);
+                    Ok(P::Ok)
+                }
+                R::PushOutput(msg) => {
+                    self.reqs.lock().unwrap().push("push_output".into());
+                    self.outputs.lock().unwrap().push(msg);
+                    Ok(P::Ok)
+                }
+                R::PushUndo { label } => {
+                    self.reqs.lock().unwrap().push(format!("push_undo:{label}"));
+                    Ok(P::Ok)
+                }
+                R::EnsureLinetypes(defs) => {
+                    self.reqs.lock().unwrap().push("ensure_linetypes".into());
+                    let mut created = 0;
+                    for def in &defs {
+                        if !self
+                            .doc
+                            .lock()
+                            .unwrap()
+                            .line_types
+                            .iter()
+                            .any(|l| l.name.eq_ignore_ascii_case(&def.name))
+                        {
+                            self.doc
+                                .lock()
+                                .unwrap()
+                                .line_types
+                                .add_or_replace(acadrust::tables::LineType::new(&def.name));
+                            created += 1;
+                        }
+                    }
+                    self.linetypes.lock().unwrap().extend(defs);
+                    Ok(P::Count(created))
+                }
+                R::EnsureLayers(defs) => {
+                    self.reqs.lock().unwrap().push("ensure_layers".into());
+                    let mut created = 0;
+                    for def in &defs {
+                        if !self
+                            .doc
+                            .lock()
+                            .unwrap()
+                            .layers
+                            .iter()
+                            .any(|l| l.name.eq_ignore_ascii_case(&def.name))
+                        {
+                            self.doc
+                                .lock()
+                                .unwrap()
+                                .layers
+                                .add_or_replace(acadrust::tables::Layer::new(&def.name));
+                            created += 1;
+                        }
+                    }
+                    self.layers.lock().unwrap().extend(defs);
+                    Ok(P::Count(created))
+                }
+                R::EnsureTextStyles(defs) => {
+                    self.reqs.lock().unwrap().push("ensure_text_styles".into());
+                    let mut created = 0;
+                    for def in &defs {
+                        if !self
+                            .doc
+                            .lock()
+                            .unwrap()
+                            .text_styles
+                            .iter()
+                            .any(|s| s.name.eq_ignore_ascii_case(&def.name))
+                        {
+                            self.doc
+                                .lock()
+                                .unwrap()
+                                .text_styles
+                                .add_or_replace(acadrust::tables::TextStyle::new(&def.name));
+                            created += 1;
+                        }
+                    }
+                    self.text_styles.lock().unwrap().extend(defs);
+                    Ok(P::Count(created))
+                }
+                R::EnsureDimStyles(defs) => {
+                    self.reqs.lock().unwrap().push("ensure_dim_styles".into());
+                    let mut created = 0;
+                    for def in &defs {
+                        if !self
+                            .doc
+                            .lock()
+                            .unwrap()
+                            .dim_styles
+                            .iter()
+                            .any(|s| s.name.eq_ignore_ascii_case(&def.name))
+                        {
+                            self.doc
+                                .lock()
+                                .unwrap()
+                                .dim_styles
+                                .add_or_replace(acadrust::tables::DimStyle::new(&def.name));
+                            created += 1;
+                        }
+                        if def.make_current {
+                            self.doc.lock().unwrap().header.current_dimstyle_name =
+                                def.name.clone();
+                        }
+                    }
+                    self.dim_styles.lock().unwrap().extend(defs);
+                    Ok(P::Count(created))
+                }
+                other => Ok(P::Error(format!("AutoInitSender 未实现 {other:?}"))),
+            }
+        }
+    }
+
+    /// 通知路径三门与命令入口同口径：空新图（含宿主默认块表/自定义层）→ 初始化；
+    /// 有用户图元 / 有 OCSM 痕迹 / 已存盘（有路径）→ 不动。
+    #[test]
+    fn notification_auto_init_gates_match_command_path() {
+        // 空新图（宿主给新图塞了默认内容：Model/Paper 块表 + 用户自建层）→ 初始化。
+        let mut doc = acadrust::CadDocument::new();
+        doc.layers
+            .add_or_replace(acadrust::tables::Layer::new("用户自建层"));
+        let sender = AutoInitSender::with_doc(doc);
+        assert!(
+            auto_init_document_via_sender(&*sender, 42),
+            "空新图（有默认块表/自定义层）也要初始化"
+        );
+        let routed = sender.routed_tabs.lock().unwrap().clone();
+        assert!(
+            !routed.is_empty() && routed.iter().all(|t| *t == Some(42)),
+            "通知路径的每个请求都必须路由到通知里的 tab：{routed:?}"
+        );
+        let names = sender.req_names();
+        assert_eq!(
+            names,
+            vec![
+                "push_info",
+                "push_undo:OCSM 初始化",
+                "ensure_linetypes",
+                "ensure_layers",
+                "ensure_text_styles",
+                "ensure_dim_styles",
+                "push_output",
+            ],
+            "序列必须与手动 OCSM 一致（撤销点在最前、线型先于图层）"
+        );
+        assert_eq!(
+            sender.layers.lock().unwrap().len(),
+            10,
+            "10 个 OCSM 图层一个不能少"
+        );
+
+        // 有用户图元 → 不动（且不建表）。
+        let mut dirty = acadrust::CadDocument::new();
+        let _ = dirty.add_entity(EntityType::Point(acadrust::entities::Point::new()));
+        let dirty = AutoInitSender::with_doc(dirty);
+        assert!(!auto_init_document_via_sender(&*dirty, 1));
+        assert!(dirty.layers.lock().unwrap().is_empty(), "旧图不得被建表");
+        assert!(dirty.req_names().is_empty(), "旧图连撤销点都不该有");
+
+        // 已有 OCSM 图层 → 幂等不动。
+        let mut initialized = acadrust::CadDocument::new();
+        initialized
+            .layers
+            .add_or_replace(acadrust::tables::Layer::new("1轮廓实线层"));
+        let initialized = AutoInitSender::with_doc(initialized);
+        assert!(!auto_init_document_via_sender(&*initialized, 1));
+
+        // 存过盘（哪怕空）→ 连快照都不取（路径门先短路）。
+        let saved = AutoInitSender::with_doc(acadrust::CadDocument::new());
+        *saved.path.lock().unwrap() = Some(std::path::PathBuf::from("/tmp/old_empty.dwg"));
+        assert!(!auto_init_document_via_sender(&*saved, 1));
+        assert_eq!(
+            saved.routed_tabs.lock().unwrap().len(),
+            1,
+            "有路径应第一道门（DocumentPath）就返回，不取快照"
+        );
+    }
+
+    /// 通知路径产物与手动 `OCSM` 逐项一致（同序列、同 defs、同文案）。
+    #[test]
+    fn notification_auto_init_matches_manual_ocsm() {
+        // `dispatch` 里 `refresh_doc_save_state` 写进程级状态：与全局态测试串行。
+        let _g = global_state_test_lock();
+        let sender = AutoInitSender::with_doc(acadrust::CadDocument::new());
+        assert!(auto_init_document_via_sender(&*sender, 7));
+
+        let mut manual = UndoOrderSpy::default();
+        assert!(OcsmPlugin.dispatch(&mut manual, "OCSM"));
+
+        // 同序列。
+        let names = sender.req_names();
+        assert_eq!(
+            names[1..6].to_vec(),
+            vec![
+                "push_undo:OCSM 初始化",
+                "ensure_linetypes",
+                "ensure_layers",
+                "ensure_text_styles",
+                "ensure_dim_styles",
+            ]
+        );
+        assert_eq!(manual.log.get(0..5), Some(&names[1..6]), "与手动日志逐项一致");
+
+        // 同 defs。
+        assert_eq!(*sender.layers.lock().unwrap(), manual.layers);
+        assert_eq!(*sender.linetypes.lock().unwrap(), manual.linetypes);
+        assert_eq!(*sender.text_styles.lock().unwrap(), manual.text_styles);
+        assert_eq!(*sender.dim_styles.lock().unwrap(), manual.dim_styles);
+
+        // 同文案（来源提示 + 完成行）。
+        assert_eq!(*sender.infos.lock().unwrap(), vec![AUTO_INIT_INFO.to_string()]);
+        assert_eq!(*sender.outputs.lock().unwrap(), manual.outputs);
+        assert_eq!(manual.infos.len(), 0, "手动 OCSM 不报自动来源提示");
+
+        // 幂等：同一张图再查一次 → 门（已有 OCSM 痕迹）拦住，不再落任何请求。
+        let before = sender.routed_tabs.lock().unwrap().len();
+        assert!(!auto_init_document_via_sender(&*sender, 7));
+        assert_eq!(
+            sender.routed_tabs.lock().unwrap().len(),
+            before + 2,
+            "第二次只该取路径 + 快照即被 OCSM 痕迹门拦住"
+        );
+    }
+
+    /// 通知胶水：欢迎页跳过、同 tab 防重、工作线程真的跑通 `auto_init_document_via_sender`。
+    #[test]
+    fn notification_glue_skips_boot_tab_and_dedupes() {
+        let _g = global_state_test_lock();
+        // 1) 启动页（欢迎 Start 页）不动。
+        let boot = AutoInitSender::with_doc(acadrust::CadDocument::new());
+        {
+            let mut st = crate::auto_init_state_lock();
+            let boot_sender: std::sync::Arc<dyn PluginRequestSender> = boot.clone();
+            st.sender = Some(boot_sender);
+            st.boot_tab = Some(7);
+            st.checked.clear();
+            st.in_flight.clear();
+        }
+        crate::maybe_auto_init_after_notification(7);
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        assert!(boot.req_names().is_empty(), "欢迎页不得被初始化");
+
+        // 2) 新图 tab=9：两次通知只初始化一次。
+        let fresh = AutoInitSender::with_doc(acadrust::CadDocument::new());
+        {
+            let mut st = crate::auto_init_state_lock();
+            let fresh_sender: std::sync::Arc<dyn PluginRequestSender> = fresh.clone();
+            st.sender = Some(fresh_sender);
+            st.boot_tab = Some(7);
+            st.checked.clear();
+            st.in_flight.clear();
+        }
+        crate::maybe_auto_init_after_notification(9);
+        for _ in 0..100 {
+            if fresh.layers.lock().unwrap().len() == 10 {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        crate::maybe_auto_init_after_notification(9);
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        assert_eq!(fresh.layers.lock().unwrap().len(), 10, "通知路径应完成初始化");
+        assert_eq!(fresh.req_names().len(), 7, "两次通知只该跑一轮初始化");
+
+        // 3) 通知路径在途时，命令入口让路（同一张图不叠撤销点）。
+        //    UndoOrderSpy 的 tab_id = 0，所以在途标记用 0。
+        {
+            let mut st = crate::auto_init_state_lock();
+            st.in_flight.insert(0);
+        }
+        let mut collided = UndoOrderSpy::default();
+        assert!(!OcsmPlugin.dispatch(&mut collided, "ZOOM"));
+        assert!(
+            collided.undo.is_empty() && collided.layers.is_empty(),
+            "在途初始化期间命令入口不得重复初始化"
+        );
+
+        // 清掉全局态，避免影响其它测试。
+        let mut st = crate::auto_init_state_lock();
+        st.sender = None;
+        st.boot_tab = None;
+        st.checked.clear();
+        st.in_flight.clear();
     }
 
     /// 计算书命令入口（命令解析层，不必真连宿主）：`OCSMGEAR … report` 与
