@@ -328,20 +328,32 @@ OCS_SMOKE_PLUGIN=$PWD/target/release/libocs_ocsm.so \
 > 其中 `src/app/update/dialog.rs`、`update/viewport.rs`、`view/mod.rs`、`scene/mod.rs` **自动合并成功**
 > （上次这四个都在冲突名单里）。
 
-## 0.13 上游待修：v2026.38 自带 1 个失败的单测（**非 fork 引入**）
+## 0.13 上游 stale 测试清单
+
+> 收录「上游实现已变、上游测试未跟」的宿主单测。原则：**以实现意图为准，改测试不改实现**；
+> 若确认是上游实现真的漏了 marker，只报告、不代改。
+
+### S-1 `scene::parametric_constraints::tests::arc_grips_drive_center_start_and_end_but_not_midpoint`（已收口）
 
 ```bash
 LC_ALL=C cargo test -p OpenCADStudio --lib \
   scene::parametric_constraints::tests::arc_grips_drive_center_start_and_end_but_not_midpoint
-# FAILED：left = ParametricRef { entity: Handle(8), marker: None }（`ParametricRef::whole`）
-#          right = ParametricRef { entity: Handle(8), marker: Some(0) }（测试期待的 `point(handle,0)`）
+# v2026.38 时 FAILED：left = ParametricRef { entity: Handle(8), marker: None }（`ParametricRef::whole`）
+#                      right = ParametricRef { entity: Handle(8), marker: Some(0) }（测试期待的 `point(handle,0)`）
 ```
 
-- **归属证据**：`src/scene/parametric_constraints.rs` 在 fork 侧**零改动**（`git diff v2026.38..HEAD --` 为空）；
-  实现改动来自上游 `9aadc97c`（*feat: complete symmetric constraint behavior*）——它把 Arc/Circle/Ellipse 的
-  grip 反查一律改成 `ParametricRef::whole(handle)`，但**没同步改该测试**；`origin/main` 上同样未修。
-- **判断**：实现是新的、测试是旧的（stale test）→ 正确修法是改测试，不是改实现。
-- **处置（本次）**：不动上游文件，仅登记；若要提上游，建议 PR：把该测试的 arc 断言改成 `ParametricRef::whole(handle)`。
+- **用例名**：`arc_grips_drive_center_start_and_end_but_not_midpoint`（旧）→ 收口后改名
+  `arc_grips_drive_center_or_the_whole_arc`。
+- **原因**：上游 `9aadc97c`（PR **#1352** `da02e382`，*feat: complete symmetric constraint behavior*，
+  2026-09-18）把 Arc/Circle/Ellipse 的非中心 grip 反查从 `point(handle, n)` 改为
+  `ParametricRef::whole(handle)`——**端点 marker 不再产生是预期行为**，测试未同步 → stale。归属与
+  `b24d04d6`/`829a69ae`（axis-hover-markers，只改 `constraint_hover_points` 悬停高亮）**无关**。
+- **处置**：照上游修复 `ececb0ef`（2026-09-21，commit message 明说 *"The arc grip test follows #1352"*）
+  照录测试：grip 0 → `center`，grips 1..=3 → `whole`，grip 4 → 空；本地**仅改测试期望、实现零改动**。
+  下次同步上游时**直接取上游版**（本地该 hunk 与上游基本一致，至多多一句注释）。
+- **日期**：发现 2026-09-21（v2026.38 同步，§0.12）· 收口 2026-09-23。
+- **验证（2026-09-23）**：用例连跑 3 次 passed ✅；宿主全量 `cargo test --lib`
+  **1547 passed / 0 failed / 18 ignored** ✅；`cargo test -p ocs_ocsm --lib` **633 passed / 0 failed / 25 ignored** ✅。
 
 ## 1. 补丁总表（基准：上游 tag `v2026.38` = `0d023d26` → 合并 `fd0f5dc2`，**46 文件 / +11093 −103**，不含插件 crate）
 

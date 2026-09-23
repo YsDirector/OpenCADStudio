@@ -2350,7 +2350,13 @@ mod tests {
     }
 
     #[test]
-    fn arc_grips_drive_center_start_and_end_but_not_midpoint() {
+    /// The center grip drives the center; the start, end and midpoint grips
+    /// reshape the arc, so they drive the whole curve and a paired Equal or
+    /// Symmetric follows the new radius and sweep.
+    /// Upstream #1352 (`9aadc97c`) stopped emitting endpoint markers for the
+    /// non-center grips; this expectation is the upstream `ececb0ef` fix for
+    /// the stale test (fork copies it, implementation untouched).
+    fn arc_grips_drive_center_or_the_whole_arc() {
         let handle = h(8);
         let arc = acadrust::EntityType::Arc(acadrust::entities::Arc::from_coords(
             0.0,
@@ -2365,15 +2371,14 @@ mod tests {
             grip_solve_anchor_refs(&arc, handle, 0),
             vec![ParametricRef::center(handle)]
         );
-        assert_eq!(
-            grip_solve_anchor_refs(&arc, handle, 1),
-            vec![ParametricRef::point(handle, 0)]
-        );
-        assert_eq!(
-            grip_solve_anchor_refs(&arc, handle, 2),
-            vec![ParametricRef::point(handle, 1)]
-        );
-        assert_eq!(grip_solve_anchor_refs(&arc, handle, 3), Vec::new());
+        for grip in 1..=3 {
+            assert_eq!(
+                grip_solve_anchor_refs(&arc, handle, grip),
+                vec![ParametricRef::whole(handle)],
+                "grip {grip}"
+            );
+        }
+        assert_eq!(grip_solve_anchor_refs(&arc, handle, 4), Vec::new());
     }
 
     #[test]
