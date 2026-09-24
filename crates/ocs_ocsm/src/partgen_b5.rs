@@ -585,7 +585,7 @@ pub fn families_json() -> serde_json::Map<String, serde_json::Value> {
             "code": "GB/T 2671.1-2017", "iso": "ISO 14580",
             "implemented": true, "views": views_json("socket_torx_2671"), "sizes": sizes2671,
             "len_label": "长度 l", "base_hint": "基点 = 头部支承面 × 轴线",
-            "tree_dir": "零件库/螺钉/内六角花形",
+            "tree_dir": "零件库/螺钉/内六角",
         }),
     );
     m
