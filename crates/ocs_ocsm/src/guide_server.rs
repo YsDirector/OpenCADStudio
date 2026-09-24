@@ -413,15 +413,36 @@ fn query_value(target: &str, key: &str) -> Option<String> {
         .map(|(_, v)| v.to_string())
 }
 
-/// 给页面 URL 补 `app=1`（插件自己开窗时用）。
+/// GUI 页面 URL 的**缓存戳**（cache-buster）：`<插件版本>-<进程启动毫秒>`。
+///
+/// 版本取自 `MANIFEST.version`（仓库里既有的版本来源，与 plugin.toml 同步）；
+/// 时间戳保证「同一版本重建 .so 后重启 OCS」也会换 URL —— GUI 页面是
+/// `include_str!` 编进 .so 的，用户实测过「页面能开但新端点 404」（WebView 缓存旧页）。
+pub(crate) fn gui_cache_token() -> &'static str {
+    static TOKEN: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    TOKEN.get_or_init(|| {
+        let ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0);
+        format!("{}-{}", crate::MANIFEST.version, ms)
+    })
+}
+
+/// 给页面 URL 补 `app=1` + 缓存戳 `v=`（插件自己开窗时用；两个都幂等）。
+/// 顺序：保留原查询串，先补 `app=1`、再补 `v=` —— 不影响既有 `tab=`/`app=1` 语义。
 pub(crate) fn with_app_marker(path_and_query: &str) -> String {
-    if query_flag(path_and_query, "app=1") {
-        return path_and_query.to_string();
+    let mut out = path_and_query.to_string();
+    let sep = |s: &str| if s.contains('?') { '&' } else { '?' };
+    if !query_flag(&out, "app=1") {
+        out.push(sep(&out));
+        out.push_str("app=1");
     }
-    format!(
-        "{path_and_query}{}app=1",
-        if path_and_query.contains('?') { '&' } else { '?' }
-    )
+    if query_value(&out, "v").is_none() {
+        out.push(sep(&out));
+        out.push_str(&format!("v={}", gui_cache_token()));
+    }
+    out
 }
 
 /// 把请求 URL 改写成 app 窗口用的 URL：保留原参数，补 `app=1`；
@@ -431,7 +452,7 @@ fn app_window_url(port: u16, target: &str, active_tab: Option<u64>) -> Option<St
     let query = target.split_once('?').map(|(_, q)| q).unwrap_or("");
     let mut parts: Vec<String> = query
         .split('&')
-        .filter(|p| !p.is_empty() && *p != "app=1")
+        .filter(|p| !p.is_empty() && *p != "app=1" && !p.starts_with("v="))
         .map(str::to_string)
         .collect();
     parts.push("app=1".to_string());
@@ -440,6 +461,8 @@ fn app_window_url(port: u16, target: &str, active_tab: Option<u64>) -> Option<St
             parts.push(format!("tab={tab}"));
         }
     }
+    // 缓存戳：外部页签/书签的旧页面被点开时，也强制走新页面（绝不命中旧缓存）。
+    parts.push(format!("v={}", gui_cache_token()));
     Some(format!("http://127.0.0.1:{port}{path}?{}", parts.join("&")))
 }
 
@@ -8875,27 +8898,36 @@ mod tests {
         assert!(is_app_window_request("/guide.html?handle=0x2A&app=1&tab=3"));
         assert!(!is_app_window_request("/bom.html"));
         assert!(!is_app_window_request("/bom.html?tab=3"));
-        assert_eq!(with_app_marker("/parts"), "/parts?app=1");
-        assert_eq!(with_app_marker("/parts?tab=2"), "/parts?tab=2&app=1");
-        assert_eq!(with_app_marker("/parts?app=1"), "/parts?app=1", "不重复加");
+        // app=1 标记 + 缓存戳 v=（版本来自 MANIFEST；两个都幂等，不影响 tab=）
+        let v = gui_cache_token();
+        assert!(v.starts_with(crate::MANIFEST.version), "v 应含插件版本：{v}");
+        assert!(gui_cache_token() == v, "同进程内缓存戳要稳定");
+        assert_eq!(with_app_marker("/parts"), format!("/parts?app=1&v={v}"));
+        assert_eq!(with_app_marker("/parts?tab=2"), format!("/parts?tab=2&app=1&v={v}"));
+        assert_eq!(
+            with_app_marker(&format!("/parts?app=1&v={v}")),
+            format!("/parts?app=1&v={v}"),
+            "不重复加"
+        );
+        assert_eq!(with_app_marker("/parts?app=1"), format!("/parts?app=1&v={v}"));
 
-        // 改写出的 app 窗口 URL：保留原参数 + 补 app=1 + 钉当前活跃图纸
+        // 改写出的 app 窗口 URL：保留原参数 + 补 app=1 + 钉当前活跃图纸 + 缓存戳
         assert_eq!(
             app_window_url(23751, "/bom.html", Some(7)).unwrap(),
-            "http://127.0.0.1:23751/bom.html?app=1&tab=7"
+            format!("http://127.0.0.1:23751/bom.html?app=1&tab=7&v={v}")
         );
         assert_eq!(
             app_window_url(23751, "/guide.html?handle=0x2A", Some(7)).unwrap(),
-            "http://127.0.0.1:23751/guide.html?handle=0x2A&app=1&tab=7"
+            format!("http://127.0.0.1:23751/guide.html?handle=0x2A&app=1&tab=7&v={v}")
         );
         assert_eq!(
             app_window_url(23752, "/parts?tab=2", Some(7)).unwrap(),
-            "http://127.0.0.1:23752/parts?tab=2&app=1",
+            format!("http://127.0.0.1:23752/parts?tab=2&app=1&v={v}"),
             "URL 里已有 tab= 就不覆盖"
         );
         assert_eq!(
             app_window_url(23751, "/rough.html?x=1&y=2", None).unwrap(),
-            "http://127.0.0.1:23751/rough.html?x=1&y=2&app=1",
+            format!("http://127.0.0.1:23751/rough.html?x=1&y=2&app=1&v={v}"),
             "活跃图纸未知就不加 tab="
         );
 

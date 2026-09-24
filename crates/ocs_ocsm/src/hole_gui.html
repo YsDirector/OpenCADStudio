@@ -379,6 +379,29 @@ function renderValues(v) {
   el("extraOut").textContent = extra.join("；");
 }
 
+// 统一读响应：非 2xx 先读文本再解析（404 是纯文本 "not found"，直接 .json() 会抛 SyntaxError）。
+// 判据/文案照轴与标准件的 `!r.ok || j.ok === false` 风格（shaft_gui.html `exportToDrawing`、
+// parts_gui.html `outOfStock`）；404 专门指路「插件未重启/版本不匹配」。
+async function readApi(resp, path) {
+  const text = await resp.text();
+  let j = null;
+  try { j = text ? JSON.parse(text) : null; } catch (e) { j = null; }
+  if (!resp.ok) {
+    const snip = text.slice(0, 200);
+    console.error(`[OCSM 孔生成器] ${path} → HTTP ${resp.status}：${snip}`);
+    const err = resp.status === 404
+      ? `端点 ${path} 不存在（HTTP 404）：可能是插件未重启或版本不匹配 —— 请完全退出并重开 OCS`
+      : `HTTP ${resp.status}：${(j && (j.error || j.message)) || snip || "无响应体"}`;
+    return { ok: false, error: err };
+  }
+  if (j === null) {
+    console.error(`[OCSM 孔生成器] ${path} → HTTP ${resp.status}：响应不是 JSON：${text.slice(0, 200)}`);
+    return { ok: false, error: `响应不是 JSON（HTTP ${resp.status}）：${text.slice(0, 200)}` };
+  }
+  if (j.ok === false) return { ok: false, error: j.error || j.message || "请求失败" };
+  return { ok: true, data: j };
+}
+
 async function refresh() {
   const model = currentModel();
   let resp;
@@ -390,15 +413,16 @@ async function refresh() {
     });
   } catch (e) {
     el("status").className = "bad";
-    el("status").textContent = "预请求失败：" + e;
+    el("status").textContent = "预览请求失败（网络层）：" + e;
     return;
   }
-  const j = await resp.json();
-  if (!j.ok) {
+  const r = await readApi(resp, "/api/hole_preview");
+  if (!r.ok) {
     el("status").className = "bad";
-    el("status").textContent = j.error;
+    el("status").textContent = r.error;
     return;
   }
+  const j = r.data;
   lastValues = j.values;
   el("preview").innerHTML = j.svg;
   renderValues(j.values);
@@ -486,23 +510,24 @@ el("ok").addEventListener("click", async () => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(currentModel()),
     });
-    const j = await r.json();
-    if (j.ok) {
-      el("status").className = "ok";
-      const w = (j.warnings || []).length ? "（提示：" + j.warnings.join("；") + "）" : "";
-      const msg = (j.message || "已生成") + w;
-      el("status").textContent = msg;
-      // 与轴/零件库同款：成功后自动关窗，把焦点交回图纸；
-      // 关窗前已由 /api/hole_export 建块 + 登记待放置件（插件侧已进 PartPlace），
-      // 鼠标跟随预览就能像轴/标准件那样接上。
-      setTimeout(() => {
-        try { window.close(); } catch (e) { /* 被拒绝时忽略 */ }
-        el("status").textContent = msg + "（若本窗口未自动关闭，请 Alt+Tab 切回图纸继续）";
-      }, 300);
-    } else {
+    const res = await readApi(r, "/api/hole_export");
+    if (!res.ok) {
       el("status").className = "bad";
-      el("status").textContent = j.error;
+      el("status").textContent = res.error;
+      return;
     }
+    const j = res.data;
+    el("status").className = "ok";
+    const w = (j.warnings || []).length ? "（提示：" + j.warnings.join("；") + "）" : "";
+    const msg = (j.message || "已生成") + w;
+    el("status").textContent = msg;
+    // 与轴/零件库同款：成功后自动关窗，把焦点交回图纸；
+    // 关窗前已由 /api/hole_export 建块 + 登记待放置件（插件侧已进 PartPlace），
+    // 鼠标跟随预览就能像轴/标准件那样接上。
+    setTimeout(() => {
+      try { window.close(); } catch (e) { /* 被拒绝时忽略 */ }
+      el("status").textContent = msg + "（若本窗口未自动关闭，请 Alt+Tab 切回图纸继续）";
+    }, 300);
   } finally {
     el("ok").disabled = false;
   }
@@ -529,10 +554,17 @@ function ping(bye) {
   el("threadToggle").checked = true;
   el("range").value = "blind";
   try {
-    sizes = await (await fetch("/api/hole_sizes", { cache: "no-store" })).json();
+    const resp = await fetch("/api/hole_sizes", { cache: "no-store" });
+    const r = await readApi(resp, "/api/hole_sizes");
+    if (!r.ok) {
+      el("status").className = "bad";
+      el("status").textContent = r.error;
+      return;
+    }
+    sizes = r.data;
   } catch (e) {
     el("status").className = "bad";
-    el("status").textContent = "数据表加载失败：" + e;
+    el("status").textContent = "数据表加载失败（网络层）：" + e;
     return;
   }
   setOptions("reco", [

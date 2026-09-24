@@ -167,8 +167,21 @@ global.URLSearchParams = class {
 let lastPreviewModel = null;
 let lastExportModel = null;
 let lastExportUrl = '';
+let forceExport404 = false;
+let forcePreview404 = false;
+const consoleErrors = [];
+console.error = (...a) => { consoleErrors.push(a.join(' ')); };
 function jsonResp(obj, status = 200) {
   return { ok: status < 400, status, json: async () => obj, text: async () => JSON.stringify(obj) };
+}
+// 旧插件（.so 没有该路由）返回纯文本 404：直接 .json() 会抛 SyntaxError —— GUI 必须先读文本。
+function text404(path) {
+  return {
+    ok: false,
+    status: 404,
+    text: async () => 'not found',
+    json: async () => { throw new SyntaxError(`Unexpected token 'o', "${path}" is not valid JSON`); },
+  };
 }
 function fmt(n) {
   return Number(Number(n).toFixed(3)).toString();
@@ -235,6 +248,7 @@ global.fetch = async (u, opts = {}) => {
   const url = String(u);
   if (url.startsWith('/api/hole_sizes')) return jsonResp(SIZES);
   if (url.startsWith('/api/hole_preview')) {
+    if (forcePreview404) return text404('/api/hole_preview');
     const m = JSON.parse(opts.body || '{}');
     lastPreviewModel = m;
     const v = computeValues(m);
@@ -243,6 +257,7 @@ global.fetch = async (u, opts = {}) => {
   }
   if (url.startsWith('/api/hole_export')) {
     lastExportUrl = url;
+    if (forceExport404) return text404('/api/hole_export');
     lastExportModel = JSON.parse(opts.body || '{}');
     return jsonResp({ ok: true, message: 'stub 已生成' });
   }
@@ -387,6 +402,28 @@ check(lastExportModel.at === undefined || lastExportModel.at === null, 'GUI 确�
 // 自动关窗（axis/parts 同款：成功后 300ms window.close）
 check(closed === true, '点「确定」后 GUI 应自动关闭（window.close）');
 check((el('status').textContent || '').includes('stub 已生成'), '导出成功提示应显示：' + el('status').textContent);
+
+// ⑧ 旧插件 404（用户实测：POST /api/hole_export → 404 "not found"）：
+//   GUI 应读文本给出可诊断提示、不抛 SyntaxError、不关窗（照轴/标准件的 r.ok 判据）。
+forceExport404 = true;
+closed = false;
+consoleErrors.length = 0;
+el('ok').click();
+await tick(6);
+check(!closed, '404 时不应关窗');
+const st404 = el('status').textContent || '';
+check(st404.includes('404') && st404.includes('重开 OCS'), '404 应显示诊断提示：' + st404);
+check(
+  consoleErrors.some((e) => e.includes('/api/hole_export') && e.includes('404') && e.includes('not found')),
+  'console.error 应带路径+状态码+响应文本：' + consoleErrors.join(' | ')
+);
+forceExport404 = false;
+// 预览端点 404 同样友好
+forcePreview404 = true;
+consoleErrors.length = 0;
+await H.refresh();
+check((el('status').textContent || '').includes('404'), '预览 404 应显示提示：' + el('status').textContent);
+forcePreview404 = false;
 
 function report() {
   if (errors.length) {
