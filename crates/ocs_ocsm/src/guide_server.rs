@@ -14544,6 +14544,16 @@ mod weld_tests {
         assert_eq!(v["clearance"]["rows"].as_array().unwrap().len(), 50);
         assert_eq!(v["tap"].as_array().unwrap().len(), 83);
         assert_eq!(v["drill"]["diameters"].as_array().unwrap().len(), 198);
+        // 七套螺纹体系（M/UN/G/R/NPT/ACME/Tr）与关键规格数
+        let systems = v["systems"].as_array().unwrap();
+        assert_eq!(systems.len(), 7, "螺纹体系应有 7 套：{j}");
+        let sys = |k: &str| systems.iter().find(|s| s["key"] == k).unwrap();
+        assert_eq!(sys("un")["groups"].as_array().unwrap().len(), 11);
+        assert_eq!(sys("un")["groups"][0]["rows"][0]["name"], "#1-64 UNC");
+        assert_eq!(sys("g")["is_pipe"], true);
+        assert_eq!(sys("npt")["groups"][0]["rows"][0]["drill"], 6.137);
+        assert_eq!(sys("acme")["groups"].as_array().unwrap().len(), 2);
+        assert_eq!(sys("tr")["groups"][0]["rows"].as_array().unwrap().len(), 236);
         // 预览：M10×1.5 自动 15/18，D1=10、D=8.376，SVG 带材料板剖面线
         let body = serde_json::json!({
             "kind": "threaded", "subtype": "standard", "d": 10.0,
@@ -14561,6 +14571,54 @@ mod weld_tests {
         assert_eq!(v["values"]["hole_depth"], "18");
         assert!(v["svg"].as_str().unwrap().contains("ocsmh"), "预览应有剖面线 pattern");
         assert!(v["svg"].as_str().unwrap().contains("D1=10"));
+        // 非公制预览：UN 1/4-20 UNC（TPI→P；底孔=钻表 5.1054；自动 1.5d / L+2P）
+        let un_body = serde_json::json!({
+            "kind": "threaded", "subtype": "standard", "thread_system": "un",
+            "thread_group": "unc", "d": 6.35, "pitch": 1.27, "fit": "2B",
+            "range": "blind", "hole_depth": null, "thread_len": null, "full_thread": false,
+            "views": {"side": true, "top": false}
+        })
+        .to_string();
+        let j = http_req(server.port, "POST", "/api/hole_preview", &un_body);
+        let v: serde_json::Value = serde_json::from_str(&j).unwrap();
+        assert_eq!(v["ok"], true, "{j}");
+        assert_eq!(v["values"]["system"], "un");
+        assert_eq!(v["values"]["major"], "6.35");
+        assert_eq!(v["values"]["minor"], "4.976");
+        assert_eq!(v["values"]["tpi"], "20");
+        assert_eq!(v["values"]["base_d"], "5.105");
+        assert_eq!(v["values"]["thread_len"], "9.525");
+        assert_eq!(v["values"]["hole_depth"], "12.065");
+        // 管螺纹 G1/8：大径 = 9.728（螺纹外径，不是通径），底孔 = 8.7
+        let g_body = serde_json::json!({
+            "kind": "threaded", "subtype": "standard", "thread_system": "g",
+            "thread_group": "standard", "d": 9.728, "pitch": 25.4 / 28.0, "fit": "",
+            "range": "blind", "hole_depth": null, "thread_len": null, "full_thread": false,
+            "views": {"side": true, "top": false}
+        })
+        .to_string();
+        let j = http_req(server.port, "POST", "/api/hole_preview", &g_body);
+        let v: serde_json::Value = serde_json::from_str(&j).unwrap();
+        assert_eq!(v["values"]["major"], "9.728", "G 大径：{j}");
+        assert_eq!(v["values"]["base_d"], "8.7");
+        // 表外规格：UN 4.0 明确报错（不插值）
+        let bad = serde_json::json!({
+            "kind": "threaded", "subtype": "standard", "thread_system": "un",
+            "thread_group": "unc", "d": 4.0, "pitch": null, "fit": "2B",
+            "range": "blind", "hole_depth": null, "views": {"side": true, "top": false}
+        })
+        .to_string();
+        let j = http_req(server.port, "POST", "/api/hole_preview", &bad);
+        assert!(j.contains("\"ok\":false") && j.contains("表外不插值"), "{j}");
+        // 非公制 + 沉头 → 明确报错（推荐值表只覆盖 M）
+        let bad = serde_json::json!({
+            "kind": "counterbore", "subtype": "standard", "thread_system": "un",
+            "thread_group": "unc", "d": 6.35, "pitch": 1.27, "reco": "gb70_1",
+            "range": "blind", "hole_depth": null, "views": {"side": true, "top": false}
+        })
+        .to_string();
+        let j = http_req(server.port, "POST", "/api/hole_preview", &bad);
+        assert!(j.contains("公制 M"), "非公制沉头应报错：{j}");
         // 沉头 + 螺栓间隙：底孔 11，沉孔 Ø18×11
         let body = serde_json::json!({
             "kind": "counterbore", "subtype": "clearance", "d": 10.0,

@@ -77,9 +77,60 @@ const CLEAR = [
   { name: 'M10', d: 10, close: 10.5, normal: 11, loose: 12 },
   { name: 'M12', d: 12, close: 13, normal: 13.5, loose: 14.5 },
 ];
+// 螺纹体系（/api/hole_sizes.systems 的形状；内容为最小桩，覆盖 M/UN/G/NPT/ACME/Tr）
+const SYS_M = {
+  key: 'iso724', code: 'M', label: '公制 M（ISO 724 / GB/T 196）', standard: 'ISO 724',
+  angle_deg: 60, is_pipe: false, source: 'stub', note: 'stub', units: 'mm',
+  groups: [
+    { key: 'coarse', label: '粗牙', rows: COARSE },
+    { key: 'fine', label: '细牙', rows: FINE },
+  ],
+};
+const SYS_UN = {
+  key: 'un', code: 'UN', label: '美制统一 UN（ASME B1.1）', standard: 'ASME B1.1',
+  angle_deg: 60, is_pipe: false, source: 'stub', note: 'stub',
+  units: 'mm（1 in = 25.4 mm）；P = 25.4/TPI',
+  groups: [
+    { key: 'unc', label: 'UNC 粗牙', rows: [
+      { name: '1/4-20 UNC', d: 6.35, p: 1.27, tpi: 20, d2: 5.525, d1: 4.976, drill: 5.1054 },
+      { name: '5/16-18 UNC', d: 7.938, p: 1.411111, tpi: 18, d2: 7.021, d1: 6.411, drill: 6.5287 },
+    ] },
+    { key: 'unf', label: 'UNF 细牙', rows: [
+      { name: '1/4-28 UNF', d: 6.35, p: 0.907143, tpi: 28, d2: 5.761, d1: 5.367, drill: 5.4102 },
+    ] },
+  ],
+};
+const SYS_G = {
+  key: 'g', code: 'G', label: '管用平行 G（ISO 228-1 / GB/T 7307）', standard: 'ISO 228-1',
+  angle_deg: 55, is_pipe: true, source: 'stub', note: 'stub', units: 'mm',
+  groups: [{ key: 'standard', label: '标准', rows: [
+    { name: 'G1/8', d: 9.728, p: 0.907143, tpi: 28, d2: 9.147, d1: 8.566, drill: 8.7 },
+  ] }],
+};
+const SYS_ACME = {
+  key: 'acme', code: 'ACME', label: '美制梯形 ACME（ASME B1.5）', standard: 'ASME B1.5',
+  angle_deg: 29, is_pipe: false, source: 'stub', note: 'stub', units: 'mm',
+  groups: [
+    { key: 'general', label: '一般用途 ACME', rows: [
+      { name: '1/4-16 ACME', d: 6.35, p: 1.5875, tpi: 16, d2: 5.556, d1: 4.762, drill: 4.762 },
+    ] },
+    { key: 'stub', label: '矮牙 Stub ACME', rows: [
+      { name: '1/4-16 Stub ACME', d: 6.35, p: 1.5875, tpi: 16, d2: 5.874, d1: 5.398, drill: 5.398 },
+    ] },
+  ],
+};
+const SYS_TR = {
+  key: 'tr', code: 'Tr', label: '公制梯形 Tr（ISO 2901 / GB/T 5796）', standard: 'ISO 2901',
+  angle_deg: 30, is_pipe: false, source: 'stub', note: 'stub', units: 'mm',
+  groups: [{ key: 'standard', label: '标准', rows: [
+    { name: 'Tr8×1.5', d: 8, p: 1.5, d2: 7.25, d1: 6.5, drill: 6.5 },
+  ] }],
+};
+const SYSTEMS = [SYS_M, SYS_UN, SYS_G, SYS_ACME, SYS_TR];
 const SIZES = {
   ok: true,
   coarse: COARSE, fine: FINE, tap: TAP,
+  systems: SYSTEMS,
   drill: { code: 'GB/T 6135.3-1996', diameters: DRILLS },
   counterbore: { code: 'GB/T 152.3-1988', rows: CBORE },
   countersink: { code: 'GB/T 152.2-2014', rows: CSINK },
@@ -191,17 +242,38 @@ function threadedOf(m) {
     || ((m.kind === 'counterbore' || m.kind === 'countersink')
         && (m.subtype === 'standard' || m.subtype === 'fine'));
 }
+function findSpec(m) {
+  const sys = SYSTEMS.find((s) => s.key === (m.thread_system || 'iso724')) || SYS_M;
+  const groups = sys.groups || [];
+  const gk = m.thread_group
+    || (sys.key === 'iso724' ? (m.subtype === 'fine' ? 'fine' : 'coarse') : (groups[0] && groups[0].key));
+  let cands = [];
+  for (const g of groups) if (g.key === gk) cands = cands.concat(g.rows);
+  if (!cands.length) for (const g of groups) cands = cands.concat(g.rows);
+  const byPitch = cands.find((r) => Number(r.d) === Number(m.d)
+    && (m.pitch == null || Math.abs(Number(r.p) - Number(m.pitch)) < 1e-6));
+  return byPitch || cands.find((r) => Number(r.d) === Number(m.d)) || null;
+}
 function computeValues(m) {
   const th = threadedOf(m);
+  const sys = m.thread_system || 'iso724';
   let p = 0, minor = m.d, base_d = m.d, base_start = 0;
+  let tpi = null, gauge_len = null;
   let bore_d = null, bore_t = null, sink_d = null, sink_t = null;
   if (th) {
-    const row = (m.subtype === 'fine' ? FINE : COARSE).find((r) => Number(r.d) === Number(m.d));
-    if (!row) return { error: `螺纹 M${m.d} 不在表里` };
+    const row = findSpec(m);
+    if (!row) return { error: `螺纹 ${sys} 没有 ${m.d}` };
     p = Number(row.p);
-    minor = m.d - 1.0825 * p;
-    const tap = TAP.find((r) => Number(r.d) === Number(m.d) && Number(r.p) === p);
-    base_d = tap ? Number(tap.drill) : minor;
+    if (sys === 'iso724') {
+      minor = m.d - 1.0825 * p;
+      const tap = TAP.find((r) => Number(r.d) === Number(m.d) && Math.abs(Number(r.p) - p) < 1e-6);
+      base_d = tap ? Number(tap.drill) : minor;
+    } else {
+      minor = Number(row.d1);
+      base_d = Number(row.drill != null ? row.drill : row.d1);
+      tpi = row.tpi != null ? fmt(row.tpi) : null;
+      gauge_len = row.gauge_len != null ? fmt(row.gauge_len) : null;
+    }
   } else if (m.subtype === 'drill') {
     if (!m.drill_d || !DRILLS.includes(Number(m.drill_d))) return { error: `Ø${m.drill_d} 不在麻花钻系列` };
     base_d = Number(m.drill_d);
@@ -234,9 +306,10 @@ function computeValues(m) {
     else return { error: '孔深不能自动' };
   }
   return {
-    size_name: th ? `M${m.d}` : `Ø${fmt(base_d)}`,
+    size_name: th ? (sys === 'iso724' ? `M${m.d}` : (findSpec(m) ? findSpec(m).name : '')) : `Ø${fmt(base_d)}`,
     threaded: th, major: fmt(th ? m.d : base_d), minor: fmt(th ? minor : base_d),
-    pitch: fmt(p), base_d: fmt(base_d), base_start: fmt(base_start),
+    pitch: fmt(p), tpi, gauge_len, system: sys,
+    base_d: fmt(base_d), base_start: fmt(base_start),
     bore_d: bore_d === null ? null : fmt(bore_d), bore_t: bore_t === null ? null : fmt(bore_t),
     sink_d: sink_d === null ? null : fmt(sink_d), sink_t: sink_t === null ? null : fmt(sink_t),
     thread_len: fmt(tl), hole_depth: fmt(hd),
@@ -328,6 +401,91 @@ check(el('majorOut').textContent === '10', `D1 应为 10，实为 ${el('majorOut
 check(el('minorOut').textContent === '8.376', `D 应为 8.376，实为 ${el('minorOut').textContent}`);
 await H.refresh();
 check(lastPreviewModel.kind === 'threaded' && lastPreviewModel.reco === 'gb70_1', '预览请求应带螺纹模型');
+check(lastPreviewModel.thread_system === 'iso724' && lastPreviewModel.thread_group === 'coarse', 'M 模型应带 iso724/coarse');
+check(
+  el('std').options.map((o) => o.value).join(',') === 'iso724,un,g,acme,tr',
+  `标准下拉应有全部体系：${el('std').options.map((o) => o.value).join(',')}`
+);
+
+// ①.5 切系统联动：UN → 子类型 UNC/UNF、大小换列表、TPI 读数；G → 管螺纹口径提示；ACME/Tr 子类型
+el('std').value = 'un';
+el('std')._fire('change', el('std'));
+await tick();
+check(
+  el('subtype').options.map((o) => o.value).join(',') === 'unc,unf',
+  `UN 子类型应为 unc/unf，实为 ${el('subtype').options.map((o) => o.value).join(',')}`
+);
+check(el('subtype').value === 'unc', `UN 默认子类型应为 unc，实为 ${el('subtype').value}`);
+check(
+  el('size').options.map((o) => o.value).includes('6.35|1.27'),
+  `UN 大小应含 1/4-20（6.35|1.27）：${el('size').options.map((o) => o.value)}`
+);
+const unSize = el('size').options.find((o) => o.value === '6.35|1.27');
+check(unSize && unSize.textContent === '1/4-20 UNC', `UN 大小名应带系列：${unSize && unSize.textContent}`);
+el('size').value = '6.35|1.27';
+el('size')._fire('change', el('size'));
+await tick();
+await H.refresh();
+check(lastPreviewModel.thread_system === 'un' && lastPreviewModel.thread_group === 'unc', 'UN 预览模型');
+check(lastPreviewModel.subtype === 'standard', `UN 模型子类型应为 standard，实为 ${lastPreviewModel.subtype}`);
+check(lastPreviewModel.pitch != null && Math.abs(lastPreviewModel.pitch - 1.27) < 1e-9, 'UN 应带 P=1.27（mm）');
+check(el('majorOut').textContent === '6.35', `UN 大径应 6.35，实为 ${el('majorOut').textContent}`);
+check(el('minorOut').textContent === '4.976', `UN 小径应 4.976，实为 ${el('minorOut').textContent}`);
+check((el('extraOut').textContent || '').includes('20 TPI'), `UN 读数应显示 TPI：${el('extraOut').textContent}`);
+check((el('extraOut').textContent || '').includes('底孔 Ø5.105'), `UN 底孔应来自钻表：${el('extraOut').textContent}`);
+check(el('fit').options.map((o) => o.value).join(',') === '2B,3B', 'UN 配合应为 2B/3B');
+// 切 UNF 子类型
+el('subtype').value = 'unf';
+el('subtype')._fire('change', el('subtype'));
+await tick();
+check(el('size').options.map((o) => o.value).includes('6.35|0.907143'), 'UNF 大小应含 1/4-28');
+// G：管螺纹口径提示 + 大径非通径 + 基准长
+el('std').value = 'g';
+el('std')._fire('change', el('std'));
+await tick();
+check(el('threadNote').style.display !== 'none', 'G 应显示管螺纹口径提示');
+check((el('threadNote').innerHTML || '').includes('管子外径'), `G 提示应说明大径=外径：${el('threadNote').innerHTML}`);
+check(el('size').options.map((o) => o.value).includes('9.728|0.907143'), 'G 大小应含 G1/8');
+await H.refresh();
+check(el('majorOut').textContent === '9.728', `G1/8 大径应 9.728，实为 ${el('majorOut').textContent}`);
+check((el('extraOut').textContent || '').includes('底孔 Ø8.7'), `G1/8 底孔应 8.7：${el('extraOut').textContent}`);
+// ACME：general/stub 两子类型，Stub 尺寸来自参考站口径
+el('std').value = 'acme';
+el('std')._fire('change', el('std'));
+await tick();
+check(
+  el('subtype').options.map((o) => o.value).join(',') === 'general,stub',
+  `ACME 子类型应为 general/stub：${el('subtype').options.map((o) => o.value).join(',')}`
+);
+check(
+  el('threadNote').style.display !== 'none' && (el('threadNote').innerHTML || '').includes('矮牙'),
+  `ACME 应有矮牙口径提示：${el('threadNote').innerHTML}`
+);
+el('subtype').value = 'stub';
+el('subtype')._fire('change', el('subtype'));
+await tick();
+await H.refresh();
+check(el('minorOut').textContent === '5.398', `Stub ACME 小径应 5.398，实为 ${el('minorOut').textContent}`);
+// Tr：公制梯形，无 TPI
+el('std').value = 'tr';
+el('std')._fire('change', el('std'));
+await tick();
+check(
+  el('size').options.map((o) => o.value).includes('8|1.5'),
+  `Tr 大小应含 Tr8×1.5：${el('size').options.map((o) => o.value)}`
+);
+await H.refresh();
+check(el('majorOut').textContent === '8' && el('minorOut').textContent === '6.5', `Tr8×1.5 读数：${el('majorOut').textContent}/${el('minorOut').textContent}`);
+check(!(el('extraOut').textContent || '').includes('TPI'), `Tr 不应显示 TPI：${el('extraOut').textContent}`);
+// 恢复 M 默认（后续 ②~⑧ 按既有口径走）
+el('std').value = 'iso724';
+el('std')._fire('change', el('std'));
+el('subtype').value = 'standard';
+el('subtype')._fire('change', el('subtype'));
+el('size').value = '10|1.5';
+el('size')._fire('change', el('size'));
+await tick();
+check(el('size').value === '10|1.5', `恢复 M 后大小应回 M10×1.5，实为 ${el('size').value}`);
 
 // ② 简单孔：钻头 = 标准麻花钻系列；两个自动置灰
 el('kindSimple').click();

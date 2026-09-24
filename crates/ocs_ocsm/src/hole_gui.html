@@ -60,7 +60,7 @@
       <button type="button" class="kind" id="kindCountersink">埋头孔</button>
     </div>
     <div class="params">
-      <label>标准</label><select id="std"><option>GB</option></select>
+      <label>标准</label><select id="std"><option value="iso724">公制 M（ISO 724 / GB/T 196）</option></select>
       <label>子类型</label><select id="subtype"></select>
       <label id="sizeLabel">大小</label><select id="size"></select>
       <label id="nominalLabel">公称</label><select id="nominal"></select>
@@ -75,6 +75,7 @@
     <div class="hint" id="sinkNote" style="display:none">
       埋头推荐值：GB/T 70.3（内六角沉头）→ 沉孔按 <b>GB/T 152.2-2014</b>（M1.6–M10，90°）
     </div>
+    <div class="hint" id="threadNote" style="display:none"></div>
     <div class="views">
       <label>视图</label>
       <label class="chk"><input type="radio" name="view" id="viewSide" checked>侧视图</label>
@@ -128,7 +129,8 @@
   <div class="hint">
     自动螺纹长 = 1.5×公称直径；自动孔深 = 有效螺纹深 + 2×螺距（刀具退出）。<b>不带螺纹时两个「自动」都不可选</b>；
     贯通孔深必须手填（板厚/通孔长度），贯通无 118° 底锥。沉头/埋头的孔径与深度分别查 GB/T 152.3 / GB/T 152.2；
-    螺栓间隙查 GB/T 5277（精/中等/粗装配）。
+    螺栓间隙查 GB/T 5277（精/中等/粗装配）。非公制螺纹（UN/G/R/NPT/ACME/Tr）的「d」取<b>表内螺纹大径</b>、
+    「P」取<b>表内螺距 mm</b>（英制 P = 25.4/TPI）；管螺纹大径是螺纹/管子外径，不是通径。
   </div>
 </div>
 
@@ -151,6 +153,29 @@ let lastValues = null;
 const isCounter = () => kind === "counterbore" || kind === "countersink";
 const isThreaded = () =>
   kind === "threaded" || (isCounter() && el("threadToggle").checked);
+
+// ── 螺纹体系（标准下拉）───────────────────────────────────────────────
+// sizes.systems = [/api/hole_sizes 返回的全部螺纹体系（M/UN/G/R/NPT/ACME/Tr）]，
+// 每个系统含 source/note/units + groups[{key,label,rows[{name,d,p,tpi,d2,d1,drill}]}]。
+function systemList() { return (sizes && sizes.systems) || []; }
+function systemOf(key) {
+  const list = systemList();
+  return list.find((s) => s.key === key) || list[0] || null;
+}
+function currentSystem() { return isThreaded() ? el("std").value || "iso724" : "iso724"; }
+function currentGroup() {
+  // 公制 M 的「子类型」= standard/fine（既有口径）；其余体系 = group.key。
+  const sys = currentSystem();
+  const sub = el("subtype").value;
+  if (sys === "iso724") return sub === "fine" ? "fine" : "coarse";
+  return sub;
+}
+function currentRows() {
+  const sys = systemOf(currentSystem());
+  if (!sys) return [];
+  const g = (sys.groups || []).find((x) => x.key === currentGroup());
+  return (g && g.rows) || [];
+}
 
 // ── 选择器填充 ────────────────────────────────────────────────────────
 function setOptions(id, pairs, preferred) {
@@ -186,8 +211,13 @@ function sizeOptions() {
   const th = isThreaded();
   const sub = el("subtype").value;
   if (th) {
-    const list = sub === "fine" ? sizes.fine : sizes.coarse;
-    return list.map((r) => [`${r.d}|${r.p}`, r.name]);
+    // 螺纹：大小 = 当前体系/子类型组里的规格（key = `d|p`，内部单位 mm）；
+    // 旧插件没返回 systems 时回退到 legacy coarse/fine（兼容缓存戳不匹配的窗口）。
+    if (!systemList().length) {
+      const list = sub === "fine" ? sizes.fine || [] : sizes.coarse || [];
+      return list.map((r) => [`${r.d}|${r.p}`, r.name]);
+    }
+    return currentRows().map((r) => [`${r.d}|${r.p}`, r.name]);
   }
   if (sub === "drill") {
     // 标准麻花钻直径系列（GB/T 6135.3-1996 直柄麻花钻）
@@ -212,7 +242,12 @@ function nominalOptions() {
 
 function fitOptions() {
   const th = isThreaded();
-  if (th) return [["6H", "6H"], ["6G", "6G"]];
+  if (th) {
+    // 配合只记录（不改变基本牙型几何）：M=6H/6G；UN=2B/3B；管/梯形无等级 → 置灰。
+    if (currentSystem() === "un") return [["2B", "2B（内螺纹）"], ["3B", "3B（内螺纹）"]];
+    if (currentSystem() === "iso724") return [["6H", "6H（内螺纹）"], ["6G", "6G（内螺纹）"]];
+    return [["", "—"]];
+  }
   if (el("subtype").value === "clearance") {
     return [["close", "精装配"], ["normal", "中等装配"], ["loose", "粗装配"]];
   }
@@ -237,12 +272,23 @@ function syncUi() {
   if (kind === "threaded") el("threadToggle").checked = true;
   if (kind === "simple") el("threadToggle").checked = false;
 
-  // 子类型（只在螺纹/无螺纹模式切换时重建，避免把用户手选覆盖掉）
-  const mode = th ? "thread" : "plain";
+  // 标准（螺纹体系）：不带螺纹时置灰；沉头/埋头 + 非公制会在 resolve 里明确报错
+  const sysSel = el("std");
+  sysSel.disabled = !th;
+  const sysObj = systemOf(currentSystem());
+
+  // 子类型（螺纹/无螺纹切换 + 螺纹体系切换时重建，避免把用户手选覆盖掉）
+  const mode = th ? `thread:${currentSystem()}` : "plain";
   if (modeKey !== mode) {
     modeKey = mode;
     if (th) {
-      setOptions("subtype", [["standard", "标准螺纹"], ["fine", "细牙螺纹"]], "standard");
+      if (currentSystem() === "iso724") {
+        // 公制 M：沿用既有「标准螺纹（粗牙）/细牙螺纹」口径
+        setOptions("subtype", [["standard", "标准螺纹"], ["fine", "细牙螺纹"]], "standard");
+      } else {
+        const groups = (sysObj && sysObj.groups ? sysObj.groups : []).map((g) => [g.key, g.label]);
+        setOptions("subtype", groups, groups.length ? groups[0][0] : "");
+      }
     } else {
       setOptions("subtype", [["drill", "钻头大小"], ["custom", "自定义"], ["clearance", "螺栓间隙"]], "drill");
     }
@@ -277,9 +323,25 @@ function syncUi() {
   el("recoLabel").style.display = isCb ? "" : "none";
   el("reco").style.display = isCb ? "" : "none";
   el("sinkNote").style.display = kind === "countersink" ? "" : "none";
+  // 管螺纹口径提示（用户明确定案：大径是螺纹外径概念，不是公称通径）；
+  // ACME 提示参考站数值实为矮牙，避免与「一般用途」对不上。
+  const isPipe = th && sysObj && sysObj.is_pipe;
+  const isAcme = th && sysObj && sysObj.key === "acme";
+  el("threadNote").style.display = isPipe || isAcme ? "" : "none";
+  if (isPipe) {
+    el("threadNote").innerHTML = currentSystem() === "npt"
+      ? '⚠️ 管螺纹口径：大径 D 是<b>内螺纹基本大径</b>（≈D2+0.8P），<b>不是</b>管子外径（1/2″ 管 OD 21.336，本表 D 21.224）；底孔按 GB/T 12716 表末列攻丝钻。'
+      : '⚠️ 管螺纹口径：G/R 后的 1/8… 是<b>管子通径代号</b>，大径 D 是<b>螺纹/管子外径</b>（G1/8 → 9.728 mm），不是内径。';
+  } else if (isAcme) {
+    el("threadNote").innerHTML =
+      '⚠️ 参考站「ACME」表列的中/小径实为<b>矮牙 Stub ACME</b>（D2=D−0.3P）；一般用途选 general（D2=D−0.5P）。底孔 = 内螺纹基本小径。';
+  }
   // 配合
   const fits = fitOptions();
-  setOptions("fit", fits, th ? "6H" : "normal");
+  const fitPref = th
+    ? (currentSystem() === "un" ? "2B" : currentSystem() === "iso724" ? "6H" : "")
+    : "normal";
+  setOptions("fit", fits, fitPref);
   el("fit").disabled = fits.length === 1;
   // 自定义孔径行
   const custom = !th && sub2 === "custom";
@@ -332,10 +394,14 @@ function currentModel() {
     const v = (el("size").value || "").split("|");
     d = Number(v[0] || 10);
   }
+  const sys = th ? currentSystem() : "iso724";
+  const group = th ? currentGroup() : null;
   let pitch = null;
   let drill_d = null;
   if (th) {
-    if (sub === "fine") {
+    // 公制 M：保持既有口径（只有细牙带 P）；其余体系始终带表内 P（mm）。
+    // 英制体系 P = 25.4/TPI（由 /api/hole_sizes 的 rows.p 预先换算好）。
+    if (sys !== "iso724" || sub === "fine") {
       const v = (el("size").value || "").split("|");
       pitch = v.length > 1 && v[1] !== "" ? Number(v[1]) : null;
     }
@@ -344,7 +410,10 @@ function currentModel() {
   }
   return {
     kind,
-    subtype: sub,
+    // 非公制：模型子类型统一 standard（牙型系列在 thread_group 里）
+    subtype: th && sys !== "iso724" ? "standard" : sub,
+    thread_system: sys,
+    thread_group: group,
     d,
     pitch,
     fit: el("fit").value,
@@ -374,8 +443,14 @@ function renderValues(v) {
   const extra = [];
   if (v.bore_d) extra.push(`沉孔 Ø${v.bore_d} × ${v.bore_t}`);
   if (v.sink_d) extra.push(`埋头 Ø${v.sink_d}（90°）`);
-  if (!th) extra.push(`底孔 Ø${v.base_d}`);
-  else extra.push(`有效螺纹 ${v.thread_len} / 底孔 Ø${v.base_d}`);
+  if (!th) {
+    extra.push(`底孔 Ø${v.base_d}`);
+  } else {
+    // 英制显示 TPI 并标注 P 换算；公制只显示 P。
+    extra.push(v.tpi ? `螺距 ${v.tpi} TPI（P ${v.pitch} mm）` : `螺距 P ${v.pitch} mm`);
+    extra.push(`有效螺纹 ${v.thread_len} / 底孔 Ø${v.base_d}`);
+    if (v.gauge_len) extra.push(`基准长 L1 ${v.gauge_len} mm`);
+  }
   el("extraOut").textContent = extra.join("；");
 }
 
@@ -470,6 +545,11 @@ el("threadToggle").addEventListener("change", () => {
   schedulePreview();
 });
 el("subtype").addEventListener("change", () => {
+  syncUi();
+  schedulePreview();
+});
+el("std").addEventListener("change", () => {
+  // 切体系：子类型/大小/配合都跟着联动（syncUi 里按体系重建）
   syncUi();
   schedulePreview();
 });
@@ -586,6 +666,13 @@ function ping(bye) {
     ["gb70_2", "GB/T 70.2 内六角平圆头（GB/T 152.3 无表·缺）"],
     ["gb6190", "GB 6190/6191/65 低圆柱头（GB/T 152.3 表2）"],
   ], "gb70_1");
+  // 标准 = 螺纹体系（M/UN/G/R/NPT/ACME/Tr）；兼容旧插件只返回 coarse/fine 的情况
+  const systems = systemList();
+  if (systems.length) {
+    setOptions("std", systems.map((s) => [s.key, s.label]), "iso724");
+  } else {
+    setOptions("std", [["iso724", "公制 M（ISO 724 / GB/T 196）"]], "iso724");
+  }
   el("nominal").value = "10";
   syncUi();
   sizeKey = el("size").value;

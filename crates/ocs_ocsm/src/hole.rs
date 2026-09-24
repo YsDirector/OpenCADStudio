@@ -11,6 +11,9 @@
 //! ## 规则（用户定案）
 //! - **自动螺纹长度** = `1.5 × 公称直径`（GB/T 3098.1-2010 口径；M12 → 18）；
 //! - **自动螺纹孔深** = 有效螺纹深 + `2 × 螺距`（刀具退出；M10×1.5、有效 15 → 18）；
+//! - 非公制系列（UN/G/R/NPT/ACME/Tr）时：`d` = 表内**螺纹大径（mm）**、
+//!   `P` = 表内**螺距（mm）**；英制体系 `P = 25.4/TPI`（表格 `tpi` 字段）。
+//!   管螺纹（G/R/NPT）的大径是螺纹/管子外径（NPT 为内螺纹基本大径），**不是通径**。
 //! - **不带螺纹时两个「自动」都不可选**（简单孔、以及沉头/埋头的光孔版本）；
 //!   贯通孔深不能自动（板厚/通孔长度必须手填）；
 //! - **孔范围**：盲孔 = 底孔带 **118° 底锥**（半角 59°）；贯通 = 无底锥；
@@ -31,6 +34,7 @@
 //! 沉头/埋头时 `孔深/螺纹范围` 从**沉孔底 / 埋头锥底**起算；俯视图（若同时勾选）
 //! 放在侧视图右侧、间隙 20 mm。材料板 + 绿色剖面线只出现在 GUI 预览里。
 
+use crate::thread::{self, ThreadSystem};
 use ocs_plugin_api::host::acadrust;
 use ocs_plugin_api::host::acadrust::entities::{Arc, Circle, EntityType, Line};
 use ocs_plugin_api::host::acadrust::types::{Color, LineWeight, Vector3};
@@ -383,8 +387,54 @@ pub fn sizes_json() -> String {
                 "close": r.close, "normal": r.normal, "loose": r.loose,
             })).collect::<Vec<_>>(),
         },
+        // 螺纹体系（GUI「标准」下拉；M 的 drill 用既有底孔牙深表，其余用行内钻径/小径兜底）
+        "systems": thread_systems_json(),
     })
     .to_string()
+}
+
+/// 全部螺纹体系（含 M）的 GUI 数据：与 `resolve()` 同口径。
+fn thread_systems_json() -> Vec<serde_json::Value> {
+    thread::ThreadSystem::ALL
+        .iter()
+        .map(|&sys| {
+            let t = thread::table(sys);
+            let groups: Vec<serde_json::Value> = t
+                .groups
+                .iter()
+                .map(|g| {
+                    serde_json::json!({
+                        "key": g.key,
+                        "label": g.label,
+                        "rows": g.rows.iter().map(|r| {
+                            // 公制 M：底孔优先用底孔牙深表（与 resolve 的兜底一致）。
+                            let drill = if sys == thread::ThreadSystem::Iso724 {
+                                tap_row(r.d, Some(r.p)).map(|x| x.drill).unwrap_or(r.d1)
+                            } else {
+                                r.drill_mm()
+                            };
+                            serde_json::json!({
+                                "name": r.name, "d": r.d, "p": r.p, "tpi": r.tpi,
+                                "d2": r.d2, "d1": r.d1, "drill": drill, "gauge_len": r.gauge_len,
+                            })
+                        }).collect::<Vec<_>>(),
+                    })
+                })
+                .collect();
+            serde_json::json!({
+                "key": sys.key(),
+                "code": sys.code(),
+                "label": sys.label(),
+                "standard": sys.standard(),
+                "angle_deg": sys.angle_deg(),
+                "is_pipe": sys.is_pipe(),
+                "source": t.source,
+                "note": t.note,
+                "units": if t.units.is_empty() { "mm" } else { t.units.as_str() },
+                "groups": groups,
+            })
+        })
+        .collect()
 }
 
 // ── 模型 ────────────────────────────────────────────────────────────────
@@ -450,6 +500,12 @@ impl Default for HoleViews {
 pub struct HoleModel {
     pub kind: HoleKind,
     pub subtype: HoleSubtype,
+    /// 螺纹体系（GUI「标准」下拉）：M/UN/G/R/NPT/ACME/Tr。
+    /// 默认 `Iso724` = 既有公制 M 行为（老请求不带此字段也走原路径）。
+    pub thread_system: ThreadSystem,
+    /// 螺纹子类型组（GUI「子类型」下拉）：如 `unc`/`unf`/`general`/`stub`/`standard`。
+    /// 仅非公制体系使用；公制 M 仍用 `subtype`（Standard=粗牙 / Fine=细牙）。
+    pub thread_group: Option<String>,
     /// 公称直径（螺纹大径 / 螺栓公称 / 底孔表规格）。
     pub d: f64,
     /// 螺距；`None` = 粗牙（查表）。
@@ -481,6 +537,8 @@ impl Default for HoleModel {
         Self {
             kind: HoleKind::Threaded,
             subtype: HoleSubtype::Standard,
+            thread_system: ThreadSystem::Iso724,
+            thread_group: None,
             d: 10.0,
             pitch: None,
             fit: "6H".to_string(),
@@ -516,6 +574,10 @@ impl HoleModel {
 pub struct HoleValues {
     pub size_name: String,
     pub threaded: bool,
+    /// 螺纹体系 key（如 `iso724`/`un`/`g`；不带螺纹 = 空串）。
+    pub system: String,
+    /// 螺纹体系显示名（如「美制统一 UN…」）。
+    pub system_label: String,
     /// 大径 D1（螺纹 = d；不带螺纹 = 底孔径）。
     pub major: f64,
     /// 小径 D（螺纹 = d − 1.0825P；不带螺纹 = 底孔径）。
@@ -537,6 +599,10 @@ pub struct HoleValues {
     pub hole_depth: f64,
     /// 118° 底锥高（贯通 = 0）。
     pub cone_height: f64,
+    /// 英制 TPI（每英寸牙数；公制 = None）。
+    pub tpi: Option<f64>,
+    /// 管螺纹基准长度 / 基准距离 L1（mm；非管螺纹 = None）。
+    pub gauge_len: Option<f64>,
     pub warnings: Vec<String>,
 }
 
@@ -547,9 +613,13 @@ impl HoleValues {
         serde_json::json!({
             "size_name": self.size_name,
             "threaded": self.threaded,
+            "system": self.system,
+            "system_label": self.system_label,
             "major": fmt3(self.major),
             "minor": fmt3(self.minor),
             "pitch": fmt3(self.pitch),
+            "tpi": opt(self.tpi),
+            "gauge_len": opt(self.gauge_len),
             "base_d": fmt3(self.base_d),
             "base_start": fmt3(self.base_start),
             "bore_d": opt(self.bore_d),
@@ -589,6 +659,30 @@ pub fn resolve(model: &HoleModel) -> Result<HoleValues, String> {
 
     // ① 底孔径 + 螺纹基本尺寸
     let (size_name, major, minor, pitch, base_d) = if threaded {
+        if model.thread_system != ThreadSystem::Iso724 {
+            // 非公制体系：逐表查规格（表外/多义明确报错，不插值）。
+            if matches!(model.kind, HoleKind::Counterbore | HoleKind::Countersink) {
+                return Err("沉头/埋头推荐值表只覆盖公制 M（GB/T 152.3-1988 / 152.2-2014）—— 非公制螺纹请用简单孔/螺纹孔".to_string());
+            }
+            if model.subtype == HoleSubtype::Fine {
+                return Err("非公制螺纹请用「子类型」选牙型系列（如 UNC/UNF/Stub ACME），不要用公制细牙".to_string());
+            }
+            // d 取该行螺纹大径（mm）；P 取表内螺距 mm（英制 p=25.4/TPI）。
+            // 自动螺纹长 1.5d、孔深 L+2P 均用这两个值（管螺纹 d=大径/外径，非通径）。
+            let spec = thread::lookup(
+                model.thread_system,
+                model.thread_group.as_deref(),
+                model.d,
+                model.pitch,
+            )?;
+            (
+                spec.name.clone(),
+                spec.d,
+                spec.d1,
+                spec.p,
+                spec.drill_mm(),
+            )
+        } else {
         let row = match model.subtype {
             HoleSubtype::Fine => {
                 let p = model.pitch.ok_or_else(|| {
@@ -626,6 +720,7 @@ pub fn resolve(model: &HoleModel) -> Result<HoleValues, String> {
         // 表外回退到 GB/T 197 理论小径 d−1.0825P（标准公式，非插值）。
         let drill = tap_row(model.d, Some(p)).map(|r| r.drill).unwrap_or(minor);
         (row.name.clone(), model.d, minor, p, drill)
+        }
     } else {
         match model.subtype {
             HoleSubtype::Drill => {
@@ -682,6 +777,33 @@ pub fn resolve(model: &HoleModel) -> Result<HoleValues, String> {
     };
 
     // ② 沉头 / 埋头
+    // 螺纹体系的显示信息（英制 TPI / 管螺纹基准长度）；不带螺纹 = 空。
+    let (system_key, system_label, tpi, gauge_len): (String, String, Option<f64>, Option<f64>) =
+        if threaded {
+            if model.thread_system == ThreadSystem::Iso724 {
+                (
+                    ThreadSystem::Iso724.key().to_string(),
+                    ThreadSystem::Iso724.label().to_string(),
+                    None,
+                    None,
+                )
+            } else {
+                let spec = thread::lookup(
+                    model.thread_system,
+                    model.thread_group.as_deref(),
+                    model.d,
+                    model.pitch,
+                )?;
+                (
+                    model.thread_system.key().to_string(),
+                    model.thread_system.label().to_string(),
+                    spec.tpi,
+                    spec.gauge_len,
+                )
+            }
+        } else {
+            (String::new(), String::new(), None, None)
+        };
     let (bore_d, bore_t, sink_d, sink_t) = match model.kind {
         HoleKind::Counterbore => {
             let r = counterbore_row(model.d, &model.reco)?;
@@ -774,6 +896,8 @@ pub fn resolve(model: &HoleModel) -> Result<HoleValues, String> {
         Ok(HoleValues {
             size_name,
             threaded: true,
+            system: system_key,
+            system_label,
             major,
             minor,
             pitch,
@@ -786,6 +910,8 @@ pub fn resolve(model: &HoleModel) -> Result<HoleValues, String> {
             thread_len,
             hole_depth,
             cone_height,
+            tpi,
+            gauge_len,
             warnings,
         })
     } else {
@@ -807,6 +933,8 @@ pub fn resolve(model: &HoleModel) -> Result<HoleValues, String> {
         Ok(HoleValues {
             size_name,
             threaded: false,
+            system: system_key,
+            system_label,
             major,
             minor,
             pitch: 0.0,
@@ -819,6 +947,8 @@ pub fn resolve(model: &HoleModel) -> Result<HoleValues, String> {
             thread_len: 0.0,
             hole_depth: h,
             cone_height,
+            tpi,
+            gauge_len,
             warnings,
         })
     }
@@ -979,7 +1109,9 @@ pub fn place(entities: Vec<EntityType>, at: [f64; 2], rot_deg: f64) -> Vec<Entit
 /// 块名：只由几何模型决定（FNV-1a，跨进程稳定）。
 pub fn block_name(model: &HoleModel) -> String {
     let canonical = format!(
-        "{:?}|{:?}|{}|{}|{:?}|{:?}|{}|{}|{}|{}|{}|{:?}|{}",
+        "{}|{}|{:?}|{:?}|{}|{}|{:?}|{:?}|{}|{}|{}|{}|{}|{:?}|{}",
+        model.thread_system.key(),
+        model.thread_group.as_deref().unwrap_or(""),
         model.kind,
         model.subtype,
         model.d,
@@ -1035,7 +1167,7 @@ pub fn ocsm_ready(doc: &ocs_plugin_api::host::acadrust::CadDocument) -> Result<(
 
 /// 命令行用法（一行直插）。
 pub const USAGE: &str = "OCSMHOLE / DK：\
-`OCSMHOLE [简单孔|螺纹孔|沉头孔|埋头孔] [带螺纹|无螺纹] [钻孔 Ø8.5|自定义 孔径8.5|间隙 中等装配] M10 [P1.5] [推荐70.1|70.2] [H18] [L15] [盲孔|贯通] [全长] [6H|6G] [view 侧视图|俯视图|双视图] [at x,y] [rot 度]`";
+`OCSMHOLE [简单孔|螺纹孔|沉头孔|埋头孔] [带螺纹|无螺纹] [公制|UN/UNC/UNF/UNEF|G/BSPP|R/BSPT|NPT|ACME|矮牙|Tr] [钻孔 Ø8.5|自定义 孔径8.5|间隙 中等装配] [M10|公称6.35 P1.058] [P1.5] [推荐70.1|70.2] [H18] [L15] [盲孔|贯通] [全长] [6H|6G] [view 侧视图|俯视图|双视图] [at x,y] [rot 度]`";
 
 /// 取关键字参数：`H=18` / `H18` / `H 18` 都收（`keys` 按长到短放）。
 fn take_arg(tokens: &[String], i: &mut usize, t: &str, keys: &[&str]) -> Result<String, String> {
@@ -1123,6 +1255,53 @@ pub fn parse_program(text: &str) -> Result<HoleModel, String> {
             }
             "标准螺纹" | "粗牙" | "standard" => m.subtype = HoleSubtype::Standard,
             "细牙" | "细牙螺纹" | "fine" => m.subtype = HoleSubtype::Fine,
+            // 螺纹体系 / 牙型系列（GUI「标准」+「子类型」的 CLI 口径）。
+            // 规格用 `公称6.35 P1.058`（mm；英制 P=25.4/TPI）给，表外报错。
+            "公制" | "iso724" | "iso" => m.thread_system = ThreadSystem::Iso724,
+            "统一" | "un" | "unified" => {
+                m.thread_system = ThreadSystem::Un;
+                m.thread_group = Some("unc".to_string());
+            }
+            "unc" => {
+                m.thread_system = ThreadSystem::Un;
+                m.thread_group = Some("unc".to_string());
+            }
+            "unf" => {
+                m.thread_system = ThreadSystem::Un;
+                m.thread_group = Some("unf".to_string());
+            }
+            "unef" => {
+                m.thread_system = ThreadSystem::Un;
+                m.thread_group = Some("unef".to_string());
+            }
+            "4un" | "6un" | "8un" | "12un" | "16un" | "20un" | "28un" | "32un" => {
+                m.thread_system = ThreadSystem::Un;
+                m.thread_group = Some(lower.clone());
+            }
+            "管用平行" | "g" | "bspp" | "pf" => {
+                m.thread_system = ThreadSystem::G;
+                m.thread_group = Some("standard".to_string());
+            }
+            "管用锥形" | "r" | "bspt" | "pt" => {
+                m.thread_system = ThreadSystem::R;
+                m.thread_group = Some("standard".to_string());
+            }
+            "npt" | "美制锥管" => {
+                m.thread_system = ThreadSystem::Npt;
+                m.thread_group = Some("standard".to_string());
+            }
+            "acme" | "爱克母" => {
+                m.thread_system = ThreadSystem::Acme;
+                m.thread_group = Some("general".to_string());
+            }
+            "矮牙" | "stub" => {
+                m.thread_system = ThreadSystem::Acme;
+                m.thread_group = Some("stub".to_string());
+            }
+            "梯形" | "公制梯形" | "tr" => {
+                m.thread_system = ThreadSystem::Tr;
+                m.thread_group = Some("standard".to_string());
+            }
             "盲孔" | "blind" => m.range = HoleRange::Blind,
             "贯通" | "通孔" | "through" => m.range = HoleRange::Through,
             "全长" | "full" => m.full_thread = true,
@@ -2130,7 +2309,125 @@ mod tests {
         assert!(cs.contains("Ø10.5"), "不带螺纹时标底孔径");
     }
 
-    /// `/api/hole_sizes` 输出四套表。
+    /// 非公制螺纹（UN/G/R/NPT/ACME/Tr）的派生：TPI→P、1.5d、L+2P、底孔、表外报错。
+    #[test]
+    fn non_metric_thread_types_resolve() {
+        // UN 1/4-20 UNC：P=1.27、d1=4.976、底孔=5.1054；自动 1.5d 与 L+2P。
+        let mut m = HoleModel {
+            kind: HoleKind::Threaded,
+            subtype: HoleSubtype::Standard,
+            thread_system: crate::thread::ThreadSystem::Un,
+            thread_group: Some("unc".to_string()),
+            d: 6.35,
+            pitch: Some(1.27),
+            ..Default::default()
+        };
+        let v = resolve(&m).unwrap();
+        assert_eq!(v.size_name, "1/4-20 UNC");
+        assert!((v.major - 6.35).abs() < 1e-9);
+        assert!((v.minor - 4.976).abs() < 1e-9);
+        assert!((v.pitch - 1.27).abs() < 1e-9);
+        assert!((v.base_d - 5.1054).abs() < 1e-3, "UN 底孔={}", v.base_d);
+        // 自动螺纹长 = 1.5×d，d = 表内大径（mm）；自动孔深 = L + 2P（P=表内 mm）。
+        assert!((v.thread_len - 1.5 * 6.35).abs() < 1e-9);
+        assert!((v.hole_depth - (1.5 * 6.35 + 2.0 * 1.27)).abs() < 1e-9);
+        assert_eq!(v.system, "un");
+        assert_eq!(v.tpi, Some(20.0));
+        assert_eq!(v.gauge_len, None);
+        // TPI → P 换算与数据一致
+        assert!((v.pitch * v.tpi.unwrap() - 25.4).abs() < 1e-3);
+
+        // G1/8：P=25.4/28、底孔 8.7；管螺纹大径 = 9.728（不是通径）。
+        m = HoleModel {
+            thread_system: crate::thread::ThreadSystem::G,
+            thread_group: Some("standard".to_string()),
+            d: 9.728,
+            pitch: Some(25.4 / 28.0),
+            ..m.clone()
+        };
+        let v = resolve(&m).unwrap();
+        assert_eq!(v.size_name, "G1/8");
+        assert!((v.major - 9.728).abs() < 1e-9);
+        assert!((v.minor - 8.566).abs() < 1e-9);
+        assert!((v.base_d - 8.7).abs() < 1e-9);
+        assert!((v.thread_len - 1.5 * 9.728).abs() < 1e-9);
+        assert_eq!(v.system, "g");
+
+        // NPT1/2：P=25.4/14、d1=18.321、底孔=17.813（GB/T 12716 末列）、基准长 L1。
+        m = HoleModel {
+            thread_system: crate::thread::ThreadSystem::Npt,
+            thread_group: Some("standard".to_string()),
+            d: 21.224,
+            pitch: Some(25.4 / 14.0),
+            ..m.clone()
+        };
+        let v = resolve(&m).unwrap();
+        assert_eq!(v.size_name, "NPT1/2");
+        assert!((v.minor - 18.321).abs() < 1e-9);
+        assert!((v.base_d - 17.813).abs() < 1e-3);
+        assert!((v.pitch - 25.4 / 14.0).abs() < 1e-5, "p={}", v.pitch);
+        assert_eq!(v.tpi, Some(14.0));
+        assert!((v.gauge_len.unwrap() - 8.128).abs() < 1e-9);
+
+        // ACME 矮牙（参考站口径）：1/4-16 → d1=5.398；Tr8×1.5 → d1=6.5。
+        m = HoleModel {
+            thread_system: crate::thread::ThreadSystem::Acme,
+            thread_group: Some("stub".to_string()),
+            d: 6.35,
+            pitch: Some(25.4 / 16.0),
+            ..m.clone()
+        };
+        let v = resolve(&m).unwrap();
+        assert!((v.minor - 5.398).abs() < 1e-9);
+        assert!((v.base_d - 5.398).abs() < 1e-9);
+        m = HoleModel {
+            thread_system: crate::thread::ThreadSystem::Tr,
+            thread_group: Some("standard".to_string()),
+            d: 8.0,
+            pitch: Some(1.5),
+            ..m.clone()
+        };
+        let v = resolve(&m).unwrap();
+        assert_eq!(v.size_name, "Tr8×1.5");
+        assert!((v.minor - 6.5).abs() < 1e-9);
+        assert!((v.base_d - 6.5).abs() < 1e-9);
+        assert_eq!(v.tpi, None);
+
+        // 表外规格明确报错（不插值）
+        m.d = 6.0;
+        let e = resolve(&m).unwrap_err();
+        assert!(e.contains("Tr") && e.contains("表外不插值"), "{e}");
+        // 非公制 + 沉头/埋头 → 明确报错（推荐值表只覆盖 M）
+        m.kind = HoleKind::Counterbore;
+        m.d = 8.0;
+        let e = resolve(&m).unwrap_err();
+        assert!(e.contains("沉头/埋头") && e.contains("公制 M"), "{e}");
+        // 非公制发送「细牙」子类型 → 明确报错
+        m.kind = HoleKind::Threaded;
+        m.subtype = HoleSubtype::Fine;
+        assert!(resolve(&m).is_err());
+
+        // CLI 口径：体系/牙型系列关键字 + `公称 d P`（mm）也能走非公制
+        let p = parse_program("螺纹孔 UNC 公称6.35 P1.27").unwrap();
+        assert_eq!(p.thread_system, crate::thread::ThreadSystem::Un);
+        assert_eq!(p.thread_group.as_deref(), Some("unc"));
+        assert!(resolve(&p).is_ok(), "CLI UN 应可解");
+        let t = parse_program("螺纹孔 Tr 公称8 P1.5").unwrap();
+        assert_eq!(t.thread_system, crate::thread::ThreadSystem::Tr);
+        assert!(resolve(&t).is_ok(), "CLI Tr 应可解");
+    }
+
+    /// 不同螺纹体系的同尺寸块名不会碰撞。
+    #[test]
+    fn block_name_includes_thread_system() {
+        let m = thread(10.0, Some(1.5));
+        let mut u = m.clone();
+        u.thread_system = crate::thread::ThreadSystem::Un;
+        u.thread_group = Some("unc".to_string());
+        assert_ne!(block_name(&m), block_name(&u));
+    }
+
+    /// `/api/hole_sizes` 输出四套表 + 全部螺纹体系。
     #[test]
     fn sizes_json_has_all_tables() {
         let v: serde_json::Value = serde_json::from_str(&sizes_json()).unwrap();
@@ -2141,5 +2438,23 @@ mod tests {
         assert_eq!(v["clearance"]["rows"].as_array().unwrap().len(), 50);
         assert_eq!(v["tap"].as_array().unwrap().len(), 83);
         assert_eq!(v["drill"]["diameters"].as_array().unwrap().len(), 198);
+        // 螺纹体系：M/UN/G/R/NPT/ACME/Tr 七套，各行数与本表一致
+        let systems = v["systems"].as_array().unwrap();
+        assert_eq!(systems.len(), 7);
+        assert_eq!(systems[0]["key"], "iso724");
+        let find = |key: &str| systems.iter().find(|s| s["key"] == key).unwrap();
+        assert_eq!(find("g")["groups"][0]["rows"].as_array().unwrap().len(), 24);
+        assert_eq!(find("r")["groups"][0]["rows"].as_array().unwrap().len(), 15);
+        assert_eq!(find("npt")["is_pipe"], true);
+        let un = find("un");
+        assert_eq!(un["groups"].as_array().unwrap().len(), 11);
+        assert_eq!(un["groups"][0]["rows"].as_array().unwrap().len(), 33);
+        let acme = find("acme");
+        assert_eq!(acme["groups"].as_array().unwrap().len(), 2);
+        assert_eq!(find("tr")["groups"][0]["rows"].as_array().unwrap().len(), 236);
+        // M 的 drill 与 resolve 口径一致（M10×1.5 → 8.5）
+        let m_group = &systems[0]["groups"][0];
+        let m10 = m_group["rows"].as_array().unwrap().iter().find(|r| r["name"] == "M10").unwrap();
+        assert_eq!(m10["drill"], 8.5);
     }
 }
