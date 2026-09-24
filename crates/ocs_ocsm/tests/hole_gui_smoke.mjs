@@ -150,9 +150,12 @@ global.document = {
   querySelector() { return null; },
   addEventListener() {},
 };
-global.window = { addEventListener() {}, close() {} };
+// 「确定」后应像轴/标准件那样自动关窗：window.close 置位 + setTimeout 立即执行
+//（范本：shaft_gui.html `exportToDrawing` 的 `window.close()` / parts_gui.html `outOfStock`）。
+let closed = false;
+global.window = { addEventListener() {}, close() { closed = true; } };
 global.location = { search: '', href: 'http://127.0.0.1:9/hole' };
-global.setTimeout = () => 0;
+global.setTimeout = (fn) => { if (typeof fn === 'function') fn(); return 0; };
 global.clearTimeout = () => {};
 global.setInterval = () => 0;
 global.URLSearchParams = class {
@@ -373,12 +376,16 @@ el('tFull').checked = false;
 el('tFull')._fire('change', el('tFull'));
 await tick();
 
-// ⑦ 确定 → POST /api/hole_export
+// ⑦ 确定 → POST /api/hole_export（放置态）+ 自动关窗（与轴/标准件同款）
 el('ok').click();
 await tick(6);
 check(lastExportUrl.startsWith('/api/hole_export'), `导出 URL 应为 /api/hole_export，实为 ${lastExportUrl}`);
 check(!!lastExportModel && lastExportModel.kind === 'threaded', `导出模型 kind 应为 threaded：${JSON.stringify(lastExportModel)}`);
 check(lastExportModel.views && lastExportModel.views.side === true, '导出模型应带视图开关');
+// 无显式 at → 后端建块 + 登记待放置件（进入放置态，鼠标跟随预览）
+check(lastExportModel.at === undefined || lastExportModel.at === null, 'GUI 确定不应带 at（走待放置件/放置态）');
+// 自动关窗（axis/parts 同款：成功后 300ms window.close）
+check(closed === true, '点「确定」后 GUI 应自动关闭（window.close）');
 check((el('status').textContent || '').includes('stub 已生成'), '导出成功提示应显示：' + el('status').textContent);
 
 function report() {

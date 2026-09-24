@@ -490,7 +490,15 @@ el("ok").addEventListener("click", async () => {
     if (j.ok) {
       el("status").className = "ok";
       const w = (j.warnings || []).length ? "（提示：" + j.warnings.join("；") + "）" : "";
-      el("status").textContent = (j.message || "已生成") + w;
+      const msg = (j.message || "已生成") + w;
+      el("status").textContent = msg;
+      // 与轴/零件库同款：成功后自动关窗，把焦点交回图纸；
+      // 关窗前已由 /api/hole_export 建块 + 登记待放置件（插件侧已进 PartPlace），
+      // 鼠标跟随预览就能像轴/标准件那样接上。
+      setTimeout(() => {
+        try { window.close(); } catch (e) { /* 被拒绝时忽略 */ }
+        el("status").textContent = msg + "（若本窗口未自动关闭，请 Alt+Tab 切回图纸继续）";
+      }, 300);
     } else {
       el("status").className = "bad";
       el("status").textContent = j.error;
