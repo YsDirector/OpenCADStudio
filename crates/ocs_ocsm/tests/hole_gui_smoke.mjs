@@ -104,7 +104,21 @@ const SYS_G = {
   key: 'g', code: 'G', label: '管用平行 G（ISO 228-1 / GB/T 7307）', standard: 'ISO 228-1',
   angle_deg: 55, is_pipe: true, source: 'stub', note: 'stub', units: 'mm',
   groups: [{ key: 'standard', label: '标准', rows: [
-    { name: 'G1/8', d: 9.728, p: 0.907143, tpi: 28, d2: 9.147, d1: 8.566, drill: 8.7 },
+    { name: 'G1/8', d: 9.728, p: 0.907143, tpi: 28, d2: 9.147, d1: 8.566, drill: 8.7, l1: 6.5 },
+  ] }],
+};
+const SYS_R = {
+  key: 'r', code: 'R', label: '管用锥形 R（ISO 7-1 / GB/T 7306）', standard: 'ISO 7-1',
+  angle_deg: 55, is_pipe: true, source: 'stub', note: 'stub', units: 'mm',
+  groups: [{ key: 'standard', label: '标准', rows: [
+    { name: 'R1/8', d: 9.728, p: 0.907143, tpi: 28, d2: 9.147, d1: 8.566, drill: 8.7, l1: 4.0, l2: 2.5, l3: 6.5 },
+  ] }],
+};
+const SYS_NPT = {
+  key: 'npt', code: 'NPT', label: '美制锥管 NPT（ASME B1.20.1 / GB/T 12716）', standard: 'ASME B1.20.1',
+  angle_deg: 60, is_pipe: true, source: 'stub', note: 'stub', units: 'mm',
+  groups: [{ key: 'standard', label: '标准', rows: [
+    { name: 'NPT1/8', d: 10.242, p: 0.940741, tpi: 27, d2: 9.489, d1: 8.737, drill: 8.481, l1: 4.102, l2: 2.822, l3: 6.924 },
   ] }],
 };
 const SYS_ACME = {
@@ -126,7 +140,7 @@ const SYS_TR = {
     { name: 'Tr8×1.5', d: 8, p: 1.5, d2: 7.25, d1: 6.5, drill: 6.5 },
   ] }],
 };
-const SYSTEMS = [SYS_M, SYS_UN, SYS_G, SYS_ACME, SYS_TR];
+const SYSTEMS = [SYS_M, SYS_UN, SYS_G, SYS_R, SYS_NPT, SYS_ACME, SYS_TR];
 const SIZES = {
   ok: true,
   coarse: COARSE, fine: FINE, tap: TAP,
@@ -258,7 +272,8 @@ function computeValues(m) {
   const th = threadedOf(m);
   const sys = m.thread_system || 'iso724';
   let p = 0, minor = m.d, base_d = m.d, base_start = 0;
-  let tpi = null, gauge_len = null;
+  let tpi = null, gauge_len = null, l1 = null;
+  const sysKey = m.thread_system || 'iso724';
   let bore_d = null, bore_t = null, sink_d = null, sink_t = null;
   if (th) {
     const row = findSpec(m);
@@ -273,6 +288,9 @@ function computeValues(m) {
       base_d = Number(row.drill != null ? row.drill : row.d1);
       tpi = row.tpi != null ? fmt(row.tpi) : null;
       gauge_len = row.gauge_len != null ? fmt(row.gauge_len) : null;
+      // 实际自动啮合长：G/NPT=l1，R=l3（与后端 HoleValues.l1 同口径）
+      const lv = sysKey === 'r' ? row.l3 : row.l1;
+      l1 = lv != null ? Number(lv) : null;
     }
   } else if (m.subtype === 'drill') {
     if (!m.drill_d || !DRILLS.includes(Number(m.drill_d))) return { error: `Ø${m.drill_d} 不在麻花钻系列` };
@@ -299,7 +317,22 @@ function computeValues(m) {
     if (!r) return { error: `埋头表没有 M${m.d}` };
     sink_d = r.d2; sink_t = r.t; base_start = (r.d2 - base_d) / 2;
   }
-  const tl = th ? (m.full_thread ? (m.hole_depth ?? 0) : (m.thread_len ?? 1.5 * m.d)) : 0;
+  let tl;
+  if (!th) {
+    tl = 0;
+  } else if (m.full_thread) {
+    tl = m.hole_depth ?? 0;
+  } else if (m.thread_len != null) {
+    tl = m.thread_len;
+  } else if (sysKey === 'g' || sysKey === 'r' || sysKey === 'npt') {
+    // 管螺纹自动长 = 查表 L1：NPT/G 用 row.l1，R 用 row.l3（有效螺纹长度）
+    const row = findSpec(m);
+    const v = sysKey === 'r' ? (row && row.l3) : (row && row.l1);
+    if (v == null) return { error: `${sysKey} 没有 L1（自动长）—— 表外不插值` };
+    tl = Number(v);
+  } else {
+    tl = 1.5 * m.d;
+  }
   let hd = m.hole_depth;
   if (hd === null || hd === undefined) {
     if (th && m.range !== 'through') hd = tl + 2 * p;
@@ -308,7 +341,7 @@ function computeValues(m) {
   return {
     size_name: th ? (sys === 'iso724' ? `M${m.d}` : (findSpec(m) ? findSpec(m).name : '')) : `Ø${fmt(base_d)}`,
     threaded: th, major: fmt(th ? m.d : base_d), minor: fmt(th ? minor : base_d),
-    pitch: fmt(p), tpi, gauge_len, system: sys,
+    pitch: fmt(p), tpi, gauge_len, l1: l1 === null ? null : fmt(l1), system: sys,
     base_d: fmt(base_d), base_start: fmt(base_start),
     bore_d: bore_d === null ? null : fmt(bore_d), bore_t: bore_t === null ? null : fmt(bore_t),
     sink_d: sink_d === null ? null : fmt(sink_d), sink_t: sink_t === null ? null : fmt(sink_t),
@@ -403,7 +436,7 @@ await H.refresh();
 check(lastPreviewModel.kind === 'threaded' && lastPreviewModel.reco === 'gb70_1', '预览请求应带螺纹模型');
 check(lastPreviewModel.thread_system === 'iso724' && lastPreviewModel.thread_group === 'coarse', 'M 模型应带 iso724/coarse');
 check(
-  el('std').options.map((o) => o.value).join(',') === 'iso724,un,g,acme,tr',
+  el('std').options.map((o) => o.value).join(',') === 'iso724,un,g,r,npt,acme,tr',
   `标准下拉应有全部体系：${el('std').options.map((o) => o.value).join(',')}`
 );
 
@@ -445,10 +478,28 @@ el('std')._fire('change', el('std'));
 await tick();
 check(el('threadNote').style.display !== 'none', 'G 应显示管螺纹口径提示');
 check((el('threadNote').innerHTML || '').includes('管子外径'), `G 提示应说明大径=外径：${el('threadNote').innerHTML}`);
+check((el('threadNote').innerHTML || '').includes('有效啮合'), `G 提示应说明自动长=L1：${el('threadNote').innerHTML}`);
 check(el('size').options.map((o) => o.value).includes('9.728|0.907143'), 'G 大小应含 G1/8');
 await H.refresh();
 check(el('majorOut').textContent === '9.728', `G1/8 大径应 9.728，实为 ${el('majorOut').textContent}`);
+check(el('tLen').value === '6.5', `G1/8 自动螺纹长应 = L1 6.5，实为 ${el('tLen').value}`);
+check((el('extraOut').textContent || '').includes('有效啮合长 L1 6.5'), `G 读数应显示 L1=6.5：${el('extraOut').textContent}`);
 check((el('extraOut').textContent || '').includes('底孔 Ø8.7'), `G1/8 底孔应 8.7：${el('extraOut').textContent}`);
+// R：自动长 = ISO 7-1 有效螺纹长度 l3=6.5（不是基准距离 4.0）；NPT：自动长 = ASME L1=4.102
+el('std').value = 'r';
+el('std')._fire('change', el('std'));
+await tick();
+check(el('size').options.map((o) => o.value).includes('9.728|0.907143'), 'R 大小应含 R1/8');
+await H.refresh();
+check(el('tLen').value === '6.5', `R1/8 自动螺纹长应 = 有效螺纹长度 6.5，实为 ${el('tLen').value}`);
+check((el('threadNote').innerHTML || '').includes('ISO 7-1'), `R 提示应写明 ISO 7-1 来源：${el('threadNote').innerHTML}`);
+el('std').value = 'npt';
+el('std')._fire('change', el('std'));
+await tick();
+check(el('size').options.map((o) => o.value).includes('10.242|0.940741'), 'NPT 大小应含 NPT1/8');
+await H.refresh();
+check(el('tLen').value === '4.102', `NPT1/8 自动螺纹长应 = ASME L1 4.102，实为 ${el('tLen').value}`);
+check((el('threadNote').innerHTML || '').includes('B1.20.1'), `NPT 提示应写明 ASME B1.20.1 来源：${el('threadNote').innerHTML}`);
 // ACME：general/stub 两子类型，Stub 尺寸来自参考站口径
 el('std').value = 'acme';
 el('std')._fire('change', el('std'));

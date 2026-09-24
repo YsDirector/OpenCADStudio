@@ -136,9 +136,22 @@ pub struct ThreadSpec {
     /// 底孔（攻丝钻）直径（mm）；缺省 = 按基本小径 D1 兜底。
     #[serde(default)]
     pub drill: Option<f64>,
-    /// 管螺纹基准长度 / 基准距离 L1（mm）。
+    /// 管螺纹基准长度 / 基准距离 L1（mm，表值；G 无此列 = None）。
     #[serde(default)]
     pub gauge_len: Option<f64>,
+    /// 管螺纹啮合长度列（mm）：
+    /// - NPT：ASME B1.20.1 **L1 手拧合长度**（hand-tight engagement）；
+    /// - R：ISO 7-1 **基准距离（基本）**；
+    /// - G：ISO 228-1 无此口径 → 本表填同规格 R 的 `l3`（有效螺纹长度，**待用户确认**）。
+    #[serde(default)]
+    pub l1: Option<f64>,
+    /// 管螺纹第二长度列（mm）：NPT = ASME **L2 扳手拧合**（GB/T 12716 表列名「装配距离 L3」）；
+    /// R = ISO 7-1 **装配余量**；G = None。
+    #[serde(default)]
+    pub l2: Option<f64>,
+    /// 管螺纹总有效长度（mm）：NPT = **L1+L2（ASME L3）**；R = **外螺纹有效螺纹长度**（表值，= l1+l2）；G = None。
+    #[serde(default)]
+    pub l3: Option<f64>,
 }
 
 impl ThreadSpec {
@@ -507,6 +520,62 @@ mod tests {
         let s = lookup(ThreadSystem::Tr, None, 8.0, Some(1.5)).unwrap();
         assert_eq!(s.name, "Tr8×1.5");
         assert_eq!(s.d1, 6.5);
+    }
+
+    /// 管螺纹长度列（用户裁定 ④）：NPT L1/L2/L3、R 基准距离/装配余量/有效长度、G 取同规格 R（待确认）。
+    #[test]
+    fn pipe_length_columns() {
+        // NPT：l1 = ASME L1（手拧合）、l2 = 扳手拧合、l3 = L1+L2；底孔名称匹配回归（1 1/4、1 1/2）
+        for r in &table(ThreadSystem::Npt).groups[0].rows {
+            let (l1, l2, l3) = (r.l1.unwrap(), r.l2.unwrap(), r.l3.unwrap());
+            assert_eq!(Some(l1), r.gauge_len, "{} gauge_len 应 = L1", r.name);
+            assert!((l3 - (l1 + l2)).abs() < 0.002, "{} L3≠L1+L2", r.name);
+            assert!(l1 > 0.0 && l2 > 0.0 && l3 > l1, "{}", r.name);
+        }
+        let s = lookup(ThreadSystem::Npt, None, 10.242, None).unwrap();
+        assert!((s.l1.unwrap() - 4.102).abs() < 1e-9, "NPT1/8 L1");
+        let s = lookup(ThreadSystem::Npt, None, 41.985, None).unwrap();
+        assert_eq!(s.name, "NPT1 1/4");
+        assert_eq!(s.drill, Some(37.785), "1 1/4 底孔应=GB/T 12716 末列");
+        let s = lookup(ThreadSystem::Npt, None, 48.054, None).unwrap();
+        assert_eq!(s.drill, Some(43.853), "1 1/2 底孔应=GB/T 12716 末列");
+        // R：l1 = 基准距离、l2 = 装配余量、l3 = 有效螺纹长度（表值 ≈ l1+l2，取整）
+        for r in &table(ThreadSystem::R).groups[0].rows {
+            let (l1, l2, l3) = (r.l1.unwrap(), r.l2.unwrap(), r.l3.unwrap());
+            assert!((l3 - (l1 + l2)).abs() < 0.11, "{} l3≠l1+l2（取整）", r.name);
+            assert!(l3 > l1, "{}", r.name);
+        }
+        let s = lookup(ThreadSystem::R, None, 9.728, None).unwrap();
+        assert_eq!(s.l3, Some(6.5), "R1/8 有效螺纹长度");
+        assert_eq!(s.l1, Some(4.0));
+        let s = lookup(ThreadSystem::R, None, 163.83, None).unwrap();
+        assert_eq!(s.l3, Some(40.1));
+        // G：ISO 228-1 无 L1 → l1 = 同规格 R 的 l3；无同规格 R 的 9 档为 None（自动时明确报错）
+        let g = &table(ThreadSystem::G).groups[0].rows;
+        let rmap: std::collections::BTreeMap<&str, f64> = table(ThreadSystem::R).groups[0]
+            .rows
+            .iter()
+            .map(|r| (r.name.as_str(), r.l3.unwrap()))
+            .collect();
+        let mut missing = 0;
+        for r in g {
+            let key = format!("R{}", &r.name[1..]);
+            match rmap.get(key.as_str()) {
+                Some(l3) => assert_eq!(
+                    r.l1.map(|v| (v * 1000.0).round() / 1000.0),
+                    Some(*l3),
+                    "{}",
+                    r.name
+                ),
+                None => {
+                    missing += 1;
+                    assert_eq!(r.l1, None, "{} 应无 L1", r.name);
+                }
+            }
+        }
+        assert_eq!(missing, 9, "G 无同规格 R 的档数");
+        let s = lookup(ThreadSystem::G, None, 9.728, None).unwrap();
+        assert_eq!(s.l1, Some(6.5), "G1/8 l1 = R1/8 有效长度");
     }
 
     /// 表外规格必须明确报错（不插值、不外推）。
