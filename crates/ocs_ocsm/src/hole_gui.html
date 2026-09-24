@@ -77,8 +77,8 @@
     </div>
     <div class="views">
       <label>视图</label>
-      <label class="chk"><input type="checkbox" id="viewSide" checked>侧视图</label>
-      <label class="chk"><input type="checkbox" id="viewTop">俯视图</label>
+      <label class="chk"><input type="radio" name="view" id="viewSide" checked>侧视图</label>
+      <label class="chk"><input type="radio" name="view" id="viewTop">俯视图</label>
     </div>
   </div>
 
@@ -438,6 +438,14 @@ async function refresh() {
   }
 }
 
+// 视图单选框（侧视/俯视二选一）：浏览器原生互斥，这里再钉一道（测试 DOM 垫片/程序化赋值都靠它），
+// 且不允许两个都不选（取消勾选就回侧视图）；请求里 views 恒只有一项为 true。
+function syncViewRadios(changed) {
+  if (changed === "side" && el("viewSide").checked) el("viewTop").checked = false;
+  if (changed === "top" && el("viewTop").checked) el("viewSide").checked = false;
+  if (!el("viewSide").checked && !el("viewTop").checked) el("viewSide").checked = true;
+}
+
 function schedulePreview() {
   if (timer) clearTimeout(timer);
   timer = setTimeout(refresh, 160);
@@ -498,8 +506,14 @@ el("tFull").addEventListener("change", () => {
 el("hDepth").addEventListener("input", () => schedulePreview());
 el("tLen").addEventListener("input", () => schedulePreview());
 el("customD").addEventListener("input", () => schedulePreview());
-el("viewSide").addEventListener("change", () => schedulePreview());
-el("viewTop").addEventListener("change", () => schedulePreview());
+el("viewSide").addEventListener("change", () => {
+  syncViewRadios("side");
+  schedulePreview();
+});
+el("viewTop").addEventListener("change", () => {
+  syncViewRadios("top");
+  schedulePreview();
+});
 
 el("ok").addEventListener("click", async () => {
   el("ok").disabled = true;

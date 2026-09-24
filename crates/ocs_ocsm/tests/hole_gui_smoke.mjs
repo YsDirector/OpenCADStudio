@@ -285,6 +285,34 @@ const el = (id) => document.getElementById(id);
 check(!!H, '探针 __hole 未挂上（脚本初始化崩溃？）');
 if (!H) report();
 
+// ⓪ 视图 = 单选框（侧视/俯视二选一），默认侧视图；结构直接钉 HTML
+check(
+  html.includes('type="radio" name="view" id="viewSide"') &&
+    html.includes('type="radio" name="view" id="viewTop"'),
+  '视图应是 name=view 的 radio（不是 checkbox）'
+);
+check(el('viewSide').checked && !el('viewTop').checked, '视图默认应选中侧视图');
+// 互斥：选俯视图 → 自动取消侧视图；请求里 views 只有一项 true
+el('viewTop').checked = true;
+el('viewTop')._fire('change', el('viewTop'));
+await tick();
+check(el('viewTop').checked && !el('viewSide').checked, '选俯视图应自动取消侧视图');
+await H.refresh();
+check(
+  lastPreviewModel.views.top === true && lastPreviewModel.views.side === false,
+  `俯视图请求里 view 只带一项：${JSON.stringify(lastPreviewModel.views)}`
+);
+// 反向：选侧视图 → 自动取消俯视图
+el('viewSide').checked = true;
+el('viewSide')._fire('change', el('viewSide'));
+await tick();
+check(el('viewSide').checked && !el('viewTop').checked, '选侧视图应自动取消俯视图');
+await H.refresh();
+check(
+  lastPreviewModel.views.side === true && lastPreviewModel.views.top === false,
+  `侧视图请求里 view 只带一项：${JSON.stringify(lastPreviewModel.views)}`
+);
+
 // ① 打开即「螺纹孔 M10」：自动 15 / 18，读数 D1=10 / D=8.376
 check(H.kind === 'threaded', `默认应为螺纹孔，实为 ${H.kind}`);
 check(!!H.sizes && H.sizes.coarse.length > 0, '/api/hole_sizes 未加载');
@@ -397,6 +425,7 @@ await tick(6);
 check(lastExportUrl.startsWith('/api/hole_export'), `导出 URL 应为 /api/hole_export，实为 ${lastExportUrl}`);
 check(!!lastExportModel && lastExportModel.kind === 'threaded', `导出模型 kind 应为 threaded：${JSON.stringify(lastExportModel)}`);
 check(lastExportModel.views && lastExportModel.views.side === true, '导出模型应带视图开关');
+check(lastExportModel.views.side !== lastExportModel.views.top, '导出模型 views 只应有一项 true');
 // 无显式 at → 后端建块 + 登记待放置件（进入放置态，鼠标跟随预览）
 check(lastExportModel.at === undefined || lastExportModel.at === null, 'GUI 确定不应带 at（走待放置件/放置态）');
 // 自动关窗（axis/parts 同款：成功后 300ms window.close）
