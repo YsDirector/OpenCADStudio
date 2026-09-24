@@ -62,8 +62,18 @@
     <div class="params">
       <label>标准</label><select id="std"><option>GB</option></select>
       <label>子类型</label><select id="subtype"></select>
-      <label>大小</label><select id="size"></select>
+      <label id="sizeLabel">大小</label><select id="size"></select>
+      <label id="nominalLabel">公称</label><select id="nominal"></select>
+      <label id="recoLabel">推荐值</label>
+      <select id="reco">
+        <option value="gb70_1">GB/T 70.1 内六角圆柱头（GB/T 152.3 表1）</option>
+        <option value="gb70_2">GB/T 70.2 内六角平圆头（GB/T 152.3 无表·缺）</option>
+        <option value="gb6190">GB 6190/6191/65 低圆柱头（GB/T 152.3 表2）</option>
+      </select>
       <label>配合</label><select id="fit"></select>
+    </div>
+    <div class="hint" id="sinkNote" style="display:none">
+      埋头推荐值：GB/T 70.3（内六角沉头）→ 沉孔按 <b>GB/T 152.2-2014</b>（M1.6–M10，90°）
     </div>
     <div class="views">
       <label>视图</label>
@@ -133,6 +143,7 @@ let kind = "threaded";     // simple | threaded | counterbore | countersink
 let modeKey = null;        // 上一次渲染的子类型模式（thread / plain）
 let sizeKey = "10|1.5";    // 维持「大小」选择跨列表切换
 let sizeD = 10;            // 当前公称直径（跨列表按 d 保选择）
+let nominalD = 10;         // 沉头/埋头 + 钻头/自定义 时的公称
 let threadPref = true;     // 沉头/埋头「带螺纹」开关的用户偏好
 let timer = 0;
 let lastValues = null;
@@ -162,7 +173,11 @@ function setOptions(id, pairs, preferred) {
 }
 
 function sizeTable() {
-  if (kind === "counterbore") return sizes.counterbore.rows;
+  // 沉头/埋头表（沉头按推荐值选 GB/T 152.3 表1/表2）
+  if (kind === "counterbore") {
+    const key = el("reco").value === "gb6190" ? "gb6190" : "gb70";
+    return sizes.counterbore.rows.filter((r) => r.table === key);
+  }
   if (kind === "countersink") return sizes.countersink.rows;
   return null;
 }
@@ -170,22 +185,29 @@ function sizeTable() {
 function sizeOptions() {
   const th = isThreaded();
   const sub = el("subtype").value;
-  const table = sizeTable();
-  const allowed = table ? new Set(table.map((r) => Number(r.d))) : null;
-  const keep = (list) => (allowed ? list.filter((r) => allowed.has(Number(r.d))) : list);
   if (th) {
     const list = sub === "fine" ? sizes.fine : sizes.coarse;
-    return keep(list).map((r) => [`${r.d}|${r.p}`, r.name]);
+    return list.map((r) => [`${r.d}|${r.p}`, r.name]);
   }
   if (sub === "drill") {
-    return keep(sizes.tap).map((r) => [`${r.d}|${r.p}`, `${r.name}（Ø${r.drill}）`]);
+    // 标准麻花钻直径系列（GB/T 6135.3-1996 直柄麻花钻）
+    return sizes.drill.diameters.map((d) => [String(d), `Ø${d}`]);
   }
   if (sub === "clearance") {
-    return keep(sizes.clearance.rows).map((r) => [String(r.d), `M${r.d}`]);
+    const table = sizeTable();
+    const allowed = table ? new Set(table.map((r) => Number(r.d))) : null;
+    const list = allowed
+      ? sizes.clearance.rows.filter((r) => allowed.has(Number(r.d)))
+      : sizes.clearance.rows;
+    return list.map((r) => [String(r.d), `M${r.d}`]);
   }
-  // 自定义：沉头/埋头按表选公称；简单孔用粗牙系列（公称只作记录）
-  const list = table || sizes.coarse;
-  return list.map((r) => [String(r.d), `M${r.d}`]);
+  return []; // 自定义：大小行隐藏
+}
+
+function nominalOptions() {
+  const table = sizeTable();
+  if (!table) return [];
+  return table.map((r) => [String(r.d), `M${r.d}`]);
 }
 
 function fitOptions() {
@@ -201,6 +223,7 @@ function fitOptions() {
 function syncUi() {
   const th = isThreaded();
   const counter = isCounter();
+  const sub = el("subtype").value;
   // 孔类型高亮
   for (const [id, key] of [
     ["kindSimple", "simple"], ["kindThreaded", "threaded"],
@@ -224,22 +247,42 @@ function syncUi() {
       setOptions("subtype", [["drill", "钻头大小"], ["custom", "自定义"], ["clearance", "螺栓间隙"]], "drill");
     }
   }
-  // 大小（跨列表尽量保住当前规格：先按完整键，再按公称直径）
+  const sub2 = el("subtype").value;
+  // 大小（螺纹/间隙/钻头共用一行；钻头时列表 = 麻花钻系列）
+  const showSize = sub2 !== "custom";
+  el("sizeLabel").style.display = showSize ? "" : "none";
+  el("size").style.display = showSize ? "" : "none";
+  el("sizeLabel").textContent = sub2 === "drill" ? "钻头" : "大小";
   const opts = sizeOptions();
   let preferred = opts.some((p) => p[0] === sizeKey) ? sizeKey : undefined;
   if (preferred === undefined) {
-    const hit = opts.find((p) => Number(p[0].split("|")[0]) === sizeD);
+    const hit =
+      opts.find((p) => Number(p[0].split("|")[0]) === sizeD) ||
+      opts.find((p) => Number(p[0].split("|")[0]) === nominalD);
     if (hit) preferred = hit[0];
   }
   setOptions("size", opts, preferred);
   sizeKey = el("size").value;
   sizeD = Number(sizeKey.split("|")[0]);
+  // 公称（沉头/埋头 + 钻头/自定义 才要）
+  const needNominal = counter && (sub2 === "drill" || sub2 === "custom");
+  el("nominalLabel").style.display = needNominal ? "" : "none";
+  el("nominal").style.display = needNominal ? "" : "none";
+  if (needNominal) {
+    setOptions("nominal", nominalOptions(), String(nominalD));
+    nominalD = Number(el("nominal").value);
+  }
+  // 推荐值（沉头）/ 埋头说明
+  const isCb = kind === "counterbore";
+  el("recoLabel").style.display = isCb ? "" : "none";
+  el("reco").style.display = isCb ? "" : "none";
+  el("sinkNote").style.display = kind === "countersink" ? "" : "none";
   // 配合
   const fits = fitOptions();
   setOptions("fit", fits, th ? "6H" : "normal");
   el("fit").disabled = fits.length === 1;
   // 自定义孔径行
-  const custom = !th && el("subtype").value === "custom";
+  const custom = !th && sub2 === "custom";
   el("customRow").style.display = custom ? "" : "none";
   el("customD").disabled = !custom;
 
@@ -276,14 +319,38 @@ function currentSize() {
 function currentModel() {
   const th = isThreaded();
   const sub = el("subtype").value;
-  const s = currentSize();
+  const counter = isCounter();
+  const subDrill = !th && sub === "drill";
+  const subCustom = !th && sub === "custom";
+  const useNominal = counter && (subDrill || subCustom);
+  let d;
+  if (useNominal) {
+    d = Number(el("nominal").value || 10);
+  } else if (subCustom) {
+    d = Number(el("customD").value || 10);
+  } else {
+    const v = (el("size").value || "").split("|");
+    d = Number(v[0] || 10);
+  }
+  let pitch = null;
+  let drill_d = null;
+  if (th) {
+    if (sub === "fine") {
+      const v = (el("size").value || "").split("|");
+      pitch = v.length > 1 && v[1] !== "" ? Number(v[1]) : null;
+    }
+  } else if (subDrill) {
+    drill_d = Number((el("size").value || "").split("|")[0]) || null;
+  }
   return {
     kind,
     subtype: sub,
-    d: s.d,
-    pitch: sub === "fine" ? s.p : null,
+    d,
+    pitch,
     fit: el("fit").value,
-    custom_d: !th && sub === "custom" ? Number(el("customD").value) : null,
+    custom_d: subCustom ? Number(el("customD").value) : null,
+    drill_d,
+    reco: el("reco").value,
     range: el("range").value,
     hole_depth: el("hAuto").checked ? null : Number(el("hDepth").value),
     thread_len:
@@ -384,6 +451,14 @@ el("size").addEventListener("change", () => {
   sizeD = Number(sizeKey.split("|")[0]);
   schedulePreview();
 });
+el("nominal").addEventListener("change", () => {
+  nominalD = Number(el("nominal").value || 10);
+  schedulePreview();
+});
+el("reco").addEventListener("change", () => {
+  syncUi();
+  schedulePreview();
+});
 el("hAuto").addEventListener("change", () => {
   syncUi();
   schedulePreview();
@@ -452,9 +527,16 @@ function ping(bye) {
     el("status").textContent = "数据表加载失败：" + e;
     return;
   }
+  setOptions("reco", [
+    ["gb70_1", "GB/T 70.1 内六角圆柱头（GB/T 152.3 表1）"],
+    ["gb70_2", "GB/T 70.2 内六角平圆头（GB/T 152.3 无表·缺）"],
+    ["gb6190", "GB 6190/6191/65 低圆柱头（GB/T 152.3 表2）"],
+  ], "gb70_1");
+  el("nominal").value = "10";
   syncUi();
   sizeKey = el("size").value;
   sizeD = Number(sizeKey.split("|")[0]);
+  nominalD = Number(el("nominal").value || 10);
   await refresh();
   ping(false);
   setInterval(() => ping(false), 4000);

@@ -76,24 +76,35 @@ struct ThreadTable {
     fine: Vec<ThreadRow>,
 }
 
-/// 沉头孔一行（GB/T 152.3-1988 圆柱头用沉孔）。
+/// 沉头孔一行（GB/T 152.3-1988；`table` = `gb70`（表1，GB 70）/ `gb6190`（表2，GB 6190、6191、65））。
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct CounterboreRow {
+    pub table: String,
     pub d: f64,
     pub d2: f64,
     pub t: f64,
+    #[allow(dead_code)]
+    pub d3: Option<f64>,
     #[allow(dead_code)]
     pub d1: f64,
 }
 
-/// 埋头孔一行（GB/T 152.2-1988 沉头用沉孔）。
+/// 埋头孔一行（GB/T 152.2-2014 沉头螺钉用沉孔）。
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct CountersinkRow {
     pub d: f64,
+    /// 沉孔直径（取标准 `dc_max`，与 1988 版 `d2` 交叉校验一致）。
     pub d2: f64,
+    /// 通孔（标准 `dh_min` = 公称，H13）。
+    pub d1: f64,
+    /// 名义深度 t≈（几何按 90° 锥：(d2−底孔)/2）。
     pub t: f64,
     #[allow(dead_code)]
-    pub d1: f64,
+    #[serde(default)]
+    pub dc_min: f64,
+    #[allow(dead_code)]
+    #[serde(default)]
+    pub dh_max: f64,
 }
 
 /// 螺栓间隙通孔一行（GB/T 5277-1985）。
@@ -166,6 +177,26 @@ fn tap_table() -> &'static JsonTable<TapRow> {
     })
 }
 
+/// 标准麻花钻直径系列（GB/T 6135.3-1996 直柄麻花钻）——「钻头大小」子类型。
+#[derive(Debug, Clone, serde::Deserialize)]
+struct DrillTable {
+    #[allow(dead_code)]
+    code: String,
+    #[allow(dead_code)]
+    source: String,
+    #[allow(dead_code)]
+    note: String,
+    diameters: Vec<f64>,
+}
+
+fn drill_table() -> &'static DrillTable {
+    static T: std::sync::OnceLock<DrillTable> = std::sync::OnceLock::new();
+    T.get_or_init(|| {
+        serde_json::from_str(include_str!("tables/holeDrill.json"))
+            .expect("tables/holeDrill.json 解析失败")
+    })
+}
+
 /// 查螺纹行：给螺距 = 粗牙/细牙里找精确 `(d, P)`；不给 = 查粗牙。
 pub fn thread_row(d: f64, pitch: Option<f64>) -> Result<&'static ThreadRow, String> {
     let t = thread_table();
@@ -207,16 +238,34 @@ pub fn is_fine(row: &ThreadRow) -> bool {
         .unwrap_or(true)
 }
 
-fn counterbore_row(d: f64) -> Result<&'static CounterboreRow, String> {
+fn counterbore_row(d: f64, table: &str) -> Result<&'static CounterboreRow, String> {
     let t = counterbore_table();
+    if table == "gb70_2" {
+        return Err(
+            "GB/T 152.3-1988 没有 GB/T 70.2（内六角平圆头）的沉孔表（官方只有 表1 适用 GB 70、".to_string()
+                + "表2 适用 GB 6190、GB 6191 及 GB 65），按不插值规则 70.2 标缺 —— 请选 70.1 或用自定义",
+        );
+    }
+    let key = match table {
+        "gb70_1" | "gb70" => "gb70",
+        "gb6190" => "gb6190",
+        other => return Err(format!("不认识的沉孔推荐值「{other}」（gb70_1/gb70_2/gb6190）")),
+    };
     t.rows
         .iter()
-        .find(|r| (r.d - d).abs() < 1e-9)
+        .find(|r| r.table == key && (r.d - d).abs() < 1e-9)
         .ok_or_else(|| {
+            let list: Vec<String> = t
+                .rows
+                .iter()
+                .filter(|r| r.table == key)
+                .map(|r| fmt(r.d))
+                .collect();
             format!(
-                "GB/T 152.3 圆柱头用沉孔表里没有 M{}（可用 {}）",
+                "GB/T 152.3-1988 {} 表里没有 M{}（可用 {}）",
+                key,
                 fmt(d),
-                t.rows.iter().map(|r| fmt(r.d)).collect::<Vec<_>>().join("/")
+                list.join("/")
             )
         })
 }
@@ -228,9 +277,10 @@ fn countersink_row(d: f64) -> Result<&'static CountersinkRow, String> {
         .find(|r| (r.d - d).abs() < 1e-9)
         .ok_or_else(|| {
             format!(
-                "GB/T 152.2 沉头用沉孔表里没有 M{}（可用 {}）",
+                "GB/T 152.2-2014（沉头螺钉用沉孔）表里没有 M{}（可用 M{}…M{}；标准只到 M10）",
                 fmt(d),
-                t.rows.iter().map(|r| fmt(r.d)).collect::<Vec<_>>().join("/")
+                fmt(t.rows.first().map(|r| r.d).unwrap_or(0.0)),
+                fmt(t.rows.last().map(|r| r.d).unwrap_or(0.0))
             )
         })
 }
@@ -261,7 +311,7 @@ fn tap_row(d: f64, pitch: Option<f64>) -> Result<&'static TapRow, String> {
     };
     hit.ok_or_else(|| {
         format!(
-            "底孔径表（钻头大小）里没有 M{}{} —— 表外不插值，换规格或改用「自定义」",
+            "底孔径表（螺纹孔底孔）里没有 M{}{}",
             fmt(d),
             pitch.map(|p| format!("×{}", fmt(p))).unwrap_or_default()
         )
@@ -303,16 +353,24 @@ pub fn sizes_json() -> String {
         "tap": tap_table().rows.iter().map(|r| serde_json::json!({
             "name": format!("M{}×{}", fmt(r.d), fmt(r.p)), "d": r.d, "p": r.p, "drill": r.drill,
         })).collect::<Vec<_>>(),
+        "drill": {
+            "code": drill_table().code,
+            "source": drill_table().source,
+            "diameters": drill_table().diameters,
+        },
         "counterbore": {
             "code": counterbore_table().code,
             "source": counterbore_table().source,
+            "note": counterbore_table().note,
             "rows": counterbore_table().rows.iter().map(|r| serde_json::json!({
-                "name": format!("M{}", fmt(r.d)), "d": r.d, "d2": r.d2, "t": r.t, "d1": r.d1,
+                "table": r.table, "name": format!("M{}", fmt(r.d)), "d": r.d,
+                "d2": r.d2, "t": r.t, "d1": r.d1,
             })).collect::<Vec<_>>(),
         },
         "countersink": {
             "code": countersink_table().code,
             "source": countersink_table().source,
+            "note": countersink_table().note,
             "rows": countersink_table().rows.iter().map(|r| serde_json::json!({
                 "name": format!("M{}", fmt(r.d)), "d": r.d, "d2": r.d2, "t": r.t, "d1": r.d1,
             })).collect::<Vec<_>>(),
@@ -400,6 +458,10 @@ pub struct HoleModel {
     pub fit: String,
     /// 自定义底孔径（子类型 = 自定义时必填）。
     pub custom_d: Option<f64>,
+    /// 钻头直径（子类型 = 钻头大小；标准麻花钻系列）。
+    pub drill_d: Option<f64>,
+    /// 沉头孔推荐值：`gb70_1`（内六角圆柱头 GB/T 70.1，默认）/ `gb70_2`（内六角平圆头，GB/T 152.3 无表 → 报错）/ `gb6190`（GB 6190/6191/65）。
+    pub reco: String,
     pub range: HoleRange,
     /// 孔深（从沉孔底/埋头锥底起算；无沉/埋时即孔口）；`None` = 自动。
     pub hole_depth: Option<f64>,
@@ -423,6 +485,8 @@ impl Default for HoleModel {
             pitch: None,
             fit: "6H".to_string(),
             custom_d: None,
+            drill_d: None,
+            reco: "gb70_1".to_string(),
             range: HoleRange::Blind,
             hole_depth: None,
             thread_len: None,
@@ -558,18 +622,30 @@ pub fn resolve(model: &HoleModel) -> Result<HoleValues, String> {
                 fmt3(minor)
             ));
         }
-        (row.name.clone(), model.d, minor, p, minor)
+        // 螺纹孔的钻孔直径：优先用底孔牙深表的实际钻头（用户口径），
+        // 表外回退到 GB/T 197 理论小径 d−1.0825P（标准公式，非插值）。
+        let drill = tap_row(model.d, Some(p)).map(|r| r.drill).unwrap_or(minor);
+        (row.name.clone(), model.d, minor, p, drill)
     } else {
         match model.subtype {
             HoleSubtype::Drill => {
-                let row = tap_row(model.d, model.pitch)?;
-                (
-                    format!("M{}×{}", fmt(row.d), fmt(row.p)),
-                    row.drill,
-                    row.drill,
-                    0.0,
-                    row.drill,
-                )
+                let d = model
+                    .drill_d
+                    .filter(|v| v.is_finite() && *v > 0.0)
+                    .ok_or_else(|| {
+                        "钻头大小需要选一个标准麻花钻直径（GB/T 6135.3 系列）".to_string()
+                    })?;
+                if !drill_table()
+                    .diameters
+                    .iter()
+                    .any(|x| (x - d).abs() < 1e-9)
+                {
+                    return Err(format!(
+                        "Ø{} 不在 GB/T 6135.3-1996 直柄麻花钻直径系列里（0.20–20.00）—— 表外不插值",
+                        fmt(d)
+                    ));
+                }
+                (format!("Ø{}", fmt(d)), d, d, 0.0, d)
             }
             HoleSubtype::Custom => {
                 let c = model
@@ -608,7 +684,7 @@ pub fn resolve(model: &HoleModel) -> Result<HoleValues, String> {
     // ② 沉头 / 埋头
     let (bore_d, bore_t, sink_d, sink_t) = match model.kind {
         HoleKind::Counterbore => {
-            let r = counterbore_row(model.d)?;
+            let r = counterbore_row(model.d, &model.reco)?;
             if base_d >= r.d2 - 1e-9 {
                 return Err(format!(
                     "底孔径 Ø{} 不小于沉孔直径 Ø{}（GB/T 152.3 M{}）",
@@ -903,7 +979,7 @@ pub fn place(entities: Vec<EntityType>, at: [f64; 2], rot_deg: f64) -> Vec<Entit
 /// 块名：只由几何模型决定（FNV-1a，跨进程稳定）。
 pub fn block_name(model: &HoleModel) -> String {
     let canonical = format!(
-        "{:?}|{:?}|{}|{}|{:?}|{:?}|{}|{}|{}|{}|{}|{:?}",
+        "{:?}|{:?}|{}|{}|{:?}|{:?}|{}|{}|{}|{}|{}|{:?}|{}",
         model.kind,
         model.subtype,
         model.d,
@@ -916,6 +992,7 @@ pub fn block_name(model: &HoleModel) -> String {
         model.fit,
         model.custom_d.map(fmt).unwrap_or_default(),
         model.range,
+        format!("{:?}|{}", model.drill_d, model.reco),
     );
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
     for byte in canonical.as_bytes() {
@@ -958,7 +1035,7 @@ pub fn ocsm_ready(doc: &ocs_plugin_api::host::acadrust::CadDocument) -> Result<(
 
 /// 命令行用法（一行直插）。
 pub const USAGE: &str = "OCSMHOLE / DK：\
-`OCSMHOLE [简单孔|螺纹孔|沉头孔|埋头孔] [带螺纹|无螺纹] [钻孔|自定义|间隙] M10 [P1.5] [孔径8.5] [H18] [L15] [盲孔|贯通] [全长] [6H|6G|精装配|中等装配|粗装配] [view 侧视图|俯视图|双视图] [at x,y] [rot 度]`";
+`OCSMHOLE [简单孔|螺纹孔|沉头孔|埋头孔] [带螺纹|无螺纹] [钻孔 Ø8.5|自定义 孔径8.5|间隙 中等装配] M10 [P1.5] [推荐70.1|70.2] [H18] [L15] [盲孔|贯通] [全长] [6H|6G] [view 侧视图|俯视图|双视图] [at x,y] [rot 度]`";
 
 /// 取关键字参数：`H=18` / `H18` / `H 18` 都收（`keys` 按长到短放）。
 fn take_arg(tokens: &[String], i: &mut usize, t: &str, keys: &[&str]) -> Result<String, String> {
@@ -1003,6 +1080,7 @@ pub fn parse_program(text: &str) -> Result<HoleModel, String> {
         ..Default::default()
     };
     let mut size_seen = false;
+    let mut size_is_dia = false;
     let tokens: Vec<String> = s.split_whitespace().map(|t| t.to_string()).collect();
     let mut i = 0;
     while i < tokens.len() {
@@ -1033,6 +1111,9 @@ pub fn parse_program(text: &str) -> Result<HoleModel, String> {
                 }
             }
             "钻孔" | "钻头" | "钻头大小" | "drill" => m.subtype = HoleSubtype::Drill,
+            "70.1" | "gb70.1" | "gb70_1" => m.reco = "gb70_1".to_string(),
+            "70.2" | "gb70.2" | "gb70_2" => m.reco = "gb70_2".to_string(),
+            "6190" | "gb6190" => m.reco = "gb6190".to_string(),
             "自定义" | "custom" => m.subtype = HoleSubtype::Custom,
             "间隙" | "螺栓间隙" | "clearance" => {
                 m.subtype = HoleSubtype::Clearance;
@@ -1130,7 +1211,32 @@ pub fn parse_program(text: &str) -> Result<HoleModel, String> {
                     return Err(format!("配合「{v}」不支持（6H/6G 或 精装配/中等装配/粗装配）"));
                 }
             }
+            _ if t.starts_with("公称") => {
+                let rest = take_arg(&tokens, &mut i, t, &["公称", "nominal", "nom"])?;
+                let body = rest
+                    .trim()
+                    .trim_start_matches(['m', 'M', 'Ø', 'Φ'])
+                    .replace('×', "x");
+                m.d = body
+                    .split('x')
+                    .next()
+                    .unwrap_or("")
+                    .trim()
+                    .parse()
+                    .map_err(|_| format!("公称直径非法：{rest}"))?;
+                size_seen = true;
+            }
+            _ if t.starts_with("推荐") || lower.starts_with("reco") => {
+                let v = take_arg(&tokens, &mut i, t, &["推荐", "RECO", "reco"])?;
+                m.reco = match v.trim().to_ascii_uppercase().as_str() {
+                    "70.1" | "GB70.1" | "GB70_1" => "gb70_1".to_string(),
+                    "70.2" | "GB70.2" | "GB70_2" => "gb70_2".to_string(),
+                    "6190" | "GB6190" => "gb6190".to_string(),
+                    other => return Err(format!("不认识的沉孔推荐值「{other}」（70.1/70.2/6190）")),
+                };
+            }
             _ if t.chars().next().is_some_and(|c| c == 'm' || c == 'M' || c == 'Ø' || c == 'Φ') => {
+                let dia = t.starts_with('Ø') || t.starts_with('Φ');
                 let body = t
                     .trim_start_matches(['m', 'M', 'Ø', 'Φ'])
                     .replace('×', "x")
@@ -1139,10 +1245,19 @@ pub fn parse_program(text: &str) -> Result<HoleModel, String> {
                     Some((d, p)) => (d.to_string(), Some(p.to_string())),
                     None => (body.clone(), None),
                 };
-                m.d = d_str
+                let v: f64 = d_str
                     .trim()
                     .parse()
-                    .map_err(|_| format!("尺寸非法：{t}（例 M10 / M10x1.25）"))?;
+                    .map_err(|_| format!("尺寸非法：{t}（例 M10 / M10x1.25 / Ø8.5）"))?;
+                if dia {
+                    m.drill_d = Some(v);
+                    if m.kind == HoleKind::Simple || !size_seen {
+                        m.d = v;
+                    }
+                    size_is_dia = true;
+                } else {
+                    m.d = v;
+                }
                 if let Some(p) = p_str {
                     let p: f64 = p.trim().parse().map_err(|_| format!("螺距非法：{t}"))?;
                     m.pitch = Some(p);
@@ -1169,6 +1284,15 @@ pub fn parse_program(text: &str) -> Result<HoleModel, String> {
         && matches!(m.subtype, HoleSubtype::Standard | HoleSubtype::Fine)
     {
         m.subtype = HoleSubtype::Drill;
+    }
+    // 裸 Ø 值在没有 M 公称时同时当 d（简单孔）
+    if m.subtype == HoleSubtype::Drill && m.drill_d.is_none() && size_is_dia {
+        m.drill_d = Some(m.d);
+    }
+    if m.kind == HoleKind::Simple {
+        if let Some(v) = m.drill_d {
+            m.d = v;
+        }
     }
     Ok(m)
 }
@@ -1497,14 +1621,21 @@ mod tests {
     }
 
     fn plain(kind: HoleKind, subtype: HoleSubtype, d: f64) -> HoleModel {
-        HoleModel {
+        let mut m = HoleModel {
             kind,
             subtype,
             d,
             fit: "normal".to_string(),
             hole_depth: Some(20.0),
             ..Default::default()
+        };
+        if subtype == HoleSubtype::Drill {
+            m.drill_d = Some(if kind == HoleKind::Simple { d } else { 8.5 });
         }
+        if subtype == HoleSubtype::Custom {
+            m.custom_d = Some(5.0);
+        }
+        m
     }
 
     /// 自动螺纹长度 = 1.5d（GB/T 3098.1-2010 口径）。
@@ -1636,18 +1767,17 @@ mod tests {
     /// 沉头/埋头/间隙/钻头四表交叉校验 + 数值样例。
     #[test]
     fn new_tables_cross_check() {
-        // 152.3 的 d1 = 5277 中等装配（逐条）
+        // GB/T 152.3 表1/表2 的 d1 = 5277 中等装配（M1.6 除外：表1 1.8 vs 2.0，为 1988 版口径）
+        let mut diffs = 0;
         for r in &counterbore_table().rows {
             let c = clearance_row(r.d).unwrap();
-            assert!(
-                (c.normal - r.d1).abs() < 1e-9,
-                "GB/T 152.3 M{} d1={} vs 5277 中等={}",
-                r.d,
-                r.d1,
-                c.normal
-            );
+            if (c.normal - r.d1).abs() > 1e-9 {
+                diffs += 1;
+                assert!((r.d - 1.6).abs() < 1e-9, "沉头表 M{} d1 与 5277 不符", r.d);
+            }
         }
-        // 152.2 的 d1 = 5277 中等装配（M1.6 除外：源表 1.8 vs 2.0）
+        assert_eq!(diffs, 1, "只有 M1.6 一处已知差异");
+        // GB/T 152.2-2014 的 dh = 5277 中等装配（M1.6 同上）
         let mut diffs = 0;
         for r in &countersink_table().rows {
             let c = clearance_row(r.d).unwrap();
@@ -1656,21 +1786,33 @@ mod tests {
                 assert!((r.d - 1.6).abs() < 1e-9, "埋头表 M{} d1 与 5277 不符", r.d);
             }
         }
-        assert_eq!(diffs, 1, "只有 M1.6 一处已知差异");
-        // 样例：M10 沉头 = Ø18×11；M10 埋头 = Ø20.3（90°）；M10 间隙 = 精 10.5/中 11/粗 12
-        let cb = counterbore_row(10.0).unwrap();
+        assert_eq!(diffs, 1, "埋头表只应有 M1.6 一处已知差异");
+        // 样例：M10 沉头（70.1 表1）= Ø18×11；M10 埋头（152.2-2014）= Ø20.3；M10 间隙 = 10.5/11/12
+        let cb = counterbore_row(10.0, "gb70_1").unwrap();
         assert!((cb.d2 - 18.0).abs() < 1e-9 && (cb.t - 11.0).abs() < 1e-9);
+        // 官方 M30 d3=36（JLC 页误写 6）
+        let m30 = counterbore_row(30.0, "gb70_1").unwrap();
+        assert_eq!(m30.d3, Some(36.0), "GB/T 152.3 官方 M30 d3=36");
         let cs = countersink_row(10.0).unwrap();
         assert!((cs.d2 - 20.3).abs() < 1e-9);
         let cl = clearance_row(10.0).unwrap();
         assert!((cl.close - 10.5).abs() < 1e-9);
         assert!((cl.normal - 11.0).abs() < 1e-9);
         assert!((cl.loose - 12.0).abs() < 1e-9);
-        // 钻头表样例：M10×1.5 → Ø8.5；M12×1.25 → Ø10.8
+        // 底孔牙深表（螺纹孔底孔）样例：M10×1.5 → Ø8.5；M12×1.25 → Ø10.8
         assert!((tap_row(10.0, Some(1.5)).unwrap().drill - 8.5).abs() < 1e-9);
         assert!((tap_row(12.0, Some(1.25)).unwrap().drill - 10.8).abs() < 1e-9);
+        // 标准麻花钻系列：用户例 ∅5.1/5.2/6.7/6.8/8.5 均在；0.20–20.00
+        for x in [5.1, 5.2, 6.7, 6.8, 8.5, 0.2, 20.0] {
+            assert!(
+                drill_table().diameters.iter().any(|v| (v - x).abs() < 1e-9),
+                "麻花钻系列缺 Ø{x}"
+            );
+        }
+        assert_eq!(drill_table().diameters.len(), 198);
         // 表外明确报错（不插值）
-        assert!(counterbore_row(7.0).is_err());
+        assert!(counterbore_row(7.0, "gb70_1").is_err());
+        assert!(counterbore_row(10.0, "gb70_2").unwrap_err().contains("70.2"));
         assert!(countersink_row(24.0).is_err());
         assert!(clearance_row(0.9).is_err());
         assert!(tap_row(13.0, None).is_err());
@@ -1700,9 +1842,15 @@ mod tests {
         assert!((v.base_d - 10.5).abs() < 1e-9);
         assert!((v.sink_d.unwrap() - 20.3).abs() < 1e-9);
         assert!((v.base_start - 4.9).abs() < 1e-9);
-        // 钻头大小：M8×1.25 → Ø6.8
-        let v = resolve(&plain(HoleKind::Simple, HoleSubtype::Drill, 8.0)).unwrap();
+        // 钻头大小：标准麻花钻 Ø6.8（GB/T 6135.3）
+        let mut m = plain(HoleKind::Simple, HoleSubtype::Drill, 6.8);
+        m.drill_d = Some(6.8);
+        let v = resolve(&m).unwrap();
         assert!((v.base_d - 6.8).abs() < 1e-9);
+        // 表外钻头（Ø6.85 不在直柄系列）→ 明确报错
+        m.drill_d = Some(6.85);
+        assert!(resolve(&m).unwrap_err().contains("麻花钻"));
+        m.drill_d = Some(6.8);
         // 自定义：孔径 5
         let mut m = plain(HoleKind::Simple, HoleSubtype::Custom, 10.0);
         m.custom_d = Some(5.0);
@@ -1875,22 +2023,36 @@ mod tests {
         assert_eq!(m.at, Some([100.0, 50.0]));
         assert_eq!(m.rot, 30.0);
 
-        let s = parse_program("简单孔 M10 钻孔 H20 俯视图").unwrap();
+        let s = parse_program("简单孔 钻孔 Ø8.5 H20 俯视图").unwrap();
         assert_eq!(s.kind, HoleKind::Simple);
         assert_eq!(s.subtype, HoleSubtype::Drill);
+        assert_eq!(s.drill_d, Some(8.5));
+        assert_eq!(s.d, 8.5, "简单孔 Ø = 公称");
         assert_eq!(s.hole_depth, Some(20.0));
         assert_eq!(s.views, HoleViews { side: false, top: true });
-        // 简单孔没写子类型 → 默认钻头大小（不报「简单孔不带螺纹」）
-        let d = parse_program("简单孔 M10 H20").unwrap();
+        assert!(resolve(&s).is_ok());
+        // 简单孔没写子类型 → 默认钻头大小（不报「简单孔不带螺纹」）；需给 Ø 钻头
+        let d = parse_program("简单孔 钻头 Ø8.5 H20").unwrap();
         assert_eq!(d.subtype, HoleSubtype::Drill);
         assert!(resolve(&d).is_ok());
+        assert!(parse_program("简单孔 M10 H20").is_err() || resolve(&parse_program("简单孔 M10 H20").unwrap()).is_err());
 
         let c = parse_program("沉头孔 无螺纹 M10 间隙 中等装配 H22").unwrap();
         assert_eq!(c.kind, HoleKind::Counterbore);
         assert_eq!(c.subtype, HoleSubtype::Clearance);
         assert_eq!(c.fit, "normal");
+        assert_eq!(c.reco, "gb70_1");
+        // 沉头推荐值 70.2 → 解析得到，但 resolve 明确报「标缺」（GB/T 152.3 无此表）
+        let c72 = parse_program("沉头孔 无螺纹 M10 间隙 H22 推荐70.2").unwrap();
+        assert_eq!(c72.reco, "gb70_2");
+        assert!(resolve(&c72).unwrap_err().contains("70.2"));
+        // 沉头 + 公称 + 钻头（两个值）
+        let cd = parse_program("沉头孔 无螺纹 钻孔 Ø8.5 公称M10 H22").unwrap();
+        assert_eq!(cd.d, 10.0);
+        assert_eq!(cd.drill_d, Some(8.5));
+        assert!(resolve(&cd).is_ok());
 
-        let k = parse_program("埋头孔 带螺纹 M12 细牙 全长 H30 配合6G").unwrap();
+        let k = parse_program("埋头孔 带螺纹 M10 细牙 全长 H30 配合6G").unwrap();
         assert_eq!(k.kind, HoleKind::Countersink);
         assert_eq!(k.subtype, HoleSubtype::Fine);
         assert_eq!(k.fit, "6G");
@@ -1974,9 +2136,10 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(&sizes_json()).unwrap();
         assert!(v["coarse"].as_array().unwrap().len() >= 40);
         assert!(v["fine"].as_array().unwrap().len() >= 100);
-        assert_eq!(v["counterbore"]["rows"].as_array().unwrap().len(), 12);
-        assert_eq!(v["countersink"]["rows"].as_array().unwrap().len(), 14);
+        assert_eq!(v["counterbore"]["rows"].as_array().unwrap().len(), 25);
+        assert_eq!(v["countersink"]["rows"].as_array().unwrap().len(), 10);
         assert_eq!(v["clearance"]["rows"].as_array().unwrap().len(), 50);
         assert_eq!(v["tap"].as_array().unwrap().len(), 83);
+        assert_eq!(v["drill"]["diameters"].as_array().unwrap().len(), 198);
     }
 }

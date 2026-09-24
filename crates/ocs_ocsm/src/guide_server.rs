@@ -14501,10 +14501,11 @@ mod weld_tests {
         let v: serde_json::Value = serde_json::from_str(&j).unwrap();
         assert_eq!(v["ok"], true);
         assert!(v["coarse"].as_array().unwrap().len() >= 40);
-        assert_eq!(v["counterbore"]["rows"].as_array().unwrap().len(), 12);
-        assert_eq!(v["countersink"]["rows"].as_array().unwrap().len(), 14);
+        assert_eq!(v["counterbore"]["rows"].as_array().unwrap().len(), 25);
+        assert_eq!(v["countersink"]["rows"].as_array().unwrap().len(), 10);
         assert_eq!(v["clearance"]["rows"].as_array().unwrap().len(), 50);
         assert_eq!(v["tap"].as_array().unwrap().len(), 83);
+        assert_eq!(v["drill"]["diameters"].as_array().unwrap().len(), 198);
         // 预览：M10×1.5 自动 15/18，D1=10、D=8.376，SVG 带材料板剖面线
         let body = serde_json::json!({
             "kind": "threaded", "subtype": "standard", "d": 10.0,
@@ -14535,14 +14536,35 @@ mod weld_tests {
         assert_eq!(v["values"]["base_d"], "11", "{j}");
         assert_eq!(v["values"]["bore_d"], "18");
         assert_eq!(v["values"]["bore_t"], "11");
-        // 表外规格明确报错（不插值）
+        // 表外规格明确报错（不插值：M7 不在 152.3 表内；先给钻头避免提前报钻头缺失）
         let bad = serde_json::json!({
-            "kind": "counterbore", "subtype": "drill", "d": 7.0,
+            "kind": "counterbore", "subtype": "drill", "d": 7.0, "drill_d": 8.5,
             "range": "blind", "hole_depth": 20.0, "views": {"side": true, "top": false}
         })
         .to_string();
         let j = http_req(server.port, "POST", "/api/hole_preview", &bad);
         assert!(j.contains("\"ok\":false") && j.contains("152.3"), "{j}");
+        // 70.2 标缺 → 明确报错
+        let bad = serde_json::json!({
+            "kind": "counterbore", "subtype": "clearance", "d": 10.0, "fit": "normal",
+            "reco": "gb70_2", "range": "blind", "hole_depth": 22.0,
+            "views": {"side": true, "top": false}
+        })
+        .to_string();
+        let j = http_req(server.port, "POST", "/api/hole_preview", &bad);
+        assert!(j.contains("70.2") && j.contains("标缺"), "{j}");
+        // 螺纹底孔按底孔牙深表：M10×1.5 → 底孔 Ø8.5（minor 仍 8.376）
+        let body_t = serde_json::json!({
+            "kind": "threaded", "subtype": "standard", "d": 10.0,
+            "pitch": null, "fit": "6H", "range": "blind",
+            "hole_depth": null, "thread_len": null, "full_thread": false,
+            "views": {"side": true, "top": false}
+        })
+        .to_string();
+        let j = http_req(server.port, "POST", "/api/hole_preview", &body_t);
+        let v: serde_json::Value = serde_json::from_str(&j).unwrap();
+        assert_eq!(v["values"]["base_d"], "8.5", "螺纹底孔用底孔牙深表：{j}");
+        assert_eq!(v["values"]["minor"], "8.376");
         // 导出（无 at → 待放置件）
         let resp = apply_hole_export(&sender, body.as_bytes()).expect("出图");
         assert!(resp.contains("\"ok\":true") && resp.contains("已生成沉头孔"), "{resp}");

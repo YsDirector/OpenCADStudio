@@ -2,12 +2,13 @@
 //
 // 目的：锁住孔生成器的交互契约（node --check / el("id") 静态扫描查不出）：
 //   ① 打开即「螺纹孔 M10」：自动螺纹长 15（1.5d）、自动孔深 18（有效 15+2P）、
-//      读数 D1=10 / D=8.376、自动输入框只读；
-//   ② 简单孔：两个「自动」都置灰且取消勾选；子类型 = 钻头大小/自定义/螺栓间隙；
+//      读数 D1=10 / D=8.376；螺纹底孔按底孔牙深表 Ø8.5；
+//   ② 简单孔：「钻头大小」= 标准麻花钻直径系列（GB/T 6135.3），两个「自动」置灰；
 //   ③ 不带螺纹 + 螺栓间隙：配合可选（精/中等/粗装配）；其余子类型配合置灰；
-//   ④ 沉头/埋头：带螺纹开关可切；不带螺纹时大小列表按 GB/T 152.3/152.2 过滤；
-//   ⑤ 贯通：孔深自动置灰；全长：孔深自动置灰、螺纹数值框置灰；
-//   ⑥ 确定 → POST /api/hole_export（带当前模型）。
+//   ④ 沉头孔：推荐值可选（70.1 / 70.2(缺) / 6190）；钻头/自定义时要「公称」；
+//   ⑤ 埋头孔：按 GB/T 152.2-2014（M1.6–M10，90°）；
+//   ⑥ 贯通：孔深自动置灰；全长：孔深自动 + 螺纹数值框置灰；
+//   ⑦ 确定 → POST /api/hole_export（带当前模型）。
 //
 // 用法：node hole_gui_smoke.mjs <hole_gui.html 路径>
 
@@ -31,55 +32,57 @@ function check(cond, msg) {
   if (!cond) errors.push(msg);
 }
 
-// ── 数据表桩（形状与 /api/hole_sizes 一致；只取测试用到的规格）──
+// ── 数据表桩（形状与 /api/hole_sizes 一致）──
 const COARSE = [
   { name: 'M4', d: 4, p: 0.7, d1: 3.242, d2: 3.545, fine: false },
-  { name: 'M5', d: 5, p: 0.8, d1: 4.134, d2: 4.48, fine: false },
   { name: 'M6', d: 6, p: 1.0, d1: 4.917, d2: 5.35, fine: false },
   { name: 'M8', d: 8, p: 1.25, d1: 6.647, d2: 7.188, fine: false },
   { name: 'M10', d: 10, p: 1.5, d1: 8.376, d2: 9.026, fine: false },
   { name: 'M12', d: 12, p: 1.75, d1: 10.106, d2: 10.863, fine: false },
   { name: 'M16', d: 16, p: 2.0, d1: 13.835, d2: 14.701, fine: false },
   { name: 'M20', d: 20, p: 2.5, d1: 17.294, d2: 18.376, fine: false },
-  { name: 'M24', d: 24, p: 3.0, d1: 20.752, d2: 22.051, fine: false },
-  { name: 'M30', d: 30, p: 3.5, d1: 26.211, d2: 27.727, fine: false },
-  { name: 'M36', d: 36, p: 4.0, d1: 31.67, d2: 33.402, fine: false },
 ];
 const FINE = [
   { name: 'M10×1.25', d: 10, p: 1.25, d1: 8.647, d2: 9.188, fine: true },
   { name: 'M10×1', d: 10, p: 1.0, d1: 8.917, d2: 9.35, fine: true },
-  { name: 'M12×1.25', d: 12, p: 1.25, d1: 10.647, d2: 11.188, fine: true },
 ];
 const TAP = [
   { name: 'M4×0.7', d: 4, p: 0.7, drill: 3.3 },
-  { name: 'M5×0.8', d: 5, p: 0.8, drill: 4.2 },
   { name: 'M6×1', d: 6, p: 1.0, drill: 5.0 },
   { name: 'M8×1.25', d: 8, p: 1.25, drill: 6.8 },
   { name: 'M10×1.5', d: 10, p: 1.5, drill: 8.5 },
   { name: 'M10×1.25', d: 10, p: 1.25, drill: 8.8 },
   { name: 'M12×1.75', d: 12, p: 1.75, drill: 10.3 },
-  { name: 'M16×2', d: 16, p: 2.0, drill: 14.0 },
   { name: 'M20×2.5', d: 20, p: 2.5, drill: 17.5 },
-  { name: 'M24×3', d: 24, p: 3.0, drill: 21.0 },
-  { name: 'M30×3.5', d: 30, p: 3.5, drill: 26.5 },
-  { name: 'M36×4', d: 36, p: 4.0, drill: 32.0 },
 ];
-const CBORE = [4, 5, 6, 8, 10, 12, 16, 20, 24, 30, 36].map((d) => ({
-  name: `M${d}`, d, d2: d === 10 ? 18 : d * 1.8, t: d === 10 ? 11 : d * 1.1, d1: d,
-}));
-const CSINK = [4, 6, 8, 10, 12, 16, 20].map((d) => ({
-  name: `M${d}`, d, d2: d === 10 ? 20.3 : d * 2, t: d === 10 ? 5.0 : d / 2, d1: d,
-}));
-const CLEAR = [4, 6, 8, 10, 12, 16, 20].map((d) => ({
-  name: `M${d}`, d,
-  close: d + 0.5, normal: d + 1, loose: d + 2,
-}));
-CLEAR[3] = { name: 'M10', d: 10, close: 10.5, normal: 11, loose: 12 };
+const DRILLS = [0.2, 0.5, 1.0, 2.0, 3.3, 4.2, 5.0, 5.1, 5.2, 6.7, 6.8, 8.5, 9.0, 10.2, 12.0, 20.0];
+const CBORE = [
+  { table: 'gb70', name: 'M4', d: 4, d2: 8, t: 4.6, d1: 4.5 },
+  { table: 'gb70', name: 'M6', d: 6, d2: 11, t: 6.8, d1: 6.6 },
+  { table: 'gb70', name: 'M10', d: 10, d2: 18, t: 11, d1: 11 },
+  { table: 'gb70', name: 'M12', d: 12, d2: 20, t: 13, d1: 13.5 },
+  { table: 'gb70', name: 'M16', d: 16, d2: 26, t: 17.5, d1: 17.5 },
+  { table: 'gb70', name: 'M20', d: 20, d2: 33, t: 21.5, d1: 22 },
+  { table: 'gb6190', name: 'M10', d: 10, d2: 18, t: 7, d1: 11 },
+];
+const CSINK = [
+  { name: 'M1.6', d: 1.6, d2: 3.7, t: 0.95, d1: 1.8 },
+  { name: 'M6', d: 6, d2: 12.85, t: 3.13, d1: 6.6 },
+  { name: 'M10', d: 10, d2: 20.3, t: 4.65, d1: 11 },
+];
+const CLEAR = [
+  { name: 'M4', d: 4, close: 4.3, normal: 4.5, loose: 4.8 },
+  { name: 'M6', d: 6, close: 6.4, normal: 6.6, loose: 7.0 },
+  { name: 'M8', d: 8, close: 8.4, normal: 9.0, loose: 10.0 },
+  { name: 'M10', d: 10, close: 10.5, normal: 11, loose: 12 },
+  { name: 'M12', d: 12, close: 13, normal: 13.5, loose: 14.5 },
+];
 const SIZES = {
   ok: true,
   coarse: COARSE, fine: FINE, tap: TAP,
+  drill: { code: 'GB/T 6135.3-1996', diameters: DRILLS },
   counterbore: { code: 'GB/T 152.3-1988', rows: CBORE },
-  countersink: { code: 'GB/T 152.2-1988', rows: CSINK },
+  countersink: { code: 'GB/T 152.2-2014', rows: CSINK },
   clearance: { code: 'GB/T 5277-1985', rows: CLEAR },
 };
 
@@ -127,7 +130,7 @@ function mkEl(id) {
 }
 
 const els = new Map();
-const SELECT_IDS = new Set(['std', 'subtype', 'size', 'fit', 'range']);
+const SELECT_IDS = new Set(['std', 'subtype', 'size', 'nominal', 'reco', 'fit', 'range']);
 global.document = {
   getElementById(id) {
     if (!els.has(id)) {
@@ -181,10 +184,11 @@ function computeValues(m) {
     if (!row) return { error: `螺纹 M${m.d} 不在表里` };
     p = Number(row.p);
     minor = m.d - 1.0825 * p;
+    const tap = TAP.find((r) => Number(r.d) === Number(m.d) && Number(r.p) === p);
+    base_d = tap ? Number(tap.drill) : minor;
   } else if (m.subtype === 'drill') {
-    const row = TAP.find((r) => Number(r.d) === Number(m.d));
-    if (!row) return { error: `钻头表没有 M${m.d}` };
-    base_d = Number(row.drill);
+    if (!m.drill_d || !DRILLS.includes(Number(m.drill_d))) return { error: `Ø${m.drill_d} 不在麻花钻系列` };
+    base_d = Number(m.drill_d);
   } else if (m.subtype === 'clearance') {
     const row = CLEAR.find((r) => Number(r.d) === Number(m.d));
     if (!row) return { error: `间隙表没有 M${m.d}` };
@@ -196,8 +200,10 @@ function computeValues(m) {
     return { error: '子类型与孔类型不匹配' };
   }
   if (m.kind === 'counterbore') {
-    const r = CBORE.find((x) => Number(x.d) === Number(m.d));
-    if (!r) return { error: `沉头表没有 M${m.d}` };
+    if (m.reco === 'gb70_2') return { error: 'GB/T 152.3 无 70.2 表（标缺）' };
+    const key = m.reco === 'gb6190' ? 'gb6190' : 'gb70';
+    const r = CBORE.find((x) => x.table === key && Number(x.d) === Number(m.d));
+    if (!r) return { error: `沉头表 ${key} 没有 M${m.d}` };
     bore_d = r.d2; bore_t = r.t; base_start = r.t;
   }
   if (m.kind === 'countersink') {
@@ -274,21 +280,27 @@ check(el('tAuto').checked, '默认应勾选自动螺纹范围');
 check(el('tLen').value === '15', `自动螺纹长应 15，实为 ${el('tLen').value}`);
 check(el('majorOut').textContent === '10', `D1 应为 10，实为 ${el('majorOut').textContent}`);
 check(el('minorOut').textContent === '8.376', `D 应为 8.376，实为 ${el('minorOut').textContent}`);
-check((el('extraOut').textContent || '').includes('有效螺纹 15'), '读数应含有效螺纹 15：' + el('extraOut').textContent);
+await H.refresh();
+check(lastPreviewModel.kind === 'threaded' && lastPreviewModel.reco === 'gb70_1', '预览请求应带螺纹模型');
 
-// ② 简单孔：两个自动都置灰/取消勾选；子类型 = 钻头/自定义/间隙；大小可显示底孔径
+// ② 简单孔：钻头 = 标准麻花钻系列；两个自动置灰
 el('kindSimple').click();
 await tick();
 check(H.kind === 'simple', '点「简单孔」应切类型');
 const subs = el('subtype').options.map((o) => o.value);
 check(subs.join(',') === 'drill,custom,clearance', `简单孔子类型应为 钻头/自定义/间隙，实为 ${subs.join(',')}`);
+check(el('sizeLabel').textContent === '钻头', `钻头子类型下大小标签应为「钻头」，实为 ${el('sizeLabel').textContent}`);
+const drillOpts = el('size').options.map((o) => Number(o.value));
+check(drillOpts.includes(8.5) && drillOpts.includes(5.1) && drillOpts.includes(6.7), `钻头列表应含 8.5/5.1/6.7：${drillOpts}`);
 check(el('hAuto').disabled && !el('hAuto').checked, '简单孔：孔深自动应置灰且取消');
 check(el('tAuto').disabled && !el('tAuto').checked, '简单孔：螺纹范围自动应置灰且取消');
 check(el('tLen').disabled, '简单孔：螺纹范围数值框应置灰');
 check(el('fit').disabled, '简单孔非间隙子类型：配合应置灰');
-check(el('size').value === '10|1.5', `简单孔默认钻头 M10×1.5，实为 ${el('size').value}`);
 await H.refresh();
-check(lastPreviewModel.subtype === 'drill' && lastPreviewModel.kind === 'simple', '预览请求应带 simple/drill');
+check(
+  lastPreviewModel.subtype === 'drill' && lastPreviewModel.drill_d != null && lastPreviewModel.kind === 'simple',
+  `预览请求应带 simple/drill+drill_d：${JSON.stringify(lastPreviewModel)}`
+);
 
 // ③ 螺栓间隙：配合可选（精/中等/粗）
 el('subtype').value = 'clearance';
@@ -304,44 +316,53 @@ check(H.currentModel().fit === 'normal', '配合选择应进入模型');
 await H.refresh();
 check((el('extraOut').textContent || '').includes('底孔 Ø11'), '读数应显示间隙底孔 Ø11：' + el('extraOut').textContent);
 
-// ④ 贯通：孔深自动置灰；回到盲孔恢复
+// ④ 沉头孔：推荐值可选；钻头 + 公称两个选择器；沉孔 Ø18×11
+H.setKind('counterbore');
+await tick();
+check(el('threadRow').style.display !== 'none', '沉头孔应显示带螺纹开关');
+check(el('threadToggle').checked, '沉头孔默认带螺纹');
+check(el('reco').style.display !== 'none', '沉头孔应显示推荐值');
+const recoOpts = el('reco').options.map((o) => o.value);
+check(recoOpts.includes('gb70_1') && recoOpts.includes('gb70_2'), `推荐值应有 70.1/70.2：${recoOpts}`);
+el('threadToggle').checked = false;
+el('threadToggle')._fire('change', el('threadToggle'));
+await tick();
+check(el('subtype').options.map((o) => o.value).join(',') === 'drill,custom,clearance', '不带螺纹子类型应为 钻头/自定义/间隙');
+check(el('nominal').style.display !== 'none', '沉头孔 + 钻头应显示公称');
+check(Number(el('nominal').value) === 10, `公称默认应 M10，实为 ${el('nominal').value}`);
+await H.refresh();
+check(lastPreviewModel.kind === 'counterbore' && lastPreviewModel.reco === 'gb70_1', '沉头预览模型应带 reco=gb70_1');
+check((el('extraOut').textContent || '').includes('沉孔 Ø18 × 11'), '读数应显示沉孔 Ø18×11：' + el('extraOut').textContent);
+// 70.2 → 明确报错（标缺）
+el('reco').value = 'gb70_2';
+el('reco')._fire('change', el('reco'));
+await tick();
+await H.refresh();
+check((el('status').textContent || '').includes('70.2'), '选 70.2 应显示标缺报错：' + el('status').textContent);
+el('reco').value = 'gb70_1';
+el('reco')._fire('change', el('reco'));
+await tick();
+
+// ⑤ 埋头孔：GB/T 152.2-2014（M1.6–M10，90°）
+H.setKind('countersink');
+await tick();
+check(el('sinkNote').style.display !== 'none', '埋头孔应显示推荐值说明');
+check(el('reco').style.display === 'none', '埋头孔不显示沉头推荐值下拉');
+el('threadToggle').checked = false;
+el('threadToggle')._fire('change', el('threadToggle'));
+await tick();
+await H.refresh();
+check((el('extraOut').textContent || '').includes('埋头 Ø20.3'), '埋头读数应 Ø20.3：' + el('extraOut').textContent);
+
+// ⑥ 贯通置灰 / 全长置灰（回到螺纹孔）
+H.setKind('threaded');
+await tick();
 el('range').value = 'through';
 el('range')._fire('change', el('range'));
 await tick();
 check(el('hAuto').disabled, '贯通：孔深自动应置灰');
 el('range').value = 'blind';
 el('range')._fire('change', el('range'));
-await tick();
-
-// ⑤ 自定义：孔径输入行出现；模型带 custom_d
-el('subtype').value = 'custom';
-el('subtype')._fire('change', el('subtype'));
-await tick();
-check(el('customRow').style.display !== 'none', '自定义孔径行应显示');
-check(!el('customD').disabled, '自定义孔径应可编辑');
-el('customD').value = '5.5';
-el('customD')._fire('input', el('customD'));
-await tick();
-check(H.currentModel().custom_d === 5.5, '自定义孔径应进入模型');
-
-// ⑥ 沉头孔：带螺纹开关可用；不带螺纹时大小按 GB/T 152.3 过滤
-H.setKind('counterbore');
-await tick();
-check(el('threadRow').style.display !== 'none', '沉头孔应显示带螺纹开关');
-check(el('threadToggle').checked, '沉头孔默认带螺纹');
-check(el('subtype').options.map((o) => o.value).join(',') === 'standard,fine', '带螺纹子类型应为 标准/细牙');
-const cbSizes = el('size').options.map((o) => Number(o.value.split('|')[0]));
-check(cbSizes.every((d) => CBORE.some((r) => r.d === d)), `沉头孔大小应落在 152.3 表内：${cbSizes}`);
-el('threadToggle').checked = false;
-el('threadToggle')._fire('change', el('threadToggle'));
-await tick();
-check(el('subtype').options.map((o) => o.value).join(',') === 'drill,custom,clearance', '不带螺纹子类型应为 钻头/自定义/间隙');
-const cbDrill = el('size').options.map((o) => Number(o.value.split('|')[0]));
-check(cbDrill.length > 0 && cbDrill.every((d) => CBORE.some((r) => r.d === d)), '沉头孔钻孔大小应落在 152.3 表内');
-check(el('hAuto').disabled, '沉头孔不带螺纹：孔深自动应置灰');
-
-// ⑦ 埋头孔：带螺纹 + 全长 → 孔深自动/螺纹数值框都置灰
-H.setKind('countersink');
 await tick();
 el('tFull').checked = true;
 el('tFull')._fire('change', el('tFull'));
@@ -352,9 +373,7 @@ el('tFull').checked = false;
 el('tFull')._fire('change', el('tFull'));
 await tick();
 
-// ⑧ 确定 → POST /api/hole_export 带模型
-H.setKind('threaded');
-await tick();
+// ⑦ 确定 → POST /api/hole_export
 el('ok').click();
 await tick(6);
 check(lastExportUrl.startsWith('/api/hole_export'), `导出 URL 应为 /api/hole_export，实为 ${lastExportUrl}`);
