@@ -359,6 +359,8 @@ fn page_label(path: &str) -> &'static str {
         "齿轮"
     } else if path.starts_with("/shaft") {
         "轴生成器"
+    } else if path.starts_with("/hole") {
+        "孔生成器"
     } else if path.starts_with("/joint") {
         "螺栓副装配"
     } else if path.starts_with("/rough") {
@@ -378,6 +380,7 @@ fn plugin_page_path(target: &str) -> Option<&'static str> {
         "/parts" | "/parts.html" => Some("/parts"),
         "/gear" | "/gear.html" => Some("/gear"),
         "/shaft" | "/shaft.html" => Some("/shaft"),
+        "/hole" | "/hole.html" => Some("/hole"),
         "/joint" | "/joint.html" => Some("/joint"),
         "/rough.html" | "/rough" => Some("/rough.html"),
         "/bom" | "/bom.html" => Some("/bom.html"),
@@ -472,6 +475,7 @@ fn page_ping_key_for(path: &str, target: &str, active_tab: Option<u64>) -> Optio
         "/parts" => Some("parts".to_string()),
         "/gear" => Some("gear".to_string()),
         "/shaft" => Some("shaft".to_string()),
+        "/hole" => Some("hole".to_string()),
         "/joint" => Some("joint".to_string()),
         "/rough.html" => Some("rough".to_string()),
         "/manual" => Some("manual".to_string()),
@@ -583,6 +587,7 @@ fn route(
         ("GET", t) if t.starts_with("/parts") => page_response(t, PARTS_HTML),
         ("GET", t) if t.starts_with("/gear") => page_response(t, GEAR_HTML),
         ("GET", t) if t.starts_with("/shaft") => page_response(t, SHAFT_HTML),
+        ("GET", t) if t.starts_with("/hole") => page_response(t, HOLE_HTML),
         ("GET", t) if t.starts_with("/api/gear_svg") => {
             let q = t.split_once('?').map(|(_, q)| q).unwrap_or("");
             match crate::gear::preview_svg(q) {
@@ -611,6 +616,9 @@ fn route(
         ("GET", t) if t.starts_with("/api/shaft_parse") => api_shaft_parse(t, &[]),
         ("POST", "/api/shaft_parse") => api_shaft_parse("", body),
         ("POST", "/api/shaft_export") => api_shaft_export(body, &sender!()),
+        ("GET", t) if t.starts_with("/api/hole_sizes") => (200, json, crate::hole::sizes_json()),
+        ("POST", "/api/hole_preview") => api_hole_preview(body),
+        ("POST", "/api/hole_export") => api_hole_export(body, &sender!()),
         ("GET", t) if t.starts_with("/api/parts_ping") => {
             crate::page_window_ping("parts", t.contains("bye=1"));
             (200, json, r#"{"ok":true}"#.into())
@@ -3984,6 +3992,7 @@ pub const COMMAND_CATALOG: &[(&str, &str, &str)] = &[
     ("OCSMCENTERLINE", "ZX", "中心线：点圆/圆弧 → 十字中心线；点两根直线 → 角平分线中心线（`3中心线层`，线长 = 直径/投影长 + 图框比例×6mm）"),
     ("OCSMGEAR", "", "齿轮（外齿轮 / 内齿轮（齿圈））+ 渐开线花键（花键模式）：不带参数=开齿轮/花键窗口（模式复选框 + 参数 + 视图按钮 + 实时预览）；带参数=一行直插（`OCSMGEAR 2 40 20 view 剖视图`、`OCSMGEAR int 2 40 30 view 端视图`；花键：`OCSMGEAR 花键 [内花键] std=DIN [profile=DIN30] db=40 2 18 h=30 view 端视图`，预设代号 GB30P/GB30R/GB375R/GB45R/DIN30 可直接代 std+profile）。齿轮模式只认 模数/齿数/压力角/变位系数 等常规项，给标准号或 d_B 明确报错。花键模式：GB 无基准直径（给 d_B 报错）；DIN 的 d_B 是主参数（d_B+m/d_B+z/m+z 三种给法，表外按公式推并标注来源），内/外花键用同一「齿轮种类」开关。内花键与内齿轮同口径（用户定案「内花键剖视图和内齿轮一样，不存在侧视图」）：只有 剖视图 + 端视图，无侧视图；剖视图齿圈内齿不剖（端面/齿顶线/齿根线/内孔壁/孔口倒角 + 分度线/轴线，不打剖面线），齿圈外壁留用户延伸。计算书：命令加 `REPORT`（如 `OCSMGEAR 花键 std=DIN db=40 2 18 h=30 REPORT`）—— 纯计算不插图，输出含公式/代入数值/结果/依据来源的 Markdown 计算书，`REPORT=路径` 另写文件"),
     ("OCSMSHAFT", "", "轴生成器：不带参数=开轴生成器窗口（段表 ↔ 行文本双向同步 + 实时预览 + 视图按钮）+ 放置态；带参数=行 DSL/JSON 一行直插（段拼接 + 端面倒角 + 砂轮越程槽 + 螺纹段 M + 齿轮段 GEAR + 矩形花键段 SPLINE + 轴槽 KEY（GB/T 1095 平键键槽，本期只做轴槽） + 视图 VIEW 常规|剖视（双视图已移除）；退刀槽就是一小段小直径轴段）。`OCSMSHAFT S30 E30 L45 CH2@L | S40 E40 L7 M1.5 | S36 E36 L5 | GEAR M3 Z20 VIEW 剖视 at x,y rot 度`；齿轮段可 `GEAR M3 Z20 ALPHA25`（压力角默认 20°）；花键 `OCSMSHAFT SPLINE 6x23x26x6 L30`（可 `de 71` 覆盖，矩形花键）；轴槽 `OCSMSHAFT S25 E25 L40 CH2@L KEY A 18 | S30 E30 L30`（**轴段类型**，进段表 KEY 列：键型 A/B/C + 键长 L（所选键型的键长）+ 位置中置/端置；**b×h 由该段直径 d 查 GB/T 1095 d 列自动定**，显式 `b8h7` 只作校验、必须落在该轴径档标准配对；t1 按 b 查 GB/T 1095 表，可 `t1 5` 覆盖；B/C 的键长自动按槽端圆弧折算（圆弧半径 b/2 吃直段：中置 B +b / C +b/2；端置 B +b/2 / C 不折算），实际槽长为折算长度（端置再 +t1）；显示口径：中置恒显示 A、端置 B/C 显示 C；可选 `双槽`（`DOUBLE`）＝绕轴心 180° 对置、仅剖视图体现、约 1.5 倍单键转矩；与 GEAR/SPLINE/M/OV/RL 互斥，见 handbook 03）。渐开线花键只在 OCSMGEAR 花键模式生成（轴段 INVOLSPLINE 已撤）；GB/T 3478 基本齿廓不含变位（花键模式下 GB 的 x 恒为 0 且锁死；CLI/查询串给非零 x 明确报错，DIN/NF 的 x 仍按 d_B/A 派生）。计算书：命令加 `REPORT`（如 `OCSMSHAFT SPLINE 6x23x26x6 L30 REPORT`）—— 纯计算不插图，输出段清单 Markdown 计算书，`REPORT=路径` 另写文件"),
+    ("OCSMHOLE", "DK", "孔生成器：不带参数=开孔生成器窗口（简单孔/螺纹孔/沉头孔/埋头孔；盲孔/贯通；沉头/埋头可选带螺纹；不带螺纹时子类型=钻头大小/自定义/螺栓间隙）+ 放置态；带参数=一行直插（`OCSMHOLE 螺纹孔 M10 H18 L15 at x,y rot 度`、`OCSMHOLE 沉头孔 无螺纹 M10 间隙 中等装配 H22`）。自动螺纹长 = 1.5d；自动孔深 = 有效深+2P（仅带螺纹且盲孔时可选）；贯通无 118° 锥。数据：ISO 724 / GB/T 152.3 / GB/T 152.2 / GB/T 5277 / 底孔牙深明细表（见表 JSON 的 source）"),
     ("OCSMEDIT", "ME", "改标注：选中 OCSM 生成的标注 → 配置窗口改参数 → 重生成"),
     ("OCSMRGH", "CC", "表面粗糙度：点选插入点 → 配置窗口（匿名块 + ATTDEF）"),
     ("OCSMDIM2GB", "D2G", "一键转国标：原生标注 → OCSM_GB 样式 + 匿名块；智能圆心标记（CENTERMARK）一并换成 `3中心线层` 中心线（Ø + 图框比例×6）"),
@@ -4932,6 +4941,159 @@ pub(crate) fn apply_shaft_export(
         "segments": segments,
         "total_length": total,
         "max_diameter": max_d,
+    })
+    .to_string())
+}
+
+/// `POST /api/hole_preview`：孔模型 JSON → 预览 SVG + 派生数值（不碰图纸）。
+fn api_hole_preview(body: &[u8]) -> (u16, &'static str, String) {
+    let json = "application/json; charset=utf-8";
+    let model: crate::hole::HoleModel = match serde_json::from_slice(body) {
+        Ok(m) => m,
+        Err(e) => {
+            return (
+                400,
+                json,
+                serde_json::json!({"ok": false, "error": format!("请求 JSON 无效: {e}")})
+                    .to_string(),
+            )
+        }
+    };
+    match crate::hole::preview_svg(&model) {
+        Ok(svg) => {
+            let built = crate::hole::build(&model).expect("preview 已通过 build");
+            (
+                200,
+                json,
+                serde_json::json!({
+                    "ok": true,
+                    "svg": svg,
+                    "values": built.values.display_json(),
+                })
+                .to_string(),
+            )
+        }
+        Err(e) => (400, json, serde_json::json!({"ok": false, "error": e}).to_string()),
+    }
+}
+
+/// `POST /api/hole_export`：GUI「确定」/ AI 插入。
+/// * 有 `at` → 直接在落点插入（一次事务）；
+/// * 没有 `at` → 建块 + 登记待放置件（回图纸点击定位基点 → 旋转 → 落定）。
+/// 插入前跑 `hole::ocsm_ready` 拦未初始化图纸（与轴/齿轮同判据）。
+fn api_hole_export(body: &[u8], sender: &Arc<dyn PluginRequestSender>) -> (u16, &'static str, String) {
+    let json = "application/json; charset=utf-8";
+    match apply_hole_export(sender, body) {
+        Ok(s) => (200, json, s),
+        Err(e) => (
+            400,
+            json,
+            serde_json::json!({"ok": false, "error": e}).to_string(),
+        ),
+    }
+}
+
+pub(crate) fn apply_hole_export(
+    sender: &Arc<dyn PluginRequestSender>,
+    body: &[u8],
+) -> Result<String, String> {
+    let model: crate::hole::HoleModel =
+        serde_json::from_slice(body).map_err(|e| format!("请求 JSON 无效: {e}"))?;
+    let doc = snapshot(sender)?;
+    crate::hole::ocsm_ready(&doc)?;
+    let built = crate::hole::build(&model)?;
+    let v = built.values.clone();
+    let kind_label = match model.kind {
+        crate::hole::HoleKind::Simple => "简单孔",
+        crate::hole::HoleKind::Threaded => "螺纹孔",
+        crate::hole::HoleKind::Counterbore => "沉头孔",
+        crate::hole::HoleKind::Countersink => "埋头孔",
+    };
+    let extra = if let Some(bd) = v.bore_d {
+        format!(" + 沉孔Ø{}×{}", crate::hole::fmt3(bd), crate::hole::fmt3(v.bore_t.unwrap_or(0.0)))
+    } else if let Some(sd) = v.sink_d {
+        format!(" + 埋头Ø{} 90°", crate::hole::fmt3(sd))
+    } else {
+        String::new()
+    };
+    let label = if v.threaded {
+        format!(
+            "{kind_label} {}（底孔Ø{}，深{}）{extra}",
+            v.size_name,
+            crate::hole::fmt3(v.base_d),
+            crate::hole::fmt3(v.hole_depth)
+        )
+    } else {
+        format!(
+            "{kind_label} Ø{}（深{}）{extra}",
+            crate::hole::fmt3(v.base_d),
+            crate::hole::fmt3(v.hole_depth)
+        )
+    };
+
+    // ① 显式落点（`at`）→ 直接插入，一次事务。
+    if let Some(at) = model.at {
+        let rot = model.rot;
+        begin_undo(sender, "孔插入")?;
+        let entities = crate::hole::place(built.entities, at, rot);
+        req_timed(sender, PluginRequest::AddEntities(entities), "AddEntities")?;
+        req_timed(sender, PluginRequest::BumpGeometry, "BumpGeometry")?;
+        mark_dirty(sender)?;
+        commit_undo(sender);
+        return Ok(serde_json::json!({
+            "ok": true,
+            "message": format!("已插入{label}于 ({:.3}, {:.3})", at[0], at[1]),
+            "at": at,
+            "rot": rot,
+            "size_name": v.size_name,
+            "base_d": v.base_d,
+            "hole_depth": v.hole_depth,
+            "warnings": v.warnings,
+        })
+        .to_string());
+    }
+
+    // ② 无落点 → 建块 + 登记待放置件（与轴/齿轮/零件库同一条放置态通路）。
+    let block = crate::hole::block_name(&model);
+    begin_undo(sender, "孔出图")?;
+    let exists = snapshot(sender)?
+        .block_records
+        .iter()
+        .any(|b| b.name == block);
+    if !exists {
+        req_timed(
+            sender,
+            PluginRequest::AddBlockRecord {
+                name: block.clone(),
+                entities: built.entities.clone(),
+            },
+            "AddBlockRecord",
+        )?;
+    }
+    crate::set_pending_part(crate::PendingPart {
+        block: block.clone(),
+        meta_json: serde_json::json!({
+            "family": "hole",
+            "kind": kind_label,
+            "size": v.size_name,
+            "base_d": v.base_d,
+            "hole_depth": v.hole_depth,
+            "thread_len": v.thread_len,
+        })
+        .to_string(),
+        label: label.clone(),
+    });
+    commit_undo(sender);
+    Ok(serde_json::json!({
+        "ok": true,
+        "message": format!(
+            "已生成{label}：切回图纸，鼠标上已带这个孔，左键点击定位基点 → 移动光标旋转 → 再点击落定（可连续，Esc 结束）。"
+        ),
+        "block": block,
+        "size_name": v.size_name,
+        "base_d": v.base_d,
+        "hole_depth": v.hole_depth,
+        "warnings": v.warnings,
     })
     .to_string())
 }
@@ -7873,6 +8035,8 @@ const PARTS_HTML: &str = include_str!("parts_gui.html");
 const GEAR_HTML: &str = include_str!("gear_gui.html");
 /// 轴生成器页（段表 ↔ 行文本双向同步 + 实时预览；`OCSMSHAFT` 不带参数时打开）。
 const SHAFT_HTML: &str = include_str!("shaft_gui.html");
+/// 孔生成器页（简单/螺纹/沉头/埋头 + 盲孔/贯通 + 实时预览；`OCSMHOLE`/`DK` 不带参数时打开）。
+const HOLE_HTML: &str = include_str!("hole_gui.html");
 /// 螺栓副（件链装配）页：给人类用的 GUI（AI 走命令行/HTTP 同一套实现）。
 const JOINT_HTML: &str = include_str!("joint_gui.html");
 /// 命令手册页（人类侧命令目录 + 操作教程）：教程正文是**磁盘上的 md**（见 `manual_dirs()`），
@@ -8779,6 +8943,7 @@ mod tests {
             ("parts_gui", PARTS_HTML),
             ("gear_gui", GEAR_HTML),
             ("shaft_gui", SHAFT_HTML),
+            ("hole_gui", HOLE_HTML),
             ("joint_gui", JOINT_HTML),
             ("manual_gui", MANUAL_HTML),
             ("bom_gui", BOM_HTML),
@@ -8828,6 +8993,61 @@ mod tests {
         assert!(
             out.status.success(),
             "shaft_gui.html 脚本 node --check 失败：\n{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    /// 孔生成器窗口：每个 `el("id")` 引用都必须在 HTML 里有对应元素；脚本过 `node --check`。
+    #[test]
+    fn hole_gui_el_ids_exist_and_script_passes_node_check() {
+        let ids = el_id_references(HOLE_HTML);
+        assert!(!ids.is_empty(), "应扫到 el(\"…\") 引用");
+        for id in &ids {
+            assert!(
+                HOLE_HTML.contains(&format!("id=\"{id}\""))
+                    || HOLE_HTML.contains(&format!("id='{id}'")),
+                "hole_gui.html: JS 里用了 el(\"{id}\")，但没有这个 id 的元素（开局 TypeError）"
+            );
+        }
+        let Some(script) = first_script(HOLE_HTML) else {
+            panic!("hole_gui.html 里找不到 <script> 块");
+        };
+        let path = std::env::temp_dir().join("ocsm_hole_gui_check.js");
+        std::fs::write(&path, script).expect("写脚本临时文件");
+        let out = match std::process::Command::new("node")
+            .arg("--check")
+            .arg(&path)
+            .output()
+        {
+            Ok(o) => o,
+            Err(_) => return, // 无 node：跳过（不阻塞 CI）
+        };
+        assert!(
+            out.status.success(),
+            "hole_gui.html 脚本 node --check 失败：\n{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    /// 孔窗口行为冒烟（node + 最小 DOM 垫片 + fetch 桩）：锁住四类孔/子类型/配合/自动开关
+    /// 的交互契约。node 缺失时跳过。
+    #[test]
+    fn hole_gui_behavior_smoke_with_node() {
+        let manifest = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let js = manifest.join("tests/hole_gui_smoke.mjs");
+        let html = manifest.join("src/hole_gui.html");
+        if !js.exists() {
+            return;
+        }
+        let out = match std::process::Command::new("node").arg(&js).arg(&html).output() {
+            Ok(o) => o,
+            Err(_) => return, // 无 node：跳过（不阻塞 CI）
+        };
+        assert!(
+            out.status.success(),
+            "孔 GUI 行为冒烟失败：\n{}{}",
             String::from_utf8_lossy(&out.stdout),
             String::from_utf8_lossy(&out.stderr)
         );
@@ -14260,6 +14480,109 @@ mod weld_tests {
             &serde_json::json!({"dsl": "INVOLSPLINE GB30R M3 Z20 L30"}).to_string(),
         );
         assert!(bad.contains("不识别的关键字") && bad.contains("INVOLSPLINE"), "{bad}");
+    }
+
+    /// 孔生成器（OCSMHOLE）：页面 / 尺寸表 / 预览 / 导出。
+    #[test]
+    fn hole_routes_serve_page_sizes_preview_and_export() {
+        let _g = export_lock();
+        let mock = Arc::new(MockSender::new(ocsm_layered_doc()));
+        let sender: Arc<dyn PluginRequestSender> = mock.clone();
+        let server = spawn_fixed(mock.clone()).expect("spawn guide server");
+        let html = http_req(server.port, "GET", "/hole", "");
+        assert!(html.contains("OCSM 孔生成器"), "孔窗口标题");
+        assert!(html.contains("kindCounterbore") && html.contains("kindCountersink"), "四类孔按钮");
+        assert!(html.contains("threadToggle"), "带螺纹开关");
+        assert!(html.contains("/api/hole_sizes"), "尺寸表端点");
+        assert!(html.contains("/api/hole_preview"), "预览端点");
+        assert!(html.contains("/api/hole_export"), "导出端点");
+        // 四套表
+        let j = http_req(server.port, "GET", "/api/hole_sizes", "");
+        let v: serde_json::Value = serde_json::from_str(&j).unwrap();
+        assert_eq!(v["ok"], true);
+        assert!(v["coarse"].as_array().unwrap().len() >= 40);
+        assert_eq!(v["counterbore"]["rows"].as_array().unwrap().len(), 12);
+        assert_eq!(v["countersink"]["rows"].as_array().unwrap().len(), 14);
+        assert_eq!(v["clearance"]["rows"].as_array().unwrap().len(), 50);
+        assert_eq!(v["tap"].as_array().unwrap().len(), 83);
+        // 预览：M10×1.5 自动 15/18，D1=10、D=8.376，SVG 带材料板剖面线
+        let body = serde_json::json!({
+            "kind": "threaded", "subtype": "standard", "d": 10.0,
+            "pitch": null, "fit": "6H", "range": "blind",
+            "hole_depth": null, "thread_len": null, "full_thread": false,
+            "views": {"side": true, "top": false}
+        })
+        .to_string();
+        let j = http_req(server.port, "POST", "/api/hole_preview", &body);
+        let v: serde_json::Value = serde_json::from_str(&j).unwrap();
+        assert_eq!(v["ok"], true, "{j}");
+        assert_eq!(v["values"]["major"], "10");
+        assert_eq!(v["values"]["minor"], "8.376");
+        assert_eq!(v["values"]["thread_len"], "15");
+        assert_eq!(v["values"]["hole_depth"], "18");
+        assert!(v["svg"].as_str().unwrap().contains("ocsmh"), "预览应有剖面线 pattern");
+        assert!(v["svg"].as_str().unwrap().contains("D1=10"));
+        // 沉头 + 螺栓间隙：底孔 11，沉孔 Ø18×11
+        let body = serde_json::json!({
+            "kind": "counterbore", "subtype": "clearance", "d": 10.0,
+            "pitch": null, "fit": "normal", "range": "blind",
+            "hole_depth": 22.0, "thread_len": null, "full_thread": false,
+            "views": {"side": true, "top": false}
+        })
+        .to_string();
+        let j = http_req(server.port, "POST", "/api/hole_preview", &body);
+        let v: serde_json::Value = serde_json::from_str(&j).unwrap();
+        assert_eq!(v["values"]["base_d"], "11", "{j}");
+        assert_eq!(v["values"]["bore_d"], "18");
+        assert_eq!(v["values"]["bore_t"], "11");
+        // 表外规格明确报错（不插值）
+        let bad = serde_json::json!({
+            "kind": "counterbore", "subtype": "drill", "d": 7.0,
+            "range": "blind", "hole_depth": 20.0, "views": {"side": true, "top": false}
+        })
+        .to_string();
+        let j = http_req(server.port, "POST", "/api/hole_preview", &bad);
+        assert!(j.contains("\"ok\":false") && j.contains("152.3"), "{j}");
+        // 导出（无 at → 待放置件）
+        let resp = apply_hole_export(&sender, body.as_bytes()).expect("出图");
+        assert!(resp.contains("\"ok\":true") && resp.contains("已生成沉头孔"), "{resp}");
+        let block = crate::pending_block().expect("已登记待放置件");
+        assert!(block.starts_with("OCSM_HOLE_"), "{block}");
+        assert!(
+            mock.block_entities(&block).iter().any(|e| matches!(
+                e,
+                acadrust::EntityType::Line(l) if l.common.layer == crate::hole::LAYER_MAIN
+            )),
+            "块里有轮廓实线"
+        );
+    }
+
+    /// 孔导出：有 at 直接插入；无 at 建块 + 待放置件；未初始化图纸拦下。
+    #[test]
+    fn hole_export_registers_pending_part_and_direct_insert() {
+        let _g = export_lock();
+        let mock = Arc::new(MockSender::new(ocsm_layered_doc()));
+        let sender: Arc<dyn PluginRequestSender> = mock.clone();
+        // 有 at → 直接插入（不建块，一次事务）
+        let direct = serde_json::json!({
+            "kind": "threaded", "subtype": "standard", "d": 12.0,
+            "pitch": null, "fit": "6H", "range": "blind",
+            "hole_depth": null, "thread_len": null, "full_thread": false,
+            "views": {"side": true, "top": false}, "at": [100.0, 50.0], "rot": 30.0
+        })
+        .to_string();
+        let resp = apply_hole_export(&sender, direct.as_bytes()).expect("直插");
+        assert!(resp.contains("已插入") && resp.contains("(100.000, 50.000)"), "{resp}");
+        assert!(mock.blocks().is_empty(), "直插不建块");
+        // 未初始化图纸 → 拦下
+        let raw = Arc::new(MockSender::new(acadrust::CadDocument::new()));
+        let raw_sender: Arc<dyn PluginRequestSender> = raw.clone();
+        let err = apply_hole_export(
+            &raw_sender,
+            br#"{"kind":"threaded","subtype":"standard","d":10.0,"range":"blind","hole_depth":null,"views":{"side":true,"top":false}}"#,
+        )
+        .unwrap_err();
+        assert!(err.contains("OCSM 初始化"), "{err}");
     }
 
     /// `/api/invol_check`：默认只查表；`check=1` 才公式导出（含缺档错误）。

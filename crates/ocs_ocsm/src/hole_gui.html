@@ -1,0 +1,466 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>OCSM 孔生成器</title>
+<style>
+  /* 样式与 gear_gui.html / shaft_gui.html 同款：同一套配色、圆角与控件尺寸 */
+  :root { color-scheme: light; }
+  body { font-family: "Helvetica Neue", "PingFang SC", "Microsoft YaHei", sans-serif;
+         margin: 14px; background: #f4f6f8; color: #222; }
+  h1 { font-size: 16px; margin: 0 0 10px; }
+  h1 .sub { font-size: 12px; color: #888; font-weight: 400; margin-left: 8px; }
+  .wrap { display: flex; flex-direction: column; gap: 10px; }
+  .card { background: #fff; border: 1px solid #d9dee5; border-radius: 8px; padding: 10px 12px; }
+  label { display: block; font-size: 12px; color: #666; margin: 6px 0 2px; }
+  select, input[type=number], input[type=text] { padding: 4px 6px; border: 1px solid #c6ccd4;
+           border-radius: 4px; font-size: 13px; box-sizing: border-box; background: #fff; }
+  select { width: 100%; }
+  input[disabled], select[disabled], input[readonly] { background: #f1f3f5; color: #999; cursor: not-allowed; }
+  .top { display: grid; grid-template-columns: 168px 1fr 130px; gap: 12px; align-items: start; }
+  .kinds { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; }
+  .kind { border: 1px solid #c6ccd4; background: #f8fafc; border-radius: 4px; padding: 8px 4px;
+          font-size: 13px; cursor: pointer; }
+  .kind.on { background: #1e6fff; border-color: #1e6fff; color: #fff; }
+  .kind[disabled] { color: #aaa; cursor: not-allowed; }
+  .params { display: grid; grid-template-columns: 54px 1fr 54px 1fr; gap: 6px 8px; align-items: center; }
+  .params label { margin: 0; }
+  .views .chk, .chk { display: flex; align-items: center; gap: 4px; font-size: 13px;
+                      color: #444; margin: 4px 0; cursor: pointer; }
+  .chk input { margin: 0; }
+  .mid { display: grid; grid-template-columns: 250px 1fr; gap: 12px; align-items: start; }
+  .numrow { display: flex; align-items: center; gap: 6px; margin: 3px 0; }
+  .numrow input[type=number] { width: 96px; }
+  .unit { font-size: 12px; color: #888; }
+  .readout { margin-top: 8px; font-size: 12.5px; color: #444; line-height: 1.7; }
+  .readout b { color: #1a4fbf; font-weight: 600; }
+  #preview { width: 100%; min-height: 190px; border: 1px solid #e2e6ea; border-radius: 6px;
+             background: #fbfbf7; display: flex; align-items: center; justify-content: center; }
+  #preview svg { max-width: 100%; }
+  .bot { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .btn { border: none; border-radius: 6px; padding: 8px 20px; font-size: 14px; cursor: pointer;
+         background: #1e6fff; color: #fff; }
+  .btn.ghost { background: #e4e7ec; color: #333; }
+  .btn[disabled] { background: #9db9e8; cursor: not-allowed; }
+  #status { font-size: 12.5px; margin-top: 6px; min-height: 16px; white-space: pre-wrap; color: #555; }
+  .ok { color: #1a7f37; } .bad { color: #d1242f; } .warn { color: #b26a00; }
+  .hint { font-size: 11.5px; color: #999; margin-top: 4px; line-height: 1.5; }
+</style>
+</head>
+<body>
+<h1>OCSM 孔生成器<span class="sub">简单 / 螺纹 / 沉头 / 埋头 · 盲孔 / 贯通</span></h1>
+
+<div class="wrap">
+  <!-- ① 孔类型 + 参数 + 视图（照参考图布局） -->
+  <div class="card top">
+    <div class="kinds">
+      <button type="button" class="kind" id="kindSimple">简单孔</button>
+      <button type="button" class="kind on" id="kindThreaded">螺纹孔</button>
+      <button type="button" class="kind" id="kindCounterbore">沉头孔</button>
+      <button type="button" class="kind" id="kindCountersink">埋头孔</button>
+    </div>
+    <div class="params">
+      <label>标准</label><select id="std"><option>GB</option></select>
+      <label>子类型</label><select id="subtype"></select>
+      <label>大小</label><select id="size"></select>
+      <label>配合</label><select id="fit"></select>
+    </div>
+    <div class="views">
+      <label>视图</label>
+      <label class="chk"><input type="checkbox" id="viewSide" checked>侧视图</label>
+      <label class="chk"><input type="checkbox" id="viewTop">俯视图</label>
+    </div>
+  </div>
+
+  <!-- ② 孔参数 + 预览示意图 -->
+  <div class="card mid">
+    <div>
+      <label class="chk" id="threadRow"><input type="checkbox" id="threadToggle">带螺纹</label>
+      <label>孔范围</label>
+      <select id="range">
+        <option value="blind">盲孔</option>
+        <option value="through">贯通</option>
+      </select>
+      <label>孔深</label>
+      <div class="numrow">
+        <label class="chk" style="margin:0"><input type="checkbox" id="hAuto" checked>自动</label>
+        <input type="number" id="hDepth" value="20" step="0.1" min="0.1">
+        <span class="unit">mm</span>
+      </div>
+      <div class="numrow" id="customRow">
+        <span class="unit">孔径</span>
+        <input type="number" id="customD" value="8.5" step="0.1" min="0.1">
+        <span class="unit">mm</span>
+      </div>
+      <div class="readout">
+        <div id="majorLine">螺纹大径D1：<b id="majorOut">10</b> mm</div>
+        <div id="minorLine">螺纹小径D：<b id="minorOut">8.376</b> mm</div>
+        <div id="extraOut"></div>
+      </div>
+    </div>
+    <div>
+      <div id="preview"></div>
+    </div>
+  </div>
+
+  <!-- ③ 螺纹范围 + 确定/取消 -->
+  <div class="card bot">
+    <label style="margin:0">螺纹范围</label>
+    <label class="chk" style="margin:0"><input type="checkbox" id="tAuto" checked>自动</label>
+    <input type="number" id="tLen" value="15" step="0.1" min="0.1">
+    <span class="unit">mm</span>
+    <label class="chk" style="margin:0"><input type="checkbox" id="tFull">全长</label>
+    <span style="flex:1"></span>
+    <button type="button" class="btn" id="ok">确定</button>
+    <button type="button" class="btn ghost" id="cancel">取消</button>
+  </div>
+  <div id="status"></div>
+  <div class="hint">
+    自动螺纹长 = 1.5×公称直径；自动孔深 = 有效螺纹深 + 2×螺距（刀具退出）。<b>不带螺纹时两个「自动」都不可选</b>；
+    贯通孔深必须手填（板厚/通孔长度），贯通无 118° 底锥。沉头/埋头的孔径与深度分别查 GB/T 152.3 / GB/T 152.2；
+    螺栓间隙查 GB/T 5277（精/中等/粗装配）。
+  </div>
+</div>
+
+<script>
+(() => {
+"use strict";
+// 窗口钉在哪张图纸（插件开窗时写的 tab=）：生成到图纸时带回给插件，多张图不串。
+const TAB = new URLSearchParams(location.search).get("tab");
+const el = (id) => document.getElementById(id);
+let sizes = null;          // /api/hole_sizes（四套数据表）
+let kind = "threaded";     // simple | threaded | counterbore | countersink
+let modeKey = null;        // 上一次渲染的子类型模式（thread / plain）
+let sizeKey = "10|1.5";    // 维持「大小」选择跨列表切换
+let sizeD = 10;            // 当前公称直径（跨列表按 d 保选择）
+let threadPref = true;     // 沉头/埋头「带螺纹」开关的用户偏好
+let timer = 0;
+let lastValues = null;
+
+const isCounter = () => kind === "counterbore" || kind === "countersink";
+const isThreaded = () =>
+  kind === "threaded" || (isCounter() && el("threadToggle").checked);
+
+// ── 选择器填充 ────────────────────────────────────────────────────────
+function setOptions(id, pairs, preferred) {
+  const sel = el(id);
+  const before = sel.value;
+  sel.innerHTML = "";
+  for (const [value, text] of pairs) {
+    const o = document.createElement("option");
+    o.value = value;
+    o.textContent = text;
+    sel.appendChild(o);
+  }
+  if (pairs.some((p) => p[0] === before)) {
+    sel.value = before;
+  } else if (preferred !== undefined && pairs.some((p) => p[0] === preferred)) {
+    sel.value = preferred;
+  } else if (pairs.length) {
+    sel.value = pairs[0][0];
+  }
+}
+
+function sizeTable() {
+  if (kind === "counterbore") return sizes.counterbore.rows;
+  if (kind === "countersink") return sizes.countersink.rows;
+  return null;
+}
+
+function sizeOptions() {
+  const th = isThreaded();
+  const sub = el("subtype").value;
+  const table = sizeTable();
+  const allowed = table ? new Set(table.map((r) => Number(r.d))) : null;
+  const keep = (list) => (allowed ? list.filter((r) => allowed.has(Number(r.d))) : list);
+  if (th) {
+    const list = sub === "fine" ? sizes.fine : sizes.coarse;
+    return keep(list).map((r) => [`${r.d}|${r.p}`, r.name]);
+  }
+  if (sub === "drill") {
+    return keep(sizes.tap).map((r) => [`${r.d}|${r.p}`, `${r.name}（Ø${r.drill}）`]);
+  }
+  if (sub === "clearance") {
+    return keep(sizes.clearance.rows).map((r) => [String(r.d), `M${r.d}`]);
+  }
+  // 自定义：沉头/埋头按表选公称；简单孔用粗牙系列（公称只作记录）
+  const list = table || sizes.coarse;
+  return list.map((r) => [String(r.d), `M${r.d}`]);
+}
+
+function fitOptions() {
+  const th = isThreaded();
+  if (th) return [["6H", "6H"], ["6G", "6G"]];
+  if (el("subtype").value === "clearance") {
+    return [["close", "精装配"], ["normal", "中等装配"], ["loose", "粗装配"]];
+  }
+  return [["", "—"]];
+}
+
+// ── UI 联动 ───────────────────────────────────────────────────────────
+function syncUi() {
+  const th = isThreaded();
+  const counter = isCounter();
+  // 孔类型高亮
+  for (const [id, key] of [
+    ["kindSimple", "simple"], ["kindThreaded", "threaded"],
+    ["kindCounterbore", "counterbore"], ["kindCountersink", "countersink"],
+  ]) {
+    el(id).classList.toggle("on", kind === key);
+  }
+  // 带螺纹开关：只有沉头/埋头能切
+  el("threadRow").style.display = counter ? "" : "none";
+  el("threadToggle").disabled = !counter;
+  if (kind === "threaded") el("threadToggle").checked = true;
+  if (kind === "simple") el("threadToggle").checked = false;
+
+  // 子类型（只在螺纹/无螺纹模式切换时重建，避免把用户手选覆盖掉）
+  const mode = th ? "thread" : "plain";
+  if (modeKey !== mode) {
+    modeKey = mode;
+    if (th) {
+      setOptions("subtype", [["standard", "标准螺纹"], ["fine", "细牙螺纹"]], "standard");
+    } else {
+      setOptions("subtype", [["drill", "钻头大小"], ["custom", "自定义"], ["clearance", "螺栓间隙"]], "drill");
+    }
+  }
+  // 大小（跨列表尽量保住当前规格：先按完整键，再按公称直径）
+  const opts = sizeOptions();
+  let preferred = opts.some((p) => p[0] === sizeKey) ? sizeKey : undefined;
+  if (preferred === undefined) {
+    const hit = opts.find((p) => Number(p[0].split("|")[0]) === sizeD);
+    if (hit) preferred = hit[0];
+  }
+  setOptions("size", opts, preferred);
+  sizeKey = el("size").value;
+  sizeD = Number(sizeKey.split("|")[0]);
+  // 配合
+  const fits = fitOptions();
+  setOptions("fit", fits, th ? "6H" : "normal");
+  el("fit").disabled = fits.length === 1;
+  // 自定义孔径行
+  const custom = !th && el("subtype").value === "custom";
+  el("customRow").style.display = custom ? "" : "none";
+  el("customD").disabled = !custom;
+
+  // 自动开关的可用性
+  const full = th && el("tFull").checked;
+  const blind = el("range").value === "blind";
+  if (!th) {
+    el("hAuto").checked = false;
+    el("tAuto").checked = false;
+  }
+  el("hAuto").disabled = !th || !blind || full;
+  if (el("hAuto").disabled && !el("hAuto").checked) el("hDepth").readOnly = false;
+  else el("hDepth").readOnly = th && el("hAuto").checked;
+  el("tAuto").disabled = !th || full;
+  el("tFull").disabled = !th;
+  el("tLen").disabled = !th || full || el("tAuto").checked;
+  el("tLen").readOnly = th && el("tAuto").checked;
+  // 螺纹读数行：不带螺纹时改标题
+  el("majorLine").innerHTML = th
+    ? '螺纹大径D1：<b id="majorOut">—</b> mm'
+    : '孔 径：<b id="majorOut">—</b> mm';
+  el("minorLine").style.display = th ? "" : "none";
+}
+
+// ── 模型 ──────────────────────────────────────────────────────────────
+function currentSize() {
+  const v = (el("size").value || "").split("|");
+  return {
+    d: Number(v[0] || 10),
+    p: v.length > 1 && v[1] !== "" ? Number(v[1]) : null,
+  };
+}
+
+function currentModel() {
+  const th = isThreaded();
+  const sub = el("subtype").value;
+  const s = currentSize();
+  return {
+    kind,
+    subtype: sub,
+    d: s.d,
+    pitch: sub === "fine" ? s.p : null,
+    fit: el("fit").value,
+    custom_d: !th && sub === "custom" ? Number(el("customD").value) : null,
+    range: el("range").value,
+    hole_depth: el("hAuto").checked ? null : Number(el("hDepth").value),
+    thread_len:
+      th && !el("tFull").checked
+        ? el("tAuto").checked
+          ? null
+          : Number(el("tLen").value)
+        : null,
+    full_thread: th ? el("tFull").checked : false,
+    views: { side: el("viewSide").checked, top: el("viewTop").checked },
+  };
+}
+
+// ── 预览 / 数值 ───────────────────────────────────────────────────────
+function renderValues(v) {
+  const th = isThreaded();
+  const majorOut = el("majorOut");
+  if (majorOut) majorOut.textContent = th ? v.major : v.base_d;
+  const minorOut = el("minorOut");
+  if (minorOut) minorOut.textContent = v.minor;
+  const extra = [];
+  if (v.bore_d) extra.push(`沉孔 Ø${v.bore_d} × ${v.bore_t}`);
+  if (v.sink_d) extra.push(`埋头 Ø${v.sink_d}（90°）`);
+  if (!th) extra.push(`底孔 Ø${v.base_d}`);
+  else extra.push(`有效螺纹 ${v.thread_len} / 底孔 Ø${v.base_d}`);
+  el("extraOut").textContent = extra.join("；");
+}
+
+async function refresh() {
+  const model = currentModel();
+  let resp;
+  try {
+    resp = await fetch("/api/hole_preview", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(model),
+    });
+  } catch (e) {
+    el("status").className = "bad";
+    el("status").textContent = "预请求失败：" + e;
+    return;
+  }
+  const j = await resp.json();
+  if (!j.ok) {
+    el("status").className = "bad";
+    el("status").textContent = j.error;
+    return;
+  }
+  lastValues = j.values;
+  el("preview").innerHTML = j.svg;
+  renderValues(j.values);
+  if (el("hAuto").checked) el("hDepth").value = j.values.hole_depth;
+  if (el("tAuto").checked && isThreaded()) el("tLen").value = j.values.thread_len;
+  const warns = j.values.warnings || [];
+  if (warns.length) {
+    el("status").className = "warn";
+    el("status").textContent = "提示：" + warns.join("；");
+  } else {
+    el("status").className = "";
+    el("status").textContent = "";
+  }
+}
+
+function schedulePreview() {
+  if (timer) clearTimeout(timer);
+  timer = setTimeout(refresh, 160);
+}
+
+// ── 事件 ──────────────────────────────────────────────────────────────
+function pickKind(k) {
+  const wasCounter = isCounter();
+  kind = k;
+  // 首次进入沉头/埋头：按用户偏好恢复「带螺纹」开关
+  if (!wasCounter && isCounter()) el("threadToggle").checked = threadPref;
+  syncUi();
+  schedulePreview();
+}
+el("kindSimple").addEventListener("click", () => pickKind("simple"));
+el("kindThreaded").addEventListener("click", () => pickKind("threaded"));
+el("kindCounterbore").addEventListener("click", () => pickKind("counterbore"));
+el("kindCountersink").addEventListener("click", () => pickKind("countersink"));
+el("threadToggle").addEventListener("change", () => {
+  threadPref = el("threadToggle").checked;
+  syncUi();
+  schedulePreview();
+});
+el("subtype").addEventListener("change", () => {
+  syncUi();
+  schedulePreview();
+});
+el("range").addEventListener("change", () => {
+  syncUi();
+  schedulePreview();
+});
+el("fit").addEventListener("change", () => schedulePreview());
+el("size").addEventListener("change", () => {
+  sizeKey = el("size").value;
+  sizeD = Number(sizeKey.split("|")[0]);
+  schedulePreview();
+});
+el("hAuto").addEventListener("change", () => {
+  syncUi();
+  schedulePreview();
+});
+el("tAuto").addEventListener("change", () => {
+  syncUi();
+  schedulePreview();
+});
+el("tFull").addEventListener("change", () => {
+  syncUi();
+  schedulePreview();
+});
+el("hDepth").addEventListener("input", () => schedulePreview());
+el("tLen").addEventListener("input", () => schedulePreview());
+el("customD").addEventListener("input", () => schedulePreview());
+el("viewSide").addEventListener("change", () => schedulePreview());
+el("viewTop").addEventListener("change", () => schedulePreview());
+
+el("ok").addEventListener("click", async () => {
+  el("ok").disabled = true;
+  try {
+    const url = "/api/hole_export" + (TAB ? "?tab=" + encodeURIComponent(TAB) : "");
+    const r = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(currentModel()),
+    });
+    const j = await r.json();
+    if (j.ok) {
+      el("status").className = "ok";
+      const w = (j.warnings || []).length ? "（提示：" + j.warnings.join("；") + "）" : "";
+      el("status").textContent = (j.message || "已生成") + w;
+    } else {
+      el("status").className = "bad";
+      el("status").textContent = j.error;
+    }
+  } finally {
+    el("ok").disabled = false;
+  }
+});
+el("cancel").addEventListener("click", () => {
+  try { window.close(); } catch (e) {}
+});
+
+// 心跳：窗口开着时告诉插件（页面去重用）。
+function ping(bye) {
+  try {
+    fetch("/api/page_ping?p=hole" + (bye ? "&bye=1" : ""), { cache: "no-store" });
+  } catch (e) {}
+}
+
+// ── 启动 ──────────────────────────────────────────────────────────────
+(async () => {
+  // 初始化勾选态（浏览器里 HTML 自带 checked；这里再钉一道，防腐化/表单恢复）
+  el("viewSide").checked = true;
+  el("viewTop").checked = false;
+  el("hAuto").checked = true;
+  el("tAuto").checked = true;
+  el("tFull").checked = false;
+  el("threadToggle").checked = true;
+  el("range").value = "blind";
+  try {
+    sizes = await (await fetch("/api/hole_sizes", { cache: "no-store" })).json();
+  } catch (e) {
+    el("status").className = "bad";
+    el("status").textContent = "数据表加载失败：" + e;
+    return;
+  }
+  syncUi();
+  sizeKey = el("size").value;
+  sizeD = Number(sizeKey.split("|")[0]);
+  await refresh();
+  ping(false);
+  setInterval(() => ping(false), 4000);
+  window.addEventListener("beforeunload", () => ping(true));
+})();
+})();
+</script>
+</body>
+</html>

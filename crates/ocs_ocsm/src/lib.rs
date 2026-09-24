@@ -24,6 +24,7 @@ mod detail;
 mod detail_clip;
 mod dim2gb;
 mod gear;
+mod hole;
 mod guide_server;
 mod guide_url;
 mod invol_spline;
@@ -73,6 +74,8 @@ static MANIFEST: PluginManifest = PluginManifest {
         "OCSMCENTERLINE", "ZX",
         "OCSMGEAR",
         "OCSMSHAFT",
+        "OCSMHOLE",
+        "DK",
     ],
 };
 
@@ -470,6 +473,11 @@ pub(crate) fn open_gear_window(port: u16, tab: Option<u64>) -> bool {
 /// 打开**轴生成器**窗口（人用 GUI：段表 + 行文本双向同步 + 实时预览；AI 走命令行/HTTP 同一实现）。
 pub(crate) fn open_shaft_window(port: u16, tab: Option<u64>) -> bool {
     open_plugin_page(port, &with_tab("/shaft", tab), "shaft", 1120, 940)
+}
+
+/// 打开**孔生成器**窗口（人用 GUI：孔类型 + 参数 + 自动规则 + 实时预览；AI 走命令行/HTTP 同一实现）。
+pub(crate) fn open_hole_window(port: u16, tab: Option<u64>) -> bool {
+    open_plugin_page(port, &with_tab("/hole", tab), "hole", 860, 720)
 }
 
 /// 打开**螺栓副装配**窗口（人用 GUI；AI 走命令行/HTTP 同一实现）。
@@ -1383,6 +1391,7 @@ const ICON_DIMGUIDE: IconKind =
     IconKind::Svg(include_bytes!("../assets/icons/dimguide.svg"));
 const ICON_DIM2GB: IconKind = IconKind::Svg(include_bytes!("../assets/icons/dim2gb.svg"));
 const ICON_PARTS: IconKind = IconKind::Svg(include_bytes!("../assets/icons/parts.svg"));
+const ICON_HOLE: IconKind = IconKind::Svg(include_bytes!("../assets/icons/hole.svg"));
 
 impl BuiltinPlugin for OcsmPlugin {
     fn manifest(&self) -> &'static PluginManifest {
@@ -1437,6 +1446,15 @@ impl BuiltinPlugin for OcsmPlugin {
                                 label: "轴生成器",
                                 icon: ICON_SHAFT,
                                 event: ModuleEvent::Command("OCSMSHAFT".to_string()),
+                            })],
+                        },
+                        RibbonGroup {
+                            title: "孔",
+                            tools: vec![RibbonItem::LargeTool(ToolDef {
+                                id: "OCSMHOLE",
+                                label: "孔生成器",
+                                icon: ICON_HOLE,
+                                event: ModuleEvent::Command("OCSMHOLE".to_string()),
                             })],
                         },
                         RibbonGroup {
@@ -1551,6 +1569,11 @@ impl BuiltinPlugin for OcsmPlugin {
             // 轴生成器（一期骨架）：行 DSL / JSON 一行直插（单视图侧视图）
             "OCSMSHAFT" => {
                 self.cmd_shaft(host, rest);
+                true
+            }
+            // 孔生成器：不带参数 = 孔窗口 + 放置态；带参数 = 一行直插
+            "OCSMHOLE" | "DK" => {
+                self.cmd_hole(host, rest);
                 true
             }
             "OCSMDIMGULIDE" | "GDIM" => {
@@ -2317,6 +2340,98 @@ impl OcsmPlugin {
             crate::partgen_kit::trim(max_diameter),
             program.view.label(),
         ));
+    }
+
+    /// `OCSMHOLE` / `DK`：孔生成器（简单孔 / 螺纹孔 / 沉头孔 / 埋头孔）。
+    ///
+    /// * 不带参数 = 人类侧：开孔生成器窗口（孔类型 2×2 + 子类型/大小/配合 +
+    ///   盲孔/贯通 + 孔深/螺纹范围自动 + 实时剖面预览）+ 进放置态；
+    ///   窗口里点「确定」→ 回图纸点基点 → 移动光标旋转 → 再点落定。
+    /// * 带参数 = AI/MCP：`OCSMHOLE [类型] [带螺纹|无螺纹] [钻孔|自定义|间隙] M10 ...`
+    ///   一行直插（`hole::parse_program`）。
+    /// * **自动规则**：螺纹长 = 1.5d；孔深 = 有效螺纹深 + 2P（仅带螺纹且盲孔时可选自动）；
+    ///   贯通无 118° 底锥；不带螺纹时两个自动都不可选。
+    /// * 数据：ISO 724 / GB/T 152.3 / GB/T 152.2 / GB/T 5277 / 底孔牙深明细表。
+    fn cmd_hole(&self, host: &mut dyn HostApi, args: &str) {
+        // 带参数 = 一行直插；解析失败报用法（不静默开窗）。
+        if !args.trim().is_empty() {
+            let model = match crate::hole::parse_program(args) {
+                Ok(m) => m,
+                Err(message) => {
+                    host.push_error(&format!("OCSMHOLE 参数无效：{message}"));
+                    host.push_output(crate::hole::USAGE);
+                    return;
+                }
+            };
+            if let Err(msg) = crate::hole::ocsm_ready(host.document()) {
+                host.push_error(&format!("OCSMHOLE: {msg}"));
+                host.push_info("OCSMHOLE：先运行 OCSM（或点功能区「图幅」组里的 OCSM 初始化），再直接插孔。");
+                return;
+            }
+            let at = model.at.unwrap_or([0.0, 0.0]);
+            let rot = model.rot;
+            let built = match crate::hole::build(&model) {
+                Ok(b) => b,
+                Err(message) => {
+                    host.push_error(&format!("OCSMHOLE 几何非法：{message}"));
+                    return;
+                }
+            };
+            let count = built.entities.len();
+            let v = built.values.clone();
+            let entities = crate::hole::place(built.entities, at, rot);
+            host.push_undo("OCSMHOLE 孔");
+            let _ = host.add_entities(entities);
+            host.set_dirty();
+            let kind = match model.kind {
+                crate::hole::HoleKind::Simple => "简单孔",
+                crate::hole::HoleKind::Threaded => "螺纹孔",
+                crate::hole::HoleKind::Counterbore => "沉头孔",
+                crate::hole::HoleKind::Countersink => "埋头孔",
+            };
+            host.push_output(&format!(
+                "OCSMHOLE：已生成{kind} {}（底孔Ø{}，深{}，{} 个图元）于 ({}, {}) rot {}° → 1轮廓实线层 / 2细线层 / 3中心线层",
+                if v.threaded { v.size_name.clone() } else { format!("Ø{}", crate::hole::fmt3(v.base_d)) },
+                crate::hole::fmt3(v.base_d),
+                crate::hole::fmt3(v.hole_depth),
+                count,
+                crate::partgen_kit::trim(at[0]),
+                crate::partgen_kit::trim(at[1]),
+                crate::partgen_kit::trim(rot),
+            ));
+            for w in &v.warnings {
+                host.push_info(&format!("OCSMHOLE 提示：{w}"));
+            }
+            return;
+        }
+        // 人类侧：先拦截未初始化图纸（与轴/齿轮同口径），再开窗 + 进放置态。
+        if let Err(msg) = crate::hole::ocsm_ready(host.document()) {
+            host.push_error(&format!("OCSMHOLE: {msg}"));
+            host.push_info("OCSMHOLE：先运行 OCSM 初始化，再打开孔生成器窗口。");
+            return;
+        }
+        let Some(port) = self.ensure_guide_server(host) else {
+            host.push_error("OCSMHOLE: 无法启动孔服务（宿主不支持 worker 请求）。");
+            return;
+        };
+        if open_hole_window(port, Some(host.tab_id())) {
+            host.push_info(
+                "OCSM 孔生成器：已打开窗口（类型 2×2 + 子类型/大小/配合 + 盲孔/贯通 + 孔深/螺纹范围自动）。\
+                 点「确定」→ 回到图纸点击定位基点 → 移动光标旋转 → 再点击落定（可连续，Esc 结束）。",
+            );
+        } else {
+            host.push_info("OCSM 孔生成器：窗口已打开（Alt+Tab 切换过去）。");
+        }
+        let Some(sender) = host.plugin_request_sender() else {
+            return;
+        };
+        host.start_interactive(Box::new(PartPlace {
+            sender: std::sync::Arc::from(sender),
+            phase: std::cell::Cell::new(PlacePhase::Follow),
+            base: std::cell::Cell::new([0.0, 0.0, 0.0]),
+            what: "OCSM 孔",
+            where_to: "请在孔生成器窗口里点「确定」",
+        }));
     }
 
     /// `OCSMPART` / `XL`：直接打开标准件库窗口，并进入放置态
@@ -4364,7 +4479,7 @@ mod tests {
                 }
             }
         }
-        assert_eq!(checked, 8, "功能区应有 8 个 LargeTool 按钮（当前 {checked}）");
+        assert_eq!(checked, 9, "功能区应有 9 个 LargeTool 按钮（当前 {checked}）");
     }
 
     /// XL/`OCSMPART` 按钮：点击（不带参数）开「OCSM 标准件库」窗口 + 放置态。
