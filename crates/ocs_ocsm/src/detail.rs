@@ -1318,7 +1318,7 @@ impl DetailElement for HubKeyway {
     }
 
     fn name(&self) -> &'static str {
-        "毂槽"
+        "普通平键毂槽"
     }
 
     fn code(&self) -> &'static str {

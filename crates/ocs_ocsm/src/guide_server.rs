@@ -13657,9 +13657,9 @@ mod weld_tests {
         assert!(bad.contains("error") && bad.contains("0.25"), "P 不在表 2 报错：{bad}");
         let bad = http_req(server.port, "GET", "/api/part_svg?family=detail_thread_relief&d=0&P=1.5", "");
         assert!(bad.contains("error"), "d=0 报错：{bad}");
-        // 结构要素（毂槽 GB/T 1095-2003）：d→b/t₂/r 查表；main/side 两视图 + len 覆盖
+        // 结构要素（普通平键毂槽 GB/T 1095-2003）：d→b/t₂/r 查表；main/side 两视图 + len 覆盖
         assert!(
-            cat.contains("毂槽 GB/T 1095-2003") && cat.contains("detail_hub_keyway") && cat.contains("结构要素/毂槽"),
+            cat.contains("普通平键毂槽 GB/T 1095-2003") && cat.contains("detail_hub_keyway") && cat.contains("结构要素/毂槽"),
             "毂槽进了目录树"
         );
         assert!(cat.contains("\"key\":\"len\"") && cat.contains("\"r_pick\""), "毂槽 len 输入/r 策略进目录");
