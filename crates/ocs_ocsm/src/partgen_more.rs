@@ -840,6 +840,7 @@ pub fn generate(family: &str, d: f64, l: f64, view: &str) -> Option<Result<GenPa
         crate::partgen_b2::generate,
         crate::partgen_b3::generate,
         crate::partgen_b4::generate,
+        crate::partgen_b5::generate,
         crate::partgen_keys::generate,
     ] {
         if let Some(r) = f(family, d, l, view) {
@@ -1699,6 +1700,7 @@ pub fn family_views(family: &str) -> Vec<&'static str> {
         crate::partgen_b2::family_views,
         crate::partgen_b3::family_views,
         crate::partgen_b4::family_views,
+        crate::partgen_b5::family_views,
         crate::partgen_keys::family_views,
     ] {
         let views = f(family);

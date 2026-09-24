@@ -852,6 +852,7 @@ pub fn catalog_json() -> String {
         .chain(crate::partgen_b2::families_json())
         .chain(crate::partgen_b3::families_json())
         .chain(crate::partgen_b4::families_json())
+        .chain(crate::partgen_b5::families_json())
         .chain(crate::partgen_keys::families_json())
         .chain(crate::detail::families_json())
     {
@@ -1076,6 +1077,8 @@ pub fn family_kind(family: &str) -> &'static str {
         // 真·螺栓：穿孔 + 螺母（件链装配只认这一种）
         "bolt"
     } else if family == "socket_head"
+        || family.starts_with("socket_button")
+        || family.starts_with("socket_torx")
         || family.starts_with("set_screw")
         || family.starts_with("eye_bolt")
     {
@@ -1160,6 +1163,7 @@ pub fn generate(family: &str, d: f64, l: f64, view: &str) -> Result<GenPart, Str
         crate::partgen_b2::generate,
         crate::partgen_b3::generate,
         crate::partgen_b4::generate,
+        crate::partgen_b5::generate,
         crate::partgen_keys::generate,
     ] {
         if let Some(r) = f(family, d, l, view) {
@@ -2179,7 +2183,13 @@ mod tests {
         for fam in ["hex_bolt_c", "hex_bolt_ab", "hex_bolt_b_full", "hex_bolt_hole_a"] {
             assert_eq!(family_kind(fam), "bolt", "{fam} 应是螺栓");
         }
-        for fam in ["socket_head", "set_screw_77", "eye_bolt_825"] {
+        for fam in [
+            "socket_head",
+            "socket_button_702",
+            "socket_torx_2671",
+            "set_screw_77",
+            "eye_bolt_825",
+        ] {
             assert_eq!(family_kind(fam), "screw", "{fam} 应是螺钉（与螺栓不同类）");
         }
         // 内六角圆柱头螺钉必须在「螺钉」支下，且不在「螺栓」支下

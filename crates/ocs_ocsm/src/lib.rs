@@ -33,6 +33,7 @@ mod partgen_b1;
 mod partgen_b2;
 mod partgen_b3;
 mod partgen_b4;
+mod partgen_b5;
 mod partgen_kit;
 mod partgen_keys;
 mod partgen_more;
