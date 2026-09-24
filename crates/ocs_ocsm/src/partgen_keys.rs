@@ -27,18 +27,25 @@
 //! 6. **1097 中央 `d0` 孔是"起键螺纹孔"** —— 它是**键自身**用于起键（撬出）的孔，
 //!    **与轴无关**；**不是**把键固定到轴上的孔（反解报告 §3.5 的"固定用"推断**已作废**）。
 //!    两端 `d1` 通孔 + `D×h1` 沉孔照源图（孔位 ±L1/2、距端面 L3）。
+//! 7. **1097 的 `L1/L2/L3` 由 `L` 查 GB/T 1097-2003 长度系列表派生**（26 档，JSON `length_rows`；
+//!    **不插值、不外推**，表外 `L` 明确报错并列出可选系列）。孔位 `±L1/2`、端距 `L3`、断裂线
+//!    全部随 `L` 派生；**废除旧行为**：不再沿用 specimen 行固定的 `L1=60/L2=50/L3=20`。
+//!    用户模板 `导向平键参数化问题.dxf` 右侧 = L=25 目标（L1=13/L2=12.5/L3=6），逐图元对齐。
 //!
 //! ### 数据口径备忘
 //!
 //! - **1096 A 型源图末 4 行 h 印作 32/20/22/25（源图自身误印，已像素级证实）**：
 //!   CSV 照录不改，但**库内取标准值 20/22/25/28**；JSON 表里 `h` 用标准值、
 //!   `h_printed` 保留印刷值备查（见 `tables/partsKey1096A.json` 的 `source`）。
-//! - 1097 表内各档 `L=100、L1=60、L2=50、L3=20`（即 specimen 行）；C 取表内范围**下限**。
+//! - **1097 的 `L1/L2/L3` 由 `L` 查长度系列表派生**（JSON `length_rows`，26 档；**不插值/不外推**，
+//!   表外 `L` 明确报错并列出可选系列）—— 旧行内固定值 `L1=60/L2=50/L3=20`（specimen 行）已废除。
+//!   每档默认 `L=100`（specimen 行），b=8/10 违反 `L<10b` 时就近取 70/90；C 取表内范围**下限**。
 //! - **1096 的 L 区间已到位**（GB/T 1096-2003 表 1 + 用户素材补 6、8）：
 //!   系列见 [`KEY_1096_L_SERIES`]，约束 `L < 10·b`；档位默认 L 必须 ∈ 系列且 < 10b，
 //!   不满足时就近取合法值（[`key_1096_legal_default`]，当前 20 档全部合法）。
-//! - **1097 的 L 系列已到位**（易紧通 `info_42177` 长度下拉实测，2026-09）：
-//!   系列见 [`key_1097_l_allowed`]（数据源 = `partsKey1097{A,B}.json` 的 `l_series`）；
+//! - **1097 的 L 系列已到位**（嘉立创 `new05232.htm` 长度表逐格核对，2026-09）：
+//!   系列/派生见 [`key_1097_l_series`] / [`key_1097_length_for`]
+//!   （数据源 = `partsKey1097{A,B}.json` 的 `l_series` + `length_rows`，两者一致性有测试护栏）；
 //!   沿用标准注③ `L < 10·b`（>400 时按 GB/T 321 的 R20 选取，本库未列）；
 //!   `l` 省略/传 0 时用表内该档 L（100；b=8/10 因 100≥10b 就近合法化，见
 //!   [`key_1097_legal_default`]/[`key_1097_default_corrections`]）。
@@ -49,7 +56,7 @@
 //! **自变量 = 键宽 `b` + 型别（编在族 id 里）**；`h` 由数据表派生；`L` 可选。
 //! 既有 GUI/CLI 的两参数模型固定为 `<d> <l>`，所以本族 **`d` 槽位承载 `b`**：
 //! `OCSMPART key_1096_a 4 8` = b=4、L=8；`l` 传 0/省略 = 用表内该档默认 L。
-//! 1097：`OCSMPART key_1097_a 8 100`。
+//! 1097：`OCSMPART key_1097_a 8 25`（L=25 → L1=13/L2=12.5/L3=6，由 L 查长度系列表派生）。
 //!
 //! ## 视图与基点（照源图坐标，另见各族 `base_hint`）
 //!
@@ -157,7 +164,8 @@ pub const KEY_1096_L_SERIES: &[f64] = &[
 
 /// 1097 断裂分界线的 x 基准：距左侧 d1 沉孔外缘（D/2）的间隙。
 /// **定案（2026-09 用户画法修正）**：断裂线位于左侧 d1 孔（沉孔外缘）与中央起键孔之间，
-/// 与沉孔外缘留 [`BREAK_GAP`]；specimen：L1=60、D=6 → x = −(30−3−1) = −26。
+/// 与沉孔外缘留 [`BREAK_GAP`]；例：specimen L=100（查表 L1=60、D=6）→ x = −(30−3−1) = −26，
+/// 短键 L=25（查表 L1=13）→ x = −(6.5−3−1) = −2.5。**L1 由 L 查表派生**，不是行内固定值。
 ///（原注释称“按 specimen 推导的临时规则”，现按用户定案升格为正式推广规则。）
 const BREAK_GAP: f64 = 1.0;
 
@@ -198,6 +206,9 @@ struct KeyTable<T> {
     /// 长度 L 标准系列（1097 两表的 `l_series`；1096 用代码常量 [`KEY_1096_L_SERIES`]）。
     #[serde(default)]
     l_series: Vec<f64>,
+    /// **1097 专用**：L → (L1, L2, L3) 长度系列表（26 档；1096 无此表 → 空）。
+    #[serde(default)]
+    length_rows: Vec<Key1097LengthRow>,
     rows: Vec<T>,
 }
 
@@ -252,13 +263,27 @@ pub struct Key1097Row {
     /// 起键螺纹孔深度 L0（自顶面向下量）。
     #[serde(rename = "L0")]
     pub l0: f64,
-    /// 表内长度 L（当前 14 档均为 100）。
+    /// 该档默认长度 L（specimen 行 = 100；b=8/10 不合法 → 就近合法化）。
+    pub l: f64,
+    /// 固定用螺钉（GB/T 822 或 GB/T 65，表内 `d×L4` 列）——**当前画法不画出**，仅留档。
+    #[serde(default)]
+    #[allow(dead_code)]
+    pub screw: String,
+}
+
+/// GB/T 1097-2003 长度系列表一行（「L 与 L1、L2、L3 的对应长度系列」，26 档）。
+///
+/// **L1/L2/L3 是派生量**：由 [`key_1097_length_for`] 按 `L` 查表；`L` 不在表内 → 报错，
+/// **不插值、不外推**。孔位（±L1/2）、端距（L3=(L−L1)/2）与断裂线都由它派生。
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct Key1097LengthRow {
+    /// 键长 L（标准系列 25…450）。
     pub l: f64,
     /// 两端 d1 孔中心距 L1。
     pub l1: f64,
     /// 键中心 → 端面 L2（= L/2）。
     pub l2: f64,
-    /// d1 孔中心 → 端面 L3。
+    /// d1 孔中心 → 端面 L3（= (L−L1)/2）。
     pub l3: f64,
 }
 
@@ -400,8 +425,8 @@ fn sizes_1097(ty: KeyType) -> Vec<serde_json::Value> {
                 "l_max": allowed.last().copied().unwrap_or(def),
                 "lengths": lengths,
                 "extra": format!(
-                    "h={}；d0=M{} 起键孔、两端 D{}×h{} 沉孔（d1 {}）、孔距 L1={}",
-                    trim(r.h), trim(r.d0), trim(r.d_sink), trim(r.h1), trim(r.d1), trim(r.l1)),
+                    "h={}；d0=M{} 起键孔、两端 D{}×h{} 沉孔（d1 {}）；L1/L2/L3 由 L 查 GB/T 1097 长度系列表",
+                    trim(r.h), trim(r.d0), trim(r.d_sink), trim(r.h1), trim(r.d1)),
             })
         })
         .collect()
@@ -476,8 +501,11 @@ pub fn families_json() -> serde_json::Map<String, serde_json::Value> {
              （用户 2026-09 画法修正；源图粗线竖线+端部台阶是手工痕迹，不再照抄）。"
                 .to_string(),
             "螺纹小径 3/4 圈在 2细线层（用户拍板；源图在 4虚线层）。".to_string(),
-            "L：GB/T 1097-2003 标准系列 25、28、…、400（易紧通 info_42177 长度行实测），\
+            "L：GB/T 1097-2003 标准系列 25、28、…、450（嘉立创 new05232.htm 长度表 26 档），\
              约束 L < 10·b（注③；>400 按 GB/T 321 R20 选取）；下拉列该 b 的全部合法 L。"
+                .to_string(),
+            "**L1/L2/L3 由 L 查 GB/T 1097-2003 长度系列表**（26 档，不插值/不外推；表外 L 明确报错）；\
+             孔位 ±L1/2、端距 L3 与断裂线随 L 派生，不再用 specimen 固定值。"
                 .to_string(),
         ];
         // 源图 specimen 的 C 取表内下限；留档一行。
@@ -697,6 +725,32 @@ pub fn key_1097_l_series() -> &'static [f64] {
     &table_1097(KeyType::A).l_series
 }
 
+/// 1097 长度系列表（`L → L1/L2/L3`，26 档；A/B 两表必须一致，测试有护栏）。
+pub fn key_1097_length_rows() -> &'static [Key1097LengthRow] {
+    &table_1097(KeyType::A).length_rows
+}
+
+/// 查表派生：1097 长度 `L` → `(L1, L2, L3)` 行。**不插值、不外推**：
+/// `L` 不在 26 档表内（如 25/28 之间的 26、超过 450 等）→ `Err`，错误里列出全部可选 `L`。
+pub fn key_1097_length_for(l: f64) -> Result<&'static Key1097LengthRow, String> {
+    if let Some(row) = key_1097_length_rows()
+        .iter()
+        .find(|r| (r.l - l).abs() < 1e-9)
+    {
+        return Ok(row);
+    }
+    Err(format!(
+        "GB/T 1097-2003 长度系列表里没有 L={}（不插值/不外推）；可选 L（{} 档）：{}",
+        trim(l),
+        key_1097_length_rows().len(),
+        key_1097_length_rows()
+            .iter()
+            .map(|r| trim(r.l))
+            .collect::<Vec<_>>()
+            .join(", ")
+    ))
+}
+
 /// 1097 某 b 允许的 L（L 系列 ∩ `L < 10·b`），升序。
 ///
 /// 标准注③：键长应小于 10 倍键宽；>400 时按 GB/T 321 的 R20 系列选取（本库未列）。
@@ -747,26 +801,18 @@ pub fn key_1097_default_corrections() -> Vec<(f64, f64, f64)> {
     out
 }
 
-/// 1097 长度校验：L 必须 ∈ 系列且 `L < 10·b`（标准注③）。
-pub fn check_length_1097(b: f64, l: f64) -> Result<(), String> {
+/// 1097 长度校验 + 派生：`L ∈ 长度系列表`（不插值）且 `L < 10·b`（标准注③）。
+///
+/// 成功返回派生的 `L1/L2/L3` 行；表外 `L` → `Err`（列出可选系列）。
+/// 同时做数据护栏：表内任一行必须满足 `L2=L/2`、`L1+2L3=L`。
+pub fn key_1097_length_checked(b: f64, l: f64) -> Result<&'static Key1097LengthRow, String> {
     let Some((lo, hi)) = key_1097_l_range(b) else {
         return Err(format!("GB/T 1097-2003 数据表里没有 b={}", trim(b)));
     };
-    let row = row_1097(KeyType::A, b).expect("区间来自表行");
-    // 尺寸链自检：L2=L/2、L1+2·L3=L（源图/表内各档应恒满足）。
-    if (row.l2 - row.l / 2.0).abs() > 1e-9 || (row.l1 + 2.0 * row.l3 - row.l).abs() > 1e-9 {
-        return Err(format!(
-            "GB/T 1097 b={} 表内尺寸链不一致：L1={}、L2={}、L3={}、L={}（应满足 L2=L/2、L1+2L3=L）",
-            trim(b),
-            trim(row.l1),
-            trim(row.l2),
-            trim(row.l3),
-            trim(row.l)
-        ));
-    }
     if !(l > 0.0) || !l.is_finite() {
         return Err(format!("GB/T 1097 b={}：L 必须是正数（收到 {l}）", trim(b)));
     }
+    let row = key_1097_length_for(l)?;
     if l < lo - 1e-9 || l > hi + 1e-9 {
         return Err(format!(
             "GB/T 1097 b={} 的 L 取值范围是 {}…{}（L 系列值且 L<10b，GB/T 1097-2003 注③），收到 {}",
@@ -776,14 +822,22 @@ pub fn check_length_1097(b: f64, l: f64) -> Result<(), String> {
             trim(l)
         ));
     }
-    if !key_1097_l_allowed(b).iter().any(|v| (*v - l).abs() < 1e-9) {
+    // 尺寸链自检：L2=L/2、L1+2·L3=L（长度表 26 档应恒满足；几何只依赖 L1，L2/L3 供校验/文档）。
+    if (row.l2 - row.l / 2.0).abs() > 1e-9 || (row.l1 + 2.0 * row.l3 - row.l).abs() > 1e-9 {
         return Err(format!(
-            "GB/T 1097 b={} 的 L 须取标准系列值（25, 28, …, 400；L<10b；>400 按 GB/T 321 R20），收到 {}",
-            trim(b),
-            trim(l)
+            "GB/T 1097-2003 长度系列表 L={} 尺寸链不一致：L1={}、L2={}、L3={}（应满足 L2=L/2、L1+2L3=L）",
+            trim(row.l),
+            trim(row.l1),
+            trim(row.l2),
+            trim(row.l3)
         ));
     }
-    Ok(())
+    Ok(row)
+}
+
+/// 1097 长度校验（旧入口，保持返回 `Result<(), String>`）；实现见 [`key_1097_length_checked`]。
+pub fn check_length_1097(b: f64, l: f64) -> Result<(), String> {
+    key_1097_length_checked(b, l).map(|_| ())
 }
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -935,10 +989,11 @@ fn gen_1097(ty: KeyType, b: f64, l: f64, view: &str) -> Result<GenPart, String> 
         .ok_or_else(|| format!("GB/T 1097-2003 数据表里没有 b={}", trim(b)))?;
     // `l=0` = 该档默认 L（表内 100；b=8/10 就近合法化为 70/90）。
     let l = if l > 0.0 { l } else { key_1097_legal_default(row) };
-    check_length_1097(b, l)?;
+    // L → (L1,L2,L3)：查表派生（不插值/不外推）；L 表外/不合法 → 明确报错。
+    let length = key_1097_length_checked(b, l)?;
     let entities = match view {
-        "main" => main_1097(ty, row, l),
-        "top" => top_1097(ty, row, l),
+        "main" => main_1097(ty, row, length),
+        "top" => top_1097(ty, row, length),
         other => return Err(format!("key_1097 没有视图 {other}")),
     };
     let weight = weight_1097(ty, row, l);
@@ -963,8 +1018,8 @@ fn gen_1097(ty: KeyType, b: f64, l: f64, view: &str) -> Result<GenPart, String> 
 /// 形态（自底边到顶边）：`(xb,0) → (xb,y0) → [4 段 45° 折线 xb→xb+a→xb→xb−a→xb] → (xb,h)`，
 /// 其中 `y0=(h−4a)/2`；两端短竖线接在顶/底边上，中段严格 45°。
 /// 推广规则（用户定案）：`xb = −(L1/2 − D/2 − BREAK_GAP)`（位于左 d1 沉孔外缘与中央起键孔之间）。
-fn break_1097(r: &Key1097Row) -> Vec<[f64; 2]> {
-    let xb = -(r.l1 / 2.0 - r.d_sink / 2.0 - BREAK_GAP);
+fn break_1097(r: &Key1097Row, l1: f64) -> Vec<[f64; 2]> {
+    let xb = -(l1 / 2.0 - r.d_sink / 2.0 - BREAK_GAP);
     let a = BREAK_AMP;
     let y0 = (r.h - 4.0 * a) / 2.0;
     vec![
@@ -978,9 +1033,10 @@ fn break_1097(r: &Key1097Row) -> Vec<[f64; 2]> {
     ]
 }
 
-fn main_1097(ty: KeyType, r: &Key1097Row, l: f64) -> Vec<EntityType> {
+fn main_1097(ty: KeyType, r: &Key1097Row, len: &Key1097LengthRow) -> Vec<EntityType> {
+    let l = len.l;
     let (h, c) = (r.h, r.c);
-    let (xh, d0, d1, d) = (r.l1 / 2.0, r.d0, r.d1, r.d_sink);
+    let (xh, d0, d1, d) = (len.l1 / 2.0, r.d0, r.d1, r.d_sink);
     let (h1, c1, l0) = (r.h1, r.c1, r.l0);
     let rcs = d0 / 2.0 - c1 * 60f64.to_radians().tan(); // 锪锥小端半径
     let y0 = h - l0; // 起键孔底（当前各档 L0=h → 通高）
@@ -1085,7 +1141,7 @@ fn main_1097(ty: KeyType, r: &Key1097Row, l: f64) -> Vec<EntityType> {
     };
     // 左中材料：左缘 = 45° 断裂折线（细实线，只画线不填充），右缘 = 中央孔壁；
     // 顶/底边已由左半外形多段线覆盖 → 不再重复画闭合粗轮廓（旧实现把三者合成一条 1轮廓实线层 闭合线）。
-    let break_pts = break_1097(r);
+    let break_pts = break_1097(r, len.l1);
     let mut left_loop = break_pts.clone();
     left_loop.push([-d0 / 2.0, h]);
     left_loop.push([-d0 / 2.0, 0.0]);
@@ -1160,9 +1216,10 @@ fn main_1097(ty: KeyType, r: &Key1097Row, l: f64) -> Vec<EntityType> {
 }
 
 /// 1097 俯视图：A 跑道形 R=b/2 / B 矩形 + 倒角内轮廓 + 三组中心线 + 全部孔圈。
-fn top_1097(ty: KeyType, r: &Key1097Row, l: f64) -> Vec<EntityType> {
+fn top_1097(ty: KeyType, r: &Key1097Row, len: &Key1097LengthRow) -> Vec<EntityType> {
+    let l = len.l;
     let (b, c) = (r.b, r.c);
-    let (xh, d0, d1, d) = (r.l1 / 2.0, r.d0, r.d1, r.d_sink);
+    let (xh, d0, d1, d) = (len.l1 / 2.0, r.d0, r.d1, r.d_sink);
     let rcs = d0 / 2.0 - r.c1 * 60f64.to_radians().tan();
     let rmin = MINOR_THREAD_FACTOR * d0 / 2.0;
     let half = b / 2.0;
@@ -1224,7 +1281,7 @@ fn top_1097(ty: KeyType, r: &Key1097Row, l: f64) -> Vec<EntityType> {
 fn weight_1097(ty: KeyType, r: &Key1097Row, l: f64) -> f64 {
     let area = match ty {
         KeyType::A => (l - r.b).max(0.0) * r.b + std::f64::consts::PI * r.b * r.b / 4.0,
-        KeyType::B => r.l * r.b,
+        KeyType::B => l * r.b,
         KeyType::C => unreachable!(),
     };
     let mut vol = area * r.h;
@@ -1536,9 +1593,16 @@ mod tests {
 
     // ── 1097 specimen b=8、h=7、L=100（模板见 平键_几何反解.md §3）──
 
+    /// specimen 期望（b=8、h=7、L=100、xh=L1/2=30）。
     fn exp_1097_main_a() -> Vec<EntityType> {
-        let (h, l, c) = (7.0, 100.0, 0.25);
-        let (xh, d0, d1, d) = (30.0, 3.0, 3.4, 6.0);
+        exp_1097_main_a_with(100.0, 30.0)
+    }
+
+    /// 参数化期望：只变 `L` 与 `xh=L1/2`（其余照 b=8 specimen 行）。
+    /// `exp_1097_main_a_with(25.0, 6.5)` = 用户模板右侧目标（L=25→L1=13）。
+    fn exp_1097_main_a_with(l: f64, xh: f64) -> Vec<EntityType> {
+        let (h, c) = (7.0, 0.25);
+        let (d0, d1, d) = (3.0, 3.4, 6.0);
         let (h1, c1, l0) = (2.4, 0.3, 7.0);
         let rcs = d0 / 2.0 - c1 * 60f64.to_radians().tan();
         let y0 = h - l0;
@@ -1613,8 +1677,12 @@ mod tests {
     }
 
     fn exp_1097_main_b() -> Vec<EntityType> {
-        let (h, l, c) = (7.0, 100.0, 0.25);
-        let (xh, d0, d1, d) = (30.0, 3.0, 3.4, 6.0);
+        exp_1097_main_b_with(100.0, 30.0)
+    }
+
+    fn exp_1097_main_b_with(l: f64, xh: f64) -> Vec<EntityType> {
+        let (h, c) = (7.0, 0.25);
+        let (d0, d1, d) = (3.0, 3.4, 6.0);
         let (h1, c1, l0) = (2.4, 0.3, 7.0);
         let rcs = d0 / 2.0 - c1 * 60f64.to_radians().tan();
         let y0 = h - l0;
@@ -1681,8 +1749,12 @@ mod tests {
     }
 
     fn exp_1097_top_a() -> Vec<EntityType> {
-        let (b, l, c) = (8.0, 100.0, 0.25);
-        let (xh, d0, d1, d) = (30.0, 3.0, 3.4, 6.0);
+        exp_1097_top_a_with(100.0, 30.0)
+    }
+
+    fn exp_1097_top_a_with(l: f64, xh: f64) -> Vec<EntityType> {
+        let (b, c) = (8.0, 0.25);
+        let (d0, d1, d) = (3.0, 3.4, 6.0);
         let rcs = d0 / 2.0 - 0.3 * 60f64.to_radians().tan();
         let rmin = 0.85 * d0 / 2.0;
         let half = b / 2.0;
@@ -1717,8 +1789,12 @@ mod tests {
     }
 
     fn exp_1097_top_b() -> Vec<EntityType> {
-        let (b, l, c) = (8.0, 100.0, 0.25);
-        let (xh, d0, d1, d) = (30.0, 3.0, 3.4, 6.0);
+        exp_1097_top_b_with(100.0, 30.0)
+    }
+
+    fn exp_1097_top_b_with(l: f64, xh: f64) -> Vec<EntityType> {
+        let (b, c) = (8.0, 0.25);
+        let (d0, d1, d) = (3.0, 3.4, 6.0);
         let rcs = d0 / 2.0 - 0.3 * 60f64.to_radians().tan();
         let rmin = 0.85 * d0 / 2.0;
         let half = b / 2.0;
@@ -1748,29 +1824,195 @@ mod tests {
         //（模板自身如此），所以逐图元比对直接走视图函数，公共入口的该校验另行单测。
         let row_a = row_1097(KeyType::A, 8.0).unwrap();
         let row_b = row_1097(KeyType::B, 8.0).unwrap();
+        let len = key_1097_length_for(100.0).unwrap();
         assert_entities(
-            &main_1097(KeyType::A, row_a, 100.0),
+            &main_1097(KeyType::A, row_a, len),
             &exp_1097_main_a(),
             "key_1097_a 主视图（specimen L=100）",
         );
         assert_entities(
-            &top_1097(KeyType::A, row_a, 100.0),
+            &top_1097(KeyType::A, row_a, len),
             &exp_1097_top_a(),
             "key_1097_a 俯视图（specimen L=100）",
         );
         assert_entities(
-            &main_1097(KeyType::B, row_b, 100.0),
+            &main_1097(KeyType::B, row_b, len),
             &exp_1097_main_b(),
             "key_1097_b 主视图（specimen L=100）",
         );
         assert_entities(
-            &top_1097(KeyType::B, row_b, 100.0),
+            &top_1097(KeyType::B, row_b, len),
             &exp_1097_top_b(),
             "key_1097_b 俯视图（specimen L=100）",
         );
         // 公共入口：specimen 尺寸除 L 外都应能出（L=100 被注③挡住，见 length 测试）。
         let p = gen_all("key_1097_a", 8.0, 70.0, "top").unwrap();
         assert_eq!(p.meta.spec, "8×7×70");
+    }
+
+    /// HATCH 边界 → 无向线段规范化集合（跨 HATCH 合并；方向/起点无关）。
+    /// 模板右侧是 1 个 HATCH 3 环、本库是 3 个 HATCH，故只能比边集合。
+    fn hatch_edge_set(entities: &[EntityType]) -> Vec<String> {
+        use ocs_plugin_api::host::acadrust::entities::hatch::BoundaryEdge;
+        let mut out = Vec::new();
+        for e in entities {
+            let EntityType::Hatch(h) = e else { continue };
+            for p in &h.paths {
+                for edge in &p.edges {
+                    if let BoundaryEdge::Line(le) = edge {
+                        out.push(undirected_edge((le.start.x, le.start.y), (le.end.x, le.end.y)));
+                    }
+                }
+            }
+        }
+        out.sort();
+        out
+    }
+
+    fn edge_set_of_loops(loops: &[Vec<[f64; 2]>]) -> Vec<String> {
+        let mut out = Vec::new();
+        for lp in loops {
+            for i in 0..lp.len() {
+                let j = (i + 1) % lp.len();
+                out.push(undirected_edge((lp[i][0], lp[i][1]), (lp[j][0], lp[j][1])));
+            }
+        }
+        out.sort();
+        out
+    }
+
+    fn undirected_edge(a: (f64, f64), b: (f64, f64)) -> String {
+        let (a, b) = if a <= b { (a, b) } else { (b, a) };
+        format!("({:.4},{:.4})-({:.4},{:.4})", a.0, a.1, b.0, b.1)
+    }
+
+    /// 短键对模板右侧逐图元：用户模板 `导向平键参数化问题.dxf` 右侧 = b=8×h=7×L=25 目标画法。
+    /// 坐标取自 `review/1097长度系列_dump.txt`（相对键中心归一；左侧 INSERT 的孔位错在 specimen L1=60）。
+    #[test]
+    fn template_1097_short_l25_matches_right_side() {
+        // L=25 → (L1,L2,L3)=(13,12.5,6)（GB/T 1097 首档）。
+        let len = key_1097_length_for(25.0).unwrap();
+        assert_eq!((len.l1, len.l2, len.l3), (13.0, 12.5, 6.0), "L=25 查表");
+        let row = row_1097(KeyType::A, 8.0).unwrap();
+        let got = main_1097(KeyType::A, row, len);
+        // 逐图元（模板右侧坐标；xh=L1/2=6.5，端面 ±L/2=±12.5，断裂线 xb=−2.5）。
+        let got_nh: Vec<EntityType> = got
+            .iter()
+            .filter(|e| !matches!(e, EntityType::Hatch(_)))
+            .cloned()
+            .collect();
+        let want_nh: Vec<EntityType> = exp_1097_main_a_with(25.0, 6.5)
+            .into_iter()
+            .filter(|e| !matches!(e, EntityType::Hatch(_)))
+            .collect();
+        assert_entities(&got_nh, &want_nh, "key_1097_a L=25 主视图（specimen 结构 + 查表坐标）");
+        // 模板右侧只有 18 个非 HATCH 图元：材料边界 mid/right 在模板里只作剖面线边界，不单独画可见线；
+        // 本库照 specimen 源模板仍画这两条（与既有孔壁/外形边完全重合，图形无人眼可见差别）→ 比对时剔除。
+        let material_outline = |e: &EntityType| {
+            matches!(e, EntityType::LwPolyline(pl)
+                if pl.is_closed && pl.common.layer == LAYER_MAIN
+                    && (pl.vertices.len() == 6 || pl.vertices.len() == 8)
+                    && pl.vertices.iter().any(|v| {
+                        near(v.location.x, 4.8) || near(v.location.x, 8.2)
+                    }))
+        };
+        let got_target: Vec<EntityType> = got
+            .iter()
+            .filter(|e| !matches!(e, EntityType::Hatch(_)) && !material_outline(e))
+            .cloned()
+            .collect();
+        let want_target: Vec<EntityType> = want_nh
+            .iter()
+            .filter(|e| !material_outline(e))
+            .cloned()
+            .collect();
+        assert_eq!(got_target.len(), 18, "模板右侧 18 个非 HATCH 图元");
+        assert_entities(
+            &got_target,
+            &want_target,
+            "key_1097_a L=25 主视图（模板右侧 18 图元）",
+        );
+        // HATCH：模板右侧 1 个 HATCH 3 环，本库 3 个 HATCH；边界线边集合必须逐段一致。
+        let want_loops: Vec<Vec<[f64; 2]>> = vec![
+            vec![
+                [-1.5, 0.0], [-1.5, 7.0], [-2.5, 7.0], [-2.5, 4.5], [-3.0, 4.0],
+                [-2.5, 3.5], [-2.0, 3.0], [-2.5, 2.5], [-2.5, 0.0],
+            ],
+            vec![
+                [4.8, 0.0], [4.8, 4.6], [3.5, 4.6], [3.5, 7.0], [1.5, 7.0], [1.5, 0.0],
+            ],
+            vec![
+                [8.2, 0.0], [12.25, 0.0], [12.5, 0.25], [12.5, 6.75], [12.25, 7.0],
+                [9.5, 7.0], [9.5, 4.6], [8.2, 4.6],
+            ],
+        ];
+        assert_eq!(
+            hatch_edge_set(&got),
+            edge_set_of_loops(&want_loops),
+            "L=25 主视图 3 片剖面线边界应与模板右侧一致"
+        );
+        // 公共入口也能直接出 L=25（b=8：25<80 合法）。
+        let p = gen_all("key_1097_a", 8.0, 25.0, "main").unwrap();
+        assert_eq!(p.meta.spec, "8×7×25");
+        let got_nh2: Vec<EntityType> = p
+            .entities
+            .iter()
+            .filter(|e| !matches!(e, EntityType::Hatch(_)))
+            .cloned()
+            .collect();
+        assert_entities(
+            &got_nh2,
+            &want_nh,
+            "key_1097_a L=25 公共入口",
+        );
+    }
+
+    /// 短键 L=25/32/50：孔位/断裂线全部随长度表派生（不再用 specimen L1=60）。
+    #[test]
+    fn short_keys_l25_l32_l50_follow_length_table() {
+        for l in [25.0, 32.0, 50.0] {
+            let len = key_1097_length_for(l).unwrap();
+            let expect_xh = len.l1 / 2.0;
+            let d_sink = row_1097(KeyType::A, 8.0).unwrap().d_sink;
+            let expect_xb = -(expect_xh - d_sink / 2.0 - BREAK_GAP);
+            for fam in ["key_1097_a", "key_1097_b"] {
+                // 俯视图：除中央起键孔外的圆全部在 ±L1/2。
+                let p = gen_all(fam, 8.0, l, "top").unwrap();
+                let mut centers: Vec<f64> = p
+                    .entities
+                    .iter()
+                    .filter_map(|e| match e {
+                        EntityType::Circle(c) if c.center.x.abs() > 1e-9 => Some(c.center.x),
+                        _ => None,
+                    })
+                    .collect();
+                centers.sort_by(|a, b| a.partial_cmp(b).unwrap());
+                assert_eq!(centers.len(), 4, "{fam} L={l}：两端各 d1/D 两圈");
+                for (i, x) in centers.iter().enumerate() {
+                    let side = if i < 2 { -1.0 } else { 1.0 };
+                    assert!(
+                        (x - side * expect_xh).abs() < 1e-12,
+                        "{fam} L={l}：孔心应 ±L1/2={expect_xh}，实得 {x}"
+                    );
+                }
+                // 主视图：断裂线位于 xb（随 L1 派生）。
+                let m = gen_all(fam, 8.0, l, "main").unwrap();
+                let thin = m
+                    .entities
+                    .iter()
+                    .find_map(|e| match e {
+                        EntityType::LwPolyline(pl) if pl.common.layer == LAYER_THIN => Some(pl),
+                        _ => None,
+                    })
+                    .expect("断裂线");
+                assert!(
+                    (thin.vertices[0].location.x - expect_xb).abs() < 1e-12,
+                    "{fam} L={l}：断裂线应在 {expect_xb}（L1={}），实得 {}",
+                    len.l1,
+                    thin.vertices[0].location.x
+                );
+            }
+        }
     }
 
     /// 1097 断裂分界线（用户 2026-09 画法修正）：必在 `2细线层`；形态 = 2 端竖线 + 4 段严格 45°
@@ -1780,7 +2022,8 @@ mod tests {
         for (fam, ty) in [("key_1097_a", KeyType::A), ("key_1097_b", KeyType::B)] {
             let row = row_1097(ty, 8.0).unwrap();
             for (l, who) in [(100.0, "specimen L=100"), (70.0, "合法 L=70")] {
-                let ents = main_1097(ty, row, l);
+                let len = key_1097_length_for(l).unwrap();
+                let ents = main_1097(ty, row, len);
                 // 主视图只有一条 `2细线层` 图元 = 分界线（其余线在 1/3/4/5 层）。
                 let thin: Vec<_> = ents
                     .iter()
@@ -1798,7 +2041,7 @@ mod tests {
                     .map(|v| (v.location.x, v.location.y))
                     .collect();
                 assert_eq!(pts.len(), 7, "{fam} {who}：2 端竖线 + 4 段45° → 7 顶点");
-                let xb = -(row.l1 / 2.0 - row.d_sink / 2.0 - BREAK_GAP);
+                let xb = -(len.l1 / 2.0 - row.d_sink / 2.0 - BREAK_GAP);
                 assert!((pts[0].0 - xb).abs() < 1e-12 && pts[0].1.abs() < 1e-12, "起点在底边");
                 assert!(
                     (pts[6].0 - xb).abs() < 1e-12 && (pts[6].1 - row.h).abs() < 1e-12,
@@ -1957,13 +2200,91 @@ mod tests {
         // 传 L 要真正进几何：L=70 的 1097A 主视图左端外形到 x=-35。
         let p = gen_all("key_1097_a", 8.0, 70.0, "main").unwrap();
         assert_eq!(p.meta.spec, "8×7×70");
+        // L=70 → L1=40（查表）→ 断裂线 xb=−(20−3−1)=−16；倒角棱线从 −35 起、止于 −16。
         assert!(
             p.entities.iter().any(|e| matches!(e, EntityType::Line(l)
-                if near(l.start.x, -35.0) && near(l.start.y, 6.75) && near(l.end.x, -26.0))),
-            "L=70 的倒角棱线应止于 x=-35"
+                if near(l.start.x, -35.0) && near(l.start.y, 6.75) && near(l.end.x, -16.0))),
+            "L=70 的倒角棱线应从 x=-35 止于断裂线 x=-16"
         );
         let p = gen_all("key_1097_b", 8.0, 0.0, "main").unwrap();
         assert_eq!(p.meta.spec, "8×7×70", "省略 L 时 b=8 默认应为合法值 70");
+    }
+
+    /// GB/T 1097-2003「L 与 L1、L2、L3 的对应长度系列」26 档逐档断言
+    /// （数据源：嘉立创 new05232.htm，2026-09-24 抓取 /review/1097长度系列_进度.md）+ 表外报错。
+    #[test]
+    fn length_table_1097_26_rows_and_out_of_table_errors() {
+        const WANT: &[(f64, f64, f64, f64)] = &[
+            (25.0, 13.0, 12.5, 6.0),
+            (28.0, 14.0, 14.0, 7.0),
+            (32.0, 16.0, 16.0, 8.0),
+            (36.0, 18.0, 18.0, 9.0),
+            (40.0, 20.0, 20.0, 10.0),
+            (45.0, 23.0, 22.5, 11.0),
+            (50.0, 26.0, 25.0, 12.0),
+            (56.0, 30.0, 28.0, 13.0),
+            (63.0, 35.0, 31.5, 14.0),
+            (70.0, 40.0, 35.0, 15.0),
+            (80.0, 48.0, 40.0, 16.0),
+            (90.0, 54.0, 45.0, 18.0),
+            (100.0, 60.0, 50.0, 20.0),
+            (110.0, 66.0, 55.0, 22.0),
+            (125.0, 75.0, 62.5, 25.0),
+            (140.0, 80.0, 70.0, 30.0),
+            (160.0, 90.0, 80.0, 35.0),
+            (180.0, 100.0, 90.0, 40.0),
+            (200.0, 110.0, 100.0, 45.0),
+            (220.0, 120.0, 110.0, 50.0),
+            (250.0, 140.0, 125.0, 55.0),
+            (280.0, 160.0, 140.0, 60.0),
+            (320.0, 180.0, 160.0, 70.0),
+            (360.0, 200.0, 180.0, 80.0),
+            (400.0, 220.0, 200.0, 90.0),
+            (450.0, 250.0, 225.0, 100.0),
+        ];
+        let rows = key_1097_length_rows();
+        assert_eq!(rows.len(), WANT.len(), "长度系列应 26 档");
+        for (i, (l, l1, l2, l3)) in WANT.iter().copied().enumerate() {
+            let r = key_1097_length_for(l).unwrap_or_else(|e| panic!("{e}"));
+            assert_eq!(
+                (r.l, r.l1, r.l2, r.l3),
+                (l, l1, l2, l3),
+                "长度表第 {} 档 L={} 与 JLC 表不符",
+                i + 1,
+                trim(l)
+            );
+            let rb = &table_1097(KeyType::B).length_rows[i];
+            assert_eq!(
+                (rb.l, rb.l1, rb.l2, rb.l3),
+                (l, l1, l2, l3),
+                "A/B 两表第 {} 档不一致",
+                i + 1
+            );
+            assert_eq!(key_1097_l_series()[i], l, "l_series 与长度表键不一致");
+            assert!(
+                (r.l2 - l / 2.0).abs() < 1e-12 && (r.l1 + 2.0 * r.l3 - l).abs() < 1e-12,
+                "第 {} 档应满足 L2=L/2、L1+2L3=L",
+                i + 1
+            );
+        }
+        // 表外：不插值（25/28 之间的 26、27）、不外推（500）→ 报错并列全系列。
+        for bad in [26.0, 27.0, 30.0, 500.0, 0.0, -25.0] {
+            let err = key_1097_length_for(bad).unwrap_err();
+            assert!(err.contains(&format!("没有 L={}", trim(bad))), "{bad}: {err}");
+            assert!(
+                err.contains("不插值") && err.contains("25") && err.contains("450"),
+                "{bad}: {err}"
+            );
+        }
+        // 公共入口：表外 L 也必须明确报错。
+        let err = gen_all("key_1097_a", 8.0, 27.0, "main").unwrap_err();
+        assert!(err.contains("没有 L=27") && err.contains("不插值"), "{err}");
+        let err = gen_all("key_1097_a", 45.0, 500.0, "main").unwrap_err();
+        assert!(err.contains("没有 L=500"), "{err}");
+        // 固定用螺钉列（同页 rowspan 对齐解析）：逐行抽检。
+        for (b, want) in [(8.0, "M3×8"), (12.0, "M4×10"), (22.0, "M6×16"), (45.0, "M12×25")] {
+            assert_eq!(row_1097(KeyType::A, b).unwrap().screw, want, "b={b} 固定螺钉");
+        }
     }
 
     /// 目录集成：五族登记、kind=key、型别下拉数据、视图/规格数、树上挂位。

@@ -778,7 +778,8 @@ fn place_one(
 ///   例：`OCSMPART detail_hub_keyway 25 len 30 view main`（b/t₂/r 由 d 查表；len 缺省 30）。
 /// - **平键**（`key_1096_{a,b,c}` = GB/T 1096 三型；`key_1097_{a,b}` = GB/T 1097 两型）：
 ///   `<族> <b> <L> [view 视图] [at x,y] [rot 度]`（`d` 槽位承载键宽 b，h 查表派生；`l=0` = 该档默认 L）
-///   例：`OCSMPART key_1096_a 4 8`（b=4、L=8）、`OCSMPART key_1096_b 22 0`、`OCSMPART key_1097_b 10 100`。
+///   例：`OCSMPART key_1096_a 4 8`（b=4、L=8）、`OCSMPART key_1096_b 22 0`、
+///   `OCSMPART key_1097_a 8 25`（短键；L1/L2/L3 由 L 查 GB/T 1097 长度系列表派生）。
 ///
 /// 解析失败（或参数为空）返回 `None` → 回退到原 GUI（零件库窗口 + 鼠标放置）流程。
 #[derive(Debug, PartialEq)]
@@ -2344,7 +2345,7 @@ impl OcsmPlugin {
                          毂槽 `OCSMPART detail_hub_keyway <d> [len 毂长] [view main|side]`\
                          （例：OCSMPART detail_hub_keyway 25 len 30 view main；b/t₂/r 由 d 查表，len 缺省 30）；\
                          平键 `OCSMPART key_1096_{a|b|c} <b> <L> [view main|top|section]`、`OCSMPART key_1097_{a|b} <b> <L> [view main|top]`\
-                         （例：OCSMPART key_1096_a 4 8、OCSMPART key_1097_b 10 100；L 省略/0 = 该档默认，L 须 ∈ 标准系列且 L<10b）；\
+                         （例：OCSMPART key_1096_a 4 8、OCSMPART key_1097_a 8 25；L 省略/0 = 该档默认，L 须 ∈ 标准系列且 L<10b，1097 的 L1/L2/L3 由 L 查长度系列表派生）；\
                          不带参数则打开零件库窗口。",
                     );
                     return;
