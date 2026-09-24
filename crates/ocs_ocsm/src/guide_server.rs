@@ -641,7 +641,10 @@ fn route(
         ("POST", "/api/shaft_export") => api_shaft_export(body, &sender!()),
         ("GET", t) if t.starts_with("/api/hole_sizes") => (200, json, crate::hole::sizes_json()),
         ("POST", "/api/hole_preview") => api_hole_preview(body),
-        ("POST", "/api/hole_export") => api_hole_export(body, &sender!()),
+        // 前缀守卫：GUI 的 POST 带 `?tab=N`（查询串不能拿字面量比，否则落 `_ =>` 404；
+        // 与同表的 `/api/bom_export` 等一致）。`tab` 由 `sender!()` → `router.resolve(target, body)`
+        // 从查询串/body 解析，handler 本身不需要 target。
+        ("POST", _t) if _t.starts_with("/api/hole_export") => api_hole_export(body, &sender!()),
         ("GET", t) if t.starts_with("/api/parts_ping") => {
             crate::page_window_ping("parts", t.contains("bye=1"));
             (200, json, r#"{"ok":true}"#.into())
@@ -14520,7 +14523,10 @@ mod weld_tests {
         let _g = export_lock();
         let mock = Arc::new(MockSender::new(ocsm_layered_doc()));
         let sender: Arc<dyn PluginRequestSender> = mock.clone();
-        let server = spawn_fixed(mock.clone()).expect("spawn guide server");
+        // 登记标签页 2 → mock：`?tab=2` 的请求要能解析到这个 sender（不是 409/404）。
+        let router = Arc::new(SenderRouter::new(mock.clone(), None));
+        router.set_current(2, mock.clone());
+        let server = spawn(router).expect("spawn guide server");
         let html = http_req(server.port, "GET", "/hole", "");
         assert!(html.contains("OCSM 孔生成器"), "孔窗口标题");
         assert!(html.contains("kindCounterbore") && html.contains("kindCountersink"), "四类孔按钮");
@@ -14600,6 +14606,20 @@ mod weld_tests {
         // 导出（无 at → 待放置件）
         let resp = apply_hole_export(&sender, body.as_bytes()).expect("出图");
         assert!(resp.contains("\"ok\":true") && resp.contains("已生成沉头孔"), "{resp}");
+        // ★ 回归（用户实测：POST /api/hole_export?tab=2 → 404）：真起服务打这个 URL，
+        //   带查询串与不带都要命中路由（分发表用前缀守卫；tab 走 router.resolve）。
+        let via_http = http_req(server.port, "POST", "/api/hole_export", &body);
+        let v: serde_json::Value = serde_json::from_str(&via_http)
+            .unwrap_or_else(|e| panic!("不带 tab 的 POST 应返回 JSON（{e}）：{via_http}"));
+        assert_eq!(v["ok"], true, "不带 tab：{via_http}");
+        let via_http_tab = http_req(server.port, "POST", "/api/hole_export?tab=2", &body);
+        assert!(
+            !via_http_tab.contains("not found"),
+            "带 ?tab=2 的 POST 不应 404：{via_http_tab}"
+        );
+        let v: serde_json::Value = serde_json::from_str(&via_http_tab)
+            .unwrap_or_else(|e| panic!("带 tab 的 POST 应是 JSON（{e}）：{via_http_tab}"));
+        assert_eq!(v["ok"], true, "带 tab：{via_http_tab}");
         let block = crate::pending_block().expect("已登记待放置件");
         assert!(block.starts_with("OCSM_HOLE_"), "{block}");
         assert!(
