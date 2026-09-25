@@ -657,6 +657,7 @@ pub fn options_json() -> Result<serde_json::Value, String> {
         "gear_card": crate::gear_table::options_json(),
         "ansi_card": crate::ansi_table::options_json(),
         "nf_card": crate::nf_table::options_json(),
+        "din_card": crate::din_table::options_json(),
         "pin_series": crate::spline_tol::pin_series()?,
         "pin_series_note": "GB/T 3478.9-2008 表 1（67 档，R40；极限偏差 ±0.001 mm）",
         "info_layers": {

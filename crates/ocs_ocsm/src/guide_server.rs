@@ -5332,6 +5332,11 @@ fn apply_card_preview(body: &[u8]) -> Result<String, String> {
                 .map_err(|e| format!("NF 内花键参数表：请求字段无效：{e}"))?;
             m.preview_json()?
         }
+        crate::card::CardRenderer::DinTable => {
+            let m: crate::din_table::DinTableModel = serde_json::from_value(v)
+                .map_err(|e| format!("DIN 花键参数表：请求字段无效：{e}"))?;
+            m.preview_json()?
+        }
     };
     Ok(out.to_string())
 }
@@ -5477,6 +5482,32 @@ pub(crate) fn apply_card_export(
                 "NF 内花键参数表".to_string(),
                 crate::nf_table::BLOCK.to_string(),
                 crate::nf_table::block_entities(),
+                at,
+                rot,
+                ins,
+                attrs,
+                meta,
+                echo,
+            )
+        }
+        CardRenderer::DinTable => {
+            let m: crate::din_table::DinTableModel = serde_json::from_value(v)
+                .map_err(|e| format!("DIN 花键参数表：请求字段无效：{e}"))?;
+            let spec = m.spec()?;
+            let echo = m.echo_note()?;
+            let at = m.at;
+            let rot = m.rot;
+            let ins = acadrust::EntityType::Insert(crate::din_table::build_insert(
+                &spec,
+                at.unwrap_or([0.0, 0.0]),
+                rot,
+            )?);
+            let attrs = m.pending_attrs()?;
+            let meta = m.part_meta_json()?;
+            (
+                "DIN 花键参数表".to_string(),
+                crate::din_table::BLOCK.to_string(),
+                crate::din_table::block_entities(),
                 at,
                 rot,
                 ins,
@@ -15688,20 +15719,23 @@ mod weld_tests {
         router.set_current(2, mock.clone());
         let server = spawn(router).expect("spawn guide server");
 
-        // ── 选项表：五张卡 + 齿轮/ANSI/NF 选项 ──
+        // ── 选项表：六张卡 + 齿轮/ANSI/NF/DIN 选项 ──
         let j = http_req(server.port, "GET", "/api/spline_options", "");
         let v: serde_json::Value = serde_json::from_str(&j).unwrap();
-        assert_eq!(v["card_types"].as_array().unwrap().len(), 5, "{j}");
+        assert_eq!(v["card_types"].as_array().unwrap().len(), 6, "{j}");
         assert_eq!(v["card_types"][1]["renderer"], "gear_table");
         assert_eq!(v["card_types"][2]["renderer"], "ansi_table_cn");
         assert_eq!(v["card_types"][3]["renderer"], "ansi_table_en");
         assert_eq!(v["card_types"][4]["renderer"], "nf_table");
+        assert_eq!(v["card_types"][5]["renderer"], "din_table");
         assert_eq!(v["gear_card"]["columns"].as_array().unwrap().len(), 19);
         assert_eq!(v["ansi_card"]["profiles"].as_array().unwrap().len(), 5);
         assert_eq!(v["ansi_card"]["columns"]["int"].as_array().unwrap().len(), 17);
         assert_eq!(v["ansi_card"]["columns"]["ext"].as_array().unwrap().len(), 17);
         assert_eq!(v["nf_card"]["columns"].as_array().unwrap().len(), 18);
         assert_eq!(v["nf_card"]["modules"].as_array().unwrap().len(), 10);
+        assert_eq!(v["din_card"]["columns"].as_array().unwrap().len(), 26);
+        assert_eq!(v["din_card"]["grades"].as_array().unwrap().len(), 12);
 
         // ── 通用端点也覆盖花键卡（同一个分派表；GUI 花键卡仍走 /api/spline_*）──
         let spline = serde_json::json!({
@@ -15851,6 +15885,49 @@ mod weld_tests {
         assert_eq!(mock.insert_attr_counts().last().copied(), Some(18));
         assert_eq!(mock.block_entities("OCSM_NFTABLE_NF_INT").len(), 97, "66 线 + 13 标签 + 18 属性");
 
+        // ── DIN 花键参数表（Bild 6 两栏）：示例逐项 = 标准原印值；缺口「—」；出表 26 ATTRIB ──
+        let din = serde_json::json!({
+            "card": "DIN花键参数表", "m": 3.0, "z": 38, "d_b": 120.0,
+            "hub": "9H", "shaft": "8f", "at": null, "rot": 0.0,
+        });
+        let j = http_req(server.port, "POST", "/api/card_preview", &din.to_string());
+        let v: serde_json::Value = serde_json::from_str(&j).unwrap();
+        assert_eq!(v["ok"], true, "{j}");
+        assert_eq!(v["renderer"], "din_table");
+        assert_eq!(v["anchor"], true);
+        let items = v["items"].as_array().unwrap();
+        assert_eq!(items.len(), 26, "13 行 × 2 栏");
+        let get = |tag: &str| items.iter().find(|it| it["tag"] == tag).unwrap();
+        assert_eq!(get("N标记")["value"], "Nabe DIN 5480 – N120×3×38×9H");
+        assert_eq!(get("N槽宽max")["value"], "6.361");
+        assert_eq!(get("N槽宽eff")["value"], "6.271");
+        assert_eq!(get("W齿厚svmax")["value"], "6.243");
+        assert_eq!(get("W齿厚smin")["value"], "6.18");
+        assert_eq!(v["missing"].as_array().unwrap().len(), 0);
+        // 出表：无 at → 待放置件 26 ATTRIB；块几何 20 线 + 27 标签 + 26 属性；有 at → 直插
+        let resp = apply_card_export(&sender, din.to_string().as_bytes()).expect("DIN 出表");
+        assert!(resp.contains("\"ok\":true") && resp.contains("DIN"), "{resp}");
+        assert_eq!(crate::pending_block().unwrap(), "OCSM_DINTABLE_DIN");
+        assert_eq!(crate::pending_part_for_test().unwrap().attrs.len(), 26);
+        let mut din_at = din.clone();
+        din_at["at"] = serde_json::json!([90.0, 100.0]);
+        din_at["rot"] = serde_json::json!(5.0);
+        let j = http_req(server.port, "POST", "/api/card_export?tab=2", &din_at.to_string());
+        let v: serde_json::Value = serde_json::from_str(&j).unwrap();
+        assert_eq!(v["ok"], true, "{j}");
+        let ins = mock.inserts().last().unwrap().clone();
+        assert_eq!(ins.0, "OCSM_DINTABLE_DIN");
+        assert_eq!(mock.insert_attr_counts().last().copied(), Some(26));
+        assert_eq!(mock.block_entities("OCSM_DINTABLE_DIN").len(), 20 + 25 + 26, "20 线 + 25 标签 + 26 属性");
+        // DIN 缺口路径：模数组 5–10 的公差「—」
+        let din_gap = serde_json::json!({
+            "card": "DIN花键参数表", "m": 5.0, "z": 16, "d_b": 80.0,
+            "hub": "9H", "shaft": "8f", "at": null, "rot": 0.0,
+        });
+        let j = http_req(server.port, "POST", "/api/card_preview", &din_gap.to_string());
+        let v: serde_json::Value = serde_json::from_str(&j).unwrap();
+        assert!(!v["missing"].as_array().unwrap().is_empty(), "{j}");
+
         // ── 报错路径：不认识的卡类型 / 非系列径节 / 表达式不自洽 / NF 齿数与表值不一致 ──
         let bad = serde_json::json!({"card": "铭牌", "expr": "x"});
         let j = http_req(server.port, "POST", "/api/card_preview", &bad.to_string());
@@ -15870,6 +15947,12 @@ mod weld_tests {
         });
         let j = http_req(server.port, "POST", "/api/card_preview", &bad.to_string());
         assert!(j.contains("不一致") && j.contains("N=38"), "{j}");
+        let bad = serde_json::json!({
+            "card": "DIN花键参数表", "m": 3.0, "z": 38, "d_b": 120.0,
+            "hub": "9v", "shaft": "8f",
+        });
+        let j = http_req(server.port, "POST", "/api/card_preview", &bad.to_string());
+        assert!(j.contains("偏差系列"), "{j}");
     }
 
     /// GUI 共享助手 `/ocsm_gui_common.js`（跨模块共享实现 > 各写一份）：

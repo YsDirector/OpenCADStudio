@@ -903,6 +903,24 @@ pub struct Din5480Row {
     pub x_m: f64,
     /// 变位系数 `x₁ = (x₁·m)/m`（由表列派生）。
     pub x: f64,
+    /// 公称齿槽宽/齿厚 `e₂ = s₁`（CSV 的 `e2_s1` 列；DIN 5480-1 §10 配合基准）。
+    pub e2_s1: f64,
+    /// 内花键齿根圆直径 `d_f2`（CSV 的 `d_f2` 列）。
+    pub d_f2: f64,
+    /// 内花键齿根圆偏差 `A_d_f2`（CSV 的 `A_df2` 列）。
+    pub a_df2: f64,
+    /// 内花键齿根成形圆直径 min `d_Ff2`（CSV 的 `d_Ff2min` 列）。
+    pub d_ff2_min: f64,
+    /// 内花键齿顶圆直径 `d_a2`（CSV 的 `d_a2` 列）。
+    pub d_a2: f64,
+    /// 外花键齿顶圆直径 `d_a1`（CSV 的 `d_a1` 列）。
+    pub d_a1: f64,
+    /// 外花键齿根成形圆直径 max `d_Ff1`（CSV 的 `d_Ff1max` 列）。
+    pub d_ff1_max: f64,
+    /// 外花键齿根圆直径 `d_f1`（CSV 的 `d_f1` 列）。
+    pub d_f1: f64,
+    /// 外花键齿根圆偏差 `A_d_f1`（CSV 的 `A_df1` 列）。
+    pub a_df1: f64,
     /// OCR 质量标记（原样保留，运行时不展示）。
     pub flags: String,
     /// OCR 来源（`A+B` / `A续2+B续2` 等；原样保留，运行时不展示）。
@@ -1025,6 +1043,17 @@ fn parse_din5480_csv(text: &str) -> Result<Vec<Din5480Row>, String> {
         let base_dia =
             csv_decimal(&f[6]).ok_or_else(|| format!("第 {n} 行 d_b「{}」非法", f[6]))?;
         let x_m = csv_decimal(&f[7]).ok_or_else(|| format!("第 {n} 行 x1_m「{}」非法", f[7]))?;
+        let e2_s1 = csv_decimal(&f[8]).ok_or_else(|| format!("第 {n} 行 e2_s1「{}」非法", f[8]))?;
+        let d_f2 = csv_decimal(&f[9]).ok_or_else(|| format!("第 {n} 行 d_f2「{}」非法", f[9]))?;
+        let a_df2 = csv_decimal(&f[10]).ok_or_else(|| format!("第 {n} 行 A_df2「{}」非法", f[10]))?;
+        let d_ff2_min =
+            csv_decimal(&f[11]).ok_or_else(|| format!("第 {n} 行 d_Ff2min「{}」非法", f[11]))?;
+        let d_a2 = csv_decimal(&f[12]).ok_or_else(|| format!("第 {n} 行 d_a2「{}」非法", f[12]))?;
+        let d_a1 = csv_decimal(&f[13]).ok_or_else(|| format!("第 {n} 行 d_a1「{}」非法", f[13]))?;
+        let d_ff1_max =
+            csv_decimal(&f[14]).ok_or_else(|| format!("第 {n} 行 d_Ff1max「{}」非法", f[14]))?;
+        let d_f1 = csv_decimal(&f[15]).ok_or_else(|| format!("第 {n} 行 d_f1「{}」非法", f[15]))?;
+        let a_df1 = csv_decimal(&f[16]).ok_or_else(|| format!("第 {n} 行 A_df1「{}」非法", f[16]))?;
         if m <= 0.0 {
             return Err(format!("第 {n} 行 m={m} 非正"));
         }
@@ -1038,6 +1067,15 @@ fn parse_din5480_csv(text: &str) -> Result<Vec<Din5480Row>, String> {
             base_dia,
             x_m,
             x: x_m / m,
+            e2_s1,
+            d_f2,
+            a_df2,
+            d_ff2_min,
+            d_a2,
+            d_a1,
+            d_ff1_max,
+            d_f1,
+            a_df1,
             flags: f[17].trim().to_string(),
             source: f[18].trim().to_string(),
         });

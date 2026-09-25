@@ -60,7 +60,7 @@
 </style>
 </head>
 <body>
-<h1>OCSM 智能卡片<span class="sub">本期五张卡：GB 花键 · 齿轮 · ANSI 花键（中/英）· NF 内花键</span></h1>
+<h1>OCSM 智能卡片<span class="sub">本期六张卡：GB 花键 · 齿轮 · ANSI 花键（中/英）· NF 内花键 · DIN 5480</span></h1>
 
 <div class="wrap">
   <div id="splinePanel">
@@ -145,6 +145,21 @@
     <div class="hint" id="nfHint"></div>
   </div>
 
+  <!-- ②d DIN 花键参数表（DIN 5480-1 Bild 6）：m/z/d_B + N/W 配合；缺口可由覆盖项补 -->
+  <div class="card" id="dinPanel" style="display:none">
+    <div class="params">
+      <label>模数 m</label><input type="number" id="dinM" min="0" step="0.001" placeholder="如 3">
+      <label>齿数 z</label><input type="number" id="dinZ" min="3" step="1" placeholder="如 38">
+      <label>基准直径 d_B</label><input type="number" id="dinB" min="0" step="0.001" placeholder="如 120">
+      <label>内花键配合</label><input type="text" id="dinHub" placeholder="如 9H（F/G/H/J/K/M）">
+      <label>外花键配合</label><input type="text" id="dinShaft" placeholder="如 8f（v…a）">
+      <label>e₂=s₁ 覆盖</label><input type="number" id="dinE2" step="0.001" placeholder="选填（名义表缺行时）">
+      <label>Ae / As 覆盖</label><input type="text" id="dinAeAs" placeholder="选填，如 0 / -0.028">
+      <label>Tact/Teff 覆盖</label><input type="text" id="dinTol" placeholder="选填，如 0.056/0.034/0.040/0.023">
+    </div>
+    <div class="hint" id="dinHint"></div>
+  </div>
+
   <!-- ③ 实时结果（公式/口径/来源在每行 title 悬停里） -->
   <div class="card">
     <label id="itemsLabel">结果预览</label>
@@ -188,6 +203,7 @@ function panelOf(card) {
   if (r === 'gear_table') return 'gear';
   if (r === 'ansi_table_cn' || r === 'ansi_table_en') return 'ansi';
   if (r === 'nf_table') return 'nf';
+  if (r === 'din_table') return 'din';
   return 'spline';
 }
 function applyPanels() {
@@ -196,6 +212,7 @@ function applyPanels() {
   el('gearPanel').style.display = p === 'gear' ? '' : 'none';
   el('ansiPanel').style.display = p === 'ansi' ? '' : 'none';
   el('nfPanel').style.display = p === 'nf' ? '' : 'none';
+  el('dinPanel').style.display = p === 'din' ? '' : 'none';
   el('cardReadout').style.display = p === 'spline' ? 'none' : '';
   el('itemsLabel').textContent = p === 'spline' ? '结果预览（21 项）' : '结果预览';
   const gc = (OPT && OPT.gear_card) || {};
@@ -207,6 +224,9 @@ function applyPanels() {
   const nc = (OPT && OPT.nf_card) || {};
   el('nfHint').title = nc.missing_note || '';
   el('nfHint').textContent = nc.note || '';
+  const dc = (OPT && OPT.din_card) || {};
+  el('dinHint').title = dc.missing_note || '';
+  el('dinHint').textContent = dc.note || '';
 }
 
 const fmt = (n) => {
@@ -379,6 +399,33 @@ function currentNfModel() {
     rot: Number(el('rot').value || 0),
   };
 }
+// DIN 5480 卡：m/z/d_B + N/W 配合；ae/as/e2/tact*/teff* 为可选覆盖。
+function currentDinModel() {
+  const pair = (s) => {
+    const parts = String(s).split(/[\s\/]+/).map((x) => x.trim()).filter(Boolean);
+    return { a: parts[0] || null, b: parts[1] || null };
+  };
+  const aeAs = pair(el('dinAeAs').value || '');
+  const tol = String(el('dinTol').value || '').split(/[\s\/]+/).map((x) => x.trim()).filter(Boolean);
+  const num = (v) => { const n = Number(v); return Number.isFinite(n) && String(v).trim() !== '' ? n : null; };
+  return {
+    card: CARD ? CARD.id : 'DIN花键参数表',
+    m: Number(el('dinM').value),
+    z: Number(el('dinZ').value),
+    d_b: Number(el('dinB').value),
+    hub: (el('dinHub').value || '').trim() || null,
+    shaft: (el('dinShaft').value || '').trim() || null,
+    e2: num(el('dinE2').value),
+    ae: num(aeAs.a),
+    as_: num(aeAs.b),
+    tact_n: num(tol[0]),
+    teff_n: num(tol[1]),
+    tact_w: num(tol[2]),
+    teff_w: num(tol[3]),
+    at: atValue(),
+    rot: Number(el('rot').value || 0),
+  };
+}
 
 // ── 结果渲染 ──────────────────────────────────────────────────────────
 function esc(s) {
@@ -458,6 +505,7 @@ async function refresh() {
   if (p === "gear") return refreshGear();
   if (p === "ansi") return refreshAnsi();
   if (p === "nf") return refreshNf();
+  if (p === "din") return refreshDin();
   return refreshSpline();
 }
 
@@ -485,16 +533,20 @@ async function refreshSpline() {
   ocsmClearStatus(seq);
 }
 
-// 通用卡片预览（齿轮 / ANSI / NF）：与后端 /api/card_preview 同一条路径，页面只渲染。
+// 通用卡片预览（齿轮 / ANSI / NF / DIN）：与后端 /api/card_preview 同一条路径，页面只渲染。
 async function refreshCard(kind) {
   const model = kind === "gear" ? currentGearModel()
-    : kind === "nf" ? currentNfModel() : currentAnsiModel();
+    : kind === "nf" ? currentNfModel()
+    : kind === "din" ? currentDinModel() : currentAnsiModel();
   const required = kind === "gear" ? model.expr
-    : kind === "nf" ? (model.a > 0 && model.m > 0) : (model.p > 0 && model.z >= 3);
+    : kind === "nf" ? (model.a > 0 && model.m > 0)
+    : kind === "din" ? (model.m > 0 && model.z >= 3 && model.d_b > 0)
+    : (model.p > 0 && model.z >= 3);
   if (!required) {
     let msg = "请填径节 P 与齿数 N";
     if (kind === "gear") msg = "请先粘九字段齿形表达式（可从轴/齿轮生成器 GUI 复制）";
     else if (kind === "nf") msg = "请填公称直径 A 与模数 m";
+    else if (kind === "din") msg = "请填模数 m、齿数 z 与基准直径 d_B";
     ocsmStatus(msg, "bad");
     return;
   }
@@ -511,6 +563,7 @@ async function refreshCard(kind) {
 async function refreshGear() { return refreshCard("gear"); }
 async function refreshAnsi() { return refreshCard("ansi"); }
 async function refreshNf() { return refreshCard("nf"); }
+async function refreshDin() { return refreshCard("din"); }
 
 // 通用卡片读数（readout 行 + 项列表；公式/来源仍进 title=）。
 function renderCardPreview(d) {
@@ -569,8 +622,9 @@ el("root").addEventListener("change", () => {
   schedulePreview();
 });
 el("expr").addEventListener("input", () => schedulePreview());
-// 齿轮 / ANSI / NF 卡输入：同一套防抖预览（面板切换见 cardType change）。
-for (const id of ["gearExpr", "gearMateZ", "gearDwg", "gearGrade", "gearCenter", "ansiP", "ansiZ", "nfA", "nfM", "nfZ"]) {
+// 齿轮 / ANSI / NF / DIN 卡输入：同一套防抖预览（面板切换见 cardType change）。
+for (const id of ["gearExpr", "gearMateZ", "gearDwg", "gearGrade", "gearCenter", "ansiP", "ansiZ", "nfA", "nfM", "nfZ",
+                  "dinM", "dinZ", "dinB", "dinHub", "dinShaft", "dinE2", "dinAeAs", "dinTol"]) {
   el(id).addEventListener("input", () => schedulePreview());
 }
 for (const id of ["ansiSide", "ansiProfile", "nfCenter", "nfRoot"]) {
@@ -612,6 +666,8 @@ el("ok").addEventListener("click", async () => {
     const url = (isSpline ? "/api/spline_export" : "/api/card_export") + (TAB ? "?tab=" + encodeURIComponent(TAB) : "");
     const model = panel === "gear" ? currentGearModel()
       : panel === "ansi" ? currentAnsiModel()
+      : panel === "nf" ? currentNfModel()
+      : panel === "din" ? currentDinModel()
       : currentModel();
     const res = await fetchApi(url, {
       method: "POST",
@@ -689,6 +745,13 @@ function ping(bye) {
   el("nfA").value = "300";
   el("nfM").value = "7.5";
   el("nfZ").value = "38";
+  // DIN 卡面板：Bild 6 示例（N120×3×38×9H / W120×3×38×8f）作默认
+  const dd = (OPT.din_card && OPT.din_card.default) || {};
+  el("dinM").value = String(dd.m != null ? dd.m : 3);
+  el("dinZ").value = String(dd.z != null ? dd.z : 38);
+  el("dinB").value = String(dd.d_b != null ? dd.d_b : 120);
+  el("dinHub").value = dd.hub || "9H";
+  el("dinShaft").value = dd.shaft || "8f";
   syncUi();
   applyPanels();
   await refresh();

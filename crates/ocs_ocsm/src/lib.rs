@@ -25,6 +25,7 @@ mod centerline;
 mod detail;
 mod detail_clip;
 mod dim2gb;
+mod din_table;
 mod gear;
 mod gear_table;
 mod hole;
@@ -2629,6 +2630,7 @@ impl OcsmPlugin {
                 self.cmd_ansi_card(host, rest, crate::ansi_table::AnsiLang::En)
             }
             crate::card::CardRenderer::NfTable => self.cmd_nf_card(host, rest),
+            crate::card::CardRenderer::DinTable => self.cmd_din_card(host, rest),
         }
     }
 
@@ -2926,6 +2928,76 @@ impl OcsmPlugin {
         host.push_info(&format!(
             "智能卡片：已插入{note}于 ({:.3}, {:.3}) rot {}°。\n\
              大径/小径/跨棒距的上下偏差（p35 列义未辨定、p12 R7/H7 未裁决）与表外 V/G/ri 显示「—」。",
+            at[0],
+            at[1],
+            crate::partgen_kit::trim(spec.rot)
+        ));
+    }
+
+    /// 卡类型「DIN 花键参数表」：
+    /// `OCSMCARD DIN花键参数表 M3 Z38 B120 [N9H] [W8f] [ae …] [as …] [tactn …] [teffn …] [tactw …] [teffw …]`。
+    /// 版面 = DIN 5480-1:2006 Bild 6 的 13 行 × Nabe/Welle 两栏；几何内建（`OCSM_DINTABLE_DIN`）；
+    /// 26 个值写 INSERT.attributes（Table 7 缺口显示「—」，不臆造）。
+    fn cmd_din_card(&self, host: &mut dyn HostApi, args: &str) {
+        use crate::din_table::DinTableSpec;
+        let spec = match DinTableSpec::parse(args) {
+            Ok(s) => s,
+            Err(e) => {
+                host.push_error(&e);
+                return;
+            }
+        };
+        host.ensure_layers(layer_defs());
+        host.ensure_text_styles(text_style_defs());
+        let block = crate::din_table::BLOCK;
+        if host.document().block_records.get(block).is_none() {
+            let members = crate::din_table::block_entities();
+            if let Err(e) = host.add_block_record(block, members) {
+                host.push_error(&format!("DIN 花键参数表：建块 {block} 失败：{e}"));
+                return;
+            }
+        }
+        let at = spec.at.unwrap_or_else(|| {
+            crate::take_parts_point()
+                .map(|p| [p[0], p[1]])
+                .unwrap_or([0.0, 0.0])
+        });
+        let ins = match crate::din_table::build_insert(&spec, at, spec.rot) {
+            Ok(i) => i,
+            Err(e) => {
+                host.push_error(&format!("DIN 花键参数表：{e}"));
+                return;
+            }
+        };
+        host.push_undo("DIN 花键参数表插入");
+        let handles = host.add_entities(vec![acadrust::EntityType::Insert(ins)]);
+        if handles.is_empty() {
+            host.push_error("DIN 花键参数表：插入失败（宿主未返回句柄）");
+            return;
+        }
+        host.set_dirty();
+        let note = crate::din_table::DinTableModel {
+            card: "DIN花键参数表".into(),
+            m: spec.m,
+            z: spec.z,
+            d_b: spec.d_b,
+            hub: Some(spec.hub.token()),
+            shaft: Some(spec.shaft.token()),
+            e2: spec.e2_s1,
+            ae: spec.ae,
+            as_: spec.as_,
+            tact_n: spec.tact_hub,
+            teff_n: spec.teff_hub,
+            tact_w: spec.tact_shaft,
+            teff_w: spec.teff_shaft,
+            at: spec.at,
+            rot: spec.rot,
+        }
+        .echo_note()
+        .unwrap_or_else(|_| String::new());
+        host.push_info(&format!(
+            "智能卡片：已插入{note}于 ({:.3}, {:.3}) rot {}°。\n\
+             Table 7 缺口（>400 侧偏差列、≤12 细档、非 6–9 级公差、无检验表行的 D_M/M2/M1）显示「—」。",
             at[0],
             at[1],
             crate::partgen_kit::trim(spec.rot)

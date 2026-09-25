@@ -19,6 +19,8 @@ pub enum CardRenderer {
     AnsiTableEn,
     /// NF 内花键参数表（NF E22-141）：A/m/z 查表 → 13 行镜像表（18 属性）。
     NfTable,
+    /// DIN 花键参数表（DIN 5480-1 Bild 6）：13 行 × Nabe/Welle 两栏（26 属性）。
+    DinTable,
 }
 
 impl CardRenderer {
@@ -30,6 +32,7 @@ impl CardRenderer {
             CardRenderer::AnsiTableCn => "ansi_table_cn",
             CardRenderer::AnsiTableEn => "ansi_table_en",
             CardRenderer::NfTable => "nf_table",
+            CardRenderer::DinTable => "din_table",
         }
     }
 }
@@ -93,6 +96,14 @@ pub const CARD_TYPES: &[CardTypeSpec] = &[
         systems: &[],
         renderer: CardRenderer::NfTable,
     },
+    CardTypeSpec {
+        id: "DIN花键参数表",
+        aliases: &["din", "din5480", "DIN花键", "din花键参数表"],
+        label: "DIN 花键参数表",
+        summary: "DIN 5480-1 Bild 6：13 行 × Nabe/Welle 两栏（z/m/α/三直径/e-s 三极限/D_M/两 M 极限）；Table 7 上段偏差 2026-09-26 OCR 入库（c4/c5 有实锚），公差表只到 6–9 级锚点，缺口如实标「—」",
+        systems: &[],
+        renderer: CardRenderer::DinTable,
+    },
 ];
 
 /// 卡类型 token → 表项（大小写不敏感；别名可命中）。
@@ -149,7 +160,8 @@ pub fn usage_line() -> String {
          * 花键参数表：`OCSMCARD 花键参数表 [std GB] 内 6H <九字段表达式> [dp 4.5] [root 平|圆] [at x,y] [rot 度]`\n\
          * 齿轮参数表：`OCSMCARD 齿轮参数表 <九字段表达式> [mate z₂] [dwg 图号] [grade 精度等级] [center a] [at x,y] [rot 度]`\n\
          * ANSI 花键参数表：`OCSMCARD ANSI花键参数表_中文 内 P16 Z20 [profile ANSI30R] [at x,y] [rot 度]`（英文版换 `_英文`）\n\
-         * NF 内花键参数表：`OCSMCARD NF内花键参数表 A300 M7.5 [Z38] [中心 外径|齿面] [根 平|圆] [at x,y] [rot 度]`"
+         * NF 内花键参数表：`OCSMCARD NF内花键参数表 A300 M7.5 [Z38] [中心 外径|齿面] [根 平|圆] [at x,y] [rot 度]`\n\
+         * DIN 花键参数表：`OCSMCARD DIN花键参数表 M3 Z38 B120 [N9H] [W8f] [ae …] [as …] [tactn …] [teffn …] [tactw …] [teffw …] [at x,y] [rot 度]`"
     )
 }
 
@@ -160,7 +172,7 @@ mod tests {
     /// 表驱动完整性：卡类型的体系 id 必须能在选项表里解析（加新体系/新卡片时先拦住）。
     #[test]
     fn card_types_resolve_systems_and_tokens() {
-        assert_eq!(CARD_TYPES.len(), 5, "本期五张卡：GB 花键 / 齿轮 / ANSI 中 / ANSI 英 / NF 内花键");
+        assert_eq!(CARD_TYPES.len(), 6, "本期六张卡：GB 花键 / 齿轮 / ANSI 中 / ANSI 英 / NF 内花键 / DIN");
         let c = &CARD_TYPES[0];
         assert_eq!(c.id, "花键参数表");
         assert_eq!(c.renderer, CardRenderer::SplineTable);
@@ -181,6 +193,10 @@ mod tests {
         assert_eq!(CARD_TYPES[4].id, "NF内花键参数表");
         assert_eq!(CARD_TYPES[4].renderer, CardRenderer::NfTable);
         assert!(CARD_TYPES[4].systems.is_empty());
+        assert_eq!(CARD_TYPES[5].id, "DIN花键参数表");
+        assert_eq!(CARD_TYPES[5].renderer, CardRenderer::DinTable);
+        assert!(CARD_TYPES[5].systems.is_empty());
+        assert_eq!(CardRenderer::DinTable.id(), "din_table");
         // 记号/别名（大小写不敏感）
         assert!(card_type_by_token("花键参数表").is_some());
         assert!(card_type_by_token("SPLINE").is_some());
@@ -195,6 +211,10 @@ mod tests {
         assert!(card_type_by_token("nf").is_some());
         assert!(card_type_by_token("NFINT").is_some());
         assert!(card_type_by_token("NF内花键").is_some());
+        assert!(card_type_by_token("DIN花键参数表").is_some());
+        assert!(card_type_by_token("din").is_some());
+        assert!(card_type_by_token("DIN5480").is_some());
+        assert!(card_type_by_token("din花键").is_some());
         assert!(card_type_by_token("铭牌").is_none(), "本期没有铭牌卡");
         assert!(card_type_by_token("  ").is_none());
         // 下发的 JSON 形状（GUI 只渲染）
@@ -207,11 +227,15 @@ mod tests {
         assert_eq!(j[3]["renderer"], "ansi_table_en");
         assert_eq!(j[4]["id"], "NF内花键参数表");
         assert_eq!(j[4]["renderer"], "nf_table");
+        assert_eq!(j[5]["id"], "DIN花键参数表");
+        assert_eq!(j[5]["renderer"], "din_table");
+        assert!(j[5]["summary"].as_str().unwrap().contains("Bild 6"));
         assert!(j[4]["summary"].as_str().unwrap().contains("NF E22-141"));
         assert!(j[0]["summary"].as_str().unwrap().contains("GB/T 3478"));
         assert!(usage_line().contains("OCSMCARD 花键参数表"));
         assert!(usage_line().contains("OCSMCARD 齿轮参数表"));
         assert!(usage_line().contains("ANSI花键参数表_中文"));
         assert!(usage_line().contains("OCSMCARD NF内花键参数表"));
+        assert!(usage_line().contains("OCSMCARD DIN花键参数表"));
     }
 }

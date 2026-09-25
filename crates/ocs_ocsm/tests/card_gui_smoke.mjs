@@ -1,7 +1,7 @@
-// 智能卡片新卡冒烟（node 最小 DOM 垫片 + fetch 桩）：锁住「齿轮参数表」与
-// 「ANSI 花键参数表（纯中文 / 纯英文）」在 spline_gui.html 里的交互契约
+// 智能卡片新卡冒烟（node 最小 DOM 垫片 + fetch 桩）：锁住「齿轮参数表」「ANSI 中/英」「NF 内花键」
+// 「DIN 花键参数表」在 spline_gui.html 里的交互契约
 // （node --check / el("id") 静态扫描查不出）：
-//   ① 卡类型下拉 4 项，切换卡片 → 面板切换（splinePanel/gearPanel/ansiPanel）；
+//   ① 卡类型下拉 6 项，切换卡片 → 面板切换（splinePanel/gearPanel/ansiPanel/nfPanel/dinPanel）；
 //   ② 齿轮卡：表达式 + 配对齿数/图号/精度等级/中心距 → /api/card_preview，
 //      结果含 19 项、缺项显示「—」；配对齿数进入模型并影响中心距；
 //   ③ ANSI 卡：方向 + 齿廓清单（由选项表下发）+ P/z → /api/card_preview；
@@ -31,13 +31,14 @@ function check(cond, msg) {
   if (!cond) errors.push(msg);
 }
 
-// ── 选项表桩（四张卡 + spline 体系 + 齿轮/ANSI 选项）──
+// ── 选项表桩（六张卡 + spline 体系 + 齿轮/ANSI/NF/DIN 选项）──
 const CARD_TYPES = [
   { id: '花键参数表', aliases: ['spline'], label: '花键参数表', summary: 'stub GB', systems: [{ id: 'gb3478', label: 'GB', standard: 'stub' }], renderer: 'spline_table' },
   { id: '齿轮参数表', aliases: ['gear'], label: '齿轮参数表', summary: 'stub gear', systems: [], renderer: 'gear_table' },
   { id: 'ANSI花键参数表_中文', aliases: ['ansicn'], label: 'ANSI 花键参数表（纯中文）', summary: 'stub ansi cn', systems: [], renderer: 'ansi_table_cn' },
   { id: 'ANSI花键参数表_英文', aliases: ['ansien'], label: 'ANSI 花键参数表（纯英文）', summary: 'stub ansi en', systems: [], renderer: 'ansi_table_en' },
   { id: 'NF内花键参数表', aliases: ['nf'], label: 'NF 内花键参数表', summary: 'stub nf', systems: [], renderer: 'nf_table' },
+  { id: 'DIN花键参数表', aliases: ['din'], label: 'DIN 花键参数表', summary: 'stub din', systems: [], renderer: 'din_table' },
 ];
 const GB_COLUMNS = Array.from({ length: 21 }, (_, i) => ({
   tag: `(内)t${i}`, label: `项${i}`, unit: '', formula: 'stub', source: 'stub',
@@ -94,6 +95,13 @@ const OPTIONS = {
     roots: [{ id: 'flat', label: '平齿根' }, { id: 'fillet', label: '圆齿根' }],
     missing_note: 'stub NF 缺项（偏差列义未辨）',
     note: 'stub NF 说明',
+  },
+  din_card: {
+    columns: Array.from({ length: 26 }, (_, i) => ({ tag: `din${i}`, label: `DIN项${i}`, unit: '', formula: 'stub', source: 'stub' })),
+    grades: [6, 7, 8, 9, 10, 11, 12],
+    default: { m: 3, z: 38, d_b: 120, hub: '9H', shaft: '8f' },
+    missing_note: 'stub DIN 缺项（Table 7 缺口）',
+    note: 'stub DIN 说明',
   },
 };
 
@@ -159,6 +167,24 @@ function nfPreview(m) {
     missing: [...missingSet], missing_note: 'stub NF 缺项',
   });
 }
+const DIN_TAGS = ['N标记', 'N齿数', 'N模数', 'N压力角', 'N齿根圆', 'N齿根成形圆', 'N齿顶圆', 'N槽宽max', 'N槽宽min', 'N槽宽eff', 'N量圆', 'N量距max', 'N量距min', 'W标记', 'W齿数', 'W模数', 'W压力角', 'W齿顶圆', 'W齿根成形圆', 'W齿根圆', 'W齿厚svmax', 'W齿厚smax', 'W齿厚smin', 'W量圆', 'W量距max', 'W量距min'];
+function dinPreview(m) {
+  const missingSet = new Set();
+  const gap = Number(m.m) >= 5;
+  if (gap) { for (const t of ['N槽宽max', 'N槽宽min', 'N槽宽eff', 'W齿厚svmax', 'W齿厚smax', 'W齿厚smin']) missingSet.add(t); }
+  const val = (tag) => tag === 'N标记' ? 'Nabe DIN 5480 – N120×3×38×9H'
+    : tag === 'N槽宽max' ? (gap ? '—' : '6.361') : tag === 'N槽宽eff' ? (gap ? '—' : '6.271')
+    : tag === 'W齿厚svmax' ? (gap ? '—' : '6.243') : `v-${tag}`;
+  const items = DIN_TAGS.map((tag) => ({
+    tag, label: tag, unit: '', value: val(tag),
+    formula: 'stub 公式', source: 'stub 来源', missing: missingSet.has(tag),
+  }));
+  return jsonResp({
+    ok: true, card: m.card, renderer: 'din_table', anchor: !gap,
+    readout: [{ k: 'e₂ = s₁（名义）', v: gap ? '—' : '6.271' }], items,
+    missing: [...missingSet], missing_note: 'stub DIN 缺项',
+  });
+}
 global.fetch = async (u, opts = {}) => {
   const url = String(u);
   if (url.startsWith('/api/spline_options')) return jsonResp(OPTIONS);
@@ -169,6 +195,7 @@ global.fetch = async (u, opts = {}) => {
     if (model.card === '齿轮参数表') return gearPreview(model);
     if (String(model.card).startsWith('ANSI')) return ansiPreview(model);
     if (model.card === 'NF内花键参数表') return nfPreview(model);
+    if (model.card === 'DIN花键参数表') return dinPreview(model);
     return jsonResp({ ok: false, error: 'stub 只支持新卡' }, 400);
   }
   if (url.startsWith('/api/card_export')) {
@@ -177,6 +204,7 @@ global.fetch = async (u, opts = {}) => {
     const v = String(lastExportModel.card).startsWith('ANSI') ? ansiPreview(lastExportModel)
       : lastExportModel.card === '齿轮参数表' ? gearPreview(lastExportModel)
       : lastExportModel.card === 'NF内花键参数表' ? nfPreview(lastExportModel)
+      : lastExportModel.card === 'DIN花键参数表' ? dinPreview(lastExportModel)
       : jsonResp({ ok: false, error: 'bad card' }, 400);
     if (!v.ok) return v;
     return jsonResp({ ok: true, message: 'stub 已生成', pending: lastExportModel.at == null });
@@ -260,7 +288,7 @@ const probed = script.replace(/\}\)\(\);\s*$/, `;globalThis.__card = {
   get card() { return CARD; },
   get sys() { return SYS; },
   get side() { return SIDE; },
-  panelOf, applyPanels, currentGearModel, currentAnsiModel, currentNfModel, refresh, schedulePreview,
+  panelOf, applyPanels, currentGearModel, currentAnsiModel, currentNfModel, currentDinModel, refresh, schedulePreview,
 };
 })();`);
 try {
@@ -278,11 +306,11 @@ check(!!H, '探针 __card 未挂上（脚本初始化崩溃？）');
 if (!H) report();
 
 // ① 卡类型下拉 5 项；默认花键卡 → spline 面板可见
-check(el('cardType').options.length === 5, `卡类型应 5 项：${el('cardType').options.map((o) => o.value)}`);
+check(el('cardType').options.length === 6, `卡类型应 6 项：${el('cardType').options.map((o) => o.value)}`);
 check(H.card && H.card.id === '花键参数表', `默认卡类型：${H.card && H.card.id}`);
 check(el('cardType').disabled === false, '五张卡时卡类型下拉应可点');
 check(H.panelOf(H.card) === 'spline', '默认应 spline 面板');
-check(el('splinePanel').style.display === '' && el('gearPanel').style.display === 'none' && el('ansiPanel').style.display === 'none' && el('nfPanel').style.display === 'none',
+check(el('splinePanel').style.display === '' && el('gearPanel').style.display === 'none' && el('ansiPanel').style.display === 'none' && el('nfPanel').style.display === 'none' && el('dinPanel').style.display === 'none',
   '默认只有 spline 面板可见');
 check(el('gearExpr').value.startsWith('GEAR EX'), `齿轮默认表达式：${el('gearExpr').value}`);
 check(el('ansiProfile').options.length === 3, `ANSI 齿廓清单来自选项表：${el('ansiProfile').options.map((o) => o.value)}`);
@@ -397,6 +425,52 @@ el('ok').click();
 await tick();
 check(JSON.stringify(lastExportModel.at) === '[7,8]', `NF at 应进模型：${JSON.stringify(lastExportModel.at)}`);
 el('atX').value = ''; el('atY').value = '';
+
+// ④b 切到 DIN 花键参数表：面板切换 + 26 项（13×2）+ 锚点原印值 + 缺口「—」 + 26 属性出表
+el('cardType').value = 'DIN花键参数表';
+el('cardType')._fire('change', el('cardType'));
+await tick();
+check(H.card.id === 'DIN花键参数表', `DIN 卡：${H.card.id}`);
+check(H.panelOf(H.card) === 'din', 'DIN 面板');
+check(el('dinPanel').style.display === '' && el('nfPanel').style.display === 'none', 'DIN 面板可见/NF 隐藏');
+check(String(el('dinM').value) === '3' && String(el('dinZ').value) === '38' && String(el('dinB').value) === '120', 'DIN 默认示例 M3/Z38/B120');
+check(el('dinHub').value === '9H' && el('dinShaft').value === '8f', 'DIN 默认配合 9H/8f');
+check(el('dinHint').title.includes('Table 7'), `DIN 缺项说明应进 title：${el('dinHint').title}`);
+await H.refresh();
+check(lastPreviewModel && lastPreviewModel.card === 'DIN花键参数表', `DIN 预览模型：${JSON.stringify(lastPreviewModel)}`);
+check(Number(lastPreviewModel.m) === 3 && Number(lastPreviewModel.z) === 38 && Number(lastPreviewModel.d_b) === 120, `DIN m/z/d_B 应进模型：${JSON.stringify(lastPreviewModel)}`);
+check(lastPreviewModel.hub === '9H' && lastPreviewModel.shaft === '8f', `DIN 配合应进模型：${JSON.stringify(lastPreviewModel)}`);
+check(el('items').innerHTML.split('class="row"').length - 1 === 26, `DIN 卡应 26 项：${el('items').innerHTML.slice(0, 100)}`);
+check(el('items').innerHTML.includes('Nabe DIN 5480 – N120×3×38×9H'), 'DIN 标记行应出现在预览里');
+check(el('items').innerHTML.includes('6.361') && el('items').innerHTML.includes('6.243'), 'DIN 锚点 e/s 应出现在预览里');
+el('dinAeAs').value = '0 / -0.028';
+el('dinAeAs')._fire('input', el('dinAeAs'));
+await tick();
+check(Number(lastPreviewModel.ae) === 0 && Number(lastPreviewModel.as_) < 0, `DIN 覆盖 ae/as 应进模型：${JSON.stringify(lastPreviewModel)}`);
+el('dinAeAs').value = '';
+el('dinAeAs')._fire('input', el('dinAeAs'));
+await tick();
+// DIN 出表（无 at → 待放置；有 at → 直插）
+closed = false;
+el('ok').click();
+await tick();
+check(lastExportUrl.startsWith('/api/card_export'), `DIN 导出 URL：${lastExportUrl}`);
+check(lastExportModel.card === 'DIN花键参数表' && lastExportModel.at === null, `DIN 导出模型：${JSON.stringify(lastExportModel)}`);
+check(closed === true, 'DIN 出表成功后应自动关窗');
+closed = false;
+el('atX').value = '9'; el('atY').value = '10';
+el('ok').click();
+await tick();
+check(JSON.stringify(lastExportModel.at) === '[9,10]', `DIN at 应进模型：${JSON.stringify(lastExportModel.at)}`);
+el('atX').value = ''; el('atY').value = '';
+// DIN 缺口路径：m=5 → 公差「—」
+el('dinM').value = '5'; el('dinZ').value = '16'; el('dinB').value = '80';
+el('dinM')._fire('input', el('dinM'));
+await tick();
+check(el('items').innerHTML.includes('—'), 'DIN 模数组缺口应显示「—」');
+el('dinM').value = '3'; el('dinZ').value = '38'; el('dinB').value = '120';
+el('dinM')._fire('input', el('dinM'));
+await tick();
 
 // ⑤ 预览 404 → 红框可见（共享助手；不关窗）
 forcePreview404 = true;
