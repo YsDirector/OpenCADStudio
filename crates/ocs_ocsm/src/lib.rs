@@ -40,6 +40,7 @@ mod partgen_keys;
 mod partgen_more;
 mod shaft;
 mod spline;
+mod spline_tol;
 mod thread;
 pub mod tolerance;
 
