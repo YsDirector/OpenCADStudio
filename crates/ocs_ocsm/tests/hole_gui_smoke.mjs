@@ -105,6 +105,7 @@ const SYS_G = {
   angle_deg: 55, is_pipe: true, source: 'stub', note: 'stub', units: 'mm',
   groups: [{ key: 'standard', label: '标准', rows: [
     { name: 'G1/8', d: 9.728, p: 0.907143, tpi: 28, d2: 9.147, d1: 8.566, drill: 8.7, eff_len: 7.4 },
+    { name: 'G5/8', d: 22.911, p: 1.814286, tpi: 14, d2: 21.749, d1: 20.587, drill: 20.8, eff_len: null },
   ] }],
 };
 const SYS_R = {
@@ -397,10 +398,23 @@ check(
   '视图应是 name=view 的 radio（不是 checkbox）'
 );
 check(el('viewSide').checked && !el('viewTop').checked, '视图默认应选中侧视图');
-// 负断言：界面不得再出现“解释数据/术语”的文案（应移入 JSON note / handbook）
-for (const bad of ['管子外径', '不是通径', '不是内径', '管子通径代号', '参考站「ACME」', '内、外螺纹同一个量', '两个量分开']) {
-  check(!html.includes(bad), `界面不应含术语/数据释疑文案「${bad}」`);
+// 常显区（可见文本，不含 title 悬停/注释）不得含公式/术语/预先警告
+const visibleText = html
+  .replace(/<script[\s\S]*?<\/script>/g, ' ')
+  .replace(/<style[\s\S]*?<\/style>/g, ' ')
+  .replace(/<[^>]+>/g, ' ');
+for (const bad of [
+  '管子外径', '不是通径', '不是内径', '管子通径代号', '参考站「ACME」',
+  '内、外螺纹同一个量', '两个量分开',
+  '1.5×公称直径', '有效长度 + 2×螺距', '2×螺距',
+  '无标准值的规格请手填', '表外会报错', '必须手填（板厚/通孔长度）',
+]) {
+  check(!visibleText.includes(bad), `常显区不应含公式/预先警告「${bad}」`);
 }
+// 公式/口径改为 title 悬停（原生 title，照 shaft/gear GUI 既有做法）
+check(html.includes('title="自动有效长度：M/UN/ACME/Tr = 1.5×公称直径'), '有效长度公式应进 tLen 悬停');
+check(html.includes('title="自动孔深 = 螺纹有效长度 + 2P'), '孔深公式应进 hAuto 悬停');
+check(html.includes('title="沉头推荐值按螺钉类型查沉孔表'), '埋头说明应收进 reco 悬停');
 // 互斥：选俯视图 → 自动取消侧视图；请求里 views 只有一项 true
 el('viewTop').checked = true;
 el('viewTop')._fire('change', el('viewTop'));
@@ -475,18 +489,11 @@ el('subtype').value = 'unf';
 el('subtype')._fire('change', el('subtype'));
 await tick();
 check(el('size').options.map((o) => o.value).includes('6.35|0.907143'), 'UNF 大小应含 1/4-28');
-// G：提示只留操作信息（自动有效长度/孔深来源）；术语释疑（通径/外径/内径）不得出现在界面
+// G：正常规格不常驻提示（公式/口径在控件 title 悬停里）
 el('std').value = 'g';
 el('std')._fire('change', el('std'));
 await tick();
-check(el('threadNote').style.display !== 'none', 'G 应显示管螺纹提示');
-check((el('threadNote').innerHTML || '').includes('螺纹有效长度'), `G 提示应说明自动有效长度：${el('threadNote').innerHTML}`);
-check(
-  !(el('threadNote').innerHTML || '').includes('管子外径') &&
-    !(el('threadNote').innerHTML || '').includes('通径') &&
-    !(el('threadNote').innerHTML || '').includes('不是内径'),
-  `G 提示不应再含术语释疑：${el('threadNote').innerHTML}`
-);
+check(el('threadNote').style.display === 'none', 'G1/8 正常规格不应常驻提示');
 check(el('size').options.map((o) => o.value).includes('9.728|0.907143'), 'G 大小应含 G1/8');
 await H.refresh();
 check(el('majorOut').textContent === '9.728', `G1/8 大径应 9.728，实为 ${el('majorOut').textContent}`);
@@ -494,6 +501,21 @@ check(el('tLen').value === '7.4', `G1/8 自动有效长度应 = eff_len 7.4，�
 check(el('hDepth').value === '9.214', `G1/8 自动孔深应 = 有效长度+2P = 9.214，实为 ${el('hDepth').value}`);
 check((el('extraOut').textContent || '').includes('螺纹有效长度 7.4'), `G 读数应显示 eff_len=7.4：${el('extraOut').textContent}`);
 check((el('extraOut').textContent || '').includes('底孔 Ø8.7'), `G1/8 底孔应 8.7：${el('extraOut').textContent}`);
+// 动态警示：选中无标准值的 G5/8 → GUI 层醒目提示 + 模型层预览报错；换回正常规格提示消失
+el('size').value = '22.911|1.814286';
+el('size')._fire('change', el('size'));
+await tick();
+check(
+  el('threadNote').style.display !== 'none' && String(el('threadNote').className).includes('bad'),
+  `G5/8 应醒目弹出无标准值提示：display=${el('threadNote').style.display} cls=${el('threadNote').className}`
+);
+check((el('threadNote').textContent || '').includes('手填'), `G5/8 提示应说手填：${el('threadNote').textContent}`);
+await H.refresh();
+check((el('status').textContent || '').includes('有效长度'), `模型层应报错：${el('status').textContent}`);
+el('size').value = '9.728|0.907143';
+el('size')._fire('change', el('size'));
+await tick();
+check(el('threadNote').style.display === 'none', '换回正常规格后提示应消失');
 // R：自动有效长度 = ISO 7-1 表第16栏 eff_len=7.4；NPT：自动有效长度 = 基准+装配余量+偏差(+1P)=7.865
 el('std').value = 'r';
 el('std')._fire('change', el('std'));
@@ -501,7 +523,7 @@ await tick();
 check(el('size').options.map((o) => o.value).includes('9.728|0.907143'), 'R 大小应含 R1/8');
 await H.refresh();
 check(el('tLen').value === '7.4', `R1/8 自动有效长度应 = 第16栏 7.4，实为 ${el('tLen').value}`);
-check((el('threadNote').innerHTML || '').includes('ISO 7-1'), `R 提示应写明 ISO 7-1 来源：${el('threadNote').innerHTML}`);
+check(el('threadNote').style.display === 'none', 'R 正常规格不应常驻提示（来源在悬停）');
 el('std').value = 'npt';
 el('std')._fire('change', el('std'));
 await tick();
@@ -509,7 +531,7 @@ check(el('size').options.map((o) => o.value).includes('10.242|0.940741'), 'NPT �
 await H.refresh();
 check(el('tLen').value === '7.865', `NPT1/8 自动有效长度应 = 7.865（含 +1P 偏差），实为 ${el('tLen').value}`);
 check(el('hDepth').value === '9.746', `NPT1/8 自动孔深应 = 7.865+2P = 9.746，实为 ${el('hDepth').value}`);
-check((el('threadNote').innerHTML || '').includes('B1.20.1'), `NPT 提示应写明 ASME B1.20.1 来源：${el('threadNote').innerHTML}`);
+check(el('threadNote').style.display === 'none', 'NPT 正常规格不应常驻提示（来源在悬停）');
 // ACME：general/stub 两子类型，Stub 尺寸来自参考站口径
 el('std').value = 'acme';
 el('std')._fire('change', el('std'));
@@ -611,7 +633,7 @@ await tick();
 // ⑤ 埋头孔：GB/T 152.2-2014（M1.6–M10，90°）
 H.setKind('countersink');
 await tick();
-check(el('sinkNote').style.display !== 'none', '埋头孔应显示推荐值说明');
+check(!html.includes('id="sinkNote"'), '埋头说明不应常驻（已收进 reco 悬停）');
 check(el('reco').style.display === 'none', '埋头孔不显示沉头推荐值下拉');
 el('threadToggle').checked = false;
 el('threadToggle')._fire('change', el('threadToggle'));

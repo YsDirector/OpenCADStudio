@@ -45,6 +45,7 @@
   #status { font-size: 12.5px; margin-top: 6px; min-height: 16px; white-space: pre-wrap; color: #555; }
   .ok { color: #1a7f37; } .bad { color: #d1242f; } .warn { color: #b26a00; }
   .hint { font-size: 11.5px; color: #999; margin-top: 4px; line-height: 1.5; }
+  .hint.bad { color: #b3261e; background: #fdecea; border: 1px solid #f3b7b3; border-radius: 4px; padding: 4px 6px; }
 </style>
 </head>
 <body>
@@ -60,20 +61,17 @@
       <button type="button" class="kind" id="kindCountersink">埋头孔</button>
     </div>
     <div class="params">
-      <label>标准</label><select id="std"><option value="iso724">公制 M（ISO 724 / GB/T 196）</option></select>
-      <label>子类型</label><select id="subtype"></select>
-      <label id="sizeLabel">大小</label><select id="size"></select>
-      <label id="nominalLabel">公称</label><select id="nominal"></select>
+      <label>标准</label><select id="std" title="标准 = 螺纹体系。管螺纹 G/R/NPT 的自动有效长度取表内标准啮合长度（R=ISO 7-1 表第16栏；NPT=基准距离+装配余量+偏差；G=同规格 R）"><option value="iso724">公制 M（ISO 724 / GB/T 196）</option></select>
+      <label>子类型</label><select id="subtype" title="子类型 = 螺纹牙型系列（如 UNC/UNF；ACME 的 general/矮牙）"></select>
+      <label id="sizeLabel">大小</label><select id="size" title="大小 = 规格；英制系列按 TPI 换算螺距 P = 25.4/TPI"></select>
+      <label id="nominalLabel">公称</label><select id="nominal" title="沉头/埋头 + 钻头/自定义时，用来按公称查沉孔推荐表"></select>
       <label id="recoLabel">推荐值</label>
-      <select id="reco">
+      <select id="reco" title="沉头推荐值按螺钉类型查沉孔表；埋头孔按所选公称自动取 90° 推荐值">
         <option value="gb70_1">GB/T 70.1 内六角圆柱头（GB/T 152.3 表1）</option>
         <option value="gb70_2">GB/T 70.2 内六角平圆头（GB/T 152.3 无表·缺）</option>
         <option value="gb6190">GB 6190/6191/65 低圆柱头（GB/T 152.3 表2）</option>
       </select>
-      <label>配合</label><select id="fit"></select>
-    </div>
-    <div class="hint" id="sinkNote" style="display:none">
-      埋头沉孔按所选公称自动取推荐值（90°）
+      <label>配合</label><select id="fit" title="带螺纹：M=6H/6G、UN=2B/3B（只记录，不改变牙型）；螺栓间隙：精/中等/粗装配"></select>
     </div>
     <div class="hint" id="threadNote" style="display:none"></div>
     <div class="views">
@@ -86,15 +84,15 @@
   <!-- ② 孔参数 + 预览示意图 -->
   <div class="card mid">
     <div>
-      <label class="chk" id="threadRow"><input type="checkbox" id="threadToggle">带螺纹</label>
+      <label class="chk" id="threadRow"><input type="checkbox" id="threadToggle" title="沉头/埋头可选带螺纹或不带；简单孔恒不带">带螺纹</label>
       <label>孔范围</label>
-      <select id="range">
+      <select id="range" title="盲孔带 118° 底锥；贯通无底锥，孔深必须手填（板厚/通孔长度）">
         <option value="blind">盲孔</option>
         <option value="through">贯通</option>
       </select>
       <label>孔深</label>
       <div class="numrow">
-        <label class="chk" style="margin:0"><input type="checkbox" id="hAuto" checked>自动</label>
+        <label class="chk" style="margin:0"><input type="checkbox" id="hAuto" checked title="自动孔深 = 螺纹有效长度 + 2P（工艺余量；锥管按额外 1~2 牙上限）">自动</label>
         <input type="number" id="hDepth" value="20" step="0.1" min="0.1">
         <span class="unit">mm</span>
       </div>
@@ -117,7 +115,7 @@
   <!-- ③ 螺纹有效长度 + 确定/取消 -->
   <div class="card bot">
     <label style="margin:0">螺纹有效长度</label>
-    <label class="chk" style="margin:0"><input type="checkbox" id="tAuto" checked>自动</label>
+    <label class="chk" style="margin:0"><input type="checkbox" id="tAuto" checked title="自动有效长度：M/UN/ACME/Tr = 1.5×公称直径；管螺纹 = 表内标准啮合长度（G 暂取同规格 R）">自动</label>
     <input type="number" id="tLen" value="15" step="0.1" min="0.1">
     <span class="unit">mm</span>
     <label class="chk" style="margin:0"><input type="checkbox" id="tFull">全长</label>
@@ -126,12 +124,7 @@
     <button type="button" class="btn ghost" id="cancel">取消</button>
   </div>
   <div id="status"></div>
-  <div class="hint">
-    「螺纹有效长度」= 要攻的螺纹深度；「孔深」= 有效长度 + 工艺余量（两个都可手动改）。
-    自动有效长度：M/UN/ACME/Tr = 1.5×公称直径；<b>管螺纹 G/R/NPT = 表内标准啮合长度（G 暂取同规格 R）</b>。
-    自动孔深 = 有效长度 + 2×螺距（工艺余量；锥管按额外 1~2 牙上限）。<b>不带螺纹时两个「自动」都不可选</b>；
-    贯通孔深必须手填（板厚/通孔长度），贯通无 118° 底锥。沉头/埋头孔径与深度自动查推荐表；螺栓间隙按所选配合。
-  </div>
+  <div class="hint">选孔型 → 定孔径 → 点「确定」回到图纸放置（自动值不合适时可手改）。</div>
 </div>
 
 <script>
@@ -318,23 +311,22 @@ function syncUi() {
     setOptions("nominal", nominalOptions(), String(nominalD));
     nominalD = Number(el("nominal").value);
   }
-  // 推荐值（沉头）/ 埋头说明
+  // 推荐值（沉头）；埋头说明已收进 reco 的 title 悬停
   const isCb = kind === "counterbore";
   el("recoLabel").style.display = isCb ? "" : "none";
   el("reco").style.display = isCb ? "" : "none";
-  el("sinkNote").style.display = kind === "countersink" ? "" : "none";
-  // 管螺纹提示只放“与操作相关”的信息：自动有效长度/孔深的口径来源与可否手改
-  // （术语释疑类文案不放在界面 —— 加工只按规格选丝锥；数据口径见 JSON note）。
+  // 动态提示：只在真正选中“无标准有效长度”的管螺纹规格时弹出（正常规格不常驻；
+  // 公式/口径说明在控件 title 悬停里）。
   const isPipe = th && sysObj && sysObj.is_pipe;
-  el("threadNote").style.display = isPipe ? "" : "none";
-  if (isPipe) {
-    const lenSrc = currentSystem() === "npt"
-      ? "ASME B1.20.1/GB/T 12716（基准距离+装配余量+偏差）"
-      : currentSystem() === "r"
-        ? "ISO 7-1 表第16栏（最大基准距离+装配余量）"
-        : "同规格 R（ISO 7-1）第16栏（待确认）";
-    el("threadNote").innerHTML =
-      `自动<b>螺纹有效长度</b> = ${lenSrc}；自动<b>孔深</b> = 有效长度 + 2P（锥管按额外 1~2 牙上限）；无标准值的规格请手填。`;
+  const selRow = isPipe
+    ? currentRows().find((r) => `${r.d}|${r.p}` === el("size").value)
+    : null;
+  const needManual = !!(isPipe && selRow && selRow.eff_len == null);
+  el("threadNote").style.display = needManual ? "" : "none";
+  el("threadNote").className = needManual ? "hint bad" : "hint";
+  if (needManual) {
+    el("threadNote").textContent =
+      "该规格没有标准有效长度：请手填「螺纹有效长度」（自动不可用）";
   }
   // 配合
   const fits = fitOptions();
@@ -562,6 +554,7 @@ el("fit").addEventListener("change", () => schedulePreview());
 el("size").addEventListener("change", () => {
   sizeKey = el("size").value;
   sizeD = Number(sizeKey.split("|")[0]);
+  syncUi(); // 重新判定“该规格有无标准有效长度”的动态提示
   schedulePreview();
 });
 el("nominal").addEventListener("change", () => {
