@@ -1745,10 +1745,87 @@ fn reader(stream: TcpStream, tx: Sender<Event>, is_streaming: Arc<AtomicBool>, d
     done.store(true, Ordering::Relaxed);
 }
 
+/// Backend modes the panel can run in, in the order the picker shows them.
+pub const BACKEND_MODES: [&str; 3] = ["auto", "web", "rpc"];
+
+/// File the chosen backend mode is remembered in (`~/.config/OpenCADStudio/`).
+///
+/// Deliberately a file of its own rather than a key in the consolidated
+/// `settings.json`: the whole Pi panel is a fork-local extension, so its
+/// preference should not widen the shared config surface (and its conflict
+/// surface on upstream syncs — see `docs/fork-patches.md`).
+pub fn backend_mode_path() -> Option<std::path::PathBuf> {
+    Some(crate::config::config_dir()?.join("pi-panel-backend.txt"))
+}
+
+/// Read a stored mode, accepting only known values.
+pub fn load_backend_mode_from(path: &std::path::Path) -> Option<String> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let mode = text.trim().to_ascii_lowercase();
+    BACKEND_MODES.contains(&mode.as_str()).then_some(mode)
+}
+
+/// Persist the chosen mode (ignores unknown values and I/O failures — a
+/// missing preference just means "fall back to the environment").
+pub fn save_backend_mode_to(path: &std::path::Path, mode: &str) {
+    let mode = mode.trim().to_ascii_lowercase();
+    if !BACKEND_MODES.contains(&mode.as_str()) {
+        return;
+    }
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let _ = std::fs::write(path, format!("{mode}\n"));
+}
+
+/// The mode the panel should start in: stored preference, else
+/// `OCS_PI_MODE`, else `auto`.
+pub fn initial_backend_mode() -> String {
+    if let Some(path) = backend_mode_path() {
+        if let Some(mode) = load_backend_mode_from(&path) {
+            return mode;
+        }
+    }
+    std::env::var("OCS_PI_MODE")
+        .ok()
+        .map(|m| m.trim().to_ascii_lowercase())
+        .filter(|m| BACKEND_MODES.contains(&m.as_str()))
+        .unwrap_or_else(|| "auto".to_string())
+}
+
+/// Remember the mode for the next run.
+pub fn save_backend_mode(mode: &str) {
+    if let Some(path) = backend_mode_path() {
+        save_backend_mode_to(&path, mode);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn backend_mode_round_trips_and_rejects_junk() {
+        let dir = std::env::temp_dir().join("ocs-pi-mode-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("pi-panel-backend.txt");
+        for mode in BACKEND_MODES {
+            save_backend_mode_to(&path, mode);
+            assert_eq!(load_backend_mode_from(&path).as_deref(), Some(mode));
+        }
+        // Case and surrounding whitespace are normalised.
+        std::fs::write(&path, "  RPC \n").unwrap();
+        assert_eq!(load_backend_mode_from(&path).as_deref(), Some("rpc"));
+        // Unknown values are neither written nor read back.
+        save_backend_mode_to(&path, "carrier-pigeon");
+        assert_eq!(load_backend_mode_from(&path).as_deref(), Some("rpc"));
+        std::fs::write(&path, "carrier-pigeon").unwrap();
+        assert_eq!(load_backend_mode_from(&path), None);
+        // A missing file is not an error.
+        assert_eq!(load_backend_mode_from(&dir.join("nope.txt")), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn dechunk_strips_chunk_framing_and_trailers() {

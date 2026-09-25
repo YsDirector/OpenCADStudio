@@ -126,6 +126,22 @@ impl OpenCADStudio {
                 }
                 Task::none()
             }
+            PiMsg::BackendPick(mode) => {
+                let panel = &mut self.tabs[tab].pi_panel;
+                if panel.mode == mode {
+                    return Task::none();
+                }
+                panel.mode = mode.clone();
+                crate::pi::save_backend_mode(&mode);
+                // The backends keep different session lists and transports, so
+                // switching means starting over: drop the worker (and its
+                // in-flight turn) and forget everything derived from it.
+                panel.stop_worker();
+                panel.reset_for_backend_switch();
+                panel.ensure_worker();
+                panel.status = crate::ui::pi_panel::PiStatus::Connecting;
+                Task::none()
+            }
             PiMsg::MenuUp => {
                 self.tabs[tab].pi_panel.menu_move(-1);
                 Task::none()

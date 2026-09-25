@@ -61,6 +61,10 @@ pub enum PiMsg {
     ModelPick(pi::ModelInfo),
     /// Switch the session's reasoning/thinking level.
     ThinkingPick(String),
+    /// Switch the transport backend (`auto` | `web` | `rpc`) — restarts the
+    /// worker, because the two backends have different session stores and
+    /// transports.
+    BackendPick(String),
     /// Completion popup: move the highlight.
     MenuUp,
     MenuDown,
@@ -405,7 +409,7 @@ impl Default for PiPanelState {
             backend: String::new(),
             stats: None,
             ui_answer: text_editor::Content::new(),
-            mode: std::env::var("OCS_PI_MODE").unwrap_or_else(|_| "auto".to_string()),
+            mode: crate::pi::initial_backend_mode(),
             pi_bin: std::env::var("OCS_PI_BIN").unwrap_or_else(|_| "pi".to_string()),
             project_cwd: std::env::var("OCS_PI_CWD")
                 .or_else(|_| std::env::var("HOME"))
@@ -450,6 +454,31 @@ impl PiPanelState {
             w.stop();
         }
         self.worker = None;
+    }
+
+    /// Forget everything derived from the current worker before switching
+    /// backends: sessions, transcript, model/thinking catalog, stats and any
+    /// pending UI request all belong to the transport that produced them.
+    pub fn reset_for_backend_switch(&mut self) {
+        self.status = PiStatus::Idle;
+        self.backend.clear();
+        self.sessions.clear();
+        self.active = None;
+        self.entries.clear();
+        self.streaming = StreamingMsg::default();
+        self.pending_echoes.clear();
+        self.queued_followups = None;
+        self.models.clear();
+        self.current_model = None;
+        self.thinking_levels.clear();
+        self.current_thinking = None;
+        self.commands.clear();
+        self.files = None;
+        self.files_requested = None;
+        self.popup = None;
+        self.browse = None;
+        self.pending_ui = None;
+        self.stats = None;
     }
 
     pub fn send_command(&self, cmd: pi::Command) {
@@ -1645,6 +1674,29 @@ fn composer<'a>(
                     .on_select(|l: String| Message::Pi(PiMsg::ThinkingPick(l))),
             );
         }
+        // Transport backend: pi-web HTTP vs. a local `pi --mode rpc` child.
+        // Without a picker this was only reachable through `OCS_PI_MODE`.
+        let backend_options: Vec<String> = crate::pi::BACKEND_MODES
+            .iter()
+            .map(|m| (*m).to_string())
+            .collect();
+        let selected_backend = backend_options
+            .iter()
+            .find(|m| **m == state.mode)
+            .cloned();
+        row = row.push(
+            tooltip(
+                pick_list(selected_backend, backend_options, |m: &String| m.clone())
+                    .width(Length::Fixed(74.0))
+                    .text_size(10)
+                    .padding([2, 6])
+                    .menu_height(120.0)
+                    .on_select(|m: String| Message::Pi(PiMsg::BackendPick(m))),
+                "后端：auto＝有 pi-web 就用它，否则本机 pi rpc",
+                tooltip::Position::Top,
+            )
+            .gap(4),
+        );
         // Manual context compaction (disabled while a run is streaming).
         let compact = button(text("压缩").size(10))
             .on_press_maybe(
