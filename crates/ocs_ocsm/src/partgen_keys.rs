@@ -369,6 +369,139 @@ pub fn family_parts(family: &str) -> Option<(KeyStandard, KeyType)> {
     }
 }
 
+// ══════════════════════════════════════════════════════════════════════════
+// 键型样式表（表驱动；键槽段 GUI 下拉 + DSL/校验的唯一元数据源）
+// ══════════════════════════════════════════════════════════════════════════
+
+/// 键型样式：**键型 → 画法（key_type+guided）/ 所属标准 / 可用位置 / 可用选项**。
+///
+/// 用户 2026-09-25 收尾口径：键槽段的「键型 + 导向复选框」合并为一个键型下拉；
+/// 本表是唯一元数据源（经 `/api/parts` 的顶层 `key_styles` 下发给 GUI 渲染）。
+/// **以后加「楔形平键」等新键型：本表加一行 + `shaft.rs` 按 `key_type`/`guided` 补画法分支**。
+#[derive(Debug, Clone, Copy)]
+pub struct KeyStyleSpec {
+    /// 稳定 id：GUI 下拉 value + 推荐 DSL 合并记号（例 `导向A`；普通键仍用 `A`/`B`/`C`）。
+    pub id: &'static str,
+    /// 额外 DSL 别名（大小写不敏感；旧开关 `KEY A 36 导向` 不在此列，由 `guided` 继续兼容）。
+    pub aliases: &'static [&'static str],
+    /// 界面名（用户口径：`普通平键A型` / `导向平键A型`）。
+    pub label: &'static str,
+    /// 平键族型别（画法分支）。
+    pub key_type: KeyType,
+    /// 是否 GB/T 1097 导向平键。
+    pub guided: bool,
+    /// 所属标准（GUI 信息行显示）。
+    pub standard: &'static str,
+    /// 允许的槽位置（`"mid"` / `"end"`；表里没有的 → 组装/校验明确报错）。
+    pub places: &'static [&'static str],
+    /// 是否支持双槽（可用选项）。
+    pub allow_double: bool,
+    /// 位置不合法时的指路文案（拼在报错尾部；普通键不会用到）。
+    pub place_hint: &'static str,
+}
+
+/// 键型样式表（顺序 = GUI 下拉顺序；同时被 `key_styles_json()` 下发给 GUI）。
+pub const KEY_STYLES: &[KeyStyleSpec] = &[
+    KeyStyleSpec {
+        id: "A",
+        aliases: &[],
+        label: "普通平键A型",
+        key_type: KeyType::A,
+        guided: false,
+        standard: "GB/T 1096-2003",
+        places: &["mid", "end"],
+        allow_double: true,
+        place_hint: "",
+    },
+    KeyStyleSpec {
+        id: "B",
+        aliases: &[],
+        label: "普通平键B型",
+        key_type: KeyType::B,
+        guided: false,
+        standard: "GB/T 1096-2003",
+        places: &["mid", "end"],
+        allow_double: true,
+        place_hint: "",
+    },
+    KeyStyleSpec {
+        id: "C",
+        aliases: &[],
+        label: "普通平键C型",
+        key_type: KeyType::C,
+        guided: false,
+        standard: "GB/T 1096-2003",
+        places: &["mid", "end"],
+        allow_double: true,
+        place_hint: "",
+    },
+    KeyStyleSpec {
+        id: "导向A",
+        aliases: &["導向A", "GUIDED_A"],
+        label: "导向平键A型",
+        key_type: KeyType::A,
+        guided: true,
+        standard: "GB/T 1097-2003",
+        places: &["mid"],
+        allow_double: false,
+        place_hint: "固定键固定在轴上；端置是普通平键 KEY 的画法",
+    },
+    KeyStyleSpec {
+        id: "导向B",
+        aliases: &["導向B", "GUIDED_B"],
+        label: "导向平键B型",
+        key_type: KeyType::B,
+        guided: true,
+        standard: "GB/T 1097-2003",
+        places: &["mid"],
+        allow_double: false,
+        place_hint: "固定键固定在轴上；端置是普通平键 KEY 的画法",
+    },
+];
+
+/// 键型记号（id/别名）→ 样式（大小写不敏感；含合并记号 `导向A`/`GUIDED_A`）。
+pub fn key_style_by_token(text: &str) -> Option<&'static KeyStyleSpec> {
+    let t = text.trim();
+    if t.is_empty() {
+        return None;
+    }
+    KEY_STYLES.iter().find(|s| {
+        s.id.eq_ignore_ascii_case(t) || s.aliases.iter().any(|a| a.eq_ignore_ascii_case(t))
+    })
+}
+
+/// (平键族型别, 是否导向) → 样式；无此组合（如导向 C）→ `None`。
+pub fn key_style_of(ty: KeyType, guided: bool) -> Option<&'static KeyStyleSpec> {
+    KEY_STYLES
+        .iter()
+        .find(|s| s.key_type == ty && s.guided == guided)
+}
+
+/// 样式表 JSON（顶层 `key_styles` 下发；GUI 键型下拉/约束/信息行的唯一来源）。
+pub fn key_styles_json() -> serde_json::Value {
+    serde_json::Value::Array(
+        KEY_STYLES
+            .iter()
+            .map(|s| {
+                serde_json::json!({
+                    "id": s.id,
+                    "label": s.label,
+                    "kind": match s.key_type {
+                        KeyType::A => "A",
+                        KeyType::B => "B",
+                        KeyType::C => "C",
+                    },
+                    "guided": s.guided,
+                    "standard": s.standard,
+                    "places": s.places,
+                    "allow_double": s.allow_double,
+                    "place_hint": s.place_hint,
+                })
+            })
+            .collect(),
+    )
+}
+
 /// 型别的中文后缀（族名/规格文本用）。
 #[allow(dead_code)]
 fn type_label(ty: KeyType) -> &'static str {
@@ -429,6 +562,8 @@ fn sizes_1097(ty: KeyType) -> Vec<serde_json::Value> {
             lengths.extend(allowed.iter().copied().filter(|v| (*v - def).abs() > 1e-9));
             serde_json::json!({
                 "d": r.b,
+                "b": r.b,
+                "h": r.h,
                 "label": format!("b={}（h={}）", trim(r.b), trim(r.h)),
                 "pitch": 0.0,
                 "l_min": allowed.first().copied().unwrap_or(def),
@@ -2418,6 +2553,41 @@ mod tests {
                 }
             }
         }
+        // 1097 sizes 必须带 h（GUI 信息行 `b8×h7`；收尾前缺字段，信息行显示 `h?`）。
+        assert_eq!(s8["h"], 7.0, "1097 sizes 应带 h 字段");
+        for (fam, ty) in [("key_1097_a", KeyType::A), ("key_1097_b", KeyType::B)] {
+            for s in fams[fam]["sizes"].as_array().unwrap() {
+                let b = s["d"].as_f64().unwrap();
+                assert_eq!(
+                    s["h"].as_f64().unwrap(),
+                    row_1097(ty, b).unwrap().h,
+                    "{fam} b={b} sizes.h 应与表行一致"
+                );
+            }
+        }
+        // 键型样式表（顶层 key_styles；用户 2026-09-25）：GUI 下拉/约束/信息行的唯一来源。
+        let styles = cat["key_styles"].as_array().expect("顶层 key_styles");
+        let ids: Vec<&str> = styles.iter().map(|s| s["id"].as_str().unwrap()).collect();
+        assert_eq!(ids, ["A", "B", "C", "导向A", "导向B"], "键型下拉集合/顺序");
+        let labels: Vec<&str> = styles.iter().map(|s| s["label"].as_str().unwrap()).collect();
+        assert_eq!(
+            labels,
+            [
+                "普通平键A型",
+                "普通平键B型",
+                "普通平键C型",
+                "导向平键A型",
+                "导向平键B型"
+            ]
+        );
+        let g = &styles[3];
+        assert_eq!(g["kind"], "A");
+        assert_eq!(g["guided"], true);
+        assert_eq!(g["standard"], "GB/T 1097-2003");
+        assert_eq!(g["places"], serde_json::json!(["mid"]));
+        assert_eq!(g["allow_double"], false);
+        assert_eq!(styles[0]["places"], serde_json::json!(["mid", "end"]));
+        assert_eq!(styles[0]["allow_double"], true);
         // 树：五族都挂在「键/平键」下。
         fn walk(node: &serde_json::Value, out: &mut Vec<String>) {
             if let Some(arr) = node.as_array() {
@@ -2438,6 +2608,24 @@ mod tests {
             assert!(on_tree.contains(&fam.to_string()), "{fam} 没挂到零件树");
         }
         assert!(cat.to_string().contains("平键"), "树路径应含「平键」");
+    }
+
+    /// 键型样式表（用户 2026-09-25）：合并记号解析 + (型别, 导向) 反查 + 表自洽。
+    #[test]
+    fn key_style_table_covers_merged_types() {
+        assert_eq!(key_style_by_token("导向A").unwrap().id, "导向A");
+        assert_eq!(key_style_by_token("GUIDED_A").unwrap().label, "导向平键A型");
+        assert_eq!(key_style_by_token("導向B").unwrap().label, "导向平键B型");
+        assert_eq!(key_style_by_token("a").unwrap().label, "普通平键A型");
+        assert!(key_style_by_token("导向C").is_none(), "GB/T 1097 无 C 型");
+        assert!(key_style_by_token("楔形A").is_none(), "未登记键型不得被识别");
+        assert!(key_style_of(KeyType::A, true).unwrap().guided);
+        assert!(!key_style_of(KeyType::A, false).unwrap().guided);
+        assert!(key_style_of(KeyType::C, true).is_none(), "导向 C 无样式");
+        for s in KEY_STYLES {
+            assert_eq!(key_style_by_token(s.id).unwrap().id, s.id);
+            assert_eq!(key_style_of(s.key_type, s.guided).unwrap().id, s.id);
+        }
     }
 
     /// 视图/参数校验与错误路径。

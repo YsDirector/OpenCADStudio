@@ -969,6 +969,8 @@ pub fn catalog_json() -> String {
         "tree": tree,
         "families": families,
         "spline_engine": crate::invol_spline::catalog_payload(),
+        // 轴生成器键槽段的键型下拉元数据（表驱动；加新键型只需 partgen_keys::KEY_STYLES 加一行）。
+        "key_styles": crate::partgen_keys::key_styles_json(),
     })
     .to_string()
 }

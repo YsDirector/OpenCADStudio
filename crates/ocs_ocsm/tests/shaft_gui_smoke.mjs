@@ -55,8 +55,17 @@ const KEY_RANGES = [
 
 // 导向平键（GB/T 1097）桩：sizes（每档 d0/l0 + 1097 L 系列∩L<10b）+ length_rows（L→L1/L2/L3）。
 const KEY1097_SIZES = [
-  { d: 8, label: 'b=8（h=7）', lengths: [25, 28, 32, 36, 40, 45, 50, 56, 63, 70], d0: 3, l0: 7 },
-  { d: 10, label: 'b=10（h=8）', lengths: [25, 28, 32, 36, 40, 45, 50, 56, 63, 70, 80, 90], d0: 3, l0: 8 },
+  { d: 8, b: 8, h: 7, label: 'b=8（h=7）', lengths: [25, 28, 32, 36, 40, 45, 50, 56, 63, 70], d0: 3, l0: 7 },
+  { d: 10, b: 10, h: 8, label: 'b=10（h=8）', lengths: [25, 28, 32, 36, 40, 45, 50, 56, 63, 70, 80, 90], d0: 3, l0: 8 },
+];
+// 键型样式表桩（与 partgen_keys::KEY_STYLES 下发的顶层 `key_styles` 同形；
+// GUI 下拉/位置约束/双槽可用性/信息行由它驱动）。
+const KEY_STYLES_JSON = [
+  { id: 'A', aliases: [], label: '普通平键A型', kind: 'A', guided: false, standard: 'GB/T 1096-2003', places: ['mid', 'end'], allow_double: true, place_hint: '' },
+  { id: 'B', aliases: [], label: '普通平键B型', kind: 'B', guided: false, standard: 'GB/T 1096-2003', places: ['mid', 'end'], allow_double: true, place_hint: '' },
+  { id: 'C', aliases: [], label: '普通平键C型', kind: 'C', guided: false, standard: 'GB/T 1096-2003', places: ['mid', 'end'], allow_double: true, place_hint: '' },
+  { id: '导向A', aliases: ['導向A', 'GUIDED_A'], label: '导向平键A型', kind: 'A', guided: true, standard: 'GB/T 1097-2003', places: ['mid'], allow_double: false, place_hint: '固定键固定在轴上；端置是普通平键 KEY 的画法' },
+  { id: '导向B', aliases: ['導向B', 'GUIDED_B'], label: '导向平键B型', kind: 'B', guided: true, standard: 'GB/T 1097-2003', places: ['mid'], allow_double: false, place_hint: '固定键固定在轴上；端置是普通平键 KEY 的画法' },
 ];
 const KEY1097_ROWS = [
   { l: 25, l1: 13, l2: 12.5, l3: 6 },
@@ -306,13 +315,18 @@ function segmentsFor(dsl) {
       const lm = /\bL\s*=?\s*([\d.]+)/i.exec(line);
       const s0 = sm ? Number(sm[1]) : 30;
       const seg = { s: s0, e: em ? Number(em[1]) : s0, l: lm ? Number(lm[1]) : 10 };
-      const km = /\bKEY\s+([ABC])\s+(?:KL\s*=?\s*)?([\d.]+)/i.exec(line);
+      const km = /\bKEY\s+(\S+)\s+(?:KL\s*=?\s*)?([\d.]+)/i.exec(line);
       if (km) {
+        const rawType = km[1];
+        const style = KEY_STYLES_JSON.find((s) => s.id === rawType)
+          || KEY_STYLES_JSON.find((s) => (s.aliases || []).some((a) => a.toUpperCase() === rawType.toUpperCase()))
+          || KEY_STYLES_JSON.find((s) => s.kind === rawType.toUpperCase() && !s.guided);
         seg.keyway = {
-          type: km[1].toUpperCase(),
+          type: style ? style.kind : rawType.toUpperCase(),
           l: Number(km[2]),
           place: /@\s*端/.test(line) ? 'end' : 'mid',
         };
+        if (style && style.guided) seg.keyway.guided = true;
         // `b8h7` 连写 / `b8` / `b10`（与后端同口径：b 必给，h 跟 b 走）。
         const bm = /\bb\s*=?\s*([\d.]+)(?:h\s*=?\s*([\d.]+))?/i.exec(line);
         if (bm) {
@@ -322,6 +336,7 @@ function segmentsFor(dsl) {
         const tm = /\bt1\s*=?\s*([\d.]+)/i.exec(line);
         if (tm) seg.keyway.t1 = Number(tm[1]);
         if (/双槽|\bDOUBLE\b/i.test(line)) seg.keyway.double = true;
+        // 旧写法 `KEY A 25 导向` 的开关标记（新写法 `KEY 导向A 25` 已在上面从样式表得到）。
         if (/导向|\bGUIDED\b/i.test(line)) seg.keyway.guided = true;
       }
       out.push(seg);
@@ -347,6 +362,7 @@ global.fetch = async (u, opts = {}) => {
         key_1097_a: { sizes: KEY1097_SIZES, length_rows: KEY1097_ROWS },
         key_1097_b: { sizes: KEY1097_SIZES, length_rows: KEY1097_ROWS },
       },
+      key_styles: KEY_STYLES_JSON,
     });
   }
   if (url.startsWith('/api/shaft_parse')) {
@@ -660,27 +676,32 @@ check(dslEl.value.includes('GEAR IN M3 Z20 ALPHA20 DA67.5 DF54 H30'),
 dslEl.value = 'S25 E25 L40 CH2@L KEY A 18 | S30 E30 L30';
 await S.refreshFromText();
 S.sel = 0;
-check(S.rows.length === 2 && S.rows[0].key.on && S.rows[0].key.kind === 'A'
+check(S.rows.length === 2 && S.rows[0].key.on && S.rows[0].key.style === 'A'
   && S.rows[0].key.l === '18' && S.rows[0].key.place === 'mid' && S.rows[0].key.b === '',
   'KEY 行应回填段表（b 省略 = 由轴径自动定）：' + JSON.stringify(S.rows[0].key));
 let krow = segBody._rows[0];
 check(krow._html.includes('b8×h7') && krow._html.includes('t1=4'),
   'KEY 列应只读显示由 d25 查得的 b8×h7 / t1=4：' + krow._html.slice(0, 400));
 check(krow._html.includes('title="平键轴槽（与 GEAR / SPLINE / M / OV 互斥）')
-  && krow._html.includes('title="键型 A/B/C（复用 GB/T 1096 平键族）；槽长按型别折算'),
+  && krow._html.includes('title="键型（表驱动）'),
   'KEY 口径（互斥/折算/查表）应进 title');
-const keyKindF = krow._fields.find((f) => f.dataset.f === 'key.kind');
+const keyStyleF = krow._fields.find((f) => f.dataset.f === 'key.style');
 const keyLenF = krow._fields.find((f) => f.dataset.f === 'key.l');
 const keyPlaceF = krow._fields.find((f) => f.dataset.f === 'key.place');
-check(!!keyKindF && !!keyLenF && !!keyPlaceF, 'KEY 列应有 键型 / 键长 L / 位置 三个字段');
+check(!!keyStyleF && !!keyLenF && !!keyPlaceF, 'KEY 列应有 键型 / 键长 L / 位置 三个字段');
+check(!krow._fields.some((f) => f.dataset.f === 'key.guided'), '「导向」复选框应已删除（并入键型下拉）');
 check(!!keyLenF && keyLenF.options.some((o) => o.value === '18'),
   '键长下拉应有平键族 L 候选：' + JSON.stringify(keyLenF && keyLenF.options.map((o) => o.value)));
 check(dslEl.value.includes('KEY A 18') && !/\bb\d/.test(dslEl.value),
   '自动 b×h 不写进 DSL（由后端按 d 定）：' + JSON.stringify(dslEl.value));
 check(!!krow._fields.find((f) => f.dataset.f === 'key.l' && f.disabled === false), 'KEY 段 L 可选');
-// A/B/C 三型都可选（用户口径恢复）；槽长按型别折算显示。
-check(keyKindF.options.map((o) => o.value).join(',') === 'A,B,C',
-  '键型下拉应为 A/B/C：' + JSON.stringify(keyKindF.options.map((o) => o.value)));
+// 合并键型下拉：普通 A/B/C + 导向 A/B（表驱动；顺序照样式表）。
+check(keyStyleF.options.map((o) => o.value).join(',') === 'A,B,C,导向A,导向B',
+  '键型下拉应为 A/B/C/导向A/导向B：' + JSON.stringify(keyStyleF.options.map((o) => o.value)));
+check(
+  keyStyleF.options.map((o) => o.textContent).join('|') === '普通平键A型|普通平键B型|普通平键C型|导向平键A型|导向平键B型',
+  '键型下拉名称应为用户口径：' + JSON.stringify(keyStyleF.options.map((o) => o.textContent))
+);
 // d45 → b14、t1=5.5（t1≠b/2，便于区分折算）；B 20：中置 20+14=34、端置 20+7+5.5=32.5。
 dslEl.value = 'S45 E45 L80 KEY B 20 | S20 E20 L10';
 await S.refreshFromText();
@@ -695,8 +716,8 @@ krow = segBody._rows[0];
 check(krow._html.includes('槽长 32.5'),
   '端置 B 折算 +b/2+t1：20+7+5.5=32.5：' + krow._html.slice(0, 400));
 // C 型中置 20+7=27；C 端置 20+5.5=25.5。
-segBody._rows[0]._fields.find((f) => f.dataset.f === 'key.kind').value = 'C';
-segBody._fire('input', segBody._rows[0]._fields.find((f) => f.dataset.f === 'key.kind'));
+segBody._rows[0]._fields.find((f) => f.dataset.f === 'key.style').value = 'C';
+segBody._fire('input', segBody._rows[0]._fields.find((f) => f.dataset.f === 'key.style'));
 await tick();
 segBody._rows[0]._fields.find((f) => f.dataset.f === 'key.place').value = 'mid';
 segBody._fire('input', segBody._rows[0]._fields.find((f) => f.dataset.f === 'key.place'));
@@ -732,33 +753,36 @@ check(krow._fields.some((f) => f.dataset.f === 'gear.on' && f.disabled)
   && krow._fields.some((f) => f.dataset.f === 'spline.on' && f.disabled),
   'KEY 段应禁用 GEAR / SPLINE 勾选');
 
-// ⑧.12 导向平键（GB/T 1097）：KEY 列勾「导向」→ 只 A/B、L 下拉换 1097 系列、
-// 派生显示固定螺钉孔；行文本/模型带 guided；与双槽互斥。
-dslEl.value = 'S30 E30 L50 CH2@L CH2@R KEY A 25 导向';
+// ⑧.12 键型下拉与「导向」合并（用户 2026-09-25）：单下拉 5 项（普通A/B/C + 导向A/B），
+// 不再单独出复选框；选导向 → 位置只有中置（端置禁用）、双槽禁用、L 换 1097 系列、
+// 信息行显示键型名+标准+固定螺钉孔；新写法 `KEY 导向A 25` 与旧写法 `KEY A 25 导向` 等价。
+dslEl.value = 'S30 E30 L50 CH2@L CH2@R KEY 导向A 25';
 await S.refreshFromText();
 S.sel = 0;
 check(
-  S.rows.length === 1 && S.rows[0].key.on && S.rows[0].key.guided === true
-    && S.rows[0].key.kind === 'A' && S.rows[0].key.l === '25',
-  '导向 KEY 应回填段表：' + JSON.stringify(S.rows[0].key)
+  S.rows.length === 1 && S.rows[0].key.on && S.rows[0].key.style === '导向A'
+    && S.rows[0].key.l === '25' && S.rows[0].key.place === 'mid',
+  '导向（新写法）应回填段表：' + JSON.stringify(S.rows[0].key)
 );
-let guidRow = segBody._rows[0];
-const gKind = guidRow._fields.find((f) => f.dataset.f === 'key.kind');
-check(
-  gKind && gKind.options.map((o) => o.value).join(',') === 'A,B',
-  '导向时应隐藏 C 型：' + JSON.stringify(gKind && gKind.options.map((o) => o.value))
-);
+const guidRow = segBody._rows[0];
+const gStyle = guidRow._fields.find((f) => f.dataset.f === 'key.style');
+check(!!gStyle && gStyle.value === '导向A', '键型下拉应选中 导向A：' + JSON.stringify(gStyle && gStyle.value));
 const gLen = guidRow._fields.find((f) => f.dataset.f === 'key.l');
 check(gLen && gLen.options.some((o) => o.value === '25'), '导向 L 下拉应含 1097 系列 25（1096 无 25）');
 check(
-  guidRow._html.includes('导向1097') && guidRow._html.includes('M3') && guidRow._html.includes('L3=6'),
-  '派生应显示 1097 固定螺钉孔与 L3：' + guidRow._html.slice(0, 500)
+  guidRow._html.includes('导向平键A型') && guidRow._html.includes('GB/T 1097-2003')
+    && guidRow._html.includes('M3') && guidRow._html.includes('L3=6') && guidRow._html.includes('×h7'),
+  '信息行应显示键型名/标准/固定螺钉孔/h7：' + guidRow._html.slice(0, 500)
 );
-check(dslEl.value.includes('KEY A 25 导向'), '行文本应带 导向：' + JSON.stringify(dslEl.value));
+check(!guidRow._html.includes('×h?'), 'b8 信息行不应再出现 h?（1097 sizes 已带 h）');
+const newDsl = S.rowToDsl(S.rows[0]);
+check(newDsl.includes('KEY 导向A 25') && !/\s导向(\s|$)/.test(newDsl),
+  '新写法应写回行 DSL（不再用尾部 导向 开关）：' + JSON.stringify(newDsl));
 const gm = S.modelFromRows();
 check(
-  !!gm && gm.segments[0].keyway && gm.segments[0].keyway.guided === true,
-  '模型应带 guided：' + JSON.stringify(gm && gm.segments[0])
+  !!gm && gm.segments[0].keyway && gm.segments[0].keyway.guided === true
+    && gm.segments[0].keyway.type === 'A',
+  '模型应带 guided + type A（JSON 老 schema）：' + JSON.stringify(gm && gm.segments[0])
 );
 const gDbl = guidRow._fields.find((f) => f.dataset.f === 'key.double');
 check(!!gDbl && gDbl.disabled === true, '导向下双槽应禁用');
@@ -768,30 +792,30 @@ check(
   !!gPlace && gPlace.options.find((o) => o.value === 'end').disabled === true,
   '导向下端置选项应禁用（只有中置）'
 );
-const gBox = guidRow._fields.find((f) => f.dataset.f === 'key.guided');
-check(!!gBox && gBox.checked === true, '导向勾选应回显');
-gBox.checked = false;
-segBody._fire('change', gBox);
-await tick();
-check(
-  S.rows[0].key.guided === false && !dslEl.value.includes('导向'),
-  '取消导向应回普通平键：' + JSON.stringify(dslEl.value)
-);
 // 导向只中置（用户 2026-09-25 裁定）：程序化把位置改 end 也应被拉回 mid，模型不得带 end。
+gPlace.value = 'end';
+segBody._fire('input', gPlace);
+await tick();
+check(S.rows[0].key.place === 'mid', '导向程序化端置应归一到中置：' + JSON.stringify(S.rows[0].key.place));
+check(S.modelFromRows().segments[0].keyway.place !== 'end', '导向模型不得带 end');
+// 旧写法兼容：`KEY A 25 导向` 仍应映射到 导向平键A型，回填后推荐新写法。
 dslEl.value = 'S30 E30 L50 CH2@L CH2@R KEY A 25 导向';
 await S.refreshFromText();
 S.sel = 0;
-let guidRow2 = segBody._rows[0];
-const gPlace2 = guidRow2._fields.find((f) => f.dataset.f === 'key.place');
-gPlace2.value = 'end';
-segBody._fire('input', gPlace2);
-await tick();
-check(S.rows[0].key.place === 'mid', '导向程序化端置应归一到中置：' + JSON.stringify(S.rows[0].key.place));
-const gm2 = S.modelFromRows();
-check(
-  !!gm2 && gm2.segments[0].keyway.place !== 'end',
-  '导向模型不得带 end：' + JSON.stringify(gm2 && gm2.segments[0])
-);
+check(S.rows[0].key.style === '导向A', '旧写法 `KEY A 25 导向` 应等价映射到 导向A：' + JSON.stringify(S.rows[0].key));
+check(S.rowToDsl(S.rows[0]).includes('KEY 导向A 25'), '旧写法回填后应推荐新写法：' + JSON.stringify(S.rowToDsl(S.rows[0])));
+// ASCII 别名 `GUIDED_B` 也走同一张表。
+dslEl.value = 'S30 E30 L50 KEY GUIDED_B 25';
+await S.refreshFromText();
+S.sel = 0;
+check(S.rows[0].key.style === '导向B', 'GUIDED_B 别名应映射到 导向平键B型：' + JSON.stringify(S.rows[0].key));
+// 普通平键仍可选端置（样式表 places = mid/end）。
+dslEl.value = 'S30 E30 L50 KEY A 25 @端 | S20 E20 L10';
+await S.refreshFromText();
+S.sel = 0;
+check(S.rows[0].key.style === 'A' && S.rows[0].key.place === 'end', '普通平键端置仍可用：' + JSON.stringify(S.rows[0].key));
+const nPlace = segBody._rows[0]._fields.find((f) => f.dataset.f === 'key.place');
+check(nPlace.options.find((o) => o.value === 'end').disabled !== true, '普通平键端置不应禁用');
 report();
 
 function report() {

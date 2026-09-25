@@ -198,7 +198,8 @@ OCSMSHAFT 轴生成器：行 DSL / JSON → 单视图侧视图（段拼接 + 端
                       （引入倒角由相邻段的 CH 表达）
     KEY A 18      轴槽（GB/T 1095-2003 平键键槽，本期只做轴槽，不毂槽）——轴段类型，进段表 KEY 列：
                   只能挂在光圆柱段上（与 GEAR/SPLINE/M/TL/RL/OV 互斥）
-                  键型 A/B/C + 键长 L（所选键型；平键族标准系列，L<10b）+ 位置中置/端置（槽长自动折算）
+                  键型（普通平键 A/B/C；导向平键 `导向A`/`导向B`——GUI 合并在一个下拉里）
+                  + 键长 L（所选键型；平键族标准系列，L<10b）+ 位置中置/端置（槽长自动折算）
                   b×h 由本段直径 d 查 GB/T 1095 d 列自动定（h 跟 b 走）；t1 按 b 查 GB/T 1095 表
                   显式覆盖写 b8h7：必须落在该轴径档的标准配对上，否则明确报错
                   显示：中置恒显示 A；端置 B/C 显示 C（C 端弧由铣刀铣出）
@@ -206,8 +207,9 @@ OCSMSHAFT 轴生成器：行 DSL / JSON → 单视图侧视图（段拼接 + 端
                   可选 双槽（DOUBLE 别名）：绕轴心 180° 对置，仅剖视图体现（常规侧视不变），
                   可承受转矩约为单键联接的 1.5 倍；剖视剖面线上下两环各带一个缺口
                   例：KEY A 18 ／ KEY C 14 @端 ／ KEY A 18 b8h7
-                  导向平键（GB/T 1097）加 `导向`：KEY A 25 导向（只 A/B；L 取 1097 系列 25…450∩L<10b；
-                  槽长 = L；自动画 2 个固定螺钉螺纹孔 d0×L0、孔心距槽两端 L3；与双槽互斥；起键孔属 1096）
+                  导向平键（GB/T 1097）用合并键型记号（推荐 `KEY 导向A 25`；旧 `KEY A 25 导向` 过时但可用）：
+                  只 A/B；L 取 1097 系列 25…450∩L<10b；槽长 = L（只有中置）；
+                  自动画 2 个固定螺钉螺纹孔 d0×L0、孔心距槽两端 L3；与双槽互斥；起键孔属 1096
                   侧视图叠画键 + 剖视缺口含 sagitta 线；不生成尺寸标注
     VIEW 常规|剖视   视图：常规（默认，只看外形）/ 剖视（轮廓 + ANSI31 剖面线）
                      （双视图已于 2026-09-23 移除；旧 `VIEW 双` 明确报错）
@@ -452,6 +454,14 @@ impl KeywayPlace {
         }
     }
 
+    /// 机器码（`partgen_keys::KEY_STYLES` 的 `places` 用）：`mid` / `end`。
+    pub fn code(self) -> &'static str {
+        match self {
+            KeywayPlace::Mid => "mid",
+            KeywayPlace::End => "end",
+        }
+    }
+
     fn parse(text: &str) -> Result<Self, String> {
         match text.trim() {
             "中" | "中置" | "mid" | "Mid" | "MID" => Ok(KeywayPlace::Mid),
@@ -505,6 +515,14 @@ impl KeyKind {
             KeyKind::A => crate::partgen_keys::KeyType::A,
             KeyKind::B => crate::partgen_keys::KeyType::B,
             KeyKind::C => crate::partgen_keys::KeyType::C,
+        }
+    }
+
+    fn from_key_type(ty: crate::partgen_keys::KeyType) -> Self {
+        match ty {
+            crate::partgen_keys::KeyType::A => KeyKind::A,
+            crate::partgen_keys::KeyType::B => KeyKind::B,
+            crate::partgen_keys::KeyType::C => KeyKind::C,
         }
     }
 
@@ -1401,6 +1419,8 @@ fn set_relief_param(
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum KeyParam {
     Kind,
+    /// 合并键型记号（`导向A` / `GUIDED_A` 等；用户 2026-09-25 收尾，键型下拉的 DSL 形式）。
+    Style,
     Len,
     B,
     H,
@@ -1450,6 +1470,16 @@ fn key_param_key(token: &str) -> Option<(KeyParam, &str)> {
     if matches!(upper.as_str(), "A" | "B" | "C") {
         return Some((KeyParam::Kind, &token[..]));
     }
+    // 合并键型记号（`导向A`/`GUIDED_A`；单字母 A/B/C 仍走旧 Kind 路径）。
+    // 表外合并记号（如 `导向C`/`GUIDED_X`）也收进 Style 分支，好报「可选键型」而不是「不识别的关键字」。
+    let looks_merged = ((token.starts_with("导向") || token.starts_with("導向"))
+        && token.chars().count() > 2)
+        || (upper.starts_with("GUIDED_") && upper.len() > "GUIDED_".len());
+    if token.chars().count() > 1
+        && (crate::partgen_keys::key_style_by_token(token).is_some() || looks_merged)
+    {
+        return Some((KeyParam::Style, &token[..]));
+    }
     if let Some(rest) = upper.strip_prefix("KL") {
         if rest.is_empty() || numeric_rest(rest) {
             return Some((KeyParam::Len, &token[2..]));
@@ -1483,6 +1513,23 @@ fn key_param_key(token: &str) -> Option<(KeyParam, &str)> {
 /// KEY 位置文本 → [`KeywayPlace`]（DSL 的 `@中/@端` 与 JSON 的 `place` 共用）。
 fn parse_keyway_place(text: &str) -> Result<KeywayPlace, String> {
     KeywayPlace::parse(text)
+}
+
+/// 键型样式查表（`KeyKind` + 导向 → `partgen_keys::KEY_STYLES` 行）。
+fn key_style_for(kind: KeyKind, guided: bool) -> Option<&'static crate::partgen_keys::KeyStyleSpec> {
+    crate::partgen_keys::key_style_of(kind.key_type(), guided)
+}
+
+/// 样式允许位置的中文（报错用）：`["mid"]` → `中置`，`["mid","end"]` → `中置、端置`。
+fn key_places_cn(places: &[&str]) -> String {
+    places
+        .iter()
+        .map(|p| match *p {
+            "mid" => "中置",
+            _ => "端置",
+        })
+        .collect::<Vec<_>>()
+        .join("、")
 }
 
 /// KEY 子关键字 → [`Keyway`]（DSL 与 JSON 共用；无任何参数 = 无轴槽）。
@@ -1523,10 +1570,22 @@ fn assemble_keyway(
             "{label}：导向平键（GB/T 1097）只有 A/B 型，没有 C 型（用户 2026-09-25 更正）"
         ));
     }
-    // 导向平键只有中置（用户 2026-09-25 裁定）：端置是普通平键（1096）画法，明确报错。
-    if key_guided && key_place == Some(KeywayPlace::End) {
+    // 位置/可用选项由键型样式表驱动（导向平键只有中置：用户 2026-09-25 裁定；
+    // 加新键型只改 `partgen_keys::KEY_STYLES` 一行）。
+    let place = key_place.unwrap_or(KeywayPlace::Mid);
+    let spec = key_style_for(kind, key_guided).expect("内建样式覆盖 A/B/C ×(普通/导向)");
+    if !spec.places.contains(&place.code()) {
         return Err(format!(
-            "{label}：导向平键（GB/T 1097）只有中置（固定键固定在轴上，不开在轴首/末段自由端）"
+            "{label}：{}只有{}（{}）",
+            spec.label,
+            key_places_cn(spec.places),
+            spec.place_hint
+        ));
+    }
+    if key_double && !spec.allow_double {
+        return Err(format!(
+            "{label}：{}不支持双槽（固定键只有一个槽）",
+            spec.label
         ));
     }
     if let Some(b) = key_b {
@@ -1569,7 +1628,7 @@ fn assemble_keyway(
     Ok(Some(Keyway {
         kind,
         l,
-        place: key_place.unwrap_or(KeywayPlace::Mid),
+        place,
         b: key_b,
         h: key_h,
         t1: key_t1,
@@ -1689,7 +1748,7 @@ fn parse_segment(chunk: &str, label: &str, program: &mut Program) -> Result<Segm
         } else if key_on && key_param_key(token).is_some() {
             let (param, attached) = key_param_key(token).expect("key_param_key 已判 Some");
             let name = match param {
-                KeyParam::Kind => "键型",
+                KeyParam::Kind | KeyParam::Style => "键型",
                 KeyParam::Len => "键长",
                 KeyParam::B => "b",
                 KeyParam::H => "h",
@@ -1751,6 +1810,40 @@ fn parse_segment(chunk: &str, label: &str, program: &mut Program) -> Result<Segm
                             ))
                         }
                         _ => key_kind = Some(value),
+                    }
+                }
+                KeyParam::Style => {
+                    // 合并键型（`导向A`）= 旧 (键型, `导向` 开关) 的等价写法；两者须一致。
+                    let spec = crate::partgen_keys::key_style_by_token(value_text)
+                        .ok_or_else(|| {
+                            format!(
+                                "{label}：KEY 键型「{value_text}」非法（可选：{}）",
+                                crate::partgen_keys::KEY_STYLES
+                                    .iter()
+                                    .map(|s| s.label)
+                                    .collect::<Vec<_>>()
+                                    .join(" / ")
+                            )
+                        })?;
+                    let value = KeyKind::from_key_type(spec.key_type);
+                    match key_kind {
+                        Some(prev) if prev != value => {
+                            return Err(format!(
+                                "{label}：KEY 键型重复且冲突（已给「{}」，又给「{}」）",
+                                prev.cn(),
+                                spec.label
+                            ))
+                        }
+                        _ => key_kind = Some(value),
+                    }
+                    if key_guided && !spec.guided {
+                        return Err(format!(
+                            "{label}：键型「{}」与「导向」冲突（该键型不是导向平键）",
+                            spec.label
+                        ));
+                    }
+                    if spec.guided {
+                        key_guided = true;
                     }
                 }
                 _ => {
@@ -2653,8 +2746,17 @@ fn parse_json(text: &str) -> Result<Program, String> {
         let keyway = match &item.keyway {
             None => None,
             Some(k) => {
-                let kind = KeyKind::parse(&k.kind)
-                    .map_err(|e| format!("第 {number} 段：{e}"))?;
+                // 新 JSON 形式：`"type":"导向A"`（合并记号）；旧形式 `"type":"A"`+`"guided":true` 兼容。
+                let (kind, guided) = match crate::partgen_keys::key_style_by_token(&k.kind) {
+                    Some(spec) => (
+                        KeyKind::from_key_type(spec.key_type),
+                        spec.guided || k.guided,
+                    ),
+                    None => (
+                        KeyKind::parse(&k.kind).map_err(|e| format!("第 {number} 段：{e}"))?,
+                        k.guided,
+                    ),
+                };
                 let place = match k.place.as_deref() {
                     None => None,
                     Some(text) => Some(
@@ -2670,7 +2772,7 @@ fn parse_json(text: &str) -> Result<Program, String> {
                     k.t1,
                     place,
                     k.double,
-                    k.guided,
+                    guided,
                     &format!("第 {number} 段"),
                 )?
             }
@@ -3072,16 +3174,22 @@ pub fn validate(program: &Program) -> Result<(), String> {
             }
             let b = keyway_b(keyway, seg.s).map_err(|e| format!("第 {number} 段：{e}"))?;
             // 导向平键（GB/T 1097）：表行 + 长度系列 + 固定螺钉孔校验（用户 2026-09-25 开工）。
-            if keyway.guided && keyway.double {
-                return Err(format!(
-                    "第 {number} 段：导向平键（GB/T 1097）不支持双槽（固定键只有一个槽）"
-                ));
-            }
-            // 导向只有中置（用户 2026-09-25 裁定）：端置入口明确报错并指路。
-            if keyway.guided && keyway.place == KeywayPlace::End {
-                return Err(format!(
-                    "第 {number} 段：导向平键（GB/T 1097）只有中置（固定键固定在轴上；端置是普通平键 KEY 的画法）"
-                ));
+            // 可用位置/可用选项由键型样式表驱动（导向平键只有中置：用户 2026-09-25 裁定）。
+            if let Some(spec) = key_style_for(keyway.kind, keyway.guided) {
+                if keyway.double && !spec.allow_double {
+                    return Err(format!(
+                        "第 {number} 段：{}不支持双槽（固定键只有一个槽）",
+                        spec.label
+                    ));
+                }
+                if !spec.places.contains(&keyway.place.code()) {
+                    return Err(format!(
+                        "第 {number} 段：{}只有{}（{}）",
+                        spec.label,
+                        key_places_cn(spec.places),
+                        spec.place_hint
+                    ));
+                }
             }
             let row_1097 = if keyway.guided {
                 Some(crate::partgen_keys::key_1097_row(keyway.kind.key_type(), b).ok_or_else(
@@ -3550,11 +3658,16 @@ fn keyway_geom(
     label: &str,
 ) -> Result<KeywayGeom, String> {
     let b = keyway_b(kw, seg.s).map_err(|e| format!("{label}：{e}"))?;
-    // 导向只有中置（用户 2026-09 裁定）：防住绕过 `validate` 的直调用。
-    if kw.guided && kw.place == KeywayPlace::End {
-        return Err(format!(
-            "{label}：导向平键（GB/T 1097）只有中置（固定键固定在轴上，不开在轴首/末段自由端）"
-        ));
+    // 样式表位置约束（导向只有中置；用户 2026-09 裁定）：防住绕过 `validate` 的直调用。
+    if let Some(spec) = key_style_for(kw.kind, kw.guided) {
+        if !spec.places.contains(&kw.place.code()) {
+            return Err(format!(
+                "{label}：{}只有{}（{}）",
+                spec.label,
+                key_places_cn(spec.places),
+                spec.place_hint
+            ));
+        }
     }
     // 导向（GB/T 1097）：查表行 + 长度系列行 + 螺钉粗牙螺距；非导向：沿用 1096 族表检查。
     let guided_src = if kw.guided {
@@ -9454,6 +9567,52 @@ GEAR M3 Z20";
         )
         .unwrap();
         assert!(back.segments[0].keyway.as_ref().unwrap().guided);
+    }
+
+    /// 收尾（用户 2026-09-25）：键型与「导向」合并为一个下拉/记号——DSL `KEY 导向A 25`
+    /// 与旧 `KEY A 25 导向` 等价；JSON `"type":"导向A"` 与旧 `type`+`guided` 等价；
+    /// 合并记号仍受同一张样式表的「位置/双槽」约束。
+    #[test]
+    fn guided_keyway_merged_style_token_and_old_form_are_equivalent() {
+        let new_p = parse_program("S30 E30 L50 CH2@L CH2@R KEY 导向A 25").unwrap();
+        let old_p = parse_program("S30 E30 L50 CH2@L CH2@R KEY A 25 导向").unwrap();
+        let (n, o) = (
+            new_p.segments[0].keyway.as_ref().unwrap(),
+            old_p.segments[0].keyway.as_ref().unwrap(),
+        );
+        assert_eq!(n.kind, o.kind);
+        assert!(n.guided && o.guided);
+        assert_eq!(n.l, o.l);
+        // ASCII 别名 `GUIDED_B` 也走同一张表。
+        let p = parse_program("S30 E30 L50 KEY GUIDED_B 25").unwrap();
+        let kw = p.segments[0].keyway.as_ref().unwrap();
+        assert!(kw.guided && kw.kind == KeyKind::B);
+        // JSON 新形式 `"type":"导向A"` = 旧 `"type":"A"`+`"guided":true`。
+        let jn = parse_program(r#"{"segments":[{"s":30,"l":50,"keyway":{"type":"导向A","l":25}}]}"#)
+            .unwrap();
+        let jo = parse_program(
+            r#"{"segments":[{"s":30,"l":50,"keyway":{"type":"A","l":25,"guided":true}}]}"#,
+        )
+        .unwrap();
+        let (jn, jo) = (
+            jn.segments[0].keyway.as_ref().unwrap(),
+            jo.segments[0].keyway.as_ref().unwrap(),
+        );
+        assert!(jn.guided && jo.guided && jn.kind == jo.kind);
+        // 合并记号同一套约束：导向只有中置、与双槽互斥、表外型别列可选值。
+        let build_err = |text: &str| match parse_program(text) {
+            Err(e) => e,
+            Ok(p) => build(&p, 1.0).unwrap_err(),
+        };
+        let err = build_err("S30 E30 L50 KEY 导向A 25 @端 | S20 E20 L10");
+        assert!(err.contains("导向平键A型") && err.contains("只有中置"), "{err}");
+        let err = build_err("S30 E30 L50 KEY 导向A 25 双槽");
+        assert!(err.contains("不支持双槽"), "{err}");
+        let err = build_err("S30 E30 L50 KEY 导向C 25");
+        assert!(err.contains("键型「导向C」非法") && err.contains("导向平键A型"), "{err}");
+        // 旧键型与合并记号冲突（A vs 导向B）。
+        let err = build_err("S30 E30 L50 KEY A 25 导向B");
+        assert!(err.contains("冲突"), "{err}");
     }
 
     #[test]

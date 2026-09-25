@@ -177,6 +177,18 @@ let splineSpecs = [];       // 矩形花键规格表（/api/parts → detail_spl
 let keyCatalog = {};
 // 导向平键（GB/T 1097）数据：`sizes`（每档含 d0/l0/lengths）+ `length_rows`（L→L1/L2/L3）。
 let keyCatalog1097 = {};
+// 键型样式表（**表驱动**；与后端 `partgen_keys::KEY_STYLES` 同源，经 `/api/parts` 顶层
+// `key_styles` 下发）：每行 = {id,label,kind,guided,standard,places,allow_double,place_hint}。
+// 下拉选项/位置约束/双槽可用性/信息行全部由本表驱动；加「楔形平键」只需后端表加一行。
+// 下面常量仅 `/api/parts` 不可用时兜底（正常路径用服务端表覆盖）。
+const KEY_STYLES_FALLBACK = [
+  { id: "A", label: "普通平键A型", kind: "A", guided: false, standard: "GB/T 1096-2003", places: ["mid", "end"], allow_double: true, place_hint: "" },
+  { id: "B", label: "普通平键B型", kind: "B", guided: false, standard: "GB/T 1096-2003", places: ["mid", "end"], allow_double: true, place_hint: "" },
+  { id: "C", label: "普通平键C型", kind: "C", guided: false, standard: "GB/T 1096-2003", places: ["mid", "end"], allow_double: true, place_hint: "" },
+  { id: "导向A", label: "导向平键A型", kind: "A", guided: true, standard: "GB/T 1097-2003", places: ["mid"], allow_double: false, place_hint: "固定键固定在轴上；端置是普通平键 KEY 的画法" },
+  { id: "导向B", label: "导向平键B型", kind: "B", guided: true, standard: "GB/T 1097-2003", places: ["mid"], allow_double: false, place_hint: "固定键固定在轴上；端置是普通平键 KEY 的画法" },
+];
+let keyStyles = KEY_STYLES_FALLBACK.slice();
 const SPLINE_CUSTOM = "__custom__";   // 下拉末尾「自定义规格…」的哨兵值
 let curView = "normal";     // 当前视图（默认常规）
 let seqPreview = 0;         // 过期响应丢弃序号
@@ -193,7 +205,7 @@ function blankRow() {
     ch: { l: { on: false, c: "2" }, r: { on: false, c: "2" } },
     ov: { l: { on: false, b1: "" }, r: { on: false, b1: "" } },
     m: { on: false, p: "" },
-    key: { on: false, kind: "A", l: "", place: "mid", b: "", h: "", t1: "", double: false, guided: false },
+    key: { on: false, style: "A", l: "", place: "mid", b: "", h: "", t1: "", double: false },
     gear: { on: false, mark: "GEAR", kind: "EX", m: "3", z: "20", x: "", da: "", df: "", h: "", alpha: "" },
     spline: { on: false, spec: "6x23x26x6", len: "30", de: "" },
   };
@@ -254,6 +266,10 @@ async function loadSplineSpecs() {
         };
       }
     }
+    // 键型样式表：服务端（唯一元数据源）优先；缺失/空则保留兜底表。
+    keyStyles = Array.isArray(cat.key_styles) && cat.key_styles.length
+      ? cat.key_styles
+      : KEY_STYLES_FALLBACK.slice();
   } catch (e) {
     splineSpecs = [];
     keyCatalog = {};
@@ -299,11 +315,26 @@ function key1097LenRow(kind, l) {
   return cat.lengthRows.find((r) => Math.abs(Number(r.l) - l) < 1e-9) || null;
 }
 
+// ── 键型样式表（表驱动）────────────────────────────────────────────
+
+// 样式 id → 样式行（未知 id 回退首行 = 普通平键A型，保证旧数据/旧链接不崩）。
+function keyStyleSpec(id) {
+  return keyStyles.find((s) => s.id === id) || keyStyles[0];
+}
+
+// 键型下拉选项（顺序/名称 = 样式表；用户 2026-09-25：不再单独出「导向」复选框）。
+function keyStyleOptionsHtml(cur) {
+  return keyStyles
+    .map((s) => `<option value="${esc(s.id)}"${s.id === cur ? " selected" : ""}>${esc(s.label)}</option>`)
+    .join("");
+}
+
 // 段表 KEY 列：键长 L 下拉（按 d 定出的 b 取平键族 L 系列 ∩ L<10b；
 // 导向时改取 GB/T 1097 长度系列 25…450，槽长 = 键长不折算）。
 function keyLengthOptionsHtml(r) {
   const b = shaftKeyB("A", numOrNaN(r.s));
-  const row = r.key.guided ? key1097Size(r.key.kind, b) : keySizeRow(r.key.kind, b);
+  const spec = keyStyleSpec(r.key.style);
+  const row = spec.guided ? key1097Size(spec.kind, b) : keySizeRow(spec.kind, b);
   const lengths = row && Array.isArray(row.lengths) ? row.lengths : [];
   return lengths.map((L) => `<option value="${fmt(L)}"${Math.abs(Number(r.key.l) - L) < 1e-9 ? " selected" : ""}>${fmt(L)}</option>`).join("");
 }
@@ -325,23 +356,24 @@ function keySlotLen(kind, place, l, b, t1) {
 
 function keyDeriveHtml(r) {
   const d = numOrNaN(r.s);
+  const spec = keyStyleSpec(r.key.style);
   const range = shaftKeyRange("A", d);
-  if (!range) return "d" + (Number.isFinite(d) ? fmt(d) : "?") + " 不在 GB/T 1095 选型表";
+  if (!range) return spec.label + "：d" + (Number.isFinite(d) ? fmt(d) : "?") + " 不在 GB/T 1095 选型表";
   const b = Number(range.b);
   const t1 = range.t1 !== undefined ? Number(range.t1) : NaN;
-  const size = r.key.guided ? key1097Size(r.key.kind, b) : keySizeRow(r.key.kind, b);
+  const size = spec.guided ? key1097Size(spec.kind, b) : keySizeRow(spec.kind, b);
   const hTxt = size && size.h !== undefined ? "×h" + fmt(size.h) : "×h?";
-  let txt = (r.key.guided ? "导向1097：" : "") + "d" + fmt(d) + " → b" + fmt(b) + hTxt + (Number.isFinite(t1) ? " t1=" + fmt(t1) : "");
+  let txt = spec.label + "（" + spec.standard + "）：d" + fmt(d) + " → b" + fmt(b) + hTxt + (Number.isFinite(t1) ? " t1=" + fmt(t1) : "");
   const l = numOrNaN(r.key.l);
   if (l > 0 && Number.isFinite(b)) {
-    if (r.key.guided) {
+    if (spec.guided) {
       if (!size) return txt + "（GB/T 1097 表无此 b）";
-      const lr = key1097LenRow(r.key.kind, l);
+      const lr = key1097LenRow(spec.kind, l);
       txt += " · 槽长 " + fmt(l) + "（= 键长 L）";
       if (lr) txt += " · L1=" + fmt(lr.l1) + " L3=" + fmt(lr.l3);
       txt += " · 固定螺钉孔 M" + fmt(size.d0) + "×深" + fmt(size.l0) + "×2";
     } else {
-      txt += " · 槽长 " + fmt(keySlotLen(r.key.kind, r.key.place, l, b, Number.isFinite(t1) ? t1 : 0));
+      txt += " · 槽长 " + fmt(keySlotLen(spec.kind, r.key.place, l, b, Number.isFinite(t1) ? t1 : 0));
     }
   }
   const over = String(r.key.b).trim() !== "" || String(r.key.h).trim() !== "" ? "（覆盖）" : "";
@@ -351,8 +383,12 @@ function keyDeriveHtml(r) {
 // 段表 KEY 列状态归一：勾上后若 L 不在该 b 的合法系列里，取第一个合法值。
 function normalizeKeyRow(r) {
   if (!r.key.on) return;
+  // 样式表驱动的位置/双槽约束（导向平键只有中置；用户 2026-09-25 裁定）。
+  const spec = keyStyleSpec(r.key.style);
+  if (!spec.places.includes(r.key.place)) r.key.place = spec.places[0];
+  if (!spec.allow_double) r.key.double = false;
   const b = shaftKeyB("A", numOrNaN(r.s));
-  const row = r.key.guided ? key1097Size(r.key.kind, b) : keySizeRow(r.key.kind, b);
+  const row = spec.guided ? key1097Size(spec.kind, b) : keySizeRow(spec.kind, b);
   const lengths = row && Array.isArray(row.lengths) ? row.lengths : [];
   if (lengths.length && !lengths.some((L) => Math.abs(Number(L) - Number(r.key.l)) < 1e-9)) {
     r.key.l = fmt(lengths[0]);
@@ -497,11 +533,10 @@ function rowHtml(r, i) {
     <td class="feat"><div class="frow"><label class="chk"><input type="checkbox" data-f="m.on" title="螺纹段：要求 S=E；不写值 = 小径 0.85d 简化画法；M1.5 = 螺距 P 精确小径"${ck(mOn)}${dis(gearOn || ovOn || splineOn || keyOn)}>M</label>
       <input type="number" step="0.1" min="0" data-f="m.p" value="${esc(r.m.p)}" placeholder="0.85d"${dis(gearOn || ovOn || splineOn || keyOn)}></div></td>
     <td class="feat"><div class="frow"><label class="chk"><input type="checkbox" data-f="key.on" title="平键轴槽（与 GEAR / SPLINE / M / OV 互斥）；b×h 与 t1 由该段直径 d 查 GB/T 1095 自动定"${ck(keyOn)}${dis(gearOn || splineOn || mOn || ovOn)}>KEY</label>
-      <select data-f="key.kind" title="键型 A/B/C（复用 GB/T 1096 平键族）；槽长按型别折算：B 中置 +b / 端置 +b/2，C 中置 +b/2 / 端置不折算"${dis(!keyOn)}><option value="A"${r.key.kind === "A" ? " selected" : ""}>A</option><option value="B"${r.key.kind === "B" ? " selected" : ""}>B</option>${r.key.guided ? "" : `<option value="C"${r.key.kind === "C" ? " selected" : ""}>C</option>`}</select>
-      <select data-f="key.place" title="位置：中置 = 槽两端封闭（居中于净圆柱）；端置 = 开在轴首/末段自由端（槽长 = 键长 + t1）；显示：中置常规侧视恒显示 A（双圆头），端置 B/C 显示 C（单圆头）；导向平键（GB/T 1097）只有中置"${dis(!keyOn)}><option value="mid"${r.key.place !== "end" ? " selected" : ""}>中置</option><option value="end"${r.key.place === "end" ? " selected" : ""}${r.key.guided ? " disabled" : ""}>端置</option></select>
-      <label class="chk" title="导向平键（GB/T 1097）：槽上自动画 2 个固定螺钉螺纹孔（d0×L0、118° 钻尖、孔心距槽端 L3）；只 A/B、只有中置；L 取 1097 系列；槽长 = 键长；与双槽互斥（起键孔是 1096 概念）"><input type="checkbox" data-f="key.guided"${ck(r.key.guided)}${dis(!keyOn)}>导向</label></div>
+      <select data-f="key.style" title="键型（表驱动）：普通平键（GB/T 1096）A 双圆头 / B 双平头 / C 单圆头；导向平键（GB/T 1097）A/B（自动画 2 个固定螺钉螺纹孔、只有中置）；槽长按型别折算：B 中置 +b / 端置 +b/2，C 中置 +b/2 / 端置不折算"${dis(!keyOn)}>${keyStyleOptionsHtml(r.key.style)}</select>
+      <select data-f="key.place" title="位置：中置 = 槽两端封闭（居中于净圆柱）；端置 = 开在轴首/末段自由端（槽长 = 键长 + t1）；显示：中置常规侧视恒显示 A（双圆头），端置 B/C 显示 C（单圆头）；导向平键只有中置（端置禁用）"${dis(!keyOn)}><option value="mid"${r.key.place !== "end" ? " selected" : ""}>中置</option><option value="end"${r.key.place === "end" ? " selected" : ""}${keyStyleSpec(r.key.style).places.includes("end") ? "" : " disabled"}>端置</option></select></div>
       <div class="frow"><span class="chk">L</span><select data-f="key.l" title="键长 L（1096：平键族系列∩L<10b；导向：GB/T 1097 系列 25…450∩L<10b）"${dis(!keyOn)}>${keyLengthOptionsHtml(r)}</select>
-      <label class="chk" title="双键槽：绕轴心 180° 对置（仅剖视图体现；可承受转矩约为单键联接的 1.5 倍）；导向平键不支持"><input type="checkbox" data-f="key.double"${ck(r.key.double)}${dis(!keyOn || r.key.guided)}>双槽</label>
+      <label class="chk" title="双键槽：绕轴心 180° 对置（仅剖视图体现；可承受转矩约为单键联接的 1.5 倍）；导向平键不支持"><input type="checkbox" data-f="key.double"${ck(r.key.double)}${dis(!keyOn || !keyStyleSpec(r.key.style).allow_double)}>双槽</label>
       <span class="chk key-derive" title="由轴段直径查 GB/T 1095 得 b×h；t1 按 b 查表；槽长/固定螺钉孔按所选标准派生">${keyDeriveHtml(r)}</span></div>
       </td>
     <td class="feat"><div class="frow"><label class="chk"><input type="checkbox" data-f="gear.on" title="齿轮 / 渐开线齿形段（与 KEY / SPLINE / M / OV 互斥）；轴段只支持模数制 M"${ck(gearOn)}${dis(splineOn || keyOn)}>GEAR</label>
@@ -616,7 +651,8 @@ function rowToDsl(r) {
     }
   }
   if (r.key.on) {
-    s += " KEY " + r.key.kind + " " + numTok(r.key.l);
+    // 新写法：键型记号直接带「导向」（`KEY 导向A 36`）；普通键仍 `KEY A 36`。
+    s += " KEY " + keyStyleSpec(r.key.style).id + " " + numTok(r.key.l);
     if (r.key.place === "end") s += " @端";
     // b/h 只在行里有显式值时写（默认按轴径自动定；覆盖才进 DSL）。
     const bRaw = String(r.key.b).trim();
@@ -625,7 +661,6 @@ function rowToDsl(r) {
       if (String(r.key.h).trim() !== "") s += "h" + numTok(r.key.h);
     }
     if (String(r.key.t1).trim() !== "") s += " t1 " + numTok(r.key.t1);
-    if (r.key.guided) s += " 导向";
     if (r.key.double) s += " 双槽";
   }
   return s;
@@ -686,17 +721,22 @@ function rowFromSegment(seg) {
   }
   if (seg.keyway) {
     r.key.on = true;
-    const kind = seg.keyway.type || seg.keyway.kind || "A";
-    r.key.kind = String(kind).toUpperCase();
+    // 新 JSON `"type":"导向A"` 直取 id；旧 JSON `"type":"A"`+`"guided":true` 按 (kind,guided) 反查。
+    const rawType = String(seg.keyway.type || seg.keyway.kind || "A");
+    const guided = !!seg.keyway.guided;
+    const byKind = keyStyles.find((s) => s.kind === rawType.toUpperCase() && s.guided === guided);
+    const byId = keyStyles.find((s) => s.id === rawType);
+    r.key.style = (byKind || byId || keyStyles[0]).id;
     r.key.l = fmt(seg.keyway.l);
     r.key.place = seg.keyway.place === "end" ? "end" : "mid";
     r.key.b = seg.keyway.b === null || seg.keyway.b === undefined ? "" : fmt(seg.keyway.b);
     r.key.h = seg.keyway.h === null || seg.keyway.h === undefined ? "" : fmt(seg.keyway.h);
     r.key.t1 = seg.keyway.t1 === null || seg.keyway.t1 === undefined ? "" : fmt(seg.keyway.t1);
     r.key.double = !!seg.keyway.double;
-    r.key.guided = !!seg.keyway.guided;
-    // 导向平键（GB/T 1097）只有中置（用户 2026-09-25 裁定）：旧 JSON 的 guided+end 也归一到中置。
-    if (r.key.guided) r.key.place = "mid";
+    // 样式表位置约束（导向只有中置）：旧 JSON 的 guided+end 也归一到允许位置。
+    if (!keyStyleSpec(r.key.style).places.includes(r.key.place)) {
+      r.key.place = keyStyleSpec(r.key.style).places[0];
+    }
   }
   enforceExclusive(r);
   return r;
@@ -931,12 +971,7 @@ function onTableInput(e) {
   }
   const isCheck = e.target.type === "checkbox";
   setField(r, field, isCheck ? e.target.checked : e.target.value);
-  // 导向平键（GB/T 1097）：与双槽互斥；键型只 A/B（C → 回 A）；位置只有中置。
-  if (r.key.guided) {
-    r.key.double = false;
-    if (r.key.kind === "C") r.key.kind = "A";
-    r.key.place = "mid";
-  }
+  // 键型样式表驱动联动（位置/双槽约束）在 normalizeKeyRow 里统一处理。
   if (field === "s" || field.indexOf("key.") === 0) normalizeKeyRow(r);
   if (isCheck) {
     sel = Number(tr.dataset.row);
@@ -1174,7 +1209,9 @@ function modelFromRows() {
     if (r.key.on) {
       const kl = numOrNaN(r.key.l);
       if (!(kl > 0)) return fail("平键的键长 L 必须 > 0（GB/T 1096 标准系列）。");
-      const keyway = { type: r.key.kind, l: kl, place: r.key.place === "end" ? "end" : "mid" };
+      const spec = keyStyleSpec(r.key.style);
+      // JSON 保持既有 schema（`type` + `guided`）：新/旧读取方都能用。
+      const keyway = { type: spec.kind, l: kl, place: r.key.place === "end" ? "end" : "mid" };
       // b×h 默认按轴段直径由后端查 GB/T 1095 定；行里有显式值时才作为覆盖送去校验。
       const bRaw = String(r.key.b).trim();
       if (bRaw !== "") {
@@ -1190,7 +1227,7 @@ function modelFromRows() {
         keyway.t1 = t1;
       }
       if (r.key.double) keyway.double = true;
-      if (r.key.guided) keyway.guided = true;
+      if (spec.guided) keyway.guided = true;
       seg.keyway = keyway;
     }
     segments.push(seg);
