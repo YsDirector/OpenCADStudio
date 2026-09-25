@@ -62,7 +62,12 @@
 //!   长度按所选键型自动折算（槽端圆弧吃直段）：中置 B +b / C +b/2；端置 B +b/2 / C 不折算；
 //!   实际槽长 = 折算长度（端置再 + t₁）。可选 `双槽`（`DOUBLE` 别名）：绕轴心 180° 对置的
 //!   第二个槽，**仅剖视图体现**（常规侧视不变），可承受转矩约为单键联接的 **1.5 倍**；
-//!   剖视剖面线按“上下两环各带一个缺口”对称分区。详见 `Keyway` 与 handbook 03。
+//!   剖视剖面线按“上下两环各带一个缺口”对称分区。
+//! - `KEY A 25 导向`：**导向平键槽（GB/T 1097-2003）**（用户 2026-09-25 开工）——
+//!   在 KEY 段上加 `导向`（`GUIDED` 别名）：键型只 A/B（1097 无 C）；L 取 1097 长度系列
+//!   （25…450∩L<10b）；槽长 = 键长 L（固定键不折算）；槽上自动画 **2 个固定螺钉螺纹孔**
+//!   （d0×L0，自槽底向下、118° 钻尖；孔心距槽两端 L3；`L1/L2/L3` 由 L 查 26 档表）；
+//!   与 `双槽` 互斥。**「起键孔」不属于 1097**（那是 GB/T 1096 附录 A 的概念）。详见 `Keyway` 与 handbook 03。
 //!   侧视图叠画键 + 剖视缺口含 sagitta 线，见文件中部「轴槽（GB/T 1095）」节
 //!   与 `review/键槽_设计.md`。
 //! - `VIEW 常规|剖视`：视图开关（默认 `常规`）；独立一行或段内关键字都认
@@ -200,6 +205,8 @@ OCSMSHAFT 轴生成器：行 DSL / JSON → 单视图侧视图（段拼接 + 端
                   可选 双槽（DOUBLE 别名）：绕轴心 180° 对置，仅剖视图体现（常规侧视不变），
                   可承受转矩约为单键联接的 1.5 倍；剖视剖面线上下两环各带一个缺口
                   例：KEY A 18 ／ KEY C 14 @端 ／ KEY A 18 b8h7
+                  导向平键（GB/T 1097）加 `导向`：KEY A 25 导向（只 A/B；L 取 1097 系列 25…450∩L<10b；
+                  槽长 = L；自动画 2 个固定螺钉螺纹孔 d0×L0、孔心距槽两端 L3；与双槽互斥；起键孔属 1096）
                   侧视图叠画键 + 剖视缺口含 sagitta 线；不生成尺寸标注
     VIEW 常规|剖视   视图：常规（默认，只看外形）/ 剖视（轮廓 + ANSI31 剖面线）
                      （双视图已于 2026-09-23 移除；旧 `VIEW 双` 明确报错）
@@ -543,6 +550,12 @@ pub struct Keyway {
     /// * 剖视剖面线按“上下两环各带一个缺口”分区（对称镜像，不再去缺口）。
     #[serde(default, skip_serializing_if = "is_false")]
     pub double: bool,
+    /// **导向平键（GB/T 1097-2003，用户 2026-09-25 开工）**：
+    /// * 槽上带 **2 个固定螺钉螺纹孔**（d0×L0，自槽底向下，118° 钻尖；孔心距槽两端 L3）；
+    /// * 槽长 = 键长 L（固定键不折算）；`kind` 只 A/B（1097 无 C 型）；
+    /// * 起键孔不属于 1097（那是 GB/T 1096 附录 A 的概念）——槽上只有固定螺钉孔。
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub guided: bool,
 }
 
 impl Keyway {
@@ -551,7 +564,11 @@ impl Keyway {
     /// 显示/开槽长度：
     /// * 中置显示 A（两端弧）：A → L；B（需直段 L）→ L + b；C（平端需 L−b/2）→ L + b/2；
     /// * 端置显示 C（单圆头）：B → L + b/2；C → L；A（双圆头）→ L。
+    /// * **导向（guided）**：键固定在轴上、长度即槽长，不折算 → L。
     pub fn effective_len(&self, b: f64) -> f64 {
+        if self.guided {
+            return self.l;
+        }
         match (self.place, self.kind) {
             (KeywayPlace::Mid, KeyKind::A) => self.l,
             (KeywayPlace::Mid, KeyKind::B) => self.l + b,
@@ -563,7 +580,11 @@ impl Keyway {
     }
 
     /// 实际槽长：中置 = 折算长度；端置 = 折算长度 + t₁（模板 LC = 端部槽长口径）。
+    /// **导向**：槽长 = 键长 L（固定键；键填满槽本身）——端置也不另加 t₁。
     pub fn slot_len(&self, t1: f64, b: f64) -> f64 {
+        if self.guided {
+            return self.l;
+        }
         let eff = self.effective_len(b);
         match self.place {
             KeywayPlace::Mid => eff,
@@ -1088,7 +1109,7 @@ fn extract_view_directives<'a>(
 
 fn unknown_keyword(token: &str, label: &str) -> String {
     format!(
-        "{label}：不识别的关键字「{token}」（本期支持 S/E/L/CH/OV/M/TL/RO/SD/RL/GEAR/SPLINE/KEY/VIEW；齿形段子关键字 M/Z/H/BETA/ALPHA/EX/IN/X/DA/DF（SPLINE + 齿形关键字 = 渐开线花键）；RL 的尺寸参数 P/g1/g2/dg/r 跟在 RL 后面；轴槽子关键字 = 键型 A/B/C + 键尺寸 b…/h…（可连写 `b8h7`）+ 键长（裸数字或 KL…）+ @中/@端（可选 t1））"
+        "{label}：不识别的关键字「{token}」（本期支持 S/E/L/CH/OV/M/TL/RO/SD/RL/GEAR/SPLINE/KEY/VIEW；齿形段子关键字 M/Z/H/BETA/ALPHA/EX/IN/X/DA/DF（SPLINE + 齿形关键字 = 渐开线花键）；RL 的尺寸参数 P/g1/g2/dg/r 跟在 RL 后面；轴槽子关键字 = 键型 A/B/C + 键尺寸 b…/h…（可连写 `b8h7`）+ 键长（裸数字或 KL…）+ @中/@端（可选 t1）+ 导向（GB/T 1097，可选 `双槽`））"
     )
 }
 
@@ -1385,6 +1406,8 @@ enum KeyParam {
     Place,
     /// 双键槽开关：`双槽` / `DOUBLE`。
     Double,
+    /// 导向平键（GB/T 1097）：`导向` / `GUIDED` / `GB1097` / `1097`。
+    Guided,
     LegacyLa,
     LegacyLc,
 }
@@ -1417,6 +1440,9 @@ fn key_param_key(token: &str) -> Option<(KeyParam, &str)> {
     }
     if token == "双槽" || token.eq_ignore_ascii_case("DOUBLE") {
         return Some((KeyParam::Double, token));
+    }
+    if matches!(token, "导向" | "導向") || token.eq_ignore_ascii_case("GUIDED") {
+        return Some((KeyParam::Guided, token));
     }
     let upper = token.to_ascii_uppercase();
     if matches!(upper.as_str(), "A" | "B" | "C") {
@@ -1470,6 +1496,7 @@ fn assemble_keyway(
     key_t1: Option<f64>,
     key_place: Option<KeywayPlace>,
     key_double: bool,
+    key_guided: bool,
     label: &str,
 ) -> Result<Option<Keyway>, String> {
     let any_param = key_kind.is_some()
@@ -1478,7 +1505,8 @@ fn assemble_keyway(
         || key_h.is_some()
         || key_t1.is_some()
         || key_place.is_some()
-        || key_double;
+        || key_double
+        || key_guided;
     if !any_param {
         return Ok(None);
     }
@@ -1486,15 +1514,32 @@ fn assemble_keyway(
         format!("{label}：KEY 缺少键型（A/B/C；例 `KEY A 18`）")
     })?;
     // b 给了就必须在平键族表里；h 给了一般要求与 b 配对。
-    // B/C 型键长会自动按圆弧端折算成显示/开槽长度（见 `Keyway::effective_len`）。
+    // B/C 型键长会自动按圆弧端折算成显示/开槽长度（见 `Keyway::effective_len`）；
+    // 导向（GB/T 1097）只有 A/B，且 b 必须在 1097 表里。
+    if key_guided && kind == KeyKind::C {
+        return Err(format!(
+            "{label}：导向平键（GB/T 1097）只有 A/B 型，没有 C 型（用户 2026-09-25 更正）"
+        ));
+    }
     if let Some(b) = key_b {
-        let std_h = crate::partgen_keys::key_1096_h(kind.key_type(), b).ok_or_else(|| {
-            format!(
-                "{label}：{} 的平键族表里没有 b={}（GB/T 1096 表 b=2…50）",
-                kind.cn(),
-                trim(b)
-            )
-        })?;
+        let std_h = if key_guided {
+            crate::partgen_keys::key_1097_row(kind.key_type(), b)
+                .map(|r| r.h)
+                .ok_or_else(|| {
+                    format!(
+                        "{label}：GB/T 1097 导向平键表里没有 b={}（b=8…45，14 档）",
+                        trim(b)
+                    )
+                })?
+        } else {
+            crate::partgen_keys::key_1096_h(kind.key_type(), b).ok_or_else(|| {
+                format!(
+                    "{label}：{} 的平键族表里没有 b={}（GB/T 1096 表 b=2…50）",
+                    kind.cn(),
+                    trim(b)
+                )
+            })?
+        };
         if let Some(h) = key_h {
             if (h - std_h).abs() > 1e-9 {
                 return Err(format!(
@@ -1521,6 +1566,7 @@ fn assemble_keyway(
         h: key_h,
         t1: key_t1,
         double: key_double,
+        guided: key_guided,
     }))
 }
 
@@ -1540,6 +1586,7 @@ fn parse_segment(chunk: &str, label: &str, program: &mut Program) -> Result<Segm
     let mut key_t1: Option<f64> = None;
     let mut key_place: Option<KeywayPlace> = None;
     let mut key_double = false;
+    let mut key_guided = false;
     // `M` 的局部螺纹扩展关键字（用户 2026-09-19 定稿）：`TL` / `RO` / `SD` / `RL`。
     // 段内顺序无关；到段尾统一装进 [`Thread`] 并校验互斥。
     let mut tl: Option<f64> = None;
@@ -1641,6 +1688,7 @@ fn parse_segment(chunk: &str, label: &str, program: &mut Program) -> Result<Segm
                 KeyParam::T1 => "t1",
                 KeyParam::Place => "@中/@端",
                 KeyParam::Double => "双槽",
+                KeyParam::Guided => "导向",
                 KeyParam::LegacyLa => "LA",
                 KeyParam::LegacyLc => "LC",
             };
@@ -1665,6 +1713,9 @@ fn parse_segment(chunk: &str, label: &str, program: &mut Program) -> Result<Segm
                         return Err(format!("{label}：KEY 参数 双槽 重复"));
                     }
                     key_double = true;
+                }
+                KeyParam::Guided => {
+                    key_guided = true;
                 }
                 KeyParam::Place => {
                     let value = parse_keyway_place(value_text)
@@ -1950,7 +2001,7 @@ fn parse_segment(chunk: &str, label: &str, program: &mut Program) -> Result<Segm
         index += 1;
     }
     // ── KEY 轴槽（GB/T 1095）：组装子关键字；键型/键尺寸 b×h/键长必给。──
-    let keyway = assemble_keyway(key_kind, key_len, key_b, key_h, key_t1, key_place, key_double, label)?;
+    let keyway = assemble_keyway(key_kind, key_len, key_b, key_h, key_t1, key_place, key_double, key_guided, label)?;
     if keyway.is_some() && (gear_on || spline_on) {
         return Err(format!("{label}：轴槽 KEY 不能与齿轮/花键段同段"));
     }
@@ -2327,6 +2378,9 @@ struct JsonKeyway {
     /// 双键槽（绕轴心 180° 对置；仅剖视图体现；约 1.5 倍单键转矩）。
     #[serde(default)]
     double: bool,
+    /// 导向平键（GB/T 1097）：槽上带 2 个固定螺钉螺纹孔；槽长 = 键长 L；只 A/B 型。
+    #[serde(default)]
+    guided: bool,
 }
 
 /// JSON 形式的花键段：`{"spec":"6x23x26x6","len":30,"de":63}`；
@@ -2608,6 +2662,7 @@ fn parse_json(text: &str) -> Result<Program, String> {
                     k.t1,
                     place,
                     k.double,
+                    k.guided,
                     &format!("第 {number} 段"),
                 )?
             }
@@ -3008,16 +3063,38 @@ pub fn validate(program: &Program) -> Result<(), String> {
                 return Err(format!("第 {number} 段：轴槽键长 L={} 必须 > 0", trim(keyway.l)));
             }
             let b = keyway_b(keyway, seg.s).map_err(|e| format!("第 {number} 段：{e}"))?;
-            if crate::partgen_keys::key_1096_h(keyway.kind.key_type(), b).is_none() {
+            // 导向平键（GB/T 1097）：表行 + 长度系列 + 固定螺钉孔校验（用户 2026-09-25 开工）。
+            if keyway.guided && keyway.double {
+                return Err(format!(
+                    "第 {number} 段：导向平键（GB/T 1097）不支持双槽（固定键只有一个槽）"
+                ));
+            }
+            let row_1097 = if keyway.guided {
+                Some(crate::partgen_keys::key_1097_row(keyway.kind.key_type(), b).ok_or_else(
+                    || {
+                        format!(
+                            "第 {number} 段：GB/T 1097 导向平键表里没有 b={}（b=8…45，14 档）",
+                            trim(b)
+                        )
+                    },
+                )?)
+            } else {
+                None
+            };
+            if row_1097.is_none()
+                && crate::partgen_keys::key_1096_h(keyway.kind.key_type(), b).is_none()
+            {
                 return Err(format!(
                     "第 {number} 段：{} 的平键族表里没有 b={}（GB/T 1096 表 b=2…50）",
                     keyway.kind.cn(),
                     trim(b)
                 ));
             }
-            // h 给了就必须与 b 配对（h 跟 b 走，不允许自由组合）。
+            // h 给了就必须与 b 配对（h 跟 b 走，不允许自由组合）；导向用 1097 表值（与 1096 同值）。
             if let Some(h) = keyway.h {
-                let std_h = crate::partgen_keys::key_1096_h(keyway.kind.key_type(), b)
+                let std_h = row_1097
+                    .map(|r| r.h)
+                    .or_else(|| crate::partgen_keys::key_1096_h(keyway.kind.key_type(), b))
                     .expect("上面已判族表有 b");
                 if (h - std_h).abs() > 1e-9 {
                     return Err(format!(
@@ -3030,8 +3107,51 @@ pub fn validate(program: &Program) -> Result<(), String> {
                     ));
                 }
             }
-            crate::partgen_keys::check_length_1096(b, keyway.l)
-                .map_err(|e| format!("第 {number} 段：轴槽：{e}"))?;
+            if let Some(row) = row_1097 {
+                // L 必须落在 GB/T 1097 长度系列（∩ L<10b）；表外报错并列出可选系列。
+                let allowed = crate::partgen_keys::key_1097_l_allowed(b);
+                if !allowed.iter().any(|v| (*v - keyway.l).abs() < 1e-9) {
+                    return Err(format!(
+                        "第 {number} 段：GB/T 1097 导向平键 L={} 不在长度系列（∩L<10b）里；可选（{} 档）：{}",
+                        trim(keyway.l),
+                        allowed.len(),
+                        allowed.iter().map(|v| trim(*v)).collect::<Vec<_>>().join(", ")
+                    ));
+                }
+                let len = crate::partgen_keys::key_1097_length_for(keyway.l)
+                    .map_err(|e| format!("第 {number} 段：{e}"))?;
+                let major_r = row.d0 / 2.0;
+                let minor_r = 0.85 * major_r;
+                let cone_h = minor_r / 59f64.to_radians().tan();
+                if len.l3 <= major_r + 1e-9 {
+                    return Err(format!(
+                        "第 {number} 段：导向平键固定螺钉孔 M{}（半径 {}）越出槽端（L3={}）",
+                        trim(row.d0),
+                        trim(major_r),
+                        trim(len.l3)
+                    ));
+                }
+                // 圆头端（A 型）：孔圈还不得越出槽端圆弧。
+                if keyway.kind == KeyKind::A {
+                    let along = keyway.l / 2.0 - len.l3; // 孔心到槽中
+                    let arc = keyway.l / 2.0 - b / 2.0; // 弧心到槽中
+                    if along > arc + 1e-9 {
+                        let dy = (b / 2.0).powi(2) - (along - arc).powi(2);
+                        if dy <= 0.0 || dy.sqrt() < major_r - 1e-9 {
+                            return Err(format!(
+                                "第 {number} 段：导向平键固定螺钉孔 M{} 越出 A 型圆头轮廓（L={}、b={}、L3={}）",
+                                trim(row.d0),
+                                trim(keyway.l),
+                                trim(b),
+                                trim(len.l3)
+                            ));
+                        }
+                    }
+                }
+            } else {
+                crate::partgen_keys::check_length_1096(b, keyway.l)
+                    .map_err(|e| format!("第 {number} 段：轴槽：{e}"))?;
+            }
             let r = seg.s / 2.0;
             if b / 2.0 >= r - 1e-9 {
                 return Err(format!(
@@ -3059,6 +3179,19 @@ pub fn validate(program: &Program) -> Result<(), String> {
                     trim(t1),
                     trim(r)
                 ));
+            }
+            // 导向固定螺钉孔：孔底（含 118° 钻尖）不得越过轴线。
+            if let Some(row) = row_1097 {
+                let cone_h = 0.85 * row.d0 / 2.0 / 59f64.to_radians().tan();
+                if t1 + row.l0 + cone_h >= r - 1e-9 {
+                    return Err(format!(
+                        "第 {number} 段：固定螺钉孔深 L0={} ＋t1={}＋钻尖 {} 越过轴线（R={}）",
+                        trim(row.l0),
+                        trim(t1),
+                        trim(cone_h),
+                        trim(r)
+                    ));
+                }
             }
             let slot_len = keyway.slot_len(t1, b);
             let x0 = x0s[index];
@@ -3370,6 +3503,27 @@ struct KeywayGeom {
     face: f64,
     /// 键端半圆半径 = b/2。
     rk: f64,
+    /// 导向平键（GB/T 1097）固定螺钉孔几何；非导向 = None。
+    guided: Option<GuidedHoleGeom>,
+}
+
+/// 导向平键（GB/T 1097）轴上固定螺钉孔几何（2 孔，槽底向下）。
+#[derive(Debug, Clone, Copy)]
+struct GuidedHoleGeom {
+    /// 固定螺钉螺纹公称 d0（M3…M12）。
+    d0: f64,
+    /// 轴上螺纹孔深 L0（自槽底向下，含至 118° 钻尖前的圆柱段）。
+    l0: f64,
+    /// 简化小径半径 = 0.85·d0/2（源图/键块口径）。
+    minor_r: f64,
+    /// 螺纹大径半径 = d0/2。
+    major_r: f64,
+    /// 螺纹可视长度 = L0 − 2P（P 由 d0 查 ISO 724）。
+    thread_len: f64,
+    /// 118° 钻尖高 = minor_r / tan59°。
+    cone_h: f64,
+    /// 两孔心 x（全局坐标，与 slot0/slot1 同系）。
+    xs: [f64; 2],
 }
 
 /// 解算一个 KEY 轴槽：b×h（b 必给）/ t₁（省 = 查 GB/T 1095 表）/ 槽长 / 中置·端置定位。
@@ -3382,13 +3536,30 @@ fn keyway_geom(
     label: &str,
 ) -> Result<KeywayGeom, String> {
     let b = keyway_b(kw, seg.s).map_err(|e| format!("{label}：{e}"))?;
-    if crate::partgen_keys::key_1096_h(kw.kind.key_type(), b).is_none() {
-        return Err(format!(
-            "{label}：{} 的平键族表里没有 b={}（GB/T 1096 表 b=2…50）",
-            kw.kind.cn(),
-            trim(b)
-        ));
-    }
+    // 导向（GB/T 1097）：查表行 + 长度系列行 + 螺钉粗牙螺距；非导向：沿用 1096 族表检查。
+    let guided_src = if kw.guided {
+        let row = crate::partgen_keys::key_1097_row(kw.kind.key_type(), b).ok_or_else(|| {
+            format!(
+                "{label}：GB/T 1097 导向平键表里没有 b={}（b=8…45，14 档）",
+                trim(b)
+            )
+        })?;
+        let len = crate::partgen_keys::key_1097_length_for(kw.l)
+            .map_err(|e| format!("{label}：{e}"))?;
+        let p = crate::hole::thread_row(row.d0, None)
+            .map(|t| t.p)
+            .map_err(|e| format!("{label}：GB/T 1097 固定螺钉 M{}：{e}", trim(row.d0)))?;
+        Some((row, len, p))
+    } else {
+        if crate::partgen_keys::key_1096_h(kw.kind.key_type(), b).is_none() {
+            return Err(format!(
+                "{label}：{} 的平键族表里没有 b={}（GB/T 1096 表 b=2…50）",
+                kw.kind.cn(),
+                trim(b)
+            ));
+        }
+        None
+    };
     let t1 = keyway_t1(b, kw.t1).map_err(|e| format!("{label}：{e}"))?;
     let slot_len = kw.slot_len(t1, b);
     let r = seg.s / 2.0;
@@ -3425,6 +3596,15 @@ fn keyway_geom(
             }
         }
     };
+    let guided = guided_src.map(|(row, len, p)| GuidedHoleGeom {
+        d0: row.d0,
+        l0: row.l0,
+        minor_r: 0.85 * row.d0 / 2.0,
+        major_r: row.d0 / 2.0,
+        thread_len: (row.l0 - 2.0 * p).max(0.0),
+        cone_h: 0.85 * row.d0 / 2.0 / 59f64.to_radians().tan(),
+        xs: [slot0 + len.l3, slot1 - len.l3],
+    });
     Ok(KeywayGeom {
         kind: kw.kind,
         double: kw.double,
@@ -3443,13 +3623,135 @@ fn keyway_geom(
         wall,
         face,
         rk,
+        guided,
     })
+}
+
+/// 导向平键（GB/T 1097）常规侧视叠画：键体（A 圆头 / B 平头，长度 = L）+ 2 个固定螺钉孔。
+/// 孔圈照模板：小径整圆（实线）+ 大径 3/4 细弧 + 孔中心十字线。
+/// （3/4 弧缺口按库内 270°→180° 口径；模板为 265°→185°，属已知 5° 朝向差，报告已记。）
+fn emit_guided_overlay(
+    out: &mut Vec<EntityType>,
+    kg: &KeywayGeom,
+    gh: &GuidedHoleGeom,
+    frame_scale: f64,
+) {
+    let over = 3.0 * frame_scale;
+    let (rk, l) = (kg.rk, kg.l);
+    let (x_lo, x_hi) = match kg.place {
+        KeywayPlace::Mid => {
+            let xc = (kg.slot0 + kg.slot1) / 2.0;
+            (xc - l / 2.0, xc + l / 2.0)
+        }
+        KeywayPlace::End => {
+            if kg.side == Some(End::L) {
+                (kg.face, kg.face + l)
+            } else {
+                (kg.face - l, kg.face)
+            }
+        }
+    };
+    match kg.kind {
+        KeyKind::A => {
+            let (ca, cb) = (x_lo + rk, x_hi - rk);
+            out.push(line([ca, rk], [cb, rk], LAYER_MAIN));
+            out.push(line([ca, -rk], [cb, -rk], LAYER_MAIN));
+            out.push(crate::partgen_kit::arc([ca, 0.0], rk, 90.0, 270.0, LAYER_MAIN));
+            out.push(crate::partgen_kit::arc([cb, 0.0], rk, 270.0, 450.0, LAYER_MAIN));
+            for x in [ca, cb] {
+                out.push(line([x, -(rk + over)], [x, rk + over], LAYER_CENTER));
+            }
+        }
+        KeyKind::B => {
+            // B 型平头键：矩形 L×b（1097 B 型键端平头；模板只给 A 型，按标准键形画）。
+            out.push(line([x_lo, rk], [x_hi, rk], LAYER_MAIN));
+            out.push(line([x_lo, -rk], [x_hi, -rk], LAYER_MAIN));
+            out.push(line([x_lo, -rk], [x_lo, rk], LAYER_MAIN));
+            out.push(line([x_hi, -rk], [x_hi, rk], LAYER_MAIN));
+        }
+        KeyKind::C => unreachable!("导向平键没有 C 型（assemble/validate 已拦）"),
+    }
+    // 固定螺钉孔（轴上螺纹孔）：小径整圆实线 + 大径 3/4 细弧 + 孔中心十字线。
+    for x in gh.xs {
+        out.push(crate::partgen_kit::circle([x, 0.0], gh.minor_r, LAYER_MAIN));
+        out.push(crate::partgen_kit::arc(
+            [x, 0.0],
+            gh.major_r,
+            270.0,
+            180.0,
+            LAYER_THIN,
+        ));
+        let half = gh.major_r + over;
+        out.push(line([x - half, 0.0], [x + half, 0.0], LAYER_CENTER));
+        out.push(line([x, -half], [x, half], LAYER_CENTER));
+    }
+}
+
+/// 导向平键剖视：`[x_start, x_end]` 的槽底路径（沿 2 孔轮廓下凹）+ 孔壁可见线。
+/// 可见线直接推入 `section_lines`；hatch 边界逐段交给 `notch`（与既有单槽同通路）。
+fn guided_floor(
+    section_lines: &mut Vec<EntityType>,
+    notch: &mut dyn FnMut(HatchEdge),
+    kg: &KeywayGeom,
+    gh: &GuidedHoleGeom,
+    x_start: f64,
+    x_end: f64,
+    frame_scale: f64,
+) {
+    let y = kg.floor;
+    let y_thr = y - gh.thread_len;
+    let y_l0 = y - gh.l0;
+    let y_tip = y_l0 - gh.cone_h;
+    let mut pts: Vec<[f64; 2]> = vec![[x_start, y]];
+    for x in gh.xs {
+        pts.extend([
+            [x - gh.major_r, y],
+            [x - gh.major_r, y_thr],
+            [x - gh.minor_r, y_thr],
+            [x - gh.minor_r, y_l0],
+            [x, y_tip],
+            [x + gh.minor_r, y_l0],
+            [x + gh.minor_r, y_thr],
+            [x + gh.major_r, y_thr],
+            [x + gh.major_r, y],
+        ]);
+    }
+    pts.push([x_end, y]);
+    for w in pts.windows(2) {
+        let (a, b) = (w[0], w[1]);
+        notch(if (a[1] - b[1]).abs() < 1e-12 {
+            lr_line(a, b)
+        } else {
+            HatchEdge::Line { a, b }
+        });
+    }
+    for x in gh.xs {
+        // 小径（实线）：孔壁 + 118° 钻尖。
+        section_lines.push(line([x - gh.minor_r, y], [x - gh.minor_r, y_l0], LAYER_MAIN));
+        section_lines.push(line([x + gh.minor_r, y], [x + gh.minor_r, y_l0], LAYER_MAIN));
+        section_lines.push(line([x - gh.minor_r, y_l0], [x, y_tip], LAYER_MAIN));
+        section_lines.push(line([x, y_tip], [x + gh.minor_r, y_l0], LAYER_MAIN));
+        // 大径（细实线）：螺纹可视长 + 终止线。
+        section_lines.push(line([x - gh.major_r, y], [x - gh.major_r, y_thr], LAYER_THIN));
+        section_lines.push(line([x + gh.major_r, y], [x + gh.major_r, y_thr], LAYER_THIN));
+        section_lines.push(line([x - gh.major_r, y_thr], [x + gh.major_r, y_thr], LAYER_THIN));
+        // 孔轴中心线：槽底+3n → 钻尖−3n（模板 x=18.5 竖向中心线 −37.599..−51.365）。
+        section_lines.push(line(
+            [x, y + 3.0 * frame_scale],
+            [x, y_tip - 3.0 * frame_scale],
+            LAYER_CENTER,
+        ));
+    }
 }
 
 /// 键叠画（仅常规侧视图）：按平键族型别 A/B/C 画键形 + 键中心线；
 /// 端置再加模板的 40° 导入斜线（层 0；x 跨度 = t₁）。
 /// 中心线伸出 = `3.0 × frame_scale`（与轴线的 `3n` 同一口径；模板无图框 n=1 → 3.0）。
 fn emit_key_overlay(out: &mut Vec<EntityType>, kg: &KeywayGeom, frame_scale: f64) {
+    if let Some(gh) = &kg.guided {
+        emit_guided_overlay(out, kg, gh, frame_scale);
+        return;
+    }
     let over = 3.0 * frame_scale;
     let (rk, l) = (kg.rk, kg.l);
     let tan20 = 20.0_f64.to_radians().tan();
@@ -4763,7 +5065,19 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
                         section_lines.push(line([kg.slot1, kg.r], [xe, kg.r], LAYER_MAIN));
                     }
                     section_lines.push(line([kg.slot0, kg.r], [kg.slot0, kg.floor], LAYER_MAIN));
-                    section_lines.push(line([kg.slot0, kg.floor], [kg.slot1, kg.floor], LAYER_MAIN));
+                    if let Some(gh) = kg.guided {
+                        guided_floor(
+                            &mut section_lines,
+                            &mut notch,
+                            &kg,
+                            &gh,
+                            kg.slot0,
+                            kg.slot1,
+                            frame_scale,
+                        );
+                    } else {
+                        section_lines.push(line([kg.slot0, kg.floor], [kg.slot1, kg.floor], LAYER_MAIN));
+                    }
                     section_lines.push(line([kg.slot1, kg.floor], [kg.slot1, kg.r], LAYER_MAIN));
                     section_lines.push(line([kg.slot0, kg.y_sag], [kg.slot1, kg.y_sag], LAYER_MAIN));
                     if kg.double {
@@ -4785,7 +5099,9 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
                         a: [kg.slot0, kg.r],
                         b: [kg.slot0, kg.floor],
                     });
-                    notch(lr_line([kg.slot0, kg.floor], [kg.slot1, kg.floor]));
+                    if kg.guided.is_none() {
+                        notch(lr_line([kg.slot0, kg.floor], [kg.slot1, kg.floor]));
+                    }
                     notch(HatchEdge::Line {
                         a: [kg.slot1, kg.floor],
                         b: [kg.slot1, kg.r],
@@ -4800,14 +5116,29 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
                                 section_lines.push(line([kg.wall, kg.r], [xe, kg.r], LAYER_MAIN));
                             }
                             section_lines.push(line([kg.wall, kg.floor], [kg.wall, kg.r], LAYER_MAIN));
-                            section_lines.push(line([kg.face, kg.floor], [kg.wall, kg.floor], LAYER_MAIN));
+                            if let Some(gh) = kg.guided {
+                                guided_floor(
+                                    &mut section_lines,
+                                    &mut notch,
+                                    &kg,
+                                    &gh,
+                                    kg.face,
+                                    kg.wall,
+                                    frame_scale,
+                                );
+                            } else {
+                                section_lines.push(line([kg.face, kg.floor], [kg.wall, kg.floor], LAYER_MAIN));
+                            }
                             section_lines.push(line([kg.face, kg.y_sag], [kg.wall, kg.y_sag], LAYER_MAIN));
                             // 键 B 平端竖线（模板 ent84）：x = 端面 + t₁，槽底 → sagitta。
-                            section_lines.push(line(
-                                [kg.face + kg.t1, kg.floor],
-                                [kg.face + kg.t1, kg.y_sag],
-                                LAYER_MAIN,
-                            ));
+                            // （导向键填满槽，无这个 t₁ 内缩，不画。）
+                            if kg.guided.is_none() {
+                                section_lines.push(line(
+                                    [kg.face + kg.t1, kg.floor],
+                                    [kg.face + kg.t1, kg.y_sag],
+                                    LAYER_MAIN,
+                                ));
+                            }
                             if kg.double {
                                 // 双槽：下槽镜像（开口端在端面、闭端壁同 x）。
                                 if xe - kg.wall > 1e-9 {
@@ -4822,7 +5153,9 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
                                     LAYER_MAIN,
                                 ));
                             }
-                            notch(lr_line([kg.face, kg.floor], [kg.wall, kg.floor]));
+                            if kg.guided.is_none() {
+                                notch(lr_line([kg.face, kg.floor], [kg.wall, kg.floor]));
+                            }
                             notch(HatchEdge::Line {
                                 a: [kg.wall, kg.floor],
                                 b: [kg.wall, kg.r],
@@ -4834,13 +5167,28 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
                                 section_lines.push(line([xs, kg.r], [kg.wall, kg.r], LAYER_MAIN));
                             }
                             section_lines.push(line([kg.wall, kg.r], [kg.wall, kg.floor], LAYER_MAIN));
-                            section_lines.push(line([kg.wall, kg.floor], [kg.face, kg.floor], LAYER_MAIN));
+                            if let Some(gh) = kg.guided {
+                                guided_floor(
+                                    &mut section_lines,
+                                    &mut notch,
+                                    &kg,
+                                    &gh,
+                                    kg.wall,
+                                    kg.face,
+                                    frame_scale,
+                                );
+                            } else {
+                                section_lines.push(line([kg.wall, kg.floor], [kg.face, kg.floor], LAYER_MAIN));
+                            }
                             section_lines.push(line([kg.wall, kg.y_sag], [kg.face, kg.y_sag], LAYER_MAIN));
-                            section_lines.push(line(
-                                [kg.face - kg.t1, kg.floor],
-                                [kg.face - kg.t1, kg.y_sag],
-                                LAYER_MAIN,
-                            ));
+                            // 导向键填满槽，无 t₁ 内缩的键端竖线。
+                            if kg.guided.is_none() {
+                                section_lines.push(line(
+                                    [kg.face - kg.t1, kg.floor],
+                                    [kg.face - kg.t1, kg.y_sag],
+                                    LAYER_MAIN,
+                                ));
+                            }
                             if kg.double {
                                 // 双槽：下槽镜像（开口端在右端面、闭端壁同 x）。
                                 if kg.wall - xs > 1e-9 {
@@ -4860,7 +5208,9 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
                                 a: [kg.wall, kg.r],
                                 b: [kg.wall, kg.floor],
                             });
-                            notch(lr_line([kg.wall, kg.floor], [kg.face, kg.floor]));
+                            if kg.guided.is_none() {
+                                notch(lr_line([kg.wall, kg.floor], [kg.face, kg.floor]));
+                            }
                         }
                     }
                 }
@@ -9035,6 +9385,115 @@ GEAR M3 Z20";
                 .unwrap();
             assert!(near(kw_a.effective_len(b_auto), l_b), "A 不折算");
         }
+    }
+
+    #[test]
+    fn guided_keyway_1097_matches_template_and_data() {
+        // GB/T 1097 导向平键槽：模板 `轴生成器-导向平键槽.dxf`（Ø30×50、槽 25×8×4、
+        // 2×M3×L0=7 固定螺纹孔，孔心距槽端 L3=6）。反解见 review/导向平键槽_几何反解.md。
+        let p = parse_program("S30 E30 L50 CH2@L CH2@R KEY A 25 导向").unwrap();
+        let kw = p.segments[0].keyway.as_ref().unwrap();
+        assert!(kw.guided && kw.kind == KeyKind::A && near(kw.l, 25.0));
+        let b = keyway_b(kw, 30.0).unwrap();
+        assert!(near(b, 8.0));
+        assert!(
+            near(kw.slot_len(keyway_t1(b, None).unwrap(), b), 25.0),
+            "导向槽长 = 键长 L（不折算）"
+        );
+        // 1097 表行：d0=3、L0=7、h=7；长度系列 L=25 → L1=13、L3=6。
+        let row = crate::partgen_keys::key_1097_row(KeyKind::A.key_type(), b).unwrap();
+        assert!(near(row.d0, 3.0) && near(row.l0, 7.0) && near(row.h, 7.0));
+        let len = crate::partgen_keys::key_1097_length_for(25.0).unwrap();
+        assert!(near(len.l1, 13.0) && near(len.l3, 6.0));
+        // 常规侧视：A 键跑道形（弧心 16.5/33.5，R=4）+ 2 固定螺钉孔圈
+        // （小径实线整圆 r=1.275 + 大径 3/4 细弧 r=1.5）。
+        let mut pn = p.clone();
+        pn.view = ShaftView::Normal;
+        let shaft = build(&pn, 1.0).unwrap();
+        assert!(arc_hit(&shaft.entities, [16.5, 0.0], 4.0, 90.0, 270.0, LAYER_MAIN));
+        assert!(arc_hit(&shaft.entities, [33.5, 0.0], 4.0, 270.0, 450.0, LAYER_MAIN));
+        assert_eq!(count_kind(&shaft.entities, "ARC"), 4, "常规：键 2 弧 + 孔 2 大径弧");
+        assert_eq!(
+            shaft.entities.iter().filter(|e| matches!(e, EntityType::Circle(_))).count(),
+            2,
+            "常规：孔 2 小径整圆"
+        );
+        for x in [18.5_f64, 31.5] {
+            assert!(
+                shaft.entities.iter().any(|e| matches!(e,
+                    EntityType::Circle(c) if near(c.center.x, x) && near(c.center.y, 0.0)
+                        && near(c.radius, 1.275) && c.common.layer == LAYER_MAIN)),
+                "孔 {x} 的小径整圆"
+            );
+            assert!(arc_hit(&shaft.entities, [x, 0.0], 1.5, 270.0, 180.0, LAYER_THIN));
+        }
+        // 剖视：槽底 = 15−4 = 11；sagitta = 15−√(15²−4²) = 14.4567；
+        // 孔小径实线至 y=4（L0=7）、钻尖至 3.234（118°）；大径细线至 y=5（L0−2P，P=0.5）。
+        let mut ps = p.clone();
+        ps.view = ShaftView::Section;
+        let sec = build(&ps, 1.0).unwrap();
+        let sag = 15.0 - (15.0_f64 * 15.0 - 4.0 * 4.0).sqrt();
+        assert!(line_hit(&sec.entities, [12.5, 15.0], [12.5, 11.0], LAYER_MAIN), "槽左壁");
+        assert!(line_hit(&sec.entities, [37.5, 11.0], [37.5, 15.0], LAYER_MAIN), "槽右壁");
+        assert!(
+            line_hit(&sec.entities, [12.5, 15.0 - sag], [37.5, 15.0 - sag], LAYER_MAIN),
+            "sagitta 线 0.543253"
+        );
+        assert!(line_hit(&sec.entities, [17.225, 11.0], [17.225, 4.0], LAYER_MAIN), "小径实线 L0");
+        assert!(line_hit(&sec.entities, [19.775, 11.0], [19.775, 4.0], LAYER_MAIN));
+        let tip = 11.0 - 7.0 - (0.85 * 1.5) / 59f64.to_radians().tan();
+        assert!(line_hit(&sec.entities, [17.225, 4.0], [18.5, tip], LAYER_MAIN), "118° 钻尖");
+        assert!(line_hit(&sec.entities, [17.0, 11.0], [17.0, 5.0], LAYER_THIN), "大径细线 L0−2P");
+        assert!(line_hit(&sec.entities, [17.0, 5.0], [20.0, 5.0], LAYER_THIN), "螺纹终止线");
+        assert_eq!(count_kind(&sec.entities, "HATCH"), 1, "剖视剖面线 1 片");
+        // JSON 往返：guided 字段保留。
+        let json = serde_json::to_string(&p).unwrap();
+        assert!(json.contains("\"guided\":true"), "JSON 应带 guided：{json}");
+        let back = parse_program(&json).unwrap();
+        assert!(back.segments[0].keyway.as_ref().unwrap().guided);
+        let back = parse_program(
+            r#"{"segments":[{"s":30,"l":50,"keyway":{"type":"A","l":25,"guided":true}}]}"#,
+        )
+        .unwrap();
+        assert!(back.segments[0].keyway.as_ref().unwrap().guided);
+    }
+
+    #[test]
+    fn guided_keyway_1097_rejects_bad_combinations() {
+        let build_err = |text: &str| match parse_program(text) {
+            Err(e) => e,
+            Ok(p) => build(&p, 1.0).unwrap_err(),
+        };
+        // 导向只 A/B（1097 无 C 型）。
+        let err = build_err("S30 E30 L50 KEY C 25 导向");
+        assert!(err.contains("1097") && err.contains("C"), "{err}");
+        // L 必须在 1097 长度系列（∩L<10b）；表外报错列选项。
+        let err = build_err("S30 E30 L50 KEY A 26 导向");
+        assert!(err.contains("长度系列") && err.contains("25"), "{err}");
+        // 小轴（d10 → b=6）没有 1097 b 行。
+        let err = build_err("S10 E10 L50 KEY A 25 导向");
+        assert!(err.contains("1097") && err.contains("表里没有 b="), "{err}");
+        // 导向与双槽互斥。
+        let err = build_err("S30 E30 L50 KEY A 25 导向 双槽");
+        assert!(err.contains("双槽"), "{err}");
+        // 孔底越过轴线（d23 → b=8、R=11.5；t1=4 + L0=7 + 钻尖 0.766 > 11.5）。
+        let err = build_err("S23 E23 L50 KEY A 25 导向");
+        assert!(err.contains("越过轴线"), "{err}");
+        // 端置（模板未给）：能建、不 panic；也走同一套孔/剖面线通路。
+        let mut pe = parse_program("S30 E30 L50 KEY A 25 导向 @端 | S20 E20 L10").unwrap();
+        pe.view = ShaftView::Section;
+        let esec = build(&pe, 1.0).unwrap();
+        assert_eq!(count_kind(&esec.entities, "HATCH"), 1, "端置剖面线 1 片");
+        // 端置孔心距端面 L3：x=6/19（槽 0..25）各有一孔小径实线。
+        assert!(line_hit(&esec.entities, [6.0 - 1.275, 11.0], [6.0 - 1.275, 4.0], LAYER_MAIN));
+        assert!(line_hit(&esec.entities, [19.0 + 1.275, 11.0], [19.0 + 1.275, 4.0], LAYER_MAIN));
+        // B 型平头键也能建（模板只给 A；B 按标准平头画 2 孔）。
+        let mut p = parse_program("S30 E30 L50 CH2@L CH2@R KEY B 25 导向").unwrap();
+        p.view = ShaftView::Normal;
+        let shaft = build(&p, 1.0).unwrap();
+        assert!(!shaft.entities.iter().any(|e| matches!(e,
+            EntityType::Arc(a) if near(a.radius, 4.0) && a.common.layer == LAYER_MAIN)),
+            "B 型不应有 A 型圆头弧");
     }
 
     #[test]

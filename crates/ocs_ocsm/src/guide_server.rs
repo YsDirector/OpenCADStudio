@@ -22,7 +22,7 @@ use ocs_plugin_api::host::PluginRequestSender;
 use ocs_plugin_api::ipc::protocol::{PluginRequest, PluginResponse};
 
 use crate::guide_url::{GdtRow, GrindKind, GuideParams, GuideType, LinearSub, WeldParams};
-use crate::{frame_scale_at, linear_text_pos, stamp, trim_scale, v3};
+use crate::{frame_scale_at, linear_text_lift, linear_text_pos, stamp, trim_scale, v3};
 
 /// 默认端口；占用时自动 +1 递增重试。
 pub const DEFAULT_PORT: u16 = 23751;
@@ -975,12 +975,15 @@ fn build_guide_linear(
     let axis = (second - first).normalize();
     let perp = Vector3::new(-axis.y, axis.x, 0.0);
     let pt = second + perp * dist;
+    // 文字锚点 = 文字中心；抬升 DIMTXT/2 + DIMGAP（随样式缩放），
+    // 宿主直接采纳该点（stored_text_point 优先），底边离线 1.0×dimscale。
+    let lift = linear_text_lift(style);
     let dim = match sub {
         LinearSub::Aligned => {
             let mut d = DimensionAligned::new(first, second);
             d.definition_point = pt;
             d.base.definition_point = pt;
-            let tp = linear_text_pos(first, second, pt, axis);
+            let tp = linear_text_pos(first, second, pt, axis, lift);
             d.base.text_middle_point = tp;
             d.base.insertion_point = tp;
             d.base.actual_measurement = d.measurement();
@@ -988,7 +991,7 @@ fn build_guide_linear(
         }
         LinearSub::Horizontal => {
             let mut d = DimensionLinear::horizontal(first, second);
-            let tp = linear_text_pos(first, second, pt, Vector3::new(1.0, 0.0, 0.0));
+            let tp = linear_text_pos(first, second, pt, Vector3::new(1.0, 0.0, 0.0), lift);
             d.definition_point = pt;
             d.base.definition_point = pt;
             d.base.text_middle_point = tp;
@@ -998,7 +1001,7 @@ fn build_guide_linear(
         }
         LinearSub::Vertical => {
             let mut d = DimensionLinear::vertical(first, second);
-            let tp = linear_text_pos(first, second, pt, Vector3::new(0.0, 1.0, 0.0));
+            let tp = linear_text_pos(first, second, pt, Vector3::new(0.0, 1.0, 0.0), lift);
             d.definition_point = pt;
             d.base.definition_point = pt;
             d.base.text_middle_point = tp;
@@ -1009,8 +1012,8 @@ fn build_guide_linear(
     };
     let mut dim = stamp(dim, style);
     dim.base_mut().common.extended_data.add_record(dim_override_record());
-    // 文字旋转（机械制图规范）。文字位置交给 host 的 dimtad=1 计算——
-    // 对齐 → 尺寸线上方，竖直 → 尺寸线左侧，自动随 dimscale 缩放。
+    // 文字旋转（机械制图规范）。位置已在上面按样式抬升（宿主以
+    // text_middle_point 为锚点，不再二次计算）；对齐/竖直随线旋转。
     // 不用 text_user_positioned（否则强制用 text_middle_point，对齐文字会
     // 落回尺寸线下方）。
     let pi = std::f64::consts::PI;
@@ -4017,7 +4020,7 @@ pub const COMMAND_CATALOG: &[(&str, &str, &str)] = &[
     ("OCSMDIMGULIDE", "GDIM", "引导线标注：选引导线 → 配置窗口（尺寸/剖视/向视/局部放大/角度/弧长/焊接/引线/序号/公差/粗糙度/形位公差）"),
     ("OCSMCENTERLINE", "ZX", "中心线：点圆/圆弧 → 十字中心线；点两根直线 → 角平分线中心线（`3中心线层`，线长 = 直径/投影长 + 图框比例×6mm）"),
     ("OCSMGEAR", "", "齿轮（外齿轮 / 内齿轮（齿圈））+ 渐开线花键（花键模式）：不带参数=开齿轮/花键窗口（模式复选框 + 参数 + 视图按钮 + 实时预览）；带参数=一行直插（`OCSMGEAR 2 40 20 view 剖视图`、`OCSMGEAR int 2 40 30 view 端视图`；花键：`OCSMGEAR 花键 [内花键] std=DIN [profile=DIN30] db=40 2 18 h=30 view 端视图`，预设代号 GB30P/GB30R/GB375R/GB45R/DIN30 可直接代 std+profile）。齿轮模式只认 模数/齿数/压力角/变位系数 等常规项，给标准号或 d_B 明确报错。花键模式：GB 无基准直径（给 d_B 报错）；DIN 的 d_B 是主参数（d_B+m/d_B+z/m+z 三种给法，表外按公式推并标注来源），内/外花键用同一「齿轮种类」开关。内花键与内齿轮同口径（用户定案「内花键剖视图和内齿轮一样，不存在侧视图」）：只有 剖视图 + 端视图，无侧视图；剖视图齿圈内齿不剖（端面/齿顶线/齿根线/内孔壁/孔口倒角 + 分度线/轴线，不打剖面线），齿圈外壁留用户延伸。计算书：命令加 `REPORT`（如 `OCSMGEAR 花键 std=DIN db=40 2 18 h=30 REPORT`）—— 纯计算不插图，输出含公式/代入数值/结果/依据来源的 Markdown 计算书，`REPORT=路径` 另写文件"),
-    ("OCSMSHAFT", "", "轴生成器：不带参数=开轴生成器窗口（段表 ↔ 行文本双向同步 + 实时预览 + 视图按钮）+ 放置态；带参数=行 DSL/JSON 一行直插（段拼接 + 端面倒角 + 砂轮越程槽 + 螺纹段 M + 齿轮段 GEAR + 矩形花键段 SPLINE + 轴槽 KEY（GB/T 1095 平键键槽，本期只做轴槽） + 视图 VIEW 常规|剖视（双视图已移除）；退刀槽就是一小段小直径轴段）。`OCSMSHAFT S30 E30 L45 CH2@L | S40 E40 L7 M1.5 | S36 E36 L5 | GEAR M3 Z20 VIEW 剖视 at x,y rot 度`；齿轮段可 `GEAR M3 Z20 ALPHA25`（压力角默认 20°）；花键 `OCSMSHAFT SPLINE 6x23x26x6 L30`（可 `de 71` 覆盖，矩形花键）；轴槽 `OCSMSHAFT S25 E25 L40 CH2@L KEY A 18 | S30 E30 L30`（**轴段类型**，进段表 KEY 列：键型 A/B/C + 键长 L（所选键型的键长）+ 位置中置/端置；**b×h 由该段直径 d 查 GB/T 1095 d 列自动定**，显式 `b8h7` 只作校验、必须落在该轴径档标准配对；t1 按 b 查 GB/T 1095 表，可 `t1 5` 覆盖；B/C 的键长自动按槽端圆弧折算（圆弧半径 b/2 吃直段：中置 B +b / C +b/2；端置 B +b/2 / C 不折算），实际槽长为折算长度（端置再 +t1）；显示口径：中置恒显示 A、端置 B/C 显示 C；可选 `双槽`（`DOUBLE`）＝绕轴心 180° 对置、仅剖视图体现、约 1.5 倍单键转矩；与 GEAR/SPLINE/M/OV/RL 互斥，见 handbook 03）。渐开线花键只在 OCSMGEAR 花键模式生成（轴段 INVOLSPLINE 已撤）；GB/T 3478 基本齿廓不含变位（花键模式下 GB 的 x 恒为 0 且锁死；CLI/查询串给非零 x 明确报错，DIN/NF 的 x 仍按 d_B/A 派生）。计算书：命令加 `REPORT`（如 `OCSMSHAFT SPLINE 6x23x26x6 L30 REPORT`）—— 纯计算不插图，输出段清单 Markdown 计算书，`REPORT=路径` 另写文件"),
+    ("OCSMSHAFT", "", "轴生成器：不带参数=开轴生成器窗口（段表 ↔ 行文本双向同步 + 实时预览 + 视图按钮）+ 放置态；带参数=行 DSL/JSON 一行直插（段拼接 + 端面倒角 + 砂轮越程槽 + 螺纹段 M + 齿轮段 GEAR + 矩形花键段 SPLINE + 轴槽 KEY（GB/T 1095 平键键槽，本期只做轴槽） + 视图 VIEW 常规|剖视（双视图已移除）；退刀槽就是一小段小直径轴段）。`OCSMSHAFT S30 E30 L45 CH2@L | S40 E40 L7 M1.5 | S36 E36 L5 | GEAR M3 Z20 VIEW 剖视 at x,y rot 度`；齿轮段可 `GEAR M3 Z20 ALPHA25`（压力角默认 20°）；花键 `OCSMSHAFT SPLINE 6x23x26x6 L30`（可 `de 71` 覆盖，矩形花键）；轴槽 `OCSMSHAFT S25 E25 L40 CH2@L KEY A 18 | S30 E30 L30`（**轴段类型**，进段表 KEY 列：键型 A/B/C + 键长 L（所选键型的键长）+ 位置中置/端置；**b×h 由该段直径 d 查 GB/T 1095 d 列自动定**，显式 `b8h7` 只作校验、必须落在该轴径档标准配对；t1 按 b 查 GB/T 1095 表，可 `t1 5` 覆盖；B/C 的键长自动按槽端圆弧折算（圆弧半径 b/2 吃直段：中置 B +b / C +b/2；端置 B +b/2 / C 不折算），实际槽长为折算长度（端置再 +t1）；显示口径：中置恒显示 A、端置 B/C 显示 C；可选 `双槽`（`DOUBLE`）＝绕轴心 180° 对置、仅剖视图体现、约 1.5 倍单键转矩；与 GEAR/SPLINE/M/OV/RL 互斥；导向平键 `OCSMSHAFT S30 E30 L50 KEY A 25 导向`（GB/T 1097：只 A/B、L 取 1097 系列 25…450∩L<10b、槽长 = 键长、槽上自动 2 个固定螺钉螺纹孔 d0×L0（孔心距槽端 L3），与双槽互斥；起键孔不属 1097），见 handbook 03）。渐开线花键只在 OCSMGEAR 花键模式生成（轴段 INVOLSPLINE 已撤）；GB/T 3478 基本齿廓不含变位（花键模式下 GB 的 x 恒为 0 且锁死；CLI/查询串给非零 x 明确报错，DIN/NF 的 x 仍按 d_B/A 派生）。计算书：命令加 `REPORT`（如 `OCSMSHAFT SPLINE 6x23x26x6 L30 REPORT`）—— 纯计算不插图，输出段清单 Markdown 计算书，`REPORT=路径` 另写文件"),
     ("OCSMHOLE", "DK", "孔生成器：不带参数=开孔生成器窗口（简单孔/螺纹孔/沉头孔/埋头孔；盲孔/贯通；沉头/埋头可选带螺纹；不带螺纹时子类型=钻头大小/自定义/螺栓间隙）+ 放置态；带参数=一行直插（`OCSMHOLE 螺纹孔 M10 H18 L15 at x,y rot 度`、`OCSMHOLE 沉头孔 无螺纹 M10 间隙 中等装配 H22`）。自动螺纹长 = 1.5d；自动孔深 = 有效深+2P（仅带螺纹且盲孔时可选）；贯通无 118° 锥。数据：ISO 724 / GB/T 152.3 / GB/T 152.2 / GB/T 5277 / 底孔牙深明细表（见表 JSON 的 source）"),
     ("OCSMEDIT", "ME", "改标注：选中 OCSM 生成的标注 → 配置窗口改参数 → 重生成"),
     ("OCSMRGH", "CC", "表面粗糙度：点选插入点 → 配置窗口（匿名块 + ATTDEF）"),
@@ -8072,6 +8075,43 @@ const MANUAL_HTML: &str = include_str!("manual_gui.html");
 /// 图纸 = 唯一真源，xlsx 只作为导入/导出的数据交换格式。
 const BOM_HTML: &str = include_str!("bom_gui.html");
 
+/// 文字锚点相对尺寸线的（沿轴, 法向）分量（世界单位）。测试专用。
+/// 宿主对非零 `text_middle_point` 直接采纳（`src/entities/dimension.rs:7337`
+/// `stored_text_point`），锚点语义由 `attachment_point` 决定（默认
+/// MiddleCenter ⇒ 中点）；法向“上方”与宿主 `text_on_dim_line` 同规则：
+/// 尺寸线轴归一化到 nx>0（nx=0 时 ny>0），up=(-ny,nx)。
+#[cfg(test)]
+pub(crate) fn linear_text_offset_from_line(dim: &Dimension) -> (f64, f64) {
+    let (first, second, def, axis) = match dim {
+        Dimension::Aligned(d) => {
+            let delta = d.second_point - d.first_point;
+            let len = delta.length().max(1e-12);
+            (d.first_point, d.second_point, d.definition_point, delta * (1.0 / len))
+        }
+        Dimension::Linear(d) => (
+            d.first_point,
+            d.second_point,
+            d.definition_point,
+            Vector3::new(d.rotation.cos(), d.rotation.sin(), 0.0),
+        ),
+        other => panic!("只支持线性/对齐标注: {other:?}"),
+    };
+    let perp = Vector3::new(-axis.y, axis.x, 0.0);
+    let dperp = def.x * perp.x + def.y * perp.y;
+    let d1 = first + perp * (dperp - (first.x * perp.x + first.y * perp.y));
+    let d2 = second + perp * (dperp - (second.x * perp.x + second.y * perp.y));
+    let mid = (d1 + d2) * 0.5;
+    let delta = dim.base().text_middle_point - mid;
+    let along = delta.x * axis.x + delta.y * axis.y;
+    let mut n = axis;
+    if n.x < 0.0 || (n.x == 0.0 && n.y < 0.0) {
+        n = n * -1.0;
+    }
+    let up = Vector3::new(-n.y, n.x, 0.0);
+    let perp = delta.x * up.x + delta.y * up.y;
+    (along, perp)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -8153,7 +8193,8 @@ mod tests {
         let rot = dim.base().text_rotation;
         let expect = (30.0f64).atan2(40.0);
         assert!((rot - expect).abs() < 1e-9, "rot={rot} expect={expect}");
-        // 位置交给 host dimtad=1（尺寸线上方），不强制 text_user_positioned。
+        // 位置由 linear_text_lift 按样式抬升后写入 text_middle_point
+        //（宿主直接采纳该点）；仍不强制 text_user_positioned。
         assert!(!dim.base().text_user_positioned);
         // 水平：文字水平 0°。
         let h = build_guide_linear([0.0, 0.0, 0.0], [40.0, 30.0, 0.0], LinearSub::Horizontal, 10.0, "OCSM_GB");
@@ -8161,6 +8202,64 @@ mod tests {
         // 竖直：文字逆时针 90°。
         let v = build_guide_linear([0.0, 0.0, 0.0], [40.0, 30.0, 0.0], LinearSub::Vertical, 10.0, "OCSM_GB");
         assert!((v.base().text_rotation - std::f64::consts::FRAC_PI_2).abs() < 1e-9);
+    }
+
+    /// 对照 `OCSMDIMGULIDE1-general.dxf` 三条线性标注匿名块（*D67/68/69）的
+    /// MTEXT：attach=8(BottomCenter)、插入点距尺寸线 **1.0 = DIMGAP**。
+    /// 宿主侧文字锚点是中点（MiddleCenter），故中心应离线
+    /// DIMTXT/2 + DIMGAP = 1.25 + 1.0 = **2.25**，即底边离线 1.0。
+    /// 修复前硬编码 0.15 → 底边压在尺寸线上。负断言锁死贴线旧行为。
+    #[test]
+    fn gdim_linear_text_center_sits_dimgap_above_dim_line() {
+        use ocs_plugin_api::host::acadrust::entities::dimension::AttachmentPointType;
+        let cases = [
+            // general.dxf #0 对齐：def=(34,38)；参考块 MTEXT 底边 (13.4,23.8)
+            // → 中心 = 底边 + up*1.25 = (12.65,24.8)。
+            (LinearSub::Aligned, [0.0, 0.0, 0.0], [40.0, 30.0, 0.0], 10.0),
+            // 水平：def=(40,-20)，线 y=-20 → 中心 (20,-17.75)。
+            (LinearSub::Horizontal, [0.0, 0.0, 0.0], [40.0, 0.0, 0.0], -20.0),
+            // 竖直：def=(-15,40)，线 x=-15 → 中心 (-17.25,20)。
+            (LinearSub::Vertical, [0.0, 0.0, 0.0], [0.0, 40.0, 0.0], 15.0),
+        ];
+        for (sub, p1, p2, dist) in cases {
+            let dim = build_guide_linear(p1, p2, sub, dist, "OCSM_GB");
+            assert_eq!(
+                dim.base().attachment_point,
+                AttachmentPointType::MiddleCenter,
+                "{sub:?}: 锚点必须是中心（stored point = 中心）"
+            );
+            let (along, perp) = linear_text_offset_from_line(&dim);
+            assert!(along.abs() < 1e-9, "{sub:?}: 文字应沿尺寸线居中，along={along}");
+            assert!(
+                (perp - 2.25).abs() < 1e-9,
+                "{sub:?}: 中心法向偏移应 2.25（DIMTXT/2+DIMGAP），实际 {perp}"
+            );
+            // 文字底边离线 = 2.25 - 2.5/2 = 1.0，与参考块 MTEXT 插入点一致。
+            assert!(
+                (perp - 1.25 - 1.0).abs() < 1e-9,
+                "{sub:?}: 底边离线应 1.0，实际 {}",
+                perp - 1.25
+            );
+            // 负断言：不得回到“贴着尺寸线”（0.15）的旧行为。
+            assert!(perp > 1.0 + 1.25 - 1e-6, "{sub:?}: 文字不得贴线");
+        }
+        // 绝对坐标抽查（= 参考块 MTEXT 底边 + up×半高）。
+        let a = build_guide_linear([0.0, 0.0, 0.0], [40.0, 30.0, 0.0], LinearSub::Aligned, 10.0, "OCSM_GB");
+        let tm = a.base().text_middle_point;
+        assert!((tm.x - 12.65).abs() < 1e-9 && (tm.y - 24.8).abs() < 1e-9, "对齐中心 {tm:?}");
+    }
+
+    /// 图幅缩放样式（OCSM_GB_x{n}）下，抬升必须随 dimscale 放大：
+    /// `2.25 × n`（对照宿主 `dimension_text_pos_f64` 的 dimgap/dimtxt × dim_scale）。
+    #[test]
+    fn gdim_linear_text_lift_scales_with_style() {
+        let dim = build_guide_linear([0.0, 0.0, 0.0], [40.0, 30.0, 0.0], LinearSub::Aligned, 10.0, "OCSM_GB_x2");
+        let (along, perp) = linear_text_offset_from_line(&dim);
+        assert!(along.abs() < 1e-9);
+        assert!((perp - 4.5).abs() < 1e-9, "x2 样式中心偏移应 4.5，实际 {perp}");
+        let half = build_guide_linear([0.0, 0.0, 0.0], [40.0, 30.0, 0.0], LinearSub::Aligned, 10.0, "OCSM_GB_x0.5");
+        let (_, perp) = linear_text_offset_from_line(&half);
+        assert!((perp - 1.125).abs() < 1e-9, "x0.5 样式中心偏移应 1.125，实际 {perp}");
     }
 
 
@@ -9139,6 +9238,7 @@ mod tests {
             );
         }
         // 花键模式关键控件/函数必须在页面上（防后续重构把入口弄丢）。
+        // 注：体系口径等说明经原生 title 悬停（信息分层），不再有 stdHint/dbHint 常显元素。
         for key in [
             "splineMode",
             "stdSel",
@@ -9152,7 +9252,6 @@ mod tests {
             "applySplinePreset",
             "sysSel",
             "dp",
-            "stdHint",
         ] {
             assert!(GEAR_HTML.contains(key), "gear_gui.html 缺花键模式要素：{key}");
         }
@@ -10058,7 +10157,96 @@ mod integration {
                     && !dim.base().style_name.eq_ignore_ascii_case("Standard"),
                 "sub={sub} 负断言：不得退化成 OCS 默认样式"
             );
+            // 文字偏移（完整 HTTP 路径）：中心离线 2.25 = DIMTXT/2+DIMGAP，
+            // 即底边离线 1.0（对照 general.dxf 块 MTEXT）；不得回到 0.15 贴线。
+            let (along, perp) = super::linear_text_offset_from_line(dim);
+            assert!(along.abs() < 1e-9, "sub={sub} 文字应沿尺寸线居中: {along}");
+            assert!(
+                (perp - 2.25).abs() < 1e-9,
+                "sub={sub} 中心法向偏移应 2.25，实际 {perp}"
+            );
+            assert!(perp > 1.0, "sub={sub} 负断言：文字不得贴着尺寸线");
         }
+    }
+
+    /// 落盘 DXF 校验（对应任务：GDIM 画一遍 → 导出 DXF → 与参考逐字段比对）：
+    /// 完整 GDIM（HTTP）→ DxfWriter → DxfReader 回读。
+    /// DIMENSION 的 group 11（text_middle_point）相对尺寸线法向应 = 2.25
+    ///（中心；底边离线 1.0 = DIMGAP，对照 general.dxf 块 MTEXT），
+    /// 且类型专属 DSTYLE 覆盖仍在（147=1.0 / 77=1 / 140=2.5）。
+    #[test]
+    fn gdim_linear_text_offset_survives_dxf_roundtrip() {
+        use acadrust::xdata::XDataValue as V;
+        let mut doc = acadrust::CadDocument::new();
+        let mut line = Line {
+            common: Default::default(),
+            start: Vector3::new(0.0, 0.0, 0.0),
+            end: Vector3::new(40.0, 30.0, 0.0),
+            thickness: 0.0,
+            normal: Vector3::new(0.0, 0.0, 1.0),
+        };
+        line.common.layer = "10引导线层".into();
+        let gh = doc.add_entity(EntityType::Line(line)).unwrap();
+        let mock = std::sync::Arc::new(MockSender::new(doc));
+        let sender: std::sync::Arc<dyn PluginRequestSender> = mock.clone();
+        let body = serde_json::json!({
+            "handle": format!("{:#X}", u64::from(gh)),
+            "url": "http://127.0.0.1:23751/DIM/LINEAR/A/10",
+        })
+        .to_string();
+        do_apply_inner(&sender, body.as_bytes(), true).expect("apply");
+
+        let bytes = {
+            let doc = mock.doc.lock().unwrap();
+            acadrust::io::DxfWriter::new(&doc)
+                .write_to_vec()
+                .expect("写 DXF")
+        };
+        let reread = acadrust::io::DxfReader::from_reader(std::io::Cursor::new(bytes))
+            .expect("DxfReader")
+            .read()
+            .expect("读回 DXF");
+        let dim = reread
+            .entities()
+            .find_map(|e| match e {
+                EntityType::Dimension(d) => Some(d),
+                _ => None,
+            })
+            .expect("回读文档应有标注");
+        assert_eq!(dim.base().style_name, "OCSM_GB");
+        // 参考 DXF general.dxf #0：块 MTEXT 底边 (13.4,23.8) 距线 1.0；
+        // 回读后 group 11 是中心 → 法向 2.25、沿轴居中。
+        let (along, perp) = super::linear_text_offset_from_line(dim);
+        assert!(along.abs() < 1e-9, "回读文字应居中: {along}");
+        assert!(
+            (perp - 2.25).abs() < 1e-9,
+            "回读 group 11 中心偏移应 2.25，实际 {perp}"
+        );
+        // DSTYLE 覆盖字段：147 DIMGAP=1.0、77 DIMTAD=1（上方）、140 DIMTXT=2.5。
+        let rec = dim
+            .base()
+            .common
+            .extended_data
+            .get_record("ACAD")
+            .expect("回读应保留 ACAD/DSTYLE");
+        let mut got: std::collections::HashMap<i16, f64> = std::collections::HashMap::new();
+        let mut it = rec.values.iter().skip(1);
+        while let Some(v) = it.next() {
+            if let V::Integer16(code) = v {
+                match it.next() {
+                    Some(V::Real(r)) => {
+                        got.insert(*code, *r);
+                    }
+                    Some(V::Integer16(n)) => {
+                        got.insert(*code, f64::from(*n));
+                    }
+                    _ => {}
+                }
+            }
+        }
+        assert_eq!(got.get(&147), Some(&1.0), "DIMGAP");
+        assert_eq!(got.get(&77), Some(&1.0), "DIMTAD=1 上方");
+        assert_eq!(got.get(&140), Some(&2.5), "DIMTXT");
     }
 
     /// 基建补齐幂等：已初始化（十层 + OCSM_GB 文字/标注样式）→ 零请求。

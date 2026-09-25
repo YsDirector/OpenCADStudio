@@ -212,6 +212,27 @@ await flush();
 const el = (id) => document.getElementById(id);
 const numOf = (id) => parseFloat(el(id).value);
 
+// ⓪ 信息分层（照 hole_gui 口径）：常显区（可见文本；剥标签、title 悬停不计）不得含
+//    公式/口径/来源/预先警告；公式与口径进 title（原生 title，不自造 tooltip）。
+const visibleText = html
+  .replace(/<script[\s\S]*?<\/script>/g, ' ')
+  .replace(/<style[\s\S]*?<\/style>/g, ' ')
+  .replace(/<[^>]+>/g, ' ');
+for (const bad of [
+  '会明确报错', 'NF 已入库', 'ANSI 已接入', 'd_B 只属于 DIN 5480', 'GB/T 3478 下不给',
+  'M 与 DP 只能选一个', '径节系列下拉暂不做', '0.38m', '不随 α 自动变',
+  '右旋为正', '三条细实线', '默认 10m', '默认 15m', 'round(0.6m)',
+  'ByLayer', '不含尺寸标注', '统一齿形表达式', '最小口径', '不存在侧视图',
+]) {
+  check(!visibleText.includes(bad), `常显区不应含公式/口径/预先警告「${bad}」`);
+}
+// 正向：公式/口径确实进了 title（静态控件 + 动态写入）。
+check(html.includes('title="勾选 = 渐开线花键'), '花键模式说明应进 splineMode 的 title');
+check(html.includes('title="m = 25.4/DP'), 'DP 换算式 m=25.4/DP 应进 dp 的 title');
+check(html.includes('title="自动 = round(0.6m)'), '倒角公式应进 chamfer 的 title');
+check(html.includes('title="模数制用 m；径节制用 DP'), 'M/DP 口径应进 sysSel 的 title');
+check(html.includes('title="生成物：轮廓'), '生成物/图层口径应进「生成到图纸」title');
+
 // ① 默认齿轮模式：c/beta/chamfer/sys 行在，花键行不在；M 体系显示模数行、隐藏径节行
 check(el('stdLabel').style.display === 'none', '齿轮模式下标准号行应隐藏');
 check(el('cLabel').style.display !== 'none', '齿轮模式下顶隙行应显示');
@@ -270,7 +291,8 @@ try { el('sysSel')._fire('change', el('sysSel')); } catch (e) { errors.push('DP 
 await flush();
 check(el('exprPreview').value === 'GEAR EX M3.175 Z20 ALPHA20 X0 DA69.85 DF55.5625 BETA0 H31.75',
   'DP 表达式应按 m=25.4/DP 换算成 M，实际 ' + JSON.stringify(el('exprPreview').value));
-check(el('exprHint').textContent.includes('25.4/DP'), 'DP 表达式提示应说明换算：' + el('exprHint').textContent);
+check(el('exprHint').textContent.includes('已换算成模数 M'), 'DP 表达式提示应说明换算：' + el('exprHint').textContent);
+check(html.includes('title="m = 25.4/DP'), 'DP 换算公式应进 dp 的 title（静态）');
 
 // ② 花键模式 + GB：花键行显示、d_B 行隐藏
 el('stdSel').value = 'GB';
@@ -281,8 +303,8 @@ check(el('alpha').readOnly === true, '花键模式 α 应由齿廓预设决定�
 check(el('hf').readOnly === true, '花键模式 hf 应由齿廓预设决定（只读）');
 check(el('x').readOnly === true, 'GB 下 x 应锁死（GB/T 3478 基本齿廓不含变位）');
 check(el('x').value === '0', 'GB 下 x 应恒为 0，实际 ' + el('x').value);
-check(el('xHint').textContent.includes('GB/T 3478') && el('xHint').textContent.includes('不可编辑'),
-  'GB 下应有「不变位、x 不可编辑」提示：' + el('xHint').textContent);
+check((el('x').title || '').includes('GB/T 3478') && (el('x').title || '').includes('不可编辑'),
+  'GB 下「不变位、x 不可编辑」口径应进 x 的 title：' + el('x').title);
 check(el('stdLabel').style.display !== 'none', '花键模式下标准号行应显示');
 check(el('dbLabel').style.display === 'none', 'GB 下 d_B 行应隐藏（本体系不用 d_B）');
 check(el('cLabel').style.display === 'none', '花键模式下顶隙行应隐藏');
@@ -306,7 +328,7 @@ try { el('stdSel')._fire('change', el('stdSel')); } catch (e) { errors.push('NF 
 await flush();
 check(el('dbLabel').style.display !== 'none', 'NF 下 A（基准直径）行应显示');
 check(el('dbLabel').textContent.includes('公称直径 A'), 'NF 标签应为公称直径 A：' + el('dbLabel').textContent);
-check(el('stdHint').textContent.includes('A 主参数'), 'NF 提示应含「A 主参数」：' + el('stdHint').textContent);
+check((el('stdSel').title || '').includes('A 主参数'), 'NF 标准口径应进 stdSel 的 title：' + el('stdSel').title);
 check(el('profileSel').value === 'NFP', 'NF 默认齿廓应为 NFP，实际 ' + el('profileSel').value);
 check(Math.abs(numOf('hf') - 1.0) < 1e-9, 'NFP hf 预设应 1.0，实际 ' + numOf('hf'));
 check(el('mLabel').style.display !== 'none', 'NF 下模数 m 行应显示（A + m 两参数体系）');
@@ -335,14 +357,14 @@ await flush();
 check(el('exprPreview').value.startsWith('SPLINE ') && el('exprPreview').value.includes('Z19'),
   'NF 花键应给出统一齿形表达式（含当前 z=19），实际 ' + JSON.stringify(el('exprPreview').value));
 check(el('exprCopy').disabled === false, 'NF 花键表达式非空时复制按钮应可用');
-check(el('exprHint').textContent.includes('统一齿形表达式'), 'NF 花键应提示统一齿形表达式：' + el('exprHint').textContent);
+check((el('exprPreview').title || '').includes('统一齿形表达式'), 'NF 花键应提示统一齿形表达式（title）：' + el('exprPreview').title);
 // ANSI：基准直径行隐藏；径节输入切到 17 项 A/B 下拉 + 自定义；hf/rho/cf 隐藏。
 el('stdSel').value = 'ANSI';
 try { el('stdSel')._fire('change', el('stdSel')); } catch (e) { errors.push('ANSI 切换异常: ' + e); }
 await flush();
 check(el('dbLabel').style.display === 'none', 'ANSI 下基准直径行应隐藏');
-check(el('stdHint').textContent.includes('径节 P'), 'ANSI 提示应含「径节 P」：' + el('stdHint').textContent);
-check(!el('stdHint').textContent.includes('未实现'), 'ANSI 提示不应再含「未实现」：' + el('stdHint').textContent);
+check((el('stdSel').title || '').includes('径节 P'), 'ANSI 标准口径应进 stdSel 的 title：' + el('stdSel').title);
+check(!(el('stdSel').title || '').includes('未实现'), 'ANSI 口径不应再含「未实现」：' + el('stdSel').title);
 check(el('mLabel').style.display !== 'none', 'ANSI 下应显示径节输入行（m 行）');
 check(el('mLabel').textContent.includes('径节[P]'), 'ANSI 标签应为径节[P]：' + el('mLabel').textContent);
 check(el('hfLabel').style.display === 'none', 'ANSI 下 hf 行应隐藏（Table 2 公式算）');
@@ -386,8 +408,9 @@ await flush();
 check(Math.abs(numOf('m') - 5) < 1e-9, '选 5/10 应把数字框填 P=5，实际 ' + el('m').value);
 check(el('ansiPitchHint').textContent.includes('P=5') && el('ansiPitchHint').textContent.includes('Ps=10'),
   'ANSI hint 应显示 P=5（Ps=10）：' + el('ansiPitchHint').textContent);
-check(el('ansiPitchHint').textContent.includes('25.4/P') && el('ansiPitchHint').textContent.includes('5.08'),
-  'ANSI hint 应显示 m=25.4/P=5.08：' + el('ansiPitchHint').textContent);
+check(el('ansiPitchHint').textContent.includes('换算模数 m=5.08'),
+  'ANSI hint 应显示换算模数 m=5.08：' + el('ansiPitchHint').textContent);
+check((el('m').title || '').includes('25.4/P'), 'ANSI 换算公式应进 m 的 title：' + el('m').title);
 // 系列外自定义 P → collect 红字列 17 项
 el('m').value = '3.75';
 el('m')._fire('input', el('m'));
@@ -404,8 +427,8 @@ await flush();
 check(el('exprPreview').value.startsWith('SPLINE '),
   'ANSI 花键应给出统一齿形表达式，实际 ' + JSON.stringify(el('exprPreview').value));
 check(el('exprCopy').disabled === false, '花键表达式非空时复制按钮应可用');
-check(el('exprHint').textContent.includes('统一齿形表达式'),
-  '花键应提示统一齿形表达式：' + el('exprHint').textContent);
+check((el('exprPreview').title || '').includes('统一齿形表达式'),
+  '花键应提示统一齿形表达式（title）：' + el('exprPreview').title);
 
 // ── ANSI 接线回归（用户实测「缺径节 P」的断点）：选完径节后，预览/信息查询串与导出 body
 // 必须带 A/B 原值 `pitch=5/10`，而不是被 collect/paramQS/导出 schema 丢在半路。
@@ -441,7 +464,7 @@ try { el('stdSel')._fire('change', el('stdSel')); } catch (e) { errors.push('GB 
 await flush();
 check(el('x').readOnly === true, '从 DIN/NF 切回 GB 后 x 仍应锁死');
 check(el('x').value === '0', '切回 GB 后 x 应复位为 0，实际 ' + el('x').value);
-check(el('xHint').textContent.includes('不可编辑'), '切回 GB 后 x 提示应恢复：' + el('xHint').textContent);
+check((el('x').title || '').includes('不可编辑'), '切回 GB 后 x 口径应恢复（title）：' + el('x').title);
 
 // ③.95 轴生成器表达式（花键模式）：INVOLSPLINE 轴段已撤 → 不再给表达式（护栏）
 el('m').value = '3';
@@ -454,8 +477,8 @@ await flush();
 check(el('exprPreview').value.startsWith('SPLINE '),
   'GB 花键应给出统一齿形表达式，实际 ' + JSON.stringify(el('exprPreview').value));
 check(el('exprCopy').disabled === false, '花键表达式非空时复制按钮应可用');
-check(el('exprHint').textContent.includes('统一齿形表达式'),
-  '应提示统一齿形表达式：' + el('exprHint').textContent);
+check((el('exprPreview').title || '').includes('统一齿形表达式'),
+  '应提示统一齿形表达式（title）：' + el('exprPreview').title);
 globalThis.__copied = '';
 el('exprCopy')._fire('click', el('exprCopy'));
 await flush();
@@ -479,8 +502,9 @@ if (intKindBtn) {
   await flush();
   check(viewBtns().join('|') === '剖视图（齿圈内齿不剖）|端视图', '内花键应只留 剖视图 + 端视图，实际 ' + viewBtns().join('|'));
   check(el('viewName').textContent === '剖视图（齿圈内齿不剖）', '内花键不可用侧视图时应自动回剖视图，实际 ' + el('viewName').textContent);
-  check(el('kindHint').innerHTML.includes('不存在侧视图'), '内花键提示应写明无侧视图：' + el('kindHint').innerHTML);
-  check(el('exprHint').textContent.includes('最小口径'), '内花键应提示轴上最小绘制口径：' + el('exprHint').textContent);
+  const kindTitles = kindBtns().map((b) => b.title || '').join('|');
+  check(kindTitles.includes('无侧视图'), '内花键「无侧视图」口径应进种类按钮 title：' + kindTitles);
+  check((el('exprPreview').title || '').includes('最小口径'), '轴上最小绘制口径应进表达式框 title：' + el('exprPreview').title);
   check(el('exprPreview').value.startsWith('SPLINE IN '), '内花键也应给出统一表达式（SPLINE IN）：' + el('exprPreview').value);
 }
 // 切回外花键：恢复三视图
@@ -618,7 +642,7 @@ el('splineMode').checked = false;
 try { el('splineMode')._fire('change', el('splineMode')); } catch (e) { errors.push('退出花键模式异常: ' + e); }
 await flush();
 check(el('x').readOnly !== true, '齿轮模式 x 不应锁死（GB 锁 x 只在花键模式生效）');
-check(el('xHint').textContent === '', '齿轮模式 x 提示应清空：' + el('xHint').textContent);
+check((el('x').title || '') === '', '齿轮模式 x 不应再带花键口径 title：' + el('x').title);
 
 // ④ 防抖回调可跑（collect/renderInfo 不抛）
 for (const t of timers.splice(0)) {

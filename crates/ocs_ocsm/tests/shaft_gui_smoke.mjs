@@ -53,6 +53,26 @@ const KEY_RANGES = [
   { d_lo: 44, d_hi: 50, lo_inclusive: false, b: 14, t1: 5.5 },
 ];
 
+// 导向平键（GB/T 1097）桩：sizes（每档 d0/l0 + 1097 L 系列∩L<10b）+ length_rows（L→L1/L2/L3）。
+const KEY1097_SIZES = [
+  { d: 8, label: 'b=8（h=7）', lengths: [25, 28, 32, 36, 40, 45, 50, 56, 63, 70], d0: 3, l0: 7 },
+  { d: 10, label: 'b=10（h=8）', lengths: [25, 28, 32, 36, 40, 45, 50, 56, 63, 70, 80, 90], d0: 3, l0: 8 },
+];
+const KEY1097_ROWS = [
+  { l: 25, l1: 13, l2: 12.5, l3: 6 },
+  { l: 28, l1: 14, l2: 14, l3: 7 },
+  { l: 32, l1: 16, l2: 16, l3: 8 },
+  { l: 36, l1: 18, l2: 18, l3: 9 },
+  { l: 40, l1: 20, l2: 20, l3: 10 },
+  { l: 45, l1: 23, l2: 22.5, l3: 11 },
+  { l: 50, l1: 26, l2: 25, l3: 12 },
+  { l: 56, l1: 30, l2: 28, l3: 13 },
+  { l: 63, l1: 35, l2: 31.5, l3: 14 },
+  { l: 70, l1: 40, l2: 35, l3: 15 },
+  { l: 80, l1: 48, l2: 40, l3: 16 },
+  { l: 90, l1: 54, l2: 45, l3: 18 },
+];
+
 // ── 最小 DOM 垫片 ────────────────────────────────────────────────
 function htmlDecode(s) {
   return String(s)
@@ -301,6 +321,7 @@ function segmentsFor(dsl) {
         const tm = /\bt1\s*=?\s*([\d.]+)/i.exec(line);
         if (tm) seg.keyway.t1 = Number(tm[1]);
         if (/双槽|\bDOUBLE\b/i.test(line)) seg.keyway.double = true;
+        if (/导向|\bGUIDED\b/i.test(line)) seg.keyway.guided = true;
       }
       out.push(seg);
       continue;
@@ -322,6 +343,8 @@ global.fetch = async (u, opts = {}) => {
         key_1096_a: { sizes: KEY_SIZES, shaft_ranges: KEY_RANGES },
         key_1096_b: { sizes: KEY_SIZES, shaft_ranges: KEY_RANGES },
         key_1096_c: { sizes: KEY_SIZES, shaft_ranges: KEY_RANGES },
+        key_1097_a: { sizes: KEY1097_SIZES, length_rows: KEY1097_ROWS },
+        key_1097_b: { sizes: KEY1097_SIZES, length_rows: KEY1097_ROWS },
       },
     });
   }
@@ -398,6 +421,28 @@ check(S.rows.length === 0, '清空行文本应回到空表');
 
 check(S.specs.length === SPECS.length, `/api/parts 规格未加载（${S.specs.length}）`);
 
+// ⓪.5 信息分层（照 hole_gui 口径）：常显区（可见文本；剥标签、title 悬停不计）不得含
+//     公式/口径/来源/预先警告；公式与口径进 title（原生 title，不自造 tooltip）。
+const visibleText = html
+  .replace(/<script[\s\S]*?<\/script>/g, ' ')
+  .replace(/<style[\s\S]*?<\/style>/g, ' ')
+  .replace(/<[^>]+>/g, ' ');
+for (const bad of [
+  '0.85d', 'GB/T 1095', 'GB/T 1144', '槽长按型别折算', '仅剖视图体现',
+  '留空 10m', '留空 20°', '10m（模板', 'ByLayer', '不含尺寸标注',
+  '双视图已移除', 'ES… 旧写法已取消', '径节制 DP 走', 'TODO',
+]) {
+  check(!visibleText.includes(bad), `常显区不应含公式/口径/预先警告「${bad}」`);
+}
+// 正向：公式/口径确实进了 title（视图按钮动态 title + 静态控件 title）。
+const layButtons = document.getElementById('viewRow').children;
+check(
+  layButtons.length === 2 && layButtons[0].title.includes('外形可见线') && layButtons[1].title.includes('ANSI31'),
+  '视图按钮应带画法口径 title：' + layButtons.map((b) => b.title).join('|')
+);
+check(html.includes('title="生成物：轮廓/端面/倒角'), '生成物/图层口径应进「生成到图纸」title');
+check(html.includes('title="段级退刀槽：RL@L'), '退刀槽/花键口径应进行文本框 title');
+
 // ① 段表 SPLINE 列是下拉，选项 = 表内规格 + 「自定义规格…」
 dslEl.value = 'SPLINE 6x23x26x6 L30';
 await S.refreshFromText();
@@ -411,6 +456,8 @@ check(sel && sel.options.some((o) => o.value === '6x23x26x6'), '下拉缺表内�
 check(sel && sel.options[sel.options.length - 1].value === '__custom__', '下拉末尾应是「自定义规格…」');
 check(!!custom && /display:\s*none/.test((custom._attrs || {}).style || ''), '表内规格时自定义文本框应隐藏');
 check(row._html.includes('de63'), '回填后派生值应显示查表 de63');
+check(row._html.includes('title="规格来自 GB/T 1144'), '花键规格来源/口径应进规格下拉 title');
+check(row._html.includes('title="螺纹段：要求 S=E；不写值 = 小径 0.85d'), 'M 段公式应进 M 勾选 title');
 
 // ② 选表内规格 → de 自动填 + 派生值 + 行文本同步（自动 de 不写进行文本）
 sel.value = '6x28x32x7';
@@ -618,6 +665,9 @@ check(S.rows.length === 2 && S.rows[0].key.on && S.rows[0].key.kind === 'A'
 let krow = segBody._rows[0];
 check(krow._html.includes('b8×h7') && krow._html.includes('t1=4'),
   'KEY 列应只读显示由 d25 查得的 b8×h7 / t1=4：' + krow._html.slice(0, 400));
+check(krow._html.includes('title="平键轴槽（与 GEAR / SPLINE / M / OV 互斥）')
+  && krow._html.includes('title="键型 A/B/C（复用 GB/T 1096 平键族）；槽长按型别折算'),
+  'KEY 口径（互斥/折算/查表）应进 title');
 const keyKindF = krow._fields.find((f) => f.dataset.f === 'key.kind');
 const keyLenF = krow._fields.find((f) => f.dataset.f === 'key.l');
 const keyPlaceF = krow._fields.find((f) => f.dataset.f === 'key.place');
@@ -680,6 +730,46 @@ krow = segBody._rows[0];
 check(krow._fields.some((f) => f.dataset.f === 'gear.on' && f.disabled)
   && krow._fields.some((f) => f.dataset.f === 'spline.on' && f.disabled),
   'KEY 段应禁用 GEAR / SPLINE 勾选');
+
+// ⑧.12 导向平键（GB/T 1097）：KEY 列勾「导向」→ 只 A/B、L 下拉换 1097 系列、
+// 派生显示固定螺钉孔；行文本/模型带 guided；与双槽互斥。
+dslEl.value = 'S30 E30 L50 CH2@L CH2@R KEY A 25 导向';
+await S.refreshFromText();
+S.sel = 0;
+check(
+  S.rows.length === 1 && S.rows[0].key.on && S.rows[0].key.guided === true
+    && S.rows[0].key.kind === 'A' && S.rows[0].key.l === '25',
+  '导向 KEY 应回填段表：' + JSON.stringify(S.rows[0].key)
+);
+let guidRow = segBody._rows[0];
+const gKind = guidRow._fields.find((f) => f.dataset.f === 'key.kind');
+check(
+  gKind && gKind.options.map((o) => o.value).join(',') === 'A,B',
+  '导向时应隐藏 C 型：' + JSON.stringify(gKind && gKind.options.map((o) => o.value))
+);
+const gLen = guidRow._fields.find((f) => f.dataset.f === 'key.l');
+check(gLen && gLen.options.some((o) => o.value === '25'), '导向 L 下拉应含 1097 系列 25（1096 无 25）');
+check(
+  guidRow._html.includes('导向1097') && guidRow._html.includes('M3') && guidRow._html.includes('L3=6'),
+  '派生应显示 1097 固定螺钉孔与 L3：' + guidRow._html.slice(0, 500)
+);
+check(dslEl.value.includes('KEY A 25 导向'), '行文本应带 导向：' + JSON.stringify(dslEl.value));
+const gm = S.modelFromRows();
+check(
+  !!gm && gm.segments[0].keyway && gm.segments[0].keyway.guided === true,
+  '模型应带 guided：' + JSON.stringify(gm && gm.segments[0])
+);
+const gDbl = guidRow._fields.find((f) => f.dataset.f === 'key.double');
+check(!!gDbl && gDbl.disabled === true, '导向下双槽应禁用');
+const gBox = guidRow._fields.find((f) => f.dataset.f === 'key.guided');
+check(!!gBox && gBox.checked === true, '导向勾选应回显');
+gBox.checked = false;
+segBody._fire('change', gBox);
+await tick();
+check(
+  S.rows[0].key.guided === false && !dslEl.value.includes('导向'),
+  '取消导向应回普通平键：' + JSON.stringify(dslEl.value)
+);
 report();
 
 function report() {

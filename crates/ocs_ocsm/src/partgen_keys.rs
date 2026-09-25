@@ -9,7 +9,7 @@
 //!
 //! ### 用户已定口径（写死在代码里，勿自行"改正"）
 //!
-//! 1. **1097 起键螺纹孔的小径 3/4 圈**：源图画在 `4虚线层`，本库改到 **`2细线层`（细实线）**；
+//! 1. **1097 键中央 d0 螺纹孔的小径 3/4 圈**：源图画在 `4虚线层`，本库改到 **`2细线层`（细实线）**；
 //!    其余一律照源图（**不**按 GB/T 4459.1 大改）。⚠️
 //! 2. **1097 主视图剖切**：右半 x>0 全剖（材料打剖面线），左半为外形，左端孔用虚线。
 //!    **分界线（用户 2026-09 画法修正）**：改用规范 **45° 断裂折线**、画在 **`2细线层`**（细实线）；
@@ -24,9 +24,10 @@
 //!    （min/max/mid，默认 min）。与 1097 的 `C` 取表内下限同口径。
 //!    ⚠️ specimen（b=2）按新口径 = **0.16**，模板 DXF 画的是 0.2（在该档 0.16~0.25 内，
 //!    属模板取中间值）→ **已知 0.04mm 有意偏差**（举证页偏差④），**不要**为对齐模板改回 0.2。
-//! 6. **1097 中央 `d0` 孔是"起键螺纹孔"** —— 它是**键自身**用于起键（撬出）的孔，
-//!    **与轴无关**；**不是**把键固定到轴上的孔（反解报告 §3.5 的"固定用"推断**已作废**）。
-//!    两端 `d1` 通孔 + `D×h1` 沉孔照源图（孔位 ±L1/2、距端面 L3）。
+//! 6. **1097 的固定方式 = 螺钉把键固定在轴上（用户 2026-09-25 更正）**：轴上是 2 个**固定螺钉"
+//!    "螺纹孔**（d0×L0，自键槽底向下，118° 钻尖）；键上对应 d1 通孔 + D×h1 沉孔（螺钉 GB/T 822/65）。
+//!    **“起键螺孔”是 GB/T 1096 附录 A 的概念（普通平键撬出用），不属于 1097**；
+//!    旧注释把表列 d0/L0 当“起键螺孔”已作废（L0 真义 = 轴上螺纹孔深，见 `Key1097Row::l0`）。
 //! 7. **1097 的 `L1/L2/L3` 由 `L` 查 GB/T 1097-2003 长度系列表派生**（26 档，JSON `length_rows`；
 //!    **不插值、不外推**，表外 `L` 明确报错并列出可选系列）。孔位 `±L1/2`、端距 `L3`、断裂线
 //!    全部随 `L` 派生；**废除旧行为**：不再沿用 specimen 行固定的 `L1=60/L2=50/L3=20`。
@@ -163,7 +164,7 @@ pub const KEY_1096_L_SERIES: &[f64] = &[
 ];
 
 /// 1097 断裂分界线的 x 基准：距左侧 d1 沉孔外缘（D/2）的间隙。
-/// **定案（2026-09 用户画法修正）**：断裂线位于左侧 d1 孔（沉孔外缘）与中央起键孔之间，
+/// **定案（2026-09 用户画法修正）**：断裂线位于左侧 d1 孔（沉孔外缘）与中央 d0 孔之间，
 /// 与沉孔外缘留 [`BREAK_GAP`]；例：specimen L=100（查表 L1=60、D=6）→ x = −(30−3−1) = −26，
 /// 短键 L=25（查表 L1=13）→ x = −(6.5−3−1) = −2.5。**L1 由 L 查表派生**，不是行内固定值。
 ///（原注释称“按 specimen 推导的临时规则”，现按用户定案升格为正式推广规则。）
@@ -251,16 +252,16 @@ pub struct Key1097Row {
     pub c_range: String,
     /// 沉孔深 h1。
     pub h1: f64,
-    /// 起键螺纹孔大径 d0。
+    /// 固定螺钉螺纹公称 d0（**打在轴上**的螺纹孔；键上对应 d1 通孔 + D×h1 沉孔）。
     pub d0: f64,
-    /// 两端通孔直径 d1。
+    /// 键上通孔直径 d1（固定螺钉过孔）。
     pub d1: f64,
-    /// 沉孔直径 D。
+    /// 键上沉孔直径 D。
     #[serde(rename = "D")]
     pub d_sink: f64,
-    /// 螺纹孔口 120° 锪锥深度 C1。
+    /// 键上孔口 120° 锪锥深度 C1。
     pub c1: f64,
-    /// 起键螺纹孔深度 L0（自顶面向下量）。
+    /// **轴上固定螺纹孔深度 L0**（自键槽底/轴表面向下量；不是键上孔深）。
     #[serde(rename = "L0")]
     pub l0: f64,
     /// 该档默认长度 L（specimen 行 = 100；b=8/10 不合法 → 就近合法化）。
@@ -321,6 +322,11 @@ fn row_1096(ty: KeyType, b: f64) -> Option<&'static Key1096Row> {
 
 fn row_1097(ty: KeyType, b: f64) -> Option<&'static Key1097Row> {
     table_1097(ty).rows.iter().find(|r| (r.b - b).abs() < 1e-9)
+}
+
+/// 1097 行查询（轴生成器轴槽侧的校验/画法用）：按 b 取 A/B 型表行；表外 → `None`。
+pub fn key_1097_row(ty: KeyType, b: f64) -> Option<&'static Key1097Row> {
+    row_1097(ty, b)
 }
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -424,9 +430,11 @@ fn sizes_1097(ty: KeyType) -> Vec<serde_json::Value> {
                 "l_min": allowed.first().copied().unwrap_or(def),
                 "l_max": allowed.last().copied().unwrap_or(def),
                 "lengths": lengths,
+                "d0": r.d0,
+                "l0": r.l0,
                 "extra": format!(
-                    "h={}；d0=M{} 起键孔、两端 D{}×h{} 沉孔（d1 {}）；L1/L2/L3 由 L 查 GB/T 1097 长度系列表",
-                    trim(r.h), trim(r.d0), trim(r.d_sink), trim(r.h1), trim(r.d1)),
+                    "h={}；轴上固定螺纹孔 M{}×{}（L0，自槽底向下）、键上 D{}×h{} 沉孔（d1 {}）；L1/L2/L3 由 L 查 GB/T 1097 长度系列表",
+                    trim(r.h), trim(r.d0), trim(r.l0), trim(r.d_sink), trim(r.h1), trim(r.d1)),
             })
         })
         .collect()
@@ -495,7 +503,9 @@ pub fn families_json() -> serde_json::Map<String, serde_json::Value> {
         "基点 = 左端面对称轴（俯视图）/ 左端面×底面（主视图）/ 截面左下角（剖视图）；d 槽位承载 b";
     let note_1097 = {
         let mut v = vec![
-            "中央 d0 孔是键自身的**起键（撬出）用螺纹孔，与轴无关** —— 不是把键固定到轴上的孔。"
+            "1097 的固定方式 = 螺钉把键固定在轴上（用户 2026-09-25 更正）：轴上是 2 个固定螺钉螺纹孔\
+             （d0×L0，自键槽底向下，118° 钻尖）；键上对应 d1 通孔 + D×h1 沉孔。\
+             “起键螺孔”是 GB/T 1096 附录 A 的概念（普通平键撬出用），不属于 1097。"
                 .to_string(),
             "主视图：右半剖 + 左半外形；分界线 = 2细线层 细实线 + 规范 45° 断裂折线\
              （用户 2026-09 画法修正；源图粗线竖线+端部台阶是手工痕迹，不再照抄）。"
@@ -577,6 +587,9 @@ pub fn families_json() -> serde_json::Map<String, serde_json::Value> {
                 "implemented": true,
                 "views": views_json(id),
                 "sizes": sizes_1097(ty),
+                "length_rows": table_1097(ty).length_rows.iter().map(|r| serde_json::json!({
+                    "l": r.l, "l1": r.l1, "l2": r.l2, "l3": r.l3
+                })).collect::<Vec<_>>(),
                 "len_label": "长度 L",
                 "base_hint": hint,
                 "tree_dir": "零件库/键/平键",
@@ -1017,7 +1030,7 @@ fn gen_1097(ty: KeyType, b: f64, l: f64, view: &str) -> Result<GenPart, String> 
 ///
 /// 形态（自底边到顶边）：`(xb,0) → (xb,y0) → [4 段 45° 折线 xb→xb+a→xb→xb−a→xb] → (xb,h)`，
 /// 其中 `y0=(h−4a)/2`；两端短竖线接在顶/底边上，中段严格 45°。
-/// 推广规则（用户定案）：`xb = −(L1/2 − D/2 − BREAK_GAP)`（位于左 d1 沉孔外缘与中央起键孔之间）。
+/// 推广规则（用户定案）：`xb = −(L1/2 − D/2 − BREAK_GAP)`（位于左 d1 沉孔外缘与中央 d0 孔之间）。
 fn break_1097(r: &Key1097Row, l1: f64) -> Vec<[f64; 2]> {
     let xb = -(l1 / 2.0 - r.d_sink / 2.0 - BREAK_GAP);
     let a = BREAK_AMP;
@@ -1039,7 +1052,10 @@ fn main_1097(ty: KeyType, r: &Key1097Row, len: &Key1097LengthRow) -> Vec<EntityT
     let (xh, d0, d1, d) = (len.l1 / 2.0, r.d0, r.d1, r.d_sink);
     let (h1, c1, l0) = (r.h1, r.c1, r.l0);
     let rcs = d0 / 2.0 - c1 * 60f64.to_radians().tan(); // 锪锥小端半径
-    let y0 = h - l0; // 起键孔底（当前各档 L0=h → 通高）
+    // 中央 d0 螺纹孔：口部 120° 锪锥 + 大径竖线 + 小端竖线（照源图）。
+    // ⚠️ L0 真义 = 轴上固定螺纹孔深（非键上孔深）；本行沿用旧口径把 y0 当键中央孔底，
+    //    specimen（L0=h）才恰好通高；多档 L0>h 时孔底越过键底 —— 键中央孔是否改通孔待用户裁定。
+    let y0 = h - l0;
     // 断裂分界线：2细线层 + 规范 45° 折线（推广规则 xb = L1/2 − D/2 − BREAK_GAP，见 break_1097）。
     let xb = xh - d / 2.0 - BREAK_GAP;
     let mut en = vec![
@@ -1047,7 +1063,6 @@ fn main_1097(ty: KeyType, r: &Key1097Row, len: &Key1097LengthRow) -> Vec<EntityT
         line([xh, -3.0], [xh, h + 3.0], LAYER_CENTER),
         line([-xh, -3.0], [-xh, h + 3.0], LAYER_CENTER),
     ];
-    // 中央起键螺纹孔：口部 120° 锪锥 + 大径竖线 + 小端竖线（照源图；孔与轴无关）。
     en.push(polyline(
         &[[-rcs, y0], [-rcs, h - c1], [0.0, h - c1]],
         false,
@@ -1226,7 +1241,7 @@ fn top_1097(ty: KeyType, r: &Key1097Row, len: &Key1097LengthRow) -> Vec<EntityTy
     let ri = half - c;
     let over = half + 3.0;
     let mut en = Vec::new();
-    // 中央起键螺纹孔三圈：大径实线、锪锥小端实线、小径 3/4 圈（**2细线层**，用户拍板）。
+    // 中央 d0 螺纹孔三圈：大径实线、锪锥小端实线、小径 3/4 圈（**2细线层**，用户拍板）。
     en.push(circle([0.0, 0.0], d0 / 2.0, LAYER_MAIN));
     en.push(circle([0.0, 0.0], rcs, LAYER_MAIN));
     // 两端 d1 通孔 + D 沉孔圈。
@@ -1976,7 +1991,7 @@ mod tests {
             let d_sink = row_1097(KeyType::A, 8.0).unwrap().d_sink;
             let expect_xb = -(expect_xh - d_sink / 2.0 - BREAK_GAP);
             for fam in ["key_1097_a", "key_1097_b"] {
-                // 俯视图：除中央起键孔外的圆全部在 ±L1/2。
+                // 俯视图：除中央 d0 孔外的圆全部在 ±L1/2。
                 let p = gen_all(fam, 8.0, l, "top").unwrap();
                 let mut centers: Vec<f64> = p
                     .entities

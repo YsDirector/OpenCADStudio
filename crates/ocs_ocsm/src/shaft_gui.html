@@ -78,11 +78,6 @@
   <div class="card">
     <h2>视图（预览与生成都按这个走）</h2>
     <div class="row" id="viewRow"></div>
-    <div class="hint">
-      <b>常规</b>（默认）= 只画外形可见线；<b>剖视</b> = 同一套轮廓 + ANSI31 剖面线
-      （<code>5剖面线层</code>）。双视图已移除（旧 <code>VIEW 双</code> 明确报错）。
-      行文本里也可写 <code>VIEW 剖视</code>（独立一行或段内关键字均可）。
-    </div>
   </div>
 
   <!-- ③ 段表：一行一段，从左到右拼接 -->
@@ -122,43 +117,20 @@
     </div>
     <div class="hint" id="exprErr"></div>
     <div class="hint" id="segHint">
-      <b>打开即为空表</b>：点上方「+ 加行」添加第一段（用 M/GEAR/SPLINE 等段型），
-      或把表达式粘贴到下方「行文本」/「粘贴齿轮表达式」框。<br>
-      <code>E</code> 留空 = 圆柱段；<code>M</code> 螺纹段要求 S=E（不写值 = 小径 0.85d 简化画法，
-      <code>M1.5</code> = 螺距 P 精确小径）；退刀槽 <b>就是一小段小直径轴段</b>（例 <code>S24 E24 L5</code>），
-      或在行文本里写段级 <code>RL@L</code> / <code>RL@R</code>（任意圆柱段；给 <code>P</code> 查 GB/T 3 表 2，
-      或显式 <code>g1/g2/dg/r</code>）。<b>SPLINE 矩形花键段</b>：规格代号从 GB/T 1144 规格表
-      （轻/中系列共 33 条）<b>下拉选择</b>，选中自动带出 d/D/B/de/h/l 派生值（de 框可改 = 覆盖）；
-      下拉末尾「自定义…」手输表外规格（表外必须给 <code>de</code>）。满齿段长 <code>L</code>
-      （段长 = L + 收尾 l）；不能与 CH/OV/M/GEAR 同段。
-      <b>平键（轴槽）</b>：段表的 <b>KEY 列</b>（与螺纹/花键同级的段类型）—— 勾选后给键型 A/B/C、键长 L（所选键型的键长）、位置中置/端置；
-      <b>b×h 与 t1 由该段直径 d 查 GB/T 1095 自动定、只读显示</b>（显式覆盖也必须落在该轴径档标准配对）；
-      槽长按型别折算（B：中置 +b / 端置 +b/2；C：中置 +b/2 / 端置不折算）。
-      显示口径：<b>中置常规侧视恒显示 A（双圆头）</b>，<b>端置 B/C 显示 C（单圆头）</b>。
-      <b>双槽</b> = 绕轴心 180° 对置的第二个槽，<b>仅剖视图体现</b>（常规侧视不变；可承受转矩约为单键联接的 1.5 倍）。
-      与 GEAR / SPLINE / M / OV 互斥。
-      <b>GEAR 齿轮段</b>的 H = 齿宽（留空 10m）、α = 压力角（留空 20°）；
-      <b>TODO</b>：GEAR 段目前只支持模数制 M（径节制 DP 走 <code>OCSMGEAR</code> 齿轮工具，端/侧/剖视共用几何）。<br>
-      <b>表达式互通</b>：齿轮窗口的「轴生成器表达式」可直接粘贴到上面的表达式框或某行的 GEAR 输入框
-      （自动解析成段表；允许 <code>OCSMGEAR</code>/<code>OCSMSHAFT</code> 前缀、中文空格与多余空格）；
-      「打开齿轮生成器」一键开齿轮窗口。轴段只做外齿轮/外矩形花键，内齿表达式不能用在轴上；渐开线花键请用齿轮生成器的花键模式。
+      <b>打开即为空表</b>：点「+ 加行」添加第一段（S/E/L 圆柱段，或勾 M / KEY / GEAR / SPLINE 段型），
+      或把表达式粘贴到上方表达式框 / 下方行文本。
     </div>
     <div id="segErr"></div>
   </div>
 
   <!-- ④ 行文本：可粘贴/编辑；解析成功回填段表，失败标行号 -->
   <div class="card">
-    <h2>行文本（可粘贴/编辑；解析成功自动回填段表，失败标行号与原因）</h2>
-    <textarea id="dsl" spellcheck="false"></textarea>
+    <h2>行文本（可粘贴/编辑；解析成功后回填段表）</h2>
+    <textarea id="dsl" spellcheck="false" title="段级退刀槽：RL@L / RL@R（P 查 GB/T 3 表 2，或显式 g1/g2/dg/r）；齿轮段可加 ALPHA（省略 = 20°）；矩形花键：表内规格 de 自动查表，de 63 = 覆盖，表外规格必须给 de，引入倒角在相邻段写 CH；视图可写 VIEW 剖视（独立一行或段内关键字）"></textarea>
     <div id="dslErr"></div>
     <div class="hint" id="dslHint">
-      一行一段，从左到右拼接；多段可用 <code>|</code> 或换行分隔；大小写不敏感、段内关键字顺序无关。
-      例：<code>OCSMSHAFT S30 E30 L45 CH2@L | S40 E40 L7 M1.5 | S36 E36 L5 | GEAR M3 Z20 VIEW 剖视</code>；
-      齿轮段可加压力角：<code>GEAR M3 Z20 ALPHA25</code>（省略 = 20°；与 <code>OCSMGEAR</code> 同口径）；
-      段级退刀槽：<code>S25 E25 L32 RL@L P1.5</code>（贴左端查表 2）或
-      <code>RL@R g1 2.5 g2 4.5 dg 22.7 r 0.8</code>（显式尺寸）；<code>ES…</code> 旧写法已取消。
-      矩形花键段：<code>SPLINE 6x23x26x6 L30</code>（规格代号可在段表下拉选择/自定义；
-      表内规格 de 自动查表，<code>de 63</code> = 覆盖；表外规格必须给 de；引入倒角在相邻段写 CH）。
+      一行一段，从左到右拼接；多段用 <code>|</code> 或换行分隔；大小写不敏感、段内关键字顺序无关。
+      例：<code>OCSMSHAFT S30 E30 L45 CH2@L | S40 E40 L7 M1.5 | S36 E36 L5 | GEAR M3 Z20 VIEW 剖视</code>。
     </div>
   </div>
 
@@ -175,15 +147,8 @@
       <label for="rot">旋转 rot</label>
       <div class="ctl"><input type="number" id="rot" placeholder="0"><span class="unit">°（逆时针）</span></div>
     </div>
-    <button class="btn" id="out">生成到图纸</button>
+    <button class="btn" id="out" title="生成物：轮廓/端面/倒角/槽与边界竖线 → 1轮廓实线层；螺纹小径/螺尾 → 2细线层（磨外圆/OV 不画砂轮细线）；轴线/分度线 → 3中心线层；剖视剖面线 → 5剖面线层；齿轮段只画齿顶线 + 分度线（不画齿根线）；花键段大径线 + 小径细线 + 收尾弧（R=de/2）→ 2细线层，剖视改轮廓线并打轴线↔小径剖面线；颜色/线型/线宽一律 ByLayer；不含尺寸标注">生成到图纸</button>
     <div id="status"></div>
-    <div class="hint">
-      生成物：轮廓/端面/倒角/槽与边界竖线 → <code>1轮廓实线层</code>、螺纹小径/螺尾 → <code>2细线层</code>（磨外圆/OV 不画砂轮细线）、
-      轴线/分度线 → <code>3中心线层</code>、剖视剖面线 → <code>5剖面线层</code>；
-      齿轮段与齿轮工具同口径：只画齿顶线 + 分度线，<b>不画齿根线</b>；
-      花键段：大径线 + 小径细线 + 收尾弧（R=de/2）落 <code>2细线层</code>，剖视改轮廓线并打轴线↔小径剖面线；
-      颜色/线型/线宽一律 <b>ByLayer</b>；<b>不含尺寸标注</b>。
-    </div>
   </div>
 </div>
 
@@ -210,6 +175,8 @@ let splineSpecs = [];       // 矩形花键规格表（/api/parts → detail_spl
 // sizes = 每档 {d(=b), label, lengths(L 系列∩L<10b), l_min/l_max, extra(h/c)}；
 // ranges = 轴径→键宽选型区间（1979 d 列，仅初选）。
 let keyCatalog = {};
+// 导向平键（GB/T 1097）数据：`sizes`（每档含 d0/l0/lengths）+ `length_rows`（L→L1/L2/L3）。
+let keyCatalog1097 = {};
 const SPLINE_CUSTOM = "__custom__";   // 下拉末尾「自定义规格…」的哨兵值
 let curView = "normal";     // 当前视图（默认常规）
 let seqPreview = 0;         // 过期响应丢弃序号
@@ -226,7 +193,7 @@ function blankRow() {
     ch: { l: { on: false, c: "2" }, r: { on: false, c: "2" } },
     ov: { l: { on: false, b1: "" }, r: { on: false, b1: "" } },
     m: { on: false, p: "" },
-    key: { on: false, kind: "A", l: "", place: "mid", b: "", h: "", t1: "", double: false },
+    key: { on: false, kind: "A", l: "", place: "mid", b: "", h: "", t1: "", double: false, guided: false },
     gear: { on: false, mark: "GEAR", kind: "EX", m: "3", z: "20", x: "", da: "", df: "", h: "", alpha: "" },
     spline: { on: false, spec: "6x23x26x6", len: "30", de: "" },
   };
@@ -277,9 +244,20 @@ async function loadSplineSpecs() {
         };
       }
     }
+    keyCatalog1097 = {};
+    for (const [kind, id] of [["A", "key_1097_a"], ["B", "key_1097_b"]]) {
+      const f = fam[id];
+      if (f) {
+        keyCatalog1097[kind] = {
+          sizes: Array.isArray(f.sizes) ? f.sizes : [],
+          lengthRows: Array.isArray(f.length_rows) ? f.length_rows : [],
+        };
+      }
+    }
   } catch (e) {
     splineSpecs = [];
     keyCatalog = {};
+    keyCatalog1097 = {};
   }
 }
 
@@ -307,9 +285,25 @@ function keySizeRow(kind, b) {
   return cat.sizes.find((s) => Math.abs(Number(s.b !== undefined ? s.b : s.d) - b) < 1e-9) || null;
 }
 
-// 段表 KEY 列：键长 L 下拉（按 d 定出的 b 取平键族 L 系列 ∩ L<10b）。
+// 1097（导向平键）某 b 档（sizes[].d = b；含 d0/l0/lengths）；拿不到 → null。
+function key1097Size(kind, b) {
+  const cat = keyCatalog1097[kind];
+  if (!cat || !Number.isFinite(b)) return null;
+  return cat.sizes.find((s) => Math.abs(Number(s.d) - b) < 1e-9) || null;
+}
+
+// 1097 长度 L → {l1,l2,l3}（26 档；表外 → null）。
+function key1097LenRow(kind, l) {
+  const cat = keyCatalog1097[kind];
+  if (!cat || !Number.isFinite(l)) return null;
+  return cat.lengthRows.find((r) => Math.abs(Number(r.l) - l) < 1e-9) || null;
+}
+
+// 段表 KEY 列：键长 L 下拉（按 d 定出的 b 取平键族 L 系列 ∩ L<10b；
+// 导向时改取 GB/T 1097 长度系列 25…450，槽长 = 键长不折算）。
 function keyLengthOptionsHtml(r) {
-  const row = keySizeRow(r.key.kind, shaftKeyB(r.key.kind, numOrNaN(r.s)));
+  const b = shaftKeyB("A", numOrNaN(r.s));
+  const row = r.key.guided ? key1097Size(r.key.kind, b) : keySizeRow(r.key.kind, b);
   const lengths = row && Array.isArray(row.lengths) ? row.lengths : [];
   return lengths.map((L) => `<option value="${fmt(L)}"${Math.abs(Number(r.key.l) - L) < 1e-9 ? " selected" : ""}>${fmt(L)}</option>`).join("");
 }
@@ -331,16 +325,24 @@ function keySlotLen(kind, place, l, b, t1) {
 
 function keyDeriveHtml(r) {
   const d = numOrNaN(r.s);
-  const range = shaftKeyRange(r.key.kind, d);
+  const range = shaftKeyRange("A", d);
   if (!range) return "d" + (Number.isFinite(d) ? fmt(d) : "?") + " 不在 GB/T 1095 选型表";
   const b = Number(range.b);
   const t1 = range.t1 !== undefined ? Number(range.t1) : NaN;
-  const size = keySizeRow(r.key.kind, b);
+  const size = r.key.guided ? key1097Size(r.key.kind, b) : keySizeRow(r.key.kind, b);
   const hTxt = size && size.h !== undefined ? "×h" + fmt(size.h) : "×h?";
-  let txt = "d" + fmt(d) + " → b" + fmt(b) + hTxt + (Number.isFinite(t1) ? " t1=" + fmt(t1) : "");
+  let txt = (r.key.guided ? "导向1097：" : "") + "d" + fmt(d) + " → b" + fmt(b) + hTxt + (Number.isFinite(t1) ? " t1=" + fmt(t1) : "");
   const l = numOrNaN(r.key.l);
   if (l > 0 && Number.isFinite(b)) {
-    txt += " · 槽长 " + fmt(keySlotLen(r.key.kind, r.key.place, l, b, Number.isFinite(t1) ? t1 : 0));
+    if (r.key.guided) {
+      if (!size) return txt + "（GB/T 1097 表无此 b）";
+      const lr = key1097LenRow(r.key.kind, l);
+      txt += " · 槽长 " + fmt(l) + "（= 键长 L）";
+      if (lr) txt += " · L1=" + fmt(lr.l1) + " L3=" + fmt(lr.l3);
+      txt += " · 固定螺钉孔 M" + fmt(size.d0) + "×深" + fmt(size.l0) + "×2";
+    } else {
+      txt += " · 槽长 " + fmt(keySlotLen(r.key.kind, r.key.place, l, b, Number.isFinite(t1) ? t1 : 0));
+    }
   }
   const over = String(r.key.b).trim() !== "" || String(r.key.h).trim() !== "" ? "（覆盖）" : "";
   return txt + over;
@@ -349,7 +351,8 @@ function keyDeriveHtml(r) {
 // 段表 KEY 列状态归一：勾上后若 L 不在该 b 的合法系列里，取第一个合法值。
 function normalizeKeyRow(r) {
   if (!r.key.on) return;
-  const row = keySizeRow(r.key.kind, shaftKeyB(r.key.kind, numOrNaN(r.s)));
+  const b = shaftKeyB("A", numOrNaN(r.s));
+  const row = r.key.guided ? key1097Size(r.key.kind, b) : keySizeRow(r.key.kind, b);
   const lengths = row && Array.isArray(row.lengths) ? row.lengths : [];
   if (lengths.length && !lengths.some((L) => Math.abs(Number(L) - Number(r.key.l)) < 1e-9)) {
     r.key.l = fmt(lengths[0]);
@@ -446,6 +449,9 @@ function renderViews() {
     b.type = "button";
     b.className = "btn ghost" + (v.key === curView ? " on" : "");
     b.textContent = v.name;
+    b.title = v.key === "section"
+      ? "同一套轮廓 + ANSI31 剖面线（剖面线落 5剖面线层）"
+      : "只画外形可见线";
     b.addEventListener("click", () => {
       if (curView === v.key) return;
       curView = v.key;
@@ -476,39 +482,43 @@ function rowHtml(r, i) {
       ? `<input type="number" step="0.1" min="0" data-f="ov.${end}.b1" value="${esc(o.b1)}" placeholder="默认"${dis(gearOn || mOn || splineOn)}>`
       : `<input type="number" step="0.1" min="0" data-f="ch.${end}.c" value="${esc(o.c)}" placeholder="2"${dis(gearOn || splineOn)}>`;
     const boxDis = kind === "ov" ? (gearOn || mOn || splineOn) : (gearOn || splineOn);
-    return `<div class="frow"><label class="chk"><input type="checkbox" data-f="${kind}.${end}.on"${ck(o.on)}${dis(boxDis)}>${label}</label>${extra}</div>`;
+    const boxTitle = kind === "ov"
+      ? "越程槽（b1 留空 = 按直径查 GB/T 3 表 2）"
+      : "端部倒角（C×45°）";
+    return `<div class="frow"><label class="chk"><input type="checkbox" data-f="${kind}.${end}.on" title="${boxTitle}"${ck(o.on)}${dis(boxDis)}>${label}</label>${extra}</div>`;
   };
   return `<tr data-row="${i}" class="${i === sel ? "sel" : ""}">
     <td class="idx">${i + 1}</td>
-    <td><input type="number" step="0.1" min="0" data-f="s" value="${esc(r.s)}"${dis(gearOn || splineOn)}></td>
-    <td><input type="number" step="0.1" min="0" data-f="e" value="${esc(r.e)}" placeholder="= S"${dis(gearOn || splineOn)}></td>
-    <td><input type="number" step="0.1" min="0" data-f="l" value="${esc(r.l)}"${dis(gearOn || splineOn)}></td>
+    <td><input type="number" step="0.1" min="0" data-f="s" title="起始直径 S（mm）" value="${esc(r.s)}"${dis(gearOn || splineOn)}></td>
+    <td><input type="number" step="0.1" min="0" data-f="e" title="终点直径 E（mm）；留空 = 圆柱段（E = S）" value="${esc(r.e)}" placeholder="= S"${dis(gearOn || splineOn)}></td>
+    <td><input type="number" step="0.1" min="0" data-f="l" title="段长 L（mm）" value="${esc(r.l)}"${dis(gearOn || splineOn)}></td>
     <td class="feat">${endCell("ch", "l", r.ch.l)}${endCell("ch", "r", r.ch.r)}</td>
     <td class="feat">${endCell("ov", "l", r.ov.l)}${endCell("ov", "r", r.ov.r)}</td>
-    <td class="feat"><div class="frow"><label class="chk"><input type="checkbox" data-f="m.on"${ck(mOn)}${dis(gearOn || ovOn || splineOn || keyOn)}>M</label>
+    <td class="feat"><div class="frow"><label class="chk"><input type="checkbox" data-f="m.on" title="螺纹段：要求 S=E；不写值 = 小径 0.85d 简化画法；M1.5 = 螺距 P 精确小径"${ck(mOn)}${dis(gearOn || ovOn || splineOn || keyOn)}>M</label>
       <input type="number" step="0.1" min="0" data-f="m.p" value="${esc(r.m.p)}" placeholder="0.85d"${dis(gearOn || ovOn || splineOn || keyOn)}></div></td>
-    <td class="feat"><div class="frow"><label class="chk"><input type="checkbox" data-f="key.on"${ck(keyOn)}${dis(gearOn || splineOn || mOn || ovOn)}>KEY</label>
-      <select data-f="key.kind" title="键型 A/B/C（复用 GB/T 1096 平键族 key_1096_a/b/c；槽长会自动按型别折算）"${dis(!keyOn)}><option value="A"${r.key.kind === "A" ? " selected" : ""}>A</option><option value="B"${r.key.kind === "B" ? " selected" : ""}>B</option><option value="C"${r.key.kind === "C" ? " selected" : ""}>C</option></select>
-      <select data-f="key.place" title="位置：中置 = 槽两端封闭（居中于净圆柱）；端置 = 开在轴首/末段自由端（槽长 = 键长 + t1）"${dis(!keyOn)}><option value="mid"${r.key.place !== "end" ? " selected" : ""}>中置</option><option value="end"${r.key.place === "end" ? " selected" : ""}>端置</option></select></div>
-      <div class="frow"><span class="chk">L</span><select data-f="key.l"${dis(!keyOn)}>${keyLengthOptionsHtml(r)}</select>
-      <label class="chk" title="双键槽：绕轴心 180° 对置（仅剖视图体现；可承受转矩约为单键联接的 1.5 倍）"><input type="checkbox" data-f="key.double"${ck(r.key.double)}${dis(!keyOn)}>双槽</label>
-      <span class="chk key-derive" title="由轴段直径查 GB/T 1095 得 b×h；t1 按 b 查表">${keyDeriveHtml(r)}</span></div>
+    <td class="feat"><div class="frow"><label class="chk"><input type="checkbox" data-f="key.on" title="平键轴槽（与 GEAR / SPLINE / M / OV 互斥）；b×h 与 t1 由该段直径 d 查 GB/T 1095 自动定"${ck(keyOn)}${dis(gearOn || splineOn || mOn || ovOn)}>KEY</label>
+      <select data-f="key.kind" title="键型 A/B/C（复用 GB/T 1096 平键族）；槽长按型别折算：B 中置 +b / 端置 +b/2，C 中置 +b/2 / 端置不折算"${dis(!keyOn)}><option value="A"${r.key.kind === "A" ? " selected" : ""}>A</option><option value="B"${r.key.kind === "B" ? " selected" : ""}>B</option>${r.key.guided ? "" : `<option value="C"${r.key.kind === "C" ? " selected" : ""}>C</option>`}</select>
+      <select data-f="key.place" title="位置：中置 = 槽两端封闭（居中于净圆柱）；端置 = 开在轴首/末段自由端（槽长 = 键长 + t1）；显示：中置常规侧视恒显示 A（双圆头），端置 B/C 显示 C（单圆头）"${dis(!keyOn)}><option value="mid"${r.key.place !== "end" ? " selected" : ""}>中置</option><option value="end"${r.key.place === "end" ? " selected" : ""}>端置</option></select>
+      <label class="chk" title="导向平键（GB/T 1097）：槽上自动画 2 个固定螺钉螺纹孔（d0×L0、118° 钻尖、孔心距槽端 L3）；只 A/B；L 取 1097 系列；槽长 = 键长；与双槽互斥（起键孔是 1096 概念）"><input type="checkbox" data-f="key.guided"${ck(r.key.guided)}${dis(!keyOn)}>导向</label></div>
+      <div class="frow"><span class="chk">L</span><select data-f="key.l" title="键长 L（1096：平键族系列∩L<10b；导向：GB/T 1097 系列 25…450∩L<10b）"${dis(!keyOn)}>${keyLengthOptionsHtml(r)}</select>
+      <label class="chk" title="双键槽：绕轴心 180° 对置（仅剖视图体现；可承受转矩约为单键联接的 1.5 倍）；导向平键不支持"><input type="checkbox" data-f="key.double"${ck(r.key.double)}${dis(!keyOn || r.key.guided)}>双槽</label>
+      <span class="chk key-derive" title="由轴段直径查 GB/T 1095 得 b×h；t1 按 b 查表；槽长/固定螺钉孔按所选标准派生">${keyDeriveHtml(r)}</span></div>
       </td>
-    <td class="feat"><div class="frow"><label class="chk"><input type="checkbox" data-f="gear.on"${ck(gearOn)}${dis(splineOn || keyOn)}>GEAR</label>
+    <td class="feat"><div class="frow"><label class="chk"><input type="checkbox" data-f="gear.on" title="齿轮 / 渐开线齿形段（与 KEY / SPLINE / M / OV 互斥）；轴段只支持模数制 M"${ck(gearOn)}${dis(splineOn || keyOn)}>GEAR</label>
       <select data-f="gear.mark" title="MARK 画法开关：SPLINE（渐开线花键）常规侧视图画小径细实线；GEAR（齿轮）不画"${dis(!gearOn)}><option value="GEAR"${r.gear.mark === "GEAR" ? " selected" : ""}>GEAR</option><option value="SPLINE"${r.gear.mark === "SPLINE" ? " selected" : ""}>SPLINE</option></select>
       <select data-f="gear.kind" title="内/外齿（IN = 内齿轮/内花键）"${dis(!gearOn)}><option value="EX"${r.gear.kind === "EX" ? " selected" : ""}>EX</option><option value="IN"${r.gear.kind === "IN" ? " selected" : ""}>IN</option></select></div>
-      <div class="frow"><span class="chk">m</span><input type="number" step="0.1" min="0" data-f="gear.m" value="${esc(r.gear.m)}"${dis(!gearOn)}>
-      <span class="chk">z</span><input type="number" step="1" min="2" data-f="gear.z" value="${esc(r.gear.z)}"${dis(!gearOn)}>
-      <span class="chk">X</span><input type="number" step="0.05" data-f="gear.x" value="${esc(r.gear.x)}" placeholder="0" style="width:52px"${dis(!gearOn)}></div>
-      <div class="frow"><span class="chk">DA</span><input type="number" step="0.1" min="0" data-f="gear.da" value="${esc(r.gear.da)}" placeholder="推" style="width:64px"${dis(!gearOn)}>
-      <span class="chk">DF</span><input type="number" step="0.1" min="0" data-f="gear.df" value="${esc(r.gear.df)}" placeholder="推" style="width:64px"${dis(!gearOn)}>
-      <span class="chk">H</span><input type="number" step="0.1" min="0" data-f="gear.h" value="${esc(r.gear.h)}" placeholder="10m" style="width:52px"${dis(!gearOn)}>
+      <div class="frow"><span class="chk">m</span><input type="number" step="0.1" min="0" data-f="gear.m" title="模数 m；轴段齿形段只支持模数制 M（径节制 DP 请用齿轮生成器）" value="${esc(r.gear.m)}"${dis(!gearOn)}>
+      <span class="chk">z</span><input type="number" step="1" min="2" data-f="gear.z" title="齿数 z（≥2）" value="${esc(r.gear.z)}"${dis(!gearOn)}>
+      <span class="chk">X</span><input type="number" step="0.05" data-f="gear.x" title="变位系数 X（默认 0 = 不变位）" value="${esc(r.gear.x)}" placeholder="0" style="width:52px"${dis(!gearOn)}></div>
+      <div class="frow"><span class="chk">DA</span><input type="number" step="0.1" min="0" data-f="gear.da" title="齿顶圆直径 DA（留空 = 按 m/z/α 自动推算）" value="${esc(r.gear.da)}" placeholder="推" style="width:64px"${dis(!gearOn)}>
+      <span class="chk">DF</span><input type="number" step="0.1" min="0" data-f="gear.df" title="齿根圆直径 DF（留空 = 按 m/z/α 自动推算）" value="${esc(r.gear.df)}" placeholder="推" style="width:64px"${dis(!gearOn)}>
+      <span class="chk">H</span><input type="number" step="0.1" min="0" data-f="gear.h" title="齿宽 H（留空 = 10m）" value="${esc(r.gear.h)}" placeholder="10m" style="width:52px"${dis(!gearOn)}>
       <span class="chk">α</span><input type="number" step="0.5" min="10.1" max="49.9" data-f="gear.alpha" value="${esc(r.gear.alpha)}" placeholder="20" title="基准齿形角，度（省略 = 20°，可给 10°<α<50°）" style="width:58px"${dis(!gearOn)}></div></td>
-    <td class="feat"><div class="frow"><label class="chk"><input type="checkbox" data-f="spline.on"${ck(splineOn)}${dis(gearOn || keyOn)}>SPLINE</label></div>
-      <div class="frow"><select data-f="spline.spec" title="表内规格下拉；表外规格选「自定义…」"${dis(!splineOn)}>${splineOptionsHtml(specSel)}</select></div>
-      <div class="frow"><input type="text" data-f="spline.spec" value="${esc(r.spline.spec)}" placeholder="自定义 N×d×D×B" style="width:128px${specHit ? ";display:none" : ""}"${dis(!splineOn)}></div>
-      <div class="frow"><span class="chk">L</span><input type="number" step="0.1" min="0" data-f="spline.len" value="${esc(r.spline.len)}" placeholder="满齿段长"${dis(!splineOn)}>
-      <span class="chk">de</span><input type="number" step="0.1" min="0" data-f="spline.de" value="${esc(r.spline.de)}" placeholder="${specHit ? fmt(specHit.de) : "表外必给"}" style="width:52px"${dis(!splineOn)}></div>
+    <td class="feat"><div class="frow"><label class="chk"><input type="checkbox" data-f="spline.on" title="矩形花键段（GB/T 1144 轻/中系列 33 条，规格下拉）；不能与 CH/OV/M/GEAR 同段"${ck(splineOn)}${dis(gearOn || keyOn)}>SPLINE</label></div>
+      <div class="frow"><select data-f="spline.spec" title="规格来自 GB/T 1144 轻/中系列（33 条）；选中自动带出 d/D/B/de/h/l（de 可改 = 覆盖）；表外规格选「自定义…」并必须给 de"${dis(!splineOn)}>${splineOptionsHtml(specSel)}</select></div>
+      <div class="frow"><input type="text" data-f="spline.spec" title="表外规格 N×d×D×B（必须给 de）" value="${esc(r.spline.spec)}" placeholder="自定义 N×d×D×B" style="width:128px${specHit ? ";display:none" : ""}"${dis(!splineOn)}></div>
+      <div class="frow"><span class="chk">L</span><input type="number" step="0.1" min="0" data-f="spline.len" title="满齿段长 L（段长 = L + 收尾 l）" value="${esc(r.spline.len)}" placeholder="满齿段长"${dis(!splineOn)}>
+      <span class="chk">de</span><input type="number" step="0.1" min="0" data-f="spline.de" title="滚刀直径 de；表内规格自动查表，手改 = 覆盖；表外规格必给" value="${esc(r.spline.de)}" placeholder="${specHit ? fmt(specHit.de) : "表外必给"}" style="width:52px"${dis(!splineOn)}></div>
       <div class="frow spline-derive" title="小径 d / 大径 D / 键宽 B / 滚刀直径 de / 齿深 h / 收尾长度 l">${esc(splineDerived(r))}</div></td>
   </tr>`;
 }
@@ -615,6 +625,7 @@ function rowToDsl(r) {
       if (String(r.key.h).trim() !== "") s += "h" + numTok(r.key.h);
     }
     if (String(r.key.t1).trim() !== "") s += " t1 " + numTok(r.key.t1);
+    if (r.key.guided) s += " 导向";
     if (r.key.double) s += " 双槽";
   }
   return s;
@@ -683,6 +694,7 @@ function rowFromSegment(seg) {
     r.key.h = seg.keyway.h === null || seg.keyway.h === undefined ? "" : fmt(seg.keyway.h);
     r.key.t1 = seg.keyway.t1 === null || seg.keyway.t1 === undefined ? "" : fmt(seg.keyway.t1);
     r.key.double = !!seg.keyway.double;
+    r.key.guided = !!seg.keyway.guided;
   }
   enforceExclusive(r);
   return r;
@@ -917,6 +929,11 @@ function onTableInput(e) {
   }
   const isCheck = e.target.type === "checkbox";
   setField(r, field, isCheck ? e.target.checked : e.target.value);
+  // 导向平键（GB/T 1097）：与双槽互斥；键型只 A/B（C → 回 A）。
+  if (field === "key.guided" && r.key.guided) {
+    r.key.double = false;
+    if (r.key.kind === "C") r.key.kind = "A";
+  }
   if (field === "s" || field.indexOf("key.") === 0) normalizeKeyRow(r);
   if (isCheck) {
     sel = Number(tr.dataset.row);
@@ -1170,6 +1187,7 @@ function modelFromRows() {
         keyway.t1 = t1;
       }
       if (r.key.double) keyway.double = true;
+      if (r.key.guided) keyway.guided = true;
       seg.keyway = keyway;
     }
     segments.push(seg);

@@ -3070,13 +3070,14 @@ impl PowerDim {
     ) -> Dimension {
         use acadrust::entities::{DimensionAligned, DimensionLinear};
         let (first, second, pt) = (v3(first), v3(second), v3(pt));
+        let lift = linear_text_lift(&self.style_name);
         let dim = match mode {
             PlaceMode::Aligned => {
                 let mut d = DimensionAligned::new(first, second);
                 let axis = (second - first).normalize();
                 d.definition_point = pt;
                 d.base.definition_point = pt;
-                let tp = linear_text_pos(first, second, pt, axis);
+                let tp = linear_text_pos(first, second, pt, axis, lift);
                 d.base.text_middle_point = tp;
                 d.base.insertion_point = tp;
                 d.base.actual_measurement = d.measurement();
@@ -3084,7 +3085,7 @@ impl PowerDim {
             }
             PlaceMode::Horizontal => {
                 let mut d = DimensionLinear::horizontal(first, second);
-                let tp = linear_text_pos(first, second, pt, Vector3::new(1.0, 0.0, 0.0));
+                let tp = linear_text_pos(first, second, pt, Vector3::new(1.0, 0.0, 0.0), lift);
                 d.definition_point = pt;
                 d.base.definition_point = pt;
                 d.base.text_middle_point = tp;
@@ -3094,7 +3095,7 @@ impl PowerDim {
             }
             PlaceMode::Vertical => {
                 let mut d = DimensionLinear::vertical(first, second);
-                let tp = linear_text_pos(first, second, pt, Vector3::new(0.0, 1.0, 0.0));
+                let tp = linear_text_pos(first, second, pt, Vector3::new(0.0, 1.0, 0.0), lift);
                 d.definition_point = pt;
                 d.base.definition_point = pt;
                 d.base.text_middle_point = tp;
@@ -3531,13 +3532,45 @@ pub(crate) fn stamp(mut dim: Dimension, style_name: &str) -> Dimension {
     dim
 }
 
-/// 线性标注文字位置（镜像宿主 linear_dim.rs 的 linear_text_pos）。
-pub(crate) fn linear_text_pos(first: Vector3, second: Vector3, def: Vector3, axis: Vector3) -> Vector3 {
+/// 线性标注文字中心相对尺寸线的法向抬升（世界单位）。
+///
+/// 与宿主 `dimension_text_pos_f64` 的 `perp_off` 同口径：`DIMTXT/2 + DIMGAP`，
+/// 且随样式 `dimscale` 缩放。OCSM_GB 系列样式把 DIMTXT=2.5、DIMGAP=1.0 钉在
+/// `dim_override_record` 的类型专属覆盖里（147/140），缩放取样式名
+/// `OCSM_GB_x{n}` 的 n → 抬升 = 2.25×n；文字底边离线 `DIMGAP×n`=1.0×n
+/// （对照 `OCSMDIMGULIDE1-general.dxf` 匿名块 MTEXT 的 1.0 插入偏移）。
+pub(crate) fn linear_text_lift(style_name: &str) -> f64 {
+    let scale = style_name
+        .strip_prefix("OCSM_GB_x")
+        .and_then(|n| n.parse::<f64>().ok())
+        .filter(|n| n.is_finite() && *n > 0.0)
+        .unwrap_or(1.0);
+    (2.5 / 2.0 + 1.0) * scale
+}
+
+/// 线性标注文字锚点（= 文字中心，默认 MiddleCenter）位置。
+///
+/// 先把两个尺寸界线原点投影到过 `def`、方向 `axis` 的尺寸线上取中点，
+/// 再沿“文字上方”法向抬升 `lift`（见 `linear_text_lift`）。
+/// “上方”与宿主 `text_on_dim_line` 同规则：尺寸线轴归一化到 nx>0
+/// （nx=0 时 ny>0），取 up=(-ny,nx)——反向画的尺寸线文字也在读向的上方。
+pub(crate) fn linear_text_pos(
+    first: Vector3,
+    second: Vector3,
+    def: Vector3,
+    axis: Vector3,
+    lift: f64,
+) -> Vector3 {
     let perp = Vector3::new(-axis.y, axis.x, 0.0);
     let dperp = def.x * perp.x + def.y * perp.y;
     let d1 = first + perp * (dperp - (first.x * perp.x + first.y * perp.y));
     let d2 = second + perp * (dperp - (second.x * perp.x + second.y * perp.y));
-    (d1 + d2) * 0.5 + perp * 0.15
+    let mut n = axis;
+    if n.x < 0.0 || (n.x == 0.0 && n.y < 0.0) {
+        n = n * -1.0;
+    }
+    let up = Vector3::new(-n.y, n.x, 0.0);
+    (d1 + d2) * 0.5 + up * lift
 }
 
 /// 从中心朝 `pt` 方向的圆周点。

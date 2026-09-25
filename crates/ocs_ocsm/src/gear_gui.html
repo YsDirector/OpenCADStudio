@@ -76,11 +76,9 @@
     <div class="form">
       <label>模式</label>
       <div class="ctl">
-        <label class="chk"><input type="checkbox" id="splineMode"> 花键模式（渐开线花键）</label>
+        <label class="chk"><input type="checkbox" id="splineMode" title="勾选 = 渐开线花键（GB/DIN/NF/ANSI）；不勾选 = 普通齿轮（体系 M/DP）。齿轮模式下给花键标准号或 d_B 会明确报错。NF 主参数 A；ANSI = 径节 P + Table 2 五列"> 花键模式（渐开线花键）</label>
         <div class="hint" id="modeHint" style="flex-basis:100%; margin:0">
-          不勾选 = 普通齿轮（体系下拉 M 模数制 / DP 径节制；给花键标准号或 d_B 会明确报错）；
-          勾选 = 渐开线花键（GB/DIN/NF/ANSI 四种体系，内/外花键仍用下面的「齿轮种类」开关切换）。
-          NF 已入库（公称直径 A 主参数，p18/p20/p21/p22 共 288 行）；ANSI 已接入（径节 P + Table 2 五列）。
+          不勾选 = 普通齿轮；勾选 = 渐开线花键（内/外花键仍用下面的「齿轮种类」开关切换）。
         </div>
       </div>
 
@@ -95,7 +93,6 @@
           <option value="NF">NF E22-141（A 主参数，已入库）</option>
           <option value="ANSI">ANSI B92.1（径节 P，公式驱动）</option>
         </select>
-        <div class="hint" id="stdHint" style="flex-basis:100%; margin:0"></div>
       </div>
 
       <label id="profileLabel">花键齿廓类型</label>
@@ -106,22 +103,15 @@
         <input type="number" id="db" min="0" step="0.5" list="dinDbList" placeholder="DIN 5480-2 查表（必给；z 由 d_B 与 m 决定）">
         <datalist id="dinDbList"></datalist>
         <datalist id="nfAList"></datalist>
-        <div class="hint" id="dbHint" style="flex-basis:100%; margin:0">
-          d_B 只属于 DIN 5480；NF E22-141 用公称直径 A。GB/T 3478 下不给（本体系没有基准直径）。
-          给 d_B / A 后 m 或 z 可空一个：由表定另一个。
-        </div>
         <div class="hint warn" id="dbListHint" style="flex-basis:100%; margin:0"></div>
       </div>
 
       <label id="sysLabel" for="sysSel">齿轮体系</label>
       <div class="ctl" id="sysCtl">
-        <select id="sysSel">
+        <select id="sysSel" title="模数制用 m；径节制用 DP（块名/规格保留 DP 原值，避免与同模数件串块）。M 与 DP 只能选一个。">
           <option value="M">M 模数制（输入模数 m）</option>
           <option value="DP">DP 径节制（输入径节 DP，m = 25.4/DP）</option>
         </select>
-        <div class="hint" id="sysHint" style="flex-basis:100%; margin:0">
-          模数制用 m；径节制用 DP（块名/规格保留 DP 原值，避免与同模数件串块）。M 与 DP 只能选一个。
-        </div>
       </div>
 
       <label for="mSel" id="mLabel">模数[m/Mn]</label>
@@ -133,8 +123,7 @@
 
       <label for="dp" id="dpLabel">径节[DP]</label>
       <div class="ctl" id="dpCtl">
-        <input type="number" id="dp" value="8" min="0.01" step="0.25" placeholder="任意 DP（系列待定）">
-        <span class="hint" style="margin:0">m = 25.4/DP（径节系列下拉暂不做，可输入任意 DP）</span>
+        <input type="number" id="dp" value="8" min="0.01" step="0.25" placeholder="任意 DP（系列待定）" title="m = 25.4/DP（径节系列下拉暂不做，可输入任意 DP；块名/规格保留 DP 原值）">
       </div>
 
       <label for="z" id="zLabel">齿数[z]</label>
@@ -146,9 +135,6 @@
         <input type="number" id="alpha" value="20" min="10.1" max="49.9" step="0.1"
                title="度；默认 20°，常用 14.5/15/17.5/20/22.5/25/30/37.5/45（10°<α<50°）">
         <span class="unit">°</span>
-        <div class="hint" id="alphaHint" style="flex-basis:100%; margin-top:2px">
-          默认 20°（GB/T 1356）；ha*/c*/齿根圆角 ρ=0.38m <b>不随 α 自动变</b>，14.5°/30°/45° 等系统请按所用标准手动改 ha*/c*（45° 花键常用 ha*≈0.5，本工具下限 0.5）
-        </div>
       </div>
 
       <label for="ha">齿顶高系数[ha*]</label>
@@ -165,22 +151,17 @@
         <span class="unit">′</span>
         <input type="number" id="betaS" value="0" min="0" step="1" title="秒">
         <span class="unit">″</span>
-        <div class="hint" id="betaHint" style="flex-basis:100%; margin-top:2px">
-          右旋为正、左旋在度数里填负数；β≠0 = 斜齿轮：侧视图会加三条细实线
-        </div>
       </div>
 
       <label for="h" id="hLabel">厚度[h]</label>
       <div class="ctl">
         <input type="number" id="h" value="20" min="0.01" step="1">
         <span class="unit">mm</span>
-        <span class="hint" id="hRule" style="margin:0">默认 10m（模板 20 @ m=2）</span>
       </div>
 
       <label for="chamfer" id="chamferLabel">轴向倒角距离[d]</label>
       <div class="ctl" id="chamferCtl">
-        <input type="text" id="chamfer" value="1" disabled>
-        <span class="hint" style="margin:0">自动 = round(0.6m)（用户定案）</span>
+        <input type="text" id="chamfer" value="1" disabled title="自动 = round(0.6m)，45° 落在齿顶圆柱两端（用户定案）">
       </div>
 
       <label id="hfLabel">花键齿根高系数[hf*]</label>
@@ -193,7 +174,7 @@
       <div class="ctl" id="cfCtl"><input type="number" id="cf" value="0.1" step="0.01"></div>
 
       <label for="x">变位系数[Xn]</label>
-      <div class="ctl"><input type="number" id="x" value="0" step="0.05"><div class="hint" id="xHint" style="flex-basis:100%; margin:0"></div></div>
+      <div class="ctl"><input type="number" id="x" value="0" step="0.05"></div>
     </div>
 
     <!-- ②.5 种类说明 + 命令行等价用法：切种类/改参数/切视图时同步刷新 -->
@@ -213,14 +194,9 @@
 
     <!-- ④ 校验红字 + 主按钮（流程与零件库「零件出库」一致） -->
     <div class="hint bad" id="warn"></div>
-    <button class="btn" id="out">生成到图纸</button>
+    <button class="btn" id="out" title="生成物：轮廓 → 1轮廓实线层、齿根/细线 → 2细线层、分度圆/中心线 → 3中心线层、剖面线 → 5剖面线层；颜色/线型/线宽一律 ByLayer；不含尺寸标注">生成到图纸</button>
     <div id="status"></div>
-
-    <div class="hint">
-      生成物：轮廓 → <code>1轮廓实线层</code>、齿根/细线 → <code>2细线层</code>、
-      分度圆/中心线 → <code>3中心线层</code>、剖面线 → <code>5剖面线层</code>；
-      颜色/线型/线宽一律 <b>ByLayer</b>；<b>不含尺寸标注</b>。
-    </div>
+    <div class="hint">调参数 → 看预览 → 点「生成到图纸」回图纸放置。</div>
   </div>
 </div>
 
@@ -410,20 +386,21 @@ function syncDefaultH(force) {
   const v = defaultH();
   if (Number.isFinite(v)) el("h").value = fmt(v);
 }
-// 厚度/有效长度提示（花键模式：外花键 = 侧视/剖视、内花键 = 剖视的有效长度 L）。
+// 厚度/有效长度口径（花键模式：外花键 = 侧视/剖视、内花键 = 剖视的有效长度 L）→ h 的 title。
 function syncHRule() {
   if (isSpline()) {
-    el("hRule").textContent = "花键有效长度 L（" + (curKind === "internal" ? "剖视" : "侧视/剖视") + "用；端视图不需要）" + (hTouched ? " · 已手动修改" : "");
+    el("h").title = "花键有效长度 L（" + (curKind === "internal" ? "剖视" : "侧视/剖视") + "用；端视图不需要）" + (hTouched ? " · 已手动修改" : "");
     return;
   }
-  el("hRule").textContent = (curKind === "internal" ? "默认 15m（模板 30 @ m=2）" : "默认 10m（模板 20 @ m=2）")
+  el("h").title = (curKind === "internal" ? "默认 15m（模板 30 @ m=2）" : "默认 10m（模板 20 @ m=2）")
     + (hTouched ? " · 已手动修改" : "");
 }
-// 螺旋角提示随种类变：内齿轮没有侧视图，斜齿按轴向剖面画、不画三条螺旋线
+// 螺旋角口径随种类变（内齿轮没有侧视图，斜齿按轴向剖面画、不画三条螺旋线）→ β 三框 title。
 function syncBetaHint() {
-  el("betaHint").textContent = curKind === "internal"
+  const tip = curKind === "internal"
     ? "右旋为正、左旋在度数里填负数；内齿轮斜齿按轴向剖面画，不画三条螺旋线细实线"
     : "右旋为正、左旋在度数里填负数；β≠0 = 斜齿轮：侧视图会加三条细实线";
+  for (const id of ["betaD", "betaM", "betaS"]) el(id).title = tip;
 }
 
 // 压力角默认值（不随 m/种类变；花键模式由齿廓预设控制，不走这里）
@@ -440,14 +417,14 @@ function syncAlphaSelect() {
   const hit = Number.isFinite(a) ? ALPHAS.find((v) => Math.abs(v - a) < 1e-9) : undefined;
   el("alphaSel").value = hit ? String(hit) : "custom";
 }
-// 压力角提示：齿轮默认 20° + 系数不随 α 自动变的提醒；花键模式由齿廓预设控制。
+// 压力角口径：齿轮默认 20° + 系数不随 α 自动变的提醒；花键模式由齿廓预设控制 → alpha 的 title。
 function syncAlphaHint() {
   if (isSpline()) {
-    el("alphaHint").innerHTML = "花键基本齿廓压力角由齿廓预设决定（GB：30/37.5/45°；DIN：30°；NF：20°；ANSI 由 Table 2 齿廓列决定）；切齿廓自动带出，<b>不可覆盖</b>（显式给不一致的 α 会被后端拒绝）。"
+    el("alpha").title = "花键基本齿廓压力角由齿廓预设决定（GB：30/37.5/45°；DIN：30°；NF：20°；ANSI 由 Table 2 齿廓列决定）；切齿廓自动带出，不可覆盖（显式给不一致的 α 会被后端拒绝）。"
       + (alphaTouched ? " · 已手动修改" : "");
     return;
   }
-  el("alphaHint").innerHTML = "默认 20°（GB/T 1356）；ha*/c*/齿根圆角 ρ=0.38m <b>不随 α 自动变</b>，"
+  el("alpha").title = "默认 20°（GB/T 1356）；ha*/c*/齿根圆角 ρ=0.38m 不随 α 自动变，"
     + "14.5°/30°/45° 等系统请按所用标准手动改 ha*/c*（45° 花键常用 ha*≈0.5，本工具下限 0.5）"
     + (alphaTouched ? " · 已手动修改" : "");
 }
@@ -611,12 +588,12 @@ function syncModuleSelect() {
     if (Number.isFinite(p) && p > 0) {
       const label = ansiPairLabel(p);
       el("mSel").value = ansiPitchLabelsForColumn(el("profileSel").value).indexOf(label) >= 0 ? label : "custom";
-      hint.textContent = "P=" + fmt(p) + "（Ps=" + fmt(2 * p) + "）；m = 25.4/P = " + fmt(25.4 / p)
-        + " mm（节圆 φ = m·z）。标准写法 A/B（如 " + ansiPairLabel(p) + "），Ps 恒为 2P。" + rtxt;
+      hint.textContent = "P=" + fmt(p) + "（Ps=" + fmt(2 * p) + "）；换算模数 m=" + fmt(25.4 / p)
+        + " mm（节圆 φ = m·z）。标准写法 A/B（如 " + ansiPairLabel(p) + "）。" + rtxt;
     } else {
       el("mSel").value = "custom";
       hint.textContent = "ANSI 径节从下拉选当前列适用的 A/B" + (range ? "（" + range.label + "）" : "")
-        + "，或在数字框输入 P；Ps 恒为 2P，m = 25.4/P。" + rtxt;
+        + "，或在数字框输入 P。" + rtxt;
     }
     return;
   }
@@ -679,10 +656,10 @@ function syncSplineUI() {
     if (bench) fillBenchList(std);
     else benchFallbackMsg = "";
     syncBenchHint(bench ? std : "");
-    el("dbHint").textContent = std === "NF"
+    el("db").title = std === "NF"
       ? "A 是 NF E22-141 的主参数（A=m(N+2x+0.4)，α=20°）；必须给 A 与 m（N 由二者决定，不单独编辑）。"
       : "d_B 只属于 DIN 5480；必须给 d_B 与 m（z 由二者决定，不单独编辑）；GB/T 3478 下不给。";
-    el("stdHint").textContent = ({
+    el("stdSel").title = ({
       GB: "GB/T 3478.1：模数制，不用 d_B；给 d_B 会明确报错；模数取表 2 的 15 种。",
       DIN: "DIN 5480-1：d_B 主参数；齿数 z 由 (d_B, m) 决定（输入框已锁定）；模数取 DIN 5480-2 名义表实际 m 列。",
       NF: "NF E22-141：A 主参数（α=20°；尺寸表 p18/p20/p21/p22 共 288 行已入库）；齿数 N 由 (A, m) 决定（输入框已锁定）；模数取尺寸表实际 m 列。",
@@ -703,14 +680,8 @@ function syncSplineUI() {
       ? "由齿廓预设决定（显示用，不可编辑；GB 30/37.5/45°、DIN 30°、NF 20°、ANSI 由 Table 2 列）"
       : "";
   }
-  // GB/T 3478.1 基本齿廓不含变位（用户定案 2026-09-23）：GB 花键下 x 恒为 0 且锁死，
-  // 并在提示区写明；DIN/NF 仍是 (d_B/A, m) 派生的只读因变量，齿轮/ANSI 不受影响。
-  const xh = el("xHint");
-  if (xh) {
-    xh.textContent = on && el("stdSel").value === "GB"
-      ? "GB/T 3478 不变位：x 恒为 0，不可编辑（基本齿廓只有 ha*/hf*/ρf*/cF*）。"
-      : "";
-  }
+  // GB/T 3478.1 基本齿廓不含变位（用户定案 2026-09-23）：GB 花键下 x 恒为 0 且锁死
+  // （口径写进 x.title，syncLockedZ 里维护）；DIN/NF 仍是 (d_B/A, m) 派生的只读因变量。
   syncLockedZ();   // DIN/NF：z/x 只读 + 由 (d_B/A, m) 联动回填；GB 下 x 恒 0 锁死。
 }
 
@@ -1000,6 +971,7 @@ function buildKinds() {
     b.className = "opt" + (k.key === curKind ? " on" : "");
     b.dataset.k = k.key;
     b.textContent = kindName(k);
+    b.title = kindSub(k);
     b.addEventListener("click", () => {
       if (curKind === k.key) return;
       curKind = k.key;
@@ -1045,7 +1017,6 @@ function equivalence(v) {
     if (v.ok && v.p.pitch) cli += " P" + v.p.pitch;
     else if (v.ok && v.p.m !== undefined) cli += " " + fmt(v.p.m);
     if (v.ok && v.p.z !== undefined) cli += " " + v.p.z;
-    if (curKind === "internal") notes.push("内齿（内齿轮/内花键）：轴生成器按最小口径绘制（外轮廓 = 大径 DA、内孔线 = 小径 DF；剖面线按实体段近似，不挖孔）。");
     // 统一齿形表达式（用户 2026-09-23 定案）：齿轮/花键共用一套轴段语法。
     // 花键的 DA/DF 必须由标准引擎算（GB/DIN/NF/ANSI 公式不同），用最近一次
     // `/api/gear_info` 的 `expr`；fetchInfo 到达后会再刷一次表达式框。
@@ -1058,8 +1029,6 @@ function equivalence(v) {
       && (v.ok && v.p.x !== undefined ? Math.abs(Number(info.x) - v.p.x) < 1e-3 : true);
     const expr = fresh && typeof info.expr === "string" ? info.expr : "";
     if (!expr) notes.push("正在按标准计算 DA/DF（轴生成器表达式稍后刷新）…");
-    notes.push("统一齿形表达式：齿轮/花键同一套轴段语法，DA/DF 由标准算出，可直接粘贴到轴生成器；"
-      + "MARK=SPLINE 常规侧视图画小径细实线、GEAR 不画（齿轮「无齿根线」）。");
     return { cli, expr, notes, warnings };
   }
   const cli = v.ok
@@ -1067,7 +1036,6 @@ function equivalence(v) {
         ? " std=DP dp=" + fmt(v.p.dp) + " " + v.p.z + " " + fmt(v.p.h) + " alpha " + fmt(v.p.alpha)
         : " " + fmt(v.p.m) + " " + v.p.z + " " + fmt(v.p.h) + " alpha " + fmt(v.p.alpha))
     : (curKind === "internal" ? "int" : "ext") + " <m> <z> <h> alpha <α>";
-  if (curKind === "internal") notes.push("内齿（内齿轮/内花键）：轴生成器按最小口径绘制（外轮廓 = 大径 DA、内孔线 = 小径 DF；剖面线按实体段近似，不挖孔）。");
   let expr = "";
   if (v.ok) {
     const p = v.p;
@@ -1087,7 +1055,7 @@ function equivalence(v) {
       + " M" + fmt(meff) + " Z" + p.z + " ALPHA" + fmt(p.alpha)
       + " X" + fmt(p.x) + " DA" + fmt(internal ? df : da) + " DF" + fmt(internal ? da : df)
       + " BETA" + fmt(beta) + " H" + fmt(p.h);
-    if (p.std === "DP") notes.push("径节制 DP：表达式已按 m = 25.4/DP = " + fmt(meff) + " 换算成 M（轴段齿形段只认模数）。");
+    if (p.std === "DP") notes.push("径节制 DP：表达式已换算成模数 M（轴段齿形段只认模数）。");
     if (Math.abs(beta) > 1e-12) warnings.push("斜齿 β=" + fmt(beta) + "°：轴段齿形段只做直齿（BETA 会报「斜齿未实现」），表达式按直齿给出。");
   }
   return { cli, expr, notes, warnings };
@@ -1096,6 +1064,9 @@ function equivalence(v) {
 // 表达式预览 + 提示（由 syncKindHint 在参数/模式/种类/视图变化时同步调用）
 function syncExpr(v, eq) {
   el("exprPreview").value = eq && eq.expr ? eq.expr : "";
+  el("exprPreview").title = "统一齿形表达式：齿轮/花键同一套轴段语法，DA/DF 由标准算出，可直接粘贴到轴生成器；"
+    + "MARK=SPLINE 常规侧视图画小径细实线、GEAR 不画（齿轮「无齿根线」）。"
+    + "内齿/内花键在轴上按最小口径绘制（外轮廓 = 大径 DA、内孔线 = 小径 DF；剖面线按实体段近似，不挖孔）。";
   el("exprCopy").disabled = !(eq && eq.expr);
   const hint = el("exprHint");
   const msgs = [];
@@ -1129,30 +1100,12 @@ async function copyExpr() {
   hint.textContent = "剪贴板不可用，已选中表达式——请按 Ctrl+C 手动复制。";
 }
 
-// 命令行等价用法 + 模式语义说明 + 轴生成器表达式（随模式/种类/参数/视图同步）
+// 命令行等价用法（随模式/种类/参数/视图同步）；体系口径写在各控件 title 里，不常驻。
 function syncKindHint() {
   const v = collect();
   const viewCn = viewLabel(curView, curKind);
   const eq = equivalence(v);
-  let html = "";
-  if (isSpline()) {
-    html += "花键模式：几何全在 <code>invol_spline.rs</code> 引擎（GB/DIN 预设 + DIN 5480-2 / NF E22-141 查表；ANSI 径节 P + Table 2 五列公式）；"
-         + "不给基准直径时用 m/z（DIN 由 m/z/x 正算 d_B，NF 由 m/z/x 正算 A，ANSI 由 P 直接算）。<br>";
-    if (curKind === "internal") {
-      html += "内花键与内齿轮同口径：只有 <b>剖视图 + 端视图</b>（无侧视图，用户定案「内花键剖视图和内齿轮一样，不存在侧视图」）；"
-           + "剖视图按齿圈内齿不剖画（端面/齿顶线/齿根线/内孔壁/孔口倒角 + 分度线/轴线），<b>不打剖面线</b>，外壁留你延伸。<br>";
-    }
-    html += "命令行等价用法：<code>OCSMGEAR " + eq.cli + " view " + viewCn + "</code>";
-    el("kindHint").innerHTML = html;
-    syncExpr(v, eq);
-    return;
-  }
-  if (curKind === "internal") {
-    html += "内齿轮只有 <b>剖视图</b> 与 <b>端视图</b> 两个视图（侧视图/简化正视图无模板，不生成）；"
-         + "齿顶圆在<b>内</b>、齿根圆在<b>外</b>（da &lt; d &lt; df）。<br>";
-  }
-  html += "命令行等价用法：<code>OCSMGEAR " + eq.cli + " view " + viewCn + "</code>";
-  el("kindHint").innerHTML = html;
+  el("kindHint").innerHTML = "命令行等价用法：<code>OCSMGEAR " + eq.cli + " view " + viewCn + "</code>";
   syncExpr(v, eq);
 }
 
