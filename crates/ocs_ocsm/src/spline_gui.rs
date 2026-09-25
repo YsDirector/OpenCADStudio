@@ -656,6 +656,7 @@ pub fn options_json() -> Result<serde_json::Value, String> {
         // 齿轮卡与 ANSI 卡的选项/口径（同一下发端点；页面按 renderer 切面板）。
         "gear_card": crate::gear_table::options_json(),
         "ansi_card": crate::ansi_table::options_json(),
+        "nf_card": crate::nf_table::options_json(),
         "pin_series": crate::spline_tol::pin_series()?,
         "pin_series_note": "GB/T 3478.9-2008 表 1（67 档，R40；极限偏差 ±0.001 mm）",
         "info_layers": {

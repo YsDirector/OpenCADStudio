@@ -32,6 +32,7 @@ mod guide_server;
 mod guide_url;
 mod invol_spline;
 mod joint;
+mod nf_table;
 mod partgen;
 mod partgen_b1;
 mod partgen_b2;
@@ -2627,6 +2628,7 @@ impl OcsmPlugin {
             crate::card::CardRenderer::AnsiTableEn => {
                 self.cmd_ansi_card(host, rest, crate::ansi_table::AnsiLang::En)
             }
+            crate::card::CardRenderer::NfTable => self.cmd_nf_card(host, rest),
         }
     }
 
@@ -2861,6 +2863,69 @@ impl OcsmPlugin {
             spec.lang.label(),
             crate::ansi_table::pair_label(spec.p),
             spec.z,
+            at[0],
+            at[1],
+            crate::partgen_kit::trim(spec.rot)
+        ));
+    }
+
+    /// 卡类型「NF 内花键参数表」：
+    /// `OCSMCARD NF内花键参数表 A300 M7.5 [Z38] [中心 外径|齿面] [根 平|圆] [at x,y] [rot 度]`。
+    /// 表格块几何内建（`OCSM_NFTABLE_NF_INT`，照 `外花键参数表NF.dxf` 同构镜像）；
+    /// 18 个值写 INSERT.attributes（偏差列义未辨 → 6 个公差格显示「—」，不臆造）。
+    fn cmd_nf_card(&self, host: &mut dyn HostApi, args: &str) {
+        use crate::nf_table::NfTableSpec;
+        let spec = match NfTableSpec::parse(args) {
+            Ok(s) => s,
+            Err(e) => {
+                host.push_error(&e);
+                return;
+            }
+        };
+        host.ensure_layers(layer_defs());
+        host.ensure_text_styles(text_style_defs());
+        let block = crate::nf_table::BLOCK;
+        if host.document().block_records.get(block).is_none() {
+            let members = crate::nf_table::block_entities();
+            if let Err(e) = host.add_block_record(block, members) {
+                host.push_error(&format!("NF 内花键参数表：建块 {block} 失败：{e}"));
+                return;
+            }
+        }
+        let at = spec.at.unwrap_or_else(|| {
+            crate::take_parts_point()
+                .map(|p| [p[0], p[1]])
+                .unwrap_or([0.0, 0.0])
+        });
+        let ins = match crate::nf_table::build_insert(&spec, at, spec.rot) {
+            Ok(i) => i,
+            Err(e) => {
+                host.push_error(&format!("NF 内花键参数表：{e}"));
+                return;
+            }
+        };
+        host.push_undo("NF 内花键参数表插入");
+        let handles = host.add_entities(vec![acadrust::EntityType::Insert(ins)]);
+        if handles.is_empty() {
+            host.push_error("NF 内花键参数表：插入失败（宿主未返回句柄）");
+            return;
+        }
+        host.set_dirty();
+        let note = crate::nf_table::NfTableModel {
+            card: "NF内花键参数表".into(),
+            a: spec.a,
+            m: spec.m,
+            z: spec.z,
+            centering: Some(spec.centering.id().into()),
+            root: Some(spec.root.id().into()),
+            at: spec.at,
+            rot: spec.rot,
+        }
+        .echo_note()
+        .unwrap_or_else(|_| String::new());
+        host.push_info(&format!(
+            "智能卡片：已插入{note}于 ({:.3}, {:.3}) rot {}°。\n\
+             大径/小径/跨棒距的上下偏差（p35 列义未辨定、p12 R7/H7 未裁决）与表外 V/G/ri 显示「—」。",
             at[0],
             at[1],
             crate::partgen_kit::trim(spec.rot)

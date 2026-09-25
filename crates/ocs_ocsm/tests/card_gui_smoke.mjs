@@ -37,6 +37,7 @@ const CARD_TYPES = [
   { id: '齿轮参数表', aliases: ['gear'], label: '齿轮参数表', summary: 'stub gear', systems: [], renderer: 'gear_table' },
   { id: 'ANSI花键参数表_中文', aliases: ['ansicn'], label: 'ANSI 花键参数表（纯中文）', summary: 'stub ansi cn', systems: [], renderer: 'ansi_table_cn' },
   { id: 'ANSI花键参数表_英文', aliases: ['ansien'], label: 'ANSI 花键参数表（纯英文）', summary: 'stub ansi en', systems: [], renderer: 'ansi_table_en' },
+  { id: 'NF内花键参数表', aliases: ['nf'], label: 'NF 内花键参数表', summary: 'stub nf', systems: [], renderer: 'nf_table' },
 ];
 const GB_COLUMNS = Array.from({ length: 21 }, (_, i) => ({
   tag: `(内)t${i}`, label: `项${i}`, unit: '', formula: 'stub', source: 'stub',
@@ -86,6 +87,14 @@ const OPTIONS = {
     missing_note: 'stub ANSI 缺项（Table 4/5 未收）',
     note: 'stub ANSI 说明',
   },
+  nf_card: {
+    columns: Array.from({ length: 18 }, (_, i) => ({ tag: `nf${i}`, label: `NF项${i}`, unit: '', formula: 'stub', source: 'stub' })),
+    modules: [0.5, 1, 2.5, 7.5],
+    centering: [{ id: 'outer', label: '外径定心（Az=A）' }, { id: 'flank', label: '齿面定心（Az=A+0.3m）' }],
+    roots: [{ id: 'flat', label: '平齿根' }, { id: 'fillet', label: '圆齿根' }],
+    missing_note: 'stub NF 缺项（偏差列义未辨）',
+    note: 'stub NF 说明',
+  },
 };
 
 // ── fetch 桩 ─────────────────────────────────────────────────────
@@ -130,6 +139,26 @@ function ansiPreview(m) {
     readout: [{ k: '径节 P/Ps', v: '16/32' }], items, missing_note: 'stub ANSI 缺项',
   });
 }
+const NF_ITEMS = [
+  '执行标准', '定心方式', '模数', '齿数', '压力角', '齿根样式', '加工方法', '大径Az', '小径D',
+  '基准尺寸', '量棒直径V', '跨棒距G', '大径上差', '大径下差', '小径上差', '小径下差', '跨棒距上差', '跨棒距下差',
+];
+function nfPreview(m) {
+  const missingSet = new Set(['大径上差', '大径下差', '小径上差', '小径下差', '跨棒距上差', '跨棒距下差']);
+  const val = (tag) => tag === '大径Az' ? (m.centering === 'flank' ? '302.25' : '300')
+    : tag === '小径D' ? '285' : tag === '量棒直径V' ? '15' : tag === '跨棒距G' ? '270.508'
+    : tag === '定心方式' ? (m.centering === 'flank' ? '齿面定心' : '外径定心')
+    : missingSet.has(tag) ? '—' : `v-${tag}`;
+  const items = NF_ITEMS.map((tag) => ({
+    tag, label: tag, unit: '', value: val(tag),
+    formula: 'stub 公式', source: 'stub 来源', missing: missingSet.has(tag),
+  }));
+  return jsonResp({
+    ok: true, card: m.card, renderer: 'nf_table',
+    readout: [{ k: '跨棒距 G / G1', v: '270.508 / 270.508' }], items,
+    missing: [...missingSet], missing_note: 'stub NF 缺项',
+  });
+}
 global.fetch = async (u, opts = {}) => {
   const url = String(u);
   if (url.startsWith('/api/spline_options')) return jsonResp(OPTIONS);
@@ -139,6 +168,7 @@ global.fetch = async (u, opts = {}) => {
     lastPreviewModel = model;
     if (model.card === '齿轮参数表') return gearPreview(model);
     if (String(model.card).startsWith('ANSI')) return ansiPreview(model);
+    if (model.card === 'NF内花键参数表') return nfPreview(model);
     return jsonResp({ ok: false, error: 'stub 只支持新卡' }, 400);
   }
   if (url.startsWith('/api/card_export')) {
@@ -146,6 +176,7 @@ global.fetch = async (u, opts = {}) => {
     lastExportModel = JSON.parse(opts.body || '{}');
     const v = String(lastExportModel.card).startsWith('ANSI') ? ansiPreview(lastExportModel)
       : lastExportModel.card === '齿轮参数表' ? gearPreview(lastExportModel)
+      : lastExportModel.card === 'NF内花键参数表' ? nfPreview(lastExportModel)
       : jsonResp({ ok: false, error: 'bad card' }, 400);
     if (!v.ok) return v;
     return jsonResp({ ok: true, message: 'stub 已生成', pending: lastExportModel.at == null });
@@ -196,7 +227,7 @@ function mkEl(id) {
   return el;
 }
 const els = new Map();
-const SELECT_IDS = new Set(['cardType', 'sys', 'grade', 'fit', 'alpha', 'root', 'ansiSide', 'ansiProfile']);
+const SELECT_IDS = new Set(['cardType', 'sys', 'grade', 'fit', 'alpha', 'root', 'ansiSide', 'ansiProfile', 'nfCenter', 'nfRoot']);
 const TEXTAREA_IDS = new Set(['expr', 'gearExpr']);
 global.document = {
   getElementById(id) {
@@ -229,7 +260,7 @@ const probed = script.replace(/\}\)\(\);\s*$/, `;globalThis.__card = {
   get card() { return CARD; },
   get sys() { return SYS; },
   get side() { return SIDE; },
-  panelOf, applyPanels, currentGearModel, currentAnsiModel, refresh, schedulePreview,
+  panelOf, applyPanels, currentGearModel, currentAnsiModel, currentNfModel, refresh, schedulePreview,
 };
 })();`);
 try {
@@ -246,12 +277,12 @@ const el = (id) => document.getElementById(id);
 check(!!H, '探针 __card 未挂上（脚本初始化崩溃？）');
 if (!H) report();
 
-// ① 卡类型下拉 4 项；默认花键卡 → spline 面板可见
-check(el('cardType').options.length === 4, `卡类型应 4 项：${el('cardType').options.map((o) => o.value)}`);
+// ① 卡类型下拉 5 项；默认花键卡 → spline 面板可见
+check(el('cardType').options.length === 5, `卡类型应 5 项：${el('cardType').options.map((o) => o.value)}`);
 check(H.card && H.card.id === '花键参数表', `默认卡类型：${H.card && H.card.id}`);
-check(el('cardType').disabled === false, '四张卡时卡类型下拉应可点');
+check(el('cardType').disabled === false, '五张卡时卡类型下拉应可点');
 check(H.panelOf(H.card) === 'spline', '默认应 spline 面板');
-check(el('splinePanel').style.display === '' && el('gearPanel').style.display === 'none' && el('ansiPanel').style.display === 'none',
+check(el('splinePanel').style.display === '' && el('gearPanel').style.display === 'none' && el('ansiPanel').style.display === 'none' && el('nfPanel').style.display === 'none',
   '默认只有 spline 面板可见');
 check(el('gearExpr').value.startsWith('GEAR EX'), `齿轮默认表达式：${el('gearExpr').value}`);
 check(el('ansiProfile').options.length === 3, `ANSI 齿廓清单来自选项表：${el('ansiProfile').options.map((o) => o.value)}`);
@@ -330,6 +361,41 @@ el('ok').click();
 await tick();
 check(lastExportUrl.startsWith('/api/card_export'), `ANSI 导出 URL：${lastExportUrl}`);
 check(lastExportModel.card === 'ANSI花键参数表_英文' && JSON.stringify(lastExportModel.at) === '[5,6]', `ANSI 导出模型：${JSON.stringify(lastExportModel)}`);
+el('atX').value = ''; el('atY').value = '';
+
+// ④a 切到 NF 内花键参数表：面板切换 + 18 项 + 缺失「—」 + 定心方式进模型
+el('cardType').value = 'NF内花键参数表';
+el('cardType')._fire('change', el('cardType'));
+await tick();
+check(H.card.id === 'NF内花键参数表', `NF 卡：${H.card.id}`);
+check(H.panelOf(H.card) === 'nf', 'NF 面板');
+check(el('nfPanel').style.display === '' && el('ansiPanel').style.display === 'none', 'NF 面板可见/ANSI 隐藏');
+check(el('nfCenter').options.length === 2 && el('nfRoot').options.length === 2, 'NF 定心/齿根清单来自选项表');
+check(el('nfA').value === '300' && el('nfM').value === '7.5' && el('nfZ').value === '38', 'NF 默认示例 A300/M7.5/Z38');
+check(el('nfHint').title.includes('偏差'), `NF 缺项说明应进 title：${el('nfHint').title}`);
+await H.refresh();
+check(lastPreviewModel && lastPreviewModel.card === 'NF内花键参数表', `NF 预览模型：${JSON.stringify(lastPreviewModel)}`);
+check(Number(lastPreviewModel.a) === 300 && Number(lastPreviewModel.m) === 7.5 && Number(lastPreviewModel.z) === 38, `A/m/z 应进模型：${JSON.stringify(lastPreviewModel)}`);
+check(el('items').innerHTML.split('class="row"').length - 1 === 18, `NF 卡应 18 项：${el('items').innerHTML.slice(0, 100)}`);
+check(el('items').innerHTML.includes('—'), 'NF 缺失项应显示「—」');
+check(el('items').innerHTML.includes('270.508'), 'NF 锚点跨棒距应出现在预览里');
+el('nfCenter').value = 'flank';
+el('nfCenter')._fire('change', el('nfCenter'));
+await tick();
+check(lastPreviewModel.centering === 'flank', `定心方式应进模型：${JSON.stringify(lastPreviewModel)}`);
+check(el('items').innerHTML.includes('302.25'), '齿面定心 → Az=302.25');
+// NF 出表（无 at → 待放置；有 at → 直插）
+closed = false;
+el('ok').click();
+await tick();
+check(lastExportUrl.startsWith('/api/card_export'), `NF 导出 URL：${lastExportUrl}`);
+check(lastExportModel.card === 'NF内花键参数表' && lastExportModel.at === null, `NF 导出模型：${JSON.stringify(lastExportModel)}`);
+check(closed === true, 'NF 出表成功后应自动关窗');
+closed = false;
+el('atX').value = '7'; el('atY').value = '8';
+el('ok').click();
+await tick();
+check(JSON.stringify(lastExportModel.at) === '[7,8]', `NF at 应进模型：${JSON.stringify(lastExportModel.at)}`);
 el('atX').value = ''; el('atY').value = '';
 
 // ⑤ 预览 404 → 红框可见（共享助手；不关窗）
