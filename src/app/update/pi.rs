@@ -327,15 +327,14 @@ fn selection_label(scene: &crate::scene::Scene) -> String {
             .entry(crate::app::helpers::entity_type_key(entity))
             .or_default() += 1;
     }
-    if by_type.len() == 1 {
-        let (kind, count) = by_type.iter().next().unwrap();
-        format!(
+    match by_type.iter().next() {
+        // One object, or several of one kind → the kind name; mixed → 全部.
+        Some((kind, count)) if by_type.len() == 1 => format!(
             "{}（{}）",
             crate::t!(crate::app::helpers::title_case_word(kind)),
             count
-        )
-    } else {
-        format!("{}（{}）", crate::t!("All"), n)
+        ),
+        _ => format!("{}（{}）", crate::t!("All"), n),
     }
 }
 

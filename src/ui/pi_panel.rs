@@ -1514,7 +1514,9 @@ fn streaming_view<'a>(state: &'a PiPanelState, theme: &'a Theme) -> Option<Eleme
 fn empty_state(state: &PiPanelState) -> Element<'static, Message> {
     let hint: String = match &state.status {
         PiStatus::Error(_) => {
-            "未连接 pi-web。\n启动方式：pi-web（或 node ~/.local/bin/pi-web）。\n默认端点 http://127.0.0.1:30141，\n可用环境变量 OCS_PI_ENDPOINT 覆盖。".to_string()
+            // Both backends are mentioned: with `OCS_PI_MODE=rpc` no pi-web is
+            // needed at all (pi is spawned directly).
+            "未连接。\n· pi-web 后端：先启动 pi-web（默认 http://127.0.0.1:30141）\n· rpc 后端：在状态条把后端切到 rpc（只需本机 pi，无需 pi-web）\n端点可用 OCS_PI_ENDPOINT 覆盖，模式可用 OCS_PI_MODE=auto|web|rpc 覆盖。".to_string()
         }
         PiStatus::Ready { .. } if state.sessions.is_empty() => {
             "pi-web 没有会话。\n在网页端新建一个会话后，本面板会自动跟随。".to_string()

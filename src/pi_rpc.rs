@@ -868,9 +868,9 @@ mod tests {
 
     #[test]
     fn session_dir_encodes_cwd_like_pi() {
-        let dir = session_dir_for("/home/ysdirector");
+        let dir = session_dir_for("/home/tester");
         assert!(
-            dir.to_string_lossy().ends_with("/sessions/--home-ysdirector--"),
+            dir.to_string_lossy().ends_with("/sessions/--home-tester--"),
             "got {dir:?}"
         );
         let dir = session_dir_for("/home/u/.config/pi-desktop-chat-workspace");
