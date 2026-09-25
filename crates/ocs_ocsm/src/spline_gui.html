@@ -1,0 +1,539 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>OCSM 花键参数表</title>
+<style>
+  /* 样式与 hole_gui.html / gear_gui.html / shaft_gui.html 同款：同一套配色、圆角与控件尺寸 */
+  :root { color-scheme: light; }
+  body { font-family: "Helvetica Neue", "PingFang SC", "Microsoft YaHei", sans-serif;
+         margin: 14px; background: #f4f6f8; color: #222; }
+  h1 { font-size: 16px; margin: 0 0 10px; }
+  h1 .sub { font-size: 12px; color: #888; font-weight: 400; margin-left: 8px; }
+  .wrap { display: flex; flex-direction: column; gap: 10px; }
+  .card { background: #fff; border: 1px solid #d9dee5; border-radius: 8px; padding: 10px 12px; }
+  label { display: block; font-size: 12px; color: #666; margin: 6px 0 2px; }
+  select, input[type=number], input[type=text] { padding: 4px 6px; border: 1px solid #c6ccd4;
+           border-radius: 4px; font-size: 13px; box-sizing: border-box; background: #fff; }
+  select { width: 100%; }
+  input[disabled], select[disabled], input[readonly] { background: #f1f3f5; color: #999; cursor: not-allowed; }
+  .top { display: grid; grid-template-columns: 168px 1fr; gap: 12px; align-items: start; }
+  .sides { display: grid; grid-template-columns: 1fr; gap: 4px; }
+  .side { border: 1px solid #c6ccd4; background: #f8fafc; border-radius: 4px; padding: 10px 4px;
+          font-size: 13px; cursor: pointer; }
+  .side.on { background: #1e6fff; border-color: #1e6fff; color: #fff; }
+  .side[disabled] { color: #aaa; cursor: not-allowed; }
+  .params { display: grid; grid-template-columns: 62px 1fr 62px 1fr; gap: 6px 8px; align-items: center; }
+  .params label { margin: 0; }
+  .chk { display: flex; align-items: center; gap: 4px; font-size: 13px; color: #444;
+         margin: 4px 0; cursor: pointer; }
+  .chk input { margin: 0; }
+  .mid { display: grid; grid-template-columns: 300px 1fr; gap: 14px; align-items: start; }
+  .numrow { display: flex; align-items: center; gap: 8px; margin: 4px 0; flex-wrap: wrap; }
+  .numrow input[type=number] { width: 110px; }
+  .chips { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 4px; min-height: 28px; }
+  .chip { border: 1px solid #c6ccd4; background: #f8fafc; border-radius: 14px;
+          padding: 4px 12px; font-size: 13px; cursor: pointer; }
+  .chip.on { background: #1e6fff; border-color: #1e6fff; color: #fff; }
+  .chip[disabled] { color: #aaa; cursor: not-allowed; }
+  .readout { margin-top: 8px; font-size: 12.5px; color: #444; line-height: 1.9; }
+  .readout b { color: #1a4fbf; font-weight: 600; }
+  .unit { font-size: 12px; color: #888; }
+  #items { border: 1px solid #e2e6ea; border-radius: 6px; max-height: 260px; overflow: auto; }
+  #items .row { display: grid; grid-template-columns: 1fr 150px; gap: 8px;
+                padding: 3px 8px; font-size: 12.5px; border-bottom: 1px solid #f0f2f5; }
+  #items .row:last-child { border-bottom: none; }
+  #items .row:nth-child(odd) { background: #fafbfc; }
+  #items .k { color: #555; }
+  #items .v { color: #1a4fbf; text-align: right; font-weight: 600; }
+  .bot { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .bot input[type=number] { width: 92px; }
+  .btn { border: none; border-radius: 6px; padding: 8px 20px; font-size: 14px; cursor: pointer;
+         background: #1e6fff; color: #fff; }
+  .btn.ghost { background: #e4e7ec; color: #333; }
+  .btn[disabled] { background: #9db9e8; cursor: not-allowed; }
+  #status { font-size: 12.5px; margin-top: 6px; min-height: 16px; white-space: pre-wrap; color: #555; }
+  .ok { color: #1a7f37; } .bad { color: #d1242f; } .warn { color: #b26a00; }
+  .hint { font-size: 11.5px; color: #999; margin-top: 4px; line-height: 1.5; }
+</style>
+</head>
+<body>
+<h1>OCSM 花键参数表<span class="sub">渐开线花键 · 内 / 外花键 · 21 项参数表</span></h1>
+
+<div class="wrap">
+  <!-- ① 体系 + 方向 + 等级/配合/压力角/齿根（可选项全部由 /api/spline_options 下发） -->
+  <div class="card top">
+    <div class="sides">
+      <button type="button" class="side on" id="sideInt">内花键</button>
+      <button type="button" class="side" id="sideExt">外花键</button>
+    </div>
+    <div class="params">
+      <label>体系</label><select id="sys" title="花键体系（选项表由后端下发）"></select>
+      <label>公差等级</label><select id="grade"></select>
+      <label>配合类别</label><select id="fit"></select>
+      <label>压力角 αD</label><select id="alpha"></select>
+      <label>齿根形式</label><select id="root"></select>
+    </div>
+  </div>
+
+  <!-- ② 参数来源（手填 / 从选中块 / 上一个块回填）+ 量棒 Dp 点选 -->
+  <div class="card mid">
+    <div>
+      <label>参数来源</label>
+      <div class="numrow">
+        <button type="button" class="btn ghost" id="readSel">从选中块读取</button>
+        <button type="button" class="btn ghost" id="readLast">从上一个块读取</button>
+      </div>
+      <div class="params" style="grid-template-columns: 62px 1fr;">
+        <label>模数 m</label><input type="number" id="m" value="2" step="0.25" min="0.25">
+        <label>齿数 z</label><input type="number" id="z" value="20" step="1" min="6">
+        <label>变位 x</label><input type="number" id="x" value="0" step="0.1">
+      </div>
+    </div>
+    <div>
+      <label id="pinLabel">量棒直径 Dp</label>
+      <div class="chips" id="dpChoices"></div>
+      <div class="numrow">
+        <label class="chk" style="margin:0"><input type="checkbox" id="dpManualOn">手填</label>
+        <input type="number" id="dpManual" step="0.01" min="0" placeholder="系列值">
+      </div>
+      <div class="readout">
+        <div>量棒直径 Dp：<b id="dpOut">—</b> mm</div>
+        <div>测量跨棒距 Md：<b id="mdOut">—</b> mm <span class="unit" id="mdRange"></span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ③ 21 项实时结果（公式/口径/来源在每行 title 悬停里） -->
+  <div class="card">
+    <label>结果预览（21 项）</label>
+    <div id="items"></div>
+  </div>
+
+  <!-- ④ 插入点/旋转 + 出表 -->
+  <div class="card bot">
+    <label style="margin:0">插入点 at</label>
+    <input type="number" id="atX" placeholder="x" step="0.1">
+    <input type="number" id="atY" placeholder="y" step="0.1">
+    <label style="margin:0">旋转 rot</label>
+    <input type="number" id="rot" value="0" step="1">
+    <span style="flex:1"></span>
+    <button type="button" class="btn" id="ok">出表</button>
+    <button type="button" class="btn ghost" id="cancel">取消</button>
+  </div>
+  <div id="status"></div>
+  <div class="hint">选内/外 → 定等级·配合·齿根 → 读参数或手填 → 选或填量棒 Dp → 点「出表」回到图纸放置。</div>
+</div>
+
+<script>
+(() => {
+"use strict";
+// 窗口钉在哪张图纸（插件开窗时写的 tab=）：出表时带回给插件，多张图不串。
+const TAB = new URLSearchParams(location.search).get("tab");
+const el = (id) => document.getElementById(id);
+let OPT = null;      // /api/spline_options（体系 → 方向 → 等级/配合/齿根/21 项公式口径）
+let SYS = null;      // 当前体系（本期只有 GB）
+let SIDE = null;     // 当前方向（内/外）
+let dpSel = null;    // null = 标准解；数字 = 点选/手填的 Dp
+let timer = 0;
+
+const fmt = (n) => {
+  if (n === null || n === undefined || Number.isNaN(Number(n))) return "—";
+  return String(Number(Number(n).toFixed(4)));
+};
+
+function sysOptions() { return (OPT && OPT.systems) || []; }
+function sideSpec(id) {
+  for (const s of sysOptions()) {
+    for (const sd of (s.sides || [])) if (sd.id === id) return sd;
+  }
+  return null;
+}
+function fitRow(code) {
+  return ((SIDE && SIDE.fits) || []).find((f) => f.code === code) || null;
+}
+
+// 统一读响应：非 2xx 先读文本再解析（404 是纯文本 "not found"，直接 .json() 会抛 SyntaxError）。
+// 判据/文案照 hole_gui.html 的 readApi（404 → 指路「插件未重启/版本不匹配」）。
+async function readApi(resp, path) {
+  const text = await resp.text();
+  let j = null;
+  try { j = text ? JSON.parse(text) : null; } catch (e) { j = null; }
+  if (!resp.ok) {
+    const snip = text.slice(0, 200);
+    console.error(`[OCSM 花键参数表] ${path} → HTTP ${resp.status}：${snip}`);
+    const err = resp.status === 404
+      ? `端点 ${path} 不存在（HTTP 404）：可能是插件未重启或版本不匹配 —— 请完全退出并重开 OCS`
+      : `HTTP ${resp.status}：${(j && (j.error || j.message)) || snip || "无响应体"}`;
+    return { ok: false, error: err };
+  }
+  if (j === null) {
+    console.error(`[OCSM 花键参数表] ${path} → HTTP ${resp.status}：响应不是 JSON：${text.slice(0, 200)}`);
+    return { ok: false, error: `响应不是 JSON（HTTP ${resp.status}）：${text.slice(0, 200)}` };
+  }
+  if (j.ok === false) return { ok: false, error: j.error || j.message || "请求失败" };
+  return { ok: true, data: j };
+}
+
+function setOptions(id, list, preferred, decorate) {
+  const sel = el(id);
+  const before = sel.value;
+  sel.innerHTML = "";
+  for (const item of list) {
+    const o = document.createElement("option");
+    o.value = String(item.value);
+    o.textContent = decorate ? decorate(item) : item.label;
+    sel.appendChild(o);
+  }
+  if (list.some((i) => String(i.value) === before)) {
+    sel.value = before;
+  } else if (preferred !== undefined && list.some((i) => String(i.value) === String(preferred))) {
+    sel.value = String(preferred);
+  } else if (list.length) {
+    sel.value = String(list[0].value);
+  }
+  return sel;
+}
+
+// ── 界面联动（清单/口径全部来自 OPT；页面不写死任何可选项）──────────────
+function updateRootTitle() {
+  const r = ((SIDE && SIDE.roots) || []).find((x) => x.key === el("root").value);
+  el("root").title = r ? r.note : "";
+}
+
+function syncUi() {
+  if (!SIDE) return;
+  el("sideInt").classList.toggle("on", SIDE.id === "int");
+  el("sideExt").classList.toggle("on", SIDE.id === "ext");
+  el("sideInt").title = (sideSpec("int") || {}).title || "";
+  el("sideExt").title = (sideSpec("ext") || {}).title || "";
+  // 公差等级（4/5/6/7）
+  setOptions("grade", SIDE.grades.map((g) => ({ value: g, label: g + " 级" })), el("grade").value || 6);
+  el("grade").title = SIDE.grade_note || "";
+  // 压力角 αD（30 / 37.5 / 45）
+  setOptions("alpha", SIDE.alphas.map((a) => ({ value: a, label: fmt(a) + "°" })), el("alpha").value || 30);
+  el("alpha").title = SIDE.alpha_note || "";
+  // 齿根形式（平/圆；口径进 title）
+  setOptions("root", SIDE.roots.map((r) => ({ value: r.key, label: r.label })), el("root").value);
+  updateRootTitle();
+  // 配合类别：表里 preferred_45 的项在 45° 时排前并标注（不改清单，只改顺序/文案）
+  const a45 = Math.abs(Number(el("alpha").value) - 45) < 1e-9;
+  const fits = (SIDE.fits || []).slice().sort((x, y) => {
+    const kx = a45 && x.preferred_45 ? 0 : 1;
+    const ky = a45 && y.preferred_45 ? 0 : 1;
+    return kx - ky;
+  });
+  const prefFit = SIDE.id === "ext" ? (a45 ? "k" : "h") : "H";
+  // 传 prefFit（不是旧值）：旧值是别的方向/体系的 code 时，setOptions 里的 `before` 不命中，
+  // 再退回 prefFit；旧值命中时仍保留用户选择。
+  setOptions("fit", fits.map((f) => ({ value: f.code, label: f.fit + (a45 && f.preferred_45 ? "（45° 优先）" : "") })), prefFit);
+  el("fit").title = (fitRow(el("fit").value) || {}).memo || "";
+  // 量棒面板：applicable=false（外花键）→ 全部置灰，不再写解释文字（口径在 title 里）
+  const pin = SIDE.pin || { applicable: false };
+  const pinOk = !!pin.applicable;
+  if (!pinOk) dpSel = null;
+  el("dpManualOn").disabled = !pinOk;
+  el("dpManual").disabled = !pinOk;
+  el("pinLabel").title = pinOk
+    ? [pin.label, pin.formula, pin.md_formula, pin.standard].filter(Boolean).join("｜")
+    : (pin.reason || SIDE.title || "");
+  el("dpManual").title = pinOk ? pin.standard : "";
+  el("dpChoices").title = pinOk ? [pin.formula, pin.md_formula].filter(Boolean).join("｜") : "";
+  // x：GB/T 3478 基本齿廓不含变位——“置灰即反馈”
+  el("x").disabled = true;
+  el("x").title = (SYS || {}).x_note || "";
+}
+
+// ── 模型 ──────────────────────────────────────────────────────────────
+function atValue() {
+  const x = el("atX").value.trim();
+  const y = el("atY").value.trim();
+  if (x === "" || y === "") return null; // 缺一个 = 走放置态（回图纸点基点）
+  const vx = Number(x);
+  const vy = Number(y);
+  if (Number.isNaN(vx) || Number.isNaN(vy)) return null;
+  return [vx, vy];
+}
+
+function currentModel() {
+  return {
+    system: SYS ? SYS.id : "gb3478",
+    side: SIDE ? SIDE.id : "int",
+    grade: Number(el("grade").value),
+    fit: el("fit").value,
+    alpha: Number(el("alpha").value),
+    root: el("root").value,
+    m: Number(el("m").value),
+    z: Number(el("z").value),
+    x: Number(el("x").value || 0),
+    dp: (SIDE && SIDE.pin && SIDE.pin.applicable && dpSel !== null) ? dpSel : null,
+    at: atValue(),
+    rot: Number(el("rot").value || 0),
+  };
+}
+
+// ── 结果渲染 ──────────────────────────────────────────────────────────
+function esc(s) {
+  return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+// 21 项：可见只有「名 + 值」，公式/口径/来源进每行原生 title=（信息分层）。
+function renderItems(items) {
+  const rows = (items || []).map((it) => {
+    const unit = it.unit ? " " + esc(it.unit) : "";
+    const title = esc(it.formula) + "｜来源：" + esc(it.source);
+    return `<div class="row" title="${title}"><span class="k">${esc(it.label)}</span><span class="v">${esc(it.value)}${unit}</span></div>`;
+  });
+  el("items").innerHTML = rows.join("");
+}
+
+// Dp 面板：标准解 + 3 个工程备选都显示、可点选；也允许手填（后端校验必须是系列值）。
+function renderDp(dp) {
+  const box = el("dpChoices");
+  box.innerHTML = "";
+  if (!dp || !dp.applicable) {
+    el("dpOut").textContent = "—";
+    el("mdOut").textContent = "—";
+    el("mdRange").textContent = "";
+    return;
+  }
+  const choices = (dp.choices || []).slice().sort((a, b) => {
+    const ka = a.standard ? 0 : 1;
+    const kb = b.standard ? 0 : 1;
+    return ka - kb || Number(a.value) - Number(b.value);
+  });
+  for (const c of choices) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "chip";
+    b.textContent = c.tag + " " + fmt(c.value);
+    if (Math.abs(Number(dp.current) - Number(c.value)) < 1e-9) b.classList.add("on");
+    b.title = c.standard ? (dp.standard || "标准解") : "与计算值最接近的系列值（工程备选）";
+    b.addEventListener("click", () => {
+      dpSel = Number(c.value);
+      el("dpManualOn").checked = false;
+      refresh();
+    });
+    box.appendChild(b);
+  }
+  el("dpOut").textContent = fmt(dp.current);
+  el("mdOut").textContent = fmt(dp.md && dp.md.value);
+  el("mdRange").textContent = dp.md
+    ? "（极限 " + fmt(dp.md.lower) + " … " + fmt(dp.md.upper) + "）"
+    : "";
+  el("dpManualOn").checked = !!dp.manual;
+  // 手填框正在输入时不要回写/重排格式（否则输入到一半会被截掉）
+  if (dp.manual) {
+    if (document.activeElement !== el("dpManual")) el("dpManual").value = fmt(dp.current);
+  } else {
+    el("dpManual").value = "";
+  }
+}
+
+async function refresh() {
+  const model = currentModel();
+  if (!(model.m > 0) || !(model.z >= 6)) {
+    el("status").className = "bad";
+    el("status").textContent = "请先填模数 m（0.25…10）与齿数 z（≥6）";
+    return;
+  }
+  let resp;
+  try {
+    resp = await fetch("/api/spline_preview", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(model),
+    });
+  } catch (e) {
+    el("status").className = "bad";
+    el("status").textContent = "预览请求失败（网络层）：" + e;
+    return;
+  }
+  const r = await readApi(resp, "/api/spline_preview");
+  if (!r.ok) {
+    el("status").className = "bad";
+    el("status").textContent = r.error;
+    el("dpOut").textContent = "—";
+    el("mdOut").textContent = "—";
+    el("mdRange").textContent = "";
+    return;
+  }
+  renderItems(r.data.items);
+  renderDp(r.data.dp);
+  el("status").className = "";
+  el("status").textContent = "";
+}
+
+function schedulePreview() {
+  if (timer) clearTimeout(timer);
+  timer = setTimeout(refresh, 160);
+}
+
+// ── 参数来源：从选中块 / 上一个块读回（回填表单）────────────────────────
+async function readMeta(from) {
+  const path = "/api/spline_meta?from=" + from + (TAB ? "&tab=" + encodeURIComponent(TAB) : "");
+  let resp;
+  try {
+    resp = await fetch(path, { cache: "no-store" });
+  } catch (e) {
+    el("status").className = "bad";
+    el("status").textContent = "读取失败（网络层）：" + e;
+    return;
+  }
+  const r = await readApi(resp, "/api/spline_meta");
+  if (!r.ok) {
+    el("status").className = "bad";
+    el("status").textContent = r.error;
+    return;
+  }
+  const j = r.data;
+  el("m").value = fmt(j.m);
+  el("z").value = String(j.z);
+  el("alpha").value = fmt(j.alpha);
+  if (j.root && (SIDE.roots || []).some((x) => x.key === j.root)) el("root").value = j.root;
+  el("x").value = fmt(j.x);
+  syncUi();
+  await refresh();
+  el("status").className = "ok";
+  el("status").textContent = "已从" + (from === "sel" ? "选中块" : "上一个块") + "读取：" + j.label;
+}
+
+// ── 事件 ──────────────────────────────────────────────────────────────
+function pickSide(id) {
+  SIDE = sideSpec(id) || SIDE;
+  dpSel = null;
+  syncUi();
+  schedulePreview();
+}
+el("sideInt").addEventListener("click", () => pickSide("int"));
+el("sideExt").addEventListener("click", () => pickSide("ext"));
+el("sys").addEventListener("change", () => { schedulePreview(); });
+el("grade").addEventListener("change", () => schedulePreview());
+el("fit").addEventListener("change", () => {
+  el("fit").title = (fitRow(el("fit").value) || {}).memo || "";
+  schedulePreview();
+});
+el("alpha").addEventListener("change", () => {
+  syncUi(); // 45° 时配合清单重排/标注
+  schedulePreview();
+});
+el("root").addEventListener("change", () => {
+  updateRootTitle();
+  schedulePreview();
+});
+el("m").addEventListener("input", () => schedulePreview());
+el("z").addEventListener("input", () => schedulePreview());
+el("readSel").addEventListener("click", () => readMeta("sel"));
+el("readLast").addEventListener("click", () => readMeta("last"));
+el("dpManualOn").addEventListener("change", () => {
+  if (el("dpManualOn").checked) {
+    const v = Number(el("dpManual").value);
+    dpSel = v > 0 ? v : null;
+  } else {
+    dpSel = null;
+  }
+  schedulePreview();
+});
+el("dpManual").addEventListener("input", () => {
+  const v = Number(el("dpManual").value);
+  if (v > 0) {
+    dpSel = v;
+    el("dpManualOn").checked = true;
+  } else {
+    dpSel = null;
+    el("dpManualOn").checked = false;
+  }
+  schedulePreview();
+});
+
+el("ok").addEventListener("click", async () => {
+  el("ok").disabled = true;
+  try {
+    // 需手填的异常走动态：at 要么都填（直插），要么都不填（回图纸点击放置）
+    const ax = el("atX").value.trim();
+    const ay = el("atY").value.trim();
+    if ((ax === "") !== (ay === "")) {
+      el("status").className = "bad";
+      el("status").textContent = "插入点 at 需要 x 与 y 都填（都不填 = 回图纸点击放置）";
+      return;
+    }
+    const url = "/api/spline_export" + (TAB ? "?tab=" + encodeURIComponent(TAB) : "");
+    const r0 = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(currentModel()),
+    });
+    const res = await readApi(r0, "/api/spline_export");
+    if (!res.ok) {
+      el("status").className = "bad";
+      el("status").textContent = res.error;
+      return;
+    }
+    const j = res.data;
+    const msg = j.message || "已生成";
+    el("status").className = "ok";
+    el("status").textContent = msg;
+    // 与孔/轴/零件库同款：成功后自动关窗，把焦点交回图纸（无 at 时插件已进 PartPlace）。
+    setTimeout(() => {
+      try { window.close(); } catch (e) { /* 被拒绝时忽略 */ }
+      el("status").textContent = msg + "（若本窗口未自动关闭，请 Alt+Tab 切回图纸继续）";
+    }, 300);
+  } finally {
+    el("ok").disabled = false;
+  }
+});
+el("cancel").addEventListener("click", () => {
+  try { window.close(); } catch (e) {}
+});
+
+// 心跳：窗口开着时告诉插件（页面去重用）。
+function ping(bye) {
+  try {
+    fetch("/api/page_ping?p=spline" + (bye ? "&bye=1" : ""), { cache: "no-store" });
+  } catch (e) {}
+}
+
+// ── 启动 ──────────────────────────────────────────────────────────────
+(async () => {
+  el("atX").value = "";
+  el("atY").value = "";
+  el("rot").value = "0";
+  // 默认参数（浏览器里 HTML 自带 value；这里再钉一道，防腐化/表单恢复）
+  el("m").value = "2";
+  el("z").value = "20";
+  el("x").value = "0";
+  let resp;
+  try {
+    resp = await fetch("/api/spline_options", { cache: "no-store" });
+  } catch (e) {
+    el("status").className = "bad";
+    el("status").textContent = "选项表加载失败（网络层）：" + e;
+    return;
+  }
+  const r = await readApi(resp, "/api/spline_options");
+  if (!r.ok) {
+    el("status").className = "bad";
+    el("status").textContent = r.error;
+    return;
+  }
+  OPT = r.data;
+  SYS = sysOptions()[0] || null;
+  if (!SYS) {
+    el("status").className = "bad";
+    el("status").textContent = "选项表里没有花键体系（插件版本不匹配？）";
+    return;
+  }
+  setOptions("sys", sysOptions().map((s) => ({ value: s.id, label: s.label })), SYS.id);
+  el("sys").disabled = sysOptions().length < 2; // 本期只有 GB——“置灰即反馈”
+  el("sys").title = SYS.note || "";
+  SIDE = (SYS.sides || [])[0] || null;
+  syncUi();
+  await refresh();
+  ping(false);
+  setInterval(() => ping(false), 4000);
+  window.addEventListener("beforeunload", () => ping(true));
+})();
+})();
+</script>
+</body>
+</html>

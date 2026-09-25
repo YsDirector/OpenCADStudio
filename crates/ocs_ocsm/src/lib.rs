@@ -40,6 +40,7 @@ mod partgen_keys;
 mod partgen_more;
 mod shaft;
 mod spline;
+mod spline_gui;
 mod spline_table;
 mod spline_tol;
 mod thread;
@@ -484,6 +485,12 @@ pub(crate) fn open_hole_window(port: u16, tab: Option<u64>) -> bool {
     open_plugin_page(port, &with_tab("/hole", tab), "hole", 860, 720)
 }
 
+/// 打开**花键参数表**窗口（人用 GUI：内/外 + 等级·配合 + Dp 点选 + 21 项实时结果；
+/// `XLT` 不带参数时打开；AI 走命令行/HTTP 同一实现）。
+pub(crate) fn open_spline_window(port: u16, tab: Option<u64>) -> bool {
+    open_plugin_page(port, &with_tab("/spline", tab), "spline", 980, 900)
+}
+
 /// 打开**螺栓副装配**窗口（人用 GUI；AI 走命令行/HTTP 同一实现）。
 pub(crate) fn open_joint_window(port: u16, tab: Option<u64>) -> bool {
     open_plugin_page(port, &with_tab("/joint", tab), "joint", 1080, 900)
@@ -621,6 +628,40 @@ pub(crate) struct PendingPart {
     pub block: String,
     pub meta_json: String,
     pub label: String,
+    /// 带属性的块（花键参数表 21 项）：落件时按 ATTDEF 生成 ATTRIB 并施加 INSERT 变换。
+    /// 普通零件/轴/孔为空。
+    pub attrs: Vec<(acadrust::entities::AttributeDefinition, String)>,
+}
+
+impl PendingPart {
+    /// 无属性块（标准件/齿轮/轴/孔等；既有调用点统一走这里）。
+    pub(crate) fn new(
+        block: impl Into<String>,
+        meta_json: impl Into<String>,
+        label: impl Into<String>,
+    ) -> Self {
+        PendingPart {
+            block: block.into(),
+            meta_json: meta_json.into(),
+            label: label.into(),
+            attrs: Vec::new(),
+        }
+    }
+
+    /// 带 ATTRIB 模板 + 取值的块（花键参数表：块里有 21 个 ATTDEF）。
+    pub(crate) fn with_attrs(
+        block: impl Into<String>,
+        meta_json: impl Into<String>,
+        label: impl Into<String>,
+        attrs: Vec<(acadrust::entities::AttributeDefinition, String)>,
+    ) -> Self {
+        PendingPart {
+            block: block.into(),
+            meta_json: meta_json.into(),
+            label: label.into(),
+            attrs,
+        }
+    }
 }
 
 static PENDING_PART: std::sync::OnceLock<std::sync::Mutex<Option<PendingPart>>> =
@@ -657,6 +698,12 @@ fn pending_block() -> Option<String> {
 #[cfg(test)]
 pub(crate) fn pending_part_meta_for_test() -> Option<String> {
     pending_slot().lock().unwrap().as_ref().map(|p| p.meta_json.clone())
+}
+
+/// 测试用：整份待放置件（花键参数表要断言 21 个 ATTRIB；落件路径 `place_one` 也用它）。
+#[cfg(test)]
+pub(crate) fn pending_part_for_test() -> Option<PendingPart> {
+    pending_slot().lock().unwrap().clone()
 }
 
 /// 待放置的**件链**（螺栓副）：GUI 点「装配到图纸」后登记，图纸里点击落定。
@@ -761,6 +808,21 @@ fn place_one(
         c.color = Color::ByLayer;
         c.linetype = "ByLayer".to_string();
         c.line_weight = LineWeight::ByLayer;
+    }
+    // 带属性块（花键参数表）：落件时把 21 个 ATTRIB 一起带上（与 CLI 同一构造口径）。
+    if !p.attrs.is_empty() {
+        use ocs_plugin_api::host::acadrust::entities::Entity as _;
+        for (ad, val) in &p.attrs {
+            let mut tmpl = ad.clone();
+            tmpl.rotation = 0.0; // 旋转由 INSERT 变换施加
+            let mut attr =
+                ocs_plugin_api::host::acadrust::entities::AttributeEntity::from_definition(
+                    &tmpl,
+                    Some(val.clone()),
+                );
+            attr.apply_transform(&ins.get_transform());
+            ins.attributes.push(attr);
+        }
     }
     let resp = sender
         .request(PluginRequest::AddEntities(vec![acadrust::EntityType::Insert(ins)]))
@@ -2531,12 +2593,41 @@ impl OcsmPlugin {
 
     /// `XLT` / `XL 花键参数表`：GB/T 3478 渐开线花键参数表。
     ///
-    /// 语法：`XLT 内 6H [dp 4.5] [m 3 z 20 a 30 x 0 | from sel|last] [root 平|圆] [at x,y] [rot 度]`。
+    /// * 不带参数 = 人类侧：开花键参数表窗口（内/外方向 + 等级·配合 + Dp 标准解/备选点选 +
+    ///   21 项实时结果）+ 进放置态（窗口点「出表」→ 回图纸点基点 → 旋转 → 落定）。
+    /// * 带参数 = AI/MCP：`XLT 内 6H [dp 4.5] [m 3 z 20 a 30 x 0 | from sel|last] [root 平|圆] [at x,y] [rot 度]`。
+    ///
     /// 表格块几何**内建**（每个方向一块，`OCSM_SPTABLE_GB_*`），21 个值走
-    /// `spline_tol::compute()` 后写 INSERT.attributes（不依赖外部 DXF）。
+    /// `spline_tol::compute()` 后写 INSERT.attributes（不依赖外部 DXF）；
+    /// 建 INSERT 与 GUI 导出共用 `spline_table::build_insert()`。
     fn cmd_spline_table(&self, host: &mut dyn HostApi, args: &str) {
         use crate::spline_table::SplineTableSpec;
-        use ocs_plugin_api::host::acadrust::entities::Entity as _;
+        if args.trim().is_empty() {
+            // 与 OCSMHOLE/DK 同款：开窗 + 进放置态（窗口里点「出表」后鼠标跟随预览）。
+            let Some(port) = self.ensure_guide_server(host) else {
+                host.push_error("XLT: 无法启动花键参数表服务（宿主不支持 worker 请求）。");
+                return;
+            };
+            if open_spline_window(port, Some(host.tab_id())) {
+                host.push_info(
+                    "OCSM 花键参数表：已打开窗口（内/外方向 + 等级·配合 + 量棒 Dp 标准解/3 备选点选 + 21 项实时结果）。\
+                     点「出表」→ 回到图纸点击定位基点 → 移动光标旋转 → 再点击落定（可连续，Esc 结束）。",
+                );
+            } else {
+                host.push_info("OCSM 花键参数表：窗口已打开（Alt+Tab 切换过去）。");
+            }
+            let Some(sender) = host.plugin_request_sender() else {
+                return;
+            };
+            host.start_interactive(Box::new(PartPlace {
+                sender: std::sync::Arc::from(sender),
+                phase: std::cell::Cell::new(PlacePhase::Follow),
+                base: std::cell::Cell::new([0.0, 0.0, 0.0]),
+                what: "OCSM 花键参数表",
+                where_to: "请在花键参数表窗口里点「出表」",
+            }));
+            return;
+        }
         let spec = match SplineTableSpec::parse(args) {
             Ok(s) => s,
             Err(e) => {
@@ -2581,40 +2672,19 @@ impl OcsmPlugin {
                 return;
             }
         }
-        let attdefs = crate::spline_table::attdefs(side);
-        let values = match crate::spline_table::values(side, &table) {
-            Ok(v) => v,
-            Err(e) => {
-                host.push_error(&format!("花键参数表：{e}"));
-                return;
-            }
-        };
         let at = spec.at.unwrap_or_else(|| {
             crate::take_parts_point()
                 .map(|p| [p[0], p[1]])
                 .unwrap_or([0.0, 0.0])
         });
-        let mut ins = acadrust::entities::Insert::new(block, Vector3::new(at[0], at[1], 0.0));
-        ins.rotation = spec.rot.to_radians();
-        {
-            let c = &mut ins.common;
-            c.layer = crate::partgen::LAYER_MAIN.to_string();
-            c.color = acadrust::types::Color::ByLayer;
-            c.linetype = "ByLayer".to_string();
-            c.line_weight = acadrust::types::LineWeight::ByLayer;
-        }
-        for ad in attdefs.iter() {
-            let val = values
-                .iter()
-                .find(|(tag, _)| tag == &ad.tag)
-                .map(|(_, v)| v.clone())
-                .unwrap_or_default();
-            let mut tmpl = ad.clone();
-            tmpl.rotation = 0.0; // 旋转由 INSERT 变换施加
-            let mut attr = acadrust::entities::AttributeEntity::from_definition(&tmpl, Some(val));
-            attr.apply_transform(&ins.get_transform());
-            ins.attributes.push(attr);
-        }
+        // CLI 与 GUI 导出共用这一条建 INSERT 路径（21 个 ATTRIB 在函数里填好）。
+        let ins = match crate::spline_table::build_insert(side, &table, at, spec.rot) {
+            Ok(i) => i,
+            Err(e) => {
+                host.push_error(&format!("花键参数表：{e}"));
+                return;
+            }
+        };
         host.push_undo("花键参数表插入");
         let handles = host.add_entities(vec![acadrust::EntityType::Insert(ins)]);
         if handles.is_empty() {
@@ -6643,11 +6713,7 @@ mod tests {
         let _g = global_state_test_lock();   // PENDING_PART 进程级全局（与导出测试共用一把锁）
         let rec = std::sync::Arc::new(RecordingSender::new());
         let sender: std::sync::Arc<dyn PluginRequestSender> = rec.clone();
-        set_pending_part(PendingPart {
-            block: "OCSM_TEST".into(),
-            meta_json: "{}".into(),
-            label: "测试件 M10x40".into(),
-        });
+        set_pending_part(PendingPart::new("OCSM_TEST", "{}", "测试件 M10x40"));
         let mut cmd = PartPlace {
             sender: sender.clone(),
             phase: std::cell::Cell::new(PlacePhase::Follow),
@@ -6680,11 +6746,7 @@ mod tests {
             other => panic!("预览应为 INSERT：{other:?}"),
         }
         // 第二下：落定（插入交给 worker；这里直接同步调用 place_one 验证请求内容）
-        let pending = PendingPart {
-            block: "OCSM_TEST".into(),
-            meta_json: "{}".into(),
-            label: "测试件".into(),
-        };
+        let pending = PendingPart::new("OCSM_TEST", "{}", "测试件");
         place_one(&sender, &pending, PlaceTask { pt: [2.0, 3.0, 0.0], rotation: std::f64::consts::FRAC_PI_2, sender: sender.clone() })
             .expect("落件");
         let names = rec.names();
@@ -6692,11 +6754,7 @@ mod tests {
         assert!(names.contains(&"WriteRecord".to_string()), "{names:?}");
         assert!(names.contains(&"SetDirty".to_string()), "{names:?}");
         // 落定后回到跟随阶段，可连续放置
-        set_pending_part(PendingPart {
-            block: "OCSM_TEST".into(),
-            meta_json: "{}".into(),
-            label: "测试件".into(),
-        });
+        set_pending_part(PendingPart::new("OCSM_TEST", "{}", "测试件"));
         let mut cmd2 = PartPlace {
             sender,
             phase: std::cell::Cell::new(PlacePhase::Follow),

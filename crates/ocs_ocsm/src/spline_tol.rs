@@ -118,7 +118,9 @@ impl ExtDev {
     /// 解析配合类别（`H/k`、`6H`、`5f`、`js`…）。
     pub fn parse(text: &str) -> Result<Self, String> {
         let t = text.trim().to_ascii_lowercase();
-        let t = t.strip_prefix('h').unwrap_or(&t); // `H/k` 去掉孔侧 H
+        // `H/k` 去掉孔侧 H（**只去 `h/` 这两字符**）；单独一个 `h` 是外花键基本偏差 H，
+        // 不能被同一个 strip_prefix('h') 误删成空串。
+        let t = t.strip_prefix("h/").unwrap_or(&t);
         let t = t.trim_start_matches('/');
         match t {
             "d" => Ok(ExtDev::D),
@@ -208,6 +210,8 @@ pub struct FitRow {
     pub fit: String,
     pub ext_dev: ExtDev,
     pub preferred_45: bool,
+    /// CSV 的 memo 列（口径说明；GUI 选项表的 title 直接用）。
+    pub memo: String,
 }
 
 fn parse_num(v: &str, what: &str) -> Result<f64, String> {
@@ -335,6 +339,7 @@ pub fn fit_rows() -> Result<Vec<FitRow>, String> {
             fit: v[0].trim().to_string(),
             ext_dev: ExtDev::parse(v[1]).map_err(|e| format!("fit 行：{e}"))?,
             preferred_45: v[2].trim() == "true",
+            memo: v[3].trim().to_string(),
         });
     }
     Ok(rows)

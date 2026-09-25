@@ -12,8 +12,10 @@
 use crate::spline_tol::{
     ExtDev, PressureAngle, RootForm, SplineInput, SplineSide, SplineTable,
 };
-use ocs_plugin_api::host::acadrust::entities::{AttributeDefinition, EntityType, MText, Text};
-use ocs_plugin_api::host::acadrust::types::{Color, Vector3};
+use ocs_plugin_api::host::acadrust::entities::{
+    AttributeDefinition, AttributeEntity, Entity as _, EntityType, Insert, MText, Text,
+};
+use ocs_plugin_api::host::acadrust::types::{Color, LineWeight, Vector3};
 
 /// 内花键参数表块名。
 pub const BLOCK_INT: &str = "OCSM_SPTABLE_GB_INT";
@@ -411,6 +413,41 @@ pub fn values(side: SplineSide, table: &SplineTable) -> Result<Vec<(String, Stri
         out.push((ad.tag.clone(), v));
     }
     Ok(out)
+}
+
+/// 建 INSERT（基点在 `at`，旋转 `rot_deg` 度；21 个 `INSERT.attributes` 取自 `values()`）。
+///
+/// **CLI（`cmd_spline_table`）与 GUI 导出（`/api/spline_export`）共用这一条路径**——
+/// 块几何只建一次（`block_entities`），值只映射一次（`values`），两处不会漂。
+pub fn build_insert(
+    side: SplineSide,
+    table: &SplineTable,
+    at: [f64; 2],
+    rot_deg: f64,
+) -> Result<Insert, String> {
+    let values = values(side, table)?;
+    let mut ins = Insert::new(block_name(side), Vector3::new(at[0], at[1], 0.0));
+    ins.rotation = rot_deg.to_radians();
+    {
+        let c = &mut ins.common;
+        c.layer = crate::partgen::LAYER_MAIN.to_string();
+        c.color = Color::ByLayer;
+        c.linetype = "ByLayer".to_string();
+        c.line_weight = LineWeight::ByLayer;
+    }
+    for ad in attdefs(side).iter() {
+        let val = values
+            .iter()
+            .find(|(tag, _)| tag == &ad.tag)
+            .map(|(_, v)| v.clone())
+            .unwrap_or_default();
+        let mut tmpl = ad.clone();
+        tmpl.rotation = 0.0; // 旋转由 INSERT 变换施加
+        let mut attr = AttributeEntity::from_definition(&tmpl, Some(val));
+        attr.apply_transform(&ins.get_transform());
+        ins.attributes.push(attr);
+    }
+    Ok(ins)
 }
 
 /// 21 项 Markdown（计算书新节用；与表同一份 `compute()` 结果）。
