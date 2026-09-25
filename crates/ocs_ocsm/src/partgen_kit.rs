@@ -60,6 +60,32 @@ pub fn circle(c: [f64; 2], r: f64, layer: &str) -> EntityType {
     EntityType::Circle(e)
 }
 
+// ── 库内共有的螺纹大径 3/4 细弧（孔生成器俯视 / 轴生成器导向平键槽共用）─────────
+
+/// 螺纹大径 3/4 细弧起始角（度；DXF ARC 逆时针，可直接落图）。
+///
+/// **口径来源（用户 2026-09-25 裁定：以模板实际几何为准，不机械抄 DXF 原始数字）**：
+/// 模板 `~/桌面/OCSM/轴生成器-导向平键槽.dxf` 的 ARC 原始记录为 `start=625°、end=545°`；
+/// DXF 规定 ARC 自 start 逆时针画到 end，换算成实际弧区间 = `[265°, 545°]`（扫过 280°），
+/// 缺口 = `(185°, 265°)`（中心 225° 左下、宽 80°）；归一化起止 = **265° → 185°**。
+/// 旧的 `270° → 180°`（缺口中心同为 225°，但端点各差 5°）按用户裁定作废。
+/// ⚠️ 其余标准件端视（螺母/螺钉等）另有各自源模板，不得套用本口径。
+pub const THREAD_MAJOR_ARC_START_DEG: f64 = 265.0;
+
+/// 螺纹大径 3/4 细弧终止角（度；换算见 [`THREAD_MAJOR_ARC_START_DEG`]）。
+pub const THREAD_MAJOR_ARC_END_DEG: f64 = 185.0;
+
+/// 按库内共有口径画螺纹大径 3/4 细弧（`2细线层`）：入参 = 圆心 + 大径半径。
+pub fn thread_major_arc(center: [f64; 2], major_r: f64) -> EntityType {
+    arc(
+        center,
+        major_r,
+        THREAD_MAJOR_ARC_START_DEG,
+        THREAD_MAJOR_ARC_END_DEG,
+        LAYER_THIN,
+    )
+}
+
 /// 点列 → 单条 LwPolyline（`closed=true` 闭合）。虚线/中心线/异形轮廓都用它。
 pub fn polyline(pts: &[[f64; 2]], closed: bool, layer: &str) -> EntityType {
     use ocs_plugin_api::host::acadrust::entities::LwVertex;

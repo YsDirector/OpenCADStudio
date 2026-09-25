@@ -498,8 +498,8 @@ function rowHtml(r, i) {
       <input type="number" step="0.1" min="0" data-f="m.p" value="${esc(r.m.p)}" placeholder="0.85d"${dis(gearOn || ovOn || splineOn || keyOn)}></div></td>
     <td class="feat"><div class="frow"><label class="chk"><input type="checkbox" data-f="key.on" title="平键轴槽（与 GEAR / SPLINE / M / OV 互斥）；b×h 与 t1 由该段直径 d 查 GB/T 1095 自动定"${ck(keyOn)}${dis(gearOn || splineOn || mOn || ovOn)}>KEY</label>
       <select data-f="key.kind" title="键型 A/B/C（复用 GB/T 1096 平键族）；槽长按型别折算：B 中置 +b / 端置 +b/2，C 中置 +b/2 / 端置不折算"${dis(!keyOn)}><option value="A"${r.key.kind === "A" ? " selected" : ""}>A</option><option value="B"${r.key.kind === "B" ? " selected" : ""}>B</option>${r.key.guided ? "" : `<option value="C"${r.key.kind === "C" ? " selected" : ""}>C</option>`}</select>
-      <select data-f="key.place" title="位置：中置 = 槽两端封闭（居中于净圆柱）；端置 = 开在轴首/末段自由端（槽长 = 键长 + t1）；显示：中置常规侧视恒显示 A（双圆头），端置 B/C 显示 C（单圆头）"${dis(!keyOn)}><option value="mid"${r.key.place !== "end" ? " selected" : ""}>中置</option><option value="end"${r.key.place === "end" ? " selected" : ""}>端置</option></select>
-      <label class="chk" title="导向平键（GB/T 1097）：槽上自动画 2 个固定螺钉螺纹孔（d0×L0、118° 钻尖、孔心距槽端 L3）；只 A/B；L 取 1097 系列；槽长 = 键长；与双槽互斥（起键孔是 1096 概念）"><input type="checkbox" data-f="key.guided"${ck(r.key.guided)}${dis(!keyOn)}>导向</label></div>
+      <select data-f="key.place" title="位置：中置 = 槽两端封闭（居中于净圆柱）；端置 = 开在轴首/末段自由端（槽长 = 键长 + t1）；显示：中置常规侧视恒显示 A（双圆头），端置 B/C 显示 C（单圆头）；导向平键（GB/T 1097）只有中置"${dis(!keyOn)}><option value="mid"${r.key.place !== "end" ? " selected" : ""}>中置</option><option value="end"${r.key.place === "end" ? " selected" : ""}${r.key.guided ? " disabled" : ""}>端置</option></select>
+      <label class="chk" title="导向平键（GB/T 1097）：槽上自动画 2 个固定螺钉螺纹孔（d0×L0、118° 钻尖、孔心距槽端 L3）；只 A/B、只有中置；L 取 1097 系列；槽长 = 键长；与双槽互斥（起键孔是 1096 概念）"><input type="checkbox" data-f="key.guided"${ck(r.key.guided)}${dis(!keyOn)}>导向</label></div>
       <div class="frow"><span class="chk">L</span><select data-f="key.l" title="键长 L（1096：平键族系列∩L<10b；导向：GB/T 1097 系列 25…450∩L<10b）"${dis(!keyOn)}>${keyLengthOptionsHtml(r)}</select>
       <label class="chk" title="双键槽：绕轴心 180° 对置（仅剖视图体现；可承受转矩约为单键联接的 1.5 倍）；导向平键不支持"><input type="checkbox" data-f="key.double"${ck(r.key.double)}${dis(!keyOn || r.key.guided)}>双槽</label>
       <span class="chk key-derive" title="由轴段直径查 GB/T 1095 得 b×h；t1 按 b 查表；槽长/固定螺钉孔按所选标准派生">${keyDeriveHtml(r)}</span></div>
@@ -695,6 +695,8 @@ function rowFromSegment(seg) {
     r.key.t1 = seg.keyway.t1 === null || seg.keyway.t1 === undefined ? "" : fmt(seg.keyway.t1);
     r.key.double = !!seg.keyway.double;
     r.key.guided = !!seg.keyway.guided;
+    // 导向平键（GB/T 1097）只有中置（用户 2026-09-25 裁定）：旧 JSON 的 guided+end 也归一到中置。
+    if (r.key.guided) r.key.place = "mid";
   }
   enforceExclusive(r);
   return r;
@@ -929,10 +931,11 @@ function onTableInput(e) {
   }
   const isCheck = e.target.type === "checkbox";
   setField(r, field, isCheck ? e.target.checked : e.target.value);
-  // 导向平键（GB/T 1097）：与双槽互斥；键型只 A/B（C → 回 A）。
-  if (field === "key.guided" && r.key.guided) {
+  // 导向平键（GB/T 1097）：与双槽互斥；键型只 A/B（C → 回 A）；位置只有中置。
+  if (r.key.guided) {
     r.key.double = false;
     if (r.key.kind === "C") r.key.kind = "A";
+    r.key.place = "mid";
   }
   if (field === "s" || field.indexOf("key.") === 0) normalizeKeyRow(r);
   if (isCheck) {

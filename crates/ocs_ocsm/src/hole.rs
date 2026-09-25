@@ -33,8 +33,9 @@
 //! - 侧视（剖）：底孔壁（小径/底孔径）`1轮廓实线层`；螺纹大径细实线 `2细线层`；
 //!   螺纹终止线 `1轮廓实线层`；沉孔壁/底面、埋头 90° 锥线同 `1轮廓实线层`；
 //!   轴线 `3中心线层`（两端各伸 3 mm）。
-//! - 俯视（端视）：底孔小径整圆粗实线 + 螺纹大径细实线 3/4 圈（照
-//!   `partgen_more.rs` 螺母端视：270°→180°）；沉孔/埋头再加深/浅一圈实线圆。
+//! - 俯视（端视）：底孔小径整圆粗实线 + 螺纹大径细实线 3/4 圈（库内共有口径，
+//!   与轴生成器导向平键槽共用 `partgen_kit::thread_major_arc`：模板换算 265°→185°）；
+//!   沉孔/埋头再加深/浅一圈实线圆。
 //! - **不生成尺寸标注**（`D1`/`D` 只在 GUI 预览示意图里画）。
 //!
 //! 输出只是孔本身（**不画材料板轮廓**）：基点 = 孔口中心 × 材料表面，孔向局部 −Y；
@@ -1105,8 +1106,8 @@ pub fn build(model: &HoleModel) -> Result<BuiltHole, String> {
         // 底孔整圆（螺纹孔 = 小径粗实线）
         en.push(circle([top_cx, 0.0], base_r, LAYER_MAIN));
         if threaded {
-            // 缺口方位照 `partgen_more.rs` 螺母端视：270° → 180°（逆时针）。
-            en.push(arc([top_cx, 0.0], major_r, 270.0, 180.0, LAYER_THIN));
+            // 缺口方位 = 库内共有口径（265°→185°，模板换算；见 `partgen_kit` 常量）。
+            en.push(crate::partgen_kit::thread_major_arc([top_cx, 0.0], major_r));
         }
         let over = major_r
             .max(base_r)
@@ -2130,14 +2131,36 @@ mod tests {
                 );
             }
         }
-        // 螺纹孔俯视含大径细实线 3/4 圈
+        // 螺纹孔俯视含大径细实线 3/4 圈；起止角 = 模板换算 265°→185°（用户 2026-09-25 裁定）。
         let mut m = thread(10.0, None);
         m.views = HoleViews { side: false, top: true };
         let built = build(&m).unwrap();
-        assert!(built
+        let arcs: Vec<_> = built
             .entities
             .iter()
-            .any(|e| matches!(e, EntityType::Arc(a) if a.common.layer == LAYER_THIN)));
+            .filter_map(|e| match e {
+                EntityType::Arc(a) if a.common.layer == LAYER_THIN => Some(a),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(arcs.len(), 1, "俯视应恰有 1 条大径细弧");
+        let a = arcs[0];
+        assert!((a.radius - 10.0 / 2.0).abs() < 1e-9, "大径半径 = d/2");
+        assert!(
+            (a.start_angle.to_degrees() - 265.0).abs() < 1e-9
+                && (a.end_angle.to_degrees() - 185.0).abs() < 1e-9,
+            "起止角应为模板换算 265°→185°（实得 {}→{}）",
+            a.start_angle.to_degrees(),
+            a.end_angle.to_degrees()
+        );
+        // 负断言：不得再出现旧的 270°→180°。
+        assert!(
+            !built.entities.iter().any(|e| matches!(e, EntityType::Arc(a)
+                if a.common.layer == LAYER_THIN
+                    && (a.start_angle.to_degrees() - 270.0).abs() < 1e-9
+                    && (a.end_angle.to_degrees() - 180.0).abs() < 1e-9)),
+            "旧的 270°→180° 口径应已作废"
+        );
     }
 
     /// 沉头/埋头几何：沉孔壁/底、90° 锥；俯视多一圈。

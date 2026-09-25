@@ -193,6 +193,7 @@ function parseFieldTag(tagHtml, tagName) {
         value: htmlDecode(it[1]),
         textContent: htmlDecode(it[3]),
         selected: /\bselected\b/.test(it[2]),
+        disabled: /\bdisabled\b/.test(it[2]),
       };
       f.options.push(o);
       if (o.selected) f.value = o.value;
@@ -761,6 +762,12 @@ check(
 );
 const gDbl = guidRow._fields.find((f) => f.dataset.f === 'key.double');
 check(!!gDbl && gDbl.disabled === true, '导向下双槽应禁用');
+const gPlace = guidRow._fields.find((f) => f.dataset.f === 'key.place');
+check(!!gPlace && gPlace.value === 'mid', '导向应回填中置：' + JSON.stringify(gPlace && gPlace.value));
+check(
+  !!gPlace && gPlace.options.find((o) => o.value === 'end').disabled === true,
+  '导向下端置选项应禁用（只有中置）'
+);
 const gBox = guidRow._fields.find((f) => f.dataset.f === 'key.guided');
 check(!!gBox && gBox.checked === true, '导向勾选应回显');
 gBox.checked = false;
@@ -769,6 +776,21 @@ await tick();
 check(
   S.rows[0].key.guided === false && !dslEl.value.includes('导向'),
   '取消导向应回普通平键：' + JSON.stringify(dslEl.value)
+);
+// 导向只中置（用户 2026-09-25 裁定）：程序化把位置改 end 也应被拉回 mid，模型不得带 end。
+dslEl.value = 'S30 E30 L50 CH2@L CH2@R KEY A 25 导向';
+await S.refreshFromText();
+S.sel = 0;
+let guidRow2 = segBody._rows[0];
+const gPlace2 = guidRow2._fields.find((f) => f.dataset.f === 'key.place');
+gPlace2.value = 'end';
+segBody._fire('input', gPlace2);
+await tick();
+check(S.rows[0].key.place === 'mid', '导向程序化端置应归一到中置：' + JSON.stringify(S.rows[0].key.place));
+const gm2 = S.modelFromRows();
+check(
+  !!gm2 && gm2.segments[0].keyway.place !== 'end',
+  '导向模型不得带 end：' + JSON.stringify(gm2 && gm2.segments[0])
 );
 report();
 

@@ -9,7 +9,9 @@
 //!
 //! ### 用户已定口径（写死在代码里，勿自行"改正"）
 //!
-//! 1. **1097 键中央 d0 螺纹孔的小径 3/4 圈**：源图画在 `4虚线层`，本库改到 **`2细线层`（细实线）**；
+//! 1. **1097 键中央 d0 孔**：**通孔**（用户 2026-09-25 裁定：螺钉穿过键身；源图/旧实现拿轴上
+//!    孔深 `L0` 当孔底，多档 `L0>h` 会画出键外）——`L0` 数据保留但**不参与键零件几何**；
+//!    俯视小径 3/4 圈：源图画在 `4虚线层`，本库改到 **`2细线层`（细实线）**；
 //!    其余一律照源图（**不**按 GB/T 4459.1 大改）。⚠️
 //! 2. **1097 主视图剖切**：右半 x>0 全剖（材料打剖面线），左半为外形，左端孔用虚线。
 //!    **分界线（用户 2026-09 画法修正）**：改用规范 **45° 断裂折线**、画在 **`2细线层`**（细实线）；
@@ -262,6 +264,8 @@ pub struct Key1097Row {
     /// 键上孔口 120° 锪锥深度 C1。
     pub c1: f64,
     /// **轴上固定螺纹孔深度 L0**（自键槽底/轴表面向下量；不是键上孔深）。
+    /// ⚠️ **不参与键零件几何**（用户 2026-09-25 裁定：键中央 d0 孔按通孔画，螺钉穿过键身）；
+    /// 数据保留备查，禁止再拿它当键上孔底。
     #[serde(rename = "L0")]
     pub l0: f64,
     /// 该档默认长度 L（specimen 行 = 100；b=8/10 不合法 → 就近合法化）。
@@ -510,7 +514,9 @@ pub fn families_json() -> serde_json::Map<String, serde_json::Value> {
             "主视图：右半剖 + 左半外形；分界线 = 2细线层 细实线 + 规范 45° 断裂折线\
              （用户 2026-09 画法修正；源图粗线竖线+端部台阶是手工痕迹，不再照抄）。"
                 .to_string(),
-            "螺纹小径 3/4 圈在 2细线层（用户拍板；源图在 4虚线层）。".to_string(),
+            "键中央 d0 孔为通孔（用户 2026-09-25 裁定：螺钉穿过键身）；轴上 L0 不入键零件几何。\
+             螺纹小径 3/4 圈在 2细线层（用户拍板；源图在 4虚线层）。"
+                .to_string(),
             "L：GB/T 1097-2003 标准系列 25、28、…、450（嘉立创 new05232.htm 长度表 26 档），\
              约束 L < 10·b（注③；>400 按 GB/T 321 R20 选取）；下拉列该 b 的全部合法 L。"
                 .to_string(),
@@ -1050,12 +1056,12 @@ fn main_1097(ty: KeyType, r: &Key1097Row, len: &Key1097LengthRow) -> Vec<EntityT
     let l = len.l;
     let (h, c) = (r.h, r.c);
     let (xh, d0, d1, d) = (len.l1 / 2.0, r.d0, r.d1, r.d_sink);
-    let (h1, c1, l0) = (r.h1, r.c1, r.l0);
+    let (h1, c1) = (r.h1, r.c1);
     let rcs = d0 / 2.0 - c1 * 60f64.to_radians().tan(); // 锪锥小端半径
-    // 中央 d0 螺纹孔：口部 120° 锪锥 + 大径竖线 + 小端竖线（照源图）。
-    // ⚠️ L0 真义 = 轴上固定螺纹孔深（非键上孔深）；本行沿用旧口径把 y0 当键中央孔底，
-    //    specimen（L0=h）才恰好通高；多档 L0>h 时孔底越过键底 —— 键中央孔是否改通孔待用户裁定。
-    let y0 = h - l0;
+    // 中央 d0 孔：口部 120° 锪锥 + 大径竖线 + 小端竖线（照源图）。
+    // **通孔**（用户 2026-09-25 裁定：螺钉穿过键身）——孔壁直达键底面 y=0。
+    // ⚠️ `L0` 真义 = 轴上固定螺纹孔深，**不参与键零件几何**（数据保留在表里，勿删）。
+    let y0 = 0.0;
     // 断裂分界线：2细线层 + 规范 45° 折线（推广规则 xb = L1/2 − D/2 − BREAK_GAP，见 break_1097）。
     let xb = xh - d / 2.0 - BREAK_GAP;
     let mut en = vec![
@@ -1300,7 +1306,8 @@ fn weight_1097(ty: KeyType, r: &Key1097Row, l: f64) -> f64 {
         KeyType::C => unreachable!(),
     };
     let mut vol = area * r.h;
-    vol -= std::f64::consts::PI * (r.d0 / 2.0).powi(2) * r.l0;
+    // 键中央孔按通孔（用户裁定：L0 不入键零件几何）；体积按贯穿全高 h 扣。
+    vol -= std::f64::consts::PI * (r.d0 / 2.0).powi(2) * r.h;
     for _ in 0..2 {
         vol -= std::f64::consts::PI * (r.d1 / 2.0).powi(2) * r.h;
         vol -= std::f64::consts::PI / 4.0 * (r.d_sink * r.d_sink - r.d1 * r.d1) * r.h1;
@@ -1618,9 +1625,9 @@ mod tests {
     fn exp_1097_main_a_with(l: f64, xh: f64) -> Vec<EntityType> {
         let (h, c) = (7.0, 0.25);
         let (d0, d1, d) = (3.0, 3.4, 6.0);
-        let (h1, c1, l0) = (2.4, 0.3, 7.0);
+        let (h1, c1) = (2.4, 0.3);
         let rcs = d0 / 2.0 - c1 * 60f64.to_radians().tan();
-        let y0 = h - l0;
+        let y0 = 0.0; // 键中央 d0 孔 = 通孔（用户裁定）
         let xb = xh - d / 2.0 - BREAK_GAP;
         // 断裂分界线（本次修正）：2细线层 + 45° 折线（自底边到顶边，与生产规则同式）。
         let ba = BREAK_AMP;
@@ -1698,9 +1705,9 @@ mod tests {
     fn exp_1097_main_b_with(l: f64, xh: f64) -> Vec<EntityType> {
         let (h, c) = (7.0, 0.25);
         let (d0, d1, d) = (3.0, 3.4, 6.0);
-        let (h1, c1, l0) = (2.4, 0.3, 7.0);
+        let (h1, c1) = (2.4, 0.3);
         let rcs = d0 / 2.0 - c1 * 60f64.to_radians().tan();
-        let y0 = h - l0;
+        let y0 = 0.0; // 键中央 d0 孔 = 通孔（用户裁定）
         let xb = xh - d / 2.0 - BREAK_GAP;
         // 断裂分界线（本次修正）：2细线层 + 45° 折线（自底边到顶边，与生产规则同式）。
         let ba = BREAK_AMP;
@@ -2119,6 +2126,71 @@ mod tests {
                 "{fam}：4虚线层不应再有螺纹圈（源图的 4虚线已按用户口径移走）"
             );
         }
+    }
+
+    /// 裁定②（用户 2026-09-25）：键中央 d0 孔 = **通孔**（螺钉穿过键身）；
+    /// 多档 L0>h 不得再把孔底画到键外；`L0` 保留在数据里但不参与键零件几何。
+    #[test]
+    fn key_1097_central_hole_is_through_all_rows() {
+        let mut checked_beyond_h = 0;
+        for ty in [KeyType::A, KeyType::B] {
+            let rows = &table_1097(ty).rows;
+            assert_eq!(rows.len(), 14, "{ty:?} 1097 表应为 14 档");
+            for r in rows {
+                // L=25 对所有 b（8…45）都合法：25 < 10b 且 ∈ 系列。
+                let len = key_1097_length_for(25.0).unwrap();
+                let ents = main_1097(ty, r, len);
+                let rcs = r.d0 / 2.0 - r.c1 * 60f64.to_radians().tan();
+                let has_pt = |x: f64, y: f64| {
+                    ents.iter().any(|e| {
+                        matches!(e, EntityType::LwPolyline(pl)
+                            if pl.vertices.iter().any(|v| near(v.location.x, x) && near(v.location.y, y)))
+                    })
+                };
+                // 正向：孔壁贯穿全高（小端壁到锪锥根；口部大径壁 0→h）。
+                for side in [-1.0, 1.0] {
+                    assert!(
+                        has_pt(side * rcs, 0.0) && has_pt(side * rcs, r.h - r.c1),
+                        "{ty:?} b={}：中央孔小端壁应自底面贯穿到锪锥根",
+                        trim(r.b)
+                    );
+                    assert!(
+                        has_pt(side * r.d0 / 2.0, 0.0) && has_pt(side * r.d0 / 2.0, r.h),
+                        "{ty:?} b={}：中央孔口部壁应自底面贯穿到顶面",
+                        trim(r.b)
+                    );
+                }
+                // 反向：除中心线外不得有键外几何（旧 bug：y0=h−L0<0 时孔壁下探到键底之下）。
+                for e in &ents {
+                    let (layer, pts): (&str, Vec<[f64; 2]>) = match e {
+                        EntityType::LwPolyline(pl) => (
+                            &pl.common.layer,
+                            pl.vertices.iter().map(|v| [v.location.x, v.location.y]).collect(),
+                        ),
+                        EntityType::Line(l) => (
+                            &l.common.layer,
+                            vec![[l.start.x, l.start.y], [l.end.x, l.end.y]],
+                        ),
+                        _ => continue,
+                    };
+                    if layer == LAYER_CENTER {
+                        continue;
+                    }
+                    for p in pts {
+                        assert!(
+                            p[1] >= -1e-9 && p[1] <= r.h + 1e-9,
+                            "{ty:?} b={}：非中心线图元越出键厚 [0,{}]（{p:?}）",
+                            trim(r.b),
+                            trim(r.h)
+                        );
+                    }
+                }
+                if r.l0 > r.h + 1e-9 {
+                    checked_beyond_h += 1;
+                }
+            }
+        }
+        assert!(checked_beyond_h > 0, "应至少覆盖一档 L0>h（旧 bug 触发档）");
     }
 
     /// 20 档（1096）× 3 视图、14 档（1097）× 2 视图全遍历：能出图、图层合法、无标注、bbox 有效。
