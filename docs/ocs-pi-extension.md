@@ -282,6 +282,12 @@ queue_update、compaction_*、auto_retry_*、extension_error），**现有 `sse_
 会话状态文字**、**思考块正文**（定稿与流式两处）。像素采样：同区域文字峰值从 ~110 提升到 ~157
 （9px 小字的抗锯齿峰值低于标称值属正常）。
 
+**Tooltip 样式**：iced 默认 tooltip 是浅色盒 + 继承的白色文字，在深色面板上非常刺眼 →
+新增 `tooltip_style()`（底色 `background.weak`、1px `background.strong` 边框、4px 圆角）+ `tooltip_label()`
+（`MUTED_TEXT`、10px），面板内三处 tooltip（Auto / Close / 后端选择器）统一使用。后端提示同时压成
+**两行短句**（`auto：优先 pi-web，没有就用本机 pi` / `rpc：只跑本机 pi，不需要 pi-web`），
+否则单行长提示会横向溢出面板盖到画布上。
+
 **踩坑**：`markdown::Content` 非 `Clone`、`Row` 不换行而是压缩子元素（见 §9）之外，本次新的：
 iced 的 `Scrollable` 在所用 rev 里**没有 `max_height()`**（只有 `height()`），要"内容少时自适应、
 多时封顶"只能按条目数分支选 `Length::Shrink` / `Length::Fixed(n)`。

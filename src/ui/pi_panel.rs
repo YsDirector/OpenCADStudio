@@ -1105,7 +1105,9 @@ fn header(auto_collapse: bool) -> Element<'static, Message> {
             style
         })
         .padding([3, 5]);
-    let pin = tooltip(pin, text("Auto").size(10), tooltip::Position::Bottom).gap(4);
+    let pin = tooltip(pin, tooltip_label("Auto"), tooltip::Position::Bottom)
+        .gap(4)
+        .style(tooltip_style);
 
     let close = button(crate::ui::icons::themed_secondary(
         crate::ui::icons::CLOSE,
@@ -1114,7 +1116,9 @@ fn header(auto_collapse: bool) -> Element<'static, Message> {
     .on_press(Message::Dock(DockMsg::Close(PanelId::Pi)))
     .style(button::subtle)
     .padding([3, 5]);
-    let close = tooltip(close, text("Close").size(10), tooltip::Position::Bottom).gap(4);
+    let close = tooltip(close, tooltip_label("Close"), tooltip::Position::Bottom)
+        .gap(4)
+        .style(tooltip_style);
 
     mouse_area(
         container(
@@ -1147,6 +1151,30 @@ fn secondary_color(theme: &Theme) -> Color {
 
 fn warning_color(theme: &Theme) -> Color {
     theme.palette().warning.base.text
+}
+
+/// Tooltip surface matching the panel chrome. The stock tooltip is a light box
+/// with inherited (white) text — jarring on the dark panel.
+fn tooltip_style(theme: &Theme) -> container::Style {
+    container::Style {
+        background: Some(Background::Color(theme.palette().background.weak.color)),
+        border: Border {
+            color: theme.palette().background.strong.color,
+            width: 1.0,
+            radius: 4.0.into(),
+        },
+        ..Default::default()
+    }
+}
+
+/// Tooltip label in the panel's muted-but-readable grey.
+fn tooltip_label<'a>(label: impl Into<String>) -> Element<'a, Message> {
+    text(label.into())
+        .size(10)
+        .style(|_: &Theme| iced::widget::text::Style {
+            color: Some(MUTED_TEXT),
+        })
+        .into()
 }
 
 /// Small secondary-colored label above an entry.
@@ -1250,10 +1278,15 @@ fn status_strip(state: &PiPanelState) -> Element<'_, Message> {
             .padding([1, 5])
             .menu_height(120.0)
             .on_select(|m: String| Message::Pi(PiMsg::BackendPick(m))),
-        "后端：auto＝有 pi-web 就用它，否则本机 pi rpc；rpc＝只跑本机 pi，不需要 pi-web",
+        column![
+            tooltip_label("auto：优先 pi-web，没有就用本机 pi"),
+            tooltip_label("rpc：只跑本机 pi，不需要 pi-web"),
+        ]
+        .spacing(2),
         tooltip::Position::Bottom,
     )
-    .gap(4);
+    .gap(4)
+    .style(tooltip_style);
     let mut strip = row![
         backend_tag,
         backend_pick,
