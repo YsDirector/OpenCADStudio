@@ -63,6 +63,7 @@
 <h1>OCSM 智能卡片<span class="sub">本期卡类型：花键参数表 · 内 / 外花键 · 21 项参数表</span></h1>
 
 <div class="wrap">
+  <div id="splinePanel">
   <!-- ① 卡类型 + 体系 + 方向 + 等级/配合/压力角/齿根（可选项全部由 /api/spline_options 下发） -->
   <div class="card top">
     <div class="sides">
@@ -105,9 +106,37 @@
     </div>
   </div>
 
-  <!-- ③ 21 项实时结果（公式/口径/来源在每行 title 悬停里） -->
+  </div><!-- /splinePanel -->
+
+  <!-- ②g 齿轮参数表（第二张卡）：九字段表达式 + 配对齿轮/精度等级 -->
+  <div class="card" id="gearPanel" style="display:none">
+    <label>齿轮齿形表达式（九字段；可从轴/齿轮生成器 GUI 复制）</label>
+    <textarea id="gearExpr" rows="2" spellcheck="false"
+      placeholder="GEAR EX M3 Z20 ALPHA20 X0 DA66 DF52.5 BETA0 H30"></textarea>
+    <div class="params" style="margin-top:6px">
+      <label>配对齿轮齿数 z₂</label><input type="number" id="gearMateZ" min="2" max="1000" step="1" placeholder="选填">
+      <label>配对齿轮图号</label><input type="text" id="gearDwg" placeholder="选填">
+      <label>精度等级</label><input type="text" id="gearGrade" placeholder="选填">
+      <label>中心距 a</label><input type="number" id="gearCenter" step="0.001" placeholder="选填，覆盖计算值">
+    </div>
+    <div class="hint" id="gearHint"></div>
+  </div>
+
+  <!-- ②a ANSI 花键参数表（纯中文 / 纯英文两个卡类型共用本面板） -->
+  <div class="card" id="ansiPanel" style="display:none">
+    <div class="params">
+      <label>方向</label><select id="ansiSide"><option value="int">内花键</option><option value="ext">外花键</option></select>
+      <label>齿廓</label><select id="ansiProfile"></select>
+      <label>径节 P</label><input type="number" id="ansiP" min="2.5" step="0.5" value="16">
+      <label>齿数 N</label><input type="number" id="ansiZ" min="3" step="1" value="20">
+    </div>
+    <div class="hint" id="ansiHint"></div>
+  </div>
+
+  <!-- ③ 实时结果（公式/口径/来源在每行 title 悬停里） -->
   <div class="card">
-    <label>结果预览（21 项）</label>
+    <label id="itemsLabel">结果预览</label>
+    <div class="readout" id="cardReadout" style="display:none"></div>
     <div id="items"></div>
   </div>
 
@@ -123,7 +152,8 @@
     <button type="button" class="btn ghost" id="cancel">取消</button>
   </div>
   <div id="status"></div>
-  <div class="hint">选内/外 → 粘齿形表达式 → 定等级·配合·齿根 → 选或填量棒 Dp → 点「出表」回到图纸放置。</div>
+  <div class="hint">选内/外 → 粘齿形表达式 → 定等级·配合·齿根 → 选或填量棒 Dp → 点「出表」回到图纸放置。
+    切到齿轮/ANSI 卡后，面板与结果预览随卡类型切换。</div>
 </div>
 
 <script src="/ocsm_gui_common.js"></script>
@@ -139,6 +169,28 @@ let SYS = null;      // 当前体系（本期只有 GB）
 let SIDE = null;     // 当前方向（内/外）
 let dpSel = null;    // null = 标准解；数字 = 点选/手填的 Dp
 let timer = 0;
+
+// 卡类型 → 面板（spline / gear / ansi）；花键卡走原路径，新卡走 /api/card_*。
+function panelOf(card) {
+  const r = card && card.renderer;
+  if (r === 'gear_table') return 'gear';
+  if (r === 'ansi_table_cn' || r === 'ansi_table_en') return 'ansi';
+  return 'spline';
+}
+function applyPanels() {
+  const p = panelOf(CARD);
+  el('splinePanel').style.display = p === 'spline' ? '' : 'none';
+  el('gearPanel').style.display = p === 'gear' ? '' : 'none';
+  el('ansiPanel').style.display = p === 'ansi' ? '' : 'none';
+  el('cardReadout').style.display = p === 'spline' ? 'none' : '';
+  el('itemsLabel').textContent = p === 'spline' ? '结果预览（21 项）' : '结果预览';
+  const gc = (OPT && OPT.gear_card) || {};
+  el('gearHint').title = gc.missing_note || '';
+  el('gearHint').textContent = gc.expression_note || '';
+  const an = (OPT && OPT.ansi_card) || {};
+  el('ansiHint').title = an.missing_note || '';
+  el('ansiHint').textContent = an.note || '';
+}
 
 const fmt = (n) => {
   if (n === null || n === undefined || Number.isNaN(Number(n))) return "—";
@@ -260,6 +312,7 @@ function atValue() {
 
 function currentModel() {
   return {
+    card: CARD ? CARD.id : "花键参数表",
     system: SYS ? SYS.id : "gb3478",
     side: SIDE ? SIDE.id : "int",
     grade: Number(el("grade").value),
@@ -269,6 +322,32 @@ function currentModel() {
     dp: (SIDE && SIDE.pin && SIDE.pin.applicable && dpSel !== null) ? dpSel : null,
     at: atValue(),
     rot: Number(el("rot").value || 0),
+  };
+}
+
+// ── 齿轮 / ANSI 卡的模型（与后端 GearTableModel / AnsiTableModel 字段一一对应）──
+function currentGearModel() {
+  const numOrNull = (v) => (String(v).trim() === '' ? null : Number(v));
+  return {
+    card: CARD ? CARD.id : '齿轮参数表',
+    expr: el('gearExpr').value.trim(),
+    mate_z: numOrNull(el('gearMateZ').value),
+    mate_dwg: el('gearDwg').value.trim() || null,
+    grade: el('gearGrade').value.trim() || null,
+    center: numOrNull(el('gearCenter').value),
+    at: atValue(),
+    rot: Number(el('rot').value || 0),
+  };
+}
+function currentAnsiModel() {
+  return {
+    card: CARD ? CARD.id : 'ANSI花键参数表_中文',
+    side: el('ansiSide').value || 'int',
+    profile: el('ansiProfile').value || null,
+    p: Number(el('ansiP').value),
+    z: Number(el('ansiZ').value),
+    at: atValue(),
+    rot: Number(el('rot').value || 0),
   };
 }
 
@@ -346,6 +425,13 @@ function renderDp(dp) {
 }
 
 async function refresh() {
+  const p = panelOf(CARD);
+  if (p === "gear") return refreshGear();
+  if (p === "ansi") return refreshAnsi();
+  return refreshSpline();
+}
+
+async function refreshSpline() {
   const model = currentModel();
   if (!model.expr) {
     ocsmStatus("请先粘九字段齿形表达式（可从轴/齿轮生成器 GUI 复制）", "bad");
@@ -369,6 +455,38 @@ async function refresh() {
   ocsmClearStatus(seq);
 }
 
+// 通用卡片预览（齿轮 / ANSI）：与后端 /api/card_preview 同一条路径，页面只渲染。
+async function refreshCard(kind) {
+  const model = kind === "gear" ? currentGearModel() : currentAnsiModel();
+  const required = kind === "gear" ? model.expr : (model.p > 0 && model.z >= 3);
+  if (!required) {
+    ocsmStatus(kind === "gear"
+      ? "请先粘九字段齿形表达式（可从轴/齿轮生成器 GUI 复制）"
+      : "请填径节 P 与齿数 N", "bad");
+    return;
+  }
+  const seq = ocsmSeq();
+  const r = await fetchApi("/api/card_preview", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(model),
+  }, "/api/card_preview");
+  if (!r.ok) return;
+  renderCardPreview(r.data);
+  ocsmClearStatus(seq);
+}
+async function refreshGear() { return refreshCard("gear"); }
+async function refreshAnsi() { return refreshCard("ansi"); }
+
+// 通用卡片读数（readout 行 + 项列表；公式/来源仍进 title=）。
+function renderCardPreview(d) {
+  const rows = (d.readout || []).map((line) =>
+    `<div>${esc(line.k)}　<b>${esc(line.v)}</b></div>`);
+  el("cardReadout").innerHTML = rows.join("");
+  renderItems(d.items);
+  if (d.missing_note) el("items").title = d.missing_note;
+}
+
 function schedulePreview() {
   if (timer) clearTimeout(timer);
   timer = setTimeout(refresh, 160);
@@ -385,11 +503,15 @@ el("sideInt").addEventListener("click", () => pickSide("int"));
 el("sideExt").addEventListener("click", () => pickSide("ext"));
 el("cardType").addEventListener("change", () => {
   CARD = cardTypes().find((c) => c.id === el("cardType").value) || CARD;
-  SYS = sysOptions()[0] || SYS;
-  setOptions("sys", sysOptions().map((s) => ({ value: s.id, label: s.label })), (SYS || {}).id);
-  SIDE = (SYS.sides || [])[0] || SIDE;
+  // 新卡（齿轮/ANSI）没有 spline 体系；只在有体系时重排体系/方向，避免把 SIDE 置空。
+  if (sysOptions().length) {
+    SYS = sysOptions()[0] || SYS;
+    setOptions("sys", sysOptions().map((s) => ({ value: s.id, label: s.label })), (SYS || {}).id);
+    SIDE = (SYS.sides || [])[0] || SIDE;
+  }
   dpSel = null;
   syncUi();
+  applyPanels();
   schedulePreview();
 });
 el("sys").addEventListener("change", () => {
@@ -413,6 +535,13 @@ el("root").addEventListener("change", () => {
   schedulePreview();
 });
 el("expr").addEventListener("input", () => schedulePreview());
+// 齿轮 / ANSI 卡输入：同一套防抖预览（面板切换见 cardType change）。
+for (const id of ["gearExpr", "gearMateZ", "gearDwg", "gearGrade", "gearCenter", "ansiP", "ansiZ"]) {
+  el(id).addEventListener("input", () => schedulePreview());
+}
+for (const id of ["ansiSide", "ansiProfile"]) {
+  el(id).addEventListener("change", () => schedulePreview());
+}
 el("dpManualOn").addEventListener("change", () => {
   if (el("dpManualOn").checked) {
     const v = Number(el("dpManual").value);
@@ -444,12 +573,17 @@ el("ok").addEventListener("click", async () => {
       ocsmStatus("插入点 at 需要 x 与 y 都填（都不填 = 回图纸点击放置）", "bad");
       return;
     }
-    const url = "/api/spline_export" + (TAB ? "?tab=" + encodeURIComponent(TAB) : "");
+    const panel = panelOf(CARD);
+    const isSpline = panel === "spline";
+    const url = (isSpline ? "/api/spline_export" : "/api/card_export") + (TAB ? "?tab=" + encodeURIComponent(TAB) : "");
+    const model = panel === "gear" ? currentGearModel()
+      : panel === "ansi" ? currentAnsiModel()
+      : currentModel();
     const res = await fetchApi(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(currentModel()),
-    }, "/api/spline_export");
+      body: JSON.stringify(model),
+    }, isSpline ? "/api/spline_export" : "/api/card_export");
     if (!res.ok) return; // 后端 error 已由共享助手原样写进 #status（红框）
     const j = res.data;
     const msg = j.message || "已生成";
@@ -493,13 +627,29 @@ function ping(bye) {
   }
   SYS = sysOptions()[0] || null;
   if (!SYS) {
-    el("status").className = "bad";
-    el("status").textContent = "卡片类型「" + CARD.id + "」没有可用体系（插件版本不匹配？）";
+    // 第一张卡不是花键体系卡时（卡类型顺序变了也要能用）：直接按卡面板走通用路径。
+    SIDE = null;
+    syncUi();
+    applyPanels();
+    await refresh();
+    ping(false);
+    setInterval(() => ping(false), 4000);
+    window.addEventListener("beforeunload", () => ping(true));
     return;
   }
   setOptions("sys", sysOptions().map((s) => ({ value: s.id, label: s.label })), SYS.id);
   SIDE = (SYS.sides || [])[0] || null;
+  // 齿轮/ANSI 卡面板：默认值/选项（表驱动；缺字段时用保守默认）
+  const gc = OPT.gear_card || {};
+  el("gearExpr").value = gc.expression_example || "GEAR EX M3 Z20 ALPHA20 X0 DA66 DF52.5 BETA0 H30";
+  const profiles = (OPT.ansi_card && OPT.ansi_card.profiles) || [];
+  setOptions("ansiProfile", profiles.map((p) => ({
+    value: p.id, label: p.id + "（" + fmt(p.alpha) + "°）",
+  })), (profiles[0] || {}).id);
+  el("ansiP").value = "16";
+  el("ansiZ").value = "20";
   syncUi();
+  applyPanels();
   await refresh();
   ping(false);
   setInterval(() => ping(false), 4000);

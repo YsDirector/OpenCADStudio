@@ -650,10 +650,13 @@ fn route(
         ("POST", "/api/shaft_export") => api_shaft_export(body, &sender!()),
         ("GET", t) if t.starts_with("/api/hole_sizes") => (200, json, crate::hole::sizes_json()),
         ("POST", "/api/hole_preview") => api_hole_preview(body),
-        // 智能卡片「花键参数表」（OCSMCARD）：卡类型+选项表 / 表达式反解预览 / 出表。
+        // 智能卡片（OCSMCARD）：卡类型+选项表 / 预览 / 出表。
         ("GET", t) if t.starts_with("/api/spline_options") => api_spline_options(),
         ("POST", "/api/spline_preview") => api_spline_preview(body),
         ("POST", _t) if _t.starts_with("/api/spline_export") => api_spline_export(body, &sender!()),
+        // 通用卡片端点（卡类型表驱动分派：花键/齿轮/ANSI）；GUI 走这两个。
+        ("POST", "/api/card_preview") => api_card_preview(body),
+        ("POST", _t) if _t.starts_with("/api/card_export") => api_card_export(body, &sender!()),
         // 前缀守卫：GUI 的 POST 带 `?tab=N`（查询串不能拿字面量比，否则落 `_ =>` 404；
         // 与同表的 `/api/bom_export` 等一致）。`tab` 由 `sender!()` → `router.resolve(target, body)`
         // 从查询串/body 解析，handler 本身不需要 target。
@@ -5271,6 +5274,250 @@ pub(crate) fn apply_spline_export(
     .to_string())
 }
 
+// ── 通用智能卡片端点（卡类型表驱动：花键/齿轮/ANSI 中英） ────────────────────
+//
+// GUI 走 `/api/card_preview` / `/api/card_export`（body 里 `card` = 卡类型 id）；
+// 旧的 `/api/spline_*` 保留兼容（同一份 spline 路径）。
+
+/// body →（JSON 值，卡类型表项）。卡类型 id 从 body 的 `card` 字段取（大小写不敏感）。
+fn card_model_value(
+    body: &[u8],
+) -> Result<(serde_json::Value, &'static crate::card::CardTypeSpec), String> {
+    let v: serde_json::Value = serde_json::from_slice(body)
+        .map_err(|e| format!("请求 JSON 无效: {e}"))?;
+    let card_id = v.get("card").and_then(|c| c.as_str()).unwrap_or("");
+    let card = crate::card::card_type_by_token(card_id).ok_or_else(|| {
+        format!(
+            "智能卡片：不认识的卡类型「{card_id}」（卡类型表见 /api/spline_options 的 card_types）"
+        )
+    })?;
+    Ok((v, card))
+}
+
+/// `POST /api/card_preview`：表单模型 → 卡片项（纯计算，不碰图纸）。
+fn api_card_preview(body: &[u8]) -> (u16, &'static str, String) {
+    let json = "application/json; charset=utf-8";
+    match apply_card_preview(body) {
+        Ok(s) => (200, json, s),
+        Err(e) => (400, json, serde_json::json!({"ok": false, "error": e}).to_string()),
+    }
+}
+
+fn apply_card_preview(body: &[u8]) -> Result<String, String> {
+    let (v, card) = card_model_value(body)?;
+    let out = match card.renderer {
+        crate::card::CardRenderer::SplineTable => {
+            let m: crate::spline_gui::SplineTableModel = serde_json::from_value(v)
+                .map_err(|e| format!("花键参数表：请求字段无效：{e}"))?;
+            m.preview_json()?
+        }
+        crate::card::CardRenderer::GearTable => {
+            let m: crate::gear_table::GearTableModel = serde_json::from_value(v)
+                .map_err(|e| format!("齿轮参数表：请求字段无效：{e}"))?;
+            m.preview_json()?
+        }
+        crate::card::CardRenderer::AnsiTableCn | crate::card::CardRenderer::AnsiTableEn => {
+            let mut m: crate::ansi_table::AnsiTableModel = serde_json::from_value(v)
+                .map_err(|e| format!("ANSI 花键参数表：请求字段无效：{e}"))?;
+            m.lang = Some(if card.renderer == crate::card::CardRenderer::AnsiTableCn {
+                "cn"
+            } else {
+                "en"
+            }
+            .to_string());
+            m.preview_json()?
+        }
+    };
+    Ok(out.to_string())
+}
+
+/// `POST /api/card_export`：GUI「出表」（卡类型表分派；与 CLI 同一构造路径）。
+fn api_card_export(
+    body: &[u8],
+    sender: &Arc<dyn PluginRequestSender>,
+) -> (u16, &'static str, String) {
+    let json = "application/json; charset=utf-8";
+    match apply_card_export(sender, body) {
+        Ok(s) => (200, json, s),
+        Err(e) => (400, json, serde_json::json!({"ok": false, "error": e}).to_string()),
+    }
+}
+
+pub(crate) fn apply_card_export(
+    sender: &Arc<dyn PluginRequestSender>,
+    body: &[u8],
+) -> Result<String, String> {
+    use crate::card::CardRenderer;
+    let (v, card) = card_model_value(body)?;
+    // 先在内存里算一遍：参数/表外/非法值全在这拦下（不写半个块）。
+    #[allow(clippy::type_complexity)]
+    let (kind_label, block, members, at, rot, ins, attrs, meta, echo): (
+        String,
+        String,
+        Vec<acadrust::EntityType>,
+        Option<[f64; 2]>,
+        f64,
+        acadrust::EntityType,
+        Vec<(acadrust::entities::AttributeDefinition, String)>,
+        String,
+        String,
+    ) = match card.renderer {
+        CardRenderer::SplineTable => {
+            let m: crate::spline_gui::SplineTableModel = serde_json::from_value(v)
+                .map_err(|e| format!("花键参数表：请求字段无效：{e}"))?;
+            let echo = m.echo_note()?;
+            let input = m.to_input()?;
+            let table = crate::spline_tol::compute(&input)?;
+            let side = input.side;
+            let block = crate::spline_table::block_name(side).to_string();
+            let at = m.at;
+            let rot = m.rot;
+            let ins = acadrust::EntityType::Insert(crate::spline_table::build_insert(
+                side,
+                &table,
+                at.unwrap_or([0.0, 0.0]),
+                rot,
+            )?);
+            let attrs = m.pending_attrs()?;
+            let meta = m.part_meta_json()?;
+            (
+                format!("{}参数表", crate::spline_gui::side_label(side)),
+                block,
+                crate::spline_table::block_entities(side),
+                at,
+                rot,
+                ins,
+                attrs,
+                meta,
+                echo,
+            )
+        }
+        CardRenderer::GearTable => {
+            let m: crate::gear_table::GearTableModel = serde_json::from_value(v)
+                .map_err(|e| format!("齿轮参数表：请求字段无效：{e}"))?;
+            let spec = m.spec()?;
+            let echo = m.echo_note()?;
+            let at = m.at;
+            let rot = m.rot;
+            let ins = acadrust::EntityType::Insert(crate::gear_table::build_insert(
+                &spec,
+                at.unwrap_or([0.0, 0.0]),
+                rot,
+            )?);
+            let attrs = m.pending_attrs()?;
+            let meta = m.part_meta_json()?;
+            (
+                "齿轮参数表".to_string(),
+                crate::gear_table::BLOCK.to_string(),
+                crate::gear_table::block_entities(),
+                at,
+                rot,
+                ins,
+                attrs,
+                meta,
+                echo,
+            )
+        }
+        CardRenderer::AnsiTableCn | CardRenderer::AnsiTableEn => {
+            let mut m: crate::ansi_table::AnsiTableModel = serde_json::from_value(v)
+                .map_err(|e| format!("ANSI 花键参数表：请求字段无效：{e}"))?;
+            m.lang = Some(if card.renderer == CardRenderer::AnsiTableCn {
+                "cn"
+            } else {
+                "en"
+            }
+            .to_string());
+            let spec = m.spec()?;
+            let echo = m.echo_note()?;
+            let at = m.at;
+            let rot = m.rot;
+            let ins = acadrust::EntityType::Insert(crate::ansi_table::build_insert(
+                &spec,
+                at.unwrap_or([0.0, 0.0]),
+                rot,
+            )?);
+            let attrs = m.pending_attrs()?;
+            let meta = m.part_meta_json()?;
+            let side_label = match spec.side {
+                crate::spline_tol::SplineSide::Internal => "内花键",
+                crate::spline_tol::SplineSide::External => "外花键",
+            };
+            (
+                format!("ANSI {side_label}参数表（{}）", spec.lang.label()),
+                crate::ansi_table::block_name(spec.side, spec.lang).to_string(),
+                crate::ansi_table::block_entities(spec.side, spec.lang),
+                at,
+                rot,
+                ins,
+                attrs,
+                meta,
+                echo,
+            )
+        }
+    };
+    let exists = snapshot(sender)?
+        .block_records
+        .iter()
+        .any(|b| b.name == block);
+    begin_undo(sender, &kind_label)?;
+    req_timed(
+        sender,
+        PluginRequest::EnsureLayers(crate::layer_defs()),
+        "EnsureLayers",
+    )?;
+    req_timed(
+        sender,
+        PluginRequest::EnsureTextStyles(crate::text_style_defs()),
+        "EnsureTextStyles",
+    )?;
+    if !exists {
+        req_timed(
+            sender,
+            PluginRequest::AddBlockRecord {
+                name: block.clone(),
+                entities: members,
+            },
+            "AddBlockRecord",
+        )?;
+    }
+    if let Some(at) = at {
+        req_timed(sender, PluginRequest::AddEntities(vec![ins]), "AddEntities")?;
+        req_timed(sender, PluginRequest::BumpGeometry, "BumpGeometry")?;
+        mark_dirty(sender)?;
+        commit_undo(sender);
+        return Ok(serde_json::json!({
+            "ok": true,
+            "message": format!(
+                "已插入{kind_label}（{echo}）于 ({}, {}) rot {}°。",
+                crate::partgen_kit::trim(at[0]),
+                crate::partgen_kit::trim(at[1]),
+                crate::partgen_kit::trim(rot)
+            ),
+            "block": block,
+            "at": at,
+            "rot": rot,
+        })
+        .to_string());
+    }
+    // 无落点 → 登记待放置件（带 ATTRIB；`place_one` 落件时一起插入）。
+    crate::set_pending_part(crate::PendingPart::with_attrs(
+        block.clone(),
+        meta,
+        format!("{kind_label}（{echo}）"),
+        attrs,
+    ));
+    commit_undo(sender);
+    Ok(serde_json::json!({
+        "ok": true,
+        "pending": true,
+        "block": block,
+        "message": format!(
+            "已生成{kind_label}（{echo}）：切回图纸，鼠标上已带这张表，左键点击定位基点 → 移动光标旋转 → 再点击落定（可连续，Esc 结束）。"
+        ),
+    })
+    .to_string())
+}
+
 fn apply_part_export(
     sender: &Arc<dyn PluginRequestSender>,
     body: &[u8],
@@ -9410,6 +9657,28 @@ mod tests {
         assert!(
             out.status.success(),
             "花键参数表 GUI 行为冒烟失败：\n{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    /// 智能卡片新卡（齿轮/ANSI 中英）窗口行为冒烟：卡类型切换、面板切换、
+    /// `/api/card_preview|export`、缺项「—」与 404 红框。node 缺失时跳过。
+    #[test]
+    fn card_gui_behavior_smoke_with_node() {
+        let manifest = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let js = manifest.join("tests/card_gui_smoke.mjs");
+        let html = manifest.join("src/spline_gui.html");
+        if !js.exists() {
+            return;
+        }
+        let out = match std::process::Command::new("node").arg(&js).arg(&html).output() {
+            Ok(o) => o,
+            Err(_) => return, // 无 node：跳过（不阻塞 CI）
+        };
+        assert!(
+            out.status.success(),
+            "智能卡片新卡 GUI 行为冒烟失败：\n{}{}",
             String::from_utf8_lossy(&out.stdout),
             String::from_utf8_lossy(&out.stderr)
         );
@@ -15374,6 +15643,147 @@ mod weld_tests {
             1
         );
         assert_eq!(mock.block_entities("OCSM_SPTABLE_GB_INT").len(), 22 + 35 + 1 + 21);
+    }
+
+    /// 通用智能卡片端点（`/api/card_preview|export`）：齿轮卡 + ANSI 中/英卡；
+    /// 选项表下发齿轮/ANSI 口径；出表无 at→待放置件、有 at→直插，ATTRIB 数正确。
+    #[test]
+    fn card_routes_serve_gear_and_ansi_preview_export() {
+        let _g = export_lock();
+        let mock = Arc::new(MockSender::new(ocsm_layered_doc()));
+        mock.mirror_blocks_into_doc();
+        let sender: Arc<dyn PluginRequestSender> = mock.clone();
+        let router = Arc::new(SenderRouter::new(mock.clone(), None));
+        router.set_current(2, mock.clone());
+        let server = spawn(router).expect("spawn guide server");
+
+        // ── 选项表：四张卡 + 齿轮/ANSI 选项 ──
+        let j = http_req(server.port, "GET", "/api/spline_options", "");
+        let v: serde_json::Value = serde_json::from_str(&j).unwrap();
+        assert_eq!(v["card_types"].as_array().unwrap().len(), 4, "{j}");
+        assert_eq!(v["card_types"][1]["renderer"], "gear_table");
+        assert_eq!(v["card_types"][2]["renderer"], "ansi_table_cn");
+        assert_eq!(v["card_types"][3]["renderer"], "ansi_table_en");
+        assert_eq!(v["gear_card"]["columns"].as_array().unwrap().len(), 19);
+        assert_eq!(v["ansi_card"]["profiles"].as_array().unwrap().len(), 5);
+        assert_eq!(v["ansi_card"]["columns"]["int"].as_array().unwrap().len(), 17);
+        assert_eq!(v["ansi_card"]["columns"]["ext"].as_array().unwrap().len(), 17);
+
+        // ── 通用端点也覆盖花键卡（同一个分派表；GUI 花键卡仍走 /api/spline_*）──
+        let spline = serde_json::json!({
+            "card": "花键参数表", "system": "gb3478", "side": "int", "grade": 6, "fit": "H",
+            "expr": "SPLINE IN M3 Z20 ALPHA30 X0 DA65.4 DF57.3436 BETA0 H30",
+            "root": null, "dp": null, "at": null, "rot": 0.0,
+        });
+        let j = http_req(server.port, "POST", "/api/card_preview", &spline.to_string());
+        let v: serde_json::Value = serde_json::from_str(&j).unwrap();
+        assert_eq!(v["ok"], true, "{j}");
+        assert_eq!(v["items"].as_array().unwrap().len(), 21);
+
+        // ── 齿轮卡预览：表达式反解交齿轮引擎；缺项「—」──
+        let gear = serde_json::json!({
+            "card": "齿轮参数表",
+            "expr": "GEAR EX M2 Z40 ALPHA20 X0 DA84 DF75 BETA0 H20",
+            "mate_z": 20, "mate_dwg": "OCS-002", "grade": "7-7-7",
+            "center": null, "at": null, "rot": 0.0,
+        });
+        let j = http_req(server.port, "POST", "/api/card_preview", &gear.to_string());
+        let v: serde_json::Value = serde_json::from_str(&j).unwrap();
+        assert_eq!(v["ok"], true, "{j}");
+        assert_eq!(v["renderer"], "gear_table");
+        let items = v["items"].as_array().unwrap();
+        assert_eq!(items.len(), 19);
+        let get = |tag: &str| {
+            items
+                .iter()
+                .find(|it| it["tag"] == tag)
+                .unwrap_or_else(|| panic!("缺 {tag}: {j}"))
+        };
+        assert_eq!(get("法向模数")["value"], "2");
+        assert_eq!(get("齿顶高系数")["value"], "1");
+        assert_eq!(get("全齿高")["value"], "4.5");
+        assert_eq!(get("公法线")["value"], "27.69");
+        assert_eq!(get("公法线K")["value"], "5");
+        assert_eq!(get("中心距及极限偏差")["value"], "60", "mt(z1+z2)/2");
+        assert_eq!(get("精度等级")["value"], "7-7-7");
+        assert_eq!(get("齿圈径向跳动公差")["value"], "—");
+        assert_eq!(get("齿圈径向跳动公差")["missing"], true);
+
+        // ── 齿轮卡出表：无 at → 待放置件 19 ATTRIB；有 at → 直插 ──
+        let resp = apply_card_export(&sender, gear.to_string().as_bytes()).expect("齿轮出表");
+        assert!(resp.contains("\"ok\":true") && resp.contains("齿轮参数表"), "{resp}");
+        assert_eq!(crate::pending_block().unwrap(), "OCSM_GEARTABLE_GB");
+        let pending = crate::pending_part_for_test().expect("待放置件");
+        assert_eq!(pending.attrs.len(), 19, "齿轮卡待放置件带 19 个 ATTRIB");
+        let mut gear_at = gear.clone();
+        gear_at["at"] = serde_json::json!([30.0, 40.0]);
+        gear_at["rot"] = serde_json::json!(15.0);
+        let j = http_req(
+            server.port,
+            "POST",
+            "/api/card_export?tab=2",
+            &gear_at.to_string(),
+        );
+        let v: serde_json::Value = serde_json::from_str(&j).unwrap();
+        assert_eq!(v["ok"], true, "{j}");
+        let ins = mock.inserts().last().unwrap().clone();
+        assert_eq!(ins.0, "OCSM_GEARTABLE_GB");
+        assert_eq!(mock.insert_attr_counts().last().copied(), Some(19));
+        assert_eq!(mock.block_entities("OCSM_GEARTABLE_GB").len(), 92, "27+46+19");
+
+        // ── ANSI 中文/英文预览：同一套引擎、语种不同 ──
+        let ansi_cn = serde_json::json!({
+            "card": "ANSI花键参数表_中文", "side": "int", "p": 16.0, "z": 20,
+            "profile": null, "at": null, "rot": 0.0,
+        });
+        let j = http_req(server.port, "POST", "/api/card_preview", &ansi_cn.to_string());
+        let v: serde_json::Value = serde_json::from_str(&j).unwrap();
+        assert_eq!(v["ok"], true, "{j}");
+        assert_eq!(v["renderer"], "ansi_table_cn");
+        let items = v["items"].as_array().unwrap();
+        assert_eq!(items.len(), 17);
+        let get = |tag: &str| items.iter().find(|it| it["tag"] == tag).unwrap();
+        assert_eq!(get("花键类型")["value"], "30°平齿根齿侧配合");
+        assert_eq!(get("径节")["value"], "16/32");
+        assert_eq!(get("大径")["value"], "33.893");
+        assert_eq!(get("小径")["value"], "30.163");
+        assert_eq!(get("跨棒距")["value"], "—");
+        assert_eq!(get("跨棒距")["missing"], true);
+        let mut ansi_en = ansi_cn.clone();
+        ansi_en["card"] = serde_json::json!("ANSI花键参数表_英文");
+        let j = http_req(server.port, "POST", "/api/card_preview", &ansi_en.to_string());
+        let v: serde_json::Value = serde_json::from_str(&j).unwrap();
+        assert_eq!(v["renderer"], "ansi_table_en");
+        assert_eq!(v["items"][0]["value"], "FLAT ROOT SIDE FIT");
+
+        // ── ANSI 出表：中文内花键 → 块 OCSM_ANSI_INT_CN（17 ATTRIB）；英文外花键 → OCSM_ANSI_EXT_EN ──
+        let resp = apply_card_export(&sender, ansi_cn.to_string().as_bytes()).expect("ANSI 出表");
+        assert!(resp.contains("\"ok\":true"), "{resp}");
+        assert_eq!(crate::pending_block().unwrap(), "OCSM_ANSI_INT_CN");
+        assert_eq!(crate::pending_part_for_test().unwrap().attrs.len(), 17);
+        let mut ansi_ext_en = ansi_en.clone();
+        ansi_ext_en["side"] = serde_json::json!("ext");
+        ansi_ext_en["p"] = serde_json::json!(12.0);
+        let resp = apply_card_export(&sender, ansi_ext_en.to_string().as_bytes()).expect("ANSI 出表");
+        assert!(resp.contains("\"ok\":true"), "{resp}");
+        assert_eq!(crate::pending_block().unwrap(), "OCSM_ANSI_EXT_EN");
+        assert_eq!(crate::pending_part_for_test().unwrap().attrs.len(), 17);
+        assert_eq!(mock.block_entities("OCSM_ANSI_INT_CN").len(), 62, "26+19+17");
+
+        // ── 报错路径：不认识的卡类型 / 非系列径节 / 表达式不自洽 ──
+        let bad = serde_json::json!({"card": "铭牌", "expr": "x"});
+        let j = http_req(server.port, "POST", "/api/card_preview", &bad.to_string());
+        assert!(j.contains("不认识的卡类型"), "{j}");
+        let bad = serde_json::json!({
+            "card": "ANSI花键参数表_中文", "side": "int", "p": 7.0, "z": 20,
+        });
+        let j = http_req(server.port, "POST", "/api/card_preview", &bad.to_string());
+        assert!(j.contains("系列"), "{j}");
+        let bad = serde_json::json!({
+            "card": "齿轮参数表", "expr": "GEAR EX M2 Z40 ALPHA20 X0 DA90 DF75 BETA0 H20",
+        });
+        let j = http_req(server.port, "POST", "/api/card_preview", &bad.to_string());
+        assert!(j.contains("不合法"), "{j}");
     }
 
     /// GUI 共享助手 `/ocsm_gui_common.js`（跨模块共享实现 > 各写一份）：

@@ -435,6 +435,29 @@ impl GearParams {
         std::f64::consts::PI * self.m / 2.0 / self.beta().cos()
             + 2.0 * self.x * self.m * self.alpha_n().tan()
     }
+    /// **跨测齿数 k 与公法线长度 W**（直齿外齿轮；`None` = 该组合无此测量口径）。
+    ///
+    /// 公式：`k = round(z·αt/180° + 0.5)`（αt = 端面压力角，直齿 = αn），
+    /// `W = m·cosαt·[(k−0.5)π + z·invαt] + 2·x·m·sinαt`（`invα = tanα − α`）。
+    /// 与 `spline_tol` 的 GB/T 3478.6 式(11) `K = z/6 + 0.5`（αD=30°）同一条渐开线跨距公式
+    /// （该式的 `z·αD/π + 0.5` 即本式；花键多了 esv − (T+λ) 修正项）。
+    ///
+    /// 不适用的组合（返回 `None`，卡片如实标缺）：
+    /// * **内齿轮** —— 公法线测量用于外齿轮；
+    /// * **斜齿轮**（β≠0）—— 公法线要在法面测量，本仓没有斜齿跨距口径。
+    pub fn span_measurement(&self) -> Option<(u32, f64)> {
+        if self.kind.is_internal() || self.is_helical() {
+            return None;
+        }
+        let a = self.alpha_t();
+        let k = (self.z as f64 * a.to_degrees() / 180.0 + 0.5).round() as u32;
+        let k = k.max(1);
+        let inv = a.tan() - a;
+        let w = self.m * a.cos() * ((k as f64 - 0.5) * std::f64::consts::PI + self.z as f64 * inv)
+            + 2.0 * self.x * self.m * a.sin();
+        Some((k, w))
+    }
+
     /// 齿根过渡圆角半径 ρ = 0.38Mn。
     pub fn rho(&self) -> f64 {
         RHO_RATIO * self.m
@@ -4050,6 +4073,31 @@ mod tests {
         assert!((p.rho() - 0.76).abs() < 1e-9, "齿根圆角 0.38m = 0.76");
         assert!((p.chamfer() - 1.0).abs() < 1e-9, "倒角 round(0.6×2) = 1");
         assert!((p.pitch_angle().to_degrees() - 9.0).abs() < 1e-9, "齿距角 9°");
+    }
+
+    /// 公法线跨距：直齿外齿轮有值（模板 m2 z40 α20 → k=5、W≈27.6896）；内齿轮/斜齿轮标缺。
+    #[test]
+    fn span_measurement_spur_external_only() {
+        let p = tmpl();
+        let (k, w) = p.span_measurement().unwrap();
+        assert_eq!(k, 5, "k = round(40×20/180 + 0.5)");
+        // 独立手算：inv20° = tan20° − 20°（弧度）
+        let a = 20f64.to_radians();
+        let want = 2.0 * a.cos() * (4.5 * std::f64::consts::PI + 40.0 * (a.tan() - a));
+        assert!((w - want).abs() < 1e-12, "W={w} vs {want}");
+        assert!((w - 27.6896).abs() < 5e-4, "模板档 W≈27.6896：{w}");
+        // 变位项 = +2·x·m·sinαt
+        let mut ps = tmpl();
+        ps.x = 0.5;
+        let (_, wx) = ps.span_measurement().unwrap();
+        assert!((wx - w - 2.0 * 0.5 * 2.0 * a.sin()).abs() < 1e-12, "变位项");
+        // 内齿轮 / 斜齿轮：无口径 → None（卡片如实标缺）
+        let mut pi = tmpl();
+        pi.kind = GearKind::Internal;
+        assert!(pi.span_measurement().is_none(), "内齿轮无公法线测量");
+        let mut ph = tmpl();
+        ph.beta_deg = 8.0;
+        assert!(ph.span_measurement().is_none(), "斜齿轮口径未收");
     }
 
     #[test]

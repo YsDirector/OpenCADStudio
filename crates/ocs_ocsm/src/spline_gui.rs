@@ -650,9 +650,12 @@ pub fn options_json() -> Result<serde_json::Value, String> {
         .collect::<Result<Vec<_>, _>>()?;
     Ok(serde_json::json!({
         "ok": true,
-        // 卡片类型表（智能卡片：本期只有「花键参数表」；以后加表格/铭牌 = 表加行）。
+        // 卡片类型表（智能卡片：花键/齿轮/ANSI 中英；以后加表格/铭牌 = 表加行）。
         "card_types": crate::card::card_types_json(),
         "systems": systems,
+        // 齿轮卡与 ANSI 卡的选项/口径（同一下发端点；页面按 renderer 切面板）。
+        "gear_card": crate::gear_table::options_json(),
+        "ansi_card": crate::ansi_table::options_json(),
         "pin_series": crate::spline_tol::pin_series()?,
         "pin_series_note": "GB/T 3478.9-2008 表 1（67 档，R40；极限偏差 ±0.001 mm）",
         "info_layers": {

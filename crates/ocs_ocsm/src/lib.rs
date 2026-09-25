@@ -19,12 +19,14 @@ mod balloon;
 mod balloon_sync;
 mod bom_xlsx;
 mod bom;
+mod ansi_table;
 mod card;
 mod centerline;
 mod detail;
 mod detail_clip;
 mod dim2gb;
 mod gear;
+mod gear_table;
 mod hole;
 mod guide_server;
 mod guide_url;
@@ -2593,7 +2595,7 @@ impl OcsmPlugin {
         }
     }
 
-    /// `OCSMCARD`：**智能卡片**（通用卡片生成器；本期卡类型 = 花键参数表）。
+    /// `OCSMCARD`：**智能卡片**（通用卡片生成器；本期卡类型 = 花键参数表 / 齿轮参数表 / ANSI 花键中英）。
     ///
     /// * 不带参数 = 人类侧：开智能卡片窗口 + 进放置态（与 DK/OCSMHOLE 同款）。
     /// * 带参数 = `OCSMCARD <卡类型> …`；卡类型/可用体系从 `card::CARD_TYPES` 表里查
@@ -2618,6 +2620,13 @@ impl OcsmPlugin {
         };
         match card.renderer {
             crate::card::CardRenderer::SplineTable => self.cmd_spline_card(host, rest),
+            crate::card::CardRenderer::GearTable => self.cmd_gear_card(host, rest),
+            crate::card::CardRenderer::AnsiTableCn => {
+                self.cmd_ansi_card(host, rest, crate::ansi_table::AnsiLang::Cn)
+            }
+            crate::card::CardRenderer::AnsiTableEn => {
+                self.cmd_ansi_card(host, rest, crate::ansi_table::AnsiLang::En)
+            }
         }
     }
 
@@ -2732,6 +2741,126 @@ impl OcsmPlugin {
             input.grade_fit_label(),
             spec.system,
             spec.expr,
+            at[0],
+            at[1],
+            crate::partgen_kit::trim(spec.rot)
+        ));
+    }
+
+    /// 卡类型「齿轮参数表」：
+    /// `OCSMCARD 齿轮参数表 <九字段表达式> [mate z₂] [dwg 图号] [grade 精度等级] [center a] [at x,y] [rot 度]`。
+    /// 表达式反解交 `gear::GearParams`（同一套公式）；表格块几何内建（`OCSM_GEARTABLE_GB`），
+    /// 19 个值写 INSERT.attributes（GB/T 10095 公差未收 → 如实标缺）。
+    fn cmd_gear_card(&self, host: &mut dyn HostApi, args: &str) {
+        use crate::gear_table::GearTableSpec;
+        let spec = match GearTableSpec::parse(args) {
+            Ok(s) => s,
+            Err(e) => {
+                host.push_error(&e);
+                return;
+            }
+        };
+        host.ensure_layers(layer_defs());
+        host.ensure_text_styles(text_style_defs());
+        let block = crate::gear_table::BLOCK;
+        if host.document().block_records.get(block).is_none() {
+            let members = crate::gear_table::block_entities();
+            if let Err(e) = host.add_block_record(block, members) {
+                host.push_error(&format!("齿轮参数表：建块 {block} 失败：{e}"));
+                return;
+            }
+        }
+        let at = spec.at.unwrap_or_else(|| {
+            crate::take_parts_point()
+                .map(|p| [p[0], p[1]])
+                .unwrap_or([0.0, 0.0])
+        });
+        let ins = match crate::gear_table::build_insert(&spec, at, spec.rot) {
+            Ok(i) => i,
+            Err(e) => {
+                host.push_error(&format!("齿轮参数表：{e}"));
+                return;
+            }
+        };
+        host.push_undo("齿轮参数表插入");
+        let handles = host.add_entities(vec![acadrust::EntityType::Insert(ins)]);
+        if handles.is_empty() {
+            host.push_error("齿轮参数表：插入失败（宿主未返回句柄）");
+            return;
+        }
+        host.set_dirty();
+        let note = crate::gear_table::GearTableModel {
+            card: "齿轮参数表".into(),
+            expr: spec.expr.clone(),
+            mate_z: spec.mate_z,
+            mate_dwg: spec.mate_dwg.clone(),
+            grade: spec.grade.clone(),
+            center: spec.center,
+            at: spec.at,
+            rot: spec.rot,
+        }
+        .echo_note()
+        .unwrap_or_else(|_| String::new());
+        host.push_info(&format!(
+            "智能卡片：已插入齿轮参数表（{note}）于 ({:.3}, {:.3}) rot {}°。\n\
+             GB/T 10095-88 公差（Fr/FW/ff/fpt/Fβ）与中心距极限偏差本仓未收 —— 表内显示「—」。",
+            at[0],
+            at[1],
+            crate::partgen_kit::trim(spec.rot)
+        ));
+    }
+
+    /// 卡类型「ANSI 花键参数表」（纯中文 / 纯英文）：
+    /// `OCSMCARD ANSI花键参数表_中文 内 P16 Z20 [profile ANSI30R] [at x,y] [rot 度]`。
+    /// 引擎 = `invol_spline.rs` ANSI B92.1 Table 2；表格块几何内建（4 个块：内/外 × 中/英）。
+    fn cmd_ansi_card(&self, host: &mut dyn HostApi, args: &str, lang: crate::ansi_table::AnsiLang) {
+        use crate::ansi_table::AnsiTableSpec;
+        let spec = match AnsiTableSpec::parse(lang, args) {
+            Ok(s) => s,
+            Err(e) => {
+                host.push_error(&e);
+                return;
+            }
+        };
+        host.ensure_layers(layer_defs());
+        host.ensure_text_styles(text_style_defs());
+        let block = crate::ansi_table::block_name(spec.side, spec.lang);
+        if host.document().block_records.get(block).is_none() {
+            let members = crate::ansi_table::block_entities(spec.side, spec.lang);
+            if let Err(e) = host.add_block_record(block, members) {
+                host.push_error(&format!("ANSI 花键参数表：建块 {block} 失败：{e}"));
+                return;
+            }
+        }
+        let at = spec.at.unwrap_or_else(|| {
+            crate::take_parts_point()
+                .map(|p| [p[0], p[1]])
+                .unwrap_or([0.0, 0.0])
+        });
+        let ins = match crate::ansi_table::build_insert(&spec, at, spec.rot) {
+            Ok(i) => i,
+            Err(e) => {
+                host.push_error(&format!("ANSI 花键参数表：{e}"));
+                return;
+            }
+        };
+        host.push_undo("ANSI 花键参数表插入");
+        let handles = host.add_entities(vec![acadrust::EntityType::Insert(ins)]);
+        if handles.is_empty() {
+            host.push_error("ANSI 花键参数表：插入失败（宿主未返回句柄）");
+            return;
+        }
+        host.set_dirty();
+        let side = match spec.side {
+            crate::spline_tol::SplineSide::Internal => "内花键",
+            crate::spline_tol::SplineSide::External => "外花键",
+        };
+        host.push_info(&format!(
+            "智能卡片：已插入 ANSI B92.1 {side}参数表（{}，P/Ps={}，N={}）于 ({:.3}, {:.3}) rot {}°。\n\
+             配合/公差/量棒/公法线表本仓未收 —— 相关格显示「—」。",
+            spec.lang.label(),
+            crate::ansi_table::pair_label(spec.p),
+            spec.z,
             at[0],
             at[1],
             crate::partgen_kit::trim(spec.rot)
