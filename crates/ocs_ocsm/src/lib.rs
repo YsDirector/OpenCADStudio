@@ -19,6 +19,7 @@ mod balloon;
 mod balloon_sync;
 mod bom_xlsx;
 mod bom;
+mod card;
 mod centerline;
 mod detail;
 mod detail_clip;
@@ -80,7 +81,7 @@ static MANIFEST: PluginManifest = PluginManifest {
         "OCSMSHAFT",
         "OCSMHOLE",
         "DK",
-        "XLT",
+        "OCSMCARD",
     ],
 };
 
@@ -485,9 +486,9 @@ pub(crate) fn open_hole_window(port: u16, tab: Option<u64>) -> bool {
     open_plugin_page(port, &with_tab("/hole", tab), "hole", 860, 720)
 }
 
-/// 打开**花键参数表**窗口（人用 GUI：内/外 + 等级·配合 + Dp 点选 + 21 项实时结果；
-/// `XLT` 不带参数时打开；AI 走命令行/HTTP 同一实现）。
-pub(crate) fn open_spline_window(port: u16, tab: Option<u64>) -> bool {
+/// 打开**智能卡片**窗口（人用 GUI：本期卡类型「花键参数表」——内/外 + 等级·配合 +
+/// Dp 点选 + 齿形表达式反解 + 21 项实时结果；`OCSMCARD` 不带参数时打开）。
+pub(crate) fn open_card_window(port: u16, tab: Option<u64>) -> bool {
     open_plugin_page(port, &with_tab("/spline", tab), "spline", 980, 900)
 }
 
@@ -1673,9 +1674,15 @@ impl BuiltinPlugin for OcsmPlugin {
                 self.cmd_parts(host, rest);
                 true
             }
-            // GB/T 3478 渐开线花键参数表（表 21 属性 → 插图；计算书节见 OCSMSHAFT REPORT）
+            // 智能卡片（正式名 `OCSMCARD`；本期卡类型「花键参数表」→ 21 属性插图）
+            "OCSMCARD" => {
+                self.cmd_card(host, rest);
+                true
+            }
+            // 旧短命令 `XLT` 已移除（用户 2026-09-25 定名收敛）：明确报错并指路，不静默。
             "XLT" => {
-                self.cmd_spline_table(host, rest);
+                host.push_error("`XLT` 已移除：请改用 `OCSMCARD 花键参数表 …`（智能卡片）。");
+                host.push_output(&crate::card::usage_line());
                 true
             }
             // 明细表：建表/刷新（`BOM 30` = 本次首列 30 行）、配置（`BOMCFG 30`）
@@ -2520,11 +2527,6 @@ impl OcsmPlugin {
         // 无参数 = 原 GUI 流程（开零件库窗口 + 进放置态）。
         // 有参数但解析失败 = 报用法（不静默开浏览器窗口，避免 AI 驱动时弹出无意义窗口）。
         if !args.trim().is_empty() {
-            // 子命令「花键参数表」：`XL 花键参数表 内 6H …`（等价短命令 `XLT 内 6H …`）。
-            if let Some(rest) = args.trim().strip_prefix("花键参数表") {
-                self.cmd_spline_table(host, rest.trim());
-                return;
-            }
             match PartsSpec::parse(args) {
                 Some(spec) => {
                     self.cmd_parts_insert(host, &spec);
@@ -2591,43 +2593,70 @@ impl OcsmPlugin {
         }
     }
 
-    /// `XLT` / `XL 花键参数表`：GB/T 3478 渐开线花键参数表。
+    /// `OCSMCARD`：**智能卡片**（通用卡片生成器；本期卡类型 = 花键参数表）。
     ///
-    /// * 不带参数 = 人类侧：开花键参数表窗口（内/外方向 + 等级·配合 + Dp 标准解/备选点选 +
-    ///   21 项实时结果）+ 进放置态（窗口点「出表」→ 回图纸点基点 → 旋转 → 落定）。
-    /// * 带参数 = AI/MCP：`XLT 内 6H [dp 4.5] [m 3 z 20 a 30 x 0 | from sel|last] [root 平|圆] [at x,y] [rot 度]`。
+    /// * 不带参数 = 人类侧：开智能卡片窗口 + 进放置态（与 DK/OCSMHOLE 同款）。
+    /// * 带参数 = `OCSMCARD <卡类型> …`；卡类型/可用体系从 `card::CARD_TYPES` 表里查
+    ///   （本期：`OCSMCARD 花键参数表 [std GB] 内 6H <九字段表达式> [dp 4.5] [root 平|圆] [at x,y] [rot 度]`）。
     ///
-    /// 表格块几何**内建**（每个方向一块，`OCSM_SPTABLE_GB_*`），21 个值走
-    /// `spline_tol::compute()` 后写 INSERT.attributes（不依赖外部 DXF）；
-    /// 建 INSERT 与 GUI 导出共用 `spline_table::build_insert()`。
-    fn cmd_spline_table(&self, host: &mut dyn HostApi, args: &str) {
-        use crate::spline_table::SplineTableSpec;
+    /// 旧短命令 `XLT` 已移除（dispatch 里明确报错并指路 `OCSMCARD`）。
+    fn cmd_card(&self, host: &mut dyn HostApi, args: &str) {
         if args.trim().is_empty() {
-            // 与 OCSMHOLE/DK 同款：开窗 + 进放置态（窗口里点「出表」后鼠标跟随预览）。
-            let Some(port) = self.ensure_guide_server(host) else {
-                host.push_error("XLT: 无法启动花键参数表服务（宿主不支持 worker 请求）。");
-                return;
-            };
-            if open_spline_window(port, Some(host.tab_id())) {
-                host.push_info(
-                    "OCSM 花键参数表：已打开窗口（内/外方向 + 等级·配合 + 量棒 Dp 标准解/3 备选点选 + 21 项实时结果）。\
-                     点「出表」→ 回到图纸点击定位基点 → 移动光标旋转 → 再点击落定（可连续，Esc 结束）。",
-                );
-            } else {
-                host.push_info("OCSM 花键参数表：窗口已打开（Alt+Tab 切换过去）。");
-            }
-            let Some(sender) = host.plugin_request_sender() else {
-                return;
-            };
-            host.start_interactive(Box::new(PartPlace {
-                sender: std::sync::Arc::from(sender),
-                phase: std::cell::Cell::new(PlacePhase::Follow),
-                base: std::cell::Cell::new([0.0, 0.0, 0.0]),
-                what: "OCSM 花键参数表",
-                where_to: "请在花键参数表窗口里点「出表」",
-            }));
+            self.open_card_window_and_place(host);
             return;
         }
+        let (name, rest) = match args.trim().split_once(char::is_whitespace) {
+            Some((name, rest)) => (name, rest.trim()),
+            None => (args.trim(), ""),
+        };
+        let Some(card) = crate::card::card_type_by_token(name) else {
+            host.push_error(&format!(
+                "智能卡片：不认识的卡类型「{name}」。\n{}",
+                crate::card::usage_line()
+            ));
+            return;
+        };
+        match card.renderer {
+            crate::card::CardRenderer::SplineTable => self.cmd_spline_card(host, rest),
+        }
+    }
+
+    /// 开智能卡片窗口 + 进放置态（`OCSMCARD` 无参调用；与 DK/OCSMHOLE 同款）。
+    fn open_card_window_and_place(&self, host: &mut dyn HostApi) {
+        let Some(port) = self.ensure_guide_server(host) else {
+            host.push_error("OCSMCARD: 无法启动智能卡片服务（宿主不支持 worker 请求）。");
+            return;
+        };
+        if open_card_window(port, Some(host.tab_id())) {
+            host.push_info(
+                "OCSM 智能卡片：已打开窗口（本期卡类型「花键参数表」：内/外 + 等级·配合 + \
+                 量棒 Dp 标准解/3 备选点选 + 齿形表达式反解 + 21 项实时结果）。\
+                 点「出表」→ 回到图纸点击定位基点 → 移动光标旋转 → 再点击落定（可连续，Esc 结束）。",
+            );
+        } else {
+            host.push_info("OCSM 智能卡片：窗口已打开（Alt+Tab 切换过去）。");
+        }
+        let Some(sender) = host.plugin_request_sender() else {
+            return;
+        };
+        host.start_interactive(Box::new(PartPlace {
+            sender: std::sync::Arc::from(sender),
+            phase: std::cell::Cell::new(PlacePhase::Follow),
+            base: std::cell::Cell::new([0.0, 0.0, 0.0]),
+            what: "OCSM 智能卡片",
+            where_to: "请在智能卡片窗口里点「出表」",
+        }));
+    }
+
+    /// 卡类型「花键参数表」：
+    /// `[std GB] 内 6H <九字段表达式> [dp 4.5] [root 平|圆] [at x,y] [rot 度]`。
+    ///
+    /// 参数来源 = 表达式（`spline_table::parse_expr_gear` 复用 `shaft::parse_program`
+    /// 反解 m/z/αD/x/Da/Df）；表格块几何**内建**（每个方向一块，`OCSM_SPTABLE_GB_*`），
+    /// 21 个值走 `spline_tol::compute()` 后写 INSERT.attributes（不依赖外部 DXF）；
+    /// 建 INSERT 与 GUI 导出共用 `spline_table::build_insert()`。
+    fn cmd_spline_card(&self, host: &mut dyn HostApi, args: &str) {
+        use crate::spline_table::SplineTableSpec;
         let spec = match SplineTableSpec::parse(args) {
             Ok(s) => s,
             Err(e) => {
@@ -2635,17 +2664,7 @@ impl OcsmPlugin {
                 return;
             }
         };
-        let meta: Option<serde_json::Value> = match spec.from {
-            None => None,
-            Some(from) => match self.spline_table_meta(host, from) {
-                Ok(v) => Some(v),
-                Err(e) => {
-                    host.push_error(&e);
-                    return;
-                }
-            },
-        };
-        let input = match spec.to_input(meta.as_ref()) {
+        let input = match spec.to_input() {
             Ok(i) => i,
             Err(e) => {
                 host.push_error(&format!("花键参数表：{e}"));
@@ -2692,10 +2711,7 @@ impl OcsmPlugin {
             return;
         }
         host.set_dirty();
-        let kind = match side {
-            crate::spline_tol::SplineSide::Internal => "内花键",
-            crate::spline_tol::SplineSide::External => "外花键",
-        };
+        let kind = crate::spline_gui::side_label(side);
         let dp_note = match (&table, spec.dp) {
             (crate::spline_tol::SplineTable::Internal(t), None) => format!(
                 "；量棒 Dp={}（计算值 D'={:.4}，备选 {}/ {}/ {}）",
@@ -2712,59 +2728,14 @@ impl OcsmPlugin {
             _ => String::new(),
         };
         host.push_info(&format!(
-            "花键参数表：已插入{kind}（{}）于 ({:.3}, {:.3}) rot {}°{dp_note}。",
+            "智能卡片：已插入{kind}参数表（{}，体系 {}，表达式 {}）于 ({:.3}, {:.3}) rot {}°{dp_note}。",
             input.grade_fit_label(),
+            spec.system,
+            spec.expr,
             at[0],
             at[1],
             crate::partgen_kit::trim(spec.rot)
         ));
-    }
-
-    /// 读选中/最后一个 INSERT 的 `OCSM_PART` 元数据（GEAR/SPLINE 生成器或轴块的 `gears[]`）。
-    fn spline_table_meta(
-        &self,
-        host: &dyn HostApi,
-        from: crate::spline_table::FromRef,
-    ) -> Result<serde_json::Value, String> {
-        use crate::spline_table::FromRef;
-        use ocs_plugin_api::host::acadrust::xdata::XDataValue;
-        let parse_rec = |h: acadrust::Handle| -> Option<serde_json::Value> {
-            let rec = host.read_record(h, "OCSM_PART")?;
-            for v in &rec.values {
-                if let XDataValue::String(s) = v {
-                    if let Ok(j) = serde_json::from_str::<serde_json::Value>(s) {
-                        if j.get("gears").is_some() || j.get("m").is_some() {
-                            return Some(j);
-                        }
-                    }
-                }
-            }
-            None
-        };
-        match from {
-            FromRef::Sel => {
-                for h in host.selected_handles() {
-                    if let Some(j) = parse_rec(h) {
-                        return Ok(j);
-                    }
-                }
-                Err("花键参数表：当前没有选中带 `OCSM_PART` 元数据的 GEAR/SPLINE 块".into())
-            }
-            FromRef::Last => {
-                let doc = host.document();
-                let mut found = None;
-                for e in doc.model_space_entities() {
-                    if let acadrust::EntityType::Insert(_) = e {
-                        if let Some(j) = parse_rec(e.common().handle) {
-                            found = Some(j);
-                        }
-                    }
-                }
-                found.ok_or_else(|| {
-                    "花键参数表：图中找不到带 `OCSM_PART` 元数据的齿轮/花键块".to_string()
-                })
-            }
-        }
     }
 
     /// `OCSMBOMEDIT` / `BOMEDIT`：打开**明细表网页编辑器**（chromium `--app` 独立窗口，
@@ -4705,8 +4676,12 @@ mod tests {
             "MANIFEST.command_prefixes 缺少 OCSMSHAFT"
         );
         assert!(
-            MANIFEST.command_prefixes.contains(&"XLT"),
-            "MANIFEST.command_prefixes 缺少 XLT（花键参数表短命令）"
+            MANIFEST.command_prefixes.contains(&"OCSMCARD"),
+            "MANIFEST.command_prefixes 缺少 OCSMCARD（智能卡片）"
+        );
+        assert!(
+            !MANIFEST.command_prefixes.contains(&"XLT"),
+            "XLT 已移除（用户定名收敛：OCSMCARD）——不该再注册"
         );
 
         // src/lib.rs 的 MANIFEST 与 plugin.toml 是两处维护（部署时 sed 只替换
@@ -4739,6 +4714,25 @@ mod tests {
             in_toml, expected,
             "plugin.toml 与 MANIFEST.command_prefixes 不同步"
         );
+    }
+
+    /// 定名收敛（用户 2026-09-25）：旧短命令 `XLT` 已移除 —— 调用时要**明确报错并指路
+    /// `OCSMCARD`**（不静默），卡类型表能查到（命令入口的表驱动基础）。
+    #[test]
+    fn xlt_removed_and_points_to_ocsmcard() {
+        let _g = global_state_test_lock(); // dispatch 会 refresh_doc_save_state（进程级全局）
+        let mut host = UndoOrderSpy::default();
+        assert!(OcsmPlugin.dispatch(
+            &mut host,
+            "XLT 内 6H SPLINE IN M3 Z20 ALPHA30 X0 DA64.5 DF57.3436 BETA0 H30"
+        ));
+        assert!(
+            host.errors.iter().any(|e| e.contains("OCSMCARD")),
+            "XLT 应报错并指路 OCSMCARD：{:?}",
+            host.errors
+        );
+        assert!(crate::card::card_type_by_token("花键参数表").is_some());
+        assert!(crate::card::card_type_by_token("spline").is_some());
     }
 
     #[test]

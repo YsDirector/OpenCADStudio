@@ -646,10 +646,9 @@ fn route(
         ("POST", "/api/shaft_export") => api_shaft_export(body, &sender!()),
         ("GET", t) if t.starts_with("/api/hole_sizes") => (200, json, crate::hole::sizes_json()),
         ("POST", "/api/hole_preview") => api_hole_preview(body),
-        // 花键参数表（阶段 3）：选项表 / 预览 / 从图纸继承 / 出表。
+        // 智能卡片「花键参数表」（OCSMCARD）：卡类型+选项表 / 表达式反解预览 / 出表。
         ("GET", t) if t.starts_with("/api/spline_options") => api_spline_options(),
         ("POST", "/api/spline_preview") => api_spline_preview(body),
-        ("GET", t) if t.starts_with("/api/spline_meta") => api_spline_meta(t, &sender!()),
         ("POST", _t) if _t.starts_with("/api/spline_export") => api_spline_export(body, &sender!()),
         // 前缀守卫：GUI 的 POST 带 `?tab=N`（查询串不能拿字面量比，否则落 `_ =>` 404；
         // 与同表的 `/api/bom_export` 等一致）。`tab` 由 `sender!()` → `router.resolve(target, body)`
@@ -4025,7 +4024,7 @@ pub const COMMAND_CATALOG: &[(&str, &str, &str)] = &[
     ("OCSMFRAMEINIT", "TF", "图框：不带参数=打开图框选择窗口；带参数=一行直插（`TF a3_landscape 1:2 at 0,0 [rot 度]`）"),
     ("OCSMFRAMEINSERT", "", "按所选图框 + 比例插入（光标跟随，比例感知标注样式）；也可带参数直插（同 TF）"),
     ("OCSMPART", "XL", "标准件/结构要素插入：不带参数=开零件库窗口（左「标准件」树 + 右「结构要素」树）+放置态；带参数=一行直插（标准件 `XL 族 d l [view …] [at x,y] [rot 度]`；结构要素 `XL detail_grind_od d [b1 值] [at x,y] [rot 度]`；外螺纹退刀槽 `XL detail_thread_relief d P 螺距 [g1 值 g2 值 dg 值 r 值 alpha 值] [at x,y] [rot 度]`；毂槽 `XL detail_hub_keyway d [len 毂长] [view main|side]`（b/t₂/r 由 d 查表，len 缺省 30）；平键 `XL key_1096_{a|b|c} b L`、`XL key_1097_{a|b} b L`（d 槽位=键宽 b，L 省略/0=该档默认，L 须 ∈ 标准系列且 L<10b；1097 的 L1/L2/L3 由 L 查 GB/T 1097 长度系列表派生，表外 L 报错））"),
-    ("XLT", "", "花键参数表（GB/T 3478 渐开线花键）：不带参数=开图形界面（内/外方向 + 等级·配合 + Dp 标准解/3 备选点选与手填 + 从选中/上一个块读回 m/z/αD + 21 项实时结果；选项/公式口径表由后端下发）；带参数=一行直插 `XLT 内 6H [dp 4.5] [m 3 z 20 a 30 x 0 | from sel|last] [root 平|圆] [at x,y] [rot 度]`（外花键把 `内 6H` 换成 `外 5f`；不填 dp = 标准 R40 自动选，3 个备选可手填；选 Dp 则 Md 重算）；表格块几何内建（模板逐图元），21 属性取自 `spline_tol::compute()`；`XL 花键参数表 …` 等价"),
+    ("OCSMCARD", "", "智能卡片（正式名；旧短命令 `XLT` 已移除）：不带参数=开图形界面（本期卡类型「花键参数表」：内/外 + 等级·配合 + Dp 标准解/3 备选点选与手填 + 九字段齿形表达式反解 m/z/αD/x/Da/Df + 21 项实时结果；卡类型/体系/公式口径表由后端 `CARD_TYPES`+选项表下发）；带参数=`OCSMCARD 花键参数表 [std GB] 内 6H <九字段表达式> [dp 4.5] [root 平|圆] [at x,y] [rot 度]`（外花键把 `内 6H` 换成 `外 5f`，表达式 KIND 用 EX；表达式形如 `SPLINE IN M3 Z20 ALPHA30 X0 DA65.4 DF57.3436 BETA0 H30`，轴/齿轮生成器 GUI 可复制；不填 dp = 标准 R40 自动选，选 Dp 则 Md 重算；不填 root = 由 DA/DF 反解）；表格块几何内建（模板逐图元），21 属性取自 `spline_tol::compute()`；以后加表格/铭牌 = `CARD_TYPES` 加数据行 + 一个渲染器"),
     ("OCSMJOINT", "", "螺栓副装配：不带参数=开装配窗口+放置态；带参数=一行直装（件链算长度、遮挡裁剪、一次撤销）"),
     ("OCSMPOWERDIM", "D", "智能标注：拾取点模式标线性/对齐/半径/直径（Enter 切线段点选）"),
     ("OCSMDIMGULIDE", "GDIM", "引导线标注：选引导线 → 配置窗口（尺寸/剖视/向视/局部放大/角度/弧长/焊接/引线/序号/公差/粗糙度/形位公差）"),
@@ -4961,32 +4960,13 @@ pub(crate) fn apply_shaft_export(
     }
     crate::set_pending_part(crate::PendingPart::new(
         block.clone(),
+        // 只留台账字段；齿轮/花键段不再快照 `gears[]`（旧的「读块继承」路径已随
+        // 定名收敛一起移除 —— 参数来源改为命令里的九字段表达式）。
         serde_json::json!({
             "family": "shaft",
             "segments": segments,
             "total_length": total,
             "max_diameter": max_d,
-            // 齿轮/渐开线花键段的参数快照（供 `XLT … from sel|last` 继承 m/z/αD/x；
-            // 与齿轮生成器同一 GearParams 口径）。
-            "gears": program
-                .segments
-                .iter()
-                .enumerate()
-                .filter_map(|(i, s)| {
-                    s.gear.as_ref().map(|g| {
-                        let gp = g.params();
-                        serde_json::json!({
-                            "seg": i + 1,
-                            "m": gp.m,
-                            "z": gp.z,
-                            "alpha": gp.alpha_deg,
-                            "x": gp.x,
-                            "involute": g.involute,
-                            "internal": gp.kind.is_internal(),
-                        })
-                    })
-                })
-                .collect::<Vec<_>>(),
         })
         .to_string(),
         label.clone(),
@@ -5159,7 +5139,7 @@ pub(crate) fn apply_hole_export(
     .to_string())
 }
 
-// ── 花键参数表（XLT 阶段 3）：选项表 / 预览 / 从图纸继承 / 出表 ─────────────
+// ── 智能卡片「花键参数表」（OCSMCARD）：选项表 / 表达式反解预览 / 出表 ─────────
 
 /// `GET /api/spline_options`：整套选项表（体系 → 方向 → 等级/配合/齿根/21 项公式口径）。
 fn api_spline_options() -> (u16, &'static str, String) {
@@ -5192,126 +5172,6 @@ fn api_spline_preview(body: &[u8]) -> (u16, &'static str, String) {
         Ok(v) => (200, json, v.to_string()),
         Err(e) => (400, json, serde_json::json!({"ok": false, "error": e}).to_string()),
     }
-}
-
-/// `GET /api/spline_meta?from=sel|last`：从图纸上的 `OCSM_PART` 元数据继承 `m/z/αD/x`。
-fn api_spline_meta(
-    target: &str,
-    sender: &Arc<dyn PluginRequestSender>,
-) -> (u16, &'static str, String) {
-    let json = "application/json; charset=utf-8";
-    let from = target
-        .split_once('?')
-        .map(|(_, q)| q)
-        .unwrap_or("")
-        .split('&')
-        .filter_map(|kv| kv.split_once('='))
-        .find(|(k, _)| *k == "from")
-        .map(|(_, v)| v.to_string())
-        .unwrap_or_else(|| "sel".to_string());
-    let from = match from.as_str() {
-        "sel" | "选中" | "选择" => crate::spline_table::FromRef::Sel,
-        "last" | "最后" | "最近" | "prev" => crate::spline_table::FromRef::Last,
-        other => {
-            return (
-                400,
-                json,
-                serde_json::json!({"ok": false, "error": format!("from「{other}」非法（只有 sel/last）")})
-                    .to_string(),
-            )
-        }
-    };
-    match spline_meta_via_sender(sender, from) {
-        Ok(v) => (200, json, v.to_string()),
-        Err(e) => (400, json, serde_json::json!({"ok": false, "error": e}).to_string()),
-    }
-}
-
-/// 读选中/最后一个 INSERT 的 `OCSM_PART` 元数据（HTTP 线程版；CLI 走 `HostApi` 版）。
-/// 两版判据一致：**带 `gears[]` 或 `m` 的 JSON** 才算齿轮/花键段。
-fn spline_meta_via_sender(
-    sender: &Arc<dyn PluginRequestSender>,
-    from: crate::spline_table::FromRef,
-) -> Result<serde_json::Value, String> {
-    let doc = snapshot(sender)?;
-    let parse_rec = |h: acadrust::Handle| -> Option<serde_json::Value> {
-        let e = doc.get_entity(h)?;
-        for v in &e.common().extended_data.get_record("OCSM_PART")?.values {
-            if let XDataValue::String(s) = v {
-                if let Ok(j) = serde_json::from_str::<serde_json::Value>(s) {
-                    if j.get("gears").is_some() || j.get("m").is_some() {
-                        return Some(j);
-                    }
-                }
-            }
-        }
-        None
-    };
-    let raw = match from {
-        crate::spline_table::FromRef::Sel => {
-            let handles = match req_timed(sender, PluginRequest::SelectedHandles, "SelectedHandles")? {
-                PluginResponse::Handles(hs) => hs,
-                other => return Err(format!("SelectedHandles 返回异常: {other:?}")),
-            };
-            handles
-                .into_iter()
-                .find_map(parse_rec)
-                .ok_or_else(|| {
-                    "花键参数表：当前没有选中带 `OCSM_PART` 元数据的 GEAR/SPLINE 块".to_string()
-                })?
-        }
-        crate::spline_table::FromRef::Last => {
-            let mut found = None;
-            for e in doc.model_space_entities() {
-                if let acadrust::EntityType::Insert(_) = e {
-                    if let Some(j) = parse_rec(e.common().handle) {
-                        found = Some(j);
-                    }
-                }
-            }
-            found.ok_or_else(|| {
-                "花键参数表：图中找不到带 `OCSM_PART` 元数据的齿轮/花键块".to_string()
-            })?
-        }
-    };
-    let inh = crate::spline_table::inherit_from_meta(&raw)?;
-    let m = inh
-        .m
-        .ok_or_else(|| "花键参数表：继承源里缺模数 m".to_string())?;
-    let z = inh
-        .z
-        .ok_or_else(|| "花键参数表：继承源里缺齿数 z".to_string())?;
-    let alpha = inh
-        .alpha
-        .ok_or_else(|| "花键参数表：继承源里缺压力角 α".to_string())?;
-    let root = inh.root.map(|r| match r {
-        crate::spline_tol::RootForm::Flat => "flat",
-        crate::spline_tol::RootForm::Fillet => "fillet",
-    });
-    let label = format!(
-        "m{} z{} α{}°{}",
-        crate::partgen_kit::trim(m),
-        z,
-        crate::partgen_kit::trim(alpha.deg()),
-        match root {
-            Some("flat") => " 平齿根",
-            Some(_) => " 圆齿根",
-            None => "",
-        }
-    );
-    Ok(serde_json::json!({
-        "ok": true,
-        "source": match from {
-            crate::spline_table::FromRef::Sel => "sel",
-            crate::spline_table::FromRef::Last => "last",
-        },
-        "m": m,
-        "z": z,
-        "alpha": alpha.deg(),
-        "x": inh.x.unwrap_or(0.0),
-        "root": root,
-        "label": label,
-    }))
 }
 
 /// `POST /api/spline_export`：GUI「出表」。
@@ -8346,7 +8206,8 @@ const GEAR_HTML: &str = include_str!("gear_gui.html");
 const SHAFT_HTML: &str = include_str!("shaft_gui.html");
 /// 孔生成器页（简单/螺纹/沉头/埋头 + 盲孔/贯通 + 实时预览；`OCSMHOLE`/`DK` 不带参数时打开）。
 const HOLE_HTML: &str = include_str!("hole_gui.html");
-/// 花键参数表页（内/外 + 等级·配合 + Dp 标准解/备选点选 + 21 项实时结果；`XLT` 不带参数时打开）。
+/// 智能卡片页（本期卡类型「花键参数表」：内/外 + 等级·配合 + Dp 标准解/备选点选 +
+/// 齿形表达式反解 + 21 项实时结果；`OCSMCARD` 不带参数时打开）。
 const SPLINE_HTML: &str = include_str!("spline_gui.html");
 /// 螺栓副（件链装配）页：给人类用的 GUI（AI 走命令行/HTTP 同一套实现）。
 const JOINT_HTML: &str = include_str!("joint_gui.html");
@@ -9490,18 +9351,20 @@ mod tests {
         for key in [
             "sideInt",
             "sideExt",
+            "cardType",
+            "expr",
             "dpChoices",
             "dpManualOn",
             "dpManual",
             "mdOut",
-            "readSel",
-            "readLast",
+            "rootOut",
             "renderDp",
             "syncUi",
             "/api/spline_options",
         ] {
-            assert!(SPLINE_HTML.contains(key), "spline_gui.html 缺花键参数表要素：{key}");
+            assert!(SPLINE_HTML.contains(key), "spline_gui.html 缺智能卡片要素：{key}");
         }
+        assert!(!SPLINE_HTML.contains("readSel"), "「读选中块」路径已收敛，不该留按钮");
         let Some(script) = first_script(SPLINE_HTML) else {
             panic!("spline_gui.html 里找不到 <script> 块");
         };
@@ -9819,8 +9682,6 @@ struct MockSender {
     inserts: std::sync::Mutex<Vec<(String, [f64; 3], f64)>>,
     /// 插入的 INSERT 带的 ATTRIB 数（花键参数表断言 21 个）
     insert_attrs: std::sync::Mutex<Vec<usize>>,
-    /// 模拟宿主当前选择集（`SelectedHandles`； `/api/spline_meta?from=sel` 测试用）
-    selected: std::sync::Mutex<Vec<acadrust::Handle>>,
     /// 是否把 `AddBlockRecord` 真的写进文档块表（**只有需要验「块已建就不重」的测试开**；
     /// 默认关——有些编辑类测试靠“每次都记录 AddBlockRecord”验块成员更新）。
     mirror_blocks: std::sync::Mutex<bool>,
@@ -9835,7 +9696,6 @@ impl MockSender {
             undos: std::sync::Mutex::new(Vec::new()),
             inserts: std::sync::Mutex::new(Vec::new()),
             insert_attrs: std::sync::Mutex::new(Vec::new()),
-            selected: std::sync::Mutex::new(Vec::new()),
             mirror_blocks: std::sync::Mutex::new(false),
         }
     }
@@ -9854,10 +9714,6 @@ impl MockSender {
     /// 插入的 INSERT 各自带的 ATTRIB 数。
     fn insert_attr_counts(&self) -> Vec<usize> {
         self.insert_attrs.lock().unwrap().clone()
-    }
-    /// 设置模拟的「当前选择集」（`SelectedHandles`）。
-    fn set_selected(&self, handles: Vec<acadrust::Handle>) {
-        *self.selected.lock().unwrap() = handles;
     }
     /// 建过的块序列（名字）：断言"同名块不重复建"。
     fn blocks(&self) -> Vec<(String, Vec<acadrust::EntityType>)> {
@@ -9976,7 +9832,6 @@ impl PluginRequestSender for MockSender {
                 self.blocks.lock().unwrap().push((name, entities));
                 Ok(P::Ok)
             }
-            R::SelectedHandles => Ok(P::Handles(self.selected.lock().unwrap().clone())),
             R::EnsureTextStyles(defs) => {
                 self.ensures
                     .lock()
@@ -11612,8 +11467,12 @@ mod rough_tests {
         assert!(super::COMMAND_CATALOG.iter().any(|(n, _, _)| *n == "OCSMJOINT"));
         assert!(super::COMMAND_CATALOG.iter().any(|(n, _, _)| *n == "OCSMHELP"));
         assert!(
-            super::COMMAND_CATALOG.iter().any(|(n, _, _)| *n == "XLT"),
-            "命令目录缺 XLT（花键参数表）"
+            super::COMMAND_CATALOG.iter().any(|(n, _, _)| *n == "OCSMCARD"),
+            "命令目录缺 OCSMCARD（智能卡片）"
+        );
+        assert!(
+            !super::COMMAND_CATALOG.iter().any(|(n, _, _)| *n == "XLT"),
+            "XLT 已移除（定名收敛：OCSMCARD）"
         );
         let dirs = super::manual_dirs();
         assert!(!dirs.is_empty(), "至少要有仓库内的 handbook 兜底目录");
@@ -15328,43 +15187,48 @@ mod weld_tests {
         assert!(err.contains("OCSM 初始化"), "{err}");
     }
 
-    /// 花键参数表（XLT 阶段 3）：页面 / 选项表（表驱动）/ 预览（Dp 点选→Md 重算）/\
+    /// 智能卡片「花键参数表」（OCSMCARD）：页面 / 卡类型表+选项表（表驱动）/ 表达式反解预览 /\
     /// 从图纸继承 / 出表（无 at→待放置件 21 ATTRIB；有 at→直插 21 ATTRIB）。
     #[test]
-    fn spline_routes_serve_page_options_preview_meta_and_export() {
+    /// 智能卡片「花键参数表」（`OCSMCARD` 阶段 4）：页面 / 卡类型表+选项表（表驱动） /
+    /// 表达式反解预览（Dp 点选→Md 重算） / 出表（无 at→待放置件 21 ATTRIB；有 at→直插）。
+    #[test]
+    fn spline_card_routes_serve_page_options_preview_and_export() {
         let _g = export_lock();
         let mock = Arc::new(MockSender::new(ocsm_layered_doc()));
         // 块记录真进文档：验「块已建就不重复 AddBlockRecord」（宿主行为）。
         mock.mirror_blocks_into_doc();
         let sender: Arc<dyn PluginRequestSender> = mock.clone();
-        // 登记标签页 2 → `?tab=2` 的请求（meta/export）能解析到本 mock。
+        // 登记标签页 2 → `?tab=2` 的请求（export）能解析到本 mock。
         let router = Arc::new(SenderRouter::new(mock.clone(), None));
         router.set_current(2, mock.clone());
         let server = spawn(router).expect("spawn guide server");
 
-        // ── 页面：四个端点 + 关键控件 ──
+        // ── 页面：三个端点 + 关键控件；旧的「读选中/上一个块」路径已收敛（不留半截）──
         let html = http_req(server.port, "GET", "/spline", "");
-        assert!(html.contains("OCSM 花键参数表"), "标题");
+        assert!(html.contains("OCSM 智能卡片"), "标题");
         for key in [
             "/api/spline_options",
             "/api/spline_preview",
-            "/api/spline_meta",
             "/api/spline_export",
             "sideInt",
             "sideExt",
             "dpChoices",
             "dpManual",
-            "readSel",
-            "readLast",
+            "expr",
             "mdOut",
         ] {
             assert!(html.contains(key), "页面缺 {key}");
         }
+        assert!(!html.contains("/api/spline_meta"), "旧的 meta 端点不应再出现在页面");
+        assert!(!html.contains("readSel"), "「读选中块」按钮应已删除");
 
-        // ── 选项表：表驱动（内/外各 21 项公式口径；内含量棒、外不含）──
+        // ── 选项表：卡类型表 + 方向/配合/21 项公式口径（内含量棒、外不含）──
         let j = http_req(server.port, "GET", "/api/spline_options", "");
         let v: serde_json::Value = serde_json::from_str(&j).unwrap();
         assert_eq!(v["ok"], true, "{j}");
+        assert_eq!(v["card_types"][0]["id"], "花键参数表");
+        assert_eq!(v["card_types"][0]["systems"][0]["id"], "gb3478");
         assert_eq!(v["systems"][0]["id"], "gb3478");
         let sides = v["systems"][0]["sides"].as_array().unwrap();
         assert_eq!(sides.len(), 2);
@@ -15380,15 +15244,24 @@ mod weld_tests {
         assert_eq!(sides[1]["pin"]["applicable"], false, "外花键参数表用 Wn/Kn");
         assert_eq!(v["pin_series"].as_array().unwrap().len(), 67);
 
-        // ── 预览：内 6H → 21 项 + 标准解 + 3 备选；选备选 → Md 重算 ──
+        // ── 预览：表达式反解 m/z/αD/x/Da/Df + 齿根反解 + 21 项 + Dp 点选→Md 重算 ──
         let base = serde_json::json!({
-            "system": "gb3478", "side": "int", "grade": 6, "fit": "H", "alpha": 30.0,
-            "root": "flat", "m": 2.0, "z": 20, "x": 0.0, "dp": null, "rot": 0.0
+            "system": "gb3478", "side": "int", "grade": 6, "fit": "H",
+            "expr": "SPLINE IN M3 Z20 ALPHA30 X0 DA65.4 DF57.3436 BETA0 H30",
+            "root": null, "dp": null, "rot": 0.0
         });
         let j = http_req(server.port, "POST", "/api/spline_preview", &base.to_string());
         let v: serde_json::Value = serde_json::from_str(&j).unwrap();
         assert_eq!(v["ok"], true, "{j}");
         assert_eq!(v["grade_fit"], "6H");
+        assert_eq!(v["mark"], "SPLINE");
+        assert_eq!(v["kind"], "IN");
+        assert_eq!(v["m"], 3.0);
+        assert_eq!(v["z"], 20);
+        assert_eq!(v["alpha"], 30.0);
+        assert_eq!(v["da"], 65.4);
+        assert_eq!(v["root"], "fillet", "DA = m(z+1.8) → 圆齿根反解");
+        assert_eq!(v["root_source"], "expr");
         assert_eq!(v["items"].as_array().unwrap().len(), 21);
         assert!(
             v["items"][0]["formula"].as_str().unwrap().contains("GB/T 3478.1"),
@@ -15420,58 +15293,29 @@ mod weld_tests {
         bad["dp"] = serde_json::json!(1.03);
         let jb = http_req(server.port, "POST", "/api/spline_preview", &bad.to_string());
         assert!(jb.contains("3478.9"), "{jb}");
+        // 表达式 KIND 与卡片方向不一致 → 明确报错
+        let mut mism = base.clone();
+        mism["expr"] = serde_json::json!("SPLINE EX M3 Z20 ALPHA30 X0 DA63 DF54.6 BETA0 H30");
+        let jm = http_req(server.port, "POST", "/api/spline_preview", &mism.to_string());
+        assert!(jm.contains("KIND"), "{jm}");
 
         // ── 外花键：公法线/跨测齿数；量棒面板 applicable=false ──
         let ext = serde_json::json!({
-            "system": "gb3478", "side": "ext", "grade": 5, "fit": "f", "alpha": 30.0,
-            "root": "fillet", "m": 2.0, "z": 20, "x": 0.0, "dp": null, "rot": 0.0
+            "system": "gb3478", "side": "ext", "grade": 5, "fit": "f",
+            "expr": "SPLINE EX M3 Z20 ALPHA30 X0 DA63 DF55.5 BETA0 H30",
+            "root": null, "dp": null, "rot": 0.0
         });
         let j = http_req(server.port, "POST", "/api/spline_preview", &ext.to_string());
         let v: serde_json::Value = serde_json::from_str(&j).unwrap();
         assert_eq!(v["ok"], true, "{j}");
         assert_eq!(v["grade_fit"], "5f");
+        assert_eq!(v["root"], "flat", "DF = m(z−1.5) → 平齿根反解");
         assert_eq!(v["dp"]["applicable"], false);
         assert!(v["items"]
             .as_array()
             .unwrap()
             .iter()
             .any(|it| it["label"].as_str().unwrap().contains("公法线长度")));
-
-        // ── 从图纸继承：塞一个 GEAR 生成物形态的 `OCSM_PART` 块 ──
-        let mut gear = acadrust::entities::Insert::new("OCSM_SPLINE_GB_TEST", Vector3::new(0.0, 0.0, 0.0));
-        let mut xd = ocs_plugin_api::host::acadrust::xdata::ExtendedDataRecord::new("OCSM_PART");
-        xd.values.push(XDataValue::String(
-            serde_json::json!({
-                "family": "gear", "mode": "spline", "m": 2.0, "z": 20, "alpha": 30.0,
-                "x": 0.0, "profile": "GB30P", "internal": false
-            })
-            .to_string(),
-        ));
-        gear.common.extended_data.add_record(xd);
-        let h = match sender.request(PluginRequest::AddEntities(vec![
-            acadrust::EntityType::Insert(gear),
-        ])) {
-            Ok(PluginResponse::Handles(hs)) => hs[0],
-            other => panic!("AddEntities 失败：{other:?}"),
-        };
-        let j = http_req(server.port, "GET", "/api/spline_meta?from=last", "");
-        let v: serde_json::Value = serde_json::from_str(&j).unwrap();
-        assert_eq!(v["ok"], true, "{j}");
-        assert_eq!(v["m"], 2.0);
-        assert_eq!(v["z"], 20);
-        assert_eq!(v["alpha"], 30.0);
-        assert_eq!(v["root"], "flat", "GB30P → 平齿根");
-        mock.set_selected(vec![h]);
-        let j = http_req(server.port, "GET", "/api/spline_meta?from=sel", "");
-        let v: serde_json::Value = serde_json::from_str(&j).unwrap();
-        assert_eq!(v["ok"], true, "{j}");
-        assert_eq!(v["source"], "sel");
-        assert!(v["label"].as_str().unwrap().contains("z20"), "{j}");
-        mock.set_selected(vec![]);
-        let j = http_req(server.port, "GET", "/api/spline_meta?from=sel", "");
-        assert!(j.contains("\"ok\":false") && j.contains("没有选中"), "{j}");
-        let j = http_req(server.port, "GET", "/api/spline_meta?from=nope", "");
-        assert!(j.contains("非法"), "{j}");
 
         // ── 出表：无 at → 待放置件（带 21 个 ATTRIB）；有 at → 直插（带 21 个 ATTRIB）──
         let resp = apply_spline_export(&sender, base.to_string().as_bytes()).expect("出表（放置态）");
@@ -15484,7 +15328,7 @@ mod weld_tests {
         assert_eq!(pending.attrs.len(), 21, "待放置件要带 21 个 ATTRIB");
         assert!(crate::pending_part_meta_for_test()
             .unwrap()
-            .contains("spline_table"));
+            .contains("花键参数表"));
         // 落件（GUI 放置态同一条 place_one）→ INSERT 带 21 个 ATTRIB
         crate::place_one(
             &sender,
@@ -15721,7 +15565,7 @@ mod weld_tests {
         );
         let label = crate::pending_part_label().expect("label");
         assert!(label.contains("2 段"), "{label}");
-        // 渐开线花键段 → 元数据带 `gears[]`（供 `XLT … from sel|last` 继承 m/z/αD/x）
+        // 渐开线花键段（统一表达式可往返；`gears[]` 快照已随「读块继承」移除，不再写）
         let sp = apply_shaft_export(
             &sender,
             b"SPLINE EX M3 Z20 ALPHA30 X0 DA63 DF54.6 BETA0 H30",
@@ -15730,8 +15574,8 @@ mod weld_tests {
         assert!(sp.contains("已生成轴"), "{sp}");
         let meta = crate::pending_part_meta_for_test().expect("花键轴 meta");
         assert!(
-            meta.contains("\"gears\"") && meta.contains("\"alpha\":30") && meta.contains("\"involute\":true"),
-            "轴块元数据应带 gears 快照：{meta}"
+            !meta.contains("\"gears\""),
+            "轴块元数据不再写 gears 快照：{meta}"
         );
         // 同几何 → 同名块（块名只由几何决定；宿主里同名块会被 exists 检查复用）
         let same = crate::shaft::block_name(&crate::shaft::parse_program(&body).unwrap());

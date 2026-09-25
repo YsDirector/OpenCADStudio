@@ -5942,7 +5942,7 @@ pub fn build_report(program: &Program) -> Result<String, String> {
         ));
     }
     md.push('\n');
-    // ── 2. 花键参数表（GB/T 3478）——与 `XLT`/`XL 花键参数表` 同一份 `compute()` 结果 ──
+    // ── 2. 花键参数表（GB/T 3478）——与 `OCSMCARD 花键参数表` 同一份 `compute()` 结果 ──
     let mut sp_section = String::new();
     let mut sp_count = 0usize;
     for (i, seg) in program.segments.iter().enumerate() {
@@ -5970,7 +5970,7 @@ pub fn build_report(program: &Program) -> Result<String, String> {
         md.push_str("## 2. 花键参数表（GB/T 3478，默认 7 级 / H·h）\n\n");
         md.push_str(&sp_section);
         md.push_str(
-            "> 与 `XLT`（`XL 花键参数表`）**同一份 `spline_tol::compute()`**；\n             > 等级/配合类别/量棒直径 Dp 可在 `XLT` 命令里显式给。\n\n",
+            "> 与 `OCSMCARD 花键参数表`（智能卡片）**同一份 `spline_tol::compute()`**；\n             > 等级/配合类别/量棒直径 Dp 可在该卡命令里显式给。\n\n",
         );
     }
     Ok(md)
@@ -8874,7 +8874,7 @@ GEAR M3 Z20";
     }
 
     /// `OCSMSHAFT … REPORT`：渐开线花键段应带「花键参数表（GB/T 3478）」节，
-    /// 与 `XLT` 同一份 `spline_tol::compute()` 结果（不许两处各算一遍）。
+    /// 与 `OCSMCARD 花键参数表` 同一份 `spline_tol::compute()` 结果（不许两处各算一遍）。
     #[test]
     fn report_includes_spline_parameter_table_section() {
         let p = parse_program("SPLINE EX M3 Z20 ALPHA30 X0 DA63 DF54.6 BETA0 H30").unwrap();

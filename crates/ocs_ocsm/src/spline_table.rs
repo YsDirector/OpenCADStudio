@@ -1,10 +1,14 @@
-//! XL「花键参数表」阶段 2：**表格块几何内建**（模板逐图元照录，不依赖外部 DXF）
-//! + 21 属性值映射 + 命令参数解析 + 从 GEAR/SPLINE 元数据继承。
+//! 智能卡片「花键参数表」（`OCSMCARD`）：**表格块几何内建**（模板逐图元照录，
+//! 不依赖外部 DXF）+ 21 属性值映射 + 命令参数解析（吃**九字段齿形表达式**）。
 //!
 //! 模板：`~/桌面/GB/参数表/内花键参数表GB.dxf` / `外花键参数表GB.dxf`（两份同构，仅
 //! 标签/符号/tag 前缀不同）。几何来源与坐标见下方 const（由模板逐图元提取）。
 //! 表格块本身**与取值无关**（标签/符号固定），所以每个方向只建一次块
 //! （`OCSM_SPTABLE_GB_INT` / `..._EXT`），每次插入用 `INSERT.attributes` 填 21 个值。
+//!
+//! 排版口径（用户 2026-09-25 截图反馈）：主值显示**最多 3 位小数**（显示与内部计算分开）；
+//! 值列/公差列 ATTRIB **实体级**字宽因子 0.7（不动全局 `OCSM_GB` 样式）；
+//! 主值右边界不得进入公差列（几何回归见 `spline_gui::tests::main_values_clear_tolerance_column`）。
 //!
 //! 单位口径：直径/跨棒距/公法线/圆弧半径 = mm；Ff/Fp/λ = μm（与 GB/T 3478.1 表 7~21 同）；
 //! 公差 = mm（带符号）；齿形角 = `30°` 形式。
@@ -234,12 +238,19 @@ fn mtext_ent(value: &str, x: f64, y: f64, h: f64, layer: &str) -> EntityType {
     EntityType::MText(m)
 }
 
+/// 值列/公差列的**实体级**字宽压缩（不动全局样式 `OCSM_GB`，只影响本表 ATTRIB）。
+///
+/// 模板 ATTDEF 原来是 1.0：长主值（未截小数的直径/跨棒距）会一路顶到 x≈−9.5 的公差列，
+/// 与上/下公差叠成乱码（用户截图实测）。0.7 与样式 `OCSM_GB` 的宽度因子同口径，
+/// 值列还剩 ~30% 余量；换字体/字号也只影响本表。
+pub const VALUE_WIDTH_FACTOR: f64 = 0.7;
+
 fn attdef(tag: &str, x: f64, y: f64, h: f64, layer: &str) -> AttributeDefinition {
     let mut ad = AttributeDefinition::new(tag.to_string(), String::new(), " ".to_string());
     ad.insertion_point = Vector3::new(x, y, 0.0);
     ad.alignment_point = ad.insertion_point;
     ad.height = h;
-    ad.width_factor = 1.0;
+    ad.width_factor = VALUE_WIDTH_FACTOR;
     ad.text_style = "OCSM_GB".into();
     ad.flags.preset = true;
     ad.common.layer = layer.to_string();
@@ -303,8 +314,45 @@ pub fn attdefs(side: SplineSide) -> Vec<AttributeDefinition> {
 // 21 属性取值（与 `spline_tol::compute()` 同源）
 // ══════════════════════════════════════════════════════════════════════════
 
+/// 主值/尺寸的**显示**格式：最多 3 位小数（截到 0.001 再抹尾零）。
+///
+/// **显示与内部计算分开**：`spline_tol` 里仍是全精度 f64，只有写 ATTRIB 时才截；
+/// 不截的话长小数（如 78.113360…）会把值列顶进公差列（用户截图实测）。
 fn fmt_mm(v: f64) -> String {
-    crate::partgen_kit::trim(v)
+    let s = format!("{v:.3}");
+    s.trim_end_matches('0').trim_end_matches('.').to_string()
+}
+
+/// 字符推进宽度（em）：朱雀仿宋实测数字 0.354~0.533、`.` 0.305；这里取保守上限。
+#[cfg(test)]
+fn char_em(c: char) -> f64 {
+    if c.is_ascii_digit() || c == '.' || c == '+' || c == '-' {
+        0.55
+    } else if c == ' ' {
+        0.25
+    } else if c.is_ascii() {
+        0.75
+    } else {
+        1.0 // CJK / 全角
+    }
+}
+
+/// 估算左对齐文本宽度（世界单位）= Σ char_em × 字高 × 字宽因子（几何断言用）。
+#[cfg(test)]
+pub fn text_extent(value: &str, height: f64, width_factor: f64) -> f64 {
+    value.chars().map(char_em).sum::<f64>() * height * width_factor
+}
+
+/// 估算左对齐文本的轴对齐框 `[x0, y0, x1, y1]`（基点在左下，与 acadrust
+/// `Text::bounding_box` 同口径但按字符分类，比它的 `len×0.6` 更贴近真实字体）。
+#[cfg(test)]
+pub fn text_box(insertion: [f64; 2], height: f64, width_factor: f64, value: &str) -> [f64; 4] {
+    [
+        insertion[0],
+        insertion[1],
+        insertion[0] + text_extent(value, height, width_factor),
+        insertion[1] + height,
+    ]
 }
 
 fn fmt_deg(v: f64) -> String {
@@ -462,7 +510,8 @@ pub fn markdown_table(side: SplineSide, table: &SplineTable) -> Result<String, S
 }
 
 /// 从轴段 `Gear` 构造输入（**唯一生成路径 = 齿轮生成器同一 `GearParams`**）。
-/// 报告/命令共用；默认 **7 级 + 基孔制 H/h**（XL 命令可显式改等级/配合/Dp）。
+/// 报告/命令共用；默认 **7 级 + 基孔制 H/h**（`OCSMCARD` 可显式改等级/配合/Dp）。
+/// 齿根：先由表达式 `DA/DF` 反解（30° 可分辨），再退到花键齿廓代号 `P/R`，最后按 αD 默认。
 pub fn input_from_gear(g: &crate::shaft::Gear) -> Result<SplineInput, String> {
     let gp = g.params();
     let alpha = PressureAngle::parse(&format!("{}", gp.alpha_deg))?;
@@ -476,15 +525,20 @@ pub fn input_from_gear(g: &crate::shaft::Gear) -> Result<SplineInput, String> {
         .as_ref()
         .map(|s| s.profile.to_ascii_uppercase())
         .unwrap_or_default();
-    let root = if profile.ends_with('P') {
-        RootForm::Flat
-    } else if profile.ends_with('R') {
-        RootForm::Fillet
-    } else if alpha == PressureAngle::A30 {
-        RootForm::Flat
-    } else {
-        RootForm::Fillet
-    };
+    let root = root_from_gear(g, side)
+        .or_else(|| {
+            if profile.ends_with('P') {
+                Some(RootForm::Flat)
+            } else if profile.ends_with('R') {
+                Some(RootForm::Fillet)
+            } else {
+                None
+            }
+        })
+        .unwrap_or(match alpha {
+            PressureAngle::A30 => RootForm::Flat,
+            _ => RootForm::Fillet,
+        });
     Ok(SplineInput {
         m: gp.m,
         z: gp.z,
@@ -499,53 +553,138 @@ pub fn input_from_gear(g: &crate::shaft::Gear) -> Result<SplineInput, String> {
 }
 
 // ══════════════════════════════════════════════════════════════════════════
-// 命令参数解析 + GEAR/SPLINE 元数据继承
+// 命令参数解析（智能卡片 `OCSMCARD` 的「花键参数表」卡）
 // ══════════════════════════════════════════════════════════════════════════
 
-/// 参数来源：当前选中的 INSERT / 图中最后一个带 `OCSM_PART` 的 INSERT。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FromRef {
-    Sel,
-    Last,
-}
-
-/// `XL 花键参数表` / `XLT` 的参数。
+/// 「花键参数表」卡参数：
+/// `[std GB] 内 6H <九字段表达式> [dp 4.5] [root 平|圆] [at x,y] [rot 度]`。
+///
+/// **参数来源 = 表达式**（用户 2026-09-25 裁定）：直接吃齿轮/花键/轴生成器 GUI
+/// 复制的**九字段统一齿形表达式**（`MARK KIND M Z ALPHA X DA DF BETA H`），
+/// 在这里反解出 `m/z/αD/x/Da/Df` 再交给 `spline_tol::compute()`。
+/// **不读选中/上一个块**——那条路径会在命令中途要求用户去选对象，放置状态会丢。
 #[derive(Debug, Clone)]
 pub struct SplineTableSpec {
+    /// 体系 id（表驱动；本期只有 `gb3478`）。
+    pub system: &'static str,
     pub side: SplineSide,
     pub grade: u32,
     pub ext_dev: ExtDev,
-    pub m: Option<f64>,
-    pub z: Option<u32>,
-    pub alpha: Option<PressureAngle>,
-    /// 仅记录（GB/T 3478 参数表不使用变位 x；继承来只为回显/后续扩展）。
-    #[allow(dead_code)]
-    pub x: Option<f64>,
+    /// 九字段表达式原文（回显/计算书）。
+    pub expr: String,
+    /// 表达式反解出的齿形段（`m/z/αD/x/DA/DF/KIND`）。
+    pub gear: crate::shaft::Gear,
+    /// 齿根形式：显式 `root` > 由表达式 `DA/DF` 反解（30° 平/圆公式可分辨）> 按 αD 默认。
     pub root: Option<RootForm>,
     pub dp: Option<f64>,
-    pub from: Option<FromRef>,
     pub at: Option<[f64; 2]>,
     pub rot: f64,
 }
 
+/// 九字段表达式 → 齿形段 `Gear`（**复用既有 `shaft::parse_program`，不另写解析器**）。
+pub fn parse_expr_gear(expr: &str) -> Result<crate::shaft::Gear, String> {
+    if expr.trim().is_empty() {
+        return Err(
+            "花键参数表：缺九字段齿形表达式（形如 `SPLINE IN M3 Z20 ALPHA30 X0 DA65.4 DF57.3436 BETA0 H30`；\
+             轴/齿轮生成器 GUI 可直接复制）"
+                .to_string(),
+        );
+    }
+    let program = crate::shaft::parse_program(expr)
+        .map_err(|e| format!("花键参数表：齿形表达式无法解析：{e}"))?;
+    if program.segments.len() != 1 {
+        return Err(format!(
+            "花键参数表：表达式应只有一段齿形（收到 {} 段）——请只粘生成器复制的那一行齿形表达式",
+            program.segments.len()
+        ));
+    }
+    program.segments[0].gear.ok_or_else(|| {
+        "花键参数表：表达式里没有齿形段（应以 `GEAR`/`SPLINE` + M/Z/ALPHA… 开头）".to_string()
+    })
+}
+
+/// 表达式里是否显式写了 `IN`/`EX`（`true` = 内齿）；缺省 = 外齿（与 `shaft` 口径一致）。
+pub fn expr_explicit_kind(expr: &str) -> Option<bool> {
+    for t in expr.split_whitespace() {
+        if t.eq_ignore_ascii_case("IN") {
+            return Some(true);
+        }
+        if t.eq_ignore_ascii_case("EX") {
+            return Some(false);
+        }
+    }
+    None
+}
+
+/// 由表达式 `DA/DF` 反解齿根形式（GB/T 3478.1 表 3：**只有 30° 的平/圆公式不同**，
+/// 37.5°/45° 推不出来 → `None`，由调用方按 αD 默认）。
+///
+/// 内花键看大径 `Dei`（平 `m(z+1.5)`、圆 `m(z+1.8)`），外花键看小径 `Die`
+/// （平 `m(z−1.5)`、圆 `m(z−1.8)`）——表 3 的平/圆差异就在这两处。
+pub fn root_from_gear(g: &crate::shaft::Gear, side: SplineSide) -> Option<RootForm> {
+    let alpha = PressureAngle::parse(&format!("{}", g.alpha_deg)).ok()?;
+    if alpha != PressureAngle::A30 {
+        return None;
+    }
+    let target = match side {
+        SplineSide::Internal => g.da?,
+        SplineSide::External => g.df?,
+    };
+    let (flat, fillet) = match side {
+        SplineSide::Internal => (
+            crate::spline_tol::internal_major(alpha, RootForm::Flat, g.m, g.z),
+            crate::spline_tol::internal_major(alpha, RootForm::Fillet, g.m, g.z),
+        ),
+        SplineSide::External => (
+            crate::spline_tol::external_minor(alpha, RootForm::Flat, g.m, g.z),
+            crate::spline_tol::external_minor(alpha, RootForm::Fillet, g.m, g.z),
+        ),
+    };
+    if (target - flat).abs() < 5e-3 {
+        Some(RootForm::Flat)
+    } else if (target - fillet).abs() < 5e-3 {
+        Some(RootForm::Fillet)
+    } else {
+        None
+    }
+}
+
 impl SplineTableSpec {
-    /// 解析 `内 6H [dp 4.5] [m 3 z 20 a 30 x 0 | from sel|last] [root 平|圆] [at x,y] [rot 度]`。
+    /// 解析 `[std GB] 内 6H <表达式> [dp 4.5] [root 平|圆] [at x,y] [rot 度]`。
     pub fn parse(text: &str) -> Result<Self, String> {
         let tokens: Vec<&str> = text.split_whitespace().collect();
-        if tokens.is_empty() {
-            return Err(usage());
+        let mut i = 0usize;
+        // 可选体系：`std GB`（体系 = 表驱动的一项；本期只有 gb3478）。
+        let mut system = "gb3478";
+        if let Some(t) = tokens.get(i) {
+            if matches!(t.to_ascii_lowercase().as_str(), "std" | "标准" | "体系") {
+                i += 1;
+                let v = tokens
+                    .get(i)
+                    .copied()
+                    .ok_or_else(|| "花键参数表：std 缺少体系（本期只有 GB）".to_string())?;
+                system = crate::spline_gui::system_id_by_token(v)?;
+                i += 1;
+            }
         }
-        let side = match tokens[0] {
-            "内" | "内部" | "内花键" | "int" | "internal" => SplineSide::Internal,
-            "外" | "外部" | "外花键" | "ext" | "external" => SplineSide::External,
-            other => {
+        let side = match tokens.get(i).copied() {
+            Some("内") | Some("内部") | Some("内花键") | Some("int") | Some("internal") => {
+                SplineSide::Internal
+            }
+            Some("外") | Some("外部") | Some("外花键") | Some("ext") | Some("external") => {
+                SplineSide::External
+            }
+            Some(other) => {
                 return Err(format!(
                     "花键参数表：第一个参数应为「内」或「外」（收到「{other}」）。\n{}",
                     usage()
                 ))
             }
+            None => return Err(usage()),
         };
-        let mark = tokens.get(1).copied().ok_or_else(usage)?;
+        i += 1;
+        let mark = tokens.get(i).copied().ok_or_else(usage)?;
+        i += 1;
         let (grade, fit_text) = split_grade_fit(mark)?;
         let ext_dev = match side {
             SplineSide::Internal => {
@@ -564,21 +703,42 @@ impl SplineTableSpec {
                 }
             }
         };
+        // 表达式 = mark 之后一直吃到第一个卡选项关键字（dp/root/at/rot）；
+        // 齿形关键字里不会出现这四个词（X/DF 等是带值前缀）。
+        let expr_start = i;
+        while i < tokens.len() {
+            let k = tokens[i].to_ascii_lowercase();
+            if matches!(
+                k.as_str(),
+                "dp" | "root" | "齿根" | "齿根形式" | "at" | "rot" | "旋转"
+            ) {
+                break;
+            }
+            i += 1;
+        }
+        let expr = tokens[expr_start..i].join(" ");
+        let gear = parse_expr_gear(&expr)?;
+        if let Some(internal) = expr_explicit_kind(&expr) {
+            if internal != (side == SplineSide::Internal) {
+                return Err(format!(
+                    "花键参数表：表达式 KIND 写的是 {}，与卡片方向「{}」不一致",
+                    if internal { "IN（内）" } else { "EX（外）" },
+                    if side == SplineSide::Internal { "内" } else { "外" }
+                ));
+            }
+        }
         let mut spec = SplineTableSpec {
+            system,
             side,
             grade,
             ext_dev,
-            m: None,
-            z: None,
-            alpha: None,
-            x: None,
+            expr,
+            gear,
             root: None,
             dp: None,
-            from: None,
             at: None,
             rot: 0.0,
         };
-        let mut i = 2usize;
         while i < tokens.len() {
             let key = tokens[i].to_ascii_lowercase();
             let mut need = |what: &str| -> Result<&str, String> {
@@ -589,31 +749,13 @@ impl SplineTableSpec {
                     .ok_or_else(|| format!("花键参数表：{what} 缺少数值/选项"))
             };
             match key.as_str() {
-                "m" | "模数" => {
-                    let v = need("m")?;
-                    let m = v.parse::<f64>().map_err(|e| format!("m={v} 不是数字：{e}"))?;
-                    if !(m > 0.0) {
-                        return Err(format!("花键参数表：m={m} 必须 >0"));
+                "dp" => {
+                    let v = need("dp")?;
+                    let dp = v.parse::<f64>().map_err(|e| format!("dp={v} 不是数字：{e}"))?;
+                    if !(dp > 0.0) {
+                        return Err(format!("花键参数表：dp={dp} 必须 >0"));
                     }
-                    spec.m = Some(m);
-                }
-                "z" | "齿数" => {
-                    let v = need("z")?;
-                    spec.z = Some(
-                        v.parse::<u32>()
-                            .map_err(|e| format!("z={v} 不是整数：{e}"))?,
-                    );
-                }
-                "a" | "α" | "alpha" | "压力角" => {
-                    let v = need("a")?;
-                    spec.alpha = Some(PressureAngle::parse(v)?);
-                }
-                "x" | "变位" => {
-                    let v = need("x")?;
-                    spec.x = Some(
-                        v.parse::<f64>()
-                            .map_err(|e| format!("x={v} 不是数字：{e}"))?,
-                    );
+                    spec.dp = Some(dp);
                 }
                 "root" | "齿根" | "齿根形式" => {
                     let v = need("root")?;
@@ -623,26 +765,6 @@ impl SplineTableSpec {
                         other => {
                             return Err(format!(
                                 "花键参数表：齿根形式「{other}」非法（只有 平/圆）"
-                            ))
-                        }
-                    });
-                }
-                "dp" => {
-                    let v = need("dp")?;
-                    let dp = v.parse::<f64>().map_err(|e| format!("dp={v} 不是数字：{e}"))?;
-                    if !(dp > 0.0) {
-                        return Err(format!("花键参数表：dp={dp} 必须 >0"));
-                    }
-                    spec.dp = Some(dp);
-                }
-                "from" | "继承" | "来源" => {
-                    let v = need("from")?;
-                    spec.from = Some(match v {
-                        "sel" | "选中" | "选择" => FromRef::Sel,
-                        "last" | "最后" | "最近" => FromRef::Last,
-                        other => {
-                            return Err(format!(
-                                "花键参数表：from「{other}」非法（只有 sel/选中、last/最后）"
                             ))
                         }
                     });
@@ -669,10 +791,7 @@ impl SplineTableSpec {
                         .map_err(|e| format!("rot={v} 不是数字：{e}"))?;
                 }
                 other => {
-                    return Err(format!(
-                        "花键参数表：不认识的参数「{other}」。\n{}",
-                    usage()
-                    ))
+                    return Err(format!("花键参数表：不认识的参数「{other}」。\n{}", usage()))
                 }
             }
             i += 1;
@@ -680,49 +799,26 @@ impl SplineTableSpec {
         Ok(spec)
     }
 
-    /// 由（可选）继承源补全 → `SplineInput`。`meta` = 从 `OCSM_PART` 解析出的对象。
-    pub fn to_input(&self, meta: Option<&serde_json::Value>) -> Result<SplineInput, String> {
-        let inherited = meta.map(inherit_from_meta).transpose()?;
-        let get = |explicit: Option<f64>, inh: Option<f64>, what: &str| -> Result<f64, String> {
-            explicit
-                .or(inh)
-                .ok_or_else(|| format!("花键参数表：缺 {what}（显式给或 `from sel|last`）"))
-        };
-        let m = get(
-            self.m,
-            inherited.as_ref().and_then(|v| v.m),
-            "模数 m",
-        )?;
-        let z = match (self.z, inherited.as_ref().and_then(|v| v.z)) {
-            (Some(z), _) => z,
-            (None, Some(z)) => z,
-            _ => return Err("花键参数表：缺齿数 z（显式给或 `from sel|last`）".into()),
-        };
-        let alpha = self
-            .alpha
-            .or_else(|| inherited.as_ref().and_then(|v| v.alpha))
-            .ok_or_else(|| "花键参数表：缺压力角 a（30/37.5/45；或 `from sel|last`）".to_string())?;
+    /// 表达式反解 → `SplineInput`（齿根：显式 `root` > DA/DF 反解 > 按 αD 默认）。
+    pub fn to_input(&self) -> Result<SplineInput, String> {
+        let alpha = PressureAngle::parse(&format!("{}", self.gear.alpha_deg))?;
         let root = self
             .root
-            .or_else(|| inherited.as_ref().and_then(|v| v.root))
+            .or_else(|| root_from_gear(&self.gear, self.side))
             .unwrap_or(match alpha {
                 PressureAngle::A30 => RootForm::Flat,
                 _ => RootForm::Fillet,
             });
-        let dp = match self.dp {
-            Some(v) => Some(v),
-            None => None, // 不填 = 标准 R40 自动解（spline_tol 内部处理）
-        };
         Ok(SplineInput {
-            m,
-            z,
+            m: self.gear.m,
+            z: self.gear.z,
             alpha,
             root,
             side: self.side,
             grade: self.grade,
             ext_dev: self.ext_dev,
             fit_length: None,
-            dp,
+            dp: self.dp,
         })
     }
 }
@@ -749,66 +845,12 @@ fn split_grade_fit(mark: &str) -> Result<(u32, &str), String> {
 }
 
 fn usage() -> String {
-    "花键参数表用法：`XLT 内 6H [dp 4.5] [m 3 z 20 a 30 x 0 | from sel|last] [root 平|圆] [at x,y] [rot 度]`；\
-     外花键把 `内 6H` 换成 `外 5f`。等级 4/5/6/7；配合内 H、外 d/e/f/h/js/k；\
-     `from sel` = 当前选中的 GEAR/SPLINE 块，`from last` = 图中最后一个；\
-     不填 dp = 按标准 R40 自动选，`dp_candidates_3` 的 3 个备选可用 `dp` 手填。"
+    "智能卡片「花键参数表」用法：`OCSMCARD 花键参数表 [std GB] 内 6H <九字段表达式> \
+     [dp 4.5] [root 平|圆] [at x,y] [rot 度]`；外花键把 `内 6H` 换成 `外 5f`（表达式 KIND 用 EX）。\
+     表达式形如 `SPLINE IN M3 Z20 ALPHA30 X0 DA65.4 DF57.3436 BETA0 H30`（轴/齿轮生成器 GUI 可直接复制）。\
+     等级 4/5/6/7；配合内 H、外 d/e/f/h/js/k；不填 dp = 按标准 R40 自动选；\
+     不填 root = 由表达式 DA/DF 反解（30° 可分辨平/圆），再退到按 αD 默认。"
         .to_string()
-}
-
-/// 从 `OCSM_PART` 的 JSON 元数据继承（GEAR/SPLINE 生成器写的字段）。
-#[derive(Debug, Clone, Copy, Default)]
-pub struct Inherited {
-    pub m: Option<f64>,
-    pub z: Option<u32>,
-    pub alpha: Option<PressureAngle>,
-    /// 仅记录（GB/T 3478 参数表不使用变位 x；继承来只为回显/后续扩展）。
-    #[allow(dead_code)]
-    pub x: Option<f64>,
-    pub root: Option<RootForm>,
-}
-
-fn parse_profile_root(profile: Option<&str>) -> Option<RootForm> {
-    let p = profile?.to_ascii_uppercase();
-    if p.ends_with('P') {
-        Some(RootForm::Flat)
-    } else if p.ends_with('R') {
-        Some(RootForm::Fillet)
-    } else {
-        None
-    }
-}
-
-/// 解析 GEAR/SPLINE 生成器元数据（`gear_meta_json`）或轴块 `gears[]` 的一项。
-pub fn inherit_from_meta(v: &serde_json::Value) -> Result<Inherited, String> {
-    // 轴块：从 `gears[]` 取第一项（花键/齿轮段）。
-    if let Some(arr) = v.get("gears").and_then(|g| g.as_array()) {
-        let first = arr
-            .first()
-            .ok_or_else(|| "花键参数表：轴块元数据里没有齿轮/花键段".to_string())?;
-        return inherit_from_meta(first);
-    }
-    let m = v.get("m").and_then(|x| x.as_f64());
-    let z = v.get("z").and_then(|x| x.as_u64()).map(|x| x as u32);
-    let alpha = v
-        .get("alpha")
-        .and_then(|x| x.as_f64())
-        .map(|a| PressureAngle::parse(&format!("{a}")))
-        .transpose()?;
-    let x = v.get("x").and_then(|x| x.as_f64());
-    let root = parse_profile_root(v.get("profile").and_then(|p| p.as_str()));
-    if m.is_none() || z.is_none() || alpha.is_none() {
-        return Err(
-            "花键参数表：继承源里缺 m/z/alpha（不是 GEAR/SPLINE 生成物的 `OCSM_PART`？）".into(),
-        );
-    }
-    Ok(Inherited {
-        m,
-        z,
-        alpha,
-        x,
-        root,
-    })
 }
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -990,68 +1032,87 @@ mod tests {
 
     /// 命令解析 + dp/root/from/at/rot。
     #[test]
-    fn spec_parse_and_inputs() {
-        let s = SplineTableSpec::parse("内 6H dp 4.5 m 3 z 20 a 30 x 0 at 10,20 rot 30").unwrap();
+    fn spec_parse_expr_and_root_inference() {
+        // 用户给的例子：内花键 DA = m(z+1.8) = 65.4 → 圆齿根反解
+        let s = SplineTableSpec::parse(
+            "std GB 内 6H SPLINE IN M3 Z20 ALPHA30 X0 DA65.4 DF57.3436 BETA0 H30 \
+             dp 1.0 at 10,20 rot 30",
+        )
+        .unwrap();
+        assert_eq!(s.system, "gb3478");
         assert_eq!(s.side, SplineSide::Internal);
         assert_eq!(s.grade, 6);
         assert_eq!(s.ext_dev, ExtDev::H);
-        assert_eq!(s.dp, Some(4.5));
-        assert_eq!(s.m, Some(3.0));
-        assert_eq!(s.z, Some(20));
-        assert_eq!(s.alpha, Some(PressureAngle::A30));
+        assert!(near(s.gear.m, 3.0) && s.gear.z == 20);
+        assert!(near(s.gear.alpha_deg, 30.0));
+        assert!(near(s.gear.x, 0.0));
+        assert_eq!(s.gear.da, Some(65.4));
+        assert_eq!(s.gear.df, Some(57.3436));
+        assert_eq!(s.dp, Some(1.0));
         assert_eq!(s.at, Some([10.0, 20.0]));
         assert!(near(s.rot, 30.0));
-        let input = s.to_input(None).unwrap();
-        assert_eq!(input.root, RootForm::Flat, "30° 默认平齿根");
-        assert_eq!(input.dp, Some(4.5));
-        // 外花键 + js + 圆齿根
-        let s = SplineTableSpec::parse("外 5js m 1 z 30 a 37.5 root 圆").unwrap();
+        let input = s.to_input().unwrap();
+        assert_eq!(input.root, RootForm::Fillet, "DA = m(z+1.8) → 圆齿根反解");
+        assert_eq!(input.dp, Some(1.0));
+        // 显式 root 覆盖反解
+        let s = SplineTableSpec::parse(
+            "内 6H SPLINE IN M3 Z20 ALPHA30 X0 DA65.4 DF57.3436 BETA0 H30 root 平",
+        )
+        .unwrap();
+        assert_eq!(s.to_input().unwrap().root, RootForm::Flat);
+        // 外花键：DF = m(z−1.5) = 55.5 → 平齿根反解；配合 js
+        let s = SplineTableSpec::parse(
+            "外 5js SPLINE EX M3 Z20 ALPHA30 X0 DA63 DF55.5 BETA0 H30",
+        )
+        .unwrap();
         assert_eq!(s.ext_dev, ExtDev::Js);
-        let input = s.to_input(None).unwrap();
-        assert_eq!(input.root, RootForm::Fillet);
-        assert_eq!(input.dp, None, "不填 dp = 自动 R40");
-        // 内花键必须 H；等级/配合/未知参数报错
-        assert!(SplineTableSpec::parse("内 6f m 3 z 20 a 30").is_err());
-        assert!(SplineTableSpec::parse("内 8H m 3 z 20 a 30").is_err());
-        assert!(SplineTableSpec::parse("内 6H m 3 z 20 a 20").is_err());
-        assert!(SplineTableSpec::parse("内 6H m 3 z 20 a 30 bogus").is_err());
-        // 内 6H 缺 m/z/a → 报错（无继承）
-        assert!(SplineTableSpec::parse("内 6H").unwrap().to_input(None).is_err());
-    }
-
-    /// 从 GEAR/SPLINE 元数据继承（gear_meta_json 形态 + 轴块 gears[] 形态）。
-    #[test]
-    fn inherit_from_gear_meta() {
-        let gear = serde_json::json!({
-            "family": "gear", "mode": "spline", "m": 2.0, "z": 20, "alpha": 30.0,
-            "x": 0.0, "profile": "GB30P", "internal": false
-        });
-        let inh = inherit_from_meta(&gear).unwrap();
-        assert!(near(inh.m.unwrap(), 2.0) && inh.z == Some(20));
-        assert_eq!(inh.alpha, Some(PressureAngle::A30));
-        assert_eq!(inh.root, Some(RootForm::Flat), "GB30P → 平齿根");
-        let spec = SplineTableSpec::parse("内 6H from sel").unwrap();
-        let input = spec.to_input(Some(&gear)).unwrap();
-        assert!(near(input.m, 2.0) && input.z == 20);
-        assert_eq!(input.alpha, PressureAngle::A30);
+        let input = s.to_input().unwrap();
         assert_eq!(input.root, RootForm::Flat);
-        // 显式参数覆盖继承值
-        let spec = SplineTableSpec::parse("内 6H m 3 a 37.5 from last").unwrap();
-        let input = spec.to_input(Some(&gear)).unwrap();
-        assert!(near(input.m, 3.0));
-        assert_eq!(input.alpha, PressureAngle::A37_5);
-        // 轴块 gears[] 形态（从轴上的 Gear 段继承）
-        let shaft = serde_json::json!({
-            "family": "shaft",
-            "gears": [{"m": 2.0, "z": 20, "alpha": 30.0, "x": 0.0, "involute": true, "internal": true}]
-        });
-        let spec = SplineTableSpec::parse("内 7H from sel").unwrap();
-        let input = spec.to_input(Some(&shaft)).unwrap();
-        assert!(near(input.m, 2.0) && input.z == 20);
-        // 20° 齿轮（非 GB/T 3478 压力角）→ 报错
-        let gear20 = serde_json::json!({"family":"gear","m":2.0,"z":20,"alpha":20.0,"x":0.0});
-        assert!(inherit_from_meta(&gear20).is_err());
-        // 没有任何 m/z/alpha 的元数据 → 报错
-        assert!(inherit_from_meta(&serde_json::json!({"family":"bolt"})).is_err());
+        assert_eq!(input.dp, None, "不填 dp = 自动 R40");
+        // 37.5° 推不出平/圆 → 默认圆齿根
+        let s = SplineTableSpec::parse(
+            "外 5f SPLINE EX M2 Z20 ALPHA37.5 X0 DA41.8 DF37.2 BETA0 H30",
+        )
+        .unwrap();
+        assert_eq!(s.to_input().unwrap().root, RootForm::Fillet);
+        // 方向与表达式 KIND 不一致 → 报错
+        let e = SplineTableSpec::parse(
+            "内 6H SPLINE EX M3 Z20 ALPHA30 X0 DA63 DF54.6 BETA0 H30",
+        )
+        .unwrap_err();
+        assert!(e.contains("KIND"), "{e}");
+        // 内花键必须 H；等级非法报错
+        assert!(SplineTableSpec::parse(
+            "内 6f SPLINE IN M3 Z20 ALPHA30 X0 DA65.4 DF57.3436 BETA0 H30"
+        )
+        .is_err());
+        assert!(SplineTableSpec::parse(
+            "内 8H SPLINE IN M3 Z20 ALPHA30 X0 DA65.4 DF57.3436 BETA0 H30"
+        )
+        .is_err());
+        // 20° 不是 GB/T 3478 压力角 → `to_input` 报错
+        assert!(SplineTableSpec::parse(
+            "内 6H GEAR IN M2 Z20 ALPHA20 X0 DA44 DF35 BETA0 H30"
+        )
+        .unwrap()
+        .to_input()
+        .is_err());
+        // 缺表达式 / 矩形花键（无齿形关键字）/ 多段 / 不认识的体系 → 报错
+        assert!(SplineTableSpec::parse("内 6H").is_err());
+        assert!(SplineTableSpec::parse("内 6H SPLINE 6x23x26x6 L30").is_err());
+        assert!(SplineTableSpec::parse(
+            "内 6H SPLINE IN M3 Z20 ALPHA30 X0 DA65.4 DF57.3436 BETA0 H30 | S30 E30 L20"
+        )
+        .is_err());
+        assert!(SplineTableSpec::parse(
+            "std ANSI 内 6H SPLINE IN M3 Z20 ALPHA30 X0 DA65.4 DF57.3436 BETA0 H30"
+        )
+        .is_err());
+        // 表达式尾巴上的未知 token 会被当成表达式的一部分 → 由 `parse_program` 报错。
+        let e = SplineTableSpec::parse(
+            "内 6H SPLINE IN M3 Z20 ALPHA30 X0 DA65.4 DF57.3436 BETA0 H30 bogus",
+        )
+        .unwrap_err();
+        assert!(e.contains("无法解析"), "{e}");
     }
 }

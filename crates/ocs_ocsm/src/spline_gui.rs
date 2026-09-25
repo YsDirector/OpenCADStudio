@@ -1,4 +1,4 @@
-//! XL「花键参数表」阶段 3：**GUI 选项表 + 页面/API 模型（表驱动）**。
+//! 智能卡片「花键参数表」（`OCSMCARD` 本期卡类型）：**GUI 选项表 + 页面/API 模型（表驱动）**。
 //!
 //! 照本仓 `partgen_keys::KEY_STYLES` 的既有做法：把「体系 → 方向 → 可选项
 //! （等级清单 / 配合清单 / 齿根形式 / 21 项尺寸公式口径）」全部放在下面的
@@ -90,6 +90,8 @@ pub struct SplineSideSpec {
 #[derive(Debug, Clone, Copy)]
 pub struct SplineSystemSpec {
     pub id: &'static str,
+    /// 命令/GUI 可用的别名（如 `gb`/`GB`；表驱动校验的唯一来源）。
+    pub aliases: &'static [&'static str],
     pub label: &'static str,
     pub standard: &'static str,
     /// 体系口径说明（原生 title）。
@@ -145,14 +147,14 @@ const INTERNAL_COLUMNS: &[SplineColumnSpec] = &[
         tag: "(内)齿数",
         label: "齿数",
         unit: "",
-        formula: "用户输入；或「从选中块 / 上一个块读取」继承 GEAR / 轴块 OCSM_PART 元数据",
+        formula: "由九字段齿形表达式反解（MARK KIND M Z ALPHA X DA DF BETA H；轴/齿轮生成器 GUI 可复制）",
         source: "手填 / 图纸继承",
     },
     SplineColumnSpec {
         tag: "(内)模数",
         label: "模数",
         unit: "mm",
-        formula: "用户输入；或「从选中块 / 上一个块读取」继承 GEAR / 轴块 OCSM_PART 元数据",
+        formula: "由九字段齿形表达式反解（MARK KIND M Z ALPHA X DA DF BETA H；轴/齿轮生成器 GUI 可复制）",
         source: "手填 / 图纸继承",
     },
     SplineColumnSpec {
@@ -295,14 +297,14 @@ const EXTERNAL_COLUMNS: &[SplineColumnSpec] = &[
         tag: "(外)齿数",
         label: "齿数",
         unit: "",
-        formula: "用户输入；或「从选中块 / 上一个块读取」继承 GEAR / 轴块 OCSM_PART 元数据",
+        formula: "由九字段齿形表达式反解（MARK KIND M Z ALPHA X DA DF BETA H；轴/齿轮生成器 GUI 可复制）",
         source: "手填 / 图纸继承",
     },
     SplineColumnSpec {
         tag: "(外)模数",
         label: "模数",
         unit: "mm",
-        formula: "用户输入；或「从选中块 / 上一个块读取」继承 GEAR / 轴块 OCSM_PART 元数据",
+        formula: "由九字段齿形表达式反解（MARK KIND M Z ALPHA X DA DF BETA H；轴/齿轮生成器 GUI 可复制）",
         source: "手填 / 图纸继承",
     },
     SplineColumnSpec {
@@ -466,6 +468,7 @@ const GB_SIDES: &[SplineSideSpec] = &[GB_INT, GB_EXT];
 
 const GB_SYSTEM: SplineSystemSpec = SplineSystemSpec {
     id: "gb3478",
+    aliases: &["gb", "GB", "GB3478"],
     label: "GB/T 3478.1-2008 渐开线花键（GB）",
     standard: "GB/T 3478.1 / .6 / .7 / .8 / .9-2008",
     note: "本期只实现 GB 体系；口径与数据见 assets/spline_gb3478_*.csv 的 source/note。\
@@ -479,7 +482,23 @@ pub const SPLINE_SYSTEMS: &[SplineSystemSpec] = &[GB_SYSTEM];
 
 /// 按 id 找体系。
 pub fn system_by_id(id: &str) -> Option<&'static SplineSystemSpec> {
-    SPLINE_SYSTEMS.iter().find(|s| s.id.eq_ignore_ascii_case(id))
+    let t = id.trim();
+    SPLINE_SYSTEMS.iter().find(|s| {
+        s.id.eq_ignore_ascii_case(t)
+            || s.aliases.iter().any(|a| a.eq_ignore_ascii_case(t))
+    })
+}
+
+/// 命令里的体系 token → 稳定 id（`gb`/`GB`/`gb3478` 均收；表驱动校验）。
+pub fn system_id_by_token(text: &str) -> Result<&'static str, String> {
+    system_by_id(text)
+        .map(|s| s.id)
+        .ok_or_else(|| {
+            format!(
+                "花键参数表：不认识的体系「{}」（本期只有 GB / gb3478）",
+                text.trim()
+            )
+        })
 }
 
 /// 按 id 找方向。
@@ -502,6 +521,14 @@ pub(crate) fn side_label(side: SplineSide) -> &'static str {
         SplineSide::Internal => "内花键",
         SplineSide::External => "外花键",
     }
+}
+
+/// 公差行 → 对应主值 tag（口径：`X.下公差`/`X.上公差` 的主值就是同前缀的 `X`）。
+/// 排版回归断言用它把「主值框 ↔ 上/下公差框」配对。
+#[cfg(test)]
+pub fn main_tag_of_dev(tag: &str) -> Option<&str> {
+    tag.strip_suffix(".下公差")
+        .or_else(|| tag.strip_suffix(".上公差"))
 }
 
 fn root_id(root: RootForm) -> &'static str {
@@ -612,6 +639,7 @@ pub fn options_json() -> Result<serde_json::Value, String> {
                 .collect();
             Ok(serde_json::json!({
                 "id": sys.id,
+                "aliases": sys.aliases,
                 "label": sys.label,
                 "standard": sys.standard,
                 "note": sys.note,
@@ -622,6 +650,8 @@ pub fn options_json() -> Result<serde_json::Value, String> {
         .collect::<Result<Vec<_>, _>>()?;
     Ok(serde_json::json!({
         "ok": true,
+        // 卡片类型表（智能卡片：本期只有「花键参数表」；以后加表格/铭牌 = 表加行）。
+        "card_types": crate::card::card_types_json(),
         "systems": systems,
         "pin_series": crate::spline_tol::pin_series()?,
         "pin_series_note": "GB/T 3478.9-2008 表 1（67 档，R40；极限偏差 ±0.001 mm）",
@@ -638,6 +668,9 @@ pub fn options_json() -> Result<serde_json::Value, String> {
 // ══════════════════════════════════════════════════════════════════════════
 
 /// GUI 表单模型（字段与页面控件一一对应）。
+///
+/// **参数来源 = 九字段齿形表达式**（用户 2026-09-25 裁定）：页面只粘表达式，
+/// `m/z/αD/x/Da/Df` 由后端反解；不再有「读选中/上一个块」这条路径。
 #[derive(Debug, Clone, Deserialize)]
 pub struct SplineTableModel {
     /// 体系 id；缺省 = gb3478。
@@ -648,15 +681,11 @@ pub struct SplineTableModel {
     pub grade: u32,
     /// 基本偏差 code：内 H；外 h/js/k/d/e/f。
     pub fit: String,
-    /// 压力角（度）：30 / 37.5 / 45。
-    pub alpha: f64,
-    /// 齿根形式：`flat` / `fillet`。
-    pub root: String,
-    pub m: f64,
-    pub z: u32,
-    /// 变位系数（GB/T 3478 参数表不使用，仅继承时记录）。
+    /// 九字段统一齿形表达式（轴/齿轮生成器 GUI 可复制）。
+    pub expr: String,
+    /// 齿根形式：`flat`/`fillet`；缺省/`auto` = 由表达式 DA/DF 反解，再退到按 αD 默认。
     #[serde(default)]
-    pub x: f64,
+    pub root: Option<String>,
     /// 量棒直径：`null` = 标准 R40 自动选（内花键）。
     #[serde(default)]
     pub dp: Option<f64>,
@@ -672,7 +701,7 @@ fn default_system() -> String {
 }
 
 impl SplineTableModel {
-    /// 体系校验（本期只认 gb3478；以后加体系 = 表里加行）。
+    /// 体系校验（表驱动；以后加体系 = 表里加行）。
     pub fn system_spec(&self) -> Result<&'static SplineSystemSpec, String> {
         system_by_id(&self.system).ok_or_else(|| {
             format!(
@@ -692,33 +721,12 @@ impl SplineTableModel {
         }
     }
 
-    /// 压力角 + 齿根（表里校验可选项）。
-    fn alpha_root(&self, side_spec: &'static SplineSideSpec) -> Result<(PressureAngle, RootForm), String> {
-        let alpha = PressureAngle::parse(&format!("{}", self.alpha))?;
-        if !side_spec.alphas.contains(&alpha) {
-            return Err(format!(
-                "花键参数表：压力角 {}° 不在 {} 可选项（见 /api/spline_options）",
-                self.alpha, side_spec.label
-            ));
+    /// 齿根形式：`None`/空/`auto` = 反解（见 `resolved`）。
+    fn root_form_opt(&self) -> Result<Option<RootForm>, String> {
+        match self.root.as_deref().map(str::trim) {
+            None | Some("") | Some("auto") | Some("自动") => Ok(None),
+            Some(t) => Ok(Some(root_form(t)?)),
         }
-        let root = root_form(&self.root)?;
-        let root_spec = side_spec
-            .roots
-            .iter()
-            .find(|r| r.key == root_id(root))
-            .ok_or_else(|| {
-                format!(
-                    "花键参数表：齿根形式「{}」不在 {} 可选项",
-                    self.root, side_spec.label
-                )
-            })?;
-        if !root_spec.alphas.contains(&alpha) {
-            return Err(format!(
-                "花键参数表：{} 不适用于压力角 {}°（见表选项 note）",
-                root_spec.label, self.alpha
-            ));
-        }
-        Ok((alpha, root))
     }
 
     /// 配合类别（表里校验可选项；内花键恒 H）。
@@ -744,10 +752,26 @@ impl SplineTableModel {
         Ok(dev)
     }
 
-    /// → `SplineInput`（全部校验过一遍；与 CLI 的 `SplineTableSpec::to_input` 同口径）。
-    pub fn to_input(&self) -> Result<SplineInput, String> {
-        let system = self.system_spec()?;
+    /// 表达式反解 + 方向 KIND 校验（表达式与卡片方向必须一致）。
+    pub fn resolved_gear(&self) -> Result<(crate::shaft::Gear, SplineSide), String> {
         let side = self.side()?;
+        let gear = crate::spline_table::parse_expr_gear(&self.expr)?;
+        if let Some(internal) = crate::spline_table::expr_explicit_kind(&self.expr) {
+            if internal != (side == SplineSide::Internal) {
+                return Err(format!(
+                    "花键参数表：表达式 KIND 写的是 {}，与卡片方向「{}」不一致",
+                    if internal { "IN（内）" } else { "EX（外）" },
+                    if side == SplineSide::Internal { "内" } else { "外" }
+                ));
+            }
+        }
+        Ok((gear, side))
+    }
+
+    /// →（`SplineInput`，表达式齿形段）。全部校验过一遍；与 CLI `SplineTableSpec` 同口径。
+    pub fn resolved(&self) -> Result<(SplineInput, crate::shaft::Gear), String> {
+        let system = self.system_spec()?;
+        let (gear, side) = self.resolved_gear()?;
         let side_spec = system
             .sides
             .iter()
@@ -766,34 +790,74 @@ impl SplineTableModel {
                     .join("/")
             ));
         }
-        if !self.m.is_finite() || !(0.25..=10.0).contains(&self.m) {
+        let ext_dev = self.ext_dev(side)?;
+        let alpha = PressureAngle::parse(&format!("{}", gear.alpha_deg))?;
+        if !side_spec.alphas.contains(&alpha) {
             return Err(format!(
-                "花键参数表：模数 m={} 不在 0.25…10（15 种模数系列）",
-                self.m
+                "花键参数表：压力角 {}° 不在 {} 可选项（30/37.5/45；见 /api/spline_options）",
+                gear.alpha_deg, side_spec.label
             ));
         }
-        if self.z < 6 {
-            return Err(format!("花键参数表：齿数 z={} 太小（至少 6）", self.z));
+        if !gear.m.is_finite() || !(0.25..=10.0).contains(&gear.m) {
+            return Err(format!(
+                "花键参数表：模数 m={} 不在 0.25…10（15 种模数系列）",
+                gear.m
+            ));
         }
-        let (alpha, root) = self.alpha_root(side_spec)?;
-        let ext_dev = self.ext_dev(side)?;
+        if gear.z < 6 {
+            return Err(format!("花键参数表：齿数 z={} 太小（至少 6）", gear.z));
+        }
+        // 齿根：显式 > 表达式 DA/DF 反解（30° 可分辨）> 按 αD 默认。
+        let root = self
+            .root_form_opt()?
+            .or_else(|| crate::spline_table::root_from_gear(&gear, side))
+            .unwrap_or(match alpha {
+                PressureAngle::A30 => RootForm::Flat,
+                _ => RootForm::Fillet,
+            });
+        let root_spec = side_spec
+            .roots
+            .iter()
+            .find(|r| r.key == root_id(root))
+            .ok_or_else(|| {
+                format!(
+                    "花键参数表：齿根形式「{}」不在 {} 可选项",
+                    root_id(root),
+                    side_spec.label
+                )
+            })?;
+        if !root_spec.alphas.contains(&alpha) {
+            return Err(format!(
+                "花键参数表：{} 不适用于压力角 {}°（见表选项 note）",
+                root_spec.label,
+                gear.alpha_deg
+            ));
+        }
         if self.dp.is_some_and(|v| !(v > 0.0)) {
             return Err(format!(
                 "花键参数表：量棒直径 Dp={} 必须 >0",
                 self.dp.unwrap_or(0.0)
             ));
         }
-        Ok(SplineInput {
-            m: self.m,
-            z: self.z,
-            alpha,
-            root,
-            side,
-            grade: self.grade,
-            ext_dev,
-            fit_length: None,
-            dp: self.dp,
-        })
+        Ok((
+            SplineInput {
+                m: gear.m,
+                z: gear.z,
+                alpha,
+                root,
+                side,
+                grade: self.grade,
+                ext_dev,
+                fit_length: None,
+                dp: self.dp,
+            },
+            gear,
+        ))
+    }
+
+    /// 只要 `SplineInput`（调用方不关心表达式齿形段时）。
+    pub fn to_input(&self) -> Result<SplineInput, String> {
+        self.resolved().map(|(input, _)| input)
     }
 }
 
@@ -889,22 +953,36 @@ fn dp_json(side: SplineSide, table: &SplineTable) -> serde_json::Value {
 }
 
 impl SplineTableModel {
-    /// 预览 JSON（不碰图纸）：21 项 + Dp/Md 面板。
+    /// 预览 JSON（不碰图纸）：反解读数 + 21 项 + Dp/Md 面板。
     pub fn preview_json(&self) -> Result<serde_json::Value, String> {
-        let input = self.to_input()?;
+        let (input, gear) = self.resolved()?;
         let table = crate::spline_tol::compute(&input)?;
         let items = items_json(input.side, &table)?;
+        // 齿根来源：显式 / 表达式 DA·DF 反解 / 按 αD 默认（GUI 只显示“怎么来的”）。
+        let root_source = if self.root_form_opt()?.is_some() {
+            "explicit"
+        } else if crate::spline_table::root_from_gear(&gear, input.side).is_some() {
+            "expr"
+        } else {
+            "default"
+        };
         Ok(serde_json::json!({
             "ok": true,
             "system": self.system,
             "side": side_id(input.side),
             "side_label": side_label(input.side),
             "grade_fit": input.grade_fit_label(),
+            "expr": self.expr,
+            "mark": if gear.involute { "SPLINE" } else { "GEAR" },
+            "kind": if input.side == SplineSide::Internal { "IN" } else { "EX" },
             "m": input.m,
             "z": input.z,
             "alpha": input.alpha.deg(),
+            "x": gear.x,
+            "da": gear.da,
+            "df": gear.df,
             "root": root_id(input.root),
-            "x": self.x,
+            "root_source": root_source,
             "dp": dp_json(input.side, &table),
             "items": items,
         }))
@@ -929,7 +1007,7 @@ impl SplineTableModel {
         Ok(out)
     }
 
-    /// `INSERT`（直接落点用；与 CLI `cmd_spline_table` 同一构造函数）。
+    /// `INSERT`（直接落点用；与 CLI `cmd_spline_card` 同一构造函数）。
     pub fn build_insert(&self) -> Result<ocs_plugin_api::host::acadrust::entities::Insert, String> {
         let input = self.to_input()?;
         let table = crate::spline_tol::compute(&input)?;
@@ -956,11 +1034,12 @@ impl SplineTableModel {
         Ok(format!("{}{dp}", input.grade_fit_label()))
     }
 
-    /// 待放置件的 `OCSM_PART` 元数据（薄台账：不带 m/z/alpha，避免被 `from last` 当继承源）。
+    /// 待放置件的 `OCSM_PART` 元数据（薄台账：卡类型/方向/等级配合/Dp）。
     pub fn part_meta_json(&self) -> Result<String, String> {
         let input = self.to_input()?;
         Ok(serde_json::json!({
             "family": "spline_table",
+            "card": "花键参数表",
             "side": side_id(input.side),
             "grade_fit": input.grade_fit_label(),
             "dp": self.dp,
@@ -977,17 +1056,19 @@ impl SplineTableModel {
 mod tests {
     use super::*;
 
+    /// 表达式档（m3 z20 ALPHA30，平齿根可由 DA/DF 反解；内部 DA=64.5、外部 DF=37）：
+    /// 覆盖 GUI 与 CLI 共用同一条表达式反解路径。
+    const EXPR_INT_FLAT: &str = "SPLINE IN M3 Z20 ALPHA30 X0 DA64.5 DF57.3436 BETA0 H30";
+    const EXPR_EXT_FLAT: &str = "SPLINE EX M2 Z20 ALPHA30 X0 DA42 DF37 BETA0 H30";
+
     fn tmodel(side: &str) -> SplineTableModel {
         SplineTableModel {
             system: "gb3478".into(),
             side: side.into(),
             grade: 6,
             fit: if side == "int" { "H".into() } else { "f".into() },
-            alpha: 30.0,
-            root: "flat".into(),
-            m: 2.0,
-            z: 20,
-            x: 0.0,
+            expr: if side == "int" { EXPR_INT_FLAT.into() } else { EXPR_EXT_FLAT.into() },
+            root: None,
             dp: None,
             at: None,
             rot: 0.0,
@@ -1106,31 +1187,19 @@ mod tests {
     /// ★ CLI 与 GUI 同源：`SplineTableSpec` 解析的输入和 GUI 模型算出的 21 项完全一致。
     #[test]
     fn gui_model_matches_cli_spec() {
-        let spec = crate::spline_table::SplineTableSpec::parse("内 6H m 3 z 20 a 30 root 平").unwrap();
-        let cli = crate::spline_tol::compute(&spec.to_input(None).unwrap()).unwrap();
-        let model = SplineTableModel {
-            system: "gb3478".into(),
-            side: "int".into(),
-            grade: 6,
-            fit: "H".into(),
-            alpha: 30.0,
-            root: "flat".into(),
-            m: 3.0,
-            z: 20,
-            x: 0.0,
-            dp: None,
-            at: None,
-            rot: 0.0,
-        };
+        // 同一段九字段表达式：CLI 与 GUI 两边反解 → 同一份 compute() 结果。
+        let expr = "SPLINE IN M3 Z20 ALPHA30 X0 DA64.5 DF57.3436 BETA0 H30";
+        let spec = crate::spline_table::SplineTableSpec::parse(&format!("内 6H {expr}")).unwrap();
+        let cli = crate::spline_tol::compute(&spec.to_input().unwrap()).unwrap();
+        let model = tmodel("int");
         let gui = crate::spline_tol::compute(&model.to_input().unwrap()).unwrap();
-        assert_eq!(cli, gui, "GUI 模型必须与 CLI 参数算同一份结果");
-        // 旧 CLI 形式（带 dp）仍可用；GUI 手填 dp 走同一字段。
-        let spec2 =
-            crate::spline_table::SplineTableSpec::parse("内 6H dp 1.0 m 2 z 20 a 30").unwrap();
+        assert_eq!(cli, gui, "同一表达式，CLI 与 GUI 必须算同一份结果");
+        // 带 dp 的卡命令与 GUI 手填 dp 走同一字段。
+        let spec2 = crate::spline_table::SplineTableSpec::parse(&format!("内 6H {expr} dp 1.0")).unwrap();
         let mut model2 = tmodel("int");
         model2.dp = Some(1.0);
         assert_eq!(
-            crate::spline_tol::compute(&spec2.to_input(None).unwrap()).unwrap(),
+            crate::spline_tol::compute(&spec2.to_input().unwrap()).unwrap(),
             crate::spline_tol::compute(&model2.to_input().unwrap()).unwrap()
         );
     }
@@ -1154,17 +1223,23 @@ mod tests {
         m.grade = 8;
         assert!(m.to_input().unwrap_err().contains("等级"));
         let mut m = tmodel("int");
-        m.root = "bogus".into();
+        m.root = Some("bogus".into());
         assert!(m.to_input().unwrap_err().contains("齿根"));
+        // 压力角来自表达式：ALPHA20 不是 GB/T 3478 的 αD
         let mut m = tmodel("int");
-        m.alpha = 20.0;
+        m.expr = "GEAR IN M2 Z20 ALPHA20 X0 DA44 DF35 BETA0 H30".into();
         assert!(m.to_input().unwrap_err().contains("压力角"));
         let mut m = tmodel("int");
         m.system = "ansi".into();
         assert!(m.to_input().unwrap_err().contains("gb3478"));
+        // 齿数来自表达式：Z4 < 6
         let mut m = tmodel("int");
-        m.z = 4;
+        m.expr = "SPLINE IN M3 Z4 ALPHA30 X0 DA16.5 DF10 BETA0 H30".into();
         assert!(m.to_input().unwrap_err().contains("齿数"));
+        // 表达式 KIND 与卡片方向不一致
+        let mut m = tmodel("int");
+        m.expr = "SPLINE EX M3 Z20 ALPHA30 X0 DA63 DF54.6 BETA0 H30".into();
+        assert!(m.to_input().unwrap_err().contains("KIND"));
     }
 
     /// 预览 JSON 的 items 带 formula/source（信息分层：进 title，不进可见文本）。
@@ -1176,5 +1251,117 @@ mod tests {
         assert!(first["formula"].as_str().unwrap().contains("GB/T 3478.1"));
         assert!(first["source"].as_str().unwrap().contains("GB/T 3478.1"));
         assert_eq!(first["unit"], "°");
+    }
+
+    /// ★ 排版回归（用户截图：`D_ii 78.113₃³` / `Md 74.255…` 主值与公差杂糅）：
+    /// 主值截到 0.001 + 值列/公差列实体级字宽 0.7 后——
+    /// ① 主值右边界 ≤ 公差列左边界（所有非公差行）；② 配对的主值框与上/下公差框不相交；
+    /// ③ 小数点后最多 3 位（显示与内部计算分开）。
+    #[test]
+    fn main_values_clear_tolerance_column() {
+        use crate::spline_table::{attdefs, build_insert, text_box, VALUE_WIDTH_FACTOR};
+        use std::collections::HashMap;
+        // 回归档：截图那两条（D_ii / Md）取一档长小数组合（m3 z26 = 分度圆 78）。
+        let cases: &[(SplineSide, f64, u32, PressureAngle, RootForm, u32, ExtDev)] = &[
+            (SplineSide::Internal, 3.0, 26, PressureAngle::A30, RootForm::Flat, 6, ExtDev::H),
+            (SplineSide::Internal, 2.0, 20, PressureAngle::A30, RootForm::Flat, 6, ExtDev::H),
+            (SplineSide::Internal, 10.0, 10, PressureAngle::A30, RootForm::Fillet, 5, ExtDev::H),
+            (SplineSide::Internal, 1.0, 40, PressureAngle::A37_5, RootForm::Fillet, 7, ExtDev::H),
+            (SplineSide::External, 3.0, 26, PressureAngle::A30, RootForm::Fillet, 5, ExtDev::F),
+            (SplineSide::External, 5.0, 15, PressureAngle::A30, RootForm::Flat, 4, ExtDev::Js),
+            (SplineSide::External, 2.0, 20, PressureAngle::A45, RootForm::Fillet, 7, ExtDev::K),
+        ];
+        let overlap = |a: [f64; 4], b: [f64; 4]| {
+            a[0] < b[2] && b[0] < a[2] && a[1] < b[3] && b[1] < a[3]
+        };
+        assert_eq!(
+            VALUE_WIDTH_FACTOR, 0.7,
+            "值列/公差列实体级字宽（不动 OCSM_GB 样式）"
+        );
+        for &(side, m, z, alpha, root, grade, fit) in cases {
+            let input = SplineInput {
+                m,
+                z,
+                alpha,
+                root,
+                side,
+                grade,
+                ext_dev: fit,
+                fit_length: None,
+                dp: None,
+            };
+            let table = crate::spline_tol::compute(&input).unwrap();
+            let ins = build_insert(side, &table, [0.0, 0.0], 0.0).unwrap();
+            let attrs: HashMap<String, _> = ins
+                .attributes
+                .iter()
+                .map(|a| (a.tag.clone(), a.clone()))
+                .collect();
+            assert_eq!(attrs.len(), 21);
+            // 公差列左边界 = 该侧公差行 ATTDEF 的最小 x（模板 ≈ −9.63）。
+            let tol_left = attdefs(side)
+                .iter()
+                .filter(|ad| main_tag_of_dev(&ad.tag).is_some())
+                .map(|ad| ad.insertion_point.x)
+                .fold(f64::MAX, f64::min);
+            assert!(
+                (-10.0..-9.0).contains(&tol_left),
+                "公差列左边界异常：{tol_left}"
+            );
+            for c in side_spec_by_id(side_id(side)).unwrap().columns {
+                let a = attrs.get(c.tag).unwrap_or_else(|| panic!("缺属性 {}", c.tag));
+                let box_of = |ad: &ocs_plugin_api::host::acadrust::entities::AttributeEntity| {
+                    text_box(
+                        [ad.insertion_point.x, ad.insertion_point.y],
+                        ad.height,
+                        ad.width_factor,
+                        &ad.value,
+                    )
+                };
+                let b = box_of(a);
+                // ③ 主值/公差显示精度：最多 3 位小数。
+                if let Some(dot) = a.value.find('.') {
+                    let n = a.value[dot + 1..]
+                        .chars()
+                        .take_while(|ch| ch.is_ascii_digit())
+                        .count();
+                    assert!(n <= 3, "{} 小数超过 3 位：{}", c.tag, a.value);
+                }
+                match main_tag_of_dev(c.tag) {
+                    // ② 配对的主值框与上/下公差框不相交（左对齐下 = 主值右边界 ≤ 公差左边界）。
+                    Some(main_tag) => {
+                        let main = attrs.get(main_tag).unwrap();
+                        let mb = box_of(main);
+                        assert!(
+                            !overlap(mb, b),
+                            "{main_tag} 与 {} 重叠：主值 {} → 右 {:.3}，公差 {} → 左 {:.3}",
+                            c.tag,
+                            main.value,
+                            mb[2],
+                            a.value,
+                            b[0]
+                        );
+                        assert!(mb[2] <= b[0] + 1e-9);
+                        assert!(
+                            b[2] <= 1e-9,
+                            "{} 公差文本超出表右边界：{}",
+                            c.tag,
+                            a.value
+                        );
+                    }
+                    // ① 所有非公差（主值）右边界不得进入公差列。
+                    None => {
+                        assert!(
+                            b[2] <= tol_left + 1e-9,
+                            "{} 主值进入公差列：{} → 右边界 {:.3} > {:.3}",
+                            c.tag,
+                            a.value,
+                            b[2],
+                            tol_left
+                        );
+                    }
+                }
+            }
+        }
     }
 }

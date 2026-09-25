@@ -1,11 +1,13 @@
 // spline_gui.html 运行时/行为冒烟（node 最小 DOM 垫片 + 最小 fetch 桩）。
 //
-// 目的：锁住花键参数表 GUI 的交互契约（node --check / el("id") 静态扫描查不出）：
-//   ① 表驱动：内/外方向、等级/配合/齿根/压力角清单全部由 /api/spline_options 下发，
-//      页面里不写死（换体系只加后端数据行）；
-//   ② 量棒：标准解 + 3 个工程备选都渲染成可点选 chip；手填也可；
-//      ★ 选/填 Dp → 预览请求带 dp、Md 随之重算（用户点名的承诺）；
-//   ③ 参数来源：「从选中块 / 上一个块读取」→ 回填 m/z/α/齿根/x；
+// 目的：锁住「智能卡片」（OCSMCARD）本期卡类型「花键参数表」的交互契约
+//（node --check / el("id") 静态扫描查不出）：
+//   ① 表驱动：卡类型/体系/等级/配合/齿根/压力角清单全部由 /api/spline_options 下发，
+//      页面里不写死（换体系/加卡片只加后端数据行）；
+//   ② 齿形表达式：粘九字段表达式 → 后端反解 m/z/αD/x/Da/Df + 齿根（30° 平/圆可分辨）；
+//      旧的「读选中/上一个块」路径**已删除**（不调用 /api/spline_meta、没有按钮）；
+//   ③ 量棒：标准解 + 3 个工程备选都渲染成可点选 chip；手填也可；
+//      ★ 选/填 Dp → 预览请求带 dp、Md 随之重算；
 //   ④ 外花键：量棒面板置灰（applicable=false），结果出公法线长度/跨测齿数；
 //   ⑤ 出表：无 at → 待放置件（请求不带 at）；有 at → 直插；成功后自动关窗；
 //   ⑥ 旧插件 404 → 直白提示（照 hole_gui.html 的 readApi 判据）；
@@ -54,53 +56,63 @@ function columns(prefix, labels) {
     source: 'stub 来源',
   }));
 }
+const SYSTEMS = [{
+  id: 'gb3478',
+  aliases: ['gb', 'GB'],
+  label: 'GB/T 3478（stub）',
+  standard: 'GB/T 3478（stub）',
+  note: 'stub 体系口径',
+  x_note: 'stub x 口径',
+  sides: [
+    {
+      id: 'int', label: '内花键', title: 'stub 内花键',
+      grade_note: 'stub 等级口径', alpha_note: 'stub 压力角口径',
+      grades: [4, 5, 6, 7],
+      fits: [{ fit: 'H', code: 'H', label: 'H（内花键基孔制）', preferred_45: true, memo: 'stub 配合口径' }],
+      roots: [
+        { key: 'flat', label: '平齿根', alphas: [30, 37.5, 45], note: 'stub 平齿根口径' },
+        { key: 'fillet', label: '圆齿根', alphas: [30, 37.5, 45], note: 'stub 圆齿根口径' },
+      ],
+      alphas: [30, 37.5, 45],
+      pin: {
+        applicable: true, label: '量棒直径 Dp 与测量跨棒距 Md',
+        formula: "stub D'_Ri 公式", md_formula: 'stub M_Ri 公式', standard: 'stub R40 选棒规则',
+      },
+      columns: columns('内', COL_INT),
+    },
+    {
+      id: 'ext', label: '外花键', title: 'stub 外花键',
+      grade_note: 'stub 等级口径', alpha_note: 'stub 压力角口径',
+      grades: [4, 5, 6, 7],
+      fits: [
+        { fit: 'H/k', code: 'k', label: 'H/k', preferred_45: true, memo: 'stub 过盈' },
+        { fit: 'H/js', code: 'js', label: 'H/js', preferred_45: false, memo: 'stub 过渡' },
+        { fit: 'H/h', code: 'h', label: 'H/h', preferred_45: true, memo: 'stub 间隙 0' },
+        { fit: 'H/f', code: 'f', label: 'H/f', preferred_45: true, memo: 'stub 小间隙' },
+        { fit: 'H/e', code: 'e', label: 'H/e', preferred_45: false, memo: 'stub 中间隙' },
+        { fit: 'H/d', code: 'd', label: 'H/d', preferred_45: false, memo: 'stub 大间隙' },
+      ],
+      roots: [
+        { key: 'flat', label: '平齿根', alphas: [30, 37.5, 45], note: 'stub 平齿根口径' },
+        { key: 'fillet', label: '圆齿根', alphas: [30, 37.5, 45], note: 'stub 圆齿根口径' },
+      ],
+      alphas: [30, 37.5, 45],
+      pin: { applicable: false, reason: 'stub 外花键用公法线，不含量棒' },
+      columns: columns('外', COL_EXT),
+    },
+  ],
+}];
 const OPTIONS = {
   ok: true,
-  systems: [{
-    id: 'gb3478',
-    label: 'GB/T 3478（stub）',
-    standard: 'GB/T 3478（stub）',
-    note: 'stub 体系口径',
-    x_note: 'stub x 口径',
-    sides: [
-      {
-        id: 'int', label: '内花键', title: 'stub 内花键',
-        grade_note: 'stub 等级口径', alpha_note: 'stub 压力角口径',
-        grades: [4, 5, 6, 7],
-        fits: [{ fit: 'H', code: 'H', label: 'H（内花键基孔制）', preferred_45: true, memo: 'stub 配合口径' }],
-        roots: [
-          { key: 'flat', label: '平齿根', alphas: [30, 37.5, 45], note: 'stub 平齿根口径' },
-          { key: 'fillet', label: '圆齿根', alphas: [30, 37.5, 45], note: 'stub 圆齿根口径' },
-        ],
-        alphas: [30, 37.5, 45],
-        pin: {
-          applicable: true, label: '量棒直径 Dp 与测量跨棒距 Md',
-          formula: "stub D'_Ri 公式", md_formula: 'stub M_Ri 公式', standard: 'stub R40 选棒规则',
-        },
-        columns: columns('内', COL_INT),
-      },
-      {
-        id: 'ext', label: '外花键', title: 'stub 外花键',
-        grade_note: 'stub 等级口径', alpha_note: 'stub 压力角口径',
-        grades: [4, 5, 6, 7],
-        fits: [
-          { fit: 'H/k', code: 'k', label: 'H/k', preferred_45: true, memo: 'stub 过盈' },
-          { fit: 'H/js', code: 'js', label: 'H/js', preferred_45: false, memo: 'stub 过渡' },
-          { fit: 'H/h', code: 'h', label: 'H/h', preferred_45: true, memo: 'stub 间隙 0' },
-          { fit: 'H/f', code: 'f', label: 'H/f', preferred_45: true, memo: 'stub 小间隙' },
-          { fit: 'H/e', code: 'e', label: 'H/e', preferred_45: false, memo: 'stub 中间隙' },
-          { fit: 'H/d', code: 'd', label: 'H/d', preferred_45: false, memo: 'stub 大间隙' },
-        ],
-        roots: [
-          { key: 'flat', label: '平齿根', alphas: [30, 37.5, 45], note: 'stub 平齿根口径' },
-          { key: 'fillet', label: '圆齿根', alphas: [30, 37.5, 45], note: 'stub 圆齿根口径' },
-        ],
-        alphas: [30, 37.5, 45],
-        pin: { applicable: false, reason: 'stub 外花键用公法线，不含量棒' },
-        columns: columns('外', COL_EXT),
-      },
-    ],
+  card_types: [{
+    id: '花键参数表',
+    aliases: ['spline'],
+    label: '花键参数表',
+    summary: 'stub 卡片说明',
+    systems: [{ id: 'gb3478', label: 'GB/T 3478（stub）', standard: 'stub' }],
+    renderer: 'spline_table',
   }],
+  systems: SYSTEMS,
   pin_series: [0.56, 0.60, 0.63, 0.67, 0.71, 0.75, 0.80, 0.85, 0.90, 0.95, 1.00, 1.06, 1.12, 1.18, 1.25],
   pin_series_note: 'stub 量棒系列',
 };
@@ -110,6 +122,40 @@ const DP_CALC = 0.93;
 const pickStd = (x) => SERIES.find((v) => v >= x - 1e-9);
 // 桩里的 Md 与 Dp 单调挂钩：选不同 Dp，Md 必然变——断言「选了 Dp 必须重算」用。
 const mdOf = (dp) => Number((10 + 1.5 * (dp - 1.0)).toFixed(6));
+const near = (a, b, eps = 1e-9) => Math.abs(Number(a) - Number(b)) < eps;
+
+// 九字段表达式最小解析（与生产 `shaft::parse_program` 同字段口径，只取 stub 要用的）。
+function parseExpr(expr) {
+  const toks = String(expr || '').trim().split(/\s+/).filter(Boolean);
+  const out = { mark: null, kind: null, m: null, z: null, alpha: null, x: 0, da: null, df: null };
+  for (const t of toks) {
+    const u = t.toUpperCase();
+    if (u === 'GEAR' || u === 'SPLINE') out.mark = u;
+    else if (u === 'IN' || u === 'EX') out.kind = u;
+    else if (u.startsWith('ALPHA')) out.alpha = Number(u.slice(5));
+    else if (u.startsWith('BETA')) { /* 本期只支持 0 */ }
+    else if (u.startsWith('DA')) out.da = Number(u.slice(2));
+    else if (u.startsWith('DF')) out.df = Number(u.slice(2));
+    else if (u.startsWith('M')) out.m = Number(u.slice(1));
+    else if (u.startsWith('Z')) out.z = Number(u.slice(1));
+    else if (u.startsWith('X')) out.x = Number(u.slice(1));
+    else if (u.startsWith('H')) { /* 轴段厚度：本卡不用 */ }
+  }
+  return out;
+}
+
+function inferRoot(side, g) {
+  if (!(Math.abs(Number(g.alpha) - 30) < 1e-9)) return null;
+  if (side === 'int' && g.da != null) {
+    if (near(g.da, g.m * (g.z + 1.5))) return 'flat';
+    if (near(g.da, g.m * (g.z + 1.8))) return 'fillet';
+  }
+  if (side === 'ext' && g.df != null) {
+    if (near(g.df, g.m * (g.z - 1.5))) return 'flat';
+    if (near(g.df, g.m * (g.z - 1.8))) return 'fillet';
+  }
+  return null;
+}
 
 function findCol(side, needle) {
   return (side.columns || []).find((c) => c.label.includes(needle));
@@ -120,19 +166,29 @@ function preview(m) {
   const side = sys && sys.sides.find((s) => s.id === m.side);
   if (!side) return { ok: false, error: `方向 ${m.side} 不存在` };
   if (!side.grades.includes(m.grade)) return { ok: false, error: `等级 ${m.grade} 不在可选项` };
-  if (!side.alphas.includes(m.alpha)) return { ok: false, error: `压力角 ${m.alpha} 不在可选项` };
-  if (!(m.m > 0) || !(m.z >= 6)) return { ok: false, error: '模数/齿数不合法' };
+  const g = parseExpr(m.expr);
+  if (!g.mark || g.m == null || g.z == null || g.alpha == null) {
+    return { ok: false, error: `花键参数表：齿形表达式无法解析（stub）：${m.expr}` };
+  }
+  if (g.kind && ((g.kind === 'IN') !== (m.side === 'int'))) {
+    return { ok: false, error: '花键参数表：表达式 KIND 与卡片方向「不一致」（stub）' };
+  }
+  if (!side.alphas.includes(g.alpha)) return { ok: false, error: `压力角 ${g.alpha} 不在可选项` };
+  if (!(g.m > 0) || !(g.z >= 6)) return { ok: false, error: '模数/齿数不合法' };
+  const inferred = inferRoot(m.side, g);
+  const explicit = m.root && m.root !== 'auto' ? m.root : null;
+  const root = explicit || inferred || (Math.abs(g.alpha - 30) < 1e-9 ? 'flat' : 'fillet');
+  const rootSource = explicit ? 'explicit' : inferred ? 'expr' : 'default';
   const items = side.columns.map((c) => {
     let value = `v-${c.label}`;
-    if (c.label.includes('齿形角')) value = `${m.alpha}°`;
-    if (c.label.includes('齿数')) value = String(m.z);
-    if (c.label.includes('模数')) value = String(m.m);
+    if (c.label.includes('齿形角')) value = `${g.alpha}°`;
+    if (c.label.includes('齿数')) value = String(g.z);
+    if (c.label.includes('模数')) value = String(g.m);
     return { tag: c.tag, label: c.label, unit: c.unit, value, formula: c.formula, source: c.source };
   });
   let dp;
   if (side.pin && side.pin.applicable) {
-    const series = SERIES;
-    if (m.dp != null && !series.some((v) => Math.abs(v - m.dp) < 1e-9)) {
+    if (m.dp != null && !SERIES.some((v) => near(v, m.dp))) {
       return { ok: false, error: `量棒参数：Dp=${m.dp} 不在 GB/T 3478.9 表 1 量棒系列（stub）` };
     }
     const auto = pickStd(DP_CALC);
@@ -147,7 +203,7 @@ function preview(m) {
     const choices = [{ value: auto, tag: '标准解', standard: true }];
     for (const v of SERIES.slice().sort((a, b) => Math.abs(a - DP_CALC) - Math.abs(b - DP_CALC))) {
       if (choices.length >= 4) break;
-      if (choices.some((c) => Math.abs(c.value - v) < 1e-9)) continue;
+      if (choices.some((c) => near(c.value, v))) continue;
       choices.push({ value: v, tag: '备选', standard: false });
     }
     choices.sort((a, b) => a.value - b.value);
@@ -168,8 +224,10 @@ function preview(m) {
   }
   return {
     ok: true, system: m.system || 'gb3478', side: side.id, side_label: side.label,
-    grade_fit: `${m.grade}${m.fit}`, m: m.m, z: m.z, alpha: m.alpha, root: m.root, x: m.x || 0,
-    dp, items,
+    grade_fit: `${m.grade}${m.fit}`, expr: m.expr,
+    mark: g.mark, kind: m.side === 'int' ? 'IN' : 'EX',
+    m: g.m, z: g.z, alpha: g.alpha, x: g.x || 0, da: g.da, df: g.df,
+    root, root_source: rootSource, dp, items,
   };
 }
 
@@ -217,12 +275,13 @@ function mkEl(id) {
 }
 
 const els = new Map();
-const SELECT_IDS = new Set(['sys', 'grade', 'fit', 'alpha', 'root']);
+const SELECT_IDS = new Set(['cardType', 'sys', 'grade', 'fit', 'alpha', 'root']);
 global.document = {
   getElementById(id) {
     if (!els.has(id)) {
       const e = mkEl(id);
       if (SELECT_IDS.has(id)) e.tagName = 'SELECT';
+      if (id === 'expr') e.tagName = 'TEXTAREA';
       els.set(id, e);
     }
     return els.get(id);
@@ -236,6 +295,7 @@ global.document = {
   querySelectorAll() { return []; },
   querySelector() { return null; },
   addEventListener() {},
+  activeElement: null,
 };
 // 出表成功后应像孔/轴/标准件那样自动关窗：window.close 置位 + setTimeout 立即执行
 let closed = false;
@@ -252,10 +312,9 @@ global.URLSearchParams = class {
 // ── fetch 桩 ─────────────────────────────────────────────────────
 let lastPreviewModel = null;
 let lastExportModel = null;
-let lastMetaUrl = '';
 let lastExportUrl = '';
+let metaCalled = false;
 let forceExport404 = false;
-let forceOptions404 = false;
 let forcePreview404 = false;
 const consoleErrors = [];
 const realError = console.error.bind(console); // report() 要用真 stderr（console.error 被冒烟接管了）
@@ -273,10 +332,7 @@ function text404(path) {
 }
 global.fetch = async (u, opts = {}) => {
   const url = String(u);
-  if (url.startsWith('/api/spline_options')) {
-    if (forceOptions404) return text404('/api/spline_options');
-    return jsonResp(OPTIONS);
-  }
+  if (url.startsWith('/api/spline_options')) return jsonResp(OPTIONS);
   if (url.startsWith('/api/spline_preview')) {
     if (forcePreview404) return text404('/api/spline_preview');
     const model = JSON.parse(opts.body || '{}');
@@ -286,11 +342,9 @@ global.fetch = async (u, opts = {}) => {
     return jsonResp(v);
   }
   if (url.startsWith('/api/spline_meta')) {
-    lastMetaUrl = url;
-    return jsonResp({
-      ok: true, source: url.includes('from=last') ? 'last' : 'sel',
-      m: 3, z: 24, alpha: 37.5, x: 0.25, root: 'fillet', label: 'm3 z24 α37.5° 圆齿根',
-    });
+    // 旧路径必须不再被调用（删路径要删干净）。
+    metaCalled = true;
+    return jsonResp({ ok: false, error: 'spline_meta 已移除' }, 404);
   }
   if (url.startsWith('/api/spline_export')) {
     lastExportUrl = url;
@@ -302,12 +356,13 @@ global.fetch = async (u, opts = {}) => {
 };
 
 // ── 跑 GUI 脚本（末尾探针暴露内部状态；不改生产代码）──────────────
-const probed = script.replace(/\}\)\(\);\s*$/, `;globalThis.__spline = {
+const probed = script.replace(/\}\)\(\);\s*$/, `;globalThis.__card = {
   get opt() { return OPT; },
+  get card() { return CARD; },
   get sys() { return SYS; },
   get side() { return SIDE; },
   get dp() { return dpSel; },
-  currentModel, refresh, syncUi, pickSide, readMeta,
+  currentModel, refresh, syncUi, pickSide,
 };
 })();`);
 try {
@@ -318,9 +373,9 @@ try {
 const tick = async (n = 4) => { for (let i = 0; i < n; i++) await new Promise((r) => setImmediate(r)); };
 await tick();
 
-const H = globalThis.__spline;
+const H = globalThis.__card;
 const el = (id) => document.getElementById(id);
-check(!!H, '探针 __spline 未挂上（脚本初始化崩溃？）');
+check(!!H, '探针 __card 未挂上（脚本初始化崩溃？）');
 if (!H) report();
 
 // ⓪ 信息分层（可见文本，剥标签 + 脚本/样式；title 属性随标签一起剥掉）：
@@ -336,52 +391,76 @@ for (const bad of [
   check(!visibleText.includes(bad), `常显区不应含公式/口径/来源「${bad}」`);
 }
 check(visibleText.includes('选内/外'), `常显区应保留操作引导：${visibleText.slice(0, 200)}`);
-// 口径改为原生 title 悬停（页面静态 title + 选项表下发到 title）
-check(html.includes('title="花键体系（选项表由后端下发）"'), '体系口径应进原生 title');
+check(html.includes('title="智能卡片类型（表驱动'), '卡类型口径应进原生 title');
 check(el('pinLabel').title.includes("stub D'_Ri 公式"), `量棒公式应从选项表进 title：${el('pinLabel').title}`);
 check(el('grade').title.includes('stub 等级口径'), `等级口径应进 title：${el('grade').title}`);
 
-// ① 表驱动：清单全部来自 /api/spline_options
-check(H.side && H.side.id === 'int', `默认方向应为内花键，实为 ${H.side && H.side.id}`);
+// ① 表驱动：卡类型/体系/清单全部来自 /api/spline_options
+check(H.card && H.card.id === '花键参数表', `默认卡类型应为花键参数表，实为 ${H.card && H.card.id}`);
+check(el('cardType').options.map((o) => o.value).join(',') === '花键参数表', '卡类型下拉来自 card_types');
+check(el('cardType').disabled === true, '只有一个卡类型时应置灰');
 check(el('sys').options.map((o) => o.value).join(',') === 'gb3478', '体系下拉来自选项表');
 check(el('sys').disabled === true, '只有一个体系时体系下拉应置灰');
+check(H.side && H.side.id === 'int', `默认方向应为内花键，实为 ${H.side && H.side.id}`);
 check(el('grade').options.map((o) => o.value).join(',') === '4,5,6,7', `等级清单：${el('grade').options.map((o) => o.value)}`);
 check(el('grade').value === '6', `默认等级应为 6，实为 ${el('grade').value}`);
 check(el('fit').options.map((o) => o.value).join(',') === 'H', `内花键配合应为 H，实为 ${el('fit').options.map((o) => o.value)}`);
 check(el('alpha').value === '30', `默认压力角应为 30，实为 ${el('alpha').value}`);
-check(el('root').options.map((o) => o.value).join(',') === 'flat,fillet', '齿根形式来自选项表');
-check(el('x').disabled === true, 'x（GB 不使用）应置灰');
-check(el('x').title.includes('stub x 口径'), 'x 口径应进 title');
+check(el('root').options.map((o) => o.value).join(',') === 'auto,flat,fillet', `齿根形式：${el('root').options.map((o) => o.value)}`);
+check(el('root').value === 'auto', `齿根默认应为自动反解，实为 ${el('root').value}`);
 
-// ①.5 打开即预览：模型/21 项/标准解
+// ② 表达式反解：默认表达式 → m/z/αD/x/Da/Df + 齿根来源；旧路径不再调用
 await H.refresh();
 check(!!lastPreviewModel && lastPreviewModel.side === 'int', `预览模型：${JSON.stringify(lastPreviewModel)}`);
 check(lastPreviewModel.dp === null, '默认 dp 应为 null（标准解自动）');
+check(String(lastPreviewModel.expr).startsWith('SPLINE IN'), `预览请求应带表达式：${JSON.stringify(lastPreviewModel.expr)}`);
+check(el('mOut').textContent === '3' && el('zOut').textContent === '20', `反解 m/z：${el('mOut').textContent}/${el('zOut').textContent}`);
+check(el('alphaOut').textContent === '30', `反解 αD：${el('alphaOut').textContent}`);
+check(el('daOut').textContent === '65.4' && el('dfOut').textContent === '57.3436', `反解 Da/Df：${el('daOut').textContent}/${el('dfOut').textContent}`);
+check((el('rootOut').textContent || '').includes('圆齿根') && (el('rootOut').textContent || '').includes('反解'), `齿根反解读数：${el('rootOut').textContent}`);
+check(metaCalled === false, '旧的 /api/spline_meta 路径不应再被调用');
 check(el('items').innerHTML.split('class="row"').length - 1 === 21, `结果应渲染 21 项：${el('items').innerHTML.slice(0, 120)}`);
 check(el('items').innerHTML.includes('测量跨棒距 Md'), '内花键结果应含测量跨棒距');
 check(el('items').innerHTML.includes('title="stub 公式'), '公式应在每行 title 里');
 const mdAuto = el('mdOut').textContent;
-check(mdAuto === mdOf(pickStd(DP_CALC)).toFixed(3).replace(/0+$/, '').replace(/\.$/, '') || Number(mdAuto) === mdOf(pickStd(DP_CALC)),
-  `自动 Md 应为标准解对应的值：${mdAuto}`);
 
-// ② 量棒：标准解 + 3 备选 chip，可点选；点选后 Md 重算
+// ②.5 换表达式（m2 z20 平齿根反解 + 显式 root 覆盖）→ 反解读数跟着变
+el('expr').value = 'SPLINE IN M2 Z20 ALPHA30 X0 DA43.6 DF36.4 BETA0 H30';
+el('expr')._fire('input', el('expr'));
+await tick();
+check(el('mOut').textContent === '2', `换表达式后 m 应 2：${el('mOut').textContent}`);
+check((el('rootOut').textContent || '').includes('圆齿根'), `DA=43.6=m(z+1.8) 应反解圆齿根：${el('rootOut').textContent}`);
+el('root').value = 'flat';
+el('root')._fire('change', el('root'));
+await tick();
+check((el('rootOut').textContent || '').includes('平齿根') && (el('rootOut').textContent || '').includes('手选'), `显式 root 应显示手选：${el('rootOut').textContent}`);
+el('root').value = 'auto';
+el('root')._fire('change', el('root'));
+await tick();
+// 回默认表达式（后续 Dp 断言用它）
+el('expr').value = 'SPLINE IN M3 Z20 ALPHA30 X0 DA65.4 DF57.3436 BETA0 H30';
+el('expr')._fire('input', el('expr'));
+await tick();
+
+// ③ 量棒：标准解 + 3 备选 chip，可点选；点选后 Md 重算
 const chips = el('dpChoices').children;
 check(chips.length === 4, `量棒应显示标准解 + 3 备选（4 个）：${chips.map((c) => c.textContent)}`);
 check(chips.some((c) => c.textContent.startsWith('标准解')), `应有标准解 chip：${chips.map((c) => c.textContent)}`);
-const altChip = chips.find((c) => Math.abs(Number(String(c.textContent).split(' ')[1]) - pickStd(DP_CALC)) > 1e-9);
+const autoVal = Number(el('dpOut').textContent);
+const altChip = chips.find((c) => !near(Number(String(c.textContent).split(' ')[1]), autoVal));
 check(!!altChip, '应有与标准解不同的备选 chip');
 altChip.click();
 await tick();
-check(lastPreviewModel && Math.abs(Number(lastPreviewModel.dp) - Number(String(altChip.textContent).split(' ')[1])) < 1e-9,
+check(lastPreviewModel && near(Number(lastPreviewModel.dp), Number(String(altChip.textContent).split(' ')[1])),
   `点选备选后预览请求应带所选 Dp：${JSON.stringify(lastPreviewModel)}`);
 const mdAlt = el('mdOut').textContent;
 check(mdAlt !== mdAuto, `★ 选了 Dp，Md 必须重算：${mdAuto} → ${mdAlt}`);
 
-// ②.5 手填：系列值 → 生效；非系列值 → 动态报错（后端拦）
+// ③.5 手填：系列值 → 生效；非系列值 → 动态报错（后端拦）
 el('dpManual').value = '1.00';
 el('dpManual')._fire('input', el('dpManual'));
 await tick();
-check(lastPreviewModel && Math.abs(Number(lastPreviewModel.dp) - 1.0) < 1e-9, `手填 Dp 应进模型：${JSON.stringify(lastPreviewModel)}`);
+check(lastPreviewModel && near(Number(lastPreviewModel.dp), 1.0), `手填 Dp 应进模型：${JSON.stringify(lastPreviewModel)}`);
 check(el('dpManualOn').checked === true, '手填时应自动勾上「手填」');
 check(el('mdOut').textContent !== mdAlt, `手填后 Md 应重算：${mdAlt} → ${el('mdOut').textContent}`);
 el('dpManual').value = '1.03';
@@ -389,27 +468,21 @@ el('dpManual')._fire('input', el('dpManual'));
 await tick();
 check((el('status').textContent || '').includes('3478.9'), `非系列 Dp 应动态报错并指路：${el('status').textContent}`);
 check(el('dpOut').textContent === '—', '报错时 Dp 读数应回 —');
-// 回到标准解
 el('dpManualOn').checked = false;
 el('dpManualOn')._fire('change', el('dpManualOn'));
 await tick();
 check(lastPreviewModel.dp === null, '取消手填应回到标准解（dp=null）');
 
-// ③ 参数来源：读选中/上一个块 → 回填表单
-el('readSel').click();
+// ④ 表达式 KIND 与方向不一致 → 动态报错
+el('expr').value = 'SPLINE EX M3 Z20 ALPHA30 X0 DA63 DF54.6 BETA0 H30';
+el('expr')._fire('input', el('expr'));
 await tick();
-check(lastMetaUrl.includes('from=sel'), `读选中应打 from=sel：${lastMetaUrl}`);
-check(Number(el('m').value) === 3 && Number(el('z').value) === 24, `回填 m/z：${el('m').value}/${el('z').value}`);
-check(Math.abs(Number(el('alpha').value) - 37.5) < 1e-9, `回填压力角：${el('alpha').value}`);
-check(el('root').value === 'fillet', `回填齿根：${el('root').value}`);
-check(Number(el('x').value) === 0.25, `回填 x：${el('x').value}`);
-check((el('status').textContent || '').includes('已从选中块读取'), `读取成功提示：${el('status').textContent}`);
-el('readLast').click();
-await tick();
-check(lastMetaUrl.includes('from=last'), `读上一个块应打 from=last：${lastMetaUrl}`);
+check((el('status').textContent || '').includes('KIND'), `方向不一致应动态报错：${el('status').textContent}`);
 
-// ④ 切外花键：配合清单 6 项、45° 优先排前并标注；量棒面板置灰
+// ⑤ 切外花键：配合清单 6 项、45° 优先排前并标注；量棒面板置灰
 H.pickSide('ext');
+el('expr').value = 'SPLINE EX M3 Z20 ALPHA30 X0 DA63 DF55.5 BETA0 H30';
+el('expr')._fire('input', el('expr'));
 await tick();
 check(H.side.id === 'ext', '应切到外花键');
 const fitCodes = el('fit').options.map((o) => o.value);
@@ -425,19 +498,21 @@ check(el('dpManualOn').disabled === true && el('dpManual').disabled === true, '�
 await H.refresh();
 check(lastPreviewModel.side === 'ext' && lastPreviewModel.dp === null, `外花键预览不应带 dp：${JSON.stringify(lastPreviewModel)}`);
 check(el('mdOut').textContent === '—' && el('dpOut').textContent === '—', '外花键不显示量棒读数');
+check((el('rootOut').textContent || '').includes('平齿根'), `外花键 DF=m(z−1.5) 应反解平齿根：${el('rootOut').textContent}`);
 check(el('items').innerHTML.includes('公法线长度'), '外花键结果应含公法线长度');
 check(el('items').innerHTML.includes('跨测齿数'), '外花键结果应含跨测齿数');
 
-// ⑤ 出表：无 at → 待放置件；成功后自动关窗
+// ⑥ 出表：无 at → 待放置件；成功后自动关窗
 el('ok').click();
 await tick(6);
 check(lastExportUrl.startsWith('/api/spline_export'), `导出 URL：${lastExportUrl}`);
 check(lastExportModel && lastExportModel.side === 'ext', `导出模型：${JSON.stringify(lastExportModel)}`);
 check(lastExportModel.at === null, '未填 at 时导出不应带落点（走放置态）');
+check(String(lastExportModel.expr).startsWith('SPLINE EX'), `导出模型应带表达式：${lastExportModel.expr}`);
 check(closed === true, '出表成功后应自动关窗');
 check((el('status').textContent || '').includes('stub 已生成'), `成功提示：${el('status').textContent}`);
 
-// ⑤.5 有 at → 直插请求带 at/rot
+// ⑥.5 有 at → 直插请求带 at/rot；at 只填一个 → 动态提示、不导出
 closed = false;
 el('atX').value = '10';
 el('atY').value = '20';
@@ -446,7 +521,6 @@ el('ok').click();
 await tick(6);
 check(JSON.stringify(lastExportModel.at) === '[10,20]', `at 应进模型：${JSON.stringify(lastExportModel.at)}`);
 check(Number(lastExportModel.rot) === 30, `rot 应进模型：${lastExportModel.rot}`);
-// at 只填一个 → 动态提示、不导出（需手填的异常走动态）
 lastExportModel = null;
 el('atX').value = '10';
 el('atY').value = '';
@@ -457,7 +531,7 @@ check((el('status').textContent || '').includes('需要 x 与 y 都填'), `半�
 el('atX').value = '';
 el('atY').value = '';
 
-// ⑥ 旧插件 404：直白提示、不关窗
+// ⑦ 旧插件 404：直白提示、不关窗
 forceExport404 = true;
 closed = false;
 consoleErrors.length = 0;
@@ -475,13 +549,18 @@ consoleErrors.length = 0;
 await H.refresh();
 check((el('status').textContent || '').includes('404'), `预览 404 提示：${el('status').textContent}`);
 forcePreview404 = false;
+// 表达式为空 → 动态提示（不需手填的常显文案）
+el('expr').value = '';
+el('expr')._fire('input', el('expr'));
+await tick();
+check((el('status').textContent || '').includes('表达式'), `空表达式动态提示：${el('status').textContent}`);
 
 function report() {
   if (errors.length) {
-    realError('花键参数表 GUI 冒烟失败：');
+    realError('智能卡片 GUI 冒烟失败：');
     for (const e of errors) realError(' - ' + e);
     process.exit(1);
   }
-  console.log('花键参数表 GUI 冒烟通过');
+  console.log('智能卡片 GUI 冒烟通过');
 }
 report();
