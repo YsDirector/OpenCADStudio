@@ -5942,6 +5942,37 @@ pub fn build_report(program: &Program) -> Result<String, String> {
         ));
     }
     md.push('\n');
+    // ── 2. 花键参数表（GB/T 3478）——与 `XLT`/`XL 花键参数表` 同一份 `compute()` 结果 ──
+    let mut sp_section = String::new();
+    let mut sp_count = 0usize;
+    for (i, seg) in program.segments.iter().enumerate() {
+        let Some(g) = &seg.gear else { continue };
+        if !g.involute {
+            continue;
+        }
+        let Ok(input) = crate::spline_table::input_from_gear(g) else {
+            continue; // 非 GB/T 3478 压力角（如 DIN/普通齿轮）→ 本节不列
+        };
+        let Ok(table) = crate::spline_tol::compute(&input) else {
+            continue;
+        };
+        let Ok(body) = crate::spline_table::markdown_table(input.side, &table) else {
+            continue;
+        };
+        sp_count += 1;
+        sp_section.push_str(&format!(
+            "### 第 {} 段（{}，默认 7 级 / 基孔制 H）\n\n{body}\n",
+            i + 1,
+            input.grade_fit_label()
+        ));
+    }
+    if sp_count > 0 {
+        md.push_str("## 2. 花键参数表（GB/T 3478，默认 7 级 / H·h）\n\n");
+        md.push_str(&sp_section);
+        md.push_str(
+            "> 与 `XLT`（`XL 花键参数表`）**同一份 `spline_tol::compute()`**；\n             > 等级/配合类别/量棒直径 Dp 可在 `XLT` 命令里显式给。\n\n",
+        );
+    }
     Ok(md)
 }
 
@@ -8840,6 +8871,24 @@ GEAR M3 Z20";
         assert!(!has_line(&section, [22.0, -33.0], [22.0, 33.0]));
         assert!(has_line(&section, [20.0, 20.0], [20.0, 31.0]));
         assert!(has_line(&section, [20.0, 26.25], [50.0, 26.25]));
+    }
+
+    /// `OCSMSHAFT … REPORT`：渐开线花键段应带「花键参数表（GB/T 3478）」节，
+    /// 与 `XLT` 同一份 `spline_tol::compute()` 结果（不许两处各算一遍）。
+    #[test]
+    fn report_includes_spline_parameter_table_section() {
+        let p = parse_program("SPLINE EX M3 Z20 ALPHA30 X0 DA63 DF54.6 BETA0 H30").unwrap();
+        let md = build_report(&p).unwrap();
+        assert!(md.contains("## 2. 花键参数表（GB/T 3478"), "{md}");
+        assert!(
+            md.contains("(外)齿形角") && md.contains("(外)公法线长度"),
+            "花键节应含外花键 21 项：{md}"
+        );
+        assert!(md.contains("同一份 `spline_tol::compute()`"), "{md}");
+        // 普通圆柱段 → 无该节
+        let p2 = parse_program("S30 E30 L20").unwrap();
+        let md2 = build_report(&p2).unwrap();
+        assert!(!md2.contains("花键参数表"), "{md2}");
     }
 
     /// `… report` 命令入口解析层：摘关键字 → 解析 → 段清单计算书。

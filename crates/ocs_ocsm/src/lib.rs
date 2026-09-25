@@ -40,6 +40,7 @@ mod partgen_keys;
 mod partgen_more;
 mod shaft;
 mod spline;
+mod spline_table;
 mod spline_tol;
 mod thread;
 pub mod tolerance;
@@ -78,6 +79,7 @@ static MANIFEST: PluginManifest = PluginManifest {
         "OCSMSHAFT",
         "OCSMHOLE",
         "DK",
+        "XLT",
     ],
 };
 
@@ -649,6 +651,12 @@ fn pending_part_label() -> Option<String> {
 
 fn pending_block() -> Option<String> {
     pending_slot().lock().unwrap().as_ref().map(|p| p.block.clone())
+}
+
+/// 测试用：取待放置件的元数据 JSON（校验轴块 `gears[]` 快照等）。
+#[cfg(test)]
+pub(crate) fn pending_part_meta_for_test() -> Option<String> {
+    pending_slot().lock().unwrap().as_ref().map(|p| p.meta_json.clone())
 }
 
 /// 待放置的**件链**（螺栓副）：GUI 点「装配到图纸」后登记，图纸里点击落定。
@@ -1603,6 +1611,11 @@ impl BuiltinPlugin for OcsmPlugin {
                 self.cmd_parts(host, rest);
                 true
             }
+            // GB/T 3478 渐开线花键参数表（表 21 属性 → 插图；计算书节见 OCSMSHAFT REPORT）
+            "XLT" => {
+                self.cmd_spline_table(host, rest);
+                true
+            }
             // 明细表：建表/刷新（`BOM 30` = 本次首列 30 行）、配置（`BOMCFG 30`）
             _ if is_bom_command(cmd) => {
                 // 只有**命令名**转大写；参数（路径、序号等）保留原始大小写
@@ -2445,6 +2458,11 @@ impl OcsmPlugin {
         // 无参数 = 原 GUI 流程（开零件库窗口 + 进放置态）。
         // 有参数但解析失败 = 报用法（不静默开浏览器窗口，避免 AI 驱动时弹出无意义窗口）。
         if !args.trim().is_empty() {
+            // 子命令「花键参数表」：`XL 花键参数表 内 6H …`（等价短命令 `XLT 内 6H …`）。
+            if let Some(rest) = args.trim().strip_prefix("花键参数表") {
+                self.cmd_spline_table(host, rest.trim());
+                return;
+            }
             match PartsSpec::parse(args) {
                 Some(spec) => {
                     self.cmd_parts_insert(host, &spec);
@@ -2508,6 +2526,174 @@ impl OcsmPlugin {
         match crate::guide_server::apply_part_pick(&sender, spec.to_body().as_bytes()) {
             Ok(msg) => host.push_output(&format!("OCSM 标准件：{msg}")),
             Err(e) => host.push_error(&format!("OCSM 标准件插入失败：{e}")),
+        }
+    }
+
+    /// `XLT` / `XL 花键参数表`：GB/T 3478 渐开线花键参数表。
+    ///
+    /// 语法：`XLT 内 6H [dp 4.5] [m 3 z 20 a 30 x 0 | from sel|last] [root 平|圆] [at x,y] [rot 度]`。
+    /// 表格块几何**内建**（每个方向一块，`OCSM_SPTABLE_GB_*`），21 个值走
+    /// `spline_tol::compute()` 后写 INSERT.attributes（不依赖外部 DXF）。
+    fn cmd_spline_table(&self, host: &mut dyn HostApi, args: &str) {
+        use crate::spline_table::SplineTableSpec;
+        use ocs_plugin_api::host::acadrust::entities::Entity as _;
+        let spec = match SplineTableSpec::parse(args) {
+            Ok(s) => s,
+            Err(e) => {
+                host.push_error(&e);
+                return;
+            }
+        };
+        let meta: Option<serde_json::Value> = match spec.from {
+            None => None,
+            Some(from) => match self.spline_table_meta(host, from) {
+                Ok(v) => Some(v),
+                Err(e) => {
+                    host.push_error(&e);
+                    return;
+                }
+            },
+        };
+        let input = match spec.to_input(meta.as_ref()) {
+            Ok(i) => i,
+            Err(e) => {
+                host.push_error(&format!("花键参数表：{e}"));
+                return;
+            }
+        };
+        let table = match crate::spline_tol::compute(&input) {
+            Ok(t) => t,
+            Err(e) => {
+                host.push_error(&format!("花键参数表：{e}"));
+                return;
+            }
+        };
+        let side = spec.side;
+        // 基建：图层/文字样式（块成员用 `6文字层` + OCSM_GB）。
+        host.ensure_layers(layer_defs());
+        host.ensure_text_styles(text_style_defs());
+        // 建块：几何与取值无关 → 每个方向只建一次。
+        let block = crate::spline_table::block_name(side);
+        if host.document().block_records.get(block).is_none() {
+            let members = crate::spline_table::block_entities(side);
+            if let Err(e) = host.add_block_record(block, members) {
+                host.push_error(&format!("花键参数表：建块 {block} 失败：{e}"));
+                return;
+            }
+        }
+        let attdefs = crate::spline_table::attdefs(side);
+        let values = match crate::spline_table::values(side, &table) {
+            Ok(v) => v,
+            Err(e) => {
+                host.push_error(&format!("花键参数表：{e}"));
+                return;
+            }
+        };
+        let at = spec.at.unwrap_or_else(|| {
+            crate::take_parts_point()
+                .map(|p| [p[0], p[1]])
+                .unwrap_or([0.0, 0.0])
+        });
+        let mut ins = acadrust::entities::Insert::new(block, Vector3::new(at[0], at[1], 0.0));
+        ins.rotation = spec.rot.to_radians();
+        {
+            let c = &mut ins.common;
+            c.layer = crate::partgen::LAYER_MAIN.to_string();
+            c.color = acadrust::types::Color::ByLayer;
+            c.linetype = "ByLayer".to_string();
+            c.line_weight = acadrust::types::LineWeight::ByLayer;
+        }
+        for ad in attdefs.iter() {
+            let val = values
+                .iter()
+                .find(|(tag, _)| tag == &ad.tag)
+                .map(|(_, v)| v.clone())
+                .unwrap_or_default();
+            let mut tmpl = ad.clone();
+            tmpl.rotation = 0.0; // 旋转由 INSERT 变换施加
+            let mut attr = acadrust::entities::AttributeEntity::from_definition(&tmpl, Some(val));
+            attr.apply_transform(&ins.get_transform());
+            ins.attributes.push(attr);
+        }
+        host.push_undo("花键参数表插入");
+        let handles = host.add_entities(vec![acadrust::EntityType::Insert(ins)]);
+        if handles.is_empty() {
+            host.push_error("花键参数表：插入失败（宿主未返回句柄）");
+            return;
+        }
+        host.set_dirty();
+        let kind = match side {
+            crate::spline_tol::SplineSide::Internal => "内花键",
+            crate::spline_tol::SplineSide::External => "外花键",
+        };
+        let dp_note = match (&table, spec.dp) {
+            (crate::spline_tol::SplineTable::Internal(t), None) => format!(
+                "；量棒 Dp={}（计算值 D'={:.4}，备选 {}/ {}/ {}）",
+                crate::partgen_kit::trim(t.dp),
+                t.dp_calc,
+                crate::partgen_kit::trim(t.dp_candidates[0]),
+                crate::partgen_kit::trim(t.dp_candidates[1]),
+                crate::partgen_kit::trim(t.dp_candidates[2]),
+            ),
+            (crate::spline_tol::SplineTable::Internal(_t), Some(dp)) => format!(
+                "；量棒 Dp={}（按所填手算，Md 已重算）",
+                crate::partgen_kit::trim(dp)
+            ),
+            _ => String::new(),
+        };
+        host.push_info(&format!(
+            "花键参数表：已插入{kind}（{}）于 ({:.3}, {:.3}) rot {}°{dp_note}。",
+            input.grade_fit_label(),
+            at[0],
+            at[1],
+            crate::partgen_kit::trim(spec.rot)
+        ));
+    }
+
+    /// 读选中/最后一个 INSERT 的 `OCSM_PART` 元数据（GEAR/SPLINE 生成器或轴块的 `gears[]`）。
+    fn spline_table_meta(
+        &self,
+        host: &dyn HostApi,
+        from: crate::spline_table::FromRef,
+    ) -> Result<serde_json::Value, String> {
+        use crate::spline_table::FromRef;
+        use ocs_plugin_api::host::acadrust::xdata::XDataValue;
+        let parse_rec = |h: acadrust::Handle| -> Option<serde_json::Value> {
+            let rec = host.read_record(h, "OCSM_PART")?;
+            for v in &rec.values {
+                if let XDataValue::String(s) = v {
+                    if let Ok(j) = serde_json::from_str::<serde_json::Value>(s) {
+                        if j.get("gears").is_some() || j.get("m").is_some() {
+                            return Some(j);
+                        }
+                    }
+                }
+            }
+            None
+        };
+        match from {
+            FromRef::Sel => {
+                for h in host.selected_handles() {
+                    if let Some(j) = parse_rec(h) {
+                        return Ok(j);
+                    }
+                }
+                Err("花键参数表：当前没有选中带 `OCSM_PART` 元数据的 GEAR/SPLINE 块".into())
+            }
+            FromRef::Last => {
+                let doc = host.document();
+                let mut found = None;
+                for e in doc.model_space_entities() {
+                    if let acadrust::EntityType::Insert(_) = e {
+                        if let Some(j) = parse_rec(e.common().handle) {
+                            found = Some(j);
+                        }
+                    }
+                }
+                found.ok_or_else(|| {
+                    "花键参数表：图中找不到带 `OCSM_PART` 元数据的齿轮/花键块".to_string()
+                })
+            }
         }
     }
 
@@ -4447,6 +4633,10 @@ mod tests {
         assert!(
             MANIFEST.command_prefixes.contains(&"OCSMSHAFT"),
             "MANIFEST.command_prefixes 缺少 OCSMSHAFT"
+        );
+        assert!(
+            MANIFEST.command_prefixes.contains(&"XLT"),
+            "MANIFEST.command_prefixes 缺少 XLT（花键参数表短命令）"
         );
 
         // src/lib.rs 的 MANIFEST 与 plugin.toml 是两处维护（部署时 sed 只替换

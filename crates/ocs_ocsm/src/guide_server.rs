@@ -4015,6 +4015,7 @@ pub const COMMAND_CATALOG: &[(&str, &str, &str)] = &[
     ("OCSMFRAMEINIT", "TF", "图框：不带参数=打开图框选择窗口；带参数=一行直插（`TF a3_landscape 1:2 at 0,0 [rot 度]`）"),
     ("OCSMFRAMEINSERT", "", "按所选图框 + 比例插入（光标跟随，比例感知标注样式）；也可带参数直插（同 TF）"),
     ("OCSMPART", "XL", "标准件/结构要素插入：不带参数=开零件库窗口（左「标准件」树 + 右「结构要素」树）+放置态；带参数=一行直插（标准件 `XL 族 d l [view …] [at x,y] [rot 度]`；结构要素 `XL detail_grind_od d [b1 值] [at x,y] [rot 度]`；外螺纹退刀槽 `XL detail_thread_relief d P 螺距 [g1 值 g2 值 dg 值 r 值 alpha 值] [at x,y] [rot 度]`；毂槽 `XL detail_hub_keyway d [len 毂长] [view main|side]`（b/t₂/r 由 d 查表，len 缺省 30）；平键 `XL key_1096_{a|b|c} b L`、`XL key_1097_{a|b} b L`（d 槽位=键宽 b，L 省略/0=该档默认，L 须 ∈ 标准系列且 L<10b；1097 的 L1/L2/L3 由 L 查 GB/T 1097 长度系列表派生，表外 L 报错））"),
+    ("XLT", "", "花键参数表（GB/T 3478 渐开线花键）：`XLT 内 6H [dp 4.5] [m 3 z 20 a 30 x 0 | from sel|last] [root 平|圆] [at x,y] [rot 度]`（外花键把 `内 6H` 换成 `外 5f`；不填 dp = 标准 R40 自动选，3 个备选可手填）；表格块几何内建（模板逐图元），21 属性取自 `spline_tol::compute()`；`XL 花键参数表 …` 等价"),
     ("OCSMJOINT", "", "螺栓副装配：不带参数=开装配窗口+放置态；带参数=一行直装（件链算长度、遮挡裁剪、一次撤销）"),
     ("OCSMPOWERDIM", "D", "智能标注：拾取点模式标线性/对齐/半径/直径（Enter 切线段点选）"),
     ("OCSMDIMGULIDE", "GDIM", "引导线标注：选引导线 → 配置窗口（尺寸/剖视/向视/局部放大/角度/弧长/焊接/引线/序号/公差/粗糙度/形位公差）"),
@@ -4955,6 +4956,27 @@ pub(crate) fn apply_shaft_export(
             "segments": segments,
             "total_length": total,
             "max_diameter": max_d,
+            // 齿轮/渐开线花键段的参数快照（供 `XLT … from sel|last` 继承 m/z/αD/x；
+            // 与齿轮生成器同一 GearParams 口径）。
+            "gears": program
+                .segments
+                .iter()
+                .enumerate()
+                .filter_map(|(i, s)| {
+                    s.gear.as_ref().map(|g| {
+                        let gp = g.params();
+                        serde_json::json!({
+                            "seg": i + 1,
+                            "m": gp.m,
+                            "z": gp.z,
+                            "alpha": gp.alpha_deg,
+                            "x": gp.x,
+                            "involute": g.involute,
+                            "internal": gp.kind.is_internal(),
+                        })
+                    })
+                })
+                .collect::<Vec<_>>(),
         })
         .to_string(),
         label: label.clone(),
@@ -11222,6 +11244,10 @@ mod rough_tests {
         }
         assert!(super::COMMAND_CATALOG.iter().any(|(n, _, _)| *n == "OCSMJOINT"));
         assert!(super::COMMAND_CATALOG.iter().any(|(n, _, _)| *n == "OCSMHELP"));
+        assert!(
+            super::COMMAND_CATALOG.iter().any(|(n, _, _)| *n == "XLT"),
+            "命令目录缺 XLT（花键参数表）"
+        );
         let dirs = super::manual_dirs();
         assert!(!dirs.is_empty(), "至少要有仓库内的 handbook 兜底目录");
         // 顺序：插件安装目录/handbook（人侧教程随插件走）在**仓库 handbook 之前**，旧 skill 目录在最后
@@ -15131,6 +15157,18 @@ mod weld_tests {
         );
         let label = crate::pending_part_label().expect("label");
         assert!(label.contains("2 段"), "{label}");
+        // 渐开线花键段 → 元数据带 `gears[]`（供 `XLT … from sel|last` 继承 m/z/αD/x）
+        let sp = apply_shaft_export(
+            &sender,
+            b"SPLINE EX M3 Z20 ALPHA30 X0 DA63 DF54.6 BETA0 H30",
+        )
+        .expect("花键轴出图");
+        assert!(sp.contains("已生成轴"), "{sp}");
+        let meta = crate::pending_part_meta_for_test().expect("花键轴 meta");
+        assert!(
+            meta.contains("\"gears\"") && meta.contains("\"alpha\":30") && meta.contains("\"involute\":true"),
+            "轴块元数据应带 gears 快照：{meta}"
+        );
         // 同几何 → 同名块（块名只由几何决定；宿主里同名块会被 exists 检查复用）
         let same = crate::shaft::block_name(&crate::shaft::parse_program(&body).unwrap());
         assert_eq!(same, block, "同几何同名块");

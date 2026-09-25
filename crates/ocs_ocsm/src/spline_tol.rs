@@ -917,6 +917,10 @@ pub struct InternalSplineTable {
     pub md_lower: f64,
     pub md_upper: f64,
     pub dp: f64,
+    /// 量棒计算直径 `D'_Ri`（式(1)，未按系列取整）。
+    pub dp_calc: f64,
+    /// 3 个工程备选（GB/T 3478.9 系列中与 D' 最接近的 3 个；标准只取 R40 较大值）。
+    pub dp_candidates: Vec<f64>,
     pub eval_min: f64,
     pub e_max: f64,
     pub rimin: f64,
@@ -998,6 +1002,7 @@ pub fn internal_table(input: &SplineInput) -> Result<InternalSplineTable, String
     let dee = external_major(alpha, m, z);
     let dp_calc = d_ri_calc(alpha, dee, minor, m, z, e_max7)?;
     let dp = resolve_dp(input, dp_calc)?;
+    let dp_candidates = dp_candidates_3(dp_calc)?;
     let m_min = m_ri(alpha, m, z, dp, e_min, z % 2 == 1)?;
     let m_max = m_ri(alpha, m, z, dp, e_max, z % 2 == 1)?;
     Ok(InternalSplineTable {
@@ -1016,6 +1021,8 @@ pub fn internal_table(input: &SplineInput) -> Result<InternalSplineTable, String
         md_lower: m_min,
         md_upper: m_max,
         dp,
+        dp_calc,
+        dp_candidates,
         eval_min: ev_min,
         e_max,
         rimin: rimin(alpha, root, m),
