@@ -1235,12 +1235,32 @@ fn status_strip(state: &PiPanelState) -> Element<'_, Message> {
             })
             .into()
     };
+    // Backend switch, right where the connected backend is shown. `auto` probes
+    // pi-web and falls back to a local `pi --mode rpc` child; `rpc` never needs
+    // pi-web at all.
+    let backend_options: Vec<String> = crate::pi::BACKEND_MODES
+        .iter()
+        .map(|m| (*m).to_string())
+        .collect();
+    let selected_backend = backend_options.iter().find(|m| **m == state.mode).cloned();
+    let backend_pick = tooltip(
+        pick_list(selected_backend, backend_options, |m: &String| m.clone())
+            .width(Length::Fixed(62.0))
+            .text_size(9)
+            .padding([1, 5])
+            .menu_height(120.0)
+            .on_select(|m: String| Message::Pi(PiMsg::BackendPick(m))),
+        "后端：auto＝有 pi-web 就用它，否则本机 pi rpc；rpc＝只跑本机 pi，不需要 pi-web",
+        tooltip::Position::Bottom,
+    )
+    .gap(4);
     let mut strip = row![
         backend_tag,
+        backend_pick,
         text(state.status_label())
             .size(10)
-            .style(|theme: &Theme| iced::widget::text::Style {
-                color: Some(secondary_color(theme)),
+            .style(|_: &Theme| iced::widget::text::Style {
+                color: Some(MUTED_TEXT),
             })
             .width(Length::Fill),
     ]
@@ -1299,8 +1319,8 @@ fn entry_view<'a>(e: &'a PiEntry, theme: &'a Theme) -> Element<'a, Message> {
                 body = body.push(
                     text(t.clone())
                         .size(11)
-                        .style(|theme: &Theme| iced::widget::text::Style {
-                            color: Some(secondary_color(theme)),
+                        .style(|_: &Theme| iced::widget::text::Style {
+                            color: Some(MUTED_TEXT),
                         })
                         .width(Length::Fill),
                 );
@@ -1420,8 +1440,8 @@ fn streaming_view<'a>(state: &'a PiPanelState, theme: &'a Theme) -> Option<Eleme
                     body = body.push(
                         text(t.clone())
                             .size(11)
-                            .style(|theme: &Theme| iced::widget::text::Style {
-                                color: Some(secondary_color(theme)),
+                            .style(|_: &Theme| iced::widget::text::Style {
+                                color: Some(MUTED_TEXT),
                             })
                             .width(Length::Fill),
                     );
@@ -1674,29 +1694,6 @@ fn composer<'a>(
                     .on_select(|l: String| Message::Pi(PiMsg::ThinkingPick(l))),
             );
         }
-        // Transport backend: pi-web HTTP vs. a local `pi --mode rpc` child.
-        // Without a picker this was only reachable through `OCS_PI_MODE`.
-        let backend_options: Vec<String> = crate::pi::BACKEND_MODES
-            .iter()
-            .map(|m| (*m).to_string())
-            .collect();
-        let selected_backend = backend_options
-            .iter()
-            .find(|m| **m == state.mode)
-            .cloned();
-        row = row.push(
-            tooltip(
-                pick_list(selected_backend, backend_options, |m: &String| m.clone())
-                    .width(Length::Fixed(74.0))
-                    .text_size(10)
-                    .padding([2, 6])
-                    .menu_height(120.0)
-                    .on_select(|m: String| Message::Pi(PiMsg::BackendPick(m))),
-                "后端：auto＝有 pi-web 就用它，否则本机 pi rpc",
-                tooltip::Position::Top,
-            )
-            .gap(4),
-        );
         // Manual context compaction (disabled while a run is streaming).
         let compact = button(text("压缩").size(10))
             .on_press_maybe(
