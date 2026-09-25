@@ -397,6 +397,10 @@ check(
   '视图应是 name=view 的 radio（不是 checkbox）'
 );
 check(el('viewSide').checked && !el('viewTop').checked, '视图默认应选中侧视图');
+// 负断言：界面不得再出现“解释数据/术语”的文案（应移入 JSON note / handbook）
+for (const bad of ['管子外径', '不是通径', '不是内径', '管子通径代号', '参考站「ACME」', '内、外螺纹同一个量', '两个量分开']) {
+  check(!html.includes(bad), `界面不应含术语/数据释疑文案「${bad}」`);
+}
 // 互斥：选俯视图 → 自动取消侧视图；请求里 views 只有一项 true
 el('viewTop').checked = true;
 el('viewTop')._fire('change', el('viewTop'));
@@ -471,13 +475,18 @@ el('subtype').value = 'unf';
 el('subtype')._fire('change', el('subtype'));
 await tick();
 check(el('size').options.map((o) => o.value).includes('6.35|0.907143'), 'UNF 大小应含 1/4-28');
-// G：管螺纹口径提示 + 大径非通径 + 基准长
+// G：提示只留操作信息（自动有效长度/孔深来源）；术语释疑（通径/外径/内径）不得出现在界面
 el('std').value = 'g';
 el('std')._fire('change', el('std'));
 await tick();
-check(el('threadNote').style.display !== 'none', 'G 应显示管螺纹口径提示');
-check((el('threadNote').innerHTML || '').includes('管子外径'), `G 提示应说明大径=外径：${el('threadNote').innerHTML}`);
+check(el('threadNote').style.display !== 'none', 'G 应显示管螺纹提示');
 check((el('threadNote').innerHTML || '').includes('螺纹有效长度'), `G 提示应说明自动有效长度：${el('threadNote').innerHTML}`);
+check(
+  !(el('threadNote').innerHTML || '').includes('管子外径') &&
+    !(el('threadNote').innerHTML || '').includes('通径') &&
+    !(el('threadNote').innerHTML || '').includes('不是内径'),
+  `G 提示不应再含术语释疑：${el('threadNote').innerHTML}`
+);
 check(el('size').options.map((o) => o.value).includes('9.728|0.907143'), 'G 大小应含 G1/8');
 await H.refresh();
 check(el('majorOut').textContent === '9.728', `G1/8 大径应 9.728，实为 ${el('majorOut').textContent}`);
@@ -510,8 +519,8 @@ check(
   `ACME 子类型应为 general/stub：${el('subtype').options.map((o) => o.value).join(',')}`
 );
 check(
-  el('threadNote').style.display !== 'none' && (el('threadNote').innerHTML || '').includes('矮牙'),
-  `ACME 应有矮牙口径提示：${el('threadNote').innerHTML}`
+  el('threadNote').style.display === 'none',
+  `ACME 不应再显示数据来源类提示：${el('threadNote').innerHTML}`
 );
 el('subtype').value = 'stub';
 el('subtype')._fire('change', el('subtype'));

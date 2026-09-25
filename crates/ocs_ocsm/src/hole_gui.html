@@ -73,7 +73,7 @@
       <label>配合</label><select id="fit"></select>
     </div>
     <div class="hint" id="sinkNote" style="display:none">
-      埋头推荐值：GB/T 70.3（内六角沉头）→ 沉孔按 <b>GB/T 152.2-2014</b>（M1.6–M10，90°）
+      埋头沉孔按所选公称自动取推荐值（90°）
     </div>
     <div class="hint" id="threadNote" style="display:none"></div>
     <div class="views">
@@ -127,12 +127,10 @@
   </div>
   <div id="status"></div>
   <div class="hint">
-    <b>两个量分开</b>：①「螺纹有效长度」= 啮合长度（内、外螺纹同一个量，"要旋进多深"）；②「孔深」= 有效长度 + 工艺余量。
-    自动有效长度：M/UN/ACME/Tr = 1.5×公称直径；<b>管螺纹 G/R/NPT = 表内 eff_len（R=ISO 7-1 表第16栏（无退刀槽），NPT=基准距离+装配余量+偏差(+1P)，G=同规格 R 待确认）</b>。
-    自动孔深 = 有效长度 + 2×螺距（工艺余量；锥管 R/NPT 取"额外 1~2 牙"上限 2P，兼顾客锥不完整牙）。<b>不带螺纹时两个「自动」都不可选</b>；
-    贯通孔深必须手填（板厚/通孔长度），贯通无 118° 底锥。沉头/埋头的孔径与深度分别查 GB/T 152.3 / GB/T 152.2；
-    螺栓间隙查 GB/T 5277（精/中等/粗装配）。非公制螺纹（UN/G/R/NPT/ACME/Tr）的「d」取<b>表内螺纹大径</b>、
-    「P」取<b>表内螺距 mm</b>（英制 P = 25.4/TPI）；管螺纹大径是螺纹/管子外径，不是通径。
+    「螺纹有效长度」= 要攻的螺纹深度；「孔深」= 有效长度 + 工艺余量（两个都可手动改）。
+    自动有效长度：M/UN/ACME/Tr = 1.5×公称直径；<b>管螺纹 G/R/NPT = 表内标准啮合长度（G 暂取同规格 R）</b>。
+    自动孔深 = 有效长度 + 2×螺距（工艺余量；锥管按额外 1~2 牙上限）。<b>不带螺纹时两个「自动」都不可选</b>；
+    贯通孔深必须手填（板厚/通孔长度），贯通无 118° 底锥。沉头/埋头孔径与深度自动查推荐表；螺栓间隙按所选配合。
   </div>
 </div>
 
@@ -325,24 +323,18 @@ function syncUi() {
   el("recoLabel").style.display = isCb ? "" : "none";
   el("reco").style.display = isCb ? "" : "none";
   el("sinkNote").style.display = kind === "countersink" ? "" : "none";
-  // 管螺纹口径提示（用户明确定案：大径是螺纹外径概念，不是公称通径）；
-  // ACME 提示参考站数值实为矮牙，避免与「一般用途」对不上。
+  // 管螺纹提示只放“与操作相关”的信息：自动有效长度/孔深的口径来源与可否手改
+  // （术语释疑类文案不放在界面 —— 加工只按规格选丝锥；数据口径见 JSON note）。
   const isPipe = th && sysObj && sysObj.is_pipe;
-  const isAcme = th && sysObj && sysObj.key === "acme";
-  el("threadNote").style.display = isPipe || isAcme ? "" : "none";
+  el("threadNote").style.display = isPipe ? "" : "none";
   if (isPipe) {
     const lenSrc = currentSystem() === "npt"
-      ? "ASME B1.20.1/GB/T 12716 有效长度 = 基准距离+装配余量+基准平面偏差（偏差取 +1P）"
+      ? "ASME B1.20.1/GB/T 12716（基准距离+装配余量+偏差）"
       : currentSystem() === "r"
-        ? "ISO 7-1 表第16栏（无退刀槽时内螺纹需保证达到 = 最大基准距离+装配余量）"
-        : "同规格 R 的 ISO 7-1 表第16栏（ISO 228-1 未规定，待确认）";
-    const head = currentSystem() === "npt"
-      ? '⚠️ 管螺纹口径：大径 D 是<b>内螺纹基本大径</b>（≈D2+0.8P），<b>不是</b>管子外径（1/2″ 管 OD 21.336，本表 D 21.224）；底孔按 GB/T 12716 表末列攻丝钻。'
-      : '⚠️ 管螺纹口径：G/R 后的 1/8… 是<b>管子通径代号</b>，大径 D 是<b>螺纹/管子外径</b>（G1/8 → 9.728 mm），不是内径。';
-    el("threadNote").innerHTML = head + `<br>自动<b>螺纹有效长度</b> = eff_len（${lenSrc}）；自动<b>孔深</b> = 有效长度 + 2P（锥管取"额外 1~2 牙"上限）；表外/无值的规格请手填。`;
-  } else if (isAcme) {
+        ? "ISO 7-1 表第16栏（最大基准距离+装配余量）"
+        : "同规格 R（ISO 7-1）第16栏（待确认）";
     el("threadNote").innerHTML =
-      '⚠️ 参考站「ACME」表列的中/小径实为<b>矮牙 Stub ACME</b>（D2=D−0.3P）；一般用途选 general（D2=D−0.5P）。底孔 = 内螺纹基本小径。';
+      `自动<b>螺纹有效长度</b> = ${lenSrc}；自动<b>孔深</b> = 有效长度 + 2P（锥管按额外 1~2 牙上限）；无标准值的规格请手填。`;
   }
   // 配合
   const fits = fitOptions();
