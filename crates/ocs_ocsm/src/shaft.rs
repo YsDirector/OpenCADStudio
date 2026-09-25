@@ -3803,8 +3803,10 @@ fn emit_guided_overlay(
     }
 }
 
-/// 导向平键剖视：`[x_start, x_end]` 的槽底路径（沿 2 孔轮廓下凹）+ 孔壁可见线。
-/// 可见线直接推入 `section_lines`；hatch 边界逐段交给 `notch`（与既有单槽同通路）。
+/// 导向平键剖视：`[x_start, x_end]` 的剖面线边界路径（沿 2 孔轮廓下凹）+ 孔壁可见线。
+/// 可见线（孔壁/118° 钻尖/大径细线/中心线）直接推入 `section_lines`；hatch 边界逐段交给 `notch`。
+/// ⚠️ **槽底直线不由本函数画**：槽底是一条贯通槽两端的实线（模板口径，螺钉孔在槽底之下），
+/// 由调用方在 `guided_floor` 前后统一推入。
 fn guided_floor(
     section_lines: &mut Vec<EntityType>,
     notch: &mut dyn FnMut(HatchEdge),
@@ -5191,9 +5193,10 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
                             kg.slot1,
                             frame_scale,
                         );
-                    } else {
-                        section_lines.push(line([kg.slot0, kg.floor], [kg.slot1, kg.floor], LAYER_MAIN));
                     }
+                    // 槽底直线：模板里贯通槽两端（固定螺钉孔在槽底之下，被这条线横过）；
+                    // 导向/普通一律画。导向曾漏画 → 剖视槽轮廓在槽底不闭合（用户 2026-09-25 报告）。
+                    section_lines.push(line([kg.slot0, kg.floor], [kg.slot1, kg.floor], LAYER_MAIN));
                     section_lines.push(line([kg.slot1, kg.floor], [kg.slot1, kg.r], LAYER_MAIN));
                     section_lines.push(line([kg.slot0, kg.y_sag], [kg.slot1, kg.y_sag], LAYER_MAIN));
                     if kg.double {
@@ -9546,6 +9549,22 @@ GEAR M3 Z20";
         let sag = 15.0 - (15.0_f64 * 15.0 - 4.0 * 4.0).sqrt();
         assert!(line_hit(&sec.entities, [12.5, 15.0], [12.5, 11.0], LAYER_MAIN), "槽左壁");
         assert!(line_hit(&sec.entities, [37.5, 11.0], [37.5, 15.0], LAYER_MAIN), "槽右壁");
+        // 槽底直线：模板 ent（12.5,-40.599）→（37.5,-40.599）；旧实现漏画（用户 2026-09-25 报告）。
+        assert!(
+            line_hit(&sec.entities, [12.5, 11.0], [37.5, 11.0], LAYER_MAIN),
+            "槽底直线（模板 12.5..37.5 @ 槽底）"
+        );
+        assert!(
+            !line_hit(&sec.entities, [2.0, 11.0], [12.5, 11.0], LAYER_MAIN),
+            "槽底线不得向槽外延伸"
+        );
+        // 表面线（模板断口 12.5 / 37.5）：槽外两段在、槽口断开。
+        assert!(line_hit(&sec.entities, [2.0, 15.0], [12.5, 15.0], LAYER_MAIN), "表面线左段");
+        assert!(line_hit(&sec.entities, [37.5, 15.0], [48.0, 15.0], LAYER_MAIN), "表面线右段");
+        assert!(
+            !line_hit(&sec.entities, [12.5, 15.0], [37.5, 15.0], LAYER_MAIN),
+            "槽口不得有贯通表面线"
+        );
         assert!(
             line_hit(&sec.entities, [12.5, 15.0 - sag], [37.5, 15.0 - sag], LAYER_MAIN),
             "sagitta 线 0.543253"
@@ -9679,6 +9698,15 @@ GEAR M3 Z20";
             ("S50 E50 L20 | S30 E30 L60 KEY C 18 @端", 0.0, 80.0, 25.0),
             ("S25 E25 L40 KEY A 18 | S30 E30 L30", 0.0, 70.0, 15.0),
             ("S45 E45 L60 CH3@L KEY A 25 | S25 E25 L20", 0.0, 80.0, 22.5),
+            // 导向平键（槽底 + 固定螺钉孔 + 118° 钻尖）与双槽加入包络不变量。
+            ("S30 E30 L50 KEY A 25 导向", 0.0, 50.0, 15.0),
+            (
+                "S30 E30 L40 CH2@L KEY A 25 导向 | S30 E30 L10 | S30 E30 L40 CH2@R KEY A 25 导向",
+                0.0,
+                90.0,
+                15.0,
+            ),
+            ("S30 E30 L50 CH2@L CH2@R KEY A 25 双槽", 0.0, 50.0, 15.0),
         ];
         for (text, x0, x1, rmax) in cases {
             let mut p = parse_program(text).unwrap_or_else(|e| panic!("{text}: {e}"));
@@ -9931,4 +9959,121 @@ GEAR M3 Z20";
         assert!(hatch_filled(&single.entities, [20.0, -10.5]), "单槽下材料区应填充");
         assert!(!hatch_filled(&single.entities, [20.0, 10.5]), "单槽上槽区不得有剖面线");
     }
+
+    /// 剖视槽轮廓闭合（用户 2026-09-25 报告）：导向键槽漏画槽底轮廓实线 →
+    /// 剖视“顶边”看起来整体下沉到槽底、表面线不完整。不变量：
+    /// * 槽底直线贯通槽两端（模板口径；固定螺钉孔在槽底之下）；
+    /// * 槽外表面线连续（轴全长 − 槽口 全部被覆盖，不缺段→无台阶）；
+    /// * 槽底线不得向槽外延伸；槽口在表面线处断开（槽是槽、表面是表面）；
+    /// * 剖面线不因此破坏。单槽 / 两个键槽 / 双槽 / 普通 / 导向都查。
+    #[test]
+    fn section_keyway_floor_line_closes_slot_contour() {
+        // (名称, DSL, [(槽 x0, 槽 x1, 半径 r, 槽底 floor, 方位 +1 上半 / -1 下半)])
+        let cases: &[(&str, &str, &[(f64, f64, f64, f64, f64)])] = &[
+            (
+                "导向单槽",
+                "S30 E30 L50 KEY A 25 导向",
+                &[(12.5, 37.5, 15.0, 11.0, 1.0)],
+            ),
+            (
+                "导向两段",
+                "S30 E30 L40 CH2@L KEY A 25 导向 | S30 E30 L10 | S30 E30 L40 CH2@R KEY A 25 导向",
+                &[(8.5, 33.5, 15.0, 11.0, 1.0), (56.5, 81.5, 15.0, 11.0, 1.0)],
+            ),
+            (
+                "普通单槽",
+                "S30 E30 L50 CH2@L CH2@R KEY A 25",
+                &[(12.5, 37.5, 15.0, 11.0, 1.0)],
+            ),
+            (
+                "普通双槽",
+                "S30 E30 L50 CH2@L CH2@R KEY A 25 双槽",
+                &[(12.5, 37.5, 15.0, 11.0, 1.0), (12.5, 37.5, 15.0, 11.0, -1.0)],
+            ),
+        ];
+        for (name, dsl, slots) in cases {
+            let mut p = parse_program(&format!("{dsl}\nVIEW 剖视")).unwrap();
+            p.view = ShaftView::Section;
+            let s = build(&p, 1.0).unwrap_or_else(|e| panic!("{name}: {e}"));
+            let main_segs_at = |y: f64| -> Vec<(f64, f64)> {
+                s.entities
+                    .iter()
+                    .filter_map(|e| match e {
+                        EntityType::Line(l)
+                            if l.common.layer == LAYER_MAIN
+                                && (l.start.y - y).abs() < 1e-9
+                                && (l.end.y - y).abs() < 1e-9 =>
+                        {
+                            Some((l.start.x.min(l.end.x), l.start.x.max(l.end.x)))
+                        }
+                        _ => None,
+                    })
+                    .collect()
+            };
+            for &(x0, x1, r, floor, sign) in slots.iter() {
+                let (yf, yr) = (sign * floor, sign * r);
+                // 正向：槽底直线贯通槽两端（模板口径）。
+                assert!(
+                    line_hit(&s.entities, [x0, yf], [x1, yf], LAYER_MAIN),
+                    "{name}：槽 [{x0},{x1}] 缺槽底直线 y={yf}（表面线会看起来下沉到槽底）"
+                );
+                assert!(
+                    line_hit(&s.entities, [x0, yr], [x0, yf], LAYER_MAIN),
+                    "{name}：{x0} 处槽壁"
+                );
+                assert!(
+                    line_hit(&s.entities, [x1, yf], [x1, yr], LAYER_MAIN),
+                    "{name}：{x1} 处槽壁"
+                );
+                // 正向：槽口两侧的表面线必须接在槽壁顶端（轴外表面线不得缺段）。
+                let surf = main_segs_at(yr);
+                for xt in [x0, x1] {
+                    assert!(
+                        surf.iter().any(|(a, b)| (a - xt).abs() < 1e-9 || (b - xt).abs() < 1e-9),
+                        "{name}：{xt} 处表面线缺失（槽外表面必须连续）"
+                    );
+                }
+                // 负断言：槽底线不得向槽外延伸（否则就是“整段顶边下沉到槽底”的形态）。
+                // 同一 y 上可能有多条槽底线（两个键槽）——每条都必须落在某个槽口内。
+                for (a, b) in main_segs_at(yf) {
+                    assert!(
+                        slots.iter().any(|&(sx0, sx1, _, sf, sp)| (sp * sf - yf).abs() < 1e-9
+                            && a >= sx0 - 1e-9
+                            && b <= sx1 + 1e-9),
+                        "{name}：y={yf} 的槽底线 [{a},{b}] 越出所有槽口"
+                    );
+                }
+                // 负断言：槽口在表面线处必须断开。
+                assert!(
+                    !line_hit(&s.entities, [x0, yr], [x1, yr], LAYER_MAIN),
+                    "{name}：槽口不应有贯通表面线"
+                );
+            }
+            // 表面线连续性不变量：轴全长 − 槽口 应被表面线段完全覆盖（不缺段→无台阶）。
+            for sign in [1.0_f64, -1.0] {
+                let yr = sign * slots[0].2;
+                let mut segs = main_segs_at(yr);
+                segs.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+                segs.dedup();
+                if segs.is_empty() {
+                    continue;
+                }
+                for w in segs.windows(2) {
+                    let (a_end, b_start) = (w[0].1, w[1].0);
+                    if b_start - a_end <= 1e-9 {
+                        continue;
+                    }
+                    assert!(
+                        slots.iter().any(|&(x0, x1, _, _, sp)| sp == sign
+                            && (x0 - a_end).abs() < 1e-9
+                            && (x1 - b_start).abs() < 1e-9),
+                        "{name}：y={yr} 表面线在 [{a_end},{b_start}] 缺段——只允许是槽口"
+                    );
+                }
+            }
+            // 剖面线仍在（轮廓闭合不破坏 HATCH）。
+            assert_eq!(count_kind(&s.entities, "HATCH"), 1, "{name}：剖面线 1 片");
+        }
+    }
+
 }
