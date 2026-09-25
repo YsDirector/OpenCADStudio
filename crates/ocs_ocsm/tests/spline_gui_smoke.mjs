@@ -350,6 +350,9 @@ global.fetch = async (u, opts = {}) => {
     lastExportUrl = url;
     if (forceExport404) return text404('/api/spline_export');
     lastExportModel = JSON.parse(opts.body || '{}');
+    // 与生产后端同口径：导出前先校验（400 + {error} 原样透出）
+    const v = preview(lastExportModel);
+    if (v.ok === false) return jsonResp(v, 400);
     return jsonResp({ ok: true, message: 'stub 已生成', pending: lastExportModel.at == null });
   }
   return jsonResp({ ok: true });
@@ -366,6 +369,9 @@ const probed = script.replace(/\}\)\(\);\s*$/, `;globalThis.__card = {
 };
 })();`);
 try {
+  // 页面外链的共享助手（/ocsm_gui_common.js）：Node 里按同一目录文件先求值
+  // （页面脚本用 fetchApi/ocsmStatus/ocsmSeq/ocsmClearStatus）。
+  (0, eval)(fs.readFileSync(htmlPath.replace(/[^/]+$/, 'ocsm_gui_common.js'), 'utf8'));
   (0, eval)(probed);
 } catch (e) {
   errors.push('脚本求值异常: ' + (e && e.stack ? e.stack : e));
@@ -530,6 +536,26 @@ check(lastExportModel === null, '半截 at 不应导出');
 check((el('status').textContent || '').includes('需要 x 与 y 都填'), `半截 at 提示：${el('status').textContent}`);
 el('atX').value = '';
 el('atY').value = '';
+
+// ⑥.8 ★ 用户实测回归：表达式 IN + 卡片方向「外」→ 点「出表」
+// → 400 的具体原因必须出现在界面可见文本里（不得只进 console）
+el('expr').value = 'SPLINE IN M3 Z20 ALPHA30 X0 DA65.4 DF57.3436 BETA0 H30';
+el('expr')._fire('input', el('expr'));
+H.pickSide('ext');
+await tick();
+lastExportModel = null;
+el('ok').click();
+await tick(6);
+const stKind400 = el('status').textContent || '';
+check(stKind400.includes('与卡片方向'), `出表 400 应显示具体原因：${stKind400}`);
+check(stKind400.includes('IN'), `400 文案应原样透出（含 KIND/IN）：${stKind400}`);
+check(!!lastExportModel, '导出请求应已发出');
+// ★ 样式断言：该提示必须是醒目的 `.bad` 红框（灰字 = 没说）
+check(el('status').className === 'bad', `报错应带 .bad 类：${el('status').className}`);
+check(String(el('status').style.background).toLowerCase() === '#fdecea',
+  `报错应有红色底纹：${el('status').style.background}`);
+check(String(el('status').style.color).toLowerCase() === '#b3261e',
+  `报错文字应为红色：${el('status').style.color}`);
 
 // ⑦ 旧插件 404：直白提示、不关窗
 forceExport404 = true;

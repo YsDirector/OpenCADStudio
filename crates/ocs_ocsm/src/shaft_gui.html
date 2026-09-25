@@ -152,6 +152,7 @@
   </div>
 </div>
 
+<script src="/ocsm_gui_common.js"></script>
 <script>
 /* ─────────────────────────── 常量与状态 ─────────────────────────── */
 
@@ -241,7 +242,9 @@ const esc = (s) =>
 // 33 条 GB/T 1144 轻/中系列）；拿不到就退化成纯手输/空下拉，不阻塞页面其余功能。
 async function loadSplineSpecs() {
   try {
-    const cat = await (await fetch("/api/parts", { cache: "no-store" })).json();
+    const resp = await fetchApi("/api/parts", { cache: "no-store" }, "/api/parts");
+    if (!resp.ok) throw new Error(resp.error); // 已红框进 #status；下表降级不堵页面
+    const cat = resp.data;
     const fam = cat && cat.families ? cat.families : {};
     const splineFam = fam.detail_spline_rect;
     splineSpecs = (splineFam && Array.isArray(splineFam.specs) ? splineFam.specs : [])
@@ -451,9 +454,9 @@ function splineOptionsHtml(current) {
 }
 
 function showStatus(msg, bad) {
-  const s = el("status");
-  s.textContent = msg;
-  s.className = bad ? "bad" : "ok";
+  // 统一走共享助手：#status 错误 = 红框红字（不再被 #status 的灰字盖住），成功 = 绿字
+  if (bad) ocsmStatusError(msg);
+  else ocsmStatusOk(msg);
 }
 
 /* ─────────────────────────── 视图开关 ─────────────────────────── */
@@ -779,16 +782,16 @@ async function refreshFromText() {
   }
   const my = ++seqParse;
   try {
-    const r = await fetch("/api/shaft_parse", {
+    const r = await fetchApi("/api/shaft_parse", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ dsl: text }),
       cache: "no-store",
-    });
-    const j = await r.json();
+    }, "/api/shaft_parse");
+    const j = r.data || {};
     if (my !== seqParse) return false;
-    if (!r.ok || j.ok === false) {
-      showDslError(j.error || j.message || ("解析失败（HTTP " + r.status + "）"));
+    if (!r.ok) {
+      showDslError(r.error);
       return false;
     }
     clearDslError();
@@ -859,16 +862,16 @@ async function parseExpressionToRows(text) {
   if (!dsl) return { ok: false, error: "粘贴内容为空。" };
   const my = ++seqExpr;
   try {
-    const r = await fetch("/api/shaft_parse", {
+    const r = await fetchApi("/api/shaft_parse", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ dsl }),
       cache: "no-store",
-    });
-    const j = await r.json();
+    }, "/api/shaft_parse");
+    const j = r.data || {};
     if (my !== seqExpr) return { ok: false, error: "已被新的解析请求取代。" };
-    if (!r.ok || j.ok === false) {
-      let msg = j.error || j.message || ("解析失败（HTTP " + r.status + "）");
+    if (!r.ok) {
+      let msg = r.error;
       if (/OCSMGEAR/i.test(String(text)) && looksLikeGearCli(text)) {
         msg += "（检测到 OCSMGEAR 命令行语法：轴生成器只接受轴段表达式，例 `GEAR M3 Z20 H20 ALPHA20`）";
       }
@@ -1073,36 +1076,26 @@ async function fetchPreview() {
     return;
   }
   const my = ++seqPreview;
-  try {
-    const r = await fetch("/api/shaft_preview", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ dsl: text, view: curView }),
-      cache: "no-store",
-    });
-    if (my !== seqPreview) return;
-    if (!r.ok) {
-      let msg = "HTTP " + r.status;
-      try {
-        const j = JSON.parse(await r.text());
-        msg = j.error || j.message || msg;
-      } catch (e) { /* 非 JSON 就报状态码 */ }
-      showPreviewError(msg);
-      markRowsFromError(msg);
-      return;
-    }
-    const svg = await r.text();
-    if (my !== seqPreview) return;
-    clearPreviewError();
-    markRowsFromError("");
-    const url = URL.createObjectURL(new Blob([svg], { type: "image/svg+xml" }));
-    if (blobUrl) URL.revokeObjectURL(blobUrl);
-    blobUrl = url;
-    el("preview").src = url;
-  } catch (e) {
-    if (my !== seqPreview) return;
-    showPreviewError("请求失败：" + e);
+  // 共享取数助手（文本端点：SVG）：失败先 text() 再解 JSON error，红框进 #status + 本区 #perr
+  const r = await fetchText("/api/shaft_preview", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ dsl: text, view: curView }),
+    cache: "no-store",
+  }, "/api/shaft_preview");
+  if (my !== seqPreview) return;
+  if (!r.ok) {
+    showPreviewError(r.error);
+    markRowsFromError(r.error);
+    return;
   }
+  const svg = r.data;
+  clearPreviewError();
+  markRowsFromError("");
+  const url = URL.createObjectURL(new Blob([svg], { type: "image/svg+xml" }));
+  if (blobUrl) URL.revokeObjectURL(blobUrl);
+  blobUrl = url;
+  el("preview").src = url;
 }
 
 function schedulePreview() {
@@ -1266,29 +1259,23 @@ async function exportToDrawing() {
   }
   if (TAB) model.tab = Number(TAB);
   showStatus("生成中…", false);
-  try {
-    const r = await fetch("/api/shaft_export", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(model),
-    });
-    const j = await r.json();
-    if (!r.ok || j.ok === false) {
-      const msg = j.error || j.message || ("HTTP " + r.status);
-      showStatus("失败：" + msg, true);
-      markRowsFromError(msg);
-      return;
-    }
-    const msg = j.message || "已生成到图纸";
-    showStatus(msg, false);
-    // 与齿轮/零件库同款：成功后自动关窗；被浏览器拒绝时提示手动切回
-    setTimeout(() => {
-      try { window.close(); } catch (e) { /* 忽略 */ }
-      showStatus(msg + "（若本窗口未自动关闭，请 Alt+Tab 切回图纸继续）", false);
-    }, 300);
-  } catch (e) {
-    showStatus("请求失败：" + e, true);
+  const r = await fetchApi("/api/shaft_export", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(model),
+  }, "/api/shaft_export");
+  if (!r.ok) {
+    showStatus(r.error, true); // 后端 error 原样透出（共享助手已先红框写 #status）
+    markRowsFromError(r.error);
+    return;
   }
+  const msg = r.data.message || "已生成到图纸";
+  showStatus(msg, false);
+  // 与齿轮/零件库同款：成功后自动关窗；被浏览器拒绝时提示手动切回
+  setTimeout(() => {
+    try { window.close(); } catch (e) { /* 忽略 */ }
+    showStatus(msg + "（若本窗口未自动关闭，请 Alt+Tab 切回图纸继续）", false);
+  }, 300);
 }
 
 /* ─────────────────────────── 心跳保活 ─────────────────────────── */

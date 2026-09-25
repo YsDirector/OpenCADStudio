@@ -616,6 +616,10 @@ fn route(
         ("GET", t) if t.starts_with("/shaft") => page_response(t, SHAFT_HTML),
         ("GET", t) if t.starts_with("/hole") => page_response(t, HOLE_HTML),
         ("GET", t) if t.starts_with("/spline") => page_response(t, SPLINE_HTML),
+        // GUI 共享助手（各页 `<script src="/ocsm_gui_common.js">`；no-store 不走缓存）
+        ("GET", t) if t.starts_with("/ocsm_gui_common.js") => {
+            (200, "application/javascript; charset=utf-8", GUI_COMMON_JS.to_string())
+        }
         ("GET", t) if t.starts_with("/api/gear_svg") => {
             let q = t.split_once('?').map(|(_, q)| q).unwrap_or("");
             match crate::gear::preview_svg(q) {
@@ -8209,6 +8213,9 @@ const HOLE_HTML: &str = include_str!("hole_gui.html");
 /// 智能卡片页（本期卡类型「花键参数表」：内/外 + 等级·配合 + Dp 标准解/备选点选 +
 /// 齿形表达式反解 + 21 项实时结果；`OCSMCARD` 不带参数时打开）。
 const SPLINE_HTML: &str = include_str!("spline_gui.html");
+/// GUI 共享助手（`/ocsm_gui_common.js`）：统一错误提示样式（红框红字）+ readApi/fetchApi。
+/// 页面里的错误只进 console 等于没报错（用户实测：`#status` 的灰字盖掉了 `.bad` 红字）。
+const GUI_COMMON_JS: &str = include_str!("ocsm_gui_common.js");
 /// 螺栓副（件链装配）页：给人类用的 GUI（AI 走命令行/HTTP 同一套实现）。
 const JOINT_HTML: &str = include_str!("joint_gui.html");
 /// 命令手册页（人类侧命令目录 + 操作教程）：教程正文是**磁盘上的 md**（见 `manual_dirs()`），
@@ -15367,6 +15374,50 @@ mod weld_tests {
             1
         );
         assert_eq!(mock.block_entities("OCSM_SPTABLE_GB_INT").len(), 22 + 35 + 1 + 21);
+    }
+
+    /// GUI 共享助手 `/ocsm_gui_common.js`（跨模块共享实现 > 各写一份）：
+    /// 路由能取到；含统一「红框红字」错误样式（基准 = hole `.hint.bad` 的配色）与
+    /// readApi/fetchApi/fetchText/ocsmStatus*；五个主 GUI 都外链它，不再各写一份 readApi。
+    #[test]
+    fn gui_common_js_is_served_and_pages_share_it() {
+        let mock = Arc::new(MockSender::new(acadrust::CadDocument::new()));
+        let server = spawn_fixed(mock).expect("spawn guide server");
+        let js = http_req(server.port, "GET", "/ocsm_gui_common.js", "");
+        for needle in [
+            "function ocsmStatus",
+            "function readApi",
+            "function fetchApi",
+            "function fetchText",
+            "ocsmStatusError",
+            "ocsmClearStatus",
+            // 醒目错误样式 = hole_gui `.hint.bad` 同一套配色（灰字 = 没说）
+            "#b3261e",
+            "#fdecea",
+            "#f3b7b3",
+        ] {
+            assert!(js.contains(needle), "共享助手缺 {needle}：{}", &js[..120.min(js.len())]);
+        }
+        for (name, html) in [
+            ("hole_gui", HOLE_HTML),
+            ("shaft_gui", SHAFT_HTML),
+            ("parts_gui", PARTS_HTML),
+            ("gear_gui", GEAR_HTML),
+            ("spline_gui", SPLINE_HTML),
+        ] {
+            assert!(
+                html.contains(r#"<script src="/ocsm_gui_common.js"></script>"#),
+                "{name}.html 应外链共享助手（统一错误样式/取数）"
+            );
+            assert!(
+                !html.contains("async function readApi(resp, path)"),
+                "{name}.html 不应再各写一份 readApi（已收敛到 ocsm_gui_common.js）"
+            );
+        }
+        // 既有基准（hole 的动态警示框）保持原样：共享助手用它同一套配色。
+        assert!(HOLE_HTML.contains(
+            ".hint.bad { color: #b3261e; background: #fdecea; border: 1px solid #f3b7b3;"
+        ));
     }
 
     /// `/api/invol_check`：默认只查表；`check=1` 才公式导出（含缺档错误）。

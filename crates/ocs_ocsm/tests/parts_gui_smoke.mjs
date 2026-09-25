@@ -216,6 +216,8 @@ const probed = script.replace(/\}\)\(\);\s*$/, `;globalThis.__parts = {
 };
 })();`);
 try {
+  // 页面外链的共享助手（/ocsm_gui_common.js）：Node 里按同一目录文件先求值
+  (0, eval)(fs.readFileSync(htmlPath.replace(/[^/]+$/, 'ocsm_gui_common.js'), 'utf8'));
   (0, eval)(probed);
 } catch (e) {
   errors.push('脚本求值异常: ' + (e && e.stack ? e.stack : e));

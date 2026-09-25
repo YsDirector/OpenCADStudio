@@ -126,6 +126,7 @@
   <div class="hint">选内/外 → 粘齿形表达式 → 定等级·配合·齿根 → 选或填量棒 Dp → 点「出表」回到图纸放置。</div>
 </div>
 
+<script src="/ocsm_gui_common.js"></script>
 <script>
 (() => {
 "use strict";
@@ -162,27 +163,9 @@ function fitRow(code) {
   return ((SIDE && SIDE.fits) || []).find((f) => f.code === code) || null;
 }
 
-// 统一读响应：非 2xx 先读文本再解析（404 是纯文本 "not found"，直接 .json() 会抛 SyntaxError）。
-// 判据/文案照 hole_gui.html 的 readApi（404 → 指路「插件未重启/版本不匹配」）。
-async function readApi(resp, path) {
-  const text = await resp.text();
-  let j = null;
-  try { j = text ? JSON.parse(text) : null; } catch (e) { j = null; }
-  if (!resp.ok) {
-    const snip = text.slice(0, 200);
-    console.error(`[OCSM 智能卡片] ${path} → HTTP ${resp.status}：${snip}`);
-    const err = resp.status === 404
-      ? `端点 ${path} 不存在（HTTP 404）：可能是插件未重启或版本不匹配 —— 请完全退出并重开 OCS`
-      : `HTTP ${resp.status}：${(j && (j.error || j.message)) || snip || "无响应体"}`;
-    return { ok: false, error: err };
-  }
-  if (j === null) {
-    console.error(`[OCSM 智能卡片] ${path} → HTTP ${resp.status}：响应不是 JSON：${text.slice(0, 200)}`);
-    return { ok: false, error: `响应不是 JSON（HTTP ${resp.status}）：${text.slice(0, 200)}` };
-  }
-  if (j.ok === false) return { ok: false, error: j.error || j.message || "请求失败" };
-  return { ok: true, data: j };
-}
+// 取数/报错一律走共享助手 `/ocsm_gui_common.js`（readApi/fetchApi/ocsmStatus）：
+// 后端 {error} 原样透出，#status 用红框红字（不受本页 #status 的 color 影响），
+// 且旧的 preview 成功不会清掉新的出表报错（ocsmSeq/ocsmClearStatus 守卫）。
 
 function setOptions(id, list, preferred, decorate) {
   const sel = el(id);
@@ -365,26 +348,16 @@ function renderDp(dp) {
 async function refresh() {
   const model = currentModel();
   if (!model.expr) {
-    el("status").className = "bad";
-    el("status").textContent = "请先粘九字段齿形表达式（可从轴/齿轮生成器 GUI 复制）";
+    ocsmStatus("请先粘九字段齿形表达式（可从轴/齿轮生成器 GUI 复制）", "bad");
     return;
   }
-  let resp;
-  try {
-    resp = await fetch("/api/spline_preview", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(model),
-    });
-  } catch (e) {
-    el("status").className = "bad";
-    el("status").textContent = "预览请求失败（网络层）：" + e;
-    return;
-  }
-  const r = await readApi(resp, "/api/spline_preview");
+  const seq = ocsmSeq(); // 只清“自己这一次”的状态：旧的成功不抹新错误
+  const r = await fetchApi("/api/spline_preview", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(model),
+  }, "/api/spline_preview");
   if (!r.ok) {
-    el("status").className = "bad";
-    el("status").textContent = r.error;
     el("dpOut").textContent = "—";
     el("mdOut").textContent = "—";
     el("mdRange").textContent = "";
@@ -393,8 +366,7 @@ async function refresh() {
   renderResolved(r.data);
   renderItems(r.data.items);
   renderDp(r.data.dp);
-  el("status").className = "";
-  el("status").textContent = "";
+  ocsmClearStatus(seq);
 }
 
 function schedulePreview() {
@@ -469,30 +441,23 @@ el("ok").addEventListener("click", async () => {
     const ax = el("atX").value.trim();
     const ay = el("atY").value.trim();
     if ((ax === "") !== (ay === "")) {
-      el("status").className = "bad";
-      el("status").textContent = "插入点 at 需要 x 与 y 都填（都不填 = 回图纸点击放置）";
+      ocsmStatus("插入点 at 需要 x 与 y 都填（都不填 = 回图纸点击放置）", "bad");
       return;
     }
     const url = "/api/spline_export" + (TAB ? "?tab=" + encodeURIComponent(TAB) : "");
-    const r0 = await fetch(url, {
+    const res = await fetchApi(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(currentModel()),
-    });
-    const res = await readApi(r0, "/api/spline_export");
-    if (!res.ok) {
-      el("status").className = "bad";
-      el("status").textContent = res.error;
-      return;
-    }
+    }, "/api/spline_export");
+    if (!res.ok) return; // 后端 error 已由共享助手原样写进 #status（红框）
     const j = res.data;
     const msg = j.message || "已生成";
-    el("status").className = "ok";
-    el("status").textContent = msg;
+    ocsmStatusOk(msg);
     // 与孔/轴/零件库同款：成功后自动关窗，把焦点交回图纸（无 at 时插件已进 PartPlace）。
     setTimeout(() => {
       try { window.close(); } catch (e) { /* 被拒绝时忽略 */ }
-      el("status").textContent = msg + "（若本窗口未自动关闭，请 Alt+Tab 切回图纸继续）";
+      ocsmStatusOk(msg + "（若本窗口未自动关闭，请 Alt+Tab 切回图纸继续）");
     }, 300);
   } finally {
     el("ok").disabled = false;
@@ -516,20 +481,8 @@ function ping(bye) {
   el("rot").value = "0";
   // 默认表达式（浏览器里只有 placeholder；这里给一份可跑的例子，防腐化/表单恢复）
   el("expr").value = "SPLINE IN M3 Z20 ALPHA30 X0 DA65.4 DF57.3436 BETA0 H30";
-  let resp;
-  try {
-    resp = await fetch("/api/spline_options", { cache: "no-store" });
-  } catch (e) {
-    el("status").className = "bad";
-    el("status").textContent = "选项表加载失败（网络层）：" + e;
-    return;
-  }
-  const r = await readApi(resp, "/api/spline_options");
-  if (!r.ok) {
-    el("status").className = "bad";
-    el("status").textContent = r.error;
-    return;
-  }
+  const r = await fetchApi("/api/spline_options", { cache: "no-store" }, "/api/spline_options");
+  if (!r.ok) return; // 共享助手已把 error 红框显示在 #status
   OPT = r.data;
   setOptions("cardType", cardTypes().map((c) => ({ value: c.id, label: c.label })), (cardTypes()[0] || {}).id);
   CARD = cardTypes()[0] || null;

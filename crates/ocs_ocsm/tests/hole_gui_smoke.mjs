@@ -379,6 +379,8 @@ const probed = script.replace(/\}\)\(\);\s*$/, `;globalThis.__hole = {
 };
 })();`);
 try {
+  // 页面外链的共享助手（/ocsm_gui_common.js）：Node 里按同一目录文件先求值
+  (0, eval)(fs.readFileSync(htmlPath.replace(/[^/]+$/, 'ocsm_gui_common.js'), 'utf8'));
   (0, eval)(probed);
 } catch (e) {
   errors.push('脚本求值异常: ' + (e && e.stack ? e.stack : e));
@@ -683,16 +685,24 @@ await tick(6);
 check(!closed, '404 时不应关窗');
 const st404 = el('status').textContent || '';
 check(st404.includes('404') && st404.includes('重开 OCS'), '404 应显示诊断提示：' + st404);
+// ★ 样式断言：错误必须是 `.bad` 红框（共享助手统一；灰字 = 没说）
+check(el('status').className === 'bad', '404 提示应带 .bad 类：' + el('status').className);
+check(String(el('status').style.background).toLowerCase() === '#fdecea',
+  '404 提示应有红色底纹：' + el('status').style.background);
+check(String(el('status').style.color).toLowerCase() === '#b3261e',
+  '404 提示文字应为红色：' + el('status').style.color);
 check(
   consoleErrors.some((e) => e.includes('/api/hole_export') && e.includes('404') && e.includes('not found')),
   'console.error 应带路径+状态码+响应文本：' + consoleErrors.join(' | ')
 );
 forceExport404 = false;
-// 预览端点 404 同样友好
+// 预览端点 404 同样友好（红色样式同样要到位）
 forcePreview404 = true;
 consoleErrors.length = 0;
 await H.refresh();
 check((el('status').textContent || '').includes('404'), '预览 404 应显示提示：' + el('status').textContent);
+check(el('status').className === 'bad' && String(el('status').style.background).toLowerCase() === '#fdecea',
+  '预览 404 也应是 .bad 红框：' + el('status').className + '/' + el('status').style.background);
 forcePreview404 = false;
 
 function report() {

@@ -106,6 +106,7 @@
   </div>
 </div>
 
+<script src="/ocsm_gui_common.js"></script>
 <script>
 let catalog = null, cur = { family: "", d: 0, l: 0, b1: null, params: {}, spec: "", view: "main" };
 const el = (id) => document.getElementById(id);
@@ -116,7 +117,10 @@ const treeRows = {};
 const TAB = new URLSearchParams(location.search).get("tab");
 
 async function load() {
-  catalog = await (await fetch("/api/parts")).json();
+  // 共享取数助手：目录拿不到不再静默（红框进 #status），页面其余部分照旧
+  const r = await fetchApi("/api/parts", { cache: "no-store" }, "/api/parts");
+  if (!r.ok) return;
+  catalog = r.data;
   buildTree(el("tree"), catalog.tree, []);
 }
 
@@ -438,33 +442,22 @@ function update() {
 }
 
 async function outOfStock() {
-  el("status").textContent = "出库中…";
-  el("status").className = "";
-  try {
-    const r = await fetch("/api/part_export", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(TAB ? Object.assign({ tab: TAB }, cur) : cur),
-    });
-    const j = await r.json();
-    if (j.ok) {
-      el("status").textContent = j.message || "已出库";
-      el("status").className = "ok";
-      // 出库后自动关掉本窗口：chromium 的标签页/--app 窗口都允许脚本自关
-      //（"会话历史仅一条即可自关"规则，已实测）；若浏览器拒绝（如 Firefox 标签页），
-      // 下面的文案会提示手动切回图纸。
-      setTimeout(() => {
-        try { window.close(); } catch (e) { /* 被拒绝时忽略 */ }
-        el("status").textContent = (j.message || "已出库") + "（若本窗口未自动关闭，请切回图纸继续）";
-      }, 300);
-    } else {
-      el("status").textContent = "失败：" + (j.error || "未知错误");
-      el("status").className = "bad";
-    }
-  } catch (e) {
-    el("status").textContent = "请求失败：" + e;
-    el("status").className = "bad";
-  }
+  ocsmStatus("出库中…");
+  const r = await fetchApi("/api/part_export", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(TAB ? Object.assign({ tab: TAB }, cur) : cur),
+  }, "/api/part_export");
+  if (!r.ok) return; // 后端 error 已由共享助手原样写进 #status（红框）
+  const msg = r.data.message || "已出库";
+  ocsmStatusOk(msg);
+  // 出库后自动关掉本窗口：chromium 的标签页/--app 窗口都允许脚本自关
+  //（"会话历史仅一条即可自关"规则，已实测）；若浏览器拒绝（如 Firefox 标签页），
+  // 下面的文案会提示手动切回图纸。
+  setTimeout(() => {
+    try { window.close(); } catch (e) { /* 被拒绝时忽略 */ }
+    ocsmStatusOk(msg + "（若本窗口未自动关闭，请切回图纸继续）");
+  }, 300);
 }
 
 // 心跳：告诉插件"零件库窗口还开着"（避免重复开窗）；关闭时 bye=1

@@ -127,6 +127,7 @@
   <div class="hint">选孔型 → 定孔径 → 点「确定」回到图纸放置（自动值不合适时可手改）。</div>
 </div>
 
+<script src="/ocsm_gui_common.js"></script>
 <script>
 (() => {
 "use strict";
@@ -447,49 +448,18 @@ function renderValues(v) {
   el("extraOut").textContent = extra.join("；");
 }
 
-// 统一读响应：非 2xx 先读文本再解析（404 是纯文本 "not found"，直接 .json() 会抛 SyntaxError）。
-// 判据/文案照轴与标准件的 `!r.ok || j.ok === false` 风格（shaft_gui.html `exportToDrawing`、
-// parts_gui.html `outOfStock`）；404 专门指路「插件未重启/版本不匹配」。
-async function readApi(resp, path) {
-  const text = await resp.text();
-  let j = null;
-  try { j = text ? JSON.parse(text) : null; } catch (e) { j = null; }
-  if (!resp.ok) {
-    const snip = text.slice(0, 200);
-    console.error(`[OCSM 孔生成器] ${path} → HTTP ${resp.status}：${snip}`);
-    const err = resp.status === 404
-      ? `端点 ${path} 不存在（HTTP 404）：可能是插件未重启或版本不匹配 —— 请完全退出并重开 OCS`
-      : `HTTP ${resp.status}：${(j && (j.error || j.message)) || snip || "无响应体"}`;
-    return { ok: false, error: err };
-  }
-  if (j === null) {
-    console.error(`[OCSM 孔生成器] ${path} → HTTP ${resp.status}：响应不是 JSON：${text.slice(0, 200)}`);
-    return { ok: false, error: `响应不是 JSON（HTTP ${resp.status}）：${text.slice(0, 200)}` };
-  }
-  if (j.ok === false) return { ok: false, error: j.error || j.message || "请求失败" };
-  return { ok: true, data: j };
-}
+// 取数/报错一律走共享助手 `/ocsm_gui_common.js`（readApi/fetchApi/ocsmStatus）：
+// 非 2xx 先 text() 再 parse、后端 {error} 原样透出、#status 用红框红字（不再被 #status 的灰字盖住）。
 
 async function refresh() {
   const model = currentModel();
-  let resp;
-  try {
-    resp = await fetch("/api/hole_preview", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(model),
-    });
-  } catch (e) {
-    el("status").className = "bad";
-    el("status").textContent = "预览请求失败（网络层）：" + e;
-    return;
-  }
-  const r = await readApi(resp, "/api/hole_preview");
-  if (!r.ok) {
-    el("status").className = "bad";
-    el("status").textContent = r.error;
-    return;
-  }
+  const seq = ocsmSeq(); // 只清“自己这一次”的状态：旧的成功不抹新错误
+  const r = await fetchApi("/api/hole_preview", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(model),
+  }, "/api/hole_preview");
+  if (!r.ok) return; // 共享助手已把 error 红框显示在 #status
   const j = r.data;
   lastValues = j.values;
   el("preview").innerHTML = j.svg;
@@ -498,11 +468,9 @@ async function refresh() {
   if (el("tAuto").checked && isThreaded()) el("tLen").value = j.values.thread_len;
   const warns = j.values.warnings || [];
   if (warns.length) {
-    el("status").className = "warn";
-    el("status").textContent = "提示：" + warns.join("；");
+    ocsmStatus("提示：" + warns.join("；"), "warn");
   } else {
-    el("status").className = "";
-    el("status").textContent = "";
+    ocsmClearStatus(seq);
   }
 }
 
@@ -593,28 +561,22 @@ el("ok").addEventListener("click", async () => {
   el("ok").disabled = true;
   try {
     const url = "/api/hole_export" + (TAB ? "?tab=" + encodeURIComponent(TAB) : "");
-    const r = await fetch(url, {
+    const res = await fetchApi(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(currentModel()),
-    });
-    const res = await readApi(r, "/api/hole_export");
-    if (!res.ok) {
-      el("status").className = "bad";
-      el("status").textContent = res.error;
-      return;
-    }
+    }, "/api/hole_export");
+    if (!res.ok) return; // 后端 error 已由共享助手原样写进 #status（红框）
     const j = res.data;
-    el("status").className = "ok";
     const w = (j.warnings || []).length ? "（提示：" + j.warnings.join("；") + "）" : "";
     const msg = (j.message || "已生成") + w;
-    el("status").textContent = msg;
+    ocsmStatusOk(msg);
     // 与轴/零件库同款：成功后自动关窗，把焦点交回图纸；
     // 关窗前已由 /api/hole_export 建块 + 登记待放置件（插件侧已进 PartPlace），
     // 鼠标跟随预览就能像轴/标准件那样接上。
     setTimeout(() => {
       try { window.close(); } catch (e) { /* 被拒绝时忽略 */ }
-      el("status").textContent = msg + "（若本窗口未自动关闭，请 Alt+Tab 切回图纸继续）";
+      ocsmStatusOk(msg + "（若本窗口未自动关闭，请 Alt+Tab 切回图纸继续）");
     }, 300);
   } finally {
     el("ok").disabled = false;
@@ -641,20 +603,9 @@ function ping(bye) {
   el("tFull").checked = false;
   el("threadToggle").checked = true;
   el("range").value = "blind";
-  try {
-    const resp = await fetch("/api/hole_sizes", { cache: "no-store" });
-    const r = await readApi(resp, "/api/hole_sizes");
-    if (!r.ok) {
-      el("status").className = "bad";
-      el("status").textContent = r.error;
-      return;
-    }
-    sizes = r.data;
-  } catch (e) {
-    el("status").className = "bad";
-    el("status").textContent = "数据表加载失败（网络层）：" + e;
-    return;
-  }
+  const r = await fetchApi("/api/hole_sizes", { cache: "no-store" }, "/api/hole_sizes");
+  if (!r.ok) return; // 共享助手已把 error 红框显示在 #status
+  sizes = r.data;
   setOptions("reco", [
     ["gb70_1", "GB/T 70.1 内六角圆柱头（GB/T 152.3 表1）"],
     ["gb70_2", "GB/T 70.2 内六角平圆头（GB/T 152.3 无表·缺）"],
