@@ -67,7 +67,7 @@ impl PanelId {
         match self {
             PanelId::Properties => "Properties",
             PanelId::BlockPalette => "Block Palette",
-            PanelId::Pi => "Pi 助手",
+            PanelId::Pi => crate::pi::panel_title(),
             PanelId::ExternalReferences => "External References",
             PanelId::Browser => "Browser",
         }
