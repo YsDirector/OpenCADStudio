@@ -14601,11 +14601,11 @@ mod weld_tests {
         let v: serde_json::Value = serde_json::from_str(&j).unwrap();
         assert_eq!(v["values"]["major"], "9.728", "G 大径：{j}");
         assert_eq!(v["values"]["base_d"], "8.7");
-        // 管螺纹自动长 = L1（用户裁定 ④）：G1/8 → 同规格 R 有效长度 6.5；孔深 = L1+2P
-        assert_eq!(v["values"]["thread_len"], "6.5", "G1/8 自动长：{j}");
-        assert_eq!(v["values"]["hole_depth"], "8.314");
-        assert_eq!(v["values"]["l1"], "6.5");
-        // NPT1/2：ASME B1.20.1 L1（手拧合）= 8.128；孔深 = L1+2P = 11.757
+        // 管螺纹自动「螺纹有效长度」= eff_len：G1/8 → 同规格 R 第16栏 7.4；孔深 = 有效长度+2P
+        assert_eq!(v["values"]["thread_len"], "7.4", "G1/8 自动长：{j}");
+        assert_eq!(v["values"]["hole_depth"], "9.214");
+        assert_eq!(v["values"]["eff_len"], "7.4");
+        // NPT1/2：基准 8.128 + 装配余量 5.443 + 偏差 +1P(1.814286) = 15.385；孔深 = L+2P = 19.014
         let npt_body = serde_json::json!({
             "kind": "threaded", "subtype": "standard", "thread_system": "npt",
             "thread_group": "standard", "d": 21.224, "pitch": 25.4 / 14.0, "fit": "",
@@ -14615,8 +14615,9 @@ mod weld_tests {
         .to_string();
         let j = http_req(server.port, "POST", "/api/hole_preview", &npt_body);
         let v: serde_json::Value = serde_json::from_str(&j).unwrap();
-        assert_eq!(v["values"]["thread_len"], "8.128", "NPT1/2 自动长：{j}");
-        assert_eq!(v["values"]["hole_depth"], "11.757");
+        assert_eq!(v["values"]["thread_len"], "15.385", "NPT1/2 自动长：{j}");
+        assert_eq!(v["values"]["hole_depth"], "19.014");
+        assert_eq!(v["values"]["eff_len"], "15.385");
         // G5/8 无同规格 R → 自动长明确报错（不臆造）；手填可覆盖
         let g_miss = serde_json::json!({
             "kind": "threaded", "subtype": "standard", "thread_system": "g",
@@ -14626,7 +14627,10 @@ mod weld_tests {
         })
         .to_string();
         let j = http_req(server.port, "POST", "/api/hole_preview", &g_miss);
-        assert!(j.contains("\"ok\":false") && j.contains("L1") && j.contains("不臆造"), "{j}");
+        assert!(
+            j.contains("\"ok\":false") && j.contains("有效长度") && j.contains("不臆造"),
+            "{j}"
+        );
         // 表外规格：UN 4.0 明确报错（不插值）
         let bad = serde_json::json!({
             "kind": "threaded", "subtype": "standard", "thread_system": "un",

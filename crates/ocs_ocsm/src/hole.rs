@@ -9,11 +9,15 @@
 //! - 钻头（底孔径）：`~/桌面/GB/公制螺纹底孔牙深明细表.png`。
 //!
 //! ## 规则（用户定案）
-//! - **自动螺纹长度**：M（iso724）仍 = `1.5 × 公称直径`（不变）；UN/ACME/Tr 暂同 1.5d；
-//!   **管螺纹 G/R/NPT 改查表 L1 口径（有效啮合长度）**：NPT = ASME B1.20.1 L1（手拧合）、
-//!   R = ISO 7-1 有效螺纹长度（row `l3`）、G = 同规格 R 的有效长度（ISO 228-1 无此口径，**待确认**）；
-//!   表内没有 L1 的规格（如 G 无同规格 R 的 9 档）明确报错 —— 可手填「螺纹范围」覆盖。
-//! - **自动螺纹孔深** = 有效螺纹深 + `2 × 螺距`（刀具退出；M10×1.5、有效 15 → 18）；
+//! - **两个量分开**（用户修正的概念模型）：
+//!   **① 螺纹有效长度**（= 啮合长度，内、外螺纹**同一个量**——“要旋进多深”）；
+//!   **② 孔深 / 实际加工长度** = 有效长度 + **工艺余量**（刀具退出 + 不完整牙）。
+//! - **自动有效长度**：M（iso724）仍 = `1.5 × 公称直径`（不变）；UN/ACME/Tr 暂同 1.5d；
+//!   **管螺纹 G/R/NPT = 表内 `eff_len`**（用户裁定）：R = ISO 7-1 表第 16 栏（无退刀槽 = 最大基准距离+装配余量）、
+//!   NPT = 基准距离基本 + 装配余量 + 基准平面位置偏差（偏差取 **+1P 最大档**，依据同族 NPTF 表 LW3-55 ±1P）、
+//!   G = 同规格 R 的 `eff_len`（ISO 228-1 无此口径，**待确认**）；表内无值明确报错 —— 可手填「有效长度」覆盖。
+//! - **自动孔深** = 有效长度 + `2 × 螺距`（既有规则；M10×1.5、有效 15 → 18）。
+//!   锥管 R/NPT 的 2P 取锥管工艺口径“额外 1~2 牙”的**上限**，兼顾客锥不完整牙区。
 //! - 非公制系列（UN/G/R/NPT/ACME/Tr）时：`d` = 表内**螺纹大径（mm）**、
 //!   `P` = 表内**螺距（mm）**；英制体系 `P = 25.4/TPI`（表格 `tpi` 字段）。
 //!   管螺纹（G/R/NPT）的大径是螺纹/管子外径（NPT 为内螺纹基本大径），**不是通径**。
@@ -34,7 +38,7 @@
 //! - **不生成尺寸标注**（`D1`/`D` 只在 GUI 预览示意图里画）。
 //!
 //! 输出只是孔本身（**不画材料板轮廓**）：基点 = 孔口中心 × 材料表面，孔向局部 −Y；
-//! 沉头/埋头时 `孔深/螺纹范围` 从**沉孔底 / 埋头锥底**起算；俯视图（若同时勾选）
+//! 沉头/埋头时 `孔深/螺纹有效长度` 从**沉孔底 / 埋头锥底**起算；俯视图（若同时勾选）
 //! 放在侧视图右侧、间隙 20 mm。材料板 + 绿色剖面线只出现在 GUI 预览里。
 
 use crate::thread::{self, ThreadSystem};
@@ -53,7 +57,8 @@ pub const LAYER_CENTER: &str = "3中心线层";
 const CONE_HALF_ANGLE_DEG: f64 = 59.0;
 /// 自动螺纹长度系数（× 公称直径）。
 pub const AUTO_THREAD_FACTOR: f64 = 1.5;
-/// 自动孔深 = 有效螺纹深 + 系数 × 螺距（刀具退出）。
+/// 自动孔深 = 有效长度 + 系数 × 螺距（工艺余量：刀具退出；锥管 R/NPT 再兼顾锥度不完整牙，
+/// 取锥管工艺口径“额外 1~2 牙”的上限：即 2P）。
 pub const AUTO_RUNOUT_FACTOR: f64 = 2.0;
 /// 中心线两端外伸。
 const AXIS_OVER: f64 = 3.0;
@@ -419,7 +424,7 @@ fn thread_systems_json() -> Vec<serde_json::Value> {
                             serde_json::json!({
                                 "name": r.name, "d": r.d, "p": r.p, "tpi": r.tpi,
                                 "d2": r.d2, "d1": r.d1, "drill": drill, "gauge_len": r.gauge_len,
-                                "l1": r.l1, "l2": r.l2, "l3": r.l3,
+                                "makeup": r.makeup, "eff_ext": r.eff_ext, "eff_len": r.eff_len,
                             })
                         }).collect::<Vec<_>>(),
                     })
@@ -525,7 +530,7 @@ pub struct HoleModel {
     pub range: HoleRange,
     /// 孔深（从沉孔底/埋头锥底起算；无沉/埋时即孔口）；`None` = 自动。
     pub hole_depth: Option<f64>,
-    /// 螺纹范围；`None` = 自动 1.5d。
+    /// 螺纹有效长度（= 啮合长度）；`None` = 自动（M/UN/ACME/Tr = 1.5d；管螺纹 = 表内 `eff_len`）。
     pub thread_len: Option<f64>,
     /// 全长螺纹（L = H；此时孔深必须手填）。
     pub full_thread: bool,
@@ -607,8 +612,8 @@ pub struct HoleValues {
     pub tpi: Option<f64>,
     /// 管螺纹基准长度 / 基准距离 L1（mm；非管螺纹 = None）。
     pub gauge_len: Option<f64>,
-    /// 管螺纹自动啮合长度 L1（mm；M/UN/ACME/Tr = None）。
-    pub l1: Option<f64>,
+    /// 管螺纹自动「螺纹有效长度」（mm；内、外螺纹同一个量；M/UN/ACME/Tr = None）。
+    pub eff_len: Option<f64>,
     pub warnings: Vec<String>,
 }
 
@@ -626,7 +631,7 @@ impl HoleValues {
             "pitch": fmt3(self.pitch),
             "tpi": opt(self.tpi),
             "gauge_len": opt(self.gauge_len),
-            "l1": opt(self.l1),
+            "eff_len": opt(self.eff_len),
             "base_d": fmt3(self.base_d),
             "base_start": fmt3(self.base_start),
             "bore_d": opt(self.bore_d),
@@ -788,7 +793,7 @@ pub fn resolve(model: &HoleModel) -> Result<HoleValues, String> {
 
     // ② 沉头 / 埋头
     // 螺纹体系的显示信息（英制 TPI / 管螺纹基准长度与 L1）；不带螺纹 = 空。
-    let (system_key, system_label, tpi, gauge_len, l1): (
+    let (system_key, system_label, tpi, gauge_len, eff_len): (
         String,
         String,
         Option<f64>,
@@ -805,10 +810,9 @@ pub fn resolve(model: &HoleModel) -> Result<HoleValues, String> {
             )
         } else {
             let spec = spec_ref.expect("非公制螺纹已在 ① 查表");
-            // 实际用于自动长的“L1”：G/NPT = l1；R = l3（ISO 7-1 有效螺纹长度）；其余非管螺纹 = None
-            let auto_l1 = match model.thread_system {
-                ThreadSystem::G | ThreadSystem::Npt => spec.l1,
-                ThreadSystem::R => spec.l3,
+            // 自动「螺纹有效长度」（管螺纹）= 表内 eff_len；其余非公制非管 = None
+            let auto_eff = match model.thread_system {
+                ThreadSystem::G | ThreadSystem::R | ThreadSystem::Npt => spec.eff_len,
                 _ => None,
             };
             (
@@ -816,7 +820,7 @@ pub fn resolve(model: &HoleModel) -> Result<HoleValues, String> {
                 model.thread_system.label().to_string(),
                 spec.tpi,
                 spec.gauge_len,
-                auto_l1,
+                auto_eff,
             )
         }
     } else {
@@ -855,14 +859,14 @@ pub fn resolve(model: &HoleModel) -> Result<HoleValues, String> {
         _ => 0.0,
     };
 
-    // ③ 孔深 / 螺纹范围（自动规则）
+    // ③ 孔深 / 螺纹有效长度（两个量：自动规则）
     if threaded {
         let thread_len = if model.full_thread {
             match model.hole_depth {
                 Some(h) => h,
                 None => {
                     return Err(
-                        "螺纹范围选「全长」时孔深必须手填（自动孔深会循环依赖）".to_string(),
+                        "螺纹有效长度选「全长」时孔深必须手填（自动孔深会循环依赖）".to_string(),
                     )
                 }
             }
@@ -876,36 +880,36 @@ pub fn resolve(model: &HoleModel) -> Result<HoleValues, String> {
                 | ThreadSystem::Un
                 | ThreadSystem::Acme
                 | ThreadSystem::Tr => AUTO_THREAD_FACTOR * model.d,
-                // 管螺纹：自动长 = 查表 L1 口径（有效啮合长度）；表外明确报错。
+                // 管螺纹：自动「螺纹有效长度」= eff_len（内、外螺纹同一个量）；表内无值明确报错。
                 ThreadSystem::Npt => spec_ref
-                    .and_then(|s| s.l1)
+                    .and_then(|s| s.eff_len)
                     .ok_or_else(|| {
                         format!(
-                            "NPT{} 表里没有 L1（手拧合长度）—— 表外不插值；请手填螺纹范围",
+                            "NPT{} 表里没有螺纹有效长度 eff_len —— 表外不插值；请手填有效长度",
                             fmt(model.d)
                         )
                     })?,
                 ThreadSystem::R => spec_ref
-                    .and_then(|s| s.l3)
+                    .and_then(|s| s.eff_len)
                     .ok_or_else(|| {
                         format!(
-                            "R{} 表里没有有效螺纹长度（l3）—— 表外不插值；请手填螺纹范围",
+                            "R{} 表里没有螺纹有效长度 eff_len（表第16栏）—— 表外不插值；请手填有效长度",
                             fmt(model.d)
                         )
                     })?,
                 ThreadSystem::G => spec_ref
-                    .and_then(|s| s.l1)
+                    .and_then(|s| s.eff_len)
                     .ok_or_else(|| {
                         format!(
-                            "G{} 没有有效啮合长度 L1（ISO 228-1 不规定；本表取同规格 R，而 R 无此规格）\
-                             —— 不臆造：请手填螺纹范围，或改用 R / M",
+                            "G{} 没有有效长度（ISO 228-1 不规定；本表取同规格 R，而 R 无此规格）\
+                             —— 不臆造：请手填有效长度，或改用 R / M",
                             fmt(model.d)
                         )
                     })?,
             }
         };
         if !(thread_len.is_finite() && thread_len > 0.0) {
-            return Err(format!("螺纹范围 L={} 非法（必须 > 0）", thread_len));
+            return Err(format!("螺纹有效长度 L={} 非法（必须 > 0）", thread_len));
         }
         let hole_depth = match model.hole_depth {
             Some(h) => h,
@@ -923,7 +927,7 @@ pub fn resolve(model: &HoleModel) -> Result<HoleValues, String> {
         }
         if thread_len > hole_depth + 1e-9 {
             return Err(format!(
-                "螺纹范围 L={} 大于孔深 H={}（螺纹至少要在孔深范围内）",
+                "螺纹有效长度 L={} 大于孔深 H={}（有效长度必须在孔深内）",
                 fmt3(thread_len),
                 fmt3(hole_depth)
             ));
@@ -933,7 +937,7 @@ pub fn resolve(model: &HoleModel) -> Result<HoleValues, String> {
             && hole_depth + 1e-9 < thread_len + AUTO_RUNOUT_FACTOR * pitch
         {
             warnings.push(format!(
-                "孔深 H={} < 螺纹范围 L={} + 2P={}（刀具退出不足 2P）",
+                "孔深 H={} < 螺纹有效长度 L={} + 2P={}（工艺余量不足 2P）",
                 fmt3(hole_depth),
                 fmt3(thread_len),
                 fmt3(thread_len + AUTO_RUNOUT_FACTOR * pitch)
@@ -963,7 +967,7 @@ pub fn resolve(model: &HoleModel) -> Result<HoleValues, String> {
             cone_height,
             tpi,
             gauge_len,
-            l1,
+            eff_len,
             warnings,
         })
     } else {
@@ -1001,7 +1005,7 @@ pub fn resolve(model: &HoleModel) -> Result<HoleValues, String> {
             cone_height,
             tpi,
             gauge_len,
-            l1,
+            eff_len,
             warnings,
         })
     }
@@ -1428,7 +1432,7 @@ pub fn parse_program(text: &str) -> Result<HoleModel, String> {
             }
             _ if lower.starts_with('l') || t.starts_with("螺纹长") || t.starts_with('长') => {
                 let v = take_arg(&tokens, &mut i, t, &["螺纹长", "L", "l", "长"])?;
-                m.thread_len = Some(v.parse().map_err(|_| format!("螺纹范围非法：{v}"))?);
+                m.thread_len = Some(v.parse().map_err(|_| format!("螺纹有效长度非法：{v}"))?);
             }
             _ if t.starts_with("孔径") || lower.starts_with("custom") || lower.starts_with("cd") => {
                 let v = take_arg(&tokens, &mut i, t, &["孔径", "custom", "CD", "cd"])?;
@@ -2388,7 +2392,7 @@ mod tests {
         assert_eq!(v.system, "un");
         assert_eq!(v.tpi, Some(20.0));
         assert_eq!(v.gauge_len, None);
-        assert_eq!(v.l1, None);
+        assert_eq!(v.eff_len, None);
         // TPI → P 换算与数据一致
         assert!((v.pitch * v.tpi.unwrap() - 25.4).abs() < 1e-3);
 
@@ -2405,10 +2409,10 @@ mod tests {
         assert!((v.major - 9.728).abs() < 1e-9);
         assert!((v.minor - 8.566).abs() < 1e-9);
         assert!((v.base_d - 8.7).abs() < 1e-9);
-        // 管螺纹自动长 = 查表 L1：G1/8 → 同规格 R1/8 有效螺纹长度 6.5（ISO 228-1 无口径，待确认）
-        assert!((v.thread_len - 6.5).abs() < 1e-9, "G 自动长={}", v.thread_len);
-        assert!((v.hole_depth - (6.5 + 2.0 * 25.4 / 28.0)).abs() < 1e-5);
-        assert_eq!(v.l1, Some(6.5));
+        // 管螺纹自动长 = 内螺纹最小有效长度（用户裁定）：G1/8 → 同规格 R1/8 第16栏 7.4（待确认）
+        assert!((v.thread_len - 7.4).abs() < 1e-9, "G 自动长={}", v.thread_len);
+        assert!((v.hole_depth - (7.4 + 2.0 * 25.4 / 28.0)).abs() < 1e-5);
+        assert_eq!(v.eff_len, Some(7.4));
         assert_eq!(v.system, "g");
 
         // NPT1/2：P=25.4/14、d1=18.321、底孔=17.813（GB/T 12716 末列）、基准长 L1。
@@ -2426,12 +2430,12 @@ mod tests {
         assert!((v.pitch - 25.4 / 14.0).abs() < 1e-5, "p={}", v.pitch);
         assert_eq!(v.tpi, Some(14.0));
         assert!((v.gauge_len.unwrap() - 8.128).abs() < 1e-9);
-        // NPT 自动长 = ASME B1.20.1 L1（手拧合 8.128）；孔深 = L1 + 2P
-        assert!((v.thread_len - 8.128).abs() < 1e-9, "NPT 自动长={}", v.thread_len);
-        assert!((v.hole_depth - (8.128 + 2.0 * 25.4 / 14.0)).abs() < 1e-5);
-        assert_eq!(v.l1, Some(8.128));
+        // NPT 自动长 = 内螺纹最小有效长度 = 8.128 + 5.443 + 1.814286（偏差取 +1P）
+        assert!((v.thread_len - 15.385).abs() < 1e-9, "NPT 自动长={}", v.thread_len);
+        assert!((v.hole_depth - (15.385 + 2.0 * 25.4 / 14.0)).abs() < 1e-5);
+        assert_eq!(v.eff_len, Some(15.385));
 
-        // R1/8：自动长 = ISO 7-1 有效螺纹长度 l3=6.5（基准距离 4.0 + 装配余量 2.5）
+        // R1/8：自动长 = 内螺纹最小有效长度（表第16栏 7.4 = 基准距离最大 4.9 + 装配余量 2.5）
         m = HoleModel {
             thread_system: crate::thread::ThreadSystem::R,
             thread_group: Some("standard".to_string()),
@@ -2441,12 +2445,12 @@ mod tests {
         };
         let v = resolve(&m).unwrap();
         assert_eq!(v.size_name, "R1/8");
-        assert!((v.thread_len - 6.5).abs() < 1e-9, "R 自动长={}", v.thread_len);
-        assert!((v.hole_depth - (6.5 + 2.0 * 25.4 / 28.0)).abs() < 1e-5);
-        assert_eq!(v.l1, Some(6.5), "自动啮合长 = l3");
-        assert!((v.gauge_len.unwrap() - 3.97).abs() < 1e-9); // 参考站表值
+        assert!((v.thread_len - 7.4).abs() < 1e-9, "R 自动长={}", v.thread_len);
+        assert!((v.hole_depth - (7.4 + 2.0 * 25.4 / 28.0)).abs() < 1e-5);
+        assert_eq!(v.eff_len, Some(7.4), "有效长度 = 第16栏 eff_len");
+        assert!((v.gauge_len.unwrap() - 4.0).abs() < 1e-9); // ISO 7-1 表列基准距离基本
 
-        // 手填「螺纹范围」优先（管螺纹也尊重手改，不被 L1 覆盖）
+        // 手填「螺纹有效长度」优先（管螺纹也尊重手改，不被 eff_len 覆盖）
         m.thread_len = Some(12.0);
         let v = resolve(&m).unwrap();
         assert!((v.thread_len - 12.0).abs() < 1e-9);
@@ -2456,7 +2460,7 @@ mod tests {
         m.pitch = Some(25.4 / 14.0);
         m.thread_len = None;
         let e = resolve(&m).unwrap_err();
-        assert!(e.contains("L1") && e.contains("不臆造"), "{e}");
+        assert!(e.contains("有效长度") && e.contains("不臆造"), "{e}");
 
         // ACME 矮牙（参考站口径）：1/4-16 → d1=5.398；Tr8×1.5 → d1=6.5。
         m = HoleModel {
@@ -2535,23 +2539,33 @@ mod tests {
         assert_eq!(find("g")["groups"][0]["rows"].as_array().unwrap().len(), 24);
         assert_eq!(find("r")["groups"][0]["rows"].as_array().unwrap().len(), 15);
         assert_eq!(find("npt")["is_pipe"], true);
-        // 管螺纹长度列进 /api/hole_sizes：G1/8 l1=6.5（同规格 R 有效长度）；NPT1/2 l1/l2/l3
+        // 管螺纹长度列进 /api/hole_sizes：G1/8 eff_len=7.4（同规格 R 第16栏）；NPT1/2 gauge/makeup/eff/eff_len
         let g18 = find("g")["groups"][0]["rows"]
             .as_array()
             .unwrap()
             .iter()
             .find(|r| r["name"] == "G1/8")
             .unwrap();
-        assert_eq!(g18["l1"], 6.5);
+        assert_eq!(g18["eff_len"], 7.4);
         let npt12 = find("npt")["groups"][0]["rows"]
             .as_array()
             .unwrap()
             .iter()
             .find(|r| r["name"] == "NPT1/2")
             .unwrap();
-        assert_eq!(npt12["l1"], 8.128);
-        assert_eq!(npt12["l2"], 5.443);
-        assert_eq!(npt12["l3"], 13.571);
+        assert_eq!(npt12["gauge_len"], 8.128);
+        assert_eq!(npt12["makeup"], 5.443);
+        assert_eq!(npt12["eff_ext"], 13.571);
+        assert_eq!(npt12["eff_len"], 15.385);
+        // 螺纹有效长度（内、外同一量；自动值）：R1/8 无退刀槽第16栏 = 7.4；NPT 含 +1P 装配公差项
+        let r18 = find("r")["groups"][0]["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["name"] == "R1/8")
+            .unwrap();
+        assert_eq!(r18["eff_len"], 7.4);
+        assert_eq!(npt12["eff_len"], 15.385);
         let un = find("un");
         assert_eq!(un["groups"].as_array().unwrap().len(), 11);
         assert_eq!(un["groups"][0]["rows"].as_array().unwrap().len(), 33);
