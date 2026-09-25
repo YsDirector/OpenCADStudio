@@ -250,5 +250,38 @@ queue_update、compaction_*、auto_retry_*、extension_error），**现有 `sse_
   assistant thinking/toolCall（即 pi 子进程真的在跑）。auto 模式在有 pi-web 时选中
   「pi-web · http://127.0.0.1:30141」。
 - **已知取舍**：pi 的 RPC 子进程里 `@file` **CLI 参数**被禁（与 prompt 文本无关，面板的
-  `@` 展开不受影响）；面板窄宽度下 markdown 表格会挤成单字列（iced markdown 渲染的
-  固有行为，后续可加表格横向滚动或降级为纯文本）。
+  `@` 展开不受影响）；面板窄宽度下 markdown 表格会挤成单字列（→ 已在 §9 修成横向滚动）。
+
+## 12. 后端切换键 + 对比度修正（2026-09-25，提交 `bd64a03e`、`87e07ea6`、其后续）
+
+**背景**：RPC 后端（§11）当时只能用环境变量 `OCS_PI_MODE` 选择，面板里没有任何入口，
+用户找不到 → 只能连 pi-web。
+
+**后端选择器（新）**：顶部状态条里，紧跟后端标签之后 ——
+`pi-web · http://127.0.0.1:30141  [auto ▾]  ● 生成中，会话 …`
+
+| 选项 | 含义 |
+|---|---|
+| `auto` | 探测到 pi-web 就用它，否则自动起本机 `pi --mode rpc` |
+| `web` | 强制 pi-web（HTTP API） |
+| `rpc` | **强制本机 `pi --mode rpc` 子进程，不需要 pi-web** |
+
+- 实现：`PiMsg::BackendPick` → `src/app/update/pi.rs` 里「记住选择 → 停 worker →
+  `reset_for_backend_switch()` → 重建 worker（连接中）」。两个后端启动时都会发
+  `Event::Backend` + `Event::Sessions`，面板自动跟随最新会话，所以切换后无需手动操作。
+- **切换必须清状态**：两个后端的会话表与传输层不同，`reset_for_backend_switch()` 会清掉
+  sessions / entries / 模型与思考目录 / 统计 / 待答审批，否则会残留另一后端的数据。
+- **持久化**：`~/.config/OpenCADStudio/pi-panel-backend.txt`（`pi::save_backend_mode`）。
+  刻意**不并入 `settings.json`** —— Pi 面板整体是 fork 本地扩展，不该扩大共享配置与上游
+  冲突面（见 `docs/fork-patches.md` 的 F 组）。`OCS_PI_MODE` 仍是首次启动的默认值；
+  读取顺序：偏好文件 → 环境变量 → `auto`。
+- 实测：选择器出现在状态条；切换后偏好文件写入对应模式（实测被写成 `web` 后重启即按 web 起）。
+
+**对比度**：新增 `MUTED_TEXT = #B1B1B1`（`Color::from_rgb8(177,177,177)`）常量，替换
+主题次级色（深色主题下几乎与背景同色）用于：composer 提示行、用量统计行、**状态条的
+会话状态文字**、**思考块正文**（定稿与流式两处）。像素采样：同区域文字峰值从 ~110 提升到 ~157
+（9px 小字的抗锯齿峰值低于标称值属正常）。
+
+**踩坑**：`markdown::Content` 非 `Clone`、`Row` 不换行而是压缩子元素（见 §9）之外，本次新的：
+iced 的 `Scrollable` 在所用 rev 里**没有 `max_height()`**（只有 `height()`），要"内容少时自适应、
+多时封顶"只能按条目数分支选 `Length::Shrink` / `Length::Fixed(n)`。
