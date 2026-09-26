@@ -538,6 +538,22 @@ mod tests {
         Ok(())
     }
 
+    /// 表 26 / C_F 口径补全（2026-09-26）：GB 报告与卡片同源地带上出处与缺口说明。
+    #[test]
+    fn gb_report_notes_table26_rimin_and_cf_scope() -> Result<(), String> {
+        let model = serde_json::json!({"card":"花键参数表","side":"int","grade":6,"fit":"H",
+            "expr":"SPLINE IN M3 Z20 ALPHA30 X0 DA65.4 DF57.3436 BETA0 H30",
+            "root":"auto","dp":null,"at":null,"rot":0.0});
+        let (_, md) = build(card("花键参数表"), &model)?;
+        assert!(md.contains("表 26"), "报告应含 R_imin 的表 26 出处：\n{md}");
+        assert!(md.contains("逐格核对"), "报告应含表 26 逐格核对口径：\n{md}");
+        assert!(
+            md.contains("全 70 页未列值") || md.contains("全文档无 CF 变化值表"),
+            "报告应说明非 H/h 的 C_F 缺口：\n{md}"
+        );
+        Ok(())
+    }
+
     #[test]
     fn report_json_errors_are_actionable() {
         let e = build_report_json(b"not json").unwrap_err();

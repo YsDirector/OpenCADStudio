@@ -175,8 +175,8 @@ const INTERNAL_COLUMNS: &[SplineColumnSpec] = &[
         tag: "(内)渐开线终止圆直径最大值",
         label: "渐开线终止圆直径最大值 D_Fimin",
         unit: "mm",
-        formula: "D_Fimin = m(z+1)/(z+0.9)/(z+0.8) + 2CF，CF = 0.1m（仅 H/h；其它配合类别素材缺）",
-        source: "GB/T 3478.1 表 3 与注 4",
+        formula: "D_Fimin = m(z+1)/(z+0.9)/(z+0.8) + 2CF，CF = 0.1m（表 3 注 4：非 H/h 有变化，标准全 70 页未列值）",
+        source: "GB/T 3478.1 表 3 与注 4（全文档无 CF 变化值表）",
     },
     SplineColumnSpec {
         tag: "(内)小径",
@@ -217,8 +217,8 @@ const INTERNAL_COLUMNS: &[SplineColumnSpec] = &[
         tag: "(内)齿根圆最小曲率半径",
         label: "齿根圆最小曲率半径 R_imin",
         unit: "mm",
-        formula: "R_imin = 0.2m 30°平 / 0.4m 30°圆 / 0.3m 37.5° / 0.25m 45°",
-        source: "GB/T 3478.1 图 2",
+        formula: "R_imin = 0.2m 30°平 / 0.4m 30°圆 / 0.3m 37.5° / 0.25m 45°（表 26 逐模数同值）",
+        source: "GB/T 3478.1 图 2；表 26（书页 50）逐格核对",
     },
     SplineColumnSpec {
         tag: "(内)齿形公差",
@@ -367,8 +367,8 @@ const EXTERNAL_COLUMNS: &[SplineColumnSpec] = &[
         tag: "(外)齿根圆最小曲率半径",
         label: "齿根圆最小曲率半径 R_imin",
         unit: "mm",
-        formula: "R_imin = 0.2m 30°平 / 0.4m 30°圆 / 0.3m 37.5° / 0.25m 45°",
-        source: "GB/T 3478.1 图 2",
+        formula: "R_imin = 0.2m 30°平 / 0.4m 30°圆 / 0.3m 37.5° / 0.25m 45°（表 26 逐模数同值）",
+        source: "GB/T 3478.1 图 2；表 26（书页 50）逐格核对",
     },
     SplineColumnSpec {
         tag: "(外)齿形公差",

@@ -13,7 +13,8 @@
 //!   `3478.6/7/8_在线预览_p*.png`）；hcno 见 `review/花键公差_资料/花键章节_导航_嘉立创.md`。
 //! - `(T+λ)/λ/Fp/Fα` 公式与 4/5/6/7 级系数：GB/T 3478.1 p17/p18 页图 + `jlc_5-3-46`。
 //! - 齿根圆弧最小曲率半径系数：GB/T 3478.1 **图 2（p07 a) / p08 b–d)）**（30°平 0.2m、30°圆 0.4m、
-//!   37.5° 0.3m、45° 0.25m）；§8.7.5 指表 26（p31+ 未抓）——本库按图 2 系数乘 m（用户口径：R_imin 是计算量）。
+//!   37.5° 0.3m、45° 0.25m）；§8.7.5 指 **表 26**（doc88 p51＝书页 50，逐模数列表，已抓）——本库按图 2 系数乘 m
+//!   （用户口径：R_imin 是计算量）；表 26 同值并存 `assets/spline_gb3478_table26_rimin.csv`（口径/缺口见文件头）。
 //! - IT/H 公差（表 25）与 GB/T 1800 一致，复用本仓 `tolerance` 模块的 IT 表；表外尺寸按 GB/T 1800。
 //!
 //! ## 口径备忘
@@ -24,7 +25,8 @@
 //! - D 区间按「lo 开 hi 闭」匹配；D>1000 或 m 不在 0.25…10 或等级不在 4/5/6/7 → 报错。
 //! - 量棒：标准只规定 **R40 取最接近的较大值（1 个）**；`dp_candidates_3` 另给「3 个工程备选」。
 //! - 表 24 脚注①：**外花键大径 Dee 的上偏差取 0**；表值用于小径 Die。
-//! - 表 3 注 4：CF=0.1m 仅 H/h；其它配合类别 CF 会变，**素材未给具体值 → 本库按 0.1m 并标注缺**。
+//! - 表 3 注 4：CF=0.1m 仅 H/h；其它配合类别齿形裕度会变——**全 70 页无列值**（p07 §5.6 与附录 C 示例
+//!   也只用 0.1m）→ 本库按 0.1m 并注明“标准未列值”（不臆造）。
 //! - 表 25 的 Dii 列在原 HTML 里是图片（5-3-51.files/image0xx.gif，已核对为 `+IT/0` 叠加格）；
 //!   本库按 H10/H11/H12 = 下偏差 0、上偏差 +IT10/11/12 实现，与 `tolerance` 的 IT 表逐格对得上。
 
@@ -173,6 +175,7 @@ const EXT_DIA_DEV_CSV: &str = include_str!("../assets/spline_gb3478_ext_dia_dev.
 const LIMITS_CSV: &str = include_str!("../assets/spline_gb3478_limits.csv");
 const FIT_CSV: &str = include_str!("../assets/spline_gb3478_fit.csv");
 const PIN_SERIES_CSV: &str = include_str!("../assets/spline_gb3478_pin_series.csv");
+const RIMIN_T26_CSV: &str = include_str!("../assets/spline_gb3478_table26_rimin.csv");
 
 /// 表 23 一行（D 区间 + d/e/f 的 esv 值 μm）。
 #[derive(Debug, Clone, Copy)]
@@ -363,6 +366,60 @@ pub fn pin_series() -> Result<Vec<f64>, String> {
         }
     }
     Ok(out)
+}
+
+/// 表 26 一行（m 与四档 R_imin，mm；`None` = 原表印“—”未列值）。
+#[derive(Debug, Clone, Copy)]
+pub struct RiminRow {
+    pub m: f64,
+    pub r30_flat: Option<f64>,
+    pub r30_fillet: Option<f64>,
+    pub r37_5: Option<f64>,
+    pub r45: Option<f64>,
+}
+
+/// 表 26 全表（doc88 p51＝书页 50；15 档模数）。
+pub fn rimin_table26_rows() -> Result<Vec<RiminRow>, String> {
+    let mut rows = Vec::new();
+    let mut lines = num_lines(RIMIN_T26_CSV);
+    let header = lines.next().ok_or("spline_gb3478_table26_rimin.csv 缺表头")?;
+    if header.trim() != "m,r_30_flat,r_30_fillet,r_37_5,r_45,source,note" {
+        return Err(format!("spline_gb3478_table26_rimin.csv 表头异常：{header}"));
+    }
+    for line in lines {
+        let v: Vec<&str> = line.split(',').collect();
+        if v.len() != 7 {
+            return Err(format!("spline_gb3478_table26_rimin.csv 列数异常：{line}"));
+        }
+        rows.push(RiminRow {
+            m: parse_num(v[0], "m")?,
+            r30_flat: parse_opt(v[1]),
+            r30_fillet: parse_opt(v[2]),
+            r37_5: parse_opt(v[3]),
+            r45: parse_opt(v[4]),
+        });
+    }
+    Ok(rows)
+}
+
+/// 表 26 查值：m 必须精确落在标准 15 档（**表外不外推**）；原表“—” → `Ok(None)`。
+/// 计算口径仍走 `rimin()`（图 2 系数式），本函数供对照/复算。
+pub fn rimin_table26(
+    alpha: PressureAngle,
+    root: RootForm,
+    m: f64,
+) -> Result<Option<f64>, String> {
+    let rows = rimin_table26_rows()?;
+    let row = rows
+        .iter()
+        .find(|r| (r.m - m).abs() < 1e-9)
+        .ok_or_else(|| format!("花键参数表：m={m} 不在表 26（GB/T 3478.1 的 15 档模数）"))?;
+    Ok(match (alpha, root) {
+        (PressureAngle::A30, RootForm::Flat) => row.r30_flat,
+        (PressureAngle::A30, RootForm::Fillet) => row.r30_fillet,
+        (PressureAngle::A37_5, _) => row.r37_5,
+        (PressureAngle::A45, _) => row.r45,
+    })
 }
 
 /// D 区间索引（lo 开 hi 闭；不在表内 → None，**不插值不外推**）。
@@ -702,8 +759,10 @@ pub fn internal_minor(alpha: PressureAngle, root: RootForm, m: f64, z: u32) -> f
     d_femax(alpha, root, m, z, 0.0) + 2.0 * tooth_clearance(m)
 }
 
-/// 齿根圆弧最小曲率半径 R_imin = Remin（图 2 系数 × m）：
+/// 齿根圆弧最小曲率半径 R_imin = R_emin（图 2 系数 × m；**计算口径**）：
 /// 30°平 0.2m / 30°圆 0.4m / 37.5° 0.3m / 45° 0.25m。
+/// 表 26（doc88 p51＝书页 50）逐模数列表同值（有值格 = coef·m 半偶舍入到 2 位；
+/// m=0.25 原表仅 45° 有值）——对照见 `rimin_table26()` 与资产 CSV，不替换本式。
 pub fn rimin(alpha: PressureAngle, root: RootForm, m: f64) -> f64 {
     let coef = match (alpha, root) {
         (PressureAngle::A30, RootForm::Flat) => 0.2,
@@ -1321,6 +1380,50 @@ mod tests {
         assert!(near(rimin(PressureAngle::A30, RootForm::Fillet, m), 0.8));
         assert!(near(rimin(PressureAngle::A37_5, RootForm::Fillet, m), 0.6));
         assert!(near(rimin(PressureAngle::A45, RootForm::Fillet, m), 0.5));
+    }
+
+    /// 表 26（doc88 p51＝书页 50）：有值格 = 图 2 系数式（含半偶舍入 2 位）；
+    /// m=0.25 与 m≥3 的 45° 缺口照原表“—”；表外报错。
+    #[test]
+    fn table26_rimin_matches_figure2_coefficients() {
+        let rows = rimin_table26_rows().unwrap();
+        assert_eq!(rows.len(), 15, "表 26 应为 15 档模数");
+        assert!(near(rows[0].m, 0.25) && near(rows[14].m, 10.0));
+        for r in &rows {
+            for (a, root, tv) in [
+                (PressureAngle::A30, RootForm::Flat, r.r30_flat),
+                (PressureAngle::A30, RootForm::Fillet, r.r30_fillet),
+                (PressureAngle::A37_5, RootForm::Fillet, r.r37_5),
+                (PressureAngle::A45, RootForm::Fillet, r.r45),
+            ] {
+                match tv {
+                    Some(v) => {
+                        let c = rimin(a, root, r.m);
+                        assert!(
+                            (v - c).abs() <= 0.0051,
+                            "m={} 表值 {v} 与图 2 系数式 {c} 不一致",
+                            r.m
+                        );
+                        assert_eq!(rimin_table26(a, root, r.m).unwrap(), Some(v));
+                    }
+                    None => assert!(
+                        rimin_table26(a, root, r.m).unwrap().is_none(),
+                        "m={} 原表应为—",
+                        r.m
+                    ),
+                }
+            }
+        }
+        // 原表抽核（防 OCR 漏读）：m=1.75 行、m=2.5 的 45°、m=0.25 的缺口。
+        assert_eq!(rimin_table26(PressureAngle::A45, RootForm::Fillet, 1.75).unwrap(), Some(0.44));
+        assert_eq!(rimin_table26(PressureAngle::A37_5, RootForm::Fillet, 1.75).unwrap(), Some(0.52));
+        assert_eq!(rimin_table26(PressureAngle::A45, RootForm::Fillet, 2.5).unwrap(), Some(0.62));
+        assert_eq!(rimin_table26(PressureAngle::A45, RootForm::Fillet, 0.25).unwrap(), Some(0.06));
+        assert!(rimin_table26(PressureAngle::A30, RootForm::Flat, 0.25).unwrap().is_none());
+        // 计算口径保留图 2 系数式（m=0.25 30°平：表为—，式给 0.05）。
+        assert!(near(rimin(PressureAngle::A30, RootForm::Flat, 0.25), 0.05));
+        // 表外不外推。
+        assert!(rimin_table26(PressureAngle::A30, RootForm::Flat, 0.3).is_err());
     }
 
     /// 量棒/M 对标准附录表 1（30° 内花键 m=0.5）：z=20、6H 用 Dp=1.00 的 M_min/M_max。
