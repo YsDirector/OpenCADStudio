@@ -56,7 +56,27 @@ const X_VALUE: f64 = -33.4;
 /// 字高（GB 模板同款）。
 const TEXT_H: f64 = 3.6;
 /// 标签字宽（模板同款）。
+/// 标题实体级字宽（用户 2026-09-27 截图：标题超出表格右界）。
+/// 宿主把 TTF 归一化到 cap height=9 再乘 height/9（`src/scene/text/ttf_glyph.rs`），
+/// 本字体（朱雀仿宋）cap=0.637em → 实际字宽 ≈ 字号 × 1.57 × width_factor；0.75 下标题宽
+/// 46.6 < 可用 51.29（外卡 51.42，余量 9%）。
+const TITLE_WF: f64 = 0.75;
+
+/// 短标签字宽（原值，实测均在列内）。
 const LABEL_WF: f64 = 1.0;
+
+/// 长标签的实体级字宽（`None` = [`LABEL_WF`]）。
+///
+/// 用户 2026-09-27 截图三处（内卡标题/量棒直径 Dp/测量跨棒距 Md）+ 追加两处
+/// （外卡跨测齿数 Kn/公法线长度 Wn）：按 TTF 实际 advance × cap-height 归一化预算，
+/// 把文本宽压到标签列宽的 91–92%（≥8% 余量），不动列宽/线位/`OCSM_GB` 样式。
+fn label_width_factor(tag: &str) -> f64 {
+    match tag {
+        "(简)量棒直径" | "(简)跨测齿数" => 0.80, // 5.4em → 24.5（列 26.8）
+        "(简)测量跨棒距" | "(简)公法线长度" => 0.65, // 6.6–6.7em → 24.2–24.5
+        _ => LABEL_WF,
+    }
+}
 /// 值 ATTDEF 实体级字宽（与 GB 卡 0.7 同口径，不动全局 `OCSM_GB`）。
 const VALUE_WF: f64 = 0.7;
 /// 标题插入 y（模板）。
@@ -431,10 +451,10 @@ pub fn block_entities(side: SplineSide) -> Vec<EntityType> {
         line([X_LEFT, row_top(i)], [X_RIGHT, row_top(i)], LAYER_THIN);
     }
     line([X_SEP, -ROW], [X_SEP, bottom], LAYER_THIN);
-    out.push(text_ent(title_text(side), title_x(side), Y_TITLE, TEXT_H, LABEL_WF));
+    out.push(text_ent(title_text(side), title_x(side), Y_TITLE, TEXT_H, TITLE_WF));
     for (i, f) in fields(side).iter().enumerate() {
         let row = i + 1;
-        out.push(text_ent(f.label, X_LABEL, label_y(row), TEXT_H, LABEL_WF));
+        out.push(text_ent(f.label, X_LABEL, label_y(row), TEXT_H, label_width_factor(f.tag)));
     }
     for (i, f) in fields(side).iter().enumerate() {
         out.push(EntityType::AttributeDefinition(attdef(f.tag, X_VALUE, value_y(i + 1))));
@@ -762,33 +782,55 @@ mod tests {
         }
     }
 
-    /// 几何：标签不出左框/标签栏，值不出右框；标签与值不叠、行与行不叠。
+    /// 几何（**TTF 实际宽**，宿主 cap-height 归一 ×1.57）：标题/标签/值均在各自单元格内
+    /// （标签列留 ≥3% 边距）、标签与值及任意两文本不相交、全体不出块框。
+    /// 用户 2026-09-27 截图三处（标题/量棒直径 Dp/测量跨棒距 Md）+ 外卡两处（跨测齿数 Kn/公法线长度 Wn）。
     #[test]
     fn lite_texts_stay_in_columns_and_do_not_overlap() {
-        let text_box = crate::spline_table::text_box;
+        use crate::spline_table::text_box_ttf;
+        let lite_cell = X_SEP - X_LABEL; // 标签列可用宽
         for side in [SplineSide::Internal, SplineSide::External] {
             let fields = fields(side);
             // 取一组大值（m=10、z=100）压最宽文本。
             let input = make_input(side, 10.0, 100, PressureAngle::A30, RootForm::Flat);
             let table = crate::spline_tol::compute(&input).unwrap();
             let vals = values(side, &table).unwrap();
+            // 标题：不出左框/右框。
+            let title = text_box_ttf([title_x(side), Y_TITLE], TEXT_H, TITLE_WF, title_text(side));
+            assert!(
+                title[0] >= X_LEFT && title[2] <= X_RIGHT - 0.02,
+                "{side:?} 标题越表：{title:?}"
+            );
+            let mut boxes: Vec<(String, [f64; 4])> = vec![(format!("title:{}", title_text(side)), title)];
             for (i, f) in fields.iter().enumerate() {
                 let row = i + 1;
-                let lab = text_box([X_LABEL, label_y(row)], TEXT_H, LABEL_WF, f.label);
+                let lab = text_box_ttf(
+                    [X_LABEL, label_y(row)],
+                    TEXT_H,
+                    label_width_factor(f.tag),
+                    f.label,
+                );
                 assert!(
-                    lab[0] >= X_LEFT && lab[2] <= X_SEP,
-                    "{side:?} 标签「{}」应在本列内：{lab:?}",
+                    lab[0] >= X_LEFT && lab[2] <= X_SEP - 0.02,
+                    "{side:?} 标签「{}」越标签列：{lab:?}",
                     f.label
                 );
-                let val = &vals[i].1;
-                let vb = text_box([X_VALUE, value_y(row)], TEXT_H, VALUE_WF, val);
+                let margin = (X_SEP - lab[2]) / lite_cell;
                 assert!(
-                    vb[0] >= X_SEP && vb[2] <= X_RIGHT,
-                    "{side:?} 值「{val}」应在本列内（不越右框、不进公差列）：{vb:?}"
+                    margin >= 0.03,
+                    "{side:?} 标签「{}」列内余量 {:.1}% < 3%：{lab:?}",
+                    f.label,
+                    margin * 100.0
+                );
+                let val = &vals[i].1;
+                let vb = text_box_ttf([X_VALUE, value_y(row)], TEXT_H, VALUE_WF, val);
+                assert!(
+                    vb[0] >= X_SEP && vb[2] <= X_RIGHT - 0.02,
+                    "{side:?} 值「{val}」越值列：{vb:?}"
                 );
                 assert!(
-                    lab[2] <= vb[0],
-                    "{side:?} 标签「{}」与值「{val}」不得横向相叠",
+                    lab[2] < vb[0],
+                    "{side:?} 标签「{}」与值「{val}」横向相叠：{lab:?} vs {vb:?}",
                     f.label
                 );
                 let top = row_top(row);
@@ -797,6 +839,16 @@ mod tests {
                     lab[1] >= bottom && lab[3] <= top && vb[1] >= bottom && vb[3] <= top,
                     "{side:?} 第 {row} 行文字应在本行带内"
                 );
+                boxes.push((format!("label:{}", f.label), lab));
+                boxes.push((format!("value:{val}"), vb));
+            }
+            // 任意两文本盒不相交（含标题/跨行）。
+            for i in 0..boxes.len() {
+                for j in (i + 1)..boxes.len() {
+                    let (a, b) = (&boxes[i].1, &boxes[j].1);
+                    let hit = a[0] < b[2] && b[0] < a[2] && a[1] < b[3] && b[1] < a[3];
+                    assert!(!hit, "{side:?} 文本框相交：{} × {}", boxes[i].0, boxes[j].0);
+                }
             }
         }
     }
