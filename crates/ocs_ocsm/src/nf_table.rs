@@ -90,7 +90,8 @@ pub const MID_X: f64 = -167.6108213593015;
 // ══════════════════════════════════════════════════════════════════════════
 
 /// 模板 `外花键参数表NF.dxf` 的 66 条 LINE（逐图元照录；`(a, b, layer)`）。
-const NF_LINES: &[([f64; 2], [f64; 2], &str)] = &[
+/// 内外两卡同版面：本表原样被 `nf_ext_table` 复用（外卡就是模板原版）。
+pub(crate) const NF_LINES: &[([f64; 2], [f64; 2], &str)] = &[
     ([-335.2216427186031, 0.0], [-167.6108213593015, 0.0], "1轮廓实线层"),
     ([-167.6108213593015, 0.0], [0.0, 0.0], "1轮廓实线层"),
     ([-335.2216427186031, 0.0], [-335.2216427186031, -41.93014705882336], "1轮廓实线层"),
@@ -410,7 +411,7 @@ pub fn e_xm_tol_row(m: f64, a: f64) -> Option<&'static NfDevRow> {
 }
 
 /// 微米偏差（µm）→ mm 显示串（带符号，最多 3 位小数；0 → `0`）。
-fn fmt_um_mm(v_um: f64) -> String {
+pub(crate) fn fmt_um_mm(v_um: f64) -> String {
     let v = v_um / 1000.0;
     if v.abs() < 5e-7 {
         return "0".to_string();
@@ -437,7 +438,7 @@ fn common_of(layer: &str) -> EntityCommon {
 }
 
 /// 标签/标题 MTEXT：模板是 `attachment=4`（标题 5），字高 25，框宽照模板 320.2216。
-fn mtext_ent(value: &str, x: f64, y: f64, attach: i16) -> EntityType {
+pub(crate) fn mtext_ent(value: &str, x: f64, y: f64, attach: i16) -> EntityType {
     let mut m = MText::new();
     m.value = value.to_string();
     m.insertion_point = Vector3::new(x, y, 0.0);
@@ -453,12 +454,22 @@ fn mtext_ent(value: &str, x: f64, y: f64, attach: i16) -> EntityType {
 }
 
 /// 值属性：左中（与模板值 MTEXT 的 attachment=4 同语义），实体级字宽 [`VALUE_WIDTH_FACTOR`]。
-fn value_attdef(tag: &str, x: f64, y: f64) -> AttributeDefinition {
+pub(crate) fn value_attdef(tag: &str, x: f64, y: f64) -> AttributeDefinition {
+    value_attdef_wf(tag, x, y, VALUE_WIDTH_FACTOR)
+}
+
+/// 值属性（指定实体级字宽；外花键卡最长值 `279.795` 要比内卡更窄一档）。
+pub(crate) fn value_attdef_wf(
+    tag: &str,
+    x: f64,
+    y: f64,
+    width_factor: f64,
+) -> AttributeDefinition {
     let mut ad = AttributeDefinition::new(tag.to_string(), String::new(), " ".to_string());
     ad.insertion_point = Vector3::new(x, y, 0.0);
     ad.alignment_point = ad.insertion_point;
     ad.height = TEXT_H;
-    ad.width_factor = VALUE_WIDTH_FACTOR;
+    ad.width_factor = width_factor;
     ad.text_style = "OCSM_GB".into();
     ad.horizontal_alignment = HorizontalAlignment::Left;
     ad.vertical_alignment = VerticalAlignment::Middle;
@@ -468,7 +479,7 @@ fn value_attdef(tag: &str, x: f64, y: f64) -> AttributeDefinition {
 }
 
 /// 公差属性：照模板 TEXT 基线左对齐（halign/valign=0），字高 15、字宽 0.667。
-fn tol_attdef(tag: &str, x: f64, y: f64) -> AttributeDefinition {
+pub(crate) fn tol_attdef(tag: &str, x: f64, y: f64) -> AttributeDefinition {
     let mut ad = AttributeDefinition::new(tag.to_string(), String::new(), " ".to_string());
     ad.insertion_point = Vector3::new(x, y, 0.0);
     ad.alignment_point = ad.insertion_point;
@@ -765,7 +776,7 @@ pub fn fmt_mm(v: f64) -> String {
 }
 
 /// ISO 286 `Limits` → 上/下差显示（缺档 → [`MISSING`]）。
-fn tol_display(lim: &Option<crate::tolerance::Limits>, upper: bool) -> String {
+pub(crate) fn tol_display(lim: &Option<crate::tolerance::Limits>, upper: bool) -> String {
     match lim {
         Some(l) => {
             let (u, lo) = l.display();

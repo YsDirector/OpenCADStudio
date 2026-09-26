@@ -35,6 +35,7 @@ mod guide_url;
 mod invol_spline;
 mod joint;
 mod nf_table;
+mod nf_ext_table;
 mod partgen;
 mod partgen_b1;
 mod partgen_b2;
@@ -1470,6 +1471,7 @@ const ICON_DIMGUIDE: IconKind =
 const ICON_DIM2GB: IconKind = IconKind::Svg(include_bytes!("../assets/icons/dim2gb.svg"));
 const ICON_PARTS: IconKind = IconKind::Svg(include_bytes!("../assets/icons/parts.svg"));
 const ICON_HOLE: IconKind = IconKind::Svg(include_bytes!("../assets/icons/hole.svg"));
+const ICON_CARD: IconKind = IconKind::Svg(include_bytes!("../assets/icons/card.svg"));
 
 impl BuiltinPlugin for OcsmPlugin {
     fn manifest(&self) -> &'static PluginManifest {
@@ -1542,6 +1544,16 @@ impl BuiltinPlugin for OcsmPlugin {
                                 label: "标准件库",
                                 icon: ICON_PARTS,
                                 event: ModuleEvent::Command("OCSMPART".to_string()),
+                            })],
+                        },
+                        // ⑥ 智能卡片：与标准件库同款的 LargeTool；不带参数 = 开卡片窗口 + 放置态。
+                        RibbonGroup {
+                            title: "卡片",
+                            tools: vec![RibbonItem::LargeTool(ToolDef {
+                                id: "OCSMCARD",
+                                label: "智能卡片",
+                                icon: ICON_CARD,
+                                event: ModuleEvent::Command("OCSMCARD".to_string()),
                             })],
                         },
                         RibbonGroup {
@@ -2631,6 +2643,7 @@ impl OcsmPlugin {
                 self.cmd_ansi_card(host, rest, crate::ansi_table::AnsiLang::En)
             }
             crate::card::CardRenderer::NfTable => self.cmd_nf_card(host, rest),
+            crate::card::CardRenderer::NfExtTable => self.cmd_nf_ext_card(host, rest),
             crate::card::CardRenderer::DinTable => self.cmd_din_card(host, rest),
         }
     }
@@ -2932,6 +2945,72 @@ impl OcsmPlugin {
             "智能卡片：已插入{note}于 ({:.3}, {:.3}) rot {}°。\n\
              公差按 p28（大径 R7 / 小径 H7，ISO 286）+ p29（跨棒距 = 内花键 E 偏差）；\
              表外 V/G/ri 与 p29 表外偏差显示「—」。",
+            at[0],
+            at[1],
+            crate::partgen_kit::trim(spec.rot)
+        ));
+    }
+
+    /// 卡类型「NF 外花键参数表」：
+    /// `OCSMCARD NF外花键参数表 A300 M7.5 [Z38] [中心 齿面|外径] [根 平|圆] [配合 …] [at x,y] [rot 度]`。
+    /// 表格块几何内建（`OCSM_NFTABLE_NF_EXT`，照 `外花键参数表NF.dxf` 原版）；
+    /// 18 个值写 INSERT.attributes（K/W 表外 → 对应格「—」，不臆造）。
+    fn cmd_nf_ext_card(&self, host: &mut dyn HostApi, args: &str) {
+        use crate::nf_ext_table::NfExtTableSpec;
+        let spec = match NfExtTableSpec::parse(args) {
+            Ok(s) => s,
+            Err(e) => {
+                host.push_error(&e);
+                return;
+            }
+        };
+        host.ensure_layers(layer_defs());
+        host.ensure_text_styles(text_style_defs());
+        let block = crate::nf_ext_table::BLOCK;
+        if host.document().block_records.get(block).is_none() {
+            let members = crate::nf_ext_table::block_entities();
+            if let Err(e) = host.add_block_record(block, members) {
+                host.push_error(&format!("NF 外花键参数表：建块 {block} 失败：{e}"));
+                return;
+            }
+        }
+        let at = spec.at.unwrap_or_else(|| {
+            crate::take_parts_point()
+                .map(|p| [p[0], p[1]])
+                .unwrap_or([0.0, 0.0])
+        });
+        let ins = match crate::nf_ext_table::build_insert(&spec, at, spec.rot) {
+            Ok(i) => i,
+            Err(e) => {
+                host.push_error(&format!("NF 外花键参数表：{e}"));
+                return;
+            }
+        };
+        host.push_undo("NF 外花键参数表插入");
+        let handles = host.add_entities(vec![acadrust::EntityType::Insert(ins)]);
+        if handles.is_empty() {
+            host.push_error("NF 外花键参数表：插入失败（宿主未返回句柄）");
+            return;
+        }
+        host.set_dirty();
+        let note = crate::nf_ext_table::NfExtTableModel {
+            card: "NF外花键参数表".into(),
+            expr: None,
+            a: spec.a,
+            m: spec.m,
+            z: spec.z,
+            centering: Some(spec.centering.id().into()),
+            root: Some(spec.root.id().into()),
+            fit: Some(spec.fit.id().into()),
+            at: spec.at,
+            rot: spec.rot,
+        }
+        .echo_note()
+        .unwrap_or_else(|_| String::new());
+        host.push_info(&format!(
+            "智能卡片：已插入{note}于 ({:.3}, {:.3}) rot {}°。\n\
+             公差按模板实测口径（大径 h12 / 小径 H7，ISO 286）+ p29（公法线 = 外花键 E 偏差，按配合）；\
+             K/W 与 p29 表外偏差显示「—」。",
             at[0],
             at[1],
             crate::partgen_kit::trim(spec.rot)
@@ -5039,7 +5118,7 @@ mod tests {
                 }
             }
         }
-        assert_eq!(checked, 9, "功能区应有 9 个 LargeTool 按钮（当前 {checked}）");
+        assert_eq!(checked, 10, "功能区应有 10 个 LargeTool 按钮（当前 {checked}）");
     }
 
     /// XL/`OCSMPART` 按钮：点击（不带参数）开「OCSM 标准件库」窗口 + 放置态。
@@ -5072,6 +5151,51 @@ mod tests {
             MANIFEST.command_prefixes.contains(&"OCSMPART")
                 && MANIFEST.command_prefixes.contains(&"XL"),
             "MANIFEST.command_prefixes 缺少 OCSMPART/XL"
+        );
+    }
+
+    /// `OCSMCARD` 工具栏按钮（⑥）：卡片图标 + 分组 + 事件；三处同步（MANIFEST / plugin.toml /
+    /// COMMAND_CATALOG）由既有断言锁定。
+    #[test]
+    fn ribbon_registers_card_button_open_card_gui() {
+        let module = OcsmPlugin.ribbon();
+        let mut found = false;
+        let mut groups: Vec<&str> = Vec::new();
+        for group in module.ribbon_groups() {
+            groups.push(group.title);
+            for item in &group.tools {
+                if let RibbonItem::LargeTool(t) = item {
+                    if t.id == "OCSMCARD" {
+                        assert_eq!(group.title, "卡片");
+                        assert_eq!(t.label, "智能卡片");
+                        assert!(matches!(
+                            &t.event,
+                            ModuleEvent::Command(c) if c == "OCSMCARD"
+                        ));
+                        match t.icon {
+                            IconKind::Svg(bytes) => {
+                                let svg = std::str::from_utf8(bytes).expect("SVG UTF-8");
+                                assert!(svg.contains("viewBox=\"0 0 24 24\""));
+                                assert!(svg.contains("#B4B6B9") && svg.contains("#6DB7ED"));
+                            }
+                            IconKind::Glyph(g) => panic!("智能卡片按钮仍是字形图标（{g}）"),
+                        }
+                        found = true;
+                    }
+                }
+            }
+        }
+        assert!(found, "功能区缺少「智能卡片」按钮（OCSMCARD）");
+        // 位置：靠近标准件/标注区（标准件之后、标注之前）。
+        let ip = groups.iter().position(|g| *g == "标准件");
+        let ic = groups.iter().position(|g| *g == "卡片");
+        let ia = groups.iter().position(|g| *g == "标注");
+        if let (Some(p), Some(c), Some(a)) = (ip, ic, ia) {
+            assert!(p < c && c < a, "卡片组应在标准件与标注之间：{groups:?}");
+        }
+        assert!(
+            MANIFEST.command_prefixes.contains(&"OCSMCARD"),
+            "MANIFEST.command_prefixes 缺少 OCSMCARD"
         );
     }
 

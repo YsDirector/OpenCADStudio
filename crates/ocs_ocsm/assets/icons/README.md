@@ -1,7 +1,7 @@
 # OCSM 功能区图标（双色扁平化 SVG）
 
-`src/lib.rs` 通过 `include_bytes!` 把这里的 8 个 SVG 编进 `libocs_ocsm.so`
-（`ICON_FRAME` … `ICON_PARTS`），因此 `tools/deploy_plugin.sh` **不需要**额外
+`src/lib.rs` 通过 `include_bytes!` 把这里的 10 个 SVG 编进 `libocs_ocsm.so`
+（`ICON_FRAME` … `ICON_CARD`），因此 `tools/deploy_plugin.sh` **不需要**额外
 分发这些文件；改图标后重新 `cargo build --release -p ocs_ocsm` 即可。
 
 ## 统一规格
@@ -32,6 +32,8 @@
 | `dimguide.svg` | 尺寸引导 `OCSMDIMGULIDE` | 虚线引导线 + 光标 |
 | `dim2gb.svg` | 标注转GB `OCSMDIM2GB` | 尺寸线 + 循环箭头 |
 | `parts.svg` | 标准件库 `OCSMPART` / `XL` | 六角头螺栓（头 + 杆 + 末端倒角 + 螺纹） |
+| `hole.svg` | 孔生成器 `OCSMHOLE` / `DK` | 阶梯孔剖视 + 点划中心线 |
+| `card.svg` | 智能卡片 `OCSMCARD` | 卡片/表格（外框 + 表头 + 参数/值两格 + 智能星标） |
 
 按钮的 id / 显示名 / 分组 / 触发命令不随图标变化；`src/lib.rs` 的
-`ribbon_tool_icons_are_two_colour_svg` 测试会校验 8 个按钮都是 24×24 双色 SVG。
+`ribbon_tool_icons_are_two_colour_svg` 测试会校验 10 个按钮都是 24×24 双色 SVG。

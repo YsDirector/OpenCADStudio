@@ -4031,7 +4031,7 @@ pub const COMMAND_CATALOG: &[(&str, &str, &str)] = &[
     ("OCSMFRAMEINIT", "TF", "图框：不带参数=打开图框选择窗口；带参数=一行直插（`TF a3_landscape 1:2 at 0,0 [rot 度]`）"),
     ("OCSMFRAMEINSERT", "", "按所选图框 + 比例插入（光标跟随，比例感知标注样式）；也可带参数直插（同 TF）"),
     ("OCSMPART", "XL", "标准件/结构要素插入：不带参数=开零件库窗口（左「标准件」树 + 右「结构要素」树）+放置态；带参数=一行直插（标准件 `XL 族 d l [view …] [at x,y] [rot 度]`；结构要素 `XL detail_grind_od d [b1 值] [at x,y] [rot 度]`；外螺纹退刀槽 `XL detail_thread_relief d P 螺距 [g1 值 g2 值 dg 值 r 值 alpha 值] [at x,y] [rot 度]`；毂槽 `XL detail_hub_keyway d [len 毂长] [view main|side]`（b/t₂/r 由 d 查表，len 缺省 30）；平键 `XL key_1096_{a|b|c} b L`、`XL key_1097_{a|b} b L`（d 槽位=键宽 b，L 省略/0=该档默认，L 须 ∈ 标准系列且 L<10b；1097 的 L1/L2/L3 由 L 查 GB/T 1097 长度系列表派生，表外 L 报错））"),
-    ("OCSMCARD", "", "智能卡片（正式名；旧短命令 `XLT` 已移除）：不带参数=开图形界面（本期卡类型「花键参数表」：内/外 + 等级·配合 + Dp 标准解/3 备选点选与手填 + 九字段齿形表达式反解 m/z/αD/x/Da/Df + 21 项实时结果；卡类型/体系/公式口径表由后端 `CARD_TYPES`+选项表下发）；带参数=`OCSMCARD 花键参数表 [std GB] 内 6H <九字段表达式> [dp 4.5] [root 平|圆] [at x,y] [rot 度]`（外花键把 `内 6H` 换成 `外 5f`，表达式 KIND 用 EX；表达式形如 `SPLINE IN M3 Z20 ALPHA30 X0 DA65.4 DF57.3436 BETA0 H30`，轴/齿轮生成器 GUI 可复制；不填 dp = 标准 R40 自动选，选 Dp 则 Md 重算；不填 root = 由 DA/DF 反解）；表格块几何内建（模板逐图元），21 属性取自 `spline_tol::compute()`；以后加表格/铭牌 = `CARD_TYPES` 加数据行 + 一个渲染器"),
+    ("OCSMCARD", "", "智能卡片（工具栏「卡片」组按钮；旧短命令 `XLT` 已移除）：不带参数=开图形界面（七张卡：GB 花键 / 齿轮 / ANSI 花键中英 / NF 内 / NF 外 / DIN 5480；卡类型表驱动，可 `?card=<id>` 深链；均支持九字段齿形表达式反解）；带参数=`OCSMCARD <卡类型> …`，如 `OCSMCARD 花键参数表 [std GB] 内 6H <表达式> [dp 4.5] [root 平|圆] [at x,y]`、`OCSMCARD NF外花键参数表 SPLINE EX M7.5 Z38 ALPHA20 X0.8 BETA0 H30`；表格块几何内建（模板逐图元），卡类型/体系/公式口径表由后端 `CARD_TYPES`+选项表下发；以后加表格/铭牌 = `CARD_TYPES` 加数据行 + 一个渲染器"),
     ("OCSMJOINT", "", "螺栓副装配：不带参数=开装配窗口+放置态；带参数=一行直装（件链算长度、遮挡裁剪、一次撤销）"),
     ("OCSMPOWERDIM", "D", "智能标注：拾取点模式标线性/对齐/半径/直径（Enter 切线段点选）"),
     ("OCSMDIMGULIDE", "GDIM", "引导线标注：选引导线 → 配置窗口（尺寸/剖视/向视/局部放大/角度/弧长/焊接/引线/序号/公差/粗糙度/形位公差）"),
@@ -5332,6 +5332,11 @@ fn apply_card_preview(body: &[u8]) -> Result<String, String> {
                 .map_err(|e| format!("NF 内花键参数表：请求字段无效：{e}"))?;
             m.preview_json()?
         }
+        crate::card::CardRenderer::NfExtTable => {
+            let m: crate::nf_ext_table::NfExtTableModel = serde_json::from_value(v)
+                .map_err(|e| format!("NF 外花键参数表：请求字段无效：{e}"))?;
+            m.preview_json()?
+        }
         crate::card::CardRenderer::DinTable => {
             let m: crate::din_table::DinTableModel = serde_json::from_value(v)
                 .map_err(|e| format!("DIN 花键参数表：请求字段无效：{e}"))?;
@@ -5482,6 +5487,32 @@ pub(crate) fn apply_card_export(
                 "NF 内花键参数表".to_string(),
                 crate::nf_table::BLOCK.to_string(),
                 crate::nf_table::block_entities(),
+                at,
+                rot,
+                ins,
+                attrs,
+                meta,
+                echo,
+            )
+        }
+        CardRenderer::NfExtTable => {
+            let m: crate::nf_ext_table::NfExtTableModel = serde_json::from_value(v)
+                .map_err(|e| format!("NF 外花键参数表：请求字段无效：{e}"))?;
+            let spec = m.spec()?;
+            let echo = m.echo_note()?;
+            let at = m.at;
+            let rot = m.rot;
+            let ins = acadrust::EntityType::Insert(crate::nf_ext_table::build_insert(
+                &spec,
+                at.unwrap_or([0.0, 0.0]),
+                rot,
+            )?);
+            let attrs = m.pending_attrs()?;
+            let meta = m.part_meta_json()?;
+            (
+                "NF 外花键参数表".to_string(),
+                crate::nf_ext_table::BLOCK.to_string(),
+                crate::nf_ext_table::block_entities(),
                 at,
                 rot,
                 ins,
@@ -15719,26 +15750,29 @@ mod weld_tests {
         router.set_current(2, mock.clone());
         let server = spawn(router).expect("spawn guide server");
 
-        // ── 选项表：六张卡 + 齿轮/ANSI/NF/DIN 选项 ──
+        // ── 选项表：七张卡 + 齿轮/ANSI/NF/DIN 选项 ──
         let j = http_req(server.port, "GET", "/api/spline_options", "");
         let v: serde_json::Value = serde_json::from_str(&j).unwrap();
-        assert_eq!(v["card_types"].as_array().unwrap().len(), 6, "{j}");
+        assert_eq!(v["card_types"].as_array().unwrap().len(), 7, "{j}");
         assert_eq!(v["card_types"][1]["renderer"], "gear_table");
         assert_eq!(v["card_types"][2]["renderer"], "ansi_table_cn");
         assert_eq!(v["card_types"][3]["renderer"], "ansi_table_en");
         assert_eq!(v["card_types"][4]["renderer"], "nf_table");
-        assert_eq!(v["card_types"][5]["renderer"], "din_table");
+        assert_eq!(v["card_types"][5]["renderer"], "nf_ext_table");
+        assert_eq!(v["card_types"][6]["renderer"], "din_table");
         assert_eq!(v["gear_card"]["columns"].as_array().unwrap().len(), 19);
         assert_eq!(v["ansi_card"]["profiles"].as_array().unwrap().len(), 5);
         assert_eq!(v["ansi_card"]["columns"]["int"].as_array().unwrap().len(), 17);
         assert_eq!(v["ansi_card"]["columns"]["ext"].as_array().unwrap().len(), 17);
         assert_eq!(v["nf_card"]["columns"].as_array().unwrap().len(), 18);
         assert_eq!(v["nf_card"]["modules"].as_array().unwrap().len(), 10);
+        assert_eq!(v["nf_ext_card"]["columns"].as_array().unwrap().len(), 18);
+        assert_eq!(v["nf_ext_card"]["centering"][0]["id"], "flank", "NF 外缺省齿面定心");
         assert_eq!(v["din_card"]["columns"].as_array().unwrap().len(), 26);
         assert_eq!(v["din_card"]["grades"].as_array().unwrap().len(), 12);
-        // 表驱动 GUI：花键卡 form=null（专用面板基准）；其余五卡下发字段清单
+        // 表驱动 GUI：花键卡 form=null（专用面板基准）；其余六卡下发字段清单
         assert!(v["card_types"][0]["form"].is_null());
-        for (i, n) in [(1usize, 5usize), (2, 5), (3, 5), (4, 7), (5, 13)] {
+        for (i, n) in [(1usize, 5usize), (2, 5), (3, 5), (4, 7), (5, 7), (6, 13)] {
             let fields = v["card_types"][i]["form"]["fields"].as_array().unwrap();
             assert_eq!(fields.len(), n, "card_types[{i}] 字段数");
             assert!(fields.iter().all(|f| f["key"].is_string() && f["kind"].is_string()));
@@ -15966,6 +16000,65 @@ mod weld_tests {
         assert_eq!(ins.0, "OCSM_NFTABLE_NF_INT");
         assert_eq!(mock.insert_attr_counts().last().copied(), Some(18));
         assert_eq!(mock.block_entities("OCSM_NFTABLE_NF_INT").len(), 97, "66 线 + 13 标签 + 18 属性");
+
+        // ── NF 外花键参数表（模板原版卡）：锚点 m=7.5/A=300/z=38；公差 h12/H7/p29 外花键 E ──
+        let nfe = serde_json::json!({
+            "card": "NF外花键参数表", "a": 300.0, "m": 7.5, "z": 38,
+            "centering": null, "root": null, "fit": null, "at": null, "rot": 0.0,
+        });
+        let j = http_req(server.port, "POST", "/api/card_preview", &nfe.to_string());
+        let v: serde_json::Value = serde_json::from_str(&j).unwrap();
+        assert_eq!(v["ok"], true, "{j}");
+        assert_eq!(v["renderer"], "nf_ext_table");
+        assert_eq!(v["centering"], "flank", "缺省齿面定心");
+        let items = v["items"].as_array().unwrap();
+        assert_eq!(items.len(), 18, "12 值 + 6 公差洞位");
+        let get = |tag: &str| items.iter().find(|it| it["tag"] == tag).unwrap();
+        assert_eq!(get("大径Dee")["value"], "298.5");
+        assert_eq!(get("小径Die")["value"], "282");
+        assert_eq!(get("跨测齿数K")["value"], "6");
+        assert_eq!(get("公法线W")["value"], "129.871");
+        assert_eq!(get("大径下差")["value"], "-0.520", "ISO 286 h12");
+        assert_eq!(get("小径上差")["value"], "+0.052", "ISO 286 H7");
+        assert_eq!(get("公法线上差")["value"], "+0.042", "p29 外花键 E 固定列");
+        assert_eq!(get("公法线下差")["value"], "-0.042");
+        assert_eq!(v["missing"].as_array().unwrap().len(), 0, "锚点 18 项齐全");
+        // 表外 A=210 → K/W/公法线公差「—」
+        let nfe_off = serde_json::json!({
+            "card": "NF外花键参数表", "a": 210.0, "m": 7.5, "z": null,
+        });
+        let j = http_req(server.port, "POST", "/api/card_preview", &nfe_off.to_string());
+        let v: serde_json::Value = serde_json::from_str(&j).unwrap();
+        assert!(!v["missing"].as_array().unwrap().is_empty(), "{j}");
+        // 表达式反解：SPLINE EX M7.5 Z38 … → A=300/m/z；KIND IN 冲突 400
+        let nfe_expr = serde_json::json!({
+            "card": "NF外花键参数表",
+            "expr": "SPLINE EX M7.5 Z38 ALPHA20 X0.8 BETA0 H30",
+            "a": 0.0, "m": 0.0, "z": null, "at": null, "rot": 0.0,
+        });
+        let j = http_req(server.port, "POST", "/api/card_preview", &nfe_expr.to_string());
+        let v: serde_json::Value = serde_json::from_str(&j).unwrap();
+        assert_eq!(v["ok"], true, "{j}");
+        assert!((v["fields"]["a"].as_f64().unwrap() - 300.0).abs() < 1e-9, "{j}");
+        assert_eq!(v["fields"]["z"], 38);
+        let mut nfe_bad = nfe_expr.clone();
+        nfe_bad["expr"] = serde_json::json!("SPLINE IN M7.5 Z38 ALPHA20 X0.8 BETA0 H30");
+        let j = http_req(server.port, "POST", "/api/card_preview", &nfe_bad.to_string());
+        assert!(j.contains("KIND"), "{j}");
+        // 出表：无 at → 待放置件 18 ATTRIB；块几何 97；有 at → 直插
+        let resp = apply_card_export(&sender, nfe.to_string().as_bytes()).expect("NF 外出表");
+        assert!(resp.contains("\"ok\":true") && resp.contains("NF"), "{resp}");
+        assert_eq!(crate::pending_block().unwrap(), "OCSM_NFTABLE_NF_EXT");
+        assert_eq!(crate::pending_part_for_test().unwrap().attrs.len(), 18);
+        let mut nfe_at = nfe.clone();
+        nfe_at["at"] = serde_json::json!([75.0, 85.0]);
+        let j = http_req(server.port, "POST", "/api/card_export?tab=2", &nfe_at.to_string());
+        let v: serde_json::Value = serde_json::from_str(&j).unwrap();
+        assert_eq!(v["ok"], true, "{j}");
+        let ins = mock.inserts().last().unwrap().clone();
+        assert_eq!(ins.0, "OCSM_NFTABLE_NF_EXT");
+        assert_eq!(mock.insert_attr_counts().last().copied(), Some(18));
+        assert_eq!(mock.block_entities("OCSM_NFTABLE_NF_EXT").len(), 97, "66 线 + 13 标签 + 18 属性");
 
         // ── DIN 花键参数表（Bild 6 两栏）：示例逐项 = 标准原印值；缺口「—」；出表 26 ATTRIB ──
         let din = serde_json::json!({

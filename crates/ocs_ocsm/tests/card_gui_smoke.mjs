@@ -1,15 +1,17 @@
-// 智能卡片冒烟（node 最小 DOM 垫片 + fetch 桩）：锁住「表驱动 GUI 统一 + 五张新卡 + NF 公差」契约。
+// 智能卡片冒烟（node 最小 DOM 垫片 + fetch 桩）：锁住「表驱动 GUI 统一 + 七张卡 + NF 公差」契约。
 //
 //   ① 统一外观：页面不再手写齿轮/ANSI/NF/DIN 面板；全部由 `card_types[].form` 驱动，
 //      与 GB 面板同一套分区（顶部参数 / 中部主输入+读数 / 结果卡 / 底部按钮）；
+//      顶部常显不得再出现「本期六张卡…」说明（用户截图红框）；
 //   ② 字段顺序/控件类型：顶部参数区控件顺序 = form.fields 顺序（只跳过 textarea 主输入）；
+//      首项卡名 = GB 花键参数表；⑤ 每张卡名带标准号、下拉 title 含全名；
 //   ③ 齿轮卡：表达式 + 配对齿数/图号/精度等级/中心距 → /api/card_preview，19 项、缺项「—」；
 //   ④ ANSI 卡：方向/齿廓（选项表下发）+ P/z；纯中/纯英两个卡类型；
-//   ⑤ NF 卡：A/m/z/定心/齿根/配合（6 字段）→ 18 项；公差 = R7/H7/p29 E（不再整片「—」）；
-//      配合类别只影响预览读数；表外 A=210 → 跨棒距公差「—」；
+//   ⑤ NF 内卡：A/m/z/定心/齿根/配合（6 字段）→ 18 项；公差 = R7/H7/p29 E；
+//      ⑤b NF 外卡：A/m/z/定心/齿根/配合 → 18 项；模板锚点 Dee/Die/K/W + h12/H7/p29 外花键 E；
 //   ⑥ DIN 卡：12 字段（覆盖项独立成格）→ 26 项；缺口 m=5 → 公差「—」；
 //   ⑦ 出表：非花键卡走 /api/card_export；无 at → 待放置件；有 at → 直插；
-//   ⑧ 预览 404 → 红框可见（共享助手；不关窗）；信息分层负断言。
+//   ⑧ 预览 404 → 红框可见（共享助手；不关窗）；信息分层负断言；④ 版面类名/顺序断言。
 //
 // 用法：node card_gui_smoke.mjs <spline_gui.html 路径>
 
@@ -82,6 +84,25 @@ const NF_FORM = {
   note: 'stub NF 说明（公差 p28 R7/H7 + p29 E）',
   missing_note: 'stub NF 缺项（(m,A) 不在 p29 或 ISO 档缺）',
 };
+const NF_EXT_FORM = {
+  fields: [
+    FIELD('expr', '齿形表达式（九字段；可从轴/齿轮生成器 GUI 复制）', 'textarea'),
+    FIELD('a', '公称直径 A', 'number', { default: '300', step: 0.001, required: true }),
+    FIELD('m', '模数 m', 'number', { default: '7.5', step: 0.001, required: true }),
+    FIELD('z', '齿数 z', 'number', { default: '38', min: 3, step: 1 }),
+    FIELD('centering', '定心方式', 'select', { options_from: 'nf_ext_centering', default: 'flank' }),
+    FIELD('root', '齿根样式', 'select', { options_from: 'nf_ext_roots', default: 'flat' }),
+    FIELD('fit', '配合类别', 'select', {
+      options: [
+        { value: 'loose', label: '松动' }, { value: 'slide', label: '滑动' },
+        { value: 'fixed', label: '固定' }, { value: 'press', label: '压' },
+      ],
+      default: 'fixed',
+    }),
+  ],
+  note: 'stub NF 外说明（公差 h12/H7 + p29 外花键 E）',
+  missing_note: 'stub NF 外缺项（h12/H7 + p29 表外/ISO 档缺）',
+};
 const DIN_FORM = {
   fields: [
     FIELD('expr', '齿形表达式（九字段；可从轴/齿轮生成器 GUI 复制）', 'textarea'),
@@ -102,12 +123,13 @@ const DIN_FORM = {
   missing_note: 'stub DIN 缺项（Table 7 缺口）',
 };
 const CARD_TYPES = [
-  { id: '花键参数表', aliases: ['spline'], label: '花键参数表', summary: 'stub GB', systems: [{ id: 'gb3478', label: 'GB', standard: 'stub' }], renderer: 'spline_table', form: null },
-  { id: '齿轮参数表', aliases: ['gear'], label: '齿轮参数表', summary: 'stub gear', systems: [], renderer: 'gear_table', form: GEAR_FORM },
+  { id: '花键参数表', aliases: ['spline', 'gb'], label: 'GB 花键参数表', summary: 'stub GB', systems: [{ id: 'gb3478', label: 'GB', standard: 'stub' }], renderer: 'spline_table', form: null },
+  { id: '齿轮参数表', aliases: ['gear'], label: '齿轮参数表（GB/T 10095）', summary: 'stub gear', systems: [], renderer: 'gear_table', form: GEAR_FORM },
   { id: 'ANSI花键参数表_中文', aliases: ['ansicn'], label: 'ANSI 花键参数表（纯中文）', summary: 'stub ansi cn', systems: [], renderer: 'ansi_table_cn', form: ANSI_FORM },
   { id: 'ANSI花键参数表_英文', aliases: ['ansien'], label: 'ANSI 花键参数表（纯英文）', summary: 'stub ansi en', systems: [], renderer: 'ansi_table_en', form: ANSI_FORM },
-  { id: 'NF内花键参数表', aliases: ['nf'], label: 'NF 内花键参数表', summary: 'stub nf', systems: [], renderer: 'nf_table', form: NF_FORM },
-  { id: 'DIN花键参数表', aliases: ['din'], label: 'DIN 花键参数表', summary: 'stub din', systems: [], renderer: 'din_table', form: DIN_FORM },
+  { id: 'NF内花键参数表', aliases: ['nf'], label: 'NF E22-141 内花键参数表', summary: 'stub nf', systems: [], renderer: 'nf_table', form: NF_FORM },
+  { id: 'NF外花键参数表', aliases: ['nfext'], label: 'NF E22-141 外花键参数表', summary: 'stub nf ext', systems: [], renderer: 'nf_ext_table', form: NF_EXT_FORM },
+  { id: 'DIN花键参数表', aliases: ['din'], label: 'DIN 5480 花键参数表', summary: 'stub din', systems: [], renderer: 'din_table', form: DIN_FORM },
 ];
 const GB_COLUMNS = Array.from({ length: 21 }, (_, i) => ({
   tag: `(内)t${i}`, label: `项${i}`, unit: '', formula: 'stub', source: 'stub',
@@ -165,6 +187,15 @@ const OPTIONS = {
     fits: [{ id: 'loose', label: '松动' }, { id: 'slide', label: '滑动' }, { id: 'fixed', label: '固定' }, { id: 'press', label: '压' }],
     missing_note: 'stub NF 缺项（p29 表外/ISO 档缺）',
     note: 'stub NF 说明',
+  },
+  nf_ext_card: {
+    columns: Array.from({ length: 18 }, (_, i) => ({ tag: `nfe${i}`, label: `NFE项${i}`, unit: '', formula: 'stub', source: 'stub' })),
+    modules: [0.5, 1, 2.5, 7.5],
+    centering: [{ id: 'flank', label: '齿面定心（Dee=A−0.2m，模板）' }, { id: 'outer', label: '外径定心（Dee=A）' }],
+    roots: [{ id: 'flat', label: '平齿根' }, { id: 'fillet', label: '圆齿根' }],
+    fits: [{ id: 'loose', label: '松动' }, { id: 'slide', label: '滑动' }, { id: 'fixed', label: '固定' }, { id: 'press', label: '压' }],
+    missing_note: 'stub NF 外缺项（p29 表外/ISO 档缺）',
+    note: 'stub NF 外说明',
   },
   din_card: {
     columns: Array.from({ length: 26 }, (_, i) => ({ tag: `din${i}`, label: `DIN项${i}`, unit: '', formula: 'stub', source: 'stub' })),
@@ -278,6 +309,51 @@ function nfPreview(mm) {
   });
 }
 const DIN_TAGS = ['N标记', 'N齿数', 'N模数', 'N压力角', 'N齿根圆', 'N齿根成形圆', 'N齿顶圆', 'N槽宽max', 'N槽宽min', 'N槽宽eff', 'N量圆', 'N量距max', 'N量距min', 'W标记', 'W齿数', 'W模数', 'W压力角', 'W齿顶圆', 'W齿根成形圆', 'W齿根圆', 'W齿厚svmax', 'W齿厚smax', 'W齿厚smin', 'W量圆', 'W量距max', 'W量距min'];
+const NFE_TAGS = [
+  '执行标准', '定心方式', '模数', '齿数', '压力角', '齿根样式', '加工方法', '大径Dee', '小径Die',
+  '基准尺寸', '跨测齿数K', '公法线W', '大径上差', '大径下差', '小径上差', '小径下差', '公法线上差', '公法线下差',
+];
+function nfExtPreview(mm) {
+  const rawExpr = String(mm.expr == null ? '' : mm.expr).trim();
+  if (/^GEAR/i.test(rawExpr)) {
+    return jsonResp({ ok: false, error: 'NF 外花键参数表：表达式 MARK 写的是 GEAR（齿轮），与卡片体系「SPLINE（花键）」不一致' }, 400);
+  }
+  if (/^SPLINE\s+IN\b/i.test(rawExpr)) {
+    return jsonResp({ ok: false, error: 'NF 外花键参数表：表达式 KIND 写的是 IN（内），与卡片方向「外」不一致' }, 400);
+  }
+  const ex = stubExpr(mm);
+  const aVal = ex ? ex.m * (ex.z + 0.4 + 2 * ex.x) : Number(mm.a);
+  const fields = ex ? { a: aVal, m: ex.m, z: ex.z } : null;
+  const gap = Number(mm.a) === 210 || (ex && Math.abs(aVal - 210) < 1e-9);
+  const missingSet = gap ? new Set(['齿数', '跨测齿数K', '公法线W', '公法线上差', '公法线下差']) : new Set();
+  const fitLabel = { loose: '松动', slide: '滑动', fixed: '固定', press: '压' }[mm.fit || 'fixed'];
+  const fitE = { loose: '-0.11/-0.194', slide: '-0.02/-0.104', fixed: '+0.042/-0.042', press: '+0.138/+0.054' }[mm.fit || 'fixed'];
+  const flank = (mm.centering || 'flank') !== 'outer';
+  const fillet = mm.root === 'fillet';
+  const val = (tag) => tag === '大径Dee' ? (flank ? '298.5' : '300')
+    : tag === '小径Die' ? (fillet ? '279.795' : '282')
+    : tag === '定心方式' ? (flank ? '齿面定心' : '外径定心')
+    : tag === '加工方法' ? '滚齿'
+    : tag === '齿根样式' ? (fillet ? '圆齿根' : '平齿根')
+    : tag === '跨测齿数K' ? '6' : tag === '公法线W' ? '129.871'
+    : tag === '大径下差' ? '-0.52' : tag === '小径上差' ? '+0.052'
+    : tag === '公法线上差' ? (gap ? '—' : fitE.split('/')[0])
+    : tag === '公法线下差' ? (gap ? '—' : fitE.split('/')[1])
+    : missingSet.has(tag) ? '—' : `v-${tag}`;
+  const items = NFE_TAGS.map((tag) => ({
+    tag, label: tag, unit: '', value: val(tag),
+    formula: 'stub 公式', source: 'stub 来源', missing: missingSet.has(tag),
+  }));
+  return jsonResp({
+    ok: true, card: mm.card, renderer: 'nf_ext_table', fit: mm.fit || 'fixed',
+    expr: ex ? String(mm.expr).trim() : null,
+    fields,
+    readout: gap ? [{ k: 'p29 外花键偏差（µm）', v: '—' }]
+      : [{ k: `p29 外花键·${fitLabel}偏差（µm）`, v: `E ${fitE}；xm +61/-61` },
+         { k: '跨测齿数 K / 公法线 W', v: '6 / 129.871' }],
+    items, missing: [...missingSet], missing_note: 'stub NF 外缺项（p29 表外/ISO 档缺）',
+  });
+}
 function dinPreview(mm) {
   const ex = stubExpr(mm);
   const dbVal = ex ? ex.m * (ex.z + 1.1 + 2 * ex.x) : Number(mm.d_b);
@@ -310,6 +386,7 @@ global.fetch = async (u, opts = {}) => {
     if (model.card === '齿轮参数表') return gearPreview(model);
     if (String(model.card).startsWith('ANSI')) return ansiPreview(model);
     if (model.card === 'NF内花键参数表') return nfPreview(model);
+    if (model.card === 'NF外花键参数表') return nfExtPreview(model);
     if (model.card === 'DIN花键参数表') return dinPreview(model);
     return jsonResp({ ok: false, error: 'stub 只支持新卡' }, 400);
   }
@@ -319,6 +396,7 @@ global.fetch = async (u, opts = {}) => {
     const v = String(lastExportModel.card).startsWith('ANSI') ? ansiPreview(lastExportModel)
       : lastExportModel.card === '齿轮参数表' ? gearPreview(lastExportModel)
       : lastExportModel.card === 'NF内花键参数表' ? nfPreview(lastExportModel)
+      : lastExportModel.card === 'NF外花键参数表' ? nfExtPreview(lastExportModel)
       : lastExportModel.card === 'DIN花键参数表' ? dinPreview(lastExportModel)
       : jsonResp({ ok: false, error: 'bad card' }, 400);
     if (!v.ok) return v;
@@ -422,8 +500,22 @@ check(!!H, '探针 __card 未挂上（脚本初始化崩溃？）');
 if (!H) report();
 
 // ── ① 统一外观：表驱动骨架 + GB 面板同款分区 ──────────────────────
-check(el('cardType').options.length === 6, `卡类型应 6 项：${el('cardType').options.map((o) => o.value)}`);
+check(el('cardType').options.length === 7, `卡类型应 7 项：${el('cardType').options.map((o) => o.value)}`);
 check(H.card && H.card.id === '花键参数表', `默认卡类型：${H.card && H.card.id}`);
+// ② 卡名（下拉闭合态）：首项带 GB；⑤ 每张卡名带标准号，一眼看出哪套标准
+check(el('cardType').options[0].textContent === 'GB 花键参数表', `首项卡名应带 GB：${el('cardType').options[0].textContent}`);
+for (const o of el('cardType').options) {
+  check(/GB|ANSI|NF|DIN/.test(o.textContent), `卡名应带标准号：${o.textContent}`);
+}
+// ⑤ 截断兜底：hover title = 全名 + 口径（不展开也能确认）
+check((el('cardType').title || '').includes('GB 花键参数表'), `卡类型 title 应含全名：${el('cardType').title}`);
+check(html.includes('class="card typebar"'), '卡类型条应有 typebar 类（独占一行自适应）');
+check(html.indexOf('id="cardType"') < html.indexOf('id="splinePanel"'), '卡类型下拉应在面板之前');
+// ④ 版面：表单+读数同列、结果预览在另一列（不再左侧大片留白）
+check(html.includes('class="card mid formmid"'), '通用卡片中部应单列（读数在表单下方）');
+check(html.includes('class="card itemsCard"'), '结果预览卡应有 itemsCard 类（右侧栏）');
+check(html.indexOf('id="formMain"') < html.indexOf('id="cardReadout"'), '结果读数应在表单之后（同列）');
+check(html.indexOf('id="cardReadout"') < html.indexOf('id="items"'), '结果预览应在读数之后（右列）');
 check(H.panelOf(H.card) === 'spline', '默认应 spline 面板');
 check(el('splinePanel').style.display === '' && el('cardPanel').style.display === 'none',
   '默认只有 GB 面板可见');
@@ -623,6 +715,83 @@ check(String(lastPreviewModel.expr).startsWith('SPLINE IN M7.5 Z40'), `NF 表达
 check(H.formControl('a').value === '315' && H.formControl('m').value === '7.5' && H.formControl('z').value === '40',
   `NF 表达式应回填 A=315/m=7.5/z=40：A=${H.formControl('a').value} m=${H.formControl('m').value} z=${H.formControl('z').value}`);
 
+// ── ⑤b NF 外花键参数表（新卡）：7 字段 + 18 项 + 模板锚点 + 表达式 + 出表 ──
+el('cardType').value = 'NF外花键参数表';
+el('cardType')._fire('change', el('cardType'));
+await tick();
+check(H.card.id === 'NF外花键参数表', `NF 外卡：${H.card.id}`);
+check(el('cardHint').title.includes('p29') && el('cardHint').title.includes('h12'), `NF 外缺项说明进 title：${el('cardHint').title}`);
+const nfeSeq = el('formParams').children.filter((c) => c.id && c.id.startsWith('f_')).map((c) => c.id);
+check(nfeSeq.join(',') === 'f_a,f_m,f_z,f_centering,f_root,f_fit', `NF 外字段顺序：${nfeSeq}`);
+check(el('formMain').children.filter((c) => c.id && c.id.startsWith('f_')).map((c) => c.id).join(',') === 'f_expr',
+  'NF 外表达式应在中部主输入区');
+check(H.formControl('centering').value === 'flank', `NF 外缺省齿面定心：${H.formControl('centering').value}`);
+check(H.formControl('centering').options.map((o) => o.value).join(',') === 'flank,outer',
+  `NF 外定心清单应来自 nf_ext_card：${H.formControl('centering').options.map((o) => o.value)}`);
+check(H.formControl('fit').value === 'fixed' && H.formControl('fit').options.length === 4, 'NF 外配合四档默认固定');
+await H.refresh();
+check(lastPreviewModel && lastPreviewModel.card === 'NF外花键参数表', `NF 外预览模型：${JSON.stringify(lastPreviewModel)}`);
+check(el('items').innerHTML.split('class="row"').length - 1 === 18, `NF 外应 18 项：${el('items').innerHTML.slice(0, 100)}`);
+check(el('items').innerHTML.includes('298.5') && el('items').innerHTML.includes('129.871'), 'NF 外模板锚点 Dee/W 应在预览里');
+check(el('items').innerHTML.includes('滚齿') && el('items').innerHTML.includes('齿面定心'), 'NF 外应显示滚齿/齿面定心（外花键口径）');
+check(el('items').innerHTML.includes('-0.52') && el('items').innerHTML.includes('+0.052'), 'NF 外公差应含 h12/H7 数值');
+check(el('cardReadout').innerHTML.includes('p29') && el('cardReadout').innerHTML.includes('129.871'), 'NF 外读数应含 p29 与 W');
+// 配合类别 → 只动公法线公差
+H.formControl('fit').value = 'press';
+H.formControl('fit')._fire('change', H.formControl('fit'));
+await tick();
+check(lastPreviewModel.fit === 'press', `NF 外配合应进模型：${JSON.stringify(lastPreviewModel)}`);
+check(el('items').innerHTML.includes('+0.138'), '压配合 → 公法线上差变化');
+// 定心/齿根变体
+H.formControl('centering').value = 'outer';
+H.formControl('centering')._fire('change', H.formControl('centering'));
+await tick();
+check(el('items').innerHTML.includes('300') && el('items').innerHTML.includes('外径定心'), '外径定心 → Dee=300');
+H.formControl('centering').value = 'flank';
+H.formControl('root').value = 'fillet';
+H.formControl('root')._fire('change', H.formControl('root'));
+await tick();
+check(el('items').innerHTML.includes('279.795'), '圆齿根 → Die=279.795');
+H.formControl('root').value = 'flat';
+H.formControl('root')._fire('change', H.formControl('root'));
+await tick();
+// NF 外出表（无 at → 待放置；有 at → 直插）
+closed = false;
+el('ok').click();
+await tick();
+check(lastExportUrl.startsWith('/api/card_export'), `NF 外导出 URL：${lastExportUrl}`);
+check(lastExportModel.card === 'NF外花键参数表' && lastExportModel.at === null, `NF 外导出模型：${JSON.stringify(lastExportModel)}`);
+check(closed === true, 'NF 外出表成功后应自动关窗');
+closed = false;
+el('atX').value = '11'; el('atY').value = '12';
+el('ok').click();
+await tick();
+check(JSON.stringify(lastExportModel.at) === '[11,12]', `NF 外 at 应进模型：${JSON.stringify(lastExportModel.at)}`);
+el('atX').value = ''; el('atY').value = '';
+// 表外 A=210 → K/W 与公法线公差「—」
+H.formControl('a').value = '210';
+H.formControl('a')._fire('input', H.formControl('a'));
+await tick();
+check(el('items').innerHTML.includes('—'), 'NF 外表外 A=210 → 标缺「—」');
+H.formControl('a').value = '300';
+H.formControl('a')._fire('input', H.formControl('a'));
+await tick();
+// 表达式 → A/m/z 回填；KIND IN 冲突红框
+H.formControl('expr').value = 'SPLINE EX M7.5 Z38 ALPHA20 X0.8 BETA0 H30';
+H.formControl('expr')._fire('input', H.formControl('expr'));
+await tick();
+check(String(lastPreviewModel.expr).startsWith('SPLINE EX M7.5'), `NF 外表达式应进模型：${JSON.stringify(lastPreviewModel.expr)}`);
+check(H.formControl('a').value === '300' && H.formControl('m').value === '7.5' && H.formControl('z').value === '38',
+  `NF 外表达式应回填 A/m/z：A=${H.formControl('a').value} m=${H.formControl('m').value} z=${H.formControl('z').value}`);
+H.formControl('expr').value = 'SPLINE IN M7.5 Z38 ALPHA20 X0.8 BETA0 H30';
+H.formControl('expr')._fire('input', H.formControl('expr'));
+await tick();
+check((el('status').textContent || '').includes('KIND'), `NF 外 KIND 冲突应可见：${el('status').textContent}`);
+check(el('status').className === 'bad', `NF 外 KIND 错误应红框：${el('status').className}`);
+H.formControl('expr').value = '';
+H.formControl('expr')._fire('input', H.formControl('expr'));
+await tick();
+
 // ── ⑥ DIN 花键参数表：12 字段 + 26 项 + 缺口 ─────────────────────
 el('cardType').value = 'DIN花键参数表';
 el('cardType')._fire('change', el('cardType'));
@@ -689,7 +858,7 @@ check(el('status').className === 'bad' && String(el('status').style.background).
   `404 应红框：class=${el('status').className} bg=${el('status').style.background}`);
 forcePreview404 = false;
 
-// ── ⑧ 信息分层负断言：常显区不含口径/来源 ───────────────────────
+// ── ⑧ 信息分层负断言：常显区不包含口径/来源，也不得出现已删的顶部说明 ──
 const visibleText = html
   .replace(/<script[\s\S]*?<\/script>/g, ' ')
   .replace(/<style[\s\S]*?<\/style>/g, ' ')
@@ -697,6 +866,9 @@ const visibleText = html
 for (const bad of ['Table 4/5', '公式', '来源：', '未臆造']) {
   check(!visibleText.includes(bad), `常显区不应含口径/来源「${bad}」`);
 }
+// ① 顶部常显说明（用户红框）：“本期六张卡……”整句不得出现在可见文本
+check(!visibleText.includes('本期六张卡'), '顶部不应再出现「本期六张卡」常显说明');
+check(!visibleText.includes('GB 花键 · 齿轮 · ANSI 花键'), '顶部不应再出现卡清单一览');
 
 function report() {
   if (errors.length) {

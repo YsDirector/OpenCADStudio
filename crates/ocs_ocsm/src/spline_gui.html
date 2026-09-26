@@ -9,9 +9,21 @@
   body { font-family: "Helvetica Neue", "PingFang SC", "Microsoft YaHei", sans-serif;
          margin: 14px; background: #f4f6f8; color: #222; }
   h1 { font-size: 16px; margin: 0 0 10px; }
-  h1 .sub { font-size: 12px; color: #888; font-weight: 400; margin-left: 8px; }
-  .wrap { display: flex; flex-direction: column; gap: 10px; }
+  .wrap { display: grid; grid-template-columns: minmax(0, 1fr) minmax(240px, 350px);
+          gap: 10px; align-items: start; }
   .card { background: #fff; border: 1px solid #d9dee5; border-radius: 8px; padding: 10px 12px; }
+  /* 常显/底栏/状态跨两列；卡类型一行占满（⑤ 闭合态看全卡名） */
+  .card.top, .card.bot, #status, .hint { grid-column: 1 / -1; }
+  .typebar { grid-column: 1 / -1; display: grid; grid-template-columns: 68px minmax(0, 1fr);
+             gap: 8px; align-items: center; }
+  .typebar label { margin: 0; }
+  /* 面板本身不生成盒子：子卡片直接落进上面的两列网格 */
+  #splinePanel, #cardPanel { display: contents; }
+  /* 参数/表单在左列；结果预览在右列（④ 左右两列各自按内容自适应高度） */
+  .card.mid { grid-column: 1; align-self: start; }
+  .formmid { grid-template-columns: 1fr; }
+  .card.formmid { grid-template-columns: 1fr; }
+  .itemsCard { grid-column: 2; grid-row: 3; align-self: start; }
   label { display: block; font-size: 12px; color: #666; margin: 6px 0 2px; }
   select, input[type=number], input[type=text], textarea { padding: 4px 6px; border: 1px solid #c6ccd4;
            border-radius: 4px; font-size: 13px; box-sizing: border-box; background: #fff; }
@@ -41,7 +53,7 @@
   .readout { margin-top: 8px; font-size: 12.5px; color: #444; line-height: 1.9; }
   .readout b { color: #1a4fbf; font-weight: 600; }
   .unit { font-size: 12px; color: #888; }
-  #items { border: 1px solid #e2e6ea; border-radius: 6px; max-height: 260px; overflow: auto; }
+  #items { border: 1px solid #e2e6ea; border-radius: 6px; max-height: 62vh; overflow: auto; }
   #items .row { display: grid; grid-template-columns: 1fr 150px; gap: 8px;
                 padding: 3px 8px; font-size: 12.5px; border-bottom: 1px solid #f0f2f5; }
   #items .row:last-child { border-bottom: none; }
@@ -60,14 +72,12 @@
 </style>
 </head>
 <body>
-<h1>OCSM 智能卡片<span class="sub">本期六张卡：GB 花键 · 齿轮 · ANSI 花键（中/英）· NF 内花键 · DIN 5480</span></h1>
+<h1>OCSM 智能卡片</h1>
 
 <div class="wrap">
   <!-- ⓪ 卡类型（共用；表驱动。GB 花键是“专用面板”= 统一外观基准，其余卡共用下面的通用骨架） -->
-  <div class="card top">
-    <div class="params">
-      <label>卡类型</label><select id="cardType" title="智能卡片类型（表驱动；以后加表格/铭牌即多一项）"></select>
-    </div>
+  <div class="card typebar">
+    <label for="cardType">卡类型</label><select id="cardType" title="智能卡片类型（表驱动；以后加表格/铭牌即多一项）"></select>
   </div>
 
   <div id="splinePanel">
@@ -121,7 +131,7 @@
     <div class="card top">
       <div class="params" id="formParams"></div>
     </div>
-    <div class="card mid">
+    <div class="card mid formmid">
       <div id="formMain"></div>
       <div>
         <label>结果读数</label>
@@ -131,8 +141,8 @@
     </div>
   </div>
 
-  <!-- ③ 实时结果（公式/口径/来源在每行 title 悬停里） -->
-  <div class="card">
+  <!-- ③ 实时结果（公式/口径/来源在每行 title 悬停里；卡页下与表单并排） -->
+  <div class="card itemsCard">
     <label id="itemsLabel">结果预览</label>
     <div id="items"></div>
   </div>
@@ -150,7 +160,7 @@
   </div>
   <div id="status"></div>
   <div class="hint">选内/外 → 粘齿形表达式 → 定等级·配合·齿根 → 选或填量棒 Dp → 点「出表」回到图纸放置。
-    切到齿轮/ANSI/NF/DIN 卡后，字段由卡类型表统一下发（同一套外观与按钮位置）。</div>
+    切到其它卡后，字段由卡类型表统一下发（同一套外观与按钮位置）。</div>
 </div>
 
 <script src="/ocsm_gui_common.js"></script>
@@ -163,7 +173,7 @@ const TAB = new URLSearchParams(location.search).get("tab");
 const CARD_PARAM = new URLSearchParams(location.search).get("card");
 const el = (id) => document.getElementById(id);
 let OPT = null;      // /api/spline_options（卡类型表 + 体系 → 方向 → 等级/配合/齿根/21 项公式口径）
-let CARD = null;     // 当前卡片类型（表驱动；本期只有「花键参数表」）
+let CARD = null;     // 当前卡片类型（表驱动；清单由 /api/spline_options 下发）
 let SYS = null;      // 当前体系（本期只有 GB）
 let SIDE = null;     // 当前方向（内/外）
 let dpSel = null;    // null = 标准解；数字 = 点选/手填的 Dp
@@ -183,11 +193,15 @@ function controlId(key) { return 'f_' + key; }
 function dynamicOptions(src) {
   const an = (OPT && OPT.ansi_card) || {};
   const nc = (OPT && OPT.nf_card) || {};
+  const ne = (OPT && OPT.nf_ext_card) || {};
   if (src === 'ansi_profiles') {
     return (an.profiles || []).map((p) => ({ value: p.id, label: p.id + '（' + fmt(p.alpha) + '°）' }));
   }
   if (src === 'nf_centering') return (nc.centering || []).map((c) => ({ value: c.id, label: c.label }));
   if (src === 'nf_roots') return (nc.roots || []).map((c) => ({ value: c.id, label: c.label }));
+  // NF 外卡：定心/齿根清单属它自己（齿面定心公式与内卡不同，不能借用内卡文案）。
+  if (src === 'nf_ext_centering') return (ne.centering || []).map((c) => ({ value: c.id, label: c.label }));
+  if (src === 'nf_ext_roots') return (ne.roots || []).map((c) => ({ value: c.id, label: c.label }));
   return [];
 }
 // 重建当前卡的表单：顶部参数区 + 中部主输入区；标签/控件/提示一律照 form 字段清单。
@@ -319,7 +333,8 @@ function syncUi() {
   el("sideExt").title = (sideSpec("ext") || {}).title || "";
   // 卡类型 / 体系（都来自后端表；只有一个时置灰——不写额外文字）
   el("cardType").disabled = cardTypes().length < 2;
-  el("cardType").title = (CARD || {}).summary || "";
+  // ⑤ title 兜底：极窄屏闭合态被截断时，悬停仍能看全卡名 + 口径
+  el("cardType").title = CARD ? (CARD.label + " — " + (CARD.summary || "")) : "";
   el("sys").disabled = sysOptions().length < 2;
   el("sys").title = (SYS || {}).note || "";
   // 公差等级（4/5/6/7）
