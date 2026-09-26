@@ -120,7 +120,7 @@ impl ThreadSystem {
 /// 一行螺纹规格（内部统一 mm）。
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct ThreadSpec {
-    /// 显示名（如 `#1-64 UNC`、`G1/8`、`Tr8×1.5`、`M10×1.5`）。
+    /// 显示名（如 `#1-64 UNC`、`G1/8`、`Tr8×1.5`、`M10×1.25`）。CLI 也按这个名字查表。
     pub name: String,
     /// 大径 D/d（mm）。
     pub d: f64,
@@ -341,6 +341,130 @@ pub fn lookup(
             ))
         }
     }
+}
+
+// ── 规格名查表（GUI 下拉名 ↔ CLI 字面量；表 `name` 是唯一事实来源）──────────
+
+/// 一次「按名查表」命中。
+#[derive(Debug, Clone, Copy)]
+pub struct NameHit {
+    /// 命中行所属组 key（UN 的 unc/unf…、ACME 的 general/stub…）。
+    /// CLI 需把它回写 `thread_group`，保证 `resolve()` 的数值查表走同一行。
+    pub group: &'static str,
+    pub spec: &'static ThreadSpec,
+}
+
+/// 按名查表的失败原因（具体用户文案由调用方拼，不在这里造）。
+#[derive(Debug, Clone)]
+pub enum NameError {
+    /// 该体系里没有这个名字（含前缀容错后仍无）。
+    NotFound,
+    /// 归一后同时命中多行（候选显示名）。
+    Ambiguous(Vec<String>),
+}
+
+/// 规格名比较键：小写、`×`/`X` → `x`、去掉全部空白。
+/// 只用于匹配，**不改显示**；匹配容错全部由表 `name` 派生，不另造别名表。
+fn name_key(s: &str) -> String {
+    s.chars()
+        .filter(|c| !c.is_whitespace())
+        .map(|c| match c {
+            '×' | 'X' | 'x' => 'x',
+            other => other.to_ascii_lowercase(),
+        })
+        .collect()
+}
+
+/// 名字去掉「体系代号前缀」后的键（仅 G/R/NPT/Tr：`G1/8` → `1/8`、`Tr8×1.5` → `8x1.5`）；
+/// 这样 CLI 写 `G 1/8` / `NPT 1/2` / `Tr 8x1.5`（体系关键字 + 尺寸）也能命中。
+/// M/UN/ACME 不适用：M 的名字必须带 `M`（防裸 `10`）、UN/ACME 的牙型后缀在名字里另处理。
+fn bare_key<'a>(sys: ThreadSystem, full: &'a str) -> Option<&'a str> {
+    if !matches!(
+        sys,
+        ThreadSystem::G | ThreadSystem::R | ThreadSystem::Npt | ThreadSystem::Tr
+    ) {
+        return None;
+    }
+    let code = sys.code();
+    let head = full.get(..code.len())?;
+    if head.eq_ignore_ascii_case(code) {
+        full.get(code.len()..)
+    } else {
+        None
+    }
+}
+
+/// 单行名字是否命中：`exact` 层 = 全等；非 exact 层 = 前缀（允许省略牙型后缀，如
+/// `1/4-20` 命 `1/4-20 UNC`）；另对 G/R/NPT/Tr 允许省略体系代号前缀。
+fn row_matches(sys: ThreadSystem, name: &str, key: &str, exact: bool) -> bool {
+    let full = name_key(name);
+    let hit = |k: &str| {
+        if exact {
+            k == key
+        } else {
+            k.starts_with(key)
+        }
+    };
+    hit(&full) || bare_key(sys, &full).is_some_and(hit)
+}
+
+/// 在**一个体系内**按显示名查规格（GUI 下拉里那个 `name`）：
+/// - 归一：大小写 / 空格 / `×`=x 等价；
+/// - 先全等、再前缀（前缀层允许 `1/4-20`、`ACME 1/4-16` 这类省略后缀写法）；
+/// - 同层多命中时优先 `prefer_group`（当前牙型系列）；仍多则 `NameError::Ambiguous`。
+///
+/// **表外不插值**：这不是数值解析（数值路径仍是 `hole::parse_program` 的 `公称/P`）。
+pub fn lookup_name(
+    sys: ThreadSystem,
+    prefer_group: Option<&str>,
+    text: &str,
+) -> Result<NameHit, NameError> {
+    let key = name_key(text);
+    if key.is_empty() {
+        return Err(NameError::NotFound);
+    }
+    let prefer = prefer_group.filter(|g| !g.is_empty());
+    for exact in [true, false] {
+        let mut pref: Vec<NameHit> = Vec::new();
+        let mut rest: Vec<NameHit> = Vec::new();
+        for g in &table(sys).groups {
+            for r in &g.rows {
+                if row_matches(sys, &r.name, &key, exact) {
+                    let hit = NameHit {
+                        group: g.key,
+                        spec: r,
+                    };
+                    if prefer == Some(g.key) {
+                        pref.push(hit);
+                    } else {
+                        rest.push(hit);
+                    }
+                }
+            }
+        }
+        let pool = if pref.is_empty() { rest } else { pref };
+        match pool.len() {
+            0 => {}
+            1 => return Ok(pool[0]),
+            _ => {
+                return Err(NameError::Ambiguous(
+                    pool.iter().map(|h| h.spec.name.clone()).collect(),
+                ))
+            }
+        }
+    }
+    Err(NameError::NotFound)
+}
+
+/// 全库按名检索（跨体系，当前体系除外）：CLI 用它把 `G 1/4-20` 这类
+/// **体系与规格不匹配**点名为「这是 UN 的规格」。命中不唯一/歧义的体系跳过。
+pub fn find_name_elsewhere(sys: ThreadSystem, text: &str) -> Vec<(ThreadSystem, NameHit)> {
+    ThreadSystem::ALL
+        .iter()
+        .copied()
+        .filter(|s| *s != sys)
+        .filter_map(|s| lookup_name(s, None, text).ok().map(|h| (s, h)))
+        .collect()
 }
 
 #[cfg(test)]
@@ -629,6 +753,100 @@ mod tests {
         assert!(lookup(ThreadSystem::Acme, None, 6.35, None)
             .unwrap_err()
             .contains("多行"));
+    }
+
+    /// 按名查表：CLI 常见书写变体全部命中 GUI 下拉同名行（表 `name` 唯一事实来源）。
+    #[test]
+    fn lookup_name_accepts_cli_variants() {
+        let g = |text: &str| lookup_name(ThreadSystem::G, Some("standard"), text).unwrap();
+        for text in ["G1/8", "g 1/8", "G 1/8", "1/8"] {
+            assert_eq!(g(text).spec.name, "G1/8", "{text}");
+        }
+        assert_eq!(g("1 1/2").spec.name, "G1 1/2", "体系代号可省");
+        let un = |text: &str, group: Option<&str>| {
+            lookup_name(ThreadSystem::Un, group, text).unwrap()
+        };
+        assert_eq!(un("1/4-20", Some("unc")).spec.name, "1/4-20 UNC", "省牙型后缀");
+        assert_eq!(un("1/4-20 UNC", Some("unc")).spec.name, "1/4-20 UNC");
+        assert_eq!(un("#1-64", Some("unc")).spec.name, "#1-64 UNC");
+        assert_eq!(un("1 1/4-12 UNF", None).spec.name, "1 1/4-12 UNF");
+        assert_eq!(un("1 1/4-12", None).group, "unf", "跨组前缀命中并归位");
+        assert_eq!(un("5/16-24", Some("unc")).group, "unf", "当前组无则全体系找");
+
+        let r = lookup_name(ThreadSystem::R, Some("standard"), "R1/8").unwrap();
+        assert_eq!(r.spec.name, "R1/8");
+        assert_eq!(
+            lookup_name(ThreadSystem::R, Some("standard"), "1/8").unwrap().spec.name,
+            "R1/8",
+            "R 也可省代号"
+        );
+        let npt = lookup_name(ThreadSystem::Npt, Some("standard"), "1/2").unwrap();
+        assert_eq!(npt.spec.name, "NPT1/2");
+        assert_eq!(
+            lookup_name(ThreadSystem::Npt, None, "NPT1 1/4").unwrap().spec.name,
+            "NPT1 1/4"
+        );
+
+        let gen = lookup_name(ThreadSystem::Acme, Some("general"), "1/4-16").unwrap();
+        assert_eq!(gen.spec.name, "1/4-16 ACME");
+        let stub = lookup_name(ThreadSystem::Acme, Some("stub"), "1/4-16").unwrap();
+        assert_eq!(stub.spec.name, "1/4-16 Stub ACME", "同层按当前组优先");
+        assert_eq!(stub.spec.d1, 5.398);
+        assert_eq!(gen.spec.d1, 4.762);
+
+        for text in ["Tr8×1.5", "Tr8x1.5", "8×1.5", "tr8x1.5"] {
+            let h = lookup_name(ThreadSystem::Tr, Some("standard"), text).unwrap();
+            assert_eq!(h.spec.name, "Tr8×1.5", "{text}");
+        }
+
+        // M（ISO 724）：名字必须带 M（裸 10 不命中，防误收）
+        assert_eq!(
+            lookup_name(ThreadSystem::Iso724, Some("coarse"), "M10").unwrap().spec.name,
+            "M10"
+        );
+        let fine = lookup_name(ThreadSystem::Iso724, Some("fine"), "M10×1.25").unwrap();
+        assert_eq!(fine.spec.name, "M10×1.25");
+        assert_eq!(
+            lookup_name(ThreadSystem::Iso724, Some("fine"), "M10x1.25").unwrap().spec.name,
+            "M10×1.25"
+        );
+        // M10×1.5 不在 ISO 724 表内（1.5 就是 M10 粗牙螺距）——
+        // CLI 的 M 数值分支照旧收，名字查表这里明确不命中（表外不插值）。
+        assert!(matches!(
+            lookup_name(ThreadSystem::Iso724, None, "M10×1.5"),
+            Err(NameError::NotFound)
+        ));
+        assert!(matches!(
+            lookup_name(ThreadSystem::Iso724, None, "10"),
+            Err(NameError::NotFound)
+        ));
+    }
+
+    /// 按名查表：未知 / 歧义 / 跨体系冲突（CLI 报错文案的依据）。
+    #[test]
+    fn lookup_name_reports_unknown_ambiguous_and_conflict() {
+        assert!(matches!(
+            lookup_name(ThreadSystem::G, Some("standard"), "9/16"),
+            Err(NameError::NotFound)
+        ));
+        match lookup_name(ThreadSystem::Un, None, "1/4") {
+            Err(NameError::Ambiguous(names)) => {
+                assert!(names.len() >= 2, "应列出多个候选：{names:?}");
+                assert!(names.iter().any(|n| n == "1/4-20 UNC"), "{names:?}");
+            }
+            other => panic!("1/4 应歧义：{other:?}"),
+        }
+        // 给当前牙型系列（UNC）则不歧义
+        assert_eq!(
+            lookup_name(ThreadSystem::Un, Some("unc"), "1/4").unwrap().spec.name,
+            "1/4-20 UNC"
+        );
+        // G 体系没有 1/4-20 → 全库检索点名 UN
+        let elsewhere = find_name_elsewhere(ThreadSystem::G, "1/4-20");
+        assert_eq!(elsewhere.len(), 1, "{elsewhere:?}");
+        assert_eq!(elsewhere[0].0, ThreadSystem::Un);
+        assert_eq!(elsewhere[0].1.spec.name, "1/4-20 UNC");
+        assert!(find_name_elsewhere(ThreadSystem::G, "9/16").is_empty());
     }
 
     /// 数据内部一致：所有行 d>0、d1>0、drill>0、名字不重复（同组内）。

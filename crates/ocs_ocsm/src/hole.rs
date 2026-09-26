@@ -1225,7 +1225,8 @@ pub fn ocsm_ready(doc: &ocs_plugin_api::host::acadrust::CadDocument) -> Result<(
 
 /// 命令行用法（一行直插）。
 pub const USAGE: &str = "OCSMHOLE / DK：\
-`OCSMHOLE [简单孔|螺纹孔|沉头孔|埋头孔] [带螺纹|无螺纹] [公制|UN/UNC/UNF/UNEF|G/BSPP|R/BSPT|NPT|ACME|矮牙|Tr] [钻孔 Ø8.5|自定义 孔径8.5|间隙 中等装配] [M10|公称6.35 P1.058] [P1.5] [推荐70.1|70.2] [H18] [L15] [盲孔|贯通] [全长] [6H|6G] [view 侧视图|俯视图|双视图] [at x,y] [rot 度]`";
+`OCSMHOLE [简单孔|螺纹孔|沉头孔|埋头孔] [带螺纹|无螺纹] [公制|UN/UNC/UNF/UNEF|G/BSPP|R/BSPT|NPT|ACME|矮牙|Tr] [钻孔 Ø8.5|自定义 孔径8.5|间隙 中等装配] [规格名 M10|M10×1.25|G1/8|1/4-20|NPT1/2|Tr8×1.5|ACME 1/4-16|公称6.35 P1.058] [P1.5] [推荐70.1|70.2] [H18] [L15] [盲孔|贯通] [全长] [6H|6G] [view 侧视图|俯视图|双视图] [at x,y] [rot 度]`\
+（规格名直接查 GUI 同一份表 `name`：G 1/8、1/4-20、NPT1/2、Tr8x1.5 等都收；数值写法 `公称6.35 P1.058` 照旧）";
 
 /// 取关键字参数：`H=18` / `H18` / `H 18` 都收（`keys` 按长到短放）。
 fn take_arg(tokens: &[String], i: &mut usize, t: &str, keys: &[&str]) -> Result<String, String> {
@@ -1248,6 +1249,53 @@ fn take_arg(tokens: &[String], i: &mut usize, t: &str, keys: &[&str]) -> Result<
         .get(*i)
         .cloned()
         .ok_or_else(|| format!("`{t}` 后面缺数值"))
+}
+
+/// 是否“像规格名”：带数字或 `#`/`×`/`/` 的 token 才试查表；纯词仍是「不识别的参数」。
+fn looks_like_spec_name(t: &str) -> bool {
+    t.chars().any(|c| c.is_ascii_digit()) || t.contains(['#', '×', '*', '/'])
+}
+
+/// 体系内可选规格示例（未命中报错用；优先当前牙型系列，取前 `n` 个名字）。
+fn spec_name_samples(sys: ThreadSystem, group: Option<&str>, n: usize) -> String {
+    let t = thread::table(sys);
+    let mut names: Vec<String> = Vec::new();
+    for g in &t.groups {
+        if group.is_some_and(|want| want != g.key) {
+            continue;
+        }
+        names.extend(g.rows.iter().take(n).map(|r| r.name.clone()));
+        if names.len() >= n {
+            break;
+        }
+    }
+    names.truncate(n);
+    names.join("、")
+}
+
+/// 多词规格名查表（表 `name` 唯一事实来源；见 `thread::lookup_name`）：
+/// 先试最长（`1/4-20 UNC`、`1 1/4-12 UNF`、`NPT1 1/4`），未命中由调用方回落既有报错。
+/// 返回 (命中, 用掉 token 数)。
+fn spec_name_lookup(
+    tokens: &[String],
+    i: usize,
+    m: &HoleModel,
+) -> Result<Option<(thread::NameHit, usize)>, String> {
+    let max = (tokens.len() - i).min(4);
+    for used in (1..=max).rev() {
+        let text = tokens[i..i + used].join(" ");
+        match thread::lookup_name(m.thread_system, m.thread_group.as_deref(), &text) {
+            Ok(hit) => return Ok(Some((hit, used))),
+            Err(thread::NameError::Ambiguous(names)) => {
+                return Err(format!(
+                    "规格名「{text}」命中多行（{}）—— 请写全（带牙型系列/螺距）",
+                    names.join("、")
+                ))
+            }
+            Err(thread::NameError::NotFound) => {}
+        }
+    }
+    Ok(None)
 }
 
 /// 解析命令行（英文/中文关键字都收）。
@@ -1314,7 +1362,9 @@ pub fn parse_program(text: &str) -> Result<HoleModel, String> {
             "标准螺纹" | "粗牙" | "standard" => m.subtype = HoleSubtype::Standard,
             "细牙" | "细牙螺纹" | "fine" => m.subtype = HoleSubtype::Fine,
             // 螺纹体系 / 牙型系列（GUI「标准」+「子类型」的 CLI 口径）。
-            // 规格用 `公称6.35 P1.058`（mm；英制 P=25.4/TPI）给，表外报错。
+            // 规格两种写法（等价）：① 直接写表 `name`（G1/8 / 1/4-20 / Tr8×1.5…，
+            // 未命中才报错，见 fallback 的规格名查表）；② 数值 `公称6.35 P1.058`
+            // （mm；英制 P=25.4/TPI），表外报错。两种都保留。
             "公制" | "iso724" | "iso" => m.thread_system = ThreadSystem::Iso724,
             "统一" | "un" | "unified" => {
                 m.thread_system = ThreadSystem::Un;
@@ -1508,7 +1558,57 @@ pub fn parse_program(text: &str) -> Result<HoleModel, String> {
                 m.fit = lower.to_ascii_uppercase();
             }
             other => {
-                return Err(format!("不识别的参数「{other}」（用法：{USAGE}）"))
+                // 先试「规格名」查表（GUI 下拉那个 `name`；表内唯一事实来源）：
+                // 命中等价于 `公称 d P`；未命中回落既有数值路径/报错，老写法一律不受影响。
+                if !looks_like_spec_name(t) {
+                    return Err(format!("不识别的参数「{other}」（用法：{USAGE}）"));
+                }
+                match spec_name_lookup(&tokens, i, &m)? {
+                    Some((hit, used)) => {
+                        m.thread_group = Some(hit.group.to_string());
+                        m.d = hit.spec.d;
+                        m.pitch = Some(hit.spec.p);
+                        size_seen = true;
+                        i += used - 1; // 循环尾还有 +1，净推进 used 个 token
+                    }
+                    None => {
+                        // 未命中：先看是不是别的体系的规格（点名体系冲突），否则报未知规格名 + 示例。
+                        let max = (tokens.len() - i).min(4);
+                        let mut conflict: Option<(String, Vec<(ThreadSystem, thread::NameHit)>)> =
+                            None;
+                        for used in 1..=max {
+                            let text = tokens[i..i + used].join(" ");
+                            let elsewhere = thread::find_name_elsewhere(m.thread_system, &text);
+                            if !elsewhere.is_empty() {
+                                conflict = Some((text, elsewhere));
+                                break;
+                            }
+                        }
+                        if let Some((text, elsewhere)) = conflict {
+                            let conflicts: Vec<String> = elsewhere
+                                .iter()
+                                .map(|(sys, hit)| format!("{} 的 {}", sys.code(), hit.spec.name))
+                                .collect();
+                            return Err(format!(
+                                "体系与规格不匹配：{} 体系里没有「{text}」—— 这是 {}；\
+                                 请先写对体系，或改用本体系规格（示例：{}）",
+                                m.thread_system.code(),
+                                conflicts.join("、"),
+                                spec_name_samples(
+                                    m.thread_system,
+                                    m.thread_group.as_deref(),
+                                    6
+                                ),
+                            ));
+                        }
+                        let text = tokens[i].clone();
+                        return Err(format!(
+                            "未知规格名「{text}」（{} 体系）—— 表内示例：{}",
+                            m.thread_system.code(),
+                            spec_name_samples(m.thread_system, m.thread_group.as_deref(), 6),
+                        ));
+                    }
+                }
             }
         }
         i += 1;
@@ -1854,6 +1954,31 @@ mod tests {
             d,
             pitch: p,
             ..Default::default()
+        }
+    }
+
+    /// `resolve(parse(...))` 一步到位（CLI 测试用）。
+    fn values(program: &str) -> HoleValues {
+        let m = parse_program(program).unwrap_or_else(|e| panic!("{program} 解析失败：{e}"));
+        resolve(&m).unwrap_or_else(|e| panic!("{program} 解算失败：{e}"))
+    }
+
+    /// 「按名查表 == 按数值等价」的逐值断言（含体系与管螺纹长度列）。
+    fn same_values(a: &HoleValues, b: &HoleValues, tag: &str) {
+        assert_eq!(a.size_name, b.size_name, "{tag}: size_name");
+        assert_eq!(a.system, b.system, "{tag}: system");
+        assert_eq!(a.tpi, b.tpi, "{tag}: tpi");
+        assert_eq!(a.gauge_len, b.gauge_len, "{tag}: gauge_len");
+        assert_eq!(a.eff_len, b.eff_len, "{tag}: eff_len");
+        for (x, y, what) in [
+            (a.major, b.major, "major"),
+            (a.minor, b.minor, "minor"),
+            (a.pitch, b.pitch, "pitch"),
+            (a.base_d, b.base_d, "base_d"),
+            (a.thread_len, b.thread_len, "thread_len"),
+            (a.hole_depth, b.hole_depth, "hole_depth"),
+        ] {
+            assert!((x - y).abs() < 1e-9, "{tag}: {what} {x} != {y}");
         }
     }
 
@@ -2323,6 +2448,101 @@ mod tests {
 
         assert!(parse_program("M10 不认识的参数").is_err());
         assert!(parse_program("").is_err());
+    }
+
+    /// CLI 规格名查表（与 GUI 下拉同一份表 `name`）：
+    /// ● 7 类体系各 ≥2 个字面量：逐条断言「按名 == 按数值」（同值）；
+    /// ● 变体容错（空格 / ASCII x / 省牙型后缀 / 省体系代号 / 大小写）；
+    /// ● 报错具体（未知规格名 + 示例；体系不匹配点名冲突；歧义列出候选）；
+    /// ● 回归：`公称/P`、`M10`、`P1.5`、`盲孔/贯通` 等老写法逐条仍通。
+    #[test]
+    fn parse_program_accepts_thread_spec_names() {
+        // ① 7 类体系 × 2 个字面量，name 写法 == 数值（公称/P）写法
+        let pairs: [(&str, &str); 14] = [
+            ("螺纹孔 M10", "螺纹孔 公称10 P1.5"),
+            ("螺纹孔 M10×1.25", "螺纹孔 公称10 P1.25"),
+            ("螺纹孔 UNC 1/4-20", "螺纹孔 UN 公称6.35 P1.27"),
+            ("螺纹孔 UNC #1-64", "螺纹孔 UN 公称1.8542 P0.396875"),
+            ("螺纹孔 G G1/8", "螺纹孔 G 公称9.728 P0.907143"),
+            ("螺纹孔 G G1 1/2", "螺纹孔 G 公称47.803 P2.309091"),
+            ("螺纹孔 R R1/8", "螺纹孔 R 公称9.728 P0.907143"),
+            ("螺纹孔 R R6", "螺纹孔 R 公称163.83 P2.309091"),
+            ("螺纹孔 NPT NPT1/2", "螺纹孔 NPT 公称21.224 P1.814286"),
+            ("螺纹孔 NPT NPT1 1/4", "螺纹孔 NPT 公称41.985 P2.208696"),
+            ("螺纹孔 ACME 1/4-16", "螺纹孔 ACME 公称6.35 P1.5875"),
+            ("螺纹孔 矮牙 1/4-16", "螺纹孔 矮牙 公称6.35 P1.5875"),
+            ("螺纹孔 Tr Tr8×1.5", "螺纹孔 Tr 公称8 P1.5"),
+            ("螺纹孔 Tr Tr10×2", "螺纹孔 Tr 公称10 P2"),
+        ];
+        for (name, numeric) in pairs {
+            same_values(&values(name), &values(numeric), name);
+            // 名字命中的模型能一直走到出图元（纯解析层之外的 build 无分支差异）
+            build(&parse_program(name).unwrap())
+                .unwrap_or_else(|e| panic!("{name} 出图失败：{e}"));
+        }
+
+        // ② 变体容错：同一行不同写法互相等价
+        let g18 = values("螺纹孔 G G1/8");
+        for variant in [
+            "DK 螺纹孔 带螺纹 G G1/8",
+            "螺纹孔 G 1/8",
+            "螺纹孔 管用平行 g1/8",
+        ] {
+            same_values(&values(variant), &g18, variant);
+        }
+        let unc = values("螺纹孔 UNC 1/4-20");
+        for variant in [
+            "螺纹孔 UN 1/4-20",
+            "螺纹孔 UN 1/4-20 UNC",
+            "螺纹孔 un 1/4-20 Unc",
+        ] {
+            same_values(&values(variant), &unc, variant);
+        }
+        let npt = values("螺纹孔 NPT NPT1/2");
+        for variant in ["螺纹孔 NPT 1/2", "螺纹孔 NPT NPT1/2"] {
+            same_values(&values(variant), &npt, variant);
+        }
+        let tr = values("螺纹孔 Tr Tr8×1.5");
+        for variant in ["螺纹孔 Tr Tr8x1.5", "螺纹孔 Tr 8x1.5", "螺纹孔 Tr 8×1.5"] {
+            same_values(&values(variant), &tr, variant);
+        }
+        // 矮牙 = stub 组（与 general 的底孔不同；名字带 Stub 也命中同组）
+        let stub = values("螺纹孔 矮牙 1/4-16");
+        for variant in ["螺纹孔 矮牙 1/4-16 Stub ACME", "螺纹孔 Stub 1/4-16"] {
+            same_values(&values(variant), &stub, variant);
+        }
+        // 按名命中的组会回写到模型（保证 resolve 走同一行）
+        let m = parse_program("螺纹孔 UN 5/16-24").unwrap();
+        assert_eq!(m.thread_group.as_deref(), Some("unf"), "按名跨组归位");
+        assert_eq!((m.d, m.pitch), (7.9375, Some(1.058333)));
+
+        // ③ 报错具体
+        let e = parse_program("螺纹孔 G 9/16").unwrap_err();
+        assert!(e.contains("未知规格名「9/16」"), "{e}");
+        assert!(e.contains("G1/8"), "应给体系内示例：{e}");
+        let e = parse_program("螺纹孔 G 1/4-20").unwrap_err();
+        assert!(e.contains("体系与规格不匹配") && e.contains("UN"), "{e}");
+        assert!(e.contains("1/4-20 UNC"), "应点名冲突行：{e}");
+        let e = parse_program("螺纹孔 G G1/").unwrap_err();
+        assert!(e.contains("命中多行"), "{e}");
+        let e = parse_program("螺纹孔 1/4-20 UNC").unwrap_err();
+        assert!(e.contains("体系与规格不匹配") && e.contains("UN"), "{e}");
+        // 非规格词的旧报错不变
+        assert!(parse_program("M10 不认识的参数")
+            .unwrap_err()
+            .contains("不识别的参数"));
+
+        // ④ 回归：老写法仍可用（数值 / M 字面量 / P / 盲孔贯通）
+        let old = values("螺纹孔 G 公称9.728 P0.907143");
+        assert_eq!(old.size_name, "G1/8");
+        let old = values("螺纹孔 M10 P1.5");
+        assert_eq!(old.size_name, "M10");
+        let old = values("螺纹孔 M10 盲孔 H18 L15");
+        assert!((old.hole_depth - 18.0).abs() < 1e-9 && (old.thread_len - 15.0).abs() < 1e-9);
+        let old = values("螺纹孔 M10 贯通 H20");
+        assert!((old.hole_depth - 20.0).abs() < 1e-9 && old.cone_height == 0.0);
+        let old = values("螺纹孔 UNC 公称6.35 P1.27");
+        assert_eq!(old.size_name, "1/4-20 UNC");
     }
 
     /// 放置：圆/弧随平移/旋转走。
