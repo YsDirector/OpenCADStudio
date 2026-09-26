@@ -230,7 +230,9 @@ const OPTIONS = {
 let lastPreviewModel = null;
 let lastExportModel = null;
 let lastExportUrl = '';
+let lastReportModel = null;
 let forcePreview404 = false;
+let forceReportError = false;
 const consoleErrors = [];
 const realError = console.error.bind(console);
 console.error = (...a) => { consoleErrors.push(a.join(' ')); };
@@ -438,6 +440,15 @@ global.fetch = async (u, opts = {}) => {
     if (String(model.card).startsWith('DIN')) return dinPreview(model);
     return jsonResp({ ok: false, error: 'stub 只支持新卡' }, 400);
   }
+  if (url.startsWith('/api/card_report')) {
+    lastReportModel = JSON.parse(opts.body || '{}');
+    if (forceReportError) return jsonResp({ ok: false, error: 'stub 计算书错误' }, 400);
+    return jsonResp({
+      ok: true,
+      title: `${lastReportModel.card}计算书`,
+      markdown: `# ${lastReportModel.card} 计算书\n\n- 同源：与卡片同一份计算\n\n| 项 | 值 |\n|---|---|\n| 模数 m | 3 |\n`,
+    });
+  }
   if (url.startsWith('/api/card_export')) {
     lastExportUrl = url;
     lastExportModel = JSON.parse(opts.body || '{}');
@@ -577,6 +588,11 @@ check(html.includes('<div class="card mid">') && html.includes('<div class="card
 check(!html.includes('id="gearPanel"') && !html.includes('id="ansiPanel"') && !html.includes('id="nfPanel"') && !html.includes('id="dinPanel"'),
   '不应再给每卡写一套 HTML 面板');
 check(html.includes('id="cardHint"') && html.includes('id="cardReadout"'), '通用面板缺提示/读数位');
+// ①b 计算书（与卡片同源）：按钮 + 面板 + 摘要表落图纸入口
+check(html.includes('id="report"') && html.includes('id="reportCard"') && html.includes('id="reportMd"'),
+  '缺计算书按钮/面板');
+check(html.includes('id="reportSummary"') && html.includes('同一份计算'),
+  '摘要表按钮应声明同源（title/说明）');
 
 // ── ② 切到齿轮卡：字段顺序/控件类型 + 19 项 + 配对齿数影响中心距 ──
 el('cardType').value = '齿轮参数表';
@@ -625,6 +641,29 @@ el('ok').click();
 await tick();
 check(JSON.stringify(lastExportModel.at) === '[10,20]', `at 应进模型：${JSON.stringify(lastExportModel.at)}`);
 el('atX').value = ''; el('atY').value = '';
+
+// ── ⑧ 计算书（与预览同一份模型）+ 摘要表落图纸（同一卡导出）+ 红字错误 ──
+closed = false; // 上一次出表已置 true；计算书/摘要表都不应关窗
+el('report').click();
+await tick();
+check(lastReportModel && lastReportModel.card === '齿轮参数表', `计算书模型应同卡：${JSON.stringify(lastReportModel)}`);
+check(el('reportCard').style.display === '', '计算书面板应常显（不自动关窗）');
+check((el('reportMd').textContent || '').includes('# 齿轮参数表 计算书'), `报告正文应进面板：${el('reportMd').textContent}`);
+check((el('reportTitle').textContent || '').includes('齿轮'), `报告标题：${el('reportTitle').textContent}`);
+check(closed === false, '生成计算书不应关窗');
+el('reportSummary').click();
+await tick();
+check(lastExportUrl.startsWith('/api/card_export'), `摘要表导出 URL：${lastExportUrl}`);
+check(lastExportModel && lastExportModel.card === '齿轮参数表', `摘要表模型同卡：${JSON.stringify(lastExportModel)}`);
+check(el('reportCard').style.display === '', '摘要表落图纸后面板应保留（可继续看报告）');
+forceReportError = true;
+el('report').click();
+await tick();
+check(el('status').className === 'bad' && (el('status').textContent || '').includes('stub 计算书错误'),
+  `计算书错误应红框可见：${el('status').className}/${el('status').textContent}`);
+forceReportError = false;
+el('reportClose').click();
+check(el('reportCard').style.display === 'none', '关闭按钮应隐藏报告面板');
 
 // ── ③ ANSI 内·纯中文：齿廓（选项表下发）+ P/z + 17 项（面板不再放方向）──
 el('cardType').value = 'ANSI花键参数表_中文';

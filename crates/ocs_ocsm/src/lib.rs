@@ -22,6 +22,7 @@ mod bom;
 mod ansi_table;
 mod card;
 mod card_expr;
+mod card_report;
 mod centerline;
 mod detail;
 mod detail_clip;

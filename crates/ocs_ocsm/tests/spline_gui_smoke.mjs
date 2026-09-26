@@ -411,7 +411,7 @@ for (const bad of [
 ]) {
   check(!visibleText.includes(bad), `常显区不应含公式/口径/来源「${bad}」`);
 }
-check(visibleText.includes('选内/外'), `常显区应保留操作引导：${visibleText.slice(0, 200)}`);
+check(visibleText.includes('点「计算书」') && visibleText.includes('出表'), `常显区应保留操作引导：${visibleText.slice(0, 200)}`);
 check(html.includes('title="智能卡片类型（表驱动'), '卡类型口径应进原生 title');
 check(el('pinLabel').title.includes("stub D'_Ri 公式"), `量棒公式应从选项表进 title：${el('pinLabel').title}`);
 check(el('grade').title.includes('stub 等级口径'), `等级口径应进 title：${el('grade').title}`);

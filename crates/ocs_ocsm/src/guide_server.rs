@@ -656,6 +656,7 @@ fn route(
         ("POST", _t) if _t.starts_with("/api/spline_export") => api_spline_export(body, &sender!()),
         // 通用卡片端点（卡类型表驱动分派：花键/齿轮/ANSI）；GUI 走这两个。
         ("POST", "/api/card_preview") => api_card_preview(body),
+        ("POST", "/api/card_report") => api_card_report(body),
         ("POST", _t) if _t.starts_with("/api/card_export") => api_card_export(body, &sender!()),
         // 前缀守卫：GUI 的 POST 带 `?tab=N`（查询串不能拿字面量比，否则落 `_ =>` 404；
         // 与同表的 `/api/bom_export` 等一致）。`tab` 由 `sender!()` → `router.resolve(target, body)`
@@ -5303,7 +5304,16 @@ fn api_card_preview(body: &[u8]) -> (u16, &'static str, String) {
     }
 }
 
-fn apply_card_preview(body: &[u8]) -> Result<String, String> {
+/// `POST /api/card_report`：卡片计算书（与卡片同一份计算；纯计算，不碰图纸）。
+fn api_card_report(body: &[u8]) -> (u16, &'static str, String) {
+    let json = "application/json; charset=utf-8";
+    match crate::card_report::build_report_json(body) {
+        Ok(s) => (200, json, s),
+        Err(e) => (400, json, serde_json::json!({"ok": false, "error": e}).to_string()),
+    }
+}
+
+pub(crate) fn apply_card_preview(body: &[u8]) -> Result<String, String> {
     let (v, card) = card_model_value(body)?;
     let out = match card.renderer {
         crate::card::CardRenderer::SplineTable => {
@@ -15837,6 +15847,14 @@ mod weld_tests {
         let v: serde_json::Value = serde_json::from_str(&j).unwrap();
         assert_eq!(v["ok"], true, "{j}");
         assert_eq!(v["items"].as_array().unwrap().len(), 21);
+        // ── 计算书端点：与卡片同一份计算（同源），GB 卡给 21 项 + 量棒口径 ──
+        let j = http_req(server.port, "POST", "/api/card_report", &spline.to_string());
+        let v: serde_json::Value = serde_json::from_str(&j).unwrap();
+        assert_eq!(v["ok"], true, "{j}");
+        assert!(v["title"].as_str().unwrap().contains("GB 花键参数表"), "{j}");
+        let md = v["markdown"].as_str().unwrap();
+        assert!(md.contains("spline_tol::compute()") && md.contains("## 2. 参数表（21 项"), "{md}");
+        assert!(md.contains("同一份计算"), "{md}");
 
         // ── 齿轮卡预览：表达式反解交齿轮引擎；缺项「—」──
         let gear = serde_json::json!({
@@ -15927,6 +15945,24 @@ mod weld_tests {
         assert_eq!(v["fields"]["z"], 20);
         assert_eq!(v["fields"]["profile"], crate::invol_spline::ANSI_DEFAULT_PROFILE);
         assert_eq!(v["items"][0]["value"], "30°平齿根齿侧配合");
+        // ── ANSI 计算书：带 Wn/Kn 渐开线几何推导（式→代入→结果）+ 卡片 17 项同源 ──
+        let j = http_req(server.port, "POST", "/api/card_report", &ansi_expr.to_string());
+        let v: serde_json::Value = serde_json::from_str(&j).unwrap();
+        assert_eq!(v["ok"], true, "{j}");
+        let md = v["markdown"].as_str().unwrap();
+        assert!(md.contains("### 检验量公式推导（Wn / Kn；渐开线几何）"), "{md}");
+        assert!(md.contains("Wn = m·cosα") && md.contains("Kn = round(N·α/180° + 0.5)"), "{md}");
+        assert!(md.contains("## 附：卡片项") && md.contains("同一份计算"), "{md}");
+        // 未知卡类型 → 400（不静默）
+        let j = http_req(
+            server.port,
+            "POST",
+            "/api/card_report",
+            &serde_json::json!({"card": "铭牌"}).to_string(),
+        );
+        let v: serde_json::Value = serde_json::from_str(&j).unwrap();
+        assert_eq!(v["ok"], false);
+        assert!(v["error"].as_str().unwrap().contains("不认识的卡类型"), "{j}");
         let mut ansi_bad = ansi_expr.clone();
         ansi_bad["side"] = serde_json::json!("ext");
         let j = http_req(server.port, "POST", "/api/card_preview", &ansi_bad.to_string());

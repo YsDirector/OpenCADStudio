@@ -14,6 +14,11 @@
   .card { background: #fff; border: 1px solid #d9dee5; border-radius: 8px; padding: 10px 12px; }
   /* 常显/底栏/状态跨两列；卡类型一行占满（⑤ 闭合态看全卡名） */
   .card.top, .card.bot, #status, .hint { grid-column: 1 / -1; }
+  #reportCard { grid-column: 1 / -1; }
+  #reportMd { margin: 0; white-space: pre-wrap; word-break: break-word; max-height: 58vh;
+              overflow: auto; background: #fafbfc; border: 1px solid #e2e6ea; border-radius: 6px;
+              padding: 8px; font-size: 12px; line-height: 1.6;
+              font-family: "SFMono-Regular", Consolas, monospace; }
   .typebar { grid-column: 1 / -1; display: grid; grid-template-columns: 68px minmax(0, 1fr);
              gap: 8px; align-items: center; }
   .typebar label { margin: 0; }
@@ -145,11 +150,24 @@
     <label style="margin:0">旋转 rot</label>
     <input type="number" id="rot" value="0" step="1">
     <span style="flex:1"></span>
+    <button type="button" class="btn ghost" id="report" title="按当前卡同一份计算出 Markdown 计算书（公式/代入/结果/来源）">计算书</button>
     <button type="button" class="btn" id="ok">出表</button>
     <button type="button" class="btn ghost" id="cancel">取消</button>
   </div>
+  <!-- 计算书面板：按钮生成；可选「摘要表落图纸」= 本卡参数表（同一份计算的 ATTRIB）。 -->
+  <div class="card" id="reportCard" style="display:none">
+    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+      <label style="margin:0" id="reportTitle">计算书</label>
+      <span style="flex:1"></span>
+      <button type="button" class="btn ghost" id="reportCopy" title="复制 Markdown 原文">复制</button>
+      <button type="button" class="btn" id="reportSummary" title="把本卡参数表插入图纸（摘要表 = 计算书关键项；与计算书同一份计算）">摘要表落图纸</button>
+      <button type="button" class="btn ghost" id="reportClose">关闭</button>
+    </div>
+    <pre id="reportMd"></pre>
+  </div>
   <div id="status"></div>
-  <div class="hint">选内/外 → 粘齿形表达式 → 定等级·配合·齿根 → 选或填量棒 Dp → 点「出表」回到图纸放置。
+  <div class="hint">粘齿形表达式 → 定等级·配合·齿根（内卡选或填量棒 Dp）→ 点「出表」回图纸放置；
+    点「计算书」查看与卡片同一份计算的 Markdown（可复制，或「摘要表落图纸」= 本卡参数表）。
     切到其它卡后，字段由卡类型表统一下发（同一套外观与按钮位置）。</div>
 </div>
 
@@ -572,6 +590,7 @@ function applyCardDirection() {
 el("cardType").addEventListener("change", () => {
   CARD = cardTypes().find((c) => c.id === el("cardType").value) || CARD;
   applyCardDirection();
+  el("reportCard").style.display = "none"; // 换卡后旧报告不再对应当前卡
   syncUi();
   applyPanels();
   schedulePreview();
@@ -643,6 +662,69 @@ el("ok").addEventListener("click", async () => {
   } finally {
     el("ok").disabled = false;
   }
+});
+
+// ── 计算书（①：与卡片同一份计算；错误走共享助手红框）──────────────────────
+// 生成的 Markdown 面板不自动关窗；「摘要表落图纸」= 把当前卡参数表走既有
+// `/api/spline_export|card_export` 插入图纸（摘要表 = 计算书关键项，同一份计算的 ATTRIB）。
+el("report").addEventListener("click", async () => {
+  el("report").disabled = true;
+  try {
+    const panel = panelOf(CARD);
+    const model = panel === 'spline' ? currentModel() : currentCardModel();
+    const r = await fetchApi('/api/card_report', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(model),
+    }, '/api/card_report');
+    if (!r.ok) return;
+    el("reportTitle").textContent = r.data.title || "计算书";
+    el("reportMd").textContent = r.data.markdown || "";
+    el("reportCard").style.display = "";
+    ocsmStatusOk("计算书已生成（与卡片同一份计算；可复制或落摘要表）");
+  } finally {
+    el("report").disabled = false;
+  }
+});
+el("reportCopy").addEventListener("click", async () => {
+  const text = el("reportMd").textContent || "";
+  if (!text) return;
+  try {
+    await navigator.clipboard.writeText(text);
+    ocsmStatusOk("计算书已复制到剪贴板");
+  } catch (e) {
+    // 剪贴板被拒：选中让用户 Ctrl+C（不弹窗）
+    const range = document.createRange();
+    range.selectNodeContents(el("reportMd"));
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+    ocsmStatus("剪贴板不可用，已选中文本 —— 请按 Ctrl+C 复制", "warn");
+  }
+});
+el("reportSummary").addEventListener("click", async () => {
+  el("reportSummary").disabled = true;
+  try {
+    const panel = panelOf(CARD);
+    const isSpline = panel === "spline";
+    const url = (isSpline ? "/api/spline_export" : "/api/card_export")
+      + (TAB ? "?tab=" + encodeURIComponent(TAB) : "");
+    const model = isSpline ? currentModel() : currentCardModel();
+    const res = await fetchApi(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(model),
+    }, isSpline ? "/api/spline_export" : "/api/card_export");
+    if (!res.ok) return;
+    const j = res.data;
+    const msg = j.message || "摘要表已生成";
+    ocsmStatusOk(msg + "（摘要表 = 本卡参数表，与计算书同一份计算；请切回图纸放置）");
+  } finally {
+    el("reportSummary").disabled = false;
+  }
+});
+el("reportClose").addEventListener("click", () => {
+  el("reportCard").style.display = "none";
 });
 el("cancel").addEventListener("click", () => {
   try { window.close(); } catch (e) {}

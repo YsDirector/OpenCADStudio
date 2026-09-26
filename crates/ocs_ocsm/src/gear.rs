@@ -449,13 +449,13 @@ impl GearParams {
         if self.kind.is_internal() || self.is_helical() {
             return None;
         }
-        let a = self.alpha_t();
-        let k = (self.z as f64 * a.to_degrees() / 180.0 + 0.5).round() as u32;
-        let k = k.max(1);
-        let inv = a.tan() - a;
-        let w = self.m * a.cos() * ((k as f64 - 0.5) * std::f64::consts::PI + self.z as f64 * inv)
-            + 2.0 * self.x * self.m * a.sin();
-        Some((k, w))
+        // 唯一实现：`invol_spline::involute_span`（直齿 αt = αn；ANSI/NF 计算书同调此函数）。
+        Some(crate::invol_spline::involute_span(
+            self.m,
+            self.z,
+            self.alpha_t().to_degrees(),
+            self.x,
+        ))
     }
 
     /// 齿根过渡圆角半径 ρ = 0.38Mn。

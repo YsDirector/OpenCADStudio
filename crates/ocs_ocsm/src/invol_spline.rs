@@ -4958,6 +4958,27 @@ fn report_preset_source(std: SplineStd) -> &'static str {
     }
 }
 
+/// **跨测齿数 k 与公法线长度 W**（渐开线跨距公式，**全仓唯一实现**）。
+///
+/// `k = round(z·α/180° + 0.5)`（α 为压力角，单位度）；
+/// `W = m·cosα·[(k−0.5)·π + z·invα] + 2·x·m·sinα`（`invα = tanα − α`）。
+///
+/// 与 GB/T 3478.6 式(11) 是**同一条渐开线跨距公式**（GB 另有 `esv − (T+λ)` 修正项，
+/// 不在本函数）；ANSI `Wn/Kn`、NF `W/E` 的检验量推导与齿轮 `GearParams::span_measurement`
+/// 都调用本函数（不许两处各算一遍）。
+///
+/// 口径说明：这是**渐开线几何名义值**；ANSI B92.1 原标准检验表（公法线跨测表）本仓未收，
+/// 报告里必须标注「几何推导」而不是冒充原表值。
+pub fn involute_span(m: f64, z: u32, alpha_deg: f64, x: f64) -> (u32, f64) {
+    let a = alpha_deg.to_radians();
+    let k = (z as f64 * alpha_deg / 180.0 + 0.5).round() as u32;
+    let k = k.max(1);
+    let inv = a.tan() - a;
+    let w = m * a.cos() * ((k as f64 - 0.5) * std::f64::consts::PI + z as f64 * inv)
+        + 2.0 * x * m * a.sin();
+    (k, w)
+}
+
 /// **渐开线花键计算书**（Markdown，纯数据、无 IO）：
 /// 输入参数（含单位口径）→ 逐步计算（公式 + 代入数值 + 结果 + 依据来源）→
 /// 派生几何 → 检验尺寸（DIN：M1/M2/D_M/k/W_k + 查表页/source；
@@ -4969,6 +4990,16 @@ fn report_preset_source(std: SplineStd) -> &'static str {
 /// NF 按 [`nf_check_by_a_m`] 查检查表原样输出（可疑格保留在 `flags`）。
 /// 命令入口：`OCSMGEAR … report` / `OCSMSHAFT INVOLSPLINE … report`。
 pub fn build_report(params: &InvolParams, origin: Option<&D_bOrigin>, h: f64) -> String {
+    build_report_inner(params, origin, Some(h))
+}
+
+/// **卡片计算书入口**：智能卡片没有「有效长度」输入 → 不打印该行；
+/// 其余与 [`build_report`] 完全同一实现（同源，不许另算一套）。
+pub fn build_report_card(params: &InvolParams, origin: Option<&D_bOrigin>) -> String {
+    build_report_inner(params, origin, None)
+}
+
+fn build_report_inner(params: &InvolParams, origin: Option<&D_bOrigin>, h: Option<f64>) -> String {
     let e = params;
     let std = e.std;
     let mut md = String::new();
@@ -4991,7 +5022,9 @@ pub fn build_report(params: &InvolParams, origin: Option<&D_bOrigin>, h: f64) ->
         e.profile,
         preset_code(std, e.profile).unwrap_or("-")
     ));
-    md.push_str(&format!("- 有效长度 L：{} mm\n", trim(h)));
+    if let Some(h) = h {
+        md.push_str(&format!("- 有效长度 L：{} mm\n", trim(h)));
+    }
     md.push_str(&format!("- 单位口径：{}\n\n", report_unit_note(std)));
 
     // ── 1. 输入参数 ──
@@ -5447,6 +5480,79 @@ pub fn build_report(params: &InvolParams, origin: Option<&D_bOrigin>, h: f64) ->
                 }
                 md.push('\n');
             }
+            // 检验量公式推导（K / W）：K = p23–p25 表值；W = E 列，公式见入库 CSV 头注。
+            // 与卡片同一份 nf_check_by_a_m 行（不许两处各算一遍）。
+            let dims_row = rows.iter().find(|r| r.k.is_some() || r.e.is_some());
+            let (k_tab, e_tab) = dims_row
+                .map(|r| (r.k, r.e))
+                .unwrap_or((None, None));
+            md.push_str("### 检验量公式推导（K / W）\n\n");
+            md.push_str(
+                "> 口径：**K**（跨测齿数）取 NF E22-141 p23–p25 检查表表值（标准按 N 分档给出，\
+                 本仓未收该分档的独立公式 —— 不臆造）；**W**（公法线）= 检查表 `E` 列，\
+                 公式见 `assets/nf_e22141_check.csv` 头注（对入库行复算命中）。\n\n",
+            );
+            md.push_str("| # | 步骤 | 公式（符号含义） | 代入 | 结果 | 依据来源 |\n");
+            md.push_str("|---|---|---|---|---|---|\n");
+            let mut n = 0usize;
+            if let Some(k) = k_tab {
+                md.push_str(&report_row(
+                    &mut n,
+                    "跨测齿数 K",
+                    "K = 检查表 K 列（标准按 N 分档给出；表外不外推）",
+                    &format!(
+                        "A={}、m={}、N={} → p{} 检查表行",
+                        trim(a),
+                        trim(e.m),
+                        e.z,
+                        dims_row.map(|r| r.page).unwrap_or(0)
+                    ),
+                    &format!("K = {}", trim(k)),
+                    "NF E22-141 p23–p25（assets/nf_e22141_check.csv）",
+                ));
+            } else {
+                md.push_str(
+                    "| 1 | 跨测齿数 K | K = 检查表 K 列 | A/m/N 未命中 p23–p25 | — | 表外不外推 |\n",
+                );
+            }
+            match (k_tab, e_tab) {
+                (Some(k), Some(e_tab_v)) => {
+                    let (_, w_geo) = involute_span(e.m, e.z, 20.0, e.x);
+                    let resid = (w_geo - e_tab_v).abs();
+                    md.push_str(&report_row(
+                        &mut n,
+                        "公法线 W（= E）",
+                        "W = m·cos20°·[(K−0.5)·π + N·inv20°] + 2·x·m·sin20°",
+                        &format!(
+                            "m={}、K={}、N={}、x={}",
+                            trim(e.m),
+                            trim(k),
+                            e.z,
+                            trim(e.x)
+                        ),
+                        &format!(
+                            "W = {} mm（表值 E={}，残差 {:.3}）",
+                            trim(w_geo),
+                            trim(e_tab_v),
+                            resid
+                        ),
+                        "公式：assets/nf_e22141_check.csv 头注；表值：同表 E 列",
+                    ));
+                    md.push_str(&format!(
+                        "- 同源：K/W 与卡片同取 [`nf_check_by_a_m`]（A={}、m={}）的同一表行；\
+                         卡片第 12/13 行（跨测齿数 K / 公法线 W）与本表逐值一致。\n",
+                        trim(a),
+                        trim(e.m)
+                    ));
+                }
+                _ => {
+                    md.push_str(&format!(
+                        "| 1 | 公法线 W（= E） | W = m·cos20°·[(K−0.5)·π + N·inv20°] + 2·x·m·sin20° | \
+                         K 未命中 | — | 表外不外推（assets/nf_e22141_check.csv） |\n"
+                    ));
+                }
+            }
+            md.push('\n');
             // 计算标准-设计尺寸（p26）。
             for r in rows.iter().filter(|r| r.page == 26) {
                 md.push_str(&format!(
@@ -5489,9 +5595,55 @@ pub fn build_report(params: &InvolParams, origin: Option<&D_bOrigin>, h: f64) ->
             }
             md.push('\n');
         }
+    } else if std == SplineStd::ANSI {
+        // ANSI B92.1 原标准检验表（公法线跨测表）本仓未收 → 只给**渐开线几何推导**，
+        // 与 GB/T 3478.6 式(11)、NF E22-141 同一条跨距公式（`involute_span` 唯一实现）。
+        // 卡片 17 项里的「公法线长度 / 跨测齿数」格保持「—」（本仓未收原表，不冒充）。
+        md.push_str("### 检验量公式推导（Wn / Kn；渐开线几何）\n\n");
+        md.push_str(
+            "> 说明：ANSI B92.1 原标准检验表（公法线/跨测表）本仓未收 —— 下表是**渐开线几何推导**\n\
+             > （与 GB/T 3478.6 式(11)、NF E22-141 同一条跨距公式），不是原标准表值；\n\
+             > 卡片里的「公法线长度 / 跨测齿数」格仍显示「—」（不冒充原表；极限/平均长度需原标准表）。\n\n",
+        );
+        let (kn, wn) = involute_span(e.m, e.z, e.alpha_deg, e.x);
+        md.push_str("| # | 步骤 | 公式（符号含义） | 代入 | 结果 | 依据来源 |\n");
+        md.push_str("|---|---|---|---|---|---|\n");
+        let mut n = 0usize;
+        md.push_str(&report_row(
+            &mut n,
+            "跨测齿数 Kn",
+            "Kn = round(N·α/180° + 0.5)（α 单位度）",
+            &format!("round({}×{}/180 + 0.5)", e.z, trim(e.alpha_deg)),
+            &format!("Kn = {kn}"),
+            "渐开线跨距公式（与 GB/T 3478.6 式(11) 同式）；ANSI 原跨测表本仓未收",
+        ));
+        md.push_str(&report_row(
+            &mut n,
+            "公法线长度 Wn",
+            "Wn = m·cosα·[(Kn−0.5)·π + N·invα] + 2·x·m·sinα（invα = tanα − α）",
+            &format!(
+                "m={}、α={}°、Kn={}、N={}、x={}",
+                trim(e.m),
+                trim(e.alpha_deg),
+                kn,
+                e.z,
+                trim(e.x)
+            ),
+            &format!("Wn = {} mm", trim(wn)),
+            "渐开线几何推导；ANSI B92.1 原公法线表本仓未收",
+        ));
+        md.push_str(&format!(
+            "- 与其它体系同式：GB/T 3478.6 式(11)（多 `esv − (T+λ)` 修正项）、\
+             NF E22-141 检查表（α=20°）；本式是同一渐开线跨距的 α 通用形式。\n"
+        ));
+        md.push_str(&format!(
+            "- 单位：长度 mm；倒式 `invα = tanα − α`。恒等式自检：|W − {:.4}| < 1e-9（同一函数返回值）。\n\n",
+            wn
+        ));
     } else if std != SplineStd::DIN {
         md.push_str(
-            "本体系无入库检验尺寸表（DIN 5480-2 检验表覆盖 DIN 预设；NF E22-141 检查表覆盖 NF）。\n\n",
+            "本体系无入库检验尺寸表（DIN 5480-2 检验表覆盖 DIN 预设；NF E22-141 检查表覆盖 NF；\
+             ANSI 只给渐开线几何推导）。\n\n",
         );
     } else {
         let d_b = e.d_b.unwrap_or_else(|| d_b_from_x(e.m, e.z, e.x));
@@ -7872,6 +8024,51 @@ mod tests {
         assert!(md.contains("内花键") || md.contains("外花键"), "{md}");
     }
 
+    /// 渐开线跨距公式唯一实现：齿轮模板 m2 z40 α20 → k=5、W≈27.6896；
+    /// gear 的 `span_measurement` 与之一字不差（ANSI/NF 计算书同调此函数）。
+    #[test]
+    fn involute_span_shared_formula_matches_known_cases() {
+        let (k, w) = involute_span(2.0, 40, 20.0, 0.0);
+        assert_eq!(k, 5, "模板跨测齿数");
+        assert!((w - 27.6896).abs() < 5e-4, "模板公法线 W={w}");
+        let p = crate::gear::GearParams {
+            m: 2.0,
+            z: 40,
+            ..Default::default()
+        };
+        assert_eq!(p.span_measurement(), Some((k, w)), "gear 必须复用同一实现");
+        // α 通用性：30° z=20 → k=round(20×30/180+0.5)=4。
+        assert_eq!(involute_span(3.0, 20, 30.0, 0.0).0, 4);
+        // 变位项 2xm·sinα：x=0.8 时 W 增大且与手算一致。
+        let (_, w0) = involute_span(7.5, 38, 20.0, 0.0);
+        let (_, w8) = involute_span(7.5, 38, 20.0, 0.8);
+        assert!((w8 - w0 - 2.0 * 0.8 * 7.5 * 20f64.to_radians().sin()).abs() < 1e-9);
+    }
+
+    /// ANSI 计算书补 Wn/Kn 公式推导：式 → 代入 → 结果 → 来源；
+    /// 并明确标注「原标准检验表本仓未收」（不冒充原表值）。
+    #[test]
+    fn report_ansi_derives_wn_kn_with_formula_substitution() {
+        let (p, origin) =
+            resolve_spline(SplineStd::ANSI, "ANSI30P", None, Some(8.0), Some(20), None).unwrap();
+        let md = build_report_card(&p, origin.as_ref());
+        for needle in [
+            "### 检验量公式推导（Wn / Kn；渐开线几何）",
+            "Kn = round(N·α/180° + 0.5)",
+            "Wn = m·cosα·[(Kn−0.5)·π + N·invα] + 2·x·m·sinα",
+            "渐开线几何推导",
+            "ANSI B92.1 原标准检验表（公法线/跨测表）本仓未收",
+            "与 GB/T 3478.6 式(11)",
+        ] {
+            assert!(md.contains(needle), "ANSI 计算书缺 `{needle}`：\n{md}");
+        }
+        let (kn, wn) = involute_span(p.m, p.z, p.alpha_deg, p.x);
+        assert!(md.contains(&format!("Kn = {kn}")), "{md}");
+        assert!(md.contains(&format!("Wn = {} mm", trim(wn))), "{md}");
+        // 卡片计算书入口不带「有效长度」行（卡片无该输入）。
+        assert!(!md.contains("有效长度"), "卡片计算书不应打印有效长度：\n{md}");
+    }
+
     /// DIN 计算书：d_B 反推口径（721 行全表校验）+ 检验尺寸的查表命中页/source
     /// + 检验表全表对照结论；取一行真实检验表行保证查表命中。
     #[test]
@@ -8370,6 +8567,16 @@ mod tests {
         assert!(md.contains("## 4. 检验尺寸"), "{md}");
         assert!(md.contains("NF E22-141 检查表命中"), "{md}");
         assert!(md.contains("assets/nf_e22141_check.csv"), "{md}");
+        // 验收③：K/W 公式推导（式→代入→结果→来源）+ 与表值残差。
+        for needle in [
+            "### 检验量公式推导（K / W）",
+            "K = 检查表 K 列",
+            "W = m·cos20°·[(K−0.5)·π + N·inv20°] + 2·x·m·sin20°",
+            "表值 E=",
+            "残差",
+        ] {
+            assert!(md.contains(needle), "NF 计算书缺 `{needle}`：\n{md}");
+        }
         for needle in [
             "p24",
             "检查尺寸(m=1.667~3.75)",
