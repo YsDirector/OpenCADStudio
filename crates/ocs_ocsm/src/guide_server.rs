@@ -4203,33 +4203,34 @@ pub(crate) fn apply_joint(
 }
 
 /// 人类侧的**命令目录**（窗口左侧那个总表）：一句话 + 别名。
+/// 第三字段是 catalog key（`cmd.catalog.*`）——`/api/manual` 按当前语言渲染；
 /// 这是"插件自带"的部分——手册 md 没装也能看命令清单。
 pub const COMMAND_CATALOG: &[(&str, &str, &str)] = &[
-    ("OCSM", "", "初始化：建图层/线型/文字样式/标注样式（并打开零件库窗口）"),
-    ("1 … 10", "数字键", "切当前图层；有选中对象时把对象移到该层"),
-    ("OCSMFRAMEINIT", "TF", "图框：不带参数=打开图框选择窗口；带参数=一行直插（`TF a3_landscape 1:2 at 0,0 [rot 度]`）"),
-    ("OCSMFRAMEINSERT", "", "按所选图框 + 比例插入（光标跟随，比例感知标注样式）；也可带参数直插（同 TF）"),
-    ("OCSMPART", "XL", "标准件/结构要素插入：不带参数=开零件库窗口（左「标准件」树 + 右「结构要素」树）+放置态；带参数=一行直插（标准件 `XL 族 d l [view …] [at x,y] [rot 度]`；结构要素 `XL detail_grind_od d [b1 值] [at x,y] [rot 度]`；外螺纹退刀槽 `XL detail_thread_relief d P 螺距 [g1 值 g2 值 dg 值 r 值 alpha 值] [at x,y] [rot 度]`；毂槽 `XL detail_hub_keyway d [len 毂长] [view main|side]`（b/t₂/r 由 d 查表，len 缺省 30）；平键 `XL key_1096_{a|b|c} b L`、`XL key_1097_{a|b} b L`（d 槽位=键宽 b，L 省略/0=该档默认，L 须 ∈ 标准系列且 L<10b；1097 的 L1/L2/L3 由 L 查 GB/T 1097 长度系列表派生，表外 L 报错））"),
-    ("OCSMCARD", "", "智能卡片（工具栏「卡片」组按钮；旧短命令 `XLT` 已移除）：不带参数=开图形界面（七张卡：GB 花键 / 齿轮 / ANSI 花键中英 / NF 内 / NF 外 / DIN 5480；卡类型表驱动，可 `?card=<id>` 深链；均支持九字段齿形表达式反解）；带参数=`OCSMCARD <卡类型> …`，如 `OCSMCARD 花键参数表 [std GB] 内 6H <表达式> [dp 4.5] [root 平|圆] [at x,y]`、`OCSMCARD NF外花键参数表 SPLINE EX M7.5 Z38 ALPHA20 X0.8 BETA0 H30`；表格块几何内建（模板逐图元），卡类型/体系/公式口径表由后端 `CARD_TYPES`+选项表下发；以后加表格/铭牌 = `CARD_TYPES` 加数据行 + 一个渲染器"),
-    ("OCSMJOINT", "", "螺栓副装配：不带参数=开装配窗口+放置态；带参数=一行直装（件链算长度、遮挡裁剪、一次撤销）"),
-    ("OCSMPOWERDIM", "D", "智能标注：拾取点模式标线性/对齐/半径/直径（Enter 切线段点选）"),
-    ("OCSMDIMGULIDE", "GDIM", "引导线标注：选引导线 → 配置窗口（尺寸/剖视/向视/局部放大/角度/弧长/焊接/引线/序号/公差/粗糙度/形位公差）"),
-    ("OCSMCENTERLINE", "ZX", "中心线：点圆/圆弧 → 十字中心线；点两根直线 → 角平分线中心线（`3中心线层`，线长 = 直径/投影长 + 图框比例×6mm）"),
-    ("OCSMGEAR", "", "齿轮（外齿轮 / 内齿轮（齿圈））+ 渐开线花键（花键模式）：不带参数=开齿轮/花键窗口（模式复选框 + 参数 + 视图按钮 + 实时预览）；带参数=一行直插（`OCSMGEAR 2 40 20 view 剖视图`、`OCSMGEAR int 2 40 30 view 端视图`；花键：`OCSMGEAR 花键 [内花键] std=DIN [profile=DIN30] db=40 2 18 h=30 view 端视图`，预设代号 GB30P/GB30R/GB375R/GB45R/DIN30 可直接代 std+profile）。齿轮模式只认 模数/齿数/压力角/变位系数 等常规项，给标准号或 d_B 明确报错。花键模式：GB 无基准直径（给 d_B 报错）；DIN 的 d_B 是主参数（d_B+m/d_B+z/m+z 三种给法，表外按公式推并标注来源），内/外花键用同一「齿轮种类」开关。内花键与内齿轮同口径（用户定案「内花键剖视图和内齿轮一样，不存在侧视图」）：只有 剖视图 + 端视图，无侧视图；剖视图齿圈内齿不剖（端面/齿顶线/齿根线/内孔壁/孔口倒角 + 分度线/轴线，不打剖面线），齿圈外壁留用户延伸。计算书：命令加 `REPORT`（如 `OCSMGEAR 花键 std=DIN db=40 2 18 h=30 REPORT`）—— 纯计算不插图，输出含公式/代入数值/结果/依据来源的 Markdown 计算书，`REPORT=路径` 另写文件"),
-    ("OCSMSHAFT", "", "轴生成器：不带参数=开轴生成器窗口（段表 ↔ 行文本双向同步 + 实时预览 + 视图按钮）+ 放置态；带参数=行 DSL/JSON 一行直插（段拼接 + 端面倒角 + 砂轮越程槽 + 螺纹段 M + 齿轮段 GEAR + 矩形花键段 SPLINE + 轴槽 KEY（GB/T 1095 平键键槽，本期只做轴槽） + 视图 VIEW 常规|剖视（双视图已移除）；退刀槽就是一小段小直径轴段）。`OCSMSHAFT S30 E30 L45 CH2@L | S40 E40 L7 M1.5 | S36 E36 L5 | GEAR M3 Z20 VIEW 剖视 at x,y rot 度`；齿轮段可 `GEAR M3 Z20 ALPHA25`（压力角默认 20°）；花键 `OCSMSHAFT SPLINE 6x23x26x6 L30`（可 `de 71` 覆盖，矩形花键）；轴槽 `OCSMSHAFT S25 E25 L40 CH2@L KEY A 18 | S30 E30 L30`（**轴段类型**，进段表 KEY 列：键型 A/B/C + 键长 L（所选键型的键长）+ 位置中置/端置；**b×h 由该段直径 d 查 GB/T 1095 d 列自动定**，显式 `b8h7` 只作校验、必须落在该轴径档标准配对；t1 按 b 查 GB/T 1095 表，可 `t1 5` 覆盖；B/C 的键长自动按槽端圆弧折算（圆弧半径 b/2 吃直段：中置 B +b / C +b/2；端置 B +b/2 / C 不折算），实际槽长为折算长度（端置再 +t1）；显示口径：中置恒显示 A、端置 B/C 显示 C；可选 `双槽`（`DOUBLE`）＝绕轴心 180° 对置、仅剖视图体现、约 1.5 倍单键转矩；与 GEAR/SPLINE/M/OV/RL 互斥；导向平键 `OCSMSHAFT S30 E30 L50 KEY A 25 导向`（GB/T 1097：只 A/B、L 取 1097 系列 25…450∩L<10b、槽长 = 键长、槽上自动 2 个固定螺钉螺纹孔 d0×L0（孔心距槽端 L3），与双槽互斥；起键孔不属 1097），见 handbook 03）。渐开线花键只在 OCSMGEAR 花键模式生成（轴段 INVOLSPLINE 已撤）；GB/T 3478 基本齿廓不含变位（花键模式下 GB 的 x 恒为 0 且锁死；CLI/查询串给非零 x 明确报错，DIN/NF 的 x 仍按 d_B/A 派生）。计算书：命令加 `REPORT`（如 `OCSMSHAFT SPLINE 6x23x26x6 L30 REPORT`）—— 纯计算不插图，输出段清单 Markdown 计算书，`REPORT=路径` 另写文件"),
-    ("OCSMHOLE", "DK", "孔生成器：不带参数=开孔生成器窗口（简单孔/螺纹孔/沉头孔/埋头孔；盲孔/贯通；沉头/埋头可选带螺纹；不带螺纹时子类型=钻头大小/自定义/螺栓间隙）+ 放置态；带参数=一行直插（`OCSMHOLE 螺纹孔 M10 H18 L15 at x,y rot 度`、`OCSMHOLE 沉头孔 无螺纹 M10 间隙 中等装配 H22`）；规格可直接写 GUI 下拉名（`G G1/8`、`UNC 1/4-20`、`NPT NPT1/2`、`Tr Tr8×1.5`、`ACME 1/4-16`，数值 `公称6.35 P1.058` 照旧）。自动螺纹长 = 1.5d；自动孔深 = 有效深+2P（仅带螺纹且盲孔时可选）；贯通无 118° 锥。数据：ISO 724 / GB/T 152.3 / GB/T 152.2 / GB/T 5277 / 底孔牙深明细表（见表 JSON 的 source）"),
-    ("OCSMEDIT", "ME", "改标注：选中 OCSM 生成的标注 → 配置窗口改参数 → 重生成"),
-    ("OCSMRGH", "CC", "表面粗糙度：点选插入点 → 配置窗口（匿名块 + ATTDEF）"),
-    ("OCSMDIM2GB", "D2G", "一键转国标：原生标注 → OCSM_GB 样式 + 匿名块；智能圆心标记（CENTERMARK）一并换成 `3中心线层` 中心线（Ø + 图框比例×6）"),
-    ("OCSMBOM", "BOM", "明细表：建表/刷新（BOM 30 = 本次首列 30 行；现有行的手改与数量锁保留）"),
-    ("OCSMBOMSYNC", "BOMSYNC", "明细表：按序号球标重排/重建（球标联动入口）"),
-    ("OCSMBOMEDIT", "BOMEDIT", "明细表：打开网页编辑器（＝Ctrl+点击图纸里的表块；改完点「应用到图纸」）"),
-    ("OCSMBOMLOCK", "BOMLOCK", "明细表：锁定某行数量（BOMLOCK 5 3 / BOMLOCK 5 off）"),
-    ("OCSMBOMXLSX", "BOMXLSX", "明细表：导出到 .xlsx（带「锁定数量」列，可外部编辑）"),
-    ("OCSMBOMXLSXI", "BOMXLSXI", "明细表：从 .xlsx/.csv 导入（手改数量自动上锁）"),
-    ("OCSMBOMCFG", "BOMCFG", "明细表：只改「每列行数」（表头/列宽/格式在 bom/ 模板块里，本命令改不了）"),
-    ("OCSMMCP", "", "打印 MCP/HTTP 接入信息（给外部 AI/脚本）"),
-    ("OCSMHELP", "OH", "打开本手册窗口（命令目录 + 操作教程）"),
+    ("OCSM", "", "cmd.catalog.ocsm"),
+    ("1 … 10", "数字键", "cmd.catalog.digits"),
+    ("OCSMFRAMEINIT", "TF", "cmd.catalog.frameinit"),
+    ("OCSMFRAMEINSERT", "", "cmd.catalog.frameinsert"),
+    ("OCSMPART", "XL", "cmd.catalog.part"),
+    ("OCSMCARD", "", "cmd.catalog.card"),
+    ("OCSMJOINT", "", "cmd.catalog.joint"),
+    ("OCSMPOWERDIM", "D", "cmd.catalog.powerdim"),
+    ("OCSMDIMGULIDE", "GDIM", "cmd.catalog.dimgulide"),
+    ("OCSMCENTERLINE", "ZX", "cmd.catalog.centerline"),
+    ("OCSMGEAR", "", "cmd.catalog.gear"),
+    ("OCSMSHAFT", "", "cmd.catalog.shaft"),
+    ("OCSMHOLE", "DK", "cmd.catalog.hole"),
+    ("OCSMEDIT", "ME", "cmd.catalog.edit"),
+    ("OCSMRGH", "CC", "cmd.catalog.rgh"),
+    ("OCSMDIM2GB", "D2G", "cmd.catalog.dim2gb"),
+    ("OCSMBOM", "BOM", "cmd.catalog.bom"),
+    ("OCSMBOMSYNC", "BOMSYNC", "cmd.catalog.bomsync"),
+    ("OCSMBOMEDIT", "BOMEDIT", "cmd.catalog.bomedit"),
+    ("OCSMBOMLOCK", "BOMLOCK", "cmd.catalog.bomlock"),
+    ("OCSMBOMXLSX", "BOMXLSX", "cmd.catalog.bomxlsx"),
+    ("OCSMBOMXLSXI", "BOMXLSXI", "cmd.catalog.bomxlsxi"),
+    ("OCSMBOMCFG", "BOMCFG", "cmd.catalog.bomcfg"),
+    ("OCSMMCP", "", "cmd.catalog.mcp"),
+    ("OCSMHELP", "OH", "cmd.catalog.help"),
 ];
 
 /// 手册 md 的搜索目录（按优先级）：
@@ -4369,8 +4370,12 @@ fn api_manual(target: &str) -> (u16, &'static str, String) {
     ];
     let commands: Vec<serde_json::Value> = COMMAND_CATALOG
         .iter()
-        .map(|(name, alias, summary)| {
-            serde_json::json!({ "name": name, "alias": alias, "summary": summary })
+        .map(|(name, alias, summary_key)| {
+            serde_json::json!({
+                "name": name,
+                "alias": alias,
+                "summary": crate::i18n::t(summary_key),
+            })
         })
         .collect();
     (
@@ -12350,6 +12355,34 @@ mod rough_tests {
         uniq.sort();
         uniq.dedup();
         assert_eq!(uniq.len(), slugs.len(), "主题重复了：{slugs:?}");
+    }
+
+    #[test]
+    fn command_catalog_summaries_are_bilingual_and_render_per_language() {
+        // ② 批：命令目录一句话摘要走 catalog（`cmd.catalog.*`），中英齐全且端点随语言。
+        let _g = crate::global_state_test_lock();
+        for (name, _alias, key) in super::COMMAND_CATALOG {
+            let msg = crate::i18n::lookup(key)
+                .unwrap_or_else(|| panic!("命令目录 {name} 的 key {key} 不在 catalog"));
+            assert!(!msg.zh.trim().is_empty(), "{key} zh 为空");
+            assert!(!msg.en.trim().is_empty(), "{key} en 为空");
+            assert_ne!(msg.zh, msg.en, "{key} 两语相同（应翻译）");
+        }
+        crate::i18n::set_lang(crate::i18n::Lang::En);
+        let (code, _, body) = api_manual("/api/manual");
+        assert_eq!(code, 200);
+        assert!(
+            body.contains("Initialize: create layers/linetypes/text styles/dimension styles"),
+            "/api/manual en 应返回英文摘要：{body}"
+        );
+        crate::i18n::set_lang(crate::i18n::Lang::Zh);
+        let (code, _, body) = api_manual("/api/manual");
+        assert_eq!(code, 200);
+        assert!(
+            body.contains("初始化：建图层/线型/文字样式/标注样式"),
+            "/api/manual zh 应返回中文摘要：{body}"
+        );
+        crate::i18n::set_lang_auto();
     }
 
     #[test]

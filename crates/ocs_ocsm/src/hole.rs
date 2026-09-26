@@ -42,6 +42,7 @@
 //! 沉头/埋头时 `孔深/螺纹有效长度` 从**沉孔底 / 埋头锥底**起算；俯视图（若同时勾选）
 //! 放在侧视图右侧、间隙 20 mm。材料板 + 绿色剖面线只出现在 GUI 预览里。
 
+use crate::i18n::{t, t_fmt};
 use crate::thread::{self, ThreadSystem};
 use ocs_plugin_api::host::acadrust;
 use ocs_plugin_api::host::acadrust::entities::{Arc, Circle, EntityType, Line};
@@ -220,10 +221,9 @@ pub fn thread_row(d: f64, pitch: Option<f64>) -> Result<&'static ThreadRow, Stri
             .chain(t.fine.iter())
             .find(|r| (r.d - d).abs() < 1e-9 && (r.p - p).abs() < 1e-9)
             .ok_or_else(|| {
-                format!(
-                    "螺纹 M{}×{} 不在 ISO 724 表里（粗牙/细牙都没有这个组合）",
-                    fmt(d),
-                    fmt(p)
+                t_fmt(
+                    "cmd.hole.err.thread_pair_missing",
+                    &[("d", &fmt(d)), ("p", &fmt(p))],
                 )
             }),
         None => t
@@ -231,11 +231,13 @@ pub fn thread_row(d: f64, pitch: Option<f64>) -> Result<&'static ThreadRow, Stri
             .iter()
             .find(|r| (r.d - d).abs() < 1e-9)
             .ok_or_else(|| {
-                format!(
-                    "M{} 不在 ISO 724 粗牙表里（粗牙范围 M{}…M{}）",
-                    fmt(d),
-                    fmt(t.coarse.first().map(|r| r.d).unwrap_or(0.0)),
-                    fmt(t.coarse.last().map(|r| r.d).unwrap_or(0.0))
+                t_fmt(
+                    "cmd.hole.err.thread_coarse_missing",
+                    &[
+                        ("d", &fmt(d)),
+                        ("d_lo", &fmt(t.coarse.first().map(|r| r.d).unwrap_or(0.0))),
+                        ("d_hi", &fmt(t.coarse.last().map(|r| r.d).unwrap_or(0.0))),
+                    ],
                 )
             }),
     }
@@ -254,15 +256,12 @@ pub fn is_fine(row: &ThreadRow) -> bool {
 fn counterbore_row(d: f64, table: &str) -> Result<&'static CounterboreRow, String> {
     let t = counterbore_table();
     if table == "gb70_2" {
-        return Err(
-            "GB/T 152.3-1988 没有 GB/T 70.2（内六角平圆头）的沉孔表（官方只有 表1 适用 GB 70、".to_string()
-                + "表2 适用 GB 6190、GB 6191 及 GB 65），按不插值规则 70.2 标缺 —— 请选 70.1 或用自定义",
-        );
+        return Err(crate::i18n::t("cmd.hole.err.counterbore_gb70_2"));
     }
     let key = match table {
         "gb70_1" | "gb70" => "gb70",
         "gb6190" => "gb6190",
-        other => return Err(format!("不认识的沉孔推荐值「{other}」（gb70_1/gb70_2/gb6190）")),
+        other => return Err(t_fmt("cmd.hole.err.reco_unknown", &[("other", other)])),
     };
     t.rows
         .iter()
@@ -274,11 +273,13 @@ fn counterbore_row(d: f64, table: &str) -> Result<&'static CounterboreRow, Strin
                 .filter(|r| r.table == key)
                 .map(|r| fmt(r.d))
                 .collect();
-            format!(
-                "GB/T 152.3-1988 {} 表里没有 M{}（可用 {}）",
-                key,
-                fmt(d),
-                list.join("/")
+            t_fmt(
+                "cmd.hole.err.counterbore_row_missing",
+                &[
+                    ("table", key),
+                    ("d", &fmt(d)),
+                    ("list", &list.join("/")),
+                ],
             )
         })
 }
@@ -289,11 +290,13 @@ fn countersink_row(d: f64) -> Result<&'static CountersinkRow, String> {
         .iter()
         .find(|r| (r.d - d).abs() < 1e-9)
         .ok_or_else(|| {
-            format!(
-                "GB/T 152.2-2014（沉头螺钉用沉孔）表里没有 M{}（可用 M{}…M{}；标准只到 M10）",
-                fmt(d),
-                fmt(t.rows.first().map(|r| r.d).unwrap_or(0.0)),
-                fmt(t.rows.last().map(|r| r.d).unwrap_or(0.0))
+            t_fmt(
+                "cmd.hole.err.countersink_row_missing",
+                &[
+                    ("d", &fmt(d)),
+                    ("d_lo", &fmt(t.rows.first().map(|r| r.d).unwrap_or(0.0))),
+                    ("d_hi", &fmt(t.rows.last().map(|r| r.d).unwrap_or(0.0))),
+                ],
             )
         })
 }
@@ -304,11 +307,13 @@ fn clearance_row(d: f64) -> Result<&'static ClearanceRow, String> {
         .iter()
         .find(|r| (r.d - d).abs() < 1e-9)
         .ok_or_else(|| {
-            format!(
-                "GB/T 5277 通孔表里没有 M{}（可用 M{}…M{}）",
-                fmt(d),
-                fmt(t.rows.first().map(|r| r.d).unwrap_or(0.0)),
-                fmt(t.rows.last().map(|r| r.d).unwrap_or(0.0))
+            t_fmt(
+                "cmd.hole.err.clearance_row_missing",
+                &[
+                    ("d", &fmt(d)),
+                    ("d_lo", &fmt(t.rows.first().map(|r| r.d).unwrap_or(0.0))),
+                    ("d_hi", &fmt(t.rows.last().map(|r| r.d).unwrap_or(0.0))),
+                ],
             )
         })
 }
@@ -323,10 +328,10 @@ fn tap_row(d: f64, pitch: Option<f64>) -> Result<&'static TapRow, String> {
         None => t.rows.iter().find(|r| (r.d - d).abs() < 1e-9),
     };
     hit.ok_or_else(|| {
-        format!(
-            "底孔径表（螺纹孔底孔）里没有 M{}{}",
-            fmt(d),
-            pitch.map(|p| format!("×{}", fmt(p))).unwrap_or_default()
+        let p = pitch.map(|p| format!("×{}", fmt(p))).unwrap_or_default();
+        t_fmt(
+            "cmd.hole.err.tap_row_missing",
+            &[("d", &fmt(d)), ("p", &p)],
         )
     })
 }
@@ -337,7 +342,7 @@ pub fn clearance_fit_label(fit: &str) -> Result<&'static str, String> {
         "close" => "精装配",
         "normal" => "中等装配",
         "loose" => "粗装配",
-        other => return Err(format!("不认识的螺栓间隙配合「{other}」（close/normal/loose）")),
+        other => return Err(t_fmt("cmd.hole.err.clearance_fit_unknown", &[("other", other)])),
     })
 }
 
@@ -346,7 +351,7 @@ pub fn thread_fit_label(fit: &str) -> Result<&'static str, String> {
     Ok(match fit {
         "6H" => "6H（内螺纹）",
         "6G" => "6G（内螺纹）",
-        other => return Err(format!("不认识的螺纹配合「{other}」（本期只有 6H/6G）")),
+        other => return Err(t_fmt("cmd.hole.err.thread_fit_unknown", &[("other", other)])),
     })
 }
 
@@ -650,18 +655,18 @@ impl HoleValues {
 /// 求派生量（含规则/表外校验）。
 pub fn resolve(model: &HoleModel) -> Result<HoleValues, String> {
     if !(model.d.is_finite() && model.d > 0.0) {
-        return Err(format!("公称直径 d={} 非法（必须 > 0）", model.d));
+        return Err(t_fmt("cmd.hole.err.d_invalid", &[("d", &model.d.to_string())]));
     }
     // 子类型与孔类型一致
     match model.kind {
         HoleKind::Simple => {
             if matches!(model.subtype, HoleSubtype::Standard | HoleSubtype::Fine) {
-                return Err("简单孔不带螺纹：子类型请选 钻头大小 / 自定义 / 螺栓间隙".into());
+                return Err(t("cmd.hole.err.simple_has_thread_subtype"));
             }
         }
         HoleKind::Threaded => {
             if !matches!(model.subtype, HoleSubtype::Standard | HoleSubtype::Fine) {
-                return Err("螺纹孔必须带螺纹：子类型请选 标准螺纹 / 细牙螺纹".into());
+                return Err(t("cmd.hole.err.threaded_needs_thread_subtype"));
             }
         }
         HoleKind::Counterbore | HoleKind::Countersink => {}
@@ -677,10 +682,10 @@ pub fn resolve(model: &HoleModel) -> Result<HoleValues, String> {
         if model.thread_system != ThreadSystem::Iso724 {
             // 非公制体系：逐表查规格（表外/多义明确报错，不插值）。
             if matches!(model.kind, HoleKind::Counterbore | HoleKind::Countersink) {
-                return Err("沉头/埋头推荐值表只覆盖公制 M（GB/T 152.3-1988 / 152.2-2014）—— 非公制螺纹请用简单孔/螺纹孔".to_string());
+                return Err(t("cmd.hole.err.cbore_csink_metric_only"));
             }
             if model.subtype == HoleSubtype::Fine {
-                return Err("非公制螺纹请用「子类型」选牙型系列（如 UNC/UNF/Stub ACME），不要用公制细牙".to_string());
+                return Err(t("cmd.hole.err.nonmetric_no_metric_fine"));
             }
             // d 取该行螺纹大径（mm）；P 取表内螺距 mm（英制 p=25.4/TPI）。
             // 自动螺纹长 1.5d、孔深 L+2P 均用这两个值（管螺纹 d=大径/外径，非通径）。
@@ -701,22 +706,24 @@ pub fn resolve(model: &HoleModel) -> Result<HoleValues, String> {
         } else {
         let row = match model.subtype {
             HoleSubtype::Fine => {
-                let p = model.pitch.ok_or_else(|| {
-                    "细牙螺纹需要具体螺距（大小里选 M10×1.25 这类）".to_string()
-                })?;
+                let p = model
+                    .pitch
+                    .ok_or_else(|| t("cmd.hole.err.fine_needs_concrete_pitch"))?;
                 let row = thread_row(model.d, Some(p))?;
                 if !is_fine(row) {
-                    return Err(format!("子类型是细牙，但 M{}×{} 是粗牙规格", fmt(model.d), fmt(p)));
+                    return Err(t_fmt(
+                        "cmd.hole.err.fine_subtype_but_coarse",
+                        &[("d", &fmt(model.d)), ("p", &fmt(p))],
+                    ));
                 }
                 row
             }
             _ => {
                 let row = thread_row(model.d, model.pitch)?;
                 if model.pitch.is_some() && is_fine(row) {
-                    return Err(format!(
-                        "子类型是标准螺纹（粗牙），但 M{}×{} 是细牙规格 —— 请切「细牙螺纹」",
-                        fmt(model.d),
-                        fmt(row.p)
+                    return Err(t_fmt(
+                        "cmd.hole.err.standard_subtype_but_fine",
+                        &[("d", &fmt(model.d)), ("p", &fmt(row.p))],
                     ));
                 }
                 row
@@ -725,11 +732,13 @@ pub fn resolve(model: &HoleModel) -> Result<HoleValues, String> {
         let p = row.p;
         let minor = model.d - 1.0825 * p;
         if minor <= 0.0 {
-            return Err(format!(
-                "螺纹 M{}×{} 的小径 d−1.0825P={} ≤ 0，参数非法",
-                fmt(model.d),
-                fmt(p),
-                fmt3(minor)
+            return Err(t_fmt(
+                "cmd.hole.err.minor_nonpositive",
+                &[
+                    ("d", &fmt(model.d)),
+                    ("p", &fmt(p)),
+                    ("minor", &fmt3(minor)),
+                ],
             ));
         }
         // 螺纹孔的钻孔直径：优先用底孔牙深表的实际钻头（用户口径），
@@ -743,17 +752,15 @@ pub fn resolve(model: &HoleModel) -> Result<HoleValues, String> {
                 let d = model
                     .drill_d
                     .filter(|v| v.is_finite() && *v > 0.0)
-                    .ok_or_else(|| {
-                        "钻头大小需要选一个标准麻花钻直径（GB/T 6135.3 系列）".to_string()
-                    })?;
+                    .ok_or_else(|| t("cmd.hole.err.drill_required"))?;
                 if !drill_table()
                     .diameters
                     .iter()
                     .any(|x| (x - d).abs() < 1e-9)
                 {
-                    return Err(format!(
-                        "Ø{} 不在 GB/T 6135.3-1996 直柄麻花钻直径系列里（0.20–20.00）—— 表外不插值",
-                        fmt(d)
+                    return Err(t_fmt(
+                        "cmd.hole.err.drill_not_in_series",
+                        &[("d", &fmt(d))],
                     ));
                 }
                 (format!("Ø{}", fmt(d)), d, d, 0.0, d)
@@ -762,7 +769,7 @@ pub fn resolve(model: &HoleModel) -> Result<HoleValues, String> {
                 let c = model
                     .custom_d
                     .filter(|v| v.is_finite() && *v > 0.0)
-                    .ok_or_else(|| "自定义孔径必须填一个 > 0 的数值".to_string())?;
+                    .ok_or_else(|| t("cmd.hole.err.custom_d_required"))?;
                 (
                     if model.kind == HoleKind::Simple {
                         format!("Ø{}", fmt(c))
@@ -782,12 +789,17 @@ pub fn resolve(model: &HoleModel) -> Result<HoleValues, String> {
                     "close" => row.close,
                     "normal" => row.normal,
                     "loose" => row.loose,
-                    other => return Err(format!("不认识的螺栓间隙配合「{other}」（close/normal/loose）")),
+                    other => {
+                        return Err(t_fmt(
+                            "cmd.hole.err.clearance_fit_unknown",
+                            &[("other", other)],
+                        ))
+                    }
                 };
                 (format!("M{}·{}", fmt(model.d), label), v, v, 0.0, v)
             }
             HoleSubtype::Standard | HoleSubtype::Fine => {
-                return Err("不带螺纹的孔不能用标准/细牙螺纹子类型".into())
+                return Err(t("cmd.hole.err.unthreaded_with_thread_subtype"))
             }
         }
     };
@@ -831,11 +843,13 @@ pub fn resolve(model: &HoleModel) -> Result<HoleValues, String> {
         HoleKind::Counterbore => {
             let r = counterbore_row(model.d, &model.reco)?;
             if base_d >= r.d2 - 1e-9 {
-                return Err(format!(
-                    "底孔径 Ø{} 不小于沉孔直径 Ø{}（GB/T 152.3 M{}）",
-                    fmt3(base_d),
-                    fmt3(r.d2),
-                    fmt(model.d)
+                return Err(t_fmt(
+                    "cmd.hole.err.cbore_pilot_ge_sink",
+                    &[
+                        ("base", &fmt3(base_d)),
+                        ("sink", &fmt3(r.d2)),
+                        ("d", &fmt(model.d)),
+                    ],
                 ));
             }
             (Some(r.d2), Some(r.t), None, None)
@@ -843,11 +857,13 @@ pub fn resolve(model: &HoleModel) -> Result<HoleValues, String> {
         HoleKind::Countersink => {
             let r = countersink_row(model.d)?;
             if base_d >= r.d2 - 1e-9 {
-                return Err(format!(
-                    "底孔径 Ø{} 不小于埋头直径 Ø{}（GB/T 152.2 M{}）",
-                    fmt3(base_d),
-                    fmt3(r.d2),
-                    fmt(model.d)
+                return Err(t_fmt(
+                    "cmd.hole.err.csink_pilot_ge_sink",
+                    &[
+                        ("base", &fmt3(base_d)),
+                        ("sink", &fmt3(r.d2)),
+                        ("d", &fmt(model.d)),
+                    ],
                 ));
             }
             (None, None, Some(r.d2), Some(r.t))
@@ -866,9 +882,7 @@ pub fn resolve(model: &HoleModel) -> Result<HoleValues, String> {
             match model.hole_depth {
                 Some(h) => h,
                 None => {
-                    return Err(
-                        "螺纹有效长度选「全长」时孔深必须手填（自动孔深会循环依赖）".to_string(),
-                    )
+                    return Err(t("cmd.hole.err.full_thread_depth_manual"))
                 }
             }
         } else if let Some(v) = model.thread_len {
@@ -885,63 +899,70 @@ pub fn resolve(model: &HoleModel) -> Result<HoleValues, String> {
                 ThreadSystem::Npt => spec_ref
                     .and_then(|s| s.eff_len)
                     .ok_or_else(|| {
-                        format!(
-                            "NPT{} 表里没有螺纹有效长度 eff_len —— 表外不插值；请手填有效长度",
-                            fmt(model.d)
+                        t_fmt(
+                            "cmd.hole.err.npt_no_eff_len",
+                            &[("d", &fmt(model.d))],
                         )
                     })?,
                 ThreadSystem::R => spec_ref
                     .and_then(|s| s.eff_len)
                     .ok_or_else(|| {
-                        format!(
-                            "R{} 表里没有螺纹有效长度 eff_len（表第16栏）—— 表外不插值；请手填有效长度",
-                            fmt(model.d)
+                        t_fmt(
+                            "cmd.hole.err.r_no_eff_len",
+                            &[("d", &fmt(model.d))],
                         )
                     })?,
                 ThreadSystem::G => spec_ref
                     .and_then(|s| s.eff_len)
                     .ok_or_else(|| {
-                        format!(
-                            "G{} 没有有效长度（ISO 228-1 不规定；本表取同规格 R，而 R 无此规格）\
-                             —— 不臆造：请手填有效长度，或改用 R / M",
-                            fmt(model.d)
+                        t_fmt(
+                            "cmd.hole.err.g_no_eff_len",
+                            &[("d", &fmt(model.d))],
                         )
                     })?,
             }
         };
         if !(thread_len.is_finite() && thread_len > 0.0) {
-            return Err(format!("螺纹有效长度 L={} 非法（必须 > 0）", thread_len));
+            return Err(t_fmt(
+                "cmd.hole.err.thread_len_invalid",
+                &[("len", &thread_len.to_string())],
+            ));
         }
         let hole_depth = match model.hole_depth {
             Some(h) => h,
             None => {
                 if model.range == HoleRange::Through {
-                    return Err(
-                        "贯通孔的孔深是板厚/通孔长度，不能自动 —— 请手填孔深".to_string(),
-                    );
+                    return Err(t("cmd.hole.err.through_depth_manual"));
                 }
                 thread_len + AUTO_RUNOUT_FACTOR * pitch
             }
         };
         if !(hole_depth.is_finite() && hole_depth > 0.0) {
-            return Err(format!("孔深 H={} 非法（必须 > 0）", hole_depth));
+            return Err(t_fmt(
+                "cmd.hole.err.hole_depth_invalid",
+                &[("h", &hole_depth.to_string())],
+            ));
         }
         if thread_len > hole_depth + 1e-9 {
-            return Err(format!(
-                "螺纹有效长度 L={} 大于孔深 H={}（有效长度必须在孔深内）",
-                fmt3(thread_len),
-                fmt3(hole_depth)
+            return Err(t_fmt(
+                "cmd.hole.err.thread_len_gt_hole_depth",
+                &[
+                    ("l", &fmt3(thread_len)),
+                    ("h", &fmt3(hole_depth)),
+                ],
             ));
         }
         if !model.full_thread
             && model.range == HoleRange::Blind
             && hole_depth + 1e-9 < thread_len + AUTO_RUNOUT_FACTOR * pitch
         {
-            warnings.push(format!(
-                "孔深 H={} < 螺纹有效长度 L={} + 2P={}（工艺余量不足 2P）",
-                fmt3(hole_depth),
-                fmt3(thread_len),
-                fmt3(thread_len + AUTO_RUNOUT_FACTOR * pitch)
+            warnings.push(t_fmt(
+                "cmd.hole.warn.runout_below_2p",
+                &[
+                    ("h", &fmt3(hole_depth)),
+                    ("l", &fmt3(thread_len)),
+                    ("need", &fmt3(thread_len + AUTO_RUNOUT_FACTOR * pitch)),
+                ],
             ));
         }
         let cone_height = if model.range == HoleRange::Blind {
@@ -974,13 +995,16 @@ pub fn resolve(model: &HoleModel) -> Result<HoleValues, String> {
     } else {
         let Some(h) = model.hole_depth else {
             return Err(if model.kind == HoleKind::Simple {
-                "简单孔：孔深不能自动（「自动」只用于螺纹孔）—— 请手填孔深".to_string()
+                t("cmd.hole.err.simple_depth_manual")
             } else {
-                "不带螺纹的沉头/埋头孔：孔深不能自动 —— 请手填孔深".to_string()
+                t("cmd.hole.err.unthreaded_cbore_depth_manual")
             });
         };
         if !(h.is_finite() && h > 0.0) {
-            return Err(format!("孔深 H={} 非法（必须 > 0）", h));
+            return Err(t_fmt(
+                "cmd.hole.err.hole_depth_invalid",
+                &[("h", &h.to_string())],
+            ));
         }
         let cone_height = if model.range == HoleRange::Blind {
             (base_d / 2.0) / CONE_HALF_ANGLE_DEG.to_radians().tan()
@@ -1212,21 +1236,22 @@ pub fn ocsm_ready(doc: &ocs_plugin_api::host::acadrust::CadDocument) -> Result<(
         return Ok(());
     }
     let why = if !missing.is_empty() {
-        format!("（缺图层：{}）", missing.join("、"))
+        t_fmt(
+            "cmd.hole.why.missing_layers",
+            &[("layers", &missing.join("、"))],
+        )
     } else {
-        format!("（{LAYER_CENTER} 没挂 CENTER2 点划线）")
+        t_fmt("cmd.hole.why.center_linetype", &[("layer", LAYER_CENTER)])
     };
-    Err(format!(
-        "这张图还没跑过 OCSM 初始化{why} —— 先执行 OCSM（建图层 + 线型 + 样式），再生成孔。"
-    ))
+    Err(t_fmt("cmd.hole.err.not_initialized", &[("why", &why)]))
 }
 
 // ── CLI（`OCSMHOLE <参数>`）─────────────────────────────────────────────
 
-/// 命令行用法（一行直插）。
-pub const USAGE: &str = "OCSMHOLE / DK：\
-`OCSMHOLE [简单孔|螺纹孔|沉头孔|埋头孔] [带螺纹|无螺纹] [公制|UN/UNC/UNF/UNEF|G/BSPP|R/BSPT|NPT|ACME|矮牙|Tr] [钻孔 Ø8.5|自定义 孔径8.5|间隙 中等装配] [规格名 M10|M10×1.25|G1/8|1/4-20|NPT1/2|Tr8×1.5|ACME 1/4-16|公称6.35 P1.058] [P1.5] [推荐70.1|70.2] [H18] [L15] [盲孔|贯通] [全长] [6H|6G] [view 侧视图|俯视图|双视图] [at x,y] [rot 度]`\
-（规格名直接查 GUI 同一份表 `name`：G 1/8、1/4-20、NPT1/2、Tr8x1.5 等都收；数值写法 `公称6.35 P1.058` 照旧）";
+/// 命令行用法（一行直插；按当前语言从 catalog 取词）。
+pub fn usage() -> String {
+    t("cmd.hole.usage")
+}
 
 /// 取关键字参数：`H=18` / `H18` / `H 18` 都收（`keys` 按长到短放）。
 fn take_arg(tokens: &[String], i: &mut usize, t: &str, keys: &[&str]) -> Result<String, String> {
@@ -1248,7 +1273,7 @@ fn take_arg(tokens: &[String], i: &mut usize, t: &str, keys: &[&str]) -> Result<
     tokens
         .get(*i)
         .cloned()
-        .ok_or_else(|| format!("`{t}` 后面缺数值"))
+        .ok_or_else(|| t_fmt("cmd.hole.err.value_missing", &[("t", t)]))
 }
 
 /// 是否“像规格名”：带数字或 `#`/`×`/`/` 的 token 才试查表；纯词仍是「不识别的参数」。
@@ -1287,9 +1312,9 @@ fn spec_name_lookup(
         match thread::lookup_name(m.thread_system, m.thread_group.as_deref(), &text) {
             Ok(hit) => return Ok(Some((hit, used))),
             Err(thread::NameError::Ambiguous(names)) => {
-                return Err(format!(
-                    "规格名「{text}」命中多行（{}）—— 请写全（带牙型系列/螺距）",
-                    names.join("、")
+                return Err(t_fmt(
+                    "cmd.hole.err.spec_name_ambiguous",
+                    &[("text", &text), ("names", &names.join("、"))],
                 ))
             }
             Err(thread::NameError::NotFound) => {}
@@ -1310,7 +1335,7 @@ pub fn parse_program(text: &str) -> Result<HoleModel, String> {
         }
     }
     if s.is_empty() {
-        return Err("缺少参数".into());
+        return Err(t("cmd.hole.err.missing_args"));
     }
     let mut m = HoleModel {
         kind: HoleKind::Threaded,
@@ -1426,7 +1451,7 @@ pub fn parse_program(text: &str) -> Result<HoleModel, String> {
                     t.split_once('=').map(|(_, v)| v.to_string()).unwrap_or_default()
                 } else {
                     i += 1;
-                    tokens.get(i).cloned().ok_or("`view` 后面缺视图名")?
+                    tokens.get(i).cloned().ok_or_else(|| crate::i18n::t("cmd.hole.err.view_name_missing"))?
                 };
                 match v.trim() {
                     "侧视图" | "侧" | "side" => m.views = HoleViews { side: true, top: false },
@@ -1434,23 +1459,31 @@ pub fn parse_program(text: &str) -> Result<HoleModel, String> {
                     "双视图" | "双" | "both" => {
                         m.views = HoleViews { side: true, top: true };
                     }
-                    other => return Err(format!("不认识的视图「{other}」（侧视图/俯视图/双视图）")),
+                    other => return Err(t_fmt("cmd.hole.err.view_unknown", &[("other", other)])),
                 }
             }
             "at" => {
                 i += 1;
-                let v = tokens.get(i).ok_or("`at` 后面缺 x,y")?;
+                let v = tokens.get(i).ok_or_else(|| crate::i18n::t("cmd.hole.err.at_xy_missing"))?;
                 let (x, y) = v
                     .split_once(',')
-                    .ok_or_else(|| format!("`at` 坐标应是 x,y（收到 {v}）"))?;
-                let x: f64 = x.trim().parse().map_err(|_| format!("x 座标非法：{x}"))?;
-                let y: f64 = y.trim().parse().map_err(|_| format!("y 座标非法：{y}"))?;
+                    .ok_or_else(|| t_fmt("cmd.hole.err.at_not_xy", &[("v", v)]))?;
+                let x: f64 = x
+                    .trim()
+                    .parse()
+                    .map_err(|_| t_fmt("cmd.hole.err.x_invalid", &[("x", x)]))?;
+                let y: f64 = y
+                    .trim()
+                    .parse()
+                    .map_err(|_| t_fmt("cmd.hole.err.y_invalid", &[("y", y)]))?;
                 m.at = Some([x, y]);
             }
             "rot" => {
                 i += 1;
-                let v = tokens.get(i).ok_or("`rot` 后面缺角度")?;
-                m.rot = v.parse().map_err(|_| format!("转角非法：{v}"))?;
+                let v = tokens.get(i).ok_or_else(|| crate::i18n::t("cmd.hole.err.rot_missing"))?;
+                m.rot = v
+                    .parse()
+                    .map_err(|_| t_fmt("cmd.hole.err.rot_invalid", &[("v", v)]))?;
             }
             _ if (lower.starts_with('p')
                 && lower[1..]
@@ -1460,9 +1493,14 @@ pub fn parse_program(text: &str) -> Result<HoleModel, String> {
                 || lower == "p" =>
             {
                 let v = take_arg(&tokens, &mut i, t, &["P", "p"])?;
-                let p: f64 = v.parse().map_err(|_| format!("螺距 P 非法：{v}"))?;
+                let p: f64 = v
+                    .parse()
+                    .map_err(|_| t_fmt("cmd.hole.err.pitch_invalid", &[("v", &v)]))?;
                 if p <= 0.0 {
-                    return Err(format!("螺距 P={p} 必须 > 0"));
+                    return Err(t_fmt(
+                        "cmd.hole.err.pitch_nonpositive",
+                        &[("p", &p.to_string())],
+                    ));
                 }
                 m.pitch = Some(p);
                 if m.pitch.is_some()
@@ -1479,15 +1517,24 @@ pub fn parse_program(text: &str) -> Result<HoleModel, String> {
                 || t.starts_with('深') =>
             {
                 let v = take_arg(&tokens, &mut i, t, &["孔深", "H", "h", "深"])?;
-                m.hole_depth = Some(v.parse().map_err(|_| format!("孔深非法：{v}"))?);
+                m.hole_depth = Some(
+                    v.parse()
+                        .map_err(|_| t_fmt("cmd.hole.err.depth_invalid", &[("v", &v)]))?,
+                );
             }
             _ if lower.starts_with('l') || t.starts_with("螺纹长") || t.starts_with('长') => {
                 let v = take_arg(&tokens, &mut i, t, &["螺纹长", "L", "l", "长"])?;
-                m.thread_len = Some(v.parse().map_err(|_| format!("螺纹有效长度非法：{v}"))?);
+                m.thread_len = Some(
+                    v.parse()
+                        .map_err(|_| t_fmt("cmd.hole.err.thread_len_parse_invalid", &[("v", &v)]))?,
+                );
             }
             _ if t.starts_with("孔径") || lower.starts_with("custom") || lower.starts_with("cd") => {
                 let v = take_arg(&tokens, &mut i, t, &["孔径", "custom", "CD", "cd"])?;
-                m.custom_d = Some(v.parse().map_err(|_| format!("自定义孔径非法：{v}"))?);
+                m.custom_d = Some(
+                    v.parse()
+                        .map_err(|_| t_fmt("cmd.hole.err.custom_d_invalid", &[("v", &v)]))?,
+                );
             }
             _ if t.starts_with("配合") || lower.starts_with("fit") => {
                 let v = take_arg(&tokens, &mut i, t, &["配合", "FIT", "fit"])?;
@@ -1495,7 +1542,7 @@ pub fn parse_program(text: &str) -> Result<HoleModel, String> {
                 if v == "6H" || v == "6G" {
                     m.fit = v;
                 } else {
-                    return Err(format!("配合「{v}」不支持（6H/6G 或 精装配/中等装配/粗装配）"));
+                    return Err(t_fmt("cmd.hole.err.fit_unsupported", &[("v", &v)]));
                 }
             }
             _ if t.starts_with("公称") => {
@@ -1510,7 +1557,7 @@ pub fn parse_program(text: &str) -> Result<HoleModel, String> {
                     .unwrap_or("")
                     .trim()
                     .parse()
-                    .map_err(|_| format!("公称直径非法：{rest}"))?;
+                    .map_err(|_| t_fmt("cmd.hole.err.nominal_invalid", &[("rest", &rest)]))?;
                 size_seen = true;
             }
             _ if t.starts_with("推荐") || lower.starts_with("reco") => {
@@ -1519,7 +1566,12 @@ pub fn parse_program(text: &str) -> Result<HoleModel, String> {
                     "70.1" | "GB70.1" | "GB70_1" => "gb70_1".to_string(),
                     "70.2" | "GB70.2" | "GB70_2" => "gb70_2".to_string(),
                     "6190" | "GB6190" => "gb6190".to_string(),
-                    other => return Err(format!("不认识的沉孔推荐值「{other}」（70.1/70.2/6190）")),
+                    other => {
+                        return Err(t_fmt(
+                            "cmd.hole.err.reco_unknown_cli",
+                            &[("other", other)],
+                        ))
+                    }
                 };
             }
             _ if t.chars().next().is_some_and(|c| c == 'm' || c == 'M' || c == 'Ø' || c == 'Φ') => {
@@ -1535,7 +1587,7 @@ pub fn parse_program(text: &str) -> Result<HoleModel, String> {
                 let v: f64 = d_str
                     .trim()
                     .parse()
-                    .map_err(|_| format!("尺寸非法：{t}（例 M10 / M10x1.25 / Ø8.5）"))?;
+                    .map_err(|_| t_fmt("cmd.hole.err.size_invalid", &[("t", t)]))?;
                 if dia {
                     m.drill_d = Some(v);
                     if m.kind == HoleKind::Simple || !size_seen {
@@ -1546,7 +1598,10 @@ pub fn parse_program(text: &str) -> Result<HoleModel, String> {
                     m.d = v;
                 }
                 if let Some(p) = p_str {
-                    let p: f64 = p.trim().parse().map_err(|_| format!("螺距非法：{t}"))?;
+                    let p: f64 = p
+                        .trim()
+                        .parse()
+                        .map_err(|_| t_fmt("cmd.hole.err.pitch_token_invalid", &[("t", t)]))?;
                     m.pitch = Some(p);
                     if is_fine(thread_row(m.d, Some(p))?) {
                         m.subtype = HoleSubtype::Fine;
@@ -1561,7 +1616,10 @@ pub fn parse_program(text: &str) -> Result<HoleModel, String> {
                 // 先试「规格名」查表（GUI 下拉那个 `name`；表内唯一事实来源）：
                 // 命中等价于 `公称 d P`；未命中回落既有数值路径/报错，老写法一律不受影响。
                 if !looks_like_spec_name(t) {
-                    return Err(format!("不识别的参数「{other}」（用法：{USAGE}）"));
+                    return Err(t_fmt(
+                        "cmd.hole.err.unknown_param",
+                        &[("other", other), ("usage", &usage())],
+                    ));
                 }
                 match spec_name_lookup(&tokens, i, &m)? {
                     Some((hit, used)) => {
@@ -1589,23 +1647,38 @@ pub fn parse_program(text: &str) -> Result<HoleModel, String> {
                                 .iter()
                                 .map(|(sys, hit)| format!("{} 的 {}", sys.code(), hit.spec.name))
                                 .collect();
-                            return Err(format!(
-                                "体系与规格不匹配：{} 体系里没有「{text}」—— 这是 {}；\
-                                 请先写对体系，或改用本体系规格（示例：{}）",
-                                m.thread_system.code(),
-                                conflicts.join("、"),
-                                spec_name_samples(
-                                    m.thread_system,
-                                    m.thread_group.as_deref(),
-                                    6
-                                ),
+                            return Err(t_fmt(
+                                "cmd.hole.err.system_spec_mismatch",
+                                &[
+                                    ("sys", m.thread_system.code()),
+                                    ("text", &text),
+                                    ("conflicts", &conflicts.join("、")),
+                                    (
+                                        "examples",
+                                        &spec_name_samples(
+                                            m.thread_system,
+                                            m.thread_group.as_deref(),
+                                            6,
+                                        ),
+                                    ),
+                                ],
                             ));
                         }
                         let text = tokens[i].clone();
-                        return Err(format!(
-                            "未知规格名「{text}」（{} 体系）—— 表内示例：{}",
-                            m.thread_system.code(),
-                            spec_name_samples(m.thread_system, m.thread_group.as_deref(), 6),
+                        return Err(t_fmt(
+                            "cmd.hole.err.spec_name_unknown",
+                            &[
+                                ("text", &text),
+                                ("sys", m.thread_system.code()),
+                                (
+                                    "examples",
+                                    &spec_name_samples(
+                                        m.thread_system,
+                                        m.thread_group.as_deref(),
+                                        6,
+                                    ),
+                                ),
+                            ],
                         ));
                     }
                 }
@@ -1614,7 +1687,7 @@ pub fn parse_program(text: &str) -> Result<HoleModel, String> {
         i += 1;
     }
     if !size_seen {
-        return Err("缺少大小（例 `M10` / `M10×1.25`）".to_string());
+        return Err(t("cmd.hole.err.size_missing"));
     }
     // 简单孔没写子类型时默认「钻头大小」（GUI 同口径；不然会报「简单孔不带螺纹」）
     if m.kind == HoleKind::Simple
@@ -1698,7 +1771,7 @@ pub fn preview_svg(model: &HoleModel) -> Result<String, String> {
         }
     }
     if bb[0] == f64::MAX {
-        return Err("至少勾选一个视图（侧视图/俯视图）".into());
+        return Err(t("cmd.hole.err.need_one_view"));
     }
     let (cw, ch) = (520.0_f64, 380.0_f64);
     let pad = 18.0;
@@ -1940,6 +2013,13 @@ impl CommonLayer for Circle {
 mod tests {
     use super::*;
 
+    /// 语言是进程级全局：断言中文文案的用例与「切语言」用例共用锁并钉死 zh。
+    fn zh_guard() -> std::sync::MutexGuard<'static, ()> {
+        let g = crate::global_state_test_lock();
+        crate::i18n::set_lang(crate::i18n::Lang::Zh);
+        g
+    }
+
     fn thread(d: f64, p: Option<f64>) -> HoleModel {
         let fine = p
             .map(|p| thread_row(d, Some(p)).map(is_fine).unwrap_or(false))
@@ -2035,6 +2115,7 @@ mod tests {
     /// 不带螺纹：孔深不能自动（简单孔 / 沉头 / 埋头都是）。
     #[test]
     fn unthreaded_rejects_auto_depth() {
+        let _g = zh_guard();
         for (kind, sub) in [
             (HoleKind::Simple, HoleSubtype::Drill),
             (HoleKind::Simple, HoleSubtype::Custom),
@@ -2183,6 +2264,7 @@ mod tests {
     /// 四类孔的关键派生：沉头底孔起算点、埋头 90° 几何、间隙三档。
     #[test]
     fn kinds_derive_correctly() {
+        let _g = zh_guard();
         // 沉头 + 螺纹：底孔小径从沉孔底起算
         let mut m = thread(10.0, None);
         m.kind = HoleKind::Counterbore;
@@ -2330,6 +2412,7 @@ mod tests {
     /// 全长：L = H；孔深自动被拒；不画终止线。
     #[test]
     fn full_thread_takes_hole_depth_and_requires_manual_depth() {
+        let _g = zh_guard();
         let mut m = thread(10.0, Some(1.5));
         m.full_thread = true;
         assert!(resolve(&m).unwrap_err().contains("全长"));
@@ -2358,6 +2441,7 @@ mod tests {
     /// 贯通孔深不能自动；手动 L > H 报错；退出不足 2P 给软警告。
     #[test]
     fn through_and_runout_validation() {
+        let _g = zh_guard();
         let mut m = thread(10.0, Some(1.5));
         m.range = HoleRange::Through;
         assert!(resolve(&m).unwrap_err().contains("贯通"));
@@ -2457,6 +2541,7 @@ mod tests {
     /// ● 回归：`公称/P`、`M10`、`P1.5`、`盲孔/贯通` 等老写法逐条仍通。
     #[test]
     fn parse_program_accepts_thread_spec_names() {
+        let _g = zh_guard();
         // ① 7 类体系 × 2 个字面量，name 写法 == 数值（公称/P）写法
         let pairs: [(&str, &str); 14] = [
             ("螺纹孔 M10", "螺纹孔 公称10 P1.5"),
@@ -2612,6 +2697,7 @@ mod tests {
     /// 非公制螺纹（UN/G/R/NPT/ACME/Tr）的派生：TPI→P、1.5d、L+2P、底孔、表外报错。
     #[test]
     fn non_metric_thread_types_resolve() {
+        let _g = zh_guard();
         // UN 1/4-20 UNC：P=1.27、d1=4.976、底孔=5.1054；自动 1.5d 与 L+2P。
         let mut m = HoleModel {
             kind: HoleKind::Threaded,
@@ -2819,5 +2905,159 @@ mod tests {
         let m_group = &systems[0]["groups"][0];
         let m10 = m_group["rows"].as_array().unwrap().iter().find(|r| r["name"] == "M10").unwrap();
         assert_eq!(m10["drill"], 8.5);
+    }
+
+    /// ② 批双语验收：孔生成器的报错/提示在 zh/en 下均取到，且关键数据（值/表名/规格名）不丢。
+    #[test]
+    fn hole_messages_switch_language_with_data_intact() {
+        let _g = crate::global_state_test_lock();
+        let calls: Vec<(&str, Box<dyn Fn() -> String>, &str, &str)> = vec![
+            (
+                "table.lookup",
+                Box::new(|| parse_program("螺纹孔 M99x1.5").unwrap_err()),
+                "M99×1.5",
+                "M99×1.5",
+            ),
+            (
+                "value.missing",
+                Box::new(|| parse_program("螺纹孔 M10 孔深").unwrap_err()),
+                "缺数值",
+                "is missing its value",
+            ),
+            (
+                "view.name",
+                Box::new(|| parse_program("螺纹孔 M10 view").unwrap_err()),
+                "缺视图名",
+                "missing a view name",
+            ),
+            (
+                "at.xy",
+                Box::new(|| parse_program("螺纹孔 M10 at 1").unwrap_err()),
+                "x,y",
+                "x,y",
+            ),
+            (
+                "rot.invalid",
+                Box::new(|| parse_program("螺纹孔 M10 rot x").unwrap_err()),
+                "转角非法",
+                "Invalid rotation",
+            ),
+            (
+                "pitch.nonpositive",
+                Box::new(|| parse_program("螺纹孔 M10 P0").unwrap_err()),
+                "P=0",
+                "P=0",
+            ),
+            (
+                "unknown.param",
+                Box::new(|| parse_program("螺纹孔 M10 公差X").unwrap_err()),
+                "公差",
+                "公差",
+            ),
+            (
+                "coarse.missing",
+                Box::new(|| {
+                    let m = parse_program("螺纹孔 公称99").unwrap();
+                    resolve(&m).unwrap_err()
+                }),
+                "M99",
+                "M99",
+            ),
+            (
+                "gb70_2",
+                Box::new(|| {
+                    let m = parse_program("沉头孔 M10 H10 推荐70.2").unwrap();
+                    resolve(&m).unwrap_err()
+                }),
+                "70.2",
+                "70.2",
+            ),
+            (
+                "not.initialized",
+                Box::new(|| {
+                    ocsm_ready(&ocs_plugin_api::host::acadrust::CadDocument::new()).unwrap_err()
+                }),
+                "缺图层",
+                "missing layers",
+            ),
+        ];
+        crate::i18n::set_lang(crate::i18n::Lang::Zh);
+        let zh: Vec<String> = calls.iter().map(|(_, f, _, _)| f()).collect();
+        crate::i18n::set_lang(crate::i18n::Lang::En);
+        let en: Vec<String> = calls.iter().map(|(_, f, _, _)| f()).collect();
+        crate::i18n::set_lang_auto();
+        for ((name, _, need_zh, need_en), (z, e)) in calls.iter().zip(zh.iter().zip(en.iter())) {
+            assert!(z.contains(need_zh), "{name} zh 缺关键数据 {need_zh}：{z}");
+            assert!(e.contains(need_en), "{name} en 缺关键数据 {need_en}：{e}");
+            assert_ne!(z, e, "{name} 两语应不同：{z}");
+        }
+        // 警告（工艺余量）与提示（回执）也走 catalog，且保留数值/图层协议名。
+        let m = parse_program("螺纹孔 M10 H16 L15").unwrap();
+        let warn_zh = crate::i18n::t_fmt_lang(
+            crate::i18n::Lang::Zh,
+            "cmd.hole.warn.runout_below_2p",
+            &[("h", "16"), ("l", "15"), ("need", "18")],
+        );
+        let warn_en = crate::i18n::t_fmt_lang(
+            crate::i18n::Lang::En,
+            "cmd.hole.warn.runout_below_2p",
+            &[("h", "16"), ("l", "15"), ("need", "18")],
+        );
+        assert!(warn_zh.contains("2P=") && warn_zh.contains("16"), "{warn_zh}");
+        assert!(warn_en.contains("2P=") && warn_en.contains("16"), "{warn_en}");
+        assert!(resolve(&m).unwrap().warnings.iter().any(|w| w.contains("工艺余量") || w.contains("runout")), "M10 H16 L15 应有工艺余量警告");
+        let echo_zh = crate::i18n::t_fmt_lang(
+            crate::i18n::Lang::Zh,
+            "cmd.hole.echo.created",
+            &[
+                ("kind", "螺纹孔"),
+                ("size", "M10"),
+                ("drill", "8.5"),
+                ("depth", "18"),
+                ("count", "7"),
+                ("x", "0"),
+                ("y", "0"),
+                ("rot", "0"),
+            ],
+        );
+        let echo_en = crate::i18n::t_fmt_lang(
+            crate::i18n::Lang::En,
+            "cmd.hole.echo.created",
+            &[
+                ("kind", "threaded hole"),
+                ("size", "M10"),
+                ("drill", "8.5"),
+                ("depth", "18"),
+                ("count", "7"),
+                ("x", "0"),
+                ("y", "0"),
+                ("rot", "0"),
+            ],
+        );
+        assert!(echo_zh.contains("已生成螺纹孔 M10") && echo_zh.contains("1轮廓实线层"), "{echo_zh}");
+        assert!(
+            echo_en.contains("created threaded hole M10")
+                && echo_en.contains("8.5")
+                && echo_en.contains("1轮廓实线层"),
+            "{echo_en}"
+        );
+    }
+
+    /// ② 批验收：跑过的产品路径不得留下「没录到」的 key（missing_keys 为空）。
+    #[test]
+    fn hole_paths_leave_no_missing_catalog_keys() {
+        let _g = crate::global_state_test_lock();
+        crate::i18n::clear_missing_keys();
+        for lang in [crate::i18n::Lang::Zh, crate::i18n::Lang::En] {
+            crate::i18n::set_lang(lang);
+            let _ = parse_program("螺纹孔 M99x1.5");
+            let _ = parse_program("螺纹孔 M10 孔深");
+            let _ = parse_program("螺纹孔 M10 公差X");
+            let _ = resolve(&parse_program("螺纹孔 公称99").unwrap());
+            let _ = ocsm_ready(&ocs_plugin_api::host::acadrust::CadDocument::new());
+        }
+        crate::i18n::set_lang_auto();
+        let missing = crate::i18n::missing_keys();
+        assert!(missing.is_empty(), "运行期漏挂 key：{missing:?}");
     }
 }

@@ -15,6 +15,8 @@
 use std::collections::BTreeMap;
 use std::sync::OnceLock;
 
+use crate::i18n::t_fmt;
+
 /// 螺纹体系（孔生成器「标准」下拉）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -299,11 +301,13 @@ pub fn lookup(
     };
     if groups.is_empty() {
         let keys: Vec<&str> = t.groups.iter().map(|g| g.key).collect();
-        return Err(format!(
-            "{} 没有子类型「{}」（可用：{}）",
-            sys.code(),
-            group.unwrap_or(""),
-            keys.join("/")
+        return Err(t_fmt(
+            "cmd.thread.err.group_missing",
+            &[
+                ("sys", sys.code()),
+                ("group", group.unwrap_or("")),
+                ("keys", &keys.join("/")),
+            ],
         ));
     }
     let mut hits: Vec<&ThreadSpec> = Vec::new();
@@ -323,21 +327,28 @@ pub fn lookup(
                 .take(6)
                 .map(|r| r.name.clone())
                 .collect();
-            Err(format!(
-                "{} 表里没有 {}（mm, P={}）—— 表外不插值；表内示例：{}",
-                sys.code(),
-                crate::hole::fmt3(d),
-                pitch.map(crate::hole::fmt3).unwrap_or_else(|| "粗牙".into()),
-                sample.join("、")
+            let p = pitch
+                .map(crate::hole::fmt3)
+                .unwrap_or_else(|| crate::i18n::t("cmd.thread.coarse_short"));
+            Err(t_fmt(
+                "cmd.thread.err.spec_missing",
+                &[
+                    ("sys", sys.code()),
+                    ("d", &crate::hole::fmt3(d)),
+                    ("p", &p),
+                    ("samples", &sample.join("、")),
+                ],
             ))
         }
         _ => {
             let names: Vec<String> = hits.iter().map(|r| r.name.clone()).collect();
-            Err(format!(
-                "{} {} 命中多行（{}）—— 请指定子类型/螺距",
-                sys.code(),
-                crate::hole::fmt3(d),
-                names.join("、")
+            Err(t_fmt(
+                "cmd.thread.err.ambiguous",
+                &[
+                    ("sys", sys.code()),
+                    ("d", &crate::hole::fmt3(d)),
+                    ("names", &names.join("、")),
+                ],
             ))
         }
     }

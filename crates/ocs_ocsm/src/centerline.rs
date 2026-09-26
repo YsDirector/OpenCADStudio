@@ -257,20 +257,25 @@ impl CenterLinePick {
         // 图框比例跟拾取点走（和 D/GDIM 的"比例感知"一致）。
         self.scale = crate::frame_scale_at(&self.doc, pick_pt);
         let Some(picked) = self.classify(handle) else {
-            self.notice = Some("只能点圆/圆弧或直线".into());
+            self.notice = Some(crate::i18n::t("cmd.centerline.err.bad_pick"));
             return Advance::KeepGoing(self.notice.clone());
         };
         match picked {
             Picked::Round { center, radius } => {
                 let segs = cross_for_circle(center, radius, self.scale).to_vec();
                 Advance::Commit {
-                    info: format!(
-                        "OCSMCENTERLINE：十字中心线（Ø{:.3} + {}×{}，线长 {:.3}）→ {}",
-                        radius * 2.0,
-                        crate::trim_scale(self.scale),
-                        OVERHANG_MM,
-                        2.0 * radius + OVERHANG_MM * self.scale,
-                        LAYER_CENTERLINE,
+                    info: crate::i18n::t_fmt(
+                        "cmd.centerline.info.cross",
+                        &[
+                            ("dia", &format!("{:.3}", radius * 2.0)),
+                            ("scale", &crate::trim_scale(self.scale)),
+                            ("over", &OVERHANG_MM.to_string()),
+                            (
+                                "len",
+                                &format!("{:.3}", 2.0 * radius + OVERHANG_MM * self.scale),
+                            ),
+                            ("layer", LAYER_CENTERLINE),
+                        ],
                     ),
                     segs,
                 }
@@ -278,7 +283,7 @@ impl CenterLinePick {
             Picked::Straight(seg) => match self.first {
                 None => {
                     if seg.len() < 1e-9 {
-                        self.notice = Some("这根线长度是 0，换一根".into());
+                        self.notice = Some(crate::i18n::t("cmd.centerline.err.zero_len_first"));
                         return Advance::KeepGoing(self.notice.clone());
                     }
                     self.first = Some(seg);
@@ -287,18 +292,23 @@ impl CenterLinePick {
                 }
                 Some(first) => match bisector(first, seg, self.scale) {
                     Some(cl) => Advance::Commit {
-                        info: format!(
-                            "OCSMCENTERLINE：角平分线中心线（长 {:.3} = 投影 {:.3} + {}×{}）→ {}",
-                            cl.len(),
-                            cl.len() - OVERHANG_MM * self.scale,
-                            crate::trim_scale(self.scale),
-                            OVERHANG_MM,
-                            LAYER_CENTERLINE,
+                        info: crate::i18n::t_fmt(
+                            "cmd.centerline.info.bisector",
+                            &[
+                                ("len", &format!("{:.3}", cl.len())),
+                                (
+                                    "proj",
+                                    &format!("{:.3}", cl.len() - OVERHANG_MM * self.scale),
+                                ),
+                                ("scale", &crate::trim_scale(self.scale)),
+                                ("over", &OVERHANG_MM.to_string()),
+                                ("layer", LAYER_CENTERLINE),
+                            ],
                         ),
                         segs: vec![cl],
                     },
                     None => {
-                        self.notice = Some("两根线里有一根长度是 0，重来".into());
+                        self.notice = Some(crate::i18n::t("cmd.centerline.err.zero_len_pair"));
                         Advance::KeepGoing(self.notice.clone())
                     }
                 },
@@ -310,9 +320,11 @@ impl CenterLinePick {
 impl InteractiveCommand for CenterLinePick {
     fn prompt(&self) -> String {
         match (&self.first, &self.notice) {
-            (Some(_), _) => "OCSMCENTERLINE：再点第二根直线（角平分线中心线），Enter 取消".into(),
-            (None, Some(n)) => format!("OCSMCENTERLINE：{n}"),
-            (None, None) => "OCSMCENTERLINE 中心线：点圆/圆弧（十字）或直线（角平分线）".into(),
+            (Some(_), _) => crate::i18n::t("cmd.centerline.prompt.second"),
+            (None, Some(n)) => {
+                crate::i18n::t_fmt("cmd.centerline.prompt.notice", &[("n", n)])
+            }
+            (None, None) => crate::i18n::t("cmd.centerline.prompt.pick"),
         }
     }
 
@@ -339,7 +351,7 @@ impl InteractiveCommand for CenterLinePick {
 
     /// 空白处点击（没点到对象）：继续等。
     fn on_point(&mut self, _pt: P) -> CommandStep {
-        self.notice = Some("没点到对象：请点在圆/圆弧或直线上".into());
+        self.notice = Some(crate::i18n::t("cmd.centerline.err.no_object"));
         CommandStep::NeedPoint
     }
 
@@ -376,22 +388,26 @@ pub(crate) fn from_selection(doc: &CadDocument, handles: &[Handle], scale: f64) 
     match picked.as_slice() {
         [Picked::Round { center, radius }] => Some((
             cross_for_circle(*center, *radius, scale).to_vec(),
-            format!(
-                "OCSMCENTERLINE：十字中心线（Ø{:.3} + {}×{}）→ {}",
-                radius * 2.0,
-                crate::trim_scale(scale),
-                OVERHANG_MM,
-                LAYER_CENTERLINE
+            crate::i18n::t_fmt(
+                "cmd.centerline.info.cross_selection",
+                &[
+                    ("dia", &format!("{:.3}", radius * 2.0)),
+                    ("scale", &crate::trim_scale(scale)),
+                    ("over", &OVERHANG_MM.to_string()),
+                    ("layer", LAYER_CENTERLINE),
+                ],
             ),
         )),
         [Picked::Straight(a), Picked::Straight(b)] => {
             let cl = bisector(*a, *b, scale)?;
             Some((
                 vec![cl],
-                format!(
-                    "OCSMCENTERLINE：角平分线中心线（第一根线 = 选区里第一个，长 {:.3}）→ {}",
-                    cl.len(),
-                    LAYER_CENTERLINE
+                crate::i18n::t_fmt(
+                    "cmd.centerline.info.bisector_selection",
+                    &[
+                        ("len", &format!("{:.3}", cl.len())),
+                        ("layer", LAYER_CENTERLINE),
+                    ],
                 ),
             ))
         }
@@ -418,15 +434,18 @@ pub(crate) fn cmd_centerline(host: &mut dyn HostApi) {
             .unwrap_or([0.0, 0.0, 0.0]);
         let scale = crate::frame_scale_at(&doc, scale_pt);
         if let Some((segs, info)) = from_selection(&doc, &sel, scale) {
-            host.push_undo("OCSMCENTERLINE 中心线");
+            host.push_undo(&crate::i18n::t("cmd.centerline.undo_label"));
             let n = segs.len();
             let _ = host.add_entities(lines_of(&segs));
             host.set_dirty();
             host.push_info(&info);
-            host.push_output(&format!("OCSMCENTERLINE：已画出 {n} 条中心线"));
+            host.push_output(&crate::i18n::t_fmt(
+                "cmd.centerline.info.draw_count",
+                &[("n", &n.to_string())],
+            ));
             return;
         }
-        host.push_info("OCSMCENTERLINE：选区不是「1 个圆/圆弧」或「2 根直线」→ 改为点选");
+        host.push_info(&crate::i18n::t("cmd.centerline.err.bad_selection"));
     }
     host.start_interactive(Box::new(CenterLinePick::new(doc)));
 }
@@ -444,6 +463,13 @@ mod tests {
 
     fn close(a: f64, b: f64) -> bool {
         (a - b).abs() < 1e-9
+    }
+
+    /// 语言是进程级全局：断言中文文案的用例与「切语言」用例共用锁并钉死 zh。
+    fn zh_guard() -> std::sync::MutexGuard<'static, ()> {
+        let g = crate::global_state_test_lock();
+        crate::i18n::set_lang(crate::i18n::Lang::Zh);
+        g
     }
 
     // ── 圆 / 圆弧 ────────────────────────────────────────────────────────
@@ -613,6 +639,7 @@ mod tests {
 
     #[test]
     fn picking_a_circle_commits_two_cross_lines_in_one_step() {
+        let _g = zh_guard();
         let (doc, c, _, _) = doc_with_circle_and_lines();
         let mut cmd = CenterLinePick::new(doc);
         match cmd.advance(c, [60.0, 50.0, 0.0]) {
@@ -629,6 +656,7 @@ mod tests {
 
     #[test]
     fn picking_two_lines_commits_the_bisector_after_the_second_pick() {
+        let _g = zh_guard();
         let (doc, _, l1, l2) = doc_with_circle_and_lines();
         let mut cmd = CenterLinePick::new(doc);
         assert!(matches!(cmd.advance(l1, [50.0, 0.0, 0.0]), Advance::KeepGoing(_)));
@@ -644,6 +672,7 @@ mod tests {
 
     #[test]
     fn picking_something_else_keeps_asking() {
+        let _g = zh_guard();
         let (mut doc, _, _, _) = doc_with_circle_and_lines();
         let t = doc
             .add_entity(EntityType::Point({
@@ -663,6 +692,7 @@ mod tests {
     #[test]
     fn interactive_trait_reports_entity_pick_without_osnap() {
         use ocs_plugin_api::host::InteractiveCommand as Ic;
+        let _g = zh_guard();
         let (doc, _, _, _) = doc_with_circle_and_lines();
         let mut cmd = CenterLinePick::new(doc);
         assert!(cmd.needs_object_pick());
@@ -697,6 +727,7 @@ mod tests {
 
     #[test]
     fn selection_entry_builds_cross_and_bisector() {
+        let _g = zh_guard();
         let (doc, c, l1, l2) = doc_with_circle_and_lines();
         let (segs, info) = from_selection(&doc, &[c], 1.0).expect("1 个圆");
         assert_eq!(segs.len(), 2);
@@ -708,5 +739,33 @@ mod tests {
         // 不合法选区 → None（转交互）
         assert!(from_selection(&doc, &[l1], 1.0).is_none());
         assert!(from_selection(&doc, &[l1, l2, c], 1.0).is_none());
+    }
+
+    /// ② 批双语：中心线的回执/报错在 zh/en 下均取到，且保留数值与图层协议名。
+    #[test]
+    fn centerline_messages_switch_language_keeping_data() {
+        let _g = crate::global_state_test_lock();
+        let (doc, c, l1, l2) = doc_with_circle_and_lines();
+        crate::i18n::set_lang(crate::i18n::Lang::Zh);
+        let (_, zh_cross) = from_selection(&doc, &[c], 1.0).expect("圆");
+        let (_, zh_bi) = from_selection(&doc, &[l1, l2], 2.0).expect("两线");
+        crate::i18n::set_lang(crate::i18n::Lang::En);
+        let (_, en_cross) = from_selection(&doc, &[c], 1.0).expect("圆");
+        let (_, en_bi) = from_selection(&doc, &[l1, l2], 2.0).expect("两线");
+        let en_pick = crate::i18n::t("cmd.centerline.err.bad_pick");
+        crate::i18n::set_lang_auto();
+        assert!(
+            zh_cross.contains("十字") && zh_cross.contains(LAYER_CENTERLINE),
+            "{zh_cross}"
+        );
+        assert!(
+            en_cross.contains("cross") && en_cross.contains(LAYER_CENTERLINE),
+            "{en_cross}"
+        );
+        assert!(
+            zh_bi.contains("角平分线") && en_bi.contains("bisector"),
+            "{zh_bi} / {en_bi}"
+        );
+        assert!(en_pick.contains("Pick a circle"), "{en_pick}");
     }
 }

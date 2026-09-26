@@ -207,24 +207,22 @@ pub(crate) fn build_balloon_parts(
     dir: BalloonDir,
 ) -> Result<BalloonParts, String> {
     if items.is_empty() {
-        return Err("序号标注：至少要有一个序号".into());
+        return Err(crate::i18n::t("cmd.balloon.err.need_item"));
     }
     if items.iter().any(|t| t.trim().is_empty()) {
-        return Err("序号标注：序号不能为空".into());
+        return Err(crate::i18n::t("cmd.balloon.err.blank_item"));
     }
     if s <= 0.0 || !s.is_finite() {
-        return Err("序号标注：图幅倍率无效".into());
+        return Err(crate::i18n::t("cmd.balloon.err.bad_scale"));
     }
     // ── 肩线必须水平（序号永远水平写；不要竖肩线 + 序号旋转那种样式）──
     let bdx = p_end[0] - p0[0];
     let bdy = p_end[1] - p0[1];
     if bdy.abs() > bdx.abs() {
-        return Err(
-            "序号标注：横线必须水平（第二段昣平画）——不支持竖肩线（序号不旋转）".into(),
-        );
+        return Err(crate::i18n::t("cmd.balloon.err.not_horizontal"));
     }
     if bdx.abs() <= 1e-9 {
-        return Err("序号标注：第二段（横线方向段）长度为零".into());
+        return Err(crate::i18n::t("cmd.balloon.err.zero_segment"));
     }
     // 横线自拐点朝 p_end 延伸（水平）：t 轴 = ±x，n_up = 内容上方 = +y。
     let t_sign = if bdx >= 0.0 { 1.0 } else { -1.0 };

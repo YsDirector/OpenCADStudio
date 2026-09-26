@@ -2367,8 +2367,8 @@ impl OcsmPlugin {
             sender: std::sync::Arc::from(sender),
             phase: std::cell::Cell::new(PlacePhase::Follow),
             base: std::cell::Cell::new([0.0, 0.0, 0.0]),
-            what: "OCSM 齿轮",
-            where_to: "请在齿轮窗口里点「生成到图纸」",
+            what: "OCSM 齿轮".to_string(),
+            where_to: "请在齿轮窗口里点「生成到图纸」".to_string(),
         }));
     }
 
@@ -2411,8 +2411,8 @@ impl OcsmPlugin {
                 sender: std::sync::Arc::from(sender),
                 phase: std::cell::Cell::new(PlacePhase::Follow),
                 base: std::cell::Cell::new([0.0, 0.0, 0.0]),
-                what: "OCSM 轴",
-                where_to: "请在轴生成器窗口里点「生成到图纸」",
+                what: "OCSM 轴".to_string(),
+                where_to: "请在轴生成器窗口里点「生成到图纸」".to_string(),
             }));
             return;
         }
@@ -2509,14 +2509,17 @@ impl OcsmPlugin {
             let model = match crate::hole::parse_program(args) {
                 Ok(m) => m,
                 Err(message) => {
-                    host.push_error(&format!("OCSMHOLE 参数无效：{message}"));
-                    host.push_output(crate::hole::USAGE);
+                    host.push_error(&crate::i18n::t_fmt(
+                        "cmd.hole.err.parse_wrap",
+                        &[("message", &message)],
+                    ));
+                    host.push_output(&crate::hole::usage());
                     return;
                 }
             };
             if let Err(msg) = crate::hole::ocsm_ready(host.document()) {
                 host.push_error(&format!("OCSMHOLE: {msg}"));
-                host.push_info("OCSMHOLE：先运行 OCSM（或点功能区「图幅」组里的 OCSM 初始化），再直接插孔。");
+                host.push_info(&crate::i18n::t("cmd.hole.info.run_init_direct"));
                 return;
             }
             let at = model.at.unwrap_or([0.0, 0.0]);
@@ -2524,7 +2527,10 @@ impl OcsmPlugin {
             let built = match crate::hole::build(&model) {
                 Ok(b) => b,
                 Err(message) => {
-                    host.push_error(&format!("OCSMHOLE 几何非法：{message}"));
+                    host.push_error(&crate::i18n::t_fmt(
+                        "cmd.hole.err.geometry_wrap",
+                        &[("message", &message)],
+                    ));
                     return;
                 }
             };
@@ -2535,43 +2541,51 @@ impl OcsmPlugin {
             let _ = host.add_entities(entities);
             host.set_dirty();
             let kind = match model.kind {
-                crate::hole::HoleKind::Simple => "简单孔",
-                crate::hole::HoleKind::Threaded => "螺纹孔",
-                crate::hole::HoleKind::Counterbore => "沉头孔",
-                crate::hole::HoleKind::Countersink => "埋头孔",
+                crate::hole::HoleKind::Simple => crate::i18n::t("cmd.hole.kind.simple"),
+                crate::hole::HoleKind::Threaded => crate::i18n::t("cmd.hole.kind.threaded"),
+                crate::hole::HoleKind::Counterbore => crate::i18n::t("cmd.hole.kind.counterbore"),
+                crate::hole::HoleKind::Countersink => crate::i18n::t("cmd.hole.kind.countersink"),
             };
-            host.push_output(&format!(
-                "OCSMHOLE：已生成{kind} {}（底孔Ø{}，深{}，{} 个图元）于 ({}, {}) rot {}° → 1轮廓实线层 / 2细线层 / 3中心线层",
-                if v.threaded { v.size_name.clone() } else { format!("Ø{}", crate::hole::fmt3(v.base_d)) },
-                crate::hole::fmt3(v.base_d),
-                crate::hole::fmt3(v.hole_depth),
-                count,
-                crate::partgen_kit::trim(at[0]),
-                crate::partgen_kit::trim(at[1]),
-                crate::partgen_kit::trim(rot),
+            let size = if v.threaded {
+                v.size_name.clone()
+            } else {
+                format!("Ø{}", crate::hole::fmt3(v.base_d))
+            };
+            host.push_output(&crate::i18n::t_fmt(
+                "cmd.hole.echo.created",
+                &[
+                    ("kind", &kind),
+                    ("size", &size),
+                    ("drill", &crate::hole::fmt3(v.base_d)),
+                    ("depth", &crate::hole::fmt3(v.hole_depth)),
+                    ("count", &count.to_string()),
+                    ("x", &crate::partgen_kit::trim(at[0])),
+                    ("y", &crate::partgen_kit::trim(at[1])),
+                    ("rot", &crate::partgen_kit::trim(rot)),
+                ],
             ));
             for w in &v.warnings {
-                host.push_info(&format!("OCSMHOLE 提示：{w}"));
+                host.push_info(&crate::i18n::t_fmt(
+                    "cmd.hole.info.warn_prefix",
+                    &[("w", w)],
+                ));
             }
             return;
         }
         // 人类侧：先拦截未初始化图纸（与轴/齿轮同口径），再开窗 + 进放置态。
         if let Err(msg) = crate::hole::ocsm_ready(host.document()) {
             host.push_error(&format!("OCSMHOLE: {msg}"));
-            host.push_info("OCSMHOLE：先运行 OCSM 初始化，再打开孔生成器窗口。");
+            host.push_info(&crate::i18n::t("cmd.hole.info.run_init_window"));
             return;
         }
         let Some(port) = self.ensure_guide_server(host) else {
-            host.push_error("OCSMHOLE: 无法启动孔服务（宿主不支持 worker 请求）。");
+            host.push_error(&crate::i18n::t("cmd.hole.err.server_start"));
             return;
         };
         if open_hole_window(port, Some(host.tab_id())) {
-            host.push_info(
-                "OCSM 孔生成器：已打开窗口（类型 2×2 + 子类型/大小/配合 + 盲孔/贯通 + 孔深/螺纹范围自动）。\
-                 点「确定」→ 回到图纸点击定位基点 → 移动光标旋转 → 再点击落定（可连续，Esc 结束）。",
-            );
+            host.push_info(&crate::i18n::t("cmd.hole.info.window_opened"));
         } else {
-            host.push_info("OCSM 孔生成器：窗口已打开（Alt+Tab 切换过去）。");
+            host.push_info(&crate::i18n::t("cmd.hole.info.window_focus"));
         }
         let Some(sender) = host.plugin_request_sender() else {
             return;
@@ -2580,8 +2594,8 @@ impl OcsmPlugin {
             sender: std::sync::Arc::from(sender),
             phase: std::cell::Cell::new(PlacePhase::Follow),
             base: std::cell::Cell::new([0.0, 0.0, 0.0]),
-            what: "OCSM 孔",
-            where_to: "请在孔生成器窗口里点「确定」",
+            what: crate::i18n::t("cmd.hole.place_what"),
+            where_to: crate::i18n::t("cmd.hole.hint.click_ok"),
         }));
     }
 
@@ -2641,8 +2655,8 @@ impl OcsmPlugin {
             sender: std::sync::Arc::from(sender),
             phase: std::cell::Cell::new(PlacePhase::Follow),
             base: std::cell::Cell::new([0.0, 0.0, 0.0]),
-            what: "OCSM 标准件",
-            where_to: "请在零件库窗口里点「零件出库」",
+            what: "OCSM 标准件".to_string(),
+            where_to: "请在零件库窗口里点「零件出库」".to_string(),
         }));
     }
 
@@ -2747,8 +2761,8 @@ impl OcsmPlugin {
             sender: std::sync::Arc::from(sender),
             phase: std::cell::Cell::new(PlacePhase::Follow),
             base: std::cell::Cell::new([0.0, 0.0, 0.0]),
-            what: "OCSM 智能卡片",
-            where_to: "请在智能卡片窗口里点「出表」",
+            what: "OCSM 智能卡片".to_string(),
+            where_to: "请在智能卡片窗口里点「出表」".to_string(),
         }));
     }
 
@@ -3515,12 +3529,12 @@ impl OcsmPlugin {
                 return;
             }
         };
-        host.push_info(&format!(
-            "OCSMFRAMEINIT: 找到 {} 个图框，正在打开选择窗口…",
-            frames.len()
+        host.push_info(&crate::i18n::t_fmt(
+            "cmd.frame.info.found_n",
+            &[("n", &frames.len().to_string())],
         ));
         if !host.show_frame_picker(frames) {
-            host.push_error("OCSMFRAMEINIT: 无法打开图框选择窗口。");
+            host.push_error(&crate::i18n::t("cmd.frame.err.picker_failed"));
         }
     }
 
@@ -3539,8 +3553,9 @@ impl OcsmPlugin {
     ) {
         // 复校比例：正整数且其一为 1。
         if v1 <= 0 || v2 <= 0 || (v1 != 1 && v2 != 1) {
-            host.push_error(&format!(
-                "{who}: 非法的比例（必须为两个正整数且其一为 1，如 1:2 / 2:1 / 1:1）。"
+            host.push_error(&crate::i18n::t_fmt(
+                "cmd.frame.err.bad_scale",
+                &[("who", who)],
             ));
             return;
         }
@@ -3556,7 +3571,7 @@ impl OcsmPlugin {
         // POWERDIM 在 frame 内标注时按此样式放大文字/箭头。
         // 缩放样式（以及随后的块导入/插入）都要可撤销：宿主 import 自带 push，
         // 这里补一次覆盖缩放样式创建；无改动时宿主会丢弃空条目。
-        host.push_undo("OCSM 插入图框");
+        host.push_undo(&crate::i18n::t("cmd.frame.undo_label"));
         if (scale - 1.0).abs() > 1e-9 {
             host.ensure_dim_styles(vec![scaled_dim_style_def(scale)]);
         }
@@ -3575,8 +3590,13 @@ impl OcsmPlugin {
 
         match at {
             None => {
-                host.push_info(&format!(
-                    "指定图框「{block_name}」的插入点（比例 {scale_text}，缩放 {scale:.2} 倍）…"
+                host.push_info(&crate::i18n::t_fmt(
+                    "cmd.frame.info.specify_point",
+                    &[
+                        ("block", &block_name),
+                        ("scale", &scale_text),
+                        ("s", &format!("{scale:.2}")),
+                    ],
                 ));
                 host.start_interactive(Box::new(FramePlace {
                     block_name,
@@ -3590,15 +3610,20 @@ impl OcsmPlugin {
                     build_frame_insert(&block_name, scale, &scale_text, &attdefs, base, rot_deg);
                 let _ = host.add_entities(vec![acadrust::EntityType::Insert(ins)]);
                 host.set_dirty();
-                host.push_info(&format!(
-                    "OCSMFRAMEINSERT: 已插入图框「{block_name}」比例 {scale_text}（缩放 {scale:.2} 倍）\
-                     基点 ({}, {})，旋转 {}°",
-                    trim_num(base[0]),
-                    trim_num(base[1]),
-                    trim_num(rot_deg)
+                host.push_info(&crate::i18n::t_fmt(
+                    "cmd.frame.info.inserted",
+                    &[
+                        ("block", &block_name),
+                        ("scale", &scale_text),
+                        ("s", &format!("{scale:.2}")),
+                        ("x", &trim_num(base[0])),
+                        ("y", &trim_num(base[1])),
+                        ("rot", &trim_num(rot_deg)),
+                    ],
                 ));
-                host.push_output(&format!(
-                    "图框 {block_name} 插入完成（比例 {scale_text}）"
+                host.push_output(&crate::i18n::t_fmt(
+                    "cmd.frame.output.inserted",
+                    &[("block", &block_name), ("scale", &scale_text)],
                 ));
             }
         }
@@ -3611,7 +3636,7 @@ impl OcsmPlugin {
             return self.cmd_frame_init(host, rest);
         }
         let Some(sel) = host.take_pending_frame_selection() else {
-            host.push_error("OCSMFRAMEINSERT: 没有待处理的图框选择。请先运行 TF。");
+            host.push_error(&crate::i18n::t("cmd.frame.err.no_pending"));
             return;
         };
         self.frame_insert(
@@ -4586,9 +4611,9 @@ fn frame_dir_stems() -> Vec<String> {
 fn frame_files() -> Result<Vec<FrameItem>, String> {
     let dir = frame_dir();
     let entries = std::fs::read_dir(&dir).map_err(|_| {
-        format!(
-            "找不到图框文件夹 {}。请在插件目录的 frame/ 中放入 DWG。",
-            dir.display()
+        crate::i18n::t_fmt(
+            "cmd.frame.err.folder_missing",
+            &[("dir", &dir.display().to_string())],
         )
     })?;
     let mut frames: Vec<FrameItem> = entries
@@ -4611,7 +4636,10 @@ fn frame_files() -> Result<Vec<FrameItem>, String> {
         .collect();
     frames.sort_by(|a, b| a.label.cmp(&b.label));
     if frames.is_empty() {
-        return Err(format!("{} 下没有 DWG 图框文件。", dir.display()));
+        return Err(crate::i18n::t_fmt(
+            "cmd.frame.err.no_dwg",
+            &[("dir", &dir.display().to_string())],
+        ));
     }
     Ok(frames)
 }
@@ -4626,14 +4654,19 @@ fn resolve_frame(frames: &[FrameItem], name: &str) -> Result<FrameItem, String> 
     if want.is_empty() {
         return match frames {
             [only] => Ok(only.clone()),
-            _ => Err(format!(
-                "图框目录里有 {} 个图框，请指名一个：{}。",
-                frames.len(),
-                frames
-                    .iter()
-                    .map(|f| f.label.as_str())
-                    .collect::<Vec<_>>()
-                    .join(" / ")
+            _ => Err(crate::i18n::t_fmt(
+                "cmd.frame.err.need_name",
+                &[
+                    ("n", &frames.len().to_string()),
+                    (
+                        "names",
+                        &frames
+                            .iter()
+                            .map(|f| f.label.as_str())
+                            .collect::<Vec<_>>()
+                            .join(" / "),
+                    ),
+                ],
             )),
         };
     }
@@ -4650,20 +4683,33 @@ fn resolve_frame(frames: &[FrameItem], name: &str) -> Result<FrameItem, String> 
         .collect();
     match hits.as_slice() {
         [only] => Ok((*only).clone()),
-        [] => Err(format!(
-            "没有叫「{want}」的图框。现有：{}。",
-            frames
-                .iter()
-                .map(|f| f.label.as_str())
-                .collect::<Vec<_>>()
-                .join(" / ")
+        [] => Err(crate::i18n::t_fmt(
+            "cmd.frame.err.name_missing",
+            &[
+                ("want", want),
+                (
+                    "names",
+                    &frames
+                        .iter()
+                        .map(|f| f.label.as_str())
+                        .collect::<Vec<_>>()
+                        .join(" / "),
+                ),
+            ],
         )),
-        many => Err(format!(
-            "「{want}」匹配到多个图框（{}），请写全名。",
-            many.iter()
-                .map(|f| f.label.as_str())
-                .collect::<Vec<_>>()
-                .join(" / ")
+        many => Err(crate::i18n::t_fmt(
+            "cmd.frame.err.name_ambiguous",
+            &[
+                ("want", want),
+                (
+                    "names",
+                    &many
+                        .iter()
+                        .map(|f| f.label.as_str())
+                        .collect::<Vec<_>>()
+                        .join(" / "),
+                ),
+            ],
         )),
     }
 }
@@ -4726,33 +4772,51 @@ fn parse_frame_args(rest: &str) -> Result<Option<FrameArgs>, String> {
         match lower.as_str() {
             "at" | "@" => {
                 if args.at.is_some() {
-                    return Err(format!("基点给了两次。{usage}"));
+                    return Err(crate::i18n::t_fmt(
+                        "cmd.tf.err.at_twice",
+                        &[("usage", &usage)],
+                    ));
                 }
                 let Some(next) = tokens.get(i + 1) else {
-                    return Err(format!("`at` 后面要给坐标，如 at 0,0。{usage}"));
+                    return Err(crate::i18n::t_fmt(
+                        "cmd.tf.err.at_needs_coords",
+                        &[("usage", &usage)],
+                    ));
                 };
                 args.at = Some(parse_point(next)?);
                 i += 2;
             }
             "rot" | "rotation" => {
                 let Some(next) = tokens.get(i + 1) else {
-                    return Err(format!("`rot` 后面要给角度。{usage}"));
+                    return Err(crate::i18n::t_fmt(
+                        "cmd.tf.err.rot_needs_angle",
+                        &[("usage", &usage)],
+                    ));
                 };
-                let deg: f64 = next
-                    .parse()
-                    .map_err(|_| format!("旋转角度「{next}」不是数字。{usage}"))?;
+                let deg: f64 = next.parse().map_err(|_| {
+                    crate::i18n::t_fmt(
+                        "cmd.tf.err.rot_not_number",
+                        &[("next", next), ("usage", &usage)],
+                    )
+                })?;
                 args.rot_deg = normalize_deg(deg);
                 i += 2;
             }
             _ => {
                 if tok.contains(',') {
                     if args.at.is_some() {
-                        return Err(format!("基点给了两次。{usage}"));
+                        return Err(crate::i18n::t_fmt(
+                            "cmd.tf.err.at_twice",
+                            &[("usage", &usage)],
+                        ));
                     }
                     args.at = Some(parse_point(tok)?);
                 } else if looks_like_scale(tok) {
                     if scale_seen {
-                        return Err(format!("比例给了两次。{usage}"));
+                        return Err(crate::i18n::t_fmt(
+                            "cmd.tf.err.scale_twice",
+                            &[("usage", &usage)],
+                        ));
                     }
                     let (v1, v2) = parse_scale_token(tok)?;
                     args.v1 = v1;
@@ -4771,7 +4835,7 @@ fn parse_frame_args(rest: &str) -> Result<Option<FrameArgs>, String> {
         }
     }
     if args.v1 <= 0 || args.v2 <= 0 || (args.v1 != 1 && args.v2 != 1) {
-        return Err("比例必须是两个正整数且其一为 1（例 1:2 / 2:1 / 1:1）。".to_string());
+        return Err(crate::i18n::t("cmd.tf.err.scale_invalid"));
     }
     Ok(Some(args))
 }
@@ -4780,13 +4844,16 @@ fn parse_frame_args(rest: &str) -> Result<Option<FrameArgs>, String> {
 fn parse_point(tok: &str) -> Result<[f64; 3], String> {
     let parts: Vec<&str> = tok.split(',').map(|s| s.trim()).collect();
     if !(2..=3).contains(&parts.len()) {
-        return Err(format!("坐标「{tok}」应写成 x,y 或 x,y,z。"));
+        return Err(crate::i18n::t_fmt(
+            "cmd.tf.err.point_form",
+            &[("tok", tok)],
+        ));
     }
     let mut out = [0.0f64; 3];
     for (i, p) in parts.iter().enumerate() {
         out[i] = p
             .parse::<f64>()
-            .map_err(|_| format!("坐标「{tok}」里「{p}」不是数字。"))?;
+            .map_err(|_| crate::i18n::t_fmt("cmd.tf.err.point_not_number", &[("tok", tok), ("p", p)]))?;
     }
     Ok(out)
 }
@@ -4814,14 +4881,17 @@ fn parse_scale_token(tok: &str) -> Result<(i64, i64), String> {
     if norm.contains(':') {
         let (a, b) = norm
             .split_once(':')
-            .ok_or_else(|| format!("比例「{tok}」写法不对（示例 1:2）。"))?;
+            .ok_or_else(|| crate::i18n::t_fmt("cmd.tf.err.scale_form", &[("tok", tok)]))?;
         return Ok((parse_scale_num(a, tok)?, parse_scale_num(b, tok)?));
     }
     let n: f64 = tok
         .parse()
-        .map_err(|_| format!("比例「{tok}」不是数字（示例 1:2 / 2 / 0.5）。"))?;
+        .map_err(|_| crate::i18n::t_fmt("cmd.tf.err.scale_not_number", &[("tok", tok)]))?;
     if !(n.is_finite() && n > 0.0) {
-        return Err(format!("比例「{tok}」必须是正数。"));
+        return Err(crate::i18n::t_fmt(
+            "cmd.tf.err.scale_not_positive",
+            &[("tok", tok)],
+        ));
     }
     let (v1, v2) = if n >= 1.0 { (1.0, n) } else { (1.0 / n, 1.0) };
     Ok((
@@ -4834,9 +4904,17 @@ fn parse_scale_num(s: &str, whole: &str) -> Result<i64, String> {
     let v: f64 = s
         .trim()
         .parse()
-        .map_err(|_| format!("比例「{whole}」里「{s}」不是数字。"))?;
+        .map_err(|_| {
+            crate::i18n::t_fmt(
+                "cmd.tf.err.scale_part_not_number",
+                &[("whole", whole), ("s", s)],
+            )
+        })?;
     if (v - v.round()).abs() > 1e-9 {
-        return Err(format!("比例「{whole}」必须是整数比（示例 1:2）。"));
+        return Err(crate::i18n::t_fmt(
+            "cmd.tf.err.scale_not_integer_ratio",
+            &[("whole", whole)],
+        ));
     }
     Ok(v.round() as i64)
 }
@@ -5093,9 +5171,9 @@ struct PartPlace {
     /// 已定位的基点
     base: std::cell::Cell<[f64; 3]>,
     /// 人看的名字（“OCSM 标准件” / “OCSM 齿轮”）——只影响提示语
-    what: &'static str,
+    what: String,
     /// 去哪里出图（“请在零件库窗口里点「零件出库」” / “请在齿轮窗口里点「生成到图纸」”）
-    where_to: &'static str,
+    where_to: String,
 }
 
 /// 放置阶段：`Follow` = 零件跟光标（未定位基点）；`Rotate` = 已定位基点、跟随光标绕基点旋转。
@@ -5107,14 +5185,19 @@ enum PlacePhase {
 
 impl InteractiveCommand for PartPlace {
     fn prompt(&self) -> String {
-        let (what, where_to) = (self.what, self.where_to);
+        let (what, where_to) = (&self.what, &self.where_to);
         match (pending_part_label(), self.phase.get()) {
-            (None, _) => format!("{what}：{where_to}，然后在此点击放置。"),
-            (Some(l), PlacePhase::Follow) => {
-                format!("{what}：{l} —— 点击定位基点（可连续，Esc 结束）")
-            }
-            (Some(l), PlacePhase::Rotate) => format!(
-                "{what}：{l} —— 移动光标绕基点旋转，再点击落定（Esc 取消）"
+            (None, _) => crate::i18n::t_fmt(
+                "cmd.place.prompt.wait",
+                &[("what", what), ("where_to", where_to)],
+            ),
+            (Some(l), PlacePhase::Follow) => crate::i18n::t_fmt(
+                "cmd.place.prompt.follow",
+                &[("what", what), ("l", &l)],
+            ),
+            (Some(l), PlacePhase::Rotate) => crate::i18n::t_fmt(
+                "cmd.place.prompt.rotate",
+                &[("what", what), ("l", &l)],
             ),
         }
     }
@@ -5190,9 +5273,9 @@ struct FramePlace {
 
 impl InteractiveCommand for FramePlace {
     fn prompt(&self) -> String {
-        format!(
-            "指定图框「{}」的插入点（比例 {}）：",
-            self.block_name, self.scale_text
+        crate::i18n::t_fmt(
+            "cmd.frame.prompt.specify_point",
+            &[("block", &self.block_name), ("scale", &self.scale_text)],
         )
     }
 
@@ -7345,8 +7428,8 @@ mod tests {
             sender: sender.clone(),
             phase: std::cell::Cell::new(PlacePhase::Follow),
             base: std::cell::Cell::new([0.0, 0.0, 0.0]),
-        what: "OCSM 标准件",
-        where_to: "请在零件库窗口里点「零件出库」",
+        what: "OCSM 标准件".to_string(),
+        where_to: "请在零件库窗口里点「零件出库」".to_string(),
         };
         // 未定位：预览跟光标（旋转 0）
         let prev = cmd.on_mouse_move([7.0, 8.0, 0.0]).expect("预览");
@@ -7386,8 +7469,8 @@ mod tests {
             sender,
             phase: std::cell::Cell::new(PlacePhase::Follow),
             base: std::cell::Cell::new([0.0, 0.0, 0.0]),
-            what: "OCSM 标准件",
-            where_to: "请在零件库窗口里点「零件出库」",
+            what: "OCSM 标准件".to_string(),
+            where_to: "请在零件库窗口里点「零件出库」".to_string(),
         };
         let _ = cmd2.on_point([1.0, 1.0, 0.0]);
         assert!(cmd2.prompt().contains("绕基点旋转"));
