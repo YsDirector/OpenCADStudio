@@ -406,13 +406,14 @@ function dinPreview(mm) {
     ? ['W齿厚svmax', 'W齿厚smax', 'W齿厚smin']
     : ['N槽宽max', 'N槽宽min', 'N槽宽eff'];
   if (gap) { for (const t of gapTags) missingSet.add(t); }
-  const design = ext ? 'Welle DIN 5480 – W120×3×38×8f' : 'Nabe DIN 5480 – N120×3×38×9H';
+  const design = ext ? 'W120×3×38×8f' : 'N120×3×38×9H';
+  const designLabel = ext ? 'Welle DIN 5480' : 'Nabe DIN 5480';
   const val = (tag) => tag.endsWith('标记') ? design
     : tag === 'N槽宽max' ? (gap ? '—' : '6.361') : tag === 'N槽宽eff' ? (gap ? '—' : '6.271')
     : tag === 'W齿厚svmax' ? (gap ? '—' : '6.243') : tag === 'W齿厚smin' ? (gap ? '—' : '6.18')
     : `v-${tag}`;
   const items = tags.map((tag) => ({
-    tag, label: tag, unit: '', value: val(tag),
+    tag, label: tag.endsWith('标记') ? designLabel : tag, unit: '', value: val(tag),
     formula: 'stub 公式', source: 'stub 来源', missing: missingSet.has(tag),
   }));
   return jsonResp({
@@ -865,7 +866,7 @@ check(!('side' in lastPreviewModel), 'DIN 模型不应带 side（由卡类型决
 check(Number(lastPreviewModel.m) === 3 && Number(lastPreviewModel.z) === 38 && Number(lastPreviewModel.d_b) === 120, `DIN m/z/d_B 应进模型：${JSON.stringify(lastPreviewModel)}`);
 check(lastPreviewModel.hub === '9H', `DIN 孔配合应进模型：${JSON.stringify(lastPreviewModel)}`);
 check(el('items').innerHTML.split('class="row"').length - 1 === 13, `DIN 内卡应 13 项：${el('items').innerHTML.slice(0, 100)}`);
-check(el('items').innerHTML.includes('Nabe DIN 5480 – N120×3×38×9H'), 'DIN 内标记行应出现在预览里');
+check(el('items').innerHTML.includes('Nabe DIN 5480') && el('items').innerHTML.includes('N120×3×38×9H'), 'DIN 内标记行应拆成标签格/值格');
 check(el('items').innerHTML.includes('6.361') && el('items').innerHTML.includes('6.271'), 'DIN 内锚点 e 应出现在预览里');
 H.formControl('ae').value = '0';
 H.formControl('ae')._fire('input', H.formControl('ae'));
@@ -916,7 +917,7 @@ H.formControl('expr').value = 'SPLINE EX M3 Z38 ALPHA30 X0.45 DA119.4 DF113.4 BE
 H.formControl('expr')._fire('input', H.formControl('expr'));
 await tick();
 check(el('items').innerHTML.split('class="row"').length - 1 === 13, `DIN 外卡应 13 项：${el('items').innerHTML.slice(0, 100)}`);
-check(el('items').innerHTML.includes('Welle DIN 5480 – W120×3×38×8f'), 'DIN 外标记行应出现在预览里');
+check(el('items').innerHTML.includes('Welle DIN 5480') && el('items').innerHTML.includes('W120×3×38×8f'), 'DIN 外标记行应拆成标签格/值格');
 check(el('items').innerHTML.includes('6.243'), 'DIN 外锚点 s 应出现在预览里');
 H.formControl('expr').value = 'SPLINE IN M3 Z38 ALPHA30 X0.45 DA120 DF114 BETA0 H30';
 H.formControl('expr')._fire('input', H.formControl('expr'));

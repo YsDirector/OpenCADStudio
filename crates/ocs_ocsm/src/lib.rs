@@ -520,8 +520,9 @@ pub(crate) fn open_hole_window(port: u16, tab: Option<u64>) -> bool {
     open_plugin_page(port, &with_tab("/hole", tab), "hole", 860, 720)
 }
 
-/// 打开**智能卡片**窗口（人用 GUI：本期卡类型「花键参数表」——内/外 + 等级·配合 +
-/// Dp 点选 + 齿形表达式反解 + 21 项实时结果；`OCSMCARD` 不带参数时打开）。
+/// 打开**智能卡片**窗口（人用 GUI：11 张卡，一卡一方向——GB 花键内/外、齿轮、
+/// ANSI 内/外×中/英、NF 内/外、DIN 内/外；字段/读数/出表由卡类型表统一下发；
+/// `OCSMCARD` 不带参数时打开）。
 pub(crate) fn open_card_window(port: u16, tab: Option<u64>) -> bool {
     open_plugin_page(port, &with_tab("/spline", tab), "spline", 980, 900)
 }
@@ -1735,7 +1736,7 @@ impl BuiltinPlugin for OcsmPlugin {
                 self.cmd_parts(host, rest);
                 true
             }
-            // 智能卡片（正式名 `OCSMCARD`；本期卡类型「花键参数表」→ 21 属性插图）
+            // 智能卡片（正式名 `OCSMCARD`；11 张卡，卡片类型表驱动 → 各卡属性插图）
             "OCSMCARD" => {
                 self.cmd_card(host, rest);
                 true
@@ -2654,11 +2655,12 @@ impl OcsmPlugin {
         }
     }
 
-    /// `OCSMCARD`：**智能卡片**（通用卡片生成器；本期卡类型 = 花键参数表 / 齿轮参数表 / ANSI 花键中英）。
+    /// `OCSMCARD`：**智能卡片**（通用卡片生成器；11 张卡：GB 花键内/外、齿轮、
+    /// ANSI 内/外×中/英、NF 内/外、DIN 内/外；一卡一方向）。
     ///
     /// * 不带参数 = 人类侧：开智能卡片窗口 + 进放置态（与 DK/OCSMHOLE 同款）。
-    /// * 带参数 = `OCSMCARD <卡类型> …`；卡类型/可用体系从 `card::CARD_TYPES` 表里查
-    ///   （本期：`OCSMCARD 花键参数表 [std GB] 内 6H <九字段表达式> [dp 4.5] [root 平|圆] [at x,y] [rot 度]`）。
+    /// * 带参数 = `OCSMCARD <卡类型> …`；卡类型/方向从 `card::CARD_TYPES` 表里查
+    ///   （旧写法 `OCSMCARD 花键参数表 [std GB] 内 6H <九字段表达式> …` 仍兼容）。
     ///
     /// 旧短命令 `XLT` 已移除（dispatch 里明确报错并指路 `OCSMCARD`）。
     fn cmd_card(&self, host: &mut dyn HostApi, args: &str) {
@@ -2714,8 +2716,8 @@ impl OcsmPlugin {
         };
         if open_card_window(port, Some(host.tab_id())) {
             host.push_info(
-                "OCSM 智能卡片：已打开窗口（本期卡类型「花键参数表」：内/外 + 等级·配合 + \
-                 量棒 Dp 标准解/3 备选点选 + 齿形表达式反解 + 21 项实时结果）。\
+                "OCSM 智能卡片：已打开窗口（11 张卡，一卡一方向：GB 花键内/外、齿轮、\
+                 ANSI 内/外×中/英、NF 内/外、DIN 内/外；齿形表达式反解 + 实时结果）。\
                  点「出表」→ 回到图纸点击定位基点 → 移动光标旋转 → 再点击落定（可连续，Esc 结束）。",
             );
         } else {

@@ -450,8 +450,8 @@ pub struct RowSpec {
 
 /// 13 行（行序 = Bild 6；行 1 = 标记）。
 pub const ROWS: &[RowSpec] = &[
-    RowSpec { hub_label: "Nabe 标记", hub_tag: "N标记", shaft_label: "Welle 标记", shaft_tag: "W标记",
-              formula: "§8 代号：DIN 5480 – N/W d_B×m×z×等级+偏差字母", source: "DIN 5480-1:2006 §8" },
+    RowSpec { hub_label: "Nabe DIN 5480", hub_tag: "N标记", shaft_label: "Welle DIN 5480", shaft_tag: "W标记",
+              formula: "§8 代号：标签格 `Nabe/Welle DIN 5480` + 值格 `N/W d_B×m×z×等级+偏差字母`", source: "DIN 5480-1:2006 §8" },
     RowSpec { hub_label: "齿数 z", hub_tag: "N齿数", shaft_label: "齿数 z", shaft_tag: "W齿数",
               formula: "输入", source: "Bild 6 行 2" },
     RowSpec { hub_label: "模数 m", hub_tag: "N模数", shaft_label: "模数 m", shaft_tag: "W模数",
@@ -538,11 +538,9 @@ fn labels(hub: bool) -> Vec<EntityType> {
     let mut out = Vec::with_capacity(13);
     out.push(mtext_ent(title_text(hub), W_TOTAL / 2.0, TITLE_Y, TITLE_H, 5));
     for (i, r) in ROWS.iter().enumerate() {
-        // 行 1（标记行）不另画标签：标记本身就是该行内容（照 Bild 6）。
-        if i == 0 {
-            continue;
-        }
-        let y = data_row_y(i - 1);
+        // 行 1（标记行）现在也有自己的**标签格**（`Nabe DIN 5480` / `Welle DIN 5480`），
+        // 值格只放代号体（用户 2026-09-26）。
+        let y = if i == 0 { DESIG_Y } else { data_row_y(i - 1) };
         out.push(mtext_ent(
             if hub { r.hub_label } else { r.shaft_label },
             LABEL_X,
@@ -557,10 +555,10 @@ fn labels(hub: bool) -> Vec<EntityType> {
 /// 13 个 ATTDEF（标记 + 12 值；与 [`values`] 同序）。
 pub fn attdefs(hub: bool) -> Vec<AttributeDefinition> {
     let mut out = Vec::with_capacity(ROWS.len());
-    // 标记行：标记横跨标签+值两列。
+    // 标记行：标签是 `Nabe/Welle DIN 5480`（MTEXT），值格只放代号体。
     out.push(value_attdef(
         if hub { ROWS[0].hub_tag } else { ROWS[0].shaft_tag },
-        LABEL_X,
+        VALUE_X,
         DESIG_Y,
     ));
     for i in 1..ROWS.len() {
@@ -1062,11 +1060,28 @@ pub fn fmt_dev(v: f64) -> String {
     }
 }
 
-/// 代号（§8）：`Nabe DIN 5480 – N d_B×m×z×等级+字母` / `Welle …`。
+/// 代号（§8）全串（回执/元数据）：`Nabe DIN 5480 – N d_B×m×z×等级+字母`。
 pub fn designation(spec: &DinTableSpec, hub: bool) -> String {
     format!(
-        "{} DIN 5480 – {}{}×{}×{}×{}",
-        if hub { "Nabe" } else { "Welle" },
+        "{} – {}",
+        designation_label(hub),
+        designation_body(spec, hub)
+    )
+}
+
+/// 标记行的**标签格**（用户 2026-09-26：标签/值分列后各放一份内容）。
+pub fn designation_label(hub: bool) -> &'static str {
+    if hub {
+        "Nabe DIN 5480"
+    } else {
+        "Welle DIN 5480"
+    }
+}
+
+/// 标记行的**值格**（§8 代号体）：`N d_B×m×z×等级+字母` / `W …`。
+pub fn designation_body(spec: &DinTableSpec, hub: bool) -> String {
+    format!(
+        "{}{}×{}×{}×{}",
         if hub { "N" } else { "W" },
         trim3(spec.d_b),
         trim3(spec.m),
@@ -1082,7 +1097,7 @@ pub fn values(spec: &DinTableSpec, hub: bool) -> Result<Vec<(String, String)>, S
     let mut out: Vec<(&'static str, String)> = Vec::with_capacity(ROWS.len());
     for (i, r) in ROWS.iter().enumerate() {
         let v: String = match i {
-            0 => designation(spec, hub),
+            0 => designation_body(spec, hub),
             1 => spec.z.to_string(),
             2 => trim3(spec.m),
             3 => "30°".to_string(),
@@ -2151,7 +2166,7 @@ mod tests {
         // 单栏取值（示例逐项；内/外各 13 项）
         let vh = values(&spec, true).unwrap();
         let getn = |tag: &str| vh.iter().find(|(t, _)| t == tag).unwrap().1.clone();
-        assert_eq!(getn("N标记"), "Nabe DIN 5480 – N120×3×38×9H");
+        assert_eq!(getn("N标记"), "N120×3×38×9H");
         assert_eq!(getn("N齿数"), "38");
         assert_eq!(getn("N压力角"), "30°");
         assert_eq!(getn("N齿根圆"), "120 +0.76");
@@ -2165,7 +2180,7 @@ mod tests {
         assert_eq!(getn("N量距min"), "109.169");
         let vw = values(&spec, false).unwrap();
         let getw = |tag: &str| vw.iter().find(|(t, _)| t == tag).unwrap().1.clone();
-        assert_eq!(getw("W标记"), "Welle DIN 5480 – W120×3×38×8f");
+        assert_eq!(getw("W标记"), "W120×3×38×8f");
         assert_eq!(getw("W齿数"), "38");
         assert_eq!(getw("W压力角"), "30°");
         assert_eq!(getw("W齿顶圆"), "119.40 h11");
@@ -2298,7 +2313,7 @@ mod tests {
                 .filter(|e| matches!(e, EntityType::AttributeDefinition(_)))
                 .count();
             assert_eq!(n_line, 18, "15 横线 + 3 竖线（单栏）");
-            assert_eq!(n_mtext, 13, "标题 + 12 标签（标记行不另画标签）");
+            assert_eq!(n_mtext, 14, "标题 + 13 标签（标记行现在也有标签格）");
             assert_eq!(n_att, 13, "标记 + 12 值属性");
             for e in &ents {
                 match e {
@@ -2323,12 +2338,7 @@ mod tests {
                         (r.shaft_tag, r.shaft_label)
                     };
                     let v = vals.iter().find(|(t, _)| t == tag).unwrap().1.clone();
-                    if i == 0 {
-                        // 标记行跨标签+值两列，但不得出右边框（用户红框：标记超出右边界）
-                        let right = LABEL_X + est(&v, TEXT_H, VALUE_W_FACTOR);
-                        assert!(right < W_TOTAL - 2.0, "标记「{v}」出右框 {right:.1}");
-                        continue;
-                    }
+                    // 标记行也按「标签格 + 值格」分列（用户 2026-09-26）
                     let lw = est(label, TEXT_H, LABEL_W_FACTOR);
                     assert!(
                         LABEL_X + lw < W_LABEL - 2.0,
@@ -2340,6 +2350,43 @@ mod tests {
                     assert!(right < W_TOTAL - 2.0, "值「{v}」（{tag}）出右框 {right:.1}");
                 }
             }
+        }
+    }
+
+    /// 标记行拆分（用户 2026-09-26）：标签格 `Nabe DIN 5480` / 值格 `N120×3×38×9H`；
+    /// 逐图元断言 MTEXT 标签位置与 ATTDEF 值位置分列，且全串代号仍可用于回执/元数据。
+    #[test]
+    fn din_marking_row_splits_label_and_value() {
+        let spec = example();
+        assert_eq!(designation_label(true), "Nabe DIN 5480");
+        assert_eq!(designation_label(false), "Welle DIN 5480");
+        assert_eq!(designation_body(&spec, true), "N120×3×38×9H");
+        assert_eq!(designation_body(&spec, false), "W120×3×38×8f");
+        assert_eq!(designation(&spec, true), "Nabe DIN 5480 – N120×3×38×9H");
+        assert_eq!(designation(&spec, false), "Welle DIN 5480 – W120×3×38×8f");
+        for hub in [true, false] {
+            let ents = block_entities(hub);
+            let want_label = designation_label(hub);
+            let m = ents
+                .iter()
+                .find_map(|e| match e {
+                    EntityType::MText(m) if m.value == want_label => Some(m),
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("缺标记行标签 {want_label}"));
+            assert!(near(m.insertion_point.x, LABEL_X) && near(m.insertion_point.y, DESIG_Y));
+            assert_eq!(m.style, "OCSM_GB");
+            let tag = if hub { "N标记" } else { "W标记" };
+            let ad = attdefs(hub)
+                .into_iter()
+                .find(|a| a.tag == tag)
+                .unwrap();
+            assert!(near(ad.insertion_point.x, VALUE_X) && near(ad.insertion_point.y, DESIG_Y));
+            // 值格只放代号体（不是全串，也没有 en-dash 前缀）
+            let vals = values(&spec, hub).unwrap();
+            let v = vals.iter().find(|(t, _)| t == tag).unwrap().1.clone();
+            assert_eq!(v, designation_body(&spec, hub));
+            assert!(!v.contains("DIN 5480"), "值格不应重写标签前缀：{v}");
         }
     }
 
@@ -2445,7 +2492,7 @@ mod tests {
             // ATTRIB 随 INSERT 缩放：字高 = 块内 25 × 0.17；位置从基点 + 局部×0.17
             assert!(near6(ins.attributes[0].height, TEXT_H * TABLE_SCALE));
             let flat = build_insert(&spec, hub, [5.0, 7.0], 0.0).unwrap();
-            assert!(near6(flat.attributes[0].insertion_point.x, 5.0 + LABEL_X * TABLE_SCALE));
+            assert!(near6(flat.attributes[0].insertion_point.x, 5.0 + VALUE_X * TABLE_SCALE));
             let last_tag = if hub { "N量距min" } else { "W量距min" };
             assert_eq!(ins.attributes[12].tag, last_tag);
         }

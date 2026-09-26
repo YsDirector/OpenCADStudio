@@ -8580,8 +8580,8 @@ const GEAR_HTML: &str = include_str!("gear_gui.html");
 const SHAFT_HTML: &str = include_str!("shaft_gui.html");
 /// 孔生成器页（简单/螺纹/沉头/埋头 + 盲孔/贯通 + 实时预览；`OCSMHOLE`/`DK` 不带参数时打开）。
 const HOLE_HTML: &str = include_str!("hole_gui.html");
-/// 智能卡片页（本期卡类型「花键参数表」：内/外 + 等级·配合 + Dp 标准解/备选点选 +
-/// 齿形表达式反解 + 21 项实时结果；`OCSMCARD` 不带参数时打开）。
+/// 智能卡片页（11 张卡、一卡一方向；字段/结果/出表由卡类型表统一下发；
+/// 齿形表达式反解；`OCSMCARD` 不带参数时打开）。
 const SPLINE_HTML: &str = include_str!("spline_gui.html");
 /// GUI 共享助手（`/ocsm_gui_common.js`）：统一错误提示样式（红框红字）+ readApi/fetchApi。
 /// 页面里的错误只进 console 等于没报错（用户实测：`#status` 的灰字盖掉了 `.bad` 红字）。
@@ -16122,7 +16122,8 @@ mod weld_tests {
         let items = v["items"].as_array().unwrap();
         assert_eq!(items.len(), 13, "单栏 13 项");
         let get = |tag: &str| items.iter().find(|it| it["tag"] == tag).unwrap();
-        assert_eq!(get("N标记")["value"], "Nabe DIN 5480 – N120×3×38×9H");
+        assert_eq!(get("N标记")["label"], "Nabe DIN 5480", "标记行标签格");
+        assert_eq!(get("N标记")["value"], "N120×3×38×9H", "标记行值格只放代号体");
         assert_eq!(get("N槽宽max")["value"], "6.361");
         assert_eq!(get("N槽宽eff")["value"], "6.271");
         assert_eq!(v["missing"].as_array().unwrap().len(), 0);
@@ -16137,7 +16138,8 @@ mod weld_tests {
         assert_eq!(v["side"], "ext");
         assert_eq!(v["items"].as_array().unwrap().len(), 13);
         assert_eq!(v["items"][0]["tag"], "W标记");
-        assert_eq!(v["items"][0]["value"], "Welle DIN 5480 – W120×3×38×8f");
+        assert_eq!(v["items"][0]["label"], "Welle DIN 5480", "外卡标记行标签格");
+        assert_eq!(v["items"][0]["value"], "W120×3×38×8f", "外卡标记行值格只放代号体");
         let getw = |tag: &str| v["items"].as_array().unwrap().iter().find(|it| it["tag"] == tag).unwrap();
         assert_eq!(getw("W齿厚svmax")["value"], "6.243");
         assert_eq!(getw("W齿厚smin")["value"], "6.18");
@@ -16157,7 +16159,7 @@ mod weld_tests {
         let ins = mock.inserts().last().unwrap().clone();
         assert_eq!(ins.0, "OCSM_DINTABLE_DIN_INT");
         assert_eq!(mock.insert_attr_counts().last().copied(), Some(13));
-        assert_eq!(mock.block_entities("OCSM_DINTABLE_DIN_INT").len(), 44, "18 线 + 13 标签 + 13 属性");
+        assert_eq!(mock.block_entities("OCSM_DINTABLE_DIN_INT").len(), 45, "18 线 + 14 标签（含标记行标签格）+ 13 属性");
         let resp = apply_card_export(&sender, din_ext.to_string().as_bytes()).expect("DIN 外出表");
         assert!(resp.contains("\"ok\":true"), "{resp}");
         assert_eq!(crate::pending_block().unwrap(), "OCSM_DINTABLE_DIN_EXT");
@@ -16170,7 +16172,7 @@ mod weld_tests {
         let ins = mock.inserts().last().unwrap().clone();
         assert_eq!(ins.0, "OCSM_DINTABLE_DIN_EXT");
         assert_eq!(mock.insert_attr_counts().last().copied(), Some(13));
-        assert_eq!(mock.block_entities("OCSM_DINTABLE_DIN_EXT").len(), 44);
+        assert_eq!(mock.block_entities("OCSM_DINTABLE_DIN_EXT").len(), 45, "18 线 + 14 标签 + 13 属性");
         // DIN 缺口路径：模数组 5–10 的公差「—」
         let din_gap = serde_json::json!({
             "card": "DIN花键参数表", "m": 5.0, "z": 16, "d_b": 80.0,
