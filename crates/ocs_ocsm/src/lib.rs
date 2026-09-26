@@ -34,6 +34,7 @@ mod gear_table;
 mod hole;
 mod guide_server;
 mod guide_url;
+mod i18n;
 mod invol_spline;
 mod joint;
 mod nf_table;
@@ -4707,7 +4708,9 @@ fn parse_frame_args(rest: &str) -> Result<Option<FrameArgs>, String> {
     if tokens.is_empty() {
         return Ok(None);
     }
-    let usage = "用法：TF <名称> [比例] [at x,y] [rot 度]（不带参数 = 打开选择窗口）";
+    // 双语竖切（用户 2026-09-27）：用法串与「参数认不出」走单一 catalog；
+    // 其余错误文案仍待按域录入（见 handbook 24 与本文件顶部的 i18n 模块）。
+    let usage = crate::i18n::t("cmd.tf.usage");
     let mut args = FrameArgs {
         name: String::new(),
         v1: 1,
@@ -4758,7 +4761,10 @@ fn parse_frame_args(rest: &str) -> Result<Option<FrameArgs>, String> {
                 } else if args.name.is_empty() {
                     args.name = tok.to_string();
                 } else {
-                    return Err(format!("认不出的参数「{tok}」。{usage}"));
+                    return Err(crate::i18n::t_fmt(
+                        "cmd.tf.err.unknown_param",
+                        &[("arg", tok), ("usage", &usage)],
+                    ));
                 }
                 i += 1;
             }
@@ -5958,6 +5964,8 @@ mod tests {
 
     #[test]
     fn tf_args_reject_bad_input_with_usage() {
+        let _g = global_state_test_lock(); // 语言是进程级全局（与竖切用例串行）
+        crate::i18n::set_lang(crate::i18n::Lang::Zh); // 本用例断中文：不随宿主 locale 飘
         for bad in [
             "a3 3:2",          // 两个正整数但都不是 1
             "a3 0:2",          // 不能是 0
@@ -5976,6 +5984,27 @@ mod tests {
                 "{bad} → {e}"
             );
         }
+        crate::i18n::set_lang_auto();
+    }
+
+    #[test]
+    fn tf_usage_and_unknown_param_switch_language_via_catalog() {
+        // 双语竖切（用户 2026-09-27）：catalog 取词 → zh/en 切换 → 两种语言都断言。
+        let _g = global_state_test_lock();
+        crate::i18n::set_lang(crate::i18n::Lang::Zh);
+        let zh = parse_frame_args("a3 1:2 乱写").unwrap_err();
+        assert!(zh.contains("认不出的参数「乱写」。"), "{zh}");
+        assert!(zh.contains("用法：TF <名称>"), "{zh}");
+
+        crate::i18n::set_lang(crate::i18n::Lang::En);
+        let en = parse_frame_args("a3 1:2 乱写").unwrap_err();
+        assert!(en.contains("Unrecognized argument \"乱写\"."), "{en}");
+        assert!(en.contains("Usage: TF <name>"), "{en}");
+        assert!(!en.contains("用法"), "英文模式不该再出中文用法：{en}");
+        // 用法串本身也随语言（另一条错误路径：at 缺坐标）。
+        let en_at = parse_frame_args("a3 at").unwrap_err();
+        assert!(en_at.contains("Usage: TF <name>"), "{en_at}");
+        crate::i18n::set_lang_auto();
     }
 
     #[test]
