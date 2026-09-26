@@ -138,8 +138,10 @@ pub fn attdefs() -> Vec<AttributeDefinition> {
     for (_, tag, y) in NF_EXT_ROWS {
         out.push(crate::nf_table::value_attdef_wf(tag, VALUE_X, *y, VALUE_WIDTH_FACTOR));
     }
-    for (tag, x, y) in NF_EXT_TOL_ATTS {
-        out.push(crate::nf_table::tol_attdef(tag, *x, *y));
+    for (j, (tag, x, y)) in NF_EXT_TOL_ATTS.iter().enumerate() {
+        // 末对（公法线上/下差）与 NF 内卡成对处理：右移 2 个字符宽（口径同 nf_table::TOL_X_SHIFT）。
+        let x = if j >= 4 { x + crate::nf_table::TOL_X_SHIFT } else { *x };
+        out.push(crate::nf_table::tol_attdef(tag, x, *y));
     }
     out
 }
@@ -400,6 +402,10 @@ pub fn build_insert(spec: &NfExtTableSpec, at: [f64; 2], rot_deg: f64) -> Result
     let vals = values(spec)?;
     let mut ins = Insert::new(BLOCK, Vector3::new(at[0], at[1], 0.0));
     ins.rotation = rot_deg.to_radians();
+    // 整表缩放（与 NF 内卡同口径 0.17；不改块几何，ATTRIB 随 INSERT 缩放）。
+    ins.set_x_scale(crate::nf_table::TABLE_SCALE);
+    ins.set_y_scale(crate::nf_table::TABLE_SCALE);
+    ins.set_z_scale(crate::nf_table::TABLE_SCALE);
     {
         let c = &mut ins.common;
         c.layer = crate::partgen::LAYER_MAIN.to_string();
@@ -1257,7 +1263,12 @@ mod tests {
         for (j, (tag, x, y)) in NF_EXT_TOL_ATTS.iter().enumerate() {
             let ad = &atts[12 + j];
             assert_eq!(ad.tag, *tag);
-            assert!(near5(ad.insertion_point.x, *x) && near5(ad.insertion_point.y, *y));
+            let want_x = if j >= 4 { *x + crate::nf_table::TOL_X_SHIFT } else { *x };
+            assert!(
+                near5(ad.insertion_point.x, want_x) && near5(ad.insertion_point.y, *y),
+                "{tag} 位置 {:?} ≠ {want_x}",
+                ad.insertion_point
+            );
             assert!(near5(ad.height, TOL_H));
             assert!(near5(ad.width_factor, TOL_WIDTH_FACTOR));
             assert_eq!(ad.vertical_alignment, VerticalAlignment::Baseline, "公差照模板 TEXT 基线");
@@ -1618,9 +1629,10 @@ mod tests {
             [x, y, x + text_extent(v, h, wf), y + h]
         };
         for spec in &specs {
-            let ins = build_insert(spec, [0.0, 0.0], 0.0).unwrap();
+            // 干涉检查用 **块局部**几何（attdefs() 模板）；整表 INSERT 缩放 0.17 是均匀缩放，
+            // 相对几何不变（缩放值另有断言）。
             let attrs: HashMap<String, _> =
-                ins.attributes.iter().map(|a| (a.tag.clone(), a.clone())).collect();
+                attdefs().into_iter().map(|a| (a.tag.clone(), a)).collect();
             let vals = values(spec).unwrap();
             let vmap: HashMap<&str, &str> = vals.iter().map(|(t, v)| (t.as_str(), v.as_str())).collect();
             for (i, (_, tag, y)) in NF_EXT_ROWS.iter().enumerate() {
@@ -1644,17 +1656,17 @@ mod tests {
                 {
                     for tol_tag in [tol_pairs.1, tol_pairs.2] {
                         let ta = attrs.get(tol_tag).unwrap();
+                        let tv = vmap[tol_tag];
                         let tb = base_box(
                             ta.insertion_point.x,
                             ta.insertion_point.y,
                             TOL_H,
                             TOL_WIDTH_FACTOR,
-                            &ta.value,
+                            tv,
                         );
                         assert!(
                             !overlap(b, tb),
-                            "{tag}={v} 与 {tol_tag}={} 叠字：值右 {:.3} / 公差左 {:.3}",
-                            ta.value,
+                            "{tag}={v} 与 {tol_tag}={tv} 叠字：值右 {:.3} / 公差左 {:.3}",
                             b[2],
                             tb[0]
                         );
@@ -1740,6 +1752,10 @@ mod tests {
         let ins = m.build_insert().unwrap();
         assert_eq!(ins.block_name, BLOCK);
         assert_eq!(ins.attributes.len(), 18);
+        // 整表 INSERT 缩放 0.17（同 NF 内卡；不改块几何，ATTRIB 随 INSERT 缩放）
+        assert!(near5(ins.x_scale(), crate::nf_table::TABLE_SCALE)
+            && near5(ins.y_scale(), crate::nf_table::TABLE_SCALE)
+            && near5(ins.z_scale(), crate::nf_table::TABLE_SCALE));
         // 多重集断言：preview items 的 tag 集合 == ATTDEF tag 集合
         let mut item_tags: Vec<String> = j["items"]
             .as_array()

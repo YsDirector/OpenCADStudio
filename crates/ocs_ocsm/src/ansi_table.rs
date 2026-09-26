@@ -859,23 +859,10 @@ pub const FORM: crate::card::CardFormSpec = crate::card::CardFormSpec {
             key: "expr",
             label: "齿形表达式（九字段；可从轴/齿轮生成器 GUI 复制）",
             kind: "textarea",
-            placeholder: "SPLINE IN M1.5875 Z20 ALPHA30 X0 BETA0 H30",
+            placeholder: "SPLINE IN M1.5875 Z20 ALPHA30 X0 BETA0 H30（外卡用 EX）",
             default: "",
-            title: "九字段统一齿形表达式（MARK KIND M Z ALPHA X DA DF BETA H）；粘贴后自动反解径节 P/齿数 N/齿廓（齿廓按 α 保持同角列或选默认列）",
+            title: "九字段统一齿形表达式（MARK KIND M Z ALPHA X DA DF BETA H）；粘贴后自动反解径节 P/齿数 N/齿廓；本卡方向由卡类型固定（KIND 须与之一致）",
             options: &[],
-            options_from: "",
-            min: 0.0,
-            step: 0.0,
-            required: false,
-        },
-        crate::card::CardFieldSpec {
-            key: "side",
-            label: "方向",
-            kind: "select",
-            placeholder: "",
-            default: "int",
-            title: "ANSI B92.1 内/外花键（两套列口径）",
-            options: &[("int", "内花键"), ("ext", "外花键")],
             options_from: "",
             min: 0.0,
             step: 0.0,
@@ -981,7 +968,8 @@ pub struct AnsiTableModel {
     /// 九字段统一齿形表达式（可空；给了则覆盖 P/Z，齿廓按 α 保持/选默认列）。
     #[serde(default)]
     pub expr: Option<String>,
-    /// 方向：`int`/`ext`。
+    /// 方向：`int`/`ext`（由卡类型固定并于后端回填；旧请求显式给也收）。
+    #[serde(default)]
     pub side: String,
     /// 径节 P。
     pub p: f64,

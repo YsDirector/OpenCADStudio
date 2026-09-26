@@ -91,6 +91,34 @@ static MANIFEST: PluginManifest = PluginManifest {
     ],
 };
 
+/// 一卡一方向（用户 2026-09-26）后的**旧 CLI 兼容**：若命令里没显式写 `内/外`，
+/// 按卡方向在 `[std 体系]` 之后注入默认记号；写了就原样保留（旧写法可覆盖）。
+pub(crate) fn inject_default_side(args: &str, side: &str) -> String {
+    const SIDES: &[&str] = &[
+        "内", "内部", "内花键", "int", "internal", "外", "外部", "外花键", "ext", "external",
+    ];
+    let mut toks: Vec<&str> = args.split_whitespace().collect();
+    if toks.is_empty() {
+        return side.to_string();
+    }
+    let mut at = 0usize;
+    if matches!(
+        toks[0].to_ascii_lowercase().as_str(),
+        "std" | "标准" | "体系"
+    ) {
+        at = 2.min(toks.len());
+    }
+    if toks
+        .get(at)
+        .map(|t| SIDES.iter().any(|s| s.eq_ignore_ascii_case(t)))
+        .unwrap_or(false)
+    {
+        return args.trim().to_string();
+    }
+    toks.insert(at, side);
+    toks.join(" ")
+}
+
 /// 10 层模板（来自 opencad.layers_quick，名称数字后无空格；线型全部在
 /// OCS 内置 OpenCADStudio.lin 表中）。第 10 层为引导线层：默认关闭（隐藏），
 /// 线宽 0mm（本身不打印），用于承载 AI/用户画的引导线。
@@ -638,6 +666,8 @@ pub(crate) struct PendingPart {
     /// 带属性的块（花键参数表 21 项）：落件时按 ATTDEF 生成 ATTRIB 并施加 INSERT 变换。
     /// 普通零件/轴/孔为空。
     pub attrs: Vec<(acadrust::entities::AttributeDefinition, String)>,
+    /// INSERT 缩放（默认 1.0；NF/DIN 卡整表 0.17 —— 与直接落点的 build_insert 同口径）。
+    pub scale: f64,
 }
 
 impl PendingPart {
@@ -652,6 +682,7 @@ impl PendingPart {
             meta_json: meta_json.into(),
             label: label.into(),
             attrs: Vec::new(),
+            scale: 1.0,
         }
     }
 
@@ -667,7 +698,16 @@ impl PendingPart {
             meta_json: meta_json.into(),
             label: label.into(),
             attrs,
+            scale: 1.0,
         }
+    }
+
+    /// 链式设置 INSERT 缩放（整表卡 NF/DIN 用 0.17；默认 1.0 = 不缩放）。
+    pub(crate) fn with_scale(mut self, scale: f64) -> Self {
+        if scale.is_finite() && scale > 0.0 {
+            self.scale = scale;
+        }
+        self
     }
 }
 
@@ -809,6 +849,10 @@ fn place_one(
     let mut ins = Insert::new(&p.block, Vector3::new(pt[0], pt[1], pt[2]));
     // Insert.rotation 单位是**弧度**（同 Arc，DXF 读入已转换）
     ins.rotation = task.rotation;
+    // 整表缩放（NF/DIN 卡 0.17）：与 `build_insert` 同口径；ATTRIB 随 INSERT 缩放。
+    ins.set_x_scale(p.scale);
+    ins.set_y_scale(p.scale);
+    ins.set_z_scale(p.scale);
     {
         let c = &mut ins.common;
         c.layer = partgen::LAYER_MAIN.to_string();
@@ -2634,17 +2678,31 @@ impl OcsmPlugin {
             return;
         };
         match card.renderer {
-            crate::card::CardRenderer::SplineTable => self.cmd_spline_card(host, rest),
+            crate::card::CardRenderer::SplineTable => {
+                // 一卡一方向；旧 CLI 显式内/外仍可覆盖（兼容）。
+                let side = match card.direction {
+                    Some("ext") => "外",
+                    _ => "内",
+                };
+                let args = crate::inject_default_side(rest, side);
+                self.cmd_spline_card(host, &args)
+            }
             crate::card::CardRenderer::GearTable => self.cmd_gear_card(host, rest),
-            crate::card::CardRenderer::AnsiTableCn => {
-                self.cmd_ansi_card(host, rest, crate::ansi_table::AnsiLang::Cn)
-            }
-            crate::card::CardRenderer::AnsiTableEn => {
-                self.cmd_ansi_card(host, rest, crate::ansi_table::AnsiLang::En)
-            }
+            crate::card::CardRenderer::AnsiTableCn => self.cmd_ansi_card(
+                host,
+                &crate::inject_default_side(rest, card.direction.unwrap_or("int")),
+                crate::ansi_table::AnsiLang::Cn,
+            ),
+            crate::card::CardRenderer::AnsiTableEn => self.cmd_ansi_card(
+                host,
+                &crate::inject_default_side(rest, card.direction.unwrap_or("int")),
+                crate::ansi_table::AnsiLang::En,
+            ),
             crate::card::CardRenderer::NfTable => self.cmd_nf_card(host, rest),
             crate::card::CardRenderer::NfExtTable => self.cmd_nf_ext_card(host, rest),
-            crate::card::CardRenderer::DinTable => self.cmd_din_card(host, rest),
+            crate::card::CardRenderer::DinTable => {
+                self.cmd_din_card(host, rest, card.direction.unwrap_or("int") != "ext")
+            }
         }
     }
 
@@ -3017,13 +3075,13 @@ impl OcsmPlugin {
         ));
     }
 
-    /// 卡类型「DIN 花键参数表」：
-    /// `OCSMCARD DIN花键参数表 M3 Z38 B120 [N9H] [W8f] [ae …] [as …] [tactn …] [teffn …] [tactw …] [teffw …]`。
-    /// 版面 = DIN 5480-1:2006 Bild 6 的 13 行 × Nabe/Welle 两栏；几何内建（`OCSM_DINTABLE_DIN`）；
-    /// 26 个值写 INSERT.attributes（Table 7 缺口显示「—」，不臆造）。
-    fn cmd_din_card(&self, host: &mut dyn HostApi, args: &str) {
+    /// 卡类型「DIN 花键参数表」（内/外两张，一卡一方向）：
+    /// `OCSMCARD DIN花键参数表_外 M3 Z38 B120 W8f`。
+    /// 单栏 Bild 6 版面（`OCSM_DINTABLE_DIN_INT`/`_EXT`）；13 个值写 INSERT.attributes；
+    /// 整表 INSERT 缩放 0.17（不改块几何）。
+    fn cmd_din_card(&self, host: &mut dyn HostApi, args: &str, hub: bool) {
         use crate::din_table::DinTableSpec;
-        let spec = match DinTableSpec::parse(args) {
+        let spec = match DinTableSpec::parse(args, hub) {
             Ok(s) => s,
             Err(e) => {
                 host.push_error(&e);
@@ -3032,9 +3090,9 @@ impl OcsmPlugin {
         };
         host.ensure_layers(layer_defs());
         host.ensure_text_styles(text_style_defs());
-        let block = crate::din_table::BLOCK;
+        let block = crate::din_table::block_name(hub);
         if host.document().block_records.get(block).is_none() {
-            let members = crate::din_table::block_entities();
+            let members = crate::din_table::block_entities(hub);
             if let Err(e) = host.add_block_record(block, members) {
                 host.push_error(&format!("DIN 花键参数表：建块 {block} 失败：{e}"));
                 return;
@@ -3045,7 +3103,7 @@ impl OcsmPlugin {
                 .map(|p| [p[0], p[1]])
                 .unwrap_or([0.0, 0.0])
         });
-        let ins = match crate::din_table::build_insert(&spec, at, spec.rot) {
+        let ins = match crate::din_table::build_insert(&spec, hub, at, spec.rot) {
             Ok(i) => i,
             Err(e) => {
                 host.push_error(&format!("DIN 花键参数表：{e}"));
@@ -3060,7 +3118,8 @@ impl OcsmPlugin {
         }
         host.set_dirty();
         let note = crate::din_table::DinTableModel {
-            card: "DIN花键参数表".into(),
+            card: if hub { "DIN花键参数表".into() } else { "DIN花键参数表_外".into() },
+            side: Some(if hub { "int".into() } else { "ext".into() }),
             expr: None,
             m: spec.m,
             z: spec.z,
@@ -3080,7 +3139,7 @@ impl OcsmPlugin {
         .echo_note()
         .unwrap_or_else(|_| String::new());
         host.push_info(&format!(
-            "智能卡片：已插入{note}于 ({:.3}, {:.3}) rot {}°。\n\
+            "智能卡片：已插入{note}于 ({:.3}, {:.3}) rot {}°（整表缩放 0.17）。\n\
              Table 7 缺口（>400 侧偏差列、≤12 细档、非 6–9 级公差、无检验表行的 D_M/M2/M1）显示「—」。",
             at[0],
             at[1],

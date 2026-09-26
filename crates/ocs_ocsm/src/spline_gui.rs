@@ -679,10 +679,8 @@ pub fn options_json() -> Result<serde_json::Value, String> {
 /// `m/z/αD/x/Da/Df` 由后端反解；不再有「读选中/上一个块」这条路径。
 #[derive(Debug, Clone, Deserialize)]
 pub struct SplineTableModel {
-    /// 体系 id；缺省 = gb3478。
-    #[serde(default = "default_system")]
-    pub system: String,
-    /// 方向：`int` / `ext`。
+    /// 方向：`int` / `ext`（由卡类型固定并于后端回填；旧请求显式给也收）。
+    #[serde(default)]
     pub side: String,
     pub grade: u32,
     /// 基本偏差 code：内 H；外 h/js/k/d/e/f。
@@ -702,19 +700,15 @@ pub struct SplineTableModel {
     pub rot: f64,
 }
 
-fn default_system() -> String {
-    "gb3478".to_string()
+/// 本轮只挂 GB 体系（体系字段已从 GUI/入参移除；CLI `std GB` 仍接受）。
+fn gb_system() -> &'static SplineSystemSpec {
+    system_by_id("gb3478").expect("gb3478 体系必在选项表内")
 }
 
 impl SplineTableModel {
-    /// 体系校验（表驱动；以后加体系 = 表里加行）。
+    /// 体系校验（表驱动；以后加体系 = 表里加行）。这一字段不再来自入参。
     pub fn system_spec(&self) -> Result<&'static SplineSystemSpec, String> {
-        system_by_id(&self.system).ok_or_else(|| {
-            format!(
-                "花键参数表：不认识的体系「{}」（本版只有 gb3478）",
-                self.system
-            )
-        })
+        Ok(gb_system())
     }
 
     pub fn side(&self) -> Result<SplineSide, String> {
@@ -974,7 +968,6 @@ impl SplineTableModel {
         };
         Ok(serde_json::json!({
             "ok": true,
-            "system": self.system,
             "side": side_id(input.side),
             "side_label": side_label(input.side),
             "grade_fit": input.grade_fit_label(),
@@ -1069,7 +1062,6 @@ mod tests {
 
     fn tmodel(side: &str) -> SplineTableModel {
         SplineTableModel {
-            system: "gb3478".into(),
             side: side.into(),
             grade: 6,
             fit: if side == "int" { "H".into() } else { "f".into() },
@@ -1235,9 +1227,10 @@ mod tests {
         let mut m = tmodel("int");
         m.expr = "GEAR IN M2 Z20 ALPHA20 X0 DA44 DF35 BETA0 H30".into();
         assert!(m.to_input().unwrap_err().contains("压力角"));
+        // 方向字符串非法（体系已从入参移除；未知方向仍应报错）
         let mut m = tmodel("int");
-        m.system = "ansi".into();
-        assert!(m.to_input().unwrap_err().contains("gb3478"));
+        m.side = "bogus".into();
+        assert!(m.to_input().unwrap_err().contains("方向"));
         // 齿数来自表达式：Z4 < 6
         let mut m = tmodel("int");
         m.expr = "SPLINE IN M3 Z4 ALPHA30 X0 DA16.5 DF10 BETA0 H30".into();

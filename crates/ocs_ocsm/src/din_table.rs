@@ -36,16 +36,24 @@ use ocs_plugin_api::host::acadrust::entities::{
 };
 use ocs_plugin_api::host::acadrust::types::{Color, LineWeight, Vector3};
 
-/// 表格块名（本卡只有一种版面：Nabe/Welle 两栏）。
+/// 表格块名（内外两张单栏卡；旧的两栏合表已拆，用户 2026-09-26）。
+pub fn block_name(hub: bool) -> &'static str {
+    if hub {
+        "OCSM_DINTABLE_DIN_INT"
+    } else {
+        "OCSM_DINTABLE_DIN_EXT"
+    }
+}
+/// 旧合表块名（仅兼容旧引用；新插入不再建它）。
 pub const BLOCK: &str = "OCSM_DINTABLE_DIN";
 /// 缺项标记（无表值/无锚/缺口一律显示它；预览与回执点明原因 —— 不臆造）。
 pub const MISSING: &str = "—";
-/// 名称/值宽度：标签列 195、值列 115（两侧共 620 宽）。
-pub const W_LABEL: f64 = 195.0;
-/// 单侧宽度。
-pub const W_SIDE: f64 = 310.0;
-/// 整表宽度。
-pub const W_TOTAL: f64 = 620.0;
+/// 单栏宽：标签列 240 + 值列 180（用户截图后加宽：标题/长标签/长标记都不出框、不压线）。
+pub const W_LABEL: f64 = 240.0;
+/// 单栏总宽。
+pub const W_SIDE: f64 = 420.0;
+/// 整表宽（单栏 = 单侧）。
+pub const W_TOTAL: f64 = W_SIDE;
 /// 标题行高。
 pub const H_TITLE: f64 = 44.0;
 /// 标记（代号）行高。
@@ -58,10 +66,13 @@ pub const H_TOTAL: f64 = H_TITLE + H_DESIG + 12.0 * H_ROW;
 pub const TEXT_H: f64 = 25.0;
 /// 标题字高。
 pub const TITLE_H: f64 = 30.0;
-/// 标签**实体级**字宽（长标签不出标签列：195 可用宽，最长「槽宽 max. e_max」≈188）。
+/// 标签**实体级**字宽（长标签不出标签列：240 可用宽，最长「齿根成形圆 d_Ff2」≈165）。
 pub const LABEL_W_FACTOR: f64 = 0.75;
-/// 值/标记**实体级**字宽（长值不出侧栏：最长标记 ≈265 < 302）。
+/// 值/标记**实体级**字宽（长标记「Nabe DIN 5480 – N120×3×38×9H」≈257 < 408）。
 pub const VALUE_W_FACTOR: f64 = 0.6;
+/// 整表缩放（用户 2026-09-26 截图）：DIN 卡 **INSERT 缩放 0.17**，
+/// **不动块内图元几何**；ATTRIB 文字随 INSERT 缩放。
+pub const TABLE_SCALE: f64 = 0.17;
 
 /// 数据行 12 行的行中心 y（自上而下）。
 pub fn data_row_y(i: usize) -> f64 {
@@ -72,13 +83,17 @@ pub const DESIG_Y: f64 = -(H_TITLE + H_DESIG / 2.0);
 /// 标题中心 y。
 pub const TITLE_Y: f64 = -H_TITLE / 2.0;
 
-/// 两侧的标签插入 x。
+/// 标签插入 x（单栏）。
+pub const LABEL_X: f64 = 6.0;
+/// 值插入 x（单栏）。
+pub const VALUE_X: f64 = W_LABEL + 9.0;
+/// 旧两栏坐标（兼容引用；新几何不再用）。
 pub const LABEL_X_HUB: f64 = 6.0;
-/// 外花键标签插入 x。
+/// 旧两栏坐标（兼容引用）。
 pub const LABEL_X_SHAFT: f64 = W_SIDE + 6.0;
-/// 内花键值插入 x。
+/// 旧两栏坐标（兼容引用）。
 pub const VALUE_X_HUB: f64 = W_LABEL + 9.0;
-/// 外花键值插入 x。
+/// 旧两栏坐标（兼容引用）。
 pub const VALUE_X_SHAFT: f64 = W_SIDE + W_LABEL + 9.0;
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -463,16 +478,20 @@ pub const ROWS: &[RowSpec] = &[
               formula: "M2min Ref. / M1min", source: "DIN 5480-2 检验表 / Bild 6" },
 ];
 
-/// 26 个 ATTDEF tag（先 13 个内花键、再 13 个外花键；与 [`ROWS`] 同序）。
-pub fn value_tags() -> Vec<&'static str> {
-    let mut v = Vec::with_capacity(26);
-    for r in ROWS {
-        v.push(r.hub_tag);
+/// 13 个 ATTDEF tag（单栏：标记 + 12 值；与 [`ROWS`] 同序）。
+pub fn value_tags(hub: bool) -> Vec<&'static str> {
+    ROWS.iter()
+        .map(|r| if hub { r.hub_tag } else { r.shaft_tag })
+        .collect()
+}
+
+/// 单栏标题。
+pub fn title_text(hub: bool) -> &'static str {
+    if hub {
+        "DIN 5480 内花键参数表"
+    } else {
+        "DIN 5480 外花键参数表"
     }
-    for r in ROWS {
-        v.push(r.shaft_tag);
-    }
-    v
 }
 
 fn common_of(layer: &str) -> EntityCommon {
@@ -489,7 +508,7 @@ fn mtext_ent(value: &str, x: f64, y: f64, height: f64, attach: i16) -> EntityTyp
     m.value = value.to_string();
     m.insertion_point = Vector3::new(x, y, 0.0);
     m.height = height;
-    m.rectangle_width = W_SIDE - 2.0 * LABEL_X_HUB;
+    m.rectangle_width = W_SIDE - 2.0 * LABEL_X;
     m.style = "OCSM_GB".into();
     m.attachment_point = match attach {
         5 => AttachmentPoint::MiddleCenter,
@@ -500,7 +519,7 @@ fn mtext_ent(value: &str, x: f64, y: f64, height: f64, attach: i16) -> EntityTyp
 }
 
 /// 值/标记 ATTDEF：左中，实体级字宽 [`VALUE_W_FACTOR`]，样式一律 `OCSM_GB`。
-fn value_attdef(tag: &str, x: f64, y: f64, width: f64) -> AttributeDefinition {
+fn value_attdef(tag: &str, x: f64, y: f64) -> AttributeDefinition {
     let mut ad = AttributeDefinition::new(tag.to_string(), String::new(), " ".to_string());
     ad.insertion_point = Vector3::new(x, y, 0.0);
     ad.alignment_point = ad.insertion_point;
@@ -511,60 +530,57 @@ fn value_attdef(tag: &str, x: f64, y: f64, width: f64) -> AttributeDefinition {
     ad.vertical_alignment = VerticalAlignment::Middle;
     ad.flags.preset = true;
     ad.common = common_of("6文字层");
-    let _ = width;
     ad
 }
 
-/// 13 行 × 2 侧的标签 MTEXT（静态）+ 标题；线条另见 [`block_entities`]。
-fn labels() -> Vec<EntityType> {
-    let mut out = Vec::with_capacity(25);
-    out.push(mtext_ent("DIN 5480 花键参数表", W_TOTAL / 2.0, TITLE_Y, TITLE_H, 5));
+/// 单栏 13 行标签 MTEXT（标题 + 12 标签）；线条另见 [`block_entities`]。
+fn labels(hub: bool) -> Vec<EntityType> {
+    let mut out = Vec::with_capacity(13);
+    out.push(mtext_ent(title_text(hub), W_TOTAL / 2.0, TITLE_Y, TITLE_H, 5));
     for (i, r) in ROWS.iter().enumerate() {
-        // 行 1（标记行）不另画标签：两侧标记本身就是该行内容（照 Bild 6）。
+        // 行 1（标记行）不另画标签：标记本身就是该行内容（照 Bild 6）。
         if i == 0 {
             continue;
         }
         let y = data_row_y(i - 1);
-        out.push(mtext_ent(r.hub_label, LABEL_X_HUB, y, TEXT_H, 4));
-        out.push(mtext_ent(r.shaft_label, LABEL_X_SHAFT, y, TEXT_H, 4));
-    }
-    out
-}
-
-/// 26 个 ATTDEF（先 13 个内花键、再 13 个外花键；与 [`values`] 同序）。
-pub fn attdefs() -> Vec<AttributeDefinition> {
-    let mut out = Vec::with_capacity(26);
-    // 标记行：每侧的标记横跨标签+值两列。
-    out.push(value_attdef(ROWS[0].hub_tag, LABEL_X_HUB, DESIG_Y, W_SIDE - 2.0 * LABEL_X_HUB));
-    for i in 1..ROWS.len() {
-        let y = data_row_y(i - 1);
-        out.push(value_attdef(
-            ROWS[i].hub_tag,
-            VALUE_X_HUB,
+        out.push(mtext_ent(
+            if hub { r.hub_label } else { r.shaft_label },
+            LABEL_X,
             y,
-            W_SIDE - W_LABEL - 2.0 * 9.0,
-        ));
-    }
-    out.push(value_attdef(ROWS[0].shaft_tag, LABEL_X_SHAFT, DESIG_Y, W_SIDE - 2.0 * LABEL_X_HUB));
-    for i in 1..ROWS.len() {
-        let y = data_row_y(i - 1);
-        out.push(value_attdef(
-            ROWS[i].shaft_tag,
-            VALUE_X_SHAFT,
-            y,
-            W_SIDE - W_LABEL - 2.0 * 9.0,
+            TEXT_H,
+            4,
         ));
     }
     out
 }
 
-/// 表格块成员：20 横/竖线 + 25 MTEXT（标题 + 24 标签）+ 26 ATTDEF。
+/// 13 个 ATTDEF（标记 + 12 值；与 [`values`] 同序）。
+pub fn attdefs(hub: bool) -> Vec<AttributeDefinition> {
+    let mut out = Vec::with_capacity(ROWS.len());
+    // 标记行：标记横跨标签+值两列。
+    out.push(value_attdef(
+        if hub { ROWS[0].hub_tag } else { ROWS[0].shaft_tag },
+        LABEL_X,
+        DESIG_Y,
+    ));
+    for i in 1..ROWS.len() {
+        let y = data_row_y(i - 1);
+        out.push(value_attdef(
+            if hub { ROWS[i].hub_tag } else { ROWS[i].shaft_tag },
+            VALUE_X,
+            y,
+        ));
+    }
+    out
+}
+
+/// 表格块成员（单栏）：18 线 + 13 MTEXT（标题 + 12 标签）+ 13 ATTDEF。
 ///
 /// 版式（y 向上为正，表从 y=0 向下）：
-/// * 标题行 `[0, −44]`（全宽）；标记行 `[−44, −104]`（标记自身即行内容，不另画标签）；
+/// * 标题行 `[0, −44]`；标记行 `[−44, −104]`（标记自身即行内容，不另画标签）；
 ///   12 数据行各 40，底 `y=−584`；
-/// * 竖线：全高 `x=0, 310, 620`；标签/值分格 `x=195, 505`（自 −44 起）。
-pub fn block_entities() -> Vec<EntityType> {
+/// * 竖线：全高 `x=0, 420`；标签/值分格 `x=240`（自 −44 起）。
+pub fn block_entities(hub: bool) -> Vec<EntityType> {
     let mut out = Vec::new();
     // 横线：0、-44、-104，随后 12 条行底（-144 … -584）。
     let mut ys = vec![0.0, -H_TITLE, -(H_TITLE + H_DESIG)];
@@ -574,26 +590,24 @@ pub fn block_entities() -> Vec<EntityType> {
     for y in &ys {
         out.push(crate::partgen_kit::line([0.0, *y], [W_TOTAL, *y], "1轮廓实线层"));
     }
-    // 全高竖线：外框 + 中分隔（Nabe/Welle）。
-    for x in [0.0, W_SIDE, W_TOTAL] {
+    // 全高竖线（外框）。
+    for x in [0.0, W_TOTAL] {
         out.push(crate::partgen_kit::line(
             [x, 0.0],
             [x, -(H_TITLE + H_DESIG + 12.0 * H_ROW)],
             "1轮廓实线层",
         ));
     }
-    // 标签/值分格竖线（标题行与标记行不切）。
-    for x in [W_LABEL, W_SIDE + W_LABEL] {
-        out.push(crate::partgen_kit::line(
-            [x, -H_TITLE],
-            [x, -(H_TITLE + H_DESIG + 12.0 * H_ROW)],
-            "2细线层",
-        ));
-    }
-    for e in labels() {
+    // 标签/值分格竖线（标题行不切）。
+    out.push(crate::partgen_kit::line(
+        [W_LABEL, -H_TITLE],
+        [W_LABEL, -(H_TITLE + H_DESIG + 12.0 * H_ROW)],
+        "2细线层",
+    ));
+    for e in labels(hub) {
         out.push(e);
     }
-    for ad in attdefs() {
+    for ad in attdefs(hub) {
         out.push(EntityType::AttributeDefinition(ad));
     }
     out
@@ -1061,91 +1075,79 @@ pub fn designation(spec: &DinTableSpec, hub: bool) -> String {
     )
 }
 
-/// 26 项取值（顺序 = [`attdefs()`]：13 孔 + 13 轴）。
-pub fn values(spec: &DinTableSpec) -> Result<Vec<(String, String)>, String> {
+/// 13 项取值（单栏，顺序 = [`attdefs(hub)`]：标记 + 12 值）。
+pub fn values(spec: &DinTableSpec, hub: bool) -> Result<Vec<(String, String)>, String> {
     let d = derive(spec)?;
     let n = d.nominal.as_ref();
-    let mut out: Vec<(&'static str, String)> = Vec::with_capacity(26);
-    // 孔
-    out.push(("N标记", designation(spec, true)));
-    out.push(("N齿数", spec.z.to_string()));
-    out.push(("N模数", trim3(spec.m)));
-    out.push(("N压力角", "30°".to_string()));
-    out.push((
-        "N齿根圆",
-        if d.anchor {
-            anchor_display("hub", "d_f2").unwrap_or_else(|| MISSING.to_string())
-        } else {
-            n.map(|r| format!("{} {}", trim3(r.d_f2), fmt_dev(r.a_df2)))
-                .unwrap_or_else(|| MISSING.to_string())
-        },
-    ));
-    out.push((
-        "N齿根成形圆",
-        if d.anchor {
-            anchor_display("hub", "d_Ff2").unwrap_or_else(|| MISSING.to_string())
-        } else {
-            n.map(|r| format!("{} min.", trim3(r.d_ff2_min)))
-                .unwrap_or_else(|| MISSING.to_string())
-        },
-    ));
-    out.push((
-        "N齿顶圆",
-        if d.anchor {
-            anchor_display("hub", "d_a2").unwrap_or_else(|| MISSING.to_string())
-        } else {
-            n.map(|r| format!("{} H11", trim3(r.d_a2)))
-                .unwrap_or_else(|| MISSING.to_string())
-        },
-    ));
-    out.push(("N槽宽max", fmt_mm(d.e_max)));
-    out.push(("N槽宽min", fmt_mm(d.e_min)));
-    out.push(("N槽宽eff", fmt_mm(d.e_vmin)));
-    out.push(("N量圆", fmt_mm(d.d_m_hub)));
-    out.push(("N量距max", fmt_mm(d.m2_max)));
-    out.push(("N量距min", fmt_mm(d.m2_min)));
-    // 轴
-    out.push(("W标记", designation(spec, false)));
-    out.push(("W齿数", spec.z.to_string()));
-    out.push(("W模数", trim3(spec.m)));
-    out.push(("W压力角", "30°".to_string()));
-    out.push((
-        "W齿顶圆",
-        if d.anchor {
-            anchor_display("shaft", "d_a1").unwrap_or_else(|| MISSING.to_string())
-        } else {
-            n.map(|r| format!("{} h11", trim3(r.d_a1)))
-                .unwrap_or_else(|| MISSING.to_string())
-        },
-    ));
-    out.push((
-        "W齿根成形圆",
-        if d.anchor {
-            anchor_display("shaft", "d_Ff1").unwrap_or_else(|| MISSING.to_string())
-        } else {
-            n.map(|r| format!("{} max.", trim3(r.d_ff1_max)))
-                .unwrap_or_else(|| MISSING.to_string())
-        },
-    ));
-    out.push((
-        "W齿根圆",
-        if d.anchor {
-            anchor_display("shaft", "d_f1").unwrap_or_else(|| MISSING.to_string())
-        } else {
-            n.map(|r| format!("{} {}", trim3(r.d_f1), fmt_dev(r.a_df1)))
-                .unwrap_or_else(|| MISSING.to_string())
-        },
-    ));
-    out.push(("W齿厚svmax", fmt_mm(d.s_vmax)));
-    out.push(("W齿厚smax", fmt_mm(d.s_max)));
-    out.push(("W齿厚smin", fmt_mm(d.s_min)));
-    out.push(("W量圆", fmt_mm(d.d_m_shaft)));
-    out.push(("W量距max", fmt_mm(d.m1_max)));
-    out.push(("W量距min", fmt_mm(d.m1_min)));
+    let mut out: Vec<(&'static str, String)> = Vec::with_capacity(ROWS.len());
+    for (i, r) in ROWS.iter().enumerate() {
+        let v: String = match i {
+            0 => designation(spec, hub),
+            1 => spec.z.to_string(),
+            2 => trim3(spec.m),
+            3 => "30°".to_string(),
+            4 => {
+                // 直径行 1：内 = 齿根圆 d_f2 / 外 = 齿顶圆 d_a1
+                if hub {
+                    if d.anchor {
+                        anchor_display("hub", "d_f2").unwrap_or_else(|| MISSING.to_string())
+                    } else {
+                        n.map(|r| format!("{} {}", trim3(r.d_f2), fmt_dev(r.a_df2)))
+                            .unwrap_or_else(|| MISSING.to_string())
+                    }
+                } else if d.anchor {
+                    anchor_display("shaft", "d_a1").unwrap_or_else(|| MISSING.to_string())
+                } else {
+                    n.map(|r| format!("{} h11", trim3(r.d_a1)))
+                        .unwrap_or_else(|| MISSING.to_string())
+                }
+            }
+            5 => {
+                // 齿根成形圆
+                if hub {
+                    if d.anchor {
+                        anchor_display("hub", "d_Ff2").unwrap_or_else(|| MISSING.to_string())
+                    } else {
+                        n.map(|r| format!("{} min.", trim3(r.d_ff2_min)))
+                            .unwrap_or_else(|| MISSING.to_string())
+                    }
+                } else if d.anchor {
+                    anchor_display("shaft", "d_Ff1").unwrap_or_else(|| MISSING.to_string())
+                } else {
+                    n.map(|r| format!("{} max.", trim3(r.d_ff1_max)))
+                        .unwrap_or_else(|| MISSING.to_string())
+                }
+            }
+            6 => {
+                // 直径行 3：内 = 齿顶圆 d_a2 / 外 = 齿根圆 d_f1
+                if hub {
+                    if d.anchor {
+                        anchor_display("hub", "d_a2").unwrap_or_else(|| MISSING.to_string())
+                    } else {
+                        n.map(|r| format!("{} H11", trim3(r.d_a2)))
+                            .unwrap_or_else(|| MISSING.to_string())
+                    }
+                } else if d.anchor {
+                    anchor_display("shaft", "d_f1").unwrap_or_else(|| MISSING.to_string())
+                } else {
+                    n.map(|r| format!("{} {}", trim3(r.d_f1), fmt_dev(r.a_df1)))
+                        .unwrap_or_else(|| MISSING.to_string())
+                }
+            }
+            7 => if hub { fmt_mm(d.e_max) } else { fmt_mm(d.s_vmax) },
+            8 => if hub { fmt_mm(d.e_min) } else { fmt_mm(d.s_max) },
+            9 => if hub { fmt_mm(d.e_vmin) } else { fmt_mm(d.s_min) },
+            10 => if hub { fmt_mm(d.d_m_hub) } else { fmt_mm(d.d_m_shaft) },
+            11 => if hub { fmt_mm(d.m2_max) } else { fmt_mm(d.m1_max) },
+            12 => if hub { fmt_mm(d.m2_min) } else { fmt_mm(d.m1_min) },
+            _ => MISSING.to_string(),
+        };
+        out.push((if hub { r.hub_tag } else { r.shaft_tag }, v));
+    }
 
     // 顺序护栏：取值顺序必须与 ATTDEF 表一致（加/改行时先在这里暴露）。
     let got: Vec<&str> = out.iter().map(|(t, _)| *t).collect();
-    let want: Vec<String> = attdefs().iter().map(|ad| ad.tag.clone()).collect();
+    let want: Vec<String> = attdefs(hub).iter().map(|ad| ad.tag.clone()).collect();
     let want: Vec<&str> = want.iter().map(|s| s.as_str()).collect();
     if got != want {
         return Err(format!(
@@ -1155,11 +1157,20 @@ pub fn values(spec: &DinTableSpec) -> Result<Vec<(String, String)>, String> {
     Ok(out.into_iter().map(|(t, v)| (t.to_string(), v)).collect())
 }
 
-/// 建 INSERT（基点在 `at`，旋转 `rot_deg` 度；26 个 ATTRIB 取自 `values()`）。
-pub fn build_insert(spec: &DinTableSpec, at: [f64; 2], rot_deg: f64) -> Result<Insert, String> {
-    let vals = values(spec)?;
-    let mut ins = Insert::new(BLOCK, Vector3::new(at[0], at[1], 0.0));
+/// 建 INSERT（单栏；基点在 `at`，旋转 `rot_deg` 度；13 个 ATTRIB 取自 `values(spec, hub)`）。
+/// 整表 **INSERT 缩放 0.17**，不改块内图元几何；ATTRIB 随 INSERT 缩放。
+pub fn build_insert(
+    spec: &DinTableSpec,
+    hub: bool,
+    at: [f64; 2],
+    rot_deg: f64,
+) -> Result<Insert, String> {
+    let vals = values(spec, hub)?;
+    let mut ins = Insert::new(block_name(hub), Vector3::new(at[0], at[1], 0.0));
     ins.rotation = rot_deg.to_radians();
+    ins.set_x_scale(TABLE_SCALE);
+    ins.set_y_scale(TABLE_SCALE);
+    ins.set_z_scale(TABLE_SCALE);
     {
         let c = &mut ins.common;
         c.layer = crate::partgen::LAYER_MAIN.to_string();
@@ -1167,7 +1178,7 @@ pub fn build_insert(spec: &DinTableSpec, at: [f64; 2], rot_deg: f64) -> Result<I
         c.linetype = "ByLayer".to_string();
         c.line_weight = LineWeight::ByLayer;
     }
-    for ad in attdefs() {
+    for ad in attdefs(hub) {
         let val = vals
             .iter()
             .find(|(tag, _)| tag == &ad.tag)
@@ -1182,9 +1193,9 @@ pub fn build_insert(spec: &DinTableSpec, at: [f64; 2], rot_deg: f64) -> Result<I
     Ok(ins)
 }
 
-/// 26 项 Markdown（回执/计算书）。
-pub fn markdown_table(spec: &DinTableSpec) -> Result<String, String> {
-    let vals = values(spec)?;
+/// 13 项 Markdown（回执/计算书）。
+pub fn markdown_table(spec: &DinTableSpec, hub: bool) -> Result<String, String> {
+    let vals = values(spec, hub)?;
     let mut md = String::new();
     md.push_str("| 属性 | 值 |\n|---|---|\n");
     for (tag, v) in vals {
@@ -1197,48 +1208,53 @@ pub fn markdown_table(spec: &DinTableSpec) -> Result<String, String> {
 // GUI 选项表与 GUI/HTTP 模型
 // ══════════════════════════════════════════════════════════════════════════
 
-/// DIN 卡的表单字段（表驱动 GUI 骨架；Bild 6 示例作默认）。
-/// DIN 卡的表达式策略（表驱动；体系要求 SPLINE、α=30、直齿；变位进 d_B 公式；
-/// 本卡 Nabe/Welle 两栏都做，方向不收窄）。
-pub const EXPR_POLICY: crate::card_expr::ExprPolicy = crate::card_expr::ExprPolicy {
-    card: "DIN 花键参数表",
+/// DIN 内花键卡（Nabe）表达式策略（一卡一方向：KIND 必须 IN；α=30、直齿；变位进 d_B）。
+pub const EXPR_POLICY_INT: crate::card_expr::ExprPolicy = crate::card_expr::ExprPolicy {
+    card: "DIN 5480 内花键参数表",
     mark: crate::card_expr::ExprMark::Spline,
     alphas: &[30.0],
     spur: true,
     allow_shift: true,
     map: &[
-        crate::card_expr::ExprRule {
-            target: "d_b",
-            label: "基准直径 d_B",
-            op: crate::card_expr::ExprOp::DinBaseDB,
-        },
-        crate::card_expr::ExprRule {
-            target: "m",
-            label: "模数 m",
-            op: crate::card_expr::ExprOp::Module,
-        },
-        crate::card_expr::ExprRule {
-            target: "z",
-            label: "齿数 z",
-            op: crate::card_expr::ExprOp::Teeth,
-        },
+        crate::card_expr::ExprRule { target: "d_b", label: "基准直径 d_B", op: crate::card_expr::ExprOp::DinBaseDB },
+        crate::card_expr::ExprRule { target: "m", label: "模数 m", op: crate::card_expr::ExprOp::Module },
+        crate::card_expr::ExprRule { target: "z", label: "齿数 z", op: crate::card_expr::ExprOp::Teeth },
     ],
 };
 
-pub const FORM: crate::card::CardFormSpec = crate::card::CardFormSpec {
+/// DIN 外花键卡（Welle）表达式策略（一卡一方向：KIND 必须 EX）。
+pub const EXPR_POLICY_EXT: crate::card_expr::ExprPolicy = crate::card_expr::ExprPolicy {
+    card: "DIN 5480 外花键参数表",
+    mark: crate::card_expr::ExprMark::Spline,
+    alphas: &[30.0],
+    spur: true,
+    allow_shift: true,
+    map: &[crate::card_expr::ExprRule {
+        target: "d_b",
+        label: "基准直径 d_B",
+        op: crate::card_expr::ExprOp::DinBaseDB,
+    }, crate::card_expr::ExprRule {
+        target: "m",
+        label: "模数 m",
+        op: crate::card_expr::ExprOp::Module,
+    }, crate::card_expr::ExprRule {
+        target: "z",
+        label: "齿数 z",
+        op: crate::card_expr::ExprOp::Teeth,
+    }],
+};
+
+/// 公用缺项说明。
+const DIN_MISSING_NOTE: &str = "Table 7 上段 c1/c2（>400 侧）与 c9（≤12 细档）列映射无实锚 → 「—」；\n                   下段公差表只抽到 6–9 级、模数组 1,75–4 的实锚 → 其余等级/模数组 Tact/Teff 显示「—」；\n                   D_M/M2/M1 无检验表行且非 Bild 6 示例时显示「—」。";
+
+/// DIN 内花键卡（Nabe）表单（单栏 Bild 6）。
+pub const FORM_INT: crate::card::CardFormSpec = crate::card::CardFormSpec {
     fields: &[
         crate::card::CardFieldSpec {
-            key: "expr",
-            label: "齿形表达式（九字段；可从轴/齿轮生成器 GUI 复制）",
-            kind: "textarea",
-            placeholder: "SPLINE IN M3 Z38 ALPHA30 X0.45 BETA0 H30",
-            default: "",
-            title: "九字段统一齿形表达式（MARK KIND M Z ALPHA X DA DF BETA H）；粘贴后自动反解 d_B=m(z+1.1+2x)、m、z；DIN 5480 压力角恒 30°",
-            options: &[],
-            options_from: "",
-            min: 0.0,
-            step: 0.0,
-            required: false,
+            key: "expr", label: "齿形表达式（九字段；可从轴/齿轮生成器 GUI 复制）",
+            kind: "textarea", placeholder: "SPLINE IN M3 Z38 ALPHA30 X0.45 BETA0 H30", default: "",
+            title: "九字段统一齿形表达式（MARK KIND M Z ALPHA X DA DF BETA H）；粘贴后自动反解 d_B=m(z+1.1+2x)、m、z；本卡固定内花键（KIND 须 IN）",
+            options: &[], options_from: "", min: 0.0, step: 0.0, required: false,
         },
         crate::card::CardFieldSpec { key: "m", label: "模数 m", kind: "number",
             placeholder: "如 3", default: "3",
@@ -1255,10 +1271,6 @@ pub const FORM: crate::card::CardFormSpec = crate::card::CardFormSpec {
         crate::card::CardFieldSpec { key: "hub", label: "内花键配合", kind: "text",
             placeholder: "如 9H（F/G/H/J/K/M）", default: "9H",
             title: "Nabe 配合（字母 F/G/H/J/K/M + 等级数字；Bild 6 示例 9H）", options: &[], options_from: "",
-            min: 0.0, step: 0.0, required: false },
-        crate::card::CardFieldSpec { key: "shaft", label: "外花键配合", kind: "text",
-            placeholder: "如 8f（v…a）", default: "8f",
-            title: "Welle 配合（字母 v…a + 等级数字；Bild 6 示例 8f）", options: &[], options_from: "",
             min: 0.0, step: 0.0, required: false },
         crate::card::CardFieldSpec { key: "e2", label: "e₂=s₁ 覆盖", kind: "number",
             placeholder: "选填（名义表缺行时）", default: "",
@@ -1280,6 +1292,48 @@ pub const FORM: crate::card::CardFormSpec = crate::card::CardFormSpec {
             placeholder: "选填", default: "",
             title: "Nabe 作用齿槽宽公差显式覆盖（mm）", options: &[], options_from: "",
             min: 0.0, step: 0.0001, required: false },
+    ],
+    note: "粘九字段表达式（自动反解 d_B/m/z）或直接填 m/z/d_B + 齿配合 → 缺行可用 e₂ / Ae / As / Tact / Teff 覆盖 → 点「出表」回到图纸放置。",
+    missing_note: DIN_MISSING_NOTE,
+};
+
+/// DIN 外花键卡（Welle）表单（单栏 Bild 6）。
+pub const FORM_EXT: crate::card::CardFormSpec = crate::card::CardFormSpec {
+    fields: &[
+        crate::card::CardFieldSpec {
+            key: "expr", label: "齿形表达式（九字段；可从轴/齿轮生成器 GUI 复制）",
+            kind: "textarea", placeholder: "SPLINE EX M3 Z38 ALPHA30 X0.45 BETA0 H30", default: "",
+            title: "九字段统一齿形表达式（MARK KIND M Z ALPHA X DA DF BETA H）；粘贴后自动反解 d_B=m(z+1.1+2x)、m、z；本卡固定外花键（KIND 须 EX）",
+            options: &[], options_from: "", min: 0.0, step: 0.0, required: false,
+        },
+        crate::card::CardFieldSpec { key: "m", label: "模数 m", kind: "number",
+            placeholder: "如 3", default: "3",
+            title: "DIN 5480-1 模数 m（Bild 6 主参数）", options: &[], options_from: "",
+            min: 0.0, step: 0.001, required: true },
+        crate::card::CardFieldSpec { key: "z", label: "齿数 z", kind: "number",
+            placeholder: "如 38", default: "38",
+            title: "齿数 z", options: &[], options_from: "",
+            min: 3.0, step: 1.0, required: true },
+        crate::card::CardFieldSpec { key: "d_b", label: "基准直径 d_B", kind: "number",
+            placeholder: "如 120", default: "120",
+            title: "基准直径 d_B = m·z（DIN 5480）", options: &[], options_from: "",
+            min: 0.0, step: 0.001, required: true },
+        crate::card::CardFieldSpec { key: "shaft", label: "外花键配合", kind: "text",
+            placeholder: "如 8f（v…a）", default: "8f",
+            title: "Welle 配合（字母 v…a + 等级数字；Bild 6 示例 8f）", options: &[], options_from: "",
+            min: 0.0, step: 0.0, required: false },
+        crate::card::CardFieldSpec { key: "e2", label: "e₂=s₁ 覆盖", kind: "number",
+            placeholder: "选填（名义表缺行时）", default: "",
+            title: "e₂=s₁ 名义值显式覆盖（mm；缺行时用）", options: &[], options_from: "",
+            min: 0.0, step: 0.001, required: false },
+        crate::card::CardFieldSpec { key: "ae", label: "Ae 覆盖", kind: "number",
+            placeholder: "选填，如 0", default: "",
+            title: "Ae（齿槽宽上偏差）显式覆盖（mm）", options: &[], options_from: "",
+            min: 0.0, step: 0.001, required: false },
+        crate::card::CardFieldSpec { key: "as_", label: "As 覆盖", kind: "number",
+            placeholder: "选填，如 -0.028", default: "",
+            title: "As（齿厚上偏差）显式覆盖（mm）", options: &[], options_from: "",
+            min: 0.0, step: 0.001, required: false },
         crate::card::CardFieldSpec { key: "tact_w", label: "Tact(W) 覆盖", kind: "number",
             placeholder: "选填", default: "",
             title: "Welle 实际齿厚公差显式覆盖（mm）", options: &[], options_from: "",
@@ -1289,8 +1343,8 @@ pub const FORM: crate::card::CardFormSpec = crate::card::CardFormSpec {
             title: "Welle 作用齿厚公差显式覆盖（mm）", options: &[], options_from: "",
             min: 0.0, step: 0.0001, required: false },
     ],
-    note: "粘九字段表达式（自动反解 d_B/m/z）或直接填 m/z/d_B + N/W 配合 → 缺行可用 e₂ / Ae / As / Tact / Teff 覆盖 → 点「出表」回到图纸放置。",
-    missing_note: "Table 7 上段 c1/c2（>400 侧）与 c9（≤12 细档）列映射无实锚 → 「—」；\n                   下段公差表只抽到 6–9 级、模数组 1,75–4 的实锚 → 其余等级/模数组 Tact/Teff 显示「—」；\n                   D_M/M2/M1 无检验表行且非 Bild 6 示例时显示「—」。",
+    note: "粘九字段表达式（自动反解 d_B/m/z）或直接填 m/z/d_B + 齿配合 → 缺行可用 e₂ / Ae / As / Tact / Teff 覆盖 → 点「出表」回到图纸放置。",
+    missing_note: DIN_MISSING_NOTE,
 };
 
 /// DIN 卡选项/口径 JSON（随 `/api/spline_options` 下发；页面只渲染）。
@@ -1321,8 +1375,18 @@ pub fn options_json() -> serde_json::Value {
         "missing_note": "Table 7 上段 c1/c2（>400 侧）与 c9（≤12 细档）列映射无实锚 → 「—」；\
                          下段公差表只抽到 6–9 级、模数组 1,75–4 的实锚 → 其余等级/模数组 Tact/Teff 显示「—」；\
                          D_M/M2/M1 无检验表行且非 Bild 6 示例时显示「—」；可用 ae/as/e2/tactn/teffn/tactw/teffw 显式覆盖。",
-        "note": "版面照 DIN 5480-1:2006 Bild 6（13 行 × Nabe/Welle 两栏）；文字样式一律 OCSM_GB；\
-                 Table 7 上段数值为 2026-09-26 双源 OCR + 逐格复核入库（assets/din5480_1_table7_dev.csv）。",
+        "columns_int": ROWS.iter().enumerate().map(|(i, r)| serde_json::json!({
+            "tag": r.hub_tag, "label": r.hub_label,
+            "unit": if i == 0 { "" } else { "mm" },
+            "formula": r.formula, "source": r.source,
+        })).collect::<Vec<_>>(),
+        "columns_ext": ROWS.iter().enumerate().map(|(i, r)| serde_json::json!({
+            "tag": r.shaft_tag, "label": r.shaft_label,
+            "unit": if i == 0 { "" } else { "mm" },
+            "formula": r.formula, "source": r.source,
+        })).collect::<Vec<_>>(),
+        "note": "版面照 DIN 5480-1:2006 Bild 6（**内外拆成两张单栏卡**；本卡只画本侧 13 行，整表 INSERT 缩放 0.17）；\
+                 文字样式一律 OCSM_GB；Table 7 上段数值为 2026-09-26 双源 OCR + 逐格复核入库（assets/din5480_1_table7_dev.csv）。",
     })
 }
 
@@ -1332,6 +1396,9 @@ pub struct DinTableModel {
     /// 卡类型（GUI 回传；后端按 renderer 分派，这里只记不看）。
     #[serde(default)]
     pub card: String,
+    /// 方向（`int`/`ext`；由卡类型固定，后端分派时回填；旧请求显式给也收）。
+    #[serde(default)]
+    pub side: Option<String>,
     /// 九字段统一齿形表达式（可空；给了则覆盖 m/z/d_B）。
     #[serde(default)]
     pub expr: Option<String>,
@@ -1369,25 +1436,43 @@ pub struct DinTableModel {
 }
 
 impl DinTableModel {
-    /// →（校验过的 `DinTableSpec`）。
+    /// 方向（缺省内）：`ext`/`外` → 外，其余 → 内。
+    pub fn hub(&self) -> bool {
+        !matches!(
+            self.side.as_deref().map(str::trim).map(|s| s.to_ascii_lowercase()).as_deref(),
+            Some("ext") | Some("external") | Some("外") | Some("外花键") | Some("welle")
+        )
+    }
+
+    /// 方向错误文案用的卡名。
+    fn card_label(hub: bool) -> &'static str {
+        if hub {
+            "DIN 5480 内花键参数表"
+        } else {
+            "DIN 5480 外花键参数表"
+        }
+    }
+
+    /// →（校验过的 `DinTableSpec`；方向由卡决定）。
     pub fn spec(&self) -> Result<DinTableSpec, String> {
-        let hub = parse_fit_token(self.hub.as_deref().unwrap_or("9H"), true)
-            .map_err(|e| format!("DIN 花键参数表：孔配合「{}」{e}", self.hub.as_deref().unwrap_or("9H")))?;
-        let shaft = parse_fit_token(self.shaft.as_deref().unwrap_or("8f"), false)
-            .map_err(|e| format!("DIN 花键参数表：轴配合「{}」{e}", self.shaft.as_deref().unwrap_or("8f")))?;
+        let hub = self.hub();
+        let card = Self::card_label(hub);
+        let hub_fit = parse_fit_token(self.hub.as_deref().unwrap_or("9H"), true)
+            .map_err(|e| format!("{card}：孔配合「{}」{e}", self.hub.as_deref().unwrap_or("9H")))?;
+        let shaft_fit = parse_fit_token(self.shaft.as_deref().unwrap_or("8f"), false)
+            .map_err(|e| format!("{card}：轴配合「{}」{e}", self.shaft.as_deref().unwrap_or("8f")))?;
         let (m, z, d_b) = match self.expr.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
             Some(e) => {
-                let r = crate::card_expr::resolve(&EXPR_POLICY, e, None)?;
+                let policy = if hub { &EXPR_POLICY_INT } else { &EXPR_POLICY_EXT };
+                let r = crate::card_expr::resolve(policy, e, Some(hub))?;
                 (
                     r.value("m")
-                        .ok_or_else(|| "DIN 花键参数表：表达式映射表缺 m（内部错误）".to_string())?,
+                        .ok_or_else(|| format!("{card}：表达式映射表缺 m（内部错误）"))?,
                     r.value("z")
-                        .ok_or_else(|| "DIN 花键参数表：表达式映射表缺 z（内部错误）".to_string())?
+                        .ok_or_else(|| format!("{card}：表达式映射表缺 z（内部错误）"))?
                         as u32,
                     r.value("d_b")
-                        .ok_or_else(|| {
-                            "DIN 花键参数表：表达式映射表缺 d_B（内部错误）".to_string()
-                        })?,
+                        .ok_or_else(|| format!("{card}：表达式映射表缺 d_B（内部错误）"))?,
                 )
             }
             None => (self.m, self.z, self.d_b),
@@ -1396,8 +1481,8 @@ impl DinTableModel {
             m,
             z,
             d_b,
-            hub,
-            shaft,
+            hub: hub_fit,
+            shaft: shaft_fit,
             e2_s1: self.e2,
             ae: self.ae,
             as_: self.as_,
@@ -1412,33 +1497,37 @@ impl DinTableModel {
         Ok(spec)
     }
 
-    /// 预览 JSON（不碰图纸）。
+    /// 预览 JSON（不碰图纸；单栏 13 项）。
     pub fn preview_json(&self) -> Result<serde_json::Value, String> {
+        let hub = self.hub();
         let spec = self.spec()?;
         let d = derive(&spec)?;
-        let vals = values(&spec)?;
-        let mut items = Vec::with_capacity(ROWS.len() * 2);
+        let vals = values(&spec, hub)?;
+        let mut items = Vec::with_capacity(ROWS.len());
         let mut missing = Vec::new();
-        for (i, r) in ROWS.iter().enumerate() {
-            for (tag, label) in [(r.hub_tag, r.hub_label), (r.shaft_tag, r.shaft_label)] {
-                let value = vals
-                    .iter()
-                    .find(|(t, _)| t == tag)
-                    .map(|(_, v)| v.clone())
-                    .unwrap_or_default();
-                if value == MISSING {
-                    missing.push(label.to_string());
-                }
-                items.push(serde_json::json!({
-                    "tag": tag,
-                    "label": label,
-                    "unit": if i == 0 { "" } else { "mm" },
-                    "value": value,
-                    "formula": r.formula,
-                    "source": r.source,
-                    "missing": value == MISSING,
-                }));
+        for r in ROWS.iter() {
+            let (tag, label) = if hub {
+                (r.hub_tag, r.hub_label)
+            } else {
+                (r.shaft_tag, r.shaft_label)
+            };
+            let value = vals
+                .iter()
+                .find(|(t, _)| t == tag)
+                .map(|(_, v)| v.clone())
+                .unwrap_or_default();
+            if value == MISSING {
+                missing.push(label.to_string());
             }
+            items.push(serde_json::json!({
+                "tag": tag,
+                "label": label,
+                "unit": if tag.ends_with("标记") { "" } else { "mm" },
+                "value": value,
+                "formula": r.formula,
+                "source": r.source,
+                "missing": value == MISSING,
+            }));
         }
         let readout = serde_json::json!([
             {"k": "e₂ = s₁（名义）", "v": fmt_mm(d.e2_s1)},
@@ -1466,16 +1555,25 @@ impl DinTableModel {
         } else {
             serde_json::Value::Null
         };
+        let title = if hub {
+            format!(
+                "DIN 5480 内花键参数表（N{}×{}×{}×{}）",
+                trim3(spec.d_b), trim3(spec.m), spec.z, spec.hub.token()
+            )
+        } else {
+            format!(
+                "DIN 5480 外花键参数表（W{}×{}×{}×{}）",
+                trim3(spec.d_b), trim3(spec.m), spec.z, spec.shaft.token()
+            )
+        };
         Ok(serde_json::json!({
             "ok": true,
-            "card": "DIN花键参数表",
+            "card": if hub { "DIN花键参数表" } else { "DIN花键参数表_外" },
             "renderer": "din_table",
+            "side": if hub { "int" } else { "ext" },
             "expr": expr_echo,
             "fields": fields,
-            "title": format!(
-                "DIN 5480 花键参数表（N{}×{}×{}×{} / W…×{}）",
-                trim3(spec.d_b), trim3(spec.m), spec.z, spec.hub.token(), spec.shaft.token()
-            ),
+            "title": title,
             "m": spec.m,
             "z": spec.z,
             "d_b": spec.d_b,
@@ -1489,12 +1587,13 @@ impl DinTableModel {
         }))
     }
 
-    /// 待放置件要带的 26 个 ATTRIB（tag → 值 + ATTDEF 模板）。
+    /// 待放置件要带的 13 个 ATTRIB（tag → 值 + ATTDEF 模板）。
     pub fn pending_attrs(&self) -> Result<Vec<(AttributeDefinition, String)>, String> {
+        let hub = self.hub();
         let spec = self.spec()?;
-        let vals = values(&spec)?;
+        let vals = values(&spec, hub)?;
         let mut out = Vec::with_capacity(vals.len());
-        for ad in attdefs() {
+        for ad in attdefs(hub) {
             let v = vals
                 .iter()
                 .find(|(tag, _)| tag == &ad.tag)
@@ -1505,21 +1604,22 @@ impl DinTableModel {
         Ok(out)
     }
 
-    /// 直接落点用的 `INSERT`。
+    /// 直接落点用的 `INSERT`（整表缩放 0.17）。
     pub fn build_insert(&self) -> Result<Insert, String> {
+        let hub = self.hub();
         let spec = self.spec()?;
         let at = self.at.unwrap_or([0.0, 0.0]);
-        build_insert(&spec, at, self.rot)
+        build_insert(&spec, hub, at, self.rot)
     }
 
-    /// 插入回执里的一段。
+    /// 插入回执里的一段（单栏，只报本侧）。
     pub fn echo_note(&self) -> Result<String, String> {
+        let hub = self.hub();
         let spec = self.spec()?;
         let d = derive(&spec)?;
         Ok(format!(
-            "DIN 5480 {} / {}（dB={} m={} z={}{}）",
-            designation(&spec, true),
-            designation(&spec, false),
+            "DIN 5480 {}（dB={} m={} z={}{}）",
+            designation(&spec, hub),
             trim3(spec.d_b),
             trim3(spec.m),
             spec.z,
@@ -1529,10 +1629,12 @@ impl DinTableModel {
 
     /// 待放置件的 `OCSM_PART` 元数据（薄台账）。
     pub fn part_meta_json(&self) -> Result<String, String> {
+        let hub = self.hub();
         let spec = self.spec()?;
         Ok(serde_json::json!({
             "family": "din_table",
-            "card": "DIN花键参数表",
+            "card": if hub { "DIN花键参数表" } else { "DIN花键参数表_外" },
+            "side": if hub { "int" } else { "ext" },
             "d_b": spec.d_b,
             "m": spec.m,
             "z": spec.z,
@@ -1579,15 +1681,13 @@ fn is_option_token(t: &str) -> bool {
 }
 
 pub fn usage() -> String {
-    "智能卡片「DIN花键参数表」用法：\
-     `OCSMCARD DIN花键参数表 <九字段齿形表达式> [N<等级><字母>] [W<等级><字母>] \
-     [e2 …] [ae …] [as …] [tactn …] [teffn …] [tactw …] [teffw …] [at x,y] [rot 度]`\
-     （如 `OCSMCARD DIN花键参数表 SPLINE IN M3 Z38 ALPHA30 X0.45 BETA0 H30 N9H W8f`；\
-     也可沿用 `M3 Z38 B120 N9H W8f` 或代号 `N 120×3×38×9H W 120×3×38×8f`）。\
-     表达式反解 d_B=m(z+1.1+2x)、m、z（DIN 5480 压力角恒 30°）。\
-     版面 = DIN 5480-1:2006 Bild 6 的 13 行 × Nabe/Welle 两栏；孔缺省 9H、轴缺省 8f；\
-     Ae/As 取 Table 7（本仓 OCR 入库：100–200 与 50–100 档有实锚，其余按表头阶梯推断），\
-     Tact/Teff 取 Table 7 公差锚（6–9 级、模数组 1,75–4）—— 缺口显示「—」，可用 ae/as/e2/tactn/teffn/tactw/teffw 覆盖。"
+    "智能卡片「DIN 5480 内/外花键参数表」用法（一卡一方向）：\
+     `OCSMCARD DIN花键参数表 <九字段表达式> [N<等级><字母>] [e2 …] [ae …] [as …] [tactn …] [teffn …] [at x,y]`\
+     （外卡：`OCSMCARD DIN花键参数表_外 <九字段表达式> [W<等级><字母>] [tactw …] [teffw …] …`；\
+     旧写法 `M3 Z38 B120 N9H W8f` 兼容：旧 id 默认内卡，N/W 都收、只取本侧）。\
+     表达式反解 d_B=m(z+1.1+2x)、m、z（DIN 5480 压力角恒 30°），KIND 须与卡方向一致（内 IN / 外 EX）。\
+     版面 = DIN 5480-1:2006 Bild 6 单栏 13 行（内 = Nabe、外 = Welle），整表 INSERT 缩放 0.17；\
+     孔缺省 9H、轴缺省 8f；Ae/As 取 Table 7，Tact/Teff 取 Table 7 公差锚 —— 缺口显示「—」，可用 ae/as/e2/tactn/teffn/tactw/teffw 覆盖。"
         .to_string()
 }
 
@@ -1638,7 +1738,7 @@ fn parse_designation_body(body: &str) -> Result<(f64, f64, u32, String), String>
 
 impl DinTableSpec {
     /// 解析 CLI 文本。
-    pub fn parse(text: &str) -> Result<Self, String> {
+    pub fn parse(text: &str, hub: bool) -> Result<Self, String> {
         let norm = normalize_input(text);
         let tokens: Vec<&str> = norm.split_whitespace().collect();
         if tokens.is_empty() {
@@ -1863,7 +1963,8 @@ impl DinTableSpec {
             return Err(format!("DIN 花键参数表：`N`/`W` 后缺长度代号（如 `N 120×3×38×9H`）。\n{}", usage()));
         }
         if let Some(e) = expr {
-            let r = crate::card_expr::resolve(&EXPR_POLICY, &e, None)?;
+            let policy = if hub { &EXPR_POLICY_INT } else { &EXPR_POLICY_EXT };
+            let r = crate::card_expr::resolve(policy, &e, Some(hub))?;
             let em = r.value("m").ok_or_else(|| {
                 "DIN 花键参数表：表达式映射表缺 m（内部错误）".to_string()
             })?;
@@ -2047,31 +2148,37 @@ mod tests {
         ] {
             assert!(near6(a, b), "公式路 {a} != {b}");
         }
-        // 26 项取值（示例逐项）
-        let vals = values(&spec).unwrap();
-        let get = |tag: &str| vals.iter().find(|(t, _)| t == tag).unwrap().1.clone();
-        assert_eq!(get("N标记"), "Nabe DIN 5480 – N120×3×38×9H");
-        assert_eq!(get("W标记"), "Welle DIN 5480 – W120×3×38×8f");
-        assert_eq!(get("N齿数"), "38");
-        assert_eq!(get("N压力角"), "30°");
-        assert_eq!(get("N齿根圆"), "120 +0.76");
-        assert_eq!(get("N齿根成形圆"), "119.49 min.");
-        assert_eq!(get("N齿顶圆"), "114 H11");
-        assert_eq!(get("N槽宽max"), "6.361");
-        assert_eq!(get("N槽宽min"), "6.305");
-        assert_eq!(get("N槽宽eff"), "6.271");
-        assert_eq!(get("N量圆"), "5.25");
-        assert_eq!(get("N量距max"), "109.266");
-        assert_eq!(get("N量距min"), "109.169");
-        assert_eq!(get("W齿顶圆"), "119.40 h11");
-        assert_eq!(get("W齿根成形圆"), "113.91 max.");
-        assert_eq!(get("W齿根圆"), "113.4 -1.74");
-        assert_eq!(get("W齿厚svmax"), "6.243");
-        assert_eq!(get("W齿厚smax"), "6.22");
-        assert_eq!(get("W齿厚smin"), "6.18");
-        assert_eq!(get("W量圆"), "6");
-        assert_eq!(get("W量距max"), "126.017");
-        assert_eq!(get("W量距min"), "125.956");
+        // 单栏取值（示例逐项；内/外各 13 项）
+        let vh = values(&spec, true).unwrap();
+        let getn = |tag: &str| vh.iter().find(|(t, _)| t == tag).unwrap().1.clone();
+        assert_eq!(getn("N标记"), "Nabe DIN 5480 – N120×3×38×9H");
+        assert_eq!(getn("N齿数"), "38");
+        assert_eq!(getn("N压力角"), "30°");
+        assert_eq!(getn("N齿根圆"), "120 +0.76");
+        assert_eq!(getn("N齿根成形圆"), "119.49 min.");
+        assert_eq!(getn("N齿顶圆"), "114 H11");
+        assert_eq!(getn("N槽宽max"), "6.361");
+        assert_eq!(getn("N槽宽min"), "6.305");
+        assert_eq!(getn("N槽宽eff"), "6.271");
+        assert_eq!(getn("N量圆"), "5.25");
+        assert_eq!(getn("N量距max"), "109.266");
+        assert_eq!(getn("N量距min"), "109.169");
+        let vw = values(&spec, false).unwrap();
+        let getw = |tag: &str| vw.iter().find(|(t, _)| t == tag).unwrap().1.clone();
+        assert_eq!(getw("W标记"), "Welle DIN 5480 – W120×3×38×8f");
+        assert_eq!(getw("W齿数"), "38");
+        assert_eq!(getw("W压力角"), "30°");
+        assert_eq!(getw("W齿顶圆"), "119.40 h11");
+        assert_eq!(getw("W齿根成形圆"), "113.91 max.");
+        assert_eq!(getw("W齿根圆"), "113.4 -1.74");
+        assert_eq!(getw("W齿厚svmax"), "6.243");
+        assert_eq!(getw("W齿厚smax"), "6.22");
+        assert_eq!(getw("W齿厚smin"), "6.18");
+        assert_eq!(getw("W量圆"), "6");
+        assert_eq!(getw("W量距max"), "126.017");
+        assert_eq!(getw("W量距min"), "125.956");
+        assert_eq!(vh.len(), 13, "单栏 13 项");
+        assert_eq!(vw.len(), 13);
     }
 
     /// 一般路径：KISSsoft 示例件（m=3、dB=70、z=22、6f/7H）应命中 Table 7 实锚列并复算。
@@ -2114,7 +2221,7 @@ mod tests {
         let d = derive(&spec).unwrap();
         assert!(d.ae.is_none() && d.as_.is_none());
         assert!(d.notes.iter().any(|n| n.contains(">400")), "{:?}", d.notes);
-        assert!(vals_has_missing(&spec, "N槽宽eff"));
+        assert!(vals_has_missing(&spec, true, "N槽宽eff"));
         // 换用显式 Ae/As 后可出 e/s，但直径/M 值仍如实标缺
         let spec2 = DinTableSpec {
             d_b: 500.0,
@@ -2125,48 +2232,33 @@ mod tests {
         let d2 = derive(&spec2).unwrap();
         assert!(d2.nominal.is_none());
         assert!(d2.e2_s1.is_none() && d2.e_vmin.is_none(), "无名义表行 ⇒ e₂ 缺口，e/s 显示「—」");
-        assert!(vals_has_missing(&spec2, "N齿根圆"));
-        assert!(vals_has_missing(&spec2, "N量距max"));
+        assert!(vals_has_missing(&spec2, true, "N齿根圆"));
+        assert!(vals_has_missing(&spec2, true, "N量距max"));
         // 模数组 5–10 → 公差「—」
         let spec3 = DinTableSpec { m: 5.0, z: 16, d_b: 80.0, ..DinTableSpec::default() };
         let d3 = derive(&spec3).unwrap();
         assert!(d3.tact_hub.is_none() && d3.teff_hub.is_none());
         assert!(d3.tact_shaft.is_none() && d3.teff_shaft.is_none());
         assert!(d3.e_max.is_none() && d3.e_min.is_none());
-        assert!(vals_has_missing(&spec3, "N槽宽max"));
+        assert!(vals_has_missing(&spec3, true, "N槽宽max"));
+        assert!(vals_has_missing(&spec3, false, "W齿厚svmax"));
         // 未知 (m,z,d_B) → 名义表缺口进 notes
         let spec4 = DinTableSpec { m: 3.0, z: 99, d_b: 120.0, ..DinTableSpec::default() };
         let d4 = derive(&spec4).unwrap();
         assert!(d4.nominal.is_none() && d4.e_vmin.is_none());
     }
 
-    fn vals_has_missing(spec: &DinTableSpec, tag: &str) -> bool {
-        values(spec)
+    fn vals_has_missing(spec: &DinTableSpec, hub: bool, tag: &str) -> bool {
+        values(spec, hub)
             .unwrap()
             .iter()
             .any(|(t, v)| t == tag && v == MISSING)
     }
 
-    /// 块结构：15 横线 + 5 竖线 + 27 MTEXT（标题 + 26 标签）+ 26 ATTDEF；全部 OCSM_GB；
-    /// 文本框不出本格（几何估算，实体级字宽）。
+    /// 单栏块结构（内/外）：18 线 + 13 MTEXT + 13 ATTDEF；全部 OCSM_GB；
+    /// 标题/标签/值均不出框、标签不进值列（实体级字宽估算）；覆盖示例/KISSsoft/缺口/表外。
     #[test]
     fn block_structure_and_no_text_overlap() {
-        let ents = block_entities();
-        let n_line = ents.iter().filter(|e| matches!(e, EntityType::Line(_))).count();
-        let n_mtext = ents.iter().filter(|e| matches!(e, EntityType::MText(_))).count();
-        let n_att = ents.iter().filter(|e| matches!(e, EntityType::AttributeDefinition(_))).count();
-        assert_eq!(n_line, 20, "15 横线 + 5 竖线");
-        assert_eq!(n_mtext, 25, "标题 + 12×2 标签（标记行不另画标签）");
-        assert_eq!(n_att, 26, "13×2 值属性");
-        // 所有文字样式一律 OCSM_GB（用户要求）
-        for e in &ents {
-            match e {
-                EntityType::MText(m) => assert_eq!(m.style, "OCSM_GB"),
-                EntityType::AttributeDefinition(a) => assert_eq!(a.text_style, "OCSM_GB"),
-                _ => {}
-            }
-        }
-        // 文本框几何检查：宽度按实体级字宽估算；不出标签列/侧栏；同行不重叠。
         let est = |s: &str, h: f64, f: f64| -> f64 {
             s.chars()
                 .map(|c| {
@@ -2186,93 +2278,135 @@ mod tests {
                 * h
                 * f
         };
-        let spec = example();
-        let vals = values(&spec).unwrap();
-        for (i, r) in ROWS.iter().enumerate() {
-            let y = if i == 0 { DESIG_Y } else { data_row_y(i - 1) };
-            let hub = vals.iter().find(|(t, _)| t == r.hub_tag).unwrap().1.clone();
-            let shaft = vals.iter().find(|(t, _)| t == r.shaft_tag).unwrap().1.clone();
-            // 标签不出标签列（标记行无标签，跳过）
-            if i != 0 {
-                assert!(
-                    est(r.hub_label, TEXT_H, LABEL_W_FACTOR) < W_LABEL - LABEL_X_HUB - 2.0,
-                    "标签「{}」出内花键标签列",
-                    r.hub_label
-                );
-                assert!(
-                    est(r.shaft_label, TEXT_H, LABEL_W_FACTOR) < W_LABEL - LABEL_X_HUB - 2.0,
-                    "标签「{}」出外花键标签列",
-                    r.shaft_label
-                );
+        let specs = [
+            example(),
+            DinTableSpec {
+                m: 3.0, z: 22, d_b: 70.0,
+                hub: DinFit { grade: 7, letter: "H".into() },
+                shaft: DinFit { grade: 6, letter: "f".into() },
+                ..DinTableSpec::default()
+            },
+            DinTableSpec { m: 5.0, z: 16, d_b: 80.0, ..DinTableSpec::default() },
+            DinTableSpec { d_b: 500.0, ..DinTableSpec::default() },
+        ];
+        for hub in [true, false] {
+            let ents = block_entities(hub);
+            let n_line = ents.iter().filter(|e| matches!(e, EntityType::Line(_))).count();
+            let n_mtext = ents.iter().filter(|e| matches!(e, EntityType::MText(_))).count();
+            let n_att = ents
+                .iter()
+                .filter(|e| matches!(e, EntityType::AttributeDefinition(_)))
+                .count();
+            assert_eq!(n_line, 18, "15 横线 + 3 竖线（单栏）");
+            assert_eq!(n_mtext, 13, "标题 + 12 标签（标记行不另画标签）");
+            assert_eq!(n_att, 13, "标记 + 12 值属性");
+            for e in &ents {
+                match e {
+                    EntityType::MText(m) => assert_eq!(m.style, "OCSM_GB"),
+                    EntityType::AttributeDefinition(a) => assert_eq!(a.text_style, "OCSM_GB"),
+                    _ => {}
+                }
             }
-            // 值不出侧栏（标记行从标签 x 起跨两列）
-            let vx_hub = if i == 0 { LABEL_X_HUB } else { VALUE_X_HUB };
-            let vx_shaft = if i == 0 { LABEL_X_SHAFT } else { VALUE_X_SHAFT };
+            // 标题居中不出框（用户红框：标题溢出/压线）
+            let tw = est(title_text(hub), TITLE_H, 1.0);
             assert!(
-                vx_hub + est(&hub, TEXT_H, VALUE_W_FACTOR) < W_SIDE - 2.0,
-                "值「{hub}」出内花键侧栏"
+                W_TOTAL / 2.0 - tw / 2.0 > LABEL_X && W_TOTAL / 2.0 + tw / 2.0 < W_TOTAL - LABEL_X,
+                "标题「{}」出框（宽 {tw:.1}）",
+                title_text(hub)
             );
-            assert!(
-                vx_shaft + est(&shaft, TEXT_H, VALUE_W_FACTOR) < W_TOTAL - 2.0,
-                "值「{shaft}」出外花键侧栏"
-            );
-            // 同行两框不相交（标签右缘 < 值左缘；两侧之间留缝；标记行只有值）
-            if i != 0 {
-                let lh = LABEL_X_HUB + est(r.hub_label, TEXT_H, LABEL_W_FACTOR);
-                assert!(lh < VALUE_X_HUB, "行 {i} 孔标签与孔值相交");
-                let ls = LABEL_X_SHAFT + est(r.shaft_label, TEXT_H, LABEL_W_FACTOR);
-                assert!(ls < VALUE_X_SHAFT, "行 {i} 轴标签与轴值相交");
+            for spec in &specs {
+                let vals = values(spec, hub).unwrap();
+                for (i, r) in ROWS.iter().enumerate() {
+                    let (tag, label) = if hub {
+                        (r.hub_tag, r.hub_label)
+                    } else {
+                        (r.shaft_tag, r.shaft_label)
+                    };
+                    let v = vals.iter().find(|(t, _)| t == tag).unwrap().1.clone();
+                    if i == 0 {
+                        // 标记行跨标签+值两列，但不得出右边框（用户红框：标记超出右边界）
+                        let right = LABEL_X + est(&v, TEXT_H, VALUE_W_FACTOR);
+                        assert!(right < W_TOTAL - 2.0, "标记「{v}」出右框 {right:.1}");
+                        continue;
+                    }
+                    let lw = est(label, TEXT_H, LABEL_W_FACTOR);
+                    assert!(
+                        LABEL_X + lw < W_LABEL - 2.0,
+                        "标签「{label}」出标签列（{lw:.1} ≥ {}）",
+                        W_LABEL - 2.0 - LABEL_X
+                    );
+                    assert!(LABEL_X + lw < VALUE_X, "标签「{label}」进值列");
+                    let right = VALUE_X + est(&v, TEXT_H, VALUE_W_FACTOR);
+                    assert!(right < W_TOTAL - 2.0, "值「{v}」（{tag}）出右框 {right:.1}");
+                }
             }
-            let _ = y;
         }
-        // 标题居中不出框
-        assert!(W_TOTAL / 2.0 - est("DIN 5480 花键参数表", TITLE_H, 1.0) / 2.0 > 0.0);
     }
 
-    /// CLI：三种写法（短参数 / 代号 / 混合）与覆盖项；报错指路。
+    /// CLI：两种写法（短参数 / 代号 / 混合）与覆盖项；内/外两张卡各解析；报错指路。
     #[test]
     fn cli_parse_forms() {
-        let a = DinTableSpec::parse("M3 Z38 B120").unwrap();
+        let a = DinTableSpec::parse("M3 Z38 B120", true).unwrap();
         assert_eq!(a, DinTableSpec { m: 3.0, z: 38, d_b: 120.0, ..DinTableSpec::default() });
-        let b = DinTableSpec::parse("N120×3×38×9H W120×3×38×8f").unwrap();
+        let b = DinTableSpec::parse("N120×3×38×9H W120×3×38×8f", true).unwrap();
         assert_eq!(b.m, 3.0);
         assert_eq!(b.d_b, 120.0);
         assert_eq!(b.hub.token(), "9H");
         assert_eq!(b.shaft.token(), "8f");
-        let c = DinTableSpec::parse("N 120x3x38x9H W 120x3x38x8f at 10,20 rot 30").unwrap();
+        let c = DinTableSpec::parse("N 120x3x38x9H W 120x3x38x8f at 10,20 rot 30", true).unwrap();
         assert_eq!(c.at, Some([10.0, 20.0]));
         assert_eq!(c.rot, 30.0);
-        let d = DinTableSpec::parse("模数 3 齿数 38 基准直径 120 内花键 9H 外花键 8f").unwrap();
+        let d = DinTableSpec::parse("模数 3 齿数 38 基准直径 120 内花键 9H 外花键 8f", true).unwrap();
         assert_eq!(d.hub.token(), "9H");
-        let e = DinTableSpec::parse("M3 Z38 B120 ae=0 as=-0.028 tactn=0.056 teffn=0.034").unwrap();
+        // 旧写法在**外卡**同样可用（只取本侧 W8f；内配合保留但不渲染）。
+        let de = DinTableSpec::parse("M3 Z38 B120 W8f", false).unwrap();
+        assert_eq!(de.shaft.token(), "8f");
+        let e = DinTableSpec::parse("M3 Z38 B120 ae=0 as=-0.028 tactn=0.056 teffn=0.034", true).unwrap();
         assert_eq!(e.ae, Some(0.0));
         assert!(near(e.as_.unwrap(), -0.028));
         // 报错
-        assert!(DinTableSpec::parse("M3 Z38").unwrap_err().contains("基准直径"));
-        assert!(DinTableSpec::parse("M3 Z38 B120 N9v").unwrap_err().contains("偏差系列"));
-        assert!(DinTableSpec::parse("M3 Z38 B120 W9L").unwrap_err().contains("偏差系列"));
-        assert!(DinTableSpec::parse("M3 Z38 B120 foo").unwrap_err().contains("不认识的参数"));
-        assert!(DinTableSpec::parse("").unwrap_err().contains("用法"));
+        assert!(DinTableSpec::parse("M3 Z38", true).unwrap_err().contains("基准直径"));
+        assert!(DinTableSpec::parse("M3 Z38 B120 N9v", true).unwrap_err().contains("偏差系列"));
+        assert!(DinTableSpec::parse("M3 Z38 B120 W9L", true).unwrap_err().contains("偏差系列"));
+        assert!(DinTableSpec::parse("M3 Z38 B120 foo", true).unwrap_err().contains("不认识的参数"));
+        assert!(DinTableSpec::parse("", true).unwrap_err().contains("用法"));
     }
 
-    /// GUI 模型：字段解析 / 预览 JSON 形状 / 标缺清单。
+    /// GUI 模型：单栏 13 项预览 / 标缺 / 内卡与外卡各自方向。
     #[test]
     fn model_preview_json() {
         let m: DinTableModel = serde_json::from_value(serde_json::json!({
-            "card": "DIN花键参数表", "m": 3, "z": 38, "d_b": 120,
+            "card": "DIN花键参数表", "side": "int", "m": 3, "z": 38, "d_b": 120,
             "hub": "9H", "shaft": "8f", "at": null, "rot": 0
         }))
         .unwrap();
         let j = m.preview_json().unwrap();
         assert_eq!(j["ok"], true);
         assert_eq!(j["renderer"], "din_table");
+        assert_eq!(j["side"], "int");
         assert_eq!(j["anchor"], true);
-        assert_eq!(j["items"].as_array().unwrap().len(), 26);
+        assert_eq!(j["items"].as_array().unwrap().len(), 13, "单栏 13 项");
         assert_eq!(j["missing"].as_array().unwrap().len(), 0);
         assert!(j["readout"].as_array().unwrap().len() >= 10);
+        assert!(j["title"].as_str().unwrap().contains("内花键"));
+        // 无 side 字段的旧请求 → 缺省内卡（旧 id 指向默认方向）
+        let m0: DinTableModel = serde_json::from_value(serde_json::json!({
+            "m": 3, "z": 38, "d_b": 120, "hub": "9H", "shaft": "8f"
+        }))
+        .unwrap();
+        assert!(m0.hub());
+        assert_eq!(m0.preview_json().unwrap()["items"].as_array().unwrap().len(), 13);
+        // 外卡（side=ext）：只出 Welle 13 项；KIND=IN 的表达式报错（固定方向仍可报）
+        let mut me = m.clone();
+        me.side = Some("ext".into());
+        let je = me.preview_json().unwrap();
+        assert_eq!(je["side"], "ext");
+        assert_eq!(je["items"][0]["tag"], "W标记");
+        assert_eq!(je["items"].as_array().unwrap().len(), 13);
+        assert!(je["title"].as_str().unwrap().contains("外花键"));
         // 标缺路径
         let m2: DinTableModel = serde_json::from_value(serde_json::json!({
-            "m": 5, "z": 16, "d_b": 80, "hub": "9H", "shaft": "8f"
+            "side": "int", "m": 5, "z": 16, "d_b": 80, "hub": "9H", "shaft": "8f"
         }))
         .unwrap();
         let j2 = m2.preview_json().unwrap();
@@ -2280,7 +2414,7 @@ mod tests {
         assert!(j2["missing_note"].as_str().unwrap().contains("Table 7"));
     }
 
-    /// 代号与用法串。
+    /// 代号与用法串（内外两张卡、单栏 Bild 6）。
     #[test]
     fn designation_and_usage() {
         let spec = example();
@@ -2289,22 +2423,35 @@ mod tests {
         let u = usage();
         assert!(u.contains("DIN花键参数表"));
         assert!(u.contains("Bild 6"));
+        assert!(u.contains("0.17"), "用法要写整表缩放");
+        assert_eq!(block_name(true), "OCSM_DINTABLE_DIN_INT");
+        assert_eq!(block_name(false), "OCSM_DINTABLE_DIN_EXT");
         assert!(table7_rows().iter().all(|r| r.values.len() == 9));
     }
 
-    /// INSERT：26 个 ATTRIB、层与旋转；与取值一一对应。
+    /// INSERT（内/外）：13 个 ATTRIB、层与旋转、**整表缩放 0.17**（ATTRIB 随缩放）。
     #[test]
     fn insert_attributes() {
         let spec = example();
-        let ins = build_insert(&spec, [5.0, 7.0], 15.0).unwrap();
-        assert_eq!(ins.attributes.len(), 26);
-        assert!(near(ins.rotation.to_degrees(), 15.0));
-        assert_eq!(ins.attributes[0].tag, "N标记");
-        assert!(ins.attributes[0].value.contains("N120×3×38×9H"));
-        assert_eq!(ins.attributes[25].tag, "W量距min");
-        assert_eq!(ins.attributes[25].value, "125.956");
+        for hub in [true, false] {
+            let ins = build_insert(&spec, hub, [5.0, 7.0], 15.0).unwrap();
+            assert_eq!(ins.attributes.len(), 13);
+            assert_eq!(ins.block_name, block_name(hub));
+            assert!(near(ins.rotation.to_degrees(), 15.0));
+            assert!(near(ins.x_scale(), TABLE_SCALE) && near(ins.y_scale(), TABLE_SCALE));
+            let first = if hub { "N标记" } else { "W标记" };
+            assert_eq!(ins.attributes[0].tag, first);
+            assert!(ins.attributes[0].value.contains(if hub { "N120×3×38×9H" } else { "W120×3×38×8f" }));
+            // ATTRIB 随 INSERT 缩放：字高 = 块内 25 × 0.17；位置从基点 + 局部×0.17
+            assert!(near6(ins.attributes[0].height, TEXT_H * TABLE_SCALE));
+            let flat = build_insert(&spec, hub, [5.0, 7.0], 0.0).unwrap();
+            assert!(near6(flat.attributes[0].insertion_point.x, 5.0 + LABEL_X * TABLE_SCALE));
+            let last_tag = if hub { "N量距min" } else { "W量距min" };
+            assert_eq!(ins.attributes[12].tag, last_tag);
+        }
         let model = DinTableModel {
             card: "DIN花键参数表".into(),
+            side: Some("int".into()),
             expr: None,
             m: 3.0,
             z: 38,
@@ -2323,14 +2470,17 @@ mod tests {
         };
         let echo = model.echo_note().unwrap();
         assert!(echo.contains("Bild 6 示例原印值"), "{echo}");
+        assert!(echo.contains("Nabe") && !echo.contains("Welle"), "单栏只报本侧：{echo}");
         assert!(model.part_meta_json().unwrap().contains("din_table"));
-        assert!(model.pending_attrs().unwrap().len() == 26);
-        assert!(markdown_table(&spec).unwrap().contains("N槽宽max"));
+        assert!(model.pending_attrs().unwrap().len() == 13);
+        assert!(markdown_table(&spec, true).unwrap().contains("N槽宽max"));
+        assert!(markdown_table(&spec, false).unwrap().contains("W齿厚svmax"));
     }
 
-    fn expr_model(expr: &str) -> DinTableModel {
+    fn expr_model(expr: &str, side: &str) -> DinTableModel {
         DinTableModel {
-            card: "DIN花键参数表".into(),
+            card: if side == "int" { "DIN花键参数表" } else { "DIN花键参数表_外" }.into(),
+            side: Some(side.into()),
             expr: Some(expr.into()),
             m: 0.0,
             z: 0,
@@ -2349,68 +2499,91 @@ mod tests {
         }
     }
 
-    /// ★ 表达式 → 字段 → 卡内值：d_B=m(z+1.1+2x)、m、z；Bild 6 锚点逐项。
+    /// ★ 表达式 → 字段 → 卡内值：d_B=m(z+1.1+2x)、m、z；内/外两张卡各自仅出本侧 13 项。
     #[test]
     fn din_expr_maps_to_base_diameter_and_anchor() {
-        let spec = expr_model("SPLINE IN M3 Z38 ALPHA30 X0.45 DA120 DF114 BETA0 H30")
+        let spec = expr_model("SPLINE IN M3 Z38 ALPHA30 X0.45 DA120 DF114 BETA0 H30", "int")
             .spec()
             .unwrap();
         assert!(near(spec.d_b, 120.0), "d_B={}", spec.d_b);
         assert!(near(spec.m, 3.0));
         assert_eq!(spec.z, 38);
         assert!(is_bild6_example(&spec), "表达式反解 d_B=120 → 走 Bild 6 锚点");
-        let vals = values(&spec).unwrap();
-        let get = |tag: &str| vals.iter().find(|(t, _)| t == tag).unwrap().1.clone();
-        assert!(get("N标记").contains("N120×3×38×9H"), "{}", get("N标记"));
-        assert!(get("W标记").contains("W120×3×38×8f"), "{}", get("W标记"));
-        assert_eq!(get("N槽宽max"), "6.361");
-        assert_eq!(get("W齿厚svmax"), "6.243");
-        // 与旧 M/Z/B 输入同值
-        let old = DinTableSpec::parse("M3 Z38 B120 N9H W8f").unwrap();
-        assert_eq!(values(&old).unwrap(), values(&spec).unwrap());
-        // 预览回填 fields + expr 回显
-        let pj = expr_model("SPLINE IN M3 Z38 ALPHA30 X0.45 DA120 DF114 BETA0 H30")
+        let vh = values(&spec, true).unwrap();
+        assert!(vh.iter().find(|(t, _)| t == "N标记").unwrap().1.contains("N120×3×38×9H"));
+        assert_eq!(vh.iter().find(|(t, _)| t == "N槽宽max").unwrap().1, "6.361");
+        let vw = values(&spec, false).unwrap();
+        assert!(vw.iter().find(|(t, _)| t == "W标记").unwrap().1.contains("W120×3×38×8f"));
+        assert_eq!(vw.iter().find(|(t, _)| t == "W齿厚svmax").unwrap().1, "6.243");
+        // 与旧 M/Z/B 输入同值（各侧）
+        let old = DinTableSpec::parse("M3 Z38 B120 N9H W8f", true).unwrap();
+        assert_eq!(values(&old, true).unwrap(), values(&spec, true).unwrap());
+        assert_eq!(values(&old, false).unwrap(), values(&spec, false).unwrap());
+        // 预览回填 fields + expr 回显 + 本侧 13 项
+        let pj = expr_model("SPLINE IN M3 Z38 ALPHA30 X0.45 DA120 DF114 BETA0 H30", "int")
             .preview_json()
             .unwrap();
         assert!(near(pj["fields"]["d_b"].as_f64().unwrap(), 120.0));
         assert!(near(pj["fields"]["m"].as_f64().unwrap(), 3.0));
         assert_eq!(pj["fields"]["z"], 38);
         assert!(pj["expr"].as_str().unwrap().starts_with("SPLINE IN"));
+        assert_eq!(pj["items"].as_array().unwrap().len(), 13);
     }
 
-    /// CLI：完整行/短表达式（缺 DA/DF/BETA/H）两种都能截；旧写法保留；冲突/体系错误。
+    /// CLI：完整行/短表达式（缺 DA/DF/BETA/H）两种都能截；旧写法保留；
+    /// 一卡一方向：KIND 与卡方向不符时报错（不静默）。
     #[test]
     fn din_cli_expr_form_and_errors() {
         let cli = DinTableSpec::parse(
             "SPLINE IN M3 Z38 ALPHA30 X0.45 DA120 DF114 BETA0 H30 N9H W8f",
+            true,
         )
         .unwrap();
         assert!(near(cli.d_b, 120.0) && near(cli.m, 3.0) && cli.z == 38);
         assert_eq!(cli.hub.token(), "9H");
         assert_eq!(cli.shaft.token(), "8f");
         // 短表达式：到 X 就结束，后面直接跟 W8f（无 DA/DF/BETA/H）
-        let short = DinTableSpec::parse("SPLINE IN M3 Z38 ALPHA30 X0.45 W8f").unwrap();
+        let short = DinTableSpec::parse("SPLINE IN M3 Z38 ALPHA30 X0.45 W8f", true).unwrap();
         assert!(near(short.d_b, 120.0));
         assert_eq!(short.shaft.token(), "8f");
-        // KIND 两向都收（DIN 卡 Nabe/Welle 两栏都做）；外花键 DA/DF 用表值 119.4/113.4
+        // 外卡：KIND EX 正常；写 IN 报错（保留报错能力）
         let ex = DinTableSpec::parse(
             "SPLINE EX M3 Z38 ALPHA30 X0.45 DA119.4 DF113.4 BETA0 H30",
+            false,
         )
         .unwrap();
         assert!(near(ex.d_b, 120.0));
+        let e = DinTableSpec::parse(
+            "SPLINE IN M3 Z38 ALPHA30 X0.45 DA120 DF114 BETA0 H30",
+            false,
+        )
+        .unwrap_err();
+        assert!(e.contains("KIND") && e.contains("「外」"), "{e}");
+        let e = DinTableSpec::parse(
+            "SPLINE EX M3 Z38 ALPHA30 X0.45 DA119.4 DF113.4 BETA0 H30",
+            true,
+        )
+        .unwrap_err();
+        assert!(e.contains("KIND") && e.contains("「内」"), "{e}");
         // 显式 d_B 与表达式反解不一致 → 报错
         let e = DinTableSpec::parse(
             "SPLINE IN M3 Z38 ALPHA30 X0.45 DA120 DF114 BETA0 H30 B100",
+            true,
         )
         .unwrap_err();
         assert!(e.contains("显式 d_B=100") && e.contains("d_B=120"), "{e}");
         // α 必须 30
-        let e = DinTableSpec::parse("SPLINE IN M3 Z38 ALPHA20 X0 BETA0 H30").unwrap_err();
+        let e = DinTableSpec::parse("SPLINE IN M3 Z38 ALPHA20 X0 BETA0 H30", true).unwrap_err();
         assert!(e.contains("压力角 20°") && e.contains("α=30"), "{e}");
         // MARK 体系不符
-        let e = expr_model("GEAR IN M3 Z38 ALPHA30 X0.45 BETA0 H30")
+        let e = expr_model("GEAR IN M3 Z38 ALPHA30 X0.45 BETA0 H30", "int")
             .spec()
             .unwrap_err();
         assert!(e.contains("MARK") && e.contains("GEAR（齿轮）"), "{e}");
+        // 外卡的错误前缀 = 外花键卡名
+        let e = expr_model("GEAR EX M3 Z38 ALPHA30 X0.45 BETA0 H30", "ext")
+            .spec()
+            .unwrap_err();
+        assert!(e.contains("DIN 5480 外花键参数表"), "{e}");
     }
 }

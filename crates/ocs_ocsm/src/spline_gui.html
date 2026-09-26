@@ -31,12 +31,7 @@
   textarea { width: 100%; resize: vertical; font-family: "SFMono-Regular", Consolas, monospace;
              font-size: 12.5px; line-height: 1.5; }
   input[disabled], select[disabled], input[readonly], textarea[disabled] { background: #f1f3f5; color: #999; cursor: not-allowed; }
-  .top { display: grid; grid-template-columns: 168px 1fr; gap: 12px; align-items: start; }
-  .sides { display: grid; grid-template-columns: 1fr; gap: 4px; }
-  .side { border: 1px solid #c6ccd4; background: #f8fafc; border-radius: 4px; padding: 10px 4px;
-          font-size: 13px; cursor: pointer; }
-  .side.on { background: #1e6fff; border-color: #1e6fff; color: #fff; }
-  .side[disabled] { color: #aaa; cursor: not-allowed; }
+  .top { display: grid; grid-template-columns: 1fr; gap: 12px; align-items: start; }
   .params { display: grid; grid-template-columns: 68px 1fr 68px 1fr; gap: 6px 8px; align-items: center; }
   .params label { margin: 0; }
   .chk { display: flex; align-items: center; gap: 4px; font-size: 13px; color: #444;
@@ -81,14 +76,9 @@
   </div>
 
   <div id="splinePanel">
-  <!-- ① 体系 + 方向 + 等级/配合/压力角/齿根（可选项全部由 /api/spline_options 下发） -->
+  <!-- ① 等级/配合/压力角/齿根（方向由卡类型决定，面板不再放内外/体系选择） -->
   <div class="card top">
-    <div class="sides">
-      <button type="button" class="side on" id="sideInt">内花键</button>
-      <button type="button" class="side" id="sideExt">外花键</button>
-    </div>
     <div class="params">
-      <label>体系</label><select id="sys" title="花键体系（选项表由后端下发）"></select>
       <label>公差等级</label><select id="grade"></select>
       <label>配合类别</label><select id="fit"></select>
       <label>压力角 αD</label><select id="alpha"></select>
@@ -174,8 +164,7 @@ const CARD_PARAM = new URLSearchParams(location.search).get("card");
 const el = (id) => document.getElementById(id);
 let OPT = null;      // /api/spline_options（卡类型表 + 体系 → 方向 → 等级/配合/齿根/21 项公式口径）
 let CARD = null;     // 当前卡片类型（表驱动；清单由 /api/spline_options 下发）
-let SYS = null;      // 当前体系（本期只有 GB）
-let SIDE = null;     // 当前方向（内/外）
+let SIDE = null;     // 当前方向（由卡类型固定；面板不再选内外）
 let dpSel = null;    // null = 标准解；数字 = 点选/手填的 Dp
 let timer = 0;
 
@@ -272,15 +261,9 @@ const fmt = (n) => {
 };
 
 function cardTypes() { return (OPT && OPT.card_types) || []; }
-function sysOptions() {
-  // 只列当前卡片类型允许的体系（卡类型 → 体系 是后端表里定的）。
-  const all = (OPT && OPT.systems) || [];
-  if (!CARD) return all;
-  const ids = (CARD.systems || []).map((s) => s.id);
-  return all.filter((s) => ids.includes(s.id));
-}
 function sideSpec(id) {
-  for (const s of sysOptions()) {
+  // 方向由卡类型固定；清单仍从后端 `systems[].sides` 表里取。
+  for (const s of ((OPT && OPT.systems) || [])) {
     for (const sd of (s.sides || [])) if (sd.id === id) return sd;
   }
   return null;
@@ -327,16 +310,10 @@ function updateRootTitle() {
 
 function syncUi() {
   if (!SIDE) return;
-  el("sideInt").classList.toggle("on", SIDE.id === "int");
-  el("sideExt").classList.toggle("on", SIDE.id === "ext");
-  el("sideInt").title = (sideSpec("int") || {}).title || "";
-  el("sideExt").title = (sideSpec("ext") || {}).title || "";
-  // 卡类型 / 体系（都来自后端表；只有一个时置灰——不写额外文字）
+  // 卡类型（表驱动；只有一个时置灰——不写额外文字）
   el("cardType").disabled = cardTypes().length < 2;
   // ⑤ title 兜底：极窄屏闭合态被截断时，悬停仍能看全卡名 + 口径
   el("cardType").title = CARD ? (CARD.label + " — " + (CARD.summary || "")) : "";
-  el("sys").disabled = sysOptions().length < 2;
-  el("sys").title = (SYS || {}).note || "";
   // 公差等级（4/5/6/7）
   setOptions("grade", SIDE.grades.map((g) => ({ value: g, label: g + " 级" })), el("grade").value || 6);
   el("grade").title = SIDE.grade_note || "";
@@ -388,7 +365,6 @@ function atValue() {
 function currentModel() {
   return {
     card: CARD ? CARD.id : "花键参数表",
-    system: SYS ? SYS.id : "gb3478",
     side: SIDE ? SIDE.id : "int",
     grade: Number(el("grade").value),
     fit: el("fit").value,
@@ -432,7 +408,8 @@ function esc(s) {
 // 21 项：可见只有「名 + 值」，公式/口径/来源进每行原生 title=（信息分层）。
 function renderItems(items) {
   const rows = (items || []).map((it) => {
-    const unit = it.unit ? " " + esc(it.unit) : "";
+    const suffix = ocsmUnitSuffix(it.value, it.unit);
+    const unit = suffix ? " " + esc(suffix) : "";
     const title = esc(it.formula) + "｜来源：" + esc(it.source);
     return `<div class="row" title="${title}"><span class="k">${esc(it.label)}</span><span class="v">${esc(it.value)}${unit}</span></div>`;
   });
@@ -586,32 +563,17 @@ function schedulePreview() {
 }
 
 // ── 事件 ──────────────────────────────────────────────────────────────
-function pickSide(id) {
-  SIDE = sideSpec(id) || SIDE;
+// 切换卡类型（一卡一方向）：方向从 card.direction 取，不再有面板内外按钮/体系下拉。
+function applyCardDirection() {
+  const dir = CARD && CARD.direction ? CARD.direction : null;
+  SIDE = dir ? (sideSpec(dir) || SIDE) : SIDE;
   dpSel = null;
-  syncUi();
-  schedulePreview();
 }
-el("sideInt").addEventListener("click", () => pickSide("int"));
-el("sideExt").addEventListener("click", () => pickSide("ext"));
 el("cardType").addEventListener("change", () => {
   CARD = cardTypes().find((c) => c.id === el("cardType").value) || CARD;
-  // 新卡（齿轮/ANSI）没有 spline 体系；只在有体系时重排体系/方向，避免把 SIDE 置空。
-  if (sysOptions().length) {
-    SYS = sysOptions()[0] || SYS;
-    setOptions("sys", sysOptions().map((s) => ({ value: s.id, label: s.label })), (SYS || {}).id);
-    SIDE = (SYS.sides || [])[0] || SIDE;
-  }
-  dpSel = null;
+  applyCardDirection();
   syncUi();
   applyPanels();
-  schedulePreview();
-});
-el("sys").addEventListener("change", () => {
-  SYS = sysOptions().find((s) => s.id === el("sys").value) || SYS;
-  SIDE = (SYS.sides || [])[0] || SIDE;
-  dpSel = null;
-  syncUi();
   schedulePreview();
 });
 el("grade").addEventListener("change", () => schedulePreview());
@@ -717,20 +679,8 @@ function ping(bye) {
     el("status").textContent = "选项表里没有卡片类型（插件版本不匹配？）";
     return;
   }
-  SYS = sysOptions()[0] || null;
-  if (!SYS) {
-    // 第一张卡不是花键体系卡时（卡类型顺序变了也要能用）：直接按卡面板走通用路径。
-    SIDE = null;
-    syncUi();
-    applyPanels();
-    await refresh();
-    ping(false);
-    setInterval(() => ping(false), 4000);
-    window.addEventListener("beforeunload", () => ping(true));
-    return;
-  }
-  setOptions("sys", sysOptions().map((s) => ({ value: s.id, label: s.label })), SYS.id);
-  SIDE = (SYS.sides || [])[0] || null;
+  // 一卡一方向：方向由卡类型固定（GB 内/外、ANSI 四张、NF 内/外、DIN 内/外）。
+  applyCardDirection();
   // 各卡字段/默认值/清单统一由 renderCardForm() 照 card_types[].form 渲染。
   syncUi();
   applyPanels();

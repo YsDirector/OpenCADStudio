@@ -151,11 +151,27 @@
     return { ok: true, data: text };
   }
 
+  // 单位后缀（预览通用规则）：值**已自带单位/符号**时不得再追加单位（如 `20°` + `°` → 不再叠成 `20° °`）。
+  // 判定：① 值里已含单位串（`20°` 含 `°`、`1.5mm` 含 `mm`）；② 符号类单位（°/%）看结尾符号；
+  //       ③ 占位缺项（「—」/?）不加单位。各卡预览共用，不在某一格里打补丁。
+  function ocsmUnitSuffix(value, unit) {
+    var u = unit == null ? "" : String(unit).trim();
+    if (!u) return "";
+    var v = value == null ? "" : String(value).trim();
+    if (!v || v === "—" || v === "?" || v === "-") return "";
+    if (v.indexOf(u) >= 0) return "";
+    if (u === "°" && /[°º⁰]$/.test(v)) return "";
+    if (u === "%" && /%$/.test(v)) return "";
+    if (u === "mm" && /mm$/i.test(v)) return "";
+    return u;
+  }
+
   g.ocsmSeq = ocsmSeq;
   g.ocsmStatus = ocsmStatus;
   g.ocsmStatusError = ocsmStatusError;
   g.ocsmStatusOk = ocsmStatusOk;
   g.ocsmClearStatus = ocsmClearStatus;
+  g.ocsmUnitSuffix = ocsmUnitSuffix;
   g.readApi = readApi;
   g.fetchApi = fetchApi;
   g.fetchText = fetchText;

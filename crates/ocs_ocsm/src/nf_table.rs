@@ -85,6 +85,10 @@ pub const FRAME: (f64, f64, f64, f64) =
 /// 中分隔线 x。
 pub const MID_X: f64 = -167.6108213593015;
 
+/// 整表缩放（用户 2026-09-26 截图）：NF 卡用 **INSERT 缩放 0.17**，
+/// **不动块内图元几何**；ATTRIB 文字随 INSERT 变换一起缩放（`transform_attribute_entity` 按 X 缩放因子缩放高度）。
+pub const TABLE_SCALE: f64 = 0.17;
+
 // ══════════════════════════════════════════════════════════════════════════
 // 模板数据（逐图元反解；不依赖外部 DXF）
 // ══════════════════════════════════════════════════════════════════════════
@@ -180,6 +184,7 @@ const NF_ROWS: &[(&str, &'static str, f64)] = &[
 ];
 
 /// 6 个公差洞位：`(tag, 插入 x, 基线 y)`，照模板 TEXT 逐点（字高 15、字宽 0.667）。
+/// 末对（跨棒距上/下差）在用户截图后**右移 2 个字符宽**，见 [`TOL_X_SHIFT`]。
 const NF_TOL_ATTS: &[(&str, f64, f64)] = &[
     ("大径上差", -79.67949597123788, -342.7153021054078),
     ("大径下差", -79.90685200460302, -362.9124102114762),
@@ -188,6 +193,11 @@ const NF_TOL_ATTS: &[(&str, f64, f64)] = &[
     ("跨棒距上差", -68.34721762208392, -505.6563921767285),
     ("跨棒距下差", -68.57457365544906, -525.8535002827967),
 ];
+
+/// 公差实体级右移量（用户 2026-09-26 截图）：NF 末对公差（跨棒距/公法线）右移 2 个字符宽。
+/// 口径照既有 `spline_table::TOL_X_SHIFT`：**一个字符宽 = 字高 × 该实体字宽因子**，
+/// 这里是 2 个 → `2 × 15 × 0.667 = 20.01`。不动全局 `OCSM_GB` 样式。
+pub const TOL_X_SHIFT: f64 = 2.0 * TOL_H * TOL_WIDTH_FACTOR;
 
 /// 12 个值属性 tag（自上而下的行序；`values()` 按本序返回）。
 pub const VALUE_TAGS: &[&str] = &[
@@ -516,8 +526,10 @@ pub fn attdefs() -> Vec<AttributeDefinition> {
     for (_, tag, y) in NF_ROWS {
         out.push(value_attdef(tag, VALUE_X, *y));
     }
-    for (tag, x, y) in NF_TOL_ATTS {
-        out.push(tol_attdef(tag, *x, *y));
+    for (i, (tag, x, y)) in NF_TOL_ATTS.iter().enumerate() {
+        // 末对（跨棒距上/下差）右移 2 个字符宽（用户截图；位置口径 = TOL_H × TOL_WIDTH_FACTOR）。
+        let x = if i >= 4 { x + TOL_X_SHIFT } else { *x };
+        out.push(tol_attdef(tag, x, *y));
     }
     out
 }
@@ -855,6 +867,10 @@ pub fn build_insert(spec: &NfTableSpec, at: [f64; 2], rot_deg: f64) -> Result<In
     let vals = values(spec)?;
     let mut ins = Insert::new(BLOCK, Vector3::new(at[0], at[1], 0.0));
     ins.rotation = rot_deg.to_radians();
+    // 整表缩放（不改块几何；ATTRIB 随 INSERT 一起缩放）。
+    ins.set_x_scale(TABLE_SCALE);
+    ins.set_y_scale(TABLE_SCALE);
+    ins.set_z_scale(TABLE_SCALE);
     {
         let c = &mut ins.common;
         c.layer = crate::partgen::LAYER_MAIN.to_string();
@@ -1738,7 +1754,13 @@ mod tests {
         for (j, (tag, x, y)) in NF_TOL_ATTS.iter().enumerate() {
             let ad = &atts[12 + j];
             assert_eq!(ad.tag, *tag);
-            assert!(near5(ad.insertion_point.x, *x) && near5(ad.insertion_point.y, *y));
+            let want_x = if j >= 4 { *x + TOL_X_SHIFT } else { *x };
+            assert!(
+                near5(ad.insertion_point.x, want_x) && near5(ad.insertion_point.y, *y),
+                "{tag} 位置 {:?} ≠ {want_x}",
+                ad.insertion_point
+            );
+            assert!(j < 4 || near5(TOL_X_SHIFT, 2.0 * TOL_H * TOL_WIDTH_FACTOR), "右移口径");
             assert!(near5(ad.height, TOL_H));
             assert!(near5(ad.width_factor, TOL_WIDTH_FACTOR));
             assert_eq!(ad.vertical_alignment, VerticalAlignment::Baseline, "公差照模板 TEXT 基线");
@@ -2127,9 +2149,10 @@ mod tests {
             [x, y, x + text_extent(v, h, wf), y + h]
         };
         for spec in &specs {
-            let ins = build_insert(spec, [0.0, 0.0], 0.0).unwrap();
+            // 干涉检查用 **块局部**几何（attdefs() 模板）；整表 INSERT 缩放 0.17 是均匀缩放，
+            // 相对几何不变，另有 `nf_insert_has_table_scale` 单独锁缩放值。
             let attrs: HashMap<String, _> =
-                ins.attributes.iter().map(|a| (a.tag.clone(), a.clone())).collect();
+                attdefs().into_iter().map(|a| (a.tag.clone(), a)).collect();
             let vals = values(spec).unwrap();
             let vmap: HashMap<&str, &str> = vals.iter().map(|(t, v)| (t.as_str(), v.as_str())).collect();
             // 12 值框：在右列行带内、不出右框；同行的值框与公差框不相交
@@ -2154,17 +2177,17 @@ mod tests {
                 {
                     for tol_tag in [tol_pairs.1, tol_pairs.2] {
                         let ta = attrs.get(tol_tag).unwrap();
+                        let tv = vmap[tol_tag];
                         let tb = base_box(
                             ta.insertion_point.x,
                             ta.insertion_point.y,
                             TOL_H,
                             TOL_WIDTH_FACTOR,
-                            &ta.value,
+                            tv,
                         );
                         assert!(
                             !overlap(b, tb),
-                            "{tag}={v} 与 {tol_tag}={} 叠字：值右 {:.3} / 公差左 {:.3}",
-                            ta.value,
+                            "{tag}={v} 与 {tol_tag}={tv} 叠字：值右 {:.3} / 公差左 {:.3}",
                             b[2],
                             tb[0]
                         );
@@ -2252,6 +2275,11 @@ mod tests {
         assert_eq!(ins.block_name, BLOCK);
         assert_eq!(ins.attributes.len(), 18);
         assert!(near(ins.rotation, 0.0));
+        // 整表 INSERT 缩放 0.17（不改块几何；ATTRIB 随 INSERT 缩放：高度/位置 ×0.17）
+        assert!(near5(ins.x_scale(), TABLE_SCALE) && near5(ins.y_scale(), TABLE_SCALE) && near5(ins.z_scale(), TABLE_SCALE));
+        let att0 = &ins.attributes[0];
+        assert!(near5(att0.height, TEXT_H * TABLE_SCALE), "ATTRIB 字高随缩放：{}", att0.height);
+        assert!(near5(att0.insertion_point.x, 12.0 + VALUE_X * TABLE_SCALE), "ATTRIB 位置随缩放（+ 基点平移）");
         // 多重集断言：preview items 的 tag 集合 == ATTDEF tag 集合（无漏无重、18 项）
         let mut item_tags: Vec<String> = j["items"]
             .as_array()

@@ -107,10 +107,21 @@ const OPTIONS = {
   card_types: [{
     id: '花键参数表',
     aliases: ['spline'],
-    label: '花键参数表',
+    label: 'GB 花键参数表（内）',
     summary: 'stub 卡片说明',
     systems: [{ id: 'gb3478', label: 'GB/T 3478（stub）', standard: 'stub' }],
+    direction: 'int',
     renderer: 'spline_table',
+    form: null,
+  }, {
+    id: '花键参数表_外',
+    aliases: ['splineext'],
+    label: 'GB 花键参数表（外）',
+    summary: 'stub 卡片说明（外）',
+    systems: [{ id: 'gb3478', label: 'GB/T 3478（stub）', standard: 'stub' }],
+    direction: 'ext',
+    renderer: 'spline_table',
+    form: null,
   }],
   systems: SYSTEMS,
   pin_series: [0.56, 0.60, 0.63, 0.67, 0.71, 0.75, 0.80, 0.85, 0.90, 0.95, 1.00, 1.06, 1.12, 1.18, 1.25],
@@ -275,7 +286,7 @@ function mkEl(id) {
 }
 
 const els = new Map();
-const SELECT_IDS = new Set(['cardType', 'sys', 'grade', 'fit', 'alpha', 'root']);
+const SELECT_IDS = new Set(['cardType', 'grade', 'fit', 'alpha', 'root']);
 global.document = {
   getElementById(id) {
     if (!els.has(id)) {
@@ -362,10 +373,9 @@ global.fetch = async (u, opts = {}) => {
 const probed = script.replace(/\}\)\(\);\s*$/, `;globalThis.__card = {
   get opt() { return OPT; },
   get card() { return CARD; },
-  get sys() { return SYS; },
   get side() { return SIDE; },
   get dp() { return dpSel; },
-  currentModel, refresh, syncUi, pickSide,
+  currentModel, refresh, syncUi, applyCardDirection,
 };
 })();`);
 try {
@@ -381,6 +391,11 @@ await tick();
 
 const H = globalThis.__card;
 const el = (id) => document.getElementById(id);
+// 一卡一方向：切方向 = 切卡（面板不再有内外按钮）
+function switchCard(id) {
+  el('cardType').value = id;
+  el('cardType')._fire('change', el('cardType'));
+}
 check(!!H, '探针 __card 未挂上（脚本初始化崩溃？）');
 if (!H) report();
 
@@ -403,11 +418,10 @@ check(el('grade').title.includes('stub 等级口径'), `等级口径应进 title
 
 // ① 表驱动：卡类型/体系/清单全部来自 /api/spline_options
 check(H.card && H.card.id === '花键参数表', `默认卡类型应为花键参数表，实为 ${H.card && H.card.id}`);
-check(el('cardType').options.map((o) => o.value).join(',') === '花键参数表', '卡类型下拉来自 card_types');
-check(el('cardType').disabled === true, '只有一个卡类型时应置灰');
-check(el('sys').options.map((o) => o.value).join(',') === 'gb3478', '体系下拉来自选项表');
-check(el('sys').disabled === true, '只有一个体系时体系下拉应置灰');
+check(el('cardType').options.map((o) => o.value).join(',') === '花键参数表,花键参数表_外', '卡类型下拉来自 card_types');
+check(el('cardType').disabled === false, '两个卡类型时不应置灰');
 check(H.side && H.side.id === 'int', `默认方向应为内花键，实为 ${H.side && H.side.id}`);
+check(!('system' in (lastPreviewModel || {})), '预览模型不应再带 system（体系字段已删）');
 check(el('grade').options.map((o) => o.value).join(',') === '4,5,6,7', `等级清单：${el('grade').options.map((o) => o.value)}`);
 check(el('grade').value === '6', `默认等级应为 6，实为 ${el('grade').value}`);
 check(el('fit').options.map((o) => o.value).join(',') === 'H', `内花键配合应为 H，实为 ${el('fit').options.map((o) => o.value)}`);
@@ -428,6 +442,9 @@ check(metaCalled === false, '旧的 /api/spline_meta 路径不应再被调用');
 check(el('items').innerHTML.split('class="row"').length - 1 === 21, `结果应渲染 21 项：${el('items').innerHTML.slice(0, 120)}`);
 check(el('items').innerHTML.includes('测量跨棒距 Md'), '内花键结果应含测量跨棒距');
 check(el('items').innerHTML.includes('title="stub 公式'), '公式应在每行 title 里');
+// ① 单位不重复（通用规则）：值自带 `°` 时不得再追单位
+check(el('items').innerHTML.includes('30°') && !el('items').innerHTML.includes('° °'),
+  `值自带符号时不得再追加单位：${el('items').innerHTML.slice(0, 200)}`);
 const mdAuto = el('mdOut').textContent;
 
 // ②.5 换表达式（m2 z20 平齿根反解 + 显式 root 覆盖）→ 反解读数跟着变
@@ -486,7 +503,7 @@ await tick();
 check((el('status').textContent || '').includes('KIND'), `方向不一致应动态报错：${el('status').textContent}`);
 
 // ⑤ 切外花键：配合清单 6 项、45° 优先排前并标注；量棒面板置灰
-H.pickSide('ext');
+switchCard('花键参数表_外');
 el('expr').value = 'SPLINE EX M3 Z20 ALPHA30 X0 DA63 DF55.5 BETA0 H30';
 el('expr')._fire('input', el('expr'));
 await tick();
@@ -541,7 +558,7 @@ el('atY').value = '';
 // → 400 的具体原因必须出现在界面可见文本里（不得只进 console）
 el('expr').value = 'SPLINE IN M3 Z20 ALPHA30 X0 DA65.4 DF57.3436 BETA0 H30';
 el('expr')._fire('input', el('expr'));
-H.pickSide('ext');
+switchCard('花键参数表_外');
 await tick();
 lastExportModel = null;
 el('ok').click();

@@ -5307,8 +5307,12 @@ fn apply_card_preview(body: &[u8]) -> Result<String, String> {
     let (v, card) = card_model_value(body)?;
     let out = match card.renderer {
         crate::card::CardRenderer::SplineTable => {
-            let m: crate::spline_gui::SplineTableModel = serde_json::from_value(v)
+            let mut m: crate::spline_gui::SplineTableModel = serde_json::from_value(v)
                 .map_err(|e| format!("花键参数表：请求字段无效：{e}"))?;
+            // 一卡一方向：GUI 不再送 side；旧请求显式 side 仍优先。
+            if m.side.trim().is_empty() {
+                m.side = card.direction.unwrap_or("int").to_string();
+            }
             m.preview_json()?
         }
         crate::card::CardRenderer::GearTable => {
@@ -5325,6 +5329,9 @@ fn apply_card_preview(body: &[u8]) -> Result<String, String> {
                 "en"
             }
             .to_string());
+            if m.side.trim().is_empty() {
+                m.side = card.direction.unwrap_or("int").to_string();
+            }
             m.preview_json()?
         }
         crate::card::CardRenderer::NfTable => {
@@ -5338,8 +5345,11 @@ fn apply_card_preview(body: &[u8]) -> Result<String, String> {
             m.preview_json()?
         }
         crate::card::CardRenderer::DinTable => {
-            let m: crate::din_table::DinTableModel = serde_json::from_value(v)
+            let mut m: crate::din_table::DinTableModel = serde_json::from_value(v)
                 .map_err(|e| format!("DIN 花键参数表：请求字段无效：{e}"))?;
+            if m.side.is_none() {
+                m.side = Some(card.direction.unwrap_or("int").to_string());
+            }
             m.preview_json()?
         }
     };
@@ -5378,8 +5388,12 @@ pub(crate) fn apply_card_export(
         String,
     ) = match card.renderer {
         CardRenderer::SplineTable => {
-            let m: crate::spline_gui::SplineTableModel = serde_json::from_value(v)
+            let mut m: crate::spline_gui::SplineTableModel = serde_json::from_value(v)
                 .map_err(|e| format!("花键参数表：请求字段无效：{e}"))?;
+            // 一卡一方向：GUI 不再送 side；旧请求显式 side 仍优先。
+            if m.side.trim().is_empty() {
+                m.side = card.direction.unwrap_or("int").to_string();
+            }
             let echo = m.echo_note()?;
             let input = m.to_input()?;
             let table = crate::spline_tol::compute(&input)?;
@@ -5442,6 +5456,9 @@ pub(crate) fn apply_card_export(
                 "en"
             }
             .to_string());
+            if m.side.trim().is_empty() {
+                m.side = card.direction.unwrap_or("int").to_string();
+            }
             let spec = m.spec()?;
             let echo = m.echo_note()?;
             let at = m.at;
@@ -5522,23 +5539,28 @@ pub(crate) fn apply_card_export(
             )
         }
         CardRenderer::DinTable => {
-            let m: crate::din_table::DinTableModel = serde_json::from_value(v)
+            let mut m: crate::din_table::DinTableModel = serde_json::from_value(v)
                 .map_err(|e| format!("DIN 花键参数表：请求字段无效：{e}"))?;
+            if m.side.is_none() {
+                m.side = Some(card.direction.unwrap_or("int").to_string());
+            }
+            let hub = m.hub();
             let spec = m.spec()?;
             let echo = m.echo_note()?;
             let at = m.at;
             let rot = m.rot;
             let ins = acadrust::EntityType::Insert(crate::din_table::build_insert(
                 &spec,
+                hub,
                 at.unwrap_or([0.0, 0.0]),
                 rot,
             )?);
             let attrs = m.pending_attrs()?;
             let meta = m.part_meta_json()?;
             (
-                "DIN 花键参数表".to_string(),
-                crate::din_table::BLOCK.to_string(),
-                crate::din_table::block_entities(),
+                if hub { "DIN 5480 内花键参数表".to_string() } else { "DIN 5480 外花键参数表".to_string() },
+                crate::din_table::block_name(hub).to_string(),
+                crate::din_table::block_entities(hub),
                 at,
                 rot,
                 ins,
@@ -5593,12 +5615,20 @@ pub(crate) fn apply_card_export(
         .to_string());
     }
     // 无落点 → 登记待放置件（带 ATTRIB；`place_one` 落件时一起插入）。
-    crate::set_pending_part(crate::PendingPart::with_attrs(
-        block.clone(),
-        meta,
-        format!("{kind_label}（{echo}）"),
-        attrs,
-    ));
+    // 整表缩放（NF/DIN 0.17）随件携带：与直接落点的 INSERT 同口径。
+    let scale = match &ins {
+        acadrust::EntityType::Insert(i) => i.x_scale(),
+        _ => 1.0,
+    };
+    crate::set_pending_part(
+        crate::PendingPart::with_attrs(
+            block.clone(),
+            meta,
+            format!("{kind_label}（{echo}）"),
+            attrs,
+        )
+        .with_scale(scale),
+    );
     commit_undo(sender);
     Ok(serde_json::json!({
         "ok": true,
@@ -9696,8 +9726,6 @@ mod tests {
             );
         }
         for key in [
-            "sideInt",
-            "sideExt",
             "cardType",
             "expr",
             "dpChoices",
@@ -9707,10 +9735,15 @@ mod tests {
             "rootOut",
             "renderDp",
             "syncUi",
+            "applyCardDirection",
+            "ocsmUnitSuffix",
             "/api/spline_options",
         ] {
             assert!(SPLINE_HTML.contains(key), "spline_gui.html 缺智能卡片要素：{key}");
         }
+        // 一卡一方向：面板不再有内外按钮/体系下拉
+        assert!(!SPLINE_HTML.contains("sideInt") && !SPLINE_HTML.contains("sideExt"), "方向按钮应已移除");
+        assert!(!SPLINE_HTML.contains("id=\"sys\""), "体系下拉应已移除");
         assert!(!SPLINE_HTML.contains("readSel"), "「读选中块」路径已收敛，不该留按钮");
         let Some(script) = first_script(SPLINE_HTML) else {
             panic!("spline_gui.html 里找不到 <script> 块");
@@ -15580,8 +15613,8 @@ mod weld_tests {
             "/api/spline_options",
             "/api/spline_preview",
             "/api/spline_export",
-            "sideInt",
-            "sideExt",
+            "cardType",
+            "applyCardDirection",
             "dpChoices",
             "dpManual",
             "expr",
@@ -15589,6 +15622,9 @@ mod weld_tests {
         ] {
             assert!(html.contains(key), "页面缺 {key}");
         }
+        // 一卡一方向：面板不再有内外按钮与体系下拉
+        assert!(!html.contains("sideInt") && !html.contains("sideExt"), "方向按钮应已移除");
+        assert!(!html.contains("id=\"sys\""), "体系下拉应已移除");
         assert!(!html.contains("/api/spline_meta"), "旧的 meta 端点不应再出现在页面");
         assert!(!html.contains("readSel"), "「读选中块」按钮应已删除");
 
@@ -15750,16 +15786,25 @@ mod weld_tests {
         router.set_current(2, mock.clone());
         let server = spawn(router).expect("spawn guide server");
 
-        // ── 选项表：七张卡 + 齿轮/ANSI/NF/DIN 选项 ──
+        // ── 选项表：11 张卡（一卡一方向）+ 齿轮/ANSI/NF/DIN 选项 ──
         let j = http_req(server.port, "GET", "/api/spline_options", "");
         let v: serde_json::Value = serde_json::from_str(&j).unwrap();
-        assert_eq!(v["card_types"].as_array().unwrap().len(), 7, "{j}");
-        assert_eq!(v["card_types"][1]["renderer"], "gear_table");
-        assert_eq!(v["card_types"][2]["renderer"], "ansi_table_cn");
-        assert_eq!(v["card_types"][3]["renderer"], "ansi_table_en");
-        assert_eq!(v["card_types"][4]["renderer"], "nf_table");
-        assert_eq!(v["card_types"][5]["renderer"], "nf_ext_table");
-        assert_eq!(v["card_types"][6]["renderer"], "din_table");
+        assert_eq!(v["card_types"].as_array().unwrap().len(), 11, "{j}");
+        assert_eq!(v["card_types"][0]["renderer"], "spline_table");
+        assert_eq!(v["card_types"][0]["direction"], "int");
+        assert_eq!(v["card_types"][1]["renderer"], "spline_table");
+        assert_eq!(v["card_types"][1]["direction"], "ext");
+        assert_eq!(v["card_types"][2]["renderer"], "gear_table");
+        assert_eq!(v["card_types"][3]["renderer"], "ansi_table_cn");
+        assert_eq!(v["card_types"][4]["id"], "ANSI花键参数表_外_中文");
+        assert_eq!(v["card_types"][5]["renderer"], "ansi_table_en");
+        assert_eq!(v["card_types"][6]["id"], "ANSI花键参数表_外_英文");
+        assert_eq!(v["card_types"][7]["renderer"], "nf_table");
+        assert_eq!(v["card_types"][8]["renderer"], "nf_ext_table");
+        assert_eq!(v["card_types"][9]["renderer"], "din_table");
+        assert_eq!(v["card_types"][9]["direction"], "int");
+        assert_eq!(v["card_types"][10]["id"], "DIN花键参数表_外");
+        assert_eq!(v["card_types"][10]["direction"], "ext");
         assert_eq!(v["gear_card"]["columns"].as_array().unwrap().len(), 19);
         assert_eq!(v["ansi_card"]["profiles"].as_array().unwrap().len(), 5);
         assert_eq!(v["ansi_card"]["columns"]["int"].as_array().unwrap().len(), 17);
@@ -15769,10 +15814,13 @@ mod weld_tests {
         assert_eq!(v["nf_ext_card"]["columns"].as_array().unwrap().len(), 18);
         assert_eq!(v["nf_ext_card"]["centering"][0]["id"], "flank", "NF 外缺省齿面定心");
         assert_eq!(v["din_card"]["columns"].as_array().unwrap().len(), 26);
+        assert_eq!(v["din_card"]["columns_int"].as_array().unwrap().len(), 13);
+        assert_eq!(v["din_card"]["columns_ext"].as_array().unwrap().len(), 13);
         assert_eq!(v["din_card"]["grades"].as_array().unwrap().len(), 12);
-        // 表驱动 GUI：花键卡 form=null（专用面板基准）；其余六卡下发字段清单
+        // 表驱动 GUI：花键卡 form=null（专用面板基准）；其余九卡下发字段清单
         assert!(v["card_types"][0]["form"].is_null());
-        for (i, n) in [(1usize, 5usize), (2, 5), (3, 5), (4, 7), (5, 7), (6, 13)] {
+        assert!(v["card_types"][1]["form"].is_null());
+        for (i, n) in [(2usize, 5usize), (3, 4), (4, 4), (5, 4), (6, 4), (7, 7), (8, 7), (9, 10), (10, 10)] {
             let fields = v["card_types"][i]["form"]["fields"].as_array().unwrap();
             assert_eq!(fields.len(), n, "card_types[{i}] 字段数");
             assert!(fields.iter().all(|f| f["key"].is_string() && f["kind"].is_string()));
@@ -16060,7 +16108,7 @@ mod weld_tests {
         assert_eq!(mock.insert_attr_counts().last().copied(), Some(18));
         assert_eq!(mock.block_entities("OCSM_NFTABLE_NF_EXT").len(), 97, "66 线 + 13 标签 + 18 属性");
 
-        // ── DIN 花键参数表（Bild 6 两栏）：示例逐项 = 标准原印值；缺口「—」；出表 26 ATTRIB ──
+        // ── DIN 5480（拆成内/外两张单栏卡）：示例逐项 = 标准原印值；出表 13 ATTRIB；缩放 0.17 ──
         let din = serde_json::json!({
             "card": "DIN花键参数表", "m": 3.0, "z": 38, "d_b": 120.0,
             "hub": "9H", "shaft": "8f", "at": null, "rot": 0.0,
@@ -16069,21 +16117,37 @@ mod weld_tests {
         let v: serde_json::Value = serde_json::from_str(&j).unwrap();
         assert_eq!(v["ok"], true, "{j}");
         assert_eq!(v["renderer"], "din_table");
+        assert_eq!(v["side"], "int");
         assert_eq!(v["anchor"], true);
         let items = v["items"].as_array().unwrap();
-        assert_eq!(items.len(), 26, "13 行 × 2 栏");
+        assert_eq!(items.len(), 13, "单栏 13 项");
         let get = |tag: &str| items.iter().find(|it| it["tag"] == tag).unwrap();
         assert_eq!(get("N标记")["value"], "Nabe DIN 5480 – N120×3×38×9H");
         assert_eq!(get("N槽宽max")["value"], "6.361");
         assert_eq!(get("N槽宽eff")["value"], "6.271");
-        assert_eq!(get("W齿厚svmax")["value"], "6.243");
-        assert_eq!(get("W齿厚smin")["value"], "6.18");
         assert_eq!(v["missing"].as_array().unwrap().len(), 0);
-        // 出表：无 at → 待放置件 26 ATTRIB；块几何 20 线 + 27 标签 + 26 属性；有 at → 直插
-        let resp = apply_card_export(&sender, din.to_string().as_bytes()).expect("DIN 出表");
+        // 外卡：卡方向固定 ext（不送 side）；只出 Welle 13 项
+        let din_ext = serde_json::json!({
+            "card": "DIN花键参数表_外", "m": 3.0, "z": 38, "d_b": 120.0,
+            "hub": "9H", "shaft": "8f", "at": null, "rot": 0.0,
+        });
+        let j = http_req(server.port, "POST", "/api/card_preview", &din_ext.to_string());
+        let v: serde_json::Value = serde_json::from_str(&j).unwrap();
+        assert_eq!(v["ok"], true, "{j}");
+        assert_eq!(v["side"], "ext");
+        assert_eq!(v["items"].as_array().unwrap().len(), 13);
+        assert_eq!(v["items"][0]["tag"], "W标记");
+        assert_eq!(v["items"][0]["value"], "Welle DIN 5480 – W120×3×38×8f");
+        let getw = |tag: &str| v["items"].as_array().unwrap().iter().find(|it| it["tag"] == tag).unwrap();
+        assert_eq!(getw("W齿厚svmax")["value"], "6.243");
+        assert_eq!(getw("W齿厚smin")["value"], "6.18");
+        // 出表：无 at → 待放置件 13 ATTRIB + 块几何 18+13+13；有 at → 直插；整表缩放 0.17
+        let resp = apply_card_export(&sender, din.to_string().as_bytes()).expect("DIN 内出表");
         assert!(resp.contains("\"ok\":true") && resp.contains("DIN"), "{resp}");
-        assert_eq!(crate::pending_block().unwrap(), "OCSM_DINTABLE_DIN");
-        assert_eq!(crate::pending_part_for_test().unwrap().attrs.len(), 26);
+        assert_eq!(crate::pending_block().unwrap(), "OCSM_DINTABLE_DIN_INT");
+        let pending = crate::pending_part_for_test().expect("待放置件");
+        assert_eq!(pending.attrs.len(), 13);
+        assert!((pending.scale - 0.17).abs() < 1e-12, "DIN 整表缩放 0.17");
         let mut din_at = din.clone();
         din_at["at"] = serde_json::json!([90.0, 100.0]);
         din_at["rot"] = serde_json::json!(5.0);
@@ -16091,9 +16155,22 @@ mod weld_tests {
         let v: serde_json::Value = serde_json::from_str(&j).unwrap();
         assert_eq!(v["ok"], true, "{j}");
         let ins = mock.inserts().last().unwrap().clone();
-        assert_eq!(ins.0, "OCSM_DINTABLE_DIN");
-        assert_eq!(mock.insert_attr_counts().last().copied(), Some(26));
-        assert_eq!(mock.block_entities("OCSM_DINTABLE_DIN").len(), 20 + 25 + 26, "20 线 + 25 标签 + 26 属性");
+        assert_eq!(ins.0, "OCSM_DINTABLE_DIN_INT");
+        assert_eq!(mock.insert_attr_counts().last().copied(), Some(13));
+        assert_eq!(mock.block_entities("OCSM_DINTABLE_DIN_INT").len(), 44, "18 线 + 13 标签 + 13 属性");
+        let resp = apply_card_export(&sender, din_ext.to_string().as_bytes()).expect("DIN 外出表");
+        assert!(resp.contains("\"ok\":true"), "{resp}");
+        assert_eq!(crate::pending_block().unwrap(), "OCSM_DINTABLE_DIN_EXT");
+        assert_eq!(crate::pending_part_for_test().unwrap().attrs.len(), 13);
+        let mut dine_at = din_ext.clone();
+        dine_at["at"] = serde_json::json!([120.0, 130.0]);
+        let j = http_req(server.port, "POST", "/api/card_export?tab=2", &dine_at.to_string());
+        let v: serde_json::Value = serde_json::from_str(&j).unwrap();
+        assert_eq!(v["ok"], true, "{j}");
+        let ins = mock.inserts().last().unwrap().clone();
+        assert_eq!(ins.0, "OCSM_DINTABLE_DIN_EXT");
+        assert_eq!(mock.insert_attr_counts().last().copied(), Some(13));
+        assert_eq!(mock.block_entities("OCSM_DINTABLE_DIN_EXT").len(), 44);
         // DIN 缺口路径：模数组 5–10 的公差「—」
         let din_gap = serde_json::json!({
             "card": "DIN花键参数表", "m": 5.0, "z": 16, "d_b": 80.0,
@@ -16102,7 +16179,7 @@ mod weld_tests {
         let j = http_req(server.port, "POST", "/api/card_preview", &din_gap.to_string());
         let v: serde_json::Value = serde_json::from_str(&j).unwrap();
         assert!(!v["missing"].as_array().unwrap().is_empty(), "{j}");
-        // ── DIN 表达式反解：SPLINE IN M3 Z38 X0.45 … → d_B=120（Bild 6 锚点）；fields 回填 ──
+        // ── DIN 表达式反解（一卡一方向）：内卡 KIND 须 IN；外卡 KIND 须 EX ──
         let din_expr = serde_json::json!({
             "card": "DIN花键参数表",
             "expr": "SPLINE IN M3 Z38 ALPHA30 X0.45 DA120 DF114 BETA0 H30",
@@ -16115,6 +16192,20 @@ mod weld_tests {
         assert!((v["fields"]["m"].as_f64().unwrap() - 3.0).abs() < 1e-9);
         assert_eq!(v["fields"]["z"], 38);
         assert_eq!(v["anchor"], true, "表达式反解 d_B=120 走 Bild 6 锚点");
+        let din_expr_ext = serde_json::json!({
+            "card": "DIN花键参数表_外",
+            "expr": "SPLINE EX M3 Z38 ALPHA30 X0.45 DA119.4 DF113.4 BETA0 H30",
+            "m": 0.0, "z": 0, "d_b": 0.0, "hub": null, "shaft": null, "at": null, "rot": 0.0,
+        });
+        let j = http_req(server.port, "POST", "/api/card_preview", &din_expr_ext.to_string());
+        let v: serde_json::Value = serde_json::from_str(&j).unwrap();
+        assert_eq!(v["ok"], true, "{j}");
+        assert_eq!(v["side"], "ext");
+        // 方向不符保留报错：外卡写 IN
+        let mut din_bad_dir = din_expr_ext.clone();
+        din_bad_dir["expr"] = serde_json::json!("SPLINE IN M3 Z38 ALPHA30 X0.45 DA120 DF114 BETA0 H30");
+        let j = http_req(server.port, "POST", "/api/card_preview", &din_bad_dir.to_string());
+        assert!(j.contains("KIND") && j.contains("外花键参数表"), "{j}");
         let j = http_req(server.port, "POST", "/api/card_preview", &serde_json::json!({
             "card": "DIN花键参数表",
             "expr": "GEAR IN M3 Z38 ALPHA30 X0.45 BETA0 H30",
