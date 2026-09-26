@@ -584,8 +584,9 @@ pub fn values(side: SplineSide, table: &SplineTable) -> Result<Vec<(String, Stri
     let atts = attdefs(side);
     let mut out = Vec::with_capacity(atts.len());
     for ad in &atts {
-        let v = value_for(&ad.tag, table)
-            .ok_or_else(|| format!("花键参数表：模板 tag「{}」没有取值映射", ad.tag))?;
+        let v = value_for(&ad.tag, table).ok_or_else(|| {
+            crate::i18n::t_fmt("cmd.spline.err.values_tag_missing", &[("tag", &ad.tag)])
+        })?;
         out.push((ad.tag.clone(), v));
     }
     Ok(out)
@@ -714,23 +715,25 @@ pub struct SplineTableSpec {
 /// 复用既有 `shaft::parse_program`，不另写解析器；五张智能卡片（含齿轮/ANSI/NF/DIN）
 /// 都经这里解析，各卡只换前缀。
 pub fn parse_gear_expr(expr: &str, card: &str) -> Result<crate::shaft::Gear, String> {
+    let card = crate::i18n::card_display(card);
     if expr.trim().is_empty() {
-        return Err(format!(
-            "{card}：缺九字段齿形表达式（形如 `SPLINE IN M3 Z20 ALPHA30 X0 DA65.4 DF57.3436 BETA0 H30`；\
-             轴/齿轮生成器 GUI 可直接复制）"
+        return Err(crate::i18n::t_fmt(
+            "cmd.card.err.expr_missing",
+            &[("card", &card)],
         ));
     }
-    let program = crate::shaft::parse_program(expr)
-        .map_err(|e| format!("{card}：齿形表达式无法解析：{e}"))?;
+    let program = crate::shaft::parse_program(expr).map_err(|e| {
+        crate::i18n::t_fmt("cmd.card.err.expr_parse", &[("card", &card), ("e", &e)])
+    })?;
     if program.segments.len() != 1 {
-        return Err(format!(
-            "{card}：表达式应只有一段齿形（收到 {} 段）——请只粘生成器复制的那一行齿形表达式",
-            program.segments.len()
+        return Err(crate::i18n::t_fmt(
+            "cmd.card.err.expr_multi",
+            &[("card", &card), ("n", &program.segments.len().to_string())],
         ));
     }
-    program.segments[0]
-        .gear
-        .ok_or_else(|| format!("{card}：表达式里没有齿形段（应以 `GEAR`/`SPLINE` + M/Z/ALPHA… 开头）"))
+    program.segments[0].gear.ok_or_else(|| {
+        crate::i18n::t_fmt("cmd.card.err.expr_no_gear", &[("card", &card)])
+    })
 }
 
 /// 九字段表达式 → 齿形段 `Gear`（花键参数表口径的薄包装；其余卡走 [`parse_gear_expr`]）。
@@ -797,7 +800,7 @@ impl SplineTableSpec {
                 let v = tokens
                     .get(i)
                     .copied()
-                    .ok_or_else(|| "花键参数表：std 缺少体系（本期只有 GB）".to_string())?;
+                    .ok_or_else(|| crate::i18n::t("cmd.spline.err.std_missing_system"))?;
                 system = crate::spline_gui::system_id_by_token(v)?;
                 i += 1;
             }
@@ -810,9 +813,9 @@ impl SplineTableSpec {
                 SplineSide::External
             }
             Some(other) => {
-                return Err(format!(
-                    "花键参数表：第一个参数应为「内」或「外」（收到「{other}」）。\n{}",
-                    usage()
+                return Err(crate::i18n::t_fmt(
+                    "cmd.spline.err.side_first",
+                    &[("other", other), ("usage", &usage())],
                 ))
             }
             None => return Err(usage()),
@@ -824,8 +827,9 @@ impl SplineTableSpec {
         let ext_dev = match side {
             SplineSide::Internal => {
                 if !fit_text.eq_ignore_ascii_case("h") {
-                    return Err(format!(
-                        "花键参数表：内花键是基孔制 H（收到「{mark}」；写法如 `内 6H`）"
+                    return Err(crate::i18n::t_fmt(
+                        "cmd.spline.err.internal_h_mark",
+                        &[("mark", mark)],
                     ));
                 }
                 ExtDev::H
@@ -855,10 +859,26 @@ impl SplineTableSpec {
         let gear = parse_expr_gear(&expr)?;
         if let Some(internal) = expr_explicit_kind(&expr) {
             if internal != (side == SplineSide::Internal) {
-                return Err(format!(
-                    "花键参数表：表达式 KIND 写的是 {}，与卡片方向「{}」不一致",
-                    if internal { "IN（内）" } else { "EX（外）" },
-                    if side == SplineSide::Internal { "内" } else { "外" }
+                return Err(crate::i18n::t_fmt(
+                    "cmd.spline.err.kind_mismatch",
+                    &[
+                        (
+                            "kind",
+                            &crate::i18n::t(if internal {
+                                "cmd.cardexpr.kind.in"
+                            } else {
+                                "cmd.cardexpr.kind.ex"
+                            }),
+                        ),
+                        (
+                            "want",
+                            &crate::i18n::t(if side == SplineSide::Internal {
+                                "cmd.cardexpr.dir.int"
+                            } else {
+                                "cmd.cardexpr.dir.ext"
+                            }),
+                        ),
+                    ],
                 ));
             }
         }
@@ -881,14 +901,21 @@ impl SplineTableSpec {
                 tokens
                     .get(i)
                     .copied()
-                    .ok_or_else(|| format!("花键参数表：{what} 缺少数值/选项"))
+                    .ok_or_else(|| {
+                        crate::i18n::t_fmt("cmd.spline.err.need_value", &[("what", what)])
+                    })
             };
             match key.as_str() {
                 "dp" => {
                     let v = need("dp")?;
-                    let dp = v.parse::<f64>().map_err(|e| format!("dp={v} 不是数字：{e}"))?;
+                    let dp = v
+                        .parse::<f64>()
+                        .map_err(|e| crate::i18n::t_fmt("cmd.spline.err.dp_num", &[("v", v), ("e", &e.to_string())]))?;
                     if !(dp > 0.0) {
-                        return Err(format!("花键参数表：dp={dp} 必须 >0"));
+                        return Err(crate::i18n::t_fmt(
+                            "cmd.spline.err.dp_parse_positive",
+                            &[("dp", &dp.to_string())],
+                        ));
                     }
                     spec.dp = Some(dp);
                 }
@@ -898,35 +925,48 @@ impl SplineTableSpec {
                         "平" | "平齿根" | "flat" | "FLAT" => RootForm::Flat,
                         "圆" | "圆齿根" | "fillet" | "FILLET" => RootForm::Fillet,
                         other => {
-                            return Err(format!(
-                                "花键参数表：齿根形式「{other}」非法（只有 平/圆）"
+                            return Err(crate::i18n::t_fmt(
+                                "cmd.spline.err.root_invalid",
+                                &[("other", other)],
                             ))
                         }
                     });
                 }
                 "at" => {
                     let v = need("at")?;
-                    let (x, y) = v
-                        .split_once(',')
-                        .ok_or_else(|| format!("花键参数表：at「{v}」应为 `x,y`"))?;
-                    let x = x
-                        .trim()
-                        .parse::<f64>()
-                        .map_err(|e| format!("at x={x} 不是数字：{e}"))?;
-                    let y = y
-                        .trim()
-                        .parse::<f64>()
-                        .map_err(|e| format!("at y={y} 不是数字：{e}"))?;
+                    let (x, y) = v.split_once(',').ok_or_else(|| {
+                        crate::i18n::t_fmt("cmd.spline.err.at_format", &[("v", v)])
+                    })?;
+                    let x = x.trim().parse::<f64>().map_err(|e: std::num::ParseFloatError| {
+                        crate::i18n::t_fmt(
+                            "cmd.spline.err.at_x",
+                            &[("x", x), ("e", &e.to_string())],
+                        )
+                    })?;
+                    let y = y.trim().parse::<f64>().map_err(|e: std::num::ParseFloatError| {
+                        crate::i18n::t_fmt(
+                            "cmd.spline.err.at_y",
+                            &[("y", y), ("e", &e.to_string())],
+                        )
+                    })?;
                     spec.at = Some([x, y]);
                 }
                 "rot" | "旋转" => {
                     let v = need("rot")?;
                     spec.rot = v
                         .parse::<f64>()
-                        .map_err(|e| format!("rot={v} 不是数字：{e}"))?;
+                        .map_err(|e: std::num::ParseFloatError| {
+                            crate::i18n::t_fmt(
+                                "cmd.spline.err.rot",
+                                &[("v", v), ("e", &e.to_string())],
+                            )
+                        })?;
                 }
                 other => {
-                    return Err(format!("花键参数表：不认识的参数「{other}」。\n{}", usage()))
+                    return Err(crate::i18n::t_fmt(
+                        "cmd.spline.err.unknown_param",
+                        &[("other", other), ("usage", &usage())],
+                    ))
                 }
             }
             i += 1;
@@ -961,31 +1001,33 @@ impl SplineTableSpec {
 fn split_grade_fit(mark: &str) -> Result<(u32, &str), String> {
     let split = mark
         .find(|c: char| !c.is_ascii_digit())
-        .ok_or_else(|| format!("花键参数表：「{mark}」应形如 `6H` / `5f`"))?;
+        .ok_or_else(|| crate::i18n::t_fmt("cmd.spline.err.mark_format", &[("mark", mark)]))?;
     let (g, f) = mark.split_at(split);
     let grade: u32 = g
         .parse()
-        .map_err(|e| format!("花键参数表：等级「{g}」不是数字：{e}"))?;
+        .map_err(|e: std::num::ParseIntError| {
+            crate::i18n::t_fmt(
+                "cmd.spline.err.grade_num",
+                &[("g", g), ("e", &e.to_string())],
+            )
+        })?;
     if !matches!(grade, 4 | 5 | 6 | 7) {
-        return Err(format!(
-            "花键参数表：公差等级「{grade}」非法（GB/T 3478.1 只有 4/5/6/7）"
+        return Err(crate::i18n::t_fmt(
+            "cmd.spline.err.grade_invalid_card",
+            &[("grade", &grade.to_string())],
         ));
     }
     if f.is_empty() {
-        return Err(format!(
-            "花键参数表：「{mark}」缺配合类别（内如 `6H`、外如 `5f`）"
+        return Err(crate::i18n::t_fmt(
+            "cmd.spline.err.mark_no_fit",
+            &[("mark", mark)],
         ));
     }
     Ok((grade, f))
 }
 
 fn usage() -> String {
-    "智能卡片「花键参数表」用法：`OCSMCARD 花键参数表 [std GB] 内 6H <九字段表达式> \
-     [dp 4.5] [root 平|圆] [at x,y] [rot 度]`；外花键把 `内 6H` 换成 `外 5f`（表达式 KIND 用 EX）。\
-     表达式形如 `SPLINE IN M3 Z20 ALPHA30 X0 DA65.4 DF57.3436 BETA0 H30`（轴/齿轮生成器 GUI 可直接复制）。\
-     等级 4/5/6/7；配合内 H、外 d/e/f/h/js/k；不填 dp = 按标准 R40 自动选；\
-     不填 root = 由表达式 DA/DF 反解（30° 可分辨平/圆），再退到按 αD 默认。"
-        .to_string()
+    crate::i18n::t("cmd.spline.usage")
 }
 
 // ══════════════════════════════════════════════════════════════════════════

@@ -73,8 +73,9 @@ impl PressureAngle {
             "30" => Ok(PressureAngle::A30),
             "37.5" => Ok(PressureAngle::A37_5),
             "45" => Ok(PressureAngle::A45),
-            other => Err(format!(
-                "花键参数表：压力角「{other}」非法（GB/T 3478.1 只有 30° / 37.5° / 45°）"
+            other => Err(crate::i18n::t_fmt(
+                "cmd.spline.err.alpha_invalid",
+                &[("other", other)],
             )),
         }
     }
@@ -131,8 +132,9 @@ impl ExtDev {
             "h" => Ok(ExtDev::H),
             "js" => Ok(ExtDev::Js),
             "k" => Ok(ExtDev::K),
-            other => Err(format!(
-                "花键参数表：齿侧配合「{other}」非法（GB/T 3478.1 只有 H/k、H/js、H/h、H/f、H/e、H/d）"
+            other => Err(crate::i18n::t_fmt(
+                "cmd.spline.err.fit_invalid",
+                &[("other", other)],
             )),
         }
     }
@@ -220,7 +222,12 @@ pub struct FitRow {
 fn parse_num(v: &str, what: &str) -> Result<f64, String> {
     v.trim()
         .parse::<f64>()
-        .map_err(|e| format!("{what}：{v:?} 不是数字（{e}）"))
+        .map_err(|e| {
+            crate::i18n::t_fmt(
+                "cmd.spline.err.num",
+                &[("what", what), ("v", v), ("e", &e.to_string())],
+            )
+        })
 }
 
 fn parse_opt(v: &str) -> Option<f64> {
@@ -241,14 +248,25 @@ fn num_lines(csv: &'static str) -> impl Iterator<Item = &'static str> {
 pub fn ev_sv_rows() -> Result<Vec<EvSvRow>, String> {
     let mut rows = Vec::new();
     let mut lines = num_lines(EV_SV_CSV);
-    let header = lines.next().ok_or("spline_gb3478_ev_sv.csv 缺表头")?;
+    let header = lines.next().ok_or_else(|| {
+        crate::i18n::t_fmt(
+            "cmd.spline.err.csv_header_missing",
+            &[("file", "spline_gb3478_ev_sv.csv")],
+        )
+    })?;
     if header.trim() != "d_lo,d_hi,esv_d,esv_e,esv_f" {
-        return Err(format!("spline_gb3478_ev_sv.csv 表头异常：{header}"));
+        return Err(crate::i18n::t_fmt(
+            "cmd.spline.err.csv_header_bad",
+            &[("file", "spline_gb3478_ev_sv.csv"), ("header", header)],
+        ));
     }
     for line in lines {
         let v: Vec<&str> = line.split(',').collect();
         if v.len() != 5 {
-            return Err(format!("spline_gb3478_ev_sv.csv 列数异常：{line}"));
+            return Err(crate::i18n::t_fmt(
+                "cmd.spline.err.csv_cols",
+                &[("file", "spline_gb3478_ev_sv.csv"), ("line", line)],
+            ));
         }
         let lo = if v[0].trim().is_empty() {
             f64::NEG_INFINITY
@@ -270,14 +288,25 @@ pub fn ev_sv_rows() -> Result<Vec<EvSvRow>, String> {
 pub fn ext_dia_dev_rows() -> Result<Vec<ExtDiaDevRow>, String> {
     let mut rows = Vec::new();
     let mut lines = num_lines(EXT_DIA_DEV_CSV);
-    let header = lines.next().ok_or("spline_gb3478_ext_dia_dev.csv 缺表头")?;
+    let header = lines.next().ok_or_else(|| {
+        crate::i18n::t_fmt(
+            "cmd.spline.err.csv_header_missing",
+            &[("file", "spline_gb3478_ext_dia_dev.csv")],
+        )
+    })?;
     if header.trim() != "d_lo,d_hi,d30,d375,d45,e30,e375,e45,f30,f375,f45" {
-        return Err(format!("spline_gb3478_ext_dia_dev.csv 表头异常：{header}"));
+        return Err(crate::i18n::t_fmt(
+            "cmd.spline.err.csv_header_bad",
+            &[("file", "spline_gb3478_ext_dia_dev.csv"), ("header", header)],
+        ));
     }
     for line in lines {
         let v: Vec<&str> = line.split(',').collect();
         if v.len() != 11 {
-            return Err(format!("spline_gb3478_ext_dia_dev.csv 列数异常：{line}"));
+            return Err(crate::i18n::t_fmt(
+                "cmd.spline.err.csv_cols",
+                &[("file", "spline_gb3478_ext_dia_dev.csv"), ("line", line)],
+            ));
         }
         let n = |i: usize, what: &str| parse_num(v[i], what);
         let lo = if v[0].trim().is_empty() {
@@ -300,14 +329,25 @@ pub fn ext_dia_dev_rows() -> Result<Vec<ExtDiaDevRow>, String> {
 pub fn limits_rows() -> Result<Vec<LimitsRow>, String> {
     let mut rows = Vec::new();
     let mut lines = num_lines(LIMITS_CSV);
-    let header = lines.next().ok_or("spline_gb3478_limits.csv 缺表头")?;
+    let header = lines.next().ok_or_else(|| {
+        crate::i18n::t_fmt(
+            "cmd.spline.err.csv_header_missing",
+            &[("file", "spline_gb3478_limits.csv")],
+        )
+    })?;
     if header.trim() != "d_lo,d_hi,it10,it11,it12" {
-        return Err(format!("spline_gb3478_limits.csv 表头异常：{header}"));
+        return Err(crate::i18n::t_fmt(
+            "cmd.spline.err.csv_header_bad",
+            &[("file", "spline_gb3478_limits.csv"), ("header", header)],
+        ));
     }
     for line in lines {
         let v: Vec<&str> = line.split(',').collect();
         if v.len() != 5 {
-            return Err(format!("spline_gb3478_limits.csv 列数异常：{line}"));
+            return Err(crate::i18n::t_fmt(
+                "cmd.spline.err.csv_cols",
+                &[("file", "spline_gb3478_limits.csv"), ("line", line)],
+            ));
         }
         let lo = if v[0].trim().is_empty() {
             f64::NEG_INFINITY
@@ -329,18 +369,30 @@ pub fn limits_rows() -> Result<Vec<LimitsRow>, String> {
 pub fn fit_rows() -> Result<Vec<FitRow>, String> {
     let mut rows = Vec::new();
     let mut lines = num_lines(FIT_CSV);
-    let header = lines.next().ok_or("spline_gb3478_fit.csv 缺表头")?;
+    let header = lines.next().ok_or_else(|| {
+        crate::i18n::t_fmt(
+            "cmd.spline.err.csv_header_missing",
+            &[("file", "spline_gb3478_fit.csv")],
+        )
+    })?;
     if header.trim() != "fit,ext_dev,preferred_45,memo" {
-        return Err(format!("spline_gb3478_fit.csv 表头异常：{header}"));
+        return Err(crate::i18n::t_fmt(
+            "cmd.spline.err.csv_header_bad",
+            &[("file", "spline_gb3478_fit.csv"), ("header", header)],
+        ));
     }
     for line in lines {
         let v: Vec<&str> = line.split(',').collect();
         if v.len() != 4 {
-            return Err(format!("spline_gb3478_fit.csv 列数异常：{line}"));
+            return Err(crate::i18n::t_fmt(
+                "cmd.spline.err.csv_cols",
+                &[("file", "spline_gb3478_fit.csv"), ("line", line)],
+            ));
         }
         rows.push(FitRow {
             fit: v[0].trim().to_string(),
-            ext_dev: ExtDev::parse(v[1]).map_err(|e| format!("fit 行：{e}"))?,
+            ext_dev: ExtDev::parse(v[1])
+                .map_err(|e| crate::i18n::t_fmt("cmd.spline.err.fit_row", &[("e", &e)]))?,
             preferred_45: v[2].trim() == "true",
             memo: v[3].trim().to_string(),
         });
@@ -352,14 +404,25 @@ pub fn fit_rows() -> Result<Vec<FitRow>, String> {
 pub fn pin_series() -> Result<Vec<f64>, String> {
     let mut out = Vec::new();
     let mut lines = num_lines(PIN_SERIES_CSV);
-    let header = lines.next().ok_or("spline_gb3478_pin_series.csv 缺表头")?;
+    let header = lines.next().ok_or_else(|| {
+        crate::i18n::t_fmt(
+            "cmd.spline.err.csv_header_missing",
+            &[("file", "spline_gb3478_pin_series.csv")],
+        )
+    })?;
     if header.trim() != "d_r,pin_std,dev" {
-        return Err(format!("spline_gb3478_pin_series.csv 表头异常：{header}"));
+        return Err(crate::i18n::t_fmt(
+            "cmd.spline.err.csv_header_bad",
+            &[("file", "spline_gb3478_pin_series.csv"), ("header", header)],
+        ));
     }
     for line in lines {
         let v: Vec<&str> = line.split(',').collect();
         if v.len() != 3 {
-            return Err(format!("spline_gb3478_pin_series.csv 列数异常：{line}"));
+            return Err(crate::i18n::t_fmt(
+                "cmd.spline.err.csv_cols",
+                &[("file", "spline_gb3478_pin_series.csv"), ("line", line)],
+            ));
         }
         if v[1].trim() == "true" {
             out.push(parse_num(v[0], "d_r")?);
@@ -382,14 +445,25 @@ pub struct RiminRow {
 pub fn rimin_table26_rows() -> Result<Vec<RiminRow>, String> {
     let mut rows = Vec::new();
     let mut lines = num_lines(RIMIN_T26_CSV);
-    let header = lines.next().ok_or("spline_gb3478_table26_rimin.csv 缺表头")?;
+    let header = lines.next().ok_or_else(|| {
+        crate::i18n::t_fmt(
+            "cmd.spline.err.csv_header_missing",
+            &[("file", "spline_gb3478_table26_rimin.csv")],
+        )
+    })?;
     if header.trim() != "m,r_30_flat,r_30_fillet,r_37_5,r_45,source,note" {
-        return Err(format!("spline_gb3478_table26_rimin.csv 表头异常：{header}"));
+        return Err(crate::i18n::t_fmt(
+            "cmd.spline.err.csv_header_bad",
+            &[("file", "spline_gb3478_table26_rimin.csv"), ("header", header)],
+        ));
     }
     for line in lines {
         let v: Vec<&str> = line.split(',').collect();
         if v.len() != 7 {
-            return Err(format!("spline_gb3478_table26_rimin.csv 列数异常：{line}"));
+            return Err(crate::i18n::t_fmt(
+                "cmd.spline.err.csv_cols",
+                &[("file", "spline_gb3478_table26_rimin.csv"), ("line", line)],
+            ));
         }
         rows.push(RiminRow {
             m: parse_num(v[0], "m")?,
@@ -413,7 +487,12 @@ pub fn rimin_table26(
     let row = rows
         .iter()
         .find(|r| (r.m - m).abs() < 1e-9)
-        .ok_or_else(|| format!("花键参数表：m={m} 不在表 26（GB/T 3478.1 的 15 档模数）"))?;
+        .ok_or_else(|| {
+            crate::i18n::t_fmt(
+                "cmd.spline.err.m_not_t26",
+                &[("m", &m.to_string())],
+            )
+        })?;
     Ok(match (alpha, root) {
         (PressureAngle::A30, RootForm::Flat) => row.r30_flat,
         (PressureAngle::A30, RootForm::Fillet) => row.r30_fillet,
@@ -467,8 +546,9 @@ fn grade_coef(grade: u32) -> Result<(f64, f64), String> {
         5 => Ok((16.0, 64.0)),
         6 => Ok((25.0, 100.0)),
         7 => Ok((40.0, 160.0)),
-        other => Err(format!(
-            "花键参数表：公差等级 {other} 非法（GB/T 3478.1 只有 4/5/6/7）"
+        other => Err(crate::i18n::t_fmt(
+            "cmd.spline.err.grade_invalid",
+            &[("grade", &other.to_string())],
         )),
     }
 }
@@ -491,7 +571,10 @@ fn fp_coef(grade: u32) -> Result<(f64, f64), String> {
         5 => Ok((3.55, 9.0)),
         6 => Ok((5.0, 12.5)),
         7 => Ok((7.1, 18.0)),
-        other => Err(format!("花键参数表：公差等级 {other} 非法")),
+        other => Err(crate::i18n::t_fmt(
+            "cmd.spline.err.grade_invalid",
+            &[("grade", &other.to_string())],
+        )),
     }
 }
 
@@ -501,7 +584,10 @@ fn fa_coef(grade: u32) -> Result<(f64, f64), String> {
         5 => Ok((2.5, 16.0)),
         6 => Ok((4.0, 25.0)),
         7 => Ok((6.3, 40.0)),
-        other => Err(format!("花键参数表：公差等级 {other} 非法")),
+        other => Err(crate::i18n::t_fmt(
+            "cmd.spline.err.grade_invalid",
+            &[("grade", &other.to_string())],
+        )),
     }
 }
 
@@ -511,7 +597,10 @@ fn fb_coef(grade: u32) -> Result<(f64, f64), String> {
         5 => Ok((1.0, 5.0)),
         6 => Ok((1.25, 6.3)),
         7 => Ok((2.0, 10.0)),
-        other => Err(format!("花键参数表：公差等级 {other} 非法")),
+        other => Err(crate::i18n::t_fmt(
+            "cmd.spline.err.grade_invalid",
+            &[("grade", &other.to_string())],
+        )),
     }
 }
 
@@ -524,7 +613,10 @@ fn fb_raw(grade: u32, m: f64, z: u32, fit_length: Option<f64>) -> Result<f64, St
     let (a, b) = fb_coef(grade)?;
     let g = fit_length.unwrap_or(m * z as f64 / 2.0);
     if !(g > 0.0) || !g.is_finite() {
-        return Err(format!("花键参数表：配合长度 g={g} 必须 >0"));
+        return Err(crate::i18n::t_fmt(
+            "cmd.spline.err.fit_len",
+            &[("g", &g.to_string())],
+        ));
     }
     Ok(a * g.sqrt() + b)
 }
@@ -590,8 +682,9 @@ pub fn esv_um(input: &SplineInput) -> Result<f64, String> {
             let d = pitch_dia(input.m, input.z);
             let rows = ev_sv_rows()?;
             let idx = row_index(&rows, d, |r| (r.d_lo, r.d_hi)).ok_or_else(|| {
-                format!(
-                    "花键参数表：D={d} 不在表 23 的分度圆直径档（≤6…800~1000），表外不插值"
+                crate::i18n::t_fmt(
+                    "cmd.spline.err.d_not_t23",
+                    &[("d", &d.to_string())],
                 )
             })?;
             let r = rows[idx];
@@ -627,7 +720,10 @@ pub fn ext_dia_dev_um(input: &SplineInput) -> Result<f64, String> {
         dev @ (ExtDev::D | ExtDev::E | ExtDev::F) => {
             let rows = ext_dia_dev_rows()?;
             let idx = row_index(&rows, d, |r| (r.d_lo, r.d_hi)).ok_or_else(|| {
-                format!("花键参数表：D={d} 不在表 24 的分度圆直径档（≤6…800~1000），表外不插值")
+                crate::i18n::t_fmt(
+                    "cmd.spline.err.d_not_t24",
+                    &[("d", &d.to_string())],
+                )
             })?;
             let r = rows[idx];
             let col = match alpha {
@@ -647,8 +743,9 @@ pub fn ext_dia_dev_um(input: &SplineInput) -> Result<f64, String> {
 /// 表 25：按模数档选 IT 等级（m 0.25~0.75→10；1~1.75→11；2~10→12）。
 pub fn dia_tol_it(m: f64) -> Result<u32, String> {
     if !(0.25..=10.0).contains(&m) {
-        return Err(format!(
-            "花键参数表：模数 m={m} 不在 0.25…10（GB/T 3478.1 的 15 种模数系列）"
+        return Err(crate::i18n::t_fmt(
+            "cmd.spline.err.m_range",
+            &[("m", &m.to_string())],
         ));
     }
     Ok(if m <= 0.75 {
@@ -670,7 +767,12 @@ pub fn side_dia_tol_it(m: f64) -> Result<u32, String> {
 pub fn it_um(d: f64, it: u32) -> Result<f64, String> {
     tolerance::bounds(d, &format!("H{it}"))
         .map(|l| round_um(l.upper * 1000.0))
-        .ok_or_else(|| format!("花键参数表：GB/T 1800 IT{it} 在 D={d} 无值（表外）"))
+        .ok_or_else(|| {
+            crate::i18n::t_fmt(
+                "cmd.spline.err.it_missing",
+                &[("it", &it.to_string()), ("d", &d.to_string())],
+            )
+        })
 }
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -801,7 +903,10 @@ pub fn solve_inv(y: f64) -> Result<f64, String> {
         return Ok(0.0);
     }
     if y > inv(85f64.to_radians()) {
-        return Err(format!("花键参数表：invα={y} 超出可解范围（α>85°）"));
+        return Err(crate::i18n::t_fmt(
+            "cmd.spline.err.inv_range",
+            &[("y", &y.to_string())],
+        ));
     }
     // 初值：小角近似 inv α ≈ α³/3。
     let mut a = (3.0 * y).cbrt().max(1e-4);
@@ -828,20 +933,24 @@ pub fn d_ri_calc(
 ) -> Result<f64, String> {
     let db = base_dia(alpha, m, z);
     if !(db > 0.0) || !(d_eemax > 0.0) || !(d_iimin > 0.0) {
-        return Err("花键参数表：D'_Ri 的 Db/D_ee max/D_ii min 必须 >0".into());
+        return Err(crate::i18n::t("cmd.spline.err.dri_base"));
     }
     let d = pitch_dia(m, z);
     let d_ci = (d_eemax + d_iimin) / 2.0;
     if d_ci <= db {
-        return Err(format!(
-            "花键参数表：D_ci={d_ci} ≤ Db={db}（接触点已在基圆内，无法算 D'_Ri）"
+        return Err(crate::i18n::t_fmt(
+            "cmd.spline.err.dri_dci",
+            &[("d_ci", &d_ci.to_string()), ("db", &db.to_string())],
         ));
     }
     let alpha_ci = (db / d_ci).acos();
     let term = alpha_ci - e_max / d + inv(alpha_ci) - alpha.inv();
     let dp = db * (alpha_ci.tan() - term.tan());
     if !(dp > 0.0) {
-        return Err(format!("花键参数表：D'_Ri={dp} ≤0（E_max 或几何异常）"));
+        return Err(crate::i18n::t_fmt(
+            "cmd.spline.err.dri_le0",
+            &[("dp", &dp.to_string())],
+        ));
     }
     Ok(dp)
 }
@@ -859,14 +968,20 @@ pub fn d_re_calc(
     let d = pitch_dia(m, z);
     let d_ce = (d_eemax + d_iimin) / 2.0;
     if d_ce <= db {
-        return Err(format!("花键参数表：D_ce={d_ce} ≤ Db={db}（无法算 D'_Re）"));
+        return Err(crate::i18n::t_fmt(
+            "cmd.spline.err.dre_dce",
+            &[("d_ce", &d_ce.to_string()), ("db", &db.to_string())],
+        ));
     }
     let alpha_ce = (db / d_ce).acos();
     let pi_z = std::f64::consts::PI / z as f64;
     let inside = alpha_ce + inv(alpha_ce) + pi_z - s_min / d - alpha.inv();
     let dp = db * (inside.tan() - alpha_ce.tan());
     if !(dp > 0.0) {
-        return Err(format!("花键参数表：D'_Re={dp} ≤0（S_min 或几何异常）"));
+        return Err(crate::i18n::t_fmt(
+            "cmd.spline.err.dre_le0",
+            &[("dp", &dp.to_string())],
+        ));
     }
     Ok(dp)
 }
@@ -879,9 +994,15 @@ pub fn dp_standard_pick(dp_calc: f64) -> Result<f64, String> {
         .copied()
         .find(|p| *p >= dp_calc - 1e-9)
         .ok_or_else(|| {
-            format!(
-                "花键参数表：D'={dp_calc:.4} 超出 GB/T 3478.9 量棒系列上限 {}",
-                series.last().copied().unwrap_or(0.0)
+            crate::i18n::t_fmt(
+                "cmd.spline.err.dp_over_series",
+                &[
+                    ("dp", &format!("{dp_calc:.4}")),
+                    (
+                        "max",
+                        &crate::partgen_kit::trim(series.last().copied().unwrap_or(0.0)),
+                    ),
+                ],
             )
         })
 }
@@ -1058,20 +1179,23 @@ pub struct ExternalSplineTable {
 
 fn check_common(input: &SplineInput) -> Result<(), String> {
     if !input.m.is_finite() || !(0.25..=10.0).contains(&input.m) {
-        return Err(format!(
-            "花键参数表：模数 m={} 不在 0.25…10（15 种模数系列）",
-            input.m
+        return Err(crate::i18n::t_fmt(
+            "cmd.spline.err.m_range15",
+            &[("m", &input.m.to_string())],
         ));
     }
     if input.z < 6 {
-        return Err(format!("花键参数表：齿数 z={} 太小（至少 6）", input.z));
+        return Err(crate::i18n::t_fmt(
+            "cmd.spline.err.z_too_small",
+            &[("z", &input.z.to_string())],
+        ));
     }
     // 注 1：37.5°/45° 内花键**允许**平齿根（此时 Dei 应大于 D_Fimin）；本库不拦，
     // 由 `internal_table` 按同一基本尺寸公式给出 Dei 供校核。
     if input.side == SplineSide::Internal && input.ext_dev != ExtDev::H {
-        return Err(format!(
-            "花键参数表：内花键是基孔制 H（收到「{}」）",
-            input.ext_dev.code()
+        return Err(crate::i18n::t_fmt(
+            "cmd.spline.err.internal_h",
+            &[("dev", input.ext_dev.code())],
         ));
     }
     Ok(())
@@ -1081,7 +1205,7 @@ fn check_common(input: &SplineInput) -> Result<(), String> {
 pub fn internal_table(input: &SplineInput) -> Result<InternalSplineTable, String> {
     check_common(input)?;
     if input.side != SplineSide::Internal {
-        return Err("花键参数表：internal_table 收到外花键输入".into());
+        return Err(crate::i18n::t("cmd.spline.err.internal_received_ext"));
     }
     let (m, z, alpha, root) = (input.m, input.z, input.alpha, input.root);
     let (total, lambda, _t) = machining_tolerance_um(input.side, input.grade, m, z, input.fit_length)?;
@@ -1136,7 +1260,7 @@ pub fn internal_table(input: &SplineInput) -> Result<InternalSplineTable, String
 pub fn external_table(input: &SplineInput) -> Result<ExternalSplineTable, String> {
     check_common(input)?;
     if input.side != SplineSide::External {
-        return Err("花键参数表：external_table 收到内花键输入".into());
+        return Err(crate::i18n::t("cmd.spline.err.external_received_int"));
     }
     let (m, z, alpha, root) = (input.m, input.z, input.alpha, input.root);
     let (total, lambda, t) =
@@ -1205,12 +1329,16 @@ fn resolve_dp(input: &SplineInput, dp_calc: f64) -> Result<f64, String> {
     match input.dp {
         Some(v) => {
             if !(v > 0.0) {
-                return Err(format!("花键参数表：量棒直径 Dp={v} 必须 >0"));
+                return Err(crate::i18n::t_fmt(
+                    "cmd.spline.err.dp_positive",
+                    &[("v", &v.to_string())],
+                ));
             }
             let series = pin_series()?;
             if !series.iter().any(|p| (p - v).abs() < 1e-9) {
-                return Err(format!(
-                    "花键参数表：Dp={v} 不在 GB/T 3478.9 表 1 量棒系列（0.56…25.00，67 档）"
+                return Err(crate::i18n::t_fmt(
+                    "cmd.spline.err.dp_not_series",
+                    &[("v", &v.to_string())],
                 ));
             }
             Ok(v)

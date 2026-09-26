@@ -465,7 +465,9 @@ impl AnsiTableSpec {
             tokens
                 .get(*i)
                 .copied()
-                .ok_or_else(|| format!("ANSI 花键参数表：{what} 缺少数值/选项"))
+                .ok_or_else(|| {
+                    crate::i18n::t_fmt("cmd.ansi.err.need_value", &[("what", what)])
+                })
         };
         while i < tokens.len() {
             let t = tokens[i];
@@ -480,27 +482,49 @@ impl AnsiTableSpec {
                 let v = need(&mut i, "齿数")?;
                 z = Some(
                     v.parse()
-                        .map_err(|e| format!("ANSI 花键参数表：齿数={v} 不是整数：{e}"))?,
+                        .map_err(|e: std::num::ParseIntError| {
+                            crate::i18n::t_fmt(
+                                "cmd.ansi.err.z_num",
+                                &[("v", &v), ("e", &e.to_string())],
+                            )
+                        })?,
                 );
             } else if key == "at" {
                 let v = need(&mut i, "at")?;
                 let (x, y) = v
                     .split_once(',')
-                    .ok_or_else(|| format!("ANSI 花键参数表：at「{v}」应为 `x,y`"))?;
+                    .ok_or_else(|| {
+                        crate::i18n::t_fmt("cmd.ansi.err.at_format", &[("v", &v)])
+                    })?;
                 let x: f64 = x
                     .trim()
                     .parse()
-                    .map_err(|e| format!("ANSI 花键参数表：at x={x} 不是数字：{e}"))?;
+                    .map_err(|e: std::num::ParseFloatError| {
+                        crate::i18n::t_fmt(
+                            "cmd.ansi.err.at_x",
+                            &[("x", &x), ("e", &e.to_string())],
+                        )
+                    })?;
                 let y: f64 = y
                     .trim()
                     .parse()
-                    .map_err(|e| format!("ANSI 花键参数表：at y={y} 不是数字：{e}"))?;
+                    .map_err(|e: std::num::ParseFloatError| {
+                        crate::i18n::t_fmt(
+                            "cmd.ansi.err.at_y",
+                            &[("y", &y), ("e", &e.to_string())],
+                        )
+                    })?;
                 at = Some([x, y]);
             } else if key == "rot" || key == "旋转" {
                 let v = need(&mut i, "rot")?;
                 rot = v
                     .parse()
-                    .map_err(|e| format!("ANSI 花键参数表：rot={v} 不是数字：{e}"))?;
+                    .map_err(|e: std::num::ParseFloatError| {
+                        crate::i18n::t_fmt(
+                            "cmd.ansi.err.rot",
+                            &[("v", &v), ("e", &e.to_string())],
+                        )
+                    })?;
             } else if let Some(v) = strip_prefix_ci(t, "p") {
                 let v = if v.is_empty() {
                     need(&mut i, "P")?
@@ -519,9 +543,9 @@ impl AnsiTableSpec {
                 match crate::invol_spline::parse_preset_token(t) {
                     Some((SplineStd::ANSI, name)) => profile = Some(name),
                     _ => {
-                        return Err(format!(
-                            "ANSI 花键参数表：不认识的参数「{t}」。\n{}",
-                            usage(lang)
+                        return Err(crate::i18n::t_fmt(
+                            "cmd.ansi.err.unknown_param",
+                            &[("t", t), ("usage", &usage(lang))],
                         ))
                     }
                 }
@@ -534,17 +558,20 @@ impl AnsiTableSpec {
                 let (ep, ez, prof) = expr_inputs(&e, side, profile)?;
                 if let Some(given) = p {
                     if (given - ep).abs() > 1e-9 {
-                        return Err(format!(
-                            "ANSI 花键参数表：显式径节 P={} 与表达式反解的 P/Ps={} 不一致",
-                            pair_label(given),
-                            pair_label(ep)
+                        return Err(crate::i18n::t_fmt(
+                            "cmd.ansi.err.p_mismatch",
+                            &[
+                                ("p", &pair_label(given)),
+                                ("ep", &pair_label(ep)),
+                            ],
                         ));
                     }
                 }
                 if let Some(given) = z {
                     if given != ez {
-                        return Err(format!(
-                            "ANSI 花键参数表：显式齿数 N={given} 与表达式反解的 N={ez} 不一致"
+                        return Err(crate::i18n::t_fmt(
+                            "cmd.ansi.err.n_mismatch",
+                            &[("given", &given.to_string()), ("ez", &ez.to_string())],
                         ));
                     }
                 }
@@ -552,15 +579,15 @@ impl AnsiTableSpec {
             }
             None => {
                 let p = p.ok_or_else(|| {
-                    format!(
-                        "ANSI 花键参数表：缺径节 P（写法 `P16` / `P 16/32` / `径节 16`，或直接给九字段表达式）。\n{}",
-                        usage(lang)
+                    crate::i18n::t_fmt(
+                        "cmd.ansi.err.missing_p",
+                        &[("usage", &usage(lang))],
                     )
                 })?;
                 let z = z.ok_or_else(|| {
-                    format!(
-                        "ANSI 花键参数表：缺齿数 Z（写法 `Z20` / `齿数 20`；表达式反解时无需再给）。\n{}",
-                        usage(lang)
+                    crate::i18n::t_fmt(
+                        "cmd.ansi.err.missing_z",
+                        &[("usage", &usage(lang))],
                     )
                 })?;
                 (
@@ -656,9 +683,9 @@ pub fn default_profile_for_alpha(alpha: f64) -> Result<&'static str, String> {
         .find(|p| (p.alpha_deg - alpha).abs() < 1e-9)
         .map(|p| p.profile)
         .ok_or_else(|| {
-            format!(
-                "ANSI 花键参数表：没有压力角 {}° 的 Table 2 齿廓（本仓仅 30/37.5/45）",
-                crate::partgen_kit::trim(alpha)
+            crate::i18n::t_fmt(
+                "cmd.ansi.err.no_profile",
+                &[("alpha", &crate::partgen_kit::trim(alpha))],
             )
         })
 }
@@ -671,12 +698,12 @@ pub fn expr_inputs(
     current: Option<&'static str>,
 ) -> Result<(f64, u32, &'static str), String> {
     let r = crate::card_expr::resolve(&EXPR_POLICY, expr, Some(side == SplineSide::Internal))?;
-    let p = r.value("p").ok_or_else(|| {
-        "ANSI 花键参数表：表达式映射表缺径节 P（内部错误）".to_string()
-    })?;
-    let z = r.value("z").ok_or_else(|| {
-        "ANSI 花键参数表：表达式映射表缺齿数 N（内部错误）".to_string()
-    })? as u32;
+    let p = r
+        .value("p")
+        .ok_or_else(|| crate::i18n::t("cmd.ansi.err.map_missing_p"))?;
+    let z = r
+        .value("z")
+        .ok_or_else(|| crate::i18n::t("cmd.ansi.err.map_missing_n"))? as u32;
     let alpha = r.fields.alpha_deg();
     let profile = match current {
         Some(t) if profile_alpha(t).is_some_and(|a| (a - alpha).abs() < 1e-9) => t,
@@ -775,14 +802,7 @@ fn usage(lang: AnsiLang) -> String {
         AnsiLang::Cn => "ANSI花键参数表_中文",
         AnsiLang::En => "ANSI花键参数表_英文",
     };
-    format!(
-        "智能卡片「{card}」用法：`OCSMCARD {card} 内|外 <九字段齿形表达式> [profile 齿廓] [at x,y] [rot 度]`\
-         （如 `OCSMCARD {card} 内 SPLINE IN M1.5875 Z20 ALPHA30 X0 BETA0 H30`；\
-         也可沿用 `P<径节> Z<齿数>` 写法，如 `OCSMCARD {card} 内 P16 Z20`）。\
-         表达式反解 P=25.4/m、N=z，齿廓按 α 保持同角列或选默认列（α 只收 30/37.5/45，直齿、不收变位）；\
-         齿廓五列：`ANSI30P`/`ANSI30PM`/`ANSI30R`/`ANSI375R`/`ANSI45R`（缺省列 A）；\
-         ANSI B92.1 的配合/公差/量棒/公法线表本仓未收 —— 相关格显示「—」，不臆造。"
-    )
+    crate::i18n::t_fmt("cmd.ansi.usage", &[("card", card)])
 }
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -989,8 +1009,9 @@ impl AnsiTableModel {
         match self.side.trim().to_ascii_lowercase().as_str() {
             "int" | "internal" | "内" | "内花键" => Ok(SplineSide::Internal),
             "ext" | "external" | "外" | "外花键" => Ok(SplineSide::External),
-            other => Err(format!(
-                "ANSI 花键参数表：方向「{other}」非法（可选项 int/ext）"
+            other => Err(crate::i18n::t_fmt(
+                "cmd.ansi.err.side_invalid",
+                &[("other", other)],
             )),
         }
     }
@@ -1124,15 +1145,20 @@ impl AnsiTableModel {
     /// 插入回执里的一段。
     pub fn echo_note(&self) -> Result<String, String> {
         let q = self.spec()?.params()?;
-        Ok(format!(
-            "{}，P/Ps={}，N={}，α={}°",
-            match self.side()? {
-                SplineSide::Internal => "内花键",
-                SplineSide::External => "外花键",
-            },
-            pair_label(q.ansi_p()),
-            q.z,
-            crate::partgen_kit::trim(q.alpha_deg)
+        Ok(crate::i18n::t_fmt(
+            "cmd.ansi.echo",
+            &[
+                (
+                    "side",
+                    &crate::i18n::t(match self.side()? {
+                        SplineSide::Internal => "cmd.ansi.side.internal",
+                        SplineSide::External => "cmd.ansi.side.external",
+                    }),
+                ),
+                ("pair", &pair_label(q.ansi_p())),
+                ("n", &q.z.to_string()),
+                ("alpha", &crate::partgen_kit::trim(q.alpha_deg)),
+            ],
         ))
     }
 

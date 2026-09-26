@@ -172,54 +172,10 @@ use crate::partgen_kit::{
 };
 
 /// `OCSMSHAFT` 不带参数时打开轴生成器窗口；命令行带参数时此处是用法说明。
-pub const USAGE: &str = "\
-OCSMSHAFT 轴生成器：行 DSL / JSON → 单视图侧视图（段拼接 + 端面倒角 + 砂轮越程槽 + 螺纹段 M + 齿轮段 GEAR + 矩形花键段 SPLINE + 轴槽 KEY）。
-用法：OCSMSHAFT <行 DSL 或 JSON>
-  行 DSL：一行一段，从左到右拼接；多段用 | 或换行分隔；大小写不敏感、段内关键字顺序无关
-    S 起始直径（靠左）   E 终点直径（省略 = 圆柱段 E=S）   L 段长（必给；齿轮段用 H 代替）
-    CH2@L / CH2@R   端面倒角 C2（@ 省略默认 R）    OV / OV3 / OV3@L   砂轮越程槽
-    M / M1.5   螺纹段：不写值 = 小径 0.85d；M1.5 = 螺距 P，小径 = d − 1.0825P（只能圆柱段）
-               不给 TL/RL = 整段全螺纹（旧行为）
-    M1.5 TL20  局部螺纹（GB/T 3-1997 图 1 第一种形式）：完整螺纹长 TL，靠段右端台肩，
-               自右向左 = 台肩面 + 锥面（a−x）+ 螺尾（细实线，x）+ 分界竖线 + 完整螺纹 TL
-               RO一般|RO短 收尾档（默认一般）   SD一般|SD长|SD短 肩距档（默认一般）
-    M1.5 TL20 RL  用 GB/T 3-1997 表 2 退刀槽收尾（图 2 画法，与 RO/SD 互斥）
-    RL@L / RL@R   段级退刀槽（任意圆柱段，@ 省略默认 R；同端只能一个 CH/OV/RL）
-               取参：① g1/g2/dg/r 全给（dg 是绝对直径）② 给 P 查表 2 ③ 都不给报错
-               例：S25 E25 L32 RL@L P1.5 / RL@L g1 2.5 g2 4.5 dg 22.7 r 0.8
-               前置：该端相邻段更高（有台肩）、本段圆柱，否则报「第 N 段」
-    GEAR M5 Z10 H20   齿轮段（直齿）：d=m·z 导出、不给 S/E；H = 齿宽（省略 = 10m）
-                       ALPHA25 = 压力角 25°（省略 20°）；齿顶轮廓两端倒角 C=round(0.6m)
-                       常规不画齿根、剖视画齿根
-    SPLINE 6x23x26x6 L30   矩形花键段（GB/T 1144 规格代号）：大径线 + 小径细线
-                      （2细线层）+ 收尾弧 R=de/2（圆心 (L, ±(d/2+R))，末端 x=L+l，
-                      l=√(h(2R−h))，6×23×26×6 → l=9.6047）；段长 = L + l；
-                      不给 S/E；可 `de 71` 覆盖滚刀外径；不能与 CH/OV/RL/M/GEAR 同段
-                      （引入倒角由相邻段的 CH 表达）
-    KEY A 18      轴槽（GB/T 1095-2003 平键键槽，本期只做轴槽，不毂槽）——轴段类型，进段表 KEY 列：
-                  只能挂在光圆柱段上（与 GEAR/SPLINE/M/TL/RL/OV 互斥）
-                  键型（普通平键 A/B/C；导向平键 `导向A`/`导向B`——GUI 合并在一个下拉里）
-                  + 键长 L（所选键型；平键族标准系列，L<10b）+ 位置中置/端置（槽长自动折算）
-                  b×h 由本段直径 d 查 GB/T 1095 d 列自动定（h 跟 b 走）；t1 按 b 查 GB/T 1095 表
-                  显式覆盖写 b8h7：必须落在该轴径档的标准配对上，否则明确报错
-                  显示：中置恒显示 A；端置 B/C 显示 C（C 端弧由铣刀铣出）
-                  折算：中置 B +b / C +b/2；端置 B +b/2 / C 不折算；端置槽长再 +t1
-                  可选 双槽（DOUBLE 别名）：绕轴心 180° 对置，仅剖视图体现（常规侧视不变），
-                  可承受转矩约为单键联接的 1.5 倍；剖视剖面线上下两环各带一个缺口
-                  例：KEY A 18 ／ KEY C 14 @端 ／ KEY A 18 b8h7
-                  导向平键（GB/T 1097）用合并键型记号（推荐 `KEY 导向A 25`；旧 `KEY A 25 导向` 过时但可用）：
-                  只 A/B；L 取 1097 系列 25…450∩L<10b；槽长 = L（只有中置）；
-                  自动画 2 个固定螺钉螺纹孔 d0×L0、孔心距槽两端 L3；与双槽互斥；起键孔属 1096
-                  侧视图叠画键 + 剖视缺口含 sagitta 线；不生成尺寸标注
-    VIEW 常规|剖视   视图：常规（默认，只看外形）/ 剖视（轮廓 + ANSI31 剖面线）
-                     （双视图已于 2026-09-23 移除；旧 `VIEW 双` 明确报错）
-    REPORT          计算书：段末加 `REPORT`（大小写不敏感）—— 不插图，直接输出 Markdown
-                    计算书（段清单 + 总长/最大直径）；
-                    `REPORT=<路径>` / `REPORT-OUT=<路径>` 另写文件
-    at x,y rot 度   放置（不写 = 原点、不转）
-  例：OCSMSHAFT S30 E30 L45 CH2@L | S40 E40 L30 CH2@R OV3 | S50 E30 L20 | S30 E30 L15 CH2@R | S40 E40 L7 M1.5 | S36 E36 L5 | GEAR M3 Z20 VIEW 剖视 at 100,50 rot 30
-  JSON：{\"segments\":[{\"s\":30,\"e\":30,\"l\":45,\"ch\":[{\"c\":2,\"end\":\"L\"}]},{\"s\":30,\"e\":30,\"l\":20,\"thread\":1.5}],\"view\":\"section\",\"at\":[100,50],\"rot\":30}
-轮廓/端面/倒角/槽与边界竖线 → 1轮廓实线层，螺纹小径/螺尾 → 2细线层（OV 不画砂轮细线），轴线/分度线 → 3中心线层，剖视剖面线 → 5剖面线层。";
+/// 轴生成器用法（catalog 唯一来源）。
+pub fn usage() -> String {
+    crate::i18n::t("cmd.shaft.usage")
+}
 
 // ══════════════════════════════════════════════════════════════════════════
 // 数据模型
@@ -616,16 +572,15 @@ impl Keyway {
 /// 键宽 b：**按轴段直径 d 查 GB/T 1095 d 列**（主路径）；显式 b 必须等于该轴径档的标准 b。
 pub fn keyway_b(keyway: &Keyway, shaft_d: f64) -> Result<f64, String> {
     let std_b = crate::partgen_keys::key_1096_b_for_shaft(shaft_d).ok_or_else(|| {
-        format!(
-            "轴径 d={} 不在 GB/T 1095 的 d 选型表（6…500）里，无法按轴径确定键尺寸 b×h",
-            trim(shaft_d)
+        crate::i18n::t_fmt(
+            "cmd.shaft.err.gb1095_no_d",
+            &[("d", &trim(shaft_d))],
         )
     })?;
     let std_h = crate::partgen_keys::key_1096_h(keyway.kind.key_type(), std_b).ok_or_else(|| {
-        format!(
-            "轴径 d={} 按 GB/T 1095 应配 b={}，但超出平键族表范围（GB/T 1096 表 b=2…50）",
-            trim(shaft_d),
-            trim(std_b)
+        crate::i18n::t_fmt(
+            "cmd.shaft.err.gb1095_b_out",
+            &[("d", &trim(shaft_d)), ("b", &trim(std_b))],
         )
     })?;
     match keyway.b {
@@ -671,17 +626,29 @@ fn parse_keyway_gb1095() -> Result<Vec<KeywayRow>, String> {
     let mut lines = KEYWAY_GB1095_CSV
         .lines()
         .filter(|l| !l.trim().is_empty() && !l.starts_with('#'));
-    let header = lines.next().ok_or("keyway_gb1095.csv 缺表头")?;
+    let header = lines
+        .next()
+        .ok_or_else(|| crate::i18n::t("cmd.shaft.err.csv_header_missing"))?;
     if !header.starts_with("b,h,") {
-        return Err(format!("keyway_gb1095.csv 表头异常：{header}"));
+        return Err(crate::i18n::t_fmt(
+            "cmd.shaft.err.csv_header_bad",
+            &[("header", header)],
+        ));
     }
     for line in lines {
         let v: Vec<&str> = line.split(',').collect();
         let num = |i: usize, what: &str| -> Result<f64, String> {
             v.get(i)
-                .ok_or_else(|| format!("keyway_gb1095.csv 缺列 {what}"))?
+                .ok_or_else(|| {
+                    crate::i18n::t_fmt("cmd.shaft.err.csv_missing_col", &[("what", what)])
+                })?
                 .parse::<f64>()
-                .map_err(|e| format!("keyway_gb1095.csv 第 {i} 列 {what} 不是数字：{e}"))
+                .map_err(|e| {
+                    crate::i18n::t_fmt(
+                        "cmd.shaft.err.csv_col_num",
+                        &[("i", &i.to_string()), ("what", what), ("e", &e.to_string())],
+                    )
+                })
         };
         rows.push(KeywayRow {
             b: num(0, "b")?,
@@ -711,14 +678,12 @@ pub fn keyway_gb1095_rows() -> Result<Vec<KeywayRow>, String> {
 
 /// 按 b 查 GB/T 1095 表 1（b 必须是标准档）。
 fn keyway_row(b: f64) -> Result<KeywayRow, String> {
-    let rows = parse_keyway_gb1095().map_err(|e| format!("GB/T 1095 表：{e}"))?;
+    let rows = parse_keyway_gb1095()
+        .map_err(|e| crate::i18n::t_fmt("cmd.shaft.err.gb1095_table_prefix", &[("e", &e)]))?;
     rows.into_iter()
         .find(|row| (row.b - b).abs() < 1e-9)
         .ok_or_else(|| {
-            format!(
-                "GB/T 1095 表里没有 b={} 这一档（标准 b×h 档：2×2…100×50）",
-                trim(b)
-            )
+            crate::i18n::t_fmt("cmd.shaft.err.gb1095_no_b", &[("b", &trim(b))])
         })
 }
 
@@ -776,13 +741,11 @@ fn resolve_relief_dims(
                 params.insert(key, value);
             }
         }
-        detail::relief_dims(d, &params).map_err(|e| format!("{label}：{e}"))
+        detail::relief_dims(d, &params).map_err(|e| crate::i18n::t_fmt("cmd.shaft.err.prefix", &[("label", label), ("e", &e)]))
     } else if let (Some(g1), Some(g2), Some(dg), Some(r)) = (spec.g1, spec.g2, spec.dg, spec.r) {
-        detail::relief_dims_explicit(d, g1, g2, dg, r).map_err(|e| format!("{label}：{e}"))
+        detail::relief_dims_explicit(d, g1, g2, dg, r).map_err(|e| crate::i18n::t_fmt("cmd.shaft.err.prefix", &[("label", label), ("e", &e)]))
     } else {
-        Err(format!(
-            "{label}：RL 退刀槽缺参 —— 表 2 以螺距为键，请给 P（例 `RL@L P1.5`）或显式 g1/g2/dg/r（例 `RL@L g1 2.5 g2 4.5 dg 22.7 r 0.8`）"
-        ))
+        Err(crate::i18n::t_fmt("cmd.shaft.err.rl_missing_params", &[("label", label)]))
     }
 }
 
@@ -1058,10 +1021,22 @@ pub fn parse_program(text: &str) -> Result<Program, String> {
                 continue;
             }
             let label = if multi {
-                format!("第 {line_no} 行第 {} 段", chunk_idx + 1)
+                crate::i18n::t_fmt(
+                    "cmd.shaft.label.multi",
+                    &[
+                        ("line", &line_no.to_string()),
+                        ("chunk", &(chunk_idx + 1).to_string()),
+                    ],
+                )
             } else {
                 // 单段行也带上「第 N 段」，便于用户按段定位（与几何错误口径一致）。
-                format!("第 {line_no} 行（第 {} 段）", program.segments.len() + 1)
+                crate::i18n::t_fmt(
+                    "cmd.shaft.label.single",
+                    &[
+                        ("line", &line_no.to_string()),
+                        ("chunk", &(program.segments.len() + 1).to_string()),
+                    ],
+                )
             };
             // `VIEW 剖视` / `视图 剖视` 是整体视图开关：独立一行或段内关键字都认。
             let tokens: Vec<&str> = chunk.split_whitespace().collect();
@@ -1078,7 +1053,7 @@ pub fn parse_program(text: &str) -> Result<Program, String> {
         }
     }
     if program.segments.is_empty() {
-        return Err("没有解析到任何轴段（至少给一段 `S… L…`）".into());
+        return Err(crate::i18n::t("cmd.shaft.err.no_segments"));
     }
     program.view = view_seen.unwrap_or_default();
     Ok(program)
@@ -1100,7 +1075,7 @@ fn extract_view_directives<'a>(
         if upper == "VIEW" || token == "视图" {
             index += 1;
             name = Some(tokens.get(index).copied().ok_or_else(|| {
-                format!("{label}：关键字 VIEW 缺少视图名（常规/剖视）")
+                crate::i18n::t_fmt("cmd.shaft.err.view_missing", &[("label", label)])
             })?);
         } else if let Some(rest) = upper.strip_prefix("VIEW") {
             name = rest.strip_prefix(['=', ':']);
@@ -1108,13 +1083,16 @@ fn extract_view_directives<'a>(
             name = rest.strip_prefix(['=', ':']);
         }
         if let Some(name) = name {
-            let parsed = ShaftView::parse(name).map_err(|e| format!("{label}：{e}"))?;
+            let parsed = ShaftView::parse(name).map_err(|e| crate::i18n::t_fmt("cmd.shaft.err.prefix", &[("label", label), ("e", &e)]))?;
             match *view {
                 Some(prev) if prev != parsed => {
-                    return Err(format!(
-                        "{label}：视图 VIEW 重复且冲突（已给「{}」，又给「{}」）",
-                        prev.label(),
-                        parsed.label()
+                    return Err(crate::i18n::t_fmt(
+                        "cmd.shaft.err.view_conflict",
+                        &[
+                            ("label", label),
+                            ("prev", prev.label()),
+                            ("now", parsed.label()),
+                        ],
                     ));
                 }
                 _ => *view = Some(parsed),
@@ -1128,26 +1106,30 @@ fn extract_view_directives<'a>(
 }
 
 fn unknown_keyword(token: &str, label: &str) -> String {
-    format!(
-        "{label}：不识别的关键字「{token}」（本期支持 S/E/L/CH/OV/M/TL/RO/SD/RL/GEAR/SPLINE/KEY/VIEW；齿形段子关键字 M/Z/H/BETA/ALPHA/EX/IN/X/DA/DF（SPLINE + 齿形关键字 = 渐开线花键）；RL 的尺寸参数 P/g1/g2/dg/r 跟在 RL 后面；轴槽子关键字 = 键型 A/B/C + 键尺寸 b…/h…（可连写 `b8h7`）+ 键长（裸数字或 KL…）+ @中/@端（可选 t1）+ 导向（GB/T 1097，可选 `双槽`））"
-    )
+    crate::i18n::t_fmt("cmd.shaft.err.unknown_keyword", &[("label", label), ("token", token)])
 }
 
 /// 齿形段大径/小径合法性（DSL 解析与 JSON 反序列化共用）：正数且 `DA > DF`。
 fn validate_tooth_radii(gear: &Gear, label: &str) -> Result<(), String> {
     let (ra, rf) = (gear.major_radius(), gear.minor_radius());
     if !(ra.is_finite() && ra > 0.0 && rf.is_finite() && rf > 0.0) {
-        return Err(format!(
-            "{label}：齿形段的大径 DA={}、小径 DF={} 必须是正数",
-            trim(ra * 2.0),
-            trim(rf * 2.0)
+        return Err(crate::i18n::t_fmt(
+            "cmd.shaft.err.tooth_radii_pos",
+            &[
+                ("label", label),
+                ("da", &trim(ra * 2.0)),
+                ("df", &trim(rf * 2.0)),
+            ],
         ));
     }
     if ra <= rf + 1e-9 {
-        return Err(format!(
-            "{label}：齿形段的大径 DA={} 必须大于小径 DF={}（外齿：DA=齿顶圆；内齿：DA=外侧齿根）",
-            trim(ra * 2.0),
-            trim(rf * 2.0)
+        return Err(crate::i18n::t_fmt(
+            "cmd.shaft.err.tooth_radii_order",
+            &[
+                ("label", label),
+                ("da", &trim(ra * 2.0)),
+                ("df", &trim(rf * 2.0)),
+            ],
         ));
     }
     Ok(())
@@ -1199,10 +1181,10 @@ fn parse_end_token(end: Option<&str>, label: &str, what: &str) -> Result<End, St
     match end {
         None => Ok(End::R),
         Some(text) if text.is_empty() => {
-            Err(format!("{label}：关键字 {what} 的端别缺省（@ 后要 L 或 R）"))
+            Err(crate::i18n::t_fmt("cmd.shaft.err.end_missing", &[("label", label), ("what", what)]))
         }
         Some(text) => parse_end(text)
-            .map_err(|bad| format!("{label}：端别「{bad}」非法（只能用 L 或 R）")),
+            .map_err(|bad| crate::i18n::t_fmt("cmd.shaft.err.end_bad", &[("label", label), ("bad", &bad)])),
     }
 }
 
@@ -1211,13 +1193,13 @@ fn parse_number(value: &str, label: &str, what: &str) -> Result<f64, String> {
         .parse::<f64>()
         .ok()
         .filter(|v| v.is_finite())
-        .ok_or_else(|| format!("{label}：关键字 {what} 的值「{value}」不是数字"))
+        .ok_or_else(|| crate::i18n::t_fmt("cmd.shaft.err.key_value_not_num", &[("label", label), ("what", what), ("value", value)]))
 }
 
 fn parse_diameter(token: &str, rest: &str, what: &str, label: &str) -> Result<f64, String> {
     let rest = rest.strip_prefix(['=', ':']).unwrap_or(rest);
     if rest.is_empty() {
-        return Err(format!("{label}：关键字 {what} 缺少数值"));
+        return Err(crate::i18n::t_fmt("cmd.shaft.err.key_no_value", &[("label", label), ("what", what)]));
     }
     if !starts_number(rest) {
         return Err(unknown_keyword(token, label));
@@ -1228,9 +1210,7 @@ fn parse_diameter(token: &str, rest: &str, what: &str, label: &str) -> Result<f6
 fn parse_ch(token: &str, rest: &str, label: &str) -> Result<Chamfer, String> {
     let rest = rest.strip_prefix(['=', ':']).unwrap_or(rest);
     if rest.is_empty() {
-        return Err(format!(
-            "{label}：关键字 CH 缺少数值（写法 CH2 / CH2@L / CH2@R）"
-        ));
+        return Err(crate::i18n::t_fmt("cmd.shaft.err.ch_no_value", &[("label", label)]));
     }
     if !starts_number(rest) {
         return Err(unknown_keyword(token, label));
@@ -1238,9 +1218,9 @@ fn parse_ch(token: &str, rest: &str, label: &str) -> Result<Chamfer, String> {
     let (value, end) = split_end(rest);
     let c = parse_number(value, label, "CH")?;
     if c <= 0.0 {
-        return Err(format!(
-            "{label}：关键字 CH 的 C={} 非法（必须 > 0）",
-            trim(c)
+        return Err(crate::i18n::t_fmt(
+            "cmd.shaft.err.ch_positive",
+            &[("label", label), ("c", &trim(c))],
         ));
     }
     Ok(Chamfer {
@@ -1262,11 +1242,11 @@ fn parse_ov(token: &str, rest: &str, label: &str) -> Result<Overtravel, String> 
             .parse::<f64>()
             .ok()
             .filter(|v| v.is_finite())
-            .ok_or_else(|| format!("{label}：关键字 OV 的值「{value}」不是数字"))?;
+            .ok_or_else(|| crate::i18n::t_fmt("cmd.shaft.err.ov_not_num", &[("label", label), ("value", value)]))?;
         if b1 <= 0.0 {
-            return Err(format!(
-                "{label}：关键字 OV 的 b1={} 非法（必须 > 0）",
-                trim(b1)
+            return Err(crate::i18n::t_fmt(
+                "cmd.shaft.err.ov_positive",
+                &[("label", label), ("b1", &trim(b1))],
             ));
         }
         Some(b1)
@@ -1279,9 +1259,7 @@ fn parse_ov(token: &str, rest: &str, label: &str) -> Result<Overtravel, String> 
 
 /// `ES` 旧关键字已取消：退刀槽用段级 `RL`（或一小段小直径轴段）表示，报错并给写法示例。
 fn es_cancelled(label: &str) -> String {
-    format!(
-        "{label}：`ES` 已取消 —— 退刀槽请用段级 `RL`（例 `S25 E25 L32 RL@L P1.5`）或一小段小直径轴段表示，例如 `S24 E24 L5`"
-    )
+    crate::i18n::t_fmt("cmd.shaft.err.es_cancelled", &[("label", label)])
 }
 
 /// `M` / `M1.5`：不写值 = 简化画法；写值 = 螺距 P（> 0）。
@@ -1292,10 +1270,10 @@ fn parse_thread(rest: &str, label: &str) -> Result<Thread, String> {
     }
     let pitch = parse_number(rest, label, "M")?;
     if pitch <= 0.0 {
-        return Err(format!(
-            "{label}：关键字 M 的螺距 P={} 非法（必须 > 0；不写值 = 小径 0.85d 简化画法）",
-            trim(pitch)
-        ));
+        return Err(crate::i18n::t_fmt(
+                "cmd.shaft.err.m_pitch",
+                &[("label", label), ("pitch", &trim(pitch))],
+            ));
     }
     Ok(Thread {
         pitch: Some(pitch),
@@ -1309,9 +1287,10 @@ fn parse_runout_grade(text: &str, label: &str) -> Result<RunoutGrade, String> {
     match value {
         "" | "一般" | "normal" | "普通" => Ok(RunoutGrade::Normal),
         "短" | "short" => Ok(RunoutGrade::Short),
-        other => Err(format!(
-            "{label}：收尾档位 RO「{other}」非法（GB/T 3 表 1 只有 一般 / 短，没有 长）"
-        )),
+        other => Err(crate::i18n::t_fmt(
+                "cmd.shaft.err.ro_invalid_t3",
+                &[("label", label), ("other", other)],
+            )),
     }
 }
 
@@ -1322,9 +1301,10 @@ fn parse_shoulder_grade(text: &str, label: &str) -> Result<ShoulderGrade, String
         "" | "一般" | "normal" | "普通" => Ok(ShoulderGrade::Normal),
         "长" | "long" => Ok(ShoulderGrade::Long),
         "短" | "short" => Ok(ShoulderGrade::Short),
-        other => Err(format!(
-            "{label}：肩距档位 SD「{other}」非法（GB/T 3 表 1 只有 一般 / 长 / 短）"
-        )),
+        other => Err(crate::i18n::t_fmt(
+                "cmd.shaft.err.sd_invalid_t3",
+                &[("label", label), ("other", other)],
+            )),
     }
 }
 
@@ -1345,17 +1325,17 @@ fn grade_tail_ok(rest: &str) -> bool {
 fn parse_thread_length(rest: &str, token: &str, label: &str) -> Result<f64, String> {
     let rest = rest.strip_prefix(['=', ':']).unwrap_or(rest);
     if rest.is_empty() {
-        return Err(format!("{label}：关键字 TL 缺少数值（写法 TL20）"));
+        return Err(crate::i18n::t_fmt("cmd.shaft.err.tl_no_value", &[("label", label)]));
     }
     if !starts_number(rest) {
         return Err(unknown_keyword(token, label));
     }
     let value = parse_number(rest, label, "TL")?;
     if value <= 0.0 {
-        return Err(format!(
-            "{label}：完整螺纹长度 TL={} 非法（必须 > 0；不给 TL = 整段全螺纹）",
-            trim(value)
-        ));
+        return Err(crate::i18n::t_fmt(
+                "cmd.shaft.err.tl_positive",
+                &[("label", label), ("value", &trim(value))],
+            ));
     }
     Ok(value)
 }
@@ -1407,7 +1387,7 @@ fn set_relief_param(
         _ => unreachable!("relief_param_key 只返回 p/g1/g2/dg/r"),
     };
     if slot.is_some() {
-        return Err(format!("{label}：RL 参数 {key} 重复"));
+        return Err(crate::i18n::t_fmt("cmd.shaft.err.rl_param_dup", &[("label", label), ("key", key)]));
     }
     *slot = Some(value);
     Ok(())
@@ -1560,70 +1540,70 @@ fn assemble_keyway(
         return Ok(None);
     }
     let kind = key_kind.ok_or_else(|| {
-        format!("{label}：KEY 缺少键型（A/B/C；例 `KEY A 18`）")
+        crate::i18n::t_fmt("cmd.shaft.err.key_no_type", &[("label", label)])
     })?;
     // b 给了就必须在平键族表里；h 给了一般要求与 b 配对。
     // B/C 型键长会自动按圆弧端折算成显示/开槽长度（见 `Keyway::effective_len`）；
     // 导向（GB/T 1097）只有 A/B，且 b 必须在 1097 表里。
     if key_guided && kind == KeyKind::C {
-        return Err(format!(
-            "{label}：导向平键（GB/T 1097）只有 A/B 型，没有 C 型（用户 2026-09-25 更正）"
-        ));
+        return Err(crate::i18n::t_fmt("cmd.shaft.err.key_1097_no_c", &[("label", label)]));
     }
     // 位置/可用选项由键型样式表驱动（导向平键只有中置：用户 2026-09-25 裁定；
     // 加新键型只改 `partgen_keys::KEY_STYLES` 一行）。
     let place = key_place.unwrap_or(KeywayPlace::Mid);
     let spec = key_style_for(kind, key_guided).expect("内建样式覆盖 A/B/C ×(普通/导向)");
     if !spec.places.contains(&place.code()) {
-        return Err(format!(
-            "{label}：{}只有{}（{}）",
-            spec.label,
-            key_places_cn(spec.places),
-            spec.place_hint
-        ));
+        return Err(crate::i18n::t_fmt(
+                "cmd.shaft.err.key_no_place",
+                &[
+                    ("label", label),
+                    ("kind", spec.label),
+                    ("places", &key_places_cn(spec.places)),
+                    ("tag", spec.place_hint),
+                ],
+            ));
     }
     if key_double && !spec.allow_double {
-        return Err(format!(
-            "{label}：{}不支持双槽（固定键只有一个槽）",
-            spec.label
-        ));
+        return Err(crate::i18n::t_fmt(
+                "cmd.shaft.err.key_no_double",
+                &[("label", label), ("kind", spec.label)],
+            ));
     }
     if let Some(b) = key_b {
         let std_h = if key_guided {
             crate::partgen_keys::key_1097_row(kind.key_type(), b)
                 .map(|r| r.h)
                 .ok_or_else(|| {
-                    format!(
-                        "{label}：GB/T 1097 导向平键表里没有 b={}（b=8…45，14 档）",
-                        trim(b)
-                    )
+                    crate::i18n::t_fmt(
+                            "cmd.shaft.err.key_1097_b",
+                            &[("label", label), ("b", &trim(b))],
+                        )
                 })?
         } else {
             crate::partgen_keys::key_1096_h(kind.key_type(), b).ok_or_else(|| {
-                format!(
-                    "{label}：{} 的平键族表里没有 b={}（GB/T 1096 表 b=2…50）",
-                    kind.cn(),
-                    trim(b)
-                )
+                crate::i18n::t_fmt(
+                        "cmd.shaft.err.key_1096_b",
+                        &[("label", label), ("kind", kind.cn()), ("b", &trim(b))],
+                    )
             })?
         };
         if let Some(h) = key_h {
             if (h - std_h).abs() > 1e-9 {
-                return Err(format!(
-                    "{label}：键尺寸 b{}×h{} 不是标准配对（{} 的 b={} 应配 h={}）；h 跟 b 走，不能自由组合",
-                    trim(b),
-                    trim(h),
-                    kind.cn(),
-                    trim(b),
-                    trim(std_h)
-                ));
+                return Err(crate::i18n::t_fmt(
+                        "cmd.shaft.err.key_bh_pair",
+                        &[
+                            ("label", label),
+                            ("b", &trim(b)),
+                            ("h", &trim(h)),
+                            ("kind", kind.cn()),
+                            ("std_h", &trim(std_h)),
+                        ],
+                    ));
             }
         }
     }
     let l = key_len.ok_or_else(|| {
-        format!(
-            "{label}：KEY 缺少键长（写法：裸数字 `18` 或 `KL18`；`L…` 是段长）"
-        )
+        crate::i18n::t_fmt("cmd.shaft.err.key_no_len", &[("label", label)])
     })?;
     Ok(Some(Keyway {
         kind,
@@ -1700,13 +1680,13 @@ fn parse_segment(chunk: &str, label: &str, program: &mut Program) -> Result<Segm
                 && tokens.get(index + 1).copied().map(tooth_keyword_token).unwrap_or(false);
             if involute_form {
                 if gear_on {
-                    return Err(format!("{label}：关键字 GEAR/SPLINE 重复"));
+                    return Err(crate::i18n::t_fmt("cmd.shaft.err.key_dup", &[("label", label), ("what", "GEAR/SPLINE")]));
                 }
                 gear_on = true;
                 gear_involute = true;
             } else {
                 if spline_on {
-                    return Err(format!("{label}：关键字 SPLINE 重复"));
+                    return Err(crate::i18n::t_fmt("cmd.shaft.err.key_dup", &[("label", label), ("what", "SPLINE")]));
                 }
                 spline_on = true;
                 let rest = &token["SPLINE".len()..];
@@ -1714,7 +1694,7 @@ fn parse_segment(chunk: &str, label: &str, program: &mut Program) -> Result<Segm
                 if rest.is_empty() {
                     index += 1;
                     let spec = tokens.get(index).ok_or_else(|| {
-                        format!("{label}：关键字 SPLINE 缺少规格代号（写法 SPLINE 6x23x26x6 L30）")
+                        crate::i18n::t_fmt("cmd.shaft.err.spline_no_spec", &[("label", label)])
                     })?;
                     spline_spec = Some((*spec).to_string());
                 } else {
@@ -1726,7 +1706,7 @@ fn parse_segment(chunk: &str, label: &str, program: &mut Program) -> Result<Segm
                 return Err(unknown_keyword(token, label));
             }
             if spline_de.is_some() {
-                return Err(format!("{label}：花键的 de 覆盖重复"));
+                return Err(crate::i18n::t_fmt("cmd.shaft.err.spline_de_dup", &[("label", label)]));
             }
             let rest = &token[2..];
             let rest = rest.strip_prefix(['=', ':']).unwrap_or(rest);
@@ -1734,7 +1714,12 @@ fn parse_segment(chunk: &str, label: &str, program: &mut Program) -> Result<Segm
                 index += 1;
                 tokens
                     .get(index)
-                    .ok_or_else(|| format!("{label}：关键字 de 缺少数值"))?
+                    .ok_or_else(|| {
+                        crate::i18n::t_fmt(
+                            "cmd.shaft.err.key_no_value",
+                            &[("label", label), ("what", "de")],
+                        )
+                    })?
             } else {
                 rest
             };
@@ -1742,7 +1727,7 @@ fn parse_segment(chunk: &str, label: &str, program: &mut Program) -> Result<Segm
             spline_de = Some(value);
         } else if upper == "KEY" {
             if key_on {
-                return Err(format!("{label}：关键字 KEY 重复"));
+                return Err(crate::i18n::t_fmt("cmd.shaft.err.key_dup", &[("label", label), ("what", "KEY")]));
             }
             key_on = true;
         } else if key_on && key_param_key(token).is_some() {
@@ -1760,24 +1745,25 @@ fn parse_segment(chunk: &str, label: &str, program: &mut Program) -> Result<Segm
                 KeyParam::LegacyLc => "LC",
             };
             if matches!(param, KeyParam::LegacyLa | KeyParam::LegacyLc) {
-                return Err(format!(
-                    "{label}：KEY 的 LA/LC 是旧「槽长」写法（已改口径，不静默兼容）——\
-                     现在按 键型 + 键长 L + 位置：中置 `KEY A 18`；端置 `KEY C 14 @端`\
-                     （端置槽长 = 键长 + t1，即模板 LC 口径）"
-                ));
+                return Err(crate::i18n::t_fmt("cmd.shaft.err.key_la_lc", &[("label", label)]));
             }
             let value_text = if attached.is_empty() {
                 index += 1;
                 tokens
                     .get(index)
-                    .ok_or_else(|| format!("{label}：KEY 参数 {name} 缺少数值"))?
+                    .ok_or_else(|| {
+                        crate::i18n::t_fmt(
+                            "cmd.shaft.err.key_param_no_value",
+                            &[("label", label), ("name", name)],
+                        )
+                    })?
             } else {
                 attached.strip_prefix(['=', ':']).unwrap_or(attached)
             };
             match param {
                 KeyParam::Double => {
                     if key_double {
-                        return Err(format!("{label}：KEY 参数 双槽 重复"));
+                        return Err(crate::i18n::t_fmt("cmd.shaft.err.key_param_dup", &[("label", label), ("what", "双槽")]));
                     }
                     key_double = true;
                 }
@@ -1786,13 +1772,16 @@ fn parse_segment(chunk: &str, label: &str, program: &mut Program) -> Result<Segm
                 }
                 KeyParam::Place => {
                     let value = parse_keyway_place(value_text)
-                        .map_err(|e| format!("{label}：{e}"))?;
+                        .map_err(|e| crate::i18n::t_fmt("cmd.shaft.err.prefix", &[("label", label), ("e", &e)]))?;
                     match key_place {
                         Some(prev) if prev != value => {
-                            return Err(format!(
-                                "{label}：KEY 位置重复且冲突（已给「{}」，又给「{}」）",
-                                prev.cn(),
-                                value.cn()
+                            return Err(crate::i18n::t_fmt(
+                                "cmd.shaft.err.key_place_conflict",
+                                &[
+                                    ("label", label),
+                                    ("prev", prev.cn()),
+                                    ("now", value.cn()),
+                                ],
                             ))
                         }
                         _ => key_place = Some(value),
@@ -1800,13 +1789,16 @@ fn parse_segment(chunk: &str, label: &str, program: &mut Program) -> Result<Segm
                 }
                 KeyParam::Kind => {
                     let value = KeyKind::parse(value_text)
-                        .map_err(|e| format!("{label}：{e}"))?;
+                        .map_err(|e| crate::i18n::t_fmt("cmd.shaft.err.prefix", &[("label", label), ("e", &e)]))?;
                     match key_kind {
                         Some(prev) if prev != value => {
-                            return Err(format!(
-                                "{label}：KEY 键型重复且冲突（已给「{}」，又给「{}」）",
-                                prev.cn(),
-                                value.cn()
+                            return Err(crate::i18n::t_fmt(
+                                "cmd.shaft.err.key_type_conflict",
+                                &[
+                                    ("label", label),
+                                    ("prev", prev.cn()),
+                                    ("now", value.cn()),
+                                ],
                             ))
                         }
                         _ => key_kind = Some(value),
@@ -1816,30 +1808,40 @@ fn parse_segment(chunk: &str, label: &str, program: &mut Program) -> Result<Segm
                     // 合并键型（`导向A`）= 旧 (键型, `导向` 开关) 的等价写法；两者须一致。
                     let spec = crate::partgen_keys::key_style_by_token(value_text)
                         .ok_or_else(|| {
-                            format!(
-                                "{label}：KEY 键型「{value_text}」非法（可选：{}）",
-                                crate::partgen_keys::KEY_STYLES
-                                    .iter()
-                                    .map(|s| s.label)
-                                    .collect::<Vec<_>>()
-                                    .join(" / ")
+                            crate::i18n::t_fmt(
+                                "cmd.shaft.err.key_type_invalid",
+                                &[
+                                    ("label", label),
+                                    ("value", value_text),
+                                    (
+                                        "options",
+                                        &crate::partgen_keys::KEY_STYLES
+                                            .iter()
+                                            .map(|s| s.label)
+                                            .collect::<Vec<_>>()
+                                            .join(" / "),
+                                    ),
+                                ],
                             )
                         })?;
                     let value = KeyKind::from_key_type(spec.key_type);
                     match key_kind {
                         Some(prev) if prev != value => {
-                            return Err(format!(
-                                "{label}：KEY 键型重复且冲突（已给「{}」，又给「{}」）",
-                                prev.cn(),
-                                spec.label
+                            return Err(crate::i18n::t_fmt(
+                                "cmd.shaft.err.key_type_conflict",
+                                &[
+                                    ("label", label),
+                                    ("prev", prev.cn()),
+                                    ("now", spec.label),
+                                ],
                             ))
                         }
                         _ => key_kind = Some(value),
                     }
                     if key_guided && !spec.guided {
-                        return Err(format!(
-                            "{label}：键型「{}」与「导向」冲突（该键型不是导向平键）",
-                            spec.label
+                        return Err(crate::i18n::t_fmt(
+                            "cmd.shaft.err.key_guide_conflict",
+                            &[("label", label), ("kind", spec.label)],
                         ));
                     }
                     if spec.guided {
@@ -1856,13 +1858,20 @@ fn parse_segment(chunk: &str, label: &str, program: &mut Program) -> Result<Segm
                             ] {
                                 let value = parse_number(text, label, what)?;
                                 if !value.is_finite() || value <= 0.0 {
-                                    return Err(format!(
-                                        "{label}：KEY 参数 {what}={} 必须 > 0",
-                                        trim(value)
+                                    return Err(crate::i18n::t_fmt(
+                                        "cmd.shaft.err.key_param_positive",
+                                        &[
+                                            ("label", label),
+                                            ("what", what),
+                                            ("value", &trim(value)),
+                                        ],
                                     ));
                                 }
                                 if slot.is_some() {
-                                    return Err(format!("{label}：KEY 参数 {what} 重复"));
+                                    return Err(crate::i18n::t_fmt(
+                                        "cmd.shaft.err.key_param_dup",
+                                        &[("label", label), ("what", what)],
+                                    ));
                                 }
                                 *slot = Some(value);
                             }
@@ -1872,7 +1881,14 @@ fn parse_segment(chunk: &str, label: &str, program: &mut Program) -> Result<Segm
                     }
                     let value = parse_number(value_text, label, name)?;
                     if !value.is_finite() || value <= 0.0 {
-                        return Err(format!("{label}：KEY 参数 {name}={} 必须 > 0", trim(value)));
+                        return Err(crate::i18n::t_fmt(
+                            "cmd.shaft.err.key_param_positive",
+                            &[
+                                ("label", label),
+                                ("what", name),
+                                ("value", &trim(value)),
+                            ],
+                        ));
                     }
                     let slot = match param {
                         KeyParam::Len => &mut key_len,
@@ -1882,7 +1898,10 @@ fn parse_segment(chunk: &str, label: &str, program: &mut Program) -> Result<Segm
                         _ => unreachable!(),
                     };
                     if slot.is_some() {
-                        return Err(format!("{label}：KEY 参数 {name} 重复"));
+                        return Err(crate::i18n::t_fmt(
+                            "cmd.shaft.err.key_param_dup",
+                            &[("label", label), ("what", name)],
+                        ));
                     }
                     *slot = Some(value);
                 }
@@ -1890,19 +1909,37 @@ fn parse_segment(chunk: &str, label: &str, program: &mut Program) -> Result<Segm
         } else if upper.starts_with("CH") {
             let item = parse_ch(token, &token[2..], label)?;
             if ch.iter().any(|x| x.end == item.end) {
-                return Err(format!(
-                    "{label}：关键字 CH 在{}端重复",
-                    end_cn(item.end)
-                ));
+                return Err(crate::i18n::t_fmt(
+                        "cmd.shaft.err.ch_dup_end",
+                        &[
+                            ("label", label),
+                            (
+                                "end",
+                                &crate::i18n::t(match item.end {
+                                    End::L => "cmd.shaft.end.l",
+                                    End::R => "cmd.shaft.end.r",
+                                }),
+                            ),
+                        ],
+                    ));
             }
             ch.push(item);
         } else if upper.starts_with("OV") {
             let item = parse_ov(token, &token[2..], label)?;
             if ov.iter().any(|x| x.end == item.end) {
-                return Err(format!(
-                    "{label}：关键字 OV 在{}端重复",
-                    end_cn(item.end)
-                ));
+                return Err(crate::i18n::t_fmt(
+                        "cmd.shaft.err.ov_dup_end",
+                        &[
+                            ("label", label),
+                            (
+                                "end",
+                                &crate::i18n::t(match item.end {
+                                    End::L => "cmd.shaft.end.l",
+                                    End::R => "cmd.shaft.end.r",
+                                }),
+                            ),
+                        ],
+                    ));
             }
             ov.push(item);
         } else if upper.starts_with("ES") {
@@ -1911,31 +1948,33 @@ fn parse_segment(chunk: &str, label: &str, program: &mut Program) -> Result<Segm
         } else if upper.starts_with("TL") {
             let item = parse_thread_length(&token[2..], token, label)?;
             if tl.is_some() {
-                return Err(format!("{label}：关键字 TL 重复"));
+                return Err(crate::i18n::t_fmt("cmd.shaft.err.key_dup", &[("label", label), ("what", "TL")]));
             }
             tl = Some(item);
         } else if upper.starts_with("RO") && grade_tail_ok(&token[2..]) {
             if ro.is_some() {
-                return Err(format!("{label}：关键字 RO 重复"));
+                return Err(crate::i18n::t_fmt("cmd.shaft.err.key_dup", &[("label", label), ("what", "RO")]));
             }
             let rest = &token[2..];
             let rest = rest.strip_prefix(['=', ':']).unwrap_or(rest);
             if starts_number(rest) {
-                return Err(format!(
-                    "{label}：收尾档位 RO「{rest}」非法（只有 一般 / 短）"
-                ));
+                return Err(crate::i18n::t_fmt(
+                        "cmd.shaft.err.ro_invalid",
+                        &[("label", label), ("rest", rest)],
+                    ));
             }
             ro = Some(parse_runout_grade(rest, label)?);
         } else if upper.starts_with("SD") && grade_tail_ok(&token[2..]) {
             if sd.is_some() {
-                return Err(format!("{label}：关键字 SD 重复"));
+                return Err(crate::i18n::t_fmt("cmd.shaft.err.key_dup", &[("label", label), ("what", "SD")]));
             }
             let rest = &token[2..];
             let rest = rest.strip_prefix(['=', ':']).unwrap_or(rest);
             if starts_number(rest) {
-                return Err(format!(
-                    "{label}：肩距档位 SD「{rest}」非法（只有 一般 / 长 / 短）"
-                ));
+                return Err(crate::i18n::t_fmt(
+                        "cmd.shaft.err.sd_invalid",
+                        &[("label", label), ("rest", rest)],
+                    ));
             }
             sd = Some(parse_shoulder_grade(rest, label)?);
         } else if upper == "RL"
@@ -1946,16 +1985,23 @@ fn parse_segment(chunk: &str, label: &str, program: &mut Program) -> Result<Segm
             let rest = &token[2..];
             let (value, end) = split_end(rest);
             if !value.is_empty() {
-                return Err(format!(
-                    "{label}：关键字 RL 不带值（写法 RL / RL@L / RL@R；尺寸参数跟在 RL 后面，如 `RL@L P1.5`）"
-                ));
+                return Err(crate::i18n::t_fmt("cmd.shaft.err.rl_no_value", &[("label", label)]));
             }
             let end = parse_end_token(end, label, "RL")?;
             if relief_specs.iter().any(|r| r.end == end) {
-                return Err(format!(
-                    "{label}：关键字 RL 重复（在{}端）",
-                    end_cn(end)
-                ));
+                return Err(crate::i18n::t_fmt(
+                        "cmd.shaft.err.rl_dup_end",
+                        &[
+                            ("label", label),
+                            (
+                                "end",
+                                &crate::i18n::t(match end {
+                                    End::L => "cmd.shaft.end.l",
+                                    End::R => "cmd.shaft.end.r",
+                                }),
+                            ),
+                        ],
+                    ));
             }
             relief_specs.push(Relief {
                 end,
@@ -1969,9 +2015,10 @@ fn parse_segment(chunk: &str, label: &str, program: &mut Program) -> Result<Segm
         } else if let Some((key, attached)) = relief_param_key(token) {
             // `P1.5` / `g1=2.5` / `g1 2.5`：一律绑定到最近一个 RL。
             let spec_index = pending_relief.ok_or_else(|| {
-                format!(
-                    "{label}：参数 {key} 要跟在 RL 后面（例 `RL@L P1.5` / `RL@L g1 2.5 …`）"
-                )
+                crate::i18n::t_fmt(
+                        "cmd.shaft.err.rl_param_order",
+                        &[("label", label), ("key", key)],
+                    )
             })?;
             let value_text = match attached {
                 Some(rest) => rest,
@@ -1979,20 +2026,25 @@ fn parse_segment(chunk: &str, label: &str, program: &mut Program) -> Result<Segm
                     index += 1;
                     tokens
                         .get(index)
-                        .ok_or_else(|| format!("{label}：RL 参数 {key} 缺少数值"))?
+                        .ok_or_else(|| {
+                        crate::i18n::t_fmt(
+                            "cmd.shaft.err.rl_param_no_value",
+                            &[("label", label), ("key", key)],
+                        )
+                    })?
                 }
             };
             let value = parse_number(value_text, label, key)?;
             if value <= 0.0 {
-                return Err(format!(
-                    "{label}：RL 参数 {key}={} 非法（必须 > 0）",
-                    trim(value)
-                ));
+                return Err(crate::i18n::t_fmt(
+                        "cmd.shaft.err.rl_param_positive",
+                        &[("label", label), ("key", key), ("value", &trim(value))],
+                    ));
             }
             set_relief_param(&mut relief_specs[spec_index], key, value, label)?;
         } else if upper == "GEAR" {
             if gear_on {
-                return Err(format!("{label}：关键字 GEAR 重复"));
+                return Err(crate::i18n::t_fmt("cmd.shaft.err.key_dup", &[("label", label), ("what", "GEAR")]));
             }
             gear_on = true;
         } else if upper.starts_with("GEAR") {
@@ -2007,7 +2059,7 @@ fn parse_segment(chunk: &str, label: &str, program: &mut Program) -> Result<Segm
                 return Err(unknown_keyword(token, label));
             }
             if gear_da.is_some() {
-                return Err(format!("{label}：关键字 DA 重复"));
+                return Err(crate::i18n::t_fmt("cmd.shaft.err.key_dup", &[("label", label), ("what", "DA")]));
             }
             gear_da = Some(parse_gear_number(token, 2, "DA", label)?);
         } else if upper.starts_with("DF") {
@@ -2015,7 +2067,7 @@ fn parse_segment(chunk: &str, label: &str, program: &mut Program) -> Result<Segm
                 return Err(unknown_keyword(token, label));
             }
             if gear_df.is_some() {
-                return Err(format!("{label}：关键字 DF 重复"));
+                return Err(crate::i18n::t_fmt("cmd.shaft.err.key_dup", &[("label", label), ("what", "DF")]));
             }
             gear_df = Some(parse_gear_number(token, 2, "DF", label)?);
         } else if upper.starts_with('X') {
@@ -2023,52 +2075,56 @@ fn parse_segment(chunk: &str, label: &str, program: &mut Program) -> Result<Segm
                 return Err(unknown_keyword(token, label));
             }
             if gear_x.is_some() {
-                return Err(format!("{label}：关键字 X 重复"));
+                return Err(crate::i18n::t_fmt("cmd.shaft.err.key_dup", &[("label", label), ("what", "X")]));
             }
             gear_x = Some(parse_gear_number(token, 1, "X", label)?);
         } else if upper.starts_with('M') {
             if has_gear {
                 let value = parse_gear_number(token, 1, "M", label)?;
                 if gear_m.is_some() {
-                    return Err(format!(
-                        "{label}：关键字 M 重复（GEAR 段里的 M 是模数；螺纹 M 不能与 GEAR 同段）"
-                    ));
+                    return Err(crate::i18n::t_fmt(
+                            "cmd.shaft.err.m_gear_dup",
+                            &[("label", label)],
+                        ));
                 }
                 gear_m = Some(value);
             } else {
                 if thread.is_some() {
-                    return Err(format!("{label}：关键字 M 重复"));
+                    return Err(crate::i18n::t_fmt("cmd.shaft.err.key_dup", &[("label", label), ("what", "M")]));
                 }
                 thread = Some(parse_thread(&token[1..], label)?);
             }
         } else if upper.starts_with('Z') {
             let rest = parse_gear_value(token, 1, "Z", label)?;
             let value: u32 = rest.parse().map_err(|_| {
-                format!("{label}：关键字 Z 的值「{rest}」不是正整数（齿数 z 必须是整数）")
+                crate::i18n::t_fmt(
+                "cmd.shaft.err.z_not_int",
+                &[("label", label), ("rest", rest)],
+            )
             })?;
             if gear_z.is_some() {
-                return Err(format!("{label}：关键字 Z 重复"));
+                return Err(crate::i18n::t_fmt("cmd.shaft.err.key_dup", &[("label", label), ("what", "Z")]));
             }
             gear_z = Some(value);
             remember_loose_gear_token(&mut loose_gear_token, token);
         } else if upper.starts_with('H') {
             let value = parse_gear_number(token, 1, "H", label)?;
             if gear_h.is_some() {
-                return Err(format!("{label}：关键字 H 重复"));
+                return Err(crate::i18n::t_fmt("cmd.shaft.err.key_dup", &[("label", label), ("what", "H")]));
             }
             gear_h = Some(value);
             remember_loose_gear_token(&mut loose_gear_token, token);
         } else if upper.starts_with("BETA") {
             let value = parse_gear_number(token, 4, "BETA", label)?;
             if gear_beta.is_some() {
-                return Err(format!("{label}：关键字 BETA 重复"));
+                return Err(crate::i18n::t_fmt("cmd.shaft.err.key_dup", &[("label", label), ("what", "BETA")]));
             }
             gear_beta = Some(value);
             remember_loose_gear_token(&mut loose_gear_token, token);
         } else if upper.starts_with("ALPHA") {
             let value = parse_gear_number(token, 5, "ALPHA", label)?;
             if gear_alpha.is_some() {
-                return Err(format!("{label}：关键字 ALPHA 重复"));
+                return Err(crate::i18n::t_fmt("cmd.shaft.err.key_dup", &[("label", label), ("what", "ALPHA")]));
             }
             gear_alpha = Some(value);
             remember_loose_gear_token(&mut loose_gear_token, token);
@@ -2077,7 +2133,7 @@ fn parse_segment(chunk: &str, label: &str, program: &mut Program) -> Result<Segm
                 return Err(unknown_keyword(token, label));
             }
             if s.is_some() {
-                return Err(format!("{label}：关键字 S 重复"));
+                return Err(crate::i18n::t_fmt("cmd.shaft.err.key_dup", &[("label", label), ("what", "S")]));
             }
             s = Some(parse_diameter(token, &token[1..], "S", label)?);
         } else if upper.starts_with('E') {
@@ -2085,7 +2141,7 @@ fn parse_segment(chunk: &str, label: &str, program: &mut Program) -> Result<Segm
                 return Err(unknown_keyword(token, label));
             }
             if e.is_some() {
-                return Err(format!("{label}：关键字 E 重复"));
+                return Err(crate::i18n::t_fmt("cmd.shaft.err.key_dup", &[("label", label), ("what", "E")]));
             }
             e = Some(parse_diameter(token, &token[1..], "E", label)?);
         } else if upper.starts_with('L') {
@@ -2093,7 +2149,7 @@ fn parse_segment(chunk: &str, label: &str, program: &mut Program) -> Result<Segm
                 return Err(unknown_keyword(token, label));
             }
             if l.is_some() {
-                return Err(format!("{label}：关键字 L 重复"));
+                return Err(crate::i18n::t_fmt("cmd.shaft.err.key_dup", &[("label", label), ("what", "L")]));
             }
             l = Some(parse_diameter(token, &token[1..], "L", label)?);
         } else {
@@ -2104,7 +2160,7 @@ fn parse_segment(chunk: &str, label: &str, program: &mut Program) -> Result<Segm
     // ── KEY 轴槽（GB/T 1095）：组装子关键字；键型/键尺寸 b×h/键长必给。──
     let keyway = assemble_keyway(key_kind, key_len, key_b, key_h, key_t1, key_place, key_double, key_guided, label)?;
     if keyway.is_some() && (gear_on || spline_on) {
-        return Err(format!("{label}：轴槽 KEY 不能与齿轮/花键段同段"));
+        return Err(crate::i18n::t_fmt("cmd.shaft.err.key_gear_conflict", &[("label", label)]));
     }
     if !gear_on {
         // ── SPLINE 段（矩形花键）：直径由规格代号导出（不给 S/E）；L 必给；
@@ -2114,34 +2170,32 @@ fn parse_segment(chunk: &str, label: &str, program: &mut Program) -> Result<Segm
                 return Err(unknown_keyword(&token, label));
             }
             if !ch.is_empty() {
-                return Err(format!(
-                    "{label}：花键段不能与倒角 CH 同段（不自动画引入倒角；请在相邻轴段上写 CH）"
-                ));
+                return Err(crate::i18n::t_fmt("cmd.shaft.err.combo_spline_ch", &[("label", label)]));
             }
             if !ov.is_empty() {
-                return Err(format!("{label}：花键段不能与越程槽 OV 同段"));
+                return Err(crate::i18n::t_fmt("cmd.shaft.err.combo_spline_ov", &[("label", label)]));
             }
             if !relief_specs.is_empty() {
-                return Err(format!("{label}：花键段不能与退刀槽 RL 同段"));
+                return Err(crate::i18n::t_fmt("cmd.shaft.err.combo_spline_rl", &[("label", label)]));
             }
             if thread.is_some() || tl.is_some() || ro.is_some() || sd.is_some() {
-                return Err(format!("{label}：花键段不能与螺纹段 M/TL/RO/SD 同段"));
+                return Err(crate::i18n::t_fmt("cmd.shaft.err.combo_spline_m", &[("label", label)]));
             }
             if s.is_some() || e.is_some() {
-                return Err(format!("{label}：花键段不给 S/E（直径由规格代号导出）"));
+                return Err(crate::i18n::t_fmt("cmd.shaft.err.spline_no_se", &[("label", label)]));
             }
             let spec = spline_spec.ok_or_else(|| {
-                format!("{label}：关键字 SPLINE 缺少规格代号（写法 SPLINE 6x23x26x6 L30）")
+                crate::i18n::t_fmt("cmd.shaft.err.spline_no_spec", &[("label", label)])
             })?;
             // 先校验规格代号 —— 比「缺 L」更切题（例如 `SPLINE L30` 里 L30 不是代号）。
             if let Err(e) = crate::spline::parse_code(&spec) {
-                return Err(format!("{label}：{e}"));
+                return Err(crate::i18n::t_fmt("cmd.shaft.err.prefix", &[("label", label), ("e", &e)]));
             }
             let len = l.ok_or_else(|| {
-                format!("{label}：花键段缺少 L（满齿段长，例 `SPLINE 6x23x26x6 L30`）")
+                crate::i18n::t_fmt("cmd.shaft.err.spline_no_len", &[("label", label)])
             })?;
             let spline = crate::spline::RectSpline::from_code(&spec, spline_de, len)
-                .map_err(|e| format!("{label}：{e}"))?;
+                .map_err(|e| crate::i18n::t_fmt("cmd.shaft.err.prefix", &[("label", label), ("e", &e)]))?;
             return Ok(Segment {
                 s: spline.big,
                 e: spline.big,
@@ -2160,9 +2214,7 @@ fn parse_segment(chunk: &str, label: &str, program: &mut Program) -> Result<Segm
             return Err(unknown_keyword(&token, label));
         }
         if thread.is_none() && (tl.is_some() || ro.is_some() || sd.is_some()) {
-            return Err(format!(
-                "{label}：关键字 TL/RO/SD 是螺纹参数，需要与 M 同段（例 `M1.5 TL20 RO短 SD长`）"
-            ));
+            return Err(crate::i18n::t_fmt("cmd.shaft.err.tlro_needs_m", &[("label", label)]));
         }
         let rl_r = relief_specs.iter().any(|r| r.end == End::R);
         if let Some(t) = &mut thread {
@@ -2181,27 +2233,21 @@ fn parse_segment(chunk: &str, label: &str, program: &mut Program) -> Result<Segm
                     .find(|r| r.end == End::R)
                     .expect("rl_r = true");
                 if spec.has_overrides() {
-                    return Err(format!(
-                        "{label}：M 段右端的 RL（螺纹收尾）按螺距查表，不支持 P/g1/g2/dg/r 覆盖；段级退刀槽请写在别的圆柱段上（或 `M…RL@L`）"
-                    ));
+                    return Err(crate::i18n::t_fmt("cmd.shaft.err.m_rl_override", &[("label", label)]));
                 }
                 if t.runout != RunoutGrade::Normal || t.shoulder != ShoulderGrade::Normal {
-                    return Err(format!(
-                        "{label}：RL（表 2 退刀槽收尾）与 RO/SD（螺尾/肩距）互斥，二选一"
-                    ));
+                    return Err(crate::i18n::t_fmt("cmd.shaft.err.rl_ro_exclusive", &[("label", label)]));
                 }
                 t.relief = true;
             }
         }
         if thread.is_some() && !ov.is_empty() {
-            return Err(format!("{label}：螺纹段 M 不能与越程槽 OV 同段"));
+            return Err(crate::i18n::t_fmt("cmd.shaft.err.m_ov_conflict", &[("label", label)]));
         }
         if keyway.is_some()
             && (thread.is_some() || !ov.is_empty() || !relief_specs.is_empty())
         {
-            return Err(format!(
-                "{label}：轴槽 KEY 不能与螺纹 M / 越程槽 OV / 退刀槽 RL 同段（只能挂在光圆柱段上）"
-            ));
+            return Err(crate::i18n::t_fmt("cmd.shaft.err.key_mrl_conflict", &[("label", label)]));
         }
         // `M` 段右端 RL 走 `Thread.relief`（不重复存进段级 relief）；其余都进段级。
         let relief: Vec<Relief> = if thread.is_some() && rl_r {
@@ -2212,9 +2258,9 @@ fn parse_segment(chunk: &str, label: &str, program: &mut Program) -> Result<Segm
         } else {
             relief_specs
         };
-        let s = s.ok_or_else(|| format!("{label}：缺少 S（起始直径）"))?;
+        let s = s.ok_or_else(|| crate::i18n::t_fmt("cmd.shaft.err.missing_s", &[("label", label)]))?;
         // E 省略 = 圆柱段；L 必给。
-        let l = l.ok_or_else(|| format!("{label}：缺少 L（段长）"))?;
+        let l = l.ok_or_else(|| crate::i18n::t_fmt("cmd.shaft.err.missing_l", &[("label", label)]))?;
         return Ok(Segment {
             s,
             e: e.unwrap_or(s),
@@ -2230,40 +2276,34 @@ fn parse_segment(chunk: &str, label: &str, program: &mut Program) -> Result<Segm
     }
     // ── 齿轮段：直径由 M·Z 导出、长度用 H；CH/OV/M 同段冲突 ──
     if s.is_some() || e.is_some() {
-        return Err(format!("{label}：齿轮段不给 S/E（直径由 M·Z 导出）"));
+        return Err(crate::i18n::t_fmt("cmd.shaft.err.gear_no_se", &[("label", label)]));
     }
     if l.is_some() {
-        return Err(format!(
-            "{label}：齿轮段长度用 H（省略 = 10m），不要再给 L"
-        ));
+        return Err(crate::i18n::t_fmt("cmd.shaft.err.gear_use_h", &[("label", label)]));
     }
     if !ch.is_empty() {
-        return Err(format!(
-            "{label}：齿轮段不能与倒角 CH 同段（齿形用 OCSMGEAR 单独出）"
-        ));
+        return Err(crate::i18n::t_fmt("cmd.shaft.err.gear_no_ch", &[("label", label)]));
     }
     if !ov.is_empty() {
-        return Err(format!("{label}：齿轮段不能与越程槽 OV 同段"));
+        return Err(crate::i18n::t_fmt("cmd.shaft.err.gear_no_ov", &[("label", label)]));
     }
     if thread.is_some() {
-        return Err(format!("{label}：齿轮段不能与螺纹段 M 同段"));
+        return Err(crate::i18n::t_fmt("cmd.shaft.err.gear_no_m", &[("label", label)]));
     }
     if tl.is_some() || ro.is_some() || sd.is_some() {
-        return Err(format!(
-            "{label}：齿轮段不能与螺纹参数 TL/RO/SD 同段（TL/RO/SD 只属于 M）"
-        ));
+        return Err(crate::i18n::t_fmt("cmd.shaft.err.gear_no_tlro", &[("label", label)]));
     }
     if !relief_specs.is_empty() {
-        return Err(format!("{label}：齿轮段不能与退刀槽 RL 同段"));
+        return Err(crate::i18n::t_fmt("cmd.shaft.err.gear_no_rl", &[("label", label)]));
     }
-    let m = gear_m.ok_or_else(|| format!("{label}：关键字 GEAR 缺少 M（模数）"))?;
-    let z = gear_z.ok_or_else(|| format!("{label}：关键字 GEAR 缺少 Z（齿数）"))?;
+    let m = gear_m.ok_or_else(|| crate::i18n::t_fmt("cmd.shaft.err.gear_no_missing", &[("label", label)]))?;
+    let z = gear_z.ok_or_else(|| crate::i18n::t_fmt("cmd.shaft.err.gear_no_z", &[("label", label)]))?;
     let beta_deg = gear_beta.unwrap_or(0.0);
     if beta_deg.abs() > 1e-9 {
-        return Err(format!(
-            "{label}：关键字 BETA 的斜齿（β={}°）本期只做直齿（斜齿未实现）",
-            trim(beta_deg)
-        ));
+        return Err(crate::i18n::t_fmt(
+                "cmd.shaft.err.beta_spur",
+                &[("label", label), ("beta", &trim(beta_deg))],
+            ));
     }
     let gear = Gear {
         m,
@@ -2284,7 +2324,7 @@ fn parse_segment(chunk: &str, label: &str, program: &mut Program) -> Result<Segm
     let params = gear.params();
     params
         .validate()
-        .map_err(|e| format!("{label}：齿轮段：{e}"))?;
+        .map_err(|e| crate::i18n::t_fmt("cmd.shaft.err.gear_seg", &[("label", label), ("e", &e)]))?;
     validate_tooth_radii(&gear, label)?;
     let d = params.d();
     Ok(Segment {
@@ -2311,7 +2351,7 @@ fn parse_gear_value<'a>(
     let rest = &token[prefix_len..];
     let rest = rest.strip_prefix(['=', ':']).unwrap_or(rest);
     if rest.is_empty() {
-        return Err(format!("{label}：关键字 {what} 缺少数值"));
+        return Err(crate::i18n::t_fmt("cmd.shaft.err.key_no_value", &[("label", label), ("what", what)]));
     }
     Ok(rest)
 }
@@ -2336,12 +2376,15 @@ fn number_or_err(text: &str, what: &str, label: &str) -> Result<f64, String> {
     text.parse::<f64>()
         .ok()
         .filter(|v| v.is_finite())
-        .ok_or_else(|| format!("{label}：{what}「{text}」不是数字"))
+        .ok_or_else(|| crate::i18n::t_fmt(
+            "cmd.shaft.err.field_not_number",
+            &[("label", label), ("what", what), ("text", text)],
+        ))
 }
 
 fn parse_placement(tokens: &[&str], label: &str, program: &mut Program) -> Result<(), String> {
     if program.at.is_some() || program.rot.is_some() {
-        return Err(format!("{label}：放置参数 at/rot 重复"));
+        return Err(crate::i18n::t_fmt("cmd.shaft.err.place_dup", &[("label", label)]));
     }
     let mut index = 0;
     if index < tokens.len() && (tokens[index].eq_ignore_ascii_case("at") || tokens[index] == "@") {
@@ -2357,9 +2400,9 @@ fn parse_placement(tokens: &[&str], label: &str, program: &mut Program) -> Resul
         } else {
             let b = tokens
                 .get(index + 1)
-                .ok_or_else(|| format!("{label}：at 缺 y 坐标（写 at x,y）"))?;
+                .ok_or_else(|| crate::i18n::t_fmt("cmd.shaft.err.at_no_y", &[("label", label)]))?;
             if is_rot(b) {
-                return Err(format!("{label}：at 缺 y 坐标（写 at x,y）"));
+                return Err(crate::i18n::t_fmt("cmd.shaft.err.at_no_y", &[("label", label)]));
             }
             (
                 number_or_err(token, "at 坐标", label)?,
@@ -2373,15 +2416,15 @@ fn parse_placement(tokens: &[&str], label: &str, program: &mut Program) -> Resul
         index += 1;
         let value = tokens
             .get(index)
-            .ok_or_else(|| format!("{label}：rot 缺少数值"))?;
+            .ok_or_else(|| crate::i18n::t_fmt("cmd.shaft.err.rot_no_value", &[("label", label)]))?;
         program.rot = Some(number_or_err(value, "rot", label)?);
         index += 1;
     }
     if index < tokens.len() {
-        return Err(format!(
-            "{label}：无法识别的词「{}」（放置段只认 at x,y rot 度）",
-            tokens[index]
-        ));
+        return Err(crate::i18n::t_fmt(
+                "cmd.shaft.err.place_unknown",
+                &[("label", label), ("word", tokens[index])],
+            ));
     }
     Ok(())
 }
@@ -3657,43 +3700,50 @@ fn keyway_geom(
     count: usize,
     label: &str,
 ) -> Result<KeywayGeom, String> {
-    let b = keyway_b(kw, seg.s).map_err(|e| format!("{label}：{e}"))?;
+    let b = keyway_b(kw, seg.s).map_err(|e| crate::i18n::t_fmt("cmd.shaft.err.prefix", &[("label", label), ("e", &e)]))?;
     // 样式表位置约束（导向只有中置；用户 2026-09 裁定）：防住绕过 `validate` 的直调用。
     if let Some(spec) = key_style_for(kw.kind, kw.guided) {
         if !spec.places.contains(&kw.place.code()) {
-            return Err(format!(
-                "{label}：{}只有{}（{}）",
-                spec.label,
-                key_places_cn(spec.places),
-                spec.place_hint
+            return Err(crate::i18n::t_fmt(
+                "cmd.shaft.err.key_no_place",
+                &[
+                    ("label", label),
+                    ("kind", spec.label),
+                    ("places", &key_places_cn(spec.places)),
+                    ("tag", spec.place_hint),
+                ],
             ));
         }
     }
     // 导向（GB/T 1097）：查表行 + 长度系列行 + 螺钉粗牙螺距；非导向：沿用 1096 族表检查。
     let guided_src = if kw.guided {
         let row = crate::partgen_keys::key_1097_row(kw.kind.key_type(), b).ok_or_else(|| {
-            format!(
-                "{label}：GB/T 1097 导向平键表里没有 b={}（b=8…45，14 档）",
-                trim(b)
+            crate::i18n::t_fmt(
+                "cmd.shaft.err.key_1097_b",
+                &[("label", label), ("b", &trim(b))],
             )
         })?;
         let len = crate::partgen_keys::key_1097_length_for(kw.l)
-            .map_err(|e| format!("{label}：{e}"))?;
+            .map_err(|e| crate::i18n::t_fmt("cmd.shaft.err.prefix", &[("label", label), ("e", &e)]))?;
         let p = crate::hole::thread_row(row.d0, None)
             .map(|t| t.p)
-            .map_err(|e| format!("{label}：GB/T 1097 固定螺钉 M{}：{e}", trim(row.d0)))?;
+            .map_err(|e| {
+            crate::i18n::t_fmt(
+                "cmd.shaft.err.key_1097_screw",
+                &[("label", label), ("d0", &trim(row.d0)), ("e", &e)],
+            )
+        })?;
         Some((row, len, p))
     } else {
         if crate::partgen_keys::key_1096_h(kw.kind.key_type(), b).is_none() {
-            return Err(format!(
-                "{label}：{} 的平键族表里没有 b={}（GB/T 1096 表 b=2…50）",
-                kw.kind.cn(),
-                trim(b)
+            return Err(crate::i18n::t_fmt(
+                "cmd.shaft.err.key_1096_b",
+                &[("label", label), ("kind", kw.kind.cn()), ("b", &trim(b))],
             ));
         }
         None
     };
-    let t1 = keyway_t1(b, kw.t1).map_err(|e| format!("{label}：{e}"))?;
+    let t1 = keyway_t1(b, kw.t1).map_err(|e| crate::i18n::t_fmt("cmd.shaft.err.prefix", &[("label", label), ("e", &e)]))?;
     let slot_len = kw.slot_len(t1, b);
     let r = seg.s / 2.0;
     let rk = b / 2.0;
@@ -3723,9 +3773,10 @@ fn keyway_geom(
                     x0 + seg.l,
                 )
             } else {
-                return Err(format!(
-                    "{label}：端置轴槽只能开在首段（左端）或末段（右端）"
-                ));
+                return Err(crate::i18n::t_fmt(
+                        "cmd.shaft.err.key_end_place_only",
+                        &[("label", label)],
+                    ));
             }
         }
     };
@@ -5842,14 +5893,19 @@ pub fn ocsm_ready(doc: &ocs_plugin_api::host::acadrust::CadDocument) -> Result<(
     if missing.is_empty() && center_ok {
         return Ok(());
     }
-    let why = if !missing.is_empty() {
-        format!("（缺图层：{}）", missing.join("、"))
-    } else {
-        format!("（{LAYER_CENTER} 没挂 CENTER2 点划线）")
-    };
-    Err(format!(
-        "这张图还没跑过 OCSM 初始化{why} —— 先执行 OCSM（建 10 个图层 + 线型 + 文字/标注样式），\
-         再生成轴；不然中心线会是实线白线。"
+    if !missing.is_empty() {
+        let sep = match crate::i18n::lang() {
+            crate::i18n::Lang::Zh => "、",
+            _ => ", ",
+        };
+        return Err(crate::i18n::t_fmt(
+            "cmd.shaft.ready.missing_layers",
+            &[("list", &missing.join(sep))],
+        ));
+    }
+    Err(crate::i18n::t_fmt(
+        "cmd.shaft.ready.center_linetype",
+        &[("layer", LAYER_CENTER)],
     ))
 }
 
@@ -10125,4 +10181,52 @@ GEAR M3 Z20";
         }
     }
 
+    /// 阶段 2 ④ 批（轴族）：DSL 报错/用法随语言切换、关键数据保留。
+    #[test]
+    fn shaft_messages_switch_language_keeping_data() {
+        let _g = crate::global_state_test_lock();
+        crate::i18n::clear_missing_keys();
+        crate::i18n::set_lang(crate::i18n::Lang::Zh);
+
+        // zh：解析报错 + 用法；关键数据（M1.5/GEAR M3/b8/h9/双）原样。
+        assert!(usage().contains("OCSMSHAFT"));
+        let e = parse_program("S30 E30 L45 KEY A").unwrap_err();
+        assert!(e.contains("KEY 缺少键长"), "{e}");
+        let e = parse_program("S30 E30 L45 CH0").unwrap_err();
+        assert!(e.contains("C=0") && e.contains("必须 > 0"), "{e}");
+        let e = parse_program("S30 E30 L45 M1.5 TL").unwrap_err();
+        assert!(e.contains("TL 缺少数值"), "{e}");
+        let e = parse_program("GEAR M3").unwrap_err();
+        assert!(e.contains("GEAR 缺少 Z"), "{e}");
+        let e = parse_program("S30 E30 L45 KEY B 18 b8 h9").unwrap_err();
+        assert!(e.contains("不是标准配对") && e.contains("b8") && e.contains("h9"), "{e}");
+        let e =
+            parse_program("S30 E30 L45 M1.5 TL20 RL g1 2.5 g2 4.5 dg 22.7 r 0.8").unwrap_err();
+        assert!(e.contains("按螺距查表") && e.contains("RL"), "{e}");
+
+        // en：同一批调用，数据不变。
+        crate::i18n::set_lang(crate::i18n::Lang::En);
+        assert!(usage().contains("shaft generator"));
+        let e = parse_program("S30 E30 L45 KEY A").unwrap_err();
+        assert!(e.contains("KEY is missing the key length"), "{e}");
+        let e = parse_program("S30 E30 L45 CH0").unwrap_err();
+        assert!(e.contains("C=0") && e.contains("must be > 0"), "{e}");
+        let e = parse_program("S30 E30 L45 M1.5 TL").unwrap_err();
+        assert!(e.contains("TL is missing a value"), "{e}");
+        let e = parse_program("GEAR M3").unwrap_err();
+        assert!(e.contains("GEAR is missing Z"), "{e}");
+        let e = parse_program("S30 E30 L45 KEY B 18 b8 h9").unwrap_err();
+        assert!(e.contains("not a standard pair") && e.contains("b8") && e.contains("h9"), "{e}");
+        let e =
+            parse_program("S30 E30 L45 M1.5 TL20 RL g1 2.5 g2 4.5 dg 22.7 r 0.8").unwrap_err();
+        assert!(e.contains("looked up by pitch") && e.contains("RL"), "{e}");
+        assert!(!e.contains("按螺距查表"), "{e}");
+
+        assert!(
+            crate::i18n::missing_keys().is_empty(),
+            "缺词条：{:?}",
+            crate::i18n::missing_keys()
+        );
+        crate::i18n::set_lang_auto();
+    }
 }

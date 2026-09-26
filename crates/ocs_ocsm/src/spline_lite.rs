@@ -510,7 +510,7 @@ pub fn values(side: SplineSide, table: &SplineTable) -> Result<Vec<(String, Stri
             ("(简)跨测齿数", t.kn.to_string()),
             ("(简)公法线长度", s(t.wn)),
         ],
-        _ => return Err("GB 花键精简卡：方向与计算结果不一致".into()),
+        _ => return Err(crate::i18n::t("cmd.splinelite.err.side_mismatch")),
     };
     // 顺序护栏：值顺序必须与字段表（ATTDEF 顺序）一致。
     for (f, (tag, _)) in fields(side).iter().zip(&vals) {

@@ -342,15 +342,17 @@ pub struct GearTableSpec {
 /// `c*=(|Da−Df|)/2m−2ha*`），再交回 `GearParams` 复核 `da/df` 是否闭环。
 pub fn params_from_gear(g: &crate::shaft::Gear) -> Result<GearParams, String> {
     if !(g.m.is_finite() && g.m > 0.0) {
-        return Err(format!("齿轮参数表：模数 m={} 非法", g.m));
+        return Err(crate::i18n::t_fmt(
+            "cmd.geartab.err.m_invalid",
+            &[("m", &crate::partgen_kit::trim(g.m))],
+        ));
     }
-    let da = g.da.ok_or_else(|| {
-        "齿轮参数表：表达式缺 `DA`（大径）—— 齿顶高系数要从它反解（轴/齿轮生成器 GUI 可复制完整九字段）"
-            .to_string()
-    })?;
-    let df = g.df.ok_or_else(|| {
-        "齿轮参数表：表达式缺 `DF`（小径）—— 全齿高与顶隙系数要从它反解".to_string()
-    })?;
+    let da = g
+        .da
+        .ok_or_else(|| crate::i18n::t("cmd.geartab.err.missing_da"))?;
+    let df = g
+        .df
+        .ok_or_else(|| crate::i18n::t("cmd.geartab.err.missing_df"))?;
     let kind = if g.kind.is_internal() {
         GearKind::Internal
     } else {
@@ -381,7 +383,9 @@ pub fn params_from_gear(g: &crate::shaft::Gear) -> Result<GearParams, String> {
     p.ha = ha;
     p.c = c;
     p.validate()
-        .map_err(|e| format!("齿轮参数表：表达式反解的齿形参数不合法：{e}"))?;
+        .map_err(|e| {
+            crate::i18n::t_fmt("cmd.geartab.err.params_invalid", &[("e", &e)])
+        })?;
     // 闭环复核：反解参数交回引擎算出的 da/df 必须与表达式一致（否则表达式自相矛盾）。
     let tol = 1e-6 * da.abs().max(1.0);
     let (want_major, want_minor) = match kind {
@@ -389,14 +393,16 @@ pub fn params_from_gear(g: &crate::shaft::Gear) -> Result<GearParams, String> {
         GearKind::Internal => (p.df(), p.da()),
     };
     if (want_major - da).abs() > tol || (want_minor - df).abs() > tol {
-        return Err(format!(
-            "齿轮参数表：表达式 DA/DF 与 M/Z/ALPHA/X 不自洽（反解 ha*={}、c*={} 后引擎给 Da={}、Df={}，表达式写 Da={}、Df={}）",
-            fmt_num(ha),
-            fmt_num(c),
-            fmt_mm(want_major),
-            fmt_mm(want_minor),
-            fmt_mm(da),
-            fmt_mm(df)
+        return Err(crate::i18n::t_fmt(
+            "cmd.geartab.err.closed_loop",
+            &[
+                ("ha", &fmt_num(ha)),
+                ("c", &fmt_num(c)),
+                ("da", &fmt_mm(want_major)),
+                ("df", &fmt_mm(want_minor)),
+                ("da_in", &fmt_mm(da)),
+                ("df_in", &fmt_mm(df)),
+            ],
         ));
     }
     Ok(p)
@@ -457,7 +463,10 @@ pub fn values(spec: &GearTableSpec) -> Result<Vec<(String, String)>, String> {
     let got: Vec<&str> = out.iter().map(|(t, _)| *t).collect();
     let want: Vec<&str> = tags.iter().map(|ad| ad.tag.as_str()).collect();
     if got != want {
-        return Err(format!("齿轮参数表：取值映射顺序与模板属性不一致：{got:?} != {want:?}"));
+        return Err(crate::i18n::t_fmt(
+            "cmd.geartab.err.tag_order",
+            &[("got", &format!("{got:?}")), ("want", &format!("{want:?}"))],
+        ));
     }
     Ok(out
         .into_iter()
@@ -795,12 +804,18 @@ impl GearTableModel {
     pub fn spec(&self) -> Result<GearTableSpec, String> {
         if let Some(z) = self.mate_z {
             if !(2..=1000).contains(&z) {
-                return Err(format!("齿轮参数表：配对齿轮齿数 z₂={z} 超出范围（2–1000）"));
+                return Err(crate::i18n::t_fmt(
+                    "cmd.geartab.err.mate_z",
+                    &[("z", &z.to_string())],
+                ));
             }
         }
         if let Some(a) = self.center {
             if !(a.is_finite() && a > 0.0) {
-                return Err(format!("齿轮参数表：中心距 center={a} 必须是正数"));
+                return Err(crate::i18n::t_fmt(
+                    "cmd.geartab.err.center",
+                    &[("a", &a.to_string())],
+                ));
             }
         }
         let r = crate::card_expr::resolve(&EXPR_POLICY, &self.expr, None)?;
@@ -892,15 +907,24 @@ impl GearTableModel {
             Some((k, w)) => (k.to_string(), fmt_mm(w)),
             None => (MISSING.to_string(), MISSING.to_string()),
         };
-        Ok(format!(
-            "{} z{} m{}（ha*={}，c*={}）公法线 k={} W={}",
-            if p.kind.is_internal() { "内齿轮" } else { "外齿轮" },
-            p.z,
-            fmt_mm(p.m),
-            fmt_num(p.ha),
-            fmt_num(p.c),
-            k,
-            w
+        Ok(crate::i18n::t_fmt(
+            "cmd.geartab.echo",
+            &[
+                (
+                    "kind",
+                    &crate::i18n::t(if p.kind.is_internal() {
+                        "cmd.geartab.kind.internal"
+                    } else {
+                        "cmd.geartab.kind.external"
+                    }),
+                ),
+                ("z", &p.z.to_string()),
+                ("m", &fmt_mm(p.m)),
+                ("ha", &fmt_num(p.ha)),
+                ("c", &fmt_num(p.c)),
+                ("k", &k),
+                ("w", &w),
+            ],
         ))
     }
 
@@ -952,7 +976,9 @@ impl GearTableSpec {
             tokens
                 .get(*i)
                 .map(|s| s.to_string())
-                .ok_or_else(|| format!("齿轮参数表：{what} 缺少数值/字符串"))
+                .ok_or_else(|| {
+                    crate::i18n::t_fmt("cmd.geartab.err.need", &[("what", what)])
+                })
         };
         while i < tokens.len() {
             let key = tokens[i].to_ascii_lowercase();
@@ -961,7 +987,12 @@ impl GearTableSpec {
                     let v = need(&mut i, "mate")?;
                     let z: u32 = v
                         .parse()
-                        .map_err(|e| format!("齿轮参数表：mate={v} 不是整数：{e}"))?;
+                        .map_err(|e: std::num::ParseIntError| {
+                            crate::i18n::t_fmt(
+                                "cmd.geartab.err.mate_num",
+                                &[("v", &v), ("e", &e.to_string())],
+                            )
+                        })?;
                     model.mate_z = Some(z);
                 }
                 "dwg" | "图号" => {
@@ -974,32 +1005,57 @@ impl GearTableSpec {
                     let v = need(&mut i, "center")?;
                     let a: f64 = v
                         .parse()
-                        .map_err(|e| format!("齿轮参数表：center={v} 不是数字：{e}"))?;
+                        .map_err(|e: std::num::ParseFloatError| {
+                            crate::i18n::t_fmt(
+                                "cmd.geartab.err.center_num",
+                                &[("v", &v), ("e", &e.to_string())],
+                            )
+                        })?;
                     model.center = Some(a);
                 }
                 "at" => {
                     let v = need(&mut i, "at")?;
                     let (x, y) = v
                         .split_once(',')
-                        .ok_or_else(|| format!("齿轮参数表：at「{v}」应为 `x,y`"))?;
+                        .ok_or_else(|| {
+                            crate::i18n::t_fmt("cmd.geartab.err.at_format", &[("v", &v)])
+                        })?;
                     let x: f64 = x
                         .trim()
                         .parse()
-                        .map_err(|e| format!("齿轮参数表：at x={x} 不是数字：{e}"))?;
+                        .map_err(|e: std::num::ParseFloatError| {
+                            crate::i18n::t_fmt(
+                                "cmd.geartab.err.at_x",
+                                &[("x", &x), ("e", &e.to_string())],
+                            )
+                        })?;
                     let y: f64 = y
                         .trim()
                         .parse()
-                        .map_err(|e| format!("齿轮参数表：at y={y} 不是数字：{e}"))?;
+                        .map_err(|e: std::num::ParseFloatError| {
+                            crate::i18n::t_fmt(
+                                "cmd.geartab.err.at_y",
+                                &[("y", &y), ("e", &e.to_string())],
+                            )
+                        })?;
                     model.at = Some([x, y]);
                 }
                 "rot" | "旋转" => {
                     let v = need(&mut i, "rot")?;
                     model.rot = v
                         .parse()
-                        .map_err(|e| format!("齿轮参数表：rot={v} 不是数字：{e}"))?;
+                        .map_err(|e: std::num::ParseFloatError| {
+                            crate::i18n::t_fmt(
+                                "cmd.geartab.err.rot",
+                                &[("v", &v), ("e", &e.to_string())],
+                            )
+                        })?;
                 }
                 other => {
-                    return Err(format!("齿轮参数表：不认识的参数「{other}」。\n{}", usage()))
+                    return Err(crate::i18n::t_fmt(
+                        "cmd.geartab.err.unknown_param",
+                        &[("other", other), ("usage", &usage())],
+                    ))
                 }
             }
             i += 1;
@@ -1010,12 +1066,7 @@ impl GearTableSpec {
 
 /// 命令用法（`OCSMCARD` 报错指路）。
 pub fn usage() -> String {
-    "智能卡片「齿轮参数表」用法：`OCSMCARD 齿轮参数表 <九字段表达式> \
-     [mate z₂] [dwg 图号] [grade 精度等级] [center a] [at x,y] [rot 度]`。\
-     表达式形如 `GEAR EX M3 Z20 ALPHA20 X0 DA66 DF52.5 BETA0 H30`（轴/齿轮生成器 GUI 可直接复制）；\
-     DA/DF 用来反解 ha*/c*，内/外齿由表达式 KIND 决定。\
-     GB/T 10095-88 公差（Fr/FW/ff/fpt/Fβ）与中心距极限偏差本仓未收 —— 卡片显示「—」，不臆造。"
-        .to_string()
+    crate::i18n::t("cmd.geartab.usage")
 }
 
 // ══════════════════════════════════════════════════════════════════════════

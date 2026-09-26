@@ -637,7 +637,10 @@ impl DinFit {
             "a",
         ];
         if !(1..=12).contains(&self.grade) {
-            return Err(format!("公差等级 {} 超出范围（1–12）", self.grade));
+            return Err(crate::i18n::t_fmt(
+                "cmd.din.err.grade_range",
+                &[("grade", &self.grade.to_string())],
+            ));
         }
         let ok = if hub {
             HUB.iter().any(|x| x.eq_ignore_ascii_case(&self.letter))
@@ -645,15 +648,27 @@ impl DinFit {
             SHAFT.iter().any(|x| *x == self.letter.to_ascii_lowercase())
         };
         if !ok {
-            return Err(format!(
-                "{}偏差系列「{}」非法（{}）",
-                if hub { "孔 " } else { "轴 " },
-                self.letter,
-                if hub {
-                    "F/G/H/J/K/M（DIN 5480 §10.3 六个）"
-                } else {
-                    "v/u/t/s/r/p/n/m/k/js/h/g/f/e/d/c/b/a（十八个）"
-                }
+            return Err(crate::i18n::t_fmt(
+                "cmd.din.err.dev_letter",
+                &[
+                    (
+                        "side",
+                        &crate::i18n::t(if hub {
+                            "cmd.din.side.hole"
+                        } else {
+                            "cmd.din.side.shaft"
+                        }),
+                    ),
+                    ("letter", &self.letter),
+                    (
+                        "allowed",
+                        &crate::i18n::t(if hub {
+                            "cmd.din.dev.hub"
+                        } else {
+                            "cmd.din.dev.shaft"
+                        }),
+                    ),
+                ],
             ));
         }
         Ok(())
@@ -720,13 +735,22 @@ impl Default for DinTableSpec {
 
 fn validate_basic(m: f64, z: u32, d_b: f64) -> Result<(), String> {
     if !(m.is_finite() && m > 0.0) {
-        return Err(format!("DIN 花键参数表：模数 m={m} 必须是正数"));
+        return Err(crate::i18n::t_fmt(
+            "cmd.din.err.m_positive",
+            &[("m", &trim3(m))],
+        ));
     }
     if !(3..=1000).contains(&z) {
-        return Err(format!("DIN 花键参数表：齿数 z={z} 超出范围（3–1000）"));
+        return Err(crate::i18n::t_fmt(
+            "cmd.din.err.z_range",
+            &[("z", &z.to_string())],
+        ));
     }
     if !(d_b.is_finite() && d_b > 0.0) {
-        return Err(format!("DIN 花键参数表：基准直径 d_B={d_b} 必须是正数"));
+        return Err(crate::i18n::t_fmt(
+            "cmd.din.err.db_positive",
+            &[("d_b", &trim3(d_b))],
+        ));
     }
     Ok(())
 }
@@ -881,8 +905,12 @@ fn sub2(a: Option<f64>, b: Option<f64>) -> Option<f64> {
 /// 求值：名义表 + Table 7（或显式覆盖）+ 表 6 公式；Bild 6 示例走锚点并保持公式一致。
 pub fn derive(spec: &DinTableSpec) -> Result<DinDerived, String> {
     validate_basic(spec.m, spec.z, spec.d_b)?;
-    spec.hub.validate(true).map_err(|e| format!("DIN 花键参数表：{e}"))?;
-    spec.shaft.validate(false).map_err(|e| format!("DIN 花键参数表：{e}"))?;
+    spec.hub
+        .validate(true)
+        .map_err(|e| crate::i18n::t_fmt("cmd.din.err.prefix", &[("e", &e)]))?;
+    spec.shaft
+        .validate(false)
+        .map_err(|e| crate::i18n::t_fmt("cmd.din.err.prefix", &[("e", &e)]))?;
     let nominal = nominal_lookup(spec.m, spec.z, spec.d_b);
     let e2 = spec.e2_s1.or(nominal.as_ref().map(|n| n.e2_s1));
     let mut notes = Vec::new();
@@ -1165,8 +1193,9 @@ pub fn values(spec: &DinTableSpec, hub: bool) -> Result<Vec<(String, String)>, S
     let want: Vec<String> = attdefs(hub).iter().map(|ad| ad.tag.clone()).collect();
     let want: Vec<&str> = want.iter().map(|s| s.as_str()).collect();
     if got != want {
-        return Err(format!(
-            "DIN 花键参数表：取值映射顺序与模板属性不一致：{got:?} != {want:?}"
+        return Err(crate::i18n::t_fmt(
+            "cmd.din.err.tag_order",
+            &[("got", &format!("{got:?}")), ("want", &format!("{want:?}"))],
         ));
     }
     Ok(out.into_iter().map(|(t, v)| (t.to_string(), v)).collect())
@@ -1632,13 +1661,22 @@ impl DinTableModel {
         let hub = self.hub();
         let spec = self.spec()?;
         let d = derive(&spec)?;
-        Ok(format!(
-            "DIN 5480 {}（dB={} m={} z={}{}）",
-            designation(&spec, hub),
-            trim3(spec.d_b),
-            trim3(spec.m),
-            spec.z,
-            if d.anchor { "，Bild 6 示例原印值" } else { "" }
+        Ok(crate::i18n::t_fmt(
+            "cmd.din.echo",
+            &[
+                ("designation", &designation(&spec, hub)),
+                ("db", &trim3(spec.d_b)),
+                ("m", &trim3(spec.m)),
+                ("z", &spec.z.to_string()),
+                (
+                    "anchor",
+                    &if d.anchor {
+                        crate::i18n::t("cmd.din.echo.anchor")
+                    } else {
+                        String::new()
+                    },
+                ),
+            ],
         ))
     }
 
@@ -1696,14 +1734,7 @@ fn is_option_token(t: &str) -> bool {
 }
 
 pub fn usage() -> String {
-    "智能卡片「DIN 5480 内/外花键参数表」用法（一卡一方向）：\
-     `OCSMCARD DIN花键参数表 <九字段表达式> [N<等级><字母>] [e2 …] [ae …] [as …] [tactn …] [teffn …] [at x,y]`\
-     （外卡：`OCSMCARD DIN花键参数表_外 <九字段表达式> [W<等级><字母>] [tactw …] [teffw …] …`；\
-     旧写法 `M3 Z38 B120 N9H W8f` 兼容：旧 id 默认内卡，N/W 都收、只取本侧）。\
-     表达式反解 d_B=m(z+1.1+2x)、m、z（DIN 5480 压力角恒 30°），KIND 须与卡方向一致（内 IN / 外 EX）。\
-     版面 = DIN 5480-1:2006 Bild 6 单栏 13 行（内 = Nabe、外 = Welle），整表 INSERT 缩放 0.17；\
-     孔缺省 9H、轴缺省 8f；Ae/As 取 Table 7，Tact/Teff 取 Table 7 公差锚 —— 缺口显示「—」，可用 ae/as/e2/tactn/teffn/tactw/teffw 覆盖。"
-        .to_string()
+    crate::i18n::t("cmd.din.usage")
 }
 
 /// 解析 `9H` / `8f` / `js` 这类配合 token。
@@ -1711,12 +1742,14 @@ pub fn parse_fit_token(t: &str, hub: bool) -> Result<DinFit, String> {
     let s = t.trim();
     let digits: String = s.chars().take_while(|c| c.is_ascii_digit()).collect();
     if digits.is_empty() {
-        return Err(format!("缺等级数字（如 `9H`/`8f`）"));
+        return Err(crate::i18n::t("cmd.din.err.fit_grade_digits"));
     }
-    let grade: u32 = digits.parse().map_err(|_| format!("等级「{digits}」非法"))?;
+    let grade: u32 = digits
+        .parse()
+        .map_err(|_| crate::i18n::t_fmt("cmd.din.err.fit_grade_invalid", &[("digits", &digits)]))?;
     let letter = s[digits.len()..].trim().to_string();
     if letter.is_empty() {
-        return Err("缺偏差字母（孔 F/G/H/J/K/M；轴 v…a）".to_string());
+        return Err(crate::i18n::t("cmd.din.err.fit_letter_missing"));
     }
     let letter = if hub { letter.to_ascii_uppercase() } else { letter.to_ascii_lowercase() };
     let fit = DinFit { grade, letter };
@@ -1788,7 +1821,10 @@ impl DinTableSpec {
         let mut i = 0usize;
         let need = |i: &mut usize, tokens: &[&str], what: &str| -> Result<String, String> {
             *i += 1;
-            tokens.get(*i).map(|s| s.to_string()).ok_or_else(|| format!("DIN 花键参数表：{what} 缺少数值"))
+            tokens
+                .get(*i)
+                .map(|s| s.to_string())
+                .ok_or_else(|| crate::i18n::t_fmt("cmd.din.err.need", &[("what", what)]))
         };
         while i < tokens.len() {
             let t = tokens[i];
@@ -1796,7 +1832,10 @@ impl DinTableSpec {
             // 代号体（pending 或自带 N/W 前缀）
             if let Some(hub) = pending.take() {
                 let Some((d_b, m, z, fit)) = parse_designation_body(t).ok() else {
-                    return Err(format!("DIN 花键参数表：代号体「{t}」非法。\n{}", usage()));
+                    return Err(crate::i18n::t_fmt(
+                        "cmd.din.err.body_invalid",
+                        &[("t", t), ("usage", &usage())],
+                    ));
                 };
                 spec.d_b = d_b;
                 spec.m = m;
@@ -1824,9 +1863,9 @@ impl DinTableSpec {
                     .trim_start_matches(['A', 'I', 'a', 'i'])
                     .trim();
                 let Some((d_b, m, z, fit)) = parse_designation_body(body).ok() else {
-                    return Err(format!(
-                        "DIN 花键参数表：代号「{t}」非法（应如 `N120×3×38×9H`）。\n{}",
-                        usage()
+                    return Err(crate::i18n::t_fmt(
+                        "cmd.din.err.code_invalid",
+                        &[("t", t), ("usage", &usage())],
                     ));
                 };
                 spec.d_b = d_b;
@@ -1854,38 +1893,72 @@ impl DinTableSpec {
                 tokens
                     .get(*i)
                     .map(|s| s.to_string())
-                    .ok_or_else(|| format!("DIN 花键参数表：「{key}」缺少数值"))
+                    .ok_or_else(|| {
+                        crate::i18n::t_fmt("cmd.din.err.key_missing", &[("key", &key)])
+                    })
             };
             match key.as_str() {
                 "at" => {
                     let v = need(&mut i, &tokens, "at")?;
                     let (x, y) = v
                         .split_once(',')
-                        .ok_or_else(|| format!("DIN 花键参数表：at「{v}」应为 `x,y`"))?;
-                    let x: f64 = x.trim().parse().map_err(|e| format!("at x={x} 不是数字：{e}"))?;
-                    let y: f64 = y.trim().parse().map_err(|e| format!("at y={y} 不是数字：{e}"))?;
+                        .ok_or_else(|| {
+                            crate::i18n::t_fmt("cmd.din.err.at_format", &[("v", &v)])
+                        })?;
+                    let x: f64 = x.trim().parse().map_err(|e: std::num::ParseFloatError| {
+                        crate::i18n::t_fmt(
+                            "cmd.din.err.at_x",
+                            &[("x", x.trim()), ("e", &e.to_string())],
+                        )
+                    })?;
+                    let y: f64 = y.trim().parse().map_err(|e: std::num::ParseFloatError| {
+                        crate::i18n::t_fmt(
+                            "cmd.din.err.at_y",
+                            &[("y", y.trim()), ("e", &e.to_string())],
+                        )
+                    })?;
                     spec.at = Some([x, y]);
                 }
                 "rot" | "旋转" => {
                     let v = need(&mut i, &tokens, "rot")?;
-                    spec.rot = v.parse().map_err(|e| format!("rot={v} 不是数字：{e}"))?;
+                    spec.rot = v.parse().map_err(|e: std::num::ParseFloatError| {
+                        crate::i18n::t_fmt(
+                            "cmd.din.err.rot",
+                            &[("v", &v), ("e", &e.to_string())],
+                        )
+                    })?;
                 }
                 "m" | "模数" => {
                     let v = value(&mut i, &tokens)?;
                     let body = v.trim_start_matches(['m', 'M']);
-                    spec.m = body.parse().map_err(|e| format!("m={v} 不是数字：{e}"))?;
+                    spec.m = body.parse().map_err(|e: std::num::ParseFloatError| {
+                        crate::i18n::t_fmt(
+                            "cmd.din.err.num",
+                            &[("name", "m"), ("v", &v), ("e", &e.to_string())],
+                        )
+                    })?;
                     have.0 = true;
                 }
                 "z" | "齿数" => {
                     let v = value(&mut i, &tokens)?;
                     let body = v.trim_start_matches(['z', 'Z']);
-                    spec.z = body.parse().map_err(|e| format!("z={v} 不是整数：{e}"))?;
+                    spec.z = body.parse().map_err(|e: std::num::ParseIntError| {
+                        crate::i18n::t_fmt(
+                            "cmd.din.err.z_num",
+                            &[("name", "z"), ("v", &v), ("e", &e.to_string())],
+                        )
+                    })?;
                     have.1 = true;
                 }
                 "b" | "db" | "基准直径" | "直径" => {
                     let v = value(&mut i, &tokens)?;
                     let body = v.trim_start_matches(['b', 'B']);
-                    spec.d_b = body.parse().map_err(|e| format!("d_B={v} 不是数字：{e}"))?;
+                    spec.d_b = body.parse().map_err(|e: std::num::ParseFloatError| {
+                        crate::i18n::t_fmt(
+                            "cmd.din.err.num",
+                            &[("name", "d_B"), ("v", &v), ("e", &e.to_string())],
+                        )
+                    })?;
                     have.2 = true;
                 }
                 "n" | "内" | "内花键" | "孔" => {
@@ -1898,46 +1971,96 @@ impl DinTableSpec {
                 }
                 "e2" => {
                     let v = value(&mut i, &tokens)?;
-                    spec.e2_s1 = Some(v.parse().map_err(|e| format!("e2={v} 不是数字：{e}"))?);
+                    spec.e2_s1 = Some(v.parse().map_err(|e: std::num::ParseFloatError| {
+                        crate::i18n::t_fmt(
+                            "cmd.din.err.num",
+                            &[("name", "e2"), ("v", &v), ("e", &e.to_string())],
+                        )
+                    })?);
                 }
                 "ae" => {
                     let v = value(&mut i, &tokens)?;
-                    spec.ae = Some(v.parse().map_err(|e| format!("ae={v} 不是数字：{e}"))?);
+                    spec.ae = Some(v.parse().map_err(|e: std::num::ParseFloatError| {
+                        crate::i18n::t_fmt(
+                            "cmd.din.err.num",
+                            &[("name", "ae"), ("v", &v), ("e", &e.to_string())],
+                        )
+                    })?);
                 }
                 "as" => {
                     let v = value(&mut i, &tokens)?;
-                    spec.as_ = Some(v.parse().map_err(|e| format!("as={v} 不是数字：{e}"))?);
+                    spec.as_ = Some(v.parse().map_err(|e: std::num::ParseFloatError| {
+                        crate::i18n::t_fmt(
+                            "cmd.din.err.num",
+                            &[("name", "as"), ("v", &v), ("e", &e.to_string())],
+                        )
+                    })?);
                 }
                 "tactn" => {
                     let v = value(&mut i, &tokens)?;
-                    spec.tact_hub = Some(v.parse().map_err(|e| format!("tactn={v} 不是数字：{e}"))?);
+                    spec.tact_hub = Some(v.parse().map_err(|e: std::num::ParseFloatError| {
+                        crate::i18n::t_fmt(
+                            "cmd.din.err.num",
+                            &[("name", "tactn"), ("v", &v), ("e", &e.to_string())],
+                        )
+                    })?);
                 }
                 "teffn" => {
                     let v = value(&mut i, &tokens)?;
-                    spec.teff_hub = Some(v.parse().map_err(|e| format!("teffn={v} 不是数字：{e}"))?);
+                    spec.teff_hub = Some(v.parse().map_err(|e: std::num::ParseFloatError| {
+                        crate::i18n::t_fmt(
+                            "cmd.din.err.num",
+                            &[("name", "teffn"), ("v", &v), ("e", &e.to_string())],
+                        )
+                    })?);
                 }
                 "tactw" => {
                     let v = value(&mut i, &tokens)?;
-                    spec.tact_shaft = Some(v.parse().map_err(|e| format!("tactw={v} 不是数字：{e}"))?);
+                    spec.tact_shaft = Some(v.parse().map_err(|e: std::num::ParseFloatError| {
+                        crate::i18n::t_fmt(
+                            "cmd.din.err.num",
+                            &[("name", "tactw"), ("v", &v), ("e", &e.to_string())],
+                        )
+                    })?);
                 }
                 "teffw" => {
                     let v = value(&mut i, &tokens)?;
-                    spec.teff_shaft = Some(v.parse().map_err(|e| format!("teffw={v} 不是数字：{e}"))?);
+                    spec.teff_shaft = Some(v.parse().map_err(|e: std::num::ParseFloatError| {
+                        crate::i18n::t_fmt(
+                            "cmd.din.err.num",
+                            &[("name", "teffw"), ("v", &v), ("e", &e.to_string())],
+                        )
+                    })?);
                 }
                 // 无 = 的短写法（M3 / Z38 / B120 / N9H / W8f）
                 _ if key.starts_with('m') && key[1..].chars().all(|c| c.is_ascii_digit() || c == '.') => {
-                    spec.m = key[1..].parse().map_err(|e| format!("m={t} 不是数字：{e}"))?;
+                    spec.m = key[1..].parse().map_err(|e: std::num::ParseFloatError| {
+                        crate::i18n::t_fmt(
+                            "cmd.din.err.num",
+                            &[("name", "m"), ("v", t), ("e", &e.to_string())],
+                        )
+                    })?;
                     have.0 = true;
                 }
                 _ if key.starts_with('z') && key[1..].chars().all(|c| c.is_ascii_digit()) => {
-                    spec.z = key[1..].parse().map_err(|e| format!("z={t} 不是整数：{e}"))?;
+                    spec.z = key[1..].parse().map_err(|e: std::num::ParseIntError| {
+                        crate::i18n::t_fmt(
+                            "cmd.din.err.z_num",
+                            &[("name", "z"), ("v", t), ("e", &e.to_string())],
+                        )
+                    })?;
                     have.1 = true;
                 }
                 _ if (key.starts_with('b') || key.starts_with("db"))
                     && key.trim_start_matches("db").trim_start_matches('b').chars().all(|c| c.is_ascii_digit() || c == '.') =>
                 {
                     let body = key.trim_start_matches("db").trim_start_matches('b');
-                    spec.d_b = body.parse().map_err(|e| format!("d_B={t} 不是数字：{e}"))?;
+                    spec.d_b = body.parse().map_err(|e: std::num::ParseFloatError| {
+                        crate::i18n::t_fmt(
+                            "cmd.din.err.num",
+                            &[("name", "d_B"), ("v", t), ("e", &e.to_string())],
+                        )
+                    })?;
                     have.2 = true;
                 }
                 _ if key.starts_with('n') && key.len() > 1 => {
@@ -1952,21 +2075,21 @@ impl DinTableSpec {
                         t.chars().take_while(|c| c.is_ascii_digit()).collect();
                     let letter = t[digits.len()..].trim();
                     let parsed = if digits.is_empty() || letter.is_empty() {
-                        Err(format!("不认识的参数「{t}」"))
+                        Err(crate::i18n::t_fmt("cmd.din.err.unknown_param_bare", &[("t", t)]))
                     } else if letter.chars().all(|c| c.is_ascii_uppercase()) {
                         parse_fit_token(t, true).map(|f| (f, true))
                     } else if letter.chars().all(|c| c.is_ascii_lowercase()) {
                         parse_fit_token(t, false).map(|f| (f, false))
                     } else {
-                        Err(format!("不认识的参数「{t}」"))
+                        Err(crate::i18n::t_fmt("cmd.din.err.unknown_param_bare", &[("t", t)]))
                     };
                     match parsed {
                         Ok((f, true)) => spec.hub = f,
                         Ok((f, false)) => spec.shaft = f,
                         Err(e) => {
-                            return Err(format!(
-                                "DIN 花键参数表：{e}。\n{}",
-                                usage()
+                            return Err(crate::i18n::t_fmt(
+                                "cmd.din.err.wrapped",
+                                &[("e", &e), ("usage", &usage())],
                             ))
                         }
                     }
@@ -1975,51 +2098,67 @@ impl DinTableSpec {
             i += 1;
         }
         if pending.is_some() {
-            return Err(format!("DIN 花键参数表：`N`/`W` 后缺长度代号（如 `N 120×3×38×9H`）。\n{}", usage()));
+            return Err(crate::i18n::t_fmt(
+                "cmd.din.err.pending_len",
+                &[("usage", &usage())],
+            ));
         }
         if let Some(e) = expr {
             let policy = if hub { &EXPR_POLICY_INT } else { &EXPR_POLICY_EXT };
             let r = crate::card_expr::resolve(policy, &e, Some(hub))?;
             let em = r.value("m").ok_or_else(|| {
-                "DIN 花键参数表：表达式映射表缺 m（内部错误）".to_string()
+                crate::i18n::t("cmd.din.err.map_missing_m")
             })?;
             let ez = r.value("z").ok_or_else(|| {
-                "DIN 花键参数表：表达式映射表缺 z（内部错误）".to_string()
+                crate::i18n::t("cmd.din.err.map_missing_z")
             })? as u32;
             let edb = r.value("d_b").ok_or_else(|| {
-                "DIN 花键参数表：表达式映射表缺 d_B（内部错误）".to_string()
+                crate::i18n::t("cmd.din.err.map_missing_db")
             })?;
             if have.0 && (spec.m - em).abs() > 1e-9 {
-                return Err(format!(
-                    "DIN 花键参数表：显式 m={} 与表达式反解的 m={} 不一致",
-                    trim3(spec.m),
-                    trim3(em)
+                return Err(crate::i18n::t_fmt(
+                    "cmd.din.err.explicit_mismatch",
+                    &[
+                        ("name", "m"),
+                        ("given", &trim3(spec.m)),
+                        ("resolved", &trim3(em)),
+                    ],
                 ));
             }
             if have.1 && spec.z != ez {
-                return Err(format!(
-                    "DIN 花键参数表：显式 z={} 与表达式反解的 z={ez} 不一致",
-                    spec.z
+                return Err(crate::i18n::t_fmt(
+                    "cmd.din.err.explicit_mismatch",
+                    &[
+                        ("name", "z"),
+                        ("given", &spec.z.to_string()),
+                        ("resolved", &ez.to_string()),
+                    ],
                 ));
             }
             if have.2 && (spec.d_b - edb).abs() > 1e-3 {
-                return Err(format!(
-                    "DIN 花键参数表：显式 d_B={} 与表达式反解的 d_B={} 不一致",
-                    trim3(spec.d_b),
-                    trim3(edb)
+                return Err(crate::i18n::t_fmt(
+                    "cmd.din.err.explicit_mismatch",
+                    &[
+                        ("name", "d_B"),
+                        ("given", &trim3(spec.d_b)),
+                        ("resolved", &trim3(edb)),
+                    ],
                 ));
             }
             spec.m = em;
             spec.z = ez;
             spec.d_b = edb;
         } else if !have.0 || !have.1 || !have.2 {
-            let what = match have {
-                (false, false, false) => "模数 m、齿数 z、基准直径 d_B",
-                (false, _, _) => "模数 m",
-                (_, false, _) => "齿数 z",
-                _ => "基准直径 d_B",
-            };
-            return Err(format!("DIN 花键参数表：缺 {what}（写法 `M3 Z38 B120` / 代号 `N 120×3×38×9H` / 九字段表达式）。\n{}", usage()));
+            let what = crate::i18n::t(match have {
+                (false, false, false) => "cmd.din.what.mzdb",
+                (false, _, _) => "cmd.din.what.m",
+                (_, false, _) => "cmd.din.what.z",
+                _ => "cmd.din.what.db",
+            });
+            return Err(crate::i18n::t_fmt(
+                "cmd.din.err.missing_fields",
+                &[("what", &what), ("usage", &usage())],
+            ));
         }
         derive(&spec)?;
         Ok(spec)

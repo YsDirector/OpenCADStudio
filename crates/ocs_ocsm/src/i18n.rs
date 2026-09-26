@@ -2158,6 +2158,1825 @@ pub const CATALOG: &[Msg] = &[
         "无效的附加区 {extra}（应为 R1..R5）",
         "invalid additional area {extra} (expected R1..R5)",
     ),
+
+    // ── 命令输出/报错：OCSMCARD 卡类型分派（guide_server / card_report 同句）──
+    Msg::new(
+        "cmd.card.err.unknown_type_usage",
+        "智能卡片：不认识的卡类型「{name}」。\n{usage}",
+        "Smart card: unknown card type \"{name}\".\n{usage}",
+    ),
+    Msg::new(
+        "cmd.card.err.unknown_type",
+        "智能卡片：不认识的卡类型「{card_id}」（卡类型表见 /api/spline_options 的 card_types）",
+        "Smart card: unknown card type \"{card_id}\" (see card_types under /api/spline_options)",
+    ),
+    Msg::new(
+        "cmd.card.err.bad_model_spline",
+        "花键参数表：请求字段无效：{e}",
+        "Spline table: invalid request field: {e}",
+    ),
+    Msg::new(
+        "cmd.card.err.bad_model_spline_lite",
+        "GB 花键精简卡：请求字段无效：{e}",
+        "GB spline lite card: invalid request field: {e}",
+    ),
+    Msg::new(
+        "cmd.card.err.bad_model_gear",
+        "齿轮参数表：请求字段无效：{e}",
+        "Gear table: invalid request field: {e}",
+    ),
+    Msg::new(
+        "cmd.card.err.bad_model_ansi",
+        "ANSI 花键参数表：请求字段无效：{e}",
+        "ANSI spline table: invalid request field: {e}",
+    ),
+    Msg::new(
+        "cmd.card.err.bad_model_nf",
+        "NF 内花键参数表：请求字段无效：{e}",
+        "NF internal spline table: invalid request field: {e}",
+    ),
+    Msg::new(
+        "cmd.card.err.bad_model_nf_ext",
+        "NF 外花键参数表：请求字段无效：{e}",
+        "NF external spline table: invalid request field: {e}",
+    ),
+    Msg::new(
+        "cmd.card.err.bad_model_din",
+        "DIN 花键参数表：请求字段无效：{e}",
+        "DIN spline table: invalid request field: {e}",
+    ),
+    Msg::new(
+        "cmd.card.err.no_lite_def",
+        "精简卡：卡类型「{id}」没有精简定义",
+        "Lite card: card type \"{id}\" has no lite definition",
+    ),
+
+    // ── 命令输出/报错：OCSMCARD 命令实现（lib.rs）──
+    Msg::new(
+        "cmd.card.err.no_worker",
+        "OCSMCARD: 无法启动智能卡片服务（宿主不支持 worker 请求）。",
+        "OCSMCARD: cannot start the smart-card service (host does not support worker requests).",
+    ),
+    Msg::new(
+        "cmd.card.info.opened",
+        "OCSM 智能卡片：已打开窗口（22 张卡，一卡一方向：GB 花键内/外、齿轮、ANSI 内/外×中/英、NF 内/外、DIN 内/外；下拉「精简版」分组 = GB/NF/DIN/ANSI×4/齿轮共 11 张只列基本参数+主要测量量的卡）。齿形表达式反解 + 实时结果。点「出表」→ 回到图纸点击定位基点 → 移动光标旋转 → 再点击落定（可连续，Esc 结束）。",
+        "OCSM smart card: window opened (22 cards, one direction each: GB spline int/ext, gear, ANSI int/ext × CN/EN, NF int/ext, DIN int/ext; the \"Lite\" group = 11 cards listing only basic parameters plus main measurements for GB/NF/DIN/ANSI×4/gear). Tooth-profile expression resolution + live results. Click \"Export\" → click in the drawing to set the base point → move to rotate → click again to place (repeatable; Esc to finish).",
+    ),
+    Msg::new(
+        "cmd.card.info.already_open",
+        "OCSM 智能卡片：窗口已打开（Alt+Tab 切换过去）。",
+        "OCSM smart card: window is already open (switch to it with Alt+Tab).",
+    ),
+    Msg::new("cmd.card.place.what", "OCSM 智能卡片", "OCSM smart card"),
+    Msg::new(
+        "cmd.card.place.where",
+        "请在智能卡片窗口里点「出表」",
+        "click \"Export\" in the smart card window",
+    ),
+    Msg::new(
+        "cmd.card.xlt.removed",
+        "`XLT` 已移除：请改用 `OCSMCARD 花键参数表 …`（智能卡片）。",
+        "`XLT` was removed: use `OCSMCARD 花键参数表 …` (smart card) instead.",
+    ),
+    Msg::new(
+        "cmd.card.err.spline_prefix",
+        "花键参数表：{e}",
+        "Spline table: {e}",
+    ),
+    Msg::new(
+        "cmd.card.err.spline_block",
+        "花键参数表：建块 {block} 失败：{e}",
+        "Spline table: failed to create block {block}: {e}",
+    ),
+    Msg::new(
+        "cmd.card.err.spline_no_handle",
+        "花键参数表：插入失败（宿主未返回句柄）",
+        "Spline table: insert failed (host returned no handle)",
+    ),
+    Msg::new("cmd.card.undo.spline", "花键参数表插入", "spline table insert"),
+    Msg::new("cmd.card.side.internal", "内花键", "internal spline"),
+    Msg::new("cmd.card.side.external", "外花键", "external spline"),
+    Msg::new(
+        "cmd.card.info.spline_inserted",
+        "智能卡片：已插入{kind}参数表（{grade}，体系 {system}，表达式 {expr}）于 ({x}, {y}) rot {rot}°{dp_note}。",
+        "Smart card: inserted {kind} parameter table ({grade}, system {system}, expression {expr}) at ({x}, {y}) rot {rot}°{dp_note}.",
+    ),
+    Msg::new(
+        "cmd.card.dp_note.calc",
+        "；量棒 Dp={dp}（计算值 D'={dp_calc}，备选 {c1}/ {c2}/ {c3}）",
+        "; pin Dp={dp} (calculated D'={dp_calc}, candidates {c1}/ {c2}/ {c3})",
+    ),
+    Msg::new(
+        "cmd.card.dp_note.manual",
+        "；量棒 Dp={dp}（按所填手算，Md 已重算）",
+        "; pin Dp={dp} (manual entry; Md recomputed)",
+    ),
+    Msg::new(
+        "cmd.card.err.lite_prefix",
+        "GB 花键精简卡：{e}",
+        "GB spline lite card: {e}",
+    ),
+    Msg::new(
+        "cmd.card.err.lite_block",
+        "GB 花键精简卡：建块 {block} 失败：{e}",
+        "GB spline lite card: failed to create block {block}: {e}",
+    ),
+    Msg::new(
+        "cmd.card.err.lite_no_handle",
+        "GB 花键精简卡：插入失败（宿主未返回句柄）",
+        "GB spline lite card: insert failed (host returned no handle)",
+    ),
+    Msg::new(
+        "cmd.card.undo.lite",
+        "GB 花键精简卡插入",
+        "GB spline lite card insert",
+    ),
+    Msg::new(
+        "cmd.card.info.lite_inserted",
+        "智能卡片：已插入{kind}精简卡（{grade}，表达式 {expr}）于 ({x}, {y}) rot {rot}°。",
+        "Smart card: inserted {kind} lite card ({grade}, expression {expr}) at ({x}, {y}) rot {rot}°.",
+    ),
+    Msg::new(
+        "cmd.card.err.lite_card_prefix",
+        "{id}：{e}",
+        "{id}: {e}",
+    ),
+    Msg::new(
+        "cmd.card.err.lite_card_block",
+        "{id}：建块 {block} 失败：{e}",
+        "{id}: failed to create block {block}: {e}",
+    ),
+    Msg::new(
+        "cmd.card.err.lite_card_no_handle",
+        "{id}：插入失败（宿主未返回句柄）",
+        "{id}: insert failed (host returned no handle)",
+    ),
+    Msg::new("cmd.card.undo.lite_card", "{label}插入", "insert {label}"),
+    Msg::new(
+        "cmd.card.info.lite_card_inserted",
+        "智能卡片：已插入{label}（{n} 个精简项，不含公差列）于 ({x}, {y}) rot {rot}°。",
+        "Smart card: inserted {label} ({n} lite items, no tolerance columns) at ({x}, {y}) rot {rot}°.",
+    ),
+    Msg::new(
+        "cmd.card.gear.err_block",
+        "齿轮参数表：建块 {block} 失败：{e}",
+        "Gear table: failed to create block {block}: {e}",
+    ),
+    Msg::new("cmd.card.gear.err_prefix", "齿轮参数表：{e}", "Gear table: {e}"),
+    Msg::new("cmd.card.gear.undo", "齿轮参数表插入", "gear table insert"),
+    Msg::new(
+        "cmd.card.gear.err_no_handle",
+        "齿轮参数表：插入失败（宿主未返回句柄）",
+        "Gear table: insert failed (host returned no handle)",
+    ),
+    Msg::new(
+        "cmd.card.gear.info",
+        "智能卡片：已插入齿轮参数表（{note}）于 ({x}, {y}) rot {rot}°。\nGB/T 10095-88 公差（Fr/FW/ff/fpt/Fβ）与中心距极限偏差本仓未收 —— 表内显示「—」。",
+        "Smart card: inserted gear table ({note}) at ({x}, {y}) rot {rot}°.\nGB/T 10095-88 tolerances (Fr/FW/ff/fpt/Fβ) and center-distance limit deviations are not collected in this repo — shown as \"—\" in the table.",
+    ),
+    Msg::new(
+        "cmd.card.ansi.err_block",
+        "ANSI 花键参数表：建块 {block} 失败：{e}",
+        "ANSI spline table: failed to create block {block}: {e}",
+    ),
+    Msg::new(
+        "cmd.card.ansi.err_prefix",
+        "ANSI 花键参数表：{e}",
+        "ANSI spline table: {e}",
+    ),
+    Msg::new(
+        "cmd.card.ansi.undo",
+        "ANSI 花键参数表插入",
+        "ANSI spline table insert",
+    ),
+    Msg::new(
+        "cmd.card.ansi.err_no_handle",
+        "ANSI 花键参数表：插入失败（宿主未返回句柄）",
+        "ANSI spline table: insert failed (host returned no handle)",
+    ),
+    Msg::new(
+        "cmd.card.ansi.info",
+        "智能卡片：已插入 ANSI B92.1 {side}参数表（{lang}，P/Ps={pair}，N={n}）于 ({x}, {y}) rot {rot}°。\n配合/公差/量棒/公法线表本仓未收 —— 相关格显示「—」。",
+        "Smart card: inserted ANSI B92.1 {side} table ({lang}, P/Ps={pair}, N={n}) at ({x}, {y}) rot {rot}°.\nFit/tolerance/pin/base-tangent tables are not collected in this repo — the related cells show \"—\".",
+    ),
+    Msg::new(
+        "cmd.card.nf.err_block",
+        "NF 内花键参数表：建块 {block} 失败：{e}",
+        "NF internal spline table: failed to create block {block}: {e}",
+    ),
+    Msg::new(
+        "cmd.card.nf.err_prefix",
+        "NF 内花键参数表：{e}",
+        "NF internal spline table: {e}",
+    ),
+    Msg::new("cmd.card.nf.undo", "NF 内花键参数表插入", "NF internal spline table insert"),
+    Msg::new(
+        "cmd.card.nf.err_no_handle",
+        "NF 内花键参数表：插入失败（宿主未返回句柄）",
+        "NF internal spline table: insert failed (host returned no handle)",
+    ),
+    Msg::new(
+        "cmd.card.nf.info",
+        "智能卡片：已插入{note}于 ({x}, {y}) rot {rot}°。\n公差按 p28（大径 R7 / 小径 H7，ISO 286）+ p29（跨棒距 = 内花键 E 偏差）；表外 V/G/ri 与 p29 表外偏差显示「—」。",
+        "Smart card: inserted {note} at ({x}, {y}) rot {rot}°.\nTolerances follow p28 (major R7 / minor H7, ISO 286) + p29 (span = internal-spline E deviation); off-table V/G/ri and off-table p29 deviations show \"—\".",
+    ),
+    Msg::new(
+        "cmd.card.nfext.err_block",
+        "NF 外花键参数表：建块 {block} 失败：{e}",
+        "NF external spline table: failed to create block {block}: {e}",
+    ),
+    Msg::new(
+        "cmd.card.nfext.err_prefix",
+        "NF 外花键参数表：{e}",
+        "NF external spline table: {e}",
+    ),
+    Msg::new(
+        "cmd.card.nfext.undo",
+        "NF 外花键参数表插入",
+        "NF external spline table insert",
+    ),
+    Msg::new(
+        "cmd.card.nfext.err_no_handle",
+        "NF 外花键参数表：插入失败（宿主未返回句柄）",
+        "NF external spline table: insert failed (host returned no handle)",
+    ),
+    Msg::new(
+        "cmd.card.nfext.info",
+        "智能卡片：已插入{note}于 ({x}, {y}) rot {rot}°。\n公差按模板实测口径（大径 h12 / 小径 H7，ISO 286）+ p29（公法线 = 外花键 E 偏差，按配合）；K/W 与 p29 表外偏差显示「—」。",
+        "Smart card: inserted {note} at ({x}, {y}) rot {rot}°.\nTolerances follow the template-measured convention (major h12 / minor H7, ISO 286) + p29 (base tangent = external-spline E deviation, per fit); off-table K/W and p29 deviations show \"—\".",
+    ),
+    Msg::new(
+        "cmd.card.din.err_block",
+        "DIN 花键参数表：建块 {block} 失败：{e}",
+        "DIN spline table: failed to create block {block}: {e}",
+    ),
+    Msg::new(
+        "cmd.card.din.err_prefix",
+        "DIN 花键参数表：{e}",
+        "DIN spline table: {e}",
+    ),
+    Msg::new("cmd.card.din.undo", "DIN 花键参数表插入", "DIN spline table insert"),
+    Msg::new(
+        "cmd.card.din.err_no_handle",
+        "DIN 花键参数表：插入失败（宿主未返回句柄）",
+        "DIN spline table: insert failed (host returned no handle)",
+    ),
+    Msg::new(
+        "cmd.card.din.info",
+        "智能卡片：已插入{note}于 ({x}, {y}) rot {rot}°（整表缩放 0.17）。\nTable 7 缺口（>400 侧偏差列、≤12 细档、非 6–9 级公差、无检验表行的 D_M/M2/M1）显示「—」。",
+        "Smart card: inserted {note} at ({x}, {y}) rot {rot}° (table scaled 0.17).\nTable 7 gaps (>400 flank-deviation columns, ≤12 fine steps, non-6–9 grade tolerances, D_M/M2/M1 without inspection-table rows) show \"—\".",
+    ),
+
+    // ── 命令输出/报错：齿形表达式反解（card_expr.rs）──
+    Msg::new(
+        "cmd.cardexpr.err.module",
+        "表达式模数 m={m} 非法，换算不出径节 P",
+        "expression module m={m} is invalid; cannot derive diametral pitch P",
+    ),
+    Msg::new(
+        "cmd.cardexpr.err.not_finite",
+        "表达式反解出非有限数",
+        "the expression resolves to a non-finite number",
+    ),
+    Msg::new(
+        "cmd.cardexpr.err.mark",
+        "{card}：表达式 MARK 写的是 {mark}，与卡片体系「{want}」不一致",
+        "{card}: expression MARK is {mark}, inconsistent with the card system \"{want}\"",
+    ),
+    Msg::new(
+        "cmd.cardexpr.err.kind",
+        "{card}：表达式 KIND 写的是 {kind}，与卡片方向「{want}」不一致",
+        "{card}: expression KIND is {kind}, inconsistent with the card direction \"{want}\"",
+    ),
+    Msg::new("cmd.cardexpr.kind.in", "IN（内）", "IN (internal)"),
+    Msg::new("cmd.cardexpr.kind.ex", "EX（外）", "EX (external)"),
+    Msg::new("cmd.cardexpr.dir.int", "内", "internal"),
+    Msg::new("cmd.cardexpr.dir.ext", "外", "external"),
+    Msg::new(
+        "cmd.cardexpr.err.alpha",
+        "{card}：表达式压力角 {alpha}° 不在卡片体系允许的 α={allowed}°（表达式与卡片体系不一致）",
+        "{card}: expression pressure angle {alpha}° is outside the card system's allowed α={allowed}° (expression and card system mismatch)",
+    ),
+    Msg::new(
+        "cmd.cardexpr.err.beta",
+        "{card}：表达式螺旋角 β={beta}° 与卡片（只做直齿）不一致",
+        "{card}: expression helix angle β={beta}° is inconsistent with the card (spur only)",
+    ),
+    Msg::new(
+        "cmd.cardexpr.err.shift",
+        "{card}：表达式径向变位 X={x} 在卡片里没有对应输入（该体系不收变位；请用 X0 的表达式）",
+        "{card}: expression profile shift X={x} has no matching input on the card (this system does not accept shift; use an expression with X0)",
+    ),
+
+    // ── 命令输出/报错：GB 花键公差/查表（spline_tol.rs）──
+    Msg::new(
+        "cmd.spline.err.alpha_invalid",
+        "花键参数表：压力角「{other}」非法（GB/T 3478.1 只有 30° / 37.5° / 45°）",
+        "Spline table: invalid pressure angle \"{other}\" (GB/T 3478.1 only has 30° / 37.5° / 45°)",
+    ),
+    Msg::new(
+        "cmd.spline.err.fit_invalid",
+        "花键参数表：齿侧配合「{other}」非法（GB/T 3478.1 只有 H/k、H/js、H/h、H/f、H/e、H/d）",
+        "Spline table: invalid flank fit \"{other}\" (GB/T 3478.1 only has H/k, H/js, H/h, H/f, H/e, H/d)",
+    ),
+    Msg::new(
+        "cmd.spline.err.num",
+        "{what}：{v} 不是数字（{e}）",
+        "{what}: {v} is not a number ({e})",
+    ),
+    Msg::new(
+        "cmd.spline.err.csv_header_missing",
+        "{file} 缺表头",
+        "{file} is missing its header",
+    ),
+    Msg::new(
+        "cmd.spline.err.csv_header_bad",
+        "{file} 表头异常：{header}",
+        "{file}: unexpected header: {header}",
+    ),
+    Msg::new(
+        "cmd.spline.err.csv_cols",
+        "{file} 列数异常：{line}",
+        "{file}: unexpected column count: {line}",
+    ),
+    Msg::new("cmd.spline.err.fit_row", "fit 行：{e}", "fit row: {e}"),
+    Msg::new(
+        "cmd.spline.err.m_not_t26",
+        "花键参数表：m={m} 不在表 26（GB/T 3478.1 的 15 档模数）",
+        "Spline table: m={m} is not in Table 26 (the 15 module steps of GB/T 3478.1)",
+    ),
+    Msg::new(
+        "cmd.spline.err.grade_invalid",
+        "花键参数表：公差等级 {grade} 非法（GB/T 3478.1 只有 4/5/6/7）",
+        "Spline table: invalid tolerance grade {grade} (GB/T 3478.1 only has 4/5/6/7)",
+    ),
+    Msg::new(
+        "cmd.spline.err.fit_len",
+        "花键参数表：配合长度 g={g} 必须 >0",
+        "Spline table: fit length g={g} must be > 0",
+    ),
+    Msg::new(
+        "cmd.spline.err.d_not_t23",
+        "花键参数表：D={d} 不在表 23 的分度圆直径档（≤6…800~1000），表外不插值",
+        "Spline table: D={d} is not in a pitch-diameter band of Table 23 (≤6…800~1000); no interpolation outside the table",
+    ),
+    Msg::new(
+        "cmd.spline.err.d_not_t24",
+        "花键参数表：D={d} 不在表 24 的分度圆直径档（≤6…800~1000），表外不插值",
+        "Spline table: D={d} is not in a pitch-diameter band of Table 24 (≤6…800~1000); no interpolation outside the table",
+    ),
+    Msg::new(
+        "cmd.spline.err.m_range",
+        "花键参数表：模数 m={m} 不在 0.25…10（GB/T 3478.1 的 15 种模数系列）",
+        "Spline table: module m={m} is not within 0.25…10 (the 15-module series of GB/T 3478.1)",
+    ),
+    Msg::new(
+        "cmd.spline.err.it_missing",
+        "花键参数表：GB/T 1800 IT{it} 在 D={d} 无值（表外）",
+        "Spline table: GB/T 1800 IT{it} has no value at D={d} (outside the table)",
+    ),
+    Msg::new(
+        "cmd.spline.err.inv_range",
+        "花键参数表：invα={y} 超出可解范围（α>85°）",
+        "Spline table: invα={y} is beyond the solvable range (α>85°)",
+    ),
+    Msg::new(
+        "cmd.spline.err.dri_base",
+        "花键参数表：D'_Ri 的 Db/D_ee max/D_ii min 必须 >0",
+        "Spline table: Db/D_ee max/D_ii min for D'_Ri must be > 0",
+    ),
+    Msg::new(
+        "cmd.spline.err.dri_dci",
+        "花键参数表：D_ci={d_ci} ≤ Db={db}（接触点已在基圆内，无法算 D'_Ri）",
+        "Spline table: D_ci={d_ci} ≤ Db={db} (contact point is inside the base circle; cannot compute D'_Ri)",
+    ),
+    Msg::new(
+        "cmd.spline.err.dri_le0",
+        "花键参数表：D'_Ri={dp} ≤0（E_max 或几何异常）",
+        "Spline table: D'_Ri={dp} ≤ 0 (E_max or geometry anomaly)",
+    ),
+    Msg::new(
+        "cmd.spline.err.dre_dce",
+        "花键参数表：D_ce={d_ce} ≤ Db={db}（无法算 D'_Re）",
+        "Spline table: D_ce={d_ce} ≤ Db={db} (cannot compute D'_Re)",
+    ),
+    Msg::new(
+        "cmd.spline.err.dre_le0",
+        "花键参数表：D'_Re={dp} ≤0（S_min 或几何异常）",
+        "Spline table: D'_Re={dp} ≤ 0 (S_min or geometry anomaly)",
+    ),
+    Msg::new(
+        "cmd.spline.err.dp_over_series",
+        "花键参数表：D'={dp} 超出 GB/T 3478.9 量棒系列上限 {max}",
+        "Spline table: D'={dp} exceeds the upper limit {max} of the GB/T 3478.9 pin series",
+    ),
+    Msg::new(
+        "cmd.spline.err.m_range15",
+        "花键参数表：模数 m={m} 不在 0.25…10（15 种模数系列）",
+        "Spline table: module m={m} is not within 0.25…10 (15-module series)",
+    ),
+    Msg::new(
+        "cmd.spline.err.z_too_small",
+        "花键参数表：齿数 z={z} 太小（至少 6）",
+        "Spline table: tooth count z={z} is too small (at least 6)",
+    ),
+    Msg::new(
+        "cmd.spline.err.internal_h",
+        "花键参数表：内花键是基孔制 H（收到「{dev}」）",
+        "Spline table: an internal spline is always H (hole-basis); got \"{dev}\"",
+    ),
+    Msg::new(
+        "cmd.spline.err.internal_received_ext",
+        "花键参数表：internal_table 收到外花键输入",
+        "Spline table: internal_table received external-spline input",
+    ),
+    Msg::new(
+        "cmd.spline.err.external_received_int",
+        "花键参数表：external_table 收到内花键输入",
+        "Spline table: external_table received internal-spline input",
+    ),
+    Msg::new(
+        "cmd.spline.err.dp_positive",
+        "花键参数表：量棒直径 Dp={v} 必须 >0",
+        "Spline table: pin diameter Dp={v} must be > 0",
+    ),
+    Msg::new(
+        "cmd.spline.err.dp_not_series",
+        "花键参数表：Dp={v} 不在 GB/T 3478.9 表 1 量棒系列（0.56…25.00，67 档）",
+        "Spline table: Dp={v} is not in the GB/T 3478.9 Table 1 pin series (0.56…25.00, 67 steps)",
+    ),
+
+    // ── 卡类型显示名（报错前缀；仅用于错误/回执前缀，不动卡面/GUI 标签）──
+    Msg::new("card.name.spline", "花键参数表", "Spline table"),
+    Msg::new("card.name.gear", "齿轮参数表", "Gear table"),
+    Msg::new("card.name.ansi", "ANSI 花键参数表", "ANSI spline table"),
+    Msg::new("card.name.nf", "NF 内花键参数表", "NF internal spline table"),
+    Msg::new("card.name.nf_ext", "NF 外花键参数表", "NF external spline table"),
+    Msg::new("card.name.din", "DIN 花键参数表", "DIN spline table"),
+
+    // ── 命令报错：五卡共用的九字段表达式解析（spline_table::parse_gear_expr）──
+    Msg::new(
+        "cmd.card.err.expr_missing",
+        "{card}：缺九字段齿形表达式（形如 `SPLINE IN M3 Z20 ALPHA30 X0 DA65.4 DF57.3436 BETA0 H30`；轴/齿轮生成器 GUI 可直接复制）",
+        "{card}: missing the nine-field tooth-profile expression (like `SPLINE IN M3 Z20 ALPHA30 X0 DA65.4 DF57.3436 BETA0 H30`; copy it from the shaft/gear generator GUI)",
+    ),
+    Msg::new(
+        "cmd.card.err.expr_parse",
+        "{card}：齿形表达式无法解析：{e}",
+        "{card}: cannot parse the tooth-profile expression: {e}",
+    ),
+    Msg::new(
+        "cmd.card.err.expr_multi",
+        "{card}：表达式应只有一段齿形（收到 {n} 段）——请只粘生成器复制的那一行齿形表达式",
+        "{card}: the expression must contain exactly one tooth-profile segment (got {n}) — paste only the single line copied from the generator",
+    ),
+    Msg::new(
+        "cmd.card.err.expr_no_gear",
+        "{card}：表达式里没有齿形段（应以 `GEAR`/`SPLINE` + M/Z/ALPHA… 开头）",
+        "{card}: the expression has no tooth-profile segment (it should start with `GEAR`/`SPLINE` + M/Z/ALPHA…)",
+    ),
+
+    // ── 命令输出/报错：GB 花键参数表命令行（spline_table.rs）──
+    Msg::new(
+        "cmd.spline.err.values_tag_missing",
+        "花键参数表：模板 tag「{tag}」没有取值映射",
+        "Spline table: template tag \"{tag}\" has no value mapping",
+    ),
+    Msg::new(
+        "cmd.spline.err.std_missing_system",
+        "花键参数表：std 缺少体系（本期只有 GB）",
+        "Spline table: std is missing a system (only GB for now)",
+    ),
+    Msg::new(
+        "cmd.spline.err.side_first",
+        "花键参数表：第一个参数应为「内」或「外」（收到「{other}」）。\n{usage}",
+        "Spline table: the first argument must be \"内\" or \"外\"/int/ext (got \"{other}\").\n{usage}",
+    ),
+    Msg::new(
+        "cmd.spline.err.internal_h_mark",
+        "花键参数表：内花键是基孔制 H（收到「{mark}」；写法如 `内 6H`）",
+        "Spline table: an internal spline is always H (hole-basis); got \"{mark}\" (write e.g. `内 6H`)",
+    ),
+    Msg::new(
+        "cmd.spline.err.kind_mismatch",
+        "花键参数表：表达式 KIND 写的是 {kind}，与卡片方向「{want}」不一致",
+        "Spline table: expression KIND is {kind}, inconsistent with the card direction \"{want}\"",
+    ),
+    Msg::new(
+        "cmd.spline.err.need_value",
+        "花键参数表：{what} 缺少数值/选项",
+        "Spline table: {what} is missing a value/option",
+    ),
+    Msg::new("cmd.spline.err.dp_num", "dp={v} 不是数字：{e}", "dp={v} is not a number: {e}"),
+    Msg::new(
+        "cmd.spline.err.dp_parse_positive",
+        "花键参数表：dp={dp} 必须 >0",
+        "Spline table: dp={dp} must be > 0",
+    ),
+    Msg::new(
+        "cmd.spline.err.root_invalid",
+        "花键参数表：齿根形式「{other}」非法（只有 平/圆）",
+        "Spline table: invalid root form \"{other}\" (only 平/flat or 圆/fillet)",
+    ),
+    Msg::new(
+        "cmd.spline.err.at_format",
+        "花键参数表：at「{v}」应为 `x,y`",
+        "Spline table: at \"{v}\" must be `x,y`",
+    ),
+    Msg::new("cmd.spline.err.at_x", "at x={x} 不是数字：{e}", "at x={x} is not a number: {e}"),
+    Msg::new("cmd.spline.err.at_y", "at y={y} 不是数字：{e}", "at y={y} is not a number: {e}"),
+    Msg::new("cmd.spline.err.rot", "rot={v} 不是数字：{e}", "rot={v} is not a number: {e}"),
+    Msg::new(
+        "cmd.spline.err.unknown_param",
+        "花键参数表：不认识的参数「{other}」。\n{usage}",
+        "Spline table: unrecognized argument \"{other}\".\n{usage}",
+    ),
+    Msg::new(
+        "cmd.spline.err.mark_format",
+        "花键参数表：「{mark}」应形如 `6H` / `5f`",
+        "Spline table: \"{mark}\" must look like `6H` / `5f`",
+    ),
+    Msg::new(
+        "cmd.spline.err.grade_num",
+        "花键参数表：等级「{g}」不是数字：{e}",
+        "Spline table: grade \"{g}\" is not a number: {e}",
+    ),
+    Msg::new(
+        "cmd.spline.err.grade_invalid_card",
+        "花键参数表：公差等级「{grade}」非法（GB/T 3478.1 只有 4/5/6/7）",
+        "Spline table: invalid tolerance grade \"{grade}\" (GB/T 3478.1 only has 4/5/6/7)",
+    ),
+    Msg::new(
+        "cmd.spline.err.mark_no_fit",
+        "花键参数表：「{mark}」缺配合类别（内如 `6H`、外如 `5f`）",
+        "Spline table: \"{mark}\" is missing the fit class (e.g. `6H` for internal, `5f` for external)",
+    ),
+    Msg::new(
+        "cmd.spline.usage",
+        "智能卡片「花键参数表」用法：`OCSMCARD 花键参数表 [std GB] 内 6H <九字段表达式> [dp 4.5] [root 平|圆] [at x,y] [rot 度]`；外花键把 `内 6H` 换成 `外 5f`（表达式 KIND 用 EX）。表达式形如 `SPLINE IN M3 Z20 ALPHA30 X0 DA65.4 DF57.3436 BETA0 H30`（轴/齿轮生成器 GUI 可直接复制）。等级 4/5/6/7；配合内 H、外 d/e/f/h/js/k；不填 dp = 按标准 R40 自动选；不填 root = 由表达式 DA/DF 反解（30° 可分辨平/圆），再退到按 αD 默认。",
+        "Smart card \"Spline table\" usage: `OCSMCARD 花键参数表 [std GB] 内 6H <nine-field expression> [dp 4.5] [root 平|圆] [at x,y] [rot deg]`; for external splines replace `内 6H` with `外 5f` (use KIND EX in the expression). Example expression: `SPLINE IN M3 Z20 ALPHA30 X0 DA65.4 DF57.3436 BETA0 H30` (copy it from the shaft/gear generator GUI). Grades 4/5/6/7; internal fit H, external d/e/f/h/js/k; omit dp = auto-pick per standard R40; omit root = resolve from DA/DF in the expression (30° distinguishes flat/fillet), then fall back to the αD default.",
+    ),
+
+    // ── 命令输出/报错：齿轮参数表命令行（gear_table.rs）──
+    Msg::new(
+        "cmd.geartab.err.m_invalid",
+        "齿轮参数表：模数 m={m} 非法",
+        "Gear table: invalid module m={m}",
+    ),
+    Msg::new(
+        "cmd.geartab.err.missing_da",
+        "齿轮参数表：表达式缺 `DA`（大径）—— 齿顶高系数要从它反解（轴/齿轮生成器 GUI 可复制完整九字段）",
+        "Gear table: the expression is missing `DA` (major diameter) — the addendum coefficient is back-solved from it (copy the full nine fields from the shaft/gear generator GUI)",
+    ),
+    Msg::new(
+        "cmd.geartab.err.missing_df",
+        "齿轮参数表：表达式缺 `DF`（小径）—— 全齿高与顶隙系数要从它反解",
+        "Gear table: the expression is missing `DF` (minor diameter) — the whole depth and clearance coefficient are back-solved from it",
+    ),
+    Msg::new(
+        "cmd.geartab.err.params_invalid",
+        "齿轮参数表：表达式反解的齿形参数不合法：{e}",
+        "Gear table: the tooth-profile parameters back-solved from the expression are invalid: {e}",
+    ),
+    Msg::new(
+        "cmd.geartab.err.closed_loop",
+        "齿轮参数表：表达式 DA/DF 与 M/Z/ALPHA/X 不自洽（反解 ha*={ha}、c*={c} 后引擎给 Da={da}、Df={df}，表达式写 Da={da_in}、Df={df_in}）",
+        "Gear table: expression DA/DF is inconsistent with M/Z/ALPHA/X (after back-solving ha*={ha}, c*={c}, the engine gives Da={da}, Df={df}, but the expression says Da={da_in}, Df={df_in})",
+    ),
+    Msg::new(
+        "cmd.geartab.err.tag_order",
+        "齿轮参数表：取值映射顺序与模板属性不一致：{got} != {want}",
+        "Gear table: value-mapping order differs from the template attributes: {got} != {want}",
+    ),
+    Msg::new(
+        "cmd.geartab.err.mate_z",
+        "齿轮参数表：配对齿轮齿数 z₂={z} 超出范围（2–1000）",
+        "Gear table: mating-gear tooth count z₂={z} is out of range (2–1000)",
+    ),
+    Msg::new(
+        "cmd.geartab.err.center",
+        "齿轮参数表：中心距 center={a} 必须是正数",
+        "Gear table: center distance center={a} must be positive",
+    ),
+    Msg::new(
+        "cmd.geartab.err.need",
+        "齿轮参数表：{what} 缺少数值/字符串",
+        "Gear table: {what} is missing a value/string",
+    ),
+    Msg::new(
+        "cmd.geartab.err.mate_num",
+        "齿轮参数表：mate={v} 不是整数：{e}",
+        "Gear table: mate={v} is not an integer: {e}",
+    ),
+    Msg::new(
+        "cmd.geartab.err.center_num",
+        "齿轮参数表：center={v} 不是数字：{e}",
+        "Gear table: center={v} is not a number: {e}",
+    ),
+    Msg::new(
+        "cmd.geartab.err.at_format",
+        "齿轮参数表：at「{v}」应为 `x,y`",
+        "Gear table: at \"{v}\" must be `x,y`",
+    ),
+    Msg::new("cmd.geartab.err.at_x", "齿轮参数表：at x={x} 不是数字：{e}", "Gear table: at x={x} is not a number: {e}"),
+    Msg::new("cmd.geartab.err.at_y", "齿轮参数表：at y={y} 不是数字：{e}", "Gear table: at y={y} is not a number: {e}"),
+    Msg::new("cmd.geartab.err.rot", "齿轮参数表：rot={v} 不是数字：{e}", "Gear table: rot={v} is not a number: {e}"),
+    Msg::new(
+        "cmd.geartab.err.unknown_param",
+        "齿轮参数表：不认识的参数「{other}」。\n{usage}",
+        "Gear table: unrecognized argument \"{other}\".\n{usage}",
+    ),
+    Msg::new(
+        "cmd.geartab.usage",
+        "智能卡片「齿轮参数表」用法：`OCSMCARD 齿轮参数表 <九字段表达式> [mate z₂] [dwg 图号] [grade 精度等级] [center a] [at x,y] [rot 度]`。表达式形如 `GEAR EX M3 Z20 ALPHA20 X0 DA66 DF52.5 BETA0 H30`（轴/齿轮生成器 GUI 可直接复制）；DA/DF 用来反解 ha*/c*，内/外齿由表达式 KIND 决定。GB/T 10095-88 公差（Fr/FW/ff/fpt/Fβ）与中心距极限偏差本仓未收 —— 卡片显示「—」，不臆造。",
+        "Smart card \"Gear table\" usage: `OCSMCARD 齿轮参数表 <nine-field expression> [mate z₂] [dwg drawing-no] [grade precision-grade] [center a] [at x,y] [rot deg]`. Example expression: `GEAR EX M3 Z20 ALPHA20 X0 DA66 DF52.5 BETA0 H30` (copy it from the shaft/gear generator GUI); DA/DF are used to back-solve ha*/c*, and internal/external teeth are determined by KIND in the expression. GB/T 10095-88 tolerances (Fr/FW/ff/fpt/Fβ) and center-distance limit deviations are not collected in this repo — the card shows \"—\" instead of guessing.",
+    ),
+    Msg::new("cmd.geartab.kind.internal", "内齿轮", "internal gear"),
+    Msg::new("cmd.geartab.kind.external", "外齿轮", "external gear"),
+    Msg::new(
+        "cmd.geartab.echo",
+        "{kind} z{z} m{m}（ha*={ha}，c*={c}）公法线 k={k} W={w}",
+        "{kind} z{z} m{m} (ha*={ha}, c*={c}) base tangent k={k} W={w}",
+    ),
+
+    // ── 命令输出/报错：ANSI 花键参数表命令行（ansi_table.rs）──
+    Msg::new(
+        "cmd.ansi.err.need_value",
+        "ANSI 花键参数表：{what} 缺少数值/选项",
+        "ANSI spline table: {what} is missing a value/option",
+    ),
+    Msg::new(
+        "cmd.ansi.err.z_num",
+        "ANSI 花键参数表：齿数={v} 不是整数：{e}",
+        "ANSI spline table: tooth count={v} is not an integer: {e}",
+    ),
+    Msg::new(
+        "cmd.ansi.err.at_format",
+        "ANSI 花键参数表：at「{v}」应为 `x,y`",
+        "ANSI spline table: at \"{v}\" must be `x,y`",
+    ),
+    Msg::new(
+        "cmd.ansi.err.at_x",
+        "ANSI 花键参数表：at x={x} 不是数字：{e}",
+        "ANSI spline table: at x={x} is not a number: {e}",
+    ),
+    Msg::new(
+        "cmd.ansi.err.at_y",
+        "ANSI 花键参数表：at y={y} 不是数字：{e}",
+        "ANSI spline table: at y={y} is not a number: {e}",
+    ),
+    Msg::new(
+        "cmd.ansi.err.rot",
+        "ANSI 花键参数表：rot={v} 不是数字：{e}",
+        "ANSI spline table: rot={v} is not a number: {e}",
+    ),
+    Msg::new(
+        "cmd.ansi.err.unknown_param",
+        "ANSI 花键参数表：不认识的参数「{t}」。\n{usage}",
+        "ANSI spline table: unrecognized argument \"{t}\".\n{usage}",
+    ),
+    Msg::new(
+        "cmd.ansi.err.p_mismatch",
+        "ANSI 花键参数表：显式径节 P={p} 与表达式反解的 P/Ps={ep} 不一致",
+        "ANSI spline table: explicit diametral pitch P={p} differs from the expression's P/Ps={ep}",
+    ),
+    Msg::new(
+        "cmd.ansi.err.n_mismatch",
+        "ANSI 花键参数表：显式齿数 N={given} 与表达式反解的 N={ez} 不一致",
+        "ANSI spline table: explicit tooth count N={given} differs from the expression's N={ez}",
+    ),
+    Msg::new(
+        "cmd.ansi.err.missing_p",
+        "ANSI 花键参数表：缺径节 P（写法 `P16` / `P 16/32` / `径节 16`，或直接给九字段表达式）。\n{usage}",
+        "ANSI spline table: missing diametral pitch P (write `P16` / `P 16/32` / `径节 16`, or supply the nine-field expression).\n{usage}",
+    ),
+    Msg::new(
+        "cmd.ansi.err.missing_z",
+        "ANSI 花键参数表：缺齿数 Z（写法 `Z20` / `齿数 20`；表达式反解时无需再给）。\n{usage}",
+        "ANSI spline table: missing tooth count Z (write `Z20` / `齿数 20`; not needed when the expression is back-solved).\n{usage}",
+    ),
+    Msg::new(
+        "cmd.ansi.err.no_profile",
+        "ANSI 花键参数表：没有压力角 {alpha}° 的 Table 2 齿廓（本仓仅 30/37.5/45）",
+        "ANSI spline table: no Table 2 profile for pressure angle {alpha}° (this repo only has 30/37.5/45)",
+    ),
+    Msg::new(
+        "cmd.ansi.err.map_missing_p",
+        "ANSI 花键参数表：表达式映射表缺径节 P（内部错误）",
+        "ANSI spline table: the expression mapping has no diametral pitch P (internal error)",
+    ),
+    Msg::new(
+        "cmd.ansi.err.map_missing_n",
+        "ANSI 花键参数表：表达式映射表缺齿数 N（内部错误）",
+        "ANSI spline table: the expression mapping has no tooth count N (internal error)",
+    ),
+    Msg::new(
+        "cmd.ansi.err.side_invalid",
+        "ANSI 花键参数表：方向「{other}」非法（可选项 int/ext）",
+        "ANSI spline table: invalid direction \"{other}\" (allowed: int/ext)",
+    ),
+    Msg::new(
+        "cmd.ansi.usage",
+        "智能卡片「{card}」用法：`OCSMCARD {card} 内|外 <九字段齿形表达式> [profile 齿廓] [at x,y] [rot 度]`（如 `OCSMCARD {card} 内 SPLINE IN M1.5875 Z20 ALPHA30 X0 BETA0 H30`；也可沿用 `P<径节> Z<齿数>` 写法，如 `OCSMCARD {card} 内 P16 Z20`）。表达式反解 P=25.4/m、N=z，齿廓按 α 保持同角列或选默认列（α 只收 30/37.5/45，直齿、不收变位）；齿廓五列：`ANSI30P`/`ANSI30PM`/`ANSI30R`/`ANSI375R`/`ANSI45R`（缺省列 A）；ANSI B92.1 的配合/公差/量棒/公法线表本仓未收 —— 相关格显示「—」，不臆造。",
+        "Smart card \"{card}\" usage: `OCSMCARD {card} 内|外 <nine-field expression> [profile PROFILE] [at x,y] [rot deg]` (e.g. `OCSMCARD {card} 内 SPLINE IN M1.5875 Z20 ALPHA30 X0 BETA0 H30`; the `P<pitch> Z<teeth>` form still works, e.g. `OCSMCARD {card} 内 P16 Z20`). The expression is back-solved to P=25.4/m, N=z; the profile keeps the same-angle column or falls back to the default column (only α 30/37.5/45, spur only, no shift); profile tokens: `ANSI30P`/`ANSI30PM`/`ANSI30R`/`ANSI375R`/`ANSI45R` (default column A). ANSI B92.1 fit/tolerance/pin/base-tangent tables are not collected in this repo — the related cells show \"—\" instead of guessing.",
+    ),
+    Msg::new("cmd.ansi.side.internal", "内花键", "internal spline"),
+    Msg::new("cmd.ansi.side.external", "外花键", "external spline"),
+    Msg::new(
+        "cmd.ansi.echo",
+        "{side}，P/Ps={pair}，N={n}，α={alpha}°",
+        "{side}, P/Ps={pair}, N={n}, α={alpha}°",
+    ),
+
+    // ── 命令输出/报错：NF 内花键参数表命令行（nf_table.rs）──
+    Msg::new(
+        "cmd.nf.err.a_positive",
+        "NF 内花键参数表：公称直径 A={a} 必须是正数",
+        "NF internal spline table: nominal diameter A={a} must be positive",
+    ),
+    Msg::new(
+        "cmd.nf.err.m_positive",
+        "NF 内花键参数表：模数 m={m} 必须是正数",
+        "NF internal spline table: module m={m} must be positive",
+    ),
+    Msg::new(
+        "cmd.nf.err.z_range",
+        "NF 内花键参数表：齿数 z={z} 超出范围（3–1000）",
+        "NF internal spline table: tooth count z={z} is out of range (3–1000)",
+    ),
+    Msg::new(
+        "cmd.nf.err.z_table_mismatch",
+        "NF 内花键参数表：齿数 z={z_in} 与 NF E22-141 表行（A={a} m={m}）的 N={z_tab} 不一致；表值行请去掉 z 或改为 N={z_tab}",
+        "NF internal spline table: tooth count z={z_in} differs from N={z_tab} in the NF E22-141 table row (A={a} m={m}); drop z or set N={z_tab} for a table row",
+    ),
+    Msg::new(
+        "cmd.nf.err.tag_order",
+        "NF 内花键参数表：取值映射顺序与模板属性不一致：{got} != {want}",
+        "NF internal spline table: value-mapping order differs from the template attributes: {got} != {want}",
+    ),
+    Msg::new(
+        "cmd.nf.err.centering_invalid",
+        "NF 内花键参数表：定心方式「{t}」非法（可用 外径 / 齿面）",
+        "NF internal spline table: invalid centering \"{t}\" (allowed: 外径/major-diameter or 齿面/flank)",
+    ),
+    Msg::new(
+        "cmd.nf.err.root_invalid",
+        "NF 内花键参数表：齿根样式「{t}」非法（可用 平 / 圆）",
+        "NF internal spline table: invalid root style \"{t}\" (allowed: 平/flat or 圆/fillet)",
+    ),
+    Msg::new(
+        "cmd.nf.err.fit_invalid",
+        "NF 内花键参数表：配合类别「{t}」非法（可用 松动 / 滑动 / 固定 / 压）",
+        "NF internal spline table: invalid fit class \"{t}\" (allowed: 松动/loose, 滑动/sliding, 固定/fixed, 压/press)",
+    ),
+    Msg::new(
+        "cmd.nf.err.map_missing_a",
+        "NF 内花键参数表：表达式映射表缺 A（内部错误）",
+        "NF internal spline table: the expression mapping has no A (internal error)",
+    ),
+    Msg::new(
+        "cmd.nf.err.map_missing_m",
+        "NF 内花键参数表：表达式映射表缺 m（内部错误）",
+        "NF internal spline table: the expression mapping has no m (internal error)",
+    ),
+    Msg::new(
+        "cmd.nf.err.map_missing_z",
+        "NF 内花键参数表：表达式映射表缺 z（内部错误）",
+        "NF internal spline table: the expression mapping has no z (internal error)",
+    ),
+    Msg::new(
+        "cmd.nf.err.need",
+        "NF 内花键参数表：{what} 缺少数值/选项",
+        "NF internal spline table: {what} is missing a value/option",
+    ),
+    Msg::new(
+        "cmd.nf.err.at_format",
+        "NF 内花键参数表：at「{v}」应为 `x,y`",
+        "NF internal spline table: at \"{v}\" must be `x,y`",
+    ),
+    Msg::new(
+        "cmd.nf.err.at_x",
+        "NF 内花键参数表：at x={x} 不是数字：{e}",
+        "NF internal spline table: at x={x} is not a number: {e}",
+    ),
+    Msg::new(
+        "cmd.nf.err.at_y",
+        "NF 内花键参数表：at y={y} 不是数字：{e}",
+        "NF internal spline table: at y={y} is not a number: {e}",
+    ),
+    Msg::new(
+        "cmd.nf.err.rot",
+        "NF 内花键参数表：rot={v} 不是数字：{e}",
+        "NF internal spline table: rot={v} is not a number: {e}",
+    ),
+    Msg::new(
+        "cmd.nf.err.num",
+        "NF 内花键参数表：{name}={v} 不是数字：{e}",
+        "NF internal spline table: {name}={v} is not a number: {e}",
+    ),
+    Msg::new(
+        "cmd.nf.err.z_num",
+        "NF 内花键参数表：{name}={v} 不是整数：{e}",
+        "NF internal spline table: {name}={v} is not an integer: {e}",
+    ),
+    Msg::new(
+        "cmd.nf.err.unknown_param",
+        "NF 内花键参数表：不认识的参数「{t}」。\n{usage}",
+        "NF internal spline table: unrecognized argument \"{t}\".\n{usage}",
+    ),
+    Msg::new(
+        "cmd.nf.err.explicit_mismatch",
+        "NF 内花键参数表：显式 {name}={given} 与表达式反解的 {name}={resolved} 不一致",
+        "NF internal spline table: explicit {name}={given} differs from the expression's {name}={resolved}",
+    ),
+    Msg::new(
+        "cmd.nf.err.missing_a",
+        "NF 内花键参数表：缺公称直径 A（写法 `A300` / `直径 300`，或直接给九字段表达式）。\n{usage}",
+        "NF internal spline table: missing nominal diameter A (write `A300` / `直径 300`, or supply the nine-field expression).\n{usage}",
+    ),
+    Msg::new(
+        "cmd.nf.err.missing_m",
+        "NF 内花键参数表：缺模数 m（写法 `M7.5` / `模数 7.5`；同一 A 可对应不同模数，必填）。\n{usage}",
+        "NF internal spline table: missing module m (write `M7.5` / `模数 7.5`; the same A can match different modules, so it is required).\n{usage}",
+    ),
+    Msg::new(
+        "cmd.nf.usage",
+        "智能卡片「NF内花键参数表」用法：`OCSMCARD NF内花键参数表 <九字段齿形表达式> [中心 外径|齿面] [根 平|圆] [配合 松动|滑动|固定|压] [at x,y] [rot 度]`（如 `OCSMCARD NF内花键参数表 SPLINE IN M7.5 Z38 ALPHA20 X0.8 BETA0 H30`；也可沿用 `A300 M7.5 [Z38]` 写法）。表达式反解 A=m(z+0.4+2x)、m、z（NF 压力角恒 20°）；A/m 取 NF E22-141 表值（p18 尺寸表，同一直径可对应不同模数）；定心方式缺省「外径定心」（Az=A；齿面定心 Az=A+0.3m）；加工方法照 p18 = 拉削；V/V1/G/G1 取 p23–p25 检查表、ri 取 p22 —— 表外显示「—」，不外推；公差：大径 R7 / 小径 H7（p28，数值按 ISO 286），跨棒距 = p29 内花键 E 偏差；配合类别（缺省固定）只影响预览里配对外花键的 E/xm 偏差读数。",
+        "Smart card \"NF internal spline table\" usage: `OCSMCARD NF内花键参数表 <nine-field expression> [中心 外径|齿面] [根 平|圆] [配合 松动|滑动|固定|压] [at x,y] [rot deg]` (e.g. `OCSMCARD NF内花键参数表 SPLINE IN M7.5 Z38 ALPHA20 X0.8 BETA0 H30`; the `A300 M7.5 [Z38]` form still works). The expression is back-solved to A=m(z+0.4+2x), m, z (NF pressure angle is always 20°); A/m come from the NF E22-141 table (p18 dimension table; the same diameter can match different modules); centering defaults to major-diameter (Az=A; flank centering Az=A+0.3m); the process follows p18 = broaching; V/V1/G/G1 come from the p23–p25 inspection table and ri from p22 — off-table values show \"—\" without extrapolation; tolerances: major R7 / minor H7 (p28, values per ISO 286), span = p29 internal-spline E deviation; the fit class (default fixed) only affects the mated external-spline E/xm deviation readings in the preview.",
+    ),
+    Msg::new("cmd.nf.centering.outer", "外径定心", "major-diameter centering"),
+    Msg::new("cmd.nf.centering.flank", "齿面定心", "flank centering"),
+    Msg::new("cmd.nf.fit.loose", "松动", "loose"),
+    Msg::new("cmd.nf.fit.sliding", "滑动", "sliding"),
+    Msg::new("cmd.nf.fit.fixed", "固定", "fixed"),
+    Msg::new("cmd.nf.fit.press", "压", "press"),
+    Msg::new(
+        "cmd.nf.echo",
+        "NF E22-141 内花键 A={a} m={m} z={z}（{centering}，拉削；{fit}配合；V/G/G1 {vg}）",
+        "NF E22-141 internal spline A={a} m={m} z={z} ({centering}, broached; {fit} fit; V/G/G1 {vg})",
+    ),
+
+    // ── 命令输出/报错：NF 外花键参数表命令行（nf_ext_table.rs）──
+    Msg::new(
+        "cmd.nfext.err.a_positive",
+        "NF 外花键参数表：公称直径 A={a} 必须是正数",
+        "NF external spline table: nominal diameter A={a} must be positive",
+    ),
+    Msg::new(
+        "cmd.nfext.err.m_positive",
+        "NF 外花键参数表：模数 m={m} 必须是正数",
+        "NF external spline table: module m={m} must be positive",
+    ),
+    Msg::new(
+        "cmd.nfext.err.z_range",
+        "NF 外花键参数表：齿数 z={z} 超出范围（3–1000）",
+        "NF external spline table: tooth count z={z} is out of range (3–1000)",
+    ),
+    Msg::new(
+        "cmd.nfext.err.z_table_mismatch",
+        "NF 外花键参数表：齿数 z={z_in} 与 NF E22-141 表行（A={a} m={m}）的 N={z_tab} 不一致；表值行请去掉 z 或改为 N={z_tab}",
+        "NF external spline table: tooth count z={z_in} differs from N={z_tab} in the NF E22-141 table row (A={a} m={m}); drop z or set N={z_tab} for a table row",
+    ),
+    Msg::new(
+        "cmd.nfext.err.tag_order",
+        "NF 外花键参数表：取值映射顺序与模板属性不一致：{got} != {want}",
+        "NF external spline table: value-mapping order differs from the template attributes: {got} != {want}",
+    ),
+    Msg::new(
+        "cmd.nfext.err.centering_invalid",
+        "NF 外花键参数表：定心方式「{t}」非法（可用 齿面 / 外径）",
+        "NF external spline table: invalid centering \"{t}\" (allowed: 齿面/flank or 外径/major-diameter)",
+    ),
+    Msg::new(
+        "cmd.nfext.err.root_invalid",
+        "NF 外花键参数表：齿根样式「{t}」非法（可用 平 / 圆）",
+        "NF external spline table: invalid root style \"{t}\" (allowed: 平/flat or 圆/fillet)",
+    ),
+    Msg::new(
+        "cmd.nfext.err.fit_invalid",
+        "NF 外花键参数表：配合类别「{t}」非法（可用 松动 / 滑动 / 固定 / 压）",
+        "NF external spline table: invalid fit class \"{t}\" (allowed: 松动/loose, 滑动/sliding, 固定/fixed, 压/press)",
+    ),
+    Msg::new(
+        "cmd.nfext.err.map_missing_a",
+        "NF 外花键参数表：表达式映射表缺 A（内部错误）",
+        "NF external spline table: the expression mapping has no A (internal error)",
+    ),
+    Msg::new(
+        "cmd.nfext.err.map_missing_m",
+        "NF 外花键参数表：表达式映射表缺 m（内部错误）",
+        "NF external spline table: the expression mapping has no m (internal error)",
+    ),
+    Msg::new(
+        "cmd.nfext.err.map_missing_z",
+        "NF 外花键参数表：表达式映射表缺 z（内部错误）",
+        "NF external spline table: the expression mapping has no z (internal error)",
+    ),
+    Msg::new(
+        "cmd.nfext.err.need",
+        "NF 外花键参数表：{what} 缺少数值/选项",
+        "NF external spline table: {what} is missing a value/option",
+    ),
+    Msg::new(
+        "cmd.nfext.err.at_format",
+        "NF 外花键参数表：at「{v}」应为 `x,y`",
+        "NF external spline table: at \"{v}\" must be `x,y`",
+    ),
+    Msg::new(
+        "cmd.nfext.err.at_x",
+        "NF 外花键参数表：at x={x} 不是数字：{e}",
+        "NF external spline table: at x={x} is not a number: {e}",
+    ),
+    Msg::new(
+        "cmd.nfext.err.at_y",
+        "NF 外花键参数表：at y={y} 不是数字：{e}",
+        "NF external spline table: at y={y} is not a number: {e}",
+    ),
+    Msg::new(
+        "cmd.nfext.err.rot",
+        "NF 外花键参数表：rot={v} 不是数字：{e}",
+        "NF external spline table: rot={v} is not a number: {e}",
+    ),
+    Msg::new(
+        "cmd.nfext.err.num",
+        "NF 外花键参数表：{name}={v} 不是数字：{e}",
+        "NF external spline table: {name}={v} is not a number: {e}",
+    ),
+    Msg::new(
+        "cmd.nfext.err.z_num",
+        "NF 外花键参数表：{name}={v} 不是整数：{e}",
+        "NF external spline table: {name}={v} is not an integer: {e}",
+    ),
+    Msg::new(
+        "cmd.nfext.err.unknown_param",
+        "NF 外花键参数表：不认识的参数「{t}」。\n{usage}",
+        "NF external spline table: unrecognized argument \"{t}\".\n{usage}",
+    ),
+    Msg::new(
+        "cmd.nfext.err.explicit_mismatch",
+        "NF 外花键参数表：显式 {name}={given} 与表达式反解的 {name}={resolved} 不一致",
+        "NF external spline table: explicit {name}={given} differs from the expression's {name}={resolved}",
+    ),
+    Msg::new(
+        "cmd.nfext.err.missing_a",
+        "NF 外花键参数表：缺公称直径 A（写法 `A300` / `直径 300`，或直接给九字段表达式）。\n{usage}",
+        "NF external spline table: missing nominal diameter A (write `A300` / `直径 300`, or supply the nine-field expression).\n{usage}",
+    ),
+    Msg::new(
+        "cmd.nfext.err.missing_m",
+        "NF 外花键参数表：缺模数 m（写法 `M7.5` / `模数 7.5`；同一 A 可对应不同模数，必填）。\n{usage}",
+        "NF external spline table: missing module m (write `M7.5` / `模数 7.5`; the same A can match different modules, so it is required).\n{usage}",
+    ),
+    Msg::new(
+        "cmd.nfext.usage",
+        "智能卡片「NF外花键参数表」用法：`OCSMCARD NF外花键参数表 <九字段齿形表达式> [中心 齿面|外径] [根 平|圆] [配合 松动|滑动|固定|压] [at x,y] [rot 度]`（如 `OCSMCARD NF外花键参数表 SPLINE EX M7.5 Z38 ALPHA20 X0.8 BETA0 H30`；也可沿用 `A300 M7.5 [Z38]` 写法）。表达式反解 A=m(z+0.4+2x)、m、z（NF 压力角恒 20°、方向恒外 EX）；定心方式缺省「齿面定心」（Dee=A−0.2m，模板口径；外径定心 Dee=A）；加工方法照模板 = 滚齿；小径 Die 平齿根 A−2.4m / 圆齿根 A−2.694m；K/W 取 p23–p25 检查表 —— 表外显示「—」，不外推；公差：大径 h12 / 小径 H7（ISO 286，模板实测口径），公法线 = p29 外花键 E 偏差（按配合类别，缺省固定）。",
+        "Smart card \"NF external spline table\" usage: `OCSMCARD NF外花键参数表 <nine-field expression> [中心 齿面|外径] [根 平|圆] [配合 松动|滑动|固定|压] [at x,y] [rot deg]` (e.g. `OCSMCARD NF外花键参数表 SPLINE EX M7.5 Z38 ALPHA20 X0.8 BETA0 H30`; the `A300 M7.5 [Z38]` form still works). The expression is back-solved to A=m(z+0.4+2x), m, z (NF pressure angle is always 20°, direction always external EX); centering defaults to flank (Dee=A−0.2m, template convention; major-diameter centering Dee=A); the process follows the template = hobbing; minor diameter Die is A−2.4m for flat root / A−2.694m for fillet root; K/W come from the p23–p25 inspection table — off-table values show \"—\" without extrapolation; tolerances: major h12 / minor H7 (ISO 286, template-measured convention), base tangent = p29 external-spline E deviation (per fit class, default fixed).",
+    ),
+    Msg::new(
+        "cmd.nfext.echo",
+        "NF E22-141 外花键 A={a} m={m} z={z}（{centering}，滚齿；{fit}配合；K/W {kw}）",
+        "NF E22-141 external spline A={a} m={m} z={z} ({centering}, hobbed; {fit} fit; K/W {kw})",
+    ),
+
+    // ── 命令输出/报错：DIN 5480 花键参数表命令行（din_table.rs）──
+    Msg::new("cmd.din.err.prefix", "DIN 花键参数表：{e}", "DIN spline table: {e}"),
+    Msg::new(
+        "cmd.din.err.m_positive",
+        "DIN 花键参数表：模数 m={m} 必须是正数",
+        "DIN spline table: module m={m} must be positive",
+    ),
+    Msg::new(
+        "cmd.din.err.z_range",
+        "DIN 花键参数表：齿数 z={z} 超出范围（3–1000）",
+        "DIN spline table: tooth count z={z} is out of range (3–1000)",
+    ),
+    Msg::new(
+        "cmd.din.err.db_positive",
+        "DIN 花键参数表：基准直径 d_B={d_b} 必须是正数",
+        "DIN spline table: base diameter d_B={d_b} must be positive",
+    ),
+    Msg::new(
+        "cmd.din.err.grade_range",
+        "公差等级 {grade} 超出范围（1–12）",
+        "tolerance grade {grade} is out of range (1–12)",
+    ),
+    Msg::new(
+        "cmd.din.err.dev_letter",
+        "{side}偏差系列「{letter}」非法（{allowed}）",
+        "{side}deviation series \"{letter}\" is invalid ({allowed})",
+    ),
+    Msg::new("cmd.din.side.hole", "孔 ", "hole "),
+    Msg::new("cmd.din.side.shaft", "轴 ", "shaft "),
+    Msg::new(
+        "cmd.din.dev.hub",
+        "F/G/H/J/K/M（DIN 5480 §10.3 六个）",
+        "F/G/H/J/K/M (six, DIN 5480 §10.3)",
+    ),
+    Msg::new(
+        "cmd.din.dev.shaft",
+        "v/u/t/s/r/p/n/m/k/js/h/g/f/e/d/c/b/a（十八个）",
+        "v/u/t/s/r/p/n/m/k/js/h/g/f/e/d/c/b/a (eighteen)",
+    ),
+    Msg::new(
+        "cmd.din.err.tag_order",
+        "DIN 花键参数表：取值映射顺序与模板属性不一致：{got} != {want}",
+        "DIN spline table: value-mapping order differs from the template attributes: {got} != {want}",
+    ),
+    Msg::new(
+        "cmd.din.err.need",
+        "DIN 花键参数表：{what} 缺少数值",
+        "DIN spline table: {what} is missing a value",
+    ),
+    Msg::new(
+        "cmd.din.err.body_invalid",
+        "DIN 花键参数表：代号体「{t}」非法。\n{usage}",
+        "DIN spline table: invalid designation body \"{t}\".\n{usage}",
+    ),
+    Msg::new(
+        "cmd.din.err.code_invalid",
+        "DIN 花键参数表：代号「{t}」非法（应如 `N120×3×38×9H`）。\n{usage}",
+        "DIN spline table: invalid designation \"{t}\" (should look like `N120×3×38×9H`).\n{usage}",
+    ),
+    Msg::new(
+        "cmd.din.err.key_missing",
+        "DIN 花键参数表：「{key}」缺少数值",
+        "DIN spline table: \"{key}\" is missing a value",
+    ),
+    Msg::new(
+        "cmd.din.err.at_format",
+        "DIN 花键参数表：at「{v}」应为 `x,y`",
+        "DIN spline table: at \"{v}\" must be `x,y`",
+    ),
+    Msg::new("cmd.din.err.at_x", "at x={x} 不是数字：{e}", "at x={x} is not a number: {e}"),
+    Msg::new("cmd.din.err.at_y", "at y={y} 不是数字：{e}", "at y={y} is not a number: {e}"),
+    Msg::new("cmd.din.err.rot", "rot={v} 不是数字：{e}", "rot={v} is not a number: {e}"),
+    Msg::new(
+        "cmd.din.err.num",
+        "{name}={v} 不是数字：{e}",
+        "{name}={v} is not a number: {e}",
+    ),
+    Msg::new(
+        "cmd.din.err.z_num",
+        "{name}={v} 不是整数：{e}",
+        "{name}={v} is not an integer: {e}",
+    ),
+    Msg::new(
+        "cmd.din.err.unknown_param_bare",
+        "不认识的参数「{t}」",
+        "unrecognized argument \"{t}\"",
+    ),
+    Msg::new(
+        "cmd.din.err.wrapped",
+        "DIN 花键参数表：{e}。\n{usage}",
+        "DIN spline table: {e}.\n{usage}",
+    ),
+    Msg::new(
+        "cmd.din.err.pending_len",
+        "DIN 花键参数表：`N`/`W` 后缺长度代号（如 `N 120×3×38×9H`）。\n{usage}",
+        "DIN spline table: `N`/`W` is missing a length designation (e.g. `N 120×3×38×9H`).\n{usage}",
+    ),
+    Msg::new(
+        "cmd.din.err.map_missing_m",
+        "DIN 花键参数表：表达式映射表缺 m（内部错误）",
+        "DIN spline table: the expression mapping has no m (internal error)",
+    ),
+    Msg::new(
+        "cmd.din.err.map_missing_z",
+        "DIN 花键参数表：表达式映射表缺 z（内部错误）",
+        "DIN spline table: the expression mapping has no z (internal error)",
+    ),
+    Msg::new(
+        "cmd.din.err.map_missing_db",
+        "DIN 花键参数表：表达式映射表缺 d_B（内部错误）",
+        "DIN spline table: the expression mapping has no d_B (internal error)",
+    ),
+    Msg::new(
+        "cmd.din.err.explicit_mismatch",
+        "DIN 花键参数表：显式 {name}={given} 与表达式反解的 {name}={resolved} 不一致",
+        "DIN spline table: explicit {name}={given} differs from the expression's {name}={resolved}",
+    ),
+    Msg::new(
+        "cmd.din.err.missing_fields",
+        "DIN 花键参数表：缺 {what}（写法 `M3 Z38 B120` / 代号 `N 120×3×38×9H` / 九字段表达式）。\n{usage}",
+        "DIN spline table: missing {what} (write `M3 Z38 B120` / designation `N 120×3×38×9H` / nine-field expression).\n{usage}",
+    ),
+    Msg::new("cmd.din.what.mzdb", "模数 m、齿数 z、基准直径 d_B", "module m, tooth count z, base diameter d_B"),
+    Msg::new("cmd.din.what.m", "模数 m", "module m"),
+    Msg::new("cmd.din.what.z", "齿数 z", "tooth count z"),
+    Msg::new("cmd.din.what.db", "基准直径 d_B", "base diameter d_B"),
+    Msg::new(
+        "cmd.din.err.fit_grade_digits",
+        "缺等级数字（如 `9H`/`8f`）",
+        "missing grade digits (e.g. `9H`/`8f`)",
+    ),
+    Msg::new(
+        "cmd.din.err.fit_grade_invalid",
+        "等级「{digits}」非法",
+        "invalid grade \"{digits}\"",
+    ),
+    Msg::new(
+        "cmd.din.err.fit_letter_missing",
+        "缺偏差字母（孔 F/G/H/J/K/M；轴 v…a）",
+        "missing deviation letter (hole F/G/H/J/K/M; shaft v…a)",
+    ),
+    Msg::new(
+        "cmd.din.usage",
+        "智能卡片「DIN 5480 内/外花键参数表」用法（一卡一方向）：`OCSMCARD DIN花键参数表 <九字段表达式> [N<等级><字母>] [e2 …] [ae …] [as …] [tactn …] [teffn …] [at x,y]`（外卡：`OCSMCARD DIN花键参数表_外 <九字段表达式> [W<等级><字母>] [tactw …] [teffw …] …`；旧写法 `M3 Z38 B120 N9H W8f` 兼容：旧 id 默认内卡，N/W 都收、只取本侧）。表达式反解 d_B=m(z+1.1+2x)、m、z（DIN 5480 压力角恒 30°），KIND 须与卡方向一致（内 IN / 外 EX）。版面 = DIN 5480-1:2006 Bild 6 单栏 13 行（内 = Nabe、外 = Welle），整表 INSERT 缩放 0.17；孔缺省 9H、轴缺省 8f；Ae/As 取 Table 7，Tact/Teff 取 Table 7 公差锚 —— 缺口显示「—」，可用 ae/as/e2/tactn/teffn/tactw/teffw 覆盖。",
+        "Smart card \"DIN 5480 internal/external spline table\" usage (one direction per card): `OCSMCARD DIN花键参数表 <nine-field expression> [N<grade><letter>] [e2 …] [ae …] [as …] [tactn …] [teffn …] [at x,y]` (external card: `OCSMCARD DIN花键参数表_外 <nine-field expression> [W<grade><letter>] [tactw …] [teffw …] …`; the old form `M3 Z38 B120 N9H W8f` still works: the old id defaults to the internal card, accepts both N/W and uses only this side). The expression is back-solved to d_B=m(z+1.1+2x), m, z (DIN 5480 pressure angle is always 30°), and KIND must match the card direction (IN for internal / EX for external). Layout = DIN 5480-1:2006 Bild 6 single-column 13 rows (internal = Nabe, external = Welle), the whole INSERT is scaled 0.17; hole default 9H, shaft default 8f; Ae/As come from Table 7 and Tact/Teff from the Table 7 tolerance anchors — gaps show \"—\" and can be overridden with ae/as/e2/tactn/teffn/tactw/teffw.",
+    ),
+    Msg::new(
+        "cmd.din.echo.anchor",
+        "，Bild 6 示例原印值",
+        ", Bild 6 example printed values",
+    ),
+    Msg::new(
+        "cmd.din.echo",
+        "DIN 5480 {designation}（dB={db} m={m} z={z}{anchor}）",
+        "DIN 5480 {designation} (dB={db} m={m} z={z}{anchor})",
+    ),
+
+    // ── 命令输出/报错：精简卡引擎（spline_lite / card_lite）──
+    Msg::new(
+        "cmd.splinelite.err.side_mismatch",
+        "GB 花键精简卡：方向与计算结果不一致",
+        "GB spline lite card: direction does not match the computed result",
+    ),
+    Msg::new(
+        "cmd.cardlite.err.serialize",
+        "{id}：请求序列化失败：{e}",
+        "{id}: failed to serialize the request: {e}",
+    ),
+    Msg::new(
+        "cmd.cardlite.err.preview",
+        "{id}：{e}",
+        "{id}: {e}",
+    ),
+    Msg::new(
+        "cmd.cardlite.err.preview_parse",
+        "{id}：完整卡预览 JSON 解析失败：{e}",
+        "{id}: failed to parse the full-card preview JSON: {e}",
+    ),
+    Msg::new(
+        "cmd.cardlite.err.gear_model",
+        "齿轮精简卡：请求字段无效：{e}",
+        "Gear lite card: invalid request field: {e}",
+    ),
+    Msg::new(
+        "cmd.cardlite.err.dir_mismatch",
+        "{id}：方向记号与卡片方向不一致（卡片固定{side}）",
+        "{id}: direction token conflicts with the card direction (card is fixed to {side})",
+    ),
+    Msg::new(
+        "cmd.cardlite.err.extra_missing",
+        "{id}：补算项 {tag} 缺失",
+        "{id}: computed extra {tag} is missing",
+    ),
+    Msg::new(
+        "cmd.cardlite.err.full_item_missing",
+        "{id}：完整卡项「{key}」不在取值表里",
+        "{id}: full-card item \"{key}\" is not in the value table",
+    ),
+    Msg::new(
+        "cmd.cardlite.err.preview_missing",
+        "{id}：预览缺项 {tag}",
+        "{id}: preview is missing item {tag}",
+    ),
+
+    // ── 命令输出/报错：OCSMCARD 用法 + 卡导出回执（card.rs / guide_server / spline_gui）──
+    Msg::new(
+        "cmd.card.label.spline",
+        "花键参数表",
+        "spline table",
+    ),
+    Msg::new(
+        "cmd.card.export.inserted",
+        "已插入{kind}参数表（{echo}）于 ({x}, {y}) rot {rot}°。",
+        "Inserted {kind} parameter table ({echo}) at ({x}, {y}) rot {rot}°.",
+    ),
+    Msg::new(
+        "cmd.card.export.pending_note",
+        "{kind}参数表（{echo}）",
+        "{kind} parameter table ({echo})",
+    ),
+    Msg::new(
+        "cmd.card.export.pending",
+        "已生成{kind}参数表（{echo}）：切回图纸，鼠标上已带这张表，左键点击定位基点 → 移动光标旋转 → 再点击落定（可连续，Esc 结束）。",
+        "Generated {kind} parameter table ({echo}): switch back to the drawing; the table is attached to the cursor. Click to set the base point → move to rotate → click again to place (repeatable; Esc to finish).",
+    ),
+    Msg::new(
+        "cmd.card.export.inserted_card",
+        "已插入{kind}（{echo}）于 ({x}, {y}) rot {rot}°。",
+        "Inserted {kind} ({echo}) at ({x}, {y}) rot {rot}°.",
+    ),
+    Msg::new(
+        "cmd.card.export.pending_note_card",
+        "{kind}（{echo}）",
+        "{kind} ({echo})",
+    ),
+    Msg::new(
+        "cmd.card.export.pending_card",
+        "已生成{kind}（{echo}）：切回图纸，鼠标上已带这张表，左键点击定位基点 → 移动光标旋转 → 再点击落定（可连续，Esc 结束）。",
+        "Generated {kind} ({echo}): switch back to the drawing; the table is attached to the cursor. Click to set the base point → move to rotate → click again to place (repeatable; Esc to finish).",
+    ),
+    Msg::new(
+        "cmd.spline.echo.dp",
+        "；量棒 Dp={dp}（{mode}，D'={dp_calc}，备选 {c1} / {c2} / {c3}）",
+        "; pin Dp={dp} ({mode}, D'={dp_calc}, candidates {c1} / {c2} / {c3})",
+    ),
+    Msg::new(
+        "cmd.spline.echo.dp_manual",
+        "手填，Md 已重算",
+        "manual entry, Md recomputed",
+    ),
+    Msg::new(
+        "cmd.spline.echo.dp_auto",
+        "标准 R40 自动选",
+        "auto-picked per standard R40",
+    ),
+
+    // ── 命令输出/报错：轴生成器命令行解析（shaft.rs）──
+    Msg::new(
+        "cmd.shaft.label.multi",
+        "第 {line} 行第 {chunk} 段",
+        "line {line}, segment {chunk}",
+    ),
+    Msg::new(
+        "cmd.shaft.label.single",
+        "第 {line} 行（第 {chunk} 段）",
+        "line {line} (segment {chunk})",
+    ),
+    Msg::new(
+        "cmd.shaft.err.unknown_keyword",
+        "{label}：不识别的关键字「{token}」（本期支持 S/E/L/CH/OV/M/TL/RO/SD/RL/GEAR/SPLINE/KEY/VIEW；齿形段子关键字 M/Z/H/BETA/ALPHA/EX/IN/X/DA/DF（SPLINE + 齿形关键字 = 渐开线花键）；RL 的尺寸参数 P/g1/g2/dg/r 跟在 RL 后面；轴槽子关键字 = 键型 A/B/C + 键尺寸 b…/h…（可连写 `b8h7`）+ 键长（裸数字或 KL…）+ @中/@端（可选 t1）+ 导向（GB/T 1097，可选 `双槽`））",
+        "{label}: unrecognized keyword \"{token}\" (supported: S/E/L/CH/OV/M/TL/RO/SD/RL/GEAR/SPLINE/KEY/VIEW; tooth-profile sub-keywords M/Z/H/BETA/ALPHA/EX/IN/X/DA/DF (SPLINE + tooth keywords = involute spline); RL size parameters P/g1/g2/dg/r follow RL; shaft-key sub-keywords = key style A/B/C + key size b…/h… (may be joined as `b8h7`) + key length (bare number or KL…) + @中/@端 (optional t1) + guided (GB/T 1097, optional `双槽`))",
+    ),
+    Msg::new(
+        "cmd.shaft.err.view_unknown",
+        "视图名无法识别：`{name}`。可用：normal|常规、section|剖视。",
+        "unrecognized view name: `{name}`. Available: normal|常规, section|剖视.",
+    ),
+    Msg::new(
+        "cmd.shaft.err.view_missing",
+        "{label}：关键字 VIEW 缺少视图名（常规/剖视）",
+        "{label}: keyword VIEW is missing a view name (常规/剖视)",
+    ),
+    Msg::new(
+        "cmd.shaft.err.view_conflict",
+        "{label}：视图 VIEW 重复且冲突（已给「{prev}」，又给「{now}」）",
+        "{label}: VIEW is repeated with a conflict (already \"{prev}\", now \"{now}\")",
+    ),
+    Msg::new(
+        "cmd.shaft.err.tooth_radii_pos",
+        "{label}：齿形段的大径 DA={da}、小径 DF={df} 必须是正数",
+        "{label}: tooth-profile segment major DA={da} and minor DF={df} must be positive",
+    ),
+    Msg::new(
+        "cmd.shaft.err.tooth_radii_order",
+        "{label}：齿形段的大径 DA={da} 必须大于小径 DF={df}（外齿：DA=齿顶圆；内齿：DA=外侧齿根）",
+        "{label}: tooth-profile segment major DA={da} must exceed minor DF={df} (external: DA=tip circle; internal: DA=outer root)",
+    ),
+    Msg::new(
+        "cmd.shaft.err.end_missing",
+        "{label}：关键字 {what} 的端别缺省（@ 后要 L 或 R）",
+        "{label}: keyword {what} is missing an end (after @ use L or R)",
+    ),
+    Msg::new(
+        "cmd.shaft.err.end_bad",
+        "{label}：端别「{bad}」非法（只能用 L 或 R）",
+        "{label}: invalid end \"{bad}\" (only L or R)",
+    ),
+    Msg::new(
+        "cmd.shaft.err.key_value_not_num",
+        "{label}：关键字 {what} 的值「{value}」不是数字",
+        "{label}: value \"{value}\" of keyword {what} is not a number",
+    ),
+    Msg::new(
+        "cmd.shaft.err.key_no_value",
+        "{label}：关键字 {what} 缺少数值",
+        "{label}: keyword {what} is missing a value",
+    ),
+    Msg::new(
+        "cmd.shaft.err.ch_no_value",
+        "{label}：关键字 CH 缺少数值（写法 CH2 / CH2@L / CH2@R）",
+        "{label}: keyword CH is missing a value (write CH2 / CH2@L / CH2@R)",
+    ),
+    Msg::new(
+        "cmd.shaft.err.ch_positive",
+        "{label}：关键字 CH 的 C={c} 非法（必须 > 0）",
+        "{label}: keyword CH C={c} is invalid (must be > 0)",
+    ),
+    Msg::new(
+        "cmd.shaft.err.ov_not_num",
+        "{label}：关键字 OV 的值「{value}」不是数字",
+        "{label}: value \"{value}\" of keyword OV is not a number",
+    ),
+    Msg::new(
+        "cmd.shaft.err.ov_positive",
+        "{label}：关键字 OV 的 b1={b1} 非法（必须 > 0）",
+        "{label}: keyword OV b1={b1} is invalid (must be > 0)",
+    ),
+    Msg::new(
+        "cmd.shaft.err.es_cancelled",
+        "{label}：`ES` 已取消 —— 退刀槽请用段级 `RL`（例 `S25 E25 L32 RL@L P1.5`）或一小段小直径轴段表示，例如 `S24 E24 L5`",
+        "{label}: `ES` was removed — use the segment-level `RL` for relief grooves (e.g. `S25 E25 L32 RL@L P1.5`), or a short small-diameter segment such as `S24 E24 L5`",
+    ),
+    Msg::new(
+        "cmd.shaft.err.m_pitch",
+        "{label}：关键字 M 的螺距 P={pitch} 非法（必须 > 0；不写值 = 小径 0.85d 简化画法）",
+        "{label}: pitch P={pitch} of keyword M is invalid (must be > 0; omit the value to draw the simplified 0.85d minor diameter)",
+    ),
+    Msg::new(
+        "cmd.shaft.err.ro_invalid_t3",
+        "{label}：收尾档位 RO「{other}」非法（GB/T 3 表 1 只有 一般 / 短，没有 长）",
+        "{label}: invalid run-out class RO \"{other}\" (GB/T 3 Table 1 only has 一般/normal or 短/short, not 长/long)",
+    ),
+    Msg::new(
+        "cmd.shaft.err.sd_invalid_t3",
+        "{label}：肩距档位 SD「{other}」非法（GB/T 3 表 1 只有 一般 / 长 / 短）",
+        "{label}: invalid shoulder-distance class SD \"{other}\" (GB/T 3 Table 1 only has 一般/normal, 长/long, 短/short)",
+    ),
+    Msg::new(
+        "cmd.shaft.err.tl_no_value",
+        "{label}：关键字 TL 缺少数值（写法 TL20）",
+        "{label}: keyword TL is missing a value (write TL20)",
+    ),
+    Msg::new(
+        "cmd.shaft.err.tl_positive",
+        "{label}：完整螺纹长度 TL={value} 非法（必须 > 0；不给 TL = 整段全线程）",
+        "{label}: full thread length TL={value} is invalid (must be > 0; omit TL for a fully threaded segment)",
+    ),
+    Msg::new(
+        "cmd.shaft.err.rl_missing_params",
+        "{label}：RL 退刀槽缺参 —— 表 2 以螺距为键，请给 P（例 `RL@L P1.5`）或显式 g1/g2/dg/r（例 `RL@L g1 2.5 g2 4.5 dg 22.7 r 0.8`）",
+        "{label}: RL relief groove is missing parameters — Table 2 is keyed by pitch, so supply P (e.g. `RL@L P1.5`) or explicit g1/g2/dg/r (e.g. `RL@L g1 2.5 g2 4.5 dg 22.7 r 0.8`)",
+    ),
+    Msg::new(
+        "cmd.shaft.err.key_no_type",
+        "{label}：KEY 缺少键型（A/B/C；例 `KEY A 18`）",
+        "{label}: KEY is missing the key style (A/B/C; e.g. `KEY A 18`)",
+    ),
+    Msg::new(
+        "cmd.shaft.err.key_dup",
+        "{label}：关键字 {what} 重复",
+        "{label}: keyword {what} is repeated",
+    ),
+    Msg::new(
+        "cmd.shaft.err.key_1097_no_c",
+        "{label}：导向平键（GB/T 1097）只有 A/B 型，没有 C 型（用户 2026-09-25 更正）",
+        "{label}: guided parallel keys (GB/T 1097) only have types A/B, not C (corrected 2026-09-25)",
+    ),
+    Msg::new(
+        "cmd.shaft.err.key_no_place",
+        "{label}：{kind}只有{places}（{tag}）",
+        "{label}: {kind} only has {places} ({tag})",
+    ),
+    Msg::new(
+        "cmd.shaft.err.key_no_double",
+        "{label}：{kind}不支持双槽（固定键只有一个槽）",
+        "{label}: {kind} does not support double keyways (a fixed key has only one slot)",
+    ),
+    Msg::new(
+        "cmd.shaft.err.key_1097_b",
+        "{label}：GB/T 1097 导向平键表里没有 b={b}（b=8…45，14 档）",
+        "{label}: the GB/T 1097 guided-key table has no b={b} (b=8…45, 14 steps)",
+    ),
+    Msg::new(
+        "cmd.shaft.err.key_1096_b",
+        "{label}：{kind} 的平键族表里没有 b={b}（GB/T 1096 表 b=2…50）",
+        "{label}: {kind} parallel-key table has no b={b} (GB/T 1096 table b=2…50)",
+    ),
+    Msg::new(
+        "cmd.shaft.err.key_bh_pair",
+        "{label}：键尺寸 b{b}×h{h} 不是标准配对（{kind} 的 b={b} 应配 h={std_h}）；h 跟 b 走，不能自由组合",
+        "{label}: key size b{b}×h{h} is not a standard pair ({kind} b={b} should pair with h={std_h}); h follows b and cannot be combined freely",
+    ),
+    Msg::new(
+        "cmd.shaft.err.key_no_len",
+        "{label}：KEY 缺少键长（写法：裸数字 `18` 或 `KL18`；`L…` 是段长）",
+        "{label}: KEY is missing the key length (bare number `18` or `KL18`; `L…` is the segment length)",
+    ),
+    Msg::new(
+        "cmd.shaft.err.key_la_lc",
+        "{label}：KEY 的 LA/LC 是旧「槽长」写法（已改口径，不静默兼容）—— 现在按 键型 + 键长 L + 位置：中置 `KEY A 18`；端置 `KEY C 14 @端`（端置槽长 = 键长 + t1，即模板 LC 口径）",
+        "{label}: KEY LA/LC is the old \"slot length\" form (removed without silent compatibility) — now use key style + key length L + position: centered `KEY A 18`; end `KEY C 14 @端` (end slot length = key length + t1, the template LC convention)",
+    ),
+    Msg::new(
+        "cmd.shaft.err.key_param_no_value",
+        "{label}：KEY 参数 {name} 缺少数值",
+        "{label}: KEY parameter {name} is missing a value",
+    ),
+    Msg::new(
+        "cmd.shaft.err.key_param_dup",
+        "{label}：KEY 参数 {what} 重复",
+        "{label}: KEY parameter {what} is repeated",
+    ),
+    Msg::new(
+        "cmd.shaft.err.key_place_conflict",
+        "{label}：KEY 位置重复且冲突（已给「{prev}」，又给「{now}」）",
+        "{label}: KEY position is repeated with a conflict (already \"{prev}\", now \"{now}\")",
+    ),
+    Msg::new(
+        "cmd.shaft.err.key_type_conflict",
+        "{label}：KEY 键型重复且冲突（已给「{prev}」，又给「{now}」）",
+        "{label}: KEY style is repeated with a conflict (already \"{prev}\", now \"{now}\")",
+    ),
+    Msg::new(
+        "cmd.shaft.err.key_type_invalid",
+        "{label}：KEY 键型「{value}」非法（可选：{options}）",
+        "{label}: invalid KEY style \"{value}\" (available: {options})",
+    ),
+    Msg::new(
+        "cmd.shaft.err.key_guide_conflict",
+        "{label}：键型「{kind}」与「导向」冲突（该键型不是导向平键）",
+        "{label}: key style \"{kind}\" conflicts with \"导向\" (that style is not a guided parallel key)",
+    ),
+    Msg::new(
+        "cmd.shaft.err.key_param_positive",
+        "{label}：KEY 参数 {what}={value} 必须 > 0",
+        "{label}: KEY parameter {what}={value} must be > 0",
+    ),
+    Msg::new(
+        "cmd.shaft.err.ch_dup_end",
+        "{label}：关键字 CH 在{end}端重复",
+        "{label}: keyword CH is repeated at the {end} end",
+    ),
+    Msg::new(
+        "cmd.shaft.err.ov_dup_end",
+        "{label}：关键字 OV 在{end}端重复",
+        "{label}: keyword OV is repeated at the {end} end",
+    ),
+    Msg::new(
+        "cmd.shaft.err.ro_invalid",
+        "{label}：收尾档位 RO「{rest}」非法（只有 一般 / 短）",
+        "{label}: invalid run-out class RO \"{rest}\" (only 一般/normal or 短/short)",
+    ),
+    Msg::new(
+        "cmd.shaft.err.sd_invalid",
+        "{label}：肩距档位 SD「{rest}」非法（只有 一般 / 长 / 短）",
+        "{label}: invalid shoulder-distance class SD \"{rest}\" (only 一般/normal, 长/long, 短/short)",
+    ),
+    Msg::new(
+        "cmd.shaft.err.rl_no_value",
+        "{label}：关键字 RL 不带值（写法 RL / RL@L / RL@R；尺寸参数跟在 RL 后面，如 `RL@L P1.5`）",
+        "{label}: keyword RL takes no value (write RL / RL@L / RL@R; size parameters follow RL, e.g. `RL@L P1.5`)",
+    ),
+    Msg::new(
+        "cmd.shaft.err.rl_dup_end",
+        "{label}：关键字 RL 重复（在{end}端）",
+        "{label}: keyword RL is repeated (at the {end} end)",
+    ),
+    Msg::new(
+        "cmd.shaft.err.rl_param_order",
+        "{label}：参数 {key} 要跟在 RL 后面（例 `RL@L P1.5` / `RL@L g1 2.5 …`）",
+        "{label}: parameter {key} must follow RL (e.g. `RL@L P1.5` / `RL@L g1 2.5 …`)",
+    ),
+    Msg::new(
+        "cmd.shaft.err.rl_param_no_value",
+        "{label}：RL 参数 {key} 缺少数值",
+        "{label}: RL parameter {key} is missing a value",
+    ),
+    Msg::new(
+        "cmd.shaft.err.rl_param_positive",
+        "{label}：RL 参数 {key}={value} 非法（必须 > 0）",
+        "{label}: RL parameter {key}={value} is invalid (must be > 0)",
+    ),
+    Msg::new(
+        "cmd.shaft.err.z_not_int",
+        "{label}：关键字 Z 的值「{rest}」不是正整数（齿数 z 必须是整数）",
+        "{label}: value \"{rest}\" of keyword Z is not a positive integer (tooth count z must be an integer)",
+    ),
+    Msg::new(
+        "cmd.shaft.err.combo_spline_ch",
+        "{label}：花键段不能与倒角 CH 同段（不自动画引入倒角；请在相邻轴段上写 CH）",
+        "{label}: a spline segment cannot share a segment with chamfer CH (no lead-in chamfer is added automatically; write CH on a neighbouring segment)",
+    ),
+    Msg::new(
+        "cmd.shaft.err.combo_spline_ov",
+        "{label}：花键段不能与越程槽 OV 同段",
+        "{label}: a spline segment cannot share a segment with an overtravel groove OV",
+    ),
+    Msg::new(
+        "cmd.shaft.err.combo_spline_rl",
+        "{label}：花键段不能与退刀槽 RL 同段",
+        "{label}: a spline segment cannot share a segment with a relief groove RL",
+    ),
+    Msg::new(
+        "cmd.shaft.err.combo_spline_m",
+        "{label}：花键段不能与螺纹段 M/TL/RO/SD 同段",
+        "{label}: a spline segment cannot share a segment with thread M/TL/RO/SD",
+    ),
+    Msg::new(
+        "cmd.shaft.err.spline_no_se",
+        "{label}：花键段不给 S/E（直径由规格代号导出）",
+        "{label}: a spline segment takes no S/E (diameters come from the spec code)",
+    ),
+    Msg::new(
+        "cmd.shaft.err.spline_no_spec",
+        "{label}：关键字 SPLINE 缺少规格代号（写法 SPLINE 6x23x26x6 L30）",
+        "{label}: keyword SPLINE is missing the spec code (write SPLINE 6x23x26x6 L30)",
+    ),
+    Msg::new(
+        "cmd.shaft.err.spline_no_len",
+        "{label}：花键段缺少 L（满齿段长，例 `SPLINE 6x23x26x6 L30`）",
+        "{label}: spline segment is missing L (full-tooth segment length, e.g. `SPLINE 6x23x26x6 L30`)",
+    ),
+    Msg::new(
+        "cmd.shaft.err.tlro_needs_m",
+        "{label}：关键字 TL/RO/SD 是螺纹参数，需要与 M 同段（例 `M1.5 TL20 RO短 SD长`）",
+        "{label}: TL/RO/SD are thread parameters and must share a segment with M (e.g. `M1.5 TL20 RO短 SD长`)",
+    ),
+    Msg::new(
+        "cmd.shaft.err.m_rl_override",
+        "{label}：M 段右端的 RL（螺纹收尾）按螺距查表，不支持 P/g1/g2/dg/r 覆盖；段级退刀槽请写在别的圆柱段上（或 `M…RL@L`）",
+        "{label}: RL on the right of an M segment (thread run-out) is looked up by pitch and does not accept P/g1/g2/dg/r overrides; put a segment-level relief groove on another cylindrical segment (or use `M…RL@L`)",
+    ),
+    Msg::new(
+        "cmd.shaft.err.rl_ro_exclusive",
+        "{label}：RL（表 2 退刀槽收尾）与 RO/SD（螺尾/肩距）互斥，二选一",
+        "{label}: RL (Table 2 relief-groove run-out) and RO/SD (thread run-out/shoulder distance) are mutually exclusive; pick one",
+    ),
+    Msg::new(
+        "cmd.shaft.err.m_ov_conflict",
+        "{label}：螺纹段 M 不能与越程槽 OV 同段",
+        "{label}: a thread segment M cannot share a segment with an overtravel groove OV",
+    ),
+    Msg::new(
+        "cmd.shaft.err.key_mrl_conflict",
+        "{label}：轴槽 KEY 不能与螺纹 M / 越程槽 OV / 退刀槽 RL 同段（只能挂在光圆柱段上）",
+        "{label}: a shaft key KEY cannot share a segment with thread M / overtravel groove OV / relief groove RL (it can only sit on a plain cylindrical segment)",
+    ),
+    Msg::new(
+        "cmd.shaft.err.missing_s",
+        "{label}：缺少 S（起始直径）",
+        "{label}: missing S (start diameter)",
+    ),
+    Msg::new(
+        "cmd.shaft.err.missing_l",
+        "{label}：缺少 L（段长）",
+        "{label}: missing L (segment length)",
+    ),
+    Msg::new(
+        "cmd.shaft.err.gear_no_se",
+        "{label}：齿轮段不给 S/E（直径由 M·Z 导出）",
+        "{label}: a gear segment takes no S/E (diameters come from M·Z)",
+    ),
+    Msg::new(
+        "cmd.shaft.err.gear_use_h",
+        "{label}：齿轮段长度用 H（省略 = 10m），不要再给 L",
+        "{label}: use H for gear-segment length (default 10m); do not give L",
+    ),
+    Msg::new(
+        "cmd.shaft.err.gear_no_ch",
+        "{label}：齿轮段不能与倒角 CH 同段（齿形用 OCSMGEAR 单独出）",
+        "{label}: a gear segment cannot share a segment with chamfer CH (draw the tooth profile separately with OCSMGEAR)",
+    ),
+    Msg::new(
+        "cmd.shaft.err.gear_no_ov",
+        "{label}：齿轮段不能与越程槽 OV 同段",
+        "{label}: a gear segment cannot share a segment with an overtravel groove OV",
+    ),
+    Msg::new(
+        "cmd.shaft.err.gear_no_m",
+        "{label}：齿轮段不能与螺纹段 M 同段",
+        "{label}: a gear segment cannot share a segment with thread M",
+    ),
+    Msg::new(
+        "cmd.shaft.err.gear_no_tlro",
+        "{label}：齿轮段不能与螺纹参数 TL/RO/SD 同段（TL/RO/SD 只属于 M）",
+        "{label}: a gear segment cannot share a segment with TL/RO/SD (those belong to M)",
+    ),
+    Msg::new(
+        "cmd.shaft.err.gear_no_rl",
+        "{label}：齿轮段不能与退刀槽 RL 同段",
+        "{label}: a gear segment cannot share a segment with a relief groove RL",
+    ),
+    Msg::new(
+        "cmd.shaft.err.gear_no_missing",
+        "{label}：关键字 GEAR 缺少 M（模数）",
+        "{label}: keyword GEAR is missing M (module)",
+    ),
+    Msg::new(
+        "cmd.shaft.err.gear_no_z",
+        "{label}：关键字 GEAR 缺少 Z（齿数）",
+        "{label}: keyword GEAR is missing Z (tooth count)",
+    ),
+    Msg::new(
+        "cmd.shaft.err.beta_spur",
+        "{label}：关键字 BETA 的斜齿（β={beta}°）本期只做直齿（斜齿未实现）",
+        "{label}: the BETA helical value (β={beta}°) is backed by spur gears only in this release (helical not implemented)",
+    ),
+    Msg::new(
+        "cmd.shaft.err.gear_seg",
+        "{label}：齿轮段：{e}",
+        "{label}: gear segment: {e}",
+    ),
+    Msg::new(
+        "cmd.shaft.err.place_dup",
+        "{label}：放置参数 at/rot 重复",
+        "{label}: placement parameter at/rot is repeated",
+    ),
+    Msg::new(
+        "cmd.shaft.err.at_no_y",
+        "{label}：at 缺 y 坐标（写 at x,y）",
+        "{label}: at is missing the y coordinate (write at x,y)",
+    ),
+    Msg::new(
+        "cmd.shaft.err.rot_no_value",
+        "{label}：rot 缺少数值",
+        "{label}: rot is missing a value",
+    ),
+    Msg::new(
+        "cmd.shaft.err.place_unknown",
+        "{label}：无法识别的词「{word}」（放置段只认 at x,y rot 度）",
+        "{label}: unrecognized word \"{word}\" (a placement segment only accepts at x,y rot deg)",
+    ),
+    Msg::new(
+        "cmd.shaft.err.prefix",
+        "{label}：{e}",
+        "{label}: {e}",
+    ),
+    Msg::new(
+        "cmd.shaft.err.field_not_number",
+        "{label}：{what}「{text}」不是数字",
+        "{label}: {what} \"{text}\" is not a number",
+    ),
+    Msg::new(
+        "cmd.shaft.err.key_place_invalid",
+        "KEY 位置「{other}」非法（只有 @中 / @端，或 mid / end）",
+        "invalid KEY position \"{other}\" (only @中/@端, or mid/end)",
+    ),
+    Msg::new(
+        "cmd.shaft.err.key_kind_invalid",
+        "KEY 键型「{other}」非法（只有 A / B / C；对应 GB/T 1096 平键族 A/B/C 型）",
+        "invalid KEY style \"{other}\" (only A / B / C; the GB/T 1096 parallel-key types A/B/C)",
+    ),
+    Msg::new(
+        "cmd.shaft.err.gb1095_no_d",
+        "轴径 d={d} 不在 GB/T 1095 的 d 选型表（6…500）里，无法按轴径确定键尺寸 b×h",
+        "shaft diameter d={d} is not in the GB/T 1095 d selection table (6…500), so the key size b×h cannot be determined from the shaft diameter",
+    ),
+    Msg::new(
+        "cmd.shaft.err.gb1095_b_out",
+        "轴径 d={d} 按 GB/T 1095 应配 b={b}，但超出平键族表范围（GB/T 1096 表 b=2…50）",
+        "shaft diameter d={d} should pair with b={b} per GB/T 1095, but that is outside the parallel-key table (GB/T 1096 table b=2…50)",
+    ),
+    Msg::new(
+        "cmd.shaft.err.csv_header_missing",
+        "keyway_gb1095.csv 缺表头",
+        "keyway_gb1095.csv is missing its header",
+    ),
+    Msg::new(
+        "cmd.shaft.err.csv_header_bad",
+        "keyway_gb1095.csv 表头异常：{header}",
+        "keyway_gb1095.csv: unexpected header: {header}",
+    ),
+    Msg::new(
+        "cmd.shaft.err.csv_missing_col",
+        "keyway_gb1095.csv 缺列 {what}",
+        "keyway_gb1095.csv is missing column {what}",
+    ),
+    Msg::new(
+        "cmd.shaft.err.csv_col_num",
+        "keyway_gb1095.csv 第 {i} 列 {what} 不是数字：{e}",
+        "keyway_gb1095.csv column {i} ({what}) is not a number: {e}",
+    ),
+    Msg::new(
+        "cmd.shaft.err.gb1095_table_prefix",
+        "GB/T 1095 表：{e}",
+        "GB/T 1095 table: {e}",
+    ),
+    Msg::new(
+        "cmd.shaft.err.gb1095_no_b",
+        "GB/T 1095 表里没有 b={b} 这一档（标准 b×h 档：2×2…100×50）",
+        "the GB/T 1095 table has no b={b} step (standard b×h steps: 2×2…100×50)",
+    ),
+    Msg::new(
+        "cmd.shaft.err.no_segments",
+        "没有解析到任何轴段（至少给一段 `S… L…`）",
+        "no shaft segments parsed (give at least one `S… L…` segment)",
+    ),
+    Msg::new(
+        "cmd.shaft.err.rl_param_dup",
+        "{label}：RL 参数 {key} 重复",
+        "{label}: RL parameter {key} is repeated",
+    ),
+    Msg::new(
+        "cmd.shaft.err.spline_de_dup",
+        "{label}：花键的 de 覆盖重复",
+        "{label}: spline de override is repeated",
+    ),
+    Msg::new(
+        "cmd.shaft.err.key_gear_conflict",
+        "{label}：轴槽 KEY 不能与齿轮/花键段同段",
+        "{label}: a shaft key KEY cannot share a segment with a gear/spline segment",
+    ),
+    Msg::new(
+        "cmd.shaft.err.key_1097_screw",
+        "{label}：GB/T 1097 固定螺钉 M{d0}：{e}",
+        "{label}: GB/T 1097 set screw M{d0}: {e}",
+    ),
+    Msg::new(
+        "cmd.shaft.err.key_end_place_only",
+        "{label}：端置轴槽只能开在首段（左端）或末段（右端）",
+        "{label}: an end-placed shaft key can only be cut on the first (left) or last (right) segment",
+    ),
+    Msg::new(
+        "cmd.shaft.err.m_gear_dup",
+        "{label}：关键字 M 重复（GEAR 段里的 M 是模数；螺纹 M 不能与 GEAR 同段）",
+        "{label}: keyword M is repeated (M in a GEAR segment is the module; a thread M cannot share a segment with GEAR)",
+    ),
+    Msg::new(
+        "cmd.shaft.err.no_service",
+        "OCSMSHAFT: 无法启动轴服务（宿主不支持 worker 请求）。",
+        "OCSMSHAFT: cannot start the shaft service (host does not support worker requests).",
+    ),
+    Msg::new(
+        "cmd.shaft.info.run_init",
+        "OCSMSHAFT：先运行 OCSM 初始化，再打开轴生成器窗口。",
+        "OCSMSHAFT: run the OCSM initializer first, then open the shaft generator window.",
+    ),
+    Msg::new(
+        "cmd.shaft.info.run_init_direct",
+        "OCSMSHAFT：先运行 OCSM（或点功能区「图幅」组里的 OCSM 初始化），再直接插轴。",
+        "OCSMSHAFT: run OCSM first (or click the OCSM initializer in the \"图幅\" ribbon group), then insert the shaft directly.",
+    ),
+    Msg::new(
+        "cmd.shaft.info.opened",
+        "OCSM 轴生成器：已打开窗口（段表 + 行文本双向同步 + 实时预览）。点「生成到图纸」→ 回到图纸点击定位基点 → 移动光标旋转 → 再点击落定（可连续，Esc 结束）。",
+        "OCSM shaft generator: window opened (segment table + two-way text sync + live preview). Click \"Generate to drawing\" → click in the drawing to set the base point → move to rotate → click again to place (repeatable; Esc to finish).",
+    ),
+    Msg::new(
+        "cmd.shaft.info.already_open",
+        "OCSM 轴生成器：窗口已打开（Alt+Tab 切换过去）。",
+        "OCSM shaft generator: window is already open (switch to it with Alt+Tab).",
+    ),
+    Msg::new("cmd.shaft.place.what", "OCSM 轴", "OCSM shaft"),
+    Msg::new(
+        "cmd.shaft.place.where",
+        "请在轴生成器窗口里点「生成到图纸」",
+        "click \"Generate to drawing\" in the shaft generator window",
+    ),
+    Msg::new(
+        "cmd.shaft.err.params_invalid",
+        "OCSMSHAFT 参数无效：{message}",
+        "OCSMSHAFT: invalid arguments: {message}",
+    ),
+    Msg::new(
+        "cmd.shaft.info.report_written",
+        "OCSMSHAFT：计算书已写入 {path}",
+        "OCSMSHAFT: report written to {path}",
+    ),
+    Msg::new(
+        "cmd.shaft.err.report_write",
+        "OCSMSHAFT 计算书写文件失败：{e}",
+        "OCSMSHAFT: failed to write the report file: {e}",
+    ),
+    Msg::new(
+        "cmd.shaft.err.report",
+        "OCSMSHAFT 计算书：{e}",
+        "OCSMSHAFT report: {e}",
+    ),
+    Msg::new(
+        "cmd.shaft.err.geometry",
+        "OCSMSHAFT 几何非法：{message}",
+        "OCSMSHAFT: invalid geometry: {message}",
+    ),
+    Msg::new("cmd.shaft.undo", "OCSMSHAFT 轴", "OCSMSHAFT shaft"),
+    Msg::new(
+        "cmd.shaft.info.generated",
+        "OCSMSHAFT：已生成轴（{segments} 段，总长 {length}，最大 Ø{max}，{view} 视图，{count} 个图元）→ {layers}",
+        "OCSMSHAFT: shaft generated ({segments} segments, total length {length}, max Ø{max}, {view} view, {count} entities) → {layers}",
+    ),
+    Msg::new("cmd.shaft.view.normal", "常规", "normal"),
+    Msg::new("cmd.shaft.view.section", "剖视", "section"),
+    Msg::new(
+        "cmd.shaft.ready.missing_layers",
+        "这张图还没跑过 OCSM 初始化（缺图层：{list}）—— 先执行 OCSM（建 10 个图层 + 线型 + 文字/标注样式），再生成轴；不然中心线会是实线白线。",
+        "this drawing has not been through OCSM initialization (missing layers: {list}) — run OCSM first (it creates the 10 layers + linetypes + text/dimension styles), otherwise the centerline will be a solid white line.",
+    ),
+    Msg::new(
+        "cmd.shaft.ready.center_linetype",
+        "这张图还没跑过 OCSM 初始化（{layer} 没挂 CENTER2 点划线）—— 先执行 OCSM（建 10 个图层 + 线型 + 文字/标注样式），再生成轴；不然中心线会是实线白线。",
+        "this drawing has not been through OCSM initialization ({layer} does not use the CENTER2 dash-dot linetype) — run OCSM first (it creates the 10 layers + linetypes + text/dimension styles), otherwise the centerline will be a solid white line.",
+    ),
+    Msg::new(
+        "cmd.card.usage_line",
+        "OCSMCARD 用法：`OCSMCARD <卡类型> …`（本期卡类型：{types}；不带参数 = 开图形界面）。\n* GB 花键参数表（内/外两张卡，一卡一方向）：`OCSMCARD 花键参数表 [std GB] <九字段表达式> [6H|5f] [dp 4.5] [root 平|圆] [at x,y] [rot 度]`（旧 `内/外` 记号兼容；外卡表下方 `花键参数表_外`）\n* 齿轮参数表：`OCSMCARD 齿轮参数表 <九字段表达式> [mate z₂] [dwg 图号] [grade 精度等级] [center a] [at x,y] [rot 度]`\n* ANSI 花键参数表（内/外 × 中/英 = 四张卡）：`OCSMCARD ANSI花键参数表_中文 <九字段表达式> [profile ANSI30R] [at x,y]`（外卡 `ANSI花键参数表_外_中文`；英文版换 `_英文`；旧写法 `内 P16 Z20` 兼容）\n* NF 内/外花键参数表（两张）：`OCSMCARD NF内花键参数表 <九字段表达式> [中心 外径|齿面] [根 平|圆] [配合 松动|滑动|固定|压] [at x,y]`（外卡 `OCSMCARD NF外花键参数表`；旧写法 `A300 M7.5 Z38` 兼容）\n* DIN 5480 内/外花键参数表（两张，单栏 Bild 6）：`OCSMCARD DIN花键参数表 <九字段表达式> [N9H] [ae …] [as …] [at x,y]`（外卡 `DIN花键参数表_外`；旧写法 `M3 Z38 B120 N9H W8f` 兼容）\n* 精简版（下拉「精简版」分组，11 张：GB/NF/DIN/ANSI×4/齿轮）：只列基本参数 + 主要测量量、**不含公差列**；参数/查表/公式与完整卡同源 —— `OCSMCARD <精简卡名> <对应完整卡参数>`（例 `OCSMCARD NF花键精简表_内 A300 M7.5 Z38`、`OCSMCARD 齿轮精简表 <九字段表达式>`）",
+        "OCSMCARD usage: `OCSMCARD <card type> …` (card types for this release: {types}; no argument = open the GUI).\n* GB spline table (internal/external cards, one direction per card): `OCSMCARD 花键参数表 [std GB] <nine-field expression> [6H|5f] [dp 4.5] [root 平|圆] [at x,y] [rot deg]` (the old `内/外` token still works; the external card is `花键参数表_外` below the table)\n* Gear table: `OCSMCARD 齿轮参数表 <nine-field expression> [mate z₂] [dwg drawing-no] [grade precision-grade] [center a] [at x,y] [rot deg]`\n* ANSI spline table (internal/external × CN/EN = four cards): `OCSMCARD ANSI花键参数表_中文 <nine-field expression> [profile ANSI30R] [at x,y]` (external card `ANSI花键参数表_外_中文`; use `_英文` for English; the old `内 P16 Z20` form still works)\n* NF internal/external spline table (two cards): `OCSMCARD NF内花键参数表 <nine-field expression> [中心 外径|齿面] [根 平|圆] [配合 松动|滑动|固定|压] [at x,y]` (external card `OCSMCARD NF外花键参数表`; the old `A300 M7.5 Z38` form still works)\n* DIN 5480 internal/external spline table (two cards, single-column Bild 6): `OCSMCARD DIN花键参数表 <nine-field expression> [N9H] [ae …] [as …] [at x,y]` (external card `DIN花键参数表_外`; the old `M3 Z38 B120 N9H W8f` form still works)\n* Lite cards (the \"Lite\" group in the dropdown, 11 cards: GB/NF/DIN/ANSI×4/gear): only basic parameters + main measurements, **no tolerance columns**; parameters/lookups/formulas are the same source as the full cards — `OCSMCARD <lite card name> <full-card arguments>` (e.g. `OCSMCARD NF花键精简表_内 A300 M7.5 Z38`, `OCSMCARD 齿轮精简表 <nine-field expression>`)",
+    ),
+    Msg::new(
+        "cmd.shaft.usage",
+        "OCSMSHAFT 轴生成器：行 DSL / JSON → 单视图侧视图（段拼接 + 端面倒角 + 砂轮越程槽 + 螺纹段 M + 齿轮段 GEAR + 矩形花键段 SPLINE + 轴槽 KEY）。\n用法：OCSMSHAFT <行 DSL 或 JSON>\n  行 DSL：一行一段，从左到右拼接；多段用 | 或换行分隔；大小写不敏感、段内关键字顺序无关\n    S 起始直径（靠左）   E 终点直径（省略 = 圆柱段 E=S）   L 段长（必给；齿轮段用 H 代替）\n    CH2@L / CH2@R   端面倒角 C2（@ 省略默认 R）    OV / OV3 / OV3@L   砂轮越程槽\n    M / M1.5   螺纹段：不写值 = 小径 0.85d；M1.5 = 螺距 P，小径 = d − 1.0825P（只能圆柱段）\n               不给 TL/RL = 整段全螺纹（旧行为）\n    M1.5 TL20  局部螺纹（GB/T 3-1997 图 1 第一种形式）：完整螺纹长 TL，靠段右端台肩，\n               自右向左 = 台肩面 + 锥面（a−x）+ 螺尾（细实线，x）+ 分界竖线 + 完整螺纹 TL\n               RO一般|RO短 收尾档（默认一般）   SD一般|SD长|SD短 肩距档（默认一般）\n    M1.5 TL20 RL  用 GB/T 3-1997 表 2 退刀槽收尾（图 2 画法，与 RO/SD 互斥）\n    RL@L / RL@R   段级退刀槽（任意圆柱段，@ 省略默认 R；同端只能一个 CH/OV/RL）\n               取参：① g1/g2/dg/r 全给（dg 是绝对直径）② 给 P 查表 2 ③ 都不给报错\n               例：S25 E25 L32 RL@L P1.5 / RL@L g1 2.5 g2 4.5 dg 22.7 r 0.8\n               前置：该端相邻段更高（有台肩）、本段圆柱，否则报「第 N 段」\n    GEAR M5 Z10 H20   齿轮段（直齿）：d=m·z 导出、不给 S/E；H = 齿宽（省略 = 10m）\n                       ALPHA25 = 压力角 25°（省略 20°）；齿顶轮廓两端倒角 C=round(0.6m)\n                       常规不画齿根、剖视画齿根\n    SPLINE 6x23x26x6 L30   矩形花键段（GB/T 1144 规格代号）：大径线 + 小径细线\n                      （2细线层）+ 收尾弧 R=de/2（圆心 (L, ±(d/2+R))，末端 x=L+l，\n                      l=√(h(2R−h))，6×23×26×6 → l=9.6047）；段长 = L + l；\n                      不给 S/E；可 `de 71` 覆盖滚刀外径；不能与 CH/OV/RL/M/GEAR 同段\n                      （引入倒角由相邻段的 CH 表达）\n    KEY A 18      轴槽（GB/T 1095-2003 平键键槽，本期只做轴槽，不毂槽）——轴段类型，进段表 KEY 列：\n                  只能挂在光圆柱段上（与 GEAR/SPLINE/M/TL/RL/OV 互斥）\n                  键型（普通平键 A/B/C；导向平键 `导向A`/`导向B`——GUI 合并在一个下拉里）\n                  + 键长 L（所选键型；平键族标准系列，L<10b）+ 位置中置/端置（槽长自动折算）\n                  b×h 由本段直径 d 查 GB/T 1095 d 列自动定（h 跟 b 走）；t1 按 b 查 GB/T 1095 表\n                  显式覆盖写 b8h7：必须落在该轴径档的标准配对上，否则明确报错\n                  显示：中置恒显示 A；端置 B/C 显示 C（C 端弧由铣刀铣出）\n                  折算：中置 B +b / C +b/2；端置 B +b/2 / C 不折算；端置槽长再 +t1\n                  可选 双槽（DOUBLE 别名）：绕轴心 180° 对置，仅剖视图体现（常规侧视不变），\n                  可承受转矩约为单键联接的 1.5 倍；剖视剖面线上下两环各带一个缺口\n                  例：KEY A 18 ／ KEY C 14 @端 ／ KEY A 18 b8h7\n                  导向平键（GB/T 1097）用合并键型记号（推荐 `KEY 导向A 25`；旧 `KEY A 25 导向` 过时但可用）：\n                  只 A/B；L 取 1097 系列 25…450∩L<10b；槽长 = L（只有中置）；\n                  自动画 2 个固定螺钉螺纹孔 d0×L0、孔心距槽两端 L3；与双槽互斥；起键孔属 1096\n                  侧视图叠画键 + 剖视缺口含 sagitta 线；不生成尺寸标注\n    VIEW 常规|剖视   视图：常规（默认，只看外形）/ 剖视（轮廓 + ANSI31 剖面线）\n                     （双视图已于 2026-09-23 移除；旧 `VIEW 双` 明确报错）\n    REPORT          计算书：段末加 `REPORT`（大小写不敏感）—— 不插图，直接输出 Markdown\n                    计算书（段清单 + 总长/最大直径）；\n                    `REPORT=<路径>` / `REPORT-OUT=<路径>` 另写文件\n    at x,y rot 度   放置（不写 = 原点、不转）\n  例：OCSMSHAFT S30 E30 L45 CH2@L | S40 E40 L30 CH2@R OV3 | S50 E30 L20 | S30 E30 L15 CH2@R | S40 E40 L7 M1.5 | S36 E36 L5 | GEAR M3 Z20 VIEW 剖视 at 100,50 rot 30\n  JSON：{\"segments\":[{\"s\":30,\"e\":30,\"l\":45,\"ch\":[{\"c\":2,\"end\":\"L\"}]},{\"s\":30,\"e\":30,\"l\":20,\"thread\":1.5}],\"view\":\"section\",\"at\":[100,50],\"rot\":30}\n轮廓/端面/倒角/槽与边界竖线 → 1轮廓实线层，螺纹小径/螺尾 → 2细线层（OV 不画砂轮细线），轴线/分度线 → 3中心线层，剖视剖面线 → 5剖面线层。",
+        "OCSMSHAFT shaft generator: line DSL / JSON → single-view side view (segment concatenation + end chamfers + grinding overtravel grooves + thread segment M + gear segment GEAR + rectangular spline segment SPLINE + shaft key KEY).\nUsage: OCSMSHAFT <line DSL or JSON>\n  Line DSL: one segment per line, concatenated left to right; separate segments with | or newlines; case-insensitive, keyword order within a segment does not matter\n    S start diameter (left side)   E end diameter (omitted = cylindrical segment with E=S)   L segment length (required; gear segments use H instead)\n    CH2@L / CH2@R   end chamfer C2 (@ omitted defaults to R)    OV / OV3 / OV3@L   grinding overtravel groove\n    M / M1.5   thread segment: no value = minor diameter 0.85d; M1.5 = pitch P, minor diameter = d − 1.0825P (cylindrical segments only)\n               no TL/RL = fully threaded segment (old behaviour)\n    M1.5 TL20   partial thread (GB/T 3-1997 Fig. 1, first form): full thread length TL next to the right shoulder,\n                drawn right to left = shoulder face + taper (a−x) + thread run-out (thin line, x) + boundary line + full thread TL\n               RO一般|RO短 run-out class (default 一般)   SD一般|SD长|SD短 shoulder-distance class (default 一般)\n    M1.5 TL20 RL   use the GB/T 3-1997 Table 2 relief-groove run-out (Fig. 2; mutually exclusive with RO/SD)\n    RL@L / RL@R   segment-level relief groove (any cylindrical segment; @ omitted defaults to R; only one CH/OV/RL per end)\n               parameters: ① give all of g1/g2/dg/r (dg is an absolute diameter) ② give P to look up Table 2 ③ give none → error\n               e.g. S25 E25 L32 RL@L P1.5 / RL@L g1 2.5 g2 4.5 dg 22.7 r 0.8\n               precondition: the neighbouring segment on that end is larger (there is a shoulder) and this segment is cylindrical, otherwise it reports \"segment N\"\n    GEAR M5 Z10 H20   gear segment (spur): d=m·z derived, no S/E; H = face width (omitted = 10m)\n                       ALPHA25 = pressure angle 25° (omitted 20°); both ends of the tip profile get a chamfer C=round(0.6m)\n                       normal view omits the root; section view draws the root\n    SPLINE 6x23x26x6 L30   rectangular spline segment (GB/T 1144 spec code): major-diameter line + thin minor-diameter line\n                      (2细线层) + run-out arc R=de/2 (centre (L, ±(d/2+R)), end x=L+l,\n                      l=√(h(2R−h)), 6×23×26×6 → l=9.6047); segment length = L + l;\n                      no S/E; `de 71` overrides the hob outer diameter; cannot share a segment with CH/OV/RL/M/GEAR\n                      (the lead-in chamfer is expressed by CH on a neighbouring segment)\n    KEY A 18      shaft key (GB/T 1095-2003 parallel-key seat; only shaft keys for now, no hub keys) — a shaft-segment type, shown in the segment table KEY column:\n                  only on plain cylindrical segments (mutually exclusive with GEAR/SPLINE/M/TL/RL/OV)\n                  key style (normal parallel keys A/B/C; guided parallel keys `导向A`/`导向B` — merged into one GUI dropdown)\n                  + key length L (per style; standard parallel-key series, L<10b) + position centred/end (slot length auto-converted)\n                  b×h is determined from this segment diameter d via the GB/T 1095 d column (h follows b); t1 from the GB/T 1095 table by b\n                  explicit override b8h7: must be a standard pair for that shaft diameter, otherwise it reports an error\n                  display: centred always shows A; end B/C shows C (the C end arc is milled)\n                  conversion: centred B +b / C +b/2; end B +b/2 / C no conversion; end slot length adds t1\n                  optional 双槽 (alias DOUBLE): two opposed slots 180° apart, only visible in section (normal side view unchanged),\n                  torque capacity about 1.5× a single key; the section hatching has one gap in each of its two rings\n                  e.g. KEY A 18 / KEY C 14 @端 / KEY A 18 b8h7\n                  guided parallel keys (GB/T 1097) use the merged style token (recommended `KEY 导向A 25`; the old `KEY A 25 导向` is outdated but works):\n                  only A/B; L from the 1097 series 25…450∩L<10b; slot length = L (centred only);\n                  automatically draws two set-screw threaded holes d0×L0 with centres L3 from the slot ends; mutually exclusive with 双槽; the key-removal hole belongs to 1096\n                  the side view overlays the key + the section gap includes the sagitta line; no dimensions are generated\n    VIEW 常规|剖视   view: normal (default, outline only) / section (outline + ANSI31 hatching)\n                     (dual view was removed on 2026-09-23; the old `VIEW 双` reports an explicit error)\n    REPORT          report: append `REPORT` at the end of a segment (case-insensitive) — no drawing, just prints the Markdown\n                    report (segment list + total length/max diameter);\n                    `REPORT=<path>` / `REPORT-OUT=<path>` also writes a file\n    at x,y rot deg   placement (omitted = origin, no rotation)\n  Example: OCSMSHAFT S30 E30 L45 CH2@L | S40 E40 L30 CH2@R OV3 | S50 E30 L20 | S30 E30 L15 CH2@R | S40 E40 L7 M1.5 | S36 E36 L5 | GEAR M3 Z20 VIEW 剖视 at 100,50 rot 30\n  JSON: {\"segments\":[{\"s\":30,\"e\":30,\"l\":45,\"ch\":[{\"c\":2,\"end\":\"L\"}]},{\"s\":30,\"e\":30,\"l\":20,\"thread\":1.5}],\"view\":\"section\",\"at\":[100,50],\"rot\":30}\nOutline/end faces/chamfers/grooves and boundary lines → 1轮廓实线层; thread minor diameter/run-out → 2细线层 (OV does not draw the grinding thin line); axis/pitch line → 3中心线层; section hatching → 5剖面线层.",
+    ),
+    Msg::new(
+        "cmd.shaft.err.host_prefix",
+        "OCSMSHAFT: {msg}",
+        "OCSMSHAFT: {msg}",
+    ),
+    Msg::new("cmd.shaft.end.l", "左", "left"),
+    Msg::new("cmd.shaft.end.r", "右", "right"),
+
 ];
 
 /// 手动覆盖：环境变量 `OCSMLANG`（最高优先级的进程外开关）。
@@ -2323,6 +4142,21 @@ pub fn t_lang(lang: Lang, key: &str) -> String {
             key.to_string()
         }
     }
+}
+
+/// 卡类型显示名（报错前缀）：中文名 → 当前语言的显示名（catalog `card.name.*`）。
+/// 只用于错误/回执前缀，不影响 GUI 卡类型下拉（那张表另有 `label`）。
+pub fn card_display(name: &str) -> String {
+    let key = match name {
+        "花键参数表" => "card.name.spline",
+        "齿轮参数表" => "card.name.gear",
+        "ANSI 花键参数表" => "card.name.ansi",
+        "NF 内花键参数表" => "card.name.nf",
+        "NF 外花键参数表" => "card.name.nf_ext",
+        "DIN 花键参数表" => "card.name.din",
+        _ => return name.to_string(),
+    };
+    t(key)
 }
 
 /// 带参数插值：`{name}` → `args` 里的值（未给到的占位符原样保留）。

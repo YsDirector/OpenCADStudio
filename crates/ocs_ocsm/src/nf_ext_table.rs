@@ -228,14 +228,23 @@ pub struct NfExtDerived {
 /// 主参数合法性（`z` 给了就限 3..=1000，与 NF 表量级一致）。
 fn validate_basic(a: f64, m: f64, z: Option<u32>) -> Result<(), String> {
     if !(a.is_finite() && a > 0.0) {
-        return Err(format!("NF 外花键参数表：公称直径 A={a} 必须是正数"));
+        return Err(crate::i18n::t_fmt(
+            "cmd.nfext.err.a_positive",
+            &[("a", &crate::partgen_kit::trim(a))],
+        ));
     }
     if !(m.is_finite() && m > 0.0) {
-        return Err(format!("NF 外花键参数表：模数 m={m} 必须是正数"));
+        return Err(crate::i18n::t_fmt(
+            "cmd.nfext.err.m_positive",
+            &[("m", &crate::partgen_kit::trim(m))],
+        ));
     }
     if let Some(z) = z {
         if !(3..=1000).contains(&z) {
-            return Err(format!("NF 外花键参数表：齿数 z={z} 超出范围（3–1000）"));
+            return Err(crate::i18n::t_fmt(
+                "cmd.nfext.err.z_range",
+                &[("z", &z.to_string())],
+            ));
         }
     }
     Ok(())
@@ -271,11 +280,14 @@ pub fn derive(spec: &NfExtTableSpec) -> Result<NfExtDerived, String> {
         .or_else(|| check.as_ref().and_then(|r| r.n));
     if let (Some(z_in), Some(z_tab)) = (spec.z, table_z) {
         if z_in != z_tab {
-            return Err(format!(
-                "NF 外花键参数表：齿数 z={z_in} 与 NF E22-141 表行（A={} m={}）的 N={z_tab} 不一致；\
-                 表值行请去掉 z 或改为 N={z_tab}",
-                crate::partgen_kit::trim(spec.a),
-                crate::partgen_kit::trim(spec.m)
+            return Err(crate::i18n::t_fmt(
+                "cmd.nfext.err.z_table_mismatch",
+                &[
+                    ("z_in", &z_in.to_string()),
+                    ("a", &crate::partgen_kit::trim(spec.a)),
+                    ("m", &crate::partgen_kit::trim(spec.m)),
+                    ("z_tab", &z_tab.to_string()),
+                ],
             ));
         }
     }
@@ -390,8 +402,9 @@ pub fn values(spec: &NfExtTableSpec) -> Result<Vec<(String, String)>, String> {
     let want: Vec<String> = attdefs().iter().map(|ad| ad.tag.clone()).collect();
     let want: Vec<&str> = want.iter().map(|s| s.as_str()).collect();
     if got != want {
-        return Err(format!(
-            "NF 外花键参数表：取值映射顺序与模板属性不一致：{got:?} != {want:?}"
+        return Err(crate::i18n::t_fmt(
+            "cmd.nfext.err.tag_order",
+            &[("got", &format!("{got:?}")), ("want", &format!("{want:?}"))],
         ));
     }
     Ok(out.into_iter().map(|(t, v)| (t.to_string(), v)).collect())
@@ -690,19 +703,19 @@ impl NfExtTableModel {
         let centering = match self.centering.as_deref().map(str::trim) {
             None | Some("") => NfExtTableSpec::default_centering(),
             Some(t) => Centering::from_token(t).ok_or_else(|| {
-                format!("NF 外花键参数表：定心方式「{t}」非法（可用 齿面 / 外径）")
+                crate::i18n::t_fmt("cmd.nfext.err.centering_invalid", &[("t", t)])
             })?,
         };
         let root = match self.root.as_deref().map(str::trim) {
             None | Some("") => RootStyle::Flat,
             Some(t) => RootStyle::from_token(t).ok_or_else(|| {
-                format!("NF 外花键参数表：齿根样式「{t}」非法（可用 平 / 圆）")
+                crate::i18n::t_fmt("cmd.nfext.err.root_invalid", &[("t", t)])
             })?,
         };
         let fit = match self.fit.as_deref().map(str::trim) {
             None | Some("") => FitClass::default(),
             Some(t) => FitClass::from_token(t).ok_or_else(|| {
-                format!("NF 外花键参数表：配合类别「{t}」非法（可用 松动 / 滑动 / 固定 / 压）")
+                crate::i18n::t_fmt("cmd.nfext.err.fit_invalid", &[("t", t)])
             })?,
         };
         let (a, m, z) = match self.expr.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
@@ -710,14 +723,14 @@ impl NfExtTableModel {
                 let r = crate::card_expr::resolve(&EXPR_POLICY, e, Some(false))?;
                 (
                     r.value("a").ok_or_else(|| {
-                        "NF 外花键参数表：表达式映射表缺 A（内部错误）".to_string()
+                        crate::i18n::t("cmd.nfext.err.map_missing_a")
                     })?,
                     r.value("m").ok_or_else(|| {
-                        "NF 外花键参数表：表达式映射表缺 m（内部错误）".to_string()
+                        crate::i18n::t("cmd.nfext.err.map_missing_m")
                     })?,
                     Some(
                         r.value("z").ok_or_else(|| {
-                            "NF 外花键参数表：表达式映射表缺 z（内部错误）".to_string()
+                            crate::i18n::t("cmd.nfext.err.map_missing_z")
                         })? as u32,
                     ),
                 )
@@ -878,17 +891,44 @@ impl NfExtTableModel {
     pub fn echo_note(&self) -> Result<String, String> {
         let spec = self.spec()?;
         let d = derive(&spec)?;
-        Ok(format!(
-            "NF E22-141 外花键 A={} m={} z={}（{}，滚齿；{}配合；K/W {}）",
-            crate::nf_table::fmt_mm(spec.a),
-            crate::nf_table::fmt_mm(spec.m),
-            d.z.map(|z| z.to_string()).unwrap_or_else(|| MISSING.to_string()),
-            spec.centering.label(),
-            spec.fit.label(),
-            match (d.k, d.w) {
-                (Some(k), Some(w)) => format!("{} / {}", crate::nf_table::fmt_mm(k), crate::nf_table::fmt_mm(w)),
-                _ => MISSING.to_string(),
-            }
+        Ok(crate::i18n::t_fmt(
+            "cmd.nfext.echo",
+            &[
+                ("a", &crate::nf_table::fmt_mm(spec.a)),
+                ("m", &crate::nf_table::fmt_mm(spec.m)),
+                (
+                    "z",
+                    &d.z.map(|z| z.to_string())
+                        .unwrap_or_else(|| MISSING.to_string()),
+                ),
+                (
+                    "centering",
+                    &crate::i18n::t(match spec.centering {
+                        Centering::Outer => "cmd.nf.centering.outer",
+                        Centering::Flank => "cmd.nf.centering.flank",
+                    }),
+                ),
+                (
+                    "fit",
+                    &crate::i18n::t(match spec.fit {
+                        FitClass::Loose => "cmd.nf.fit.loose",
+                        FitClass::Slide => "cmd.nf.fit.sliding",
+                        FitClass::Fixed => "cmd.nf.fit.fixed",
+                        FitClass::Press => "cmd.nf.fit.press",
+                    }),
+                ),
+                (
+                    "kw",
+                    &match (d.k, d.w) {
+                        (Some(k), Some(w)) => format!(
+                            "{} / {}",
+                            crate::nf_table::fmt_mm(k),
+                            crate::nf_table::fmt_mm(w)
+                        ),
+                        _ => MISSING.to_string(),
+                    },
+                ),
+            ],
         ))
     }
 
@@ -944,14 +984,7 @@ fn strip_prefix_ci<'a>(t: &'a str, p: &str) -> Option<&'a str> {
 }
 
 pub fn usage() -> String {
-    "智能卡片「NF外花键参数表」用法：\
-     `OCSMCARD NF外花键参数表 <九字段齿形表达式> [中心 齿面|外径] [根 平|圆] [配合 松动|滑动|固定|压] [at x,y] [rot 度]`\
-     （如 `OCSMCARD NF外花键参数表 SPLINE EX M7.5 Z38 ALPHA20 X0.8 BETA0 H30`；\
-     也可沿用 `A300 M7.5 [Z38]` 写法）。表达式反解 A=m(z+0.4+2x)、m、z（NF 压力角恒 20°、方向恒外 EX）；\
-     定心方式缺省「齿面定心」（Dee=A−0.2m，模板口径；外径定心 Dee=A）；加工方法照模板 = 滚齿；\
-     小径 Die 平齿根 A−2.4m / 圆齿根 A−2.694m；K/W 取 p23–p25 检查表 —— 表外显示「—」，不外推；\
-     公差：大径 h12 / 小径 H7（ISO 286，模板实测口径），公法线 = p29 外花键 E 偏差（按配合类别，缺省固定）。"
-        .to_string()
+    crate::i18n::t("cmd.nfext.usage")
 }
 
 impl NfExtTableSpec {
@@ -983,7 +1016,9 @@ impl NfExtTableSpec {
             tokens
                 .get(*i)
                 .map(|s| s.to_string())
-                .ok_or_else(|| format!("NF 外花键参数表：{what} 缺少数值/选项"))
+                .ok_or_else(|| {
+                    crate::i18n::t_fmt("cmd.nfext.err.need", &[("what", what)])
+                })
         };
         while i < tokens.len() {
             let t = tokens[i];
@@ -992,75 +1027,123 @@ impl NfExtTableSpec {
                 let v = need(&mut i, &tokens, "at")?;
                 let (x, y) = v
                     .split_once(',')
-                    .ok_or_else(|| format!("NF 外花键参数表：at「{v}」应为 `x,y`"))?;
+                    .ok_or_else(|| {
+                        crate::i18n::t_fmt("cmd.nfext.err.at_format", &[("v", &v)])
+                    })?;
                 let x: f64 = x
                     .trim()
                     .parse()
-                    .map_err(|e| format!("NF 外花键参数表：at x={x} 不是数字：{e}"))?;
+                    .map_err(|e: std::num::ParseFloatError| {
+                        crate::i18n::t_fmt(
+                            "cmd.nfext.err.at_x",
+                            &[("x", &x), ("e", &e.to_string())],
+                        )
+                    })?;
                 let y: f64 = y
                     .trim()
                     .parse()
-                    .map_err(|e| format!("NF 外花键参数表：at y={y} 不是数字：{e}"))?;
+                    .map_err(|e: std::num::ParseFloatError| {
+                        crate::i18n::t_fmt(
+                            "cmd.nfext.err.at_y",
+                            &[("y", &y), ("e", &e.to_string())],
+                        )
+                    })?;
                 at = Some([x, y]);
             } else if key == "rot" || key == "旋转" {
                 let v = need(&mut i, &tokens, "rot")?;
                 rot = v
                     .parse()
-                    .map_err(|e| format!("NF 外花键参数表：rot={v} 不是数字：{e}"))?;
+                    .map_err(|e: std::num::ParseFloatError| {
+                        crate::i18n::t_fmt(
+                            "cmd.nfext.err.rot",
+                            &[("v", &v), ("e", &e.to_string())],
+                        )
+                    })?;
             } else if key == "中心" || key == "定心" || key == "centering" {
                 let v = need(&mut i, &tokens, "中心")?;
                 centering = Centering::from_token(&v).ok_or_else(|| {
-                    format!("NF 外花键参数表：定心方式「{v}」非法（可用 齿面 / 外径）")
+                    crate::i18n::t_fmt("cmd.nfext.err.centering_invalid", &[("t", &v)])
                 })?;
             } else if key == "根" || key == "齿根" || key == "root" {
                 let v = need(&mut i, &tokens, "根")?;
-                root = RootStyle::from_token(&v)
-                    .ok_or_else(|| format!("NF 外花键参数表：齿根样式「{v}」非法（可用 平 / 圆）"))?;
+                root = RootStyle::from_token(&v).ok_or_else(|| {
+                    crate::i18n::t_fmt("cmd.nfext.err.root_invalid", &[("t", &v)])
+                })?;
             } else if key == "配合" || key == "fit" {
                 let v = need(&mut i, &tokens, "配合")?;
                 fit = FitClass::from_token(&v).ok_or_else(|| {
-                    format!("NF 外花键参数表：配合类别「{v}」非法（可用 松动 / 滑动 / 固定 / 压）")
+                    crate::i18n::t_fmt("cmd.nfext.err.fit_invalid", &[("t", &v)])
                 })?;
             } else if key == "直径" || key == "公称直径" || key == "a" {
                 let v = need(&mut i, &tokens, "A")?;
                 a = Some(
                     v.parse()
-                        .map_err(|e| format!("NF 外花键参数表：A={v} 不是数字：{e}"))?,
+                        .map_err(|e: std::num::ParseFloatError| {
+                            crate::i18n::t_fmt(
+                                "cmd.nfext.err.num",
+                                &[("name", "A"), ("v", &v), ("e", &e.to_string())],
+                            )
+                        })?,
                 );
             } else if key == "模数" || key == "m" {
                 let v = need(&mut i, &tokens, "m")?;
                 m = Some(
                     v.parse()
-                        .map_err(|e| format!("NF 外花键参数表：m={v} 不是数字：{e}"))?,
+                        .map_err(|e: std::num::ParseFloatError| {
+                            crate::i18n::t_fmt(
+                                "cmd.nfext.err.num",
+                                &[("name", "m"), ("v", &v), ("e", &e.to_string())],
+                            )
+                        })?,
                 );
             } else if key == "齿数" || key == "z" {
                 let v = need(&mut i, &tokens, "z")?;
                 z = Some(
                     v.parse()
-                        .map_err(|e| format!("NF 外花键参数表：z={v} 不是整数：{e}"))?,
+                        .map_err(|e: std::num::ParseIntError| {
+                            crate::i18n::t_fmt(
+                                "cmd.nfext.err.z_num",
+                                &[("name", "z"), ("v", &v), ("e", &e.to_string())],
+                            )
+                        })?,
                 );
             } else if let Some(v) = strip_prefix_ci(t, "a") {
                 let v = if v.is_empty() { need(&mut i, &tokens, "A")? } else { v.to_string() };
                 a = Some(
                     v.parse()
-                        .map_err(|e| format!("NF 外花键参数表：A={v} 不是数字：{e}"))?,
+                        .map_err(|e: std::num::ParseFloatError| {
+                            crate::i18n::t_fmt(
+                                "cmd.nfext.err.num",
+                                &[("name", "A"), ("v", &v), ("e", &e.to_string())],
+                            )
+                        })?,
                 );
             } else if let Some(v) = strip_prefix_ci(t, "m") {
                 let v = if v.is_empty() { need(&mut i, &tokens, "M")? } else { v.to_string() };
                 m = Some(
                     v.parse()
-                        .map_err(|e| format!("NF 外花键参数表：M={v} 不是数字：{e}"))?,
+                        .map_err(|e: std::num::ParseFloatError| {
+                            crate::i18n::t_fmt(
+                                "cmd.nfext.err.num",
+                                &[("name", "M"), ("v", &v), ("e", &e.to_string())],
+                            )
+                        })?,
                 );
             } else if let Some(v) = strip_prefix_ci(t, "z") {
                 let v = if v.is_empty() { need(&mut i, &tokens, "Z")? } else { v.to_string() };
                 z = Some(
                     v.parse()
-                        .map_err(|e| format!("NF 外花键参数表：Z={v} 不是整数：{e}"))?,
+                        .map_err(|e: std::num::ParseIntError| {
+                            crate::i18n::t_fmt(
+                                "cmd.nfext.err.z_num",
+                                &[("name", "Z"), ("v", &v), ("e", &e.to_string())],
+                            )
+                        })?,
                 );
             } else {
-                return Err(format!(
-                    "NF 外花键参数表：不认识的参数「{t}」。\n{}",
-                    usage()
+                return Err(crate::i18n::t_fmt(
+                    "cmd.nfext.err.unknown_param",
+                    &[("t", t), ("usage", &usage())],
                 ));
             }
             i += 1;
@@ -1070,44 +1153,59 @@ impl NfExtTableSpec {
             Some(e) => {
                 let r = crate::card_expr::resolve(&EXPR_POLICY, &e, Some(false))?;
                 let ea = r.value("a").ok_or_else(|| {
-                    "NF 外花键参数表：表达式映射表缺 A（内部错误）".to_string()
+                    crate::i18n::t("cmd.nfext.err.map_missing_a")
                 })?;
                 let em = r.value("m").ok_or_else(|| {
-                    "NF 外花键参数表：表达式映射表缺 m（内部错误）".to_string()
+                    crate::i18n::t("cmd.nfext.err.map_missing_m")
                 })?;
                 let ez = r.value("z").ok_or_else(|| {
-                    "NF 外花键参数表：表达式映射表缺 z（内部错误）".to_string()
+                    crate::i18n::t("cmd.nfext.err.map_missing_z")
                 })? as u32;
                 if let Some(given) = a {
                     if (given - ea).abs() > 1e-6 {
-                        return Err(format!(
-                            "NF 外花键参数表：显式 A={} 与表达式反解的 A={} 不一致",
-                            crate::partgen_kit::trim(given),
-                            crate::partgen_kit::trim(ea)
+                        return Err(crate::i18n::t_fmt(
+                            "cmd.nfext.err.explicit_mismatch",
+                            &[
+                                ("name", "A"),
+                                ("given", &crate::partgen_kit::trim(given)),
+                                ("resolved", &crate::partgen_kit::trim(ea)),
+                            ],
                         ));
                     }
                 }
                 if let Some(given) = m {
                     if (given - em).abs() > 1e-9 {
-                        return Err(format!(
-                            "NF 外花键参数表：显式 m={} 与表达式反解的 m={} 不一致",
-                            crate::partgen_kit::trim(given),
-                            crate::partgen_kit::trim(em)
+                        return Err(crate::i18n::t_fmt(
+                            "cmd.nfext.err.explicit_mismatch",
+                            &[
+                                ("name", "m"),
+                                ("given", &crate::partgen_kit::trim(given)),
+                                ("resolved", &crate::partgen_kit::trim(em)),
+                            ],
                         ));
                     }
                 }
                 if let Some(given) = z {
                     if given != ez {
-                        return Err(format!(
-                            "NF 外花键参数表：显式 z={given} 与表达式反解的 z={ez} 不一致"
+                        return Err(crate::i18n::t_fmt(
+                            "cmd.nfext.err.explicit_mismatch",
+                            &[
+                                ("name", "z"),
+                                ("given", &given.to_string()),
+                                ("resolved", &ez.to_string()),
+                            ],
                         ));
                     }
                 }
                 (ea, em, Some(ez))
             }
             None => {
-                let a = a.ok_or_else(|| format!("NF 外花键参数表：缺公称直径 A（写法 `A300` / `直径 300`，或直接给九字段表达式）。\n{}", usage()))?;
-                let m = m.ok_or_else(|| format!("NF 外花键参数表：缺模数 m（写法 `M7.5` / `模数 7.5`；同一 A 可对应不同模数，必填）。\n{}", usage()))?;
+                let a = a.ok_or_else(|| {
+                    crate::i18n::t_fmt("cmd.nfext.err.missing_a", &[("usage", &usage())])
+                })?;
+                let m = m.ok_or_else(|| {
+                    crate::i18n::t_fmt("cmd.nfext.err.missing_m", &[("usage", &usage())])
+                })?;
                 (a, m, z)
             }
         };

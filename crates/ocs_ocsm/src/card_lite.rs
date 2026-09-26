@@ -369,10 +369,20 @@ fn full_preview(card: &LiteCardSpec, model: &serde_json::Value) -> Result<serde_
     let mut v = model.clone();
     v["card"] = serde_json::Value::String(card.full_card.to_string());
     let bytes = serde_json::to_vec(&v)
-        .map_err(|e| format!("{}：请求序列化失败：{e}", card.id))?;
+        .map_err(|e| {
+            crate::i18n::t_fmt(
+                "cmd.cardlite.err.serialize",
+                &[("id", card.id), ("e", &e.to_string())],
+            )
+        })?;
     let s = crate::guide_server::apply_card_preview(&bytes)
-        .map_err(|e| format!("{}：{e}", card.id))?;
-    serde_json::from_str(&s).map_err(|e| format!("{}：完整卡预览 JSON 解析失败：{e}", card.id))
+        .map_err(|e| crate::i18n::t_fmt("cmd.cardlite.err.preview", &[("id", card.id), ("e", &e)]))?;
+    serde_json::from_str(&s).map_err(|e| {
+        crate::i18n::t_fmt(
+            "cmd.cardlite.err.preview_parse",
+            &[("id", card.id), ("e", &e.to_string())],
+        )
+    })
 }
 
 /// 完整卡项 tag → 值。
@@ -404,7 +414,9 @@ pub fn gear_extras_from_params(p: &crate::gear::GearParams) -> Vec<(String, Stri
 
 fn gear_extras(model: &serde_json::Value) -> Result<Vec<(String, String)>, String> {
     let m: crate::gear_table::GearTableModel = serde_json::from_value(model.clone())
-        .map_err(|e| format!("齿轮精简卡：请求字段无效：{e}"))?;
+        .map_err(|e| {
+            crate::i18n::t_fmt("cmd.cardlite.err.gear_model", &[("e", &e.to_string())])
+        })?;
     let spec = m.spec()?;
     Ok(gear_extras_from_params(&spec.params))
 }
@@ -435,7 +447,20 @@ pub fn cli_values(
             let s = crate::ansi_table::AnsiTableSpec::parse(crate::ansi_table::AnsiLang::Cn, &args)?;
             let want_int = card.family == LiteFamily::AnsiCnInt;
             if (s.side == crate::spline_tol::SplineSide::Internal) != want_int {
-                return Err(format!("{}：方向记号与卡片方向不一致（卡片固定{}）", card.id, side));
+                return Err(crate::i18n::t_fmt(
+                    "cmd.cardlite.err.dir_mismatch",
+                    &[
+                        ("id", card.id),
+                        (
+                            "side",
+                            &crate::i18n::t(if want_int {
+                                "cmd.cardexpr.dir.int"
+                            } else {
+                                "cmd.cardexpr.dir.ext"
+                            }),
+                        ),
+                    ],
+                ));
             }
             Ok((crate::ansi_table::values(&s)?, Vec::new(), s.at, s.rot))
         }
@@ -445,7 +470,20 @@ pub fn cli_values(
             let s = crate::ansi_table::AnsiTableSpec::parse(crate::ansi_table::AnsiLang::En, &args)?;
             let want_int = card.family == LiteFamily::AnsiEnInt;
             if (s.side == crate::spline_tol::SplineSide::Internal) != want_int {
-                return Err(format!("{}：方向记号与卡片方向不一致（卡片固定{}）", card.id, side));
+                return Err(crate::i18n::t_fmt(
+                    "cmd.cardlite.err.dir_mismatch",
+                    &[
+                        ("id", card.id),
+                        (
+                            "side",
+                            &crate::i18n::t(if want_int {
+                                "cmd.cardexpr.dir.int"
+                            } else {
+                                "cmd.cardexpr.dir.ext"
+                            }),
+                        ),
+                    ],
+                ));
             }
             Ok((crate::ansi_table::values(&s)?, Vec::new(), s.at, s.rot))
         }
@@ -478,11 +516,21 @@ fn project(
                 .iter()
                 .find(|(t, _)| t == f.tag)
                 .map(|(_, v)| v.clone())
-                .ok_or_else(|| format!("{}：补算项 {} 缺失", card.id, f.tag))?
+                .ok_or_else(|| {
+                    crate::i18n::t_fmt(
+                        "cmd.cardlite.err.extra_missing",
+                        &[("id", card.id), ("tag", &f.tag)],
+                    )
+                })?
         } else {
             full.get(f.key)
                 .cloned()
-                .ok_or_else(|| format!("{}：完整卡项「{}」不在取值表里", card.id, f.key))?
+                .ok_or_else(|| {
+                    crate::i18n::t_fmt(
+                        "cmd.cardlite.err.full_item_missing",
+                        &[("id", card.id), ("key", f.key)],
+                    )
+                })?
         };
         out.push((f.tag.to_string(), v));
     }
@@ -557,7 +605,12 @@ pub fn values_from_preview(card: &LiteCardSpec, preview: &serde_json::Value) -> 
             .as_array()
             .and_then(|arr| arr.iter().find(|it| it["tag"].as_str() == Some(f.tag)))
             .and_then(|it| it["value"].as_str())
-            .ok_or_else(|| format!("{}：预览缺项 {}", card.id, f.tag))?;
+            .ok_or_else(|| {
+                crate::i18n::t_fmt(
+                    "cmd.cardlite.err.preview_missing",
+                    &[("id", card.id), ("tag", &f.tag)],
+                )
+            })?;
         out.push((f.tag.to_string(), v.to_string()));
     }
     Ok(out)

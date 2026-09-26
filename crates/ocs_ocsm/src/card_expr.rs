@@ -123,7 +123,10 @@ impl ExprOp {
             ExprOp::Teeth => f.z() as f64,
             ExprOp::Pitch => {
                 if !(f.m().is_finite() && f.m() > 0.0) {
-                    return Err(format!("表达式模数 m={} 非法，换算不出径节 P", f.m()));
+                    return Err(crate::i18n::t_fmt(
+                        "cmd.cardexpr.err.module",
+                        &[("m", &crate::partgen_kit::trim(f.m()))],
+                    ));
                 }
                 f.ansi_pitch()
             }
@@ -131,7 +134,7 @@ impl ExprOp {
             ExprOp::DinBaseDB => f.din_base_d_b(),
         };
         if !v.is_finite() {
-            return Err("表达式反解出非有限数".to_string());
+            return Err(crate::i18n::t("cmd.cardexpr.err.not_finite"));
         }
         Ok(v)
     }
@@ -204,20 +207,38 @@ pub fn check(
     want_internal: Option<bool>,
 ) -> Result<(), String> {
     if f.mark != policy.mark {
-        return Err(format!(
-            "{}：表达式 MARK 写的是 {}，与卡片体系「{}」不一致",
-            policy.card,
-            f.mark.label(),
-            policy.mark.label()
+        return Err(crate::i18n::t_fmt(
+            "cmd.cardexpr.err.mark",
+            &[
+                ("card", &crate::i18n::card_display(policy.card)),
+                ("mark", f.mark.label()),
+                ("want", policy.mark.label()),
+            ],
         ));
     }
     if let (Some(want), Some(has)) = (want_internal, f.kind) {
         if want != has {
-            return Err(format!(
-                "{}：表达式 KIND 写的是 {}，与卡片方向「{}」不一致",
-                policy.card,
-                if has { "IN（内）" } else { "EX（外）" },
-                if want { "内" } else { "外" }
+            return Err(crate::i18n::t_fmt(
+                "cmd.cardexpr.err.kind",
+                &[
+                    ("card", &crate::i18n::card_display(policy.card)),
+                    (
+                        "kind",
+                        &crate::i18n::t(if has {
+                            "cmd.cardexpr.kind.in"
+                        } else {
+                            "cmd.cardexpr.kind.ex"
+                        }),
+                    ),
+                    (
+                        "want",
+                        &crate::i18n::t(if want {
+                            "cmd.cardexpr.dir.int"
+                        } else {
+                            "cmd.cardexpr.dir.ext"
+                        }),
+                    ),
+                ],
             ));
         }
     }
@@ -227,25 +248,31 @@ pub fn check(
             .iter()
             .any(|a| (a - f.alpha_deg()).abs() < 1e-9)
     {
-        return Err(format!(
-            "{}：表达式压力角 {}° 不在卡片体系允许的 α={}°（表达式与卡片体系不一致）",
-            policy.card,
-            crate::partgen_kit::trim(f.alpha_deg()),
-            alpha_list(policy.alphas)
+        return Err(crate::i18n::t_fmt(
+            "cmd.cardexpr.err.alpha",
+            &[
+                ("card", &crate::i18n::card_display(policy.card)),
+                ("alpha", &crate::partgen_kit::trim(f.alpha_deg())),
+                ("allowed", &alpha_list(policy.alphas)),
+            ],
         ));
     }
     if policy.spur && f.beta_deg().abs() > 1e-9 {
-        return Err(format!(
-            "{}：表达式螺旋角 β={}° 与卡片（只做直齿）不一致",
-            policy.card,
-            crate::partgen_kit::trim(f.beta_deg())
+        return Err(crate::i18n::t_fmt(
+            "cmd.cardexpr.err.beta",
+            &[
+                ("card", &crate::i18n::card_display(policy.card)),
+                ("beta", &crate::partgen_kit::trim(f.beta_deg())),
+            ],
         ));
     }
     if !policy.allow_shift && f.shift_x().abs() > 1e-9 {
-        return Err(format!(
-            "{}：表达式径向变位 X={} 在卡片里没有对应输入（该体系不收变位；请用 X0 的表达式）",
-            policy.card,
-            crate::partgen_kit::trim(f.shift_x())
+        return Err(crate::i18n::t_fmt(
+            "cmd.cardexpr.err.shift",
+            &[
+                ("card", &crate::i18n::card_display(policy.card)),
+                ("x", &crate::partgen_kit::trim(f.shift_x())),
+            ],
         ));
     }
     Ok(())

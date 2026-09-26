@@ -445,17 +445,7 @@ pub fn usage_line() -> String {
         .map(|c| c.id)
         .collect::<Vec<_>>()
         .join(" / ");
-    format!(
-        "OCSMCARD 用法：`OCSMCARD <卡类型> …`（本期卡类型：{types}；不带参数 = 开图形界面）。\n\
-         * GB 花键参数表（内/外两张卡，一卡一方向）：`OCSMCARD 花键参数表 [std GB] <九字段表达式> [6H|5f] [dp 4.5] [root 平|圆] [at x,y] [rot 度]`（旧 `内/外` 记号兼容；外卡表下方 `花键参数表_外`）\n\
-         * 齿轮参数表：`OCSMCARD 齿轮参数表 <九字段表达式> [mate z₂] [dwg 图号] [grade 精度等级] [center a] [at x,y] [rot 度]`\n\
-         * ANSI 花键参数表（内/外 × 中/英 = 四张卡）：`OCSMCARD ANSI花键参数表_中文 <九字段表达式> [profile ANSI30R] [at x,y]`（外卡 `ANSI花键参数表_外_中文`；英文版换 `_英文`；旧写法 `内 P16 Z20` 兼容）\n\
-         * NF 内/外花键参数表（两张）：`OCSMCARD NF内花键参数表 <九字段表达式> [中心 外径|齿面] [根 平|圆] [配合 松动|滑动|固定|压] [at x,y]`（外卡 `OCSMCARD NF外花键参数表`；旧写法 `A300 M7.5 Z38` 兼容）\n\
-         * DIN 5480 内/外花键参数表（两张，单栏 Bild 6）：`OCSMCARD DIN花键参数表 <九字段表达式> [N9H] [ae …] [as …] [at x,y]`（外卡 `DIN花键参数表_外`；旧写法 `M3 Z38 B120 N9H W8f` 兼容）\n\
-         * 精简版（下拉「精简版」分组，11 张：GB/NF/DIN/ANSI×4/齿轮）：只列基本参数 + 主要测量量、\
-         **不含公差列**；参数/查表/公式与完整卡同源 —— `OCSMCARD <精简卡名> <对应完整卡参数>`\
-         （例 `OCSMCARD NF花键精简表_内 A300 M7.5 Z38`、`OCSMCARD 齿轮精简表 <九字段表达式>`）"
-    )
+    crate::i18n::t_fmt("cmd.card.usage_line", &[("types", &types)])
 }
 
 #[cfg(test)]
@@ -662,5 +652,89 @@ mod tests {
         assert!(usage_line().contains("OCSMCARD NF外花键参数表"));
         assert!(usage_line().contains("OCSMCARD DIN花键参数表"));
         assert!(usage_line().contains("DIN花键参数表_外"));
+    }
+
+    /// 阶段 2 ④ 批（卡族）：卡内校验/口径报错随语言切换、关键数据保留。
+    #[test]
+    fn card_family_messages_switch_language_keeping_data() {
+        let _g = crate::global_state_test_lock();
+        crate::i18n::clear_missing_keys();
+        crate::i18n::set_lang(crate::i18n::Lang::Zh);
+
+        // zh：卡表体系（表达式/查表/口径）与卡类型分派。
+        assert!(usage_line().contains("OCSMCARD 用法"));
+        let e = crate::spline_tol::PressureAngle::parse("20").unwrap_err();
+        assert!(e.contains("压力角") && e.contains("20"), "{e}");
+        let e = crate::spline_table::SplineTableSpec::parse("内 6H").unwrap_err();
+        assert!(e.contains("缺九字段齿形表达式"), "{e}");
+        let e = crate::gear_table::GearTableSpec::parse(
+            "GEAR EX M3 Z20 ALPHA20 X0 DA66 DF52.5 BETA0 H30 rot x",
+        )
+        .unwrap_err();
+        assert!(e.contains("rot=x") && e.contains("不是数字"), "{e}");
+        let e = crate::ansi_table::AnsiTableSpec::parse(crate::ansi_table::AnsiLang::Cn, "内")
+            .unwrap_err();
+        assert!(e.contains("缺径节 P"), "{e}");
+        let e = crate::nf_table::NfTableSpec::parse("A300").unwrap_err();
+        assert!(e.contains("缺模数 m") && e.contains("A300"), "{e}");
+        let e = crate::nf_ext_table::NfExtTableSpec::parse("A300").unwrap_err();
+        assert!(e.contains("缺模数 m") && e.contains("A300"), "{e}");
+        let e = crate::din_table::DinTableSpec::parse("M3", true).unwrap_err();
+        assert!(e.contains("缺 齿数 z") && e.contains("M3"), "{e}");
+        let e = crate::guide_server::apply_card_preview(
+            r#"{"card":"花键参数表","at":"nope"}"#.as_bytes(),
+        )
+        .unwrap_err();
+        assert!(e.contains("请求字段无效"), "{e}");
+        let e = crate::card_expr::resolve(
+            &crate::gear_table::EXPR_POLICY,
+            "SPLINE EX M3 Z20 ALPHA20 X0 DA66 DF52.5 BETA0 H30",
+            None,
+        )
+        .unwrap_err();
+        assert!(e.contains("齿轮参数表") && e.contains("MARK"), "{e}");
+
+        // en：同一批调用，数据不变。
+        crate::i18n::set_lang(crate::i18n::Lang::En);
+        assert!(usage_line().contains("OCSMCARD usage"));
+        let e = crate::spline_tol::PressureAngle::parse("20").unwrap_err();
+        assert!(e.contains("invalid pressure angle") && e.contains("20"), "{e}");
+        assert!(!e.contains("压力角"), "{e}");
+        let e = crate::spline_table::SplineTableSpec::parse("内 6H").unwrap_err();
+        assert!(e.contains("missing the nine-field tooth-profile expression"), "{e}");
+        let e = crate::gear_table::GearTableSpec::parse(
+            "GEAR EX M3 Z20 ALPHA20 X0 DA66 DF52.5 BETA0 H30 rot x",
+        )
+        .unwrap_err();
+        assert!(e.contains("rot=x is not a number"), "{e}");
+        let e = crate::ansi_table::AnsiTableSpec::parse(crate::ansi_table::AnsiLang::Cn, "内")
+            .unwrap_err();
+        assert!(e.contains("missing diametral pitch P"), "{e}");
+        let e = crate::nf_table::NfTableSpec::parse("A300").unwrap_err();
+        assert!(e.contains("missing module m") && e.contains("A300"), "{e}");
+        let e = crate::nf_ext_table::NfExtTableSpec::parse("A300").unwrap_err();
+        assert!(e.contains("missing module m") && e.contains("A300"), "{e}");
+        let e = crate::din_table::DinTableSpec::parse("M3", true).unwrap_err();
+        assert!(e.contains("missing") && e.contains("M3"), "{e}");
+        let e = crate::guide_server::apply_card_preview(
+            r#"{"card":"花键参数表","at":"nope"}"#.as_bytes(),
+        )
+        .unwrap_err();
+        assert!(e.contains("invalid request field"), "{e}");
+        let e = crate::card_expr::resolve(
+            &crate::gear_table::EXPR_POLICY,
+            "SPLINE EX M3 Z20 ALPHA20 X0 DA66 DF52.5 BETA0 H30",
+            None,
+        )
+        .unwrap_err();
+        assert!(e.contains("Gear table") && e.contains("MARK"), "{e}");
+        assert!(!e.contains("齿轮参数表"), "{e}");
+
+        assert!(
+            crate::i18n::missing_keys().is_empty(),
+            "缺词条：{:?}",
+            crate::i18n::missing_keys()
+        );
+        crate::i18n::set_lang_auto();
     }
 }

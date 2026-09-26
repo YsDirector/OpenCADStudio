@@ -5398,7 +5398,7 @@ pub(crate) fn apply_spline_export(
         .block_records
         .iter()
         .any(|b| b.name == block);
-    begin_undo(sender, "花键参数表")?;
+    begin_undo(sender, &crate::i18n::t("cmd.card.label.spline"))?;
     // 幂等 ensure（与 CLI `cmd_spline_table` 同一做法：图层 + 文字样式）。
     req_timed(
         sender,
@@ -5432,11 +5432,22 @@ pub(crate) fn apply_spline_export(
         commit_undo(sender);
         return Ok(serde_json::json!({
             "ok": true,
-            "message": format!(
-                "已插入{kind}参数表（{echo}）于 ({}, {}) rot {}°。",
-                crate::partgen_kit::trim(at[0]),
-                crate::partgen_kit::trim(at[1]),
-                crate::partgen_kit::trim(model.rot)
+            "message": crate::i18n::t_fmt(
+                "cmd.card.export.inserted",
+                &[
+                    (
+                        "kind",
+                        &crate::i18n::t(if side == crate::spline_tol::SplineSide::Internal {
+                            "cmd.card.side.internal"
+                        } else {
+                            "cmd.card.side.external"
+                        }),
+                    ),
+                    ("echo", &echo),
+                    ("x", &crate::partgen_kit::trim(at[0])),
+                    ("y", &crate::partgen_kit::trim(at[1])),
+                    ("rot", &crate::partgen_kit::trim(model.rot)),
+                ],
             ),
             "block": block,
             "at": at,
@@ -5448,7 +5459,20 @@ pub(crate) fn apply_spline_export(
     crate::set_pending_part(crate::PendingPart::with_attrs(
         block.to_string(),
         model.part_meta_json()?,
-        format!("{kind}参数表（{echo}）"),
+        crate::i18n::t_fmt(
+            "cmd.card.export.pending_note",
+            &[
+                (
+                    "kind",
+                    &crate::i18n::t(if side == crate::spline_tol::SplineSide::Internal {
+                        "cmd.card.side.internal"
+                    } else {
+                        "cmd.card.side.external"
+                    }),
+                ),
+                ("echo", &echo),
+            ],
+        ),
         model.pending_attrs()?,
     ));
     commit_undo(sender);
@@ -5456,8 +5480,19 @@ pub(crate) fn apply_spline_export(
         "ok": true,
         "pending": true,
         "block": block,
-        "message": format!(
-            "已生成{kind}参数表（{echo}）：切回图纸，鼠标上已带这张表，左键点击定位基点 → 移动光标旋转 → 再点击落定（可连续，Esc 结束）。"
+        "message": crate::i18n::t_fmt(
+            "cmd.card.export.pending",
+            &[
+                (
+                    "kind",
+                    &crate::i18n::t(if side == crate::spline_tol::SplineSide::Internal {
+                        "cmd.card.side.internal"
+                    } else {
+                        "cmd.card.side.external"
+                    }),
+                ),
+                ("echo", &echo),
+            ],
         ),
     })
     .to_string())
@@ -5476,9 +5511,7 @@ fn card_model_value(
         .map_err(|e| crate::i18n::t_fmt("cmd.req.err.bad_json", &[("e", &e.to_string())]))?;
     let card_id = v.get("card").and_then(|c| c.as_str()).unwrap_or("");
     let card = crate::card::card_type_by_token(card_id).ok_or_else(|| {
-        format!(
-            "智能卡片：不认识的卡类型「{card_id}」（卡类型表见 /api/spline_options 的 card_types）"
-        )
+        crate::i18n::t_fmt("cmd.card.err.unknown_type", &[("card_id", card_id)])
     })?;
     Ok((v, card))
 }
@@ -5506,7 +5539,7 @@ pub(crate) fn apply_card_preview(body: &[u8]) -> Result<String, String> {
     let out = match card.renderer {
         crate::card::CardRenderer::SplineTable => {
             let mut m: crate::spline_gui::SplineTableModel = serde_json::from_value(v)
-                .map_err(|e| format!("花键参数表：请求字段无效：{e}"))?;
+                .map_err(|e| crate::i18n::t_fmt("cmd.card.err.bad_model_spline", &[("e", &e.to_string())]))?;
             // 一卡一方向：GUI 不再送 side；旧请求显式 side 仍优先。
             if m.side.trim().is_empty() {
                 m.side = card.direction.unwrap_or("int").to_string();
@@ -5515,7 +5548,7 @@ pub(crate) fn apply_card_preview(body: &[u8]) -> Result<String, String> {
         }
         crate::card::CardRenderer::SplineLite => {
             let mut m: crate::spline_gui::SplineTableModel = serde_json::from_value(v)
-                .map_err(|e| format!("GB 花键精简卡：请求字段无效：{e}"))?;
+                .map_err(|e| crate::i18n::t_fmt("cmd.card.err.bad_model_spline_lite", &[("e", &e.to_string())]))?;
             if m.side.trim().is_empty() {
                 m.side = card.direction.unwrap_or("int").to_string();
             }
@@ -5523,12 +5556,12 @@ pub(crate) fn apply_card_preview(body: &[u8]) -> Result<String, String> {
         }
         crate::card::CardRenderer::GearTable => {
             let m: crate::gear_table::GearTableModel = serde_json::from_value(v)
-                .map_err(|e| format!("齿轮参数表：请求字段无效：{e}"))?;
+                .map_err(|e| crate::i18n::t_fmt("cmd.card.err.bad_model_gear", &[("e", &e.to_string())]))?;
             m.preview_json()?
         }
         crate::card::CardRenderer::AnsiTableCn | crate::card::CardRenderer::AnsiTableEn => {
             let mut m: crate::ansi_table::AnsiTableModel = serde_json::from_value(v)
-                .map_err(|e| format!("ANSI 花键参数表：请求字段无效：{e}"))?;
+                .map_err(|e| crate::i18n::t_fmt("cmd.card.err.bad_model_ansi", &[("e", &e.to_string())]))?;
             m.lang = Some(if card.renderer == crate::card::CardRenderer::AnsiTableCn {
                 "cn"
             } else {
@@ -5542,17 +5575,17 @@ pub(crate) fn apply_card_preview(body: &[u8]) -> Result<String, String> {
         }
         crate::card::CardRenderer::NfTable => {
             let m: crate::nf_table::NfTableModel = serde_json::from_value(v)
-                .map_err(|e| format!("NF 内花键参数表：请求字段无效：{e}"))?;
+                .map_err(|e| crate::i18n::t_fmt("cmd.card.err.bad_model_nf", &[("e", &e.to_string())]))?;
             m.preview_json()?
         }
         crate::card::CardRenderer::NfExtTable => {
             let m: crate::nf_ext_table::NfExtTableModel = serde_json::from_value(v)
-                .map_err(|e| format!("NF 外花键参数表：请求字段无效：{e}"))?;
+                .map_err(|e| crate::i18n::t_fmt("cmd.card.err.bad_model_nf_ext", &[("e", &e.to_string())]))?;
             m.preview_json()?
         }
         crate::card::CardRenderer::DinTable => {
             let mut m: crate::din_table::DinTableModel = serde_json::from_value(v)
-                .map_err(|e| format!("DIN 花键参数表：请求字段无效：{e}"))?;
+                .map_err(|e| crate::i18n::t_fmt("cmd.card.err.bad_model_din", &[("e", &e.to_string())]))?;
             if m.side.is_none() {
                 m.side = Some(card.direction.unwrap_or("int").to_string());
             }
@@ -5560,7 +5593,7 @@ pub(crate) fn apply_card_preview(body: &[u8]) -> Result<String, String> {
         }
         crate::card::CardRenderer::CardLite => {
             let c = crate::card_lite::by_id(card.id).ok_or_else(|| {
-                format!("精简卡：卡类型「{}」没有精简定义", card.id)
+                crate::i18n::t_fmt("cmd.card.err.no_lite_def", &[("id", card.id)])
             })?;
             crate::card_lite::preview_json(c, &v)?
         }
@@ -5601,7 +5634,7 @@ pub(crate) fn apply_card_export(
     ) = match card.renderer {
         CardRenderer::SplineTable => {
             let mut m: crate::spline_gui::SplineTableModel = serde_json::from_value(v)
-                .map_err(|e| format!("花键参数表：请求字段无效：{e}"))?;
+                .map_err(|e| crate::i18n::t_fmt("cmd.card.err.bad_model_spline", &[("e", &e.to_string())]))?;
             // 一卡一方向：GUI 不再送 side；旧请求显式 side 仍优先。
             if m.side.trim().is_empty() {
                 m.side = card.direction.unwrap_or("int").to_string();
@@ -5635,7 +5668,7 @@ pub(crate) fn apply_card_export(
         }
         CardRenderer::SplineLite => {
             let mut m: crate::spline_gui::SplineTableModel = serde_json::from_value(v)
-                .map_err(|e| format!("GB 花键精简卡：请求字段无效：{e}"))?;
+                .map_err(|e| crate::i18n::t_fmt("cmd.card.err.bad_model_spline_lite", &[("e", &e.to_string())]))?;
             if m.side.trim().is_empty() {
                 m.side = card.direction.unwrap_or("int").to_string();
             }
@@ -5668,7 +5701,7 @@ pub(crate) fn apply_card_export(
         }
         CardRenderer::GearTable => {
             let m: crate::gear_table::GearTableModel = serde_json::from_value(v)
-                .map_err(|e| format!("齿轮参数表：请求字段无效：{e}"))?;
+                .map_err(|e| crate::i18n::t_fmt("cmd.card.err.bad_model_gear", &[("e", &e.to_string())]))?;
             let spec = m.spec()?;
             let echo = m.echo_note()?;
             let at = m.at;
@@ -5694,7 +5727,7 @@ pub(crate) fn apply_card_export(
         }
         CardRenderer::AnsiTableCn | CardRenderer::AnsiTableEn => {
             let mut m: crate::ansi_table::AnsiTableModel = serde_json::from_value(v)
-                .map_err(|e| format!("ANSI 花键参数表：请求字段无效：{e}"))?;
+                .map_err(|e| crate::i18n::t_fmt("cmd.card.err.bad_model_ansi", &[("e", &e.to_string())]))?;
             m.lang = Some(if card.renderer == CardRenderer::AnsiTableCn {
                 "cn"
             } else {
@@ -5733,7 +5766,7 @@ pub(crate) fn apply_card_export(
         }
         CardRenderer::NfTable => {
             let m: crate::nf_table::NfTableModel = serde_json::from_value(v)
-                .map_err(|e| format!("NF 内花键参数表：请求字段无效：{e}"))?;
+                .map_err(|e| crate::i18n::t_fmt("cmd.card.err.bad_model_nf", &[("e", &e.to_string())]))?;
             let spec = m.spec()?;
             let echo = m.echo_note()?;
             let at = m.at;
@@ -5759,7 +5792,7 @@ pub(crate) fn apply_card_export(
         }
         CardRenderer::NfExtTable => {
             let m: crate::nf_ext_table::NfExtTableModel = serde_json::from_value(v)
-                .map_err(|e| format!("NF 外花键参数表：请求字段无效：{e}"))?;
+                .map_err(|e| crate::i18n::t_fmt("cmd.card.err.bad_model_nf_ext", &[("e", &e.to_string())]))?;
             let spec = m.spec()?;
             let echo = m.echo_note()?;
             let at = m.at;
@@ -5785,7 +5818,7 @@ pub(crate) fn apply_card_export(
         }
         CardRenderer::DinTable => {
             let mut m: crate::din_table::DinTableModel = serde_json::from_value(v)
-                .map_err(|e| format!("DIN 花键参数表：请求字段无效：{e}"))?;
+                .map_err(|e| crate::i18n::t_fmt("cmd.card.err.bad_model_din", &[("e", &e.to_string())]))?;
             if m.side.is_none() {
                 m.side = Some(card.direction.unwrap_or("int").to_string());
             }
@@ -5816,7 +5849,7 @@ pub(crate) fn apply_card_export(
         }
         CardRenderer::CardLite => {
             let c = crate::card_lite::by_id(card.id).ok_or_else(|| {
-                format!("精简卡：卡类型「{}」没有精简定义", card.id)
+                crate::i18n::t_fmt("cmd.card.err.no_lite_def", &[("id", card.id)])
             })?;
             // 先跑完整卡预览（校验/计算一次）→ 投影精简项；与 GUI 预览、计算书同源。
             let preview = crate::card_lite::preview_json(c, &v)?;
@@ -5878,11 +5911,15 @@ pub(crate) fn apply_card_export(
         commit_undo(sender);
         return Ok(serde_json::json!({
             "ok": true,
-            "message": format!(
-                "已插入{kind_label}（{echo}）于 ({}, {}) rot {}°。",
-                crate::partgen_kit::trim(at[0]),
-                crate::partgen_kit::trim(at[1]),
-                crate::partgen_kit::trim(rot)
+            "message": crate::i18n::t_fmt(
+                "cmd.card.export.inserted_card",
+                &[
+                    ("kind", &kind_label),
+                    ("echo", &echo),
+                    ("x", &crate::partgen_kit::trim(at[0])),
+                    ("y", &crate::partgen_kit::trim(at[1])),
+                    ("rot", &crate::partgen_kit::trim(rot)),
+                ],
             ),
             "block": block,
             "at": at,
@@ -5900,7 +5937,10 @@ pub(crate) fn apply_card_export(
         crate::PendingPart::with_attrs(
             block.clone(),
             meta,
-            format!("{kind_label}（{echo}）"),
+            crate::i18n::t_fmt(
+            "cmd.card.export.pending_note_card",
+            &[("kind", &kind_label), ("echo", &echo)],
+        ),
             attrs,
         )
         .with_scale(scale),
@@ -5910,8 +5950,9 @@ pub(crate) fn apply_card_export(
         "ok": true,
         "pending": true,
         "block": block,
-        "message": format!(
-            "已生成{kind_label}（{echo}）：切回图纸，鼠标上已带这张表，左键点击定位基点 → 移动光标旋转 → 再点击落定（可连续，Esc 结束）。"
+        "message": crate::i18n::t_fmt(
+            "cmd.card.export.pending_card",
+            &[("kind", &kind_label), ("echo", &echo)],
         ),
     })
     .to_string())

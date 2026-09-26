@@ -1747,7 +1747,7 @@ impl BuiltinPlugin for OcsmPlugin {
             }
             // 旧短命令 `XLT` 已移除（用户 2026-09-25 定名收敛）：明确报错并指路，不静默。
             "XLT" => {
-                host.push_error("`XLT` 已移除：请改用 `OCSMCARD 花键参数表 …`（智能卡片）。");
+                host.push_error(&crate::i18n::t("cmd.card.xlt.removed"));
                 host.push_output(&crate::card::usage_line());
                 true
             }
@@ -2398,21 +2398,18 @@ impl OcsmPlugin {
             // 人类侧：先确保服务在跑并开窗，然后进放置态
             // —— 没初始化就拦下来（避免出“实线白中心线”的废图，与 OCSMGEAR 同口径）。
             if let Err(msg) = crate::shaft::ocsm_ready(host.document()) {
-                host.push_error(&format!("OCSMSHAFT: {msg}"));
-                host.push_info("OCSMSHAFT：先运行 OCSM 初始化，再打开轴生成器窗口。");
+                host.push_error(&crate::i18n::t_fmt("cmd.shaft.err.host_prefix", &[("msg", &msg)]));
+                host.push_info(&crate::i18n::t("cmd.shaft.info.run_init"));
                 return;
             }
             let Some(port) = self.ensure_guide_server(host) else {
-                host.push_error("OCSMSHAFT: 无法启动轴服务（宿主不支持 worker 请求）。");
+                host.push_error(&crate::i18n::t("cmd.shaft.err.no_service"));
                 return;
             };
             if open_shaft_window(port, Some(host.tab_id())) {
-                host.push_info(
-                    "OCSM 轴生成器：已打开窗口（段表 + 行文本双向同步 + 实时预览）。\
-                     点「生成到图纸」→ 回到图纸点击定位基点 → 移动光标旋转 → 再点击落定（可连续，Esc 结束）。",
-                );
+                host.push_info(&crate::i18n::t("cmd.shaft.info.opened"));
             } else {
-                host.push_info("OCSM 轴生成器：窗口已打开（Alt+Tab 切换过去）。");
+                host.push_info(&crate::i18n::t("cmd.shaft.info.already_open"));
             }
             let Some(sender) = host.plugin_request_sender() else {
                 return;
@@ -2421,8 +2418,8 @@ impl OcsmPlugin {
                 sender: std::sync::Arc::from(sender),
                 phase: std::cell::Cell::new(PlacePhase::Follow),
                 base: std::cell::Cell::new([0.0, 0.0, 0.0]),
-                what: "OCSM 轴".to_string(),
-                where_to: "请在轴生成器窗口里点「生成到图纸」".to_string(),
+                what: crate::i18n::t("cmd.shaft.place.what"),
+                where_to: crate::i18n::t("cmd.shaft.place.where"),
             }));
             return;
         }
@@ -2432,8 +2429,8 @@ impl OcsmPlugin {
             let program = match crate::shaft::parse_program(&args_wo) {
                 Ok(program) => program,
                 Err(message) => {
-                    host.push_error(&format!("OCSMSHAFT 参数无效：{message}"));
-                    host.push_output(crate::shaft::USAGE);
+                    host.push_error(&crate::i18n::t_fmt("cmd.shaft.err.params_invalid", &[("message", &message)]));
+                    host.push_output(&crate::shaft::usage());
                     return;
                 }
             };
@@ -2441,29 +2438,29 @@ impl OcsmPlugin {
                 Ok(md) => {
                     if let Some(path) = &report_out {
                         match std::fs::write(path, &md) {
-                            Ok(()) => host.push_info(&format!("OCSMSHAFT：计算书已写入 {path}")),
-                            Err(e) => host.push_error(&format!("OCSMSHAFT 计算书写文件失败：{e}")),
+                            Ok(()) => host.push_info(&crate::i18n::t_fmt("cmd.shaft.info.report_written", &[("path", path)])),
+                            Err(e) => host.push_error(&crate::i18n::t_fmt("cmd.shaft.err.report_write", &[("e", &e.to_string())])),
                         }
                     }
                     host.push_output(&md);
                 }
-                Err(e) => host.push_error(&format!("OCSMSHAFT 计算书：{e}")),
+                Err(e) => host.push_error(&crate::i18n::t_fmt("cmd.shaft.err.report", &[("e", &e.to_string())])),
             }
             return;
         }
         let program = match crate::shaft::parse_program(args) {
             Ok(program) => program,
             Err(message) => {
-                host.push_error(&format!("OCSMSHAFT 参数无效：{message}"));
-                host.push_output(crate::shaft::USAGE);
+                host.push_error(&crate::i18n::t_fmt("cmd.shaft.err.params_invalid", &[("message", &message)]));
+                host.push_output(&crate::shaft::usage());
                 return;
             }
         };
         // 插之前先拦一道：与 OCSMGEAR 同口径 —— 没跑过 OCSM 初始化的图纸
         // 不再自动补层，直接报错指路（避免出“实线白中心线”的废图）。
         if let Err(msg) = crate::shaft::ocsm_ready(host.document()) {
-            host.push_error(&format!("OCSMSHAFT: {msg}"));
-            host.push_info("OCSMSHAFT：先运行 OCSM（或点功能区「图幅」组里的 OCSM 初始化），再直接插轴。");
+            host.push_error(&crate::i18n::t_fmt("cmd.shaft.err.host_prefix", &[("msg", &msg)]));
+            host.push_info(&crate::i18n::t("cmd.shaft.info.run_init_direct"));
             return;
         }
         let at = program.at.unwrap_or([0.0, 0.0]);
@@ -2473,7 +2470,7 @@ impl OcsmPlugin {
         let shaft = match crate::shaft::build(&program, scale) {
             Ok(shaft) => shaft,
             Err(message) => {
-                host.push_error(&format!("OCSMSHAFT 几何非法：{message}"));
+                host.push_error(&crate::i18n::t_fmt("cmd.shaft.err.geometry", &[("message", &message)]));
                 return;
             }
         };
@@ -2484,7 +2481,7 @@ impl OcsmPlugin {
             segment_count,
         } = shaft;
         let entities = crate::shaft::place(entities, at, rot);
-        host.push_undo("OCSMSHAFT 轴");
+        host.push_undo(&crate::i18n::t("cmd.shaft.undo"));
         let count = entities.len();
         let _ = host.add_entities(entities);
         host.set_dirty();
@@ -2493,12 +2490,23 @@ impl OcsmPlugin {
         } else {
             "1轮廓实线层 / 2细线层 / 3中心线层"
         };
-        host.push_output(&format!(
-            "OCSMSHAFT：已生成轴（{} 段，总长 {}，最大 Ø{}，{} 视图，{count} 个图元）→ {layers}",
-            segment_count,
-            crate::partgen_kit::trim(total_length),
-            crate::partgen_kit::trim(max_diameter),
-            program.view.label(),
+        host.push_output(&crate::i18n::t_fmt(
+            "cmd.shaft.info.generated",
+            &[
+                ("segments", &segment_count.to_string()),
+                ("length", &crate::partgen_kit::trim(total_length)),
+                ("max", &crate::partgen_kit::trim(max_diameter)),
+                (
+                    "view",
+                    &crate::i18n::t(if program.view.has_hatch() {
+                        "cmd.shaft.view.section"
+                    } else {
+                        "cmd.shaft.view.normal"
+                    }),
+                ),
+                ("count", &count.to_string()),
+                ("layers", layers),
+            ],
         ));
     }
 
@@ -2692,9 +2700,9 @@ impl OcsmPlugin {
             None => (args.trim(), ""),
         };
         let Some(card) = crate::card::card_type_by_token(name) else {
-            host.push_error(&format!(
-                "智能卡片：不认识的卡类型「{name}」。\n{}",
-                crate::card::usage_line()
+            host.push_error(&crate::i18n::t_fmt(
+                "cmd.card.err.unknown_type_usage",
+                &[("name", name), ("usage", &crate::card::usage_line())],
             ));
             return;
         };
@@ -2740,19 +2748,13 @@ impl OcsmPlugin {
     /// 开智能卡片窗口 + 进放置态（`OCSMCARD` 无参调用；与 DK/OCSMHOLE 同款）。
     fn open_card_window_and_place(&self, host: &mut dyn HostApi) {
         let Some(port) = self.ensure_guide_server(host) else {
-            host.push_error("OCSMCARD: 无法启动智能卡片服务（宿主不支持 worker 请求）。");
+            host.push_error(&crate::i18n::t("cmd.card.err.no_worker"));
             return;
         };
         if open_card_window(port, Some(host.tab_id())) {
-            host.push_info(
-                "OCSM 智能卡片：已打开窗口（22 张卡，一卡一方向：GB 花键内/外、齿轮、\
-                 ANSI 内/外×中/英、NF 内/外、DIN 内/外；\
-                 下拉「精简版」分组 = GB/NF/DIN/ANSI×4/齿轮共 11 张只列基本参数+主要测量量的卡）。\
-                 齿形表达式反解 + 实时结果。点「出表」→ 回到图纸点击定位基点 → \
-                 移动光标旋转 → 再点击落定（可连续，Esc 结束）。",
-            );
+            host.push_info(&crate::i18n::t("cmd.card.info.opened"));
         } else {
-            host.push_info("OCSM 智能卡片：窗口已打开（Alt+Tab 切换过去）。");
+            host.push_info(&crate::i18n::t("cmd.card.info.already_open"));
         }
         let Some(sender) = host.plugin_request_sender() else {
             return;
@@ -2761,8 +2763,8 @@ impl OcsmPlugin {
             sender: std::sync::Arc::from(sender),
             phase: std::cell::Cell::new(PlacePhase::Follow),
             base: std::cell::Cell::new([0.0, 0.0, 0.0]),
-            what: "OCSM 智能卡片".to_string(),
-            where_to: "请在智能卡片窗口里点「出表」".to_string(),
+            what: crate::i18n::t("cmd.card.place.what"),
+            where_to: crate::i18n::t("cmd.card.place.where"),
         }));
     }
 
@@ -2785,14 +2787,14 @@ impl OcsmPlugin {
         let input = match spec.to_input() {
             Ok(i) => i,
             Err(e) => {
-                host.push_error(&format!("花键参数表：{e}"));
+                host.push_error(&crate::i18n::t_fmt("cmd.card.err.spline_prefix", &[("e", &e)]));
                 return;
             }
         };
         let table = match crate::spline_tol::compute(&input) {
             Ok(t) => t,
             Err(e) => {
-                host.push_error(&format!("花键参数表：{e}"));
+                host.push_error(&crate::i18n::t_fmt("cmd.card.err.spline_prefix", &[("e", &e)]));
                 return;
             }
         };
@@ -2805,7 +2807,7 @@ impl OcsmPlugin {
         if host.document().block_records.get(block).is_none() {
             let members = crate::spline_table::block_entities(side);
             if let Err(e) = host.add_block_record(block, members) {
-                host.push_error(&format!("花键参数表：建块 {block} 失败：{e}"));
+                host.push_error(&crate::i18n::t_fmt("cmd.card.err.spline_block", &[("block", block), ("e", &e)]));
                 return;
             }
         }
@@ -2818,41 +2820,51 @@ impl OcsmPlugin {
         let ins = match crate::spline_table::build_insert(side, &table, at, spec.rot) {
             Ok(i) => i,
             Err(e) => {
-                host.push_error(&format!("花键参数表：{e}"));
+                host.push_error(&crate::i18n::t_fmt("cmd.card.err.spline_prefix", &[("e", &e)]));
                 return;
             }
         };
-        host.push_undo("花键参数表插入");
+        host.push_undo(&crate::i18n::t("cmd.card.undo.spline"));
         let handles = host.add_entities(vec![acadrust::EntityType::Insert(ins)]);
         if handles.is_empty() {
-            host.push_error("花键参数表：插入失败（宿主未返回句柄）");
+            host.push_error(&crate::i18n::t("cmd.card.err.spline_no_handle"));
             return;
         }
         host.set_dirty();
-        let kind = crate::spline_gui::side_label(side);
+        let kind = crate::i18n::t(if side == crate::spline_tol::SplineSide::Internal {
+            "cmd.card.side.internal"
+        } else {
+            "cmd.card.side.external"
+        });
         let dp_note = match (&table, spec.dp) {
-            (crate::spline_tol::SplineTable::Internal(t), None) => format!(
-                "；量棒 Dp={}（计算值 D'={:.4}，备选 {}/ {}/ {}）",
-                crate::partgen_kit::trim(t.dp),
-                t.dp_calc,
-                crate::partgen_kit::trim(t.dp_candidates[0]),
-                crate::partgen_kit::trim(t.dp_candidates[1]),
-                crate::partgen_kit::trim(t.dp_candidates[2]),
+            (crate::spline_tol::SplineTable::Internal(t), None) => crate::i18n::t_fmt(
+                "cmd.card.dp_note.calc",
+                &[
+                    ("dp", &crate::partgen_kit::trim(t.dp)),
+                    ("dp_calc", &format!("{:.4}", t.dp_calc)),
+                    ("c1", &crate::partgen_kit::trim(t.dp_candidates[0])),
+                    ("c2", &crate::partgen_kit::trim(t.dp_candidates[1])),
+                    ("c3", &crate::partgen_kit::trim(t.dp_candidates[2])),
+                ],
             ),
-            (crate::spline_tol::SplineTable::Internal(_t), Some(dp)) => format!(
-                "；量棒 Dp={}（按所填手算，Md 已重算）",
-                crate::partgen_kit::trim(dp)
+            (crate::spline_tol::SplineTable::Internal(_t), Some(dp)) => crate::i18n::t_fmt(
+                "cmd.card.dp_note.manual",
+                &[("dp", &crate::partgen_kit::trim(dp))],
             ),
             _ => String::new(),
         };
-        host.push_info(&format!(
-            "智能卡片：已插入{kind}参数表（{}，体系 {}，表达式 {}）于 ({:.3}, {:.3}) rot {}°{dp_note}。",
-            input.grade_fit_label(),
-            spec.system,
-            spec.expr,
-            at[0],
-            at[1],
-            crate::partgen_kit::trim(spec.rot)
+        host.push_info(&crate::i18n::t_fmt(
+            "cmd.card.info.spline_inserted",
+            &[
+                ("kind", &kind),
+                ("grade", &input.grade_fit_label()),
+                ("system", spec.system),
+                ("expr", &spec.expr),
+                ("x", &format!("{:.3}", at[0])),
+                ("y", &format!("{:.3}", at[1])),
+                ("rot", &crate::partgen_kit::trim(spec.rot)),
+                ("dp_note", &dp_note),
+            ],
         ));
     }
 
@@ -2873,14 +2885,14 @@ impl OcsmPlugin {
         let input = match spec.to_input() {
             Ok(i) => i,
             Err(e) => {
-                host.push_error(&format!("GB 花键精简卡：{e}"));
+                host.push_error(&crate::i18n::t_fmt("cmd.card.err.lite_prefix", &[("e", &e)]));
                 return;
             }
         };
         let table = match crate::spline_tol::compute(&input) {
             Ok(t) => t,
             Err(e) => {
-                host.push_error(&format!("GB 花键精简卡：{e}"));
+                host.push_error(&crate::i18n::t_fmt("cmd.card.err.lite_prefix", &[("e", &e)]));
                 return;
             }
         };
@@ -2891,7 +2903,7 @@ impl OcsmPlugin {
         if host.document().block_records.get(block).is_none() {
             let members = crate::spline_lite::block_entities(side);
             if let Err(e) = host.add_block_record(block, members) {
-                host.push_error(&format!("GB 花键精简卡：建块 {block} 失败：{e}"));
+                host.push_error(&crate::i18n::t_fmt("cmd.card.err.lite_block", &[("block", block), ("e", &e)]));
                 return;
             }
         }
@@ -2903,25 +2915,34 @@ impl OcsmPlugin {
         let ins = match crate::spline_lite::build_insert(side, &table, at, spec.rot) {
             Ok(i) => i,
             Err(e) => {
-                host.push_error(&format!("GB 花键精简卡：{e}"));
+                host.push_error(&crate::i18n::t_fmt("cmd.card.err.lite_prefix", &[("e", &e)]));
                 return;
             }
         };
-        host.push_undo("GB 花键精简卡插入");
+        host.push_undo(&crate::i18n::t("cmd.card.undo.lite"));
         let handles = host.add_entities(vec![acadrust::EntityType::Insert(ins)]);
         if handles.is_empty() {
-            host.push_error("GB 花键精简卡：插入失败（宿主未返回句柄）");
+            host.push_error(&crate::i18n::t("cmd.card.err.lite_no_handle"));
             return;
         }
         host.set_dirty();
-        host.push_info(&format!(
-            "智能卡片：已插入{}精简卡（{}，表达式 {}）于 ({:.3}, {:.3}) rot {}°。",
-            crate::spline_gui::side_label(side),
-            input.grade_fit_label(),
-            spec.expr,
-            at[0],
-            at[1],
-            crate::partgen_kit::trim(spec.rot)
+        host.push_info(&crate::i18n::t_fmt(
+            "cmd.card.info.lite_inserted",
+            &[
+                (
+                    "kind",
+                    &crate::i18n::t(if side == crate::spline_tol::SplineSide::Internal {
+                        "cmd.card.side.internal"
+                    } else {
+                        "cmd.card.side.external"
+                    }),
+                ),
+                ("grade", &input.grade_fit_label()),
+                ("expr", &spec.expr),
+                ("x", &format!("{:.3}", at[0])),
+                ("y", &format!("{:.3}", at[1])),
+                ("rot", &crate::partgen_kit::trim(spec.rot)),
+            ],
         ));
     }
 
@@ -2934,13 +2955,13 @@ impl OcsmPlugin {
         args: &str,
     ) {
         let Some(c) = crate::card_lite::by_id(card.id) else {
-            host.push_error(&format!("精简卡：卡类型「{}」没有精简定义", card.id));
+            host.push_error(&crate::i18n::t_fmt("cmd.card.err.no_lite_def", &[("id", card.id)]));
             return;
         };
         let (full, extras, at, rot) = match crate::card_lite::cli_values(c, args) {
             Ok(v) => v,
             Err(e) => {
-                host.push_error(&format!("{}：{e}", c.id));
+                host.push_error(&crate::i18n::t_fmt("cmd.card.err.lite_card_prefix", &[("id", c.id), ("e", &e)]));
                 return;
             }
         };
@@ -2955,7 +2976,7 @@ impl OcsmPlugin {
         host.ensure_text_styles(text_style_defs());
         if host.document().block_records.get(c.block).is_none() {
             if let Err(e) = host.add_block_record(c.block, crate::card_lite::block_entities(c)) {
-                host.push_error(&format!("{}：建块 {} 失败：{e}", c.id, c.block));
+                host.push_error(&crate::i18n::t_fmt("cmd.card.err.lite_card_block", &[("id", c.id), ("block", c.block), ("e", &e)]));
                 return;
             }
         }
@@ -2967,24 +2988,26 @@ impl OcsmPlugin {
         let ins = match crate::card_lite::build_insert(c, &values, at, rot) {
             Ok(i) => i,
             Err(e) => {
-                host.push_error(&format!("{}：{e}", c.id));
+                host.push_error(&crate::i18n::t_fmt("cmd.card.err.lite_card_prefix", &[("id", c.id), ("e", &e)]));
                 return;
             }
         };
-        host.push_undo(&format!("{}插入", card.label));
+        host.push_undo(&crate::i18n::t_fmt("cmd.card.undo.lite_card", &[("label", card.label)]));
         let handles = host.add_entities(vec![acadrust::EntityType::Insert(ins)]);
         if handles.is_empty() {
-            host.push_error(&format!("{}：插入失败（宿主未返回句柄）", c.id));
+            host.push_error(&crate::i18n::t_fmt("cmd.card.err.lite_card_no_handle", &[("id", c.id)]));
             return;
         }
         host.set_dirty();
-        host.push_info(&format!(
-            "智能卡片：已插入{}（{} 个精简项，不含公差列）于 ({:.3}, {:.3}) rot {}°。",
-            card.label,
-            values.len(),
-            at[0],
-            at[1],
-            crate::partgen_kit::trim(rot)
+        host.push_info(&crate::i18n::t_fmt(
+            "cmd.card.info.lite_card_inserted",
+            &[
+                ("label", card.label),
+                ("n", &values.len().to_string()),
+                ("x", &format!("{:.3}", at[0])),
+                ("y", &format!("{:.3}", at[1])),
+                ("rot", &crate::partgen_kit::trim(rot)),
+            ],
         ));
     }
 
@@ -3007,7 +3030,7 @@ impl OcsmPlugin {
         if host.document().block_records.get(block).is_none() {
             let members = crate::gear_table::block_entities();
             if let Err(e) = host.add_block_record(block, members) {
-                host.push_error(&format!("齿轮参数表：建块 {block} 失败：{e}"));
+                host.push_error(&crate::i18n::t_fmt("cmd.card.gear.err_block", &[("block", block), ("e", &e)]));
                 return;
             }
         }
@@ -3019,14 +3042,14 @@ impl OcsmPlugin {
         let ins = match crate::gear_table::build_insert(&spec, at, spec.rot) {
             Ok(i) => i,
             Err(e) => {
-                host.push_error(&format!("齿轮参数表：{e}"));
+                host.push_error(&crate::i18n::t_fmt("cmd.card.gear.err_prefix", &[("e", &e)]));
                 return;
             }
         };
-        host.push_undo("齿轮参数表插入");
+        host.push_undo(&crate::i18n::t("cmd.card.undo.gear"));
         let handles = host.add_entities(vec![acadrust::EntityType::Insert(ins)]);
         if handles.is_empty() {
-            host.push_error("齿轮参数表：插入失败（宿主未返回句柄）");
+            host.push_error(&crate::i18n::t("cmd.card.gear.err_no_handle"));
             return;
         }
         host.set_dirty();
@@ -3042,12 +3065,14 @@ impl OcsmPlugin {
         }
         .echo_note()
         .unwrap_or_else(|_| String::new());
-        host.push_info(&format!(
-            "智能卡片：已插入齿轮参数表（{note}）于 ({:.3}, {:.3}) rot {}°。\n\
-             GB/T 10095-88 公差（Fr/FW/ff/fpt/Fβ）与中心距极限偏差本仓未收 —— 表内显示「—」。",
-            at[0],
-            at[1],
-            crate::partgen_kit::trim(spec.rot)
+        host.push_info(&crate::i18n::t_fmt(
+            "cmd.card.gear.info",
+            &[
+                ("note", &note),
+                ("x", &format!("{:.3}", at[0])),
+                ("y", &format!("{:.3}", at[1])),
+                ("rot", &crate::partgen_kit::trim(spec.rot)),
+            ],
         ));
     }
 
@@ -3069,7 +3094,7 @@ impl OcsmPlugin {
         if host.document().block_records.get(block).is_none() {
             let members = crate::ansi_table::block_entities(spec.side, spec.lang);
             if let Err(e) = host.add_block_record(block, members) {
-                host.push_error(&format!("ANSI 花键参数表：建块 {block} 失败：{e}"));
+                host.push_error(&crate::i18n::t_fmt("cmd.card.ansi.err_block", &[("block", block), ("e", &e)]));
                 return;
             }
         }
@@ -3081,30 +3106,32 @@ impl OcsmPlugin {
         let ins = match crate::ansi_table::build_insert(&spec, at, spec.rot) {
             Ok(i) => i,
             Err(e) => {
-                host.push_error(&format!("ANSI 花键参数表：{e}"));
+                host.push_error(&crate::i18n::t_fmt("cmd.card.ansi.err_prefix", &[("e", &e)]));
                 return;
             }
         };
-        host.push_undo("ANSI 花键参数表插入");
+        host.push_undo(&crate::i18n::t("cmd.card.ansi.undo"));
         let handles = host.add_entities(vec![acadrust::EntityType::Insert(ins)]);
         if handles.is_empty() {
-            host.push_error("ANSI 花键参数表：插入失败（宿主未返回句柄）");
+            host.push_error(&crate::i18n::t("cmd.card.ansi.err_no_handle"));
             return;
         }
         host.set_dirty();
-        let side = match spec.side {
-            crate::spline_tol::SplineSide::Internal => "内花键",
-            crate::spline_tol::SplineSide::External => "外花键",
-        };
-        host.push_info(&format!(
-            "智能卡片：已插入 ANSI B92.1 {side}参数表（{}，P/Ps={}，N={}）于 ({:.3}, {:.3}) rot {}°。\n\
-             配合/公差/量棒/公法线表本仓未收 —— 相关格显示「—」。",
-            spec.lang.label(),
-            crate::ansi_table::pair_label(spec.p),
-            spec.z,
-            at[0],
-            at[1],
-            crate::partgen_kit::trim(spec.rot)
+        let side = crate::i18n::t(match spec.side {
+            crate::spline_tol::SplineSide::Internal => "cmd.card.side.internal",
+            crate::spline_tol::SplineSide::External => "cmd.card.side.external",
+        });
+        host.push_info(&crate::i18n::t_fmt(
+            "cmd.card.ansi.info",
+            &[
+                ("side", &side),
+                ("lang", &spec.lang.label()),
+                ("pair", &crate::ansi_table::pair_label(spec.p)),
+                ("n", &spec.z.to_string()),
+                ("x", &format!("{:.3}", at[0])),
+                ("y", &format!("{:.3}", at[1])),
+                ("rot", &crate::partgen_kit::trim(spec.rot)),
+            ],
         ));
     }
 
@@ -3127,7 +3154,7 @@ impl OcsmPlugin {
         if host.document().block_records.get(block).is_none() {
             let members = crate::nf_table::block_entities();
             if let Err(e) = host.add_block_record(block, members) {
-                host.push_error(&format!("NF 内花键参数表：建块 {block} 失败：{e}"));
+                host.push_error(&crate::i18n::t_fmt("cmd.card.nf.err_block", &[("block", block), ("e", &e)]));
                 return;
             }
         }
@@ -3139,14 +3166,14 @@ impl OcsmPlugin {
         let ins = match crate::nf_table::build_insert(&spec, at, spec.rot) {
             Ok(i) => i,
             Err(e) => {
-                host.push_error(&format!("NF 内花键参数表：{e}"));
+                host.push_error(&crate::i18n::t_fmt("cmd.card.nf.err_prefix", &[("e", &e)]));
                 return;
             }
         };
-        host.push_undo("NF 内花键参数表插入");
+        host.push_undo(&crate::i18n::t("cmd.card.nf.undo"));
         let handles = host.add_entities(vec![acadrust::EntityType::Insert(ins)]);
         if handles.is_empty() {
-            host.push_error("NF 内花键参数表：插入失败（宿主未返回句柄）");
+            host.push_error(&crate::i18n::t("cmd.card.nf.err_no_handle"));
             return;
         }
         host.set_dirty();
@@ -3164,13 +3191,14 @@ impl OcsmPlugin {
         }
         .echo_note()
         .unwrap_or_else(|_| String::new());
-        host.push_info(&format!(
-            "智能卡片：已插入{note}于 ({:.3}, {:.3}) rot {}°。\n\
-             公差按 p28（大径 R7 / 小径 H7，ISO 286）+ p29（跨棒距 = 内花键 E 偏差）；\
-             表外 V/G/ri 与 p29 表外偏差显示「—」。",
-            at[0],
-            at[1],
-            crate::partgen_kit::trim(spec.rot)
+        host.push_info(&crate::i18n::t_fmt(
+            "cmd.card.nf.info",
+            &[
+                ("note", &note),
+                ("x", &format!("{:.3}", at[0])),
+                ("y", &format!("{:.3}", at[1])),
+                ("rot", &crate::partgen_kit::trim(spec.rot)),
+            ],
         ));
     }
 
@@ -3193,7 +3221,7 @@ impl OcsmPlugin {
         if host.document().block_records.get(block).is_none() {
             let members = crate::nf_ext_table::block_entities();
             if let Err(e) = host.add_block_record(block, members) {
-                host.push_error(&format!("NF 外花键参数表：建块 {block} 失败：{e}"));
+                host.push_error(&crate::i18n::t_fmt("cmd.card.nfext.err_block", &[("block", block), ("e", &e)]));
                 return;
             }
         }
@@ -3205,14 +3233,14 @@ impl OcsmPlugin {
         let ins = match crate::nf_ext_table::build_insert(&spec, at, spec.rot) {
             Ok(i) => i,
             Err(e) => {
-                host.push_error(&format!("NF 外花键参数表：{e}"));
+                host.push_error(&crate::i18n::t_fmt("cmd.card.nfext.err_prefix", &[("e", &e)]));
                 return;
             }
         };
-        host.push_undo("NF 外花键参数表插入");
+        host.push_undo(&crate::i18n::t("cmd.card.nfext.undo"));
         let handles = host.add_entities(vec![acadrust::EntityType::Insert(ins)]);
         if handles.is_empty() {
-            host.push_error("NF 外花键参数表：插入失败（宿主未返回句柄）");
+            host.push_error(&crate::i18n::t("cmd.card.nfext.err_no_handle"));
             return;
         }
         host.set_dirty();
@@ -3230,13 +3258,14 @@ impl OcsmPlugin {
         }
         .echo_note()
         .unwrap_or_else(|_| String::new());
-        host.push_info(&format!(
-            "智能卡片：已插入{note}于 ({:.3}, {:.3}) rot {}°。\n\
-             公差按模板实测口径（大径 h12 / 小径 H7，ISO 286）+ p29（公法线 = 外花键 E 偏差，按配合）；\
-             K/W 与 p29 表外偏差显示「—」。",
-            at[0],
-            at[1],
-            crate::partgen_kit::trim(spec.rot)
+        host.push_info(&crate::i18n::t_fmt(
+            "cmd.card.nfext.info",
+            &[
+                ("note", &note),
+                ("x", &format!("{:.3}", at[0])),
+                ("y", &format!("{:.3}", at[1])),
+                ("rot", &crate::partgen_kit::trim(spec.rot)),
+            ],
         ));
     }
 
@@ -3259,7 +3288,7 @@ impl OcsmPlugin {
         if host.document().block_records.get(block).is_none() {
             let members = crate::din_table::block_entities(hub);
             if let Err(e) = host.add_block_record(block, members) {
-                host.push_error(&format!("DIN 花键参数表：建块 {block} 失败：{e}"));
+                host.push_error(&crate::i18n::t_fmt("cmd.card.din.err_block", &[("block", block), ("e", &e)]));
                 return;
             }
         }
@@ -3271,14 +3300,14 @@ impl OcsmPlugin {
         let ins = match crate::din_table::build_insert(&spec, hub, at, spec.rot) {
             Ok(i) => i,
             Err(e) => {
-                host.push_error(&format!("DIN 花键参数表：{e}"));
+                host.push_error(&crate::i18n::t_fmt("cmd.card.din.err_prefix", &[("e", &e)]));
                 return;
             }
         };
-        host.push_undo("DIN 花键参数表插入");
+        host.push_undo(&crate::i18n::t("cmd.card.din.undo"));
         let handles = host.add_entities(vec![acadrust::EntityType::Insert(ins)]);
         if handles.is_empty() {
-            host.push_error("DIN 花键参数表：插入失败（宿主未返回句柄）");
+            host.push_error(&crate::i18n::t("cmd.card.din.err_no_handle"));
             return;
         }
         host.set_dirty();
@@ -3303,12 +3332,14 @@ impl OcsmPlugin {
         }
         .echo_note()
         .unwrap_or_else(|_| String::new());
-        host.push_info(&format!(
-            "智能卡片：已插入{note}于 ({:.3}, {:.3}) rot {}°（整表缩放 0.17）。\n\
-             Table 7 缺口（>400 侧偏差列、≤12 细档、非 6–9 级公差、无检验表行的 D_M/M2/M1）显示「—」。",
-            at[0],
-            at[1],
-            crate::partgen_kit::trim(spec.rot)
+        host.push_info(&crate::i18n::t_fmt(
+            "cmd.card.din.info",
+            &[
+                ("note", &note),
+                ("x", &format!("{:.3}", at[0])),
+                ("y", &format!("{:.3}", at[1])),
+                ("rot", &crate::partgen_kit::trim(spec.rot)),
+            ],
         ));
     }
 

@@ -1062,14 +1062,23 @@ impl SplineTableModel {
         let input = self.to_input()?;
         let table = crate::spline_tol::compute(&input)?;
         let dp = match &table {
-            SplineTable::Internal(t) => format!(
-                "；量棒 Dp={}（{}，D'={}，备选 {} / {} / {}）",
-                crate::partgen_kit::trim(t.dp),
-                if self.dp.is_some() { "手填，Md 已重算" } else { "标准 R40 自动选" },
-                crate::partgen_kit::trim(t.dp_calc),
-                crate::partgen_kit::trim(t.dp_candidates[0]),
-                crate::partgen_kit::trim(t.dp_candidates[1]),
-                crate::partgen_kit::trim(t.dp_candidates[2]),
+            SplineTable::Internal(t) => crate::i18n::t_fmt(
+                "cmd.spline.echo.dp",
+                &[
+                    ("dp", &crate::partgen_kit::trim(t.dp)),
+                    (
+                        "mode",
+                        &crate::i18n::t(if self.dp.is_some() {
+                            "cmd.spline.echo.dp_manual"
+                        } else {
+                            "cmd.spline.echo.dp_auto"
+                        }),
+                    ),
+                    ("dp_calc", &crate::partgen_kit::trim(t.dp_calc)),
+                    ("c1", &crate::partgen_kit::trim(t.dp_candidates[0])),
+                    ("c2", &crate::partgen_kit::trim(t.dp_candidates[1])),
+                    ("c3", &crate::partgen_kit::trim(t.dp_candidates[2])),
+                ],
             ),
             SplineTable::External(_) => String::new(),
         };
