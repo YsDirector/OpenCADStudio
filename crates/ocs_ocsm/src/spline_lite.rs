@@ -40,30 +40,27 @@ pub fn block_name(side: SplineSide) -> &'static str {
 
 // ── 版面常量（坐标照 GB 模板；右框直接收在值列，公差列不存在）───────────────
 /// 行高（GB 模板实测）。
-const ROW: f64 = 6.898_720_166_384_379;
+pub(crate) const ROW: f64 = 6.898_720_166_384_379;
 /// 数据行数（标题外）。
 const DATA_ROWS: usize = 9;
 /// 左框 x。
-const X_LEFT: f64 = -62.693_742_864_145;
+pub(crate) const X_LEFT: f64 = -62.693_742_864_145;
 /// 标签/值分栏线 x。
-const X_SEP: f64 = -34.865_056_129_880_27;
+pub(crate) const X_SEP: f64 = -34.865_056_129_880_27;
 /// 右框 x（= 原值列右缘；公差列已整列去掉）。
-const X_RIGHT: f64 = 0.0;
+pub(crate) const X_RIGHT: f64 = 0.0;
 /// 标签插入 x（照模板）。
-const X_LABEL: f64 = -61.709_962_722_953_35;
+pub(crate) const X_LABEL: f64 = -61.709_962_722_953_35;
 /// 值插入 x（分栏线右侧留 1.47）。
-const X_VALUE: f64 = -33.4;
+pub(crate) const X_VALUE: f64 = -33.4;
 /// 字高（GB 模板同款）。
-const TEXT_H: f64 = 3.6;
+pub(crate) const TEXT_H: f64 = 3.6;
 /// 标签字宽（模板同款）。
 /// 标题实体级字宽（用户 2026-09-27 截图：标题超出表格右界）。
 /// 宿主把 TTF 归一化到 cap height=9 再乘 height/9（`src/scene/text/ttf_glyph.rs`），
 /// 本字体（朱雀仿宋）cap=0.637em → 实际字宽 ≈ 字号 × 1.57 × width_factor；0.75 下标题宽
 /// 46.6 < 可用 51.29（外卡 51.42，余量 9%）。
-const TITLE_WF: f64 = 0.75;
-
-/// 短标签字宽（原值，实测均在列内）。
-const LABEL_WF: f64 = 1.0;
+pub(crate) const TITLE_WF: f64 = 0.75;
 
 /// 长标签的实体级字宽（`None` = [`LABEL_WF`]）。
 ///
@@ -74,17 +71,24 @@ fn label_width_factor(tag: &str) -> f64 {
     match tag {
         "(简)量棒直径" | "(简)跨测齿数" => 0.80, // 5.4em → 24.5（列 26.8）
         "(简)测量跨棒距" | "(简)公法线长度" => 0.65, // 6.6–6.7em → 24.2–24.5
-        _ => LABEL_WF,
+        _ => 1.0,
     }
 }
 /// 值 ATTDEF 实体级字宽（与 GB 卡 0.7 同口径，不动全局 `OCSM_GB`）。
-const VALUE_WF: f64 = 0.7;
-/// 标题插入 y（模板）。
-const Y_TITLE: f64 = -5.200_708_803_331_338;
+pub(crate) const VALUE_WF: f64 = 0.7;
 
-const LAYER_OUTLINE: &str = "1轮廓实线层";
-const LAYER_THIN: &str = "2细线层";
-const LAYER_TEXT: &str = "6文字层";
+/// 按字段指定值字宽的 ATTDEF（长值如 ANSI 英文「花键类型」需再压缩；不动其它行）。
+pub(crate) fn attdef_wf(tag: &str, x: f64, y: f64, wf: f64) -> AttributeDefinition {
+    let mut ad = attdef(tag, x, y);
+    ad.width_factor = wf;
+    ad
+}
+/// 标题插入 y（模板）。
+pub(crate) const Y_TITLE: f64 = -5.200_708_803_331_338;
+
+pub(crate) const LAYER_OUTLINE: &str = "1轮廓实线层";
+pub(crate) const LAYER_THIN: &str = "2细线层";
+pub(crate) const LAYER_TEXT: &str = "6文字层";
 
 /// 一行数据（表驱动；tag 同时是 ATTDEF 键与取值映射键）。
 #[derive(Debug, Clone, Copy)]
@@ -383,7 +387,7 @@ pub const FORM_EXT: CardFormSpec = CardFormSpec {
 
 // ── 块几何（照 GB 模板风格 + 去掉公差整列）───────────────────────────────
 
-fn text_ent(value: &str, x: f64, y: f64, h: f64, wf: f64) -> EntityType {
+pub(crate) fn text_ent(value: &str, x: f64, y: f64, h: f64, wf: f64) -> EntityType {
     let mut t = Text::with_value(value, Vector3::new(x, y, 0.0));
     t.height = h;
     t.width_factor = wf;
@@ -394,7 +398,7 @@ fn text_ent(value: &str, x: f64, y: f64, h: f64, wf: f64) -> EntityType {
     EntityType::Text(t)
 }
 
-fn attdef(tag: &str, x: f64, y: f64) -> AttributeDefinition {
+pub(crate) fn attdef(tag: &str, x: f64, y: f64) -> AttributeDefinition {
     let mut ad = AttributeDefinition::new(tag.to_string(), String::new(), " ".to_string());
     ad.insertion_point = Vector3::new(x, y, 0.0);
     ad.alignment_point = ad.insertion_point;
@@ -407,17 +411,17 @@ fn attdef(tag: &str, x: f64, y: f64) -> AttributeDefinition {
 }
 
 /// 数据行 i（1 起）顶部 y。
-fn row_top(i: usize) -> f64 {
+pub(crate) fn row_top(i: usize) -> f64 {
     -(i as f64) * ROW
 }
 
 /// 标签基线 y（照模板 row1 = −12.74995）。
-fn label_y(i: usize) -> f64 {
+pub(crate) fn label_y(i: usize) -> f64 {
     row_top(i) - 5.852_141_401_252_116
 }
 
 /// 值基线 y（照模板 row1 = −12.19744）。
-fn value_y(i: usize) -> f64 {
+pub(crate) fn value_y(i: usize) -> f64 {
     label_y(i) + 0.552_51
 }
 

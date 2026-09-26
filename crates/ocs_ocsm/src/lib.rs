@@ -22,6 +22,7 @@ mod bom;
 mod ansi_table;
 mod card;
 mod card_expr;
+mod card_lite;
 mod card_report;
 mod centerline;
 mod detail;
@@ -2716,6 +2717,7 @@ impl OcsmPlugin {
             crate::card::CardRenderer::DinTable => {
                 self.cmd_din_card(host, rest, card.direction.unwrap_or("int") != "ext")
             }
+            crate::card::CardRenderer::CardLite => self.cmd_card_lite(host, card, rest),
         }
     }
 
@@ -2727,9 +2729,11 @@ impl OcsmPlugin {
         };
         if open_card_window(port, Some(host.tab_id())) {
             host.push_info(
-                "OCSM 智能卡片：已打开窗口（11 张卡，一卡一方向：GB 花键内/外、齿轮、\
-                 ANSI 内/外×中/英、NF 内/外、DIN 内/外；齿形表达式反解 + 实时结果）。\
-                 点「出表」→ 回到图纸点击定位基点 → 移动光标旋转 → 再点击落定（可连续，Esc 结束）。",
+                "OCSM 智能卡片：已打开窗口（22 张卡，一卡一方向：GB 花键内/外、齿轮、\
+                 ANSI 内/外×中/英、NF 内/外、DIN 内/外；\
+                 下拉「精简版」分组 = GB/NF/DIN/ANSI×4/齿轮共 11 张只列基本参数+主要测量量的卡）。\
+                 齿形表达式反解 + 实时结果。点「出表」→ 回到图纸点击定位基点 → \
+                 移动光标旋转 → 再点击落定（可连续，Esc 结束）。",
             );
         } else {
             host.push_info("OCSM 智能卡片：窗口已打开（Alt+Tab 切换过去）。");
@@ -2902,6 +2906,69 @@ impl OcsmPlugin {
             at[0],
             at[1],
             crate::partgen_kit::trim(spec.rot)
+        ));
+    }
+
+    /// 卡类型「精简版」系列（NF / DIN / ANSI×4 / 齿轮）：共享 `card_lite` 引擎。
+    /// args 复用对应完整卡的 `Spec::parse`（查表/公式/表达式反解同一份）→ 投影精简项。
+    fn cmd_card_lite(
+        &self,
+        host: &mut dyn HostApi,
+        card: &crate::card::CardTypeSpec,
+        args: &str,
+    ) {
+        let Some(c) = crate::card_lite::by_id(card.id) else {
+            host.push_error(&format!("精简卡：卡类型「{}」没有精简定义", card.id));
+            return;
+        };
+        let (full, extras, at, rot) = match crate::card_lite::cli_values(c, args) {
+            Ok(v) => v,
+            Err(e) => {
+                host.push_error(&format!("{}：{e}", c.id));
+                return;
+            }
+        };
+        let values = match crate::card_lite::values_from_full(c, &full, &extras) {
+            Ok(v) => v,
+            Err(e) => {
+                host.push_error(&e);
+                return;
+            }
+        };
+        host.ensure_layers(layer_defs());
+        host.ensure_text_styles(text_style_defs());
+        if host.document().block_records.get(c.block).is_none() {
+            if let Err(e) = host.add_block_record(c.block, crate::card_lite::block_entities(c)) {
+                host.push_error(&format!("{}：建块 {} 失败：{e}", c.id, c.block));
+                return;
+            }
+        }
+        let at = at.unwrap_or_else(|| {
+            crate::take_parts_point()
+                .map(|p| [p[0], p[1]])
+                .unwrap_or([0.0, 0.0])
+        });
+        let ins = match crate::card_lite::build_insert(c, &values, at, rot) {
+            Ok(i) => i,
+            Err(e) => {
+                host.push_error(&format!("{}：{e}", c.id));
+                return;
+            }
+        };
+        host.push_undo(&format!("{}插入", card.label));
+        let handles = host.add_entities(vec![acadrust::EntityType::Insert(ins)]);
+        if handles.is_empty() {
+            host.push_error(&format!("{}：插入失败（宿主未返回句柄）", c.id));
+            return;
+        }
+        host.set_dirty();
+        host.push_info(&format!(
+            "智能卡片：已插入{}（{} 个精简项，不含公差列）于 ({:.3}, {:.3}) rot {}°。",
+            card.label,
+            values.len(),
+            at[0],
+            at[1],
+            crate::partgen_kit::trim(rot)
         ));
     }
 

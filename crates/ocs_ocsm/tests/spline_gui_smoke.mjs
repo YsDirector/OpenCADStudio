@@ -8,7 +8,8 @@
 //      旧的「读选中/上一个块」路径**已删除**（不调用 /api/spline_meta、没有按钮）；
 //   ③ 量棒：标准解 + 3 个工程备选都渲染成可点选 chip；手填也可；
 //      ★ 选/填 Dp → 预览请求带 dp、Md 随之重算；
-//   ④ 外花键：量棒面板置灰（applicable=false），结果出公法线长度/跨测齿数；
+//   ④ 外花键：量棒面板可用（M_Re 备用，标注「公法线为主、跨棒距备用」），
+//      主表项仍出公法线长度/跨测齿数（21 项卡面不加 M_Re 行）；
 //   ⑤ 出表：无 at → 待放置件（请求不带 at）；有 at → 直插；成功后自动关窗；
 //   ⑥ 旧插件 404 → 直白提示（照 hole_gui.html 的 readApi 判据）；
 //   ⑦ 信息分层负断言：公式/口径/来源只在 title=，可见文本（剥标签）里没有。
@@ -76,6 +77,7 @@ const SYSTEMS = [{
       alphas: [30, 37.5, 45],
       pin: {
         applicable: true, label: '量棒直径 Dp 与测量跨棒距 Md',
+        dp_label: '量棒直径 Dp', md_label: '测量跨棒距 Md',
         formula: "stub D'_Ri 公式", md_formula: 'stub M_Ri 公式', standard: 'stub R40 选棒规则',
       },
       columns: columns('内', COL_INT),
@@ -97,7 +99,13 @@ const SYSTEMS = [{
         { key: 'fillet', label: '圆齿根', alphas: [30, 37.5, 45], note: 'stub 圆齿根口径' },
       ],
       alphas: [30, 37.5, 45],
-      pin: { applicable: false, reason: 'stub 外花键用公法线，不含量棒' },
+      // 用户 2026-09-27：外花键主用 Wn/Kn，M_Re 面板也可用（公法线为主、跨棒距备用）。
+      pin: {
+        applicable: true,
+        label: '量棒直径 D_Re 与跨棒距 M_Re（公法线为主、跨棒距备用）',
+        dp_label: '量棒直径 D_Re', md_label: '跨棒距 M_Re',
+        formula: "stub D'_Re 公式", md_formula: 'stub M_Re 公式', standard: 'stub R40 选棒规则',
+      },
       columns: columns('外', COL_EXT),
     },
   ],
@@ -205,6 +213,7 @@ function preview(m) {
     const auto = pickStd(DP_CALC);
     const current = m.dp != null ? m.dp : auto;
     const md = mdOf(current);
+    // 内花键：M_Ri 插回 21 项「测量跨棒距」；外花键：M_Re 只在面板（卡面 21 项不加行）。
     const col = findCol(side, '测量跨棒距');
     if (col) {
       const it = items.find((x) => x.tag === col.tag);
@@ -219,19 +228,24 @@ function preview(m) {
     }
     choices.sort((a, b) => a.value - b.value);
     dp = {
-      applicable: true, label: side.pin.label, formula: side.pin.formula,
+      applicable: true, label: side.pin.label,
+      dp_label: side.pin.dp_label, md_label: side.pin.md_label,
+      formula: side.pin.formula,
       md_formula: side.pin.md_formula, standard: side.pin.standard,
       current, auto, calc: DP_CALC, manual: m.dp != null,
       choices,
       md: { value: md, lower: md - 0.02, upper: md + 0.03 },
     };
   } else {
+    dp = { applicable: false, reason: side.pin && side.pin.reason };
+  }
+  // 外花键主表项：公法线长度（与 M_Re 面板并存，不重复堆 M_Re）。
+  if (side.id === 'ext') {
     const col = findCol(side, '公法线长度');
     if (col) {
       const it = items.find((x) => x.tag === col.tag);
       if (it) it.value = '35.500';
     }
-    dp = { applicable: false, reason: side.pin && side.pin.reason };
   }
   return {
     ok: true, system: m.system || 'gb3478', side: side.id, side_label: side.label,
@@ -502,7 +516,7 @@ el('expr')._fire('input', el('expr'));
 await tick();
 check((el('status').textContent || '').includes('KIND'), `方向不一致应动态报错：${el('status').textContent}`);
 
-// ⑤ 切外花键：配合清单 6 项、45° 优先排前并标注；量棒面板置灰
+// ⑤ 切外花键：配合清单 6 项、45° 优先排前并标注；量棒面板可用（M_Re 备用）
 switchCard('花键参数表_外');
 el('expr').value = 'SPLINE EX M3 Z20 ALPHA30 X0 DA63 DF55.5 BETA0 H30';
 el('expr')._fire('input', el('expr'));
@@ -517,10 +531,34 @@ await tick();
 check(el('fit').options[0].value === 'k', `45° 优先项应排前：${el('fit').options.map((o) => o.value)}`);
 const labels45 = el('fit').options.map((o) => o.textContent).join('|');
 check(labels45.includes('（45° 优先）'), `45° 优先项应有标注：${labels45}`);
-check(el('dpManualOn').disabled === true && el('dpManual').disabled === true, '外花键量棒面板应置灰');
+// 用户 2026-09-27：外花键 M_Re 面板可用（能算、能显示；卡面不加行）。
+check(el('dpManualOn').disabled === false && el('dpManual').disabled === false,
+  '外花键量棒面板应可用（M_Re 备用）');
+check((el('pinLabel').textContent || '').includes('公法线为主、跨棒距备用'),
+  `外花键面板应标注主/备口径：${el('pinLabel').textContent}`);
+check((el('dpLabel').textContent || '').includes('D_Re') && (el('mdLabel').textContent || '').includes('M_Re'),
+  `外花键读数标签：${el('dpLabel').textContent}/${el('mdLabel').textContent}`);
+check((el('pinLabel').title || '').includes("stub D'_Re 公式"),
+  `外花键量棒公式应从选项表进 title：${el('pinLabel').title}`);
 await H.refresh();
-check(lastPreviewModel.side === 'ext' && lastPreviewModel.dp === null, `外花键预览不应带 dp：${JSON.stringify(lastPreviewModel)}`);
-check(el('mdOut').textContent === '—' && el('dpOut').textContent === '—', '外花键不显示量棒读数');
+check(lastPreviewModel.side === 'ext' && lastPreviewModel.dp === null,
+  `外花键预览不带 dp（标准解）：${JSON.stringify(lastPreviewModel)}`);
+check(el('mdOut').textContent !== '—' && el('dpOut').textContent !== '—',
+  `外花键应显示 M_Re 读数：D_Re=${el('dpOut').textContent} M_Re=${el('mdOut').textContent}`);
+check((el('mdRange').textContent || '').includes('极限'),
+  `M_Re 应显示极限：${el('mdRange').textContent}`);
+const chipsExt = el('dpChoices').children;
+check(chipsExt.length === 4, `外花键 M_Re 也应标准解 + 3 备选：${chipsExt.length}`);
+const mdExtAuto = el('mdOut').textContent;
+const altExt = chipsExt.find((c) => !near(Number(String(c.textContent).split(' ')[1]), Number(el('dpOut').textContent)));
+check(!!altExt, `外花键应有备选 chip：${chipsExt.map((c) => c.textContent)}`);
+if (altExt) {
+  altExt.click();
+  await tick();
+  check(el('mdOut').textContent !== mdExtAuto,
+    `★ 外花键选了 Dp，M_Re 必须重算：${mdExtAuto} → ${el('mdOut').textContent}`);
+}
+check(!el('items').innerHTML.includes('跨棒距'), '外花键 21 项卡面不应加 M_Re 行');
 check((el('rootOut').textContent || '').includes('平齿根'), `外花键 DF=m(z−1.5) 应反解平齿根：${el('rootOut').textContent}`);
 check(el('items').innerHTML.includes('公法线长度'), '外花键结果应含公法线长度');
 check(el('items').innerHTML.includes('跨测齿数'), '外花键结果应含跨测齿数');

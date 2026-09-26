@@ -153,9 +153,12 @@ pub fn build(card: &CardTypeSpec, model: &serde_json::Value) -> Result<(String, 
                     crate::partgen_kit::trim(calc),
                 ));
             }
-            // 量棒/跨棒距口径（内花键适用；公式来自 GB/T 3478.6 §3.1）。
+            // 量棒/跨棒距口径（**只对内花键**；公式来自 GB/T 3478.6 §3.1）。
+            // 外花键 M_Re 属「备用」量，按用户口径**只在面板出现**（面板/报告不重复堆同一量）。
             let dp = &preview["dp"];
-            if dp["applicable"] == serde_json::Value::Bool(true) {
+            if dp["applicable"] == serde_json::Value::Bool(true)
+                && preview["side"].as_str() == Some("int")
+            {
                 md.push_str("## 3. 量棒/跨棒距口径\n\n");
                 if let Some(f) = dp["formula"].as_str() {
                     md.push_str(&format!("- 量棒直径：{}\n", cell(f)));
@@ -168,7 +171,10 @@ pub fn build(card: &CardTypeSpec, model: &serde_json::Value) -> Result<(String, 
                 }
                 md.push_str(&format!(
                     "- 取值：Dp={}、Md={}（同一次 `compute()`；卡片 ATTRIB 同值）。\n\n",
-                    num(&preview, "dp"),
+                    dp["current"]
+                        .as_f64()
+                        .map(crate::partgen_kit::trim)
+                        .unwrap_or_else(|| "—".to_string()),
                     dp["md"]["value"]
                         .as_f64()
                         .map(crate::partgen_kit::trim)
@@ -191,6 +197,27 @@ pub fn build(card: &CardTypeSpec, model: &serde_json::Value) -> Result<(String, 
             );
             md.push_str(&items_section(
                 "## 1. 精简项（9 项；与卡片 ATTDEF 同一份 `spline_tol::compute()`）",
+                &preview,
+            ));
+            md.push_str(&sources_section(&preview, card));
+        }
+        CardRenderer::CardLite => {
+            md.push_str(&format!("# {title}\n\n"));
+            if let Some(c) = preview["card"].as_str() {
+                md.push_str(&format!("- 卡：**{c}**（完整卡口径同源）\n"));
+            }
+            if let Some(expr) = preview["expr"].as_str() {
+                if !expr.is_empty() {
+                    md.push_str(&format!("- 表达式：`{expr}`\n"));
+                }
+            }
+            let n = preview["items"].as_array().map(|a| a.len()).unwrap_or(0);
+            md.push_str(
+                "- 口径：精简版只列基本参数 + 主要测量量，**不含任何公差（上/下偏差）列**；\n\
+                 取值/校验全部投影自对应完整卡的同一次计算（查不到 →「—」，不外推）。\n\n",
+            );
+            md.push_str(&items_section(
+                &format!("## 1. 精简项（{n} 项；与完整卡同一份计算）"),
                 &preview,
             ));
             md.push_str(&sources_section(&preview, card));
@@ -385,6 +412,27 @@ mod tests {
         assert!(md.contains("## 2. 参数表（21 项"), "{md}");
         assert!(md.contains("量棒/跨棒距口径"), "{md}");
         assert!(md.contains("spline_tol::compute()"), "{md}");
+        // 面板同一份值：Dp 取当前选棒（不是占位「—」）、Md 为中值。
+        assert!(md.contains("Dp="), "{md}");
+        assert!(!md.contains("Dp=—"), "报告 Dp 不应是占位符：\n{md}");
+    }
+
+    /// 外花键 M_Re：**只在面板出现**（用户 2026-09-27：公法线为主、跨棒距备用；
+    /// 同一量只在一处给）——报告不得再堆一份 Dp/M_Re 数值或公式节。
+    #[test]
+    fn external_report_has_no_m_re_section() {
+        let (_, md) = build(
+            card("花键参数表_外"),
+            &serde_json::json!({
+                "card": "花键参数表_外", "side": "ext", "grade": 6, "fit": "f",
+                "expr": "SPLINE EX M2 Z20 ALPHA30 X0 DA42 DF37 BETA0 H30",
+                "root": "auto", "dp": null, "at": null, "rot": 0.0
+            }),
+        )
+        .unwrap();
+        assert!(md.contains("## 2. 参数表（21 项"), "{md}");
+        assert!(!md.contains("量棒/跨棒距口径"), "外花键报告不应重复 M_Re：\n{md}");
+        assert!(!md.contains("M_Re"), "外花键报告不应出现 M_Re 值/公式：\n{md}");
     }
 
     #[test]
@@ -510,6 +558,22 @@ mod tests {
                     "expr":"SPLINE EX M3 Z20 ALPHA30 X0 DA66 DF52.5 BETA0 H30",
                     "root":"auto","dp":null,"at":null,"rot":0.0}),
             ),
+            (
+                "NF花键精简表_内",
+                serde_json::json!({"card":"NF花键精简表_内","expr":null,"a":300.0,"m":7.5,
+                    "z":38,"centering":null,"root":null,"fit":null,"at":null,"rot":0.0}),
+            ),
+            (
+                "DIN花键精简表_内",
+                serde_json::json!({"card":"DIN花键精简表_内","side":"int","expr":null,
+                    "m":3.0,"z":38,"d_b":120.0,"hub":"9H","at":null,"rot":0.0}),
+            ),
+            (
+                "齿轮精简表",
+                serde_json::json!({"card":"齿轮精简表",
+                    "expr":"GEAR EX M2 Z40 ALPHA20 X0 DA84 DF75 BETA0 H30",
+                    "mate_z":null,"dwg":null,"grade":null,"center":null,"at":null,"rot":0.0}),
+            ),
         ];
         for (id, model) in cases {
             let c = card(id);
@@ -584,6 +648,11 @@ mod tests {
                         .into_iter()
                         .map(|(ad, v)| (ad.tag.clone(), v))
                         .collect()
+                }
+                CardRenderer::CardLite => {
+                    let lc = crate::card_lite::by_id(c.id).unwrap();
+                    let preview = crate::card_lite::preview_json(lc, &model)?;
+                    crate::card_lite::values_from_preview(lc, &preview)?
                 }
             };
             assert!(!attrs.is_empty(), "{id} 无 ATTRIB");

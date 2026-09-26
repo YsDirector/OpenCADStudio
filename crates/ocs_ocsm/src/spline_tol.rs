@@ -1036,6 +1036,17 @@ pub struct ExternalSplineTable {
     pub kn: u32,
     pub s_min: f64,
     pub sv_max: f64,
+    /// 外花键跨棒距 `M_Re`（用户 2026-09-27 点单：公法线为主、跨棒距备用；**不上卡面**）。
+    /// 中值 = (M_min+M_max)/2，`md_lower/md_upper` = S_min/S_max 对应的绝对极限值。
+    pub md: f64,
+    pub md_lower: f64,
+    pub md_upper: f64,
+    /// 量棒直径（标准 R40 选值或手填；与内花键同口径）。
+    pub dp: f64,
+    /// 量棒计算直径 `D'_Re`（式(6)，未按系列取整）。
+    pub dp_calc: f64,
+    /// 3 个工程备选（GB/T 3478.9 系列中与 D' 最接近的 3 个）。
+    pub dp_candidates: Vec<f64>,
     /// 图 2 系数计算口径（报告对照用；卡面不直接显示）。
     pub rimin: f64,
     /// 表 26 表值（卡面口径；`None` = 原表「—」/表外 → 卡面显示「—」）。
@@ -1144,6 +1155,18 @@ pub fn external_table(input: &SplineInput) -> Result<ExternalSplineTable, String
     let die_dev = ext_dia_dev_um(input)? / 1000.0;
     let dfemax = d_femax(alpha, root, m, z, esv_um(input)?);
     let (w_min, w_max) = wn(alpha, m, z, esv_um(input)?, total, t);
+    // 量棒/跨棒距（GB/T 3478.6 §3.2 式(6)~(10)；用户 2026-09-27：外花键公法线为主、跨棒距备用）。
+    // D'_Re 的 S_min 按标准口径取「7 级 + 基本偏差 h」（与内花键 E_max 取 7 级同构）；
+    // D_ce = (Dee max + Dii min)/2（配对内花键为 H，Dii 下偏差 0 → 基本尺寸）。
+    let (total7, _, _) = machining_tolerance_um(input.side, 7, m, z, input.fit_length)?;
+    let s_min7 = basic_width(m) - total7 / 1000.0;
+    let dii_min = internal_minor(alpha, root, m, z);
+    let dp_calc = d_re_calc(alpha, major, dii_min, m, z, s_min7)?;
+    let dp = resolve_dp(input, dp_calc)?;
+    let dp_candidates = dp_candidates_3(dp_calc)?;
+    let odd = z % 2 == 1;
+    let m_min = m_re(alpha, m, z, dp, s_min, odd)?;
+    let m_max = m_re(alpha, m, z, dp, sv_max, odd)?;
     Ok(ExternalSplineTable {
         alpha_deg: alpha.deg(),
         z,
@@ -1163,6 +1186,12 @@ pub fn external_table(input: &SplineInput) -> Result<ExternalSplineTable, String
         kn: wn_k(z),
         s_min,
         sv_max,
+        md: (m_min + m_max) / 2.0,
+        md_lower: m_min,
+        md_upper: m_max,
+        dp,
+        dp_calc,
+        dp_candidates,
         rimin: rimin(alpha, root, m),
         rimin_table: rimin_table_for_card(alpha, root, m),
         ff,
@@ -1483,6 +1512,84 @@ mod tests {
         );
         assert!(near(t.dp, 1.00));
         assert!(near(t.eval_min, 0.5 * std::f64::consts::PI * m));
+    }
+
+    /// 外花键 M_Re / D'_Re（用户 2026-09-27：公法线为主、跨棒距备用）：
+    /// 用 `inv`/`acos` 直接反代回环，独立于 `solve_inv` 的 Newton 迭代验证式(6)~(10)。
+    #[test]
+    fn external_m_re_and_d_re_round_trip() {
+        let (m, z) = (3.0_f64, 20_u32);
+        let root = RootForm::Fillet;
+        for alpha in [
+            PressureAngle::A30,
+            PressureAngle::A37_5,
+            PressureAngle::A45,
+        ] {
+            let db = base_dia(alpha, m, z);
+            let d = pitch_dia(m, z);
+            let (s_min, s_max) = (basic_width(m) - 0.05, basic_width(m));
+            let dp = 4.0_f64;
+            let m_even = m_re(alpha, m, z, dp, s_max, false).unwrap();
+            let m_odd = m_re(alpha, m, z, dp, s_min, true).unwrap();
+            // 回环：α_e = acos(Db/(M − Dp))，invα_e 必须等于式(8)/(9) 右边。
+            let ae = (db / (m_even - dp)).acos();
+            let want = dp / db + alpha.inv() + s_max / d
+                - std::f64::consts::PI / z as f64;
+            assert!(
+                (inv(ae) - want).abs() < 1e-9,
+                "{alpha:?} M_Re 回环失败：invα_e={} vs {}（奇齿值 {m_odd}）",
+                inv(ae),
+                want
+            );
+            assert!(m_even > m_odd, "S_max → M_Re 应更大");
+            // D'_Re 回代：式(6) 两边 tan 一致。
+            let dee = external_major(alpha, m, z);
+            let dii = internal_minor(alpha, root, m, z);
+            let dp_calc = d_re_calc(alpha, dee, dii, m, z, s_min).unwrap();
+            let ace = (db / ((dee + dii) / 2.0)).acos();
+            let rhs = (ace + inv(ace) + std::f64::consts::PI / z as f64
+                - s_min / d
+                - alpha.inv())
+                .tan()
+                - ace.tan();
+            assert!((dp_calc / db - rhs).abs() < 1e-9, "{alpha:?} D'_Re 回代失败");
+        }
+    }
+
+    /// 外花键 21 项结果表：M_Re 三件（dp/calc/candidates）与 S_min/S_max 同源；
+    /// 手填 Dp 必须重算 M_Re（与内花键同口径）。**卡面 21 项不因它加行**。
+    #[test]
+    fn external_table_m_re_fields_same_compute() {
+        let input = SplineInput {
+            m: 2.0,
+            z: 20,
+            alpha: PressureAngle::A30,
+            root: RootForm::Fillet,
+            side: SplineSide::External,
+            grade: 6,
+            ext_dev: ExtDev::F,
+            fit_length: None,
+            dp: None,
+        };
+        let t = external_table(&input).unwrap();
+        assert!(t.md_lower < t.md && t.md < t.md_upper, "M_Re 三值序");
+        assert!(t.dp > 0.0 && t.dp_calc > 0.0 && t.dp_candidates.len() == 3);
+        assert!(
+            (t.md_lower - m_re(PressureAngle::A30, 2.0, 20, t.dp, t.s_min, false).unwrap()).abs()
+                < 1e-12
+        );
+        assert!(
+            (t.md_upper - m_re(PressureAngle::A30, 2.0, 20, t.dp, t.sv_max, false).unwrap()).abs()
+                < 1e-12
+        );
+        let pick = t.dp_candidates[0];
+        if (pick - t.dp).abs() > 1e-9 {
+            let mut manual = input.clone();
+            manual.dp = Some(pick);
+            let t2 = external_table(&manual).unwrap();
+            assert!((t2.dp - pick).abs() < 1e-12, "手填 Dp 应回填");
+            assert!((t2.md - t.md).abs() > 1e-12, "选了别的 Dp，M_Re 必须重算");
+        }
     }
 
     /// 21 项完整输出：内外各一例，字段齐、数量=21、无 NaN。

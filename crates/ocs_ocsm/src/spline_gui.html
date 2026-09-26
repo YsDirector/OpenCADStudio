@@ -111,8 +111,8 @@
         <input type="number" id="dpManual" step="0.01" min="0" placeholder="系列值">
       </div>
       <div class="readout">
-        <div>量棒直径 Dp：<b id="dpOut">—</b> mm</div>
-        <div>测量跨棒距 Md：<b id="mdOut">—</b> mm <span class="unit" id="mdRange"></span></div>
+        <div><span id="dpLabel">量棒直径 Dp</span>：<b id="dpOut">—</b> mm</div>
+        <div><span id="mdLabel">测量跨棒距 Md</span>：<b id="mdOut">—</b> mm <span class="unit" id="mdRange"></span></div>
       </div>
     </div>
   </div>
@@ -371,10 +371,13 @@ function syncUi() {
   // 再退回 prefFit；旧值命中时仍保留用户选择。
   setOptions("fit", fits.map((f) => ({ value: f.code, label: f.fit + (a45 && f.preferred_45 ? "（45° 优先）" : "") })), prefFit);
   el("fit").title = (fitRow(el("fit").value) || {}).memo || "";
-  // 量棒面板：applicable=false（外花键）→ 全部置灰，不再写解释文字（口径在 title 里）
+  // 量棒面板：applicable=false（无面板）→ 全部置灰；标签/读数文字照 pin spec（表驱动）。
   const pin = SIDE.pin || { applicable: false };
   const pinOk = !!pin.applicable;
   if (!pinOk) dpSel = null;
+  el("pinLabel").textContent = pinOk ? (pin.label || "量棒直径 Dp") : "量棒直径 Dp";
+  el("dpLabel").textContent = pinOk ? (pin.dp_label || "量棒直径 Dp") : "量棒直径 Dp";
+  el("mdLabel").textContent = pinOk ? (pin.md_label || "测量跨棒距 Md") : "测量跨棒距 Md";
   el("dpManualOn").disabled = !pinOk;
   el("dpManual").disabled = !pinOk;
   el("pinLabel").title = pinOk
@@ -469,11 +472,18 @@ function renderDp(dp) {
   const box = el("dpChoices");
   box.innerHTML = "";
   if (!dp || !dp.applicable) {
+    el("pinLabel").textContent = "量棒直径 Dp";
+    el("dpLabel").textContent = "量棒直径 Dp";
+    el("mdLabel").textContent = "测量跨棒距 Md";
     el("dpOut").textContent = "—";
     el("mdOut").textContent = "—";
     el("mdRange").textContent = "";
     return;
   }
+  // 标签照后端 pin spec（内 = Dp/Md，外 = D_Re/M_Re 且带「公法线为主、跨棒距备用」）。
+  el("pinLabel").textContent = dp.label || "量棒直径 Dp";
+  el("dpLabel").textContent = dp.dp_label || "量棒直径 Dp";
+  el("mdLabel").textContent = dp.md_label || "测量跨棒距 Md";
   const choices = (dp.choices || []).slice().sort((a, b) => {
     const ka = a.standard ? 0 : 1;
     const kb = b.standard ? 0 : 1;

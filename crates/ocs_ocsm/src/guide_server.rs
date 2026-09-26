@@ -5370,6 +5370,12 @@ pub(crate) fn apply_card_preview(body: &[u8]) -> Result<String, String> {
             }
             m.preview_json()?
         }
+        crate::card::CardRenderer::CardLite => {
+            let c = crate::card_lite::by_id(card.id).ok_or_else(|| {
+                format!("精简卡：卡类型「{}」没有精简定义", card.id)
+            })?;
+            crate::card_lite::preview_json(c, &v)?
+        }
     };
     Ok(out.to_string())
 }
@@ -5618,6 +5624,37 @@ pub(crate) fn apply_card_export(
                 attrs,
                 meta,
                 echo,
+            )
+        }
+        CardRenderer::CardLite => {
+            let c = crate::card_lite::by_id(card.id).ok_or_else(|| {
+                format!("精简卡：卡类型「{}」没有精简定义", card.id)
+            })?;
+            // 先跑完整卡预览（校验/计算一次）→ 投影精简项；与 GUI 预览、计算书同源。
+            let preview = crate::card_lite::preview_json(c, &v)?;
+            let values = crate::card_lite::values_from_preview(c, &preview)?;
+            let at = v
+                .get("at")
+                .and_then(|a| serde_json::from_value::<[f64; 2]>(a.clone()).ok());
+            let rot = v.get("rot").and_then(|r| r.as_f64()).unwrap_or(0.0);
+            let ins = acadrust::EntityType::Insert(crate::card_lite::build_insert(
+                c,
+                &values,
+                at.unwrap_or([0.0, 0.0]),
+                rot,
+            )?);
+            let attrs = crate::card_lite::pending_attrs(c, &values);
+            let meta = crate::card_lite::part_meta_json(c);
+            (
+                card.label.to_string(),
+                c.block.to_string(),
+                crate::card_lite::block_entities(c),
+                at,
+                rot,
+                ins,
+                attrs,
+                meta,
+                "精简版（只列基本参数 + 主要测量量，不含公差列）".to_string(),
             )
         }
     };
@@ -15697,7 +15734,15 @@ mod weld_tests {
         assert_eq!(sides[1]["fits"][0]["code"], "k");
         assert_eq!(sides[1]["fits"][0]["preferred_45"], true);
         assert_eq!(sides[0]["pin"]["applicable"], true);
-        assert_eq!(sides[1]["pin"]["applicable"], false, "外花键参数表用 Wn/Kn");
+        // 用户 2026-09-27：外花键主用 Wn/Kn，但 M_Re 量棒面板也可用（公法线为主、跨棒距备用）。
+        assert_eq!(sides[1]["pin"]["applicable"], true, "外花键 M_Re 面板可用");
+        assert!(
+            sides[1]["pin"]["label"]
+                .as_str()
+                .unwrap()
+                .contains("公法线为主、跨棒距备用"),
+            "外花键面板须标注主/备口径"
+        );
         assert_eq!(v["pin_series"].as_array().unwrap().len(), 67);
 
         // ── 预览：表达式反解 m/z/αD/x/Da/Df + 齿根反解 + 21 项 + Dp 点选→Md 重算 ──
@@ -15755,7 +15800,7 @@ mod weld_tests {
         let jm = http_req(server.port, "POST", "/api/spline_preview", &mism.to_string());
         assert!(jm.contains("KIND"), "{jm}");
 
-        // ── 外花键：公法线/跨测齿数；量棒面板 applicable=false ──
+        // ── 外花键：公法线/跨测齿数为主；M_Re 量棒面板可用（公法线为主、跨棒距备用）──
         let ext = serde_json::json!({
             "system": "gb3478", "side": "ext", "grade": 5, "fit": "f",
             "expr": "SPLINE EX M3 Z20 ALPHA30 X0 DA63 DF55.5 BETA0 H30",
@@ -15766,7 +15811,15 @@ mod weld_tests {
         assert_eq!(v["ok"], true, "{j}");
         assert_eq!(v["grade_fit"], "5f");
         assert_eq!(v["root"], "flat", "DF = m(z−1.5) → 平齿根反解");
-        assert_eq!(v["dp"]["applicable"], false);
+        // 面板可用：能算、能显示（21 项卡面仍不加 M_Re 行）。
+        assert_eq!(v["dp"]["applicable"], true, "外花键 M_Re 面板可用");
+        assert!(v["dp"]["md"]["value"].as_f64().unwrap() > 0.0);
+        assert_eq!(v["dp"]["choices"].as_array().unwrap().len(), 4);
+        assert!(!v["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|it| it["label"].as_str().unwrap().contains("跨棒距")));
         assert!(v["items"]
             .as_array()
             .unwrap()
@@ -15837,10 +15890,10 @@ mod weld_tests {
         router.set_current(2, mock.clone());
         let server = spawn(router).expect("spawn guide server");
 
-        // ── 选项表：13 张卡（一卡一方向 + GB 精简内/外）+ 齿轮/ANSI/NF/DIN 选项 ──
+        // ── 选项表：22 张卡（一卡一方向 + 精简版 11 张）+ 齿轮/ANSI/NF/DIN 选项 ──
         let j = http_req(server.port, "GET", "/api/spline_options", "");
         let v: serde_json::Value = serde_json::from_str(&j).unwrap();
-        assert_eq!(v["card_types"].as_array().unwrap().len(), 13, "{j}");
+        assert_eq!(v["card_types"].as_array().unwrap().len(), 22, "{j}");
         assert_eq!(v["card_types"][0]["renderer"], "spline_table");
         assert_eq!(v["card_types"][0]["direction"], "int");
         assert_eq!(v["card_types"][1]["renderer"], "spline_table");
@@ -15864,6 +15917,15 @@ mod weld_tests {
         assert_eq!(v["card_types"][12]["renderer"], "spline_lite");
         assert_eq!(v["card_types"][12]["direction"], "ext");
         assert_eq!(v["card_types"][12]["group"], "精简版");
+        // 精简版扩体系 9 张：共享 card_lite 引擎 + 统一「精简版」分组。
+        for i in 13..=21 {
+            assert_eq!(v["card_types"][i]["renderer"], "card_lite", "card_types[{i}]");
+            assert_eq!(v["card_types"][i]["group"], "精简版", "card_types[{i}]");
+            assert!(
+                v["card_types"][i]["summary"].as_str().unwrap().contains("公差"),
+                "card_types[{i}] 口径应说明公差列去掉"
+            );
+        }
         assert_eq!(v["gear_card"]["columns"].as_array().unwrap().len(), 19);
         assert_eq!(v["ansi_card"]["profiles"].as_array().unwrap().len(), 5);
         assert_eq!(v["ansi_card"]["columns"]["int"].as_array().unwrap().len(), 17);
@@ -15879,7 +15941,7 @@ mod weld_tests {
         // 表驱动 GUI：花键卡 form=null（专用面板基准）；其余九卡下发字段清单
         assert!(v["card_types"][0]["form"].is_null());
         assert!(v["card_types"][1]["form"].is_null());
-        for (i, n) in [(2usize, 5usize), (3, 4), (4, 4), (5, 4), (6, 4), (7, 7), (8, 7), (9, 10), (10, 10), (11, 5), (12, 4)] {
+        for (i, n) in [(2usize, 5usize), (3, 4), (4, 4), (5, 4), (6, 4), (7, 7), (8, 7), (9, 10), (10, 10), (11, 5), (12, 4), (13, 7), (14, 7), (15, 10), (16, 10), (17, 4), (18, 4), (19, 4), (20, 4), (21, 5)] {
             let fields = v["card_types"][i]["form"]["fields"].as_array().unwrap();
             assert_eq!(fields.len(), n, "card_types[{i}] 字段数");
             assert!(fields.iter().all(|f| f["key"].is_string() && f["kind"].is_string()));
@@ -15965,6 +16027,92 @@ mod weld_tests {
             v["items"].as_array().unwrap().iter().any(|it| it["label"] == "跨测齿数 Kn"),
             "{j}"
         );
+
+        // ── 精简版扩体系（NF/DIN/ANSI×4/齿轮）：卡 id 一行一定义；预览/计算书/出表全同一条路 ──
+        let nf_lite = serde_json::json!({
+            "card": "NF花键精简表_内", "expr": null, "a": 300.0, "m": 7.5, "z": 38,
+            "centering": null, "root": null, "fit": null, "at": [1.0, 2.0], "rot": 0.0,
+        });
+        let j = http_req(server.port, "POST", "/api/card_preview", &nf_lite.to_string());
+        let v: serde_json::Value = serde_json::from_str(&j).unwrap();
+        assert_eq!(v["ok"], true, "{j}");
+        assert_eq!(v["renderer"], "card_lite");
+        let lc = crate::card_lite::by_id("NF花键精简表_内").unwrap();
+        assert_eq!(v["items"].as_array().unwrap().len(), 11, "{j}");
+        let preview_items = v["items"].as_array().unwrap();
+        for it in preview_items {
+            let label = it["label"].as_str().unwrap();
+            let tag = it["tag"].as_str().unwrap();
+            assert!(
+                !label.contains("公差") && !tag.contains("公差") && !label.contains("偏差"),
+                "精简卡不得含公差类项：{label} / {tag}"
+            );
+        }
+        assert!(preview_items.iter().any(|it| it["label"] == "量棒直径 V"));
+        assert!(preview_items.iter().any(|it| it["label"] == "跨棒距 G"));
+        // 同源：精简项值 = 完整卡（NF内）同一 `values()` 的对应项。
+        let nf_full = serde_json::json!({
+            "card": "NF内花键参数表", "expr": null, "a": 300.0, "m": 7.5, "z": 38,
+            "centering": null, "root": null, "fit": null, "at": null, "rot": 0.0,
+        });
+        let j = http_req(server.port, "POST", "/api/card_preview", &nf_full.to_string());
+        let vf: serde_json::Value = serde_json::from_str(&j).unwrap();
+        for f in lc.fields {
+            let lite_v = preview_items
+                .iter()
+                .find(|it| it["tag"] == f.tag)
+                .unwrap()["value"]
+                .clone();
+            let full_v = vf["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|it| it["tag"] == f.key)
+                .unwrap()["value"]
+                .clone();
+            assert_eq!(lite_v, full_v, "{} 应与完整卡同源", f.tag);
+        }
+        // 计算书 + 出表（同一分派表；块名 = card_lite 定义）。
+        let j = http_req(server.port, "POST", "/api/card_report", &nf_lite.to_string());
+        let v: serde_json::Value = serde_json::from_str(&j).unwrap();
+        assert_eq!(v["ok"], true, "{j}");
+        assert!(v["markdown"].as_str().unwrap().contains("精简项（11 项"), "{j}");
+        let j = http_req(server.port, "POST", "/api/card_export", &nf_lite.to_string());
+        let v: serde_json::Value = serde_json::from_str(&j).unwrap();
+        assert_eq!(v["ok"], true, "{j}");
+        assert_eq!(v["block"], "OCSM_LITE_NF_INT", "{j}");
+        assert_eq!(mock.insert_attr_counts().last().copied(), Some(11));
+        assert_eq!(mock.block_entities("OCSM_LITE_NF_INT").len(), (11 + 5) + (11 + 1) + 11);
+        // 齿轮精简：三圆由同一 `GearParams` 补算；公法线/跨齿数与完整卡同源。
+        let gear_lite = serde_json::json!({
+            "card": "齿轮精简表",
+            "expr": "GEAR EX M2 Z40 ALPHA20 X0 DA84 DF75 BETA0 H20",
+            "mate_z": null, "mate_dwg": null, "grade": null, "center": null,
+            "at": null, "rot": 0.0,
+        });
+        let j = http_req(server.port, "POST", "/api/card_preview", &gear_lite.to_string());
+        let v: serde_json::Value = serde_json::from_str(&j).unwrap();
+        assert_eq!(v["ok"], true, "{j}");
+        assert_eq!(v["renderer"], "card_lite");
+        let git = |tag: &str| {
+            v["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|it| it["tag"] == tag)
+                .unwrap()["value"]
+                .clone()
+        };
+        assert_eq!(git("(齿轮简)分度圆"), "80", "d = mz");
+        assert_eq!(git("(齿轮简)齿顶圆"), "84", "da");
+        assert_eq!(git("(齿轮简)齿根圆"), "75", "df");
+        assert_eq!(git("(齿轮简)公法线"), "27.69", "与完整卡同源");
+        assert_eq!(git("(齿轮简)跨齿数"), "5");
+        assert_eq!(v["items"].as_array().unwrap().len(), 9, "{j}");
+        let j = http_req(server.port, "POST", "/api/card_export", &gear_lite.to_string());
+        let v: serde_json::Value = serde_json::from_str(&j).unwrap();
+        assert_eq!(v["ok"], true, "{j}");
+        assert_eq!(v["block"], "OCSM_LITE_GEAR", "{j}");
 
         // ── 齿轮卡预览：表达式反解交齿轮引擎；缺项「—」──
         let gear = serde_json::json!({

@@ -48,11 +48,15 @@ pub struct SplineRootSpec {
     pub note: &'static str,
 }
 
-/// 量棒面板（只有参数表含量棒测量的方向才有；本期 GB 只有内花键）。
+/// 量棒面板（只有参数表含量棒测量的方向才有；GB 内/外都有：内 M_Ri、外 M_Re 备用）。
 #[derive(Debug, Clone, Copy)]
 pub struct SplinePinSpec {
-    /// 面板标题（可见）。
+    /// 面板标题（可见；外花键带「公法线为主、跨棒距备用」标注）。
     pub label: &'static str,
+    /// 读数行 1 标签（可见）。
+    pub dp_label: &'static str,
+    /// 读数行 2 标签（可见）。
+    pub md_label: &'static str,
     /// 量棒计算式（title）。
     pub formula: &'static str,
     /// 跨棒距计算式（title）。
@@ -127,11 +131,29 @@ const GB_ROOTS: &[SplineRootSpec] = &[
 
 const PIN_INTERNAL: SplinePinSpec = SplinePinSpec {
     label: "量棒直径 Dp 与测量跨棒距 Md",
+    dp_label: "量棒直径 Dp",
+    md_label: "测量跨棒距 Md",
     formula: "D'_Ri = Db[tanα_ci − tan(α_ci − E_max/D + invα_ci − invαD)]，\
               α_ci = acos(Db/D_ci)、D_ci = (D_ee max + D_ii min)/2（GB/T 3478.6 §3.1.1 式(1)）",
     md_formula: "偶齿 M_Ri max/min = Db/cosα_i max/min − Dp；奇齿再乘 cos(90°/z)；\
                  invα_i max/min = E_max/min/D + invαD − Dp/Db（GB/T 3478.6 §3.1.2 式(2)~(5)）",
     standard: "D'_Ri 算完后按 GB/T 321 的 R40 系列取最接近且较大的值（GB/T 3478.9 表 1，67 档）；\
+               3 个备选 = 系列中与 D' 最接近的 3 个（工程口径）",
+};
+
+/// 外花键量棒面板（用户 2026-09-27 点单）：**公法线为主、跨棒距备用**。
+/// 卡面 21 项不加行（模板忠实）；只在 GUI 面板给出 D_Re 与 M_Re（含极限）。
+const PIN_EXTERNAL: SplinePinSpec = SplinePinSpec {
+    label: "量棒直径 D_Re 与跨棒距 M_Re（公法线为主、跨棒距备用）",
+    dp_label: "量棒直径 D_Re",
+    md_label: "跨棒距 M_Re",
+    formula: "D'_Re = Db[tan(α_ce + invα_ce + π/z − S_min/D − invαD) − tanα_ce]，\
+              α_ce = acos(Db/D_ce)、D_ce = (D_ee max + D_ii min)/2；\
+              S_min 按 7 级 + 基本偏差 h 取（GB/T 3478.6 §3.2.1 式(6)）",
+    md_formula: "偶齿 M_Re max/min = Db/cosα_e max/min + D_Re；奇齿再乘 cos(90°/z)；\
+                 invα_e min = D_Re/Db + invαD + S_min/D − π/z，\
+                 invα_e max = D_Re/Db + invαD + S_max/D − π/z（GB/T 3478.6 §3.2.2 式(7)~(10)）",
+    standard: "D'_Re 算完后按 GB/T 321 的 R40 系列取最接近且较大的值（GB/T 3478.9 表 1，67 档）；\
                3 个备选 = 系列中与 D' 最接近的 3 个（工程口径）",
 };
 
@@ -459,8 +481,9 @@ const GB_EXT: SplineSideSpec = SplineSideSpec {
     alpha_note: "压力角 αD = 30° / 37.5° / 45°（基本齿廓）；invαD = 0.0537515 / 0.1128285 / 0.2146018",
     roots: GB_ROOTS,
     alphas: GB_ALPHAS,
-    // GB/T 3478.1 外花键参数表用公法线长度，不含 Dp/M_Ri（GB/T 3478.6 的 M_Re 未列入 21 项）。
-    pin: None,
+    // 外花键：公法线长度 Wn / 跨测齿数 Kn 为主；量棒跨棒距 M_Re 备用（用户 2026-09-27 点单，
+    // M_Re 不在 21 项卡面里 → 只进 GUI 面板）。
+    pin: Some(PIN_EXTERNAL),
     columns: EXTERNAL_COLUMNS,
 };
 
@@ -603,6 +626,8 @@ pub fn options_json() -> Result<serde_json::Value, String> {
                         Some(p) => serde_json::json!({
                             "applicable": true,
                             "label": p.label,
+                            "dp_label": p.dp_label,
+                            "md_label": p.md_label,
                             "formula": p.formula,
                             "md_formula": p.md_formula,
                             "standard": p.standard,
@@ -889,67 +914,74 @@ pub fn items_json(side: SplineSide, table: &SplineTable) -> Result<Vec<serde_jso
     Ok(out)
 }
 
-/// 量棒面板 JSON：标准解 + 3 个工程备选 + 当前 Dp 对应的 Md（选了 Dp 随之重算）。
+/// 量棒面板 JSON：标准解 + 3 个工程备选 + 当前 Dp 对应的 Md/M_Re（选了 Dp 随之重算）。
 fn dp_json(side: SplineSide, table: &SplineTable) -> serde_json::Value {
     let pin = side_spec_by_id(side_id(side)).and_then(|s| s.pin.as_ref());
-    match (side, table, pin) {
+    // 内/外共用同一面板形状：内 = M_Ri，外 = M_Re（公法线为主、跨棒距备用）。
+    let (pin, dp_calc, current, md, md_lower, md_upper) = match (side, table, pin) {
         (SplineSide::Internal, SplineTable::Internal(t), Some(pin)) => {
-            let auto = crate::spline_tol::dp_standard_pick(t.dp_calc).ok();
-            // 用户口径：「标准解 + 3 个工程备选」都要能点。标准解可能本来就是 3 个最近
-            // 系列值之一 → 去重后要再往后取一个，保证 4 个 chip（标准解 + 3 备选）。
-            let mut nearest = crate::spline_tol::pin_series()
-                .unwrap_or_else(|_| t.dp_candidates.clone());
-            nearest.sort_by(|a, b| {
-                (a - t.dp_calc)
-                    .abs()
-                    .partial_cmp(&(b - t.dp_calc).abs())
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            });
-            let mut choices: Vec<(f64, &'static str, bool)> = Vec::new();
-            if let Some(a) = auto {
-                choices.push((a, "标准解", true));
-            }
-            for v in nearest {
-                if choices.len() >= 4 {
-                    break;
-                }
-                if choices.iter().any(|(x, _, _)| (x - v).abs() < 1e-9) {
-                    continue;
-                }
-                choices.push((v, "备选", false));
-            }
-            choices.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
-            let manual = auto.map(|a| (a - t.dp).abs() > 1e-9).unwrap_or(true);
-            serde_json::json!({
-                "applicable": true,
-                "label": pin.label,
-                "formula": pin.formula,
-                "md_formula": pin.md_formula,
-                "standard": pin.standard,
-                "current": t.dp,
-                "auto": auto,
-                "calc": t.dp_calc,
-                "manual": manual,
-                "choices": choices
-                    .into_iter()
-                    .map(|(v, tag, std)| serde_json::json!({
-                        "value": v, "tag": tag, "standard": std,
-                    }))
-                    .collect::<Vec<_>>(),
-                "md": {
-                    "value": t.md,
-                    "lower": t.md_lower,
-                    "upper": t.md_upper,
-                },
+            (pin, t.dp_calc, t.dp, t.md, t.md_lower, t.md_upper)
+        }
+        (SplineSide::External, SplineTable::External(t), Some(pin)) => {
+            (pin, t.dp_calc, t.dp, t.md, t.md_lower, t.md_upper)
+        }
+        (_, _, None) => {
+            return serde_json::json!({
+                "applicable": false,
+                "reason": "该方向的参数表不含量棒/跨棒距面板",
             })
         }
-        (_, _, Some(_)) => serde_json::json!({ "applicable": false }),
-        (_, _, None) => serde_json::json!({
-            "applicable": false,
-            "reason": "外花键按 GB/T 3478.1 出公法线长度 Wn / 跨测齿数 Kn；\
-                       Dp/M_Ri 不在这 21 项里（GB/T 3478.6 的 M_Re 未列入）",
-        }),
+        _ => return serde_json::json!({ "applicable": false }),
+    };
+    // 用户口径：「标准解 + 3 个工程备选」都要能点。标准解可能本来就是 3 个最近
+    // 系列值之一 → 去重后要再往后取一个，保证 4 个 chip（标准解 + 3 备选）。
+    let auto = crate::spline_tol::dp_standard_pick(dp_calc).ok();
+    let mut nearest = crate::spline_tol::pin_series().unwrap_or_default();
+    nearest.sort_by(|a, b| {
+        (a - dp_calc)
+            .abs()
+            .partial_cmp(&(b - dp_calc).abs())
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    let mut choices: Vec<(f64, &'static str, bool)> = Vec::new();
+    if let Some(a) = auto {
+        choices.push((a, "标准解", true));
     }
+    for v in nearest {
+        if choices.len() >= 4 {
+            break;
+        }
+        if choices.iter().any(|(x, _, _)| (x - v).abs() < 1e-9) {
+            continue;
+        }
+        choices.push((v, "备选", false));
+    }
+    choices.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    let manual = auto.map(|a| (a - current).abs() > 1e-9).unwrap_or(true);
+    serde_json::json!({
+        "applicable": true,
+        "label": pin.label,
+        "dp_label": pin.dp_label,
+        "md_label": pin.md_label,
+        "formula": pin.formula,
+        "md_formula": pin.md_formula,
+        "standard": pin.standard,
+        "current": current,
+        "auto": auto,
+        "calc": dp_calc,
+        "manual": manual,
+        "choices": choices
+            .into_iter()
+            .map(|(v, tag, std)| serde_json::json!({
+                "value": v, "tag": tag, "standard": std,
+            }))
+            .collect::<Vec<_>>(),
+        "md": {
+            "value": md,
+            "lower": md_lower,
+            "upper": md_upper,
+        },
+    })
 }
 
 impl SplineTableModel {
@@ -1175,14 +1207,26 @@ mod tests {
         assert!(bad.pending_attrs().is_err());
     }
 
-    /// 外花键：参数表用公法线长度/跨测齿数，量棒面板不可用（置灰由 GUI 读 applicable=false）。
+    /// 外花键：参数表仍用公法线长度/跨测齿数（21 项不加行），
+    /// 量棒/跨棒距 M_Re 面板可用（用户 2026-09-27：公法线为主、跨棒距备用）。
     #[test]
-    fn external_has_wn_and_no_pin_panel() {
+    fn external_pin_panel_enabled_for_m_re() {
         let model = tmodel("ext");
         let p = model.preview_json().unwrap();
         assert_eq!(p["side"], "ext");
         assert_eq!(p["grade_fit"], "6f");
-        assert_eq!(p["dp"]["applicable"], false);
+        // 面板可用：能算、能显示。
+        let dp = &p["dp"];
+        assert_eq!(dp["applicable"], true);
+        assert!(dp["label"].as_str().unwrap().contains("公法线为主、跨棒距备用"));
+        assert_eq!(dp["dp_label"], "量棒直径 D_Re");
+        assert_eq!(dp["md_label"], "跨棒距 M_Re");
+        let md = dp["md"]["value"].as_f64().unwrap();
+        assert!(md > 0.0, "M_Re 应 >0：{md}");
+        assert!(dp["md"]["lower"].as_f64().unwrap() < md);
+        assert!(dp["md"]["upper"].as_f64().unwrap() > md);
+        assert_eq!(dp["choices"].as_array().unwrap().len(), 4);
+        // 卡面 21 项：M_Re 不加行（模板忠实）。
         let labels: Vec<&str> = p["items"]
             .as_array()
             .unwrap()
@@ -1191,6 +1235,31 @@ mod tests {
             .collect();
         assert!(labels.iter().any(|l| l.contains("公法线长度")));
         assert!(labels.iter().any(|l| l.contains("跨测齿数")));
+        assert!(!labels.iter().any(|l| l.contains("跨棒距")));
+        assert!(!labels.iter().any(|l| l.contains("量棒")));
+        // 手填 Dp → M_Re 按所填重算（同一 to_input/compute 路径）。
+        let auto_md = md;
+        let pick = dp["choices"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c["value"].as_f64().unwrap())
+            .find(|v| (v - dp["auto"].as_f64().unwrap()).abs() > 1e-9)
+            .expect("备选里必有与标准解不同的值");
+        let mut manual = tmodel("ext");
+        manual.dp = Some(pick);
+        let p2 = manual.preview_json().unwrap();
+        assert_eq!(p2["dp"]["current"].as_f64().unwrap(), pick);
+        assert_eq!(p2["dp"]["manual"], true);
+        assert!(
+            (p2["dp"]["md"]["value"].as_f64().unwrap() - auto_md).abs() > 1e-9,
+            "选了别的 Dp，M_Re 必须重算"
+        );
+        // 非系列值在导出路径同样拦。
+        let mut bad = tmodel("ext");
+        bad.dp = Some(1.03);
+        assert!(bad.preview_json().unwrap_err().contains("3478.9"));
+        assert!(bad.pending_attrs().is_err());
     }
 
     /// ★ CLI 与 GUI 同源：`SplineTableSpec` 解析的输入和 GUI 模型算出的 21 项完全一致。

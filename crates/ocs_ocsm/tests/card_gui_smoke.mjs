@@ -180,6 +180,15 @@ const CARD_TYPES = [
   { id: 'DIN花键参数表_外', aliases: ['dinext'], label: 'DIN 5480 外花键参数表', group: null, summary: 'stub din ext', systems: [], direction: 'ext', renderer: 'din_table', form: DIN_FORM_EXT },
   { id: 'GB花键精简表_内', aliases: ['gb精简'], label: 'GB 花键参数表（内·精简版）', group: '精简版', summary: 'stub lite int', systems: [{ id: 'gb3478', label: 'GB', standard: 'stub' }], direction: 'int', renderer: 'spline_lite', form: LITE_FORM_INT },
   { id: 'GB花键精简表_外', aliases: ['gb精简外'], label: 'GB 花键参数表（外·精简版）', group: '精简版', summary: 'stub lite ext', systems: [{ id: 'gb3478', label: 'GB', standard: 'stub' }], direction: 'ext', renderer: 'spline_lite', form: LITE_FORM_EXT },
+  { id: 'NF花键精简表_内', aliases: ['nf精简'], label: 'NF E22-141 内花键参数表（精简版）', group: '精简版', summary: 'stub NF lite int（不含公差列）', systems: [], direction: 'int', renderer: 'card_lite', form: NF_FORM },
+  { id: 'NF花键精简表_外', aliases: ['nf精简外'], label: 'NF E22-141 外花键参数表（精简版）', group: '精简版', summary: 'stub NF lite ext（不含公差列）', systems: [], direction: 'ext', renderer: 'card_lite', form: NF_EXT_FORM },
+  { id: 'DIN花键精简表_内', aliases: ['din精简'], label: 'DIN 5480 内花键参数表（精简版）', group: '精简版', summary: 'stub DIN lite int（不含公差列）', systems: [], direction: 'int', renderer: 'card_lite', form: DIN_FORM_INT },
+  { id: 'DIN花键精简表_外', aliases: ['din精简外'], label: 'DIN 5480 外花键参数表（精简版）', group: '精简版', summary: 'stub DIN lite ext（不含公差列）', systems: [], direction: 'ext', renderer: 'card_lite', form: DIN_FORM_EXT },
+  { id: 'ANSI花键精简表_内_中文', aliases: ['ansi精简'], label: 'ANSI 花键参数表（内·纯中文·精简版）', group: '精简版', summary: 'stub ANSI lite cn int（不含公差列）', systems: [], direction: 'int', renderer: 'card_lite', form: ANSI_FORM },
+  { id: 'ANSI花键精简表_外_中文', aliases: ['ansi精简外中'], label: 'ANSI 花键参数表（外·纯中文·精简版）', group: '精简版', summary: 'stub ANSI lite cn ext（不含公差列）', systems: [], direction: 'ext', renderer: 'card_lite', form: ANSI_FORM },
+  { id: 'ANSI花键精简表_内_英文', aliases: ['ansi精简内英'], label: 'ANSI 花键参数表（内·纯英文·精简版）', group: '精简版', summary: 'stub ANSI lite en int（不含公差列）', systems: [], direction: 'int', renderer: 'card_lite', form: ANSI_FORM },
+  { id: 'ANSI花键精简表_外_英文', aliases: ['ansi精简外英'], label: 'ANSI 花键参数表（外·纯英文·精简版）', group: '精简版', summary: 'stub ANSI lite en ext（不含公差列）', systems: [], direction: 'ext', renderer: 'card_lite', form: ANSI_FORM },
+  { id: '齿轮精简表', aliases: ['gear精简'], label: '齿轮参数表（GB/T 10095·精简版）', group: '精简版', summary: 'stub gear lite（不含公差列）', systems: [], direction: null, renderer: 'card_lite', form: GEAR_FORM },
 ];
 const GB_COLUMNS = Array.from({ length: 21 }, (_, i) => ({
   tag: `(内)t${i}`, label: `项${i}`, unit: '', formula: 'stub', source: 'stub',
@@ -465,6 +474,32 @@ function dinPreview(mm) {
 // 精简卡：9 项固定、无任何公差列；表达式反解复用 stubExpr，回填 fields。
 const LITE_INT_TAGS = ['执行标准', '模数 m', '齿数 z', '齿形角 αD', '齿根样式', '大径 Dei', '小径 Dii', '量棒直径 Dp', '测量跨棒距 Md'];
 const LITE_EXT_TAGS = ['执行标准', '模数 m', '齿数 z', '齿形角 αD', '齿根样式', '大径 Dee', '小径 Die', '跨测齿数 Kn', '公法线长度 Wn'];
+function cardLitePreview(mm) {
+  const spec = LITE_STUB[mm.card] || { n: 9, labels: [] };
+  const labels = spec.labels.length ? spec.labels
+    : Array.from({ length: spec.n }, (_, i) => `精简项${i + 1}`);
+  const items = labels.map((label, i) => ({
+    tag: `(简stub)${label}`, label, unit: '', value: `v-${i + 1}`,
+    formula: 'stub 公式', source: 'stub 来源', missing: false,
+  }));
+  return jsonResp({
+    ok: true, card: mm.card, renderer: 'card_lite',
+    readout: [{ k: '基本参数', v: 'stub' }], items, missing: [],
+    missing_note: 'stub 精简卡：不含任何公差列',
+  });
+}
+// 精简版扩体系：每卡字段数/标签（stub 与生产表同构；仅供 DOM 断言）
+const LITE_STUB = {
+  'NF花键精简表_内': { n: 11, labels: ['执行标准', '定心方式', '模数 m', '齿数 z', '压力角 a', '齿根样式', '加工方法', '大径 Az', '小径 D', '量棒直径 V', '跨棒距 G'] },
+  'NF花键精简表_外': { n: 11, labels: ['执行标准', '定心方式', '模数 m', '齿数 z', '压力角 a', '齿根样式', '加工方法', '大径 Dee', '小径 Die', '跨测齿数 K', '公法线 W'] },
+  'DIN花键精简表_内': { n: 10, labels: ['标记 N', '齿数 z', '模数 m', '压力角 α', '齿根圆 d_f2', '齿根成形圆 d_Ff2', '齿顶圆 d_a2', '量圆 D_M', '量圆距 M2_max', '量圆距 M2_min'] },
+  'DIN花键精简表_外': { n: 10, labels: ['标记 W', '齿数 z', '模数 m', '压力角 α', '齿顶圆 d_a1', '齿根成形圆 d_Ff1', '齿根圆 d_f1', '量圆 D_M', '量圆距 M1_max', '量圆距 M1_min'] },
+  'ANSI花键精简表_内_中文': { n: 10, labels: ['花键类型', '齿数 z', '径节 P', '压力角 α', '基圆直径 Db', '节圆直径 D', '大径', '小径', '跨棒距 M', '量棒直径 Dp'] },
+  'ANSI花键精简表_外_中文': { n: 10, labels: ['花键类型', '齿数 z', '径节 P', '压力角 α', '基圆直径 Db', '节圆直径 D', '大径', '小径', '公法线 W', '跨测齿数 K'] },
+  'ANSI花键精简表_内_英文': { n: 10, labels: ['SPLINE TYPE', 'TEETH z', 'PITCH P', 'ALPHA', 'BASE DIA. Db', 'PITCH DIA. D', 'MAJOR DIA.', 'MINOR DIA.', 'PIN DIST. M', 'PIN DIA. Dp'] },
+  'ANSI花键精简表_外_英文': { n: 10, labels: ['SPLINE TYPE', 'TEETH z', 'PITCH P', 'ALPHA', 'BASE DIA. Db', 'PITCH DIA. D', 'MAJOR DIA.', 'MINOR DIA.', 'BASE TANG. W', 'SPAN TEETH K'] },
+  '齿轮精简表': { n: 9, labels: ['模数 m', '齿数 z', '压力角 α', '变位系数 x', '分度圆 d', '齿顶圆 da', '齿根圆 df', '公法线 W', '跨齿数 K'] },
+};
 function litePreview(mm) {
   const ext = /_外/.test(String(mm.card));
   const tags = ext ? LITE_EXT_TAGS : LITE_INT_TAGS;
@@ -502,6 +537,7 @@ global.fetch = async (u, opts = {}) => {
     if (model.card === 'NF内花键参数表') return nfPreview(model);
     if (model.card === 'NF外花键参数表') return nfExtPreview(model);
     if (String(model.card).startsWith('GB花键精简表')) return litePreview(model);
+    if (LITE_STUB[model.card]) return cardLitePreview(model);
     if (String(model.card).startsWith('DIN')) return dinPreview(model);
     return jsonResp({ ok: false, error: 'stub 只支持新卡' }, 400);
   }
@@ -522,6 +558,7 @@ global.fetch = async (u, opts = {}) => {
       : lastExportModel.card === 'NF内花键参数表' ? nfPreview(lastExportModel)
       : lastExportModel.card === 'NF外花键参数表' ? nfExtPreview(lastExportModel)
       : String(lastExportModel.card).startsWith('GB花键精简表') ? litePreview(lastExportModel)
+      : LITE_STUB[lastExportModel.card] ? cardLitePreview(lastExportModel)
       : String(lastExportModel.card).startsWith('DIN') ? dinPreview(lastExportModel)
       : jsonResp({ ok: false, error: 'bad card' }, 400);
     if (!v.ok) return v;
@@ -631,16 +668,16 @@ check(!!H, '探针 __card 未挂上（脚本初始化崩溃？）');
 if (!H) report();
 
 // ── ① 统一外观：表驱动骨架 + GB 面板同款分区 ──────────────────────
-check(el('cardType').options.length === 13, `卡类型应 13 项：${el('cardType').options.map((o) => o.value)}`);
+check(el('cardType').options.length === 22, `卡类型应 22 项：${el('cardType').options.map((o) => o.value)}`);
 check(H.card && H.card.id === '花键参数表', `默认卡类型：${H.card && H.card.id}`);
 // ② 卡名（下拉闭合态）：首项带 GB；⑤ 每张卡名带标准号，一眼看出哪套标准
 check(el('cardType').options[0].textContent === 'GB 花键参数表（内）', `首项卡名：${el('cardType').options[0].textContent}`);
 for (const o of el('cardType').options) {
   check(/GB|ANSI|NF|DIN/.test(o.textContent), `卡名应带标准号：${o.textContent}`);
 }
-// 下拉分组（精简版）：两个精简卡收进 <optgroup label="精简版">；普通卡平铺。
+// 下拉分组（精简版）：11 张精简卡收进 <optgroup label="精简版">；普通卡平铺。
 const liteGroups = el('cardType').children.filter((c) => c.tagName === 'OPTGROUP');
-check(liteGroups.length === 1 && liteGroups[0].label === '精简版' && liteGroups[0].options.length === 2,
+check(liteGroups.length === 1 && liteGroups[0].label === '精简版' && liteGroups[0].options.length === 11,
   `精简版分组：${liteGroups.map((g) => `${g.label}(${g.options.length})`)}`);
 // ⑤ 截断兜底：hover title = 全名 + 口径（不展开也能确认）
 check((el('cardType').title || '').includes('GB 花键参数表'), `卡类型 title 应含全名：${el('cardType').title}`);
@@ -1094,6 +1131,37 @@ el('report').click();
 await tick();
 check(lastReportModel && lastReportModel.card === 'GB花键精简表_外', `精简计算书同源模型：${JSON.stringify(lastReportModel)}`);
 el('reportClose').click();
+
+// ── ⑩ 精简版扩体系（NF/DIN/ANSI×4/齿轮）：共享 card_lite 引擎 + 统一骨架 ──
+el('cardType').value = 'NF花键精简表_内';
+el('cardType')._fire('change', el('cardType'));
+await tick();
+check(H.card.id === 'NF花键精简表_内', `NF 精简内卡：${H.card.id}`);
+check(H.panelOf(H.card) === 'form', '精简版扩体系也走统一骨架');
+check(H.formControl('expr') != null && H.formControl('a') != null, 'NF 精简卡沿用完整卡字段清单');
+await H.refresh();
+check(lastPreviewModel && lastPreviewModel.card === 'NF花键精简表_内', `NF 精简预览模型：${JSON.stringify(lastPreviewModel)}`);
+check(el('items').innerHTML.split('class="row"').length - 1 === 11, `NF 精简应 11 项：${el('items').innerHTML.slice(0, 100)}`);
+check(!el('items').innerHTML.includes('公差') && !el('items').innerHTML.includes('偏差'),
+  'NF 精简结果不得出现公差/偏差');
+check(el('items').innerHTML.includes('量棒直径 V') && el('items').innerHTML.includes('跨棒距 G'),
+  'NF 精简应含 V/G');
+// 齿轮精简：三圆 + 公法线/跨齿数（9 项）
+el('cardType').value = '齿轮精简表';
+el('cardType')._fire('change', el('cardType'));
+await tick();
+check(H.card.id === '齿轮精简表', `齿轮精简卡：${H.card.id}`);
+await H.refresh();
+check(el('items').innerHTML.split('class="row"').length - 1 === 9, `齿轮精简应 9 项：${el('items').innerHTML.slice(0, 100)}`);
+check(el('items').innerHTML.includes('分度圆 d') && el('items').innerHTML.includes('公法线 W'),
+  '齿轮精简应含三圆/公法线');
+check(!el('items').innerHTML.includes('公差') && !el('items').innerHTML.includes('偏差'),
+  '齿轮精简结果不得出现公差/偏差');
+closed = false;
+el('ok').click();
+await tick();
+check(lastExportUrl.startsWith('/api/card_export') && lastExportModel.card === '齿轮精简表',
+  `齿轮精简出表：${lastExportUrl} ${JSON.stringify(lastExportModel)}`);
 
 // ── ⑦ 预览 404 → 红框可见（共享助手；不关窗）─────────────────────
 forcePreview404 = true;
