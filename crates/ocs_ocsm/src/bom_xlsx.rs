@@ -30,6 +30,7 @@ use std::io::Write;
 use std::path::Path;
 
 use crate::bom::{RowSpec, CELL_TAGS};
+use crate::i18n::{t, t_fmt};
 
 /// xlsx 表头（9 列；第 9 列是界面列，不写进图纸明细表）。
 pub(crate) const HEADERS: [&str; 9] = [
@@ -146,11 +147,13 @@ pub(crate) fn parse_csv(text: &str) -> Result<Vec<XRow>, String> {
     let mut out = Vec::new();
     for (i, r) in rows.iter().enumerate() {
         if r.len() > HEADERS.len() {
-            return Err(format!(
-                "第 {} 行有 {} 列，超过 {} 列（多出来的列无法识别）",
-                i + 1,
-                r.len(),
-                HEADERS.len()
+            return Err(t_fmt(
+                "cmd.bomxlsx.err.too_many_cols",
+                &[
+                    ("row", &(i + 1).to_string()),
+                    ("have", &r.len().to_string()),
+                    ("max", &HEADERS.len().to_string()),
+                ],
             ));
         }
         let mut cells: [String; 9] = Default::default();
@@ -188,8 +191,10 @@ impl ZipWriter {
             flate2::Compression::default(),
         );
         enc.write_all(data)
-            .map_err(|e| format!("压缩 {name} 失败: {e}"))?;
-        let comp = enc.finish().map_err(|e| format!("压缩 {name} 失败: {e}"))?;
+            .map_err(|e| t_fmt("cmd.bomxlsx.err.compress", &[("name", name), ("e", &e.to_string())]))?;
+        let comp = enc
+            .finish()
+            .map_err(|e| t_fmt("cmd.bomxlsx.err.compress", &[("name", name), ("e", &e.to_string())]))?;
         let crc = crc32fast::hash(data);
         let off = self.out.len() as u32;
         let name_b = name.as_bytes();
@@ -274,13 +279,13 @@ fn read_zip_entries(data: &[u8]) -> Result<Vec<(String, Vec<u8>)>, String> {
         }
         i -= 1;
     }
-    let eocd = eocd.ok_or("不是有效的 xlsx/zip：找不到 EOCD")?;
+    let eocd = eocd.ok_or_else(|| t("cmd.bomxlsx.err.no_eocd"))?;
     let count = u16at(eocd + 10) as usize;
     let mut p = u32at(eocd + 16) as usize;
     let mut out = Vec::new();
     for _ in 0..count {
         if p + 46 > data.len() || data[p..p + 4] != SIG_CD {
-            return Err("zip 中央目录损坏".into());
+            return Err(t("cmd.bomxlsx.err.zip_central_dir"));
         }
         let method = u16at(p + 10);
         let comp_size = u32at(p + 20) as usize;
@@ -291,13 +296,13 @@ fn read_zip_entries(data: &[u8]) -> Result<Vec<(String, Vec<u8>)>, String> {
         let name = String::from_utf8_lossy(&data[p + 46..p + 46 + name_len]).to_string();
         // 局部头 → 数据起点
         if local_off + 30 > data.len() || data[local_off..local_off + 4] != SIG_LOCAL {
-            return Err(format!("zip 条目 {name} 局部头损坏"));
+            return Err(t_fmt("cmd.bomxlsx.err.zip_local_header", &[("name", &name)]));
         }
         let l_name = u16at(local_off + 26) as usize;
         let l_extra = u16at(local_off + 28) as usize;
         let dstart = local_off + 30 + l_name + l_extra;
         if dstart + comp_size > data.len() {
-            return Err(format!("zip 条目 {name} 数据越界"));
+            return Err(t_fmt("cmd.bomxlsx.err.zip_out_of_bounds", &[("name", &name)]));
         }
         let raw = &data[dstart..dstart + comp_size];
         let bytes = match method {
@@ -307,10 +312,15 @@ fn read_zip_entries(data: &[u8]) -> Result<Vec<(String, Vec<u8>)>, String> {
                 let mut d = flate2::read::DeflateDecoder::new(raw);
                 let mut v = Vec::new();
                 d.read_to_end(&mut v)
-                    .map_err(|e| format!("解压 {name} 失败: {e}"))?;
+                    .map_err(|e| t_fmt("cmd.bomxlsx.err.unzip", &[("name", &name), ("e", &e.to_string())]))?;
                 v
             }
-            m => return Err(format!("zip 条目 {name} 用了不支持的压缩方法 {m}")),
+            m => {
+                return Err(t_fmt(
+                    "cmd.bomxlsx.err.unsupported_method",
+                    &[("name", &name), ("m", &m.to_string())],
+                ))
+            }
         };
         out.push((name, bytes));
         p += 46 + name_len + extra_len + comment_len;
@@ -404,9 +414,15 @@ fn sheet_xml(rows: &[XRow]) -> String {
 pub(crate) fn write_xlsx(path: &Path, rows: &[XRow]) -> Result<(), String> {
     let bytes = xlsx_bytes(rows)?;
     if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir).map_err(|e| format!("建目录失败: {e}"))?;
+        std::fs::create_dir_all(dir)
+            .map_err(|e| t_fmt("cmd.bomxlsx.err.make_dir", &[("e", &e.to_string())]))?;
     }
-    std::fs::write(path, bytes).map_err(|e| format!("写 {} 失败: {e}", path.display()))
+    std::fs::write(path, bytes).map_err(|e| {
+        t_fmt(
+            "cmd.bom.err.write_failed",
+            &[("path", &path.display().to_string()), ("e", &e.to_string())],
+        )
+    })
 }
 
 /// 构造 .xlsx 的字节（zip 容器；`write_xlsx` 与网页「导出→浏览器另存为」共用）。
@@ -633,7 +649,7 @@ fn parse_sheet(xml: &str, shared: &[String]) -> Result<Vec<Vec<String>>, String>
                 _ => {}
             },
             Ok(Event::Eof) => break,
-            Err(e) => return Err(format!("解析 sheet 失败: {e}")),
+            Err(e) => return Err(t_fmt("cmd.bomxlsx.err.parse_sheet", &[("e", &e.to_string())])),
             _ => {}
         }
     }
@@ -680,7 +696,12 @@ fn parse_shared(xml: &str) -> Vec<String> {
 
 /// 读 `.xlsx` → 行（跳过表头；列数不足补空）。
 pub(crate) fn read_xlsx(path: &Path) -> Result<Vec<XRow>, String> {
-    let data = std::fs::read(path).map_err(|e| format!("读 {} 失败: {e}", path.display()))?;
+    let data = std::fs::read(path).map_err(|e| {
+        t_fmt(
+            "cmd.bomxlsx.err.read_file",
+            &[("path", &path.display().to_string()), ("e", &e.to_string())],
+        )
+    })?;
     read_xlsx_bytes(&data)
 }
 
@@ -693,8 +714,11 @@ pub(crate) fn read_xlsx_bytes(data: &[u8]) -> Result<Vec<XRow>, String> {
             .find(|(name, _)| name == n)
             .map(|(_, d)| d.as_slice())
     };
-    let sheet_name = first_sheet_path(&entries).ok_or("xlsx 里找不到工作表")?;
-    let sheet = String::from_utf8_lossy(get(&sheet_name).ok_or("工作表读取失败")?).to_string();
+    let sheet_name = first_sheet_path(&entries).ok_or_else(|| t("cmd.bomxlsx.err.no_sheet"))?;
+    let sheet = String::from_utf8_lossy(
+        get(&sheet_name).ok_or_else(|| t("cmd.bomxlsx.err.sheet_read"))?,
+    )
+    .to_string();
     let shared = get("xl/sharedStrings.xml")
         .map(|d| parse_shared(&String::from_utf8_lossy(d)))
         .unwrap_or_default();

@@ -140,8 +140,8 @@ pub fn chamfer_1096(row: &Key1096Row) -> f64 {
     // 数据自检：行的 b 必须落在 [`KEY_1096_CHAMFER_RANGES`] 的某一档（JSON 与档位表漂移时 debug 构建报错）。
     debug_assert!(
         chamfer_1096_range_for(row.b).is_some(),
-        "b={} 不在倒角档位表内",
-        row.b
+        "{}",
+        crate::i18n::t_fmt("cmd.parts.err.corner_b", &[("b", &trim(row.b))])
     );
     chamfer_1096_from_range(row.c_min, row.c_max)
 }
@@ -217,7 +217,7 @@ struct KeyTable<T> {
 
 impl<T: serde::de::DeserializeOwned> KeyTable<T> {
     fn parse(json: &str) -> Self {
-        serde_json::from_str(json).expect("平键数据表 JSON 解析失败")
+        serde_json::from_str(json).expect(&crate::i18n::t("cmd.parts.err.json_parse_keys"))
     }
 }
 
@@ -316,7 +316,7 @@ fn table_1097(ty: KeyType) -> &'static KeyTable<Key1097Row> {
     match ty {
         KeyType::A => once!("tables/partsKey1097A.json"),
         KeyType::B => once!("tables/partsKey1097B.json"),
-        KeyType::C => unreachable!("GB/T 1097 没有 C 型"),
+        KeyType::C => unreachable!("{}", crate::i18n::t("cmd.parts.err.key1097_no_c")),
     }
 }
 
@@ -716,7 +716,7 @@ pub fn families_json() -> serde_json::Map<String, serde_json::Value> {
         let id = match ty {
             KeyType::A => "key_1097_a",
             KeyType::B => "key_1097_b",
-            KeyType::C => unreachable!("GB/T 1097 没有 C 型"),
+            KeyType::C => unreachable!("{}", crate::i18n::t("cmd.parts.err.key1097_no_c")),
         };
         m.insert(
             id.into(),
@@ -801,25 +801,33 @@ pub fn key_1096_default_corrections() -> Vec<(f64, f64, f64)> {
 /// 1096 长度校验：必须是 L 系列值，且 `L < 10·b`。
 pub fn check_length_1096(b: f64, l: f64) -> Result<(), String> {
     let Some((lo, hi)) = key_1096_l_range(b) else {
-        return Err(format!("GB/T 1096-2003 数据表里没有 b={}", trim(b)));
+        return Err(crate::i18n::t_fmt(
+            "cmd.parts.err.key_no_b",
+            &[("table", "GB/T 1096-2003"), ("b", &trim(b))],
+        ));
     };
     if !(l > 0.0) || !l.is_finite() {
-        return Err(format!("GB/T 1096 b={}：L 必须是正数（收到 {l}）", trim(b)));
+        return Err(crate::i18n::t_fmt(
+            "cmd.parts.err.key_l_positive",
+            &[("std", "1096"), ("b", &trim(b)), ("l", &trim(l))],
+        ));
     }
     if l < lo - 1e-9 || l > hi + 1e-9 {
-        return Err(format!(
-            "GB/T 1096 b={} 的 L 取值范围是 {}…{}（L 系列值且 L<10b），收到 {}",
-            trim(b),
-            trim(lo),
-            trim(hi),
-            trim(l)
+        return Err(crate::i18n::t_fmt(
+            "cmd.parts.err.key_l_range",
+            &[
+                ("std", "1096"),
+                ("b", &trim(b)),
+                ("lo", &trim(lo)),
+                ("hi", &trim(hi)),
+                ("l", &trim(l)),
+            ],
         ));
     }
     if !key_1096_l_allowed(b).iter().any(|v| (*v - l).abs() < 1e-9) {
-        return Err(format!(
-            "GB/T 1096 b={} 的 L 须取标准系列值（6, 8, 10, …, 400；L<10b），收到 {}",
-            trim(b),
-            trim(l)
+        return Err(crate::i18n::t_fmt(
+            "cmd.parts.err.key_l_series",
+            &[("b", &trim(b)), ("l", &trim(l))],
         ));
     }
     Ok(())
@@ -893,15 +901,20 @@ pub fn key_1097_length_for(l: f64) -> Result<&'static Key1097LengthRow, String> 
     {
         return Ok(row);
     }
-    Err(format!(
-        "GB/T 1097-2003 长度系列表里没有 L={}（不插值/不外推）；可选 L（{} 档）：{}",
-        trim(l),
-        key_1097_length_rows().len(),
-        key_1097_length_rows()
-            .iter()
-            .map(|r| trim(r.l))
-            .collect::<Vec<_>>()
-            .join(", ")
+    Err(crate::i18n::t_fmt(
+        "cmd.parts.err.key_series_missing",
+        &[
+            ("l", &trim(l)),
+            ("n", &key_1097_length_rows().len().to_string()),
+            (
+                "list",
+                &key_1097_length_rows()
+                    .iter()
+                    .map(|r| trim(r.l))
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            ),
+        ],
     ))
 }
 
@@ -961,29 +974,39 @@ pub fn key_1097_default_corrections() -> Vec<(f64, f64, f64)> {
 /// 同时做数据护栏：表内任一行必须满足 `L2=L/2`、`L1+2L3=L`。
 pub fn key_1097_length_checked(b: f64, l: f64) -> Result<&'static Key1097LengthRow, String> {
     let Some((lo, hi)) = key_1097_l_range(b) else {
-        return Err(format!("GB/T 1097-2003 数据表里没有 b={}", trim(b)));
+        return Err(crate::i18n::t_fmt(
+            "cmd.parts.err.key_no_b",
+            &[("table", "GB/T 1097-2003"), ("b", &trim(b))],
+        ));
     };
     if !(l > 0.0) || !l.is_finite() {
-        return Err(format!("GB/T 1097 b={}：L 必须是正数（收到 {l}）", trim(b)));
+        return Err(crate::i18n::t_fmt(
+            "cmd.parts.err.key_l_positive",
+            &[("std", "1097"), ("b", &trim(b)), ("l", &trim(l))],
+        ));
     }
     let row = key_1097_length_for(l)?;
     if l < lo - 1e-9 || l > hi + 1e-9 {
-        return Err(format!(
-            "GB/T 1097 b={} 的 L 取值范围是 {}…{}（L 系列值且 L<10b，GB/T 1097-2003 注③），收到 {}",
-            trim(b),
-            trim(lo),
-            trim(hi),
-            trim(l)
+        return Err(crate::i18n::t_fmt(
+            "cmd.parts.err.key_l_range_1097",
+            &[
+                ("b", &trim(b)),
+                ("lo", &trim(lo)),
+                ("hi", &trim(hi)),
+                ("l", &trim(l)),
+            ],
         ));
     }
     // 尺寸链自检：L2=L/2、L1+2·L3=L（长度表 26 档应恒满足；几何只依赖 L1，L2/L3 供校验/文档）。
     if (row.l2 - row.l / 2.0).abs() > 1e-9 || (row.l1 + 2.0 * row.l3 - row.l).abs() > 1e-9 {
-        return Err(format!(
-            "GB/T 1097-2003 长度系列表 L={} 尺寸链不一致：L1={}、L2={}、L3={}（应满足 L2=L/2、L1+2L3=L）",
-            trim(row.l),
-            trim(row.l1),
-            trim(row.l2),
-            trim(row.l3)
+        return Err(crate::i18n::t_fmt(
+            "cmd.parts.err.key_chain",
+            &[
+                ("l", &trim(row.l)),
+                ("l1", &trim(row.l1)),
+                ("l2", &trim(row.l2)),
+                ("l3", &trim(row.l3)),
+            ],
         ));
     }
     Ok(row)
@@ -1005,9 +1028,13 @@ pub fn generate(family: &str, d: f64, l: f64, view: &str) -> Option<Result<GenPa
     let (standard, ty) = family_parts(family)?;
     let allowed = family_views(family);
     if !allowed.contains(&view) {
-        return Some(Err(format!(
-            "{family} 不提供视图 {view}（可用：{}）",
-            allowed.join("/")
+        return Some(Err(crate::i18n::t_fmt(
+            "cmd.parts.err.view_not_offered",
+            &[
+                ("family", family),
+                ("view", view),
+                ("avail", &allowed.join("/")),
+            ],
         )));
     }
     Some(match standard {
@@ -1019,8 +1046,12 @@ pub fn generate(family: &str, d: f64, l: f64, view: &str) -> Option<Result<GenPa
 // ── 1096 普通平键 ─────────────────────────────────────────────────────────
 
 fn gen_1096(ty: KeyType, b: f64, l: f64, view: &str) -> Result<GenPart, String> {
-    let row = row_1096(ty, b)
-        .ok_or_else(|| format!("GB/T 1096-2003 数据表里没有 b={}", trim(b)))?;
+    let row = row_1096(ty, b).ok_or_else(|| {
+        crate::i18n::t_fmt(
+            "cmd.parts.err.key_no_b",
+            &[("table", "GB/T 1096-2003"), ("b", &trim(b))],
+        )
+    })?;
     let l = if l > 0.0 { l } else { row.l };
     check_length_1096(b, l)?;
     let (h, c) = (row.h, chamfer_1096(row));
@@ -1028,7 +1059,12 @@ fn gen_1096(ty: KeyType, b: f64, l: f64, view: &str) -> Result<GenPart, String> 
         "main" => main_1096(ty, b, h, l, c),
         "top" => top_1096(ty, b, l, c),
         "section" => section_1096(b, h, c),
-        other => return Err(format!("key_1096 没有视图 {other}")),
+        other => {
+            return Err(crate::i18n::t_fmt(
+                "cmd.parts.err.view_absent_bare",
+                &[("family", "key_1096"), ("view", other)],
+            ))
+        }
     };
     let weight = weight_1096(ty, b, h, l);
     Ok(GenPart {
@@ -1139,8 +1175,12 @@ fn weight_1096(ty: KeyType, b: f64, h: f64, l: f64) -> f64 {
 // ── 1097 导向平键 ─────────────────────────────────────────────────────────
 
 fn gen_1097(ty: KeyType, b: f64, l: f64, view: &str) -> Result<GenPart, String> {
-    let row = row_1097(ty, b)
-        .ok_or_else(|| format!("GB/T 1097-2003 数据表里没有 b={}", trim(b)))?;
+    let row = row_1097(ty, b).ok_or_else(|| {
+        crate::i18n::t_fmt(
+            "cmd.parts.err.key_no_b",
+            &[("table", "GB/T 1097-2003"), ("b", &trim(b))],
+        )
+    })?;
     // `l=0` = 该档默认 L（表内 100；b=8/10 就近合法化为 70/90）。
     let l = if l > 0.0 { l } else { key_1097_legal_default(row) };
     // L → (L1,L2,L3)：查表派生（不插值/不外推）；L 表外/不合法 → 明确报错。
@@ -1148,7 +1188,12 @@ fn gen_1097(ty: KeyType, b: f64, l: f64, view: &str) -> Result<GenPart, String> 
     let entities = match view {
         "main" => main_1097(ty, row, length),
         "top" => top_1097(ty, row, length),
-        other => return Err(format!("key_1097 没有视图 {other}")),
+        other => {
+            return Err(crate::i18n::t_fmt(
+                "cmd.parts.err.view_absent_bare",
+                &[("family", "key_1097"), ("view", other)],
+            ))
+        }
     };
     let weight = weight_1097(ty, row, l);
     Ok(GenPart {
@@ -1263,7 +1308,7 @@ fn main_1097(ty: KeyType, r: &Key1097Row, len: &Key1097LengthRow) -> Vec<EntityT
             en.push(line([-l / 2.0, h - c], [-xb, h - c], LAYER_MAIN));
             en.push(line([-l / 2.0, c], [-xb, c], LAYER_MAIN));
         }
-        KeyType::C => unreachable!("GB/T 1097 没有 C 型"),
+        KeyType::C => unreachable!("{}", crate::i18n::t("cmd.parts.err.key1097_no_c")),
     }
     // 材料剖面多边形（中段 / 右端 / 左中带断裂边界）。
     let mid = vec![
@@ -1293,7 +1338,7 @@ fn main_1097(ty: KeyType, r: &Key1097Row, len: &Key1097LengthRow) -> Vec<EntityT
             [l / 2.0, h],
             [l / 2.0, 0.0],
         ],
-        KeyType::C => unreachable!("GB/T 1097 没有 C 型"),
+        KeyType::C => unreachable!("{}", crate::i18n::t("cmd.parts.err.key1097_no_c")),
     };
     // 左中材料：左缘 = 45° 断裂折线（细实线，只画线不填充），右缘 = 中央孔壁；
     // 顶/底边已由左半外形多段线覆盖 → 不再重复画闭合粗轮廓（旧实现把三者合成一条 1轮廓实线层 闭合线）。
@@ -1428,7 +1473,7 @@ fn top_1097(ty: KeyType, r: &Key1097Row, len: &Key1097LengthRow) -> Vec<EntityTy
             en.push(line([-l / 2.0, ri], [l / 2.0, ri], LAYER_MAIN));
             en.push(line([-l / 2.0, -ri], [l / 2.0, -ri], LAYER_MAIN));
         }
-        KeyType::C => unreachable!("GB/T 1097 没有 C 型"),
+        KeyType::C => unreachable!("{}", crate::i18n::t("cmd.parts.err.key1097_no_c")),
     }
     en
 }
@@ -1506,6 +1551,14 @@ fn bbox_of(entities: &[EntityType]) -> [f64; 4] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 语言是进程级全局：断言中文文案的用例共用锁并钉死 zh。
+    fn zh_guard() -> std::sync::MutexGuard<'static, ()> {
+        let g = crate::global_state_test_lock();
+        crate::i18n::set_lang(crate::i18n::Lang::Zh);
+        g
+    }
+
     use crate::partgen::generate as gen_all;
     use crate::partgen_kit::{hatch_perpendicular_spacing, part_svg};
     use ocs_plugin_api::host::acadrust::types::Color;
@@ -2370,6 +2423,7 @@ mod tests {
     }
 
     fn check_clean(p: &GenPart, what: &str) {
+        let _g = zh_guard();
         for e in &p.entities {
             let lay = e.common().layer.as_str();
             assert!(OCSM_LAYERS.contains(&lay), "{what} 图层越界: {lay}");
@@ -2436,6 +2490,7 @@ mod tests {
     /// （数据源：嘉立创 new05232.htm，2026-09-24 抓取 /review/1097长度系列_进度.md）+ 表外报错。
     #[test]
     fn length_table_1097_26_rows_and_out_of_table_errors() {
+        let _g = zh_guard();
         const WANT: &[(f64, f64, f64, f64)] = &[
             (25.0, 13.0, 12.5, 6.0),
             (28.0, 14.0, 14.0, 7.0),
@@ -2512,6 +2567,7 @@ mod tests {
     /// 目录集成：五族登记、kind=key、型别下拉数据、视图/规格数、树上挂位。
     #[test]
     fn catalog_registration() {
+        let _g = zh_guard();
         let cat: serde_json::Value = serde_json::from_str(&crate::partgen::catalog_json()).unwrap();
         let fams = &cat["families"];
         for (fam, n_sizes, n_views, n_types) in [
@@ -2631,6 +2687,7 @@ mod tests {
     /// 视图/参数校验与错误路径。
     #[test]
     fn view_and_param_errors() {
+        let _g = zh_guard();
         assert_eq!(family_views("key_1096_a"), vec!["main", "top", "section"]);
         assert_eq!(family_views("key_1097_a"), vec!["main", "top"]);
         assert!(family_views("key_9999").is_empty());
@@ -2652,6 +2709,7 @@ mod tests {
     /// SVG 冒烟：样本规格可渲染；剖面线间距按用户口径 3.0mm。
     #[test]
     fn svg_smoke() {
+        let _g = zh_guard();
         for (fam, d, l, views) in [
             ("key_1096_a", 4.0, 8.0, vec!["main", "top", "section"]),
             ("key_1096_c", 2.0, 6.0, vec!["main", "top", "section"]),

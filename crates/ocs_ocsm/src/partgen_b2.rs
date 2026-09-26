@@ -764,15 +764,22 @@ pub fn generate(family: &str, d: f64, l: f64, view: &str) -> Option<Result<GenPa
         return None;
     }
     if !allowed.contains(&view) {
-        return Some(Err(format!(
-            "{family} 不提供视图 {view}（可用：{}）",
-            allowed.join("/")
+        return Some(Err(crate::i18n::t_fmt(
+            "cmd.parts.err.view_not_offered",
+            &[
+                ("family", family),
+                ("view", view),
+                ("avail", &allowed.join("/")),
+            ],
         )));
     }
     Some(match family {
         "set_screw_77" => {
             let Some(row) = set_screw_row(d) else {
-                return Some(Err(format!("GB/T 77-2007 数据表里没有 M{}", trim(d))));
+                return Some(Err(crate::i18n::t_fmt(
+                    "cmd.parts.err.no_m",
+                    &[("table", "GB/T 77-2007"), ("d", &trim(d))],
+                )));
             };
             if let Err(e) = check_length(row.l_min, row.l_max, d, l) {
                 return Some(Err(e));
@@ -785,7 +792,10 @@ pub fn generate(family: &str, d: f64, l: f64, view: &str) -> Option<Result<GenPa
         }
         "round_nut_812" => {
             let Some(row) = round_nut_row(d) else {
-                return Some(Err(format!("GB/T 812-1988 数据表里没有 M{}", trim(d))));
+                return Some(Err(crate::i18n::t_fmt(
+                    "cmd.parts.err.no_m",
+                    &[("table", "GB/T 812-1988"), ("d", &trim(d))],
+                )));
             };
             let g = nut812_geom(row);
             match view {
@@ -798,7 +808,10 @@ pub fn generate(family: &str, d: f64, l: f64, view: &str) -> Option<Result<GenPa
         "lock_washer_858" => {
             let large = lock_washer_large(d);
             let Some(row) = lock_washer_row_by_d(d) else {
-                return Some(Err(format!("GB/T 858-1988 数据表里没有 Ø{}", trim(d))));
+                return Some(Err(crate::i18n::t_fmt(
+                    "cmd.parts.err.no_dia",
+                    &[("table", "GB/T 858-1988"), ("d", &trim(d))],
+                )));
             };
             match view {
                 "main" => Ok(lock_washer_main(row, large)),

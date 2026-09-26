@@ -345,7 +345,7 @@ pub struct Table<T> {
 impl<T: serde::de::DeserializeOwned> Table<T> {
     /// 解析一张表（配合 `include_str!` + `OnceLock` 用，见各族的 `xxx_table()`）。
     pub fn parse(json: &str) -> Self {
-        serde_json::from_str(json).expect("零件数据表 JSON 解析失败")
+        serde_json::from_str(json).expect(&crate::i18n::t("cmd.parts.err.json_parse_parts"))
     }
     pub fn row(&self, d: f64) -> Option<&T>
     where
@@ -390,18 +390,24 @@ pub fn bolt_view(view: &str) -> Result<BoltView, String> {
         "main" => Ok(BoltView::Main),
         "top" => Ok(BoltView::Top),
         "end" => Ok(BoltView::End),
-        other => Err(format!("没有视图 {other}（可用 main/top/end）")),
+        other => Err(crate::i18n::t_fmt(
+            "cmd.parts.err.view_absent_no_family",
+            &[("view", other), ("avail", "main/top/end")],
+        )),
     }
 }
 
 /// 长度范围校验（错误文本与既有族一致，GUI/CLI 直接显示）。
 pub fn check_length(l_min: f64, l_max: f64, d: f64, l: f64) -> Result<(), String> {
     if l < l_min - 1e-9 || l > l_max + 1e-9 {
-        return Err(format!(
-            "M{} 的长度范围是 {}…{}（收到 {l}）",
-            trim(d),
-            trim(l_min),
-            trim(l_max)
+        return Err(crate::i18n::t_fmt(
+            "cmd.parts.err.len_range_kit",
+            &[
+                ("d", &trim(d)),
+                ("lo", &trim(l_min)),
+                ("hi", &trim(l_max)),
+                ("l", &trim(l)),
+            ],
         ));
     }
     Ok(())

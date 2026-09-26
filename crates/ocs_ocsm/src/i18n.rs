@@ -1276,6 +1276,888 @@ pub const CATALOG: &[Msg] = &[
         "比例「{whole}」必须是整数比（示例 1:2）。",
         "Scale \"{whole}\" must be an integer ratio (e.g. 1:2).",
     ),
+
+    // ── 命令输出/报错：螺栓副装配（OCSMJOINT；joint.rs）───────────────────
+    Msg::new(
+        "cmd.joint.usage",
+        "用法：OCSMJOINT at x,y rot 度 [protrude 扣数] bolt=<族>:<d>[:<l>] [plate=<厚>|gap=<厚>|<螺母或垫圈族>=<d>] …",
+        "Usage: OCSMJOINT at x,y rot deg [protrude turns] bolt=<family>:<d>[:<l>] [plate=<t>|gap=<t>|<nut or washer family>=<d>] …",
+    ),
+    Msg::new(
+        "cmd.joint.err.at_needs_coords",
+        "at 缺坐标。{usage}",
+        "at: missing coordinates. {usage}",
+    ),
+    Msg::new(
+        "cmd.joint.err.at_needs_y",
+        "at 缺 y。{usage}",
+        "at: missing y. {usage}",
+    ),
+    Msg::new(
+        "cmd.joint.err.rot_needs_angle",
+        "rot 缺角度。{usage}",
+        "rot: missing angle. {usage}",
+    ),
+    Msg::new(
+        "cmd.joint.err.protrude_needs_number",
+        "protrude 缺数值。{usage}",
+        "protrude: missing value. {usage}",
+    ),
+    Msg::new(
+        "cmd.joint.err.protrude_negative",
+        "protrude 不能为负（扣数）",
+        "protrude cannot be negative (turns)",
+    ),
+    Msg::new(
+        "cmd.joint.err.view_needs_name",
+        "view 缺视图名。{usage}",
+        "view: missing view name. {usage}",
+    ),
+    Msg::new(
+        "cmd.joint.err.at_required",
+        "缺 at x,y。{usage}",
+        "Missing at x,y. {usage}",
+    ),
+    Msg::new(
+        "cmd.joint.err.empty_chain",
+        "件链为空。{usage}",
+        "The part chain is empty. {usage}",
+    ),
+    Msg::new(
+        "cmd.joint.err.empty_chain_bare",
+        "件链为空",
+        "the part chain is empty",
+    ),
+    Msg::new(
+        "cmd.joint.err.chain_needs_bolt",
+        "件链必须以 bolt=<族>:<d> 开头（它决定轴线与长度基准）。",
+        "The part chain must start with bolt=<family>:<d> (it defines the axis and the length datum).",
+    ),
+    Msg::new(
+        "cmd.joint.err.chain_needs_bolt_short",
+        "件链必须以 bolt=<族>:<d> 开头",
+        "The part chain must start with bolt=<family>:<d>",
+    ),
+    Msg::new(
+        "cmd.joint.err.bad_json",
+        "请求 JSON 无效: {e}",
+        "Invalid request JSON: {e}",
+    ),
+    Msg::new(
+        "cmd.joint.err.unknown_kind_json",
+        "未知件类型: {other}",
+        "Unknown part kind: {other}",
+    ),
+    Msg::new(
+        "cmd.joint.err.chain_needs_bolt_json",
+        "件链必须以 kind=bolt 开头",
+        "The part chain must start with kind=bolt",
+    ),
+    Msg::new(
+        "cmd.joint.err.family_no_size",
+        "零件库没有 {family} 的 {d}，可用直径：{hint}",
+        "The parts library has no {d} in {family}. Available diameters: {hint}",
+    ),
+    Msg::new(
+        "cmd.joint.err.no_pitch",
+        "{family} {d} 没有螺距数据，无法按扣数算露出",
+        "{family} {d} has no pitch data; cannot compute protrusion in turns",
+    ),
+    Msg::new(
+        "cmd.joint.err.item_size_missing",
+        "{item} 的规格在零件库里查不到",
+        "No library entry for the size of {item}",
+    ),
+    Msg::new(
+        "cmd.joint.err.length_too_short",
+        "{family} {d} 的供货长度最大 {lmax}，装不下（需 ≥ {need}）。换更长的族或改件链。",
+        "{family} {d}: longest supplied length is {lmax}, too short (need ≥ {need}). Use a longer family or change the chain.",
+    ),
+    Msg::new(
+        "cmd.joint.err.item_format",
+        "件格式应为 `<类型>=<族>:<规格>` 或 `plate=<厚>`（收到 {token}）",
+        "Part format must be `<kind>=<family>:<size>` or `plate=<t>` (got {token})",
+    ),
+    Msg::new(
+        "cmd.joint.err.item_colon",
+        "{token} 应为 <类型>=<族>:<规格>，如 bolt=hex_bolt_b_full:8",
+        "{token} must be <kind>=<family>:<size>, e.g. bolt=hex_bolt_b_full:8",
+    ),
+    Msg::new(
+        "cmd.joint.err.no_screw",
+        "件链不支持螺钉（螺钉拧入螺纹孔、不配螺母）；螺栓副请用 六角头螺栓族",
+        "The part chain does not accept screws (a screw threads into a tapped hole and takes no nut); use a hex-head bolt family for a bolted joint",
+    ),
+    Msg::new(
+        "cmd.joint.err.unknown_kind",
+        "未知件类型 {other}（可用 bolt/nut/washer/plate/gap，或直接写族名）",
+        "Unknown part kind {other} (use bolt/nut/washer/plate/gap, or write the family name directly)",
+    ),
+    Msg::new(
+        "cmd.joint.err.screw_not_expected",
+        "{family} 是螺钉（screw）——螺钉拧入螺纹孔、不配螺母，不能当件链的 {expected} 用",
+        "{family} is a screw — it threads into a tapped hole and takes no nut, so it cannot serve as the {expected} in the chain",
+    ),
+    Msg::new(
+        "cmd.joint.err.family_kind_mismatch",
+        "{family} 不是{expected}族",
+        "{family} is not a {expected} family",
+    ),
+    Msg::new(
+        "cmd.joint.err.size_format",
+        "规格最多 <d>[:<l>]（收到 {raw}）",
+        "Size must be at most <d>[:<l>] (got {raw})",
+    ),
+    Msg::new(
+        "cmd.joint.err.library_no_d",
+        "零件库没有 {family} 的 M{d}（可用：{hint}）",
+        "The parts library has no M{d} in {family}. Available: {hint}",
+    ),
+    Msg::new(
+        "cmd.joint.err.screw_not_bolt",
+        "{family} 是螺钉（screw）——螺钉拧入螺纹孔、不配螺母，不是螺栓；件链只支持 螺栓（六角头螺栓族）/螺母/垫圈",
+        "{family} is a screw — it threads into a tapped hole and takes no nut, so it is not a bolt. The chain supports only bolts (hex-head bolt families) / nuts / washers",
+    ),
+    Msg::new(
+        "cmd.joint.err.kind_unsupported",
+        "{family} 是 {other} 类，件链里只支持螺栓/螺母/垫圈",
+        "{family} is of kind {other}; the chain supports only bolts/nuts/washers",
+    ),
+    Msg::new(
+        "cmd.joint.err.family_not_implemented",
+        "（该族未实现）",
+        "(family not implemented)",
+    ),
+    Msg::new(
+        "cmd.joint.note.no_plates",
+        "无被连接件",
+        "no connected parts",
+    ),
+    Msg::new(
+        "cmd.joint.report",
+        "OCSMJOINT：{bolt_name} {bolt_code} {d}×{l}｜件链 {chain} → Σ{stack}｜需 l ≥ {need}(= Σ{stack} + 露出{turns}扣×{pitch}) → 取供货长度 {l2}（实际外露 {pm}mm≈{pt}扣）｜基点 ({x}, {y}) rot {rot}°｜共 {n} 件",
+        "OCSMJOINT: {bolt_name} {bolt_code} {d}×{l} | chain {chain} → Σ{stack} | need l ≥ {need} (= Σ{stack} + protrusion {turns} turns × {pitch}) → use supplied length {l2} (actual protrusion {pm} mm ≈ {pt} turns) | base point ({x}, {y}) rot {rot}° | {n} parts",
+    ),
+    Msg::new(
+        "cmd.joint.item.bolt_with_length",
+        "{name} {code} {d}×{l}",
+        "{name} {code} {d}×{l}",
+    ),
+    Msg::new(
+        "cmd.joint.item.bolt",
+        "{name} {code} {d}",
+        "{name} {code} {d}",
+    ),
+    Msg::new(
+        "cmd.joint.item.nut",
+        "{name} {code} {d}(m{thick})",
+        "{name} {code} {d}(m{thick})",
+    ),
+    Msg::new(
+        "cmd.joint.item.washer",
+        "{name} {code} {d}(厚{thick})",
+        "{name} {code} {d}(thk {thick})",
+    ),
+    Msg::new(
+        "cmd.joint.item.plate",
+        "板厚 {t}",
+        "plate t={t}",
+    ),
+    Msg::new(
+        "cmd.joint.item.gap",
+        "间隔 {t}",
+        "gap {t}",
+    ),
+    Msg::new(
+        "cmd.joint.note.hidden",
+        "{name} {spec} 被遮 {iv}",
+        "{name} {spec} hidden {iv}",
+    ),
+    Msg::new(
+        "cmd.joint.err.empty_geometry",
+        "整链几何为空",
+        "Joint geometry is empty",
+    ),
+    Msg::new(
+        "cmd.joint.err.not_number",
+        "不是有效数字: {raw}",
+        "Not a valid number: {raw}",
+    ),
+    Msg::new(
+        "cmd.joint.err.not_finite",
+        "不是有限数字: {raw}",
+        "Not a finite number: {raw}",
+    ),
+
+    // ── 命令输出/报错：一键转国标（OCSMDIM2GB / D2G；dim2gb.rs）───────
+    Msg::new(
+        "cmd.d2g.report",
+        "OCSMDIM2GB：扫描原生标注 {seen} 个，转换成功 {converted} 个。",
+        "OCSMDIM2GB: scanned {seen} native dimensions, converted {converted}.",
+    ),
+    Msg::new(
+        "cmd.d2g.report.leaders",
+        "其中引线标注 {n} 个。",
+        " of which {n} were leaders.",
+    ),
+    Msg::new(
+        "cmd.d2g.report.marks",
+        "其中智能圆心标记 {n} 个（已换成 `3中心线层` 中心线）。",
+        " of which {n} were smart center marks (replaced with `3中心线层` center lines).",
+    ),
+    Msg::new(
+        "cmd.d2g.report.skipped",
+        "跳过 {n} 个：",
+        " skipped {n}:",
+    ),
+    Msg::new("cmd.d2g.report.none_skipped", "无跳过。", " none skipped."),
+    Msg::new(
+        "cmd.d2g.report.undo_hint",
+        "（可用一次 Ctrl+Z 全部撤销）",
+        "(one Ctrl+Z undoes them all)",
+    ),
+    Msg::new("cmd.d2g.report.sep", "；", "; "),
+    Msg::new(
+        "cmd.d2g.err.unsupported_request",
+        "dim2gb 收集器不支持该请求: {req}",
+        "dim2gb collector does not support this request: {req}",
+    ),
+    Msg::new("cmd.d2g.type.aligned", "对齐标注", "aligned dimension"),
+    Msg::new("cmd.d2g.type.linear", "线性标注", "linear dimension"),
+    Msg::new("cmd.d2g.type.radius", "半径标注", "radius dimension"),
+    Msg::new("cmd.d2g.type.diameter", "直径标注", "diameter dimension"),
+    Msg::new("cmd.d2g.type.angular", "角度标注", "angular dimension"),
+    Msg::new("cmd.d2g.type.arc", "弧长标注", "arc-length dimension"),
+    Msg::new("cmd.d2g.type.ordinate", "坐标标注", "ordinate dimension"),
+    Msg::new("cmd.d2g.type.large_radial", "折弯半径标注", "bend-radius dimension"),
+    Msg::new("cmd.d2g.err.zero_radius", "半径为零", "radius is zero"),
+    Msg::new(
+        "cmd.d2g.err.arc_zero_radius",
+        "弧长标注半径为零",
+        "arc-length dimension has zero radius",
+    ),
+    Msg::new(
+        "cmd.d2g.err.temp_arc_block",
+        "临时引导弧创建失败: {e}",
+        "failed to create temporary guide arc: {e}",
+    ),
+    Msg::new(
+        "cmd.d2g.err.diameter_coincident",
+        "直径两点重合",
+        "the two diameter points coincide",
+    ),
+    Msg::new(
+        "cmd.d2g.err.arc_invalid",
+        "弧长标注尺寸无效（可能来自旧文件解析）",
+        "invalid arc-length dimension (possibly from parsing an old file)",
+    ),
+    Msg::new(
+        "cmd.d2g.err.ordinate_unsupported",
+        "坐标标注本期不转换（OCSM 无对应构件）",
+        "ordinate dimensions are not converted yet (no OCSM equivalent)",
+    ),
+    Msg::new(
+        "cmd.d2g.err.large_radial_unsupported",
+        "折弯半径本期不转换（OCSM 无对应构件）",
+        "bend-radius dimensions are not converted yet (no OCSM equivalent)",
+    ),
+    Msg::new(
+        "cmd.d2g.skip.multileader",
+        "多重引线（本期不转）",
+        "multileader (not converted yet)",
+    ),
+    Msg::new(
+        "cmd.d2g.skip.non_dimension",
+        "非标注对象（{kind}）",
+        "non-dimension object ({kind})",
+    ),
+    Msg::new(
+        "cmd.d2g.err.leader_vertices",
+        "顶点不足（需 箭头点→拐点→肩线末端）",
+        "too few vertices (need arrow point → bend point → shoulder end)",
+    ),
+    Msg::new(
+        "cmd.d2g.err.text_lines",
+        "文字 {n} 行（>2 行不转换）",
+        "text has {n} lines (>2 lines not converted)",
+    ),
+    Msg::new(
+        "cmd.d2g.err.block_create",
+        "建块失败：{e}",
+        "failed to create block: {e}",
+    ),
+    Msg::new(
+        "cmd.d2g.err.add_entity",
+        "加实体失败：{e}",
+        "failed to add entity: {e}",
+    ),
+    Msg::new(
+        "cmd.d2g.skip.handle_missing",
+        "handle {h} 不存在",
+        "handle {h} does not exist",
+    ),
+    Msg::new(
+        "cmd.d2g.err.geometry_check",
+        "几何自检未通过（原 {before} → 新 {after}）",
+        "geometry self-check failed (original {before} → new {after})",
+    ),
+    Msg::new(
+        "cmd.d2g.info.none_found",
+        "OCSMDIM2GB：未找到可转换的原生标注（仅扫描模型空间）{tail}",
+        "OCSMDIM2GB: no convertible native dimensions found (model space only){tail}",
+    ),
+    Msg::new(
+        "cmd.d2g.info.none_found_tail",
+        "（{list}）",
+        " ({list})",
+    ),
+    Msg::new(
+        "cmd.d2g.undo",
+        "OCSMDIM2GB 原生标注转 GB",
+        "OCSMDIM2GB: native dimensions → GB",
+    ),
+    Msg::new(
+        "cmd.d2g.err.block_create_named",
+        "OCSMDIM2GB：建块 {name} 失败：{e}",
+        "OCSMDIM2GB: failed to create block {name}: {e}",
+    ),
+    Msg::new(
+        "cmd.d2g.skip.dim",
+        "{label}（{e}）",
+        "{label} ({e})",
+    ),
+    Msg::new(
+        "cmd.d2g.skip.leader",
+        "引线标注（{e}）",
+        "leader ({e})",
+    ),
+    Msg::new(
+        "cmd.d2g.skip.mark_bad_radius",
+        "圆心标记（记录里的半径无效，已跳过）",
+        "center mark (invalid radius in record, skipped)",
+    ),
+    Msg::new("cmd.d2g.ent.point", "点", "point"),
+    Msg::new("cmd.d2g.ent.line", "直线", "line"),
+    Msg::new("cmd.d2g.ent.circle", "圆", "circle"),
+    Msg::new("cmd.d2g.ent.arc", "圆弧", "arc"),
+    Msg::new("cmd.d2g.ent.polyline", "多段线", "polyline"),
+    Msg::new("cmd.d2g.ent.text", "文字", "text"),
+    Msg::new("cmd.d2g.ent.mtext", "多行文字", "mtext"),
+    Msg::new("cmd.d2g.ent.insert", "块参照", "block reference"),
+    Msg::new("cmd.d2g.ent.dimension", "标注", "dimension"),
+    Msg::new("cmd.d2g.ent.solid", "实体填充", "solid fill"),
+    Msg::new("cmd.d2g.ent.other", "其它", "other"),
+
+    // ── 命令输出/报错：明细表 BOM 系列（bom.rs / bom_xlsx.rs）───────────
+    Msg::new("cmd.bom.sep", "、", ", "),
+    Msg::new(
+        "cmd.bom.undo.table",
+        "OCSM 明细表",
+        "OCSM BOM table",
+    ),
+    Msg::new("cmd.bom.undo.qty_lock", "OCSM 数量锁", "OCSM quantity lock"),
+    Msg::new("cmd.bom.undo.export", "OCSM 明细表导出", "OCSM BOM export"),
+    Msg::new("cmd.bom.undo.import", "OCSM 明细表导入", "OCSM BOM import"),
+    Msg::new(
+        "cmd.bom.err.template_missing",
+        "OCSMBOM: 找不到明细表模板块（{head} / {row}）。请把 OCSM_BOMHEAD.dwg、OCSM_BOMROW.dwg 放进插件目录 bom/（或设 OCSM_BOM_DIR）。",
+        "OCSMBOM: BOM template blocks not found ({head} / {row}). Put OCSM_BOMHEAD.dwg and OCSM_BOMROW.dwg into the plugin's bom/ directory (or set OCSM_BOM_DIR).",
+    ),
+    Msg::new(
+        "cmd.bom.err.bad_attdefs",
+        "OCSMBOM: 行块 {block} 应有 {expect} 个 ATTDEF，实际 {got} 个 → 模板不对。",
+        "OCSMBOM: row block {block} should have {expect} ATTDEFs but has {got} → wrong template.",
+    ),
+    Msg::new(
+        "cmd.bom.err.layout_first_col",
+        "图框/配置不对：首列连一行都放不下（检查 sheet_top / first_col_bottom）",
+        "Frame/config problem: not even one row fits in the first column (check sheet_top / first_col_bottom)",
+    ),
+    Msg::new(
+        "cmd.bom.err.layout_cont_col",
+        "图框/配置不对：续列连一行都放不下（检查 sheet_top / sheet_bottom）",
+        "Frame/config problem: not even one row fits in a continuation column (check sheet_top / sheet_bottom)",
+    ),
+    Msg::new(
+        "cmd.bom.err.layout_columns",
+        "明细表需要 {cols} 列（共 {rows} 行：首列 {first} 行/上限 {cap_first}，续列每列上限 {cap_cont}），当前图幅只放得下 {fit} 列 → 请换更大图幅，或改用多页明细表。",
+        "The BOM needs {cols} columns ({rows} rows total: first column {first} rows / limit {cap_first}, continuation columns limit {cap_cont}) but the current sheet fits only {fit} columns → use a larger sheet or a multi-page BOM.",
+    ),
+    Msg::new(
+        "cmd.bom.col.desc",
+        "第{col}列 {n} 行",
+        "column {col}: {n} rows",
+    ),
+    Msg::new(
+        "cmd.bom.info.built",
+        "OCSMBOM: {rows} 件 → {cols} 列（{desc}）；旧表元 {removed} 个已替换（Ctrl+Z 可整体撤销）；现有行里手改过的列与 BOMLOCK 数量锁已保留。",
+        "OCSMBOM: {rows} parts → {cols} columns ({desc}); {removed} old table entities replaced (Ctrl+Z undoes all); manually edited cells and BOMLOCK quantity locks were kept.",
+    ),
+    Msg::new(
+        "cmd.bom.info.count_hint",
+        "OCSMBOM: 提示——数量按「图中插入件数」统计，同一零件画在多个视图里会重复计数。",
+        "OCSMBOM: note — quantities count inserted occurrences in the drawing, so the same part drawn in several views is counted more than once.",
+    ),
+    Msg::new(
+        "cmd.bom.info.untracked",
+        "OCSMBOM: 注意——图中有 {n} 个 OCSM_ 零件块引用但没有 OCSM_PART 台账记录（多为离线生成/早期版本的文件），它们不会进明细表。用 XL 重新放置，或后续用表格导入补录。",
+        "OCSMBOM: warning — {n} OCSM_ part block references have no OCSM_PART ledger record (usually from offline/older files); they will not appear in the BOM. Re-place them with XL, or add them later via table import.",
+    ),
+    Msg::new(
+        "cmd.bom.err.sync_nothing",
+        "OCSMBOMSYNC: 没有可排的内容（图上没有序号球标，也没有零件台账）。",
+        "OCSMBOMSYNC: nothing to list (no balloon items and no part ledger in the drawing).",
+    ),
+    Msg::new(
+        "cmd.bom.err.sync_failed",
+        "OCSMBOMSYNC: {e}",
+        "OCSMBOMSYNC: {e}",
+    ),
+    Msg::new(
+        "cmd.bom.info.sync",
+        "OCSMBOMSYNC: {rows} 行（序号 {nos}）→ {cols} 列；旧表元 {removed} 个已替换。",
+        "OCSMBOMSYNC: {rows} rows (item numbers {nos}) → {cols} columns; {removed} old table entities replaced.",
+    ),
+    Msg::new(
+        "cmd.bom.locked.item",
+        "{no}（数量 {qty}）",
+        "{no} (qty {qty})",
+    ),
+    Msg::new(
+        "cmd.bom.info.sync_locked",
+        "OCSMBOMSYNC: {n} 行数量已锁定，未覆盖：{list}。要重算用 `BOMLOCK <序号> off`。",
+        "OCSMBOMSYNC: quantity locked on {n} rows, not overwritten: {list}. Use `BOMLOCK <item no> off` to unlock.",
+    ),
+    Msg::new(
+        "cmd.bom.info.squeezed",
+        "OCSMBOM: {n} 格文字超宽 → 已自动横向压缩（字高统一不动；压太扁的另点名）。",
+        "OCSMBOM: {n} cells were too wide → compressed horizontally (text height unchanged; badly flattened ones are listed separately).",
+    ),
+    Msg::new(
+        "cmd.bom.info.squeezed_hard",
+        "OCSMBOM: 下面 {n} 格横向压得偏扁（已压进格内、不会到邻格，但可读性下降）：{list}（建议加宽该列 / 缩短文本 / 把标准号写进名称列）。",
+        "OCSMBOM: {n} cells were flattened hard (still inside their cells but less readable): {list} (widen the column, shorten the text, or put the standard number in the name column).",
+    ),
+    Msg::new(
+        "cmd.bom.squeezed_hard.item",
+        "{tag}「{value}」{pct}%",
+        "{tag} \"{value}\" {pct}%",
+    ),
+    Msg::new(
+        "cmd.bom.lock.usage",
+        "OCSMBOMLOCK / BOMLOCK 用法：BOMLOCK <序号|图号> [数量|off]（不给数量 = 按行上现值锁；off = 解锁）",
+        "OCSMBOMLOCK / BOMLOCK usage: BOMLOCK <item no|drawing no> [qty|off] (no qty = lock at the current value; off = unlock)",
+    ),
+    Msg::new(
+        "cmd.bom.lock.err.row_missing",
+        "OCSMBOMLOCK: 表里找不到序号/图号为「{key}」的行。",
+        "OCSMBOMLOCK: no row with item/drawing number \"{key}\" in the table.",
+    ),
+    Msg::new(
+        "cmd.bom.lock.info.unlocked",
+        "OCSMBOMLOCK: 序号 {key}→已解锁（数量 {qty}）——下次同步会按件数/引用次数重算。",
+        "OCSMBOMLOCK: {key} → unlocked (qty {qty}); the next sync will recompute it from part counts/references.",
+    ),
+    Msg::new(
+        "cmd.bom.lock.err.qty_invalid",
+        "OCSMBOMLOCK: 数量「{v}」不是正整数（或写 off 解锁）。",
+        "OCSMBOMLOCK: quantity \"{v}\" is not a positive integer (or write off to unlock).",
+    ),
+    Msg::new(
+        "cmd.bom.lock.info.locked",
+        "OCSMBOMLOCK: 序号 {key} 数量锁定为 {qty}（同步不再重算；BOMLOCK {key} off 可解锁）。",
+        "OCSMBOMLOCK: {key} quantity locked to {qty} (sync will not recompute; BOMLOCK {key} off unlocks).",
+    ),
+    Msg::new(
+        "cmd.bom.err.row_no_empty",
+        "有行的序号为空（每行都需要序号）",
+        "A row has an empty item number (every row needs one)",
+    ),
+    Msg::new(
+        "cmd.bom.err.row_qty_not_positive_int",
+        "序号 {no} 的数量「{qty}」不是正整数",
+        "Row {no}: quantity \"{qty}\" is not a positive integer",
+    ),
+    Msg::new(
+        "cmd.bom.err.row_qty_zero",
+        "序号 {no} 的数量不能为 0（要删行就删行）",
+        "Row {no}: quantity cannot be 0 (delete the row to remove it)",
+    ),
+    Msg::new(
+        "cmd.bom.info.links_stamped",
+        "OCSMBOM: 已把 {changed} 个表块链接指向明细表编辑页（Ctrl+点击打开；或运行 `BOMEDIT` 在新窗口打开）。",
+        "OCSMBOM: {changed} table blocks now link to the BOM edit page (Ctrl+click, or run `BOMEDIT`).",
+    ),
+    Msg::new(
+        "cmd.bom.err.export_empty",
+        "OCSMBOMXLSX: 图上还没有明细表行（先 `BOM` 或 `BOMSYNC` 建表）。",
+        "OCSMBOMXLSX: the drawing has no BOM rows yet (run `BOM` or `BOMSYNC` first).",
+    ),
+    Msg::new(
+        "cmd.bom.err.write_failed",
+        "写 {path} 失败: {e}",
+        "Failed to write {path}: {e}",
+    ),
+    Msg::new(
+        "cmd.bom.err.export_failed",
+        "OCSMBOMXLSX: {e}",
+        "OCSMBOMXLSX: {e}",
+    ),
+    Msg::new(
+        "cmd.bom.info.export_temp_hint",
+        "OCSMBOMXLSX: 提示——本图还没存过盘，所以文件落在**临时目录**（{dir}）。临时目录会被系统清理，要长期保存请先 Ctrl+S 存盘再导出（xlsx 就会生成在图纸同目录、同名-明细表.xlsx）。",
+        "OCSMBOMXLSX: note — the drawing has not been saved, so the file went to a **temporary directory** ({dir}). Temp files get cleaned up; for long-term storage press Ctrl+S first, then the xlsx is created next to the drawing as <same name>-明细表.xlsx.",
+    ),
+    Msg::new(
+        "cmd.bom.info.exported",
+        "OCSMBOMXLSX: {rows} 行已导出 → {path}（{n} 行记下导出基线；表块已挂编辑页链接，Ctrl+点击打开网页）。",
+        "OCSMBOMXLSX: {rows} rows exported → {path} ({n} rows recorded as export baseline; table blocks link to the edit page, Ctrl+click to open).",
+    ),
+    Msg::new(
+        "cmd.bom.info.export_columns",
+        "OCSMBOMXLSX: 列 = {cols}（「锁定数量」只在此文件里，不进图纸表格；空=不锁，Y/是=锁为同行数量，数字=锁为该数）。",
+        "OCSMBOMXLSX: columns = {cols} (the \"locked quantity\" column exists only in this file, not in the drawing table; empty = unlocked, Y/是 = lock at the row quantity, a number = lock to that value).",
+    ),
+    Msg::new(
+        "cmd.bom.err.import_missing",
+        "OCSMBOMXLSXI: 找不到文件 {path}（先 `BOMXLSX` 导出，或给个路径）。",
+        "OCSMBOMXLSXI: file not found: {path} (run `BOMXLSX` first, or give a path).",
+    ),
+    Msg::new(
+        "cmd.bom.err.import_csv",
+        "OCSMBOMXLSXI: 读 CSV 失败：{e}",
+        "OCSMBOMXLSXI: failed to read CSV: {e}",
+    ),
+    Msg::new(
+        "cmd.bom.err.import_empty",
+        "OCSMBOMXLSXI: 文件里没有数据行。",
+        "OCSMBOMXLSXI: the file has no data rows.",
+    ),
+    Msg::new(
+        "cmd.bom.err.import_failed",
+        "OCSMBOMXLSXI: {e}",
+        "OCSMBOMXLSXI: {e}",
+    ),
+    Msg::new(
+        "cmd.bom.info.imported",
+        "OCSMBOMXLSXI: 从 {path} 导入 {n} 行 → 表 {rows} 行 / {cols} 列（{locked} 行数量已锁定，{kept} 行文件里没有、按图纸保留）。",
+        "OCSMBOMXLSXI: imported {n} rows from {path} → {rows} rows / {cols} columns ({locked} rows keep quantity locks; {kept} rows absent from the file were kept from the drawing).",
+    ),
+    Msg::new(
+        "cmd.bom.cfg.info.set",
+        "OCSMBOMCFG: 首列行数已设为 {n}（{path}）。",
+        "OCSMBOMCFG: first-column row count set to {n} ({path}).",
+    ),
+    Msg::new(
+        "cmd.bom.cfg.err.save",
+        "OCSMBOMCFG: 写配置失败：{e}",
+        "OCSMBOMCFG: failed to save config: {e}",
+    ),
+    Msg::new(
+        "cmd.bom.cfg.info.show",
+        "OCSMBOMCFG: 首列行数 {n}（配置 {path}）；用法：BOMCFG 30 改默认，BOM 30 只改本次。",
+        "OCSMBOMCFG: first-column row count {n} (config {path}); usage: BOMCFG 30 changes the default, BOM 30 changes only this run.",
+    ),
+    Msg::new(
+        "cmd.bomxlsx.err.too_many_cols",
+        "第 {row} 行有 {have} 列，超过 {max} 列（多出来的列无法识别）",
+        "Row {row} has {have} columns, more than the {max} recognized (extra columns are ignored)",
+    ),
+    Msg::new(
+        "cmd.bomxlsx.err.compress",
+        "压缩 {name} 失败: {e}",
+        "Failed to compress {name}: {e}",
+    ),
+    Msg::new(
+        "cmd.bomxlsx.err.no_eocd",
+        "不是有效的 xlsx/zip：找不到 EOCD",
+        "Not a valid xlsx/zip: EOCD not found",
+    ),
+    Msg::new(
+        "cmd.bomxlsx.err.zip_central_dir",
+        "zip 中央目录损坏",
+        "corrupt zip central directory",
+    ),
+    Msg::new(
+        "cmd.bomxlsx.err.zip_local_header",
+        "zip 条目 {name} 局部头损坏",
+        "zip entry {name} has a corrupt local header",
+    ),
+    Msg::new(
+        "cmd.bomxlsx.err.zip_out_of_bounds",
+        "zip 条目 {name} 数据越界",
+        "zip entry {name} data out of bounds",
+    ),
+    Msg::new(
+        "cmd.bomxlsx.err.unzip",
+        "解压 {name} 失败: {e}",
+        "Failed to decompress {name}: {e}",
+    ),
+    Msg::new(
+        "cmd.bomxlsx.err.unsupported_method",
+        "zip 条目 {name} 用了不支持的压缩方法 {m}",
+        "zip entry {name} uses unsupported compression method {m}",
+    ),
+    Msg::new(
+        "cmd.bomxlsx.err.make_dir",
+        "建目录失败: {e}",
+        "Failed to create directory: {e}",
+    ),
+    Msg::new(
+        "cmd.bomxlsx.err.parse_sheet",
+        "解析 sheet 失败: {e}",
+        "Failed to parse sheet: {e}",
+    ),
+    Msg::new(
+        "cmd.bomxlsx.err.read_file",
+        "读 {path} 失败: {e}",
+        "Failed to read {path}: {e}",
+    ),
+    Msg::new(
+        "cmd.bomxlsx.err.no_sheet",
+        "xlsx 里找不到工作表",
+        "no worksheet found in the xlsx",
+    ),
+    Msg::new(
+        "cmd.bomxlsx.err.sheet_read",
+        "工作表读取失败",
+        "failed to read the worksheet",
+    ),
+
+    // ── 命令输出/报错：标准件库 / 结构要素（OCSMPART / XL；lib.rs + partgen*.rs + guide_server）──
+    Msg::new(
+        "cmd.parts.usage",
+        "OCSMPART 参数无效。用法：标准件 `OCSMPART <族> <d> <l> [view <视图>] [at x,y] [rot 度]`（例：OCSMPART hex_bolt_c 10 95 at 150,30 rot 0）；结构要素 `OCSMPART detail_grind_od <d> [b1 <值>] [at x,y] [rot 度]`（b1 缺省 = 该 d 档默认行）；矩形花键 `OCSMPART detail_spline_rect <规格代号> L<满齿段长> [de <滚刀外径>] [view front|side|section]`（例：OCSMPART detail_spline_rect 6x23x26x6 L30 view side）；外螺纹退刀槽 `OCSMPART detail_thread_relief <d> P <螺距> [g1 值 g2 值 dg 值 r 值 alpha 值] [at x,y] [rot 度]`（P 必给）；毂槽 `OCSMPART detail_hub_keyway <d> [len 毂长] [view main|side]`（例：OCSMPART detail_hub_keyway 25 len 30 view main；b/t₂/r 由 d 查表，len 缺省 30）；平键 `OCSMPART key_1096_{a|b|c} <b> <L> [view main|top|section]`、`OCSMPART key_1097_{a|b} <b> <L> [view main|top]`（例：OCSMPART key_1096_a 4 8、OCSMPART key_1097_a 8 25；L 省略/0 = 该档默认，L 须 ∈ 标准系列且 L<10b，1097 的 L1/L2/L3 由 L 查长度系列表派生）；不带参数则打开零件库窗口。",
+        "Invalid OCSMPART arguments. Usage: standard part `OCSMPART <family> <d> <l> [view <view>] [at x,y] [rot deg]` (e.g. OCSMPART hex_bolt_c 10 95 at 150,30 rot 0); feature `OCSMPART detail_grind_od <d> [b1 <value>] [at x,y] [rot deg]` (b1 omitted = the default row for that d); rectangular spline `OCSMPART detail_spline_rect <spec code> L<full-tooth length> [de <hob OD>] [view front|side|section]` (e.g. OCSMPART detail_spline_rect 6x23x26x6 L30 view side); external thread relief `OCSMPART detail_thread_relief <d> P <pitch> [g1 v g2 v dg v r v alpha v] [at x,y] [rot deg]` (P required); hub keyway `OCSMPART detail_hub_keyway <d> [len hub length] [view main|side]` (e.g. OCSMPART detail_hub_keyway 25 len 30 view main; b/t₂/r looked up from d, len defaults to 30); parallel keys `OCSMPART key_1096_{a|b|c} <b> <L> [view main|top|section]`, `OCSMPART key_1097_{a|b} <b> <L> [view main|top]` (e.g. OCSMPART key_1096_a 4 8, OCSMPART key_1097_a 8 25; L omitted/0 = default for that b, L must be a standard series value with L<10b, and key_1097 derives L1/L2/L3 from the length series table); no arguments opens the parts library window.",
+    ),
+    Msg::new(
+        "cmd.parts.window_opened",
+        "OCSM 标准件库：已打开零件库窗口。选零件点「零件出库」→ 回到图纸点击定位基点 → 移动光标旋转 → 再点击落定（可连续，Esc 结束）。",
+        "OCSM parts library: window opened. Pick a part and click \"Produce part\" → back in the drawing click to set the base point → move the cursor to rotate → click to place (repeatable; Esc to finish).",
+    ),
+    Msg::new(
+        "cmd.parts.window_exists",
+        "OCSM 标准件库：零件库窗口已打开（Alt+Tab 切换过去）。",
+        "OCSM parts library: the window is already open (Alt+Tab to switch to it).",
+    ),
+    Msg::new(
+        "cmd.parts.err.no_service",
+        "OCSM: 无法启动零件库服务（宿主不支持 worker 请求）。",
+        "OCSM: cannot start the parts library service (the host does not support worker requests).",
+    ),
+    Msg::new(
+        "cmd.parts.err.no_worker",
+        "OCSM 标准件：宿主不支持 worker 请求，无法参数化插入。",
+        "OCSM parts: the host does not support worker requests; parametric insert is unavailable.",
+    ),
+    Msg::new("cmd.parts.inserted_prefix", "OCSM 标准件：{msg}", "OCSM parts: {msg}"),
+    Msg::new(
+        "cmd.parts.err.insert_failed",
+        "OCSM 标准件插入失败：{e}",
+        "OCSM part insert failed: {e}",
+    ),
+    Msg::new("cmd.parts.undo_insert", "零件插入", "insert part"),
+    Msg::new(
+        "cmd.parts.inserted_item",
+        "已插入 {name} {spec}（{code}）",
+        "inserted {name} {spec} ({code})",
+    ),
+    Msg::new("cmd.req.err.bad_json", "请求 JSON 无效: {e}", "Invalid request JSON: {e}"),
+    Msg::new("cmd.parts.prompt.what", "OCSM 标准件", "OCSM part"),
+    Msg::new(
+        "cmd.parts.prompt.where",
+        "请在零件库窗口里点「零件出库」",
+        "click \"Produce part\" in the parts library window",
+    ),
+    Msg::new(
+        "cmd.parts.err.no_m",
+        "{table} 数据表里没有 M{d}",
+        "{table} data table has no M{d}",
+    ),
+    Msg::new(
+        "cmd.parts.err.no_dia",
+        "{table} 数据表里没有 Ø{d}",
+        "{table} data table has no Ø{d}",
+    ),
+    Msg::new(
+        "cmd.parts.err.len_range_std",
+        "M{d} 的长度应在 {lo}~{hi}（标准范围）",
+        "M{d} length must be within {lo}~{hi} (standard range)",
+    ),
+    Msg::new(
+        "cmd.parts.err.len_range",
+        "M{d} 的长度应在 {lo}~{hi} 之间",
+        "M{d} length must be between {lo} and {hi}",
+    ),
+    Msg::new(
+        "cmd.parts.err.len_range_ab",
+        "M{d} 的长度应在 {lo}~{hi} 之间（GB/T 5782 A/B级）",
+        "M{d} length must be between {lo} and {hi} (GB/T 5782 grade A/B)",
+    ),
+    Msg::new(
+        "cmd.parts.err.len_range_series",
+        "{std} Ø{d} 的长度应在 {lo} ~ {hi} 之间（表内系列：{series}）",
+        "{std} Ø{d} length must be between {lo} and {hi} (in-table series: {series})",
+    ),
+    Msg::new(
+        "cmd.parts.err.len_range_kit",
+        "M{d} 的长度范围是 {lo}…{hi}（收到 {l}）",
+        "M{d} length range is {lo}…{hi} (got {l})",
+    ),
+    Msg::new(
+        "cmd.parts.err.view_not_offered",
+        "{family} 不提供视图 {view}（可用：{avail}）",
+        "{family} does not provide view {view} (available: {avail})",
+    ),
+    Msg::new(
+        "cmd.parts.err.view_absent",
+        "{family} 没有视图 {view}（可用：{avail}）",
+        "{family} has no view {view} (available: {avail})",
+    ),
+    Msg::new(
+        "cmd.parts.err.view_absent_bare",
+        "{family} 没有视图 {view}",
+        "{family} has no view {view}",
+    ),
+    Msg::new(
+        "cmd.parts.err.only_main",
+        "{family} 只有主视图（模板只有这一个视图）",
+        "{family} only has the main view (the template has just this one)",
+    ),
+    Msg::new(
+        "cmd.parts.err.only_main_received",
+        "{family} 只有主视图（模板只有这一个视图），收到 {view}",
+        "{family} only has the main view (the template has just this one); got {view}",
+    ),
+    Msg::new("cmd.parts.err.unknown_family", "未知族 {other}", "unknown family {other}"),
+    Msg::new(
+        "cmd.parts.err.unknown_nut_family",
+        "未知螺母族 {other}",
+        "unknown nut family {other}",
+    ),
+    Msg::new(
+        "cmd.parts.err.family_todo",
+        "零件族 {other} 尚未实现",
+        "part family {other} is not implemented yet",
+    ),
+    Msg::new(
+        "cmd.parts.err.nut6170_todo",
+        "1型六角螺母 GB/T 6170-2015 暂未提供（画法待模板确认，数据表已备好）",
+        "Hex nut style 1 GB/T 6170-2015 is not available yet (drawing method pending template confirmation; the data table is ready)",
+    ),
+    Msg::new(
+        "cmd.parts.err.key_no_b",
+        "{table} 数据表里没有 b={b}",
+        "{table} data table has no b={b}",
+    ),
+    Msg::new(
+        "cmd.parts.err.key_l_positive",
+        "GB/T {std} b={b}：L 必须是正数（收到 {l}）",
+        "GB/T {std} b={b}: L must be a positive number (got {l})",
+    ),
+    Msg::new(
+        "cmd.parts.err.key_l_range",
+        "GB/T {std} b={b} 的 L 取值范围是 {lo}…{hi}（L 系列值且 L<10b），收到 {l}",
+        "GB/T {std} b={b}: L must be within {lo}…{hi} (a series value with L<10b); got {l}",
+    ),
+    Msg::new(
+        "cmd.parts.err.key_l_range_1097",
+        "GB/T 1097 b={b} 的 L 取值范围是 {lo}…{hi}（L 系列值且 L<10b，GB/T 1097-2003 注③），收到 {l}",
+        "GB/T 1097 b={b}: L must be within {lo}…{hi} (a series value with L<10b, GB/T 1097-2003 note 3); got {l}",
+    ),
+    Msg::new(
+        "cmd.parts.err.key_l_series",
+        "GB/T 1096 b={b} 的 L 须取标准系列值（6, 8, 10, …, 400；L<10b），收到 {l}",
+        "GB/T 1096 b={b}: L must be a standard series value (6, 8, 10, …, 400; L<10b); got {l}",
+    ),
+    Msg::new(
+        "cmd.parts.err.key_series_missing",
+        "GB/T 1097-2003 长度系列表里没有 L={l}（不插值/不外推）；可选 L（{n} 档）：{list}",
+        "GB/T 1097-2003 length series has no L={l} (no interpolation/extrapolation); available L ({n} entries): {list}",
+    ),
+    Msg::new(
+        "cmd.parts.err.key_chain",
+        "GB/T 1097-2003 长度系列表 L={l} 尺寸链不一致：L1={l1}、L2={l2}、L3={l3}（应满足 L2=L/2、L1+2L3=L）",
+        "GB/T 1097-2003 length series L={l} dimension chain inconsistent: L1={l1}, L2={l2}, L3={l3} (expected L2=L/2 and L1+2L3=L)",
+    ),
+    Msg::new(
+        "cmd.parts.err.corner_b",
+        "b={b} 不在倒角档位表内",
+        "b={b} is not in the chamfer table",
+    ),
+    Msg::new(
+        "cmd.parts.err.key1097_no_c",
+        "GB/T 1097 没有 C 型",
+        "GB/T 1097 has no type C",
+    ),
+    Msg::new(
+        "cmd.parts.err.json_parse_keys",
+        "平键数据表 JSON 解析失败",
+        "failed to parse the parallel-key data table JSON",
+    ),
+    Msg::new(
+        "cmd.parts.err.json_parse_parts",
+        "零件数据表 JSON 解析失败",
+        "failed to parse the part data table JSON",
+    ),
+    Msg::new(
+        "cmd.parts.err.missing_param",
+        "缺少参数 {name}",
+        "missing parameter {name}",
+    ),
+    Msg::new(
+        "cmd.parts.err.param_not_number",
+        "{name} 不是数字",
+        "{name} is not a number",
+    ),
+    Msg::new(
+        "cmd.parts.err.thread_len",
+        "M{d} 的螺纹长度 l={want}（收到 {got}）",
+        "M{d} thread length l={want} (got {got})",
+    ),
+    Msg::new(
+        "cmd.parts.err.no_d1_od",
+        "GB/T 13871.1 数据表里没有 d1={d1} D={od}",
+        "GB/T 13871.1 data table has no d1={d1} D={od}",
+    ),
+    Msg::new(
+        "cmd.parts.err.no_d_bearing",
+        "GB/T 276 数据表里没有 内径 d={d} 宽度 B={b}",
+        "GB/T 276 data table has no bore d={d} width B={b}",
+    ),
+    Msg::new(
+        "cmd.parts.err.no_dt",
+        "{table} 数据表里没有 d={d} T={t} 的规格",
+        "{table} data table has no spec with d={d} T={t}",
+    ),
+    Msg::new(
+        "cmd.parts.err.no_db",
+        "{table} 数据表里没有 d={d} B={b} 的规格",
+        "{table} data table has no spec with d={d} B={b}",
+    ),
+    Msg::new(
+        "cmd.parts.err.view_absent_no_family",
+        "没有视图 {view}（可用：{avail}）",
+        "no view {view} (available: {avail})",
+    ),
+
+    // ── 命令输出/报错：表面粗糙度（OCSMRGH / CC；guide_server::apply_roughness）──
+    Msg::new("cmd.rough.undo_insert", "表面粗糙度", "roughness symbol"),
+    Msg::new(
+        "cmd.rough.prompt",
+        "OCSM 表面粗糙度：指定符号插入点。",
+        "OCSM surface roughness: specify the symbol insertion point.",
+    ),
+    Msg::new(
+        "cmd.rough.err.bad_base",
+        "无效的基础体 {base}（应为 C1..C4）",
+        "invalid base symbol {base} (expected C1..C4)",
+    ),
+    Msg::new(
+        "cmd.rough.err.bad_extra",
+        "无效的附加区 {extra}（应为 R1..R5）",
+        "invalid additional area {extra} (expected R1..R5)",
+    ),
 ];
 
 /// 手动覆盖：环境变量 `OCSMLANG`（最高优先级的进程外开关）。

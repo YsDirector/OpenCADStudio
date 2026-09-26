@@ -31,6 +31,7 @@ use ocs_plugin_api::host::acadrust::xdata::XDataValue;
 use ocs_plugin_api::host::{DimStyleDef, PluginRequestError, PluginRequestSender};
 use ocs_plugin_api::ipc::protocol::{PluginRequest, PluginResponse};
 
+use crate::i18n::{t, t_fmt};
 use crate::LineGeom;
 use crate::guide_server as gs;
 use crate::guide_url::{
@@ -67,27 +68,24 @@ pub(crate) struct Dim2GbPlan {
 impl Dim2GbPlan {
     /// 命令结束时打印的报告文本。
     pub fn report(&self) -> String {
-        let mut s = format!(
-            "OCSMDIM2GB：扫描原生标注 {} 个，转换成功 {} 个。",
-            self.seen, self.converted
+        let mut s = t_fmt(
+            "cmd.d2g.report",
+            &[("seen", &self.seen.to_string()), ("converted", &self.converted.to_string())],
         );
         if self.leaders > 0 {
-            s.push_str(&format!("其中引线标注 {} 个。", self.leaders));
+            s.push_str(&t_fmt("cmd.d2g.report.leaders", &[("n", &self.leaders.to_string())]));
         }
         if self.marks > 0 {
-            s.push_str(&format!(
-                "其中智能圆心标记 {} 个（已换成 `3中心线层` 中心线）。",
-                self.marks
-            ));
+            s.push_str(&t_fmt("cmd.d2g.report.marks", &[("n", &self.marks.to_string())]));
         }
         if !self.skipped.is_empty() {
-            s.push_str(&format!("跳过 {} 个：", self.skipped.len()));
-            s.push_str(&self.skipped.join("；"));
+            s.push_str(&t_fmt("cmd.d2g.report.skipped", &[("n", &self.skipped.len().to_string())]));
+            s.push_str(&self.skipped.join(&t("cmd.d2g.report.sep")));
         } else {
-            s.push_str("无跳过。");
+            s.push_str(&t("cmd.d2g.report.none_skipped"));
         }
         if self.converted > 0 {
-            s.push_str("（可用一次 Ctrl+Z 全部撤销）");
+            s.push_str(&t("cmd.d2g.report.undo_hint"));
         }
         s
     }
@@ -141,8 +139,9 @@ impl PluginRequestSender for CollectSender {
             | R::RemoveEntity { .. }
             | R::WriteRecord { .. } => Ok(P::Ok),
             R::ReadRecord { .. } => Ok(P::Record(None)),
-            other => Err(PluginRequestError(format!(
-                "dim2gb 收集器不支持该请求: {other:?}"
+            other => Err(PluginRequestError(t_fmt(
+                "cmd.d2g.err.unsupported_request",
+                &[("req", &format!("{other:?}"))],
             ))),
         }
     }
@@ -158,19 +157,19 @@ fn axis_perp(axis: Vector3) -> Vector3 {
     Vector3::new(-axis.y, axis.x, 0.0)
 }
 
-fn type_label(dim: &Dimension) -> &'static str {
+fn type_label(dim: &Dimension) -> String {
     match dim {
         Dimension::Linear(l) => match l.base.dimension_type {
-            DimensionType::Aligned => "对齐标注",
-            _ => "线性标注",
+            DimensionType::Aligned => t("cmd.d2g.type.aligned"),
+            _ => t("cmd.d2g.type.linear"),
         },
-        Dimension::Aligned(_) => "对齐标注",
-        Dimension::Radius(_) => "半径标注",
-        Dimension::Diameter(_) => "直径标注",
-        Dimension::Angular2Ln(_) | Dimension::Angular3Pt(_) => "角度标注",
-        Dimension::Arc(_) => "弧长标注",
-        Dimension::Ordinate(_) => "坐标标注",
-        Dimension::LargeRadial(_) => "折弯半径标注",
+        Dimension::Aligned(_) => t("cmd.d2g.type.aligned"),
+        Dimension::Radius(_) => t("cmd.d2g.type.radius"),
+        Dimension::Diameter(_) => t("cmd.d2g.type.diameter"),
+        Dimension::Angular2Ln(_) | Dimension::Angular3Pt(_) => t("cmd.d2g.type.angular"),
+        Dimension::Arc(_) => t("cmd.d2g.type.arc"),
+        Dimension::Ordinate(_) => t("cmd.d2g.type.ordinate"),
+        Dimension::LargeRadial(_) => t("cmd.d2g.type.large_radial"),
     }
 }
 
@@ -518,7 +517,7 @@ fn convert_radial(
 ) -> Result<Entity, String> {
     let radius = center.distance(&rim);
     if radius < 1e-9 {
-        return Err("半径为零".into());
+        return Err(t("cmd.d2g.err.zero_radius"));
     }
     // 文字锚点：原标注的尺寸线点（用户拖放处）。
     let text_pt = base.text_middle_point;
@@ -598,7 +597,7 @@ fn convert_arclen(
 ) -> Result<Option<Entity>, String> {
     let radius = center.distance(&first_ext);
     if radius < 1e-9 {
-        return Err("弧长标注半径为零".into());
+        return Err(t("cmd.d2g.err.arc_zero_radius"));
     }
     let def = base.definition_point;
     let d_def = def.distance(&center);
@@ -624,7 +623,7 @@ fn convert_arclen(
     arc.common.layer = "10引导线层".into();
     let handle = scratch
         .add_entity(Entity::Arc(arc))
-        .map_err(|e| format!("临时引导弧创建失败: {e:?}"))?;
+        .map_err(|e| t_fmt("cmd.d2g.err.temp_arc_block", &[("e", &format!("{e:?}"))]))?;
     let json = gs::apply_arclen(c, &scratch, handle, &params)?;
     let _ = json;
     let _ = second_ext;
@@ -677,7 +676,7 @@ fn convert_one(
                 radius = m;
             }
             if radius < 1e-9 {
-                return Err("半径为零".into());
+                return Err(t("cmd.d2g.err.zero_radius"));
             }
             convert_radial(c, doc, base, r.angle_vertex, rim, false, &style).map(Some)
         }
@@ -687,7 +686,7 @@ fn convert_one(
             let mid = (a + b) * 0.5;
             let dist_ab = a.distance(&b);
             if dist_ab < 1e-9 {
-                return Err("直径两点重合".into());
+                return Err(t("cmd.d2g.err.diameter_coincident"));
             }
             // 两种常见写法：
             //  ① 宿主画法：两点 = 圆周上的一对对径点（圆心 = 中点）
@@ -753,7 +752,7 @@ fn convert_one(
         }
         Dimension::Arc(a) => {
             if a.center_point.distance(&a.first_extension_point) < 1e-9 {
-                return Err("弧长标注尺寸无效（可能来自旧文件解析）".into());
+                return Err(t("cmd.d2g.err.arc_invalid"));
             }
             let start = if a.arc_start_parameter.is_finite() {
                 a.arc_start_parameter
@@ -778,8 +777,8 @@ fn convert_one(
                 end,
             )
         }
-        Dimension::Ordinate(_) => Err("坐标标注本期不转换（OCSM 无对应构件）".into()),
-        Dimension::LargeRadial(_) => Err("折弯半径本期不转换（OCSM 无对应构件）".into()),
+        Dimension::Ordinate(_) => Err(t("cmd.d2g.err.ordinate_unsupported")),
+        Dimension::LargeRadial(_) => Err(t("cmd.d2g.err.large_radial_unsupported")),
     }
 }
 
@@ -848,8 +847,8 @@ fn sync_collected_blocks(scratch: &mut Doc, collector: &CollectSender) {
 fn selection_note(e: &Entity) -> Option<String> {
     match e {
         Entity::Dimension(_) | Entity::Leader(_) => None,
-        Entity::MultiLeader(_) => Some("多重引线（本期不转）".to_string()),
-        other => Some(format!("非标注对象（{}）", entity_kind(other))),
+        Entity::MultiLeader(_) => Some(t("cmd.d2g.skip.multileader")),
+        other => Some(t_fmt("cmd.d2g.skip.non_dimension", &[("kind", &entity_kind(other))])),
     }
 }
 
@@ -929,7 +928,7 @@ fn convert_leader(
         .map(|v| [v.x, v.y, v.z])
         .collect();
     if vs.len() < 3 {
-        return Err("顶点不足（需 箭头点→拐点→肩线末端）".into());
+        return Err(t("cmd.d2g.err.leader_vertices"));
     }
     let p_tip = vs[0];
     let p0 = vs[vs.len() - 2];
@@ -938,7 +937,7 @@ fn convert_leader(
     // 文字行数判据：1~2 行转（0 行 = 空文字骨架），≥3 行跳过。
     let lines = ann_text.map(mtext_lines).unwrap_or_default();
     if lines.len() > 2 {
-        return Err(format!("文字 {} 行（>2 行不转换）", lines.len()));
+        return Err(t_fmt("cmd.d2g.err.text_lines", &[("n", &lines.len().to_string())]));
     }
     let upper = lines.first().cloned().unwrap_or_default();
     let lower = lines.get(1).cloned().unwrap_or_default();
@@ -960,7 +959,7 @@ fn convert_leader(
         name: block_name.clone(),
         entities: parts.members.clone(),
     })
-    .map_err(|e| format!("建块失败：{e}"))?;
+    .map_err(|e| t_fmt("cmd.d2g.err.block_create", &[("e", &e.to_string())]))?;
 
     let mut ins = gs::leader_insert(&block_name, p0);
     {
@@ -977,7 +976,7 @@ fn convert_leader(
         }
     }
     c.request(PluginRequest::AddEntities(vec![Entity::Insert(ins)]))
-        .map_err(|e| format!("加实体失败：{e}"))?;
+        .map_err(|e| t_fmt("cmd.d2g.err.add_entity", &[("e", &e.to_string())]))?;
     Ok(())
 }
 
@@ -996,7 +995,10 @@ pub(crate) fn plan(doc: &Doc, selected: &[Handle]) -> Dim2GbPlan {
                         plan.skipped.push(format!("handle {} {}", h.value(), note));
                     }
                 }
-                None => plan.skipped.push(format!("handle {} 不存在", h.value())),
+                None => plan.skipped.push(t_fmt(
+                    "cmd.d2g.skip.handle_missing",
+                    &[("h", &h.value().to_string())],
+                )),
             }
         }
     }
@@ -1045,7 +1047,13 @@ pub(crate) fn plan(doc: &Doc, selected: &[Handle]) -> Dim2GbPlan {
                         _ => true,
                     };
                     if !ok {
-                        return Err(format!("几何自检未通过（原 {before:.4} → 新 {after:.4}）"));
+                        return Err(t_fmt(
+                            "cmd.d2g.err.geometry_check",
+                            &[
+                                ("before", &format!("{before:.4}")),
+                                ("after", &format!("{after:.4}")),
+                            ],
+                        ));
                     }
                 }
             }
@@ -1062,7 +1070,7 @@ pub(crate) fn plan(doc: &Doc, selected: &[Handle]) -> Dim2GbPlan {
                 plan.removes.push(handle);
                 plan.converted += 1;
             }
-            Err(e) => plan.skipped.push(format!("{label}（{e}）")),
+            Err(e) => plan.skipped.push(t_fmt("cmd.d2g.skip.dim", &[("label", &label), ("e", &e)])),
         }
     }
 
@@ -1099,7 +1107,7 @@ pub(crate) fn plan(doc: &Doc, selected: &[Handle]) -> Dim2GbPlan {
                 plan.converted += 1;
                 plan.leaders += 1;
             }
-            Err(e) => plan.skipped.push(format!("引线标注（{e}）")),
+            Err(e) => plan.skipped.push(t_fmt("cmd.d2g.skip.leader", &[("e", &e)])),
         }
     }
 
@@ -1128,7 +1136,7 @@ pub(crate) fn plan(doc: &Doc, selected: &[Handle]) -> Dim2GbPlan {
         plan.seen += 1;
         if !(assoc.radius.is_finite() && assoc.radius > 0.0) {
             plan.skipped
-                .push("圆心标记（记录里的半径无效，已跳过）".to_string());
+                .push(t("cmd.d2g.skip.mark_bad_radius"));
             continue;
         }
         let center = to_arr(assoc.center);
@@ -1184,19 +1192,19 @@ fn center_mark_carrier(center: Vector3, radius: f64, source: Handle) -> Entity {
     Entity::Line(line)
 }
 
-fn entity_kind(e: &Entity) -> &'static str {
+fn entity_kind(e: &Entity) -> String {
     match e {
-        Entity::Point(_) => "点",
-        Entity::Line(_) => "直线",
-        Entity::Circle(_) => "圆",
-        Entity::Arc(_) => "圆弧",
-        Entity::Polyline(_) | Entity::LwPolyline(_) => "多段线",
-        Entity::Text(_) => "文字",
-        Entity::MText(_) => "多行文字",
-        Entity::Insert(_) => "块参照",
-        Entity::Dimension(_) => "标注",
-        Entity::Solid(_) => "实体填充",
-        _ => "其它",
+        Entity::Point(_) => t("cmd.d2g.ent.point"),
+        Entity::Line(_) => t("cmd.d2g.ent.line"),
+        Entity::Circle(_) => t("cmd.d2g.ent.circle"),
+        Entity::Arc(_) => t("cmd.d2g.ent.arc"),
+        Entity::Polyline(_) | Entity::LwPolyline(_) => t("cmd.d2g.ent.polyline"),
+        Entity::Text(_) => t("cmd.d2g.ent.text"),
+        Entity::MText(_) => t("cmd.d2g.ent.mtext"),
+        Entity::Insert(_) => t("cmd.d2g.ent.insert"),
+        Entity::Dimension(_) => t("cmd.d2g.ent.dimension"),
+        Entity::Solid(_) => t("cmd.d2g.ent.solid"),
+        _ => t("cmd.d2g.ent.other"),
     }
 }
 
@@ -1207,6 +1215,13 @@ mod tests {
         Circle, DimensionAligned, DimensionAngular2Ln, DimensionArc, DimensionDiameter,
         DimensionLinear, DimensionOrdinate, DimensionRadius, MText,
     };
+
+    /// 语言是进程级全局：断言中文文案的用例共用锁并钉死 zh。
+    fn zh_guard() -> std::sync::MutexGuard<'static, ()> {
+        let g = crate::global_state_test_lock();
+        crate::i18n::set_lang(crate::i18n::Lang::Zh);
+        g
+    }
 
     fn doc_with(entities: Vec<Entity>) -> Doc {
         let mut doc = Doc::new();
@@ -1575,6 +1590,7 @@ mod tests {
     /// 半径存在 XDATA（`OCS_CENTERMARK`），长度 = `直径 + n×6`（与 `ZX` 一致）。
     #[test]
     fn plan_converts_smart_center_mark_to_centerlines() {
+        let _g = zh_guard();
         let mut doc = Doc::default();
         let center = Vector3::new(50.0, 50.0, 0.0);
         let carrier = doc.add_entity(center_mark_carrier(center, 10.0, Handle::NULL)).unwrap();
@@ -1637,6 +1653,7 @@ mod tests {
     /// 半径无效的关联记录：跳过并报原因，不删东西。
     #[test]
     fn plan_skips_center_mark_with_invalid_radius() {
+        let _g = zh_guard();
         let mut doc = Doc::default();
         let carrier = doc
             .add_entity(center_mark_carrier(Vector3::ZERO, 0.0, Handle::NULL))
@@ -1652,6 +1669,7 @@ mod tests {
     /// 不支持的类型：跳过并给出原因，不阻断整批。
     #[test]
     fn plan_skips_unsupported_and_reports() {
+        let _g = zh_guard();
         let mut o = DimensionOrdinate::new(
             Vector3::new(5.0, 0.0, 0.0),
             Vector3::new(5.0, 10.0, 0.0),
@@ -1717,6 +1735,7 @@ mod tests {
     /// 选中非标注对象 → 记入跳过报告。
     #[test]
     fn plan_reports_non_dimension_selection() {
+        let _g = zh_guard();
         let doc = doc_with(vec![Entity::MText(MText::new())]);
         let h = doc.entities().next().unwrap().common().handle;
         let plan = plan(&doc, &[h]);
@@ -2259,6 +2278,7 @@ mod tests {
     /// 1 行文字 → 转成 OCSM 引线标注（上侧），删原 Leader + MText。
     #[test]
     fn plan_converts_one_line_leader() {
+        let _g = zh_guard();
         let (doc, lh, mh) = leader_doc(Some("通孔"));
         let plan = plan(&doc, &[]);
         assert_eq!(plan.converted, 1, "转换成功: {:?}", plan.skipped);
@@ -2287,6 +2307,7 @@ mod tests {
     /// 2 行 → 上/下侧各一行；3 行 → 跳过并报告。
     #[test]
     fn plan_leader_two_lines_and_three_line_skip() {
+        let _g = zh_guard();
         let (doc2, _, _) = leader_doc(Some("通孔\\P深10"));
         let plan2 = plan(&doc2, &[]);
         assert_eq!(plan2.converted, 1, "{:?}", plan2.skipped);
@@ -2370,6 +2391,7 @@ mod tests {
     /// 多重引线明确不转（选中时报告原因）。
     #[test]
     fn plan_reports_multileader_as_unsupported() {
+        let _g = zh_guard();
         let mut doc = Doc::new();
         let mh = doc
             .add_entity(Entity::MultiLeader(acadrust::entities::MultiLeader::new()))
@@ -2383,4 +2405,77 @@ mod tests {
         );
     }
 
+    /// D2G 回执/跳过原因/实体名随语言切换，关键数据（数量、handle）原样保留。
+    #[test]
+    fn dim2gb_messages_switch_language_keeping_data() {
+        let _g = zh_guard();
+        crate::i18n::clear_missing_keys();
+
+        let mut o = DimensionOrdinate::new(
+            Vector3::new(5.0, 0.0, 0.0),
+            Vector3::new(5.0, 10.0, 0.0),
+            true,
+        );
+        o.base.style_name = "Standard".into();
+        let mut l = DimensionLinear::horizontal(
+            Vector3::new(0.0, 0.0, 0.0),
+            Vector3::new(10.0, 0.0, 0.0),
+        );
+        l.definition_point = Vector3::new(5.0, 5.0, 0.0);
+        l.base.actual_measurement = 10.0;
+        l.base.style_name = "Standard".into();
+        let doc = doc_with(vec![
+            Entity::Dimension(Dimension::Ordinate(o)),
+            Entity::Dimension(Dimension::Linear(l)),
+        ]);
+        let plan_zh = plan(&doc, &[]);
+        assert_eq!(plan_zh.seen, 2);
+        assert_eq!(plan_zh.converted, 1);
+        assert!(plan_zh.skipped[0].contains("坐标标注"), "{:?}", plan_zh.skipped);
+        let zh_report = plan_zh.report();
+        assert!(zh_report.contains("OCSMDIM2GB") && zh_report.contains("2") && zh_report.contains("1"), "{zh_report}");
+        assert!(zh_report.contains("跳过") && zh_report.contains("Ctrl+Z"), "{zh_report}");
+        assert_eq!(entity_kind(&Entity::Point(acadrust::entities::Point::default())), "点");
+        assert_eq!(entity_kind(&Entity::Circle(Circle::from_center_radius(Vector3::ZERO, 1.0))), "圆");
+        assert_eq!(
+            t("cmd.d2g.err.text_lines"),
+            "文字 {n} 行（>2 行不转换）",
+            "占位符原样存 catalog"
+        );
+
+        crate::i18n::set_lang(crate::i18n::Lang::En);
+        let mut o = DimensionOrdinate::new(
+            Vector3::new(5.0, 0.0, 0.0),
+            Vector3::new(5.0, 10.0, 0.0),
+            true,
+        );
+        o.base.style_name = "Standard".into();
+        let mut l = DimensionLinear::horizontal(
+            Vector3::new(0.0, 0.0, 0.0),
+            Vector3::new(10.0, 0.0, 0.0),
+        );
+        l.definition_point = Vector3::new(5.0, 5.0, 0.0);
+        l.base.actual_measurement = 10.0;
+        l.base.style_name = "Standard".into();
+        let doc = doc_with(vec![
+            Entity::Dimension(Dimension::Ordinate(o)),
+            Entity::Dimension(Dimension::Linear(l)),
+        ]);
+        let plan_en = plan(&doc, &[]);
+        assert!(plan_en.skipped[0].contains("ordinate dimension"), "{:?}", plan_en.skipped);
+        assert!(!plan_en.skipped[0].contains("坐标"), "{:?}", plan_en.skipped);
+        let en_report = plan_en.report();
+        assert!(en_report.contains("OCSMDIM2GB") && en_report.contains("2") && en_report.contains("1"), "{en_report}");
+        assert!(en_report.contains("skipped") && en_report.contains("Ctrl+Z"), "{en_report}");
+        assert_ne!(en_report, zh_report);
+        assert_eq!(entity_kind(&Entity::Point(acadrust::entities::Point::default())), "point");
+        assert_eq!(entity_kind(&Entity::Circle(Circle::from_center_radius(Vector3::ZERO, 1.0))), "circle");
+        assert_eq!(
+            t_fmt("cmd.d2g.err.text_lines", &[("n", "3")]),
+            "text has 3 lines (>2 lines not converted)"
+        );
+
+        assert!(crate::i18n::missing_keys().is_empty(), "缺词条：{:?}", crate::i18n::missing_keys());
+        crate::i18n::set_lang_auto();
+    }
 }

@@ -263,14 +263,19 @@ fn trim_num(v: f64) -> String {
 /// 六角头螺栓（`GB/T 5782-2016`；`full_thread=true` 时按全螺纹 `GB/T 5783` 画）。
 pub fn hex_bolt(d: f64, l: f64, full_thread: bool) -> Result<GenPart, String> {
     let Some(row) = bolt_row(d) else {
-        return Err(format!("GB/T 5782 数据表里没有 M{}", trim_num(d)));
+        return Err(crate::i18n::t_fmt(
+            "cmd.parts.err.no_m",
+            &[("table", "GB/T 5782"), ("d", &trim_num(d))],
+        ));
     };
     if l < row.l_min - 1e-9 || l > row.l_max + 1e-9 {
-        return Err(format!(
-            "M{} 的长度应在 {}~{}（标准范围）",
-            trim_num(d),
-            trim_num(row.l_min),
-            trim_num(row.l_max)
+        return Err(crate::i18n::t_fmt(
+            "cmd.parts.err.len_range_std",
+            &[
+                ("d", &trim_num(d)),
+                ("lo", &trim_num(row.l_min)),
+                ("hi", &trim_num(row.l_max)),
+            ],
         ));
     }
     let (s, k) = (row.s, row.k);
@@ -338,7 +343,10 @@ pub fn hex_bolt(d: f64, l: f64, full_thread: bool) -> Result<GenPart, String> {
 /// 1 型六角螺母（`GB/T 6170-2015`）主视图：底面 y=0、顶面 y=m，对边宽 s。
 pub fn hex_nut(d: f64) -> Result<GenPart, String> {
     let Some(row) = nut_row(d) else {
-        return Err(format!("GB/T 6170 数据表里没有 M{}", trim_num(d)));
+        return Err(crate::i18n::t_fmt(
+            "cmd.parts.err.no_m",
+            &[("table", "GB/T 6170"), ("d", &trim_num(d))],
+        ));
     };
     let (s, m) = (row.s, row.m);
     let d1 = minor_dia(d, row.pitch);
@@ -539,14 +547,19 @@ pub fn chamfer_run(s: f64, e: f64) -> f64 {
 /// - **不含任何尺寸标注**（用户要求：调用零件时不显示尺寸）
 pub fn hex_bolt_c(d: f64, l: f64, view: BoltView) -> Result<GenPart, String> {
     let Some(row) = hex_bolt_c_row(d) else {
-        return Err(format!("GB/T 5780 数据表里没有 M{}", trim_num(d)));
+        return Err(crate::i18n::t_fmt(
+            "cmd.parts.err.no_m",
+            &[("table", "GB/T 5780"), ("d", &trim_num(d))],
+        ));
     };
     if l < row.l_min - 1e-9 || l > row.l_max + 1e-9 {
-        return Err(format!(
-            "M{} 的长度应在 {}~{} 之间",
-            trim_num(d),
-            trim_num(row.l_min),
-            trim_num(row.l_max)
+        return Err(crate::i18n::t_fmt(
+            "cmd.parts.err.len_range",
+            &[
+                ("d", &trim_num(d)),
+                ("lo", &trim_num(row.l_min)),
+                ("hi", &trim_num(row.l_max)),
+            ],
         ));
     }
     let b = thread_length_c(row, l);
@@ -566,14 +579,19 @@ pub fn hex_bolt_c(d: f64, l: f64, view: BoltView) -> Result<GenPart, String> {
 /// A/B 级标准图的头部垫圈面 dw×c 未画（按用户指示，dw/c 仅入表备查）。
 pub fn hex_bolt_ab(d: f64, l: f64, view: BoltView) -> Result<GenPart, String> {
     let Some(row) = hex_bolt_ab_row(d) else {
-        return Err(format!("GB/T 5782 数据表里没有 M{}", trim_num(d)));
+        return Err(crate::i18n::t_fmt(
+            "cmd.parts.err.no_m",
+            &[("table", "GB/T 5782"), ("d", &trim_num(d))],
+        ));
     };
     if l < row.l_min - 1e-9 || l > row.l_max + 1e-9 {
-        return Err(format!(
-            "M{} 的长度应在 {}~{} 之间（GB/T 5782 A/B级）",
-            trim_num(d),
-            trim_num(row.l_min),
-            trim_num(row.l_max)
+        return Err(crate::i18n::t_fmt(
+            "cmd.parts.err.len_range_ab",
+            &[
+                ("d", &trim_num(d)),
+                ("lo", &trim_num(row.l_min)),
+                ("hi", &trim_num(row.l_max)),
+            ],
         ));
     }
     let b = thread_length_c(row, l);
@@ -1179,13 +1197,19 @@ pub fn generate(family: &str, d: f64, l: f64, view: &str) -> Result<GenPart, Str
         ("hex_bolt_c", "main") => hex_bolt_c(d, l, BoltView::Main),
         ("hex_bolt_c", "top") => hex_bolt_c(d, l, BoltView::Top),
         ("hex_bolt_c", "end") => hex_bolt_c(d, l, BoltView::End),
-        ("hex_bolt_c", other) => Err(format!("hex_bolt_c 没有视图 {other}")),
+        ("hex_bolt_c", other) => Err(crate::i18n::t_fmt(
+            "cmd.parts.err.view_absent_bare",
+            &[("family", "hex_bolt_c"), ("view", other)],
+        )),
         // GB/T 5782-2016 A/B级：画法同 C 级（用户确认直接复制），数据表不同
         ("hex_bolt_ab", "main") => hex_bolt_ab(d, l, BoltView::Main),
         ("hex_bolt_ab", "top") => hex_bolt_ab(d, l, BoltView::Top),
         ("hex_bolt_ab", "end") => hex_bolt_ab(d, l, BoltView::End),
-        ("hex_bolt_ab", other) => Err(format!("hex_bolt_ab 没有视图 {other}")),
-        (other, _) => Err(format!("零件族 {other} 尚未实现")),
+        ("hex_bolt_ab", other) => Err(crate::i18n::t_fmt(
+            "cmd.parts.err.view_absent_bare",
+            &[("family", "hex_bolt_ab"), ("view", other)],
+        )),
+        (other, _) => Err(crate::i18n::t_fmt("cmd.parts.err.family_todo", &[("other", other)])),
     }
 }
 
@@ -1213,7 +1237,7 @@ pub fn generate_requested_params(
     if crate::detail::is_detail(family) {
         return crate::detail::generate_params(family, d, params, view);
     }
-    let l = l.ok_or_else(|| "缺少参数 l".to_string())?;
+    let l = l.ok_or_else(|| crate::i18n::t_fmt("cmd.parts.err.missing_param", &[("name", "l")]))?;
     generate(family, d, l, view)
 }
 
@@ -1232,8 +1256,14 @@ pub fn preview_svg(query: &str) -> Result<String, String> {
             .map(|(_, v)| v.to_string())
     };
     let family = get("family").unwrap_or_else(|| "hex_bolt_c".to_string());
-    let d: f64 = get("d").ok_or("缺少参数 d")?.parse().map_err(|_| "d 不是数字".to_string())?;
-    let l: f64 = get("l").ok_or("缺少参数 l")?.parse().map_err(|_| "l 不是数字".to_string())?;
+    let d: f64 = get("d")
+        .ok_or_else(|| crate::i18n::t_fmt("cmd.parts.err.missing_param", &[("name", "d")]))?
+        .parse()
+        .map_err(|_| crate::i18n::t_fmt("cmd.parts.err.param_not_number", &[("name", "d")]))?;
+    let l: f64 = get("l")
+        .ok_or_else(|| crate::i18n::t_fmt("cmd.parts.err.missing_param", &[("name", "l")]))?
+        .parse()
+        .map_err(|_| crate::i18n::t_fmt("cmd.parts.err.param_not_number", &[("name", "l")]))?;
     let view = get("view").unwrap_or_else(|| "main".to_string());
     let part = generate(&family, d, l, &view)?;
     let title = format!("{} {} {}", part.meta.code, part.meta.name, part.meta.spec);
@@ -1505,6 +1535,13 @@ mod svg_dump {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 语言是进程级全局：断言中文文案的用例共用锁并钉死 zh。
+    fn zh_guard() -> std::sync::MutexGuard<'static, ()> {
+        let g = crate::global_state_test_lock();
+        crate::i18n::set_lang(crate::i18n::Lang::Zh);
+        g
+    }
     /// 剖面线裁剪（预览用）：直线与闭合多边形的偶数规则区间。
     #[test]
     fn hatch_preview_clip_line_to_polygon() {
@@ -2255,6 +2292,44 @@ mod tests {
         let mut weird = serde_json::json!({ "name": "零件库" });
         insert_tree_leaf(&mut weird, "零件库/挡圈/X", "ring_893", true);
     }
+
+    /// PART/XL 报错随语言切换，关键数据（M8/表号/视图名）原样保留。
+    #[test]
+    fn parts_messages_switch_language_keeping_data() {
+        let _g = zh_guard();
+        crate::i18n::clear_missing_keys();
+
+        let err = hex_bolt(8.0, 5.0, false).unwrap_err();
+        assert!(err.contains("M8") && err.contains("长度") && err.contains("30"), "{err}");
+        let err = hex_bolt_c(8.0, 5.0, BoltView::Main).unwrap_err();
+        assert!(err.contains("M8") && err.contains("长度") && err.contains("80"), "{err}");
+        let err = generate("hex_bolt_c", 8.0, 30.0, "bad").unwrap_err();
+        assert!(err.contains("hex_bolt_c") && err.contains("bad") && err.contains("视图"), "{err}");
+        let err = preview_svg("family=hex_bolt_c&d=8").unwrap_err();
+        assert!(err.contains("l"), "{err}");
+        let err = preview_svg("family=hex_bolt_c&d=x&l=30").unwrap_err();
+        assert!(err.contains("d") && err.contains("数字"), "{err}");
+        let err = crate::partgen_kit::check_length(20.0, 200.0, 8.0, 5.0).unwrap_err();
+        assert!(err.contains("M8") && err.contains("20") && err.contains("200"), "{err}");
+
+        crate::i18n::set_lang(crate::i18n::Lang::En);
+        let err = hex_bolt(8.0, 5.0, false).unwrap_err();
+        assert!(err.contains("M8") && err.contains("length") && err.contains("30"), "{err}");
+        assert!(!err.contains("长度"), "{err}");
+        let err = hex_bolt_c(8.0, 5.0, BoltView::Main).unwrap_err();
+        assert!(err.contains("M8") && err.contains("between") && err.contains("80"), "{err}");
+        let err = generate("hex_bolt_c", 8.0, 30.0, "bad").unwrap_err();
+        assert!(err.contains("hex_bolt_c") && err.contains("bad") && err.contains("does not provide view"), "{err}");
+        let err = preview_svg("family=hex_bolt_c&d=8").unwrap_err();
+        assert!(err.contains("missing parameter l"), "{err}");
+        let err = preview_svg("family=hex_bolt_c&d=x&l=30").unwrap_err();
+        assert!(err.contains("d") && err.contains("not a number"), "{err}");
+        let err = crate::partgen_kit::check_length(20.0, 200.0, 8.0, 5.0).unwrap_err();
+        assert!(err.contains("M8") && err.contains("20") && err.contains("200") && err.contains("range"), "{err}");
+
+        assert!(crate::i18n::missing_keys().is_empty(), "缺词条：{:?}", crate::i18n::missing_keys());
+        crate::i18n::set_lang_auto();
+    }
 }
 
 #[cfg(test)]
@@ -2485,4 +2560,5 @@ mod json_dump {
         std::fs::write(f.join("mine.json"), out).unwrap();
         println!("已写出 /tmp/partgen/mine.json");
     }
+
 }

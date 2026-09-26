@@ -3519,7 +3519,8 @@ fn do_apply(
         url: String,
     }
     let req: Req =
-        serde_json::from_slice(body).map_err(|e| format!("请求 JSON 无效: {e}"))?;
+        serde_json::from_slice(body)
+        .map_err(|e| crate::i18n::t_fmt("cmd.req.err.bad_json", &[("e", &e.to_string())]))?;
     let posted = handle_hex(&req.handle)?;
 
     // “仅应用”（刷新参数记录 / 写 PE_URL）也改文档 → 开事务，结束时 commit。
@@ -3636,7 +3637,8 @@ fn do_apply_inner(
         url: String,
     }
     let req: Req =
-        serde_json::from_slice(body).map_err(|e| format!("请求 JSON 无效: {e}"))?;
+        serde_json::from_slice(body)
+        .map_err(|e| crate::i18n::t_fmt("cmd.req.err.bad_json", &[("e", &e.to_string())]))?;
     let handle = handle_hex(&req.handle)?;
     let params = GuideParams::from_url(&req.url).ok_or_else(|| format!("URL 无法解析: {}", req.url))?;
 
@@ -4716,7 +4718,8 @@ fn apply_gear_export(
     fn d_view() -> String {
         "section".to_string()
     }
-    let req: Req = serde_json::from_slice(body).map_err(|e| format!("请求 JSON 无效: {e}"))?;
+    let req: Req = serde_json::from_slice(body)
+        .map_err(|e| crate::i18n::t_fmt("cmd.req.err.bad_json", &[("e", &e.to_string())]))?;
     let kind = match req.kind.as_deref() {
         Some(s) => crate::gear::GearKind::parse(s)
             .ok_or_else(|| format!("齿轮种类无法识别：`{s}`（可用 internal|内齿轮、external|外齿轮）。"))?,
@@ -5186,7 +5189,7 @@ fn api_hole_preview(body: &[u8]) -> (u16, &'static str, String) {
             return (
                 400,
                 json,
-                serde_json::json!({"ok": false, "error": format!("请求 JSON 无效: {e}")})
+                serde_json::json!({"ok": false, "error": crate::i18n::t_fmt("cmd.req.err.bad_json", &[("e", &e.to_string())])})
                     .to_string(),
             )
         }
@@ -5230,7 +5233,8 @@ pub(crate) fn apply_hole_export(
     body: &[u8],
 ) -> Result<String, String> {
     let model: crate::hole::HoleModel =
-        serde_json::from_slice(body).map_err(|e| format!("请求 JSON 无效: {e}"))?;
+        serde_json::from_slice(body)
+        .map_err(|e| crate::i18n::t_fmt("cmd.req.err.bad_json", &[("e", &e.to_string())]))?;
     let doc = snapshot(sender)?;
     crate::hole::ocsm_ready(&doc)?;
     let built = crate::hole::build(&model)?;
@@ -5354,7 +5358,7 @@ fn api_spline_preview(body: &[u8]) -> (u16, &'static str, String) {
             return (
                 400,
                 json,
-                serde_json::json!({"ok": false, "error": format!("请求 JSON 无效: {e}")})
+                serde_json::json!({"ok": false, "error": crate::i18n::t_fmt("cmd.req.err.bad_json", &[("e", &e.to_string())])})
                     .to_string(),
             )
         }
@@ -5382,7 +5386,8 @@ pub(crate) fn apply_spline_export(
     body: &[u8],
 ) -> Result<String, String> {
     let model: crate::spline_gui::SplineTableModel =
-        serde_json::from_slice(body).map_err(|e| format!("请求 JSON 无效: {e}"))?;
+        serde_json::from_slice(body)
+        .map_err(|e| crate::i18n::t_fmt("cmd.req.err.bad_json", &[("e", &e.to_string())]))?;
     // 先在内存里算一遍：参数/表外/非系列 Dp 都在这拦下来（不写半个块）。
     let echo = model.echo_note()?;
     let input = model.to_input()?;
@@ -5468,7 +5473,7 @@ fn card_model_value(
     body: &[u8],
 ) -> Result<(serde_json::Value, &'static crate::card::CardTypeSpec), String> {
     let v: serde_json::Value = serde_json::from_slice(body)
-        .map_err(|e| format!("请求 JSON 无效: {e}"))?;
+        .map_err(|e| crate::i18n::t_fmt("cmd.req.err.bad_json", &[("e", &e.to_string())]))?;
     let card_id = v.get("card").and_then(|c| c.as_str()).unwrap_or("");
     let card = crate::card::card_type_by_token(card_id).ok_or_else(|| {
         format!(
@@ -5938,7 +5943,8 @@ fn apply_part_export(
     fn default_view() -> String {
         "main".to_string()
     }
-    let req: Req = serde_json::from_slice(body).map_err(|e| format!("请求 JSON 无效: {e}"))?;
+    let req: Req = serde_json::from_slice(body)
+        .map_err(|e| crate::i18n::t_fmt("cmd.req.err.bad_json", &[("e", &e.to_string())]))?;
     let mut params = crate::detail::DetailParams::from_b1(req.b1);
     if let Some(spec) = &req.spec {
         params.set_spec(spec);
@@ -6056,7 +6062,8 @@ pub(crate) fn apply_part_pick(
     fn default_view() -> String {
         "main".to_string()
     }
-    let req: Req = serde_json::from_slice(body).map_err(|e| format!("请求 JSON 无效: {e}"))?;
+    let req: Req = serde_json::from_slice(body)
+        .map_err(|e| crate::i18n::t_fmt("cmd.req.err.bad_json", &[("e", &e.to_string())]))?;
     let mut params = crate::detail::DetailParams::from_b1(req.b1);
     if let Some(spec) = &req.spec {
         params.set_spec(spec);
@@ -6083,7 +6090,7 @@ pub(crate) fn apply_part_pick(
     };
 
     // 插入会建块 + 落 INSERT 实体 → 开事务，结束时 commit。
-    begin_undo(sender, "零件插入")?;
+    begin_undo(sender, &crate::i18n::t("cmd.parts.undo_insert"))?;
     // 块定义幂等：已存在就不再建（同名块重复插入直接复用）
     let exists = snapshot(sender)?
         .block_records
@@ -6155,7 +6162,14 @@ pub(crate) fn apply_part_pick(
 
     Ok(serde_json::json!({
         "ok": true,
-        "message": format!("已插入 {} {}（{}）", part.meta.name, part.meta.spec, part.meta.code),
+        "message": crate::i18n::t_fmt(
+            "cmd.parts.inserted_item",
+            &[
+                ("name", &part.meta.name),
+                ("spec", &part.meta.spec),
+                ("code", &part.meta.code),
+            ],
+        ),
         "block": block,
         "insert_handle": handle.map(fmt_handle),
         "at": at,
@@ -6189,16 +6203,27 @@ fn apply_roughness(
         #[serde(default)]
         values: std::collections::HashMap<String, String>,
     }
-    let req: Req = serde_json::from_slice(body).map_err(|e| format!("请求 JSON 无效: {e}"))?;
+    let req: Req = serde_json::from_slice(body)
+        .map_err(|e| crate::i18n::t_fmt("cmd.req.err.bad_json", &[("e", &e.to_string())]))?;
     let base = req.base.to_ascii_uppercase();
     let extra = req.extra.to_ascii_uppercase();
     let bi = match base.as_str() {
         "C1" => 0, "C2" => 1, "C3" => 2, "C4" => 3,
-        _ => return Err(format!("无效的基础体 {base}（应为 C1..C4）")),
+        _ => {
+            return Err(crate::i18n::t_fmt(
+                "cmd.rough.err.bad_base",
+                &[("base", &base)],
+            ))
+        }
     };
     let ri = match extra.as_str() {
         "R1" => 0, "R2" => 1, "R3" => 2, "R4" => 3, "R5" => 4,
-        _ => return Err(format!("无效的附加区 {extra}（应为 R1..R5）")),
+        _ => {
+            return Err(crate::i18n::t_fmt(
+                "cmd.rough.err.bad_extra",
+                &[("extra", &extra)],
+            ))
+        }
     };
     // C2 列（以不去除材料的方法获得）：P 强制空白且不生成 P 属性（对照参考）。
     let has_p = bi != 1;
@@ -6206,7 +6231,7 @@ fn apply_roughness(
 
     let doc = snapshot(sender)?;
     // 符号会新建块 + 实体、并可能补齐样式/图层 → 开事务，结束时 commit。
-    begin_undo(sender, "表面粗糙度")?;
+    begin_undo(sender, &crate::i18n::t("cmd.rough.undo_insert"))?;
     // 幂等 ensure：文档缺 OCSM_GB 样式 / 8符号标注层时补齐（新图纸直接 CC
     // 时宿主渲染 ATTDEF 会 fallback 未知字体、图层色错乱——用户实测）。
     if !doc
@@ -11432,6 +11457,8 @@ mod integration {
 
     #[test]
     fn http_server_rough_apply_end_to_end() {
+        let _g = crate::global_state_test_lock();
+        crate::i18n::set_lang(crate::i18n::Lang::Zh);
         // POST /api/rough_apply：C4R5 全形态 → 块含 7 线/1 圆/1 SOLID/8 ATTDEF，
         // INSERT @ 坐标 + attributes；GET /rough.html 返回 GUI。
         let mock = std::sync::Arc::new(MockSender::new(acadrust::CadDocument::new()));

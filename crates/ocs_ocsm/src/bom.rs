@@ -25,6 +25,8 @@ use ocs_plugin_api::host::acadrust::xdata::{ExtendedDataRecord, XDataValue};
 use ocs_plugin_api::host::acadrust::{Entity, EntityType, Handle};
 use ocs_plugin_api::host::{HostApi, ImportFrameBlockRequest};
 
+use crate::i18n::{t, t_fmt};
+
 pub(crate) const XDATA_BOM: &str = "OCSM_BOM";
 /// 行块上的「数量锁」记录（用户手改数量后不应被同步覆盖）。
 pub(crate) const LOCK_APP: &str = "OCSM_BOMLOCK";
@@ -540,11 +542,9 @@ pub(crate) fn fill_bom(
     let head_dwg = dir.join("OCSM_BOMHEAD.dwg");
     let row_dwg = dir.join("OCSM_BOMROW.dwg");
     if !head_dwg.exists() || !row_dwg.exists() {
-        return Err(format!(
-            "OCSMBOM: 找不到明细表模板块（{} / {}）。请把 OCSM_BOMHEAD.dwg、OCSM_BOMROW.dwg \
-             放进插件目录 bom/（或设 OCSM_BOM_DIR）。",
-            head_dwg.display(),
-            row_dwg.display()
+        return Err(t_fmt(
+            "cmd.bom.err.template_missing",
+            &[("head", &head_dwg.display().to_string()), ("row", &row_dwg.display().to_string())],
         ));
     }
 
@@ -567,10 +567,13 @@ pub(crate) fn fill_bom(
         attdefs = sink.import_block(&row_dwg.to_string_lossy(), ROW_BLOCK)?;
     }
     if attdefs.len() != CELL_TAGS.len() {
-        return Err(format!(
-            "OCSMBOM: 行块 {ROW_BLOCK} 应有 {} 个 ATTDEF，实际 {} 个 → 模板不对。",
-            CELL_TAGS.len(),
-            attdefs.len()
+        return Err(t_fmt(
+            "cmd.bom.err.bad_attdefs",
+            &[
+                ("block", ROW_BLOCK),
+                ("expect", &CELL_TAGS.len().to_string()),
+                ("got", &attdefs.len().to_string()),
+            ],
         ));
     }
 
@@ -661,11 +664,13 @@ pub(crate) fn fill_bom(
                     }
                     // 压得太扁（可读性下降）→ 点名，建议加宽列/缩短文本
                     if f < wf0 * WARN_WIDTH_FACTOR {
-                        squeezed_hard.push(format!(
-                            "{}「{}」{:.0}%",
-                            ad.tag,
-                            values[idx],
-                            f / wf0 * 100.0
+                        squeezed_hard.push(t_fmt(
+                            "cmd.bom.squeezed_hard.item",
+                            &[
+                                ("tag", &ad.tag),
+                                ("value", &values[idx]),
+                                ("pct", &format!("{:.0}", f / wf0 * 100.0)),
+                            ],
                         ));
                     }
                     a.width_factor = f;
@@ -695,7 +700,7 @@ pub(crate) fn fill_bom(
     }
 
     // ⑤ 替换语义：一次 undo（删旧 + 建新），整体可 Ctrl+Z。
-    sink.push_undo("OCSM 明细表")?;
+    sink.push_undo(&t("cmd.bom.undo.table"))?;
     let removed = old.len();
     for h in old {
         sink.remove_entity(h)?;
@@ -739,7 +744,7 @@ pub(crate) fn layout(n_items: usize, per_col_rows: usize, cfg: &BomConfig) -> Re
         return Ok(vec![0]);
     }
     if cap_first == 0 {
-        return Err("图框/配置不对：首列连一行都放不下（检查 sheet_top / first_col_bottom）".into());
+        return Err(t("cmd.bom.err.layout_first_col"));
     }
     let mut cols = Vec::new();
     let mut left = n_items;
@@ -748,22 +753,23 @@ pub(crate) fn layout(n_items: usize, per_col_rows: usize, cfg: &BomConfig) -> Re
     left -= first;
     while left > 0 {
         if cap_cont == 0 {
-            return Err("图框/配置不对：续列连一行都放不下（检查 sheet_top / sheet_bottom）".into());
+            return Err(t("cmd.bom.err.layout_cont_col"));
         }
         let take = left.min(cap_cont);
         cols.push(take);
         left -= take;
     }
     if cols.len() > fit_cols {
-        return Err(format!(
-            "明细表需要 {} 列（共 {} 行：首列 {} 行/上限 {}，续列每列上限 {}），\
-             当前图幅只放得下 {} 列 → 请换更大图幅，或改用多页明细表。",
-            cols.len(),
-            n_items,
-            per_col_rows.max(1),
-            cap_first,
-            cap_cont,
-            fit_cols
+        return Err(t_fmt(
+            "cmd.bom.err.layout_columns",
+            &[
+                ("cols", &cols.len().to_string()),
+                ("rows", &n_items.to_string()),
+                ("first", &per_col_rows.max(1).to_string()),
+                ("cap_first", &cap_first.to_string()),
+                ("cap_cont", &cap_cont.to_string()),
+                ("fit", &fit_cols.to_string()),
+            ],
         ));
     }
     Ok(cols)
@@ -831,28 +837,27 @@ pub(crate) fn cmd_bom(host: &mut dyn HostApi, args: &str) {
                 .cols
                 .iter()
                 .enumerate()
-                .map(|(i, n)| format!("第{}列 {} 行", i + 1, n))
+                .map(|(i, n)| t_fmt("cmd.bom.col.desc", &[("col", &(i + 1).to_string()), ("n", &n.to_string())]))
                 .collect();
             let _ = &rep;
-            host.push_info(&format!(
-                "OCSMBOM: {} 件 → {} 列（{}）；旧表元 {} 个已替换（Ctrl+Z 可整体撤销）；\
-                 现有行里手改过的列与 BOMLOCK 数量锁已保留。",
-                rep.rows,
-                rep.cols.len(),
-                desc.join("、"),
-                rep.removed
+            host.push_info(&t_fmt(
+                "cmd.bom.info.built",
+                &[
+                    ("rows", &rep.rows.to_string()),
+                    ("cols", &rep.cols.len().to_string()),
+                    ("desc", &desc.join(&t("cmd.bom.sep"))),
+                    ("removed", &rep.removed.to_string()),
+                ],
             ));
             report_cell_fit(host, &rep);
             if items.iter().any(|it| it.spec.is_empty()) && !items.is_empty() {
-                host.push_info(
-                    "OCSMBOM: 提示——数量按「图中插入件数」统计，同一零件画在多个视图里会重复计数。",
-                );
+                host.push_info(&t("cmd.bom.info.count_hint"));
             }
             stamp_bom_links(host);
             if rep.untracked > 0 {
-                host.push_info(&format!(
-                    "OCSMBOM: 注意——图中有 {} 个 OCSM_ 零件块引用但没有 OCSM_PART 台账记录             （多为离线生成/早期版本的文件），它们不会进明细表。用 XL 重新放置，或后续用表格导入补录。",
-                    rep.untracked
+                host.push_info(&t_fmt(
+                    "cmd.bom.info.untracked",
+                    &[("n", &rep.untracked.to_string())],
                 ));
             }
         }
@@ -869,12 +874,12 @@ pub(crate) fn cmd_bom_sync(host: &mut dyn HostApi, _args: &str) {
     let rows = match crate::balloon_sync::plan_rows(&doc) {
         Ok(r) => r,
         Err(e) => {
-            host.push_error(&format!("OCSMBOMSYNC: {e}"));
+            host.push_error(&t_fmt("cmd.bom.err.sync_failed", &[("e", &e)]));
             return;
         }
     };
     if rows.is_empty() {
-        host.push_error("OCSMBOMSYNC: 没有可排的内容（图上没有序号球标，也没有零件台账）。");
+        host.push_error(&t("cmd.bom.err.sync_nothing"));
         return;
     }
     let per_col = 0; // 0 = 用配置默认（fill_bom 里 layout 的 per_col_rows）
@@ -883,25 +888,37 @@ pub(crate) fn cmd_bom_sync(host: &mut dyn HostApi, _args: &str) {
     match fill_bom(&mut HostSink(host), &doc, &rows, per_col) {
         Ok(rep) => {
             let nos: Vec<String> = rows.iter().map(|r| r.item_no.clone()).collect();
-            host.push_info(&format!(
-                "OCSMBOMSYNC: {} 行（序号 {}）→ {} 列；旧表元 {} 个已替换。",
-                rep.rows,
-                nos.join("、"),
-                rep.cols.len(),
-                rep.removed
+            host.push_info(&t_fmt(
+                "cmd.bom.info.sync",
+                &[
+                    ("rows", &rep.rows.to_string()),
+                    ("nos", &nos.join(&t("cmd.bom.sep"))),
+                    ("cols", &rep.cols.len().to_string()),
+                    ("removed", &rep.removed.to_string()),
+                ],
             ));
             report_cell_fit(host, &rep);
             // 锁定/保留提示（不静默：用户要知道哪些行没被重算）
             let locked: Vec<String> = rows
                 .iter()
                 .filter(|r| r.lock_qty.is_some())
-                .map(|r| format!("{}（数量 {}）", r.item_no, r.lock_qty.unwrap()))
+                .map(|r| {
+                    t_fmt(
+                        "cmd.bom.locked.item",
+                        &[
+                            ("no", &r.item_no),
+                            ("qty", &r.lock_qty.unwrap().to_string()),
+                        ],
+                    )
+                })
                 .collect();
             if !locked.is_empty() {
-                host.push_info(&format!(
-                    "OCSMBOMSYNC: {} 行数量已锁定，未覆盖：{}。要重算用 `BOMLOCK <序号> off`。",
-                    locked.len(),
-                    locked.join("、")
+                host.push_info(&t_fmt(
+                    "cmd.bom.info.sync_locked",
+                    &[
+                        ("n", &locked.len().to_string()),
+                        ("list", &locked.join(&t("cmd.bom.sep"))),
+                    ],
                 ));
             }
             stamp_bom_links(host);
@@ -921,17 +938,18 @@ pub(crate) fn cmd_bom_sync(host: &mut dyn HostApi, _args: &str) {
 /// 打印"单元格自动压缩"结果（有压缩才说；压到下限仍溢出的点名）。
 fn report_cell_fit(host: &mut dyn HostApi, rep: &BomReport) {
     if rep.squeezed > 0 {
-        host.push_info(&format!(
-            "OCSMBOM: {} 格文字超宽 → 已自动横向压缩（字高统一不动；压太扁的另点名）。",
-            rep.squeezed
+        host.push_info(&t_fmt(
+            "cmd.bom.info.squeezed",
+            &[("n", &rep.squeezed.to_string())],
         ));
     }
     if !rep.squeezed_hard.is_empty() {
-        host.push_info(&format!(
-            "OCSMBOM: 下面 {} 格横向压得偏扁（已压进格内、不会到邻格，但可读性下降）：{} \
-             （建议加宽该列 / 缩短文本 / 把标准号写进名称列）。",
-            rep.squeezed_hard.len(),
-            rep.squeezed_hard.join("、")
+        host.push_info(&t_fmt(
+            "cmd.bom.info.squeezed_hard",
+            &[
+                ("n", &rep.squeezed_hard.len().to_string()),
+                ("list", &rep.squeezed_hard.join(&t("cmd.bom.sep"))),
+            ],
         ));
     }
 }
@@ -939,10 +957,7 @@ fn report_cell_fit(host: &mut dyn HostApi, rep: &BomReport) {
 pub(crate) fn cmd_bom_lock(host: &mut dyn HostApi, args: &str) {
     let mut it = args.split_whitespace();
     let Some(key) = it.next() else {
-        host.push_info(
-            "OCSMBOMLOCK / BOMLOCK 用法：BOMLOCK <序号|图号> [数量|off]\
-             （不给数量 = 按行上现值锁；off = 解锁）",
-        );
+        host.push_info(&t("cmd.bom.lock.usage"));
         return;
     };
     let arg = it.next().map(|s| s.to_string());
@@ -970,20 +985,20 @@ pub(crate) fn cmd_bom_lock(host: &mut dyn HostApi, args: &str) {
         }
     }
     let Some(mut ins) = target else {
-        host.push_error(&format!("OCSMBOMLOCK: 表里找不到序号/图号为「{key}」的行。"));
+        host.push_error(&t_fmt("cmd.bom.lock.err.row_missing", &[("key", key)]));
         return;
     };
     let cur_qty: usize = attr_of(&ins, "数量").parse().unwrap_or(1);
-    let unlock = matches!(arg.as_deref(), Some("off") | Some("OFF") | Some("解锁") | Some("unlock"));
+        let unlock = matches!(arg.as_deref(), Some("off") | Some("OFF") | Some("解锁") | Some("unlock"));
 
     if unlock {
         ins.common.extended_data.remove_record(LOCK_APP);
-        host.push_undo("OCSM 数量锁");
+        host.push_undo(&t("cmd.bom.undo.qty_lock"));
         host.update_entity(EntityType::Insert(ins));
         host.set_dirty();
-        host.push_info(&format!(
-            "OCSMBOMLOCK: 序号 {}→已解锁（数量 {}）——下次同步会按件数/引用次数重算。",
-            key, cur_qty
+        host.push_info(&t_fmt(
+            "cmd.bom.lock.info.unlocked",
+            &[("key", key), ("qty", &cur_qty.to_string())],
         ));
         return;
     }
@@ -993,7 +1008,10 @@ pub(crate) fn cmd_bom_lock(host: &mut dyn HostApi, args: &str) {
         Some(v) => match v.parse::<usize>() {
             Ok(q) if q > 0 => q,
             _ => {
-                host.push_error(&format!("OCSMBOMLOCK: 数量「{v}」不是正整数（或写 off 解锁）。"));
+                host.push_error(&t_fmt(
+                    "cmd.bom.lock.err.qty_invalid",
+                    &[("v", v)],
+                ));
                 return;
             }
         },
@@ -1021,12 +1039,12 @@ pub(crate) fn cmd_bom_lock(host: &mut dyn HostApi, args: &str) {
     ));
     ins.common.extended_data.remove_record(LOCK_APP);
     ins.common.extended_data.add_record(rec);
-    host.push_undo("OCSM 数量锁");
+    host.push_undo(&t("cmd.bom.undo.qty_lock"));
     host.update_entity(EntityType::Insert(ins));
     host.set_dirty();
-    host.push_info(&format!(
-        "OCSMBOMLOCK: 序号 {} 数量锁定为 {qty}（同步不再重算；BOMLOCK {key} off 可解锁）。",
-        key
+    host.push_info(&t_fmt(
+        "cmd.bom.lock.info.locked",
+        &[("key", key), ("qty", &qty.to_string())],
     ));
 }
 
@@ -1183,14 +1201,19 @@ pub(crate) fn rowspec_from_cells(
 ) -> Result<RowSpec, String> {
     let no = cells[0].trim().to_string();
     if no.is_empty() {
-        return Err("有行的序号为空（每行都需要序号）".into());
+        return Err(t("cmd.bom.err.row_no_empty"));
     }
     let qty: usize = cells[3]
         .trim()
         .parse()
-        .map_err(|_| format!("序号 {no} 的数量「{}」不是正整数", cells[3]))?;
+        .map_err(|_| {
+            t_fmt(
+                "cmd.bom.err.row_qty_not_positive_int",
+                &[("no", &no), ("qty", &cells[3])],
+            )
+        })?;
     if qty == 0 {
-        return Err(format!("序号 {no} 的数量不能为 0（要删行就删行）"));
+        return Err(t_fmt("cmd.bom.err.row_qty_zero", &[("no", &no)]));
     }
     let unit = weight_text(&cells[5]);
     Ok(RowSpec {
@@ -1283,8 +1306,9 @@ pub(crate) fn stamp_bom_links(host: &mut dyn HostApi) {
     }
     if changed > 0 {
         host.set_dirty();
-        host.push_info(&format!(
-            "OCSMBOM: 已把 {changed} 个表块链接指向明细表编辑页（Ctrl+点击打开；或运行 `BOMEDIT` 在新窗口打开）。"
+        host.push_info(&t_fmt(
+            "cmd.bom.info.links_stamped",
+            &[("changed", &changed.to_string())],
         ));
     }
 }
@@ -1297,7 +1321,7 @@ pub(crate) fn cmd_bom_xlsx(host: &mut dyn HostApi, args: &str) {
     let doc = host.document().clone();
     let rows = crate::balloon_sync::old_rows(&doc);
     if rows.is_empty() {
-        host.push_error("OCSMBOMXLSX: 图上还没有明细表行（先 `BOM` 或 `BOMSYNC` 建表）。");
+        host.push_error(&t("cmd.bom.err.export_empty"));
         return;
     }
     let path = match args.split_whitespace().next() {
@@ -1326,18 +1350,23 @@ pub(crate) fn cmd_bom_xlsx(host: &mut dyn HostApi, args: &str) {
         }
         let mut text = String::from("\u{feff}");
         text.push_str(&crate::bom_xlsx::csv_text(&xrows));
-        std::fs::write(&path, text.as_bytes()).map_err(|e| format!("写 {} 失败: {e}", path.display()))
+        std::fs::write(&path, text.as_bytes()).map_err(|e| {
+            t_fmt(
+                "cmd.bom.err.write_failed",
+                &[("path", &path.display().to_string()), ("e", &e.to_string())],
+            )
+        })
     } else {
         crate::bom_xlsx::write_xlsx(&path, &xrows)
     };
     if let Err(e) = wrote {
-        host.push_error(&format!("OCSMBOMXLSX: {e}"));
+        host.push_error(&t_fmt("cmd.bom.err.export_failed", &[("e", &e)]));
         return;
     }
     // 导出基线：每行当时的数量（用于导入侧判断"人手改过"）
     let doc = host.document().clone();
     let mut stamped = 0usize;
-    host.push_undo("OCSM 明细表导出");
+    host.push_undo(&t("cmd.bom.undo.export"));
     for e in doc.model_space_entities() {
         let EntityType::Insert(ins) = e else { continue };
         if ins.block_name != ROW_BLOCK {
@@ -1362,21 +1391,22 @@ pub(crate) fn cmd_bom_xlsx(host: &mut dyn HostApi, args: &str) {
     set_xlsx_url(host, &path);
     host.set_dirty();
     if host.document_path(host.tab_id()).is_none() {
-        host.push_info(&format!(
-            "OCSMBOMXLSX: 提示——本图还没存过盘，所以文件落在**临时目录**（{}）。\
-             临时目录会被系统清理，要长期保存请先 Ctrl+S 存盘再导出（xlsx 就会生成在图纸同目录、同名-明细表.xlsx）。",
-            path.display()
+        host.push_info(&t_fmt(
+            "cmd.bom.info.export_temp_hint",
+            &[("dir", &path.display().to_string())],
         ));
     }
-    host.push_info(&format!(
-        "OCSMBOMXLSX: {} 行已导出 → {}（{} 行记下导出基线；表块已挂编辑页链接，Ctrl+点击打开网页）。",
-        xrows.len(),
-        path.display(),
-        stamped
+    host.push_info(&t_fmt(
+        "cmd.bom.info.exported",
+        &[
+            ("rows", &xrows.len().to_string()),
+            ("path", &path.display().to_string()),
+            ("n", &stamped.to_string()),
+        ],
     ));
-    host.push_info(&format!(
-        "OCSMBOMXLSX: 列 = {}（「锁定数量」只在此文件里，不进图纸表格；空=不锁，Y/是=锁为同行数量，数字=锁为该数）。",
-        crate::bom_xlsx::col_list()
+    host.push_info(&t_fmt(
+        "cmd.bom.info.export_columns",
+        &[("cols", &crate::bom_xlsx::col_list())],
     ));
 }
 
@@ -1395,9 +1425,9 @@ pub(crate) fn cmd_bom_xlsxi(host: &mut dyn HostApi, args: &str) {
         }
     };
     if !path.exists() {
-        host.push_error(&format!(
-            "OCSMBOMXLSXI: 找不到文件 {}（先 `BOMXLSX` 导出，或给个路径）。",
-            path.display()
+        host.push_error(&t_fmt(
+            "cmd.bom.err.import_missing",
+            &[("path", &path.display().to_string())],
         ));
         return;
     }
@@ -1412,7 +1442,7 @@ pub(crate) fn cmd_bom_xlsxi(host: &mut dyn HostApi, args: &str) {
         {
             Ok(v) => v,
             Err(e) => {
-                host.push_error(&format!("OCSMBOMXLSXI: 读 CSV 失败：{e}"));
+                host.push_error(&t_fmt("cmd.bom.err.import_csv", &[("e", &e)]));
                 return;
             }
         }
@@ -1420,13 +1450,13 @@ pub(crate) fn cmd_bom_xlsxi(host: &mut dyn HostApi, args: &str) {
         match crate::bom_xlsx::read_xlsx(&path) {
             Ok(v) => v,
             Err(e) => {
-                host.push_error(&format!("OCSMBOMXLSXI: {e}"));
+                host.push_error(&t_fmt("cmd.bom.err.import_failed", &[("e", &e)]));
                 return;
             }
         }
     };
     if file.is_empty() {
-        host.push_error("OCSMBOMXLSXI: 文件里没有数据行。");
+        host.push_error(&t("cmd.bom.err.import_empty"));
         return;
     }
     let doc = host.document().clone();
@@ -1442,7 +1472,7 @@ pub(crate) fn cmd_bom_xlsxi(host: &mut dyn HostApi, args: &str) {
         Ok(rep) => {
             // 导入成功后刷新导出基线（同一份文件重复导入不会再"手改即锁"一次）
             let doc2 = host.document().clone();
-            host.push_undo("OCSM 明细表导入");
+            host.push_undo(&t("cmd.bom.undo.import"));
             for e in doc2.model_space_entities() {
                 let EntityType::Insert(ins) = e else { continue };
                 if ins.block_name != ROW_BLOCK {
@@ -1464,17 +1494,19 @@ pub(crate) fn cmd_bom_xlsxi(host: &mut dyn HostApi, args: &str) {
             }
             host.set_dirty();
             stamp_bom_links(host);
-            host.push_info(&format!(
-                "OCSMBOMXLSXI: 从 {} 导入 {} 行 → 表 {} 行 / {} 列（{} 行数量已锁定，{} 行文件里没有、按图纸保留）。",
-                path.display(),
-                file.len(),
-                rep.rows,
-                rep.cols.len(),
-                locked,
-                kept
+            host.push_info(&t_fmt(
+                "cmd.bom.info.imported",
+                &[
+                    ("path", &path.display().to_string()),
+                    ("n", &file.len().to_string()),
+                    ("rows", &rep.rows.to_string()),
+                    ("cols", &rep.cols.len().to_string()),
+                    ("locked", &locked.to_string()),
+                    ("kept", &kept.to_string()),
+                ],
             ));
         }
-        Err(e) => host.push_error(&format!("OCSMBOMXLSXI: {e}")),
+        Err(e) => host.push_error(&t_fmt("cmd.bom.err.import_failed", &[("e", &e)])),
     }
 }
 
@@ -1486,17 +1518,19 @@ pub(crate) fn cmd_bom_cfg(host: &mut dyn HostApi, args: &str) {
         Some(n) if n > 0 => {
             cfg.per_col_rows = n;
             match save_config(&dir, &cfg) {
-                Ok(()) => host.push_info(&format!(
-                    "OCSMBOMCFG: 首列行数已设为 {n}（{}）。",
-                    config_path(&dir).display()
+                Ok(()) => host.push_info(&t_fmt(
+                    "cmd.bom.cfg.info.set",
+                    &[("n", &n.to_string()), ("path", &config_path(&dir).display().to_string())],
                 )),
-                Err(e) => host.push_error(&format!("OCSMBOMCFG: 写配置失败：{e}")),
+                Err(e) => host.push_error(&t_fmt("cmd.bom.cfg.err.save", &[("e", &e.to_string())])),
             }
         }
-        _ => host.push_info(&format!(
-            "OCSMBOMCFG: 首列行数 {}（配置 {}）；用法：BOMCFG 30 改默认，BOM 30 只改本次。",
-            cfg.per_col_rows,
-            config_path(&dir).display()
+        _ => host.push_info(&t_fmt(
+            "cmd.bom.cfg.info.show",
+            &[
+                ("n", &cfg.per_col_rows.to_string()),
+                ("path", &config_path(&dir).display().to_string()),
+            ],
         )),
     }
 }
@@ -1504,6 +1538,13 @@ pub(crate) fn cmd_bom_cfg(host: &mut dyn HostApi, args: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 语言是进程级全局：断言中文文案的用例共用锁并钉死 zh。
+    fn zh_guard() -> std::sync::MutexGuard<'static, ()> {
+        let g = crate::global_state_test_lock();
+        crate::i18n::set_lang(crate::i18n::Lang::Zh);
+        g
+    }
 
     // ── 单元格文字自动压缩 ──
 
@@ -1805,6 +1846,7 @@ mod tests {
 
     #[test]
     fn layout_refuses_when_the_sheet_is_too_small() {
+        let _g = zh_guard();
         let cfg = BomConfig::default();
         // A3 只放得下 2 列（(210+180-0)/180 = 2.17），第 3 列要被拒绝
         let err = layout(150, 26, &cfg).unwrap_err();
@@ -1927,5 +1969,59 @@ mod tests {
         assert_eq!(weight_text(" ≈ 0.050 kg "), "0.050 kg");
         assert_eq!(weight_text("约2.5"), "2.5");
         assert_eq!(weight_text("1.35"), "1.35");
+    }
+
+    /// BOM 族报错/回执随语言切换，关键数据（行数/路径/数量）原样保留。
+    #[test]
+    fn bom_messages_switch_language_keeping_data() {
+        let _g = zh_guard();
+        crate::i18n::clear_missing_keys();
+        let cfg = BomConfig::default();
+
+        // zh：布局报错（含列数/行数）与行规格报错（含序号/数量）。
+        let err = layout(150, 26, &cfg).unwrap_err();
+        assert!(err.contains("多页明细表") && err.contains("150"), "{err}");
+        let err = rowspec_from_cells(&["".into(), "".into(), "".into(), "1".into(), "".into(), "".into(), "".into(), "".into()], None, None)
+            .unwrap_err();
+        assert!(err.contains("序号"), "{err}");
+        let err = rowspec_from_cells(&["7".into(), "".into(), "".into(), "abc".into(), "".into(), "".into(), "".into(), "".into()], None, None)
+            .unwrap_err();
+        assert!(err.contains("7") && err.contains("abc"), "{err}");
+        let err = rowspec_from_cells(&["7".into(), "".into(), "".into(), "0".into(), "".into(), "".into(), "".into(), "".into()], None, None)
+            .unwrap_err();
+        assert!(err.contains("7") && err.contains("0"), "{err}");
+        let lock = t_fmt("cmd.bom.lock.info.locked", &[("key", "3"), ("qty", "5")]);
+        assert!(lock.contains("3") && lock.contains("5"), "{lock}");
+        let tmp = std::env::temp_dir().join("ocs_bom_i18n_probe.xlsx");
+        std::fs::write(&tmp, b"not a zip").unwrap();
+        let err = crate::bom_xlsx::read_xlsx(&tmp).unwrap_err();
+        assert!(err.contains("EOCD"), "{err}");
+        let zh_err = err.clone();
+        let _ = std::fs::remove_file(&tmp);
+
+        // en：同一批调用，数据保留。
+        crate::i18n::set_lang(crate::i18n::Lang::En);
+        let err = layout(150, 26, &cfg).unwrap_err();
+        assert!(err.contains("multi-page BOM") && err.contains("150"), "{err}");
+        assert!(!err.contains("多页"), "{err}");
+        let err = rowspec_from_cells(&["".into(), "".into(), "".into(), "1".into(), "".into(), "".into(), "".into(), "".into()], None, None)
+            .unwrap_err();
+        assert!(err.contains("item number"), "{err}");
+        let err = rowspec_from_cells(&["7".into(), "".into(), "".into(), "abc".into(), "".into(), "".into(), "".into(), "".into()], None, None)
+            .unwrap_err();
+        assert!(err.contains("7") && err.contains("abc") && err.contains("positive integer"), "{err}");
+        let err = rowspec_from_cells(&["7".into(), "".into(), "".into(), "0".into(), "".into(), "".into(), "".into(), "".into()], None, None)
+            .unwrap_err();
+        assert!(err.contains("7") && err.contains("cannot be 0"), "{err}");
+        let lock = t_fmt("cmd.bom.lock.info.locked", &[("key", "3"), ("qty", "5")]);
+        assert!(lock.contains("3") && lock.contains("5") && lock.contains("locked"), "{lock}");
+        let tmp = std::env::temp_dir().join("ocs_bom_i18n_probe.xlsx");
+        std::fs::write(&tmp, b"not a zip").unwrap();
+        let err = crate::bom_xlsx::read_xlsx(&tmp).unwrap_err();
+        assert!(err.contains("EOCD") && err.contains("Not a valid xlsx/zip") && err != zh_err, "{err}");
+        let _ = std::fs::remove_file(&tmp);
+
+        assert!(crate::i18n::missing_keys().is_empty(), "缺词条：{:?}", crate::i18n::missing_keys());
+        crate::i18n::set_lang_auto();
     }
 }

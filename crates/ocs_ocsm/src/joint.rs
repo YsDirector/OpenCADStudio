@@ -20,6 +20,7 @@
 //! ```
 //! 例：`OCSMJOINT at 50,10 rot -90 bolt=hex_bolt_b_full:8 plate=10 plate=10 washer=washer_971:8 washer=washer_93:8 nut=nut_c41:8`
 
+use crate::i18n::{t, t_fmt};
 use crate::partgen::{self, family_kind};
 
 /// 件链里的一件。
@@ -52,26 +53,44 @@ impl JointItem {
             JointItem::Bolt { family, d, l } => {
                 let (name, code) = partgen::family_meta(family);
                 match l {
-                    Some(l) => format!("{name} {code} {}×{}", label_d(*d), num(*l)),
-                    None => format!("{name} {code} {}", label_d(*d)),
+                    Some(l) => t_fmt(
+                        "cmd.joint.item.bolt_with_length",
+                        &[("name", &name), ("code", &code), ("d", &label_d(*d)), ("l", &num(*l))],
+                    ),
+                    None => t_fmt(
+                        "cmd.joint.item.bolt",
+                        &[("name", &name), ("code", &code), ("d", &label_d(*d))],
+                    ),
                 }
             }
             JointItem::Nut { family, d } => {
                 let (name, code) = partgen::family_meta(family);
                 match partgen::size_row(family, *d) {
-                    Some(row) => format!("{name} {code} {}(m{})", label_d(*d), num(row.l_min)),
-                    None => format!("{name} {code} {}", label_d(*d)),
+                    Some(row) => t_fmt(
+                        "cmd.joint.item.nut",
+                        &[("name", &name), ("code", &code), ("d", &label_d(*d)), ("thick", &num(row.l_min))],
+                    ),
+                    None => t_fmt(
+                        "cmd.joint.item.bolt",
+                        &[("name", &name), ("code", &code), ("d", &label_d(*d))],
+                    ),
                 }
             }
             JointItem::Washer { family, d } => {
                 let (name, code) = partgen::family_meta(family);
                 match partgen::size_row(family, *d) {
-                    Some(row) => format!("{name} {code} {}(厚{})", label_d(*d), num(row.l_min)),
-                    None => format!("{name} {code} {}", label_d(*d)),
+                    Some(row) => t_fmt(
+                        "cmd.joint.item.washer",
+                        &[("name", &name), ("code", &code), ("d", &label_d(*d)), ("thick", &num(row.l_min))],
+                    ),
+                    None => t_fmt(
+                        "cmd.joint.item.bolt",
+                        &[("name", &name), ("code", &code), ("d", &label_d(*d))],
+                    ),
                 }
             }
-            JointItem::Plate { t } => format!("板厚 {}", num(*t)),
-            JointItem::Gap { t } => format!("间隔 {}", num(*t)),
+            JointItem::Plate { t } => t_fmt("cmd.joint.item.plate", &[("t", &num(*t))]),
+            JointItem::Gap { t } => t_fmt("cmd.joint.item.gap", &[("t", &num(*t))]),
         }
     }
 }
@@ -97,8 +116,7 @@ impl JointSpec {
 
     /// 解析命令行参数（`at/rot/protrude` + 件链）；失败给出用法。
     pub fn parse(args: &str) -> Result<Self, String> {
-        let usage = "用法：OCSMJOINT at x,y rot 度 [protrude 扣数] \
-                     bolt=<族>:<d>[:<l>] [plate=<厚>|gap=<厚>|<螺母或垫圈族>=<d>] …";
+        let usage = t("cmd.joint.usage");
         let mut tokens = args.split_whitespace();
         let mut at: Option<[f64; 2]> = None;
         let mut rot_deg = 0.0f64;
@@ -110,25 +128,33 @@ impl JointSpec {
             let lower = token.to_ascii_lowercase();
             match lower.as_str() {
                 "at" | "@" => {
-                    let first = tokens.next().ok_or_else(|| format!("at 缺坐标。{usage}"))?;
+                    let first = tokens.next().ok_or_else(|| {
+                        t_fmt("cmd.joint.err.at_needs_coords", &[("usage", &usage)])
+                    })?;
                     let (x, y) = match first.split_once(',') {
                         Some((x, y)) => (number(x)?, number(y)?),
                         None => (
                             number(&first)?,
-                            number(&tokens.next().ok_or_else(|| format!("at 缺 y。{usage}"))?)?,
+                            number(&tokens.next().ok_or_else(|| {
+                                t_fmt("cmd.joint.err.at_needs_y", &[("usage", &usage)])
+                            })?)?,
                         ),
                     };
                     at = Some([x, y]);
                 }
                 "rot" | "rotation" => {
-                    let raw = tokens.next().ok_or_else(|| format!("rot 缺角度。{usage}"))?;
+                    let raw = tokens.next().ok_or_else(|| {
+                        t_fmt("cmd.joint.err.rot_needs_angle", &[("usage", &usage)])
+                    })?;
                     rot_deg = number(&raw)?;
                 }
                 "protrude" => {
-                    let raw = tokens.next().ok_or_else(|| format!("protrude 缺数值。{usage}"))?;
+                    let raw = tokens.next().ok_or_else(|| {
+                        t_fmt("cmd.joint.err.protrude_needs_number", &[("usage", &usage)])
+                    })?;
                     protrude_turns = number(&raw)?;
                     if protrude_turns < 0.0 {
-                        return Err("protrude 不能为负（扣数）".into());
+                        return Err(t("cmd.joint.err.protrude_negative"));
                     }
                 }
                 // `trim` / `trim on` = 开（默认）；`trim off` / `no-trim` / `notrim` = 关
@@ -146,18 +172,20 @@ impl JointSpec {
                     trim = !off;
                 }
                 "view" => {
-                    let raw = tokens.next().ok_or_else(|| format!("view 缺视图名。{usage}"))?;
+                    let raw = tokens.next().ok_or_else(|| {
+                        t_fmt("cmd.joint.err.view_needs_name", &[("usage", &usage)])
+                    })?;
                     view = Some(raw.to_ascii_lowercase());
                 }
                 _ => items.push(parse_item(token)?),
             }
         }
-        let at = at.ok_or_else(|| format!("缺 at x,y。{usage}"))?;
+        let at = at.ok_or_else(|| t_fmt("cmd.joint.err.at_required", &[("usage", &usage)]))?;
         if items.is_empty() {
-            return Err(format!("件链为空。{usage}"));
+            return Err(t_fmt("cmd.joint.err.empty_chain", &[("usage", &usage)]));
         }
         if !matches!(items.first(), Some(JointItem::Bolt { .. })) {
-            return Err("件链必须以 bolt=<族>:<d> 开头（它决定轴线与长度基准）。".into());
+            return Err(t("cmd.joint.err.chain_needs_bolt"));
         }
         Ok(JointSpec { at, rot_deg, protrude_turns, trim, view, items })
     }
@@ -195,7 +223,8 @@ impl JointSpec {
         fn default_true() -> bool {
             true
         }
-        let raw: Raw = serde_json::from_slice(body).map_err(|e| format!("请求 JSON 无效: {e}"))?;
+        let raw: Raw = serde_json::from_slice(body)
+            .map_err(|e| t_fmt("cmd.joint.err.bad_json", &[("e", &e.to_string())]))?;
         let items = raw
             .items
             .into_iter()
@@ -206,12 +235,12 @@ impl JointSpec {
                     "washer" => JointItem::Washer { family: item.family, d: item.d },
                     "plate" => JointItem::Plate { t: item.t },
                     "gap" => JointItem::Gap { t: item.t },
-                    other => return Err(format!("未知件类型: {other}")),
+                    other => return Err(t_fmt("cmd.joint.err.unknown_kind_json", &[("other", other)])),
                 })
             })
             .collect::<Result<Vec<_>, String>>()?;
         if !matches!(items.first(), Some(JointItem::Bolt { .. })) {
-            return Err("件链必须以 kind=bolt 开头".into());
+            return Err(t("cmd.joint.err.chain_needs_bolt_json"));
         }
         Ok(JointSpec { at: raw.at, rot_deg: raw.rot, protrude_turns: raw.protrude, trim: raw.trim, view: raw.view, items })
     }
@@ -280,20 +309,28 @@ pub struct JointPlan {
 /// 计算整个件链：长度落点（以表内供货系列为准）+ 各件基点。
 pub fn plan(spec: &JointSpec) -> Result<JointPlan, String> {
     let Some(JointItem::Bolt { family, d, l: explicit_l }) = spec.items.first().cloned() else {
-        return Err("件链必须以 bolt=<族>:<d> 开头".into());
+        return Err(t("cmd.joint.err.chain_needs_bolt_short"));
     };
     let row = partgen::size_row(&family, d).ok_or_else(|| {
-        format!("零件库没有 {family} 的 {}，可用直径：{}", label_d(d), diameters_hint(&family))
+        t_fmt(
+            "cmd.joint.err.family_no_size",
+            &[("family", &family), ("d", &label_d(d)), ("hint", &diameters_hint(&family))],
+        )
     })?;
     if row.pitch <= 0.0 {
-        return Err(format!("{family} {} 没有螺距数据，无法按扣数算露出", label_d(d)));
+        return Err(t_fmt(
+            "cmd.joint.err.no_pitch",
+            &[("family", &family), ("d", &label_d(d))],
+        ));
     }
 
     // ① Σ 件高（不含螺栓本身）
     let mut stack = 0.0f64;
     let mut chain_text: Vec<String> = Vec::new();
     for item in spec.items.iter().skip(1) {
-        let h = item.height().ok_or_else(|| format!("{} 的规格在零件库里查不到", item.describe()))?;
+        let h = item
+            .height()
+            .ok_or_else(|| t_fmt("cmd.joint.err.item_size_missing", &[("item", &item.describe())]))?;
         stack += h;
         chain_text.push(item.describe());
     }
@@ -317,11 +354,14 @@ pub fn plan(spec: &JointSpec) -> Result<JointPlan, String> {
                 row.lengths.clone()
             };
             candidates.iter().copied().find(|l| *l >= need - 1e-9).ok_or_else(|| {
-                format!(
-                    "{family} {} 的供货长度最大 {}，装不下（需 ≥ {}）。换更长的族或改件链。",
-                    label_d(d),
-                    num(row.l_max),
-                    num(need)
+                t_fmt(
+                    "cmd.joint.err.length_too_short",
+                    &[
+                        ("family", &family),
+                        ("d", &label_d(d)),
+                        ("lmax", &num(row.l_max)),
+                        ("need", &num(need)),
+                    ],
                 )
             })?
         }
@@ -373,26 +413,30 @@ pub fn plan(spec: &JointSpec) -> Result<JointPlan, String> {
 
     let (bolt_name, bolt_code) = partgen::family_meta(&family);
     let chain_note = if chain_text.is_empty() {
-        "无被连接件".to_string()
+        t("cmd.joint.note.no_plates")
     } else {
         chain_text.join(" + ")
     };
-    let report = format!(
-        "OCSMJOINT：{bolt_name} {bolt_code} {}×{}｜件链 {chain_note} → Σ{}｜需 l ≥ {}(= Σ{} + 露出{}扣×{}) → 取供货长度 {}（实际外露 {}mm≈{}扣）｜基点 ({}, {}) rot {}°｜共 {} 件",
-        label_d(d),
-        num(bolt_l),
-        num(stack),
-        num(need),
-        num(stack),
-        num(spec.protrude_turns),
-        num(row.pitch),
-        num(bolt_l),
-        num(protrude_mm),
-        num(protrude_turns.round_at(1)),
-        num(spec.at[0]),
-        num(spec.at[1]),
-        num(spec.rot_deg),
-        placements.len(),
+    let report = t_fmt(
+        "cmd.joint.report",
+        &[
+            ("bolt_name", &bolt_name),
+            ("bolt_code", &bolt_code),
+            ("d", &label_d(d)),
+            ("l", &num(bolt_l)),
+            ("chain", &chain_note),
+            ("stack", &num(stack)),
+            ("need", &num(need)),
+            ("turns", &num(spec.protrude_turns)),
+            ("pitch", &num(row.pitch)),
+            ("l2", &num(bolt_l)),
+            ("pm", &num(protrude_mm)),
+            ("pt", &num(protrude_turns.round_at(1))),
+            ("x", &num(spec.at[0])),
+            ("y", &num(spec.at[1])),
+            ("rot", &num(spec.rot_deg)),
+            ("n", &placements.len().to_string()),
+        ],
     );
 
     Ok(JointPlan {
@@ -421,7 +465,7 @@ impl RoundAt for f64 {
 fn diameters_hint(family: &str) -> String {
     let list: Vec<String> = partgen::family_sizes(family).iter().map(|r| label_d(r.d)).collect();
     if list.is_empty() {
-        "（该族未实现）".to_string()
+        t("cmd.joint.err.family_not_implemented")
     } else {
         list.join(", ")
     }
@@ -430,7 +474,9 @@ fn diameters_hint(family: &str) -> String {
 fn parse_item(token: &str) -> Result<JointItem, String> {
     let (key, value) = token
         .split_once('=')
-        .ok_or_else(|| format!("件格式应为 `<类型>=<族>:<规格>` 或 `plate=<厚>`（收到 {token}）"))?;
+        .ok_or_else(|| {
+            t_fmt("cmd.joint.err.item_format", &[("token", token)])
+        })?;
     let key = key.to_ascii_lowercase();
     match key.as_str() {
         "plate" | "p" | "板" => return Ok(JointItem::Plate { t: number(value)? }),
@@ -444,30 +490,31 @@ fn parse_item(token: &str) -> Result<JointItem, String> {
     }
     // 写法②：件类型 + 族名：`bolt=hex_bolt_b_full:8[:40]`、`nut=nut_c41:8`
     let (family, rest) = value.split_once(':').ok_or_else(|| {
-        format!("{token} 应为 <类型>=<族>:<规格>，如 bolt=hex_bolt_b_full:8")
+        t_fmt("cmd.joint.err.item_colon", &[("token", token)])
     })?;
     let family = family.to_ascii_lowercase();
     let (d, l) = parse_size(rest)?;
     let expected = match key.as_str() {
         "bolt" | "screw_bolt" => "bolt",
         "screw" | "螺钉" => {
-            return Err(
-                "件链不支持螺钉（螺钉拧入螺纹孔、不配螺母）；螺栓副请用 六角头螺栓族".into(),
-            )
+            return Err(t("cmd.joint.err.no_screw"))
         }
         "nut" => "nut",
         "washer" => "washer",
-        other => return Err(format!("未知件类型 {other}（可用 bolt/nut/washer/plate/gap，或直接写族名）")),
+        other => return Err(t_fmt("cmd.joint.err.unknown_kind", &[("other", other)])),
     };
     if partgen::family_kind(&family) != expected {
         let kind = partgen::family_kind(&family);
         return Err(if kind == "screw" {
-            // 螺钉 ≠ 螺栓：提示上说清楚，别让人再去猜
-            format!(
-                "{family} 是螺钉（screw）——螺钉拧入螺纹孔、不配螺母，不能当件链的 {expected} 用"
+            t_fmt(
+                "cmd.joint.err.screw_not_expected",
+                &[("family", &family), ("expected", expected)],
             )
         } else {
-            format!("{family} 不是{expected}族")
+            t_fmt(
+                "cmd.joint.err.family_kind_mismatch",
+                &[("family", &family), ("expected", expected)],
+            )
         });
     }
     item_for(family, d, l)
@@ -482,14 +529,17 @@ fn parse_size(raw: &str) -> Result<(f64, Option<f64>), String> {
         _ => None,
     };
     if parts.next().is_some() {
-        return Err(format!("规格最多 <d>[:<l>]（收到 {raw}）"));
+        return Err(t_fmt("cmd.joint.err.size_format", &[("raw", raw)]));
     }
     Ok((d, l))
 }
 
 fn item_for(family: String, d: f64, l: Option<f64>) -> Result<JointItem, String> {
     if partgen::size_row(&family, d).is_none() {
-        return Err(format!("零件库没有 {family} 的 M{}（可用：{}）", num(d), diameters_hint(&family)));
+        return Err(t_fmt(
+            "cmd.joint.err.library_no_d",
+            &[("family", &family), ("d", &num(d)), ("hint", &diameters_hint(&family))],
+        ));
     }
     Ok(match partgen::family_kind(&family) {
         "bolt" => JointItem::Bolt { family, d, l },
@@ -497,12 +547,9 @@ fn item_for(family: String, d: f64, l: Option<f64>) -> Result<JointItem, String>
         "washer" => JointItem::Washer { family, d },
         // 螺钉是另一类东西：自带头部、拧入螺纹孔，不配螺母 —— 不能当件链的"螺栓"使
         "screw" => {
-            return Err(format!(
-                "{family} 是螺钉（screw）——螺钉拧入螺纹孔、不配螺母，不是螺栓；\
-                 件链只支持 螺栓（六角头螺栓族）/螺母/垫圈"
-            ))
+            return Err(t_fmt("cmd.joint.err.screw_not_bolt", &[("family", &family)]))
         }
-        other => return Err(format!("{family} 是 {other} 类，件链里只支持螺栓/螺母/垫圈")),
+        other => return Err(t_fmt("cmd.joint.err.kind_unsupported", &[("family", &family), ("other", other)])),
     })
 }
 
@@ -842,7 +889,10 @@ pub fn build(plan: &JointPlan, trim: bool) -> Result<JointBuild, String> {
             .map(|(a, b)| format!("{}~{}", num(*a), num(*b)))
             .collect::<Vec<_>>()
             .join("、");
-        notes.push(format!("{name} {} 被遮 {iv}", parts[index].meta.spec));
+        notes.push(t_fmt(
+            "cmd.joint.note.hidden",
+            &[("name", &name), ("spec", &parts[index].meta.spec), ("iv", &iv)],
+        ));
         parts[index].entities = clipped.clone();
         geometry[index] = clipped;
     }
@@ -863,12 +913,12 @@ pub fn build(plan: &JointPlan, trim: bool) -> Result<JointBuild, String> {
         }
     }
     if !bbox[0].is_finite() {
-        return Err("整链几何为空".into());
+        return Err(t("cmd.joint.err.empty_geometry"));
     }
     let mut assembly = parts
         .first()
         .cloned()
-        .ok_or_else(|| "件链为空".to_string())?;
+        .ok_or_else(|| t("cmd.joint.err.empty_chain_bare"))?;
     assembly.entities = merged;
     assembly.bbox = bbox;
     Ok(JointBuild { parts, hidden, notes, assembly })
@@ -906,9 +956,9 @@ fn number(raw: &str) -> Result<f64, String> {
         .trim()
         .trim_end_matches(['m', 'M', '°', '度'])
         .parse()
-        .map_err(|_| format!("不是有效数字: {raw}"))?;
+        .map_err(|_| t_fmt("cmd.joint.err.not_number", &[("raw", raw)]))?;
     if !value.is_finite() {
-        return Err(format!("不是有限数字: {raw}"));
+        return Err(t_fmt("cmd.joint.err.not_finite", &[("raw", raw)]));
     }
     Ok(value)
 }
@@ -937,8 +987,16 @@ fn num(v: f64) -> String {
 mod tests {
     use super::*;
 
+    /// 语言是进程级全局：断言中文文案的用例与「切语言」用例共用锁并钉死 zh。
+    fn zh_guard() -> std::sync::MutexGuard<'static, ()> {
+        let g = crate::global_state_test_lock();
+        crate::i18n::set_lang(crate::i18n::Lang::Zh);
+        g
+    }
+
     #[test]
     fn parses_command_line_forms() {
+        let _g = zh_guard();
         let spec = JointSpec::parse(
             "at 50,10 rot -90 bolt=hex_bolt_b_full:8 plate=10 plate=10 nut=nut_c41:8",
         )
@@ -1211,9 +1269,67 @@ mod tests {
 
     #[test]
     fn plan_rejects_impossible_bolt_family() {
+        let _g = zh_guard();
         // 5780 C 级 M8 的库内系列最短 35；件链超过它就必须报错而不是硬塞
         let spec = JointSpec::parse("at 0,0 bolt=hex_bolt_c:8 plate=40 plate=40 nut=nut_c41:8").unwrap();
         let err = plan(&spec).unwrap_err();
         assert!(err.contains("装不下") || err.contains("需"), "{err}");
+    }
+
+    #[test]
+    fn joint_messages_switch_language_keeping_data() {
+        let _g = zh_guard();
+        crate::i18n::clear_missing_keys();
+
+        // ── zh：≥5 条面向用户的输出，均需含关键协议/数据 ──
+        let err = JointSpec::parse("bolt=hex_bolt_c:8 plate=10").unwrap_err();
+        assert!(err.contains("缺 at x,y") && err.contains("OCSMJOINT"), "{err}");
+        let err = JointSpec::parse("at 0,0 screw=hex_bolt_c:8 plate=10").unwrap_err();
+        assert!(err.contains("螺钉") && err.contains("件链"), "{err}");
+        let err = JointSpec::parse("at 0,0 bolt=hex_bolt_c:8:40:50").unwrap_err();
+        assert!(err.contains("规格最多") && err.contains("8:40:50"), "{err}");
+        let err = item_for("nut_c41".into(), 99.0, None).unwrap_err();
+        assert!(err.contains("M99") && err.contains("nut_c41"), "{err}");
+        let err = JointSpec::parse("at 0,0 bolt=nut_c41:8 plate=10").unwrap_err();
+        assert!(err.contains("不是bolt族"), "{err}");
+        let spec = JointSpec::parse(
+            "at 50,10 rot -90 bolt=hex_bolt_b_full:8 plate=10 plate=10 nut=nut_c41:8",
+        )
+        .unwrap();
+        let built = plan(&spec).unwrap();
+        assert!(built.report.contains("OCSMJOINT") && built.report.contains("M8") && built.report.contains("35"), "{}", built.report);
+        let bolt = JointItem::Bolt { family: "hex_bolt_b_full".into(), d: 8.0, l: Some(35.0) };
+        assert!(bolt.describe().contains("M8×35"), "{}", bolt.describe());
+        let plate = JointItem::Plate { t: 10.0 };
+        assert!(plate.describe().contains("10"), "{}", plate.describe());
+        let zh_report = built.report.clone();
+
+        // ── en：同一批调用，关键数据（M8/35/hex_bolt_c…）必须原样保留 ──
+        crate::i18n::set_lang(crate::i18n::Lang::En);
+        let err = JointSpec::parse("bolt=hex_bolt_c:8 plate=10").unwrap_err();
+        assert!(err.contains("Missing at x,y") && err.contains("OCSMJOINT"), "{err}");
+        assert!(!err.contains("缺"), "{err}");
+        let err = JointSpec::parse("at 0,0 screw=hex_bolt_c:8 plate=10").unwrap_err();
+        assert!(err.contains("screw") && err.contains("hex-head bolt"), "{err}");
+        let err = JointSpec::parse("at 0,0 bolt=hex_bolt_c:8:40:50").unwrap_err();
+        assert!(err.contains("Size") && err.contains("8:40:50"), "{err}");
+        let err = item_for("nut_c41".into(), 99.0, None).unwrap_err();
+        assert!(err.contains("M99") && err.contains("nut_c41") && err.contains("Available"), "{err}");
+        let err = JointSpec::parse("at 0,0 bolt=nut_c41:8 plate=10").unwrap_err();
+        assert!(err.contains("not a bolt family"), "{err}");
+        let spec = JointSpec::parse(
+            "at 50,10 rot -90 bolt=hex_bolt_b_full:8 plate=10 plate=10 nut=nut_c41:8",
+        )
+        .unwrap();
+        let built = plan(&spec).unwrap();
+        assert!(built.report.contains("OCSMJOINT") && built.report.contains("M8") && built.report.contains("35"), "{}", built.report);
+        assert_ne!(built.report, zh_report, "报告应随语言变");
+        let bolt = JointItem::Bolt { family: "hex_bolt_b_full".into(), d: 8.0, l: Some(35.0) };
+        assert!(bolt.describe().contains("M8×35"), "{}", bolt.describe());
+        let plate = JointItem::Plate { t: 10.0 };
+        assert!(plate.describe().contains("10") && plate.describe().contains("plate"), "{}", plate.describe());
+
+        assert!(crate::i18n::missing_keys().is_empty(), "缺词条：{:?}", crate::i18n::missing_keys());
+        crate::i18n::set_lang_auto();
     }
 }

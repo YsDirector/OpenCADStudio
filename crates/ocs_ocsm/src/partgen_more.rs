@@ -225,7 +225,12 @@ pub fn full_b_row(d: f64) -> Option<&'static FullBoltRow> {
 
 /// 生成 GB/T 5783-2016（全螺纹 B 级）六角头螺栓的一个视图。
 pub fn hex_bolt_b_full(d: f64, l: f64, view: BoltView) -> Result<GenPart, String> {
-    let row = full_b_row(d).ok_or_else(|| format!("GB/T 5783 数据表里没有 M{}", trim(d)))?;
+    let row = full_b_row(d).ok_or_else(|| {
+        crate::i18n::t_fmt(
+            "cmd.parts.err.no_m",
+            &[("table", "GB/T 5783"), ("d", &trim(d))],
+        )
+    })?;
     check_l(row.l_min, row.l_max, d, l)?;
     let spec = HexSpec {
         d,
@@ -273,7 +278,12 @@ pub fn hole_a_row(d: f64) -> Option<&'static HoleBoltRow> {
 
 /// 生成 GB/T 32.1-1988（A 级带孔）六角头螺栓的一个视图。
 pub fn hex_bolt_hole_a(d: f64, l: f64, view: BoltView) -> Result<GenPart, String> {
-    let row = hole_a_row(d).ok_or_else(|| format!("GB/T 32.1 数据表里没有 M{}", trim(d)))?;
+    let row = hole_a_row(d).ok_or_else(|| {
+        crate::i18n::t_fmt(
+            "cmd.parts.err.no_m",
+            &[("table", "GB/T 32.1"), ("d", &trim(d))],
+        )
+    })?;
     check_l(row.l_min, row.l_max, d, l)?;
     let spec = HexSpec {
         d,
@@ -340,11 +350,13 @@ struct HexSpec {
 
 fn check_l(l_min: f64, l_max: f64, d: f64, l: f64) -> Result<(), String> {
     if l < l_min - 1e-9 || l > l_max + 1e-9 {
-        return Err(format!(
-            "M{} 的长度应在 {}~{} 之间",
-            trim(d),
-            trim(l_min),
-            trim(l_max)
+        return Err(crate::i18n::t_fmt(
+            "cmd.parts.err.len_range",
+            &[
+                ("d", &trim(d)),
+                ("lo", &trim(l_min)),
+                ("hi", &trim(l_max)),
+            ],
         ));
     }
     Ok(())
@@ -515,7 +527,12 @@ pub fn socket_row(d: f64) -> Option<&'static SocketRow> {
 
 /// 生成 GB/T 70.1-2008（内六角圆柱头螺钉）的一个视图。
 pub fn socket_head(d: f64, l: f64, view: BoltView) -> Result<GenPart, String> {
-    let row = socket_row(d).ok_or_else(|| format!("GB/T 70.1 数据表里没有 M{}", trim(d)))?;
+    let row = socket_row(d).ok_or_else(|| {
+        crate::i18n::t_fmt(
+            "cmd.parts.err.no_m",
+            &[("table", "GB/T 70.1"), ("d", &trim(d))],
+        )
+    })?;
     check_l(row.l_min, row.l_max, d, l)?;
     let (dm, ck) = (0.85 * d, 0.075 * d);
     // ISO 4762 表 1：l ≤ l_full → 全螺纹（螺纹止于距头部 3P）；否则 b = b_ref、收尾 5P
@@ -850,22 +867,27 @@ pub fn generate(family: &str, d: f64, l: f64, view: &str) -> Option<Result<GenPa
     // 1型六角螺母：**已在第四批（2026-09-17）由 `partgen_b1` 按用户四视图模板上架**，
     // 本模块这分支只作傅底（正常情况到不了这里）；真走到说明 b1 未接管。
     if family == "nut_6170" {
-        return Some(Err(
-            "1型六角螺母 GB/T 6170-2015 暂未提供（画法待模板确认，数据表已备好）".into(),
-        ));
+        return Some(Err(crate::i18n::t("cmd.parts.err.nut6170_todo")));
     }
     // 只允许该族样例里存在的视图（其余一律报错，GUI 也不会列出）
     let allowed = family_views(family);
     if !allowed.is_empty() && !allowed.contains(&view) {
-        return Some(Err(format!(
-            "{family} 不提供视图 {view}（可用：{}）",
-            allowed.join("/")
+        return Some(Err(crate::i18n::t_fmt(
+            "cmd.parts.err.view_not_offered",
+            &[
+                ("family", family),
+                ("view", view),
+                ("avail", &allowed.join("/")),
+            ],
         )));
     }
     // 销族：单视图（模板只有主视图）
     if matches!(family, "pin_1191" | "pin_1201") {
         if view != "main" {
-            return Some(Err(format!("{family} 只有主视图（模板只有这一个视图）")));
+            return Some(Err(crate::i18n::t_fmt(
+                "cmd.parts.err.only_main",
+                &[("family", family)],
+            )));
         }
         return Some(match family {
             "pin_1191" => pin_a(d, l),
@@ -879,20 +901,30 @@ pub fn generate(family: &str, d: f64, l: f64, view: &str) -> Option<Result<GenPa
             "section" => NutView::Section,
             "top" => NutView::Top,
             "end" => NutView::End,
-            other => return Some(Err(format!("{family} 没有视图 {other}"))),
+            other => {
+                return Some(Err(crate::i18n::t_fmt(
+                    "cmd.parts.err.view_absent_bare",
+                    &[("family", family), ("view", other)],
+                )))
+            }
         };
         return Some(match family {
             "washer_971" => flat_washer(d, nv),
             "washer_93" => spring_washer(d, nv),
             nut @ ("nut_6170" | "nut_61721" | "nut_c41") => hex_nut(d, nut, nv),
-            other => Err(format!("未知族 {other}")),
+            other => Err(crate::i18n::t_fmt("cmd.parts.err.unknown_family", &[("other", other)])),
         });
     }
     let v = match view {
         "main" => BoltView::Main,
         "top" => BoltView::Top,
         "end" => BoltView::End,
-        other => return Some(Err(format!("{family} 没有视图 {other}"))),
+        other => {
+            return Some(Err(crate::i18n::t_fmt(
+                "cmd.parts.err.view_absent_bare",
+                &[("family", family), ("view", other)],
+            )))
+        }
     };
     match family {
         "hex_bolt_b_full" => Some(hex_bolt_b_full(d, l, v)),
@@ -913,6 +945,14 @@ pub fn view_svg(family: &str, d: f64, l: f64, view: &str, px_w: f64, px_h: f64) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 语言是进程级全局：断言中文文案的用例共用锁并钉死 zh。
+    fn zh_guard() -> std::sync::MutexGuard<'static, ()> {
+        let g = crate::global_state_test_lock();
+        crate::i18n::set_lang(crate::i18n::Lang::Zh);
+        g
+    }
+
     use std::collections::BTreeSet;
 
     include!("tables/ref_3fams_expected.rs");
@@ -1178,6 +1218,7 @@ mod tests {
     /// 长度校验：越界长度给出可读错误；表内规格齐全、长度序列单调。
     #[test]
     fn tables_sane() {
+        let _g = zh_guard();
         for (fam, ds) in [
             ("hex_bolt_b_full", full_b_diameters()),
             ("hex_bolt_hole_a", hole_a_diameters()),
@@ -1327,6 +1368,7 @@ mod tests {
     /// 目录 JSON：三族都在树里打勾，且带 ISO 对应与视图表。
     #[test]
     fn catalog_contains_three_new_families() {
+        let _g = zh_guard();
         let c = crate::partgen::catalog_json();
         for (fam, code, iso) in [
             ("hex_bolt_b_full", "GB/T 5783-2016", "ISO 4017:2014"),
@@ -1924,7 +1966,9 @@ pub fn washer_93_row(d: f64) -> Option<&'static SpringWasherRow> {
 ///   + **两片 ANSI31 Hatch**（落在 `5剖面线层`，上片转 270°、下片 0°，边界=被切材料轮廓）。
 pub fn hex_nut(d: f64, family: &str, view: NutView) -> Result<GenPart, String> {
     let (code, name) = nut_meta(family)?;
-    let row = nut_any_row(d, family).ok_or_else(|| format!("{code} 数据表里没有 M{}", trim(d)))?;
+    let row = nut_any_row(d, family).ok_or_else(|| {
+        crate::i18n::t_fmt("cmd.parts.err.no_m", &[("table", code), ("d", &trim(d))])
+    })?;
     if view == NutView::Section {
         return nut_section(d, family, row);
     }
@@ -2012,7 +2056,7 @@ fn nut_meta(family: &str) -> Result<(&'static str, &'static str), String> {
         "nut_6170" => ("GB/T 6170-2015", "1型六角螺母"),
         "nut_61721" => ("GB/T 6172.1-2016", "六角薄螺母"),
         "nut_c41" => ("GB/T 41-2016", "六角螺母 C级"),
-        other => return Err(format!("未知螺母族 {other}")),
+        other => return Err(crate::i18n::t_fmt("cmd.parts.err.unknown_nut_family", &[("other", other)])),
     })
 }
 
@@ -2238,11 +2282,22 @@ fn pin_a_weight_kg(row: &PinARow, l: f64) -> f64 {
 
 /// GB/T 119.1-2000 A 型圆柱销主视图（唯一视图；模板实测逐条复刻）。
 pub fn pin_a(d: f64, l: f64) -> Result<GenPart, String> {
-    let row = pin_1191_row(d).ok_or_else(|| format!("GB/T 119.1-2000 数据表里没有 Ø{}", trim(d)))?;
+    let row = pin_1191_row(d).ok_or_else(|| {
+        crate::i18n::t_fmt(
+            "cmd.parts.err.no_dia",
+            &[("table", "GB/T 119.1-2000"), ("d", &trim(d))],
+        )
+    })?;
     if l + 1e-9 < row.l_min || l > row.l_max + 1e-9 {
-        return Err(format!(
-            "GB/T 119.1 Ø{} 的长度应在 {} ~ {} 之间（表内系列：{:?}）",
-            trim(d), trim(row.l_min), trim(row.l_max), row.lengths
+        return Err(crate::i18n::t_fmt(
+            "cmd.parts.err.len_range_series",
+            &[
+                ("std", "GB/T 119.1"),
+                ("d", &trim(d)),
+                ("lo", &trim(row.l_min)),
+                ("hi", &trim(row.l_max)),
+                ("series", &format!("{:?}", row.lengths)),
+            ],
         ));
     }
     let r = d / 2.0;
@@ -2280,11 +2335,22 @@ pub fn pin_a(d: f64, l: f64) -> Result<GenPart, String> {
 
 /// GB/T 120.1-2000 内螺纹圆柱销主视图（外形 + 局部剖；模板实测逐条复刻）。
 pub fn pin_threaded(d: f64, l: f64) -> Result<GenPart, String> {
-    let row = pin_1201_row(d).ok_or_else(|| format!("GB/T 120.1-2000 数据表里没有 Ø{}", trim(d)))?;
+    let row = pin_1201_row(d).ok_or_else(|| {
+        crate::i18n::t_fmt(
+            "cmd.parts.err.no_dia",
+            &[("table", "GB/T 120.1-2000"), ("d", &trim(d))],
+        )
+    })?;
     if l + 1e-9 < row.l_min || l > row.l_max + 1e-9 {
-        return Err(format!(
-            "GB/T 120.1 Ø{} 的长度应在 {} ~ {} 之间（表内系列：{:?}）",
-            trim(d), trim(row.l_min), trim(row.l_max), row.lengths
+        return Err(crate::i18n::t_fmt(
+            "cmd.parts.err.len_range_series",
+            &[
+                ("std", "GB/T 120.1"),
+                ("d", &trim(d)),
+                ("lo", &trim(row.l_min)),
+                ("hi", &trim(row.l_max)),
+                ("series", &format!("{:?}", row.lengths)),
+            ],
         ));
     }
     let r = d / 2.0;
@@ -2398,7 +2464,9 @@ fn pin_threaded_weight_kg(row: &ThreadedPinRow, l: f64) -> f64 {
 /// - `main`：**侧视**（矩形 h × d2，装配/剖视图用）；`end`：左视图 = 面视（两圆 d2 / d1）
 ///   —— 2026-09-15 用户要求主视图/左视图互换（主视图 = 装配要用的侧视轮廓）。
 pub fn flat_washer(d: f64, view: NutView) -> Result<GenPart, String> {
-    let row = washer_971_row(d).ok_or_else(|| format!("GB/T 97.1 数据表里没有 Ø{}", trim(d)))?;
+    let row = washer_971_row(d).ok_or_else(|| {
+        crate::i18n::t_fmt("cmd.parts.err.no_dia", &[("table", "GB/T 97.1"), ("d", &trim(d))])
+    })?;
     let (d1, d2, h) = (row.d1, row.d2, row.h);
     let meta = PartMeta {
         code: "GB/T 97.1-2002".into(),
@@ -2447,7 +2515,9 @@ pub fn flat_washer(d: f64, view: NutView) -> Result<GenPart, String> {
 /// - `end` 左视图：上下两个半矩形（厚 s × 半径 r_out，沿 y=0 分界）
 ///   + 两条 15° 斜切口线（(0, ±s/8) → (s, ±(s/8+s·tan15°))）。
 pub fn spring_washer(d: f64, view: NutView) -> Result<GenPart, String> {
-    let row = washer_93_row(d).ok_or_else(|| format!("GB/T 93 数据表里没有 Ø{}", trim(d)))?;
+    let row = washer_93_row(d).ok_or_else(|| {
+        crate::i18n::t_fmt("cmd.parts.err.no_dia", &[("table", "GB/T 93"), ("d", &trim(d))])
+    })?;
     let r_out = (row.d1 + 2.0 * row.b) / 2.0;
     let r_in = row.d1 / 2.0;
     let s = row.s;
@@ -2754,6 +2824,8 @@ mod acm_ref_tests {
     /// 剖视 Δ45=1.8、孔壁竖线 x=1.8/20.5、大径细线 ±12 全长、两片 ANSI31。
     #[test]
     fn c41_nut_matches_template() {
+        let _g = crate::global_state_test_lock();
+        crate::i18n::set_lang(crate::i18n::Lang::Zh);
         let (d, m) = (24.0, 22.3);
         let row = nut_c41_row(d).unwrap();
         let s = row.s; // 36
@@ -2867,6 +2939,8 @@ mod acm_ref_tests {
     /// 两端交界竖棱线 x=2 / x=16.8、中心线 −3→21。
     #[test]
     fn pin_1191_matches_template() {
+        let _g = crate::global_state_test_lock();
+        crate::i18n::set_lang(crate::i18n::Lang::Zh);
         let p = pin_a(10.0, 18.0).unwrap();
         let (r, c, a) = (5.0, 2.0, 1.2);
         let rf = pin_face_r(10.0, c);
@@ -2923,6 +2997,8 @@ mod acm_ref_tests {
     /// 剖面线 ANSI31 角 0°、比例 1。本库把孔口端映到 x=l（整体平移 +l），下列断言已平移。
     #[test]
     fn pin_1201_matches_template() {
+        let _g = crate::global_state_test_lock();
+        crate::i18n::set_lang(crate::i18n::Lang::Zh);
         let (d, l) = (20.0, 40.0);
         let row = pin_1201_row(d).unwrap();
         let (c, a, d1, t1, t2) = (row.c, row.a, row.d1, row.t1, row.t2);
@@ -3076,6 +3152,8 @@ mod acm_ref_tests {
     /// 销族数据表体检：规格数、长度递增、全规格可生成、模板实例在表内。
     #[test]
     fn pin_tables_sane() {
+        let _g = crate::global_state_test_lock();
+        crate::i18n::set_lang(crate::i18n::Lang::Zh);
         assert_eq!(pin_1191_table().rows.len(), 20, "GB/T 119.1 共 20 规格");
         assert_eq!(pin_1201_table().rows.len(), 10, "GB/T 120.1 共 10 规格");
         for row in pin_1191_table().rows.iter() {
@@ -3163,6 +3241,8 @@ mod acm_ref_tests {
     /// 视图注册表：只声明样例里真实存在的视图；未声明的必须报错（GUI 不会列出）。
     #[test]
     fn view_registry_matches_user_samples() {
+        let _g = crate::global_state_test_lock();
+        crate::i18n::set_lang(crate::i18n::Lang::Zh);
         assert_eq!(family_views("hex_bolt_c"), vec!["main", "top", "end"], "5780 三视图齐全");
         for fam in ["hex_bolt_b_full", "hex_bolt_hole_a", "socket_head"] {
             assert_eq!(family_views(fam), vec!["main", "end"], "{fam} 样例无俯视图");

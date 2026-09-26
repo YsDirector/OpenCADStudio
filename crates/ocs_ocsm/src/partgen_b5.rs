@@ -216,15 +216,20 @@ fn arc_prefer(c: [f64; 2], r: f64, pa: [f64; 2], pb: [f64; 2], outward: bool) ->
 
 /// 生成 GB/T 70.2-2015 的一个视图。
 pub fn socket_button(d: f64, l: f64, view: &str) -> Result<GenPart, String> {
-    let row = button702_row(d)
-        .ok_or_else(|| format!("GB/T 70.2 数据表里没有 M{}", trim(d)))?;
+    let row = button702_row(d).ok_or_else(|| {
+        crate::i18n::t_fmt(
+            "cmd.parts.err.no_m",
+            &[("table", "GB/T 70.2"), ("d", &trim(d))],
+        )
+    })?;
     check_length(row.l_min, row.l_max, d, l)?;
     let entities = match view {
         "main" => button_main(row, l),
         "end" => button_end(row),
         other => {
-            return Err(format!(
-                "socket_button_702 不提供视图 {other}（可用 main/end）"
+            return Err(crate::i18n::t_fmt(
+                "cmd.parts.err.view_not_offered",
+                &[("family", "socket_button_702"), ("view", other), ("avail", "main/end")],
             ))
         }
     };
@@ -334,14 +339,20 @@ pub fn torx2671_top_radius(row: &Torx2671Row) -> f64 {
 
 /// 生成 GB/T 2671.1-2017 的一个视图。
 pub fn socket_torx(d: f64, l: f64, view: &str) -> Result<GenPart, String> {
-    let row = torx2671_row(d).ok_or_else(|| format!("GB/T 2671.1 数据表里没有 M{}", trim(d)))?;
+    let row = torx2671_row(d).ok_or_else(|| {
+        crate::i18n::t_fmt(
+            "cmd.parts.err.no_m",
+            &[("table", "GB/T 2671.1"), ("d", &trim(d))],
+        )
+    })?;
     check_length(row.l_min, row.l_max, d, l)?;
     let entities = match view {
         "main" => torx_main(row, l),
         "end" => torx_end(row),
         other => {
-            return Err(format!(
-                "socket_torx_2671 不提供视图 {other}（可用 main/end）"
+            return Err(crate::i18n::t_fmt(
+                "cmd.parts.err.view_not_offered",
+                &[("family", "socket_torx_2671"), ("view", other), ("avail", "main/end")],
             ))
         }
     };

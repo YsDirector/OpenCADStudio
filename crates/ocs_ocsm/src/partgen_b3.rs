@@ -833,14 +833,18 @@ pub fn generate(family: &str, d: f64, l: f64, view: &str) -> Option<Result<GenPa
 
 fn gen_eye(d: f64, l: f64, view: &str) -> Result<GenPart, String> {
     if !family_views("eye_bolt_825").contains(&view) {
-        return Err(format!("eye_bolt_825 不提供视图 {view}（可用 main/end）"));
+        return Err(crate::i18n::t_fmt(
+            "cmd.parts.err.view_not_offered",
+            &[("family", "eye_bolt_825"), ("view", view), ("avail", "main/end")],
+        ));
     }
-    let row = eye_row(d).ok_or_else(|| format!("GB/T 825 数据表里没有 M{}", trim(d)))?;
+    let row = eye_row(d).ok_or_else(|| {
+        crate::i18n::t_fmt("cmd.parts.err.no_m", &[("table", "GB/T 825"), ("d", &trim(d))])
+    })?;
     if (l - row.l).abs() > 1e-6 {
-        return Err(format!(
-            "M{} 的螺纹长度 l={}（收到 {l}）",
-            trim(d),
-            trim(row.l)
+        return Err(crate::i18n::t_fmt(
+            "cmd.parts.err.thread_len",
+            &[("d", &trim(d)), ("want", &trim(row.l)), ("got", &trim(l))],
         ));
     }
     match view {
@@ -851,19 +855,32 @@ fn gen_eye(d: f64, l: f64, view: &str) -> Result<GenPart, String> {
 
 fn gen_seal(d1: f64, od: f64, view: &str) -> Result<GenPart, String> {
     if view != "main" {
-        return Err(format!("seal_fb 只有主视图（模板只有这一个视图），收到 {view}"));
+        return Err(crate::i18n::t_fmt(
+            "cmd.parts.err.only_main_received",
+            &[("family", "seal_fb"), ("view", view)],
+        ));
     }
-    let row = seal_row(d1, od)
-        .ok_or_else(|| format!("GB/T 13871.1 数据表里没有 d1={} D={}", trim(d1), trim(od)))?;
+    let row = seal_row(d1, od).ok_or_else(|| {
+        crate::i18n::t_fmt(
+            "cmd.parts.err.no_d1_od",
+            &[("d1", &trim(d1)), ("od", &trim(od))],
+        )
+    })?;
     seal_fb(row)
 }
 
 fn gen_bearing(d: f64, w: f64, view: &str) -> Result<GenPart, String> {
     if view != "main" {
-        return Err(format!("bearing_276 只有主视图（模板只有这一个视图），收到 {view}"));
+        return Err(crate::i18n::t_fmt(
+            "cmd.parts.err.only_main_received",
+            &[("family", "bearing_276"), ("view", view)],
+        ));
     }
     let row = bearing_row(d, w).ok_or_else(|| {
-        format!("GB/T 276 数据表里没有 内径 d={} 宽度 B={}", trim(d), trim(w))
+        crate::i18n::t_fmt(
+            "cmd.parts.err.no_d_bearing",
+            &[("d", &trim(d)), ("b", &trim(w))],
+        )
     })?;
     bearing_276(row)
 }

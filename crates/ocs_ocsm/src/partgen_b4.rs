@@ -631,20 +631,40 @@ pub fn generate(family: &str, d: f64, l: f64, view: &str) -> Option<Result<GenPa
 
 fn gen297(d: f64, l: f64, view: &str) -> Result<GenPart, String> {
     if view != "main" {
-        return Err(format!("bearing_297 只有主视图（模板只有这一个视图），收到 {view}"));
+        return Err(crate::i18n::t_fmt(
+            "cmd.parts.err.only_main_received",
+            &[("family", "bearing_297"), ("view", view)],
+        ));
     }
     let row = row297(d, l).ok_or_else(|| {
-        format!("GB/T 297 数据表里没有 d={} T={} 的规格", trim(d), trim(l))
+        crate::i18n::t_fmt(
+            "cmd.parts.err.no_dt",
+            &[
+                ("table", "GB/T 297"),
+                ("d", &trim(d)),
+                ("t", &trim(l)),
+            ],
+        )
     })?;
     Ok(bearing_297(row))
 }
 
 fn gen288(d: f64, l: f64, view: &str) -> Result<GenPart, String> {
     if view != "main" {
-        return Err(format!("bearing_288 只有主视图（模板只有这一个视图），收到 {view}"));
+        return Err(crate::i18n::t_fmt(
+            "cmd.parts.err.only_main_received",
+            &[("family", "bearing_288"), ("view", view)],
+        ));
     }
     let row = row288(d, l).ok_or_else(|| {
-        format!("GB/T 288 数据表里没有 d={} B={} 的规格", trim(d), trim(l))
+        crate::i18n::t_fmt(
+            "cmd.parts.err.no_db",
+            &[
+                ("table", "GB/T 288"),
+                ("d", &trim(d)),
+                ("b", &trim(l)),
+            ],
+        )
     })?;
     Ok(bearing_288(row))
 }

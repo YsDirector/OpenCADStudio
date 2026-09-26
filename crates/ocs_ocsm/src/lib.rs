@@ -2186,10 +2186,17 @@ impl OcsmPlugin {
             let tail = if plan.skipped.is_empty() {
                 String::new()
             } else {
-                format!("（{}）", plan.skipped.join("；"))
+                crate::i18n::t_fmt(
+                    "cmd.d2g.info.none_found_tail",
+                    &[(
+                        "list",
+                        &plan.skipped.join(&crate::i18n::t("cmd.d2g.report.sep")),
+                    )],
+                )
             };
-            host.push_info(&format!(
-                "OCSMDIM2GB：未找到可转换的原生标注（仅扫描模型空间）{tail}"
+            host.push_info(&crate::i18n::t_fmt(
+                "cmd.d2g.info.none_found",
+                &[("tail", &tail)],
             ));
             return;
         }
@@ -2197,7 +2204,7 @@ impl OcsmPlugin {
         if plan.converted == 0 {
             return;
         }
-        host.push_undo("OCSMDIM2GB 原生标注转 GB");
+        host.push_undo(&crate::i18n::t("cmd.d2g.undo"));
         // ① 幂等补基建（图层/文字样式/标注样式——图纸可能从没跑过 OCSM 初始化）
         // ② 建匿名块（INSERT 引用它）③ 加新实体 ④ 删原标注。
         host.ensure_layers(layer_defs());
@@ -2212,7 +2219,10 @@ impl OcsmPlugin {
         }
         for (name, ents) in &plan.blocks {
             if let Err(e) = host.add_block_record(name, ents.clone()) {
-                host.push_error(&format!("OCSMDIM2GB：建块 {name} 失败：{e}"));
+                host.push_error(&crate::i18n::t_fmt(
+                    "cmd.d2g.err.block_create_named",
+                    &[("name", name), ("e", &e.to_string())],
+                ));
             }
         }
         if !plan.adds.is_empty() {
@@ -2254,7 +2264,7 @@ impl OcsmPlugin {
     /// POST /api/rough_apply 生成匿名块（ATTDEF 文字）+ INSERT。
     fn cmd_roughness(&self, host: &mut dyn HostApi) {
         let Some(sender) = host.plugin_request_sender() else {
-            host.push_error("OCSM: 无法获取插件请求通道（宿主不支持 worker 请求）。");
+            host.push_error(&crate::i18n::t("cmd.parts.err.no_service"));
             return;
         };
         host.start_interactive(Box::new(RoughnessPlace {
@@ -2614,21 +2624,7 @@ impl OcsmPlugin {
                     return;
                 }
                 None => {
-                    host.push_error(
-                        "OCSMPART 参数无效。用法：标准件 `OCSMPART <族> <d> <l> [view <视图>] [at x,y] [rot 度]`\
-                         （例：OCSMPART hex_bolt_c 10 95 at 150,30 rot 0）；\
-                         结构要素 `OCSMPART detail_grind_od <d> [b1 <值>] [at x,y] [rot 度]`\
-                         （b1 缺省 = 该 d 档默认行）；\
-                         矩形花键 `OCSMPART detail_spline_rect <规格代号> L<满齿段长> [de <滚刀外径>] [view front|side|section]`\
-                         （例：OCSMPART detail_spline_rect 6x23x26x6 L30 view side）；\
-                         外螺纹退刀槽 `OCSMPART detail_thread_relief <d> P <螺距> [g1 值 g2 值 dg 值 r 值 alpha 值] [at x,y] [rot 度]`\
-                         （P 必给）；\
-                         毂槽 `OCSMPART detail_hub_keyway <d> [len 毂长] [view main|side]`\
-                         （例：OCSMPART detail_hub_keyway 25 len 30 view main；b/t₂/r 由 d 查表，len 缺省 30）；\
-                         平键 `OCSMPART key_1096_{a|b|c} <b> <L> [view main|top|section]`、`OCSMPART key_1097_{a|b} <b> <L> [view main|top]`\
-                         （例：OCSMPART key_1096_a 4 8、OCSMPART key_1097_a 8 25；L 省略/0 = 该档默认，L 须 ∈ 标准系列且 L<10b，1097 的 L1/L2/L3 由 L 查长度系列表派生）；\
-                         不带参数则打开零件库窗口。",
-                    );
+                    host.push_error(&crate::i18n::t("cmd.parts.usage"));
                     return;
                 }
             }
@@ -2636,14 +2632,12 @@ impl OcsmPlugin {
         // 先确保标注更新服务器在跑并打开零件库窗口（不需要先点插入点）
         if let Some(port) = self.ensure_guide_server(host) {
             if open_parts_window(port, Some(host.tab_id())) {
-                host.push_info(
-                    "OCSM 标准件库：已打开零件库窗口。选零件点「零件出库」→ 回到图纸点击定位基点 → 移动光标旋转 → 再点击落定（可连续，Esc 结束）。",
-                );
+                host.push_info(&crate::i18n::t("cmd.parts.window_opened"));
             } else {
-                host.push_info("OCSM 标准件库：零件库窗口已打开（Alt+Tab 切换过去）。");
+                host.push_info(&crate::i18n::t("cmd.parts.window_exists"));
             }
         } else {
-            host.push_error("OCSM: 无法启动零件库服务（宿主不支持 worker 请求）。");
+            host.push_error(&crate::i18n::t("cmd.parts.err.no_service"));
             return;
         }
         // 同时进入放置态：窗口里出库后，鼠标即跟随预览、左键落件
@@ -2655,8 +2649,8 @@ impl OcsmPlugin {
             sender: std::sync::Arc::from(sender),
             phase: std::cell::Cell::new(PlacePhase::Follow),
             base: std::cell::Cell::new([0.0, 0.0, 0.0]),
-            what: "OCSM 标准件".to_string(),
-            where_to: "请在零件库窗口里点「零件出库」".to_string(),
+            what: crate::i18n::t("cmd.parts.prompt.what"),
+            where_to: crate::i18n::t("cmd.parts.prompt.where"),
         }));
     }
 
@@ -2664,13 +2658,19 @@ impl OcsmPlugin {
     /// （`guide_server::apply_part_pick`，已带 Begin/Commit 撤销事务）。
     fn cmd_parts_insert(&self, host: &mut dyn HostApi, spec: &PartsSpec) {
         let Some(sender) = host.plugin_request_sender() else {
-            host.push_error("OCSM 标准件：宿主不支持 worker 请求，无法参数化插入。");
+            host.push_error(&crate::i18n::t("cmd.parts.err.no_worker"));
             return;
         };
         let sender: std::sync::Arc<dyn PluginRequestSender> = std::sync::Arc::from(sender);
         match crate::guide_server::apply_part_pick(&sender, spec.to_body().as_bytes()) {
-            Ok(msg) => host.push_output(&format!("OCSM 标准件：{msg}")),
-            Err(e) => host.push_error(&format!("OCSM 标准件插入失败：{e}")),
+            Ok(msg) => host.push_output(&crate::i18n::t_fmt(
+                "cmd.parts.inserted_prefix",
+                &[("msg", &msg)],
+            )),
+            Err(e) => host.push_error(&crate::i18n::t_fmt(
+                "cmd.parts.err.insert_failed",
+                &[("e", &e)],
+            )),
         }
     }
 
@@ -5140,7 +5140,7 @@ struct RoughnessPlace {
 
 impl InteractiveCommand for RoughnessPlace {
     fn prompt(&self) -> String {
-        "OCSM 表面粗糙度：指定符号插入点。".to_string()
+        crate::i18n::t("cmd.rough.prompt")
     }
 
     fn on_point(&mut self, pt: [f64; 3]) -> CommandStep {
@@ -7421,6 +7421,7 @@ mod tests {
     #[test]
     fn part_place_is_two_stage_with_rotation_preview() {
         let _g = global_state_test_lock();   // PENDING_PART 进程级全局（与导出测试共用一把锁）
+        crate::i18n::set_lang(crate::i18n::Lang::Zh);
         let rec = std::sync::Arc::new(RecordingSender::new());
         let sender: std::sync::Arc<dyn PluginRequestSender> = rec.clone();
         set_pending_part(PendingPart::new("OCSM_TEST", "{}", "测试件 M10x40"));

@@ -251,9 +251,13 @@ pub fn generate(family: &str, d: f64, l: f64, view: &str) -> Option<Result<GenPa
         return None;
     }
     if !allowed.contains(&view) {
-        return Some(Err(format!(
-            "{family} 不提供视图 {view}（可用：{}）",
-            allowed.join("/")
+        return Some(Err(crate::i18n::t_fmt(
+            "cmd.parts.err.view_not_offered",
+            &[
+                ("family", family),
+                ("view", view),
+                ("avail", &allowed.join("/")),
+            ],
         )));
     }
     match family {
@@ -278,7 +282,12 @@ fn nut_weight_kg(row: &NutRow, d: f64) -> f64 {
 fn nut_6170(d: f64, _l: f64, view: &str) -> Result<GenPart, String> {
     let row = nut_table()
         .row(d)
-        .ok_or_else(|| format!("GB/T 6170-2015 数据表里没有 M{}", trim(d)))?;
+        .ok_or_else(|| {
+            crate::i18n::t_fmt(
+                "cmd.parts.err.no_m",
+                &[("table", "GB/T 6170-2015"), ("d", &trim(d))],
+            )
+        })?;
     let meta = PartMeta {
         code: "GB/T 6170-2015".into(),
         name: "1型六角螺母".into(),
@@ -355,7 +364,14 @@ fn nut_6170(d: f64, _l: f64, view: &str) -> Result<GenPart, String> {
             en.push(line([0.0, o], [0.0, -o], LAYER_CENTER));
             Ok(GenPart { entities: en, meta, bbox: [-s / 2.0, -e / 2.0, s / 2.0, e / 2.0] })
         }
-        other => Err(format!("nut_6170 没有视图 {other}（可用：main/top/end/section）")),
+        other => Err(crate::i18n::t_fmt(
+            "cmd.parts.err.view_absent",
+            &[
+                ("family", "nut_6170"),
+                ("view", other),
+                ("avail", "main/top/end/section"),
+            ],
+        )),
     }
 }
 
@@ -459,7 +475,12 @@ const R893_GAP_DEG: f64 = -67.5;
 fn ring_893(d: f64, view: &str) -> Result<GenPart, String> {
     let row = ring893_table()
         .row(d)
-        .ok_or_else(|| format!("GB/T 893-2017 A型 数据表里没有 Ø{}", trim(d)))?;
+        .ok_or_else(|| {
+            crate::i18n::t_fmt(
+                "cmd.parts.err.no_dia",
+                &[("table", "GB/T 893-2017 A型"), ("d", &trim(d))],
+            )
+        })?;
     let meta = PartMeta {
         code: "GB/T 893-2017".into(),
         name: "孔用弹性挡圈 A型".into(),
@@ -470,7 +491,10 @@ fn ring_893(d: f64, view: &str) -> Result<GenPart, String> {
     match view {
         "main" => Ok(ring893_main(row, meta)),
         "end" => Ok(ring893_end(row, meta)),
-        other => Err(format!("ring_893 没有视图 {other}（可用：main/end）")),
+        other => Err(crate::i18n::t_fmt(
+            "cmd.parts.err.view_absent",
+            &[("family", "ring_893"), ("view", other), ("avail", "main/end")],
+        )),
     }
 }
 
@@ -609,7 +633,12 @@ fn r894_geom(row: &Ring894Row) -> R894 {
 fn ring_894(d: f64, view: &str) -> Result<GenPart, String> {
     let row = ring894_table()
         .row(d)
-        .ok_or_else(|| format!("GB/T 894-2017 A型 数据表里没有 Ø{}", trim(d)))?;
+        .ok_or_else(|| {
+            crate::i18n::t_fmt(
+                "cmd.parts.err.no_dia",
+                &[("table", "GB/T 894-2017 A型"), ("d", &trim(d))],
+            )
+        })?;
     let meta = PartMeta {
         code: "GB/T 894-2017".into(),
         name: "轴用弹性挡圈 A型".into(),
@@ -620,7 +649,10 @@ fn ring_894(d: f64, view: &str) -> Result<GenPart, String> {
     match view {
         "main" => Ok(ring894_main(row, meta)),
         "end" => Ok(ring894_end(row, meta)),
-        other => Err(format!("ring_894 没有视图 {other}（可用：main/end）")),
+        other => Err(crate::i18n::t_fmt(
+            "cmd.parts.err.view_absent",
+            &[("family", "ring_894"), ("view", other), ("avail", "main/end")],
+        )),
     }
 }
 
@@ -690,6 +722,14 @@ fn ring894_end(row: &Ring894Row, meta: PartMeta) -> GenPart {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 语言是进程级全局：断言中文文案的用例共用锁并钉死 zh。
+    fn zh_guard() -> std::sync::MutexGuard<'static, ()> {
+        let g = crate::global_state_test_lock();
+        crate::i18n::set_lang(crate::i18n::Lang::Zh);
+        g
+    }
+
     use crate::partgen_kit::{LAYER_CENTER, LAYER_HATCH, LAYER_HIDDEN, LAYER_MAIN, LAYER_THIN};
 
     /// 每个规格 × 每个视图都能生成；首个长度（= s / m）能出图。
@@ -725,6 +765,7 @@ mod tests {
     /// 非本组族：`generate` 必须返回 None；视图越界必须报错。
     #[test]
     fn dispatch_ownership_and_view_check() {
+        let _g = zh_guard();
         assert!(generate("hex_bolt_c", 10.0, 20.0, "main").is_none());
         assert!(generate("washer_971", 10.0, 10.0, "main").is_none());
         let e = generate("nut_6170", 10.0, 8.4, "side").unwrap().unwrap_err();
