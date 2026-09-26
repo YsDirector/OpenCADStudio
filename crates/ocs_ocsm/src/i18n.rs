@@ -3977,6 +3977,657 @@ pub const CATALOG: &[Msg] = &[
     Msg::new("cmd.shaft.end.l", "左", "left"),
     Msg::new("cmd.shaft.end.r", "右", "right"),
 
+    Msg::new(
+        "cmd.shaft.label.seg",
+        "第 {n} 段",
+        "segment {n}",
+    ),
+    Msg::new(
+        "cmd.shaft.err.view_double_removed",
+        "不识别的视图名「{name}」：双视图已移除（用户 2026-09-23 定案）——轴生成器只支持 常规/剖视 两个视图；原 `VIEW 双` 的并排输出已撤（需要并排请分别出两次图）。",
+        "unrecognized view name \"{name}\": the dual view was removed (decided 2026-09-23) — the shaft generator only supports normal/section; the old `VIEW 双` side-by-side output was withdrawn (run the command twice if you need them side by side).",
+    ),
+    Msg::new(
+        "cmd.shaft.place.mid",
+        "中置",
+        "centred",
+    ),
+    Msg::new(
+        "cmd.shaft.place.end",
+        "端置",
+        "end-placed",
+    ),
+    Msg::new(
+        "cmd.shaft.keykind.a",
+        "A型（双圆头）",
+        "type A (round both ends)",
+    ),
+    Msg::new(
+        "cmd.shaft.keykind.b",
+        "B型（双平头）",
+        "type B (flat both ends)",
+    ),
+    Msg::new(
+        "cmd.shaft.keykind.c",
+        "C型（单圆头）",
+        "type C (one round end)",
+    ),
+    Msg::new(
+        "cmd.shaft.err.gb1095_b_pair",
+        "轴径 d={p0} 按 GB/T 1095 应配 b={p1}×h={p2}；显式 b={p3} 不是该轴径档的标准键尺寸（不许自由组合）",
+        "shaft diameter d={p0} should pair with b={p1}×h={p2} per GB/T 1095; the explicit b={p3} is not a standard key size for that diameter step (free combinations are not allowed)",
+    ),
+    Msg::new(
+        "cmd.shaft.err.thread_str_not_number",
+        "thread 字符串「{text}」不是螺距数字",
+        "thread string \"{text}\" is not a pitch number",
+    ),
+    Msg::new(
+        "cmd.shaft.err.json_parse",
+        "JSON 解析失败：{e}",
+        "JSON parse failed: {e}",
+    ),
+    Msg::new(
+        "cmd.shaft.err.json_ch_end_bad",
+        "{label}：ch[{k}] 的端别「{bad}」非法（只能用 L 或 R）",
+        "{label}: end \"{bad}\" of ch[{k}] is invalid (only L or R)",
+    ),
+    Msg::new(
+        "cmd.shaft.err.json_ch_dup_end",
+        "{label}：ch 在{p0}端重复",
+        "{label}: ch is repeated at the {p0} end",
+    ),
+    Msg::new(
+        "cmd.shaft.err.json_ov_end_bad",
+        "{label}：ov[{k}] 的端别「{bad}」非法（只能用 L 或 R）",
+        "{label}: end \"{bad}\" of ov[{k}] is invalid (only L or R)",
+    ),
+    Msg::new(
+        "cmd.shaft.err.json_ov_dup_end",
+        "{label}：ov 在{p0}端重复",
+        "{label}: ov is repeated at the {p0} end",
+    ),
+    Msg::new(
+        "cmd.shaft.err.json_relief_end_bad",
+        "{label}：relief[{k}] 的端别「{bad}」非法（只能用 L 或 R）",
+        "{label}: end \"{bad}\" of relief[{k}] is invalid (only L or R)",
+    ),
+    Msg::new(
+        "cmd.shaft.err.json_relief_dup_end",
+        "{label}：relief 在{p0}端重复",
+        "{label}: relief is repeated at the {p0} end",
+    ),
+    Msg::new(
+        "cmd.shaft.err.json_thread_relief",
+        "{label}：M 段右端的退刀槽收尾用 thread.relief 表示，不要再写段级 relief（端别 R）",
+        "{label}: the right-end thread run-out of an M segment is expressed by thread.relief; do not add a segment-level relief (end R)",
+    ),
+    Msg::new(
+        "cmd.shaft.err.spline_no_n",
+        "{label}：花键段缺 n（齿数）",
+        "{label}: spline segment is missing n (tooth count)",
+    ),
+    Msg::new(
+        "cmd.shaft.err.spline_no_d",
+        "{label}：花键段缺 d（小径）",
+        "{label}: spline segment is missing d (minor diameter)",
+    ),
+    Msg::new(
+        "cmd.shaft.err.spline_no_big",
+        "{label}：花键段缺 big（大径 D）",
+        "{label}: spline segment is missing big (major diameter D)",
+    ),
+    Msg::new(
+        "cmd.shaft.err.spline_no_b",
+        "{label}：花键段缺 b（键宽 B）",
+        "{label}: spline segment is missing b (key width B)",
+    ),
+    Msg::new(
+        "cmd.shaft.err.spline_de_not_found",
+        "{label}：花键段 de 查不到（不在表 1/表 2），请显式给 de",
+        "{label}: spline de not found (not in Table 1/2); give de explicitly",
+    ),
+    Msg::new(
+        "cmd.shaft.err.spline_s_mismatch",
+        "{label}：花键段的 s={p0} 应等于大径 D={p1}",
+        "{label}: spline s={p0} must equal the major diameter D={p1}",
+    ),
+    Msg::new(
+        "cmd.shaft.err.spline_e_mismatch",
+        "{label}：花键段的 e={p0} 应等于大径 D={p1}",
+        "{label}: spline e={p0} must equal the major diameter D={p1}",
+    ),
+    Msg::new(
+        "cmd.shaft.err.spline_l_mismatch",
+        "{label}：花键段的 l={p0} 应等于 L+l={p1}（L={p2} + 收尾 {p3})），",
+        "{label}: spline l={p0} must equal L+l={p1} (L={p2} + run-out {p3})",
+    ),
+    Msg::new(
+        "cmd.shaft.err.json_gear_kind_bad",
+        "{label}：齿轮段的 kind「{k}」非法（应为 external/internal）",
+        "{label}: invalid gear segment kind \"{k}\" (use external/internal)",
+    ),
+    Msg::new(
+        "cmd.shaft.err.json_gear_helical",
+        "{label}：齿轮段斜齿（beta={p0}）本期只做直齿（斜齿未实现）",
+        "{label}: helical gear segment (beta={p0}) is spur-only in this release (helical not implemented)",
+    ),
+    Msg::new(
+        "cmd.shaft.err.json_gear_s_mismatch",
+        "{label}：齿轮段的 s={p0} 应等于分度圆 d={p1}（由 m·z 导出）",
+        "{label}: gear s={p0} must equal the pitch diameter d={p1} (derived from m·z)",
+    ),
+    Msg::new(
+        "cmd.shaft.err.json_gear_e_mismatch",
+        "{label}：齿轮段的 e={p0} 应等于分度圆 d={p1}（由 m·z 导出）",
+        "{label}: gear e={p0} must equal the pitch diameter d={p1} (derived from m·z)",
+    ),
+    Msg::new(
+        "cmd.shaft.err.json_gear_l_mismatch",
+        "{label}：齿轮段的 l={p0} 应等于齿宽 h={p1}",
+        "{label}: gear l={p0} must equal the face width h={p1}",
+    ),
+    Msg::new(
+        "cmd.shaft.err.seg_len_positive",
+        "{label}：段长 L={p0} 必须 > 0",
+        "{label}: segment length L={p0} must be > 0",
+    ),
+    Msg::new(
+        "cmd.shaft.err.seg_s_positive",
+        "{label}：起始直径 S={p0} 必须 > 0",
+        "{label}: start diameter S={p0} must be > 0",
+    ),
+    Msg::new(
+        "cmd.shaft.err.seg_e_positive",
+        "{label}：终点直径 E={p0} 必须 > 0",
+        "{label}: end diameter E={p0} must be > 0",
+    ),
+    Msg::new(
+        "cmd.shaft.err.chamfer_positive",
+        "{label}：倒角 C={p0} 必须 > 0",
+        "{label}: chamfer C={p0} must be > 0",
+    ),
+    Msg::new(
+        "cmd.shaft.err.chamfer_len_overlap",
+        "{label}：{p0}端倒角 C={p1} ≥ 段长/2（l={p2}），特征重叠",
+        "{label}: {p0}-end chamfer C={p1} ≥ half the segment length (l={p2}); features overlap",
+    ),
+    Msg::new(
+        "cmd.shaft.err.chamfer_dup_end",
+        "{label}：倒角 CH 在{p0}端重复",
+        "{label}: chamfer CH is repeated at the {p0} end",
+    ),
+    Msg::new(
+        "cmd.shaft.err.ov_b1_positive",
+        "{label}：越程槽 b1={p0} 必须 > 0",
+        "{label}: overtravel groove b1={p0} must be > 0",
+    ),
+    Msg::new(
+        "cmd.shaft.err.ov_b1_too_long",
+        "{label}：越程槽 b1={p0} > 段长 l={p1}",
+        "{label}: overtravel groove b1={p0} > segment length l={p1}",
+    ),
+    Msg::new(
+        "cmd.shaft.err.relief_dup_end",
+        "{label}：退刀槽 RL 重复（在{p0}端）",
+        "{label}: relief groove RL is repeated (at the {p0} end)",
+    ),
+    Msg::new(
+        "cmd.shaft.err.rl_cone_only",
+        "{label}：RL 退刀槽只能开在圆柱端（本段是锥面 S={p0} → E={p1}）",
+        "{label}: an RL relief groove can only be cut on a cylindrical end (this segment is a cone S={p0} → E={p1})",
+    ),
+    Msg::new(
+        "cmd.shaft.err.rl_free_end_r",
+        "{label}：右端是自由端，退刀槽没有台阶面",
+        "{label}: the right end is free; a relief groove has no shoulder face",
+    ),
+    Msg::new(
+        "cmd.shaft.err.rl_g2_too_long",
+        "{label}：RL 退刀槽 g2={p0} > 段长 L={p1}",
+        "{label}: RL relief groove g2={p0} > segment length L={p1}",
+    ),
+    Msg::new(
+        "cmd.shaft.err.rl_ch_conflict",
+        "{label}：{p0}端的 RL 退刀槽与倒角 CH 冲突（同端只能一个）",
+        "{label}: the RL relief groove on the {p0} end conflicts with chamfer CH (only one per end)",
+    ),
+    Msg::new(
+        "cmd.shaft.err.rl_ov_conflict",
+        "{label}：{p0}端的 RL 退刀槽与越程槽 OV 冲突（同端只能一个）",
+        "{label}: the RL relief groove on the {p0} end conflicts with overtravel groove OV (only one per end)",
+    ),
+    Msg::new(
+        "cmd.shaft.err.key_round_only",
+        "{label}：轴槽只能开在圆柱段（本段是锥面 S={p0} → E={p1}）",
+        "{label}: a shaft key can only be cut on a cylindrical segment (this one is a cone S={p0} → E={p1})",
+    ),
+    Msg::new(
+        "cmd.shaft.err.key_len_positive",
+        "{label}：轴槽键长 L={p0} 必须 > 0",
+        "{label}: shaft-key length L={p0} must be > 0",
+    ),
+    Msg::new(
+        "cmd.shaft.err.key_pair_invalid",
+        "{label}：键尺寸 b{p0}×h{p1} 不是标准配对（{p2} 的 b={p3} 应配 h={p4}）",
+        "{label}: key size b{p0}×h{p1} is not a standard pair ({p2} with b={p3} should pair with h={p4})",
+    ),
+    Msg::new(
+        "cmd.shaft.err.key_1097_len_bad",
+        "{label}：GB/T 1097 导向平键 L={p0} 不在长度系列（∩L<10b）里；可选（{p1} 档）：{p2}",
+        "{label}: GB/T 1097 guided-key L={p0} is not in the length series (∩L<10b); available ({p1} steps): {p2}",
+    ),
+    Msg::new(
+        "cmd.shaft.err.key_screw_out_slot",
+        "{label}：导向平键固定螺钉孔 M{p0}（半径 {p1}）越出槽端（L3={p2}）",
+        "{label}: guided-key set-screw hole M{p0} (radius {p1}) falls outside the slot end (L3={p2})",
+    ),
+    Msg::new(
+        "cmd.shaft.err.key_screw_out_profile",
+        "{label}：导向平键固定螺钉孔 M{p0} 越出 A 型圆头轮廓（L={p1}、b={p2}、L3={p3}）",
+        "{label}: guided-key set-screw hole M{p0} falls outside the type-A round-end profile (L={p1}, b={p2}, L3={p3})",
+    ),
+    Msg::new(
+        "cmd.shaft.err.keyway_prefix",
+        "{label}：轴槽：{e}",
+        "{label}: shaft key: {e}",
+    ),
+    Msg::new(
+        "cmd.shaft.err.key_b_ge_d",
+        "{label}：轴槽键宽 b={p0} ≥ 轴径 d={p1}（槽切穿轴）",
+        "{label}: shaft-key width b={p0} ≥ shaft diameter d={p1} (the slot cuts through the shaft)",
+    ),
+    Msg::new(
+        "cmd.shaft.err.key_t1_positive",
+        "{label}：轴槽槽深 t1={p0} 必须 > 0",
+        "{label}: shaft-key depth t1={p0} must be > 0",
+    ),
+    Msg::new(
+        "cmd.shaft.err.key_t1_le_sagitta",
+        "{label}：轴槽槽深 t1={p0} ≤ sagitta={p1}（槽底没切到圆柱下）",
+        "{label}: shaft-key depth t1={p0} ≤ sagitta={p1} (the slot bottom does not cut below the cylinder)",
+    ),
+    Msg::new(
+        "cmd.shaft.err.key_t1_ge_radius",
+        "{label}：轴槽槽深 t1={p0} ≥ 轴半径 R={p1}（槽切过轴线，剖视上下环分区不成立）",
+        "{label}: shaft-key depth t1={p0} ≥ shaft radius R={p1} (the slot cuts through the axis; the section's two hatched rings no longer hold)",
+    ),
+    Msg::new(
+        "cmd.shaft.err.key_screw_through_axis",
+        "{label}：固定螺钉孔深 L0={p0} ＋t1={p1}＋钻尖 {p2} 越过轴线（R={p3}）",
+        "{label}: set-screw hole depth L0={p0} + t1={p1} + drill point {p2} crosses the axis (R={p3})",
+    ),
+    Msg::new(
+        "cmd.shaft.err.key_mid_no_fit",
+        "{label}：中置轴槽（键长 L={p0}）在净圆柱段（倒角根↔段末）{p1} 内装不下",
+        "{label}: centred keyway (key length L={p0}) does not fit in the clean cylindrical run (chamfer root↔segment end) {p1}",
+    ),
+    Msg::new(
+        "cmd.shaft.err.key_single_end_ambiguous",
+        "{label}：单段轴的端置轴槽开口端不唯一（改中置 `KEY A 18` 或拆段）",
+        "{label}: on a single-segment shaft the open end of an end-placed keyway is ambiguous (use a centred `KEY A 18` or split the shaft)",
+    ),
+    Msg::new(
+        "cmd.shaft.err.key_slot_len_too_long",
+        "{label}：端置轴槽槽长（L + t1 = {p0} + {p1} = {p2}）> 段长 l={p3}",
+        "{label}: end-placed keyway slot length (L + t1 = {p0} + {p1} = {p2}) > segment length l={p3}",
+    ),
+    Msg::new(
+        "cmd.shaft.err.key_t1_lt_chamfer",
+        "{label}：端置轴槽 t1={p0} < {p1}端倒角 C={p2}（槽没切穿倒角，本期不支持）",
+        "{label}: end-placed keyway t1={p0} < {p1}-end chamfer C={p2} (the slot does not cut through the chamfer; not supported in this release)",
+    ),
+    Msg::new(
+        "cmd.shaft.err.m_pitch_positive",
+        "{label}：螺纹螺距 P={p0} 必须 > 0",
+        "{label}: thread pitch P={p0} must be > 0",
+    ),
+    Msg::new(
+        "cmd.shaft.err.m_pitch_too_big",
+        "{label}：螺距 P={p0} 太大（小径 d−1.0825P={p1} ≤ 0）",
+        "{label}: pitch P={p0} is too large (minor diameter d−1.0825P={p1} ≤ 0)",
+    ),
+    Msg::new(
+        "cmd.shaft.err.m_round_only",
+        "{label}：螺纹段必须是圆柱（S==E，当前 S={p0}、E={p1}）",
+        "{label}: a thread segment must be cylindrical (S==E; currently S={p0}, E={p1})",
+    ),
+    Msg::new(
+        "cmd.shaft.err.m_gear_conflict",
+        "{label}：螺纹段 M 不能与齿轮段 GEAR 同段",
+        "{label}: a thread segment M cannot share a segment with a gear segment GEAR",
+    ),
+    Msg::new(
+        "cmd.shaft.err.tlro_need_pitch",
+        "{label}：局部螺纹 TL/RL 必须给螺距（写法 M1.5 TL20；表 1/表 2 都按螺距查）",
+        "{label}: partial thread TL/RL requires a pitch (write M1.5 TL20; both Table 1 and Table 2 are keyed by pitch)",
+    ),
+    Msg::new(
+        "cmd.shaft.err.tl_positive_plain",
+        "{label}：完整螺纹长度 TL 必须 > 0",
+        "{label}: full thread length TL must be > 0",
+    ),
+    Msg::new(
+        "cmd.shaft.err.rl_dg_nonpositive",
+        "{label}：退刀槽 dg = d − {p0} = {p1} ≤ 0（螺纹直径太小）",
+        "{label}: relief groove dg = d − {p0} = {p1} ≤ 0 (the thread diameter is too small)",
+    ),
+    Msg::new(
+        "cmd.shaft.err.rl_dg_too_shallow",
+        "{label}：退刀槽底 dg={p0} 不低于螺纹小径 d1={p1}（槽没切进牙底）",
+        "{label}: relief-groove bottom dg={p0} is not below the thread minor diameter d1={p1} (the groove does not reach the thread root)",
+    ),
+    Msg::new(
+        "cmd.shaft.err.rl_g2_tl_too_long",
+        "{label}：退刀槽 g2={p0} + 完整螺纹 TL={p1} = {p2} 超过段长 L={p3}",
+        "{label}: relief groove g2={p0} + full thread TL={p1} = {p2} exceeds segment length L={p3}",
+    ),
+    Msg::new(
+        "cmd.shaft.err.ro_gt_sd",
+        "{label}：收尾 x={p0}（RO）大于肩距 a={p1}（SD），档位不搭（把 SD 调大或 RO 调短）",
+        "{label}: run-out x={p0} (RO) exceeds shoulder distance a={p1} (SD); the classes do not match (increase SD or shorten RO)",
+    ),
+    Msg::new(
+        "cmd.shaft.err.sd_tl_too_long",
+        "{label}：肩距 a={p0} + 完整螺纹 TL={p1} = {p2} 超过段长 L={p3}",
+        "{label}: shoulder distance a={p0} + full thread TL={p1} = {p2} exceeds segment length L={p3}",
+    ),
+    Msg::new(
+        "cmd.shaft.err.tlro_no_chamfer_v",
+        "{label}：局部螺纹 TL/RL 的右端不能倒角 CH（会吃掉锥面/退刀槽的台肩角）",
+        "{label}: the right end of a partial thread TL/RL cannot take a chamfer CH (it would eat the cone/relief-groove shoulder corner)",
+    ),
+    Msg::new(
+        "cmd.shaft.err.ro_sd_need_tl",
+        "{label}：RO/SD 只在局部螺纹（给了 TL）时有意义——不给 TL = 整段全螺纹",
+        "{label}: RO/SD only make sense for a partial thread (TL given) — no TL means the whole segment is threaded",
+    ),
+    Msg::new(
+        "cmd.shaft.err.spline_se_mismatch",
+        "{label}：花键段的 S/E={p0}/{p1} 应等于大径 D={p2}（由规格导出）",
+        "{label}: spline S/E={p0}/{p1} must equal the major diameter D={p2} (derived from the spec)",
+    ),
+    Msg::new(
+        "cmd.shaft.err.spline_len_mismatch",
+        "{label}：花键段段长 {p0} 应等于 L+l={p1}（L={p2} + 收尾 {p3}）",
+        "{label}: spline segment length {p0} must equal L+l={p1} (L={p2} + run-out {p3})",
+    ),
+    Msg::new(
+        "cmd.shaft.err.spline_gear_conflict",
+        "{label}：花键段不能与齿轮段 GEAR 同段",
+        "{label}: a spline segment cannot share a segment with a gear segment GEAR",
+    ),
+    Msg::new(
+        "cmd.shaft.err.tlro_rl_need_pitch",
+        "{label}：局部螺纹 RL 必须给螺距（写法 M1.5 TL20 RL）",
+        "{label}: partial thread RL requires a pitch (write M1.5 TL20 RL)",
+    ),
+    Msg::new(
+        "cmd.shaft.err.tlro_tl_need_pitch",
+        "{label}：局部螺纹 TL 必须给螺距（写法 M1.5 TL20）",
+        "{label}: partial thread TL requires a pitch (write M1.5 TL20)",
+    ),
+    Msg::new(
+        "cmd.shaft.err.gear_adjacent_covers_tip",
+        "{label}：齿轮段相邻第 {p0} 段 Ø{p1} 大于齿顶圆 Ø{p2}，会盖住齿顶线（相邻段半径必须 ≤ 齿顶圆半径）",
+        "{label}: the adjacent segment {p0} Ø{p1} is larger than the tip circle Ø{p2} and would cover the tip line (adjacent radius must be ≤ tip-circle radius)",
+    ),
+    Msg::new(
+        "cmd.shaft.err.chamfer_same_face",
+        "{label}：右端倒角与第 {p0} 段左端倒角落在同一端面，特征重叠",
+        "{label}: the right-end chamfer and the left-end chamfer of segment {p0} land on the same end face; features overlap",
+    ),
+    Msg::new(
+        "cmd.shaft.err.ov_same_face",
+        "{label}：右端与第 {p0} 段左端都写了越程槽（同一端面只能一侧）",
+        "{label}: an overtravel groove is written on both the right end and the left end of segment {p0} (only one side per end face)",
+    ),
+    Msg::new(
+        "cmd.shaft.err.one_relief_per_face",
+        "{label}：同一端面只能有一个退刀槽（RL）",
+        "{label}: only one relief groove (RL) per end face",
+    ),
+    Msg::new(
+        "cmd.shaft.err.rl_no_chamfer",
+        "{label}：退刀槽 RL 所在端面不能倒角 CH（同端只能有一个槽/倒角）",
+        "{label}: the end face with relief groove RL cannot take a chamfer CH (only one groove/chamfer per end)",
+    ),
+    Msg::new(
+        "cmd.shaft.err.rl_ov_same_face",
+        "{label}：退刀槽 RL 与越程槽 OV 在同一端面冲突（同端只能有一个槽/倒角）",
+        "{label}: relief groove RL and overtravel groove OV conflict on the same end face (only one groove/chamfer per end)",
+    ),
+    Msg::new(
+        "cmd.shaft.err.no_face_for_chamfer",
+        "{label}：{p0}端没有端面（相邻段直径相同），无法倒角",
+        "{label}: no end face on the {p0} end (the neighbouring segment has the same diameter), so no chamfer is possible",
+    ),
+    Msg::new(
+        "cmd.shaft.err.chamfer_eats_face",
+        "{label}：{p0}端倒角 C={p1} ≥ 端面直径变化量的一半（Ø{p2} → Ø{p3} 的 {p4}），端面被吃掉",
+        "{label}: {p0}-end chamfer C={p1} ≥ half the end-face diameter step (Ø{p2} → Ø{p3}, step {p4}); the end face is eaten away",
+    ),
+    Msg::new(
+        "cmd.shaft.err.chamfer_on_gear",
+        "{label}：{p0}端倒角会落在第 {p1} 段齿轮段上（齿轮段不能倒角）",
+        "{label}: the {p0}-end chamfer would land on gear segment {p1} (gear segments cannot take a chamfer)",
+    ),
+    Msg::new(
+        "cmd.shaft.err.chamfer_on_spline",
+        "{label}：倒角会落在花键段右端（收尾弧占有该端）—— 引入倒角请写在花键左端",
+        "{label}: the chamfer would land on the right end of a spline segment (its run-out arc owns that end) — put the lead-in chamfer on the spline's left end",
+    ),
+    Msg::new(
+        "cmd.shaft.err.chamfer_face_overlap",
+        "{label}：{p0}端倒角与相邻面重叠（端面点 {p1} ≤ {p2}）",
+        "{label}: {p0}-end chamfer overlaps the neighbouring face (face point {p1} ≤ {p2})",
+    ),
+    Msg::new(
+        "cmd.shaft.err.ov_no_step_r",
+        "{label}：右端越程槽没有台阶面（相邻段 Ø{p0} 不大于本段 Ø{p1}）",
+        "{label}: right-end overtravel groove has no shoulder face (neighbouring Ø{p0} is not larger than this segment Ø{p1})",
+    ),
+    Msg::new(
+        "cmd.shaft.err.ov_cone_r",
+        "{label}：右端是锥面，越程槽只能开在圆柱端",
+        "{label}: the right end is a cone; an overtravel groove can only be cut on a cylindrical end",
+    ),
+    Msg::new(
+        "cmd.shaft.err.ov_prefix_r",
+        "{label}：右端越程槽：{e}",
+        "{label}: right-end overtravel groove: {e}",
+    ),
+    Msg::new(
+        "cmd.shaft.err.ov_r_tangent_r",
+        "{label}：右端越程槽的 R 圆角切点 {p0} 不低于台阶面 {p1}（相邻台阶太小）",
+        "{label}: the R-fillet tangent point {p0} of the right-end overtravel groove is not below the shoulder face {p1} (neighbouring shoulder too small)",
+    ),
+    Msg::new(
+        "cmd.shaft.err.ov_no_step_l",
+        "{label}：左端越程槽没有台阶面（相邻段 Ø{p0} 不大于本段 Ø{p1}）",
+        "{label}: left-end overtravel groove has no shoulder face (neighbouring Ø{p0} is not larger than this segment Ø{p1})",
+    ),
+    Msg::new(
+        "cmd.shaft.err.ov_cone_l",
+        "{label}：左端是锥面，越程槽只能开在圆柱端",
+        "{label}: the left end is a cone; an overtravel groove can only be cut on a cylindrical end",
+    ),
+    Msg::new(
+        "cmd.shaft.err.ov_prefix_l",
+        "{label}：左端越程槽：{e}",
+        "{label}: left-end overtravel groove: {e}",
+    ),
+    Msg::new(
+        "cmd.shaft.err.ov_r_tangent_l",
+        "{label}：左端越程槽的 R 圆角切点 {p0} 不低于台阶面 {p1}（相邻台阶太小）",
+        "{label}: the R-fillet tangent point {p0} of the left-end overtravel groove is not below the shoulder face {p1} (neighbouring shoulder too small)",
+    ),
+    Msg::new(
+        "cmd.shaft.err.rl_no_step_r",
+        "{label}：右端退刀槽没有台阶面（相邻段 Ø{p0} 不大于本段 Ø{p1}）",
+        "{label}: right-end relief groove has no shoulder face (neighbouring Ø{p0} is not larger than this segment Ø{p1})",
+    ),
+    Msg::new(
+        "cmd.shaft.err.rl_r_tangent_r",
+        "{label}：右端退刀槽的 R 圆角切点 {p0} 不低于台阶面 {p1}（相邻台阶太小）",
+        "{label}: the R-fillet tangent point {p0} of the right-end relief groove is not below the shoulder face {p1} (neighbouring shoulder too small)",
+    ),
+    Msg::new(
+        "cmd.shaft.err.rl_no_step_l",
+        "{label}：左端退刀槽没有台阶面（相邻段 Ø{p0} 不大于本段 Ø{p1}）",
+        "{label}: left-end relief groove has no shoulder face (neighbouring Ø{p0} is not larger than this segment Ø{p1})",
+    ),
+    Msg::new(
+        "cmd.shaft.err.rl_r_tangent_l",
+        "{label}：左端退刀槽的 R 圆角切点 {p0} 不低于台阶面 {p1}（相邻台阶太小）",
+        "{label}: the R-fillet tangent point {p0} of the left-end relief groove is not below the shoulder face {p1} (neighbouring shoulder too small)",
+    ),
+    Msg::new(
+        "cmd.shaft.err.tlro_no_chamfer",
+        "{label}：局部螺纹 TL/RL 的右端不能倒角 CH（相邻段倒角会落在这里）",
+        "{label}: the right end of a partial thread TL/RL cannot take a chamfer CH (a neighbouring chamfer would land there)",
+    ),
+    Msg::new(
+        "cmd.shaft.err.chamfer_left_eats_face",
+        "{label}：左端倒角 C={p0} ≥ 端面半径（Ø{p1} 的 {p2}），端面被吃掉",
+        "{label}: left-end chamfer C={p0} ≥ the end-face radius (Ø{p1}, radius {p2}); the end face is eaten away",
+    ),
+    Msg::new(
+        "cmd.shaft.err.chamfer_left_through",
+        "{label}：左端倒角 C={p0} 把端面吃穿了（端面点 {p1} ≤ 0）",
+        "{label}: left-end chamfer C={p0} cuts through the end face (face point {p1} ≤ 0)",
+    ),
+    Msg::new(
+        "cmd.shaft.err.ov_free_end_r",
+        "{label}：右端是自由端，越程槽没有台阶面",
+        "{label}: the right end is free; an overtravel groove has no shoulder face",
+    ),
+    Msg::new(
+        "cmd.shaft.err.tlro_no_chamfer_plain",
+        "{label}：局部螺纹 TL/RL 的右端不能倒角 CH",
+        "{label}: the right end of a partial thread TL/RL cannot take a chamfer CH",
+    ),
+    Msg::new(
+        "cmd.shaft.err.chamfer_right_eats_face",
+        "{label}：右端倒角 C={p0} ≥ 端面半径（Ø{p1} 的 {p2}），端面被吃掉",
+        "{label}: right-end chamfer C={p0} ≥ the end-face radius (Ø{p1}, radius {p2}); the end face is eaten away",
+    ),
+    Msg::new(
+        "cmd.shaft.err.chamfer_right_through",
+        "{label}：右端倒角 C={p0} 把端面吃穿了（端面点 {p1} ≤ 0）",
+        "{label}: right-end chamfer C={p0} cuts through the end face (face point {p1} ≤ 0)",
+    ),
+    Msg::new(
+        "cmd.shaft.err.both_ends_overlap",
+        "{label}：两端特征重叠（左 {p0} + 右 {p1} > 段长 {p2}）",
+        "{label}: features at both ends overlap (left {p0} + right {p1} > segment length {p2})",
+    ),
+    Msg::new(
+        "cmd.shaft.err.tlro_no_ov",
+        "{label}：局部螺纹 TL/RL 的右端不能有越程槽 OV",
+        "{label}: the right end of a partial thread TL/RL cannot take an overtravel groove OV",
+    ),
+    Msg::new(
+        "cmd.shaft.err.tlro_no_fit",
+        "{label}：局部螺纹装不下（小径细实线长 ≤ 0；TL/RL 与左端倒角/段长冲突）",
+        "{label}: partial thread does not fit (minor-diameter thin line ≤ 0; TL/RL conflicts with the left chamfer/segment length)",
+    ),
+    Msg::new(
+        "cmd.shaft.report.header",
+        "- 视图：{p0}（{p1}）\n- 段数：{p2}；总长：{p3} mm；最大直径：{p4} mm\n\n",
+        "- View: {p0} ({p1})\n- Segments: {p2}; total length: {p3} mm; max diameter: {p4} mm\n\n",
+    ),
+    Msg::new("cmd.shaft.report.title", "# 轴段计算书", "# Shaft segment report"),
+    Msg::new("cmd.shaft.report.sec_list", "## 1. 段清单", "## 1. Segment list"),
+    Msg::new(
+        "cmd.shaft.report.list_header",
+        "| # | 类型 | 关键参数 | 长度 mm | 外径 mm |",
+        "| # | Type | Key parameters | Length mm | Outer Ø mm |",
+    ),
+    Msg::new(
+        "cmd.shaft.report.spline_sec_title",
+        "## 2. 花键参数表（GB/T 3478，默认 7 级 / H·h）",
+        "## 2. Spline parameter table (GB/T 3478, default grade 7 / H·h)",
+    ),
+    Msg::new(
+        "cmd.shaft.report.spline_sec_note",
+        "> 与 `OCSMCARD 花键参数表`（智能卡片）**同一份 `spline_tol::compute()`**；\n             > 等级/配合类别/量棒直径 Dp 可在该卡命令里显式给。\n\n",
+        "> Shares one `spline_tol::compute()` with `OCSMCARD 花键参数表` (the smart card);\n             > grade/fit class/pin diameter Dp can be given explicitly in that card command.\n\n",
+    ),
+    Msg::new(
+        "cmd.shaft.report.keyway",
+        "；轴槽 {p0} 键长 L={p1} {p2} b={p3} t1={p4}",
+        "; shaft key {p0}, key length L={p1}, {p2}, b={p3}, t1={p4}",
+    ),
+    Msg::new(
+        "cmd.shaft.report.spline_heading",
+        "### 第 {p0} 段（{p1}，默认 7 级 / 基孔制 H）\n\n{body}\n",
+        "### Segment {p0} ({p1}, default grade 7 / hole-basis H)\n\n{body}\n",
+    ),
+    Msg::new(
+        "cmd.shaft.err.json_no_segments",
+        "JSON 里没有 segments（至少给一段）",
+        "JSON has no segments (give at least one)",
+    ),
+    Msg::new(
+        "cmd.shaft.err.json_rot_not_finite",
+        "JSON：rot 不是有限数",
+        "JSON: rot is not a finite number",
+    ),
+    Msg::new("cmd.shaft.err.field_at", "at 坐标", "at coordinates"),
+    Msg::new("cmd.shaft.err.keyparam.kind", "键型", "key style"),
+    Msg::new("cmd.shaft.err.keyparam.len", "键长", "key length"),
+    Msg::new("cmd.shaft.err.keyparam.place", "@中/@端", "@mid/@end"),
+    Msg::new("cmd.shaft.err.keyparam.double", "双槽", "双槽/DOUBLE"),
+    Msg::new("cmd.shaft.err.keyparam.guided", "导向", "导向/guided"),
+    Msg::new(
+        "cmd.shaft.err.json_at_format",
+        "at 字符串要写成 \"x,y\"",
+        "the at string must be written as \"x,y\"",
+    ),
+    Msg::new("cmd.shaft.err.json_at_x", "at 的 x 不是数字", "at's x is not a number"),
+    Msg::new("cmd.shaft.err.json_at_y", "at 的 y 不是数字", "at's y is not a number"),
+    Msg::new(
+        "cmd.shaft.err.validate_no_segments",
+        "至少要有一段（S… L…）",
+        "at least one segment is required (S… L…)",
+    ),
+    Msg::new(
+        "cmd.shaft.err.rl_free_end_l",
+        "{label}：左端是自由端，退刀槽没有台阶面",
+        "{label}: the left end is free; a relief groove has no shoulder face",
+    ),
+    Msg::new(
+        "cmd.shaft.err.ov_free_end_l",
+        "{label}：左端是自由端，越程槽没有台阶面",
+        "{label}: the left end is free; an overtravel groove has no shoulder face",
+    ),
+    Msg::new(
+        "cmd.shaft.report.type_gear",
+        "齿轮段",
+        "gear segment",
+    ),
+    Msg::new(
+        "cmd.shaft.report.type_spline",
+        "矩形花键段",
+        "rectangular spline segment",
+    ),
+    Msg::new(
+        "cmd.shaft.report.type_thread",
+        "螺纹段",
+        "thread segment",
+    ),
+    Msg::new(
+        "cmd.shaft.report.simplified_085d",
+        "简化0.85d",
+        "simplified 0.85d",
+    ),
+    Msg::new(
+        "cmd.shaft.report.type_plain",
+        "普通段",
+        "plain segment",
+    ),
+    // —— 轴族（JSON/几何校验/计算书）补齐（§26）——
 ];
 
 /// 手动覆盖：环境变量 `OCSMLANG`（最高优先级的进程外开关）。

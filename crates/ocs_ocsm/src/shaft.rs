@@ -188,11 +188,16 @@ pub enum End {
     R,
 }
 
-fn end_cn(end: End) -> &'static str {
-    match end {
-        End::L => "左",
-        End::R => "右",
-    }
+fn end_cn(end: End) -> String {
+    crate::i18n::t(match end {
+        End::L => "cmd.shaft.end.l",
+        End::R => "cmd.shaft.end.r",
+    })
+}
+
+/// 段号标签「第 N 段」/ "segment N"（catalog 唯一来源；几何报错/回执共用）。
+pub(crate) fn seg_label(n: usize) -> String {
+    crate::i18n::t_fmt("cmd.shaft.label.seg", &[("n", &n.to_string())])
 }
 
 /// 视图开关（用户 2026-09-18 定案；**双视图已于 2026-09-23 移除**）：`常规` / `剖视`。
@@ -254,19 +259,15 @@ impl ShaftView {
             // 双视图用户 2026-09-23 定案移除：点名报错，不静默降级成常规
             // （风格同撤掉轴段 INVOLSPLINE 时的“不识别的关键字 + 原因/指路”）。
             "both" | "dual" | "双" | "双视图" | "并排" | "常规+剖视" | "两个" => {
-                return Err(format!(
-                    "不识别的视图名「{}」：双视图已移除（用户 2026-09-23 定案）——\
-                     轴生成器只支持 常规/剖视 两个视图；原 `VIEW 双` 的并排输出已撤（需要并排请分别出两次图）。",
-                    s.trim()
+                return Err(crate::i18n::t_fmt(
+                    "cmd.shaft.err.view_double_removed",
+                    &[("name", s.trim())],
                 ));
             }
             _ => None,
         };
         hit.ok_or_else(|| {
-            format!(
-                "视图名无法识别：`{}`。可用：normal|常规、section|剖视。",
-                s.trim()
-            )
+            crate::i18n::t_fmt("cmd.shaft.err.view_unknown", &[("name", &(s.trim()).to_string())])
         })
     }
 }
@@ -403,11 +404,11 @@ pub enum KeywayPlace {
 }
 
 impl KeywayPlace {
-    fn cn(self) -> &'static str {
-        match self {
-            KeywayPlace::Mid => "中置",
-            KeywayPlace::End => "端置",
-        }
+    fn cn(self) -> String {
+        crate::i18n::t(match self {
+            KeywayPlace::Mid => "cmd.shaft.place.mid",
+            KeywayPlace::End => "cmd.shaft.place.end",
+        })
     }
 
     /// 机器码（`partgen_keys::KEY_STYLES` 的 `places` 用）：`mid` / `end`。
@@ -422,9 +423,7 @@ impl KeywayPlace {
         match text.trim() {
             "中" | "中置" | "mid" | "Mid" | "MID" => Ok(KeywayPlace::Mid),
             "端" | "端置" | "end" | "End" | "END" => Ok(KeywayPlace::End),
-            other => Err(format!(
-                "KEY 位置「{other}」非法（只有 @中 / @端，或 mid / end）"
-            )),
+            other => Err(crate::i18n::t_fmt("cmd.shaft.err.key_place_invalid", &[("other", &other.to_string())])),
         }
     }
 }
@@ -440,12 +439,12 @@ pub enum KeyKind {
 }
 
 impl KeyKind {
-    fn cn(self) -> &'static str {
-        match self {
-            KeyKind::A => "A型（双圆头）",
-            KeyKind::B => "B型（双平头）",
-            KeyKind::C => "C型（单圆头）",
-        }
+    fn cn(self) -> String {
+        crate::i18n::t(match self {
+            KeyKind::A => "cmd.shaft.keykind.a",
+            KeyKind::B => "cmd.shaft.keykind.b",
+            KeyKind::C => "cmd.shaft.keykind.c",
+        })
     }
 
     /// 平键族 id（数据/型别唯一来源）。
@@ -487,9 +486,7 @@ impl KeyKind {
             "A" => Ok(KeyKind::A),
             "B" => Ok(KeyKind::B),
             "C" => Ok(KeyKind::C),
-            other => Err(format!(
-                "KEY 键型「{other}」非法（只有 A / B / C；对应 GB/T 1096 平键族 A/B/C 型）"
-            )),
+            other => Err(crate::i18n::t_fmt("cmd.shaft.err.key_kind_invalid", &[("other", &other.to_string())])),
         }
     }
 }
@@ -586,13 +583,7 @@ pub fn keyway_b(keyway: &Keyway, shaft_d: f64) -> Result<f64, String> {
     match keyway.b {
         None => Ok(std_b),
         Some(b) if (b - std_b).abs() < 1e-9 => Ok(b),
-        Some(b) => Err(format!(
-            "轴径 d={} 按 GB/T 1095 应配 b={}×h={}；显式 b={} 不是该轴径档的标准键尺寸（不许自由组合）",
-            trim(shaft_d),
-            trim(std_b),
-            trim(std_h),
-            trim(b)
-        )),
+        Some(b) => Err(crate::i18n::t_fmt("cmd.shaft.err.gb1095_b_pair", &[("p0", &(trim(shaft_d)).to_string()), ("p1", &(trim(std_b)).to_string()), ("p2", &(trim(std_h)).to_string()), ("p3", &(trim(b)).to_string())])),
     }
 }
 
@@ -1583,7 +1574,7 @@ fn assemble_keyway(
             crate::partgen_keys::key_1096_h(kind.key_type(), b).ok_or_else(|| {
                 crate::i18n::t_fmt(
                         "cmd.shaft.err.key_1096_b",
-                        &[("label", label), ("kind", kind.cn()), ("b", &trim(b))],
+                        &[("label", label), ("kind", &kind.cn()), ("b", &trim(b))],
                     )
             })?
         };
@@ -1595,7 +1586,7 @@ fn assemble_keyway(
                             ("label", label),
                             ("b", &trim(b)),
                             ("h", &trim(h)),
-                            ("kind", kind.cn()),
+                            ("kind", &kind.cn()),
                             ("std_h", &trim(std_h)),
                         ],
                     ));
@@ -1733,16 +1724,16 @@ fn parse_segment(chunk: &str, label: &str, program: &mut Program) -> Result<Segm
         } else if key_on && key_param_key(token).is_some() {
             let (param, attached) = key_param_key(token).expect("key_param_key 已判 Some");
             let name = match param {
-                KeyParam::Kind | KeyParam::Style => "键型",
-                KeyParam::Len => "键长",
-                KeyParam::B => "b",
-                KeyParam::H => "h",
-                KeyParam::T1 => "t1",
-                KeyParam::Place => "@中/@端",
-                KeyParam::Double => "双槽",
-                KeyParam::Guided => "导向",
-                KeyParam::LegacyLa => "LA",
-                KeyParam::LegacyLc => "LC",
+                KeyParam::Kind | KeyParam::Style => crate::i18n::t("cmd.shaft.err.keyparam.kind"),
+                KeyParam::Len => crate::i18n::t("cmd.shaft.err.keyparam.len"),
+                KeyParam::B => "b".to_string(),
+                KeyParam::H => "h".to_string(),
+                KeyParam::T1 => "t1".to_string(),
+                KeyParam::Place => crate::i18n::t("cmd.shaft.err.keyparam.place"),
+                KeyParam::Double => crate::i18n::t("cmd.shaft.err.keyparam.double"),
+                KeyParam::Guided => crate::i18n::t("cmd.shaft.err.keyparam.guided"),
+                KeyParam::LegacyLa => "LA".to_string(),
+                KeyParam::LegacyLc => "LC".to_string(),
             };
             if matches!(param, KeyParam::LegacyLa | KeyParam::LegacyLc) {
                 return Err(crate::i18n::t_fmt("cmd.shaft.err.key_la_lc", &[("label", label)]));
@@ -1754,7 +1745,7 @@ fn parse_segment(chunk: &str, label: &str, program: &mut Program) -> Result<Segm
                     .ok_or_else(|| {
                         crate::i18n::t_fmt(
                             "cmd.shaft.err.key_param_no_value",
-                            &[("label", label), ("name", name)],
+                            &[("label", label), ("name", &name)],
                         )
                     })?
             } else {
@@ -1763,7 +1754,7 @@ fn parse_segment(chunk: &str, label: &str, program: &mut Program) -> Result<Segm
             match param {
                 KeyParam::Double => {
                     if key_double {
-                        return Err(crate::i18n::t_fmt("cmd.shaft.err.key_param_dup", &[("label", label), ("what", "双槽")]));
+                        return Err(crate::i18n::t_fmt("cmd.shaft.err.key_param_dup", &[("label", label), ("what", &crate::i18n::t("cmd.shaft.err.keyparam.double"))]));
                     }
                     key_double = true;
                 }
@@ -1779,8 +1770,8 @@ fn parse_segment(chunk: &str, label: &str, program: &mut Program) -> Result<Segm
                                 "cmd.shaft.err.key_place_conflict",
                                 &[
                                     ("label", label),
-                                    ("prev", prev.cn()),
-                                    ("now", value.cn()),
+                                    ("prev", &prev.cn()),
+                                    ("now", &value.cn()),
                                 ],
                             ))
                         }
@@ -1796,8 +1787,8 @@ fn parse_segment(chunk: &str, label: &str, program: &mut Program) -> Result<Segm
                                 "cmd.shaft.err.key_type_conflict",
                                 &[
                                     ("label", label),
-                                    ("prev", prev.cn()),
-                                    ("now", value.cn()),
+                                    ("prev", &prev.cn()),
+                                    ("now", &value.cn()),
                                 ],
                             ))
                         }
@@ -1831,7 +1822,7 @@ fn parse_segment(chunk: &str, label: &str, program: &mut Program) -> Result<Segm
                                 "cmd.shaft.err.key_type_conflict",
                                 &[
                                     ("label", label),
-                                    ("prev", prev.cn()),
+                                    ("prev", &prev.cn()),
                                     ("now", spec.label),
                                 ],
                             ))
@@ -1879,13 +1870,13 @@ fn parse_segment(chunk: &str, label: &str, program: &mut Program) -> Result<Segm
                             continue;
                         }
                     }
-                    let value = parse_number(value_text, label, name)?;
+                    let value = parse_number(value_text, label, &name)?;
                     if !value.is_finite() || value <= 0.0 {
                         return Err(crate::i18n::t_fmt(
                             "cmd.shaft.err.key_param_positive",
                             &[
                                 ("label", label),
-                                ("what", name),
+                                ("what", &name),
                                 ("value", &trim(value)),
                             ],
                         ));
@@ -1900,7 +1891,7 @@ fn parse_segment(chunk: &str, label: &str, program: &mut Program) -> Result<Segm
                     if slot.is_some() {
                         return Err(crate::i18n::t_fmt(
                             "cmd.shaft.err.key_param_dup",
-                            &[("label", label), ("what", name)],
+                            &[("label", label), ("what", &name)],
                         ));
                     }
                     *slot = Some(value);
@@ -2386,6 +2377,7 @@ fn parse_placement(tokens: &[&str], label: &str, program: &mut Program) -> Resul
     if program.at.is_some() || program.rot.is_some() {
         return Err(crate::i18n::t_fmt("cmd.shaft.err.place_dup", &[("label", label)]));
     }
+    let at_what = crate::i18n::t("cmd.shaft.err.field_at");
     let mut index = 0;
     if index < tokens.len() && (tokens[index].eq_ignore_ascii_case("at") || tokens[index] == "@") {
         index += 1;
@@ -2394,8 +2386,8 @@ fn parse_placement(tokens: &[&str], label: &str, program: &mut Program) -> Resul
         let token = tokens[index];
         let (x, y) = if let Some((a, b)) = token.split_once(',') {
             (
-                number_or_err(a, "at 坐标", label)?,
-                number_or_err(b, "at 坐标", label)?,
+                number_or_err(a, &at_what, label)?,
+                number_or_err(b, &at_what, label)?,
             )
         } else {
             let b = tokens
@@ -2405,8 +2397,8 @@ fn parse_placement(tokens: &[&str], label: &str, program: &mut Program) -> Resul
                 return Err(crate::i18n::t_fmt("cmd.shaft.err.at_no_y", &[("label", label)]));
             }
             (
-                number_or_err(token, "at 坐标", label)?,
-                number_or_err(b, "at 坐标", label)?,
+                number_or_err(token, &at_what, label)?,
+                number_or_err(b, &at_what, label)?,
             )
         };
         program.at = Some([x, y]);
@@ -2685,7 +2677,7 @@ where
                 return Ok(Some(make(None)));
             }
             let pitch = text.parse::<f64>().map_err(|_| {
-                serde::de::Error::custom(format!("thread 字符串「{text}」不是螺距数字"))
+                serde::de::Error::custom(crate::i18n::t_fmt("cmd.shaft.err.thread_str_not_number", &[("text", &text.to_string())]))
             })?;
             Ok(Some(make(Some(pitch))))
         }
@@ -2711,15 +2703,15 @@ where
         Some(Raw::Text(text)) => {
             let (x, y) = text
                 .split_once(',')
-                .ok_or_else(|| serde::de::Error::custom("at 字符串要写成 \"x,y\""))?;
+                .ok_or_else(|| serde::de::Error::custom(crate::i18n::t("cmd.shaft.err.json_at_format")))?;
             let x = x
                 .trim()
                 .parse::<f64>()
-                .map_err(|_| serde::de::Error::custom("at 的 x 不是数字"))?;
+                .map_err(|_| serde::de::Error::custom(crate::i18n::t("cmd.shaft.err.json_at_x")))?;
             let y = y
                 .trim()
                 .parse::<f64>()
-                .map_err(|_| serde::de::Error::custom("at 的 y 不是数字"))?;
+                .map_err(|_| serde::de::Error::custom(crate::i18n::t("cmd.shaft.err.json_at_y")))?;
             Ok(Some([x, y]))
         }
     }
@@ -2727,9 +2719,9 @@ where
 
 fn parse_json(text: &str) -> Result<Program, String> {
     let raw: JsonProgram =
-        serde_json::from_str(text).map_err(|e| format!("JSON 解析失败：{e}"))?;
+        serde_json::from_str(text).map_err(|e| crate::i18n::t_fmt("cmd.shaft.err.json_parse", &[("e", &e.to_string())]))?;
     if raw.segments.is_empty() {
-        return Err("JSON 里没有 segments（至少给一段）".into());
+        return Err(crate::i18n::t("cmd.shaft.err.json_no_segments").into());
     }
     let mut segments = Vec::with_capacity(raw.segments.len());
     for (index, item) in raw.segments.iter().enumerate() {
@@ -2739,11 +2731,11 @@ fn parse_json(text: &str) -> Result<Program, String> {
             let end = match &value.end {
                 None => End::R,
                 Some(text) => parse_end(text).map_err(|bad| {
-                    format!("第 {number} 段：ch[{k}] 的端别「{bad}」非法（只能用 L 或 R）")
+                    crate::i18n::t_fmt("cmd.shaft.err.json_ch_end_bad", &[("label", &seg_label(number)), ("k", &k.to_string()), ("bad", &bad.to_string())])
                 })?,
             };
             if ch.iter().any(|x: &Chamfer| x.end == end) {
-                return Err(format!("第 {number} 段：ch 在{}端重复", end_cn(end)));
+                return Err(crate::i18n::t_fmt("cmd.shaft.err.json_ch_dup_end", &[("label", &seg_label(number)), ("p0", &(end_cn(end)).to_string())]));
             }
             ch.push(Chamfer { c: value.c, end });
         }
@@ -2752,11 +2744,11 @@ fn parse_json(text: &str) -> Result<Program, String> {
             let end = match &value.end {
                 None => End::R,
                 Some(text) => parse_end(text).map_err(|bad| {
-                    format!("第 {number} 段：ov[{k}] 的端别「{bad}」非法（只能用 L 或 R）")
+                    crate::i18n::t_fmt("cmd.shaft.err.json_ov_end_bad", &[("label", &seg_label(number)), ("k", &k.to_string()), ("bad", &bad.to_string())])
                 })?,
             };
             if ov.iter().any(|x: &Overtravel| x.end == end) {
-                return Err(format!("第 {number} 段：ov 在{}端重复", end_cn(end)));
+                return Err(crate::i18n::t_fmt("cmd.shaft.err.json_ov_dup_end", &[("label", &seg_label(number)), ("p0", &(end_cn(end)).to_string())]));
             }
             ov.push(Overtravel { b1: value.b1, end });
         }
@@ -2765,11 +2757,11 @@ fn parse_json(text: &str) -> Result<Program, String> {
             let end = match &value.end {
                 None => End::R,
                 Some(text) => parse_end(text).map_err(|bad| {
-                    format!("第 {number} 段：relief[{k}] 的端别「{bad}」非法（只能用 L 或 R）")
+                    crate::i18n::t_fmt("cmd.shaft.err.json_relief_end_bad", &[("label", &seg_label(number)), ("k", &k.to_string()), ("bad", &bad.to_string())])
                 })?,
             };
             if relief.iter().any(|x: &Relief| x.end == end) {
-                return Err(format!("第 {number} 段：relief 在{}端重复", end_cn(end)));
+                return Err(crate::i18n::t_fmt("cmd.shaft.err.json_relief_dup_end", &[("label", &seg_label(number)), ("p0", &(end_cn(end)).to_string())]));
             }
             relief.push(Relief {
                 end,
@@ -2781,9 +2773,7 @@ fn parse_json(text: &str) -> Result<Program, String> {
             });
         }
         if item.es.is_some() {
-            return Err(format!(
-                "第 {number} 段：`ES` 已取消 —— 退刀槽请用段级 `RL` 或一小段小直径轴段表示，例如 `S24 E24 L5`"
-            ));
+            return Err(crate::i18n::t_fmt("cmd.shaft.err.es_cancelled", &[("label", &seg_label(number))]));
         }
         // 轴槽 KEY：`{"type":"A","l":18,"place":"mid","b":8,"t1":null}`。
         let keyway = match &item.keyway {
@@ -2796,7 +2786,7 @@ fn parse_json(text: &str) -> Result<Program, String> {
                         spec.guided || k.guided,
                     ),
                     None => (
-                        KeyKind::parse(&k.kind).map_err(|e| format!("第 {number} 段：{e}"))?,
+                        KeyKind::parse(&k.kind).map_err(|e| crate::i18n::t_fmt("cmd.shaft.err.prefix", &[("label", &seg_label(number)), ("e", &e.to_string())]))?,
                         k.guided,
                     ),
                 };
@@ -2804,7 +2794,7 @@ fn parse_json(text: &str) -> Result<Program, String> {
                     None => None,
                     Some(text) => Some(
                         parse_keyway_place(text)
-                            .map_err(|e| format!("第 {number} 段：{e}"))?,
+                            .map_err(|e| crate::i18n::t_fmt("cmd.shaft.err.prefix", &[("label", &seg_label(number)), ("e", &e.to_string())]))?,
                     ),
                 };
                 assemble_keyway(
@@ -2816,7 +2806,7 @@ fn parse_json(text: &str) -> Result<Program, String> {
                     place,
                     k.double,
                     guided,
-                    &format!("第 {number} 段"),
+                    &seg_label(number),
                 )?
             }
         };
@@ -2824,73 +2814,57 @@ fn parse_json(text: &str) -> Result<Program, String> {
         // `M` 段右端的退刀槽收尾以 `thread.relief` 表示；不要把同一端再写进
         // 段级 `relief`（两套同时画会重复）。
         if thread.as_ref().is_some_and(|t| t.relief) && relief.iter().any(|r| r.end == End::R) {
-            return Err(format!(
-                "第 {number} 段：M 段右端的退刀槽收尾用 thread.relief 表示，不要再写段级 relief（端别 R）"
-            ));
+            return Err(crate::i18n::t_fmt("cmd.shaft.err.json_thread_relief", &[("label", &seg_label(number))]));
         }
         // 花键段：直径由规格代号导出、长度 = L + 收尾 l；与 CH/OV/RL/M 同段冲突。
         if let Some(js) = &item.spline {
             if keyway.is_some() {
-                return Err(format!("第 {number} 段：轴槽 keyway 不能与花键段同段"));
+                return Err(crate::i18n::t_fmt("cmd.shaft.err.key_gear_conflict", &[("label", &seg_label(number))]));
             }
             if !ch.is_empty() {
-                return Err(format!("第 {number} 段：花键段不能与倒角 ch 同段（请在相邻轴段上写 ch）"));
+                return Err(crate::i18n::t_fmt("cmd.shaft.err.combo_spline_ch", &[("label", &seg_label(number))]));
             }
             if !ov.is_empty() {
-                return Err(format!("第 {number} 段：花键段不能与越程槽 ov 同段"));
+                return Err(crate::i18n::t_fmt("cmd.shaft.err.combo_spline_ov", &[("label", &seg_label(number))]));
             }
             if !relief.is_empty() {
-                return Err(format!("第 {number} 段：花键段不能与退刀槽 relief 同段"));
+                return Err(crate::i18n::t_fmt("cmd.shaft.err.combo_spline_rl", &[("label", &seg_label(number))]));
             }
             if thread.is_some() {
-                return Err(format!("第 {number} 段：花键段不能与螺纹段 m 同段"));
+                return Err(crate::i18n::t_fmt("cmd.shaft.err.combo_spline_m", &[("label", &seg_label(number))]));
             }
             let len = js.len.ok_or_else(|| {
-                format!("第 {number} 段：花键段缺少 len（满齿段长 L，例 {{\"spec\":\"6x23x26x6\",\"len\":30}}")
+                crate::i18n::t_fmt("cmd.shaft.err.spline_no_len", &[("label", &seg_label(number))])
             })?;
             let spline = if let Some(spec) = &js.spec {
                 crate::spline::RectSpline::from_code(spec, js.de, len)
             } else {
-                let n = js.n.ok_or_else(|| format!("第 {number} 段：花键段缺 n（齿数）"))?;
-                let d = js.d.ok_or_else(|| format!("第 {number} 段：花键段缺 d（小径）"))?;
-                let big = js.big.ok_or_else(|| format!("第 {number} 段：花键段缺 big（大径 D）"))?;
-                let b = js.b.ok_or_else(|| format!("第 {number} 段：花键段缺 b（键宽 B）"))?;
+                let n = js.n.ok_or_else(|| crate::i18n::t_fmt("cmd.shaft.err.spline_no_n", &[("label", &seg_label(number))]))?;
+                let d = js.d.ok_or_else(|| crate::i18n::t_fmt("cmd.shaft.err.spline_no_d", &[("label", &seg_label(number))]))?;
+                let big = js.big.ok_or_else(|| crate::i18n::t_fmt("cmd.shaft.err.spline_no_big", &[("label", &seg_label(number))]))?;
+                let b = js.b.ok_or_else(|| crate::i18n::t_fmt("cmd.shaft.err.spline_no_b", &[("label", &seg_label(number))]))?;
                 let de = match js.de {
                     Some(de) => de,
                     None => crate::spline::lookup_de(n, d, big, b).ok_or_else(|| {
-                        format!("第 {number} 段：花键段 de 查不到（不在表 1/表 2），请显式给 de")
+                        crate::i18n::t_fmt("cmd.shaft.err.spline_de_not_found", &[("label", &seg_label(number))])
                     })?,
                 };
                 crate::spline::RectSpline::new(n, d, big, b, de, len)
             }
-            .map_err(|e| format!("第 {number} 段：{e}"))?;
+            .map_err(|e| crate::i18n::t_fmt("cmd.shaft.err.prefix", &[("label", &seg_label(number)), ("e", &e.to_string())]))?;
             if let Some(s) = item.s {
                 if (s - spline.big).abs() > 1e-9 {
-                    return Err(format!(
-                        "第 {number} 段：花键段的 s={} 应等于大径 D={}",
-                        trim(s),
-                        trim(spline.big)
-                    ));
+                    return Err(crate::i18n::t_fmt("cmd.shaft.err.spline_s_mismatch", &[("label", &seg_label(number)), ("p0", &(trim(s)).to_string()), ("p1", &(trim(spline.big)).to_string())]));
                 }
             }
             if let Some(e) = item.e {
                 if (e - spline.big).abs() > 1e-9 {
-                    return Err(format!(
-                        "第 {number} 段：花键段的 e={} 应等于大径 D={}",
-                        trim(e),
-                        trim(spline.big)
-                    ));
+                    return Err(crate::i18n::t_fmt("cmd.shaft.err.spline_e_mismatch", &[("label", &seg_label(number)), ("p0", &(trim(e)).to_string()), ("p1", &(trim(spline.big)).to_string())]));
                 }
             }
             if let Some(l) = item.l {
                 if (l - spline.segment_len()).abs() > 1e-9 {
-                    return Err(format!(
-                        "第 {number} 段：花键段的 l={} 应等于 L+l={}（L={} + 收尾 {})），",
-                        trim(l),
-                        trim(spline.segment_len()),
-                        trim(spline.len),
-                        trim(spline.runout())
-                    ));
+                    return Err(crate::i18n::t_fmt("cmd.shaft.err.spline_l_mismatch", &[("label", &seg_label(number)), ("p0", &(trim(l)).to_string()), ("p1", &(trim(spline.segment_len())).to_string()), ("p2", &(trim(spline.len)).to_string()), ("p3", &(trim(spline.runout())).to_string())]));
                 }
             }
             segments.push(Segment {
@@ -2911,26 +2885,24 @@ fn parse_json(text: &str) -> Result<Program, String> {
         // （序列化回传的 s/e/l 允许出现，但要等于派生值，不允许相互矛盾。）
         if let Some(g) = &item.gear {
             if keyway.is_some() {
-                return Err(format!("第 {number} 段：轴槽 keyway 不能与齿轮段同段"));
+                return Err(crate::i18n::t_fmt("cmd.shaft.err.key_gear_conflict", &[("label", &seg_label(number))]));
             }
             if !ch.is_empty() {
-                return Err(format!("第 {number} 段：齿轮段不能与倒角 ch 同段"));
+                return Err(crate::i18n::t_fmt("cmd.shaft.err.gear_no_ch", &[("label", &seg_label(number))]));
             }
             if !ov.is_empty() {
-                return Err(format!("第 {number} 段：齿轮段不能与越程槽 ov 同段"));
+                return Err(crate::i18n::t_fmt("cmd.shaft.err.gear_no_ov", &[("label", &seg_label(number))]));
             }
             if !relief.is_empty() {
-                return Err(format!("第 {number} 段：齿轮段不能与退刀槽 relief 同段"));
+                return Err(crate::i18n::t_fmt("cmd.shaft.err.gear_no_rl", &[("label", &seg_label(number))]));
             }
             if thread.is_some() {
-                return Err(format!("第 {number} 段：齿轮段不能与螺纹段 m 同段"));
+                return Err(crate::i18n::t_fmt("cmd.shaft.err.gear_no_m", &[("label", &seg_label(number))]));
             }
             let kind = match g.kind.as_deref() {
                 None => GearKind::External,
                 Some(k) => GearKind::parse(k).ok_or_else(|| {
-                    format!(
-                        "第 {number} 段：齿轮段的 kind「{k}」非法（应为 external/internal）"
-                    )
+                    crate::i18n::t_fmt("cmd.shaft.err.json_gear_kind_bad", &[("label", &seg_label(number)), ("k", &k.to_string())])
                 })?,
             };
             let gear = Gear {
@@ -2946,42 +2918,27 @@ fn parse_json(text: &str) -> Result<Program, String> {
                 df: g.df,
             };
             if gear.beta_deg.abs() > 1e-9 {
-                return Err(format!(
-                    "第 {number} 段：齿轮段斜齿（beta={}）本期只做直齿（斜齿未实现）",
-                    trim(gear.beta_deg)
-                ));
+                return Err(crate::i18n::t_fmt("cmd.shaft.err.json_gear_helical", &[("label", &seg_label(number)), ("p0", &(trim(gear.beta_deg)).to_string())]));
             }
             let params = gear.params();
             params
                 .validate()
-                .map_err(|e| format!("第 {number} 段：齿轮段：{e}"))?;
-            validate_tooth_radii(&gear, &format!("第 {number} 段"))?;
+                .map_err(|e| crate::i18n::t_fmt("cmd.shaft.err.gear_seg", &[("label", &seg_label(number)), ("e", &e.to_string())]))?;
+            validate_tooth_radii(&gear, &seg_label(number))?;
             let d = params.d();
             if let Some(s) = item.s {
                 if (s - d).abs() > 1e-9 {
-                    return Err(format!(
-                        "第 {number} 段：齿轮段的 s={} 应等于分度圆 d={}（由 m·z 导出）",
-                        trim(s),
-                        trim(d)
-                    ));
+                    return Err(crate::i18n::t_fmt("cmd.shaft.err.json_gear_s_mismatch", &[("label", &seg_label(number)), ("p0", &(trim(s)).to_string()), ("p1", &(trim(d)).to_string())]));
                 }
             }
             if let Some(e) = item.e {
                 if (e - d).abs() > 1e-9 {
-                    return Err(format!(
-                        "第 {number} 段：齿轮段的 e={} 应等于分度圆 d={}（由 m·z 导出）",
-                        trim(e),
-                        trim(d)
-                    ));
+                    return Err(crate::i18n::t_fmt("cmd.shaft.err.json_gear_e_mismatch", &[("label", &seg_label(number)), ("p0", &(trim(e)).to_string()), ("p1", &(trim(d)).to_string())]));
                 }
             }
             if let Some(l) = item.l {
                 if (l - gear.width()).abs() > 1e-9 {
-                    return Err(format!(
-                        "第 {number} 段：齿轮段的 l={} 应等于齿宽 h={}",
-                        trim(l),
-                        trim(gear.width())
-                    ));
+                    return Err(crate::i18n::t_fmt("cmd.shaft.err.json_gear_l_mismatch", &[("label", &seg_label(number)), ("p0", &(trim(l)).to_string()), ("p1", &(trim(gear.width())).to_string())]));
                 }
             }
             segments.push(Segment {
@@ -3000,14 +2957,12 @@ fn parse_json(text: &str) -> Result<Program, String> {
         }
         let s = item
             .s
-            .ok_or_else(|| format!("第 {number} 段：缺少 s（起始直径）"))?;
+            .ok_or_else(|| crate::i18n::t_fmt("cmd.shaft.err.missing_s", &[("label", &seg_label(number))]))?;
         let l = item
             .l
-            .ok_or_else(|| format!("第 {number} 段：缺少 l（段长）"))?;
+            .ok_or_else(|| crate::i18n::t_fmt("cmd.shaft.err.missing_l", &[("label", &seg_label(number))]))?;
         if keyway.is_some() && (thread.is_some() || !ov.is_empty() || !relief.is_empty()) {
-            return Err(format!(
-                "第 {number} 段：轴槽 keyway 不能与螺纹/越程槽/退刀槽同段（只能挂在光圆柱段上）"
-            ));
+            return Err(crate::i18n::t_fmt("cmd.shaft.err.key_mrl_conflict", &[("label", &seg_label(number))]));
         }
         segments.push(Segment {
             s,
@@ -3027,7 +2982,7 @@ fn parse_json(text: &str) -> Result<Program, String> {
         Some(text) => ShaftView::parse(text).map_err(|e| format!("JSON：{e}"))?,
     };
     if raw.rot.is_some_and(|v| !v.is_finite()) {
-        return Err("JSON：rot 不是有限数".into());
+        return Err(crate::i18n::t("cmd.shaft.err.json_rot_not_finite").into());
     }
     Ok(Program {
         segments,
@@ -3045,7 +3000,7 @@ fn parse_json(text: &str) -> Result<Program, String> {
 /// 端面之间的检查（倒角直径变化量、越程槽台阶…）在 [`build`] 里做。
 pub fn validate(program: &Program) -> Result<(), String> {
     if program.segments.is_empty() {
-        return Err("至少要有一段（S… L…）".into());
+        return Err(crate::i18n::t("cmd.shaft.err.validate_no_segments").into());
     }
     // 每段起点 x（第 1 段左端面 = 0）—— 轴槽中置/端置定位用。
     let mut x0s = Vec::with_capacity(program.segments.len());
@@ -3057,73 +3012,43 @@ pub fn validate(program: &Program) -> Result<(), String> {
     for (index, seg) in program.segments.iter().enumerate() {
         let number = index + 1;
         if !seg.l.is_finite() || seg.l <= 0.0 {
-            return Err(format!(
-                "第 {number} 段：段长 L={} 必须 > 0",
-                trim(seg.l)
-            ));
+            return Err(crate::i18n::t_fmt("cmd.shaft.err.seg_len_positive", &[("label", &seg_label(number)), ("p0", &(trim(seg.l)).to_string())]));
         }
         if !seg.s.is_finite() || seg.s <= 0.0 {
-            return Err(format!(
-                "第 {number} 段：起始直径 S={} 必须 > 0",
-                trim(seg.s)
-            ));
+            return Err(crate::i18n::t_fmt("cmd.shaft.err.seg_s_positive", &[("label", &seg_label(number)), ("p0", &(trim(seg.s)).to_string())]));
         }
         if !seg.e.is_finite() || seg.e <= 0.0 {
-            return Err(format!(
-                "第 {number} 段：终点直径 E={} 必须 > 0",
-                trim(seg.e)
-            ));
+            return Err(crate::i18n::t_fmt("cmd.shaft.err.seg_e_positive", &[("label", &seg_label(number)), ("p0", &(trim(seg.e)).to_string())]));
         }
         for chamfer in &seg.ch {
             if !chamfer.c.is_finite() || chamfer.c <= 0.0 {
-                return Err(format!(
-                    "第 {number} 段：倒角 C={} 必须 > 0",
-                    trim(chamfer.c)
-                ));
+                return Err(crate::i18n::t_fmt("cmd.shaft.err.chamfer_positive", &[("label", &seg_label(number)), ("p0", &(trim(chamfer.c)).to_string())]));
             }
             if chamfer.c >= seg.l / 2.0 {
-                return Err(format!(
-                    "第 {number} 段：{}端倒角 C={} ≥ 段长/2（l={}），特征重叠",
-                    end_cn(chamfer.end),
-                    trim(chamfer.c),
-                    trim(seg.l)
-                ));
+                return Err(crate::i18n::t_fmt("cmd.shaft.err.chamfer_len_overlap", &[("label", &seg_label(number)), ("p0", &(end_cn(chamfer.end)).to_string()), ("p1", &(trim(chamfer.c)).to_string()), ("p2", &(trim(seg.l)).to_string())]));
             }
         }
         for (a, first) in seg.ch.iter().enumerate() {
             for second in &seg.ch[a + 1..] {
                 if first.end == second.end {
-                    return Err(format!(
-                        "第 {number} 段：倒角 CH 在{}端重复",
-                        end_cn(first.end)
-                    ));
+                    return Err(crate::i18n::t_fmt("cmd.shaft.err.chamfer_dup_end", &[("label", &seg_label(number)), ("p0", &(end_cn(first.end)).to_string())]));
                 }
             }
         }
         for ov in &seg.ov {
             if let Some(b1) = ov.b1 {
                 if !b1.is_finite() || b1 <= 0.0 {
-                    return Err(format!(
-                        "第 {number} 段：越程槽 b1={} 必须 > 0",
-                        trim(b1)
-                    ));
+                    return Err(crate::i18n::t_fmt("cmd.shaft.err.ov_b1_positive", &[("label", &seg_label(number)), ("p0", &(trim(b1)).to_string())]));
                 }
                 if b1 > seg.l + 1e-9 {
-                    return Err(format!(
-                        "第 {number} 段：越程槽 b1={} > 段长 l={}",
-                        trim(b1),
-                        trim(seg.l)
-                    ));
+                    return Err(crate::i18n::t_fmt("cmd.shaft.err.ov_b1_too_long", &[("label", &seg_label(number)), ("p0", &(trim(b1)).to_string()), ("p1", &(trim(seg.l)).to_string())]));
                 }
             }
         }
         for (a, first) in seg.ov.iter().enumerate() {
             for second in &seg.ov[a + 1..] {
                 if first.end == second.end {
-                    return Err(format!(
-                        "第 {number} 段：越程槽 OV 在{}端重复",
-                        end_cn(first.end)
-                    ));
+                    return Err(crate::i18n::t_fmt("cmd.shaft.err.ov_dup_end", &[("label", &seg_label(number)), ("end", &(end_cn(first.end)).to_string())]));
                 }
             }
         }
@@ -3131,16 +3056,13 @@ pub fn validate(program: &Program) -> Result<(), String> {
         for (a, first) in seg.relief.iter().enumerate() {
             for second in &seg.relief[a + 1..] {
                 if first.end == second.end {
-                    return Err(format!(
-                        "第 {number} 段：退刀槽 RL 重复（在{}端）",
-                        end_cn(first.end)
-                    ));
+                    return Err(crate::i18n::t_fmt("cmd.shaft.err.relief_dup_end", &[("label", &seg_label(number)), ("p0", &(end_cn(first.end)).to_string())]));
                 }
             }
         }
         if !seg.relief.is_empty() {
             if seg.gear.is_some() {
-                return Err(format!("第 {number} 段：齿轮段不能与退刀槽 RL 同段"));
+                return Err(crate::i18n::t_fmt("cmd.shaft.err.gear_no_rl", &[("label", &seg_label(number))]));
             }
             if seg
                 .thread
@@ -3148,99 +3070,62 @@ pub fn validate(program: &Program) -> Result<(), String> {
                 .is_some_and(|thread| thread.relief)
                 && seg.relief.iter().any(|r| r.end == End::R)
             {
-                return Err(format!(
-                    "第 {number} 段：M 段右端的退刀槽收尾用 thread.relief 表示，不要再写段级 relief（端别 R）"
-                ));
+                return Err(crate::i18n::t_fmt("cmd.shaft.err.json_thread_relief", &[("label", &seg_label(number))]));
             }
             for spec in &seg.relief {
                 if (seg.s - seg.e).abs() > 1e-9 {
-                    return Err(format!(
-                        "第 {number} 段：RL 退刀槽只能开在圆柱端（本段是锥面 S={} → E={}）",
-                        trim(seg.s),
-                        trim(seg.e)
-                    ));
+                    return Err(crate::i18n::t_fmt("cmd.shaft.err.rl_cone_only", &[("label", &seg_label(number)), ("p0", &(trim(seg.s)).to_string()), ("p1", &(trim(seg.e)).to_string())]));
                 }
                 if index == 0 && spec.end == End::L {
                     return Err(
-                        "第 1 段：左端是自由端，退刀槽没有台阶面".to_string()
+                        crate::i18n::t_fmt("cmd.shaft.err.rl_free_end_l", &[("label", &seg_label(1))]).to_string()
                     );
                 }
                 if index + 1 == program.segments.len() && spec.end == End::R {
-                    return Err(format!(
-                        "第 {number} 段：右端是自由端，退刀槽没有台阶面"
-                    ));
+                    return Err(crate::i18n::t_fmt("cmd.shaft.err.rl_free_end_r", &[("label", &seg_label(number))]));
                 }
-                let dims = resolve_relief_dims(seg, spec, &format!("第 {number} 段"))?;
+                let dims = resolve_relief_dims(seg, spec, &seg_label(number))?;
                 if dims.g2 > seg.l + 1e-9 {
-                    return Err(format!(
-                        "第 {number} 段：RL 退刀槽 g2={} > 段长 L={}",
-                        trim(dims.g2),
-                        trim(seg.l)
-                    ));
+                    return Err(crate::i18n::t_fmt("cmd.shaft.err.rl_g2_too_long", &[("label", &seg_label(number)), ("p0", &(trim(dims.g2)).to_string()), ("p1", &(trim(seg.l)).to_string())]));
                 }
                 // 同一段同端的 CH / OV 是「同端只能有一个槽/倒角」。
                 if seg.ch.iter().any(|c| c.end == spec.end) {
-                    return Err(format!(
-                        "第 {number} 段：{}端的 RL 退刀槽与倒角 CH 冲突（同端只能一个）",
-                        end_cn(spec.end)
-                    ));
+                    return Err(crate::i18n::t_fmt("cmd.shaft.err.rl_ch_conflict", &[("label", &seg_label(number)), ("p0", &(end_cn(spec.end)).to_string())]));
                 }
                 if seg.ov.iter().any(|o| o.end == spec.end) {
-                    return Err(format!(
-                        "第 {number} 段：{}端的 RL 退刀槽与越程槽 OV 冲突（同端只能一个）",
-                        end_cn(spec.end)
-                    ));
+                    return Err(crate::i18n::t_fmt("cmd.shaft.err.rl_ov_conflict", &[("label", &seg_label(number)), ("p0", &(end_cn(spec.end)).to_string())]));
                 }
             }
         }
         // ── 轴槽 KEY（GB/T 1095）：结构、装得下、端置位置（几何定位在 `keyway_geom`）──
         if let Some(keyway) = &seg.keyway {
             if seg.gear.is_some() || seg.spline.is_some() {
-                return Err(format!(
-                    "第 {number} 段：轴槽 KEY 不能与齿轮/花键段同段"
-                ));
+                return Err(crate::i18n::t_fmt("cmd.shaft.err.key_gear_conflict", &[("label", &seg_label(number))]));
             }
             if seg.thread.is_some() || !seg.ov.is_empty() || !seg.relief.is_empty() {
-                return Err(format!(
-                    "第 {number} 段：轴槽 KEY 不能与螺纹 M / 越程槽 OV / 退刀槽 RL 同段（只能挂在光圆柱段上）"
-                ));
+                return Err(crate::i18n::t_fmt("cmd.shaft.err.key_mrl_conflict", &[("label", &seg_label(number))]));
             }
             if (seg.s - seg.e).abs() > 1e-9 {
-                return Err(format!(
-                    "第 {number} 段：轴槽只能开在圆柱段（本段是锥面 S={} → E={}）",
-                    trim(seg.s),
-                    trim(seg.e)
-                ));
+                return Err(crate::i18n::t_fmt("cmd.shaft.err.key_round_only", &[("label", &seg_label(number)), ("p0", &(trim(seg.s)).to_string()), ("p1", &(trim(seg.e)).to_string())]));
             }
             if !keyway.l.is_finite() || keyway.l <= 0.0 {
-                return Err(format!("第 {number} 段：轴槽键长 L={} 必须 > 0", trim(keyway.l)));
+                return Err(crate::i18n::t_fmt("cmd.shaft.err.key_len_positive", &[("label", &seg_label(number)), ("p0", &(trim(keyway.l)).to_string())]));
             }
-            let b = keyway_b(keyway, seg.s).map_err(|e| format!("第 {number} 段：{e}"))?;
+            let b = keyway_b(keyway, seg.s).map_err(|e| crate::i18n::t_fmt("cmd.shaft.err.prefix", &[("label", &seg_label(number)), ("e", &e.to_string())]))?;
             // 导向平键（GB/T 1097）：表行 + 长度系列 + 固定螺钉孔校验（用户 2026-09-25 开工）。
             // 可用位置/可用选项由键型样式表驱动（导向平键只有中置：用户 2026-09-25 裁定）。
             if let Some(spec) = key_style_for(keyway.kind, keyway.guided) {
                 if keyway.double && !spec.allow_double {
-                    return Err(format!(
-                        "第 {number} 段：{}不支持双槽（固定键只有一个槽）",
-                        spec.label
-                    ));
+                    return Err(crate::i18n::t_fmt("cmd.shaft.err.key_no_double", &[("label", &seg_label(number)), ("kind", &(spec.label).to_string())]));
                 }
                 if !spec.places.contains(&keyway.place.code()) {
-                    return Err(format!(
-                        "第 {number} 段：{}只有{}（{}）",
-                        spec.label,
-                        key_places_cn(spec.places),
-                        spec.place_hint
-                    ));
+                    return Err(crate::i18n::t_fmt("cmd.shaft.err.key_no_place", &[("label", &seg_label(number)), ("kind", &(spec.label).to_string()), ("places", &(key_places_cn(spec.places)).to_string()), ("tag", &(spec.place_hint).to_string())]));
                 }
             }
             let row_1097 = if keyway.guided {
                 Some(crate::partgen_keys::key_1097_row(keyway.kind.key_type(), b).ok_or_else(
                     || {
-                        format!(
-                            "第 {number} 段：GB/T 1097 导向平键表里没有 b={}（b=8…45，14 档）",
-                            trim(b)
-                        )
+                        crate::i18n::t_fmt("cmd.shaft.err.key_1097_b", &[("label", &seg_label(number)), ("b", &(trim(b)).to_string())])
                     },
                 )?)
             } else {
@@ -3249,11 +3134,7 @@ pub fn validate(program: &Program) -> Result<(), String> {
             if row_1097.is_none()
                 && crate::partgen_keys::key_1096_h(keyway.kind.key_type(), b).is_none()
             {
-                return Err(format!(
-                    "第 {number} 段：{} 的平键族表里没有 b={}（GB/T 1096 表 b=2…50）",
-                    keyway.kind.cn(),
-                    trim(b)
-                ));
+                return Err(crate::i18n::t_fmt("cmd.shaft.err.key_1096_b", &[("label", &seg_label(number)), ("kind", &(keyway.kind.cn()).to_string()), ("b", &(trim(b)).to_string())]));
             }
             // h 给了就必须与 b 配对（h 跟 b 走，不允许自由组合）；导向用 1097 表值（与 1096 同值）。
             if let Some(h) = keyway.h {
@@ -3262,39 +3143,22 @@ pub fn validate(program: &Program) -> Result<(), String> {
                     .or_else(|| crate::partgen_keys::key_1096_h(keyway.kind.key_type(), b))
                     .expect("上面已判族表有 b");
                 if (h - std_h).abs() > 1e-9 {
-                    return Err(format!(
-                        "第 {number} 段：键尺寸 b{}×h{} 不是标准配对（{} 的 b={} 应配 h={}）",
-                        trim(b),
-                        trim(h),
-                        keyway.kind.cn(),
-                        trim(b),
-                        trim(std_h)
-                    ));
+                    return Err(crate::i18n::t_fmt("cmd.shaft.err.key_pair_invalid", &[("label", &seg_label(number)), ("p0", &(trim(b)).to_string()), ("p1", &(trim(h)).to_string()), ("p2", &(keyway.kind.cn()).to_string()), ("p3", &(trim(b)).to_string()), ("p4", &(trim(std_h)).to_string())]));
                 }
             }
             if let Some(row) = row_1097 {
                 // L 必须落在 GB/T 1097 长度系列（∩ L<10b）；表外报错并列出可选系列。
                 let allowed = crate::partgen_keys::key_1097_l_allowed(b);
                 if !allowed.iter().any(|v| (*v - keyway.l).abs() < 1e-9) {
-                    return Err(format!(
-                        "第 {number} 段：GB/T 1097 导向平键 L={} 不在长度系列（∩L<10b）里；可选（{} 档）：{}",
-                        trim(keyway.l),
-                        allowed.len(),
-                        allowed.iter().map(|v| trim(*v)).collect::<Vec<_>>().join(", ")
-                    ));
+                    return Err(crate::i18n::t_fmt("cmd.shaft.err.key_1097_len_bad", &[("label", &seg_label(number)), ("p0", &(trim(keyway.l)).to_string()), ("p1", &(allowed.len()).to_string()), ("p2", &(allowed.iter().map(|v| trim(*v)).collect::<Vec<_>>().join(", ")).to_string())]));
                 }
                 let len = crate::partgen_keys::key_1097_length_for(keyway.l)
-                    .map_err(|e| format!("第 {number} 段：{e}"))?;
+                    .map_err(|e| crate::i18n::t_fmt("cmd.shaft.err.prefix", &[("label", &seg_label(number)), ("e", &e.to_string())]))?;
                 let major_r = row.d0 / 2.0;
                 let minor_r = 0.85 * major_r;
                 let cone_h = minor_r / 59f64.to_radians().tan();
                 if len.l3 <= major_r + 1e-9 {
-                    return Err(format!(
-                        "第 {number} 段：导向平键固定螺钉孔 M{}（半径 {}）越出槽端（L3={}）",
-                        trim(row.d0),
-                        trim(major_r),
-                        trim(len.l3)
-                    ));
+                    return Err(crate::i18n::t_fmt("cmd.shaft.err.key_screw_out_slot", &[("label", &seg_label(number)), ("p0", &(trim(row.d0)).to_string()), ("p1", &(trim(major_r)).to_string()), ("p2", &(trim(len.l3)).to_string())]));
                 }
                 // 圆头端（A 型）：孔圈还不得越出槽端圆弧。
                 if keyway.kind == KeyKind::A {
@@ -3303,59 +3167,35 @@ pub fn validate(program: &Program) -> Result<(), String> {
                     if along > arc + 1e-9 {
                         let dy = (b / 2.0).powi(2) - (along - arc).powi(2);
                         if dy <= 0.0 || dy.sqrt() < major_r - 1e-9 {
-                            return Err(format!(
-                                "第 {number} 段：导向平键固定螺钉孔 M{} 越出 A 型圆头轮廓（L={}、b={}、L3={}）",
-                                trim(row.d0),
-                                trim(keyway.l),
-                                trim(b),
-                                trim(len.l3)
-                            ));
+                            return Err(crate::i18n::t_fmt("cmd.shaft.err.key_screw_out_profile", &[("label", &seg_label(number)), ("p0", &(trim(row.d0)).to_string()), ("p1", &(trim(keyway.l)).to_string()), ("p2", &(trim(b)).to_string()), ("p3", &(trim(len.l3)).to_string())]));
                         }
                     }
                 }
             } else {
                 crate::partgen_keys::check_length_1096(b, keyway.l)
-                    .map_err(|e| format!("第 {number} 段：轴槽：{e}"))?;
+                    .map_err(|e| crate::i18n::t_fmt("cmd.shaft.err.keyway_prefix", &[("label", &seg_label(number)), ("e", &e.to_string())]))?;
             }
             let r = seg.s / 2.0;
             if b / 2.0 >= r - 1e-9 {
-                return Err(format!(
-                    "第 {number} 段：轴槽键宽 b={} ≥ 轴径 d={}（槽切穿轴）",
-                    trim(b),
-                    trim(r * 2.0)
-                ));
+                return Err(crate::i18n::t_fmt("cmd.shaft.err.key_b_ge_d", &[("label", &seg_label(number)), ("p0", &(trim(b)).to_string()), ("p1", &(trim(r * 2.0)).to_string())]));
             }
-            let t1 = keyway_t1(b, keyway.t1).map_err(|e| format!("第 {number} 段：{e}"))?;
+            let t1 = keyway_t1(b, keyway.t1).map_err(|e| crate::i18n::t_fmt("cmd.shaft.err.prefix", &[("label", &seg_label(number)), ("e", &e.to_string())]))?;
             if !t1.is_finite() || t1 <= 0.0 {
-                return Err(format!("第 {number} 段：轴槽槽深 t1={} 必须 > 0", trim(t1)));
+                return Err(crate::i18n::t_fmt("cmd.shaft.err.key_t1_positive", &[("label", &seg_label(number)), ("p0", &(trim(t1)).to_string())]));
             }
             let rk = b / 2.0;
             let sag = r - (r * r - rk * rk).max(0.0).sqrt();
             if t1 <= sag + 1e-9 {
-                return Err(format!(
-                    "第 {number} 段：轴槽槽深 t1={} ≤ sagitta={}（槽底没切到圆柱下）",
-                    trim(t1),
-                    trim(sag)
-                ));
+                return Err(crate::i18n::t_fmt("cmd.shaft.err.key_t1_le_sagitta", &[("label", &seg_label(number)), ("p0", &(trim(t1)).to_string()), ("p1", &(trim(sag)).to_string())]));
             }
             if t1 >= r - 1e-9 {
-                return Err(format!(
-                    "第 {number} 段：轴槽槽深 t1={} ≥ 轴半径 R={}（槽切过轴线，剖视上下环分区不成立）",
-                    trim(t1),
-                    trim(r)
-                ));
+                return Err(crate::i18n::t_fmt("cmd.shaft.err.key_t1_ge_radius", &[("label", &seg_label(number)), ("p0", &(trim(t1)).to_string()), ("p1", &(trim(r)).to_string())]));
             }
             // 导向固定螺钉孔：孔底（含 118° 钻尖）不得越过轴线。
             if let Some(row) = row_1097 {
                 let cone_h = 0.85 * row.d0 / 2.0 / 59f64.to_radians().tan();
                 if t1 + row.l0 + cone_h >= r - 1e-9 {
-                    return Err(format!(
-                        "第 {number} 段：固定螺钉孔深 L0={} ＋t1={}＋钻尖 {} 越过轴线（R={}）",
-                        trim(row.l0),
-                        trim(t1),
-                        trim(cone_h),
-                        trim(r)
-                    ));
+                    return Err(crate::i18n::t_fmt("cmd.shaft.err.key_screw_through_axis", &[("label", &seg_label(number)), ("p0", &(trim(row.l0)).to_string()), ("p1", &(trim(t1)).to_string()), ("p2", &(trim(cone_h)).to_string()), ("p3", &(trim(r)).to_string())]));
                 }
             }
             let slot_len = keyway.slot_len(t1, b);
@@ -3366,48 +3206,29 @@ pub fn validate(program: &Program) -> Result<(), String> {
                 KeywayPlace::Mid => {
                     let usable = (x0 + seg.l - ch_r) - (x0 + ch_l);
                     if slot_len > usable + 1e-9 {
-                        return Err(format!(
-                            "第 {number} 段：中置轴槽（键长 L={}）在净圆柱段（倒角根↔段末）{} 内装不下",
-                            trim(keyway.l),
-                            trim(usable)
-                        ));
+                        return Err(crate::i18n::t_fmt("cmd.shaft.err.key_mid_no_fit", &[("label", &seg_label(number)), ("p0", &(trim(keyway.l)).to_string()), ("p1", &(trim(usable)).to_string())]));
                     }
                 }
                 KeywayPlace::End => {
                     if program.segments.len() == 1 {
-                        return Err(format!(
-                            "第 {number} 段：单段轴的端置轴槽开口端不唯一（改中置 `KEY A 18` 或拆段）"
-                        ));
+                        return Err(crate::i18n::t_fmt("cmd.shaft.err.key_single_end_ambiguous", &[("label", &seg_label(number))]));
                     }
                     let side = if index == 0 {
                         End::L
                     } else if index + 1 == program.segments.len() {
                         End::R
                     } else {
-                        return Err(format!(
-                            "第 {number} 段：端置轴槽只能开在首段（左端）或末段（右端）"
-                        ));
+                        return Err(crate::i18n::t_fmt("cmd.shaft.err.key_end_place_only", &[("label", &seg_label(number))]));
                     };
                     if slot_len > seg.l + 1e-9 {
-                        return Err(format!(
-                            "第 {number} 段：端置轴槽槽长（L + t1 = {} + {} = {}）> 段长 l={}",
-                            trim(keyway.l),
-                            trim(t1),
-                            trim(slot_len),
-                            trim(seg.l)
-                        ));
+                        return Err(crate::i18n::t_fmt("cmd.shaft.err.key_slot_len_too_long", &[("label", &seg_label(number)), ("p0", &(trim(keyway.l)).to_string()), ("p1", &(trim(t1)).to_string()), ("p2", &(trim(slot_len)).to_string()), ("p3", &(trim(seg.l)).to_string())]));
                     }
                     let c = match side {
                         End::L => ch_l,
                         End::R => ch_r,
                     };
                     if c > 0.0 && t1 < c - 1e-9 {
-                        return Err(format!(
-                            "第 {number} 段：端置轴槽 t1={} < {}端倒角 C={}（槽没切穿倒角，本期不支持）",
-                            trim(t1),
-                            end_cn(side),
-                            trim(c)
-                        ));
+                        return Err(crate::i18n::t_fmt("cmd.shaft.err.key_t1_lt_chamfer", &[("label", &seg_label(number)), ("p0", &(trim(t1)).to_string()), ("p1", &(end_cn(side)).to_string()), ("p2", &(trim(c)).to_string())]));
                     }
                 }
             }
@@ -3415,34 +3236,21 @@ pub fn validate(program: &Program) -> Result<(), String> {
         if let Some(thread) = &seg.thread {
             if let Some(pitch) = thread.pitch {
                 if !pitch.is_finite() || pitch <= 0.0 {
-                    return Err(format!(
-                        "第 {number} 段：螺纹螺距 P={} 必须 > 0",
-                        trim(pitch)
-                    ));
+                    return Err(crate::i18n::t_fmt("cmd.shaft.err.m_pitch_positive", &[("label", &seg_label(number)), ("p0", &(trim(pitch)).to_string())]));
                 }
                 let minor = thread.minor_diameter(seg.s);
                 if minor <= 0.0 {
-                    return Err(format!(
-                        "第 {number} 段：螺距 P={} 太大（小径 d−1.0825P={} ≤ 0）",
-                        trim(pitch),
-                        trim(minor)
-                    ));
+                    return Err(crate::i18n::t_fmt("cmd.shaft.err.m_pitch_too_big", &[("label", &seg_label(number)), ("p0", &(trim(pitch)).to_string()), ("p1", &(trim(minor)).to_string())]));
                 }
             }
             if (seg.s - seg.e).abs() > 1e-9 {
-                return Err(format!(
-                    "第 {number} 段：螺纹段必须是圆柱（S==E，当前 S={}、E={}）",
-                    trim(seg.s),
-                    trim(seg.e)
-                ));
+                return Err(crate::i18n::t_fmt("cmd.shaft.err.m_round_only", &[("label", &seg_label(number)), ("p0", &(trim(seg.s)).to_string()), ("p1", &(trim(seg.e)).to_string())]));
             }
             if !seg.ov.is_empty() {
-                return Err(format!("第 {number} 段：螺纹段 M 不能与越程槽 OV 同段"));
+                return Err(crate::i18n::t_fmt("cmd.shaft.err.m_ov_conflict", &[("label", &seg_label(number))]));
             }
             if seg.gear.is_some() {
-                return Err(format!(
-                    "第 {number} 段：螺纹段 M 不能与齿轮段 GEAR 同段"
-                ));
+                return Err(crate::i18n::t_fmt("cmd.shaft.err.m_gear_conflict", &[("label", &seg_label(number))]));
             }
             // ── 局部螺纹（`TL` + `RO`/`SD` 或 `RL`）：表 1/表 2 查表 + 几何装得下 ──
             let wants_local = thread.tl.is_some() || thread.relief;
@@ -3450,135 +3258,90 @@ pub fn validate(program: &Program) -> Result<(), String> {
                 && (thread.runout != RunoutGrade::Normal
                     || thread.shoulder != ShoulderGrade::Normal)
             {
-                return Err(format!(
-                    "第 {number} 段：RL（表 2 退刀槽收尾）与 RO/SD（螺尾/肩距）互斥，二选一"
-                ));
+                return Err(crate::i18n::t_fmt("cmd.shaft.err.rl_ro_exclusive", &[("label", &seg_label(number))]));
             }
             if wants_local {
                 let pitch = thread.pitch.ok_or_else(|| {
-                    format!(
-                        "第 {number} 段：局部螺纹 TL/RL 必须给螺距（写法 M1.5 TL20；表 1/表 2 都按螺距查）"
-                    )
+                    crate::i18n::t_fmt("cmd.shaft.err.tlro_need_pitch", &[("label", &seg_label(number))])
                 })?;
                 if thread.tl.is_some_and(|tl| !tl.is_finite() || tl <= 0.0) {
-                    return Err(format!("第 {number} 段：完整螺纹长度 TL 必须 > 0"));
+                    return Err(crate::i18n::t_fmt("cmd.shaft.err.tl_positive_plain", &[("label", &seg_label(number))]));
                 }
                 let tl = thread.tl.unwrap_or(0.0);
                 if thread.relief {
                     let row =
-                        detail::thread_relief_row(pitch).map_err(|e| format!("第 {number} 段：{e}"))?;
+                        detail::thread_relief_row(pitch).map_err(|e| crate::i18n::t_fmt("cmd.shaft.err.prefix", &[("label", &seg_label(number)), ("e", &e.to_string())]))?;
                     let dg = seg.s - row.dg_reduction;
                     if dg <= 0.0 {
-                        return Err(format!(
-                            "第 {number} 段：退刀槽 dg = d − {} = {} ≤ 0（螺纹直径太小）",
-                            trim(row.dg_reduction),
-                            trim(dg)
-                        ));
+                        return Err(crate::i18n::t_fmt("cmd.shaft.err.rl_dg_nonpositive", &[("label", &seg_label(number)), ("p0", &(trim(row.dg_reduction)).to_string()), ("p1", &(trim(dg)).to_string())]));
                     }
                     let r1 = thread.minor_radius(seg.s);
                     if r1 <= dg / 2.0 + 1e-9 {
-                        return Err(format!(
-                            "第 {number} 段：退刀槽底 dg={} 不低于螺纹小径 d1={}（槽没切进牙底）",
-                            trim(dg),
-                            trim(r1 * 2.0)
-                        ));
+                        return Err(crate::i18n::t_fmt("cmd.shaft.err.rl_dg_too_shallow", &[("label", &seg_label(number)), ("p0", &(trim(dg)).to_string()), ("p1", &(trim(r1 * 2.0)).to_string())]));
                     }
                     let need = row.g2 + tl;
                     if need > seg.l + 1e-9 {
-                        return Err(format!(
-                            "第 {number} 段：退刀槽 g2={} + 完整螺纹 TL={} = {} 超过段长 L={}",
-                            trim(row.g2),
-                            trim(tl),
-                            trim(need),
-                            trim(seg.l)
-                        ));
+                        return Err(crate::i18n::t_fmt("cmd.shaft.err.rl_g2_tl_too_long", &[("label", &seg_label(number)), ("p0", &(trim(row.g2)).to_string()), ("p1", &(trim(tl)).to_string()), ("p2", &(trim(need)).to_string()), ("p3", &(trim(seg.l)).to_string())]));
                     }
                 } else {
                     let row = detail::runout_row_checked(pitch)
-                        .map_err(|e| format!("第 {number} 段：{e}"))?;
+                        .map_err(|e| crate::i18n::t_fmt("cmd.shaft.err.prefix", &[("label", &seg_label(number)), ("e", &e.to_string())]))?;
                     let x = row.x(thread.runout);
                     let a = row.a(thread.shoulder);
                     if x > a + 1e-9 {
-                        return Err(format!(
-                            "第 {number} 段：收尾 x={}（RO）大于肩距 a={}（SD），档位不搭（把 SD 调大或 RO 调短）",
-                            trim(x),
-                            trim(a)
-                        ));
+                        return Err(crate::i18n::t_fmt("cmd.shaft.err.ro_gt_sd", &[("label", &seg_label(number)), ("p0", &(trim(x)).to_string()), ("p1", &(trim(a)).to_string())]));
                     }
                     let need = a + tl;
                     if need > seg.l + 1e-9 {
-                        return Err(format!(
-                            "第 {number} 段：肩距 a={} + 完整螺纹 TL={} = {} 超过段长 L={}",
-                            trim(a),
-                            trim(tl),
-                            trim(need),
-                            trim(seg.l)
-                        ));
+                        return Err(crate::i18n::t_fmt("cmd.shaft.err.sd_tl_too_long", &[("label", &seg_label(number)), ("p0", &(trim(a)).to_string()), ("p1", &(trim(tl)).to_string()), ("p2", &(trim(need)).to_string()), ("p3", &(trim(seg.l)).to_string())]));
                     }
                 }
                 if seg.ch.iter().any(|c| c.end == End::R) {
-                    return Err(format!(
-                        "第 {number} 段：局部螺纹 TL/RL 的右端不能倒角 CH（会吃掉锥面/退刀槽的台肩角）"
-                    ));
+                    return Err(crate::i18n::t_fmt("cmd.shaft.err.tlro_no_chamfer_v", &[("label", &seg_label(number))]));
                 }
             } else if thread.runout != RunoutGrade::Normal
                 || thread.shoulder != ShoulderGrade::Normal
             {
-                return Err(format!(
-                    "第 {number} 段：RO/SD 只在局部螺纹（给了 TL）时有意义——不给 TL = 整段全螺纹"
-                ));
+                return Err(crate::i18n::t_fmt("cmd.shaft.err.ro_sd_need_tl", &[("label", &seg_label(number))]));
             }
         }
         if let Some(gear) = &seg.gear {
             gear.params()
                 .validate()
-                .map_err(|e| format!("第 {number} 段：齿轮段：{e}"))?;
-            validate_tooth_radii(gear, &format!("第 {number} 段"))?;
+                .map_err(|e| crate::i18n::t_fmt("cmd.shaft.err.gear_seg", &[("label", &seg_label(number)), ("e", &e.to_string())]))?;
+            validate_tooth_radii(gear, &seg_label(number))?;
             if !seg.ch.is_empty() {
-                return Err(format!("第 {number} 段：齿轮段不能与倒角 CH 同段"));
+                return Err(crate::i18n::t_fmt("cmd.shaft.err.gear_no_ch", &[("label", &seg_label(number))]));
             }
             if !seg.ov.is_empty() {
-                return Err(format!("第 {number} 段：齿轮段不能与越程槽 OV 同段"));
+                return Err(crate::i18n::t_fmt("cmd.shaft.err.gear_no_ov", &[("label", &seg_label(number))]));
             }
             if seg.thread.is_some() {
-                return Err(format!("第 {number} 段：齿轮段不能与螺纹段 M 同段"));
+                return Err(crate::i18n::t_fmt("cmd.shaft.err.gear_no_m", &[("label", &seg_label(number))]));
             }
         }
         // ── 矩形花键段（SPLINE）：直径由规格导出、段长 = L+l；与 CH/OV/RL/M/GEAR 互斥 ──
         if let Some(spline) = &seg.spline {
             if (seg.s - spline.big).abs() > 1e-9 || (seg.e - spline.big).abs() > 1e-9 {
-                return Err(format!(
-                    "第 {number} 段：花键段的 S/E={}/{} 应等于大径 D={}（由规格导出）",
-                    trim(seg.s),
-                    trim(seg.e),
-                    trim(spline.big)
-                ));
+                return Err(crate::i18n::t_fmt("cmd.shaft.err.spline_se_mismatch", &[("label", &seg_label(number)), ("p0", &(trim(seg.s)).to_string()), ("p1", &(trim(seg.e)).to_string()), ("p2", &(trim(spline.big)).to_string())]));
             }
             if (seg.l - spline.segment_len()).abs() > 1e-9 {
-                return Err(format!(
-                    "第 {number} 段：花键段段长 {} 应等于 L+l={}（L={} + 收尾 {}）",
-                    trim(seg.l),
-                    trim(spline.segment_len()),
-                    trim(spline.len),
-                    trim(spline.runout())
-                ));
+                return Err(crate::i18n::t_fmt("cmd.shaft.err.spline_len_mismatch", &[("label", &seg_label(number)), ("p0", &(trim(seg.l)).to_string()), ("p1", &(trim(spline.segment_len())).to_string()), ("p2", &(trim(spline.len)).to_string()), ("p3", &(trim(spline.runout())).to_string())]));
             }
             if !seg.ch.is_empty() {
-                return Err(format!(
-                    "第 {number} 段：花键段不能与倒角 CH 同段（引入倒角写在相邻轴段上）"
-                ));
+                return Err(crate::i18n::t_fmt("cmd.shaft.err.combo_spline_ch", &[("label", &seg_label(number))]));
             }
             if !seg.ov.is_empty() {
-                return Err(format!("第 {number} 段：花键段不能与越程槽 OV 同段"));
+                return Err(crate::i18n::t_fmt("cmd.shaft.err.combo_spline_ov", &[("label", &seg_label(number))]));
             }
             if !seg.relief.is_empty() {
-                return Err(format!("第 {number} 段：花键段不能与退刀槽 RL 同段"));
+                return Err(crate::i18n::t_fmt("cmd.shaft.err.combo_spline_rl", &[("label", &seg_label(number))]));
             }
             if seg.thread.is_some() {
-                return Err(format!("第 {number} 段：花键段不能与螺纹段 M 同段"));
+                return Err(crate::i18n::t_fmt("cmd.shaft.err.combo_spline_m", &[("label", &seg_label(number))]));
             }
             if seg.gear.is_some() {
-                return Err(format!("第 {number} 段：花键段不能与齿轮段 GEAR 同段"));
+                return Err(crate::i18n::t_fmt("cmd.shaft.err.spline_gear_conflict", &[("label", &seg_label(number))]));
             }
         }
 
@@ -3738,7 +3501,7 @@ fn keyway_geom(
         if crate::partgen_keys::key_1096_h(kw.kind.key_type(), b).is_none() {
             return Err(crate::i18n::t_fmt(
                 "cmd.shaft.err.key_1096_b",
-                &[("label", label), ("kind", kw.kind.cn()), ("b", &trim(b))],
+                &[("label", label), ("kind", &kw.kind.cn()), ("b", &trim(b))],
             ));
         }
         None
@@ -4280,13 +4043,10 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
         };
         if thread.relief {
             let pitch = thread.pitch.ok_or_else(|| {
-                format!(
-                    "第 {} 段：局部螺纹 RL 必须给螺距（写法 M1.5 TL20 RL）",
-                    index + 1
-                )
+                crate::i18n::t_fmt("cmd.shaft.err.tlro_rl_need_pitch", &[("label", &seg_label(index + 1))])
             })?;
             let row = detail::thread_relief_row(pitch)
-                .map_err(|e| format!("第 {} 段：{e}", index + 1))?;
+                .map_err(|e| crate::i18n::t_fmt("cmd.shaft.err.prefix", &[("label", &seg_label(index + 1)), ("e", &e.to_string())]))?;
             let dims = row.dims(seg.s);
             let rg = dims.dg / 2.0;
             lay.relief = Some(dims);
@@ -4300,10 +4060,10 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
             };
         } else {
             let pitch = thread.pitch.ok_or_else(|| {
-                format!("第 {} 段：局部螺纹 TL 必须给螺距（写法 M1.5 TL20）", index + 1)
+                crate::i18n::t_fmt("cmd.shaft.err.tlro_tl_need_pitch", &[("label", &seg_label(index + 1))])
             })?;
             let row = detail::runout_row_checked(pitch)
-                .map_err(|e| format!("第 {} 段：{e}", index + 1))?;
+                .map_err(|e| crate::i18n::t_fmt("cmd.shaft.err.prefix", &[("label", &seg_label(index + 1)), ("e", &e.to_string())]))?;
             let a = row.a(thread.shoulder);
             let x = row.x(thread.runout);
             lay.runout_start = face - (a - x);
@@ -4319,7 +4079,7 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
     let mut relief_dims: Vec<[Option<detail::ReliefDims>; 2]> = vec![[None, None]; count];
     for (index, seg) in segs.iter().enumerate() {
         for spec in &seg.relief {
-            let label = format!("第 {} 段", index + 1);
+            let label = seg_label(index + 1);
             let dims = resolve_relief_dims(seg, spec, &label)?;
             relief_dims[index][match spec.end {
                 End::L => 0,
@@ -4370,13 +4130,7 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
             let Some(j) = j else { continue };
             let r_n = face_radius(&segs[j], end);
             if r_n > ra + 1e-9 {
-                return Err(format!(
-                    "第 {} 段：齿轮段相邻第 {} 段 Ø{} 大于齿顶圆 Ø{}，会盖住齿顶线（相邻段半径必须 ≤ 齿顶圆半径）",
-                    index + 1,
-                    j + 1,
-                    trim(r_n * 2.0),
-                    trim(ra * 2.0)
-                ));
+                return Err(crate::i18n::t_fmt("cmd.shaft.err.gear_adjacent_covers_tip", &[("label", &seg_label(index + 1)), ("p0", &(j + 1).to_string()), ("p1", &(trim(r_n * 2.0)).to_string()), ("p2", &(trim(ra * 2.0)).to_string())]));
             }
         }
     }
@@ -4390,11 +4144,7 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
         let ch_l = segs[k].ch.iter().find(|c| c.end == End::L).map(|c| c.c);
         let (chamfer, ch_from_left) = match (ch_r, ch_l) {
             (Some(_), Some(_)) => {
-                return Err(format!(
-                    "第 {} 段：右端倒角与第 {} 段左端倒角落在同一端面，特征重叠",
-                    i + 1,
-                    k + 1
-                ))
+                return Err(crate::i18n::t_fmt("cmd.shaft.err.chamfer_same_face", &[("label", &seg_label(i + 1)), ("p0", &(k + 1).to_string())]))
             }
             (Some(c), None) => (Some(c), true),
             (None, Some(c)) => (Some(c), false),
@@ -4403,11 +4153,7 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
         let ov_r = segs[i].ov.iter().find(|o| o.end == End::R).copied();
         let ov_l = segs[k].ov.iter().find(|o| o.end == End::L).copied();
         if ov_r.is_some() && ov_l.is_some() {
-            return Err(format!(
-                "第 {} 段：右端与第 {} 段左端都写了越程槽（同一端面只能一侧）",
-                i + 1,
-                k + 1
-            ));
+            return Err(crate::i18n::t_fmt("cmd.shaft.err.ov_same_face", &[("label", &seg_label(i + 1)), ("p0", &(k + 1).to_string())]));
         }
         // 段级 RL（i 右端 / k 左端）与本端面已有的 M 段螺纹收尾：
         // 同一端面只能有一个退刀槽；与 CH/OV 互斥（同端只能有一个槽/倒角）。
@@ -4418,20 +4164,14 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
             + relief_l.is_some() as u8
             + thread_relief_here.is_some() as u8;
         if relief_kinds > 1 {
-            return Err(format!("第 {} 段：同一端面只能有一个退刀槽（RL）", i + 1));
+            return Err(crate::i18n::t_fmt("cmd.shaft.err.one_relief_per_face", &[("label", &seg_label(i + 1))]));
         }
         if relief_kinds > 0 {
             if chamfer.is_some() {
-                return Err(format!(
-                    "第 {} 段：退刀槽 RL 所在端面不能倒角 CH（同端只能有一个槽/倒角）",
-                    i + 1
-                ));
+                return Err(crate::i18n::t_fmt("cmd.shaft.err.rl_no_chamfer", &[("label", &seg_label(i + 1))]));
             }
             if ov_r.is_some() || ov_l.is_some() {
-                return Err(format!(
-                    "第 {} 段：退刀槽 RL 与越程槽 OV 在同一端面冲突（同端只能有一个槽/倒角）",
-                    i + 1
-                ));
+                return Err(crate::i18n::t_fmt("cmd.shaft.err.rl_ov_same_face", &[("label", &seg_label(i + 1))]));
             }
         }
         // 该端面处两侧的轮廓半径。
@@ -4487,13 +4227,9 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
 
         if let Some(c) = chamfer {
             let requester = if ch_from_left { i } else { k };
-            let requester_end = if ch_from_left { "右" } else { "左" };
+            let requester_end = crate::i18n::t(if ch_from_left { "cmd.shaft.end.r" } else { "cmd.shaft.end.l" });
             if (ra - rb).abs() < 1e-12 {
-                return Err(format!(
-                    "第 {} 段：{}端没有端面（相邻段直径相同），无法倒角",
-                    requester + 1,
-                    requester_end
-                ));
+                return Err(crate::i18n::t_fmt("cmd.shaft.err.no_face_for_chamfer", &[("label", &seg_label(requester + 1)), ("p0", &(requester_end).to_string())]));
             }
             let delta = (ra - rb).abs();
             // 倒角贴**凸角**（大的一侧）；落在齿轮段那侧则冲突。
@@ -4501,30 +4237,14 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
             // 花键凸角允许「C = 全台阶」（模板 φ22→φ26 的 C2 就是如此，倒角正好吃掉台阶）。
             let full_step_on_spline = is_spline_seg(&segs[land]) && (c - delta).abs() < 1e-9;
             if c >= delta - 1e-12 && !full_step_on_spline {
-                return Err(format!(
-                    "第 {} 段：{}端倒角 C={} ≥ 端面直径变化量的一半（Ø{} → Ø{} 的 {}），端面被吃掉",
-                    requester + 1,
-                    requester_end,
-                    trim(c),
-                    trim(ra * 2.0),
-                    trim(rb * 2.0),
-                    trim(delta)
-                ));
+                return Err(crate::i18n::t_fmt("cmd.shaft.err.chamfer_eats_face", &[("label", &seg_label(requester + 1)), ("p0", &(requester_end).to_string()), ("p1", &(trim(c)).to_string()), ("p2", &(trim(ra * 2.0)).to_string()), ("p3", &(trim(rb * 2.0)).to_string()), ("p4", &(trim(delta)).to_string())]));
             }
             chamfer_land = Some(land);
             if segs[land].gear.is_some() {
-                return Err(format!(
-                    "第 {} 段：{}端倒角会落在第 {} 段齿轮段上（齿轮段不能倒角）",
-                    requester + 1,
-                    requester_end,
-                    land + 1
-                ));
+                return Err(crate::i18n::t_fmt("cmd.shaft.err.chamfer_on_gear", &[("label", &seg_label(requester + 1)), ("p0", &(requester_end).to_string()), ("p1", &(land + 1).to_string())]));
             }
             if is_spline_seg(&segs[land]) && land == i {
-                return Err(format!(
-                    "第 {} 段：倒角会落在花键段右端（收尾弧占有该端）—— 引入倒角请写在花键左端",
-                    requester + 1
-                ));
+                return Err(crate::i18n::t_fmt("cmd.shaft.err.chamfer_on_spline", &[("label", &seg_label(requester + 1))]));
             }
             let (contour, face_point) = if rb > ra {
                 chamfer_geom(&segs[k], x0s[k], End::L, c)
@@ -4532,13 +4252,7 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
                 chamfer_geom(&segs[i], x0s[i], End::R, c)
             };
             if face_point[1] <= bottom + 1e-9 && !full_step_on_spline {
-                return Err(format!(
-                    "第 {} 段：{}端倒角与相邻面重叠（端面点 {} ≤ {}）",
-                    requester + 1,
-                    requester_end,
-                    trim(face_point[1]),
-                    trim(bottom)
-                ));
+                return Err(crate::i18n::t_fmt("cmd.shaft.err.chamfer_face_overlap", &[("label", &seg_label(requester + 1)), ("p0", &(requester_end).to_string()), ("p1", &(trim(face_point[1])).to_string()), ("p2", &(trim(bottom)).to_string())]));
             }
             top = face_point[1];
             chamfer_lines = Some((contour, face_point));
@@ -4552,34 +4266,19 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
         if let Some(ov) = ov_r {
             // 槽开在第 i 段（磨出的外圆），台阶 = 第 i+1 段。
             if !(rb > ra + 1e-12) {
-                return Err(format!(
-                    "第 {} 段：右端越程槽没有台阶面（相邻段 Ø{} 不大于本段 Ø{}）",
-                    i + 1,
-                    trim(rb * 2.0),
-                    trim(ra * 2.0)
-                ));
+                return Err(crate::i18n::t_fmt("cmd.shaft.err.ov_no_step_r", &[("label", &seg_label(i + 1)), ("p0", &(trim(rb * 2.0)).to_string()), ("p1", &(trim(ra * 2.0)).to_string())]));
             }
             if (segs[i].s - segs[i].e).abs() > 1e-9 {
-                return Err(format!("第 {} 段：右端是锥面，越程槽只能开在圆柱端", i + 1));
+                return Err(crate::i18n::t_fmt("cmd.shaft.err.ov_cone_r", &[("label", &seg_label(i + 1))]));
             }
             let (groove, row) = detail::groove_entities(segs[i].e, ov.b1)
-                .map_err(|e| format!("第 {} 段：右端越程槽：{e}", i + 1))?;
+                .map_err(|e| crate::i18n::t_fmt("cmd.shaft.err.ov_prefix_r", &[("label", &seg_label(i + 1)), ("e", &e.to_string())]))?;
             if row.b1 > segs[i].l + 1e-9 {
-                return Err(format!(
-                    "第 {} 段：越程槽 b1={} > 段长 l={}",
-                    i + 1,
-                    trim(row.b1),
-                    trim(segs[i].l)
-                ));
+                return Err(crate::i18n::t_fmt("cmd.shaft.err.ov_b1_too_long", &[("label", &seg_label(i + 1)), ("p0", &(trim(row.b1)).to_string()), ("p1", &(trim(segs[i].l)).to_string())]));
             }
             let fillet = detail::fillet_tangent_radius(segs[i].e, row);
             if fillet >= top - 1e-9 {
-                return Err(format!(
-                    "第 {} 段：右端越程槽的 R 圆角切点 {} 不低于台阶面 {}（相邻台阶太小）",
-                    i + 1,
-                    trim(fillet),
-                    trim(top)
-                ));
+                return Err(crate::i18n::t_fmt("cmd.shaft.err.ov_r_tangent_r", &[("label", &seg_label(i + 1)), ("p0", &(trim(fillet)).to_string()), ("p1", &(trim(top)).to_string())]));
             }
             bottom = fillet;
             face_through_h = Some(fillet);
@@ -4607,34 +4306,19 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
         } else if let Some(ov) = ov_l {
             // 槽开在第 k 段（磨出的外圆），台阶 = 第 i 段。
             if !(ra > rb + 1e-12) {
-                return Err(format!(
-                    "第 {} 段：左端越程槽没有台阶面（相邻段 Ø{} 不大于本段 Ø{}）",
-                    k + 1,
-                    trim(ra * 2.0),
-                    trim(rb * 2.0)
-                ));
+                return Err(crate::i18n::t_fmt("cmd.shaft.err.ov_no_step_l", &[("label", &seg_label(k + 1)), ("p0", &(trim(ra * 2.0)).to_string()), ("p1", &(trim(rb * 2.0)).to_string())]));
             }
             if (segs[k].s - segs[k].e).abs() > 1e-9 {
-                return Err(format!("第 {} 段：左端是锥面，越程槽只能开在圆柱端", k + 1));
+                return Err(crate::i18n::t_fmt("cmd.shaft.err.ov_cone_l", &[("label", &seg_label(k + 1))]));
             }
             let (groove, row) = detail::groove_entities(segs[k].s, ov.b1)
-                .map_err(|e| format!("第 {} 段：左端越程槽：{e}", k + 1))?;
+                .map_err(|e| crate::i18n::t_fmt("cmd.shaft.err.ov_prefix_l", &[("label", &seg_label(k + 1)), ("e", &e.to_string())]))?;
             if row.b1 > segs[k].l + 1e-9 {
-                return Err(format!(
-                    "第 {} 段：越程槽 b1={} > 段长 l={}",
-                    k + 1,
-                    trim(row.b1),
-                    trim(segs[k].l)
-                ));
+                return Err(crate::i18n::t_fmt("cmd.shaft.err.ov_b1_too_long", &[("label", &seg_label(k + 1)), ("p0", &(trim(row.b1)).to_string()), ("p1", &(trim(segs[k].l)).to_string())]));
             }
             let fillet = detail::fillet_tangent_radius(segs[k].s, row);
             if fillet >= top - 1e-9 {
-                return Err(format!(
-                    "第 {} 段：左端越程槽的 R 圆角切点 {} 不低于台阶面 {}（相邻台阶太小）",
-                    k + 1,
-                    trim(fillet),
-                    trim(top)
-                ));
+                return Err(crate::i18n::t_fmt("cmd.shaft.err.ov_r_tangent_l", &[("label", &seg_label(k + 1)), ("p0", &(trim(fillet)).to_string()), ("p1", &(trim(top)).to_string())]));
             }
             bottom = fillet;
             face_through_h = Some(fillet);
@@ -4665,21 +4349,11 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
         let mut segment_relief_right: Option<f64> = None;
         if let Some(dims) = relief_r {
             if !(rb > ra + 1e-12) {
-                return Err(format!(
-                    "第 {} 段：右端退刀槽没有台阶面（相邻段 Ø{} 不大于本段 Ø{}）",
-                    i + 1,
-                    trim(rb * 2.0),
-                    trim(ra * 2.0)
-                ));
+                return Err(crate::i18n::t_fmt("cmd.shaft.err.rl_no_step_r", &[("label", &seg_label(i + 1)), ("p0", &(trim(rb * 2.0)).to_string()), ("p1", &(trim(ra * 2.0)).to_string())]));
             }
             let tangent = dims.dg / 2.0 + dims.r;
             if tangent >= top - 1e-9 {
-                return Err(format!(
-                    "第 {} 段：右端退刀槽的 R 圆角切点 {} 不低于台阶面 {}（相邻台阶太小）",
-                    i + 1,
-                    trim(tangent),
-                    trim(top)
-                ));
+                return Err(crate::i18n::t_fmt("cmd.shaft.err.rl_r_tangent_r", &[("label", &seg_label(i + 1)), ("p0", &(trim(tangent)).to_string()), ("p1", &(trim(top)).to_string())]));
             }
             bottom = tangent;
             face_through_h = Some(tangent);
@@ -4706,21 +4380,11 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
             segment_relief_left = Some(tangent);
         } else if let Some(dims) = relief_l {
             if !(ra > rb + 1e-12) {
-                return Err(format!(
-                    "第 {} 段：左端退刀槽没有台阶面（相邻段 Ø{} 不大于本段 Ø{}）",
-                    k + 1,
-                    trim(ra * 2.0),
-                    trim(rb * 2.0)
-                ));
+                return Err(crate::i18n::t_fmt("cmd.shaft.err.rl_no_step_l", &[("label", &seg_label(k + 1)), ("p0", &(trim(ra * 2.0)).to_string()), ("p1", &(trim(rb * 2.0)).to_string())]));
             }
             let tangent = dims.dg / 2.0 + dims.r;
             if tangent >= top - 1e-9 {
-                return Err(format!(
-                    "第 {} 段：左端退刀槽的 R 圆角切点 {} 不低于台阶面 {}（相邻台阶太小）",
-                    k + 1,
-                    trim(tangent),
-                    trim(top)
-                ));
+                return Err(crate::i18n::t_fmt("cmd.shaft.err.rl_r_tangent_l", &[("label", &seg_label(k + 1)), ("p0", &(trim(tangent)).to_string()), ("p1", &(trim(top)).to_string())]));
             }
             bottom = tangent;
             face_through_h = Some(tangent);
@@ -4754,10 +4418,7 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
             .map(|lay| lay.relief_tangent);
         if let Some(tangent) = relief_face {
             if chamfer_lines.is_some() {
-                return Err(format!(
-                    "第 {} 段：局部螺纹 TL/RL 的右端不能倒角 CH（相邻段倒角会落在这里）",
-                    i + 1
-                ));
+                return Err(crate::i18n::t_fmt("cmd.shaft.err.tlro_no_chamfer", &[("label", &seg_label(i + 1))]));
             }
             let right_surface = if ov_l.is_some() { bottom } else { rb };
             bottom = tangent.min(right_surface);
@@ -4859,7 +4520,7 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
 
     // ── 左自由端（第 1 段左端面） ──
     if segs[0].ov.iter().any(|o| o.end == End::L) {
-        return Err("第 1 段：左端是自由端，越程槽没有台阶面".into());
+        return Err(crate::i18n::t_fmt("cmd.shaft.err.ov_free_end_l", &[("label", &seg_label(1))]).into());
     }
     // 左端是端置轴槽：剖视端面被槽切开（上倒角被切掉），模板 C1/C2。
     let key_end_left = segs[0]
@@ -4867,7 +4528,7 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
         .as_ref()
         .filter(|k| k.place == KeywayPlace::End);
     if let Some(kw) = key_end_left {
-        let kg = keyway_geom(&segs[0], kw, 0.0, 0, count, "第 1 段")?;
+        let kg = keyway_geom(&segs[0], kw, 0.0, 0, count, &seg_label(1))?;
         let double = kw.double;
         let c = segs[0].ch.iter().find(|c| c.end == End::L).map(|c| c.c);
         // face_lo 统一为“端面下端点”的 y（负值），无倒角时为 -R；
@@ -4931,20 +4592,11 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
     } else if let Some(c) = segs[0].ch.iter().find(|c| c.end == End::L).map(|c| c.c) {
         let radius = segs[0].s / 2.0;
         if c >= radius - 1e-12 {
-            return Err(format!(
-                "第 1 段：左端倒角 C={} ≥ 端面半径（Ø{} 的 {}），端面被吃掉",
-                trim(c),
-                trim(segs[0].s),
-                trim(radius)
-            ));
+            return Err(crate::i18n::t_fmt("cmd.shaft.err.chamfer_left_eats_face", &[("label", &seg_label(1)), ("p0", &(trim(c)).to_string()), ("p1", &(trim(segs[0].s)).to_string()), ("p2", &(trim(radius)).to_string())]));
         }
         let (contour, face_point) = chamfer_geom(&segs[0], 0.0, End::L, c);
         if face_point[1] <= 1e-9 {
-            return Err(format!(
-                "第 1 段：左端倒角 C={} 把端面吃穿了（端面点 {} ≤ 0）",
-                trim(c),
-                trim(face_point[1])
-            ));
+            return Err(crate::i18n::t_fmt("cmd.shaft.err.chamfer_left_through", &[("label", &seg_label(1)), ("p0", &(trim(c)).to_string()), ("p1", &(trim(face_point[1])).to_string())]));
         }
         own_ch[0][0] = Some(c);
         entities.push(line(face_point, contour, LAYER_MAIN));
@@ -4970,10 +4622,7 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
     let last = count - 1;
     let x_end = x0s[last] + segs[last].l;
     if segs[last].ov.iter().any(|o| o.end == End::R) {
-        return Err(format!(
-            "第 {} 段：右端是自由端，越程槽没有台阶面",
-            last + 1
-        ));
+        return Err(crate::i18n::t_fmt("cmd.shaft.err.ov_free_end_r", &[("label", &seg_label(last + 1))]));
     }
     // 右端是端置轴槽：与左端镜像（剖视端面被槽切开）。
     let key_end_right = segs[last]
@@ -4987,7 +4636,7 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
             x0s[last],
             last,
             count,
-            &format!("第 {} 段", last + 1),
+            &seg_label(last + 1),
         )?;
         let c = segs[last].ch.iter().find(|c| c.end == End::R).map(|c| c.c);
         let double = kw.double;
@@ -5029,7 +4678,7 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
         .map(|lay| lay.relief_tangent);
     let right_face = if let Some(tangent) = relief_tail {
         if segs[last].ch.iter().any(|c| c.end == End::R) {
-            return Err(format!("第 {} 段：局部螺纹 TL/RL 的右端不能倒角 CH", last + 1));
+            return Err(crate::i18n::t_fmt("cmd.shaft.err.tlro_no_chamfer_plain", &[("label", &seg_label(last + 1))]));
         }
         tangent
     } else if let Some(c) = side_auto_chamfer(
@@ -5058,22 +4707,11 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
     {
         let radius = segs[last].e / 2.0;
         if c >= radius - 1e-12 {
-            return Err(format!(
-                "第 {} 段：右端倒角 C={} ≥ 端面半径（Ø{} 的 {}），端面被吃掉",
-                last + 1,
-                trim(c),
-                trim(segs[last].e),
-                trim(radius)
-            ));
+            return Err(crate::i18n::t_fmt("cmd.shaft.err.chamfer_right_eats_face", &[("label", &seg_label(last + 1)), ("p0", &(trim(c)).to_string()), ("p1", &(trim(segs[last].e)).to_string()), ("p2", &(trim(radius)).to_string())]));
         }
         let (contour, face_point) = chamfer_geom(&segs[last], x0s[last], End::R, c);
         if face_point[1] <= 1e-9 {
-            return Err(format!(
-                "第 {} 段：右端倒角 C={} 把端面吃穿了（端面点 {} ≤ 0）",
-                last + 1,
-                trim(c),
-                trim(face_point[1])
-            ));
+            return Err(crate::i18n::t_fmt("cmd.shaft.err.chamfer_right_through", &[("label", &seg_label(last + 1)), ("p0", &(trim(c)).to_string()), ("p1", &(trim(face_point[1])).to_string())]));
         }
         own_ch[last][1] = Some(c);
         entities.push(line(face_point, contour, LAYER_MAIN));
@@ -5198,7 +4836,7 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
         //    下轮廓两视图共用；上轮廓：常规 = 整段连续线，剖视 = 缺口两段；
         //    hatch 边界走带台阶的真实轮廓（模板 C0/C1 逐图元）。──
         if let Some(kw) = &seg.keyway {
-            let label = format!("第 {} 段", index + 1);
+            let label = seg_label(index + 1);
             let kg = keyway_geom(seg, kw, x0s[index], index, count, &label)?;
             let xs = x0s[index] + keyway_chamfer(seg, End::L);
             let xe = x0s[index] + seg.l - keyway_chamfer(seg, End::R);
@@ -5371,13 +5009,7 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
                     .unwrap_or(0.0),
             );
         if start_shift + end_shift > seg.l + 1e-9 {
-            return Err(format!(
-                "第 {} 段：两端特征重叠（左 {} + 右 {} > 段长 {}）",
-                index + 1,
-                trim(start_shift),
-                trim(end_shift),
-                trim(seg.l)
-            ));
+            return Err(crate::i18n::t_fmt("cmd.shaft.err.both_ends_overlap", &[("label", &seg_label(index + 1)), ("p0", &(trim(start_shift)).to_string()), ("p1", &(trim(end_shift)).to_string()), ("p2", &(trim(seg.l)).to_string())]));
         }
         let xs = x0s[index] + start_shift;
         let xe = x0s[index] + seg.l - end_shift;
@@ -5442,16 +5074,10 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
         //    退刀槽斜壁；同段端面倒角比小径深时不挑出材料外。 ──
         if let Some(lay) = local_threads[index] {
             if own_ch[index][1].is_some() {
-                return Err(format!(
-                    "第 {} 段：局部螺纹 TL/RL 的右端不能倒角 CH",
-                    index + 1
-                ));
+                return Err(crate::i18n::t_fmt("cmd.shaft.err.tlro_no_chamfer_plain", &[("label", &seg_label(index + 1))]));
             }
             if own_ov[index][1].is_some() {
-                return Err(format!(
-                    "第 {} 段：局部螺纹 TL/RL 的右端不能有越程槽 OV",
-                    index + 1
-                ));
+                return Err(crate::i18n::t_fmt("cmd.shaft.err.tlro_no_ov", &[("label", &seg_label(index + 1))]));
             }
             match lay.relief {
                 Some(dims) => {
@@ -5516,10 +5142,7 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
             let xt0 = (x0s[index] + left_inset).max(lay.full_start);
             let xt1 = lay.minor_end;
             if xt1 - xt0 <= 1e-9 {
-                return Err(format!(
-                    "第 {} 段：局部螺纹装不下（小径细实线长 ≤ 0；TL/RL 与左端倒角/段长冲突）",
-                    index + 1
-                ));
+                return Err(crate::i18n::t_fmt("cmd.shaft.err.tlro_no_fit", &[("label", &seg_label(index + 1))]));
             }
             entities.push(line([xt0, lay.r1], [xt1, lay.r1], LAYER_THIN));
             entities.push(line([xt0, -lay.r1], [xt1, -lay.r1], LAYER_THIN));
@@ -5940,34 +5563,31 @@ pub fn preview_svg(program: &Program) -> Result<String, String> {
 pub fn build_report(program: &Program) -> Result<String, String> {
     let built = build(program, 1.0)?;
     let mut md = String::new();
-    md.push_str("# 轴段计算书\n\n");
+    md.push_str(&format!("{}\n\n", crate::i18n::t("cmd.shaft.report.title")));
+    md.push_str(&crate::i18n::t_fmt("cmd.shaft.report.header", &[("p0", &(program.view.key()).to_string()), ("p1", &(program.view.label()).to_string()), ("p2", &(built.segment_count).to_string()), ("p3", &(trim(built.total_length)).to_string()), ("p4", &(trim(built.max_diameter)).to_string())]));
     md.push_str(&format!(
-        "- 视图：{}（{}）\n- 段数：{}；总长：{} mm；最大直径：{} mm\n\n",
-        program.view.key(),
-        program.view.label(),
-        built.segment_count,
-        trim(built.total_length),
-        trim(built.max_diameter)
+        "{}\n\n{}\n|---|---|---|---|---|\n",
+        crate::i18n::t("cmd.shaft.report.sec_list"),
+        crate::i18n::t("cmd.shaft.report.list_header")
     ));
-    md.push_str("## 1. 段清单\n\n| # | 类型 | 关键参数 | 长度 mm | 外径 mm |\n|---|---|---|---|---|\n");
     for (i, seg) in program.segments.iter().enumerate() {
         let (kind, params) = if let Some(g) = &seg.gear {
             let gp = g.params();
             (
-                "齿轮段",
+                crate::i18n::t("cmd.shaft.report.type_gear"),
                 format!("m={} z={} α={}°", trim(gp.m), gp.z, trim(gp.alpha_deg)),
             )
         } else if let Some(s) = &seg.spline {
             (
-                "矩形花键段",
+                crate::i18n::t("cmd.shaft.report.type_spline"),
                 format!("N={} d={} D={} B={}", s.n, trim(s.d), trim(s.big), trim(s.b)),
             )
         } else if let Some(t) = &seg.thread {
             (
-                "螺纹段",
+                crate::i18n::t("cmd.shaft.report.type_thread"),
                 format!(
                     "P={}",
-                    t.pitch.map(trim).unwrap_or_else(|| "简化0.85d".into())
+                    t.pitch.map(trim).unwrap_or_else(|| crate::i18n::t("cmd.shaft.report.simplified_085d").into())
                 ),
             )
         } else {
@@ -5977,16 +5597,9 @@ pub fn build_report(program: &Program) -> Result<String, String> {
                 let t1 = keyway_t1(b, keyway.t1)
                     .map(trim)
                     .unwrap_or_else(|_| "?".into());
-                params.push_str(&format!(
-                    "；轴槽 {} 键长 L={} {} b={} t1={}",
-                    keyway.kind.cn(),
-                    trim(keyway.l),
-                    keyway.place.cn(),
-                    trim(b),
-                    t1
-                ));
+                params.push_str(&crate::i18n::t_fmt("cmd.shaft.report.keyway", &[("p0", &(keyway.kind.cn()).to_string()), ("p1", &(trim(keyway.l)).to_string()), ("p2", &(keyway.place.cn()).to_string()), ("p3", &(trim(b)).to_string()), ("p4", &(t1).to_string())]));
             }
-            ("普通段", params)
+            (crate::i18n::t("cmd.shaft.report.type_plain"), params)
         };
         md.push_str(&format!(
             "| {} | {} | {} | {} | {} |\n",
@@ -6016,18 +5629,12 @@ pub fn build_report(program: &Program) -> Result<String, String> {
             continue;
         };
         sp_count += 1;
-        sp_section.push_str(&format!(
-            "### 第 {} 段（{}，默认 7 级 / 基孔制 H）\n\n{body}\n",
-            i + 1,
-            input.grade_fit_label()
-        ));
+        sp_section.push_str(&crate::i18n::t_fmt("cmd.shaft.report.spline_heading", &[("p0", &(i + 1).to_string()), ("p1", &(input.grade_fit_label()).to_string()), ("body", &body.to_string())]));
     }
     if sp_count > 0 {
-        md.push_str("## 2. 花键参数表（GB/T 3478，默认 7 级 / H·h）\n\n");
+        md.push_str(&format!("{}\n\n", crate::i18n::t("cmd.shaft.report.spline_sec_title")));
         md.push_str(&sp_section);
-        md.push_str(
-            "> 与 `OCSMCARD 花键参数表`（智能卡片）**同一份 `spline_tol::compute()`**；\n             > 等级/配合类别/量棒直径 Dp 可在该卡命令里显式给。\n\n",
-        );
+        md.push_str(&crate::i18n::t("cmd.shaft.report.spline_sec_note"));
     }
     Ok(md)
 }
@@ -8972,7 +8579,7 @@ GEAR M3 Z20";
             r#"{"segments":[{"invol_spline":{"code":"GB30R","m":3,"z":20,"len":30}}]}"#,
         )
         .unwrap_err();
-        assert!(e.contains("缺少 s") || e.contains("缺少 l"), "{e}");
+        assert!(e.contains("缺少 S") || e.contains("缺少 L"), "{e}");
         let json = serde_json::to_string(&parse_program("SPLINE 6x23x26x6 L30").unwrap()).unwrap();
         assert!(!json.contains("invol_spline"), "{json}");
         // GEAR 段不受牵连，照常可用。
@@ -10222,6 +9829,87 @@ GEAR M3 Z20";
         assert!(e.contains("looked up by pitch") && e.contains("RL"), "{e}");
         assert!(!e.contains("按螺距查表"), "{e}");
 
+        assert!(
+            crate::i18n::missing_keys().is_empty(),
+            "缺词条：{:?}",
+            crate::i18n::missing_keys()
+        );
+        crate::i18n::set_lang_auto();
+    }
+
+    /// 族②补齐（§26）：JSON 输入 / 几何校验 / 计算书正文 —— zh/en 双断言、数据原样。
+    #[test]
+    fn shaft_json_geometry_and_report_switch_language() {
+        let _g = crate::global_state_test_lock();
+        crate::i18n::clear_missing_keys();
+        crate::i18n::set_lang(crate::i18n::Lang::Zh);
+
+        // ── JSON 输入路径 ──
+        let e = parse_program(r#"{"segments":[{"ch":[{"c":2,"end":"X"}]}]}"#).unwrap_err();
+        assert!(e.contains("ch[0]") && e.contains("X") && e.contains("只能用 L 或 R"), "{e}");
+        let e = parse_program(r#"{"segments":[{"spline":{"spec":"6x23x26x6"}}]}"#).unwrap_err();
+        assert!(e.contains("缺少 L") && e.contains("6x23x26x6"), "{e}");
+        let e = parse_program(r#"{"segments":[]}"#).unwrap_err();
+        assert!(e.contains("segments") && e.contains("至少给一段"), "{e}");
+        let e = parse_program(r#"{"segments":[{"gear":{"m":3,"z":20,"h":30,"kind":"nope"}}]}"#).unwrap_err();
+        assert!(e.contains("kind") && e.contains("nope"), "{e}");
+
+        // ── 几何校验（build / validate）──
+        let e = build(&parse_program("S30 E30 L0").unwrap(), 1.0).unwrap_err();
+        assert!(e.contains("L=0") && e.contains("必须 > 0"), "{e}");
+        let e = build(&parse_program("S30 E30 L45 CH60").unwrap(), 1.0).unwrap_err();
+        assert!(e.contains("C=60") && e.contains("特征重叠"), "{e}");
+        let e = build(&parse_program("S30 E30 L45 OV50").unwrap(), 1.0).unwrap_err();
+        assert!(e.contains("b1=50") && e.contains("段长 l=45"), "{e}");
+        let e = build(&parse_program("S30 E30 L45 OV3@L").unwrap(), 1.0).unwrap_err();
+        assert!(e.contains("自由端") && e.contains("越程槽"), "{e}");
+        let e = build(
+            &parse_program("S30 E30 L45 CH2@R | S30 E30 L20 CH2@L").unwrap(),
+            1.0,
+        )
+        .unwrap_err();
+        assert!(e.contains("同一端面") && e.contains("特征重叠"), "{e}");
+        let e = build(&parse_program("S80 E80 L10 | GEAR M3 Z20 H30").unwrap(), 1.0).unwrap_err();
+        assert!(e.contains("Ø80") && e.contains("Ø66"), "{e}");
+
+        // ── 计算书正文（段清单 + 花键节）──
+        let md = build_report(&parse_program("SPLINE 6x23x26x6 L30").unwrap()).unwrap();
+        assert!(md.contains("# 轴段计算书") && md.contains("## 1. 段清单"), "{md}");
+        assert!(md.contains("矩形花键段") && md.contains("N=6") && md.contains("39.6047"), "{md}");
+        let md2 = build_report(&parse_program("SPLINE EX M3 Z20 ALPHA30 X0 DA63 DF54.6 BETA0 H30").unwrap()).unwrap();
+        assert!(md2.contains("## 2. 花键参数表（GB/T 3478") && md2.contains("同一份"), "{md2}");
+
+        // ── en：同一批调用，数据原样 ──
+        crate::i18n::set_lang(crate::i18n::Lang::En);
+        let e = parse_program(r#"{"segments":[{"ch":[{"c":2,"end":"X"}]}]}"#).unwrap_err();
+        assert!(e.contains("ch[0]") && e.contains("X") && e.contains("only L or R"), "{e}");
+        let e = parse_program(r#"{"segments":[{"spline":{"spec":"6x23x26x6"}}]}"#).unwrap_err();
+        assert!(e.contains("missing L") && e.contains("6x23x26x6"), "{e}");
+        let e = parse_program(r#"{"segments":[]}"#).unwrap_err();
+        assert!(e.contains("segments") && e.contains("at least one"), "{e}");
+        let e = parse_program(r#"{"segments":[{"gear":{"m":3,"z":20,"h":30,"kind":"nope"}}]}"#).unwrap_err();
+        assert!(e.contains("kind") && e.contains("nope") && e.contains("external/internal"), "{e}");
+        let e = build(&parse_program("S30 E30 L0").unwrap(), 1.0).unwrap_err();
+        assert!(e.contains("L=0") && e.contains("must be > 0"), "{e}");
+        let e = build(&parse_program("S30 E30 L45 CH60").unwrap(), 1.0).unwrap_err();
+        assert!(e.contains("C=60") && e.contains("overlap"), "{e}");
+        let e = build(&parse_program("S30 E30 L45 OV50").unwrap(), 1.0).unwrap_err();
+        assert!(e.contains("b1=50") && e.contains("l=45"), "{e}");
+        let e = build(&parse_program("S30 E30 L45 OV3@L").unwrap(), 1.0).unwrap_err();
+        assert!(e.contains("left end is free") && e.contains("overtravel groove"), "{e}");
+        let e = build(
+            &parse_program("S30 E30 L45 CH2@R | S30 E30 L20 CH2@L").unwrap(),
+            1.0,
+        )
+        .unwrap_err();
+        assert!(e.contains("same end face") && e.contains("overlap"), "{e}");
+        let e = build(&parse_program("S80 E80 L10 | GEAR M3 Z20 H30").unwrap(), 1.0).unwrap_err();
+        assert!(e.contains("Ø80") && e.contains("Ø66") && e.contains("tip"), "{e}");
+        let md = build_report(&parse_program("SPLINE 6x23x26x6 L30").unwrap()).unwrap();
+        assert!(md.contains("# Shaft segment report") && md.contains("## 1. Segment list"), "{md}");
+        assert!(md.contains("rectangular spline segment") && md.contains("N=6"), "{md}");
+        let md2 = build_report(&parse_program("SPLINE EX M3 Z20 ALPHA30 X0 DA63 DF54.6 BETA0 H30").unwrap()).unwrap();
+        assert!(md2.contains("## 2. Spline parameter table") && md2.contains("Shares one"), "{md2}");
         assert!(
             crate::i18n::missing_keys().is_empty(),
             "缺词条：{:?}",
