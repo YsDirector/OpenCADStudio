@@ -245,7 +245,23 @@ fn mtext_ent(value: &str, x: f64, y: f64, h: f64, layer: &str) -> EntityType {
 /// 值列还剩 ~30% 余量；换字体/字号也只影响本表。
 pub const VALUE_WIDTH_FACTOR: f64 = 0.7;
 
+/// 上/下公差文字**实体级**右移（用户 2026-09-26：公差右移一个字符的位置）。
+///
+/// 口径 = 一个字符宽 = 该字高（1.8）× 实体字宽因子（[`VALUE_WIDTH_FACTOR`] 0.7）= **1.26**；
+/// 只挪公差行 ATTDEF 的插入点 x，不动全局 `OCSM_GB` 样式，也不改字号/字宽。
+pub const TOL_X_SHIFT: f64 = 1.8 * VALUE_WIDTH_FACTOR;
+
+/// 公差 tag（`.上公差`/`.下公差`）→ 实体级右移；其余不动。
+fn tolerance_shift(tag: &str) -> f64 {
+    if tag.ends_with(".上公差") || tag.ends_with(".下公差") {
+        TOL_X_SHIFT
+    } else {
+        0.0
+    }
+}
+
 fn attdef(tag: &str, x: f64, y: f64, h: f64, layer: &str) -> AttributeDefinition {
+    let x = x + tolerance_shift(tag);
     let mut ad = AttributeDefinition::new(tag.to_string(), String::new(), " ".to_string());
     ad.insertion_point = Vector3::new(x, y, 0.0);
     ad.alignment_point = ad.insertion_point;
@@ -1114,5 +1130,32 @@ mod tests {
         )
         .unwrap_err();
         assert!(e.contains("无法解析"), "{e}");
+    }
+
+    /// 用户 2026-09-26 修改 ③：上/下公差文字**整体右移一个字符宽**。
+    ///
+    /// 口径 = 实体级 x 偏移 = 字高 1.8 × 实体字宽 0.7 = 1.26（不动全局 `OCSM_GB`）；
+    /// 只动公差 ATTDEF，其余标签/主值属性坐标一格不动。
+    #[test]
+    fn tolerance_texts_shift_right_one_char() {
+        assert!((TOL_X_SHIFT - 1.8 * 0.7).abs() < 1e-12, "一个字符宽 = 1.26");
+        for side in sides() {
+            let (_, _, _, raw_atts) = side_data(side);
+            let built = attdefs(side);
+            assert_eq!(built.len(), raw_atts.len());
+            for ((tag, x, _, _, _), ad) in raw_atts.iter().zip(built.iter()) {
+                let want = *x + tolerance_shift(tag);
+                assert!(
+                    near(ad.insertion_point.x, want),
+                    "{side:?} {tag}: x={}，应为 {want}",
+                    ad.insertion_point.x
+                );
+                if tag.ends_with(".上公差") || tag.ends_with(".下公差") {
+                    assert!(near(ad.insertion_point.x, x + TOL_X_SHIFT));
+                } else {
+                    assert!(near(ad.insertion_point.x, *x), "{side:?} {tag} 不应位移");
+                }
+            }
+        }
     }
 }

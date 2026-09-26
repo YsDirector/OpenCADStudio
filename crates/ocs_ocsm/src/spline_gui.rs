@@ -1264,7 +1264,7 @@ mod tests {
     /// ③ 小数点后最多 3 位（显示与内部计算分开）。
     #[test]
     fn main_values_clear_tolerance_column() {
-        use crate::spline_table::{attdefs, build_insert, text_box, VALUE_WIDTH_FACTOR};
+        use crate::spline_table::{attdefs, build_insert, text_box, VALUE_WIDTH_FACTOR, TOL_X_SHIFT};
         use std::collections::HashMap;
         // 回归档：截图那两条（D_ii / Md）取一档长小数组合（m3 z26 = 分度圆 78）。
         let cases: &[(SplineSide, f64, u32, PressureAngle, RootForm, u32, ExtDev)] = &[
@@ -1303,15 +1303,15 @@ mod tests {
                 .map(|a| (a.tag.clone(), a.clone()))
                 .collect();
             assert_eq!(attrs.len(), 21);
-            // 公差列左边界 = 该侧公差行 ATTDEF 的最小 x（模板 ≈ −9.63）。
+            // 公差列左边界 = 该侧公差行 ATTDEF 的最小 x（模板 ≈ −9.63，实体级右移一个字符宽后 ≈ −8.37）。
             let tol_left = attdefs(side)
                 .iter()
                 .filter(|ad| main_tag_of_dev(&ad.tag).is_some())
                 .map(|ad| ad.insertion_point.x)
                 .fold(f64::MAX, f64::min);
             assert!(
-                (-10.0..-9.0).contains(&tol_left),
-                "公差列左边界异常：{tol_left}"
+                (-10.0 + TOL_X_SHIFT..-9.0 + TOL_X_SHIFT).contains(&tol_left),
+                "公差列左边界异常（右移 {TOL_X_SHIFT} 后）：{tol_left}"
             );
             for c in side_spec_by_id(side_id(side)).unwrap().columns {
                 let a = attrs.get(c.tag).unwrap_or_else(|| panic!("缺属性 {}", c.tag));

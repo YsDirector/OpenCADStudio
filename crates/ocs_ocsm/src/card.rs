@@ -37,6 +37,69 @@ impl CardRenderer {
     }
 }
 
+/// 一种卡片的**表单字段**（表驱动 GUI 骨架；每个卡在自身模块里给清单）。
+///
+/// 字段只描述「控件 + 标签 + 取值来源（title）」；布局/分区/按钮位置由页面统一骨架提供，
+/// 以后加卡 = 在 `CARD_TYPES` 加一行 + 一个渲染器 + 一份字段清单。
+#[derive(Debug, Clone, Copy)]
+pub struct CardFieldSpec {
+    /// 模型 JSON 键（DOM id = `f_` + key）。
+    pub key: &'static str,
+    /// 显示名。
+    pub label: &'static str,
+    /// 控件类型：`number` / `text` / `textarea` / `select`。
+    pub kind: &'static str,
+    pub placeholder: &'static str,
+    /// 初始值（空 = 不预填，交后端默认）。
+    pub default: &'static str,
+    /// 口径/来源（进原生 `title=`，不做常显）。
+    pub title: &'static str,
+    /// `select` 的静态选项 `(value, label)`。
+    pub options: &'static [(&'static str, &'static str)],
+    /// `select` 的动态选项来源键（`ansi_profiles` / `nf_centering` / `nf_roots`；空 = 无）。
+    pub options_from: &'static str,
+    /// `number` 控件属性（0.0 = 不设）。
+    pub min: f64,
+    pub step: f64,
+    /// 必填（空值由页面拦住并指路；后端仍会校验）。
+    pub required: bool,
+}
+
+/// 一张卡的表单骨架（字段清单 + 提示）。
+#[derive(Debug, Clone, Copy)]
+pub struct CardFormSpec {
+    pub fields: &'static [CardFieldSpec],
+    /// 常显提示（操作引导）。
+    pub note: &'static str,
+    /// 缺项/口径说明（进常显区的原生 `title=`）。
+    pub missing_note: &'static str,
+}
+
+impl CardFormSpec {
+    pub fn fields_json(&self) -> serde_json::Value {
+        serde_json::Value::Array(
+            self.fields
+                .iter()
+                .map(|f| {
+                    serde_json::json!({
+                        "key": f.key,
+                        "label": f.label,
+                        "kind": f.kind,
+                        "placeholder": f.placeholder,
+                        "default": f.default,
+                        "title": f.title,
+                        "options": f.options.iter().map(|(v, l)| serde_json::json!({"value": v, "label": l})).collect::<Vec<_>>(),
+                        "options_from": f.options_from,
+                        "min": f.min,
+                        "step": f.step,
+                        "required": f.required,
+                    })
+                })
+                .collect(),
+        )
+    }
+}
+
 /// 一种卡片类型。
 #[derive(Debug, Clone, Copy)]
 pub struct CardTypeSpec {
@@ -52,6 +115,8 @@ pub struct CardTypeSpec {
     pub systems: &'static [&'static str],
     /// 渲染器。
     pub renderer: CardRenderer,
+    /// 表单字段清单（`None` = 花键卡：保持专用面板，作为统一外观的基准）。
+    pub form: Option<&'static CardFormSpec>,
 }
 
 /// 卡片类型表（顺序 = GUI 下拉/命令扫描顺序）。
@@ -63,6 +128,8 @@ pub const CARD_TYPES: &[CardTypeSpec] = &[
         summary: "GB/T 3478 渐开线花键：内/外 + 九字段齿形表达式 → 21 项参数表",
         systems: &["gb3478"],
         renderer: CardRenderer::SplineTable,
+        // 花键卡保持专用面板（统一外观的基准；以后新卡沿用通用骨架）。
+        form: None,
     },
     CardTypeSpec {
         id: "齿轮参数表",
@@ -71,6 +138,7 @@ pub const CARD_TYPES: &[CardTypeSpec] = &[
         summary: "齿轮（内/外）：九字段齿形表达式反解 ha*/c* + 公法线跨距 → 19 项参数表（GB/T 10095 公差未收，如实标缺）",
         systems: &[],
         renderer: CardRenderer::GearTable,
+        form: Some(&crate::gear_table::FORM),
     },
     CardTypeSpec {
         id: "ANSI花键参数表_中文",
@@ -79,6 +147,7 @@ pub const CARD_TYPES: &[CardTypeSpec] = &[
         summary: "ANSI B92.1 花键：内/外 + P/z → 17 项参数表（中文版；公差/量棒/公法线未收，如实标缺）",
         systems: &[],
         renderer: CardRenderer::AnsiTableCn,
+        form: Some(&crate::ansi_table::FORM),
     },
     CardTypeSpec {
         id: "ANSI花键参数表_英文",
@@ -87,14 +156,16 @@ pub const CARD_TYPES: &[CardTypeSpec] = &[
         summary: "ANSI B92.1 花键：内/外 + P/z → 17 项参数表（英文版；与中文版同构，仅文本语种替换）",
         systems: &[],
         renderer: CardRenderer::AnsiTableEn,
+        form: Some(&crate::ansi_table::FORM),
     },
     CardTypeSpec {
         id: "NF内花键参数表",
         aliases: &["nf", "nfint", "NF内花键", "NF花键参数表"],
         label: "NF 内花键参数表",
-        summary: "NF E22-141 内花键（拉削，外径定心）：A/m/z 查 p18 表 → 13 行镜像表（Az=A 或 A+0.3m、D=A−2m、V/G 取 p23–p25、ri 取 p22；偏差列义未辨，如实标缺）",
+        summary: "NF E22-141 内花键（拉削，外径定心）：A/m/z 查 p18 表 → 13 行镜像表（Az=A 或 A+0.3m、D=A−2m、V/G 取 p23–p25、ri 取 p22；公差 = p28 R7/H7 + p29 E 偏差，四配合）",
         systems: &[],
         renderer: CardRenderer::NfTable,
+        form: Some(&crate::nf_table::FORM),
     },
     CardTypeSpec {
         id: "DIN花键参数表",
@@ -103,6 +174,7 @@ pub const CARD_TYPES: &[CardTypeSpec] = &[
         summary: "DIN 5480-1 Bild 6：13 行 × Nabe/Welle 两栏（z/m/α/三直径/e-s 三极限/D_M/两 M 极限）；Table 7 上段偏差 2026-09-26 OCR 入库（c4/c5 有实锚），公差表只到 6–9 级锚点，缺口如实标「—」",
         systems: &[],
         renderer: CardRenderer::DinTable,
+        form: Some(&crate::din_table::FORM),
     },
 ];
 
@@ -142,6 +214,12 @@ pub fn card_types_json() -> serde_json::Value {
                     "summary": c.summary,
                     "systems": systems,
                     "renderer": c.renderer.id(),
+                    // 表驱动 GUI：字段清单 + 提示（花键卡为 null，页面用专用面板）。
+                    "form": c.form.map(|f| serde_json::json!({
+                        "fields": f.fields_json(),
+                        "note": f.note,
+                        "missing_note": f.missing_note,
+                    })),
                 })
             })
             .collect(),
@@ -160,7 +238,7 @@ pub fn usage_line() -> String {
          * 花键参数表：`OCSMCARD 花键参数表 [std GB] 内 6H <九字段表达式> [dp 4.5] [root 平|圆] [at x,y] [rot 度]`\n\
          * 齿轮参数表：`OCSMCARD 齿轮参数表 <九字段表达式> [mate z₂] [dwg 图号] [grade 精度等级] [center a] [at x,y] [rot 度]`\n\
          * ANSI 花键参数表：`OCSMCARD ANSI花键参数表_中文 内 P16 Z20 [profile ANSI30R] [at x,y] [rot 度]`（英文版换 `_英文`）\n\
-         * NF 内花键参数表：`OCSMCARD NF内花键参数表 A300 M7.5 [Z38] [中心 外径|齿面] [根 平|圆] [at x,y] [rot 度]`\n\
+         * NF 内花键参数表：`OCSMCARD NF内花键参数表 A300 M7.5 [Z38] [中心 外径|齿面] [根 平|圆] [配合 松动|滑动|固定|压] [at x,y] [rot 度]`\n\
          * DIN 花键参数表：`OCSMCARD DIN花键参数表 M3 Z38 B120 [N9H] [W8f] [ae …] [as …] [tactn …] [teffn …] [tactw …] [teffw …] [at x,y] [rot 度]`"
     )
 }
@@ -197,6 +275,26 @@ mod tests {
         assert_eq!(CARD_TYPES[5].renderer, CardRenderer::DinTable);
         assert!(CARD_TYPES[5].systems.is_empty());
         assert_eq!(CardRenderer::DinTable.id(), "din_table");
+        // 表驱动 GUI：花键卡无 form（专用面板基准）；其余五卡都有字段清单。
+        assert!(CARD_TYPES[0].form.is_none(), "花键卡保持专用面板");
+        for c in &CARD_TYPES[1..] {
+            let f = c.form.unwrap_or_else(|| panic!("{} 缺 form 字段清单", c.id));
+            assert!(!f.fields.is_empty(), "{} form 为空", c.id);
+            assert!(
+                f.fields.iter().all(|x| !x.kind.is_empty() && !x.label.is_empty()),
+                "{} form 字段缺 kind/label",
+                c.id
+            );
+        }
+        assert_eq!(CARD_TYPES[1].form.unwrap().fields.len(), 5, "齿轮 5 字段");
+        assert_eq!(CARD_TYPES[2].form.unwrap().fields.len(), 4, "ANSI 4 字段");
+        assert_eq!(CARD_TYPES[3].form.unwrap().fields.len(), 4, "ANSI 4 字段");
+        assert_eq!(CARD_TYPES[4].form.unwrap().fields.len(), 6, "NF 6 字段（含配合）");
+        assert_eq!(CARD_TYPES[5].form.unwrap().fields.len(), 12, "DIN 12 字段");
+        assert!(
+            CARD_TYPES[4].form.unwrap().fields.iter().any(|x| x.key == "fit"),
+            "NF 配合类别字段"
+        );
         // 记号/别名（大小写不敏感）
         assert!(card_type_by_token("花键参数表").is_some());
         assert!(card_type_by_token("SPLINE").is_some());
@@ -229,6 +327,12 @@ mod tests {
         assert_eq!(j[4]["renderer"], "nf_table");
         assert_eq!(j[5]["id"], "DIN花键参数表");
         assert_eq!(j[5]["renderer"], "din_table");
+        // form 下发：花键 null；其余含 fields/note/missing_note
+        assert!(j[0]["form"].is_null());
+        assert_eq!(j[1]["form"]["fields"].as_array().unwrap().len(), 5);
+        assert!(j[4]["form"]["fields"].as_array().unwrap().iter().any(|f| f["key"] == "fit"));
+        assert!(j[4]["form"]["missing_note"].as_str().unwrap().contains("p29"));
+        assert_eq!(j[5]["form"]["fields"].as_array().unwrap().len(), 12);
         assert!(j[5]["summary"].as_str().unwrap().contains("Bild 6"));
         assert!(j[4]["summary"].as_str().unwrap().contains("NF E22-141"));
         assert!(j[0]["summary"].as_str().unwrap().contains("GB/T 3478"));

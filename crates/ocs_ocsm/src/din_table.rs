@@ -1197,6 +1197,62 @@ pub fn markdown_table(spec: &DinTableSpec) -> Result<String, String> {
 // GUI 选项表与 GUI/HTTP 模型
 // ══════════════════════════════════════════════════════════════════════════
 
+/// DIN 卡的表单字段（表驱动 GUI 骨架；Bild 6 示例作默认）。
+pub const FORM: crate::card::CardFormSpec = crate::card::CardFormSpec {
+    fields: &[
+        crate::card::CardFieldSpec { key: "m", label: "模数 m", kind: "number",
+            placeholder: "如 3", default: "3",
+            title: "DIN 5480-1 模数 m（Bild 6 主参数）", options: &[], options_from: "",
+            min: 0.0, step: 0.001, required: true },
+        crate::card::CardFieldSpec { key: "z", label: "齿数 z", kind: "number",
+            placeholder: "如 38", default: "38",
+            title: "齿数 z", options: &[], options_from: "",
+            min: 3.0, step: 1.0, required: true },
+        crate::card::CardFieldSpec { key: "d_b", label: "基准直径 d_B", kind: "number",
+            placeholder: "如 120", default: "120",
+            title: "基准直径 d_B = m·z（DIN 5480）", options: &[], options_from: "",
+            min: 0.0, step: 0.001, required: true },
+        crate::card::CardFieldSpec { key: "hub", label: "内花键配合", kind: "text",
+            placeholder: "如 9H（F/G/H/J/K/M）", default: "9H",
+            title: "Nabe 配合（字母 F/G/H/J/K/M + 等级数字；Bild 6 示例 9H）", options: &[], options_from: "",
+            min: 0.0, step: 0.0, required: false },
+        crate::card::CardFieldSpec { key: "shaft", label: "外花键配合", kind: "text",
+            placeholder: "如 8f（v…a）", default: "8f",
+            title: "Welle 配合（字母 v…a + 等级数字；Bild 6 示例 8f）", options: &[], options_from: "",
+            min: 0.0, step: 0.0, required: false },
+        crate::card::CardFieldSpec { key: "e2", label: "e₂=s₁ 覆盖", kind: "number",
+            placeholder: "选填（名义表缺行时）", default: "",
+            title: "e₂=s₁ 名义值显式覆盖（mm；缺行时用）", options: &[], options_from: "",
+            min: 0.0, step: 0.001, required: false },
+        crate::card::CardFieldSpec { key: "ae", label: "Ae 覆盖", kind: "number",
+            placeholder: "选填，如 0", default: "",
+            title: "Ae（齿槽宽上偏差）显式覆盖（mm）", options: &[], options_from: "",
+            min: 0.0, step: 0.001, required: false },
+        crate::card::CardFieldSpec { key: "as_", label: "As 覆盖", kind: "number",
+            placeholder: "选填，如 -0.028", default: "",
+            title: "As（齿厚上偏差）显式覆盖（mm）", options: &[], options_from: "",
+            min: 0.0, step: 0.001, required: false },
+        crate::card::CardFieldSpec { key: "tact_n", label: "Tact(N) 覆盖", kind: "number",
+            placeholder: "选填", default: "",
+            title: "Nabe 实际齿槽宽公差显式覆盖（mm）", options: &[], options_from: "",
+            min: 0.0, step: 0.0001, required: false },
+        crate::card::CardFieldSpec { key: "teff_n", label: "Teff(N) 覆盖", kind: "number",
+            placeholder: "选填", default: "",
+            title: "Nabe 作用齿槽宽公差显式覆盖（mm）", options: &[], options_from: "",
+            min: 0.0, step: 0.0001, required: false },
+        crate::card::CardFieldSpec { key: "tact_w", label: "Tact(W) 覆盖", kind: "number",
+            placeholder: "选填", default: "",
+            title: "Welle 实际齿厚公差显式覆盖（mm）", options: &[], options_from: "",
+            min: 0.0, step: 0.0001, required: false },
+        crate::card::CardFieldSpec { key: "teff_w", label: "Teff(W) 覆盖", kind: "number",
+            placeholder: "选填", default: "",
+            title: "Welle 作用齿厚公差显式覆盖（mm）", options: &[], options_from: "",
+            min: 0.0, step: 0.0001, required: false },
+    ],
+    note: "填 m/z/d_B + N/W 配合 → 缺行可用 e₂ / Ae / As / Tact / Teff 覆盖 → 点「出表」回到图纸放置。",
+    missing_note: "Table 7 上段 c1/c2（>400 侧）与 c9（≤12 细档）列映射无实锚 → 「—」；\n                   下段公差表只抽到 6–9 级、模数组 1,75–4 的实锚 → 其余等级/模数组 Tact/Teff 显示「—」；\n                   D_M/M2/M1 无检验表行且非 Bild 6 示例时显示「—」。",
+};
+
 /// DIN 卡选项/口径 JSON（随 `/api/spline_options` 下发；页面只渲染）。
 pub fn options_json() -> serde_json::Value {
     serde_json::json!({

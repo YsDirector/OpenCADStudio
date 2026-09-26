@@ -2920,6 +2920,7 @@ impl OcsmPlugin {
             z: spec.z,
             centering: Some(spec.centering.id().into()),
             root: Some(spec.root.id().into()),
+            fit: Some(spec.fit.id().into()),
             at: spec.at,
             rot: spec.rot,
         }
@@ -2927,7 +2928,8 @@ impl OcsmPlugin {
         .unwrap_or_else(|_| String::new());
         host.push_info(&format!(
             "智能卡片：已插入{note}于 ({:.3}, {:.3}) rot {}°。\n\
-             大径/小径/跨棒距的上下偏差（p35 列义未辨定、p12 R7/H7 未裁决）与表外 V/G/ri 显示「—」。",
+             公差按 p28（大径 R7 / 小径 H7，ISO 286）+ p29（跨棒距 = 内花键 E 偏差）；\
+             表外 V/G/ri 与 p29 表外偏差显示「—」。",
             at[0],
             at[1],
             crate::partgen_kit::trim(spec.rot)

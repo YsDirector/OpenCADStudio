@@ -654,6 +654,80 @@ pub const GEAR_COLUMNS: &[GearColumnSpec] = &[
     },
 ];
 
+/// 齿轮卡的表单字段（表驱动 GUI 骨架；页面由 `card::CardTypeSpec.form` 统一渲染）。
+pub const FORM: crate::card::CardFormSpec = crate::card::CardFormSpec {
+    fields: &[
+        crate::card::CardFieldSpec {
+            key: "expr",
+            label: "齿轮齿形表达式（九字段；可从轴/齿轮生成器 GUI 复制）",
+            kind: "textarea",
+            placeholder: "GEAR EX M3 Z20 ALPHA20 X0 DA66 DF52.5 BETA0 H30",
+            default: "GEAR EX M3 Z20 ALPHA20 X0 DA66 DF52.5 BETA0 H30",
+            title: "九字段统一齿形表达式（与轴/齿轮生成器同口径）；反解 m/z/αt/ha*/c*",
+            options: &[],
+            options_from: "",
+            min: 0.0,
+            step: 0.0,
+            required: true,
+        },
+        crate::card::CardFieldSpec {
+            key: "mate_z",
+            label: "配对齿轮齿数 z₂",
+            kind: "number",
+            placeholder: "选填",
+            default: "",
+            title: "中心距 a = mt(z₁+z₂)/2；不填则中心距显示「—」",
+            options: &[],
+            options_from: "",
+            min: 2.0,
+            step: 1.0,
+            required: false,
+        },
+        crate::card::CardFieldSpec {
+            key: "mate_dwg",
+            label: "配对齿轮图号",
+            kind: "text",
+            placeholder: "选填",
+            default: "",
+            title: "手填字符串，进「配对齿轮图号」行",
+            options: &[],
+            options_from: "",
+            min: 0.0,
+            step: 0.0,
+            required: false,
+        },
+        crate::card::CardFieldSpec {
+            key: "grade",
+            label: "精度等级",
+            kind: "text",
+            placeholder: "选填",
+            default: "",
+            title: "手填字符串（如 7-7-7），进「精度等级」行；缺省「—」",
+            options: &[],
+            options_from: "",
+            min: 0.0,
+            step: 0.0,
+            required: false,
+        },
+        crate::card::CardFieldSpec {
+            key: "center",
+            label: "中心距 a",
+            kind: "number",
+            placeholder: "选填，覆盖计算值",
+            default: "",
+            title: "显式覆盖 mt(z₁+z₂)/2（mm）",
+            options: &[],
+            options_from: "",
+            min: 0.0,
+            step: 0.001,
+            required: false,
+        },
+    ],
+    note: "粘九字段齿轮表达式 → 选填配对齿轮/图号/精度等级/中心距 → 点「出表」回到图纸放置。",
+    missing_note: "GB/T 10095-88 的 Fr/FW/ff/fpt/Fβ 与中心距极限偏差本仓未收；\
+                   内齿轮/斜齿轮的公法线口径本仓未收 —— 这些格显示「—」，不臆造。",
+};
+
 /// 齿轮卡的选项/口径 JSON（随 `/api/spline_options` 下发；页面只渲染）。
 pub fn options_json() -> serde_json::Value {
     serde_json::json!({

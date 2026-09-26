@@ -717,6 +717,67 @@ pub fn columns(side: SplineSide) -> &'static [AnsiColumnSpec] {
     }
 }
 
+/// ANSI 卡的表单字段（表驱动 GUI 骨架；中/英两卡共用同一清单，只有语种渲染不同）。
+pub const FORM: crate::card::CardFormSpec = crate::card::CardFormSpec {
+    fields: &[
+        crate::card::CardFieldSpec {
+            key: "side",
+            label: "方向",
+            kind: "select",
+            placeholder: "",
+            default: "int",
+            title: "ANSI B92.1 内/外花键（两套列口径）",
+            options: &[("int", "内花键"), ("ext", "外花键")],
+            options_from: "",
+            min: 0.0,
+            step: 0.0,
+            required: false,
+        },
+        crate::card::CardFieldSpec {
+            key: "profile",
+            label: "齿廓",
+            kind: "select",
+            placeholder: "",
+            default: "",
+            title: "ANSI B92.1 齿廓预设（Table 2 列 A–E；齿形类型/α）",
+            options: &[],
+            options_from: "ansi_profiles",
+            min: 0.0,
+            step: 0.0,
+            required: false,
+        },
+        crate::card::CardFieldSpec {
+            key: "p",
+            label: "径节 P",
+            kind: "number",
+            placeholder: "如 16",
+            default: "16",
+            title: "径节 P（1/in；ANSI B92.1 主参数）",
+            options: &[],
+            options_from: "",
+            min: 2.5,
+            step: 0.5,
+            required: true,
+        },
+        crate::card::CardFieldSpec {
+            key: "z",
+            label: "齿数 N",
+            kind: "number",
+            placeholder: "如 20",
+            default: "20",
+            title: "齿数 N",
+            options: &[],
+            options_from: "",
+            min: 3.0,
+            step: 1.0,
+            required: true,
+        },
+    ],
+    note: "选方向/齿廓 → 填径节 P 与齿数 N → 点「出表」回到图纸放置。",
+    missing_note: "ANSI B92.1 配合/公差（Table 4/5）、量棒检验（p30–p32）与公法线/跨测表本仓未收\
+                   —— 这些格显示「—」，不臆造。",
+};
+
 /// ANSI 卡的选项/口径 JSON（随 `/api/spline_options` 下发；页面只渲染）。
 pub fn options_json() -> serde_json::Value {
     let profiles: Vec<serde_json::Value> = crate::invol_spline::ANSI_PRESETS

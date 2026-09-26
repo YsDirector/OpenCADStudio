@@ -15736,6 +15736,14 @@ mod weld_tests {
         assert_eq!(v["nf_card"]["modules"].as_array().unwrap().len(), 10);
         assert_eq!(v["din_card"]["columns"].as_array().unwrap().len(), 26);
         assert_eq!(v["din_card"]["grades"].as_array().unwrap().len(), 12);
+        // 表驱动 GUI：花键卡 form=null（专用面板基准）；其余五卡下发字段清单
+        assert!(v["card_types"][0]["form"].is_null());
+        for (i, n) in [(1usize, 5usize), (2, 4), (3, 4), (4, 6), (5, 12)] {
+            let fields = v["card_types"][i]["form"]["fields"].as_array().unwrap();
+            assert_eq!(fields.len(), n, "card_types[{i}] 字段数");
+            assert!(fields.iter().all(|f| f["key"].is_string() && f["kind"].is_string()));
+        }
+        assert!(v["nf_card"]["fits"].as_array().unwrap().len() == 4, "NF 配合四档");
 
         // ── 通用端点也覆盖花键卡（同一个分派表；GUI 花键卡仍走 /api/spline_*）──
         let spline = serde_json::json!({
@@ -15854,9 +15862,38 @@ mod weld_tests {
         assert_eq!(get("小径D")["value"], "285");
         assert_eq!(get("量棒直径V")["value"], "15");
         assert_eq!(get("跨棒距G")["value"], "270.508");
-        assert_eq!(get("跨棒距上差")["value"], "—");
-        assert_eq!(get("跨棒距上差")["missing"], true);
-        assert_eq!(v["missing"].as_array().unwrap().len(), 6, "只有 6 个公差缺");
+        // 公差（修改②）：大径 R7 / 小径 H7（p28，ISO 286）+ 跨棒距 = p29 内花键 E（µm→mm）
+        assert_eq!(get("大径上差")["value"], "-0.078");
+        assert_eq!(get("大径下差")["value"], "-0.130");
+        assert_eq!(get("小径上差")["value"], "+0.052");
+        assert_eq!(get("小径下差")["value"], "0");
+        assert_eq!(get("跨棒距上差")["value"], "+0.052");
+        assert_eq!(get("跨棒距下差")["value"], "0");
+        assert_eq!(v["missing"].as_array().unwrap().len(), 0, "锚点 18 项齐全（公差已填值）");
+        assert_eq!(v["fit"], "fixed", "配合类别缺省固定");
+        assert!(
+            v["readout"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|r| r["v"].as_str().unwrap().contains("+52/+0")),
+            "读数应含 p29 内花键 E 偏差：{j}"
+        );
+        // 配合类别 → 配对外花键读数（不动内花键公差）
+        let mut nf_press = nf.clone();
+        nf_press["fit"] = serde_json::json!("press");
+        let j = http_req(server.port, "POST", "/api/card_preview", &nf_press.to_string());
+        let vp: serde_json::Value = serde_json::from_str(&j).unwrap();
+        assert_eq!(vp["fit"], "press");
+        assert!(
+            vp["readout"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|r| r["k"].as_str().unwrap().contains("压")
+                    && r["v"].as_str().unwrap().contains("+138/+54")),
+            "压配合的外花键 E 偏差：{j}"
+        );
         // 齿面定心 → Az = A+0.3m = 302.25
         let mut nf_flank = nf.clone();
         nf_flank["centering"] = serde_json::json!("齿面");

@@ -63,15 +63,21 @@
 <h1>OCSM 智能卡片<span class="sub">本期六张卡：GB 花键 · 齿轮 · ANSI 花键（中/英）· NF 内花键 · DIN 5480</span></h1>
 
 <div class="wrap">
+  <!-- ⓪ 卡类型（共用；表驱动。GB 花键是“专用面板”= 统一外观基准，其余卡共用下面的通用骨架） -->
+  <div class="card top">
+    <div class="params">
+      <label>卡类型</label><select id="cardType" title="智能卡片类型（表驱动；以后加表格/铭牌即多一项）"></select>
+    </div>
+  </div>
+
   <div id="splinePanel">
-  <!-- ① 卡类型 + 体系 + 方向 + 等级/配合/压力角/齿根（可选项全部由 /api/spline_options 下发） -->
+  <!-- ① 体系 + 方向 + 等级/配合/压力角/齿根（可选项全部由 /api/spline_options 下发） -->
   <div class="card top">
     <div class="sides">
       <button type="button" class="side on" id="sideInt">内花键</button>
       <button type="button" class="side" id="sideExt">外花键</button>
     </div>
     <div class="params">
-      <label>卡类型</label><select id="cardType" title="智能卡片类型（表驱动；以后加表格/铭牌即多一项）"></select>
       <label>体系</label><select id="sys" title="花键体系（选项表由后端下发）"></select>
       <label>公差等级</label><select id="grade"></select>
       <label>配合类别</label><select id="fit"></select>
@@ -108,62 +114,26 @@
 
   </div><!-- /splinePanel -->
 
-  <!-- ②g 齿轮参数表（第二张卡）：九字段表达式 + 配对齿轮/精度等级 -->
-  <div class="card" id="gearPanel" style="display:none">
-    <label>齿轮齿形表达式（九字段；可从轴/齿轮生成器 GUI 复制）</label>
-    <textarea id="gearExpr" rows="2" spellcheck="false"
-      placeholder="GEAR EX M3 Z20 ALPHA20 X0 DA66 DF52.5 BETA0 H30"></textarea>
-    <div class="params" style="margin-top:6px">
-      <label>配对齿轮齿数 z₂</label><input type="number" id="gearMateZ" min="2" max="1000" step="1" placeholder="选填">
-      <label>配对齿轮图号</label><input type="text" id="gearDwg" placeholder="选填">
-      <label>精度等级</label><input type="text" id="gearGrade" placeholder="选填">
-      <label>中心距 a</label><input type="number" id="gearCenter" step="0.001" placeholder="选填，覆盖计算值">
+  <!-- ①b 通用卡片面板（表驱动）：字段/默认值/提示全部来自 card_types[].form；
+       与 GB 面板同一套分区（顶部参数 / 中部主输入+读数 / 结果 / 底部按钮），
+       以后加卡只加字段清单，不再手写 HTML。 -->
+  <div id="cardPanel" style="display:none">
+    <div class="card top">
+      <div class="params" id="formParams"></div>
     </div>
-    <div class="hint" id="gearHint"></div>
-  </div>
-
-  <!-- ②a ANSI 花键参数表（纯中文 / 纯英文两个卡类型共用本面板） -->
-  <div class="card" id="ansiPanel" style="display:none">
-    <div class="params">
-      <label>方向</label><select id="ansiSide"><option value="int">内花键</option><option value="ext">外花键</option></select>
-      <label>齿廓</label><select id="ansiProfile"></select>
-      <label>径节 P</label><input type="number" id="ansiP" min="2.5" step="0.5" value="16">
-      <label>齿数 N</label><input type="number" id="ansiZ" min="3" step="1" value="20">
+    <div class="card mid">
+      <div id="formMain"></div>
+      <div>
+        <label>结果读数</label>
+        <div class="readout" id="cardReadout"></div>
+        <div class="hint" id="cardHint"></div>
+      </div>
     </div>
-    <div class="hint" id="ansiHint"></div>
-  </div>
-
-  <!-- ⠄n NF 内花键参数表（镜像卡）：A/m/z 查表台账 + 定心/齿根选择 -->
-  <div class="card" id="nfPanel" style="display:none">
-    <div class="params">
-      <label>公称直径 A</label><input type="number" id="nfA" min="0" step="0.001" placeholder="NF 主参数（表值）">
-      <label>模数 m</label><input type="number" id="nfM" min="0" step="0.001" placeholder="NF 模数档">
-      <label>齿数 z</label><input type="number" id="nfZ" min="3" step="1" placeholder="选填，按 p18 表核对">
-      <label>定心方式</label><select id="nfCenter" title="NF E22-141 内花键定心方式（p04/p07/p10-p12）"></select>
-      <label>齿根样式</label><select id="nfRoot" title="行 7 文本；槽底圆角 ri 在预览读数里"></select>
-    </div>
-    <div class="hint" id="nfHint"></div>
-  </div>
-
-  <!-- ②d DIN 花键参数表（DIN 5480-1 Bild 6）：m/z/d_B + N/W 配合；缺口可由覆盖项补 -->
-  <div class="card" id="dinPanel" style="display:none">
-    <div class="params">
-      <label>模数 m</label><input type="number" id="dinM" min="0" step="0.001" placeholder="如 3">
-      <label>齿数 z</label><input type="number" id="dinZ" min="3" step="1" placeholder="如 38">
-      <label>基准直径 d_B</label><input type="number" id="dinB" min="0" step="0.001" placeholder="如 120">
-      <label>内花键配合</label><input type="text" id="dinHub" placeholder="如 9H（F/G/H/J/K/M）">
-      <label>外花键配合</label><input type="text" id="dinShaft" placeholder="如 8f（v…a）">
-      <label>e₂=s₁ 覆盖</label><input type="number" id="dinE2" step="0.001" placeholder="选填（名义表缺行时）">
-      <label>Ae / As 覆盖</label><input type="text" id="dinAeAs" placeholder="选填，如 0 / -0.028">
-      <label>Tact/Teff 覆盖</label><input type="text" id="dinTol" placeholder="选填，如 0.056/0.034/0.040/0.023">
-    </div>
-    <div class="hint" id="dinHint"></div>
   </div>
 
   <!-- ③ 实时结果（公式/口径/来源在每行 title 悬停里） -->
   <div class="card">
     <label id="itemsLabel">结果预览</label>
-    <div class="readout" id="cardReadout" style="display:none"></div>
     <div id="items"></div>
   </div>
 
@@ -180,7 +150,7 @@
   </div>
   <div id="status"></div>
   <div class="hint">选内/外 → 粘齿形表达式 → 定等级·配合·齿根 → 选或填量棒 Dp → 点「出表」回到图纸放置。
-    切到齿轮/ANSI 卡后，面板与结果预览随卡类型切换。</div>
+    切到齿轮/ANSI/NF/DIN 卡后，字段由卡类型表统一下发（同一套外观与按钮位置）。</div>
 </div>
 
 <script src="/ocsm_gui_common.js"></script>
@@ -189,6 +159,8 @@
 "use strict";
 // 窗口钉在哪张图纸（插件开窗时写的 tab=）：出表时带回给插件，多张图不串。
 const TAB = new URLSearchParams(location.search).get("tab");
+// 可选深链：`?card=<卡类型 id>`（书签/截图定位；缺省第一张卡）。
+const CARD_PARAM = new URLSearchParams(location.search).get("card");
 const el = (id) => document.getElementById(id);
 let OPT = null;      // /api/spline_options（卡类型表 + 体系 → 方向 → 等级/配合/齿根/21 项公式口径）
 let CARD = null;     // 当前卡片类型（表驱动；本期只有「花键参数表」）
@@ -197,36 +169,87 @@ let SIDE = null;     // 当前方向（内/外）
 let dpSel = null;    // null = 标准解；数字 = 点选/手填的 Dp
 let timer = 0;
 
-// 卡类型 → 面板（spline / gear / ansi）；花键卡走原路径，新卡走 /api/card_*。
+// 卡类型 → 面板：花键卡（renderer=spline_table）走专用面板（统一外观的基准）；
+// 其余卡 = 通用骨架，字段清单由 card_types[].form 下发（页面不含任何卡专属 HTML）。
 function panelOf(card) {
-  const r = card && card.renderer;
-  if (r === 'gear_table') return 'gear';
-  if (r === 'ansi_table_cn' || r === 'ansi_table_en') return 'ansi';
-  if (r === 'nf_table') return 'nf';
-  if (r === 'din_table') return 'din';
-  return 'spline';
+  return (card && card.renderer === 'spline_table') ? 'spline' : 'form';
+}
+function formOf(card) { return (card && card.form) || null; }
+
+// ── 通用表单渲染（表驱动）────────────────────────────────────────────
+const FORM_CTL = new Map(); // 字段 key → 控件（model/preview 从这读，不依赖 DOM 查询）
+function controlId(key) { return 'f_' + key; }
+// 动态选项（清单在后端选项表的对应段里；页面只做映射，不写死取值）
+function dynamicOptions(src) {
+  const an = (OPT && OPT.ansi_card) || {};
+  const nc = (OPT && OPT.nf_card) || {};
+  if (src === 'ansi_profiles') {
+    return (an.profiles || []).map((p) => ({ value: p.id, label: p.id + '（' + fmt(p.alpha) + '°）' }));
+  }
+  if (src === 'nf_centering') return (nc.centering || []).map((c) => ({ value: c.id, label: c.label }));
+  if (src === 'nf_roots') return (nc.roots || []).map((c) => ({ value: c.id, label: c.label }));
+  return [];
+}
+// 重建当前卡的表单：顶部参数区 + 中部主输入区；标签/控件/提示一律照 form 字段清单。
+function renderCardForm() {
+  const params = el('formParams');
+  const main = el('formMain');
+  params.innerHTML = '';
+  main.innerHTML = '';
+  FORM_CTL.clear();
+  const f = formOf(CARD);
+  if (!f) return;
+  for (const fld of (f.fields || [])) {
+    const host = fld.kind === 'textarea' ? main : params;
+    const lab = document.createElement('label');
+    lab.textContent = fld.label;
+    lab.title = fld.title || '';
+    host.appendChild(lab);
+    let ctl;
+    if (fld.kind === 'select') {
+      ctl = document.createElement('select');
+      const opts = (fld.options && fld.options.length) ? fld.options : dynamicOptions(fld.options_from);
+      for (const o of opts) {
+        const op = document.createElement('option');
+        op.value = String(o.value);
+        op.textContent = o.label;
+        ctl.appendChild(op);
+      }
+    } else if (fld.kind === 'textarea') {
+      ctl = document.createElement('textarea');
+      ctl.rows = 2;
+      ctl.spellcheck = false;
+    } else {
+      ctl = document.createElement('input');
+      ctl.type = fld.kind === 'number' ? 'number' : 'text';
+      if (fld.kind === 'number') {
+        if (fld.min) ctl.min = String(fld.min);
+        if (fld.step) ctl.step = String(fld.step);
+      }
+    }
+    ctl.id = controlId(fld.key);
+    ctl.title = fld.title || '';
+    if (fld.placeholder) ctl.placeholder = fld.placeholder;
+    // 默认值：字段给的 default（空则 select 取第一项；数字/文本留空交后端默认）
+    if (fld.default !== undefined && fld.default !== null && String(fld.default) !== '') {
+      ctl.value = String(fld.default);
+    } else if (ctl.tagName === 'SELECT' && ctl.options && ctl.options.length) {
+      ctl.value = ctl.options[0].value;
+    }
+    FORM_CTL.set(fld.key, ctl);
+    ctl.addEventListener(fld.kind === 'select' ? 'change' : 'input', schedulePreview);
+    host.appendChild(ctl);
+  }
 }
 function applyPanels() {
   const p = panelOf(CARD);
   el('splinePanel').style.display = p === 'spline' ? '' : 'none';
-  el('gearPanel').style.display = p === 'gear' ? '' : 'none';
-  el('ansiPanel').style.display = p === 'ansi' ? '' : 'none';
-  el('nfPanel').style.display = p === 'nf' ? '' : 'none';
-  el('dinPanel').style.display = p === 'din' ? '' : 'none';
-  el('cardReadout').style.display = p === 'spline' ? 'none' : '';
+  el('cardPanel').style.display = p === 'form' ? '' : 'none';
+  if (p === 'form') renderCardForm();
   el('itemsLabel').textContent = p === 'spline' ? '结果预览（21 项）' : '结果预览';
-  const gc = (OPT && OPT.gear_card) || {};
-  el('gearHint').title = gc.missing_note || '';
-  el('gearHint').textContent = gc.expression_note || '';
-  const an = (OPT && OPT.ansi_card) || {};
-  el('ansiHint').title = an.missing_note || '';
-  el('ansiHint').textContent = an.note || '';
-  const nc = (OPT && OPT.nf_card) || {};
-  el('nfHint').title = nc.missing_note || '';
-  el('nfHint').textContent = nc.note || '';
-  const dc = (OPT && OPT.din_card) || {};
-  el('dinHint').title = dc.missing_note || '';
-  el('dinHint').textContent = dc.note || '';
+  const f = formOf(CARD) || {};
+  el('cardHint').title = f.missing_note || (CARD && CARD.summary) || '';
+  el('cardHint').textContent = f.note || '';
 }
 
 const fmt = (n) => {
@@ -362,69 +385,28 @@ function currentModel() {
   };
 }
 
-// ── 齿轮 / ANSI 卡的模型（与后端 GearTableModel / AnsiTableModel 字段一一对应）──
-function currentGearModel() {
-  const numOrNull = (v) => (String(v).trim() === '' ? null : Number(v));
-  return {
-    card: CARD ? CARD.id : '齿轮参数表',
-    expr: el('gearExpr').value.trim(),
-    mate_z: numOrNull(el('gearMateZ').value),
-    mate_dwg: el('gearDwg').value.trim() || null,
-    grade: el('gearGrade').value.trim() || null,
-    center: numOrNull(el('gearCenter').value),
+// ── 通用卡模型（表驱动：字段 key ↔ 后端模型字段一一对应）────────────────
+// 数字必填为空 → 送 0（后端给校验话术）；选填为空 → null；text/textarea → 字符串。
+function currentCardModel() {
+  const f = formOf(CARD);
+  const model = {
+    card: CARD ? CARD.id : '',
     at: atValue(),
     rot: Number(el('rot').value || 0),
   };
-}
-function currentAnsiModel() {
-  return {
-    card: CARD ? CARD.id : 'ANSI花键参数表_中文',
-    side: el('ansiSide').value || 'int',
-    profile: el('ansiProfile').value || null,
-    p: Number(el('ansiP').value),
-    z: Number(el('ansiZ').value),
-    at: atValue(),
-    rot: Number(el('rot').value || 0),
-  };
-}
-function currentNfModel() {
-  return {
-    card: CARD ? CARD.id : 'NF内花键参数表',
-    a: Number(el('nfA').value),
-    m: Number(el('nfM').value),
-    z: el('nfZ').value.trim() === '' ? null : Number(el('nfZ').value),
-    centering: el('nfCenter').value || null,
-    root: el('nfRoot').value || null,
-    at: atValue(),
-    rot: Number(el('rot').value || 0),
-  };
-}
-// DIN 5480 卡：m/z/d_B + N/W 配合；ae/as/e2/tact*/teff* 为可选覆盖。
-function currentDinModel() {
-  const pair = (s) => {
-    const parts = String(s).split(/[\s\/]+/).map((x) => x.trim()).filter(Boolean);
-    return { a: parts[0] || null, b: parts[1] || null };
-  };
-  const aeAs = pair(el('dinAeAs').value || '');
-  const tol = String(el('dinTol').value || '').split(/[\s\/]+/).map((x) => x.trim()).filter(Boolean);
-  const num = (v) => { const n = Number(v); return Number.isFinite(n) && String(v).trim() !== '' ? n : null; };
-  return {
-    card: CARD ? CARD.id : 'DIN花键参数表',
-    m: Number(el('dinM').value),
-    z: Number(el('dinZ').value),
-    d_b: Number(el('dinB').value),
-    hub: (el('dinHub').value || '').trim() || null,
-    shaft: (el('dinShaft').value || '').trim() || null,
-    e2: num(el('dinE2').value),
-    ae: num(aeAs.a),
-    as_: num(aeAs.b),
-    tact_n: num(tol[0]),
-    teff_n: num(tol[1]),
-    tact_w: num(tol[2]),
-    teff_w: num(tol[3]),
-    at: atValue(),
-    rot: Number(el('rot').value || 0),
-  };
+  for (const fld of ((f && f.fields) || [])) {
+    const c = FORM_CTL.get(fld.key);
+    if (!c) continue;
+    const raw = String(c.value == null ? '' : c.value).trim();
+    if (fld.kind === 'number') {
+      model[fld.key] = raw === '' ? (fld.required ? 0 : null) : Number(raw);
+    } else if (fld.kind === 'select') {
+      model[fld.key] = raw || null;
+    } else {
+      model[fld.key] = raw;
+    }
+  }
+  return model;
 }
 
 // ── 结果渲染 ──────────────────────────────────────────────────────────
@@ -501,12 +483,8 @@ function renderDp(dp) {
 }
 
 async function refresh() {
-  const p = panelOf(CARD);
-  if (p === "gear") return refreshGear();
-  if (p === "ansi") return refreshAnsi();
-  if (p === "nf") return refreshNf();
-  if (p === "din") return refreshDin();
-  return refreshSpline();
+  if (panelOf(CARD) === 'spline') return refreshSpline();
+  return refreshCard();
 }
 
 async function refreshSpline() {
@@ -533,37 +511,33 @@ async function refreshSpline() {
   ocsmClearStatus(seq);
 }
 
-// 通用卡片预览（齿轮 / ANSI / NF / DIN）：与后端 /api/card_preview 同一条路径，页面只渲染。
-async function refreshCard(kind) {
-  const model = kind === "gear" ? currentGearModel()
-    : kind === "nf" ? currentNfModel()
-    : kind === "din" ? currentDinModel() : currentAnsiModel();
-  const required = kind === "gear" ? model.expr
-    : kind === "nf" ? (model.a > 0 && model.m > 0)
-    : kind === "din" ? (model.m > 0 && model.z >= 3 && model.d_b > 0)
-    : (model.p > 0 && model.z >= 3);
-  if (!required) {
-    let msg = "请填径节 P 与齿数 N";
-    if (kind === "gear") msg = "请先粘九字段齿形表达式（可从轴/齿轮生成器 GUI 复制）";
-    else if (kind === "nf") msg = "请填公称直径 A 与模数 m";
-    else if (kind === "din") msg = "请填模数 m、齿数 z 与基准直径 d_B";
-    ocsmStatus(msg, "bad");
+// 通用卡片预览（齿轮 / ANSI / NF / DIN）：与后端 /api/card_preview 同一条路径；
+// 必填校验按 form.required（表驱动），页面不写死任何卡的分支。
+async function refreshCard() {
+  const f = formOf(CARD);
+  if (!f) return;
+  const blank = [];
+  for (const fld of (f.fields || [])) {
+    if (!fld.required) continue;
+    const c = FORM_CTL.get(fld.key);
+    const raw = String(c && c.value != null ? c.value : '').trim();
+    const bad = fld.kind === 'number' ? !(Number(raw) > 0) : raw === '';
+    if (bad) blank.push(fld.label);
+  }
+  if (blank.length) {
+    ocsmStatus('请填 ' + blank.join('、'), 'bad');
     return;
   }
   const seq = ocsmSeq();
-  const r = await fetchApi("/api/card_preview", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(model),
-  }, "/api/card_preview");
+  const r = await fetchApi('/api/card_preview', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(currentCardModel()),
+  }, '/api/card_preview');
   if (!r.ok) return;
   renderCardPreview(r.data);
   ocsmClearStatus(seq);
 }
-async function refreshGear() { return refreshCard("gear"); }
-async function refreshAnsi() { return refreshCard("ansi"); }
-async function refreshNf() { return refreshCard("nf"); }
-async function refreshDin() { return refreshCard("din"); }
 
 // 通用卡片读数（readout 行 + 项列表；公式/来源仍进 title=）。
 function renderCardPreview(d) {
@@ -622,14 +596,7 @@ el("root").addEventListener("change", () => {
   schedulePreview();
 });
 el("expr").addEventListener("input", () => schedulePreview());
-// 齿轮 / ANSI / NF / DIN 卡输入：同一套防抖预览（面板切换见 cardType change）。
-for (const id of ["gearExpr", "gearMateZ", "gearDwg", "gearGrade", "gearCenter", "ansiP", "ansiZ", "nfA", "nfM", "nfZ",
-                  "dinM", "dinZ", "dinB", "dinHub", "dinShaft", "dinE2", "dinAeAs", "dinTol"]) {
-  el(id).addEventListener("input", () => schedulePreview());
-}
-for (const id of ["ansiSide", "ansiProfile", "nfCenter", "nfRoot"]) {
-  el(id).addEventListener("change", () => schedulePreview());
-}
+// 通用卡字段的监听在 renderCardForm() 里随控件创建时挂上（input/change → 防抖预览）。
 el("dpManualOn").addEventListener("change", () => {
   if (el("dpManualOn").checked) {
     const v = Number(el("dpManual").value);
@@ -664,11 +631,7 @@ el("ok").addEventListener("click", async () => {
     const panel = panelOf(CARD);
     const isSpline = panel === "spline";
     const url = (isSpline ? "/api/spline_export" : "/api/card_export") + (TAB ? "?tab=" + encodeURIComponent(TAB) : "");
-    const model = panel === "gear" ? currentGearModel()
-      : panel === "ansi" ? currentAnsiModel()
-      : panel === "nf" ? currentNfModel()
-      : panel === "din" ? currentDinModel()
-      : currentModel();
+    const model = isSpline ? currentModel() : currentCardModel();
     const res = await fetchApi(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -710,6 +673,13 @@ function ping(bye) {
   OPT = r.data;
   setOptions("cardType", cardTypes().map((c) => ({ value: c.id, label: c.label })), (cardTypes()[0] || {}).id);
   CARD = cardTypes()[0] || null;
+  if (CARD && CARD_PARAM) {
+    const want = cardTypes().find((c) => c.id === CARD_PARAM);
+    if (want) {
+      CARD = want;
+      el("cardType").value = want.id;
+    }
+  }
   if (!CARD) {
     el("status").className = "bad";
     el("status").textContent = "选项表里没有卡片类型（插件版本不匹配？）";
@@ -729,29 +699,7 @@ function ping(bye) {
   }
   setOptions("sys", sysOptions().map((s) => ({ value: s.id, label: s.label })), SYS.id);
   SIDE = (SYS.sides || [])[0] || null;
-  // 齿轮/ANSI 卡面板：默认值/选项（表驱动；缺字段时用保守默认）
-  const gc = OPT.gear_card || {};
-  el("gearExpr").value = gc.expression_example || "GEAR EX M3 Z20 ALPHA20 X0 DA66 DF52.5 BETA0 H30";
-  const profiles = (OPT.ansi_card && OPT.ansi_card.profiles) || [];
-  setOptions("ansiProfile", profiles.map((p) => ({
-    value: p.id, label: p.id + "（" + fmt(p.alpha) + "°）",
-  })), (profiles[0] || {}).id);
-  el("ansiP").value = "16";
-  el("ansiZ").value = "20";
-  // NF 卡面板：定心/齿根清单 + 锚点示例（可由用户改）
-  const nc = OPT.nf_card || {};
-  setOptions("nfCenter", (nc.centering || []).map((c) => ({ value: c.id, label: c.label })), "outer");
-  setOptions("nfRoot", (nc.roots || []).map((c) => ({ value: c.id, label: c.label })), "flat");
-  el("nfA").value = "300";
-  el("nfM").value = "7.5";
-  el("nfZ").value = "38";
-  // DIN 卡面板：Bild 6 示例（N120×3×38×9H / W120×3×38×8f）作默认
-  const dd = (OPT.din_card && OPT.din_card.default) || {};
-  el("dinM").value = String(dd.m != null ? dd.m : 3);
-  el("dinZ").value = String(dd.z != null ? dd.z : 38);
-  el("dinB").value = String(dd.d_b != null ? dd.d_b : 120);
-  el("dinHub").value = dd.hub || "9H";
-  el("dinShaft").value = dd.shaft || "8f";
+  // 各卡字段/默认值/清单统一由 renderCardForm() 照 card_types[].form 渲染。
   syncUi();
   applyPanels();
   await refresh();

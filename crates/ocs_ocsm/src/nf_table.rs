@@ -35,11 +35,14 @@
 //! | 12 | 量棒直径 `V` | p23–p25 检查表（表外 → `—`） | p25 |
 //! | 13 | 跨棒距 `G` | p23–p25 检查表（表外 → `—`） | p25 |
 //!
-//! **如实标缺（不臆造）**：模板里大径/小径/跨棒距三行的上/下偏差洞位保留，但
-//! p35 偏差表的 `dev1..dev10` 列名是位置命名、列义未辨定，p12 的内花键大径公差
-//! `R7` vs `H7` 两读法未裁决 —— 6 个公差格一律默认 `—`，由用户在 CAD 里按已知
-//! 配合自行改写（ATTDEF 可编辑）。`ri`（槽底圆角半径，p22）与 `x`（变位系数）不进
-//! 表格（外花键模板也没有这两行），只在预览读数/回执里给出。
+//! **公差（p28 + p29）**：模板里大径/小径/跨棒距三行的上/下偏差洞位均已填值——
+//! 大径上/下差 = ISO 286 **R7**（p28 §4：拉削/外径定心的内花键大径公差）；
+//! 小径上/下差 = ISO 286 **H7**（p28 §6：内花键小径公差，参考）；
+//! 跨棒距上/下差 = p29 检查尺寸的公差值里 **内花键 E** 的偏差（µm→mm）。
+//! p29 的 **xm 内花键** 与所选配合（p31/p34：松动/滑动/固定/压，缺省固定）的
+//! **外花键 E/xm** 偏差进预览读数；`(m,A)` 不在 p29 或 ISO 档缺时对应格「—」，
+//! 不外推——元素（ATTDEF）始终在，可在 CAD 里改写。`ri`（槽底圆角半径，p22）与
+//! `x`（变位系数）不进表格（外花键模板也没有这两行），只在预览读数/回执里给。
 //!
 //! **表外不外推**：`V/V1/G/G1/ri/z` 只从入库表值取（`nf_e22141_dims.csv` /
 //! `nf_e22141_check.csv`，逐行带 `source/flags`）；查不到就显示 `—` 并说明原因。
@@ -210,6 +213,216 @@ pub const TOL_TAGS: &[&str] = &[
     "跨棒距上差",
     "跨棒距下差",
 ];
+
+// ══════════════════════════════════════════════════════════════════════════
+// NF E22-141 公差（p28 直径公差 + p29 E/xm 偏差表）
+// ══════════════════════════════════════════════════════════════════════════
+
+/// 配合类别（NF E22-141 中文译本 p31「1=松动配合 2=滑动配合 3=固定配合 4=压配合」）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FitClass {
+    Loose,
+    Slide,
+    Fixed,
+    Press,
+}
+
+impl FitClass {
+    pub fn id(self) -> &'static str {
+        match self {
+            FitClass::Loose => "loose",
+            FitClass::Slide => "slide",
+            FitClass::Fixed => "fixed",
+            FitClass::Press => "press",
+        }
+    }
+    pub fn label(self) -> &'static str {
+        match self {
+            FitClass::Loose => "松动",
+            FitClass::Slide => "滑动",
+            FitClass::Fixed => "固定",
+            FitClass::Press => "压",
+        }
+    }
+    pub fn index(self) -> usize {
+        match self {
+            FitClass::Loose => 0,
+            FitClass::Slide => 1,
+            FitClass::Fixed => 2,
+            FitClass::Press => 3,
+        }
+    }
+    /// 命令/GUI token（宽松收词）。
+    pub fn from_token(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "松动" | "松" | "loose" | "l" => Some(FitClass::Loose),
+            "滑动" | "滑" | "slide" | "sliding" | "s" => Some(FitClass::Slide),
+            "固定" | "固" | "fixed" | "fix" | "f" => Some(FitClass::Fixed),
+            "压" | "压配合" | "press" | "p" => Some(FitClass::Press),
+            _ => None,
+        }
+    }
+    pub const ALL: [FitClass; 4] = [
+        FitClass::Loose,
+        FitClass::Slide,
+        FitClass::Fixed,
+        FitClass::Press,
+    ];
+}
+
+impl Default for FitClass {
+    /// 缺省「固定」：模板公法线公差 +0.055/−0.042 的量级/正负最接近 p29 固定配合列（+42/−42）。
+    fn default() -> Self {
+        FitClass::Fixed
+    }
+}
+
+/// 上/下偏差对（微米，NF 原文单位）。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DevPair {
+    pub upper: f64,
+    pub lower: f64,
+}
+
+impl DevPair {
+    /// `"+25/0"` → DevPair；解析失败 `None`。
+    pub fn parse(s: &str) -> Option<Self> {
+        let (u, l) = s.trim().split_once('/')?;
+        Some(DevPair {
+            upper: u.trim().parse().ok()?,
+            lower: l.trim().parse().ok()?,
+        })
+    }
+}
+
+/// p29 一行（m + A 范围/列表 + E/xm 内花键 + E/xm 外花键 4 配合，单位微米）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct NfDevRow {
+    pub m: f64,
+    /// 原文 A 范围/列表（如 `4~15` / `110,120,130`）。
+    pub a_spec: String,
+    pub e_int: DevPair,
+    pub e_ext: [DevPair; 4],
+    pub xm_int: DevPair,
+    pub xm_ext: [DevPair; 4],
+    pub source: String,
+    pub raw: String,
+    pub note: String,
+}
+
+impl NfDevRow {
+    /// A 是否落在本行（范围 `lo~hi` 或逗号列表；容差 1e-9）。
+    pub fn contains_a(&self, a: f64) -> bool {
+        let s = self.a_spec.replace('~', "-");
+        if s.contains('-') {
+            let mut it = s.split('-').filter_map(|x| x.trim().parse::<f64>().ok());
+            if let (Some(lo), Some(hi)) = (it.next(), it.next()) {
+                return a >= lo - 1e-9 && a <= hi + 1e-9;
+            }
+        }
+        s.split(',')
+            .filter_map(|x| x.trim().parse::<f64>().ok())
+            .any(|v| (v - a).abs() < 1e-9)
+    }
+    pub fn e_ext_for(&self, fit: FitClass) -> DevPair {
+        self.e_ext[fit.index()]
+    }
+    pub fn xm_ext_for(&self, fit: FitClass) -> DevPair {
+        self.xm_ext[fit.index()]
+    }
+}
+
+/// 解析 `assets/nf_e22141_e_xm_tol.csv`（14 行；逐行 source/raw/note，include_str! 编译进插件）。
+fn parse_dev_rows(text: &str) -> Vec<NfDevRow> {
+    fn split_csv(line: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        let mut cur = String::new();
+        let mut quoted = false;
+        for ch in line.chars() {
+            match ch {
+                '"' => quoted = !quoted,
+                ',' if !quoted => out.push(std::mem::take(&mut cur)),
+                _ => cur.push(ch),
+            }
+        }
+        out.push(cur);
+        out
+    }
+    let mut rows = Vec::new();
+    for line in text.lines() {
+        if line.trim().is_empty() || line.starts_with('#') || line.starts_with("m,") {
+            continue;
+        }
+        let f = split_csv(line);
+        if f.len() < 15 {
+            continue;
+        }
+        let pair = |i: usize| DevPair::parse(&f[i]);
+        let Some(m) = f[0].trim().parse::<f64>().ok() else {
+            continue;
+        };
+        let (Some(ei), Some(xi)) = (pair(2), pair(7)) else {
+            continue;
+        };
+        let mut e_ext = [DevPair { upper: 0.0, lower: 0.0 }; 4];
+        let mut xm_ext = [DevPair { upper: 0.0, lower: 0.0 }; 4];
+        let mut ok = true;
+        for k in 0..4 {
+            match (pair(3 + k), pair(8 + k)) {
+                (Some(a), Some(b)) => {
+                    e_ext[k] = a;
+                    xm_ext[k] = b;
+                }
+                _ => ok = false,
+            }
+        }
+        if !ok {
+            continue;
+        }
+        rows.push(NfDevRow {
+            m,
+            a_spec: f[1].trim().to_string(),
+            e_int: ei,
+            e_ext,
+            xm_int: xi,
+            xm_ext,
+            source: f[12].clone(),
+            raw: f[13].clone(),
+            note: f[14].clone(),
+        });
+    }
+    rows
+}
+
+/// p29 偏差表（惰性解析一次）。
+pub fn e_xm_tol_rows() -> &'static [NfDevRow] {
+    static ROWS: std::sync::OnceLock<Vec<NfDevRow>> = std::sync::OnceLock::new();
+    ROWS.get_or_init(|| {
+        parse_dev_rows(include_str!("../assets/nf_e22141_e_xm_tol.csv"))
+    })
+}
+
+/// 该 (m, A) 命中的 p29 行（表外 `None` → 内花键 E 偏差标缺，不外推）。
+pub fn e_xm_tol_row(m: f64, a: f64) -> Option<&'static NfDevRow> {
+    e_xm_tol_rows()
+        .iter()
+        .find(|r| (r.m - m).abs() < 1e-9 && r.contains_a(a))
+}
+
+/// 微米偏差（µm）→ mm 显示串（带符号，最多 3 位小数；0 → `0`）。
+fn fmt_um_mm(v_um: f64) -> String {
+    let v = v_um / 1000.0;
+    if v.abs() < 5e-7 {
+        return "0".to_string();
+    }
+    let s = format!("{v:+.3}");
+    let s = s.trim_end_matches('0').trim_end_matches('.');
+    if s == "+" || s == "-" {
+        "0".to_string()
+    } else {
+        s.to_string()
+    }
+}
 
 // ══════════════════════════════════════════════════════════════════════════
 // 文字/属性实体构造
@@ -384,6 +597,8 @@ pub struct NfTableSpec {
     pub centering: Centering,
     /// 齿根样式（缺省 = 平齿根）。
     pub root: RootStyle,
+    /// 配合类别（p31/p34 四档；只影响预览里配对外花键的偏差读数）。
+    pub fit: FitClass,
     pub at: Option<[f64; 2]>,
     pub rot: f64,
 }
@@ -417,6 +632,16 @@ pub struct NfDerived {
     pub detail_source: String,
     /// p23–p25 行来源说明（V/G 的出处）。
     pub check_source: String,
+    /// p29 偏差行（E/xm；表外 `None` → 跨棒距公差标缺）。
+    pub tol_row: Option<&'static NfDevRow>,
+    /// 内花键大径公差（ISO 286 R7，NF E22-141 p28 §4）。
+    pub major_tol: Option<crate::tolerance::Limits>,
+    /// 内花键小径公差（ISO 286 H7，NF E22-141 p28 §6，参考）。
+    pub minor_tol: Option<crate::tolerance::Limits>,
+    /// 大径公差来源说明（含失败原因）。
+    pub major_tol_note: String,
+    /// 小径公差来源说明。
+    pub minor_tol_note: String,
 }
 
 /// 主参数合法性（`z` 给了就限 3..=1000，与 NF 表量级一致）。
@@ -489,6 +714,19 @@ pub fn derive(spec: &NfTableSpec) -> Result<NfDerived, String> {
         Centering::Flank => spec.a + 0.3 * spec.m,
     };
     let d = spec.a - 2.0 * spec.m;
+    // ⑤ p28 直径公差（内花键大径 R7、小径 H7 参考）+ p29 E/xm 偏差行。
+    let major_tol = crate::tolerance::hole(az, "R7");
+    let minor_tol = crate::tolerance::hole(d, "H7");
+    let major_tol_note = match major_tol {
+        Some(_) => "ISO 286 R7（NF E22-141 p28 §4：拉削/外径定心的内花键大径公差同为 R7）"
+            .to_string(),
+        None => format!("—（ISO 286 无 Az={} 的 R7 档）", fmt_mm(az)),
+    };
+    let minor_tol_note = match minor_tol {
+        Some(_) => "ISO 286 H7（NF E22-141 p28 §6：内花键小径 D 公差 H7，参考）".to_string(),
+        None => format!("—（ISO 286 无 D={} 的 H7 档）", fmt_mm(d)),
+    };
+    let tol_row = e_xm_tol_row(spec.m, spec.a);
     Ok(NfDerived {
         z,
         az,
@@ -512,6 +750,11 @@ pub fn derive(spec: &NfTableSpec) -> Result<NfDerived, String> {
             .as_ref()
             .map(|r| r.source_note())
             .unwrap_or_else(|| "—（该 (m, A) 不在 p23–p25 检查尺寸表内）".to_string()),
+        tol_row,
+        major_tol,
+        minor_tol,
+        major_tol_note,
+        minor_tol_note,
     })
 }
 
@@ -521,10 +764,28 @@ pub fn fmt_mm(v: f64) -> String {
     s.trim_end_matches('0').trim_end_matches('.').to_string()
 }
 
+/// ISO 286 `Limits` → 上/下差显示（缺档 → [`MISSING`]）。
+fn tol_display(lim: &Option<crate::tolerance::Limits>, upper: bool) -> String {
+    match lim {
+        Some(l) => {
+            let (u, lo) = l.display();
+            if upper {
+                u
+            } else {
+                lo
+            }
+        }
+        None => MISSING.to_string(),
+    }
+}
+
 /// 18 项取值（顺序 = `attdefs()`：12 值 + 6 公差）。
 ///
-/// 公差洞位默认 [`MISSING`]：p35 `dev1..dev10` 列义未辨定、p12 大径公差 `R7/H7`
-/// 未裁决 —— 一律「—」并给出原因，不臆造；ATTDEF 可编辑，用户可自行填已知配合。
+/// 公差口径（NF E22-141）：
+/// * 大径上/下差 = ISO 286 **R7**（p28 §4：拉削/外径定心的内花键大径公差）；
+/// * 小径上/下差 = ISO 286 **H7**（p28 §6：小径公差，参考）；
+/// * 跨棒距上/下差 = p29 **内花键 E 的偏差**（µm→mm；表题「齿公法线长度公差」）。
+/// 查不到（(m,A) 不在 p29、ISO 档缺）只对应格「—」，其余照给。
 pub fn values(spec: &NfTableSpec) -> Result<Vec<(String, String)>, String> {
     let d = derive(spec)?;
     let out: Vec<(&str, String)> = vec![
@@ -549,12 +810,22 @@ pub fn values(spec: &NfTableSpec) -> Result<Vec<(String, String)>, String> {
             "跨棒距G",
             d.g.map(fmt_mm).unwrap_or_else(|| MISSING.to_string()),
         ),
-        ("大径上差", MISSING.to_string()),
-        ("大径下差", MISSING.to_string()),
-        ("小径上差", MISSING.to_string()),
-        ("小径下差", MISSING.to_string()),
-        ("跨棒距上差", MISSING.to_string()),
-        ("跨棒距下差", MISSING.to_string()),
+        ("大径上差", tol_display(&d.major_tol, true)),
+        ("大径下差", tol_display(&d.major_tol, false)),
+        ("小径上差", tol_display(&d.minor_tol, true)),
+        ("小径下差", tol_display(&d.minor_tol, false)),
+        (
+            "跨棒距上差",
+            d.tol_row
+                .map(|r| fmt_um_mm(r.e_int.upper))
+                .unwrap_or_else(|| MISSING.to_string()),
+        ),
+        (
+            "跨棒距下差",
+            d.tol_row
+                .map(|r| fmt_um_mm(r.e_int.lower))
+                .unwrap_or_else(|| MISSING.to_string()),
+        ),
     ];
     // 顺序护栏：取值顺序必须与 ATTDEF 表一致（加/改行时先在这里暴露）。
     let got: Vec<&str> = out.iter().map(|(t, _)| *t).collect();
@@ -622,8 +893,12 @@ pub struct NfColumnSpec {
 
 const SOURCE_DIMS: &str = "NF E22-141 中文译本 p18（拉削内花键尺寸表；assets/nf_e22141_dims.csv）";
 const SOURCE_CHECK: &str = "NF E22-141 中文译本 p23–p25（检查尺寸表；assets/nf_e22141_check.csv）";
-const SOURCE_DEV_MISSING: &str =
-    "缺：p35 偏差表 dev1..dev10 列名按位置命名、列义未辨定；p12 内花键大径公差 R7/H7 未裁决 —— 不臆造";
+const SOURCE_MAJOR_TOL: &str =
+    "NF E22-141 p28 §4（内花键大径公差 R7；数值按 ISO 286 查表）";
+const SOURCE_MINOR_TOL: &str =
+    "NF E22-141 p28 §6（内花键小径公差 H7，参考；数值按 ISO 286 查表）";
+const SOURCE_G_TOL: &str =
+    "NF E22-141 p29（检查尺寸的公差值：内花键 E 的偏差，微米；表外不外推）";
 
 /// 18 项口径（顺序 = `attdefs()`）。
 pub const NF_COLUMNS: &[NfColumnSpec] = &[
@@ -639,13 +914,106 @@ pub const NF_COLUMNS: &[NfColumnSpec] = &[
     NfColumnSpec { tag: "基准尺寸", label: "基准尺寸 Do", unit: "mm", formula: "Do = A（NF 主参数）", source: "p07" },
     NfColumnSpec { tag: "量棒直径V", label: "量棒直径 V", unit: "mm", formula: "p23–p25 检查表 V 列（表外 → 「—」，不外推）", source: SOURCE_CHECK },
     NfColumnSpec { tag: "跨棒距G", label: "跨棒距 G", unit: "mm", formula: "p23–p25 检查表 G 列（G1 见预览读数；表外 → 「—」）", source: SOURCE_CHECK },
-    NfColumnSpec { tag: "大径上差", label: "大径上差", unit: "", formula: "内花键大径（齿根圆 Az）上偏差", source: SOURCE_DEV_MISSING },
-    NfColumnSpec { tag: "大径下差", label: "大径下差", unit: "", formula: "内花键大径（齿根圆 Az）下偏差", source: SOURCE_DEV_MISSING },
-    NfColumnSpec { tag: "小径上差", label: "小径上差", unit: "", formula: "内花键小径（齿顶圆 D）上偏差", source: SOURCE_DEV_MISSING },
-    NfColumnSpec { tag: "小径下差", label: "小径下差", unit: "", formula: "内花键小径（齿顶圆 D）下偏差", source: SOURCE_DEV_MISSING },
-    NfColumnSpec { tag: "跨棒距上差", label: "跨棒距上差", unit: "", formula: "内花键量棒跨距 G/G1 上偏差（微米表）", source: SOURCE_DEV_MISSING },
-    NfColumnSpec { tag: "跨棒距下差", label: "跨棒距下差", unit: "", formula: "内花键量棒跨距 G/G1 下偏差（微米表）", source: SOURCE_DEV_MISSING },
+    NfColumnSpec { tag: "大径上差", label: "大径上差", unit: "mm", formula: "ISO 286 R7（p28 §4 内花键大径公差）", source: SOURCE_MAJOR_TOL },
+    NfColumnSpec { tag: "大径下差", label: "大径下差", unit: "mm", formula: "ISO 286 R7（p28 §4 内花键大径公差）", source: SOURCE_MAJOR_TOL },
+    NfColumnSpec { tag: "小径上差", label: "小径上差", unit: "mm", formula: "ISO 286 H7（p28 §6 内花键小径公差，参考）", source: SOURCE_MINOR_TOL },
+    NfColumnSpec { tag: "小径下差", label: "小径下差", unit: "mm", formula: "ISO 286 H7（p28 §6 内花键小径公差，参考）", source: SOURCE_MINOR_TOL },
+    NfColumnSpec { tag: "跨棒距上差", label: "跨棒距上差", unit: "mm", formula: "p29 内花键 E 偏差上差（µm→mm）", source: SOURCE_G_TOL },
+    NfColumnSpec { tag: "跨棒距下差", label: "跨棒距下差", unit: "mm", formula: "p29 内花键 E 偏差下差（µm→mm）", source: SOURCE_G_TOL },
 ];
+
+/// NF 内花键卡的表单字段（表驱动 GUI 骨架）。
+pub const FORM: crate::card::CardFormSpec = crate::card::CardFormSpec {
+    fields: &[
+        crate::card::CardFieldSpec {
+            key: "a",
+            label: "公称直径 A",
+            kind: "number",
+            placeholder: "NF 主参数（表值）",
+            default: "300",
+            title: "NF 主参数 A；同一 A 可对应不同模数（p18 尺寸表）",
+            options: &[],
+            options_from: "",
+            min: 0.0,
+            step: 0.001,
+            required: true,
+        },
+        crate::card::CardFieldSpec {
+            key: "m",
+            label: "模数 m",
+            kind: "number",
+            placeholder: "NF 模数档",
+            default: "7.5",
+            title: "NF 模数档（p18 表实际 m 列：0.50/0.75/1/1.25/1.667/2.5/3.75/5/7.5/10）",
+            options: &[],
+            options_from: "",
+            min: 0.0,
+            step: 0.001,
+            required: true,
+        },
+        crate::card::CardFieldSpec {
+            key: "z",
+            label: "齿数 z",
+            kind: "number",
+            placeholder: "选填，按 p18 表核对",
+            default: "38",
+            title: "选填；与 p18 表 N 不一致直接报错（避免 V/G 取错行）",
+            options: &[],
+            options_from: "",
+            min: 3.0,
+            step: 1.0,
+            required: false,
+        },
+        crate::card::CardFieldSpec {
+            key: "centering",
+            label: "定心方式",
+            kind: "select",
+            placeholder: "",
+            default: "outer",
+            title: "NF E22-141 内花键定心方式（p04/p07/p10–p12）；缺省外径定心 Az=A",
+            options: &[],
+            options_from: "nf_centering",
+            min: 0.0,
+            step: 0.0,
+            required: false,
+        },
+        crate::card::CardFieldSpec {
+            key: "root",
+            label: "齿根样式",
+            kind: "select",
+            placeholder: "",
+            default: "flat",
+            title: "行 7 文本；槽底圆角 ri 在预览读数里",
+            options: &[],
+            options_from: "nf_roots",
+            min: 0.0,
+            step: 0.0,
+            required: false,
+        },
+        crate::card::CardFieldSpec {
+            key: "fit",
+            label: "配合类别",
+            kind: "select",
+            placeholder: "",
+            default: "fixed",
+            title: "NF E22-141 p31/p34：松动/滑动/固定/压；只影响预览里配对外花键的 E/xm 偏差读数",
+            options: &[
+                ("loose", "松动"),
+                ("slide", "滑动"),
+                ("fixed", "固定"),
+                ("press", "压"),
+            ],
+            options_from: "",
+            min: 0.0,
+            step: 0.0,
+            required: false,
+        },
+    ],
+    note: "填 A/m（z 选填核对）→ 选定心/齿根/配合 → 点「出表」回到图纸放置。\
+           公差：大径 R7 / 小径 H7（p28）+ 跨棒距 = p29 内花键 E 偏差。",
+    missing_note: "(m,A) 不在 p29 或 ISO 档缺时对应公差格显示「—」，不外推；\
+                   V/V1/G/G1 与 ri 只取 p23–p25 / p22 表值，表外显示「—」。",
+};
 
 /// NF 卡的选项/口径 JSON（随 `/api/spline_options` 下发；页面只渲染）。
 pub fn options_json() -> serde_json::Value {
@@ -666,11 +1034,20 @@ pub fn options_json() -> serde_json::Value {
             {"id": "flat", "label": "平齿根"},
             {"id": "fillet", "label": "圆齿根"},
         ],
-        "missing_note": "内花键大径/小径/跨棒距的上下偏差：p35 偏差表 dev1..dev10 列名按位置命名、\
-                         列义未辨定，p12 大径公差 R7/H7 两读法未裁决 —— 6 个公差格一律「—」，不臆造；\
-                         V/V1/G/G1 与 ri 只从 p23–p25 / p22 表值取，表外显示「—」，不外推。",
+        // p31/p34 配合名（NF E22-141 译本体系；四档按 p29 分列）
+        "fits": FitClass::ALL.iter().map(|f| serde_json::json!({
+            "id": f.id(),
+            "label": f.label(),
+        })).collect::<Vec<_>>(),
+        "missing_note": "公差口径（NF E22-141）：大径上/下差 = ISO 286 R7（p28 §4）；\
+                         小径上/下差 = ISO 286 H7（p28 §6，参考）；\
+                         跨棒距上/下差 = p29 检查尺寸的公差值里**内花键 E** 的偏差（µm→mm）。\
+                         p29 的 xm 内花键 + 所选配合的外花键 E/xm 偏差在预览读数里列出；\
+                         (m,A) 不在 p29 或 ISO 档缺时对应格显示「—」，不外推；\
+                         元素（ATTDEF）始终存在，可在 CAD 里改写。",
         "note": "版面照外花键参数表NF.dxf 同构镜像（13 行 × 2 列，66 线 + 13 标签 + 18 属性）；\
-                 文字样式一律 OCSM_GB；模板末行标签出框已归位。",
+                 文字样式一律 OCSM_GB；模板末行标签出框已归位；\
+                 公差按 p28 直径公差 + p29 E 偏差取值（配合类别只影响预览读数）。",
     })
 }
 
@@ -693,6 +1070,9 @@ pub struct NfTableModel {
     /// 齿根样式（`flat`/`fillet`/`平`/`圆`；缺省 flat）。
     #[serde(default)]
     pub root: Option<String>,
+    /// 配合类别（`loose`/`slide`/`fixed`/`press` 或中文；缺省 fixed）。
+    #[serde(default)]
+    pub fit: Option<String>,
     /// 显式落点；缺省 = 待放置件。
     #[serde(default)]
     pub at: Option<[f64; 2]>,
@@ -715,12 +1095,19 @@ impl NfTableModel {
                 format!("NF 内花键参数表：齿根样式「{t}」非法（可用 平 / 圆）")
             })?,
         };
+        let fit = match self.fit.as_deref().map(str::trim) {
+            None | Some("") => FitClass::default(),
+            Some(t) => FitClass::from_token(t).ok_or_else(|| {
+                format!("NF 内花键参数表：配合类别「{t}」非法（可用 松动 / 滑动 / 固定 / 压）")
+            })?,
+        };
         let spec = NfTableSpec {
             a: self.a,
             m: self.m,
             z: self.z,
             centering,
             root,
+            fit,
             at: self.at,
             rot: self.rot,
         };
@@ -755,6 +1142,25 @@ impl NfTableModel {
             Centering::Outer => "Az = A",
             Centering::Flank => "Az = A + 0.3m",
         };
+        // p29 E/xm 偏差读数（内花键 + 所选配合的外花键）；微米原文与 mm 对照。
+        let um = |p: DevPair| format!("{:+}/{:+}", p.upper, p.lower);
+        let (p29_int, p29_ext) = match d.tol_row {
+            Some(r) => (
+                format!(
+                    "E {}（{}/{} mm）；xm {}（µm）",
+                    um(r.e_int),
+                    fmt_um_mm(r.e_int.upper),
+                    fmt_um_mm(r.e_int.lower),
+                    um(r.xm_int)
+                ),
+                format!(
+                    "E {}；xm {}",
+                    um(r.e_ext_for(spec.fit)),
+                    um(r.xm_ext_for(spec.fit))
+                ),
+            ),
+            None => (MISSING.to_string(), MISSING.to_string()),
+        };
         let readout = serde_json::json!([
             {"k": "公称直径 A（主参数）", "v": fmt_mm(spec.a)},
             {"k": format!("大径 Az（{az_formula}）"), "v": fmt_mm(d.az)},
@@ -764,6 +1170,10 @@ impl NfTableModel {
             {"k": "跨棒距 G / G1", "v": format!("{} / {}", opt(d.g), opt(d.g1))},
             {"k": "槽底圆角 ri（p22）", "v": opt(d.ri)},
             {"k": "变位系数 x（p22）", "v": opt(d.x)},
+            {"k": "p29 内花键偏差（µm）", "v": p29_int},
+            {"k": format!("配对外花键·{}偏差（µm；p29）", spec.fit.label()), "v": p29_ext},
+            {"k": "大径上/下差", "v": d.major_tol.map(|l| { let (u, lo) = l.display(); format!("{u} / {lo}") }).unwrap_or_else(|| MISSING.to_string())},
+            {"k": "小径上/下差", "v": d.minor_tol.map(|l| { let (u, lo) = l.display(); format!("{u} / {lo}") }).unwrap_or_else(|| MISSING.to_string())},
             {"k": "p18 行", "v": d.dims_source},
             {"k": "p22 行", "v": d.detail_source},
             {"k": "p25 行", "v": d.check_source},
@@ -773,21 +1183,24 @@ impl NfTableModel {
             "card": "NF内花键参数表",
             "renderer": "nf_table",
             "title": format!(
-                "NF E22-141 内花键参数表（A={} m={} z={}）",
+                "NF E22-141 内花键参数表（A={} m={} z={}，{}配合）",
                 fmt_mm(spec.a),
                 fmt_mm(spec.m),
-                d.z.map(|z| z.to_string()).unwrap_or_else(|| MISSING.to_string())
+                d.z.map(|z| z.to_string()).unwrap_or_else(|| MISSING.to_string()),
+                spec.fit.label()
             ),
             "a": spec.a,
             "m": spec.m,
             "z": d.z,
             "centering": spec.centering.id(),
             "root": spec.root.id(),
+            "fit": spec.fit.id(),
             "readout": readout,
             "items": items,
             "missing": missing,
-            "missing_note": "大径/小径/跨棒距的上下偏差：p35 偏差列义未辨定、p12 R7/H7 未裁决 —— 显示「—」，不臆造；\
-                             V/V1/G/G1 与 ri 只取 p23–p25 / p22 表值，表外显示「—」，不外推。",
+            "missing_note": "公差口径：大径 R7 / 小径 H7（p28，数值 ISO 286）、跨棒距 = p29 内花键 E 偏差；\
+                             (m,A) 不在 p29 或 ISO 档缺 → 对应格「—」，不外推；\
+                             V/V1/G/G1 与 ri 只取 p23–p25 / p22 表值，表外显示「—」。",
         }))
     }
 
@@ -819,11 +1232,12 @@ impl NfTableModel {
         let spec = self.spec()?;
         let d = derive(&spec)?;
         Ok(format!(
-            "NF E22-141 内花键 A={} m={} z={}（{}，拉削；V/G/G1 {}）",
+            "NF E22-141 内花键 A={} m={} z={}（{}，拉削；{}配合；V/G/G1 {}）",
             fmt_mm(spec.a),
             fmt_mm(spec.m),
             d.z.map(|z| z.to_string()).unwrap_or_else(|| MISSING.to_string()),
             spec.centering.label(),
+            spec.fit.label(),
             match (d.v, d.g, d.g1) {
                 (Some(v), Some(g), Some(g1)) => format!("{} / {} / {}", fmt_mm(v), fmt_mm(g), fmt_mm(g1)),
                 _ => MISSING.to_string(),
@@ -843,6 +1257,7 @@ impl NfTableModel {
             "z": d.z,
             "centering": spec.centering.id(),
             "root": spec.root.id(),
+            "fit": spec.fit.id(),
         })
         .to_string())
     }
@@ -851,11 +1266,12 @@ impl NfTableModel {
 /// 命令用法（`OCSMCARD` 报错指路）。
 pub fn usage() -> String {
     "智能卡片「NF内花键参数表」用法：\
-     `OCSMCARD NF内花键参数表 A<公称直径> M<模数> [Z<齿数>] [中心 外径|齿面] [根 平|圆] [at x,y] [rot 度]`\
+     `OCSMCARD NF内花键参数表 A<公称直径> M<模数> [Z<齿数>] [中心 外径|齿面] [根 平|圆] [配合 松动|滑动|固定|压] [at x,y] [rot 度]`\
      （如 `OCSMCARD NF内花键参数表 A300 M7.5 Z38`）。A/m 取 NF E22-141 表值（p18 尺寸表，\
      同一直径可对应不同模数，m 必填）；定心方式缺省「外径定心」（Az=A；齿面定心 Az=A+0.3m）；\
      加工方法照 p18 = 拉削；V/V1/G/G1 取 p23–p25 检查表、ri 取 p22 —— 表外显示「—」，不外推；\
-     大径/小径/跨棒距的上下偏差（p35 列义未辨定、p12 R7/H7 未裁决）一律「—」。"
+     公差：大径 R7 / 小径 H7（p28，数值按 ISO 286），跨棒距 = p29 内花键 E 偏差；\
+     配合类别（缺省固定）只影响预览里配对外花键的 E/xm 偏差读数。"
         .to_string()
 }
 
@@ -871,6 +1287,7 @@ impl NfTableSpec {
         let mut z: Option<u32> = None;
         let mut centering = Centering::Outer;
         let mut root = RootStyle::Flat;
+        let mut fit = FitClass::default();
         let mut at: Option<[f64; 2]> = None;
         let mut rot = 0.0f64;
         let mut i = 0usize;
@@ -911,6 +1328,11 @@ impl NfTableSpec {
                 let v = need(&mut i, &tokens, "根")?;
                 root = RootStyle::from_token(&v)
                     .ok_or_else(|| format!("NF 内花键参数表：齿根样式「{v}」非法（可用 平 / 圆）"))?;
+            } else if key == "配合" || key == "fit" {
+                let v = need(&mut i, &tokens, "配合")?;
+                fit = FitClass::from_token(&v).ok_or_else(|| {
+                    format!("NF 内花键参数表：配合类别「{v}」非法（可用 松动 / 滑动 / 固定 / 压）")
+                })?;
             } else if key == "直径" || key == "公称直径" || key == "a" {
                 let v = need(&mut i, &tokens, "A")?;
                 a = Some(
@@ -963,6 +1385,7 @@ impl NfTableSpec {
             z,
             centering,
             root,
+            fit,
             at,
             rot,
         };
@@ -1002,6 +1425,7 @@ mod tests {
             z: Some(38),
             centering: Centering::Outer,
             root: RootStyle::Flat,
+            fit: FitClass::Fixed,
             at: None,
             rot: 0.0,
         }
@@ -1182,6 +1606,13 @@ mod tests {
         assert_eq!(get("基准尺寸"), "300");
         assert_eq!(get("量棒直径V"), "15");
         assert_eq!(get("跨棒距G"), "270.508");
+        // 公差（p28 直径公差 + p29 内花键 E 偏差，µm→mm）
+        assert_eq!(get("大径上差"), "-0.078", "Az=300 的 ISO 286 R7");
+        assert_eq!(get("大径下差"), "-0.130");
+        assert_eq!(get("小径上差"), "+0.052", "D=285 的 ISO 286 H7");
+        assert_eq!(get("小径下差"), "0");
+        assert_eq!(get("跨棒距上差"), "+0.052", "p29 m=7.5/A=300 内花键 E +52/0");
+        assert_eq!(get("跨棒距下差"), "0");
         // 表值与公式交叉核对
         assert_eq!(d.table_d, Some(285.0), "p18 表 D = A−2m = 285");
         assert_eq!(d.v, Some(15.0));
@@ -1239,15 +1670,73 @@ mod tests {
         assert_eq!(checked, 11, "锚点行数（含外花键对账锚点）");
     }
 
+    /// p29 E/xm 偏差资产：14 行、两处 dev7 校正、A 范围/列表命中、四配合列与主控转录一致。
+    #[test]
+    fn nf_p29_e_xm_tol_asset_matches_standard() {
+        let rows = e_xm_tol_rows();
+        assert_eq!(rows.len(), 14, "p29 14 行");
+        // m=7.5 / A=300：锚点行（E 内 +52/0；xm 内 +76/0；固定 E +42/-42、xm +61/-61）
+        let r = e_xm_tol_row(7.5, 300.0).expect("m=7.5 A=300 应在 p29 表内");
+        assert_eq!(r.e_int, DevPair { upper: 52.0, lower: 0.0 });
+        assert_eq!(r.xm_int, DevPair { upper: 76.0, lower: 0.0 });
+        assert_eq!(r.e_ext_for(FitClass::Fixed), DevPair { upper: 42.0, lower: -42.0 });
+        assert_eq!(r.xm_ext_for(FitClass::Fixed), DevPair { upper: 61.0, lower: -61.0 });
+        assert_eq!(r.e_ext_for(FitClass::Loose), DevPair { upper: -110.0, lower: -194.0 });
+        assert_eq!(r.xm_ext_for(FitClass::Press), DevPair { upper: 202.0, lower: 79.0 });
+        // m=7.5 / A=200 命中第一表列（110,120,130,140,150,170,180,200,250），不是第二表列
+        let r200 = e_xm_tol_row(7.5, 200.0).expect("A=200");
+        assert_eq!(r200.e_int, DevPair { upper: 43.0, lower: 0.0 });
+        assert_eq!(r200.e_ext_for(FitClass::Press), DevPair { upper: 115.0, lower: 45.0 });
+        // m=10 / A=300–400 的压列特异值（用户转录确认）
+        let r10 = e_xm_tol_row(10.0, 350.0).expect("A=350");
+        assert_eq!(r10.e_ext_for(FitClass::Press), DevPair { upper: 148.0, lower: 64.0 });
+        assert_eq!(r10.xm_ext_for(FitClass::Press), DevPair { upper: 217.0, lower: 94.0 });
+        // 表外：A=210/m=7.5、A=300/m=3.75 → None（不外推）
+        assert!(e_xm_tol_row(7.5, 210.0).is_none());
+        assert!(e_xm_tol_row(3.75, 300.0).is_none());
+        // 两处 dev7 校正：0.75 / 1.00 行不再有 -30/-146（与 0.50/1.25 同行）
+        for m in [0.5, 0.75, 1.0, 1.25] {
+            let r = e_xm_tol_row(m, 10.0).or_else(|| e_xm_tol_row(m, 4.0)).unwrap_or_else(|| {
+                panic!("m={m} 行")
+            });
+            assert_eq!(
+                r.xm_int,
+                DevPair { upper: 37.0, lower: 0.0 },
+                "m={m} xm 内"
+            );
+        }
+        assert_eq!(
+            e_xm_tol_row(0.75, 10.0).unwrap().e_ext_for(FitClass::Loose),
+            DevPair { upper: -60.0, lower: -100.0 }
+        );
+        assert!(
+            e_xm_tol_rows()
+                .iter()
+                .filter(|r| (r.m - 0.75).abs() < 1e-9 || (r.m - 1.0).abs() < 1e-9)
+                .all(|r| r.xm_ext_for(FitClass::Loose) == DevPair { upper: -88.0, lower: -146.0 }),
+            "dev7 校正 -88/-146"
+        );
+        // 逐行 raw 非空（原始读数留档）
+        for r in rows {
+            assert!(!r.raw.is_empty() && r.source == "p29", "{r:?}");
+        }
+    }
+
     /// 标缺行为：6 个公差格一律「—」；表外 (m,A) 的 V/G/ri/z 一律「—」，不外推。
     #[test]
     fn nf_missing_is_dash_and_no_extrapolation() {
-        // ① 公差洞位：全部「—」+ missing 标记（来源可回溯）
+        // ① 锚点公差：6 格全有值（p28 R7/H7 + p29 内花键 E）；不再整片标缺
         let spec = anchor_spec();
         let vals = values(&spec).unwrap();
+        let g = |t: &str| vals.iter().find(|(x, _)| x == t).unwrap().1.clone();
+        assert_eq!(g("大径上差"), "-0.078", "ISO 286 R7（Az=300，280–315 档）");
+        assert_eq!(g("大径下差"), "-0.130");
+        assert_eq!(g("小径上差"), "+0.052", "ISO 286 H7（D=285，250–315 档）");
+        assert_eq!(g("小径下差"), "0");
+        assert_eq!(g("跨棒距上差"), "+0.052", "p29 m=7.5/A=300 内花键 E 上差 +52 µm");
+        assert_eq!(g("跨棒距下差"), "0");
         for tag in TOL_TAGS {
-            let v = vals.iter().find(|(t, _)| t == tag).unwrap().1.clone();
-            assert_eq!(v, MISSING, "{tag} 应如实标缺");
+            assert_ne!(g(tag), MISSING, "{tag} 不应缺");
         }
         let j = NfTableModel {
             card: "NF内花键参数表".into(),
@@ -1256,26 +1745,31 @@ mod tests {
             z: spec.z,
             centering: None,
             root: None,
+            fit: None,
             at: None,
             rot: 0.0,
         }
         .preview_json()
         .unwrap();
         assert_eq!(j["items"].as_array().unwrap().len(), 18);
-        assert_eq!(j["missing"].as_array().unwrap().len(), 6, "只有 6 个公差缺");
-        for it in j["items"].as_array().unwrap() {
-            if TOL_TAGS.contains(&it["tag"].as_str().unwrap()) {
-                assert_eq!(it["value"], MISSING);
-                assert_eq!(it["missing"], true);
-            }
-        }
-        // ② 表外：A=210 m=7.5 不在 p18/p25（表内只有 200/220）→ 公式量照给，表量标缺
+        assert_eq!(j["missing"].as_array().unwrap().len(), 0, "锚点 18 项齐全");
+        assert_eq!(j["fit"], "fixed", "配合缺省固定");
+        assert!(
+            j["readout"].as_array().unwrap().iter().any(|r| r["v"]
+                .as_str()
+                .unwrap()
+                .contains("+52/+0")),
+            "p29 内花键 E 应进读数：{j}"
+        );
+        // ② 表外：A=210 m=7.5 不在 p18/p25（表内只有 200/220）→ 公式量照给，表量/跨棒距公差标缺；
+        //    ISO 286 R7/H7 与 A 无关，D=195/Az=210 仍算得出 → 不连坐。
         let off = NfTableSpec {
             a: 210.0,
             m: 7.5,
             z: None,
             centering: Centering::Outer,
             root: RootStyle::Flat,
+            fit: FitClass::Fixed,
             at: None,
             rot: 0.0,
         };
@@ -1289,6 +1783,7 @@ mod tests {
         assert_eq!(d.ri, None);
         assert!(d.dims_source.contains("不在 p18"));
         assert!(d.check_source.contains("不在 p23–p25"));
+        assert!(d.tol_row.is_none(), "A=210 不在 p29 表 → E 公差标缺（不外推）");
         let vals = values(&off).unwrap();
         let g = |t: &str| vals.iter().find(|(x, _)| x == t).unwrap().1.clone();
         assert_eq!(g("齿数"), MISSING);
@@ -1296,6 +1791,36 @@ mod tests {
         assert_eq!(g("跨棒距G"), MISSING);
         assert_eq!(g("大径Az"), "210");
         assert_eq!(g("小径D"), "195");
+        assert_eq!(g("跨棒距上差"), MISSING, "p29 表外 → 跨棒距公差标缺");
+        assert_eq!(g("跨棒距下差"), MISSING);
+        // ③ 配合类别只影响“配对外花键”读数，不影响内花键自身取值
+        for fit in FitClass::ALL {
+            let mut s = spec.clone();
+            s.fit = fit;
+            let pj = NfTableModel {
+                card: "NF内花键参数表".into(),
+                a: s.a,
+                m: s.m,
+                z: s.z,
+                centering: None,
+                root: None,
+                fit: Some(fit.label().to_string()),
+                at: None,
+                rot: 0.0,
+            }
+            .preview_json()
+            .unwrap();
+            assert_eq!(pj["fit"], fit.id());
+            assert_eq!(pj["items"][16]["value"], "+0.052", "{fit:?} 不影响内花键 E");
+            assert!(
+                pj["readout"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|r| r["k"].as_str().unwrap().contains(fit.label())),
+                "{fit:?} 配对外花键读数应在"
+            );
+        }
     }
 
     /// 报错路径：z 与表值不一致 / z 越界 / 缺 m / 不认识的参数 / 非正数。
@@ -1319,6 +1844,8 @@ mod tests {
         assert!(e.contains("定心方式"), "{e}");
         let e = NfTableSpec::parse("A300 M7.5 根 尖").unwrap_err();
         assert!(e.contains("齿根样式"), "{e}");
+        let e = NfTableSpec::parse("A300 M7.5 配合 抱").unwrap_err();
+        assert!(e.contains("配合类别"), "{e}");
     }
 
     /// CLI 解析：短记法 + 中文键 + at/rot；数字与别名。
@@ -1344,7 +1871,24 @@ mod tests {
         let u = usage();
         assert!(u.contains("A300 M7.5"), "{u}");
         assert!(u.contains("表外"), "{u}");
-        assert!(u.contains("R7/H7"), "{u}");
+        assert!(u.contains("R7") && u.contains("H7"), "{u}");
+        assert!(u.contains("配合"), "{u}");
+        // 配合类别（四个中文名 + 英文 id）
+        for (tok, want) in [
+            ("松动", FitClass::Loose),
+            ("滑动", FitClass::Slide),
+            ("固定", FitClass::Fixed),
+            ("压", FitClass::Press),
+            ("press", FitClass::Press),
+        ] {
+            assert_eq!(FitClass::from_token(tok), Some(want), "{tok}");
+        }
+        assert_eq!(FitClass::from_token("抱"), None);
+        assert_eq!(FitClass::default(), FitClass::Fixed);
+        let s = NfTableSpec::parse("A300 M7.5 Z38 配合 松动").unwrap();
+        assert_eq!(s.fit, FitClass::Loose);
+        let s = NfTableSpec::parse("A300 M7.5 fit slide").unwrap();
+        assert_eq!(s.fit, FitClass::Slide);
     }
 
     /// 文字干涉几何检查（照 GB 花键 `main_values_clear_tolerance_column` 的口径）：
@@ -1380,6 +1924,7 @@ mod tests {
                     z: None,
                     centering: Centering::Outer,
                     root: RootStyle::Flat,
+                    fit: FitClass::Fixed,
                     at: None,
                     rot: 0.0,
                 });
@@ -1396,6 +1941,7 @@ mod tests {
             z: None,
             centering: Centering::Outer,
             root: RootStyle::Flat,
+            fit: FitClass::Fixed,
             at: None,
             rot: 0.0,
         });
@@ -1503,6 +2049,7 @@ mod tests {
             z: Some(38),
             centering: None,
             root: None,
+            fit: None,
             at: Some([12.0, 34.0]),
             rot: 0.0,
         };
