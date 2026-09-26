@@ -1198,8 +1198,48 @@ pub fn markdown_table(spec: &DinTableSpec) -> Result<String, String> {
 // ══════════════════════════════════════════════════════════════════════════
 
 /// DIN 卡的表单字段（表驱动 GUI 骨架；Bild 6 示例作默认）。
+/// DIN 卡的表达式策略（表驱动；体系要求 SPLINE、α=30、直齿；变位进 d_B 公式；
+/// 本卡 Nabe/Welle 两栏都做，方向不收窄）。
+pub const EXPR_POLICY: crate::card_expr::ExprPolicy = crate::card_expr::ExprPolicy {
+    card: "DIN 花键参数表",
+    mark: crate::card_expr::ExprMark::Spline,
+    alphas: &[30.0],
+    spur: true,
+    allow_shift: true,
+    map: &[
+        crate::card_expr::ExprRule {
+            target: "d_b",
+            label: "基准直径 d_B",
+            op: crate::card_expr::ExprOp::DinBaseDB,
+        },
+        crate::card_expr::ExprRule {
+            target: "m",
+            label: "模数 m",
+            op: crate::card_expr::ExprOp::Module,
+        },
+        crate::card_expr::ExprRule {
+            target: "z",
+            label: "齿数 z",
+            op: crate::card_expr::ExprOp::Teeth,
+        },
+    ],
+};
+
 pub const FORM: crate::card::CardFormSpec = crate::card::CardFormSpec {
     fields: &[
+        crate::card::CardFieldSpec {
+            key: "expr",
+            label: "齿形表达式（九字段；可从轴/齿轮生成器 GUI 复制）",
+            kind: "textarea",
+            placeholder: "SPLINE IN M3 Z38 ALPHA30 X0.45 BETA0 H30",
+            default: "",
+            title: "九字段统一齿形表达式（MARK KIND M Z ALPHA X DA DF BETA H）；粘贴后自动反解 d_B=m(z+1.1+2x)、m、z；DIN 5480 压力角恒 30°",
+            options: &[],
+            options_from: "",
+            min: 0.0,
+            step: 0.0,
+            required: false,
+        },
         crate::card::CardFieldSpec { key: "m", label: "模数 m", kind: "number",
             placeholder: "如 3", default: "3",
             title: "DIN 5480-1 模数 m（Bild 6 主参数）", options: &[], options_from: "",
@@ -1249,7 +1289,7 @@ pub const FORM: crate::card::CardFormSpec = crate::card::CardFormSpec {
             title: "Welle 作用齿厚公差显式覆盖（mm）", options: &[], options_from: "",
             min: 0.0, step: 0.0001, required: false },
     ],
-    note: "填 m/z/d_B + N/W 配合 → 缺行可用 e₂ / Ae / As / Tact / Teff 覆盖 → 点「出表」回到图纸放置。",
+    note: "粘九字段表达式（自动反解 d_B/m/z）或直接填 m/z/d_B + N/W 配合 → 缺行可用 e₂ / Ae / As / Tact / Teff 覆盖 → 点「出表」回到图纸放置。",
     missing_note: "Table 7 上段 c1/c2（>400 侧）与 c9（≤12 细档）列映射无实锚 → 「—」；\n                   下段公差表只抽到 6–9 级、模数组 1,75–4 的实锚 → 其余等级/模数组 Tact/Teff 显示「—」；\n                   D_M/M2/M1 无检验表行且非 Bild 6 示例时显示「—」。",
 };
 
@@ -1292,6 +1332,9 @@ pub struct DinTableModel {
     /// 卡类型（GUI 回传；后端按 renderer 分派，这里只记不看）。
     #[serde(default)]
     pub card: String,
+    /// 九字段统一齿形表达式（可空；给了则覆盖 m/z/d_B）。
+    #[serde(default)]
+    pub expr: Option<String>,
     /// 模数 m。
     pub m: f64,
     /// 齿数 z。
@@ -1332,10 +1375,27 @@ impl DinTableModel {
             .map_err(|e| format!("DIN 花键参数表：孔配合「{}」{e}", self.hub.as_deref().unwrap_or("9H")))?;
         let shaft = parse_fit_token(self.shaft.as_deref().unwrap_or("8f"), false)
             .map_err(|e| format!("DIN 花键参数表：轴配合「{}」{e}", self.shaft.as_deref().unwrap_or("8f")))?;
+        let (m, z, d_b) = match self.expr.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+            Some(e) => {
+                let r = crate::card_expr::resolve(&EXPR_POLICY, e, None)?;
+                (
+                    r.value("m")
+                        .ok_or_else(|| "DIN 花键参数表：表达式映射表缺 m（内部错误）".to_string())?,
+                    r.value("z")
+                        .ok_or_else(|| "DIN 花键参数表：表达式映射表缺 z（内部错误）".to_string())?
+                        as u32,
+                    r.value("d_b")
+                        .ok_or_else(|| {
+                            "DIN 花键参数表：表达式映射表缺 d_B（内部错误）".to_string()
+                        })?,
+                )
+            }
+            None => (self.m, self.z, self.d_b),
+        };
         let spec = DinTableSpec {
-            m: self.m,
-            z: self.z,
-            d_b: self.d_b,
+            m,
+            z,
+            d_b,
             hub,
             shaft,
             e2_s1: self.e2,
@@ -1395,10 +1455,23 @@ impl DinTableModel {
             {"k": "轴公差出处", "v": d.tol_shaft_note},
             {"k": "名义表", "v": d.nominal.as_ref().map(|n| n.source.clone()).unwrap_or_else(|| MISSING.to_string())},
         ]);
+        let expr_echo = self
+            .expr
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string);
+        let fields = if expr_echo.is_some() {
+            serde_json::json!({"m": spec.m, "z": spec.z, "d_b": spec.d_b})
+        } else {
+            serde_json::Value::Null
+        };
         Ok(serde_json::json!({
             "ok": true,
             "card": "DIN花键参数表",
             "renderer": "din_table",
+            "expr": expr_echo,
+            "fields": fields,
             "title": format!(
                 "DIN 5480 花键参数表（N{}×{}×{}×{} / W…×{}）",
                 trim3(spec.d_b), trim3(spec.m), spec.z, spec.hub.token(), spec.shaft.token()
@@ -1475,11 +1548,43 @@ impl DinTableModel {
 // ══════════════════════════════════════════════════════════════════════════
 
 /// 命令用法（`OCSMCARD` 报错指路）。
+/// 表达式截取用：DIN 卡选项关键字（`N9H`/`W8f`/`e2`/`ae`/`as`/`tactn`…/`at`/`rot`）。
+/// `BETA0` 不是 `b` 选项（rest 不是数字）；表达式里的 `M3`/`Z38` 在第 7 token 前不判。
+fn is_option_token(t: &str) -> bool {
+    let l = t.to_ascii_lowercase();
+    if t.chars().next().is_some_and(|c| c.is_ascii_digit()) {
+        return true; // `9H` 裸配合 / 裸数字
+    }
+    if matches!(
+        l.as_str(),
+        "at" | "rot" | "旋转" | "内" | "外" | "内花键" | "外花键" | "孔" | "轴" | "m" | "z"
+            | "b" | "db" | "模数" | "齿数" | "基准直径" | "直径" | "e2" | "ae" | "as" | "tactn"
+            | "teffn" | "tactw" | "teffw"
+    ) {
+        return true;
+    }
+    if l.starts_with('n') || l.starts_with('w') {
+        if t[1..].starts_with(|c: char| c.is_ascii_digit()) {
+            return true;
+        }
+    }
+    for p in ["m", "z", "b"] {
+        if let Some(rest) = l.strip_prefix(p) {
+            if rest.chars().next().is_some_and(|c| c.is_ascii_digit()) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 pub fn usage() -> String {
     "智能卡片「DIN花键参数表」用法：\
-     `OCSMCARD DIN花键参数表 M<模数> Z<齿数> B<基准直径> [N<等级><字母>] [W<等级><字母>] \
+     `OCSMCARD DIN花键参数表 <九字段齿形表达式> [N<等级><字母>] [W<等级><字母>] \
      [e2 …] [ae …] [as …] [tactn …] [teffn …] [tactw …] [teffw …] [at x,y] [rot 度]`\
-     （如 `OCSMCARD DIN花键参数表 M3 Z38 B120 N9H W8f`；也可直接给代号 `N 120×3×38×9H W 120×3×38×8f`）。\
+     （如 `OCSMCARD DIN花键参数表 SPLINE IN M3 Z38 ALPHA30 X0.45 BETA0 H30 N9H W8f`；\
+     也可沿用 `M3 Z38 B120 N9H W8f` 或代号 `N 120×3×38×9H W 120×3×38×8f`）。\
+     表达式反解 d_B=m(z+1.1+2x)、m、z（DIN 5480 压力角恒 30°）。\
      版面 = DIN 5480-1:2006 Bild 6 的 13 行 × Nabe/Welle 两栏；孔缺省 9H、轴缺省 8f；\
      Ae/As 取 Table 7（本仓 OCR 入库：100–200 与 50–100 档有实锚，其余按表头阶梯推断），\
      Tact/Teff 取 Table 7 公差锚（6–9 级、模数组 1,75–4）—— 缺口显示「—」，可用 ae/as/e2/tactn/teffn/tactw/teffw 覆盖。"
@@ -1557,6 +1662,14 @@ impl DinTableSpec {
         };
         let mut have = (false, false, false); // m, z, d_b
         let mut pending: Option<bool> = None; // Some(true)=待接孔代号体
+        // 表达式形态：`<九字段表达式> [N9H] [W8f] [e2 …] … [at x,y] [rot 度]`。
+        let mut expr: Option<String> = None;
+        let tokens = if let Some((e, rest)) = crate::card_expr::split_expr(&tokens, is_option_token) {
+            expr = Some(e);
+            rest
+        } else {
+            tokens
+        };
         let mut i = 0usize;
         let need = |i: &mut usize, tokens: &[&str], what: &str| -> Result<String, String> {
             *i += 1;
@@ -1749,14 +1862,48 @@ impl DinTableSpec {
         if pending.is_some() {
             return Err(format!("DIN 花键参数表：`N`/`W` 后缺长度代号（如 `N 120×3×38×9H`）。\n{}", usage()));
         }
-        if !have.0 || !have.1 || !have.2 {
+        if let Some(e) = expr {
+            let r = crate::card_expr::resolve(&EXPR_POLICY, &e, None)?;
+            let em = r.value("m").ok_or_else(|| {
+                "DIN 花键参数表：表达式映射表缺 m（内部错误）".to_string()
+            })?;
+            let ez = r.value("z").ok_or_else(|| {
+                "DIN 花键参数表：表达式映射表缺 z（内部错误）".to_string()
+            })? as u32;
+            let edb = r.value("d_b").ok_or_else(|| {
+                "DIN 花键参数表：表达式映射表缺 d_B（内部错误）".to_string()
+            })?;
+            if have.0 && (spec.m - em).abs() > 1e-9 {
+                return Err(format!(
+                    "DIN 花键参数表：显式 m={} 与表达式反解的 m={} 不一致",
+                    trim3(spec.m),
+                    trim3(em)
+                ));
+            }
+            if have.1 && spec.z != ez {
+                return Err(format!(
+                    "DIN 花键参数表：显式 z={} 与表达式反解的 z={ez} 不一致",
+                    spec.z
+                ));
+            }
+            if have.2 && (spec.d_b - edb).abs() > 1e-3 {
+                return Err(format!(
+                    "DIN 花键参数表：显式 d_B={} 与表达式反解的 d_B={} 不一致",
+                    trim3(spec.d_b),
+                    trim3(edb)
+                ));
+            }
+            spec.m = em;
+            spec.z = ez;
+            spec.d_b = edb;
+        } else if !have.0 || !have.1 || !have.2 {
             let what = match have {
                 (false, false, false) => "模数 m、齿数 z、基准直径 d_B",
                 (false, _, _) => "模数 m",
                 (_, false, _) => "齿数 z",
                 _ => "基准直径 d_B",
             };
-            return Err(format!("DIN 花键参数表：缺 {what}（写法 `M3 Z38 B120` 或代号 `N 120×3×38×9H`）。\n{}", usage()));
+            return Err(format!("DIN 花键参数表：缺 {what}（写法 `M3 Z38 B120` / 代号 `N 120×3×38×9H` / 九字段表达式）。\n{}", usage()));
         }
         derive(&spec)?;
         Ok(spec)
@@ -2158,6 +2305,7 @@ mod tests {
         assert_eq!(ins.attributes[25].value, "125.956");
         let model = DinTableModel {
             card: "DIN花键参数表".into(),
+            expr: None,
             m: 3.0,
             z: 38,
             d_b: 120.0,
@@ -2178,5 +2326,91 @@ mod tests {
         assert!(model.part_meta_json().unwrap().contains("din_table"));
         assert!(model.pending_attrs().unwrap().len() == 26);
         assert!(markdown_table(&spec).unwrap().contains("N槽宽max"));
+    }
+
+    fn expr_model(expr: &str) -> DinTableModel {
+        DinTableModel {
+            card: "DIN花键参数表".into(),
+            expr: Some(expr.into()),
+            m: 0.0,
+            z: 0,
+            d_b: 0.0,
+            hub: None,
+            shaft: None,
+            e2: None,
+            ae: None,
+            as_: None,
+            tact_n: None,
+            teff_n: None,
+            tact_w: None,
+            teff_w: None,
+            at: None,
+            rot: 0.0,
+        }
+    }
+
+    /// ★ 表达式 → 字段 → 卡内值：d_B=m(z+1.1+2x)、m、z；Bild 6 锚点逐项。
+    #[test]
+    fn din_expr_maps_to_base_diameter_and_anchor() {
+        let spec = expr_model("SPLINE IN M3 Z38 ALPHA30 X0.45 DA120 DF114 BETA0 H30")
+            .spec()
+            .unwrap();
+        assert!(near(spec.d_b, 120.0), "d_B={}", spec.d_b);
+        assert!(near(spec.m, 3.0));
+        assert_eq!(spec.z, 38);
+        assert!(is_bild6_example(&spec), "表达式反解 d_B=120 → 走 Bild 6 锚点");
+        let vals = values(&spec).unwrap();
+        let get = |tag: &str| vals.iter().find(|(t, _)| t == tag).unwrap().1.clone();
+        assert!(get("N标记").contains("N120×3×38×9H"), "{}", get("N标记"));
+        assert!(get("W标记").contains("W120×3×38×8f"), "{}", get("W标记"));
+        assert_eq!(get("N槽宽max"), "6.361");
+        assert_eq!(get("W齿厚svmax"), "6.243");
+        // 与旧 M/Z/B 输入同值
+        let old = DinTableSpec::parse("M3 Z38 B120 N9H W8f").unwrap();
+        assert_eq!(values(&old).unwrap(), values(&spec).unwrap());
+        // 预览回填 fields + expr 回显
+        let pj = expr_model("SPLINE IN M3 Z38 ALPHA30 X0.45 DA120 DF114 BETA0 H30")
+            .preview_json()
+            .unwrap();
+        assert!(near(pj["fields"]["d_b"].as_f64().unwrap(), 120.0));
+        assert!(near(pj["fields"]["m"].as_f64().unwrap(), 3.0));
+        assert_eq!(pj["fields"]["z"], 38);
+        assert!(pj["expr"].as_str().unwrap().starts_with("SPLINE IN"));
+    }
+
+    /// CLI：完整行/短表达式（缺 DA/DF/BETA/H）两种都能截；旧写法保留；冲突/体系错误。
+    #[test]
+    fn din_cli_expr_form_and_errors() {
+        let cli = DinTableSpec::parse(
+            "SPLINE IN M3 Z38 ALPHA30 X0.45 DA120 DF114 BETA0 H30 N9H W8f",
+        )
+        .unwrap();
+        assert!(near(cli.d_b, 120.0) && near(cli.m, 3.0) && cli.z == 38);
+        assert_eq!(cli.hub.token(), "9H");
+        assert_eq!(cli.shaft.token(), "8f");
+        // 短表达式：到 X 就结束，后面直接跟 W8f（无 DA/DF/BETA/H）
+        let short = DinTableSpec::parse("SPLINE IN M3 Z38 ALPHA30 X0.45 W8f").unwrap();
+        assert!(near(short.d_b, 120.0));
+        assert_eq!(short.shaft.token(), "8f");
+        // KIND 两向都收（DIN 卡 Nabe/Welle 两栏都做）；外花键 DA/DF 用表值 119.4/113.4
+        let ex = DinTableSpec::parse(
+            "SPLINE EX M3 Z38 ALPHA30 X0.45 DA119.4 DF113.4 BETA0 H30",
+        )
+        .unwrap();
+        assert!(near(ex.d_b, 120.0));
+        // 显式 d_B 与表达式反解不一致 → 报错
+        let e = DinTableSpec::parse(
+            "SPLINE IN M3 Z38 ALPHA30 X0.45 DA120 DF114 BETA0 H30 B100",
+        )
+        .unwrap_err();
+        assert!(e.contains("显式 d_B=100") && e.contains("d_B=120"), "{e}");
+        // α 必须 30
+        let e = DinTableSpec::parse("SPLINE IN M3 Z38 ALPHA20 X0 BETA0 H30").unwrap_err();
+        assert!(e.contains("压力角 20°") && e.contains("α=30"), "{e}");
+        // MARK 体系不符
+        let e = expr_model("GEAR IN M3 Z38 ALPHA30 X0.45 BETA0 H30")
+            .spec()
+            .unwrap_err();
+        assert!(e.contains("MARK") && e.contains("GEAR（齿轮）"), "{e}");
     }
 }

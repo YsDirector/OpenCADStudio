@@ -445,6 +445,16 @@ impl AnsiTableSpec {
             _ => return Err(usage(lang)),
         };
         i += 1;
+        // 表达式形态（用户 2026-09-26）：`内|外 <九字段表达式>`（MARK KIND M Z ALPHA X DA DF BETA H）。
+        // 表达式从 `GEAR`/`SPLINE` 截到下一个本卡选项关键字；`P16 Z20` 旧写法保留兼容，
+        // 两者都给时以表达式为准，不一致则报错。
+        let mut expr: Option<String> = None;
+        let tokens = if let Some((e, rest)) = crate::card_expr::split_expr(&tokens, is_option_token) {
+            expr = Some(e);
+            rest
+        } else {
+            tokens
+        };
         let mut p: Option<f64> = None;
         let mut z: Option<u32> = None;
         let mut profile: Option<&'static str> = None;
@@ -518,22 +528,52 @@ impl AnsiTableSpec {
             }
             i += 1;
         }
-        let p = p.ok_or_else(|| {
-            format!(
-                "ANSI 花键参数表：缺径节 P（写法 `P16` / `P 16/32` / `径节 16`）。\n{}",
-                usage(lang)
-            )
-        })?;
-        let z = z.ok_or_else(|| {
-            format!(
-                "ANSI 花键参数表：缺齿数 Z（写法 `Z20` / `齿数 20`）。\n{}",
-                usage(lang)
-            )
-        })?;
+        // 表达式 > 旧 P/Z；显式值与表达式反解不一致 → 报错（帮排错）。
+        let (p, z, profile) = match expr {
+            Some(e) => {
+                let (ep, ez, prof) = expr_inputs(&e, side, profile)?;
+                if let Some(given) = p {
+                    if (given - ep).abs() > 1e-9 {
+                        return Err(format!(
+                            "ANSI 花键参数表：显式径节 P={} 与表达式反解的 P/Ps={} 不一致",
+                            pair_label(given),
+                            pair_label(ep)
+                        ));
+                    }
+                }
+                if let Some(given) = z {
+                    if given != ez {
+                        return Err(format!(
+                            "ANSI 花键参数表：显式齿数 N={given} 与表达式反解的 N={ez} 不一致"
+                        ));
+                    }
+                }
+                (ep, ez, prof)
+            }
+            None => {
+                let p = p.ok_or_else(|| {
+                    format!(
+                        "ANSI 花键参数表：缺径节 P（写法 `P16` / `P 16/32` / `径节 16`，或直接给九字段表达式）。\n{}",
+                        usage(lang)
+                    )
+                })?;
+                let z = z.ok_or_else(|| {
+                    format!(
+                        "ANSI 花键参数表：缺齿数 Z（写法 `Z20` / `齿数 20`；表达式反解时无需再给）。\n{}",
+                        usage(lang)
+                    )
+                })?;
+                (
+                    p,
+                    z,
+                    profile.unwrap_or(crate::invol_spline::ANSI_DEFAULT_PROFILE),
+                )
+            }
+        };
         let spec = AnsiTableSpec {
             side,
             lang,
-            profile: profile.unwrap_or(crate::invol_spline::ANSI_DEFAULT_PROFILE),
+            profile,
             p,
             z,
             at,
@@ -544,12 +584,105 @@ impl AnsiTableSpec {
     }
 }
 
+/// 表达式截取用：token 是不是 ANSI 卡的选项关键字（`P16`/`Z20`/`profile`/`at`/`rot`…）。
+/// 只在表达式第 7 个 token 之后调用，所以不会误判 `M3`/`Z20`/`ALPHA30`/`X0`。
+fn is_option_token(t: &str) -> bool {
+    let l = t.to_ascii_lowercase();
+    if t.chars().next().is_some_and(|c| c.is_ascii_digit()) {
+        return true; // 裸数字/配合 token（稳健兜底）
+    }
+    if matches!(
+        l.as_str(),
+        "at" | "rot" | "旋转" | "profile" | "齿廓" | "preset" | "pitch" | "径节" | "齿数"
+    ) {
+        return true;
+    }
+    if l == "p" || l == "z" {
+        return true;
+    }
+    if let Some(rest) = l.strip_prefix('p').or_else(|| l.strip_prefix('z')) {
+        return rest.chars().next().is_some_and(|c| c.is_ascii_digit());
+    }
+    false
+}
+
 fn strip_prefix_ci<'a>(t: &'a str, p: &str) -> Option<&'a str> {
     if t.len() >= p.len() && t[..p.len()].eq_ignore_ascii_case(p) {
         Some(&t[p.len()..])
     } else {
         None
     }
+}
+
+/// ANSI 卡的表达式策略（表驱动；体系要求 SPLINE，α 只收 30/37.5/45，直齿，不收变位）。
+pub const EXPR_POLICY: crate::card_expr::ExprPolicy = crate::card_expr::ExprPolicy {
+    card: "ANSI 花键参数表",
+    mark: crate::card_expr::ExprMark::Spline,
+    alphas: &[30.0, 37.5, 45.0],
+    spur: true,
+    allow_shift: false,
+    map: &[
+        crate::card_expr::ExprRule {
+            target: "p",
+            label: "径节 P/Ps",
+            op: crate::card_expr::ExprOp::Pitch,
+        },
+        crate::card_expr::ExprRule {
+            target: "z",
+            label: "齿数 N",
+            op: crate::card_expr::ExprOp::Teeth,
+        },
+    ],
+};
+
+/// 齿廓预设 → α（Table 2 五列）。
+fn profile_alpha(profile: &str) -> Option<f64> {
+    crate::invol_spline::preset(SplineStd::ANSI, profile)
+        .ok()
+        .map(|p| p.alpha_deg)
+}
+
+/// α → 默认齿廓：优先列 A（30° 平齿根齿侧），否则 Table 2 里同 α 的第一列。
+pub fn default_profile_for_alpha(alpha: f64) -> Result<&'static str, String> {
+    use crate::invol_spline::{ANSI_DEFAULT_PROFILE, ANSI_PRESETS};
+    if let Some(p) = ANSI_PRESETS
+        .iter()
+        .find(|p| (p.alpha_deg - alpha).abs() < 1e-9 && p.profile == ANSI_DEFAULT_PROFILE)
+    {
+        return Ok(p.profile);
+    }
+    ANSI_PRESETS
+        .iter()
+        .find(|p| (p.alpha_deg - alpha).abs() < 1e-9)
+        .map(|p| p.profile)
+        .ok_or_else(|| {
+            format!(
+                "ANSI 花键参数表：没有压力角 {}° 的 Table 2 齿廓（本仓仅 30/37.5/45）",
+                crate::partgen_kit::trim(alpha)
+            )
+        })
+}
+
+/// 九字段表达式 → `(P, N, profile)`：方向必查（KIND 与卡片方向一致）；
+/// 齿廓保持「当前选择里同 α 的那一列」，否则按 α 取默认列。
+pub fn expr_inputs(
+    expr: &str,
+    side: SplineSide,
+    current: Option<&'static str>,
+) -> Result<(f64, u32, &'static str), String> {
+    let r = crate::card_expr::resolve(&EXPR_POLICY, expr, Some(side == SplineSide::Internal))?;
+    let p = r.value("p").ok_or_else(|| {
+        "ANSI 花键参数表：表达式映射表缺径节 P（内部错误）".to_string()
+    })?;
+    let z = r.value("z").ok_or_else(|| {
+        "ANSI 花键参数表：表达式映射表缺齿数 N（内部错误）".to_string()
+    })? as u32;
+    let alpha = r.fields.alpha_deg();
+    let profile = match current {
+        Some(t) if profile_alpha(t).is_some_and(|a| (a - alpha).abs() < 1e-9) => t,
+        _ => default_profile_for_alpha(alpha)?,
+    };
+    Ok((p, z, profile))
 }
 
 /// 齿廓 token → 预设全名（收五列代号 `ANSI30R` 与全名 `30圆齿根齿侧`）。
@@ -643,8 +776,10 @@ fn usage(lang: AnsiLang) -> String {
         AnsiLang::En => "ANSI花键参数表_英文",
     };
     format!(
-        "智能卡片「{card}」用法：`OCSMCARD {card} 内|外 P<径节> Z<齿数> [profile 齿廓] [at x,y] [rot 度]`\
-         （如 `OCSMCARD {card} 内 P16 Z20`）。径节写法 `P16` / `P 16/32` / `径节 16`；\
+        "智能卡片「{card}」用法：`OCSMCARD {card} 内|外 <九字段齿形表达式> [profile 齿廓] [at x,y] [rot 度]`\
+         （如 `OCSMCARD {card} 内 SPLINE IN M1.5875 Z20 ALPHA30 X0 BETA0 H30`；\
+         也可沿用 `P<径节> Z<齿数>` 写法，如 `OCSMCARD {card} 内 P16 Z20`）。\
+         表达式反解 P=25.4/m、N=z，齿廓按 α 保持同角列或选默认列（α 只收 30/37.5/45，直齿、不收变位）；\
          齿廓五列：`ANSI30P`/`ANSI30PM`/`ANSI30R`/`ANSI375R`/`ANSI45R`（缺省列 A）；\
          ANSI B92.1 的配合/公差/量棒/公法线表本仓未收 —— 相关格显示「—」，不臆造。"
     )
@@ -721,6 +856,19 @@ pub fn columns(side: SplineSide) -> &'static [AnsiColumnSpec] {
 pub const FORM: crate::card::CardFormSpec = crate::card::CardFormSpec {
     fields: &[
         crate::card::CardFieldSpec {
+            key: "expr",
+            label: "齿形表达式（九字段；可从轴/齿轮生成器 GUI 复制）",
+            kind: "textarea",
+            placeholder: "SPLINE IN M1.5875 Z20 ALPHA30 X0 BETA0 H30",
+            default: "",
+            title: "九字段统一齿形表达式（MARK KIND M Z ALPHA X DA DF BETA H）；粘贴后自动反解径节 P/齿数 N/齿廓（齿廓按 α 保持同角列或选默认列）",
+            options: &[],
+            options_from: "",
+            min: 0.0,
+            step: 0.0,
+            required: false,
+        },
+        crate::card::CardFieldSpec {
             key: "side",
             label: "方向",
             kind: "select",
@@ -773,7 +921,7 @@ pub const FORM: crate::card::CardFormSpec = crate::card::CardFormSpec {
             required: true,
         },
     ],
-    note: "选方向/齿廓 → 填径节 P 与齿数 N → 点「出表」回到图纸放置。",
+    note: "粘九字段表达式（自动反解 P/N/齿廓）或直接填 P/N → 选方向/齿廓 → 点「出表」回到图纸放置。",
     missing_note: "ANSI B92.1 配合/公差（Table 4/5）、量棒检验（p30–p32）与公法线/跨测表本仓未收\
                    —— 这些格显示「—」，不臆造。",
 };
@@ -830,6 +978,9 @@ pub struct AnsiTableModel {
     /// 语种（`cn`/`en`；由卡类型决定，GUI 不必填）。
     #[serde(default)]
     pub lang: Option<String>,
+    /// 九字段统一齿形表达式（可空；给了则覆盖 P/Z，齿廓按 α 保持/选默认列）。
+    #[serde(default)]
+    pub expr: Option<String>,
     /// 方向：`int`/`ext`。
     pub side: String,
     /// 径节 P。
@@ -867,16 +1018,24 @@ impl AnsiTableModel {
     pub fn spec(&self) -> Result<AnsiTableSpec, String> {
         let side = self.side()?;
         let lang = self.lang();
-        let profile = match self.profile.as_deref().map(str::trim) {
-            None | Some("") => crate::invol_spline::ANSI_DEFAULT_PROFILE,
-            Some(t) => resolve_profile(t)?,
+        let wanted = match self.profile.as_deref().map(str::trim) {
+            None | Some("") => None,
+            Some(t) => Some(resolve_profile(t)?),
+        };
+        let (p, z, profile) = match self.expr.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+            Some(e) => expr_inputs(e, side, wanted)?,
+            None => (
+                self.p,
+                self.z,
+                wanted.unwrap_or(crate::invol_spline::ANSI_DEFAULT_PROFILE),
+            ),
         };
         let spec = AnsiTableSpec {
             side,
             lang,
             profile,
-            p: self.p,
-            z: self.z,
+            p,
+            z,
             at: self.at,
             rot: self.rot,
         };
@@ -917,6 +1076,18 @@ impl AnsiTableModel {
             {"k": "节圆直径 D", "v": fmt_mm(q.d())},
             {"k": "基圆直径 Db", "v": fmt_mm(q.db())},
         ]);
+        // 表达式反解回填：只带本卡字段（p/z/profile）；无表达式 = null（页面不动控件）。
+        let expr_echo = self
+            .expr
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string);
+        let fields = if expr_echo.is_some() {
+            serde_json::json!({"p": spec.p, "z": spec.z, "profile": spec.profile})
+        } else {
+            serde_json::Value::Null
+        };
         Ok(serde_json::json!({
             "ok": true,
             "card": match spec.lang {
@@ -928,6 +1099,8 @@ impl AnsiTableModel {
                 AnsiLang::En => "ansi_table_en",
             },
             "title": format!("ANSI B92.1 {side_label}参数表（{}，{side_label}）", spec.lang.label()),
+            "expr": expr_echo,
+            "fields": fields,
             "side": match spec.side { SplineSide::Internal => "int", SplineSide::External => "ext" },
             "profile": spec.profile,
             "readout": readout,
@@ -1134,6 +1307,7 @@ mod tests {
     fn ansi_values_from_engine_and_missing() {
         let int = AnsiTableModel {
             card: "ANSI花键参数表_中文".into(),
+            expr: None,
             lang: None,
             side: "int".into(),
             p: 16.0,
@@ -1174,6 +1348,7 @@ mod tests {
         // 纯英文版：类型值用英文
         let mut en = AnsiTableModel {
             card: "ANSI花键参数表_英文".into(),
+            expr: None,
             lang: Some("en".into()),
             side: "int".into(),
             p: 16.0,
@@ -1190,6 +1365,7 @@ mod tests {
         // 外花键：Do/Dre/DFe 口径
         let ext = AnsiTableModel {
             card: "ANSI花键参数表_中文".into(),
+            expr: None,
             lang: Some("cn".into()),
             side: "ext".into(),
             p: 16.0,
@@ -1319,6 +1495,7 @@ mod tests {
         let cli = AnsiTableSpec::parse(AnsiLang::Cn, "内 P16 Z20").unwrap();
         let model = AnsiTableModel {
             card: "ANSI花键参数表_中文".into(),
+            expr: None,
             lang: Some("cn".into()),
             side: "int".into(),
             p: 16.0,
@@ -1333,5 +1510,130 @@ mod tests {
         let md = markdown_table(&cli).unwrap();
         assert!(md.contains("| 花键类型 | 30°平齿根齿侧配合 |"));
         assert!(md.lines().count() >= 19);
+    }
+
+    fn expr_model(side: &str, expr: &str, profile: Option<&str>) -> AnsiTableModel {
+        AnsiTableModel {
+            card: "ANSI花键参数表_中文".into(),
+            expr: Some(expr.into()),
+            lang: None,
+            side: side.into(),
+            p: 0.0,
+            z: 0,
+            profile: profile.map(str::to_string),
+            at: None,
+            rot: 0.0,
+        }
+    }
+
+    /// ★ 表达式 → 字段 → 卡内值：P=25.4/m、N=z、齿廓按 α；同 α 的用户选择保持。
+    #[test]
+    fn ansi_expr_maps_pitch_teeth_and_profile() {
+        // P16 ⇔ m=25.4/16=1.5875；α30 → 列 A（30°平齿根齿侧）
+        let spec = expr_model("int", "SPLINE IN M1.5875 Z20 ALPHA30 X0 BETA0 H30", None)
+            .spec()
+            .unwrap();
+        assert!(near(spec.p, 16.0), "P=25.4/m：{}", spec.p);
+        assert_eq!(spec.z, 20);
+        assert_eq!(spec.profile, crate::invol_spline::ANSI_DEFAULT_PROFILE);
+        let vals = values(&spec).unwrap();
+        let get = |tag: &str| vals.iter().find(|(t, _)| t == tag).unwrap().1.clone();
+        assert_eq!(get("齿数"), "20");
+        assert_eq!(get("径节"), "16/32");
+        assert_eq!(get("压力角"), "30°");
+        // 同 α 的用户选择不被换列
+        let keep = expr_model(
+            "int",
+            "SPLINE IN M1.5875 Z20 ALPHA30 X0 BETA0 H30",
+            Some("ANSI30圆齿根齿侧"),
+        )
+        .spec()
+        .unwrap();
+        assert_eq!(keep.profile, "ANSI30圆齿根齿侧");
+        // α=45 → 45° 圆齿根齿侧（外花键）
+        let a45 = expr_model("ext", "SPLINE EX M1.5875 Z20 ALPHA45 X0 BETA0 H30", None)
+            .spec()
+            .unwrap();
+        assert_eq!(a45.profile, "ANSI45圆齿根齿侧");
+        // α=37.5 → 37.5° 圆齿根齿侧
+        let a375 = expr_model("ext", "SPLINE EX M1.5875 Z20 ALPHA37.5 X0 BETA0 H30", None)
+            .spec()
+            .unwrap();
+        assert_eq!(a375.profile, "ANSI37.5圆齿根齿侧");
+        // 预览 JSON 回填 fields（GUI 自动回填用）
+        let pj = expr_model("int", "SPLINE IN M1.5875 Z20 ALPHA30 X0 BETA0 H30", None)
+            .preview_json()
+            .unwrap();
+        assert!(near(pj["fields"]["p"].as_f64().unwrap(), 16.0));
+        assert_eq!(pj["fields"]["z"], 20);
+        assert_eq!(pj["fields"]["profile"], crate::invol_spline::ANSI_DEFAULT_PROFILE);
+        assert!(pj["expr"].as_str().unwrap().starts_with("SPLINE IN"));
+    }
+
+    /// 表达式错误路径：方向/体系/α/变位/系列/缺失。
+    #[test]
+    fn ansi_expr_error_paths() {
+        // KIND 与卡片方向不一致（照 GB 卡文案）
+        let e = expr_model("int", "SPLINE EX M1.5875 Z20 ALPHA30 X0 BETA0 H30", None)
+            .spec()
+            .unwrap_err();
+        assert!(e.contains("KIND") && e.contains("EX（外）") && e.contains("「内」"), "{e}");
+        // MARK 体系不符
+        let e = expr_model("int", "GEAR IN M1.5875 Z20 ALPHA30 X0 BETA0 H30", None)
+            .spec()
+            .unwrap_err();
+        assert!(e.contains("MARK") && e.contains("GEAR（齿轮）"), "{e}");
+        // α 不在 30/37.5/45
+        let e = expr_model("int", "SPLINE IN M3 Z20 ALPHA20 X0 BETA0 H30", None)
+            .spec()
+            .unwrap_err();
+        assert!(e.contains("压力角 20°") && e.contains("30/37.5/45"), "{e}");
+        // ANSI 不收变位
+        let e = expr_model("int", "SPLINE IN M1.5875 Z20 ALPHA30 X0.4 BETA0 H30", None)
+            .spec()
+            .unwrap_err();
+        assert!(e.contains("变位 X=0.4"), "{e}");
+        // 径节系列外（m=3 → P=8.4667）
+        let e = expr_model("int", "SPLINE IN M3 Z20 ALPHA30 X0 BETA0 H30", None)
+            .spec()
+            .unwrap_err();
+        assert!(e.contains("不在标准系列") || e.contains("径节"), "{e}");
+        // 缺表达式且缺 P
+        let e = AnsiTableModel {
+            card: "ANSI花键参数表_中文".into(),
+            expr: None,
+            lang: None,
+            side: "int".into(),
+            p: 0.0,
+            z: 20,
+            profile: None,
+            at: None,
+            rot: 0.0,
+        }
+        .spec()
+        .unwrap_err();
+        assert!(e.contains("P"), "{e}");
+    }
+
+    /// CLI 表达式形态：与模型同值；旧 P/Z 保留；显式冲突报错。
+    #[test]
+    fn ansi_cli_expr_form() {
+        let expr = "内 SPLINE IN M1.5875 Z20 ALPHA30 X0 BETA0 H30";
+        let cli = AnsiTableSpec::parse(AnsiLang::Cn, expr).unwrap();
+        assert!(near(cli.p, 16.0) && cli.z == 20);
+        assert_eq!(cli.profile, crate::invol_spline::ANSI_DEFAULT_PROFILE);
+        let cli_en = AnsiTableSpec::parse(AnsiLang::En, "外 SPLINE EX M1.5875 Z20 ALPHA45 X0 BETA0 H30").unwrap();
+        assert_eq!(cli_en.side, External);
+        assert_eq!(cli_en.profile, "ANSI45圆齿根齿侧");
+        // 旧写法不受影响
+        let old = AnsiTableSpec::parse(AnsiLang::Cn, "内 P16 Z20").unwrap();
+        assert_eq!(values(&cli).unwrap(), values(&old).unwrap());
+        // 表达式与显式 P/Z 同值时允许；不同值 → 报错
+        assert!(AnsiTableSpec::parse(AnsiLang::Cn, "内 SPLINE IN M1.5875 Z20 ALPHA30 X0 BETA0 H30 P16").is_ok());
+        let e = AnsiTableSpec::parse(AnsiLang::Cn, "内 SPLINE IN M1.5875 Z20 ALPHA30 X0 BETA0 H30 Z22").unwrap_err();
+        assert!(e.contains("显式齿数 N=22") && e.contains("N=20"), "{e}");
+        // 表达式里有不认识的 token → 指路解析错误
+        let e = AnsiTableSpec::parse(AnsiLang::Cn, "内 SPLINE IN M1.5875 Z20 ALPHA30 X0 bogus").unwrap_err();
+        assert!(e.contains("无法解析"), "{e}");
     }
 }

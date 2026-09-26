@@ -529,23 +529,40 @@ async function refreshCard() {
     return;
   }
   const seq = ocsmSeq();
+  const exprCtl = FORM_CTL.get('expr');
+  const exprSent = exprCtl ? String(exprCtl.value || '').trim() : '';
   const r = await fetchApi('/api/card_preview', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(currentCardModel()),
   }, '/api/card_preview');
   if (!r.ok) return;
-  renderCardPreview(r.data);
+  // 过期响应守卫：表达式在请求期间被改动 → 这次结果作废（不覆盖新输入）。
+  const exprNow = exprCtl ? String(exprCtl.value || '').trim() : '';
+  if (exprNow !== exprSent) return;
+  renderCardPreview(r.data, exprSent);
   ocsmClearStatus(seq);
 }
 
 // 通用卡片读数（readout 行 + 项列表；公式/来源仍进 title=）。
-function renderCardPreview(d) {
+function renderCardPreview(d, exprSent) {
   const rows = (d.readout || []).map((line) =>
     `<div>${esc(line.k)}　<b>${esc(line.v)}</b></div>`);
   el("cardReadout").innerHTML = rows.join("");
   renderItems(d.items);
   if (d.missing_note) el("items").title = d.missing_note;
+  // 表达式反解 → 回填本卡表单字段（后端只在本卡带 expr 时回 fields + 表达式回显）；
+  // 直接改控件值，不派发 input 事件 → 不会触发预览风暴；正在输入的控件不抢。
+  const echo = d.expr == null ? '' : String(d.expr).trim();
+  if (d.fields && echo && exprSent && exprSent === echo) {
+    for (const key of Object.keys(d.fields)) {
+      const c = FORM_CTL.get(key);
+      if (!c || document.activeElement === c) continue;
+      const v = d.fields[key];
+      const s = (v === null || v === undefined) ? '' : String(v);
+      if (String(c.value) !== s) c.value = s;
+    }
+  }
 }
 
 function schedulePreview() {

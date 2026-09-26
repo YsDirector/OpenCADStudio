@@ -774,26 +774,20 @@ pub struct GearTableModel {
     pub rot: f64,
 }
 
-/// 九字段表达式 → 齿形段（**复用 `shaft::parse_program`**；报错前缀换成本卡）。
+/// 齿轮卡的表达式策略（表驱动；MARK 必须 `GEAR`；方向由表达式 `IN/EX` 决定；
+/// 允许斜齿与变位；本卡输入就是表达式本身，无回填字段）。
+pub const EXPR_POLICY: crate::card_expr::ExprPolicy = crate::card_expr::ExprPolicy {
+    card: "齿轮参数表",
+    mark: crate::card_expr::ExprMark::Gear,
+    alphas: &[],
+    spur: false,
+    allow_shift: true,
+    map: &[],
+};
+
+/// 九字段表达式 → 齿形段（**复用 `spline_table::parse_gear_expr` 唯一解析器**；报错前缀 = 本卡）。
 pub fn parse_expr_gear(expr: &str) -> Result<crate::shaft::Gear, String> {
-    if expr.trim().is_empty() {
-        return Err(
-            "齿轮参数表：缺九字段齿形表达式（形如 `GEAR EX M3 Z20 ALPHA20 X0 DA66 DF52.5 BETA0 H30`；\
-             轴/齿轮生成器 GUI 可直接复制）"
-                .to_string(),
-        );
-    }
-    let program = crate::shaft::parse_program(expr)
-        .map_err(|e| format!("齿轮参数表：齿形表达式无法解析：{e}"))?;
-    if program.segments.len() != 1 {
-        return Err(format!(
-            "齿轮参数表：表达式应只有一段齿形（收到 {} 段）——请只粘生成器复制的那一行齿形表达式",
-            program.segments.len()
-        ));
-    }
-    program.segments[0].gear.ok_or_else(|| {
-        "齿轮参数表：表达式里没有齿形段（应以 `GEAR`/`SPLINE` + M/Z/ALPHA… 开头）".to_string()
-    })
+    crate::spline_table::parse_gear_expr(expr, "齿轮参数表")
 }
 
 impl GearTableModel {
@@ -809,8 +803,8 @@ impl GearTableModel {
                 return Err(format!("齿轮参数表：中心距 center={a} 必须是正数"));
             }
         }
-        let g = parse_expr_gear(&self.expr)?;
-        let params = params_from_gear(&g)?;
+        let r = crate::card_expr::resolve(&EXPR_POLICY, &self.expr, None)?;
+        let params = params_from_gear(&r.fields.gear)?;
         Ok(GearTableSpec {
             expr: self.expr.trim().to_string(),
             params,
@@ -1357,5 +1351,15 @@ mod tests {
         let md = markdown_table(&cli).unwrap();
         assert!(md.contains("| 公法线 | 27.69 |"));
         assert!(md.lines().count() >= 21);
+    }
+
+    /// 体系自洽：花键表达式（SPLINE MARK）不得进齿轮卡；GEAR 照旧。
+    #[test]
+    fn gear_expr_mark_must_be_gear() {
+        let mut m = model();
+        m.expr = "SPLINE EX M3 Z20 ALPHA30 X0 DA63 DF54.6 BETA0 H30".into();
+        let e = m.spec().unwrap_err();
+        assert!(e.contains("MARK") && e.contains("SPLINE（花键）"), "{e}");
+        assert!(e.contains("齿轮参数表"), "{e}");
     }
 }

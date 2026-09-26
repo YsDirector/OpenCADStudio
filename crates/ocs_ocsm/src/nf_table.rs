@@ -923,8 +923,47 @@ pub const NF_COLUMNS: &[NfColumnSpec] = &[
 ];
 
 /// NF 内花键卡的表单字段（表驱动 GUI 骨架）。
+/// NF 卡的表达式策略（表驱动；体系要求 SPLINE、方向恒内、α=20、直齿；变位进 A 公式）。
+pub const EXPR_POLICY: crate::card_expr::ExprPolicy = crate::card_expr::ExprPolicy {
+    card: "NF 内花键参数表",
+    mark: crate::card_expr::ExprMark::Spline,
+    alphas: &[20.0],
+    spur: true,
+    allow_shift: true,
+    map: &[
+        crate::card_expr::ExprRule {
+            target: "a",
+            label: "公称直径 A",
+            op: crate::card_expr::ExprOp::NfBaseA,
+        },
+        crate::card_expr::ExprRule {
+            target: "m",
+            label: "模数 m",
+            op: crate::card_expr::ExprOp::Module,
+        },
+        crate::card_expr::ExprRule {
+            target: "z",
+            label: "齿数 z",
+            op: crate::card_expr::ExprOp::Teeth,
+        },
+    ],
+};
+
 pub const FORM: crate::card::CardFormSpec = crate::card::CardFormSpec {
     fields: &[
+        crate::card::CardFieldSpec {
+            key: "expr",
+            label: "齿形表达式（九字段；可从轴/齿轮生成器 GUI 复制）",
+            kind: "textarea",
+            placeholder: "SPLINE IN M7.5 Z38 ALPHA20 X0.8 BETA0 H30",
+            default: "",
+            title: "九字段统一齿形表达式（MARK KIND M Z ALPHA X DA DF BETA H）；粘贴后自动反解 A=m(z+0.4+2x)、m、z；NF 压力角恒 20°",
+            options: &[],
+            options_from: "",
+            min: 0.0,
+            step: 0.0,
+            required: false,
+        },
         crate::card::CardFieldSpec {
             key: "a",
             label: "公称直径 A",
@@ -1009,7 +1048,7 @@ pub const FORM: crate::card::CardFormSpec = crate::card::CardFormSpec {
             required: false,
         },
     ],
-    note: "填 A/m（z 选填核对）→ 选定心/齿根/配合 → 点「出表」回到图纸放置。\
+    note: "粘九字段表达式（自动反解 A/m/z）或直接填 A/m（z 选填核对）→ 选定心/齿根/配合 → 点「出表」回到图纸放置。\
            公差：大径 R7 / 小径 H7（p28）+ 跨棒距 = p29 内花键 E 偏差。",
     missing_note: "(m,A) 不在 p29 或 ISO 档缺时对应公差格显示「—」，不外推；\
                    V/V1/G/G1 与 ri 只取 p23–p25 / p22 表值，表外显示「—」。",
@@ -1057,6 +1096,9 @@ pub struct NfTableModel {
     /// 卡类型（GUI 回传；后端按 renderer 分派，这里只记不看）。
     #[serde(default)]
     pub card: String,
+    /// 九字段统一齿形表达式（可空；给了则覆盖 A/m/z）。
+    #[serde(default)]
+    pub expr: Option<String>,
     /// 公称直径 `A`。
     pub a: f64,
     /// 模数 `m`。
@@ -1101,10 +1143,28 @@ impl NfTableModel {
                 format!("NF 内花键参数表：配合类别「{t}」非法（可用 松动 / 滑动 / 固定 / 压）")
             })?,
         };
+        let (a, m, z) = match self.expr.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+            Some(e) => {
+                let r = crate::card_expr::resolve(&EXPR_POLICY, e, Some(true))?;
+                (
+                    r.value("a")
+                        .ok_or_else(|| "NF 内花键参数表：表达式映射表缺 A（内部错误）".to_string())?,
+                    r.value("m")
+                        .ok_or_else(|| "NF 内花键参数表：表达式映射表缺 m（内部错误）".to_string())?,
+                    Some(
+                        r.value("z")
+                            .ok_or_else(|| {
+                                "NF 内花键参数表：表达式映射表缺 z（内部错误）".to_string()
+                            })? as u32,
+                    ),
+                )
+            }
+            None => (self.a, self.m, self.z),
+        };
         let spec = NfTableSpec {
-            a: self.a,
-            m: self.m,
-            z: self.z,
+            a,
+            m,
+            z,
             centering,
             root,
             fit,
@@ -1178,10 +1238,27 @@ impl NfTableModel {
             {"k": "p22 行", "v": d.detail_source},
             {"k": "p25 行", "v": d.check_source},
         ]);
+        let expr_echo = self
+            .expr
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string);
+        let fields = if expr_echo.is_some() {
+            serde_json::json!({
+                "a": spec.a,
+                "m": spec.m,
+                "z": spec.z,
+            })
+        } else {
+            serde_json::Value::Null
+        };
         Ok(serde_json::json!({
             "ok": true,
             "card": "NF内花键参数表",
             "renderer": "nf_table",
+            "expr": expr_echo,
+            "fields": fields,
             "title": format!(
                 "NF E22-141 内花键参数表（A={} m={} z={}，{}配合）",
                 fmt_mm(spec.a),
@@ -1264,11 +1341,40 @@ impl NfTableModel {
 }
 
 /// 命令用法（`OCSMCARD` 报错指路）。
+/// 表达式截取用：NF 卡选项关键字（`A300`/`M7.5`/`Z38`/`中心`/`根`/`配合`/`at`/`rot`…）。
+/// 只在表达式第 7 个 token 之后调用（`M7.5`/`Z38` 在表达式里不会被误判）。
+fn is_option_token(t: &str) -> bool {
+    let l = t.to_ascii_lowercase();
+    if t.chars().next().is_some_and(|c| c.is_ascii_digit()) {
+        return true;
+    }
+    if matches!(
+        l.as_str(),
+        "at" | "rot" | "旋转" | "中心" | "定心" | "centering" | "根" | "齿根" | "root" | "配合"
+            | "fit" | "直径" | "公称直径" | "模数" | "齿数"
+    ) {
+        return true;
+    }
+    for p in ['a', 'm', 'z'] {
+        if l == p.to_string() {
+            return true;
+        }
+        if let Some(rest) = l.strip_prefix(p) {
+            if rest.chars().next().is_some_and(|c| c.is_ascii_digit()) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 pub fn usage() -> String {
     "智能卡片「NF内花键参数表」用法：\
-     `OCSMCARD NF内花键参数表 A<公称直径> M<模数> [Z<齿数>] [中心 外径|齿面] [根 平|圆] [配合 松动|滑动|固定|压] [at x,y] [rot 度]`\
-     （如 `OCSMCARD NF内花键参数表 A300 M7.5 Z38`）。A/m 取 NF E22-141 表值（p18 尺寸表，\
-     同一直径可对应不同模数，m 必填）；定心方式缺省「外径定心」（Az=A；齿面定心 Az=A+0.3m）；\
+     `OCSMCARD NF内花键参数表 <九字段齿形表达式> [中心 外径|齿面] [根 平|圆] [配合 松动|滑动|固定|压] [at x,y] [rot 度]`\
+     （如 `OCSMCARD NF内花键参数表 SPLINE IN M7.5 Z38 ALPHA20 X0.8 BETA0 H30`；\
+     也可沿用 `A300 M7.5 [Z38]` 写法）。表达式反解 A=m(z+0.4+2x)、m、z（NF 压力角恒 20°）；\
+     A/m 取 NF E22-141 表值（p18 尺寸表，\
+     同一直径可对应不同模数）；定心方式缺省「外径定心」（Az=A；齿面定心 Az=A+0.3m）；\
      加工方法照 p18 = 拉削；V/V1/G/G1 取 p23–p25 检查表、ri 取 p22 —— 表外显示「—」，不外推；\
      公差：大径 R7 / 小径 H7（p28，数值按 ISO 286），跨棒距 = p29 内花键 E 偏差；\
      配合类别（缺省固定）只影响预览里配对外花键的 E/xm 偏差读数。"
@@ -1291,6 +1397,14 @@ impl NfTableSpec {
         let mut at: Option<[f64; 2]> = None;
         let mut rot = 0.0f64;
         let mut i = 0usize;
+        // 表达式形态：`<九字段表达式> [中心 …] [根 …] [配合 …] [at …] [rot …]`。
+        let mut expr: Option<String> = None;
+        let tokens = if let Some((e, rest)) = crate::card_expr::split_expr(&tokens, is_option_token) {
+            expr = Some(e);
+            rest
+        } else {
+            tokens
+        };
         let need = |i: &mut usize, tokens: &[&str], what: &str| -> Result<String, String> {
             *i += 1;
             tokens
@@ -1377,8 +1491,52 @@ impl NfTableSpec {
             }
             i += 1;
         }
-        let a = a.ok_or_else(|| format!("NF 内花键参数表：缺公称直径 A（写法 `A300` / `直径 300`）。\n{}", usage()))?;
-        let m = m.ok_or_else(|| format!("NF 内花键参数表：缺模数 m（写法 `M7.5` / `模数 7.5`；同一 A 可对应不同模数，必填）。\n{}", usage()))?;
+        // 表达式 > 旧 A/M/Z；显式值与表达式反解不一致 → 报错（帮排错）。
+        let (a, m, z) = match expr {
+            Some(e) => {
+                let r = crate::card_expr::resolve(&EXPR_POLICY, &e, Some(true))?;
+                let ea = r.value("a").ok_or_else(|| {
+                    "NF 内花键参数表：表达式映射表缺 A（内部错误）".to_string()
+                })?;
+                let em = r.value("m").ok_or_else(|| {
+                    "NF 内花键参数表：表达式映射表缺 m（内部错误）".to_string()
+                })?;
+                let ez = r.value("z").ok_or_else(|| {
+                    "NF 内花键参数表：表达式映射表缺 z（内部错误）".to_string()
+                })? as u32;
+                if let Some(given) = a {
+                    if (given - ea).abs() > 1e-6 {
+                        return Err(format!(
+                            "NF 内花键参数表：显式 A={} 与表达式反解的 A={} 不一致",
+                            crate::partgen_kit::trim(given),
+                            crate::partgen_kit::trim(ea)
+                        ));
+                    }
+                }
+                if let Some(given) = m {
+                    if (given - em).abs() > 1e-9 {
+                        return Err(format!(
+                            "NF 内花键参数表：显式 m={} 与表达式反解的 m={} 不一致",
+                            crate::partgen_kit::trim(given),
+                            crate::partgen_kit::trim(em)
+                        ));
+                    }
+                }
+                if let Some(given) = z {
+                    if given != ez {
+                        return Err(format!(
+                            "NF 内花键参数表：显式 z={given} 与表达式反解的 z={ez} 不一致"
+                        ));
+                    }
+                }
+                (ea, em, Some(ez))
+            }
+            None => {
+                let a = a.ok_or_else(|| format!("NF 内花键参数表：缺公称直径 A（写法 `A300` / `直径 300`，或直接给九字段表达式）。\n{}", usage()))?;
+                let m = m.ok_or_else(|| format!("NF 内花键参数表：缺模数 m（写法 `M7.5` / `模数 7.5`；同一 A 可对应不同模数，必填）。\n{}", usage()))?;
+                (a, m, z)
+            }
+        };
         let spec = NfTableSpec {
             a,
             m,
@@ -1740,6 +1898,7 @@ mod tests {
         }
         let j = NfTableModel {
             card: "NF内花键参数表".into(),
+            expr: None,
             a: spec.a,
             m: spec.m,
             z: spec.z,
@@ -1799,6 +1958,7 @@ mod tests {
             s.fit = fit;
             let pj = NfTableModel {
                 card: "NF内花键参数表".into(),
+                expr: None,
                 a: s.a,
                 m: s.m,
                 z: s.z,
@@ -2044,6 +2204,7 @@ mod tests {
     fn nf_preview_and_pending_shape() {
         let m = NfTableModel {
             card: "NF内花键参数表".into(),
+            expr: None,
             a: 300.0,
             m: 7.5,
             z: Some(38),
@@ -2099,5 +2260,110 @@ mod tests {
         assert!(echo.contains("A=300") && echo.contains("z=38"), "{echo}");
         let md = markdown_table(&m.spec().unwrap()).unwrap();
         assert_eq!(md.lines().count(), 20, "18 行 + 表头 + 分隔");
+    }
+
+    fn expr_model(expr: &str) -> NfTableModel {
+        NfTableModel {
+            card: "NF内花键参数表".into(),
+            expr: Some(expr.into()),
+            a: 0.0,
+            m: 0.0,
+            z: None,
+            centering: None,
+            root: None,
+            fit: None,
+            at: None,
+            rot: 0.0,
+        }
+    }
+
+    /// ★ 表达式 → 字段 → 卡内值：A=m(z+0.4+2x)、m、z；锚点 A300/M7.5/Z38 逐项。
+    #[test]
+    fn nf_expr_maps_to_anchor_a_m_z() {
+        let spec = expr_model("SPLINE IN M7.5 Z38 ALPHA20 X0.8 BETA0 H30")
+            .spec()
+            .unwrap();
+        assert!((spec.a - 300.0).abs() < 1e-9, "A={}", spec.a);
+        assert!((spec.m - 7.5).abs() < 1e-12);
+        assert_eq!(spec.z, Some(38));
+        let d = derive(&spec).unwrap();
+        assert!(near(d.g.unwrap(), 270.508));
+        assert!(near(d.v.unwrap(), 15.0));
+        assert!(near(d.ri.unwrap(), 1.343));
+        // 卡内值（逐项）
+        let vals = values(&spec).unwrap();
+        let get = |tag: &str| vals.iter().find(|(t, _)| t == tag).unwrap().1.clone();
+        assert_eq!(get("模数"), "7.5");
+        assert_eq!(get("齿数"), "38");
+        assert_eq!(get("压力角"), "20°");
+        assert_eq!(get("大径Az"), "300");
+        assert_eq!(get("小径D"), "285");
+        assert_eq!(get("跨棒距G"), "270.508");
+        // 与旧 A/M/Z 输入同值（CLI 两条路）
+        let old = NfTableSpec::parse("A300 M7.5 Z38").unwrap();
+        assert_eq!(values(&old).unwrap(), values(&spec).unwrap());
+        // 预览回填 fields + expr 回显
+        let pj = expr_model("SPLINE IN M7.5 Z38 ALPHA20 X0.8 BETA0 H30")
+            .preview_json()
+            .unwrap();
+        assert!(near(pj["fields"]["a"].as_f64().unwrap(), 300.0));
+        assert!(near(pj["fields"]["m"].as_f64().unwrap(), 7.5));
+        assert_eq!(pj["fields"]["z"], 38);
+        assert!(pj["expr"].as_str().unwrap().starts_with("SPLINE IN"));
+        // CLI 表达式写法
+        let cli = NfTableSpec::parse("SPLINE IN M7.5 Z38 ALPHA20 X0.8 BETA0 H30 中心 齿面").unwrap();
+        assert!(near(cli.a, 300.0) && cli.z == Some(38));
+        assert_eq!(cli.centering, Centering::Flank);
+    }
+
+    /// 表达式错误路径：KIND/MARK/α/显式冲突/缺失/表外。
+    #[test]
+    fn nf_expr_error_paths_and_off_table() {
+        // KIND EX 与 NF 内花键卡不一致
+        let e = expr_model("SPLINE EX M7.5 Z38 ALPHA20 X0.8 BETA0 H30")
+            .spec()
+            .unwrap_err();
+        assert!(e.contains("KIND") && e.contains("EX（外）") && e.contains("「内」"), "{e}");
+        // MARK 体系不符
+        let e = expr_model("GEAR IN M7.5 Z38 ALPHA20 X0.8 BETA0 H30")
+            .spec()
+            .unwrap_err();
+        assert!(e.contains("MARK") && e.contains("GEAR（齿轮）"), "{e}");
+        // α 必须 20
+        let e = expr_model("SPLINE IN M7.5 Z38 ALPHA30 X0.8 BETA0 H30")
+            .spec()
+            .unwrap_err();
+        assert!(e.contains("压力角 30°") && e.contains("α=20"), "{e}");
+        // 模型路径：有表达式时字段以表达式为准（GUI 回填前的旧值不参与校验）
+        let mut m = expr_model("SPLINE IN M7.5 Z38 ALPHA20 X0.8 BETA0 H30");
+        m.z = Some(40);
+        assert_eq!(m.spec().unwrap().z, Some(38), "表达式覆盖显式 z");
+        // CLI 显式冲突
+        let e = NfTableSpec::parse("SPLINE IN M7.5 Z38 ALPHA20 X0.8 BETA0 H30 Z40").unwrap_err();
+        assert!(e.contains("显式 z=40") && e.contains("z=38"), "{e}");
+        // 缺表达式且 A=0 → 现有校验路径
+        let e = NfTableModel {
+            card: "NF内花键参数表".into(),
+            expr: None,
+            a: 0.0,
+            m: 7.5,
+            z: None,
+            centering: None,
+            root: None,
+            fit: None,
+            at: None,
+            rot: 0.0,
+        }
+        .spec()
+        .unwrap_err();
+        assert!(e.contains("A=0"), "{e}");
+        // 表外（表达式 z=40 → A=309，不在 p18 表）→ V/G/ri 如实标「—」，不报错也不臆造
+        let off = expr_model("SPLINE IN M7.5 Z40 ALPHA20 X0.8 BETA0 H30")
+            .spec()
+            .unwrap();
+        let vals = values(&off).unwrap();
+        let get = |tag: &str| vals.iter().find(|(t, _)| t == tag).unwrap().1.clone();
+        assert_eq!(get("量棒直径V"), MISSING);
+        assert_eq!(get("跨棒距G"), MISSING);
     }
 }

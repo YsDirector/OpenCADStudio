@@ -597,26 +597,33 @@ pub struct SplineTableSpec {
     pub rot: f64,
 }
 
-/// 九字段表达式 → 齿形段 `Gear`（**复用既有 `shaft::parse_program`，不另写解析器**）。
-pub fn parse_expr_gear(expr: &str) -> Result<crate::shaft::Gear, String> {
+/// 九字段表达式 → 齿形段 `Gear`（**唯一实现**；`card` = 报错前缀，如「花键参数表」）。
+///
+/// 复用既有 `shaft::parse_program`，不另写解析器；五张智能卡片（含齿轮/ANSI/NF/DIN）
+/// 都经这里解析，各卡只换前缀。
+pub fn parse_gear_expr(expr: &str, card: &str) -> Result<crate::shaft::Gear, String> {
     if expr.trim().is_empty() {
-        return Err(
-            "花键参数表：缺九字段齿形表达式（形如 `SPLINE IN M3 Z20 ALPHA30 X0 DA65.4 DF57.3436 BETA0 H30`；\
+        return Err(format!(
+            "{card}：缺九字段齿形表达式（形如 `SPLINE IN M3 Z20 ALPHA30 X0 DA65.4 DF57.3436 BETA0 H30`；\
              轴/齿轮生成器 GUI 可直接复制）"
-                .to_string(),
-        );
+        ));
     }
     let program = crate::shaft::parse_program(expr)
-        .map_err(|e| format!("花键参数表：齿形表达式无法解析：{e}"))?;
+        .map_err(|e| format!("{card}：齿形表达式无法解析：{e}"))?;
     if program.segments.len() != 1 {
         return Err(format!(
-            "花键参数表：表达式应只有一段齿形（收到 {} 段）——请只粘生成器复制的那一行齿形表达式",
+            "{card}：表达式应只有一段齿形（收到 {} 段）——请只粘生成器复制的那一行齿形表达式",
             program.segments.len()
         ));
     }
-    program.segments[0].gear.ok_or_else(|| {
-        "花键参数表：表达式里没有齿形段（应以 `GEAR`/`SPLINE` + M/Z/ALPHA… 开头）".to_string()
-    })
+    program.segments[0]
+        .gear
+        .ok_or_else(|| format!("{card}：表达式里没有齿形段（应以 `GEAR`/`SPLINE` + M/Z/ALPHA… 开头）"))
+}
+
+/// 九字段表达式 → 齿形段 `Gear`（花键参数表口径的薄包装；其余卡走 [`parse_gear_expr`]）。
+pub fn parse_expr_gear(expr: &str) -> Result<crate::shaft::Gear, String> {
+    parse_gear_expr(expr, "花键参数表")
 }
 
 /// 表达式里是否显式写了 `IN`/`EX`（`true` = 内齿）；缺省 = 外齿（与 `shaft` 口径一致）。

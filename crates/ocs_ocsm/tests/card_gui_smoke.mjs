@@ -52,6 +52,7 @@ const GEAR_FORM = {
 };
 const ANSI_FORM = {
   fields: [
+    FIELD('expr', '齿形表达式（九字段；可从轴/齿轮生成器 GUI 复制）', 'textarea'),
     FIELD('side', '方向', 'select', {
       options: [{ value: 'int', label: '内花键' }, { value: 'ext', label: '外花键' }], default: 'int',
     }),
@@ -64,6 +65,7 @@ const ANSI_FORM = {
 };
 const NF_FORM = {
   fields: [
+    FIELD('expr', '齿形表达式（九字段；可从轴/齿轮生成器 GUI 复制）', 'textarea'),
     FIELD('a', '公称直径 A', 'number', { default: '300', step: 0.001, required: true }),
     FIELD('m', '模数 m', 'number', { default: '7.5', step: 0.001, required: true }),
     FIELD('z', '齿数 z', 'number', { default: '38', min: 3, step: 1 }),
@@ -82,6 +84,7 @@ const NF_FORM = {
 };
 const DIN_FORM = {
   fields: [
+    FIELD('expr', '齿形表达式（九字段；可从轴/齿轮生成器 GUI 复制）', 'textarea'),
     FIELD('m', '模数 m', 'number', { default: '3', step: 0.001, required: true }),
     FIELD('z', '齿数 z', 'number', { default: '38', min: 3, step: 1, required: true }),
     FIELD('d_b', '基准直径 d_B', 'number', { default: '120', step: 0.001, required: true }),
@@ -190,6 +193,17 @@ function text404(path) {
     json: async () => { throw new SyntaxError(`${path} not valid JSON`); },
   };
 }
+// ── 表达式桩：从 stub 模型里的九字段表达式取 M/Z/ALPHA/X（够测回填）──
+function stubExpr(mm) {
+  const s = String(mm.expr == null ? '' : mm.expr).trim();
+  if (!s) return null;
+  const t = s.split(/\s+/);
+  const num = (re, skip) => {
+    const hit = t.find((x) => re.test(x));
+    return hit ? Number(hit.slice(skip)) : NaN;
+  };
+  return { m: num(/^M/i, 1), z: num(/^Z/i, 1), alpha: num(/^ALPHA/i, 5), x: num(/^X/i, 1) || 0 };
+}
 function gearPreview(mm) {
   const missingSet = new Set(['精度等级', '齿圈径向跳动公差', '公法线长度公差', '齿形公差', '齿距极限偏差', '齿向公差']);
   const items = GEAR_LABELS.map((label) => ({
@@ -204,6 +218,16 @@ function ansiPreview(mm) {
   const labels = mm.side === 'ext' ? ANSI_EXT : ANSI_INT;
   const missingSet = new Set(['跨棒距', '量棒直径', '公法线长度', '跨测齿数', '大径上差', '大径下差']);
   const typeText = mm.card.includes('英文') ? 'FLAT ROOT SIDE FIT' : '30°平齿根齿侧配合';
+  // 表达式反解桩：P=25.4/m，齿廓按 α（30 → 列 A；45 → 45° 圆齿根齿侧）
+  const ex = stubExpr(mm);
+  if (ex && /^GEAR/i.test(String(mm.expr).trim())) {
+    return jsonResp({ ok: false, error: 'ANSI 花键参数表：表达式 MARK 写的是 GEAR（齿轮），与卡片体系「SPLINE（花键）」不一致' }, 400);
+  }
+  let fields = null;
+  if (ex && ex.m > 0) {
+    const prof = Math.abs(ex.alpha - 45) < 1e-9 ? 'ANSI45圆齿根齿侧' : 'ANSI30平齿根齿侧';
+    fields = { p: 25.4 / ex.m, z: ex.z, profile: prof };
+  }
   const items = labels.map((label) => ({
     tag: label, label, unit: '', value: missingSet.has(label) ? '—' : (label === '花键类型' ? typeText : `v-${label}`),
     formula: 'stub 公式', source: 'stub 来源', missing: missingSet.has(label),
@@ -211,6 +235,8 @@ function ansiPreview(mm) {
   return jsonResp({
     ok: true, card: mm.card,
     renderer: mm.card.includes('英文') ? 'ansi_table_en' : 'ansi_table_cn',
+    expr: ex ? String(mm.expr).trim() : null,
+    fields,
     readout: [{ k: '径节 P/Ps', v: '16/32' }], items, missing_note: 'stub ANSI 缺项',
   });
 }
@@ -219,7 +245,10 @@ const NF_ITEMS = [
   '基准尺寸', '量棒直径V', '跨棒距G', '大径上差', '大径下差', '小径上差', '小径下差', '跨棒距上差', '跨棒距下差',
 ];
 function nfPreview(mm) {
-  const gap = Number(mm.a) === 210;
+  const ex = stubExpr(mm);
+  const aVal = ex ? ex.m * (ex.z + 0.4 + 2 * ex.x) : Number(mm.a);
+  const fields = ex ? { a: aVal, m: ex.m, z: ex.z } : null;
+  const gap = Number(mm.a) === 210 || (ex && Math.abs(aVal - 210) < 1e-9);
   const missingSet = gap ? new Set(['齿数', '量棒直径V', '跨棒距G', '跨棒距上差', '跨棒距下差']) : new Set();
   const fitLabel = { loose: '松动', slide: '滑动', fixed: '固定', press: '压' }[mm.fit || 'fixed'];
   const press = (mm.fit || 'fixed') === 'press';
@@ -243,13 +272,18 @@ function nfPreview(mm) {
     ];
   return jsonResp({
     ok: true, card: mm.card, renderer: 'nf_table', fit: mm.fit || 'fixed',
+    expr: ex ? String(mm.expr).trim() : null,
+    fields,
     readout, items, missing: [...missingSet], missing_note: 'stub NF 缺项（p29 表外/ISO 档缺）',
   });
 }
 const DIN_TAGS = ['N标记', 'N齿数', 'N模数', 'N压力角', 'N齿根圆', 'N齿根成形圆', 'N齿顶圆', 'N槽宽max', 'N槽宽min', 'N槽宽eff', 'N量圆', 'N量距max', 'N量距min', 'W标记', 'W齿数', 'W模数', 'W压力角', 'W齿顶圆', 'W齿根成形圆', 'W齿根圆', 'W齿厚svmax', 'W齿厚smax', 'W齿厚smin', 'W量圆', 'W量距max', 'W量距min'];
 function dinPreview(mm) {
+  const ex = stubExpr(mm);
+  const dbVal = ex ? ex.m * (ex.z + 1.1 + 2 * ex.x) : Number(mm.d_b);
+  const fields = ex ? { m: ex.m, z: ex.z, d_b: dbVal } : null;
   const missingSet = new Set();
-  const gap = Number(mm.m) >= 5;
+  const gap = Number(mm.m) >= 5 || (ex && ex.m >= 5);
   if (gap) { for (const t of ['N槽宽max', 'N槽宽min', 'N槽宽eff', 'W齿厚svmax', 'W齿厚smax', 'W齿厚smin']) missingSet.add(t); }
   const val = (tag) => tag === 'N标记' ? 'Nabe DIN 5480 – N120×3×38×9H'
     : tag === 'N槽宽max' ? (gap ? '—' : '6.361') : tag === 'N槽宽eff' ? (gap ? '—' : '6.271')
@@ -260,6 +294,8 @@ function dinPreview(mm) {
   }));
   return jsonResp({
     ok: true, card: mm.card, renderer: 'din_table', anchor: !gap,
+    expr: ex ? String(mm.expr).trim() : null,
+    fields,
     readout: [{ k: 'e₂ = s₁（名义）', v: gap ? '—' : '6.271' }], items,
     missing: [...missingSet], missing_note: 'stub DIN 缺项',
   });
@@ -462,6 +498,8 @@ check(H.formControl('profile').options.length === 3, `ANSI 齿廓清单来自选
 check(H.formControl('p').value === '16' && H.formControl('z').value === '20', 'ANSI 默认 P16/N20');
 const ansiSeq = el('formParams').children.filter((c) => c.id && c.id.startsWith('f_')).map((c) => c.id);
 check(ansiSeq.join(',') === 'f_side,f_profile,f_p,f_z', `ANSI 字段顺序：${ansiSeq}`);
+check(el('formMain').children.filter((c) => c.id && c.id.startsWith('f_')).map((c) => c.id).join(',') === 'f_expr',
+  'ANSI 表达式应在中部主输入区（textarea）');
 await H.refresh();
 check(lastPreviewModel.card === 'ANSI花键参数表_中文' && lastPreviewModel.side === 'int', `ANSI 预览模型：${JSON.stringify(lastPreviewModel)}`);
 check(Number(lastPreviewModel.p) === 16 && Number(lastPreviewModel.z) === 20, `P/z 应进模型：${JSON.stringify(lastPreviewModel)}`);
@@ -476,6 +514,25 @@ H.formControl('profile').value = 'ANSI45圆齿根齿侧';
 H.formControl('profile')._fire('change', H.formControl('profile'));
 await tick();
 check(lastPreviewModel.profile === 'ANSI45圆齿根齿侧', `齿廓应进模型：${JSON.stringify(lastPreviewModel)}`);
+// ★ 表达式 → 反解回填：粘入新表达式后 P/N/齿廓控件自动回填（后端 fields）
+H.formControl('profile').value = 'ANSI30平齿根齿侧';
+H.formControl('expr').value = 'SPLINE IN M3.175 Z22 ALPHA45 X0 BETA0 H30';
+H.formControl('expr')._fire('input', H.formControl('expr'));
+await tick();
+check(String(lastPreviewModel.expr).startsWith('SPLINE IN M3.175'), `表达式应进模型：${JSON.stringify(lastPreviewModel.expr)}`);
+check(H.formControl('p').value === '8' && H.formControl('z').value === '22',
+  `表达式反解应回填 P=8/N=22：P=${H.formControl('p').value} N=${H.formControl('z').value}`);
+check(H.formControl('profile').value === 'ANSI45圆齿根齿侧',
+  `表达式 α45 应回填齿廓：${H.formControl('profile').value}`);
+// ★ 表达式错误路径 → 红字可见（共享助手；不动已修好的 #status 优先级）
+H.formControl('expr').value = 'GEAR IN M1.5875 Z20 ALPHA30 X0 BETA0 H30';
+H.formControl('expr')._fire('input', H.formControl('expr'));
+await tick();
+check((el('status').textContent || '').includes('MARK'), `表达式 MARK 冲突应可见：${el('status').textContent}`);
+check(el('status').className === 'bad', `表达式错误应红框：${el('status').className}`);
+H.formControl('expr').value = '';
+H.formControl('expr')._fire('input', H.formControl('expr'));
+await tick();
 
 // ── ④ ANSI 纯英文：同构，card 字段换英文卡 ────────────────────────
 el('cardType').value = 'ANSI花键参数表_英文';
@@ -501,6 +558,8 @@ check(H.card.id === 'NF内花键参数表', `NF 卡：${H.card.id}`);
 check(el('cardHint').title.includes('p29'), `NF 缺项说明应进 title：${el('cardHint').title}`);
 const nfSeq = el('formParams').children.filter((c) => c.id && c.id.startsWith('f_')).map((c) => c.id);
 check(nfSeq.join(',') === 'f_a,f_m,f_z,f_centering,f_root,f_fit', `NF 字段顺序：${nfSeq}`);
+check(el('formMain').children.filter((c) => c.id && c.id.startsWith('f_')).map((c) => c.id).join(',') === 'f_expr',
+  'NF 表达式应在中部主输入区');
 check(H.formControl('a').value === '300' && H.formControl('m').value === '7.5' && H.formControl('z').value === '38', 'NF 默认示例 A300/M7.5/Z38');
 check(H.formControl('centering').options.length === 2 && H.formControl('root').options.length === 2, 'NF 定心/齿根清单来自选项表');
 check(H.formControl('fit').options.length === 4 && H.formControl('fit').value === 'fixed', 'NF 配合类别四档、默认固定');
@@ -553,6 +612,16 @@ H.formControl('a')._fire('input', H.formControl('a'));
 await tick();
 check(lastPreviewModel.a === 210, `表外 A 应进模型：${JSON.stringify(lastPreviewModel)}`);
 check(el('items').innerHTML.includes('—'), '表外 A=210 → 标缺「—」');
+// ★ NF 表达式 → A=m(z+0.4+2x)/m/z 回填
+H.formControl('a').value = '300';
+H.formControl('a')._fire('input', H.formControl('a'));
+await tick();
+H.formControl('expr').value = 'SPLINE IN M7.5 Z40 ALPHA20 X0.8 BETA0 H30';
+H.formControl('expr')._fire('input', H.formControl('expr'));
+await tick();
+check(String(lastPreviewModel.expr).startsWith('SPLINE IN M7.5 Z40'), `NF 表达式应进模型：${JSON.stringify(lastPreviewModel.expr)}`);
+check(H.formControl('a').value === '315' && H.formControl('m').value === '7.5' && H.formControl('z').value === '40',
+  `NF 表达式应回填 A=315/m=7.5/z=40：A=${H.formControl('a').value} m=${H.formControl('m').value} z=${H.formControl('z').value}`);
 
 // ── ⑥ DIN 花键参数表：12 字段 + 26 项 + 缺口 ─────────────────────
 el('cardType').value = 'DIN花键参数表';
@@ -562,6 +631,8 @@ check(H.card.id === 'DIN花键参数表', `DIN 卡：${H.card.id}`);
 check(el('cardHint').title.includes('Table 7'), `DIN 缺项说明应进 title：${el('cardHint').title}`);
 const dinSeq = el('formParams').children.filter((c) => c.id && c.id.startsWith('f_')).map((c) => c.id);
 check(dinSeq.join(',') === 'f_m,f_z,f_d_b,f_hub,f_shaft,f_e2,f_ae,f_as_,f_tact_n,f_teff_n,f_tact_w,f_teff_w', `DIN 字段顺序：${dinSeq}`);
+check(el('formMain').children.filter((c) => c.id && c.id.startsWith('f_')).map((c) => c.id).join(',') === 'f_expr',
+  'DIN 表达式应在中部主输入区');
 check(H.formControl('m').value === '3' && H.formControl('z').value === '38' && H.formControl('d_b').value === '120', 'DIN 默认示例 M3/Z38/B120');
 check(H.formControl('hub').value === '9H' && H.formControl('shaft').value === '8f', 'DIN 默认配合 9H/8f');
 await H.refresh();
@@ -601,6 +672,13 @@ check(el('items').innerHTML.includes('—'), 'DIN 模数组缺口应显示「—
 H.formControl('m').value = '3'; H.formControl('z').value = '38'; H.formControl('d_b').value = '120';
 H.formControl('m')._fire('input', H.formControl('m'));
 await tick();
+// ★ DIN 表达式 → d_B=m(z+1.1+2x)/m/z 回填
+H.formControl('expr').value = 'SPLINE IN M4 Z30 ALPHA30 X0.2 BETA0 H30';
+H.formControl('expr')._fire('input', H.formControl('expr'));
+await tick();
+check(String(lastPreviewModel.expr).startsWith('SPLINE IN M4 Z30'), `DIN 表达式应进模型：${JSON.stringify(lastPreviewModel.expr)}`);
+check(H.formControl('m').value === '4' && H.formControl('z').value === '30' && H.formControl('d_b').value === '126',
+  `DIN 表达式应回填 m=4/z=30/d_B=126：m=${H.formControl('m').value} z=${H.formControl('z').value} d_B=${H.formControl('d_b').value}`);
 
 // ── ⑦ 预览 404 → 红框可见（共享助手；不关窗）─────────────────────
 forcePreview404 = true;

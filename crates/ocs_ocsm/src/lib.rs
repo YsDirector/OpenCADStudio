@@ -21,6 +21,7 @@ mod bom_xlsx;
 mod bom;
 mod ansi_table;
 mod card;
+mod card_expr;
 mod centerline;
 mod detail;
 mod detail_clip;
@@ -2915,6 +2916,7 @@ impl OcsmPlugin {
         host.set_dirty();
         let note = crate::nf_table::NfTableModel {
             card: "NF内花键参数表".into(),
+            expr: None,
             a: spec.a,
             m: spec.m,
             z: spec.z,
@@ -2980,6 +2982,7 @@ impl OcsmPlugin {
         host.set_dirty();
         let note = crate::din_table::DinTableModel {
             card: "DIN花键参数表".into(),
+            expr: None,
             m: spec.m,
             z: spec.z,
             d_b: spec.d_b,

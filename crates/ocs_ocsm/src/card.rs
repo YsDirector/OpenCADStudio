@@ -237,9 +237,9 @@ pub fn usage_line() -> String {
         "OCSMCARD 用法：`OCSMCARD <卡类型> …`（本期卡类型：{types}；不带参数 = 开图形界面）。\n\
          * 花键参数表：`OCSMCARD 花键参数表 [std GB] 内 6H <九字段表达式> [dp 4.5] [root 平|圆] [at x,y] [rot 度]`\n\
          * 齿轮参数表：`OCSMCARD 齿轮参数表 <九字段表达式> [mate z₂] [dwg 图号] [grade 精度等级] [center a] [at x,y] [rot 度]`\n\
-         * ANSI 花键参数表：`OCSMCARD ANSI花键参数表_中文 内 P16 Z20 [profile ANSI30R] [at x,y] [rot 度]`（英文版换 `_英文`）\n\
-         * NF 内花键参数表：`OCSMCARD NF内花键参数表 A300 M7.5 [Z38] [中心 外径|齿面] [根 平|圆] [配合 松动|滑动|固定|压] [at x,y] [rot 度]`\n\
-         * DIN 花键参数表：`OCSMCARD DIN花键参数表 M3 Z38 B120 [N9H] [W8f] [ae …] [as …] [tactn …] [teffn …] [tactw …] [teffw …] [at x,y] [rot 度]`"
+         * ANSI 花键参数表：`OCSMCARD ANSI花键参数表_中文 内 <九字段表达式> [profile ANSI30R] [at x,y]`（英文版换 `_英文`；旧写法 `内 P16 Z20` 兼容）\n\
+         * NF 内花键参数表：`OCSMCARD NF内花键参数表 <九字段表达式> [中心 外径|齿面] [根 平|圆] [配合 松动|滑动|固定|压] [at x,y]`（旧写法 `A300 M7.5 Z38` 兼容）\n\
+         * DIN 花键参数表：`OCSMCARD DIN花键参数表 <九字段表达式> [N9H] [W8f] [ae …] [as …] [tactn …] [teffn …] [tactw …] [teffw …] [at x,y]`（旧写法 `M3 Z38 B120` 兼容）"
     )
 }
 
@@ -287,10 +287,17 @@ mod tests {
             );
         }
         assert_eq!(CARD_TYPES[1].form.unwrap().fields.len(), 5, "齿轮 5 字段");
-        assert_eq!(CARD_TYPES[2].form.unwrap().fields.len(), 4, "ANSI 4 字段");
-        assert_eq!(CARD_TYPES[3].form.unwrap().fields.len(), 4, "ANSI 4 字段");
-        assert_eq!(CARD_TYPES[4].form.unwrap().fields.len(), 6, "NF 6 字段（含配合）");
-        assert_eq!(CARD_TYPES[5].form.unwrap().fields.len(), 12, "DIN 12 字段");
+        assert_eq!(CARD_TYPES[2].form.unwrap().fields.len(), 5, "ANSI 5 字段（含 expr）");
+        assert_eq!(CARD_TYPES[3].form.unwrap().fields.len(), 5, "ANSI 5 字段（含 expr）");
+        assert_eq!(CARD_TYPES[4].form.unwrap().fields.len(), 7, "NF 7 字段（含 expr/配合）");
+        assert_eq!(CARD_TYPES[5].form.unwrap().fields.len(), 13, "DIN 13 字段（含 expr）");
+        // 五张卡都有表达式输入框（齿轮已有；其余四卡新增；花键卡保留专用面板）。
+        for c in &CARD_TYPES[1..] {
+            let f = c.form.unwrap();
+            let e = f.fields.iter().find(|x| x.key == "expr");
+            let e = e.unwrap_or_else(|| panic!("{} 缺 expr 字段", c.id));
+            assert_eq!(e.kind, "textarea", "{} expr 应为 textarea", c.id);
+        }
         assert!(
             CARD_TYPES[4].form.unwrap().fields.iter().any(|x| x.key == "fit"),
             "NF 配合类别字段"
@@ -332,7 +339,7 @@ mod tests {
         assert_eq!(j[1]["form"]["fields"].as_array().unwrap().len(), 5);
         assert!(j[4]["form"]["fields"].as_array().unwrap().iter().any(|f| f["key"] == "fit"));
         assert!(j[4]["form"]["missing_note"].as_str().unwrap().contains("p29"));
-        assert_eq!(j[5]["form"]["fields"].as_array().unwrap().len(), 12);
+        assert_eq!(j[5]["form"]["fields"].as_array().unwrap().len(), 13);
         assert!(j[5]["summary"].as_str().unwrap().contains("Bild 6"));
         assert!(j[4]["summary"].as_str().unwrap().contains("NF E22-141"));
         assert!(j[0]["summary"].as_str().unwrap().contains("GB/T 3478"));

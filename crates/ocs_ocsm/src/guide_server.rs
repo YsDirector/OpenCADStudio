@@ -15738,7 +15738,7 @@ mod weld_tests {
         assert_eq!(v["din_card"]["grades"].as_array().unwrap().len(), 12);
         // 表驱动 GUI：花键卡 form=null（专用面板基准）；其余五卡下发字段清单
         assert!(v["card_types"][0]["form"].is_null());
-        for (i, n) in [(1usize, 5usize), (2, 4), (3, 4), (4, 6), (5, 12)] {
+        for (i, n) in [(1usize, 5usize), (2, 5), (3, 5), (4, 7), (5, 13)] {
             let fields = v["card_types"][i]["form"]["fields"].as_array().unwrap();
             assert_eq!(fields.len(), n, "card_types[{i}] 字段数");
             assert!(fields.iter().all(|f| f["key"].is_string() && f["kind"].is_string()));
@@ -15832,6 +15832,32 @@ mod weld_tests {
         assert_eq!(v["renderer"], "ansi_table_en");
         assert_eq!(v["items"][0]["value"], "FLAT ROOT SIDE FIT");
 
+        // ── ANSI 表达式反解：SPLINE IN M1.5875 … → P16/N20；fields 回填给 GUI；方向冲突 400 ──
+        let ansi_expr = serde_json::json!({
+            "card": "ANSI花键参数表_中文", "side": "int",
+            "expr": "SPLINE IN M1.5875 Z20 ALPHA30 X0 BETA0 H30",
+            "p": 0.0, "z": 0, "profile": null, "at": null, "rot": 0.0,
+        });
+        let j = http_req(server.port, "POST", "/api/card_preview", &ansi_expr.to_string());
+        let v: serde_json::Value = serde_json::from_str(&j).unwrap();
+        assert_eq!(v["ok"], true, "{j}");
+        assert!((v["fields"]["p"].as_f64().unwrap() - 16.0).abs() < 1e-9, "{j}");
+        assert_eq!(v["fields"]["z"], 20);
+        assert_eq!(v["fields"]["profile"], crate::invol_spline::ANSI_DEFAULT_PROFILE);
+        assert_eq!(v["items"][0]["value"], "30°平齿根齿侧配合");
+        let mut ansi_bad = ansi_expr.clone();
+        ansi_bad["side"] = serde_json::json!("ext");
+        let j = http_req(server.port, "POST", "/api/card_preview", &ansi_bad.to_string());
+        let v: serde_json::Value = serde_json::from_str(&j).unwrap();
+        assert_eq!(v["ok"], false);
+        assert!(v["error"].as_str().unwrap().contains("KIND"), "{j}");
+        // 表达式经导出路径也反解（待放置件 17 ATTRIB，径节/齿数取表达式值）
+        let resp = apply_card_export(&sender, ansi_expr.to_string().as_bytes()).expect("ANSI 表达式出表");
+        assert!(resp.contains("\"ok\":true"), "{resp}");
+        let attrs = crate::pending_part_for_test().unwrap().attrs;
+        assert_eq!(attrs.len(), 17);
+        assert!(attrs.iter().any(|(t, v)| t.tag == "径节" && v == "16/32"), "{attrs:?}");
+
         // ── ANSI 出表：中文内花键 → 块 OCSM_ANSI_INT_CN（17 ATTRIB）；英文外花键 → OCSM_ANSI_EXT_EN ──
         let resp = apply_card_export(&sender, ansi_cn.to_string().as_bytes()).expect("ANSI 出表");
         assert!(resp.contains("\"ok\":true"), "{resp}");
@@ -15870,6 +15896,25 @@ mod weld_tests {
         assert_eq!(get("跨棒距上差")["value"], "+0.052");
         assert_eq!(get("跨棒距下差")["value"], "0");
         assert_eq!(v["missing"].as_array().unwrap().len(), 0, "锚点 18 项齐全（公差已填值）");
+        // ── NF 表达式反解：SPLINE IN M7.5 Z38 ALPHA20 X0.8 … → A=300/m=7.5/z=38；fields 回填 ──
+        let nf_expr = serde_json::json!({
+            "card": "NF内花键参数表",
+            "expr": "SPLINE IN M7.5 Z38 ALPHA20 X0.8 BETA0 H30",
+            "a": 0.0, "m": 0.0, "z": null, "centering": null, "root": null,
+            "fit": null, "at": null, "rot": 0.0,
+        });
+        let je = http_req(server.port, "POST", "/api/card_preview", &nf_expr.to_string());
+        let ve: serde_json::Value = serde_json::from_str(&je).unwrap();
+        assert_eq!(ve["ok"], true, "{je}");
+        assert!((ve["fields"]["a"].as_f64().unwrap() - 300.0).abs() < 1e-9, "{je}");
+        assert!((ve["fields"]["m"].as_f64().unwrap() - 7.5).abs() < 1e-9);
+        assert_eq!(ve["fields"]["z"], 38);
+        assert!(ve["items"].as_array().unwrap().iter().any(|it| it["tag"] == "跨棒距G" && it["value"] == "270.508"), "{je}");
+        let mut nf_bad = nf_expr.clone();
+        nf_bad["expr"] = serde_json::json!("SPLINE EX M7.5 Z38 ALPHA20 X0.8 BETA0 H30");
+        let je = http_req(server.port, "POST", "/api/card_preview", &nf_bad.to_string());
+        let ve: serde_json::Value = serde_json::from_str(&je).unwrap();
+        assert!(ve["error"].as_str().unwrap().contains("KIND"), "{je}");
         assert_eq!(v["fit"], "fixed", "配合类别缺省固定");
         assert!(
             v["readout"]
@@ -15964,6 +16009,25 @@ mod weld_tests {
         let j = http_req(server.port, "POST", "/api/card_preview", &din_gap.to_string());
         let v: serde_json::Value = serde_json::from_str(&j).unwrap();
         assert!(!v["missing"].as_array().unwrap().is_empty(), "{j}");
+        // ── DIN 表达式反解：SPLINE IN M3 Z38 X0.45 … → d_B=120（Bild 6 锚点）；fields 回填 ──
+        let din_expr = serde_json::json!({
+            "card": "DIN花键参数表",
+            "expr": "SPLINE IN M3 Z38 ALPHA30 X0.45 DA120 DF114 BETA0 H30",
+            "m": 0.0, "z": 0, "d_b": 0.0, "hub": null, "shaft": null, "at": null, "rot": 0.0,
+        });
+        let j = http_req(server.port, "POST", "/api/card_preview", &din_expr.to_string());
+        let v: serde_json::Value = serde_json::from_str(&j).unwrap();
+        assert_eq!(v["ok"], true, "{j}");
+        assert!((v["fields"]["d_b"].as_f64().unwrap() - 120.0).abs() < 1e-9, "{j}");
+        assert!((v["fields"]["m"].as_f64().unwrap() - 3.0).abs() < 1e-9);
+        assert_eq!(v["fields"]["z"], 38);
+        assert_eq!(v["anchor"], true, "表达式反解 d_B=120 走 Bild 6 锚点");
+        let j = http_req(server.port, "POST", "/api/card_preview", &serde_json::json!({
+            "card": "DIN花键参数表",
+            "expr": "GEAR IN M3 Z38 ALPHA30 X0.45 BETA0 H30",
+            "m": 0.0, "z": 0, "d_b": 0.0,
+        }).to_string());
+        assert!(j.contains("MARK"), "{j}");
 
         // ── 报错路径：不认识的卡类型 / 非系列径节 / 表达式不自洽 / NF 齿数与表值不一致 ──
         let bad = serde_json::json!({"card": "铭牌", "expr": "x"});
