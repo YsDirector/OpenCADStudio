@@ -15819,9 +15819,9 @@ mod weld_tests {
         assert_eq!(v["ansi_card"]["profiles"].as_array().unwrap().len(), 5);
         assert_eq!(v["ansi_card"]["columns"]["int"].as_array().unwrap().len(), 17);
         assert_eq!(v["ansi_card"]["columns"]["ext"].as_array().unwrap().len(), 17);
-        assert_eq!(v["nf_card"]["columns"].as_array().unwrap().len(), 18);
+        assert_eq!(v["nf_card"]["columns"].as_array().unwrap().len(), 38, "12 值 + 6 公差 + 20 条带");
         assert_eq!(v["nf_card"]["modules"].as_array().unwrap().len(), 10);
-        assert_eq!(v["nf_ext_card"]["columns"].as_array().unwrap().len(), 18);
+        assert_eq!(v["nf_ext_card"]["columns"].as_array().unwrap().len(), 38, "12 值 + 6 公差 + 20 条带");
         assert_eq!(v["nf_ext_card"]["centering"][0]["id"], "flank", "NF 外缺省齿面定心");
         assert_eq!(v["din_card"]["columns"].as_array().unwrap().len(), 26);
         assert_eq!(v["din_card"]["columns_int"].as_array().unwrap().len(), 13);
@@ -16000,7 +16000,7 @@ mod weld_tests {
         assert_eq!(v["ok"], true, "{j}");
         assert_eq!(v["renderer"], "nf_table");
         let items = v["items"].as_array().unwrap();
-        assert_eq!(items.len(), 18, "12 值 + 6 公差洞位");
+        assert_eq!(items.len(), 38, "12 值 + 6 公差 + 20 条带");
         let get = |tag: &str| items.iter().find(|it| it["tag"] == tag).unwrap();
         assert_eq!(get("大径Az")["value"], "300");
         assert_eq!(get("小径D")["value"], "285");
@@ -16013,7 +16013,12 @@ mod weld_tests {
         assert_eq!(get("小径下差")["value"], "0");
         assert_eq!(get("跨棒距上差")["value"], "+0.052");
         assert_eq!(get("跨棒距下差")["value"], "0");
-        assert_eq!(v["missing"].as_array().unwrap().len(), 0, "锚点 18 项齐全（公差已填值）");
+        // 四配合全表进卡（条带 20 项；锚点行 = p29 m=7.5/A=300）
+        assert_eq!(get("E松动上差")["value"], "-110");
+        assert_eq!(get("E压上差")["value"], "+138");
+        assert_eq!(get("xm固定下差")["value"], "-61");
+        assert_eq!(get("E内花键上差")["value"], "+52");
+        assert_eq!(v["missing"].as_array().unwrap().len(), 0, "锚点 38 项齐全（公差已填值）");
         // ── NF 表达式反解：SPLINE IN M7.5 Z38 ALPHA20 X0.8 … → A=300/m=7.5/z=38；fields 回填 ──
         let nf_expr = serde_json::json!({
             "card": "NF内花键参数表",
@@ -16074,7 +16079,7 @@ mod weld_tests {
         let resp = apply_card_export(&sender, nf.to_string().as_bytes()).expect("NF 出表");
         assert!(resp.contains("\"ok\":true") && resp.contains("NF"), "{resp}");
         assert_eq!(crate::pending_block().unwrap(), "OCSM_NFTABLE_NF_INT");
-        assert_eq!(crate::pending_part_for_test().unwrap().attrs.len(), 18);
+        assert_eq!(crate::pending_part_for_test().unwrap().attrs.len(), 38);
         let mut nf_at = nf.clone();
         nf_at["at"] = serde_json::json!([70.0, 80.0]);
         let j = http_req(server.port, "POST", "/api/card_export?tab=2", &nf_at.to_string());
@@ -16082,8 +16087,8 @@ mod weld_tests {
         assert_eq!(v["ok"], true, "{j}");
         let ins = mock.inserts().last().unwrap().clone();
         assert_eq!(ins.0, "OCSM_NFTABLE_NF_INT");
-        assert_eq!(mock.insert_attr_counts().last().copied(), Some(18));
-        assert_eq!(mock.block_entities("OCSM_NFTABLE_NF_INT").len(), 97, "66 线 + 13 标签 + 18 属性");
+        assert_eq!(mock.insert_attr_counts().last().copied(), Some(38));
+        assert_eq!(mock.block_entities("OCSM_NFTABLE_NF_INT").len(), 136, "66+11 线 + 13+8 标签 + 18+20 属性");
 
         // ── NF 外花键参数表（模板原版卡）：锚点 m=7.5/A=300/z=38；公差 h12/H7/p29 外花键 E ──
         let nfe = serde_json::json!({
@@ -16096,7 +16101,7 @@ mod weld_tests {
         assert_eq!(v["renderer"], "nf_ext_table");
         assert_eq!(v["centering"], "flank", "缺省齿面定心");
         let items = v["items"].as_array().unwrap();
-        assert_eq!(items.len(), 18, "12 值 + 6 公差洞位");
+        assert_eq!(items.len(), 38, "12 值 + 6 公差 + 20 条带");
         let get = |tag: &str| items.iter().find(|it| it["tag"] == tag).unwrap();
         assert_eq!(get("大径Dee")["value"], "298.5");
         assert_eq!(get("小径Die")["value"], "282");
@@ -16106,7 +16111,12 @@ mod weld_tests {
         assert_eq!(get("小径上差")["value"], "+0.052", "ISO 286 H7");
         assert_eq!(get("公法线上差")["value"], "+0.042", "p29 外花键 E 固定列");
         assert_eq!(get("公法线下差")["value"], "-0.042");
-        assert_eq!(v["missing"].as_array().unwrap().len(), 0, "锚点 18 项齐全");
+        // 四配合全表进卡（条带 20 项；锚点行 = p29 m=7.5/A=300）
+        assert_eq!(get("E松动下差")["value"], "-194");
+        assert_eq!(get("E压上差")["value"], "+138");
+        assert_eq!(get("xm压上差")["value"], "+202");
+        assert_eq!(get("xm内花键上差")["value"], "+76");
+        assert_eq!(v["missing"].as_array().unwrap().len(), 0, "锚点 38 项齐全");
         // 表外 A=210 → K/W/公法线公差「—」
         let nfe_off = serde_json::json!({
             "card": "NF外花键参数表", "a": 210.0, "m": 7.5, "z": null,
@@ -16133,7 +16143,7 @@ mod weld_tests {
         let resp = apply_card_export(&sender, nfe.to_string().as_bytes()).expect("NF 外出表");
         assert!(resp.contains("\"ok\":true") && resp.contains("NF"), "{resp}");
         assert_eq!(crate::pending_block().unwrap(), "OCSM_NFTABLE_NF_EXT");
-        assert_eq!(crate::pending_part_for_test().unwrap().attrs.len(), 18);
+        assert_eq!(crate::pending_part_for_test().unwrap().attrs.len(), 38);
         let mut nfe_at = nfe.clone();
         nfe_at["at"] = serde_json::json!([75.0, 85.0]);
         let j = http_req(server.port, "POST", "/api/card_export?tab=2", &nfe_at.to_string());
@@ -16141,8 +16151,8 @@ mod weld_tests {
         assert_eq!(v["ok"], true, "{j}");
         let ins = mock.inserts().last().unwrap().clone();
         assert_eq!(ins.0, "OCSM_NFTABLE_NF_EXT");
-        assert_eq!(mock.insert_attr_counts().last().copied(), Some(18));
-        assert_eq!(mock.block_entities("OCSM_NFTABLE_NF_EXT").len(), 97, "66 线 + 13 标签 + 18 属性");
+        assert_eq!(mock.insert_attr_counts().last().copied(), Some(38));
+        assert_eq!(mock.block_entities("OCSM_NFTABLE_NF_EXT").len(), 136, "66+11 线 + 13+8 标签 + 18+20 属性");
 
         // ── DIN 5480（拆成内/外两张单栏卡）：示例逐项 = 标准原印值；出表 13 ATTRIB；缩放 0.17 ──
         let din = serde_json::json!({
