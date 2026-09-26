@@ -109,18 +109,12 @@ pub const TOL_TAGS: &[&str] = &[
 // 块几何（66 线照模板 + 标题 + 12 标签 + 18 ATTDEF）
 // ══════════════════════════════════════════════════════════════════════════
 
-/// 表格块成员：**77 线（66 主 + 11 条带）+ 21 MTEXT（标题 + 12 标签 + 8 条带）
-/// + 38 ATTDEF**（12 值 + 6 公差 + 20 条带）。
+/// 表格块成员：**66 线 + 13 MTEXT（标题 + 12 标签）+ 18 ATTDEF**（12 值 + 6 公差）。
 pub fn block_entities() -> Vec<EntityType> {
-    let strip_lines = crate::nf_table::fit_strip_lines();
-    let strip_texts = crate::nf_table::fit_strip_mtexts();
     let mut out = Vec::with_capacity(
         crate::nf_table::NF_LINES.len() + 1 + NF_EXT_ROWS.len() + VALUE_TAGS.len() + TOL_TAGS.len(),
     );
     for (a, b, layer) in crate::nf_table::NF_LINES {
-        out.push(crate::partgen_kit::line(*a, *b, layer));
-    }
-    for (a, b, layer) in &strip_lines {
         out.push(crate::partgen_kit::line(*a, *b, layer));
     }
     out.push(crate::nf_table::mtext_ent(
@@ -132,18 +126,15 @@ pub fn block_entities() -> Vec<EntityType> {
     for (label, _, y) in NF_EXT_ROWS {
         out.push(crate::nf_table::mtext_ent(label, LABEL_X, *y, 4));
     }
-    for (value, x, y, attach) in strip_texts {
-        out.push(crate::nf_table::strip_mtext(value, x, y, attach));
-    }
     for ad in attdefs() {
         out.push(EntityType::AttributeDefinition(ad));
     }
     out
 }
 
-/// 38 个 ATTDEF：12 值（行序）+ 6 公差（大径/小径/公法线 上/下）+ 20 条带（p29 四配合全表）。
+/// 18 个 ATTDEF：先 12 个值（行序），再 6 个公差（大径/小径/公法线 上/下）。
 pub fn attdefs() -> Vec<AttributeDefinition> {
-    let mut out = Vec::with_capacity(VALUE_TAGS.len() + TOL_TAGS.len() + 20);
+    let mut out = Vec::with_capacity(VALUE_TAGS.len() + TOL_TAGS.len());
     for (_, tag, y) in NF_EXT_ROWS {
         out.push(crate::nf_table::value_attdef_wf(tag, VALUE_X, *y, VALUE_WIDTH_FACTOR));
     }
@@ -152,7 +143,6 @@ pub fn attdefs() -> Vec<AttributeDefinition> {
         let x = if j >= 4 { x + crate::nf_table::TOL_X_SHIFT } else { *x };
         out.push(crate::nf_table::tol_attdef(tag, x, *y));
     }
-    out.extend(crate::nf_table::fit_strip_attdefs());
     out
 }
 
@@ -344,7 +334,7 @@ pub fn derive(spec: &NfExtTableSpec) -> Result<NfExtDerived, String> {
     })
 }
 
-/// 38 项取值（顺序 = `attdefs()`：12 值 + 6 公差 + 20 条带）。
+/// 18 项取值（顺序 = `attdefs()`：12 值 + 6 公差）。
 ///
 /// 公差口径（模板 + ISO 286 + p29）：
 /// * 大径上/下差 = ISO 286 **h12**（模板实测 Dee=298.5 → 0/−0.460）；
@@ -395,13 +385,6 @@ pub fn values(spec: &NfExtTableSpec) -> Result<Vec<(String, String)>, String> {
                 .unwrap_or_else(|| MISSING.to_string()),
         ),
     ];
-    // p29 四配合全表条带（20 项；内花键单列 + 外花键松动/滑动/固定/压，µm 原文）。
-    let strip_att = crate::nf_table::fit_strip_attdefs();
-    let strip_vals = crate::nf_table::fit_strip_values(d.tol_row);
-    let mut out = out;
-    for (ad, v) in strip_att.iter().zip(strip_vals) {
-        out.push((ad.tag.as_str(), v));
-    }
     // 顺序护栏：取值顺序必须与 ATTDEF 表一致（加/改行时先在这里暴露）。
     let got: Vec<&str> = out.iter().map(|(t, _)| *t).collect();
     let want: Vec<String> = attdefs().iter().map(|ad| ad.tag.clone()).collect();
@@ -608,11 +591,12 @@ pub const FORM: crate::card::CardFormSpec = crate::card::CardFormSpec {
         },
         crate::card::CardFieldSpec {
             key: "fit",
-            label: "配合类别",
+            label: "配合类别（出表前选定）",
             kind: "select",
             placeholder: "",
             default: "fixed",
-            title: "NF E22-141 p31/p34：松动/滑动/固定/压；决定 p29 外花键 E 偏差（公法线公差）",
+            title: "NF E22-141 p31/p34：松动/滑动/固定/压；缺省固定；★ 出表前先选好——\
+                    该选择决定公法线 W 上/下差（p29 外花键 E）与预览读数",
             options: &[
                 ("loose", "松动"),
                 ("slide", "滑动"),
@@ -627,10 +611,9 @@ pub const FORM: crate::card::CardFormSpec = crate::card::CardFormSpec {
     ],
     note: "粘九字段表达式（自动反解 A/m/z）或直接填 A/m（z 选填核对）→ 选定心/齿根/配合 → 点「出表」回到图纸放置。\
            公差：大径 h12 / 小径 H7（模板实测口径）+ 公法线 = p29 外花键 E 偏差；\
-           卡底「p29 配合偏差」条带并列 E/xm 的内花键值与外花键四配合（松动/滑动/固定/压）。",
+           配合类别在出表前选定（缺省固定）：决定公法线 W 公差与预览读数。",
     missing_note: "K/W 只取 p23–p25 检查表值，(m,A) 不在表内显示「—」；\
-                   p29 表外或 ISO 档缺时对应公差格显示「—」，不外推；\
-                   条带表外整条「—」。",
+                   p29 表外或 ISO 档缺时对应公差格显示「—」，不外推。",
 };
 
 /// NF 外花键卡的选项/口径 JSON（随 `/api/spline_options` 下发；页面只渲染）。
@@ -642,13 +625,7 @@ pub fn options_json() -> serde_json::Value {
             "unit": c.unit,
             "formula": c.formula,
             "source": c.source,
-        })).chain(crate::nf_table::FIT_COLUMNS.iter().map(|c| serde_json::json!({
-            "tag": c.tag,
-            "label": c.label,
-            "unit": c.unit,
-            "formula": c.formula,
-            "source": c.source,
-        }))).collect::<Vec<_>>(),
+        })).collect::<Vec<_>>(),
         "modules": crate::invol_spline::nf_e22141_modules(),
         "centering": [
             {"id": "flank", "label": "齿面定心（Dee=A−0.2m，模板）"},
@@ -666,16 +643,12 @@ pub fn options_json() -> serde_json::Value {
         "missing_note": "公差口径（模板实测 + ISO 286 + NF E22-141 p29）：大径上/下差 = ISO 286 h12\
                          （模板示例 Dee=298.5 实测 0/−0.460）；小径上/下差 = ISO 286 H7\
                          （模板示例 Die=282 实测 +0.052/0）；公法线上/下差 = p29 检查尺寸的公差值里\
-                         **外花键 E** 的偏差（µm→mm，按所选配合）。卡底「p29 配合偏差」条带把\
-                         E / xm 的**内花键单列 + 外花键四配合（松动/滑动/固定/压）**全部并列\
-                         （原文微米，各自上/下）；K/W 取 p23–p25 检查表；\
+                         **外花键 E** 的偏差（µm→mm，按所选配合）。K/W 取 p23–p25 检查表；\
                          (m,A) 表外或 ISO 档缺 → 对应格「—」，不外推；\
                          元素（ATTDEF）始终存在，可在 CAD 里改写。",
-        "note": "版面照模板 `外花键参数表NF.dxf` 原版（13 行 × 2 列，66 线 + 13 标签 + 18 属性）\
-                 + 底部 p29 四配合全表条带（3 行 × 5 数据列，11 线 + 8 文字 + 20 属性）；\
+        "note": "版面照模板 `外花键参数表NF.dxf` 原版（13 行 × 2 列，66 线 + 13 标签 + 18 属性）；\
                  文字样式一律 OCSM_GB；模板末行标签出框已归位；\
-                 符号用 NF 原文（Dee/Die/K/W 与 E/xm，不用 GB 符号）；\
-                 配合选中项仍决定主表公法线格（高亮）。",
+                 符号用 NF 原文（Dee/Die/K/W，不用 GB 符号）。",
     })
 }
 
@@ -770,27 +743,9 @@ impl NfExtTableModel {
         let spec = self.spec()?;
         let d = derive(&spec)?;
         let vals = values(&spec)?;
-        let mut items = Vec::with_capacity(NF_EXT_COLUMNS.len() + crate::nf_table::FIT_COLUMNS.len());
+        let mut items = Vec::with_capacity(NF_EXT_COLUMNS.len());
         let mut missing = Vec::new();
-        let mut vals = vals.into_iter();
-        for c in NF_EXT_COLUMNS {
-            let (tag, value) = vals.next().expect("主表取值数不够（内部错误）");
-            debug_assert_eq!(c.tag, tag);
-            if value == MISSING {
-                missing.push(c.label.to_string());
-            }
-            items.push(serde_json::json!({
-                "tag": tag,
-                "label": c.label,
-                "unit": c.unit,
-                "value": value,
-                "formula": c.formula,
-                "source": c.source,
-                "missing": value == MISSING,
-            }));
-        }
-        for c in crate::nf_table::FIT_COLUMNS.iter() {
-            let (tag, value) = vals.next().expect("条带取值数不够（内部错误）");
+        for (c, (tag, value)) in NF_EXT_COLUMNS.iter().zip(vals) {
             debug_assert_eq!(c.tag, tag);
             if value == MISSING {
                 missing.push(c.label.to_string());
@@ -814,54 +769,45 @@ impl NfExtTableModel {
             RootStyle::Flat => "Die = A − 2.4m",
             RootStyle::Fillet => "Die = A − 2.694m",
         };
-        // p29 E/xm 偏差读数：外花键四配合各一行 + 内花键单行对照（全表进卡）。
+        // p29 外花键 E/xm 偏差读数（按所选配合）；内花键 E 作对照。
         let um = |p: crate::nf_table::DevPair| format!("{:+}/{:+}", p.upper, p.lower);
-        let p29_int = match d.tol_row {
-            Some(r) => format!(
-                "E {}（{}/{} mm）；xm {}（µm；对照）",
-                um(r.e_int),
-                crate::nf_table::fmt_um_mm(r.e_int.upper),
-                crate::nf_table::fmt_um_mm(r.e_int.lower),
-                um(r.xm_int)
-            ),
-            None => MISSING.to_string(),
-        };
-        let mut readout: Vec<serde_json::Value> = vec![
-            serde_json::json!({"k": "公称直径 A（主参数）", "v": crate::nf_table::fmt_mm(spec.a)}),
-            serde_json::json!({"k": format!("大径 Dee（{dee_formula}）"), "v": crate::nf_table::fmt_mm(d.dee)}),
-            serde_json::json!({"k": format!("小径 Die（{die_formula}）"), "v": crate::nf_table::fmt_mm(d.die)}),
-            serde_json::json!({"k": "p20–p22 表齿根圆交叉核对（平 / 圆）", "v": format!("{} / {}", opt(d.table_flat_root), opt(d.table_round_root))}),
-            serde_json::json!({"k": "跨测齿数 K / 公法线 W", "v": format!("{} / {}", opt(d.k), opt(d.w))}),
-            serde_json::json!({"k": "变位系数 x（p20–p22）", "v": opt(d.x)}),
-            serde_json::json!({"k": "分度圆 d / 基圆 dB", "v": format!("{} / {}", opt(d.d), opt(d.db))}),
-            serde_json::json!({"k": "分度圆弧齿厚 s / 基圆 sB", "v": format!("{} / {}", opt(d.s), opt(d.sb))}),
-            serde_json::json!({"k": "齿根圆角 Rf / Rr", "v": format!("{} / {}", opt(d.rf), opt(d.rr))}),
-            serde_json::json!({"k": "齿顶倒角高度 h", "v": opt(d.h)}),
-        ];
-        for fit in FitClass::ALL {
-            let v = match d.tol_row {
-                Some(r) => format!(
+        let (p29_ext, p29_int) = match d.tol_row {
+            Some(r) => (
+                format!(
                     "E {}（{}/{} mm）；xm {}（µm）",
-                    um(r.e_ext_for(fit)),
-                    crate::nf_table::fmt_um_mm(r.e_ext_for(fit).upper),
-                    crate::nf_table::fmt_um_mm(r.e_ext_for(fit).lower),
-                    um(r.xm_ext_for(fit))
+                    um(r.e_ext_for(spec.fit)),
+                    crate::nf_table::fmt_um_mm(r.e_ext_for(spec.fit).upper),
+                    crate::nf_table::fmt_um_mm(r.e_ext_for(spec.fit).lower),
+                    um(r.xm_ext_for(spec.fit))
                 ),
-                None => MISSING.to_string(),
-            };
-            readout.push(serde_json::json!({
-                "k": format!("p29 外花键·{}偏差（µm）", fit.label()),
-                "v": v,
-            }));
-        }
-        readout.extend([
-            serde_json::json!({"k": "p29 内花键 E 偏差（µm；对照）", "v": p29_int}),
-            serde_json::json!({"k": "大径上/下差", "v": d.major_tol.map(|l| { let (u, lo) = l.display(); format!("{u} / {lo}") }).unwrap_or_else(|| MISSING.to_string())}),
-            serde_json::json!({"k": "小径上/下差", "v": d.minor_tol.map(|l| { let (u, lo) = l.display(); format!("{u} / {lo}") }).unwrap_or_else(|| MISSING.to_string())}),
-            serde_json::json!({"k": "p20–p22 行", "v": d.dims_source}),
-            serde_json::json!({"k": "p23–p25 行", "v": d.check_source}),
+                format!(
+                    "E {}（{}/{} mm）；xm {}（µm；对照）",
+                    um(r.e_int),
+                    crate::nf_table::fmt_um_mm(r.e_int.upper),
+                    crate::nf_table::fmt_um_mm(r.e_int.lower),
+                    um(r.xm_int)
+                ),
+            ),
+            None => (MISSING.to_string(), MISSING.to_string()),
+        };
+        let readout = serde_json::json!([
+            {"k": "公称直径 A（主参数）", "v": crate::nf_table::fmt_mm(spec.a)},
+            {"k": format!("大径 Dee（{dee_formula}）"), "v": crate::nf_table::fmt_mm(d.dee)},
+            {"k": format!("小径 Die（{die_formula}）"), "v": crate::nf_table::fmt_mm(d.die)},
+            {"k": "p20–p22 表齿根圆交叉核对（平 / 圆）", "v": format!("{} / {}", opt(d.table_flat_root), opt(d.table_round_root))},
+            {"k": "跨测齿数 K / 公法线 W", "v": format!("{} / {}", opt(d.k), opt(d.w))},
+            {"k": "变位系数 x（p20–p22）", "v": opt(d.x)},
+            {"k": "分度圆 d / 基圆 dB", "v": format!("{} / {}", opt(d.d), opt(d.db))},
+            {"k": "分度圆弧齿厚 s / 基圆 sB", "v": format!("{} / {}", opt(d.s), opt(d.sb))},
+            {"k": "齿根圆角 Rf / Rr", "v": format!("{} / {}", opt(d.rf), opt(d.rr))},
+            {"k": "齿顶倒角高度 h", "v": opt(d.h)},
+            {"k": format!("p29 外花键·{}偏差（µm）", spec.fit.label()), "v": p29_ext},
+            {"k": "p29 内花键 E 偏差（µm；对照）", "v": p29_int},
+            {"k": "大径上/下差", "v": d.major_tol.map(|l| { let (u, lo) = l.display(); format!("{u} / {lo}") }).unwrap_or_else(|| MISSING.to_string())},
+            {"k": "小径上/下差", "v": d.minor_tol.map(|l| { let (u, lo) = l.display(); format!("{u} / {lo}") }).unwrap_or_else(|| MISSING.to_string())},
+            {"k": "p20–p22 行", "v": d.dims_source},
+            {"k": "p23–p25 行", "v": d.check_source},
         ]);
-        let readout = serde_json::Value::Array(readout);
         let expr_echo = self
             .expr
             .as_deref()
@@ -905,7 +851,7 @@ impl NfExtTableModel {
         }))
     }
 
-    /// 待放置件要带的 38 个 ATTRIB（tag → 值 + ATTDEF 模板）。
+    /// 待放置件要带的 18 个 ATTRIB（tag → 值 + ATTDEF 模板）。
     pub fn pending_attrs(&self) -> Result<Vec<(AttributeDefinition, String)>, String> {
         let spec = self.spec()?;
         let vals = values(&spec)?;
@@ -1230,8 +1176,8 @@ mod tests {
         let ents = block_entities();
         assert_eq!(
             ents.len(),
-            66 + 13 + 18 + 11 + 8 + 20,
-            "主表 97 图元（66 线 + 13 标签 + 18 属性）+ 条带 39（11 线 + 8 文字 + 20 属性）"
+            66 + 13 + 18,
+            "模板 97 图元（66 线 + 25 MTEXT + 6 TEXT）→ 66 线 + 13 标签 + 18 属性"
         );
 
         // ── 66 条 LINE：逐条在集合里能按坐标+图层找到（1e-5）──
@@ -1268,7 +1214,7 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert_eq!(mtexts.len(), 21, "标题 + 12 标签 + 条带 8");
+        assert_eq!(mtexts.len(), 13, "标题 + 12 标签");
         let title = mtexts
             .iter()
             .find(|m| m.value == "外花键参数表")
@@ -1281,12 +1227,7 @@ mod tests {
         for m in &mtexts {
             assert_eq!(m.style, "OCSM_GB", "MTEXT 样式：{}", m.value);
             assert_eq!(m.common.layer, "6文字层");
-            assert!(
-                near5(m.height, TEXT_H) || near5(m.height, crate::nf_table::TOL_H),
-                "MTEXT 字高只能主表 25 / 条带 15：{} {}",
-                m.value,
-                m.height
-            );
+            assert!(near5(m.height, TEXT_H));
         }
         for (label, _, y) in NF_EXT_ROWS {
             let m = mtexts
@@ -1304,34 +1245,11 @@ mod tests {
             mtexts.iter().all(|m| (m.insertion_point.x + 444.9504118793738).abs() > 1.0),
             "末行标签仍在模板的出框位置"
         );
-        // ── 条带 8 条 MTEXT：表头（左标签 + 5 列头）+ E/xm 行标签 ──
-        let strip_texts = crate::nf_table::fit_strip_mtexts();
-        assert_eq!(strip_texts.len(), 8);
-        for (value, x, y, attach) in strip_texts {
-            let m = mtexts
-                .iter()
-                .find(|m| m.value == value)
-                .unwrap_or_else(|| panic!("缺条带 MTEXT {value}"));
-            assert!(near5(m.insertion_point.x, x) && near5(m.insertion_point.y, y), "{value} 位置");
-            assert!(near5(m.height, crate::nf_table::TOL_H));
-            let want = if attach == 5 {
-                ocs_plugin_api::host::acadrust::entities::mtext::AttachmentPoint::MiddleCenter
-            } else {
-                ocs_plugin_api::host::acadrust::entities::mtext::AttachmentPoint::MiddleLeft
-            };
-            assert_eq!(m.attachment_point, want, "{value} 对齐");
-        }
 
-        // ── 38 个 ATTDEF：12 值（左中）+ 6 公差（基线）+ 20 条带（正中），tag/位置/字高/字宽 ──
+        // ── 18 个 ATTDEF：12 值（左中）+ 6 公差（基线），tag/位置/字高/字宽 ──
         let atts: Vec<AttributeDefinition> = attdefs();
-        assert_eq!(atts.len(), 38);
-        let strip_att = crate::nf_table::fit_strip_attdefs();
-        let want_tags: Vec<&str> = VALUE_TAGS
-            .iter()
-            .chain(TOL_TAGS.iter())
-            .copied()
-            .chain(strip_att.iter().map(|a| a.tag.as_str()))
-            .collect();
+        assert_eq!(atts.len(), 18);
+        let want_tags: Vec<&str> = VALUE_TAGS.iter().chain(TOL_TAGS.iter()).copied().collect();
         let got_tags: Vec<&str> = atts.iter().map(|a| a.tag.as_str()).collect();
         assert_eq!(got_tags, want_tags, "ATTDEF tag 顺序");
         for (i, (_, tag, y)) in NF_EXT_ROWS.iter().enumerate() {
@@ -1367,33 +1285,6 @@ mod tests {
             assert_eq!(atts[12 + 2 * i].tag, *pair.0);
             assert_eq!(atts[12 + 2 * i + 1].tag, *pair.1);
         }
-        // ── 20 个条带 ATTDEF：正中（中/中），字高 15、字宽 0.667 ──
-        assert_eq!(strip_att.len(), 20);
-        for (i, ad) in strip_att.iter().enumerate() {
-            let a = &atts[18 + i];
-            assert_eq!(a.tag, ad.tag, "条带 tag 顺序");
-            assert!(
-                near5(a.insertion_point.x, ad.insertion_point.x)
-                    && near5(a.insertion_point.y, ad.insertion_point.y),
-                "{} 位置",
-                a.tag
-            );
-            assert!(near5(a.height, crate::nf_table::TOL_H));
-            assert!(near5(a.width_factor, crate::nf_table::TOL_WIDTH_FACTOR));
-            assert_eq!(
-                a.horizontal_alignment,
-                ocs_plugin_api::host::acadrust::entities::HorizontalAlignment::Center
-            );
-            assert_eq!(a.vertical_alignment, VerticalAlignment::Middle);
-            assert_eq!(a.text_style, "OCSM_GB");
-            assert_eq!(a.common.layer, "6文字层");
-        }
-        // 条带 11 条线（左右边框延长 + 底框 + 2 行分隔 + 5 列分隔）
-        let strip_lines = crate::nf_table::fit_strip_lines();
-        assert_eq!(strip_lines.len(), 11);
-        for (a, b, layer) in &strip_lines {
-            assert!(line_hits(*a, *b, layer), "缺条带线 {a:?}→{b:?} @{layer}");
-        }
     }
 
     /// ★ 锚点正向断言：模板示例 m=7.5 / A=300 / z=38 的每个标准/模板原值，与
@@ -1423,21 +1314,6 @@ mod tests {
         assert_eq!(get("小径下差"), "0");
         assert_eq!(get("公法线上差"), "+0.042", "p29 m=7.5/A=300 外花键 E 固定 +42/−42");
         assert_eq!(get("公法线下差"), "-0.042");
-        // p29 四配合全表条带（锚点行逐项对 CSV；原文微米整数）
-        for (tag, want) in [
-            ("E内花键上差", "+52"), ("E内花键下差", "0"),
-            ("E松动上差", "-110"), ("E松动下差", "-194"),
-            ("E滑动上差", "-20"), ("E滑动下差", "-104"),
-            ("E固定上差", "+42"), ("E固定下差", "-42"),
-            ("E压上差", "+138"), ("E压下差", "+54"),
-            ("xm内花键上差", "+76"), ("xm内花键下差", "0"),
-            ("xm松动上差", "-161"), ("xm松动下差", "-284"),
-            ("xm滑动上差", "-29"), ("xm滑动下差", "-152"),
-            ("xm固定上差", "+61"), ("xm固定下差", "-61"),
-            ("xm压上差", "+202"), ("xm压下差", "+79"),
-        ] {
-            assert_eq!(get(tag), want, "条带 {tag}");
-        }
         // 表值与公式交叉核对（p22 行）
         assert_eq!(d.table_flat_root, Some(282.0));
         assert_eq!(d.table_round_root, Some(279.795));
@@ -1543,8 +1419,8 @@ mod tests {
         }
         .preview_json()
         .unwrap();
-        assert_eq!(j["items"].as_array().unwrap().len(), 38, "12 值 + 6 公差 + 20 条带");
-        assert_eq!(j["missing"].as_array().unwrap().len(), 0, "锚点 38 项齐全");
+        assert_eq!(j["items"].as_array().unwrap().len(), 18);
+        assert_eq!(j["missing"].as_array().unwrap().len(), 0, "锚点 18 项齐全");
         assert_eq!(j["fit"], "fixed", "配合缺省固定");
         assert_eq!(j["centering"], "flank", "定心缺省齿面（模板口径）");
         assert_eq!(j["root"], "flat", "齿根缺省平齿根");
@@ -1591,10 +1467,6 @@ mod tests {
         assert_eq!(g("小径Die"), "192");
         assert_eq!(g("公法线上差"), MISSING, "p29 表外 → 公法线公差标缺");
         assert_eq!(g("公法线下差"), MISSING);
-        // 条带 20 项一并标缺（原文列义在、无值 → 「—」，不外推）
-        for c in crate::nf_table::FIT_COLUMNS {
-            assert_eq!(g(c.tag), MISSING, "p29 表外 → 条带 {} 标缺", c.tag);
-        }
         assert_ne!(g("大径下差"), MISSING, "ISO 286 与 A 无关，不连坐");
         assert_ne!(g("小径上差"), MISSING);
         // ③ 配合类别只影响公法线公差
@@ -1862,7 +1734,7 @@ mod tests {
         assert_eq!(j["renderer"], "nf_ext_table");
         assert_eq!(j["centering"], "flank");
         assert_eq!(j["root"], "flat");
-        assert_eq!(j["items"].as_array().unwrap().len(), 38);
+        assert_eq!(j["items"].as_array().unwrap().len(), 18);
         assert!(
             j["readout"]
                 .as_array()
@@ -1881,7 +1753,7 @@ mod tests {
         );
         let ins = m.build_insert().unwrap();
         assert_eq!(ins.block_name, BLOCK);
-        assert_eq!(ins.attributes.len(), 38);
+        assert_eq!(ins.attributes.len(), 18);
         // 整表 INSERT 缩放 0.17（同 NF 内卡；不改块几何，ATTRIB 随 INSERT 缩放）
         assert!(near5(ins.x_scale(), crate::nf_table::TABLE_SCALE)
             && near5(ins.y_scale(), crate::nf_table::TABLE_SCALE)
@@ -1897,14 +1769,14 @@ mod tests {
         item_tags.sort();
         att_tags.sort();
         assert_eq!(item_tags, att_tags, "口径表 ↔ 属性表多重集不一致");
-        assert_eq!(att_tags.len(), 38);
-        assert_eq!(m.pending_attrs().unwrap().len(), 38);
+        assert_eq!(att_tags.len(), 18);
+        assert_eq!(m.pending_attrs().unwrap().len(), 18);
         let meta = m.part_meta_json().unwrap();
         assert!(meta.contains("\"family\":\"nf_ext_table\""));
         let echo = m.echo_note().unwrap();
         assert!(echo.contains("A=300") && echo.contains("z=38") && echo.contains("滚齿"), "{echo}");
         let md = markdown_table(&m.spec().unwrap()).unwrap();
-        assert_eq!(md.lines().count(), 40, "38 行 + 表头 + 分隔");
+        assert_eq!(md.lines().count(), 20, "18 行 + 表头 + 分隔");
     }
 
     fn expr_model(expr: &str) -> NfExtTableModel {

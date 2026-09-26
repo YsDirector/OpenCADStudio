@@ -436,147 +436,6 @@ pub(crate) fn fmt_um_mm(v_um: f64) -> String {
 }
 
 // ══════════════════════════════════════════════════════════════════════════
-// p29 四配合全表条带（主表下追加：内花键单列 + 外花键松动/滑动/固定/压）
-// ══════════════════════════════════════════════════════════════════════════
-//
-// 原表 p29 一行 = E[内花键 | 外花键×4配合] + xm[内花键 | 外花键×4配合]（单位微米）。
-// 主表 13 行只放得下“所选配合”，这里按原表把**四配合全部并列进卡**：
-// 3 行（表头 + E + xm）× 5 数据列（内花键 + 四配合），每格上/下偏差两行。
-// 不臆造：`(m,A)` 不在 p29 时整条「—」；符号照 NF 原文 `E`/`xm`。
-
-/// 条带行数（表头 + E + xm）。
-pub const FIT_STRIP_ROWS: usize = 3;
-/// 条带行高（与模板行高量级一致）。
-pub const FIT_STRIP_ROW_H: f64 = 40.475;
-/// 条带上边界 = 原表下框。
-pub const FIT_STRIP_TOP: f64 = FRAME.3;
-/// 条带下边界（新表底）。
-pub const FIT_STRIP_BOTTOM: f64 = FIT_STRIP_TOP - FIT_STRIP_ROWS as f64 * FIT_STRIP_ROW_H;
-/// 条带标签列宽（比主表标签列窄，给 5 个数据列让位）。
-pub const FIT_STRIP_LABEL_W: f64 = 90.0;
-/// 条带数据列名（0=内花键，1..=4=外花键四配合，照 p29 列序）。
-pub const FIT_STRIP_COLS: [&str; 5] = ["内花键", "松动", "滑动", "固定", "压"];
-/// 单元格内上/下偏差的纵向偏移（字高 15）。
-pub const FIT_STRIP_DY: f64 = 10.0;
-
-/// 条带数据列宽。
-pub fn fit_strip_col_w() -> f64 {
-    (FRAME.1 - (FRAME.0 + FIT_STRIP_LABEL_W)) / FIT_STRIP_COLS.len() as f64
-}
-
-/// 条带第 `i` 个数据列中心 x（0=内花键，1..=4=四配合）。
-pub fn fit_strip_col_center(i: usize) -> f64 {
-    FRAME.0 + FIT_STRIP_LABEL_W + (i as f64 + 0.5) * fit_strip_col_w()
-}
-
-/// 条带第 `row` 行（0=表头，1=E，2=xm）的行中心 y。
-pub fn fit_strip_row_center(row: usize) -> f64 {
-    FIT_STRIP_TOP - (row as f64 + 0.5) * FIT_STRIP_ROW_H
-}
-
-/// 条带 11 条线：左右边框延长 + 底框（左右两半）+ 2 条行分隔 + 5 条列分隔。
-pub fn fit_strip_lines() -> Vec<([f64; 2], [f64; 2], &'static str)> {
-    let mut out = Vec::with_capacity(11);
-    out.push(([FRAME.0, FIT_STRIP_TOP], [FRAME.0, FIT_STRIP_BOTTOM], "1轮廓实线层"));
-    out.push(([FRAME.1, FIT_STRIP_TOP], [FRAME.1, FIT_STRIP_BOTTOM], "1轮廓实线层"));
-    out.push(([FRAME.0, FIT_STRIP_BOTTOM], [MID_X, FIT_STRIP_BOTTOM], "1轮廓实线层"));
-    out.push(([MID_X, FIT_STRIP_BOTTOM], [FRAME.1, FIT_STRIP_BOTTOM], "1轮廓实线层"));
-    for r in 1..FIT_STRIP_ROWS {
-        let y = FIT_STRIP_TOP - r as f64 * FIT_STRIP_ROW_H;
-        out.push(([FRAME.0, y], [FRAME.1, y], "2细线层"));
-    }
-    for c in 0..FIT_STRIP_COLS.len() {
-        let x = FRAME.0 + FIT_STRIP_LABEL_W + c as f64 * fit_strip_col_w();
-        out.push(([x, FIT_STRIP_TOP], [x, FIT_STRIP_BOTTOM], "2细线层"));
-    }
-    out
-}
-
-/// 条带 8 条静态 MTEXT：表头（左标签 + 5 列头）+ `E`/`xm` 两个行标签。
-pub fn fit_strip_mtexts() -> Vec<(&'static str, f64, f64, i16)> {
-    let mut out = Vec::with_capacity(8);
-    let yh = fit_strip_row_center(0);
-    out.push(("p29 配合偏差", FRAME.0 + 8.0, yh, 4));
-    for (i, name) in FIT_STRIP_COLS.iter().enumerate() {
-        out.push((*name, fit_strip_col_center(i), yh, 5));
-    }
-    out.push(("E（µm）", FRAME.0 + 8.0, fit_strip_row_center(1), 4));
-    out.push(("xm（µm）", FRAME.0 + 8.0, fit_strip_row_center(2), 4));
-    out
-}
-
-/// 条带单元格属性：正中（中/中），字高 15、字宽 0.667（与公差列同口径）。
-fn fit_cell_attdef(tag: &str, x: f64, y: f64) -> AttributeDefinition {
-    let mut ad = AttributeDefinition::new(tag.to_string(), String::new(), " ".to_string());
-    ad.insertion_point = Vector3::new(x, y, 0.0);
-    ad.alignment_point = ad.insertion_point;
-    ad.height = TOL_H;
-    ad.width_factor = TOL_WIDTH_FACTOR;
-    ad.text_style = "OCSM_GB".into();
-    ad.horizontal_alignment = HorizontalAlignment::Center;
-    ad.vertical_alignment = VerticalAlignment::Middle;
-    ad.flags.preset = true;
-    ad.common = common_of("6文字层");
-    ad
-}
-
-/// 条带 20 个属性 tag（行 E/xm × 列 内花键/四配合 × 上/下），顺序 = [`fit_strip_values`]。
-pub fn fit_strip_attdefs() -> Vec<AttributeDefinition> {
-    let mut out = Vec::with_capacity(20);
-    for (row, key) in ["E", "xm"].iter().enumerate() {
-        let yc = fit_strip_row_center(row + 1);
-        for (ci, col) in FIT_STRIP_COLS.iter().enumerate() {
-            let x = fit_strip_col_center(ci);
-            out.push(fit_cell_attdef(&format!("{key}{col}上差"), x, yc + FIT_STRIP_DY));
-            out.push(fit_cell_attdef(&format!("{key}{col}下差"), x, yc - FIT_STRIP_DY));
-        }
-    }
-    out
-}
-
-/// p29 微米整数显示：0 → `0`，其余带符号（原文就是微米，不做 mm 换算）。
-pub fn fmt_um(v: f64) -> String {
-    if v.abs() < 0.5 {
-        "0".to_string()
-    } else {
-        format!("{:+}", v)
-    }
-}
-
-/// 条带 20 项取值（顺序与 [`fit_strip_attdefs`] 一致；p29 表外 → 整条「—」，不外推）。
-pub fn fit_strip_values(row: Option<&NfDevRow>) -> Vec<String> {
-    let mut out = Vec::with_capacity(20);
-    for e_or_xm in 0..2 {
-        for col in 0..FIT_STRIP_COLS.len() {
-            let pair = row.map(|r| {
-                if col == 0 {
-                    if e_or_xm == 0 {
-                        r.e_int
-                    } else {
-                        r.xm_int
-                    }
-                } else if e_or_xm == 0 {
-                    r.e_ext_for(FitClass::ALL[col - 1])
-                } else {
-                    r.xm_ext_for(FitClass::ALL[col - 1])
-                }
-            });
-            match pair {
-                Some(p) => {
-                    out.push(fmt_um(p.upper));
-                    out.push(fmt_um(p.lower));
-                }
-                None => {
-                    out.push(MISSING.to_string());
-                    out.push(MISSING.to_string());
-                }
-            }
-        }
-    }
-    out
-}
-
-// ══════════════════════════════════════════════════════════════════════════
 // 文字/属性实体构造
 // ══════════════════════════════════════════════════════════════════════════
 
@@ -644,33 +503,16 @@ pub(crate) fn tol_attdef(tag: &str, x: f64, y: f64) -> AttributeDefinition {
     ad
 }
 
-/// 表格块成员：**77 线（66 主 + 11 条带）+ 21 MTEXT（标题 + 12 标签 + 8 条带）
-/// + 38 ATTDEF**（12 值 + 6 公差 + 20 条带）。
+/// 表格块成员：**66 线 + 13 MTEXT（标题 + 12 标签）+ 18 ATTDEF**（12 值 + 6 公差）。
 pub fn block_entities() -> Vec<EntityType> {
-    let strip_lines = fit_strip_lines();
-    let strip_texts = fit_strip_mtexts();
-    let mut out = Vec::with_capacity(
-        NF_LINES.len()
-            + strip_lines.len()
-            + 1
-            + NF_ROWS.len()
-            + strip_texts.len()
-            + VALUE_TAGS.len()
-            + TOL_TAGS.len()
-            + 20,
-    );
+    let mut out =
+        Vec::with_capacity(NF_LINES.len() + 1 + NF_ROWS.len() + VALUE_TAGS.len() + TOL_TAGS.len());
     for (a, b, layer) in NF_LINES {
-        out.push(crate::partgen_kit::line(*a, *b, layer));
-    }
-    for (a, b, layer) in &strip_lines {
         out.push(crate::partgen_kit::line(*a, *b, layer));
     }
     out.push(mtext_ent("内花键参数表", TITLE_AT.0, TITLE_AT.1, 5));
     for (label, _, y) in NF_ROWS {
         out.push(mtext_ent(label, LABEL_X, *y, 4));
-    }
-    for (value, x, y, attach) in strip_texts {
-        out.push(strip_mtext(value, x, y, attach));
     }
     for ad in attdefs() {
         out.push(EntityType::AttributeDefinition(ad));
@@ -678,9 +520,9 @@ pub fn block_entities() -> Vec<EntityType> {
     out
 }
 
-/// 38 个 ATTDEF：12 值（行序）+ 6 公差（大径/小径/跨棒距 上/下）+ 20 条带（p29 四配合全表）。
+/// 18 个 ATTDEF：先 12 个值（行序），再 6 个公差（大径/小径/跨棒距 上/下）。
 pub fn attdefs() -> Vec<AttributeDefinition> {
-    let mut out = Vec::with_capacity(VALUE_TAGS.len() + TOL_TAGS.len() + 20);
+    let mut out = Vec::with_capacity(VALUE_TAGS.len() + TOL_TAGS.len());
     for (_, tag, y) in NF_ROWS {
         out.push(value_attdef(tag, VALUE_X, *y));
     }
@@ -689,25 +531,7 @@ pub fn attdefs() -> Vec<AttributeDefinition> {
         let x = if i >= 4 { x + TOL_X_SHIFT } else { *x };
         out.push(tol_attdef(tag, x, *y));
     }
-    out.extend(fit_strip_attdefs());
     out
-}
-
-/// 条带 MTEXT（字高 15；与标签同层/同样式，attachment 5=正中 / 4=左中）。
-/// 参考框宽照模板/主表用 320.2216（= 不换行；列宽 49 会把 `p29 配合偏差`/`xm（µm）` 折行）。
-pub(crate) fn strip_mtext(value: &str, x: f64, y: f64, attach: i16) -> EntityType {
-    let mut m = MText::new();
-    m.value = value.to_string();
-    m.insertion_point = Vector3::new(x, y, 0.0);
-    m.height = TOL_H;
-    m.rectangle_width = 320.2216427186032;
-    m.style = "OCSM_GB".into();
-    m.attachment_point = match attach {
-        5 => AttachmentPoint::MiddleCenter,
-        _ => AttachmentPoint::MiddleLeft,
-    };
-    m.common = common_of("6文字层");
-    EntityType::MText(m)
 }
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -978,7 +802,7 @@ pub(crate) fn tol_display(lim: &Option<crate::tolerance::Limits>, upper: bool) -
     }
 }
 
-/// 38 项取值（顺序 = `attdefs()`：12 值 + 6 公差 + 20 条带）。
+/// 18 项取值（顺序 = `attdefs()`：12 值 + 6 公差）。
 ///
 /// 公差口径（NF E22-141）：
 /// * 大径上/下差 = ISO 286 **R7**（p28 §4：拉削/外径定心的内花键大径公差）；
@@ -1026,13 +850,6 @@ pub fn values(spec: &NfTableSpec) -> Result<Vec<(String, String)>, String> {
                 .unwrap_or_else(|| MISSING.to_string()),
         ),
     ];
-    // p29 四配合全表条带（20 项；内花键单列 + 外花键松动/滑动/固定/压，µm 原文）。
-    let strip_att = fit_strip_attdefs();
-    let strip_vals = fit_strip_values(d.tol_row);
-    let mut out = out;
-    for (ad, v) in strip_att.iter().zip(strip_vals) {
-        out.push((ad.tag.as_str(), v));
-    }
     // 顺序护栏：取值顺序必须与 ATTDEF 表一致（加/改行时先在这里暴露）。
     let got: Vec<&str> = out.iter().map(|(t, _)| *t).collect();
     let want: Vec<String> = attdefs().iter().map(|ad| ad.tag.clone()).collect();
@@ -1130,34 +947,6 @@ pub const NF_COLUMNS: &[NfColumnSpec] = &[
     NfColumnSpec { tag: "小径下差", label: "小径下差", unit: "mm", formula: "ISO 286 H7（p28 §6 内花键小径公差，参考）", source: SOURCE_MINOR_TOL },
     NfColumnSpec { tag: "跨棒距上差", label: "跨棒距上差", unit: "mm", formula: "p29 内花键 E 偏差上差（µm→mm）", source: SOURCE_G_TOL },
     NfColumnSpec { tag: "跨棒距下差", label: "跨棒距下差", unit: "mm", formula: "p29 内花键 E 偏差下差（µm→mm）", source: SOURCE_G_TOL },
-];
-
-const SOURCE_FIT_TOL: &str =
-    "NF E22-141 p29（检查尺寸的公差值；assets/nf_e22141_e_xm_tol.csv 逐行 source）";
-
-/// 条带 20 项口径（顺序 = [`fit_strip_attdefs()`]；内外两卡共用）。
-/// 符号照 NF 原文 `E`/`xm`；单位照 p29 原文微米整数；表外一律「—」。
-pub const FIT_COLUMNS: [NfColumnSpec; 20] = [
-    NfColumnSpec { tag: "E内花键上差", label: "E 内花键上差", unit: "µm", formula: "p29 内花键 E 偏差上差（原文微米）", source: SOURCE_FIT_TOL },
-    NfColumnSpec { tag: "E内花键下差", label: "E 内花键下差", unit: "µm", formula: "p29 内花键 E 偏差下差（原文微米）", source: SOURCE_FIT_TOL },
-    NfColumnSpec { tag: "E松动上差", label: "E 松动上差", unit: "µm", formula: "p29 外花键 E 偏差上差（松动配合）", source: SOURCE_FIT_TOL },
-    NfColumnSpec { tag: "E松动下差", label: "E 松动下差", unit: "µm", formula: "p29 外花键 E 偏差下差（松动配合）", source: SOURCE_FIT_TOL },
-    NfColumnSpec { tag: "E滑动上差", label: "E 滑动上差", unit: "µm", formula: "p29 外花键 E 偏差上差（滑动配合）", source: SOURCE_FIT_TOL },
-    NfColumnSpec { tag: "E滑动下差", label: "E 滑动下差", unit: "µm", formula: "p29 外花键 E 偏差下差（滑动配合）", source: SOURCE_FIT_TOL },
-    NfColumnSpec { tag: "E固定上差", label: "E 固定上差", unit: "µm", formula: "p29 外花键 E 偏差上差（固定配合）", source: SOURCE_FIT_TOL },
-    NfColumnSpec { tag: "E固定下差", label: "E 固定下差", unit: "µm", formula: "p29 外花键 E 偏差下差（固定配合）", source: SOURCE_FIT_TOL },
-    NfColumnSpec { tag: "E压上差", label: "E 压上差", unit: "µm", formula: "p29 外花键 E 偏差上差（压配合）", source: SOURCE_FIT_TOL },
-    NfColumnSpec { tag: "E压下差", label: "E 压下差", unit: "µm", formula: "p29 外花键 E 偏差下差（压配合）", source: SOURCE_FIT_TOL },
-    NfColumnSpec { tag: "xm内花键上差", label: "xm 内花键上差", unit: "µm", formula: "p29 内花键 xm 偏差上差（原文微米）", source: SOURCE_FIT_TOL },
-    NfColumnSpec { tag: "xm内花键下差", label: "xm 内花键下差", unit: "µm", formula: "p29 内花键 xm 偏差下差（原文微米）", source: SOURCE_FIT_TOL },
-    NfColumnSpec { tag: "xm松动上差", label: "xm 松动上差", unit: "µm", formula: "p29 外花键 xm 偏差上差（松动配合）", source: SOURCE_FIT_TOL },
-    NfColumnSpec { tag: "xm松动下差", label: "xm 松动下差", unit: "µm", formula: "p29 外花键 xm 偏差下差（松动配合）", source: SOURCE_FIT_TOL },
-    NfColumnSpec { tag: "xm滑动上差", label: "xm 滑动上差", unit: "µm", formula: "p29 外花键 xm 偏差上差（滑动配合）", source: SOURCE_FIT_TOL },
-    NfColumnSpec { tag: "xm滑动下差", label: "xm 滑动下差", unit: "µm", formula: "p29 外花键 xm 偏差下差（滑动配合）", source: SOURCE_FIT_TOL },
-    NfColumnSpec { tag: "xm固定上差", label: "xm 固定上差", unit: "µm", formula: "p29 外花键 xm 偏差上差（固定配合）", source: SOURCE_FIT_TOL },
-    NfColumnSpec { tag: "xm固定下差", label: "xm 固定下差", unit: "µm", formula: "p29 外花键 xm 偏差下差（固定配合）", source: SOURCE_FIT_TOL },
-    NfColumnSpec { tag: "xm压上差", label: "xm 压上差", unit: "µm", formula: "p29 外花键 xm 偏差上差（压配合）", source: SOURCE_FIT_TOL },
-    NfColumnSpec { tag: "xm压下差", label: "xm 压下差", unit: "µm", formula: "p29 外花键 xm 偏差下差（压配合）", source: SOURCE_FIT_TOL },
 ];
 
 /// NF 内花键卡的表单字段（表驱动 GUI 骨架）。
@@ -1269,11 +1058,12 @@ pub const FORM: crate::card::CardFormSpec = crate::card::CardFormSpec {
         },
         crate::card::CardFieldSpec {
             key: "fit",
-            label: "配合类别",
+            label: "配合类别（出表前选定）",
             kind: "select",
             placeholder: "",
             default: "fixed",
-            title: "NF E22-141 p31/p34：松动/滑动/固定/压；只影响预览里配对外花键的 E/xm 偏差读数",
+            title: "NF E22-141 p31/p34：松动/滑动/固定/压；缺省固定；★ 出表前先选好——\
+                    决定预览里配对外花键的 E/xm 偏差读数（内卡跨棒距 G 公差 = p29 内花键 E，不随配合变）",
             options: &[
                 ("loose", "松动"),
                 ("slide", "滑动"),
@@ -1288,16 +1078,15 @@ pub const FORM: crate::card::CardFormSpec = crate::card::CardFormSpec {
     ],
     note: "粘九字段表达式（自动反解 A/m/z）或直接填 A/m（z 选填核对）→ 选定心/齿根/配合 → 点「出表」回到图纸放置。\
            公差：大径 R7 / 小径 H7（p28）+ 跨棒距 = p29 内花键 E 偏差；\
-           卡底「p29 配合偏差」条带并列 E/xm 的内花键值与外花键四配合（松动/滑动/固定/压）。",
+           配合类别在出表前选定（缺省固定）：决定预览里配对外花键的 E/xm 读数。",
     missing_note: "(m,A) 不在 p29 或 ISO 档缺时对应公差格显示「—」，不外推；\
-                   V/V1/G/G1 与 ri 只取 p23–p25 / p22 表值，表外显示「—」；\
-                   条带表外整条「—」。",
+                   V/V1/G/G1 与 ri 只取 p23–p25 / p22 表值，表外显示「—」。",
 };
 
 /// NF 卡的选项/口径 JSON（随 `/api/spline_options` 下发；页面只渲染）。
 pub fn options_json() -> serde_json::Value {
     serde_json::json!({
-        "columns": NF_COLUMNS.iter().chain(FIT_COLUMNS.iter()).map(|c| serde_json::json!({
+        "columns": NF_COLUMNS.iter().map(|c| serde_json::json!({
             "tag": c.tag,
             "label": c.label,
             "unit": c.unit,
@@ -1321,13 +1110,12 @@ pub fn options_json() -> serde_json::Value {
         "missing_note": "公差口径（NF E22-141）：大径上/下差 = ISO 286 R7（p28 §4）；\
                          小径上/下差 = ISO 286 H7（p28 §6，参考）；\
                          跨棒距上/下差 = p29 检查尺寸的公差值里**内花键 E** 的偏差（µm→mm）。\
-                         卡底「p29 配合偏差」条带把 E / xm 的**内花键单列 + 外花键四配合（松动/滑动/固定/压）**\
-                         全部并列（原文微米，各自上/下）；(m,A) 不在 p29 或 ISO 档缺时对应格显示「—」，不外推；\
+                         p29 的 xm 内花键 + 所选配合的外花键 E/xm 偏差在预览读数里列出；\
+                         (m,A) 不在 p29 或 ISO 档缺时对应格显示「—」，不外推；\
                          元素（ATTDEF）始终存在，可在 CAD 里改写。",
-        "note": "版面照外花键参数表NF.dxf 同构镜像（13 行 × 2 列，66 线 + 13 标签 + 18 属性）\
-                 + 底部 p29 四配合全表条带（3 行 × 5 数据列，11 线 + 8 文字 + 20 属性）；\
+        "note": "版面照外花键参数表NF.dxf 同构镜像（13 行 × 2 列，66 线 + 13 标签 + 18 属性）；\
                  文字样式一律 OCSM_GB；模板末行标签出框已归位；\
-                 公差按 p28 直径公差 + p29 E 偏差取值；配合类别选中项仍决定主表公法线/跨棒距格（高亮）。",
+                 公差按 p28 直径公差 + p29 E 偏差取值（配合类别只影响预览读数）。",
     })
 }
 
@@ -1421,10 +1209,9 @@ impl NfTableModel {
         let spec = self.spec()?;
         let d = derive(&spec)?;
         let vals = values(&spec)?;
-        let cols: Vec<&NfColumnSpec> = NF_COLUMNS.iter().chain(FIT_COLUMNS.iter()).collect();
-        let mut items = Vec::with_capacity(cols.len());
+        let mut items = Vec::with_capacity(NF_COLUMNS.len());
         let mut missing = Vec::new();
-        for (c, (tag, value)) in cols.iter().zip(vals) {
+        for (c, (tag, value)) in NF_COLUMNS.iter().zip(vals) {
             debug_assert_eq!(c.tag, tag);
             if value == MISSING {
                 missing.push(c.label.to_string());
@@ -1444,53 +1231,42 @@ impl NfTableModel {
             Centering::Outer => "Az = A",
             Centering::Flank => "Az = A + 0.3m",
         };
-        // p29 E/xm 偏差读数：内花键单行 + 外花键四配合各一行（全表进卡，不再只报所选配合）。
+        // p29 E/xm 偏差读数（内花键 + 所选配合的外花键）；微米原文与 mm 对照。
         let um = |p: DevPair| format!("{:+}/{:+}", p.upper, p.lower);
-        let p29_int = match d.tol_row {
-            Some(r) => format!(
-                "E {}（{}/{} mm）；xm {}（µm）",
-                um(r.e_int),
-                fmt_um_mm(r.e_int.upper),
-                fmt_um_mm(r.e_int.lower),
-                um(r.xm_int)
-            ),
-            None => MISSING.to_string(),
-        };
-        let mut readout: Vec<serde_json::Value> = vec![
-            serde_json::json!({"k": "公称直径 A（主参数）", "v": fmt_mm(spec.a)}),
-            serde_json::json!({"k": format!("大径 Az（{az_formula}）"), "v": fmt_mm(d.az)}),
-            serde_json::json!({"k": "小径 D = A − 2m", "v": fmt_mm(d.d)}),
-            serde_json::json!({"k": "p18 表小径 D 交叉核对", "v": d.table_d.map(fmt_mm).unwrap_or_else(|| MISSING.to_string())}),
-            serde_json::json!({"k": "量棒 V / V1", "v": format!("{} / {}", opt(d.v), opt(d.v1))}),
-            serde_json::json!({"k": "跨棒距 G / G1", "v": format!("{} / {}", opt(d.g), opt(d.g1))}),
-            serde_json::json!({"k": "槽底圆角 ri（p22）", "v": opt(d.ri)}),
-            serde_json::json!({"k": "变位系数 x（p22）", "v": opt(d.x)}),
-            serde_json::json!({"k": "p29 内花键偏差（µm）", "v": p29_int}),
-        ];
-        for fit in FitClass::ALL {
-            let v = match d.tol_row {
-                Some(r) => format!(
+        let (p29_int, p29_ext) = match d.tol_row {
+            Some(r) => (
+                format!(
                     "E {}（{}/{} mm）；xm {}（µm）",
-                    um(r.e_ext_for(fit)),
-                    fmt_um_mm(r.e_ext_for(fit).upper),
-                    fmt_um_mm(r.e_ext_for(fit).lower),
-                    um(r.xm_ext_for(fit))
+                    um(r.e_int),
+                    fmt_um_mm(r.e_int.upper),
+                    fmt_um_mm(r.e_int.lower),
+                    um(r.xm_int)
                 ),
-                None => MISSING.to_string(),
-            };
-            readout.push(serde_json::json!({
-                "k": format!("配对外花键·{}偏差（µm；p29）", fit.label()),
-                "v": v,
-            }));
-        }
-        readout.extend([
-            serde_json::json!({"k": "大径上/下差", "v": d.major_tol.map(|l| { let (u, lo) = l.display(); format!("{u} / {lo}") }).unwrap_or_else(|| MISSING.to_string())}),
-            serde_json::json!({"k": "小径上/下差", "v": d.minor_tol.map(|l| { let (u, lo) = l.display(); format!("{u} / {lo}") }).unwrap_or_else(|| MISSING.to_string())}),
-            serde_json::json!({"k": "p18 行", "v": d.dims_source}),
-            serde_json::json!({"k": "p22 行", "v": d.detail_source}),
-            serde_json::json!({"k": "p25 行", "v": d.check_source}),
+                format!(
+                    "E {}；xm {}",
+                    um(r.e_ext_for(spec.fit)),
+                    um(r.xm_ext_for(spec.fit))
+                ),
+            ),
+            None => (MISSING.to_string(), MISSING.to_string()),
+        };
+        let readout = serde_json::json!([
+            {"k": "公称直径 A（主参数）", "v": fmt_mm(spec.a)},
+            {"k": format!("大径 Az（{az_formula}）"), "v": fmt_mm(d.az)},
+            {"k": "小径 D = A − 2m", "v": fmt_mm(d.d)},
+            {"k": "p18 表小径 D 交叉核对", "v": d.table_d.map(fmt_mm).unwrap_or_else(|| MISSING.to_string())},
+            {"k": "量棒 V / V1", "v": format!("{} / {}", opt(d.v), opt(d.v1))},
+            {"k": "跨棒距 G / G1", "v": format!("{} / {}", opt(d.g), opt(d.g1))},
+            {"k": "槽底圆角 ri（p22）", "v": opt(d.ri)},
+            {"k": "变位系数 x（p22）", "v": opt(d.x)},
+            {"k": "p29 内花键偏差（µm）", "v": p29_int},
+            {"k": format!("配对外花键·{}偏差（µm；p29）", spec.fit.label()), "v": p29_ext},
+            {"k": "大径上/下差", "v": d.major_tol.map(|l| { let (u, lo) = l.display(); format!("{u} / {lo}") }).unwrap_or_else(|| MISSING.to_string())},
+            {"k": "小径上/下差", "v": d.minor_tol.map(|l| { let (u, lo) = l.display(); format!("{u} / {lo}") }).unwrap_or_else(|| MISSING.to_string())},
+            {"k": "p18 行", "v": d.dims_source},
+            {"k": "p22 行", "v": d.detail_source},
+            {"k": "p25 行", "v": d.check_source},
         ]);
-        let readout = serde_json::Value::Array(readout);
         let expr_echo = self
             .expr
             .as_deref()
@@ -1534,7 +1310,7 @@ impl NfTableModel {
         }))
     }
 
-    /// 待放置件要带的 38 个 ATTRIB（tag → 值 + ATTDEF 模板）。
+    /// 待放置件要带的 18 个 ATTRIB（tag → 值 + ATTDEF 模板）。
     pub fn pending_attrs(&self) -> Result<Vec<(AttributeDefinition, String)>, String> {
         let spec = self.spec()?;
         let vals = values(&spec)?;
@@ -1858,8 +1634,8 @@ mod tests {
         let ents = block_entities();
         assert_eq!(
             ents.len(),
-            66 + 13 + 18 + 11 + 8 + 20,
-            "主表 97 图元（66 线 + 13 标签 + 18 属性）+ 条带 39（11 线 + 8 文字 + 20 属性）"
+            66 + 13 + 18,
+            "模板 97 图元（66 线 + 25 MTEXT + 6 TEXT）→ 66 线 + 13 标签 + 18 属性"
         );
 
         // ── 66 条 LINE：逐条在集合里能按坐标+图层找到（1e-5）──
@@ -1922,7 +1698,7 @@ mod tests {
         assert!(line_hits([MID_X, -41.93014705882336], [MID_X, -82.6214766677619], "2细线层"));
         assert!(line_hits([MID_X, -489.2095660532368], [MID_X, FRAME.3], "2细线层"));
 
-        // ── 21 条 MTEXT：标题 + 12 标签 + 条带 8，全部 OCSM_GB / 6文字层 ──
+        // ── 13 条 MTEXT：标题 + 12 标签，全部 OCSM_GB / 6文字层 ──
         let mtexts: Vec<&MText> = ents
             .iter()
             .filter_map(|e| match e {
@@ -1930,7 +1706,7 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert_eq!(mtexts.len(), 21, "标题 + 12 标签 + 条带 8");
+        assert_eq!(mtexts.len(), 13, "标题 + 12 标签");
         let title = mtexts
             .iter()
             .find(|m| m.value == "内花键参数表")
@@ -1940,12 +1716,7 @@ mod tests {
         for m in &mtexts {
             assert_eq!(m.style, "OCSM_GB", "MTEXT 样式：{}", m.value);
             assert_eq!(m.common.layer, "6文字层");
-            assert!(
-                near5(m.height, TEXT_H) || near5(m.height, TOL_H),
-                "MTEXT 字高只能主表 25 / 条带 15：{} {}",
-                m.value,
-                m.height
-            );
+            assert!(near5(m.height, TEXT_H));
         }
         for (label, _, y) in NF_ROWS {
             let m = mtexts
@@ -1964,34 +1735,11 @@ mod tests {
             mtexts.iter().all(|m| (m.insertion_point.x + 444.9504118793738).abs() > 1.0),
             "末行标签仍在模板的出框位置"
         );
-        // ── 条带 8 条 MTEXT：表头（左标签 + 5 列头）+ E/xm 行标签 ──
-        let strip_texts = fit_strip_mtexts();
-        assert_eq!(strip_texts.len(), 8);
-        for (value, x, y, attach) in strip_texts {
-            let m = mtexts
-                .iter()
-                .find(|m| m.value == value)
-                .unwrap_or_else(|| panic!("缺条带 MTEXT {value}"));
-            assert!(near5(m.insertion_point.x, x) && near5(m.insertion_point.y, y), "{value} 位置");
-            assert!(near5(m.height, TOL_H));
-            let want = if attach == 5 {
-                AttachmentPoint::MiddleCenter
-            } else {
-                AttachmentPoint::MiddleLeft
-            };
-            assert_eq!(m.attachment_point, want, "{value} 对齐");
-        }
 
-        // ── 38 个 ATTDEF：12 值（左中）+ 6 公差（基线）+ 20 条带（正中），tag/位置/字高/字宽 ──
+        // ── 18 个 ATTDEF：12 值（左中）+ 6 公差（基线），tag/位置/字高/字宽 ──
         let atts: Vec<AttributeDefinition> = attdefs();
-        assert_eq!(atts.len(), 38);
-        let strip_att = fit_strip_attdefs();
-        let want_tags: Vec<&str> = VALUE_TAGS
-            .iter()
-            .chain(TOL_TAGS.iter())
-            .copied()
-            .chain(strip_att.iter().map(|a| a.tag.as_str()))
-            .collect();
+        assert_eq!(atts.len(), 18);
+        let want_tags: Vec<&str> = VALUE_TAGS.iter().chain(TOL_TAGS.iter()).copied().collect();
         let got_tags: Vec<&str> = atts.iter().map(|a| a.tag.as_str()).collect();
         assert_eq!(got_tags, want_tags, "ATTDEF tag 顺序");
         for (i, (_, tag, y)) in NF_ROWS.iter().enumerate() {
@@ -2029,34 +1777,6 @@ mod tests {
             assert_eq!(atts[12 + 2 * i].tag, *pair.0);
             assert_eq!(atts[12 + 2 * i + 1].tag, *pair.1);
         }
-        // ── 20 个条带 ATTDEF：正中（中/中），字高 15、字宽 0.667；行/列顺序确定 ──
-        assert_eq!(strip_att.len(), 20);
-        for (i, ad) in strip_att.iter().enumerate() {
-            let a = &atts[18 + i];
-            assert_eq!(a.tag, ad.tag, "条带 tag 顺序");
-            assert!(
-                near5(a.insertion_point.x, ad.insertion_point.x)
-                    && near5(a.insertion_point.y, ad.insertion_point.y),
-                "{} 位置",
-                a.tag
-            );
-            assert!(near5(a.height, TOL_H));
-            assert!(near5(a.width_factor, TOL_WIDTH_FACTOR));
-            assert_eq!(a.horizontal_alignment, HorizontalAlignment::Center);
-            assert_eq!(a.vertical_alignment, VerticalAlignment::Middle);
-            assert_eq!(a.text_style, "OCSM_GB");
-            assert_eq!(a.common.layer, "6文字层");
-        }
-        // 条带行/列分隔线：左右边框延长 + 新底框 + 2 条行分隔 + 5 条列分隔
-        let strip_lines = fit_strip_lines();
-        assert_eq!(strip_lines.len(), 11);
-        for (a, b, layer) in &strip_lines {
-            assert!(line_hits(*a, *b, layer), "缺条带线 {a:?}→{b:?} @{layer}");
-        }
-        assert!(near5(
-            FIT_STRIP_BOTTOM,
-            FIT_STRIP_TOP - FIT_STRIP_ROWS as f64 * FIT_STRIP_ROW_H
-        ));
     }
 
     /// ★ 锚点正向断言（调研 §4.2）：模板示例 m=7.5 / A=300 / z=38 的每个标准原值，
@@ -2086,21 +1806,6 @@ mod tests {
         assert_eq!(get("小径下差"), "0");
         assert_eq!(get("跨棒距上差"), "+0.052", "p29 m=7.5/A=300 内花键 E +52/0");
         assert_eq!(get("跨棒距下差"), "0");
-        // p29 四配合全表条带（锚点行 m=7.5/A=300 逐项对 CSV；原文微米整数）
-        for (tag, want) in [
-            ("E内花键上差", "+52"), ("E内花键下差", "0"),
-            ("E松动上差", "-110"), ("E松动下差", "-194"),
-            ("E滑动上差", "-20"), ("E滑动下差", "-104"),
-            ("E固定上差", "+42"), ("E固定下差", "-42"),
-            ("E压上差", "+138"), ("E压下差", "+54"),
-            ("xm内花键上差", "+76"), ("xm内花键下差", "0"),
-            ("xm松动上差", "-161"), ("xm松动下差", "-284"),
-            ("xm滑动上差", "-29"), ("xm滑动下差", "-152"),
-            ("xm固定上差", "+61"), ("xm固定下差", "-61"),
-            ("xm压上差", "+202"), ("xm压下差", "+79"),
-        ] {
-            assert_eq!(get(tag), want, "条带 {tag}");
-        }
         // 表值与公式交叉核对
         assert_eq!(d.table_d, Some(285.0), "p18 表 D = A−2m = 285");
         assert_eq!(d.v, Some(15.0));
@@ -2240,8 +1945,8 @@ mod tests {
         }
         .preview_json()
         .unwrap();
-        assert_eq!(j["items"].as_array().unwrap().len(), 38, "12 值 + 6 公差 + 20 条带");
-        assert_eq!(j["missing"].as_array().unwrap().len(), 0, "锚点 38 项齐全");
+        assert_eq!(j["items"].as_array().unwrap().len(), 18);
+        assert_eq!(j["missing"].as_array().unwrap().len(), 0, "锚点 18 项齐全");
         assert_eq!(j["fit"], "fixed", "配合缺省固定");
         assert!(
             j["readout"].as_array().unwrap().iter().any(|r| r["v"]
@@ -2282,10 +1987,6 @@ mod tests {
         assert_eq!(g("小径D"), "195");
         assert_eq!(g("跨棒距上差"), MISSING, "p29 表外 → 跨棒距公差标缺");
         assert_eq!(g("跨棒距下差"), MISSING);
-        // 条带 20 项一并标缺（原文列义在、无值 → 「—」，不外推）
-        for c in FIT_COLUMNS {
-            assert_eq!(g(c.tag), MISSING, "p29 表外 → 条带 {} 标缺", c.tag);
-        }
         // ③ 配合类别只影响“配对外花键”读数，不影响内花键自身取值
         for fit in FitClass::ALL {
             let mut s = spec.clone();
@@ -2517,148 +2218,6 @@ mod tests {
         assert!(tbox[1] >= tbottom - 1e-9 && tbox[3] <= ttop + 1e-9, "标题出行为");
     }
 
-    /// ★ 四配合全表条件取值：列序 = 内花键 / 松动 / 滑动 / 固定 / 压，行序 = E / xm，
-    /// 每格上/下；与 `assets/nf_e22141_e_xm_tol.csv` 逐格对照（p29 原文微米）。
-    #[test]
-    fn nf_fit_strip_values_match_p29_columns_in_order() {
-        let idx = |e_or_xm: usize, col: usize, upper: bool| {
-            e_or_xm * 10 + col * 2 + usize::from(!upper)
-        };
-        // m=1.25 / A=45 行（p29 row4）：四配合取值互不相同，能锁列序
-        let r = e_xm_tol_row(1.25, 45.0).expect("p29 m=1.25/A=45");
-        let v = fit_strip_values(Some(r));
-        assert_eq!(v.len(), 20);
-        // E 行：内 +30/0；松动 -70/-118；滑动 -10/-58；固定 +24/-24；压 +76/+28
-        assert_eq!(v[idx(0, 0, true)], "+30");
-        assert_eq!(v[idx(0, 0, false)], "0");
-        assert_eq!(v[idx(0, 1, true)], "-70");
-        assert_eq!(v[idx(0, 1, false)], "-118");
-        assert_eq!(v[idx(0, 2, true)], "-10");
-        assert_eq!(v[idx(0, 2, false)], "-58");
-        assert_eq!(v[idx(0, 3, true)], "+24");
-        assert_eq!(v[idx(0, 3, false)], "-24");
-        assert_eq!(v[idx(0, 4, true)], "+76");
-        assert_eq!(v[idx(0, 4, false)], "+28");
-        // xm 行：内 +44/0；松动 -102/-173；滑动 -15/-85；固定 +35/-35；压 +111/+41
-        assert_eq!(v[idx(1, 0, true)], "+44");
-        assert_eq!(v[idx(1, 0, false)], "0");
-        assert_eq!(v[idx(1, 1, true)], "-102");
-        assert_eq!(v[idx(1, 1, false)], "-173");
-        assert_eq!(v[idx(1, 2, true)], "-15");
-        assert_eq!(v[idx(1, 2, false)], "-85");
-        assert_eq!(v[idx(1, 3, true)], "+35");
-        assert_eq!(v[idx(1, 3, false)], "-35");
-        assert_eq!(v[idx(1, 4, true)], "+111");
-        assert_eq!(v[idx(1, 4, false)], "+41");
-        // tag 与列序逐位对齐（GUI 行/计算书行按 tag 走）
-        let tags: Vec<String> = fit_strip_attdefs().iter().map(|a| a.tag.clone()).collect();
-        let mut want = Vec::new();
-        for key in ["E", "xm"] {
-            for col in FIT_STRIP_COLS {
-                want.push(format!("{key}{col}上差"));
-                want.push(format!("{key}{col}下差"));
-            }
-        }
-        assert_eq!(tags, want);
-        // 每一行 p29 都能按列序产出 20 项（不重不漏）；表外整条「—」
-        for row in e_xm_tol_rows() {
-            let v = fit_strip_values(Some(row));
-            assert_eq!(v.len(), 20);
-            assert_eq!(v[idx(0, 1, true)], fmt_um(row.e_ext_for(FitClass::Loose).upper));
-            assert_eq!(v[idx(0, 4, false)], fmt_um(row.e_ext_for(FitClass::Press).lower));
-            assert_eq!(v[idx(1, 1, true)], fmt_um(row.xm_ext_for(FitClass::Loose).upper));
-            assert_eq!(v[idx(1, 4, false)], fmt_um(row.xm_ext_for(FitClass::Press).lower));
-        }
-        assert!(fit_strip_values(None).iter().all(|s| s == MISSING));
-    }
-
-    /// ★ 条带几何：每格文本在所在列/行带内、不出框、相互不叠；表头/行标签也不越列。
-    #[test]
-    fn nf_fit_strip_cells_stay_in_columns_and_do_not_overlap() {
-        let w = fit_strip_col_w();
-        let col_bounds = |i: usize| {
-            let left = FRAME.0 + FIT_STRIP_LABEL_W + i as f64 * w;
-            (left, left + w)
-        };
-        let row_bounds = |row: usize| {
-            let top = FIT_STRIP_TOP - row as f64 * FIT_STRIP_ROW_H;
-            (top - FIT_STRIP_ROW_H, top)
-        };
-        let overlap = |a: [f64; 4], b: [f64; 4]| {
-            a[0] < b[2] && b[0] < a[2] && a[1] < b[3] && b[1] < a[3]
-        };
-        // 覆盖选型：锚点 / 表内最大字宽（压配合 +217/-284）+ 表外（全「—」）
-        let specs = [
-            anchor_spec(),
-            NfTableSpec {
-                a: 300.0,
-                m: 10.0,
-                z: None,
-                centering: Centering::Outer,
-                root: RootStyle::Flat,
-                fit: FitClass::Press,
-                at: None,
-                rot: 0.0,
-            },
-            NfTableSpec {
-                a: 210.0,
-                m: 7.5,
-                z: None,
-                centering: Centering::Outer,
-                root: RootStyle::Flat,
-                fit: FitClass::Fixed,
-                at: None,
-                rot: 0.0,
-            },
-        ];
-        let strip_att = fit_strip_attdefs();
-        for spec in &specs {
-            let d = derive(spec).unwrap();
-            let vals = fit_strip_values(d.tol_row);
-            let mut boxes: Vec<[f64; 4]> = Vec::with_capacity(20);
-            for (i, ad) in strip_att.iter().enumerate() {
-                let v = &vals[i];
-                let half = text_extent(v, TOL_H, TOL_WIDTH_FACTOR) / 2.0;
-                let b = [
-                    ad.insertion_point.x - half,
-                    ad.insertion_point.y - TOL_H / 2.0,
-                    ad.insertion_point.x + half,
-                    ad.insertion_point.y + TOL_H / 2.0,
-                ];
-                // tag → 列/行（顺序：行 E/xm × 列 内/四配合 × 上/下）
-                let col = (i % 10) / 2;
-                let row = 1 + i / 10;
-                let (cl, cr) = col_bounds(col);
-                let (rb, rt) = row_bounds(row);
-                assert!(b[0] >= cl - 1e-9 && b[2] <= cr + 1e-9, "{}={v} 出列 [{cl},{cr}]：{b:?}", ad.tag);
-                assert!(b[1] >= rb - 1e-9 && b[3] <= rt + 1e-9, "{}={v} 出行 [{rb},{rt}]：{b:?}", ad.tag);
-                for prev in &boxes {
-                    assert!(!overlap(b, *prev), "{}={v} 与前一格叠字：{b:?} / {prev:?}", ad.tag);
-                }
-                boxes.push(b);
-            }
-        }
-        // 静态文字：表头列名在各自列内；左标签与 E/xm 行标签在标签列内
-        for (value, x, y, attach) in fit_strip_mtexts() {
-            let width = text_extent(value, TOL_H, 0.7);
-            let b = if attach == 5 {
-                [x - width / 2.0, y - TOL_H / 2.0, x + width / 2.0, y + TOL_H / 2.0]
-            } else {
-                [x, y - TOL_H / 2.0, x + width, y + TOL_H / 2.0]
-            };
-            assert!(b[0] >= FRAME.0 - 1e-9 && b[2] <= FRAME.1 + 1e-9, "条带文字 {value} 出框：{b:?}");
-            if attach == 4 {
-                assert!(b[2] <= FRAME.0 + FIT_STRIP_LABEL_W + 1e-9, "行标签 {value} 越列：{b:?}");
-            }
-            let (rb, rt) = row_bounds(match value {
-                "E（µm）" => 1,
-                "xm（µm）" => 2,
-                _ => 0,
-            });
-            assert!(b[1] >= rb - 1e-9 && b[3] <= rt + 1e-9, "条带文字 {value} 出行：{b:?}");
-        }
-    }
-
     /// 值/标签文本宽度估计：字符推进宽度（em，朱雀仿宋实测的保守上限，与 GB 花键卡同款）。
     fn char_em(c: char) -> f64 {
         if c.is_ascii_digit() || c == '.' || c == '+' || c == '-' {
@@ -2697,7 +2256,7 @@ mod tests {
         assert_eq!(j["renderer"], "nf_table");
         assert_eq!(j["centering"], "outer");
         assert_eq!(j["root"], "flat");
-        assert_eq!(j["items"].as_array().unwrap().len(), 38);
+        assert_eq!(j["items"].as_array().unwrap().len(), 18);
         assert!(
             j["readout"]
                 .as_array()
@@ -2716,7 +2275,7 @@ mod tests {
         );
         let ins = m.build_insert().unwrap();
         assert_eq!(ins.block_name, BLOCK);
-        assert_eq!(ins.attributes.len(), 38);
+        assert_eq!(ins.attributes.len(), 18);
         assert!(near(ins.rotation, 0.0));
         // 整表 INSERT 缩放 0.17（不改块几何；ATTRIB 随 INSERT 缩放：高度/位置 ×0.17）
         assert!(near5(ins.x_scale(), TABLE_SCALE) && near5(ins.y_scale(), TABLE_SCALE) && near5(ins.z_scale(), TABLE_SCALE));
@@ -2734,14 +2293,14 @@ mod tests {
         item_tags.sort();
         att_tags.sort();
         assert_eq!(item_tags, att_tags, "口径表 ↔ 属性表多重集不一致");
-        assert_eq!(att_tags.len(), 38);
-        assert_eq!(m.pending_attrs().unwrap().len(), 38);
+        assert_eq!(att_tags.len(), 18);
+        assert_eq!(m.pending_attrs().unwrap().len(), 18);
         let meta = m.part_meta_json().unwrap();
         assert!(meta.contains("\"family\":\"nf_table\""));
         let echo = m.echo_note().unwrap();
         assert!(echo.contains("A=300") && echo.contains("z=38"), "{echo}");
         let md = markdown_table(&m.spec().unwrap()).unwrap();
-        assert_eq!(md.lines().count(), 40, "38 行 + 表头 + 分隔");
+        assert_eq!(md.lines().count(), 20, "18 行 + 表头 + 分隔");
     }
 
     fn expr_model(expr: &str) -> NfTableModel {
@@ -2847,5 +2406,124 @@ mod tests {
         let get = |tag: &str| vals.iter().find(|(t, _)| t == tag).unwrap().1.clone();
         assert_eq!(get("量棒直径V"), MISSING);
         assert_eq!(get("跨棒距G"), MISSING);
+    }
+
+    /// ★ 负断言（用户 2026-09-27 判定）：卡底**不得**再出现「p29 四配合全表条带」。
+    /// 内/外两卡都回到模板同构：97 图元 = 66 线 + 13 MTEXT + 18 ATTDEF；18 项取值。
+    #[test]
+    fn nf_cards_have_no_p29_fit_strip() {
+        let strip_mark = |value: &str| value.contains("p29 配合偏差") || value == "E（µm）" || value == "xm（µm）";
+        let strip_tag = |tag: &str| {
+            ["E内花键", "E松动", "E滑动", "E固定", "E压", "xm内花键", "xm松动", "xm滑动", "xm固定", "xm压"]
+                .iter()
+                .any(|p| tag.starts_with(p))
+        };
+        // 内卡
+        let int_ents = block_entities();
+        assert_eq!(int_ents.len(), 66 + 13 + 18, "内卡回到模板 97 图元");
+        let int_texts: Vec<&str> = int_ents
+            .iter()
+            .filter_map(|e| match e {
+                EntityType::MText(m) => Some(m.value.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert!(int_texts.iter().all(|t| !strip_mark(t)), "内卡仍有条带文字：{int_texts:?}");
+        let int_tags: Vec<String> = attdefs().iter().map(|a| a.tag.clone()).collect();
+        assert_eq!(int_tags.len(), 18);
+        assert!(int_tags.iter().all(|t| !strip_tag(t)), "内卡仍有条带属性：{int_tags:?}");
+        let int_vals = values(&anchor_spec()).unwrap();
+        assert_eq!(int_vals.len(), 18);
+        assert!(int_vals.iter().all(|(t, v)| !strip_tag(t) && !v.contains('µ')));
+        // 外卡
+        let ext_ents = crate::nf_ext_table::block_entities();
+        assert_eq!(ext_ents.len(), 66 + 13 + 18, "外卡回到模板 97 图元");
+        let ext_texts: Vec<&str> = ext_ents
+            .iter()
+            .filter_map(|e| match e {
+                EntityType::MText(m) => Some(m.value.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert!(ext_texts.iter().all(|t| !strip_mark(t)), "外卡仍有条带文字：{ext_texts:?}");
+        let ext_tags: Vec<String> = crate::nf_ext_table::attdefs().iter().map(|a| a.tag.clone()).collect();
+        assert_eq!(ext_tags.len(), 18);
+        assert!(ext_tags.iter().all(|t| !strip_tag(t)), "外卡仍有条带属性：{ext_tags:?}");
+        let ext_spec = crate::nf_ext_table::NfExtTableSpec {
+            a: 300.0,
+            m: 7.5,
+            z: Some(38),
+            centering: Centering::Flank,
+            root: RootStyle::Flat,
+            fit: FitClass::Fixed,
+            at: None,
+            rot: 0.0,
+        };
+        let ext_vals = crate::nf_ext_table::values(&ext_spec).unwrap();
+        assert_eq!(ext_vals.len(), 18);
+        assert!(ext_vals.iter().all(|(t, v)| !strip_tag(t) && !v.contains('µ')));
+        // 预览 items 也回到 18（内 6 值 + 6 公差 = 18；无条带 20）
+        let j = NfTableModel {
+            card: "NF内花键参数表".into(),
+            expr: None,
+            a: 300.0,
+            m: 7.5,
+            z: Some(38),
+            centering: None,
+            root: None,
+            fit: None,
+            at: None,
+            rot: 0.0,
+        }
+        .preview_json()
+        .unwrap();
+        assert_eq!(j["items"].as_array().unwrap().len(), 18);
+    }
+
+    /// ★ 几何：内/外两卡所有 MTEXT 参考框宽 ≥ 文本宽（不折行）且框不出表；标签互不叠。
+    #[test]
+    fn nf_cards_mtext_no_wrap_and_no_overlap() {
+        for (name, ents) in [
+            ("NF内", block_entities()),
+            ("NF外", crate::nf_ext_table::block_entities()),
+        ] {
+            let mut boxes: Vec<(&str, [f64; 4])> = Vec::new();
+            for e in &ents {
+                let EntityType::MText(m) = e else { continue };
+                let w = text_extent(&m.value, m.height, 0.7);
+                assert!(
+                    m.rectangle_width == 0.0 || m.rectangle_width + 1e-9 >= w,
+                    "{name} MTEXT {:?} 参考框宽 {:.2} < 文本宽 {:.2}（会折行）",
+                    m.value,
+                    m.rectangle_width,
+                    w
+                );
+                let (x, y, h) = (m.insertion_point.x, m.insertion_point.y, m.height);
+                let b = match m.attachment_point {
+                    AttachmentPoint::MiddleCenter => [x - w / 2.0, y - h / 2.0, x + w / 2.0, y + h / 2.0],
+                    AttachmentPoint::MiddleLeft => [x, y - h / 2.0, x + w, y + h / 2.0],
+                    other => panic!("{name} MTEXT {:?} 未覆盖的对齐 {other:?}", m.value),
+                };
+                assert!(
+                    b[0] >= FRAME.0 - 1e-6 && b[2] <= FRAME.1 + 1e-6
+                        && b[1] >= FRAME.3 - 1e-6 && b[3] <= FRAME.2 + 1e-6,
+                    "{name} MTEXT {:?} 出表：{b:?}",
+                    m.value
+                );
+                boxes.push((m.value.as_str(), b));
+            }
+            for i in 0..boxes.len() {
+                for j in i + 1..boxes.len() {
+                    let (a, b) = (boxes[i].1, boxes[j].1);
+                    assert!(
+                        !(a[0] < b[2] - 1e-9 && b[0] < a[2] - 1e-9
+                            && a[1] < b[3] - 1e-9 && b[1] < a[3] - 1e-9),
+                        "{name} MTEXT {:?} × {:?} 叠字",
+                        boxes[i].0,
+                        boxes[j].0
+                    );
+                }
+            }
+        }
     }
 }

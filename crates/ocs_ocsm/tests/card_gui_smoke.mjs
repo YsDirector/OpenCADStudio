@@ -7,8 +7,8 @@
 //      首项卡名 = GB 花键参数表；⑤ 每张卡名带标准号、下拉 title 含全名；
 //   ③ 齿轮卡：表达式 + 配对齿数/图号/精度等级/中心距 → /api/card_preview，19 项、缺项「—」；
 //   ④ ANSI 卡：方向/齿廓（选项表下发）+ P/z；纯中/纯英两个卡类型；
-//   ⑤ NF 内卡：A/m/z/定心/齿根/配合（6 字段）→ 38 项（12+6+四配合条带 20）；公差 = R7/H7/p29 E；
-//      ⑤b NF 外卡：A/m/z/定心/齿根/配合 → 38 项；模板锚点 Dee/Die/K/W + h12/H7/p29 外花键 E；
+//   ⑤ NF 内卡：A/m/z/定心/齿根/配合（6 字段）→ 18 项；公差 = R7/H7/p29 E；
+//      ⑤b NF 外卡：A/m/z/定心/齿根/配合 → 18 项；模板锚点 Dee/Die/K/W + h12/H7/p29 外花键 E；
 //   ⑥ DIN 卡：12 字段（覆盖项独立成格）→ 26 项；缺口 m=5 → 公差「—」；
 //   ⑦ 出表：非花键卡走 /api/card_export；无 at → 待放置件；有 at → 直插；
 //   ⑧ 预览 404 → 红框可见（共享助手；不关窗）；信息分层负断言；④ 版面类名/顺序断言。
@@ -200,7 +200,7 @@ const OPTIONS = {
     note: 'stub ANSI 说明',
   },
   nf_card: {
-    columns: Array.from({ length: 38 }, (_, i) => ({ tag: `nf${i}`, label: `NF项${i}`, unit: '', formula: 'stub', source: 'stub' })),
+    columns: Array.from({ length: 18 }, (_, i) => ({ tag: `nf${i}`, label: `NF项${i}`, unit: '', formula: 'stub', source: 'stub' })),
     modules: [0.5, 1, 2.5, 7.5],
     centering: [{ id: 'outer', label: '外径定心（Az=A）' }, { id: 'flank', label: '齿面定心（Az=A+0.3m）' }],
     roots: [{ id: 'flat', label: '平齿根' }, { id: 'fillet', label: '圆齿根' }],
@@ -209,7 +209,7 @@ const OPTIONS = {
     note: 'stub NF 说明',
   },
   nf_ext_card: {
-    columns: Array.from({ length: 38 }, (_, i) => ({ tag: `nfe${i}`, label: `NFE项${i}`, unit: '', formula: 'stub', source: 'stub' })),
+    columns: Array.from({ length: 18 }, (_, i) => ({ tag: `nfe${i}`, label: `NFE项${i}`, unit: '', formula: 'stub', source: 'stub' })),
     modules: [0.5, 1, 2.5, 7.5],
     centering: [{ id: 'flank', label: '齿面定心（Dee=A−0.2m，模板）' }, { id: 'outer', label: '外径定心（Dee=A）' }],
     roots: [{ id: 'flat', label: '平齿根' }, { id: 'fillet', label: '圆齿根' }],
@@ -304,11 +304,6 @@ function ansiPreview(mm) {
 const NF_ITEMS = [
   '执行标准', '定心方式', '模数', '齿数', '压力角', '齿根样式', '加工方法', '大径Az', '小径D',
   '基准尺寸', '量棒直径V', '跨棒距G', '大径上差', '大径下差', '小径上差', '小径下差', '跨棒距上差', '跨棒距下差',
-  // p29 四配合全表条带（20 项：E/xm × 内花键/四配合 × 上/下）
-  'E内花键上差', 'E内花键下差', 'E松动上差', 'E松动下差', 'E滑动上差', 'E滑动下差',
-  'E固定上差', 'E固定下差', 'E压上差', 'E压下差',
-  'xm内花键上差', 'xm内花键下差', 'xm松动上差', 'xm松动下差', 'xm滑动上差', 'xm滑动下差',
-  'xm固定上差', 'xm固定下差', 'xm压上差', 'xm压下差',
 ];
 function nfPreview(mm) {
   const ex = stubExpr(mm);
@@ -348,12 +343,6 @@ const DIN_EXT_TAGS = ['W标记', 'W齿数', 'W模数', 'W压力角', 'W齿顶圆
 const NFE_TAGS = [
   '执行标准', '定心方式', '模数', '齿数', '压力角', '齿根样式', '加工方法', '大径Dee', '小径Die',
   '基准尺寸', '跨测齿数K', '公法线W', '大径上差', '大径下差', '小径上差', '小径下差', '公法线上差', '公法线下差',
-  // p29 四配合全表条带（20 项：E/xm × 内花键/四配合 × 上/下）
-  'E内花键上差', 'E内花键下差', 'E松动上差', 'E松动下差', 'E滑动上差', 'E滑动下差',
-  'E固定上差', 'E固定下差', 'E压上差', 'E压下差',
-  'xm内花键上差', 'xm内花键下差', 'xm松动上差', 'xm松动下差', 'xm滑动上差', 'xm滑动下差',
-  'xm固定上差', 'xm固定下差', 'xm压上差', 'xm压下差',
-
 ];
 function nfExtPreview(mm) {
   const rawExpr = String(mm.expr == null ? '' : mm.expr).trim();
@@ -765,7 +754,7 @@ await H.refresh();
 check(lastPreviewModel && lastPreviewModel.card === 'NF内花键参数表', `NF 预览模型：${JSON.stringify(lastPreviewModel)}`);
 check(Number(lastPreviewModel.a) === 300 && Number(lastPreviewModel.m) === 7.5 && Number(lastPreviewModel.z) === 38, `A/m/z 应进模型：${JSON.stringify(lastPreviewModel)}`);
 check(lastPreviewModel.fit === 'fixed', `NF 配合应进模型：${JSON.stringify(lastPreviewModel)}`);
-check(el('items').innerHTML.split('class="row"').length - 1 === 38, `NF 卡应 38 项（12+6+条带 20）：${el('items').innerHTML.slice(0, 100)}`);
+check(el('items').innerHTML.split('class="row"').length - 1 === 18, `NF 卡应 18 项：${el('items').innerHTML.slice(0, 100)}`);
 check(el('items').innerHTML.includes('270.508'), 'NF 锚点跨棒距应出现在预览里');
 // 修改②：6 个公差格必须有值（R7/H7/p29 E），不再整片「—」
 const tolLabels = ['大径上差', '大径下差', '小径上差', '小径下差', '跨棒距上差', '跨棒距下差'];
@@ -821,7 +810,7 @@ check(String(lastPreviewModel.expr).startsWith('SPLINE IN M7.5 Z40'), `NF 表达
 check(H.formControl('a').value === '315' && H.formControl('m').value === '7.5' && H.formControl('z').value === '40',
   `NF 表达式应回填 A=315/m=7.5/z=40：A=${H.formControl('a').value} m=${H.formControl('m').value} z=${H.formControl('z').value}`);
 
-// ── ⑤b NF 外花键参数表（新卡）：7 字段 + 38 项 + 模板锚点 + 表达式 + 出表 ──
+// ── ⑤b NF 外花键参数表（新卡）：7 字段 + 18 项 + 模板锚点 + 表达式 + 出表 ──
 el('cardType').value = 'NF外花键参数表';
 el('cardType')._fire('change', el('cardType'));
 await tick();
@@ -837,7 +826,7 @@ check(H.formControl('centering').options.map((o) => o.value).join(',') === 'flan
 check(H.formControl('fit').value === 'fixed' && H.formControl('fit').options.length === 4, 'NF 外配合四档默认固定');
 await H.refresh();
 check(lastPreviewModel && lastPreviewModel.card === 'NF外花键参数表', `NF 外预览模型：${JSON.stringify(lastPreviewModel)}`);
-check(el('items').innerHTML.split('class="row"').length - 1 === 38, `NF 外应 38 项（12+6+条带 20）：${el('items').innerHTML.slice(0, 100)}`);
+check(el('items').innerHTML.split('class="row"').length - 1 === 18, `NF 外应 18 项：${el('items').innerHTML.slice(0, 100)}`);
 check(el('items').innerHTML.includes('298.5') && el('items').innerHTML.includes('129.871'), 'NF 外模板锚点 Dee/W 应在预览里');
 check(el('items').innerHTML.includes('滚齿') && el('items').innerHTML.includes('齿面定心'), 'NF 外应显示滚齿/齿面定心（外花键口径）');
 check(el('items').innerHTML.includes('-0.52') && el('items').innerHTML.includes('+0.052'), 'NF 外公差应含 h12/H7 数值');
