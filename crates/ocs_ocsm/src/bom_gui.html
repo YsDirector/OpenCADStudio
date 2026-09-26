@@ -2,7 +2,7 @@
 <html lang="zh">
 <head>
 <meta charset="utf-8">
-<title>明细表编辑</title>
+<title>{{i18n:gui.bom.h1}}</title>
 <style>
   :root { --accent: #2b6fe0; --line: #ddd; --text: #222; }
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -38,18 +38,18 @@
 </style>
 </head>
 <body>
-  <h1>明细表编辑</h1>
+  <h1>{{i18n:gui.bom.h1}}</h1>
   <div class="panel">
     <div class="row" style="margin-bottom:8px">
       <span id="doc-meta" class="lbl"></span>
       <span style="flex:1"></span>
-      <button id="btn-reload" title="重新从图纸读取">刷新</button>
-      <button id="btn-export-x">导出 xlsx</button>
-      <button id="btn-export-c">导出 csv</button>
-      <button id="btn-import" title="读外部 xlsx / csv 回灌（非空覆盖 · 空白保留 · 手改数量自动上锁）">导入 xlsx/csv…</button>
+      <button id="btn-reload" title="重新从图纸读取">{{i18n:gui.bom.reload}}</button>
+      <button id="btn-export-x">{{i18n:gui.bom.export_x}}</button>
+      <button id="btn-export-c">{{i18n:gui.bom.export_c}}</button>
+      <button id="btn-import" title="读外部 xlsx / csv 回灌（非空覆盖 · 空白保留 · 手改数量自动上锁）">{{i18n:gui.bom.import}}</button>
       <input type="file" id="file-in" accept=".xlsx,.csv" style="display:none">
-      <button id="btn-add" title="手加件：不依赖零件台账，直接加一行">＋加行</button>
-      <button id="btn-apply" class="primary" title="整表一次重建（一次 Ctrl+Z 可整体撤销）">应用到图纸</button>
+      <button id="btn-add" title="手加件：不依赖零件台账，直接加一行">{{i18n:gui.bom.add}}</button>
+      <button id="btn-apply" class="primary" title="整表一次重建（一次 Ctrl+Z 可整体撤销）">{{i18n:gui.bom.apply}}</button>
     </div>
     <div class="row" style="margin-bottom:6px">
       <label style="font-size:12px; display:flex; align-items:center; gap:4px; cursor:pointer">

@@ -2,7 +2,7 @@
 <html lang="zh">
 <head>
 <meta charset="utf-8">
-<title>标注配置</title>
+<title>{{i18n:gui.guide.h1}}</title>
 <style>
   :root { --accent: #2b6fe0; --line: #ddd; --text: #222; }
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -109,26 +109,26 @@
 </style>
 </head>
 <body>
-  <h1><span id="title-text">标注配置</span> <span id="h" style="font-weight:normal;font-size:12px;color:#888"></span></h1>
+  <h1><span id="title-text">{{i18n:gui.guide.h1}}</span> <span id="h" style="font-weight:normal;font-size:12px;color:#888"></span></h1>
   <div id="edit-note" style="display:none;margin:-6px 0 10px;font-size:12px;color:#7a5b00;background:#fff8e1;border:1px solid #ffe082;border-radius:6px;padding:6px 10px">编辑已有标注：改完点「更新标注」会用新参数**替换**原标注（不会叠加）。要删除标注请用 OCS 原生 ERASE。</div>
 
   <div class="panel">
     <div class="row">
       <span class="lbl">类型</span>
       <div class="seg" id="seg-type">
-        <button data-t="LINEAR" class="on">线性</button>
-        <button data-t="DIAMETER">直径</button>
-        <button data-t="RADIUS">半径</button>
-        <button data-t="DATUM">基准</button>
-        <button data-t="VIEW">向视图</button>
-        <button data-t="ANGLE">角度</button>
-        <button data-t="SECTION">剖切</button>
-        <button data-t="TOLERANCE">形位公差</button>
-        <button data-t="WELD">焊接</button>
-        <button data-t="LEADER">引线</button>
-        <button data-t="BALLOON">序号</button>
-        <button data-t="ARCLEN">弧长</button>
-        <button data-t="DETAIL">局部放大</button>
+        <button data-t="LINEAR" class="on">{{i18n:gui.guide.type.linear}}</button>
+        <button data-t="DIAMETER">{{i18n:gui.guide.type.diameter}}</button>
+        <button data-t="RADIUS">{{i18n:gui.guide.type.radius}}</button>
+        <button data-t="DATUM">{{i18n:gui.guide.type.datum}}</button>
+        <button data-t="VIEW">{{i18n:gui.guide.type.view}}</button>
+        <button data-t="ANGLE">{{i18n:gui.guide.type.angle}}</button>
+        <button data-t="SECTION">{{i18n:gui.guide.type.section}}</button>
+        <button data-t="TOLERANCE">{{i18n:gui.guide.type.tolerance}}</button>
+        <button data-t="WELD">{{i18n:gui.guide.type.weld}}</button>
+        <button data-t="LEADER">{{i18n:gui.guide.type.leader}}</button>
+        <button data-t="BALLOON">{{i18n:gui.guide.type.balloon}}</button>
+        <button data-t="ARCLEN">{{i18n:gui.guide.type.arclen}}</button>
+        <button data-t="DETAIL">{{i18n:gui.guide.type.detail}}</button>
       </div>
     </div>
     <!-- 局部放大图：比例/序号/放置偏移（仅 circle/rect 引导） -->
@@ -346,8 +346,8 @@
   </div>
 
   <div class="btnrow">
-    <button id="btn-apply">应用</button>
-    <button id="btn-refresh" class="primary">应用并刷新</button>
+    <button id="btn-apply">{{i18n:gui.guide.apply}}</button>
+    <button id="btn-refresh" class="primary">{{i18n:gui.guide.refresh}}</button>
   </div>
   <div id="msg" class="msg"></div>
 
@@ -358,7 +358,7 @@
       <div class="gdt-hint" style="margin-bottom:8px">点击插入符号：GDT 字体把该字符渲染成工程符号（如 x=深度符号），插入后自动恢复标注字体。</div>
       <div id="gdt-chars"></div>
       <div style="margin-top:14px; text-align:right">
-        <button id="btn-gdt-close" style="padding:5px 16px;border:1px solid #bbb;border-radius:6px;background:#fff;cursor:pointer">关闭</button>
+        <button id="btn-gdt-close" style="padding:5px 16px;border:1px solid #bbb;border-radius:6px;background:#fff;cursor:pointer">{{i18n:gui.guide.close}}</button>
       </div>
     </div>
   </div>
@@ -385,7 +385,7 @@
       </div>
       <div id="tol-table"></div>
       <div class="btnrow" style="margin-top:14px">
-        <button id="btn-tol-close">关闭</button>
+        <button id="btn-tol-close">{{i18n:gui.guide.close}}</button>
       </div>
     </div>
   </div>
@@ -723,16 +723,16 @@
   // 不提供「删除标注」按钮——删除走 OCS 原生 ERASE。
   function setEditMode(on) {
     const t = document.getElementById('title-text');
-    if (t) t.textContent = on ? '更新标注' : '标注配置';
-    try { document.title = on ? '更新标注' : '标注配置'; } catch (e) { /* 无 title 的垫片 */ }
+    if (t) t.textContent = on ? '{{i18njs:gui.guide.update}}' : '{{i18njs:gui.guide.h1}}';
+    try { document.title = on ? '{{i18njs:gui.guide.update}}' : '{{i18njs:gui.guide.h1}}'; } catch (e) { /* 无 title 的垫片 */ }
     const apply = document.getElementById('btn-apply');
     const refresh = document.getElementById('btn-refresh');
     if (apply) {
-      apply.textContent = on ? '另存为新标注' : '应用';
+      apply.textContent = on ? '{{i18njs:gui.guide.save_new}}' : '{{i18njs:gui.guide.apply}}';
       apply.title = on ? '保留原标注，按当前参数另生成一个' : '';
     }
     if (refresh) {
-      refresh.textContent = on ? '更新标注' : '应用并刷新';
+      refresh.textContent = on ? '{{i18njs:gui.guide.update}}' : '{{i18njs:gui.guide.refresh}}';
       refresh.title = on ? '用当前参数重建并替换原标注' : '';
     }
     const note = document.getElementById('edit-note');

@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
-<title>OCSM 表面粗糙度</title>
+<title>{{i18n:gui.rough.h1}}</title>
 <style>
   :root { color-scheme: light; }
   body { font-family: "Helvetica Neue", "PingFang SC", "Microsoft YaHei", sans-serif;
@@ -39,48 +39,48 @@
 </style>
 </head>
 <body>
-<h1>OCSM 表面粗糙度 <span id="pos" class="small"></span></h1>
+<h1>{{i18n:gui.rough.h1}} <span id="pos" class="small"></span></h1>
 
 <div class="card">
-  <h2>基础体（V 内差异）</h2>
+  <h2>{{i18n:gui.rough.base}}</h2>
   <div class="row" id="baseRow">
-    <button class="opt" data-v="C1">C1 通用</button>
-    <button class="opt" data-v="C2">C2 以不去除材料的方法获得</button>
-    <button class="opt" data-v="C3">C3 去除材料</button>
-    <button class="opt" data-v="C4">C4 焊后加工</button>
+    <button class="opt" data-v="C1">{{i18n:gui.rough.c1}}</button>
+    <button class="opt" data-v="C2">{{i18n:gui.rough.c2}}</button>
+    <button class="opt" data-v="C3">{{i18n:gui.rough.c3}}</button>
+    <button class="opt" data-v="C4">{{i18n:gui.rough.c4}}</button>
   </div>
 </div>
 
 <div class="card">
-  <h2>附加标注</h2>
+  <h2>{{i18n:gui.rough.extra}}</h2>
   <div class="row" id="extraRow">
-    <button class="opt" data-v="R1">基础</button>
-    <button class="opt" data-v="R2">周边相同处理</button>
-    <button class="opt" data-v="R3">高级</button>
-    <button class="opt" data-v="R4">上限开关</button>
-    <button class="opt" data-v="R5">上限开关+周边相同处理</button>
+    <button class="opt" data-v="R1">{{i18n:gui.rough.r1}}</button>
+    <button class="opt" data-v="R2">{{i18n:gui.rough.r2}}</button>
+    <button class="opt" data-v="R3">{{i18n:gui.rough.r3}}</button>
+    <button class="opt" data-v="R4">{{i18n:gui.rough.r4}}</button>
+    <button class="opt" data-v="R5">{{i18n:gui.rough.r5}}</button>
   </div>
 </div>
 
 <div class="grid">
   <div class="card">
-    <h2>预览</h2>
+    <h2>{{i18n:gui.rough.preview}}</h2>
     <canvas id="cv" width="380" height="380"></canvas>
   </div>
   <div>
     <div class="card">
-      <h2>属性文字（ATTDEF，可缺省空白）</h2>
+      <h2>{{i18n:gui.rough.attrs}}</h2>
       <table id="attTbl">
-        <tr><td><label>A′ 粗糙度上限</label></td><td><input id="v_A_prime" type="text" placeholder="空白"></td></tr>
-        <tr><td><label>A 粗糙度下限</label></td><td><input id="v_A" type="text" placeholder="空白"></td></tr>
-        <tr><td><label>E 备注</label></td><td><input id="v_E" type="text" placeholder="空白"></td></tr>
+        <tr><td><label>{{i18n:gui.rough.attr_a_up}}</label></td><td><input id="v_A_prime" type="text" placeholder="{{i18n:gui.rough.blank}}"></td></tr>
+        <tr><td><label>{{i18n:gui.rough.attr_a}}</label></td><td><input id="v_A" type="text" placeholder="{{i18n:gui.rough.blank}}"></td></tr>
+        <tr><td><label>{{i18n:gui.rough.attr_e}}</label></td><td><input id="v_E" type="text" placeholder="{{i18n:gui.rough.blank}}"></td></tr>
       </table>
       <table id="extTbl" style="margin-top:6px"></table>
     </div>
     <div class="card">
-      <h2>加工符号 P</h2>
+      <h2>{{i18n:gui.rough.p_symbol}}</h2>
       <select id="pSel">
-        <option value="">空白</option>
+        <option value="">{{i18n:gui.rough.blank}}</option>
         <option value="=">=</option>
         <option value="⊥">⊥</option>
         <option value="×">×</option>
@@ -89,15 +89,15 @@
         <option value="R">R</option>
         <option value="P">P</option>
       </select>
-      <div class="hint">仅 C2（以不去除材料的方法获得）时强制空白。</div>
+      <div class="hint">{{i18n:gui.rough.c2_hint}}</div>
     </div>
     <div class="card">
-      <h2>旋转</h2>
+      <h2>{{i18n:gui.rough.rotate}}</h2>
       <input id="rot" type="number" step="1" value="0" style="width:80px"> 度
-      <div class="hint">符号绕插入点旋转（默认 0）。</div>
+      <div class="hint">{{i18n:gui.rough.rot_hint}}</div>
     </div>
     <div class="bar">
-      <button class="btn primary" id="apply">应用并关闭</button>
+      <button class="btn primary" id="apply">{{i18n:gui.rough.apply}}</button>
     </div>
     <div id="status"></div>
   </div>

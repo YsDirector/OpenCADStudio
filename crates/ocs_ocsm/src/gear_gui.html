@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
-<title>OCSM 齿轮（外齿轮 / 内齿轮）</title>
+<title>{{i18n:gui.gear.title}}</title>
 <style>
   /* 样式与 parts_gui.html / joint_gui.html 同款：同一套配色、圆角与控件尺寸 */
   :root { color-scheme: light; }
@@ -59,7 +59,7 @@
 </style>
 </head>
 <body>
-<h1>OCSM 齿轮 / 花键<span class="sub" id="pageSub">外齿轮 / 内齿轮（齿圈）</span><span class="sub" id="modeSub"></span></h1>
+<h1>{{i18n:gui.gear.h1}}<span class="sub" id="pageSub">{{i18n:gui.gear.sub}}</span><span class="sub" id="modeSub"></span></h1>
 
 <div class="wrap">
   <!-- ① 上部预览区：当前选中视图（大图位，深色底） -->
@@ -184,7 +184,7 @@
     <label for="exprPreview">轴生成器表达式（一行轴段语法，复制后到轴生成器粘贴）</label>
     <div class="ctl expr">
       <input type="text" id="exprPreview" readonly spellcheck="false">
-      <button type="button" class="btn mini" id="exprCopy">复制表达式</button>
+      <button type="button" class="btn mini" id="exprCopy">{{i18n:gui.gear.copy_expr}}</button>
     </div>
     <div class="hint" id="exprHint"></div>
 
@@ -194,7 +194,7 @@
 
     <!-- ④ 校验红字 + 主按钮（流程与零件库「零件出库」一致） -->
     <div class="hint bad" id="warn"></div>
-    <button class="btn" id="out" title="生成物：轮廓 → 1轮廓实线层、齿根/细线 → 2细线层、分度圆/中心线 → 3中心线层、剖面线 → 5剖面线层；颜色/线型/线宽一律 ByLayer；不含尺寸标注">生成到图纸</button>
+    <button class="btn" id="out" title="生成物：轮廓 → 1轮廓实线层、齿根/细线 → 2细线层、分度圆/中心线 → 3中心线层、剖面线 → 5剖面线层；颜色/线型/线宽一律 ByLayer；不含尺寸标注">{{i18n:gui.gear.export}}</button>
     <div id="status"></div>
     <div class="hint">调参数 → 看预览 → 点「生成到图纸」回图纸放置。</div>
   </div>

@@ -87,7 +87,8 @@
 
   // 统一读响应：非 2xx 先读文本再解析；返回 {ok,data} / {ok:false,error}。
   // （与 hole_gui 既有 readApi 同判据/同文案；404 专门指路「插件未重启/版本不匹配」。）
-  async function readApi(resp, path) {
+  // 文案全部走服务端注入的 catalog（i18njs 占位符），本文件不写中文兜底。
+async function readApi(resp, path) {
     var prefix = pageLabel();
     var text = await resp.text();
     var j = null;
@@ -96,15 +97,19 @@
       var snip = text.slice(0, 200);
       console.error(prefix + " " + path + " → HTTP " + resp.status + "：" + snip);
       var err = resp.status === 404
-        ? "端点 " + path + " 不存在（HTTP 404）：可能是插件未重启或版本不匹配 —— 请完全退出并重开 OCS"
-        : "HTTP " + resp.status + "：" + ((j && (j.error || j.message)) || snip || "无响应体");
+        ? "{{i18njs:gui.common.err.404}}".replace("{path}", path)
+        : "{{i18njs:gui.common.err.http}}".replace("{status}", String(resp.status))
+            .replace("{detail}", (j && (j.error || j.message)) || snip || "{{i18njs:gui.common.err.no_body}}");
       return { ok: false, error: err };
     }
     if (j === null) {
-      console.error(prefix + " " + path + " → HTTP " + resp.status + "：响应不是 JSON：" + text.slice(0, 200));
-      return { ok: false, error: "响应不是 JSON（HTTP " + resp.status + "）：" + text.slice(0, 200) };
+      console.error(prefix + " " + path + " → HTTP " + resp.status + "：not JSON：" + text.slice(0, 200));
+      var nerr = "{{i18njs:gui.common.err.not_json}}"
+        .replace("{status}", String(resp.status))
+        .replace("{text}", text.slice(0, 200));
+      return { ok: false, error: nerr };
     }
-    if (j.ok === false) return { ok: false, error: j.error || j.message || "请求失败" };
+    if (j.ok === false) return { ok: false, error: j.error || j.message || "{{i18njs:gui.common.err.request_failed}}" };
     return { ok: true, data: j };
   }
 
@@ -115,7 +120,7 @@
     try {
       resp = await fetch(url, opts);
     } catch (e) {
-      var nerr = "请求失败（网络层）：" + e;
+      var nerr = "{{i18njs:gui.common.err.net}}".replace("{err}", String(e));
       console.error(pageLabel() + " " + path + " → " + nerr);
       ocsmStatusError(nerr);
       return { ok: false, error: nerr };
@@ -131,7 +136,7 @@
     try {
       resp = await fetch(url, opts);
     } catch (e) {
-      var nerr = "请求失败（网络层）：" + e;
+      var nerr = "{{i18njs:gui.common.err.net}}".replace("{err}", String(e));
       console.error(pageLabel() + " " + path + " → " + nerr);
       ocsmStatusError(nerr);
       return { ok: false, error: nerr };
@@ -143,8 +148,9 @@
       var snip = text.slice(0, 200);
       console.error(pageLabel() + " " + path + " → HTTP " + resp.status + "：" + snip);
       var err = resp.status === 404
-        ? "端点 " + path + " 不存在（HTTP 404）：可能是插件未重启或版本不匹配 —— 请完全退出并重开 OCS"
-        : "HTTP " + resp.status + "：" + ((j && (j.error || j.message)) || snip || "无响应体");
+        ? "{{i18njs:gui.common.err.404}}".replace("{path}", path)
+        : "{{i18njs:gui.common.err.http}}".replace("{status}", String(resp.status))
+            .replace("{detail}", (j && (j.error || j.message)) || snip || "{{i18njs:gui.common.err.no_body}}");
       ocsmStatusError(err);
       return { ok: false, error: err };
     }

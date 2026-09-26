@@ -10,6 +10,7 @@
 // 用法：node gear_gui_smoke.mjs <gear_gui.html 路径>
 
 import fs from 'node:fs';
+import { renderZh } from './i18n_zh_fixture.mjs';
 import path from 'node:path';
 
 const htmlPath = process.argv[2];
@@ -17,7 +18,7 @@ if (!htmlPath) {
   console.error('usage: node gear_gui_smoke.mjs <gear_gui.html>');
   process.exit(2);
 }
-const html = fs.readFileSync(htmlPath, 'utf8');
+const html = renderZh(fs.readFileSync(htmlPath, 'utf8'));
 const m = html.match(/<script>([\s\S]*?)<\/script>/);
 if (!m) {
   console.error('no <script> found');
@@ -201,7 +202,7 @@ global.fetch = async (u, opts) => {
 // ── 跑 GUI 脚本 ─────────────────────────────────────────────────
 try {
   // 页面外链的共享助手（/ocsm_gui_common.js）：Node 里按同一目录文件先求值
-  (0, eval)(fs.readFileSync(htmlPath.replace(/[^/]+$/, 'ocsm_gui_common.js'), 'utf8'));
+  (0, eval)(renderZh(fs.readFileSync(htmlPath.replace(/[^/]+$/, 'ocsm_gui_common.js'), 'utf8')));
   (0, eval)(script);
 } catch (e) {
   errors.push('脚本求值异常: ' + (e && e.stack ? e.stack : e));

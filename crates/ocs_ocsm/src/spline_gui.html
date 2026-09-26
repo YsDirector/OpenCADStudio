@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
-<title>OCSM 智能卡片</title>
+<title>{{i18n:gui.spline.h1}}</title>
 <style>
   /* 样式与 hole_gui.html / gear_gui.html / shaft_gui.html 同款：同一套配色、圆角与控件尺寸 */
   :root { color-scheme: light; }
@@ -72,7 +72,7 @@
 </style>
 </head>
 <body>
-<h1>OCSM 智能卡片</h1>
+<h1>{{i18n:gui.spline.h1}}</h1>
 
 <div class="wrap">
   <!-- ⓪ 卡类型（共用；表驱动。GB 花键是“专用面板”= 统一外观基准，其余卡共用下面的通用骨架） -->
@@ -150,18 +150,18 @@
     <label style="margin:0">旋转 rot</label>
     <input type="number" id="rot" value="0" step="1">
     <span style="flex:1"></span>
-    <button type="button" class="btn ghost" id="report" title="按当前卡同一份计算出 Markdown 计算书（公式/代入/结果/来源）">计算书</button>
-    <button type="button" class="btn" id="ok">出表</button>
-    <button type="button" class="btn ghost" id="cancel">取消</button>
+    <button type="button" class="btn ghost" id="report" title="按当前卡同一份计算出 Markdown 计算书（公式/代入/结果/来源）">{{i18n:gui.spline.report}}</button>
+    <button type="button" class="btn" id="ok">{{i18n:gui.spline.export}}</button>
+    <button type="button" class="btn ghost" id="cancel">{{i18n:gui.spline.cancel}}</button>
   </div>
   <!-- 计算书面板：按钮生成；可选「摘要表落图纸」= 本卡参数表（同一份计算的 ATTRIB）。 -->
   <div class="card" id="reportCard" style="display:none">
     <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
       <label style="margin:0" id="reportTitle">计算书</label>
       <span style="flex:1"></span>
-      <button type="button" class="btn ghost" id="reportCopy" title="复制 Markdown 原文">复制</button>
-      <button type="button" class="btn" id="reportSummary" title="把本卡参数表插入图纸（摘要表 = 计算书关键项；与计算书同一份计算）">摘要表落图纸</button>
-      <button type="button" class="btn ghost" id="reportClose">关闭</button>
+      <button type="button" class="btn ghost" id="reportCopy" title="复制 Markdown 原文">{{i18n:gui.spline.copy}}</button>
+      <button type="button" class="btn" id="reportSummary" title="把本卡参数表插入图纸（摘要表 = 计算书关键项；与计算书同一份计算）">{{i18n:gui.spline.summary}}</button>
+      <button type="button" class="btn ghost" id="reportClose">{{i18n:gui.spline.close}}</button>
     </div>
     <pre id="reportMd"></pre>
   </div>

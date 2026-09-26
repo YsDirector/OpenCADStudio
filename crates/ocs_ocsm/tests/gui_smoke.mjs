@@ -10,13 +10,14 @@
 // 用法：node gui_smoke.mjs <guide_gui.html 路径>
 
 import fs from 'node:fs';
+import { renderZh } from './i18n_zh_fixture.mjs';
 
 const htmlPath = process.argv[2];
 if (!htmlPath) {
   console.error('usage: node gui_smoke.mjs <guide_gui.html>');
   process.exit(2);
 }
-const html = fs.readFileSync(htmlPath, 'utf8');
+const html = renderZh(fs.readFileSync(htmlPath, 'utf8'));
 const m = html.match(/<script>([\s\S]*?)<\/script>/);
 if (!m) {
   console.error('no <script> found');

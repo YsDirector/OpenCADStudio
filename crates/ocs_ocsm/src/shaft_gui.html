@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
-<title>OCSM 轴生成器</title>
+<title>{{i18n:gui.shaft.title}}</title>
 <style>
   /* 样式与 gear_gui.html / parts_gui.html / joint_gui.html 同款：同一套配色、圆角与控件尺寸 */
   :root { color-scheme: light; }
@@ -64,7 +64,7 @@
 </style>
 </head>
 <body>
-<h1>OCSM 轴生成器<span class="sub">段表 ↔ 行文本双向同步 + 实时预览</span></h1>
+<h1>{{i18n:gui.shaft.h1}}<span class="sub">{{i18n:gui.shaft.sub}}</span></h1>
 
 <div class="wrap">
   <!-- ① 预览：轴侧视图（深色底，和齿轮窗口同一渲染口径） -->
@@ -103,17 +103,17 @@
       </table>
     </div>
     <div class="row">
-      <button type="button" class="btn ghost" id="addRow">+ 加行</button>
-      <button type="button" class="btn ghost" id="delRow">删行</button>
-      <button type="button" class="btn ghost" id="copyRow">复制行</button>
-      <button type="button" class="btn ghost" id="upRow">上移</button>
-      <button type="button" class="btn ghost" id="downRow">下移</button>
+      <button type="button" class="btn ghost" id="addRow">{{i18n:gui.shaft.add_row}}</button>
+      <button type="button" class="btn ghost" id="delRow">{{i18n:gui.shaft.del_row}}</button>
+      <button type="button" class="btn ghost" id="copyRow">{{i18n:gui.shaft.copy_row}}</button>
+      <button type="button" class="btn ghost" id="upRow">{{i18n:gui.shaft.up_row}}</button>
+      <button type="button" class="btn ghost" id="downRow">{{i18n:gui.shaft.down_row}}</button>
     </div>
     <!-- 表达式互通：齿轮窗口复制来的轴段表达式（GEAR 一行）粘贴即成段 -->
     <div class="row" style="margin-top:8px">
       <input type="text" id="exprInput" placeholder="粘贴齿轮表达式（例 GEAR M3 Z20 H20 ALPHA20）">
-      <button type="button" class="btn ghost" id="exprAdd">解析并加段</button>
-      <button type="button" class="btn ghost" id="openGear">打开齿轮生成器</button>
+      <button type="button" class="btn ghost" id="exprAdd">{{i18n:gui.shaft.parse_add}}</button>
+      <button type="button" class="btn ghost" id="openGear">{{i18n:gui.shaft.open_gear}}</button>
     </div>
     <div class="hint" id="exprErr"></div>
     <div class="hint" id="segHint">
@@ -147,7 +147,7 @@
       <label for="rot">旋转 rot</label>
       <div class="ctl"><input type="number" id="rot" placeholder="0"><span class="unit">°（逆时针）</span></div>
     </div>
-    <button class="btn" id="out" title="生成物：轮廓/端面/倒角/槽与边界竖线 → 1轮廓实线层；螺纹小径/螺尾 → 2细线层（磨外圆/OV 不画砂轮细线）；轴线/分度线 → 3中心线层；剖视剖面线 → 5剖面线层；齿轮段只画齿顶线 + 分度线（不画齿根线）；花键段大径线 + 小径细线 + 收尾弧（R=de/2）→ 2细线层，剖视改轮廓线并打轴线↔小径剖面线；颜色/线型/线宽一律 ByLayer；不含尺寸标注">生成到图纸</button>
+    <button class="btn" id="out" title="生成物：轮廓/端面/倒角/槽与边界竖线 → 1轮廓实线层；螺纹小径/螺尾 → 2细线层（磨外圆/OV 不画砂轮细线）；轴线/分度线 → 3中心线层；剖视剖面线 → 5剖面线层；齿轮段只画齿顶线 + 分度线（不画齿根线）；花键段大径线 + 小径细线 + 收尾弧（R=de/2）→ 2细线层，剖视改轮廓线并打轴线↔小径剖面线；颜色/线型/线宽一律 ByLayer；不含尺寸标注">{{i18n:gui.shaft.export}}</button>
     <div id="status"></div>
   </div>
 </div>

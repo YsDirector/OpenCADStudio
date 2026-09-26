@@ -349,29 +349,30 @@ fn handle_conn(
 
 // ── 外部打开的页面 → 补一个 app 窗口 ──────────────────────────────────────
 
-/// 页面标题（提示页用）。
-fn page_label(path: &str) -> &'static str {
-    if path.starts_with("/bom") {
-        "明细表编辑"
+/// 页面标题（提示页用；走 catalog，随当前语言）。
+fn page_label(path: &str) -> String {
+    let key = if path.starts_with("/bom") {
+        "gui.window.bom"
     } else if path.starts_with("/parts") {
-        "零件库"
+        "gui.window.parts"
     } else if path.starts_with("/gear") {
-        "齿轮"
+        "gui.window.gear"
     } else if path.starts_with("/shaft") {
-        "轴生成器"
+        "gui.window.shaft"
     } else if path.starts_with("/hole") {
-        "孔生成器"
+        "gui.window.hole"
     } else if path.starts_with("/spline") {
-        "花键参数表"
+        "gui.window.spline"
     } else if path.starts_with("/joint") {
-        "螺栓副装配"
+        "gui.window.joint"
     } else if path.starts_with("/rough") {
-        "表面粗糙度"
+        "gui.window.rough"
     } else if path.starts_with("/manual") {
-        "命令手册"
+        "gui.window.manual"
     } else {
-        "标注配置"
-    }
+        "gui.window.default"
+    };
+    crate::i18n::t(key)
 }
 
 /// 已知插件页面路径（去查询串，回到规范形式）；不是页面则 None。
@@ -472,7 +473,7 @@ fn app_window_url(port: u16, target: &str, active_tab: Option<u64>) -> Option<St
 /// “已在新窗口打开”的提示页（给那个带地址栏的浏览器页签用）。
 fn opened_elsewhere_html(label: &str) -> String {
     const TPL: &str = r#"<!DOCTYPE html><html lang="zh"><head><meta charset="utf-8">
-<title>__LABEL__（已在新窗口打开）</title>
+<title>{{i18n:gui.notice.opened_title}}</title>
 <style>
 body { font-family: "Microsoft YaHei", "PingFang SC", sans-serif; color: #333;
        background: #f5f6f8; padding: 26px; }
@@ -483,14 +484,14 @@ button { margin-top: 14px; padding: 6px 16px; border: 1px solid #bbb; border-rad
          background: #fff; cursor: pointer; font-size: 13px; }
 button:hover { border-color: #2b6fe0; background: #eef4ff; }
 </style></head><body>
-<h1>「__LABEL__」已经用独立窗口打开了</h1>
-<p>图纸里的链接（Ctrl+点击）只能落在这种带地址栏的浏览器页签上，所以插件又开了一个 OCSM 独立窗口
-（去掉了地址栏/页签，与其它 OCSM 页面一致）—— 请到那个窗口里操作，<b>本页可以直接关掉</b>。</p>
-<p>明细表编辑器下次也可以直接运行命令 <code>BOMEDIT</code> 打开，不走浏览器。</p>
-<p><button onclick="window.close()">关闭本页</button></p>
+<h1>{{i18n:gui.notice.opened_title}}</h1>
+<p>{{i18n:gui.notice.opened_body1}}<b>{{i18n:gui.notice.opened_body2}}</b>{{i18n:gui.notice.opened_body3}}</p>
+<p>{{i18n:gui.notice.bom_hint1}}<code>BOMEDIT</code>{{i18n:gui.notice.bom_hint2}}</p>
+<p><button onclick="window.close()">{{i18n:gui.notice.close_page}}</button></p>
 <script>try { window.close(); } catch (e) {}</script>
 </body></html>"#;
-    TPL.replace("__LABEL__", label)
+    let html = render_i18n_text(TPL);
+    html.replace("{label}", &html_escape(label))
 }
 
 /// 目标页面的心跳键（页面自己 ping 的键）：用来判断“这个编辑器/配置窗已经开着了”。
@@ -538,7 +539,7 @@ fn upgrade_external_page(target: &str) -> Option<String> {
     // 已经开着同一窗口（心跳键匹配）→ 只给浏览器页签一个提示，不再弹一个重复窗口。
     if let Some(key) = page_ping_key_for(path, target, active_tab) {
         if crate::page_window_alive(&key) {
-            return Some(opened_elsewhere_html(page_label(path)));
+            return Some(opened_elsewhere_html(&page_label(path)));
         }
     }
     {
@@ -570,15 +571,189 @@ fn upgrade_external_page(target: &str) -> Option<String> {
         return None;
     }
     dbg_guide(&format!("external page {target} → app window {url}"));
-    Some(opened_elsewhere_html(page_label(path)))
+    Some(opened_elsewhere_html(&page_label(path)))
+}
+
+// ── i18n 页面渲染（阶段 2 ①；机制见 handbook/24）──────────────────────
+//
+// catalog 是唯一来源：页面/公共 JS 里**不得**另留中文兜底。
+// * `{{i18n:key}}`   → HTML 转义后的当前语言文案（文本节点 / 属性）；
+// * `{{i18njs:key}}` → JS 字符串字面量转义后的当前语言文案（`<script>` 内）；
+//   JS 插值写法：`"{{i18njs:key}}".replace("{name}", v)`。
+// 页面响应时再注入语言切换控件（`id="ocsmlang"`，调 `/api/i18n?lang=` 切换后刷新）。
+
+/// HTML 转义（文本节点 / 属性内通用）。
+fn html_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 8);
+    for c in s.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+/// JS 字符串字面量转义（不含外层引号；`<`/`>` 防 `</script>` 提前闭合）。
+fn js_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 8);
+    for c in s.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            '<' => out.push_str("\\u003c"),
+            '>' => out.push_str("\\u003e"),
+            '\u{2028}' => out.push_str("\\u2028"),
+            '\u{2029}' => out.push_str("\\u2029"),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+/// 文案占位符替换（当前语言）。
+fn render_i18n_text(template: &str) -> String {
+    render_i18n_text_lang(template, crate::i18n::lang())
+}
+
+/// 文案占位符替换（指定语言；测试/预渲染用；其余内容原样保留）。
+fn render_i18n_text_lang(template: &str, lang: crate::i18n::Lang) -> String {
+    let mut out = String::with_capacity(template.len() + 256);
+    let mut rest = template;
+    while let Some(pos) = rest.find("{{i18n") {
+        out.push_str(&rest[..pos]);
+        let tail = &rest[pos..];
+        let (open, esc_js) = if tail.starts_with("{{i18njs:") {
+            (9, true)
+        } else if tail.starts_with("{{i18n:") {
+            (7, false)
+        } else {
+            // 不是占位符 → 原样推进，避免死循环。
+            out.push_str("{{i18n");
+            rest = &tail[7..];
+            continue;
+        };
+        let after = &tail[open..];
+        let Some(end) = after.find("}}") else {
+            out.push_str(tail);
+            rest = "";
+            break;
+        };
+        let text = crate::i18n::t_lang(lang, &after[..end]);
+        out.push_str(&if esc_js { js_escape(&text) } else { html_escape(&text) });
+        rest = &after[end + 2..];
+    }
+    out.push_str(rest);
+    out
+}
+
+/// 语言切换控件（服务端注入每个页面；标签本身也来自 catalog）。
+fn lang_switch_html() -> String {
+    use crate::i18n::Lang;
+    let cur = crate::i18n::lang();
+    let active = "style=\"cursor:default;border:1px solid #1e6fff;background:#e8f0ff;color:#1e5fd0;border-radius:5px;padding:2px 8px;font:inherit;font-weight:600\"";
+    let idle = "style=\"cursor:pointer;border:1px solid #c6ccd4;background:#fff;color:#333;border-radius:5px;padding:2px 8px;font:inherit\"";
+    let button = |lang: Lang| {
+        let key = if lang == Lang::Zh { "gui.lang.zh" } else { "gui.lang.en" };
+        format!(
+            "<button type=\"button\" data-lang=\"{}\" {}>{}</button>",
+            lang.code(),
+            if lang == cur { active } else { idle },
+            html_escape(&crate::i18n::t_lang(lang, key))
+        )
+    };
+    format!(
+        concat!(
+            "<div id=\"ocsmlang\" data-lang=\"{}\" style=\"position:fixed;right:12px;bottom:12px;",
+            "z-index:2147483647;display:flex;gap:6px;align-items:center;background:#fff;border:1px solid #d9dee5;",
+            "border-radius:8px;padding:4px 8px;box-shadow:0 2px 8px rgba(0,0,0,.12);",
+            "font:12px/1.4 'Helvetica Neue','PingFang SC','Microsoft YaHei',sans-serif;color:#555\">",
+            "<span>{}</span>{}{}</div>",
+            "<script>(function(){{var box=document.getElementById('ocsmlang');if(!box)return;",
+            "box.addEventListener('click',function(ev){{var el=ev.target;",
+            "while(el&&el!==box&&!(el.getAttribute&&el.getAttribute('data-lang')))el=el.parentNode;",
+            "if(!el||el===box)return;var lang=el.getAttribute('data-lang');",
+            "if(lang===box.getAttribute('data-lang'))return;",
+            "fetch('/api/i18n?lang='+encodeURIComponent(lang),{{cache:'no-store'}})",
+            ".then(function(){{location.reload();}},function(){{location.reload();}});}});}})();</script>"
+        ),
+        cur.code(),
+        html_escape(&crate::i18n::t("gui.lang.title")),
+        button(Lang::Zh),
+        button(Lang::En)
+    )
+}
+
+/// 页面渲染：占位符替换 + 注入语言切换控件（`</body>` 前；没有则末尾追加）。
+fn render_page_i18n(html: &str) -> String {
+    let mut out = render_i18n_text(html);
+    let widget = lang_switch_html();
+    match out.rfind("</body>") {
+        Some(pos) => out.insert_str(pos, &widget),
+        None => out.push_str(&widget),
+    }
+    out
 }
 
 /// 页面响应：外部打开的页面换成提示页（同时补一个 app 窗口），否则发真页面。
 fn page_response(target: &str, html: &'static str) -> (u16, &'static str, String) {
     match upgrade_external_page(target) {
         Some(notice) => (200, "text/html; charset=utf-8", notice),
-        None => (200, "text/html; charset=utf-8", html.to_string()),
+        None => (200, "text/html; charset=utf-8", render_page_i18n(html)),
     }
+}
+
+fn api_i18n(target: &str) -> (u16, &'static str, String) {
+    let json_ct = "application/json; charset=utf-8";
+    if let Some(raw) = query_value(target, "lang") {
+        match crate::i18n::parse_lang(&raw) {
+            Some(l) => crate::i18n::set_lang(l),
+            None => {
+                return (
+                    400,
+                    json_ct,
+                    serde_json::json!({"ok": false, "error": format!("unsupported language: {raw}")})
+                        .to_string(),
+                )
+            }
+        }
+    }
+    use crate::i18n::Lang;
+    let lang = crate::i18n::lang();
+    let lang_label = |l: Lang| {
+        crate::i18n::t_lang(
+            l,
+            if l == Lang::Zh { "gui.lang.zh" } else { "gui.lang.en" },
+        )
+    };
+    let catalog: serde_json::Map<String, serde_json::Value> = crate::i18n::catalog_pairs(lang)
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), serde_json::Value::String(v)))
+        .collect();
+    let languages: Vec<serde_json::Value> = [Lang::Zh, Lang::En]
+        .iter()
+        .map(|l| serde_json::json!({"code": l.code(), "label": lang_label(*l)}))
+        .collect();
+    let source = crate::i18n::env_lang_source()
+        .map(|(var, value)| serde_json::json!({"var": var, "value": value}));
+    (
+        200,
+        json_ct,
+        serde_json::json!({
+            "ok": true,
+            "lang": lang.code(),
+            "languages": languages,
+            "source": source,
+            "catalog": catalog,
+        })
+        .to_string(),
+    )
 }
 
 fn route(
@@ -618,7 +793,7 @@ fn route(
         ("GET", t) if t.starts_with("/spline") => page_response(t, SPLINE_HTML),
         // GUI 共享助手（各页 `<script src="/ocsm_gui_common.js">`；no-store 不走缓存）
         ("GET", t) if t.starts_with("/ocsm_gui_common.js") => {
-            (200, "application/javascript; charset=utf-8", GUI_COMMON_JS.to_string())
+            (200, "application/javascript; charset=utf-8", render_i18n_text(GUI_COMMON_JS))
         }
         ("GET", t) if t.starts_with("/api/gear_svg") => {
             let q = t.split_once('?').map(|(_, q)| q).unwrap_or("");
@@ -712,6 +887,9 @@ fn route(
         ("GET", t) if t.starts_with("/api/guide") => api_guide(target, &sender!()),
         ("GET", t) if t.starts_with("/api/tolerance") => api_tolerance(target),
         ("GET", t) if t.starts_with("/api/ping") => (200, json, r#"{"ok":true}"#.into()),
+        // 语言：`GET /api/i18n[?lang=zh|en]` —— 查询串带 lang = 切换（进程级，选一次全插件生效），
+        // 返回当前语言 + 语言列表 + 当前语言全 catalog（GUI/联调用）。
+        ("GET", t) if t.starts_with("/api/i18n") => api_i18n(t),
         ("POST", "/api/apply") => api_apply(body, &sender!(), false),
         ("POST", "/api/apply_refresh") => api_apply(body, &sender!(), true),
         ("POST", "/api/rough_apply") => api_rough_apply(body, &sender!()),
@@ -4183,11 +4361,11 @@ fn api_manual(target: &str) -> (u16, &'static str, String) {
             .cmp(b["slug"].as_str().unwrap_or_default())
     });
     let groups: Vec<serde_json::Value> = vec![
-        serde_json::json!({ "name": "入门与总览", "prefix": "0" }),
-        serde_json::json!({ "name": "建图与插入", "prefix": "1" }),
-        serde_json::json!({ "name": "标注与符号", "prefix": "2" }),
-        serde_json::json!({ "name": "表格与自动化", "prefix": "3" }),
-        serde_json::json!({ "name": "机械制图知识", "prefix": "4" }),
+        serde_json::json!({ "name": crate::i18n::t("gui.manual.group.0"), "prefix": "0" }),
+        serde_json::json!({ "name": crate::i18n::t("gui.manual.group.1"), "prefix": "1" }),
+        serde_json::json!({ "name": crate::i18n::t("gui.manual.group.2"), "prefix": "2" }),
+        serde_json::json!({ "name": crate::i18n::t("gui.manual.group.3"), "prefix": "3" }),
+        serde_json::json!({ "name": crate::i18n::t("gui.manual.group.4"), "prefix": "4" }),
     ];
     let commands: Vec<serde_json::Value> = COMMAND_CATALOG
         .iter()
@@ -8720,6 +8898,35 @@ pub(crate) fn linear_text_offset_from_line(dim: &Dimension) -> (f64, f64) {
     (along, perp)
 }
 
+/// 测试辅助：把页面 + 公共 JS **按 zh 渲染**后写到临时目录（node 冒烟用）。
+///
+/// 冒烟必须跑「服务端渲染后的内容」，否则页面里的 `{{i18n*:key}}` 占位符会原样进
+/// `textContent`，断言看到的是 key 而不是文案。公共 JS 放在同目录（页面脚本按相对路径读它）。
+#[cfg(test)]
+fn rendered_page_copy_for_test(html: &str, name: &str) -> Option<std::path::PathBuf> {
+    // 放在 `target/i18n_smoke/src/`（`../assets` = `target/i18n_smoke/assets`，
+    // 指向仓库 assets 的软链；gear 冒烟要读真实名义表 CSV）。
+    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/i18n_smoke");
+    let dir = root.join("src");
+    std::fs::create_dir_all(&dir).ok()?;
+    let assets_link = root.join("assets");
+    if !assets_link.exists() {
+        #[cfg(unix)]
+        let _ = std::os::unix::fs::symlink(
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets"),
+            &assets_link,
+        );
+    }
+    std::fs::write(
+        dir.join("ocsm_gui_common.js"),
+        render_i18n_text_lang(GUI_COMMON_JS, crate::i18n::Lang::Zh),
+    )
+    .ok()?;
+    let page = dir.join(name);
+    std::fs::write(&page, render_i18n_text_lang(html, crate::i18n::Lang::Zh)).ok()?;
+    Some(page)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -9580,9 +9787,17 @@ mod tests {
 
     #[test]
     fn guide_html_is_embedded_and_has_key_controls() {
-        assert!(GUI_HTML.contains("应用并刷新"));
+        let _g = crate::global_state_test_lock();
+        crate::i18n::set_lang(crate::i18n::Lang::Zh);
+        let zh = render_i18n_text(GUI_HTML);
+        assert!(zh.contains("应用并刷新"), "zh 渲染缺主按钮：{}", zh.len());
+        crate::i18n::set_lang(crate::i18n::Lang::En);
+        let en = render_i18n_text(GUI_HTML);
+        assert!(en.contains("Apply and refresh"), "en 渲染缺主按钮");
+        assert!(en.contains("Linear") && en.contains("Weld"));
         assert!(GUI_HTML.contains("/api/apply_refresh"));
         assert!(GUI_HTML.contains("LINEAR"));
+        crate::i18n::set_lang_auto();
     }
 
     /// **回归：GUI 页开局不能抛错**（2026-09-16 用户报的 BOM 页 bug）。
@@ -9595,6 +9810,8 @@ mod tests {
     /// 这里只测纯函数部分（真弹窗在生产构建里，测试里刻意不碰 chromium）。
     #[test]
     fn external_page_upgrade_maps_urls_to_app_windows() {
+        let _g = crate::global_state_test_lock();
+        crate::i18n::set_lang(crate::i18n::Lang::Zh);
         // 页面路径识别
         assert_eq!(plugin_page_path("/"), Some("/guide.html"));
         assert_eq!(plugin_page_path("/guide.html?handle=0x2A"), Some("/guide.html"));
@@ -9645,11 +9862,17 @@ mod tests {
         );
 
         // 提示页：标题随页面变，并且会尝试自关
-        let bom_notice = opened_elsewhere_html(page_label("/bom.html"));
+        let bom_notice = opened_elsewhere_html(&page_label("/bom.html"));
         assert!(bom_notice.contains("明细表编辑"));
         assert!(bom_notice.contains("BOMEDIT"));
         assert!(bom_notice.contains("window.close()"));
-        assert!(opened_elsewhere_html(page_label("/guide.html")).contains("标注配置"));
+        assert!(opened_elsewhere_html(&page_label("/guide.html")).contains("标注配置"));
+        // 英文时提示页同步切换（页头/按钮均为 catalog 渲染）
+        crate::i18n::set_lang(crate::i18n::Lang::En);
+        let en_notice = opened_elsewhere_html(&page_label("/bom.html"));
+        assert!(en_notice.contains("BOM editor"), "en 提示页缺页名：{en_notice}");
+        assert!(en_notice.contains("Close this page"), "en 提示页缺按钮");
+        crate::i18n::set_lang_auto();
 
         // “这个窗口已经开着”的心跳键：必须与页面里算的键完全一致，否则去重永远失效。
         assert_eq!(page_ping_key_for("/bom.html", "/bom.html", None).unwrap(), "bom");
@@ -9676,9 +9899,123 @@ mod tests {
     /// 测试环境不弹窗：`page_response` 必须照常发真页面（否则既有页面测试全挂）。
     #[test]
     fn page_response_serves_the_real_page_without_spawning() {
+        let _g = crate::global_state_test_lock();
+        crate::i18n::set_lang(crate::i18n::Lang::Zh);
         let (status, ctype, body) = page_response("/bom.html", BOM_HTML);
         assert_eq!((status, ctype), (200, "text/html; charset=utf-8"));
         assert!(body.contains("btn-apply"), "应该是真页面：{}", &body[..80.min(body.len())]);
+        assert!(body.contains("应用到图纸"), "zh 页面缺按钮文案");
+        assert!(body.contains("id=\"ocsmlang\""), "页面应注入语言切换控件");
+        assert!(!body.contains("{{i18n"), "不得残留未替换的占位符");
+        crate::i18n::set_lang_auto();
+    }
+
+    /// 页面 i18n 渲染：占位符替换（HTML/JS 两种转义）+ 语言切换控件注入 + 双语切换。
+    #[test]
+    fn page_i18n_render_replaces_placeholders_and_injects_switch() {
+        let _g = crate::global_state_test_lock();
+        let tpl = "<html><head></head><body><h1>{{i18n:gui.parts.h1}}</h1>\
+             <script>var s=\"{{i18njs:gui.parts.export}}\";</script></body></html>";
+        crate::i18n::set_lang(crate::i18n::Lang::Zh);
+        let zh = render_page_i18n(tpl);
+        assert!(zh.contains("OCSM 标准件库"));
+        assert!(zh.contains("零件出库"));
+        assert!(!zh.contains("{{i18n"));
+        assert!(zh.contains("id=\"ocsmlang\""));
+        assert!(zh.contains("data-lang=\"zh\"") && zh.contains("data-lang=\"en\""));
+        assert!(zh.contains("id=\"ocsmlang\" data-lang=\"zh\""), "控件应标当前语言");
+
+        crate::i18n::set_lang(crate::i18n::Lang::En);
+        let en = render_page_i18n(tpl);
+        assert!(en.contains("OCSM Standard Parts"));
+        assert!(en.contains("Produce part"));
+        assert!(!en.contains("{{i18n"));
+        assert!(en.contains("id=\"ocsmlang\" data-lang=\"en\""), "控件应标当前语言 en");
+        assert_ne!(zh, en);
+        crate::i18n::set_lang_auto();
+    }
+
+    /// JS / HTML 转义：catalog 文案里的引号/换行不得把 JS 字面量提前截断。
+    #[test]
+    fn page_i18n_escapes_html_and_js_contexts() {
+        assert_eq!(js_escape("a\"b\\c\nd<e>"), "a\\\"b\\\\c\\nd\\u003ce\\u003e");
+        assert_eq!(html_escape("<b>&\"x\"</b>"), "&lt;b&gt;&amp;&quot;x&quot;&lt;/b&gt;");
+    }
+
+    /// `/api/i18n?lang=en` 切语言 + 返回当前语言词表；不传 lang 不改语言；不认识的语言 400。
+    #[test]
+    fn api_i18n_switches_language_and_lists_catalog() {
+        let _g = crate::global_state_test_lock();
+        crate::i18n::set_lang(crate::i18n::Lang::Zh);
+        let (status, ctype, body) = api_i18n("/api/i18n");
+        assert_eq!((status, ctype), (200, "application/json; charset=utf-8"));
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["lang"], "zh");
+        assert_eq!(v["catalog"]["gui.parts.export"], "零件出库");
+        assert_eq!(v["languages"].as_array().unwrap().len(), 2);
+
+        let (status, _, body) = api_i18n("/api/i18n?lang=en");
+        assert_eq!(status, 200);
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["lang"], "en");
+        assert_eq!(v["catalog"]["gui.parts.export"], "Produce part");
+        assert_eq!(crate::i18n::lang(), crate::i18n::Lang::En);
+
+        let (status, _, _) = api_i18n("/api/i18n?lang=de");
+        assert_eq!(status, 400, "不认识的语言应 400");
+        assert_eq!(crate::i18n::lang(), crate::i18n::Lang::En, "400 不改当前语言");
+        crate::i18n::set_lang_auto();
+    }
+
+    /// 页面/公共 JS 里引用的 `{{i18n*:key}}` 必须都在 catalog 里（防 key 拼错）。
+    #[test]
+    fn embedded_page_i18n_keys_all_exist_in_catalog() {
+        for (name, src) in [
+            ("guide_gui.html", GUI_HTML),
+            ("rough_gui.html", ROUGH_HTML),
+            ("parts_gui.html", PARTS_HTML),
+            ("gear_gui.html", GEAR_HTML),
+            ("shaft_gui.html", SHAFT_HTML),
+            ("hole_gui.html", HOLE_HTML),
+            ("spline_gui.html", SPLINE_HTML),
+            ("ocsm_gui_common.js", GUI_COMMON_JS),
+            ("joint_gui.html", JOINT_HTML),
+            ("manual_gui.html", MANUAL_HTML),
+            ("bom_gui.html", BOM_HTML),
+        ] {
+            for key in i18n_keys_in(src) {
+                assert!(
+                    crate::i18n::lookup(key).is_some(),
+                    "{name} 引用了 catalog 里没有的 key：{key}"
+                );
+            }
+        }
+    }
+
+    /// 抽 `{{i18n:key}}` / `{{i18njs:key}}` 的 key（测试用）。
+    fn i18n_keys_in(source: &str) -> Vec<&str> {
+        let mut out = Vec::new();
+        let mut rest = source;
+        while let Some(pos) = rest.find("{{i18n") {
+            let tail = &rest[pos..];
+            let open = if tail.starts_with("{{i18njs:") {
+                9
+            } else if tail.starts_with("{{i18n:") {
+                7
+            } else {
+                rest = &tail[7..];
+                continue;
+            };
+            let after = &tail[open..];
+            match after.find("}}") {
+                Some(end) => {
+                    out.push(&after[..end]);
+                    rest = &after[end + 2..];
+                }
+                None => break,
+            }
+        }
+        out
     }
 
     #[test]
@@ -9784,7 +10121,9 @@ mod tests {
     fn hole_gui_behavior_smoke_with_node() {
         let manifest = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         let js = manifest.join("tests/hole_gui_smoke.mjs");
-        let html = manifest.join("src/hole_gui.html");
+        let Some(html) = rendered_page_copy_for_test(HOLE_HTML, "hole_gui.html") else {
+            return;
+        };
         if !js.exists() {
             return;
         }
@@ -9860,7 +10199,9 @@ mod tests {
     fn spline_gui_behavior_smoke_with_node() {
         let manifest = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         let js = manifest.join("tests/spline_gui_smoke.mjs");
-        let html = manifest.join("src/spline_gui.html");
+        let Some(html) = rendered_page_copy_for_test(SPLINE_HTML, "spline_gui.html") else {
+            return;
+        };
         if !js.exists() {
             return;
         }
@@ -9882,7 +10223,9 @@ mod tests {
     fn card_gui_behavior_smoke_with_node() {
         let manifest = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         let js = manifest.join("tests/card_gui_smoke.mjs");
-        let html = manifest.join("src/spline_gui.html");
+        let Some(html) = rendered_page_copy_for_test(SPLINE_HTML, "spline_gui.html") else {
+            return;
+        };
         if !js.exists() {
             return;
         }
@@ -9994,7 +10337,9 @@ mod tests {
     fn shaft_gui_specs_dropdown_behavior_smoke_with_node() {
         let manifest = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         let js = manifest.join("tests/shaft_gui_smoke.mjs");
-        let html = manifest.join("src/shaft_gui.html");
+        let Some(html) = rendered_page_copy_for_test(SHAFT_HTML, "shaft_gui.html") else {
+            return;
+        };
         if !js.exists() {
             return;
         }
@@ -10017,7 +10362,9 @@ mod tests {
     fn parts_gui_type_dropdown_smoke_with_node() {
         let manifest = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         let js = manifest.join("tests/parts_gui_smoke.mjs");
-        let html = manifest.join("src/parts_gui.html");
+        let Some(html) = rendered_page_copy_for_test(PARTS_HTML, "parts_gui.html") else {
+            return;
+        };
         if !js.exists() {
             return;
         }
@@ -10039,7 +10386,9 @@ mod tests {
     fn gear_gui_spline_mode_smoke_with_node() {
         let manifest = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         let js = manifest.join("tests/gear_gui_smoke.mjs");
-        let html = manifest.join("src/gear_gui.html");
+        let Some(html) = rendered_page_copy_for_test(GEAR_HTML, "gear_gui.html") else {
+            return;
+        };
         if !js.exists() {
             return;
         }
@@ -11949,8 +12298,9 @@ mod rough_tests {
 
     #[test]
     fn manual_page_and_catalog_expose_commands_and_topics() {
-        // 人类侧手册：页面关键控件在；命令目录非空；手册目录按优先级排好
-        let html = super::MANUAL_HTML;
+        // 人类侧手册：页面关键控件在；命令目录非空；手册目录按优先级排好。
+        // 页面文案走 catalog：按 zh 渲染后再断言。
+        let html = super::render_i18n_text_lang(super::MANUAL_HTML, crate::i18n::Lang::Zh);
         for key in ["/api/manual", "/api/manual/md", "命令目录", "操作教程", "renderMd"] {
             assert!(html.contains(key), "手册页缺 {key}");
         }
@@ -14690,7 +15040,9 @@ mod weld_tests {
     fn gui_runtime_smoke_with_node() {
         let manifest = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         let js = manifest.join("tests/gui_smoke.mjs");
-        let html = manifest.join("src/guide_gui.html");
+        let Some(html) = rendered_page_copy_for_test(GUI_HTML, "guide_gui.html") else {
+            return;
+        };
         if !js.exists() {
             return;
         }
@@ -14975,7 +15327,8 @@ mod weld_tests {
         // 销族树标签
         assert!(cat.contains("圆柱销 A型 GB/T 119.1-2000") && cat.contains("内螺纹圆柱销 GB/T 120.1-2000"));
         // 螺栓副 GUI 页：关键控件都在（件链编辑器 / 实时预览 / 装配按钮 / 防松模板）
-        let jhtml = super::JOINT_HTML;
+        // 页面文案走 catalog：按 zh 渲染后再断言（真产品路径）。
+        let jhtml = super::render_i18n_text_lang(super::JOINT_HTML, crate::i18n::Lang::Zh);
         for key in ["/api/joint_plan", "/api/joint_place", "/api/parts", "装配到图纸", "双螺母", "弹垫", "遮挡裁剪"] {
             assert!(jhtml.contains(key), "螺栓副页缺 {key}");
         }

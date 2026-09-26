@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
-<title>OCSM 标准件库</title>
+<title>{{i18n:gui.parts.h1}}</title>
 <style>
   :root { color-scheme: light; }
   body { font-family: "Helvetica Neue", "PingFang SC", "Microsoft YaHei", sans-serif;
@@ -47,62 +47,62 @@
 </style>
 </head>
 <body>
-<h1>OCSM 标准件库<span id="code" class="hint"></span></h1>
+<h1>{{i18n:gui.parts.h1}}<span id="code" class="hint"></span></h1>
 
 <div class="wrap">
   <div class="card left">
-    <h2>零件树（点选零件）</h2>
+    <h2>{{i18n:gui.parts.tree}}</h2>
     <ul class="tree" id="tree"></ul>
-    <div class="hint">灰色 = 待实现（已列在树上，按需排期）</div>
+    <div class="hint">{{i18n:gui.parts.tree_note}}</div>
   </div>
 
   <div class="card right">
-    <h2>规格与视图</h2>
+    <h2>{{i18n:gui.parts.spec_view}}</h2>
     <div id="panel" style="display:none">
       <div id="stdFields">
         <!-- 型别下拉（平键 A/B/C）：按目录 `type_group` 渲染；切型别 = 切族（同一尺寸表、不同端型画法）。 -->
         <div id="typeFields" style="display:none">
-          <label for="typeSel">型别</label>
+          <label for="typeSel">{{i18n:gui.parts.type}}</label>
           <select id="typeSel"></select>
         </div>
-        <label for="dia">公称直径</label>
+        <label for="dia">{{i18n:gui.parts.dia}}</label>
         <select id="dia"></select>
-        <label for="len" id="lenLabel">长度 l（mm，仅列该直径标准长度系列）</label>
+        <label for="len" id="lenLabel">{{i18n:gui.parts.len}}</label>
         <select id="len"></select>
       </div>
       <div id="detailFields" style="display:none">
         <!-- 规格代号族（矩形花键）：下拉选表内规格，或选「自定义」自由输入。 -->
         <div id="specFields" style="display:none">
-          <label for="specSel" id="specLabel">规格代号</label>
+          <label for="specSel" id="specLabel">{{i18n:gui.parts.spec_code}}</label>
           <select id="specSel"></select>
-          <input id="specText" type="text" placeholder="自定义规格，例 6x23x26x6" style="display:none" />
+          <input id="specText" type="text" placeholder="{{i18n:gui.parts.spec_custom_ph}}" style="display:none" />
         </div>
         <div id="dFields">
-          <label for="dnum" id="dLabel">轴径 d（mm，自由输入）</label>
+          <label for="dnum" id="dLabel">{{i18n:gui.parts.d}}</label>
           <input id="dnum" type="number" step="0.1" min="0.01" value="100" />
         </div>
         <div id="b1Fields">
-          <label for="b1num" id="b1Label">槽宽 b1 覆盖（mm，留空 = 该 d 档默认）</label>
-          <input id="b1num" type="number" step="0.1" min="0.01" placeholder="留空 = 默认" />
+          <label for="b1num" id="b1Label">{{i18n:gui.parts.b1}}</label>
+          <input id="b1num" type="number" step="0.1" min="0.01" placeholder="{{i18n:gui.parts.req_blank}}" />
         </div>
         <!-- 通用自由参数面板：按目录族条目的 `inputs` 动态生成
              （磨外圆没有 inputs → 走上面的 b1 老面板；退刀槽有 P/g1/g2/dg/r/alpha） -->
         <div id="paramFields"></div>
         <div class="hint" id="detailHint"></div>
       </div>
-      <label>视图（出库哪个视图）</label>
+      <label>{{i18n:gui.parts.view}}</label>
       <div class="row" id="viewRow"></div>
-      <button class="btn" id="out">零件出库</button>
+      <button class="btn" id="out">{{i18n:gui.parts.export}}</button>
       <div class="hint" id="steps"></div>
       <div id="status"></div>
-      <img id="preview" alt="零件预览" style="margin-top:10px" />
+      <img id="preview" alt="{{i18n:gui.parts.preview_alt}}" style="margin-top:10px" />
       <div class="hint">
         生成物：轮廓 → <code>1轮廓实线层</code>、牙底/细线 → <code>2细线层</code>、中心线 → <code>3中心线层</code>、
         剖面线 → <code>5剖面线层</code>；颜色/线型/线宽一律 <b>ByLayer</b>；
         <span id="baseHint">基点 = 头部支承面 × 轴线</span>；<b>不含尺寸标注</b>。
       </div>
     </div>
-    <div id="tip" class="hint">← 在左侧展开并选择零件</div>
+    <div id="tip" class="hint">{{i18n:gui.parts.tip}}</div>
   </div>
 </div>
 
@@ -130,7 +130,7 @@ function buildTree(ul, nodes, path) {
     const row = document.createElement("div");
     row.className = "node";
     const hasKids = n.children && n.children.length;
-    const extra = n.family ? "" : (hasKids ? "" : (n.implemented === false ? "待实现" : ""));
+    const extra = n.family ? "" : (hasKids ? "" : (n.implemented === false ? "{{i18njs:gui.parts.tag_pending}}" : ""));
     row.innerHTML = '<span class="tw">' + (hasKids ? "▾" : "•") + "</span>" + n.name +
                     (extra ? '<span class="tag">' + extra + "</span>" : "");
     if (!hasKids && n.implemented === false) row.classList.add("dim");
@@ -165,7 +165,7 @@ function pickFamily(id, row) {
     pickFamilyInner(id, row);
   } catch (e) {
     // 数据异常（例如某族的 views 为空）不再静默死面板，直接把原因写在状态行
-    el("status").textContent = "该零件族数据异常：" + e;
+    el("status").textContent = "{{i18njs:gui.parts.err.family}}".replace("{err}", e);
     el("status").className = "bad";
   }
 }
@@ -174,7 +174,7 @@ function pickFamilyInner(id, row) {
   const f = catalog.families[id];
   if (!f) return;
   if (!f.views || !f.views.length) {
-    el("status").textContent = "该族暂无可出库视图（待画法确认）";
+    el("status").textContent = "{{i18njs:gui.parts.err.no_view}}";
     el("status").className = "bad";
     return;
   }
@@ -187,7 +187,7 @@ function pickFamilyInner(id, row) {
   el("code").textContent = "　" + f.code + " ← " + f.iso;
   el("panel").style.display = "";
   el("tip").style.display = "none";
-  el("baseHint").textContent = f.base_hint || "基点 = 头部支承面 × 轴线";
+  el("baseHint").textContent = f.base_hint || "{{i18njs:gui.parts.base_default}}";
   // 型别下拉（目录 `type_group`；平键族有，其它族无 → 隐藏）。
   const typeGroup = f.type_group || [];
   el("typeFields").style.display = typeGroup.length ? "" : "none";
@@ -226,7 +226,7 @@ function pickFamilyInner(id, row) {
     const hasSpecs = !!(f.specs && f.specs.length);
     el("specFields").style.display = hasSpecs ? "" : "none";
     el("dFields").style.display = (hasSpecs || f.hide_d) ? "none" : "";
-    el("dLabel").textContent = f.d_label || "参数 d（mm，自由输入）";
+    el("dLabel").textContent = f.d_label || "{{i18njs:gui.parts.d}}";
     el("dnum").value = f.default_d || 100;
     el("b1num").value = "";
     renderDetailInputs(f);
@@ -234,7 +234,7 @@ function pickFamilyInner(id, row) {
     onDetail();
     return;
   }
-  el("lenLabel").textContent = (f.len_label || "长度 l") + "（mm，仅列该直径的取值）";
+  el("lenLabel").textContent = (f.len_label || "{{i18njs:gui.parts.len_default}}") + "{{i18njs:gui.parts.len_suffix}}";
   const dia = el("dia");
   dia.innerHTML = "";
   f.sizes.forEach((s) => {
@@ -264,7 +264,7 @@ function renderDetailInputs(f) {
     inp.min = "0";
     inp.id = "p_" + it.key;
     inp.dataset.key = it.key;
-    inp.placeholder = it.placeholder || (it.required ? "必给" : "留空 = 默认");
+    inp.placeholder = it.placeholder || (it.required ? "{{i18njs:gui.parts.req_yes}}" : "{{i18njs:gui.parts.req_blank}}");
     inp.addEventListener("input", onDetail);
     box.appendChild(inp);
   });
@@ -283,14 +283,14 @@ function collectParams(f, hint) {
     }
     const v = Number(raw);
     if (!isFinite(v)) {
-      hint.textContent = (it.label || it.key) + " 不是数字";
+      hint.textContent = "{{i18njs:gui.parts.err.not_number}}".replace("{label}", it.label || it.key);
       el("preview").removeAttribute("src");
       return null;
     }
     params[it.key] = v;
   }
   if (missing !== null) {
-    hint.textContent = "参数 " + missing + " 必给（花键：L 满齿段长；退刀槽：P）";
+    hint.textContent = "{{i18njs:gui.parts.err.missing_param}}".replace("{name}", missing);
     el("preview").removeAttribute("src");
     return null;
   }
@@ -309,7 +309,7 @@ function renderSpecFields(f) {
   });
   const custom = document.createElement("option");
   custom.value = "__custom__";
-  custom.textContent = "自定义规格…";
+  custom.textContent = "{{i18njs:gui.parts.custom_spec}}";
   sel.appendChild(custom);
   sel.value = f.specs[0].code;
   el("specText").style.display = "none";
@@ -343,7 +343,7 @@ function onDetail() {
     cur.d = specMinorD(cur.spec);
     if (!cur.spec || cur.d <= 0) {
       cur.params = {};
-      hint.textContent = "规格代号要写成 N×d×D×B（例 6x23x26x6）";
+      hint.textContent = "{{i18njs:gui.parts.err.spec_form}}";
       el("preview").removeAttribute("src");
       return;
     }
@@ -351,10 +351,10 @@ function onDetail() {
     const params = collectParams(f, hint);
     if (params === null) { cur.params = {}; return; }
     cur.params = params;
-    hint.textContent = (hit ? "表内规格" : "表外规格（de 必给）")
+    hint.textContent = (hit ? "{{i18njs:gui.parts.hint.in_table}}" : "{{i18njs:gui.parts.hint.off_table}}")
         + "：d=" + cur.d + "、D=" + (hit ? hit.D : "?") + "、B=" + (hit ? hit.B : "?")
         + (hit ? "、de=" + hit.de : "")
-        + "；L 必给（侧视/剖视），de 留空 = 按规格查表";
+        + "{{i18njs:gui.parts.hint.spec_tail}}";
     update();
     return;
   }
@@ -363,7 +363,7 @@ function onDetail() {
   if (!isFinite(d) || d <= 0) {
     cur.b1 = null;
     cur.params = {};
-    hint.textContent = "d 必须是正数";
+    hint.textContent = "{{i18njs:gui.parts.err.d_positive}}";
     el("preview").removeAttribute("src");
     return;
   }
@@ -375,9 +375,10 @@ function onDetail() {
     const choices = (f.pitches || []).map((r) => r.P).join("、");
     const row = (f.pitches || []).find((r) => Number(r.P) === Number(params.P));
     hint.textContent = row
-        ? "P=" + row.P + "：g1=" + row.g1 + "、g2=" + row.g2 + "、dg=d−" + row.dg_reduction
-          + "、r=" + row.r + "；表 2 单键（P）：" + choices
-        : "P 必须是表 2 单键：" + choices;
+        ? "{{i18njs:gui.parts.hint.p_ok}}".replace("{p}", row.P).replace("{g1}", row.g1)
+            .replace("{g2}", row.g2).replace("{red}", row.dg_reduction).replace("{r}", row.r)
+            .replace("{choices}", choices)
+        : "{{i18njs:gui.parts.err.p_choice}}".replace("{choices}", choices);
     update();
     return;
   }
@@ -390,14 +391,15 @@ function onDetail() {
     return loOk && hiOk;
   });
   if (!band) {
-    hint.textContent = "d 超出标准表范围";
+    hint.textContent = "{{i18njs:gui.parts.err.d_range}}";
     el("preview").removeAttribute("src");
     return;
   }
   const rows = band.rows || [];
   const def = rows.length ? rows[rows.length - 1].b1 : "?";
   const choices = rows.map((r) => r.b1).join("、");
-  hint.textContent = "该 d 属于「" + band.label + "」档；默认 b1=" + def + "；可选 b1=" + choices;
+  hint.textContent = "{{i18njs:gui.parts.hint.d_band}}"
+      .replace("{band}", band.label).replace("{def}", def).replace("{choices}", choices);
   update();
 }
 
@@ -413,10 +415,10 @@ function onDia(size) {
   });
   len.value = size.lengths[0];
   cur.l = Number(size.lengths[0]);
-  const lab = catalog.families[cur.family].len_label || "长度";
+  const lab = catalog.families[cur.family].len_label || "{{i18njs:gui.parts.len_default}}";
   el("steps").textContent = size.lengths.length > 1
-      ? "该直径" + lab + " 的取值：" + size.lengths.join("、") + " mm"
-      : "该直径" + lab + " = " + size.lengths[0] + " mm";
+      ? "{{i18njs:gui.parts.hint.len_values}}".replace("{label}", lab).replace("{choices}", size.lengths.join("、"))
+      : "{{i18njs:gui.parts.hint.len_single}}".replace("{label}", lab).replace("{len}", size.lengths[0]);
   update();
 }
 
@@ -442,21 +444,21 @@ function update() {
 }
 
 async function outOfStock() {
-  ocsmStatus("出库中…");
+  ocsmStatus("{{i18njs:gui.parts.status.exporting}}");
   const r = await fetchApi("/api/part_export", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(TAB ? Object.assign({ tab: TAB }, cur) : cur),
   }, "/api/part_export");
   if (!r.ok) return; // 后端 error 已由共享助手原样写进 #status（红框）
-  const msg = r.data.message || "已出库";
+  const msg = r.data.message || "{{i18njs:gui.parts.status.exported}}";
   ocsmStatusOk(msg);
   // 出库后自动关掉本窗口：chromium 的标签页/--app 窗口都允许脚本自关
   //（"会话历史仅一条即可自关"规则，已实测）；若浏览器拒绝（如 Firefox 标签页），
   // 下面的文案会提示手动切回图纸。
   setTimeout(() => {
     try { window.close(); } catch (e) { /* 被拒绝时忽略 */ }
-    ocsmStatusOk(msg + "（若本窗口未自动关闭，请切回图纸继续）");
+    ocsmStatusOk(msg + "{{i18njs:gui.parts.status.exported_tail}}");
   }, 300);
 }
 

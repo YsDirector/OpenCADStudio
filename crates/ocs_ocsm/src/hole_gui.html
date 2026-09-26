@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
-<title>OCSM 孔生成器</title>
+<title>{{i18n:gui.hole.h1}}</title>
 <style>
   /* 样式与 gear_gui.html / shaft_gui.html 同款：同一套配色、圆角与控件尺寸 */
   :root { color-scheme: light; }
@@ -49,16 +49,16 @@
 </style>
 </head>
 <body>
-<h1>OCSM 孔生成器<span class="sub">简单 / 螺纹 / 沉头 / 埋头 · 盲孔 / 贯通</span></h1>
+<h1>{{i18n:gui.hole.h1}}<span class="sub">{{i18n:gui.hole.sub}}</span></h1>
 
 <div class="wrap">
   <!-- ① 孔类型 + 参数 + 视图（照参考图布局） -->
   <div class="card top">
     <div class="kinds">
-      <button type="button" class="kind" id="kindSimple">简单孔</button>
-      <button type="button" class="kind on" id="kindThreaded">螺纹孔</button>
-      <button type="button" class="kind" id="kindCounterbore">沉头孔</button>
-      <button type="button" class="kind" id="kindCountersink">埋头孔</button>
+      <button type="button" class="kind" id="kindSimple">{{i18n:gui.hole.kind.simple}}</button>
+      <button type="button" class="kind on" id="kindThreaded">{{i18n:gui.hole.kind.threaded}}</button>
+      <button type="button" class="kind" id="kindCounterbore">{{i18n:gui.hole.kind.counterbore}}</button>
+      <button type="button" class="kind" id="kindCountersink">{{i18n:gui.hole.kind.countersink}}</button>
     </div>
     <div class="params">
       <label>标准</label><select id="std" title="标准 = 螺纹体系。管螺纹 G/R/NPT 的自动有效长度取表内标准啮合长度（R=ISO 7-1 表第16栏；NPT=基准距离+装配余量+偏差；G=同规格 R）"><option value="iso724">公制 M（ISO 724 / GB/T 196）</option></select>
@@ -120,11 +120,11 @@
     <span class="unit">mm</span>
     <label class="chk" style="margin:0"><input type="checkbox" id="tFull">全长</label>
     <span style="flex:1"></span>
-    <button type="button" class="btn" id="ok">确定</button>
-    <button type="button" class="btn ghost" id="cancel">取消</button>
+    <button type="button" class="btn" id="ok">{{i18n:gui.hole.ok}}</button>
+    <button type="button" class="btn ghost" id="cancel">{{i18n:gui.hole.cancel}}</button>
   </div>
   <div id="status"></div>
-  <div class="hint">选孔型 → 定孔径 → 点「确定」回到图纸放置（自动值不合适时可手改）。</div>
+  <div class="hint">{{i18n:gui.hole.hint}}</div>
 </div>
 
 <script src="/ocsm_gui_common.js"></script>

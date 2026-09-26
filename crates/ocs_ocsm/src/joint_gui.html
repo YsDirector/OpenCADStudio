@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
-<title>OCSM 螺栓副装配</title>
+<title>{{i18n:gui.joint.h1}}</title>
 <style>
   :root { color-scheme: light; }
   body { font-family: "Helvetica Neue", "PingFang SC", "Microsoft YaHei", sans-serif;
@@ -57,11 +57,11 @@
 </style>
 </head>
 <body>
-<h1>OCSM 螺栓副装配<span id="code" class="hint"></span></h1>
+<h1>{{i18n:gui.joint.h1}}<span id="code" class="hint"></span></h1>
 
 <div class="wrap">
   <div class="card left">
-    <h2>① 螺栓</h2>
+    <h2>{{i18n:gui.joint.bolt}}</h2>
     <label for="fam">螺栓族</label>
     <select id="fam"></select>
     <div class="grid3" style="margin-top:8px">
@@ -71,18 +71,18 @@
     </div>
     <div class="hint" id="lenHint"></div>
 
-    <h2>② 件链（从被连接件往外，依次穿过）</h2>
+    <h2>{{i18n:gui.joint.chain}}</h2>
     <div class="chainwrap">
       <table class="chain">
         <thead><tr><th>件</th><th>规格</th><th>厚度（板/间隙）</th><th></th></tr></thead>
         <tbody id="chain"></tbody>
       </table>
       <div class="row">
-        <button class="btn ghost" id="add">+ 加一件</button>
+        <button class="btn ghost" id="add">{{i18n:gui.joint.add}}</button>
       </div>
     </div>
 
-    <h2>③ 常用件链（点一下套用，之后仍可逐件改）</h2>
+    <h2>{{i18n:gui.joint.presets}}</h2>
     <div class="row" id="presets"></div>
     <div class="hint">
       件链是<b>你（或 AI 按工况）决定的</b>：命令只按件链算长度、按基点放置、按遮挡裁剪，
@@ -92,12 +92,12 @@
     </div>
 
     <div class="row">
-      <button class="btn ghost" id="clear">清空件链</button>
+      <button class="btn ghost" id="clear">{{i18n:gui.joint.clear}}</button>
     </div>
   </div>
 
   <div class="card right">
-    <h2>放置</h2>
+    <h2>{{i18n:gui.joint.place_title}}</h2>
     <div class="grid3">
       <div><label for="rot">转角（度）</label><select id="rot">
         <option value="-90">-90（杆朝下）</option>
@@ -110,10 +110,10 @@
         <option value="end">左视图</option>
         <option value="top">俯视图</option>
       </select></div>
-      <div><label>&nbsp;</label><button class="btn" id="place" style="width:100%">装配到图纸</button></div>
+      <div><label>&nbsp;</label><button class="btn" id="place" style="width:100%">{{i18n:gui.joint.place}}</button></div>
     </div>
     <div id="status"></div>
-    <h2>装配预览（真实几何，含遮挡裁剪）</h2>
+    <h2>{{i18n:gui.joint.preview}}</h2>
     <img id="preview" alt="装配预览" />
     <div id="report">…</div>
     <div class="kv" id="kv"></div>

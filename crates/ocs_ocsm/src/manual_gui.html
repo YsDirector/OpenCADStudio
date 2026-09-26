@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
-<title>OCSM 命令手册</title>
+<title>{{i18n:gui.manual.h1}}</title>
 <style>
   :root { color-scheme: light; }
   body { font-family: "Helvetica Neue", "PingFang SC", "Microsoft YaHei", sans-serif;
@@ -50,23 +50,23 @@
 </style>
 </head>
 <body>
-<h1>OCSM 命令手册<span class="hint" id="src"></span></h1>
+<h1>{{i18n:gui.manual.h1}}<span class="hint" id="src"></span></h1>
 
 <div class="wrap">
   <div class="card left">
-    <h2>命令目录</h2>
+    <h2>{{i18n:gui.manual.commands}}</h2>
     <div id="cmds"></div>
-    <h2 style="margin-top:14px">操作教程 / 制图知识</h2>
+    <h2 style="margin-top:14px">{{i18n:gui.manual.topics}}</h2>
     <div id="topics"></div>
     <div id="status"></div>
     <div class="hint">
-      教程正文是磁盘上的 markdown（与 AI 用的 skill 手册**同一批文件**）。
-      搜索目录：<span id="dirs"></span>
+      {{i18n:gui.manual.note}}
+      <span id="dirs"></span>
     </div>
   </div>
 
   <div class="card right">
-    <div id="md"><span class="hint">← 左侧点一个命令或主题；这里显示它的用法与步骤。</span></div>
+    <div id="md"><span class="hint">{{i18n:gui.manual.empty}}</span></div>
     <div class="path" id="path"></div>
   </div>
 </div>
@@ -152,25 +152,26 @@ function selectNode(btn, slug, title) {
 }
 
 async function loadTopic(slug, title) {
-  el("status").textContent = "读取中…";
+  el("status").textContent = "{{i18njs:gui.manual.loading}}";
   el("status").className = "";
   try {
     const r = await fetch("/api/manual/md?slug=" + encodeURIComponent(slug));
     const j = await r.json();
     if (!j.ok) {
       el("md").innerHTML = "<h2>" + esc(title || slug) + "</h2><p class='bad'>"
-        + esc(j.error || "读取失败") + "</p><p class='hint'>搜索目录：" + esc((j.searched || []).join("；"))
+        + esc(j.error || "{{i18njs:gui.manual.read_fail}}") + "</p><p class='hint'>"
+        + "{{i18njs:gui.manual.search_dirs}}".replace("{dirs}", esc((j.searched || []).join("；")))
         + "</p>";
       el("path").textContent = "";
-      el("status").textContent = "未找到该主题的 md";
+      el("status").textContent = "{{i18njs:gui.manual.not_found}}";
       el("status").className = "bad";
       return;
     }
     el("md").innerHTML = renderMd(j.md);
-    el("path").textContent = "来源：" + j.path;
+    el("path").textContent = "{{i18njs:gui.manual.source}}".replace("{path}", j.path);
     el("status").textContent = "";
   } catch (e) {
-    el("status").textContent = "请求失败：" + e;
+    el("status").textContent = "{{i18njs:gui.manual.request_fail}}".replace("{err}", e);
     el("status").className = "bad";
   }
 }
@@ -192,8 +193,8 @@ async function load() {
     const box = el("topics");
     box.innerHTML = "";
     if (!topics.length) {
-      box.innerHTML = '<div class="hint">没找到手册 md。把手册放到 <code>~/.agents/skills/ocsm-manual/manual/</code>，'
-        + "或用环境变量 <code>OCSM_MANUAL_DIR</code> 指定目录后重开本窗口。</div>";
+      box.innerHTML = '<div class="hint">{{i18njs:gui.manual.no_md1}}<code>~/.agents/skills/ocsm-manual/manual/</code>'
+        + "{{i18njs:gui.manual.no_md2}}<code>OCSM_MANUAL_DIR</code>{{i18njs:gui.manual.no_md3}}</div>";
     }
     topics.forEach((t) => {
       const b = document.createElement("button");
@@ -203,7 +204,8 @@ async function load() {
       box.appendChild(b);
     });
     el("dirs").textContent = (idx.dirs || []).join("；");
-    el("src").textContent = "　共 " + (idx.commands || []).length + " 条命令、" + topics.length + " 篇教程";
+    el("src").textContent = "{{i18njs:gui.manual.count}}"
+      .replace("{cmds}", (idx.commands || []).length).replace("{topics}", topics.length);
     // 默认打开总览
     const first = topics.find((t) => t.slug.startsWith("00")) || topics[0];
     if (first) {
@@ -211,7 +213,7 @@ async function load() {
       selectNode(btn, first.slug, first.title);
     }
   } catch (e) {
-    el("status").textContent = "初始化失败：" + e;
+    el("status").textContent = "{{i18njs:gui.manual.init_fail}}".replace("{err}", e);
     el("status").className = "bad";
   }
 }
