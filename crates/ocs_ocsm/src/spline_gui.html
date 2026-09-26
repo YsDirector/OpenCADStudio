@@ -298,11 +298,26 @@ function setOptions(id, list, preferred, decorate) {
   const sel = el(id);
   const before = sel.value;
   sel.innerHTML = "";
+  // 分组（card_types[].group）：同一组收进 <optgroup>；无组名 = 平铺。
+  let host = sel;
+  let group = null;
   for (const item of list) {
+    const g = item.group == null || item.group === '' ? null : String(item.group);
+    if (g !== group) {
+      group = g;
+      if (g) {
+        const og = document.createElement("optgroup");
+        og.label = g;
+        sel.appendChild(og);
+        host = og;
+      } else {
+        host = sel;
+      }
+    }
     const o = document.createElement("option");
     o.value = String(item.value);
     o.textContent = decorate ? decorate(item) : item.label;
-    sel.appendChild(o);
+    host.appendChild(o);
   }
   if (list.some((i) => String(i.value) === before)) {
     sel.value = before;
@@ -747,7 +762,7 @@ function ping(bye) {
   const r = await fetchApi("/api/spline_options", { cache: "no-store" }, "/api/spline_options");
   if (!r.ok) return; // 共享助手已把 error 红框显示在 #status
   OPT = r.data;
-  setOptions("cardType", cardTypes().map((c) => ({ value: c.id, label: c.label })), (cardTypes()[0] || {}).id);
+  setOptions("cardType", cardTypes().map((c) => ({ value: c.id, label: c.label, group: c.group })), (cardTypes()[0] || {}).id);
   CARD = cardTypes()[0] || null;
   if (CARD && CARD_PARAM) {
     const want = cardTypes().find((c) => c.id === CARD_PARAM);

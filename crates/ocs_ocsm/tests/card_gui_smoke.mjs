@@ -132,6 +132,40 @@ const DIN_FORM_EXT = {
   note: 'stub DIN 外说明',
   missing_note: 'stub DIN 缺项（Table 7 缺口）',
 };
+const LITE_FORM_INT = {
+  fields: [
+    FIELD('expr', '齿形表达式（九字段；可从轴/齿轮生成器 GUI 复制）', 'textarea',
+      { default: 'SPLINE IN M3 Z20 ALPHA30 X0 DA65.4 DF57.3436 BETA0 H30', required: true }),
+    FIELD('grade', '公差等级（只影响 Md 计算；卡面不显示公差）', 'number',
+      { default: '6', min: 4, step: 1, required: true }),
+    FIELD('fit', '配合类别（只影响 Md 计算；卡面不显示公差）', 'select',
+      { options: [{ value: 'H', label: 'H' }], default: 'H' }),
+    FIELD('root', '齿根样式', 'select', {
+      options: [{ value: 'auto', label: '自动（按表达式反解）' }, { value: 'flat', label: '平齿根' }, { value: 'fillet', label: '圆齿根' }],
+      default: 'auto',
+    }),
+    FIELD('dp', '量棒直径 Dp（留空 = 标准 R40 自动选）', 'number'),
+  ],
+  note: 'stub 精简内说明（不含公差列）',
+  missing_note: 'stub 精简内缺项（卡面固定不含公差）',
+};
+const LITE_FORM_EXT = {
+  fields: [
+    FIELD('expr', '齿形表达式（九字段；可从轴/齿轮生成器 GUI 复制）', 'textarea',
+      { default: 'SPLINE EX M3 Z20 ALPHA30 X0 DA66 DF52.5 BETA0 H30', required: true }),
+    FIELD('grade', '公差等级（只影响 Wn 计算；卡面不显示公差）', 'number',
+      { default: '6', min: 4, step: 1, required: true }),
+    FIELD('fit', '配合类别（只影响 Wn 计算；卡面不显示公差）', 'select', {
+      options: [{ value: 'h', label: 'h' }, { value: 'k', label: 'k' }], default: 'h',
+    }),
+    FIELD('root', '齿根样式', 'select', {
+      options: [{ value: 'auto', label: '自动（按表达式反解）' }, { value: 'flat', label: '平齿根' }, { value: 'fillet', label: '圆齿根' }],
+      default: 'auto',
+    }),
+  ],
+  note: 'stub 精简外说明（不含公差列）',
+  missing_note: 'stub 精简外缺项（卡面固定不含公差）',
+};
 const CARD_TYPES = [
   { id: '花键参数表', aliases: ['spline', 'gb'], label: 'GB 花键参数表（内）', summary: 'stub GB', systems: [{ id: 'gb3478', label: 'GB', standard: 'stub' }], direction: 'int', renderer: 'spline_table', form: null },
   { id: '花键参数表_外', aliases: ['splineext'], label: 'GB 花键参数表（外）', summary: 'stub GB ext', systems: [{ id: 'gb3478', label: 'GB', standard: 'stub' }], direction: 'ext', renderer: 'spline_table', form: null },
@@ -143,7 +177,9 @@ const CARD_TYPES = [
   { id: 'NF内花键参数表', aliases: ['nf'], label: 'NF E22-141 内花键参数表', summary: 'stub nf', systems: [], direction: 'int', renderer: 'nf_table', form: NF_FORM },
   { id: 'NF外花键参数表', aliases: ['nfext'], label: 'NF E22-141 外花键参数表', summary: 'stub nf ext', systems: [], direction: 'ext', renderer: 'nf_ext_table', form: NF_EXT_FORM },
   { id: 'DIN花键参数表', aliases: ['din'], label: 'DIN 5480 内花键参数表', summary: 'stub din', systems: [], direction: 'int', renderer: 'din_table', form: DIN_FORM_INT },
-  { id: 'DIN花键参数表_外', aliases: ['dinext'], label: 'DIN 5480 外花键参数表', summary: 'stub din ext', systems: [], direction: 'ext', renderer: 'din_table', form: DIN_FORM_EXT },
+  { id: 'DIN花键参数表_外', aliases: ['dinext'], label: 'DIN 5480 外花键参数表', group: null, summary: 'stub din ext', systems: [], direction: 'ext', renderer: 'din_table', form: DIN_FORM_EXT },
+  { id: 'GB花键精简表_内', aliases: ['gb精简'], label: 'GB 花键参数表（内·精简版）', group: '精简版', summary: 'stub lite int', systems: [{ id: 'gb3478', label: 'GB', standard: 'stub' }], direction: 'int', renderer: 'spline_lite', form: LITE_FORM_INT },
+  { id: 'GB花键精简表_外', aliases: ['gb精简外'], label: 'GB 花键参数表（外·精简版）', group: '精简版', summary: 'stub lite ext', systems: [{ id: 'gb3478', label: 'GB', standard: 'stub' }], direction: 'ext', renderer: 'spline_lite', form: LITE_FORM_EXT },
 ];
 const GB_COLUMNS = Array.from({ length: 21 }, (_, i) => ({
   tag: `(内)t${i}`, label: `项${i}`, unit: '', formula: 'stub', source: 'stub',
@@ -426,6 +462,34 @@ function dinPreview(mm) {
     missing: [...missingSet], missing_note: 'stub DIN 缺项',
   });
 }
+// 精简卡：9 项固定、无任何公差列；表达式反解复用 stubExpr，回填 fields。
+const LITE_INT_TAGS = ['执行标准', '模数 m', '齿数 z', '齿形角 αD', '齿根样式', '大径 Dei', '小径 Dii', '量棒直径 Dp', '测量跨棒距 Md'];
+const LITE_EXT_TAGS = ['执行标准', '模数 m', '齿数 z', '齿形角 αD', '齿根样式', '大径 Dee', '小径 Die', '跨测齿数 Kn', '公法线长度 Wn'];
+function litePreview(mm) {
+  const ext = /_外/.test(String(mm.card));
+  const tags = ext ? LITE_EXT_TAGS : LITE_INT_TAGS;
+  const ex = stubExpr(mm);
+  if (!ex) return jsonResp({ ok: false, error: 'GB 花键精简卡：表达式缺失' }, 400);
+  const val = (tag) => tag === '执行标准' ? 'GB/T 3478.1-2008'
+    : tag === '模数 m' ? String(ex.m) : tag === '齿数 z' ? String(ex.z)
+    : tag === '齿形角 αD' ? ex.alpha + '°' : tag === '齿根样式' ? '平齿根'
+    : tag === '大径 Dei' ? '65.4' : tag === '小径 Dii' ? '57.344'
+    : tag === '量棒直径 Dp' ? '4.5' : tag === '测量跨棒距 Md' ? '61.5'
+    : tag === '大径 Dee' ? '66' : tag === '小径 Die' ? '52.5'
+    : tag === '跨测齿数 Kn' ? '3' : tag === '公法线长度 Wn' ? '22.981'
+    : `v-${tag}`;
+  const items = tags.map((tag) => ({
+    tag: '(简)' + tag, label: tag, unit: '', value: val(tag),
+    formula: 'stub 公式', source: 'stub 来源', missing: false,
+  }));
+  return jsonResp({
+    ok: true, card: ext ? 'GB花键精简表_外' : 'GB花键精简表_内', renderer: 'spline_lite',
+    expr: String(mm.expr).trim(),
+    fields: { grade: mm.grade, fit: mm.fit, root: 'flat' },
+    readout: [{ k: '模数 m', v: String(ex.m) }, { k: '齿数 z', v: String(ex.z) }],
+    items, missing: [], missing_note: 'stub 精简卡：不含任何公差列',
+  });
+}
 global.fetch = async (u, opts = {}) => {
   const url = String(u);
   if (url.startsWith('/api/spline_options')) return jsonResp(OPTIONS);
@@ -437,6 +501,7 @@ global.fetch = async (u, opts = {}) => {
     if (String(model.card).startsWith('ANSI')) return ansiPreview(model);
     if (model.card === 'NF内花键参数表') return nfPreview(model);
     if (model.card === 'NF外花键参数表') return nfExtPreview(model);
+    if (String(model.card).startsWith('GB花键精简表')) return litePreview(model);
     if (String(model.card).startsWith('DIN')) return dinPreview(model);
     return jsonResp({ ok: false, error: 'stub 只支持新卡' }, 400);
   }
@@ -456,6 +521,7 @@ global.fetch = async (u, opts = {}) => {
       : lastExportModel.card === '齿轮参数表' ? gearPreview(lastExportModel)
       : lastExportModel.card === 'NF内花键参数表' ? nfPreview(lastExportModel)
       : lastExportModel.card === 'NF外花键参数表' ? nfExtPreview(lastExportModel)
+      : String(lastExportModel.card).startsWith('GB花键精简表') ? litePreview(lastExportModel)
       : String(lastExportModel.card).startsWith('DIN') ? dinPreview(lastExportModel)
       : jsonResp({ ok: false, error: 'bad card' }, 400);
     if (!v.ok) return v;
@@ -488,7 +554,13 @@ function mkEl(id) {
     },
     appendChild(c) {
       if (this.tagName === 'SELECT' && c.tagName === 'OPTION') this.options.push(c);
-      else this.children.push(c);
+      else if (this.tagName === 'SELECT' && c.tagName === 'OPTGROUP') {
+        c._parent = this;
+        this.children.push(c);
+      } else if (this.tagName === 'OPTGROUP' && c.tagName === 'OPTION') {
+        this.options.push(c);
+        if (this._parent) this._parent.options.push(c);
+      } else this.children.push(c);
       return c;
     },
     removeChild(c) { this.children = this.children.filter((x) => x !== c); },
@@ -559,13 +631,17 @@ check(!!H, '探针 __card 未挂上（脚本初始化崩溃？）');
 if (!H) report();
 
 // ── ① 统一外观：表驱动骨架 + GB 面板同款分区 ──────────────────────
-check(el('cardType').options.length === 11, `卡类型应 11 项：${el('cardType').options.map((o) => o.value)}`);
+check(el('cardType').options.length === 13, `卡类型应 13 项：${el('cardType').options.map((o) => o.value)}`);
 check(H.card && H.card.id === '花键参数表', `默认卡类型：${H.card && H.card.id}`);
 // ② 卡名（下拉闭合态）：首项带 GB；⑤ 每张卡名带标准号，一眼看出哪套标准
 check(el('cardType').options[0].textContent === 'GB 花键参数表（内）', `首项卡名：${el('cardType').options[0].textContent}`);
 for (const o of el('cardType').options) {
   check(/GB|ANSI|NF|DIN/.test(o.textContent), `卡名应带标准号：${o.textContent}`);
 }
+// 下拉分组（精简版）：两个精简卡收进 <optgroup label="精简版">；普通卡平铺。
+const liteGroups = el('cardType').children.filter((c) => c.tagName === 'OPTGROUP');
+check(liteGroups.length === 1 && liteGroups[0].label === '精简版' && liteGroups[0].options.length === 2,
+  `精简版分组：${liteGroups.map((g) => `${g.label}(${g.options.length})`)}`);
 // ⑤ 截断兜底：hover title = 全名 + 口径（不展开也能确认）
 check((el('cardType').title || '').includes('GB 花键参数表'), `卡类型 title 应含全名：${el('cardType').title}`);
 check(html.includes('class="card typebar"'), '卡类型条应有 typebar 类（独占一行自适应）');
@@ -966,6 +1042,58 @@ check(el('status').className === 'bad', `DIN 方向错误应红框：${el('statu
 H.formControl('expr').value = '';
 H.formControl('expr')._fire('input', H.formControl('expr'));
 await tick();
+
+// ── ⑨ GB 精简版卡片（新增）：9 项、无公差列、统一骨架、表达式反解、出表/计算书同路径 ──
+el('cardType').value = 'GB花键精简表_内';
+el('cardType')._fire('change', el('cardType'));
+await tick();
+check(H.card.id === 'GB花键精简表_内', `精简内卡：${H.card.id}`);
+check(H.panelOf(H.card) === 'form', '精简卡应走通用骨架（不另写一套）');
+check((el('cardHint').title || '').includes('不含公差') || (el('cardHint').title || '').includes('公差'),
+  `精简缺项说明进 title：${el('cardHint').title}`);
+let liteSeq = el('formParams').children.filter((c) => c.id && c.id.startsWith('f_')).map((c) => c.id);
+check(liteSeq.join(',') === 'f_grade,f_fit,f_root,f_dp', `精简内字段顺序：${liteSeq}`);
+check(el('formMain').children.filter((c) => c.id && c.id.startsWith('f_')).map((c) => c.id).join(',') === 'f_expr',
+  '精简表达式应在中部主输入区');
+check(H.formControl('grade').value === '6' && H.formControl('fit').value === 'H', '精简内默认 6/H');
+await H.refresh();
+check(lastPreviewModel && lastPreviewModel.card === 'GB花键精简表_内', `精简预览模型：${JSON.stringify(lastPreviewModel)}`);
+check(el('items').innerHTML.split('class="row"').length - 1 === 9, `精简内应 9 项：${el('items').innerHTML.slice(0, 100)}`);
+check(!el('items').innerHTML.includes('公差') && !el('items').innerHTML.includes('偏差'),
+  '精简卡结果预览不得出现公差/偏差字段');
+check(el('items').innerHTML.includes('量棒直径 Dp') && el('items').innerHTML.includes('测量跨棒距 Md'),
+  '精简内应含量棒/跨棒距');
+// 表达式 → 反解值出现（统一解析器；后端 fields 回填）
+H.formControl('expr').value = 'SPLINE IN M0.5 Z30 ALPHA30 X0 DA16 DF13.75 BETA0 H20';
+H.formControl('expr')._fire('input', H.formControl('expr'));
+await tick();
+check(String(lastPreviewModel.expr).startsWith('SPLINE IN M0.5'), `精简表达式应进模型：${lastPreviewModel.expr}`);
+check(el('items').innerHTML.includes('0.5') && el('items').innerHTML.includes('30'), '表达式反解值应出现在预览');
+// 切精简外卡：字段少一个 dp；9 项含 Kn/Wn；仍无公差
+el('cardType').value = 'GB花键精简表_外';
+el('cardType')._fire('change', el('cardType'));
+await tick();
+check(H.card.id === 'GB花键精简表_外', `精简外卡：${H.card.id}`);
+liteSeq = el('formParams').children.filter((c) => c.id && c.id.startsWith('f_')).map((c) => c.id);
+check(liteSeq.join(',') === 'f_grade,f_fit,f_root', `精简外字段顺序：${liteSeq}`);
+check(H.formControl('dp') === undefined, '精简外卡不含量棒字段');
+await H.refresh();
+check(el('items').innerHTML.split('class="row"').length - 1 === 9, `精简外应 9 项：${el('items').innerHTML.slice(0, 100)}`);
+check(el('items').innerHTML.includes('跨测齿数 Kn') && el('items').innerHTML.includes('公法线长度 Wn'),
+  '精简外应含 Kn/Wn');
+check(!el('items').innerHTML.includes('公差') && !el('items').innerHTML.includes('偏差'),
+  '精简外预览不得出现公差/偏差');
+// 出表走统一 /api/card_export；计算书同端点同模型
+closed = false;
+el('ok').click();
+await tick();
+check(lastExportUrl.startsWith('/api/card_export') && lastExportModel.card === 'GB花键精简表_外',
+  `精简外出表：${lastExportUrl} ${JSON.stringify(lastExportModel)}`);
+closed = false;
+el('report').click();
+await tick();
+check(lastReportModel && lastReportModel.card === 'GB花键精简表_外', `精简计算书同源模型：${JSON.stringify(lastReportModel)}`);
+el('reportClose').click();
 
 // ── ⑦ 预览 404 → 红框可见（共享助手；不关窗）─────────────────────
 forcePreview404 = true;

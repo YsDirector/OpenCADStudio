@@ -49,6 +49,7 @@ mod partgen_more;
 mod shaft;
 mod spline;
 mod spline_gui;
+mod spline_lite;
 mod spline_table;
 mod spline_tol;
 mod thread;
@@ -2690,6 +2691,15 @@ impl OcsmPlugin {
                 let args = crate::inject_default_side(rest, side);
                 self.cmd_spline_card(host, &args)
             }
+            crate::card::CardRenderer::SplineLite => {
+                // 一卡一方向；旧 CLI 显式内/外仍可覆盖（兼容）。
+                let side = match card.direction {
+                    Some("ext") => "外",
+                    _ => "内",
+                };
+                let args = crate::inject_default_side(rest, side);
+                self.cmd_spline_lite_card(host, &args)
+            }
             crate::card::CardRenderer::GearTable => self.cmd_gear_card(host, rest),
             crate::card::CardRenderer::AnsiTableCn => self.cmd_ansi_card(
                 host,
@@ -2819,6 +2829,75 @@ impl OcsmPlugin {
             "智能卡片：已插入{kind}参数表（{}，体系 {}，表达式 {}）于 ({:.3}, {:.3}) rot {}°{dp_note}。",
             input.grade_fit_label(),
             spec.system,
+            spec.expr,
+            at[0],
+            at[1],
+            crate::partgen_kit::trim(spec.rot)
+        ));
+    }
+
+    /// 卡类型「GB花键精简表_内/外」（用户 2026-09-27 点单）：
+    /// `[std GB] 内 6H <九字段表达式> [dp 4.5] [root 平|圆] [at x,y] [rot 度]`。
+    ///
+    /// 取值与 GB 花键卡**同一份** `spline_tol::compute()`；卡面只列 9 项基本参数/测量量
+    /// （内：Dp/Md；外：Kn/Wn），**不含任何公差列**。表达式反解复用 `SplineTableSpec`。
+    fn cmd_spline_lite_card(&self, host: &mut dyn HostApi, args: &str) {
+        use crate::spline_table::SplineTableSpec;
+        let spec = match SplineTableSpec::parse(args) {
+            Ok(s) => s,
+            Err(e) => {
+                host.push_error(&e);
+                return;
+            }
+        };
+        let input = match spec.to_input() {
+            Ok(i) => i,
+            Err(e) => {
+                host.push_error(&format!("GB 花键精简卡：{e}"));
+                return;
+            }
+        };
+        let table = match crate::spline_tol::compute(&input) {
+            Ok(t) => t,
+            Err(e) => {
+                host.push_error(&format!("GB 花键精简卡：{e}"));
+                return;
+            }
+        };
+        let side = spec.side;
+        host.ensure_layers(layer_defs());
+        host.ensure_text_styles(text_style_defs());
+        let block = crate::spline_lite::block_name(side);
+        if host.document().block_records.get(block).is_none() {
+            let members = crate::spline_lite::block_entities(side);
+            if let Err(e) = host.add_block_record(block, members) {
+                host.push_error(&format!("GB 花键精简卡：建块 {block} 失败：{e}"));
+                return;
+            }
+        }
+        let at = spec.at.unwrap_or_else(|| {
+            crate::take_parts_point()
+                .map(|p| [p[0], p[1]])
+                .unwrap_or([0.0, 0.0])
+        });
+        let ins = match crate::spline_lite::build_insert(side, &table, at, spec.rot) {
+            Ok(i) => i,
+            Err(e) => {
+                host.push_error(&format!("GB 花键精简卡：{e}"));
+                return;
+            }
+        };
+        host.push_undo("GB 花键精简卡插入");
+        let handles = host.add_entities(vec![acadrust::EntityType::Insert(ins)]);
+        if handles.is_empty() {
+            host.push_error("GB 花键精简卡：插入失败（宿主未返回句柄）");
+            return;
+        }
+        host.set_dirty();
+        host.push_info(&format!(
+            "智能卡片：已插入{}精简卡（{}，表达式 {}）于 ({:.3}, {:.3}) rot {}°。",
+            crate::spline_gui::side_label(side),
+            input.grade_fit_label(),
             spec.expr,
             at[0],
             at[1],

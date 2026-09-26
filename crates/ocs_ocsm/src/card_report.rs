@@ -132,6 +132,27 @@ pub fn build(card: &CardTypeSpec, model: &serde_json::Value) -> Result<(String, 
                 "## 2. 参数表（21 项；与卡片 ATTDEF 同一份 `spline_tol::compute()`）",
                 &preview,
             ));
+            // R_imin 双口径（卡面=表 26；计算=图 2 系数）——用户 2026-09-27 拍板。
+            if let Some(calc) = preview["rimin"]["calc"].as_f64() {
+                let m = num(&preview, "m");
+                let alpha = num(&preview, "alpha");
+                let root_cn = if preview["root"] == "fillet" { "圆齿根" } else { "平齿根" };
+                md.push_str("## 2.1 R_imin 口径（卡面按表 26；计算按图 2 系数）\n\n");
+                match preview["rimin"]["table"].as_f64() {
+                    Some(v) => md.push_str(&format!(
+                        "- 表 26（GB/T 3478.1-2008 书页 50）m={m}、{alpha}°、{root_cn} 档表值 = **{}** mm；卡面显示同值。\n",
+                        crate::partgen_kit::trim(v),
+                    )),
+                    None => md.push_str(&format!(
+                        "- 表 26 未列值（原表印「—」；m={m}、{alpha}°、{root_cn}）：卡面按表 26 显示「—」，不外推。\n",
+                    )),
+                }
+                md.push_str(&format!(
+                    "- 计算口径（图 2 系数式；注明性质）：R_imin = {}·m = **{}** mm —— 仅供内部/报告对照，不直接上卡面。\n\n",
+                    crate::partgen_kit::trim(preview["rimin"]["coef"].as_f64().unwrap_or(0.0)),
+                    crate::partgen_kit::trim(calc),
+                ));
+            }
             // 量棒/跨棒距口径（内花键适用；公式来自 GB/T 3478.6 §3.1）。
             let dp = &preview["dp"];
             if dp["applicable"] == serde_json::Value::Bool(true) {
@@ -154,6 +175,24 @@ pub fn build(card: &CardTypeSpec, model: &serde_json::Value) -> Result<(String, 
                         .unwrap_or_else(|| "—".to_string())
                 ));
             }
+            md.push_str(&sources_section(&preview, card));
+        }
+        CardRenderer::SplineLite => {
+            md.push_str(&format!("# {title}\n\n"));
+            md.push_str(&format!(
+                "- 方向：**{}**\n",
+                preview["side_label"].as_str().unwrap_or("—")
+            ));
+            if let Some(expr) = preview["expr"].as_str() {
+                md.push_str(&format!("- 表达式：`{expr}`\n"));
+            }
+            md.push_str(
+                "- 口径：精简版只列基本参数 + 主要测量量，**不含任何公差（上/下偏差）列**；\n  公差等级/配合仅用于测量量（Dp/Md 或 Kn/Wn）计算。\n\n",
+            );
+            md.push_str(&items_section(
+                "## 1. 精简项（9 项；与卡片 ATTDEF 同一份 `spline_tol::compute()`）",
+                &preview,
+            ));
             md.push_str(&sources_section(&preview, card));
         }
         CardRenderer::GearTable => {
@@ -320,7 +359,8 @@ mod tests {
             }
         }
         // 报告 = 卡片项 + 引擎计算书 + 来源；不再出现裸 `|` 断表（除表格分隔行）。
-        assert!(md.contains("## 附：卡片项") || card_id == "花键参数表" || card_id == "花键参数表_外");
+        assert!(md.contains("## 附：卡片项") || card_id == "花键参数表" || card_id == "花键参数表_外"
+            || card_id.starts_with("GB花键精简表"), "{card_id} 报告缺卡片项节：{md}");
     }
 
     #[test]
@@ -458,6 +498,18 @@ mod tests {
                     "hub":null,"shaft":null,"e2":null,"ae":null,"as_":null,
                     "tact_n":null,"teff_n":null,"tact_w":null,"teff_w":null,"at":null,"rot":0.0}),
             ),
+            (
+                "GB花键精简表_内",
+                serde_json::json!({"card":"GB花键精简表_内","grade":6,"fit":"H",
+                    "expr":"SPLINE IN M3 Z20 ALPHA30 X0 DA65.4 DF57.3436 BETA0 H30",
+                    "root":"auto","dp":null,"at":null,"rot":0.0}),
+            ),
+            (
+                "GB花键精简表_外",
+                serde_json::json!({"card":"GB花键精简表_外","grade":6,"fit":"h",
+                    "expr":"SPLINE EX M3 Z20 ALPHA30 X0 DA66 DF52.5 BETA0 H30",
+                    "root":"auto","dp":null,"at":null,"rot":0.0}),
+            ),
         ];
         for (id, model) in cases {
             let c = card(id);
@@ -520,6 +572,19 @@ mod tests {
                         .map(|(ad, v)| (ad.tag.clone(), v))
                         .collect()
                 }
+                CardRenderer::SplineLite => {
+                    let mut m: crate::spline_gui::SplineTableModel =
+                        serde_json::from_value(model.clone()).unwrap();
+                    if m.side.trim().is_empty() {
+                        m.side = c.direction.unwrap_or("int").to_string();
+                    }
+                    let input = m.to_input()?;
+                    let table = crate::spline_tol::compute(&input)?;
+                    crate::spline_lite::pending_attrs(input.side, &table)?
+                        .into_iter()
+                        .map(|(ad, v)| (ad.tag.clone(), v))
+                        .collect()
+                }
             };
             assert!(!attrs.is_empty(), "{id} 无 ATTRIB");
             let mut checked = 0usize;
@@ -548,9 +613,49 @@ mod tests {
         assert!(md.contains("表 26"), "报告应含 R_imin 的表 26 出处：\n{md}");
         assert!(md.contains("逐格核对"), "报告应含表 26 逐格核对口径：\n{md}");
         assert!(
+            md.contains("R_imin 口径") && md.contains("卡面按表 26"),
+            "报告应写明卡面=表 26 口径：\n{md}"
+        );
+        assert!(md.contains("0.6"), "m=3/30°平禁面应为表值 0.6：\n{md}");
+        assert!(
             md.contains("全 70 页未列值") || md.contains("全文档无 CF 变化值表"),
             "报告应说明非 H/h 的 C_F 缺口：\n{md}"
         );
+        // m=0.25（表 26 未列值）报告应写「未列值 + 图 2 系数 = 0.05」，且卡面项值为「—」。
+        let (_, md25) = build(
+            card("花键参数表"),
+            &serde_json::json!({"card":"花键参数表","side":"int","grade":6,"fit":"H",
+                "expr":"SPLINE IN M0.25 Z20 ALPHA30 X0 DA5.375 DF4.375 BETA0 H30",
+                "root":"flat","dp":null,"at":null,"rot":0.0}),
+        )?;
+        assert!(md25.contains("表 26 未列值"), "m=0.25 应注明表 26 未列值：\n{md25}");
+        assert!(md25.contains("0.05"), "m=0.25 报告应给图 2 系数对照 0.05：\n{md25}");
+        assert!(md25.contains("| 齿根圆最小曲率半径 R_imin |"), "{md25}");
+        assert!(md25.contains("| — mm |"), "卡面项值应为「— mm」：\n{md25}");
+        Ok(())
+    }
+
+    #[test]
+    fn report_lite_card_is_same_source_and_has_no_tolerance_items() -> Result<(), String> {
+        // 内/外两张精简卡：报告 9 项与卡片 ATTRIB 同源；负断言无公差项/文本。
+        for (id, expr, fit) in [
+            ("GB花键精简表_内", "SPLINE IN M3 Z20 ALPHA30 X0 DA65.4 DF57.3436 BETA0 H30", "H"),
+            ("GB花键精简表_外", "SPLINE EX M3 Z20 ALPHA30 X0 DA66 DF52.5 BETA0 H30", "h"),
+        ] {
+            let model = serde_json::json!({
+                "card": id, "grade": 6, "fit": fit, "expr": expr,
+                "root": "auto", "dp": null, "at": null, "rot": 0.0,
+            });
+            assert_items_in_report(id, model.clone());
+            let (title, md) = build(card(id), &model)?;
+            assert!(title.contains("精简"), "{title}");
+            assert!(md.contains("不含任何公差"), "{md}");
+            assert!(md.contains("精简项（9 项"), "{md}");
+            // 报告表格/正文不得出现公差项标签。
+            for bad in ["公差等级和配合类别", "大径上公差", "大径下公差", "量棒直径上公差"] {
+                assert!(!md.contains(bad), "精简卡报告不应含「{bad}」：\n{md}");
+            }
+        }
         Ok(())
     }
 

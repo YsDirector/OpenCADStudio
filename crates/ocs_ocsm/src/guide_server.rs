@@ -5325,6 +5325,14 @@ pub(crate) fn apply_card_preview(body: &[u8]) -> Result<String, String> {
             }
             m.preview_json()?
         }
+        crate::card::CardRenderer::SplineLite => {
+            let mut m: crate::spline_gui::SplineTableModel = serde_json::from_value(v)
+                .map_err(|e| format!("GB 花键精简卡：请求字段无效：{e}"))?;
+            if m.side.trim().is_empty() {
+                m.side = card.direction.unwrap_or("int").to_string();
+            }
+            crate::spline_lite::preview_json(&m)?
+        }
         crate::card::CardRenderer::GearTable => {
             let m: crate::gear_table::GearTableModel = serde_json::from_value(v)
                 .map_err(|e| format!("齿轮参数表：请求字段无效：{e}"))?;
@@ -5423,6 +5431,39 @@ pub(crate) fn apply_card_export(
                 format!("{}参数表", crate::spline_gui::side_label(side)),
                 block,
                 crate::spline_table::block_entities(side),
+                at,
+                rot,
+                ins,
+                attrs,
+                meta,
+                echo,
+            )
+        }
+        CardRenderer::SplineLite => {
+            let mut m: crate::spline_gui::SplineTableModel = serde_json::from_value(v)
+                .map_err(|e| format!("GB 花键精简卡：请求字段无效：{e}"))?;
+            if m.side.trim().is_empty() {
+                m.side = card.direction.unwrap_or("int").to_string();
+            }
+            let echo = m.echo_note()?;
+            let input = m.to_input()?;
+            let table = crate::spline_tol::compute(&input)?;
+            let side = input.side;
+            let block = crate::spline_lite::block_name(side).to_string();
+            let at = m.at;
+            let rot = m.rot;
+            let ins = acadrust::EntityType::Insert(crate::spline_lite::build_insert(
+                side,
+                &table,
+                at.unwrap_or([0.0, 0.0]),
+                rot,
+            )?);
+            let attrs = crate::spline_lite::pending_attrs(side, &table)?;
+            let meta = crate::spline_lite::part_meta_json(side, &input, m.dp);
+            (
+                format!("{}参数表（精简版）", crate::spline_gui::side_label(side)),
+                block,
+                crate::spline_lite::block_entities(side),
                 at,
                 rot,
                 ins,
@@ -15796,10 +15837,10 @@ mod weld_tests {
         router.set_current(2, mock.clone());
         let server = spawn(router).expect("spawn guide server");
 
-        // ── 选项表：11 张卡（一卡一方向）+ 齿轮/ANSI/NF/DIN 选项 ──
+        // ── 选项表：13 张卡（一卡一方向 + GB 精简内/外）+ 齿轮/ANSI/NF/DIN 选项 ──
         let j = http_req(server.port, "GET", "/api/spline_options", "");
         let v: serde_json::Value = serde_json::from_str(&j).unwrap();
-        assert_eq!(v["card_types"].as_array().unwrap().len(), 11, "{j}");
+        assert_eq!(v["card_types"].as_array().unwrap().len(), 13, "{j}");
         assert_eq!(v["card_types"][0]["renderer"], "spline_table");
         assert_eq!(v["card_types"][0]["direction"], "int");
         assert_eq!(v["card_types"][1]["renderer"], "spline_table");
@@ -15815,6 +15856,14 @@ mod weld_tests {
         assert_eq!(v["card_types"][9]["direction"], "int");
         assert_eq!(v["card_types"][10]["id"], "DIN花键参数表_外");
         assert_eq!(v["card_types"][10]["direction"], "ext");
+        assert_eq!(v["card_types"][11]["id"], "GB花键精简表_内");
+        assert_eq!(v["card_types"][11]["renderer"], "spline_lite");
+        assert_eq!(v["card_types"][11]["direction"], "int");
+        assert_eq!(v["card_types"][11]["group"], "精简版");
+        assert_eq!(v["card_types"][12]["id"], "GB花键精简表_外");
+        assert_eq!(v["card_types"][12]["renderer"], "spline_lite");
+        assert_eq!(v["card_types"][12]["direction"], "ext");
+        assert_eq!(v["card_types"][12]["group"], "精简版");
         assert_eq!(v["gear_card"]["columns"].as_array().unwrap().len(), 19);
         assert_eq!(v["ansi_card"]["profiles"].as_array().unwrap().len(), 5);
         assert_eq!(v["ansi_card"]["columns"]["int"].as_array().unwrap().len(), 17);
@@ -15830,11 +15879,24 @@ mod weld_tests {
         // 表驱动 GUI：花键卡 form=null（专用面板基准）；其余九卡下发字段清单
         assert!(v["card_types"][0]["form"].is_null());
         assert!(v["card_types"][1]["form"].is_null());
-        for (i, n) in [(2usize, 5usize), (3, 4), (4, 4), (5, 4), (6, 4), (7, 7), (8, 7), (9, 10), (10, 10)] {
+        for (i, n) in [(2usize, 5usize), (3, 4), (4, 4), (5, 4), (6, 4), (7, 7), (8, 7), (9, 10), (10, 10), (11, 5), (12, 4)] {
             let fields = v["card_types"][i]["form"]["fields"].as_array().unwrap();
             assert_eq!(fields.len(), n, "card_types[{i}] 字段数");
             assert!(fields.iter().all(|f| f["key"].is_string() && f["kind"].is_string()));
         }
+        // 精简卡：静态选项/必填/类型；卡面口径进 summary。
+        assert_eq!(v["card_types"][11]["form"]["fields"][0]["key"], "expr");
+        assert_eq!(v["card_types"][11]["form"]["fields"][0]["kind"], "textarea");
+        assert_eq!(v["card_types"][11]["form"]["fields"][0]["required"], true);
+        assert_eq!(v["card_types"][11]["form"]["fields"][1]["key"], "grade");
+        assert_eq!(v["card_types"][11]["form"]["fields"][1]["kind"], "number");
+        assert_eq!(v["card_types"][11]["form"]["fields"][3]["key"], "root");
+        assert!(
+            v["card_types"][11]["summary"].as_str().unwrap().contains("不含任何公差"),
+            "{j}"
+        );
+        assert_eq!(v["card_types"][12]["form"]["fields"].as_array().unwrap().len(), 4);
+        assert!(!v["card_types"][12]["form"]["fields"].as_array().unwrap().iter().any(|f| f["key"] == "dp"));
         assert!(v["nf_card"]["fits"].as_array().unwrap().len() == 4, "NF 配合四档");
 
         // ── 通用端点也覆盖花键卡（同一个分派表；GUI 花键卡仍走 /api/spline_*）──
@@ -15855,6 +15917,54 @@ mod weld_tests {
         let md = v["markdown"].as_str().unwrap();
         assert!(md.contains("spline_tol::compute()") && md.contains("## 2. 参数表（21 项"), "{md}");
         assert!(md.contains("同一份计算"), "{md}");
+
+        // ── GB 精简卡：预览 9 项（无公差）、计算书同源、出表真建块 ──
+        let lite = serde_json::json!({
+            "card": "GB花键精简表_内", "grade": 6, "fit": "H",
+            "expr": "SPLINE IN M3 Z20 ALPHA30 X0 DA65.4 DF57.3436 BETA0 H30",
+            "root": null, "dp": null, "at": [1.0, 2.0], "rot": 0.0,
+        });
+        let j = http_req(server.port, "POST", "/api/card_preview", &lite.to_string());
+        let v: serde_json::Value = serde_json::from_str(&j).unwrap();
+        assert_eq!(v["ok"], true, "{j}");
+        assert_eq!(v["renderer"], "spline_lite");
+        let items = v["items"].as_array().unwrap();
+        assert_eq!(items.len(), 9, "{j}");
+        for it in items {
+            let label = it["label"].as_str().unwrap();
+            let tag = it["tag"].as_str().unwrap();
+            assert!(
+                !label.contains("公差") && !tag.contains("公差") && !label.contains("偏差"),
+                "精简卡不得含公差类项：{label} / {tag}"
+            );
+        }
+        assert!(items.iter().any(|it| it["label"] == "量棒直径 Dp"));
+        assert!(items.iter().any(|it| it["label"] == "测量跨棒距 Md"));
+        let j = http_req(server.port, "POST", "/api/card_report", &lite.to_string());
+        let v: serde_json::Value = serde_json::from_str(&j).unwrap();
+        assert_eq!(v["ok"], true, "{j}");
+        assert!(
+            v["markdown"].as_str().unwrap().contains("精简项（9 项"),
+            "{j}"
+        );
+        // 出表：mock sender 真写块（与 GUI 同一条 /api/card_export）。
+        let j = http_req(server.port, "POST", "/api/card_export", &lite.to_string());
+        let v: serde_json::Value = serde_json::from_str(&j).unwrap();
+        assert_eq!(v["ok"], true, "{j}");
+        assert_eq!(v["block"], "OCSM_SPLITE_GB_INT", "{j}");
+        // 外卡：方向由卡类型固定（模型不送 side）。
+        let lite_ext = serde_json::json!({
+            "card": "GB花键精简表_外", "grade": 6, "fit": "h",
+            "expr": "SPLINE EX M3 Z20 ALPHA30 X0 DA66 DF52.5 BETA0 H30",
+            "root": null, "dp": null, "at": null, "rot": 0.0,
+        });
+        let j = http_req(server.port, "POST", "/api/card_preview", &lite_ext.to_string());
+        let v: serde_json::Value = serde_json::from_str(&j).unwrap();
+        assert_eq!(v["items"].as_array().unwrap().len(), 9, "{j}");
+        assert!(
+            v["items"].as_array().unwrap().iter().any(|it| it["label"] == "跨测齿数 Kn"),
+            "{j}"
+        );
 
         // ── 齿轮卡预览：表达式反解交齿轮引擎；缺项「—」──
         let gear = serde_json::json!({

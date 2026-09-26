@@ -217,8 +217,8 @@ const INTERNAL_COLUMNS: &[SplineColumnSpec] = &[
         tag: "(内)齿根圆最小曲率半径",
         label: "齿根圆最小曲率半径 R_imin",
         unit: "mm",
-        formula: "R_imin = 0.2m 30°平 / 0.4m 30°圆 / 0.3m 37.5° / 0.25m 45°（表 26 逐模数同值）",
-        source: "GB/T 3478.1 图 2；表 26（书页 50）逐格核对",
+        formula: "卡面 = 表 26（GB/T 3478.1 书页 50）该模数档表值；表 26 未列值（如 m=0.25 的 30°平/30°圆/37.5°）→「—」。计算口径 = 图 2 系数式 R_imin = 0.2m 30°平 / 0.4m 30°圆 / 0.3m 37.5° / 0.25m 45°（性质：内部/报告对照，不直接上卡面；有值格与表值一致）",
+        source: "GB/T 3478.1-2008 表 26（书页 50）逐格核对；图 2 系数式作计算口径",
     },
     SplineColumnSpec {
         tag: "(内)齿形公差",
@@ -367,8 +367,8 @@ const EXTERNAL_COLUMNS: &[SplineColumnSpec] = &[
         tag: "(外)齿根圆最小曲率半径",
         label: "齿根圆最小曲率半径 R_imin",
         unit: "mm",
-        formula: "R_imin = 0.2m 30°平 / 0.4m 30°圆 / 0.3m 37.5° / 0.25m 45°（表 26 逐模数同值）",
-        source: "GB/T 3478.1 图 2；表 26（书页 50）逐格核对",
+        formula: "卡面 = 表 26（GB/T 3478.1 书页 50）该模数档表值；表 26 未列值（如 m=0.25 的 30°平/30°圆/37.5°）→「—」。计算口径 = 图 2 系数式 R_imin = 0.2m 30°平 / 0.4m 30°圆 / 0.3m 37.5° / 0.25m 45°（性质：内部/报告对照，不直接上卡面；有值格与表值一致）",
+        source: "GB/T 3478.1-2008 表 26（书页 50）逐格核对；图 2 系数式作计算口径",
     },
     SplineColumnSpec {
         tag: "(外)齿形公差",
@@ -531,7 +531,7 @@ pub fn main_tag_of_dev(tag: &str) -> Option<&str> {
         .or_else(|| tag.strip_suffix(".上公差"))
 }
 
-fn root_id(root: RootForm) -> &'static str {
+pub(crate) fn root_id(root: RootForm) -> &'static str {
     match root {
         RootForm::Flat => "flat",
         RootForm::Fillet => "fillet",
@@ -958,6 +958,16 @@ impl SplineTableModel {
         let (input, gear) = self.resolved()?;
         let table = crate::spline_tol::compute(&input)?;
         let items = items_json(input.side, &table)?;
+        // R_imin 双口径（卡面=表 26；计算=图 2 系数）：报告注明用。
+        let coef = crate::spline_tol::rimin_coef(input.alpha, input.root);
+        let rimin = match &table {
+            crate::spline_tol::SplineTable::Internal(t) => serde_json::json!({
+                "table": t.rimin_table, "calc": t.rimin, "coef": coef,
+            }),
+            crate::spline_tol::SplineTable::External(t) => serde_json::json!({
+                "table": t.rimin_table, "calc": t.rimin, "coef": coef,
+            }),
+        };
         // 齿根来源：显式 / 表达式 DA·DF 反解 / 按 αD 默认（GUI 只显示“怎么来的”）。
         let root_source = if self.root_form_opt()?.is_some() {
             "explicit"
@@ -983,6 +993,7 @@ impl SplineTableModel {
             "root": root_id(input.root),
             "root_source": root_source,
             "dp": dp_json(input.side, &table),
+            "rimin": rimin,
             "items": items,
         }))
     }

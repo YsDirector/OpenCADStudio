@@ -764,13 +764,26 @@ pub fn internal_minor(alpha: PressureAngle, root: RootForm, m: f64, z: u32) -> f
 /// 表 26（doc88 p51＝书页 50）逐模数列表同值（有值格 = coef·m 半偶舍入到 2 位；
 /// m=0.25 原表仅 45° 有值）——对照见 `rimin_table26()` 与资产 CSV，不替换本式。
 pub fn rimin(alpha: PressureAngle, root: RootForm, m: f64) -> f64 {
-    let coef = match (alpha, root) {
+    rimin_coef(alpha, root) * m
+}
+
+/// 图 2 系数（表 26 有值档同值来源）：30°平 0.2 / 30°圆 0.4 / 37.5° 0.3 / 45° 0.25。
+/// 卡面按表 26 表值显示（未列值 →「—」）；本系数只作计算/报告口径。
+#[must_use]
+pub fn rimin_coef(alpha: PressureAngle, root: RootForm) -> f64 {
+    match (alpha, root) {
         (PressureAngle::A30, RootForm::Flat) => 0.2,
         (PressureAngle::A30, RootForm::Fillet) => 0.4,
         (PressureAngle::A37_5, _) => 0.3,
         (PressureAngle::A45, _) => 0.25,
-    };
-    coef * m
+    }
+}
+
+/// 表 26 查值（卡面口径）：m 必须精确落在标准 15 档、且该齿根档位原表有值；
+/// 表外/原表「—」→ `None`（卡面显示「—」，不外推）；错误同样收敛为 `None`（表外不外推）。
+#[must_use]
+pub fn rimin_table_for_card(alpha: PressureAngle, root: RootForm, m: f64) -> Option<f64> {
+    rimin_table26(alpha, root, m).unwrap_or(None)
 }
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -969,6 +982,8 @@ pub struct InternalSplineTable {
     pub alpha_deg: f64,
     pub z: u32,
     pub m: f64,
+    /// 齿根型式（输入回填；卡面「齿根样式」用）。
+    pub root: RootForm,
     pub grade_fit: String,
     pub major_dia: f64,
     pub major_lower: f64,
@@ -987,7 +1002,10 @@ pub struct InternalSplineTable {
     pub dp_candidates: Vec<f64>,
     pub eval_min: f64,
     pub e_max: f64,
+    /// 图 2 系数计算口径（报告对照用；卡面不直接显示）。
     pub rimin: f64,
+    /// 表 26 表值（卡面口径；`None` = 原表「—」/表外 → 卡面显示「—」）。
+    pub rimin_table: Option<f64>,
     pub ff: f64,
     pub fp: f64,
     pub lambda: f64,
@@ -1002,6 +1020,8 @@ pub struct ExternalSplineTable {
     pub alpha_deg: f64,
     pub z: u32,
     pub m: f64,
+    /// 齿根型式（输入回填；卡面「齿根样式」用）。
+    pub root: RootForm,
     pub grade_fit: String,
     pub major_dia: f64,
     pub major_lower: f64,
@@ -1016,7 +1036,10 @@ pub struct ExternalSplineTable {
     pub kn: u32,
     pub s_min: f64,
     pub sv_max: f64,
+    /// 图 2 系数计算口径（报告对照用；卡面不直接显示）。
     pub rimin: f64,
+    /// 表 26 表值（卡面口径；`None` = 原表「—」/表外 → 卡面显示「—」）。
+    pub rimin_table: Option<f64>,
     pub ff: f64,
     pub fp: f64,
     pub lambda: f64,
@@ -1073,6 +1096,7 @@ pub fn internal_table(input: &SplineInput) -> Result<InternalSplineTable, String
         alpha_deg: alpha.deg(),
         z,
         m,
+        root,
         grade_fit: input.grade_fit_label(),
         major_dia: major,
         major_lower: 0.0,
@@ -1090,6 +1114,7 @@ pub fn internal_table(input: &SplineInput) -> Result<InternalSplineTable, String
         eval_min: ev_min,
         e_max,
         rimin: rimin(alpha, root, m),
+        rimin_table: rimin_table_for_card(alpha, root, m),
         ff,
         fp,
         lambda,
@@ -1123,6 +1148,7 @@ pub fn external_table(input: &SplineInput) -> Result<ExternalSplineTable, String
         alpha_deg: alpha.deg(),
         z,
         m,
+        root,
         grade_fit: input.grade_fit_label(),
         major_dia: major,
         major_lower: -major_tol / 1000.0,
@@ -1138,6 +1164,7 @@ pub fn external_table(input: &SplineInput) -> Result<ExternalSplineTable, String
         s_min,
         sv_max,
         rimin: rimin(alpha, root, m),
+        rimin_table: rimin_table_for_card(alpha, root, m),
         ff,
         fp,
         lambda,

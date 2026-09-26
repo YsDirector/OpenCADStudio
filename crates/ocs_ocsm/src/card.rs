@@ -24,6 +24,9 @@ pub enum CardRenderer {
     NfExtTable,
     /// DIN 花键参数表（DIN 5480-1 Bild 6）：13 行 × Nabe/Welle 两栏（26 属性）。
     DinTable,
+    /// GB 花键参数表**精简版**（用户 2026-09-27）：只列基本参数 + 主要测量量，
+    /// **不含任何公差列**；取值与 GB 卡同一份 `spline_tol::compute()`。
+    SplineLite,
 }
 
 impl CardRenderer {
@@ -37,6 +40,7 @@ impl CardRenderer {
             CardRenderer::NfTable => "nf_table",
             CardRenderer::NfExtTable => "nf_ext_table",
             CardRenderer::DinTable => "din_table",
+            CardRenderer::SplineLite => "spline_lite",
         }
     }
 }
@@ -113,6 +117,8 @@ pub struct CardTypeSpec {
     pub aliases: &'static [&'static str],
     /// 界面名。
     pub label: &'static str,
+    /// 下拉分组（`None` = 平铺；如「精简版」）。GUI 仅渲染，不写死卡名。
+    pub group: Option<&'static str>,
     /// 一句话说明（命令目录/title）。
     pub summary: &'static str,
     /// 可用体系 id（指向选项表；命令 `std <体系>` 与 GUI 体系下拉只收这里的）。
@@ -136,6 +142,7 @@ pub const CARD_TYPES: &[CardTypeSpec] = &[
         id: "花键参数表",
         aliases: &["spline", "splinetable", "花键", "gb", "GB花键参数表", "GB花键", "花键参数表_内", "GB花键_内"],
         label: "GB 花键参数表（内）",
+        group: None,
         summary: "GB/T 3478 内花键：九字段齿形表达式 → 21 项参数表（一卡一方向；外键见表下方「（外）」卡）",
         systems: &["gb3478"],
         direction: Some("int"),
@@ -147,6 +154,7 @@ pub const CARD_TYPES: &[CardTypeSpec] = &[
         id: "花键参数表_外",
         aliases: &["splineext", "GB花键参数表_外", "GB花键_外", "GB花键外"],
         label: "GB 花键参数表（外）",
+        group: None,
         summary: "GB/T 3478 外花键：九字段齿形表达式 → 21 项参数表（一卡一方向，不再面板选内外）",
         systems: &["gb3478"],
         direction: Some("ext"),
@@ -157,6 +165,7 @@ pub const CARD_TYPES: &[CardTypeSpec] = &[
         id: "齿轮参数表",
         aliases: &["gear", "geartable", "齿轮"],
         label: "齿轮参数表（GB/T 10095）",
+        group: None,
         summary: "齿轮（内/外）：九字段齿形表达式反解 ha*/c* + 公法线跨距 → 19 项参数表（GB/T 10095 公差未收，如实标缺）",
         systems: &[],
         direction: None,
@@ -167,6 +176,7 @@ pub const CARD_TYPES: &[CardTypeSpec] = &[
         id: "ANSI花键参数表_中文",
         aliases: &["ansicn", "ansi中文", "ANSI花键参数表CN", "ANSI内中文"],
         label: "ANSI 花键参数表（内·纯中文）",
+        group: None,
         summary: "ANSI B92.1 内花键 + P/z → 17 项参数表（纯中文；公差/量棒/公法线未收，如实标缺）",
         systems: &[],
         direction: Some("int"),
@@ -177,6 +187,7 @@ pub const CARD_TYPES: &[CardTypeSpec] = &[
         id: "ANSI花键参数表_外_中文",
         aliases: &["ansicnext", "ansi外中文", "ANSI花键参数表外CN"],
         label: "ANSI 花键参数表（外·纯中文）",
+        group: None,
         summary: "ANSI B92.1 外花键 + P/z → 17 项参数表（纯中文；公差/量棒/公法线未收，如实标缺）",
         systems: &[],
         direction: Some("ext"),
@@ -187,6 +198,7 @@ pub const CARD_TYPES: &[CardTypeSpec] = &[
         id: "ANSI花键参数表_英文",
         aliases: &["ansien", "ansi英文", "ANSI花键参数表EN", "ANSI内英文"],
         label: "ANSI 花键参数表（内·纯英文）",
+        group: None,
         summary: "ANSI B92.1 内花键 + P/z → 17 项参数表（纯英文；与中文版同构，仅文本语种替换）",
         systems: &[],
         direction: Some("int"),
@@ -197,6 +209,7 @@ pub const CARD_TYPES: &[CardTypeSpec] = &[
         id: "ANSI花键参数表_外_英文",
         aliases: &["ansienext", "ansi外英文", "ANSI花键参数表外EN"],
         label: "ANSI 花键参数表（外·纯英文）",
+        group: None,
         summary: "ANSI B92.1 外花键 + P/z → 17 项参数表（纯英文；与中文版同构，仅文本语种替换）",
         systems: &[],
         direction: Some("ext"),
@@ -207,6 +220,7 @@ pub const CARD_TYPES: &[CardTypeSpec] = &[
         id: "NF内花键参数表",
         aliases: &["nf", "nfint", "NF内花键", "NF花键参数表"],
         label: "NF E22-141 内花键参数表",
+        group: None,
         summary: "NF E22-141 内花键（拉削，外径定心）：A/m/z 查 p18 表 → 13 行镜像表（Az=A 或 A+0.3m、D=A−2m、V/G 取 p23–p25、ri 取 p22；公差 = p28 R7/H7 + p29 E 偏差，四配合）",
         systems: &[],
         direction: Some("int"),
@@ -217,6 +231,7 @@ pub const CARD_TYPES: &[CardTypeSpec] = &[
         id: "NF外花键参数表",
         aliases: &["nfext", "nfout", "NF外花键", "NF外花键参数表"],
         label: "NF E22-141 外花键参数表",
+        group: None,
         summary: "NF E22-141 外花键（滚齿，齿面定心）：A/m/z 查 p20–p22 表 → 13 行模板原版表（Dee=A−0.2m、Die=A−2.4m/2.694m、K/W 取 p23–p25；公差 = ISO h12/H7 + p29 外花键 E 偏差，四配合）",
         systems: &[],
         direction: Some("ext"),
@@ -227,6 +242,7 @@ pub const CARD_TYPES: &[CardTypeSpec] = &[
         id: "DIN花键参数表",
         aliases: &["din", "din5480", "DIN花键", "din花键参数表", "DIN内花键"],
         label: "DIN 5480 内花键参数表",
+        group: None,
         summary: "DIN 5480-1 Bild 6 内花键（Nabe）单栏 13 行（z/m/α/三直径/e 三极限/D_M/两 M2 极限）；Table 7 上段偏差有实锚，公差表只到 6–9 级锚点，缺口如实标「—」",
         systems: &[],
         direction: Some("int"),
@@ -237,11 +253,34 @@ pub const CARD_TYPES: &[CardTypeSpec] = &[
         id: "DIN花键参数表_外",
         aliases: &["dinext", "DIN外花键", "din5480外"],
         label: "DIN 5480 外花键参数表",
+        group: None,
         summary: "DIN 5480-1 Bild 6 外花键（Welle）单栏 13 行（z/m/α/三直径/s 三极限/D_M/两 M1 极限）；与内卡同源，缺口同样如实标「—」",
         systems: &[],
         direction: Some("ext"),
         renderer: CardRenderer::DinTable,
         form: Some(&crate::din_table::FORM_EXT),
+    },
+    CardTypeSpec {
+        id: "GB花键精简表_内",
+        aliases: &["gb精简", "精简内", "精简卡", "GB精简花键_内", "花键精简表_内", "splinelite"],
+        label: "GB 花键参数表（内·精简版）",
+        group: Some("精简版"),
+        summary: "GB/T 3478 内花键精简卡：只列基本参数（标准/模数/齿数/压力角/齿根样式/大径/小径）+ 量棒 Dp / 跨棒距 Md，不含任何公差列",
+        systems: &["gb3478"],
+        direction: Some("int"),
+        renderer: CardRenderer::SplineLite,
+        form: Some(&crate::spline_lite::FORM_INT),
+    },
+    CardTypeSpec {
+        id: "GB花键精简表_外",
+        aliases: &["gb精简外", "精简外", "GB精简花键_外", "花键精简表_外", "splineliteext"],
+        label: "GB 花键参数表（外·精简版）",
+        group: Some("精简版"),
+        summary: "GB/T 3478 外花键精简卡：只列基本参数（标准/模数/齿数/压力角/齿根样式/大径/小径）+ 跨测齿数 Kn / 公法线 Wn，不含任何公差列",
+        systems: &["gb3478"],
+        direction: Some("ext"),
+        renderer: CardRenderer::SplineLite,
+        form: Some(&crate::spline_lite::FORM_EXT),
     },
 ];
 
@@ -278,6 +317,7 @@ pub fn card_types_json() -> serde_json::Value {
                     "id": c.id,
                     "aliases": c.aliases,
                     "label": c.label,
+                    "group": c.group,
                     "summary": c.summary,
                     "systems": systems,
                     "direction": c.direction,
@@ -320,8 +360,8 @@ mod tests {
     fn card_types_resolve_systems_and_tokens() {
         assert_eq!(
             CARD_TYPES.len(),
-            11,
-            "一卡一方向后 11 张：GB 内/外 / 齿轮 / ANSI 内中·外中·内英·外英 / NF 内·外 / DIN 内·外"
+            13,
+            "一卡一方向后 13 张：GB 内/外 / 齿轮 / ANSI 内中·外中·内英·外英 / NF 内·外 / DIN 内·外 / GB 精简内·外"
         );
         // 首卡 = GB 内（旧 id 保持不变：深链 ?card= 与 CLI 旧写法兼容）
         let c = &CARD_TYPES[0];
@@ -347,6 +387,8 @@ mod tests {
             ("NF外花键参数表", Some("ext"), CardRenderer::NfExtTable, "NF E22-141 外花键参数表"),
             ("DIN花键参数表", Some("int"), CardRenderer::DinTable, "DIN 5480 内花键参数表"),
             ("DIN花键参数表_外", Some("ext"), CardRenderer::DinTable, "DIN 5480 外花键参数表"),
+            ("GB花键精简表_内", Some("int"), CardRenderer::SplineLite, "GB 花键参数表（内·精简版）"),
+            ("GB花键精简表_外", Some("ext"), CardRenderer::SplineLite, "GB 花键参数表（外·精简版）"),
         ];
         for (i, (id, dir, renderer, label)) in want.iter().enumerate() {
             let c = &CARD_TYPES[i + 1];
@@ -354,7 +396,7 @@ mod tests {
             assert_eq!(c.direction, *dir, "{} 方向", id);
             assert_eq!(c.renderer, *renderer, "{id} 渲染器");
             assert_eq!(c.label, *label, "{id} 显示名");
-            if !id.starts_with("花键参数表") {
+            if !id.starts_with("花键参数表") && !id.starts_with("GB花键精简表") {
                 assert!(c.systems.is_empty(), "{id} 不应有体系");
             }
         }
@@ -401,6 +443,13 @@ mod tests {
         }
         assert_eq!(CARD_TYPES[7].form.unwrap().fields.len(), 7, "NF 内 7 字段");
         assert_eq!(CARD_TYPES[8].form.unwrap().fields.len(), 7, "NF 外 7 字段");
+        assert_eq!(CARD_TYPES[11].form.unwrap().fields.len(), 5, "GB 精简内 5 字段");
+        assert_eq!(CARD_TYPES[12].form.unwrap().fields.len(), 4, "GB 精简外 4 字段");
+        assert_eq!(CARD_TYPES[11].group, Some("精简版"), "精简卡下拉分组");
+        assert_eq!(CARD_TYPES[12].group, Some("精简版"), "精简卡下拉分组");
+        for c in &CARD_TYPES[..11] {
+            assert!(c.group.is_none(), "普通卡不分组：{}", c.id);
+        }
         for i in [9usize, 10] {
             let f = CARD_TYPES[i].form.unwrap();
             assert_eq!(f.fields.len(), 10, "DIN 单栏 10 字段（含 expr）");
@@ -436,6 +485,7 @@ mod tests {
             "DIN花键参数表", "din", "DIN5480", "din花键",
             "splineext", "GB花键参数表_外", "ansicnext", "ANSI外中文",
             "ansienext", "dinext", "DIN外花键",
+            "GB花键精简表_内", "GB花键精简表_外", "精简内", "精简外", "splinelite",
         ] {
             assert!(card_type_by_token(tok).is_some(), "别名/记号 {tok} 应命中");
         }
@@ -462,6 +512,14 @@ mod tests {
         assert_eq!(j[9]["direction"], "int");
         assert_eq!(j[10]["id"], "DIN花键参数表_外");
         assert_eq!(j[10]["renderer"], "din_table");
+        assert_eq!(j[11]["id"], "GB花键精简表_内");
+        assert_eq!(j[11]["renderer"], "spline_lite");
+        assert_eq!(j[11]["direction"], "int");
+        assert_eq!(j[11]["group"], "精简版");
+        assert_eq!(j[12]["id"], "GB花键精简表_外");
+        assert_eq!(j[12]["direction"], "ext");
+        assert_eq!(j[12]["group"], "精简版");
+        assert!(j[0]["group"].is_null(), "普通卡 group = null");
         // form 下发：花键 null；其余含 fields/note/missing_note
         assert!(j[0]["form"].is_null());
         assert!(j[1]["form"].is_null());

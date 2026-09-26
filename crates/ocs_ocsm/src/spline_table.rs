@@ -334,7 +334,7 @@ pub fn attdefs(side: SplineSide) -> Vec<AttributeDefinition> {
 ///
 /// **显示与内部计算分开**：`spline_tol` 里仍是全精度 f64，只有写 ATTRIB 时才截；
 /// 不截的话长小数（如 78.113360…）会把值列顶进公差列（用户截图实测）。
-fn fmt_mm(v: f64) -> String {
+pub(crate) fn fmt_mm(v: f64) -> String {
     let s = format!("{v:.3}");
     s.trim_end_matches('0').trim_end_matches('.').to_string()
 }
@@ -371,7 +371,7 @@ pub fn text_box(insertion: [f64; 2], height: f64, width_factor: f64, value: &str
     ]
 }
 
-fn fmt_deg(v: f64) -> String {
+pub(crate) fn fmt_deg(v: f64) -> String {
     if (v - v.round()).abs() < 1e-9 {
         format!("{}°", v.round() as i64)
     } else {
@@ -428,7 +428,8 @@ fn value_internal(
         "量棒直径" => Some(s(t.dp)),
         "作用齿槽宽最小值" => Some(s(t.eval_min)),
         "实际齿槽宽最大值" => Some(s(t.e_max)),
-        "齿根圆最小曲率半径" => Some(s(t.rimin)),
+        // 卡面口径（用户 2026-09-27 拍板）：表 26 有值用表值；原表「—」/表外 →「—」。
+        "齿根圆最小曲率半径" => Some(t.rimin_table.map(s).unwrap_or_else(|| "—".to_string())),
         "齿形公差" => Some(fmt_mm(t.ff)),
         "齿距累计公差" => Some(fmt_mm(t.fp)),
         "综合公差" => Some(fmt_mm(t.lambda)),
@@ -459,7 +460,8 @@ fn value_external(
         "跨测齿数" => Some(t.kn.to_string()),
         "实际齿厚最小值" => Some(s(t.s_min)),
         "作用齿厚最大值" => Some(s(t.sv_max)),
-        "齿根圆最小曲率半径" => Some(s(t.rimin)),
+        // 卡面口径（用户 2026-09-27 拍板）：表 26 有值用表值；原表「—」/表外 →「—」。
+        "齿根圆最小曲率半径" => Some(t.rimin_table.map(s).unwrap_or_else(|| "—".to_string())),
         "齿形公差" => Some(fmt_mm(t.ff)),
         "齿距累计公差" => Some(fmt_mm(t.fp)),
         "综合公差" => Some(fmt_mm(t.lambda)),
@@ -1051,6 +1053,77 @@ mod tests {
         // Markdown 计算书节
         let md = markdown_table(SplineSide::External, &t).unwrap();
         assert!(md.contains("| (外)公法线长度 |") && md.lines().count() >= 23);
+    }
+
+    #[test]
+    fn rimin_values_follow_table26_not_coefficient() {
+        use crate::spline_tol::{rimin, rimin_table26, PressureAngle, RootForm, SplineInput, SplineSide};
+        // 表 26 四档（30°平/30°圆/37.5°/45°）逐 m 对表；卡面值 = 表值，None →「—」。
+        for (m, want) in [
+            (0.25, [None, None, None, Some(0.06)]),
+            (1.0, [Some(0.20), Some(0.40), Some(0.30), Some(0.25)]),
+            (2.5, [Some(0.50), Some(1.00), Some(0.75), Some(0.62)]),
+            (3.0, [Some(0.60), Some(1.20), Some(0.90), None]),
+            (10.0, [Some(2.00), Some(4.00), Some(3.00), None]),
+        ] {
+            for (root, (idx, key)) in [
+                (RootForm::Flat, (0usize, "(内)齿根圆最小曲率半径")),
+                (RootForm::Fillet, (1usize, "(内)齿根圆最小曲率半径")),
+            ] {
+                let input = SplineInput {
+                    m,
+                    z: 20,
+                    alpha: PressureAngle::A30,
+                    root,
+                    side: SplineSide::Internal,
+                    grade: 6,
+                    ext_dev: ExtDev::H,
+                    fit_length: None,
+                    dp: None,
+                };
+                let got = values(SplineSide::Internal, &spline_tol::compute(&input).unwrap())
+                    .unwrap()
+                    .into_iter()
+                    .find(|(t, _)| t == key)
+                    .unwrap()
+                    .1;
+                let table = rimin_table26(PressureAngle::A30, root, m).unwrap();
+                assert_eq!(table, want[idx], "表 26 口径 m={m} root={root:?}");
+                match want[idx] {
+                    Some(v) => assert_eq!(got, format!("{v:.3}").trim_end_matches('0').trim_end_matches('.'), "卡面应取表值 m={m} root={root:?}"),
+                    None => assert_eq!(got, "—", "表 26 未列值应显示「—」m={m} root={root:?}"),
+                }
+            }
+            // 37.5° / 45°：只有圆齿根列进表（表 26 无平齿根分列）；用 30°圆 项位对齐同一表列。
+            for (alpha, root, idx) in [
+                (PressureAngle::A37_5, RootForm::Fillet, 2usize),
+                (PressureAngle::A45, RootForm::Fillet, 3usize),
+            ] {
+                let input = SplineInput {
+                    m,
+                    z: 20,
+                    alpha,
+                    root,
+                    side: SplineSide::Internal,
+                    grade: 6,
+                    ext_dev: ExtDev::H,
+                    fit_length: None,
+                    dp: None,
+                };
+                let got = values(SplineSide::Internal, &spline_tol::compute(&input).unwrap())
+                    .unwrap()
+                    .into_iter()
+                    .find(|(t, _)| t == "(内)齿根圆最小曲率半径")
+                    .unwrap()
+                    .1;
+                match want[idx] {
+                    Some(v) => assert_eq!(got, format!("{v:.3}").trim_end_matches('0').trim_end_matches('.'), "卡面应取表值 m={m} α={alpha:?}"),
+                    None => assert_eq!(got, "—", "表 26 未列值应显示「—」m={m} α={alpha:?}"),
+                }
+            }
+        }
+        // 系数式保留（内部/报告口径）：m=0.25 30°平 = 0.05，与卡面「—」并存。
+        assert!((rimin(PressureAngle::A30, RootForm::Flat, 0.25) - 0.05).abs() < 1e-12);
     }
 
     /// 命令解析 + dp/root/from/at/rot。
