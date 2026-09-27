@@ -14,19 +14,19 @@
 | `03-standard-parts.md` | `03-标准件库.md` | ✅ translated |
 | `04-bolt-joint.md` | `04-螺栓副装配.md` | ⏳ pending |
 | `05-smart-dimension-d.md` | `05-智能标注D.md` | ✅ translated |
-| `06-leader-annotation.md` | `06-引导线标注.md` | ⏳ pending |
+| `06-leader-annotation.md` | `06-引导线标注.md` | ✅ translated (batch 6) |
 | `07-one-click-gb.md` | `07-一键转国标.md` | ✅ translated |
-| `08-tolerance-roughness-gdt.md` | `08-公差粗糙度与GDT.md` | ⏳ pending |
+| `08-tolerance-roughness-gdt.md` | `08-公差粗糙度与GDT.md` | ✅ translated (batch 6) |
 | `09-edit-annotations-text.md` | `09-改标注与文字.md` | ✅ translated |
 | `10-bom.md` | `10-明细表BOM.md` | ⏳ pending |
 | `11-automation-api.md` | `11-自动化接口.md` | ⏳ pending |
 | `12-troubleshooting.md` | `12-故障与坑.md` | ✅ translated |
-| `13-task-kickoff-protocol.md` | `13-任务启动协议.md` | ⏳ pending |
-| `14-item-numbers.md` | `14-序号标注.md` | ⏳ pending |
-| `15-centerlines.md` | `15-中心线.md` | ⏳ pending |
-| `16-gears.md` | `16-齿轮.md` | ⏳ pending |
+| `13-task-kickoff-protocol.md` | `13-任务启动协议.md` | ✅ translated (batch 6) |
+| `14-item-numbers.md` | `14-序号标注.md` | ✅ translated (batch 6) |
+| `15-centerlines.md` | `15-中心线.md` | ✅ translated (batch 6) |
+| `16-gears.md` | `16-齿轮.md` | ✅ translated (big page, batch 5) |
 | `17-hole-generator.md` | `17-孔生成器.md` | ⏳ pending |
-| `20-knowledge-gb-drafting.md` | `20-知识-国标制图画法.md` | ⏳ pending |
+| `20-knowledge-gb-drafting.md` | `20-知识-国标制图画法.md` | ✅ translated (batch 6) |
 | `21-knowledge-fastener-selection.md` | `21-知识-紧固件选型与防松.md` | ✅ translated |
 | `22-knowledge-tolerances-fits.md` | `22-知识-公差与配合.md` | ✅ translated |
 | `23-knowledge-materials-heat-treatment.md` | `23-知识-材料与热处理.md` | ✅ translated |
