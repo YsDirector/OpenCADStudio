@@ -62,6 +62,17 @@ TF <name> [scale] [at x,y] [rot deg]      (OCSMFRAMEINSERT uses the same syntax;
 - It lists every `*.dwg` in the **plugin directory**'s `frame/` (sorted by file name); just click one in the window.
   - Actual path: `~/.config/OpenCADStudio/plugins/opencad.ocsm/frame/`
   - Currently available: `a3_landscape.dwg` (A3 landscape, with a **185×40 title block** + a vertical additional column on the left) etc.; the actual directory content is authoritative.
+- **The frame DWGs are user-supplied data and are not part of the plugin repository** (there is no `frame/`
+  directory under `crates/ocs_ocsm/`):
+  - On the maintainer machine the sample frames live in `~/桌面/OCSM/frame/`; they are cleaned
+    (`tools/frame_clean.py --install`: strips the old CAD environment's leftovers and repairs layer
+    colours) before landing in the plugin directory's `frame/`;
+  - On a new machine: drop the frame DWGs into that `frame/`, or pass `OCSM_FRAME_SRC=<dir with frames>`
+    to `tools/deploy_plugin.sh` (an already-installed file with the same name is never overwritten);
+  - The deploy script's self-check **only warns (and still exits 0) when `frame/` is empty** — frames
+    are user-supplied data, a first-time user should not be blocked; an empty directory merely makes
+    `TF` report “frame folder not found”. To turn it into a hard gate (release/CI), set
+    `OCSM_REQUIRE_FRAME=1` explicitly (only then does it exit non-zero).
 - When the directory does not exist / is empty it reports: `OCSMFRAMEINIT: 找不到图框文件夹 …。请在插件目录的 frame/ 中放入 DWG。`
   (OCSMFRAMEINIT: frame folder not found …; put DWG files into `frame/` in the plugin directory.)
 - This step only **registers the choice**, nothing is put into the drawing yet → run `OCSMFRAMEINSERT` next.

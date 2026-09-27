@@ -52,15 +52,19 @@ Open CAD Studio 机械工具包插件（`opencad.ocsm`，API v5）。为机械�
 # 1. 宿主（API v5）——runner 是宿主自身二进制，必须重编
 cargo build --release
 
-# 2. 插件 + 安装（.so / plugin.toml / handbook 一次搞定）
+# 2. 插件 + 安装（.so / plugin.toml / handbook 递归含 en/ / bom 模板块 / 图框 一次搞定）
 #    宿主 API≥4 的两道门禁都靠 plugin.toml 里的**部署时占位符**，脚本会从 Cargo.lock 与 rustc 填好：
 #      __RUSTC_VERSION__   ← rustc --version 原串
 #      __ACADRUST_SOURCE__ ← Cargo.lock 里 acadrust 的 source（缺了插件直接被拒：
 #                            `Plugin built for acadrust @unknown, but this host uses @…`）
 tools/deploy_plugin.sh
 
-# 3. 图框 DWG（已有样例在 ~/桌面/OCSM/frame/）
-cp ~/桌面/OCSM/frame/*.dwg "$HOME/.config/OpenCADStudio/plugins/opencad.ocsm/frame/" || true
+# 3. 图框 DWG（**用户自备，不在仓库**；样例在 ~/桌面/OCSM/frame/）
+#    同机部署时用 OCSM_FRAME_SRC 把图框一起装（同名不覆盖已装图框）：
+OCSM_FRAME_SRC=~/桌面/OCSM/frame tools/deploy_plugin.sh --skip-build
+#    脚本自检：handbook/（含 en/）、bom 两个模板块——缺哪项非零退出；
+#    frame/ 为空**默认只警告**（图框是用户自备数据，不拦新用户）⇒ 要当硬门禁设 OCSM_REQUIRE_FRAME=1；
+#    bom/settings.json 是运行期状态（BOMCFG 会改）⇒ 已存在就不覆盖。
 
 # 4. 卸载旧 layers_quick（宿主升 v5 后它会重新加载并与 OCSM 数字键冲突）
 rm -rf "$HOME/.config/OpenCADStudio/plugins/opencad.layers_quick"
