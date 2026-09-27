@@ -74,6 +74,45 @@ fn label_width_factor(tag: &str) -> f64 {
         _ => 1.0,
     }
 }
+
+/// 英文标签的**实体级字宽**（`None` = 用 [`label_width_factor`] 的 zh 值）。
+///
+/// 同一口径：真字体 metrics（cap=0.637em ⇒ 宽 = 字号 × 1.57 × wf），逐条按
+/// 「宽 ≤ (X_SEP − X_LABEL) × 0.97（≥3% 余量）」预算；同时满足仓库保守模型
+/// `text_extent_ttf()`（预算脚本：`~/桌面/OCSM/review/i18n_检查/card_gb_width_plan.py`）。
+fn en_label_width_factor(tag: &str) -> Option<f64> {
+    Some(match tag {
+        "(简)执行标准" => 1.0,
+        "(简)模数" => 1.0,
+        "(简)齿数" => 0.61,
+        "(简)齿形角" => 0.60,
+        "(简)齿根样式" => 1.0,
+        "(简)大径" => 0.55,
+        "(简)小径" => 0.55,
+        "(简)量棒直径" => 0.66,
+        "(简)测量跨棒距" => 0.40,
+        "(简)跨测齿数" => 0.79,
+        "(简)公法线长度" => 0.46,
+        _ => return None,
+    })
+}
+
+/// 标签实体字宽：中文用 zh 值；英文用 [`en_label_width_factor`] 覆盖。
+fn label_wf(tag: &str) -> f64 {
+    match (crate::i18n::lang(), en_label_width_factor(tag)) {
+        (crate::i18n::Lang::En, Some(wf)) => wf,
+        _ => label_width_factor(tag),
+    }
+}
+
+/// 标题实体字宽：中文 = [`TITLE_WF`]；英文按同口径预算（内 0.56 / 外 0.55）。
+fn title_wf(side: SplineSide) -> f64 {
+    match (crate::i18n::lang(), side) {
+        (crate::i18n::Lang::En, SplineSide::Internal) => 0.56,
+        (crate::i18n::Lang::En, SplineSide::External) => 0.55,
+        _ => TITLE_WF,
+    }
+}
 /// 值 ATTDEF 实体级字宽（与 GB 卡 0.7 同口径，不动全局 `OCSM_GB`）。
 pub(crate) const VALUE_WF: f64 = 0.7;
 
@@ -95,8 +134,10 @@ pub(crate) const LAYER_TEXT: &str = "6文字层";
 pub(crate) struct LiteFieldSpec {
     /// ATTDEF tag（`(简)` 前缀，避免与 GB 卡块混淆）。
     pub tag: &'static str,
-    /// 卡面标签（含符号）。
-    pub label: &'static str,
+    /// 卡面标签的 catalog key（**只译文字**；符号由 `symbol` 原样拼回）。
+    pub label_key: &'static str,
+    /// 标签后的**符号/代号**（原样透传，不译；空串 = 无）。
+    pub symbol: &'static str,
     /// 单位（进 GUI 预览；卡面不加单位行）。
     pub unit: &'static str,
     /// 公式/口径（GUI 行 title、计算书）。
@@ -105,66 +146,87 @@ pub(crate) struct LiteFieldSpec {
     pub source: &'static str,
 }
 
+impl LiteFieldSpec {
+    /// 卡面标签（随语言）：`模数 m` ⇄ `Module m`（符号/代号恒原样）。
+    pub(crate) fn label(&self) -> String {
+        let text = crate::i18n::t(self.label_key);
+        if self.symbol.is_empty() {
+            text
+        } else {
+            format!("{text} {}", self.symbol)
+        }
+    }
+}
+
 const INTERNAL_FIELDS: &[LiteFieldSpec] = &[
     LiteFieldSpec {
         tag: "(简)执行标准",
-        label: "执行标准",
+        label_key: "card.gb.lite.label.standard",
+        symbol: "",
         unit: "",
         formula: "GB/T 3478.1-2008 渐开线花键（精简卡口径：只列基本参数与主要测量量，不含公差列）",
         source: "GB/T 3478.1-2008",
     },
     LiteFieldSpec {
         tag: "(简)模数",
-        label: "模数 m",
+        label_key: "card.gb.lite.label.module",
+        symbol: "m",
         unit: "mm",
         formula: "m = 九字段齿形表达式反解（与 GB 花键卡同一 `spline_tol::compute()`）",
         source: "GB/T 3478.1",
     },
     LiteFieldSpec {
         tag: "(简)齿数",
-        label: "齿数 z",
+        label_key: "card.gb.lite.label.teeth",
+        symbol: "z",
         unit: "",
         formula: "z = 九字段齿形表达式反解",
         source: "GB/T 3478.1",
     },
     LiteFieldSpec {
         tag: "(简)齿形角",
-        label: "齿形角 αD",
+        label_key: "card.gb.lite.label.alpha",
+        symbol: "αD",
         unit: "°",
         formula: "αD = 表达式反解（30/37.5/45）",
         source: "GB/T 3478.1 表 3",
     },
     LiteFieldSpec {
         tag: "(简)齿根样式",
-        label: "齿根样式",
+        label_key: "card.gb.lite.label.root_form",
+        symbol: "",
         unit: "",
         formula: "由表达式 DA/DF 反解或手选；平齿根（仅 30°）/ 圆齿根",
         source: "GB/T 3478.1 §5",
     },
     LiteFieldSpec {
         tag: "(简)大径",
-        label: "大径 Dei",
+        label_key: "card.gb.lite.label.major_dia",
+        symbol: "Dei",
         unit: "mm",
         formula: "Dei = m(z+1.5) 30°平 / m(z+1.8) 30°圆 / m(z+1.4) 37.5° / m(z+1.2) 45°",
         source: "GB/T 3478.1 表 3",
     },
     LiteFieldSpec {
         tag: "(简)小径",
-        label: "小径 Dii",
+        label_key: "card.gb.lite.label.minor_dia",
+        symbol: "Dii",
         unit: "mm",
         formula: "Dii = D_Femax(H/h) + 2CF（CF = 0.1m）",
         source: "GB/T 3478.1 表 3 注 2/注 3",
     },
     LiteFieldSpec {
         tag: "(简)量棒直径",
-        label: "量棒直径 Dp",
+        label_key: "card.gb.label.pin_dia",
+        symbol: "Dp",
         unit: "mm",
         formula: "D'_Ri = Db[tanαci − tan(αci − E_max/D + invαci − invαD)]，按 GB/T 3478.9 R40 取最接近较大值",
         source: "GB/T 3478.6 式(1)、GB/T 3478.9 表 1",
     },
     LiteFieldSpec {
         tag: "(简)测量跨棒距",
-        label: "测量跨棒距 Md",
+        label_key: "card.gb.label.over_pins",
+        symbol: "Md",
         unit: "mm",
         formula: "偶齿 M = Db/cosαi ∓ Dp；奇齿再乘 cos(90°/z)",
         source: "GB/T 3478.6 式(2)~(5)",
@@ -174,63 +236,72 @@ const INTERNAL_FIELDS: &[LiteFieldSpec] = &[
 const EXTERNAL_FIELDS: &[LiteFieldSpec] = &[
     LiteFieldSpec {
         tag: "(简)执行标准",
-        label: "执行标准",
+        label_key: "card.gb.lite.label.standard",
+        symbol: "",
         unit: "",
         formula: "GB/T 3478.1-2008 渐开线花键（精简卡口径：只列基本参数与主要测量量，不含公差列）",
         source: "GB/T 3478.1-2008",
     },
     LiteFieldSpec {
         tag: "(简)模数",
-        label: "模数 m",
+        label_key: "card.gb.lite.label.module",
+        symbol: "m",
         unit: "mm",
         formula: "m = 九字段齿形表达式反解（与 GB 花键卡同一 `spline_tol::compute()`）",
         source: "GB/T 3478.1",
     },
     LiteFieldSpec {
         tag: "(简)齿数",
-        label: "齿数 z",
+        label_key: "card.gb.lite.label.teeth",
+        symbol: "z",
         unit: "",
         formula: "z = 九字段齿形表达式反解",
         source: "GB/T 3478.1",
     },
     LiteFieldSpec {
         tag: "(简)齿形角",
-        label: "齿形角 αD",
+        label_key: "card.gb.lite.label.alpha",
+        symbol: "αD",
         unit: "°",
         formula: "αD = 表达式反解（30/37.5/45）",
         source: "GB/T 3478.1 表 3",
     },
     LiteFieldSpec {
         tag: "(简)齿根样式",
-        label: "齿根样式",
+        label_key: "card.gb.lite.label.root_form",
+        symbol: "",
         unit: "",
         formula: "由表达式 DA/DF 反解或手选；平齿根（仅 30°）/ 圆齿根",
         source: "GB/T 3478.1 §5",
     },
     LiteFieldSpec {
         tag: "(简)大径",
-        label: "大径 Dee",
+        label_key: "card.gb.lite.label.major_dia",
+        symbol: "Dee",
         unit: "mm",
         formula: "Dee = m(z+1) 30° / m(z+0.9) 37.5° / m(z+0.8) 45°",
         source: "GB/T 3478.1 表 3",
     },
     LiteFieldSpec {
         tag: "(简)小径",
-        label: "小径 Die",
+        label_key: "card.gb.lite.label.minor_dia",
+        symbol: "Die",
         unit: "mm",
         formula: "Die = m(z−1.5) 30°平 / m(z−1.8) 30°圆 / m(z−1.4) 37.5° / m(z−1.2) 45°",
         source: "GB/T 3478.1 表 3",
     },
     LiteFieldSpec {
         tag: "(简)跨测齿数",
-        label: "跨测齿数 Kn",
+        label_key: "card.gb.label.span_teeth",
+        symbol: "Kn",
         unit: "",
         formula: "K = z/6 + 0.5 取整数",
         source: "GB/T 3478.6 式(11) 注",
     },
     LiteFieldSpec {
         tag: "(简)公法线长度",
-        label: "公法线长度 Wn",
+        label_key: "card.gb.label.base_tangent",
+        symbol: "Wn",
         unit: "mm",
         formula: "W_min = cosαD[(K−0.5)πm + D·invαD + esv − (T+λ)]；W = (W_min+W_max)/2",
         source: "GB/T 3478.6 式(11)(12)",
@@ -425,12 +496,17 @@ pub(crate) fn value_y(i: usize) -> f64 {
     label_y(i) + 0.552_51
 }
 
-/// 标题（内/外）。
-fn title_text(side: SplineSide) -> &'static str {
+/// 标题（内/外）catalog key。
+fn title_key(side: SplineSide) -> &'static str {
     match side {
-        SplineSide::Internal => "内 花 键 参 数 表（精简）",
-        SplineSide::External => "外 花 键 参 数 表（精简）",
+        SplineSide::Internal => "card.gb.title.int_lite",
+        SplineSide::External => "card.gb.title.ext_lite",
     }
+}
+
+/// 卡面标题（随语言）：`内 花 键 参 数 表（精简）` ⇄ `Internal Spline Parameter Table (Lite)`。
+pub(crate) fn title_text(side: SplineSide) -> String {
+    crate::i18n::t(title_key(side))
 }
 
 fn title_x(side: SplineSide) -> f64 {
@@ -455,10 +531,22 @@ pub fn block_entities(side: SplineSide) -> Vec<EntityType> {
         line([X_LEFT, row_top(i)], [X_RIGHT, row_top(i)], LAYER_THIN);
     }
     line([X_SEP, -ROW], [X_SEP, bottom], LAYER_THIN);
-    out.push(text_ent(title_text(side), title_x(side), Y_TITLE, TEXT_H, TITLE_WF));
+    out.push(text_ent(
+        &title_text(side),
+        title_x(side),
+        Y_TITLE,
+        TEXT_H,
+        title_wf(side),
+    ));
     for (i, f) in fields(side).iter().enumerate() {
         let row = i + 1;
-        out.push(text_ent(f.label, X_LABEL, label_y(row), TEXT_H, label_width_factor(f.tag)));
+        out.push(text_ent(
+            &f.label(),
+            X_LABEL,
+            label_y(row),
+            TEXT_H,
+            label_wf(f.tag),
+        ));
     }
     for (i, f) in fields(side).iter().enumerate() {
         out.push(EntityType::AttributeDefinition(attdef(f.tag, X_VALUE, value_y(i + 1))));
@@ -477,11 +565,11 @@ pub fn attdefs(side: SplineSide) -> Vec<AttributeDefinition> {
 
 // ── 取值（与 GB 卡同一份 `spline_tol::compute()`；本模块不另算）────────────
 
-fn root_label(root: RootForm) -> &'static str {
-    match root {
-        RootForm::Flat => "平齿根",
-        RootForm::Fillet => "圆齿根",
-    }
+fn root_label(root: RootForm) -> String {
+    crate::i18n::t(match root {
+        RootForm::Flat => "card.gb.root.flat",
+        RootForm::Fillet => "card.gb.root.fillet",
+    })
 }
 
 /// 9 个 tag 的值（顺序与 `attdefs()` 一致）。只读 `SplineTable` 既有字段。
@@ -493,7 +581,7 @@ pub fn values(side: SplineSide, table: &SplineTable) -> Result<Vec<(String, Stri
             ("(简)模数", s(t.m)),
             ("(简)齿数", t.z.to_string()),
             ("(简)齿形角", crate::spline_table::fmt_deg(t.alpha_deg)),
-            ("(简)齿根样式", root_label(t.root).to_string()),
+            ("(简)齿根样式", root_label(t.root)),
             ("(简)大径", s(t.major_dia)),
             ("(简)小径", s(t.minor_dia)),
             ("(简)量棒直径", s(t.dp)),
@@ -504,7 +592,7 @@ pub fn values(side: SplineSide, table: &SplineTable) -> Result<Vec<(String, Stri
             ("(简)模数", s(t.m)),
             ("(简)齿数", t.z.to_string()),
             ("(简)齿形角", crate::spline_table::fmt_deg(t.alpha_deg)),
-            ("(简)齿根样式", root_label(t.root).to_string()),
+            ("(简)齿根样式", root_label(t.root)),
             ("(简)大径", s(t.major_dia)),
             ("(简)小径", s(t.minor_dia)),
             ("(简)跨测齿数", t.kn.to_string()),
@@ -530,7 +618,7 @@ pub fn items_json(side: SplineSide, table: &SplineTable) -> Result<Vec<serde_jso
         debug_assert_eq!(f.tag, tag);
         out.push(serde_json::json!({
             "tag": tag,
-            "label": f.label,
+            "label": f.label(),
             "unit": f.unit,
             "value": value,
             "formula": f.formula,
@@ -700,45 +788,55 @@ mod tests {
     /// 负断言 + 图元数：9 行基本项，**卡面无任何公差类字段/文字**。
     #[test]
     fn lite_block_has_no_tolerance_column() {
-        for side in [SplineSide::Internal, SplineSide::External] {
-            let ents = block_entities(side);
-            let lines = ents
-                .iter()
-                .filter(|e| matches!(e, EntityType::Line(_)))
-                .count();
-            let texts = text_values(&ents);
-            let atts = attdefs(side);
-            assert_eq!(lines, 14, "{side:?} 线数（4 框 + 9 分隔 + 1 分栏）");
-            assert_eq!(texts.len(), 10, "{side:?} 文字数（标题 + 9 标签）");
-            assert_eq!(atts.len(), DATA_ROWS, "{side:?} ATTDEF 数");
-            // 块底部必须到第 10 行（标题 + 9 数据行），否则最后一行会出框。
-            let min_y = ents
-                .iter()
-                .filter_map(|e| match e {
-                    EntityType::Line(l) => Some(l.start.y.min(l.end.y)),
-                    _ => None,
-                })
-                .fold(f64::INFINITY, f64::min);
-            assert!(
-                (min_y + ((DATA_ROWS as f64) + 1.0) * ROW).abs() < 1e-9,
-                "{side:?} 块底应在 −10·ROW（含标题行），实 {min_y}"
-            );
-            for bad in ["公差", "偏差", "上差", "下差"] {
+        let _g = crate::global_state_test_lock();
+        for lang in [crate::i18n::Lang::Zh, crate::i18n::Lang::En] {
+            crate::i18n::set_lang(lang);
+            for side in [SplineSide::Internal, SplineSide::External] {
+                let ents = block_entities(side);
+                let lines = ents
+                    .iter()
+                    .filter(|e| matches!(e, EntityType::Line(_)))
+                    .count();
+                let texts = text_values(&ents);
+                let atts = attdefs(side);
+                assert_eq!(lines, 14, "{lang:?} {side:?} 线数（4 框 + 9 分隔 + 1 分栏）");
+                assert_eq!(texts.len(), 10, "{lang:?} {side:?} 文字数（标题 + 9 标签）");
+                assert_eq!(atts.len(), DATA_ROWS, "{lang:?} {side:?} ATTDEF 数");
+                // 块底部必须到第 10 行（标题 + 9 数据行），否则最后一行会出框。
+                let min_y = ents
+                    .iter()
+                    .filter_map(|e| match e {
+                        EntityType::Line(l) => Some(l.start.y.min(l.end.y)),
+                        _ => None,
+                    })
+                    .fold(f64::INFINITY, f64::min);
                 assert!(
-                    !texts.iter().any(|t| t.contains(bad)),
-                    "{side:?} 卡面文字不应出现「{bad}」：{texts:?}"
+                    (min_y + ((DATA_ROWS as f64) + 1.0) * ROW).abs() < 1e-9,
+                    "{lang:?} {side:?} 块底应在 −10·ROW（含标题行），实 {min_y}"
                 );
-                assert!(
-                    !atts.iter().any(|a| a.tag.contains(bad)),
-                    "{side:?} ATTDEF tag 不应出现「{bad}」"
-                );
+                // 负断言：卡面/标签不得出现公差类字样（**两语都查**：中文 + 英文）。
+                for bad in [
+                    "公差", "偏差", "上差", "下差", "Toleran", "Deviat", "deviat", "toleran",
+                ] {
+                    assert!(
+                        !texts.iter().any(|t| t.contains(bad)),
+                        "{lang:?} {side:?} 卡面文字不应出现「{bad}」：{texts:?}"
+                    );
+                    assert!(
+                        !atts.iter().any(|a| a.tag.contains(bad)),
+                        "{lang:?} {side:?} ATTDEF tag 不应出现「{bad}」"
+                    );
+                }
             }
         }
+        crate::i18n::set_lang_auto();
     }
 
     /// 与既有 GB 卡同一批 `compute()` 值：精简项逐项等于 GB 卡对应项。
     #[test]
     fn lite_values_equal_gb_card_items_same_compute() {
+        let _g = crate::global_state_test_lock();
+        crate::i18n::set_lang(crate::i18n::Lang::Zh); // 本用例断言中文卡面值（齿根样式「平齿根」）
         for (side, input) in [
             (
                 SplineSide::Internal,
@@ -784,77 +882,160 @@ mod tests {
             assert_eq!(lite["(简)执行标准"], "GB/T 3478.1-2008");
             assert_eq!(lite["(简)齿根样式"], "平齿根");
         }
+        crate::i18n::set_lang_auto();
     }
 
     /// 几何（**TTF 实际宽**，宿主 cap-height 归一 ×1.57）：标题/标签/值均在各自单元格内
     /// （标签列留 ≥3% 边距）、标签与值及任意两文本不相交、全体不出块框。
     /// 用户 2026-09-27 截图三处（标题/量棒直径 Dp/测量跨棒距 Md）+ 外卡两处（跨测齿数 Kn/公法线长度 Wn）。
+    /// ③ 卡面批：**中英各跑一遍**（英文用 `en_label_width_factor` / `title_wf` 的实体级字宽）。
     #[test]
     fn lite_texts_stay_in_columns_and_do_not_overlap() {
+        let _g = crate::global_state_test_lock();
         use crate::spline_table::text_box_ttf;
         let lite_cell = X_SEP - X_LABEL; // 标签列可用宽
-        for side in [SplineSide::Internal, SplineSide::External] {
-            let fields = fields(side);
-            // 取一组大值（m=10、z=100）压最宽文本。
-            let input = make_input(side, 10.0, 100, PressureAngle::A30, RootForm::Flat);
-            let table = crate::spline_tol::compute(&input).unwrap();
-            let vals = values(side, &table).unwrap();
-            // 标题：不出左框/右框。
-            let title = text_box_ttf([title_x(side), Y_TITLE], TEXT_H, TITLE_WF, title_text(side));
-            assert!(
-                title[0] >= X_LEFT && title[2] <= X_RIGHT - 0.02,
-                "{side:?} 标题越表：{title:?}"
-            );
-            let mut boxes: Vec<(String, [f64; 4])> = vec![(format!("title:{}", title_text(side)), title)];
-            for (i, f) in fields.iter().enumerate() {
-                let row = i + 1;
-                let lab = text_box_ttf(
-                    [X_LABEL, label_y(row)],
+        for lang in [crate::i18n::Lang::Zh, crate::i18n::Lang::En] {
+            crate::i18n::set_lang(lang);
+            for side in [SplineSide::Internal, SplineSide::External] {
+                let fields = fields(side);
+                // 取一组大值（m=10、z=100）压最宽文本。
+                let input = make_input(side, 10.0, 100, PressureAngle::A30, RootForm::Flat);
+                let table = crate::spline_tol::compute(&input).unwrap();
+                let vals = values(side, &table).unwrap();
+                // 标题：不出左框/右框。
+                let title_s = title_text(side);
+                let title = text_box_ttf(
+                    [title_x(side), Y_TITLE],
                     TEXT_H,
-                    label_width_factor(f.tag),
-                    f.label,
+                    title_wf(side),
+                    &title_s,
                 );
                 assert!(
-                    lab[0] >= X_LEFT && lab[2] <= X_SEP - 0.02,
-                    "{side:?} 标签「{}」越标签列：{lab:?}",
-                    f.label
+                    title[0] >= X_LEFT && title[2] <= X_RIGHT - 0.02,
+                    "{lang:?} {side:?} 标题「{title_s}」越表：{title:?}"
                 );
-                let margin = (X_SEP - lab[2]) / lite_cell;
-                assert!(
-                    margin >= 0.03,
-                    "{side:?} 标签「{}」列内余量 {:.1}% < 3%：{lab:?}",
-                    f.label,
-                    margin * 100.0
-                );
-                let val = &vals[i].1;
-                let vb = text_box_ttf([X_VALUE, value_y(row)], TEXT_H, VALUE_WF, val);
-                assert!(
-                    vb[0] >= X_SEP && vb[2] <= X_RIGHT - 0.02,
-                    "{side:?} 值「{val}」越值列：{vb:?}"
-                );
-                assert!(
-                    lab[2] < vb[0],
-                    "{side:?} 标签「{}」与值「{val}」横向相叠：{lab:?} vs {vb:?}",
-                    f.label
-                );
-                let top = row_top(row);
-                let bottom = top - ROW;
-                assert!(
-                    lab[1] >= bottom && lab[3] <= top && vb[1] >= bottom && vb[3] <= top,
-                    "{side:?} 第 {row} 行文字应在本行带内"
-                );
-                boxes.push((format!("label:{}", f.label), lab));
-                boxes.push((format!("value:{val}"), vb));
-            }
-            // 任意两文本盒不相交（含标题/跨行）。
-            for i in 0..boxes.len() {
-                for j in (i + 1)..boxes.len() {
-                    let (a, b) = (&boxes[i].1, &boxes[j].1);
-                    let hit = a[0] < b[2] && b[0] < a[2] && a[1] < b[3] && b[1] < a[3];
-                    assert!(!hit, "{side:?} 文本框相交：{} × {}", boxes[i].0, boxes[j].0);
+                let mut boxes: Vec<(String, [f64; 4])> =
+                    vec![(format!("title:{title_s}"), title)];
+                for (i, f) in fields.iter().enumerate() {
+                    let row = i + 1;
+                    let label_s = f.label();
+                    let lab = text_box_ttf(
+                        [X_LABEL, label_y(row)],
+                        TEXT_H,
+                        label_wf(f.tag),
+                        &label_s,
+                    );
+                    assert!(
+                        lab[0] >= X_LEFT && lab[2] <= X_SEP - 0.02,
+                        "{lang:?} {side:?} 标签「{label_s}」越标签列：{lab:?}"
+                    );
+                    let margin = (X_SEP - lab[2]) / lite_cell;
+                    assert!(
+                        margin >= 0.03,
+                        "{lang:?} {side:?} 标签「{label_s}」列内余量 {:.1}% < 3%：{lab:?}",
+                        margin * 100.0
+                    );
+                    let val = &vals[i].1;
+                    let vb = text_box_ttf([X_VALUE, value_y(row)], TEXT_H, VALUE_WF, val);
+                    assert!(
+                        vb[0] >= X_SEP && vb[2] <= X_RIGHT - 0.02,
+                        "{lang:?} {side:?} 值「{val}」越值列：{vb:?}"
+                    );
+                    assert!(
+                        lab[2] < vb[0],
+                        "{lang:?} {side:?} 标签「{label_s}」与值「{val}」横向相叠：{lab:?} vs {vb:?}"
+                    );
+                    let top = row_top(row);
+                    let bottom = top - ROW;
+                    assert!(
+                        lab[1] >= bottom && lab[3] <= top && vb[1] >= bottom && vb[3] <= top,
+                        "{lang:?} {side:?} 第 {row} 行文字应在本行带内"
+                    );
+                    boxes.push((format!("label:{label_s}"), lab));
+                    boxes.push((format!("value:{val}"), vb));
+                }
+                // 任意两文本盒不相交（含标题/跨行）。
+                for i in 0..boxes.len() {
+                    for j in (i + 1)..boxes.len() {
+                        let (a, b) = (&boxes[i].1, &boxes[j].1);
+                        let hit = a[0] < b[2] && b[0] < a[2] && a[1] < b[3] && b[1] < a[3];
+                        assert!(
+                            !hit,
+                            "{lang:?} {side:?} 文本框相交：{} × {}",
+                            boxes[i].0, boxes[j].0
+                        );
+                    }
                 }
             }
         }
+        crate::i18n::set_lang_auto();
+    }
+
+    /// ③ 卡面批：精简卡卡面**文字随语言**、**符号/代号/ATTDEF tag/值原样**。
+    #[test]
+    fn lite_card_face_switches_language_keeping_symbols_and_values() {
+        let _g = crate::global_state_test_lock();
+        let input = make_input(SplineSide::External, 2.0, 20, PressureAngle::A30, RootForm::Fillet);
+        let table = crate::spline_tol::compute(&input).unwrap();
+        let vals = values(SplineSide::External, &table).unwrap();
+        let tag_list = |side| {
+            attdefs(side)
+                .iter()
+                .map(|a| a.tag.clone())
+                .collect::<Vec<_>>()
+        };
+        let texts = |side| {
+            block_entities(side)
+                .iter()
+                .filter_map(|e| match e {
+                    EntityType::Text(t) => Some(t.value.clone()),
+                    _ => None,
+                })
+                .collect::<Vec<String>>()
+        };
+
+        crate::i18n::set_lang(crate::i18n::Lang::Zh);
+        let zh = texts(SplineSide::External);
+        let tags_zh = tag_list(SplineSide::External);
+        assert!(tags_zh.iter().all(|t| t.starts_with("(简)")));
+        for want in [
+            "外 花 键 参 数 表（精简）",
+            "模数 m",
+            "齿根样式",
+            "跨测齿数 Kn",
+            "公法线长度 Wn",
+        ] {
+            assert!(zh.iter().any(|t| t == want), "zh 卡面缺「{want}」：{zh:?}");
+        }
+        assert_eq!(vals[4].1, "圆齿根", "卡面值（齿根样式）随语言");
+
+        crate::i18n::set_lang(crate::i18n::Lang::En);
+        let en = texts(SplineSide::External);
+        for want in [
+            "External Spline Parameter Table (Lite)",
+            "Module m",
+            "Root form",
+            "Span teeth Kn",
+            "Base tangent length Wn",
+        ] {
+            assert!(en.iter().any(|t| t == want), "en 卡面缺「{want}」：{en:?}");
+        }
+        assert_eq!(en.len(), zh.len(), "中英卡面文字条数一致");
+        assert!(
+            !en
+                .iter()
+                .any(|t| t.chars().any(|c| ('\u{4E00}'..='\u{9FFF}').contains(&c))),
+            "英文卡面不应再有汉字：{en:?}"
+        );
+        assert_eq!(tag_list(SplineSide::External), tags_zh, "ATTDEF tag 不随语言");
+        // 数据值（标准号/数字/符号）两语一致；只有「齿根样式」术语随语言。
+        let vals_en = values(SplineSide::External, &table).unwrap();
+        assert!(vals_en.iter().any(|(t, v)| t == "(简)执行标准" && v == "GB/T 3478.1-2008"));
+        assert!(vals_en.iter().any(|(t, v)| t == "(简)公法线长度" && v == &vals[8].1));
+        assert_eq!(vals_en[4].1, "Fillet root", "英文卡面值用英文术语");
+        assert!(!vals_en.is_empty());
+        assert!(crate::i18n::missing_keys().is_empty(), "{:?}", crate::i18n::missing_keys());
+        crate::i18n::set_lang_auto();
     }
 
     /// 表达式反解 + 预览 JSON：9 项、回填 fields（root/grade/fit）、无公差项。

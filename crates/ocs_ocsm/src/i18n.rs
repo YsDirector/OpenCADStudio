@@ -2825,6 +2825,48 @@ pub const CATALOG: &[Msg] = &[
     Msg::new("card.name.nf_ext", "NF 外花键参数表", "NF external spline table"),
     Msg::new("card.name.din", "DIN 花键参数表", "DIN spline table"),
 
+    // ── 卡面标签：GB 花键参数表（`spline_table.rs`，③ 卡面批 ① 族）──
+    // 用户 2026-09-27：「**卡面文字也要英译**」；**标准符号/代号/标准号/值原样**（不列在表里）。
+    // * zh 侧含 GB 模板自带的对齐空格（`模  数`/`小  径`/`齿 形 角`）＝模板忠实，不动版面；
+    //   精简卡（`spline_lite.rs`）用**无空格**的另一组 key（`card.gb.lite.label.*`），英文同译法。
+    // * 英文天生比中文长 ⇒ 卡面文字按**实体级 width_factor** 压实（真字体 metrics：
+    //   朱雀仿宋 cap=0.637em ⇒ 宽 = 字号 × 1.57 × wf，见 `spline_table::en_label_width_factor`）。
+    Msg::new("card.gb.title.int", "内 花 键 参 数 表", "Internal Spline Parameter Table"),
+    Msg::new("card.gb.title.ext", "外 花 键 参 数 表", "External Spline Parameter Table"),
+    Msg::new("card.gb.title.int_lite", "内 花 键 参 数 表（精简）", "Internal Spline Parameter Table (Lite)"),
+    Msg::new("card.gb.title.ext_lite", "外 花 键 参 数 表（精简）", "External Spline Parameter Table (Lite)"),
+    Msg::new("card.gb.label.total_composite", "综合公差", "Total composite tolerance"),
+    Msg::new("card.gb.label.pitch_cumulative", "齿距累计公差", "Cumulative pitch tolerance"),
+    Msg::new("card.gb.label.profile", "齿形公差", "Profile tolerance"),
+    Msg::new("card.gb.label.space_width_min", "作用齿槽宽最小值", "Min. effective space width"),
+    Msg::new("card.gb.label.space_width_max", "实际齿槽宽最大值", "Max. actual space width"),
+    Msg::new("card.gb.label.thickness_min", "实际齿厚最小值", "Min. actual tooth thickness"),
+    Msg::new("card.gb.label.thickness_max", "作用齿厚最大值", "Max. effective tooth thickness"),
+    Msg::new("card.gb.label.minor_dia", "小  径", "Minor diameter"),
+    Msg::new("card.gb.label.major_dia", "大  径", "Major diameter"),
+    Msg::new("card.gb.label.form_dia_max", "渐开线终止圆直径最大值", "Max. form diameter"),
+    Msg::new("card.gb.label.grade_fit", "公差等级和配合类别", "Tolerance grade and fit"),
+    Msg::new("card.gb.label.module", "模  数", "Module"),
+    Msg::new("card.gb.label.alpha", "齿 形 角", "Pressure angle"),
+    Msg::new("card.gb.label.teeth", "齿  数", "Number of teeth"),
+    Msg::new("card.gb.label.root_fillet_radius", "齿根圆最小曲率半径", "Min. root fillet radius"),
+    Msg::new("card.gb.label.pin_dia", "量棒直径", "Pin diameter"),
+    Msg::new("card.gb.label.over_pins", "测量跨棒距", "Measurement over pins"),
+    Msg::new("card.gb.label.span_teeth", "跨测齿数", "Span teeth"),
+    Msg::new("card.gb.label.base_tangent", "公法线长度", "Base tangent length"),
+    // 精简卡专属（无模板对齐空格的 zh 形态 + GB 精简卡才有的两行）。
+    Msg::new("card.gb.lite.label.standard", "执行标准", "Standard"),
+    Msg::new("card.gb.lite.label.root_form", "齿根样式", "Root form"),
+    Msg::new("card.gb.lite.label.module", "模数", "Module"),
+    Msg::new("card.gb.lite.label.teeth", "齿数", "Number of teeth"),
+    Msg::new("card.gb.lite.label.alpha", "齿形角", "Pressure angle"),
+    Msg::new("card.gb.lite.label.major_dia", "大径", "Major diameter"),
+    Msg::new("card.gb.lite.label.minor_dia", "小径", "Minor diameter"),
+    // 齿根样式**取值**（写进 ATTRIB、卡面可见；`(简)齿根样式` 行）：术语随语言，
+    // 命令关键字（`平`/`圆`/`flat`/`fillet`）仍不译（§六）。
+    Msg::new("card.gb.root.flat", "平齿根", "Flat root"),
+    Msg::new("card.gb.root.fillet", "圆齿根", "Fillet root"),
+
     // ── 命令报错：五卡共用的九字段表达式解析（spline_table::parse_gear_expr）──
     Msg::new(
         "cmd.card.err.expr_missing",

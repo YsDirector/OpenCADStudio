@@ -16337,6 +16337,7 @@ mod weld_tests {
     #[test]
     fn card_routes_serve_gear_and_ansi_preview_export() {
         let _g = export_lock();
+        crate::i18n::set_lang(crate::i18n::Lang::Zh); // 本用例断言中文卡面标签（精简卡「量棒直径 Dp」…）
         let mock = Arc::new(MockSender::new(ocsm_layered_doc()));
         mock.mirror_blocks_into_doc();
         let sender: Arc<dyn PluginRequestSender> = mock.clone();
