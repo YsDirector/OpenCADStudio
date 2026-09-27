@@ -1145,11 +1145,11 @@ impl AnsiTableModel {
             SplineSide::External => "外花键",
         };
         let readout = serde_json::json!([
-            {"k": "径节 P/Ps", "v": pair_label(q.ansi_p())},
-            {"k": "齿数 N", "v": q.z.to_string()},
-            {"k": "压力角 φD", "v": fmt_deg(q.alpha_deg)},
-            {"k": "节圆直径 D", "v": fmt_mm(q.d())},
-            {"k": "基圆直径 Db", "v": fmt_mm(q.db())},
+            {"k": crate::i18n::t("gui.ansi.readout.pitch"), "v": pair_label(q.ansi_p())},
+            {"k": crate::i18n::t("gui.ansi.readout.teeth"), "v": q.z.to_string()},
+            {"k": crate::i18n::t("gui.ansi.readout.alpha"), "v": fmt_deg(q.alpha_deg)},
+            {"k": crate::i18n::t("gui.ansi.readout.pitch_dia"), "v": fmt_mm(q.d())},
+            {"k": crate::i18n::t("gui.ansi.readout.base_dia"), "v": fmt_mm(q.db())},
         ]);
         // 表达式反解回填：只带本卡字段（p/z/profile）；无表达式 = null（页面不动控件）。
         let expr_echo = self

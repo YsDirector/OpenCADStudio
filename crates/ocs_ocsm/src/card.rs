@@ -448,7 +448,8 @@ pub fn card_types_json() -> serde_json::Value {
                         let s = crate::spline_gui::system_by_id(id);
                         serde_json::json!({
                             "id": id,
-                            "label": s.map(|s| s.label).unwrap_or(id),
+                            "label": s.map(|s| s.label())
+                                .unwrap_or_else(|| id.to_string()),
                             "standard": s.map(|s| s.standard).unwrap_or(""),
                         })
                     })

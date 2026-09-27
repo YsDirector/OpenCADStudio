@@ -942,12 +942,12 @@ impl GearTableModel {
             }));
         }
         let readout = serde_json::json!([
-            {"k": "反解：模数 m", "v": fmt_mm(p.m)},
-            {"k": "齿数 z", "v": p.z.to_string()},
-            {"k": "齿形角 α", "v": fmt_deg(p.alpha_deg)},
-            {"k": "变位 x", "v": fmt_num(p.x)},
-            {"k": "螺旋角 β", "v": fmt_deg(p.beta_deg)},
-            {"k": "表达式 Da / Df", "v": format!("{} / {}", fmt_mm(p.da()), fmt_mm(p.df()))},
+            {"k": crate::i18n::t("gui.gear.readout.module"), "v": fmt_mm(p.m)},
+            {"k": crate::i18n::t("gui.gear.readout.teeth"), "v": p.z.to_string()},
+            {"k": crate::i18n::t("gui.gear.readout.alpha"), "v": fmt_deg(p.alpha_deg)},
+            {"k": crate::i18n::t("gui.gear.readout.shift"), "v": fmt_num(p.x)},
+            {"k": crate::i18n::t("gui.gear.readout.beta"), "v": fmt_deg(p.beta_deg)},
+            {"k": crate::i18n::t("gui.gear.readout.expr_da_df"), "v": format!("{} / {}", fmt_mm(p.da()), fmt_mm(p.df()))},
         ]);
         Ok(serde_json::json!({
             "ok": true,

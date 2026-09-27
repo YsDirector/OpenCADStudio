@@ -711,11 +711,11 @@ pub fn preview_json(model: &crate::spline_gui::SplineTableModel) -> Result<serde
         .to_string();
     let root = crate::spline_gui::root_id(input.root);
     let readout = serde_json::json!([
-        {"k": "模数 m", "v": crate::spline_table::fmt_mm(input.m)},
-        {"k": "齿数 z", "v": input.z.to_string()},
-        {"k": "齿形角 αD", "v": crate::spline_table::fmt_deg(input.alpha.deg())},
-        {"k": "齿根样式", "v": root_label(input.root)},
-        {"k": "方向", "v": side_label},
+        {"k": crate::i18n::t("gui.gb_lite.readout.module"), "v": crate::spline_table::fmt_mm(input.m)},
+        {"k": crate::i18n::t("gui.gb_lite.readout.teeth"), "v": input.z.to_string()},
+        {"k": crate::i18n::t("gui.gb_lite.readout.alpha"), "v": crate::spline_table::fmt_deg(input.alpha.deg())},
+        {"k": crate::i18n::t("gui.gb_lite.readout.root_form"), "v": root_label(input.root)},
+        {"k": crate::i18n::t("gui.gb_lite.readout.side"), "v": side_label},
     ]);
     let fit_code = match side {
         SplineSide::Internal => "H",

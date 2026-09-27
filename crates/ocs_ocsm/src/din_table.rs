@@ -1676,19 +1676,19 @@ impl DinTableModel {
             }));
         }
         let readout = serde_json::json!([
-            {"k": "e₂ = s₁（名义）", "v": fmt_mm(d.e2_s1)},
-            {"k": format!("Ae（孔 {}）", spec.hub.token()), "v": fmt_mm(d.ae)},
-            {"k": format!("As（轴 {}）", spec.shaft.token()), "v": fmt_mm(d.as_)},
-            {"k": format!("孔 {}：Tact / Teff", spec.hub.token()),
+            {"k": crate::i18n::t("gui.din.readout.e2_s1"), "v": fmt_mm(d.e2_s1)},
+            {"k": crate::i18n::t_fmt("gui.din.readout.ae", &[("hub", &spec.hub.token())]), "v": fmt_mm(d.ae)},
+            {"k": crate::i18n::t_fmt("gui.din.readout.as", &[("shaft", &spec.shaft.token())]), "v": fmt_mm(d.as_)},
+            {"k": crate::i18n::t_fmt("gui.din.readout.tact_hub", &[("hub", &spec.hub.token())]),
              "v": format!("{} / {}", fmt_mm(d.tact_hub), fmt_mm(d.teff_hub))},
-            {"k": format!("轴 {}：Tact / Teff", spec.shaft.token()),
+            {"k": crate::i18n::t_fmt("gui.din.readout.tact_shaft", &[("shaft", &spec.shaft.token())]),
              "v": format!("{} / {}", fmt_mm(d.tact_shaft), fmt_mm(d.teff_shaft))},
-            {"k": "Bild 6 示例路径", "v": if d.anchor { "是（整表照标准原印值）" } else { "否（按公式/表值计算）" }},
-            {"k": "Ae 出处", "v": d.ae_note},
-            {"k": "As 出处", "v": d.as_note},
-            {"k": "孔公差出处", "v": d.tol_hub_note},
-            {"k": "轴公差出处", "v": d.tol_shaft_note},
-            {"k": "名义表", "v": d.nominal.as_ref().map(|n| n.source.clone()).unwrap_or_else(|| MISSING.to_string())},
+            {"k": crate::i18n::t("gui.din.readout.anchor_path"), "v": if d.anchor { crate::i18n::t("gui.din.readout.anchor_yes") } else { crate::i18n::t("gui.din.readout.anchor_no") }},
+            {"k": crate::i18n::t("gui.din.readout.ae_source"), "v": d.ae_note},
+            {"k": crate::i18n::t("gui.din.readout.as_source"), "v": d.as_note},
+            {"k": crate::i18n::t("gui.din.readout.tol_hub_source"), "v": d.tol_hub_note, "tol": true},
+            {"k": crate::i18n::t("gui.din.readout.tol_shaft_source"), "v": d.tol_shaft_note, "tol": true},
+            {"k": crate::i18n::t("gui.din.readout.nominal_table"), "v": d.nominal.as_ref().map(|n| n.source.clone()).unwrap_or_else(|| MISSING.to_string())},
         ]);
         let expr_echo = self
             .expr

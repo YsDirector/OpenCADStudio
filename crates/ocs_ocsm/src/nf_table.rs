@@ -263,13 +263,14 @@ impl FitClass {
             FitClass::Press => "press",
         }
     }
-    pub fn label(self) -> &'static str {
-        match self {
-            FitClass::Loose => "松动",
-            FitClass::Slide => "滑动",
-            FitClass::Fixed => "固定",
-            FitClass::Press => "压",
-        }
+    /// 显示名（随语言；catalog `gui.fld.nf_table.form.fit.opt.*`，NF 内/外共用）。
+    pub fn label(self) -> String {
+        crate::i18n::t(match self {
+            FitClass::Loose => "gui.fld.nf_table.form.fit.opt.loose",
+            FitClass::Slide => "gui.fld.nf_table.form.fit.opt.slide",
+            FitClass::Fixed => "gui.fld.nf_table.form.fit.opt.fixed",
+            FitClass::Press => "gui.fld.nf_table.form.fit.opt.press",
+        })
     }
     pub fn index(self) -> usize {
         match self {
@@ -1379,21 +1380,21 @@ impl NfTableModel {
             None => (MISSING.to_string(), MISSING.to_string()),
         };
         let readout = serde_json::json!([
-            {"k": "公称直径 A（主参数）", "v": fmt_mm(spec.a)},
-            {"k": format!("大径 Az（{az_formula}）"), "v": fmt_mm(d.az)},
-            {"k": "小径 D = A − 2m", "v": fmt_mm(d.d)},
-            {"k": "p18 表小径 D 交叉核对", "v": d.table_d.map(fmt_mm).unwrap_or_else(|| MISSING.to_string())},
-            {"k": "量棒 V / V1", "v": format!("{} / {}", opt(d.v), opt(d.v1))},
-            {"k": "跨棒距 G / G1", "v": format!("{} / {}", opt(d.g), opt(d.g1))},
-            {"k": "槽底圆角 ri（p22）", "v": opt(d.ri)},
-            {"k": "变位系数 x（p22）", "v": opt(d.x)},
-            {"k": "p29 内花键偏差（µm）", "v": p29_int},
-            {"k": format!("配对外花键·{}偏差（µm；p29）", spec.fit.label()), "v": p29_ext},
-            {"k": "大径上/下差", "v": d.major_tol.map(|l| { let (u, lo) = l.display(); format!("{u} / {lo}") }).unwrap_or_else(|| MISSING.to_string())},
-            {"k": "小径上/下差", "v": d.minor_tol.map(|l| { let (u, lo) = l.display(); format!("{u} / {lo}") }).unwrap_or_else(|| MISSING.to_string())},
-            {"k": "p18 行", "v": d.dims_source},
-            {"k": "p22 行", "v": d.detail_source},
-            {"k": "p25 行", "v": d.check_source},
+            {"k": crate::i18n::t("gui.nf.readout.nominal_a"), "v": fmt_mm(spec.a)},
+            {"k": crate::i18n::t_fmt("gui.nf.readout.major_dia", &[("az_formula", az_formula)]), "v": fmt_mm(d.az)},
+            {"k": crate::i18n::t("gui.nf.readout.minor_dia"), "v": fmt_mm(d.d)},
+            {"k": crate::i18n::t("gui.nf.readout.table_minor_dia"), "v": d.table_d.map(fmt_mm).unwrap_or_else(|| MISSING.to_string())},
+            {"k": crate::i18n::t("gui.nf.readout.pin_v"), "v": format!("{} / {}", opt(d.v), opt(d.v1))},
+            {"k": crate::i18n::t("gui.nf.readout.over_pins_g"), "v": format!("{} / {}", opt(d.g), opt(d.g1))},
+            {"k": crate::i18n::t("gui.nf.readout.root_fillet_ri"), "v": opt(d.ri)},
+            {"k": crate::i18n::t("gui.nf.readout.shift_x"), "v": opt(d.x)},
+            {"k": crate::i18n::t("gui.nf.readout.p29_int_dev"), "v": p29_int, "tol": true},
+            {"k": crate::i18n::t_fmt("gui.nf.readout.p29_ext_dev", &[("fit", &spec.fit.label())]), "v": p29_ext, "tol": true},
+            {"k": crate::i18n::t("gui.nf.readout.major_tol"), "v": d.major_tol.map(|l| { let (u, lo) = l.display(); format!("{u} / {lo}") }).unwrap_or_else(|| MISSING.to_string()), "tol": true},
+            {"k": crate::i18n::t("gui.nf.readout.minor_tol"), "v": d.minor_tol.map(|l| { let (u, lo) = l.display(); format!("{u} / {lo}") }).unwrap_or_else(|| MISSING.to_string()), "tol": true},
+            {"k": crate::i18n::t("gui.nf.readout.p18_row"), "v": d.dims_source},
+            {"k": crate::i18n::t("gui.nf.readout.p22_row"), "v": d.detail_source},
+            {"k": crate::i18n::t("gui.nf.readout.p25_row"), "v": d.check_source},
         ]);
         let expr_echo = self
             .expr
@@ -2300,7 +2301,7 @@ mod tests {
                     .as_array()
                     .unwrap()
                     .iter()
-                    .any(|r| r["k"].as_str().unwrap().contains(fit.label())),
+                    .any(|r| r["k"].as_str().unwrap().contains(&fit.label())),
                 "{fit:?} 配对外花键读数应在"
             );
         }

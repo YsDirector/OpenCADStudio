@@ -9049,6 +9049,19 @@ pub(crate) fn linear_text_offset_from_line(dim: &Dimension) -> (f64, f64) {
 /// 冒烟必须跑「服务端渲染后的内容」，否则页面里的 `{{i18n*:key}}` 占位符会原样进
 /// `textContent`，断言看到的是 key 而不是文案。公共 JS 放在同目录（页面脚本按相对路径读它）。
 #[cfg(test)]
+fn write_atomic(path: &std::path::Path, content: String) -> Option<()> {
+    // 冒烟测试并行跑：同一个 `ocsm_gui_common.js` 会被多个用例重写，
+    // 非原子写会让另一个 node 进程读到被截断的文件（fetchApi 未定义 ⇒ 偶发假红）。
+    // 先写独占临时名再 rename（同目录原子替换；内容每次都相同）。
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let tmp = path.with_extension(format!("tmp{}-{seq}", std::process::id()));
+    std::fs::write(&tmp, content).ok()?;
+    std::fs::rename(&tmp, path).ok()?;
+    Some(())
+}
+
+#[cfg(test)]
 fn rendered_page_copy_for_test(html: &str, name: &str) -> Option<std::path::PathBuf> {
     // 放在 `target/i18n_smoke/src/`（`../assets` = `target/i18n_smoke/assets`，
     // 指向仓库 assets 的软链；gear 冒烟要读真实名义表 CSV）。
@@ -9063,13 +9076,12 @@ fn rendered_page_copy_for_test(html: &str, name: &str) -> Option<std::path::Path
             &assets_link,
         );
     }
-    std::fs::write(
-        dir.join("ocsm_gui_common.js"),
+    write_atomic(
+        &dir.join("ocsm_gui_common.js"),
         render_i18n_text_lang(GUI_COMMON_JS, crate::i18n::Lang::Zh),
-    )
-    .ok()?;
+    )?;
     let page = dir.join(name);
-    std::fs::write(&page, render_i18n_text_lang(html, crate::i18n::Lang::Zh)).ok()?;
+    write_atomic(&page, render_i18n_text_lang(html, crate::i18n::Lang::Zh))?;
     Some(page)
 }
 
@@ -10650,6 +10662,207 @@ mod tests {
         let end = html[start..].find("</script>")? + start;
         Some(&html[start..end])
     }
+
+    /// §37 批①：预览读数行 `k` 的 **zh/en 双断言**（每族全量；zh 是中文、en 零汉字且两语不同）
+    /// ＋ 精简卡公差行过滤随语言（`tol` 标记；en 下中文子串判定会失效）。
+    #[test]
+    fn card_readout_labels_switch_language_in_every_family() {
+        let _g = crate::global_state_test_lock();
+        crate::i18n::clear_missing_keys();
+        let han = |s: &str| s.chars().any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c));
+        let models: Vec<(&str, serde_json::Value)> = vec![
+            ("齿轮参数表", serde_json::json!({
+                "card": "齿轮参数表", "expr": "GEAR EX M2 Z40 ALPHA20 X0 DA84 DF75 BETA0 H20",
+                "mate_z": 20, "mate_dwg": "OCS-002", "grade": "7-7-7",
+                "center": null, "at": null, "rot": 0.0})),
+            ("ANSI中文", serde_json::json!({
+                "card": "ANSI花键参数表_中文", "side": "int", "p": 16.0, "z": 20,
+                "profile": null, "at": null, "rot": 0.0})),
+            ("ANSI英文", serde_json::json!({
+                "card": "ANSI花键参数表_英文", "side": "ext", "p": 16.0, "z": 20,
+                "profile": null, "at": null, "rot": 0.0})),
+            ("NF内", serde_json::json!({
+                "card": "NF内花键参数表", "expr": null, "a": 300.0, "m": 7.5, "z": 38,
+                "centering": null, "root": null, "fit": null, "at": null, "rot": 0.0})),
+            ("NF外", serde_json::json!({
+                "card": "NF外花键参数表", "a": 300.0, "m": 7.5, "z": 38,
+                "centering": null, "root": null, "fit": null, "at": null, "rot": 0.0})),
+            ("DIN", serde_json::json!({
+                "card": "DIN花键参数表", "side": "int", "m": 3.0, "z": 38, "d_b": 120.0,
+                "at": null, "rot": 0.0})),
+            ("GB精简", serde_json::json!({
+                "card": "GB花键精简表_内", "grade": 6, "fit": "H",
+                "expr": "SPLINE IN M3 Z20 ALPHA30 X0 DA65.4 DF57.3436 BETA0 H30",
+                "root": null, "dp": null, "at": [1.0, 2.0], "rot": 0.0})),
+            ("NF精简", serde_json::json!({
+                "card": "NF花键精简表_内", "expr": null, "a": 300.0, "m": 7.5, "z": 38,
+                "centering": null, "root": null, "fit": null, "at": null, "rot": 0.0})),
+            ("DIN精简", serde_json::json!({
+                "card": "DIN花键精简表_内", "side": "int", "m": 3.0, "z": 38, "d_b": 120.0,
+                "at": null, "rot": 0.0})),
+        ];
+        let rows = |body: &serde_json::Value| -> Vec<(String, String)> {
+            let bytes = serde_json::to_vec(body).unwrap();
+            let j = crate::guide_server::apply_card_preview(&bytes)
+                .unwrap_or_else(|e| panic!("预览失败：{e}"));
+            let v: serde_json::Value = serde_json::from_str(&j).unwrap();
+            assert_eq!(v["ok"], true, "{j}");
+            v["readout"]
+                .as_array()
+                .unwrap_or_else(|| panic!("无 readout：{j}"))
+                .iter()
+                .map(|r| {
+                    (
+                        r["k"].as_str().unwrap_or("").to_string(),
+                        r["v"].as_str().unwrap_or("").to_string(),
+                    )
+                })
+                .collect()
+        };
+        crate::i18n::set_lang(crate::i18n::Lang::Zh);
+        let zh: Vec<Vec<(String, String)>> = models.iter().map(|(_, m)| rows(m)).collect();
+        crate::i18n::set_lang(crate::i18n::Lang::En);
+        let en: Vec<Vec<(String, String)>> = models.iter().map(|(_, m)| rows(m)).collect();
+        for (i, (name, _)) in models.iter().enumerate() {
+            let (z, e) = (&zh[i], &en[i]);
+            assert_eq!(
+                z.len(),
+                e.len(),
+                "{name} 读数行数两语应一致（zh {} / en {}）",
+                z.len(),
+                e.len()
+            );
+            assert!(!z.is_empty(), "{name} 应有读数行");
+            for ((kz, vz), (ke, ve)) in z.iter().zip(e.iter()) {
+                assert!(han(kz), "{name} zh 标签应是中文：{kz}");
+                assert!(!han(ke), "{name} en 标签仍有汉字：{ke}");
+                assert_ne!(kz, ke, "{name} en 标签未随语言（{ke}）");
+                // 取值：出处注源级文案（如 `cmd.invol.check.*`）本身随语言 ⇒ 只断非空；
+                // 数值不变用下面的抽查钉。
+                assert!(!vz.is_empty(), "{name} zh 取值不应为空（{kz}）");
+                assert!(!ve.is_empty(), "{name} en 取值不应为空（{ke}）");
+            }
+        }
+        // 数值/数据不变抽查（zh/en 各查一侧，同一数据源）。
+        let value_of = |rows: &[(String, String)], key: &str| -> String {
+            rows.iter()
+                .find(|(k, _)| k.contains(key))
+                .map(|(_, v)| v.clone())
+                .unwrap_or_default()
+        };
+        let cases: &[(usize, &str, &str, &str, &str)] = &[
+            (0, "齿数 z", "40", "Number of teeth z", "40"),
+            (2, "节圆直径 D", "31.75", "Pitch diameter D", "31.75"),
+            (3, "公称直径 A", "300", "Nominal diameter A", "300"),
+        ];
+        for (i, kz, vz, ke, ve) in cases {
+            assert_eq!(value_of(&zh[*i], kz), *vz, "{} zh 数值抽查", models[*i].0);
+            assert_eq!(value_of(&en[*i], ke), *ve, "{} en 数值抽查", models[*i].0);
+        }
+        // DIN 示例路径的存在/否两分支也入 catalog（zh 中文 / en 英文）。
+        assert!(
+            han(&value_of(&zh[5], "示例路径")),
+            "DIN zh 示例路径取值应中文：{:?}",
+            value_of(&zh[5], "示例路径")
+        );
+        assert!(
+            !han(&value_of(&en[5], "example path"))
+                && !value_of(&en[5], "example path").is_empty(),
+            "DIN en 示例路径取值应英文：{:?}",
+            value_of(&en[5], "example path")
+        );
+        assert!(
+            crate::i18n::missing_keys().is_empty(),
+            "缺词条：{:?}",
+            crate::i18n::missing_keys()
+        );
+        crate::i18n::set_lang_auto();
+    }
+
+    /// §37 批②：`spline_gui.rs` GB 专用面板元数据 **zh/en 双断言（全量 key）**：
+    /// zh 是中文、en 零汉字且两语不同；符号两语原样；GB 全卡计算书的 21 项列口径切到英文。
+    #[test]
+    fn gb_panel_metadata_switches_language_and_has_no_cjk_in_english() {
+        let _g = crate::global_state_test_lock();
+        crate::i18n::clear_missing_keys();
+        let han = |s: &str| s.chars().any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c));
+        let mut keys: Vec<&'static str> = Vec::new();
+        for sys in crate::spline_gui::SPLINE_SYSTEMS {
+            keys.extend([sys.label_key, sys.note_key, sys.x_note_key]);
+            for s in sys.sides {
+                keys.extend([s.label_key, s.title_key, s.grade_note_key, s.alpha_note_key]);
+                for r in s.roots {
+                    keys.extend([r.label_key, r.note_key]);
+                }
+                if let Some(p) = &s.pin {
+                    keys.extend([
+                        p.label_key, p.dp_label_key, p.md_label_key,
+                        p.formula_key, p.md_formula_key, p.standard_key,
+                    ]);
+                }
+                for c in s.columns {
+                    keys.extend([c.label_key, c.formula_key, c.source_key]);
+                }
+            }
+        }
+        keys.sort_unstable();
+        keys.dedup();
+        assert!(keys.len() >= 100, "GB 面板 key 数应 ≥100（实际 {}）", keys.len());
+        for k in &keys {
+            let zh = crate::i18n::t_lang(crate::i18n::Lang::Zh, k);
+            let en = crate::i18n::t_lang(crate::i18n::Lang::En, k);
+            assert_ne!(zh, *k, "{k} zh 未入库（回落 key 本身）");
+            assert_ne!(en, *k, "{k} en 未入库");
+            assert!(!han(&en), "{k} en 仍有汉字：{en}");
+            if han(&zh) {
+                assert_ne!(zh, en, "{k} en 未随语言：{en}");
+            } else {
+                // 符号/公式体/标准号类（zh 本身无汉字）⇒ 两语都零汉字（标点可归一化为 ASCII）
+                assert!(!han(&en), "{k} en 仍有汉字：{en}");
+            }
+        }
+        // 符号两语原样（21 项列名 = 译名 + 空格 + 符号）。
+        let int = crate::spline_gui::side_spec_by_id("int").unwrap();
+        crate::i18n::set_lang(crate::i18n::Lang::Zh);
+        let zh_cols: Vec<String> = int.columns.iter().map(|c| c.label()).collect();
+        crate::i18n::set_lang(crate::i18n::Lang::En);
+        let en_cols: Vec<String> = int.columns.iter().map(|c| c.label()).collect();
+        assert_eq!(zh_cols.len(), 21);
+        for (c, (z, e)) in int.columns.iter().zip(zh_cols.iter().zip(&en_cols)) {
+            if !c.symbol.is_empty() {
+                assert!(z.ends_with(c.symbol), "zh 列名应带符号：{z}");
+                assert!(e.ends_with(c.symbol), "en 列名应带符号：{e}");
+            }
+        }
+        // ★ 主要症状：GB 全卡计算书的 21 项列口径/来源在 en 下不再出现中文原文。
+        let (_, md) = crate::card_report::build(
+            crate::card::card_type_by_token("花键参数表").unwrap(),
+            &serde_json::json!({
+                "card": "花键参数表", "side": "int", "grade": 6, "fit": "H",
+                "expr": "SPLINE IN M3 Z20 ALPHA30 X0 DA65.4 DF57.3436 BETA0 H30",
+                "root": "auto", "dp": null, "at": [1.0, 2.0], "rot": 0.0}),
+        )
+        .unwrap();
+        // 协议卡 id（`花键参数表`）按口径不译 ⇒ 先剔掉再断「零汉字」。
+        let md_no_id = md.replace("花键参数表", "");
+        let bad_line = md_no_id.lines().find(|l| han(l)).unwrap_or("");
+        assert!(!han(&md_no_id), "GB 计算书（en）仍有汉字：{bad_line}");
+        for c in int.columns {
+            for k in [c.formula_key, c.source_key] {
+                let zh = crate::i18n::t_lang(crate::i18n::Lang::Zh, k);
+                let en = crate::i18n::t_lang(crate::i18n::Lang::En, k);
+                if zh != en {
+                    assert!(!md.contains(&zh), "{k} 的 zh 口径仍在 en 报告里：{zh}");
+                }
+            }
+        }
+        assert!(
+            crate::i18n::missing_keys().is_empty(),
+            "缺词条：{:?}",
+            crate::i18n::missing_keys()
+        );
+        crate::i18n::set_lang_auto();
+    }
 }
 
 // ── 测试用宿主代理（integration/tests 共用） ───────────────────────────────
@@ -10878,6 +11091,7 @@ impl PluginRequestSender for MockSender {
             _ => Ok(P::Ok),
         }
     }
+
 }
 
 

@@ -823,22 +823,22 @@ impl NfExtTableModel {
             None => (MISSING.to_string(), MISSING.to_string()),
         };
         let readout = serde_json::json!([
-            {"k": "公称直径 A（主参数）", "v": crate::nf_table::fmt_mm(spec.a)},
-            {"k": format!("大径 Dee（{dee_formula}）"), "v": crate::nf_table::fmt_mm(d.dee)},
-            {"k": format!("小径 Die（{die_formula}）"), "v": crate::nf_table::fmt_mm(d.die)},
-            {"k": "p20–p22 表齿根圆交叉核对（平 / 圆）", "v": format!("{} / {}", opt(d.table_flat_root), opt(d.table_round_root))},
-            {"k": "跨测齿数 K / 公法线 W", "v": format!("{} / {}", opt(d.k), opt(d.w))},
-            {"k": "变位系数 x（p20–p22）", "v": opt(d.x)},
-            {"k": "分度圆 d / 基圆 dB", "v": format!("{} / {}", opt(d.d), opt(d.db))},
-            {"k": "分度圆弧齿厚 s / 基圆 sB", "v": format!("{} / {}", opt(d.s), opt(d.sb))},
-            {"k": "齿根圆角 Rf / Rr", "v": format!("{} / {}", opt(d.rf), opt(d.rr))},
-            {"k": "齿顶倒角高度 h", "v": opt(d.h)},
-            {"k": format!("p29 外花键·{}偏差（µm）", spec.fit.label()), "v": p29_ext},
-            {"k": "p29 内花键 E 偏差（µm；对照）", "v": p29_int},
-            {"k": "大径上/下差", "v": d.major_tol.map(|l| { let (u, lo) = l.display(); format!("{u} / {lo}") }).unwrap_or_else(|| MISSING.to_string())},
-            {"k": "小径上/下差", "v": d.minor_tol.map(|l| { let (u, lo) = l.display(); format!("{u} / {lo}") }).unwrap_or_else(|| MISSING.to_string())},
-            {"k": "p20–p22 行", "v": d.dims_source},
-            {"k": "p23–p25 行", "v": d.check_source},
+            {"k": crate::i18n::t("gui.nf_ext.readout.nominal_a"), "v": crate::nf_table::fmt_mm(spec.a)},
+            {"k": crate::i18n::t_fmt("gui.nf_ext.readout.major_dia", &[("dee_formula", dee_formula)]), "v": crate::nf_table::fmt_mm(d.dee)},
+            {"k": crate::i18n::t_fmt("gui.nf_ext.readout.minor_dia", &[("die_formula", die_formula)]), "v": crate::nf_table::fmt_mm(d.die)},
+            {"k": crate::i18n::t("gui.nf_ext.readout.table_root_dia"), "v": format!("{} / {}", opt(d.table_flat_root), opt(d.table_round_root))},
+            {"k": crate::i18n::t("gui.nf_ext.readout.span_teeth_base_tangent"), "v": format!("{} / {}", opt(d.k), opt(d.w))},
+            {"k": crate::i18n::t("gui.nf_ext.readout.shift_x"), "v": opt(d.x)},
+            {"k": crate::i18n::t("gui.nf_ext.readout.pitch_base_dia"), "v": format!("{} / {}", opt(d.d), opt(d.db))},
+            {"k": crate::i18n::t("gui.nf_ext.readout.thickness_s_sb"), "v": format!("{} / {}", opt(d.s), opt(d.sb))},
+            {"k": crate::i18n::t("gui.nf_ext.readout.root_radius"), "v": format!("{} / {}", opt(d.rf), opt(d.rr))},
+            {"k": crate::i18n::t("gui.nf_ext.readout.tip_chamfer_h"), "v": opt(d.h)},
+            {"k": crate::i18n::t_fmt("gui.nf_ext.readout.p29_ext_dev", &[("fit", &spec.fit.label())]), "v": p29_ext, "tol": true},
+            {"k": crate::i18n::t("gui.nf_ext.readout.p29_int_dev"), "v": p29_int, "tol": true},
+            {"k": crate::i18n::t("gui.nf_ext.readout.major_tol"), "v": d.major_tol.map(|l| { let (u, lo) = l.display(); format!("{u} / {lo}") }).unwrap_or_else(|| MISSING.to_string()), "tol": true},
+            {"k": crate::i18n::t("gui.nf_ext.readout.minor_tol"), "v": d.minor_tol.map(|l| { let (u, lo) = l.display(); format!("{u} / {lo}") }).unwrap_or_else(|| MISSING.to_string()), "tol": true},
+            {"k": crate::i18n::t("gui.nf_ext.readout.p20_row"), "v": d.dims_source},
+            {"k": crate::i18n::t("gui.nf_ext.readout.p23_row"), "v": d.check_source},
         ]);
         let expr_echo = self
             .expr
@@ -1688,7 +1688,7 @@ mod tests {
                     .as_array()
                     .unwrap()
                     .iter()
-                    .any(|r| r["k"].as_str().unwrap().contains(fit.label())),
+                    .any(|r| r["k"].as_str().unwrap().contains(&fit.label())),
                 "{fit:?} 外花键偏差读数应在"
             );
         }

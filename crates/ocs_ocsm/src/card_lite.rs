@@ -783,6 +783,11 @@ pub fn preview_json(card: &LiteCardSpec, model: &serde_json::Value) -> Result<se
         .unwrap_or_default()
         .into_iter()
         .filter(|r| {
+            // 读数行自带的公差标记（随语言都生效；§37 批：en 下中文子串判定会失效）
+            if r["tol"] == serde_json::Value::Bool(true) {
+                return false;
+            }
+            // 兼容兜底：未打标记的行仍按中文子串判定（zh 老行为）
             let k = r["k"].as_str().unwrap_or("");
             !(k.contains("公差") || k.contains("上差") || k.contains("下差")
                 || k.contains("上/下差") || k.contains("偏差"))

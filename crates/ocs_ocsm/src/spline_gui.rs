@@ -27,42 +27,99 @@ use serde::Deserialize;
 pub struct SplineColumnSpec {
     /// 与 `spline_table::attdefs()` 的 ATTDEF tag 完全一致（表驱动断言：21 项一一对应）。
     pub tag: &'static str,
-    /// 结果表里的可见名（不带 `(内)`/`(外)` 前缀）。
-    pub label: &'static str,
+    /// 结果表里的可见名（**catalog key**；不带 `(内)`/`(外)` 前缀）。
+    pub label_key: &'static str,
+    /// 可见名后的符号（`Dei`/`D_Fimin`/`R_imin`/`λ`…；空串 = 无）。两语原样不译。
+    pub symbol: &'static str,
     /// 显示单位（空串 = 无量纲，如齿数/角度/等级）。
     pub unit: &'static str,
-    /// 公式/计算口径（原生 title）。
-    pub formula: &'static str,
-    /// 依据来源（原生 title）。
-    pub source: &'static str,
+    /// 公式/计算口径（**catalog key**；进原生 title）。
+    pub formula_key: &'static str,
+    /// 依据来源（**catalog key**；进原生 title）。
+    pub source_key: &'static str,
+}
+
+impl SplineColumnSpec {
+    /// 可见名 = 译名（+ 空格 + 符号；符号两语原样）。
+    pub fn label(&self) -> String {
+        if self.symbol.is_empty() {
+            crate::i18n::t(self.label_key)
+        } else {
+            format!("{} {}", crate::i18n::t(self.label_key), self.symbol)
+        }
+    }
+
+    /// 公式/计算口径（随语言）。
+    pub fn formula(&self) -> String {
+        crate::i18n::t(self.formula_key)
+    }
+
+    /// 依据来源（随语言）。
+    pub fn source(&self) -> String {
+        crate::i18n::t(self.source_key)
+    }
 }
 
 /// 齿根形式（表驱动；`key` 与模型 JSON 的 `root` 一致）。
 #[derive(Debug, Clone, Copy)]
 pub struct SplineRootSpec {
     pub key: &'static str,
-    pub label: &'static str,
+    /// 可见名（**catalog key**）。
+    pub label_key: &'static str,
     /// 该齿根形式适用的压力角（本表只列，不做强校验——公式层按 αD 分派）。
     pub alphas: &'static [PressureAngle],
-    /// 口径说明（原生 title）。
-    pub note: &'static str,
+    /// 口径说明（**catalog key**；原生 title）。
+    pub note_key: &'static str,
+}
+
+impl SplineRootSpec {
+    /// 可见名（随语言）。
+    pub fn label(&self) -> String {
+        crate::i18n::t(self.label_key)
+    }
+
+    /// 口径说明（随语言）。
+    pub fn note(&self) -> String {
+        crate::i18n::t(self.note_key)
+    }
 }
 
 /// 量棒面板（只有参数表含量棒测量的方向才有；GB 内/外都有：内 M_Ri、外 M_Re 备用）。
 #[derive(Debug, Clone, Copy)]
 pub struct SplinePinSpec {
-    /// 面板标题（可见；外花键带「公法线为主、跨棒距备用」标注）。
-    pub label: &'static str,
-    /// 读数行 1 标签（可见）。
-    pub dp_label: &'static str,
-    /// 读数行 2 标签（可见）。
-    pub md_label: &'static str,
-    /// 量棒计算式（title）。
-    pub formula: &'static str,
-    /// 跨棒距计算式（title）。
-    pub md_formula: &'static str,
-    /// 选棒规则（title）。
-    pub standard: &'static str,
+    /// 面板标题（可见；外花键带「公法线为主、跨棒距备用」标注）。**catalog key**。
+    pub label_key: &'static str,
+    /// 读数行 1 标签（可见）。**catalog key**。
+    pub dp_label_key: &'static str,
+    /// 读数行 2 标签（可见）。**catalog key**。
+    pub md_label_key: &'static str,
+    /// 量棒计算式（title）。**catalog key**。
+    pub formula_key: &'static str,
+    /// 跨棒距计算式（title）。**catalog key**。
+    pub md_formula_key: &'static str,
+    /// 选棒规则（title）。**catalog key**。
+    pub standard_key: &'static str,
+}
+
+impl SplinePinSpec {
+    pub fn label(&self) -> String {
+        crate::i18n::t(self.label_key)
+    }
+    pub fn dp_label(&self) -> String {
+        crate::i18n::t(self.dp_label_key)
+    }
+    pub fn md_label(&self) -> String {
+        crate::i18n::t(self.md_label_key)
+    }
+    pub fn formula(&self) -> String {
+        crate::i18n::t(self.formula_key)
+    }
+    pub fn md_formula(&self) -> String {
+        crate::i18n::t(self.md_formula_key)
+    }
+    pub fn standard(&self) -> String {
+        crate::i18n::t(self.standard_key)
+    }
 }
 
 /// 一个方向（内/外）的可选项 + 21 项公式口径。
@@ -70,16 +127,16 @@ pub struct SplinePinSpec {
 pub struct SplineSideSpec {
     /// 稳定 id（模型 JSON 的 `side`）：`int` / `ext`。
     pub id: &'static str,
-    /// 可见名（按钮/标题）。
-    pub label: &'static str,
-    /// 方向说明（原生 title）。
-    pub title: &'static str,
+    /// 可见名（按钮/标题）。**catalog key**。
+    pub label_key: &'static str,
+    /// 方向说明（原生 title）。**catalog key**。
+    pub title_key: &'static str,
     /// 公差等级清单（GB/T 3478.1 只有 4/5/6/7）。
     pub grades: &'static [u32],
-    /// 等级口径（原生 title）。
-    pub grade_note: &'static str,
-    /// 压力角口径（原生 title）。
-    pub alpha_note: &'static str,
+    /// 等级口径（原生 title）。**catalog key**。
+    pub grade_note_key: &'static str,
+    /// 压力角口径（原生 title）。**catalog key**。
+    pub alpha_note_key: &'static str,
     /// 齿根形式清单。
     pub roots: &'static [SplineRootSpec],
     /// 压力角清单。
@@ -90,19 +147,48 @@ pub struct SplineSideSpec {
     pub columns: &'static [SplineColumnSpec],
 }
 
+impl SplineSideSpec {
+    pub fn label(&self) -> String {
+        crate::i18n::t(self.label_key)
+    }
+    pub fn title(&self) -> String {
+        crate::i18n::t(self.title_key)
+    }
+    pub fn grade_note(&self) -> String {
+        crate::i18n::t(self.grade_note_key)
+    }
+    pub fn alpha_note(&self) -> String {
+        crate::i18n::t(self.alpha_note_key)
+    }
+}
+
 /// 一个体系（本期只有 GB；以后 ANSI/NF = 加数据行）。
 #[derive(Debug, Clone, Copy)]
 pub struct SplineSystemSpec {
     pub id: &'static str,
     /// 命令/GUI 可用的别名（如 `gb`/`GB`；表驱动校验的唯一来源）。
     pub aliases: &'static [&'static str],
-    pub label: &'static str,
+    /// 可见名（**catalog key**）。
+    pub label_key: &'static str,
+    /// 标准号（协议记号，**原样不译**）。
     pub standard: &'static str,
-    /// 体系口径说明（原生 title）。
-    pub note: &'static str,
-    /// 变位系数 x 的口径（原生 title；GB 参数表不使用 x）。
-    pub x_note: &'static str,
+    /// 体系口径说明（原生 title）。**catalog key**。
+    pub note_key: &'static str,
+    /// 变位系数 x 的口径（原生 title；GB 参数表不使用 x）。**catalog key**。
+    pub x_note_key: &'static str,
     pub sides: &'static [SplineSideSpec],
+}
+
+impl SplineSystemSpec {
+    pub fn label(&self) -> String {
+        crate::i18n::t(self.label_key)
+    }
+    pub fn note(&self) -> String {
+        crate::i18n::t(self.note_key)
+    }
+    pub fn x_note(&self) -> String {
+        crate::i18n::t(self.x_note_key)
+    }
 }
 
 const GB_GRADES: &[u32] = &[4, 5, 6, 7];
@@ -115,356 +201,369 @@ const GB_ALPHAS: &[PressureAngle] = &[
 const GB_ROOTS: &[SplineRootSpec] = &[
     SplineRootSpec {
         key: "flat",
-        label: "平齿根",
+        label_key: "card.gb.root.flat",
         alphas: &[PressureAngle::A30, PressureAngle::A37_5, PressureAngle::A45],
-        note: "GB/T 3478.1 表 3：30° 平齿根 Dei = m(z+1.5)、外花键 Die = m(z−1.5)；\
-               37.5°/45° 允许平齿根（基本尺寸按圆齿根系列公式）",
+        note_key: "gui.gb.root.flat.note",
     },
     SplineRootSpec {
         key: "fillet",
-        label: "圆齿根",
+        label_key: "card.gb.root.fillet",
         alphas: &[PressureAngle::A30, PressureAngle::A37_5, PressureAngle::A45],
-        note: "GB/T 3478.1 表 3：30° 圆齿根 Dei = m(z+1.8)、外花键 Die = m(z−1.8)；\
-               37.5°/45° 按各自系列公式",
+        note_key: "gui.gb.root.fillet.note",
     },
 ];
 
 const PIN_INTERNAL: SplinePinSpec = SplinePinSpec {
-    label: "量棒直径 Dp 与测量跨棒距 Md",
-    dp_label: "量棒直径 Dp",
-    md_label: "测量跨棒距 Md",
-    formula: "D'_Ri = Db[tanα_ci − tan(α_ci − E_max/D + invα_ci − invαD)]，\
-              α_ci = acos(Db/D_ci)、D_ci = (D_ee max + D_ii min)/2（GB/T 3478.6 §3.1.1 式(1)）",
-    md_formula: "偶齿 M_Ri max/min = Db/cosα_i max/min − Dp；奇齿再乘 cos(90°/z)；\
-                 invα_i max/min = E_max/min/D + invαD − Dp/Db（GB/T 3478.6 §3.1.2 式(2)~(5)）",
-    standard: "D'_Ri 算完后按 GB/T 321 的 R40 系列取最接近且较大的值（GB/T 3478.9 表 1，67 档）；\
-               3 个备选 = 系列中与 D' 最接近的 3 个（工程口径）",
+    label_key: "gui.gb.pin.int.label",
+    dp_label_key: "gui.gb.pin.int.dp_label",
+    md_label_key: "gui.gb.pin.int.md_label",
+    formula_key: "gui.gb.pin.int.formula",
+    md_formula_key: "gui.gb.pin.int.md_formula",
+    standard_key: "gui.gb.pin.int.standard",
 };
 
 /// 外花键量棒面板（用户 2026-09-27 点单）：**公法线为主、跨棒距备用**。
 /// 卡面 21 项不加行（模板忠实）；只在 GUI 面板给出 D_Re 与 M_Re（含极限）。
 const PIN_EXTERNAL: SplinePinSpec = SplinePinSpec {
-    label: "量棒直径 D_Re 与跨棒距 M_Re（公法线为主、跨棒距备用）",
-    dp_label: "量棒直径 D_Re",
-    md_label: "跨棒距 M_Re",
-    formula: "D'_Re = Db[tan(α_ce + invα_ce + π/z − S_min/D − invαD) − tanα_ce]，\
-              α_ce = acos(Db/D_ce)、D_ce = (D_ee max + D_ii min)/2；\
-              S_min 按 7 级 + 基本偏差 h 取（GB/T 3478.6 §3.2.1 式(6)）",
-    md_formula: "偶齿 M_Re max/min = Db/cosα_e max/min + D_Re；奇齿再乘 cos(90°/z)；\
-                 invα_e min = D_Re/Db + invαD + S_min/D − π/z，\
-                 invα_e max = D_Re/Db + invαD + S_max/D − π/z（GB/T 3478.6 §3.2.2 式(7)~(10)）",
-    standard: "D'_Re 算完后按 GB/T 321 的 R40 系列取最接近且较大的值（GB/T 3478.9 表 1，67 档）；\
-               3 个备选 = 系列中与 D' 最接近的 3 个（工程口径）",
+    label_key: "gui.gb.pin.ext.label",
+    dp_label_key: "gui.gb.pin.ext.dp_label",
+    md_label_key: "gui.gb.pin.ext.md_label",
+    formula_key: "gui.gb.pin.ext.formula",
+    md_formula_key: "gui.gb.pin.ext.md_formula",
+    standard_key: "gui.gb.pin.ext.standard",
 };
 
 const INTERNAL_COLUMNS: &[SplineColumnSpec] = &[
     SplineColumnSpec {
         tag: "(内)齿形角",
-        label: "齿形角",
+        label_key: "gui.gb.col.alpha.label",
+        symbol: "",
         unit: "°",
-        formula: "GB/T 3478.1 基本齿廓：αD = 30° / 37.5° / 45°（本页所选值）",
-        source: "GB/T 3478.1 基本齿廓",
+        formula_key: "gui.gb.col.alpha.formula",
+        source_key: "gui.gb.col.alpha.source",
     },
     SplineColumnSpec {
         tag: "(内)齿数",
-        label: "齿数",
+        label_key: "gui.gb.col.teeth.label",
+        symbol: "",
         unit: "",
-        formula: "由九字段齿形表达式反解（MARK KIND M Z ALPHA X DA DF BETA H；轴/齿轮生成器 GUI 可复制）",
-        source: "手填 / 图纸继承",
+        formula_key: "gui.gb.col.teeth.formula",
+        source_key: "gui.gb.col.teeth.source",
     },
     SplineColumnSpec {
         tag: "(内)模数",
-        label: "模数",
+        label_key: "gui.gb.col.module.label",
+        symbol: "",
         unit: "mm",
-        formula: "由九字段齿形表达式反解（MARK KIND M Z ALPHA X DA DF BETA H；轴/齿轮生成器 GUI 可复制）",
-        source: "手填 / 图纸继承",
+        formula_key: "gui.gb.col.teeth.formula",
+        source_key: "gui.gb.col.teeth.source",
     },
     SplineColumnSpec {
         tag: "(内)公差等级和配合类别",
-        label: "公差等级和配合类别",
+        label_key: "gui.gb.col.grade_fit.label",
+        symbol: "",
         unit: "",
-        formula: "等级 4/5/6/7（表 7~21 的 (T+λ) 系数 10/16/25/40）；内花键恒为基孔制 H",
-        source: "GB/T 3478.1 §8.7、表 23",
+        formula_key: "gui.gb.col.grade_fit.formula",
+        source_key: "gui.gb.col.grade_fit.source",
     },
     SplineColumnSpec {
         tag: "(内)大径",
-        label: "大径 Dei",
+        label_key: "gui.gb.col.major_dia.label", symbol: "Dei",
         unit: "mm",
-        formula: "Dei = m(z+1.5) 30°平 / m(z+1.8) 30°圆 / m(z+1.4) 37.5° / m(z+1.2) 45°",
-        source: "GB/T 3478.1 表 3",
+        formula_key: "gui.gb.col.major_dia.formula",
+        source_key: "gui.gb.col.major_dia.source",
     },
     SplineColumnSpec {
         tag: "(内)渐开线终止圆直径最大值",
-        label: "渐开线终止圆直径最大值 D_Fimin",
+        label_key: "gui.gb.col.form_dia_max.label", symbol: "D_Fimin",
         unit: "mm",
-        formula: "D_Fimin = m(z+1)/(z+0.9)/(z+0.8) + 2CF，CF = 0.1m（表 3 注 4：非 H/h 有变化，标准全 70 页未列值）",
-        source: "GB/T 3478.1 表 3 与注 4（全文档无 CF 变化值表）",
+        formula_key: "gui.gb.col.form_dia_max.formula",
+        source_key: "gui.gb.col.form_dia_max.source",
     },
     SplineColumnSpec {
         tag: "(内)小径",
-        label: "小径 Dii",
+        label_key: "gui.gb.col.minor_dia.label", symbol: "Dii",
         unit: "mm",
-        formula: "Dii = D_Femax(H/h) + 2CF（表 3 注 2）；D_Femax 按表 3 注 3（h_s 见图 2）",
-        source: "GB/T 3478.1 表 3 注 2/注 3",
+        formula_key: "gui.gb.col.minor_dia.formula",
+        source_key: "gui.gb.col.minor_dia.source",
     },
     SplineColumnSpec {
         tag: "(内)测量跨棒距",
-        label: "测量跨棒距 Md",
+        label_key: "gui.gb.col.over_pins_md.label", symbol: "Md",
         unit: "mm",
-        formula: "偶齿 M = Db/cosαi ∓ Dp；奇齿再乘 cos(90°/z)；αi 由 E/D + invαD − Dp/Db 反解",
-        source: "GB/T 3478.6 式(2)~(5)",
+        formula_key: "gui.gb.col.over_pins_md.formula",
+        source_key: "gui.gb.col.over_pins_md.source",
     },
     SplineColumnSpec {
         tag: "(内)量棒直径",
-        label: "量棒直径 Dp",
+        label_key: "gui.gb.col.pin_dia_dp.label", symbol: "Dp",
         unit: "mm",
-        formula: "D'_Ri = Db[tanαci − tan(αci − E_max/D + invαci − invαD)]，再按 R40 取最接近较大值",
-        source: "GB/T 3478.6 式(1)、GB/T 3478.9 表 1",
+        formula_key: "gui.gb.col.pin_dia_dp.formula",
+        source_key: "gui.gb.col.pin_dia_dp.source",
     },
     SplineColumnSpec {
         tag: "(内)作用齿槽宽最小值",
-        label: "作用齿槽宽最小值",
+        label_key: "gui.gb.col.space_width_min.label",
+        symbol: "",
         unit: "mm",
-        formula: "基本齿槽宽 E = 0.5πm（模板该列口径；与按 λ 修正的 E_min 分开）",
-        source: "GB/T 3478.1 表 3",
+        formula_key: "gui.gb.col.space_width_min.formula",
+        source_key: "gui.gb.col.major_dia.source",
     },
     SplineColumnSpec {
         tag: "(内)实际齿槽宽最大值",
-        label: "实际齿槽宽最大值",
+        label_key: "gui.gb.col.space_width_max.label",
+        symbol: "",
         unit: "mm",
-        formula: "E max = E + (T+λ)；(T+λ) = 10/16/25/40·i_d + 40/64/100/160·i_E（4/5/6/7 级）",
-        source: "GB/T 3478.1 §8.1、表 7~21",
+        formula_key: "gui.gb.col.space_width_max.formula",
+        source_key: "gui.gb.col.space_width_max.source",
     },
     SplineColumnSpec {
         tag: "(内)齿根圆最小曲率半径",
-        label: "齿根圆最小曲率半径 R_imin",
+        label_key: "gui.gb.col.root_fillet_radius.label", symbol: "R_imin",
         unit: "mm",
-        formula: "卡面 = 表 26（GB/T 3478.1 书页 50）该模数档表值；表 26 未列值（如 m=0.25 的 30°平/30°圆/37.5°）→「—」。计算口径 = 图 2 系数式 R_imin = 0.2m 30°平 / 0.4m 30°圆 / 0.3m 37.5° / 0.25m 45°（性质：内部/报告对照，不直接上卡面；有值格与表值一致）",
-        source: "GB/T 3478.1-2008 表 26（书页 50）逐格核对；图 2 系数式作计算口径",
+        formula_key: "gui.gb.col.root_fillet_radius.formula",
+        source_key: "gui.gb.col.root_fillet_radius.source",
     },
     SplineColumnSpec {
         tag: "(内)齿形公差",
-        label: "齿形公差 Ff",
+        label_key: "gui.gb.col.profile_tol.label", symbol: "Ff",
         unit: "μm",
-        formula: "Fα = aφ1 + b，φ1 = m + 0.0125mz（4/5/6/7 级系数 1.6/2.5/4/6.3、10/16/25/40）",
-        source: "GB/T 3478.1 §8.3、表 7~21",
+        formula_key: "gui.gb.col.profile_tol.formula",
+        source_key: "gui.gb.col.profile_tol.source",
     },
     SplineColumnSpec {
         tag: "(内)齿距累计公差",
-        label: "齿距累计公差 Fp",
+        label_key: "gui.gb.col.pitch_cum_tol.label", symbol: "Fp",
         unit: "μm",
-        formula: "Fp = a√L + b，L = πmz/2（4/5/6/7 级系数 2.5/3.55/5/7.1、6.3/9/12.5/18）",
-        source: "GB/T 3478.1 §8.2、表 7~21",
+        formula_key: "gui.gb.col.pitch_cum_tol.formula",
+        source_key: "gui.gb.col.pitch_cum_tol.source",
     },
     SplineColumnSpec {
         tag: "(内)综合公差",
-        label: "综合公差 λ",
+        label_key: "gui.gb.col.total_composite.label", symbol: "λ",
         unit: "μm",
-        formula: "λ = 0.6√(Fp²+Fα²+Fβ²)，用未修约的 F 值",
-        source: "GB/T 3478.1 §8.6",
+        formula_key: "gui.gb.col.total_composite.formula",
+        source_key: "gui.gb.col.total_composite.source",
     },
     SplineColumnSpec {
         tag: "(内)小径.下公差",
-        label: "小径下公差",
+        label_key: "gui.gb.col.minor_dia_down.label",
+        symbol: "",
         unit: "mm",
-        formula: "Dii 用 H10/H11/H12（模数档 0.25~0.75 / 1~1.75 / 2~10），下偏差 0",
-        source: "GB/T 3478.1 表 25、GB/T 1800",
+        formula_key: "gui.gb.col.minor_dia_down.formula",
+        source_key: "gui.gb.col.minor_dia_down.source",
     },
     SplineColumnSpec {
         tag: "(内)小径.上公差",
-        label: "小径上公差",
+        label_key: "gui.gb.col.minor_dia_up.label",
+        symbol: "",
         unit: "mm",
-        formula: "+IT10/IT11/IT12（模数档同上）；表 25 原页 Dii 列为图片，已核对为 +IT/0",
-        source: "GB/T 3478.1 表 25",
+        formula_key: "gui.gb.col.minor_dia_up.formula",
+        source_key: "gui.gb.col.minor_dia_up.source",
     },
     SplineColumnSpec {
         tag: "(内)测量跨棒距.下公差",
-        label: "测量跨棒距下公差",
+        label_key: "gui.gb.col.over_pins_down.label",
+        symbol: "",
         unit: "mm",
-        formula: "M_min − M_mid（E_min = E + λ 一侧）",
-        source: "GB/T 3478.6 式(2)~(5)",
+        formula_key: "gui.gb.col.over_pins_down.formula",
+        source_key: "gui.gb.col.over_pins_md.source",
     },
     SplineColumnSpec {
         tag: "(内)测量跨棒距.上公差",
-        label: "测量跨棒距上公差",
+        label_key: "gui.gb.col.over_pins_up.label",
+        symbol: "",
         unit: "mm",
-        formula: "M_max − M_mid（E_max = E + (T+λ) 一侧）",
-        source: "GB/T 3478.6 式(2)~(5)",
+        formula_key: "gui.gb.col.over_pins_up.formula",
+        source_key: "gui.gb.col.over_pins_md.source",
     },
     SplineColumnSpec {
         tag: "(内)大径.下公差",
-        label: "大径下公差",
+        label_key: "gui.gb.col.major_dia_down.label",
+        symbol: "",
         unit: "mm",
-        formula: "基孔制 H：下偏差 0",
-        source: "GB/T 3478.1 表 25",
+        formula_key: "gui.gb.col.major_dia_down.formula",
+        source_key: "gui.gb.col.minor_dia_up.source",
     },
     SplineColumnSpec {
         tag: "(内)大径.上公差",
-        label: "大径上公差",
+        label_key: "gui.gb.col.major_dia_up.label",
+        symbol: "",
         unit: "mm",
-        formula: "Dei 用 IT12/IT13/IT14（模数档 0.25~0.75 / 1~1.75 / 2~10）",
-        source: "GB/T 3478.1 表 25、GB/T 1800",
+        formula_key: "gui.gb.col.major_dia_up.formula",
+        source_key: "gui.gb.col.minor_dia_down.source",
     },
 ];
 
 const EXTERNAL_COLUMNS: &[SplineColumnSpec] = &[
     SplineColumnSpec {
         tag: "(外)齿形角",
-        label: "齿形角",
+        label_key: "gui.gb.col.alpha.label",
+        symbol: "",
         unit: "°",
-        formula: "GB/T 3478.1 基本齿廓：αD = 30° / 37.5° / 45°（本页所选值）",
-        source: "GB/T 3478.1 基本齿廓",
+        formula_key: "gui.gb.col.alpha.formula",
+        source_key: "gui.gb.col.alpha.source",
     },
     SplineColumnSpec {
         tag: "(外)齿数",
-        label: "齿数",
+        label_key: "gui.gb.col.teeth.label",
+        symbol: "",
         unit: "",
-        formula: "由九字段齿形表达式反解（MARK KIND M Z ALPHA X DA DF BETA H；轴/齿轮生成器 GUI 可复制）",
-        source: "手填 / 图纸继承",
+        formula_key: "gui.gb.col.teeth.formula",
+        source_key: "gui.gb.col.teeth.source",
     },
     SplineColumnSpec {
         tag: "(外)模数",
-        label: "模数",
+        label_key: "gui.gb.col.module.label",
+        symbol: "",
         unit: "mm",
-        formula: "由九字段齿形表达式反解（MARK KIND M Z ALPHA X DA DF BETA H；轴/齿轮生成器 GUI 可复制）",
-        source: "手填 / 图纸继承",
+        formula_key: "gui.gb.col.teeth.formula",
+        source_key: "gui.gb.col.teeth.source",
     },
     SplineColumnSpec {
         tag: "(外)公差等级和配合类别",
-        label: "公差等级和配合类别",
+        label_key: "gui.gb.col.grade_fit.label",
+        symbol: "",
         unit: "",
-        formula: "等级 4/5/6/7；基本偏差 h/js/k/d/e/f（与内花键 H 相配）",
-        source: "GB/T 3478.1 §8.7.2、表 23/24",
+        formula_key: "gui.gb.col.ext_grade_fit.formula",
+        source_key: "gui.gb.col.ext_grade_fit.source",
     },
     SplineColumnSpec {
         tag: "(外)大径",
-        label: "大径 Dee",
+        label_key: "gui.gb.col.major_dia.label", symbol: "Dee",
         unit: "mm",
-        formula: "Dee = m(z+1) 30° / m(z+0.9) 37.5° / m(z+0.8) 45°",
-        source: "GB/T 3478.1 表 3",
+        formula_key: "gui.gb.col.ext_major_dia.formula",
+        source_key: "gui.gb.col.major_dia.source",
     },
     SplineColumnSpec {
         tag: "(外)渐开线终止圆直径最大值",
-        label: "渐开线终止圆直径最大值 D_Femax",
+        label_key: "gui.gb.col.form_dia_max.label", symbol: "D_Femax",
         unit: "mm",
-        formula: "D_Femax 按表 3 注 3（h_s 见图 2；含 esv 修正）",
-        source: "GB/T 3478.1 表 3 注 3",
+        formula_key: "gui.gb.col.ext_form_dia_max.formula",
+        source_key: "gui.gb.col.ext_form_dia_max.source",
     },
     SplineColumnSpec {
         tag: "(外)小径",
-        label: "小径 Die",
+        label_key: "gui.gb.col.minor_dia.label", symbol: "Die",
         unit: "mm",
-        formula: "Die = m(z−1.5) 30°平 / m(z−1.8) 30°圆 / m(z−1.4) 37.5° / m(z−1.2) 45°",
-        source: "GB/T 3478.1 表 3",
+        formula_key: "gui.gb.col.ext_minor_dia.formula",
+        source_key: "gui.gb.col.major_dia.source",
     },
     SplineColumnSpec {
         tag: "(外)公法线长度",
-        label: "公法线长度 Wn",
+        label_key: "gui.gb.col.base_tangent.label", symbol: "Wn",
         unit: "mm",
-        formula: "W_min = cosαD[(K−0.5)πm + D·invαD + esv − (T+λ)]；W_mid = (W_min+W_max)/2",
-        source: "GB/T 3478.6 式(11)(12)",
+        formula_key: "gui.gb.col.base_tangent.formula",
+        source_key: "gui.gb.col.base_tangent.source",
     },
     SplineColumnSpec {
         tag: "(外)跨测齿数",
-        label: "跨测齿数 Kn",
+        label_key: "gui.gb.col.span_teeth.label", symbol: "Kn",
         unit: "",
-        formula: "K = z/6 + 0.5 取整数",
-        source: "GB/T 3478.6 式(11) 注",
+        formula_key: "gui.gb.col.span_teeth.formula",
+        source_key: "gui.gb.col.span_teeth.source",
     },
     SplineColumnSpec {
         tag: "(外)实际齿厚最小值",
-        label: "实际齿厚最小值",
+        label_key: "gui.gb.col.thickness_min.label",
+        symbol: "",
         unit: "mm",
-        formula: "S_min = S_v max − (T+λ)，S_v max = S + esv",
-        source: "GB/T 3478.1 §8.7、表 23",
+        formula_key: "gui.gb.col.thickness_min.formula",
+        source_key: "gui.gb.col.grade_fit.source",
     },
     SplineColumnSpec {
         tag: "(外)作用齿厚最大值",
-        label: "作用齿厚最大值",
+        label_key: "gui.gb.col.thickness_max.label",
+        symbol: "",
         unit: "mm",
-        formula: "S_v max = S + esv，基本齿厚 S = 0.5πm",
-        source: "GB/T 3478.1 表 3、表 23",
+        formula_key: "gui.gb.col.thickness_max.formula",
+        source_key: "gui.gb.col.thickness_max.source",
     },
     SplineColumnSpec {
         tag: "(外)齿根圆最小曲率半径",
-        label: "齿根圆最小曲率半径 R_imin",
+        label_key: "gui.gb.col.root_fillet_radius.label", symbol: "R_imin",
         unit: "mm",
-        formula: "卡面 = 表 26（GB/T 3478.1 书页 50）该模数档表值；表 26 未列值（如 m=0.25 的 30°平/30°圆/37.5°）→「—」。计算口径 = 图 2 系数式 R_imin = 0.2m 30°平 / 0.4m 30°圆 / 0.3m 37.5° / 0.25m 45°（性质：内部/报告对照，不直接上卡面；有值格与表值一致）",
-        source: "GB/T 3478.1-2008 表 26（书页 50）逐格核对；图 2 系数式作计算口径",
+        formula_key: "gui.gb.col.root_fillet_radius.formula",
+        source_key: "gui.gb.col.root_fillet_radius.source",
     },
     SplineColumnSpec {
         tag: "(外)齿形公差",
-        label: "齿形公差 Ff",
+        label_key: "gui.gb.col.profile_tol.label", symbol: "Ff",
         unit: "μm",
-        formula: "Fα = aφ1 + b，φ1 = m + 0.0125mz（4/5/6/7 级系数 1.6/2.5/4/6.3、10/16/25/40）",
-        source: "GB/T 3478.1 §8.3、表 7~21",
+        formula_key: "gui.gb.col.profile_tol.formula",
+        source_key: "gui.gb.col.profile_tol.source",
     },
     SplineColumnSpec {
         tag: "(外)齿距累计公差",
-        label: "齿距累计公差 Fp",
+        label_key: "gui.gb.col.pitch_cum_tol.label", symbol: "Fp",
         unit: "μm",
-        formula: "Fp = a√L + b，L = πmz/2（4/5/6/7 级系数 2.5/3.55/5/7.1、6.3/9/12.5/18）",
-        source: "GB/T 3478.1 §8.2、表 7~21",
+        formula_key: "gui.gb.col.pitch_cum_tol.formula",
+        source_key: "gui.gb.col.pitch_cum_tol.source",
     },
     SplineColumnSpec {
         tag: "(外)综合公差",
-        label: "综合公差 λ",
+        label_key: "gui.gb.col.total_composite.label", symbol: "λ",
         unit: "μm",
-        formula: "λ = 0.6√(Fp²+Fα²+Fβ²)，用未修约的 F 值",
-        source: "GB/T 3478.1 §8.6",
+        formula_key: "gui.gb.col.total_composite.formula",
+        source_key: "gui.gb.col.total_composite.source",
     },
     SplineColumnSpec {
         tag: "(外)小径.下公差",
-        label: "小径下公差",
+        label_key: "gui.gb.col.minor_dia_down.label",
+        symbol: "",
         unit: "mm",
-        formula: "esv/tanαD − IT（Die 公差用 IT12/IT13/IT14，模数档 0.25~0.75 / 1~1.75 / 2~10）",
-        source: "GB/T 3478.1 表 24、表 25",
+        formula_key: "gui.gb.col.ext_minor_dia_down.formula",
+        source_key: "gui.gb.col.ext_minor_dia_down.source",
     },
     SplineColumnSpec {
         tag: "(外)小径.上公差",
-        label: "小径上公差",
+        label_key: "gui.gb.col.minor_dia_up.label",
+        symbol: "",
         unit: "mm",
-        formula: "esv/tanαD；d/e/f 查表 24、h=0、js=+(T+λ)/(2tanαD)、k=+(T+λ)/tanαD",
-        source: "GB/T 3478.1 表 24",
+        formula_key: "gui.gb.col.ext_minor_dia_up.formula",
+        source_key: "gui.gb.col.ext_minor_dia_up.source",
     },
     SplineColumnSpec {
         tag: "(外)公法线长度.下公差",
-        label: "公法线长度下公差",
+        label_key: "gui.gb.col.base_tangent_down.label",
+        symbol: "",
         unit: "mm",
-        formula: "W_min − W_mid",
-        source: "GB/T 3478.6 式(11)(12)",
+        formula_key: "gui.gb.col.base_tangent_down.formula",
+        source_key: "gui.gb.col.base_tangent.source",
     },
     SplineColumnSpec {
         tag: "(外)公法线长度.上公差",
-        label: "公法线长度上公差",
+        label_key: "gui.gb.col.base_tangent_up.label",
+        symbol: "",
         unit: "mm",
-        formula: "W_max − W_mid，W_max = W_min + T·cosαD",
-        source: "GB/T 3478.6 式(12)",
+        formula_key: "gui.gb.col.base_tangent_up.formula",
+        source_key: "gui.gb.col.base_tangent_up.source",
     },
     SplineColumnSpec {
         tag: "(外)大径.下公差",
-        label: "大径下公差",
+        label_key: "gui.gb.col.major_dia_down.label",
+        symbol: "",
         unit: "mm",
-        formula: "Dee 用 IT12/IT13/IT14（模数档 0.25~0.75 / 1~1.75 / 2~10）",
-        source: "GB/T 3478.1 表 25、GB/T 1800",
+        formula_key: "gui.gb.col.ext_major_dia_down.formula",
+        source_key: "gui.gb.col.minor_dia_down.source",
     },
     SplineColumnSpec {
         tag: "(外)大径.上公差",
-        label: "大径上公差",
+        label_key: "gui.gb.col.major_dia_up.label",
+        symbol: "",
         unit: "mm",
-        formula: "Dee 上偏差取 0",
-        source: "GB/T 3478.1 表 24 脚注①",
+        formula_key: "gui.gb.col.ext_major_dia_up.formula",
+        source_key: "gui.gb.col.major_dia_up.source",
     },
 ];
 
 const GB_INT: SplineSideSpec = SplineSideSpec {
     id: "int",
-    label: "内花键",
-    title: "内花键（基孔制 H）：参数表含量棒直径 Dp 与测量跨棒距 Md",
+    label_key: "gui.gb.side.int.label",
+    title_key: "gui.gb.side.int.title",
     grades: GB_GRADES,
-    grade_note: "公差等级 4/5/6/7：等级越高公差越小；(T+λ) 系数 10/16/25/40、\
-                 i_E/i_d 同 GB/T 3478.1 §8.1（表 7~21）",
-    alpha_note: "压力角 αD = 30° / 37.5° / 45°（基本齿廓）；invαD = 0.0537515 / 0.1128285 / 0.2146018",
+    grade_note_key: "gui.gb.side.int.grade_note",
+    alpha_note_key: "gui.gb.side.int.alpha_note",
     roots: GB_ROOTS,
     alphas: GB_ALPHAS,
     pin: Some(PIN_INTERNAL),
@@ -473,12 +572,11 @@ const GB_INT: SplineSideSpec = SplineSideSpec {
 
 const GB_EXT: SplineSideSpec = SplineSideSpec {
     id: "ext",
-    label: "外花键",
-    title: "外花键：基本偏差 d/e/f/h/js/k 与内花键 H 相配；参数表按 GB/T 3478.1 出公法线长度 Wn / 跨测齿数 Kn",
+    label_key: "gui.gb.side.ext.label",
+    title_key: "gui.gb.side.ext.title",
     grades: GB_GRADES,
-    grade_note: "公差等级 4/5/6/7：等级越高公差越小；(T+λ) 系数 10/16/25/40、\
-                 i_S/i_d 同 GB/T 3478.1 §8.1（表 7~21）",
-    alpha_note: "压力角 αD = 30° / 37.5° / 45°（基本齿廓）；invαD = 0.0537515 / 0.1128285 / 0.2146018",
+    grade_note_key: "gui.gb.side.ext.grade_note",
+    alpha_note_key: "gui.gb.side.ext.alpha_note",
     roots: GB_ROOTS,
     alphas: GB_ALPHAS,
     // 外花键：公法线长度 Wn / 跨测齿数 Kn 为主；量棒跨棒距 M_Re 备用（用户 2026-09-27 点单，
@@ -492,11 +590,10 @@ const GB_SIDES: &[SplineSideSpec] = &[GB_INT, GB_EXT];
 const GB_SYSTEM: SplineSystemSpec = SplineSystemSpec {
     id: "gb3478",
     aliases: &["gb", "GB", "GB3478"],
-    label: "GB/T 3478.1-2008 渐开线花键（GB）",
+    label_key: "gui.gb.sys.label",
     standard: "GB/T 3478.1 / .6 / .7 / .8 / .9-2008",
-    note: "本期只实现 GB 体系；口径与数据见 assets/spline_gb3478_*.csv 的 source/note。\
-           以后加 ANSI / NF = 本表加数据行 + 引擎补口径。",
-    x_note: "GB/T 3478.1 基本齿廓不含变位系数 x；x 仅记录（从 GEAR / 轴块继承时带回）",
+    note_key: "gui.gb.sys.note",
+    x_note_key: "gui.gb.sys.x_note",
     sides: GB_SIDES,
 };
 
@@ -539,11 +636,11 @@ pub(crate) fn side_id(side: SplineSide) -> &'static str {
     }
 }
 
-pub(crate) fn side_label(side: SplineSide) -> &'static str {
-    match side {
-        SplineSide::Internal => "内花键",
-        SplineSide::External => "外花键",
-    }
+pub(crate) fn side_label(side: SplineSide) -> String {
+    crate::i18n::t(match side {
+        SplineSide::Internal => "card.gb.side.int",
+        SplineSide::External => "card.gb.side.ext",
+    })
 }
 
 /// 公差行 → 对应主值 tag（口径：`X.下公差`/`X.上公差` 的主值就是同前缀的 `X`）。
@@ -577,9 +674,9 @@ fn fits_json(side: SplineSide) -> Result<Vec<serde_json::Value>, String> {
         SplineSide::Internal => Ok(vec![serde_json::json!({
             "fit": "H",
             "code": "H",
-            "label": "H（内花键基孔制）",
+            "label": crate::i18n::t("gui.gb.fit.int.label"),
             "preferred_45": true,
-            "memo": "内花键恒 H；与外花键基本偏差 d/e/f/h/js/k 形成配合",
+            "memo": crate::i18n::t("gui.gb.fit.int.memo"),
         })]),
         SplineSide::External => Ok(crate::spline_tol::fit_rows()?
             .into_iter()
@@ -616,21 +713,21 @@ pub fn options_json() -> Result<serde_json::Value, String> {
                         .map(|r| {
                             serde_json::json!({
                                 "key": r.key,
-                                "label": r.label,
+                                "label": r.label(),
                                 "alphas": r.alphas.iter().map(|a| a.deg()).collect::<Vec<f64>>(),
-                                "note": r.note,
+                                "note": r.note(),
                             })
                         })
                         .collect();
                     let pin = match &s.pin {
                         Some(p) => serde_json::json!({
                             "applicable": true,
-                            "label": p.label,
-                            "dp_label": p.dp_label,
-                            "md_label": p.md_label,
-                            "formula": p.formula,
-                            "md_formula": p.md_formula,
-                            "standard": p.standard,
+                            "label": p.label(),
+                            "dp_label": p.dp_label(),
+                            "md_label": p.md_label(),
+                            "formula": p.formula(),
+                            "md_formula": p.md_formula(),
+                            "standard": p.standard(),
                         }),
                         None => serde_json::json!({ "applicable": false }),
                     };
@@ -640,19 +737,19 @@ pub fn options_json() -> Result<serde_json::Value, String> {
                         .map(|c| {
                             serde_json::json!({
                                 "tag": c.tag,
-                                "label": c.label,
+                                "label": c.label(),
                                 "unit": c.unit,
-                                "formula": c.formula,
-                                "source": c.source,
+                                "formula": c.formula(),
+                                "source": c.source(),
                             })
                         })
                         .collect();
                     Ok(serde_json::json!({
                         "id": s.id,
-                        "label": s.label,
-                        "title": s.title,
-                        "grade_note": s.grade_note,
-                        "alpha_note": s.alpha_note,
+                        "label": s.label(),
+                        "title": s.title(),
+                        "grade_note": s.grade_note(),
+                        "alpha_note": s.alpha_note(),
                         "grades": s.grades,
                         "fits": fits_json(side)?,
                         "roots": roots,
@@ -665,10 +762,10 @@ pub fn options_json() -> Result<serde_json::Value, String> {
             Ok(serde_json::json!({
                 "id": sys.id,
                 "aliases": sys.aliases,
-                "label": sys.label,
+                "label": sys.label(),
                 "standard": sys.standard,
-                "note": sys.note,
-                "x_note": sys.x_note,
+                "note": sys.note(),
+                "x_note": sys.x_note(),
                 "sides": sides?,
             }))
         })
@@ -685,11 +782,11 @@ pub fn options_json() -> Result<serde_json::Value, String> {
         "nf_ext_card": crate::nf_ext_table::options_json(),
         "din_card": crate::din_table::options_json(),
         "pin_series": crate::spline_tol::pin_series()?,
-        "pin_series_note": "GB/T 3478.9-2008 表 1（67 档，R40；极限偏差 ±0.001 mm）",
+        "pin_series_note": crate::i18n::t("gui.gb.pin_series_note"),
         "info_layers": {
-            "guide": "常显只放操作引导",
-            "title": "公式/口径/来源一律进原生 title=",
-            "dynamic": "异常与需手填只在出现时显示",
+            "guide": crate::i18n::t("gui.gb.info.guide"),
+            "title": crate::i18n::t("gui.gb.info.title"),
+            "dynamic": crate::i18n::t("gui.gb.info.dynamic"),
         },
     }))
 }
@@ -806,7 +903,7 @@ impl SplineTableModel {
             return Err(format!(
                 "花键参数表：公差等级「{}」不在 {} 可选项（{}）",
                 self.grade,
-                side_spec.label,
+                side_spec.label(),
                 side_spec
                     .grades
                     .iter()
@@ -820,7 +917,7 @@ impl SplineTableModel {
         if !side_spec.alphas.contains(&alpha) {
             return Err(format!(
                 "花键参数表：压力角 {}° 不在 {} 可选项（30/37.5/45；见 /api/spline_options）",
-                gear.alpha_deg, side_spec.label
+                gear.alpha_deg, side_spec.label()
             ));
         }
         if !gear.m.is_finite() || !(0.25..=10.0).contains(&gear.m) {
@@ -848,13 +945,13 @@ impl SplineTableModel {
                 format!(
                     "花键参数表：齿根形式「{}」不在 {} 可选项",
                     root_id(root),
-                    side_spec.label
+                    side_spec.label()
                 )
             })?;
         if !root_spec.alphas.contains(&alpha) {
             return Err(format!(
                 "花键参数表：{} 不适用于压力角 {}°（见表选项 note）",
-                root_spec.label,
+                root_spec.label(),
                 gear.alpha_deg
             ));
         }
@@ -904,11 +1001,11 @@ pub fn items_json(side: SplineSide, table: &SplineTable) -> Result<Vec<serde_jso
             .ok_or_else(|| format!("花键参数表：选项表 tag「{}」没有取值映射", c.tag))?;
         out.push(serde_json::json!({
             "tag": c.tag,
-            "label": c.label,
+            "label": c.label(),
             "unit": c.unit,
             "value": value,
-            "formula": c.formula,
-            "source": c.source,
+            "formula": c.formula(),
+            "source": c.source(),
         }));
     }
     Ok(out)
@@ -928,7 +1025,7 @@ fn dp_json(side: SplineSide, table: &SplineTable) -> serde_json::Value {
         (_, _, None) => {
             return serde_json::json!({
                 "applicable": false,
-                "reason": "该方向的参数表不含量棒/跨棒距面板",
+                "reason": crate::i18n::t("gui.gb.pin.not_applicable"),
             })
         }
         _ => return serde_json::json!({ "applicable": false }),
@@ -943,9 +1040,9 @@ fn dp_json(side: SplineSide, table: &SplineTable) -> serde_json::Value {
             .partial_cmp(&(b - dp_calc).abs())
             .unwrap_or(std::cmp::Ordering::Equal)
     });
-    let mut choices: Vec<(f64, &'static str, bool)> = Vec::new();
+    let mut choices: Vec<(f64, String, bool)> = Vec::new();
     if let Some(a) = auto {
-        choices.push((a, "标准解", true));
+        choices.push((a, crate::i18n::t("gui.gb.pin.tag_standard"), true));
     }
     for v in nearest {
         if choices.len() >= 4 {
@@ -954,18 +1051,18 @@ fn dp_json(side: SplineSide, table: &SplineTable) -> serde_json::Value {
         if choices.iter().any(|(x, _, _)| (x - v).abs() < 1e-9) {
             continue;
         }
-        choices.push((v, "备选", false));
+        choices.push((v, crate::i18n::t("gui.gb.pin.tag_alt"), false));
     }
     choices.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
     let manual = auto.map(|a| (a - current).abs() > 1e-9).unwrap_or(true);
     serde_json::json!({
         "applicable": true,
-        "label": pin.label,
-        "dp_label": pin.dp_label,
-        "md_label": pin.md_label,
-        "formula": pin.formula,
-        "md_formula": pin.md_formula,
-        "standard": pin.standard,
+        "label": pin.label(),
+        "dp_label": pin.dp_label(),
+        "md_label": pin.md_label(),
+        "formula": pin.formula(),
+        "md_formula": pin.md_formula(),
+        "standard": pin.standard(),
         "current": current,
         "auto": auto,
         "calc": dp_calc,
@@ -1136,11 +1233,11 @@ mod tests {
                 spec.columns.len(),
                 attdefs.len(),
                 "{} 选项表列数应 = ATTDEF 数",
-                spec.label
+                spec.label()
             );
             for (i, (c, ad)) in spec.columns.iter().zip(attdefs.iter()).enumerate() {
-                assert_eq!(c.tag, ad.tag, "{} 第 {} 项 tag 应一致", spec.label, i + 1);
-                assert!(!c.label.is_empty() && !c.formula.is_empty() && !c.source.is_empty());
+                assert_eq!(c.tag, ad.tag, "{} 第 {} 项 tag 应一致", spec.label(), i + 1);
+                assert!(!c.label().is_empty() && !c.formula().is_empty() && !c.source().is_empty());
             }
             // 插入后用 items_json 组装时，21 个值必须都非空。
             let input = tmodel(side_id(side)).to_input().unwrap();
