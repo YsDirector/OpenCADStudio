@@ -2386,6 +2386,25 @@ mod tests {
                 .collect()
         };
         assert_eq!(ids(&zh), ids(&en));
+        // ⑥ 收尾：`spline_engine` 引擎说明串（source/din_notes/nf_notes/ansi_notes）随语言，
+        // 协议/数据记号（标准代号、行数、文件名、公式符号）两语一致。
+        for f in ["source", "din_notes", "nf_notes", "ansi_notes"] {
+            let z = zh["spline_engine"][f].as_str().unwrap_or_default();
+            let e = en["spline_engine"][f].as_str().unwrap_or_default();
+            assert!(!z.is_empty() && !e.is_empty(), "spline_engine.{f} 空：{z:?} / {e:?}");
+            assert_ne!(z, e, "spline_engine.{f} 未随语言：{z:?}");
+            assert!(!has_cjk(e), "spline_engine.{f} 英文里仍含汉字：{e:?}");
+        }
+        let esrc = en["spline_engine"]["source"].as_str().unwrap_or_default();
+        assert!(
+            esrc.contains("GB/T 3478.1-2008") && esrc.contains("DIN 5480-1:2015"),
+            "spline_engine.source 丢了标准代号：{esrc}"
+        );
+        let ean = en["spline_engine"]["ansi_notes"].as_str().unwrap_or_default();
+        assert!(
+            ean.contains("assets/ansi_b921_notes.md") && ean.contains("m=25.4/P"),
+            "spline_engine.ansi_notes 丢了文件名/公式：{ean}"
+        );
         assert!(crate::i18n::missing_keys().is_empty(), "{:?}", crate::i18n::missing_keys());
     }
 

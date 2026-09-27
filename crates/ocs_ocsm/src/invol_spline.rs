@@ -1900,13 +1900,11 @@ pub fn catalog_payload() -> serde_json::Value {
         })
         .collect();
     serde_json::json!({
-        "source": format!(
-            "{}（图 2 基本齿廓 + 表 3~表 6）；{}（条 5.1：齿侧对中 h_fP=0.55m）；NF E22-141（中文译本 p18/p20/p21/p22，288 行：α=20°、A=m(N+2x+0.4)、D=A−2m）；ANSI B92.1-1970 (R1993)（公式驱动：径节 17 项 + Table 2 五列；D=N/P、Do=(N+1)/P、cF=0.001D 夹取）；DIN 5480-2 名义表（721 行；m=1.5/m=5 均由用户截图补入）+ 检验表（267 行；M₁/M₂/D_M/k/W_k）",
-            GB_CODE, DIN_CODE
-        ),
-        "din_notes": "DIN 5480-2 名义表：721 行；m=1.5（56 行）与 m=5（47 行）均由用户截图补入；x=(d_B−m(z+1.1))/(2m) 为反推关系（m=5 的 2 处 z 在解析期按代码修正表生效）。检验表：267 行（p12/16/18/20 + m=1.5/m=5 截图），6 档 0.5/0.75/0.8/1/1.5/5（m=5 的 17 处 k 同走代码修正表）；查表外 z 走公式（267 行逐行对照验证）",
-        "nf_notes": "NF E22-141：288 行（p18 拉削内花键 144 + p20 39 + p21 49 + p22 56）；A=m(N+2x+0.4)、D=A−2m、db=d·cos20°；17 处 OCR 错格走代码修正表（不改 CSV），9 行疑原表印误只标注；m=0.75/3.75/7.50 的次系列 x=0.633/0.967 交替是真实设计值",
-        "ansi_notes": "ANSI B92.1-1970 (R1993) 公式驱动：径节 17 项 + Table 2 五列（30°平/齿侧、30°平/外径、30°圆/齿侧、37.5°圆/齿侧、45°圆/齿侧）；D=N/P、Db=D·cosφD、p=π/P、Do=(N+1)/P、Dre 三段、Sv min 随 φD、cF=0.001D 夹取；rf 标准未给值（p14），引擎按切于齿根的过渡弧构造（无标准数值依据）；**标准为英制，引擎内部/输出统一 mm（m=25.4/P，cF 夹取 0.0508~0.254 mm）**；抽样 73 行复算见 assets/ansi_b921_notes.md",
+        // ⑥ 说明串随语言（协议/数据记号原样）；取词在 `i18n::cmd.invol.engine.*`。
+        "source": crate::i18n::t_fmt("cmd.invol.engine.source", &[("v0", GB_CODE), ("v1", DIN_CODE)]),
+        "din_notes": crate::i18n::t_static("cmd.invol.engine.din_notes"),
+        "nf_notes": crate::i18n::t_static("cmd.invol.engine.nf_notes"),
+        "ansi_notes": crate::i18n::t_static("cmd.invol.engine.ansi_notes"),
         "invol_presets": presets,
         "din_nominal": din_nominal,
         "din_inspection": din_inspection,
