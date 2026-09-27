@@ -2960,6 +2960,42 @@ pub const CATALOG: &[Msg] = &[
     Msg::new("card.ansi.lite.label.base_tangent", "公法线 W", "BASE TANG. W"),
     Msg::new("card.ansi.lite.label.span_teeth", "跨测齿数 K", "SPAN TEETH K"),
 
+    // ── 卡面标签：NF E22-141 花键参数表（内/外；`nf_table.rs` / `nf_ext_table.rs`）──
+    // ★ 本卡是「用户自定画法」同构镜像（NF 标准里没有参数表版面，§29 调研）⇒ 标签是中文自定
+    //   术语；英译贴工程惯例（量棒/跨棒距/公法线沿用 GB 卡既有译法；定心方式按 DIN/ISO 的
+    //   centering 口径），拿不准的两条（基准尺寸 / 加工方法）见 §33 报告供用户校。
+    // * **符号/标准号/值/块名/ATTDEF tag 原样**（`Az`/`Dee`/`D`/`Die`/`V`/`G`/`K`/`W`/`Do`/`m`/`z`/`a`）。
+    // * 标签里的符号**不进表**：卡面 = `t(key)` + `「 」+ symbol`（§31/§32「符号与译名分置」形态）。
+    Msg::new("card.nf.title.int", "内花键参数表", "Internal Spline Data"),
+    Msg::new("card.nf.title.ext", "外花键参数表", "External Spline Data"),
+    Msg::new("card.nf.label.standard", "执行标准", "Standard"),
+    Msg::new("card.nf.label.centering", "定心方式", "Centering"),
+    Msg::new("card.nf.label.module", "模数", "Module"),
+    Msg::new("card.nf.label.teeth", "齿数", "Number of teeth"),
+    Msg::new("card.nf.label.alpha", "压力角", "Pressure angle"),
+    Msg::new("card.nf.label.root_form", "齿根样式", "Root form"),
+    Msg::new("card.nf.label.machining", "加工方法", "Machining method"),
+    Msg::new("card.nf.label.major_dia", "大径", "Major diameter"),
+    Msg::new("card.nf.label.minor_dia", "小径", "Minor diameter"),
+    Msg::new("card.nf.label.base_size", "基准尺寸", "Basic size"),
+    Msg::new("card.nf.label.pin_dia", "量棒直径", "Pin diameter"),
+    Msg::new("card.nf.label.over_pins", "跨棒距", "Measurement over pins"),
+    Msg::new("card.nf.label.span_teeth", "跨测齿数", "Span teeth"),
+    Msg::new("card.nf.label.base_tangent", "公法线", "Base tangent length"),
+
+    // ── 卡面取值（枚举显示值随语言；NF E22-141 p04/p07/p18 口径）──
+    Msg::new("card.nf.centering.outer", "外径定心", "Major dia. centering"),
+    Msg::new("card.nf.centering.flank", "齿面定心", "Flank centering"),
+    Msg::new("card.nf.root.flat", "平齿根", "Flat root"),
+    Msg::new("card.nf.root.fillet", "圆齿根", "Fillet root"),
+    Msg::new("card.nf.machining.broach", "拉削", "Broaching"),
+    Msg::new("card.nf.machining.hob", "滚齿", "Hobbing"),
+
+    // ── 卡面标签：NF 花键参数表（精简两卡；`card_lite.rs` NF 族）──
+    // 行标签复用上面 `card.nf.label.*`（精简卡 zh 形态与全卡逐字相同），只有标题另立。
+    Msg::new("card.nf.lite.title.int", "NF 内花键参数表（精简）", "NF Internal Spline Data (Lite)"),
+    Msg::new("card.nf.lite.title.ext", "NF 外花键参数表（精简）", "NF External Spline Data (Lite)"),
+
     // ── 命令报错：五卡共用的九字段表达式解析（spline_table::parse_gear_expr）──
     Msg::new(
         "cmd.card.err.expr_missing",

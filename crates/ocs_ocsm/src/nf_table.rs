@@ -48,6 +48,21 @@
 //! `nf_e22141_check.csv`，逐行带 `source/flags`）；查不到就显示 `—` 并说明原因。
 //! `Az/D/Do` 是公式量（p04/p07），任何 `m/A` 都能给（与本卡的标准表口径不冲突）。
 //!
+//! # 卡面文字随语言（③ 卡面批；`i18n::lang()`）
+//!
+//! 标题 + 12 个标签 → catalog（`card.nf.title.*` / `card.nf.label.*`），**符号原样**：卡面 = 译名 +
+//! （符号非空时）`空格 + 符号`；定心方式/齿根样式/加工方法这类**枚举显示值**随语言（`card.nf.*`），
+//! 而**标准号 `NF E22-141`、数值、「—」、ATTDEF tag、块名一律原样**。
+//!
+//! ★ **标签行是 MTEXT，而 acadrust 的 `MText` 没有实体级 `width_factor`**（只有参考框宽
+//! `rectangle_width`，那是折行框不是字宽；宿主渲染 MTEXT 用**文字样式**的字宽，`OCSM_GB` = 0.7）。
+//! 英文标签天生比中文长（实测 `Number of teeth z` 真字体宽 291 vs 标签列 146），因此英文（及
+//! 模板自带偏窄的 `基准尺寸 Do`）按**内联字宽码** `\W<f>;` 逐条压缩（宿主 MTEXT 解析器支持，
+//! 见 `src/entities/text_support.rs` 的 `\W1.5;x` 用例）：有效字宽 = 0.7 × f。
+//! **不动坐标/字高/图层/对齐/列宽，也不动全局 `OCSM_GB` 样式**；元素清单照模板不变
+//! （66 线 + 13 MTEXT + 18 ATTDEF）。预算表见 [`label_inline_wf`]（脚本
+//! `~/桌面/OCSM/review/i18n_检查/card_nf_width_plan.py`，真字体 × 仓库两个保守模型取更紧、留 ≥3%）。
+//!
 //! 排版口径：主值最多 3 位小数（显示与内部计算分开）；值属性用**实体级**
 //! [`VALUE_WIDTH_FACTOR`] 压缩，保证值框不进公差格（几何回归见测试
 //! `nf_values_clear_tolerance_column`）。
@@ -164,23 +179,24 @@ pub(crate) const NF_LINES: &[([f64; 2], [f64; 2], &str)] = &[
     ([-167.6108213593015, -529.9008956621753], [0.0, -529.9008956621753], "1轮廓实线层"),
 ];
 
-/// 12 个内容行：`(标签, 值属性 tag, 行中心 y)`。
+/// 12 个内容行：`(标签 catalog key, 符号, 值属性 tag, 行中心 y)`。
 ///
 /// y = 模板各行带（13 行 = 标题 + 12 内容行）的垂直中心，与模板值 MTEXT 逐点一致；
 /// 标签 x 一律 [`LABEL_X`]（模板末行 `x=−444.95` 归位）。
-const NF_ROWS: &[(&str, &'static str, f64)] = &[
-    ("执行标准", "执行标准", -62.27581186329274),
-    ("定心方式", "定心方式", -102.8587392375943),
-    ("模数 m", "模数", -143.4416666118961),
-    ("齿数 z", "齿数", -184.0787951035162),
-    ("压力角 a", "压力角", -224.7701247124548),
-    ("齿根样式", "齿根样式", -265.4614543213933),
-    ("加工方法", "加工方法", -305.9901805783765),
-    ("大径 Az", "大径Az", -346.5189068353597),
-    ("小径 D", "小径D", -386.9934319750245),
-    ("基准尺寸 Do", "基准尺寸", -427.4679571146893),
-    ("量棒直径 V", "量棒直径V", -468.4844934275385),
-    ("跨棒距 G", "跨棒距G", -509.5552308577061),
+/// **标签 = 译名 + 「空格 + 符号」**（符号原样；`card.nf.label.*` 的 zh 值不含空格/符号 ⇒ 与模板逐字相同）。
+pub(crate) const NF_ROWS: &[(&str, &str, &'static str, f64)] = &[
+    ("card.nf.label.standard", "", "执行标准", -62.27581186329274),
+    ("card.nf.label.centering", "", "定心方式", -102.8587392375943),
+    ("card.nf.label.module", "m", "模数", -143.4416666118961),
+    ("card.nf.label.teeth", "z", "齿数", -184.0787951035162),
+    ("card.nf.label.alpha", "a", "压力角", -224.7701247124548),
+    ("card.nf.label.root_form", "", "齿根样式", -265.4614543213933),
+    ("card.nf.label.machining", "", "加工方法", -305.9901805783765),
+    ("card.nf.label.major_dia", "Az", "大径Az", -346.5189068353597),
+    ("card.nf.label.minor_dia", "D", "小径D", -386.9934319750245),
+    ("card.nf.label.base_size", "Do", "基准尺寸", -427.4679571146893),
+    ("card.nf.label.pin_dia", "V", "量棒直径V", -468.4844934275385),
+    ("card.nf.label.over_pins", "G", "跨棒距G", -509.5552308577061),
 ];
 
 /// 6 个公差洞位：`(tag, 插入 x, 基线 y)`，照模板 TEXT 逐点（字高 15、字宽 0.667）。
@@ -447,7 +463,53 @@ fn common_of(layer: &str) -> EntityCommon {
     c
 }
 
+/// 卡面取词：`card.` 前缀 = catalog key（按当前语言）；其余原样（符号/协议记号）。
+pub(crate) fn face_text(key: &str) -> String {
+    if key.starts_with("card.") {
+        crate::i18n::t(key)
+    } else {
+        key.to_string()
+    }
+}
+
+/// 卡面标签文字 = 译名 +（符号非空时）`空格 + 符号`；**符号两语原样**。
+pub(crate) fn face_label(key: &str, symbol: &str) -> String {
+    let text = face_text(key);
+    if symbol.is_empty() {
+        text
+    } else {
+        format!("{text} {symbol}")
+    }
+}
+
+/// 标签/标题 MTEXT 的**内联字宽因子表**（`\W<f>;`；有效字宽 = 0.7 × f）。
+///
+/// `None` = 不压缩（卡面文字与模板逐字相同）。数字来源：`card_nf_width_plan.py`
+/// （真字体 advance × cap 0.637 归一 / 仓库 `char_em` / 仓库 `char_em_ttf` **三模型取更紧者**，
+/// 再留 ≥3% 列内余量）；标签列可用 = `MID_X − LABEL_X − 0.5` = 145.73。
+/// 压缩只发生在**装不下的那一条**上（中文只有模板本就偏宽的 `基准尺寸 Do`），不动列宽/线位/样式。
+pub(crate) fn label_inline_wf(key: &str, lang: crate::i18n::Lang) -> Option<f64> {
+    use crate::i18n::Lang;
+    let table: &[(&str, f64, f64)] = &[
+        // (key, zh 的 W, en 的 W)；1.0 = 不压缩
+        ("card.nf.label.teeth", 1.0, 0.66),
+        ("card.nf.label.alpha", 1.0, 0.70),
+        ("card.nf.label.machining", 1.0, 0.62),
+        ("card.nf.label.major_dia", 1.0, 0.60),
+        ("card.nf.label.minor_dia", 1.0, 0.60),
+        ("card.nf.label.base_size", 0.92, 0.89),
+        ("card.nf.label.pin_dia", 1.0, 0.80),
+        ("card.nf.label.over_pins", 1.0, 0.45),
+        ("card.nf.label.span_teeth", 1.0, 0.95),
+        ("card.nf.label.base_tangent", 1.0, 0.52),
+    ];
+    let (_, zh, en) = table.iter().find(|(k, _, _)| *k == key)?;
+    let w = if lang == Lang::En { *en } else { *zh };
+    (w < 0.995).then_some(w)
+}
+
 /// 标签/标题 MTEXT：模板是 `attachment=4`（标题 5），字高 25，框宽照模板 320.2216。
+/// 装不下的标签在**值首**加内联字宽码 `\W<f>;`（见 [`label_inline_wf`]；宿主按 0.7 × f 渲染）。
 pub(crate) fn mtext_ent(value: &str, x: f64, y: f64, attach: i16) -> EntityType {
     let mut m = MText::new();
     m.value = value.to_string();
@@ -463,9 +525,35 @@ pub(crate) fn mtext_ent(value: &str, x: f64, y: f64, attach: i16) -> EntityType 
     EntityType::MText(m)
 }
 
-/// 值属性：左中（与模板值 MTEXT 的 attachment=4 同语义），实体级字宽 [`VALUE_WIDTH_FACTOR`]。
-pub(crate) fn value_attdef(tag: &str, x: f64, y: f64) -> AttributeDefinition {
-    value_attdef_wf(tag, x, y, VALUE_WIDTH_FACTOR)
+/// 带内联字宽码的 MTEXT：`\W0.66;Number of teeth z`（`wf` = 内联因子，有效字宽 = 0.7 × wf）。
+pub(crate) fn mtext_with_inline_wf(
+    text: &str,
+    wf: f64,
+    x: f64,
+    y: f64,
+    attach: i16,
+) -> EntityType {
+    mtext_ent(&format!("\\W{wf:.2};{text}"), x, y, attach)
+}
+
+/// 标签 MTEXT（按当前语言取词 + 必要时内联压缩）。
+pub(crate) fn label_mtext(key: &str, symbol: &str, x: f64, y: f64) -> EntityType {
+    let text = face_label(key, symbol);
+    match label_inline_wf(key, crate::i18n::lang()) {
+        Some(wf) => mtext_with_inline_wf(&text, wf, x, y, 4),
+        None => mtext_ent(&text, x, y, 4),
+    }
+}
+
+/// 值属性：左中（与模板值 MTEXT 的 attachment=4 同语义），实体级字宽 [`VALUE_WIDTH_FACTOR`]
+/// （英文长文字值再按 [`value_width_factor`] 压一档）。
+pub(crate) fn value_attdef_for(tag: &str, x: f64, y: f64, base_wf: f64) -> AttributeDefinition {
+    value_attdef_wf(
+        tag,
+        x,
+        y,
+        value_width_factor(tag, base_wf, crate::i18n::lang()),
+    )
 }
 
 /// 值属性（指定实体级字宽；外花键卡最长值 `279.795` 要比内卡更窄一档）。
@@ -486,6 +574,21 @@ pub(crate) fn value_attdef_wf(
     ad.flags.preset = true;
     ad.common = common_of("6文字层");
     ad
+}
+
+/// 值 ATTDEF 的**实体级字宽**：默认 [`base`]（内卡 0.7 / 外卡 0.6），英文长文字值再压一档。
+///
+/// 三个文字值（定心方式 / 齿根样式 / 加工方法）英文比中文长得多（`Major dia. centering`
+/// 真字体 328 > 值列 145.73）；预算同标签（`card_nf_width_plan.py`，三模型取更紧、≥3% 余量），
+/// 中文侧保持原字宽。
+pub(crate) fn value_width_factor(tag: &str, base: f64, lang: crate::i18n::Lang) -> f64 {
+    if lang != crate::i18n::Lang::En {
+        return base;
+    }
+    match tag {
+        "定心方式" => base.min(0.40),
+        _ => base,
+    }
 }
 
 /// 公差属性：照模板 TEXT 基线左对齐（halign/valign=0），字高 15、字宽 0.667。
@@ -510,9 +613,14 @@ pub fn block_entities() -> Vec<EntityType> {
     for (a, b, layer) in NF_LINES {
         out.push(crate::partgen_kit::line(*a, *b, layer));
     }
-    out.push(mtext_ent("内花键参数表", TITLE_AT.0, TITLE_AT.1, 5));
-    for (label, _, y) in NF_ROWS {
-        out.push(mtext_ent(label, LABEL_X, *y, 4));
+    out.push(mtext_ent(
+        &face_text("card.nf.title.int"),
+        TITLE_AT.0,
+        TITLE_AT.1,
+        5,
+    ));
+    for (key, symbol, _, y) in NF_ROWS {
+        out.push(label_mtext(key, symbol, LABEL_X, *y));
     }
     for ad in attdefs() {
         out.push(EntityType::AttributeDefinition(ad));
@@ -523,8 +631,8 @@ pub fn block_entities() -> Vec<EntityType> {
 /// 18 个 ATTDEF：先 12 个值（行序），再 6 个公差（大径/小径/跨棒距 上/下）。
 pub fn attdefs() -> Vec<AttributeDefinition> {
     let mut out = Vec::with_capacity(VALUE_TAGS.len() + TOL_TAGS.len());
-    for (_, tag, y) in NF_ROWS {
-        out.push(value_attdef(tag, VALUE_X, *y));
+    for (_, _, tag, y) in NF_ROWS {
+        out.push(value_attdef_for(tag, VALUE_X, *y, VALUE_WIDTH_FACTOR));
     }
     for (i, (tag, x, y)) in NF_TOL_ATTS.iter().enumerate() {
         // 末对（跨棒距上/下差）右移 2 个字符宽（用户截图；位置口径 = TOL_H × TOL_WIDTH_FACTOR）。
@@ -552,11 +660,12 @@ impl Centering {
             Centering::Flank => "flank",
         }
     }
-    pub fn label(self) -> &'static str {
-        match self {
-            Centering::Outer => "外径定心",
-            Centering::Flank => "齿面定心",
-        }
+    /// 卡面取值（枚举显示值**随语言**；键 `card.nf.centering.*`）。
+    pub fn label(self) -> String {
+        crate::i18n::t(match self {
+            Centering::Outer => "card.nf.centering.outer",
+            Centering::Flank => "card.nf.centering.flank",
+        })
     }
     /// 命令/GUI token（宽松收词；`None` = 不认识）。
     pub fn from_token(s: &str) -> Option<Self> {
@@ -586,11 +695,12 @@ impl RootStyle {
             RootStyle::Fillet => "fillet",
         }
     }
-    pub fn label(self) -> &'static str {
-        match self {
-            RootStyle::Flat => "平齿根",
-            RootStyle::Fillet => "圆齿根",
-        }
+    /// 卡面取值（枚举显示值**随语言**；键 `card.nf.root.*`）。
+    pub fn label(self) -> String {
+        crate::i18n::t(match self {
+            RootStyle::Flat => "card.nf.root.flat",
+            RootStyle::Fillet => "card.nf.root.fillet",
+        })
     }
     pub fn from_token(s: &str) -> Option<Self> {
         match s.trim().to_ascii_lowercase().as_str() {
@@ -825,15 +935,15 @@ pub fn values(spec: &NfTableSpec) -> Result<Vec<(String, String)>, String> {
     let d = derive(spec)?;
     let out: Vec<(&str, String)> = vec![
         ("执行标准", "NF E22-141".to_string()),
-        ("定心方式", spec.centering.label().to_string()),
+        ("定心方式", spec.centering.label()),
         ("模数", fmt_mm(spec.m)),
         (
             "齿数",
             d.z.map(|z| z.to_string()).unwrap_or_else(|| MISSING.to_string()),
         ),
         ("压力角", "20°".to_string()),
-        ("齿根样式", spec.root.label().to_string()),
-        ("加工方法", "拉削".to_string()),
+        ("齿根样式", spec.root.label()),
+        ("加工方法", crate::i18n::t("card.nf.machining.broach")),
         ("大径Az", fmt_mm(d.az)),
         ("小径D", fmt_mm(d.d)),
         ("基准尺寸", fmt_mm(spec.a)),
@@ -1685,6 +1795,20 @@ fn strip_prefix_ci<'a>(t: &'a str, p: &str) -> Option<&'a str> {
 // 测试
 // ══════════════════════════════════════════════════════════════════════════
 
+/// 测试用：拆出标签/标题 MTEXT 头部的**内联字宽码**（`\W<f>;`）→ `(内联因子, 纯文字)`。
+/// 无码 = `(1.0, 原文)`；MTEXT 的**有效字宽** = 模板样式 0.7 × 内联因子（见模块文档）。
+#[cfg(test)]
+pub(crate) fn mtext_inline_wf(value: &str) -> (f64, &str) {
+    if let Some(rest) = value.strip_prefix("\\W") {
+        if let Some((f, text)) = rest.split_once(';') {
+            if let Ok(wf) = f.parse::<f64>() {
+                return (wf, text);
+            }
+        }
+    }
+    (1.0, value)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1722,8 +1846,18 @@ mod tests {
 
     /// 13 行结构 + 逐图元对模板（1e-5）：66 线（外框/中分隔/行分隔）、标题 + 12 标签、
     /// 12 值 ATTDEF、6 公差 ATTDEF；末行标签归位；样式一律 OCSM_GB。
+    /// 逐图元对模板（③ 卡面批：**中英各跑一遍** —— 卡面文字随语言，元素清单/位置/图层不变）。
     #[test]
     fn nf_template_geometry_line_by_line() {
+        let _g = crate::global_state_test_lock();
+        for lang in [crate::i18n::Lang::Zh, crate::i18n::Lang::En] {
+            crate::i18n::set_lang(lang);
+            nf_template_geometry_one_lang(lang);
+        }
+        crate::i18n::set_lang_auto();
+    }
+
+    fn nf_template_geometry_one_lang(lang: crate::i18n::Lang) {
         let ents = block_entities();
         assert_eq!(
             ents.len(),
@@ -1800,10 +1934,11 @@ mod tests {
             })
             .collect();
         assert_eq!(mtexts.len(), 13, "标题 + 12 标签");
+        let title_text = face_text("card.nf.title.int");
         let title = mtexts
             .iter()
-            .find(|m| m.value == "内花键参数表")
-            .expect("标题 MTEXT");
+            .find(|m| m.value == title_text)
+            .unwrap_or_else(|| panic!("{lang:?} 缺标题 MTEXT「{title_text}」"));
         assert_eq!(title.attachment_point, AttachmentPoint::MiddleCenter);
         assert!(near5(title.insertion_point.x, TITLE_AT.0) && near5(title.insertion_point.y, TITLE_AT.1));
         for m in &mtexts {
@@ -1811,11 +1946,12 @@ mod tests {
             assert_eq!(m.common.layer, "6文字层");
             assert!(near5(m.height, TEXT_H));
         }
-        for (label, _, y) in NF_ROWS {
+        for (key, symbol, _, y) in NF_ROWS {
+            let label = face_label(key, symbol);
             let m = mtexts
                 .iter()
-                .find(|m| m.value == *label)
-                .unwrap_or_else(|| panic!("缺标签 MTEXT {label}"));
+                .find(|m| mtext_inline_wf(&m.value).1 == label)
+                .unwrap_or_else(|| panic!("{lang:?} 缺标签 MTEXT {label}"));
             assert_eq!(m.attachment_point, AttachmentPoint::MiddleLeft, "{label}");
             assert!(
                 near5(m.insertion_point.x, LABEL_X) && near5(m.insertion_point.y, *y),
@@ -1835,12 +1971,17 @@ mod tests {
         let want_tags: Vec<&str> = VALUE_TAGS.iter().chain(TOL_TAGS.iter()).copied().collect();
         let got_tags: Vec<&str> = atts.iter().map(|a| a.tag.as_str()).collect();
         assert_eq!(got_tags, want_tags, "ATTDEF tag 顺序");
-        for (i, (_, tag, y)) in NF_ROWS.iter().enumerate() {
+        for (i, (_, _, tag, y)) in NF_ROWS.iter().enumerate() {
             let ad = &atts[i];
             assert_eq!(ad.tag, *tag);
             assert!(near5(ad.insertion_point.x, VALUE_X) && near5(ad.insertion_point.y, *y));
             assert!(near5(ad.height, TEXT_H));
-            assert!(near5(ad.width_factor, VALUE_WIDTH_FACTOR));
+            assert!(
+                near5(ad.width_factor, value_width_factor(tag, VALUE_WIDTH_FACTOR, lang)),
+                "{tag} 字宽 {} ≠ {}",
+                ad.width_factor,
+                value_width_factor(tag, VALUE_WIDTH_FACTOR, lang)
+            );
             assert_eq!(ad.horizontal_alignment, HorizontalAlignment::Left);
             assert_eq!(ad.vertical_alignment, VerticalAlignment::Middle, "值行与模板 MTEXT 同为左中");
             assert_eq!(ad.text_style, "OCSM_GB");
@@ -2182,10 +2323,20 @@ mod tests {
     /// 文字干涉几何检查（照 GB 花键 `main_values_clear_tolerance_column` 的口径）：
     /// 值框不进公差格、标签不越中分隔、全部文字在表格行带与外框内；不止锚点，
     /// **全量 p18 表行**（144 行）+ 齿面定心 + 表外长值都过。
+    /// ③ 卡面批：**中英各跑一遍**（英文文字值用实体级字宽、标签用内联 `\W` 压缩后的有效宽）。
     #[test]
     fn nf_values_clear_tolerance_column() {
         assert_eq!(VALUE_WIDTH_FACTOR, 0.7, "值列实体级字宽（不动 OCSM_GB 样式）");
         assert_eq!(TOL_WIDTH_FACTOR, 0.667, "公差列照模板 TEXT");
+        let _g = crate::global_state_test_lock();
+        for lang in [crate::i18n::Lang::Zh, crate::i18n::Lang::En] {
+            crate::i18n::set_lang(lang);
+            nf_values_clear_tolerance_column_one_lang(lang);
+        }
+        crate::i18n::set_lang_auto();
+    }
+
+    fn nf_values_clear_tolerance_column_one_lang(lang: crate::i18n::Lang) {
         // 行带边界：14 条水平边界（标题 + 12 内容行）
         let mut sep: Vec<f64> = NF_LINES
             .iter()
@@ -2251,9 +2402,10 @@ mod tests {
             let vals = values(spec).unwrap();
             let vmap: HashMap<&str, &str> = vals.iter().map(|(t, v)| (t.as_str(), v.as_str())).collect();
             // 12 值框：在右列行带内、不出右框；同行的值框与公差框不相交
-            for (i, (_, tag, y)) in NF_ROWS.iter().enumerate() {
+            for (i, (_, _, tag, y)) in NF_ROWS.iter().enumerate() {
                 let v = vmap[*tag];
-                let b = mid_box(VALUE_X, *y, TEXT_H, VALUE_WIDTH_FACTOR, v);
+                let wf = value_width_factor(tag, VALUE_WIDTH_FACTOR, lang);
+                let b = mid_box(VALUE_X, *y, TEXT_H, wf, v);
                 let (top, bottom) = band_of(*y);
                 assert!(
                     b[1] >= bottom - 1e-9 && b[3] <= top + 1e-9,
@@ -2294,9 +2446,11 @@ mod tests {
                     }
                 }
             }
-            // 12 标签框：左列内、不进中分隔、不出左框
-            for (label, _, y) in NF_ROWS {
-                let b = mid_box(LABEL_X, *y, TEXT_H, 0.7, label);
+            // 12 标签框：左列内、不进中分隔、不出左框（英文侧用内联 `\W` 压缩后的有效字宽）
+            for (key, symbol, _, y) in NF_ROWS {
+                let label = face_label(key, symbol);
+                let inline = label_inline_wf(key, lang).unwrap_or(1.0);
+                let b = mid_box(LABEL_X, *y, TEXT_H, 0.7 * inline, &label);
                 assert!(b[0] >= FRAME.0 + 0.5, "标签 {label} 出左框");
                 assert!(b[2] <= MID_X - 0.5, "标签 {label} 越中分隔：右 {:.3}", b[2]);
                 let (top, bottom) = band_of(*y);
@@ -2304,9 +2458,10 @@ mod tests {
             }
         }
         // 标题框：行 1 内、不越外框
-        let half = text_extent("内花键参数表", TEXT_H, 0.7) / 2.0;
+        let title = face_text("card.nf.title.int");
+        let half = text_extent(&title, TEXT_H, 0.7) / 2.0;
         let tbox = [MID_X - half, TITLE_AT.1 - TEXT_H / 2.0, MID_X + half, TITLE_AT.1 + TEXT_H / 2.0];
-        assert!(tbox[0] >= FRAME.0 + 0.5 && tbox[2] <= FRAME.1 - 0.5, "标题出框");
+        assert!(tbox[0] >= FRAME.0 + 0.5 && tbox[2] <= FRAME.1 - 0.5, "标题 {title} 出框");
         let (ttop, tbottom) = band_of(TITLE_AT.1);
         assert!(tbox[1] >= tbottom - 1e-9 && tbox[3] <= ttop + 1e-9, "标题出行为");
     }
@@ -2574,8 +2729,18 @@ mod tests {
     }
 
     /// ★ 几何：内/外两卡所有 MTEXT 参考框宽 ≥ 文本宽（不折行）且框不出表；标签互不叠。
+    /// ③ 卡面批：**中英各跑一遍**（文本宽 = 模板样式 0.7 × 内联 `\W` 压缩后的**有效宽**）。
     #[test]
     fn nf_cards_mtext_no_wrap_and_no_overlap() {
+        let _g = crate::global_state_test_lock();
+        for lang in [crate::i18n::Lang::Zh, crate::i18n::Lang::En] {
+            crate::i18n::set_lang(lang);
+            nf_cards_mtext_no_wrap_and_no_overlap_one_lang(lang);
+        }
+        crate::i18n::set_lang_auto();
+    }
+
+    fn nf_cards_mtext_no_wrap_and_no_overlap_one_lang(lang: crate::i18n::Lang) {
         for (name, ents) in [
             ("NF内", block_entities()),
             ("NF外", crate::nf_ext_table::block_entities()),
@@ -2583,11 +2748,12 @@ mod tests {
             let mut boxes: Vec<(&str, [f64; 4])> = Vec::new();
             for e in &ents {
                 let EntityType::MText(m) = e else { continue };
-                let w = text_extent(&m.value, m.height, 0.7);
+                let (inline, plain) = mtext_inline_wf(&m.value);
+                let w = text_extent(plain, m.height, 0.7 * inline);
                 assert!(
                     m.rectangle_width == 0.0 || m.rectangle_width + 1e-9 >= w,
-                    "{name} MTEXT {:?} 参考框宽 {:.2} < 文本宽 {:.2}（会折行）",
-                    m.value,
+                    "{lang:?} {name} MTEXT {:?} 参考框宽 {:.2} < 文本宽 {:.2}（会折行）",
+                    plain,
                     m.rectangle_width,
                     w
                 );
@@ -2595,15 +2761,14 @@ mod tests {
                 let b = match m.attachment_point {
                     AttachmentPoint::MiddleCenter => [x - w / 2.0, y - h / 2.0, x + w / 2.0, y + h / 2.0],
                     AttachmentPoint::MiddleLeft => [x, y - h / 2.0, x + w, y + h / 2.0],
-                    other => panic!("{name} MTEXT {:?} 未覆盖的对齐 {other:?}", m.value),
+                    other => panic!("{lang:?} {name} MTEXT {plain:?} 未覆盖的对齐 {other:?}"),
                 };
                 assert!(
                     b[0] >= FRAME.0 - 1e-6 && b[2] <= FRAME.1 + 1e-6
                         && b[1] >= FRAME.3 - 1e-6 && b[3] <= FRAME.2 + 1e-6,
-                    "{name} MTEXT {:?} 出表：{b:?}",
-                    m.value
+                    "{lang:?} {name} MTEXT {plain:?} 出表：{b:?}"
                 );
-                boxes.push((m.value.as_str(), b));
+                boxes.push((plain, b));
             }
             for i in 0..boxes.len() {
                 for j in i + 1..boxes.len() {
@@ -2611,12 +2776,123 @@ mod tests {
                     assert!(
                         !(a[0] < b[2] - 1e-9 && b[0] < a[2] - 1e-9
                             && a[1] < b[3] - 1e-9 && b[1] < a[3] - 1e-9),
-                        "{name} MTEXT {:?} × {:?} 叠字",
+                        "{lang:?} {name} MTEXT {:?} × {:?} 叠字",
                         boxes[i].0,
                         boxes[j].0
                     );
                 }
             }
         }
+    }
+
+    /// ③ 卡面批：内卡**中英双断言** —— 标题/12 标签/14 条符号随语言切换、英文侧零汉字；
+    /// 标准号/数值/「—」/ATTDEF tag 两语逐项相等；`missing_keys()` 为空（无漏 key）。
+    #[test]
+    fn nf_card_faces_switch_language_keeping_symbols_and_values() {
+        use crate::i18n::{set_lang, set_lang_auto, Lang};
+        let _g = crate::global_state_test_lock();
+        let cjk = |s: &str| s.chars().any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c));
+        let mtexts = |ents: &[EntityType]| -> Vec<String> {
+            ents.iter()
+                .filter_map(|e| match e {
+                    EntityType::MText(m) => Some(mtext_inline_wf(&m.value).1.to_string()),
+                    _ => None,
+                })
+                .collect()
+        };
+        let tags = |ents: &[EntityType]| -> Vec<String> {
+            ents.iter()
+                .filter_map(|e| match e {
+                    EntityType::AttributeDefinition(a) => Some(a.tag.clone()),
+                    _ => None,
+                })
+                .collect()
+        };
+        // 符号集合（两语原样；NF 原文符号）
+        let syms: &[&str] = &["m", "z", "a", "Az", "D", "Do", "V", "G"];
+        let syms_ext: &[&str] = &["m", "z", "a", "Dee", "Die", "Do", "K", "W"];
+        for (name, int_card) in [("NF内", true), ("NF外", false)] {
+            let build = |_card: bool| -> Vec<EntityType> {
+                if int_card {
+                    block_entities()
+                } else {
+                    crate::nf_ext_table::block_entities()
+                }
+            };
+            let rows: &[(&str, &str, &str, f64)] = if int_card {
+                NF_ROWS
+            } else {
+                crate::nf_ext_table::rows()
+            };
+            set_lang(Lang::Zh);
+            let zh = mtexts(&build(int_card));
+            let zh_tags = tags(&build(int_card));
+            set_lang(Lang::En);
+            let en = mtexts(&build(int_card));
+            let en_tags = tags(&build(int_card));
+            assert_eq!(zh.len(), 13, "{name} 标题 + 12 标签");
+            assert_eq!(en.len(), 13);
+            assert_eq!(zh_tags, en_tags, "{name} ATTDEF tag 不随语言");
+            assert!(!en.iter().any(|s| cjk(s)), "{name} 英文卡面零汉字：{en:?}");
+            // 中文侧：12 条标签原文（不含内联码）逐条在
+            set_lang(Lang::Zh);
+            for (key, symbol, _, _) in rows {
+                let want = face_label(key, symbol);
+                assert!(zh.iter().any(|s| s == &want), "{name} zh 卡面缺「{want}」：{zh:?}");
+            }
+            set_lang(Lang::En);
+            for (key, symbol, _, _) in rows {
+                let want = face_label(key, symbol);
+                assert!(en.iter().any(|s| s == &want), "{name} en 卡面缺「{want}」：{en:?}");
+            }
+            for s in if int_card { syms } else { syms_ext } {
+                assert!(zh.iter().any(|t| t.split_whitespace().last() == Some(*s)),
+                        "{name} zh 符号 {s} 原样：{zh:?}");
+                assert!(en.iter().any(|t| t.split_whitespace().last() == Some(*s)),
+                        "{name} en 符号 {s} 原样：{en:?}");
+            }
+            // 值：标准号/数值/缺项与枚举显示值（随语言）
+            let int_spec = anchor_spec();
+            let ext_spec = crate::nf_ext_table::NfExtTableSpec {
+                a: 300.0,
+                m: 7.5,
+                z: Some(38),
+                centering: Centering::Flank,
+                root: RootStyle::Flat,
+                fit: FitClass::Fixed,
+                at: None,
+                rot: 0.0,
+            };
+            let vals_of = |card: bool| -> HashMap<String, String> {
+                let v = if card {
+                    values(&int_spec).unwrap()
+                } else {
+                    crate::nf_ext_table::values(&ext_spec).unwrap()
+                };
+                v.into_iter().collect()
+            };
+            set_lang(Lang::Zh);
+            let zh_vals = vals_of(int_card);
+            set_lang(Lang::En);
+            let en_vals = vals_of(int_card);
+            assert_eq!(zh_vals.len(), 18, "{name} 18 项");
+            for (tag, zh_v) in &zh_vals {
+                let en_v = en_vals.get(tag).expect("同 tag 集合");
+                if ["定心方式", "齿根样式", "加工方法"].contains(&tag.as_str()) {
+                    assert_ne!(zh_v, en_v, "{name} {tag} 是枚举显示值，应随语言");
+                } else {
+                    assert_eq!(zh_v, en_v, "{name} {tag} 是数据/标准号，应两语相同");
+                }
+            }
+            assert_eq!(zh_vals.get("执行标准").map(String::as_str), Some("NF E22-141"));
+        }
+        // ★ 只查**本批 NF 键**未漏（`missing_keys()` 是进程全局，其它并行用例会故意点
+        //   `no.such.key.at.all` / `data:…` ⇒ 不能断言全局为空，否则偶发假红）。
+        let missed = crate::i18n::missing_keys();
+        assert!(
+            !missed.iter().any(|k| k.starts_with("card.nf.")),
+            "NF 键有漏：{missed:?}"
+        );
+        set_lang_auto();
     }
 }

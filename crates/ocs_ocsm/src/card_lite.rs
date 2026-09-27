@@ -84,8 +84,10 @@ fn lite_text(raw: &str, lang: crate::i18n::Lang) -> String {
 
 /// 卡面标签符号（§31 形态：**符号与译名分置**，译文怎么改都不会丢符号）。
 /// `None` = 该行没有外挂符号（ANSI 4 卡的符号已含在双语原文里，如 `齿数 z` / `TEETH z`）。
-fn label_symbol(label_key: &str) -> Option<&'static str> {
-    Some(match label_key {
+/// NF 族的大径/小径符号**随卡方向**（内 `Az`/`D`，外 `Dee`/`Die`；NF 原文符号）。
+fn label_symbol(f: &LiteFieldSpec, family: LiteFamily) -> Option<&'static str> {
+    let nf_ext = matches!(family, LiteFamily::NfExt);
+    Some(match f.label {
         "card.gear.lite.label.module" => "m",
         "card.gear.lite.label.teeth" => "z",
         "card.gear.lite.label.alpha" => "α",
@@ -95,6 +97,28 @@ fn label_symbol(label_key: &str) -> Option<&'static str> {
         "card.gear.lite.label.root_dia" => "df",
         "card.gear.lite.label.base_tangent" => "W",
         "card.gear.lite.label.span_teeth" => "K",
+        // NF 族（`card.nf.label.*` 与全卡同一组 key）
+        "card.nf.label.module" => "m",
+        "card.nf.label.teeth" => "z",
+        "card.nf.label.alpha" => "a",
+        "card.nf.label.major_dia" => {
+            if nf_ext {
+                "Dee"
+            } else {
+                "Az"
+            }
+        }
+        "card.nf.label.minor_dia" => {
+            if nf_ext {
+                "Die"
+            } else {
+                "D"
+            }
+        }
+        "card.nf.label.pin_dia" => "V",
+        "card.nf.label.over_pins" => "G",
+        "card.nf.label.span_teeth" => "K",
+        "card.nf.label.base_tangent" => "W",
         _ => return None,
     })
 }
@@ -107,7 +131,7 @@ pub fn title_text(card: &LiteCardSpec) -> String {
 /// 卡面标签文字（按族语种）：译名 + 「空格 + 符号」（符号原样，两语相同）。
 pub fn label_text(f: &LiteFieldSpec, family: LiteFamily) -> String {
     let base = lite_text(f.label, family.face_lang());
-    match label_symbol(f.label) {
+    match label_symbol(f, family) {
         Some(sym) => format!("{base} {sym}"),
         None => base,
     }
@@ -130,6 +154,17 @@ fn en_label_width_factor(label_key: &str) -> Option<f64> {
         "card.gear.lite.label.root_dia" => 0.65,
         "card.gear.lite.label.base_tangent" => 0.49,
         "card.gear.lite.label.span_teeth" => 0.87,
+        // NF 族（脚本 `card_nf_width_plan.py`；内/外卡取更紧者：大径 0.54 / 小径 0.55）
+        "card.nf.label.module" => 1.0,
+        "card.nf.label.teeth" => 0.61,
+        "card.nf.label.alpha" => 0.65,
+        "card.nf.label.machining" => 0.57,
+        "card.nf.label.major_dia" => 0.54,
+        "card.nf.label.minor_dia" => 0.55,
+        "card.nf.label.pin_dia" => 0.73,
+        "card.nf.label.over_pins" => 0.42,
+        "card.nf.label.span_teeth" => 0.86,
+        "card.nf.label.base_tangent" => 0.48,
         _ => return None,
     })
 }
@@ -139,6 +174,15 @@ fn label_wf(f: &LiteFieldSpec, lang: crate::i18n::Lang) -> f64 {
     match (lang, en_label_width_factor(f.label)) {
         (crate::i18n::Lang::En, Some(wf)) => wf,
         _ => f.wf,
+    }
+}
+
+/// 值 ATTDEF 的实体字宽：默认 [`LiteFieldSpec::vwf`]；NF 的英文长文字值（`Major dia. centering`
+/// 在 33.4 宽的值列里）再压一档（预算同 [`en_label_width_factor`]，脚本 `card_nf_width_plan.py`）。
+fn value_wf(f: &LiteFieldSpec, family: LiteFamily) -> f64 {
+    match (family.face_lang(), f.key) {
+        (crate::i18n::Lang::En, "定心方式") => f.vwf.min(0.64),
+        _ => f.vwf,
     }
 }
 
@@ -172,33 +216,34 @@ macro_rules! fld {
 }
 
 // ── NF 内花键（p18 拉削内花键；用户例：执行标准·定心方式·m·z·a·齿根样式·加工方法·大径·小径 + V/G）──
+// 卡面标签 = catalog（`card.nf.label.*`，与全卡同一组 key，§33 ③ 卡面批）+ 符号（见 [`label_symbol`]）。
 const NF_INT_FIELDS: &[LiteFieldSpec] = &[
-    fld!("(NF简)执行标准", "执行标准", "执行标准", 1.0),
-    fld!("(NF简)定心方式", "定心方式", "定心方式", 1.0),
-    fld!("(NF简)模数", "模数", "模数 m", 1.0),
-    fld!("(NF简)齿数", "齿数", "齿数 z", 1.0),
-    fld!("(NF简)压力角", "压力角", "压力角 a", 1.0),
-    fld!("(NF简)齿根样式", "齿根样式", "齿根样式", 1.0),
-    fld!("(NF简)加工方法", "加工方法", "加工方法", 1.0),
-    fld!("(NF简)大径", "大径Az", "大径 Az", 1.0),
-    fld!("(NF简)小径", "小径D", "小径 D", 1.0),
-    fld!("(NF简)量棒直径", "量棒直径V", "量棒直径 V", 0.90),
-    fld!("(NF简)跨棒距", "跨棒距G", "跨棒距 G", 1.0),
+    fld!("(NF简)执行标准", "执行标准", "card.nf.label.standard", 1.0),
+    fld!("(NF简)定心方式", "定心方式", "card.nf.label.centering", 1.0),
+    fld!("(NF简)模数", "模数", "card.nf.label.module", 1.0),
+    fld!("(NF简)齿数", "齿数", "card.nf.label.teeth", 1.0),
+    fld!("(NF简)压力角", "压力角", "card.nf.label.alpha", 1.0),
+    fld!("(NF简)齿根样式", "齿根样式", "card.nf.label.root_form", 1.0),
+    fld!("(NF简)加工方法", "加工方法", "card.nf.label.machining", 1.0),
+    fld!("(NF简)大径", "大径Az", "card.nf.label.major_dia", 1.0),
+    fld!("(NF简)小径", "小径D", "card.nf.label.minor_dia", 1.0),
+    fld!("(NF简)量棒直径", "量棒直径V", "card.nf.label.pin_dia", 0.90),
+    fld!("(NF简)跨棒距", "跨棒距G", "card.nf.label.over_pins", 1.0),
 ];
 
 // ── NF 外花键（p20–p22 滚齿外花键；末两项 K/W）──
 const NF_EXT_FIELDS: &[LiteFieldSpec] = &[
-    fld!("(NF简)执行标准", "执行标准", "执行标准", 1.0),
-    fld!("(NF简)定心方式", "定心方式", "定心方式", 1.0),
-    fld!("(NF简)模数", "模数", "模数 m", 1.0),
-    fld!("(NF简)齿数", "齿数", "齿数 z", 1.0),
-    fld!("(NF简)压力角", "压力角", "压力角 a", 1.0),
-    fld!("(NF简)齿根样式", "齿根样式", "齿根样式", 1.0),
-    fld!("(NF简)加工方法", "加工方法", "加工方法", 1.0),
-    fld!("(NF简)大径", "大径Dee", "大径 Dee", 1.0),
-    fld!("(NF简)小径", "小径Die", "小径 Die", 1.0),
-    fld!("(NF简)跨测齿数", "跨测齿数K", "跨测齿数 K", 0.90),
-    fld!("(NF简)公法线", "公法线W", "公法线 W", 1.0),
+    fld!("(NF简)执行标准", "执行标准", "card.nf.label.standard", 1.0),
+    fld!("(NF简)定心方式", "定心方式", "card.nf.label.centering", 1.0),
+    fld!("(NF简)模数", "模数", "card.nf.label.module", 1.0),
+    fld!("(NF简)齿数", "齿数", "card.nf.label.teeth", 1.0),
+    fld!("(NF简)压力角", "压力角", "card.nf.label.alpha", 1.0),
+    fld!("(NF简)齿根样式", "齿根样式", "card.nf.label.root_form", 1.0),
+    fld!("(NF简)加工方法", "加工方法", "card.nf.label.machining", 1.0),
+    fld!("(NF简)大径", "大径Dee", "card.nf.label.major_dia", 1.0),
+    fld!("(NF简)小径", "小径Die", "card.nf.label.minor_dia", 1.0),
+    fld!("(NF简)跨测齿数", "跨测齿数K", "card.nf.label.span_teeth", 0.90),
+    fld!("(NF简)公法线", "公法线W", "card.nf.label.base_tangent", 1.0),
 ];
 
 // ── DIN 5480（Bild 6；标记 + z/m/α + 关键直径/量圆；按 DIN 自身口径，不照搬 GB）──
@@ -323,7 +368,7 @@ pub const LITE_CARDS: &[LiteCardSpec] = &[
     LiteCardSpec {
         id: "NF花键精简表_内",
         block: "OCSM_LITE_NF_INT",
-        title: "NF 内花键参数表（精简）",
+        title: "card.nf.lite.title.int",
         full_card: "NF内花键参数表",
         family: LiteFamily::NfInt,
         fields: NF_INT_FIELDS,
@@ -331,7 +376,7 @@ pub const LITE_CARDS: &[LiteCardSpec] = &[
     LiteCardSpec {
         id: "NF花键精简表_外",
         block: "OCSM_LITE_NF_EXT",
-        title: "NF 外花键参数表（精简）",
+        title: "card.nf.lite.title.ext",
         full_card: "NF外花键参数表",
         family: LiteFamily::NfExt,
         fields: NF_EXT_FIELDS,
@@ -438,7 +483,7 @@ pub fn block_entities(card: &LiteCardSpec) -> Vec<EntityType> {
             f.tag,
             X_VALUE,
             value_y(i + 1),
-            f.vwf,
+            value_wf(f, card.family),
         )));
     }
     out
@@ -449,7 +494,7 @@ pub fn attdefs(card: &LiteCardSpec) -> Vec<AttributeDefinition> {
     card.fields
         .iter()
         .enumerate()
-        .map(|(i, f)| attdef_wf(f.tag, X_VALUE, value_y(i + 1), f.vwf))
+        .map(|(i, f)| attdef_wf(f.tag, X_VALUE, value_y(i + 1), value_wf(f, card.family)))
         .collect()
 }
 
@@ -897,7 +942,7 @@ mod tests {
                     );
                     // 值取最宽样式（三圆/直径 + 小数）。
                     let val = "12345.678";
-                    let vb = text_box_ttf([X_VALUE, value_y(row)], TEXT_H, f.vwf, val);
+                    let vb = text_box_ttf([X_VALUE, value_y(row)], TEXT_H, value_wf(f, c.family), val);
                     assert!(
                         vb[0] >= X_SEP && vb[2] <= X_RIGHT - 0.02,
                         "{lang:?} {} 值「{val}」越值列：{vb:?}",
@@ -928,6 +973,7 @@ mod tests {
     }
 
     /// ② 卡面批：齿轮精简卡**中英双断言**；ANSI 精简 4 卡 = 「一卡一语种」钉死（与语言开关无关）。
+    /// ③ 卡面批：**NF 精简两卡也中英双断言**（标签/标题随语言，符号原样）。
     #[test]
     fn lite_card_faces_switch_or_pin_language_by_family() {
         use crate::i18n::{set_lang, set_lang_auto, Lang};
@@ -978,12 +1024,58 @@ mod tests {
             );
             assert_eq!(attdefs(c).len(), c.fields.len(), "{id} ATTDEF 数");
         }
+        // NF 精简两卡：**随语言开关切换**（同 GB/齿轮族口径）
+        for (id, syms, want_zh, want_en) in [
+            (
+                "NF花键精简表_内",
+                ["m", "z", "a", "Az", "D", "V", "G"].as_slice(),
+                "NF 内花键参数表（精简）",
+                "NF Internal Spline Data (Lite)",
+            ),
+            (
+                "NF花键精简表_外",
+                ["m", "z", "a", "Dee", "Die", "K", "W"].as_slice(),
+                "NF 外花键参数表（精简）",
+                "NF External Spline Data (Lite)",
+            ),
+        ] {
+            let c = by_id(id).unwrap();
+            set_lang(Lang::Zh);
+            let zh = texts(c);
+            set_lang(Lang::En);
+            let en = texts(c);
+            assert_eq!(zh.len(), 12, "{id} 标题 + 11 行");
+            assert_eq!(en.len(), 12);
+            assert!(zh.iter().any(|s| s == want_zh), "{id} zh 标题：{zh:?}");
+            assert!(en.iter().any(|s| s == want_en), "{id} en 标题：{en:?}");
+            assert!(!en.iter().any(|s| cjk(s)), "{id} 英文卡面零汉字：{en:?}");
+            assert!(zh.iter().any(|s| cjk(s)), "{id} 中文卡面应含中文");
+            for sym in syms {
+                assert!(
+                    zh.iter().any(|s| s.split_whitespace().last() == Some(*sym)),
+                    "{id} zh 符号 {sym} 原样：{zh:?}"
+                );
+                assert!(
+                    en.iter().any(|s| s.split_whitespace().last() == Some(*sym)),
+                    "{id} en 符号 {sym} 原样：{en:?}"
+                );
+            }
+            // 取值（ATTDEF wf）也随语言：定心方式的英文字值列更窄
+            for (lang, f) in [(Lang::Zh, 0.70), (Lang::En, 0.64)] {
+                set_lang(lang);
+                let ads = attdefs(c);
+                let w = value_wf(&c.fields[1], c.family);
+                assert!((w - f).abs() < 1e-9, "{id} {lang:?} 定心方式值字宽 {w}");
+                assert!(ads.iter().any(|a| (a.width_factor - f).abs() < 1e-9));
+            }
+        }
         assert!(crate::i18n::missing_keys().is_empty(), "{:?}", crate::i18n::missing_keys());
         set_lang_auto();
     }
 
     /// ANSI「花键类型」长值（英文全称最长）按**实体级值字宽**再压缩后仍留 ≥3% 余量。
     /// OCS 真字体扫描（扩体系批）发现的唯一越值列项，锁在单测里。
+    /// ③ 卡面批：NF 三个文字值（英文 `Major dia. centering` 最长）同口径另行断言（下个用例）。
     #[test]
     fn ansi_type_values_fit_value_column() {
         for c in LITE_CARDS {
@@ -1020,6 +1112,58 @@ mod tests {
                 assert!(lab[2] < vb[0], "{} 标签×值相叠：{}", c.id, label_text(f, c.family));
             }
         }
+    }
+
+    /// ③ 卡面批：NF 精简两卡的**文字值**（定心方式/齿根样式/加工方法）在值列内留 ≥3% 余量
+    /// （英文 `Major dia. centering` 最长 ⇒ 实体级值字宽再压一档；中文侧保持 0.7）。
+    #[test]
+    fn nf_lite_text_values_fit_value_column() {
+        use crate::i18n::{set_lang, set_lang_auto, Lang};
+        let _g = crate::global_state_test_lock();
+        let avail = X_RIGHT - X_VALUE;
+        for (lang, vals) in [
+            (Lang::Zh, ["外径定心", "齿面定心", "平齿根", "圆齿根", "拉削", "滚齿"].as_slice()),
+            (Lang::En, ["Major dia. centering", "Flank centering", "Flat root", "Fillet root",
+                        "Broaching", "Hobbing"].as_slice()),
+        ] {
+            set_lang(lang);
+            for id in ["NF花键精简表_内", "NF花键精简表_外"] {
+                let c = by_id(id).unwrap();
+                for f in c.fields.iter().filter(|f| {
+                    ["定心方式", "齿根样式", "加工方法"].contains(&f.key)
+                }) {
+                    let wf = value_wf(f, c.family);
+                    for val in vals {
+                        // 命中本行的值（标签 tag 与值同源：直接按内容过滤）。
+                        let is_this_row = match f.key {
+                            "定心方式" => val.contains("定心") || val.contains("centering"),
+                            "齿根样式" => val.contains("齿根") || val.contains("root"),
+                            _ => val.contains("削") || val.contains("齿") && val.contains("铣")
+                                || val.contains("Broaching") || val.contains("Hobbing"),
+                        };
+                        if !is_this_row {
+                            continue;
+                        }
+                        let vb = text_box_ttf([X_VALUE, value_y(1)], TEXT_H, wf, val);
+                        let margin = (X_RIGHT - vb[2]) / avail;
+                        assert!(
+                            vb[2] <= X_RIGHT - 0.02 && margin >= 0.03,
+                            "{lang:?} {id} {}/「{val}」越值列：vwf={wf} {vb:?} 余量 {:.1}%",
+                            f.key,
+                            margin * 100.0
+                        );
+                        let lab = text_box_ttf(
+                            [X_LABEL, label_y(1)],
+                            TEXT_H,
+                            label_wf(f, c.family.face_lang()),
+                            &label_text(f, c.family),
+                        );
+                        assert!(lab[2] < vb[0], "{id} 标签×值相叠：{}", label_text(f, c.family));
+                    }
+                }
+            }
+        }
+        set_lang_auto();
     }
 
     /// 代表性模型（每族一例；与完整卡现有测试/集成用例同参数）。
