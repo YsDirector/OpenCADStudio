@@ -11,7 +11,7 @@
 | `00-overview.md` | `00-总览.md` | ✅ translated |
 | `01-init-and-layers.md` | `01-初始化与图层.md` | ⏳ pending |
 | `02-sheet-and-frame.md` | `02-图幅与图框.md` | ⏳ pending |
-| `03-standard-parts.md` | `03-标准件库.md` | ⏳ pending |
+| `03-standard-parts.md` | `03-标准件库.md` | ✅ translated |
 | `04-bolt-joint.md` | `04-螺栓副装配.md` | ⏳ pending |
 | `05-smart-dimension-d.md` | `05-智能标注D.md` | ✅ translated |
 | `06-leader-annotation.md` | `06-引导线标注.md` | ⏳ pending |
@@ -28,7 +28,7 @@
 | `17-hole-generator.md` | `17-孔生成器.md` | ⏳ pending |
 | `20-knowledge-gb-drafting.md` | `20-知识-国标制图画法.md` | ⏳ pending |
 | `21-knowledge-fastener-selection.md` | `21-知识-紧固件选型与防松.md` | ⏳ pending |
-| `22-knowledge-tolerances-fits.md` | `22-知识-公差与配合.md` | ⏳ pending |
+| `22-knowledge-tolerances-fits.md` | `22-知识-公差与配合.md` | ✅ translated |
 | `23-knowledge-materials-heat-treatment.md` | `23-知识-材料与热处理.md` | ⏳ pending |
 | `24-bilingual-copy-and-entries.md` | `24-双语文案与新增词条.md` | ⏳ pending |
 
