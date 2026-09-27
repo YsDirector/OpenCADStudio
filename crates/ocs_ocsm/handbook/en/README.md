@@ -3,6 +3,7 @@
 > English mirror of the Chinese handbook in `handbook/`. **The Chinese original is the source of truth**;
 > when the two disagree, fix the translation, not the original.
 > Started 2026-09-27 (stage 4 of the OCSM bilingual i18n roadmap; see `~/桌面/OCSM/review/handbook_英译_进度.md`).
+> **Stage 4 is complete: all 23 pages are translated** (2026-09-27); this table is the zh→en file mapping.
 
 ## Files
 
@@ -12,25 +13,25 @@
 | `01-init-and-layers.md` | `01-初始化与图层.md` | ✅ translated |
 | `02-sheet-and-frame.md` | `02-图幅与图框.md` | ✅ translated |
 | `03-standard-parts.md` | `03-标准件库.md` | ✅ translated |
-| `04-bolt-joint.md` | `04-螺栓副装配.md` | ⏳ pending |
+| `04-bolt-joint.md` | `04-螺栓副装配.md` | ✅ translated (batch 7) |
 | `05-smart-dimension-d.md` | `05-智能标注D.md` | ✅ translated |
 | `06-leader-annotation.md` | `06-引导线标注.md` | ✅ translated (batch 6) |
 | `07-one-click-gb.md` | `07-一键转国标.md` | ✅ translated |
 | `08-tolerance-roughness-gdt.md` | `08-公差粗糙度与GDT.md` | ✅ translated (batch 6) |
 | `09-edit-annotations-text.md` | `09-改标注与文字.md` | ✅ translated |
-| `10-bom.md` | `10-明细表BOM.md` | ⏳ pending |
-| `11-automation-api.md` | `11-自动化接口.md` | ⏳ pending |
+| `10-bom.md` | `10-明细表BOM.md` | ✅ translated (big page, batch 7) |
+| `11-automation-api.md` | `11-自动化接口.md` | ✅ translated (batch 7) |
 | `12-troubleshooting.md` | `12-故障与坑.md` | ✅ translated |
 | `13-task-kickoff-protocol.md` | `13-任务启动协议.md` | ✅ translated (batch 6) |
 | `14-item-numbers.md` | `14-序号标注.md` | ✅ translated (batch 6) |
 | `15-centerlines.md` | `15-中心线.md` | ✅ translated (batch 6) |
 | `16-gears.md` | `16-齿轮.md` | ✅ translated (big page, batch 5) |
-| `17-hole-generator.md` | `17-孔生成器.md` | ⏳ pending |
+| `17-hole-generator.md` | `17-孔生成器.md` | ✅ translated (batch 7) |
 | `20-knowledge-gb-drafting.md` | `20-知识-国标制图画法.md` | ✅ translated (batch 6) |
 | `21-knowledge-fastener-selection.md` | `21-知识-紧固件选型与防松.md` | ✅ translated |
 | `22-knowledge-tolerances-fits.md` | `22-知识-公差与配合.md` | ✅ translated |
 | `23-knowledge-materials-heat-treatment.md` | `23-知识-材料与热处理.md` | ✅ translated |
-| `24-bilingual-copy-and-entries.md` | `24-双语文案与新增词条.md` | ⏳ pending |
+| `24-bilingual-copy-and-entries.md` | `24-双语文案与新增词条.md` | ✅ translated (big page, batch 7) |
 
 ## Translation conventions
 
@@ -54,5 +55,7 @@
 1. Edit the Chinese original first, then update the matching English file (and the table above).
 2. A translation is "current" when the English file mentions the same section/file names as the original; the
    `handbook/英译` progress file tracks what has been translated.
-3. The `handbook/en/` subdirectory is **not scanned** by `guide_server::manual_topics_in()` (it only lists the top level),
-   so these files do not show up in the `OCSMHELP` window yet. Wiring the GUI to offer English topics is a code-side task.
+3. Since commit `48ed9462` (stage 3⑤) the `handbook/en/` files **are** served by the manual window: `guide_server::manual_topics_in()`
+   picks topics per language (zh → the Chinese top-level pages; en → the `en/` pages, falling back to the Chinese original with `fallback=true`
+   when a translation is missing), and `find_manual()` looks for `<dir>/en/<slug>.md` first in an `en` environment.
+   `en/README.md` itself is not listed as a topic.
