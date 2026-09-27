@@ -242,7 +242,7 @@ pub fn socket_button(d: f64, l: f64, view: &str) -> Result<GenPart, String> {
         entities,
         meta: PartMeta {
             code: "GB/T 70.2-2015".into(),
-            name: "内六角平圆头螺钉".into(),
+            name: crate::i18n::t_data("内六角平圆头螺钉").into(),
             spec: format!("M{}×{}", trim(d), trim(l)),
             material: String::new(),
             weight: weight_text(weight_button(row, l)),
@@ -365,7 +365,7 @@ pub fn socket_torx(d: f64, l: f64, view: &str) -> Result<GenPart, String> {
         entities,
         meta: PartMeta {
             code: "GB/T 2671.1-2017".into(),
-            name: "内六角花形低圆柱头螺钉".into(),
+            name: crate::i18n::t_data("内六角花形低圆柱头螺钉").into(),
             spec: format!("M{}×{}", trim(d), trim(l)),
             material: String::new(),
             weight: weight_text(weight_torx(row, l)),

@@ -5867,7 +5867,7 @@ pub(crate) fn apply_card_export(
             let attrs = crate::card_lite::pending_attrs(c, &values);
             let meta = crate::card_lite::part_meta_json(c);
             (
-                card.label.to_string(),
+                card.label(),
                 c.block.to_string(),
                 crate::card_lite::block_entities(c),
                 at,

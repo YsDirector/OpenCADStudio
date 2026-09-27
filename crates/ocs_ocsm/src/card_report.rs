@@ -56,7 +56,7 @@ fn sources_section(preview: &serde_json::Value, card: &CardTypeSpec) -> String {
     let mut md = String::new();
     md.push_str("---\n\n");
     md.push_str("- 卡类型：");
-    md.push_str(card.label);
+    md.push_str(&card.label());
     md.push_str(&format!("（`{}`）\n", card.id));
     md.push_str(&format!("- 卡片口径：{}\n", cell(card.summary)));
     if let Some(note) = preview["missing_note"].as_str() {
@@ -99,7 +99,7 @@ pub fn build(card: &CardTypeSpec, model: &serde_json::Value) -> Result<(String, 
     let preview: serde_json::Value =
         serde_json::from_str(&crate::guide_server::apply_card_preview(&bytes)?)
             .map_err(|e| format!("计算书：卡片预览 JSON 解析失败：{e}"))?;
-    let title = format!("{}计算书", card.label);
+    let title = crate::i18n::t_fmt("gui.card.report.title", &[("card", &card.label())]);
     let mut md = String::new();
     match card.renderer {
         CardRenderer::SplineTable => {
@@ -358,7 +358,7 @@ mod tests {
             serde_json::from_str(&crate::guide_server::apply_card_preview(&bytes).unwrap())
                 .unwrap();
         let (title, md) = build(c, &model).unwrap();
-        assert!(title.starts_with(c.label), "{card_id} 标题应含卡名");
+        assert!(title.starts_with(&c.label()), "{card_id} 标题应含卡名");
         assert!(md.contains("同一份"), "{card_id} 报告缺同源说明：\n{md}");
         let empty = Vec::new();
         let items = preview["items"].as_array().unwrap_or(&empty);

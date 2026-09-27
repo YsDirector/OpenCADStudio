@@ -222,7 +222,7 @@ fn set_screw_main(row: &SetScrewRow, l: f64) -> GenPart {
         entities: en,
         meta: PartMeta {
             code: "GB/T 77-2007".into(),
-            name: "内六角平端紧定螺钉".into(),
+            name: crate::i18n::t_data("内六角平端紧定螺钉").into(),
             spec: format!("M{}×{}", trim(d), trim(l)),
             material: String::new(),
             weight: format!("{:.5}", weight_kg(vol, 7.85)),
@@ -260,7 +260,7 @@ fn set_screw_end(row: &SetScrewRow, l: f64) -> GenPart {
         entities: en,
         meta: PartMeta {
             code: "GB/T 77-2007".into(),
-            name: "内六角平端紧定螺钉".into(),
+            name: crate::i18n::t_data("内六角平端紧定螺钉").into(),
             spec: format!("M{}×{}", trim(d), trim(l)),
             material: String::new(),
             weight: String::new(),
@@ -342,7 +342,7 @@ fn nut812_meta(g: &Nut812) -> PartMeta {
         - std::f64::consts::PI / 4.0 * g.d_thread * g.d_thread * g.m;
     PartMeta {
         code: "GB/T 812-1988".into(),
-        name: "圆螺母".into(),
+        name: crate::i18n::t_data("圆螺母").into(),
         spec: format!("M{}", trim(g.d_thread)),
         material: String::new(),
         weight: format!("{:.4}", weight_kg(vol.max(0.0), 7.85)),
@@ -524,7 +524,7 @@ fn lock_washer_meta(row: &LockWasherRow) -> PartMeta {
     let vol = std::f64::consts::PI * (rb * rb - rh * rh) * row.s;
     PartMeta {
         code: "GB/T 858-1988".into(),
-        name: "圆螺母用止动垫圈".into(),
+        name: crate::i18n::t_data("圆螺母用止动垫圈").into(),
         spec: if (row.d - row.d.floor()).abs() < 1e-9 {
             format!("Ø{}", trim(row.d))
         } else {

@@ -219,7 +219,7 @@ fn circumcircle(p1: [f64; 2], p2: [f64; 2], p3: [f64; 2]) -> Option<([f64; 2], f
 fn meta_297(row: &B297Row) -> PartMeta {
     PartMeta {
         code: "GB/T 297-1994".into(),
-        name: "圆锥滚子轴承 30000型 02系列".into(),
+        name: crate::i18n::t_data("圆锥滚子轴承 30000型 02系列").into(),
         spec: row.code.clone(),
         material: String::new(),
         weight: weight_297(row),
@@ -228,7 +228,7 @@ fn meta_297(row: &B297Row) -> PartMeta {
 fn meta_288(row: &B288Row) -> PartMeta {
     PartMeta {
         code: "GB/T 288-1994".into(),
-        name: "调心滚子轴承 20000C型".into(),
+        name: crate::i18n::t_data("调心滚子轴承 20000C型").into(),
         spec: row.code.clone(),
         material: String::new(),
         weight: weight_288(row),

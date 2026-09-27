@@ -33,9 +33,43 @@ use crate::bom::{RowSpec, CELL_TAGS};
 use crate::i18n::{t, t_fmt};
 
 /// xlsx 表头（9 列；第 9 列是界面列，不写进图纸明细表）。
+/// ★ 中文一套 = 老文件/老图匹配键；**写入随当前语言**（见 [`headers`]），**读取两套都认**
+/// （见 [`ParseHeader::is_header`] / [`parse_csv`]）。
 pub(crate) const HEADERS: [&str; 9] = [
     "序号", "图号", "名称", "数量", "材料", "单重", "总重", "备注", "锁定数量",
 ];
+
+/// xlsx 表头的**英文一套**（与 [`HEADERS`] 同序）。
+pub(crate) const HEADERS_EN: [&str; 9] = [
+    "No.",
+    "Drawing No.",
+    "Name",
+    "Qty",
+    "Material",
+    "Unit wt.",
+    "Total wt.",
+    "Remarks",
+    "Locked qty",
+];
+
+/// 当前语言的一套表头（**写入侧**：新文件随语言；旧文件中英都能导入）。
+/// 前 8 列 = [`crate::bom::cell_tags`]（图纸明细表同一套列头）；第 9 列是界面列「锁定数量」。
+pub(crate) fn headers(lang: crate::i18n::Lang) -> [&'static str; 9] {
+    let locked = match lang {
+        crate::i18n::Lang::En => HEADERS_EN[8],
+        crate::i18n::Lang::Zh => HEADERS[8],
+    };
+    let mut h = [""; 9];
+    h[..8].copy_from_slice(crate::bom::cell_tags(lang));
+    h[8] = locked;
+    h
+}
+
+/// 表头识别（读侧兼容）：第一格是任一语言的已知列头 ⇒ 这是表头行。
+pub(crate) fn is_header_cell(cell: &str) -> bool {
+    let c = cell.trim();
+    HEADERS.contains(&c) || HEADERS_EN.contains(&c)
+}
 
 /// 一行 xlsx（9 格，全按文本处理；总重忽略输入）。
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -81,7 +115,7 @@ fn csv_field(s: &str) -> String {
 /// 行 → CSV 文本（含表头；CRLF 行尾 + 无 BOM，用 UTF-8）。
 pub(crate) fn csv_text(rows: &[XRow]) -> String {
     let mut out = String::new();
-    out.push_str(&HEADERS.map(csv_field).join(","));
+    out.push_str(&headers(crate::i18n::lang()).map(csv_field).join(","));
     out.push_str("\r\n");
     for r in rows {
         out.push_str(
@@ -140,8 +174,8 @@ pub(crate) fn parse_csv(text: &str) -> Result<Vec<XRow>, String> {
             rows.push(line);
         }
     }
-    // 表头行：第一格是"序号"就丢掉
-    if rows.first().map(|r| r[0].trim() == "序号").unwrap_or(false) {
+    // 表头行：第一格是任一语言的已知列头就丢掉（旧文件中文表头 / 新文件英文表头都认）
+    if rows.first().map(|r| is_header_cell(&r[0])).unwrap_or(false) {
         rows.remove(0);
     }
     let mut out = Vec::new();
@@ -386,7 +420,7 @@ fn sheet_xml(rows: &[XRow]) -> String {
         r#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>"#,
     );
     let mut all: Vec<Vec<String>> = Vec::with_capacity(rows.len() + 1);
-    all.push(HEADERS.iter().map(|s| s.to_string()).collect());
+    all.push(headers(crate::i18n::lang()).iter().map(|s| s.to_string()).collect());
     for r in rows {
         all.push(r.cells.to_vec());
     }
@@ -869,9 +903,9 @@ pub(crate) fn col_list() -> String {
     HEADERS.join(" | ")
 }
 
-/// `CELL_TAGS` 与 xlsx 前 8 列的对应（保证两者没跑偏）。
+/// `CELL_TAGS` 与 xlsx 前 8 列的对应（保证两者没跑偏；中英两套都查）。
 pub(crate) fn assert_headers_match() -> bool {
-    HEADERS[..8] == CELL_TAGS
+    HEADERS[..8] == CELL_TAGS && HEADERS_EN[..8] == crate::bom::CELL_TAGS_EN
 }
 
 // ── 测试 ────────────────────────────────────────────────────────────────
@@ -890,6 +924,62 @@ mod tests {
         assert_eq!(HEADERS.len(), 9);
         assert_eq!(HEADERS[8], "锁定数量");
         assert_eq!(col_list(), "序号 | 图号 | 名称 | 数量 | 材料 | 单重 | 总重 | 备注 | 锁定数量");
+    }
+
+    /// ③ xlsx 表头：**写入随语言**（en 导出英文表头、数据行原样）、**读取两套都认**
+    /// （中/英表头行都丢掉）；`assert_headers_match` 中英两套都查。
+    #[test]
+    fn headers_switch_language_and_parse_accepts_both() {
+        use crate::i18n::{set_lang, set_lang_auto, Lang};
+        let _g = crate::global_state_test_lock();
+        assert!(assert_headers_match(), "中英两套表头都要与 CELL_TAGS 对齐");
+        assert_eq!(HEADERS_EN[8], "Locked qty");
+        assert_eq!(headers(Lang::Zh), HEADERS);
+        assert_eq!(headers(Lang::En), HEADERS_EN);
+        let rows = vec![xrow(&[
+            "1",
+            "GB/T 5782-2016",
+            "六角头螺栓 M8x35",
+            "2",
+            "Q235",
+            "0.021",
+            "0.042",
+            "外购",
+            "",
+        ])];
+        set_lang(Lang::Zh);
+        let csv_zh = csv_text(&rows);
+        let xml_zh = sheet_xml(&rows);
+        set_lang(Lang::En);
+        let csv_en = csv_text(&rows);
+        let xml_en = sheet_xml(&rows);
+        set_lang_auto();
+        assert!(
+            csv_zh.starts_with("序号,图号,名称,数量,材料,单重,总重,备注,锁定数量"),
+            "{csv_zh}"
+        );
+        assert!(
+            csv_en.starts_with("No.,Drawing No.,Name,Qty,Material,Unit wt.,Total wt.,Remarks,Locked qty"),
+            "{csv_en}"
+        );
+        // 数据行两语一致（不翻数据）
+        for csv in [&csv_zh, &csv_en] {
+            assert!(csv.contains("GB/T 5782-2016") && csv.contains("六角头螺栓 M8x35"), "{csv}");
+        }
+        assert!(xml_zh.contains("序号") && !xml_zh.contains("Locked qty"), "{xml_zh}");
+        assert!(xml_en.contains("Locked qty") && !xml_en.contains("序号"), "{xml_en}");
+        // 读取：中/英表头的 CSV 都丢掉表头行 → 同一份数据
+        for csv in [csv_zh, csv_en] {
+            let back = parse_csv(&csv).unwrap();
+            assert_eq!(back.len(), 1, "表头行应被丢掉");
+            assert_eq!(back[0].cells[1], "GB/T 5782-2016");
+            assert_eq!(back[0].cells[7], "外购");
+        }
+        // 表头识别：两套的 9 个列头都认，普通数据不算表头
+        for h in HEADERS.iter().chain(HEADERS_EN.iter()) {
+            assert!(is_header_cell(h), "{h} 应识别为表头");
+        }
+        assert!(!is_header_cell("GB/T 5782-2016") && !is_header_cell("1"));
     }
 
     #[test]

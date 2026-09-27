@@ -52,11 +52,11 @@ impl AnsiLang {
             AnsiLang::En => "en",
         }
     }
-    pub fn label(self) -> &'static str {
-        match self {
-            AnsiLang::Cn => "纯中文",
-            AnsiLang::En => "纯英文",
-        }
+    pub fn label(self) -> String {
+        crate::i18n::t(match self {
+            AnsiLang::Cn => "card.ansi.lang.cn",
+            AnsiLang::En => "card.ansi.lang.en",
+        })
     }
     pub fn from_id(s: &str) -> Option<Self> {
         match s.trim().to_ascii_lowercase().as_str() {
@@ -847,58 +847,85 @@ fn usage(lang: AnsiLang) -> String {
 // ══════════════════════════════════════════════════════════════════════════
 
 /// 一项属性的取值口径（进原生 `title=`，不做常显）。
+///
+/// ★ GUI 元数据（本批 ②）：文字全进 catalog —— 列名 = [`label_key`](Self::label_key)
+/// （`gui.ansi.col.*`）+ [`symbol`](Self::symbol)（两语原样，`N`/`P/Ps`/`φD`/`Dri`…）；
+/// 取值口径/来源 = [`formula_key`](Self::formula_key) / [`source_key`](Self::source_key)。
+/// 取词走 [`AnsiColumnSpec::label`] / [`AnsiColumnSpec::formula`] / [`AnsiColumnSpec::source`]。
 #[derive(Debug, Clone, Copy)]
 pub struct AnsiColumnSpec {
     pub tag: &'static str,
-    pub label: &'static str,
+    /// 列名 key（`gui.ansi.col.*`）。
+    pub label_key: &'static str,
+    /// 列名里的符号（两语原样；空串 = 无）。
+    pub symbol: &'static str,
     pub unit: &'static str,
-    pub formula: &'static str,
-    pub source: &'static str,
+    /// 取值口径 key（`gui.ansi.formula.*`）。
+    pub formula_key: &'static str,
+    /// 来源 key（`gui.ansi.source.*`）。
+    pub source_key: &'static str,
 }
 
-const SOURCE_TABLE2: &str = "ANSI B92.1-1970 (R1993) Table 2（p10，本仓 invol_spline.rs 已入库）";
-const SOURCE_MISSING: &str = "缺：本仓未收 ANSI B92.1 配合/公差（Table 4/5）/量棒检验/公法线表 —— 不臆造";
+impl AnsiColumnSpec {
+    /// 列名（按当前语言）：译名 + 「空格 + 符号」（符号两语原样）。
+    pub fn label(&self) -> String {
+        let text = crate::i18n::t(self.label_key);
+        if self.symbol.is_empty() {
+            text
+        } else {
+            format!("{text} {}", self.symbol)
+        }
+    }
+    /// 取值口径（按当前语言）。
+    pub fn formula(&self) -> String {
+        crate::i18n::t(self.formula_key)
+    }
+    /// 来源（按当前语言）。
+    pub fn source(&self) -> String {
+        crate::i18n::t(self.source_key)
+    }
+}
 
 /// 内花键 17 项口径（顺序 = `TAGS_INT`）。
 pub const ANSI_COLUMNS_INT: &[AnsiColumnSpec] = &[
-    AnsiColumnSpec { tag: "花键类型", label: "花键类型", unit: "", formula: "Table 2 列（30°平/圆齿根 × 齿侧/外径配合；由 profile 预设决定）", source: SOURCE_TABLE2 },
-    AnsiColumnSpec { tag: "齿数", label: "齿数 N", unit: "", formula: "输入齿数 N", source: "用户填写" },
-    AnsiColumnSpec { tag: "径节", label: "径节 P/Ps", unit: "", formula: "Table 3 的 P/Ps 成对写法（Ps=2P）", source: "ANSI B92.1 Table 3（p11）" },
-    AnsiColumnSpec { tag: "压力角", label: "压力角 φD", unit: "°", formula: "Table 2 列：30° / 37.5° / 45°", source: SOURCE_TABLE2 },
-    AnsiColumnSpec { tag: "基圆直径", label: "基圆直径 Db", unit: "mm", formula: "Db = D·cosφD，D = N/P（英寸→mm 已换算）", source: SOURCE_TABLE2 },
-    AnsiColumnSpec { tag: "节圆直径", label: "节圆直径 D", unit: "mm", formula: "D = N/P（标准英寸值 × 25.4 = mm）", source: SOURCE_TABLE2 },
-    AnsiColumnSpec { tag: "大径上差", label: "大径上差", unit: "", formula: "ANSI B92.1 配合/公差表 —— 本仓未收", source: SOURCE_MISSING },
-    AnsiColumnSpec { tag: "大径", label: "大径 Dri", unit: "mm", formula: "Dri = (N+1.35)/P（30°平齿侧 A；B/C/D/E 列各自系数）", source: SOURCE_TABLE2 },
-    AnsiColumnSpec { tag: "大径下差", label: "大径下差", unit: "", formula: "ANSI B92.1 配合/公差表 —— 本仓未收", source: SOURCE_MISSING },
-    AnsiColumnSpec { tag: "有效直径", label: "有效直径 DFi", unit: "mm", formula: "DFi = (N+1)/P + 2cF（B 列含 −0.004 in 修正）", source: SOURCE_TABLE2 },
-    AnsiColumnSpec { tag: "小径", label: "小径 Di", unit: "mm", formula: "Di = (N−1)/P（30°；37.5° −0.8/P、45° −0.6/P）", source: SOURCE_TABLE2 },
-    AnsiColumnSpec { tag: "实际齿厚最大值", label: "实际齿厚最大值", unit: "", formula: "ANSI B92.1 齿厚/公差表 —— 本仓未收", source: SOURCE_MISSING },
-    AnsiColumnSpec { tag: "作用齿厚最小值", label: "作用齿厚最小值", unit: "", formula: "ANSI B92.1 齿厚/公差表 —— 本仓未收", source: SOURCE_MISSING },
-    AnsiColumnSpec { tag: "跨棒距上差", label: "跨棒距上差", unit: "", formula: "ANSI B92.1 量棒检验表（p30–p32）—— 本仓未收", source: SOURCE_MISSING },
-    AnsiColumnSpec { tag: "跨棒距", label: "跨棒距", unit: "mm", formula: "ANSI B92.1 量棒直径 + 量棒跨距表 —— 本仓未收", source: SOURCE_MISSING },
-    AnsiColumnSpec { tag: "跨棒距下差", label: "跨棒距下差", unit: "", formula: "ANSI B92.1 量棒检验表（p30–p32）—— 本仓未收", source: SOURCE_MISSING },
-    AnsiColumnSpec { tag: "量棒直径", label: "量棒直径", unit: "mm", formula: "ANSI B92.1 量棒直径表 —— 本仓未收", source: SOURCE_MISSING },
+    AnsiColumnSpec { tag: "花键类型", label_key: "gui.ansi.col.spline_type", symbol: "", unit: "", formula_key: "gui.ansi.formula.profile_column", source_key: "gui.ansi.source.table2" },
+    AnsiColumnSpec { tag: "齿数", label_key: "gui.ansi.col.teeth", symbol: "N", unit: "", formula_key: "gui.ansi.formula.teeth_input", source_key: "gui.ansi.source.user" },
+    AnsiColumnSpec { tag: "径节", label_key: "gui.ansi.col.pitch", symbol: "P/Ps", unit: "", formula_key: "gui.ansi.formula.pitch_pair", source_key: "gui.ansi.source.table3" },
+    AnsiColumnSpec { tag: "压力角", label_key: "gui.ansi.col.pressure_angle", symbol: "φD", unit: "°", formula_key: "gui.ansi.formula.alpha_columns", source_key: "gui.ansi.source.table2" },
+    AnsiColumnSpec { tag: "基圆直径", label_key: "gui.ansi.col.base_dia", symbol: "Db", unit: "mm", formula_key: "gui.ansi.formula.base_dia", source_key: "gui.ansi.source.table2" },
+    AnsiColumnSpec { tag: "节圆直径", label_key: "gui.ansi.col.pitch_dia", symbol: "D", unit: "mm", formula_key: "gui.ansi.formula.pitch_dia", source_key: "gui.ansi.source.table2" },
+    AnsiColumnSpec { tag: "大径上差", label_key: "gui.ansi.col.major_dia_up", symbol: "", unit: "", formula_key: "gui.ansi.formula.fit_missing", source_key: "gui.ansi.source.missing" },
+    AnsiColumnSpec { tag: "大径", label_key: "gui.ansi.col.major_dia", symbol: "Dri", unit: "mm", formula_key: "gui.ansi.formula.major_dia_int", source_key: "gui.ansi.source.table2" },
+    AnsiColumnSpec { tag: "大径下差", label_key: "gui.ansi.col.major_dia_down", symbol: "", unit: "", formula_key: "gui.ansi.formula.fit_missing", source_key: "gui.ansi.source.missing" },
+    AnsiColumnSpec { tag: "有效直径", label_key: "gui.ansi.col.form_dia", symbol: "DFi", unit: "mm", formula_key: "gui.ansi.formula.form_dia_int", source_key: "gui.ansi.source.table2" },
+    AnsiColumnSpec { tag: "小径", label_key: "gui.ansi.col.minor_dia", symbol: "Di", unit: "mm", formula_key: "gui.ansi.formula.minor_dia_int", source_key: "gui.ansi.source.table2" },
+    AnsiColumnSpec { tag: "实际齿厚最大值", label_key: "gui.ansi.col.thick_max_actual", symbol: "", unit: "", formula_key: "gui.ansi.formula.thickness_missing", source_key: "gui.ansi.source.missing" },
+    AnsiColumnSpec { tag: "作用齿厚最小值", label_key: "gui.ansi.col.thick_min_effective", symbol: "", unit: "", formula_key: "gui.ansi.formula.thickness_missing", source_key: "gui.ansi.source.missing" },
+    AnsiColumnSpec { tag: "跨棒距上差", label_key: "gui.ansi.col.over_pins_up", symbol: "", unit: "", formula_key: "gui.ansi.formula.pin_inspection_missing", source_key: "gui.ansi.source.missing" },
+    AnsiColumnSpec { tag: "跨棒距", label_key: "gui.ansi.col.over_pins", symbol: "", unit: "mm", formula_key: "gui.ansi.formula.over_pins_missing", source_key: "gui.ansi.source.missing" },
+    AnsiColumnSpec { tag: "跨棒距下差", label_key: "gui.ansi.col.over_pins_down", symbol: "", unit: "", formula_key: "gui.ansi.formula.pin_inspection_missing", source_key: "gui.ansi.source.missing" },
+    AnsiColumnSpec { tag: "量棒直径", label_key: "gui.ansi.col.pin_dia", symbol: "", unit: "mm", formula_key: "gui.ansi.formula.pin_dia_missing", source_key: "gui.ansi.source.missing" },
 ];
 
 /// 外花键 17 项口径（顺序 = `TAGS_EXT`）。
 pub const ANSI_COLUMNS_EXT: &[AnsiColumnSpec] = &[
-    AnsiColumnSpec { tag: "花键类型", label: "花键类型", unit: "", formula: "Table 2 列（30°平/圆齿根 × 齿侧/外径配合；由 profile 预设决定）", source: SOURCE_TABLE2 },
-    AnsiColumnSpec { tag: "齿数", label: "齿数 N", unit: "", formula: "输入齿数 N", source: "用户填写" },
-    AnsiColumnSpec { tag: "径节", label: "径节 P/Ps", unit: "", formula: "Table 3 的 P/Ps 成对写法（Ps=2P）", source: "ANSI B92.1 Table 3（p11）" },
-    AnsiColumnSpec { tag: "压力角", label: "压力角 φD", unit: "°", formula: "Table 2 列：30° / 37.5° / 45°", source: SOURCE_TABLE2 },
-    AnsiColumnSpec { tag: "基圆直径", label: "基圆直径 Db", unit: "mm", formula: "Db = D·cosφD，D = N/P（英寸→mm 已换算）", source: SOURCE_TABLE2 },
-    AnsiColumnSpec { tag: "节圆直径", label: "节圆直径 D", unit: "mm", formula: "D = N/P（标准英寸值 × 25.4 = mm）", source: SOURCE_TABLE2 },
-    AnsiColumnSpec { tag: "大径上差", label: "大径上差", unit: "", formula: "ANSI B92.1 配合/公差表 —— 本仓未收", source: SOURCE_MISSING },
-    AnsiColumnSpec { tag: "大径", label: "大径 Do", unit: "mm", formula: "Do = (N+1)/P（Table 2 全列同式）", source: SOURCE_TABLE2 },
-    AnsiColumnSpec { tag: "大径下差", label: "大径下差", unit: "", formula: "ANSI B92.1 配合/公差表 —— 本仓未收", source: SOURCE_MISSING },
-    AnsiColumnSpec { tag: "渐开线终止圆直径", label: "渐开线终止圆直径 DFe", unit: "mm", formula: "DFe = (N−1)/P − 2cF（37.5° −0.8/P、45° −0.6/P）", source: SOURCE_TABLE2 },
-    AnsiColumnSpec { tag: "小径", label: "小径 Dre", unit: "mm", formula: "Dre = (N−1.35/P)（30°；圆齿根 16/32 及更细 (N−2)/P；A/B 列 (N−1.35)/P）", source: SOURCE_TABLE2 },
-    AnsiColumnSpec { tag: "作用齿厚最大值", label: "作用齿厚最大值", unit: "", formula: "ANSI B92.1 齿厚/公差表 —— 本仓未收", source: SOURCE_MISSING },
-    AnsiColumnSpec { tag: "实际齿厚最小值", label: "实际齿厚最小值", unit: "", formula: "ANSI B92.1 齿厚/公差表 —— 本仓未收", source: SOURCE_MISSING },
-    AnsiColumnSpec { tag: "公法线上差", label: "公法线上差", unit: "", formula: "ANSI B92.1 公法线/跨测表 —— 本仓未收", source: SOURCE_MISSING },
-    AnsiColumnSpec { tag: "公法线长度", label: "公法线长度", unit: "mm", formula: "ANSI B92.1 公法线/跨测表 —— 本仓未收", source: SOURCE_MISSING },
-    AnsiColumnSpec { tag: "公法线下差", label: "公法线下差", unit: "", formula: "ANSI B92.1 公法线/跨测表 —— 本仓未收", source: SOURCE_MISSING },
-    AnsiColumnSpec { tag: "跨测齿数", label: "跨测齿数", unit: "", formula: "ANSI B92.1 公法线/跨测表 —— 本仓未收", source: SOURCE_MISSING },
+    AnsiColumnSpec { tag: "花键类型", label_key: "gui.ansi.col.spline_type", symbol: "", unit: "", formula_key: "gui.ansi.formula.profile_column", source_key: "gui.ansi.source.table2" },
+    AnsiColumnSpec { tag: "齿数", label_key: "gui.ansi.col.teeth", symbol: "N", unit: "", formula_key: "gui.ansi.formula.teeth_input", source_key: "gui.ansi.source.user" },
+    AnsiColumnSpec { tag: "径节", label_key: "gui.ansi.col.pitch", symbol: "P/Ps", unit: "", formula_key: "gui.ansi.formula.pitch_pair", source_key: "gui.ansi.source.table3" },
+    AnsiColumnSpec { tag: "压力角", label_key: "gui.ansi.col.pressure_angle", symbol: "φD", unit: "°", formula_key: "gui.ansi.formula.alpha_columns", source_key: "gui.ansi.source.table2" },
+    AnsiColumnSpec { tag: "基圆直径", label_key: "gui.ansi.col.base_dia", symbol: "Db", unit: "mm", formula_key: "gui.ansi.formula.base_dia", source_key: "gui.ansi.source.table2" },
+    AnsiColumnSpec { tag: "节圆直径", label_key: "gui.ansi.col.pitch_dia", symbol: "D", unit: "mm", formula_key: "gui.ansi.formula.pitch_dia", source_key: "gui.ansi.source.table2" },
+    AnsiColumnSpec { tag: "大径上差", label_key: "gui.ansi.col.major_dia_up", symbol: "", unit: "", formula_key: "gui.ansi.formula.fit_missing", source_key: "gui.ansi.source.missing" },
+    AnsiColumnSpec { tag: "大径", label_key: "gui.ansi.col.major_dia", symbol: "Do", unit: "mm", formula_key: "gui.ansi.formula.major_dia_ext", source_key: "gui.ansi.source.table2" },
+    AnsiColumnSpec { tag: "大径下差", label_key: "gui.ansi.col.major_dia_down", symbol: "", unit: "", formula_key: "gui.ansi.formula.fit_missing", source_key: "gui.ansi.source.missing" },
+    AnsiColumnSpec { tag: "渐开线终止圆直径", label_key: "gui.ansi.col.form_dia_ext", symbol: "DFe", unit: "mm", formula_key: "gui.ansi.formula.form_dia_ext", source_key: "gui.ansi.source.table2" },
+    AnsiColumnSpec { tag: "小径", label_key: "gui.ansi.col.minor_dia", symbol: "Dre", unit: "mm", formula_key: "gui.ansi.formula.minor_dia_ext", source_key: "gui.ansi.source.table2" },
+    AnsiColumnSpec { tag: "作用齿厚最大值", label_key: "gui.ansi.col.thick_max_effective", symbol: "", unit: "", formula_key: "gui.ansi.formula.thickness_missing", source_key: "gui.ansi.source.missing" },
+    AnsiColumnSpec { tag: "实际齿厚最小值", label_key: "gui.ansi.col.thick_min_actual", symbol: "", unit: "", formula_key: "gui.ansi.formula.thickness_missing", source_key: "gui.ansi.source.missing" },
+    AnsiColumnSpec { tag: "公法线上差", label_key: "gui.ansi.col.base_tangent_up", symbol: "", unit: "", formula_key: "gui.ansi.formula.base_tangent_missing", source_key: "gui.ansi.source.missing" },
+    AnsiColumnSpec { tag: "公法线长度", label_key: "gui.ansi.col.base_tangent", symbol: "", unit: "mm", formula_key: "gui.ansi.formula.base_tangent_missing", source_key: "gui.ansi.source.missing" },
+    AnsiColumnSpec { tag: "公法线下差", label_key: "gui.ansi.col.base_tangent_down", symbol: "", unit: "", formula_key: "gui.ansi.formula.base_tangent_missing", source_key: "gui.ansi.source.missing" },
+    AnsiColumnSpec { tag: "跨测齿数", label_key: "gui.ansi.col.span_teeth", symbol: "", unit: "", formula_key: "gui.ansi.formula.base_tangent_missing", source_key: "gui.ansi.source.missing" },
 ];
 
 /// 方向 → 列口径。
@@ -988,10 +1015,10 @@ pub fn options_json() -> serde_json::Value {
             .map(|c| {
                 serde_json::json!({
                     "tag": c.tag,
-                    "label": c.label,
+                    "label": c.label(),
                     "unit": c.unit,
-                    "formula": c.formula,
-                    "source": c.source,
+                    "formula": c.formula(),
+                    "source": c.source(),
                 })
             })
             .collect()
@@ -1003,13 +1030,11 @@ pub fn options_json() -> serde_json::Value {
             "ext": cols(SplineSide::External),
         },
         "langs": [
-            {"id": "cn", "label": "纯中文"},
-            {"id": "en", "label": "纯英文"},
+            {"id": "cn", "label": crate::i18n::t("card.ansi.lang.cn")},
+            {"id": "en", "label": crate::i18n::t("card.ansi.lang.en")},
         ],
-        "missing_note": "ANSI B92.1 的配合/公差（Table 4/5）、量棒检验（p30–p32）、\
-                         公法线跨测表本仓未收 —— 这些格子显示「—」，不臆造。",
-        "note": "内/外共用同一套 Table 2 公式（invol_spline.rs 的 ANSI 分支）；\
-                 模板按语种拆成纯中文/纯英文两版，位置/字高/层照原双语模板。",
+        "missing_note": crate::i18n::t("card.ansi.missing_note"),
+        "note": crate::i18n::t("card.ansi.note"),
     })
 }
 
@@ -1099,15 +1124,15 @@ impl AnsiTableModel {
         for (c, (tag, value)) in columns(spec.side).iter().zip(vals) {
             debug_assert_eq!(c.tag, tag);
             if value == MISSING {
-                missing.push(c.label.to_string());
+                missing.push(c.label());
             }
             items.push(serde_json::json!({
                 "tag": tag,
-                "label": c.label,
+                "label": c.label(),
                 "unit": c.unit,
                 "value": value,
-                "formula": c.formula,
-                "source": c.source,
+                "formula": c.formula(),
+                "source": c.source(),
                 "missing": value == MISSING,
             }));
         }
@@ -1509,6 +1534,85 @@ mod tests {
         set_lang_auto();
     }
 
+    /// ② GUI 元数据批：ANSI 卡语种名 + 17 项列名/口径/来源 + `options_json` 的 langs/notes
+    /// **随语言且非空**；英文侧**零汉字**；列名里的符号（`N`/`P/Ps`/`φD`/`Dri`…）两语原样。
+    #[test]
+    fn ansi_gui_metadata_switches_language_and_has_no_cjk() {
+        use crate::i18n::{set_lang, set_lang_auto, Lang};
+        let _g = crate::global_state_test_lock();
+        let cjk = |s: &str| s.chars().any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c));
+        let snap = |side: SplineSide| -> Vec<(String, String, String, String)> {
+            columns(side)
+                .iter()
+                .map(|c| (c.tag.to_string(), c.label(), c.formula(), c.source()))
+                .collect()
+        };
+        set_lang(Lang::Zh);
+        let zh_int = snap(SplineSide::Internal);
+        let zh_ext = snap(SplineSide::External);
+        let zh_lang = AnsiLang::Cn.label();
+        let zh_en_lang = AnsiLang::En.label();
+        let zh_opts = options_json();
+        set_lang(Lang::En);
+        let en_int = snap(SplineSide::Internal);
+        let en_ext = snap(SplineSide::External);
+        let en_lang = AnsiLang::Cn.label();
+        let en_en_lang = AnsiLang::En.label();
+        let en_opts = options_json();
+        assert_eq!(zh_lang, "纯中文");
+        assert_eq!(zh_en_lang, "纯英文");
+        assert_eq!(en_lang, "Chinese only");
+        assert_eq!(en_en_lang, "English only");
+        for (side, zh, en) in [
+            ("int", &zh_int, &en_int),
+            ("ext", &zh_ext, &en_ext),
+        ] {
+            assert_eq!(zh.len(), 17, "{side} 17 项");
+            for (i, ((zt, zl, zf, zs), (et, el, ef, es))) in zh.iter().zip(en.iter()).enumerate() {
+                assert_eq!(zt, et, "{side} 第 {} 项 tag 不译", i + 1);
+                for (what, z, e) in [("label", zl, el), ("formula", zf, ef), ("source", zs, es)] {
+                    assert!(!z.is_empty() && !e.is_empty(), "{side} 第 {} 项 {what} 空", i + 1);
+                    assert!(!cjk(e), "{side} 第 {} 项 {what} 英文含汉字：{e:?}", i + 1);
+                    assert_ne!(z, e, "{side} 第 {} 项 {what} 未随语言：{z:?}", i + 1);
+                    // 列名必为中文术语（口径/来源可能是纯公式/标准号，如 `Di = (N−1)/P…`）
+                    if what == "label" {
+                        assert!(cjk(z), "{side} 第 {} 项列名中文应含汉字：{z:?}", i + 1);
+                    }
+                }
+                // 列名 = 译名 +「空格 + 符号」；符号两语原样，且中文列名里的符号不丢
+                let spec = if side == "int" {
+                    SplineSide::Internal
+                } else {
+                    SplineSide::External
+                };
+                let sym = columns(spec)[i].symbol;
+                if !sym.is_empty() {
+                    assert!(
+                        zl.ends_with(sym) && el.ends_with(sym),
+                        "{side} 第 {} 项丢符号 {sym}",
+                        i + 1
+                    );
+                    assert_ne!(zl, el, "{side} 第 {} 项列名未随语言", i + 1);
+                }
+            }
+        }
+        // options_json：langs / missing_note / note 同源随语言
+        assert_eq!(zh_opts["langs"][0]["label"], "纯中文");
+        assert_eq!(en_opts["langs"][0]["label"], "Chinese only");
+        for f in ["missing_note", "note"] {
+            let z = zh_opts[f].as_str().unwrap_or_default();
+            let e = en_opts[f].as_str().unwrap_or_default();
+            assert!(!z.is_empty() && !e.is_empty(), "options_json.{f} 空");
+            assert!(!cjk(e), "options_json.{f} 英文含汉字：{e:?}");
+            assert!(cjk(z), "options_json.{f} 中文应含汉字：{z:?}");
+        }
+        // 列名/口径/来源的 zh 值不得被接口改制搬丢
+        assert_eq!(zh_int[0].2, "Table 2 列（30°平/圆齿根 × 齿侧/外径配合；由 profile 预设决定）");
+        assert_eq!(zh_int[5].1, "节圆直径 D");
+        assert_eq!(zh_ext[9].1, "渐开线终止圆直径 DFe");
+        set_lang_auto();
+    }
+
     /// 17 项口径 ↔ ATTDEF 逐项同序（表驱动护栏）。
     #[test]
     fn ansi_columns_cover_all_attdefs() {
@@ -1519,7 +1623,11 @@ mod tests {
             assert_eq!(cols.len(), 17);
             for (i, (c, ad)) in cols.iter().zip(atts.iter()).enumerate() {
                 assert_eq!(c.tag, ad.tag, "{side:?} 第 {} 项", i + 1);
-                assert!(!c.label.is_empty() && !c.formula.is_empty() && !c.source.is_empty());
+                assert!(
+                    !c.label().is_empty() && !c.formula().is_empty() && !c.source().is_empty(),
+                    "{side:?} 第 {} 项 GUI 元数据空",
+                    i + 1
+                );
             }
         }
     }

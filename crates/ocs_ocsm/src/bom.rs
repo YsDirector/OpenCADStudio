@@ -44,7 +44,48 @@ pub(crate) const HEAD_H: f64 = 12.0;
 pub(crate) const ROW_H: f64 = 8.0;
 const LAYER_LINE: &str = "2细线层";
 /// 8 个单元格 tag（顺序 = 行块 ATTDEF 的顺序，取值按 tag 匹配而不是按下标）。
+/// ★ 这是**中文一套**（模板 `OCSM_BOMROW.dwg` 的 ATTDEF tag），也是老图的匹配键；不译。
 pub(crate) const CELL_TAGS: [&str; 8] = ["序号", "图号", "名称", "数量", "材料", "单重", "总重", "备注"];
+
+/// 8 个单元格 tag 的**英文一套**（与 [`CELL_TAGS`] 同序；新图导出/写入随语言的那一套）。
+pub(crate) const CELL_TAGS_EN: [&str; 8] = [
+    "No.",
+    "Drawing No.",
+    "Name",
+    "Qty",
+    "Material",
+    "Unit wt.",
+    "Total wt.",
+    "Remarks",
+];
+
+/// 当前语言的一套列头（**写入侧**：新图导出/生成用当前语言）。
+pub(crate) fn cell_tags(lang: crate::i18n::Lang) -> &'static [&'static str; 8] {
+    match lang {
+        crate::i18n::Lang::En => &CELL_TAGS_EN,
+        crate::i18n::Lang::Zh => &CELL_TAGS,
+    }
+}
+
+/// **读取侧**：任一语言的 tag → 列号（**zh/en 两套都认**；未知 → `None`）。
+/// ★ 匹配键逻辑本身不译（仍是「按 tag 找列」），只是把「认哪些 tag」扩到两套 ——
+/// 这样老图（中文 tag）与英文 tag 的行块都读得回。
+pub(crate) fn cell_index(tag: &str) -> Option<usize> {
+    let t = tag.trim();
+    CELL_TAGS
+        .iter()
+        .position(|x| *x == t)
+        .or_else(|| CELL_TAGS_EN.iter().position(|x| *x == t))
+}
+
+/// **读取侧**：按列号取属性值（zh/en tag 都认；缺 = 空串）。
+pub(crate) fn cell_value(ins: &Insert, i: usize) -> String {
+    ins.attributes
+        .iter()
+        .find(|a| cell_index(&a.tag) == Some(i))
+        .map(|a| a.value.trim().to_string())
+        .unwrap_or_default()
+}
 
 // ── 目录 / 配置 ────────────────────────────────────────────────────────────
 
@@ -650,7 +691,7 @@ pub(crate) fn fill_bom(
             seq += 1;
             let transform = ins.get_transform();
             for ad in &attdefs {
-                let Some(idx) = CELL_TAGS.iter().position(|t| *t == ad.tag) else {
+                let Some(idx) = cell_index(&ad.tag) else {
                     continue;
                 };
                 let mut a = AttributeEntity::from_definition(ad, Some(values[idx].clone()));
@@ -964,13 +1005,6 @@ pub(crate) fn cmd_bom_lock(host: &mut dyn HostApi, args: &str) {
 
     // 找那一行（按序号或图号匹配；先找序号）
     let doc = host.document().clone();
-    let attr_of = |ins: &Insert, tag: &str| -> String {
-        ins.attributes
-            .iter()
-            .find(|a| a.tag.trim() == tag)
-            .map(|a| a.value.trim().to_string())
-            .unwrap_or_default()
-    };
     let mut target: Option<Insert> = None;
     for e in doc.model_space_entities() {
         let EntityType::Insert(ins) = e else {
@@ -979,7 +1013,7 @@ pub(crate) fn cmd_bom_lock(host: &mut dyn HostApi, args: &str) {
         if ins.block_name != ROW_BLOCK {
             continue;
         }
-        if attr_of(ins, "序号") == *key || attr_of(ins, "图号") == *key {
+        if cell_value(ins, 0) == *key || cell_value(ins, 1) == *key {
             target = Some(ins.clone());
             break;
         }
@@ -988,7 +1022,7 @@ pub(crate) fn cmd_bom_lock(host: &mut dyn HostApi, args: &str) {
         host.push_error(&t_fmt("cmd.bom.lock.err.row_missing", &[("key", key)]));
         return;
     };
-    let cur_qty: usize = attr_of(&ins, "数量").parse().unwrap_or(1);
+    let cur_qty: usize = cell_value(&ins, 3).parse().unwrap_or(1);
         let unlock = matches!(arg.as_deref(), Some("off") | Some("OFF") | Some("解锁") | Some("unlock"));
 
     if unlock {
@@ -1019,15 +1053,15 @@ pub(crate) fn cmd_bom_lock(host: &mut dyn HostApi, args: &str) {
     // 数量改值（如果指定了新值）+ 写锁记录
     if qty != cur_qty {
         for a in ins.attributes.iter_mut() {
-            if a.tag.trim() == "数量" {
+            if cell_index(&a.tag) == Some(3) {
                 a.value = qty.to_string();
             }
         }
         // 总重跟着算（单重 × 数量）
-        let unit = attr_of(&ins, "单重");
+        let unit = cell_value(&ins, 5);
         if let Some(w) = weight_number(&unit) {
             for a in ins.attributes.iter_mut() {
-                if a.tag.trim() == "总重" {
+                if cell_index(&a.tag) == Some(6) {
                     a.value = trim_num(w * qty as f64);
                 }
             }
@@ -1159,22 +1193,15 @@ pub(crate) fn sheet_rows(doc: &ocs_plugin_api::host::acadrust::CadDocument) -> V
         if ins.block_name != ROW_BLOCK {
             continue;
         }
-        let get = |tag: &str| -> String {
-            ins.attributes
-                .iter()
-                .find(|a| a.tag.trim() == tag)
-                .map(|a| a.value.trim().to_string())
-                .unwrap_or_default()
-        };
         let cells = [
-            get("序号"),
-            get("图号"),
-            get("名称"),
-            get("数量"),
-            get("材料"),
-            get("单重"),
-            get("总重"),
-            get("备注"),
+            cell_value(&ins, 0),
+            cell_value(&ins, 1),
+            cell_value(&ins, 2),
+            cell_value(&ins, 3),
+            cell_value(&ins, 4),
+            cell_value(&ins, 5),
+            cell_value(&ins, 6),
+            cell_value(&ins, 7),
         ];
         if cells[0].is_empty() {
             continue;
@@ -1372,11 +1399,7 @@ pub(crate) fn cmd_bom_xlsx(host: &mut dyn HostApi, args: &str) {
         if ins.block_name != ROW_BLOCK {
             continue;
         }
-        let qty: Option<usize> = ins
-            .attributes
-            .iter()
-            .find(|a| a.tag.trim() == "数量")
-            .and_then(|a| a.value.trim().parse::<usize>().ok());
+        let qty: Option<usize> = cell_value(ins, 3).parse::<usize>().ok();
         let Some(q) = qty else { continue };
         let mut ins2 = ins.clone();
         let mut rec = ExtendedDataRecord::new(EXPORTED_APP);
@@ -1478,11 +1501,7 @@ pub(crate) fn cmd_bom_xlsxi(host: &mut dyn HostApi, args: &str) {
                 if ins.block_name != ROW_BLOCK {
                     continue;
                 }
-                let qty: Option<usize> = ins
-                    .attributes
-                    .iter()
-                    .find(|a| a.tag.trim() == "数量")
-                    .and_then(|a| a.value.trim().parse::<usize>().ok());
+                let qty: Option<usize> = cell_value(ins, 3).parse::<usize>().ok();
                 let Some(q) = qty else { continue };
                 let mut ins2 = ins.clone();
                 let mut rec = ExtendedDataRecord::new(EXPORTED_APP);
@@ -1940,6 +1959,52 @@ mod tests {
         let rows = sheet_rows(&doc);
         let nos: Vec<&str> = rows.iter().map(|r| r.cells[0].as_str()).collect();
         assert_eq!(nos, vec!["2", "10"], "应按数字序升序（不是字典序）");
+    }
+
+    /// ③ `CELL_TAGS` 读写兼容：**英文一套 tag** 的行块也能读回（`sheet_rows`/`cell_value`）；
+    /// 中文老图逐字不变；`cell_tags(lang)` = 写入侧当前语言那一套。
+    #[test]
+    fn cell_tags_read_accepts_english_and_chinese_sets() {
+        use ocs_plugin_api::host::acadrust::{entities::AttributeEntity, types::Vector3, CadDocument};
+        let mut doc = CadDocument::new();
+        for (tags, vals) in [
+            (
+                CELL_TAGS,
+                ["1", "GB/T 5780-2016", "六角头螺栓 C级 M8x35", "2", "Q235", "0.02", "0.04", "外购"],
+            ),
+            (
+                CELL_TAGS_EN,
+                ["2", "GB/T 5782-2016", "Hex head bolt M10x40", "3", "45", "0.05", "0.15", "Bought"],
+            ),
+        ] {
+            let mut row = Insert::new(ROW_BLOCK, Vector3::new(0.0, 0.0, 0.0));
+            for (tag, val) in tags.iter().zip(vals) {
+                let mut a = AttributeEntity::default();
+                a.tag = tag.to_string();
+                a.value = val.to_string();
+                row.attributes.push(a);
+            }
+            doc.add_entity(EntityType::Insert(row)).unwrap();
+        }
+        let rows = sheet_rows(&doc);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(
+            rows[0].cells,
+            ["1", "GB/T 5780-2016", "六角头螺栓 C级 M8x35", "2", "Q235", "0.02", "0.04", "外购"]
+        );
+        assert_eq!(
+            rows[1].cells,
+            ["2", "GB/T 5782-2016", "Hex head bolt M10x40", "3", "45", "0.05", "0.15", "Bought"]
+        );
+        // 写入侧：当前语言那一套（同序）
+        assert_eq!(cell_tags(crate::i18n::Lang::Zh), &CELL_TAGS);
+        assert_eq!(cell_tags(crate::i18n::Lang::En), &CELL_TAGS_EN);
+        // 读侧：任一语言的 tag 都能定位到同一列
+        for i in 0..8 {
+            assert_eq!(cell_index(CELL_TAGS[i]), Some(i));
+            assert_eq!(cell_index(CELL_TAGS_EN[i]), Some(i));
+        }
+        assert_eq!(cell_index(" Nope "), None);
     }
 
     #[test]

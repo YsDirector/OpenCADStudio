@@ -2992,7 +2992,7 @@ impl OcsmPlugin {
                 return;
             }
         };
-        host.push_undo(&crate::i18n::t_fmt("cmd.card.undo.lite_card", &[("label", card.label)]));
+        host.push_undo(&crate::i18n::t_fmt("cmd.card.undo.lite_card", &[("label", &card.label())]));
         let handles = host.add_entities(vec![acadrust::EntityType::Insert(ins)]);
         if handles.is_empty() {
             host.push_error(&crate::i18n::t_fmt("cmd.card.err.lite_card_no_handle", &[("id", c.id)]));
@@ -3002,7 +3002,7 @@ impl OcsmPlugin {
         host.push_info(&crate::i18n::t_fmt(
             "cmd.card.info.lite_card_inserted",
             &[
-                ("label", card.label),
+                ("label", &card.label()),
                 ("n", &values.len().to_string()),
                 ("x", &format!("{:.3}", at[0])),
                 ("y", &format!("{:.3}", at[1])),

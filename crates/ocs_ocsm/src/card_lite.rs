@@ -84,9 +84,11 @@ fn lite_text(raw: &str, lang: crate::i18n::Lang) -> String {
 
 /// 卡面标签符号（§31 形态：**符号与译名分置**，译文怎么改都不会丢符号）。
 /// `None` = 该行没有外挂符号（ANSI 4 卡的符号已含在双语原文里，如 `齿数 z` / `TEETH z`）。
-/// NF 族的大径/小径符号**随卡方向**（内 `Az`/`D`，外 `Dee`/`Die`；NF 原文符号）。
+/// NF 族的大径/小径符号**随卡方向**（内 `Az`/`D`，外 `Dee`/`Die`；NF 原文符号）；
+/// DIN 族同理（内 `d_f2`/`d_a2`/`M2_*`，外 `d_f1`/`d_a1`/`M1_*`）。
 fn label_symbol(f: &LiteFieldSpec, family: LiteFamily) -> Option<&'static str> {
     let nf_ext = matches!(family, LiteFamily::NfExt);
+    let din_ext = matches!(family, LiteFamily::DinExt);
     Some(match f.label {
         "card.gear.lite.label.module" => "m",
         "card.gear.lite.label.teeth" => "z",
@@ -119,6 +121,46 @@ fn label_symbol(f: &LiteFieldSpec, family: LiteFamily) -> Option<&'static str> {
         "card.nf.label.over_pins" => "G",
         "card.nf.label.span_teeth" => "K",
         "card.nf.label.base_tangent" => "W",
+        // DIN 族（`card.din.label.*` 与全卡同一组 key；符号两语原样）
+        "card.din.lite.label.desig" => {
+            if din_ext {
+                "W"
+            } else {
+                "N"
+            }
+        }
+        "card.din.label.teeth" => "z",
+        "card.din.label.module" => "m",
+        "card.din.label.alpha" => "α",
+        "card.din.label.root_dia" => {
+            if din_ext {
+                "d_f1"
+            } else {
+                "d_f2"
+            }
+        }
+        "card.din.label.root_form_dia" => {
+            if din_ext {
+                "d_Ff1"
+            } else {
+                "d_Ff2"
+            }
+        }
+        "card.din.label.tip_dia" => {
+            if din_ext {
+                "d_a1"
+            } else {
+                "d_a2"
+            }
+        }
+        "card.din.label.measuring_circle" => "D_M",
+        // 量圆距一行两义（max/min），靠 tag 尾巴区分（同 key 两条字段）
+        "card.din.label.over_pins" => match (din_ext, f.tag.ends_with("max")) {
+            (false, true) => "M2_max",
+            (false, false) => "M2_min",
+            (true, true) => "M1_max",
+            (true, false) => "M1_min",
+        },
         _ => return None,
     })
 }
@@ -165,6 +207,16 @@ fn en_label_width_factor(label_key: &str) -> Option<f64> {
         "card.nf.label.over_pins" => 0.42,
         "card.nf.label.span_teeth" => 0.86,
         "card.nf.label.base_tangent" => 0.48,
+        // DIN 族（脚本 `card_din_width_plan.py`；内/外卡取更紧者）
+        "card.din.lite.label.desig" => 0.73,
+        "card.din.label.teeth" => 0.61,
+        "card.din.label.module" => 1.0,
+        "card.din.label.alpha" => 0.63,
+        "card.din.label.root_dia" => 0.56,
+        "card.din.label.root_form_dia" => 0.42,
+        "card.din.label.tip_dia" => 0.59,
+        "card.din.label.measuring_circle" => 0.49,
+        "card.din.label.over_pins" => 0.33,
         _ => return None,
     })
 }
@@ -247,30 +299,31 @@ const NF_EXT_FIELDS: &[LiteFieldSpec] = &[
 ];
 
 // ── DIN 5480（Bild 6；标记 + z/m/α + 关键直径/量圆；按 DIN 自身口径，不照搬 GB）──
+// 标签 = catalog（`card.din.label.*`，与全卡同一组 key，§34 ① 卡面批）+ 符号（见 [`label_symbol`]）。
 const DIN_INT_FIELDS: &[LiteFieldSpec] = &[
-    fld!("(DIN简)标记", "N标记", "标记 N", 1.0),
-    fld!("(DIN简)齿数", "N齿数", "齿数 z", 1.0),
-    fld!("(DIN简)模数", "N模数", "模数 m", 1.0),
-    fld!("(DIN简)压力角", "N压力角", "压力角 α", 1.0),
-    fld!("(DIN简)齿根圆", "N齿根圆", "齿根圆 d_f2", 0.85),
-    fld!("(DIN简)齿根成形圆", "N齿根成形圆", "齿根成形圆 d_Ff2", 0.60),
-    fld!("(DIN简)齿顶圆", "N齿顶圆", "齿顶圆 d_a2", 0.80),
-    fld!("(DIN简)量圆", "N量圆", "量圆 D_M", 1.0),
-    fld!("(DIN简)量距max", "N量距max", "量圆距 M2_max", 0.65),
-    fld!("(DIN简)量距min", "N量距min", "量圆距 M2_min", 0.65),
+    fld!("(DIN简)标记", "N标记", "card.din.lite.label.desig", 1.0),
+    fld!("(DIN简)齿数", "N齿数", "card.din.label.teeth", 1.0),
+    fld!("(DIN简)模数", "N模数", "card.din.label.module", 1.0),
+    fld!("(DIN简)压力角", "N压力角", "card.din.label.alpha", 1.0),
+    fld!("(DIN简)齿根圆", "N齿根圆", "card.din.label.root_dia", 0.85),
+    fld!("(DIN简)齿根成形圆", "N齿根成形圆", "card.din.label.root_form_dia", 0.60),
+    fld!("(DIN简)齿顶圆", "N齿顶圆", "card.din.label.tip_dia", 0.80),
+    fld!("(DIN简)量圆", "N量圆", "card.din.label.measuring_circle", 1.0),
+    fld!("(DIN简)量距max", "N量距max", "card.din.label.over_pins", 0.65),
+    fld!("(DIN简)量距min", "N量距min", "card.din.label.over_pins", 0.65),
 ];
 
 const DIN_EXT_FIELDS: &[LiteFieldSpec] = &[
-    fld!("(DIN简)标记", "W标记", "标记 W", 1.0),
-    fld!("(DIN简)齿数", "W齿数", "齿数 z", 1.0),
-    fld!("(DIN简)模数", "W模数", "模数 m", 1.0),
-    fld!("(DIN简)压力角", "W压力角", "压力角 α", 1.0),
-    fld!("(DIN简)齿顶圆", "W齿顶圆", "齿顶圆 d_a1", 0.85),
-    fld!("(DIN简)齿根成形圆", "W齿根成形圆", "齿根成形圆 d_Ff1", 0.60),
-    fld!("(DIN简)齿根圆", "W齿根圆", "齿根圆 d_f1", 0.85),
-    fld!("(DIN简)量圆", "W量圆", "量圆 D_M", 1.0),
-    fld!("(DIN简)量距max", "W量距max", "量圆距 M1_max", 0.65),
-    fld!("(DIN简)量距min", "W量距min", "量圆距 M1_min", 0.65),
+    fld!("(DIN简)标记", "W标记", "card.din.lite.label.desig", 1.0),
+    fld!("(DIN简)齿数", "W齿数", "card.din.label.teeth", 1.0),
+    fld!("(DIN简)模数", "W模数", "card.din.label.module", 1.0),
+    fld!("(DIN简)压力角", "W压力角", "card.din.label.alpha", 1.0),
+    fld!("(DIN简)齿顶圆", "W齿顶圆", "card.din.label.tip_dia", 0.85),
+    fld!("(DIN简)齿根成形圆", "W齿根成形圆", "card.din.label.root_form_dia", 0.60),
+    fld!("(DIN简)齿根圆", "W齿根圆", "card.din.label.root_dia", 0.85),
+    fld!("(DIN简)量圆", "W量圆", "card.din.label.measuring_circle", 1.0),
+    fld!("(DIN简)量距max", "W量距max", "card.din.label.over_pins", 0.65),
+    fld!("(DIN简)量距min", "W量距min", "card.din.label.over_pins", 0.65),
 ];
 
 // ── ANSI B92.1（内/外 × 中/英 四张：基本参数 + 主要测量量）──
@@ -384,7 +437,7 @@ pub const LITE_CARDS: &[LiteCardSpec] = &[
     LiteCardSpec {
         id: "DIN花键精简表_内",
         block: "OCSM_LITE_DIN_INT",
-        title: "DIN 内花键参数表（精简）",
+        title: "card.din.lite.title.int",
         full_card: "DIN花键参数表",
         family: LiteFamily::DinInt,
         fields: DIN_INT_FIELDS,
@@ -392,7 +445,7 @@ pub const LITE_CARDS: &[LiteCardSpec] = &[
     LiteCardSpec {
         id: "DIN花键精简表_外",
         block: "OCSM_LITE_DIN_EXT",
-        title: "DIN 外花键参数表（精简）",
+        title: "card.din.lite.title.ext",
         full_card: "DIN花键参数表_外",
         family: LiteFamily::DinExt,
         fields: DIN_EXT_FIELDS,
@@ -1069,6 +1122,45 @@ mod tests {
                 assert!(ads.iter().any(|a| (a.width_factor - f).abs() < 1e-9));
             }
         }
+        // DIN 精简两卡：**随语言开关切换**（同 GB/齿轮/NF 族口径）
+        for (id, syms, want_zh, want_en) in [
+            (
+                "DIN花键精简表_内",
+                ["N", "z", "m", "α", "d_f2", "d_Ff2", "d_a2", "D_M", "M2_max", "M2_min"]
+                    .as_slice(),
+                "DIN 内花键参数表（精简）",
+                "DIN Internal Spline Data (Lite)",
+            ),
+            (
+                "DIN花键精简表_外",
+                ["W", "z", "m", "α", "d_f1", "d_Ff1", "d_a1", "D_M", "M1_max", "M1_min"]
+                    .as_slice(),
+                "DIN 外花键参数表（精简）",
+                "DIN External Spline Data (Lite)",
+            ),
+        ] {
+            let c = by_id(id).unwrap();
+            set_lang(Lang::Zh);
+            let zh = texts(c);
+            set_lang(Lang::En);
+            let en = texts(c);
+            assert_eq!(zh.len(), 11, "{id} 标题 + 10 行");
+            assert_eq!(en.len(), 11);
+            assert!(zh.iter().any(|s| s == want_zh), "{id} zh 标题：{zh:?}");
+            assert!(en.iter().any(|s| s == want_en), "{id} en 标题：{en:?}");
+            assert!(!en.iter().any(|s| cjk(s)), "{id} 英文卡面零汉字：{en:?}");
+            assert!(zh.iter().any(|s| cjk(s)), "{id} 中文卡面应含中文");
+            for sym in syms {
+                assert!(
+                    zh.iter().any(|s| s.split_whitespace().last() == Some(*sym)),
+                    "{id} zh 符号 {sym} 原样：{zh:?}"
+                );
+                assert!(
+                    en.iter().any(|s| s.split_whitespace().last() == Some(*sym)),
+                    "{id} en 符号 {sym} 原样：{en:?}"
+                );
+            }
+        }
         assert!(crate::i18n::missing_keys().is_empty(), "{:?}", crate::i18n::missing_keys());
         set_lang_auto();
     }
@@ -1167,6 +1259,54 @@ mod tests {
     }
 
     /// 代表性模型（每族一例；与完整卡现有测试/集成用例同参数）。
+    /// DIN 精简两卡：标记号（值）在内/外 × 中英下都不越值列、不与标签相叠（真字体 metrics）。
+    #[test]
+    fn din_lite_values_fit_value_column() {
+        use crate::i18n::{set_lang, set_lang_auto, Lang};
+        let _g = crate::global_state_test_lock();
+        let avail = X_RIGHT - X_VALUE;
+        let vals = [
+            "N120×3×38×9H",
+            "W120×3×38×8f",
+            "38",
+            "3",
+            "30°",
+            "106.125 min.",
+            "104.56 max.",
+            "112.43",
+            "111.16",
+            "+0.768",
+        ];
+        for lang in [Lang::Zh, Lang::En] {
+            set_lang(lang);
+            for id in ["DIN花键精简表_内", "DIN花键精简表_外"] {
+                let c = by_id(id).unwrap();
+                for f in c.fields {
+                    let wf = value_wf(f, c.family);
+                    let lab_s = label_text(f, c.family);
+                    let lab = text_box_ttf(
+                        [X_LABEL, label_y(1)],
+                        TEXT_H,
+                        label_wf(f, c.family.face_lang()),
+                        &lab_s,
+                    );
+                    for val in vals {
+                        let vb = text_box_ttf([X_VALUE, value_y(1)], TEXT_H, wf, val);
+                        let margin = (X_RIGHT - vb[2]) / avail;
+                        assert!(
+                            vb[2] <= X_RIGHT - 0.02 && margin >= 0.03,
+                            "{lang:?} {id} {}/「{val}」越值列：vwf={wf} {vb:?} 余量 {:.1}%",
+                            f.tag,
+                            margin * 100.0
+                        );
+                        assert!(lab[2] < vb[0], "{id} 标签×值相叠：{lab_s}");
+                    }
+                }
+            }
+        }
+        set_lang_auto();
+    }
+
     fn sample_models() -> Vec<(&'static str, serde_json::Value)> {
         vec![
             (

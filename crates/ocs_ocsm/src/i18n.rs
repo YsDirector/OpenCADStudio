@@ -194,6 +194,25 @@ pub const DATA_CATALOG: &[(&str, &str)] = &[
     ("GB/T 3-1997（ISO 3508:1976 / ISO 4755:1977）表 2；抄自 164580.com/data/detail_148.html（用户 2026-09-19 核对）", "GB/T 3-1997 (ISO 3508:1976 / ISO 4755:1977) Table 2; copied from 164580.com/data/detail_148.html (checked by the user on 2026-09-19)"),
     ("GB/T 1095-2003 表 1；数据复用 assets/keyway_gb1095.csv（b→t₂/r）+ 1979 d 列；模板 GB-T1095-2003毂槽-{主视图,侧视图}.dxf 逐图元反解", "GB/T 1095-2003 Table 1; data reuses assets/keyway_gb1095.csv (b→t₂/r) + the 1979 d column; template GB-T1095-2003毂槽-{主视图,侧视图}.dxf reverse-engineered entity by entity"),
     ("把手册 md 放到 ~/.agents/skills/ocsm-manual/manual/，或用环境变量 OCSM_MANUAL_DIR 指定目录", "Put the handbook md files under ~/.agents/skills/ocsm-manual/manual/, or point the OCSM_MANUAL_DIR environment variable at a directory"),
+    // ② GUI 元数据批补齐项（零件库树/视图名/尺寸下拉/元数据名；带 `{}` 的走 [`t_data_fmt`]）。
+    ("六角薄螺母", "Hex thin nut"),
+    ("外螺纹退刀槽", "External thread relief groove"),
+    ("六角螺母 C级", "Hex nut, grade C"),
+    ("基点 = 左端面对称轴（俯视图）/ 左端面×底面（主视图）/ 截面左下角（剖视图）；d 槽位承载 b", "Base point = left end face, symmetry axis (top view) / left end face × bottom face (front view) / lower-left corner of the section (section view); the d slot carries b"),
+    ("剖视图", "Section view"),
+    ("视图", "View"),
+    ("A型", "Type A"),
+    ("B型", "Type B"),
+    ("C型", "Type C"),
+    ("圆头普通平键", "Round-end parallel key"),
+    ("导向平键", "Gib-head key"),
+    ("轴径", "Shaft diameter"),
+    ("内径", "Bore diameter"),
+    ("毂槽（{}）", "Hub keyway ({})"),
+    ("砂轮越程槽 磨外圆", "Grinding relief groove, external grinding"),
+    ("圆柱销 A型", "Parallel pin, type A"),
+    ("内螺纹圆柱销", "Parallel pin with internal thread"),
+    ("{}（规格代号自带 N/d/D/B）；{} 表1/表2（de）；模板 矩形花键.dxf 逐图元反解", "{} (spec code already carries N/d/D/B); {} Table 1/2 (de); template 矩形花键.dxf reverse-engineered entity by entity"),
 ];
 
 /// GUI 元数据取词：`zh` 原值 → 当前语言。英文缺条目时**回落中文**并记入 [`missing_keys`]。
@@ -246,6 +265,29 @@ fn t_data_prefix(seg: &str) -> String {
         Some((zh, en)) => format!("{en}{}", &seg[zh.len()..]),
         None => t_data_soft(seg),
     }
+}
+
+/// 带占位符的 GUI 数据取词：模板（含 `{}`）本身进 [`DATA_CATALOG`]，`{}` 按顺序替换。
+/// `Lang::Zh` 下原样返回（占位符也填好）；英文缺条目时回落中文并记 missing。
+pub fn t_data_fmt(zh: &str, args: &[&str]) -> String {
+    if DATA_KEEP_AS_IS.contains(&zh) {
+        return zh.to_string();
+    }
+    let mut out = if lang() == Lang::Zh {
+        zh.to_string()
+    } else {
+        match DATA_CATALOG.iter().find(|(k, _)| *k == zh) {
+            Some((_, en)) if !en.is_empty() => en.to_string(),
+            _ => {
+                note_missing(&format!("data:{zh}"));
+                zh.to_string()
+            }
+        }
+    };
+    for a in args {
+        out = out.replacen("{}", a, 1);
+    }
+    out
 }
 
 /// 软取词：字典有就翻，没有就**原样返回且不记 missing**（用于批量 JSON：数据串不算漏译）。
@@ -2825,6 +2867,34 @@ pub const CATALOG: &[Msg] = &[
     Msg::new("card.name.nf_ext", "NF 外花键参数表", "NF external spline table"),
     Msg::new("card.name.din", "DIN 花键参数表", "DIN spline table"),
 
+    // ── GUI 元数据：卡类型下拉的显示名/分组（`card.rs::CardTypeSpec`；GUI 卡类型列表）──
+    // ★ 前批 ⑥ 的未接线项（§32.6 ②）：只做 **label/group**（summary 仍中文，见 §34 报告）；
+    //   `id`/`renderer`/`direction` 是协议记号，**不译**。
+    Msg::new("gui.card.group.lite", "精简版", "Lite"),
+    Msg::new("gui.card.report.title", "{card}计算书", "{card} report"),
+    Msg::new("gui.card.gb_int.label", "GB 花键参数表（内）", "GB spline parameter table (internal)"),
+    Msg::new("gui.card.gb_ext.label", "GB 花键参数表（外）", "GB spline parameter table (external)"),
+    Msg::new("gui.card.gear.label", "齿轮参数表（GB/T 10095）", "Gear parameter table (GB/T 10095)"),
+    Msg::new("gui.card.ansi_cn_int.label", "ANSI 花键参数表（内·纯中文）", "ANSI spline parameter table (internal · Chinese)"),
+    Msg::new("gui.card.ansi_cn_ext.label", "ANSI 花键参数表（外·纯中文）", "ANSI spline parameter table (external · Chinese)"),
+    Msg::new("gui.card.ansi_en_int.label", "ANSI 花键参数表（内·纯英文）", "ANSI spline parameter table (internal · English)"),
+    Msg::new("gui.card.ansi_en_ext.label", "ANSI 花键参数表（外·纯英文）", "ANSI spline parameter table (external · English)"),
+    Msg::new("gui.card.nf_int.label", "NF E22-141 内花键参数表", "NF E22-141 internal spline parameter table"),
+    Msg::new("gui.card.nf_ext.label", "NF E22-141 外花键参数表", "NF E22-141 external spline parameter table"),
+    Msg::new("gui.card.din_int.label", "DIN 5480 内花键参数表", "DIN 5480 internal spline parameter table"),
+    Msg::new("gui.card.din_ext.label", "DIN 5480 外花键参数表", "DIN 5480 external spline parameter table"),
+    Msg::new("gui.card.gb_int_lite.label", "GB 花键参数表（内·精简版）", "GB spline parameter table (internal · lite)"),
+    Msg::new("gui.card.gb_ext_lite.label", "GB 花键参数表（外·精简版）", "GB spline parameter table (external · lite)"),
+    Msg::new("gui.card.nf_int_lite.label", "NF E22-141 内花键参数表（精简版）", "NF E22-141 internal spline parameter table (lite)"),
+    Msg::new("gui.card.nf_ext_lite.label", "NF E22-141 外花键参数表（精简版）", "NF E22-141 external spline parameter table (lite)"),
+    Msg::new("gui.card.din_int_lite.label", "DIN 5480 内花键参数表（精简版）", "DIN 5480 internal spline parameter table (lite)"),
+    Msg::new("gui.card.din_ext_lite.label", "DIN 5480 外花键参数表（精简版）", "DIN 5480 external spline parameter table (lite)"),
+    Msg::new("gui.card.ansi_cn_int_lite.label", "ANSI 花键参数表（内·纯中文·精简版）", "ANSI spline parameter table (internal · Chinese · lite)"),
+    Msg::new("gui.card.ansi_cn_ext_lite.label", "ANSI 花键参数表（外·纯中文·精简版）", "ANSI spline parameter table (external · Chinese · lite)"),
+    Msg::new("gui.card.ansi_en_int_lite.label", "ANSI 花键参数表（内·纯英文·精简版）", "ANSI spline parameter table (internal · English · lite)"),
+    Msg::new("gui.card.ansi_en_ext_lite.label", "ANSI 花键参数表（外·纯英文·精简版）", "ANSI spline parameter table (external · English · lite)"),
+    Msg::new("gui.card.gear_lite.label", "齿轮参数表（GB/T 10095·精简版）", "Gear parameter table (GB/T 10095 · lite)"),
+
     // ── 卡面标签：GB 花键参数表（`spline_table.rs`，③ 卡面批 ① 族）──
     // 用户 2026-09-27：「**卡面文字也要英译**」；**标准符号/代号/标准号/值原样**（不列在表里）。
     // * zh 侧含 GB 模板自带的对齐空格（`模  数`/`小  径`/`齿 形 角`）＝模板忠实，不动版面；
@@ -2960,6 +3030,140 @@ pub const CATALOG: &[Msg] = &[
     Msg::new("card.ansi.lite.label.base_tangent", "公法线 W", "BASE TANG. W"),
     Msg::new("card.ansi.lite.label.span_teeth", "跨测齿数 K", "SPAN TEETH K"),
 
+    // ── GUI 元数据：ANSI 卡语种名 + 17 项列口径（`ansi_table.rs`；GUI 表头/口径 tooltip）──
+    // ★ 这些是 **GUI 元数据**（不是卡面文字）：列名 = `gui.ansi.col.*`，取值口径/来源分别为
+    //   `gui.ansi.formula.*` / `gui.ansi.source.*`（前批 ⑥ 的未接线项）。符号与译名分置。
+    Msg::new("card.ansi.lang.cn", "纯中文", "Chinese only"),
+    Msg::new("card.ansi.lang.en", "纯英文", "English only"),
+    Msg::new(
+        "card.ansi.missing_note",
+        "ANSI B92.1 的配合/公差（Table 4/5）、量棒检验（p30–p32）、公法线跨测表本仓未收 —— 这些格子显示「—」，不臆造。",
+        "ANSI B92.1 fits/tolerances (Table 4/5), pin inspection (p30–p32) and the base tangent/span tables are not collected in this repo — those cells show “—”; no guesswork.",
+    ),
+    Msg::new(
+        "card.ansi.note",
+        "内/外共用同一套 Table 2 公式（invol_spline.rs 的 ANSI 分支）；模板按语种拆成纯中文/纯英文两版，位置/字高/层照原双语模板。",
+        "Internal and external sides share the same Table 2 formulas (the ANSI branch of invol_spline.rs); the template is split into a Chinese-only and an English-only version, with positions/heights/layers following the original bilingual template.",
+    ),
+    Msg::new("gui.ansi.col.spline_type", "花键类型", "Spline type"),
+    Msg::new("gui.ansi.col.teeth", "齿数", "Number of teeth"),
+    Msg::new("gui.ansi.col.pitch", "径节", "Diametral pitch"),
+    Msg::new("gui.ansi.col.pressure_angle", "压力角", "Pressure angle"),
+    Msg::new("gui.ansi.col.base_dia", "基圆直径", "Base diameter"),
+    Msg::new("gui.ansi.col.pitch_dia", "节圆直径", "Pitch diameter"),
+    Msg::new("gui.ansi.col.major_dia_up", "大径上差", "Major dia. upper dev."),
+    Msg::new("gui.ansi.col.major_dia", "大径", "Major diameter"),
+    Msg::new("gui.ansi.col.major_dia_down", "大径下差", "Major dia. lower dev."),
+    Msg::new("gui.ansi.col.form_dia", "有效直径", "Form diameter"),
+    Msg::new("gui.ansi.col.form_dia_ext", "渐开线终止圆直径", "Form diameter"),
+    Msg::new("gui.ansi.col.minor_dia", "小径", "Minor diameter"),
+    Msg::new("gui.ansi.col.thick_max_actual", "实际齿厚最大值", "Max. actual tooth thickness"),
+    Msg::new("gui.ansi.col.thick_min_effective", "作用齿厚最小值", "Min. effective tooth thickness"),
+    Msg::new("gui.ansi.col.over_pins_up", "跨棒距上差", "Over-pins upper dev."),
+    Msg::new("gui.ansi.col.over_pins", "跨棒距", "Measurement over pins"),
+    Msg::new("gui.ansi.col.over_pins_down", "跨棒距下差", "Over-pins lower dev."),
+    Msg::new("gui.ansi.col.pin_dia", "量棒直径", "Pin diameter"),
+    Msg::new("gui.ansi.col.thick_max_effective", "作用齿厚最大值", "Max. effective tooth thickness"),
+    Msg::new("gui.ansi.col.thick_min_actual", "实际齿厚最小值", "Min. actual tooth thickness"),
+    Msg::new("gui.ansi.col.base_tangent_up", "公法线上差", "Base tangent upper dev."),
+    Msg::new("gui.ansi.col.base_tangent", "公法线长度", "Base tangent length"),
+    Msg::new("gui.ansi.col.base_tangent_down", "公法线下差", "Base tangent lower dev."),
+    Msg::new("gui.ansi.col.span_teeth", "跨测齿数", "Span teeth"),
+    Msg::new(
+        "gui.ansi.formula.profile_column",
+        "Table 2 列（30°平/圆齿根 × 齿侧/外径配合；由 profile 预设决定）",
+        "Table 2 column (30° flat/fillet root × flank/major-dia. fit; set by the profile preset)",
+    ),
+    Msg::new("gui.ansi.formula.teeth_input", "输入齿数 N", "Number of teeth N (input)"),
+    Msg::new(
+        "gui.ansi.formula.pitch_pair",
+        "Table 3 的 P/Ps 成对写法（Ps=2P）",
+        "Paired P/Ps notation from Table 3 (Ps = 2P)",
+    ),
+    Msg::new("gui.ansi.formula.alpha_columns", "Table 2 列：30° / 37.5° / 45°", "Table 2 column: 30° / 37.5° / 45°"),
+    Msg::new(
+        "gui.ansi.formula.base_dia",
+        "Db = D·cosφD，D = N/P（英寸→mm 已换算）",
+        "Db = D·cos φD, D = N/P (inches → mm already converted)",
+    ),
+    Msg::new(
+        "gui.ansi.formula.pitch_dia",
+        "D = N/P（标准英寸值 × 25.4 = mm）",
+        "D = N/P (standard inch value × 25.4 = mm)",
+    ),
+    Msg::new(
+        "gui.ansi.formula.fit_missing",
+        "ANSI B92.1 配合/公差表 —— 本仓未收",
+        "ANSI B92.1 fit/tolerance tables — not collected in this repo",
+    ),
+    Msg::new(
+        "gui.ansi.formula.major_dia_int",
+        "Dri = (N+1.35)/P（30°平齿侧 A；B/C/D/E 列各自系数）",
+        "Dri = (N+1.35)/P (30° flat root, flank fit A; columns B/C/D/E use their own coefficients)",
+    ),
+    Msg::new(
+        "gui.ansi.formula.form_dia_int",
+        "DFi = (N+1)/P + 2cF（B 列含 −0.004 in 修正）",
+        "DFi = (N+1)/P + 2cF (column B includes a −0.004 in correction)",
+    ),
+    Msg::new(
+        "gui.ansi.formula.minor_dia_int",
+        "Di = (N−1)/P（30°；37.5° −0.8/P、45° −0.6/P）",
+        "Di = (N−1)/P (30°; 37.5° −0.8/P, 45° −0.6/P)",
+    ),
+    Msg::new(
+        "gui.ansi.formula.thickness_missing",
+        "ANSI B92.1 齿厚/公差表 —— 本仓未收",
+        "ANSI B92.1 tooth-thickness/tolerance tables — not collected in this repo",
+    ),
+    Msg::new(
+        "gui.ansi.formula.pin_inspection_missing",
+        "ANSI B92.1 量棒检验表（p30–p32）—— 本仓未收",
+        "ANSI B92.1 pin inspection tables (p30–p32) — not collected in this repo",
+    ),
+    Msg::new(
+        "gui.ansi.formula.over_pins_missing",
+        "ANSI B92.1 量棒直径 + 量棒跨距表 —— 本仓未收",
+        "ANSI B92.1 pin-diameter and over-pins tables — not collected in this repo",
+    ),
+    Msg::new(
+        "gui.ansi.formula.pin_dia_missing",
+        "ANSI B92.1 量棒直径表 —— 本仓未收",
+        "ANSI B92.1 pin-diameter table — not collected in this repo",
+    ),
+    Msg::new(
+        "gui.ansi.formula.major_dia_ext",
+        "Do = (N+1)/P（Table 2 全列同式）",
+        "Do = (N+1)/P (same formula for all Table 2 columns)",
+    ),
+    Msg::new(
+        "gui.ansi.formula.form_dia_ext",
+        "DFe = (N−1)/P − 2cF（37.5° −0.8/P、45° −0.6/P）",
+        "DFe = (N−1)/P − 2cF (37.5° −0.8/P, 45° −0.6/P)",
+    ),
+    Msg::new(
+        "gui.ansi.formula.minor_dia_ext",
+        "Dre = (N−1.35/P)（30°；圆齿根 16/32 及更细 (N−2)/P；A/B 列 (N−1.35)/P）",
+        "Dre = (N−1.35)/P (30°; fillet root 16/32 and finer (N−2)/P; columns A/B (N−1.35)/P)",
+    ),
+    Msg::new(
+        "gui.ansi.formula.base_tangent_missing",
+        "ANSI B92.1 公法线/跨测表 —— 本仓未收",
+        "ANSI B92.1 base-tangent/span tables — not collected in this repo",
+    ),
+    Msg::new(
+        "gui.ansi.source.table2",
+        "ANSI B92.1-1970 (R1993) Table 2（p10，本仓 invol_spline.rs 已入库）",
+        "ANSI B92.1-1970 (R1993) Table 2 (p10; already collected in this repo's invol_spline.rs)",
+    ),
+    Msg::new(
+        "gui.ansi.source.missing",
+        "缺：本仓未收 ANSI B92.1 配合/公差（Table 4/5）/量棒检验/公法线表 —— 不臆造",
+        "Missing: this repo has not collected the ANSI B92.1 fit/tolerance (Table 4/5), pin-inspection and base-tangent tables — no guesswork",
+    ),
+    Msg::new("gui.ansi.source.user", "用户填写", "Entered by the user"),
+    Msg::new("gui.ansi.source.table3", "ANSI B92.1 Table 3（p11）", "ANSI B92.1 Table 3 (p11)"),
+
     // ── 卡面标签：NF E22-141 花键参数表（内/外；`nf_table.rs` / `nf_ext_table.rs`）──
     // ★ 本卡是「用户自定画法」同构镜像（NF 标准里没有参数表版面，§29 调研）⇒ 标签是中文自定
     //   术语；英译贴工程惯例（量棒/跨棒距/公法线沿用 GB 卡既有译法；定心方式按 DIN/ISO 的
@@ -2995,6 +3199,40 @@ pub const CATALOG: &[Msg] = &[
     // 行标签复用上面 `card.nf.label.*`（精简卡 zh 形态与全卡逐字相同），只有标题另立。
     Msg::new("card.nf.lite.title.int", "NF 内花键参数表（精简）", "NF Internal Spline Data (Lite)"),
     Msg::new("card.nf.lite.title.ext", "NF 外花键参数表（精简）", "NF External Spline Data (Lite)"),
+
+    // ── 卡面标签：DIN 5480 花键参数表（内/外 + 精简两卡；`din_table.rs` / `card_lite.rs` DIN 族）──
+    // ★ 本卡是「照 DIN 5480-1:2006-03 §9.1 Datenfeld / Bild 6 **自定版面**」（标准里没有参数表模板）
+    //   ⇒ 英译贴**德英工程惯例**（DIN 5480-1/-2 英文符号表 + ISO 21771/KISSsoft 用词）：
+    //   `Nabe/Welle` → `Hub/Shaft`（标准第 8 章代号字母仍是 `N`/`W`）、`Fußformkreis` →
+    //   `Root form diameter`、`Lückenweite/Zahndicke` → `Space width/Tooth thickness`。
+    //   ★ 拿不准的写法（行 1 的 Hub/Shaft、`Measuring circle D_M`、`Measurement over pins M1/M2`、
+    //   标题 `… Spline Data` vs `… Parameter Table`）见 §34 报告供用户校。
+    // * **原样不译**：标记号（`N120×3×38×9H`/`W120×3×38×8f`）、符号（`z`/`m`/`α`/`d_f2`/`d_Ff2`/
+    //   `d_a1`/`d_a2`/`d_f1`/`e_max`/`e_vmin`/`s_vmax`/`D_M`/`M1_max`/`M2_min` …）、值、
+    //   ATTDEF tag（`N标记`…）、块名（`OCSM_DINTABLE_DIN_*`/`OCSM_LITE_DIN_*`）。
+    // * 标签里的符号**不进表**：卡面 = `t(key)` + 「空格 + symbol」（§31/§32「符号与译名分置」形态）。
+    Msg::new("card.din.title.int", "DIN 5480 内花键参数表", "DIN 5480 Internal Spline Data"),
+    Msg::new("card.din.title.ext", "DIN 5480 外花键参数表", "DIN 5480 External Spline Data"),
+    Msg::new("card.din.label.nabe", "Nabe DIN 5480", "Hub DIN 5480"),
+    Msg::new("card.din.label.welle", "Welle DIN 5480", "Shaft DIN 5480"),
+    Msg::new("card.din.label.teeth", "齿数", "Number of teeth"),
+    Msg::new("card.din.label.module", "模数", "Module"),
+    Msg::new("card.din.label.alpha", "压力角", "Pressure angle"),
+    Msg::new("card.din.label.root_dia", "齿根圆", "Root diameter"),
+    Msg::new("card.din.label.tip_dia", "齿顶圆", "Tip diameter"),
+    Msg::new("card.din.label.root_form_dia", "齿根成形圆", "Root form diameter"),
+    Msg::new("card.din.label.space_width_max", "槽宽 max.", "Space width max."),
+    Msg::new("card.din.label.space_width_min", "槽宽 min.", "Space width min."),
+    Msg::new("card.din.label.space_width_eff", "槽宽 eff.", "Space width eff."),
+    Msg::new("card.din.label.thickness_eff_max", "齿厚 eff.", "Tooth thickness eff."),
+    Msg::new("card.din.label.thickness_max", "齿厚 max.", "Tooth thickness max."),
+    Msg::new("card.din.label.thickness_min", "齿厚 min.", "Tooth thickness min."),
+    Msg::new("card.din.label.measuring_circle", "量圆", "Measuring circle"),
+    Msg::new("card.din.label.over_pins", "量圆距", "Measurement over pins"),
+    // 精简两卡（`card_lite.rs` DIN 族：行标签复用上面 `card.din.label.*`，只有标记行/标题另立）。
+    Msg::new("card.din.lite.title.int", "DIN 内花键参数表（精简）", "DIN Internal Spline Data (Lite)"),
+    Msg::new("card.din.lite.title.ext", "DIN 外花键参数表（精简）", "DIN External Spline Data (Lite)"),
+    Msg::new("card.din.lite.label.desig", "标记", "Designation"),
 
     // ── 命令报错：五卡共用的九字段表达式解析（spline_table::parse_gear_expr）──
     Msg::new(

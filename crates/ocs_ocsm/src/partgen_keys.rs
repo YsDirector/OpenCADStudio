@@ -690,7 +690,7 @@ pub fn families_json() -> serde_json::Map<String, serde_json::Value> {
             id.into(),
             serde_json::json!({
                 "id": id,
-                "name": format!("圆头普通平键 {}", if ty == KeyType::A { "A型" } else if ty == KeyType::B { "B型" } else { "C型" }),
+                "name": format!("{} {}", crate::i18n::t_data("圆头普通平键"), crate::i18n::t_data(if ty == KeyType::A { "A型" } else if ty == KeyType::B { "B型" } else { "C型" })),
                 "code": "GB/T 1096-2003",
                 "iso": "—",
                 "implemented": true,
@@ -722,7 +722,7 @@ pub fn families_json() -> serde_json::Map<String, serde_json::Value> {
             id.into(),
             serde_json::json!({
                 "id": id,
-                "name": format!("导向平键 {}", if ty == KeyType::A { "A型" } else { "B型" }),
+                "name": format!("{} {}", crate::i18n::t_data("导向平键"), crate::i18n::t_data(if ty == KeyType::A { "A型" } else { "B型" })),
                 "code": "GB/T 1097-2003",
                 "iso": "—",
                 "implemented": true,
@@ -1072,11 +1072,11 @@ fn gen_1096(ty: KeyType, b: f64, l: f64, view: &str) -> Result<GenPart, String> 
         entities,
         meta: PartMeta {
             code: "GB/T 1096-2003".into(),
-            name: format!("圆头普通平键 {}", match ty {
+            name: format!("{} {}", crate::i18n::t_data("圆头普通平键"), crate::i18n::t_data(match ty {
                 KeyType::A => "A型",
                 KeyType::B => "B型",
                 KeyType::C => "C型",
-            }),
+            })),
             spec: format!("{}×{}×{}", trim(b), trim(h), trim(l)),
             material: String::new(),
             weight: format!("{weight:.4}"),
@@ -1201,7 +1201,7 @@ fn gen_1097(ty: KeyType, b: f64, l: f64, view: &str) -> Result<GenPart, String> 
         entities,
         meta: PartMeta {
             code: "GB/T 1097-2003".into(),
-            name: format!("导向平键 {}", if ty == KeyType::A { "A型" } else { "B型" }),
+            name: format!("{} {}", crate::i18n::t_data("导向平键"), crate::i18n::t_data(if ty == KeyType::A { "A型" } else { "B型" })),
             spec: format!("{}×{}×{}", trim(row.b), trim(row.h), trim(l)),
             material: String::new(),
             weight: format!("{weight:.4}"),

@@ -431,15 +431,22 @@ pub fn tol_lookup_mm(grade: u32, m: f64) -> Result<(f64, f64, f64, String), Stri
 // 表结构：13 行 × 2 侧（照 Bild 6 字段清单与栏序）
 // ══════════════════════════════════════════════════════════════════════════
 
-/// 一行字段的静态定义：`(内花键标签, 内花键 tag, 外花键标签, 外花键 tag, 取值口径, 来源)`。
+/// 一行字段的静态定义：`(内花键 key, 内符号, 内 tag, 外花键 key, 外符号, 外 tag, 取值口径, 来源)`。
+///
+/// ★ 标签文字**不进结构体**（卡面随语言）：`key` 是 catalog 键（`card.din.label.*`），`symbol`
+/// （`d_f2`/`M2_max`/…两语原样）与译名分置（§31/§32「符号与译名分置」形态）。
 #[derive(Debug, Clone, Copy)]
 pub struct RowSpec {
-    /// 内花键（Nabe）标签。
-    pub hub_label: &'static str,
+    /// 内花键（Nabe）行标签 catalog key。
+    pub hub_key: &'static str,
+    /// 内花键符号（两语原样；空串 = 该行无符号，如行 1）。
+    pub hub_symbol: &'static str,
     /// 内花键 ATTDEF tag。
     pub hub_tag: &'static str,
-    /// 外花键（Welle）标签。
-    pub shaft_label: &'static str,
+    /// 外花键（Welle）行标签 catalog key。
+    pub shaft_key: &'static str,
+    /// 外花键符号（两语原样；空串 = 无符号）。
+    pub shaft_symbol: &'static str,
     /// 外花键 ATTDEF tag。
     pub shaft_tag: &'static str,
     /// 公式/口径（预览 title）。
@@ -450,33 +457,57 @@ pub struct RowSpec {
 
 /// 13 行（行序 = Bild 6；行 1 = 标记）。
 pub const ROWS: &[RowSpec] = &[
-    RowSpec { hub_label: "Nabe DIN 5480", hub_tag: "N标记", shaft_label: "Welle DIN 5480", shaft_tag: "W标记",
+    RowSpec { hub_key: "card.din.label.nabe", hub_symbol: "", hub_tag: "N标记",
+              shaft_key: "card.din.label.welle", shaft_symbol: "", shaft_tag: "W标记",
               formula: "§8 代号：标签格 `Nabe/Welle DIN 5480` + 值格 `N/W d_B×m×z×等级+偏差字母`", source: "DIN 5480-1:2006 §8" },
-    RowSpec { hub_label: "齿数 z", hub_tag: "N齿数", shaft_label: "齿数 z", shaft_tag: "W齿数",
+    RowSpec { hub_key: "card.din.label.teeth", hub_symbol: "z", hub_tag: "N齿数",
+              shaft_key: "card.din.label.teeth", shaft_symbol: "z", shaft_tag: "W齿数",
               formula: "输入", source: "Bild 6 行 2" },
-    RowSpec { hub_label: "模数 m", hub_tag: "N模数", shaft_label: "模数 m", shaft_tag: "W模数",
+    RowSpec { hub_key: "card.din.label.module", hub_symbol: "m", hub_tag: "N模数",
+              shaft_key: "card.din.label.module", shaft_symbol: "m", shaft_tag: "W模数",
               formula: "输入", source: "Bild 6 行 3" },
-    RowSpec { hub_label: "压力角 α", hub_tag: "N压力角", shaft_label: "压力角 α", shaft_tag: "W压力角",
+    RowSpec { hub_key: "card.din.label.alpha", hub_symbol: "α", hub_tag: "N压力角",
+              shaft_key: "card.din.label.alpha", shaft_symbol: "α", shaft_tag: "W压力角",
               formula: "DIN 5480 固定 30°", source: "§5 / Bild 6 行 4" },
-    RowSpec { hub_label: "齿根圆 d_f2", hub_tag: "N齿根圆", shaft_label: "齿顶圆 d_a1", shaft_tag: "W齿顶圆",
+    RowSpec { hub_key: "card.din.label.root_dia", hub_symbol: "d_f2", hub_tag: "N齿根圆",
+              shaft_key: "card.din.label.tip_dia", shaft_symbol: "d_a1", shaft_tag: "W齿顶圆",
               formula: "名义表 d_f2 + A_df2；d_a1（齿侧定心 h11）", source: "DIN 5480-2 名义表 + Table 5" },
-    RowSpec { hub_label: "齿根成形圆 d_Ff2", hub_tag: "N齿根成形圆", shaft_label: "齿根成形圆 d_Ff1", shaft_tag: "W齿根成形圆",
+    RowSpec { hub_key: "card.din.label.root_form_dia", hub_symbol: "d_Ff2", hub_tag: "N齿根成形圆",
+              shaft_key: "card.din.label.root_form_dia", shaft_symbol: "d_Ff1", shaft_tag: "W齿根成形圆",
               formula: "名义表 d_Ff2min（min.）/ d_Ff1max（max.）", source: "DIN 5480-2 名义表" },
-    RowSpec { hub_label: "齿顶圆 d_a2", hub_tag: "N齿顶圆", shaft_label: "齿根圆 d_f1", shaft_tag: "W齿根圆",
+    RowSpec { hub_key: "card.din.label.tip_dia", hub_symbol: "d_a2", hub_tag: "N齿顶圆",
+              shaft_key: "card.din.label.root_dia", shaft_symbol: "d_f1", shaft_tag: "W齿根圆",
               formula: "名义表 d_a2（H11）/ d_f1 + A_df1", source: "DIN 5480-2 名义表 + Table 5" },
-    RowSpec { hub_label: "槽宽 max. e_max", hub_tag: "N槽宽max", shaft_label: "齿厚 eff. s_vmax", shaft_tag: "W齿厚svmax",
+    RowSpec { hub_key: "card.din.label.space_width_max", hub_symbol: "e_max", hub_tag: "N槽宽max",
+              shaft_key: "card.din.label.thickness_eff_max", shaft_symbol: "s_vmax", shaft_tag: "W齿厚svmax",
               formula: "emax = e2 + Ae + Tact + Teff；svmax = s1 + As", source: "§10.8 表 6" },
-    RowSpec { hub_label: "槽宽 min. e_min", hub_tag: "N槽宽min", shaft_label: "齿厚 max. s_max", shaft_tag: "W齿厚smax",
+    RowSpec { hub_key: "card.din.label.space_width_min", hub_symbol: "e_min", hub_tag: "N槽宽min",
+              shaft_key: "card.din.label.thickness_max", shaft_symbol: "s_max", shaft_tag: "W齿厚smax",
               formula: "emin = e2 + Ae + Teff（actual Ref.）；smax = s1 + As − Teff", source: "§10.8 表 6" },
-    RowSpec { hub_label: "槽宽 eff. e_vmin", hub_tag: "N槽宽eff", shaft_label: "齿厚 min. s_min", shaft_tag: "W齿厚smin",
+    RowSpec { hub_key: "card.din.label.space_width_eff", hub_symbol: "e_vmin", hub_tag: "N槽宽eff",
+              shaft_key: "card.din.label.thickness_min", shaft_symbol: "s_min", shaft_tag: "W齿厚smin",
               formula: "evmin = e2 + Ae；smin = s1 + As − Tact − Teff", source: "§10.8 表 6" },
-    RowSpec { hub_label: "量圆 D_M", hub_tag: "N量圆", shaft_label: "量圆 D_M", shaft_tag: "W量圆",
+    RowSpec { hub_key: "card.din.label.measuring_circle", hub_symbol: "D_M", hub_tag: "N量圆",
+              shaft_key: "card.din.label.measuring_circle", shaft_symbol: "D_M", shaft_tag: "W量圆",
               formula: "DIN 3977 系列（5480-2 检验表）", source: "DIN 5480-2 检验表" },
-    RowSpec { hub_label: "量圆距 M2_max", hub_tag: "N量距max", shaft_label: "量圆距 M1_max", shaft_tag: "W量距max",
+    RowSpec { hub_key: "card.din.label.over_pins", hub_symbol: "M2_max", hub_tag: "N量距max",
+              shaft_key: "card.din.label.over_pins", shaft_symbol: "M1_max", shaft_tag: "W量距max",
               formula: "M2max（棒间距）/ M1max Ref.（跨棒距）", source: "DIN 5480-2 检验表 / Bild 6" },
-    RowSpec { hub_label: "量圆距 M2_min", hub_tag: "N量距min", shaft_label: "量圆距 M1_min", shaft_tag: "W量距min",
+    RowSpec { hub_key: "card.din.label.over_pins", hub_symbol: "M2_min", hub_tag: "N量距min",
+              shaft_key: "card.din.label.over_pins", shaft_symbol: "M1_min", shaft_tag: "W量距min",
               formula: "M2min Ref. / M1min", source: "DIN 5480-2 检验表 / Bild 6" },
 ];
+
+/// 行标签（按当前语言）：`t(key)` + 「空格 + 符号」（符号两语原样；行 1 无符号）。
+/// 卡面与 GUI 元数据（`options_json`/`preview_json`）**同源**。
+pub fn row_label(r: &RowSpec, hub: bool) -> String {
+    let (key, symbol) = if hub {
+        (r.hub_key, r.hub_symbol)
+    } else {
+        (r.shaft_key, r.shaft_symbol)
+    };
+    crate::nf_table::face_label(key, symbol)
+}
 
 /// 13 个 ATTDEF tag（单栏：标记 + 12 值；与 [`ROWS`] 同序）。
 pub fn value_tags(hub: bool) -> Vec<&'static str> {
@@ -485,13 +516,13 @@ pub fn value_tags(hub: bool) -> Vec<&'static str> {
         .collect()
 }
 
-/// 单栏标题。
-pub fn title_text(hub: bool) -> &'static str {
-    if hub {
-        "DIN 5480 内花键参数表"
+/// 单栏标题（按当前语言）。
+pub fn title_text(hub: bool) -> String {
+    crate::i18n::t(if hub {
+        "card.din.title.int"
     } else {
-        "DIN 5480 外花键参数表"
-    }
+        "card.din.title.ext"
+    })
 }
 
 fn common_of(layer: &str) -> EntityCommon {
@@ -518,6 +549,70 @@ fn mtext_ent(value: &str, x: f64, y: f64, height: f64, attach: i16) -> EntityTyp
     EntityType::MText(m)
 }
 
+/// 标签/标题 MTEXT 的**内联字宽因子表**（`\W<f>;`；有效字宽 = 样式字宽 0.7 × f）。
+///
+/// `None` = 不压缩。数字来源：`i18n_检查/card_din_width_plan.py`
+/// （真字体 advance × cap 0.637 归一 / 仓库 `char_em` / 仓库 `char_em_ttf` **三模型取更紧者**，
+/// 再留 ≥3% 列内余量）；标签列可用 = `W_LABEL − LABEL_X − 0.5` = 233.5，标题整宽可用 407。
+/// 中文侧 13 行全部装得下（模板自定版面，与前批 NF 卡的「
+/// `基准尺寸 Do` 本就偏宽」不同），英文侧 6 条标签 + 两条标题需压缩。
+/// 压缩只发生在装不下的那一条上；不动列宽/线位/字高/样式。
+pub(crate) fn inline_wf(key: &str, lang: crate::i18n::Lang) -> Option<f64> {
+    use crate::i18n::Lang;
+    let table: &[(&str, f64, f64)] = &[
+        // (key, zh 的 W, en 的 W)；1.0 = 不压缩
+        ("card.din.title.int", 1.0, 0.93),
+        ("card.din.title.ext", 1.0, 0.91),
+        ("card.din.label.root_form_dia", 1.0, 0.75),
+        ("card.din.label.space_width_max", 1.0, 0.79),
+        ("card.din.label.space_width_min", 1.0, 0.80),
+        ("card.din.label.space_width_eff", 1.0, 0.81),
+        ("card.din.label.thickness_eff_max", 1.0, 0.69),
+        ("card.din.label.thickness_max", 1.0, 0.69),
+        ("card.din.label.thickness_min", 1.0, 0.70),
+        ("card.din.label.measuring_circle", 1.0, 0.89),
+        ("card.din.label.over_pins", 1.0, 0.59),
+    ];
+    let (_, zh, en) = table.iter().find(|(k, _, _)| *k == key)?;
+    let w = if lang == Lang::En { *en } else { *zh };
+    (w < 0.995).then_some(w)
+}
+
+/// 带内联字宽码的 MTEXT：`\W0.75;Root form diameter d_Ff2`（有效字宽 = 0.7 × wf）。
+fn mtext_with_inline_wf(
+    text: &str,
+    wf: f64,
+    x: f64,
+    y: f64,
+    height: f64,
+    attach: i16,
+) -> EntityType {
+    mtext_ent(&format!("\\W{wf:.2};{text}"), x, y, height, attach)
+}
+
+/// 标签 MTEXT（按当前语言取词 + 必要时内联压缩）。
+fn label_mtext(key: &str, symbol: &str, x: f64, y: f64) -> EntityType {
+    let text = crate::nf_table::face_label(key, symbol);
+    match inline_wf(key, crate::i18n::lang()) {
+        Some(wf) => mtext_with_inline_wf(&text, wf, x, y, TEXT_H, 4),
+        None => mtext_ent(&text, x, y, TEXT_H, 4),
+    }
+}
+
+/// 标题 MTEXT（按当前语言取词 + 必要时内联压缩；正中）。
+fn title_mtext(hub: bool) -> EntityType {
+    let key = if hub {
+        "card.din.title.int"
+    } else {
+        "card.din.title.ext"
+    };
+    let text = crate::i18n::t(key);
+    match inline_wf(key, crate::i18n::lang()) {
+        Some(wf) => mtext_with_inline_wf(&text, wf, W_TOTAL / 2.0, TITLE_Y, TITLE_H, 5),
+        None => mtext_ent(&text, W_TOTAL / 2.0, TITLE_Y, TITLE_H, 5),
+    }
+}
+
 /// 值/标记 ATTDEF：左中，实体级字宽 [`VALUE_W_FACTOR`]，样式一律 `OCSM_GB`。
 fn value_attdef(tag: &str, x: f64, y: f64) -> AttributeDefinition {
     let mut ad = AttributeDefinition::new(tag.to_string(), String::new(), " ".to_string());
@@ -536,18 +631,17 @@ fn value_attdef(tag: &str, x: f64, y: f64) -> AttributeDefinition {
 /// 单栏 13 行标签 MTEXT（标题 + 12 标签）；线条另见 [`block_entities`]。
 fn labels(hub: bool) -> Vec<EntityType> {
     let mut out = Vec::with_capacity(13);
-    out.push(mtext_ent(title_text(hub), W_TOTAL / 2.0, TITLE_Y, TITLE_H, 5));
+    out.push(title_mtext(hub));
     for (i, r) in ROWS.iter().enumerate() {
         // 行 1（标记行）现在也有自己的**标签格**（`Nabe DIN 5480` / `Welle DIN 5480`），
         // 值格只放代号体（用户 2026-09-26）。
         let y = if i == 0 { DESIG_Y } else { data_row_y(i - 1) };
-        out.push(mtext_ent(
-            if hub { r.hub_label } else { r.shaft_label },
-            LABEL_X,
-            y,
-            TEXT_H,
-            4,
-        ));
+        let (key, symbol) = if hub {
+            (r.hub_key, r.hub_symbol)
+        } else {
+            (r.shaft_key, r.shaft_symbol)
+        };
+        out.push(label_mtext(key, symbol, LABEL_X, y));
     }
     out
 }
@@ -1097,13 +1191,13 @@ pub fn designation(spec: &DinTableSpec, hub: bool) -> String {
     )
 }
 
-/// 标记行的**标签格**（用户 2026-09-26：标签/值分列后各放一份内容）。
-pub fn designation_label(hub: bool) -> &'static str {
-    if hub {
-        "Nabe DIN 5480"
+/// 标记行的**标签格**（用户 2026-09-26：标签/值分列后各放一份内容；**随语言**）。
+pub fn designation_label(hub: bool) -> String {
+    crate::i18n::t(if hub {
+        "card.din.label.nabe"
     } else {
-        "Welle DIN 5480"
-    }
+        "card.din.label.welle"
+    })
 }
 
 /// 标记行的**值格**（§8 代号体）：`N d_B×m×z×等级+字母` / `W …`。
@@ -1396,15 +1490,15 @@ pub fn options_json() -> serde_json::Value {
     serde_json::json!({
         "columns": ROWS.iter().enumerate().flat_map(|(i, r)| {
             let (label, tag, unit, source) = if i == 0 {
-                (r.hub_label, r.hub_tag, "", r.source)
+                (row_label(r, true), r.hub_tag, "", r.source)
             } else {
-                (r.hub_label, r.hub_tag, "mm", r.source)
+                (row_label(r, true), r.hub_tag, "mm", r.source)
             };
             let _ = source;
             vec![
                 serde_json::json!({"tag": tag, "label": label, "unit": unit,
                                    "formula": r.formula, "source": r.source}),
-                serde_json::json!({"tag": r.shaft_tag, "label": r.shaft_label, "unit": unit,
+                serde_json::json!({"tag": r.shaft_tag, "label": row_label(r, false), "unit": unit,
                                    "formula": r.formula, "source": r.source}),
             ]
         }).collect::<Vec<_>>(),
@@ -1420,12 +1514,12 @@ pub fn options_json() -> serde_json::Value {
                          下段公差表只抽到 6–9 级、模数组 1,75–4 的实锚 → 其余等级/模数组 Tact/Teff 显示「—」；\
                          D_M/M2/M1 无检验表行且非 Bild 6 示例时显示「—」；可用 ae/as/e2/tactn/teffn/tactw/teffw 显式覆盖。",
         "columns_int": ROWS.iter().enumerate().map(|(i, r)| serde_json::json!({
-            "tag": r.hub_tag, "label": r.hub_label,
+            "tag": r.hub_tag, "label": row_label(r, true),
             "unit": if i == 0 { "" } else { "mm" },
             "formula": r.formula, "source": r.source,
         })).collect::<Vec<_>>(),
         "columns_ext": ROWS.iter().enumerate().map(|(i, r)| serde_json::json!({
-            "tag": r.shaft_tag, "label": r.shaft_label,
+            "tag": r.shaft_tag, "label": row_label(r, false),
             "unit": if i == 0 { "" } else { "mm" },
             "formula": r.formula, "source": r.source,
         })).collect::<Vec<_>>(),
@@ -1551,9 +1645,9 @@ impl DinTableModel {
         let mut missing = Vec::new();
         for r in ROWS.iter() {
             let (tag, label) = if hub {
-                (r.hub_tag, r.hub_label)
+                (r.hub_tag, row_label(r, true))
             } else {
-                (r.shaft_tag, r.shaft_label)
+                (r.shaft_tag, row_label(r, false))
             };
             let value = vals
                 .iter()
@@ -1561,7 +1655,7 @@ impl DinTableModel {
                 .map(|(_, v)| v.clone())
                 .unwrap_or_default();
             if value == MISSING {
-                missing.push(label.to_string());
+                missing.push(label.clone());
             }
             items.push(serde_json::json!({
                 "tag": tag,
@@ -1599,17 +1693,8 @@ impl DinTableModel {
         } else {
             serde_json::Value::Null
         };
-        let title = if hub {
-            format!(
-                "DIN 5480 内花键参数表（N{}×{}×{}×{}）",
-                trim3(spec.d_b), trim3(spec.m), spec.z, spec.hub.token()
-            )
-        } else {
-            format!(
-                "DIN 5480 外花键参数表（W{}×{}×{}×{}）",
-                trim3(spec.d_b), trim3(spec.m), spec.z, spec.shaft.token()
-            )
-        };
+        // GUI 标题 = 卡面标题（随语言）+ 本侧代号体（值原样）。
+        let title = format!("{}（{}）", title_text(hub), designation_body(&spec, hub));
         Ok(serde_json::json!({
             "ok": true,
             "card": if hub { "DIN花键参数表" } else { "DIN花键参数表_外" },
@@ -2409,29 +2494,14 @@ mod tests {
             .any(|(t, v)| t == tag && v == MISSING)
     }
 
-    /// 单栏块结构（内/外）：18 线 + 13 MTEXT + 13 ATTDEF；全部 OCSM_GB；
-    /// 标题/标签/值均不出框、标签不进值列（实体级字宽估算）；覆盖示例/KISSsoft/缺口/表外。
+    /// 单栏块结构（内/外 × 中/英）：18 线 + 14 MTEXT（标题 + 13 标签）+ 13 ATTDEF；全部 OCSM_GB；
+    /// 标题/标签/值均不出框、标签不进值列（真字体 metrics；英文侧按内联 `\W` 压缩）；
+    /// 覆盖示例/KISSsoft/缺口/表外。中文侧零内联码（自定版面本来装得下，与 NF 卡模板偏宽不同）。
     #[test]
     fn block_structure_and_no_text_overlap() {
-        let est = |s: &str, h: f64, f: f64| -> f64 {
-            s.chars()
-                .map(|c| {
-                    if c == ' ' {
-                        0.25
-                    } else if c.is_ascii() {
-                        if c.is_ascii_digit() || c == '.' || c == '+' || c == '-' {
-                            0.55
-                        } else {
-                            0.75
-                        }
-                    } else {
-                        1.0
-                    }
-                })
-                .sum::<f64>()
-                * h
-                * f
-        };
+        use crate::i18n::{set_lang, set_lang_auto, Lang};
+        use crate::spline_table::text_extent_ttf;
+        let _g = crate::global_state_test_lock();
         let specs = [
             example(),
             DinTableSpec {
@@ -2443,60 +2513,101 @@ mod tests {
             DinTableSpec { m: 5.0, z: 16, d_b: 80.0, ..DinTableSpec::default() },
             DinTableSpec { d_b: 500.0, ..DinTableSpec::default() },
         ];
-        for hub in [true, false] {
-            let ents = block_entities(hub);
-            let n_line = ents.iter().filter(|e| matches!(e, EntityType::Line(_))).count();
-            let n_mtext = ents.iter().filter(|e| matches!(e, EntityType::MText(_))).count();
-            let n_att = ents
-                .iter()
-                .filter(|e| matches!(e, EntityType::AttributeDefinition(_)))
-                .count();
-            assert_eq!(n_line, 18, "15 横线 + 3 竖线（单栏）");
-            assert_eq!(n_mtext, 14, "标题 + 13 标签（标记行现在也有标签格）");
-            assert_eq!(n_att, 13, "标记 + 12 值属性");
-            for e in &ents {
-                match e {
-                    EntityType::MText(m) => assert_eq!(m.style, "OCSM_GB"),
-                    EntityType::AttributeDefinition(a) => assert_eq!(a.text_style, "OCSM_GB"),
-                    _ => {}
+        for lang in [Lang::Zh, Lang::En] {
+            set_lang(lang);
+            for hub in [true, false] {
+                let ents = block_entities(hub);
+                let n_line = ents.iter().filter(|e| matches!(e, EntityType::Line(_))).count();
+                let n_mtext = ents.iter().filter(|e| matches!(e, EntityType::MText(_))).count();
+                let n_att = ents
+                    .iter()
+                    .filter(|e| matches!(e, EntityType::AttributeDefinition(_)))
+                    .count();
+                assert_eq!(n_line, 18, "15 横线 + 3 竖线（单栏）");
+                assert_eq!(n_mtext, 14, "标题 + 13 标签（标记行现在也有标签格）");
+                assert_eq!(n_att, 13, "标记 + 12 值属性");
+                // 文字框（MTEXT：有效字宽 = 样式 0.7 × 内联 W；标题正中 / 标签左中）
+                let mut boxes: Vec<(String, [f64; 4])> = Vec::new();
+                for e in &ents {
+                    match e {
+                        EntityType::MText(m) => {
+                            assert_eq!(m.style, "OCSM_GB");
+                            let (inline, plain) = crate::nf_table::mtext_inline_wf(&m.value);
+                            let w = text_extent_ttf(plain, m.height, 0.7 * inline);
+                            let (x, y, h) = (m.insertion_point.x, m.insertion_point.y, m.height);
+                            let b = match m.attachment_point {
+                                AttachmentPoint::MiddleCenter => {
+                                    [x - w / 2.0, y - h / 2.0, x + w / 2.0, y + h / 2.0]
+                                }
+                                AttachmentPoint::MiddleLeft => [x, y - h / 2.0, x + w, y + h / 2.0],
+                                other => panic!("{lang:?} MTEXT {plain:?} 未覆盖的对齐 {other:?}"),
+                            };
+                            assert!(
+                                b[0] >= LABEL_X - 1e-6 && b[2] <= W_TOTAL - LABEL_X + 1e-6,
+                                "{lang:?} {hub} MTEXT {plain:?} 出框：{b:?}"
+                            );
+                            if m.height == TEXT_H {
+                                assert!(
+                                    b[2] <= W_LABEL - 0.5,
+                                    "{lang:?} {hub} 标签 {plain:?} 进值列（右 {:.1} > {}）：{b:?}",
+                                    b[2],
+                                    W_LABEL - 0.5
+                                );
+                                if lang == Lang::Zh {
+                                    assert_eq!(
+                                        inline, 1.0,
+                                        "中文侧 {hub} 标签 {plain:?} 不该有内联压缩（预算见 card_din_width_plan.py）"
+                                    );
+                                }
+                                boxes.push((plain.to_string(), b));
+                            } else if lang == Lang::En {
+                                // 英文标题已到 407 宽的 98%（预算 W=0.98），确认真被压过
+                                assert!(inline < 0.995, "英文标题 {plain:?} 应压缩（inline={inline}）");
+                            }
+                        }
+                        EntityType::AttributeDefinition(a) => assert_eq!(a.text_style, "OCSM_GB"),
+                        _ => {}
+                    }
                 }
-            }
-            // 标题居中不出框（用户红框：标题溢出/压线）
-            let tw = est(title_text(hub), TITLE_H, 1.0);
-            assert!(
-                W_TOTAL / 2.0 - tw / 2.0 > LABEL_X && W_TOTAL / 2.0 + tw / 2.0 < W_TOTAL - LABEL_X,
-                "标题「{}」出框（宽 {tw:.1}）",
-                title_text(hub)
-            );
-            for spec in &specs {
-                let vals = values(spec, hub).unwrap();
-                for (i, r) in ROWS.iter().enumerate() {
-                    let (tag, label) = if hub {
-                        (r.hub_tag, r.hub_label)
-                    } else {
-                        (r.shaft_tag, r.shaft_label)
-                    };
-                    let v = vals.iter().find(|(t, _)| t == tag).unwrap().1.clone();
-                    // 标记行也按「标签格 + 值格」分列（用户 2026-09-26）
-                    let lw = est(label, TEXT_H, LABEL_W_FACTOR);
-                    assert!(
-                        LABEL_X + lw < W_LABEL - 2.0,
-                        "标签「{label}」出标签列（{lw:.1} ≥ {}）",
-                        W_LABEL - 2.0 - LABEL_X
-                    );
-                    assert!(LABEL_X + lw < VALUE_X, "标签「{label}」进值列");
-                    let right = VALUE_X + est(&v, TEXT_H, VALUE_W_FACTOR);
-                    assert!(right < W_TOTAL - 2.0, "值「{v}」（{tag}）出右框 {right:.1}");
+                // 标签两两不叠（同行只有一条；跨行 40 行高 > 25 字高）
+                for i in 0..boxes.len() {
+                    for j in i + 1..boxes.len() {
+                        let (a, b) = (boxes[i].1, boxes[j].1);
+                        assert!(
+                            !(a[0] < b[2] - 1e-9 && b[0] < a[2] - 1e-9
+                                && a[1] < b[3] - 1e-9 && b[1] < a[3] - 1e-9),
+                            "{lang:?} {hub} 标签 {:?} × {:?} 叠字",
+                            boxes[i].0, boxes[j].0
+                        );
+                    }
+                }
+                // 值（ATTDEF 实体字宽 0.6）不出右框
+                for spec in &specs {
+                    let vals = values(spec, hub).unwrap();
+                    for ad in attdefs(hub) {
+                        let v = vals.iter().find(|(t, _)| t == &ad.tag).unwrap().1.clone();
+                        let w = text_extent_ttf(&v, ad.height, ad.width_factor);
+                        assert!(
+                            ad.insertion_point.x + w < W_TOTAL - 0.5,
+                            "{lang:?} {hub} 值「{v}」（{}）出右框 {:.1}",
+                            ad.tag,
+                            ad.insertion_point.x + w
+                        );
+                    }
                 }
             }
         }
+        set_lang_auto();
     }
 
-    /// 标记行拆分（用户 2026-09-26）：标签格 `Nabe DIN 5480` / 值格 `N120×3×38×9H`；
+    /// 标记行拆分（用户 2026-09-26）：标签格 `Nabe`/`Welle DIN 5480`（随语言）/ 值格代号体；
     /// 逐图元断言 MTEXT 标签位置与 ATTDEF 值位置分列，且全串代号仍可用于回执/元数据。
     #[test]
     fn din_marking_row_splits_label_and_value() {
+        use crate::i18n::{set_lang, set_lang_auto, Lang};
+        let _g = crate::global_state_test_lock();
         let spec = example();
+        set_lang(Lang::Zh);
         assert_eq!(designation_label(true), "Nabe DIN 5480");
         assert_eq!(designation_label(false), "Welle DIN 5480");
         assert_eq!(designation_body(&spec, true), "N120×3×38×9H");
@@ -2527,6 +2638,105 @@ mod tests {
             assert_eq!(v, designation_body(&spec, hub));
             assert!(!v.contains("DIN 5480"), "值格不应重写标签前缀：{v}");
         }
+        // 英文侧：标记行标签随语言，代号体（值，`N`/`W` 前缀）两语原样。
+        set_lang(Lang::En);
+        assert_eq!(designation_label(true), "Hub DIN 5480");
+        assert_eq!(designation_label(false), "Shaft DIN 5480");
+        assert_eq!(designation(&spec, true), "Hub DIN 5480 – N120×3×38×9H");
+        assert_eq!(designation_body(&spec, false), "W120×3×38×8f");
+        set_lang_auto();
+    }
+
+    /// 卡面随语言（内/外 × 中英）：14 条文字（标题 + 13 标签）条数相等、en 零汉字、符号原样、
+    /// ATTDEF tag 不随语言、13 项值（标记号/数据/缺项）两语逐项相等（DIN 无枚举显示值）、
+    /// 标题两语不同，`missing_keys()` 无 `card.din.*`。
+    #[test]
+    fn din_card_faces_switch_language_keeping_symbols_and_values() {
+        use crate::i18n::{missing_keys, set_lang, set_lang_auto, Lang};
+        let _g = crate::global_state_test_lock();
+        let cjk = |s: &str| s.chars().any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c));
+        let mtexts = |ents: &[EntityType]| -> Vec<String> {
+            ents.iter()
+                .filter_map(|e| match e {
+                    EntityType::MText(m) => {
+                        Some(crate::nf_table::mtext_inline_wf(&m.value).1.to_string())
+                    }
+                    _ => None,
+                })
+                .collect()
+        };
+        let tags = |ents: &[EntityType]| -> Vec<String> {
+            ents.iter()
+                .filter_map(|e| match e {
+                    EntityType::AttributeDefinition(a) => Some(a.tag.clone()),
+                    _ => None,
+                })
+                .collect()
+        };
+        let syms_hub: &[&str] = &[
+            "z", "m", "α", "d_f2", "d_Ff2", "d_a2", "e_max", "e_min", "e_vmin", "D_M",
+            "M2_max", "M2_min",
+        ];
+        let syms_shaft: &[&str] = &[
+            "z", "m", "α", "d_a1", "d_Ff1", "d_f1", "s_vmax", "s_max", "s_min", "D_M",
+            "M1_max", "M1_min",
+        ];
+        let spec = example();
+        for hub in [true, false] {
+            set_lang(Lang::Zh);
+            let zh = mtexts(&block_entities(hub));
+            let zh_tags = tags(&block_entities(hub));
+            set_lang(Lang::En);
+            let en = mtexts(&block_entities(hub));
+            let en_tags = tags(&block_entities(hub));
+            assert_eq!(zh.len(), 14, "标题 + 13 标签（内={hub}）");
+            assert_eq!(en.len(), 14);
+            assert_eq!(zh_tags, en_tags, "ATTDEF tag 不随语言（内={hub}）");
+            assert!(!en.iter().any(|s| cjk(s)), "en 卡面零汉字（内={hub}）：{en:?}");
+            set_lang(Lang::Zh);
+            for r in ROWS {
+                let want = row_label(r, hub);
+                assert!(zh.iter().any(|s| s == &want), "zh 卡面缺「{want}」（内={hub}）：{zh:?}");
+            }
+            set_lang(Lang::En);
+            for r in ROWS {
+                let want = row_label(r, hub);
+                assert!(en.iter().any(|s| s == &want), "en 卡面缺「{want}」（内={hub}）：{en:?}");
+            }
+            for s in if hub { syms_hub } else { syms_shaft } {
+                assert!(
+                    zh.iter().any(|t| t.ends_with(*s)),
+                    "zh 符号 {s} 原样（内={hub}）：{zh:?}"
+                );
+                assert!(
+                    en.iter().any(|t| t.ends_with(*s)),
+                    "en 符号 {s} 原样（内={hub}）：{en:?}"
+                );
+            }
+            // 值：标记号/数据/缺项两语逐项相等（DIN 无枚举显示值）
+            set_lang(Lang::Zh);
+            let zh_vals = values(&spec, hub).unwrap();
+            set_lang(Lang::En);
+            let en_vals = values(&spec, hub).unwrap();
+            assert_eq!(zh_vals.len(), 13, "标记 + 12 值（内={hub}）");
+            assert_eq!(zh_vals, en_vals, "13 项值两语逐项相等（内={hub}）");
+            assert_eq!(zh_vals[0].1, designation_body(&spec, hub));
+            // 标题两语不同
+            set_lang(Lang::Zh);
+            let zh_title = mtexts(&block_entities(hub))[0].clone();
+            set_lang(Lang::En);
+            let en_title = mtexts(&block_entities(hub))[0].clone();
+            assert_ne!(zh_title, en_title, "标题随语言（内={hub}）");
+            assert_eq!(en_title, title_text(hub));
+        }
+        // ★ 只查**本批 DIN 键**未漏（`missing_keys()` 是进程全局，其它并行用例会故意点
+        //   `no.such.key.at.all` / `data:…` ⇒ 不能断言全局为空，否则偶发假红）。
+        let missed = missing_keys();
+        assert!(
+            !missed.iter().any(|k| k.starts_with("card.din.")),
+            "DIN 键有漏：{missed:?}"
+        );
+        set_lang_auto();
     }
 
     /// CLI：两种写法（短参数 / 代号 / 混合）与覆盖项；内/外两张卡各解析；报错指路。

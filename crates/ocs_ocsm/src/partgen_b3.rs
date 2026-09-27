@@ -359,7 +359,7 @@ pub fn eye_bolt_main(row: &EyeBoltRow) -> Result<GenPart, String> {
         entities: en,
         meta: PartMeta {
             code: "GB/T 825-1988".into(),
-            name: "吊环螺钉 A型".into(),
+            name: crate::i18n::t_data("吊环螺钉 A型").into(),
             spec: format!("M{}", trim(d)),
             material: String::new(),
             weight: eye_weight(row),
@@ -419,7 +419,7 @@ pub fn eye_bolt_end(row: &EyeBoltRow) -> Result<GenPart, String> {
         entities: en,
         meta: PartMeta {
             code: "GB/T 825-1988".into(),
-            name: "吊环螺钉 A型".into(),
+            name: crate::i18n::t_data("吊环螺钉 A型").into(),
             spec: format!("M{}", trim(d)),
             material: String::new(),
             weight: eye_weight(row),
@@ -590,7 +590,7 @@ pub fn seal_fb(row: &SealRow) -> Result<GenPart, String> {
         entities: en,
         meta: PartMeta {
             code: "GB/T 13871.1-2007".into(),
-            name: "内包骨架有副唇密封圈 FB型".into(),
+            name: crate::i18n::t_data("内包骨架有副唇密封圈 FB型").into(),
             spec: format!("{}×{}×{}", trim(d1), trim(od), trim(b)),
             material: String::new(),
             weight: seal_weight(row),
@@ -683,7 +683,7 @@ pub fn bearing_276(row: &BearingRow) -> Result<GenPart, String> {
         entities: en,
         meta: PartMeta {
             code: "GB/T 276-2013".into(),
-            name: "深沟球轴承 60000型".into(),
+            name: crate::i18n::t_data("深沟球轴承 60000型").into(),
             spec: row.code.clone(),
             material: String::new(),
             weight: bearing_weight(row),
@@ -756,7 +756,7 @@ pub fn families_json() -> serde_json::Map<String, serde_json::Value> {
         .iter()
         .map(|(d1, ods, tags)| {
             serde_json::json!({
-                "d": d1, "label": format!("轴径 {}", trim(*d1)), "pitch": 0.0,
+                "d": d1, "label": format!("{} {}", crate::i18n::t_data("轴径"), trim(*d1)), "pitch": 0.0,
                 "l_min": ods.first().copied().unwrap_or(0.0),
                 "l_max": ods.last().copied().unwrap_or(0.0),
                 "lengths": ods, "extra": tags.join("、"),
@@ -799,7 +799,7 @@ pub fn families_json() -> serde_json::Map<String, serde_json::Value> {
         .iter()
         .map(|(d, ws, tags)| {
             serde_json::json!({
-                "d": d, "label": format!("内径 {}", trim(*d)), "pitch": 0.0,
+                "d": d, "label": format!("{} {}", crate::i18n::t_data("内径"), trim(*d)), "pitch": 0.0,
                 "l_min": ws.first().copied().unwrap_or(0.0),
                 "l_max": ws.last().copied().unwrap_or(0.0),
                 "lengths": ws, "extra": tags.join("、"),

@@ -290,7 +290,7 @@ fn nut_6170(d: f64, _l: f64, view: &str) -> Result<GenPart, String> {
         })?;
     let meta = PartMeta {
         code: "GB/T 6170-2015".into(),
-        name: "1型六角螺母".into(),
+        name: crate::i18n::t_data("1型六角螺母").into(),
         spec: format!("M{}", trim(d)),
         material: String::new(),
         weight: format!("{:.4}", nut_weight_kg(row, d)),
@@ -483,7 +483,7 @@ fn ring_893(d: f64, view: &str) -> Result<GenPart, String> {
         })?;
     let meta = PartMeta {
         code: "GB/T 893-2017".into(),
-        name: "孔用弹性挡圈 A型".into(),
+        name: crate::i18n::t_data("孔用弹性挡圈 A型").into(),
         spec: format!("d{}", trim(d)),
         material: String::new(),
         weight: weight_text(ring893_weight_kg(row)),
@@ -641,7 +641,7 @@ fn ring_894(d: f64, view: &str) -> Result<GenPart, String> {
         })?;
     let meta = PartMeta {
         code: "GB/T 894-2017".into(),
-        name: "轴用弹性挡圈 A型".into(),
+        name: crate::i18n::t_data("轴用弹性挡圈 A型").into(),
         spec: format!("d{}", trim(d)),
         material: String::new(),
         weight: weight_text(ring894_weight_kg(row)),

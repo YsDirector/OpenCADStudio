@@ -104,26 +104,20 @@ pub(crate) fn old_rows(doc: &CadDocument) -> BTreeMap<String, ([String; 8], Opti
         if ins.block_name != bom::ROW_BLOCK {
             continue;
         }
-        let get = |tag: &str| -> String {
-            ins.attributes
-                .iter()
-                .find(|a| a.tag.trim() == tag)
-                .map(|a| a.value.trim().to_string())
-                .unwrap_or_default()
-        };
-        let no = get("序号");
+        // ③ 读侧兼容：按列号取（`bom::cell_value` 认 zh/en 两套 tag，老图读得回）。
+        let no = bom::cell_value(ins, 0);
         if no.is_empty() {
             continue;
         }
         let values: [String; 8] = [
             no.clone(),
-            get("图号"),
-            get("名称"),
-            get("数量"),
-            get("材料"),
-            get("单重"),
-            get("总重"),
-            get("备注"),
+            bom::cell_value(ins, 1),
+            bom::cell_value(ins, 2),
+            bom::cell_value(ins, 3),
+            bom::cell_value(ins, 4),
+            bom::cell_value(ins, 5),
+            bom::cell_value(ins, 6),
+            bom::cell_value(ins, 7),
         ];
         let lock = record_text(&ins.common, bom::LOCK_APP)
             .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())

@@ -380,7 +380,7 @@ pub fn hex_nut(d: f64) -> Result<GenPart, String> {
         entities,
         meta: PartMeta {
             code: "GB/T 6170-2015".to_string(),
-            name: "1型六角螺母".to_string(),
+            name: crate::i18n::t_data("1型六角螺母").to_string(),
             spec: spec_text_dia(d),
             material: String::new(),
             weight: format!("{:.3}", nut_weight_kg(row)),
@@ -565,7 +565,7 @@ pub fn hex_bolt_c(d: f64, l: f64, view: BoltView) -> Result<GenPart, String> {
     let b = thread_length_c(row, l);
     let meta = PartMeta {
         code: "GB/T 5780-2016".to_string(),
-        name: "六角头螺栓 C级".to_string(),
+        name: crate::i18n::t_data("六角头螺栓 C级").to_string(),
         spec: spec_text_bolt(d, l),
         material: String::new(),
         weight: format!("{:.3}", hex_bolt_weight_kg(row, l)),
@@ -598,7 +598,7 @@ pub fn hex_bolt_ab(d: f64, l: f64, view: BoltView) -> Result<GenPart, String> {
     let runout = 5.0 * row.pitch;
     let meta = PartMeta {
         code: "GB/T 5782-2016".to_string(),
-        name: "六角头螺栓 A/B级".to_string(),
+        name: crate::i18n::t_data("六角头螺栓 A/B级").to_string(),
         spec: spec_text_bolt(d, l),
         material: String::new(),
         weight: format!("{:.3}", hex_bolt_weight_kg(row, l)),
@@ -2408,6 +2408,111 @@ mod tests {
         assert!(crate::i18n::missing_keys().is_empty(), "{:?}", crate::i18n::missing_keys());
     }
 
+    /// ② GUI 元数据批：**全量**目录 JSON（families + tree）里白名单字段（`DATA_JSON_FIELDS`）
+    /// 在英文下**逐条无汉字**且 zh/en 都非空；族 id/代号/文件名（`DATA_KEEP_AS_IS`）例外。
+    #[test]
+    fn catalog_json_all_whitelisted_metadata_has_no_cjk_in_english() {
+        let _g = zh_guard();
+        crate::i18n::clear_missing_keys();
+        let zh: serde_json::Value = serde_json::from_str(&catalog_json()).expect("zh catalog json");
+        crate::i18n::set_lang(crate::i18n::Lang::En);
+        let en: serde_json::Value = serde_json::from_str(&catalog_json()).expect("en catalog json");
+        crate::i18n::set_lang_auto();
+        let has_cjk = |s: &str| s.chars().any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c));
+        let fields = [
+            "name", "base_hint", "len_label", "d_label", "tree_dir", "hint", "place_hint",
+            "label", "source", "display", "desc",
+        ];
+        // `DATA_KEEP_AS_IS`（文件名/路径 —— 翻了就对不上磁盘）允许保留中文
+        let keep = ["磨外圆_GB-T6403.png + 磨外圆_GB-T6403.5-2008.dxf"];
+        // 译文里**必须原样保留的文件名**（模板 dxf/表格 csv）——查汉字前先剥掉
+        let keep_names = ["毂槽-{主视图,侧视图}.dxf", "矩形花键.dxf"];
+        let mut checked = 0usize;
+        let mut offenders: Vec<String> = Vec::new();
+        fn walk(
+            z: &serde_json::Value,
+            e: &serde_json::Value,
+            path: &str,
+            on: &mut dyn FnMut(&str, &str, &str),
+        ) {
+            match (z, e) {
+                (serde_json::Value::Object(zm), serde_json::Value::Object(em)) => {
+                    for (k, zv) in zm {
+                        let Some(ev) = em.get(k) else { continue };
+                        let p = format!("{path}.{k}");
+                        if let (Some(zs), Some(es)) = (zv.as_str(), ev.as_str()) {
+                            on(&p, zs, es);
+                        }
+                        walk(zv, ev, &p, on);
+                    }
+                }
+                (serde_json::Value::Array(za), serde_json::Value::Array(ea)) => {
+                    for (i, (zv, ev)) in za.iter().zip(ea.iter()).enumerate() {
+                        walk(zv, ev, &format!("{path}[{i}]"), on);
+                    }
+                }
+                _ => {}
+            }
+        }
+        fn walk_tree(
+            z: &serde_json::Value,
+            e: &serde_json::Value,
+            on: &mut dyn FnMut(&str, &str, &str),
+        ) {
+            if let (Some(zn), Some(en)) = (z["name"].as_str(), e["name"].as_str()) {
+                on("tree", zn, en);
+            }
+            if let (Some(zc), Some(ec)) = (z["children"].as_array(), e["children"].as_array()) {
+                for (zv, ev) in zc.iter().zip(ec.iter()) {
+                    walk_tree(zv, ev, on);
+                }
+            }
+        }
+        {
+            let mut on = |p: &str, zs: &str, es: &str| {
+                let f = p.rsplit('.').next().unwrap_or("");
+                if !fields.contains(&f) {
+                    return;
+                }
+                // 规格代号（`specs[].label`，如 `中10x72x82x12`）是协议数据，不译
+                if p.contains(".specs[") || zs.starts_with("用户 OCR 核对表") {
+                    return;
+                }
+                checked += 1;
+                assert!(!zs.is_empty() && !es.is_empty(), "{p} 空：{zs:?} / {es:?}");
+                let mut probe = es.to_string();
+                for name in keep_names {
+                    probe = probe.replace(name, "");
+                }
+                if has_cjk(&probe) && !keep.contains(&zs) {
+                    offenders.push(format!("{p}: {es:?}"));
+                }
+            };
+            for (fam, obj) in zh["families"].as_object().unwrap() {
+                let eobj = &en["families"][fam];
+                walk(obj, eobj, fam, &mut on);
+                // 族 id / 代号不译
+                assert_eq!(obj["id"], eobj["id"], "{fam} id 不译");
+                assert_eq!(obj["code"], eobj["code"], "{fam} code 不译");
+            }
+        }
+        {
+            let mut on = |p: &str, zs: &str, es: &str| {
+                checked += 1;
+                if has_cjk(es) && !keep.contains(&zs) {
+                    offenders.push(format!("{p}: {es:?}"));
+                }
+            };
+            walk_tree(&zh["tree"], &en["tree"], &mut on);
+        }
+        assert!(checked > 60, "扫过的元数据字段太少（{checked}）——白名单/结构变了？");
+        assert!(
+            offenders.is_empty(),
+            "英文目录仍含汉字 {} 条：\n{}",
+            offenders.len(),
+            offenders.join("\n")
+        );
+    }
 }
 
 #[cfg(test)]

@@ -576,7 +576,7 @@ fn build_grind_od(d: f64, row: &GrooveRow) -> GenPart {
         entities,
         meta: PartMeta {
             code: "GB/T 6403.5-2008".into(),
-            name: "砂轮越程槽 磨外圆".into(),
+            name: crate::i18n::t_data("砂轮越程槽 磨外圆").into(),
             spec: format!("d{} b1 {}", trim(d), trim(row.b1)),
             material: String::new(),
             weight: String::new(),
@@ -1325,7 +1325,7 @@ fn build_hub_keyway(g: &HubKeywayGeom, view: &str, view_label: &str) -> GenPart 
         entities,
         meta: PartMeta {
             code: "GB/T 1095-2003".into(),
-            name: format!("毂槽（{view_label}）"),
+            name: crate::i18n::t_data_fmt("毂槽（{}）", &[view_label]),
             spec: format!(
                 "d{} b{} t2 {} r{} L{}",
                 trim(g.d),
@@ -1607,7 +1607,7 @@ impl DetailElement for SplineRect {
             "d_label": "小径 d（mm；由规格代号派生，自定义规格时才自由输入）",
             "default_d": 23,
             "spec_label": "规格代号 N×d×D×B（下拉选择或自定义输入）",
-            "source": format!("{}（规格代号自带 N/d/D/B）；{} 表1/表2（de）；模板 矩形花键.dxf 逐图元反解", crate::spline::CODE, crate::spline::HOB_CODE),
+            "source": crate::i18n::t_data_fmt("{}（规格代号自带 N/d/D/B）；{} 表1/表2（de）；模板 矩形花键.dxf 逐图元反解", &[crate::spline::CODE, crate::spline::HOB_CODE]),
             "inputs": [
                 { "key": "len", "label": "L 满齿段长（mm，侧视/剖视必给）", "required": true, "placeholder": "例如 30" },
                 { "key": "de", "label": "de 滚刀外径覆盖（mm，留空 = 按规格查表）", "placeholder": "例如 63" },

@@ -247,7 +247,7 @@ pub fn hex_bolt_b_full(d: f64, l: f64, view: BoltView) -> Result<GenPart, String
     let mut part = hex_view(&spec, view);
     part.meta = PartMeta {
         code: "GB/T 5783-2016".into(),
-        name: "六角头全螺纹螺栓 全螺纹 B级".into(),
+        name: crate::i18n::t_data("六角头全螺纹螺栓 全螺纹 B级").into(),
         spec: format!("M{}×{}", trim(d), trim(l)),
         material: String::new(),
         weight: format!("{:.3}", bolt_weight_kg(row, l)),
@@ -301,7 +301,7 @@ pub fn hex_bolt_hole_a(d: f64, l: f64, view: BoltView) -> Result<GenPart, String
     let mut part = hex_view(&spec, view);
     part.meta = PartMeta {
         code: "GB/T 32.1-2020".into(),
-        name: "六角头头部带孔螺栓 A级".into(),
+        name: crate::i18n::t_data("六角头头部带孔螺栓 A级").into(),
         spec: format!("M{}×{}", trim(d), trim(l)),
         material: String::new(),
         weight: format!("{:.3}", hole_a_weight_kg(row, l)),
@@ -607,7 +607,7 @@ pub fn socket_head(d: f64, l: f64, view: BoltView) -> Result<GenPart, String> {
                 entities: en,
                 meta: PartMeta {
                     code: "GB/T 70.1-2008".into(),
-                    name: "内六角圆柱头螺钉".into(),
+                    name: crate::i18n::t_data("内六角圆柱头螺钉").into(),
                     spec: format!("M{}×{}", trim(d), trim(l)),
                     material: String::new(),
                     weight: format!("{:.3}", socket_weight_kg(row, l)),
@@ -641,7 +641,7 @@ pub fn socket_head(d: f64, l: f64, view: BoltView) -> Result<GenPart, String> {
         entities: en,
         meta: PartMeta {
             code: "GB/T 70.1-2008".into(),
-            name: "内六角圆柱头螺钉".into(),
+            name: crate::i18n::t_data("内六角圆柱头螺钉").into(),
             spec: format!("M{}×{}", trim(d), trim(l)),
             material: String::new(),
             weight: format!("{:.3}", socket_weight_kg(row, l)),
@@ -2324,7 +2324,7 @@ pub fn pin_a(d: f64, l: f64) -> Result<GenPart, String> {
         entities: en,
         meta: PartMeta {
             code: "GB/T 119.1-2000".into(),
-            name: "圆柱销 A型".into(),
+            name: crate::i18n::t_data("圆柱销 A型").into(),
             spec: format!("Ø{}×{}", trim(d), trim(l)),
             material: String::new(),
             weight: format!("{:.5}", pin_a_weight_kg(row, l)),
@@ -2435,7 +2435,7 @@ pub fn pin_threaded(d: f64, l: f64) -> Result<GenPart, String> {
         entities: en,
         meta: PartMeta {
             code: "GB/T 120.1-2000".into(),
-            name: "内螺纹圆柱销".into(),
+            name: crate::i18n::t_data("内螺纹圆柱销").into(),
             spec: format!("Ø{}×{}", trim(d), trim(l)),
             material: String::new(),
             weight: format!("{:.5}", pin_threaded_weight_kg(row, l)),
@@ -2470,7 +2470,7 @@ pub fn flat_washer(d: f64, view: NutView) -> Result<GenPart, String> {
     let (d1, d2, h) = (row.d1, row.d2, row.h);
     let meta = PartMeta {
         code: "GB/T 97.1-2002".into(),
-        name: "平垫圈 A级".into(),
+        name: crate::i18n::t_data("平垫圈 A级").into(),
         spec: format!("Ø{}", trim(d)),
         material: String::new(),
         weight: format!(
@@ -2525,7 +2525,7 @@ pub fn spring_washer(d: f64, view: NutView) -> Result<GenPart, String> {
     let g2 = g1 + s * 15f64.to_radians().tan(); // 远侧端面（15° 斜切口）
     let meta = PartMeta {
         code: "GB/T 93-2025".into(),
-        name: "标准型弹簧垫圈".into(),
+        name: crate::i18n::t_data("标准型弹簧垫圈").into(),
         spec: format!("Ø{}", trim(d)),
         material: String::new(),
         weight: format!(
