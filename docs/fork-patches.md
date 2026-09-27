@@ -375,7 +375,8 @@ LC_ALL=C cargo test -p OpenCADStudio --lib \
 > | fork 提交 | `6d88be35` |
 > | 修法 | 新增 `fix_pre_r2000_layer_plot_flags`：`AC1012`(R13)/`AC1014`(R14) 时把图层恢复为可打印（格式的默认语义），`AC1015+` 原样保留文件里的标志（DEFPOINTS 这类真“不打印”图层不受影响）；挂在两条加载入口 —— `load_bytes`（内存/自动化）与 `finalize_loaded_outcome`（按路径打开） |
 > | 验证 | 4 个新单测（R14 读回全可打印 / R13 走路径入口 / 现代文件保留原标志 / R14 的 wire 全部 `plot_visible`）· 宿主全量 `cargo test --lib` **1554 passed / 0 failed / 18 ignored** · 实测：用户图纸 + 其 dialog 设置（window `(54.09,91.11)-(321.68,264.36)`、A4 横向、Fit、`Monochrome.ctb`）导出 **1.2 KB 全白 → 47.9 KB 完整拨叉图**（尺寸/剖面线/中心线齐全，黑色输出证明样式一直正常） |
-> | PR 分支 | `fix/r14-layer-plot-flags`（基点 = 上游 `78c9128a`，PR 提交 `29a252de`） |
+> | PR 分支 | `fix/r14-layer-plot-flags` ✅ 已推 `prf`（提交 `29a252de`，`git ls-remote` 已核对），**PR 未开** —— 基点 = 上游 `78c9128a` |
+> | 上游基点验证 | `cargo check --lib` ✅（4m44s，0 error，不动 `Cargo.lock`）· `cargo test --lib pre_r2000_layer_plot_tests` ✅ **4 passed**（上游 1759 个用例中的新增 4 个） |
 > | 报告 | `桌面/OCSM/PR-R14图层可打印-{正文.md,链接.txt}` |
 >
 > **同步动作**：上游合并后**直接取上游版**，删本节、删分支。PR 版与本 fork 版内容一致，唯一差别是 crate 前缀 ——
