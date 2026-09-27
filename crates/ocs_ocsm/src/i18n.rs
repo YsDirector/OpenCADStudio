@@ -85,6 +85,217 @@ impl Msg {
 // 本阶段只登记「已接线」的词条（竖切域）与语言元信息；其余全量字符串先盘点
 // （`~/桌面/OCSM/review/i18n_盘点.md`），按域分批录入，**列在这里的必须真有人用**。
 
+/// **GUI 深层元数据字典**（零件库/结构要素目录、表单标签、来源说明等）。
+///
+/// 这些字符串是 `partgen*` / `detail` 目录 JSON 里的**显示元数据**：中文原值即「数据」本身
+/// （族定义就地写死），英文按本表查；`t_data` 在 `Lang::Zh` 下原样返回，`Lang::En` 下查表。
+/// **协议记号（族 id / 代号 / 标准号 / 文件名）不在表内**，原样透传。
+pub const DATA_CATALOG: &[(&str, &str)] = &[
+    ("基点 = 头部支承面 × 轴线", "Base point = head bearing face × axis"),
+    ("基点 = 头部支承面 × 轴线（画法同 GB/T 5780 C级）", "Base point = head bearing face × axis (drawn the same as GB/T 5780 grade C)"),
+    ("基点 = 端面中心（轴线）", "Base point = end-face centre (axis)"),
+    ("基点 = 端面中心 × 轴线（主视图：轴线 y=0、端面 x=0）", "Base point = end-face centre × axis (front view: axis y=0, end face x=0)"),
+    ("基点 = 端面中心 × 轴线（剖面：轴线 x=0、端面 y=0）", "Base point = end-face centre × axis (section: axis x=0, end face y=0)"),
+    ("基点 = 端面 × 轴线", "Base point = end face × axis"),
+    ("基点 = 端面（d1 凸台面）× 轴线", "Base point = end face (d1 boss face) × axis"),
+    ("基点 = 内六角端端面 × 轴线", "Base point = socket end face × axis"),
+    ("基点 = 垫圈端面中心（轴线）", "Base point = washer end-face centre (axis)"),
+    ("基点 = 支承面 × 轴线（环心在 +y 侧、杆沿 −y）", "Base point = bearing face × axis (ring centre on the +y side, shank along −y)"),
+    ("基点 = 左端面 × 轴线", "Base point = left end face × axis"),
+    ("基点 = 左端面（c 锥端）× 轴线", "Base point = left end face (c chamfer end) × axis"),
+    ("长度 l", "Length l"),
+    ("长度 L", "Length L"),
+    ("厚度 s", "Thickness s"),
+    ("厚度 T", "Thickness T"),
+    ("厚度 h", "Thickness h"),
+    ("高度 m", "Height m"),
+    ("宽度 B", "Width B"),
+    ("螺纹长度 l", "Thread length l"),
+    ("外径 D（同轴径变体）", "Outside diameter D (same-shaft-diameter variant)"),
+    ("宽度 B（同内径变体）", "Width B (same-bore variant)"),
+    ("b1（mm，留空 = 该 d 档默认）", "b1 (mm, blank = default for that d step)"),
+    ("毂长 len（mm，默认 30）", "Hub length len (mm, default 30)"),
+    ("主视图", "Front view"),
+    ("俯视图", "Top view"),
+    ("左视图", "Left view"),
+    ("A型（双圆头）", "Type A (double round head)"),
+    ("B型（双平头）", "Type B (double flat head)"),
+    ("C型（单圆头）", "Type C (single round head)"),
+    ("零件库", "Part library"),
+    ("螺栓", "Bolts"),
+    ("螺钉", "Screws"),
+    ("螺母", "Nuts"),
+    ("垫圈", "Washers"),
+    ("销", "Pins"),
+    ("挡圈", "Retaining rings"),
+    ("内六角", "Socket head"),
+    ("六角螺栓", "Hex bolts"),
+    ("六角螺母", "Hex nuts"),
+    ("平垫圈", "Plain washers"),
+    ("弹性垫圈", "Spring washers"),
+    ("圆柱销", "Parallel pins"),
+    ("六角头螺栓 C级", "Hex head bolt, grade C"),
+    ("六角头螺栓 A/B级", "Hex head bolt, grades A/B"),
+    ("六角头螺栓 C级 GB/T 5780-2016", "Hex head bolt, grade C GB/T 5780-2016"),
+    ("六角头螺栓 A/B级 GB/T 5782-2016", "Hex head bolt, grades A/B GB/T 5782-2016"),
+    ("六角头螺栓 全螺纹 GB/T 5783-2016", "Hex head bolt, fully threaded GB/T 5783-2016"),
+    ("六角头头部带孔螺栓 GB/T 32.1-2020", "Hex head bolt with hole in head GB/T 32.1-2020"),
+    ("内六角圆柱头螺钉 GB/T 70.1-2008", "Hexagon socket head cap screw GB/T 70.1-2008"),
+    ("六角螺母 C级 GB/T 41-2016", "Hex nut, grade C GB/T 41-2016"),
+    ("六角薄螺母 GB/T 6172.1-2016", "Hex thin nut GB/T 6172.1-2016"),
+    ("平垫圈 A级 GB/T 97.1-2002", "Plain washer, grade A GB/T 97.1-2002"),
+    ("标准型弹簧垫圈 GB/T 93-2025", "Standard spring washer GB/T 93-2025"),
+    ("圆柱销 A型 GB/T 119.1-2000", "Parallel pin, type A GB/T 119.1-2000"),
+    ("内螺纹圆柱销 GB/T 120.1-2000", "Parallel pin with internal thread GB/T 120.1-2000"),
+    ("1型六角螺母", "Hex nut, style 1"),
+    ("孔用弹性挡圈 A型", "Circlip for holes, type A"),
+    ("轴用弹性挡圈 A型", "Circlip for shafts, type A"),
+    ("内六角平端紧定螺钉", "Hexagon socket set screw with flat point"),
+    ("圆螺母", "Round nut"),
+    ("圆螺母用止动垫圈", "Tab washer for round nut"),
+    ("吊环螺钉 A型", "Lifting eye bolt, type A"),
+    ("内包骨架有副唇密封圈 FB型", "Rotary shaft lip seal, metal case with dust lip, type FB"),
+    ("深沟球轴承 60000型", "Deep groove ball bearing, 60000 series"),
+    ("圆锥滚子轴承 30000型 02系列", "Tapered roller bearing, 30000 series, size series 02"),
+    ("调心滚子轴承 20000C型", "Spherical roller bearing, 20000C series"),
+    ("内六角平圆头螺钉", "Hexagon socket button head screw"),
+    ("内六角花形低圆柱头螺钉", "Hexalobular socket low head cap screw"),
+    ("六角头全螺纹螺栓 全螺纹 B级", "Hex head bolt, fully threaded, grade B"),
+    ("六角头头部带孔螺栓 A级", "Hex head bolt with hole in head, grade A"),
+    ("平垫圈 A级", "Plain washer, grade A"),
+    ("标准型弹簧垫圈", "Standard spring washer"),
+    ("内六角圆柱头螺钉", "Hexagon socket head cap screw"),
+    ("零件库/螺钉/内六角", "Part library/Screws/Socket head"),
+        ("普通平键A型", "Parallel key, type A"),
+    ("普通平键B型", "Parallel key, type B"),
+    ("普通平键C型", "Parallel key, type C"),
+    ("导向平键A型", "Gib-head key, type A"),
+    ("导向平键B型", "Gib-head key, type B"),
+    ("固定键固定在轴上；端置是普通平键 KEY 的画法", "The fixed key stays on the shaft; the end position follows the plain-key KEY drawing"),
+("零件库/键/平键", "Part library/Keys/Parallel keys"),
+    ("结构要素/砂轮越程槽", "Structural elements/Grinding relief groove"),
+    ("结构要素/退刀槽", "Structural elements/Thread relief groove"),
+    ("结构要素/毂槽", "Structural elements/Hub keyway"),
+    ("结构要素/花键", "Structural elements/Splines"),
+    ("螺距 P（mm，必给；表 2 单键）", "Pitch P (mm, required; single value from Table 2)"),
+    ("g1 覆盖（mm，留空 = 表值）", "g1 override (mm, blank = table value)"),
+    ("g2 覆盖（mm，留空 = 表值）", "g2 override (mm, blank = table value)"),
+    ("dg 覆盖（mm，留空 = d − 表值减量）", "dg override (mm, blank = d − table reduction)"),
+    ("r 覆盖（mm，留空 = 表值）", "r override (mm, blank = table value)"),
+    ("斜壁最小角 α（°，默认 30，必须 ≥30）", "Minimum flank angle α (°, default 30, must be ≥30)"),
+    ("毂长 len（mm，留空 = 默认 30）", "Hub length len (mm, blank = default 30)"),
+    ("L 满齿段长（mm，侧视/剖视必给）", "L, full-tooth length (mm, required for side/section views)"),
+    ("de 滚刀外径覆盖（mm，留空 = 按规格查表）", "de hob outside diameter override (mm, blank = look up by spec)"),
+    ("H（内花键基孔制）", "H (internal spline, hole basis)"),
+    ("轴径 d（mm，自由输入）", "Shaft diameter d (mm, free input)"),
+    ("螺纹公称直径 d（mm，自由输入）", "Nominal thread diameter d (mm, free input)"),
+    ("孔径 d（mm，自由输入；b/t₂/r 由 GB/T 1095 查表）", "Hole diameter d (mm, free input; b/t₂/r from GB/T 1095)"),
+    ("小径 d（mm；由规格代号派生，自定义规格时才自由输入）", "Minor diameter d (mm; derived from the spec code, free input only for custom specs)"),
+    ("GB/T 3-1997（ISO 3508:1976 / ISO 4755:1977）表 2；抄自 164580.com/data/detail_148.html（用户 2026-09-19 核对）", "GB/T 3-1997 (ISO 3508:1976 / ISO 4755:1977) Table 2; copied from 164580.com/data/detail_148.html (checked by the user on 2026-09-19)"),
+    ("GB/T 1095-2003 表 1；数据复用 assets/keyway_gb1095.csv（b→t₂/r）+ 1979 d 列；模板 GB-T1095-2003毂槽-{主视图,侧视图}.dxf 逐图元反解", "GB/T 1095-2003 Table 1; data reuses assets/keyway_gb1095.csv (b→t₂/r) + the 1979 d column; template GB-T1095-2003毂槽-{主视图,侧视图}.dxf reverse-engineered entity by entity"),
+    ("把手册 md 放到 ~/.agents/skills/ocsm-manual/manual/，或用环境变量 OCSM_MANUAL_DIR 指定目录", "Put the handbook md files under ~/.agents/skills/ocsm-manual/manual/, or point the OCSM_MANUAL_DIR environment variable at a directory"),
+];
+
+/// GUI 元数据取词：`zh` 原值 → 当前语言。英文缺条目时**回落中文**并记入 [`missing_keys`]。
+/// **有意原样保留**的元数据（文件名/路径等：翻了就对不上磁盘/图纸）。
+pub const DATA_KEEP_AS_IS: &[&str] = &[
+    "磨外圆_GB-T6403.png + 磨外圆_GB-T6403.5-2008.dxf",
+];
+
+pub fn t_data(zh: &str) -> String {
+    if DATA_KEEP_AS_IS.contains(&zh) {
+        return zh.to_string();
+    }
+    if lang() == Lang::Zh {
+        return zh.to_string();
+    }
+    match DATA_CATALOG.iter().find(|(k, _)| *k == zh) {
+        Some((_, en)) if !en.is_empty() => en.to_string(),
+        _ => {
+            note_missing(&format!("data:{zh}"));
+            zh.to_string()
+        }
+    }
+}
+
+/// JSON 里**要翻**的元数据字段（白名单；其余字符串是数据/协议，原样透传）。
+const DATA_JSON_FIELDS: &[&str] = &[
+    "name", "base_hint", "len_label", "d_label", "tree_dir", "hint", "place_hint", "label",
+    "source",
+    "display", "desc",
+];
+
+/// 树叶子段 `族名 + " " + 代号` → 英文：按**最长前缀**命中 `DATA_CATALOG`，代号部分原样拼回。
+fn t_data_prefix(seg: &str) -> String {
+    if lang() == Lang::Zh {
+        return seg.to_string();
+    }
+    let mut best: Option<(&str, &str)> = None;
+    for (zh, en) in DATA_CATALOG {
+        if zh.is_empty() || !seg.starts_with(zh) {
+            continue;
+        }
+        let rest = &seg[zh.len()..];
+        if rest.is_empty() || rest.starts_with(' ') {
+            if best.map_or(true, |(b, _)| b.len() < zh.len()) {
+                best = Some((zh, en));
+            }
+        }
+    }
+    match best {
+        Some((zh, en)) => format!("{en}{}", &seg[zh.len()..]),
+        None => t_data_soft(seg),
+    }
+}
+
+/// 软取词：字典有就翻，没有就**原样返回且不记 missing**（用于批量 JSON：数据串不算漏译）。
+fn t_data_soft(zh: &str) -> String {
+    if lang() == Lang::Zh {
+        return zh.to_string();
+    }
+    match DATA_CATALOG.iter().find(|(k, _)| *k == zh) {
+        Some((_, en)) if !en.is_empty() => en.to_string(),
+        _ => zh.to_string(),
+    }
+}
+
+/// 递归把 JSON 对象里**白名单字段**的字符串值取词（键不动；尺寸/代号等数据原样）。
+///
+/// 用于 `partgen::catalog_json`：目录 JSON 在「各族 JSON 合并后、建树前」整体取词，
+/// 树叶子名（`族名 + 代号`）因此也随语言。`tree_path` 按 `>` 分段，段内按最长前缀译。
+pub fn translate_json(value: &serde_json::Value) -> serde_json::Value {
+    use serde_json::Value;
+    match value {
+        Value::String(s) => Value::String(t_data_soft(s)),
+        Value::Array(items) => Value::Array(items.iter().map(translate_json).collect()),
+        Value::Object(map) => Value::Object(
+            map.iter()
+                .map(|(k, v)| {
+                    let out = match (k.as_str(), v) {
+                        ("tree_path", Value::String(s)) => Value::String(
+                            s.split('>')
+                                .map(|seg| {
+                                    let trimmed = seg.trim();
+                                    let lead = &seg[..seg.len() - seg.trim_start().len()];
+                                    let tail = &seg[seg.trim_end().len()..];
+                                    format!("{lead}{}{tail}", t_data_prefix(trimmed))
+                                })
+                                .collect::<Vec<_>>()
+                                .join(">"),
+                        ),
+                        (field, Value::String(s)) if DATA_JSON_FIELDS.contains(&field) => {
+                            Value::String(t_data_soft(s))
+                        }
+                        _ => translate_json(v),
+                    };
+                    (k.clone(), out)
+                })
+                .collect(),
+        ),
+        other => other.clone(),
+    }
+}
+
 /// 单一 message catalog。加词条 = 按域在对应小节加一行。
 pub const CATALOG: &[Msg] = &[
     // ── 语言元信息（GUI / 测试）──────────────────────────────────────
@@ -4630,6 +4841,16 @@ pub const CATALOG: &[Msg] = &[
 
     // —— 齿轮族 core（③a，2026-09-27）——
     Msg::new("cmd.detail.sep.list", "、", ", "),
+    Msg::new("cmd.detail.hint.grind_od", "基点 = 台阶面与轴线交点（轴线为 x 轴；d = 磨出的外圆直径）", "Base point = intersection of the shoulder face and the axis (axis = x; d = ground outside diameter)"),
+    Msg::new("cmd.detail.hint.thread_relief", "基点 = 台肩面与轴线交点（轴线为 x 轴；d = 螺纹公称直径）", "Base point = intersection of the shoulder face and the axis (axis = x; d = nominal thread diameter)"),
+    Msg::new("cmd.detail.hint.hub_keyway", "主视图基点 = 孔心；侧视图基点 = 左端面×轴线（d = 孔径；键槽开口朝 +Y）", "Front-view base point = hole centre; side-view base point = left end face × axis (d = hole diameter; the keyway opens towards +Y)"),
+    Msg::new("cmd.detail.hint.spline_rect", "基点 = 左端面与轴线交点（轴线为 x 轴；正视图 = 齿形中心）", "Base point = intersection of the left end face and the axis (axis = x; front view = tooth-profile centre)"),
+    Msg::new("cmd.detail.hub.view.main", "主视图（孔端面）", "Front view (hole end face)"),
+    Msg::new("cmd.detail.hub.view.side", "侧视图（纵向剖）", "Side view (longitudinal section)"),
+    Msg::new("cmd.detail.spline.view.front", "正视图（端视图）", "Front view (end view)"),
+    Msg::new("cmd.detail.spline.view.side", "常规侧视图", "Regular side view"),
+    Msg::new("cmd.detail.spline.view.section", "侧剖视图", "Sectional side view"),
+    Msg::new("cmd.detail.part_name_rect", "矩形花键（{view}）", "Rectangular spline ({view})"),
     Msg::new("cmd.detail.name.grind_od", "磨外圆", "external grinding"),
     Msg::new("cmd.detail.name.thread_relief", "外螺纹退刀槽", "external thread relief groove"),
     Msg::new("cmd.detail.name.hub_keyway", "普通平键毂槽", "parallel-key hub keyway"),
@@ -4895,6 +5116,65 @@ pub const CATALOG: &[Msg] = &[
     Msg::new("cmd.guide.grind.dbl", "双弧", "double arc"),
     Msg::new("cmd.guide.grind.zig", "锯齿", "zigzag"),
 
+    Msg::new("cmd.gear.err.two_spline_stds", "同一行出现两个体系的标识：{v0} 与 {v1}（体系只能写一个）。", "Two system tokens on the same line: {v0} and {v1} (only one system may be given)."),
+    Msg::new("cmd.gear.err.gear_spline_std_conflict", "同一行出现两个体系的标识：{v0} 是齿轮体系（M = 模数制 / DP = 径节制），不能与花键体系（GB/DIN/NF/ANSI）同用。", "Two system tokens on the same line: {v0} is a gear system (M = module / DP = diametral pitch) and cannot be combined with a spline system (GB/DIN/NF/ANSI)."),
+    Msg::new("cmd.invol.err.m_positive", "渐开线花键：模数 m={v0} 必须是正数。", "Involute spline: module m={v0} must be positive."),
+    Msg::new("cmd.invol.err.z_range", "渐开线花键：齿数 z={v0} 超出范围（3..=1000）。", "Involute spline: tooth count z={v0} is out of range (3..=1000)."),
+    Msg::new("cmd.invol.err.alpha_range", "渐开线花键：压力角 α 超出范围（10°<α<50°）：{v0}°。", "Involute spline: pressure angle α is out of range (10°<α<50°): {v0}°."),
+    Msg::new("cmd.invol.err.ha_positive", "渐开线花键：齿顶高系数 ha*={v0} 必须是正数。", "Involute spline: addendum coefficient ha*={v0} must be positive."),
+    Msg::new("cmd.invol.err.hf_positive", "渐开线花键：齿根高系数 hf*={v0} 必须是正数。", "Involute spline: dedendum coefficient hf*={v0} must be positive."),
+    Msg::new("cmd.invol.err.rho_negative", "渐开线花键：齿根圆角系数 ρf*={v0} 不能为负。", "Involute spline: root fillet coefficient ρf*={v0} must not be negative."),
+    Msg::new("cmd.invol.err.cf_negative", "渐开线花键：齿形裕度系数 cF*={v0} 不能为负。", "Involute spline: form clearance coefficient cF*={v0} must not be negative."),
+    Msg::new("cmd.invol.err.x_finite", "渐开线花键：变位系数 x={v0} 必须是有限数。", "Involute spline: profile shift x={v0} must be finite."),
+    Msg::new("cmd.invol.err.din_x_range", "DIN 5480：变位系数 x={v0} 超出 x·m∈[−0.05m, +0.45m]（x∈[−0.05, 0.45]）。", "DIN 5480: profile shift x={v0} is outside x·m∈[−0.05m, +0.45m] (x∈[−0.05, 0.45])."),
+    Msg::new("cmd.invol.err.ansi_col_unknown", "ANSI B92.1：齿廓「{v0}」不是 Table 2 五列之一（用 `ANSI30P`/`ANSI30PM`/`ANSI30R`/`ANSI375R`/`ANSI45R`）。", "ANSI B92.1: profile “{v0}” is not one of the five Table 2 columns (use `ANSI30P`/`ANSI30PM`/`ANSI30R`/`ANSI375R`/`ANSI45R`)."),
+    Msg::new("cmd.invol.err.ansi_no_x", "ANSI B92.1：不使用变位系数 x（Table 2 基本尺寸无 x 项）；收到 x={v0}。", "ANSI B92.1: profile shift x is not used (Table 2 basic dimensions have no x term); got x={v0}."),
+    Msg::new("cmd.invol.err.df_nonpositive", "渐开线花键：齿根圆直径 df={v0} 非正（检查 m/z/x/hf* 组合）。", "Involute spline: root diameter df={v0} is not positive (check the m/z/x/hf* combination)."),
+    Msg::new("cmd.invol.err.da_not_gt_df", "渐开线花键：齿顶圆 da={v0} 不大于齿根圆 df={v1}。", "Involute spline: tip diameter da={v0} is not greater than root diameter df={v1}."),
+    Msg::new("cmd.invol.err.internal_minor_nonpositive", "内花键：小径 D_ii={v0} 非正（检查 m/z/x/系数组合）。", "Internal spline: minor diameter D_ii={v0} is not positive (check the m/z/x/coefficient combination)."),
+    Msg::new("cmd.invol.err.internal_major_le_minor", "内花键：大径 D_ei={v0} 不大于小径 D_ii={v1}。", "Internal spline: major diameter D_ei={v0} is not greater than minor diameter D_ii={v1}."),
+    Msg::new("cmd.invol.err.preset_unknown", "{v0} 没有齿廓预设「{v1}」；可用：{v2}", "{v0} has no profile preset “{v1}”; available: {v2}"),
+    Msg::new("cmd.invol.err.ansi_no_flat_col", "ANSI B92.1 Table 2 没有 {v0}° 平齿根列（37.5°/45° 只有圆齿根）", "ANSI B92.1 Table 2 has no {v0}° flat-root column (37.5°/45° have fillet roots only)"),
+    Msg::new("cmd.invol.err.ansi_fillet_side_only", "ANSI B92.1 Table 2 的圆齿根只有齿侧配合（外径配合仅 30° 平齿根列 B）", "ANSI B92.1 Table 2 fillet roots are side-fit only (major-diameter fit exists only for the 30° flat-root column B)"),
+    Msg::new("cmd.invol.err.ansi_alpha_unsupported", "ANSI B92.1 压力角只支持 30° / 37.5° / 45°（收到 {v0}°）；组合见 Table 2 五列", "ANSI B92.1 supports pressure angles 30° / 37.5° / 45° only (got {v0}°); see the five Table 2 columns for combinations"),
+    Msg::new("cmd.invol.err.series_m_positive", "{v0}：模数 m={v1} 必须是正数。", "{v0}: module m={v1} must be positive."),
+    Msg::new("cmd.invol.err.series_m_not_in_list", "{v0}：模数 m={v1} 不在体系可用系列（来源：{v2}；可用值：{v3}）。", "{v0}: module m={v1} is not in the system’s available series (source: {v2}; available: {v3})."),
+    Msg::new("cmd.invol.din.db_positive", "DIN 5480：d_B={v0} 必须是正数。", "DIN 5480: d_B={v0} must be positive."),
+    Msg::new("cmd.invol.din.m_positive", "DIN 5480：m={v0} 必须是正数。", "DIN 5480: m={v0} must be positive."),
+    Msg::new("cmd.invol.din.db_multi_hit", "DIN 5480：d_B={v0} 命中 {v1} 行（同一 d_B 多个 m/z/x₁ 变体）：{v2}；请再给 M 和/或 Z。", "DIN 5480: d_B={v0} matched {v1} rows (the same d_B has several m/z/x₁ variants): {v2}; give M and/or Z as well."),
+    Msg::new("cmd.invol.din.db_m_multi_z", "DIN 5480：d_B={v0}、m={v1} 有多个 z 变体：{v2}；请再给 Z（同一 d_B 多个 z/x₁ 是表格事实）。", "DIN 5480: d_B={v0}, m={v1} has several z variants: {v2}; give Z as well (several z/x₁ for one d_B is a table fact)."),
+    Msg::new("cmd.invol.din.db_z_multi_m", "DIN 5480：d_B={v0}、z={v1} 有多个 m 变体：{v2}；请再给 M。", "DIN 5480: d_B={v0}, z={v1} has several m variants: {v2}; give M as well."),
+    Msg::new("cmd.invol.din.z_no_feasible", "DIN 5480：由 d_B={v0}、m={v1} 与 x∈[−0.05,0.45] 得不到可行齿数（z∈[{v2},{v3}]）——请核对 d_B 与 m。", "DIN 5480: d_B={v0}, m={v1} with x∈[−0.05,0.45] yields no feasible tooth count (z∈[{v2},{v3}]) — check d_B and m."),
+    Msg::new("cmd.invol.din.derive_z_note", "推导值、未命中表：d_B={v0}、m={v1} 不在 DIN 5480-2 名义表；由 d_B=m(z+1.1+2x)、x∈[−0.05,0.45] 得 z∈[{v2},{v3}]，取 z={v4}（x={v5}）", "Derived value, table not hit: d_B={v0}, m={v1} are not in the DIN 5480-2 nominal table; from d_B=m(z+1.1+2x), x∈[−0.05,0.45] we get z∈[{v2},{v3}], take z={v4} (x={v5})"),
+    Msg::new("cmd.invol.din.derive_m_note", "推导值、未命中表：d_B={v0}、z={v1} 不在 DIN 5480-2 名义表；由 d_B=m(z+1.1+2x) 取 x=0 得 m={v2}（可行区间 m∈[{v3},{v4}]）", "Derived value, table not hit: d_B={v0}, z={v1} are not in the DIN 5480-2 nominal table; from d_B=m(z+1.1+2x) with x=0 we get m={v2} (feasible range m∈[{v3},{v4}])"),
+    Msg::new("cmd.invol.din.prefix", "DIN 5480：{v0}", "DIN 5480: {v0}"),
+    Msg::new("cmd.invol.din.lookup_db_positive", "DIN 5480-2 查表：d_B={v0} 必须是正数。", "DIN 5480-2 lookup: d_B={v0} must be positive."),
+    Msg::new("cmd.invol.din.lookup_m_positive", "DIN 5480-2 查表：m={v0} 必须是正数。", "DIN 5480-2 lookup: m={v0} must be positive."),
+    Msg::new("cmd.invol.din.lookup_head", "DIN 5480-2 查表：d_B={v0}", "DIN 5480-2 lookup: d_B={v0}"),
+    Msg::new("cmd.invol.din.lookup_head_m", "（m={v0}）", " (m={v0})"),
+    Msg::new("cmd.invol.din.lookup_no_hit", " 无命中", " no hit"),
+    Msg::new("cmd.invol.table.no_module_step", "；表中没有 m={v0} 档（已入库档位：{v1}）。", "; the table has no m={v0} step (loaded steps: {v1})."),
+    Msg::new("cmd.invol.din.cand_row", "d_B={v0}（m={v1}）", "d_B={v0} (m={v1})"),
+    Msg::new("cmd.invol.table.candidates", "附近候选：{v0}。", "Nearby candidates: {v0}."),
+    Msg::new("cmd.invol.din.rows_join", "m={v0} z={v1} x={v2}", "m={v0} z={v1} x={v2}"),
+    Msg::new("cmd.invol.nf.lookup_a_positive", "NF E22-141 查表：A={v0} 必须是正数。", "NF E22-141 lookup: A={v0} must be positive."),
+    Msg::new("cmd.invol.nf.lookup_m_positive", "NF E22-141 查表：m={v0} 必须是正数。", "NF E22-141 lookup: m={v0} must be positive."),
+    Msg::new("cmd.invol.nf.lookup_head", "NF E22-141 查表：A={v0}", "NF E22-141 lookup: A={v0}"),
+    Msg::new("cmd.invol.nf.a_positive", "NF E22-141：A={v0} 必须是正数。", "NF E22-141: A={v0} must be positive."),
+    Msg::new("cmd.invol.nf.m_positive", "NF E22-141：m={v0} 必须是正数。", "NF E22-141: m={v0} must be positive."),
+    Msg::new("cmd.invol.nf.row_tag", "NF E22-141：查表行 p{v0} m={v1} N={v2}：{v3}", "NF E22-141: table row p{v0} m={v1} N={v2}: {v3}"),
+    Msg::new("cmd.invol.nf.z_out_of_range", "NF E22-141：由 A={v0}、m={v1} 取 x={v2} 得 N={v3} 超出 1..=1000（表内 x∈[0.6,0.967]）——请核对 A 与 m。", "NF E22-141: A={v0}, m={v1} with x={v2} gives N={v3}, outside 1..=1000 (x∈[0.6,0.967] in the table) — check A and m."),
+    Msg::new("cmd.invol.nf.bench_positive", "{v0}：基准直径/公称直径={v1} 必须是正数。", "{v0}: reference/nominal diameter={v1} must be positive."),
+    Msg::new("cmd.invol.nf.a_m_multi_z", "NF E22-141：A={v0}、m={v1} 有多个 N 变体：{v2}；请再给 N。", "NF E22-141: A={v0}, m={v1} has several N variants: {v2}; give N as well."),
+    Msg::new("cmd.invol.nf.a_z_multi_m", "NF E22-141：A={v0}、N={v1} 有多个 m 变体：{v2}；请再给 M。", "NF E22-141: A={v0}, N={v1} has several m variants: {v2}; give M as well."),
+    Msg::new("cmd.invol.nf.a_multi_hit", "NF E22-141：A={v0} 命中 {v1} 行：{v2}；请再给 M 和/或 N。", "NF E22-141: A={v0} matched {v1} rows: {v2}; give M and/or N as well."),
+    Msg::new("cmd.invol.nf.derive_z_note", "推导值、未命中表：A={v0}、m={v1} 不在 NF E22-141 尺寸表；按主系列 x={v2} 取 N={v3}（表内 x∈[0.6,0.967] 时 N∈[{v4},{v5}]）", "Derived value, table not hit: A={v0}, m={v1} are not in the NF E22-141 dimension table; with the main series x={v2} we take N={v3} (with x∈[0.6,0.967] in the table, N∈[{v4},{v5}])"),
+    Msg::new("cmd.invol.nf.derive_m_note", "推导值、未命中表：A={v0}、N={v1} 不在 NF E22-141 尺寸表；按 x={v2} 取名义 m=A/(N+2x+0.4)={v3}", "Derived value, table not hit: A={v0}, N={v1} are not in the NF E22-141 dimension table; with x={v2} we take the nominal m=A/(N+2x+0.4)={v3}"),
+    Msg::new("cmd.invol.nf.note_multi_variant", "查表命中 A={v0}、m={v1} 的多个 N 变体（{v2}），按最接近主系列 x=0.8 取 N={v3}", "Table hit: several N variants for A={v0}, m={v1} ({v2}); take N={v3}, the one closest to the main series x=0.8"),
+    Msg::new("cmd.invol.nf.derive_z_table_note", "表外推导：d_B={v0}、m={v1} 不在 DIN 5480-2 名义表；由 d_B=m(z+1.1+2x)、x∈[−0.05,0.45] 得 z∈[{v2},{v3}]，取 z={v4}（x={v5}）", "Derived outside the table: d_B={v0}, m={v1} are not in the DIN 5480-2 nominal table; from d_B=m(z+1.1+2x), x∈[−0.05,0.45] we get z∈[{v2},{v3}], take z={v4} (x={v5})"),
+    Msg::new("cmd.invol.derive_z_not_applicable", "{v0} 不使用基准直径推齿数（GB 用 m/z/x，ANSI 用径节 P 与齿数 N）。", "{v0} does not derive the tooth count from a reference diameter (GB uses m/z/x, ANSI uses pitch P and tooth count N)."),
+    Msg::new("cmd.invol.nf.rows_join", "N={v0}（x={v1}）", "N={v0} (x={v1})"),
+    Msg::new("cmd.invol.sep.list", "、", ", "),
     // —— 轴族（JSON/几何校验/计算书）补齐（§26）——
 ];
 

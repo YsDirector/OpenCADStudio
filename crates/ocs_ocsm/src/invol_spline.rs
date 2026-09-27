@@ -709,16 +709,9 @@ pub fn ansi_profile_name(
         (AnsiRoot::Fillet, AnsiFit::Side) if near(alpha_deg, 45.0) => {
             Ok("ANSI45圆齿根齿侧")
         }
-        (AnsiRoot::Flat, _) if near(alpha_deg, 37.5) || near(alpha_deg, 45.0) => Err(format!(
-            "ANSI B92.1 Table 2 没有 {alpha_deg}° 平齿根列（37.5°/45° 只有圆齿根）"
-        )),
-        (AnsiRoot::Fillet, AnsiFit::MajorDia) => Err(
-            "ANSI B92.1 Table 2 的圆齿根只有齿侧配合（外径配合仅 30° 平齿根列 B）".to_string(),
-        ),
-        _ => Err(format!(
-            "ANSI B92.1 压力角只支持 30° / 37.5° / 45°（收到 {alpha_deg}°）；\
-             组合见 Table 2 五列"
-        )),
+        (AnsiRoot::Flat, _) if near(alpha_deg, 37.5) || near(alpha_deg, 45.0) => Err(crate::i18n::t_fmt("cmd.invol.err.ansi_no_flat_col", &[("v0", &trim(alpha_deg))])),
+        (AnsiRoot::Fillet, AnsiFit::MajorDia) => Err(crate::i18n::t("cmd.invol.err.ansi_fillet_side_only")),
+        _ => Err(crate::i18n::t_fmt("cmd.invol.err.ansi_alpha_unsupported", &[("v0", &trim(alpha_deg))])),
     }
 }
 
@@ -800,8 +793,8 @@ pub fn preset(std: SplineStd, profile: &str) -> Result<&'static InvolPreset, Str
                 .iter()
                 .map(|p| p.profile)
                 .collect::<Vec<_>>()
-                .join("、");
-            format!("{} 没有齿廓预设「{profile}」；可用：{list}", std.code())
+                .join(&crate::i18n::t("cmd.invol.sep.list"));
+            crate::i18n::t_fmt("cmd.invol.err.preset_unknown", &[("v0", &std.code()), ("v1", &profile), ("v2", &list)])
         })
 }
 
@@ -1126,11 +1119,11 @@ fn din5480_match(d_b: f64, m: Option<f64>) -> Vec<Din5480Row> {
 /// * `m=1.5`、`m=5` 均已由用户截图补入，可正常命中（m=5 的 2 处 z 解析时按修正表生效）。
 pub fn lookup_by_d_b(d_b: f64, m: Option<f64>) -> Result<Vec<Din5480Row>, String> {
     if !(d_b.is_finite() && d_b > 0.0) {
-        return Err(format!("DIN 5480-2 查表：d_B={} 必须是正数。", trim(d_b)));
+        return Err(crate::i18n::t_fmt("cmd.invol.din.lookup_db_positive", &[("v0", &trim(d_b))]));
     }
     if let Some(m) = m {
         if !(m.is_finite() && m > 0.0) {
-            return Err(format!("DIN 5480-2 查表：m={} 必须是正数。", trim(m)));
+            return Err(crate::i18n::t_fmt("cmd.invol.din.lookup_m_positive", &[("v0", &trim(m))]));
         }
     }
     let mut hits = din5480_match(d_b, m);
@@ -1144,11 +1137,11 @@ pub fn lookup_by_d_b(d_b: f64, m: Option<f64>) -> Result<Vec<Din5480Row>, String
 
 /// 未命中的错误文案：缺失档位说明 + 附近候选。
 fn din5480_miss_message(d_b: f64, m: Option<f64>) -> String {
-    let mut msg = format!("DIN 5480-2 查表：d_B={}", trim(d_b));
+    let mut msg = crate::i18n::t_fmt("cmd.invol.din.lookup_head", &[("v0", &trim(d_b))]);
     if let Some(m) = m {
-        msg.push_str(&format!("（m={}）", trim(m)));
+        msg.push_str(&crate::i18n::t_fmt("cmd.invol.din.lookup_head_m", &[("v0", &trim(m))]));
     }
-    msg.push_str(" 无命中");
+    msg.push_str(&crate::i18n::t("cmd.invol.din.lookup_no_hit"));
     if let Some(m) = m {
         if !din5480_modules()
             .iter()
@@ -1158,12 +1151,8 @@ fn din5480_miss_message(d_b: f64, m: Option<f64>) -> String {
                 .iter()
                 .map(|v| trim(*v))
                 .collect::<Vec<_>>()
-                .join("、");
-            msg.push_str(&format!(
-                "；表中没有 m={} 档（已入库档位：{}）。",
-                trim(m),
-                list
-            ));
+                .join(&crate::i18n::t("cmd.invol.sep.list"));
+            msg.push_str(&crate::i18n::t_fmt("cmd.invol.table.no_module_step", &[("v0", &trim(m)), ("v1", &list)]));
         } else {
             msg.push('。');
         }
@@ -1191,13 +1180,13 @@ fn din5480_miss_message(d_b: f64, m: Option<f64>) -> String {
             continue;
         }
         seen.push(r.d_b);
-        cands.push(format!("d_B={}（m={}）", trim(r.d_b), trim(r.m)));
+        cands.push(crate::i18n::t_fmt("cmd.invol.din.cand_row", &[("v0", &trim(r.d_b)), ("v1", &trim(r.m))]));
         if cands.len() >= 5 {
             break;
         }
     }
     if !cands.is_empty() {
-        msg.push_str(&format!("附近候选：{}。", cands.join("、")));
+        msg.push_str(&crate::i18n::t_fmt("cmd.invol.table.candidates", &[("v0", &cands.join(&crate::i18n::t("cmd.invol.sep.list")))]));
     }
     msg
 }
@@ -1264,7 +1253,7 @@ fn derive_z_from_d_b_m(
     prefer: Option<u32>,
 ) -> Result<(u32, f64, f64), String> {
     if !(m.is_finite() && m > 0.0) {
-        return Err(format!("DIN 5480：m={} 必须是正数。", trim(m)));
+        return Err(crate::i18n::t_fmt("cmd.invol.din.m_positive", &[("v0", &trim(m))]));
     }
     let ratio = d_b / m;
     let z_lo_f = ratio - 2.0;
@@ -1272,13 +1261,7 @@ fn derive_z_from_d_b_m(
     let z_lo = (z_lo_f - 1e-9).ceil();
     let z_hi = (z_hi_f + 1e-9).floor();
     if z_hi < z_lo || z_hi < 3.0 || z_lo > 1000.0 {
-        return Err(format!(
-            "DIN 5480：由 d_B={}、m={} 与 x∈[−0.05,0.45] 得不到可行齿数（z∈[{:.4},{:.4}]）——请核对 d_B 与 m。",
-            trim(d_b),
-            trim(m),
-            z_lo_f,
-            z_hi_f
-        ));
+        return Err(crate::i18n::t_fmt("cmd.invol.din.z_no_feasible", &[("v0", &trim(d_b)), ("v1", &trim(m)), ("v2", &format!("{:.4}", z_lo_f)), ("v3", &format!("{:.4}", z_hi_f))]));
     }
     let candidates: Vec<u32> = (z_lo.max(3.0) as u32..=z_hi.min(1000.0) as u32).collect();
     let best = candidates
@@ -1318,11 +1301,11 @@ pub fn resolve_din_by_d_b(
     x: Option<f64>,
 ) -> Result<(InvolParams, D_bOrigin), String> {
     if !(d_b.is_finite() && d_b > 0.0) {
-        return Err(format!("DIN 5480：d_B={} 必须是正数。", trim(d_b)));
+        return Err(crate::i18n::t_fmt("cmd.invol.din.db_positive", &[("v0", &trim(d_b))]));
     }
     if let Some(m) = m {
         if !(m.is_finite() && m > 0.0) {
-            return Err(format!("DIN 5480：m={} 必须是正数。", trim(m)));
+            return Err(crate::i18n::t_fmt("cmd.invol.din.m_positive", &[("v0", &trim(m))]));
         }
         // 模数必须来自 DIN 5480-2 名义表的实际 m 列（候选随表走，避免系列漂移）。
         module_series_check(SplineStd::DIN, m)?;
@@ -1337,12 +1320,7 @@ pub fn resolve_din_by_d_b(
                 return Err(lookup_by_d_b(d_b, None).unwrap_err());
             }
             if hits.len() > 1 {
-                return Err(format!(
-                    "DIN 5480：d_B={} 命中 {} 行（同一 d_B 多个 m/z/x₁ 变体）：{}；请再给 M 和/或 Z。",
-                    trim(d_b),
-                    hits.len(),
-                    join_rows(&hits)
-                ));
+                return Err(crate::i18n::t_fmt("cmd.invol.din.db_multi_hit", &[("v0", &trim(d_b)), ("v1", &hits.len().to_string()), ("v2", &join_rows(&hits))]));
             }
             row_to_params(hits[0].clone())
         }
@@ -1356,12 +1334,7 @@ fn resolve_with_m(d_b: f64, m: f64) -> Result<(InvolParams, D_bOrigin), String> 
     zs.sort_unstable();
     zs.dedup();
     if zs.len() > 1 {
-        return Err(format!(
-            "DIN 5480：d_B={}、m={} 有多个 z 变体：{}；请再给 Z（同一 d_B 多个 z/x₁ 是表格事实）。",
-            trim(d_b),
-            trim(m),
-            join_rows(&hits)
-        ));
+        return Err(crate::i18n::t_fmt("cmd.invol.din.db_m_multi_z", &[("v0", &trim(d_b)), ("v1", &trim(m)), ("v2", &join_rows(&hits))]));
     }
     if zs.len() == 1 {
         hits.sort_by_key(|r| r.z);
@@ -1370,17 +1343,9 @@ fn resolve_with_m(d_b: f64, m: f64) -> Result<(InvolParams, D_bOrigin), String> 
     // 表外：按公式推 z 并标注区间依据。
     let (z, z_lo, z_hi) = derive_z_from_d_b_m(d_b, m, None)?;
     let x = x_from_d_b(d_b, m, z);
-    let note = format!(
-        "推导值、未命中表：d_B={}、m={} 不在 DIN 5480-2 名义表；由 d_B=m(z+1.1+2x)、x∈[−0.05,0.45] 得 z∈[{:.4},{:.4}]，取 z={}（x={}）",
-        trim(d_b),
-        trim(m),
-        z_lo,
-        z_hi,
-        z,
-        trim(x)
-    );
+    let note = crate::i18n::t_fmt("cmd.invol.din.derive_z_note", &[("v0", &trim(d_b)), ("v1", &trim(m)), ("v2", &format!("{:.4}", z_lo)), ("v3", &format!("{:.4}", z_hi)), ("v4", &z.to_string()), ("v5", &trim(x))]);
     let p = InvolParams::din(m, z, x)
-        .map_err(|e| format!("DIN 5480：{e}"))?
+        .map_err(|e| crate::i18n::t_fmt("cmd.invol.din.prefix", &[("v0", &e)]))?
         .with_d_b(d_b);
     Ok((p, D_bOrigin::Derived(note)))
 }
@@ -1396,12 +1361,7 @@ fn resolve_with_z(d_b: f64, z: u32) -> Result<(InvolParams, D_bOrigin), String> 
         ms.sort_by(|a, b| a.partial_cmp(b).unwrap());
         ms.dedup_by(|a, b| (*a - *b).abs() < DIN_M_TOL);
         if ms.len() > 1 {
-            return Err(format!(
-                "DIN 5480：d_B={}、z={} 有多个 m 变体：{}；请再给 M。",
-                trim(d_b),
-                z,
-                join_rows(&hits)
-            ));
+            return Err(crate::i18n::t_fmt("cmd.invol.din.db_z_multi_m", &[("v0", &trim(d_b)), ("v1", &z.to_string()), ("v2", &join_rows(&hits))]));
         }
         return row_to_params(hits[0].clone());
     }
@@ -1409,16 +1369,9 @@ fn resolve_with_z(d_b: f64, z: u32) -> Result<(InvolParams, D_bOrigin), String> 
     let m = d_b / (z as f64 + 1.1);
     let m_lo = d_b / (z as f64 + 2.0);
     let m_hi = d_b / (z as f64 + 1.0);
-    let note = format!(
-        "推导值、未命中表：d_B={}、z={} 不在 DIN 5480-2 名义表；由 d_B=m(z+1.1+2x) 取 x=0 得 m={}（可行区间 m∈[{:.4},{:.4}]）",
-        trim(d_b),
-        z,
-        trim(m),
-        m_lo,
-        m_hi
-    );
+    let note = crate::i18n::t_fmt("cmd.invol.din.derive_m_note", &[("v0", &trim(d_b)), ("v1", &z.to_string()), ("v2", &trim(m)), ("v3", &format!("{:.4}", m_lo)), ("v4", &format!("{:.4}", m_hi))]);
     let p = InvolParams::din(m, z, 0.0)
-        .map_err(|e| format!("DIN 5480：{e}"))?
+        .map_err(|e| crate::i18n::t_fmt("cmd.invol.din.prefix", &[("v0", &e)]))?
         .with_d_b(d_b);
     Ok((p, D_bOrigin::Derived(note)))
 }
@@ -1460,7 +1413,7 @@ fn resolve_with_m_z(
             }
         }
         let p = InvolParams::din(m, z_canon, x2)
-            .map_err(|e| format!("DIN 5480：{e}"))?
+            .map_err(|e| crate::i18n::t_fmt("cmd.invol.din.prefix", &[("v0", &e)]))?
             .with_d_b(d_b);
         return Ok((p, D_bOrigin::Adjusted(note)));
     }
@@ -1501,7 +1454,7 @@ fn resolve_with_m_z(
             }
         };
         let p = InvolParams::din(m, z, xv)
-            .map_err(|e| format!("DIN 5480：{e}"))?
+            .map_err(|e| crate::i18n::t_fmt("cmd.invol.din.prefix", &[("v0", &e)]))?
             .with_d_b(d_b);
         return Ok((p, origin));
     }
@@ -1526,7 +1479,7 @@ fn resolve_with_m_z(
         }
     }
     let p = InvolParams::din(m, z2, x2)
-        .map_err(|e| format!("DIN 5480：{e}"))?
+        .map_err(|e| crate::i18n::t_fmt("cmd.invol.din.prefix", &[("v0", &e)]))?
         .with_d_b(d_b);
     Ok((p, D_bOrigin::Adjusted(note)))
 }
@@ -1676,9 +1629,9 @@ pub fn resolve_spline(
 /// 行列表（错误信息里的候选展示）。
 fn join_rows(rows: &[Din5480Row]) -> String {
     rows.iter()
-        .map(|r| format!("m={} z={} x={}", trim(r.m), r.z, trim(r.x)))
+        .map(|r| crate::i18n::t_fmt("cmd.invol.din.rows_join", &[("v0", &trim(r.m)), ("v1", &r.z.to_string()), ("v2", &trim(r.x))]))
         .collect::<Vec<_>>()
-        .join("、")
+        .join(&crate::i18n::t("cmd.invol.sep.list"))
 }
 
 // ──────────────── NF E22-141 尺寸表（`A` 查表；数据 = assets/nf_e22141_dims.csv） ────────────────
@@ -1904,7 +1857,7 @@ pub fn module_series_check(std: SplineStd, m: f64) -> Result<(), String> {
         return ansi_pitch_series_check(m);
     }
     if !(m.is_finite() && m > 0.0) {
-        return Err(format!("{}：模数 m={} 必须是正数。", std.code(), trim(m)));
+        return Err(crate::i18n::t_fmt("cmd.invol.err.series_m_positive", &[("v0", &std.code()), ("v1", &trim(m))]));
     }
     let list = module_candidates(std);
     if list
@@ -1913,13 +1866,7 @@ pub fn module_series_check(std: SplineStd, m: f64) -> Result<(), String> {
     {
         return Ok(());
     }
-    Err(format!(
-        "{}：模数 m={} 不在体系可用系列（来源：{}；可用值：{}）。",
-        std.code(),
-        trim(m),
-        module_source(std),
-        list.iter().map(|v| trim(*v)).collect::<Vec<_>>().join("、")
-    ))
+    Err(crate::i18n::t_fmt("cmd.invol.err.series_m_not_in_list", &[("v0", &std.code()), ("v1", &trim(m)), ("v2", &module_source(std)), ("v3", &list.iter().map(|v| trim(*v)).collect::<Vec<_>>().join(&crate::i18n::t("cmd.invol.sep.list")))]))
 }
 
 /// **花键引擎目录数据**（JSON）：预设表、DIN/NF 名义表、DIN 检验表、各体系模数/径节候选。
@@ -2198,7 +2145,7 @@ fn nf_join_rows(rows: &[NfE22141Row]) -> String {
     rows.iter()
         .map(|r| format!("A={} m={} N={} x={}", trim(r.a), trim(r.m), r.z, r.x.map(trim).unwrap_or_default()))
         .collect::<Vec<_>>()
-        .join("、")
+        .join(&crate::i18n::t("cmd.invol.sep.list"))
 }
 
 /// **NF E22-141 尺寸表查表**：按公称直径 `A`（可再限定模数 `m`）返回名义行。
@@ -2208,11 +2155,11 @@ fn nf_join_rows(rows: &[NfE22141Row]) -> String {
 /// * p18 的拉削内花键行只有 `D=A−2m`，与 p20/p21/p22 同 `(m,A,N)` 行合并时保留信息全的后者。
 pub fn lookup_by_a(a: f64, m: Option<f64>) -> Result<Vec<NfE22141Row>, String> {
     if !(a.is_finite() && a > 0.0) {
-        return Err(format!("NF E22-141 查表：A={} 必须是正数。", trim(a)));
+        return Err(crate::i18n::t_fmt("cmd.invol.nf.lookup_a_positive", &[("v0", &trim(a))]));
     }
     if let Some(m) = m {
         if !(m.is_finite() && m > 0.0) {
-            return Err(format!("NF E22-141 查表：m={} 必须是正数。", trim(m)));
+            return Err(crate::i18n::t_fmt("cmd.invol.nf.lookup_m_positive", &[("v0", &trim(m))]));
         }
     }
     let hits = nf_match(a, m);
@@ -2225,15 +2172,15 @@ pub fn lookup_by_a(a: f64, m: Option<f64>) -> Result<Vec<NfE22141Row>, String> {
 
 /// 未命中的错误文案：已入库档位 + 附近候选。
 fn nf_miss_message(a: f64, m: Option<f64>) -> String {
-    let mut msg = format!("NF E22-141 查表：A={}", trim(a));
+    let mut msg = crate::i18n::t_fmt("cmd.invol.nf.lookup_head", &[("v0", &trim(a))]);
     if let Some(m) = m {
-        msg.push_str(&format!("（m={}）", trim(m)));
+        msg.push_str(&crate::i18n::t_fmt("cmd.invol.din.lookup_head_m", &[("v0", &trim(m))]));
     }
-    msg.push_str(" 无命中");
+    msg.push_str(&crate::i18n::t("cmd.invol.din.lookup_no_hit"));
     if let Some(m) = m {
         if !nf_e22141_modules().iter().any(|mm| (mm - m).abs() < NF_M_TOL) {
-            let list = nf_e22141_modules().iter().map(|v| trim(*v)).collect::<Vec<_>>().join("、");
-            msg.push_str(&format!("；表中没有 m={} 档（已入库档位：{}）。", trim(m), list));
+            let list = nf_e22141_modules().iter().map(|v| trim(*v)).collect::<Vec<_>>().join(&crate::i18n::t("cmd.invol.sep.list"));
+            msg.push_str(&crate::i18n::t_fmt("cmd.invol.table.no_module_step", &[("v0", &trim(m)), ("v1", &list)]));
         } else {
             msg.push('。');
         }
@@ -2263,7 +2210,7 @@ fn nf_miss_message(a: f64, m: Option<f64>) -> String {
         }
     }
     if !cands.is_empty() {
-        msg.push_str(&format!("附近候选：{}。", cands.join("、")));
+        msg.push_str(&crate::i18n::t_fmt("cmd.invol.table.candidates", &[("v0", &cands.join(&crate::i18n::t("cmd.invol.sep.list")))]));
     }
     msg
 }
@@ -2283,7 +2230,7 @@ pub fn a_from_x(m: f64, z: u32, x: f64) -> f64 {
 fn nf_row_to_params(row: NfE22141Row, profile: &str) -> Result<(InvolParams, D_bOrigin), String> {
     let xv = x_from_a(row.a, row.m, row.z);
     let p = InvolParams::from_preset(SplineStd::NF, profile, row.m, row.z)
-        .map_err(|e| format!("NF E22-141：查表行 p{} m={} N={}：{e}", row.page, trim(row.m), row.z))?
+        .map_err(|e| crate::i18n::t_fmt("cmd.invol.nf.row_tag", &[("v0", &row.page.to_string()), ("v1", &trim(row.m)), ("v2", &row.z.to_string()), ("v3", &e)]))?
         .with_x(xv)
         .with_a(row.a);
     p.validate().map_err(|e| crate::i18n::t_fmt("cmd.invol.err.nf_prefix", &[("e", &e)]))?;
@@ -2294,7 +2241,7 @@ fn nf_row_to_params(row: NfE22141Row, profile: &str) -> Result<(InvolParams, D_b
 /// → `N = A/m − 2.0`；表外取最接近的整数（标注推导值）。返回 `(N, 区间下界, 区间上界)`。
 fn derive_nf_z_from_a_m(a: f64, m: f64, prefer: Option<u32>, x: Option<f64>) -> Result<(u32, f64, f64), String> {
     if !(m.is_finite() && m > 0.0) {
-        return Err(format!("NF E22-141：m={} 必须是正数。", trim(m)));
+        return Err(crate::i18n::t_fmt("cmd.invol.nf.m_positive", &[("v0", &trim(m))]));
     }
     let x0 = x.unwrap_or(0.8);
     let z_lo_f = (a - m * (0.4 + 2.0 * 0.967)) / m - 1e-9;
@@ -2305,10 +2252,7 @@ fn derive_nf_z_from_a_m(a: f64, m: f64, prefer: Option<u32>, x: Option<f64>) -> 
         None => nominal,
     };
     if !(1.0..=1000.0).contains(&z) {
-        return Err(format!(
-            "NF E22-141：由 A={}、m={} 取 x={} 得 N={} 超出 1..=1000（表内 x∈[0.6,0.967]）——请核对 A 与 m。",
-            trim(a), trim(m), trim(x0), z
-        ));
+        return Err(crate::i18n::t_fmt("cmd.invol.nf.z_out_of_range", &[("v0", &trim(a)), ("v1", &trim(m)), ("v2", &trim(x0)), ("v3", &trim(z))]));
     }
     Ok((z as u32, z_lo_f, z_hi_f))
 }
@@ -2324,14 +2268,10 @@ fn derive_nf_z_from_a_m(a: f64, m: f64, prefer: Option<u32>, x: Option<f64>) -> 
 /// [`resolve_din_by_d_b`]/[`resolve_nf_by_a`] 与推导值比对，不符则以基准直径为准并明文提示。
 pub fn derive_z_from_bench_m(std: SplineStd, bench: f64, m: f64) -> Result<(u32, String), String> {
     if !(bench.is_finite() && bench > 0.0) {
-        return Err(format!(
-            "{}：基准直径/公称直径={} 必须是正数。",
-            std.code(),
-            trim(bench)
-        ));
+        return Err(crate::i18n::t_fmt("cmd.invol.nf.bench_positive", &[("v0", &std.code()), ("v1", &trim(bench))]));
     }
     if !(m.is_finite() && m > 0.0) {
-        return Err(format!("{}：模数 m={} 必须是正数。", std.code(), trim(m)));
+        return Err(crate::i18n::t_fmt("cmd.invol.err.series_m_positive", &[("v0", &std.code()), ("v1", &trim(m))]));
     }
     match std {
         SplineStd::DIN => {
@@ -2340,10 +2280,7 @@ pub fn derive_z_from_bench_m(std: SplineStd, bench: f64, m: f64) -> Result<(u32,
             zs.dedup();
             if zs.is_empty() {
                 let (z, z_lo, z_hi) = derive_z_from_d_b_m(bench, m, None)?;
-                return Ok((z, format!(
-                    "表外推导：d_B={}、m={} 不在 DIN 5480-2 名义表；由 d_B=m(z+1.1+2x)、x∈[−0.05,0.45] 得 z∈[{:.4},{:.4}]，取 z={}（x={}）",
-                    trim(bench), trim(m), z_lo, z_hi, z, trim(x_from_d_b(bench, m, z))
-                )));
+                return Ok((z, crate::i18n::t_fmt("cmd.invol.nf.derive_z_table_note", &[("v0", &trim(bench)), ("v1", &trim(m)), ("v2", &format!("{:.4}", z_lo)), ("v3", &format!("{:.4}", z_hi)), ("v4", &z.to_string()), ("v5", &trim(x_from_d_b(bench, m, z)))])));
             }
             let z = zs
                 .iter()
@@ -2363,7 +2300,7 @@ pub fn derive_z_from_bench_m(std: SplineStd, bench: f64, m: f64) -> Result<(u32,
                     .iter()
                     .map(|v| format!("z={}（x={}）", v, trim(x_from_d_b(bench, m, *v))))
                     .collect::<Vec<_>>()
-                    .join("、");
+                    .join(&crate::i18n::t("cmd.invol.sep.list"));
                 format!(
                     "查表命中 d_B={}、m={} 的多个 z 变体（{}），按 |x| 最小取 z={}",
                     trim(bench), trim(m), variants, z
@@ -2398,20 +2335,14 @@ pub fn derive_z_from_bench_m(std: SplineStd, bench: f64, m: f64) -> Result<(u32,
             } else {
                 let variants = zs
                     .iter()
-                    .map(|v| format!("N={}（x={}）", v, trim(x_from_a(bench, m, *v))))
+                    .map(|v| crate::i18n::t_fmt("cmd.invol.nf.rows_join", &[("v0", &v.to_string()), ("v1", &trim(x_from_a(bench, m, *v)))]))
                     .collect::<Vec<_>>()
-                    .join("、");
-                format!(
-                    "查表命中 A={}、m={} 的多个 N 变体（{}），按最接近主系列 x=0.8 取 N={}",
-                    trim(bench), trim(m), variants, z
-                )
+                    .join(&crate::i18n::t("cmd.invol.sep.list"));
+                crate::i18n::t_fmt("cmd.invol.nf.note_multi_variant", &[("v0", &trim(bench)), ("v1", &trim(m)), ("v2", &variants), ("v3", &z.to_string())])
             };
             Ok((z, note))
         }
-        _ => Err(format!(
-            "{} 不使用基准直径推齿数（GB 用 m/z/x，ANSI 用径节 P 与齿数 N）。",
-            std.label()
-        )),
+        _ => Err(crate::i18n::t_fmt("cmd.invol.derive_z_not_applicable", &[("v0", &std.label())])),
     }
 }
 
@@ -2430,11 +2361,11 @@ pub fn resolve_nf_by_a(
     profile: &str,
 ) -> Result<(InvolParams, D_bOrigin), String> {
     if !(a.is_finite() && a > 0.0) {
-        return Err(format!("NF E22-141：A={} 必须是正数。", trim(a)));
+        return Err(crate::i18n::t_fmt("cmd.invol.nf.a_positive", &[("v0", &trim(a))]));
     }
     if let Some(m) = m {
         if !(m.is_finite() && m > 0.0) {
-            return Err(format!("NF E22-141：m={} 必须是正数。", trim(m)));
+            return Err(crate::i18n::t_fmt("cmd.invol.nf.m_positive", &[("v0", &trim(m))]));
         }
         // 模数必须来自 NF E22-141 尺寸表的实际 m 列（与 GB/DIN 系列不同）。
         module_series_check(SplineStd::NF, m)?;
@@ -2472,7 +2403,7 @@ pub fn resolve_nf_by_a(
                     let with_fixes = if row.fixes.is_empty() {
                         String::new()
                     } else {
-                        format!("（OCR 修正：{}）", row.fixes.join("、"))
+                        format!("（OCR 修正：{}）", row.fixes.join(&crate::i18n::t("cmd.invol.sep.list")))
                     };
                     let origin = match x {
                         Some(xi) if (xi - x_formula).abs() > NF_X_TOL => D_bOrigin::Adjusted(format!(
@@ -2514,10 +2445,7 @@ pub fn resolve_nf_by_a(
             zs.sort_unstable();
             zs.dedup();
             if zs.len() > 1 {
-                return Err(format!(
-                    "NF E22-141：A={}、m={} 有多个 N 变体：{}；请再给 N。",
-                    trim(a), trim(m), nf_join_rows(&hits)
-                ));
+                return Err(crate::i18n::t_fmt("cmd.invol.nf.a_m_multi_z", &[("v0", &trim(a)), ("v1", &trim(m)), ("v2", &nf_join_rows(&hits))]));
             }
             if zs.len() == 1 {
                 let row = hits.into_iter().next().expect("zs 非空");
@@ -2526,10 +2454,7 @@ pub fn resolve_nf_by_a(
             // 表外：主系列 x=0.8 → A=m(N+2)。
             let (z, z_lo, z_hi) = derive_nf_z_from_a_m(a, m, None, x)?;
             let xv = x.unwrap_or(0.8);
-            let note = format!(
-                "推导值、未命中表：A={}、m={} 不在 NF E22-141 尺寸表；按主系列 x={} 取 N={}（表内 x∈[0.6,0.967] 时 N∈[{:.4},{:.4}]）",
-                trim(a), trim(m), trim(xv), z, z_lo, z_hi
-            );
+            let note = crate::i18n::t_fmt("cmd.invol.nf.derive_z_note", &[("v0", &trim(a)), ("v1", &trim(m)), ("v2", &trim(xv)), ("v3", &z.to_string()), ("v4", &format!("{:.4}", z_lo)), ("v5", &format!("{:.4}", z_hi))]);
             let p = InvolParams::from_preset(SplineStd::NF, profile, m, z)
                 .map_err(|e| crate::i18n::t_fmt("cmd.invol.err.nf_prefix", &[("e", &e)]))?
                 .with_x(xv)
@@ -2544,20 +2469,14 @@ pub fn resolve_nf_by_a(
                 ms.sort_by(|x, y| x.partial_cmp(y).unwrap());
                 ms.dedup_by(|x, y| (*x - *y).abs() < NF_M_TOL);
                 if ms.len() > 1 {
-                    return Err(format!(
-                        "NF E22-141：A={}、N={} 有多个 m 变体：{}；请再给 M。",
-                        trim(a), z, nf_join_rows(&hits)
-                    ));
+                    return Err(crate::i18n::t_fmt("cmd.invol.nf.a_z_multi_m", &[("v0", &trim(a)), ("v1", &z.to_string()), ("v2", &nf_join_rows(&hits))]));
                 }
                 return nf_row_to_params(hits[0].clone(), profile);
             }
             // 表外：主系列 x=0.8 → m = A/(N+2)。
             let xv = x.unwrap_or(0.8);
             let m = a / (z as f64 + 2.0 * xv + 0.4);
-            let note = format!(
-                "推导值、未命中表：A={}、N={} 不在 NF E22-141 尺寸表；按 x={} 取名义 m=A/(N+2x+0.4)={}",
-                trim(a), z, trim(xv), trim(m)
-            );
+            let note = crate::i18n::t_fmt("cmd.invol.nf.derive_m_note", &[("v0", &trim(a)), ("v1", &z.to_string()), ("v2", &trim(xv)), ("v3", &trim(m))]);
             let p = InvolParams::from_preset(SplineStd::NF, profile, m, z)
                 .map_err(|e| crate::i18n::t_fmt("cmd.invol.err.nf_prefix", &[("e", &e)]))?
                 .with_x(xv)
@@ -2571,10 +2490,7 @@ pub fn resolve_nf_by_a(
                 return Err(nf_miss_message(a, None));
             }
             if hits.len() > 1 {
-                return Err(format!(
-                    "NF E22-141：A={} 命中 {} 行：{}；请再给 M 和/或 N。",
-                    trim(a), hits.len(), nf_join_rows(&hits)
-                ));
+                return Err(crate::i18n::t_fmt("cmd.invol.nf.a_multi_hit", &[("v0", &trim(a)), ("v1", &hits.len().to_string()), ("v2", &nf_join_rows(&hits))]));
             }
             nf_row_to_params(hits.into_iter().next().expect("非空"), profile)
         }
@@ -3177,16 +3093,16 @@ pub fn lookup_inspection(d_b: f64, m: Option<f64>) -> Result<Vec<InspectionRow>,
 fn inspection_miss_message(d_b: f64, m: Option<f64>) -> String {
     let mut msg = format!("DIN 5480-2 检验表：d_B={}", trim(d_b));
     if let Some(m) = m {
-        msg.push_str(&format!("（m={}）", trim(m)));
+        msg.push_str(&crate::i18n::t_fmt("cmd.invol.din.lookup_head_m", &[("v0", &trim(m))]));
     }
-    msg.push_str(" 无命中");
+    msg.push_str(&crate::i18n::t("cmd.invol.din.lookup_no_hit"));
     if let Some(m) = m {
         if !inspection_modules().iter().any(|mm| (mm - m).abs() < DIN_M_TOL) {
             let list = inspection_modules()
                 .iter()
                 .map(|v| trim(*v))
                 .collect::<Vec<_>>()
-                .join("、");
+                .join(&crate::i18n::t("cmd.invol.sep.list"));
             msg.push_str(&format!(
                 "；检验表没有 m={} 档（已入库检验档位：{}；检验表仅覆盖 \
                  0.5/0.75/0.8/1/1.5/5，其余档名义表有但检验表未并入，需另找表页）。",
@@ -3231,7 +3147,7 @@ fn inspection_miss_message(d_b: f64, m: Option<f64>) -> String {
         }
     }
     if !cands.is_empty() {
-        msg.push_str(&format!("附近候选：{}。", cands.join("、")));
+        msg.push_str(&crate::i18n::t_fmt("cmd.invol.table.candidates", &[("v0", &cands.join(&crate::i18n::t("cmd.invol.sep.list")))]));
     }
     msg
 }
@@ -3246,7 +3162,7 @@ pub fn inspection_for(d_b: f64, m: f64, z: u32) -> Result<InspectionRow, String>
         .iter()
         .map(|r| format!("z={}（{}）", r.z, r.source_note()))
         .collect::<Vec<_>>()
-        .join("、");
+        .join(&crate::i18n::t("cmd.invol.sep.list"));
     Err(format!(
         "DIN 5480-2 检验表：d_B={}、m={} 命中 {} 行但没有 z={}；同组的 z 变体：{}。",
         trim(d_b),
@@ -3281,7 +3197,7 @@ pub fn inspection_for_d_b_z(d_b: f64, z: u32) -> Result<InspectionRow, String> {
             "DIN 5480-2 检验表：d_B={}、z={} 在名义表有多个 m 变体：{}；请直接给 m。",
             trim(d_b),
             z,
-            many.iter().map(|m| trim(*m)).collect::<Vec<_>>().join("、")
+            many.iter().map(|m| trim(*m)).collect::<Vec<_>>().join(&crate::i18n::t("cmd.invol.sep.list"))
         )),
     }
 }
@@ -4431,52 +4347,31 @@ impl InvolParams {
     /// 参数自检（错误信息直接给用户看）。
     pub fn validate(&self) -> Result<(), String> {
         if !(self.m.is_finite() && self.m > 0.0) {
-            return Err(format!("渐开线花键：模数 m={} 必须是正数。", self.m));
+            return Err(crate::i18n::t_fmt("cmd.invol.err.m_positive", &[("v0", &trim(self.m))]));
         }
         if !(3..=1000).contains(&self.z) {
-            return Err(format!(
-                "渐开线花键：齿数 z={} 超出范围（3..=1000）。",
-                self.z
-            ));
+            return Err(crate::i18n::t_fmt("cmd.invol.err.z_range", &[("v0", &self.z.to_string())]));
         }
         if !(self.alpha_deg.is_finite() && self.alpha_deg > 10.0 && self.alpha_deg < 50.0) {
-            return Err(format!(
-                "渐开线花键：压力角 α 超出范围（10°<α<50°）：{}°。",
-                self.alpha_deg
-            ));
+            return Err(crate::i18n::t_fmt("cmd.invol.err.alpha_range", &[("v0", &trim(self.alpha_deg))]));
         }
         if !(self.ha_star.is_finite() && self.ha_star > 0.0) {
-            return Err(format!(
-                "渐开线花键：齿顶高系数 ha*={} 必须是正数。",
-                self.ha_star
-            ));
+            return Err(crate::i18n::t_fmt("cmd.invol.err.ha_positive", &[("v0", &trim(self.ha_star))]));
         }
         if !(self.hf_star.is_finite() && self.hf_star > 0.0) {
-            return Err(format!(
-                "渐开线花键：齿根高系数 hf*={} 必须是正数。",
-                self.hf_star
-            ));
+            return Err(crate::i18n::t_fmt("cmd.invol.err.hf_positive", &[("v0", &trim(self.hf_star))]));
         }
         if !(self.rho_star.is_finite() && self.rho_star >= 0.0) {
-            return Err(format!(
-                "渐开线花键：齿根圆角系数 ρf*={} 不能为负。",
-                self.rho_star
-            ));
+            return Err(crate::i18n::t_fmt("cmd.invol.err.rho_negative", &[("v0", &trim(self.rho_star))]));
         }
         if !(self.c_f_star.is_finite() && self.c_f_star >= 0.0) {
-            return Err(format!(
-                "渐开线花键：齿形裕度系数 cF*={} 不能为负。",
-                self.c_f_star
-            ));
+            return Err(crate::i18n::t_fmt("cmd.invol.err.cf_negative", &[("v0", &trim(self.c_f_star))]));
         }
         if !self.x.is_finite() {
-            return Err(format!("渐开线花键：变位系数 x={} 必须是有限数。", self.x));
+            return Err(crate::i18n::t_fmt("cmd.invol.err.x_finite", &[("v0", &trim(self.x))]));
         }
         if self.std == SplineStd::DIN && !self.x_in_range() {
-            return Err(format!(
-                "DIN 5480：变位系数 x={} 超出 x·m∈[−0.05m, +0.45m]（x∈[−0.05, 0.45]）。",
-                trim(self.x)
-            ));
+            return Err(crate::i18n::t_fmt("cmd.invol.err.din_x_range", &[("v0", &trim(self.x))]));
         }
         if self.std == SplineStd::ANSI {
             let p = self.ansi_p();
@@ -4488,49 +4383,28 @@ impl InvolParams {
             let col = match self.ansi_column() {
                 Some(c) => c,
                 None => {
-                    return Err(format!(
-                        "ANSI B92.1：齿廓「{}」不是 Table 2 五列之一（用 `ANSI30P`/`ANSI30PM`/\
-                         `ANSI30R`/`ANSI375R`/`ANSI45R`）。",
-                        self.profile
-                    ));
+                    return Err(crate::i18n::t_fmt("cmd.invol.err.ansi_col_unknown", &[("v0", &self.profile)]));
                 }
             };
             if self.x.abs() > 1e-12 {
-                return Err(format!(
-                    "ANSI B92.1：不使用变位系数 x（Table 2 基本尺寸无 x 项）；收到 x={}。",
-                    trim(self.x)
-                ));
+                return Err(crate::i18n::t_fmt("cmd.invol.err.ansi_no_x", &[("v0", &trim(self.x))]));
             }
             // Table 2 每列各自的适用径节范围（用户定案 A）；原 45° 下限特例已并入。
             ansi_column_pitch_check(col, p)?;
         }
         if self.df() <= 1e-9 {
-            return Err(format!(
-                "渐开线花键：齿根圆直径 df={} 非正（检查 m/z/x/hf* 组合）。",
-                trim(self.df())
-            ));
+            return Err(crate::i18n::t_fmt("cmd.invol.err.df_nonpositive", &[("v0", &trim(self.df()))]));
         }
         if self.da() <= self.df() + 1e-9 {
-            return Err(format!(
-                "渐开线花键：齿顶圆 da={} 不大于齿根圆 df={}。",
-                trim(self.da()),
-                trim(self.df())
-            ));
+            return Err(crate::i18n::t_fmt("cmd.invol.err.da_not_gt_df", &[("v0", &trim(self.da())), ("v1", &trim(self.df()))]));
         }
         // 内花键：外侧齿根 > 里侧齿顶；两条轮廓都必须是正数。
         if self.internal {
             if self.internal_minor_dia() <= 1e-9 {
-                return Err(format!(
-                    "内花键：小径 D_ii={} 非正（检查 m/z/x/系数组合）。",
-                    trim(self.internal_minor_dia())
-                ));
+                return Err(crate::i18n::t_fmt("cmd.invol.err.internal_minor_nonpositive", &[("v0", &trim(self.internal_minor_dia()))]));
             }
             if self.internal_major_dia() <= self.internal_minor_dia() + 1e-9 {
-                return Err(format!(
-                    "内花键：大径 D_ei={} 不大于小径 D_ii={}。",
-                    trim(self.internal_major_dia()),
-                    trim(self.internal_minor_dia())
-                ));
+                return Err(crate::i18n::t_fmt("cmd.invol.err.internal_major_le_minor", &[("v0", &trim(self.internal_major_dia())), ("v1", &trim(self.internal_minor_dia()))]));
             }
         }
         Ok(())
@@ -5466,7 +5340,7 @@ fn build_report_inner(params: &InvolParams, origin: Option<&D_bOrigin>, h: Optio
                     trim(a),
                     trim(e.m),
                     e.z,
-                    ns.iter().map(|v| v.to_string()).collect::<Vec<_>>().join("、")
+                    ns.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(&crate::i18n::t("cmd.invol.sep.list"))
                 ));
             }
         } else {
@@ -5615,7 +5489,7 @@ fn build_report_inner(params: &InvolParams, origin: Option<&D_bOrigin>, h: Optio
                     .filter(|(_, s)| !s.is_empty())
                     .map(|(i, s)| format!("dev{}={s}", i + 1))
                     .collect::<Vec<_>>()
-                    .join("、");
+                    .join(&crate::i18n::t("cmd.invol.sep.list"));
                 md.push_str(&format!("- 偏差（微米，上/下）：{devs}；{}。\n", r.source_note()));
             }
             md.push('\n');

@@ -120,14 +120,15 @@ impl DetailParams {
 pub trait DetailElement: Sync {
     /// 族 id（CLI / GUI / 树 / xdata 用）。
     fn family(&self) -> &'static str;
-    /// 显示名（树叶子 = `name + " " + code`）。
-    fn name(&self) -> &'static str;
+    /// 显示名（树叶子 = `name + " " + code`）。**随语言**（⑥ 批改制：`&'static str` → `String`，
+    /// 取词走 catalog；调用方一次性对齐，不留半截中文）。
+    fn name(&self) -> String;
     /// 标准号。
     fn code(&self) -> &'static str;
     /// 支持的视图 id（第一期都只有主视图）。
     fn views(&self) -> &'static [&'static str];
-    /// 基点说明（GUI 面板用）。
-    fn base_hint(&self) -> &'static str;
+    /// 基点说明（GUI 面板用）。**随语言**（同 [`DetailElement::name`]）。
+    fn base_hint(&self) -> String;
     /// 生成图元。`b1 = None` → 该 d 档默认行；`Some(b1)` → 档内按 b1 匹配（匹配不到报错）。
     fn generate(&self, d: f64, b1: Option<f64>, view: &str) -> Result<GenPart, String>;
     /// **通用参数**入口（第二期起的新要素实现它；默认只认历史 `b1`）。
@@ -149,7 +150,7 @@ pub trait DetailElement: Sync {
             return Err(crate::i18n::t_fmt(
                 "cmd.detail.err.unknown_param_b1",
                 &[
-                    ("name", &display_name(self.name())),
+                    ("name", &self.name()),
                     ("list", &extra.join(&crate::i18n::t("cmd.detail.sep.list"))),
                 ],
             ));
@@ -158,9 +159,9 @@ pub trait DetailElement: Sync {
     }
     /// 目录 JSON 的补充字段（`free_d` / `bands` 等，GUI 自由输入表单用）。
     fn catalog_extra(&self) -> serde_json::Value;
-    /// 视图按钮的中文名覆盖（默认空 = 用 `partgen_kit::views_json` 的通用名）。
-    fn view_labels(&self) -> &'static [(&'static str, &'static str)] {
-        &[]
+    /// 视图按钮的显示名覆盖（默认空 = 用 `partgen_kit::views_json` 的通用名）。**随语言**。
+    fn view_labels(&self) -> Vec<(&'static str, String)> {
+        Vec::new()
     }
     /// **规格代号入口**：把非数字的第二 token（`6x23x26x6`）交给族自己解析，
     /// 返回 `(主参数 d, 预设参数)`。默认 `None` = 本族不认规格代号。
@@ -177,14 +178,14 @@ pub fn find(family: &str) -> Option<&'static dyn DetailElement> {
     ELEMENTS.iter().copied().find(|e| e.family() == family)
 }
 
-/// 报错/回执用的族显示名（随语言；catalog `cmd.detail.name.*`）。
-pub fn display_name(name: &str) -> String {
-    let key = match name {
-        "磨外圆" => "cmd.detail.name.grind_od",
-        "外螺纹退刀槽" => "cmd.detail.name.thread_relief",
-        "普通平键毂槽" => "cmd.detail.name.hub_keyway",
-        "矩形花键" => "cmd.detail.name.spline_rect",
-        _ => return name.to_string(),
+/// 报错/回执用的族显示名（随语言；catalog `cmd.detail.name.*`）。入参 = **族 id**（不是中文名）。
+pub fn display_name(family: &str) -> String {
+    let key = match family {
+        FAMILY_GRIND_OD => "cmd.detail.name.grind_od",
+        FAMILY_THREAD_RELIEF => "cmd.detail.name.thread_relief",
+        FAMILY_HUB_KEYWAY => "cmd.detail.name.hub_keyway",
+        FAMILY_SPLINE_RECT => "cmd.detail.name.spline_rect",
+        _ => return family.to_string(),
     };
     crate::i18n::t(key)
 }
@@ -222,7 +223,7 @@ pub fn generate_params(
         return Err(crate::i18n::t_fmt(
             "cmd.detail.err.view_only",
             &[
-                ("name", &display_name(element.name())),
+                ("name", &element.name()),
                 ("list", &element.views().join("/")),
                 ("view", view),
             ],
@@ -262,8 +263,10 @@ pub fn families_json() -> serde_json::Map<String, serde_json::Value> {
             if let Some(views) = entry["views"].as_array_mut() {
                 for view in views.iter_mut() {
                     if let Some(id) = view["id"].as_str() {
-                        if let Some((_, label)) =
-                            element.view_labels().iter().find(|(key, _)| *key == id)
+                        if let Some((_, label)) = element
+                            .view_labels()
+                            .into_iter()
+                            .find(|(key, _)| *key == id)
                         {
                             view["name"] = serde_json::json!(label);
                         }
@@ -627,8 +630,8 @@ impl DetailElement for GrindOd {
         FAMILY_GRIND_OD
     }
 
-    fn name(&self) -> &'static str {
-        "磨外圆"
+    fn name(&self) -> String {
+        display_name(FAMILY_GRIND_OD)
     }
 
     fn code(&self) -> &'static str {
@@ -639,8 +642,8 @@ impl DetailElement for GrindOd {
         &["main"]
     }
 
-    fn base_hint(&self) -> &'static str {
-        "基点 = 台阶面与轴线交点（轴线为 x 轴；d = 磨出的外圆直径）"
+    fn base_hint(&self) -> String {
+        crate::i18n::t("cmd.detail.hint.grind_od")
     }
 
     fn generate(&self, d: f64, b1: Option<f64>, _view: &str) -> Result<GenPart, String> {
@@ -1049,8 +1052,8 @@ impl DetailElement for ThreadRelief {
         FAMILY_THREAD_RELIEF
     }
 
-    fn name(&self) -> &'static str {
-        "外螺纹退刀槽"
+    fn name(&self) -> String {
+        display_name(FAMILY_THREAD_RELIEF)
     }
 
     fn code(&self) -> &'static str {
@@ -1061,8 +1064,8 @@ impl DetailElement for ThreadRelief {
         &["main"]
     }
 
-    fn base_hint(&self) -> &'static str {
-        "基点 = 台肩面与轴线交点（轴线为 x 轴；d = 螺纹公称直径）"
+    fn base_hint(&self) -> String {
+        crate::i18n::t("cmd.detail.hint.thread_relief")
     }
 
     /// 历史 `b1` 槽位表达不了必给的 P —— 明确报错指路（不让默认值静默出图）。
@@ -1349,8 +1352,8 @@ impl DetailElement for HubKeyway {
         FAMILY_HUB_KEYWAY
     }
 
-    fn name(&self) -> &'static str {
-        "普通平键毂槽"
+    fn name(&self) -> String {
+        display_name(FAMILY_HUB_KEYWAY)
     }
 
     fn code(&self) -> &'static str {
@@ -1361,12 +1364,15 @@ impl DetailElement for HubKeyway {
         &["main", "side"]
     }
 
-    fn view_labels(&self) -> &'static [(&'static str, &'static str)] {
-        &[("main", "主视图（孔端面）"), ("side", "侧视图（纵向剖）")]
+    fn view_labels(&self) -> Vec<(&'static str, String)> {
+        vec![
+            ("main", crate::i18n::t("cmd.detail.hub.view.main")),
+            ("side", crate::i18n::t("cmd.detail.hub.view.side")),
+        ]
     }
 
-    fn base_hint(&self) -> &'static str {
-        "主视图基点 = 孔心；侧视图基点 = 左端面×轴线（d = 孔径；键槽开口朝 +Y）"
+    fn base_hint(&self) -> String {
+        crate::i18n::t("cmd.detail.hint.hub_keyway")
     }
 
     /// 历史 `b1` 槽位在本族按**毂长 len** 解释（`partgen::generate(family,d,l,view)` 的统一入口用；
@@ -1388,11 +1394,11 @@ impl DetailElement for HubKeyway {
         let g = hub_keyway_geom(d, params)?;
         let label = self
             .view_labels()
-            .iter()
+            .into_iter()
             .find(|(key, _)| *key == view)
-            .map(|(_, label)| *label)
-            .unwrap_or(view);
-        Ok(build_hub_keyway(&g, view, label))
+            .map(|(_, label)| label)
+            .unwrap_or_else(|| view.to_string());
+        Ok(build_hub_keyway(&g, view, &label))
     }
 
     fn catalog_extra(&self) -> serde_json::Value {
@@ -1513,8 +1519,8 @@ impl DetailElement for SplineRect {
         FAMILY_SPLINE_RECT
     }
 
-    fn name(&self) -> &'static str {
-        "矩形花键"
+    fn name(&self) -> String {
+        display_name(FAMILY_SPLINE_RECT)
     }
 
     fn code(&self) -> &'static str {
@@ -1525,16 +1531,16 @@ impl DetailElement for SplineRect {
         &["front", "side", "section"]
     }
 
-    fn view_labels(&self) -> &'static [(&'static str, &'static str)] {
-        &[
-            ("front", "正视图（端视图）"),
-            ("side", "常规侧视图"),
-            ("section", "侧剖视图"),
+    fn view_labels(&self) -> Vec<(&'static str, String)> {
+        vec![
+            ("front", crate::i18n::t("cmd.detail.spline.view.front")),
+            ("side", crate::i18n::t("cmd.detail.spline.view.side")),
+            ("section", crate::i18n::t("cmd.detail.spline.view.section")),
         ]
     }
 
-    fn base_hint(&self) -> &'static str {
-        "基点 = 左端面与轴线交点（轴线为 x 轴；正视图 = 齿形中心）"
+    fn base_hint(&self) -> String {
+        crate::i18n::t("cmd.detail.hint.spline_rect")
     }
 
     /// 历史 `b1` 槽位表达不了规格代号 —— 明确报错指路。
@@ -1568,12 +1574,18 @@ impl DetailElement for SplineRect {
             entities,
             meta: PartMeta {
                 code: crate::spline::CODE.into(),
-                name: format!("矩形花键（{}）", self
-                    .view_labels()
-                    .iter()
-                    .find(|(key, _)| *key == view)
-                    .map(|(_, label)| *label)
-                    .unwrap_or(view)),
+                name: crate::i18n::t_fmt(
+                    "cmd.detail.part_name_rect",
+                    &[(
+                        "view",
+                        &self
+                            .view_labels()
+                            .into_iter()
+                            .find(|(key, _)| *key == view)
+                            .map(|(_, label)| label)
+                            .unwrap_or_else(|| view.to_string()),
+                    )],
+                ),
                 spec: spec_text,
                 material: String::new(),
                 weight: String::new(),
@@ -2615,4 +2627,52 @@ mod tests {
         );
         crate::i18n::set_lang_auto();
     }
+
+    /// 语言是进程级全局：断言中文文案的用例共用锁并钉死 zh。
+    fn zh_guard() -> std::sync::MutexGuard<'static, ()> {
+        let g = crate::global_state_test_lock();
+        crate::i18n::set_lang(crate::i18n::Lang::Zh);
+        g
+    }
+
+    /// ⑥ 批：`DetailElement` 元数据（name / base_hint / view_labels）**随语言**且都非空。
+    #[test]
+    fn detail_metadata_switches_language_and_stays_nonempty() {
+        let _g = zh_guard();
+        crate::i18n::clear_missing_keys();
+        let spline = find(FAMILY_SPLINE_RECT).expect("矩形花键");
+        crate::i18n::set_lang(crate::i18n::Lang::Zh);
+        let zh_name = spline.name();
+        let zh_hint = spline.base_hint();
+        let zh_views: Vec<String> = spline.view_labels().into_iter().map(|(_, l)| l).collect();
+        crate::i18n::set_lang(crate::i18n::Lang::En);
+        let en_name = spline.name();
+        let en_hint = spline.base_hint();
+        let en_views: Vec<String> = spline.view_labels().into_iter().map(|(_, l)| l).collect();
+        crate::i18n::set_lang_auto();
+        assert!(!zh_name.is_empty() && !en_name.is_empty() && zh_name != en_name, "{zh_name} / {en_name}");
+        assert!(!zh_hint.is_empty() && !en_hint.is_empty() && zh_hint != en_hint, "{zh_hint} / {en_hint}");
+        assert_eq!(zh_views.len(), en_views.len());
+        assert!(zh_views.len() >= 3, "花键三个视图：{zh_views:?}");
+        for (z, e) in zh_views.iter().zip(en_views.iter()) {
+            assert!(!z.is_empty() && !e.is_empty() && z != e, "{z} / {e}");
+        }
+        // 毂槽：基点 + 两个视图名
+        let hub = find(FAMILY_HUB_KEYWAY).expect("毂槽");
+        crate::i18n::set_lang(crate::i18n::Lang::Zh);
+        let (hz, hzv) = (hub.base_hint(), hub.view_labels().into_iter().map(|(_, l)| l).collect::<Vec<_>>());
+        crate::i18n::set_lang(crate::i18n::Lang::En);
+        let (he, hev) = (hub.base_hint(), hub.view_labels().into_iter().map(|(_, l)| l).collect::<Vec<_>>());
+        crate::i18n::set_lang_auto();
+        assert!(!hz.is_empty() && !he.is_empty() && hz != he, "{hz} / {he}");
+        assert_eq!(hzv.len(), 2);
+        for (z, e) in hzv.iter().zip(hev.iter()) {
+            assert!(!z.is_empty() && !e.is_empty() && z != e, "{z} / {e}");
+        }
+        // 报错/回执用的族显示名：入参是**族 id**（不再吃中文名）
+        assert_eq!(crate::i18n::t_lang(crate::i18n::Lang::Zh, "cmd.detail.name.spline_rect"), zh_name);
+        assert_eq!(crate::i18n::t_lang(crate::i18n::Lang::En, "cmd.detail.name.spline_rect"), en_name);
+        assert!(crate::i18n::missing_keys().is_empty(), "{:?}", crate::i18n::missing_keys());
+    }
+
 }

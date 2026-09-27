@@ -898,7 +898,9 @@ pub fn catalog_json() -> String {
     }
     // 每族补一个 kind 字段（bolt/nut/washer/pin/other）：GUI 与 AI 都靠它分组，
     // 不用去猜族名前缀（`family_kind` 是唯一判据来源）。
-    let families = {
+    // ★ ⑥ 批：目录 JSON 的显示元数据随语言（族名/基点/长度标签/树目录/来源…）。
+    // 在**合并后、建树前**统一取词，保证树叶子名与 families 一致（不留半截中文）。
+    let families = crate::i18n::translate_json(&{
         let mut obj = fam_map;
         for (key, value) in obj.iter_mut() {
             let kind = family_kind(key);
@@ -907,8 +909,8 @@ pub fn catalog_json() -> String {
             }
         }
         serde_json::Value::Object(obj)
-    };
-    let tree = serde_json::json!([
+    });
+    let tree = crate::i18n::translate_json(&serde_json::json!([
         { "name": "零件库", "children": [
             { "name": "螺栓", "children": [
                 { "name": "六角螺栓", "children": [
@@ -946,7 +948,7 @@ pub fn catalog_json() -> String {
                 ]}
             ]}
         ]}
-    ]);
+    ]));
 
     // 树叶子动态补位：新批次的族在自己的 `families_json` 里声明**目录**，叶子名由代码统一拼
     // （`族名 + 代号`，保证全库标签一致）：
@@ -988,7 +990,7 @@ pub fn catalog_json() -> String {
         "families": families,
         "spline_engine": crate::invol_spline::catalog_payload(),
         // 轴生成器键槽段的键型下拉元数据（表驱动；加新键型只需 partgen_keys::KEY_STYLES 加一行）。
-        "key_styles": crate::partgen_keys::key_styles_json(),
+        "key_styles": crate::i18n::translate_json(&crate::partgen_keys::key_styles_json()),
     })
     .to_string()
 }
@@ -2330,6 +2332,63 @@ mod tests {
         assert!(crate::i18n::missing_keys().is_empty(), "缺词条：{:?}", crate::i18n::missing_keys());
         crate::i18n::set_lang_auto();
     }
+
+    /// ⑥ 批：GUI 目录 JSON 的深层元数据（族名/基点/长度标签/树目录/来源）**随语言**且非空。
+    #[test]
+    fn catalog_json_metadata_switches_language_and_stays_nonempty() {
+        let _g = zh_guard();
+        crate::i18n::clear_missing_keys();
+        let zh: serde_json::Value = serde_json::from_str(&catalog_json()).expect("zh catalog json");
+        crate::i18n::set_lang(crate::i18n::Lang::En);
+        let en: serde_json::Value = serde_json::from_str(&catalog_json()).expect("en catalog json");
+        crate::i18n::set_lang_auto();
+        // 结构要素（detail 族）：四个元数据字段逐个 zh/en 双断言
+        for f in ["name", "len_label", "base_hint", "tree_dir"] {
+            let z = zh["families"]["detail_grind_od"][f].as_str().unwrap_or_default();
+            let e = en["families"]["detail_grind_od"][f].as_str().unwrap_or_default();
+            assert!(!z.is_empty() && !e.is_empty(), "{f} 空：{z:?} / {e:?}");
+            assert_ne!(z, e, "{f} 未随语言：{z:?}");
+            assert!(
+                !e.chars().any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c)),
+                "{f} 英文里仍含汉字：{e:?}"
+            );
+        }
+        // 标准件族：族名 / 长度标签 / 基点
+        for f in ["name", "len_label", "base_hint"] {
+            let z = zh["families"]["hex_bolt_c"][f].as_str().unwrap_or_default();
+            let e = en["families"]["hex_bolt_c"][f].as_str().unwrap_or_default();
+            assert!(!z.is_empty() && !e.is_empty() && z != e, "{f}：{z:?} / {e:?}");
+        }
+        // 树（含 `族名 + 代号` 叶子）也随语言；**代号/族 id 不译**
+        let zt = zh["tree"].to_string();
+        let et = en["tree"].to_string();
+        assert!(zt.contains("六角头螺栓 C级 GB/T 5780-2016"), "{zt}");
+        assert!(et.contains("Hex head bolt, grade C GB/T 5780-2016"), "{et}");
+        assert!(et.contains("hex_bolt_c") && et.contains("GB/T 5780-2016"));
+        // 键型下拉元数据（key_styles）同样随语言；`id`（协议别名）**不译**，只查 label/place_hint
+        let zk = zh["key_styles"].to_string();
+        let ek = en["key_styles"].to_string();
+        assert!(!zk.is_empty() && !ek.is_empty() && zk != ek, "key_styles 未随语言");
+        let has_cjk = |s: &str| s.chars().any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c));
+        for item in en["key_styles"].as_array().expect("key_styles 数组") {
+            for f in ["label", "place_hint"] {
+                let v = item[f].as_str().unwrap_or_default();
+                assert!(!has_cjk(v), "key_styles.{f} 英文里仍含汉字：{v:?}");
+            }
+        }
+        // `id`（协议别名，如 `A`/`导向A`）两语必须**逐项相同**
+        let ids = |v: &serde_json::Value| -> Vec<String> {
+            v["key_styles"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|it| it["id"].as_str().unwrap_or_default().to_string())
+                .collect()
+        };
+        assert_eq!(ids(&zh), ids(&en));
+        assert!(crate::i18n::missing_keys().is_empty(), "{:?}", crate::i18n::missing_keys());
+    }
+
 }
 
 #[cfg(test)]
@@ -2560,5 +2619,6 @@ mod json_dump {
         std::fs::write(f.join("mine.json"), out).unwrap();
         println!("已写出 /tmp/partgen/mine.json");
     }
+
 
 }

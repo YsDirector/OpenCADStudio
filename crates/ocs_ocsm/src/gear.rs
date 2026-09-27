@@ -2729,11 +2729,7 @@ fn set_spline_std_once(
     std: crate::invol_spline::SplineStd,
 ) -> Result<(), String> {
     match *slot {
-        Some(old) if old != std => Err(format!(
-            "同一行出现两个体系的标识：{} 与 {}（体系只能写一个）。",
-            old.label(),
-            std.label()
-        )),
+        Some(old) if old != std => Err(crate::i18n::t_fmt("cmd.gear.err.two_spline_stds", &[("v0", &old.label()), ("v1", &std.label())])),
         _ => {
             *slot = Some(std);
             Ok(())
@@ -3127,18 +3123,11 @@ pub fn parse_request(raw: &str) -> Result<GearRequest, String> {
     // ── 同一行两个体系 → 报错（体系只能写一个）；随后按体系回填位置参数 ──
     let any_gear_id = gear_std.is_some() || gear_dp.is_some();
     if sp_std.is_some() && any_gear_id {
-        return Err(format!(
-            "同一行出现两个体系的标识：{} 与 {}（体系只能写一个）。",
-            sp_std.map(|s| s.label()).unwrap_or("GB"),
-            gear_std.map(|g| g.label()).unwrap_or("DP")
-        ));
+        return Err(crate::i18n::t_fmt("cmd.gear.err.two_spline_stds", &[("v0", &sp_std.map(|s| s.label()).unwrap_or("GB")), ("v1", &gear_std.map(|g| g.label()).unwrap_or("DP"))]));
     }
     if spline_on {
         if any_gear_id {
-            return Err(format!(
-                "同一行出现两个体系的标识：{} 是齿轮体系（M = 模数制 / DP = 径节制），不能与花键体系（GB/DIN/NF/ANSI）同用。",
-                gear_std.map(|g| g.label()).unwrap_or("DP")
-            ));
+            return Err(crate::i18n::t_fmt("cmd.gear.err.gear_spline_std_conflict", &[("v0", &gear_std.map(|g| g.label()).unwrap_or("DP"))]));
         }
         // 花键位置参数 = [m, z, h]（与旧行为一致）。
         if let Some(v) = pos_vals.first() {
