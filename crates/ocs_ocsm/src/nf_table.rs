@@ -1032,44 +1032,61 @@ pub fn markdown_table(spec: &NfTableSpec) -> Result<String, String> {
 // ══════════════════════════════════════════════════════════════════════════
 
 /// 一项属性的取值口径（进原生 `title=`，不做常显）。
+///
+/// ★ 本批 GUI 元数据批：`label/formula/source` 由中文字面量改成 catalog key（随语言）；
+/// 取词走 [`NfColumnSpec::label`] / [`NfColumnSpec::formula`] / [`NfColumnSpec::source`]。
+/// 列名里的符号（`Az`/`D`/`Do`/`V`/`G`/`m`/`z`/`a`）两语原样。
 #[derive(Debug, Clone, Copy)]
 pub struct NfColumnSpec {
+    /// ATTDEF tag（协议记号，不译）。
     pub tag: &'static str,
-    pub label: &'static str,
+    /// 列名 key（`gui.nf.col.*`）。
+    pub label_key: &'static str,
     pub unit: &'static str,
-    pub formula: &'static str,
-    pub source: &'static str,
+    /// 取值口径 key（`gui.nf.formula.*`）。
+    pub formula_key: &'static str,
+    /// 来源 key（`gui.nf.source.*`）。
+    pub source_key: &'static str,
 }
 
-const SOURCE_DIMS: &str = "NF E22-141 中文译本 p18（拉削内花键尺寸表；assets/nf_e22141_dims.csv）";
-const SOURCE_CHECK: &str = "NF E22-141 中文译本 p23–p25（检查尺寸表；assets/nf_e22141_check.csv）";
-const SOURCE_MAJOR_TOL: &str =
-    "NF E22-141 p28 §4（内花键大径公差 R7；数值按 ISO 286 查表）";
-const SOURCE_MINOR_TOL: &str =
-    "NF E22-141 p28 §6（内花键小径公差 H7，参考；数值按 ISO 286 查表）";
-const SOURCE_G_TOL: &str =
-    "NF E22-141 p29（检查尺寸的公差值：内花键 E 的偏差，微米；表外不外推）";
+impl NfColumnSpec {
+    /// 列名（按当前语言）。
+    pub fn label(&self) -> String {
+        crate::i18n::t(self.label_key)
+    }
+    /// 取值口径（按当前语言）。
+    pub fn formula(&self) -> String {
+        crate::i18n::t(self.formula_key)
+    }
+    /// 来源（按当前语言）。
+    pub fn source(&self) -> String {
+        crate::i18n::t(self.source_key)
+    }
+}
+
+// ★ 来源串已入 catalog（本批）：`gui.nf.source.*`（dims/check/major_tol/minor_tol/over_pins_tol）——
+//   原来的 `SOURCE_*` 中文常量已删（catalog 是唯一来源，避免两份文案漂移）。
 
 /// 18 项口径（顺序 = `attdefs()`）。
 pub const NF_COLUMNS: &[NfColumnSpec] = &[
-    NfColumnSpec { tag: "执行标准", label: "执行标准", unit: "", formula: "固定 NF E22-141（p01 封面）", source: "NF E22-141" },
-    NfColumnSpec { tag: "定心方式", label: "定心方式", unit: "", formula: "缺省外径定心（Az=A）；齿面定心 Az=A+0.3m", source: "p10–p12；p18 表题「拉削的内花键(外径定心)」" },
-    NfColumnSpec { tag: "模数", label: "模数 m", unit: "mm", formula: "输入（NF 模数档 0.50/0.75/1/1.25/1.667/2.5/3.75/5/7.5/10）", source: "p18 尺寸表实际 m 列" },
-    NfColumnSpec { tag: "齿数", label: "齿数 z", unit: "", formula: "输入或取 p18 表 N；与表值不一致直接报错", source: SOURCE_DIMS },
-    NfColumnSpec { tag: "压力角", label: "压力角 a", unit: "°", formula: "NF E22-141 全表 20°", source: "p07" },
-    NfColumnSpec { tag: "齿根样式", label: "齿根样式", unit: "", formula: "平齿根（缺省）/ 圆齿根；槽底圆角 ri 见预览读数", source: "p06；p22「内花键槽底圆角半径(平根齿)」" },
-    NfColumnSpec { tag: "加工方法", label: "加工方法", unit: "", formula: "拉削（p18 表题即「拉削的内花键」）", source: "p18 / p19 图三十二·三十三" },
-    NfColumnSpec { tag: "大径Az", label: "大径 Az（内花键齿根圆）", unit: "mm", formula: "外径定心 Az=A；拉削+齿面定心 Az=A+0.3m", source: "p04 / p07" },
-    NfColumnSpec { tag: "小径D", label: "小径 D（内花键齿顶圆）", unit: "mm", formula: "D = A − 2m（任何情况）；与 p18 表 D 列交叉核对", source: "p04 / p05 / p07；p18" },
-    NfColumnSpec { tag: "基准尺寸", label: "基准尺寸 Do", unit: "mm", formula: "Do = A（NF 主参数）", source: "p07" },
-    NfColumnSpec { tag: "量棒直径V", label: "量棒直径 V", unit: "mm", formula: "p23–p25 检查表 V 列（表外 → 「—」，不外推）", source: SOURCE_CHECK },
-    NfColumnSpec { tag: "跨棒距G", label: "跨棒距 G", unit: "mm", formula: "p23–p25 检查表 G 列（G1 见预览读数；表外 → 「—」）", source: SOURCE_CHECK },
-    NfColumnSpec { tag: "大径上差", label: "大径上差", unit: "mm", formula: "ISO 286 R7（p28 §4 内花键大径公差）", source: SOURCE_MAJOR_TOL },
-    NfColumnSpec { tag: "大径下差", label: "大径下差", unit: "mm", formula: "ISO 286 R7（p28 §4 内花键大径公差）", source: SOURCE_MAJOR_TOL },
-    NfColumnSpec { tag: "小径上差", label: "小径上差", unit: "mm", formula: "ISO 286 H7（p28 §6 内花键小径公差，参考）", source: SOURCE_MINOR_TOL },
-    NfColumnSpec { tag: "小径下差", label: "小径下差", unit: "mm", formula: "ISO 286 H7（p28 §6 内花键小径公差，参考）", source: SOURCE_MINOR_TOL },
-    NfColumnSpec { tag: "跨棒距上差", label: "跨棒距上差", unit: "mm", formula: "p29 内花键 E 偏差上差（µm→mm）", source: SOURCE_G_TOL },
-    NfColumnSpec { tag: "跨棒距下差", label: "跨棒距下差", unit: "mm", formula: "p29 内花键 E 偏差下差（µm→mm）", source: SOURCE_G_TOL },
+    NfColumnSpec { tag: "执行标准", label_key: "gui.nf.col.standard", unit: "", formula_key: "gui.nf.formula.standard", source_key: "gui.nf.source.standard" },
+    NfColumnSpec { tag: "定心方式", label_key: "gui.nf.col.centering", unit: "", formula_key: "gui.nf.formula.centering", source_key: "gui.nf.source.centering_p18" },
+    NfColumnSpec { tag: "模数", label_key: "gui.nf.col.module", unit: "mm", formula_key: "gui.nf.formula.module", source_key: "gui.nf.source.module_col_p18" },
+    NfColumnSpec { tag: "齿数", label_key: "gui.nf.col.teeth", unit: "", formula_key: "gui.nf.formula.teeth", source_key: "gui.nf.source.dims" },
+    NfColumnSpec { tag: "压力角", label_key: "gui.nf.col.alpha", unit: "°", formula_key: "gui.nf.formula.alpha", source_key: "gui.nf.source.p07" },
+    NfColumnSpec { tag: "齿根样式", label_key: "gui.nf.col.root_form", unit: "", formula_key: "gui.nf.formula.root_form", source_key: "gui.nf.source.root_form_p06" },
+    NfColumnSpec { tag: "加工方法", label_key: "gui.nf.col.machining", unit: "", formula_key: "gui.nf.formula.machining", source_key: "gui.nf.source.machining_figs" },
+    NfColumnSpec { tag: "大径Az", label_key: "gui.nf.col.major_dia", unit: "mm", formula_key: "gui.nf.formula.major_dia", source_key: "gui.nf.source.p04_p07" },
+    NfColumnSpec { tag: "小径D", label_key: "gui.nf.col.minor_dia", unit: "mm", formula_key: "gui.nf.formula.minor_dia", source_key: "gui.nf.source.p04_p05_p07_p18" },
+    NfColumnSpec { tag: "基准尺寸", label_key: "gui.nf.col.base_size", unit: "mm", formula_key: "gui.nf.formula.base_size", source_key: "gui.nf.source.p07" },
+    NfColumnSpec { tag: "量棒直径V", label_key: "gui.nf.col.pin_dia", unit: "mm", formula_key: "gui.nf.formula.pin_dia", source_key: "gui.nf.source.check" },
+    NfColumnSpec { tag: "跨棒距G", label_key: "gui.nf.col.over_pins", unit: "mm", formula_key: "gui.nf.formula.over_pins", source_key: "gui.nf.source.check" },
+    NfColumnSpec { tag: "大径上差", label_key: "gui.nf.col.major_dia_up", unit: "mm", formula_key: "gui.nf.formula.major_dia_up", source_key: "gui.nf.source.major_tol" },
+    NfColumnSpec { tag: "大径下差", label_key: "gui.nf.col.major_dia_down", unit: "mm", formula_key: "gui.nf.formula.major_dia_down", source_key: "gui.nf.source.major_tol" },
+    NfColumnSpec { tag: "小径上差", label_key: "gui.nf.col.minor_dia_up", unit: "mm", formula_key: "gui.nf.formula.minor_dia_up", source_key: "gui.nf.source.minor_tol" },
+    NfColumnSpec { tag: "小径下差", label_key: "gui.nf.col.minor_dia_down", unit: "mm", formula_key: "gui.nf.formula.minor_dia_down", source_key: "gui.nf.source.minor_tol" },
+    NfColumnSpec { tag: "跨棒距上差", label_key: "gui.nf.col.over_pins_up", unit: "mm", formula_key: "gui.nf.formula.over_pins_up", source_key: "gui.nf.source.over_pins_tol" },
+    NfColumnSpec { tag: "跨棒距下差", label_key: "gui.nf.col.over_pins_down", unit: "mm", formula_key: "gui.nf.formula.over_pins_down", source_key: "gui.nf.source.over_pins_tol" },
 ];
 
 /// NF 内花键卡的表单字段（表驱动 GUI 骨架）。
@@ -1199,11 +1216,8 @@ pub const FORM: crate::card::CardFormSpec = crate::card::CardFormSpec {
             required: false,
         },
     ],
-    note: "粘九字段表达式（自动反解 A/m/z）或直接填 A/m（z 选填核对）→ 选定心/齿根/配合 → 点「出表」回到图纸放置。\
-           公差：大径 R7 / 小径 H7（p28）+ 跨棒距 = p29 内花键 E 偏差；\
-           配合类别在出表前选定（缺省固定）：决定预览里配对外花键的 E/xm 读数。",
-    missing_note: "(m,A) 不在 p29 或 ISO 档缺时对应公差格显示「—」，不外推；\
-                   V/V1/G/G1 与 ri 只取 p23–p25 / p22 表值，表外显示「—」。",
+    note_key: "gui.form.nf.note",
+    missing_note_key: "gui.form.nf.missing_note",
 };
 
 /// NF 卡的选项/口径 JSON（随 `/api/spline_options` 下发；页面只渲染）。
@@ -1211,10 +1225,10 @@ pub fn options_json() -> serde_json::Value {
     serde_json::json!({
         "columns": NF_COLUMNS.iter().map(|c| serde_json::json!({
             "tag": c.tag,
-            "label": c.label,
+            "label": c.label(),
             "unit": c.unit,
-            "formula": c.formula,
-            "source": c.source,
+            "formula": c.formula(),
+            "source": c.source(),
         })).collect::<Vec<_>>(),
         "modules": crate::invol_spline::nf_e22141_modules(),
         "centering": [
@@ -1337,15 +1351,15 @@ impl NfTableModel {
         for (c, (tag, value)) in NF_COLUMNS.iter().zip(vals) {
             debug_assert_eq!(c.tag, tag);
             if value == MISSING {
-                missing.push(c.label.to_string());
+                missing.push(c.label());
             }
             items.push(serde_json::json!({
                 "tag": tag,
-                "label": c.label,
+                "label": c.label(),
                 "unit": c.unit,
                 "value": value,
-                "formula": c.formula,
-                "source": c.source,
+                "formula": c.formula(),
+                "source": c.source(),
                 "missing": value == MISSING,
             }));
         }

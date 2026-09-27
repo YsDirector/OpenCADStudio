@@ -470,43 +470,61 @@ pub fn markdown_table(spec: &NfExtTableSpec) -> Result<String, String> {
 // ══════════════════════════════════════════════════════════════════════════
 
 /// 一项属性的取值口径（进原生 `title=`，不做常显）。
+///
+/// ★ 本批 GUI 元数据批：`label/formula/source` 由中文字面量改成 catalog key（随语言）；
+/// 取词走 [`NfExtColumnSpec::label`] / [`NfExtColumnSpec::formula`] / [`NfExtColumnSpec::source`]。
+/// 列名里的符号（`Dee`/`Die`/`Do`/`K`/`W`/`m`/`z`/`a`）两语原样。
 #[derive(Debug, Clone, Copy)]
 pub struct NfExtColumnSpec {
+    /// ATTDEF tag（协议记号，不译）。
     pub tag: &'static str,
-    pub label: &'static str,
+    /// 列名 key（`gui.nf_ext.col.*`）。
+    pub label_key: &'static str,
     pub unit: &'static str,
-    pub formula: &'static str,
-    pub source: &'static str,
+    /// 取值口径 key（`gui.nf_ext.formula.*`）。
+    pub formula_key: &'static str,
+    /// 来源 key（`gui.nf_ext.source.*`）。
+    pub source_key: &'static str,
 }
 
-const SOURCE_DIMS: &str = "NF E22-141 中文译本 p20–p22（外花键尺寸表；assets/nf_e22141_dims.csv）";
-const SOURCE_CHECK: &str = "NF E22-141 中文译本 p23–p25（检查尺寸表；assets/nf_e22141_check.csv）";
-const SOURCE_MAJOR_TOL: &str =
-    "ISO 286 h12（外花键齿顶圆非功能直径；模板示例 Dee=298.5 实测 0/−0.460 一致）";
-const SOURCE_MINOR_TOL: &str =
-    "ISO 286 H7（模板示例 Die=282 实测 +0.052/0 一致；与 NF 内卡小径同口径）";
-const SOURCE_W_TOL: &str = "NF E22-141 p29（检查尺寸的公差值：外花键 E 的偏差，微米；按所选配合）";
+impl NfExtColumnSpec {
+    /// 列名（按当前语言）。
+    pub fn label(&self) -> String {
+        crate::i18n::t(self.label_key)
+    }
+    /// 取值口径（按当前语言）。
+    pub fn formula(&self) -> String {
+        crate::i18n::t(self.formula_key)
+    }
+    /// 来源（按当前语言）。
+    pub fn source(&self) -> String {
+        crate::i18n::t(self.source_key)
+    }
+}
+
+// ★ 来源串已入 catalog（本批）：`gui.nf_ext.source.*`（dims/check/major_tol/minor_tol/w_tol）——
+//   原来的 `SOURCE_*` 中文常量已删（catalog 是唯一来源，避免两份文案漂移）。
 
 /// 18 项口径（顺序 = `attdefs()`）。
 pub const NF_EXT_COLUMNS: &[NfExtColumnSpec] = &[
-    NfExtColumnSpec { tag: "执行标准", label: "执行标准", unit: "", formula: "固定 NF E22-141（p01 封面）", source: "NF E22-141" },
-    NfExtColumnSpec { tag: "定心方式", label: "定心方式", unit: "", formula: "缺省齿面定心（Dee=A−0.2m，模板）；外径定心 Dee=A", source: "p04/p07；模板示例「齿形定心」" },
-    NfExtColumnSpec { tag: "模数", label: "模数 m", unit: "mm", formula: "输入（NF 模数档 0.50/0.75/1/1.25/1.667/2.5/3.75/5/7.5/10）", source: "p20–p22 尺寸表实际 m 列" },
-    NfExtColumnSpec { tag: "齿数", label: "齿数 z", unit: "", formula: "输入或取 p20–p22 表 N；与表值不一致直接报错", source: SOURCE_DIMS },
-    NfExtColumnSpec { tag: "压力角", label: "压力角 a", unit: "°", formula: "NF E22-141 全表 20°", source: "p07" },
-    NfExtColumnSpec { tag: "齿根样式", label: "齿根样式", unit: "", formula: "平齿根（缺省）/ 圆齿根；对应 Die=A−2.4m / A−2.694m", source: "p05 / p07" },
-    NfExtColumnSpec { tag: "加工方法", label: "加工方法", unit: "", formula: "滚齿（外花键模板口径）", source: "模板；p19 图三十二/三十三（滚齿/插齿）" },
-    NfExtColumnSpec { tag: "大径Dee", label: "大径 Dee（外花键齿顶圆）", unit: "mm", formula: "齿面定心 Dee=A−0.2m；外径定心 Dee=A", source: "p04 / p07；p22 表对账" },
-    NfExtColumnSpec { tag: "小径Die", label: "小径 Die（外花键齿根圆）", unit: "mm", formula: "平齿根 Die=A−2.4m；圆齿根 Die=A−2.694m", source: "p05 / p07；p22 表平/圆齿根列对账" },
-    NfExtColumnSpec { tag: "基准尺寸", label: "基准尺寸 Do", unit: "mm", formula: "Do = A（NF 主参数）", source: "p07" },
-    NfExtColumnSpec { tag: "跨测齿数K", label: "跨测齿数 K", unit: "", formula: "p23–p25 检查表 K 列（表外 → 「—」，不外推）", source: SOURCE_CHECK },
-    NfExtColumnSpec { tag: "公法线W", label: "公法线 W", unit: "mm", formula: "p23–p25 检查表 E 列 = K 齿公法线长度（表外 → 「—」）", source: SOURCE_CHECK },
-    NfExtColumnSpec { tag: "大径上差", label: "大径上差", unit: "mm", formula: "ISO 286 h12（模板实测口径）", source: SOURCE_MAJOR_TOL },
-    NfExtColumnSpec { tag: "大径下差", label: "大径下差", unit: "mm", formula: "ISO 286 h12（模板实测口径）", source: SOURCE_MAJOR_TOL },
-    NfExtColumnSpec { tag: "小径上差", label: "小径上差", unit: "mm", formula: "ISO 286 H7（模板实测口径）", source: SOURCE_MINOR_TOL },
-    NfExtColumnSpec { tag: "小径下差", label: "小径下差", unit: "mm", formula: "ISO 286 H7（模板实测口径）", source: SOURCE_MINOR_TOL },
-    NfExtColumnSpec { tag: "公法线上差", label: "公法线上差", unit: "mm", formula: "p29 外花键 E 偏差上差（µm→mm；按所选配合）", source: SOURCE_W_TOL },
-    NfExtColumnSpec { tag: "公法线下差", label: "公法线下差", unit: "mm", formula: "p29 外花键 E 偏差下差（µm→mm；按所选配合）", source: SOURCE_W_TOL },
+    NfExtColumnSpec { tag: "执行标准", label_key: "gui.nf_ext.col.standard", unit: "", formula_key: "gui.nf_ext.formula.standard", source_key: "gui.nf_ext.source.standard" },
+    NfExtColumnSpec { tag: "定心方式", label_key: "gui.nf_ext.col.centering", unit: "", formula_key: "gui.nf_ext.formula.centering", source_key: "gui.nf_ext.source.centering_p04" },
+    NfExtColumnSpec { tag: "模数", label_key: "gui.nf_ext.col.module", unit: "mm", formula_key: "gui.nf_ext.formula.module", source_key: "gui.nf_ext.source.module_col_p20_22" },
+    NfExtColumnSpec { tag: "齿数", label_key: "gui.nf_ext.col.teeth", unit: "", formula_key: "gui.nf_ext.formula.teeth", source_key: "gui.nf_ext.source.dims" },
+    NfExtColumnSpec { tag: "压力角", label_key: "gui.nf_ext.col.alpha", unit: "°", formula_key: "gui.nf_ext.formula.alpha", source_key: "gui.nf_ext.source.p07" },
+    NfExtColumnSpec { tag: "齿根样式", label_key: "gui.nf_ext.col.root_form", unit: "", formula_key: "gui.nf_ext.formula.root_form", source_key: "gui.nf_ext.source.p05_p07" },
+    NfExtColumnSpec { tag: "加工方法", label_key: "gui.nf_ext.col.machining", unit: "", formula_key: "gui.nf_ext.formula.machining", source_key: "gui.nf_ext.source.machining_template" },
+    NfExtColumnSpec { tag: "大径Dee", label_key: "gui.nf_ext.col.major_dia", unit: "mm", formula_key: "gui.nf_ext.formula.major_dia", source_key: "gui.nf_ext.source.p04_p07_p22" },
+    NfExtColumnSpec { tag: "小径Die", label_key: "gui.nf_ext.col.minor_dia", unit: "mm", formula_key: "gui.nf_ext.formula.minor_dia", source_key: "gui.nf_ext.source.p05_p07_p22" },
+    NfExtColumnSpec { tag: "基准尺寸", label_key: "gui.nf_ext.col.base_size", unit: "mm", formula_key: "gui.nf_ext.formula.base_size", source_key: "gui.nf_ext.source.p07" },
+    NfExtColumnSpec { tag: "跨测齿数K", label_key: "gui.nf_ext.col.span_teeth", unit: "", formula_key: "gui.nf_ext.formula.span_teeth", source_key: "gui.nf_ext.source.check" },
+    NfExtColumnSpec { tag: "公法线W", label_key: "gui.nf_ext.col.base_tangent", unit: "mm", formula_key: "gui.nf_ext.formula.base_tangent", source_key: "gui.nf_ext.source.check" },
+    NfExtColumnSpec { tag: "大径上差", label_key: "gui.nf_ext.col.major_dia_up", unit: "mm", formula_key: "gui.nf_ext.formula.major_dia_up", source_key: "gui.nf_ext.source.major_tol" },
+    NfExtColumnSpec { tag: "大径下差", label_key: "gui.nf_ext.col.major_dia_down", unit: "mm", formula_key: "gui.nf_ext.formula.major_dia_down", source_key: "gui.nf_ext.source.major_tol" },
+    NfExtColumnSpec { tag: "小径上差", label_key: "gui.nf_ext.col.minor_dia_up", unit: "mm", formula_key: "gui.nf_ext.formula.minor_dia_up", source_key: "gui.nf_ext.source.minor_tol" },
+    NfExtColumnSpec { tag: "小径下差", label_key: "gui.nf_ext.col.minor_dia_down", unit: "mm", formula_key: "gui.nf_ext.formula.minor_dia_down", source_key: "gui.nf_ext.source.minor_tol" },
+    NfExtColumnSpec { tag: "公法线上差", label_key: "gui.nf_ext.col.base_tangent_up", unit: "mm", formula_key: "gui.nf_ext.formula.base_tangent_up", source_key: "gui.nf_ext.source.w_tol" },
+    NfExtColumnSpec { tag: "公法线下差", label_key: "gui.nf_ext.col.base_tangent_down", unit: "mm", formula_key: "gui.nf_ext.formula.base_tangent_down", source_key: "gui.nf_ext.source.w_tol" },
 ];
 
 /// NF 外花键卡的表达式策略（体系 SPLINE、方向恒外、α=20、直齿；变位进 A 公式）。
@@ -635,11 +653,8 @@ pub const FORM: crate::card::CardFormSpec = crate::card::CardFormSpec {
             required: false,
         },
     ],
-    note: "粘九字段表达式（自动反解 A/m/z）或直接填 A/m（z 选填核对）→ 选定心/齿根/配合 → 点「出表」回到图纸放置。\
-           公差：大径 h12 / 小径 H7（模板实测口径）+ 公法线 = p29 外花键 E 偏差；\
-           配合类别在出表前选定（缺省固定）：决定公法线 W 公差与预览读数。",
-    missing_note: "K/W 只取 p23–p25 检查表值，(m,A) 不在表内显示「—」；\
-                   p29 表外或 ISO 档缺时对应公差格显示「—」，不外推。",
+    note_key: "gui.form.nf_ext.note",
+    missing_note_key: "gui.form.nf_ext.missing_note",
 };
 
 /// NF 外花键卡的选项/口径 JSON（随 `/api/spline_options` 下发；页面只渲染）。
@@ -647,10 +662,10 @@ pub fn options_json() -> serde_json::Value {
     serde_json::json!({
         "columns": NF_EXT_COLUMNS.iter().map(|c| serde_json::json!({
             "tag": c.tag,
-            "label": c.label,
+            "label": c.label(),
             "unit": c.unit,
-            "formula": c.formula,
-            "source": c.source,
+            "formula": c.formula(),
+            "source": c.source(),
         })).collect::<Vec<_>>(),
         "modules": crate::invol_spline::nf_e22141_modules(),
         "centering": [
@@ -774,15 +789,15 @@ impl NfExtTableModel {
         for (c, (tag, value)) in NF_EXT_COLUMNS.iter().zip(vals) {
             debug_assert_eq!(c.tag, tag);
             if value == MISSING {
-                missing.push(c.label.to_string());
+                missing.push(c.label());
             }
             items.push(serde_json::json!({
                 "tag": tag,
-                "label": c.label,
+                "label": c.label(),
                 "unit": c.unit,
                 "value": value,
-                "formula": c.formula,
-                "source": c.source,
+                "formula": c.formula(),
+                "source": c.source(),
                 "missing": value == MISSING,
             }));
         }

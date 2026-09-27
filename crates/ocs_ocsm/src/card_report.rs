@@ -58,7 +58,7 @@ fn sources_section(preview: &serde_json::Value, card: &CardTypeSpec) -> String {
     md.push_str("- 卡类型：");
     md.push_str(&card.label());
     md.push_str(&format!("（`{}`）\n", card.id));
-    md.push_str(&format!("- 卡片口径：{}\n", cell(card.summary)));
+    md.push_str(&format!("- 卡片口径：{}\n", cell(&card.summary())));
     if let Some(note) = preview["missing_note"].as_str() {
         if !note.trim().is_empty() {
             md.push_str(&format!("- 缺项说明：{}\n", cell(note)));

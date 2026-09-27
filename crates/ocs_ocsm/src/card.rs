@@ -81,13 +81,22 @@ pub struct CardFieldSpec {
 #[derive(Debug, Clone, Copy)]
 pub struct CardFormSpec {
     pub fields: &'static [CardFieldSpec],
-    /// 常显提示（操作引导）。
-    pub note: &'static str,
-    /// 缺项/口径说明（进常显区的原生 `title=`）。
-    pub missing_note: &'static str,
+    /// 常显提示（操作引导）key（`gui.form.*.note`）。
+    pub note_key: &'static str,
+    /// 缺项/口径说明 key（`gui.form.*.missing_note`；进常显区的原生 `title=`）。
+    pub missing_note_key: &'static str,
 }
 
 impl CardFormSpec {
+    /// 常显提示（按当前语言）。
+    pub fn note(&self) -> String {
+        crate::i18n::t(self.note_key)
+    }
+    /// 缺项/口径说明（按当前语言）。
+    pub fn missing_note(&self) -> String {
+        crate::i18n::t(self.missing_note_key)
+    }
+
     pub fn fields_json(&self) -> serde_json::Value {
         serde_json::Value::Array(
             self.fields
@@ -123,8 +132,8 @@ pub struct CardTypeSpec {
     pub label_key: &'static str,
     /// 下拉分组 key（`None` = 平铺；如「精简版」）。GUI 仅渲染，不写死卡名。
     pub group_key: Option<&'static str>,
-    /// 一句话说明（命令目录/title）。
-    pub summary: &'static str,
+    /// 一句话说明 key（`gui.card.*.summary`；取词用 [`CardTypeSpec::summary`]，随语言）。
+    pub summary_key: &'static str,
     /// 可用体系 id（指向选项表；命令 `std <体系>` 与 GUI 体系下拉只收这里的）。
     pub systems: &'static [&'static str],
     /// 固定方向（`int`/`ext`；`None` = 无方向/双向卡）。**一卡一方向**：
@@ -147,7 +156,7 @@ pub const CARD_TYPES: &[CardTypeSpec] = &[
         aliases: &["spline", "splinetable", "花键", "gb", "GB花键参数表", "GB花键", "花键参数表_内", "GB花键_内"],
         label_key: "gui.card.gb_int.label",
         group_key: None,
-        summary: "GB/T 3478 内花键：九字段齿形表达式 → 21 项参数表（一卡一方向；外键见表下方「（外）」卡）",
+        summary_key: "gui.card.gb_int.summary",
         systems: &["gb3478"],
         direction: Some("int"),
         renderer: CardRenderer::SplineTable,
@@ -159,7 +168,7 @@ pub const CARD_TYPES: &[CardTypeSpec] = &[
         aliases: &["splineext", "GB花键参数表_外", "GB花键_外", "GB花键外"],
         label_key: "gui.card.gb_ext.label",
         group_key: None,
-        summary: "GB/T 3478 外花键：九字段齿形表达式 → 21 项参数表（一卡一方向，不再面板选内外）",
+        summary_key: "gui.card.gb_ext.summary",
         systems: &["gb3478"],
         direction: Some("ext"),
         renderer: CardRenderer::SplineTable,
@@ -170,7 +179,7 @@ pub const CARD_TYPES: &[CardTypeSpec] = &[
         aliases: &["gear", "geartable", "齿轮"],
         label_key: "gui.card.gear.label",
         group_key: None,
-        summary: "齿轮（内/外）：九字段齿形表达式反解 ha*/c* + 公法线跨距 → 19 项参数表（GB/T 10095 公差未收，如实标缺）",
+        summary_key: "gui.card.gear.summary",
         systems: &[],
         direction: None,
         renderer: CardRenderer::GearTable,
@@ -181,7 +190,7 @@ pub const CARD_TYPES: &[CardTypeSpec] = &[
         aliases: &["ansicn", "ansi中文", "ANSI花键参数表CN", "ANSI内中文"],
         label_key: "gui.card.ansi_cn_int.label",
         group_key: None,
-        summary: "ANSI B92.1 内花键 + P/z → 17 项参数表（纯中文；公差/量棒/公法线未收，如实标缺）",
+        summary_key: "gui.card.ansi_cn_int.summary",
         systems: &[],
         direction: Some("int"),
         renderer: CardRenderer::AnsiTableCn,
@@ -192,7 +201,7 @@ pub const CARD_TYPES: &[CardTypeSpec] = &[
         aliases: &["ansicnext", "ansi外中文", "ANSI花键参数表外CN"],
         label_key: "gui.card.ansi_cn_ext.label",
         group_key: None,
-        summary: "ANSI B92.1 外花键 + P/z → 17 项参数表（纯中文；公差/量棒/公法线未收，如实标缺）",
+        summary_key: "gui.card.ansi_cn_ext.summary",
         systems: &[],
         direction: Some("ext"),
         renderer: CardRenderer::AnsiTableCn,
@@ -203,7 +212,7 @@ pub const CARD_TYPES: &[CardTypeSpec] = &[
         aliases: &["ansien", "ansi英文", "ANSI花键参数表EN", "ANSI内英文"],
         label_key: "gui.card.ansi_en_int.label",
         group_key: None,
-        summary: "ANSI B92.1 内花键 + P/z → 17 项参数表（纯英文；与中文版同构，仅文本语种替换）",
+        summary_key: "gui.card.ansi_en_int.summary",
         systems: &[],
         direction: Some("int"),
         renderer: CardRenderer::AnsiTableEn,
@@ -214,7 +223,7 @@ pub const CARD_TYPES: &[CardTypeSpec] = &[
         aliases: &["ansienext", "ansi外英文", "ANSI花键参数表外EN"],
         label_key: "gui.card.ansi_en_ext.label",
         group_key: None,
-        summary: "ANSI B92.1 外花键 + P/z → 17 项参数表（纯英文；与中文版同构，仅文本语种替换）",
+        summary_key: "gui.card.ansi_en_ext.summary",
         systems: &[],
         direction: Some("ext"),
         renderer: CardRenderer::AnsiTableEn,
@@ -225,7 +234,7 @@ pub const CARD_TYPES: &[CardTypeSpec] = &[
         aliases: &["nf", "nfint", "NF内花键", "NF花键参数表"],
         label_key: "gui.card.nf_int.label",
         group_key: None,
-        summary: "NF E22-141 内花键（拉削，外径定心）：A/m/z 查 p18 表 → 13 行镜像表（Az=A 或 A+0.3m、D=A−2m、V/G 取 p23–p25、ri 取 p22；公差 = p28 R7/H7 + p29 E 偏差，四配合）",
+        summary_key: "gui.card.nf_int.summary",
         systems: &[],
         direction: Some("int"),
         renderer: CardRenderer::NfTable,
@@ -236,7 +245,7 @@ pub const CARD_TYPES: &[CardTypeSpec] = &[
         aliases: &["nfext", "nfout", "NF外花键", "NF外花键参数表"],
         label_key: "gui.card.nf_ext.label",
         group_key: None,
-        summary: "NF E22-141 外花键（滚齿，齿面定心）：A/m/z 查 p20–p22 表 → 13 行模板原版表（Dee=A−0.2m、Die=A−2.4m/2.694m、K/W 取 p23–p25；公差 = ISO h12/H7 + p29 外花键 E 偏差，四配合）",
+        summary_key: "gui.card.nf_ext.summary",
         systems: &[],
         direction: Some("ext"),
         renderer: CardRenderer::NfExtTable,
@@ -247,7 +256,7 @@ pub const CARD_TYPES: &[CardTypeSpec] = &[
         aliases: &["din", "din5480", "DIN花键", "din花键参数表", "DIN内花键"],
         label_key: "gui.card.din_int.label",
         group_key: None,
-        summary: "DIN 5480-1 Bild 6 内花键（Nabe）单栏 13 行（z/m/α/三直径/e 三极限/D_M/两 M2 极限）；Table 7 上段偏差有实锚，公差表只到 6–9 级锚点，缺口如实标「—」",
+        summary_key: "gui.card.din_int.summary",
         systems: &[],
         direction: Some("int"),
         renderer: CardRenderer::DinTable,
@@ -258,7 +267,7 @@ pub const CARD_TYPES: &[CardTypeSpec] = &[
         aliases: &["dinext", "DIN外花键", "din5480外"],
         label_key: "gui.card.din_ext.label",
         group_key: None,
-        summary: "DIN 5480-1 Bild 6 外花键（Welle）单栏 13 行（z/m/α/三直径/s 三极限/D_M/两 M1 极限）；与内卡同源，缺口同样如实标「—」",
+        summary_key: "gui.card.din_ext.summary",
         systems: &[],
         direction: Some("ext"),
         renderer: CardRenderer::DinTable,
@@ -269,7 +278,7 @@ pub const CARD_TYPES: &[CardTypeSpec] = &[
         aliases: &["gb精简", "精简内", "精简卡", "GB精简花键_内", "花键精简表_内", "splinelite"],
         label_key: "gui.card.gb_int_lite.label",
         group_key: Some("gui.card.group.lite"),
-        summary: "GB/T 3478 内花键精简卡：只列基本参数（标准/模数/齿数/压力角/齿根样式/大径/小径）+ 量棒 Dp / 跨棒距 Md，不含任何公差列",
+        summary_key: "gui.card.gb_int_lite.summary",
         systems: &["gb3478"],
         direction: Some("int"),
         renderer: CardRenderer::SplineLite,
@@ -280,7 +289,7 @@ pub const CARD_TYPES: &[CardTypeSpec] = &[
         aliases: &["gb精简外", "精简外", "GB精简花键_外", "花键精简表_外", "splineliteext"],
         label_key: "gui.card.gb_ext_lite.label",
         group_key: Some("gui.card.group.lite"),
-        summary: "GB/T 3478 外花键精简卡：只列基本参数（标准/模数/齿数/压力角/齿根样式/大径/小径）+ 跨测齿数 Kn / 公法线 Wn，不含任何公差列",
+        summary_key: "gui.card.gb_ext_lite.summary",
         systems: &["gb3478"],
         direction: Some("ext"),
         renderer: CardRenderer::SplineLite,
@@ -292,7 +301,7 @@ pub const CARD_TYPES: &[CardTypeSpec] = &[
         aliases: &["nf精简", "nf精简内", "NF精简花键_内", "nf精简表_内", "nflite"],
         label_key: "gui.card.nf_int_lite.label",
         group_key: Some("gui.card.group.lite"),
-        summary: "NF 内花键精简卡：执行标准/定心方式/模数/齿数/压力角/齿根样式/加工方法/大径/小径 + 量棒 V / 跨棒距 G，不含公差列",
+        summary_key: "gui.card.nf_int_lite.summary",
         systems: &[],
         direction: Some("int"),
         renderer: CardRenderer::CardLite,
@@ -303,7 +312,7 @@ pub const CARD_TYPES: &[CardTypeSpec] = &[
         aliases: &["nf精简外", "NF精简花键_外", "nf精简表_外", "nfliteext"],
         label_key: "gui.card.nf_ext_lite.label",
         group_key: Some("gui.card.group.lite"),
-        summary: "NF 外花键精简卡：执行标准/定心方式/模数/齿数/压力角/齿根样式/加工方法/大径/小径 + 跨测齿数 K / 公法线 W，不含公差列",
+        summary_key: "gui.card.nf_ext_lite.summary",
         systems: &[],
         direction: Some("ext"),
         renderer: CardRenderer::CardLite,
@@ -314,7 +323,7 @@ pub const CARD_TYPES: &[CardTypeSpec] = &[
         aliases: &["din精简", "din精简内", "DIN精简花键_内", "din精简表_内", "dinlite"],
         label_key: "gui.card.din_int_lite.label",
         group_key: Some("gui.card.group.lite"),
-        summary: "DIN 5480 内花键精简卡：标记/齿数/模数/压力角 + 齿根圆/齿根成形圆/齿顶圆/量圆 D_M/量圆距 M2 极限（按 DIN 自身口径，不含公差列）",
+        summary_key: "gui.card.din_int_lite.summary",
         systems: &[],
         direction: Some("int"),
         renderer: CardRenderer::CardLite,
@@ -325,7 +334,7 @@ pub const CARD_TYPES: &[CardTypeSpec] = &[
         aliases: &["din精简外", "DIN精简花键_外", "din精简表_外", "dinliteext"],
         label_key: "gui.card.din_ext_lite.label",
         group_key: Some("gui.card.group.lite"),
-        summary: "DIN 5480 外花键精简卡：标记/齿数/模数/压力角 + 齿顶圆/齿根成形圆/齿根圆/量圆 D_M/量圆距 M1 极限（按 DIN 自身口径，不含公差列）",
+        summary_key: "gui.card.din_ext_lite.summary",
         systems: &[],
         direction: Some("ext"),
         renderer: CardRenderer::CardLite,
@@ -336,7 +345,7 @@ pub const CARD_TYPES: &[CardTypeSpec] = &[
         aliases: &["ansi精简", "ansi精简内中", "ANSI精简花键_内_中", "ansilitecn"],
         label_key: "gui.card.ansi_cn_int_lite.label",
         group_key: Some("gui.card.group.lite"),
-        summary: "ANSI B92.1 内花键精简卡（纯中文）：类型/齿数/径节/压力角/基圆/节圆/大径/小径 + 跨棒距 M / 量棒 Dp，不含公差列",
+        summary_key: "gui.card.ansi_cn_int_lite.summary",
         systems: &[],
         direction: Some("int"),
         renderer: CardRenderer::CardLite,
@@ -347,7 +356,7 @@ pub const CARD_TYPES: &[CardTypeSpec] = &[
         aliases: &["ansi精简外中", "ANSI精简花键_外_中", "ansilitecnext"],
         label_key: "gui.card.ansi_cn_ext_lite.label",
         group_key: Some("gui.card.group.lite"),
-        summary: "ANSI B92.1 外花键精简卡（纯中文）：类型/齿数/径节/压力角/基圆/节圆/大径/小径 + 公法线 W / 跨测齿数 K，不含公差列",
+        summary_key: "gui.card.ansi_cn_ext_lite.summary",
         systems: &[],
         direction: Some("ext"),
         renderer: CardRenderer::CardLite,
@@ -358,7 +367,7 @@ pub const CARD_TYPES: &[CardTypeSpec] = &[
         aliases: &["ansi精简内英", "ANSI精简花键_内_英", "ansiliteen"],
         label_key: "gui.card.ansi_en_int_lite.label",
         group_key: Some("gui.card.group.lite"),
-        summary: "ANSI B92.1 内花键精简卡（纯英文）：SPLINE TYPE/TEETH/PITCH/ALPHA/base·pitch dia + PIN DIST. / PIN DIA.，不含公差列",
+        summary_key: "gui.card.ansi_en_int_lite.summary",
         systems: &[],
         direction: Some("int"),
         renderer: CardRenderer::CardLite,
@@ -369,7 +378,7 @@ pub const CARD_TYPES: &[CardTypeSpec] = &[
         aliases: &["ansi精简外英", "ANSI精简花键_外_英", "ansiliteenext"],
         label_key: "gui.card.ansi_en_ext_lite.label",
         group_key: Some("gui.card.group.lite"),
-        summary: "ANSI B92.1 外花键精简卡（纯英文）：SPLINE TYPE/TEETH/PITCH/ALPHA/base·pitch dia + BASE TANG. / SPAN TEETH，不含公差列",
+        summary_key: "gui.card.ansi_en_ext_lite.summary",
         systems: &[],
         direction: Some("ext"),
         renderer: CardRenderer::CardLite,
@@ -380,7 +389,7 @@ pub const CARD_TYPES: &[CardTypeSpec] = &[
         aliases: &["gear精简", "齿轮精简", "精简齿轮", "GEAR精简表", "gearlite"],
         label_key: "gui.card.gear_lite.label",
         group_key: Some("gui.card.group.lite"),
-        summary: "齿轮精简卡：模数/齿数/压力角/变位 + 分度圆/齿顶圆/齿根圆 + 公法线 W / 跨齿数 K（公差与未收项一律不上卡）",
+        summary_key: "gui.card.gear_lite.summary",
         systems: &[],
         direction: None,
         renderer: CardRenderer::CardLite,
@@ -388,7 +397,7 @@ pub const CARD_TYPES: &[CardTypeSpec] = &[
     },
 ];
 
-/// 卡类型取词（本批 ②：界面名/分组随语言；`summary` 暂未入 catalog，见报告）。
+/// 卡类型取词（界面名/分组/一句话说明均随语言）。
 impl CardTypeSpec {
     /// 界面名（按当前语言）。
     pub fn label(&self) -> String {
@@ -397,6 +406,10 @@ impl CardTypeSpec {
     /// 下拉分组（按当前语言）。
     pub fn group(&self) -> Option<String> {
         self.group_key.map(crate::i18n::t)
+    }
+    /// 一句话说明（按当前语言；GUI `title=` / 命令目录 / 计算书口径行）。
+    pub fn summary(&self) -> String {
+        crate::i18n::t(self.summary_key)
     }
 }
 
@@ -434,15 +447,15 @@ pub fn card_types_json() -> serde_json::Value {
                     "aliases": c.aliases,
                     "label": c.label(),
                     "group": c.group(),
-                    "summary": c.summary,
+                    "summary": c.summary(),
                     "systems": systems,
                     "direction": c.direction,
                     "renderer": c.renderer.id(),
                     // 表驱动 GUI：字段清单 + 提示（花键卡为 null，页面用专用面板）。
                     "form": c.form.map(|f| serde_json::json!({
                         "fields": f.fields_json(),
-                        "note": f.note,
-                        "missing_note": f.missing_note,
+                        "note": f.note(),
+                        "missing_note": f.missing_note(),
                     })),
                 })
             })
@@ -508,6 +521,8 @@ mod tests {
     /// 表驱动完整性：22 张卡（一卡一方向 + 精简版 11 张）、体系 id 可解析、别名/JSON 形状。
     #[test]
     fn card_types_resolve_systems_and_tokens() {
+        let _g = crate::global_state_test_lock();
+        crate::i18n::set_lang(crate::i18n::Lang::Zh); // 英文摘要随语言，中文断言需钉住语言
         assert_eq!(
             CARD_TYPES.len(),
             22,
@@ -700,6 +715,17 @@ mod tests {
         assert!(j[10]["summary"].as_str().unwrap().contains("外花键"));
         assert!(j[8]["summary"].as_str().unwrap().contains("NF E22-141"));
         assert!(j[0]["summary"].as_str().unwrap().contains("GB/T 3478"));
+        // 摘要随语言（本批：22 条 `gui.card.*.summary`）
+        let cjk = |s: &str| s.chars().any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c));
+        let zh_sum: Vec<String> = CARD_TYPES.iter().map(|c| c.summary()).collect();
+        assert!(zh_sum.iter().all(|s| !s.is_empty() && cjk(s)), "中文摘要：{zh_sum:?}");
+        crate::i18n::set_lang(crate::i18n::Lang::En);
+        let en_sum: Vec<String> = CARD_TYPES.iter().map(|c| c.summary()).collect();
+        assert!(en_sum.iter().all(|s| !s.is_empty() && !cjk(s)), "英文摘要仍含汉字：{en_sum:?}");
+        assert!(zh_sum.iter().zip(en_sum.iter()).all(|(z, e)| z != e), "摘要应逐条随语言");
+        let en_json = card_types_json();
+        assert_eq!(en_json[9]["summary"], en_sum[9]);
+        crate::i18n::set_lang_auto();
         assert!(usage_line().contains("OCSMCARD 花键参数表"));
         assert!(usage_line().contains("OCSMCARD 齿轮参数表"));
         assert!(usage_line().contains("ANSI花键参数表_中文"));
@@ -708,6 +734,95 @@ mod tests {
         assert!(usage_line().contains("OCSMCARD NF外花键参数表"));
         assert!(usage_line().contains("OCSMCARD DIN花键参数表"));
         assert!(usage_line().contains("DIN花键参数表_外"));
+    }
+
+    /// 阶段 3⑤ 批：剩余 GUI 元数据全部入 catalog —— 卡类型 22 条摘要 / 齿轮·NF·DIN 列名与口径·来源 /
+    /// GB 精简字段说明 / 齿轮精简三圆 / 8 个表单提示（note+missing_note）：中英都有、
+    /// 英文零汉字、含汉字的中文条目逐条随语言、`missing_keys()` 空。
+    #[test]
+    fn gui_metadata_batch_switches_language_without_cjk_or_missing_keys() {
+        use crate::i18n::{clear_missing_keys, set_lang, set_lang_auto, Lang};
+        let _g = crate::global_state_test_lock();
+        let cjk = |s: &str| s.chars().any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c));
+        let collect = || -> Vec<(String, String)> {
+            let mut out: Vec<(String, String)> = Vec::new();
+            for c in CARD_TYPES {
+                out.push((c.summary_key.to_string(), c.summary()));
+            }
+            for c in crate::gear_table::GEAR_COLUMNS {
+                out.push((c.label_key.to_string(), c.label()));
+                out.push((c.formula_key.to_string(), c.formula()));
+                out.push((c.source_key.to_string(), c.source()));
+            }
+            for c in crate::nf_table::NF_COLUMNS {
+                out.push((c.label_key.to_string(), c.label()));
+                out.push((c.formula_key.to_string(), c.formula()));
+                out.push((c.source_key.to_string(), c.source()));
+            }
+            for c in crate::nf_ext_table::NF_EXT_COLUMNS {
+                out.push((c.label_key.to_string(), c.label()));
+                out.push((c.formula_key.to_string(), c.formula()));
+                out.push((c.source_key.to_string(), c.source()));
+            }
+            for r in crate::din_table::ROWS {
+                out.push((r.formula_key.to_string(), r.formula()));
+                out.push((r.source_key.to_string(), r.source()));
+            }
+            for side in [crate::spline_tol::SplineSide::Internal, crate::spline_tol::SplineSide::External] {
+                for f in crate::spline_lite::fields(side) {
+                    if !f.formula_key.is_empty() {
+                        out.push((f.formula_key.to_string(), f.formula()));
+                    }
+                    if !f.source_key.is_empty() {
+                        out.push((f.source_key.to_string(), f.source()));
+                    }
+                }
+            }
+            for card in crate::card_lite::LITE_CARDS {
+                for f in card.fields {
+                    if !f.formula_key.is_empty() {
+                        out.push((f.formula_key.to_string(), f.formula()));
+                    }
+                    if !f.source_key.is_empty() {
+                        out.push((f.source_key.to_string(), f.source()));
+                    }
+                }
+            }
+            for form in [
+                &crate::gear_table::FORM,
+                &crate::ansi_table::FORM,
+                &crate::nf_table::FORM,
+                &crate::nf_ext_table::FORM,
+                &crate::din_table::FORM_INT,
+            ] {
+                out.push((form.note_key.to_string(), form.note()));
+                out.push((form.missing_note_key.to_string(), form.missing_note()));
+            }
+            for form in [&crate::spline_lite::FORM_INT, &crate::spline_lite::FORM_EXT] {
+                out.push((form.note_key.to_string(), form.note()));
+                out.push((form.missing_note_key.to_string(), form.missing_note()));
+            }
+            out
+        };
+        clear_missing_keys();
+        set_lang(Lang::Zh);
+        let zh = collect();
+        set_lang(Lang::En);
+        let en = collect();
+        set_lang_auto();
+        assert_eq!(zh.len(), en.len());
+        assert!(zh.len() >= 260, "本批元数据量：{} 条", zh.len());
+        for ((kz, vz), (ke, ve)) in zh.iter().zip(en.iter()) {
+            assert_eq!(kz, ke, "两语条目应同序同源");
+            assert!(!vz.trim().is_empty(), "{kz} 中文为空");
+            assert!(!ve.trim().is_empty(), "{kz} 英文为空");
+            assert!(!cjk(ve), "{kz} 英文侧仍有汉字：{ve}");
+            if cjk(vz) {
+                assert_ne!(vz, ve, "{kz} 含汉字却两语相同（未翻译）");
+            }
+        }
+        let missing = crate::i18n::missing_keys();
+        assert!(missing.is_empty(), "缺词条：{missing:?}");
     }
 
     /// 阶段 2 ④ 批（卡族）：卡内校验/口径报错随语言切换、关键数据保留。

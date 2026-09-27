@@ -4237,6 +4237,9 @@ pub const COMMAND_CATALOG: &[(&str, &str, &str)] = &[
 
 /// 手册 md 的搜索目录（按优先级）：
 /// ① 环境变量 `OCSM_MANUAL_DIR`；
+///
+/// 每个目录下可带 `en/` 子目录放英译篇（阶段 4 方案 A：中英平行目录；中文原文是源）。
+/// 挑哪篇见 [`manual_topics_in`] / [`find_manual`]（随 `OCSMLANG`）。
 /// ② **插件安装目录/handbook**（人类侧教程随插件分发 —— 默认形态）；
 /// ③ 仓库内 `crates/ocs_ocsm/handbook`（开发期/源码树直跑）；
 /// ④ 旧位置 `~/.agents/skills/ocsm-manual/manual`（兼容：早期把正文放在 skill 里）。
@@ -4259,8 +4262,21 @@ pub fn manual_dirs() -> Vec<std::path::PathBuf> {
     out
 }
 
-/// 目录清单（跳过非 md、按文件名排序；标题取文件首个 `# ` 行）。
-pub fn manual_topics_in(dir: &std::path::Path) -> Vec<(String, String)> {
+/// 一篇手册主题（md 文件）。
+#[derive(Debug, Clone)]
+pub struct ManualTopic {
+    /// 文件名词干 = URL `slug`（如 `00-总览` / `00-overview`）。
+    pub slug: String,
+    /// 标题（文件首个 `# ` 行；没有就用 slug）。
+    pub title: String,
+    /// 实际读到的语种（`zh`/`en`）。
+    pub lang: &'static str,
+    /// 英文环境下该篇**尚无英文版**、回退中文原文（GUI 注明）。
+    pub fallback: bool,
+}
+
+/// 扫一个目录的**顶层** md（跳过 README、按文件名排序；标题取文件首个 `# ` 行）。
+fn scan_md_topics(dir: &std::path::Path) -> Vec<(String, String)> {
     let mut out: Vec<(String, String)> = Vec::new();
     let Ok(entries) = std::fs::read_dir(dir) else {
         return out;
@@ -4271,6 +4287,10 @@ pub fn manual_topics_in(dir: &std::path::Path) -> Vec<(String, String)> {
             continue;
         }
         let Some(stem) = path.file_stem().and_then(|x| x.to_str()) else { continue };
+        // `README.md` 是版本状态表，不是主题篇。
+        if stem.to_ascii_lowercase().starts_with("readme") {
+            continue;
+        }
         let title = std::fs::read_to_string(&path)
             .ok()
             .and_then(|text| {
@@ -4288,8 +4308,54 @@ pub fn manual_topics_in(dir: &std::path::Path) -> Vec<(String, String)> {
     out
 }
 
+/// 主题篇的配对前缀：`00-总览` / `00-overview` → `00`（中英两篇按同一编号配对）。
+fn topic_prefix(slug: &str) -> String {
+    slug.split('-').next().unwrap_or(slug).to_ascii_lowercase()
+}
+
+/// 目录清单（**随当前语言挑篇**，标题取文件首个 `# ` 行）。
+///
+/// * 中文环境：只列中文顶层篇（既有行为，一字不变）；
+/// * 英文环境：`en/` 子目录里**有英译的篇**列英文版（slug = 英文文件名），
+///   其余按保守默认**回退中文原文**并标注（`fallback = true`，GUI 注明「中文原文」）；
+///   只在 `en/`、中文侧没有同编号篇的英文篇也列出。
+pub fn manual_topics_in(dir: &std::path::Path) -> Vec<ManualTopic> {
+    let zh = scan_md_topics(dir);
+    if crate::i18n::lang() != crate::i18n::Lang::En {
+        return zh
+            .into_iter()
+            .map(|(slug, title)| ManualTopic { slug, title, lang: "zh", fallback: false })
+            .collect();
+    }
+    let en = scan_md_topics(&dir.join("en"));
+    let mut by_prefix: std::collections::HashMap<String, (String, String)> =
+        std::collections::HashMap::new();
+    for (slug, title) in &en {
+        by_prefix
+            .entry(topic_prefix(slug))
+            .or_insert_with(|| (slug.clone(), title.clone()));
+    }
+    let mut out: Vec<ManualTopic> = zh
+        .into_iter()
+        .map(|(slug, title)| match by_prefix.remove(&topic_prefix(&slug)) {
+            Some((en_slug, en_title)) => {
+                ManualTopic { slug: en_slug, title: en_title, lang: "en", fallback: false }
+            }
+            None => ManualTopic { slug, title, lang: "zh", fallback: true },
+        })
+        .collect();
+    for (_prefix, (slug, title)) in by_prefix {
+        out.push(ManualTopic { slug, title, lang: "en", fallback: false });
+    }
+    out.sort_by(|a, b| a.slug.cmp(&b.slug));
+    out
+}
+
 /// 按 slug 找 md：返回 (路径, 内容)。slug 只允许 `[A-Za-z0-9_-]` 与中文字符，
 /// 且不允许路径分隔符（防目录穿越）。
+///
+/// 语言优先：英文环境先找 `<dir>/en/<slug>.md` 再回退顶层中文；中文环境只看顶层
+/// （既有中文路径行为不变 —— 英文篇在中文环境不参与解析）。
 pub fn find_manual(dirs: &[std::path::PathBuf], slug: &str) -> Option<(std::path::PathBuf, String)> {
     if slug.is_empty()
         || slug.contains('/')
@@ -4299,10 +4365,17 @@ pub fn find_manual(dirs: &[std::path::PathBuf], slug: &str) -> Option<(std::path
     {
         return None;
     }
+    let prefer_en = crate::i18n::lang() == crate::i18n::Lang::En;
     for dir in dirs {
-        let path = dir.join(format!("{slug}.md"));
+        let path = if prefer_en { dir.join("en").join(format!("{slug}.md")) } else { dir.join(format!("{slug}.md")) };
         if let Ok(text) = std::fs::read_to_string(&path) {
             return Some((path, text));
+        }
+        if prefer_en {
+            let path = dir.join(format!("{slug}.md"));
+            if let Ok(text) = std::fs::read_to_string(&path) {
+                return Some((path, text));
+            }
         }
     }
     None
@@ -4346,11 +4419,13 @@ fn api_manual(target: &str) -> (u16, &'static str, String) {
     let mut seen: std::collections::HashMap<String, serde_json::Value> =
         std::collections::HashMap::new();
     for dir in &dirs {
-        for (slug, title) in manual_topics_in(dir) {
-            seen.entry(slug.clone()).or_insert_with(|| {
+        for topic in manual_topics_in(dir) {
+            seen.entry(topic.slug.clone()).or_insert_with(|| {
                 serde_json::json!({
-                    "slug": slug,
-                    "title": title,
+                    "slug": topic.slug,
+                    "title": topic.title,
+                    "lang": topic.lang,
+                    "fallback": topic.fallback,
                     "dir": dir.display().to_string(),
                 })
             });
@@ -12465,7 +12540,9 @@ mod rough_tests {
         assert!(md.contains("正文"));
         let topics = manual_topics_in(&dir);
         assert_eq!(topics.len(), 1);
-        assert_eq!(topics[0].1, "总览", "标题应取文件名后的 # 行");
+        assert_eq!(topics[0].title, "总览", "标题应取文件名后的 # 行");
+        assert_eq!(topics[0].lang, "zh");
+        assert!(!topics[0].fallback);
         // 目录穿越 / 不存在 → 一律 None
         for bad in ["../secret", "..", "sub/dir", "nope", ""] {
             assert!(find_manual(&dirs, bad).is_none(), "{bad} 不该命中");
@@ -12479,6 +12556,86 @@ mod rough_tests {
         assert_eq!(v["ok"], false);
         assert!(v["hint"].as_str().unwrap().contains("OCSM_MANUAL_DIR"), "{body}");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 阶段 4 遗留：`en/` 英译篇接入手册窗口 —— 英文环境列英文篇（缺译回退中文并标注）；
+    /// 中文环境一字不变；按 en slug 能读到 `en/…md`。
+    #[test]
+    fn manual_topics_pick_english_edition_and_fall_back_to_chinese() {
+        use crate::i18n::{set_lang, set_lang_auto, Lang};
+        let _g = crate::global_state_test_lock();
+        let dir = std::env::temp_dir()
+            .join(format!("ocsm-manual-en-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("en")).unwrap();
+        std::fs::write(dir.join("00-总览.md"), "# 总览\n\n中文正文\n").unwrap();
+        std::fs::write(dir.join("24-双语文案.md"), "# 双语文案\n\n中文正文\n").unwrap();
+        std::fs::write(dir.join("en/README.md"), "# English Handbook\n").unwrap();
+        std::fs::write(dir.join("en/00-overview.md"), "# 00 Overview: Command Index\n\nEnglish body\n")
+            .unwrap();
+        let dirs = vec![dir.clone()];
+        // 中文环境：只列中文篇（既有行为）
+        set_lang(Lang::Zh);
+        let zh = manual_topics_in(&dir);
+        let slugs: Vec<&str> = zh.iter().map(|t| t.slug.as_str()).collect();
+        assert_eq!(slugs, vec!["00-总览", "24-双语文案"], "中文环境不该列 en/ 篇：{slugs:?}");
+        assert!(zh.iter().all(|t| t.lang == "zh" && !t.fallback));
+        // `en/README.md` 不是主题篇
+        assert!(!slugs.contains(&"README"));
+        // 英文环境：00 用英译篇；24 无英译 → 中文回退 + 标注
+        set_lang(Lang::En);
+        let en = manual_topics_in(&dir);
+        assert_eq!(en.len(), 2, "{en:?}");
+        let t0 = en.iter().find(|t| t.slug == "00-overview").expect("应列英译篇");
+        assert_eq!(t0.title, "00 Overview: Command Index");
+        assert_eq!(t0.lang, "en");
+        assert!(!t0.fallback);
+        assert!(!en.iter().any(|t| t.slug == "00-总览"), "英模式下不该重复列中文版");
+        let t24 = en.iter().find(|t| t.slug == "24-双语文案").expect("缺译应回退中文篇");
+        assert_eq!(t24.title, "双语文案");
+        assert_eq!(t24.lang, "zh");
+        assert!(t24.fallback, "缺译篇应标注回退");
+        // 英文环境按 en slug 读到 `en/…md`；按中文 slug 也能读到顶层原文
+        let (path, body) = find_manual(&dirs, "00-overview").expect("英译篇应能命中");
+        assert!(path.ends_with("en/00-overview.md"), "{}", path.display());
+        assert!(body.contains("English body"));
+        let (path, body) = find_manual(&dirs, "24-双语文案").expect("回退篇应能命中");
+        assert!(path.ends_with("24-双语文案.md"), "{}", path.display());
+        assert!(body.contains("中文正文"));
+        // 目录穿越仍然拦住
+        assert!(find_manual(&dirs, "../00-overview").is_none());
+        set_lang_auto();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 阶段 4 遗留（回归网）：**仓库手册**在 en 环境列出 `en/` 里的英译篇，其余回退中文并标注；
+    /// zh 环境一字不变。与 `gui_meta_lang_check.py` 的活复核同口径（少了 HTTP 运输层）。
+    #[test]
+    fn repo_handbook_lists_english_edition_in_english_mode() {
+        use crate::i18n::{set_lang, set_lang_auto, Lang};
+        let _g = crate::global_state_test_lock();
+        let repo = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("handbook");
+        assert!(repo.join("en").is_dir(), "仓库 handbook/en 应存在：{}", repo.display());
+        set_lang(Lang::En);
+        let en = manual_topics_in(&repo);
+        let by_slug: std::collections::HashMap<&str, &ManualTopic> =
+            en.iter().map(|t| (t.slug.as_str(), t)).collect();
+        for slug in ["00-overview", "05-smart-dimension-d", "12-troubleshooting"] {
+            let t = by_slug.get(slug).unwrap_or_else(|| panic!("en 环境应列 {slug}：{:?}", by_slug.keys()));
+            assert_eq!(t.lang, "en", "{slug} 应是英译篇");
+            assert!(!t.fallback, "{slug} 不该标回退");
+            assert!(!t.title.is_empty(), "{slug} 要有标题");
+        }
+        assert!(en.iter().any(|t| t.fallback && t.lang == "zh"),
+                "未译篇应按中文原文回退并标注：{:?}", en.len());
+        assert!(!by_slug.contains_key("00-总览"), "英译篇存在时不该重复列中文版");
+        // zh：回到既有行为
+        set_lang(Lang::Zh);
+        let zh = manual_topics_in(&repo);
+        assert!(zh.iter().all(|t| t.lang == "zh" && !t.fallback));
+        assert!(zh.iter().any(|t| t.slug == "00-总览"));
+        assert!(zh.iter().all(|t| !t.slug.contains("overview")), "zh 环境不列 en/ 篇");
+        set_lang_auto();
     }
 
     #[test]

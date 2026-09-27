@@ -140,10 +140,27 @@ pub(crate) struct LiteFieldSpec {
     pub symbol: &'static str,
     /// 单位（进 GUI 预览；卡面不加单位行）。
     pub unit: &'static str,
-    /// 公式/口径（GUI 行 title、计算书）。
-    pub formula: &'static str,
-    /// 来源。
-    pub source: &'static str,
+    /// 公式/口径 key（`gui.gb_lite.formula.*`；GUI 行 title、计算书）。
+    pub formula_key: &'static str,
+    /// 来源 key（`gui.gb_lite.source.*`）。
+    pub source_key: &'static str,
+}
+
+impl LiteFieldSpec {
+    /// 公式/口径（按当前语言）。
+    pub fn formula(&self) -> String {
+        if self.formula_key.is_empty() {
+            return String::new();
+        }
+        crate::i18n::t(self.formula_key)
+    }
+    /// 来源（按当前语言）。
+    pub fn source(&self) -> String {
+        if self.source_key.is_empty() {
+            return String::new();
+        }
+        crate::i18n::t(self.source_key)
+    }
 }
 
 impl LiteFieldSpec {
@@ -164,72 +181,72 @@ const INTERNAL_FIELDS: &[LiteFieldSpec] = &[
         label_key: "card.gb.lite.label.standard",
         symbol: "",
         unit: "",
-        formula: "GB/T 3478.1-2008 渐开线花键（精简卡口径：只列基本参数与主要测量量，不含公差列）",
-        source: "GB/T 3478.1-2008",
+        formula_key: "gui.gb_lite.formula.standard_expr",
+        source_key: "gui.gb_lite.source.gb3478_1_2008",
     },
     LiteFieldSpec {
         tag: "(简)模数",
         label_key: "card.gb.lite.label.module",
         symbol: "m",
         unit: "mm",
-        formula: "m = 九字段齿形表达式反解（与 GB 花键卡同一 `spline_tol::compute()`）",
-        source: "GB/T 3478.1",
+        formula_key: "gui.gb_lite.formula.module",
+        source_key: "gui.gb_lite.source.gb3478_1",
     },
     LiteFieldSpec {
         tag: "(简)齿数",
         label_key: "card.gb.lite.label.teeth",
         symbol: "z",
         unit: "",
-        formula: "z = 九字段齿形表达式反解",
-        source: "GB/T 3478.1",
+        formula_key: "gui.gb_lite.formula.teeth",
+        source_key: "gui.gb_lite.source.gb3478_1",
     },
     LiteFieldSpec {
         tag: "(简)齿形角",
         label_key: "card.gb.lite.label.alpha",
         symbol: "αD",
         unit: "°",
-        formula: "αD = 表达式反解（30/37.5/45）",
-        source: "GB/T 3478.1 表 3",
+        formula_key: "gui.gb_lite.formula.alpha",
+        source_key: "gui.gb_lite.source.gb3478_1_t3",
     },
     LiteFieldSpec {
         tag: "(简)齿根样式",
         label_key: "card.gb.lite.label.root_form",
         symbol: "",
         unit: "",
-        formula: "由表达式 DA/DF 反解或手选；平齿根（仅 30°）/ 圆齿根",
-        source: "GB/T 3478.1 §5",
+        formula_key: "gui.gb_lite.formula.root_form",
+        source_key: "gui.gb_lite.source.gb3478_1_s5",
     },
     LiteFieldSpec {
         tag: "(简)大径",
         label_key: "card.gb.lite.label.major_dia",
         symbol: "Dei",
         unit: "mm",
-        formula: "Dei = m(z+1.5) 30°平 / m(z+1.8) 30°圆 / m(z+1.4) 37.5° / m(z+1.2) 45°",
-        source: "GB/T 3478.1 表 3",
+        formula_key: "gui.gb_lite.formula.major_dia_int",
+        source_key: "gui.gb_lite.source.gb3478_1_t3",
     },
     LiteFieldSpec {
         tag: "(简)小径",
         label_key: "card.gb.lite.label.minor_dia",
         symbol: "Dii",
         unit: "mm",
-        formula: "Dii = D_Femax(H/h) + 2CF（CF = 0.1m）",
-        source: "GB/T 3478.1 表 3 注 2/注 3",
+        formula_key: "gui.gb_lite.formula.minor_dia_int",
+        source_key: "gui.gb_lite.source.gb3478_1_t3_note",
     },
     LiteFieldSpec {
         tag: "(简)量棒直径",
         label_key: "card.gb.label.pin_dia",
         symbol: "Dp",
         unit: "mm",
-        formula: "D'_Ri = Db[tanαci − tan(αci − E_max/D + invαci − invαD)]，按 GB/T 3478.9 R40 取最接近较大值",
-        source: "GB/T 3478.6 式(1)、GB/T 3478.9 表 1",
+        formula_key: "gui.gb_lite.formula.pin_dia",
+        source_key: "gui.gb_lite.source.gb3478_6_eq1",
     },
     LiteFieldSpec {
         tag: "(简)测量跨棒距",
         label_key: "card.gb.label.over_pins",
         symbol: "Md",
         unit: "mm",
-        formula: "偶齿 M = Db/cosαi ∓ Dp；奇齿再乘 cos(90°/z)",
-        source: "GB/T 3478.6 式(2)~(5)",
+        formula_key: "gui.gb_lite.formula.over_pins",
+        source_key: "gui.gb_lite.source.gb3478_6_eq2_5",
     },
 ];
 
@@ -239,72 +256,72 @@ const EXTERNAL_FIELDS: &[LiteFieldSpec] = &[
         label_key: "card.gb.lite.label.standard",
         symbol: "",
         unit: "",
-        formula: "GB/T 3478.1-2008 渐开线花键（精简卡口径：只列基本参数与主要测量量，不含公差列）",
-        source: "GB/T 3478.1-2008",
+        formula_key: "gui.gb_lite.formula.standard_expr",
+        source_key: "gui.gb_lite.source.gb3478_1_2008",
     },
     LiteFieldSpec {
         tag: "(简)模数",
         label_key: "card.gb.lite.label.module",
         symbol: "m",
         unit: "mm",
-        formula: "m = 九字段齿形表达式反解（与 GB 花键卡同一 `spline_tol::compute()`）",
-        source: "GB/T 3478.1",
+        formula_key: "gui.gb_lite.formula.module",
+        source_key: "gui.gb_lite.source.gb3478_1",
     },
     LiteFieldSpec {
         tag: "(简)齿数",
         label_key: "card.gb.lite.label.teeth",
         symbol: "z",
         unit: "",
-        formula: "z = 九字段齿形表达式反解",
-        source: "GB/T 3478.1",
+        formula_key: "gui.gb_lite.formula.teeth",
+        source_key: "gui.gb_lite.source.gb3478_1",
     },
     LiteFieldSpec {
         tag: "(简)齿形角",
         label_key: "card.gb.lite.label.alpha",
         symbol: "αD",
         unit: "°",
-        formula: "αD = 表达式反解（30/37.5/45）",
-        source: "GB/T 3478.1 表 3",
+        formula_key: "gui.gb_lite.formula.alpha",
+        source_key: "gui.gb_lite.source.gb3478_1_t3",
     },
     LiteFieldSpec {
         tag: "(简)齿根样式",
         label_key: "card.gb.lite.label.root_form",
         symbol: "",
         unit: "",
-        formula: "由表达式 DA/DF 反解或手选；平齿根（仅 30°）/ 圆齿根",
-        source: "GB/T 3478.1 §5",
+        formula_key: "gui.gb_lite.formula.root_form",
+        source_key: "gui.gb_lite.source.gb3478_1_s5",
     },
     LiteFieldSpec {
         tag: "(简)大径",
         label_key: "card.gb.lite.label.major_dia",
         symbol: "Dee",
         unit: "mm",
-        formula: "Dee = m(z+1) 30° / m(z+0.9) 37.5° / m(z+0.8) 45°",
-        source: "GB/T 3478.1 表 3",
+        formula_key: "gui.gb_lite.formula.major_dia_ext",
+        source_key: "gui.gb_lite.source.gb3478_1_t3",
     },
     LiteFieldSpec {
         tag: "(简)小径",
         label_key: "card.gb.lite.label.minor_dia",
         symbol: "Die",
         unit: "mm",
-        formula: "Die = m(z−1.5) 30°平 / m(z−1.8) 30°圆 / m(z−1.4) 37.5° / m(z−1.2) 45°",
-        source: "GB/T 3478.1 表 3",
+        formula_key: "gui.gb_lite.formula.minor_dia_ext",
+        source_key: "gui.gb_lite.source.gb3478_1_t3",
     },
     LiteFieldSpec {
         tag: "(简)跨测齿数",
         label_key: "card.gb.label.span_teeth",
         symbol: "Kn",
         unit: "",
-        formula: "K = z/6 + 0.5 取整数",
-        source: "GB/T 3478.6 式(11) 注",
+        formula_key: "gui.gb_lite.formula.span_teeth",
+        source_key: "gui.gb_lite.source.gb3478_6_eq11_note",
     },
     LiteFieldSpec {
         tag: "(简)公法线长度",
         label_key: "card.gb.label.base_tangent",
         symbol: "Wn",
         unit: "mm",
-        formula: "W_min = cosαD[(K−0.5)πm + D·invαD + esv − (T+λ)]；W = (W_min+W_max)/2",
-        source: "GB/T 3478.6 式(11)(12)",
+        formula_key: "gui.gb_lite.formula.base_tangent",
+        source_key: "gui.gb_lite.source.gb3478_6_eq11_12",
     },
 ];
 
@@ -385,8 +402,8 @@ pub const FORM_INT: CardFormSpec = CardFormSpec {
             required: false,
         },
     ],
-    note: "精简版：只列基本参数 + 量棒/跨棒距，不含任何公差列；需要公差请用「GB 花键参数表（内）」。",
-    missing_note: "精简卡面固定不含公差（上/下偏差）；等级/配合只用于 Md 计算（点项标题可看口径）。",
+    note_key: "gui.form.gb_lite_int.note",
+    missing_note_key: "gui.form.gb_lite_int.missing_note",
 };
 
 /// 精简外卡表单。
@@ -452,8 +469,8 @@ pub const FORM_EXT: CardFormSpec = CardFormSpec {
             required: false,
         },
     ],
-    note: "精简版：只列基本参数 + 公法线，不含任何公差列；需要公差请用「GB 花键参数表（外）」。",
-    missing_note: "精简卡面固定不含公差（上/下偏差）；等级/配合只用于 Wn 计算（点项标题可看口径）。",
+    note_key: "gui.form.gb_lite_ext.note",
+    missing_note_key: "gui.form.gb_lite_ext.missing_note",
 };
 
 // ── 块几何（照 GB 模板风格 + 去掉公差整列）───────────────────────────────
@@ -621,8 +638,8 @@ pub fn items_json(side: SplineSide, table: &SplineTable) -> Result<Vec<serde_jso
             "label": f.label(),
             "unit": f.unit,
             "value": value,
-            "formula": f.formula,
-            "source": f.source,
+            "formula": f.formula(),
+            "source": f.source(),
         }));
     }
     Ok(out)

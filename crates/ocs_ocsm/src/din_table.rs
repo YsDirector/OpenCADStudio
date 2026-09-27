@@ -449,53 +449,64 @@ pub struct RowSpec {
     pub shaft_symbol: &'static str,
     /// 外花键 ATTDEF tag。
     pub shaft_tag: &'static str,
-    /// 公式/口径（预览 title）。
-    pub formula: &'static str,
-    /// 来源（预览 title）。
-    pub source: &'static str,
+    /// 公式/口径 key（`gui.din.formula.*`；预览 title，随语言）。
+    pub formula_key: &'static str,
+    /// 来源 key（`gui.din.source.*`；预览 title，随语言）。
+    pub source_key: &'static str,
+}
+
+impl RowSpec {
+    /// 公式/口径（按当前语言）。
+    pub fn formula(&self) -> String {
+        crate::i18n::t(self.formula_key)
+    }
+    /// 来源（按当前语言）。
+    pub fn source(&self) -> String {
+        crate::i18n::t(self.source_key)
+    }
 }
 
 /// 13 行（行序 = Bild 6；行 1 = 标记）。
 pub const ROWS: &[RowSpec] = &[
     RowSpec { hub_key: "card.din.label.nabe", hub_symbol: "", hub_tag: "N标记",
               shaft_key: "card.din.label.welle", shaft_symbol: "", shaft_tag: "W标记",
-              formula: "§8 代号：标签格 `Nabe/Welle DIN 5480` + 值格 `N/W d_B×m×z×等级+偏差字母`", source: "DIN 5480-1:2006 §8" },
+              formula_key: "gui.din.formula.designation", source_key: "gui.din.source.clause8" },
     RowSpec { hub_key: "card.din.label.teeth", hub_symbol: "z", hub_tag: "N齿数",
               shaft_key: "card.din.label.teeth", shaft_symbol: "z", shaft_tag: "W齿数",
-              formula: "输入", source: "Bild 6 行 2" },
+              formula_key: "gui.din.formula.input", source_key: "gui.din.source.bild6_row2" },
     RowSpec { hub_key: "card.din.label.module", hub_symbol: "m", hub_tag: "N模数",
               shaft_key: "card.din.label.module", shaft_symbol: "m", shaft_tag: "W模数",
-              formula: "输入", source: "Bild 6 行 3" },
+              formula_key: "gui.din.formula.input", source_key: "gui.din.source.bild6_row3" },
     RowSpec { hub_key: "card.din.label.alpha", hub_symbol: "α", hub_tag: "N压力角",
               shaft_key: "card.din.label.alpha", shaft_symbol: "α", shaft_tag: "W压力角",
-              formula: "DIN 5480 固定 30°", source: "§5 / Bild 6 行 4" },
+              formula_key: "gui.din.formula.alpha", source_key: "gui.din.source.clause5_row4" },
     RowSpec { hub_key: "card.din.label.root_dia", hub_symbol: "d_f2", hub_tag: "N齿根圆",
               shaft_key: "card.din.label.tip_dia", shaft_symbol: "d_a1", shaft_tag: "W齿顶圆",
-              formula: "名义表 d_f2 + A_df2；d_a1（齿侧定心 h11）", source: "DIN 5480-2 名义表 + Table 5" },
+              formula_key: "gui.din.formula.root_dia", source_key: "gui.din.source.nominal_table5" },
     RowSpec { hub_key: "card.din.label.root_form_dia", hub_symbol: "d_Ff2", hub_tag: "N齿根成形圆",
               shaft_key: "card.din.label.root_form_dia", shaft_symbol: "d_Ff1", shaft_tag: "W齿根成形圆",
-              formula: "名义表 d_Ff2min（min.）/ d_Ff1max（max.）", source: "DIN 5480-2 名义表" },
+              formula_key: "gui.din.formula.root_form_dia", source_key: "gui.din.source.nominal_table" },
     RowSpec { hub_key: "card.din.label.tip_dia", hub_symbol: "d_a2", hub_tag: "N齿顶圆",
               shaft_key: "card.din.label.root_dia", shaft_symbol: "d_f1", shaft_tag: "W齿根圆",
-              formula: "名义表 d_a2（H11）/ d_f1 + A_df1", source: "DIN 5480-2 名义表 + Table 5" },
+              formula_key: "gui.din.formula.tip_dia", source_key: "gui.din.source.nominal_table5" },
     RowSpec { hub_key: "card.din.label.space_width_max", hub_symbol: "e_max", hub_tag: "N槽宽max",
               shaft_key: "card.din.label.thickness_eff_max", shaft_symbol: "s_vmax", shaft_tag: "W齿厚svmax",
-              formula: "emax = e2 + Ae + Tact + Teff；svmax = s1 + As", source: "§10.8 表 6" },
+              formula_key: "gui.din.formula.space_width_max", source_key: "gui.din.source.clause10_8" },
     RowSpec { hub_key: "card.din.label.space_width_min", hub_symbol: "e_min", hub_tag: "N槽宽min",
               shaft_key: "card.din.label.thickness_max", shaft_symbol: "s_max", shaft_tag: "W齿厚smax",
-              formula: "emin = e2 + Ae + Teff（actual Ref.）；smax = s1 + As − Teff", source: "§10.8 表 6" },
+              formula_key: "gui.din.formula.space_width_min", source_key: "gui.din.source.clause10_8" },
     RowSpec { hub_key: "card.din.label.space_width_eff", hub_symbol: "e_vmin", hub_tag: "N槽宽eff",
               shaft_key: "card.din.label.thickness_min", shaft_symbol: "s_min", shaft_tag: "W齿厚smin",
-              formula: "evmin = e2 + Ae；smin = s1 + As − Tact − Teff", source: "§10.8 表 6" },
+              formula_key: "gui.din.formula.space_width_eff", source_key: "gui.din.source.clause10_8" },
     RowSpec { hub_key: "card.din.label.measuring_circle", hub_symbol: "D_M", hub_tag: "N量圆",
               shaft_key: "card.din.label.measuring_circle", shaft_symbol: "D_M", shaft_tag: "W量圆",
-              formula: "DIN 3977 系列（5480-2 检验表）", source: "DIN 5480-2 检验表" },
+              formula_key: "gui.din.formula.measuring_circle", source_key: "gui.din.source.insp_table" },
     RowSpec { hub_key: "card.din.label.over_pins", hub_symbol: "M2_max", hub_tag: "N量距max",
               shaft_key: "card.din.label.over_pins", shaft_symbol: "M1_max", shaft_tag: "W量距max",
-              formula: "M2max（棒间距）/ M1max Ref.（跨棒距）", source: "DIN 5480-2 检验表 / Bild 6" },
+              formula_key: "gui.din.formula.over_pins_max", source_key: "gui.din.source.insp_table_bild6" },
     RowSpec { hub_key: "card.din.label.over_pins", hub_symbol: "M2_min", hub_tag: "N量距min",
               shaft_key: "card.din.label.over_pins", shaft_symbol: "M1_min", shaft_tag: "W量距min",
-              formula: "M2min Ref. / M1min", source: "DIN 5480-2 检验表 / Bild 6" },
+              formula_key: "gui.din.formula.over_pins_min", source_key: "gui.din.source.insp_table_bild6" },
 ];
 
 /// 行标签（按当前语言）：`t(key)` + 「空格 + 符号」（符号两语原样；行 1 无符号）。
@@ -1382,8 +1393,8 @@ pub const EXPR_POLICY_EXT: crate::card_expr::ExprPolicy = crate::card_expr::Expr
     }],
 };
 
-/// 公用缺项说明。
-const DIN_MISSING_NOTE: &str = "Table 7 上段 c1/c2（>400 侧）与 c9（≤12 细档）列映射无实锚 → 「—」；\n                   下段公差表只抽到 6–9 级、模数组 1,75–4 的实锚 → 其余等级/模数组 Tact/Teff 显示「—」；\n                   D_M/M2/M1 无检验表行且非 Bild 6 示例时显示「—」。";
+/// 公用缺项说明 —— 本批入 catalog（`gui.form.din.missing_note`，随语言；原文见 i18n.rs）。
+/// 预览/选项 JSON 的那份（多一句「可用 ae/as/… 覆盖」）另走 `gui.din.missing_note`。
 
 /// DIN 内花键卡（Nabe）表单（单栏 Bild 6）。
 pub const FORM_INT: crate::card::CardFormSpec = crate::card::CardFormSpec {
@@ -1431,8 +1442,8 @@ pub const FORM_INT: crate::card::CardFormSpec = crate::card::CardFormSpec {
             title: "Nabe 作用齿槽宽公差显式覆盖（mm）", options: &[], options_from: "",
             min: 0.0, step: 0.0001, required: false },
     ],
-    note: "粘九字段表达式（自动反解 d_B/m/z）或直接填 m/z/d_B + 齿配合 → 缺行可用 e₂ / Ae / As / Tact / Teff 覆盖 → 点「出表」回到图纸放置。",
-    missing_note: DIN_MISSING_NOTE,
+    note_key: "gui.form.din.note",
+    missing_note_key: "gui.form.din.missing_note",
 };
 
 /// DIN 外花键卡（Welle）表单（单栏 Bild 6）。
@@ -1481,8 +1492,8 @@ pub const FORM_EXT: crate::card::CardFormSpec = crate::card::CardFormSpec {
             title: "Welle 作用齿厚公差显式覆盖（mm）", options: &[], options_from: "",
             min: 0.0, step: 0.0001, required: false },
     ],
-    note: "粘九字段表达式（自动反解 d_B/m/z）或直接填 m/z/d_B + 齿配合 → 缺行可用 e₂ / Ae / As / Tact / Teff 覆盖 → 点「出表」回到图纸放置。",
-    missing_note: DIN_MISSING_NOTE,
+    note_key: "gui.form.din.note",
+    missing_note_key: "gui.form.din.missing_note",
 };
 
 /// DIN 卡选项/口径 JSON（随 `/api/spline_options` 下发；页面只渲染）。
@@ -1490,16 +1501,16 @@ pub fn options_json() -> serde_json::Value {
     serde_json::json!({
         "columns": ROWS.iter().enumerate().flat_map(|(i, r)| {
             let (label, tag, unit, source) = if i == 0 {
-                (row_label(r, true), r.hub_tag, "", r.source)
+                (row_label(r, true), r.hub_tag, "", r.source())
             } else {
-                (row_label(r, true), r.hub_tag, "mm", r.source)
+                (row_label(r, true), r.hub_tag, "mm", r.source())
             };
             let _ = source;
             vec![
                 serde_json::json!({"tag": tag, "label": label, "unit": unit,
-                                   "formula": r.formula, "source": r.source}),
+                                   "formula": r.formula(), "source": r.source()}),
                 serde_json::json!({"tag": r.shaft_tag, "label": row_label(r, false), "unit": unit,
-                                   "formula": r.formula, "source": r.source}),
+                                   "formula": r.formula(), "source": r.source()}),
             ]
         }).collect::<Vec<_>>(),
         "hub_letters": ["F","G","H","J","K","M"],
@@ -1510,18 +1521,16 @@ pub fn options_json() -> serde_json::Value {
             "m": 3.0, "z": 38, "d_b": 120.0, "hub": "9H", "shaft": "8f",
             "note": "DIN 5480-1:2006 Bild 6 原示例（N120×3×38×9H / W120×3×38×8f）—— 整表照标准原印值"
         },
-        "missing_note": "Table 7 上段 c1/c2（>400 侧）与 c9（≤12 细档）列映射无实锚 → 「—」；\
-                         下段公差表只抽到 6–9 级、模数组 1,75–4 的实锚 → 其余等级/模数组 Tact/Teff 显示「—」；\
-                         D_M/M2/M1 无检验表行且非 Bild 6 示例时显示「—」；可用 ae/as/e2/tactn/teffn/tactw/teffw 显式覆盖。",
+        "missing_note": crate::i18n::t("gui.din.missing_note"),
         "columns_int": ROWS.iter().enumerate().map(|(i, r)| serde_json::json!({
             "tag": r.hub_tag, "label": row_label(r, true),
             "unit": if i == 0 { "" } else { "mm" },
-            "formula": r.formula, "source": r.source,
+            "formula": r.formula(), "source": r.source(),
         })).collect::<Vec<_>>(),
         "columns_ext": ROWS.iter().enumerate().map(|(i, r)| serde_json::json!({
             "tag": r.shaft_tag, "label": row_label(r, false),
             "unit": if i == 0 { "" } else { "mm" },
-            "formula": r.formula, "source": r.source,
+            "formula": r.formula(), "source": r.source(),
         })).collect::<Vec<_>>(),
         "note": "版面照 DIN 5480-1:2006 Bild 6（**内外拆成两张单栏卡**；本卡只画本侧 13 行，整表 INSERT 缩放 0.17）；\
                  文字样式一律 OCSM_GB；Table 7 上段数值为 2026-09-26 双源 OCR + 逐格复核入库（assets/din5480_1_table7_dev.csv）。",
@@ -1662,8 +1671,8 @@ impl DinTableModel {
                 "label": label,
                 "unit": if tag.ends_with("标记") { "" } else { "mm" },
                 "value": value,
-                "formula": r.formula,
-                "source": r.source,
+                "formula": r.formula(),
+                "source": r.source(),
                 "missing": value == MISSING,
             }));
         }

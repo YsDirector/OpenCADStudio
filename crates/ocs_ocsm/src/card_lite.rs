@@ -38,10 +38,27 @@ pub struct LiteFieldSpec {
     pub wf: f64,
     /// 值 ATTDEF 的实体级字宽（默认 [`VALUE_WF`]；长英文值如 ANSI「花键类型」需再压缩）。
     pub vwf: f64,
-    /// 补算项的公式/口径（key=="" 时用）。
-    pub formula: &'static str,
-    /// 补算项的来源（key=="" 时用）。
-    pub source: &'static str,
+    /// 补算项的公式/口径 key（`gui.gear_lite.formula.*`；`key==""` 时用；空串 = 无）。
+    pub formula_key: &'static str,
+    /// 补算项的来源 key（`gui.gear_lite.source.*`；空串 = 无）。
+    pub source_key: &'static str,
+}
+
+impl LiteFieldSpec {
+    /// 补算项的公式/口径（按当前语言；空 key → 空串）。
+    pub fn formula(&self) -> String {
+        if self.formula_key.is_empty() {
+            return String::new();
+        }
+        crate::i18n::t(self.formula_key)
+    }
+    /// 补算项的来源（按当前语言；空 key → 空串）。
+    pub fn source(&self) -> String {
+        if self.source_key.is_empty() {
+            return String::new();
+        }
+        crate::i18n::t(self.source_key)
+    }
 }
 
 /// 体系族（取值/补算分派；不是每张卡一套代码）。
@@ -261,8 +278,8 @@ macro_rules! fld {
             label: $label,
             wf: $wf,
             vwf: VALUE_WF,
-            formula: "",
-            source: "",
+            formula_key: "",
+            source_key: "",
         }
     };
 }
@@ -328,7 +345,7 @@ const DIN_EXT_FIELDS: &[LiteFieldSpec] = &[
 
 // ── ANSI B92.1（内/外 × 中/英 四张：基本参数 + 主要测量量）──
 const ANSI_CN_INT_FIELDS: &[LiteFieldSpec] = &[
-    LiteFieldSpec { tag: "(ANSI简)花键类型", key: "花键类型", label: "card.ansi.lite.label.spline_type", wf: 1.0, vwf: 0.60, formula: "", source: "" },
+    LiteFieldSpec { tag: "(ANSI简)花键类型", key: "花键类型", label: "card.ansi.lite.label.spline_type", wf: 1.0, vwf: 0.60, formula_key: "", source_key: "" },
     fld!("(ANSI简)齿数", "齿数", "card.ansi.lite.label.teeth", 1.0),
     fld!("(ANSI简)径节", "径节", "card.ansi.lite.label.pitch", 1.0),
     fld!("(ANSI简)压力角", "压力角", "card.ansi.lite.label.alpha", 1.0),
@@ -341,7 +358,7 @@ const ANSI_CN_INT_FIELDS: &[LiteFieldSpec] = &[
 ];
 
 const ANSI_CN_EXT_FIELDS: &[LiteFieldSpec] = &[
-    LiteFieldSpec { tag: "(ANSI简)花键类型", key: "花键类型", label: "card.ansi.lite.label.spline_type", wf: 1.0, vwf: 0.60, formula: "", source: "" },
+    LiteFieldSpec { tag: "(ANSI简)花键类型", key: "花键类型", label: "card.ansi.lite.label.spline_type", wf: 1.0, vwf: 0.60, formula_key: "", source_key: "" },
     fld!("(ANSI简)齿数", "齿数", "card.ansi.lite.label.teeth", 1.0),
     fld!("(ANSI简)径节", "径节", "card.ansi.lite.label.pitch", 1.0),
     fld!("(ANSI简)压力角", "压力角", "card.ansi.lite.label.alpha", 1.0),
@@ -354,7 +371,7 @@ const ANSI_CN_EXT_FIELDS: &[LiteFieldSpec] = &[
 ];
 
 const ANSI_EN_INT_FIELDS: &[LiteFieldSpec] = &[
-    LiteFieldSpec { tag: "(ANSI简)花键类型", key: "花键类型", label: "card.ansi.lite.label.spline_type", wf: 0.75, vwf: 0.45, formula: "", source: "" },
+    LiteFieldSpec { tag: "(ANSI简)花键类型", key: "花键类型", label: "card.ansi.lite.label.spline_type", wf: 0.75, vwf: 0.45, formula_key: "", source_key: "" },
     fld!("(ANSI简)齿数", "齿数", "card.ansi.lite.label.teeth", 1.0),
     fld!("(ANSI简)径节", "径节", "card.ansi.lite.label.pitch", 1.0),
     fld!("(ANSI简)压力角", "压力角", "card.ansi.lite.label.alpha", 1.0),
@@ -367,7 +384,7 @@ const ANSI_EN_INT_FIELDS: &[LiteFieldSpec] = &[
 ];
 
 const ANSI_EN_EXT_FIELDS: &[LiteFieldSpec] = &[
-    LiteFieldSpec { tag: "(ANSI简)花键类型", key: "花键类型", label: "card.ansi.lite.label.spline_type", wf: 0.75, vwf: 0.45, formula: "", source: "" },
+    LiteFieldSpec { tag: "(ANSI简)花键类型", key: "花键类型", label: "card.ansi.lite.label.spline_type", wf: 0.75, vwf: 0.45, formula_key: "", source_key: "" },
     fld!("(ANSI简)齿数", "齿数", "card.ansi.lite.label.teeth", 1.0),
     fld!("(ANSI简)径节", "径节", "card.ansi.lite.label.pitch", 1.0),
     fld!("(ANSI简)压力角", "压力角", "card.ansi.lite.label.alpha", 1.0),
@@ -391,8 +408,8 @@ const GEAR_FIELDS: &[LiteFieldSpec] = &[
         label: "card.gear.lite.label.pitch_dia",
         wf: 1.0,
         vwf: VALUE_WF,
-        formula: "d = m·z（与齿轮卡同一 `GearParams`）",
-        source: "齿轮引擎 `GearParams::d()`",
+        formula_key: "gui.gear_lite.formula.pitch_dia",
+        source_key: "gui.gear_lite.source.d",
     },
     LiteFieldSpec {
         tag: "(齿轮简)齿顶圆",
@@ -400,8 +417,8 @@ const GEAR_FIELDS: &[LiteFieldSpec] = &[
         label: "card.gear.lite.label.tip_dia",
         wf: 1.0,
         vwf: VALUE_WF,
-        formula: "da = d + 2m(ha* + x)（外齿；内齿引擎口径）",
-        source: "齿轮引擎 `GearParams::da()`",
+        formula_key: "gui.gear_lite.formula.tip_dia",
+        source_key: "gui.gear_lite.source.da",
     },
     LiteFieldSpec {
         tag: "(齿轮简)齿根圆",
@@ -409,8 +426,8 @@ const GEAR_FIELDS: &[LiteFieldSpec] = &[
         label: "card.gear.lite.label.root_dia",
         wf: 1.0,
         vwf: VALUE_WF,
-        formula: "df = d − 2m(ha* + c* − x)（外齿；内齿引擎口径）",
-        source: "齿轮引擎 `GearParams::df()`",
+        formula_key: "gui.gear_lite.formula.root_dia",
+        source_key: "gui.gear_lite.source.df",
     },
     fld!("(齿轮简)公法线", "公法线", "card.gear.lite.label.base_tangent", 1.0),
     fld!("(齿轮简)跨齿数", "公法线K", "card.gear.lite.label.span_teeth", 1.0),
@@ -744,7 +761,7 @@ pub fn preview_json(card: &LiteCardSpec, model: &serde_json::Value) -> Result<se
                 it["formula"].as_str().unwrap_or("").to_string(),
                 it["source"].as_str().unwrap_or("").to_string(),
             ),
-            None => (String::new(), f.formula.to_string(), f.source.to_string()),
+            None => (String::new(), f.formula(), f.source()),
         };
         if value == "—" {
             missing.push(label_text(f, card.family));
@@ -901,7 +918,7 @@ mod tests {
                 assert!(!f.label.is_empty() && f.wf > 0.0, "{} 字段 {} 缺 label/wf", c.id, f.tag);
                 if f.key.is_empty() {
                     assert_eq!(c.family, LiteFamily::Gear, "只有齿轮有补算项：{}", c.id);
-                    assert!(!f.formula.is_empty(), "补算项 {} 缺公式", f.tag);
+                    assert!(!f.formula().is_empty(), "补算项 {} 缺公式", f.tag);
                 }
             }
         }

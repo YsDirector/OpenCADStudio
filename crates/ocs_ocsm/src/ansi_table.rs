@@ -992,9 +992,8 @@ pub const FORM: crate::card::CardFormSpec = crate::card::CardFormSpec {
             required: true,
         },
     ],
-    note: "粘九字段表达式（自动反解 P/N/齿廓）或直接填 P/N → 选方向/齿廓 → 点「出表」回到图纸放置。",
-    missing_note: "ANSI B92.1 配合/公差（Table 4/5）、量棒检验（p30–p32）与公法线/跨测表本仓未收\
-                   —— 这些格显示「—」，不臆造。",
+    note_key: "gui.form.ansi.note",
+    missing_note_key: "gui.form.ansi.missing_note",
 };
 
 /// ANSI 卡的选项/口径 JSON（随 `/api/spline_options` 下发；页面只渲染）。

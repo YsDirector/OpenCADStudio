@@ -583,149 +583,172 @@ pub fn markdown_table(spec: &GearTableSpec) -> Result<String, String> {
 // ══════════════════════════════════════════════════════════════════════════
 
 /// 一项属性的取值口径（进原生 `title=`，不做常显）。
+///
+/// ★ 本批 GUI 元数据批：`label/formula/source` 由中文字面量改成 catalog key（随语言）；
+/// 取词走 [`GearColumnSpec::label`] / [`GearColumnSpec::formula`] / [`GearColumnSpec::source`]。
+/// 列名里的符号（`mn`/`z`/`α`/`ha*`/`β`/`Fr`/`FW`/`ff`/`fpt`/`Fβ`/`W`/`k`）两语原样。
 #[derive(Debug, Clone, Copy)]
 pub struct GearColumnSpec {
+    /// ATTDEF tag（协议记号，不译）。
     pub tag: &'static str,
-    pub label: &'static str,
+    /// 列名 key（`gui.gear.col.*`）。
+    pub label_key: &'static str,
     pub unit: &'static str,
-    pub formula: &'static str,
-    pub source: &'static str,
+    /// 取值口径 key（`gui.gear.formula.*`）。
+    pub formula_key: &'static str,
+    /// 来源 key（`gui.gear.source.*`）。
+    pub source_key: &'static str,
+}
+
+impl GearColumnSpec {
+    /// 列名（按当前语言）。
+    pub fn label(&self) -> String {
+        crate::i18n::t(self.label_key)
+    }
+    /// 取值口径（按当前语言）。
+    pub fn formula(&self) -> String {
+        crate::i18n::t(self.formula_key)
+    }
+    /// 来源（按当前语言）。
+    pub fn source(&self) -> String {
+        crate::i18n::t(self.source_key)
+    }
 }
 
 /// 19 项口径（顺序 = `attdefs()`；表驱动护栏见 `values()` 的顺序复核）。
 pub const GEAR_COLUMNS: &[GearColumnSpec] = &[
     GearColumnSpec {
         tag: "法向模数",
-        label: "法向模数 mn",
+        label_key: "gui.gear.col.normal_module",
         unit: "mm",
-        formula: "九字段表达式反解 `M`（斜齿即法向模数 Mn）",
-        source: "轴/齿轮生成器同一份表达式",
+        formula_key: "gui.gear.formula.normal_module",
+        source_key: "gui.gear.source.generator_expr",
     },
     GearColumnSpec {
         tag: "齿数",
-        label: "齿数 z",
+        label_key: "gui.gear.col.teeth",
         unit: "",
-        formula: "九字段表达式反解 `Z`",
-        source: "轴/齿轮生成器同一份表达式",
+        formula_key: "gui.gear.formula.teeth",
+        source_key: "gui.gear.source.generator_expr",
     },
     GearColumnSpec {
         tag: "齿形角",
-        label: "齿形角 α",
+        label_key: "gui.gear.col.alpha",
         unit: "°",
-        formula: "九字段表达式反解 `ALPHA`（法向齿形角）",
-        source: "轴/齿轮生成器同一份表达式",
+        formula_key: "gui.gear.formula.alpha",
+        source_key: "gui.gear.source.generator_expr",
     },
     GearColumnSpec {
         tag: "齿顶高系数",
-        label: "齿顶高系数 ha*",
+        label_key: "gui.gear.col.ha_coef",
         unit: "",
-        formula: "外齿 ha* = (Da−d)/(2m) − x；内齿 ha* = (d−Da)/(2m) − x（d = mt·z）",
-        source: "表达式 DA 反解 + gear.rs 的 d()/mt()",
+        formula_key: "gui.gear.formula.ha_coef",
+        source_key: "gui.gear.source.expr_da",
     },
     GearColumnSpec {
         tag: "螺旋角",
-        label: "螺旋角 β",
+        label_key: "gui.gear.col.beta",
         unit: "°",
-        formula: "九字段表达式反解 `BETA`（取绝对值；方向看下一行）",
-        source: "轴/齿轮生成器同一份表达式",
+        formula_key: "gui.gear.formula.beta",
+        source_key: "gui.gear.source.generator_expr",
     },
     GearColumnSpec {
         tag: "螺旋方向",
-        label: "螺旋方向",
+        label_key: "gui.gear.col.hand",
         unit: "",
-        formula: "β>0 右旋、β<0 左旋、β=0 直齿（表达式 BETA 符号）",
-        source: "轴/齿轮生成器同一份表达式",
+        formula_key: "gui.gear.formula.hand",
+        source_key: "gui.gear.source.generator_expr",
     },
     GearColumnSpec {
         tag: "径向变位系数",
-        label: "径向变位系数 x",
+        label_key: "gui.gear.col.shift",
         unit: "",
-        formula: "九字段表达式反解 `X`",
-        source: "轴/齿轮生成器同一份表达式",
+        formula_key: "gui.gear.formula.shift",
+        source_key: "gui.gear.source.generator_expr",
     },
     GearColumnSpec {
         tag: "全齿高",
-        label: "全齿高 h",
+        label_key: "gui.gear.col.whole_depth",
         unit: "mm",
-        formula: "h = |da − df| / 2（内/外齿同一式）",
-        source: "gear.rs 的 da()/df()",
+        formula_key: "gui.gear.formula.whole_depth",
+        source_key: "gui.gear.source.engine_da_df",
     },
     GearColumnSpec {
         tag: "精度等级",
-        label: "精度等级",
+        label_key: "gui.gear.col.grade",
         unit: "",
-        formula: "手填（模板该行是样例 TEXT `887FHGB10095-88`，本卡提升为属性，缺省「—」）",
-        source: "用户填写；本仓未收 GB/T 10095 数据",
+        formula_key: "gui.gear.formula.grade",
+        source_key: "gui.gear.source.user_input_uncollected",
     },
     GearColumnSpec {
         tag: "中心距及极限偏差",
-        label: "中心距及极限偏差",
+        label_key: "gui.gear.col.center",
         unit: "mm",
-        formula: "a = mt(z₁+z₂)/2（给配对齿数时；`center` 可显式覆盖）；极限偏差 ±fα 本仓未收",
-        source: "gear.rs 的 mt()；GB/T 10095-88 未收",
+        formula_key: "gui.gear.formula.center",
+        source_key: "gui.gear.source.engine_mt",
     },
     GearColumnSpec {
         tag: "配对齿轮图号",
-        label: "配对齿轮图号",
+        label_key: "gui.gear.col.mate_dwg",
         unit: "",
-        formula: "手填 `dwg`（缺省「—」）",
-        source: "用户填写",
+        formula_key: "gui.gear.formula.mate_dwg",
+        source_key: "gui.gear.source.user_input",
     },
     GearColumnSpec {
         tag: "配对齿轮齿数",
-        label: "配对齿轮齿数",
+        label_key: "gui.gear.col.mate_teeth",
         unit: "",
-        formula: "手填 `mate`（中心距用；缺省「—」）",
-        source: "用户填写",
+        formula_key: "gui.gear.formula.mate_teeth",
+        source_key: "gui.gear.source.user_input",
     },
     GearColumnSpec {
         tag: "齿圈径向跳动公差",
-        label: "齿圈径向跳动公差 Fr",
+        label_key: "gui.gear.col.runout",
         unit: "",
-        formula: "GB/T 10095-88 齿圈径向跳动公差 —— 本仓未收该标准数据",
-        source: "缺（不臆造）",
+        formula_key: "gui.gear.formula.runout",
+        source_key: "gui.gear.source.missing_no_guess",
     },
     GearColumnSpec {
         tag: "公法线长度公差",
-        label: "公法线长度变动公差 FW",
+        label_key: "gui.gear.col.fw_var",
         unit: "",
-        formula: "GB/T 10095-88 公法线长度变动公差 —— 本仓未收该标准数据",
-        source: "缺（不臆造）",
+        formula_key: "gui.gear.formula.fw_var",
+        source_key: "gui.gear.source.missing_no_guess",
     },
     GearColumnSpec {
         tag: "齿形公差",
-        label: "齿形公差 ff",
+        label_key: "gui.gear.col.profile_tol",
         unit: "",
-        formula: "GB/T 10095-88 齿形公差 —— 本仓未收该标准数据",
-        source: "缺（不臆造）",
+        formula_key: "gui.gear.formula.profile_tol",
+        source_key: "gui.gear.source.missing_no_guess",
     },
     GearColumnSpec {
         tag: "齿距极限偏差",
-        label: "齿距极限偏差 fpt",
+        label_key: "gui.gear.col.pitch_dev",
         unit: "",
-        formula: "GB/T 10095-88 齿距极限偏差 —— 本仓未收该标准数据",
-        source: "缺（不臆造）",
+        formula_key: "gui.gear.formula.pitch_dev",
+        source_key: "gui.gear.source.missing_no_guess",
     },
     GearColumnSpec {
         tag: "齿向公差",
-        label: "齿向公差 Fβ",
+        label_key: "gui.gear.col.helix_tol",
         unit: "",
-        formula: "GB/T 10095-88 齿向公差 —— 本仓未收该标准数据",
-        source: "缺（不臆造）",
+        formula_key: "gui.gear.formula.helix_tol",
+        source_key: "gui.gear.source.missing_no_guess",
     },
     GearColumnSpec {
         tag: "公法线",
-        label: "公法线 W",
+        label_key: "gui.gear.col.base_tangent",
         unit: "mm",
-        formula: "W = m·cosαt·[(k−0.5)π + z·invαt] + 2·x·m·sinαt（直齿外齿轮）",
-        source: "gear.rs span_measurement()（与 GB/T 3478.6 式(11) 同一条渐开线跨距式）",
+        formula_key: "gui.gear.formula.base_tangent",
+        source_key: "gui.gear.source.span_measurement",
     },
     GearColumnSpec {
         tag: "公法线K",
-        label: "公法线跨测齿数 k",
+        label_key: "gui.gear.col.span_teeth",
         unit: "",
-        formula: "k = round(z·αt/180° + 0.5)（直齿外齿轮；30° 时即 z/6+0.5）",
-        source: "gear.rs span_measurement()",
+        formula_key: "gui.gear.formula.span_teeth",
+        source_key: "gui.gear.source.span_measurement_plain",
     },
 ];
 
@@ -798,9 +821,8 @@ pub const FORM: crate::card::CardFormSpec = crate::card::CardFormSpec {
             required: false,
         },
     ],
-    note: "粘九字段齿轮表达式 → 选填配对齿轮/图号/精度等级/中心距 → 点「出表」回到图纸放置。",
-    missing_note: "GB/T 10095-88 的 Fr/FW/ff/fpt/Fβ 与中心距极限偏差本仓未收；\
-                   内齿轮/斜齿轮的公法线口径本仓未收 —— 这些格显示「—」，不臆造。",
+    note_key: "gui.form.gear.note",
+    missing_note_key: "gui.form.gear.missing_note",
 };
 
 /// 齿轮卡的选项/口径 JSON（随 `/api/spline_options` 下发；页面只渲染）。
@@ -810,10 +832,10 @@ pub fn options_json() -> serde_json::Value {
         "expression_note": "九字段统一齿形表达式（轴/齿轮生成器 GUI 可复制）；DA/DF 用于反解 ha*/c* 与全齿高",
         "columns": GEAR_COLUMNS.iter().map(|c| serde_json::json!({
             "tag": c.tag,
-            "label": c.label,
+            "label": c.label(),
             "unit": c.unit,
-            "formula": c.formula,
-            "source": c.source,
+            "formula": c.formula(),
+            "source": c.source(),
         })).collect::<Vec<_>>(),
         "missing_note": "GB/T 10095-88 的 Fr/FW/ff/fpt/Fβ 与中心距极限偏差本仓未收；\
                          内齿轮/斜齿轮的公法线口径本仓未收 —— 这些格子一律显示「—」，不臆造。",
@@ -908,15 +930,15 @@ impl GearTableModel {
         for (c, (tag, value)) in GEAR_COLUMNS.iter().zip(vals) {
             debug_assert_eq!(c.tag, tag);
             if value == MISSING {
-                missing.push(c.label.to_string());
+                missing.push(c.label());
             }
             items.push(serde_json::json!({
                 "tag": tag,
-                "label": c.label,
+                "label": c.label(),
                 "unit": c.unit,
                 "value": value,
-                "formula": c.formula,
-                "source": c.source,
+                "formula": c.formula(),
+                "source": c.source(),
                 "missing": value == MISSING,
             }));
         }
@@ -1233,7 +1255,7 @@ mod tests {
         assert_eq!(GEAR_COLUMNS.len(), atts.len());
         for (i, (c, ad)) in GEAR_COLUMNS.iter().zip(atts.iter()).enumerate() {
             assert_eq!(c.tag, ad.tag, "第 {} 项", i + 1);
-            assert!(!c.label.is_empty() && !c.formula.is_empty() && !c.source.is_empty());
+            assert!(!c.label().is_empty() && !c.formula().is_empty() && !c.source().is_empty());
         }
     }
 

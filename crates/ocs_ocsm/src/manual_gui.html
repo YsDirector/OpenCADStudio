@@ -199,7 +199,8 @@ async function load() {
     topics.forEach((t) => {
       const b = document.createElement("button");
       b.className = "node";
-      b.innerHTML = esc(t.title) + '<span class="sub">' + esc(t.slug) + "</span>";
+      b.innerHTML = esc(t.title) + '<span class="sub">' + esc(t.slug) + "</span>"
+        + (t.fallback ? '<span class="sub">' + "{{i18njs:gui.manual.fallback}}" + "</span>" : "");
       b.addEventListener("click", () => selectNode(b, t.slug, t.title));
       box.appendChild(b);
     });
