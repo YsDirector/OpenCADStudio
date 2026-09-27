@@ -109,14 +109,14 @@ impl LinearSub {
             _ => None,
         }
     }
-    /// 显示名（GUI 用）。
-#[allow(dead_code)]
-    pub fn label(self) -> &'static str {
-        match self {
-            LinearSub::Horizontal => "水平",
-            LinearSub::Vertical => "竖直",
-            LinearSub::Aligned => "对齐",
-        }
+    /// 显示名（GUI 用；随语言）。
+    #[allow(dead_code)]
+    pub fn label(self) -> String {
+        crate::i18n::t(match self {
+            LinearSub::Horizontal => "cmd.guide.linear.h",
+            LinearSub::Vertical => "cmd.guide.linear.v",
+            LinearSub::Aligned => "cmd.guide.linear.a",
+        })
     }
 }
 
@@ -209,13 +209,13 @@ impl SectionSide {
             SectionSide::Left => (tau.1, -tau.0),
         }
     }
-    /// 显示名（GUI 用）。
+    /// 显示名（GUI 用；随语言）。
     #[allow(dead_code)]
-    pub fn label(self) -> &'static str {
-        match self {
-            SectionSide::Right => "向右",
-            SectionSide::Left => "向左",
-        }
+    pub fn label(self) -> String {
+        crate::i18n::t(match self {
+            SectionSide::Right => "cmd.guide.section.right",
+            SectionSide::Left => "cmd.guide.section.left",
+        })
     }
 }
 
@@ -243,13 +243,13 @@ impl AngleMode {
             _ => None,
         }
     }
-    /// 显示名（GUI 用）。
+    /// 显示名（GUI 用；随语言）。
     #[allow(dead_code)]
-    pub fn label(self) -> &'static str {
-        match self {
-            AngleMode::Minor => "劣角",
-            AngleMode::Reflex => "优角",
-        }
+    pub fn label(self) -> String {
+        crate::i18n::t(match self {
+            AngleMode::Minor => "cmd.guide.angle.minor",
+            AngleMode::Reflex => "cmd.guide.angle.reflex",
+        })
     }
 }
 
@@ -295,16 +295,16 @@ impl GrindKind {
             _ => None,
         }
     }
-    /// 显示名（GUI/文档用）。
-    pub fn label(self) -> &'static str {
-        match self {
-            GrindKind::None => "不打磨",
-            GrindKind::ArcConcave => "弧·凹",
-            GrindKind::ArcConvex => "弧·凸",
-            GrindKind::Line => "直线",
-            GrindKind::DoubleArc => "双弧",
-            GrindKind::Zigzag => "锯齿",
-        }
+    /// 显示名（GUI/文档用；随语言）。
+    pub fn label(self) -> String {
+        crate::i18n::t(match self {
+            GrindKind::None => "cmd.guide.grind.none",
+            GrindKind::ArcConcave => "cmd.guide.grind.cav",
+            GrindKind::ArcConvex => "cmd.guide.grind.cvx",
+            GrindKind::Line => "cmd.guide.grind.line",
+            GrindKind::DoubleArc => "cmd.guide.grind.dbl",
+            GrindKind::Zigzag => "cmd.guide.grind.zig",
+        })
     }
 }
 
@@ -1438,5 +1438,31 @@ mod tests {
         p.flip = FlipDir::Clockwise;
         let back = GuideParams::from_url(&p.to_url(1)).unwrap();
         assert_eq!(back.flip, FlipDir::Clockwise);
+    }
+
+    /// 族⑤：引导线 GUI 显示名 —— zh/en 双语（协议别名不译，仍可中文/英文解析）。
+    #[test]
+    fn guide_labels_switch_language_and_aliases_stay() {
+        let _g = crate::global_state_test_lock();
+        crate::i18n::clear_missing_keys();
+        crate::i18n::set_lang(crate::i18n::Lang::Zh);
+        assert_eq!(LinearSub::Horizontal.label(), "水平");
+        assert_eq!(LinearSub::Vertical.label(), "竖直");
+        assert_eq!(LinearSub::Aligned.label(), "对齐");
+        assert_eq!(SectionSide::Left.label(), "向左");
+        assert_eq!(AngleMode::Reflex.label(), "优角");
+        assert_eq!(GrindKind::ArcConcave.label(), "弧·凹");
+
+        crate::i18n::set_lang(crate::i18n::Lang::En);
+        assert_eq!(LinearSub::Horizontal.label(), "horizontal");
+        assert_eq!(LinearSub::Vertical.label(), "vertical");
+        assert_eq!(LinearSub::Aligned.label(), "aligned");
+        assert_eq!(SectionSide::Left.label(), "left");
+        assert_eq!(AngleMode::Reflex.label(), "reflex angle");
+        assert_eq!(GrindKind::ArcConcave.label(), "concave arc");
+        // 协议别名不译：英文短名照常解析（与语言无关）。
+        assert_eq!(GuideParams::from_url("http://127.0.0.1:23751/DIM/LINEAR/H/-50").unwrap().sub, Some(LinearSub::Horizontal));
+        assert!(crate::i18n::missing_keys().is_empty(), "{:?}", crate::i18n::missing_keys());
+        crate::i18n::set_lang_auto();
     }
 }

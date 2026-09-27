@@ -314,21 +314,25 @@ pub const NF_PRESETS: &[InvolPreset] = &[
 ];
 
 /// GB 体系误给 `d_B`/`A` 的**统一报错文案**（GB/T 3478 没有基准直径这个概念）。
-pub const GB_D_B_MSG: &str =
-    "基准直径 d_B 是 DIN 5480 的概念，GB/T 3478 体系请给 m 与 z（本体系不用 d_B）";
+pub fn gb_d_b_msg() -> String {
+    crate::i18n::t("cmd.invol.err.gb_db")
+}
 
 /// GB 体系误给非零变位系数 `x` 的**统一报错文案**（GB/T 3478 基本齿廓不含变位）。
 /// 与 [`GB_D_B_MSG`] / [`PITCH_ONLY_ANSI_MSG`] 同一口径：体系没有的参数在入口层明确拒绝。
-pub const GB_X_MSG: &str =
-    "变位系数 x 是 DIN 5480/NF E22-141 的概念，GB/T 3478 基本齿廓不含变位（x 恒为 0）；请去掉 x（齿轮生成器已锁死为 0）";
+pub fn gb_x_msg() -> String {
+    crate::i18n::t("cmd.invol.err.gb_x")
+}
 
 /// 非 ANSI 体系误给径节的**统一报错文案**（P/Ps 是 ANSI B92.1 的径节制写法）。
-pub const PITCH_ONLY_ANSI_MSG: &str =
-    "径节 P/Ps 是 ANSI B92.1 的写法（P=每英寸齿数、Ps=2P）；GB/DIN/NF 用模数 m（写法 `M…`），不要给径节 P/DP";
+pub fn pitch_only_ansi_msg() -> String {
+    crate::i18n::t("cmd.invol.err.pitch_only_ansi")
+}
 
 /// ANSI B92.1 误给 `d_B`/`A` 的报错文案（径节制用径节 P/Ps，不用基准直径 `d_B`/`A`）。
-pub const ANSI_D_B_MSG: &str =
-    "ANSI B92.1 不使用基准直径 d_B/A（径节制用径节 P/Ps 与压力角）；请给径节 P（与齿数 N）";
+pub fn ansi_d_b_msg() -> String {
+    crate::i18n::t("cmd.invol.err.ansi_db")
+}
 
 /// 标准下的默认齿廓名（不给 profile 时用）。
 pub fn default_profile(std: SplineStd) -> &'static str {
@@ -423,8 +427,9 @@ pub fn ansi_pitch_labels() -> Vec<&'static str> {
 }
 
 /// 径节写法统一说明（报错/GUI 提示共用）：`A/B` 成对写法。
-pub const ANSI_PITCH_FORM_MSG: &str =
-    "径节写法应为 A/B（如 2.5/5、3/6…128/256），Ps 恒为 2P";
+pub fn ansi_pitch_form_msg() -> String {
+    crate::i18n::t("cmd.invol.pitch.form")
+}
 
 /// 解析 ANSI 径节写法：**只校验语法**（`A/B` 的 `B == 2A`，或裸数字为正数），
 /// **不查 17 项系列** —— 系列由 [`InvolParams::validate`] 统一把关，这样轴段
@@ -434,43 +439,60 @@ pub const ANSI_PITCH_FORM_MSG: &str =
 pub fn parse_ansi_pitch_syntax(text: &str) -> Result<f64, String> {
     let s = text.trim();
     if s.is_empty() {
-        return Err(format!("ANSI B92.1：缺径节 P（{ANSI_PITCH_FORM_MSG}）。"));
+        return Err(crate::i18n::t_fmt(
+            "cmd.invol.pitch.err.missing",
+            &[("form", &ansi_pitch_form_msg())],
+        ));
     }
     if let Some((a, b)) = s.split_once('/') {
         if b.contains('/') {
-            return Err(format!(
-                "ANSI B92.1：径节「{s}」格式不对（{ANSI_PITCH_FORM_MSG}）。"
+            return Err(crate::i18n::t_fmt(
+                "cmd.invol.pitch.err.bad_format",
+                &[("s", s), ("form", &ansi_pitch_form_msg())],
             ));
         }
         let (a_txt, b_txt) = (a.trim(), b.trim());
         let a: f64 = a_txt.parse().map_err(|_| {
-            format!("ANSI B92.1：径节「{s}」的分子 A 不是数字（{ANSI_PITCH_FORM_MSG}）。")
+            crate::i18n::t_fmt(
+                "cmd.invol.pitch.err.a_not_number",
+                &[("s", s), ("form", &ansi_pitch_form_msg())],
+            )
         })?;
         let b: f64 = b_txt.parse().map_err(|_| {
-            format!("ANSI B92.1：径节「{s}」的分母 B 不是数字（{ANSI_PITCH_FORM_MSG}）。")
+            crate::i18n::t_fmt(
+                "cmd.invol.pitch.err.b_not_number",
+                &[("s", s), ("form", &ansi_pitch_form_msg())],
+            )
         })?;
         if !(a.is_finite() && a > 0.0) || !(b.is_finite() && b > 0.0) {
-            return Err(format!(
-                "ANSI B92.1：径节 A/B 的 A、B 都必须是正数；收到「{s}」。"
+            return Err(crate::i18n::t_fmt(
+                "cmd.invol.pitch.err.not_positive",
+                &[("s", s)],
             ));
         }
         if (b - 2.0 * a).abs() > 1e-9 * (2.0 * a).abs().max(1.0) {
-            return Err(format!(
-                "ANSI B92.1：径节写法 A/B 的 B 是 stub pitch Ps，标准中 Ps 恒为 2P；\
-                 收到 {}/{}，应写 {}/{}。",
-                trim(a),
-                trim(b),
-                trim(a),
-                trim(2.0 * a)
+            return Err(crate::i18n::t_fmt(
+                "cmd.invol.pitch.err.b_not_2a",
+                &[
+                    ("a", &trim(a)),
+                    ("b", &trim(b)),
+                    ("a2", &trim(a)),
+                    ("b2", &trim(2.0 * a)),
+                ],
             ));
         }
         return Ok(a);
     }
     let p: f64 = s
         .parse()
-        .map_err(|_| format!("ANSI B92.1：径节「{s}」不是数字（{ANSI_PITCH_FORM_MSG}）。"))?;
+        .map_err(|_| {
+            crate::i18n::t_fmt(
+                "cmd.invol.pitch.err.not_number",
+                &[("s", s), ("form", &ansi_pitch_form_msg())],
+            )
+        })?;
     if !(p.is_finite() && p > 0.0) {
-        return Err(format!("ANSI B92.1：径节 P={} 必须是正数。", trim(p)));
+        return Err(crate::i18n::t_fmt("cmd.invol.pitch.err.p_positive", &[("p", &trim(p))]));
     }
     Ok(p)
 }
@@ -480,11 +502,13 @@ pub fn ansi_pitch_series_check(p: f64) -> Result<(), String> {
     if ansi_pitch_row(p).is_some() {
         return Ok(());
     }
-    Err(format!(
-        "ANSI B92.1：径节 P={} 不在标准系列（17 项：{}）；{}。",
-        trim(p),
-        ansi_pitch_labels().join("、"),
-        ANSI_PITCH_FORM_MSG
+    Err(crate::i18n::t_fmt(
+        "cmd.invol.pitch.err.series",
+        &[
+            ("p", &trim(p)),
+            ("list", &ansi_pitch_labels().join(&crate::i18n::t("cmd.detail.sep.list"))),
+            ("form", &ansi_pitch_form_msg()),
+        ],
     ))
 }
 
@@ -500,7 +524,7 @@ fn ansi_prefixed(e: String) -> String {
     if e.starts_with(ANSI_CODE) {
         e
     } else {
-        format!("{ANSI_CODE}：{e}")
+        crate::i18n::t_fmt("cmd.invol.err.prefix", &[("code", ANSI_CODE), ("e", &e)])
     }
 }
 
@@ -596,18 +620,20 @@ pub fn ansi_column_pitch_check(col: AnsiColumn, p: f64) -> Result<(), String> {
     // 系列里的径节都是精确十进制值，1e-9 相对容差只兜浮点往返。
     let eps = 1e-9 * p.abs().max(1.0);
     let side = if p < lo - eps {
-        "低于下限"
+        crate::i18n::t("cmd.invol.column.below")
     } else if p > hi + eps {
-        "超出上限"
+        crate::i18n::t("cmd.invol.column.above")
     } else {
         return Ok(());
     };
-    Err(format!(
-        "ANSI B92.1 Table 2「{}」列的适用径节为 {}，收到 {}（{}）。",
-        col.desc(),
-        col.range_label(),
-        ansi_pair_label(p),
-        side
+    Err(crate::i18n::t_fmt(
+        "cmd.invol.column.err.range",
+        &[
+            ("col", col.desc()),
+            ("range", col.range_label()),
+            ("got", &ansi_pair_label(p)),
+            ("side", &side),
+        ],
     ))
 }
 
@@ -1551,10 +1577,9 @@ pub fn resolve_spline(
     let profile = match parse_preset_token(profile) {
         Some((pstd, name)) => {
             if pstd != std {
-                return Err(format!(
-                    "齿廓代号「{profile}」属于 {}，与所选标准 {} 不符。",
-                    pstd.code(),
-                    std.code()
+                return Err(crate::i18n::t_fmt(
+                    "cmd.invol.err.profile_std_mismatch",
+                    &[("profile", profile), ("pstd", pstd.code()), ("std", std.code())],
                 ));
             }
             name
@@ -1570,18 +1595,15 @@ pub fn resolve_spline(
     // ANSI：公式驱动 —— 第 5 参槽位 = 径节 P；无 d_B/A、无变位。
     if std == SplineStd::ANSI {
         if d_b.is_some() {
-            return Err(ANSI_D_B_MSG.to_string());
+            return Err(ansi_d_b_msg());
         }
-        let p = m.ok_or_else(|| {
-            "ANSI B92.1：缺径节 P（写法 `P5/10`（A/B）或 `P8`（裸数字，需在 17 项系列）；也兼容 `pitch=5/10` 与 `m=` 槽位）"
-                .to_string()
-        })?;
-        let z = z.ok_or_else(|| "ANSI B92.1：缺齿数 N（写法 `Z20`）".to_string())?;
+        let p = m.ok_or_else(|| crate::i18n::t("cmd.invol.err.ansi_missing_p"))?;
+        let z = z.ok_or_else(|| crate::i18n::t("cmd.invol.err.ansi_missing_n"))?;
         if let Some(xv) = x {
             if xv.abs() > 1e-12 {
-                return Err(format!(
-                    "ANSI B92.1：不使用变位系数 x（Table 2 基本尺寸无 x 项）；收到 x={}。",
-                    trim(xv)
+                return Err(crate::i18n::t_fmt(
+                    "cmd.invol.err.ansi_x",
+                    &[("x", &trim(xv))],
                 ));
             }
         }
@@ -1594,24 +1616,20 @@ pub fn resolve_spline(
             let (p, origin) = resolve_nf_by_a(a, m, z, x, profile)?;
             return Ok((p, Some(origin)));
         }
-        let m = m.ok_or_else(|| {
-            "NF E22-141：缺模数 m（给 A 与 m，或给 A 与 z 由表/公式推导另一项）".to_string()
-        })?;
-        let z = z.ok_or_else(|| {
-            "NF E22-141：缺齿数 N（给 A 与 N，或给 A 与 m 由表/公式推导另一项）".to_string()
-        })?;
+        let m = m.ok_or_else(|| crate::i18n::t("cmd.invol.err.nf_missing_m"))?;
+        let z = z.ok_or_else(|| crate::i18n::t("cmd.invol.err.nf_missing_n"))?;
         let xv = x.unwrap_or(0.8);
         let a = a_from_x(m, z, xv);
         let p = InvolParams::from_preset(SplineStd::NF, profile, m, z)
-            .map_err(|e| format!("NF E22-141：{e}"))?
+            .map_err(|e| crate::i18n::t_fmt("cmd.invol.err.nf_prefix", &[("e", &e)]))?
             .with_x(xv)
             .with_a(a);
-        p.validate().map_err(|e| format!("NF E22-141：{e}"))?;
+        p.validate().map_err(|e| crate::i18n::t_fmt("cmd.invol.err.nf_prefix", &[("e", &e)]))?;
         return Ok((p, Some(D_bOrigin::ComputedA)));
     }
     if let Some(d_b) = d_b {
         if std != SplineStd::DIN {
-            return Err(GB_D_B_MSG.to_string());
+            return Err(gb_d_b_msg());
         }
         let (p, origin) = resolve_din_by_d_b(d_b, m, z, x)?;
         return Ok((p, Some(origin)));
@@ -1621,21 +1639,28 @@ pub fn resolve_spline(
     if std == SplineStd::GB {
         if let Some(xv) = x {
             if xv.abs() > 1e-12 {
-                return Err(format!("{GB_X_MSG}（收到 x={}）", trim(xv)));
+                return Err(crate::i18n::t_fmt(
+                    "cmd.invol.err.gb_x_received",
+                    &[("msg", &gb_x_msg()), ("x", &trim(xv))],
+                ));
             }
         }
     }
-    let m = m.ok_or_else(|| match std {
-        SplineStd::GB => "GB/T 3478：缺模数 m（写法 `M3`）".to_string(),
-        SplineStd::DIN => "DIN 5480：缺模数 m（给 m 与 z，或给基准直径 d_B 由表补全）".to_string(),
-        SplineStd::NF => "NF E22-141：缺模数 m（给 A 与 m，或给 A 与 z）".to_string(),
-        SplineStd::ANSI => "ANSI B92.1：缺径节 P（写法 `P5/10`（A/B）或 `P8`）".to_string(),
+    let m = m.ok_or_else(|| {
+        crate::i18n::t(match std {
+            SplineStd::GB => "cmd.invol.err.missing_m_gb",
+            SplineStd::DIN => "cmd.invol.err.missing_m_din",
+            SplineStd::NF => "cmd.invol.err.missing_m_nf",
+            SplineStd::ANSI => "cmd.invol.err.missing_m_ansi",
+        })
     })?;
-    let z = z.ok_or_else(|| match std {
-        SplineStd::GB => "GB/T 3478：缺齿数 z（写法 `Z20`）".to_string(),
-        SplineStd::DIN => "DIN 5480：缺齿数 z（给 m 与 z，或给基准直径 d_B 由表补全）".to_string(),
-        SplineStd::NF => "NF E22-141：缺齿数 N（给 A 与 N，或给 A 与 m）".to_string(),
-        SplineStd::ANSI => "ANSI B92.1：缺齿数 N（写法 `Z20`）".to_string(),
+    let z = z.ok_or_else(|| {
+        crate::i18n::t(match std {
+            SplineStd::GB => "cmd.invol.err.missing_z_gb",
+            SplineStd::DIN => "cmd.invol.err.missing_z_din",
+            SplineStd::NF => "cmd.invol.err.missing_z_nf",
+            SplineStd::ANSI => "cmd.invol.err.missing_z_ansi",
+        })
     })?;
     let mut p = InvolParams::from_preset(std, profile, m, z)?
         .with_x(x.unwrap_or(0.0));
@@ -2261,7 +2286,7 @@ fn nf_row_to_params(row: NfE22141Row, profile: &str) -> Result<(InvolParams, D_b
         .map_err(|e| format!("NF E22-141：查表行 p{} m={} N={}：{e}", row.page, trim(row.m), row.z))?
         .with_x(xv)
         .with_a(row.a);
-    p.validate().map_err(|e| format!("NF E22-141：{e}"))?;
+    p.validate().map_err(|e| crate::i18n::t_fmt("cmd.invol.err.nf_prefix", &[("e", &e)]))?;
     Ok((p, D_bOrigin::NfTable(row)))
 }
 
@@ -2435,10 +2460,10 @@ pub fn resolve_nf_by_a(
                     }
                 }
                 let p = InvolParams::from_preset(SplineStd::NF, profile, m, z_canon)
-                    .map_err(|e| format!("NF E22-141：{e}"))?
+                    .map_err(|e| crate::i18n::t_fmt("cmd.invol.err.nf_prefix", &[("e", &e)]))?
                     .with_x(x2)
                     .with_a(a);
-                p.validate().map_err(|e| format!("NF E22-141：{e}"))?;
+                p.validate().map_err(|e| crate::i18n::t_fmt("cmd.invol.err.nf_prefix", &[("e", &e)]))?;
                 return Ok((p, D_bOrigin::Adjusted(note)));
             }
             let x_formula = x_from_a(a, m, z);
@@ -2477,10 +2502,10 @@ pub fn resolve_nf_by_a(
                 }
             };
             let p = InvolParams::from_preset(SplineStd::NF, profile, m, z)
-                .map_err(|e| format!("NF E22-141：{e}"))?
+                .map_err(|e| crate::i18n::t_fmt("cmd.invol.err.nf_prefix", &[("e", &e)]))?
                 .with_x(xv)
                 .with_a(a);
-            p.validate().map_err(|e| format!("NF E22-141：{e}"))?;
+            p.validate().map_err(|e| crate::i18n::t_fmt("cmd.invol.err.nf_prefix", &[("e", &e)]))?;
             Ok((p, origin))
         }
         (Some(m), None) => {
@@ -2506,10 +2531,10 @@ pub fn resolve_nf_by_a(
                 trim(a), trim(m), trim(xv), z, z_lo, z_hi
             );
             let p = InvolParams::from_preset(SplineStd::NF, profile, m, z)
-                .map_err(|e| format!("NF E22-141：{e}"))?
+                .map_err(|e| crate::i18n::t_fmt("cmd.invol.err.nf_prefix", &[("e", &e)]))?
                 .with_x(xv)
                 .with_a(a);
-            p.validate().map_err(|e| format!("NF E22-141：{e}"))?;
+            p.validate().map_err(|e| crate::i18n::t_fmt("cmd.invol.err.nf_prefix", &[("e", &e)]))?;
             Ok((p, D_bOrigin::Derived(note)))
         }
         (None, Some(z)) => {
@@ -2534,10 +2559,10 @@ pub fn resolve_nf_by_a(
                 trim(a), z, trim(xv), trim(m)
             );
             let p = InvolParams::from_preset(SplineStd::NF, profile, m, z)
-                .map_err(|e| format!("NF E22-141：{e}"))?
+                .map_err(|e| crate::i18n::t_fmt("cmd.invol.err.nf_prefix", &[("e", &e)]))?
                 .with_x(xv)
                 .with_a(a);
-            p.validate().map_err(|e| format!("NF E22-141：{e}"))?;
+            p.validate().map_err(|e| crate::i18n::t_fmt("cmd.invol.err.nf_prefix", &[("e", &e)]))?;
             Ok((p, D_bOrigin::Derived(note)))
         }
         (None, None) => {
@@ -4456,7 +4481,7 @@ impl InvolParams {
         if self.std == SplineStd::ANSI {
             let p = self.ansi_p();
             if !(p.is_finite() && p > 0.0) {
-                return Err(format!("ANSI B92.1：径节 P={} 必须是正数。", trim(p)));
+                return Err(crate::i18n::t_fmt("cmd.invol.pitch.err.p_positive", &[("p", &trim(p))]));
             }
             // 系列校验：错误把 17 项按 A/B 形式列出（不再只报范围端点）。
             ansi_pitch_series_check(p)?;
@@ -5915,7 +5940,7 @@ mod tests {
         }
 
         // GB DB 文案常量与报错链接（齿轮/轴/结构要素三处共用）。
-        assert!(GB_D_B_MSG.contains("DIN 5480") && GB_D_B_MSG.contains("GB/T 3478"));
+        assert!(gb_d_b_msg().contains("DIN 5480") && gb_d_b_msg().contains("GB/T 3478"));
     }
 
     /// DIN：hf*=0.55（齿侧对中基准）、公式与 DIN 5480-2 名义表逐行吻合；x 边界 [−0.05, 0.45]。
@@ -6664,10 +6689,10 @@ mod tests {
     fn resolve_spline_gb_rejects_d_b_and_din_computes_d_b() {
         let e = resolve_spline(SplineStd::GB, "GB30R", Some(40.0), Some(3.0), Some(20), None)
             .unwrap_err();
-        assert_eq!(e, GB_D_B_MSG, "{e}");
+        assert_eq!(e, gb_d_b_msg(), "{e}");
         let e = resolve_spline(SplineStd::GB, "30圆齿根", Some(40.0), None, None, None)
             .unwrap_err();
-        assert_eq!(e, GB_D_B_MSG, "{e}");
+        assert_eq!(e, gb_d_b_msg(), "{e}");
         // DIN：m+z（无 d_B）→ 由 d_B=m(z+1.1+2x) 正算并回填，不报“不匹配”。
         let (p, origin) =
             resolve_spline(SplineStd::DIN, "DIN30", None, Some(2.0), Some(18), Some(0.2))
@@ -6696,7 +6721,7 @@ mod tests {
         for bad in [0.2, -0.05, 1.0] {
             let e = resolve_spline(SplineStd::GB, "GB30R", None, Some(3.0), Some(20), Some(bad))
                 .unwrap_err();
-            assert!(e.contains(GB_X_MSG), "{e}");
+            assert!(e.contains(&gb_x_msg()), "{e}");
             assert!(e.contains("收到"), "{e}");
         }
         // DIN/NF 的 x 行为不变（仍是几何自变量/主系列参数）；ANSI 仍拒非零 x（原有口径）。
@@ -7394,10 +7419,10 @@ mod tests {
         // GB：统一文案；ANSI：径节制文案。
         let e = resolve_spline(SplineStd::GB, "GB30R", Some(66.0), Some(3.0), Some(20), None)
             .unwrap_err();
-        assert_eq!(e, GB_D_B_MSG, "{e}");
+        assert_eq!(e, gb_d_b_msg(), "{e}");
         let e = resolve_spline(SplineStd::ANSI, "ANSI", Some(66.0), Some(3.0), Some(20), None)
             .unwrap_err();
-        assert_eq!(e, ANSI_D_B_MSG, "{e}");
+        assert_eq!(e, ansi_d_b_msg(), "{e}");
         // ANSI：不给 d_B 可正常解析（`m` 槽位 = 径节 P=3）。
         let (pa, oa) = resolve_spline(SplineStd::ANSI, "ANSI", None, Some(3.0), Some(20), None)
             .unwrap();
@@ -7452,9 +7477,9 @@ mod tests {
         // GB/ANSI：d_B 一律不允许（GB 沿统一文案；ANSI 径节制文案）。
         let e = resolve_spline(SplineStd::GB, "GB30R", Some(40.0), Some(3.0), Some(20), None)
             .unwrap_err();
-        assert_eq!(e, GB_D_B_MSG, "{e}");
+        assert_eq!(e, gb_d_b_msg(), "{e}");
         let e = resolve_spline(SplineStd::ANSI, "ANSI", Some(40.0), None, None, None).unwrap_err();
-        assert_eq!(e, ANSI_D_B_MSG, "{e}");
+        assert_eq!(e, ansi_d_b_msg(), "{e}");
         assert!(e.contains("d_B") && e.contains("径节") && !e.contains("未实现"), "{e}");
 
         // NF：已入库 —— A 主参数；A+m+z 走查表，A+m 查表补 N，无 A 时由 m/z/x 正算 A。
@@ -7965,7 +7990,7 @@ mod tests {
         // d_B/A → ANSI_D_B_MSG（不含「未实现」字样）。
         let e = resolve_spline(SplineStd::ANSI, "ANSI", Some(40.0), Some(8.0), Some(20), None)
             .unwrap_err();
-        assert_eq!(e, ANSI_D_B_MSG, "{e}");
+        assert_eq!(e, ansi_d_b_msg(), "{e}");
         assert!(!e.contains("未实现"), "{e}");
         // 缺 P / 缺 N。
         let e = resolve_spline(SplineStd::ANSI, "ANSI", None, None, Some(20), None).unwrap_err();
@@ -8706,11 +8731,11 @@ mod tests {
         // GB 给 d_B/A。
         let e = resolve_spline(SplineStd::GB, "GB30R", Some(40.0), Some(3.0), Some(20), None)
             .unwrap_err();
-        assert_eq!(e, GB_D_B_MSG, "{e}");
+        assert_eq!(e, gb_d_b_msg(), "{e}");
         // ANSI 给 d_B/A、给 x、45° 低径节。
         let e = resolve_spline(SplineStd::ANSI, "ANSI30P", Some(40.0), Some(8.0), Some(20), None)
             .unwrap_err();
-        assert_eq!(e, ANSI_D_B_MSG, "{e}");
+        assert_eq!(e, ansi_d_b_msg(), "{e}");
         let e = resolve_spline(SplineStd::ANSI, "ANSI30P", None, Some(8.0), Some(20), Some(0.1))
             .unwrap_err();
         assert!(e.contains("不使用变位系数"), "{e}");
@@ -8723,5 +8748,52 @@ mod tests {
             .validate()
             .unwrap_err();
         assert!(e.contains("压力角") && e.contains("10°<α<50°"), "{e}");
+    }
+
+    /// 族③b（部分）：渐开线花键入口层（径节解析 + resolve_spline）—— zh/en 双语断言 + 数据原样。
+    #[test]
+    fn invol_entry_messages_switch_language_keeping_data() {
+        let _g = crate::global_state_test_lock();
+        crate::i18n::clear_missing_keys();
+
+        // ── zh ──
+        crate::i18n::set_lang(crate::i18n::Lang::Zh);
+        let e = parse_ansi_pitch_syntax("").unwrap_err();
+        assert!(e.contains("缺径节 P") && e.contains("A/B"), "{e}");
+        let e = parse_ansi_pitch_syntax("abc").unwrap_err();
+        assert!(e.contains("不是数字") && e.contains("abc"), "{e}");
+        let e = parse_ansi_pitch_syntax("2.5/4").unwrap_err();
+        assert!(e.contains("stub pitch") && e.contains("2.5/4") && e.contains("2.5/5"), "{e}");
+        let e = parse_ansi_pitch("7").unwrap_err();
+        assert!(e.contains("不在标准系列") && e.contains("17 项"), "{e}");
+        let e = resolve_spline(SplineStd::GB, "", Some(40.0), Some(3.0), Some(20), None).unwrap_err();
+        assert!(e.contains("基准直径 d_B") && e.contains("GB/T 3478"), "{e}");
+        let e = resolve_spline(SplineStd::GB, "", None, Some(3.0), Some(20), Some(0.2)).unwrap_err();
+        assert!(e.contains("变位系数 x") && e.contains("0.2"), "{e}");
+        let e = resolve_spline(SplineStd::ANSI, "", Some(40.0), Some(8.0), Some(20), None).unwrap_err();
+        assert!(e.contains("不使用基准直径"), "{e}");
+
+        // ── en：同一批调用，数据原样 ──
+        crate::i18n::set_lang(crate::i18n::Lang::En);
+        let e = parse_ansi_pitch_syntax("").unwrap_err();
+        assert!(e.contains("missing pitch P") && e.contains("A/B"), "{e}");
+        let e = parse_ansi_pitch_syntax("abc").unwrap_err();
+        assert!(e.contains("is not a number") && e.contains("abc"), "{e}");
+        let e = parse_ansi_pitch_syntax("2.5/4").unwrap_err();
+        assert!(e.contains("stub pitch") && e.contains("2.5/4") && e.contains("2.5/5"), "{e}");
+        let e = parse_ansi_pitch("7").unwrap_err();
+        assert!(e.contains("not in the standard series") && e.contains("17 items"), "{e}");
+        let e = resolve_spline(SplineStd::GB, "", Some(40.0), Some(3.0), Some(20), None).unwrap_err();
+        assert!(e.contains("Reference diameter d_B") && e.contains("GB/T 3478"), "{e}");
+        let e = resolve_spline(SplineStd::GB, "", None, Some(3.0), Some(20), Some(0.2)).unwrap_err();
+        assert!(e.contains("Profile shift x") && e.contains("0.2"), "{e}");
+        let e = resolve_spline(SplineStd::ANSI, "", Some(40.0), Some(8.0), Some(20), None).unwrap_err();
+        assert!(e.contains("does not use reference diameter"), "{e}");
+        assert!(
+            crate::i18n::missing_keys().is_empty(),
+            "缺词条：{:?}",
+            crate::i18n::missing_keys()
+        );
+        crate::i18n::set_lang_auto();
     }
 }

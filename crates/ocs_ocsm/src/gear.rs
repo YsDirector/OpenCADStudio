@@ -173,8 +173,9 @@ pub fn dp_from_m(m: f64) -> f64 {
 }
 
 /// `M` 与 `DP` 同给的统一报错文案（互斥；不静默取其一）。
-pub const M_DP_CONFLICT_MSG: &str =
-    "M 与 DP 同给：模数制与径节制只能选一个（M 用 m，DP 用 DP=25.4/m）。";
+pub fn m_dp_conflict_msg() -> String {
+    crate::i18n::t("cmd.gear.err.m_dp_conflict")
+}
 
 /// 齿轮几何参数（GUI / 命令行同一套）。
 #[derive(Debug, Clone, PartialEq)]
@@ -276,10 +277,7 @@ impl SplineOpts {
             .collect();
         match key.as_str() {
             "M" | "MODULE" | "MODUL" | "DP" => {
-                return Err(format!(
-                    "`{s}` 是齿轮体系（M = 模数制 / DP = 径节制），不是花键体系；\
-                     花键体系可用 GB / DIN / NF / ANSI。"
-                ));
+                return Err(crate::i18n::t_fmt("cmd.gear.err.std_is_gear_system", &[("s", s)]));
             }
             _ => {}
         }
@@ -295,10 +293,26 @@ impl SplineOpts {
         if key == "ANSI" || key.starts_with("ANSIB92") {
             return Ok(SplineStd::ANSI);
         }
-        Err(format!(
-            "花键体系标识无法识别：`{s}`（可用 GB / GB/T 3478.1 / DIN / DIN 5480 / NF / NF E22-141 / ANSI / ANSI B92.1）。"
-        ))
+        Err(crate::i18n::t_fmt("cmd.gear.err.std_unknown", &[("s", s)]))
     }
+}
+
+/// 报错用：齿轮种类显示名（随语言；与 spec/GUI 用的 [`GearKind::label`] 分开）。
+pub fn kind_label(kind: GearKind) -> String {
+    crate::i18n::t(match kind {
+        GearKind::External => "cmd.gear.kind.external",
+        GearKind::Internal => "cmd.gear.kind.internal",
+    })
+}
+
+/// 报错用：视图显示名（随语言；内齿轮剖视带说明）。
+pub fn view_label(view: GearView) -> String {
+    crate::i18n::t(match view {
+        GearView::Section => "cmd.gear.view.section",
+        GearView::Front => "cmd.gear.view.front",
+        GearView::Side => "cmd.gear.view.side",
+        GearView::Simplified => "cmd.gear.view.simplified",
+    })
 }
 
 impl Default for GearParams {
@@ -483,70 +497,67 @@ impl GearParams {
     /// 参数自检（错误信息直接给用户看）。
     pub fn validate(&self) -> Result<(), String> {
         if !(self.m.is_finite() && self.m > 0.0) {
-            return Err("模数 m 必须是正数。".into());
+            return Err(crate::i18n::t("cmd.gear.err.module_positive"));
         }
         if self.is_dp() {
             let dp = self.dp.ok_or_else(|| {
-                "径节制（std=DP）缺径节值 DP（写法 `dp=8` / `DP8`；m = 25.4/DP）。".to_string()
+                crate::i18n::t("cmd.gear.err.dp_missing_std")
             })?;
             if !(dp.is_finite() && dp > 0.0) {
-                return Err(format!("径节 DP={} 必须是正数。", trim(dp)));
+                return Err(crate::i18n::t_fmt("cmd.gear.err.dp_positive", &[("v", &trim(dp))]));
             }
             let m = m_from_dp(dp);
             if (self.m - m).abs() > 1e-9 * m.max(1.0) {
-                return Err(format!(
-                    "径节制：DP={} 对应 m=25.4/DP={}，与当前 m={} 不符（DP 体系不要另给 m）。",
-                    trim(dp),
-                    trim(m),
-                    trim(self.m)
+                return Err(crate::i18n::t_fmt(
+                    "cmd.gear.err.dp_mismatch",
+                    &[("dp", &trim(dp)), ("m", &trim(m)), ("cur", &trim(self.m))],
                 ));
             }
         } else if self.dp.is_some() {
-            return Err(M_DP_CONFLICT_MSG.to_string());
+            return Err(m_dp_conflict_msg());
         }
         if !(2..=1000).contains(&self.z) {
-            return Err(format!("齿数 z 超出范围（2–1000）：{}", self.z));
+            return Err(crate::i18n::t_fmt("cmd.gear.err.z_range", &[("z", &self.z.to_string())]));
         }
         if !(self.alpha_deg.is_finite() && self.alpha_deg > 10.0 && self.alpha_deg < 50.0) {
-            return Err(format!(
-                "压力角 α 超出范围（10°<α<50°）：{}°",
-                self.alpha_deg
+            return Err(crate::i18n::t_fmt(
+                "cmd.gear.err.alpha_range",
+                &[("v", &self.alpha_deg.to_string())],
             ));
         }
         if !(self.ha.is_finite() && self.ha >= 0.5) {
-            return Err("齿顶高系数 ha* 至少 0.5。".into());
+            return Err(crate::i18n::t("cmd.gear.err.ha_min"));
         }
         if !(self.c.is_finite() && self.c >= 0.0) {
-            return Err("顶隙系数 c* 不能为负。".into());
+            return Err(crate::i18n::t("cmd.gear.err.c_negative"));
         }
         if !(self.beta_deg.is_finite() && self.beta_deg.abs() < 45.0) {
-            return Err(format!("螺旋角 β 超出范围（|β|<45°）：{}°", self.beta_deg));
+            return Err(crate::i18n::t_fmt("cmd.gear.err.beta_range", &[("v", &self.beta_deg.to_string())]));
         }
         if !(self.h.is_finite() && self.h > 0.0) {
-            return Err("厚度 h 必须是正数。".into());
+            return Err(crate::i18n::t("cmd.gear.err.h_positive"));
         }
         if !(self.x.is_finite() && self.x.abs() <= 1.0) {
-            return Err(format!("变位系数 Xn 超出范围（|Xn|≤1）：{}", self.x));
+            return Err(crate::i18n::t_fmt("cmd.gear.err.x_range", &[("v", &self.x.to_string())]));
         }
         if self.kind.is_internal() {
             if self.da() <= 1e-6 {
-                return Err("内齿轮齿顶圆直径非正（齿朝圆心长太长）：检查 m/z/ha*/Xn 组合。".into());
+                return Err(crate::i18n::t("cmd.gear.err.internal_da_nonpositive"));
             }
             if self.da() / 2.0 >= self.df() / 2.0 {
-                return Err("内齿轮齿顶圆不小于齿根圆：检查 m/z/ha*/c* 组合。".into());
+                return Err(crate::i18n::t("cmd.gear.err.internal_da_ge_df"));
             }
         } else if self.df() <= 1e-6 {
-            return Err("齿根圆直径非正：检查 m/z/ha*/c*/Xn 组合。".into());
+            return Err(crate::i18n::t("cmd.gear.err.df_nonpositive"));
         }
         if self.chamfer() * 2.0 >= self.h {
-            return Err(format!(
-                "轴向倒角 C=round(0.6m)={:.0} 太大（厚度 h={:.1}）——加大厚度或减小模数。",
-                self.chamfer(),
-                self.h
+            return Err(crate::i18n::t_fmt(
+                "cmd.gear.err.chamfer_too_big",
+                &[("c", &format!("{:.0}", self.chamfer())), ("h", &format!("{:.1}", self.h))],
             ));
         }
         if self.chamfer() >= self.da() / 2.0 {
-            return Err("轴向倒角大于齿顶圆半径，无法画图。".into());
+            return Err(crate::i18n::t("cmd.gear.err.chamfer_ge_tip"));
         }
         Ok(())
     }
@@ -555,63 +566,68 @@ impl GearParams {
         let mut v = Vec::new();
         if self.is_dp() {
             let dp = self.dp.unwrap_or_else(|| dp_from_m(self.m));
-            v.push(format!(
-                "径节制（{} DP）：m = 25.4/DP = {}；块名/规格按 **DP 原值** 出，避免与同模数 {} 的模数制件串块。",
-                trim(dp),
-                trim(self.m),
-                trim(self.m)
+            v.push(crate::i18n::t_fmt(
+                "cmd.gear.note.dp_spec",
+                &[("dp", &trim(dp)), ("m", &trim(self.m)), ("m2", &trim(self.m))],
             ));
         }
         if self.z < 17 && self.x.abs() < 1e-9 {
-            v.push(format!(
-                "齿数 z={} < 17 且未变位：实际滚齿会有根切，本视图未画根切（如需要请给变位或根切画法模板）。",
-                self.z
+            v.push(crate::i18n::t_fmt(
+                "cmd.gear.note.undercut",
+                &[("z", &self.z.to_string())],
             ));
         }
         if self.is_helical() {
-            v.push(format!(
-                "斜齿轮（β={}°，{}）：正视图齿廓按端面参数 mt={:.4}／αt={:.3}° 画，侧视图按 GB 简化画法加三条细实线表示轮齿倾斜方向。",
-                trim(self.beta_deg),
-                if self.beta_deg > 0.0 { "右旋" } else { "左旋" },
-                self.mt(),
-                self.alpha_t().to_degrees()
+            v.push(crate::i18n::t_fmt(
+                "cmd.gear.note.helical",
+                &[
+                    ("beta", &trim(self.beta_deg)),
+                    ("hand", &crate::i18n::t(if self.beta_deg > 0.0 {
+                        "cmd.gear.dir.right"
+                    } else {
+                        "cmd.gear.dir.left"
+                    })),
+                    ("mt", &format!("{:.4}", self.mt())),
+                    ("at", &format!("{:.3}", self.alpha_t().to_degrees())),
+                ],
             ));
         }
         if self.x.abs() > 1e-9 {
-            v.push(format!(
-                "变位齿轮（Xn={}）：da/df 与齿厚按国标公式算（齿顶高未扣 Δy，单件图无配对中心距）。",
-                trim(self.x)
+            v.push(crate::i18n::t_fmt(
+                "cmd.gear.note.shift",
+                &[("x", &trim(self.x))],
             ));
         }
         if (self.alpha_deg - ALPHA_N_DEG).abs() > 1e-9 {
-            v.push(format!(
-                "非 20° 基准齿形角（α={}°）：α 已代入渐开线/基圆/齿厚公式（db=d·cosαt、ψ(R) 用 inv αt）；\
-                 ha*、c*、齿根圆角系数 ρ=0.38m 不随 α 自动改变（当前 ha*={}、c*={}、ρ={}），\
-                 14.5°/25° 等系统的系数、以及 30°/37.5°/45° 花键的短齿顶请按所用标准手动填 ha*/c*。",
-                trim(self.alpha_deg),
-                trim(self.ha),
-                trim(self.c),
-                trim(self.rho())
+            v.push(crate::i18n::t_fmt(
+                "cmd.gear.note.alpha_nonstandard",
+                &[
+                    ("alpha", &trim(self.alpha_deg)),
+                    ("ha", &trim(self.ha)),
+                    ("c", &trim(self.c)),
+                    ("rho", &trim(self.rho())),
+                ],
             ));
         }
         if self.tooth_tip_crossed() {
-            v.push(format!(
-                "齿顶变尖/渐开线交叉：α={}° 配 ha*={} 时 ψ(da/2)={:.4}° ≤ 0 —— 两条齿廓在齿顶圆之前就相交，\
-                 「常规正视图」画不出真实渐开线齿廓（会报错；剖视/侧视/简化正视图不受影响）。\
-                 45° 花键通常配小齿顶高系数（例如 ha*=0.5；本工具 ha* 下限就是 0.5）；或减小 α/齿顶高、增大齿数。",
-                trim(self.alpha_deg),
-                trim(self.ha),
-                self.half_tooth_angle(self.da() / 2.0).to_degrees()
+            v.push(crate::i18n::t_fmt(
+                "cmd.gear.note.tip_crossed",
+                &[
+                    ("alpha", &trim(self.alpha_deg)),
+                    ("ha", &trim(self.ha)),
+                    ("psi", &format!("{:.4}", self.half_tooth_angle(self.da() / 2.0).to_degrees())),
+                ],
             ));
         }
         if self.internal_tooth_crossed() {
-            v.push(format!(
-                "内齿轮齿槽过宽：α={}° 配 ha*={} 时齿槽半角 ψ(da/2)={:.4}° ≥ 半齿距 {:.4}° —— 相邻齿槽齿廓\
-                 在齿顶圆之前相交，「端视图」画不出真实齿廓（会报错；剖视图不受影响）。减小 ha*/α 或增大齿数。",
-                trim(self.alpha_deg),
-                trim(self.ha),
-                self.space_half_angle(self.da().max(self.db()) / 2.0).to_degrees(),
-                (self.pitch_angle() / 2.0).to_degrees()
+            v.push(crate::i18n::t_fmt(
+                "cmd.gear.note.internal_space_wide",
+                &[
+                    ("alpha", &trim(self.alpha_deg)),
+                    ("ha", &trim(self.ha)),
+                    ("psi", &format!("{:.4}", self.space_half_angle(self.da().max(self.db()) / 2.0).to_degrees())),
+                    ("half", &format!("{:.4}", (self.pitch_angle() / 2.0).to_degrees())),
+                ],
             ));
         }
         if let Some(w) = self.root_style_note() {
@@ -625,38 +641,32 @@ impl GearParams {
             let ok = solve_internal_fillet(self, s0, 1.0).is_some()
                 && solve_internal_fillet(self, s0, -1.0).is_some();
             if !ok {
-                v.push(format!(
-                    "内齿轮齿根圆角无解（z={}、m={}）：rf−ρ={:.3} 与齿廓之间放不下 ρ={:.3} 的圆角，\
-                     已按无圆角画（齿廓末端径向直线落到齿根圆）。",
-                    self.z,
-                    trim(self.m),
-                    self.fillet_center_radius(),
-                    self.rho()
+                v.push(crate::i18n::t_fmt(
+                    "cmd.gear.note.internal_fillet_none",
+                    &[
+                        ("z", &self.z.to_string()),
+                        ("m", &trim(self.m)),
+                        ("rc", &format!("{:.3}", self.fillet_center_radius())),
+                        ("rho", &format!("{:.3}", self.rho())),
+                    ],
                 ));
             }
         }
         if self.kind.is_internal() {
-            v.push(
-                "内齿轮剖视图按模板只画到**齿根圆**，不打剖面线 —— 齿圈外壁结构（轮缘/腹板/键槽等）".to_string()
-                    + "由用户/AI 按实际结构延伸，这样一张图能服务不同齿圈。延伸画法：从齿根线往外加厚齿圈"
-                    + "（轴向宽度保持 h），新轮廓落 1轮廓实线层、剖面线用 ANSI31 放 5剖面线层"
-                    + "（一个 HATCH 两个环，轴线上下各一环）。",
-            );
+            v.push(crate::i18n::t("cmd.gear.note.internal_section_template"));
         }
         if self.internal_tip_falls_below_base() {
-            v.push(format!(
-                "内齿轮 z={} 时齿顶圆 da={:.3} 低于基圆 db={:.3}：真实齿顶由插齿刀刀尖包络成形（非渐开线），\
-                 本图按简化画法画「渐开线到基圆 → 径向直线到齿顶圆」。要精确齿顶画法请给模板。",
-                self.z,
-                self.da(),
-                self.db()
+            v.push(crate::i18n::t_fmt(
+                "cmd.gear.note.internal_tip_below_base",
+                &[
+                    ("z", &self.z.to_string()),
+                    ("da", &format!("{:.3}", self.da())),
+                    ("db", &format!("{:.3}", self.db())),
+                ],
             ));
         }
         if self.is_helical() && self.kind.is_internal() {
-            v.push(
-                "内齿轮斜齿：剖视图按轴向剖面画，未画三条螺旋线细实线（外齿轮模板侧视图才有，内齿轮模板没有侧视图）。"
-                    .to_string(),
-            );
+            v.push(crate::i18n::t("cmd.gear.note.internal_helical"));
         }
         v
     }
@@ -743,16 +753,21 @@ impl GearParams {
         }
         let r_c = self.df() / 2.0 + self.rho();
         let r_s = self.flank_start_radius();
-        Some(format!(
-            "齿根圆角无解：z={}、m={} 时齿廓起点半径 {:.3} 与圆角圆心半径 {:.3} 相差 {:.3} > 圆角半径 ρ={:.3}，\
-             模板口径的 0.38m 圆角放不下。已按{}出图（想看真实根切曲线请用变位，或按 GB 允许的轻微根切另画）。",
-            self.z,
-            trim(self.m),
-            r_s.abs(),
-            r_c.abs(),
-            (r_s - r_c).abs(),
-            self.rho(),
-            style.label()
+        Some(crate::i18n::t_fmt(
+            "cmd.gear.note.root_style_fallback",
+            &[
+                ("z", &self.z.to_string()),
+                ("m", &trim(self.m)),
+                ("rs", &format!("{:.3}", r_s.abs())),
+                ("rc", &format!("{:.3}", r_c.abs())),
+                ("diff", &format!("{:.3}", (r_s - r_c).abs())),
+                ("rho", &format!("{:.3}", self.rho())),
+                ("style", &crate::i18n::t(match style {
+                    RootStyle::TemplateArc => "cmd.gear.rootstyle.template_arc",
+                    RootStyle::BaseCircleLine => "cmd.gear.rootstyle.base_circle_line",
+                    RootStyle::NoFillet => "cmd.gear.rootstyle.none",
+                })),
+            ],
         ))
     }
 
@@ -760,11 +775,11 @@ impl GearParams {
     pub fn spec(&self) -> String {
         let mut s = String::new();
         if self.kind.is_internal() {
-            s.push_str("内齿轮 ");
+            s.push_str(&crate::i18n::t("cmd.gear.spec.internal_prefix"));
         }
         if self.is_dp() {
             let dp = self.dp.unwrap_or_else(|| dp_from_m(self.m));
-            s.push_str(&format!("DP{}（m{}）", trim(dp), trim(self.m)));
+            s.push_str(&crate::i18n::t_fmt("cmd.gear.spec.dp", &[("dp", &trim(dp)), ("m", &trim(self.m))]));
         } else {
             s.push_str(&format!("m{}", trim(self.m)));
         }
@@ -815,15 +830,15 @@ impl GearParams {
         let s = self
             .spline
             .as_ref()
-            .ok_or_else(|| "齿轮模式不是花键（请先勾选「花键模式」再给标准号/d_B）。".to_string())?;
+            .ok_or_else(|| crate::i18n::t("cmd.gear.err.spline_mode_required"))?;
         if self.beta_deg.abs() > 1e-9 {
-            return Err(format!(
-                "渐开线花键为直齿（β 必须为 0）；收到 β={}°。",
-                trim(self.beta_deg)
+            return Err(crate::i18n::t_fmt(
+                "cmd.gear.err.spline_spur_only",
+                &[("v", &trim(self.beta_deg))],
             ));
         }
         if !(self.h.is_finite() && self.h > 0.0) {
-            return Err("花键厚度/有效长度 h 必须是正数。".to_string());
+            return Err(crate::i18n::t("cmd.gear.err.h_spline_positive"));
         }
         let (mut p, origin) = crate::invol_spline::resolve_spline(
             s.std,
@@ -1139,10 +1154,8 @@ impl GearView {
 ///
 /// `GearView` 校验与引擎 [`crate::invol_spline::InvolParams::side_view`] 共用；语气同内齿轮的
 /// 「模板没有的画法不猜」，不静默忽略、不出乱图。
-pub fn internal_spline_no_side_view_msg() -> &'static str {
-    "内花键不提供「侧视图」—— 用户定案：内花键剖视图和内齿轮一样，不存在侧视图。\n\
-     内花键可用视图只有**剖视图**和**端视图**两个（与内齿轮同模板口径）；模板没有的画法不猜\
-     （避免出一张看起来对、实际没依据的图）。"
+pub fn internal_spline_no_side_view_msg() -> String {
+    crate::i18n::t("cmd.gear.err.internal_spline_no_side")
 }
 
 // ─────────────────────────── 齿廓（渐开线 + 圆角 + 样条）─────────
@@ -1240,7 +1253,7 @@ fn solve(mut a: Vec<Vec<f64>>, mut b: Vec<f64>) -> Result<Vec<f64>, String> {
             }
         }
         if a[piv][c].abs() < 1e-12 {
-            return Err("齿廓样条方程组奇异（参数太极端）".into());
+            return Err(crate::i18n::t("cmd.gear.err.fillet_singular"));
         }
         a.swap(c, piv);
         b.swap(c, piv);
@@ -2269,13 +2282,16 @@ pub fn ocsm_ready(doc: &ocs_plugin_api::host::acadrust::CadDocument) -> Result<(
         return Ok(());
     }
     let why = if !missing.is_empty() {
-        format!("（缺图层：{}）", missing.join("、"))
+        crate::i18n::t_fmt(
+            "cmd.gear.warn.missing_layers",
+            &[("list", &missing.join(&crate::i18n::t("cmd.gear.sep.list")))],
+        )
     } else {
-        format!("（{LAYER_CENTER} 没挂 CENTER2 点划线）")
+        crate::i18n::t_fmt("cmd.gear.warn.no_center2", &[("layer", LAYER_CENTER)])
     };
-    Err(format!(
-        "这张图还没跑过 OCSM 初始化{why} —— 先执行 OCSM（建 10 个图层 + 线型 + 文字/标注样式），\
-         再生成齿轮；不然中心线会是实线白线、剖面线层颜色也不对。"
+    Err(crate::i18n::t_fmt(
+        "cmd.gear.err.not_initialized",
+        &[("why", &why)],
     ))
 }
 
@@ -2289,11 +2305,9 @@ pub fn generate(p: &GearParams, view: GearView, n: f64) -> Result<GenPart, Strin
     }
     p.validate()?;
     if !view.available_for(p.kind) {
-        return Err(format!(
-            "{}不提供「{}」视图 —— 用户给的模板（内齿轮.dxf）里只有**剖视图**和**端视图**两个视图；\n\
-             模板没有的画法不猜（避免出一张看起来对、实际没依据的图）。要用请先给对应模板。",
-            p.kind.label(),
-            view.label()
+        return Err(crate::i18n::t_fmt(
+            "cmd.gear.err.view_unavailable",
+            &[("kind", &kind_label(p.kind)), ("view", &view_label(view))],
         ));
     }
     let entities = match (p.kind, view) {
@@ -2304,10 +2318,9 @@ pub fn generate(p: &GearParams, view: GearView, n: f64) -> Result<GenPart, Strin
         (GearKind::Internal, GearView::Section) => section_internal(p, n)?,
         (GearKind::Internal, GearView::Front) => front_internal(p, n)?,
         (_, v) => {
-            return Err(format!(
-                "{}不提供「{}」视图（见上文）。",
-                p.kind.label(),
-                v.label()
+            return Err(crate::i18n::t_fmt(
+                "cmd.gear.err.view_unavailable_short",
+                &[("kind", &kind_label(p.kind)), ("view", &view_label(v))],
             ))
         }
     };
@@ -2316,7 +2329,7 @@ pub fn generate(p: &GearParams, view: GearView, n: f64) -> Result<GenPart, Strin
         entities,
         meta: PartMeta {
             code: p.spec(),
-            name: format!("{}（{}）", p.kind.label(), view.label_for(p.kind)),
+            name: crate::i18n::t_fmt("cmd.gear.name.pair", &[("a", p.kind.label()), ("b", view.label_for(p.kind))]),
             spec: p.spec(),
             material: String::new(),
             weight: if p.kind.is_internal() {
@@ -2449,15 +2462,14 @@ fn generate_spline(p: &GearParams, view: GearView, n: f64) -> Result<GenPart, St
     let (engine, origin) = p.spline_engine()?;
     if !view.available_for_spline(p.kind) {
         return Err(match (p.kind, view) {
-            (GearKind::Internal, GearView::Side) => internal_spline_no_side_view_msg().to_string(),
-            (GearKind::Internal, GearView::Simplified) => format!(
-                "内花键不提供「{}」视图 —— 内花键与内齿轮同口径，只有 **剖视图 + 端视图** 两个视图。",
-                view.label()
+            (GearKind::Internal, GearView::Side) => internal_spline_no_side_view_msg(),
+            (GearKind::Internal, GearView::Simplified) => crate::i18n::t_fmt(
+                "cmd.gear.err.internal_spline_view_unavailable",
+                &[("view", &view_label(view))],
             ),
-            _ => format!(
-                "花键不提供「{}」视图 —— 花键只有 端视图 / 侧视图 / 剖视图 三个视图（端视图=真实渐开线齿廓；\
-                 侧视/剖视=轴向轮廓）。",
-                view.label()
+            _ => crate::i18n::t_fmt(
+                "cmd.gear.err.spline_view_unavailable",
+                &[("view", &view_label(view))],
             ),
         });
     }
@@ -2472,18 +2484,15 @@ fn generate_spline(p: &GearParams, view: GearView, n: f64) -> Result<GenPart, St
                 // 厚度/倒角校验与内齿轮 `validate()` 同口径：C 太大直接报错，不出乱图。
                 let c = spline_chamfer(&engine);
                 if c * 2.0 >= len {
-                    return Err(format!(
-                        "内花键（齿圈）轴向倒角 C=round(0.6m)={:.0} 太大（有效长度 L={}）——\
-                         加大 L 或减小模数（同内齿轮校验口径）。",
-                        c,
-                        trim(len)
+                    return Err(crate::i18n::t_fmt(
+                        "cmd.gear.err.internal_spline_chamfer_len",
+                        &[("c", &format!("{:.0}", c)), ("len", &trim(len))],
                     ));
                 }
                 if c >= engine.internal_tip_radius() {
-                    return Err(format!(
-                        "内花键（齿圈）轴向倒角 C={:.0} 不小于小径半径 D_ii/2={}，无法画图（同内齿轮口径）。",
-                        c,
-                        trim(engine.internal_tip_radius())
+                    return Err(crate::i18n::t_fmt(
+                        "cmd.gear.err.internal_spline_chamfer_radius",
+                        &[("c", &format!("{:.0}", c)), ("r", &trim(engine.internal_tip_radius()))],
                     ));
                 }
                 internal_bore_section(
@@ -2509,7 +2518,7 @@ fn generate_spline(p: &GearParams, view: GearView, n: f64) -> Result<GenPart, St
         entities,
         meta: PartMeta {
             code: engine.std.code().into(),
-            name: format!("{}（{}）", p.spline_kind_label(), view.label_for_spline(p.kind)),
+            name: crate::i18n::t_fmt("cmd.gear.name.pair", &[("a", p.spline_kind_label()), ("b", view.label_for_spline(p.kind))]),
             spec: p.spline_spec(&engine, origin.as_ref()),
             material: String::new(),
             weight: String::new(),
@@ -2735,7 +2744,7 @@ fn set_spline_std_once(
 /// 齿轮体系标识写入（`M` 与 `DP` 互斥；同值重复不报）。
 fn set_gear_std_once(slot: &mut Option<GearStd>, std: GearStd) -> Result<(), String> {
     match *slot {
-        Some(old) if old != std => Err(M_DP_CONFLICT_MSG.to_string()),
+        Some(old) if old != std => Err(m_dp_conflict_msg()),
         _ => {
             *slot = Some(std);
             Ok(())
@@ -2766,21 +2775,10 @@ pub struct GearRequest {
 
 /// 命令行/HTTP 参数解析（人侧 GUI 与 AI 侧共用同一套键名）。
 pub fn parse_request(raw: &str) -> Result<GearRequest, String> {
-    let usage = "用法：OCSMGEAR [内齿轮|int] <模数m> <齿数z> [h=齿宽] [ha=齿顶高系数] [c=顶隙系数] [alpha=压力角(°,默认20) 或 α25] [beta=螺旋角(右旋为正)] [x=变位系数] \
-                 [view 剖视图|侧视图|简化正视图|常规正视图|端视图] [at x,y] [rot 度]。\n\
-                 齿轮体系：默认 M 模数制；径节制写 `std=DP dp=8`（或 `DP8`），此时位置参数 = `<齿数z> <齿宽h>`，m=25.4/DP。\n\
-                 花键模式：`OCSMGEAR 花键 [内花键] [std=GB|DIN|NF|ANSI] [profile=GB30R] [db=40] [hf=0.9] [rho=0.4] [cf=0.1] <m> <z> [x=..] [h=..] [view 端视图|侧视图|剖视图]`；\
-                 花键模式 α 由齿廓预设固定（GB 30/37.5/45°、DIN 30°、NF 20°、ANSI Table 2 列），不可覆盖；径节 P/Ps 只属 ANSI（GB/DIN/NF 给 P 会报错）；\
-                 GB/T 3478 基本齿廓不含变位（x 恒为 0，给非零 x 明确报错；GUI 花键模式下 x 已锁死）；\
-                 内花键与内齿轮同口径：只有 `view 端视图|剖视图`（无侧视图，用户定案）；\
-                 花键参数也可用预设代号（GB30P/GB30R/GB375R/GB45R/DIN30/NFP/NFR/ANSI30P/ANSI30PM/ANSI30R/ANSI375R/ANSI45R）代替 std+profile；
-                 花键模式：`db=40` 是 DIN 的 d_B，NF 用 `a=66`（或 `公称直径=66`，也兼容 `db=` 当 A）；
-                 ANSI 是径节制：写 `P2.5/5`（A/B 成对，A=P、B=Ps=2P；`pitch=2.5/5`、裸 `P8` 也收），位置参数 = <径节P> <齿数N> <有效长度L>，x 不允许。\n\
-                 不带参数则打开齿轮窗口。内齿轮（齿圈）目前只有 剖视图 + 端视图（模板只有这两个）；\
-                 剖视图不画齿圈外壁与剖面线，由用户/AI 按实际齿圈结构延伸。";
+    let usage = crate::i18n::t("cmd.gear.usage");
     let toks: Vec<&str> = raw.split_whitespace().collect();
     if toks.is_empty() {
-        return Err(usage.into());
+        return Err(usage);
     }
     let mut p = GearParams { h: 0.0, ..GearParams::default() };
     let mut h_given = false;
@@ -2831,7 +2829,9 @@ pub fn parse_request(raw: &str) -> Result<GearRequest, String> {
                     toks.get(i).map(|s| s.to_string()).unwrap_or_default()
                 }
             };
-            v.trim().parse::<f64>().map_err(|_| format!("{} 需要数字，收到 `{}`", key, v))
+            v.trim()
+            .parse::<f64>()
+            .map_err(|_| crate::i18n::t_fmt("cmd.gear.err.num_expected", &[("key", key), ("v", &v)]))
         };
         match key.to_ascii_lowercase().as_str() {
             "m" | "模数" => {
@@ -2853,7 +2853,7 @@ pub fn parse_request(raw: &str) -> Result<GearRequest, String> {
                     p.m = text
                         .trim()
                         .parse::<f64>()
-                        .map_err(|_| format!("m 需要数字，收到 `{text}`"))?;
+                        .map_err(|_| crate::i18n::t_fmt("cmd.gear.err.m_expected", &[("text", &text)]))?;
                     m_given = true;
                 }
             }
@@ -2876,7 +2876,7 @@ pub fn parse_request(raw: &str) -> Result<GearRequest, String> {
                 } else if matches!(lv.as_str(), "gear" | "齿轮") {
                     spline_on = false;
                 } else {
-                    return Err(format!("模式无法识别：`{v}`（可用 gear|齿轮、spline|花键）。"));
+                    return Err(crate::i18n::t_fmt("cmd.gear.err.mode_unknown", &[("v", &v)]));
                 }
             }
             "std" | "standard" | "标准" | "标准号" | "体系" | "system" => {
@@ -2899,7 +2899,7 @@ pub fn parse_request(raw: &str) -> Result<GearRequest, String> {
             "dp" | "径节" | "径节制" => {
                 let v = num("dp", val)?;
                 if !(v.is_finite() && v > 0.0) {
-                    return Err(format!("径节 DP={} 必须是正数。", trim(v)));
+                    return Err(crate::i18n::t_fmt("cmd.gear.err.dp_positive", &[("v", &trim(v))]));
                 }
                 set_gear_std_once(&mut gear_std, GearStd::DP)?;
                 gear_dp = Some(v);
@@ -2919,9 +2919,9 @@ pub fn parse_request(raw: &str) -> Result<GearRequest, String> {
             }
             "p" | "pitch" | "径节P" => {
                 let raw = val.ok_or_else(|| {
-                    format!(
-                        "径节 P 需要 A/B 写法（{}），如 `p=2.5/5`。",
-                        crate::invol_spline::ANSI_PITCH_FORM_MSG
+                    crate::i18n::t_fmt(
+                        "cmd.gear.err.p_pitch_missing",
+                        &[("form", &crate::invol_spline::ansi_pitch_form_msg())],
                     )
                 })?;
                 sp_pitch = Some(crate::invol_spline::parse_ansi_pitch(raw)?);
@@ -2988,13 +2988,13 @@ pub fn parse_request(raw: &str) -> Result<GearRequest, String> {
                     .unwrap_or("")
                     .trim()
                     .parse::<f64>()
-                    .map_err(|_| format!("at 坐标需要 `x,y`，收到 `{}`", pair))?;
+                    .map_err(|_| crate::i18n::t_fmt("cmd.gear.err.at_pair", &[("pair", &pair)]))?;
                 let y = it
                     .next()
                     .unwrap_or("")
                     .trim()
                     .parse::<f64>()
-                    .map_err(|_| format!("at 坐标需要 `x,y`，收到 `{}`", pair))?;
+                    .map_err(|_| crate::i18n::t_fmt("cmd.gear.err.at_pair", &[("pair", &pair)]))?;
                 at = Some([x, y]);
             }
             "rot" | "角度" => rotation = num("rot", val)?,
@@ -3006,9 +3006,8 @@ pub fn parse_request(raw: &str) -> Result<GearRequest, String> {
                         toks.get(i).map(|s| s.to_string()).unwrap_or_default()
                     }
                 };
-                p.kind = GearKind::parse(&v).ok_or_else(|| {
-                    format!("种类无法识别：`{}`。可用 internal|内齿轮（花键模式下 = 内花键）、external|外齿轮。", v)
-                })?;
+                p.kind = GearKind::parse(&v)
+                    .ok_or_else(|| crate::i18n::t_fmt("cmd.gear.err.kind_unknown", &[("v", &v)]))?;
             }
             other => {
                 // `α25` / `alpha25` 这类紧凑写法（压力角；`α=25`/`alpha=25` 走上面的匹配臂）
@@ -3021,7 +3020,7 @@ pub fn parse_request(raw: &str) -> Result<GearRequest, String> {
                     if !rest.is_empty() {
                         p.alpha_deg = rest
                             .parse::<f64>()
-                            .map_err(|_| format!("alpha 需要数字，收到 `{}`", other))?;
+                            .map_err(|_| crate::i18n::t_fmt("cmd.gear.err.alpha_expected", &[("v", &other)]))?;
                         i += 1;
                         continue;
                     }
@@ -3056,9 +3055,9 @@ pub fn parse_request(raw: &str) -> Result<GearRequest, String> {
                     if !rest.is_empty() {
                         let v: f64 = rest
                             .parse()
-                            .map_err(|_| format!("径节 DP 需要数字，收到 `{other}`"))?;
+                            .map_err(|_| crate::i18n::t_fmt("cmd.gear.err.dp_expected", &[("v", &other)]))?;
                         if !(v.is_finite() && v > 0.0) {
-                            return Err(format!("径节 DP={} 必须是正数。", trim(v)));
+                            return Err(crate::i18n::t_fmt("cmd.gear.err.dp_positive", &[("v", &trim(v))]));
                         }
                         set_gear_std_once(&mut gear_std, GearStd::DP)?;
                         gear_dp = Some(v);
@@ -3089,9 +3088,9 @@ pub fn parse_request(raw: &str) -> Result<GearRequest, String> {
                     {
                         let v: f64 = rest
                             .parse()
-                            .map_err(|_| format!("公称直径 A 需要数字，收到 `{other}`"))?;
+                            .map_err(|_| crate::i18n::t_fmt("cmd.gear.err.a_expected", &[("v", &other)]))?;
                         if !(v.is_finite() && v > 0.0) {
-                            return Err(format!("公称直径 A={} 必须是正数。", trim(v)));
+                            return Err(crate::i18n::t_fmt("cmd.gear.err.a_positive", &[("v", &trim(v))]));
                         }
                         sp_d_b = Some(v);
                         i += 1;
@@ -3100,9 +3099,17 @@ pub fn parse_request(raw: &str) -> Result<GearRequest, String> {
                 }
                 let v = other
                     .parse::<f64>()
-                    .map_err(|_| format!("无法识别的参数 `{}`。\n{}", other, usage))?;
+                    .map_err(|_| {
+                    crate::i18n::t_fmt(
+                        "cmd.gear.err.unknown_param",
+                        &[("arg", other), ("usage", &usage)],
+                    )
+                })?;
                 if positional >= 3 {
-                    return Err(format!("多余的参数 `{}`。\n{}", other, usage));
+                    return Err(crate::i18n::t_fmt(
+                    "cmd.gear.err.extra_param",
+                    &[("arg", other), ("usage", &usage)],
+                ));
                 }
                 // 位置参数缓存：语义按体系在后文回填（M = [m,z,h]，DP = [z,h]）。
                 pos_vals.push(v);
@@ -3112,7 +3119,10 @@ pub fn parse_request(raw: &str) -> Result<GearRequest, String> {
         i += 1;
     }
     if positional < 2 && (raw.contains("m=") || raw.contains("z=")) == false && toks.len() < 2 {
-        return Err(format!("至少要给模数 m 和齿数 z（例如 `OCSMGEAR 2 40 20`）。\n{}", usage));
+        return Err(crate::i18n::t_fmt(
+                "cmd.gear.err.need_m_z",
+                &[("usage", &usage)],
+            ));
     }
     // ── 同一行两个体系 → 报错（体系只能写一个）；随后按体系回填位置参数 ──
     let any_gear_id = gear_std.is_some() || gear_dp.is_some();
@@ -3154,10 +3164,9 @@ pub fn parse_request(raw: &str) -> Result<GearRequest, String> {
         let std = sp_std.unwrap_or_else(|| default_spline_std(&sp_profile));
         // 径节 P/Ps 只属 ANSI B92.1：GB/DIN/NF 收到 P/DP/pitch → 明确拒绝（不静默丢参）。
         if sp_pitch.is_some() && std != crate::invol_spline::SplineStd::ANSI {
-            return Err(format!(
-                "{} 体系：{}。",
-                std.code(),
-                crate::invol_spline::PITCH_ONLY_ANSI_MSG
+            return Err(crate::i18n::t_fmt(
+                "cmd.gear.err.system_pitch",
+                &[("code", std.code()), ("msg", &crate::invol_spline::pitch_only_ansi_msg())],
             ));
         }
         // ANSI：`P8`/`pitch=8` 优先；否则位置参数第 1 个就是径节 P（与 m 槽位同义）。
@@ -3202,34 +3211,26 @@ pub fn parse_request(raw: &str) -> Result<GearRequest, String> {
             || sp_cf.is_some()
             || sp_pitch.is_some()
         {
-            return Err(
-                "齿轮模式不认花键参数（齿廓/hf/ρf/cf/径节 P）；要用花键请在窗口勾选「花键模式」（命令行加 `花键`；径节制齿轮写 `DP…`）。"
-                    .to_string(),
-            );
+            return Err(crate::i18n::t("cmd.gear.err.spline_params_in_gear"));
         }
         // 齿轮体系落地：DP → **位置参数 = [z, h]**（DP 值走 `DP8`/`dp=8`），m = 25.4/DP；
         // M → 位置参数 = [m, z, h]（与旧行为一致）。
         let is_dp = gear_std == Some(GearStd::DP) || gear_dp.is_some();
         if is_dp {
             if gear_std == Some(GearStd::M) {
-                return Err(M_DP_CONFLICT_MSG.to_string());
+                return Err(m_dp_conflict_msg());
             }
-            let dp = gear_dp.ok_or_else(|| {
-                "径节制 DP：缺径节值（写法 `DP8` 或 `dp=8`）。".to_string()
-            })?;
+            let dp = gear_dp.ok_or_else(|| crate::i18n::t("cmd.gear.err.dp_missing_cli"))?;
             if !(dp.is_finite() && dp > 0.0) {
-                return Err(format!("径节 DP={} 必须是正数。", trim(dp)));
+                return Err(crate::i18n::t_fmt("cmd.gear.err.dp_positive", &[("v", &trim(dp))]));
             }
             if m_given {
-                return Err(
-                    "DP 体系用径节 DP 定模数（m = 25.4/DP），不要再给 m。".to_string(),
-                );
+                return Err(crate::i18n::t("cmd.gear.err.no_m_in_dp"));
             }
             if pos_vals.len() > 2 {
-                return Err(format!(
-                    "径节制位置参数最多 2 个（<齿数z> <齿宽h>），多给了 {} 个。\n{}",
-                    pos_vals.len() - 2,
-                    usage
+                return Err(crate::i18n::t_fmt(
+                    "cmd.gear.err.dp_pos_count",
+                    &[("n", &(pos_vals.len() - 2).to_string()), ("usage", &usage)],
                 ));
             }
             if let Some(v) = pos_vals.first() {
@@ -3316,7 +3317,7 @@ pub fn params_from_query(query: &str) -> Result<(GearParams, GearView, f64), Str
     let opt_f = |k: &str| get(k).and_then(|v| v.trim().parse::<f64>().ok());
     let kind = match get("kind") {
         Some(v) => GearKind::parse(&v)
-            .ok_or_else(|| format!("kind 无法识别：`{}`（可用 internal|内齿轮、external|外齿轮）。", v))?,
+            .ok_or_else(|| crate::i18n::t_fmt("cmd.gear.err.kind_unknown_query", &[("v", &v)]))?,
         None => GearKind::External,
     };
     let view = GearView::parse(&get("view").unwrap_or_else(|| "section".into()))?;
@@ -3344,10 +3345,9 @@ pub fn params_from_query(query: &str) -> Result<(GearParams, GearView, f64), Str
         if std != crate::invol_spline::SplineStd::ANSI
             && get("p").or_else(|| get("pitch")).is_some_and(|v| !v.trim().is_empty())
         {
-            return Err(format!(
-                "{} 体系：{}。",
-                std.code(),
-                crate::invol_spline::PITCH_ONLY_ANSI_MSG
+            return Err(crate::i18n::t_fmt(
+                "cmd.gear.err.system_pitch",
+                &[("code", std.code()), ("msg", &crate::invol_spline::pitch_only_ansi_msg())],
             ));
         }
         let m_or_p = if std == crate::invol_spline::SplineStd::ANSI {
@@ -3405,7 +3405,7 @@ pub fn params_from_query(query: &str) -> Result<(GearParams, GearView, f64), Str
         let dp_in = opt_f("dp").or_else(|| opt_f("径节"));
         if dp_in.is_some() {
             if std_raw.is_some() && gear_std == GearStd::M {
-                return Err(M_DP_CONFLICT_MSG.to_string());
+                return Err(m_dp_conflict_msg());
             }
             gear_std = GearStd::DP;
         }
@@ -3417,27 +3417,18 @@ pub fn params_from_query(query: &str) -> Result<(GearParams, GearView, f64), Str
             || get("rho").is_some()
             || get("cf").is_some()
         {
-            return Err(
-                "齿轮模式不认花键参数（齿廓/hf/ρf/cf）；要用花键请勾选「花键模式」。".to_string(),
-            );
+            return Err(crate::i18n::t("cmd.gear.err.spline_params_in_gear_query"));
         }
         if get("p").or_else(|| get("pitch")).is_some_and(|v| !v.trim().is_empty()) {
-            return Err(
-                "齿轮模式不认径节 P（径节制齿轮写 `std=DP&dp=8`；花键径节只属 ANSI B92.1 花键模式）。"
-                    .to_string(),
-            );
+            return Err(crate::i18n::t("cmd.gear.err.p_in_gear"));
         }
         let (m, dp_value) = if gear_std == GearStd::DP {
-            let dp = dp_in.ok_or_else(|| {
-                "径节制 DP：缺径节值（写法 `std=DP&dp=8`）。".to_string()
-            })?;
+            let dp = dp_in.ok_or_else(|| crate::i18n::t("cmd.gear.err.dp_missing_query"))?;
             if !(dp.is_finite() && dp > 0.0) {
-                return Err(format!("径节 DP={} 必须是正数。", trim(dp)));
+                return Err(crate::i18n::t_fmt("cmd.gear.err.dp_positive", &[("v", &trim(dp))]));
             }
             if get("m").is_some() {
-                return Err(
-                    "DP 体系用径节 DP 定模数（m = 25.4/DP），不要再给 m。".to_string(),
-                );
+                return Err(crate::i18n::t("cmd.gear.err.no_m_in_dp"));
             }
             (m_from_dp(dp), Some(dp))
         } else {
@@ -3470,17 +3461,12 @@ pub fn params_from_query(query: &str) -> Result<(GearParams, GearView, f64), Str
 /// 用户定案文案：**模数制齿轮不使用标准号与基准直径**（GB/T 3478.1 / DIN 5480 /
 /// NF E22-141 / ANSI B92.1 都是花键体系）。
 pub fn gear_mode_std_error() -> String {
-    "模数制齿轮不使用标准号与基准直径 —— 齿轮模式不认标准号（GB/T 3478.1 / DIN 5480-1 / \
-     NF E22-141 / ANSI B92.1 是**花键**体系）；要用花键请在窗口勾选「花键模式」\
-     （命令行加 `花键` 或 `mode=spline`）。"
-        .to_string()
+    crate::i18n::t("cmd.gear.err.std_mode")
 }
 
 /// 齿轮模式给 `d_B` 的报错（用户定案文案：模数制齿轮不使用标准号与基准直径）。
 pub fn gear_mode_db_error() -> String {
-    "模数制齿轮不使用标准号与基准直径 —— 齿轮模式不认基准直径 d_B（d_B 是 DIN 5480 / \
-     NF E22-141 花键体系的概念）；要用花键请在窗口勾选「花键模式」（命令行加 `花键` 或 `mode=spline`）。"
-        .to_string()
+    crate::i18n::t("cmd.gear.err.db_mode")
 }
 
 /// `/api/gear_info`：派生尺寸 + 提示（GUI 信息行用）。花键模式走 [`spline_info_json`]。
@@ -3814,40 +3800,40 @@ fn report_row(
 /// 派生几何 → 数据来源与校验（恒等式残差）。纯数据、无 IO。
 fn gear_report(p: &GearParams) -> String {
     let mut md = String::new();
-    md.push_str(&format!(
-        "# {} {} 计算书\n\n",
-        p.kind.label(),
-        if p.std == GearStd::DP {
-            "（径节制 DP）"
-        } else {
-            "（模数制 M）"
-        }
+    md.push_str(&crate::i18n::t_fmt(
+        "cmd.gear.report.title",
+        &[
+            ("kind", &kind_label(p.kind)),
+            ("std", &crate::i18n::t(if p.std == GearStd::DP {
+                "cmd.gear.report.std_dp"
+            } else {
+                "cmd.gear.report.std_m"
+            })),
+        ],
     ));
-    md.push_str("- 单位口径：长度 mm，角度 °；DP 体系 m = 25.4/DP。\n\n");
+    md.push_str(&crate::i18n::t("cmd.gear.report.units"));
 
-    md.push_str("## 1. 输入参数\n\n| 输入 | 原值 | 说明 |\n|---|---|---|\n");
+    md.push_str(&crate::i18n::t("cmd.gear.report.h_inputs"));
     if p.std == GearStd::DP {
-        md.push_str(&format!(
-            "| 径节 DP | {} | m = 25.4/DP |\n",
-            trim(p.dp.unwrap_or(0.0))
+        md.push_str(&crate::i18n::t_fmt(
+            "cmd.gear.report.row_dp",
+            &[("v", &trim(p.dp.unwrap_or(0.0)))],
         ));
-        md.push_str(&format!("| 模数 m（换算） | {} mm | 25.4/DP |\n", trim(p.m)));
+        md.push_str(&crate::i18n::t_fmt("cmd.gear.report.row_m_conv", &[("v", &trim(p.m))]));
     } else {
-        md.push_str(&format!("| 模数 m | {} mm | 模数制 |\n", trim(p.m)));
+        md.push_str(&crate::i18n::t_fmt("cmd.gear.report.row_m", &[("v", &trim(p.m))]));
     }
-    md.push_str(&format!("| 齿数 z | {} | — |\n", p.z));
-    md.push_str(&format!("| 压力角 αn | {}° | — |\n", trim(p.alpha_deg)));
-    md.push_str(&format!(
-        "| 齿顶高/顶隙/变位系数 | ha*={}、c*={}、x={} | — |\n",
-        trim(p.ha),
-        trim(p.c),
-        trim(p.x)
+    md.push_str(&crate::i18n::t_fmt("cmd.gear.report.row_z", &[("v", &p.z.to_string())]));
+    md.push_str(&crate::i18n::t_fmt("cmd.gear.report.row_alpha", &[("v", &trim(p.alpha_deg))]));
+    md.push_str(&crate::i18n::t_fmt(
+        "cmd.gear.report.row_hcx",
+        &[("ha", &trim(p.ha)), ("c", &trim(p.c)), ("x", &trim(p.x))],
     ));
-    md.push_str(&format!("| 螺旋角 β | {}° | — |\n", trim(p.beta_deg)));
-    md.push_str(&format!("| 厚度 h | {} mm | — |\n\n", trim(p.h)));
+    md.push_str(&crate::i18n::t_fmt("cmd.gear.report.row_beta", &[("v", &trim(p.beta_deg))]));
+    md.push_str(&crate::i18n::t_fmt("cmd.gear.report.row_h", &[("v", &trim(p.h))]));
 
-    md.push_str("## 2. 逐步计算\n\n");
-    md.push_str("| # | 步骤 | 公式（符号含义） | 代入 | 结果 | 依据来源 |\n");
+    md.push_str(&crate::i18n::t("cmd.gear.report.h_steps"));
+    md.push_str(&crate::i18n::t("cmd.gear.report.rows_head"));
     md.push_str("|---|---|---|---|---|---|\n");
     let mut n = 0usize;
     let mut steps = String::new();
@@ -3857,54 +3843,66 @@ fn gear_report(p: &GearParams) -> String {
         };
         if p.std == GearStd::DP {
             s(
-                "径节换算",
-                "m = 25.4 / DP（DP 径节，1/in）",
+                &crate::i18n::t("cmd.gear.report.step.dp"),
+                &crate::i18n::t("cmd.gear.report.formula.dp"),
                 &format!("25.4 / {}", trim(p.dp.unwrap_or(0.0))),
                 &format!("{} mm", trim(p.m)),
-                "径节制定义（与 OCSMGEAR 同口径）",
+                &crate::i18n::t("cmd.gear.report.source.dp"),
             );
         }
         if p.is_helical() {
             s(
-                "端面换算",
-                "mt = m / cosβ；αt = atan(tanαn / cosβ)",
-                &format!("m={}，β={}°，αn={}°", trim(p.m), trim(p.beta_deg), trim(p.alpha_deg)),
-                &format!("mt={} mm，αt={}°", trim(p.mt()), trim(p.alpha_t().to_degrees())),
-                "斜齿轮端面几何（与 gear.rs 同式）",
+                &crate::i18n::t("cmd.gear.report.step.face"),
+                &crate::i18n::t("cmd.gear.report.formula.face"),
+                &crate::i18n::t_fmt(
+                    "cmd.gear.report.subst.face",
+                    &[("m", &trim(p.m)), ("beta", &trim(p.beta_deg)), ("alpha", &trim(p.alpha_deg))],
+                ),
+                &crate::i18n::t_fmt(
+                    "cmd.gear.report.result.face",
+                    &[("mt", &trim(p.mt())), ("at", &trim(p.alpha_t().to_degrees()))],
+                ),
+                &crate::i18n::t("cmd.gear.report.source.face"),
             );
         } else {
             s(
-                "端面参数",
-                "直齿：mt = m；αt = αn",
-                &format!("β=0，m={}，αn={}°", trim(p.m), trim(p.alpha_deg)),
-                &format!("mt={} mm，αt={}°", trim(p.mt()), trim(p.alpha_t().to_degrees())),
-                "直齿退化为法向参数",
+                &crate::i18n::t("cmd.gear.report.step.face_spur"),
+                &crate::i18n::t("cmd.gear.report.formula.face_spur"),
+                &crate::i18n::t_fmt(
+                    "cmd.gear.report.subst.face_spur",
+                    &[("m", &trim(p.m)), ("alpha", &trim(p.alpha_deg))],
+                ),
+                &crate::i18n::t_fmt(
+                    "cmd.gear.report.result.face",
+                    &[("mt", &trim(p.mt())), ("at", &trim(p.alpha_t().to_degrees()))],
+                ),
+                &crate::i18n::t("cmd.gear.report.source.face_spur"),
             );
         }
         s(
-            "分度圆直径",
-            "d = mt·z（mt 端面模数，z 齿数）",
+            &crate::i18n::t("cmd.gear.report.step.d"),
+            &crate::i18n::t("cmd.gear.report.formula.d"),
             &format!("{} × {}", trim(p.mt()), p.z),
             &format!("{} mm", trim(p.d())),
-            "齿轮几何（与 OCSMGEAR 同式）",
+            &crate::i18n::t("cmd.gear.report.source.geom"),
         );
         s(
-            "基圆直径",
-            "db = d·cosαt",
+            &crate::i18n::t("cmd.gear.report.step.db"),
+            &crate::i18n::t("cmd.gear.report.formula.db"),
             &format!("{} × cos {}°", trim(p.d()), trim(p.alpha_t().to_degrees())),
             &format!("{} mm", trim(p.db())),
-            "渐开线基圆定义",
+            &crate::i18n::t("cmd.gear.report.source.db"),
         );
         s(
-            "齿顶高",
-            "ha = m·(ha* + x)",
+            &crate::i18n::t("cmd.gear.report.step.ha"),
+            &crate::i18n::t("cmd.gear.report.formula.ha"),
             &format!("{} × ({} + {})", trim(p.m), trim(p.ha), trim(p.x)),
             &format!("{} mm", trim(p.ha_height())),
-            "齿轮齿顶高公式",
+            &crate::i18n::t("cmd.gear.report.source.ha"),
         );
         s(
-            "齿根高",
-            "hf = m·(ha* + c* − x)",
+            &crate::i18n::t("cmd.gear.report.step.hf"),
+            &crate::i18n::t("cmd.gear.report.formula.hf"),
             &format!(
                 "{} × ({} + {} − {})",
                 trim(p.m),
@@ -3913,15 +3911,15 @@ fn gear_report(p: &GearParams) -> String {
                 trim(p.x)
             ),
             &format!("{} mm", trim(p.hf_height())),
-            "齿轮齿根高公式",
+            &crate::i18n::t("cmd.gear.report.source.hf"),
         );
         s(
-            "齿顶圆直径",
-            if p.kind.is_internal() {
-                "da = d − 2ha（内齿轮齿顶朝圆心）"
+            &crate::i18n::t("cmd.gear.report.step.da"),
+            &crate::i18n::t(if p.kind.is_internal() {
+                "cmd.gear.report.formula.da_int"
             } else {
-                "da = d + 2ha"
-            },
+                "cmd.gear.report.formula.da_ext"
+            }),
             &format!(
                 "{} {} 2×{}",
                 trim(p.d()),
@@ -3929,15 +3927,15 @@ fn gear_report(p: &GearParams) -> String {
                 trim(p.ha_height())
             ),
             &format!("{} mm", trim(p.da())),
-            "齿轮几何（与 OCSMGEAR 同式）",
+            &crate::i18n::t("cmd.gear.report.source.geom"),
         );
         s(
-            "齿根圆直径",
-            if p.kind.is_internal() {
-                "df = d + 2hf（内齿轮齿根在外）"
+            &crate::i18n::t("cmd.gear.report.step.df"),
+            &crate::i18n::t(if p.kind.is_internal() {
+                "cmd.gear.report.formula.df_int"
             } else {
-                "df = d − 2hf"
-            },
+                "cmd.gear.report.formula.df_ext"
+            }),
             &format!(
                 "{} {} 2×{}",
                 trim(p.d()),
@@ -3945,11 +3943,11 @@ fn gear_report(p: &GearParams) -> String {
                 trim(p.hf_height())
             ),
             &format!("{} mm", trim(p.df())),
-            "齿轮几何（与 OCSMGEAR 同式）",
+            &crate::i18n::t("cmd.gear.report.source.geom"),
         );
         s(
-            "端面分度圆齿厚",
-            "st = πm/(2cosβ) + 2x·m·tanαn",
+            &crate::i18n::t("cmd.gear.report.step.st"),
+            &crate::i18n::t("cmd.gear.report.formula.st"),
             &format!(
                 "π×{}/(2cos{}°) + 2×{}×{}×tan{}°",
                 trim(p.m),
@@ -3959,64 +3957,61 @@ fn gear_report(p: &GearParams) -> String {
                 trim(p.alpha_deg)
             ),
             &format!("{} mm", trim(p.st())),
-            "齿轮齿厚公式（与 OCSMGEAR 同式）",
+            &crate::i18n::t("cmd.gear.report.source.st"),
         );
         s(
-            "齿根圆角半径",
-            "ρ = 0.38·m",
+            &crate::i18n::t("cmd.gear.report.step.rho"),
+            &crate::i18n::t("cmd.gear.report.formula.rho"),
             &format!("0.38 × {}", trim(p.m)),
             &format!("{} mm", trim(p.rho())),
-            "OCSMGEAR 齿根圆角口径（模板反解）",
+            &crate::i18n::t("cmd.gear.report.source.rho"),
         );
         s(
-            "轴向倒角",
-            "C = round(0.6·m)",
+            &crate::i18n::t("cmd.gear.report.step.chamfer"),
+            &crate::i18n::t("cmd.gear.report.formula.chamfer"),
             &format!("round(0.6 × {})", trim(p.m)),
             &format!("{} mm", trim(p.chamfer())),
-            "OCSMGEAR 倒角口径（模板反解）",
+            &crate::i18n::t("cmd.gear.report.source.chamfer"),
         );
     }
     md.push_str(&steps);
     md.push('\n');
 
-    md.push_str("## 3. 派生几何\n\n| 量 | 值 |\n|---|---|\n");
-    md.push_str(&format!("| 分度圆 d | {} mm |\n", trim(p.d())));
-    md.push_str(&format!("| 基圆 db | {} mm |\n", trim(p.db())));
-    md.push_str(&format!("| 齿顶圆 da | {} mm |\n", trim(p.da())));
-    md.push_str(&format!("| 齿根圆 df | {} mm |\n", trim(p.df())));
-    md.push_str(&format!("| 端面模数 mt | {} mm |\n", trim(p.mt())));
-    md.push_str(&format!(
-        "| 端面压力角 αt | {}° |\n",
-        trim(p.alpha_t().to_degrees())
+    md.push_str(&crate::i18n::t("cmd.gear.report.h_derived"));
+    md.push_str(&crate::i18n::t_fmt("cmd.gear.report.row_d", &[("v", &trim(p.d()))]));
+    md.push_str(&crate::i18n::t_fmt("cmd.gear.report.row_db", &[("v", &trim(p.db()))]));
+    md.push_str(&crate::i18n::t_fmt("cmd.gear.report.row_da", &[("v", &trim(p.da()))]));
+    md.push_str(&crate::i18n::t_fmt("cmd.gear.report.row_df", &[("v", &trim(p.df()))]));
+    md.push_str(&crate::i18n::t_fmt("cmd.gear.report.row_mt", &[("v", &trim(p.mt()))]));
+    md.push_str(&crate::i18n::t_fmt(
+        "cmd.gear.report.row_alpha_t",
+        &[("v", &trim(p.alpha_t().to_degrees()))],
     ));
-    md.push_str(&format!(
-        "| 齿距角 | {}° |\n",
-        trim(p.pitch_angle().to_degrees())
+    md.push_str(&crate::i18n::t_fmt(
+        "cmd.gear.report.row_pitch_angle",
+        &[("v", &trim(p.pitch_angle().to_degrees()))],
     ));
     md.push('\n');
 
-    md.push_str("## 4. 检验尺寸\n\n");
-    md.push_str("齿轮模式无入库检验尺寸表（检验表属 DIN 5480-2 花键体系）。\n\n");
+    md.push_str(&crate::i18n::t("cmd.gear.report.h_checks"));
+    md.push_str(&crate::i18n::t("cmd.gear.report.no_checks"));
 
-    md.push_str("## 5. 数据来源与校验\n\n");
-    md.push_str(
-        "- 数据来源：OCSM 齿轮引擎（`gear.rs`），与 OCSMGEAR/GUI 同一套公式；未二次手算。\n",
-    );
+    md.push_str(&crate::i18n::t("cmd.gear.report.h_sources"));
+    md.push_str(&crate::i18n::t("cmd.gear.report.source_engine"));
     if p.std == GearStd::DP {
-        md.push_str(&format!(
-            "- 径节制：m = 25.4/DP = {}（原值 DP={}）；块名/规格按 DP 原值出。\n",
-            trim(p.m),
-            trim(p.dp.unwrap_or(0.0))
+        md.push_str(&crate::i18n::t_fmt(
+            "cmd.gear.report.source_dp",
+            &[("m", &trim(p.m)), ("dp", &trim(p.dp.unwrap_or(0.0)))],
         ));
     }
     let res_d = (p.d() - p.mt() * p.z as f64).abs();
     let res_db = (p.db() - p.d() * p.alpha_t().cos()).abs();
-    md.push_str(&format!(
-        "- 恒等式自检（定义式，残差应 0）：|d−mt·z|={:.2e}、|db−d·cosαt|={:.2e}；违例 0。\n",
-        res_d, res_db
+    md.push_str(&crate::i18n::t_fmt(
+        "cmd.gear.report.identity",
+        &[("r1", &format!("{:.2e}", res_d)), ("r2", &format!("{:.2e}", res_db))],
     ));
     for note in p.notes() {
-        md.push_str(&format!("- 提示：{note}\n"));
+        md.push_str(&crate::i18n::t_fmt("cmd.gear.report.note_line", &[("note", &note)]));
     }
     md
 }
@@ -5476,15 +5471,15 @@ mod tests {
             s.z = Some(20);
         }
         let e = p.spline_engine().unwrap_err();
-        assert_eq!(e, crate::invol_spline::GB_D_B_MSG, "{e}");
+        assert_eq!(e, crate::invol_spline::gb_d_b_msg(), "{e}");
         // GB + d_B（查询串）
         let e = params_from_query("mode=spline&std=GB&db=40&m=3&z=20").unwrap_err();
-        assert_eq!(e, crate::invol_spline::GB_D_B_MSG, "{e}");
+        assert_eq!(e, crate::invol_spline::gb_d_b_msg(), "{e}");
         // GB + 非零 x：CLI/查询串都走统一报错（GUI 花键模式下 x 已锁 0）。
         let e = parse_request("花键 GB30P 3 20 x=0.2 h=30").unwrap_err();
-        assert!(e.contains(crate::invol_spline::GB_X_MSG), "{e}");
+        assert!(e.contains(&crate::invol_spline::gb_x_msg()), "{e}");
         let e = params_from_query("mode=spline&std=GB&m=3&z=20&x=0.2&h=30").unwrap_err();
-        assert!(e.contains(crate::invol_spline::GB_X_MSG), "{e}");
+        assert!(e.contains(&crate::invol_spline::gb_x_msg()), "{e}");
         // GB + x=0：正常解析（x 省略与 0 等价）。
         let r = parse_request("花键 GB30P 3 20 x=0 h=30").unwrap();
         assert!(r.params.spline_engine().is_ok(), "GB x=0 应可用");
@@ -5507,7 +5502,7 @@ mod tests {
         assert!((ea.d() - 20.0 * 25.4 / 3.0).abs() < 1e-12, "D=N/P×25.4（mm）");
         assert!(oa.is_none());
         let e = params_from_query("mode=spline&std=ANSI&db=40&m=3&z=20").unwrap_err();
-        assert_eq!(e, crate::invol_spline::ANSI_D_B_MSG, "{e}");
+        assert_eq!(e, crate::invol_spline::ansi_d_b_msg(), "{e}");
         // ANSI 径节入口：`p=5/10`（A/B）解析为 P=5；系列外 `p=2` 只带一层前缀并列 17 项 A/B。
         let (p, _, _) = params_from_query("mode=spline&std=ANSI&p=5/10&z=20").unwrap();
         let ea = p.spline_engine().unwrap().0;
@@ -5539,7 +5534,7 @@ mod tests {
         }
         // A 槽位在 GB 下报统一文案；M/DP 是齿轮体系，花键模式直接报错。
         let e = params_from_query("mode=spline&std=GB&a=66&m=3&z=20").unwrap_err();
-        assert_eq!(e, crate::invol_spline::GB_D_B_MSG, "{e}");
+        assert_eq!(e, crate::invol_spline::gb_d_b_msg(), "{e}");
         for bad in ["M", "DP"] {
             let e = params_from_query(&format!("mode=spline&std={bad}&a=66&m=3&z=20")).unwrap_err();
             assert!(e.contains("齿轮体系"), "std={bad}：{e}");
@@ -5990,7 +5985,7 @@ mod tests {
         );
         // GB + d_B（花键模式）→ 统一文案
         let e = parse_request("花键 GB30R db=40 3 20 h=30").unwrap_err();
-        assert_eq!(e, crate::invol_spline::GB_D_B_MSG, "{e}");
+        assert_eq!(e, crate::invol_spline::gb_d_b_msg(), "{e}");
         // 体系不支持的模数：命令行侧也明确报错并指出来源表（GUI 侧同一入口）。
         let e = parse_request("花键 GB30R 0.7 20 h=30").unwrap_err();
         assert!(e.contains("表 2") && e.contains("0.75"), "{e}");
@@ -6172,9 +6167,9 @@ mod tests {
             .contains("齿轮模式不认标准号"));
         // 花键体系必须显式：只给 d_B 不再反推 DIN（默认 GB → GB_D_B_MSG）。
         let e = parse_request("花键 db=40 m=2 z=18").unwrap_err();
-        assert_eq!(e, crate::invol_spline::GB_D_B_MSG, "{e}");
+        assert_eq!(e, crate::invol_spline::gb_d_b_msg(), "{e}");
         let e = params_from_query("mode=spline&db=40&m=2&z=18").unwrap_err();
-        assert_eq!(e, crate::invol_spline::GB_D_B_MSG, "{e}");
+        assert_eq!(e, crate::invol_spline::gb_d_b_msg(), "{e}");
         // 显式 DIN 才走查表。
         let r = parse_request("花键 std=DIN db=40 m=2").unwrap();
         assert_eq!(r.params.spline.as_ref().unwrap().std, crate::invol_spline::SplineStd::DIN);
@@ -6725,5 +6720,64 @@ mod tests {
         // 内花键无侧视/简化正视图（有意，用户定案：同内齿轮）。
         assert!(generate(&si, GearView::Side, 1.0).is_err());
         assert!(generate(&si, GearView::Simplified, 1.0).is_err());
+    }
+
+    /// 族③a：齿轮命令输出/报错/计算书 —— zh/en 双语断言 + 关键数据原样。
+    #[test]
+    fn gear_messages_switch_language_keeping_data() {
+        let _g = crate::global_state_test_lock();
+        crate::i18n::clear_missing_keys();
+
+        // ── zh ──
+        crate::i18n::set_lang(crate::i18n::Lang::Zh);
+        let p = GearParams { m: 0.0, ..GearParams::default() };
+        let e = p.validate().unwrap_err();
+        assert!(e.contains("模数 m 必须是正数"), "{e}");
+        let p = GearParams { beta_deg: 50.0, ..GearParams::default() };
+        let e = p.validate().unwrap_err();
+        assert!(e.contains("螺旋角 β 超出范围") && e.contains("50"), "{e}");
+        let e = parse_request("mode=nope").unwrap_err();
+        assert!(e.contains("模式无法识别") && e.contains("nope"), "{e}");
+        let e = parse_request("kind=nope").unwrap_err();
+        assert!(e.contains("种类无法识别") && e.contains("nope"), "{e}");
+        let e = parse_request("1 40 20 at x,y").unwrap_err();
+        assert!(e.contains("at 坐标需要") && e.contains("x,y"), "{e}");
+        let p = GearParams { z: 5, ..GearParams::default() };
+        assert!(p.notes().iter().any(|n| n.contains("z=5") && n.contains("根切")), "{:?}", p.notes());
+        let p = GearParams { beta_deg: 30.0, ..GearParams::default() };
+        assert!(p.notes().iter().any(|n| n.contains("斜齿轮") && n.contains("右旋") && n.contains("30")), "{:?}", p.notes());
+        let md = build_report(&GearParams::default()).unwrap();
+        assert!(md.contains("# 外齿轮 （模数制 M） 计算书"), "{md}");
+        assert!(md.contains("## 2. 逐步计算") && md.contains("| 分度圆 d | 80 mm |"), "{md}");
+        assert!(gear_mode_db_error().contains("模数制齿轮不使用标准号与基准直径"), "{}", gear_mode_db_error());
+
+        // ── en：同一批调用，数据原样 ──
+        crate::i18n::set_lang(crate::i18n::Lang::En);
+        let p = GearParams { m: 0.0, ..GearParams::default() };
+        let e = p.validate().unwrap_err();
+        assert!(e.contains("Module m must be positive"), "{e}");
+        let p = GearParams { beta_deg: 50.0, ..GearParams::default() };
+        let e = p.validate().unwrap_err();
+        assert!(e.contains("Helix angle β out of range") && e.contains("50"), "{e}");
+        let e = parse_request("mode=nope").unwrap_err();
+        assert!(e.contains("Unrecognized mode") && e.contains("nope"), "{e}");
+        let e = parse_request("kind=nope").unwrap_err();
+        assert!(e.contains("Unrecognized kind") && e.contains("nope"), "{e}");
+        let e = parse_request("1 40 20 at x,y").unwrap_err();
+        assert!(e.contains("at coordinates must be") && e.contains("x,y"), "{e}");
+        let p = GearParams { z: 5, ..GearParams::default() };
+        assert!(p.notes().iter().any(|n| n.contains("z=5") && n.contains("undercut")), "{:?}", p.notes());
+        let p = GearParams { beta_deg: 30.0, ..GearParams::default() };
+        assert!(p.notes().iter().any(|n| n.contains("Helical gear") && n.contains("right-hand") && n.contains("30")), "{:?}", p.notes());
+        let md = build_report(&GearParams::default()).unwrap();
+        assert!(md.contains("# external gear (module M) computation report"), "{md}");
+        assert!(md.contains("## 2. Step-by-step calculation") && md.contains("| Pitch d | 80 mm |"), "{md}");
+        assert!(gear_mode_db_error().contains("Module-mode gears do not use a standard number or reference diameter"), "{}", gear_mode_db_error());
+        assert!(
+            crate::i18n::missing_keys().is_empty(),
+            "缺词条：{:?}",
+            crate::i18n::missing_keys()
+        );
+        crate::i18n::set_lang_auto();
     }
 }

@@ -146,10 +146,12 @@ pub trait DetailElement: Sync {
             .filter(|key| *key != "b1")
             .collect();
         if !extra.is_empty() {
-            return Err(format!(
-                "{}：不认识参数 {}（本族只支持 b1）",
-                self.name(),
-                extra.join("、")
+            return Err(crate::i18n::t_fmt(
+                "cmd.detail.err.unknown_param_b1",
+                &[
+                    ("name", &display_name(self.name())),
+                    ("list", &extra.join(&crate::i18n::t("cmd.detail.sep.list"))),
+                ],
             ));
         }
         self.generate(d, params.b1(), view)
@@ -173,6 +175,18 @@ pub static ELEMENTS: &[&dyn DetailElement] = &[&GRIND_OD, &THREAD_RELIEF, &HUB_K
 /// 族 id → 要素定义。
 pub fn find(family: &str) -> Option<&'static dyn DetailElement> {
     ELEMENTS.iter().copied().find(|e| e.family() == family)
+}
+
+/// 报错/回执用的族显示名（随语言；catalog `cmd.detail.name.*`）。
+pub fn display_name(name: &str) -> String {
+    let key = match name {
+        "磨外圆" => "cmd.detail.name.grind_od",
+        "外螺纹退刀槽" => "cmd.detail.name.thread_relief",
+        "普通平键毂槽" => "cmd.detail.name.hub_keyway",
+        "矩形花键" => "cmd.detail.name.spline_rect",
+        _ => return name.to_string(),
+    };
+    crate::i18n::t(key)
 }
 
 /// 是否结构要素族（标准件/结构要素的分派判据）。
@@ -202,12 +216,16 @@ pub fn generate_params(
     params: &DetailParams,
     view: &str,
 ) -> Result<GenPart, String> {
-    let element = find(family).ok_or_else(|| format!("结构要素族 {family} 尚未实现"))?;
+    let element = find(family)
+        .ok_or_else(|| crate::i18n::t_fmt("cmd.detail.err.family_unknown", &[("family", family)]))?;
     if !element.views().contains(&view) {
-        return Err(format!(
-            "{} 只有视图 {}（收到 {view}）",
-            element.name(),
-            element.views().join("/")
+        return Err(crate::i18n::t_fmt(
+            "cmd.detail.err.view_only",
+            &[
+                ("name", &display_name(element.name())),
+                ("list", &element.views().join("/")),
+                ("view", view),
+            ],
         ));
     }
     element.generate_params(d, params, view)
@@ -286,9 +304,9 @@ pub fn preview_svg(query: &str) -> Option<Result<String, String>> {
         // `spec`（规格代号）可以替代 `d`（花键：d 由 N×d×D×B 派生）。
         let spec = get("spec").filter(|s| !s.trim().is_empty());
         let d: f64 = match get("d") {
-            Some(text) => text.parse().map_err(|_| "d 不是数字".to_string())?,
+            Some(text) => text.parse().map_err(|_| crate::i18n::t("cmd.detail.err.d_not_number"))?,
             None if spec.is_some() => 0.0,
-            None => return Err("缺少参数 d（或 spec 规格代号）".to_string()),
+            None => return Err(crate::i18n::t("cmd.detail.err.missing_d")),
         };
         let view = get("view").unwrap_or_else(|| "main".to_string());
         let mut params = DetailParams::new();
@@ -303,7 +321,7 @@ pub fn preview_svg(query: &str) -> Option<Result<String, String>> {
             }
             let value: f64 = value
                 .parse()
-                .map_err(|_| format!("参数 {key} 不是数字"))?;
+                .map_err(|_| crate::i18n::t_fmt("cmd.detail.err.param_not_number", &[("key", key)]))?;
             params.insert(key, value);
         }
         let part = generate_params(element.family(), d, &params, &view)?;
@@ -473,12 +491,12 @@ impl GrooveBand {
 /// d → 所在档。`d ≤ 0` / 非有限数报错（表覆盖 d>0 全范围，不外推）。
 pub fn band_of(d: f64) -> Result<&'static GrooveBand, String> {
     if !d.is_finite() || d <= 0.0 {
-        return Err(format!("磨外圆：d 必须是正数（收到 {d}）"));
+        return Err(crate::i18n::t_fmt("cmd.detail.grind.err.d_positive", &[("d", &d.to_string())]));
     }
     GROOVE_BANDS
         .iter()
         .find(|band| band.contains(d))
-        .ok_or_else(|| format!("磨外圆：d={d} 不在数据表范围内"))
+        .ok_or_else(|| crate::i18n::t_fmt("cmd.detail.grind.err.d_out_of_table", &[("d", &d.to_string())]))
 }
 
 /// `d` + 可选 `b1` → 数据行。
@@ -491,10 +509,10 @@ pub fn row_for(d: f64, b1: Option<f64>) -> Result<&'static GrooveRow, String> {
         None => band
             .rows
             .last()
-            .ok_or_else(|| "磨外圆：数据表为空".to_string()),
+            .ok_or_else(|| crate::i18n::t("cmd.detail.grind.err.empty_table")),
         Some(b1) => {
             if !b1.is_finite() || b1 <= 0.0 {
-                return Err(format!("磨外圆：b1 必须是正数（收到 {b1}）"));
+                return Err(crate::i18n::t_fmt("cmd.detail.grind.err.b1_positive", &[("b1", &b1.to_string())]));
             }
             band.rows
                 .iter()
@@ -505,13 +523,15 @@ pub fn row_for(d: f64, b1: Option<f64>) -> Result<&'static GrooveRow, String> {
                         .iter()
                         .map(|row| trim(row.b1))
                         .collect::<Vec<_>>()
-                        .join("、");
-                    format!(
-                        "磨外圆：d={} 属于「{}」档，该档可选 b1 = {}（收到 {}）",
-                        trim(d),
-                        band.label,
-                        choices,
-                        trim(b1)
+                        .join(&crate::i18n::t("cmd.detail.sep.list"));
+                    crate::i18n::t_fmt(
+                        "cmd.detail.grind.err.b1_choice",
+                        &[
+                            ("d", &trim(d)),
+                            ("band", band.label),
+                            ("choices", &choices),
+                            ("got", &trim(b1)),
+                        ],
                     )
                 })
         }
@@ -751,7 +771,7 @@ impl ThreadReliefRow {
 /// 螺距 P → 表 2 行（1e-9 容差；表里没有就报错并列出可用 P，**不插值/不外推**）。
 pub(crate) fn thread_relief_row(p: f64) -> Result<&'static ThreadReliefRow, String> {
     if !p.is_finite() || p <= 0.0 {
-        return Err(format!("外螺纹退刀槽：螺距 P 必须是正数（收到 {p}）"));
+        return Err(crate::i18n::t_fmt("cmd.detail.thread.err.p_positive", &[("p", &p.to_string())]));
     }
     THREAD_RELIEF_ROWS
         .iter()
@@ -761,11 +781,10 @@ pub(crate) fn thread_relief_row(p: f64) -> Result<&'static ThreadReliefRow, Stri
                 .iter()
                 .map(|row| trim(row.p))
                 .collect::<Vec<_>>()
-                .join("、");
-            format!(
-                "外螺纹退刀槽：表 2 没有螺距 P={}（可用 P = {}；表 2 从 0.25 起，无 0.2）",
-                trim(p),
-                choices
+                .join(&crate::i18n::t("cmd.detail.sep.list"));
+            crate::i18n::t_fmt(
+                "cmd.detail.thread.err.p_not_in_table",
+                &[("p", &trim(p)), ("choices", &choices)],
             )
         })
 }
@@ -800,24 +819,34 @@ pub(crate) fn relief_dims(d: f64, params: &DetailParams) -> Result<ReliefDims, S
         .filter(|key| !KNOWN.contains(key))
         .collect();
     if !unknown.is_empty() {
-        return Err(format!(
-            "外螺纹退刀槽：不认识参数 {}（本族支持 P/g1/g2/dg/r/alpha）",
-            unknown.join("、")
+        return Err(crate::i18n::t_fmt(
+            "cmd.detail.thread.err.unknown_param",
+            &[("list", &unknown.join(&crate::i18n::t("cmd.detail.sep.list")))],
         ));
     }
     if !d.is_finite() || d <= 0.0 {
-        return Err(format!("外螺纹退刀槽：d 必须是正数（收到 {d}）"));
+        return Err(crate::i18n::t_fmt("cmd.detail.thread.err.d_positive", &[("d", &d.to_string())]));
     }
-    let p = params.get("P").ok_or_else(|| {
-        "外螺纹退刀槽：缺少螺距 P（写法 `XL detail_thread_relief <d> P <P>`）".to_string()
-    })?;
+    let p = params
+        .get("P")
+        .ok_or_else(|| crate::i18n::t("cmd.detail.thread.err.p_missing"))?;
     let row = thread_relief_row(p)?;
     let dg = params.get("dg").unwrap_or(d - row.dg_reduction);
     let g1 = params.get("g1").unwrap_or(row.g1);
     let g2 = params.get("g2").unwrap_or(row.g2);
     let r = params.get("r").unwrap_or(row.r);
     let alpha = params.get("alpha").unwrap_or(DEFAULT_ALPHA_DEG);
-    check_relief("外螺纹退刀槽", "螺纹大径", d, p, dg, g1, g2, r, alpha)
+    check_relief(
+        &crate::i18n::t("cmd.detail.what.thread_relief"),
+        &crate::i18n::t("cmd.detail.big.thread_major"),
+        d,
+        p,
+        dg,
+        g1,
+        g2,
+        r,
+        alpha,
+    )
 }
 
 /// **段级退刀槽**（轴生成器 `RL@L/@R` 的显式尺寸路径）：不给 P 时 g1/g2/dg/r 全给。
@@ -832,7 +861,17 @@ pub(crate) fn relief_dims_explicit(
     r: f64,
 ) -> Result<ReliefDims, String> {
     // p=0 = 段级显式尺寸占位（不再有螺距可查；调用方不需要 p）。
-    check_relief("段级退刀槽", "本段大径", d, 0.0, dg, g1, g2, r, DEFAULT_ALPHA_DEG)
+    check_relief(
+        &crate::i18n::t("cmd.detail.what.relief_seg"),
+        &crate::i18n::t("cmd.detail.big.seg_major"),
+        d,
+        0.0,
+        dg,
+        g1,
+        g2,
+        r,
+        DEFAULT_ALPHA_DEG,
+    )
 }
 
 /// 表 2 / 显式覆盖共用的几何校验：尺寸、圆角、槽深、斜壁角。
@@ -850,57 +889,57 @@ fn check_relief(
     alpha: f64,
 ) -> Result<ReliefDims, String> {
     if !d.is_finite() || d <= 0.0 {
-        return Err(format!("{what}：d 必须是正数（收到 {d}）"));
+        return Err(crate::i18n::t_fmt("cmd.detail.relief.err.d_positive", &[("what", what), ("d", &d.to_string())]));
     }
     for (name, value) in [("dg", dg), ("g1", g1), ("g2", g2), ("r", r)] {
         if !value.is_finite() || value <= 0.0 {
-            return Err(format!("{what}：{name} 必须是正数（收到 {value}）"));
+            return Err(crate::i18n::t_fmt("cmd.detail.relief.err.value_positive", &[("what", what), ("name", name), ("value", &value.to_string())]));
         }
     }
     if !alpha.is_finite() {
-        return Err(format!("{what}：alpha 不是有限数"));
+        return Err(crate::i18n::t_fmt("cmd.detail.relief.err.alpha_finite", &[("what", what)]));
     }
     if alpha < DEFAULT_ALPHA_DEG {
-        return Err(format!(
-            "{what}：alpha 必须 ≥ {}°（收到 {}°）—— 斜壁不能比 30° 更平",
-            trim(DEFAULT_ALPHA_DEG),
-            trim(alpha)
+        return Err(crate::i18n::t_fmt(
+            "cmd.detail.relief.err.alpha_min",
+            &[("what", what), ("min", &trim(DEFAULT_ALPHA_DEG)), ("got", &trim(alpha))],
         ));
     }
     if dg >= d {
-        return Err(format!(
-            "{what}：dg（{}）必须小于{big} d（{}）",
-            trim(dg),
-            trim(d)
+        return Err(crate::i18n::t_fmt(
+            "cmd.detail.relief.err.dg_lt_d",
+            &[("what", what), ("dg", &trim(dg)), ("big", big), ("d", &trim(d))],
         ));
     }
     if g2 <= g1 {
-        return Err(format!(
-            "{what}：g2（{}）必须大于 g1（{}）",
-            trim(g2),
-            trim(g1)
+        return Err(crate::i18n::t_fmt(
+            "cmd.detail.relief.err.g2_gt_g1",
+            &[("what", what), ("g2", &trim(g2)), ("g1", &trim(g1))],
         ));
     }
     if g1 <= r {
-        return Err(format!(
-            "{what}：g1（{}）必须大于圆角 r（{}），否则圆角与斜壁打架",
-            trim(g1),
-            trim(r)
+        return Err(crate::i18n::t_fmt(
+            "cmd.detail.relief.err.g1_gt_r",
+            &[("what", what), ("g1", &trim(g1)), ("r", &trim(r))],
         ));
     }
     let half = (d - dg) / 2.0;
     if r > half + 1e-9 {
-        return Err(format!(
-            "{what}：圆角 r（{}）超过槽深 (d−dg)/2（{}），圆角伸到{big}之外",
-            trim(r),
-            trim(half)
+        return Err(crate::i18n::t_fmt(
+            "cmd.detail.relief.err.r_le_half",
+            &[("what", what), ("r", &trim(r)), ("half", &trim(half)), ("big", big)],
         ));
     }
     let wall_angle_deg = (half / (g2 - g1)).atan().to_degrees();
     if wall_angle_deg + WALL_ANGLE_TOL_DEG < alpha {
-        return Err(format!(
-            "{what}：斜壁实际角 {:.2}° 小于 alpha {:.2}°（含表 2 取整容差 {:.0}°）—— 检查 g1/g2/dg 覆盖值",
-            wall_angle_deg, alpha, WALL_ANGLE_TOL_DEG
+        return Err(crate::i18n::t_fmt(
+            "cmd.detail.relief.err.wall_angle",
+            &[
+                ("what", what),
+                ("wall", &format!("{:.2}", wall_angle_deg)),
+                ("alpha", &format!("{:.2}", alpha)),
+                ("tol", &format!("{:.0}", WALL_ANGLE_TOL_DEG)),
+            ],
         ));
     }
     Ok(ReliefDims {
@@ -1028,8 +1067,7 @@ impl DetailElement for ThreadRelief {
 
     /// 历史 `b1` 槽位表达不了必给的 P —— 明确报错指路（不让默认值静默出图）。
     fn generate(&self, _d: f64, _b1: Option<f64>, _view: &str) -> Result<GenPart, String> {
-        Err("外螺纹退刀槽需要螺距 P：请用 `XL detail_thread_relief <d> P <P> [g1 值 …]`"
-            .to_string())
+        Err(crate::i18n::t("cmd.detail.thread.err.p_hint"))
     }
 
     fn generate_params(
@@ -1152,26 +1190,23 @@ pub fn hub_keyway_geom(d: f64, params: &DetailParams) -> Result<HubKeywayGeom, S
         .filter(|key| !KNOWN.contains(key))
         .collect();
     if !unknown.is_empty() {
-        return Err(format!(
-            "毂槽：不认识参数 {}（本族只支持 len 毂长；b/t₂/r 由 d 查表）",
-            unknown.join("、")
+        return Err(crate::i18n::t_fmt(
+            "cmd.detail.hub.err.unknown_param",
+            &[("list", &unknown.join(&crate::i18n::t("cmd.detail.sep.list")))],
         ));
     }
     if !d.is_finite() || d <= 0.0 {
-        return Err(format!("毂槽：孔径 d 必须是正数（收到 {d}）"));
+        return Err(crate::i18n::t_fmt("cmd.detail.hub.err.d_positive", &[("d", &d.to_string())]));
     }
     let b = crate::partgen_keys::key_1096_b_for_shaft(d).ok_or_else(|| {
-        format!(
-            "毂槽：d={} 不在 GB/T 1095 的 d 选型表（6…500）里，无法按孔径定键宽 b",
-            trim(d)
-        )
+        crate::i18n::t_fmt("cmd.detail.hub.err.d_not_in_table", &[("d", &trim(d))])
     })?;
     let rows = crate::shaft::keyway_gb1095_rows()
-        .map_err(|e| format!("毂槽：GB/T 1095 表读取失败：{e}"))?;
+        .map_err(|e| crate::i18n::t_fmt("cmd.detail.hub.err.table_read", &[("e", &e)]))?;
     let row = rows
         .iter()
         .find(|row| (row.b - b).abs() < 1e-9)
-        .ok_or_else(|| format!("毂槽：GB/T 1095 表里没有 b={} 这一档", trim(b)))?;
+        .ok_or_else(|| crate::i18n::t_fmt("cmd.detail.hub.err.b_unknown", &[("b", &trim(b))]))?;
     let r_corner = hub_keyway_r_from_range(row.r_min, row.r_max, HUB_KEYWAY_R_PICK);
     let len = params
         .get("len")
@@ -1181,32 +1216,29 @@ pub fn hub_keyway_geom(d: f64, params: &DetailParams) -> Result<HubKeywayGeom, S
     let r = d / 2.0;
     let half = b / 2.0;
     if half >= r - 1e-9 {
-        return Err(format!(
-            "毂槽：键宽 b={} ≥ 孔径 d={}（槽切穿孔壁），d 与表 1 不符",
-            trim(b),
-            trim(d)
+        return Err(crate::i18n::t_fmt(
+            "cmd.detail.hub.err.b_ge_d",
+            &[("b", &trim(b)), ("d", &trim(d))],
         ));
     }
     if !(r_corner > 0.0) || r_corner >= half - 1e-9 {
-        return Err(format!(
-            "毂槽：圆角 r={} 必须 >0 且 < b/2={}（表 1 的 r 范围异常）",
-            trim(r_corner),
-            trim(half)
+        return Err(crate::i18n::t_fmt(
+            "cmd.detail.hub.err.r_range",
+            &[("r", &trim(r_corner)), ("half", &trim(half))],
         ));
     }
     if !(row.t2 > 0.0) {
-        return Err(format!("毂槽：表 1 的 t₂={} 必须 >0", trim(row.t2)));
+        return Err(crate::i18n::t_fmt("cmd.detail.hub.err.t2_positive", &[("t2", &trim(row.t2))]));
     }
     if !len.is_finite() || len <= 0.0 {
-        return Err(format!("毂槽：毂长 len={} 必须是正数", trim(len)));
+        return Err(crate::i18n::t_fmt("cmd.detail.hub.err.len_positive", &[("len", &trim(len))]));
     }
     let y_wall = (r * r - half * half).sqrt();
     // 槽底圆角不得越过孔壁交点：R+t₂−r ≥ y_wall（等价 t₂ + sag ≥ r）。
     if r + row.t2 - r_corner < y_wall - 1e-9 {
-        return Err(format!(
-            "毂槽：槽底 R+t₂−r={} 低于孔壁交点 {}（表 1 数据/圆角取值异常）",
-            trim(r + row.t2 - r_corner),
-            trim(y_wall)
+        return Err(crate::i18n::t_fmt(
+            "cmd.detail.hub.err.bottom_below",
+            &[("bottom", &trim(r + row.t2 - r_corner)), ("intersect", &trim(y_wall))],
         ));
     }
     let phi_deg = (y_wall / half).atan().to_degrees();
@@ -1402,9 +1434,9 @@ fn resolve_rect_spline(
         .filter(|key| !KNOWN.contains(key))
         .collect();
     if !unknown.is_empty() {
-        return Err(format!(
-            "矩形花键：不认识参数 {}（本族支持 规格代号 spec、L/len、de、N、D、B）",
-            unknown.join("、")
+        return Err(crate::i18n::t_fmt(
+            "cmd.detail.spline.err.unknown_param",
+            &[("list", &unknown.join(&crate::i18n::t("cmd.detail.sep.list")))],
         ));
     }
     let len = params.get("len").or_else(|| params.get("l"));
@@ -1412,62 +1444,57 @@ fn resolve_rect_spline(
     if let Some(spec) = params.spec() {
         let spline = crate::spline::RectSpline::from_code(spec, de, len.unwrap_or(0.0))?;
         if d.is_finite() && d > 0.0 && (d - spline.d).abs() > 1e-9 {
-            return Err(format!(
-                "矩形花键：规格 {spec} 的小径 d={} 与参数 d={} 不一致",
-                trim(spline.d),
-                trim(d)
+            return Err(crate::i18n::t_fmt(
+                "cmd.detail.spline.err.mismatch_d",
+                &[("spec", spec), ("v", &trim(spline.d)), ("p", &trim(d))],
             ));
         }
         if let Some(n) = params.get("n") {
             if n.fract().abs() > 1e-9 || n as u32 != spline.n {
-                return Err(format!(
-                    "矩形花键：规格 {spec} 的齿数 N={} 与参数 N={} 不一致",
-                    spline.n,
-                    trim(n)
+                return Err(crate::i18n::t_fmt(
+                    "cmd.detail.spline.err.mismatch_n",
+                    &[("spec", spec), ("v", &spline.n.to_string()), ("p", &trim(n))],
                 ));
             }
         }
         if let Some(big) = params.get("big").or_else(|| params.get("D")) {
             if (big - spline.big).abs() > 1e-9 {
-                return Err(format!(
-                    "矩形花键：规格 {spec} 的大径 D={} 与参数 D={} 不一致",
-                    trim(spline.big),
-                    trim(big)
+                return Err(crate::i18n::t_fmt(
+                    "cmd.detail.spline.err.mismatch_dmajor",
+                    &[("spec", spec), ("v", &trim(spline.big)), ("p", &trim(big))],
                 ));
             }
         }
         if let Some(b) = params.get("b") {
             if (b - spline.b).abs() > 1e-9 {
-                return Err(format!(
-                    "矩形花键：规格 {spec} 的键宽 B={} 与参数 B={} 不一致",
-                    trim(spline.b),
-                    trim(b)
+                return Err(crate::i18n::t_fmt(
+                    "cmd.detail.spline.err.mismatch_b",
+                    &[("spec", spec), ("v", &trim(spline.b)), ("p", &trim(b))],
                 ));
             }
         }
         return Ok((spline, len));
     }
-    let n_value = params.get("n").ok_or_else(|| {
-        format!("矩形花键：缺齿数 N（写法 `spec 6x23x26x6` 或数字参数 `N6 D26 B6 d23`）")
-    })?;
+    let n_value = params
+        .get("n")
+        .ok_or_else(|| crate::i18n::t("cmd.detail.spline.err.missing_n"))?;
     if n_value.fract().abs() > 1e-9 || !(3.0..=100.0).contains(&n_value) {
-        return Err(format!("矩形花键：齿数 N={} 必须取 3..=100 的整数", trim(n_value)));
+        return Err(crate::i18n::t_fmt("cmd.detail.spline.err.n_range", &[("n", &trim(n_value))]));
     }
     let big = params
         .get("big")
         .or_else(|| params.get("D"))
-        .ok_or_else(|| "矩形花键：缺大径 D（数字参数写法 `D26`）".to_string())?;
+        .ok_or_else(|| crate::i18n::t("cmd.detail.spline.err.missing_dmajor"))?;
     let b = params
         .get("b")
-        .ok_or_else(|| "矩形花键：缺键宽 B（数字参数写法 `B6`）".to_string())?;
+        .ok_or_else(|| crate::i18n::t("cmd.detail.spline.err.missing_b"))?;
     if !d.is_finite() || d <= 0.0 {
-        return Err(format!("矩形花键：小径 d={} 必须是正数", trim(d)));
+        return Err(crate::i18n::t_fmt("cmd.detail.spline.err.d_minor_positive", &[("d", &trim(d))]));
     }
     let de = match de {
         Some(de) => de,
-        None => crate::spline::lookup_de(n_value as u32, d, big, b).ok_or_else(|| {
-            "矩形花键：该 N/d/D/B 不在 GB/T 10952-2005 表 1/表 2 里，de 查不到 —— 请给 de".to_string()
-        })?,
+        None => crate::spline::lookup_de(n_value as u32, d, big, b)
+            .ok_or_else(|| crate::i18n::t("cmd.detail.spline.err.de_not_found"))?,
     };
     Ok((
         crate::spline::RectSpline::new(n_value as u32, d, big, b, de, len.unwrap_or(0.0))?,
@@ -1512,8 +1539,7 @@ impl DetailElement for SplineRect {
 
     /// 历史 `b1` 槽位表达不了规格代号 —— 明确报错指路。
     fn generate(&self, _d: f64, _b1: Option<f64>, _view: &str) -> Result<GenPart, String> {
-        Err("矩形花键请给规格代号：`XL detail_spline_rect 6x23x26x6 L30 [de 63] [view side|section|front]`"
-            .to_string())
+        Err(crate::i18n::t("cmd.detail.spline.usage"))
     }
 
     fn generate_params(
@@ -1526,18 +1552,16 @@ impl DetailElement for SplineRect {
         let (entities, spec_text) = match view {
             "front" => (spline.front_view(), spline.code()),
             "side" => {
-                let len = len.ok_or_else(|| {
-                    "矩形花键：常规侧视图需要 L（满齿段长，例 `L30` / `&len=30`）".to_string()
-                })?;
+                let len = len
+                    .ok_or_else(|| crate::i18n::t("cmd.detail.spline.err.need_len_side"))?;
                 (spline.side_view(len), format!("{} L{}", spline.code(), trim(len)))
             }
             "section" => {
-                let len = len.ok_or_else(|| {
-                    "矩形花键：侧剖视图需要 L（满齿段长，例 `L30` / `&len=30`）".to_string()
-                })?;
+                let len = len
+                    .ok_or_else(|| crate::i18n::t("cmd.detail.spline.err.need_len_section"))?;
                 (spline.section_view(len), format!("{} L{}", spline.code(), trim(len)))
             }
-            other => return Err(format!("矩形花键：视图 {other} 尚未实现")),
+            other => return Err(crate::i18n::t_fmt("cmd.detail.spline.err.view_unimplemented", &[("view", other)])),
         };
         let bbox = entity_bbox(&entities);
         Ok(GenPart {
@@ -1664,18 +1688,17 @@ pub(crate) fn runout_row(p: f64) -> Option<&'static RunoutRow> {
 /// 不外推）；表 1 从 P=0.2 起。
 pub(crate) fn runout_row_checked(p: f64) -> Result<&'static RunoutRow, String> {
     if !p.is_finite() || p <= 0.0 {
-        return Err(format!("GB/T 3 表 1：螺距 P 必须是正数（收到 {}）", trim(p)));
+        return Err(crate::i18n::t_fmt("cmd.detail.runout.err.p_positive", &[("p", &trim(p))]));
     }
     runout_row(p).ok_or_else(|| {
         let choices = RUNOUT_ROWS
             .iter()
             .map(|row| trim(row.p))
             .collect::<Vec<_>>()
-            .join("、");
-        format!(
-            "GB/T 3 表 1 没有螺距 P={}（可用 P = {}；不插值、不外推）",
-            trim(p),
-            choices
+            .join(&crate::i18n::t("cmd.detail.sep.list"));
+        crate::i18n::t_fmt(
+            "cmd.detail.runout.err.p_not_in_table",
+            &[("p", &trim(p)), ("choices", &choices)],
         )
     })
 }
@@ -2536,5 +2559,60 @@ mod tests {
             .unwrap()
             .unwrap();
         assert!(svg.contains("<svg"), "预览应出 SVG");
+    }
+
+    /// 族④：结构要素族 —— zh/en 双语断言 + 关键数据原样。
+    #[test]
+    fn detail_messages_switch_language_keeping_data() {
+        let _g = crate::global_state_test_lock();
+        crate::i18n::clear_missing_keys();
+
+        // ── zh ──
+        crate::i18n::set_lang(crate::i18n::Lang::Zh);
+        let e = generate("no_such_family", 25.0, None, "main").unwrap_err();
+        assert!(e.contains("结构要素族") && e.contains("no_such_family"), "{e}");
+        let e = generate(FAMILY_GRIND_OD, 25.0, Some(2.0), "side").unwrap_err();
+        assert!(e.contains("只有视图") && e.contains("side") && e.contains("磨外圆"), "{e}");
+        let e = band_of(0.0).unwrap_err();
+        assert!(e.contains("磨外圆：d 必须是正数") && e.contains("0"), "{e}");
+        let e = row_for(25.0, Some(99.0)).unwrap_err();
+        assert!(e.contains("该档可选 b1") && e.contains("99"), "{e}");
+        let e = thread_relief_row(0.0).unwrap_err();
+        assert!(e.contains("螺距 P 必须是正数") && e.contains("0"), "{e}");
+        let e = hub_keyway_geom(25.0, &DetailParams::from_pairs([("bogus", 1.0)])).unwrap_err();
+        assert!(e.contains("不认识参数") && e.contains("bogus"), "{e}");
+        let e = hub_keyway_geom(0.0, &DetailParams::new()).unwrap_err();
+        assert!(e.contains("孔径 d 必须是正数") && e.contains("0"), "{e}");
+        let e = resolve_rect_spline(0.0, &DetailParams::from_pairs([("n", 6.0), ("d", 23.0), ("big", 26.0)])).unwrap_err();
+        assert!(e.contains("缺键宽 B") && e.contains("B6"), "{e}");
+        let e = runout_row_checked(0.0).unwrap_err();
+        assert!(e.contains("GB/T 3 表 1") && e.contains("0"), "{e}");
+
+        // ── en：同一批调用，数据原样 ──
+        crate::i18n::set_lang(crate::i18n::Lang::En);
+        let e = generate("no_such_family", 25.0, None, "main").unwrap_err();
+        assert!(e.contains("detail-element family") && e.contains("no_such_family"), "{e}");
+        let e = generate(FAMILY_GRIND_OD, 25.0, Some(2.0), "side").unwrap_err();
+        assert!(e.contains("only has view") && e.contains("side") && e.contains("external grinding"), "{e}");
+        let e = band_of(0.0).unwrap_err();
+        assert!(e.contains("External grinding: d must be positive") && e.contains("0"), "{e}");
+        let e = row_for(25.0, Some(99.0)).unwrap_err();
+        assert!(e.contains("whose b1 values are") && e.contains("99"), "{e}");
+        let e = thread_relief_row(0.0).unwrap_err();
+        assert!(e.contains("pitch P must be positive") && e.contains("0"), "{e}");
+        let e = hub_keyway_geom(25.0, &DetailParams::from_pairs([("bogus", 1.0)])).unwrap_err();
+        assert!(e.contains("unrecognized parameter") && e.contains("bogus"), "{e}");
+        let e = hub_keyway_geom(0.0, &DetailParams::new()).unwrap_err();
+        assert!(e.contains("bore d must be positive") && e.contains("0"), "{e}");
+        let e = resolve_rect_spline(0.0, &DetailParams::from_pairs([("n", 6.0), ("d", 23.0), ("big", 26.0)])).unwrap_err();
+        assert!(e.contains("missing key width B") && e.contains("B6"), "{e}");
+        let e = runout_row_checked(0.0).unwrap_err();
+        assert!(e.contains("GB/T 3 Table 1") && e.contains("0"), "{e}");
+        assert!(
+            crate::i18n::missing_keys().is_empty(),
+            "缺词条：{:?}",
+            crate::i18n::missing_keys()
+        );
+        crate::i18n::set_lang_auto();
     }
 }

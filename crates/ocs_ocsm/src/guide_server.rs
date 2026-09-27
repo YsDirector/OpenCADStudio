@@ -4798,7 +4798,7 @@ fn apply_gear_export(
             );
         }
         if gear_std == crate::gear::GearStd::M && req.dp.is_some() {
-            return Err(crate::gear::M_DP_CONFLICT_MSG.to_string());
+            return Err(crate::gear::m_dp_conflict_msg());
         }
         let (std, dp, m) = if gear_std == crate::gear::GearStd::DP || req.dp.is_some() {
             let dp = req.dp.ok_or_else(|| {
