@@ -1229,17 +1229,12 @@ impl D_bOrigin {
     /// 给用户看的来源说明（GUI/命令行派生值文本用）。
     pub fn note(&self) -> String {
         match self {
-            Self::Table(r) => format!("查表命中 p{} m={}", r.page, trim(r.m)),
-            Self::Formula => "由公式解出，未命中表".to_string(),
-            Self::Computed => "由 m/z/x 正算 d_B=m(z+1.1+2x)".to_string(),
+            Self::Table(r) => crate::i18n::t_fmt("cmd.invol.din.origin_table", &[("v0", &r.page.to_string()), ("v1", &trim(r.m))]),
+            Self::Formula => crate::i18n::t_static("cmd.invol.din.origin_formula").to_string(),
+            Self::Computed => crate::i18n::t_static("cmd.invol.din.origin_computed").to_string(),
             Self::Derived(n) | Self::Adjusted(n) => n.clone(),
-            Self::NfTable(r) => format!(
-                "查表命中 p{} m={} A={}",
-                r.page,
-                trim(r.m),
-                trim(r.a)
-            ),
-            Self::ComputedA => "由 m/z/x 正算 A=m(z+2x+0.4)".to_string(),
+            Self::NfTable(r) => crate::i18n::t_fmt("cmd.invol.nf.origin_table", &[("v0", &r.page.to_string()), ("v1", &trim(r.m)), ("v2", &trim(r.a))]),
+            Self::ComputedA => crate::i18n::t_static("cmd.invol.nf.origin_computed_a").to_string(),
         }
     }
 }
@@ -1394,22 +1389,10 @@ fn resolve_with_m_z(
         let x2 = x_from_d_b(d_b, m, z_canon);
         let z_lo = d_b / m - 2.0;
         let z_hi = d_b / m - 1.0;
-        let mut note = format!(
-            "按基准直径 d_B={} 取 z={}（与输入 z={} 不符，d_B 为主参数；z 由 d_B 与 m 决定；\
-             由 d_B=m(z+1.1+2x)、x∈[−0.05,0.45] 得 z∈[{:.4},{:.4}]）",
-            trim(d_b),
-            z_canon,
-            z,
-            z_lo,
-            z_hi
-        );
+        let mut note = crate::i18n::t_fmt("cmd.invol.din.keep_z_from_db_m", &[("v0", &trim(d_b)), ("v1", &z_canon.to_string()), ("v2", &z.to_string()), ("v3", &format!("{:.4}", z_lo)), ("v4", &format!("{:.4}", z_hi))]);
         if let Some(xi) = x {
             if (xi - x2).abs() > DIN_X_TOL {
-                note.push_str(&format!(
-                    "；同时按 d_B 取 x={}（与输入 x={} 不符）",
-                    trim(x2),
-                    trim(xi)
-                ));
+                note.push_str(&crate::i18n::t_fmt("cmd.invol.din.also_x", &[("v0", &trim(x2)), ("v1", &trim(xi))]));
             }
         }
         let p = InvolParams::din(m, z_canon, x2)
@@ -1428,26 +1411,14 @@ fn resolve_with_m_z(
         let (xv, origin) = match row {
             Some(row) => {
                 let origin = match x {
-                    Some(xi) if (xi - row.x).abs() > DIN_X_TOL => D_bOrigin::Adjusted(format!(
-                        "查表命中 p{} m={}；按基准直径 d_B={} 取 x={}（与输入 x={} 不符，d_B 为主参数）",
-                        row.page,
-                        trim(row.m),
-                        trim(d_b),
-                        trim(row.x),
-                        trim(xi)
-                    )),
+                    Some(xi) if (xi - row.x).abs() > DIN_X_TOL => D_bOrigin::Adjusted(crate::i18n::t_fmt("cmd.invol.din.table_hit_x", &[("v0", &row.page.to_string()), ("v1", &trim(row.m)), ("v2", &trim(d_b)), ("v3", &trim(row.x)), ("v4", &trim(xi))])),
                     _ => D_bOrigin::Table(row.clone()),
                 };
                 (row.x, origin)
             }
             None => {
                 let origin = match x {
-                    Some(xi) if (xi - x_formula).abs() > DIN_X_TOL => D_bOrigin::Adjusted(format!(
-                        "按基准直径 d_B={} 取 x={}（与输入 x={} 不符，d_B 为主参数）",
-                        trim(d_b),
-                        trim(x_formula),
-                        trim(xi)
-                    )),
+                    Some(xi) if (xi - x_formula).abs() > DIN_X_TOL => D_bOrigin::Adjusted(crate::i18n::t_fmt("cmd.invol.din.keep_x_from_db", &[("v0", &trim(d_b)), ("v1", &trim(x_formula)), ("v2", &trim(xi))])),
                     _ => D_bOrigin::Formula,
                 };
                 (x_formula, origin)
@@ -1461,21 +1432,10 @@ fn resolve_with_m_z(
     // 不相容 → 以 d_B 为准，保留 m 重算 z。
     let (z2, z_lo, z_hi) = derive_z_from_d_b_m(d_b, m, Some(z))?;
     let x2 = x_from_d_b(d_b, m, z2);
-    let mut note = format!(
-        "按基准直径 d_B={} 取 z={}（与输入 z={} 不符，d_B 为主参数；由 d_B=m(z+1.1+2x)、x∈[−0.05,0.45] 得 z∈[{:.4},{:.4}]）",
-        trim(d_b),
-        z2,
-        z,
-        z_lo,
-        z_hi
-    );
+    let mut note = crate::i18n::t_fmt("cmd.invol.din.keep_z_from_db", &[("v0", &trim(d_b)), ("v1", &z2.to_string()), ("v2", &z.to_string()), ("v3", &format!("{:.4}", z_lo)), ("v4", &format!("{:.4}", z_hi))]);
     if let Some(xi) = x {
         if (xi - x2).abs() > DIN_X_TOL {
-            note.push_str(&format!(
-                "；同时按 d_B 取 x={}（与输入 x={} 不符）",
-                trim(x2),
-                trim(xi)
-            ));
+            note.push_str(&crate::i18n::t_fmt("cmd.invol.din.also_x", &[("v0", &trim(x2)), ("v1", &trim(xi))]));
         }
     }
     let p = InvolParams::din(m, z2, x2)
@@ -1488,13 +1448,7 @@ fn resolve_with_m_z(
 fn row_to_params(row: Din5480Row) -> Result<(InvolParams, D_bOrigin), String> {
     let p = InvolParams::din(row.m, row.z, row.x)
         .map_err(|e| {
-            format!(
-                "DIN 5480：查表行 p{} m={} z={} x={} 不自洽：{e}",
-                row.page,
-                trim(row.m),
-                row.z,
-                trim(row.x)
-            )
+            crate::i18n::t_fmt("cmd.invol.din.row_inconsistent", &[("v0", &row.page.to_string()), ("v1", &trim(row.m)), ("v2", &row.z.to_string()), ("v3", &trim(row.x)), ("v4", &e)])
         })?
         .with_d_b(row.d_b);
     Ok((p, D_bOrigin::Table(row)))
@@ -1842,11 +1796,11 @@ pub fn module_candidates(std: SplineStd) -> Vec<f64> {
 pub fn module_source(std: SplineStd) -> &'static str {
     match std {
         SplineStd::GB => {
-            "GB/T 3478.1-2008 表 2（15 种：第 1 系列 0.25/0.5/1/1.5/2/2.5/3/5/10 + 第 2 系列 0.75/1.25/1.75/4/6/8）"
+            crate::i18n::t_static("cmd.invol.src.module.gb")
         }
-        SplineStd::DIN => "DIN 5480-2 名义表（assets/din5480_2_nominal.csv 实际 m 列）",
-        SplineStd::NF => "NF E22-141 尺寸表（assets/nf_e22141_dims.csv 实际 m 列）",
-        SplineStd::ANSI => "ANSI B92.1 径节 17 项（assets/ansi_b921_formulas.csv，P/Ps=A/B）",
+        SplineStd::DIN => crate::i18n::t_static("cmd.invol.src.module.din"),
+        SplineStd::NF => crate::i18n::t_static("cmd.invol.src.module.nf"),
+        SplineStd::ANSI => crate::i18n::t_static("cmd.invol.src.module.ansi"),
     }
 }
 
@@ -2294,17 +2248,14 @@ pub fn derive_z_from_bench_m(std: SplineStd, bench: f64, m: f64) -> Result<(u32,
                 })
                 .expect("zs 非空");
             let note = if zs.len() == 1 {
-                format!("查表命中 d_B={}、m={} → z={}", trim(bench), trim(m), z)
+                crate::i18n::t_fmt("cmd.invol.din.bench_hit_z", &[("v0", &trim(bench)), ("v1", &trim(m)), ("v2", &z.to_string())])
             } else {
                 let variants = zs
                     .iter()
-                    .map(|v| format!("z={}（x={}）", v, trim(x_from_d_b(bench, m, *v))))
+                    .map(|v| crate::i18n::t_fmt("cmd.invol.din.z_with_x", &[("v0", &v.to_string()), ("v1", &trim(x_from_d_b(bench, m, *v)))]))
                     .collect::<Vec<_>>()
                     .join(&crate::i18n::t("cmd.invol.sep.list"));
-                format!(
-                    "查表命中 d_B={}、m={} 的多个 z 变体（{}），按 |x| 最小取 z={}",
-                    trim(bench), trim(m), variants, z
-                )
+                crate::i18n::t_fmt("cmd.invol.din.bench_multi_z", &[("v0", &trim(bench)), ("v1", &trim(m)), ("v2", &variants), ("v3", &z.to_string())])
             };
             Ok((z, note))
         }
@@ -2331,7 +2282,7 @@ pub fn derive_z_from_bench_m(std: SplineStd, bench: f64, m: f64) -> Result<(u32,
                 })
                 .expect("zs 非空");
             let note = if zs.len() == 1 {
-                format!("查表命中 A={}、m={} → N={}", trim(bench), trim(m), z)
+                crate::i18n::t_fmt("cmd.invol.nf.bench_hit_n", &[("v0", &trim(bench)), ("v1", &trim(m)), ("v2", &z.to_string())])
             } else {
                 let variants = zs
                     .iter()
@@ -2377,17 +2328,10 @@ pub fn resolve_nf_by_a(
             let row = nf_match(a, Some(m)).into_iter().find(|r| r.z == z);
             if z != z_canon && row.is_none() {
                 let x2 = x_from_a(a, m, z_canon);
-                let mut note = format!(
-                    "按公称直径 A={} 取 N={}（与输入 N={} 不符，A 为主参数；N 由 A 与 m 决定）",
-                    trim(a), z_canon, z
-                );
+                let mut note = crate::i18n::t_fmt("cmd.invol.nf.keep_n_from_a", &[("v0", &trim(a)), ("v1", &z_canon.to_string()), ("v2", &z.to_string())]);
                 if let Some(xi) = x {
                     if (xi - x2).abs() > NF_X_TOL {
-                        note.push_str(&format!(
-                            "；同时按 A 取 x={}（与输入 x={} 不符）",
-                            trim(x2),
-                            trim(xi)
-                        ));
+                        note.push_str(&crate::i18n::t_fmt("cmd.invol.nf.also_x", &[("v0", &trim(x2)), ("v1", &trim(xi))]));
                     }
                 }
                 let p = InvolParams::from_preset(SplineStd::NF, profile, m, z_canon)
@@ -2403,19 +2347,12 @@ pub fn resolve_nf_by_a(
                     let with_fixes = if row.fixes.is_empty() {
                         String::new()
                     } else {
-                        format!("（OCR 修正：{}）", row.fixes.join(&crate::i18n::t("cmd.invol.sep.list")))
+                        crate::i18n::t_fmt("cmd.invol.ocr_fix_note", &[("v0", &row.fixes.join(&crate::i18n::t("cmd.invol.sep.list")))])
                     };
                     let origin = match x {
-                        Some(xi) if (xi - x_formula).abs() > NF_X_TOL => D_bOrigin::Adjusted(format!(
-                            "查表命中 p{} m={} A={}{}；按 A 取 x={}（与输入 x={} 不符，A 为主参数）",
-                            row.page, trim(row.m), trim(a), with_fixes, trim(x_formula), trim(xi)
-                        )),
+                        Some(xi) if (xi - x_formula).abs() > NF_X_TOL => D_bOrigin::Adjusted(crate::i18n::t_fmt("cmd.invol.nf.table_hit_x", &[("v0", &row.page.to_string()), ("v1", &trim(row.m)), ("v2", &trim(a)), ("v3", &with_fixes), ("v4", &trim(x_formula)), ("v5", &trim(xi))])),
                         _ if row.x.is_some_and(|v| (v - x_formula).abs() > NF_X_MATCH_TOL) => {
-                            D_bOrigin::Adjusted(format!(
-                                "查表命中 p{} m={} A={}{}；表值 x={} 与 A 公式解 x={} 不符（超排版精度），按 A 取公式解",
-                                row.page, trim(row.m), trim(a), with_fixes,
-                                row.x.map(trim).unwrap_or_default(), trim(x_formula)
-                            ))
+                            D_bOrigin::Adjusted(crate::i18n::t_fmt("cmd.invol.nf.table_x_mismatch", &[("v0", &row.page.to_string()), ("v1", &trim(row.m)), ("v2", &trim(a)), ("v3", &with_fixes), ("v4", &row.x.map(trim).unwrap_or_default()), ("v5", &trim(x_formula))]))
                         }
                         _ => D_bOrigin::NfTable(row),
                     };
@@ -2423,10 +2360,7 @@ pub fn resolve_nf_by_a(
                 }
                 None => {
                     let origin = match x {
-                        Some(xi) if (xi - x_formula).abs() > NF_X_TOL => D_bOrigin::Adjusted(format!(
-                            "按公称直径 A={} 取 x={}（与输入 x={} 不符，A 为主参数）",
-                            trim(a), trim(x_formula), trim(xi)
-                        )),
+                        Some(xi) if (xi - x_formula).abs() > NF_X_TOL => D_bOrigin::Adjusted(crate::i18n::t_fmt("cmd.invol.nf.keep_x_from_a", &[("v0", &trim(a)), ("v1", &trim(x_formula)), ("v2", &trim(xi))])),
                         _ => D_bOrigin::Formula,
                     };
                     (x_formula, origin)
@@ -2624,10 +2558,7 @@ pub const NF_CHECK_OCR_FIXES: &[NfCheckFix] = &[
 impl NfCheckRow {
     /// 给用户看的来源说明（页码 + 表名 + source + 页内子表）。
     pub fn source_note(&self) -> String {
-        format!(
-            "p{} 表{}（source={}；{}）",
-            self.page, self.table_no, self.source, self.section
-        )
+        crate::i18n::t_fmt("cmd.invol.check.src_nf_row", &[("v0", &self.page.to_string()), ("v1", &self.table_no.to_string()), ("v2", &self.source), ("v3", &self.section)])
     }
 
     /// 是否为检查尺寸行（p23–p25/p27：有 K/E/U/F/V/G 任一列）。
@@ -2913,7 +2844,7 @@ pub struct InspectionRow {
 impl InspectionRow {
     /// 给用户看的来源说明（页码 + 表号 + source）。
     pub fn source_note(&self) -> String {
-        format!("p{} 表{}（source={}）", self.page, self.table_no, self.source)
+        crate::i18n::t_fmt("cmd.invol.check.src_row", &[("v0", &self.page.to_string()), ("v1", &self.table_no.to_string()), ("v2", &self.source)])
     }
 }
 
@@ -3073,11 +3004,11 @@ fn inspection_match(d_b: f64, m: Option<f64>) -> Vec<InspectionRow> {
 /// * 检验表没收录的档（如 m=2）明确报「检验表没有 m=X 档」并给已入库检验档位。
 pub fn lookup_inspection(d_b: f64, m: Option<f64>) -> Result<Vec<InspectionRow>, String> {
     if !(d_b.is_finite() && d_b > 0.0) {
-        return Err(format!("DIN 5480-2 检验表：d_B={} 必须是正数。", trim(d_b)));
+        return Err(crate::i18n::t_fmt("cmd.invol.check.db_pos", &[("v0", &trim(d_b))]));
     }
     if let Some(m) = m {
         if !(m.is_finite() && m > 0.0) {
-            return Err(format!("DIN 5480-2 检验表：m={} 必须是正数。", trim(m)));
+            return Err(crate::i18n::t_fmt("cmd.invol.check.m_pos", &[("v0", &trim(m))]));
         }
     }
     let mut hits = inspection_match(d_b, m);
@@ -3091,7 +3022,7 @@ pub fn lookup_inspection(d_b: f64, m: Option<f64>) -> Result<Vec<InspectionRow>,
 
 /// 检验表未命中的错误文案：缺档说明 + 附近候选（带页码/source）。
 fn inspection_miss_message(d_b: f64, m: Option<f64>) -> String {
-    let mut msg = format!("DIN 5480-2 检验表：d_B={}", trim(d_b));
+    let mut msg = crate::i18n::t_fmt("cmd.invol.check.head_db", &[("v0", &trim(d_b))]);
     if let Some(m) = m {
         msg.push_str(&crate::i18n::t_fmt("cmd.invol.din.lookup_head_m", &[("v0", &trim(m))]));
     }
@@ -3103,12 +3034,7 @@ fn inspection_miss_message(d_b: f64, m: Option<f64>) -> String {
                 .map(|v| trim(*v))
                 .collect::<Vec<_>>()
                 .join(&crate::i18n::t("cmd.invol.sep.list"));
-            msg.push_str(&format!(
-                "；检验表没有 m={} 档（已入库检验档位：{}；检验表仅覆盖 \
-                 0.5/0.75/0.8/1/1.5/5，其余档名义表有但检验表未并入，需另找表页）。",
-                trim(m),
-                list
-            ));
+            msg.push_str(&crate::i18n::t_fmt("cmd.invol.check.no_m_step", &[("v0", &trim(m)), ("v1", &list)]));
         } else {
             msg.push('。');
         }
@@ -3136,12 +3062,7 @@ fn inspection_miss_message(d_b: f64, m: Option<f64>) -> String {
             continue;
         }
         seen.push(r.d_b);
-        cands.push(format!(
-            "d_B={}（m={}，{}）",
-            trim(r.d_b),
-            trim(r.m),
-            r.source_note()
-        ));
+        cands.push(crate::i18n::t_fmt("cmd.invol.check.cand_row", &[("v0", &trim(r.d_b)), ("v1", &trim(r.m)), ("v2", &r.source_note())]));
         if cands.len() >= 5 {
             break;
         }
@@ -3163,20 +3084,13 @@ pub fn inspection_for(d_b: f64, m: f64, z: u32) -> Result<InspectionRow, String>
         .map(|r| format!("z={}（{}）", r.z, r.source_note()))
         .collect::<Vec<_>>()
         .join(&crate::i18n::t("cmd.invol.sep.list"));
-    Err(format!(
-        "DIN 5480-2 检验表：d_B={}、m={} 命中 {} 行但没有 z={}；同组的 z 变体：{}。",
-        trim(d_b),
-        trim(m),
-        rows.len(),
-        z,
-        list
-    ))
+    Err(crate::i18n::t_fmt("cmd.invol.check.z_variants", &[("v0", &trim(d_b)), ("v1", &trim(m)), ("v2", &rows.len().to_string()), ("v3", &z.to_string()), ("v4", &list)]))
 }
 
 /// `m` 由名义表反查的检验查询：`(d_B, z)` 唯一定位 m 后走 [`inspection_for`]。
 pub fn inspection_for_d_b_z(d_b: f64, z: u32) -> Result<InspectionRow, String> {
     if !(d_b.is_finite() && d_b > 0.0) {
-        return Err(format!("DIN 5480-2 检验表：d_B={} 必须是正数。", trim(d_b)));
+        return Err(crate::i18n::t_fmt("cmd.invol.check.db_pos", &[("v0", &trim(d_b))]));
     }
     let mut ms: Vec<f64> = din5480_rows()
         .iter()
@@ -3186,19 +3100,9 @@ pub fn inspection_for_d_b_z(d_b: f64, z: u32) -> Result<InspectionRow, String> {
     ms.sort_by(|a, b| a.partial_cmp(b).unwrap());
     ms.dedup_by(|a, b| (*a - *b).abs() < DIN_M_TOL);
     match ms.as_slice() {
-        [] => Err(format!(
-            "DIN 5480-2 检验表：名义表里没有 d_B={}、z={} 的行，无法反查 m；请直接给 m\
-             （数据来源：DIN 5480-2 名义表 721 行 + 检验表 267 行）。",
-            trim(d_b),
-            z
-        )),
+        [] => Err(crate::i18n::t_fmt("cmd.invol.check.nominal_no_row", &[("v0", &trim(d_b)), ("v1", &z.to_string())])),
         [m] => inspection_for(d_b, *m, z),
-        many => Err(format!(
-            "DIN 5480-2 检验表：d_B={}、z={} 在名义表有多个 m 变体：{}；请直接给 m。",
-            trim(d_b),
-            z,
-            many.iter().map(|m| trim(*m)).collect::<Vec<_>>().join(&crate::i18n::t("cmd.invol.sep.list"))
-        )),
+        many => Err(crate::i18n::t_fmt("cmd.invol.check.nominal_multi_m", &[("v0", &trim(d_b)), ("v1", &z.to_string()), ("v2", &many.iter().map(|m| trim(*m)).collect::<Vec<_>>().join(&crate::i18n::t("cmd.invol.sep.list")))])),
     }
 }
 
@@ -3237,13 +3141,13 @@ pub fn base_tangent_length(m: f64, z: u32, x: f64, k: u32) -> f64 {
 /// 另 3 行为 k/z 的 OCR 残值（p18 z=35 的 k=63、z=93/97 重复残行）。
 pub fn span_teeth(m: f64, z: u32, x: f64) -> Result<u32, String> {
     if !(m.is_finite() && m > 0.0) {
-        return Err(format!("DIN 5480-2 检验：m={} 必须是正数（跨测齿数 k）。", trim(m)));
+        return Err(crate::i18n::t_fmt("cmd.invol.check.m_pos_k", &[("v0", &trim(m))]));
     }
     if !(3..=1000).contains(&z) {
-        return Err(format!("DIN 5480-2 检验：齿数 z={} 超出范围（3..=1000）。", z));
+        return Err(crate::i18n::t_fmt("cmd.invol.check.z_range_insp", &[("v0", &z.to_string())]));
     }
     if !x.is_finite() {
-        return Err(format!("DIN 5480-2 检验：变位系数 x={} 必须是有限数。", trim(x)));
+        return Err(crate::i18n::t_fmt("cmd.invol.check.x_finite", &[("v0", &trim(x))]));
     }
     let a = 30f64.to_radians();
     let d = m * z as f64;
@@ -3261,12 +3165,7 @@ pub fn span_teeth(m: f64, z: u32, x: f64) -> Result<u32, String> {
         }
     }
     best.ok_or_else(|| {
-        format!(
-            "DIN 5480-2 检验：m={}、z={}、x={} 没有可用的跨测齿数 k（齿数太小，接触圆超出齿顶圆）。",
-            trim(m),
-            z,
-            trim(x)
-        )
+        crate::i18n::t_fmt("cmd.invol.check.no_span_k", &[("v0", &trim(m)), ("v1", &z.to_string()), ("v2", &trim(x))])
     })
 }
 
@@ -3281,30 +3180,23 @@ fn ball_center_radius(
     internal: bool,
 ) -> Result<(f64, f64), String> {
     if !(m.is_finite() && m > 0.0) {
-        return Err(format!("DIN 5480-2 检验：m={} 必须是正数（棒间距/跨棒距）。", trim(m)));
+        return Err(crate::i18n::t_fmt("cmd.invol.check.m_pos_span", &[("v0", &trim(m))]));
     }
     if !(3..=1000).contains(&z) {
-        return Err(format!("DIN 5480-2 检验：齿数 z={} 超出范围（3..=1000）。", z));
+        return Err(crate::i18n::t_fmt("cmd.invol.check.z_range_insp", &[("v0", &z.to_string())]));
     }
     if !x.is_finite() {
-        return Err(format!("DIN 5480-2 检验：变位系数 x={} 必须是有限数。", trim(x)));
+        return Err(crate::i18n::t_fmt("cmd.invol.check.x_finite", &[("v0", &trim(x))]));
     }
     if !(d_m.is_finite() && d_m > 0.0) {
-        return Err(format!("DIN 5480-2 检验：量棒直径 D_M={} 必须是正数。", trim(d_m)));
+        return Err(crate::i18n::t_fmt("cmd.invol.check.dm_pos", &[("v0", &trim(d_m))]));
     }
     let a = 30f64.to_radians();
     let d = m * z as f64;
     let db = d * a.cos();
     let s = std::f64::consts::PI * m / 2.0 + 2.0 * x * m * a.tan();
     if !(db > 0.0 && s > 0.0) {
-        return Err(format!(
-            "DIN 5480-2 检验：m={}、z={}、x={} 的几何量非正（d_b={}、s={}）。",
-            trim(m),
-            z,
-            trim(x),
-            trim(db),
-            trim(s)
-        ));
+        return Err(crate::i18n::t_fmt("cmd.invol.check.geom_nonpositive", &[("v0", &trim(m)), ("v1", &z.to_string()), ("v2", &trim(x)), ("v3", &trim(db)), ("v4", &trim(s))]));
     }
     let inv_delta = if internal {
         inv(a) + s / d - d_m / db
@@ -3312,13 +3204,15 @@ fn ball_center_radius(
         inv(a) + s / d - std::f64::consts::PI / z as f64 + d_m / db
     };
     let delta = inv_solve(inv_delta).ok_or_else(|| {
-        format!(
-            "DIN 5480-2 检验：invδ={inv_delta} 在范围内无解（m={}、z={}、x={}、D_M={}），\
-             请核对量棒/参数。",
-            trim(m),
-            z,
-            trim(x),
-            trim(d_m)
+        crate::i18n::t_fmt(
+            "cmd.invol.check.inv_delta_no_solution",
+            &[
+                ("v0", &format!("{inv_delta}")),
+                ("v1", &trim(m)),
+                ("v2", &z.to_string()),
+                ("v3", &trim(x)),
+                ("v4", &trim(d_m)),
+            ],
         )
     })?;
     let r_m = db / (2.0 * delta.cos());
@@ -3405,21 +3299,20 @@ fn nearest_inspection_row(m: f64, z: u32) -> Option<InspectionRow> {
 /// 「该 z 不在表中、公式未验证通过，请提供对应表页」。
 pub fn inspection_query(d_b: f64, m: f64, z: u32) -> Result<InspectionResult, String> {
     if !(d_b.is_finite() && d_b > 0.0) {
-        return Err(format!("DIN 5480-2 检验表：d_B={} 必须是正数。", trim(d_b)));
+        return Err(crate::i18n::t_fmt("cmd.invol.check.db_pos", &[("v0", &trim(d_b))]));
     }
     if !(m.is_finite() && m > 0.0) {
-        return Err(format!("DIN 5480-2 检验表：m={} 必须是正数。", trim(m)));
+        return Err(crate::i18n::t_fmt("cmd.invol.check.m_pos", &[("v0", &trim(m))]));
     }
     if !(3..=1000).contains(&z) {
-        return Err(format!("DIN 5480-2 检验表：齿数 z={} 超出范围（3..=1000）。", z));
+        return Err(crate::i18n::t_fmt("cmd.invol.check.z_range_insp_table", &[("v0", &z.to_string())]));
     }
     // ① 精确查表。
     if let Some(row) = inspection_match(d_b, Some(m)).into_iter().find(|r| r.z == z) {
         let mut notes = Vec::new();
         if row.flags.contains("footnote_marker") {
             notes.push(
-                "该表行带 a 脚注：测量点靠近齿根圆角或齿顶边缘，测量值不可靠（DIN 5480-2 表注）；\
-                 棒间距/跨棒距 M1/M2 优先。"
+                crate::i18n::t_static("cmd.invol.check.footnote_a")
                     .to_string(),
             );
         }
@@ -3436,33 +3329,37 @@ pub fn inspection_query(d_b: f64, m: f64, z: u32) -> Result<InspectionResult, St
             a_m1: Some(row.a_m1),
             k: row.k,
             w_k: row.w_k,
-            source: format!("查表 {}", row.source_note()),
+            source: crate::i18n::t_fmt("cmd.invol.check.src_table", &[("v0", &row.source_note())]),
             row: Some(row),
             notes,
         });
     }
     // ② 公式导出（自定义 z）。
     if !inspection_formula_validated() {
-        return Err(format!(
-            "DIN 5480-2 检验表：z={z} 不在表中、公式未验证通过，请提供对应表页。"
+        return Err(crate::i18n::t_fmt(
+            "cmd.invol.check.z_no_formula",
+            &[("z", &z.to_string())],
         ));
     }
     let near = nearest_inspection_row(m, z).ok_or_else(|| {
-        format!(
-            "DIN 5480-2 检验表：z={z} 不在表中，且公式不可用（缺量棒直径 D_M）——{}\
-             请提供对应表页。",
-            inspection_miss_message(d_b, Some(m))
+        crate::i18n::t_fmt(
+            "cmd.invol.check.z_no_ball_row",
+            &[
+                ("z", &z.to_string()),
+                ("v0", &inspection_miss_message(d_b, Some(m))),
+            ],
         )
     })?;
     let x = x_from_d_b(d_b, m, z);
     if !(-0.05 - 1e-9..=0.45 + 1e-9).contains(&x) {
-        return Err(format!(
-            "DIN 5480-2 检验表：z={z} 不在表中；由 d_B={}、m={} 反解 x={} 超出 x∈[−0.05, 0.45]\
-             （DIN 5480-1），公式不可用 —— 请提供对应表页\
-             （数据来源：检验表 267 行 / p12·p16·p18·p20 + m=1.5/m=5 截图）。",
-            trim(d_b),
-            trim(m),
-            trim(x)
+        return Err(crate::i18n::t_fmt(
+            "cmd.invol.check.z_x_out_of_range",
+            &[
+                ("z", &z.to_string()),
+                ("v0", &trim(d_b)),
+                ("v1", &trim(m)),
+                ("v2", &trim(x)),
+            ],
         ));
     }
     let k = span_teeth(m, z, x)?;
@@ -3483,34 +3380,17 @@ pub fn inspection_query(d_b: f64, m: f64, z: u32) -> Result<InspectionResult, St
         k,
         w_k,
         row: None,
-        source: format!("公式导出（z={z} 不在检验表中）"),
+        source: crate::i18n::t_fmt("cmd.invol.check.src_formula_z", &[("z", &z.to_string())]),
         notes: vec![
-            format!(
-                "公式已与检验表逐行对照：可算 265/267 行，W_k/M1/M2 残差 ≤{}（17 处源表 OCR 异常已按源图核对）。",
-                trim(INSPECTION_TOL)
-            ),
-            format!(
-                "量棒直径借用邻近表行 {}：D_M_hub={}、D_M_shaft={}；k={k} 由跨测齿数规则反推。",
-                near.source_note(),
-                trim(near.d_m_hub),
-                trim(near.d_m_shaft)
-            ),
+            crate::i18n::t_fmt("cmd.invol.check.notes_line1", &[("v0", &trim(INSPECTION_TOL))]),
+            crate::i18n::t_fmt("cmd.invol.check.notes_line2", &[("v0", &near.source_note()), ("v1", &trim(near.d_m_hub)), ("v2", &trim(near.d_m_shaft)), ("k", &k.to_string())]),
         ],
     })
 }
 
 /// 单行检验结果摘要（GUI/命令行 info 用；含来源）。
 pub fn inspection_summary(r: &InspectionResult) -> String {
-    format!(
-        "M1={}（D_M={}） M2={}（D_M={}） k={} W_k={}；{}",
-        trim(r.m1),
-        trim(r.d_m_shaft),
-        trim(r.m2),
-        trim(r.d_m_hub),
-        r.k,
-        trim(r.w_k),
-        r.source
-    )
+    crate::i18n::t_fmt("cmd.invol.check.summary", &[("v0", &trim(r.m1)), ("v1", &trim(r.d_m_shaft)), ("v2", &trim(r.m2)), ("v3", &trim(r.d_m_hub)), ("v4", &r.k.to_string()), ("v5", &trim(r.w_k)), ("v6", &r.source)])
 }
 
 /// `/api/invol_check`：`?db=40&m=2&z=18[&check=1]` → 检验值 JSON。
@@ -3526,19 +3406,16 @@ pub fn inspection_json(query: &str) -> Result<String, String> {
     let db = param("db")
         .or_else(|| param("d_b"))
         .and_then(|v| v.parse::<f64>().ok())
-        .ok_or_else(|| "invol_check：缺 db（基准直径 d_B，例 ?db=40&m=2&z=18）".to_string())?;
+        .ok_or_else(|| crate::i18n::t_static("cmd.invol.check.missing_db").to_string())?;
     let m = param("m")
         .and_then(|v| v.parse::<f64>().ok())
-        .ok_or_else(|| "invol_check：缺 m（模数，例 ?db=40&m=2&z=18）".to_string())?;
+        .ok_or_else(|| crate::i18n::t_static("cmd.invol.check.missing_m").to_string())?;
     let z = param("z")
         .and_then(|v| v.parse::<u32>().ok())
-        .ok_or_else(|| "invol_check：缺 z（齿数，例 ?db=40&m=2&z=18）".to_string())?;
+        .ok_or_else(|| crate::i18n::t_static("cmd.invol.check.missing_z").to_string())?;
     let check = param("check").is_some_and(|v| !(v == "0" || v.eq_ignore_ascii_case("false")));
     if !check && inspection_match(db, Some(m)).iter().all(|r| r.z != z) {
-        return Err(format!(
-            "{}（公式导出请加 check=1 / CHECK）",
-            inspection_miss_message(db, Some(m))
-        ));
+        return Err(crate::i18n::t_fmt("cmd.invol.check.need_check_flag", &[("v0", &inspection_miss_message(db, Some(m)))]));
     }
     let r = inspection_query(db, m, z)?;
     let mut obj = serde_json::json!({
@@ -3703,7 +3580,7 @@ pub fn inspection_residuals() -> Vec<InspectionResidual> {
             note: String::new(),
         };
         let Some(x) = res.x else {
-            res.note = "名义表无该 (m,d_B,z)（z 疑 OCR 残行，不参与公式对照）".to_string();
+            res.note = crate::i18n::t_static("cmd.invol.check.residual_x_note").to_string();
             out.push(res);
             continue;
         };
@@ -3717,14 +3594,14 @@ pub fn inspection_residuals() -> Vec<InspectionResidual> {
                 res.m1_calc = Some(v);
                 res.m1_residual = Some((v - row.m1).abs());
             }
-            Err(e) => res.note.push_str(&format!("M1 计算失败：{e} ")),
+            Err(e) => res.note.push_str(&crate::i18n::t_fmt("cmd.invol.check.m1_fail", &[("e", &e)])),
         }
         match m2 {
             Ok(v) => {
                 res.m2_calc = Some(v);
                 res.m2_residual = Some((v - row.m2).abs());
             }
-            Err(e) => res.note.push_str(&format!("M2 计算失败：{e} ")),
+            Err(e) => res.note.push_str(&crate::i18n::t_fmt("cmd.invol.check.m2_fail", &[("e", &e)])),
         }
         // 异常标注 + 源图核对修正复核。
         let mut bad = Vec::new();
@@ -3757,26 +3634,38 @@ pub fn inspection_residuals() -> Vec<InspectionResidual> {
                         _ => None,
                     };
                     let fixed_ok = fixed.is_some_and(|r| r <= INSPECTION_TOL);
-                    res.note = format!(
-                        "源表 OCR 异常（{} 与公式不一致）：{} 印为 {}、源图为 {}；修正后{}。",
-                        bad.join("/"),
-                        field,
-                        if *field == "k" {
-                            row.k.to_string()
-                        } else {
-                            trim(match *field {
-                                "d_m_shaft" => row.d_m_shaft,
-                                "d_m_hub" => row.d_m_hub,
-                                "m2" => row.m2,
-                                _ => row.k as f64,
-                            })
-                        },
-                        trim(*value),
-                        if fixed_ok { "通过（≤2e-3）" } else { "仍不一致" }
+                    res.note = crate::i18n::t_fmt(
+                        "cmd.invol.check.ocr_anomaly",
+                        &[
+                            ("v0", &bad.join("/")),
+                            ("v1", &field),
+                            (
+                                "v2",
+                                &if *field == "k" {
+                                    row.k.to_string()
+                                } else {
+                                    trim(match *field {
+                                        "d_m_shaft" => row.d_m_shaft,
+                                        "d_m_hub" => row.d_m_hub,
+                                        "m2" => row.m2,
+                                        _ => row.k as f64,
+                                    })
+                                },
+                            ),
+                            ("v3", &trim(*value)),
+                            (
+                                "v4",
+                                if fixed_ok {
+                                    crate::i18n::t_static("cmd.invol.check.ocr_fixed_ok")
+                                } else {
+                                    crate::i18n::t_static("cmd.invol.check.ocr_still_bad")
+                                },
+                            ),
+                        ],
                     );
                 }
                 None => {
-                    res.note = format!("与公式不一致（{}，无源图核对记录）", bad.join("/"));
+                    res.note = crate::i18n::t_fmt("cmd.invol.check.mismatch_no_fix", &[("v0", &bad.join("/"))]);
                 }
             }
         }
@@ -3831,41 +3720,50 @@ pub fn inspection_formula_report() -> &'static InspectionFormulaReport {
             }
             if !r.note.is_empty() {
                 let fix_ok = inspection_ocr_fix(r.page, r.m, r.d_b, r.z)
-                    .is_some_and(|(_, _, _, _, _, _)| r.note.contains("修正后通过"));
+                    .is_some_and(|(_, _, _, _, _, _)| r.note.contains(crate::i18n::t_static("cmd.invol.check.fixed_pass")));
                 if !fix_ok {
                     report.validated = false;
                 }
-                report.anomalies.push(format!(
-                    "p{} d_B={} m={} z={}（{}）：{}",
-                    r.page,
-                    trim(r.d_b),
-                    trim(r.m),
-                    r.z,
-                    r.source,
-                    r.note
+                report.anomalies.push(crate::i18n::t_fmt(
+                    "cmd.invol.check.anomaly_row",
+                    &[
+                        ("v0", &r.page.to_string()),
+                        ("v1", &trim(r.d_b)),
+                        ("v2", &trim(r.m)),
+                        ("v3", &r.z.to_string()),
+                        ("v4", &r.source),
+                        ("v5", &r.note),
+                    ],
                 ));
             }
         }
-        report.summary = format!(
-            "DIN 5480-2 检验表逐行对照：{} 行（可算 {}，跳过 {} 行无名义 x）；W_k {}/{} 行、\
-             M1 {}/{} 行、M2 {}/{} 行残差 ≤{}（max W_k {:.4} / M1 {:.4} / M2 {:.4}）；\
-             源数据 OCR 异常 {} 处（已按源图核对、未改写 CSV，修正后全部 ≤{}）：公式{}。",
-            report.total,
-            report.checked,
-            report.skipped.len(),
-            report.w_k_pass,
-            report.checked,
-            report.m1_pass,
-            report.checked,
-            report.m2_pass,
-            report.checked,
-            trim(INSPECTION_TOL),
-            report.max_w_k_residual,
-            report.max_m1_residual,
-            report.max_m2_residual,
-            report.anomalies.len(),
-            trim(INSPECTION_TOL),
-            if report.validated { "验证通过" } else { "未通过" }
+        report.summary = crate::i18n::t_fmt(
+            "cmd.invol.check.formula_summary",
+            &[
+                ("v0", &report.total.to_string()),
+                ("v1", &report.checked.to_string()),
+                ("v2", &report.skipped.len().to_string()),
+                ("v3", &report.w_k_pass.to_string()),
+                ("v4", &report.checked.to_string()),
+                ("v5", &report.m1_pass.to_string()),
+                ("v6", &report.checked.to_string()),
+                ("v7", &report.m2_pass.to_string()),
+                ("v8", &report.checked.to_string()),
+                ("v9", &trim(INSPECTION_TOL)),
+                ("v10", &format!("{:.4}", report.max_w_k_residual)),
+                ("v11", &format!("{:.4}", report.max_m1_residual)),
+                ("v12", &format!("{:.4}", report.max_m2_residual)),
+                ("v13", &report.anomalies.len().to_string()),
+                ("v14", &trim(INSPECTION_TOL)),
+                (
+                    "v15",
+                    if report.validated {
+                        crate::i18n::t_static("cmd.invol.check.validated")
+                    } else {
+                        crate::i18n::t_static("cmd.invol.check.not_validated")
+                    },
+                ),
+            ],
         );
         report
     })
@@ -3960,7 +3858,7 @@ impl InvolParams {
     /// [`ansi_profile_name`] 可由「压力角 + 齿根型式 + 配合方式」拿到合法齿廓名。
     pub fn ansi(profile: &str, p: f64, z: u32) -> Result<Self, String> {
         if !(p.is_finite() && p > 0.0) {
-            return Err(ansi_prefixed(format!("径节 P={} 必须是正数。", trim(p))));
+            return Err(ansi_prefixed(crate::i18n::t_fmt("cmd.invol.check.pitch_pos", &[("v0", &trim(p))])));
         }
         // 构造即用 mm 模数；`pitch` 回填原值（`ansi_p()` 优先用它，避免整数/小数往返丢精度）。
         let mut q = Self::from_preset(SplineStd::ANSI, profile, ANSI_INCH_MM / p, z)
@@ -4412,18 +4310,21 @@ impl InvolParams {
 
     /// 规格文本（块名/明细表用）；ANSI 用 `P/Ps`（径节）标识，不用模数/`d_B`。
     pub fn spec(&self) -> String {
-        let head = if self.internal { "内花键 " } else { "" };
+        let head = if self.internal { crate::i18n::t_static("cmd.invol.spec.internal_head") } else { "" };
         let mut s = if self.std == SplineStd::ANSI {
             let p = self.ansi_p();
             // P/Ps 保留标准原值（照 DP 先例）；附录圆 mm（内部统一 mm，避免误读）。
             format!(
-                "{head}{} {} P{}/Ps{} N{}（节圆 φ{}）",
+                "{head}{} {} P{}/Ps{} N{}{}",
                 self.std.label(),
                 self.profile,
                 trim(p),
                 trim(2.0 * p),
                 self.z,
-                trim(self.d())
+                crate::i18n::t_fmt(
+                    "cmd.invol.spec.ansi_pitch_circle",
+                    &[("v0", &trim(self.d()))]
+                )
             )
         } else {
             format!(
@@ -4502,22 +4403,33 @@ impl InvolParams {
             return self.front_view_internal(n);
         }
         if self.tooth_tip_crossed() {
-            return Err(format!(
-                "{} {}：齿顶变尖（ψ(da/2)={:.4}° ≤ 0），两条渐开线在齿顶圆之前相交，\
-                 端视图画不出真实齿廓；请减小 ha* / 增大齿数。",
-                self.std.label(),
-                self.profile,
+            let psi_deg = format!(
+                "{:.4}",
                 self.half_tooth_angle(self.da() / 2.0).to_degrees()
+            );
+            return Err(crate::i18n::t_fmt(
+                "cmd.invol.err.tooth_tip_crossed",
+                &[
+                    ("v0", self.std.label()),
+                    ("v1", self.profile),
+                    ("v2", &psi_deg),
+                ],
             ));
         }
         if self.root_space_crossed() {
-            return Err(format!(
-                "{} {}：齿槽过宽（ψ(r_start)={:.4}° ≥ 半齿距 {:.4}°），相邻齿廓在齿根之前相交，\
-                 端视图画不出真实齿廓；请减小 hf*/α 或增大齿数。",
-                self.std.label(),
-                self.profile,
-                self.half_tooth_angle(self.r_involute_start()).to_degrees(),
-                (self.pitch_angle() / 2.0).to_degrees()
+            let psi_deg = format!(
+                "{:.4}",
+                self.half_tooth_angle(self.r_involute_start()).to_degrees()
+            );
+            let pitch_deg = format!("{:.4}", (self.pitch_angle() / 2.0).to_degrees());
+            return Err(crate::i18n::t_fmt(
+                "cmd.invol.err.root_space_crossed",
+                &[
+                    ("v0", self.std.label()),
+                    ("v1", self.profile),
+                    ("v2", &psi_deg),
+                    ("v3", &pitch_deg),
+                ],
             ));
         }
         let pitch = self.pitch_angle();
@@ -4614,23 +4526,28 @@ impl InvolParams {
         let pitch_half = pitch / 2.0;
         let psi_inner = self.internal_half_space_angle(r_inner);
         if psi_inner >= pitch_half - 1e-9 {
-            return Err(format!(
-                "{} {} 内花键：齿槽过宽（ψ={:.4}° ≥ 半齿距 {:.4}°），相邻齿槽的齿廓在齿顶之前相交，\
-                 端视图画不出真实齿廓；请减小 hf*/α 或增大齿数。",
-                self.std.label(),
-                self.profile,
-                psi_inner.to_degrees(),
-                pitch_half.to_degrees()
+            let psi_inner_deg = format!("{:.4}", psi_inner.to_degrees());
+            let pitch_half_deg = format!("{:.4}", pitch_half.to_degrees());
+            return Err(crate::i18n::t_fmt(
+                "cmd.invol.err.internal_space_crossed",
+                &[
+                    ("v0", self.std.label()),
+                    ("v1", self.profile),
+                    ("v2", &psi_inner_deg),
+                    ("v3", &pitch_half_deg),
+                ],
             ));
         }
         let psi_root = self.internal_half_space_angle(r_root);
         if psi_root <= 1e-9 {
-            return Err(format!(
-                "{} {} 内花键：齿槽在齿根处已相交（ψ(D_ei/2)={:.4}° ≤ 0），端视图画不出真实齿廓；\
-                 请减小齿槽宽（如减小 hf* 或调整 x）。",
-                self.std.label(),
-                self.profile,
-                psi_root.to_degrees()
+            let psi_root_deg = format!("{:.4}", psi_root.to_degrees());
+            return Err(crate::i18n::t_fmt(
+                "cmd.invol.err.internal_root_crossed",
+                &[
+                    ("v0", self.std.label()),
+                    ("v1", self.profile),
+                    ("v2", &psi_root_deg),
+                ],
             ));
         }
         let mut out = Vec::with_capacity(self.z as usize * (2 * INVOLUTE_SEGMENTS + 4) + 2);
@@ -4725,8 +4642,7 @@ impl InvolParams {
     pub fn section_view(&self, len: f64) -> Result<Vec<EntityType>, String> {
         if self.internal {
             return Err(
-                "内花键剖视图按内齿轮口径出图（齿圈内齿不剖：端面/齿顶线/齿根线/内孔壁/孔口倒角 \
-                 + 分度线/轴线，不打剖面线），由 gear.rs 的 internal_bore_section 模板生成，不在引擎侧出图。"
+                crate::i18n::t_static("cmd.invol.section.internal_note")
                     .to_string(),
             );
         }
@@ -4743,14 +4659,13 @@ impl InvolParams {
     /// 收尾长度 `l = √(h(2R−h))`（`h=(da−df)/2`、`R=de/2`；`de` 须大于大径）。
     pub fn runout_length(&self, de: f64) -> Result<f64, String> {
         if !(de.is_finite() && de > 0.0) {
-            return Err(format!("渐开线花键：滚刀外径 de={de} 必须是正数。"));
+            return Err(crate::i18n::t_fmt(
+                "cmd.invol.runout.de_pos",
+                &[("de", &trim(de))],
+            ));
         }
         if de <= self.da() + 1e-9 {
-            return Err(format!(
-                "渐开线花键：滚刀外径 de={} 必须大于外花键大径 da={}（否则收尾弧切不出去）。",
-                trim(de),
-                trim(self.da())
-            ));
+            return Err(crate::i18n::t_fmt("cmd.invol.runout.de_gt_da", &[("v0", &trim(de)), ("v1", &trim(self.da()))]));
         }
         let h = self.tooth_depth();
         let r = self.hob_radius(de);
@@ -4814,18 +4729,18 @@ fn report_row(
 fn ansi_dre_branch(e: &InvolParams) -> String {
     match e.ansi_column() {
         Some(AnsiColumn::A30FlatSide) | Some(AnsiColumn::B30FlatMajor) => {
-            "30° 平齿根（列 A/B）：k=1.35，不分径节段".to_string()
+            crate::i18n::t_static("cmd.invol.report.dre.a").to_string()
         }
         Some(AnsiColumn::C30FilletSide) => {
             if e.ansi_p() > 12.0 + 1e-9 {
-                "30° 圆齿根（列 C）：P>12 段，Dre=(N−2)/P".to_string()
+                crate::i18n::t_static("cmd.invol.report.dre.c_gt12").to_string()
             } else {
-                "30° 圆齿根（列 C）：P≤12 段，Dre=(N−1.8)/P".to_string()
+                crate::i18n::t_static("cmd.invol.report.dre.c_le12").to_string()
             }
         }
-        Some(AnsiColumn::D375FilletSide) => "37.5° 圆齿根（列 D）：k=1.3".to_string(),
-        Some(AnsiColumn::E45FilletSide) => "45° 圆齿根（列 E）：k=1.0（径节 10/20 起）".to_string(),
-        None => "（无 Table 2 列）".to_string(),
+        Some(AnsiColumn::D375FilletSide) => crate::i18n::t_static("cmd.invol.report.dre.d").to_string(),
+        Some(AnsiColumn::E45FilletSide) => crate::i18n::t_static("cmd.invol.report.dre.e").to_string(),
+        None => crate::i18n::t_static("cmd.invol.report.dre.none").to_string(),
     }
 }
 
@@ -4833,13 +4748,13 @@ fn ansi_dre_branch(e: &InvolParams) -> String {
 fn report_unit_note(std: SplineStd) -> &'static str {
     match std {
         SplineStd::ANSI => {
-            "ANSI B92.1 为英制标准：径节 P 单位 1/in、Ps=2P；引擎内部按 1 in = 25.4 mm 换算，输出全为 mm。"
+            crate::i18n::t_static("cmd.invol.report.units_note.ansi")
         }
         SplineStd::DIN => {
-            "长度 mm、角度 °；d_B 为 DIN 5480 基准直径（由名义表/公式确定几何）。"
+            crate::i18n::t_static("cmd.invol.report.units_note.din")
         }
-        SplineStd::NF => "长度 mm、角度 °；A 为 NF E22-141 公称直径主参数。",
-        SplineStd::GB => "长度 mm、角度 °；GB/T 3478.1 不用基准直径，几何由 m/z/x 决定。",
+        SplineStd::NF => crate::i18n::t_static("cmd.invol.report.units_note.nf"),
+        SplineStd::GB => crate::i18n::t_static("cmd.invol.report.units_note.gb"),
     }
 }
 
@@ -4847,13 +4762,13 @@ fn report_unit_note(std: SplineStd) -> &'static str {
 fn report_preset_source(std: SplineStd) -> &'static str {
     match std {
         SplineStd::GB => {
-            "GB/T 3478.1-2008 表 2（模数系列）+ 图 2（基本齿廓）+ 表 3（尺寸公式）"
+            crate::i18n::t_static("cmd.invol.report.src.preset.gb")
         }
         SplineStd::DIN => {
-            "DIN 5480-1:2015 条 5.1（齿侧对中基准 h_fP*=0.55）+ DIN 5480-2 名义表/检验表"
+            crate::i18n::t_static("cmd.invol.report.src.preset.din")
         }
-        SplineStd::NF => "NF E22-141 p07 公式（α=20°；外径定心 A₁′=A）",
-        SplineStd::ANSI => "ANSI B92.1 Table 2 五列公式（p10；英制换 mm：1in=25.4mm）",
+        SplineStd::NF => crate::i18n::t_static("cmd.invol.report.src.preset.nf"),
+        SplineStd::ANSI => crate::i18n::t_static("cmd.invol.report.src.preset.ansi"),
     }
 }
 
@@ -4902,73 +4817,42 @@ fn build_report_inner(params: &InvolParams, origin: Option<&D_bOrigin>, h: Optio
     let e = params;
     let std = e.std;
     let mut md = String::new();
-    md.push_str("# 渐开线花键计算书\n\n");
-    md.push_str(&format!(
-        "- 体系：**{}**（{}）\n",
-        std.label(),
-        std.code()
-    ));
-    md.push_str(&format!(
-        "- 模式：**{}**\n",
-        if e.internal {
-            "内花键（材料在外、齿朝内）"
+    md.push_str(crate::i18n::t_static("cmd.invol.report.title"));
+    md.push_str(&crate::i18n::t_fmt("cmd.invol.report.std", &[("v0", &std.label()), ("v1", &std.code())]));
+    md.push_str(&crate::i18n::t_fmt("cmd.invol.report.mode", &[("v0", &if e.internal {
+            crate::i18n::t("cmd.invol.report.mode_internal")
         } else {
-            "外花键"
-        }
-    ));
-    md.push_str(&format!(
-        "- 齿廓/预设：**{}**（代号 `{}`）\n",
-        e.profile,
-        preset_code(std, e.profile).unwrap_or("-")
-    ));
+            crate::i18n::t("cmd.invol.report.mode_external")
+        })]));
+    md.push_str(&crate::i18n::t_fmt("cmd.invol.report.profile", &[("v0", &e.profile), ("v1", &preset_code(std, e.profile).unwrap_or("-"))]));
     if let Some(h) = h {
-        md.push_str(&format!("- 有效长度 L：{} mm\n", trim(h)));
+        md.push_str(&crate::i18n::t_fmt("cmd.invol.report.len", &[("v0", &trim(h))]));
     }
-    md.push_str(&format!("- 单位口径：{}\n\n", report_unit_note(std)));
+    md.push_str(&crate::i18n::t_fmt("cmd.invol.report.units", &[("v0", &report_unit_note(std))]));
 
     // ── 1. 输入参数 ──
-    md.push_str("## 1. 输入参数\n\n");
-    md.push_str("| 输入 | 原值 | 说明 |\n|---|---|---|\n");
+    md.push_str(crate::i18n::t_static("cmd.invol.report.h_inputs"));
+    md.push_str(crate::i18n::t_static("cmd.invol.report.t_inputs"));
     if std == SplineStd::ANSI {
-        md.push_str(&format!(
-            "| 径节 P / Ps | {} / {} | A/B 写法；P 单位 1/in，Ps 恒 = 2P |\n",
-            trim(e.ansi_p()),
-            trim(2.0 * e.ansi_p())
-        ));
-        md.push_str(&format!(
-            "| 模数 m = 25.4/P | {} mm | 引擎内部统一 mm |\n",
-            trim(e.m)
-        ));
+        md.push_str(&crate::i18n::t_fmt("cmd.invol.report.row_pitch", &[("v0", &trim(e.ansi_p())), ("v1", &trim(2.0 * e.ansi_p()))]));
+        md.push_str(&crate::i18n::t_fmt("cmd.invol.report.row_m_conv", &[("v0", &trim(e.m))]));
     } else {
-        md.push_str(&format!("| 模数 m | {} mm | 模数制 |\n", trim(e.m)));
+        md.push_str(&crate::i18n::t_fmt("cmd.invol.report.row_m", &[("v0", &trim(e.m))]));
     }
-    md.push_str(&format!("| 齿数 z（ANSI 记 N） | {} | — |\n", e.z));
-    md.push_str(&format!("| 变位系数 x | {} | — |\n", trim(e.x)));
+    md.push_str(&crate::i18n::t_fmt("cmd.invol.report.row_z", &[("v0", &e.z.to_string())]));
+    md.push_str(&crate::i18n::t_fmt("cmd.invol.report.row_x", &[("v0", &trim(e.x))]));
     if std == SplineStd::DIN {
-        md.push_str(&format!(
-            "| 基准直径 d_B | {} | 主参数（DIN 5480） |\n",
-            e.d_b.map(trim).unwrap_or_else(|| "—".into())
-        ));
+        md.push_str(&crate::i18n::t_fmt("cmd.invol.report.row_db_input", &[("v0", &e.d_b.map(trim).unwrap_or_else(|| "—".into()))]));
     }
     if std == SplineStd::NF {
-        md.push_str(&format!(
-            "| 公称直径 A | {} | 主参数（NF E22-141） |\n",
-            e.a.map(trim).unwrap_or_else(|| "—".into())
-        ));
+        md.push_str(&crate::i18n::t_fmt("cmd.invol.report.row_a", &[("v0", &e.a.map(trim).unwrap_or_else(|| "—".into()))]));
     }
-    md.push_str(&format!(
-        "| 基本齿廓 α / ha* / hf* / ρf* / cF* | {}° / {} / {} / {} / {} | 预设（可覆盖） |\n",
-        trim(e.alpha_deg),
-        trim(e.ha_star),
-        trim(e.hf_star),
-        trim(e.rho_star),
-        trim(e.c_f_star)
-    ));
+    md.push_str(&crate::i18n::t_fmt("cmd.invol.report.row_profile", &[("v0", &trim(e.alpha_deg)), ("v1", &trim(e.ha_star)), ("v2", &trim(e.hf_star)), ("v3", &trim(e.rho_star)), ("v4", &trim(e.c_f_star))]));
     md.push('\n');
 
     // ── 2. 逐步计算 ──
-    md.push_str("## 2. 逐步计算\n\n");
-    md.push_str("| # | 步骤 | 公式（符号含义） | 代入 | 结果 | 依据来源 |\n");
+    md.push_str(crate::i18n::t_static("cmd.invol.report.h_steps"));
+    md.push_str(crate::i18n::t_static("cmd.invol.report.t_steps"));
     md.push_str("|---|---|---|---|---|---|\n");
     let mut n = 0usize;
     let mut steps = String::new();
@@ -4977,7 +4861,7 @@ fn build_report_inner(params: &InvolParams, origin: Option<&D_bOrigin>, h: Optio
             steps.push_str(&report_row(&mut n, name, formula, subst, result, source));
         };
         s(
-            "预设基本齿廓",
+            crate::i18n::t_static("cmd.invol.report.step.preset"),
             "α / ha* / hf* / ρf* / cF*",
             "—",
             &format!(
@@ -4992,131 +4876,125 @@ fn build_report_inner(params: &InvolParams, origin: Option<&D_bOrigin>, h: Optio
         );
         if std == SplineStd::ANSI {
             s(
-                "英制换算",
-                "m = 25.4 / P（P 径节 1/in；m 模数 mm）",
+                crate::i18n::t_static("cmd.invol.report.step.ansi_conv"),
+                crate::i18n::t_static("cmd.invol.report.formula.ansi_conv"),
                 &format!("25.4 / {}", trim(e.ansi_p())),
                 &format!("{} mm", trim(e.m)),
-                "ANSI B92.1 英制标准（1 in = 25.4 mm）",
+                crate::i18n::t_static("cmd.invol.report.source.ansi_conv"),
             );
         }
         match std {
             SplineStd::DIN => {
                 let d_b = e.d_b.unwrap_or_else(|| d_b_from_x(e.m, e.z, e.x));
                 s(
-                    "基准直径/变位",
-                    "d_B = d + 1.1m + 2x₁m；逆式 x₁ = (d_B − m(z+1.1)) / (2m)",
+                    crate::i18n::t_static("cmd.invol.report.step.din_db"),
+                    crate::i18n::t_static("cmd.invol.report.formula.din_db"),
                     &format!("m={}，z={}，x₁={}", trim(e.m), e.z, trim(e.x)),
                     &format!("d_B = {} mm", trim(d_b)),
-                    &format!(
-                        "由 DIN 5480-2 名义表（OCR）反推并经全表逐行校验（721 行残差 0）；{}",
-                        origin.map(|o| o.note()).unwrap_or_default()
-                    ),
+                    &crate::i18n::t_fmt("cmd.invol.report.source.din_db", &[("v0", &origin.map(|o| o.note()).unwrap_or_default())]),
                 );
             }
             SplineStd::NF => {
                 let a = e.a.unwrap_or_else(|| a_from_x(e.m, e.z, e.x));
                 s(
-                    "公称直径/变位",
-                    "A = m(N + 2x + 0.4)；逆式 x = (A − m(N+0.4)) / (2m)",
+                    crate::i18n::t_static("cmd.invol.report.step.nf_a"),
+                    crate::i18n::t_static("cmd.invol.report.formula.nf_a"),
                     &format!("m={}，N={}，x={}", trim(e.m), e.z, trim(e.x)),
                     &format!("A = {} mm", trim(a)),
-                    &format!(
-                        "NF E22-141 p07；{}",
-                        origin.map(|o| o.note()).unwrap_or_default()
-                    ),
+                    &crate::i18n::t_fmt("cmd.invol.report.source.nf_a", &[("v0", &origin.map(|o| o.note()).unwrap_or_default())]),
                 );
             }
             _ => {}
         }
         s(
-            "分度圆直径",
-            "d = m·z（m 模数，z 齿数）",
+            crate::i18n::t_static("cmd.invol.report.step.d"),
+            crate::i18n::t_static("cmd.invol.report.formula.d"),
             &format!("{} × {}", trim(e.m), e.z),
             &format!("{} mm", trim(e.d())),
             match std {
-                SplineStd::GB => "GB/T 3478.1-2008 表 3（d = mz）",
-                SplineStd::DIN => "DIN 5480-2 名义表 d 列 / DIN 5480-1:2015（d = mz）",
-                SplineStd::NF => "NF E22-141 p07（d = mN）",
-                SplineStd::ANSI => "ANSI B92.1 Table 2（D = N/P，英寸 → m·z mm）",
+                SplineStd::GB => crate::i18n::t_static("cmd.invol.report.source.d.gb"),
+                SplineStd::DIN => crate::i18n::t_static("cmd.invol.report.source.d.din"),
+                SplineStd::NF => crate::i18n::t_static("cmd.invol.report.source.d.nf"),
+                SplineStd::ANSI => crate::i18n::t_static("cmd.invol.report.source.d.ansi"),
             },
         );
         if e.x.abs() > 1e-12 {
             s(
-                "计算直径",
-                "d′ = d + 2x·m（计入变位）",
+                crate::i18n::t_static("cmd.invol.report.step.d_eff"),
+                crate::i18n::t_static("cmd.invol.report.formula.d_eff"),
                 &format!("{} + 2×{}×{}", trim(e.d()), trim(e.x), trim(e.m)),
                 &format!("{} mm", trim(e.d_eff())),
                 match std {
-                    SplineStd::DIN => "DIN 5480-1:2015 条 5.1（d′ = mz + 2xm）",
-                    SplineStd::NF => "NF E22-141 p07（d′ = m(N+2x)）",
-                    _ => "通用变位口径（GB 基本齿廓不含变位，x=0 时 d′=d）",
+                    SplineStd::DIN => crate::i18n::t_static("cmd.invol.report.source.d_eff.din"),
+                    SplineStd::NF => crate::i18n::t_static("cmd.invol.report.source.d_eff.nf"),
+                    _ => crate::i18n::t_static("cmd.invol.report.source.d_eff.other"),
                 },
             );
         }
         s(
-            "基圆直径",
-            "db = d·cosα（α 压力角）",
+            crate::i18n::t_static("cmd.invol.report.step.db"),
+            crate::i18n::t_static("cmd.invol.report.formula.db"),
             &format!("{} × cos {}°", trim(e.d()), trim(e.alpha_deg)),
             &format!("{} mm", trim(e.db())),
             match std {
-                SplineStd::GB => "GB/T 3478.1-2008 表 3（基圆 db）",
-                SplineStd::DIN => "DIN 5480-1:2015 渐开线定义",
-                SplineStd::NF => "NF E22-141 渐开线定义",
-                SplineStd::ANSI => "ANSI B92.1 渐开线定义（α 由 Table 2 列定）",
+                SplineStd::GB => crate::i18n::t_static("cmd.invol.report.source.db.gb"),
+                SplineStd::DIN => crate::i18n::t_static("cmd.invol.report.source.db.din"),
+                SplineStd::NF => crate::i18n::t_static("cmd.invol.report.source.db.nf"),
+                SplineStd::ANSI => crate::i18n::t_static("cmd.invol.report.source.db.ansi"),
             },
         );
         s(
-            "齿顶圆直径",
+            crate::i18n::t_static("cmd.invol.report.step.da"),
             match std {
-                SplineStd::DIN => "d_a1 = d′ + 2·ha*·m（ha*=0.45 ⇒ d + 2xm + 0.9m）",
-                SplineStd::NF => "da = A（外径定心 A₁′=A，等效 ha*=0.2）",
-                SplineStd::ANSI => "Do = (N+1)/P ⇒ da = d + m（所选列 ha*=0.5）",
-                SplineStd::GB => "da = d′ + 2·ha*·m",
+                SplineStd::DIN => crate::i18n::t_static("cmd.invol.report.formula.da.din"),
+                SplineStd::NF => crate::i18n::t_static("cmd.invol.report.formula.da.nf"),
+                SplineStd::ANSI => crate::i18n::t_static("cmd.invol.report.formula.da.ansi"),
+                SplineStd::GB => crate::i18n::t_static("cmd.invol.report.formula.da.gb"),
             },
             &format!("{} + 2×{}×{}", trim(e.d_eff()), trim(e.ha_star), trim(e.m)),
             &format!("{} mm", trim(e.da())),
             match std {
                 SplineStd::GB => {
-                    "GB/T 3478.1-2008 表 3 + 表 4~表 6（30° 平/圆 → m(z+1)；37.5° → m(z+0.9)；45° → m(z+0.8)）"
+                    crate::i18n::t_static("cmd.invol.report.source.da.gb")
                 }
-                SplineStd::DIN => "DIN 5480-1:2015（d_a1 = mz + 2xm + 0.9m）",
-                SplineStd::NF => "NF E22-141 p07（外径定心）",
-                SplineStd::ANSI => "ANSI B92.1 Table 2（Do 公式）",
+                SplineStd::DIN => crate::i18n::t_static("cmd.invol.report.source.da.din"),
+                SplineStd::NF => crate::i18n::t_static("cmd.invol.report.source.da.nf"),
+                SplineStd::ANSI => crate::i18n::t_static("cmd.invol.report.source.da.ansi"),
             },
         );
         s(
-            "齿根圆直径",
+            crate::i18n::t_static("cmd.invol.report.step.df"),
             match std {
-                SplineStd::DIN => "d_f1 = d′ − 2·hf*·m（hf*=0.55 ⇒ d′ − 1.1m）",
-                SplineStd::NF => "df = A − 2.4m（平齿根）/ A − 2.694m（圆齿根）",
-                SplineStd::ANSI => "Dre = (N−k)/P；df = d − k·m",
-                SplineStd::GB => "df = d′ − 2·hf*·m",
+                SplineStd::DIN => crate::i18n::t_static("cmd.invol.report.formula.df.din"),
+                SplineStd::NF => crate::i18n::t_static("cmd.invol.report.formula.df.nf"),
+                SplineStd::ANSI => crate::i18n::t_static("cmd.invol.report.formula.df.ansi"),
+                SplineStd::GB => crate::i18n::t_static("cmd.invol.report.formula.df.gb"),
             },
             &format!("{} − 2×{}×{}", trim(e.d_eff()), trim(e.hf_star), trim(e.m)),
             &format!("{} mm", trim(e.df())),
             match std {
                 SplineStd::GB => {
-                    "GB/T 3478.1-2008 表 3 + 表 4~表 6（30°平 m(z−1.5)；30°圆 m(z−1.8)；37.5° m(z−1.4)；45° m(z−1.2)）"
+                    crate::i18n::t_static("cmd.invol.report.source.df.gb")
                 }
-                SplineStd::DIN => "DIN 5480-1:2015（d_f1；齿侧对中基准 h_fP*=0.55）",
-                SplineStd::NF => "NF E22-141 p07（B=A−2.4m / B₁=A−2.694m）",
-                SplineStd::ANSI => "ANSI B92.1 Table 2（Dre；k 按所选列与径节分段）",
+                SplineStd::DIN => crate::i18n::t_static("cmd.invol.report.source.df.din"),
+                SplineStd::NF => crate::i18n::t_static("cmd.invol.report.source.df.nf"),
+                SplineStd::ANSI => crate::i18n::t_static("cmd.invol.report.source.df.ansi"),
             },
         );
         if std == SplineStd::ANSI {
             s(
-                "Dre 径节分段",
-                "按 Table 2 列与径节 P 取 Dre 的 k",
+                crate::i18n::t_static("cmd.invol.report.step.dre"),
+                crate::i18n::t_static("cmd.invol.report.formula.dre"),
                 "—",
                 &ansi_dre_branch(e),
-                "ANSI B92.1 Table 2（Dre 分段：P>12 与 P≤12）",
+                crate::i18n::t_static("cmd.invol.report.source.dre"),
             );
         }
         s(
-            "分度圆齿厚",
+            crate::i18n::t_static("cmd.invol.report.step.s"),
             match std {
-                SplineStd::ANSI => "t = p − Sv min（p = πm 齿距；Sv min 由压力角列定）",
-                _ => "s = mπ/2 + 2x·m·tanα",
+                SplineStd::ANSI => crate::i18n::t_static("cmd.invol.report.formula.s.ansi"),
+                _ => crate::i18n::t_static("cmd.invol.report.formula.s.gb_din"),
             },
             &match std {
                 // ANSI 的口径是 `t = p − Sv min`，不要照搬 GB/DIN 的齿厚式。
@@ -5131,11 +5009,11 @@ fn build_report_inner(params: &InvolParams, origin: Option<&D_bOrigin>, h: Optio
             },
             &format!("{} mm", trim(e.s())),
             match std {
-                SplineStd::GB => "GB/T 3478.1-2008 表 3（分度圆齿厚）",
-                SplineStd::DIN => "DIN 5480-1:2015（s1 = mπ/2 + 2xm·tanα）",
+                SplineStd::GB => crate::i18n::t_static("cmd.invol.report.source.s.gb"),
+                SplineStd::DIN => crate::i18n::t_static("cmd.invol.report.source.s.din"),
                 SplineStd::NF => "NF E22-141 p07",
                 SplineStd::ANSI => {
-                    "ANSI B92.1 Table 2（Sv min：30° π/(2P)；37.5° (0.5π+0.1)/P；45° (0.5π+0.2)/P）"
+                    crate::i18n::t_static("cmd.invol.report.source.s.ansi")
                 }
             },
         );
@@ -5143,15 +5021,15 @@ fn build_report_inner(params: &InvolParams, origin: Option<&D_bOrigin>, h: Optio
             match std {
                 SplineStd::GB => {
                     s(
-                        "内花键大径",
-                        "D_ei = d′ + 2·hf*·m（外侧齿根）",
+                        crate::i18n::t_static("cmd.invol.report.step.int_major"),
+                        crate::i18n::t_static("cmd.invol.report.formula.int_major.gb"),
                         &format!("{} + 2×{}×{}", trim(e.d_eff()), trim(e.hf_star), trim(e.m)),
                         &format!("{} mm", trim(e.internal_major_dia())),
-                        "GB/T 3478.1-2008 表 3（内花键大径 D_ei）",
+                        crate::i18n::t_static("cmd.invol.report.source.int_major.gb"),
                     );
                     s(
-                        "内花键小径",
-                        "D_ii = D_Fe max + 2cF；D_Fe max = 2√((db/2)² + (d/2·sinα − h_s/sinα)²)",
+                        crate::i18n::t_static("cmd.invol.report.step.int_minor"),
+                        crate::i18n::t_static("cmd.invol.report.formula.int_minor.gb"),
                         &format!(
                             "db={}，d={}，α={}°，h_s={}m",
                             trim(e.db()),
@@ -5164,84 +5042,84 @@ fn build_report_inner(params: &InvolParams, origin: Option<&D_bOrigin>, h: Optio
                             trim(e.gb_form_dia_max()),
                             trim(e.internal_minor_dia())
                         ),
-                        "GB/T 3478.1-2008 表 3（D_Fe max，es_v=0，H/h 配合；h_s 见图 2）",
+                        crate::i18n::t_static("cmd.invol.report.source.int_minor.gb"),
                     );
                 }
                 SplineStd::DIN => {
                     s(
-                        "内花键齿根",
-                        "d_f2 = d_B（名义表恒等式）",
+                        crate::i18n::t_static("cmd.invol.report.step.int_root"),
+                        crate::i18n::t_static("cmd.invol.report.formula.int_root.din"),
                         &format!("d_B = {}", trim(e.internal_major_dia())),
                         &format!("{} mm", trim(e.internal_major_dia())),
-                        "DIN 5480-2 名义表恒等式（d_f2 = d_B）",
+                        crate::i18n::t_static("cmd.invol.report.source.int_root.din"),
                     );
                     s(
-                        "内花键齿顶",
-                        "d_a2 = d′ − 0.9m",
+                        crate::i18n::t_static("cmd.invol.report.step.int_tip"),
+                        crate::i18n::t_static("cmd.invol.report.formula.int_tip.din"),
                         &format!("{} − 0.9×{}", trim(e.d_eff()), trim(e.m)),
                         &format!("{} mm", trim(e.internal_minor_dia())),
-                        "DIN 5480-1:2015（d_a2 = d − 0.9m + 2xm）",
+                        crate::i18n::t_static("cmd.invol.report.source.int_tip.din"),
                     );
                 }
                 SplineStd::NF => {
                     s(
-                        "内花键大径",
-                        "D_ei = A（外径定心）",
+                        crate::i18n::t_static("cmd.invol.report.step.int_major"),
+                        crate::i18n::t_static("cmd.invol.report.formula.int_major.nf"),
                         &format!("A = {}", trim(e.internal_major_dia())),
                         &format!("{} mm", trim(e.internal_major_dia())),
                         "NF E22-141 p07",
                     );
                     s(
-                        "内花键小径",
-                        "D_ii = A − 2m",
+                        crate::i18n::t_static("cmd.invol.report.step.int_minor"),
+                        crate::i18n::t_static("cmd.invol.report.formula.int_minor.nf"),
                         &format!("{} − 2×{}", trim(e.internal_major_dia()), trim(e.m)),
                         &format!("{} mm", trim(e.internal_minor_dia())),
-                        "NF E22-141 p07（D = A − 2m）",
+                        crate::i18n::t_static("cmd.invol.report.source.int_minor.nf"),
                     );
                 }
                 SplineStd::ANSI => {
                     s(
-                        "内花键大径",
-                        &format!("Dri = (N+{})/P", trim(e.ansi_dri_offset())),
+                        crate::i18n::t_static("cmd.invol.report.step.int_major"),
+                        &crate::i18n::t_fmt("cmd.invol.report.formula.int_major.ansi", &[("v0", &trim(e.ansi_dri_offset()))]),
                         &format!("(N+{}) / {}", trim(e.ansi_dri_offset()), trim(e.ansi_p())),
                         &format!("{} mm", trim(e.internal_major_dia())),
-                        "ANSI B92.1 Table 2（Dri 公式）",
+                        crate::i18n::t_static("cmd.invol.report.source.int_major.ansi"),
                     );
                     s(
-                        "内花键小径",
-                        &format!("Di = (N−{})/P", trim(e.ansi_di_offset())),
+                        crate::i18n::t_static("cmd.invol.report.step.int_minor"),
+                        &crate::i18n::t_fmt("cmd.invol.report.formula.int_minor.ansi", &[("v0", &trim(e.ansi_di_offset()))]),
                         &format!("(N−{}) / {}", trim(e.ansi_di_offset()), trim(e.ansi_p())),
                         &format!("{} mm", trim(e.internal_minor_dia())),
-                        "ANSI B92.1 Table 2（Di 公式）",
+                        crate::i18n::t_static("cmd.invol.report.source.int_minor.ansi"),
                     );
                 }
             }
         }
         if std == SplineStd::ANSI {
             s(
-                "齿形裕度",
-                "cF = clamp(0.001·D_mm, 0.0508, 0.254)（原式 clamp(0.001·D_in, 0.002in, 0.010in)）",
+                crate::i18n::t_static("cmd.invol.report.step.cf"),
+                crate::i18n::t_static("cmd.invol.report.formula.cf"),
                 &format!("D = {} mm", trim(e.d())),
                 &format!("{} mm", trim(e.c_f())),
-                "ANSI B92.1 Table 2（cF 夹取）",
+                crate::i18n::t_static("cmd.invol.report.source.cf"),
             );
             s(
-                "外花键 form 直径",
-                "DFe = d − k·m − 2cF（k 按列：默认 1，37.5° 0.8，45° 0.6）",
+                crate::i18n::t_static("cmd.invol.report.step.dfe"),
+                crate::i18n::t_static("cmd.invol.report.formula.dfe"),
                 &format!(
                     "d={}，cF={}",
                     trim(e.d()),
                     trim(e.c_f())
                 ),
                 &format!("{} mm", trim(e.ansi_form_dia_external())),
-                "ANSI B92.1 Table 2（DFe）",
+                crate::i18n::t_static("cmd.invol.report.source.dfe"),
             );
             s(
-                "内花键 form 直径",
-                "DFi = d + k·m + 2cF（列 B 另含英寸常量 −0.004 in = −0.1016 mm）",
+                crate::i18n::t_static("cmd.invol.report.step.dfi"),
+                crate::i18n::t_static("cmd.invol.report.formula.dfi"),
                 &format!("d={}，cF={}", trim(e.d()), trim(e.c_f())),
                 &format!("{} mm", trim(e.ansi_form_dia_internal())),
-                "ANSI B92.1 Table 2（DFi）",
+                crate::i18n::t_static("cmd.invol.report.source.dfi"),
             );
         }
     }
@@ -5249,59 +5127,40 @@ fn build_report_inner(params: &InvolParams, origin: Option<&D_bOrigin>, h: Optio
     md.push('\n');
 
     // ── 3. 派生几何 ──
-    md.push_str("## 3. 派生几何\n\n| 量 | 值 |\n|---|---|\n");
-    md.push_str(&format!("| 分度圆 d | {} mm |\n", trim(e.d())));
-    md.push_str(&format!("| 基圆 db | {} mm |\n", trim(e.db())));
+    md.push_str(crate::i18n::t_static("cmd.invol.report.h_derived"));
+    md.push_str(&crate::i18n::t_fmt("cmd.invol.report.row_d", &[("v0", &trim(e.d()))]));
+    md.push_str(&crate::i18n::t_fmt("cmd.invol.report.row_db", &[("v0", &trim(e.db()))]));
     if e.internal {
-        md.push_str(&format!(
-            "| 内花键大径 D_ei（外侧齿根） | {} mm |\n",
-            trim(e.internal_major_dia())
-        ));
-        md.push_str(&format!(
-            "| 内花键小径 D_ii（里侧齿顶） | {} mm |\n",
-            trim(e.internal_minor_dia())
-        ));
+        md.push_str(&crate::i18n::t_fmt("cmd.invol.report.row_int_major", &[("v0", &trim(e.internal_major_dia()))]));
+        md.push_str(&crate::i18n::t_fmt("cmd.invol.report.row_int_minor", &[("v0", &trim(e.internal_minor_dia()))]));
     } else {
-        md.push_str(&format!("| 齿顶圆 da | {} mm |\n", trim(e.da())));
-        md.push_str(&format!("| 齿根圆 df | {} mm |\n", trim(e.df())));
+        md.push_str(&crate::i18n::t_fmt("cmd.invol.report.row_da", &[("v0", &trim(e.da()))]));
+        md.push_str(&crate::i18n::t_fmt("cmd.invol.report.row_df", &[("v0", &trim(e.df()))]));
     }
-    md.push_str(&format!("| 分度圆齿厚 s | {} mm |\n", trim(e.s())));
-    md.push_str(&format!("| 齿根圆角 ρf | {} mm |\n", trim(e.rho_f())));
-    md.push_str(&format!("| 齿形裕度 cF | {} mm |\n", trim(e.c_f())));
-    md.push_str(&format!("| 顶隙 c | {} mm |\n", trim(e.clearance())));
+    md.push_str(&crate::i18n::t_fmt("cmd.invol.report.row_s", &[("v0", &trim(e.s()))]));
+    md.push_str(&crate::i18n::t_fmt("cmd.invol.report.row_rho", &[("v0", &trim(e.rho_f()))]));
+    md.push_str(&crate::i18n::t_fmt("cmd.invol.report.row_cf", &[("v0", &trim(e.c_f()))]));
+    md.push_str(&crate::i18n::t_fmt("cmd.invol.report.row_clearance", &[("v0", &trim(e.clearance()))]));
     if e.internal {
         // 内花键：渐开线有效区间在 [max(D_ii, db[, DFi]), D_ei]（外侧齿根），不是外花键的 [max(df, db), da]。
         // 与 `front_view_internal` 同走 `internal_involute_band()`：若已到/超过外侧齿根则端视径向降级。
         let (r_in, radial_only) = e.internal_involute_band();
         let note = if radial_only {
-            "（已到/超过外侧齿根：材料带内无渐开线，端视图按径向直线降级）"
+            crate::i18n::t_static("cmd.invol.report.note_radial_fallback")
         } else {
             ""
         };
-        md.push_str(&format!(
-            "| 渐开线有效起始圆（内花键 max(D_ii, db, DFi)） | {} mm{} |\n",
-            trim(2.0 * r_in),
-            note
-        ));
-        md.push_str(&format!(
-            "| 渐开线终止（外侧齿根 D_ei） | {} mm |\n",
-            trim(e.internal_major_dia())
-        ));
+        md.push_str(&crate::i18n::t_fmt("cmd.invol.report.row_inv_start_int", &[("v0", &trim(2.0 * r_in)), ("v1", &note)]));
+        md.push_str(&crate::i18n::t_fmt("cmd.invol.report.row_inv_end_int", &[("v0", &trim(e.internal_major_dia()))]));
     } else {
-        md.push_str(&format!(
-            "| 渐开线起始圆 d_involute_start | {} mm |\n",
-            trim(e.d_involute_start())
-        ));
-        md.push_str(&format!(
-            "| 渐开线终止圆 d_involute_end（=da） | {} mm |\n",
-            trim(e.d_involute_end())
-        ));
+        md.push_str(&crate::i18n::t_fmt("cmd.invol.report.row_inv_start", &[("v0", &trim(e.d_involute_start()))]));
+        md.push_str(&crate::i18n::t_fmt("cmd.invol.report.row_inv_end", &[("v0", &trim(e.d_involute_end()))]));
     }
     if let Some(d_b) = e.d_b {
-        md.push_str(&format!("| 基准直径 d_B | {} mm |\n", trim(d_b)));
+        md.push_str(&crate::i18n::t_fmt("cmd.invol.report.row_db_val", &[("v0", &trim(d_b))]));
     }
     if let Some(a) = e.a {
-        md.push_str(&format!("| 公称直径 A | {} mm |\n", trim(a)));
+        md.push_str(&crate::i18n::t_fmt("cmd.invol.report.row_a_val", &[("v0", &trim(a))]));
     }
     if std == SplineStd::ANSI {
         md.push_str(&format!(
@@ -5313,7 +5172,7 @@ fn build_report_inner(params: &InvolParams, origin: Option<&D_bOrigin>, h: Optio
     md.push('\n');
 
     // ── 4. 检验尺寸 ──
-    md.push_str("## 4. 检验尺寸\n\n");
+    md.push_str(crate::i18n::t_static("cmd.invol.report.h_checks"));
     if std == SplineStd::NF {
         let a = e.a.unwrap_or_else(|| a_from_x(e.m, e.z, e.x));
         let all = nf_check_by_a_m(a, e.m);
@@ -5324,55 +5183,35 @@ fn build_report_inner(params: &InvolParams, origin: Option<&D_bOrigin>, h: Optio
             .collect();
         if rows.is_empty() {
             if all.is_empty() {
-                md.push_str(&format!(
-                    "NF E22-141 检查表没有该档（A={}、m={}、N={}）；已入库检查表覆盖 \
-                     p23–p27/p29/p31–p33/p35（`assets/nf_e22141_check.csv`，399 行）。\n\n",
-                    trim(a),
-                    trim(e.m),
-                    e.z
-                ));
+                md.push_str(&crate::i18n::t_fmt("cmd.invol.report.nf_no_table", &[("v0", &trim(a)), ("v1", &trim(e.m)), ("v2", &e.z.to_string())]));
             } else {
                 let mut ns: Vec<u32> = all.iter().filter_map(|r| r.n).collect();
                 ns.sort_unstable();
                 ns.dedup();
-                md.push_str(&format!(
-                    "NF E22-141 检查表：A={}、m={} 有行但 N={} 未命中；同档 N 变体：{}。\n\n",
-                    trim(a),
-                    trim(e.m),
-                    e.z,
-                    ns.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(&crate::i18n::t("cmd.invol.sep.list"))
-                ));
+                md.push_str(&crate::i18n::t_fmt("cmd.invol.report.nf_n_miss", &[("v0", &trim(a)), ("v1", &trim(e.m)), ("v2", &e.z.to_string()), ("v3", &ns.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(&crate::i18n::t("cmd.invol.sep.list")))]));
             }
         } else {
-            md.push_str(&format!(
-                "NF E22-141 检查表命中 {} 行（`assets/nf_e22141_check.csv`，共 {} 行/10 张表；\
-                 页清单 `NF-E22-141_检查公差_页清单.md`）。\n\n",
-                rows.len(),
-                nf_check_rows().len()
-            ));
+            md.push_str(&crate::i18n::t_fmt("cmd.invol.report.nf_hit", &[("v0", &rows.len().to_string()), ("v1", &nf_check_rows().len().to_string())]));
             // 检查尺寸（p23–p25/p27；p27 另带 q1..q7 位置列）。
             for r in rows.iter().filter(|r| r.has_check_dims()) {
-                md.push_str(&format!(
-                    "### p{} {}（source={}；{}）\n\n",
-                    r.page, r.table_no, r.source, r.section
-                ));
-                md.push_str("| 量 | 值 |\n|---|---|\n");
+                md.push_str(&crate::i18n::t_fmt("cmd.invol.report.h_check_row", &[("v0", &r.page.to_string()), ("v1", &r.table_no.to_string()), ("v2", &r.source), ("v3", &r.section)]));
+                md.push_str(crate::i18n::t_static("cmd.invol.report.t_qty"));
                 let mut any = false;
                 for (label, v) in [
-                    ("跨齿数 K", r.k),
-                    ("K 齿公法线 E", r.e),
-                    ("外花键量棒直径 U", r.u),
-                    ("外花键跨量棒距 F", r.f),
-                    ("外花键跨量棒距 F1", r.f1),
-                    ("内花键量棒直径 V", r.v),
-                    ("内花键量棒削边 V1", r.v1),
-                    ("内花键量棒跨距 G", r.g),
-                    ("内花键量棒跨距 G1", r.g1),
+                    (crate::i18n::t_static("cmd.invol.report.k_span"), r.k),
+                    (crate::i18n::t_static("cmd.invol.report.e_kt"), r.e),
+                    (crate::i18n::t_static("cmd.invol.report.u_ext"), r.u),
+                    (crate::i18n::t_static("cmd.invol.report.f_ext"), r.f),
+                    (crate::i18n::t_static("cmd.invol.report.f1_ext"), r.f1),
+                    (crate::i18n::t_static("cmd.invol.report.v_int"), r.v),
+                    (crate::i18n::t_static("cmd.invol.report.v1_int"), r.v1),
+                    (crate::i18n::t_static("cmd.invol.report.g_int"), r.g),
+                    (crate::i18n::t_static("cmd.invol.report.g1_int"), r.g1),
                 ] {
                     any |= nf_check_push_row(&mut md, label, v);
                 }
                 for (i, qv) in r.q.iter().enumerate() {
-                    any |= nf_check_push_row(&mut md, &format!("q{}（表头未辨认）", i + 1), *qv);
+                    any |= nf_check_push_row(&mut md, &crate::i18n::t_fmt("cmd.invol.report.q_unknown", &[("v0", &(i + 1).to_string())]), *qv);
                 }
                 if !any {
                     md.push_str("| — | — |\n");
@@ -5385,33 +5224,25 @@ fn build_report_inner(params: &InvolParams, origin: Option<&D_bOrigin>, h: Optio
             let (k_tab, e_tab) = dims_row
                 .map(|r| (r.k, r.e))
                 .unwrap_or((None, None));
-            md.push_str("### 检验量公式推导（K / W）\n\n");
+            md.push_str(crate::i18n::t_static("cmd.invol.report.h_insp_deriv"));
             md.push_str(
-                "> 口径：**K**（跨测齿数）取 NF E22-141 p23–p25 检查表表值（标准按 N 分档给出，\
-                 本仓未收该分档的独立公式 —— 不臆造）；**W**（公法线）= 检查表 `E` 列，\
-                 公式见 `assets/nf_e22141_check.csv` 头注（对入库行复算命中）。\n\n",
+                crate::i18n::t_static("cmd.invol.report.nf_conv"),
             );
-            md.push_str("| # | 步骤 | 公式（符号含义） | 代入 | 结果 | 依据来源 |\n");
+            md.push_str(crate::i18n::t_static("cmd.invol.report.t_steps"));
             md.push_str("|---|---|---|---|---|---|\n");
             let mut n = 0usize;
             if let Some(k) = k_tab {
                 md.push_str(&report_row(
                     &mut n,
                     "跨测齿数 K",
-                    "K = 检查表 K 列（标准按 N 分档给出；表外不外推）",
-                    &format!(
-                        "A={}、m={}、N={} → p{} 检查表行",
-                        trim(a),
-                        trim(e.m),
-                        e.z,
-                        dims_row.map(|r| r.page).unwrap_or(0)
-                    ),
+                    crate::i18n::t_static("cmd.invol.report.k_formula"),
+                    &crate::i18n::t_fmt("cmd.invol.report.k_subst", &[("v0", &trim(a)), ("v1", &trim(e.m)), ("v2", &e.z.to_string()), ("v3", &dims_row.map(|r| r.page).unwrap_or(0).to_string())]),
                     &format!("K = {}", trim(k)),
-                    "NF E22-141 p23–p25（assets/nf_e22141_check.csv）",
+                    crate::i18n::t_static("cmd.invol.report.k_source"),
                 ));
             } else {
                 md.push_str(
-                    "| 1 | 跨测齿数 K | K = 检查表 K 列 | A/m/N 未命中 p23–p25 | — | 表外不外推 |\n",
+                    crate::i18n::t_static("cmd.invol.report.k_no_hit_row"),
                 );
             }
             match (k_tab, e_tab) {
@@ -5420,58 +5251,43 @@ fn build_report_inner(params: &InvolParams, origin: Option<&D_bOrigin>, h: Optio
                     let resid = (w_geo - e_tab_v).abs();
                     md.push_str(&report_row(
                         &mut n,
-                        "公法线 W（= E）",
-                        "W = m·cos20°·[(K−0.5)·π + N·inv20°] + 2·x·m·sin20°",
-                        &format!(
-                            "m={}、K={}、N={}、x={}",
-                            trim(e.m),
-                            trim(k),
-                            e.z,
-                            trim(e.x)
+                        crate::i18n::t_static("cmd.invol.report.w_step"),
+                        crate::i18n::t_static("cmd.invol.report.w_formula"),
+                        &crate::i18n::t_fmt("cmd.invol.report.w_subst", &[("v0", &trim(e.m)), ("v1", &k.to_string()), ("v2", &e.z.to_string()), ("v3", &trim(e.x))]),
+                        &crate::i18n::t_fmt(
+                            "cmd.invol.report.w_result",
+                            &[
+                                ("v0", &trim(w_geo)),
+                                ("v1", &trim(e_tab_v)),
+                                ("v2", &format!("{:.3}", resid)),
+                            ],
                         ),
-                        &format!(
-                            "W = {} mm（表值 E={}，残差 {:.3}）",
-                            trim(w_geo),
-                            trim(e_tab_v),
-                            resid
-                        ),
-                        "公式：assets/nf_e22141_check.csv 头注；表值：同表 E 列",
+                        crate::i18n::t_static("cmd.invol.report.w_source"),
                     ));
-                    md.push_str(&format!(
-                        "- 同源：K/W 与卡片同取 [`nf_check_by_a_m`]（A={}、m={}）的同一表行；\
-                         卡片第 12/13 行（跨测齿数 K / 公法线 W）与本表逐值一致。\n",
-                        trim(a),
-                        trim(e.m)
-                    ));
+                    md.push_str(&crate::i18n::t_fmt("cmd.invol.report.same_source_kw", &[("v0", &trim(a)), ("v1", &trim(e.m))]));
                 }
                 _ => {
-                    md.push_str(&format!(
-                        "| 1 | 公法线 W（= E） | W = m·cos20°·[(K−0.5)·π + N·inv20°] + 2·x·m·sin20° | \
-                         K 未命中 | — | 表外不外推（assets/nf_e22141_check.csv） |\n"
-                    ));
+                    md.push_str(crate::i18n::t_static("cmd.invol.report.w_no_hit_row"));
                 }
             }
             md.push('\n');
             // 计算标准-设计尺寸（p26）。
             for r in rows.iter().filter(|r| r.page == 26) {
-                md.push_str(&format!(
-                    "### p{} {}（source={}；{}）\n\n",
-                    r.page, r.table_no, r.source, r.section
-                ));
-                md.push_str("| 量 | 值 |\n|---|---|\n");
+                md.push_str(&crate::i18n::t_fmt("cmd.invol.report.h_check_row", &[("v0", &r.page.to_string()), ("v1", &r.table_no.to_string()), ("v2", &r.source), ("v3", &r.section)]));
+                md.push_str(crate::i18n::t_static("cmd.invol.report.t_qty"));
                 let mut any = false;
                 for (label, v) in [
-                    ("分度圆 d", r.d),
-                    ("基圆 dB", r.db),
-                    ("变位系数 x", r.x),
-                    ("分度圆弧齿厚 s", r.s),
-                    ("基圆弧齿厚 sB", r.sb),
-                    ("齿根圆 B（平齿根）", r.b),
-                    ("齿根圆 B2（圆齿根）", r.b2),
-                    ("齿根圆角 Rf", r.rf),
-                    ("齿根圆角 Rr", r.rr),
-                    ("齿顶倒角高度 h", r.h),
-                    ("槽底圆角 ri", r.ri),
+                    (crate::i18n::t_static("cmd.invol.report.d_pitch"), r.d),
+                    (crate::i18n::t_static("cmd.invol.report.db_base"), r.db),
+                    (crate::i18n::t_static("cmd.invol.report.x_shift"), r.x),
+                    (crate::i18n::t_static("cmd.invol.report.s_arc"), r.s),
+                    (crate::i18n::t_static("cmd.invol.report.sb_arc"), r.sb),
+                    (crate::i18n::t_static("cmd.invol.report.b_flat"), r.b),
+                    (crate::i18n::t_static("cmd.invol.report.b2_fillet"), r.b2),
+                    (crate::i18n::t_static("cmd.invol.report.rf_fillet"), r.rf),
+                    (crate::i18n::t_static("cmd.invol.report.rr_fillet"), r.rr),
+                    (crate::i18n::t_static("cmd.invol.report.h_chamfer"), r.h),
+                    (crate::i18n::t_static("cmd.invol.report.ri_slot"), r.ri),
                 ] {
                     any |= nf_check_push_row(&mut md, label, v);
                 }
@@ -5490,7 +5306,7 @@ fn build_report_inner(params: &InvolParams, origin: Option<&D_bOrigin>, h: Optio
                     .map(|(i, s)| format!("dev{}={s}", i + 1))
                     .collect::<Vec<_>>()
                     .join(&crate::i18n::t("cmd.invol.sep.list"));
-                md.push_str(&format!("- 偏差（微米，上/下）：{devs}；{}。\n", r.source_note()));
+                md.push_str(&crate::i18n::t_fmt("cmd.invol.report.dev_line", &[("devs", &devs), ("v0", &r.source_note())]));
             }
             md.push('\n');
         }
@@ -5498,134 +5314,102 @@ fn build_report_inner(params: &InvolParams, origin: Option<&D_bOrigin>, h: Optio
         // ANSI B92.1 原标准检验表（公法线跨测表）本仓未收 → 只给**渐开线几何推导**，
         // 与 GB/T 3478.6 式(11)、NF E22-141 同一条跨距公式（`involute_span` 唯一实现）。
         // 卡片 17 项里的「公法线长度 / 跨测齿数」格保持「—」（本仓未收原表，不冒充）。
-        md.push_str("### 检验量公式推导（Wn / Kn；渐开线几何）\n\n");
+        md.push_str(crate::i18n::t_static("cmd.invol.report.h_ansi_deriv"));
         md.push_str(
-            "> 说明：ANSI B92.1 原标准检验表（公法线/跨测表）本仓未收 —— 下表是**渐开线几何推导**\n\
-             > （与 GB/T 3478.6 式(11)、NF E22-141 同一条跨距公式），不是原标准表值；\n\
-             > 卡片里的「公法线长度 / 跨测齿数」格仍显示「—」（不冒充原表；极限/平均长度需原标准表）。\n\n",
+            crate::i18n::t_static("cmd.invol.report.ansi_note"),
         );
         let (kn, wn) = involute_span(e.m, e.z, e.alpha_deg, e.x);
-        md.push_str("| # | 步骤 | 公式（符号含义） | 代入 | 结果 | 依据来源 |\n");
+        md.push_str(crate::i18n::t_static("cmd.invol.report.t_steps"));
         md.push_str("|---|---|---|---|---|---|\n");
         let mut n = 0usize;
         md.push_str(&report_row(
             &mut n,
-            "跨测齿数 Kn",
-            "Kn = round(N·α/180° + 0.5)（α 单位度）",
-            &format!("round({}×{}/180 + 0.5)", e.z, trim(e.alpha_deg)),
+            crate::i18n::t_static("cmd.invol.report.kn_step"),
+            crate::i18n::t_static("cmd.invol.report.kn_formula"),
+            &crate::i18n::t_fmt("cmd.invol.report.kn_subst", &[("v0", &e.z.to_string()), ("v1", &trim(e.alpha_deg))]),
             &format!("Kn = {kn}"),
-            "渐开线跨距公式（与 GB/T 3478.6 式(11) 同式）；ANSI 原跨测表本仓未收",
+            crate::i18n::t_static("cmd.invol.report.kn_source"),
         ));
         md.push_str(&report_row(
             &mut n,
-            "公法线长度 Wn",
-            "Wn = m·cosα·[(Kn−0.5)·π + N·invα] + 2·x·m·sinα（invα = tanα − α）",
-            &format!(
-                "m={}、α={}°、Kn={}、N={}、x={}",
-                trim(e.m),
-                trim(e.alpha_deg),
-                kn,
-                e.z,
-                trim(e.x)
-            ),
+            crate::i18n::t_static("cmd.invol.report.wn_step"),
+            crate::i18n::t_static("cmd.invol.report.wn_formula"),
+            &crate::i18n::t_fmt("cmd.invol.report.wn_subst", &[("v0", &trim(e.m)), ("v1", &trim(e.alpha_deg)), ("v2", &kn.to_string()), ("v3", &e.z.to_string()), ("v4", &trim(e.x))]),
             &format!("Wn = {} mm", trim(wn)),
-            "渐开线几何推导；ANSI B92.1 原公法线表本仓未收",
+            crate::i18n::t_static("cmd.invol.report.wn_source"),
         ));
-        md.push_str(&format!(
-            "- 与其它体系同式：GB/T 3478.6 式(11)（多 `esv − (T+λ)` 修正项）、\
-             NF E22-141 检查表（α=20°）；本式是同一渐开线跨距的 α 通用形式。\n"
-        ));
-        md.push_str(&format!(
-            "- 单位：长度 mm；倒式 `invα = tanα − α`。恒等式自检：|W − {:.4}| < 1e-9（同一函数返回值）。\n\n",
-            wn
+        md.push_str(&crate::i18n::t("cmd.invol.report.wn_same_formula"));
+        md.push_str(&crate::i18n::t_fmt(
+            "cmd.invol.report.wn_identity_line",
+            &[("v0", &format!("{wn:.4}"))],
         ));
     } else if std != SplineStd::DIN {
         md.push_str(
-            "本体系无入库检验尺寸表（DIN 5480-2 检验表覆盖 DIN 预设；NF E22-141 检查表覆盖 NF；\
-             ANSI 只给渐开线几何推导）。\n\n",
+            crate::i18n::t_static("cmd.invol.report.no_table"),
         );
     } else {
         let d_b = e.d_b.unwrap_or_else(|| d_b_from_x(e.m, e.z, e.x));
         match inspection_query(d_b, e.m, e.z) {
             Ok(r) => {
-                md.push_str("| 量 | 值 | 说明 |\n|---|---|---|\n");
-                md.push_str(&format!(
-                    "| 跨棒距 M1 | {} mm | 外花键；量棒 D_M={} mm |\n",
-                    trim(r.m1),
-                    trim(r.d_m_shaft)
-                ));
-                md.push_str(&format!(
-                    "| 棒间距 M2 | {} mm | 内花键；量棒 D_M={} mm |\n",
-                    trim(r.m2),
-                    trim(r.d_m_hub)
-                ));
-                md.push_str(&format!("| 跨测齿数 k | {} | — |\n", r.k));
-                md.push_str(&format!("| 公法线 W_k | {} mm | — |\n", trim(r.w_k)));
+                md.push_str(crate::i18n::t_static("cmd.invol.report.t_qty_notes"));
+                md.push_str(&crate::i18n::t_fmt("cmd.invol.report.m1_row", &[("v0", &trim(r.m1)), ("v1", &trim(r.d_m_shaft))]));
+                md.push_str(&crate::i18n::t_fmt("cmd.invol.report.m2_row", &[("v0", &trim(r.m2)), ("v1", &trim(r.d_m_hub))]));
+                md.push_str(&crate::i18n::t_fmt("cmd.invol.report.k_row", &[("v0", &r.k.to_string())]));
+                md.push_str(&crate::i18n::t_fmt("cmd.invol.report.wk_row", &[("v0", &trim(r.w_k))]));
                 if let Some(row) = &r.row {
-                    md.push_str(&format!(
-                        "| 查表命中 | p{} 表{} | source={} |\n",
-                        row.page, row.table_no, row.source
-                    ));
+                    md.push_str(&crate::i18n::t_fmt("cmd.invol.report.tbl_hit_row", &[("v0", &row.page.to_string()), ("v1", &row.table_no.to_string()), ("v2", &row.source)]));
                 }
-                md.push_str(&format!(
-                    "- 来源：{}{}\n",
-                    r.source,
-                    if r.from_table() {
-                        "（精确查表）"
+                md.push_str(&crate::i18n::t_fmt("cmd.invol.report.src_line", &[("v0", &r.source), ("v1", &if r.from_table() {
+                        crate::i18n::t_static("cmd.invol.report.src_exact")
                     } else {
-                        "（公式导出）"
-                    }
-                ));
+                        crate::i18n::t_static("cmd.invol.report.src_formula")
+                    })]));
                 for note in &r.notes {
-                    md.push_str(&format!("- 注：{note}\n"));
+                    md.push_str(&crate::i18n::t_fmt("cmd.invol.report.note_line", &[("note", &note)]));
                 }
                 md.push('\n');
             }
-            Err(err) => md.push_str(&format!("无法给出检验尺寸：{err}\n\n")),
+            Err(err) => md.push_str(&crate::i18n::t_fmt("cmd.invol.report.no_check_dims", &[("err", &err)])),
         }
     }
 
     // ── 5. 数据来源与校验 ──
-    md.push_str("## 5. 数据来源与校验\n\n");
-    md.push_str(&format!(
-        "- 预设来源：{}（`{}`）\n",
-        report_preset_source(std),
-        e.profile
-    ));
-    md.push_str(&format!("- 候选/查表来源：{}\n", module_source(std)));
-    md.push_str(&format!(
-        "- 基准直径来源：{}\n",
-        origin
+    md.push_str(crate::i18n::t_static("cmd.invol.report.h_sources"));
+    md.push_str(&crate::i18n::t_fmt("cmd.invol.report.src_preset", &[("v0", &report_preset_source(std)), ("v1", &e.profile)]));
+    md.push_str(&crate::i18n::t_fmt("cmd.invol.report.src_module", &[("v0", &module_source(std))]));
+    md.push_str(&crate::i18n::t_fmt("cmd.invol.report.src_datum", &[("v0", &origin
             .map(|o| o.note())
-            .unwrap_or_else(|| "不适用（GB/ANSI 无 d_B/A 主参数）".to_string())
-    ));
+            .unwrap_or_else(|| crate::i18n::t_static("cmd.invol.report.src_datum_na").to_string()))]));
     if std == SplineStd::DIN {
-        md.push_str(&format!(
-            "- 检验表全表对照：{}\n",
-            inspection_formula_report().summary
-        ));
+        md.push_str(&crate::i18n::t_fmt("cmd.invol.report.src_full_check", &[("v0", &inspection_formula_report().summary)]));
     }
     let res_d = (e.d() - e.m * e.z as f64).abs();
     let res_db = (e.db() - e.d() * e.alpha().cos()).abs();
     let res_deff = (e.d_eff() - (e.d() + 2.0 * e.x * e.m)).abs();
-    md.push_str(&format!(
-        "- 恒等式自检（定义式，残差应 0）：|d−m·z|={:.2e}、|db−d·cosα|={:.2e}、|d′−(d+2xm)|={:.2e}；违例 0。\n",
-        res_d, res_db, res_deff
+    md.push_str(&crate::i18n::t_fmt(
+        "cmd.invol.report.identity_line",
+        &[
+            ("v0", &format!("{res_d:.2e}")),
+            ("v1", &format!("{res_db:.2e}")),
+            ("v2", &format!("{res_deff:.2e}")),
+        ],
     ));
     if let Some(d_b) = e.d_b {
         let res = (d_b - d_b_from_x(e.m, e.z, e.x)).abs();
-        md.push_str(&format!(
-            "- DIN 基准直径恒等式：|d_B−(m(z+1.1+2x))|={res:.2e}（721 行名义表逐行残差 0）。\n"
+        md.push_str(&crate::i18n::t_fmt(
+            "cmd.invol.report.identity_din",
+            &[("v0", &format!("{res:.2e}"))],
         ));
     }
     if let Some(a) = e.a {
         let res = (a - a_from_x(e.m, e.z, e.x)).abs();
-        md.push_str(&format!(
-            "- NF 公称直径恒等式：|A−(m(N+2x+0.4))|={res:.2e}（NF E22-141 p07）。\n"
+        md.push_str(&crate::i18n::t_fmt(
+            "cmd.invol.report.identity_nf",
+            &[("v0", &format!("{res:.2e}"))],
         ));
     }
     md.push_str(
-        "- 计算书内容与 JSON 输出同源：所有数值由 OCSM 计算引擎（`invol_spline`）导出，未二次手算。\n",
+        crate::i18n::t_static("cmd.invol.report.same_engine"),
     );
     md
 }
@@ -7906,6 +7690,8 @@ mod tests {
     /// + 依据来源（`GB/T 3478.1`），并含 5 个小节骨架。
     #[test]
     fn report_gb_contains_formula_substitution_result_and_source() {
+        let _g = crate::global_state_test_lock();
+        crate::i18n::set_lang(crate::i18n::Lang::Zh);
         let p = InvolParams::gb("30圆齿根", 3.0, 20).unwrap();
         let md = build_report(&p, None, 30.0);
         for needle in ["m·z", "3 × 20", "60 mm", "GB/T 3478.1"] {
@@ -7921,6 +7707,117 @@ mod tests {
             assert!(md.contains(section), "计算书缺小节 `{section}`：\n{md}");
         }
         assert!(md.contains("内花键") || md.contains("外花键"), "{md}");
+    }
+
+    /// ⑧ 批：计算书 / 卡类型报错 / 检验查表随语言切换，且**数据与符号两语一致**。
+    #[test]
+    fn report_and_lookup_switch_language_and_keep_data() {
+        use crate::i18n::{set_lang, set_lang_auto, Lang};
+        let _g = crate::global_state_test_lock();
+        crate::i18n::clear_missing_keys();
+
+        // ── zh：GB 计算书四要素 + 头部 ──
+        set_lang(Lang::Zh);
+        let p = InvolParams::gb("30圆齿根", 3.0, 20).unwrap();
+        let zh = build_report(&p, None, 30.0);
+        for needle in [
+            "# 渐开线花键计算书",
+            "## 1. 输入参数",
+            "| 3 × 20 | 60 mm |",
+            "GB/T 3478.1-2008 表 3（d = mz）",
+            "## 5. 数据来源与校验",
+            "恒等式自检",
+        ] {
+            assert!(zh.contains(needle), "zh 计算书缺 `{needle}`：\n{zh}");
+        }
+        // ── en：同参数计算书，结构与数据在、句子为英文 ──
+        set_lang(Lang::En);
+        let en = build_report(&p, None, 30.0);
+        for needle in [
+            "# Involute spline computation report",
+            "## 1. Input parameters",
+            "| 3 × 20 | 60 mm |",
+            "GB/T 3478.1-2008 Table 3 (d = mz)",
+            "## 5. Data sources and checks",
+            "Identity self-check",
+        ] {
+            assert!(en.contains(needle), "en report missing `{needle}`:\n{en}");
+        }
+        assert!(!en.contains("渐开线花键计算书") && !en.contains("输入参数"), "{en}");
+
+        // ── 四体系 × 两语：模板占位符必须全部替换（不漏 `{vN}` / `{}`）──
+        let mut reports: Vec<(String, String)> = vec![("GB-zh".to_string(), zh.clone())];
+        for (tag, std, profile, m, z) in [
+            ("DIN", SplineStd::DIN, "DIN30", 3.0, 20u32),
+            ("NF", SplineStd::NF, "NF平齿根", 3.75, 19),
+            ("ANSI", SplineStd::ANSI, "ANSI30P", 8.0, 20),
+        ] {
+            let (pp, oo) = resolve_spline(std, profile, None, Some(m), Some(z), None).unwrap();
+            set_lang(Lang::Zh);
+            reports.push((format!("{tag}-zh"), build_report(&pp, oo.as_ref(), 30.0)));
+            set_lang(Lang::En);
+            reports.push((format!("{tag}-en"), build_report(&pp, oo.as_ref(), 30.0)));
+        }
+        for (tag, md) in &reports {
+            assert!(
+                !md.contains("{v") && !md.contains("{}"),
+                "{tag} 计算书有未替换占位符：\n{md}"
+            );
+        }
+        for (tag, md) in &reports {
+            if tag.ends_with("-en") {
+                assert!(
+                    !md.contains("输入参数") && !md.contains("渐开线花键计算书"),
+                    "{tag} 仍出中文小节：\n{md}"
+                );
+            }
+        }
+        set_lang(Lang::Zh);
+
+        // ── spec()：内花键头随语言；标准号/齿廓名/数值原样 ──
+        let pi = p.clone().with_internal(true);
+        set_lang(Lang::Zh);
+        let sz = pi.spec();
+        set_lang(Lang::En);
+        let se = pi.spec();
+        assert!(sz.starts_with("内花键 GB "), "{sz}");
+        assert!(se.starts_with("Internal spline GB "), "{se}");
+        for (s, tag) in [(&sz, "zh"), (&se, "en")] {
+            assert!(
+                s.contains("30圆齿根") && s.contains("m3") && s.contains("z20"),
+                "{tag} spec：{s}"
+            );
+        }
+
+        // ── 几何报错（齿顶变尖）：zh/en 双文案，角度值两语一致 ──
+        let sharp = InvolParams::gb("30圆齿根", 3.0, 20)
+            .unwrap()
+            .with_coeffs(9.0, 0.9, 0.4, 0.1);
+        set_lang(Lang::Zh);
+        let ez = sharp.front_view(1.0).unwrap_err();
+        set_lang(Lang::En);
+        let ee = sharp.front_view(1.0).unwrap_err();
+        assert!(ez.contains("齿顶变尖") && ez.contains("°"), "{ez}");
+        assert!(ee.contains("becomes pointed") && ee.contains("°"), "{ee}");
+
+        // ── DIN 检验查表（未命中 → 附近候选）＋ invol_check 缺参：双向 ──
+        set_lang(Lang::Zh);
+        let dz = lookup_inspection(41.0, Some(0.9)).unwrap_err();
+        let iz = inspection_json("db=40&m=2").unwrap_err();
+        set_lang(Lang::En);
+        let de = lookup_inspection(41.0, Some(0.9)).unwrap_err();
+        let ie = inspection_json("db=40&m=2").unwrap_err();
+        assert!(dz.contains("无命中") && dz.contains("附近候选"), "{dz}");
+        assert!(de.contains("no hit") && de.contains("Nearby candidates"), "{de}");
+        assert!(iz.contains("缺 z") && iz.contains("?db=40&m=2&z=18"), "{iz}");
+        assert!(ie.contains("missing z") && ie.contains("?db=40&m=2&z=18"), "{ie}");
+
+        set_lang_auto();
+        assert!(
+            crate::i18n::missing_keys().is_empty(),
+            "{:?}",
+            crate::i18n::missing_keys()
+        );
     }
 
     /// 渐开线跨距公式唯一实现：齿轮模板 m2 z40 α20 → k=5、W≈27.6896；
@@ -7948,6 +7845,8 @@ mod tests {
     /// 并明确标注「原标准检验表本仓未收」（不冒充原表值）。
     #[test]
     fn report_ansi_derives_wn_kn_with_formula_substitution() {
+        let _g = crate::global_state_test_lock();
+        crate::i18n::set_lang(crate::i18n::Lang::Zh);
         let (p, origin) =
             resolve_spline(SplineStd::ANSI, "ANSI30P", None, Some(8.0), Some(20), None).unwrap();
         let md = build_report_card(&p, origin.as_ref());
@@ -7972,6 +7871,8 @@ mod tests {
     /// + 检验表全表对照结论；取一行真实检验表行保证查表命中。
     #[test]
     fn report_din_carries_bench_formula_and_inspection_source() {
+        let _g = crate::global_state_test_lock();
+        crate::i18n::set_lang(crate::i18n::Lang::Zh);
         let row = inspection_rows()
             .iter()
             .find(|r| (r.m - 1.0).abs() < 1e-9)
@@ -8133,6 +8034,8 @@ mod tests {
     /// 不再打印外花键的 `d_involute_end（=da）`（与端视图/JSON 同源）。
     #[test]
     fn report_internal_uses_internal_involute_bounds() {
+        let _g = crate::global_state_test_lock();
+        crate::i18n::set_lang(crate::i18n::Lang::Zh);
         let pi = InvolParams::gb("30圆齿根", 3.0, 20)
             .unwrap()
             .with_internal(true);
@@ -8460,6 +8363,8 @@ mod tests {
     /// + 页/表/source 来源；表外档明确报“没有该档”而不是静默。
     #[test]
     fn report_nf_carries_check_dimensions_and_source() {
+        let _g = crate::global_state_test_lock();
+        crate::i18n::set_lang(crate::i18n::Lang::Zh);
         // m=3.75 A=80 N=19：p24 检查尺寸 + p33/p29 偏差行命中。
         let (p, origin) = resolve_nf_by_a(80.0, Some(3.75), Some(19), None, "NF平齿根").unwrap();
         let md = build_report(&p, Some(&origin), 30.0);
