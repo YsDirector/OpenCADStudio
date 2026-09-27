@@ -2867,6 +2867,99 @@ pub const CATALOG: &[Msg] = &[
     Msg::new("card.gb.root.flat", "平齿根", "Flat root"),
     Msg::new("card.gb.root.fillet", "圆齿根", "Fillet root"),
 
+    // ── 卡面标签：齿轮参数表（`gear_table.rs`，③ 卡面批 ② 族）──
+    // 口径同 `card.gb.*`：**符号/代号/标准号/值/块名/ATTDEF tag 不进表**（原样）。
+    // * `卡面 TEXT 表首字段 = key`（`card.` 前缀取词，其余原样＝符号/代号）；
+    // * 英文按真字体 metrics 逐条给**实体级 width_factor**（`gear_table::en_label_width_factor`，
+    //   预算脚本 `i18n_检查/card_gear_ansi_width_plan.py`）；
+    // * **阶梯：符号与译名之间一个空格**（`mn`/`z`/`α` 等仍在模板原位，不动坐标）。
+    Msg::new("card.gear.label.normal_module", "法向模数", "Normal module"),
+    Msg::new("card.gear.label.teeth", "齿数", "Number of teeth"),
+    Msg::new("card.gear.label.alpha", "齿形角", "Pressure angle"),
+    Msg::new("card.gear.label.ha_coef", "齿顶高系数", "Addendum coefficient"),
+    Msg::new("card.gear.label.beta", "螺旋角", "Helix angle"),
+    Msg::new("card.gear.label.hand", "螺旋方向", "Hand of helix"),
+    Msg::new("card.gear.label.shift", "径向变位系数", "Profile shift coefficient"),
+    Msg::new("card.gear.label.whole_depth", "全齿高", "Whole depth"),
+    Msg::new("card.gear.label.grade", "精度等级", "Accuracy grade"),
+    Msg::new("card.gear.label.center", "齿轮副中心距及其极限偏差", "Centre distance and limits"),
+    Msg::new("card.gear.label.mate", "配对齿轮", "Mating gear"),
+    Msg::new("card.gear.label.tol_group", "公差组", "Tolerance group"),
+    Msg::new("card.gear.label.fw_var", "公法线长度变动公差", "Base tangent length variation"),
+    Msg::new("card.gear.label.profile_tol", "齿形公差", "Profile tolerance"),
+    Msg::new("card.gear.label.pitch_dev", "齿距极限偏差", "Pitch limit deviation"),
+    Msg::new("card.gear.label.helix_tol", "齿向公差", "Helix tolerance"),
+    Msg::new("card.gear.label.base_tangent", "公法线", "Base tangent length"),
+    Msg::new("card.gear.label.runout", "齿圈径向跳动公差", "Radial run-out tolerance"),
+    Msg::new("card.gear.label.dwg_no", "图号", "DWG No."),
+    Msg::new("card.gear.label.mate_teeth", "齿数", "Teeth"),
+    Msg::new("card.gear.label.inspect_code", "检验项目代号", "Inspection code"),
+    Msg::new("card.gear.label.tol_value", "公差(或极限偏差)值", "Tol. (or limit)"),
+    // 取值（枚举显示值随语言；数值/标准号仍是数据，不进表）。
+    Msg::new("card.gear.dir.straight", "直齿", "Spur"),
+    Msg::new("card.gear.dir.right", "右旋", "Right hand"),
+    Msg::new("card.gear.dir.left", "左旋", "Left hand"),
+
+    // ── 卡面标签：齿轮参数表（精简）（`card_lite.rs` 齿轮族；形态同 `card.gb.lite.*`）──
+    Msg::new("card.gear.lite.title", "齿轮参数表（精简）", "Gear Parameter Table (Lite)"),
+    Msg::new("card.gear.lite.label.module", "模数", "Module"),
+    Msg::new("card.gear.lite.label.teeth", "齿数", "Number of teeth"),
+    Msg::new("card.gear.lite.label.alpha", "压力角", "Pressure angle"),
+    Msg::new("card.gear.lite.label.shift", "变位系数", "Shift coefficient"),
+    Msg::new("card.gear.lite.label.pitch_dia", "分度圆", "Pitch diameter"),
+    Msg::new("card.gear.lite.label.tip_dia", "齿顶圆", "Tip diameter"),
+    Msg::new("card.gear.lite.label.root_dia", "齿根圆", "Root diameter"),
+    Msg::new("card.gear.lite.label.base_tangent", "公法线", "Base tangent length"),
+    Msg::new("card.gear.lite.label.span_teeth", "跨齿数", "Span teeth"),
+
+    // ── 卡面标签：ANSI B92.1 花键参数表（`ansi_table.rs`，③ 卡面批 ② 族）──
+    // ★ 口径（用户 2026-09-27）：**语言开关与「块语种」是两件事** —— 本卡的纯中文/纯英文是
+    //   **两个模板块**（`OCSM_ANSI_INT_CN` / `_INT_EN` …）；块语种决定取本表 zh 还是 en，
+    //   **不随 `OCSMLANG` 变**（`ocs_gear_ansi_lang_check.py` 双向断言）。
+    // * 「跨棒距」/「公法线长度」在英文块里是**换行成两行**的另一条 MTEXT（`LabelLang::En` 行），
+    //   中英共用同一个 key（zh=中文单行名、en=英文单行名），几何各按模板原值。
+    Msg::new("card.ansi.label.spline_type", "花键类型", "SPLINE TYPE"),
+    Msg::new("card.ansi.label.teeth", "齿数", "NUMBER OF TEETH"),
+    Msg::new("card.ansi.label.pitch", "径节", "SPLINE PITCH"),
+    Msg::new("card.ansi.label.pressure_angle", "压力角", "PRESSURE ANGLE"),
+    Msg::new("card.ansi.label.base_dia", "基圆直径", "BASE DIAMETER"),
+    Msg::new("card.ansi.label.pitch_dia", "节圆直径", "PITCH DIAMETER"),
+    Msg::new("card.ansi.label.major_dia", "大径", "MAJOR DIAMETER"),
+    Msg::new("card.ansi.label.minor_dia", "小径", "MINOR DIAMETER"),
+    Msg::new("card.ansi.label.form_dia", "有效直径", "FORM DIAMETER"),
+    Msg::new("card.ansi.label.form_dia_ext", "渐开线终止圆直径", "FORM DIAMETER"),
+    Msg::new("card.ansi.label.ref", "参考", "REF"),
+    Msg::new("card.ansi.label.min", "最小", "MIN"),
+    Msg::new("card.ansi.label.circular_thickness", "圆周齿厚", "CIRCULAR TOOTH THICKNESS"),
+    Msg::new("card.ansi.label.max_actual", "实际齿厚最大值", "MAX ACTUAL"),
+    Msg::new("card.ansi.label.min_actual", "实际齿厚最小值", "MIN ACTUAL"),
+    Msg::new("card.ansi.label.min_effective", "作用齿厚最小值", "MIN EFFECTIVE"),
+    Msg::new("card.ansi.label.max_effective", "作用齿厚最大值", "MAX EFFECTIVE"),
+    Msg::new("card.ansi.label.over_pins", "跨棒距", "MEASUREMENT BETWEEN PINS"),
+    Msg::new("card.ansi.label.pin_dia", "量棒直径", "PIN DIAMETER"),
+    Msg::new("card.ansi.label.base_tangent", "公法线长度", "COMMON NORMAL LINE"),
+    Msg::new("card.ansi.label.span_teeth", "跨测齿数", "NUMBER OF TESTING TEETH"),
+    Msg::new("card.ansi.label.standard", "标准：ANSI B92.1-1996", "STANDARD: ANSI B92.1-1996"),
+    Msg::new("card.ansi.label.title_internal", "内花键参数表", "INTERNAL INVOLUTE SPLINE DATA"),
+    Msg::new("card.ansi.label.title_external", "外花键参数表", "EXTERNAL INVOLUTE SPLINE DATA"),
+
+    // ── 卡面标签：ANSI 花键参数表（精简 4 卡；`card_lite.rs` ANSI 族）──
+    // 精简 4 卡 = 「一卡一语种」（卡 id/块名已含 CN/EN）⇒ 译文由**族**钉死，与 `OCSMLANG` 无关。
+    Msg::new("card.ansi.lite.title.int", "ANSI 内花键参数表（精简）", "ANSI INTERNAL SPLINE (LITE)"),
+    Msg::new("card.ansi.lite.title.ext", "ANSI 外花键参数表（精简）", "ANSI EXTERNAL SPLINE (LITE)"),
+    Msg::new("card.ansi.lite.label.spline_type", "花键类型", "SPLINE TYPE"),
+    Msg::new("card.ansi.lite.label.teeth", "齿数 z", "TEETH z"),
+    Msg::new("card.ansi.lite.label.pitch", "径节 P", "PITCH P"),
+    Msg::new("card.ansi.lite.label.alpha", "压力角 α", "ALPHA"),
+    Msg::new("card.ansi.lite.label.base_dia", "基圆直径 Db", "BASE DIA. Db"),
+    Msg::new("card.ansi.lite.label.pitch_dia", "节圆直径 D", "PITCH DIA. D"),
+    Msg::new("card.ansi.lite.label.major_dia", "大径", "MAJOR DIA."),
+    Msg::new("card.ansi.lite.label.minor_dia", "小径", "MINOR DIA."),
+    Msg::new("card.ansi.lite.label.over_pins", "跨棒距 M", "PIN DIST. M"),
+    Msg::new("card.ansi.lite.label.pin_dia", "量棒直径 Dp", "PIN DIA. Dp"),
+    Msg::new("card.ansi.lite.label.base_tangent", "公法线 W", "BASE TANG. W"),
+    Msg::new("card.ansi.lite.label.span_teeth", "跨测齿数 K", "SPAN TEETH K"),
+
     // ── 命令报错：五卡共用的九字段表达式解析（spline_table::parse_gear_expr）──
     Msg::new(
         "cmd.card.err.expr_missing",
@@ -5558,9 +5651,14 @@ pub fn lookup(key: &str) -> Option<&'static Msg> {
 /// 当前语言（解析见模块头注释）。
 pub fn lang() -> Lang {
     #[cfg(test)]
-    if let Some(l) = TEST_OVERRIDE.with(|c| c.get()) {
-        return l;
+    {
+        // ★ 测试下语言**只认线程局部覆盖**（`set_lang`），不读进程 env：env 是进程级全局，
+        // 与 `i18n::tests::env_resolution_*`（持锁期间临时改 `LANG`/`OCSMLANG`）并发时，
+        // 未取全局锁的用例（如 `invol_spline` 的中文断言）会偶发拿到 en ⇒ 假红。
+        // 2026-09-27 ② 卡面批实测：18 轮里 1 轮 7 红，全部落在未取锁的中文断言上。
+        return TEST_OVERRIDE.with(|c| c.get()).unwrap_or(Lang::Zh);
     }
+    #[cfg(not(test))]
     match OVERRIDE.load(Ordering::Relaxed) {
         LANG_ZH => Lang::Zh,
         LANG_EN => Lang::En,

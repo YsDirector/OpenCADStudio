@@ -77,27 +77,28 @@ const GEAR_LINES: &[([f64; 2], [f64; 2], &str)] = &[
     ([-80.0, -120.0], [0.0, -120.0], "2细线层"),
 ];
 
-/// 模板 46 条 TEXT（`(value, ins_x, ins_y, h, wf, layer, halign, valign, align_x, align_y)`）。
+/// 模板 46 条 TEXT（`(catalog key | 原样文字, ins_x, ins_y, h, wf, layer, halign, valign, align_x, align_y)`）。
+/// 首字段 `card.` 前缀 = 卡面标签（随语言，见 [`face_text`]）；其余 = **符号/代号/表头固定**原样。
 /// 模板里的样例 TEXT `887FHGB10095-88`（精度等级行）**提升为第 19 个 ATTDEF**，见 `GEAR_SAMPLE_GRADE`。
 const GEAR_TEXTS: &[(&str, f64, f64, f64, f64, &str, i16, i16, f64, f64)] = &[
-    ("法向模数", -66.20295433412753, -5.088443562470388, 3.5, 0.6669999957084656, "6文字层", 0, 0, -66.20295433412753, -5.088443562470388),
-    ("齿数", -66.20295433412753, -11.08844356247039, 3.5, 0.6669999957084656, "6文字层", 0, 0, -66.20295433412753, -11.08844356247039),
-    ("齿形角", -66.20295433412753, -17.08844356247039, 3.5, 0.6669999957084656, "6文字层", 0, 0, -66.20295433412753, -17.08844356247039),
-    ("齿顶高系数", -66.20295433412753, -23.08844356247039, 3.5, 0.6669999957084656, "6文字层", 0, 0, -66.20295433412753, -23.08844356247039),
-    ("螺旋角", -66.20295433412753, -29.08844356247039, 3.5, 0.6669999957084656, "6文字层", 0, 0, -66.20295433412753, -29.08844356247039),
-    ("螺旋方向", -66.20295433412753, -35.08844356247039, 3.5, 0.6669999957084656, "6文字层", 0, 0, -66.20295433412753, -35.08844356247039),
-    ("径向变位系数", -66.20295433412753, -41.08844356247039, 3.5, 0.6669999957084656, "6文字层", 0, 0, -66.20295433412753, -41.08844356247039),
-    ("全齿高", -66.20295433412753, -47.08844356247039, 3.5, 0.6669999957084656, "6文字层", 0, 0, -66.20295433412753, -47.08844356247039),
-    ("精度等级", -66.20295433412753, -53.08844356247039, 3.5, 0.6669999957084656, "6文字层", 0, 0, -66.20295433412753, -53.08844356247039),
-    ("齿轮副中心距及其极限偏差", -77.6116580526807, -59.08844356247039, 3.5, 0.55, "6文字层", 0, 0, -77.6116580526807, -59.08844356247039),
-    ("配对齿轮", -66.20295433412753, -67.69694562274663, 3.5, 0.6669999957084656, "6文字层", 0, 0, -66.20295433412753, -67.69694562274663),
-    ("公差组", -66.20295433412753, -77.08844356247039, 3.5, 0.6669999957084656, "6文字层", 0, 0, -66.20295433412753, -77.08844356247039),
-    ("公法线长度变动公差", -73.0420936167925, -89.08844356247039, 3.5, 0.6669999957084656, "6文字层", 0, 0, -73.0420936167925, -89.08844356247039),
-    ("齿形公差", -66.20295433412753, -95.08844356247037, 3.5, 0.6669999957084656, "6文字层", 0, 0, -66.20295433412753, -95.08844356247037),
-    ("齿距极限偏差", -66.20295433412753, -101.0884435624704, 3.5, 0.6669999957084656, "6文字层", 0, 0, -66.20295433412753, -101.0884435624704),
-    ("齿向公差", -66.20295433412753, -107.0884435624704, 3.5, 0.6669999957084656, "6文字层", 0, 0, -66.20295433412753, -107.0884435624704),
-    ("公法线", -66.20295433412753, -115.6516360087796, 3.5, 0.6669999957084656, "6文字层", 0, 0, -66.20295433412753, -115.6516360087796),
-    ("齿圈径向跳动公差", -70.96009359332923, -83.08844356247039, 3.5, 0.6669999957084656, "6文字层", 0, 0, -70.96009359332923, -83.08844356247039),
+    ("card.gear.label.normal_module", -66.20295433412753, -5.088443562470388, 3.5, 0.6669999957084656, "6文字层", 0, 0, -66.20295433412753, -5.088443562470388),
+    ("card.gear.label.teeth", -66.20295433412753, -11.08844356247039, 3.5, 0.6669999957084656, "6文字层", 0, 0, -66.20295433412753, -11.08844356247039),
+    ("card.gear.label.alpha", -66.20295433412753, -17.08844356247039, 3.5, 0.6669999957084656, "6文字层", 0, 0, -66.20295433412753, -17.08844356247039),
+    ("card.gear.label.ha_coef", -66.20295433412753, -23.08844356247039, 3.5, 0.6669999957084656, "6文字层", 0, 0, -66.20295433412753, -23.08844356247039),
+    ("card.gear.label.beta", -66.20295433412753, -29.08844356247039, 3.5, 0.6669999957084656, "6文字层", 0, 0, -66.20295433412753, -29.08844356247039),
+    ("card.gear.label.hand", -66.20295433412753, -35.08844356247039, 3.5, 0.6669999957084656, "6文字层", 0, 0, -66.20295433412753, -35.08844356247039),
+    ("card.gear.label.shift", -66.20295433412753, -41.08844356247039, 3.5, 0.6669999957084656, "6文字层", 0, 0, -66.20295433412753, -41.08844356247039),
+    ("card.gear.label.whole_depth", -66.20295433412753, -47.08844356247039, 3.5, 0.6669999957084656, "6文字层", 0, 0, -66.20295433412753, -47.08844356247039),
+    ("card.gear.label.grade", -66.20295433412753, -53.08844356247039, 3.5, 0.6669999957084656, "6文字层", 0, 0, -66.20295433412753, -53.08844356247039),
+    ("card.gear.label.center", -77.6116580526807, -59.08844356247039, 3.5, 0.55, "6文字层", 0, 0, -77.6116580526807, -59.08844356247039),
+    ("card.gear.label.mate", -66.20295433412753, -67.69694562274663, 3.5, 0.6669999957084656, "6文字层", 0, 0, -66.20295433412753, -67.69694562274663),
+    ("card.gear.label.tol_group", -66.20295433412753, -77.08844356247039, 3.5, 0.6669999957084656, "6文字层", 0, 0, -66.20295433412753, -77.08844356247039),
+    ("card.gear.label.fw_var", -73.0420936167925, -89.08844356247039, 3.5, 0.6669999957084656, "6文字层", 0, 0, -73.0420936167925, -89.08844356247039),
+    ("card.gear.label.profile_tol", -66.20295433412753, -95.08844356247037, 3.5, 0.6669999957084656, "6文字层", 0, 0, -66.20295433412753, -95.08844356247037),
+    ("card.gear.label.pitch_dev", -66.20295433412753, -101.0884435624704, 3.5, 0.6669999957084656, "6文字层", 0, 0, -66.20295433412753, -101.0884435624704),
+    ("card.gear.label.helix_tol", -66.20295433412753, -107.0884435624704, 3.5, 0.6669999957084656, "6文字层", 0, 0, -66.20295433412753, -107.0884435624704),
+    ("card.gear.label.base_tangent", -66.20295433412753, -115.6516360087796, 3.5, 0.6669999957084656, "6文字层", 0, 0, -66.20295433412753, -115.6516360087796),
+    ("card.gear.label.runout", -70.96009359332923, -83.08844356247039, 3.5, 0.6669999957084656, "6文字层", 0, 0, -70.96009359332923, -83.08844356247039),
     ("mn", -32.2197526123839, -4.45836311807659, 3.5, 0.6669999957084656, "6文字层", 0, 0, -32.2197526123839, -4.45836311807659),
     ("z", -32.2197526123839, -10.45836311807659, 3.5, 0.6669999957084656, "6文字层", 0, 0, -32.2197526123839, -10.45836311807659),
     ("α", -32.2197526123839, -16.45836311807659, 3.5, 0.6669999957084656, "6文字层", 0, 0, -32.2197526123839, -16.45836311807659),
@@ -109,9 +110,9 @@ const GEAR_TEXTS: &[(&str, f64, f64, f64, f64, &str, i16, i16, f64, f64)] = &[
     ("h", -32.2197526123839, -46.45836311807658, 3.5, 0.6669999957084656, "6文字层", 0, 0, -32.2197526123839, -46.45836311807658),
     ("a±f", -33.24525585049878, -59.13996194129788, 3.5, 0.6669999957084656, "6文字层", 0, 0, -33.24525585049878, -59.13996194129788),
     ("α", -26.40394362430334, -59.56182201771219, 2.0, 0.6669999957084656, "6文字层", 0, 0, -26.40394362430334, -59.56182201771219),
-    ("图号", -32.41515046354744, -65.4360503074116, 3.5, 0.6669999957084656, "6文字层", 0, 0, -32.41515046354744, -65.4360503074116),
-    ("齿数", -32.41515046354744, -71.1435645545306, 3.5, 0.6669999957084656, "6文字层", 0, 0, -32.41515046354744, -71.1435645545306),
-    ("检验项目代号", -38.95808068055612, -77.12652817287142, 3.5, 0.55, "6文字层", 0, 0, -38.95808068055612, -77.12652817287142),
+    ("card.gear.label.dwg_no", -32.41515046354744, -65.4360503074116, 3.5, 0.6669999957084656, "6文字层", 0, 0, -32.41515046354744, -65.4360503074116),
+    ("card.gear.label.mate_teeth", -32.41515046354744, -71.1435645545306, 3.5, 0.6669999957084656, "6文字层", 0, 0, -32.41515046354744, -71.1435645545306),
+    ("card.gear.label.inspect_code", -38.95808068055612, -77.12652817287142, 3.5, 0.55, "6文字层", 0, 0, -38.95808068055612, -77.12652817287142),
     ("F", -33.24612459677155, -82.93781618581863, 3.5, 0.6669999957084656, "6文字层", 0, 0, -33.24612459677155, -82.93781618581863),
     ("r", -31.58446519384825, -83.14536164295419, 2.5, 0.6669999957084656, "6文字层", 0, 0, -31.58446519384825, -83.14536164295419),
     ("F", -33.24612459677155, -88.93781618581863, 3.5, 0.6669999957084656, "6文字层", 0, 0, -33.24612459677155, -88.93781618581863),
@@ -127,7 +128,7 @@ const GEAR_TEXTS: &[(&str, f64, f64, f64, f64, &str, i16, i16, f64, f64)] = &[
     ("k", -31.89602606243397, -118.8736314730472, 3.5, 0.6669999957084656, "6文字层", 0, 0, -31.89602606243397, -118.8736314730472),
     // 表头 `公差(或极限偏差)值` 实体级字宽 0.6（模板 0.819 会与中列表头 `检验项目代号` 叠字；
     // OCS 截图/DXF 干涉检查后按「调整字宽」口径降档，位置/字高照模板）。
-    ("公差(或极限偏差)值", -19.50848117938926, -77.08844356247039, 3.5, 0.6, "6文字层", 5, 0, -0.6802058188077922, -77.08844356247039),
+    ("card.gear.label.tol_value", -19.50848117938926, -77.08844356247039, 3.5, 0.6, "6文字层", 5, 0, -0.6802058188077922, -77.08844356247039),
 ];
 
 /// 模板 18 个 ATTDEF（`(tag, ins_x, ins_y, align_x, align_y, h, wf, layer, halign)`）。
@@ -217,6 +218,60 @@ fn common_of(layer: &str) -> EntityCommon {
     c
 }
 
+/// 卡面文字取词：catalog key（`card.` 前缀）→ 当前语言；**符号/代号原样**（`mn`/`z`/`α`/`a±f`…）。
+fn face_text(key: &str) -> String {
+    if key.starts_with("card.") {
+        crate::i18n::t(key)
+    } else {
+        key.to_string()
+    }
+}
+
+/// 英文卡面文字的**实体级字宽**（`None` = 用模板原值 zh 字宽）。
+///
+/// 口径同 §31（GB 花键批）：真字体 metrics（宿主把 TTF 轮廓归一化到 cap height；朱雀仿宋
+/// cap = 0.637em ⇒ 宽 = Σadvance/em × 字号 × 1.57 × width_factor）逐条按
+/// 「宽 ≤ (列右界 − 插入 x) × 0.97（≥3% 余量）」预算，并同时满足仓库两个保守模型
+/// `text_extent()` / `text_extent_ttf()`（取三者更紧者）。
+/// 预算脚本：`~/桌面/OCSM/review/i18n_检查/card_gear_ansi_width_plan.py`。
+/// **不动列宽/线位/全局 `OCSM_GB`**；中列两条表头（`检验项目代号` × `公差(或极限偏差)值`
+/// 右锚 Fit）联算：EN 侧不比 zh 更挤占对方列（见脚本输出）。
+fn en_label_width_factor(key: &str) -> Option<f64> {
+    Some(match key {
+        "card.gear.label.normal_module" => 0.70,
+        "card.gear.label.teeth" => 0.67,
+        "card.gear.label.alpha" => 0.72,
+        "card.gear.label.ha_coef" => 0.49,
+        "card.gear.label.beta" => 0.93,
+        "card.gear.label.hand" => 0.82,
+        "card.gear.label.shift" => 0.40,
+        "card.gear.label.whole_depth" => 0.86,
+        "card.gear.label.grade" => 0.72,
+        "card.gear.label.center" => 0.57,
+        "card.gear.label.mate" => 0.91,
+        "card.gear.label.tol_group" => 0.67,
+        "card.gear.label.fw_var" => 0.45,
+        "card.gear.label.profile_tol" => 0.59,
+        "card.gear.label.pitch_dev" => 0.49,
+        "card.gear.label.helix_tol" => 0.67,
+        "card.gear.label.base_tangent" => 0.54,
+        "card.gear.label.runout" => 0.51,
+        "card.gear.label.dwg_no" => 0.53,
+        "card.gear.label.mate_teeth" => 0.91,
+        "card.gear.label.inspect_code" => 0.45,
+        "card.gear.label.tol_value" => 0.55,
+        _ => return None,
+    })
+}
+
+/// 卡面文字字宽因子：中文用模板原值；英文用 [`en_label_width_factor`] 覆盖。
+fn face_width_factor(key: &str, wf_zh: f64) -> f64 {
+    match (crate::i18n::lang(), en_label_width_factor(key)) {
+        (crate::i18n::Lang::En, Some(wf)) => wf,
+        _ => wf_zh,
+    }
+}
+
 fn text_ent(
     value: &str,
     x: f64,
@@ -265,14 +320,25 @@ fn attdef(
     ad
 }
 
-/// 表格块成员：27 线 + 46 标签/符号 TEXT + 19 ATTDEF（18 模板项 + `精度等级`）。
+/// 表格块成员：27 线 + 46 标签/符号 TEXT（**标签随语言**）+ 19 ATTDEF（18 模板项 + `精度等级`）。
 pub fn block_entities() -> Vec<EntityType> {
     let mut out = Vec::with_capacity(GEAR_LINES.len() + GEAR_TEXTS.len() + 19);
     for (a, b, layer) in GEAR_LINES {
         out.push(crate::partgen_kit::line(*a, *b, layer));
     }
-    for (v, x, y, h, wf, layer, ha, va, ax, ay) in GEAR_TEXTS {
-        out.push(text_ent(v, *x, *y, *h, *wf, layer, *ha, *va, *ax, *ay));
+    for (key, x, y, h, wf, layer, ha, va, ax, ay) in GEAR_TEXTS {
+        out.push(text_ent(
+            &face_text(key),
+            *x,
+            *y,
+            *h,
+            face_width_factor(key, *wf),
+            layer,
+            *ha,
+            *va,
+            *ax,
+            *ay,
+        ));
     }
     for ad in attdefs() {
         out.push(EntityType::AttributeDefinition(ad));
@@ -413,11 +479,11 @@ pub fn values(spec: &GearTableSpec) -> Result<Vec<(String, String)>, String> {
     let p = &spec.params;
     let full_depth = (p.da() - p.df()).abs() / 2.0;
     let direction = if p.beta_deg.abs() < 1e-9 {
-        "直齿".to_string()
+        crate::i18n::t("card.gear.dir.straight")
     } else if p.beta_deg > 0.0 {
-        "右旋".to_string()
+        crate::i18n::t("card.gear.dir.right")
     } else {
-        "左旋".to_string()
+        crate::i18n::t("card.gear.dir.left")
     };
     let (k_text, w_text) = match p.span_measurement() {
         Some((k, w)) => (k.to_string(), fmt_mm(w)),
@@ -1174,6 +1240,8 @@ mod tests {
     /// 取值正确性：模板档 m2 z40 α20 → ha*=1、c*=0.25、全齿高 4.5、W 27.6896、k=5。
     #[test]
     fn gear_values_from_engine_and_missing() {
+        let _g = crate::global_state_test_lock();
+        crate::i18n::set_lang(crate::i18n::Lang::Zh); // 中文值断言（螺旋方向等枚举显示值随语言）
         let spec = model().spec().unwrap();
         let p = &spec.params;
         assert!(near(p.m, 2.0) && p.z == 40);
@@ -1224,11 +1292,14 @@ mod tests {
             values(&m3.spec().unwrap()).unwrap().iter().find(|(t, _)| t == "中心距及极限偏差").unwrap().1,
             "60.5"
         );
+        crate::i18n::set_lang_auto();
     }
 
     /// 内齿 / 斜齿 / 变位档：反解与缺项口径。
     #[test]
     fn gear_values_internal_helical_and_shift() {
+        let _g = crate::global_state_test_lock();
+        crate::i18n::set_lang(crate::i18n::Lang::Zh);
         // 内齿轮 m2 z40 α20（表达式口径：DA=外侧齿根=d+2.25m=84.5、DF=里侧齿顶=d−2m=76）
         // → 全齿高 4.25、公法线标缺
         let mut mi = model();
@@ -1284,6 +1355,7 @@ mod tests {
         let vx = values(&sx).unwrap();
         assert_eq!(get(&vx, "径向变位系数"), "0.5");
         assert_eq!(get(&vx, "全齿高"), "6");
+        crate::i18n::set_lang_auto();
     }
 
     /// 表达式不自洽（DA 与 M/Z/X 对不上）→ 直白报错（不产半张表）。
@@ -1322,82 +1394,225 @@ mod tests {
         assert!(e.contains("bogus"), "{e}");
     }
 
-    /// 排版/几何断言：值文本不出表边界、不跨列（中列右边界 x≤−20；右列左边界 x≥−20），
-    /// 标签不出标签列（x≤−40）。
+    /// 排版/几何断言（**中英各跑一遍**）：标签不越标签列、符号不越中列、值不出表/不跨列；
+    /// 两条中列表头（左锚 ‖ 右锚 Fit）不叠字。
+    ///
+    /// 与预算脚本同口径的三模型里仓库能算的两个：`text_extent()`（字符分类保守）与
+    /// `text_extent_ttf()`（cap-height 归一后的保守上限）；真字体 advance 由活复核脚本查。
+    /// 英文标签另查「列内余量 ≥3%」。
     #[test]
     fn gear_text_boxes_stay_in_columns() {
-        use crate::spline_table::text_extent;
+        use crate::spline_table::{text_extent, text_extent_ttf};
+        let _g = crate::global_state_test_lock();
         let spec = model().spec().unwrap();
-        let vals = values(&spec).unwrap();
-        // 值框：Fit/右锚 → [ax − w, y, ax, y+h]
-        for ad in attdefs() {
-            let v = vals.iter().find(|(t, _)| t == &ad.tag).unwrap().1.clone();
-            let w = text_extent(&v, ad.height, ad.width_factor);
-            let anchor_x = ad.alignment_point.x;
-            let left = if matches!(ad.horizontal_alignment, HorizontalAlignment::Left) {
-                ad.insertion_point.x
-            } else {
-                anchor_x - w
-            };
-            let right = if matches!(ad.horizontal_alignment, HorizontalAlignment::Left) {
-                ad.insertion_point.x + w
-            } else {
-                anchor_x
-            };
-            assert!(
-                left >= -40.0 - 1e-9 && right <= 1e-9,
-                "{} 值「{v}」越界 [{left:.3}, {right:.3}]",
-                ad.tag
-            );
-            // 值列分栏：模板值列最小左界 −20（跨列行 螺旋方向/精度等级 从 −40 起，单独放行）
-            if !matches!(ad.tag.as_str(), "螺旋方向" | GRADE_TAG) {
+        let widest = |v: &str, h: f64, wf: f64| text_extent(v, h, wf).max(text_extent_ttf(v, h, wf));
+        for lang in [crate::i18n::Lang::Zh, crate::i18n::Lang::En] {
+            crate::i18n::set_lang(lang);
+            let zh = matches!(lang, crate::i18n::Lang::Zh);
+            let vals = values(&spec).unwrap();
+            // 值框（ATTRIB）：Fit/右锚 → [ax − w, y, ax, y+h]
+            for ad in attdefs() {
+                let v = vals.iter().find(|(t, _)| t == &ad.tag).unwrap().1.clone();
+                let w = widest(&v, ad.height, ad.width_factor);
+                let anchor_x = ad.alignment_point.x;
+                let left = if matches!(ad.horizontal_alignment, HorizontalAlignment::Left) {
+                    ad.insertion_point.x
+                } else {
+                    anchor_x - w
+                };
+                let right = if matches!(ad.horizontal_alignment, HorizontalAlignment::Left) {
+                    ad.insertion_point.x + w
+                } else {
+                    anchor_x
+                };
                 assert!(
-                    left >= -20.0 - 1e-9,
-                    "{} 值「{v}」左边界 {left:.3} 进标签/符号列",
+                    left >= -40.0 - 1e-9 && right <= 1e-9,
+                    "{lang:?} {} 值「{v}」越界 [{left:.3}, {right:.3}]",
                     ad.tag
+                );
+                // 值列分栏：模板值列最小左界 −20（跨列行 螺旋方向/精度等级 从 −40 起，单独放行）
+                if !matches!(ad.tag.as_str(), "螺旋方向" | GRADE_TAG) {
+                    assert!(
+                        left >= -20.0 - 1e-9,
+                        "{lang:?} {} 值「{v}」左边界 {left:.3} 进标签/符号列",
+                        ad.tag
+                    );
+                }
+            }
+            // 标签/符号 TEXT：标签列（x≤−40）不出列、符号/表头不进值列（x≤−20）
+            for (key, x, _y, h, wf, _layer, ha, _va, ax, _ay) in GEAR_TEXTS {
+                let text = face_text(key);
+                let w = face_width_factor(key, *wf);
+                let right = if *ha == 0 { *ax + widest(&text, *h, w) } else { *ax };
+                assert!(right <= 1e-9, "{lang:?} TEXT「{text}」出表右边界 {right:.3}");
+                if !key.starts_with("card.") {
+                    // 中列符号（`mn`/`z`/…）：个别手绘符号（`h α *` 组合）按模板照录
+                    if !matches!(*key, "*" | "α" | "h") {
+                        assert!(right <= -20.0 + 1e-6, "符号「{text}」进值列：{right:.3}");
+                    }
+                    continue;
+                }
+                if *key == "card.gear.label.tol_value" {
+                    continue; // Fit 右锚表头（模板）：下方单独断言
+                }
+                if *x <= -40.0 {
+                    // 标签列右界 = −40（模板竖线）。zh 是模板原值：`公法线长度变动公差`
+                    // 在真字体口径下正好压线（+0.06，模板自带），留 0.1 容差；
+                    // **英文侧是本批预算：必须 ≥3% 列内余量**。
+                    let lim = -40.0 + if zh { 0.1 } else { 0.0 };
+                    let margin = (-40.0 - right) / (-40.0 - *x);
+                    assert!(
+                        right <= lim + 1e-6,
+                        "{lang:?} 标签「{text}」越入符号列：right={right:.3}"
+                    );
+                    if !zh {
+                        assert!(
+                            margin >= 0.03,
+                            "{lang:?} 标签「{text}」列内余量 {:.1}% < 3%：right={right:.3}",
+                            margin * 100.0
+                        );
+                    }
+                } else {
+                    assert!(
+                        right <= -20.0 + 1e-6,
+                        "{lang:?} 中列标签「{text}」越入值列：right={right:.3}"
+                    );
+                }
+            }
+            // 公差(或极限偏差)值 是 Fit 右锚（模板）：框 = [ax−w, ay, ax, ay+h]
+            let tol_head = GEAR_TEXTS
+                .iter()
+                .find(|t| t.0 == "card.gear.label.tol_value")
+                .unwrap();
+            assert_eq!(tol_head.6, 5, "表头应为 Fit（右锚）");
+            let w = text_extent(&face_text(tol_head.0), tol_head.3, face_width_factor(tol_head.0, tol_head.4));
+            assert!(tol_head.8 - w > -40.0, "表头左边界 {} 进标签列", tol_head.8 - w);
+            assert!(tol_head.8 <= 1e-9, "表头右边界 {} 出表", tol_head.8);
+            // 中列 `检验项目代号` 字宽按用户截图降到 0.55（实体级）；EN 侧 0.45（预算脚本）。
+            let mid_head = GEAR_TEXTS
+                .iter()
+                .find(|t| t.0 == "card.gear.label.inspect_code")
+                .unwrap();
+            let center_label = GEAR_TEXTS
+                .iter()
+                .find(|t| t.0 == "card.gear.label.center")
+                .unwrap();
+            let zh = matches!(lang, crate::i18n::Lang::Zh);
+            assert_eq!(tol_head.4, 0.6, "表头字宽应已降到 0.6");
+            assert_eq!(mid_head.4, 0.55, "检验项目代号字宽应降到 0.55");
+            assert_eq!(center_label.4, 0.55, "齿轮副中心距…字宽应降到 0.55");
+            if !zh {
+                assert_eq!(w, text_extent("Tol. (or limit)", 3.5, 0.55), "EN 表头实体字宽");
+                assert_eq!(mid_head.6, 0, "EN 中列表头仍左锚");
+                assert_eq!(
+                    face_width_factor(mid_head.0, mid_head.4),
+                    0.45,
+                    "EN 中列表头实体字宽"
+                );
+            }
+            // 两条表头不叠字（仓库 char 模型；zh 现状即此口径）
+            let mid_head_right = -38.95808117938926
+                + text_extent(&face_text(mid_head.0), 3.5, face_width_factor(mid_head.0, mid_head.4));
+            assert!(
+                tol_head.8 - w >= mid_head_right - 1e-6,
+                "{lang:?} 表头左边界 {:.3} 与中列表头右边界 {:.3} 叠字",
+                tol_head.8 - w,
+                mid_head_right
+            );
+            // EN 表头不比 zh 更挤占中列（`text_extent_ttf` 模型，与预算脚本同一条）
+            if !zh {
+                let zh_w = text_extent_ttf("公差(或极限偏差)值", 3.5, 0.6);
+                assert!(
+                    w <= zh_w + 1e-9,
+                    "EN 表头保守宽 {w:.3} 超过 zh 现状 {zh_w:.3}"
                 );
             }
         }
-        // 标签/符号 TEXT：标签不进符号列（x≤−40），符号不进值列（x≤−20）
-        for (v, x, y, h, wf, _layer, ha, _va, ax, _ay) in GEAR_TEXTS {
-            let left = *x;
-            let right = if *ha == 0 { *ax + text_extent(v, *h, *wf) } else { *ax };
-            assert!(right <= 1e-9, "TEXT「{v}」出表右边界 {right:.3}");
-            if right <= -40.0 + 1e-6 {
-                continue; // 标签列
-            }
-            // 中列符号：不得越过 x=−20（个别手绘符号如 `h α *` 组合按模板照录，放行；
-            // 表头 `公差(或极限偏差)值` 是 Fit 右锚，单独负断言）
-            if !matches!(*v, "*" | "α" | "h" | "公差(或极限偏差)值") {
-                assert!(right <= -20.0 + 1e-6, "符号「{v}」进值列：{right:.3}");
-            }
-            let _ = (left, y);
+        crate::i18n::set_lang_auto();
+    }
+
+    /// ③ 卡面批：**中英双断言**（标签随语言；符号/代号/值/ATTDEF tag 原样）。
+    #[test]
+    fn card_face_switches_language_keeping_symbols_and_values() {
+        use crate::i18n::{set_lang, set_lang_auto, Lang};
+        let _g = crate::global_state_test_lock();
+        let spec = model().spec().unwrap();
+        let cjk = |s: &str| s.chars().any(|c| ('\u{4E00}'..='\u{9FFF}').contains(&c));
+        // 原始表里的**符号/代号**（非 `card.` key）→ 两语必须逐字相同
+        let want_symbols: Vec<String> = GEAR_TEXTS
+            .iter()
+            .filter(|(k, ..)| !k.starts_with("card."))
+            .map(|(k, ..)| (*k).to_string())
+            .collect();
+        for s in ["mn", "z", "α", "h", "β", "x", "a±f", "F", "W", "kn", "k", "pt"] {
+            assert!(want_symbols.iter().any(|w| w == s), "符号表缺 {s}");
         }
-        // 公差(或极限偏差)值 是 Fit 右锚（模板）：框 = [ax−w, ay, ax, ay+h]
-        let tol_head = GEAR_TEXTS
-            .iter()
-            .find(|t| t.0 == "公差(或极限偏差)值")
-            .unwrap();
-        assert_eq!(tol_head.6, 5, "表头应为 Fit（右锚）");
-        let w = text_extent(tol_head.0, tol_head.3, tol_head.4);
-        assert!(tol_head.8 - w > -40.0, "表头左边界 {} 进标签列", tol_head.8 - w);
-        assert!(tol_head.8 <= 1e-9, "表头右边界 {} 出表", tol_head.8);
-        // 表头 `公差(或极限偏差)值` 与中列 `检验项目代号` 字宽都按用户截图降到 0.55（实体级）。
-        assert_eq!(tol_head.4, 0.6, "表头字宽应已降到 0.6");
-        let mid_head = GEAR_TEXTS.iter().find(|t| t.0 == "检验项目代号").unwrap();
-        assert_eq!(mid_head.4, 0.55, "检验项目代号字宽应降到 0.55");
-        let center_label = GEAR_TEXTS
-            .iter()
-            .find(|t| t.0 == "齿轮副中心距及其极限偏差")
-            .unwrap();
-        assert_eq!(center_label.4, 0.55, "齿轮副中心距…字宽应降到 0.55");
-        let mid_head_right = -38.95808117938926 + text_extent("检验项目代号", 3.5, 0.55);
+        let face = |want: Lang| {
+            set_lang(want);
+            block_entities()
+                .iter()
+                .filter_map(|e| match e {
+                    EntityType::Text(t) => Some(t.value.clone()),
+                    _ => None,
+                })
+                .collect::<Vec<String>>()
+        };
+        let tags = |_l: Lang| attdefs().iter().map(|a| a.tag.clone()).collect::<Vec<_>>();
+        let tags_zh = tags(Lang::Zh);
+
+        let zh = face(Lang::Zh);
+        for want in [
+            "法向模数",
+            "齿圈径向跳动公差",
+            "检验项目代号",
+            "公差(或极限偏差)值",
+            "图号",
+        ] {
+            assert!(zh.iter().any(|t| t == want), "zh 卡面缺「{want}」：{zh:?}");
+        }
         assert!(
-            tol_head.8 - w >= mid_head_right - 1e-6,
-            "表头左边界 {:.3} 与中列表头右边界 {:.3} 叠字",
-            tol_head.8 - w,
-            mid_head_right
+            want_symbols.iter().all(|s| zh.contains(s)),
+            "zh 卡面缺符号/代号：{want_symbols:?}"
         );
+        let vals_zh = { set_lang(Lang::Zh); values(&spec).unwrap() };
+        assert_eq!(vals_zh.iter().find(|(t, _)| t == "螺旋方向").unwrap().1, "直齿");
+
+        let en = face(Lang::En);
+        for want in [
+            "Normal module",
+            "Radial run-out tolerance",
+            "Inspection code",
+            "Tol. (or limit)",
+            "DWG No.",
+            "Number of teeth",
+        ] {
+            assert!(en.iter().any(|t| t == want), "en 卡面缺「{want}」：{en:?}");
+        }
+        assert_eq!(en.len(), zh.len(), "中英卡面文字条数一致");
+        assert!(!en.iter().any(|t| cjk(t)), "英文卡面不应再有汉字：{en:?}");
+        assert!(
+            want_symbols.iter().all(|s| en.contains(s)),
+            "英文卡面符号/代号必须原样：{want_symbols:?}"
+        );
+        assert!(
+            zh.iter().all(|t| !t.contains("module") && !t.contains("tolerance")),
+            "中文卡面不得混入英文标签：{zh:?}"
+        );
+        assert_eq!(tags(Lang::En), tags_zh, "ATTDEF tag 不随语言");
+
+        // 值（数据）：数值/标准号两语一致；**枚举显示值**（螺旋方向）随语言。
+        let vals_en = { set_lang(Lang::En); values(&spec).unwrap() };
+        assert_eq!(vals_en.len(), vals_zh.len());
+        for ((t, vzh), (t2, ven)) in vals_zh.iter().zip(vals_en.iter()) {
+            assert_eq!(t, t2, "取值顺序（= tag 顺序）不随语言");
+            if t == "螺旋方向" {
+                assert_eq!((vzh.as_str(), ven.as_str()), ("直齿", "Spur"));
+            } else {
+                assert_eq!(vzh, ven, "{t} 值（数据）不应随语言");
+            }
+        }
+        assert!(crate::i18n::missing_keys().is_empty(), "{:?}", crate::i18n::missing_keys());
+        set_lang_auto();
     }
 
     /// CLI/GUI 同源：同一表达式两边出同一份 19 项。

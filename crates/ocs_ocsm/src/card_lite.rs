@@ -58,6 +58,90 @@ pub enum LiteFamily {
     Gear,
 }
 
+impl LiteFamily {
+    /// 卡面取词语言。
+    ///
+    /// * **ANSI 精简 4 卡 = 「一卡一语种」**（卡 id / 块名已含 `CN`/`EN`）⇒ 由族**钉死**，
+    ///   与 `OCSMLANG`（语言开关）无关 —— 同完整 ANSI 卡的「块语种」口径（② 卡面批）；
+    /// * 其余族（NF/DIN/齿轮）一本卡两语 ⇒ 随当前语言（与 GB 精简卡同口径）。
+    fn face_lang(self) -> crate::i18n::Lang {
+        match self {
+            LiteFamily::AnsiCnInt | LiteFamily::AnsiCnExt => crate::i18n::Lang::Zh,
+            LiteFamily::AnsiEnInt | LiteFamily::AnsiEnExt => crate::i18n::Lang::En,
+            _ => crate::i18n::lang(),
+        }
+    }
+}
+
+/// 卡面取词：`card.` 前缀 = catalog key（按 `lang` 取），其余原样（NF/DIN 尚未入表）。
+fn lite_text(raw: &str, lang: crate::i18n::Lang) -> String {
+    if raw.starts_with("card.") {
+        crate::i18n::t_lang(lang, raw)
+    } else {
+        raw.to_string()
+    }
+}
+
+/// 卡面标签符号（§31 形态：**符号与译名分置**，译文怎么改都不会丢符号）。
+/// `None` = 该行没有外挂符号（ANSI 4 卡的符号已含在双语原文里，如 `齿数 z` / `TEETH z`）。
+fn label_symbol(label_key: &str) -> Option<&'static str> {
+    Some(match label_key {
+        "card.gear.lite.label.module" => "m",
+        "card.gear.lite.label.teeth" => "z",
+        "card.gear.lite.label.alpha" => "α",
+        "card.gear.lite.label.shift" => "x",
+        "card.gear.lite.label.pitch_dia" => "d",
+        "card.gear.lite.label.tip_dia" => "da",
+        "card.gear.lite.label.root_dia" => "df",
+        "card.gear.lite.label.base_tangent" => "W",
+        "card.gear.lite.label.span_teeth" => "K",
+        _ => return None,
+    })
+}
+
+/// 卡面标题文字（按族语种）。
+pub fn title_text(card: &LiteCardSpec) -> String {
+    lite_text(card.title, card.family.face_lang())
+}
+
+/// 卡面标签文字（按族语种）：译名 + 「空格 + 符号」（符号原样，两语相同）。
+pub fn label_text(f: &LiteFieldSpec, family: LiteFamily) -> String {
+    let base = lite_text(f.label, family.face_lang());
+    match label_symbol(f.label) {
+        Some(sym) => format!("{base} {sym}"),
+        None => base,
+    }
+}
+
+/// 英文卡面标签的**实体级字宽**（`None` = 用该行自带 wf）。
+///
+/// 口径同 §31/§32（GB/齿轮族）：真字体 metrics（cap=0.637em ⇒ 宽 = 字号 × 1.57 × wf）逐条按
+/// 「宽 ≤ (X_SEP − X_LABEL) × 0.97（≥3% 余量）」预算，并同时满足仓库 `char_em` / `char_em_ttf`
+/// 两个保守模型（取更紧者）；脚本 `i18n_检查/card_gear_ansi_width_plan.py`。
+/// **ANSI 4 卡自带 wf 就是英文档**（一卡一语种）故不覆盖；`模数 m` 英文比中文短 ⇒ 保持 1.0。
+fn en_label_width_factor(label_key: &str) -> Option<f64> {
+    Some(match label_key {
+        "card.gear.lite.label.module" => 1.0,
+        "card.gear.lite.label.teeth" => 0.61,
+        "card.gear.lite.label.alpha" => 0.64,
+        "card.gear.lite.label.shift" => 0.54,
+        "card.gear.lite.label.pitch_dia" => 0.65,
+        "card.gear.lite.label.tip_dia" => 0.69,
+        "card.gear.lite.label.root_dia" => 0.65,
+        "card.gear.lite.label.base_tangent" => 0.49,
+        "card.gear.lite.label.span_teeth" => 0.87,
+        _ => return None,
+    })
+}
+
+/// 卡面标签实体字宽：中文用行自带值；英文用 [`en_label_width_factor`] 覆盖。
+fn label_wf(f: &LiteFieldSpec, lang: crate::i18n::Lang) -> f64 {
+    match (lang, en_label_width_factor(f.label)) {
+        (crate::i18n::Lang::En, Some(wf)) => wf,
+        _ => f.wf,
+    }
+}
+
 /// 一张精简卡（一行一卡定义）。
 #[derive(Debug, Clone, Copy)]
 pub struct LiteCardSpec {
@@ -146,67 +230,67 @@ const DIN_EXT_FIELDS: &[LiteFieldSpec] = &[
 
 // ── ANSI B92.1（内/外 × 中/英 四张：基本参数 + 主要测量量）──
 const ANSI_CN_INT_FIELDS: &[LiteFieldSpec] = &[
-    LiteFieldSpec { tag: "(ANSI简)花键类型", key: "花键类型", label: "花键类型", wf: 1.0, vwf: 0.60, formula: "", source: "" },
-    fld!("(ANSI简)齿数", "齿数", "齿数 z", 1.0),
-    fld!("(ANSI简)径节", "径节", "径节 P", 1.0),
-    fld!("(ANSI简)压力角", "压力角", "压力角 α", 1.0),
-    fld!("(ANSI简)基圆直径", "基圆直径", "基圆直径 Db", 0.80),
-    fld!("(ANSI简)节圆直径", "节圆直径", "节圆直径 D", 0.90),
-    fld!("(ANSI简)大径", "大径", "大径", 1.0),
-    fld!("(ANSI简)小径", "小径", "小径", 1.0),
-    fld!("(ANSI简)跨棒距", "跨棒距", "跨棒距 M", 1.0),
-    fld!("(ANSI简)量棒直径", "量棒直径", "量棒直径 Dp", 0.80),
+    LiteFieldSpec { tag: "(ANSI简)花键类型", key: "花键类型", label: "card.ansi.lite.label.spline_type", wf: 1.0, vwf: 0.60, formula: "", source: "" },
+    fld!("(ANSI简)齿数", "齿数", "card.ansi.lite.label.teeth", 1.0),
+    fld!("(ANSI简)径节", "径节", "card.ansi.lite.label.pitch", 1.0),
+    fld!("(ANSI简)压力角", "压力角", "card.ansi.lite.label.alpha", 1.0),
+    fld!("(ANSI简)基圆直径", "基圆直径", "card.ansi.lite.label.base_dia", 0.80),
+    fld!("(ANSI简)节圆直径", "节圆直径", "card.ansi.lite.label.pitch_dia", 0.90),
+    fld!("(ANSI简)大径", "大径", "card.ansi.lite.label.major_dia", 1.0),
+    fld!("(ANSI简)小径", "小径", "card.ansi.lite.label.minor_dia", 1.0),
+    fld!("(ANSI简)跨棒距", "跨棒距", "card.ansi.lite.label.over_pins", 1.0),
+    fld!("(ANSI简)量棒直径", "量棒直径", "card.ansi.lite.label.pin_dia", 0.80),
 ];
 
 const ANSI_CN_EXT_FIELDS: &[LiteFieldSpec] = &[
-    LiteFieldSpec { tag: "(ANSI简)花键类型", key: "花键类型", label: "花键类型", wf: 1.0, vwf: 0.60, formula: "", source: "" },
-    fld!("(ANSI简)齿数", "齿数", "齿数 z", 1.0),
-    fld!("(ANSI简)径节", "径节", "径节 P", 1.0),
-    fld!("(ANSI简)压力角", "压力角", "压力角 α", 1.0),
-    fld!("(ANSI简)基圆直径", "基圆直径", "基圆直径 Db", 0.80),
-    fld!("(ANSI简)节圆直径", "节圆直径", "节圆直径 D", 0.90),
-    fld!("(ANSI简)大径", "大径", "大径", 1.0),
-    fld!("(ANSI简)小径", "小径", "小径", 1.0),
-    fld!("(ANSI简)公法线", "公法线长度", "公法线 W", 1.0),
-    fld!("(ANSI简)跨测齿数", "跨测齿数", "跨测齿数 K", 0.90),
+    LiteFieldSpec { tag: "(ANSI简)花键类型", key: "花键类型", label: "card.ansi.lite.label.spline_type", wf: 1.0, vwf: 0.60, formula: "", source: "" },
+    fld!("(ANSI简)齿数", "齿数", "card.ansi.lite.label.teeth", 1.0),
+    fld!("(ANSI简)径节", "径节", "card.ansi.lite.label.pitch", 1.0),
+    fld!("(ANSI简)压力角", "压力角", "card.ansi.lite.label.alpha", 1.0),
+    fld!("(ANSI简)基圆直径", "基圆直径", "card.ansi.lite.label.base_dia", 0.80),
+    fld!("(ANSI简)节圆直径", "节圆直径", "card.ansi.lite.label.pitch_dia", 0.90),
+    fld!("(ANSI简)大径", "大径", "card.ansi.lite.label.major_dia", 1.0),
+    fld!("(ANSI简)小径", "小径", "card.ansi.lite.label.minor_dia", 1.0),
+    fld!("(ANSI简)公法线", "公法线长度", "card.ansi.lite.label.base_tangent", 1.0),
+    fld!("(ANSI简)跨测齿数", "跨测齿数", "card.ansi.lite.label.span_teeth", 0.90),
 ];
 
 const ANSI_EN_INT_FIELDS: &[LiteFieldSpec] = &[
-    LiteFieldSpec { tag: "(ANSI简)花键类型", key: "花键类型", label: "SPLINE TYPE", wf: 0.75, vwf: 0.45, formula: "", source: "" },
-    fld!("(ANSI简)齿数", "齿数", "TEETH z", 1.0),
-    fld!("(ANSI简)径节", "径节", "PITCH P", 1.0),
-    fld!("(ANSI简)压力角", "压力角", "ALPHA", 1.0),
-    fld!("(ANSI简)基圆直径", "基圆直径", "BASE DIA. Db", 0.75),
-    fld!("(ANSI简)节圆直径", "节圆直径", "PITCH DIA. D", 0.75),
-    fld!("(ANSI简)大径", "大径", "MAJOR DIA.", 0.80),
-    fld!("(ANSI简)小径", "小径", "MINOR DIA.", 0.80),
-    fld!("(ANSI简)跨棒距", "跨棒距", "PIN DIST. M", 0.80),
-    fld!("(ANSI简)量棒直径", "量棒直径", "PIN DIA. Dp", 0.80),
+    LiteFieldSpec { tag: "(ANSI简)花键类型", key: "花键类型", label: "card.ansi.lite.label.spline_type", wf: 0.75, vwf: 0.45, formula: "", source: "" },
+    fld!("(ANSI简)齿数", "齿数", "card.ansi.lite.label.teeth", 1.0),
+    fld!("(ANSI简)径节", "径节", "card.ansi.lite.label.pitch", 1.0),
+    fld!("(ANSI简)压力角", "压力角", "card.ansi.lite.label.alpha", 1.0),
+    fld!("(ANSI简)基圆直径", "基圆直径", "card.ansi.lite.label.base_dia", 0.75),
+    fld!("(ANSI简)节圆直径", "节圆直径", "card.ansi.lite.label.pitch_dia", 0.75),
+    fld!("(ANSI简)大径", "大径", "card.ansi.lite.label.major_dia", 0.80),
+    fld!("(ANSI简)小径", "小径", "card.ansi.lite.label.minor_dia", 0.80),
+    fld!("(ANSI简)跨棒距", "跨棒距", "card.ansi.lite.label.over_pins", 0.80),
+    fld!("(ANSI简)量棒直径", "量棒直径", "card.ansi.lite.label.pin_dia", 0.80),
 ];
 
 const ANSI_EN_EXT_FIELDS: &[LiteFieldSpec] = &[
-    LiteFieldSpec { tag: "(ANSI简)花键类型", key: "花键类型", label: "SPLINE TYPE", wf: 0.75, vwf: 0.45, formula: "", source: "" },
-    fld!("(ANSI简)齿数", "齿数", "TEETH z", 1.0),
-    fld!("(ANSI简)径节", "径节", "PITCH P", 1.0),
-    fld!("(ANSI简)压力角", "压力角", "ALPHA", 1.0),
-    fld!("(ANSI简)基圆直径", "基圆直径", "BASE DIA. Db", 0.75),
-    fld!("(ANSI简)节圆直径", "节圆直径", "PITCH DIA. D", 0.75),
-    fld!("(ANSI简)大径", "大径", "MAJOR DIA.", 0.80),
-    fld!("(ANSI简)小径", "小径", "MINOR DIA.", 0.80),
-    fld!("(ANSI简)公法线", "公法线长度", "BASE TANG. W", 0.65),
-    fld!("(ANSI简)跨测齿数", "跨测齿数", "SPAN TEETH K", 0.65),
+    LiteFieldSpec { tag: "(ANSI简)花键类型", key: "花键类型", label: "card.ansi.lite.label.spline_type", wf: 0.75, vwf: 0.45, formula: "", source: "" },
+    fld!("(ANSI简)齿数", "齿数", "card.ansi.lite.label.teeth", 1.0),
+    fld!("(ANSI简)径节", "径节", "card.ansi.lite.label.pitch", 1.0),
+    fld!("(ANSI简)压力角", "压力角", "card.ansi.lite.label.alpha", 1.0),
+    fld!("(ANSI简)基圆直径", "基圆直径", "card.ansi.lite.label.base_dia", 0.75),
+    fld!("(ANSI简)节圆直径", "节圆直径", "card.ansi.lite.label.pitch_dia", 0.75),
+    fld!("(ANSI简)大径", "大径", "card.ansi.lite.label.major_dia", 0.80),
+    fld!("(ANSI简)小径", "小径", "card.ansi.lite.label.minor_dia", 0.80),
+    fld!("(ANSI简)公法线", "公法线长度", "card.ansi.lite.label.base_tangent", 0.65),
+    fld!("(ANSI简)跨测齿数", "跨测齿数", "card.ansi.lite.label.span_teeth", 0.65),
 ];
 
 // ── 齿轮（GB/T 10095；模数·齿数·压力角·变位·三圆 + 公法线/跨齿数）──
 const GEAR_FIELDS: &[LiteFieldSpec] = &[
-    fld!("(齿轮简)模数", "法向模数", "模数 m", 1.0),
-    fld!("(齿轮简)齿数", "齿数", "齿数 z", 1.0),
-    fld!("(齿轮简)压力角", "齿形角", "压力角 α", 1.0),
-    fld!("(齿轮简)变位", "径向变位系数", "变位系数 x", 0.90),
+    fld!("(齿轮简)模数", "法向模数", "card.gear.lite.label.module", 1.0),
+    fld!("(齿轮简)齿数", "齿数", "card.gear.lite.label.teeth", 1.0),
+    fld!("(齿轮简)压力角", "齿形角", "card.gear.lite.label.alpha", 1.0),
+    fld!("(齿轮简)变位", "径向变位系数", "card.gear.lite.label.shift", 0.90),
     LiteFieldSpec {
         tag: "(齿轮简)分度圆",
         key: "",
-        label: "分度圆 d",
+        label: "card.gear.lite.label.pitch_dia",
         wf: 1.0,
         vwf: VALUE_WF,
         formula: "d = m·z（与齿轮卡同一 `GearParams`）",
@@ -215,7 +299,7 @@ const GEAR_FIELDS: &[LiteFieldSpec] = &[
     LiteFieldSpec {
         tag: "(齿轮简)齿顶圆",
         key: "",
-        label: "齿顶圆 da",
+        label: "card.gear.lite.label.tip_dia",
         wf: 1.0,
         vwf: VALUE_WF,
         formula: "da = d + 2m(ha* + x)（外齿；内齿引擎口径）",
@@ -224,14 +308,14 @@ const GEAR_FIELDS: &[LiteFieldSpec] = &[
     LiteFieldSpec {
         tag: "(齿轮简)齿根圆",
         key: "",
-        label: "齿根圆 df",
+        label: "card.gear.lite.label.root_dia",
         wf: 1.0,
         vwf: VALUE_WF,
         formula: "df = d − 2m(ha* + c* − x)（外齿；内齿引擎口径）",
         source: "齿轮引擎 `GearParams::df()`",
     },
-    fld!("(齿轮简)公法线", "公法线", "公法线 W", 1.0),
-    fld!("(齿轮简)跨齿数", "公法线K", "跨齿数 K", 1.0),
+    fld!("(齿轮简)公法线", "公法线", "card.gear.lite.label.base_tangent", 1.0),
+    fld!("(齿轮简)跨齿数", "公法线K", "card.gear.lite.label.span_teeth", 1.0),
 ];
 
 /// 9 张精简卡（顺序 = GUI 下拉「精简版」分组顺序；GB 精简两卡见 `spline_lite.rs`）。
@@ -271,7 +355,7 @@ pub const LITE_CARDS: &[LiteCardSpec] = &[
     LiteCardSpec {
         id: "ANSI花键精简表_内_中文",
         block: "OCSM_LITE_ANSI_INT_CN",
-        title: "ANSI 内花键参数表（精简）",
+        title: "card.ansi.lite.title.int",
         full_card: "ANSI花键参数表_中文",
         family: LiteFamily::AnsiCnInt,
         fields: ANSI_CN_INT_FIELDS,
@@ -279,7 +363,7 @@ pub const LITE_CARDS: &[LiteCardSpec] = &[
     LiteCardSpec {
         id: "ANSI花键精简表_外_中文",
         block: "OCSM_LITE_ANSI_EXT_CN",
-        title: "ANSI 外花键参数表（精简）",
+        title: "card.ansi.lite.title.ext",
         full_card: "ANSI花键参数表_外_中文",
         family: LiteFamily::AnsiCnExt,
         fields: ANSI_CN_EXT_FIELDS,
@@ -287,7 +371,7 @@ pub const LITE_CARDS: &[LiteCardSpec] = &[
     LiteCardSpec {
         id: "ANSI花键精简表_内_英文",
         block: "OCSM_LITE_ANSI_INT_EN",
-        title: "ANSI INTERNAL SPLINE (LITE)",
+        title: "card.ansi.lite.title.int",
         full_card: "ANSI花键参数表_英文",
         family: LiteFamily::AnsiEnInt,
         fields: ANSI_EN_INT_FIELDS,
@@ -295,7 +379,7 @@ pub const LITE_CARDS: &[LiteCardSpec] = &[
     LiteCardSpec {
         id: "ANSI花键精简表_外_英文",
         block: "OCSM_LITE_ANSI_EXT_EN",
-        title: "ANSI EXTERNAL SPLINE (LITE)",
+        title: "card.ansi.lite.title.ext",
         full_card: "ANSI花键参数表_外_英文",
         family: LiteFamily::AnsiEnExt,
         fields: ANSI_EN_EXT_FIELDS,
@@ -303,7 +387,7 @@ pub const LITE_CARDS: &[LiteCardSpec] = &[
     LiteCardSpec {
         id: "齿轮精简表",
         block: "OCSM_LITE_GEAR",
-        title: "齿轮参数表（精简）",
+        title: "card.gear.lite.title",
         full_card: "齿轮参数表",
         family: LiteFamily::Gear,
         fields: GEAR_FIELDS,
@@ -337,10 +421,17 @@ pub fn block_entities(card: &LiteCardSpec) -> Vec<EntityType> {
         line([X_LEFT, row_top(i)], [X_RIGHT, row_top(i)], LAYER_THIN);
     }
     line([X_SEP, -ROW], [X_SEP, bottom], LAYER_THIN);
-    // 标题左对齐在标签列（自定卡无模板；不与列线/标签相叠）。
-    out.push(text_ent(card.title, X_LABEL, Y_TITLE, TEXT_H, TITLE_WF));
+    // 标题左对齐在标签列（自定卡无模板；不与列线/标签相叠）。标题/标签**随语言**（ANSI 4 卡随块语种）。
+    let lang = card.family.face_lang();
+    out.push(text_ent(&title_text(card), X_LABEL, Y_TITLE, TEXT_H, TITLE_WF));
     for (i, f) in card.fields.iter().enumerate() {
-        out.push(text_ent(f.label, X_LABEL, label_y(i + 1), TEXT_H, f.wf));
+        out.push(text_ent(
+            &label_text(f, card.family),
+            X_LABEL,
+            label_y(i + 1),
+            TEXT_H,
+            label_wf(f, lang),
+        ));
     }
     for (i, f) in card.fields.iter().enumerate() {
         out.push(EntityType::AttributeDefinition(attdef_wf(
@@ -558,11 +649,11 @@ pub fn preview_json(card: &LiteCardSpec, model: &serde_json::Value) -> Result<se
             None => (String::new(), f.formula.to_string(), f.source.to_string()),
         };
         if value == "—" {
-            missing.push(f.label.to_string());
+            missing.push(label_text(f, card.family));
         }
         items.push(serde_json::json!({
             "tag": tag,
-            "label": f.label,
+            "label": label_text(f, card.family),
             "unit": unit,
             "value": value,
             "formula": formula,
@@ -746,7 +837,8 @@ mod tests {
             for bad in ["公差", "偏差", "上差", "下差"] {
                 assert!(!texts.iter().any(|t| t.contains(bad)), "{} 文字含「{bad}」", c.id);
                 assert!(
-                    !c.fields.iter().any(|f| f.label.contains(bad) || f.tag.contains(bad)),
+                    !c.fields.iter().any(|f| label_text(f, c.family).contains(bad)
+                        || f.tag.contains(bad)),
                     "{} 字段含「{bad}」",
                     c.id
                 );
@@ -769,58 +861,125 @@ mod tests {
         }
     }
 
-    /// 真字体 metrics：标题/标签均在格内（标签列 ≥3% 边距）、标签×值不相交、不出块框。
+    /// 真字体 metrics（**中英各跑一遍**）：标题/标签均在格内（标签列 ≥3% 边距）、标签×值不相交、
+    /// 不出块框。英文侧用 [`label_wf`] 的实体字宽（齿轮精简卡）；ANSI 4 卡随块语种（钉死）。
     #[test]
     fn lite_texts_stay_in_columns_and_do_not_overlap() {
+        let _g = crate::global_state_test_lock();
         let cell = X_SEP - X_LABEL;
-        for c in LITE_CARDS {
-            let title = text_box_ttf([X_LABEL, Y_TITLE], TEXT_H, TITLE_WF, c.title);
-            assert!(
-                title[0] >= X_LEFT && title[2] <= X_RIGHT - 0.02,
-                "{} 标题越表：{title:?}",
-                c.id
-            );
-            let mut boxes: Vec<(String, [f64; 4])> = vec![(format!("title:{}", c.title), title)];
-            for (i, f) in c.fields.iter().enumerate() {
-                let row = i + 1;
-                let lab = text_box_ttf([X_LABEL, label_y(row)], TEXT_H, f.wf, f.label);
+        for lang in [crate::i18n::Lang::Zh, crate::i18n::Lang::En] {
+            crate::i18n::set_lang(lang);
+            for c in LITE_CARDS {
+                let face = c.family.face_lang();
+                let title_s = title_text(c);
+                let title = text_box_ttf([X_LABEL, Y_TITLE], TEXT_H, TITLE_WF, &title_s);
                 assert!(
-                    lab[0] >= X_LEFT && lab[2] <= X_SEP - 0.02,
-                    "{} 标签「{}」越列：{lab:?}",
-                    c.id,
-                    f.label
-                );
-                let margin = (X_SEP - lab[2]) / cell;
-                assert!(
-                    margin >= 0.03,
-                    "{} 标签「{}」余量 {:.1}% < 3%：{lab:?}",
-                    c.id,
-                    f.label,
-                    margin * 100.0
-                );
-                // 值取最宽样式（三圆/直径 + 小数）。
-                let val = "12345.678";
-                let vb = text_box_ttf([X_VALUE, value_y(row)], TEXT_H, f.vwf, val);
-                assert!(
-                    vb[0] >= X_SEP && vb[2] <= X_RIGHT - 0.02,
-                    "{} 值「{val}」越值列：{vb:?}",
+                    title[0] >= X_LEFT && title[2] <= X_RIGHT - 0.02,
+                    "{lang:?} {} 标题「{title_s}」越表：{title:?}",
                     c.id
                 );
-                assert!(lab[2] < vb[0], "{} 标签×值相叠：{}", c.id, f.label);
-                let top = row_top(row);
-                let bottom = top - ROW;
-                assert!(lab[1] >= bottom && lab[3] <= top && vb[1] >= bottom && vb[3] <= top);
-                boxes.push((format!("label:{}", f.label), lab));
-                boxes.push((format!("value:{val}"), vb));
-            }
-            for i in 0..boxes.len() {
-                for j in (i + 1)..boxes.len() {
-                    let (a, b) = (&boxes[i].1, &boxes[j].1);
-                    let hit = a[0] < b[2] && b[0] < a[2] && a[1] < b[3] && b[1] < a[3];
-                    assert!(!hit, "{} 文本框相交：{} × {}", c.id, boxes[i].0, boxes[j].0);
+                let mut boxes: Vec<(String, [f64; 4])> = vec![(format!("title:{title_s}"), title)];
+                for (i, f) in c.fields.iter().enumerate() {
+                    let row = i + 1;
+                    let lab_s = label_text(f, c.family);
+                    let lab = text_box_ttf([X_LABEL, label_y(row)], TEXT_H, label_wf(f, face), &lab_s);
+                    assert!(
+                        lab[0] >= X_LEFT && lab[2] <= X_SEP - 0.02,
+                        "{lang:?} {} 标签「{lab_s}」越列：{lab:?}",
+                        c.id
+                    );
+                    let margin = (X_SEP - lab[2]) / cell;
+                    assert!(
+                        margin >= 0.03,
+                        "{lang:?} {} 标签「{lab_s}」余量 {:.1}% < 3%：{lab:?}",
+                        c.id,
+                        margin * 100.0
+                    );
+                    // 值取最宽样式（三圆/直径 + 小数）。
+                    let val = "12345.678";
+                    let vb = text_box_ttf([X_VALUE, value_y(row)], TEXT_H, f.vwf, val);
+                    assert!(
+                        vb[0] >= X_SEP && vb[2] <= X_RIGHT - 0.02,
+                        "{lang:?} {} 值「{val}」越值列：{vb:?}",
+                        c.id
+                    );
+                    assert!(
+                        lab[2] < vb[0],
+                        "{lang:?} {} 标签×值相叠：{}",
+                        c.id,
+                        lab_s
+                    );
+                    let top = row_top(row);
+                    let bottom = top - ROW;
+                    assert!(lab[1] >= bottom && lab[3] <= top && vb[1] >= bottom && vb[3] <= top);
+                    boxes.push((format!("label:{lab_s}"), lab));
+                    boxes.push((format!("value:{val}"), vb));
+                }
+                for i in 0..boxes.len() {
+                    for j in (i + 1)..boxes.len() {
+                        let (a, b) = (&boxes[i].1, &boxes[j].1);
+                        let hit = a[0] < b[2] && b[0] < a[2] && a[1] < b[3] && b[1] < a[3];
+                        assert!(!hit, "{} 文本框相交：{} × {}", c.id, boxes[i].0, boxes[j].0);
+                    }
                 }
             }
         }
+        crate::i18n::set_lang_auto();
+    }
+
+    /// ② 卡面批：齿轮精简卡**中英双断言**；ANSI 精简 4 卡 = 「一卡一语种」钉死（与语言开关无关）。
+    #[test]
+    fn lite_card_faces_switch_or_pin_language_by_family() {
+        use crate::i18n::{set_lang, set_lang_auto, Lang};
+        let _g = crate::global_state_test_lock();
+        let cjk = |s: &str| s.chars().any(|c| ('\u{4e00}'..='\u{9FFF}').contains(&c));
+        let texts = |c: &LiteCardSpec| -> Vec<String> {
+            block_entities(c)
+                .iter()
+                .filter_map(|e| match e {
+                    EntityType::Text(t) => Some(t.value.clone()),
+                    _ => None,
+                })
+                .collect()
+        };
+        let gear = by_id("齿轮精简表").unwrap();
+        for (lang, want, no) in [
+            (Lang::Zh, "模数 m", "Module m"),
+            (Lang::En, "Module m", "模数 m"),
+        ] {
+            set_lang(lang);
+            let t = texts(gear);
+            assert!(t.iter().any(|s| s == want), "{lang:?} 齿轮精简卡缺「{want}」：{t:?}");
+            assert!(t.iter().all(|s| s != no));
+            // 符号/单位（m/z/α/x/d/da/df/W/K）两语原样
+            for sym in ["m", "z", "α", "x", "d", "da", "df", "W", "K"] {
+                assert!(
+                    t.iter().any(|s| s.split_whitespace().last() == Some(sym)),
+                    "{lang:?} 齿轮精简卡缺符号 {sym}：{t:?}"
+                );
+            }
+            if lang == Lang::En {
+                assert!(!t.iter().any(|s| cjk(s)), "英文齿轮精简卡不应有汉字：{t:?}");
+            }
+        }
+        // ANSI 4 卡：语种由族钉死 ⇒ 在 zh 与 en 两个环境下文字逐条相等
+        for id in ["ANSI花键精简表_内_中文", "ANSI花键精简表_外_中文",
+                   "ANSI花键精简表_内_英文", "ANSI花键精简表_外_英文"] {
+            let c = by_id(id).unwrap();
+            set_lang(Lang::Zh);
+            let zh = texts(c);
+            set_lang(Lang::En);
+            let en = texts(c);
+            assert_eq!(zh, en, "{id} 卡面随语言开关变了（应随块语种钉死）");
+            let want_cn = c.family == LiteFamily::AnsiCnInt || c.family == LiteFamily::AnsiCnExt;
+            assert!(
+                zh.iter().all(|s| cjk(s) == want_cn),
+                "{id} 语种纯度：{zh:?}"
+            );
+            assert_eq!(attdefs(c).len(), c.fields.len(), "{id} ATTDEF 数");
+        }
+        assert!(crate::i18n::missing_keys().is_empty(), "{:?}", crate::i18n::missing_keys());
+        set_lang_auto();
     }
 
     /// ANSI「花键类型」长值（英文全称最长）按**实体级值字宽**再压缩后仍留 ≥3% 余量。
@@ -852,8 +1011,13 @@ mod tests {
                     c.id,
                     margin * 100.0
                 );
-                let lab = text_box_ttf([X_LABEL, label_y(1)], TEXT_H, f.wf, f.label);
-                assert!(lab[2] < vb[0], "{} 标签×值相叠：{}", c.id, f.label);
+                let lab = text_box_ttf(
+                    [X_LABEL, label_y(1)],
+                    TEXT_H,
+                    label_wf(f, c.family.face_lang()),
+                    &label_text(f, c.family),
+                );
+                assert!(lab[2] < vb[0], "{} 标签×值相叠：{}", c.id, label_text(f, c.family));
             }
         }
     }
