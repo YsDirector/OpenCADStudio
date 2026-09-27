@@ -1,6 +1,9 @@
 [package]
 name = "ocs_ocsm"
-version = "0.1.0"
+# 版本单一来源：plugin.toml 的 [plugin] version 是**宿主显示口径**，本行必须与它一致。
+# src/lib.rs 的 MANIFEST.version 走 env!("CARGO_PKG_VERSION")（即本行），
+# 一致性由 src/lib.rs 的 plugin_toml_version_matches_cargo_pkg_version 测试守住。
+version = "0.2.0"
 edition = "2021"
 description = "OCSMechanical 机械工具包：OCSM 初始化 + 数字键快速图层 + 图框插入 (OCSMFRAMEINIT/TF) + 智能标注 (D) + 尺寸引导 (GDIM/OCSMMCP)"
 license = "GPL-3.0-only"

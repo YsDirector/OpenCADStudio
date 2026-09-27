@@ -4184,7 +4184,7 @@ dependencies = [
 
 [[package]]
 name = "ocs_ocsm"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "crc32fast",
  "flate2",

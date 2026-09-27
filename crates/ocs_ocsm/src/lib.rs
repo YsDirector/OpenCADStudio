@@ -75,7 +75,9 @@ use ocs_plugin_api::ribbon::{
 static MANIFEST: PluginManifest = PluginManifest {
     id: "opencad.ocsm",
     name: "OCSMechanical 机械工具包",
-    version: "0.2.0",
+    // 单一来源：Cargo.toml 的 [package] version（= plugin.toml 的 [plugin] version，
+    // 由 tests 守住；见 plugin_toml_version_matches_cargo_pkg_version）。
+    version: env!("CARGO_PKG_VERSION"),
     description: "OCSM 初始化 + 数字键 1-10 快速图层 + 图框插入（TF）+ 智能标注（D）",
     api_version: ApiVersion { major: 5 },
     ribbon_order: 100,
@@ -5392,6 +5394,46 @@ mod tests {
         assert_eq!(
             in_toml, expected,
             "plugin.toml 与 MANIFEST.command_prefixes 不同步"
+        );
+    }
+
+    /// 版本**三处同源**（用户 2026-09-27）：`plugin.toml` 的 `[plugin] version`（宿主
+    /// 显示口径 = 0.2.0）、`Cargo.toml` 的 `[package] version`、`MANIFEST.version`。
+    /// 后两者本就是一处（`env!("CARGO_PKG_VERSION")`），这里把与 plugin.toml 的那处
+    /// 漂移变成**测试失败**（此前 0.1.0 / 0.2.0 不一致静默存在）。
+    #[test]
+    fn plugin_toml_version_matches_cargo_pkg_version() {
+        let toml = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/plugin.toml"))
+            .expect("读 plugin.toml");
+        // 取 [plugin] 段里的 version（`[opencad]` 段没有 version，但要防以后加）
+        let mut in_plugin_section = false;
+        let mut toml_version: Option<String> = None;
+        for line in toml.lines() {
+            let line = line.trim();
+            if line.starts_with('[') {
+                in_plugin_section = line == "[plugin]";
+                continue;
+            }
+            if in_plugin_section {
+                if let Some(rest) = line.strip_prefix("version") {
+                    toml_version = rest
+                        .trim_start()
+                        .strip_prefix('=')
+                        .map(|v| v.trim().trim_matches('"').to_string());
+                    break;
+                }
+            }
+        }
+        let toml_version = toml_version.expect("plugin.toml 的 [plugin] 段缺 version");
+        assert_eq!(
+            toml_version,
+            env!("CARGO_PKG_VERSION"),
+            "plugin.toml 的 [plugin] version 与 Cargo.toml 的 version 不一致"
+        );
+        assert_eq!(
+            MANIFEST.version,
+            env!("CARGO_PKG_VERSION"),
+            "MANIFEST.version 应走 env!(CARGO_PKG_VERSION)"
         );
     }
 
