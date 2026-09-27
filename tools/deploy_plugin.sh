@@ -150,6 +150,29 @@ else
     echo "==> frame/：未给 OCSM_FRAME_SRC ⇒ 保留现有图框（用户自备数据，脚本不生成）"
 fi
 
+# ── 清理安装目录 bom/ 里陈旧的 *.bak（构建残留）────────────────────────────
+# 本脚本从源仓库装 bom/ 时已经跳过 *.bak；但**旧版手工 `cp crates/ocs_ocsm/bom/*`** 会把构建
+# 残留一起带进来，而下面自检把「bom/ 里不该有 *.bak」当不变量 ⇒ 这里自愈，而不是让用户手删。
+# 只删 bom/ 这一层里的 *.bak 文件：glob 只可能匹配 *.bak，非普通文件跳过，删完**复验**，
+# 没删掉就报出来（别把操作失败当逻辑生效）；其余文件/目录一律不碰。
+if [[ -d "$PLUGIN_DIR/bom" ]]; then
+    shopt -s nullglob
+    stale_bak=( "$PLUGIN_DIR/bom"/*.bak )
+    shopt -u nullglob
+    if (( ${#stale_bak[@]} > 0 )); then
+        echo "==> 清理 bom/ 里陈旧的 *.bak（${#stale_bak[@]} 个；构建残留，自检要求 bom/ 不含 *.bak）"
+        for f in "${stale_bak[@]}"; do
+            [[ -f "$f" ]] || { echo "  ⚠ 跳过（不是普通文件）：$f" >&2; continue; }
+            rm -f -- "$f"
+            if [[ -e "$f" ]]; then
+                echo "  ⚠ 删除失败，仍存在：$f" >&2
+            else
+                echo "  - 已删：$f"
+            fi
+        done
+    fi
+fi
+
 # ── 自检：装了哪些（计数）+ 必需数据是否齐全（缺哪项就非零退出）──────────────
 echo "==> 自检"
 MISSING=0
