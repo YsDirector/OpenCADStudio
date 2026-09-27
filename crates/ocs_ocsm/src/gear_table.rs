@@ -757,11 +757,11 @@ pub const FORM: crate::card::CardFormSpec = crate::card::CardFormSpec {
     fields: &[
         crate::card::CardFieldSpec {
             key: "expr",
-            label: "齿轮齿形表达式（九字段；可从轴/齿轮生成器 GUI 复制）",
+            label: "gui.fld.gear_table.form.expr.label",
             kind: "textarea",
             placeholder: "GEAR EX M3 Z20 ALPHA20 X0 DA66 DF52.5 BETA0 H30",
             default: "GEAR EX M3 Z20 ALPHA20 X0 DA66 DF52.5 BETA0 H30",
-            title: "九字段统一齿形表达式（与轴/齿轮生成器同口径）；反解 m/z/αt/ha*/c*",
+            title: "gui.fld.gear_table.form.expr.title",
             options: &[],
             options_from: "",
             min: 0.0,
@@ -770,11 +770,11 @@ pub const FORM: crate::card::CardFormSpec = crate::card::CardFormSpec {
         },
         crate::card::CardFieldSpec {
             key: "mate_z",
-            label: "配对齿轮齿数 z₂",
+            label: "gui.fld.gear_table.form.mate_z.label",
             kind: "number",
-            placeholder: "选填",
+            placeholder: "gui.fld.gear_table.form.mate_z.placeholder",
             default: "",
-            title: "中心距 a = mt(z₁+z₂)/2；不填则中心距显示「—」",
+            title: "gui.fld.gear_table.form.mate_z.title",
             options: &[],
             options_from: "",
             min: 2.0,
@@ -783,11 +783,11 @@ pub const FORM: crate::card::CardFormSpec = crate::card::CardFormSpec {
         },
         crate::card::CardFieldSpec {
             key: "mate_dwg",
-            label: "配对齿轮图号",
+            label: "gui.fld.gear_table.form.mate_dwg.label",
             kind: "text",
-            placeholder: "选填",
+            placeholder: "gui.fld.gear_table.form.mate_dwg.placeholder",
             default: "",
-            title: "手填字符串，进「配对齿轮图号」行",
+            title: "gui.fld.gear_table.form.mate_dwg.title",
             options: &[],
             options_from: "",
             min: 0.0,
@@ -796,11 +796,11 @@ pub const FORM: crate::card::CardFormSpec = crate::card::CardFormSpec {
         },
         crate::card::CardFieldSpec {
             key: "grade",
-            label: "精度等级",
+            label: "gui.fld.gear_table.form.grade.label",
             kind: "text",
-            placeholder: "选填",
+            placeholder: "gui.fld.gear_table.form.grade.placeholder",
             default: "",
-            title: "手填字符串（如 7-7-7），进「精度等级」行；缺省「—」",
+            title: "gui.fld.gear_table.form.grade.title",
             options: &[],
             options_from: "",
             min: 0.0,
@@ -809,11 +809,11 @@ pub const FORM: crate::card::CardFormSpec = crate::card::CardFormSpec {
         },
         crate::card::CardFieldSpec {
             key: "center",
-            label: "中心距 a",
+            label: "gui.fld.gear_table.form.center.label",
             kind: "number",
-            placeholder: "选填，覆盖计算值",
+            placeholder: "gui.fld.gear_table.form.center.placeholder",
             default: "",
-            title: "显式覆盖 mt(z₁+z₂)/2（mm）",
+            title: "gui.fld.gear_table.form.center.title",
             options: &[],
             options_from: "",
             min: 0.0,
@@ -837,10 +837,9 @@ pub fn options_json() -> serde_json::Value {
             "formula": c.formula(),
             "source": c.source(),
         })).collect::<Vec<_>>(),
-        "missing_note": "GB/T 10095-88 的 Fr/FW/ff/fpt/Fβ 与中心距极限偏差本仓未收；\
-                         内齿轮/斜齿轮的公法线口径本仓未收 —— 这些格子一律显示「—」，不臆造。",
-        "note": "取值复用既有齿轮引擎（gear.rs）：表达式反解后 ha*/c* 由 DA/DF 反解，\
-                 交回 GearParams 复核 da/df 闭环；公法线走 GearParams::span_measurement()。",
+        // ★ GUI 元数据批 ⑥：note/缺项说明随语言（catalog 唯一来源；zh 由脚本从 HEAD 提取）。
+        "missing_note": crate::i18n::t("gui.gear.options.missing_note"),
+        "note": crate::i18n::t("gui.gear.options.note"),
     })
 }
 
@@ -959,8 +958,7 @@ impl GearTableModel {
             "readout": readout,
             "items": items,
             "missing": missing,
-            "missing_note": "本仓未收 GB/T 10095-88（Fr/FW/ff/fpt/Fβ）与中心距极限偏差；\
-                             内齿轮/斜齿轮无公法线口径 —— 如实标缺，不臆造。",
+            "missing_note": crate::i18n::t("gui.gear.preview.missing_note"),
         }))
     }
 

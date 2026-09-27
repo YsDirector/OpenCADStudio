@@ -57,16 +57,17 @@ impl CardRenderer {
 pub struct CardFieldSpec {
     /// 模型 JSON 键（DOM id = `f_` + key）。
     pub key: &'static str,
-    /// 显示名。
+    /// 显示名：`gui.fld.` 前缀 = catalog key（随语言），其余原样（协议记号/数值/示例串）。
     pub label: &'static str,
     /// 控件类型：`number` / `text` / `textarea` / `select`。
     pub kind: &'static str,
+    /// 占位提示（同 `label` 的前缀规则）。
     pub placeholder: &'static str,
     /// 初始值（空 = 不预填，交后端默认）。
     pub default: &'static str,
-    /// 口径/来源（进原生 `title=`，不做常显）。
+    /// 口径/来源（进原生 `title=`，不做常显；同 `label` 的前缀规则）。
     pub title: &'static str,
-    /// `select` 的静态选项 `(value, label)`。
+    /// `select` 的静态选项 `(value, label)`（label 同 `label` 的前缀规则）。
     pub options: &'static [(&'static str, &'static str)],
     /// `select` 的动态选项来源键（`ansi_profiles` / `nf_centering` / `nf_roots`；空 = 无）。
     pub options_from: &'static str,
@@ -75,6 +76,16 @@ pub struct CardFieldSpec {
     pub step: f64,
     /// 必填（空值由页面拦住并指路；后端仍会校验）。
     pub required: bool,
+}
+
+/// 表单字段取词：`gui.fld.` 前缀 = catalog key（随语言）；其余**原样**
+/// （协议记号 / 标准值 / 示例串 / 空串 —— 翻句子不翻数据）。
+fn field_text(s: &'static str) -> String {
+    if s.starts_with("gui.fld.") {
+        crate::i18n::t(s)
+    } else {
+        s.to_string()
+    }
 }
 
 /// 一张卡的表单骨架（字段清单 + 提示）。
@@ -104,12 +115,12 @@ impl CardFormSpec {
                 .map(|f| {
                     serde_json::json!({
                         "key": f.key,
-                        "label": f.label,
+                        "label": field_text(f.label),
                         "kind": f.kind,
-                        "placeholder": f.placeholder,
+                        "placeholder": field_text(f.placeholder),
                         "default": f.default,
-                        "title": f.title,
-                        "options": f.options.iter().map(|(v, l)| serde_json::json!({"value": v, "label": l})).collect::<Vec<_>>(),
+                        "title": field_text(f.title),
+                        "options": f.options.iter().map(|(v, l)| serde_json::json!({"value": v, "label": field_text(l)})).collect::<Vec<_>>(),
                         "options_from": f.options_from,
                         "min": f.min,
                         "step": f.step,
@@ -821,6 +832,63 @@ mod tests {
                 assert_ne!(vz, ve, "{kz} 含汉字却两语相同（未翻译）");
             }
         }
+        let missing = crate::i18n::missing_keys();
+        assert!(missing.is_empty(), "缺词条：{missing:?}");
+    }
+
+    /// ⑥ 批：**表单字段元数据**（`CardFieldSpec.label/title/placeholder` + 静态选项）随语言；
+    /// zh 侧逐字取自 `git HEAD`（脚本提取，见 `i18n_检查/card_field_i18n_gen.py`）。
+    #[test]
+    fn form_field_metadata_switches_language_without_cjk() {
+        use crate::i18n::{clear_missing_keys, set_lang, set_lang_auto, Lang};
+        let _g = crate::global_state_test_lock();
+        let cjk = |s: &str| s.chars().any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c));
+        let collect = || -> Vec<(String, String)> {
+            let mut out: Vec<(String, String)> = Vec::new();
+            for c in CARD_TYPES {
+                let Some(f) = c.form else { continue };
+                for fld in f.fields {
+                    let id = format!("{}:{}:{}", c.id, fld.key, fld.kind);
+                    for (part, v) in [
+                        ("label", field_text(fld.label)),
+                        ("title", field_text(fld.title)),
+                        ("placeholder", field_text(fld.placeholder)),
+                    ] {
+                        if !v.trim().is_empty() {
+                            out.push((format!("{id}:{part}"), v));
+                        }
+                    }
+                    for (val, lab) in fld.options {
+                        let v = field_text(lab);
+                        if !v.trim().is_empty() {
+                            out.push((format!("{id}:opt:{val}"), v));
+                        }
+                    }
+                }
+            }
+            out
+        };
+        clear_missing_keys();
+        set_lang(Lang::Zh);
+        let zh = collect();
+        set_lang(Lang::En);
+        let en = collect();
+        set_lang_auto();
+        assert_eq!(zh.len(), en.len());
+        assert!(zh.len() >= 120, "表单元数据量：{} 条", zh.len());
+        let mut translated = 0usize;
+        for ((kz, vz), (ke, ve)) in zh.iter().zip(en.iter()) {
+            assert_eq!(kz, ke, "两语条目应同序同源");
+            assert!(!ve.trim().is_empty(), "{kz} 英文为空");
+            assert!(!cjk(ve), "{kz} 英文侧仍有汉字：{ve}");
+            if cjk(vz) {
+                assert_ne!(vz, ve, "{kz} 含汉字却两语相同（未翻译）");
+                translated += 1;
+            } else {
+                assert_eq!(vz, ve, "{kz} 协议记号/数值/示例串必须两语原样");
+            }
+        }
+        assert!(translated >= 100, "真正翻到的条目：{translated}");
         let missing = crate::i18n::missing_keys();
         assert!(missing.is_empty(), "缺词条：{missing:?}");
     }

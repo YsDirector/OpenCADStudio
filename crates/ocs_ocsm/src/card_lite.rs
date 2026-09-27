@@ -798,8 +798,7 @@ pub fn preview_json(card: &LiteCardSpec, model: &serde_json::Value) -> Result<se
         "readout": readout,
         "items": items,
         "missing": missing,
-        "missing_note": "精简版：只列基本参数 + 主要测量量，不含任何公差（上/下偏差）列；\
-                         完整明细请用对应的完整卡。",
+        "missing_note": crate::i18n::t("gui.card_lite.options.missing_note"),
     }))
 }
 

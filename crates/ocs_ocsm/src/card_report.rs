@@ -24,7 +24,7 @@ fn cell(s: &str) -> String {
 fn items_section(heading: &str, preview: &serde_json::Value) -> String {
     let mut md = String::new();
     md.push_str(heading);
-    md.push_str("\n\n| 项 | 公式/口径 | 值 | 依据来源 |\n|---|---|---|---|\n");
+    md.push_str(&crate::i18n::t("gui.report.items.head"));
     let empty = Vec::new();
     for it in preview["items"].as_array().unwrap_or(&empty) {
         let label = it["label"].as_str().unwrap_or("");
@@ -55,13 +55,20 @@ fn items_section(heading: &str, preview: &serde_json::Value) -> String {
 fn sources_section(preview: &serde_json::Value, card: &CardTypeSpec) -> String {
     let mut md = String::new();
     md.push_str("---\n\n");
-    md.push_str("- 卡类型：");
-    md.push_str(&card.label());
-    md.push_str(&format!("（`{}`）\n", card.id));
-    md.push_str(&format!("- 卡片口径：{}\n", cell(&card.summary())));
+    md.push_str(&crate::i18n::t_fmt(
+        "gui.report.sources.card_type",
+        &[("name", &card.label()), ("id", card.id)],
+    ));
+    md.push_str(&crate::i18n::t_fmt(
+        "gui.report.sources.card_def",
+        &[("note", &cell(&card.summary()))],
+    ));
     if let Some(note) = preview["missing_note"].as_str() {
         if !note.trim().is_empty() {
-            md.push_str(&format!("- 缺项说明：{}\n", cell(note)));
+            md.push_str(&crate::i18n::t_fmt(
+                "gui.report.sources.missing_def",
+                &[("note", &cell(note))],
+            ));
         }
     }
     if let Some(missing) = preview["missing"].as_array() {
@@ -70,14 +77,14 @@ fn sources_section(preview: &serde_json::Value, card: &CardTypeSpec) -> String {
                 .iter()
                 .filter_map(|v| v.as_str())
                 .collect::<Vec<_>>()
-                .join("、");
-            md.push_str(&format!("- 本卡标缺项：{list}\n"));
+                .join(&crate::i18n::t("gui.report.sources.list_sep"));
+            md.push_str(&crate::i18n::t_fmt(
+                "gui.report.sources.missing_list",
+                &[("list", &list)],
+            ));
         }
     }
-    md.push_str(
-        "- 同源：本报告与卡片（OCSMCARD）取同一份计算（`/api/card_preview` 同一入口）；\
-         报告数值与卡片 ATTRIB 逐项一致，未二次手算。\n",
-    );
+    md.push_str(&crate::i18n::t("gui.report.sources.same_source"));
     md
 }
 
@@ -94,63 +101,102 @@ pub fn build(card: &CardTypeSpec, model: &serde_json::Value) -> Result<(String, 
     let mut v = model.clone();
     v["card"] = serde_json::Value::String(card.id.to_string());
     let bytes =
-        serde_json::to_vec(&v).map_err(|e| format!("计算书：请求模型序列化失败：{e}"))?;
+        serde_json::to_vec(&v).map_err(|e| {
+            crate::i18n::t_fmt("gui.report.err.serialize", &[("e", &e.to_string())])
+        })?;
     // 同源：与 /api/card_preview 完全同一条分派（含 GB 花键卡）。
     let preview: serde_json::Value =
-        serde_json::from_str(&crate::guide_server::apply_card_preview(&bytes)?)
-            .map_err(|e| format!("计算书：卡片预览 JSON 解析失败：{e}"))?;
+        serde_json::from_str(&crate::guide_server::apply_card_preview(&bytes)?).map_err(|e| {
+            crate::i18n::t_fmt("gui.report.err.preview_json", &[("e", &e.to_string())])
+        })?;
     let title = crate::i18n::t_fmt("gui.card.report.title", &[("card", &card.label())]);
+    // 请求模型反序列化失败的报错前缀（卡名随语言；`card.name.*` = 旧报错前缀原文）。
+    let model_err = |name_key: &str, e: serde_json::Error| {
+        crate::i18n::t_fmt(
+            "gui.report.err.model",
+            &[("card", &crate::i18n::t(name_key)), ("e", &e.to_string())],
+        )
+    };
     let mut md = String::new();
     match card.renderer {
         CardRenderer::SplineTable => {
             md.push_str(&format!("# {title}\n\n"));
-            md.push_str(&format!(
-                "- 方向：**{}**\n",
-                preview["side_label"].as_str().unwrap_or("—")
+            let side_key = if preview["side"].as_str() == Some("ext") {
+                "card.gb.side.ext"
+            } else {
+                "card.gb.side.int"
+            };
+            md.push_str(&crate::i18n::t_fmt(
+                "gui.report.gb.side",
+                &[("v", &crate::i18n::t(side_key))],
             ));
-            md.push_str(&format!(
-                "- 等级/配合：**{}**\n",
-                preview["grade_fit"].as_str().unwrap_or("—")
+            md.push_str(&crate::i18n::t_fmt(
+                "gui.report.gb.grade_fit",
+                &[("v", preview["grade_fit"].as_str().unwrap_or("—"))],
             ));
             if let Some(expr) = preview["expr"].as_str() {
-                md.push_str(&format!("- 表达式：`{expr}`\n"));
+                md.push_str(&crate::i18n::t_fmt("gui.report.gb.expr", &[("expr", expr)]));
             }
-            md.push_str("\n## 1. 输入与反解\n\n| 量 | 值 |\n|---|---|\n");
-            md.push_str(&format!(
-                "| 模数 m | {} mm |\n| 齿数 z | {} |\n| 压力角 αD | {}° |\n| 变位系数 x | {} |\n\
-                 | 表达式大径 Da | {} mm |\n| 表达式小径 Df | {} mm |\n| 齿根形式 | {}（{}） |\n\n",
-                num(&preview, "m"),
-                num(&preview, "z"),
-                num(&preview, "alpha"),
-                num(&preview, "x"),
-                num(&preview, "da"),
-                num(&preview, "df"),
-                preview["root"].as_str().unwrap_or("—"),
-                preview["root_source"].as_str().unwrap_or("—"),
+            md.push_str(&crate::i18n::t("gui.report.gb.inputs_head"));
+            let (fm, fz) = (num(&preview, "m"), num(&preview, "z"));
+            let (fa, fx) = (num(&preview, "alpha"), num(&preview, "x"));
+            let (fda, fdf) = (num(&preview, "da"), num(&preview, "df"));
+            md.push_str(&crate::i18n::t_fmt(
+                "gui.report.gb.inputs_rows",
+                &[
+                    ("m", &fm),
+                    ("z", &fz),
+                    ("alpha", &fa),
+                    ("x", &fx),
+                    ("da", &fda),
+                    ("df", &fdf),
+                    ("root", preview["root"].as_str().unwrap_or("—")),
+                    (
+                        "root_source",
+                        preview["root_source"].as_str().unwrap_or("—"),
+                    ),
+                ],
             ));
             md.push_str(&items_section(
-                "## 2. 参数表（21 项；与卡片 ATTDEF 同一份 `spline_tol::compute()`）",
+                &crate::i18n::t("gui.report.gb.items_head"),
                 &preview,
             ));
             // R_imin 双口径（卡面=表 26；计算=图 2 系数）——用户 2026-09-27 拍板。
             if let Some(calc) = preview["rimin"]["calc"].as_f64() {
                 let m = num(&preview, "m");
                 let alpha = num(&preview, "alpha");
-                let root_cn = if preview["root"] == "fillet" { "圆齿根" } else { "平齿根" };
-                md.push_str("## 2.1 R_imin 口径（卡面按表 26；计算按图 2 系数）\n\n");
+                let root_cn = crate::i18n::t(if preview["root"] == "fillet" {
+                    "card.gb.root.fillet"
+                } else {
+                    "card.gb.root.flat"
+                });
+                md.push_str(&crate::i18n::t("gui.report.gb.rimin_head"));
                 match preview["rimin"]["table"].as_f64() {
-                    Some(v) => md.push_str(&format!(
-                        "- 表 26（GB/T 3478.1-2008 书页 50）m={m}、{alpha}°、{root_cn} 档表值 = **{}** mm；卡面显示同值。\n",
-                        crate::partgen_kit::trim(v),
+                    Some(v) => md.push_str(&crate::i18n::t_fmt(
+                        "gui.report.gb.rimin_table_hit",
+                        &[
+                            ("m", &m),
+                            ("alpha", &alpha),
+                            ("root_cn", &root_cn),
+                            ("v", &crate::partgen_kit::trim(v)),
+                        ],
                     )),
-                    None => md.push_str(&format!(
-                        "- 表 26 未列值（原表印「—」；m={m}、{alpha}°、{root_cn}）：卡面按表 26 显示「—」，不外推。\n",
+                    None => md.push_str(&crate::i18n::t_fmt(
+                        "gui.report.gb.rimin_table_miss",
+                        &[("m", &m), ("alpha", &alpha), ("root_cn", &root_cn)],
                     )),
                 }
-                md.push_str(&format!(
-                    "- 计算口径（图 2 系数式；注明性质）：R_imin = {}·m = **{}** mm —— 仅供内部/报告对照，不直接上卡面。\n\n",
-                    crate::partgen_kit::trim(preview["rimin"]["coef"].as_f64().unwrap_or(0.0)),
-                    crate::partgen_kit::trim(calc),
+                md.push_str(&crate::i18n::t_fmt(
+                    "gui.report.gb.rimin_calc",
+                    &[
+                        (
+                            "coef",
+                            &crate::partgen_kit::trim(
+                                preview["rimin"]["coef"].as_f64().unwrap_or(0.0),
+                            ),
+                        ),
+                        ("calc", &crate::partgen_kit::trim(calc)),
+                    ],
                 ));
             }
             // 量棒/跨棒距口径（**只对内花键**；公式来自 GB/T 3478.6 §3.1）。
@@ -159,44 +205,64 @@ pub fn build(card: &CardTypeSpec, model: &serde_json::Value) -> Result<(String, 
             if dp["applicable"] == serde_json::Value::Bool(true)
                 && preview["side"].as_str() == Some("int")
             {
-                md.push_str("## 3. 量棒/跨棒距口径\n\n");
+                md.push_str(&crate::i18n::t("gui.report.gb.pin_head"));
                 if let Some(f) = dp["formula"].as_str() {
-                    md.push_str(&format!("- 量棒直径：{}\n", cell(f)));
+                    md.push_str(&crate::i18n::t_fmt(
+                        "gui.report.gb.pin_formula",
+                        &[("v", &cell(f))],
+                    ));
                 }
                 if let Some(f) = dp["md_formula"].as_str() {
-                    md.push_str(&format!("- 跨棒距：{}\n", cell(f)));
+                    md.push_str(&crate::i18n::t_fmt(
+                        "gui.report.gb.md_formula",
+                        &[("v", &cell(f))],
+                    ));
                 }
                 if let Some(s) = dp["standard"].as_str() {
-                    md.push_str(&format!("- 来源：{}\n", cell(s)));
+                    md.push_str(&crate::i18n::t_fmt(
+                        "gui.report.gb.pin_source",
+                        &[("v", &cell(s))],
+                    ));
                 }
-                md.push_str(&format!(
-                    "- 取值：Dp={}、Md={}（同一次 `compute()`；卡片 ATTRIB 同值）。\n\n",
-                    dp["current"]
-                        .as_f64()
-                        .map(crate::partgen_kit::trim)
-                        .unwrap_or_else(|| "—".to_string()),
-                    dp["md"]["value"]
-                        .as_f64()
-                        .map(crate::partgen_kit::trim)
-                        .unwrap_or_else(|| "—".to_string())
+                md.push_str(&crate::i18n::t_fmt(
+                    "gui.report.gb.pin_values",
+                    &[
+                        (
+                            "dp",
+                            &dp["current"]
+                                .as_f64()
+                                .map(crate::partgen_kit::trim)
+                                .unwrap_or_else(|| "—".to_string()),
+                        ),
+                        (
+                            "md",
+                            &dp["md"]["value"]
+                                .as_f64()
+                                .map(crate::partgen_kit::trim)
+                                .unwrap_or_else(|| "—".to_string()),
+                        ),
+                    ],
                 ));
             }
             md.push_str(&sources_section(&preview, card));
         }
         CardRenderer::SplineLite => {
             md.push_str(&format!("# {title}\n\n"));
-            md.push_str(&format!(
-                "- 方向：**{}**\n",
-                preview["side_label"].as_str().unwrap_or("—")
+            let side_key = if preview["side"].as_str() == Some("ext") {
+                "card.gb.side.ext"
+            } else {
+                "card.gb.side.int"
+            };
+            md.push_str(&crate::i18n::t_fmt(
+                "gui.report.gb.side",
+                &[("v", &crate::i18n::t(side_key))],
             ));
             if let Some(expr) = preview["expr"].as_str() {
-                md.push_str(&format!("- 表达式：`{expr}`\n"));
+                md.push_str(&crate::i18n::t_fmt("gui.report.gb.expr", &[("expr", expr)]));
             }
-            md.push_str(
-                "- 口径：精简版只列基本参数 + 主要测量量，**不含任何公差（上/下偏差）列**；\n  公差等级/配合仅用于测量量（Dp/Md 或 Kn/Wn）计算。\n\n",
-            );
+            md.push_str(&crate::i18n::t("gui.report.lite.scope"));
             md.push_str(&items_section(
-                "## 1. 精简项（9 项；与卡片 ATTDEF 同一份 `spline_tol::compute()`）",
+                &crate::i18n::t("gui.report.lite.items_head"),
                 &preview,
             ));
             md.push_str(&sources_section(&preview, card));
@@ -204,40 +270,37 @@ pub fn build(card: &CardTypeSpec, model: &serde_json::Value) -> Result<(String, 
         CardRenderer::CardLite => {
             md.push_str(&format!("# {title}\n\n"));
             if let Some(c) = preview["card"].as_str() {
-                md.push_str(&format!("- 卡：**{c}**（完整卡口径同源）\n"));
+                md.push_str(&crate::i18n::t_fmt("gui.report.card_lite.card", &[("c", c)]));
             }
             if let Some(expr) = preview["expr"].as_str() {
                 if !expr.is_empty() {
-                    md.push_str(&format!("- 表达式：`{expr}`\n"));
+                    md.push_str(&crate::i18n::t_fmt("gui.report.gb.expr", &[("expr", expr)]));
                 }
             }
             let n = preview["items"].as_array().map(|a| a.len()).unwrap_or(0);
-            md.push_str(
-                "- 口径：精简版只列基本参数 + 主要测量量，**不含任何公差（上/下偏差）列**；\n\
-                 取值/校验全部投影自对应完整卡的同一次计算（查不到 →「—」，不外推）。\n\n",
-            );
+            md.push_str(&crate::i18n::t("gui.report.card_lite.scope"));
             md.push_str(&items_section(
-                &format!("## 1. 精简项（{n} 项；与完整卡同一份计算）"),
+                &crate::i18n::t_fmt("gui.report.card_lite.items_head", &[("n", &n.to_string())]),
                 &preview,
             ));
             md.push_str(&sources_section(&preview, card));
         }
         CardRenderer::GearTable => {
             let m: crate::gear_table::GearTableModel = serde_json::from_value(model.clone())
-                .map_err(|e| format!("齿轮参数表：请求字段无效：{e}"))?;
+                .map_err(|e| model_err("card.name.gear", e))?;
             let spec = m.spec()?;
             let engine = crate::gear::build_report(&spec.params)?;
             md.push_str(engine.trim_end());
             md.push_str("\n\n");
             md.push_str(&items_section(
-                "## 附：卡片项（与卡片 ATTDEF 同一份 `GearParams`）",
+                &crate::i18n::t("gui.report.append.gear"),
                 &preview,
             ));
             md.push_str(&sources_section(&preview, card));
         }
         CardRenderer::AnsiTableCn | CardRenderer::AnsiTableEn => {
             let m: crate::ansi_table::AnsiTableModel = serde_json::from_value(model.clone())
-                .map_err(|e| format!("ANSI 花键参数表：请求字段无效：{e}"))?;
+                .map_err(|e| model_err("card.name.ansi", e))?;
             let mut m = m;
             if m.side.trim().is_empty() {
                 m.side = card.direction.unwrap_or("int").to_string();
@@ -248,14 +311,14 @@ pub fn build(card: &CardTypeSpec, model: &serde_json::Value) -> Result<(String, 
             md.push_str(engine.trim_end());
             md.push_str("\n\n");
             md.push_str(&items_section(
-                "## 附：卡片项（与卡片 ATTDEF 同一份 `InvolParams`）",
+                &crate::i18n::t("gui.report.append.invol"),
                 &preview,
             ));
             md.push_str(&sources_section(&preview, card));
         }
         CardRenderer::NfTable => {
             let m: crate::nf_table::NfTableModel = serde_json::from_value(model.clone())
-                .map_err(|e| format!("NF 内花键参数表：请求字段无效：{e}"))?;
+                .map_err(|e| model_err("card.name.nf", e))?;
             let spec = m.spec()?;
             let d = crate::nf_table::derive(&spec)?;
             let (q, o) = crate::invol_spline::resolve_spline(
@@ -270,14 +333,14 @@ pub fn build(card: &CardTypeSpec, model: &serde_json::Value) -> Result<(String, 
             md.push_str(engine.trim_end());
             md.push_str("\n\n");
             md.push_str(&items_section(
-                "## 附：卡片项（与卡片 ATTDEF 同一份 NF 查表）",
+                &crate::i18n::t("gui.report.append.nf"),
                 &preview,
             ));
             md.push_str(&sources_section(&preview, card));
         }
         CardRenderer::NfExtTable => {
             let m: crate::nf_ext_table::NfExtTableModel = serde_json::from_value(model.clone())
-                .map_err(|e| format!("NF 外花键参数表：请求字段无效：{e}"))?;
+                .map_err(|e| model_err("card.name.nf_ext", e))?;
             let spec = m.spec()?;
             let d = crate::nf_ext_table::derive(&spec)?;
             let (q, o) = crate::invol_spline::resolve_spline(
@@ -292,14 +355,14 @@ pub fn build(card: &CardTypeSpec, model: &serde_json::Value) -> Result<(String, 
             md.push_str(engine.trim_end());
             md.push_str("\n\n");
             md.push_str(&items_section(
-                "## 附：卡片项（与卡片 ATTDEF 同一份 NF 查表）",
+                &crate::i18n::t("gui.report.append.nf"),
                 &preview,
             ));
             md.push_str(&sources_section(&preview, card));
         }
         CardRenderer::DinTable => {
             let m: crate::din_table::DinTableModel = serde_json::from_value(model.clone())
-                .map_err(|e| format!("DIN 花键参数表：请求字段无效：{e}"))?;
+                .map_err(|e| model_err("card.name.din", e))?;
             let mut m = m;
             if m.side.is_none() {
                 m.side = Some(card.direction.unwrap_or("int").to_string());
@@ -317,7 +380,7 @@ pub fn build(card: &CardTypeSpec, model: &serde_json::Value) -> Result<(String, 
             md.push_str(engine.trim_end());
             md.push_str("\n\n");
             md.push_str(&items_section(
-                "## 附：卡片项（与卡片 ATTDEF 同一份 DIN 查表）",
+                &crate::i18n::t("gui.report.append.din"),
                 &preview,
             ));
             md.push_str(&sources_section(&preview, card));
@@ -329,10 +392,13 @@ pub fn build(card: &CardTypeSpec, model: &serde_json::Value) -> Result<(String, 
 /// `POST /api/card_report` 的实现：body = 与 `/api/card_preview` 同形 JSON。
 pub fn build_report_json(body: &[u8]) -> Result<String, String> {
     let v: serde_json::Value = serde_json::from_slice(body)
-        .map_err(|e| format!("计算书：请求不是 JSON：{e}"))?;
+        .map_err(|e| crate::i18n::t_fmt("gui.report.err.not_json", &[("e", &e.to_string())]))?;
     let card_id = v.get("card").and_then(|c| c.as_str()).unwrap_or("");
     let card = crate::card::card_type_by_token(card_id).ok_or_else(|| {
-        format!("计算书：不认识的卡类型「{card_id}」（卡类型表见 /api/spline_options 的 card_types）")
+        crate::i18n::t_fmt(
+            "gui.report.err.card_unknown",
+            &[("card_id", card_id)],
+        )
     })?;
     let (title, markdown) = build(card, &v)?;
     Ok(serde_json::json!({"ok": true, "title": title, "markdown": markdown}).to_string())
@@ -512,6 +578,8 @@ mod tests {
     /// 卡片出表时写进图纸的 ATTRIB 值（`pending_attrs()` = 块/INSERT 的唯一填值来源）。
     #[test]
     fn report_and_card_attdefs_share_one_source() -> Result<(), String> {
+        // (卡 id, 模型, 是否整份零汉字) —— GB 全卡的 21 项**列口径**来自 `spline_gui.rs` 的
+        // 专用面板（本批范围外，见 §36 交接）；报告自身正文/表头仍断言随语言。
         let cases: Vec<(&str, serde_json::Value)> = vec![
             (
                 "花键参数表",
@@ -726,6 +794,130 @@ mod tests {
             }
         }
         Ok(())
+    }
+
+    /// 阶段 5：计算书**正文/标题/表头随语言**（en 侧零汉字；公式体/符号/键名/标准号原样；
+    /// zh 侧与 HEAD 逐字一致 —— 见 `i18n_检查/card_report_i18n_gen.py` 的 `--verify`）。
+    #[test]
+    fn report_body_switches_language_and_has_no_cjk_in_english() {
+        use crate::i18n::{clear_missing_keys, set_lang, set_lang_auto, Lang};
+        let _g = crate::global_state_test_lock();
+        let cjk = |s: &str| s.chars().any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c));
+        // (卡 id, 模型, 是否整份零汉字) —— GB 全卡的 21 项**列口径**来自 `spline_gui.rs` 的
+        // 专用面板（本批范围外，见 §36 交接）；报告自身正文/表头仍断言随语言。
+        let cases: Vec<(&str, serde_json::Value, bool)> = vec![
+            (
+                "花键参数表",
+                serde_json::json!({"card":"花键参数表","side":"int","grade":6,"fit":"H",
+                    "expr":"SPLINE IN M3 Z20 ALPHA30 X0 DA65.4 DF57.3436 BETA0 H30",
+                    "root":"auto","dp":null,"at":null,"rot":0.0}),
+                false,
+            ),
+            (
+                "齿轮参数表",
+                serde_json::json!({"card":"齿轮参数表",
+                    "expr":"GEAR EX M2 Z40 ALPHA20 X0 DA84 DF75 BETA0 H30",
+                    "mate_z":null,"dwg":null,"grade":null,"center":null,"at":null,"rot":0.0}),
+                true,
+            ),
+            (
+                // ★ 用**英文版** ANSI 卡：中文版的卡面**值**（花键类型）是中文，属卡自身语种。
+                "ANSI花键参数表_英文",
+                serde_json::json!({"card":"ANSI花键参数表_英文","side":"int","p":8.0,"z":20,
+                    "profile":null,"expr":null,"at":null,"rot":0.0}),
+                true,
+            ),
+            (
+                "NF内花键参数表",
+                serde_json::json!({"card":"NF内花键参数表","a":300.0,"m":7.5,"z":38,
+                    "centering":null,"root":null,"fit":null,"at":null,"rot":0.0}),
+                true,
+            ),
+            (
+                "DIN花键参数表",
+                serde_json::json!({"card":"DIN花键参数表","side":"int","m":3.0,"z":38,"d_b":120.0,
+                    "hub":null,"shaft":null,"e2":null,"ae":null,"as_":null,
+                    "tact_n":null,"teff_n":null,"tact_w":null,"teff_w":null,"at":null,"rot":0.0}),
+                true,
+            ),
+            (
+                "GB花键精简表_内",
+                serde_json::json!({"card":"GB花键精简表_内","grade":6,"fit":"H",
+                    "expr":"SPLINE IN M3 Z20 ALPHA30 X0 DA65.4 DF57.3436 BETA0 H30",
+                    "root":"auto","dp":null,"at":null,"rot":0.0}),
+                true,
+            ),
+            (
+                "NF花键精简表_内",
+                serde_json::json!({"card":"NF花键精简表_内","expr":null,"a":300.0,"m":7.5,
+                    "z":38,"centering":null,"root":null,"fit":null,"at":null,"rot":0.0}),
+                true,
+            ),
+        ];
+        clear_missing_keys();
+        for (id, model, full_clean) in &cases {
+            let c = card(id);
+            set_lang(Lang::Zh);
+            let (zh_title, zh) = build(c, model).unwrap();
+            set_lang(Lang::En);
+            let (en_title, en) = build(c, model).unwrap();
+            assert_ne!(zh_title, en_title, "{id} 标题应随语言");
+            assert!(cjk(&zh_title) && !cjk(&en_title), "{id} 标题：{en_title}");
+            assert!(cjk(&zh), "{id} zh 报告应含汉字");
+            if !*full_clean {
+                assert!(en.contains("- Direction: **internal spline**"), "{en}");
+                assert!(en.contains("## 2. Parameter table"), "{en}");
+            }
+            // ★ 报告**自身**的正文/标题/表头不得残留中文（引擎报告里的图库数据串/文件名、
+            //   卡 id、齿廓预设名是**数据/协议记号** —— 翻了就对不上，见 §35 口径）。
+            for bad in [
+                "卡类型：",
+                "卡片口径：",
+                "缺项说明：",
+                "本卡标缺项：",
+                "同源：",
+                "方向：",
+                "等级/配合：",
+                "表达式：",
+                "输入与反解",
+                "参数表（21 项",
+                "R_imin 口径",
+                "量棒/跨棒距口径",
+                "精确",
+                "精简项（",
+                "附：卡片项",
+                "不外推",
+                "不臆造",
+            ] {
+                assert!(!en.contains(bad), "{id} en 报告仍含报告自身中文：{bad}\n{en}");
+            }
+            assert!(!cjk(&en_title), "{id} en 标题仍有汉字：{en_title}");
+            // 表头/来源行两语同结构（同一份计算）。
+            assert!(en.contains("## Appendix: card items") || en.contains("## 1. Lite items")
+                || en.contains("## 2. Parameter table"), "{id} en 报告缺表头：\n{en}");
+            assert!(en.contains("Same source"), "{id} en 报告缺同源说明：\n{en}");
+        }
+        set_lang_auto();
+        let missing = crate::i18n::missing_keys();
+        assert!(missing.is_empty(), "缺词条：{missing:?}");
+    }
+
+    /// 请求报错亦随语言（卡名/字段/JSON/未知卡）。
+    #[test]
+    fn report_errors_switch_language() {
+        use crate::i18n::{set_lang, set_lang_auto, Lang};
+        let _g = crate::global_state_test_lock();
+        let cjk = |s: &str| s.chars().any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c));
+        set_lang(Lang::En);
+        let e1 = build_report_json(b"not json").unwrap_err();
+        assert!(!cjk(&e1) && e1.contains("not JSON"), "{e1}");
+        let e2 = build_report_json(r#"{"card":"NOSUCHCARD","m":1}"#.as_bytes()).unwrap_err();
+        assert!(!cjk(&e2) && e2.contains("unknown card type"), "{e2}");
+        let e3 =
+            build_report_json(r#"{"card":"齿轮参数表","expr":"GEAR EX M2 Z40"}"#.as_bytes())
+                .unwrap_err();
+        assert!(!cjk(&e3) && !e3.is_empty(), "{e3}");
+        set_lang_auto();
     }
 
     #[test]

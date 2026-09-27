@@ -863,13 +863,12 @@ pub fn derive(spec: &NfTableSpec) -> Result<NfDerived, String> {
     let major_tol = crate::tolerance::hole(az, "R7");
     let minor_tol = crate::tolerance::hole(d, "H7");
     let major_tol_note = match major_tol {
-        Some(_) => "ISO 286 R7（NF E22-141 p28 §4：拉削/外径定心的内花键大径公差同为 R7）"
-            .to_string(),
-        None => format!("—（ISO 286 无 Az={} 的 R7 档）", fmt_mm(az)),
+        Some(_) => crate::i18n::t("gui.nf.tol.major_note"),
+        None => crate::i18n::t_fmt("gui.nf.tol.major_none", &[("d", &fmt_mm(az))]),
     };
     let minor_tol_note = match minor_tol {
-        Some(_) => "ISO 286 H7（NF E22-141 p28 §6：内花键小径 D 公差 H7，参考）".to_string(),
-        None => format!("—（ISO 286 无 D={} 的 H7 档）", fmt_mm(d)),
+        Some(_) => crate::i18n::t("gui.nf.tol.minor_note"),
+        None => crate::i18n::t_fmt("gui.nf.tol.minor_none", &[("d", &fmt_mm(d))]),
     };
     let tol_row = e_xm_tol_row(spec.m, spec.a);
     Ok(NfDerived {
@@ -1120,11 +1119,11 @@ pub const FORM: crate::card::CardFormSpec = crate::card::CardFormSpec {
     fields: &[
         crate::card::CardFieldSpec {
             key: "expr",
-            label: "齿形表达式（九字段；可从轴/齿轮生成器 GUI 复制）",
+            label: "gui.fld.nf_table.form.expr.label",
             kind: "textarea",
             placeholder: "SPLINE IN M7.5 Z38 ALPHA20 X0.8 BETA0 H30",
             default: "",
-            title: "九字段统一齿形表达式（MARK KIND M Z ALPHA X DA DF BETA H）；粘贴后自动反解 A=m(z+0.4+2x)、m、z；NF 压力角恒 20°",
+            title: "gui.fld.nf_table.form.expr.title",
             options: &[],
             options_from: "",
             min: 0.0,
@@ -1133,11 +1132,11 @@ pub const FORM: crate::card::CardFormSpec = crate::card::CardFormSpec {
         },
         crate::card::CardFieldSpec {
             key: "a",
-            label: "公称直径 A",
+            label: "gui.fld.nf_table.form.a.label",
             kind: "number",
-            placeholder: "NF 主参数（表值）",
+            placeholder: "gui.fld.nf_table.form.a.placeholder",
             default: "300",
-            title: "NF 主参数 A；同一 A 可对应不同模数（p18 尺寸表）",
+            title: "gui.fld.nf_table.form.a.title",
             options: &[],
             options_from: "",
             min: 0.0,
@@ -1146,11 +1145,11 @@ pub const FORM: crate::card::CardFormSpec = crate::card::CardFormSpec {
         },
         crate::card::CardFieldSpec {
             key: "m",
-            label: "模数 m",
+            label: "gui.fld.nf_table.form.m.label",
             kind: "number",
-            placeholder: "NF 模数档",
+            placeholder: "gui.fld.nf_table.form.m.placeholder",
             default: "7.5",
-            title: "NF 模数档（p18 表实际 m 列：0.50/0.75/1/1.25/1.667/2.5/3.75/5/7.5/10）",
+            title: "gui.fld.nf_table.form.m.title",
             options: &[],
             options_from: "",
             min: 0.0,
@@ -1159,11 +1158,11 @@ pub const FORM: crate::card::CardFormSpec = crate::card::CardFormSpec {
         },
         crate::card::CardFieldSpec {
             key: "z",
-            label: "齿数 z",
+            label: "gui.fld.nf_table.form.z.label",
             kind: "number",
-            placeholder: "选填，按 p18 表核对",
+            placeholder: "gui.fld.nf_table.form.z.placeholder",
             default: "38",
-            title: "选填；与 p18 表 N 不一致直接报错（避免 V/G 取错行）",
+            title: "gui.fld.nf_table.form.z.title",
             options: &[],
             options_from: "",
             min: 3.0,
@@ -1172,11 +1171,11 @@ pub const FORM: crate::card::CardFormSpec = crate::card::CardFormSpec {
         },
         crate::card::CardFieldSpec {
             key: "centering",
-            label: "定心方式",
+            label: "gui.fld.nf_table.form.centering.label",
             kind: "select",
             placeholder: "",
             default: "outer",
-            title: "NF E22-141 内花键定心方式（p04/p07/p10–p12）；缺省外径定心 Az=A",
+            title: "gui.fld.nf_table.form.centering.title",
             options: &[],
             options_from: "nf_centering",
             min: 0.0,
@@ -1185,11 +1184,11 @@ pub const FORM: crate::card::CardFormSpec = crate::card::CardFormSpec {
         },
         crate::card::CardFieldSpec {
             key: "root",
-            label: "齿根样式",
+            label: "gui.fld.nf_table.form.root.label",
             kind: "select",
             placeholder: "",
             default: "flat",
-            title: "行 7 文本；槽底圆角 ri 在预览读数里",
+            title: "gui.fld.nf_table.form.root.title",
             options: &[],
             options_from: "nf_roots",
             min: 0.0,
@@ -1198,17 +1197,16 @@ pub const FORM: crate::card::CardFormSpec = crate::card::CardFormSpec {
         },
         crate::card::CardFieldSpec {
             key: "fit",
-            label: "配合类别（出表前选定）",
+            label: "gui.fld.nf_table.form.fit.label",
             kind: "select",
             placeholder: "",
             default: "fixed",
-            title: "NF E22-141 p31/p34：松动/滑动/固定/压；缺省固定；★ 出表前先选好——\
-                    决定预览里配对外花键的 E/xm 偏差读数（内卡跨棒距 G 公差 = p29 内花键 E，不随配合变）",
+            title: "gui.fld.nf_table.form.fit.title",
             options: &[
-                ("loose", "松动"),
-                ("slide", "滑动"),
-                ("fixed", "固定"),
-                ("press", "压"),
+                ("loose", "gui.fld.nf_table.form.fit.opt.loose"),
+                ("slide", "gui.fld.nf_table.form.fit.opt.slide"),
+                ("fixed", "gui.fld.nf_table.form.fit.opt.fixed"),
+                ("press", "gui.fld.nf_table.form.fit.opt.press"),
             ],
             options_from: "",
             min: 0.0,
@@ -1232,27 +1230,20 @@ pub fn options_json() -> serde_json::Value {
         })).collect::<Vec<_>>(),
         "modules": crate::invol_spline::nf_e22141_modules(),
         "centering": [
-            {"id": "outer", "label": "外径定心（Az=A）"},
-            {"id": "flank", "label": "齿面定心（Az=A+0.3m）"},
+            {"id": "outer", "label": crate::i18n::t("gui.nf.centering.outer")},
+            {"id": "flank", "label": crate::i18n::t("gui.nf.centering.flank")},
         ],
         "roots": [
-            {"id": "flat", "label": "平齿根"},
-            {"id": "fillet", "label": "圆齿根"},
+            {"id": "flat", "label": RootStyle::Flat.label()},
+            {"id": "fillet", "label": RootStyle::Fillet.label()},
         ],
         // p31/p34 配合名（NF E22-141 译本体系；四档按 p29 分列）
         "fits": FitClass::ALL.iter().map(|f| serde_json::json!({
             "id": f.id(),
             "label": f.label(),
         })).collect::<Vec<_>>(),
-        "missing_note": "公差口径（NF E22-141）：大径上/下差 = ISO 286 R7（p28 §4）；\
-                         小径上/下差 = ISO 286 H7（p28 §6，参考）；\
-                         跨棒距上/下差 = p29 检查尺寸的公差值里**内花键 E** 的偏差（µm→mm）。\
-                         p29 的 xm 内花键 + 所选配合的外花键 E/xm 偏差在预览读数里列出；\
-                         (m,A) 不在 p29 或 ISO 档缺时对应格显示「—」，不外推；\
-                         元素（ATTDEF）始终存在，可在 CAD 里改写。",
-        "note": "版面照外花键参数表NF.dxf 同构镜像（13 行 × 2 列，66 线 + 13 标签 + 18 属性）；\
-                 文字样式一律 OCSM_GB；模板末行标签出框已归位；\
-                 公差按 p28 直径公差 + p29 E 偏差取值（配合类别只影响预览读数）。",
+        "missing_note": crate::i18n::t("gui.nf.options.missing_note"),
+        "note": crate::i18n::t("gui.nf.options.note"),
     })
 }
 
@@ -1441,9 +1432,10 @@ impl NfTableModel {
             "readout": readout,
             "items": items,
             "missing": missing,
-            "missing_note": "公差口径：大径 R7 / 小径 H7（p28，数值 ISO 286）、跨棒距 = p29 内花键 E 偏差；\
-                             (m,A) 不在 p29 或 ISO 档缺 → 对应格「—」，不外推；\
-                             V/V1/G/G1 与 ri 只取 p23–p25 / p22 表值，表外显示「—」。",
+            "missing_note": crate::i18n::t("gui.nf.preview.missing_note"),
+            // 直径公差读数注（随语言；GUI 读数旁注/API 消费者用）。
+            "major_tol_note": d.major_tol_note,
+            "minor_tol_note": d.minor_tol_note,
         }))
     }
 
@@ -1827,6 +1819,54 @@ pub(crate) fn mtext_inline_wf(value: &str) -> (f64, &str) {
 mod tests {
     use super::*;
     use std::collections::HashMap;
+
+    /// ⑥ 批：直径公差**读数注**随语言（Some/None 两分支；`ISO 286 R7/H7` 等协议记号两语原样）。
+    #[test]
+    fn tol_notes_switch_language_and_have_no_cjk_in_english() {
+        use crate::i18n::{set_lang, set_lang_auto, Lang};
+        let _g = crate::global_state_test_lock();
+        let cjk = |s: &str| s.chars().any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c));
+        let spec = |a: f64| NfTableSpec {
+            a,
+            m: 3.75,
+            z: None,
+            centering: Centering::Outer,
+            root: RootStyle::Flat,
+            fit: FitClass::Fixed,
+            at: None,
+            rot: 0.0,
+        };
+        set_lang(Lang::Zh);
+        let hit_zh = derive(&spec(80.0)).unwrap();
+        let miss_zh = derive(&spec(5000.0)).unwrap();
+        set_lang(Lang::En);
+        let hit_en = derive(&spec(80.0)).unwrap();
+        let miss_en = derive(&spec(5000.0)).unwrap();
+        set_lang_auto();
+        assert!(hit_zh.major_tol.is_some() && hit_zh.minor_tol.is_some(), "A=80 应在 ISO 286 档内");
+        assert!(
+            miss_zh.major_tol.is_none() || miss_zh.minor_tol.is_none(),
+            "A=5000 应缺 ISO 286 档"
+        );
+        assert!(cjk(&hit_zh.major_tol_note) && cjk(&hit_zh.minor_tol_note));
+        for (z, e) in [
+            (&hit_zh.major_tol_note, &hit_en.major_tol_note),
+            (&hit_zh.minor_tol_note, &hit_en.minor_tol_note),
+            (&miss_zh.major_tol_note, &miss_en.major_tol_note),
+            (&miss_zh.minor_tol_note, &miss_en.minor_tol_note),
+        ] {
+            assert_ne!(z, e, "公差注应随语言：{z}");
+            assert!(!cjk(e), "en 公差注仍有汉字：{e}");
+            assert!(e.contains("ISO 286"), "协议记号两语原样：{e}");
+        }
+        if miss_en.major_tol.is_none() {
+            assert!(miss_en.major_tol_note.contains("Az="), "{miss_en:?}");
+        }
+        if miss_en.minor_tol.is_none() {
+            assert!(miss_en.minor_tol_note.contains("D="), "{miss_en:?}");
+        }
+        assert!(hit_en.major_tol_note.contains("R7") && hit_en.minor_tol_note.contains("H7"));
+    }
 
     fn near(a: f64, b: f64) -> bool {
         (a - b).abs() < 1e-9

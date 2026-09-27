@@ -423,22 +423,27 @@ pub fn pair_label(p: f64) -> String {
 }
 
 /// 齿形类型（中文/英文；ANSI B92.1 Table 2 的列名）。
+///
+/// ★ catalog 唯一来源（`card.ansi.type.*`）：**按块语种钉死**取词 —— 与 GUI 语言开关无关
+/// （纯中文块永远取 zh 侧，纯英文块永远取 en 侧）。
 fn type_text(col: Option<AnsiColumn>, lang: AnsiLang) -> String {
     let Some(c) = col else {
         return MISSING.to_string();
     };
-    match (c, lang) {
-        (AnsiColumn::A30FlatSide, AnsiLang::Cn) => "30°平齿根齿侧配合".into(),
-        (AnsiColumn::A30FlatSide, AnsiLang::En) => "FLAT ROOT SIDE FIT".into(),
-        (AnsiColumn::B30FlatMajor, AnsiLang::Cn) => "30°平齿根外径配合".into(),
-        (AnsiColumn::B30FlatMajor, AnsiLang::En) => "FLAT ROOT MAJOR DIA FIT".into(),
-        (AnsiColumn::C30FilletSide, AnsiLang::Cn) => "30°圆齿根齿侧配合".into(),
-        (AnsiColumn::C30FilletSide, AnsiLang::En) => "FILLET ROOT SIDE FIT".into(),
-        (AnsiColumn::D375FilletSide, AnsiLang::Cn) => "37.5°圆齿根齿侧配合".into(),
-        (AnsiColumn::D375FilletSide, AnsiLang::En) => "FILLET ROOT SIDE FIT".into(),
-        (AnsiColumn::E45FilletSide, AnsiLang::Cn) => "45°圆齿根齿侧配合".into(),
-        (AnsiColumn::E45FilletSide, AnsiLang::En) => "FILLET ROOT SIDE FIT".into(),
-    }
+    let key = match c {
+        AnsiColumn::A30FlatSide => "card.ansi.type.a30flat_side",
+        AnsiColumn::B30FlatMajor => "card.ansi.type.b30flat_major",
+        AnsiColumn::C30FilletSide => "card.ansi.type.c30fillet_side",
+        AnsiColumn::D375FilletSide => "card.ansi.type.d375fillet_side",
+        AnsiColumn::E45FilletSide => "card.ansi.type.e45fillet_side",
+    };
+    crate::i18n::t_lang(
+        match lang {
+            AnsiLang::Cn => crate::i18n::Lang::Zh,
+            AnsiLang::En => crate::i18n::Lang::En,
+        },
+        key,
+    )
 }
 
 /// 「ANSI 花键参数表」卡参数（CLI/GUI 同一份字段）。
@@ -941,11 +946,11 @@ pub const FORM: crate::card::CardFormSpec = crate::card::CardFormSpec {
     fields: &[
         crate::card::CardFieldSpec {
             key: "expr",
-            label: "齿形表达式（九字段；可从轴/齿轮生成器 GUI 复制）",
+            label: "gui.fld.ansi_table.form.expr.label",
             kind: "textarea",
-            placeholder: "SPLINE IN M1.5875 Z20 ALPHA30 X0 BETA0 H30（外卡用 EX）",
+            placeholder: "gui.fld.ansi_table.form.expr.placeholder",
             default: "",
-            title: "九字段统一齿形表达式（MARK KIND M Z ALPHA X DA DF BETA H）；粘贴后自动反解径节 P/齿数 N/齿廓；本卡方向由卡类型固定（KIND 须与之一致）",
+            title: "gui.fld.ansi_table.form.expr.title",
             options: &[],
             options_from: "",
             min: 0.0,
@@ -954,11 +959,11 @@ pub const FORM: crate::card::CardFormSpec = crate::card::CardFormSpec {
         },
         crate::card::CardFieldSpec {
             key: "profile",
-            label: "齿廓",
+            label: "gui.fld.ansi_table.form.profile.label",
             kind: "select",
             placeholder: "",
             default: "",
-            title: "ANSI B92.1 齿廓预设（Table 2 列 A–E；齿形类型/α）",
+            title: "gui.fld.ansi_table.form.profile.title",
             options: &[],
             options_from: "ansi_profiles",
             min: 0.0,
@@ -967,11 +972,11 @@ pub const FORM: crate::card::CardFormSpec = crate::card::CardFormSpec {
         },
         crate::card::CardFieldSpec {
             key: "p",
-            label: "径节 P",
+            label: "gui.fld.ansi_table.form.p.label",
             kind: "number",
-            placeholder: "如 16",
+            placeholder: "gui.fld.ansi_table.form.p.placeholder",
             default: "16",
-            title: "径节 P（1/in；ANSI B92.1 主参数）",
+            title: "gui.fld.ansi_table.form.p.title",
             options: &[],
             options_from: "",
             min: 2.5,
@@ -980,11 +985,11 @@ pub const FORM: crate::card::CardFormSpec = crate::card::CardFormSpec {
         },
         crate::card::CardFieldSpec {
             key: "z",
-            label: "齿数 N",
+            label: "gui.fld.ansi_table.form.z.label",
             kind: "number",
-            placeholder: "如 20",
+            placeholder: "gui.fld.ansi_table.form.z.placeholder",
             default: "20",
-            title: "齿数 N",
+            title: "gui.fld.ansi_table.form.z.title",
             options: &[],
             options_from: "",
             min: 3.0,
@@ -1176,7 +1181,7 @@ impl AnsiTableModel {
             "readout": readout,
             "items": items,
             "missing": missing,
-            "missing_note": "ANSI B92.1 的配合/公差（Table 4/5）、量棒检验、公法线跨测表本仓未收 —— 如实标缺，不臆造。",
+            "missing_note": crate::i18n::t("gui.ansi.preview.missing_note"),
         }))
     }
 
@@ -1250,6 +1255,29 @@ impl AnsiTableModel {
 mod tests {
     use super::*;
     use crate::spline_tol::SplineSide::{External, Internal};
+
+    /// ⑥ 批：ANSI 齿形类型显示值 catalog 化后，**块语种钉死**（与 GUI 语言开关无关）。
+    #[test]
+    fn ansi_type_text_is_pinned_by_block_language() {
+        use crate::i18n::{set_lang, set_lang_auto, Lang};
+        let _g = crate::global_state_test_lock();
+        let cols = [
+            (AnsiColumn::A30FlatSide, "30°平齿根齿侧配合", "FLAT ROOT SIDE FIT"),
+            (AnsiColumn::B30FlatMajor, "30°平齿根外径配合", "FLAT ROOT MAJOR DIA FIT"),
+            (AnsiColumn::C30FilletSide, "30°圆齿根齿侧配合", "FILLET ROOT SIDE FIT"),
+            (AnsiColumn::D375FilletSide, "37.5°圆齿根齿侧配合", "FILLET ROOT SIDE FIT"),
+            (AnsiColumn::E45FilletSide, "45°圆齿根齿侧配合", "FILLET ROOT SIDE FIT"),
+        ];
+        for gui_lang in [Lang::Zh, Lang::En] {
+            set_lang(gui_lang);
+            for (c, cn, en) in cols {
+                assert_eq!(type_text(Some(c), AnsiLang::Cn), cn, "GUI 语言开关不得影响块语种");
+                assert_eq!(type_text(Some(c), AnsiLang::En), en, "GUI 语言开关不得影响块语种");
+            }
+            assert_eq!(type_text(None, AnsiLang::Cn), MISSING);
+        }
+        set_lang_auto();
+    }
 
     fn near(a: f64, b: f64) -> bool {
         (a - b).abs() < 1e-9

@@ -12626,9 +12626,31 @@ mod rough_tests {
             assert!(!t.fallback, "{slug} 不该标回退");
             assert!(!t.title.is_empty(), "{slug} 要有标题");
         }
-        assert!(en.iter().any(|t| t.fallback && t.lang == "zh"),
-                "未译篇应按中文原文回退并标注：{:?}", en.len());
         assert!(!by_slug.contains_key("00-总览"), "英译篇存在时不该重复列中文版");
+        // 未译篇（若有）必须按中文原文回退并标注；**不写死篇数**（平行译者会陆续补齐，
+        // 23/23 全译时回退篇数 = 0）。不变量：en 环境列出的篇数 == 中文顶层篇数。
+        let zh_top = std::fs::read_dir(&repo)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| {
+                let n = e.file_name().to_string_lossy().to_string();
+                n.ends_with(".md") && !n.eq_ignore_ascii_case("readme.md")
+            })
+            .count();
+        assert_eq!(
+            en.iter().filter(|t| !t.slug.is_empty()).count(),
+            zh_top,
+            "en 环境列出的篇数应等于中文顶层篇数（英译 + 回退）：{:?}",
+            by_slug.keys().collect::<Vec<_>>()
+        );
+        for t in en.iter().filter(|t| t.fallback) {
+            assert_eq!(t.lang, "zh", "回退篇必须标注为中文原文：{}", t.slug);
+            assert!(
+                repo.join(format!("{}.md", t.slug)).is_file(),
+                "回退篇应是中文顶层原文：{}",
+                t.slug
+            );
+        }
         // zh：回到既有行为
         set_lang(Lang::Zh);
         let zh = manual_topics_in(&repo);
