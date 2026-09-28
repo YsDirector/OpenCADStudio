@@ -358,6 +358,8 @@ LC_ALL=C cargo test -p OpenCADStudio --lib \
 ## 0.14 已上游化 · R13/R14 图层可打印标志（2026-09-28 开 PR **#1507**，bug：R14 图纸打印/预览全白）
 
 > ✅ **本轮同步（上游 `1bbdce31`）已按判据删除 G-1（2026-09-28 二轮）**：
+> **结论**：**G-1 已于 2026-09-28 二轮同步中删除；上游 `8c9b485b` 接管（R13/R14 打印标志改由 codec 提供），
+> 判据 `pre_r2000_layer_plot_tests` 4/4 通过**。
 > 上游 `8834d77d` 合了我们的 PR #1507，紧接着 `8c9b485b refactor(io): R13/R14 plot flags come from the codec now`
 > 把修法**移进 codec 仓库**（`opencadcodec` reads R13/R14 LAYER records as plottable），宿主侧的
 > `fix_pre_r2000_layer_plot_flags` 函数与两处调用（`load_bytes` 的 dwg 分支、`finalize_loaded_outcome`）
@@ -441,7 +443,7 @@ LC_ALL=C cargo test -p OpenCADStudio --lib \
 | | `src/app/{mod.rs,document.rs,update/mod.rs,update/dialog.rs}` | ~+40 | `Message::Pi` / `PiImagePasted` 路由、`show_pi_panel` 开关、**每标签页** `PiPanelState`、× 关闭语义 |
 | | `src/lib.rs`、`src/ui/mod.rs` | +3 | 模块注册（`pi`、`pi_rpc`、`pi_panel`） |
 | | 依赖 | 0 | **无新增 crate**（`ureq`/`base64`/`image` 上游本有；仅 `Cargo.lock` +3 行） |
-| **G. IO 兼容修复（2026-09-28）** | `src/io/mod.rs` | +149 → **0** | ~~**G-1** R13/R14 图层可打印标志~~ —— **2026-09-28 二轮同步已删除**（上游 `8c9b485b` 让 codec 修根因，判据已实证，见 §0.14） |
+| **G. IO 兼容修复（2026-09-28）** | `src/io/mod.rs` | +149 → **0** | ~~**G-1** R13/R14 图层可打印标志~~ —— **2026-09-28 二轮同步已删除**（上游 `8c9b485b` 让 codec 修根因，判据 `pre_r2000_layer_plot_tests` **4/4 通过**，见 §0.14） |
 
 ## 2. 关键补丁详情
 
@@ -555,7 +557,7 @@ LC_ALL=C cargo test -p OpenCADStudio --lib \
 - **删除理由**：上游 `8c9b485b` 把修法移进 `opencadcodec`（本 fork pin 已跟到 `ad16215`），宿主侧
   `fix_pre_r2000_layer_plot_flags` + 两处调用属重复实现，且与上游继续演进冲突；按 §0.14 判据删除。
 - **删除判据（已实证）**：AC1014 图纸读回后图层与 wire 都可打印 —— `pre_r2000_layer_plot_tests`
-  4 例（R14 `load_bytes` / R13 `load_file` 路径 / 现代文件保留原标志 / R14 wire `plot_visible`）在删除后全过。
+  4 例（R14 `load_bytes` / R13 `load_file` 路径 / 现代文件保留原标志 / R14 wire `plot_visible`）在删除后全过（**4/4 通过**）。
 - **历史**（供回溯）：fork 提交 `6d88be35`，+149（1 个加载期修正 + 2 处调用 + 4 个回归测试），
   PR [#1507](https://github.com/HakanSeven12/OpenCADStudio/pull/1507) 已被上游合并（`8834d77d`），
   修法随后被上游移进 codec。原改法与验证数字见 §0.14 与 `docs/sync-2026-09-28-冲突评估.md`。
