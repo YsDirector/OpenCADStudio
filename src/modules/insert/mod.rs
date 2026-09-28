@@ -9,6 +9,7 @@ mod content_browser;
 pub(crate) mod create_block;
 mod design_center;
 mod edit_block;
+pub(crate) mod image_transparency;
 pub(crate) mod insert_block;
 mod landxml;
 pub(crate) mod picker;
@@ -52,7 +53,18 @@ impl CadModule for InsertModule {
                     title: "Reference",
                     tools: vec![
                         RibbonItem::LargeTool(xattach::tool()),
-                        RibbonItem::LargeTool(pdf_attach::tool()),
+                        // PDF, DWF or DGN; the face runs the last one chosen.
+                        RibbonItem::LargeDropdown {
+                            id: "UNDERLAY_ATTACH",
+                            label: "Attach Underlay",
+                            icon: pdf_attach::ICON,
+                            items: vec![
+                                ("PDFATTACH", "Attach PDF", pdf_attach::ICON),
+                                ("DWFATTACH", "Attach DWF", pdf_attach::ICON),
+                                ("DGNATTACH", "Attach DGN", pdf_attach::ICON),
+                            ],
+                            default: "PDFATTACH",
+                        },
                         RibbonItem::LargeTool(xclip::tool()),
                         RibbonItem::LargeTool(xadjust::tool()),
                         RibbonItem::LabeledTool(underlay_layers::tool()),
@@ -62,9 +74,12 @@ impl CadModule for InsertModule {
                             label: "",
                             icon: FRAMES_ICON,
                             items: vec![
-                                ("FRAMES0", "Frames Off", FRAMES_ICON),
-                                ("FRAMES1", "Frames On", FRAMES_ICON),
-                                ("FRAMES2", "Frames On, Not Plotted", FRAMES_ICON),
+                                ("FRAMES0", "Hide frames", FRAMES_ICON),
+                                ("FRAMES1", "Display and plot frames", FRAMES_ICON),
+                                ("FRAMES2", "Display but don't plot frames", FRAMES_ICON),
+                                // Shown (not selectable) while the frame
+                                // variables differ from each other.
+                                ("FRAMES3", "*Frames vary*", FRAMES_ICON),
                             ],
                             default: "FRAMES1",
                         },

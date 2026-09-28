@@ -10,6 +10,8 @@ impl OpenCADStudio {
             "FRAMES0" => return self.dispatch_styleprops("SETVAR FRAME 0", i),
             "FRAMES1" => return self.dispatch_styleprops("SETVAR FRAME 1", i),
             "FRAMES2" => return self.dispatch_styleprops("SETVAR FRAME 2", i),
+            // The mixed state is shown, never chosen.
+            "FRAMES3" => return Some(Task::none()),
             "UOSNAP0" => return self.dispatch_styleprops("SETVAR UOSNAP 0", i),
             "UOSNAP1" => return self.dispatch_styleprops("SETVAR UOSNAP 1", i),
             // COLOR <ByLayer|ByBlock|1-255|name> — the colour applied to new
@@ -1017,7 +1019,11 @@ impl OpenCADStudio {
                     | "FRAME"
                     | "IMAGEFRAME"
                     | "PDFFRAME"
+                    | "DWFFRAME"
+                    | "DGNFRAME"
                     | "PDFOSNAP"
+                    | "DWFOSNAP"
+                    | "DGNOSNAP"
                     | "UOSNAP"
                     | "PDFIMPORTMODE"
                     | "PDFIMPORTFILTER"
@@ -1177,14 +1183,27 @@ impl OpenCADStudio {
                         }
                         return Some(self.finish_dispatch(cmd));
                     }
-                    if matches!(name.as_str(), "PDFOSNAP" | "UOSNAP") {
-                        let current = i16::from(crate::scene::model::pdf_vector::pdf_osnap());
+                    if matches!(name.as_str(), "PDFOSNAP" | "DWFOSNAP" | "DGNOSNAP" | "UOSNAP") {
+                        use crate::scene::model::pdf_vector as pv;
+                        use codec::entities::UnderlayType;
+                        // UOSNAP sets every kind and reads 2 while they differ.
+                        let kind = match name.as_str() {
+                            "PDFOSNAP" => Some(UnderlayType::Pdf),
+                            "DWFOSNAP" => Some(UnderlayType::Dwf),
+                            "DGNOSNAP" => Some(UnderlayType::Dgn),
+                            _ => None,
+                        };
+                        let current = kind.map_or_else(pv::uosnap, |kind| i16::from(pv::underlay_osnap(kind)));
                         if let Some(value) = &value {
                             match value.parse::<i16>().ok().filter(|value| (0..=1).contains(value)) {
                                 Some(mode) => {
                                     if current != mode {
-                                        crate::scene::model::pdf_vector::set_pdf_osnap(mode == 1);
+                                        match kind {
+                                            Some(kind) => pv::set_underlay_osnap(kind, mode == 1),
+                                            None => pv::set_uosnap(mode == 1),
+                                        }
                                         self.tabs[i].scene.reseed_underlays();
+                                        self.sync_underlay_tab();
                                     }
                                 }
                                 None => self.command_line.push_error("Requires 0 or 1 only"),
@@ -1283,13 +1302,23 @@ impl OpenCADStudio {
                                             self.tabs[i].scene.bump_entities(&changes);
                                         }
                                         self.tabs[i].dirty = true;
+                                        // IMAGEFRAME also lands in the profile.
+                                        self.save_config();
                                     }
                                     self.command_line
-                                        .push_output(&crate::tf!("{name} = {mode}"));
+                                        .push_output(crate::t!("Regenerating model.").as_ref());
                                 }
-                                _ => self.command_line.push_error(
-                                    crate::tf!("SETVAR: {name} requires 0, 1, or 2.").as_ref(),
-                                ),
+                                // Out of range: say so and ask again.
+                                _ => {
+                                    self.command_line.push_error(
+                                        crate::t!("Requires an integer between 0 and 2.").as_ref(),
+                                    );
+                                    self.command_line.push_output(
+                                        crate::tf!("Enter new value for {name} <{current}>:")
+                                            .as_ref(),
+                                    );
+                                    self.pending_setvar = Some(name.clone());
+                                }
                             },
                             None => {
                                 self.command_line.push_output(crate::tf!(

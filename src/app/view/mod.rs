@@ -37,12 +37,6 @@ pub(in crate::app) const VIEWPORT_CAPTURE_BOUNDS_ID: &str = "viewport-capture-bo
 
 
 const VIEWCUBE_HIT_SIZE: f32 = VIEWCUBE_REGION_PX;
-static MOBILE_SPONSOR_IMAGE: std::sync::LazyLock<iced::widget::image::Handle> =
-    std::sync::LazyLock::new(|| {
-        iced::widget::image::Handle::from_bytes(
-            include_bytes!("../../../assets/sponsors/cad-editor-mobile-dwg-viewer.png").as_slice(),
-        )
-    });
 
 /// Background used by drafting overlays in model or paper space.
 fn crosshair_background(tab: &DocumentTab, is_paper: bool) -> [f32; 4] {
@@ -1619,7 +1613,7 @@ bg={bg_ms:.1}ms n={view_count}"
             } else if let Some(ctx) = self.ribbon.underlay_context() {
                 let ctx = ctx.clone();
                 crate::ui::side_toolbar::view_with_active(
-                    &crate::ui::ribbon::pdf_underlay_tools(),
+                    &crate::ui::ribbon::pdf_underlay_tools(ctx.kind),
                     &move |id| match id {
                         "_PDFULMONO" => ctx.monochrome,
                         "_PDFULSHOW" => ctx.shown,
@@ -2551,7 +2545,10 @@ impl OpenCADStudio {
         // driven by input events, but once the cursor stops no event would fire
         // the one full-quality frame that re-renders hatches — this tick does,
         // then the scene-render cache holds it and the subscription auto-stops.
-        let nav_settle = if self.tabs[self.active_tab].scene.is_settling() {
+        // Underlay rasters follow the zoom once it settles; tick until then.
+        let nav_settle = if self.tabs[self.active_tab].scene.is_settling()
+            || self.tabs[self.active_tab].scene.underlay_resolution_stale()
+        {
             window::frames().map(Message::Tick)
         } else {
             Subscription::none()
@@ -3617,18 +3614,6 @@ fn start_page_content<'a>(
         )
         .interaction(iced::mouse::Interaction::Pointer)
         .on_press(Message::OpenUrl("https://open-aec.com/".to_string())),
-        mouse_area(
-            container(
-                iced::widget::image(MOBILE_SPONSOR_IMAGE.clone())
-                    .width(Fill)
-                    .content_fit(iced::ContentFit::Contain),
-            )
-            .width(Fill),
-        )
-        .interaction(iced::mouse::Interaction::Pointer)
-        .on_press(Message::OpenUrl(
-            "https://play.google.com/store/apps/details?id=net.cadeditor.app".to_string(),
-        )),
     ]
     .spacing(10)
     .align_x(iced::alignment::Horizontal::Center)

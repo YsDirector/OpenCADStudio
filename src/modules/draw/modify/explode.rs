@@ -118,6 +118,53 @@ pub fn explode_entity(entity: &EntityType, document: &CadDocument) -> Vec<Entity
     }
 }
 
+/// Explode every entity; one piece list per input, input order preserved,
+/// empty lists kept. Used by benchmarks and regression tests.
+pub fn explode_batch(
+    items: &[(Handle, &EntityType)],
+    doc: &CadDocument,
+) -> Vec<Vec<EntityType>> {
+    items.iter().map(|(_, e)| explode_entity(e, doc)).collect()
+}
+
+/// Plan the EXPLODE command for an already lock-filtered selection:
+/// order-preserving, empty pieces dropped (matching the command arm).
+pub fn plan_explode(
+    selected: &[(Handle, &EntityType)],
+    doc: &CadDocument,
+) -> Vec<(Handle, Vec<EntityType>)> {
+    selected
+        .iter()
+        .filter_map(|(handle, entity)| {
+            let pieces = explode_entity(entity, doc);
+            if pieces.is_empty() {
+                None
+            } else {
+                Some((*handle, pieces))
+            }
+        })
+        .collect()
+}
+
+/// Apply precomputed EXPLODE replacements. Initial version is a
+/// byte-for-byte extraction of the command arm's loop (erase one handle,
+/// add pieces one at a time); optimizations change its internals only.
+/// Returns the number of exploded sources.
+pub fn apply_explode_replacements(
+    scene: &mut crate::scene::Scene,
+    replacements: Vec<(Handle, Vec<EntityType>)>,
+) -> usize {
+    let exploded = replacements.len();
+    let handles: Vec<Handle> = replacements.iter().map(|(h, _)| *h).collect();
+    scene.erase_entities(&handles);
+    for (_, pieces) in replacements {
+        for piece in pieces {
+            scene.add_entity(piece);
+        }
+    }
+    exploded
+}
+
 fn explode_polyline(p: &Polyline) -> Vec<EntityType> {
     let n = p.vertices.len();
     if n < 2 {
@@ -125,7 +172,7 @@ fn explode_polyline(p: &Polyline) -> Vec<EntityType> {
     }
     let closed = p.flags.is_closed();
     let n_segs = if closed { n } else { n - 1 };
-    let mut result = Vec::new();
+    let mut result = Vec::with_capacity(n_segs);
     for i in 0..n_segs {
         let v0 = &p.vertices[i];
         let v1 = &p.vertices[(i + 1) % n];
@@ -148,7 +195,7 @@ fn explode_polyline3d(p: &codec::entities::Polyline3D) -> Vec<EntityType> {
     }
     let closed = p.is_closed();
     let n_segs = if closed { n } else { n - 1 };
-    let mut result = Vec::new();
+    let mut result = Vec::with_capacity(n_segs);
     for i in 0..n_segs {
         let v0 = &p.vertices[i];
         let v1 = &p.vertices[(i + 1) % n];
@@ -178,7 +225,7 @@ fn explode_polyline2d(p: &Polyline2D) -> Vec<EntityType> {
     let normal = Vector3::new(normal.x, normal.y, normal.z);
     let plane = crate::entities::curve::ocs_plane(normal.clone(), elevation);
 
-    let mut result = Vec::new();
+    let mut result = Vec::with_capacity(n_segs);
     for i in 0..n_segs {
         let v0 = &p.vertices[i];
         let v1 = &p.vertices[(i + 1) % n];
@@ -257,7 +304,7 @@ fn explode_lwpolyline(p: &LwPolyline) -> Vec<EntityType> {
     let elevation = p.elevation;
     let n_segs = if p.is_closed { n } else { n - 1 };
 
-    let mut result = Vec::new();
+    let mut result = Vec::with_capacity(n_segs);
     for i in 0..n_segs {
         let v0 = &p.vertices[i];
         let v1 = &p.vertices[(i + 1) % n];
@@ -343,7 +390,7 @@ fn explode_mline(ml: &MLine) -> Vec<EntityType> {
     let closed = ml.flags.contains(codec::entities::MLineFlags::CLOSED);
     let scale = ml.scale_factor;
     let n_segs = if closed { n } else { n - 1 };
-    let mut result = Vec::new();
+    let mut result = Vec::with_capacity(n_segs * 3);
 
     // Helper: build a Line from two Vector3 positions.
     let make_line = |common: &codec::entities::EntityCommon,

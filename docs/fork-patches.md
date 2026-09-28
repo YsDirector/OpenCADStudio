@@ -355,7 +355,21 @@ LC_ALL=C cargo test -p OpenCADStudio --lib \
 - **验证（2026-09-23）**：用例连跑 3 次 passed ✅；宿主全量 `cargo test --lib`
   **1547 passed / 0 failed / 18 ignored** ✅；`cargo test -p ocs_ocsm --lib` **633 passed / 0 failed / 25 ignored** ✅。
 
-## 0.14 待上游合并 · R13/R14 图层可打印标志（2026-09-28 开 PR **#1507**，bug：R14 图纸打印/预览全白）
+## 0.14 已上游化 · R13/R14 图层可打印标志（2026-09-28 开 PR **#1507**，bug：R14 图纸打印/预览全白）
+
+> ✅ **本轮同步（上游 `1bbdce31`）已按判据删除 G-1（2026-09-28 二轮）**：
+> 上游 `8834d77d` 合了我们的 PR #1507，紧接着 `8c9b485b refactor(io): R13/R14 plot flags come from the codec now`
+> 把修法**移进 codec 仓库**（`opencadcodec` reads R13/R14 LAYER records as plottable），宿主侧的
+> `fix_pre_r2000_layer_plot_flags` 函数与两处调用（`load_bytes` 的 dwg 分支、`finalize_loaded_outcome`）
+> 已**整段删除**；上游留下的 4 个测试改名为每例独立临时文件（`saved_path(test, version)`）后保留。
+> **判据验证（不是照抄上游）**：删除后 `pre_r2000_layer_plot_tests` 4 例仍全过 ——
+> R14 `load_bytes` 读回图层全可打印 · R13 走 `load_file`/`finalize_loaded_outcome` 路径入口 · 现代文件保留文件内标志
+> （DEFPOINTS 语义）· R14 全部 wire `plot_visible`；本轮宿主全量 `cargo test --release --lib`
+> **1830 passed / 0 failed / 23 ignored**（含这 4 例，详见 §验证）。
+> **pin 同步**：`[patch."…opencadcodec.git"]` rev `42b44d2` → **`ad16215`**（ghfast 镜像保留），Lock 里 codec
+> source 已核对为 `git+https://ghfast.top/…?rev=ad16215#ad16215faa…`；同批上游还升 kernel `237827e`、graph `fe36957`（无镜像 patch，跟上游官方 URL）。
+> fork 提交 `6d88be35` / PR #1507 的内容随之作废（被上游实现取代，不再需要本地维护）。
+> 本节保留为历史记录：下面是当初的现象、根因与当时的证据。
 
 > **现象**：打开任何 R14（AC1014）图纸，屏幕显示完全正常，但 PLOT / 打印预览 / QUICKPRINT 出来的
 > PDF 是空白页 —— 文件里除一个白底矩形和一个裁剪框外**没有任何绘制指令**（实测 1.2 KB，渲染全白）。
@@ -427,7 +441,7 @@ LC_ALL=C cargo test -p OpenCADStudio --lib \
 | | `src/app/{mod.rs,document.rs,update/mod.rs,update/dialog.rs}` | ~+40 | `Message::Pi` / `PiImagePasted` 路由、`show_pi_panel` 开关、**每标签页** `PiPanelState`、× 关闭语义 |
 | | `src/lib.rs`、`src/ui/mod.rs` | +3 | 模块注册（`pi`、`pi_rpc`、`pi_panel`） |
 | | 依赖 | 0 | **无新增 crate**（`ureq`/`base64`/`image` 上游本有；仅 `Cargo.lock` +3 行） |
-| **G. IO 兼容修复（2026-09-28）** | `src/io/mod.rs` | +149 | **G-1** R13/R14 图层可打印标志 —— R14 图纸打印/预览全白的根因（见 §0.14） |
+| **G. IO 兼容修复（2026-09-28）** | `src/io/mod.rs` | +149 → **0** | ~~**G-1** R13/R14 图层可打印标志~~ —— **2026-09-28 二轮同步已删除**（上游 `8c9b485b` 让 codec 修根因，判据已实证，见 §0.14） |
 
 ## 2. 关键补丁详情
 
@@ -536,19 +550,17 @@ LC_ALL=C cargo test -p OpenCADStudio --lib \
     门控，否则 wasm 目标编译失败。
   - 面板需要**运行时环境**（本机 `pi` CLI 或 pi-web HTTP）：不影响构建，没有它时面板显示错误态。
 
-### G-1 `src/io/mod.rs` — R13/R14 图层可打印标志（fork 本地 + 待上游 PR，2026-09-28）
+### G-1 `src/io/mod.rs` — R13/R14 图层可打印标志（✅ **已删除**，2026-09-28 二轮同步）
 
-- **位置**：`fn fix_pre_r2000_layer_plot_flags()`（新增，紧邻 `fix_viewport_status_flags`）+ 两处调用 ——
-  `load_bytes` 的 `"dwg"` 分支、`finalize_loaded_outcome` 的 `source_format == Dwg` 分支。
-- **为什么**：DWG 的 LAYER 记录 R2000 才有 plottable 位；acadrust 对 R13/R14 不读该位，字段留在
-  `false` → 每个图层都被当成“不打印” → PLOT / 预览 / QUICKPRINT 出空白页，而屏幕显示正常
-  （`display_visible` 与 `plot_visible` 是两套标志）。完整现象与证据见 **§0.14**。
-- **改法**：`AC1012`(R13) / `AC1014`(R14) 时把图层置回 `is_plottable = true`（格式的默认语义）；
-  `AC1015+` 不动（文件里的标志权威，DEFPOINTS 这类真“不打印”图层保持）。两条加载入口都覆盖。
-- **验证**：`cargo test --lib pre_r2000_layer_plot_tests`（4 例）；宿主全量 **1554 passed**；
-  实测 R14 图纸导出 PDF 由全白变完整图形（1.2 KB → 47.9 KB）。
-- **合并注意**：上游若改在 cadcodec/acadrust 里（更根正，把 `read_layer` 的 `plottable` 默认值改成 `true`），
-  本项可整段删除 —— 判据是“AC1014 图纸读回后图层与 wire 都可打印”，不是函数名。
+- **删除理由**：上游 `8c9b485b` 把修法移进 `opencadcodec`（本 fork pin 已跟到 `ad16215`），宿主侧
+  `fix_pre_r2000_layer_plot_flags` + 两处调用属重复实现，且与上游继续演进冲突；按 §0.14 判据删除。
+- **删除判据（已实证）**：AC1014 图纸读回后图层与 wire 都可打印 —— `pre_r2000_layer_plot_tests`
+  4 例（R14 `load_bytes` / R13 `load_file` 路径 / 现代文件保留原标志 / R14 wire `plot_visible`）在删除后全过。
+- **历史**（供回溯）：fork 提交 `6d88be35`，+149（1 个加载期修正 + 2 处调用 + 4 个回归测试），
+  PR [#1507](https://github.com/HakanSeven12/OpenCADStudio/pull/1507) 已被上游合并（`8834d77d`），
+  修法随后被上游移进 codec。原改法与验证数字见 §0.14 与 `docs/sync-2026-09-28-冲突评估.md`。
+- **回归检查点**：`git grep fix_pre_r2000_layer_plot_flags`（应为空）；
+  `cargo test --release --lib pre_r2000_layer_plot_tests`（应 4 passed）。
 
 ## 3. 已知取舍
 
