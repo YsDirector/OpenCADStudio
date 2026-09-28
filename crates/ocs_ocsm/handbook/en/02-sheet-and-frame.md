@@ -67,6 +67,13 @@ TF <name> [scale] [at x,y] [rot deg]      (OCSMFRAMEINSERT uses the same syntax;
   - On the maintainer machine the sample frames live in `~/桌面/OCSM/frame/`; they are cleaned
     (`tools/frame_clean.py --install`: strips the old CAD environment's leftovers and repairs layer
     colours) before landing in the plugin directory's `frame/`;
+  - The frame's `OCSM_GB` text style is defined **the same way as the plugin's `text_style_defs()`**
+    (user decision 2026-09-28: the plugin is authoritative): group 3 = the TrueType name
+    (`Zhuque Fangsong`, not the `Unicode` SHX placeholder), width factor 0.7, `height = 3.5`
+    (the template used to say 0.0 = no fixed height) and `annotative = 1`. `tools/frame_clean.py`
+    produces the frame with those values and self-checks the result; `annotative` travels in the
+    `AcadAnnotative` XDATA, which LibreDWG drops when it writes the DWG, so the plugin's
+    `ensure_text_styles()` lines the host's style up on insertion;
   - On a new machine: drop the frame DWGs into that `frame/`, or pass `OCSM_FRAME_SRC=<dir with frames>`
     to `tools/deploy_plugin.sh` (an already-installed file with the same name is never overwritten);
   - The deploy script's self-check **only warns (and still exits 0) when `frame/` is empty** — frames

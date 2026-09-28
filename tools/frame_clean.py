@@ -8,6 +8,8 @@
 做法：OCS 导出源 DWG → ezdxf 读 → **只挑要的东西**建一份全新 R2000 文档：
     图层（按 OCSM 约定给正确颜色：1轮廓实线层=7、2细线层=4、6文字层=3 …）
     文字样式（Standard + OCSM_GB(font_file=Zhuque Fangsong, 宽比 0.7)；失效的 SHX 样式换成 OCSM_GB）
+   文字样式 `OCSM_GB` 与插件 `text_style_defs()` 同口径：group 3 = TTF 名、宽比 0.7、
+   height 3.5、annotative=1（用户 2026-09-28 清单 §P3；height/annotative 见下 ⚠）
     标注样式、模型空间图元（LINE/TEXT/ATTDEF…，属性原样保留：halign/valign/align_point/width/height）
 → 写 DXF（gb2312 字节）→ 补丁版 LibreDWG `--as r2000` 写 DWG（r2004 会写坏图层颜色）
 
@@ -47,8 +49,28 @@ LAYER_COLOR = {
     "Defpoints": 7,
 }
 STYLE_FIX = "OCSM_GB"          # 失效/旧 SHX 样式统一换成它
+# `OCSM_GB` 必须与插件 `crates/ocs_ocsm/src/lib.rs` 的 `text_style_defs()` **同口径**
+# （用户 2026-09-28 清单 §P3 定案：以插件为准，模板侧跟着改）：
+#   group 3 = TTF 名（不是 SHX 占位 `Unicode`）、宽比 0.7、height = 3.5、annotative = 1。
+STYLE_HEIGHT = 3.5              # 插件口径的固定字高（模板原来是 0.0 = 不定高）
 DWG_VERSION = "r2000"          # 必须：r2004 会写坏 LAYER 表颜色
 JUNK = ("[redacted]", "[redacted]", "Zwm", "ZWM", "PCCAD", "TH_Paper", "TH_CSL")
+
+
+def set_annotative(style) -> None:
+    """给文字样式标 `annotative=1`（插件 `TextStyleDef.annotative = true`）。
+
+    STYLE 表没有对应组码：DXF 与 DWG 都把它放在 XDATA `AcadAnnotative` 里
+    （`AnnotativeData { 1 <flag> }`，与 opencadcodec `write_annotative_xdata` 同形状）。
+    ⚠ 实测（2026-09-28）：这一步只在**清理出的 DXF** 里可靠 —— 下游 `dxf2dwg`
+    （LibreDWG r2000）写 DWG 时会丢掉 STYLE 的 XDATA，装进插件目录的 DWG 读回仍是
+    annotative=0。不影响出图：插件在 `TF`/`D` 前调 `ensure_text_styles()`，用
+    `TextStyleDef` 把宿主里的 `OCSM_GB` 对齐到插件口径（含 annotative）—— 交付件取的是
+    插件侧（见清单 §P3）。height=3.5 能过 DWG 这道，已由 `check()` 守住。
+    """
+    style.set_xdata("AcadAnnotative", [
+        (1000, "AnnotativeData"), (1002, "{"), (1070, 1), (1070, 1), (1002, "}"),
+    ])
 
 
 def ocs_export(dwg: Path, dxf: Path) -> Path:
@@ -78,6 +100,8 @@ def build_clean(src_dxf: Path, out_dxf: Path) -> tuple[Path, dict]:
     if STYLE_FIX not in out.styles:
         st = out.styles.add(STYLE_FIX, font="Zhuque Fangsong")
         st.dxf.width = 0.7
+        st.dxf.height = STYLE_HEIGHT      # 插件口径（模板原来是 0.0）
+        set_annotative(st)                # 插件口径 annotative=1
     # 只保留 Standard 与 OCSM_GB：被引用的旧样式（如 SHX 的 PC_TEXTSTYLE）全部改挂 OCSM_GB
     remapped = {name: STYLE_FIX for name in used if name and name not in ("Standard", STYLE_FIX)}
     # 标注样式（通用名，原样保留）
@@ -152,10 +176,18 @@ def check(dwg: Path, src_dxf: Path, tmp: Path) -> list[str]:
         a, b = sum(1 for e in sm if e.dxftype() == t), sum(1 for e in gm if e.dxftype() == t)
         if a != b:
             bad.append(f"{t} 数 {b} != 源 {a}")
-    # ATTDEF 字段（样式/宽比/对齐/锚点）必须还在
-    s_att = {a.dxf.tag: a for a in sm.query("ATTDEF")}
+    # ATTDEF 字段（样式/宽比/对齐/锚点）必须还在。
+    # 同一 tag 会重复（「图样代号」在左侧附加栏与标题栏各有一个）⇒ 按**出现顺序**逐个配对：
+    # 按 tag 建 dict 只留最后一个，会把两个 ATTDEF 的 halign 互相比对，误报「halign 0 != 源 4」。
+    src_att: dict[str, list] = {}
+    for a in sm.query("ATTDEF"):
+        src_att.setdefault(a.dxf.tag, []).append(a)
+    nth: dict[str, int] = {}
     for a in gm.query("ATTDEF"):
-        o = s_att.get(a.dxf.tag)
+        n = nth.get(a.dxf.tag, 0)
+        nth[a.dxf.tag] = n + 1
+        cands = src_att.get(a.dxf.tag) or []
+        o = cands[n] if n < len(cands) else None
         if o is None:
             bad.append(f"多出 ATTDEF {a.dxf.tag}")
             continue
@@ -171,6 +203,17 @@ def check(dwg: Path, src_dxf: Path, tmp: Path) -> list[str]:
         want = LAYER_COLOR.get(l.dxf.name)
         if want is not None and l.dxf.color != want:
             bad.append(f"图层 {l.dxf.name} 颜色 {l.dxf.color} != {want}")
+    # 文字样式 OCSM_GB 与插件同口径（清单 §P3：height=3.5 / 宽比 0.7 / TTF 名在 group 3）
+    gst = next((s for s in got.styles if s.dxf.name == STYLE_FIX), None)
+    if gst is None:
+        bad.append(f"读回缺文字样式 {STYLE_FIX}")
+    else:
+        if abs(gst.dxf.height - STYLE_HEIGHT) > 1e-9:
+            bad.append(f"{STYLE_FIX} height {gst.dxf.height} != 插件口径 {STYLE_HEIGHT}")
+        if abs(gst.dxf.width - 0.7) > 1e-9:
+            bad.append(f"{STYLE_FIX} 宽比 {gst.dxf.width} != 0.7")
+        if "Zhuque" not in (gst.dxf.font or ""):
+            bad.append(f"{STYLE_FIX} group 3 不是 TTF 名：{gst.dxf.font!r}")
     # 引用的样式必须存在（避免悬挂样式名）
     names = {s.dxf.name for s in got.styles}
     for e in gm:
