@@ -508,9 +508,17 @@ pub(super) struct OpenCADStudio {
     /// Working copy of the structured feature-control-frame editor.
     geometric_tolerance: Option<crate::ui::window::geometric_tolerance::State>,
     /// OCSMechanical frame picker dialog state; `None` while closed.
+    ///
+    /// Desktop-only, like the modal itself: the picker is opened by the
+    /// out-of-process plugin host (`app::plugin_host`), which the web build does
+    /// not have — and the frame types it carries come from `ocs_plugin_api::host`,
+    /// compiled only with that side's `host` feature (see `Cargo.toml`).
+    #[cfg(not(target_arch = "wasm32"))]
     ocsm_frame_picker: Option<OcsmFramePicker>,
     /// Frame selection the user made in the OCSM picker, waiting for the
-    /// plugin to take it (via `OCSMFRAMEINSERT`).
+    /// plugin to take it (via `OCSMFRAMEINSERT`). Desktop-only — see
+    /// `ocsm_frame_picker` above.
+    #[cfg(not(target_arch = "wasm32"))]
     ocsm_pending_frame_selection: Option<ocs_plugin_api::host::FrameSelection>,
     /// PICKDRAG (#226): false (default) = press-drag lassoes; true =
     /// press-drag draws a rectangle marquee.
@@ -1895,6 +1903,12 @@ impl ClipboardDeps {
 /// at a time; dialog-specific data lives in its own fields. Closed via the
 /// modal's ✕ (`Message::CloseModal`).
 /// Working state of the OCSMechanical frame picker dialog.
+///
+/// `FrameItem` lives in `ocs_plugin_api::host`, which only exists with the
+/// desktop `host` feature, so the whole struct (and every field holding it) is
+/// desktop-only. The `ModalKind`/`Message` variants stay in the shared enums —
+/// on the web build nothing can ever produce them.
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Debug, Clone)]
 pub(super) struct OcsmFramePicker {
     /// Frame DWG files offered to the user (path + label).
@@ -4226,7 +4240,9 @@ impl OpenCADStudio {
             color_picker_tab: ColorPickerTab::Index,
             recent_colors: Vec::new(),
             active_modal: None,
+            #[cfg(not(target_arch = "wasm32"))]
             ocsm_frame_picker: None,
+            #[cfg(not(target_arch = "wasm32"))]
             ocsm_pending_frame_selection: None,
             hyperlink_editor_handles: Vec::new(),
             hyperlink_editor_url: String::new(),

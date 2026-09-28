@@ -14,7 +14,7 @@
 //! cargo run -q -p ocs_plugin_api --features host --example split_views -- <in.dwg|dir> <out_dir> [limit] [stride]
 //! ```
 
-#[path = "part_lib.rs"]
+#[path = "kit/part_lib.rs"]
 mod part_lib;
 
 use ocs_plugin_api::host::codec::io::dwg::{DwgReadOptions, DwgReader, DwgWriter};

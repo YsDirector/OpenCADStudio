@@ -5,7 +5,7 @@
 //! cargo run -q -p ocs_plugin_api --features host --example color_survey -- <库根> [文件上限]
 //! ```
 
-#[path = "proxy_decode.rs"]
+#[path = "kit/proxy_decode.rs"]
 mod dec;
 
 use ocs_plugin_api::host::codec::io::dwg::DwgReader;

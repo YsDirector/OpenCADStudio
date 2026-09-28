@@ -79,13 +79,20 @@ impl OpenCADStudio {
         // A verb a plugin registers wins over the alias table: OCSM's `D`
         // (OCSMPOWERDIM) must beat the shipped `D` → `*DIMSTYLE` alias, or the
         // plugin command would be unreachable by typing. (project.md)
-        let verb = cmd.split_whitespace().next().unwrap_or(cmd);
+        //
+        // Web build: `disabled_plugin_ids` (and the out-of-process plugin
+        // registry behind it) is desktop-only, and so is any external plugin —
+        // no plugin verb can win there.
+        #[cfg(not(target_arch = "wasm32"))]
         let plugin_wins = {
+            let verb = cmd.split_whitespace().next().unwrap_or(cmd);
             let disabled = self.disabled_plugin_ids();
             crate::plugin::plugin_command_names(&disabled)
                 .iter()
                 .any(|n| n.eq_ignore_ascii_case(verb))
         };
+        #[cfg(target_arch = "wasm32")]
+        let plugin_wins = false;
         let resolved = if plugin_wins {
             None
         } else {

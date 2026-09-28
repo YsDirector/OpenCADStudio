@@ -9,9 +9,9 @@
 //! PROXY_LIST=1 …   # 顺便逐条打印图元（颜色/线型/几何）
 //! ```
 
-#[path = "part_lib.rs"]
+#[path = "kit/part_lib.rs"]
 mod part_lib;
-#[path = "svg_render.rs"]
+#[path = "kit/svg_render.rs"]
 mod svg_render;
 
 use ocs_plugin_api::host::codec::io::dwg::DwgReader;

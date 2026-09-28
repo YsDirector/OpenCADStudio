@@ -23,11 +23,22 @@ impl OpenCADStudio {
                 for (i, tab_state) in self.tabs.iter_mut().enumerate() {
                     // Refresh the selection label only when the selection set
                     // actually changed (fingerprint is cached and O(selected)).
-                    let fingerprint = tab_state.scene.selection_fingerprint();
-                    if fingerprint != tab_state.pi_panel.selection_fingerprint {
-                        tab_state.pi_panel.selection_fingerprint = fingerprint;
-                        tab_state.pi_panel.selection_label =
-                            selection_label(&tab_state.scene);
+                    //
+                    // `selection_fingerprint` is desktop-only (see
+                    // `scene::selection`), so the web build just recomputes the
+                    // label every poll — it is a cache, not a behaviour.
+                    #[cfg(not(target_arch = "wasm32"))]
+                    {
+                        let fingerprint = tab_state.scene.selection_fingerprint();
+                        if fingerprint != tab_state.pi_panel.selection_fingerprint {
+                            tab_state.pi_panel.selection_fingerprint = fingerprint;
+                            tab_state.pi_panel.selection_label =
+                                selection_label(&tab_state.scene);
+                        }
+                    }
+                    #[cfg(target_arch = "wasm32")]
+                    {
+                        tab_state.pi_panel.selection_label = selection_label(&tab_state.scene);
                     }
                     let mut events = Vec::new();
                     if let Some(worker) = &tab_state.pi_panel.worker {

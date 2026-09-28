@@ -407,6 +407,23 @@ LC_ALL=C cargo test -p OpenCADStudio --lib \
 > 分支被赋值，于是 R13/R14 恒为 false（与其 `Layer::new()` 的默认值 `true` 也不一致）。cadcodec 不属本
 > fork（属 HakanSeven12），所以修在 OCS 的加载层；要根治可另向 cadcodec 提 issue/PR（把默认值改为 `true`）。
 
+## 0.15 CI 双红修复记录（2026-09-28，`a27360ed` 上的两条流水线）
+
+背景：fork 的 `main` 上 `Tests`（run 36444537815）与 `Web build check`（run 36444537753）全红。
+两条**都不是**依赖/网络问题，是 fork 自己的代码没按目标 cfg。
+
+| # | 流水线 / 原命令 | 真因 | 改法 |
+|---|---|---|---|
+| ① | `Web build check`（job `wasm32`）<br>`cargo check --locked --target wasm32-unknown-unknown -p OpenCADStudio -p ocs_web_worker` | fork 代码在 web 构建里引用了**只在桌面存在**的东西（共 9 个错）：<br>(a) `ocs_plugin_api::host::{FrameItem,FrameSelection}` —— 根 `Cargo.toml` 的 wasm 段故意不带 `host` feature（`src/app/mod.rs` 两字段 + `OcsmFramePicker`、`src/app/view/modal.rs` 模态臂、`src/app/update/mod.rs` 回调）；<br>(b) `src/pi.rs` 调桌面专属 `crate::config::config_dir()`；<br>(c) `src/app/commands/mod.rs` 的 `plugin_wins` 调桌面专属 `disabled_plugin_ids()`（定义在**上游** `src/app/update/file.rs`，带 `#[cfg(not(wasm32))]`）；<br>(d) `src/app/update/pi.rs` 调桌面专属 `Scene::selection_fingerprint()`（定义在**上游** `src/scene/selection.rs`，`#[cfg(any(test,not(wasm32)))]`）。 | **只给 fork 自己的代码加 `#[cfg(not(target_arch = "wasm32"))]`**，上游文件一行不动（(c)(d) 是 fork 的**调用点**缺 cfg）：OCSM 图框选择器整块桌面化（`update::update_inner` 与 `view::modal` 两个 match **都没有** catch-all ⇒ 各补一条 wasm 合并/空臂）；`plugin_wins` 在 wasm 直接 `false`；Pi 面板的选中指纹缓存按目标出两版（web 每 poll 重算 label，纯缓存）；`backend_mode_path()` 加 wasm 版返回 `None`。<br>**`Cargo.toml` 不用改** —— `ocs_plugin_api` 早已按目标拆两段（`cfg(not(wasm32))` / `cfg(wasm32)`）。 |
+| ② | `Tests`（job `test`）<br>`cargo test --workspace --locked` | `crates/ocs_plugin_api/examples/` 里 3 个文件是被 `#[path]` 引入的**模块片段**而非独立 bin：`proxy_decode.rs`、`part_lib.rs`、`svg_render.rs`（都没有 `fn main`，`svg_render.rs` 还用 `crate::part_lib::…`）⇒ `cargo test` 默认连 examples 一起编 ⇒ `E0601`/`E0433`。**与 `--locked`/镜像无关。** | 把三个片段挪进 `examples/kit/`（子目录里没有 `main.rs` ⇒ cargo 不当它是 example target），并改 5 处 `#[path]`（`kit/part_lib.rs` 里的 `#[path = "proxy_decode.rs"]` 是同目录兄弟，不用改）。`cargo metadata` 确认 examples 只剩 7 个真 bin。 |
+| ③ | （预防，**不是**本次红的成因） | `Cargo.lock` 里 `opencadcodec` 的 source 是**第三方代理** `git+https://ghfast.top/https://github.com/…`，而 `.cargo/config.toml` 带 `git-fetch-with-cli = true` ⇒ CI runner 要拿 `git` 去拉这个代理。上游没这段。 | 摘掉根 `Cargo.toml` 的 `[patch."https://github.com/HakanSeven12/opencadcodec.git"]` 段（见 §2 A-3），重建锁 ⇒ source 回到官方 URL（rev 不变）。本机加速改由**全局 git insteadOf** 提供。 |
+
+> ⚠️ **别再自造 wasm 复现**：`cargo check --target wasm32-unknown-unknown --workspace`（或任何选中
+> `ocs_ocsm` 的组合）**会**失败 —— `ocs_ocsm` 是 cdylib 插件、开 `ocs_plugin_api/host`，features 统一后
+> 把 `host`（⇒ `interprocess`，不支持 wasm32）灌进 wasm 图。CI 的 `-p OpenCADStudio -p ocs_web_worker`
+> **不含** `ocs_ocsm`，两者不是一回事。判据：
+> `cargo tree -i interprocess --target wasm32-unknown-unknown -p OpenCADStudio -p ocs_web_worker` ⇒ `nothing to print`。
+
 ## 1. 补丁总表（基准：上游 tag `v2026.38` = `0d023d26` → 合并 `fd0f5dc2`，**46 文件 / +11093 −103**，不含插件 crate）
 
 > A–E 组的行数是 v2026.36 基准时的记录（功能性描述仍适用）；F 组为 2026-09-16 新增。
@@ -420,7 +437,7 @@ LC_ALL=C cargo test -p OpenCADStudio --lib \
 | | `crates/ocs_plugin_api/src/ipc/server.rs` | +19 | 服务端分发 |
 | | `crates/ocs_plugin_api/src/process.rs` / `process/v4.rs` / `runner.rs` | +123 / +6 / +208 | 交互命令、预览实体、通知 |
 | | `crates/ocs_plugin_api/src/manifest.rs` | +7 | `API_VERSION` 4 → **5** |
-| | `Cargo.toml` | +5 | workspace 成员（ocs_ocsm / ocs_ocsm_mcp）+ **acadrust rev pin** |
+| | `Cargo.toml` | +5 | workspace 成员（ocs_ocsm / ocs_ocsm_mcp）+ **codec rev pin**（`[patch]` 镜像段已于 2026-09-28 摘除，见 §2 A-3） |
 | **B. 宿主落地与 UI** | `src/app/plugin_host.rs` | +1095 | v5 请求在宿主的实现 |
 | | `src/app/update/mod.rs` | +96 | drain 插件请求 + 图框选择回调 |
 | | `src/app/view/modal.rs` | +75 | `OcsmFramePicker` 模态框 |
@@ -513,7 +530,28 @@ LC_ALL=C cargo test -p OpenCADStudio --lib \
   未被覆盖成官方 URL**。宿主与插件经 `cargo tree` 确认共用同一份 acadrust（无重复版本），插件 178 测试全过
   → 实体 API 未破坏。这符合本节原定规则「上游更新 rev 时同步升 rev 并重跑插件测试」。
 - **合并注意**：上游更新 acadrust rev 时，需确认插件依赖的实体 API（ATTDEF/块/标注字段）
-  没变；必要时同步升 rev 并重跑插件测试。**不要**让上游覆盖成本地的镜像 URL（网络环境原因）。
+  没变；必要时同步升 rev 并重跑插件测试。~~**不要**让上游覆盖成本地的镜像 URL（网络环境原因）~~
+  —— **2026-09-28 起这条作废**：镜像 `[patch]` 已摘除，见 §2 A-3。
+
+### A-3 `Cargo.toml` — opencadcodec 镜像 `[patch]` 摘除（2026-09-28，**CI 依赖，勿回退**）
+
+- **原样**（曾长期存在）：`[patch."https://github.com/HakanSeven12/opencadcodec.git"]` 把上游的官方 URL
+  指到 `https://ghfast.top/https://github.com/…`，本机拉得快；代价是 `Cargo.lock` 的 source 变成
+  **第三方代理 URL**。
+- **为什么必须摘**：fork 的 `Tests` / `Web build check` 跑在 GitHub runner 上，`--locked` 会照锁文件里的
+  source 去 `git`（`.cargo/config.toml` 有 `[net] git-fetch-with-cli = true`）拉 **ghfast.top** ——
+  等于把 CI 挂在一个不受我们控制、且上游没有的代理上。上游 CI 绿，差距就在这一段。
+- **摘除后**：`Cargo.lock` 的 source 回到
+  `git+https://github.com/HakanSeven12/opencadcodec.git?rev=ad16215#ad16215faa2b625d52346bdb1f147596567f70f7`
+  （rev/commit 不变；`grep -c ghfast Cargo.lock` = **0**）。
+- **本机加速不受影响**：`~/.gitconfig` 的
+  `url.https://ghfast.top/https://github.com/.insteadof = https://github.com/`（与 `git@github.com:`）
+  在 fetch 时改写官方 URL ⇒ 实际仍走镜像。取证：
+  `GIT_TRACE=1 git ls-remote https://github.com/HakanSeven12/opencadcodec.git` 会打印
+  `git-remote-https … https://ghfast.top/https://github.com/…`。**这是本机配置，不进仓库。**
+- **同步规则（改后）**：上游升 codec rev 时，只改根 `Cargo.toml` /
+  `crates/ocs_plugin_api/Cargo.toml` / `crates/ocs_web_worker/Cargo.toml` 的 `rev` 与 `Cargo.lock`，
+  **不要把镜像 URL 写回仓库**。
 - **2026-09-21（v2026.38）：rev `8a28c21` → `5b682ed`**（acadrust 0.5.5，上游这次升了 30 个提交，
   内容以 DWG/DXF IO 修复为主）。三处一起升：根 `Cargo.toml`、`[patch]` 镜像段、`Cargo.lock` 的 source 行
   （`ghfast.top…?rev=5b682ed#5b682ed66ea2c89be8142c8dd83d83774fc3de08`）。**副作用**：`EntityCommon` 新增

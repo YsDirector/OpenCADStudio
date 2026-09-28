@@ -1460,6 +1460,14 @@ impl OpenCADStudio {
             }
 
             // ── OCSMechanical frame picker ─────────────────────────────────
+            //
+            // Desktop-only as a block: the picker's state (and the
+            // `FrameItem`/`FrameSelection` types it carries) comes from
+            // `ocs_plugin_api::host`, which the web build never compiles — there is
+            // no plugin host on wasm, so nothing can open the modal or emit these
+            // messages. The single combined arm at the end of the block keeps the
+            // `Message` match exhaustive on wasm.
+            #[cfg(not(target_arch = "wasm32"))]
             Message::OcsmFramePickerSelect(idx) => {
                 if let Some(state) = self.ocsm_frame_picker.as_mut() {
                     if idx < state.frames.len() {
@@ -1469,6 +1477,7 @@ impl OpenCADStudio {
                 }
                 Task::none()
             }
+            #[cfg(not(target_arch = "wasm32"))]
             Message::OcsmFramePickerScaleV1(value) => {
                 if let Some(state) = self.ocsm_frame_picker.as_mut() {
                     state.scale_v1 = value;
@@ -1476,6 +1485,7 @@ impl OpenCADStudio {
                 }
                 Task::none()
             }
+            #[cfg(not(target_arch = "wasm32"))]
             Message::OcsmFramePickerScaleV2(value) => {
                 if let Some(state) = self.ocsm_frame_picker.as_mut() {
                     state.scale_v2 = value;
@@ -1483,6 +1493,7 @@ impl OpenCADStudio {
                 }
                 Task::none()
             }
+            #[cfg(not(target_arch = "wasm32"))]
             Message::OcsmFramePickerOk => {
                 let mut do_close = false;
                 if let Some(state) = self.ocsm_frame_picker.as_mut() {
@@ -1518,13 +1529,14 @@ impl OpenCADStudio {
                 }
                 Task::none()
             }
+            #[cfg(not(target_arch = "wasm32"))]
             Message::OcsmFramePickerCancel => {
                 self.ocsm_frame_picker = None;
                 self.active_modal = None;
                 Task::none()
             }
+            #[cfg(not(target_arch = "wasm32"))]
             Message::OcsmFramePickerOpenDir => {
-                #[cfg(not(target_arch = "wasm32"))]
                 {
                     // frame 文件都在同一目录：取第一个图框的父目录。
                     let dir = self
@@ -1548,12 +1560,15 @@ impl OpenCADStudio {
                             .push_error("没有已加载的图框文件。"),
                     }
                 }
-                #[cfg(target_arch = "wasm32")]
-                {
-                    let _ = self;
-                }
                 Task::none()
             }
+            #[cfg(target_arch = "wasm32")]
+            Message::OcsmFramePickerSelect(_)
+            | Message::OcsmFramePickerScaleV1(_)
+            | Message::OcsmFramePickerScaleV2(_)
+            | Message::OcsmFramePickerOk
+            | Message::OcsmFramePickerCancel
+            | Message::OcsmFramePickerOpenDir => Task::none(),
 
             Message::WblockSave(block_name) => {
                 let name = block_name.clone();

@@ -375,6 +375,11 @@ pub struct PiPanelState {
     pub selection_label: String,
     /// Selection fingerprint the label was computed from (skip per-frame
     /// rescans while the selection is unchanged).
+    ///
+    /// Desktop-only, following `scene::selection::selection_fingerprint` itself:
+    /// the web build has no plugin host to amortise against, so it recomputes
+    /// the label every poll instead (`app::update::pi`).
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) selection_fingerprint: u64,
     /// Expand flags for *live* blocks (streaming thinking), keyed by block id
     /// — they don't exist as entries yet.
@@ -419,6 +424,7 @@ impl Default for PiPanelState {
             pending_image: None,
             pending_image_size: None,
             selection_label: String::new(),
+            #[cfg(not(target_arch = "wasm32"))]
             selection_fingerprint: 0,
             live_expanded: HashSet::new(),
             next_id: 0,

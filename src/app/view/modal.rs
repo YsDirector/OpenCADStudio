@@ -690,6 +690,12 @@ impl OpenCADStudio {
             }
             // OCSM 图框插入：图框列表 + 比例（值1:值2）输入。确定后由 update
             // 处理把选择存到 ocsm_pending_frame_selection 并回调插件命令。
+            //
+            // 桌面专属：这个模态只由**进程外插件宿主**打开（`ocsm_frame_picker`
+            // 只在 `app::plugin_host` 里赋值），而列表类型
+            // `ocs_plugin_api::host::FrameItem` 属 `host` feature。web 侧给一个空
+            // 模态占位，保证 `ModalKind` 的 match 在 wasm 上仍然穷尽。
+            #[cfg(not(target_arch = "wasm32"))]
             super::super::ModalKind::OcsmFramePicker => automatic_flow(ex, |_flow| {
                 use iced::widget::text_input;
                 let frames: &[ocs_plugin_api::host::FrameItem] = self
@@ -762,6 +768,10 @@ impl OpenCADStudio {
                 );
                 container(col.spacing(8).padding(16)).into()
             }),
+            #[cfg(target_arch = "wasm32")]
+            super::super::ModalKind::OcsmFramePicker => {
+                automatic_flow(ex, |_flow| Space::new().into())
+            }
             super::super::ModalKind::AnnoObjectScale => {
                 let tab = &self.tabs[self.active_tab];
                 let entity = self.anno_object_scale_target;

@@ -6,7 +6,7 @@
 //! cargo run -q -p ocs_plugin_api --features host --example marker_survey -- <库根> [max]
 //! ```
 
-#[path = "proxy_decode.rs"]
+#[path = "kit/proxy_decode.rs"]
 mod dec;
 
 use dec::Prim;

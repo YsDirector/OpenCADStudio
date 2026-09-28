@@ -1915,12 +1915,21 @@ pub fn panel_title() -> &'static str {
 /// Backend modes the panel can run in, in the order the picker shows them.
 pub const BACKEND_MODES: [&str; 3] = ["auto", "web", "rpc"];
 
+/// Web build: there is no per-user config directory
+/// (`crate::config::config_dir` is desktop-only) and no local `pi` CLI to talk
+/// to, so no backend mode is remembered — the panel uses its default.
+#[cfg(target_arch = "wasm32")]
+pub fn backend_mode_path() -> Option<std::path::PathBuf> {
+    None
+}
+
 /// File the chosen backend mode is remembered in (`~/.config/OpenCADStudio/`).
 ///
 /// Deliberately a file of its own rather than a key in the consolidated
 /// `settings.json`: the whole Pi panel is a fork-local extension, so its
 /// preference should not widen the shared config surface (and its conflict
 /// surface on upstream syncs — see `docs/fork-patches.md`).
+#[cfg(not(target_arch = "wasm32"))]
 pub fn backend_mode_path() -> Option<std::path::PathBuf> {
     Some(crate::config::config_dir()?.join("pi-panel-backend.txt"))
 }

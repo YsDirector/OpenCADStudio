@@ -95,16 +95,14 @@ objc2-foundation = { version = "0.2", features = ["NSArray", "NSURL", "NSString"
 iced_core = { git = "https://github.com/iced-rs/iced.git", rev = "23604ff22ab0aad9e00b9327cb7b8546ed84db39" }
 iced_widget = { git = "https://github.com/iced-rs/iced.git", rev = "23604ff22ab0aad9e00b9327cb7b8546ed84db39" }
 
-# fork 镜像 pin：上游只带官方 URL + 自己的 rev，这里把同一 rev 指到 ghfast 镜像
-# （配合全局 git insteadOf 与 `[net] git-fetch-with-cli = true`）。
-# 同步规则：**上游升 rev 时跟着升**，但 URL 必须保持镜像；`Cargo.lock` 里 opencadcodec 的
-# source 应显示 ghfast.top（不是 github.com）。
-# 2026-09-28：上游把 cadcodec 仓库改名 opencadcodec、依赖别名由 `acadrust` 改为 `codec`
-# —— patch 的键跟包名，URL 跟仓库新名，rev 跟上游。
-# 2026-09-28 二轮同步（上游 1bbdce31）：rev 42b44d2 → ad16215（上游同批还升了
-# kernel 237827e、graph fe36957，那两个没有镜像 patch，锁文件里即官方 URL）。
-[patch."https://github.com/HakanSeven12/opencadcodec.git"]
-opencadcodec = { git = "https://ghfast.top/https://github.com/HakanSeven12/opencadcodec.git", rev = "ad16215" }
+# opencadcodec 的镜像 `[patch]` 段已于 2026-09-28 **摘除**（台账见 docs/fork-patches.md §2 A-2）。
+# 它曾把上游的官方 URL 指到 ghfast 代理，好让本机拉得快；代价是 `Cargo.lock` 里 codec 的
+# source 变成第三方代理 URL，于是 CI（GitHub runner）的 `--locked` 也要去拉这个不受我们控制的
+# 代理 —— 上游没有这段，等于把 CI 挂在一个额外依赖上。
+# 本机加速现在**只靠全局 git insteadOf**（`url.https://ghfast.top/https://github.com/.insteadof`
+# = `https://github.com/`，配 `[net] git-fetch-with-cli = true`）：照样走镜像，而锁文件里是官方
+# URL，CI 与上游同形。**不要再把镜像 URL 写回这个文件。**
+# 同步规则不变：上游升 rev 时，根 `Cargo.toml` / `ocs_plugin_api` / `ocs_web_worker` / 锁文件一起升。
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 getrandom = "0.3"
 ocs_plugin_api = { path = "crates/ocs_plugin_api", features = ["host"] }
