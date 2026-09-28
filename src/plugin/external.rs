@@ -233,6 +233,9 @@ fn discover_root(root: &Path, bundled: bool, found: &mut BTreeMap<String, Extern
         if !dir.is_dir() {
             continue;
         }
+        if entry.file_name().to_str().is_some_and(is_backup_dir_name) {
+            continue;
+        }
         let toml_path = dir.join("plugin.toml");
         let Ok(text) = std::fs::read_to_string(&toml_path) else {
             continue;
@@ -261,6 +264,24 @@ fn lib_present_in(dir: &std::path::Path) -> bool {
                 .any(|e| e.path().extension().and_then(|s| s.to_str()) == Some(ext))
         })
         .unwrap_or(false)
+}
+
+/// Backup copies kept next to the live package (`opencad.ocsm.bak` /
+/// `opencad.ocsm.bak-20260928-235036` — the convention used by this repo's
+/// deploy tools). A full-directory backup carries the **same** `plugin.toml`
+/// id as the live package, so discovering it makes the `BTreeMap` key collide:
+/// `read_dir` order decides the winner, and a stale copy can shadow the real
+/// one (it then dies on the opencadcodec / rustc gate with “Plugin built for
+/// …”). Skip them by name; only the `.bak` / `.bak-<digits-and-dashes>` shape
+/// counts, so a package legitimately named e.g. `foo.notes` stays visible.
+fn is_backup_dir_name(name: &str) -> bool {
+    let Some((_, tail)) = name.rsplit_once(".bak") else {
+        return false;
+    };
+    tail.is_empty()
+        || (tail.starts_with('-')
+            && tail.len() > 1
+            && tail[1..].chars().all(|c| c.is_ascii_digit() || c == '-'))
 }
 
 /// Minimal `plugin.toml` reader for the documented `[plugin]` / `[opencad]`
@@ -603,6 +624,45 @@ xdata_apps = ["MYPLUGIN_RECORD"]
         assert_eq!(overridden.len(), 1);
         assert!(!overridden[0].bundled);
         assert_eq!(overridden[0].version, "user");
+        std::fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn discovery_skips_backup_directories() {
+        assert!(is_backup_dir_name("opencad.ocsm.bak-20260928-235036"));
+        assert!(is_backup_dir_name("opencad.ocsm.bak"));
+        assert!(!is_backup_dir_name("opencad.ocsm"));
+        assert!(!is_backup_dir_name("opencad.notes"));
+        assert!(!is_backup_dir_name("opencad.bakery"));
+
+        let base = std::env::temp_dir().join(format!(
+            "ocs-plugin-backup-discovery-{}",
+            std::process::id()
+        ));
+        let live = base.join("opencad.ocsm");
+        let backup = base.join("opencad.ocsm.bak-20260928-235036");
+        let other = base.join("opencad.notes");
+        let manifest = |id: &str, version: &str| {
+            format!("[plugin]\nid=\"{id}\"\nversion=\"{version}\"\n[opencad]\napi_version=5\n")
+        };
+        for (dir, text) in [
+            (&live, manifest("opencad.ocsm", "live")),
+            // 备份目录：同一 id + 旧版本 —— 不该参与发现（否则 read_dir 顺序决定谁赢）。
+            (&backup, manifest("opencad.ocsm", "backup")),
+            (&other, manifest("opencad.notes", "other")),
+        ] {
+            std::fs::create_dir_all(dir).unwrap();
+            std::fs::write(dir.join("plugin.toml"), text).unwrap();
+            std::fs::write(dir.join(format!("plugin.{}", lib_extension())), b"fixture").unwrap();
+        }
+        let found = discover_from_roots(None, Some(&base));
+        let by_id: std::collections::BTreeMap<_, _> =
+            found.iter().map(|p| (p.id.as_str(), p)).collect();
+        assert_eq!(found.len(), 2, "备份目录不该被发现：{found:?}");
+        assert!(by_id.contains_key("opencad.notes"), "正常目录不该被误伤");
+        let livep = by_id.get("opencad.ocsm").expect("实时插件包要被发现");
+        assert_eq!(livep.version, "live", "备份目录不能赢同名 id 碰撞");
+        assert_eq!(livep.dir, live);
         std::fs::remove_dir_all(base).unwrap();
     }
 
