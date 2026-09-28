@@ -2262,6 +2262,57 @@ common =
     .row-s-skipped-duplicate-parameter-name = __ocs_fmt_0__ row(s) skipped: duplicate parameter name.
     .surface-s-cannot-be-thickened-because-the-offset-intersects-itself = __ocs_fmt_0__ surface(s) cannot be thickened because the offset intersects itself.
     .conflicting = ⚠ __ocs_fmt_0__ conflicting
+    .allow-exploding = Salli hajottaminen
+    .angstroms = Ångströmit
+    .astronomical-units = Astronomiset yksiköt
+    .behavior = Toiminta
+    .block-already-exists-will-redefine-upon-ok = Lohko "__ocs_fmt_0__" on jo olemassa — määritetään uudelleen valitsemalla OK
+    .block-creates-a-block-definition-from-objects-you-select = BLOCK luo lohkomäärityksen valitsemistasi kohteista.
+    .block-definition = Lohkon määritys
+    .block-name = Lohkon nimi
+    .block-name-already-exists-do-you-want-to-redefine-it =
+        Lohko "__ocs_fmt_0__" on jo olemassa.
+        Haluatko määrittää sen uudelleen?
+    .block-name-cannot-be-empty = Lohkon nimi ei voi olla tyhjä.
+    .block-name-cannot-contain-invalid-chars = Lohkon nimi ei saa sisältää merkkejä: \ / : * ? " < > | = `
+    .block-name-cannot-start-with-star = Lohkon nimi ei voi alkaa merkillä '*'.
+    .block-unit-label = Lohkoyksikkö:
+    .convert-to-block = Muunna lohkoksi
+    .count-objects-selected = __ocs_fmt_0__ kohdetta valittu
+    .decameters = Dekametrit
+    .decimeters = Desimetrit
+    .enter-block-description = Kirjoita lohkon kuvaus...
+    .gigameters = Gigametrit
+    .hectometers = Hehtometrit
+    .hyperlink-ellipsis = Hyperlinkki...
+    .hyperlink-star = Hyperlinkki*
+    .invalid-character-in-block-name = Virheellinen merkki '__ocs_fmt_0__' lohkon nimessä (merkit \ / : * ? " < > | = ` eivät ole sallittuja)
+    .light-years = Valovuodet
+    .match-block-orientation = Sovita lohkon suuntaus
+    .microinches = Mikrotuumat
+    .microns = Mikronit
+    .mils = Milsit
+    .nanometers = Nanometrit
+    .no-objects-selected = Ei kohteita valittuna
+    .no-objects-selected-you-must-select-objects-to-define-a-block = Kohteita ei ole valittu. Sinun on valittava kohteet lohkon määrittämiseksi.
+    .objects-title-case = Kohteet
+    .parsecs = Parsekit
+    .pick-point = Valitse piste
+    .retain = Säilytä
+    .scale-uniformly = Skaalaa tasaisesti
+    .specify-on-screen = Määritä näytöltä
+    .to-layout = asetteluun
+    .us-survey-feet = US Survey -jalat
+    .entire-drawing = Koko piirustus
+    .delete-from-drawing = Poista piirustuksesta
+    .destination = Kohde
+    .file-name-and-path = Tiedoston nimi ja polku:
+    .insert-units-label = Lisäysyksiköt:
+    .wblock-err-no-block-name = Valitse tai anna lohkon nimi.
+    .wblock-err-block-not-found = Lohkoa "__ocs_fmt_0__" ei ole piirustuksessa.
+    .wblock-err-no-path = Määritä tiedoston nimi ja polku.
+    .wblock-err-current-drawing = Nykyiseen piirustustiedostoon ei voi kirjoittaa.
+    .wblock-help-info = WBLOCK kirjoittaa kohteet, lohkon tai koko piirustuksen uuteen piirustustiedostoon.
 errors =
     .save-warning = Tallenna varoitus
     .unable-to-save-drawing = Piirustusta ei voi tallentaa
@@ -3456,6 +3507,109 @@ annotate =
     .tolerance-specify-insertion-point = TOLERANCE Määritä lisäyskohta:
 
 insert =
+    .pdfui-pdf-scale = PDF scale: __ocs_fmt_0__:1
+    .pdfui-specify-insertion-point = Specify insertion point:
+    .pdfui-no-pdf-underlays = No PDF underlays found.
+    .pdfui-imports-the-geometry-fills-raster-images-and-text-of-a-pdf-f = Imports the geometry, fills, raster images and text of a PDF file as drawing objects.
+    .pdfui-turns-the-layers-of-a-pdf-underlay-on-or-off = Turns the layers of a PDF underlay on or off.
+    .pdfui-attaches-a-pdf-file-as-an-underlay = Attaches a PDF file as an underlay.
+    .pdfui-rotation = Rotation:
+    .pdfui-scale = Scale:
+    .pdfui-specify-insertion-point-on-screen = Specify insertion point on-screen
+    .pdfui-page-size-size = Page size: __ocs_fmt_0__
+    .pdfui-total-count = Total: __ocs_fmt_0__
+    .pdfui-pages = Pages
+    .pdfui-placement = Placement
+    .pdfui-on-screen = On screen
+    .pdfui-file-details = File details
+    .pdfui-page-count = __ocs_fmt_0__ pages
+    .pdfui-selected-pages = Selected pages: __ocs_fmt_0__
+    .pdfui-layer-summary = __ocs_fmt_0__ layers, __ocs_fmt_1__ hidden
+    .pdfui-page = Page:
+    .pdfui-page-to-import = Page to import
+    .pdfui-infer-linetypes-from-collinear-dashes = Infer linetypes from collinear dashes
+    .pdfui-apply-lineweight-properties = Apply lineweight properties
+    .pdfui-convert-solid-fills-to-hatches = Convert solid fills to hatches
+    .pdfui-join-line-and-arc-segments = Join line and arc segments
+    .pdfui-import-as-block = Import as block
+    .pdfui-import-options = Import options
+    .pdfui-create-object-layers = Create object layers
+    .pdfui-use-pdf-layers = Use PDF layers
+    .pdfui-raster-images = Raster images
+    .pdfui-truetype-text = TrueType text
+    .pdfui-solid-fills = Solid fills
+    .pdfui-vector-geometry = Vector geometry
+    .pdfui-pdf-data-to-import = PDF data to import
+    .pdfui-select-an-underlay-to-view-its-layers = Select an underlay to view its layers.
+    .pdfui-this-file-does-not-contain-any-layers = This file does not contain any layers.
+    .pdfui-search-for-layer = Search for layer
+    .pdfui-reference-name = Reference name:
+    .pdfui-page-size = Page size:
+    .pdfui-select-one-or-more-pages-from-the-pdf-file = Select one or more pages from the PDF file:
+    .pdfui-import-pdf = Import PDF
+    .pdfui-pdf-import-settings = PDF Import Settings
+    .pdfui-underlay-layers = Underlay Layers
+    .pdfui-attach-pdf-underlay = Attach PDF Underlay
+    .pdfui-pdf-import = PDF Import
+    .pdfui-pdf-layers = PDF Layers
+    .pdfui-import-as-objects =
+        Import As
+        Objects
+    .pdfui-edit-layers =
+        Edit
+        Layers
+    .pdfui-external-references =
+        External
+        References
+    .pdfui-enable-snap =
+        Enable
+        Snap
+    .pdfui-show-underlay =
+        Show
+        Underlay
+    .pdfui-remove-clipping =
+        Remove
+        Clipping
+    .pdfui-create-clipping-boundary =
+        Create Clipping
+        Boundary
+    .pdfui-display-in-monochrome =
+        Display in
+        Monochrome
+    .select-pdf-file = Select PDF File
+    .refui-requires-int-90 = Requires an integer between -90 and 90.
+    .refui-xref-fading = Xref fading
+    .refui-edit-reference = Edit Reference
+    .refui-edit-reference-in-place =
+        Edit Reference
+        In-Place
+    .refui-open-reference =
+        Open
+        Reference
+    .refui-snap-to-underlays-off = Snap to Underlays OFF
+    .refui-snap-to-underlays-on = Snap to Underlays ON
+    .refui-snap-to-underlays = Snap to Underlays
+    .xref-attach-dialog-title = Attach External Reference
+    .xref-attach-browse = Browse...
+    .xref-attach-reference-type = Reference Type
+    .xref-attach-uniform-scale = Uniform Scale
+    .xref-attach-insertion-point = Insertion point
+    .xref-attach-angle = Angle:
+    .xref-attach-block-unit = Block Unit
+    .xref-attach-unit = Unit:
+    .xref-attach-factor = Factor:
+    .xref-attach-found-in = Found in:
+    .xref-attach-saved-path = Saved path:
+    .xref-attach-show-details = Show Details
+    .xref-attach-hide-details = Hide Details
+    .xref-attach-select-file = Select Reference File
+    .xref-attach-all-files = All Reference Files
+    .xref-attach-help = Inserts references to external files such as other drawings, raster images, and underlays.
+    .xref-attach-invalid-input = Invalid input.
+    .xref-insertion-point-x = Insertion point X
+    .xref-insertion-point-y = Insertion point Y
+    .xref-insertion-point-z = Insertion point Z
+    .xref-layer-property-overrides = Layer property overrides
     .point-clouds =
         Point
         Pilviä
@@ -3747,6 +3901,9 @@ insert =
     .xattach-specify-scale-factor-1-0-x-y-z-or-pick-corner = XATTACH  Specify scale factor <1.0> (X,Y,Z or pick Corner):
     .xopen-opening = XOPEN: opening "__ocs_fmt_0__".
     .xref = XREF: __ocs_fmt_0__
+    .block-select-objects = BLOCK  Valitse kohteet:
+    .block-specify-insertion-base-point = BLOCK  Määritä sijoituksen peruspiste:
+    .wblock-specify-insertion-base-point = WBLOCK  Määritä lisäyksen peruspiste:
 model =
     .create = Luo
     .boolean = Boolen operaatiot
@@ -4202,6 +4359,12 @@ view =
     .ucs-specify-point-in-positive-xy-plane = UCS  { common.specify }: XY · { common.positive-direction } · { common.point }:
 
 properties =
+    .applied = Applied
+    .pdf-underlay = PDF Underlay
+    .dwf-underlay = DWF Underlay
+    .dgn-underlay = DGN Underlay
+    .page-number = Page number
+    .layer-display-overrides = Layer display overrides
     .arrowhead-size = Nuolenkärjen koko
     .attachment = Liitos
     .chord = Jänne

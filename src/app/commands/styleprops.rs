@@ -10,6 +10,8 @@ impl OpenCADStudio {
             "FRAMES0" => return self.dispatch_styleprops("SETVAR FRAME 0", i),
             "FRAMES1" => return self.dispatch_styleprops("SETVAR FRAME 1", i),
             "FRAMES2" => return self.dispatch_styleprops("SETVAR FRAME 2", i),
+            "UOSNAP0" => return self.dispatch_styleprops("SETVAR UOSNAP 0", i),
+            "UOSNAP1" => return self.dispatch_styleprops("SETVAR UOSNAP 1", i),
             // COLOR <ByLayer|ByBlock|1-255|name> — the colour applied to new
             // objects (CECOLOR). Bare COLOR reports the current value.
             "COLOR" | "COLOUR" | "CECOLOR" | "DDCOLOR" => {
@@ -29,7 +31,7 @@ impl OpenCADStudio {
                 || cmd.starts_with("CECOLOR ")
                 || cmd.starts_with("DDCOLOR ") =>
             {
-                use acadrust::types::Color;
+                use codec::types::Color;
                 let describe = |c: &Color| match c {
                     Color::ByLayer => "ByLayer".to_string(),
                     Color::ByBlock => "ByBlock".to_string(),
@@ -117,9 +119,9 @@ impl OpenCADStudio {
                                 .push_info(crate::t!("Usage: LINETYPE SET <name | ByLayer | ByBlock>").as_ref());
                         } else {
                             let canon = if name.eq_ignore_ascii_case("BYLAYER") {
-                                Some(("ByLayer".to_string(), acadrust::types::Handle::NULL))
+                                Some(("ByLayer".to_string(), codec::types::Handle::NULL))
                             } else if name.eq_ignore_ascii_case("BYBLOCK") {
-                                Some(("ByBlock".to_string(), acadrust::types::Handle::NULL))
+                                Some(("ByBlock".to_string(), codec::types::Handle::NULL))
                             } else {
                                 self.tabs[i]
                                     .scene
@@ -220,12 +222,12 @@ impl OpenCADStudio {
                         .document
                         .entities()
                         .filter_map(|e| match e {
-                            acadrust::EntityType::Text(t) => Some(t.style.clone()),
-                            acadrust::EntityType::MText(t) => Some(t.style.clone()),
-                            acadrust::EntityType::AttributeDefinition(a) => {
+                            codec::EntityType::Text(t) => Some(t.style.clone()),
+                            codec::EntityType::MText(t) => Some(t.style.clone()),
+                            codec::EntityType::AttributeDefinition(a) => {
                                 Some(a.text_style.clone())
                             }
-                            acadrust::EntityType::AttributeEntity(a) => {
+                            codec::EntityType::AttributeEntity(a) => {
                                 Some(a.text_style.clone())
                             }
                             _ => None,
@@ -269,13 +271,13 @@ impl OpenCADStudio {
                     // through the shared graph. Dangling layouts do not count.
                     let live_blocks: rustc_hash::FxHashSet<String> = {
                         let doc = &self.tabs[i].scene.document;
-                        let is_real_layout = |br: &acadrust::BlockRecord| -> bool {
+                        let is_real_layout = |br: &codec::BlockRecord| -> bool {
                             let up = br.name.to_ascii_uppercase();
                             up.starts_with("*MODEL_SPACE")
                                 || up.starts_with("*PAPER_SPACE")
                                 || matches!(
                                     doc.objects.get(&br.layout),
-                                    Some(acadrust::objects::ObjectType::Layout(_))
+                                    Some(codec::objects::ObjectType::Layout(_))
                                 )
                         };
                         let children = |name: &str| -> Vec<String> {
@@ -446,20 +448,20 @@ impl OpenCADStudio {
                 // Remove draw-order tables whose owning blocks are gone.
                 let mut n_sortents = 0usize;
                 if do_blocks {
-                    let live_blocks: rustc_hash::FxHashSet<acadrust::Handle> = self.tabs[i]
+                    let live_blocks: rustc_hash::FxHashSet<codec::Handle> = self.tabs[i]
                         .scene
                         .document
                         .block_records
                         .iter()
                         .map(|br| br.handle)
                         .collect();
-                    let orphans: Vec<acadrust::Handle> = self.tabs[i]
+                    let orphans: Vec<codec::Handle> = self.tabs[i]
                         .scene
                         .document
                         .objects
                         .iter()
                         .filter_map(|(h, o)| match o {
-                            acadrust::objects::ObjectType::SortEntitiesTable(s)
+                            codec::objects::ObjectType::SortEntitiesTable(s)
                                 if !live_blocks.contains(&s.block_owner_handle) =>
                             {
                                 Some(*h)
@@ -558,11 +560,11 @@ impl OpenCADStudio {
                             .push_error(crate::t!("CHPROP: no entities selected.").as_ref());
                     } else {
                         // Validate value early to give clear errors
-                        let color_val: Option<acadrust::types::Color> = if prop == "COLOR" {
+                        let color_val: Option<codec::types::Color> = if prop == "COLOR" {
                             value
                                 .parse::<i16>()
                                 .ok()
-                                .map(acadrust::types::Color::from_index)
+                                .map(codec::types::Color::from_index)
                         } else {
                             None
                         };
@@ -571,12 +573,12 @@ impl OpenCADStudio {
                         } else {
                             None
                         };
-                        let transparency_val: Option<acadrust::types::Transparency> =
+                        let transparency_val: Option<codec::types::Transparency> =
                             if prop == "TRANSPARENCY" {
                                 value
                                     .parse::<f64>()
                                     .ok()
-                                    .map(acadrust::types::Transparency::from_percent)
+                                    .map(codec::types::Transparency::from_percent)
                             } else {
                                 None
                             };
@@ -686,7 +688,7 @@ impl OpenCADStudio {
                     let mut index = 0;
                     while index < handles.len() {
                         let children = match self.tabs[i].scene.document.get_entity(handles[index]) {
-                            Some(acadrust::EntityType::Insert(insert)) => self.tabs[i].scene.document
+                            Some(codec::EntityType::Insert(insert)) => self.tabs[i].scene.document
                                 .block_records.get(&insert.block_name)
                                 .map(|block| block.entity_handles.clone()).unwrap_or_default(),
                             _ => Vec::new(),
@@ -783,60 +785,60 @@ impl OpenCADStudio {
                                 removed.insert(candidates[b].0);progress=true;continue;
                             }
                             if overlap {
-                                let contained = |circle: &acadrust::entities::Circle, arc: &acadrust::entities::Arc| {
+                                let contained = |circle: &codec::entities::Circle, arc: &codec::entities::Arc| {
                                     circle.common == arc.common && circle.thickness == arc.thickness
-                                        && cadkernel::space::arc_union::circle_contains_arc(
+                                        && kernel::space::arc_union::circle_contains_arc(
                                             [circle.center.x,circle.center.y,circle.center.z],
                                             [circle.normal.x,circle.normal.y,circle.normal.z],circle.radius,
-                                            cadkernel::space::arc_union::CircularArc { center:[arc.center.x,arc.center.y,arc.center.z],
+                                            kernel::space::arc_union::CircularArc { center:[arc.center.x,arc.center.y,arc.center.z],
                                                 normal:[arc.normal.x,arc.normal.y,arc.normal.z],radius:arc.radius,start:arc.start_angle,end:arc.end_angle })
                                 };
                                 match (&left,&right) {
-                                    (acadrust::EntityType::Circle(circle),acadrust::EntityType::Arc(arc)) if contained(circle,arc) => {
+                                    (codec::EntityType::Circle(circle),codec::EntityType::Arc(arc)) if contained(circle,arc) => {
                                         removed.insert(candidates[b].0);progress=true;continue;
                                     }
-                                    (acadrust::EntityType::Arc(arc),acadrust::EntityType::Circle(circle)) if contained(circle,arc) => {
+                                    (codec::EntityType::Arc(arc),codec::EntityType::Circle(circle)) if contained(circle,arc) => {
                                         removed.insert(candidates[a].0);progress=true;break;
                                     }
                                     _ => {},
                                 }
                             }
-                            if let (acadrust::EntityType::Arc(l),acadrust::EntityType::Arc(r))=(&left,&right) {
-                                use cadkernel::space::arc_union::{CircularArc,ArcUnionKind,circular_arc_union};
+                            if let (codec::EntityType::Arc(l),codec::EntityType::Arc(r))=(&left,&right) {
+                                use kernel::space::arc_union::{CircularArc,ArcUnionKind,circular_arc_union};
                                 if l.common!=r.common || l.thickness!=r.thickness {continue;}
-                                let arc=|v:&acadrust::entities::Arc|CircularArc{center:[v.center.x,v.center.y,v.center.z],normal:[v.normal.x,v.normal.y,v.normal.z],radius:v.radius,start:v.start_angle,end:v.end_angle};
+                                let arc=|v:&codec::entities::Arc|CircularArc{center:[v.center.x,v.center.y,v.center.z],normal:[v.normal.x,v.normal.y,v.normal.z],radius:v.radius,start:v.start_angle,end:v.end_angle};
                                 let Some(union)=circular_arc_union(arc(l),arc(r),tolerance) else {continue;};
                                 let allowed=match union.kind {ArcUnionKind::Duplicate=>true,ArcUnionKind::Overlap=>overlap,ArcUnionKind::EndToEnd=>end_to_end};
                                 if !allowed {continue;}
-                                if let acadrust::EntityType::Arc(source)=&candidates[a].1 {
+                                if let codec::EntityType::Arc(source)=&candidates[a].1 {
                                     let replacement=if union.full_circle {
-                                        let mut circle=acadrust::entities::Circle::new();
+                                        let mut circle=codec::entities::Circle::new();
                                         circle.common=source.common.clone();circle.center=source.center.clone();circle.normal=source.normal.clone();circle.radius=source.radius;circle.thickness=source.thickness;
-                                        acadrust::EntityType::Circle(circle)
+                                        codec::EntityType::Circle(circle)
                                     } else {
-                                        let mut arc=source.clone();arc.start_angle=union.start;arc.end_angle=union.end;acadrust::EntityType::Arc(arc)
+                                        let mut arc=source.clone();arc.start_angle=union.start;arc.end_angle=union.end;codec::EntityType::Arc(arc)
                                     };
                                     candidates[a].1=replacement;
                                 }
                                 changed.insert(candidates[a].0);removed.insert(candidates[b].0);progress=true;
                                 continue;
                             }
-                            let (acadrust::EntityType::Line(l),acadrust::EntityType::Line(r))=(&left,&right)
+                            let (codec::EntityType::Line(l),codec::EntityType::Line(r))=(&left,&right)
                                 else {continue;};
                             if l.common!=r.common||l.thickness!=r.thickness||l.normal!=r.normal {continue;}
-                            let point=|p:acadrust::types::Vector3|[p.x,p.y,p.z];
-                            let Some(union)=cadkernel::space::line_union(
+                            let point=|p:codec::types::Vector3|[p.x,p.y,p.z];
+                            let Some(union)=kernel::space::line_union(
                                 [point(l.start),point(l.end)],[point(r.start),point(r.end)],tolerance)
                                 else {continue;};
                             let allowed=match union.kind {
-                                cadkernel::space::LineUnionKind::Duplicate=>true,
-                                cadkernel::space::LineUnionKind::Overlap=>overlap,
-                                cadkernel::space::LineUnionKind::EndToEnd=>end_to_end,
+                                kernel::space::LineUnionKind::Duplicate=>true,
+                                kernel::space::LineUnionKind::Overlap=>overlap,
+                                kernel::space::LineUnionKind::EndToEnd=>end_to_end,
                             };
                             if !allowed {continue;}
-                            if let acadrust::EntityType::Line(line)=&mut candidates[a].1 {
-                                line.start=acadrust::types::Vector3::new(union.start[0],union.start[1],union.start[2]);
-                                line.end=acadrust::types::Vector3::new(union.end[0],union.end[1],union.end[2]);
+                            if let codec::EntityType::Line(line)=&mut candidates[a].1 {
+                                line.start=codec::types::Vector3::new(union.start[0],union.start[1],union.start[2]);
+                                line.end=codec::types::Vector3::new(union.end[0],union.end[1],union.end[2]);
                             }
                             changed.insert(candidates[a].0);removed.insert(candidates[b].0);progress=true;
                         }
@@ -1015,6 +1017,13 @@ impl OpenCADStudio {
                     | "FRAME"
                     | "IMAGEFRAME"
                     | "PDFFRAME"
+                    | "PDFOSNAP"
+                    | "UOSNAP"
+                    | "PDFIMPORTMODE"
+                    | "PDFIMPORTFILTER"
+                    | "PDFIMPORTLAYERS"
+                    | "PDFIMPORTIMAGEPATH"
+                    | "XDWGFADECTL"
                     | "POINTCLOUDCLIPFRAME"
                     | "XCLIPFRAME"
                     | "WIPEOUTFRAME"
@@ -1052,6 +1061,9 @@ impl OpenCADStudio {
                     | "CONSTRAINTINFER"
                     | "CONSTRAINTBARDISPLAY"
                     | "CONSTRAINTBARMODE"
+                    | "CONSTRAINTNAMEFORMAT"
+                    | "DYNCONSTRAINTDISPLAY"
+                    | "CCONSTRAINTFORM"
             ) =>
             {
                 return self.dispatch_styleprops(&format!("SETVAR {cmd}"), i);
@@ -1075,9 +1087,22 @@ impl OpenCADStudio {
                 if name.is_empty() || name == "?" {
                     self.command_line.push_info(&super::plotvars::setvar_listing());
                     self.command_line.push_info(
-                        crate::t!("SETVAR: CETRANSPARENCY LTSCALE CELTSCALE PDMODE PDSIZE TEXTSIZE ORTHOMODE FILLMODE MIRRTEXT FRAME IMAGEFRAME PDFFRAME WIPEOUTFRAME XCLIPFRAME POINTCLOUDCLIPFRAME ZOOMWHEEL ZOOMFACTOR SHORTCUTMENU SHORTCUTMENUDURATION CURSORSIZE PICKBOX CURSORTYPE SNAPANG TEXTFILL CLIPROMPTLINES COMMANDLINEFADETIME ATTREQ ATTDIA DIMASSOC DIMCONTINUEMODE CONSTRAINTSOLVEMODE CONSTRAINTINFER CONSTRAINTBARDISPLAY CONSTRAINTBARMODE ANGBASE ANGDIR SKETCHINC SKPOLY SKTOLERANCE DONUTID DONUTOD CENTEREXE CENTERLAYER CENTERLTYPE CENTERLTSCALE CENTERLTYPEFILE CENTERCROSSSIZE CENTERCROSSGAP CENTERMARKEXE COLORTHEME SELECTIONAREA SELECTIONAREAOPACITY SELECTIONEFFECT SELECTIONEFFECTCOLOR WINDOWSAREACOLOR CROSSINGAREACOLOR SELECTIONPREVIEW GRIPSIZE GRIPCOLOR GRIPHOT GRIPHOVER GRIPOBJLIMIT | CLAYER CELTYPE TEXTSTYLE (read-only)").as_ref(),
+                        crate::t!("SETVAR: CETRANSPARENCY LTSCALE CELTSCALE PDMODE PDSIZE TEXTSIZE ORTHOMODE FILLMODE MIRRTEXT FRAME IMAGEFRAME PDFFRAME WIPEOUTFRAME XCLIPFRAME POINTCLOUDCLIPFRAME ZOOMWHEEL ZOOMFACTOR SHORTCUTMENU SHORTCUTMENUDURATION CURSORSIZE PICKBOX CURSORTYPE SNAPANG TEXTFILL CLIPROMPTLINES COMMANDLINEFADETIME ATTREQ ATTDIA DIMASSOC DIMCONTINUEMODE CONSTRAINTSOLVEMODE CONSTRAINTINFER CONSTRAINTBARDISPLAY CONSTRAINTBARMODE CONSTRAINTNAMEFORMAT DYNCONSTRAINTDISPLAY ANGBASE ANGDIR SKETCHINC SKPOLY SKTOLERANCE DONUTID DONUTOD CENTEREXE CENTERLAYER CENTERLTYPE CENTERLTSCALE CENTERLTYPEFILE CENTERCROSSSIZE CENTERCROSSGAP CENTERMARKEXE COLORTHEME SELECTIONAREA SELECTIONAREAOPACITY SELECTIONEFFECT SELECTIONEFFECTCOLOR WINDOWSAREACOLOR CROSSINGAREACOLOR SELECTIONPREVIEW GRIPSIZE GRIPCOLOR GRIPHOT GRIPHOVER GRIPOBJLIMIT | CLAYER CELTYPE TEXTSTYLE (read-only)").as_ref(),
                     );
                 } else {
+                    if name == "XDWGFADECTL" {
+                        let current = crate::scene::cache::block_cache::xref_fade_ctl();
+                        if let Some(value) = &value {
+                            match value.parse::<i32>().ok().filter(|v| (-90..=90).contains(v)) {
+                                Some(fade) => self.set_xref_fade(fade),
+                                None => self.command_line.push_error("Requires an integer between -90 and 90."),
+                            }
+                        } else {
+                            self.command_line.push_output(&format!("Enter new value for XDWGFADECTL <{current}>:"));
+                            self.pending_setvar = Some(name.clone());
+                        }
+                        return Some(self.finish_dispatch(cmd));
+                    }
                     if name == "CETRANSPARENCY" {
                         let current = self.tabs[i].scene.document.current_entity_transparency();
                         if let Some(value) = &value {
@@ -1099,6 +1124,73 @@ impl OpenCADStudio {
                             }
                         } else {
                             self.command_line.push_output(&format!("Enter new value for CETRANSPARENCY <{}>:", crate::scene::creation_style::current_transparency_label(current)));
+                            self.pending_setvar = Some(name.clone());
+                        }
+                        return Some(self.finish_dispatch(cmd));
+                    }
+                    // Snapping to the geometry inside underlays (one switch for
+                    // PDF underlays and underlays in general).
+                    // The PDF Import Settings' options as bits.
+                    if matches!(name.as_str(), "PDFIMPORTMODE" | "PDFIMPORTFILTER" | "PDFIMPORTLAYERS") {
+                        use crate::modules::insert::pdf_import::{import_settings, set_import_settings, ImportLayers};
+                        let mut settings = import_settings();
+                        let (current, max) = match name.as_str() {
+                            "PDFIMPORTMODE" => (settings.mode(), 31),
+                            "PDFIMPORTFILTER" => (settings.filter(), 15),
+                            _ => (settings.layers_value(), 2),
+                        };
+                        if let Some(value) = &value {
+                            match value.parse::<i16>().ok().filter(|v| (0..=max).contains(v)) {
+                                Some(v) => {
+                                    match name.as_str() {
+                                        "PDFIMPORTMODE" => settings.set_mode(v),
+                                        "PDFIMPORTFILTER" => settings.set_filter(v),
+                                        _ => {
+                                            settings.layers = [ImportLayers::Pdf, ImportLayers::Object, ImportLayers::Current][v as usize]
+                                        }
+                                    }
+                                    set_import_settings(settings);
+                                }
+                                None => self.command_line.push_error(&format!("Requires an integer between 0 and {max}.")),
+                            }
+                        } else {
+                            self.command_line.push_output(&format!("Enter new value for {name} <{current}>:"));
+                            self.pending_setvar = Some(name.clone());
+                        }
+                        return Some(self.finish_dispatch(cmd));
+                    }
+                    // A folder name; "." clears it.
+                    if name == "PDFIMPORTIMAGEPATH" {
+                        use crate::modules::insert::pdf_import::{image_path, set_image_path};
+                        match &value {
+                            Some(value) => {
+                                let value = value.trim().trim_matches('"');
+                                set_image_path(if value == "." { String::new() } else { value.to_string() });
+                            }
+                            None => {
+                                self.command_line.push_output(&format!(
+                                    "Enter new value for PDFIMPORTIMAGEPATH, or . for none <\"{}\">:",
+                                    image_path()
+                                ));
+                                self.pending_setvar = Some(name.clone());
+                            }
+                        }
+                        return Some(self.finish_dispatch(cmd));
+                    }
+                    if matches!(name.as_str(), "PDFOSNAP" | "UOSNAP") {
+                        let current = i16::from(crate::scene::model::pdf_vector::pdf_osnap());
+                        if let Some(value) = &value {
+                            match value.parse::<i16>().ok().filter(|value| (0..=1).contains(value)) {
+                                Some(mode) => {
+                                    if current != mode {
+                                        crate::scene::model::pdf_vector::set_pdf_osnap(mode == 1);
+                                        self.tabs[i].scene.reseed_underlays();
+                                    }
+                                }
+                                None => self.command_line.push_error("Requires 0 or 1 only"),
+                            }
+                        } else {
+                            self.command_line.push_output(&format!("Enter new value for {name} <{current}>:"));
                             self.pending_setvar = Some(name.clone());
                         }
                         return Some(self.finish_dispatch(cmd));
@@ -1275,17 +1367,28 @@ impl OpenCADStudio {
                             | "CONSTRAINTINFER"
                             | "CONSTRAINTBARDISPLAY"
                             | "CONSTRAINTBARMODE"
+                            | "CONSTRAINTNAMEFORMAT"
+                            | "DYNCONSTRAINTDISPLAY"
+                            | "CCONSTRAINTFORM"
                     ) {
                         let current = match name.as_str() {
                             "CONSTRAINTSOLVEMODE" => i16::from(self.constraint_solve_mode),
                             "CONSTRAINTINFER" => i16::from(self.constraint_infer),
                             "CONSTRAINTBARDISPLAY" => self.constraint_bar_display,
                             "CONSTRAINTBARMODE" => self.constraint_bar_mode,
+                            "CONSTRAINTNAMEFORMAT" => {
+                                i16::from(self.tabs[i].scene.constraint_name_format)
+                            }
+                            "DYNCONSTRAINTDISPLAY" => {
+                                i16::from(self.tabs[i].scene.dynamic_constraint_display)
+                            }
+                            "CCONSTRAINTFORM" => i16::from(self.constraint_form_annotational),
                             _ => unreachable!(),
                         };
                         let maximum = match name.as_str() {
                             "CONSTRAINTBARDISPLAY" => 3,
                             "CONSTRAINTBARMODE" => 4095,
+                            "CONSTRAINTNAMEFORMAT" => 2,
                             _ => 1,
                         };
                         if let Some(value) = &value {
@@ -1304,6 +1407,21 @@ impl OpenCADStudio {
                                             self.constraint_bar_display = mode
                                         }
                                         "CONSTRAINTBARMODE" => self.constraint_bar_mode = mode,
+                                        "CONSTRAINTNAMEFORMAT" => {
+                                            self.tabs[i].scene.constraint_name_format = mode as u8;
+                                            self.tabs[i].scene.refresh_dynamic_dimension_texts();
+                                            self.tabs[i].dirty = true;
+                                        }
+                                        "DYNCONSTRAINTDISPLAY" => {
+                                            self.tabs[i].scene.dynamic_constraint_display =
+                                                mode != 0;
+                                            self.tabs[i].scene.refresh_hidden_dynamic_dimensions();
+                                        }
+                                        // The form new dimensional constraints take
+                                        // (0 dynamic, 1 annotational), as DCFORM sets.
+                                        "CCONSTRAINTFORM" => {
+                                            self.constraint_form_annotational = mode != 0
+                                        }
                                         _ => unreachable!(),
                                     }
                                     self.persist_settings_if_changed();
@@ -2476,6 +2594,13 @@ impl OpenCADStudio {
                     if name == "PDMODE" || name == "PDSIZE" {
                         self.tabs[i].scene.invalidate_point_dependencies();
                     }
+                    if matches!(name.as_str(), "LUNITS" | "LUPREC" | "AUNITS" | "AUPREC") {
+                        crate::entities::common::set_unit_context(
+                            crate::entities::common::UnitContext::from_header(
+                                &self.tabs[i].scene.document.header,
+                            ),
+                        );
+                    }
                     // ORTHOMODE / OSMODE set the header directly; mirror them into
                     // the live Ortho / running OSNAP so the constraint + status
                     // bar follow and the save-time stamp doesn't revert them.
@@ -2519,13 +2644,13 @@ impl OpenCADStudio {
                             linetypes.insert(lt.clone());
                         }
                         match e {
-                            acadrust::EntityType::Text(t) if !t.style.is_empty() => {
+                            codec::EntityType::Text(t) if !t.style.is_empty() => {
                                 styles.insert(t.style.clone());
                             }
-                            acadrust::EntityType::MText(t) if !t.style.is_empty() => {
+                            codec::EntityType::MText(t) if !t.style.is_empty() => {
                                 styles.insert(t.style.clone());
                             }
-                            acadrust::EntityType::Insert(ins) => {
+                            codec::EntityType::Insert(ins) => {
                                 blocks.insert(ins.block_name.clone());
                             }
                             _ => {}
@@ -2570,7 +2695,7 @@ impl OpenCADStudio {
                         if !layer.is_empty() && doc.layers.get(layer).is_none() {
                             undefined_layers.insert(layer.clone());
                         }
-                        if let acadrust::EntityType::Insert(ins) = e {
+                        if let codec::EntityType::Insert(ins) = e {
                             if doc.block_records.get(&ins.block_name).is_none() {
                                 undefined_blocks.insert(ins.block_name.clone());
                             }
@@ -2709,10 +2834,7 @@ impl OpenCADStudio {
                     self.command_line
                         .push_output(crate::tf!("CLAYER = \"{cur}\"").as_ref());
                 } else {
-                    if self.tabs[i].scene.document.layers.contains(name_arg) {
-                        self.tabs[i].scene.document.header.current_layer_name =
-                            name_arg.to_string();
-                        self.tabs[i].dirty = true;
+                    if self.set_current_layer_name(i, name_arg).is_ok() {
                         self.command_line
                             .push_output(crate::tf!("CLAYER set to \"{name_arg}\"").as_ref());
                     } else {
@@ -2897,6 +3019,29 @@ impl OpenCADStudio {
                     _ => self.command_line.push_error(crate::t!("Requires 0 or 1").as_ref()),
                 }
             }
+            cmd if cmd == "SCRIPTCOMMANDS" || cmd.starts_with("SCRIPTCOMMANDS ") => {
+                // A user setting, deliberately outside the script's reach: it is refused by
+                // the script command runner, so only the command line can change it.
+                let arg = cmd.trim_start_matches("SCRIPTCOMMANDS").trim();
+                match arg {
+                    "" => {}
+                    "1" | "ON" | "YES" => self.script_commands = true,
+                    "0" | "OFF" | "NO" => self.script_commands = false,
+                    _ => {
+                        self.command_line.push_error(
+                            crate::t!("SCRIPTCOMMANDS takes 1 (scripts may run commands) or 0 (they may not)")
+                                .as_ref(),
+                        );
+                        return Some(Task::none());
+                    }
+                }
+                if !arg.is_empty() {
+                    self.persist_settings_if_changed();
+                }
+                let state = if self.script_commands { 1 } else { 0 };
+                self.command_line
+                    .push_output(crate::tf!("SCRIPTCOMMANDS = {state}").as_ref());
+            }
             "SAVETIME" => {
                 use crate::command::ValuePromptCommand;
                 let c = ValuePromptCommand::new(
@@ -3052,7 +3197,7 @@ impl OpenCADStudio {
             cmd if cmd.starts_with("SCALETEXT ") => {
                 let rest = cmd.trim_start_matches("SCALETEXT").trim();
                 let parts: Vec<&str> = rest.split_whitespace().collect();
-                let selected_handles: Vec<acadrust::Handle> = self.tabs[i]
+                let selected_handles: Vec<codec::Handle> = self.tabs[i]
                     .scene
                     .selected_entities()
                     .iter()
@@ -3084,12 +3229,12 @@ impl OpenCADStudio {
                                         continue;
                                     }
                                     match entity {
-                                        acadrust::EntityType::Text(t) => {
+                                        codec::EntityType::Text(t) => {
                                             t.height =
                                                 if use_absolute { val } else { t.height * val };
                                             count += 1;
                                         }
-                                        acadrust::EntityType::MText(t) => {
+                                        codec::EntityType::MText(t) => {
                                             t.height =
                                                 if use_absolute { val } else { t.height * val };
                                             count += 1;
@@ -3123,8 +3268,8 @@ impl OpenCADStudio {
 }
 
 /// RENAME for the remaining name-keyed symbol tables.
-fn rename_symbol(doc: &mut acadrust::CadDocument, ty: &str, old: &str, new: &str) -> bool {
-    use acadrust::{EntityType, Table, TableEntry};
+fn rename_symbol(doc: &mut codec::CadDocument, ty: &str, old: &str, new: &str) -> bool {
+    use codec::{EntityType, Table, TableEntry};
 
     fn rekey<T: TableEntry>(table: &mut Table<T>, old: &str, new: &str) -> bool {
         if !crate::scene::valid_block_name(new) {
@@ -3465,6 +3610,21 @@ mod scale_validation_tests {
                     app.tabs[i].scene.document.header.current_entity_linetype_scale
                 };
                 assert_eq!(before, after, "{entry} must be refused");
+            }
+        }
+    }
+}
+
+impl OpenCADStudio {
+    /// XDWGFADECTL: store it, show it on the ribbon and redraw every tab's
+    /// referenced drawings.
+    pub(in crate::app) fn set_xref_fade(&mut self, fade: i32) {
+        crate::scene::cache::block_cache::set_xref_fade_ctl(fade);
+        self.ribbon.xref_fade = crate::scene::cache::block_cache::xref_fade_ctl();
+        for tab in &mut self.tabs {
+            if !tab.is_start {
+                tab.scene.recolor_meshes();
+                tab.scene.bump_geometry();
             }
         }
     }

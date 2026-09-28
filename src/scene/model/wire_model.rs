@@ -443,7 +443,7 @@ pub struct WireModel {
     /// Empty for tessellated curves (Circle, Arc, Ellipse) which use snap_pts instead.
     pub key_vertices: Vec<[f64; 3]>,
     /// World-space 2-D bounding box [min_x, min_y, max_x, max_y].
-    /// Set from acadrust `bounding_box()` in `tessellate_entity()`.
+    /// Set from opencadcodec `bounding_box()` in `tessellate_entity()`.
     /// Preview / interim wires use `UNBOUNDED_AABB` so they are never pre-rejected
     /// by the snap world-space filter.
     pub aabb: [f32; 4],
@@ -630,6 +630,28 @@ impl WireModel {
             .iter()
             .map(|tg| tg.translated(delta.as_dvec3()))
             .collect();
+        out
+    }
+
+    /// Return a preview clone with every point mapped through `map` (an
+    /// INSERT-style placement: per-axis scale, rotation, translation).
+    /// Tangent geometry is dropped; a preview is not snapped to.
+    pub fn mapped(&self, map: impl Fn(glam::DVec3) -> glam::DVec3) -> Self {
+        let mut out = self.clone();
+        out.name = format!("preview_{}", self.name);
+        out.color = Self::CYAN;
+        out.selected = false;
+        map_points(&mut out.points, &mut out.points_low, &map);
+        if let Some(marker) = &mut out.point_marker {
+            marker.origin = map(marker.origin);
+        }
+        if !out.text_verts.is_empty() {
+            out.text_verts = map_text_verts(&self.text_verts, |x, y, z| {
+                let p = map(glam::DVec3::new(x, y, z));
+                (p.x, p.y, p.z)
+            });
+        }
+        out.tangent_geoms.clear();
         out
     }
 

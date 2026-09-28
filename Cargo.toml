@@ -35,13 +35,15 @@ rfd = "0.17"
 clap = { version = "4", features = ["derive", "string"] }
 env_logger = "0.11"
 log = "0.4"
-acadrust = { git = "https://github.com/HakanSeven12/cadcodec.git", rev = "5b682ed", features = ["serde"] }
-cadkernel = { git = "https://github.com/HakanSeven12/cadkernel.git", rev = "6f046af", features = ["acis", "offset"] }
-cadkernel-constraints = { git = "https://github.com/HakanSeven12/cadkernel.git", rev = "6f046af" }
+codec = { package = "opencadcodec", git = "https://github.com/HakanSeven12/opencadcodec.git", rev = "42b44d2", features = ["serde"] }
+kernel = { package = "opencadkernel", git = "https://github.com/HakanSeven12/opencadkernel.git", rev = "4e67cd7", features = ["acis", "offset"] }
+kernel-constraints = { package = "opencadkernel-constraints", git = "https://github.com/HakanSeven12/opencadkernel.git", rev = "4e67cd7" }
+graph = { package = "opencadgraph", git = "https://github.com/HakanSeven12/opencadgraph.git", rev = "d89a9c5" }
 dwg-thumbnailer = { path = "crates/dwg-thumbnailer" }
 flate2 = "1"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "bmp", "tiff"] }
 hayro = "0.7.1"
+kurbo = "0.13"
 # Rasterises assets/logo.svg into the window icon at startup, so the taskbar
 # icon comes from the same file every other build target does. Already in the
 # tree behind iced's svg feature; named here only to use it directly.
@@ -76,7 +78,10 @@ ashpd = { version = "0.13.13", default-features = false, features = ["async-io",
 # here to the same versions Cargo already resolves for it.
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.5"
-objc2-app-kit = { version = "0.2", features = ["NSApplication", "NSResponder", "NSRunningApplication"] }
+# The `NSEvent`/`block2` features are for the trackpad pinch monitor in
+# `src/input/trackpad.rs` — see that file for why the gesture is read there.
+objc2-app-kit = { version = "0.2", features = ["NSApplication", "NSResponder", "NSRunningApplication", "NSEvent", "block2"] }
+block2 = "0.5"
 objc2-foundation = { version = "0.2", features = ["NSArray", "NSURL", "NSString", "NSObject", "NSNotification", "NSThread", "NSEnumerator"] }
 
 [patch.crates-io]
@@ -85,10 +90,12 @@ iced_widget = { git = "https://github.com/iced-rs/iced.git", rev = "23604ff22ab0
 
 # fork 镜像 pin：上游只带官方 URL + 自己的 rev，这里把同一 rev 指到 ghfast 镜像
 # （配合全局 git insteadOf 与 `[net] git-fetch-with-cli = true`）。
-# 同步规则：**上游升 rev 时跟着升**，但 URL 必须保持镜像；`Cargo.lock` 里 acadrust 的
+# 同步规则：**上游升 rev 时跟着升**，但 URL 必须保持镜像；`Cargo.lock` 里 opencadcodec 的
 # source 应显示 ghfast.top（不是 github.com）。
-[patch."https://github.com/HakanSeven12/cadcodec.git"]
-acadrust = { git = "https://ghfast.top/https://github.com/HakanSeven12/cadcodec.git", rev = "5b682ed" }
+# 2026-09-28：上游把 cadcodec 仓库改名 opencadcodec、依赖别名由 `acadrust` 改为 `codec`
+# （rev 42b44d2）—— patch 的键跟包名，URL 跟仓库新名，rev 跟上游。
+[patch."https://github.com/HakanSeven12/opencadcodec.git"]
+opencadcodec = { git = "https://ghfast.top/https://github.com/HakanSeven12/opencadcodec.git", rev = "42b44d2" }
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 getrandom = "0.3"
 ocs_plugin_api = { path = "crates/ocs_plugin_api", features = ["host"] }

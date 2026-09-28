@@ -358,7 +358,7 @@ impl InteractiveCommand for CenterLinePick {
     fn on_object_pick_snapped(&mut self, handle: Handle, pt: P, _snapped: bool) -> CommandStep {
         match self.advance(handle, pt) {
             Advance::KeepGoing(_) => CommandStep::NeedPoint,
-            Advance::Commit { segs, .. } => CommandStep::CommitEntitiesAndExit(lines_of(&segs)),
+            Advance::Commit { segs, .. } => CommandStep::CommitManyAndEnd(lines_of(&segs)),
         }
     }
 }
@@ -712,7 +712,7 @@ mod tests {
         let (doc, c, _, _) = doc_with_circle_and_lines();
         let mut cmd = CenterLinePick::new(doc);
         match cmd.on_object_pick_snapped(c, [60.0, 50.0, 0.0], false) {
-            CommandStep::CommitEntitiesAndExit(ents) => {
+            CommandStep::CommitManyAndEnd(ents) => {
                 assert_eq!(ents.len(), 2, "十字 = 两条 LINE 一次提交");
                 for e in ents {
                     match e {
@@ -721,7 +721,7 @@ mod tests {
                     }
                 }
             }
-            other => panic!("应当是 CommitEntitiesAndExit，得到 {other:?}"),
+            other => panic!("应当是 CommitManyAndEnd，得到 {other:?}"),
         }
     }
 

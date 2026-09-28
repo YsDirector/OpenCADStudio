@@ -1,4 +1,4 @@
-// Tessellation — convert acadrust EntityType to GPU-ready WireModel or MeshModel.
+// Tessellation — convert opencadcodec EntityType to GPU-ready WireModel or MeshModel.
 //
 // Flow:
 //   EntityType
@@ -14,8 +14,8 @@
 // are tessellated by the FallbackTess fallback_geometry() path.
 
 use crate::entities::leader::LeaderTess;
-use acadrust::types::Color as AcadColor;
-use acadrust::{CadDocument, EntityType, Handle};
+use codec::types::Color as AcadColor;
+use codec::{CadDocument, EntityType, Handle};
 use glam::Vec3;
 
 use crate::scene::convert::acad_to_render::{convert, RenderObject};
@@ -80,7 +80,7 @@ fn oriented_text_corners(
 
 fn oriented_mtext_corner_groups(
     verts: &[crate::scene::pipeline::text_gpu::TextVertex],
-    text: &acadrust::MText,
+    text: &codec::MText,
     rotation: f64,
     pad: f64,
     annotation_scale: f64,
@@ -101,12 +101,12 @@ fn oriented_mtext_corner_groups(
     let gutter = columns.gutter.max(0.0) * annotation_scale;
     let total_width = width * count as f64 + gutter * count.saturating_sub(1) as f64;
     let anchor = match text.attachment_point {
-        acadrust::entities::mtext::AttachmentPoint::TopCenter
-        | acadrust::entities::mtext::AttachmentPoint::MiddleCenter
-        | acadrust::entities::mtext::AttachmentPoint::BottomCenter => 0.5,
-        acadrust::entities::mtext::AttachmentPoint::TopRight
-        | acadrust::entities::mtext::AttachmentPoint::MiddleRight
-        | acadrust::entities::mtext::AttachmentPoint::BottomRight => 1.0,
+        codec::entities::mtext::AttachmentPoint::TopCenter
+        | codec::entities::mtext::AttachmentPoint::MiddleCenter
+        | codec::entities::mtext::AttachmentPoint::BottomCenter => 0.5,
+        codec::entities::mtext::AttachmentPoint::TopRight
+        | codec::entities::mtext::AttachmentPoint::MiddleRight
+        | codec::entities::mtext::AttachmentPoint::BottomRight => 1.0,
         _ => 0.0,
     };
     let block_left = -anchor * total_width;
@@ -186,6 +186,9 @@ pub(crate) fn points_to_ds(
     let it = src.into_iter();
     let (lo, hi) = it.size_hint();
     let cap = hi.unwrap_or(lo);
+    if cap == 0 {
+        return (Vec::new(), Vec::new());
+    }
     let mut high = Vec::with_capacity(cap);
     let mut low = Vec::with_capacity(cap);
     for [x, y, z] in it {
@@ -226,7 +229,7 @@ fn polyline_segment_widths(entity: &EntityType) -> Vec<(f32, f32)> {
         }
         EntityType::Polyline2D(p) => {
             let filtered = crate::entities::polyline::drawn_vertices2d(p);
-            let verts: &[acadrust::entities::Vertex2D] =
+            let verts: &[codec::entities::Vertex2D] =
                 filtered.as_deref().unwrap_or(&p.vertices);
             let count = verts.len();
             let seg_count = if p.is_closed() {
@@ -327,9 +330,10 @@ fn split_mixed_polyline(
                 (sw, ew)
             };
 
-            let mut arc_pts = Vec::with_capacity(17);
-            let mut arc_widths = Vec::with_capacity(17);
             let n = 16;
+            let mut points = Vec::with_capacity(n + 1);
+            let mut points_low = Vec::with_capacity(n + 1);
+            let mut arc_widths = Vec::with_capacity(n + 1);
             let sweep = if end_angle >= start_angle {
                 end_angle - start_angle
             } else {
@@ -338,15 +342,15 @@ fn split_mixed_polyline(
             for s in 0..=n {
                 let frac = s as f64 / n as f64;
                 let ang = start_angle + frac * sweep;
-                let p = [
-                    center[0] + radius * (ang.cos() * axis_x[0] + ang.sin() * axis_y[0]),
-                    center[1] + radius * (ang.cos() * axis_x[1] + ang.sin() * axis_y[1]),
-                    center[2] + radius * (ang.cos() * axis_x[2] + ang.sin() * axis_y[2]),
-                ];
-                arc_pts.push(p);
+                let (sin_a, cos_a) = ang.sin_cos();
+                let x = center[0] + radius * (cos_a * axis_x[0] + sin_a * axis_y[0]);
+                let y = center[1] + radius * (cos_a * axis_x[1] + sin_a * axis_y[1]);
+                let z = center[2] + radius * (cos_a * axis_x[2] + sin_a * axis_y[2]);
+                let (h, l) = split_ds_xyz(x, y, z);
+                points.push(h);
+                points_low.push(l);
                 arc_widths.push(w_at_sa + (w_at_ea - w_at_sa) * frac as f32);
             }
-            let (points, points_low) = points_to_ds(arc_pts);
 
             let taper_widths = if (w_at_sa - w_at_ea).abs() > 1e-6 {
                 arc_widths
@@ -2415,7 +2419,7 @@ pub(crate) enum ArrowKind {
 
 pub(crate) fn arrow_from_block(
     doc: &CadDocument,
-    handle: acadrust::types::Handle,
+    handle: codec::types::Handle,
     dimasz: f32,
 ) -> ArrowKind {
     arrow_from_block_with_deferred_hatch(doc, handle, dimasz, false)
@@ -2423,7 +2427,7 @@ pub(crate) fn arrow_from_block(
 
 pub(crate) fn arrow_from_block_with_deferred_hatch(
     doc: &CadDocument,
-    handle: acadrust::types::Handle,
+    handle: codec::types::Handle,
     dimasz: f32,
     defer_hatch: bool,
 ) -> ArrowKind {
@@ -2530,7 +2534,7 @@ fn builtin_arrow_from_block_name(name: &str, dimasz: f32) -> Option<ArrowKind> {
 
 fn custom_arrow_from_block(
     doc: &CadDocument,
-    record: &acadrust::tables::BlockRecord,
+    record: &codec::tables::BlockRecord,
     dimasz: f32,
     defer_hatch: bool,
 ) -> Option<ArrowKind> {
@@ -2556,7 +2560,7 @@ fn custom_arrow_from_block(
         doc,
         record.handle,
         crate::scene::render_graph::BlockRole::ArrowHead,
-        acadrust::types::Vector3::ZERO,
+        codec::types::Vector3::ZERO,
     )?;
     let mut lines = Vec::new();
     let mut fill = Vec::new();
@@ -2608,7 +2612,7 @@ fn append_custom_arrow_leaf(
         EntityType::Hatch(hatch) => {
             append_custom_hatch_geometry(
                 hatch,
-                acadrust::types::Vector3::ZERO,
+                codec::types::Vector3::ZERO,
                 lines,
                 fill,
             );
@@ -2636,21 +2640,21 @@ fn append_custom_arrow_leaf(
         append_custom_wire_points(
             &wire.points,
             &wire.points_low,
-            acadrust::types::Vector3::ZERO,
+            codec::types::Vector3::ZERO,
             lines,
         );
         append_custom_fill_points(
             &wire.fill_tris,
             &wire.fill_tris_low,
-            acadrust::types::Vector3::ZERO,
+            codec::types::Vector3::ZERO,
             fill,
         );
     }
 }
 
 fn append_custom_hatch_geometry(
-    hatch: &acadrust::entities::Hatch,
-    base: acadrust::types::Vector3,
+    hatch: &codec::entities::Hatch,
+    base: codec::types::Vector3,
     lines: &mut Vec<[f32; 3]>,
     fill: &mut Vec<[f32; 3]>,
 ) {
@@ -2738,7 +2742,7 @@ fn append_custom_hatch_geometry(
 fn append_custom_wire_points(
     points: &[[f32; 3]],
     points_low: &[[f32; 3]],
-    base: acadrust::types::Vector3,
+    base: codec::types::Vector3,
     out: &mut Vec<[f32; 3]>,
 ) {
     if points.is_empty() {
@@ -2766,7 +2770,7 @@ fn append_custom_wire_points(
 fn append_custom_fill_points(
     points: &[[f32; 3]],
     points_low: &[[f32; 3]],
-    base: acadrust::types::Vector3,
+    base: codec::types::Vector3,
     out: &mut Vec<[f32; 3]>,
 ) {
     for (index, point) in points.iter().enumerate() {
@@ -2796,7 +2800,7 @@ impl DimGeom {
 }
 
 
-/// Convert an acadrust `Color` to RGBA, falling back to `inherited` for
+/// Convert an opencadcodec `Color` to RGBA, falling back to `inherited` for
 /// `ByLayer` / `ByBlock` (assumes those are already resolved upstream).
 pub(crate) fn color_or_inherit(c: &AcadColor, inherited: [f32; 4]) -> [f32; 4] {
     match c.rgb() {

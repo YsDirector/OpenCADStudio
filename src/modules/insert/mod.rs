@@ -17,15 +17,21 @@ mod mview_block;
 mod open_obj;
 mod pc_attach;
 pub(crate) mod pdf_attach;
+pub(crate) mod pdf_clip;
+pub(crate) mod pdf_import;
 mod snap_underlays;
 pub(crate) mod solid3d_cmds;
 mod underlay_layers;
 pub(crate) mod wblock;
 mod xadjust;
 pub(crate) mod xattach;
-mod xclip;
+pub(crate) mod xref_cmd;
+pub(crate) mod xclip;
 
 use crate::modules::{CadModule, IconKind, RibbonGroup, RibbonItem};
+
+const FRAMES_ICON: IconKind =
+    IconKind::Svg(include_bytes!("../../../assets/icons/underlay_frames.svg"));
 
 pub struct InsertModule;
 
@@ -49,38 +55,29 @@ impl CadModule for InsertModule {
                         RibbonItem::LargeTool(pdf_attach::tool()),
                         RibbonItem::LargeTool(xclip::tool()),
                         RibbonItem::LargeTool(xadjust::tool()),
-                        RibbonItem::Tool(underlay_layers::tool()),
-                        RibbonItem::Dropdown {
+                        RibbonItem::LabeledTool(underlay_layers::tool()),
+                        // An empty label shows the chosen item's.
+                        RibbonItem::LabeledDropdown {
                             id: "FRAMES_DROPDOWN",
-                            icon: IconKind::Svg(include_bytes!(
-                                "../../../assets/icons/underlay_frames.svg"
-                            )),
+                            label: "",
+                            icon: FRAMES_ICON,
                             items: vec![
-                                (
-                                    "FRAMES0",
-                                    "Frames Off",
-                                    IconKind::Svg(include_bytes!(
-                                        "../../../assets/icons/underlay_frames.svg"
-                                    )),
-                                ),
-                                (
-                                    "FRAMES1",
-                                    "Frames On",
-                                    IconKind::Svg(include_bytes!(
-                                        "../../../assets/icons/underlay_frames.svg"
-                                    )),
-                                ),
-                                (
-                                    "FRAMES2",
-                                    "Frames On, Not Plotted",
-                                    IconKind::Svg(include_bytes!(
-                                        "../../../assets/icons/underlay_frames.svg"
-                                    )),
-                                ),
+                                ("FRAMES0", "Frames Off", FRAMES_ICON),
+                                ("FRAMES1", "Frames On", FRAMES_ICON),
+                                ("FRAMES2", "Frames On, Not Plotted", FRAMES_ICON),
                             ],
                             default: "FRAMES1",
                         },
-                        RibbonItem::Tool(snap_underlays::tool()),
+                        RibbonItem::LabeledDropdown {
+                            id: "UOSNAP_DROPDOWN",
+                            label: "Snap to Underlays",
+                            icon: snap_underlays::ICON,
+                            items: vec![
+                                ("UOSNAP1", "Snap to Underlays ON", snap_underlays::ICON),
+                                ("UOSNAP0", "Snap to Underlays OFF", snap_underlays::ICON),
+                            ],
+                            default: "UOSNAP1",
+                        },
                     ],
                 },
                 // ── Point Cloud ───────────────────────────────────────────────────

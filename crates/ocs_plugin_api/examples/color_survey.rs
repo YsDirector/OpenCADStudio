@@ -8,8 +8,8 @@
 #[path = "proxy_decode.rs"]
 mod dec;
 
-use ocs_plugin_api::host::acadrust::io::dwg::DwgReader;
-use ocs_plugin_api::host::acadrust::EntityType;
+use ocs_plugin_api::host::codec::io::dwg::DwgReader;
+use ocs_plugin_api::host::codec::EntityType;
 use std::collections::BTreeMap;
 
 fn main() {

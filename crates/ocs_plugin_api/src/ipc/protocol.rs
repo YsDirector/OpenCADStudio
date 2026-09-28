@@ -17,32 +17,41 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::host::{CommandSource, CommandStep};
+use crate::host::{CommandSource, CommandStep, HostSettingValue};
 use crate::manifest::ApiVersion;
 use crate::ribbon::owned::{OwnedPluginManifest, OwnedRibbonGroup};
 
-pub use acadrust::xdata::{ExtendedDataRecord, XDataValue};
-pub use acadrust::{CadDocument, EntityType, Handle};
+pub use codec::xdata::{ExtendedDataRecord, XDataValue};
+pub use codec::{CadDocument, EntityType, Handle};
+pub use crate::host::PreviewWire;
 
 /// Events the host forwards to an active plugin `InteractiveCommand`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum InteractiveEvent {
+    /// User clicked or specified a point coordinate.
     Point([f64; 3]),
+    /// User pressed Enter or Return to complete input.
     Enter,
+    /// User selected an existing entity in the drawing.
+    ///
+    /// fork: `snapped` distinguishes an OSNAP hit from the raw click point (the
+    /// host only fills it for plugins that opt into object-pick snapping — see
+    /// `InteractiveCommand::on_object_pick_snapped`). ⚠ This is the one wire
+    /// shape that differs from upstream's 2-field `ObjectPick`.
     ObjectPick {
         handle: Handle,
         pt: [f64; 3],
-        /// True when `pt` is an OSNAP result rather than the raw click point.
-        /// The host only fills this for plugins that opt into object-pick
-        /// snapping (see `InteractiveCommand::on_object_pick_snapped`); older
-        /// plugin binaries never see it because the host sends the plain
-        /// variant to them.
         snapped: bool,
     },
-    /// Typed command-line text (keyword letter, value, or override).
+    /// User cancelled the prompt (e.g. pressed ESC), resetting interactive collection.
+    /// (upstream's index 3 — kept ahead of the fork's own events so plugins built
+    /// against upstream decode it correctly)
+    Cancel,
+    /// fork: typed command-line text (keyword letter, value, or override).
     Text(String),
-    /// Mouse moved to `pt` — the plugin returns a preview entity to render
-    /// transiently (see `InteractiveCommand::on_mouse_move`).
+    /// fork: mouse moved to `pt`; the plugin returns a *preview entity* to render
+    /// transiently (see `InteractiveCommand::on_mouse_move`). Upstream's separate
+    /// *wire* preview travels as `HostRequest::CursorMove` / `HostResponse::PreviewWires`.
     MouseMove([f64; 3]),
 }
 
@@ -90,6 +99,17 @@ pub enum HostRequest {
         code: String,
         tab_index: usize,
     },
+    // ── upstream v6/v7 additions first, then the fork's own additions ───────
+    // (ordering keeps upstream's bincode discriminant indices intact; the fork's
+    // plugin is rebuilt with this crate. See docs/fork-patches.md §A-1.)
+    /// V7: release an interactive command after completion or cancellation.
+    DropInteractive { command_id: u64 },
+    /// V7: cursor move preview update during an interactive command.
+    CursorMove {
+        command_id: u64,
+        pt: [f64; 3],
+    },
+    // ── fork: the fork's own additions follow (see docs/fork-patches.md §A-1) ─
     /// API v5: whether the interactive command wants typed text input.
     WantsTextInput {
         command_id: u64,
@@ -115,6 +135,10 @@ pub enum HostResponse {
     Manifest(OwnedPluginManifest),
     Error(String),
     CodeExecutionResult(crate::host::ExecutionResult),
+    // ── upstream v6/v7 additions first, then the fork's own additions ───────
+    // (ordering keeps upstream's bincode discriminant indices intact; the fork's
+    // plugin is rebuilt with this crate. See docs/fork-patches.md §A-1.)
+    PreviewWires(Vec<PreviewWire>),
     /// API v5: the plugin's preview entity for the current cursor position.
     Preview(Option<EntityType>),
 }
@@ -167,6 +191,30 @@ pub enum PluginRequest {
     GetTabId,
     /// V5: ask the host for the filesystem path of the document in `tab_id`.
     DocumentPath { tab_id: u64 },
+    // ── upstream v6/v7 additions first, then the fork's own additions ───────
+    // (ordering keeps upstream's bincode discriminant indices intact; the fork's
+    // plugin is rebuilt with this crate. See docs/fork-patches.md §A-1.)
+    /// Add a layer to the active document with full initial properties.
+    AddLayer(crate::host::LayerConfig),
+    /// Modify specified properties of an existing layer in the active document.
+    ModifyLayer(crate::host::LayerConfig),
+    /// Run a command on the active document tab's command line (AutoLISP style).
+    ExecuteCommand(String),
+    /// Read a host-managed setting without nested command dispatch.
+    GetSystemVariable { name: String },
+    /// Change a host-managed setting without nested command dispatch.
+    SetSystemVariable { name: String, value: HostSettingValue },
+    /// V7: validate and replace existing entities in a single undo step.
+    UpdateEntitiesTransaction { label: String, entities: Vec<EntityType> },
+    /// V7: synchronous selection read/write for the dispatch tab.
+    GetSelection,
+    SetSelection { handles: Vec<Handle> },
+    /// V7 (additive): kernel-backed solid create or transform.
+    SolidOperation { operation: crate::host::SolidOperation },
+    /// V7 (additive): drawing table record create/modify/rename/delete.
+    TableOperation { operation: crate::host::TableOperation },
+    /// V7 (additive): drive an OCS command.
+    RunCommand { request: crate::host::CommandRequest },
     /// API v5: handles of the currently selected entities.
     SelectedHandles,
     /// API v5: set the current layer by name.
@@ -227,13 +275,26 @@ pub enum PluginResponse {
     TabId(u64),
     /// V5: filesystem path of the document in the requested tab, if any.
     DocumentPath(Option<std::ffi::OsString>),
+    // ── upstream v6/v7 additions first, then the fork's own additions ───────
+    // (ordering keeps upstream's bincode discriminant indices intact; the fork's
+    // plugin is rebuilt with this crate. See docs/fork-patches.md §A-1.)
+    /// Optional entity handle (e.g. from AddLayer).
+    OptHandle(Option<Handle>),
+    SystemVariable(Option<HostSettingValue>),
+    SystemVariableResult(Result<HostSettingValue, String>),
+    EntityTransactionResult(Result<(), String>),
+    Selection(Vec<Handle>),
+    SelectionResult(Result<(), String>),
+    SolidResult(Result<Handle, String>),
+    TableResult(Result<Handle, String>),
+    CommandResult(Result<crate::host::CommandOutcome, String>),
     /// API v5: count returned by `ensure_layers` / `ensure_linetypes` /
     /// `ensure_text_styles` (number of entries created).
     Count(usize),
     /// API v5: pending frame selection from the picker modal.
     FrameSelection(Option<crate::host::FrameSelection>),
     /// API v5: result of a frame block import (ATTDEFs in draw order).
-    ImportFrameBlock(Result<Vec<acadrust::entities::AttributeDefinition>, String>),
+    ImportFrameBlock(Result<Vec<codec::entities::AttributeDefinition>, String>),
 }
 
 /// Messages sent from the host to the plugin runner.
@@ -289,9 +350,9 @@ mod tests {
     fn layer() -> crate::host::LayerDef {
         crate::host::LayerDef {
             name: "A".into(),
-            color: acadrust::types::Color::from_index(1),
+            color: codec::types::Color::from_index(1),
             linetype: "Continuous".into(),
-            lineweight: acadrust::types::LineWeight::from_value(25),
+            lineweight: codec::types::LineWeight::from_value(25),
             plottable: true,
             off: false,
         }
@@ -423,7 +484,7 @@ mod tests {
 
     #[test]
     fn v5_preview_response_round_trips_entity() {
-        let preview = HostResponse::Preview(Some(EntityType::Line(acadrust::entities::Line::new())));
+        let preview = HostResponse::Preview(Some(EntityType::Line(codec::entities::Line::new())));
         let bytes = bincode::serialize(&preview).unwrap();
         let back: HostResponse = bincode::deserialize(&bytes).unwrap();
         assert_eq!(bincode::serialize(&back).unwrap(), bytes);

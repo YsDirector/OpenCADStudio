@@ -4,7 +4,7 @@
 //! （`OCSM_LEADER_PDF`）。与 `dim_leader_render_check.rs` 同套路：
 //! `Scene::entity_wires() → export_pdf()`，用于人工/图像核对"引线+箭头+肩线+
 //! 上下侧文字"的观感（数值正确性已由插件侧单测覆盖）。
-use acadrust::EntityType;
+use codec::EntityType;
 use OpenCADStudio::io::load_file;
 use OpenCADStudio::io::pdf_export::{export_pdf, PdfPageInput, PdfPlotOptions, PlotContent, PlotWire};
 use OpenCADStudio::scene::Scene;

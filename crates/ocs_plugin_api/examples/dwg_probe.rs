@@ -8,9 +8,9 @@
 //! cargo run -p ocs_plugin_api --features host --example dwg_probe -- <file.dwg> [max_objs]
 //! ```
 
-use ocs_plugin_api::host::acadrust::io::dwg::DwgReader;
-use ocs_plugin_api::host::acadrust::objects::ObjectType;
-use ocs_plugin_api::host::acadrust::EntityType;
+use ocs_plugin_api::host::codec::io::dwg::DwgReader;
+use ocs_plugin_api::host::codec::objects::ObjectType;
+use ocs_plugin_api::host::codec::EntityType;
 
 fn hex_preview(data: &[u8], max: usize) -> String {
     let n = data.len().min(max);
@@ -99,7 +99,7 @@ fn main() {
             println!("      graphic_data(代理图形): {}",
                 gd.map(|d| format!("{} 字节", d.len())).unwrap_or("无".into()));
             if let Some(g) = u.common.proxy_graphics() {
-                use ocs_plugin_api::host::acadrust::entities::ProxyGraphicRecord as R;
+                use ocs_plugin_api::host::codec::entities::ProxyGraphicRecord as R;
                 println!("      代理图形记录 {} 条:", g.records.len());
                 let mut kinds = std::collections::BTreeMap::<u32, (usize, usize)>::new();
                 for r in &g.records {

@@ -9,10 +9,10 @@ pub mod dec;
 
 use dec::Piece;
 use ocs_plugin_api::host::acadrust;
-use acadrust::entities::{Arc, Circle, EntityType, Line, LwPolyline, Text};
-use acadrust::tables::{Layer, LineType, LineTypeElement};
-use acadrust::types::{Color, LineWeight, Vector2, Vector3};
-use acadrust::CadDocument;
+use codec::entities::{Arc, Circle, EntityType, Line, LwPolyline, Text};
+use codec::tables::{Layer, LineType, LineTypeElement};
+use codec::types::{Color, LineWeight, Vector2, Vector3};
+use codec::CadDocument;
 
 /// OCSM 图层模板（与 `crates/ocs_ocsm/src/lib.rs::layer_defs()` 一致）。
 pub const LAYERS: &[(&str, i16, &str, i16)] = &[
@@ -159,8 +159,8 @@ pub fn to_entity(prim: &dec::Prim) -> Option<EntityType> {
 }
 
 /// 实体 → 代理图形图元（预览/校验用；bulge 弧段不展开）。
-pub fn prims_from_entities(entities: &[acadrust::EntityType]) -> Vec<Piece> {
-    use acadrust::entities::EntityType as E;
+pub fn prims_from_entities(entities: &[codec::EntityType]) -> Vec<Piece> {
+    use codec::entities::EntityType as E;
     let attrs = dec::PrimAttrs::default();
     let mut out = Vec::new();
     let p3 = |v: Vector3| [v.x, v.y, v.z];

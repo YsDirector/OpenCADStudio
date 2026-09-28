@@ -17,8 +17,8 @@
 #[path = "part_lib.rs"]
 mod part_lib;
 
-use ocs_plugin_api::host::acadrust::io::dwg::{DwgReadOptions, DwgReader, DwgWriter};
-use ocs_plugin_api::host::acadrust::EntityType;
+use ocs_plugin_api::host::codec::io::dwg::{DwgReadOptions, DwgReader, DwgWriter};
+use ocs_plugin_api::host::codec::EntityType;
 use part_lib::dec;
 
 fn main() {
@@ -180,9 +180,9 @@ fn split_one(src: &str, out_root: &str, catalog: &mut String) -> Result<(usize, 
                 {
                     let c = e.common_mut();
                     c.layer = layer.to_string();
-                    c.color = ocs_plugin_api::host::acadrust::types::Color::ByLayer;
+                    c.color = ocs_plugin_api::host::codec::types::Color::ByLayer;
                     c.linetype = "ByLayer".to_string();
-                    c.line_weight = ocs_plugin_api::host::acadrust::types::LineWeight::ByLayer;
+                    c.line_weight = ocs_plugin_api::host::codec::types::LineWeight::ByLayer;
                 }
                 if doc.add_entity(e).is_ok() {
                     n += 1;
@@ -236,7 +236,7 @@ fn split_one(src: &str, out_root: &str, catalog: &mut String) -> Result<(usize, 
 
 fn entity_aci(e: &EntityType) -> u16 {
     match e.common().color {
-        ocs_plugin_api::host::acadrust::types::Color::Index(i) => i as u16,
+        ocs_plugin_api::host::codec::types::Color::Index(i) => i as u16,
         _ => 7,
     }
 }

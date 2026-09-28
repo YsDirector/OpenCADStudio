@@ -5,6 +5,7 @@ use iced::Task;
 use std::path::PathBuf;
 
 mod blocks;
+mod xref_attach;
 mod dim;
 pub(crate) mod display;
 mod draw;
@@ -12,6 +13,10 @@ mod fileops;
 mod inquiry;
 mod layerprops;
 mod layers;
+pub(crate) mod pdf_import;
+mod pdf_underlay;
+mod pdf_dialogs;
+mod xclip;
 mod plotvars;
 mod styleprops;
 mod view;
@@ -201,17 +206,18 @@ impl OpenCADStudio {
             return Task::none();
         }
 
-        if crate::plugin::try_dispatch(self, i, cmd) {
+        if !self.suppress_plugin_dispatch && crate::plugin::try_dispatch(self, i, cmd) {
             // try_dispatch returns true for both finished commands and interactive
             // commands that it just installed. If no command is now active, the
             // tool was a one-shot and we must turn the ribbon highlight off here —
             // normally apply_cmd_result does that, but plugin dispatch can return
             // without producing a CmdResult.
+            self.tabs[i].last_cmd = Some(cmd.to_string());
             self.command_line.record_recent(cmd);
             if self.tabs[i].active_cmd.is_none() {
                 self.ribbon.deactivate_tool();
             }
-            return Task::none();
+            return self.finish_dispatch(cmd);
         }
 
         // Command families are dispatched in source order (see
@@ -261,7 +267,13 @@ impl OpenCADStudio {
         if let Some(t) = self.dispatch_layers(cmd, i) {
             return Some(t);
         }
+        if let Some(t) = self.dispatch_xref_attach(cmd, i) {
+            return Some(t);
+        }
         if let Some(t) = self.dispatch_blocks(cmd, i) {
+            return Some(t);
+        }
+        if let Some(t) = self.dispatch_pdf_underlay(cmd, i) {
             return Some(t);
         }
         if let Some(t) = self.dispatch_draw(cmd, i) {
@@ -621,12 +633,21 @@ inventory::submit!(crate::command::CommandRegistration {
         "FRAME",
         "IMAGEFRAME",
         "PDFFRAME",
+        "PDFOSNAP",
+        "UOSNAP",
+        "PDFIMPORTMODE",
+        "PDFIMPORTFILTER",
+        "PDFIMPORTLAYERS",
+        "PDFIMPORTIMAGEPATH",
+        "XDWGFADECTL",
         "POINTCLOUDCLIPFRAME",
         "XCLIPFRAME",
         "WIPEOUTFRAME",
         "FRAMES0",
         "FRAMES1",
         "FRAMES2",
+        "UOSNAP0",
+        "UOSNAP1",
         "HALOGAP",
         "TRACEWID",
         "SKETCHINC",
@@ -667,6 +688,7 @@ inventory::submit!(crate::command::CommandRegistration {
         "3DORBIT",
         "3O",
         "ABOUT",
+        "ATTACH",
         "ATTDISP",
         "ATTEXT",
         "BACKGROUND",
@@ -816,10 +838,10 @@ inventory::submit!(crate::command::CommandRegistration {
 
 #[cfg(test)]
 mod marquee_cancel_tests {
-    use crate::app::{GripPendingValue, OpenCADStudio};
+    use crate::app::{GripPendingValue, Message, OpenCADStudio};
     use crate::scene::model::object::GripMenuAction;
     use crate::scene::pick::grip::GripEdit;
-    use acadrust::Handle;
+    use codec::Handle;
     use iced::time::Instant;
 
     fn fresh() -> OpenCADStudio {
@@ -957,6 +979,29 @@ mod marquee_cancel_tests {
         assert!(app.tabs[i].active_grip.is_none());
         assert!(app.grip_pending.is_none());
         assert!(app.command_line.input.is_empty());
+        assert_eq!(
+            app.tabs[i].active_cmd.as_deref().map(|cmd| cmd.name()),
+            Some("LINE")
+        );
+    }
+
+    #[test]
+    fn command_finalize_repeats_last_cmd() {
+        let mut app = fresh();
+        let i = app.active_tab;
+        assert_eq!(app.tabs[i].last_cmd, None);
+
+        // Run LINE command
+        let _ = app.dispatch_command("LINE");
+        assert_eq!(app.tabs[i].last_cmd.as_deref(), Some("LINE"));
+
+        // Cancel LINE with Escape
+        let _ = app.update(Message::CommandEscape);
+        assert!(app.tabs[i].active_cmd.is_none());
+        assert_eq!(app.tabs[i].last_cmd.as_deref(), Some("LINE"));
+
+        // Press Enter (CommandFinalize) on empty command line repeats LINE
+        let _ = app.update(Message::CommandFinalize);
         assert_eq!(
             app.tabs[i].active_cmd.as_deref().map(|cmd| cmd.name()),
             Some("LINE")

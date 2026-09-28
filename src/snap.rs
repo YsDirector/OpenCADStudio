@@ -8,8 +8,8 @@ use glam::{DVec3, Mat4, Vec3};
 use iced::time::Instant;
 use iced::{Point, Rectangle};
 
-use cadkernel::geom2d::Curve;
-use acadrust::types::Handle;
+use kernel::geom2d::Curve;
+use codec::types::Handle;
 
 use crate::command::{DimensionAssociationSource, TangentObject};
 use crate::scene::model::wire_model::{SnapHint, TangentGeom, WireModel};
@@ -170,6 +170,7 @@ pub(crate) fn wire_source(wire: &WireModel) -> Option<DimensionAssociationSource
 /// Object-snap-tracking alignment: the cursor projected onto a ray from an
 /// acquired tracking point.
 #[derive(Debug, Clone, Copy)]
+#[non_exhaustive]
 pub struct OtrackHit {
     /// Cursor projected onto the tracking ray.
     pub aligned: DVec3,
@@ -177,6 +178,12 @@ pub struct OtrackHit {
     pub dir: DVec3,
     /// The tracking point the ray emanates from.
     pub base: DVec3,
+    /// The second ray of an intersection lock, as `(base, outward direction)`.
+    /// A crossing is the meeting of two tracking vectors, and the user has to
+    /// see both of them to read what the lock means; `base`/`dir` above carry
+    /// only the one a typed distance is measured along. `None` for a
+    /// single-ray alignment, which has no second vector. (#1313)
+    pub cross: Option<(DVec3, DVec3)>,
 
     pub kind: TrackingKind,
 }
@@ -917,19 +924,35 @@ impl Snapper {
                 if sd < r && best_x.as_ref().map_or(true, |(bd, _)| sd < *bd) {
                     // Report an acquired tracking ray (not an auxiliary
                     // last_point ray) as base/dir for typed-distance entry.
-                    let ot = if rays[i].group != POLAR_GROUP && rays[i].group != ORTHO_GROUP {
-                        &rays[i]
+                    let (ot, other) = if rays[i].group != POLAR_GROUP
+                        && rays[i].group != ORTHO_GROUP
+                    {
+                        (&rays[i], &rays[j])
                     } else {
-                        &rays[j]
+                        (&rays[j], &rays[i])
                     };
-                    let t = (x.x - ot.origin.x) * ot.dir.x + (x.y - ot.origin.y) * ot.dir.y;
-                    let dir_out = if t >= 0.0 { ot.dir } else { -ot.dir };
+                    // Point each ray the way the crossing lies from its own
+                    // origin, so the guide drawn for it runs through the lock
+                    // rather than away from it.
+                    let outward = |ray: &Ray| {
+                        let t = (x.x - ray.origin.x) * ray.dir.x
+                            + (x.y - ray.origin.y) * ray.dir.y;
+                        if t >= 0.0 {
+                            ray.dir
+                        } else {
+                            -ray.dir
+                        }
+                    };
+                    let dir_out = outward(ot);
                     best_x = Some((
                         sd,
                         OtrackHit {
                             aligned: x,
                             dir: dir_out,
                             base: ot.origin,
+                            // The vector the reported one crosses. Both are
+                            // drawn, so the intersection reads as one. (#1313)
+                            cross: Some((other.origin, outward(other))),
                             kind: ot.kind,
                         }
                     ));
@@ -970,6 +993,8 @@ impl Snapper {
                         aligned,
                         dir: dir_out,
                         base: ray.origin,
+                        // A single-ray alignment has no second vector.
+                        cross: None,
                         kind: ray.kind,
                     },
                 ));
@@ -2843,7 +2868,7 @@ fn tangent_line_endpoints(
 }
 
 fn curves_in_frame(wire: &WireModel, frame: &WirePlane, tol: f64) -> Option<Vec<Curve>> {
-    use cadkernel::geom2d::{Arc as KArc, Circle as KCircle, Ellipse as KEllipse, EllipseArc as KEllipseArc, Line as KLine};
+    use kernel::geom2d::{Arc as KArc, Circle as KCircle, Ellipse as KEllipse, EllipseArc as KEllipseArc, Line as KLine};
 
     let mut curves = Vec::new();
 
@@ -2961,11 +2986,11 @@ pub(crate) fn exact_curve_intersections(
         return None;
     }
 
-    let tolerance = cadkernel::geom2d::Tolerance::new(1e-9_f64.max(PLANE_TOL));
+    let tolerance = kernel::geom2d::Tolerance::new(1e-9_f64.max(PLANE_TOL));
     let mut points: Vec<DVec3> = Vec::new();
     for ca in &curves_a {
         for cb in &curves_b {
-            let crossings = cadkernel::geom2d::intersect(ca, cb, tolerance);
+            let crossings = kernel::geom2d::intersect(ca, cb, tolerance);
             for c in crossings {
                 let pt = frame.to_3d(c.point);
                 if !points.iter().any(|existing| existing.distance_squared(pt) <= 1e-12) {
@@ -3056,11 +3081,11 @@ fn seg_intersect_2d(a0: Point, a1: Point, b0: Point, b1: Point) -> Option<(f32, 
 
 /// Returns the two external tangent points on an XY circle.
 fn circle_tangent_points(p: Vec3, center: Vec3, radius: f32) -> Option<(Vec3, Vec3)> {
-    let curve = cadkernel::geom2d::Curve::Circle(cadkernel::geom2d::Circle {
+    let curve = kernel::geom2d::Curve::Circle(kernel::geom2d::Circle {
         centre: [center.x as f64, center.y as f64],
         radius: radius as f64,
     });
-    let points = cadkernel::geom2d::tangent_from(&curve, [p.x as f64, p.y as f64]);
+    let points = kernel::geom2d::tangent_from(&curve, [p.x as f64, p.y as f64]);
     let [first, second] = points.as_slice() else {
         return None;
     };
@@ -3077,15 +3102,15 @@ fn planar_circle_tangent_points(
     axis_y: [f64; 3],
     radius: f64,
 ) -> Vec<DVec3> {
-    let plane = cadkernel::space::Plane::from_axes(center, axis_x, axis_y);
+    let plane = kernel::space::Plane::from_axes(center, axis_x, axis_y);
     let Some(from) = plane.project(from.to_array()) else {
         return Vec::new();
     };
-    let curve = cadkernel::geom2d::Curve::Circle(cadkernel::geom2d::Circle {
+    let curve = kernel::geom2d::Curve::Circle(kernel::geom2d::Circle {
         centre: [0.0, 0.0],
         radius,
     });
-    cadkernel::geom2d::tangent_from(&curve, from)
+    kernel::geom2d::tangent_from(&curve, from)
         .into_iter()
         .map(|point| DVec3::from_array(plane.point_at(point.point)))
         .collect()
@@ -3100,17 +3125,17 @@ fn arc_tangent_points(
     start_angle: f64,
     end_angle: f64,
 ) -> Vec<DVec3> {
-    let plane = cadkernel::space::Plane::from_axes(center, axis_x, axis_y);
+    let plane = kernel::space::Plane::from_axes(center, axis_x, axis_y);
     let Some(from) = plane.project(from.to_array()) else {
         return Vec::new();
     };
-    let curve = cadkernel::geom2d::Curve::Arc(cadkernel::geom2d::Arc {
+    let curve = kernel::geom2d::Curve::Arc(kernel::geom2d::Arc {
         centre: [0.0, 0.0],
         radius,
         start_angle,
         end_angle,
     });
-    cadkernel::geom2d::tangent_from(&curve, from)
+    kernel::geom2d::tangent_from(&curve, from)
         .into_iter()
         .map(|point| DVec3::from_array(plane.point_at(point.point)))
         .collect()
@@ -3658,6 +3683,121 @@ mod ext_tests {
             DVec3::Y,
         );
         assert!(none.is_none(), "no base point → no base→corner alignment");
+    }
+
+    /// #1313: an intersection lock must report both of the vectors it is the
+    /// crossing of, so the overlay can draw both. Reporting only the one a
+    /// typed distance runs along leaves the user with a single guide and no
+    /// sign of what the point actually is.
+    #[test]
+    fn intersection_lock_reports_both_crossing_vectors() {
+        let mut s = Snapper::default();
+        s.otrack_enabled = true;
+        s.osnap_radius_px = 10.0;
+        // Two acquired corners. With no polar step each offers a horizontal and
+        // a vertical ray, so their rays cross at (10, 0) and at (0, 5).
+        let first = DVec3::new(0.0, 0.0, 0.0);
+        let second = DVec3::new(10.0, 5.0, 0.0);
+        for corner in [first, second] {
+            s.tracking_points.push(corner);
+            s.tracking_dirs.push(Vec::new());
+        }
+
+        let view_rot = Mat4::from_scale(Vec3::splat(0.0001));
+        let eye = glam::DVec3::ZERO;
+        let bounds = Rectangle {
+            x: 0.0,
+            y: 0.0,
+            width: 1000.0,
+            height: 1000.0,
+        };
+
+        // Cursor a hair off the crossing of the first corner's horizontal ray
+        // and the second corner's vertical one.
+        let crossing = DVec3::new(10.0, 0.0, 0.0);
+        let hit = s
+            .otrack_snap(
+                crossing + DVec3::new(0.02, 0.02, 0.0),
+                view_rot,
+                eye,
+                bounds,
+                None,
+                None,
+                None,
+                false,
+                DVec3::X,
+                DVec3::Y,
+            )
+            .expect("the two rays cross inside the aperture");
+        assert!(
+            (hit.aligned - crossing).length() < 1e-9,
+            "locked off the crossing: {:?}",
+            hit.aligned
+        );
+
+        let (cross_base, cross_dir) = hit.cross.expect("a crossing reports its second vector");
+        let bases = [hit.base, cross_base];
+        for corner in [first, second] {
+            assert!(
+                bases.iter().any(|b| (*b - corner).length() < 1e-9),
+                "{corner:?} is not one of the two reported vectors: {bases:?}"
+            );
+        }
+
+        // Each vector runs from its own corner through the crossing, pointing
+        // at it — the guides are drawn along these.
+        for (base, dir) in [(hit.base, hit.dir), (cross_base, cross_dir)] {
+            let off = crossing - base;
+            assert!(
+                (off.x * dir.y - off.y * dir.x).abs() < 1e-9,
+                "the crossing is off the vector from {base:?} along {dir:?}"
+            );
+            assert!(
+                off.dot(dir) > 0.0,
+                "vector from {base:?} points away from the crossing"
+            );
+        }
+    }
+
+    /// The second vector belongs to a crossing alone: a plain single-ray
+    /// alignment has nothing to cross, and must not draw a second guide.
+    #[test]
+    fn single_ray_alignment_reports_no_crossing_vector() {
+        let mut s = Snapper::default();
+        s.otrack_enabled = true;
+        s.osnap_radius_px = 10.0;
+        let corner = DVec3::new(10.0, 5.0, 0.0);
+        s.tracking_points.push(corner);
+        s.tracking_dirs.push(Vec::new());
+
+        let view_rot = Mat4::from_scale(Vec3::splat(0.0001));
+        let eye = glam::DVec3::ZERO;
+        let bounds = Rectangle {
+            x: 0.0,
+            y: 0.0,
+            width: 1000.0,
+            height: 1000.0,
+        };
+
+        let hit = s
+            .otrack_snap(
+                DVec3::new(60.0, 5.02, 0.0),
+                view_rot,
+                eye,
+                bounds,
+                None,
+                None,
+                None,
+                false,
+                DVec3::X,
+                DVec3::Y,
+            )
+            .expect("the corner's horizontal ray catches the cursor");
+        assert!(
+            hit.cross.is_none(),
+            "a single-ray alignment reported a crossing vector: {:?}",
+            hit.cross
+        );
     }
 
     #[test]

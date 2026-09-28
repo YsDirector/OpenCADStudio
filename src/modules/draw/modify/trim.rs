@@ -10,7 +10,7 @@
 
 use std::f64::consts::TAU;
 
-// The plane geometry these commands run on lives in cadkernel; `geom` adapts
+// The plane geometry these commands run on lives in opencadkernel; `geom` adapts
 // its call shapes to the loose scalars and f32 render vertices used here.
 use super::geom;
 use super::geom::{
@@ -20,15 +20,15 @@ use super::geom::{
 
 use crate::modules::draw::fence::{crossing_box_preview, FencePick};
 
-use acadrust::entities::{
+use codec::entities::{
     Arc as ArcEnt, Circle as CircleEnt, Ellipse as EllipseEnt, Line as LineEnt, LwPolyline,
     LwVertex, Ray as RayEnt, Spline as SplineEnt, XLine as XLineEnt,
 };
-use acadrust::types::Vector3;
-use acadrust::{EntityType, Handle};
+use codec::types::Vector3;
+use codec::{EntityType, Handle};
 use glam::DVec3;
-use cadkernel::geom2d::nurbs::clamped_uniform_knots;
-use cadkernel::geom2d::{
+use kernel::geom2d::nurbs::clamped_uniform_knots;
+use kernel::geom2d::{
     intersect as kernel_intersect, trim_spans as kernel_trim_spans, Arc as KernelArc,
     BulgeArc, Circle as KernelCircle, Curve, Extent as KernelExtent,
     Ellipse as KernelEllipse, EllipseArc as KernelEllipseArc, Line as KernelLine,
@@ -77,7 +77,7 @@ const TRIM_EXTENT: f64 = 1_000_000.0;
 /// Sampling density for the plan-view point lists the fence and preview
 /// passes walk. The renderer's own figure, so a preview cut lands where the
 /// drawn geometry is rather than a chord away from it.
-const SAMPLE_SEGMENTS_PER_RADIAN: f64 = cadkernel::geom2d::DEFAULT_SEGMENTS_PER_RADIAN;
+const SAMPLE_SEGMENTS_PER_RADIAN: f64 = kernel::geom2d::DEFAULT_SEGMENTS_PER_RADIAN;
 /// If a trim interval endpoint is beyond this threshold it is treated as "infinite".
 
 #[derive(Clone)]
@@ -694,11 +694,11 @@ fn extend_spline(spl: &SplineEnt, t_click: f64, geos: &[Geo]) -> Option<EntityTy
     if extend_end {
         new_spl
             .control_points
-            .push(acadrust::types::Vector3::new(hit_x, hit_y, z));
+            .push(codec::types::Vector3::new(hit_x, hit_y, z));
     } else {
         new_spl
             .control_points
-            .insert(0, acadrust::types::Vector3::new(hit_x, hit_y, z));
+            .insert(0, codec::types::Vector3::new(hit_x, hit_y, z));
     }
     // Rebuild knots (uniform) for the extended control polygon.
     let degree = new_spl.degree as usize;
@@ -2548,7 +2548,7 @@ impl CadCommand for TrimCommand {
         }
     }
 
-    fn on_entity_replaced(&mut self, _old: Handle, new_handles: &[acadrust::Handle]) {
+    fn on_entity_replaced(&mut self, _old: Handle, new_handles: &[codec::Handle]) {
         // Batch gestures stage several NULL-handle replacement groups before
         // the document assigns real handles. The host applies them in the same
         // order, so fill the first remaining placeholders on each callback.
@@ -3227,7 +3227,7 @@ impl CadCommand for ExtendCommand {
         }
     }
 
-    fn on_entity_replaced(&mut self, _old: Handle, new_handles: &[acadrust::Handle]) {
+    fn on_entity_replaced(&mut self, _old: Handle, new_handles: &[codec::Handle]) {
         // The last new_handles.len() entries are the pieces appended with NULL
         // handles in on_entity_pick — assign their real document handles.
         let start = self.all_entities.len().saturating_sub(new_handles.len());
@@ -3810,6 +3810,72 @@ mod tests {
             other => panic!("expected LwPolyline, got {other:?}"),
         }
     }
+
+    /// #1318 repro: a 3D polyline whose first segment is not horizontal has no
+    /// plan-view shape, so it samples to nothing. The seam test then compared
+    /// two empty ends as equal and sliced the empty sample from index 1.
+    #[test]
+    fn sampling_skips_segments_with_no_plan_shape() {
+        use codec::entities::{Polyline3D, Vertex3DPolyline};
+
+        let mut pl = Polyline3D::new();
+        pl.vertices = vec![
+            // Vertical: an upright curve plane, dropped by `entity_curve_xy`.
+            Vertex3DPolyline::from_xyz(0.0, 0.0, 0.0),
+            Vertex3DPolyline::from_xyz(0.0, 0.0, 10.0),
+            // Horizontal, so this one does sample.
+            Vertex3DPolyline::from_xyz(10.0, 0.0, 10.0),
+        ];
+
+        let pts = sample_entity_xy(&EntityType::Polyline3D(pl));
+        assert!(
+            !pts.is_empty(),
+            "the horizontal segment still has to be sampled"
+        );
+        assert!(
+            pts.iter().all(|p| p.iter().all(|c| c.is_finite())),
+            "sampled points stay finite: {pts:?}"
+        );
+    }
+
+    /// The same skip must not swallow a leading segment that does sample, and
+    /// must keep dropping the duplicated seam vertex between two of them.
+    #[test]
+    fn sampling_still_joins_segments_at_their_seam() {
+        use codec::entities::{Polyline3D, Vertex3DPolyline};
+
+        let mut pl = Polyline3D::new();
+        pl.vertices = vec![
+            Vertex3DPolyline::from_xyz(0.0, 0.0, 0.0),
+            Vertex3DPolyline::from_xyz(10.0, 0.0, 0.0),
+            Vertex3DPolyline::from_xyz(10.0, 10.0, 0.0),
+        ];
+
+        let pts = sample_entity_xy(&EntityType::Polyline3D(pl));
+        let seam = [10.0, 0.0];
+        assert_eq!(
+            pts.iter().filter(|p| **p == seam).count(),
+            1,
+            "the shared vertex appears once, not twice: {pts:?}"
+        );
+    }
+
+    #[test]
+    fn preview_sampling_skips_edge_on_polyline2d_arc_segments() {
+        use codec::entities::{Polyline2D, Vertex2D};
+
+        let mut pl = Polyline2D::new();
+        let mut start = Vertex2D::new(Vector3::new(0.0, 0.0, 0.0));
+        start.bulge = 1.0;
+        pl.vertices = vec![start, Vertex2D::new(Vector3::new(2.0, 0.0, 0.0))];
+        pl.normal = Vector3::new(1.0, 0.0, 0.0);
+
+        let pts = preview_sample_xy(&EntityType::Polyline2D(pl));
+        assert!(
+            pts.is_empty(),
+            "edge-on arc segments are skipped instead of panicking: {pts:?}"
+        );
+    }
 }
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -3978,6 +4044,13 @@ fn sample_entity_xy(e: &EntityType) -> Vec<[f64; 2]> {
         let mut pts: Vec<[f64; 2]> = Vec::new();
         for seg in crate::modules::draw::modify::explode::explode_polyline_segments(e) {
             let sp = sample_entity_xy(&seg);
+            // A segment with no plan-view shape samples to nothing — an
+            // edge-on plane has no XY curve, so `entity_curve_xy` declines it.
+            // Skipping it here also keeps the seam test below from comparing
+            // two `None`s and then slicing an empty sample (#1318).
+            if sp.is_empty() {
+                continue;
+            }
             if pts.last() == sp.first() {
                 pts.extend_from_slice(&sp[1..]);
             } else {
@@ -4030,6 +4103,9 @@ fn preview_sample_xy(e: &EntityType) -> Vec<[f64; 2]> {
                     }
                     _ => sample_entity_xy(&seg),
                 };
+                if sp.is_empty() {
+                    continue;
+                }
                 if pts.last() == sp.first() {
                     pts.extend_from_slice(&sp[1..]);
                 } else {

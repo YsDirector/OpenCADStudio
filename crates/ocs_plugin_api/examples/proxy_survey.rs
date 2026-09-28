@@ -6,9 +6,9 @@
 //! cargo run -q -p ocs_plugin_api --features host --example proxy_survey -- <目录> [文件上限] [取样间隔]
 //! ```
 
-use ocs_plugin_api::host::acadrust::io::dwg::DwgReader;
-use ocs_plugin_api::host::acadrust::objects::ObjectType;
-use ocs_plugin_api::host::acadrust::EntityType;
+use ocs_plugin_api::host::codec::io::dwg::DwgReader;
+use ocs_plugin_api::host::codec::objects::ObjectType;
+use ocs_plugin_api::host::codec::EntityType;
 use std::collections::{BTreeMap, BTreeSet};
 
 /// 代理图形记录类型（ezdxf ProxyGraphicTypes 权威表）。

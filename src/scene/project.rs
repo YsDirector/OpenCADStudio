@@ -10,7 +10,7 @@ impl Scene {
         only_vp: Option<Handle>,
         exclude_vp: Option<Handle>,
     ) -> Vec<WireModel> {
-        use acadrust::entities::Viewport;
+        use codec::entities::Viewport;
 
         let (_, _, viewport_handles) = self.paper_viewport_handles();
         let viewports: Vec<&Viewport> = viewport_handles
@@ -321,6 +321,22 @@ impl Scene {
                 }
                 let mut out = wire.clone();
                 out.points = clipped;
+                // A wide polyline's band width is a geometric width in model
+                // units; the points were just projected into paper units, so
+                // the band (and any per-point taper) must follow the same
+                // scale or the PDF / print exporter strokes a 15-unit bus bar
+                // as 15 mm of paper. Negative values are fixed pixel widths
+                // and zero means "use the lineweight" — both stay as they are.
+                if out.world_width > 0.0 {
+                    out.world_width = wire.world_width * scale;
+                    if wire.taper_widths.len() == out.points.len() {
+                        out.taper_widths = wire.taper_widths.iter().map(|w| w * scale).collect();
+                    } else {
+                        // Clipping changed the vertex count, so the per-point
+                        // widths no longer line up; fall back to a constant band.
+                        out.taper_widths.clear();
+                    }
+                }
                 if let Some(source_length) = source_length {
                     for station in &mut clipped_stations {
                         *station *= scale;
@@ -387,7 +403,7 @@ impl Scene {
     pub fn viewport_plot_fills(
         &self,
     ) -> (Vec<(WireModel, f32)>, Vec<HatchModel>, Vec<HatchModel>, Vec<crate::io::pdf_export::PlotImage>) {
-        use acadrust::entities::Viewport;
+        use codec::entities::Viewport;
         use model::hatch_model::HatchPattern;
 
         if self.current_layout == "Model" {
@@ -611,7 +627,7 @@ impl Scene {
         us: f32,
         vs: f32,
     ) -> Vec<[f32; 2]> {
-        use acadrust::entities::Viewport;
+        use codec::entities::Viewport;
         let Some(EntityType::Viewport(vp)) = self.document.get_entity(vp_handle) else {
             return vec![];
         };
@@ -863,7 +879,7 @@ where
         output.extend(clipped);
     };
     if let (Some(plane), Some(boundary)) = (fill.fill_plane, fill.fill_plane_boundary.as_deref()) {
-        let plane = cadkernel::space::Plane::from_axes(
+        let plane = kernel::space::Plane::from_axes(
             plane.origin,
             plane.x_axis,
             plane.y_axis,

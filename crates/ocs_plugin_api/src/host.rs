@@ -1,6 +1,6 @@
 //! Runtime host surface (`host` feature).
 //!
-//! [`HostApi`] is the `acadrust`-typed adapter a plugin uses at *dispatch* time
+//! [`HostApi`] is the `opencadcodec`-typed adapter a plugin uses at *dispatch* time
 //! — document access, entity creation, XDATA, undo, and the command line. It is
 //! the stable counterpart to the dependency-free manifest/ribbon contract: a
 //! plugin's `dispatch` receives `&mut dyn HostApi` rather than the host's
@@ -19,16 +19,21 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use crate::manifest::PluginManifest;
 use crate::ribbon::CadModule;
 
-// Re-export the acadrust crate and the types that appear in the HostApi trait
-// so out-of-tree plugins can use them without adding their own acadrust
+// Re-export the opencadcodec crate and the types that appear in the HostApi trait
+// so out-of-tree plugins can use them without adding their own opencadcodec
 // dependency (which would risk an ABI-mismatching version).
-pub use acadrust;
-pub use acadrust::objects::{
+pub use codec;
+// fork: the crate was renamed `acadrust` -> `opencadcodec` (alias `codec`) by upstream
+// on 2026-09-28; keep the old path working so the fork's OCSMechanical plugin
+// (`use ocs_plugin_api::host::acadrust;`, 944 references) compiles unchanged.
+// See `docs/fork-patches.md` §A-1.
+pub use codec as acadrust;
+pub use codec::objects::{
     DictionaryCloningFlags, KnownXRecordKind, ProxyObjectReference, ProxyReferenceKind, XRecord,
     XRecordEntry, XRecordSection, XRecordValue, XRecordValueType,
 };
-pub use acadrust::xdata::{ExtendedDataRecord, XDataValue};
-pub use acadrust::{CadDocument, EntityType, Handle};
+pub use codec::xdata::{ExtendedDataRecord, XDataValue};
+pub use codec::{CadDocument, EntityType, Handle};
 
 use crate::ipc::protocol::{PluginRequest, PluginResponse};
 
@@ -76,6 +81,243 @@ pub enum LogLevel {
     Error,
 }
 
+/// A solid primitive the host can build with its geometry kernel. Lengths are
+/// in drawing units; `center`/`origin` are world coordinates.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum SolidPrimitive {
+    /// Axis-aligned box from its center and full extents.
+    Box { center: [f64; 3], size: [f64; 3] },
+    /// Right triangular prism from its minimum corner and extents.
+    Wedge { origin: [f64; 3], size: [f64; 3] },
+    /// Cylinder standing on the plane through `center`.
+    Cylinder { center: [f64; 3], radius: f64, height: f64 },
+    Sphere { center: [f64; 3], radius: f64 },
+    Torus { center: [f64; 3], major: f64, minor: f64 },
+    /// Regular pyramid with `sides` base edges.
+    Pyramid { center: [f64; 3], radius: f64, height: f64, sides: u32 },
+}
+
+/// How two solids combine.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SolidBoolean {
+    Union,
+    /// Remove the second solid from the first.
+    Subtract,
+    Intersect,
+}
+
+/// One step of driving an OCS command from a script (API v7, additive). The
+/// host runs the real command, so every tool behaves exactly as at the command
+/// line, and answers with where the command stands.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum CommandRequest {
+    /// Run a whole command line (`OFFSET 5 ...`): the tokens after the name
+    /// answer the prompts in order and a final Enter finishes the command.
+    Run { line: String },
+    /// Start a command and leave it waiting for its first input.
+    Start { name: String },
+    /// Answer the current prompt with a world-coordinate point.
+    Point { point: [f64; 3] },
+    /// Answer with typed text (a distance, an angle, a name).
+    Text { text: String },
+    /// Answer with a keyword option.
+    Token { text: String },
+    /// Pick an entity at a point.
+    Entity { handle: Handle, point: [f64; 3] },
+    /// Complete an object-selection prompt with the current selection.
+    Selection,
+    /// Press Enter.
+    Enter,
+    /// Cancel the running command and close anything it left open.
+    Cancel,
+}
+
+/// Where a command stands after a [`CommandRequest`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct CommandOutcome {
+    /// `completed` when nothing is waiting, `waiting_input` when the command
+    /// (or an editor or dialog it opened) needs more.
+    pub status: String,
+    /// What is still open: `command`, `text_editor`, `mtext_editor` or `modal:<kind>`.
+    pub blocked_by: Option<String>,
+    /// The waiting command's name and prompt (empty when none).
+    pub command: String,
+    pub prompt: String,
+    /// The kinds of input the prompt accepts (`point`, `entity`, `selection`,
+    /// `text`, `token`, `enter`) and its keyword options.
+    pub accepts: Vec<String>,
+    pub options: Vec<String>,
+    /// Entities in the drawing after the step, and the change.
+    pub entities: u64,
+    pub added: i64,
+    /// Typed tokens no prompt asked for.
+    pub unconsumed: Vec<String>,
+    /// The command line's error message when the step failed.
+    pub error: Option<String>,
+}
+
+/// A change to a drawing table record (API v7, additive). The host validates
+/// the request, records one undo step and refuses without changing anything
+/// when it cannot honour it; the result is the record's handle.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum TableOperation {
+    /// Create a layer. `config.name` must be unused and valid.
+    LayerCreate { config: LayerConfig },
+    /// Change only the properties `config` sets on an existing layer.
+    LayerModify { config: LayerConfig },
+    /// Rename a layer; entities on it follow. Layer `0` and `Defpoints` stay.
+    LayerRename { from: String, to: String },
+    /// Delete a layer. A layer that still holds objects is refused unless
+    /// `erase_objects` is set, which erases them with the layer. Layer `0`,
+    /// `Defpoints` and the current layer are never deleted.
+    LayerDelete { name: String, erase_objects: bool },
+    /// Make an existing layer current.
+    LayerSetCurrent { name: String },
+    /// Create a text style; unset properties take the AutoCAD defaults.
+    TextStyleCreate { config: TextStyleConfig },
+    /// Change only the properties `config` sets on an existing text style.
+    TextStyleModify { config: TextStyleConfig },
+    /// Create a dimension style, optionally copying an existing one first.
+    /// `properties` is a JSON object of DimStyle fields (see the Python docs);
+    /// handles and xref fields are managed by the host and refused.
+    DimStyleCreate { name: String, copy_from: Option<String>, properties: String },
+    /// Change only the DimStyle fields the JSON object `properties` names.
+    DimStyleModify { name: String, properties: String },
+    /// Rename a text or dimension style; references to it follow. `Standard`
+    /// is never renamed and a case-only change is refused.
+    StyleRename { kind: TableStyleKind, from: String, to: String },
+    /// Delete a text or dimension style that is neither current nor in use.
+    /// `Standard` is never deleted.
+    StyleDelete { kind: TableStyleKind, name: String },
+    /// Make a text or dimension style current.
+    StyleSetCurrent { kind: TableStyleKind, name: String },
+    /// Define a block from existing drawing entities. The entities are copied
+    /// into the definition shifted by `-base_point` (the block's origin);
+    /// `erase_originals` then removes them from the drawing. No insert is
+    /// placed. Returns the block record's handle.
+    BlockCreate {
+        name: String,
+        entities: Vec<Handle>,
+        base_point: [f64; 3],
+        erase_originals: bool,
+        description: Option<String>,
+    },
+    /// Change a block's description, explodable or uniform-scale settings.
+    BlockModify {
+        name: String,
+        description: Option<String>,
+        explodable: Option<bool>,
+        scale_uniformly: Option<bool>,
+    },
+    /// Rename a block; every insert of it follows.
+    BlockRename { from: String, to: String },
+    /// Delete an unreferenced block definition and its contents.
+    BlockDelete { name: String },
+    /// Add a new entity to a block definition, validated exactly as a new
+    /// model-space entity is. The entity's owner is set by the host. Returns the
+    /// new entity's handle. Edit and delete members with the ordinary entity
+    /// operations.
+    BlockEntityAdd { block: String, entity: EntityType },
+    /// Create a simple linetype. `pattern` is signed lengths in drawing units:
+    /// positive is a dash, negative a gap, zero a dot (2-12 elements with at
+    /// least one dash or dot and one gap). Returns the linetype's handle.
+    LinetypeCreate { name: String, description: String, pattern: Vec<f64> },
+    /// Change a simple linetype's description or pattern in place.
+    LinetypeModify { name: String, description: Option<String>, pattern: Option<Vec<f64>> },
+    /// Rename a linetype; layers and entities that use it follow.
+    LinetypeRename { from: String, to: String },
+    /// Delete a linetype that no layer, entity, dimension style or the current
+    /// setting uses. `Continuous`, `ByLayer` and `ByBlock` are never deleted.
+    LinetypeDelete { name: String },
+    /// Create a paper-space layout with the default page setup and sheet viewport.
+    LayoutCreate { name: String },
+    /// Rename a paper-space layout (never `Model`).
+    LayoutRename { from: String, to: String },
+    /// Delete a paper-space layout and everything on it (never `Model`).
+    LayoutDelete { name: String },
+    /// Switch the active layout (`Model` or a paper-space layout).
+    LayoutSetCurrent { name: String },
+    /// Change a paper-space layout's sheet: size in millimetres, rotation in
+    /// degrees (0, 90, 180 or 270) and a custom plot scale (numerator,
+    /// denominator).
+    LayoutSetPage {
+        name: String,
+        paper_size: Option<[f64; 2]>,
+        rotation: Option<u16>,
+        scale: Option<[f64; 2]>,
+    },
+}
+
+/// The style tables `TableOperation` can rename, delete or make current.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TableStyleKind {
+    Text,
+    Dim,
+}
+
+/// Properties for creating or changing a text style; `None` leaves a property
+/// as it was (or the default for a new style). Angles are in radians.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct TextStyleConfig {
+    pub name: String,
+    /// Fixed height; `0` lets each text choose its own.
+    pub height: Option<f64>,
+    pub width_factor: Option<f64>,
+    pub oblique_angle: Option<f64>,
+    pub font_file: Option<String>,
+    pub big_font_file: Option<String>,
+    pub true_type_font: Option<String>,
+    pub backward: Option<bool>,
+    pub upside_down: Option<bool>,
+    pub vertical: Option<bool>,
+    pub annotative: Option<bool>,
+}
+
+/// A kernel operation on ACIS-backed solids (API v7, additive). The host owns
+/// the geometry: a script never sees or rewrites the payload.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum SolidOperation {
+    /// Build a new solid on `layer` (layer `0` when `None`).
+    Create { primitive: SolidPrimitive, layer: Option<String> },
+    /// Apply a rigid transform, given as a column-major 4x4 matrix, to an
+    /// existing solid. Scaling and shear are refused.
+    Transform { handle: Handle, matrix: [f64; 16] },
+    /// Build a planar region from one closed planar profile entity (a circle,
+    /// ellipse, closed polyline or spline, ...). The new region goes on
+    /// `layer`, or on the source's layer when `None`; `delete_source` erases
+    /// the profile afterwards, as the REGION command does.
+    RegionFromProfile { source: Handle, layer: Option<String>, delete_source: bool },
+    /// Build a plane surface from one closed planar profile entity.
+    SurfaceFromProfile { source: Handle, layer: Option<String>, delete_source: bool },
+    /// Extrude a planar profile along `direction`: a solid when the profile is
+    /// closed, a surface when it is open.
+    Extrude { source: Handle, direction: [f64; 3], layer: Option<String>, delete_source: bool },
+    /// Combine two solids into a new one. Both operands are consumed unless
+    /// `keep_operands`; the result goes on `layer` or the first operand's
+    /// layer. The kernel refuses some cases (coincident faces, cuts it has no
+    /// closed form for); a refusal changes nothing. Curved operands can take a
+    /// second or two, and the host thread is busy meanwhile.
+    /// Embed a picture file as an OLE frame whose bottom-left corner is at
+    /// `origin`, `width` drawing units wide, keeping the picture's aspect.
+    /// PNG, JPEG and BMP are stored as read; other formats are re-encoded as
+    /// PNG. The frame goes on `layer` (layer `0` when `None`).
+    EmbedPicture { path: String, origin: [f64; 3], width: f64, layer: Option<String> },
+    Boolean {
+        first: Handle,
+        second: Handle,
+        operation: SolidBoolean,
+        layer: Option<String>,
+        keep_operands: bool,
+    },
+}
+
+/// Value of a host-managed drafting or document setting exposed to plugins.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum HostSettingValue {
+    Text(String),
+    Number(f64),
+}
+
 /// A notification the host sends to a plugin. These are best-effort,
 /// full-duplex messages correlated with an optional `command_id`.
 #[derive(Debug, Clone, PartialEq)]
@@ -92,6 +334,10 @@ pub enum HostNotification {
     DocumentTabClosed { tab_id: u64 },
     /// V4 selection changed for a specific tab. Discriminant 7.
     SelectionChangedV4 { tab_id: u64, handles: Vec<Handle> },
+    /// V7 active interactive-command state for a tab. Discriminant 8.
+    CommandStateChanged { tab_id: u64, command: Option<String> },
+    /// V7 drawing epoch, broadcast even without an open shared view. Discriminant 9.
+    DrawingChanged { tab_id: u64, epoch: u64 },
     /// Fallback for notification variants added in future minor revisions.
     /// Carries the raw bincode payload so an older peer can ignore it without
     /// failing deserialization.
@@ -142,6 +388,20 @@ impl Serialize for HostNotification {
                 bincode::serialize_into(&mut bytes, handles)
                     .map_err(serde::ser::Error::custom)?;
             }
+            HostNotification::CommandStateChanged { tab_id, command } => {
+                bytes.push(8);
+                bincode::serialize_into(&mut bytes, tab_id)
+                    .map_err(serde::ser::Error::custom)?;
+                bincode::serialize_into(&mut bytes, command)
+                    .map_err(serde::ser::Error::custom)?;
+            }
+            HostNotification::DrawingChanged { tab_id, epoch } => {
+                bytes.push(9);
+                bincode::serialize_into(&mut bytes, tab_id)
+                    .map_err(serde::ser::Error::custom)?;
+                bincode::serialize_into(&mut bytes, epoch)
+                    .map_err(serde::ser::Error::custom)?;
+            }
             HostNotification::Unknown(raw) => bytes.extend_from_slice(raw),
         }
         bytes.serialize(serializer)
@@ -178,6 +438,12 @@ impl<'de> Deserialize<'de> for HostNotification {
                 .map_err(serde::de::Error::custom),
             7 => bincode::deserialize(rest)
                 .map(|(tab_id, handles)| HostNotification::SelectionChangedV4 { tab_id, handles })
+                .map_err(serde::de::Error::custom),
+            8 => bincode::deserialize(rest)
+                .map(|(tab_id, command)| HostNotification::CommandStateChanged { tab_id, command })
+                .map_err(serde::de::Error::custom),
+            9 => bincode::deserialize(rest)
+                .map(|(tab_id, epoch)| HostNotification::DrawingChanged { tab_id, epoch })
                 .map_err(serde::de::Error::custom),
             _ => Ok(HostNotification::Unknown(bytes)),
         }
@@ -360,7 +626,15 @@ pub trait InteractiveCommand: Send {
         CommandStep::Cancel
     }
 
-    // ── API v5 interactive enhancements (appended at the end; old plugin
+    /// Real-time preview geometry (lines, arcs, polylines) to render as the cursor moves.
+    /// Each wire can specify custom vertices and an optional color (defaults to host cyan).
+    fn on_cursor_move(&mut self, _pt: [f64; 3]) -> Vec<PreviewWire> {
+        Vec::new()
+    }
+    // ── fork: API v5 interactive enhancements ──────────────────────────────
+    // Appended **after** upstream's own slots: a plugin built against upstream
+    // alone keeps byte-compatible vtable offsets, and fork plugins (OCSMechanical)
+    // are rebuilt together with this crate. See docs/fork-patches.md §A-1.
     // binaries keep their vtable slots) ──────────────────────────────────────
 
     /// True while the next typed line is captured as command text (a keyword
@@ -416,6 +690,97 @@ pub trait InteractiveCommand: Send {
     }
 }
 
+/// A preview wire rendered in real-time during interactive commands.
+/// Supports straight polylines as well as analytical circles and arcs
+/// that render via GPU shaders with infinite smoothness.
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "host", derive(serde::Serialize, serde::Deserialize))]
+pub enum PreviewWire {
+    /// A connected sequence of straight line segments in world space.
+    Polyline {
+        points: Vec<[f64; 3]>,
+        color: Option<[f32; 4]>,
+    },
+    /// An analytical circle rendered with sub-pixel GPU anti-aliasing.
+    Circle {
+        center: [f64; 3],
+        radius: f64,
+        color: Option<[f32; 4]>,
+    },
+    /// An analytical circular arc swept counter-clockwise from `start_angle_rad` to `end_angle_rad`.
+    Arc {
+        center: [f64; 3],
+        radius: f64,
+        start_angle_rad: f64,
+        end_angle_rad: f64,
+        color: Option<[f32; 4]>,
+    },
+}
+
+impl PreviewWire {
+    /// Create a polyline preview wire with default host cyan color.
+    pub fn new(points: Vec<[f64; 3]>) -> Self {
+        Self::Polyline { points, color: None }
+    }
+
+    /// Optional RGBA color (0.0 to 1.0) specified for this preview wire.
+    pub fn color(&self) -> Option<[f32; 4]> {
+        match self {
+            Self::Polyline { color, .. } => *color,
+            Self::Circle { color, .. } => *color,
+            Self::Arc { color, .. } => *color,
+        }
+    }
+
+    /// Create a polyline preview wire with a custom RGBA color.
+    pub fn with_color(points: Vec<[f64; 3]>, color: [f32; 4]) -> Self {
+        Self::Polyline {
+            points,
+            color: Some(color),
+        }
+    }
+
+    /// Create a straight line segment preview between two points.
+    pub fn line(from: [f64; 3], to: [f64; 3], color: Option<[f32; 4]>) -> Self {
+        Self::Polyline {
+            points: vec![from, to],
+            color,
+        }
+    }
+
+    /// Create an analytical circle preview.
+    pub fn circle(center: [f64; 3], radius: f64, color: Option<[f32; 4]>) -> Self {
+        Self::Circle {
+            center,
+            radius,
+            color,
+        }
+    }
+
+    /// Create an analytical circular arc preview.
+    pub fn arc(
+        center: [f64; 3],
+        radius: f64,
+        start_angle_rad: f64,
+        end_angle_rad: f64,
+        color: Option<[f32; 4]>,
+    ) -> Self {
+        Self::Arc {
+            center,
+            radius,
+            start_angle_rad,
+            end_angle_rad,
+            color,
+        }
+    }
+}
+
+impl From<Vec<[f64; 3]>> for PreviewWire {
+    fn from(points: Vec<[f64; 3]>) -> Self {
+        Self::new(points)
+    }
+}
+
 /// The outcome of an [`InteractiveCommand`] step.
 #[derive(Debug)]
 #[cfg_attr(feature = "host", derive(serde::Serialize, serde::Deserialize))]
@@ -430,24 +795,25 @@ pub enum CommandStep {
     Done,
     /// Cancel the command.
     Cancel,
+    // New variants go after the existing ones: the step crosses the plugin
+    // IPC, which encodes a variant by its position, so inserting one earlier
+    // would make a plugin built against the previous API send `Done` and
+    // have the host read it as something else.
+    /// Commit multiple entities to the document and keep collecting points.
+    CommitMany(Vec<EntityType>),
+    /// Commit multiple entities to the document and end the command.
+    CommitManyAndEnd(Vec<EntityType>),
+    // fork: the variant below is appended *after* upstream's, so every position
+    // upstream-built plugins rely on (NeedPoint..Cancel, CommitMany,
+    // CommitManyAndEnd) stays exactly as upstream defines it. The fork's own
+    // `CommitEntities`/`CommitEntitiesAndExit` are gone: upstream's
+    // `CommitMany`/`CommitManyAndEnd` are the single API now (OCSMechanical's
+    // `centerline.rs` and the host test were ported in the 2026-09-28 sync).
     /// The input was not consumed — let the host interpret it normally (e.g.
     /// a non-keyword token at an entity-pick step falls through to the hex
     /// handle reading). Without this, a plugin `on_text_input` that returns
     /// `NeedPoint` would swallow every typed token and block handle picks.
     Ignored,
-
-    // ── API v5 addendum (2026-09-17; appended at the end so the bincode
-    // discriminants of the variants above stay put for pre-built plugins) ──
-
-    /// Commit **several** entities in one step and stay active.
-    ///
-    /// Maps onto the host's `CmdResult::CommitEntities`, so a plugin command
-    /// can emit composite geometry as *plain* entities — e.g. the two centre
-    /// lines of `OCSMCENTERLINE` — in a single undo entry, instead of having
-    /// to wrap them in an anonymous block to keep one entity per step.
-    CommitEntities(Vec<EntityType>),
-    /// Commit several entities and end the command (see [`Self::CommitEntities`]).
-    CommitEntitiesAndExit(Vec<EntityType>),
 }
 
 /// Export a `BuiltinPlugin` from a `cdylib` so the host can load it at runtime.
@@ -495,11 +861,11 @@ pub struct LayerDef {
     /// Layer name (case-insensitive uniqueness against existing layers).
     pub name: String,
     /// Layer color.
-    pub color: acadrust::types::Color,
+    pub color: codec::types::Color,
     /// Linetype name (must exist in the document's linetype table).
     pub linetype: String,
     /// Line weight.
-    pub lineweight: acadrust::types::LineWeight,
+    pub lineweight: codec::types::LineWeight,
     /// Whether the layer is plottable.
     pub plottable: bool,
     /// Whether the layer is created in the off (hidden) state.
@@ -869,8 +1235,104 @@ pub trait HostApi {
         None
     }
 
-    // ── API v5 (added at the very end; vtable-prefix compatible) ────────────
+    /// Read a named host setting without invoking the command dispatcher.
+    /// Names are case-insensitive. Hosts may support only a subset.
+    fn system_variable(&self, _name: &str) -> Option<HostSettingValue> {
+        None
+    }
+
+    /// Set a named host setting without re-entering command dispatch.
+    /// Returns the effective value after validation and normalization.
+    fn set_system_variable(
+        &mut self,
+        _name: &str,
+        _value: HostSettingValue,
+    ) -> Result<HostSettingValue, String> {
+        Err("system variable is not supported by this host".to_owned())
+    }
+
+    /// Validate and replace existing entities as one undo step (API v7).
+    /// Callers clone entities from `document()`, change only supported fields,
+    /// and submit all replacements together. Identity and kind must be kept.
+    /// An error leaves the drawing and undo history unchanged.
+    fn update_entities_transaction(
+        &mut self,
+        _label: &str,
+        _entities: Vec<EntityType>,
+    ) -> Result<(), String> {
+        Err("entity transactions are not supported by this host".to_owned())
+    }
+
+    /// Current ordered selection in this session's tab (API v7).
+    fn selection(&self) -> Vec<Handle> { Vec::new() }
+
+    /// Replace this tab's selection with exactly these handles, in order.
+    /// Missing or duplicate handles reject the request (API v7).
+    fn set_selection(&mut self, _handles: &[Handle]) -> Result<(), String> {
+        Err("selection writes are not supported by this host".to_owned())
+    }
+
+    /// Run a kernel-backed solid operation and return the created or updated
+    /// entity's handle. Refused, without any change, when the kernel cannot
+    /// perform it losslessly (API v7, additive).
+    fn solid_operation(&mut self, _operation: SolidOperation) -> Result<Handle, String> {
+        Err("solid operations are not supported by this host".to_owned())
+    }
+
+    /// Drive an OCS command from a script (API v7, additive). Refused, with
+    /// nothing run, when another command is already active or the request names
+    /// a command that could end the session or re-enter the plugin.
+    fn run_command(&mut self, _request: CommandRequest) -> Result<CommandOutcome, String> {
+        Err("running commands is not supported by this host".to_owned())
+    }
+
+    /// Create, change, rename, delete or select a drawing table record (API v7,
+    /// additive). Returns the record's handle; a refusal changes nothing.
+    fn table_operation(&mut self, _operation: TableOperation) -> Result<Handle, String> {
+        Err("table operations are not supported by this host".to_owned())
+    }
+    /// Add a layer to the active document with full initial properties.
+    /// If an optional property in `config` is `None`, standard CAD defaults are applied.
+    /// Returns `None` if the layer already exists or `config.name` is invalid.
+    ///
+    /// To modify properties of an already existing layer, use [`modify_layer`](Self::modify_layer).
+    fn add_layer(&mut self, config: LayerConfig) -> Option<Handle> {
+        let _ = config;
+        None
+    }
+
+    /// Modify specified properties of an existing layer in the active document.
+    /// Properties that are `None` in `config` are left untouched as-is.
+    /// Returns `false` if the layer does not exist or `config.name` is invalid.
+    ///
+    /// To create a new layer, use [`add_layer`](Self::add_layer).
+    fn modify_layer(&mut self, config: LayerConfig) -> bool {
+        let _ = config;
+        false
+    }
+
+    /// Run a command on the active document tab's command line (AutoLISP / script style).
+    ///
+    /// The string is passed to the host command driver as if entered into the command line,
+    /// supporting command names, space/newline-delimited arguments, AutoCAD-compatible
+    /// aliases, system variable setters (e.g. `SETVAR PDMODE 3`), and display commands
+    /// (e.g. `VSCURRENT`, `GRID`, `SNAP`).
+    ///
+    /// Headless async tasks spawned by commands are automatically pumped through the host
+    /// application lifecycle.
+    ///
+    /// Returns `true` if the command was recognized and initiated successfully, `false` otherwise.
+    fn execute_command(&mut self, cmd: &str) -> bool {
+        let _ = cmd;
+        false
+    }
+    // ── fork: API v5 HostApi surface (OCSMechanical) ───────────────────────
+    // Appended **after** upstream's v6/v7 methods so a plugin built against
+    // upstream alone keeps byte-compatible vtable offsets; fork plugins are
+    // rebuilt together with this crate. See docs/fork-patches.md §A-1.
     // Layer / selection / text-style / frame surface for the OCSMechanical
+    // plugin. Defaults keep older hosts and test hosts compiling: read-only
+    // queries return empty, mutating calls report "not supported".
     // plugin. Defaults keep older hosts and test hosts compiling: read-only
     // queries return empty, mutating calls report "not supported".
 
@@ -923,7 +1385,7 @@ pub trait HostApi {
     fn import_frame_block(
         &mut self,
         _req: ImportFrameBlockRequest,
-    ) -> Result<Vec<acadrust::entities::AttributeDefinition>, String> {
+    ) -> Result<Vec<codec::entities::AttributeDefinition>, String> {
         Err("import_frame_block: not supported by this host".to_string())
     }
 
@@ -943,8 +1405,8 @@ pub trait HostApi {
     fn add_block_record(
         &mut self,
         _name: &str,
-        _entities: Vec<acadrust::EntityType>,
-    ) -> Result<acadrust::Handle, String> {
+        _entities: Vec<codec::EntityType>,
+    ) -> Result<codec::Handle, String> {
         Err("add_block_record: not supported by this host".to_string())
     }
 
@@ -968,7 +1430,21 @@ pub trait HostApi {
     /// Close the transaction opened by [`begin_undo`](Self::begin_undo) and commit
     /// its entry. No-op by default (and when no transaction is open).
     fn commit_undo(&mut self) {}
+}
 
+/// Configuration properties for creating or modifying a layer.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct LayerConfig {
+    pub name: String,
+    pub color: Option<codec::types::Color>,
+    pub linetype: Option<String>,
+    pub lineweight: Option<codec::types::LineWeight>,
+    pub off: Option<bool>,
+    pub frozen: Option<bool>,
+    pub locked: Option<bool>,
+    pub plottable: Option<bool>,
+    pub transparency: Option<codec::types::Transparency>,
+    pub description: Option<String>,
 }
 
 /// Simplified, read-only entity kind exposed by [`DocumentReader`].

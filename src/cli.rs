@@ -85,10 +85,20 @@ pub struct Cli {
     #[arg(help = crate::t!("TCP port for --serve (defaults to stdin/stdout).").into_owned(), long_help = None)]
     pub port: Option<u16>,
 
+    /// Expose the headless automation API as a REST HTTP server on this port.
+    #[arg(long, value_name = "PORT")]
+    #[arg(help = crate::t!("Serve the automation API over REST on http://127.0.0.1:PORT").into_owned(), long_help = None)]
+    pub http: Option<u16>,
+
     /// Headless convert: read IN, write OUT (format from OUT's extension), exit.
     #[arg(long, num_args = 2, value_names = ["IN", "OUT"])]
     #[arg(help = crate::t!("Convert IN to OUT using the output file extension, then exit.").into_owned(), long_help = None)]
     pub export: Option<Vec<PathBuf>>,
+
+    /// Explicit output CAD version for --export (R14, 2000, 2004, 2007,
+    /// 2010, 2013 or 2018). Without it the source document version is kept.
+    #[arg(long, value_name = "VERSION", requires = "export")]
+    pub target_version: Option<String>,
 
     /// Run a command script at startup: one command line per line of FILE.
     #[arg(long, value_name = "FILE")]

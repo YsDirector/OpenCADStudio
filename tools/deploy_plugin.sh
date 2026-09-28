@@ -6,8 +6,9 @@
 # `Plugin built for acadrust @unknown, but this host uses @…` / rustc 不匹配）：
 #
 #   __RUSTC_VERSION__   ← `rustc --version` 原串（Rust 无稳定 ABI，宿主按编译器卡）
-#   __ACADRUST_SOURCE__ ← Cargo.lock 里 `name = "acadrust"` 的 source 串
-#                         （形如 git+https://…cadcodec.git?rev=8a28c21#<40位commit>）
+#   __ACADRUST_SOURCE__ ← Cargo.lock 里 codec 依赖的 source 串
+#                         （2026-09-28 起上游把仓库改名 opencadcodec、包名 `acadrust` → `opencadcodec`；
+#                          脚本两个名字都认，形如 git+https://…opencadcodec.git?rev=42b44d2#<40位commit>）
 #                         上游文档：docs/plugin-architecture.md「acadrust_source is also
 #                         required for API v4 and later … reading acadrust_source out of Cargo.lock」
 #
@@ -77,13 +78,19 @@ fi
 ACADRUST_SRC=$(python3 - <<'PY'
 import re, sys, pathlib
 lock = pathlib.Path('Cargo.lock').read_text(encoding='utf-8')
-m = re.search(r'name = "acadrust"\nversion = "[^"]+"\nsource = "([^"]+)"', lock)
+# 2026-09-28：上游把依赖仓库 cadcodec 改名 opencadcodec（包名 acadrust → opencadcodec，
+# 依赖别名 codec）——三个名字都认，优先新名。
+m = None
+for pkg in ('opencadcodec', 'codec', 'acadrust'):
+    m = re.search(rf'name = "{pkg}"\nversion = "[^"]+"\nsource = "([^"]+)"', lock)
+    if m:
+        break
 if not m:
-    sys.exit('Cargo.lock 里找不到 acadrust 的 source')
+    sys.exit('Cargo.lock 里找不到 opencadcodec / acadrust 的 source')
 src = m.group(1)
 hash_part = src.rsplit('#', 1)[-1]
 if len(hash_part) != 40 or any(c not in '0123456789abcdef' for c in hash_part):
-    sys.exit(f'acadrust source 末尾不是 40 位 commit：{src}')
+    sys.exit(f'opencadcodec source 末尾不是 40 位 commit：{src}')
 print(src)
 PY
 )

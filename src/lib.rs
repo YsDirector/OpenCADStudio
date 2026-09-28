@@ -24,6 +24,8 @@ pub mod par;
 pub mod patreon;
 pub mod perf;
 pub mod plugin;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod rest;
 pub mod scene;
 pub mod snap;
 pub mod sys;

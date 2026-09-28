@@ -2263,6 +2263,57 @@ common =
     .row-s-skipped-duplicate-parameter-name = __ocs_fmt_0__ row(s) skipped: duplicate parameter name.
     .surface-s-cannot-be-thickened-because-the-offset-intersects-itself = __ocs_fmt_0__ surface(s) cannot be thickened because the offset intersects itself.
     .conflicting = ⚠ __ocs_fmt_0__ conflicting
+    .allow-exploding = Permitir explodir
+    .angstroms = Angstroms
+    .astronomical-units = Unidades astronômicas
+    .behavior = Comportamento
+    .block-already-exists-will-redefine-upon-ok = O bloco "__ocs_fmt_0__" já existe — será redefinido ao clicar em OK
+    .block-creates-a-block-definition-from-objects-you-select = BLOCO cria uma definição de bloco a partir dos objetos selecionados.
+    .block-definition = Definição de bloco
+    .block-name = Nome do bloco
+    .block-name-already-exists-do-you-want-to-redefine-it =
+        O bloco "__ocs_fmt_0__" já existe.
+        Deseja redefini-lo?
+    .block-name-cannot-be-empty = O nome do bloco não pode estar vazio.
+    .block-name-cannot-contain-invalid-chars = O nome do bloco não pode conter: \ / : * ? " < > | = `
+    .block-name-cannot-start-with-star = O nome do bloco não pode começar com '*'.
+    .block-unit-label = Unidade do bloco:
+    .convert-to-block = Converter em bloco
+    .count-objects-selected = __ocs_fmt_0__ objetos selecionados
+    .decameters = Decâmetros
+    .decimeters = Decímetros
+    .enter-block-description = Digite a descrição do bloco...
+    .gigameters = Gigâmetros
+    .hectometers = Hectômetros
+    .hyperlink-ellipsis = Hiperlink...
+    .hyperlink-star = Hiperlink*
+    .invalid-character-in-block-name = Caractere inválido '__ocs_fmt_0__' no nome do bloco (\ / : * ? " < > | = ` não são permitidos)
+    .light-years = Anos-luz
+    .match-block-orientation = Corresponder orientação do bloco
+    .microinches = Micropolegadas
+    .microns = Mícrons
+    .mils = Mils
+    .nanometers = Nanômetros
+    .no-objects-selected = Nenhum objeto selecionado
+    .no-objects-selected-you-must-select-objects-to-define-a-block = Nenhum objeto selecionado. Você deve selecionar objetos para definir um bloco.
+    .objects-title-case = Objetos
+    .parsecs = Parsecs
+    .pick-point = Escolher ponto
+    .retain = Reter
+    .scale-uniformly = Dimensionar uniformemente
+    .specify-on-screen = Especificar na tela
+    .to-layout = ao layout
+    .us-survey-feet = Pés topográficos dos EUA
+    .entire-drawing = Desenho inteiro
+    .delete-from-drawing = Excluir do desenho
+    .destination = Destino
+    .file-name-and-path = Nome do arquivo e caminho:
+    .insert-units-label = Unidades de inserção:
+    .wblock-err-no-block-name = Selecione ou insira o nome de um bloco.
+    .wblock-err-block-not-found = O bloco "__ocs_fmt_0__" não existe no desenho.
+    .wblock-err-no-path = Especifique um nome de arquivo e caminho.
+    .wblock-err-current-drawing = Não é possível gravar no arquivo de desenho atual.
+    .wblock-help-info = O WBLOCK grava objetos, um bloco ou o desenho inteiro em um novo arquivo de desenho.
 errors =
     .save-warning = Aviso de salvamento
     .unable-to-save-drawing = Não foi possível salvar o desenho
@@ -3457,6 +3508,109 @@ annotate =
     .tolerance-specify-insertion-point = TOLERANCE  Especifique o ponto de inserção:
 
 insert =
+    .pdfui-pdf-scale = PDF scale: __ocs_fmt_0__:1
+    .pdfui-specify-insertion-point = Specify insertion point:
+    .pdfui-no-pdf-underlays = No PDF underlays found.
+    .pdfui-imports-the-geometry-fills-raster-images-and-text-of-a-pdf-f = Imports the geometry, fills, raster images and text of a PDF file as drawing objects.
+    .pdfui-turns-the-layers-of-a-pdf-underlay-on-or-off = Turns the layers of a PDF underlay on or off.
+    .pdfui-attaches-a-pdf-file-as-an-underlay = Attaches a PDF file as an underlay.
+    .pdfui-rotation = Rotation:
+    .pdfui-scale = Scale:
+    .pdfui-specify-insertion-point-on-screen = Specify insertion point on-screen
+    .pdfui-page-size-size = Page size: __ocs_fmt_0__
+    .pdfui-total-count = Total: __ocs_fmt_0__
+    .pdfui-pages = Pages
+    .pdfui-placement = Placement
+    .pdfui-on-screen = On screen
+    .pdfui-file-details = File details
+    .pdfui-page-count = __ocs_fmt_0__ pages
+    .pdfui-selected-pages = Selected pages: __ocs_fmt_0__
+    .pdfui-layer-summary = __ocs_fmt_0__ layers, __ocs_fmt_1__ hidden
+    .pdfui-page = Page:
+    .pdfui-page-to-import = Page to import
+    .pdfui-infer-linetypes-from-collinear-dashes = Infer linetypes from collinear dashes
+    .pdfui-apply-lineweight-properties = Apply lineweight properties
+    .pdfui-convert-solid-fills-to-hatches = Convert solid fills to hatches
+    .pdfui-join-line-and-arc-segments = Join line and arc segments
+    .pdfui-import-as-block = Import as block
+    .pdfui-import-options = Import options
+    .pdfui-create-object-layers = Create object layers
+    .pdfui-use-pdf-layers = Use PDF layers
+    .pdfui-raster-images = Raster images
+    .pdfui-truetype-text = TrueType text
+    .pdfui-solid-fills = Solid fills
+    .pdfui-vector-geometry = Vector geometry
+    .pdfui-pdf-data-to-import = PDF data to import
+    .pdfui-select-an-underlay-to-view-its-layers = Select an underlay to view its layers.
+    .pdfui-this-file-does-not-contain-any-layers = This file does not contain any layers.
+    .pdfui-search-for-layer = Search for layer
+    .pdfui-reference-name = Reference name:
+    .pdfui-page-size = Page size:
+    .pdfui-select-one-or-more-pages-from-the-pdf-file = Select one or more pages from the PDF file:
+    .pdfui-import-pdf = Import PDF
+    .pdfui-pdf-import-settings = PDF Import Settings
+    .pdfui-underlay-layers = Underlay Layers
+    .pdfui-attach-pdf-underlay = Attach PDF Underlay
+    .pdfui-pdf-import = PDF Import
+    .pdfui-pdf-layers = PDF Layers
+    .pdfui-import-as-objects =
+        Import As
+        Objects
+    .pdfui-edit-layers =
+        Edit
+        Layers
+    .pdfui-external-references =
+        External
+        References
+    .pdfui-enable-snap =
+        Enable
+        Snap
+    .pdfui-show-underlay =
+        Show
+        Underlay
+    .pdfui-remove-clipping =
+        Remove
+        Clipping
+    .pdfui-create-clipping-boundary =
+        Create Clipping
+        Boundary
+    .pdfui-display-in-monochrome =
+        Display in
+        Monochrome
+    .select-pdf-file = Select PDF File
+    .refui-requires-int-90 = Requires an integer between -90 and 90.
+    .refui-xref-fading = Xref fading
+    .refui-edit-reference = Edit Reference
+    .refui-edit-reference-in-place =
+        Edit Reference
+        In-Place
+    .refui-open-reference =
+        Open
+        Reference
+    .refui-snap-to-underlays-off = Snap to Underlays OFF
+    .refui-snap-to-underlays-on = Snap to Underlays ON
+    .refui-snap-to-underlays = Snap to Underlays
+    .xref-attach-dialog-title = Attach External Reference
+    .xref-attach-browse = Browse...
+    .xref-attach-reference-type = Reference Type
+    .xref-attach-uniform-scale = Uniform Scale
+    .xref-attach-insertion-point = Insertion point
+    .xref-attach-angle = Angle:
+    .xref-attach-block-unit = Block Unit
+    .xref-attach-unit = Unit:
+    .xref-attach-factor = Factor:
+    .xref-attach-found-in = Found in:
+    .xref-attach-saved-path = Saved path:
+    .xref-attach-show-details = Show Details
+    .xref-attach-hide-details = Hide Details
+    .xref-attach-select-file = Select Reference File
+    .xref-attach-all-files = All Reference Files
+    .xref-attach-help = Inserts references to external files such as other drawings, raster images, and underlays.
+    .xref-attach-invalid-input = Invalid input.
+    .xref-insertion-point-x = Insertion point X
+    .xref-insertion-point-y = Insertion point Y
+    .xref-insertion-point-z = Insertion point Z
+    .xref-layer-property-overrides = Layer property overrides
     .point-clouds =
         Nuvens de
         pontos
@@ -3748,6 +3902,9 @@ insert =
     .xattach-specify-scale-factor-1-0-x-y-z-or-pick-corner = XATTACH  Specify scale factor <1.0> (X,Y,Z or pick Corner):
     .xopen-opening = XOPEN: opening "__ocs_fmt_0__".
     .xref = XREF: __ocs_fmt_0__
+    .block-select-objects = BLOCK  Selecionar objetos:
+    .block-specify-insertion-base-point = BLOCK  Especificar ponto base de inserção:
+    .wblock-specify-insertion-base-point = WBLOCK  Especifique o ponto base de inserção:
 model =
     .create = Criar
     .boolean = Operações booleanas
@@ -4203,6 +4360,12 @@ view =
     .ucs-specify-point-in-positive-xy-plane = UCS  { common.specify }: XY · { common.positive-direction } · { common.point }:
 
 properties =
+    .applied = Applied
+    .pdf-underlay = PDF Underlay
+    .dwf-underlay = DWF Underlay
+    .dgn-underlay = DGN Underlay
+    .page-number = Page number
+    .layer-display-overrides = Layer display overrides
     .arrowhead-size = Tamanho da ponta da seta
     .attachment = Anexação
     .chord = Corda

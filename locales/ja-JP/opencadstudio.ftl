@@ -2253,6 +2253,57 @@ common =
     .row-s-skipped-duplicate-parameter-name = __ocs_fmt_0__ row(s) skipped: duplicate parameter name.
     .surface-s-cannot-be-thickened-because-the-offset-intersects-itself = __ocs_fmt_0__ surface(s) cannot be thickened because the offset intersects itself.
     .conflicting = ⚠ __ocs_fmt_0__ conflicting
+    .allow-exploding = 分解を許可
+    .angstroms = オングストローム
+    .astronomical-units = 天文単位
+    .behavior = 動作
+    .block-already-exists-will-redefine-upon-ok = ブロック "__ocs_fmt_0__" は既に存在します — [OK] で再定義されます
+    .block-creates-a-block-definition-from-objects-you-select = BLOCK コマンドは選択したオブジェクトからブロック定義を作成します。
+    .block-definition = ブロック定義
+    .block-name = ブロック名
+    .block-name-already-exists-do-you-want-to-redefine-it =
+        ブロック "__ocs_fmt_0__" は既に存在します。
+        再定義しますか?
+    .block-name-cannot-be-empty = ブロック名を空白にすることはできません。
+    .block-name-cannot-contain-invalid-chars = ブロック名に次の文字を含めることはできません: \ / : * ? " < > | = `
+    .block-name-cannot-start-with-star = ブロック名を '*' で始めることはできません。
+    .block-unit-label = ブロックの単位:
+    .convert-to-block = ブロックに変換
+    .count-objects-selected = __ocs_fmt_0__ 個のオブジェクトが選択されました
+    .decameters = デカメートル
+    .decimeters = デシメートル
+    .enter-block-description = ブロックの説明を入力...
+    .gigameters = ギガメートル
+    .hectometers = ヘクトメートル
+    .hyperlink-ellipsis = ハイパーリンク...
+    .hyperlink-star = ハイパーリンク*
+    .invalid-character-in-block-name = ブロック名に無効な文字 '__ocs_fmt_0__' が含まれています (\ / : * ? " < > | = ` は使用不可)
+    .light-years = 光年
+    .match-block-orientation = ブロックの向きをシートに合わせる
+    .microinches = マイクロインチ
+    .microns = ミクロン
+    .mils = ミル
+    .nanometers = ナノメートル
+    .no-objects-selected = オブジェクトが選択されていません
+    .no-objects-selected-you-must-select-objects-to-define-a-block = オブジェクトが選択されていません。ブロックを定義するにはオブジェクトを選択する必要があります。
+    .objects-title-case = オブジェクト
+    .parsecs = パーセク
+    .pick-point = 点を指定
+    .retain = 保持
+    .scale-uniformly = 均一に尺度変更
+    .specify-on-screen = 画面上で指定
+    .to-layout = レイアウトに合わせる
+    .us-survey-feet = 米国測量フィート
+    .entire-drawing = 図面全体
+    .delete-from-drawing = 図面から削除
+    .destination = 保存先
+    .file-name-and-path = ファイル名とパス:
+    .insert-units-label = 挿入単位:
+    .wblock-err-no-block-name = ブロック名を選択または入力してください。
+    .wblock-err-block-not-found = ブロック "__ocs_fmt_0__" は図面に存在しません。
+    .wblock-err-no-path = ファイル名とパスを指定してください。
+    .wblock-err-current-drawing = 現在の図面ファイルには書き込めません。
+    .wblock-help-info = WBLOCK はオブジェクト、ブロック、または図面全体を新しい図面ファイルに書き出します。
 errors =
     .save-warning = 保存の警告
     .unable-to-save-drawing = 図面を保存できません
@@ -3447,6 +3498,109 @@ annotate =
     .tolerance-specify-insertion-point = TOLERANCE  挿入点を指定:
 
 insert =
+    .pdfui-pdf-scale = PDF scale: __ocs_fmt_0__:1
+    .pdfui-specify-insertion-point = Specify insertion point:
+    .pdfui-no-pdf-underlays = No PDF underlays found.
+    .pdfui-imports-the-geometry-fills-raster-images-and-text-of-a-pdf-f = Imports the geometry, fills, raster images and text of a PDF file as drawing objects.
+    .pdfui-turns-the-layers-of-a-pdf-underlay-on-or-off = Turns the layers of a PDF underlay on or off.
+    .pdfui-attaches-a-pdf-file-as-an-underlay = Attaches a PDF file as an underlay.
+    .pdfui-rotation = Rotation:
+    .pdfui-scale = Scale:
+    .pdfui-specify-insertion-point-on-screen = Specify insertion point on-screen
+    .pdfui-page-size-size = Page size: __ocs_fmt_0__
+    .pdfui-total-count = Total: __ocs_fmt_0__
+    .pdfui-pages = Pages
+    .pdfui-placement = Placement
+    .pdfui-on-screen = On screen
+    .pdfui-file-details = File details
+    .pdfui-page-count = __ocs_fmt_0__ pages
+    .pdfui-selected-pages = Selected pages: __ocs_fmt_0__
+    .pdfui-layer-summary = __ocs_fmt_0__ layers, __ocs_fmt_1__ hidden
+    .pdfui-page = Page:
+    .pdfui-page-to-import = Page to import
+    .pdfui-infer-linetypes-from-collinear-dashes = Infer linetypes from collinear dashes
+    .pdfui-apply-lineweight-properties = Apply lineweight properties
+    .pdfui-convert-solid-fills-to-hatches = Convert solid fills to hatches
+    .pdfui-join-line-and-arc-segments = Join line and arc segments
+    .pdfui-import-as-block = Import as block
+    .pdfui-import-options = Import options
+    .pdfui-create-object-layers = Create object layers
+    .pdfui-use-pdf-layers = Use PDF layers
+    .pdfui-raster-images = Raster images
+    .pdfui-truetype-text = TrueType text
+    .pdfui-solid-fills = Solid fills
+    .pdfui-vector-geometry = Vector geometry
+    .pdfui-pdf-data-to-import = PDF data to import
+    .pdfui-select-an-underlay-to-view-its-layers = Select an underlay to view its layers.
+    .pdfui-this-file-does-not-contain-any-layers = This file does not contain any layers.
+    .pdfui-search-for-layer = Search for layer
+    .pdfui-reference-name = Reference name:
+    .pdfui-page-size = Page size:
+    .pdfui-select-one-or-more-pages-from-the-pdf-file = Select one or more pages from the PDF file:
+    .pdfui-import-pdf = Import PDF
+    .pdfui-pdf-import-settings = PDF Import Settings
+    .pdfui-underlay-layers = Underlay Layers
+    .pdfui-attach-pdf-underlay = Attach PDF Underlay
+    .pdfui-pdf-import = PDF Import
+    .pdfui-pdf-layers = PDF Layers
+    .pdfui-import-as-objects =
+        Import As
+        Objects
+    .pdfui-edit-layers =
+        Edit
+        Layers
+    .pdfui-external-references =
+        External
+        References
+    .pdfui-enable-snap =
+        Enable
+        Snap
+    .pdfui-show-underlay =
+        Show
+        Underlay
+    .pdfui-remove-clipping =
+        Remove
+        Clipping
+    .pdfui-create-clipping-boundary =
+        Create Clipping
+        Boundary
+    .pdfui-display-in-monochrome =
+        Display in
+        Monochrome
+    .select-pdf-file = Select PDF File
+    .refui-requires-int-90 = Requires an integer between -90 and 90.
+    .refui-xref-fading = Xref fading
+    .refui-edit-reference = Edit Reference
+    .refui-edit-reference-in-place =
+        Edit Reference
+        In-Place
+    .refui-open-reference =
+        Open
+        Reference
+    .refui-snap-to-underlays-off = Snap to Underlays OFF
+    .refui-snap-to-underlays-on = Snap to Underlays ON
+    .refui-snap-to-underlays = Snap to Underlays
+    .xref-attach-dialog-title = Attach External Reference
+    .xref-attach-browse = Browse...
+    .xref-attach-reference-type = Reference Type
+    .xref-attach-uniform-scale = Uniform Scale
+    .xref-attach-insertion-point = Insertion point
+    .xref-attach-angle = Angle:
+    .xref-attach-block-unit = Block Unit
+    .xref-attach-unit = Unit:
+    .xref-attach-factor = Factor:
+    .xref-attach-found-in = Found in:
+    .xref-attach-saved-path = Saved path:
+    .xref-attach-show-details = Show Details
+    .xref-attach-hide-details = Hide Details
+    .xref-attach-select-file = Select Reference File
+    .xref-attach-all-files = All Reference Files
+    .xref-attach-help = Inserts references to external files such as other drawings, raster images, and underlays.
+    .xref-attach-invalid-input = Invalid input.
+    .xref-insertion-point-x = Insertion point X
+    .xref-insertion-point-y = Insertion point Y
+    .xref-insertion-point-z = Insertion point Z
+    .xref-layer-property-overrides = Layer property overrides
     .point-clouds = 点群
     .attsync-block-name-to-sync = ATTSYNC  同期するブロック名:
     .attsync-no-block-named-arg = ATTSYNC: "__ocs_fmt_0__" というブロックはありません。
@@ -3736,6 +3890,9 @@ insert =
     .xattach-specify-scale-factor-1-0-x-y-z-or-pick-corner = XATTACH  Specify scale factor <1.0> (X,Y,Z or pick Corner):
     .xopen-opening = XOPEN: opening "__ocs_fmt_0__".
     .xref = XREF: __ocs_fmt_0__
+    .block-select-objects = BLOCK  オブジェクトを選択:
+    .block-specify-insertion-base-point = BLOCK  挿入基点を指定:
+    .wblock-specify-insertion-base-point = WBLOCK  挿入基点を指定:
 model =
     .create = 作成
     .boolean = ブール演算
@@ -4191,6 +4348,12 @@ view =
     .ucs-specify-point-in-positive-xy-plane = UCS  { common.specify }: XY · { common.positive-direction } · { common.point }:
 
 properties =
+    .applied = Applied
+    .pdf-underlay = PDF Underlay
+    .dwf-underlay = DWF Underlay
+    .dgn-underlay = DGN Underlay
+    .page-number = Page number
+    .layer-display-overrides = Layer display overrides
     .arrowhead-size = 矢印の先端サイズ
     .attachment = アタッチ
     .chord = 弦

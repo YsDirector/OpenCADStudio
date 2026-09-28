@@ -14,8 +14,8 @@ mod part_lib;
 #[path = "svg_render.rs"]
 mod svg_render;
 
-use ocs_plugin_api::host::acadrust::io::dwg::DwgReader;
-use ocs_plugin_api::host::acadrust::EntityType;
+use ocs_plugin_api::host::codec::io::dwg::DwgReader;
+use ocs_plugin_api::host::codec::EntityType;
 use part_lib::dec::{self, Prim};
 
 fn main() {

@@ -1,4 +1,5 @@
 pub mod about;
+pub mod block_definition;
 pub mod block_palette;
 pub mod browser;
 pub mod layout_manager;
@@ -23,5 +24,8 @@ pub mod annotation_data;
 pub mod alias_editor;
 pub mod find_replace;
 pub mod named_parameters;
+pub mod pdf_dialogs;
+pub mod xref_attach;
 pub mod xref_help;
 pub mod xref_manager;
+pub mod wblock;

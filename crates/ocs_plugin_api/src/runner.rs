@@ -22,7 +22,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::rc::Rc;
 
-use crate::host::{BuiltinPlugin, InteractiveCommand};
+use crate::host::{BuiltinPlugin, CommandStep, InteractiveCommand};
 use crate::ipc::client::{InteractiveRegistry, IpcClient, PluginHostApi};
 use crate::ipc::protocol::{
     HostRequest, HostResponse, HostToPlugin, InteractiveEvent, PluginToHost, PLUGIN_TOKEN_ENV,
@@ -170,46 +170,74 @@ fn handle_host_request(
             }
         }
         HostRequest::InteractiveEvent { command_id, event } => {
-            let mut registry = interactive.borrow_mut();
-            let Some(cmd) = registry.get_mut(&command_id) else {
-                return HostResponse::Error(format!(
-                    "unknown interactive command {command_id}"
-                ));
-            };
-            let cmd_ref: &mut dyn InteractiveCommand = cmd.as_mut();
-            // Mouse-move previews answer with a preview entity; every other
-            // event answers with a command step.
-            match event {
-                InteractiveEvent::MouseMove(pt) => {
-                    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        cmd_ref.on_mouse_move(pt)
-                    })) {
-                        Ok(ent) => HostResponse::Preview(ent),
-                        Err(_) => {
-                            HostResponse::Error("interactive command panicked".to_string())
-                        }
-                    }
-                }
-                other => {
-                    let step = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        match other {
-                            InteractiveEvent::Point(pt) => cmd_ref.on_point(pt),
-                            InteractiveEvent::Enter => cmd_ref.on_enter(),
-                            InteractiveEvent::ObjectPick { handle, pt, snapped } => {
-                                cmd_ref.on_object_pick_snapped(handle, pt, snapped)
-                            }
-                            InteractiveEvent::Text(text) => cmd_ref.on_text_input(&text),
-                            InteractiveEvent::MouseMove(_) => unreachable!("handled above"),
-                        }
-                    }));
-                    match step {
-                        Ok(s) => HostResponse::CommandStep(Box::new(s)),
-                        Err(_) => {
-                            HostResponse::Error("interactive command panicked".to_string())
-                        }
-                    }
-                }
+            if matches!(event, InteractiveEvent::Cancel) {
+                interactive.borrow_mut().remove(&command_id);
+                return HostResponse::CommandStep(Box::new(CommandStep::Cancel));
             }
+            // fork: mouse-move previews answer with a *preview entity* (the entity the
+            // plugin would commit) and never end the command. Upstream's *wire* preview
+            // travels as the dedicated `HostRequest::CursorMove` request below; both
+            // paths stay available on purpose (docs/fork-patches.md §A-1).
+            if let InteractiveEvent::MouseMove(pt) = event {
+                let mut registry = interactive.borrow_mut();
+                let Some(cmd) = registry.get_mut(&command_id) else {
+                    return HostResponse::Error(format!(
+                        "unknown interactive command {command_id}"
+                    ));
+                };
+                let cmd_ref: &mut dyn InteractiveCommand = cmd.as_mut();
+                return match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    cmd_ref.on_mouse_move(pt)
+                })) {
+                    Ok(ent) => HostResponse::Preview(ent),
+                    Err(_) => HostResponse::Error("interactive command panicked".to_string()),
+                };
+            }
+            let (step, done) = {
+                let mut registry = interactive.borrow_mut();
+                let Some(cmd) = registry.get_mut(&command_id) else {
+                    return HostResponse::Error(format!(
+                        "unknown interactive command {command_id}"
+                    ));
+                };
+                let cmd_ref: &mut dyn InteractiveCommand = cmd.as_mut();
+                let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match event {
+                    InteractiveEvent::Point(pt) => cmd_ref.on_point(pt),
+                    InteractiveEvent::Enter => cmd_ref.on_enter(),
+                    InteractiveEvent::ObjectPick { handle, pt, snapped } => {
+                        cmd_ref.on_object_pick_snapped(handle, pt, snapped)
+                    }
+                    // fork: typed command-line input (keyword letter, value, override).
+                    InteractiveEvent::Text(text) => cmd_ref.on_text_input(&text),
+                    // fork: unreachable here — caught by the early return above.
+                    InteractiveEvent::MouseMove(_) => unreachable!("handled by the early return"),
+                    InteractiveEvent::Cancel => CommandStep::Cancel,
+                }));
+                match res {
+                    Ok(s) => {
+                        let is_done = matches!(
+                            s,
+                            CommandStep::Done
+                                | CommandStep::Cancel
+                                | CommandStep::CommitAndEnd(_)
+                                | CommandStep::CommitManyAndEnd(_)
+                        );
+                        (Ok(s), is_done)
+                    }
+                    Err(_) => (Err(()), true),
+                }
+            };
+            if done {
+                interactive.borrow_mut().remove(&command_id);
+            }
+            match step {
+                Ok(s) => HostResponse::CommandStep(Box::new(s)),
+                Err(_) => HostResponse::Error("interactive command panicked".to_string()),
+            }
+        }
+        HostRequest::DropInteractive { command_id } => {
+            interactive.borrow_mut().remove(&command_id);
+            HostResponse::Bool(true)
         }
         HostRequest::GetPrompt { command_id } => {
             let result = {
@@ -237,6 +265,21 @@ fn handle_host_request(
                 Some(Ok(b)) => HostResponse::Bool(b),
                 Some(Err(_)) => HostResponse::Error("needs_object_pick() panicked".to_string()),
                 None => HostResponse::Error(format!("unknown interactive command {command_id}")),
+            }
+        }
+        HostRequest::CursorMove { command_id, pt } => {
+            let result = {
+                let mut registry = interactive.borrow_mut();
+                registry.get_mut(&command_id).map(|cmd| {
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        cmd.on_cursor_move(pt)
+                    }))
+                })
+            };
+            match result {
+                Some(Ok(wires)) => HostResponse::PreviewWires(wires),
+                Some(Err(_)) => HostResponse::PreviewWires(Vec::new()),
+                None => HostResponse::PreviewWires(Vec::new()),
             }
         }
         HostRequest::WantsTextInput { command_id } => {
@@ -336,44 +379,74 @@ fn handle_host_request_v4(
             }
         }
         HostRequest::InteractiveEvent { command_id, event } => {
-            let mut registry = interactive.borrow_mut();
-            let Some(cmd) = registry.get_mut(&command_id) else {
-                return Some(HostResponse::Error(format!(
-                    "unknown interactive command {command_id}"
-                )));
-            };
-            let cmd_ref: &mut dyn InteractiveCommand = cmd.as_mut();
-            match event {
-                InteractiveEvent::MouseMove(pt) => {
-                    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        cmd_ref.on_mouse_move(pt)
-                    })) {
-                        Ok(ent) => Some(HostResponse::Preview(ent)),
-                        Err(_) => Some(HostResponse::Error(
-                            "interactive command panicked".to_string(),
-                        )),
-                    }
-                }
-                other => {
-                    let step = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        match other {
-                            InteractiveEvent::Point(pt) => cmd_ref.on_point(pt),
-                            InteractiveEvent::Enter => cmd_ref.on_enter(),
-                            InteractiveEvent::ObjectPick { handle, pt, snapped } => {
-                                cmd_ref.on_object_pick_snapped(handle, pt, snapped)
-                            }
-                            InteractiveEvent::Text(text) => cmd_ref.on_text_input(&text),
-                            InteractiveEvent::MouseMove(_) => unreachable!("handled above"),
-                        }
-                    }));
-                    match step {
-                        Ok(s) => Some(HostResponse::CommandStep(Box::new(s))),
-                        Err(_) => Some(HostResponse::Error(
-                            "interactive command panicked".to_string(),
-                        )),
-                    }
-                }
+            if matches!(event, InteractiveEvent::Cancel) {
+                interactive.borrow_mut().remove(&command_id);
+                return Some(HostResponse::CommandStep(Box::new(CommandStep::Cancel)));
             }
+            // fork: mouse-move previews answer with a *preview entity* (the entity the
+            // plugin would commit) and never end the command. Upstream's *wire* preview
+            // travels as the dedicated `HostRequest::CursorMove` request below; both
+            // paths stay available on purpose (docs/fork-patches.md §A-1).
+            if let InteractiveEvent::MouseMove(pt) = event {
+                let mut registry = interactive.borrow_mut();
+                let Some(cmd) = registry.get_mut(&command_id) else {
+                    return Some(HostResponse::Error(format!(
+                        "unknown interactive command {command_id}"
+                    )));
+                };
+                let cmd_ref: &mut dyn InteractiveCommand = cmd.as_mut();
+                return match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    cmd_ref.on_mouse_move(pt)
+                })) {
+                    Ok(ent) => Some(HostResponse::Preview(ent)),
+                    Err(_) => Some(HostResponse::Error("interactive command panicked".to_string())),
+                };
+            }
+            let (step, done) = {
+                let mut registry = interactive.borrow_mut();
+                let Some(cmd) = registry.get_mut(&command_id) else {
+                    return Some(HostResponse::Error(format!(
+                        "unknown interactive command {command_id}"
+                    )));
+                };
+                let cmd_ref: &mut dyn InteractiveCommand = cmd.as_mut();
+                let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match event {
+                    InteractiveEvent::Point(pt) => cmd_ref.on_point(pt),
+                    InteractiveEvent::Enter => cmd_ref.on_enter(),
+                    InteractiveEvent::ObjectPick { handle, pt, snapped } => {
+                        cmd_ref.on_object_pick_snapped(handle, pt, snapped)
+                    }
+                    // fork: typed command-line input (keyword letter, value, override).
+                    InteractiveEvent::Text(text) => cmd_ref.on_text_input(&text),
+                    // fork: unreachable here — caught by the early return above.
+                    InteractiveEvent::MouseMove(_) => unreachable!("handled by the early return"),
+                    InteractiveEvent::Cancel => CommandStep::Cancel,
+                }));
+                match res {
+                    Ok(s) => {
+                        let is_done = matches!(
+                            s,
+                            CommandStep::Done
+                                | CommandStep::Cancel
+                                | CommandStep::CommitAndEnd(_)
+                                | CommandStep::CommitManyAndEnd(_)
+                        );
+                        (Ok(s), is_done)
+                    }
+                    Err(_) => (Err(()), true),
+                }
+            };
+            if done {
+                interactive.borrow_mut().remove(&command_id);
+            }
+            match step {
+                Ok(s) => Some(HostResponse::CommandStep(Box::new(s))),
+                Err(_) => Some(HostResponse::Error("interactive command panicked".to_string())),
+            }
+        }
+        HostRequest::DropInteractive { command_id } => {
+            interactive.borrow_mut().remove(&command_id);
+            Some(HostResponse::Bool(true))
         }
         HostRequest::GetPrompt { command_id } => {
             let result = {
@@ -401,6 +474,21 @@ fn handle_host_request_v4(
                 Some(Ok(b)) => Some(HostResponse::Bool(b)),
                 Some(Err(_)) => Some(HostResponse::Error("needs_object_pick() panicked".to_string())),
                 None => Some(HostResponse::Error(format!("unknown interactive command {command_id}"))),
+            }
+        }
+        HostRequest::CursorMove { command_id, pt } => {
+            let result = {
+                let mut registry = interactive.borrow_mut();
+                registry.get_mut(&command_id).map(|cmd| {
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        cmd.on_cursor_move(pt)
+                    }))
+                })
+            };
+            match result {
+                Some(Ok(wires)) => Some(HostResponse::PreviewWires(wires)),
+                Some(Err(_)) => Some(HostResponse::PreviewWires(Vec::new())),
+                None => Some(HostResponse::PreviewWires(Vec::new())),
             }
         }
         HostRequest::WantsTextInput { command_id } => {

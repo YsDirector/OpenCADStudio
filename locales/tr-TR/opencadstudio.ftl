@@ -1528,7 +1528,7 @@ common =
     .decimal-degrees = Ondalık derece
     .deg-min-sec-55d08d = Derece/dakika/saniye
     .block-palette-9925cd = { common.block-palette }
-    .attach-pdf = { insert.attach } PDF
+    .attach-pdf = PDF Bağla
     .no-leader = { common.leader } · { common.none-title-case }
     .no-leader-5e6b2a = /{ common.no-leader }
     .leader-c5dd1e = /{ common.leader }
@@ -2004,7 +2004,7 @@ common =
     .fit-data-does-not-define-a-valid-control-curve = Fit data does not define a valid control curve.
     .fit-points-do-not-define-a-valid-spline = Fit points do not define a valid spline.
     .formula = Formula
-    .full-path = Full path
+    .full-path = Tam yol
     .fully-constrained-no-remaining-degrees-of-freedom = Fully constrained — no remaining degrees of freedom
     .grid-on-f7 = Grid On (F7)
     .grid-x-spacing = Grid X spacing:
@@ -2059,7 +2059,7 @@ common =
     .named-parameters = Named Parameters
     .named-range = Named range
     .nearest-to-face = Nearest to face
-    .no-path = No path
+    .no-path = Yol yok
     .no-preview-available = No preview available.
     .no-surfaces-selected = No surfaces selected.
     .objectscale-the-selected-objects-already-have-the-current-scale-or-do-not-support-annotation-scales = OBJECTSCALE: the selected objects already have the current scale, or do not support annotation scales.
@@ -2099,7 +2099,7 @@ common =
     .recent-colors = Recent Colors
     .reference-changes-are-not-available-on-web-the-reference-list-is-read-only = Reference changes are not available on web — the reference list is read-only.
     .refine-data = Refine data
-    .relative-path = Relative path
+    .relative-path = Göreli yol
     .remaining-degrees-of-freedom-in-the-current-parametric-constraint-scope = Remaining degrees of freedom in the current parametric constraint scope
     .requires-an-integer-between-0-and-99 = Requires an integer between 0 and 99.
     .requires-numeric-distance-or-two-points = Requires numeric distance or two points.
@@ -2247,6 +2247,57 @@ common =
     .row-s-skipped-duplicate-parameter-name = __ocs_fmt_0__ row(s) skipped: duplicate parameter name.
     .surface-s-cannot-be-thickened-because-the-offset-intersects-itself = __ocs_fmt_0__ surface(s) cannot be thickened because the offset intersects itself.
     .conflicting = ⚠ __ocs_fmt_0__ conflicting
+    .allow-exploding = Dağıtmaya izin ver
+    .angstroms = Angstrom
+    .astronomical-units = Astronomik Birimler
+    .behavior = Davranış
+    .block-already-exists-will-redefine-upon-ok = "__ocs_fmt_0__" bloğu zaten mevcut — Tamam'da yeniden tanımlanacak
+    .block-creates-a-block-definition-from-objects-you-select = BLOCK, seçtiğiniz nesnelerden bir blok tanımı oluşturur.
+    .block-definition = Blok Tanımı
+    .block-name = Blok adı
+    .block-name-already-exists-do-you-want-to-redefine-it =
+        "__ocs_fmt_0__" bloğu zaten var.
+        Yeniden tanımlamak istiyor musunuz?
+    .block-name-cannot-be-empty = Blok adı boş olamaz.
+    .block-name-cannot-contain-invalid-chars = Blok adı şunları içeremez: \ / : * ? " < > | = `
+    .block-name-cannot-start-with-star = Blok adı '*' ile başlayamaz.
+    .block-unit-label = Blok birimi:
+    .convert-to-block = Bloğa dönüştür
+    .count-objects-selected = __ocs_fmt_0__ nesne seçildi
+    .decameters = Dekametre
+    .decimeters = Desimetre
+    .enter-block-description = Blok açıklamasını girin...
+    .gigameters = Gigametre
+    .hectometers = Hektometre
+    .hyperlink-ellipsis = Köprü...
+    .hyperlink-star = Köprü*
+    .invalid-character-in-block-name = Blok adında geçersiz karakter '__ocs_fmt_0__' (\ / : * ? " < > | = ` kullanılamaz)
+    .light-years = Işık Yılı
+    .match-block-orientation = Blok yönünü eşle
+    .microinches = Mikroinç
+    .microns = Mikron
+    .mils = Mil
+    .nanometers = Nanometre
+    .no-objects-selected = Nesne seçilmedi
+    .no-objects-selected-you-must-select-objects-to-define-a-block = Nesne seçilmedi. Bir blok tanımlamak için nesneleri seçmelisiniz.
+    .objects-title-case = Nesneler
+    .parsecs = Parsek
+    .pick-point = Nokta seç
+    .retain = Koru
+    .scale-uniformly = Eşit ölçekle
+    .specify-on-screen = Ekranda Belirt
+    .to-layout = düzene
+    .us-survey-feet = ABD Ölçüm Fiti
+    .entire-drawing = Tüm çizim
+    .delete-from-drawing = Çizimden sil
+    .destination = Hedef
+    .file-name-and-path = Dosya adı ve yolu:
+    .insert-units-label = Ekleme birimleri:
+    .wblock-err-no-block-name = Lütfen bir blok adı seçin veya girin.
+    .wblock-err-block-not-found = "__ocs_fmt_0__" bloğu çizimde mevcut değil.
+    .wblock-err-no-path = Lütfen bir dosya adı ve yolu belirtin.
+    .wblock-err-current-drawing = Geçerli çizim dosyasına yazılamıyor.
+    .wblock-help-info = WBLOCK nesneleri, bir bloğu veya tüm çizimi yeni bir çizim dosyasına yazar.
 errors =
     .save-warning = Kaydetme Uyarısı
     .unable-to-save-drawing = Çizim Kaydedilemiyor
@@ -3431,6 +3482,109 @@ annotate =
     .tolerance-specify-insertion-point = TOLERANCE  Ekleme noktasını belirtin:
 
 insert =
+    .pdfui-pdf-scale = PDF ölçeği: __ocs_fmt_0__:1
+    .pdfui-specify-insertion-point = Ekleme noktasını belirtin:
+    .pdfui-no-pdf-underlays = PDF altlığı bulunamadı.
+    .pdfui-imports-the-geometry-fills-raster-images-and-text-of-a-pdf-f = Bir PDF dosyasının geometrisini, dolu alanlarını, raster görüntülerini ve metnini çizim nesneleri olarak içe aktarır.
+    .pdfui-turns-the-layers-of-a-pdf-underlay-on-or-off = Bir PDF altlığının katmanlarını açar veya kapatır.
+    .pdfui-attaches-a-pdf-file-as-an-underlay = Bir PDF dosyasını altlık olarak ekler.
+    .pdfui-rotation = Döndürme:
+    .pdfui-scale = Ölçek:
+    .pdfui-specify-insertion-point-on-screen = Ekleme noktasını ekranda belirt
+    .pdfui-page-size-size = Sayfa boyutu: __ocs_fmt_0__
+    .pdfui-total-count = Toplam: __ocs_fmt_0__
+    .pdfui-pages = Sayfalar
+    .pdfui-placement = Yerleşim
+    .pdfui-on-screen = Ekranda
+    .pdfui-file-details = Dosya bilgisi
+    .pdfui-page-count = __ocs_fmt_0__ sayfa
+    .pdfui-selected-pages = Seçili sayfalar: __ocs_fmt_0__
+    .pdfui-layer-summary = __ocs_fmt_0__ katman, __ocs_fmt_1__ gizli
+    .pdfui-page = Sayfa:
+    .pdfui-page-to-import = İçe aktarılacak sayfa
+    .pdfui-infer-linetypes-from-collinear-dashes = Aynı doğrultudaki kesiklerden çizgi tipi çıkar
+    .pdfui-apply-lineweight-properties = Çizgi kalınlığı özelliklerini uygula
+    .pdfui-convert-solid-fills-to-hatches = Dolu alanları taramaya dönüştür
+    .pdfui-join-line-and-arc-segments = Çizgi ve yay parçalarını birleştir
+    .pdfui-import-as-block = Blok olarak içe aktar
+    .pdfui-import-options = İçe aktarma seçenekleri
+    .pdfui-create-object-layers = Nesne katmanları oluştur
+    .pdfui-use-pdf-layers = PDF katmanlarını kullan
+    .pdfui-raster-images = Raster görüntüler
+    .pdfui-truetype-text = TrueType metin
+    .pdfui-solid-fills = Dolu alanlar
+    .pdfui-vector-geometry = Vektör geometri
+    .pdfui-pdf-data-to-import = İçe aktarılacak PDF verisi
+    .pdfui-select-an-underlay-to-view-its-layers = Katmanlarını görmek için bir altlık seçin.
+    .pdfui-this-file-does-not-contain-any-layers = Bu dosya herhangi bir katman içermiyor.
+    .pdfui-search-for-layer = Katman ara
+    .pdfui-reference-name = Referans adı:
+    .pdfui-page-size = Sayfa boyutu:
+    .pdfui-select-one-or-more-pages-from-the-pdf-file = PDF dosyasından bir veya daha fazla sayfa seçin:
+    .pdfui-import-pdf = PDF İçe Aktar
+    .pdfui-pdf-import-settings = PDF İçe Aktarma Ayarları
+    .pdfui-underlay-layers = Altlık Katmanları
+    .pdfui-attach-pdf-underlay = PDF Altlığı Ekle
+    .pdfui-pdf-import = PDF İçe Aktar
+    .pdfui-pdf-layers = PDF Katmanları
+    .pdfui-import-as-objects =
+        Nesne Olarak
+        İçe Aktar
+    .pdfui-edit-layers =
+        Katmanları
+        Düzenle
+    .pdfui-external-references =
+        Harici
+        Referanslar
+    .pdfui-enable-snap =
+        Yakalamayı
+        Etkinleştir
+    .pdfui-show-underlay =
+        Altlığı
+        Göster
+    .pdfui-remove-clipping =
+        Kırpmayı
+        Kaldır
+    .pdfui-create-clipping-boundary =
+        Kırpma Sınırı
+        Oluştur
+    .pdfui-display-in-monochrome =
+        Tek renkli
+        göster
+    .select-pdf-file = PDF Dosyası Seç
+    .refui-requires-int-90 = -90 ile 90 arasında bir tam sayı gerekir.
+    .refui-xref-fading = Xref soldurma
+    .refui-edit-reference = Referansı Düzenle
+    .refui-edit-reference-in-place =
+        Yerinde Referansı
+        Düzenle
+    .refui-open-reference =
+        Referansı
+        Aç
+    .refui-snap-to-underlays-off = Altlıklara Yakala Kapalı
+    .refui-snap-to-underlays-on = Altlıklara Yakala Açık
+    .refui-snap-to-underlays = Altlıklara Yakala
+    .xref-attach-dialog-title = Harici Referans Ekle
+    .xref-attach-browse = Gözat...
+    .xref-attach-reference-type = Referans Türü
+    .xref-attach-uniform-scale = Eşit ölçek
+    .xref-attach-insertion-point = Ekleme noktası
+    .xref-attach-angle = Açı:
+    .xref-attach-block-unit = Blok birimi
+    .xref-attach-unit = Birim:
+    .xref-attach-factor = Çarpan:
+    .xref-attach-found-in = Bulunduğu yer:
+    .xref-attach-saved-path = Kayıtlı yol:
+    .xref-attach-show-details = Ayrıntıları Göster
+    .xref-attach-hide-details = Ayrıntıları Gizle
+    .xref-attach-select-file = Referans Dosyası Seç
+    .xref-attach-all-files = Tüm Referans Dosyaları
+    .xref-attach-help = Diğer çizimler, raster görüntüler ve altlıklar gibi harici dosyalara referans ekler.
+    .xref-attach-invalid-input = Geçersiz giriş.
+    .xref-insertion-point-x = Ekleme noktası X
+    .xref-insertion-point-y = Ekleme noktası Y
+    .xref-insertion-point-z = Ekleme noktası Z
+    .xref-layer-property-overrides = Katman özelliği geçersiz kılmaları
     .point-clouds =
         Nokta
         Bulutları
@@ -3708,6 +3862,9 @@ insert =
     .xattach-specify-scale-factor-1-0-x-y-z-or-pick-corner = XATTACH  Specify scale factor <1.0> (X,Y,Z or pick Corner):
     .xopen-opening = XOPEN: opening "__ocs_fmt_0__".
     .xref = XREF: __ocs_fmt_0__
+    .block-select-objects = BLOCK  Nesneleri seçin:
+    .block-specify-insertion-base-point = BLOCK  Ekleme taban noktasını belirtin:
+    .wblock-specify-insertion-base-point = WBLOCK  Ekleme taban noktasını belirleyin:
 model =
     .create = Oluştur
     .boolean = Boole işlemleri
@@ -4143,6 +4300,12 @@ view =
     .ucs-specify-point-in-positive-xy-plane = UCS  { common.specify }: XY · { common.positive-direction } · { common.point }:
 
 properties =
+    .applied = Uygulandı
+    .pdf-underlay = PDF Altlığı
+    .dwf-underlay = DWF Altlığı
+    .dgn-underlay = DGN Altlığı
+    .page-number = Sayfa numarası
+    .layer-display-overrides = Katman görüntüleme geçersiz kılmaları
     .extended-data = Genişletilmiş Veri
     .count-objects-selected = __ocs_arg_count__ nesne seçildi
     .scope-visual-style = __ocs_arg_scope__ Görsel Stil
@@ -4351,7 +4514,7 @@ properties =
     .extended-lighting = Gelişmiş Aydınlatma
     .extents-max = En Büyük Sınırlar
     .extents-min = En Küçük Sınırlar
-    .external-reference = Dış Referans
+    .external-reference = Harici Referans
     .face = Yüz
     .face-count = Yüz sayısı
     .falloff-angle = Düşüş Açısı

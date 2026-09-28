@@ -10,8 +10,8 @@
 //! cargo run -q -p ocs_plugin_api --features host --example ref_dump -- <in.dwg|dxf> [out.tsv]
 //! ```
 
-use ocs_plugin_api::host::acadrust::io::dwg::DwgReader;
-use ocs_plugin_api::host::acadrust::{CadDocument, EntityType};
+use ocs_plugin_api::host::codec::io::dwg::DwgReader;
+use ocs_plugin_api::host::codec::{CadDocument, EntityType};
 
 #[derive(Clone, Debug)]
 struct Prim {
@@ -23,7 +23,7 @@ struct Prim {
     text: String,
 }
 
-fn color_str(c: &ocs_plugin_api::host::acadrust::types::Color) -> String {
+fn color_str(c: &ocs_plugin_api::host::codec::types::Color) -> String {
     format!("{c:?}")
 }
 
@@ -219,7 +219,7 @@ fn main() {
     let out = a.next().unwrap_or_else(|| format!("{src}.tsv"));
 
     let doc = if src.to_ascii_lowercase().ends_with(".dxf") {
-        ocs_plugin_api::host::acadrust::io::dxf::DxfReader::from_file(&src)
+        ocs_plugin_api::host::codec::io::dxf::DxfReader::from_file(&src)
             .and_then(|r| r.read())
             .expect("读 DXF")
     } else {
