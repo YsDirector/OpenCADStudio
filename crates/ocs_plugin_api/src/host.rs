@@ -1360,8 +1360,11 @@ pub trait HostApi {
         0
     }
 
-    /// Create any missing text styles from `defs` (case-insensitive). Returns
-    /// the number of styles actually created.
+    /// Create any missing text styles from `defs` (case-insensitive). A
+    /// same-named style whose `true_type_font` is empty is filled in from the
+    /// matching def — an existing non-empty font name is never overwritten.
+    /// Returns the number of styles created or filled in (0 when nothing
+    /// changed).
     fn ensure_text_styles(&mut self, _defs: Vec<TextStyleDef>) -> usize {
         0
     }

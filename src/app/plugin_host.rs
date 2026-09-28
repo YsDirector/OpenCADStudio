@@ -2929,6 +2929,7 @@ impl HostApi for HostSession<'_> {
         use codec::tables::TextStyle;
         let i = self.tab;
         let mut created = 0usize;
+        let mut filled = 0usize;
         for def in defs {
             let doc = &mut self.app.tabs[i].scene.document;
             if doc
@@ -2936,6 +2937,19 @@ impl HostApi for HostSession<'_> {
                 .iter()
                 .any(|s| s.name.eq_ignore_ascii_case(&def.name))
             {
+                // 旧图救字体（用户 2026-09-28）：同名样式已在、但 `true_type_font`
+                // 为空（新宿主之前建的、或外来图档带过来的 `OCSM_GB`）→ 按插件
+                // 自己的样式定义补上，旧图不必重开就能拿到正确字体。
+                // 硬规则：**只在为空时补**；已有非空 TTF（哪怕与我们不同）一律不动；
+                // 只有 `defs` 里我们定义的样式名会走到这里。
+                if let Some(style) = doc.text_styles.get_mut(&def.name) {
+                    if style.true_type_font.trim().is_empty()
+                        && !def.true_type_font.trim().is_empty()
+                    {
+                        style.true_type_font = def.true_type_font;
+                        filled += 1;
+                    }
+                }
                 continue;
             }
             let mut style = TextStyle::new(&def.name);
@@ -2951,7 +2965,12 @@ impl HostApi for HostSession<'_> {
             doc.text_styles.add_or_replace(style);
             created += 1;
         }
-        created
+        if filled > 0 {
+            // 样式表改了：入脏 + 刷新样式面板 + REGEN（同 `text_style_modify` 的效果）。
+            self.finish_style_change(crate::app::style_ops::StyleKind::Text);
+        }
+        // 补齐与新建都算「动过表」：IPC 侧据此失效文档快照缓存（`n > 0` 才会重置）。
+        created + filled
     }
 
     fn ensure_dim_styles(&mut self, defs: Vec<ocs_plugin_api::host::DimStyleDef>) -> usize {
@@ -3811,6 +3830,63 @@ mod tests {
         assert!(s.annotative);
         assert!(!s.handle.is_null());
         assert_eq!(host.ensure_text_styles(styles), 0);
+    }
+
+    /// 旧图救字体（用户 2026-09-28）：同名样式已在、`true_type_font` 为空
+    /// （旧版插件建的 `OCSM_GB`）⇒ 按插件定义补上。
+    #[test]
+    fn v5_ensure_text_styles_fills_empty_true_type_font() {
+        let mut app = OpenCADStudio::new_for_test();
+        app.tabs[0].is_start = false;
+        let mut host = HostSession::new(&mut app, 0);
+        let def = |ttf: &str| ocs_plugin_api::host::TextStyleDef {
+            name: "OCSM_GB".into(),
+            font_file: "Unicode".into(),
+            big_font_file: String::new(),
+            true_type_font: ttf.into(),
+            height: 3.5,
+            width_factor: 0.7,
+            annotative: true,
+            is_shape_file: false,
+            is_vertical: false,
+        };
+        // ① 旧图现状：`OCSM_GB` 在，但 TTF 是空的。
+        assert_eq!(host.ensure_text_styles(vec![def("")]), 1);
+        assert!(host.document().text_styles.get("OCSM_GB").unwrap().true_type_font.is_empty());
+        // ② 再跑一次（新版插件定义带 TTF）⇒ 补上，且算「动过表」（IPC 侧据此失效快照）。
+        assert_eq!(host.ensure_text_styles(vec![def("Zhuque Fangsong")]), 1);
+        assert_eq!(
+            host.document().text_styles.get("OCSM_GB").unwrap().true_type_font,
+            "Zhuque Fangsong"
+        );
+        // ③ 幂等：已非空 ⇒ 不再动。
+        assert_eq!(host.ensure_text_styles(vec![def("Zhuque Fangsong")]), 0);
+    }
+
+    /// 硬规则：同名样式的 `true_type_font` 非空时，**绝不覆盖**（哪怕是别的字体名）。
+    #[test]
+    fn v5_ensure_text_styles_never_overwrites_existing_true_type_font() {
+        let mut app = OpenCADStudio::new_for_test();
+        app.tabs[0].is_start = false;
+        let mut host = HostSession::new(&mut app, 0);
+        let def = |ttf: &str| ocs_plugin_api::host::TextStyleDef {
+            name: "OCSM_GB".into(),
+            font_file: "Unicode".into(),
+            big_font_file: String::new(),
+            true_type_font: ttf.into(),
+            height: 3.5,
+            width_factor: 0.7,
+            annotative: true,
+            is_shape_file: false,
+            is_vertical: false,
+        };
+        assert_eq!(host.ensure_text_styles(vec![def("MS Gothic")]), 1);
+        assert_eq!(host.ensure_text_styles(vec![def("Zhuque Fangsong")]), 0);
+        assert_eq!(
+            host.document().text_styles.get("OCSM_GB").unwrap().true_type_font,
+            "MS Gothic",
+            "已有非空 TTF 绝不覆盖"
+        );
     }
 
     #[test]

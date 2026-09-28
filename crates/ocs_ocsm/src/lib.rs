@@ -1865,6 +1865,70 @@ fn ocsm_init_done_line(layers: usize, linetypes: usize, styles: usize, dim_style
     )
 }
 
+/// 旧图救字体（用户 2026-09-28）：`ensure_text_styles` 对同名样式只跳过、不重建，
+/// 所以旧图里 `OCSM_GB` 的 `true_type_font` 是空的（旧版插件建的、或外来图档带来的）。
+/// 这里在 `ensure` 前后各看一眼：**`ensure` 之前**就存在且 TTF 为空、且属于
+/// [`text_style_defs`] 里的样式名 ⇒ 按插件自己的定义 `TextStyleModify` 补上。
+///
+/// 硬规则（与宿主侧同口径）：**只在为空时补**；已有非空 TTF（哪怕不是我们的字体）
+/// 一律不碰；只处理我们定义的样式名。快照必须在 `ensure` 前取，否则新建出来的
+/// 样式（TTF 由宿主填）会被误判成「旧图缺字」。
+///
+/// 新宿主已在内建 `ensure_text_styles` 里做同样的事，这条插件侧路径通常是 no-op ——
+/// 留着是因为插件与宿主**分开部署**（旧宿主 + 新插件也不能丢字体）。
+fn ensure_ocsm_text_styles(host: &mut dyn HostApi) -> usize {
+    use ocs_plugin_api::host::{TableOperation, TextStyleConfig};
+    // ① 先取快照：本来就在、TTF 为空的插件样式（旧图）。
+    let stale: Vec<(String, String)> = host
+        .document()
+        .text_styles
+        .iter()
+        .filter(|s| s.true_type_font.trim().is_empty())
+        .filter_map(|s| {
+            text_style_defs()
+                .into_iter()
+                .find(|d| d.name.eq_ignore_ascii_case(&s.name) && !d.true_type_font.trim().is_empty())
+                .map(|d| (s.name.clone(), d.true_type_font))
+        })
+        .collect();
+    // ② 正常建缺失样式（新宿主会顺手把已存在但 TTF 为空的也补好）。
+    let created = host.ensure_text_styles(text_style_defs());
+    // ③ 宿主没补（旧宿主）→ 插件自己补，并告诉用户补了什么。
+    let mut repaired: Vec<String> = Vec::new();
+    for (name, ttf) in stale {
+        let still_empty = host
+            .document()
+            .text_styles
+            .get(&name)
+            .map(|s| s.true_type_font.trim().is_empty())
+            .unwrap_or(false);
+        if !still_empty {
+            // 宿主已在 `ensure_text_styles` 里补好（新宿主）——照实报给用户。
+            repaired.push(format!("{name} → {ttf}"));
+            continue;
+        }
+        match host.table_operation(TableOperation::TextStyleModify {
+            config: TextStyleConfig {
+                name: name.clone(),
+                true_type_font: Some(ttf.clone()),
+                ..Default::default()
+            },
+        }) {
+            Ok(_) => repaired.push(format!("{name} → {ttf}")),
+            Err(e) => host.push_error(&format!(
+                "OCSM：样式 {name} 缺少 TrueType 字体，按插件定义补齐失败：{e}"
+            )),
+        }
+    }
+    if !repaired.is_empty() {
+        host.push_info(&format!(
+            "OCSM：旧图样式缺少 TrueType 字体，已按插件定义补齐（{}）。",
+            repaired.join("、")
+        ));
+    }
+    created
+}
+
 /// 通知路径（`maybe_auto_init_after_notification`）的进程级状态。
 struct AutoInitState {
     /// `on_load` 缓存的 sender：工作线程用它发宿主请求（不必等命令）。
@@ -2033,7 +2097,7 @@ impl OcsmPlugin {
         // 线型先于图层：DWG 写出时层引用的线型名必须在 line_types 表。
         let lt = host.ensure_linetypes(linetype_defs());
         let layers = host.ensure_layers(layer_defs());
-        let styles = host.ensure_text_styles(text_style_defs());
+        let styles = ensure_ocsm_text_styles(host);
         // 标注样式（参数取自标注示例.dwg 的 Mechanical，字体换成 OCSM_GB）。
         let dim_styles = host.ensure_dim_styles(dim_style_defs());
         host.push_output(&ocsm_init_done_line(layers, lt, styles, dim_styles));
@@ -6989,6 +7053,28 @@ mod tests {
             self.text_styles.extend(defs);
             created
         }
+        /// 只实现插件用到的 `TextStyleModify`（旧图救字体的兜底路径）；其余操作不支持。
+        fn table_operation(
+            &mut self,
+            operation: ocs_plugin_api::host::TableOperation,
+        ) -> Result<ocs_plugin_api::host::Handle, String> {
+            use ocs_plugin_api::host::TableOperation;
+            match operation {
+                TableOperation::TextStyleModify { config } => {
+                    self.log.push("table_operation:TextStyleModify".into());
+                    let style = self
+                        .doc
+                        .text_styles
+                        .get_mut(&config.name)
+                        .ok_or_else(|| format!("text style {:?} does not exist", config.name))?;
+                    if let Some(ttf) = config.true_type_font {
+                        style.true_type_font = ttf;
+                    }
+                    Ok(style.handle)
+                }
+                other => Err(format!("UndoOrderSpy: unsupported {other:?}")),
+            }
+        }
         fn ensure_dim_styles(&mut self, defs: Vec<ocs_plugin_api::host::DimStyleDef>) -> usize {
             self.log.push("ensure_dim_styles".into());
             let mut created = 0;
@@ -7491,6 +7577,50 @@ mod tests {
             before + 2,
             "第二次只该取路径 + 快照即被 OCSM 痕迹门拦住"
         );
+    }
+
+    /// 旧图救字体（用户 2026-09-28）：打开旧图（`OCSM_GB` 已在但 `true_type_font` 为空）
+    /// → 跑一次 `OCSM` ⇒ 按插件定义补上 `Zhuque Fangsong`（并报一句提示）。
+    #[test]
+    fn ocsm_init_fills_missing_ocsm_gb_true_type_font() {
+        let mut host = UndoOrderSpy::default();
+        host.doc
+            .text_styles
+            .add_or_replace(acadrust::tables::TextStyle::new("OCSM_GB"));
+        assert!(
+            host.doc.text_styles.get("OCSM_GB").unwrap().true_type_font.is_empty(),
+            "TextStyle::new 的 TTF 应为空（模拟旧图）"
+        );
+        assert!(OcsmPlugin.dispatch(&mut host, "OCSM"));
+        assert_eq!(
+            host.doc.text_styles.get("OCSM_GB").unwrap().true_type_font,
+            "Zhuque Fangsong"
+        );
+        assert!(
+            host.infos.iter().any(|m| m.contains("TrueType")),
+            "补上了就该报一句：{:?}",
+            host.infos
+        );
+    }
+
+    /// 硬规则：同名样式的 `true_type_font` 非空时，**绝不覆盖**（哪怕是别的字体名）。
+    #[test]
+    fn ocsm_init_never_overwrites_existing_true_type_font() {
+        let mut host = UndoOrderSpy::default();
+        let mut style = acadrust::tables::TextStyle::new("OCSM_GB");
+        style.true_type_font = "MS Gothic".into();
+        host.doc.text_styles.add_or_replace(style);
+        assert!(OcsmPlugin.dispatch(&mut host, "OCSM"));
+        assert_eq!(
+            host.doc.text_styles.get("OCSM_GB").unwrap().true_type_font,
+            "MS Gothic"
+        );
+        assert!(
+            !host.log.iter().any(|l| l.starts_with("table_operation")),
+            "不该动已有字体：{:?}",
+            host.log
+        );
+        assert!(host.infos.is_empty(), "无补齐就不该有提示：{:?}", host.infos);
     }
 
     /// 通知胶水：欢迎页跳过、同 tab 防重、工作线程真的跑通 `auto_init_document_via_sender`。

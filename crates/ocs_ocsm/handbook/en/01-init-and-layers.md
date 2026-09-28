@@ -14,7 +14,7 @@ It does four things (adds whatever is missing, **idempotent**, safe to re-run):
 
 1. **Linetypes**: `CENTER2`, `DASHED2`, `DIVIDE2` (linetypes must come before layers, otherwise writing a DWG loses the linetype names).
 2. **Layers**: `1轮廓实线层` … `10引导线层` (see the layer table in the 00 overview); colour/linetype/lineweight follow the GB division of labour.
-3. **Text style**: `OCSM_GB` (GB font, dimension text height 5).
+3. **Text style**: `OCSM_GB` (GB font, dimension text height 5). **Old-drawing font rescue**: when a same-named `OCSM_GB` already exists with an empty TrueType font, the font is filled in from the plugin definition (an existing non-empty font is **never** overwritten, even if it is not ours).
 4. **Dimension style**: `OCSM_GB` (parameters taken from Mechanical in the dimension sample dwg, font switched to `OCSM_GB`), set as the **current style**.
 
 Example of a successful output, as emitted (still Chinese):
