@@ -4961,7 +4961,7 @@ fn build_frame_insert(
     base: [f64; 3],
     rot_deg: f64,
 ) -> acadrust::entities::Insert {
-    use acadrust::entities::{AttributeEntity, Entity, Insert};
+    use acadrust::entities::{AttributeEntity, Entity, HorizontalAlignment, Insert, VerticalAlignment};
     use acadrust::types::Vector3;
 
     let mut ins = Insert::new(block_name, Vector3::new(base[0], base[1], base[2]));
@@ -4979,6 +4979,20 @@ fn build_frame_insert(
             ad.default_value.clone()
         };
         let mut attr = AttributeEntity::from_definition(ad, Some(value));
+        // 有的导出器把 halign/valign 非 0 的 ATTDEF 的 11 组（对齐点）写空，
+        // 属性于是按 (0,0) 定位：文字落到块原点，标题栏看起来是空的、
+        // 「图样代号」按左对齐横穿图框。DXF 语义里对齐点缺失时文本按**插入点**
+        // 定位，故此处退回插入点——保留对齐语义，不清零（用户 2026-09-28 清单 §P2.1）。
+        // 左/基线（默认对齐）的 ATTDEF 不做替换：它们的对齐点本来就该是空的，
+        // 按插入点排字才是正常做法。
+        let alignment_lost = attr.alignment_point.x == 0.0
+            && attr.alignment_point.y == 0.0
+            && attr.alignment_point.z == 0.0;
+        let aligned_by_point = !matches!(ad.horizontal_alignment, HorizontalAlignment::Left)
+            || !matches!(ad.vertical_alignment, VerticalAlignment::Baseline);
+        if alignment_lost && aligned_by_point {
+            attr.alignment_point = attr.insertion_point;
+        }
         attr.apply_transform(&xform);
         ins.attributes.push(attr);
     }
@@ -5801,7 +5815,9 @@ mod tests {
     }
 
     use super::*;
-    use acadrust::entities::{Arc, Circle, EntityType, Insert, Line};
+    use acadrust::entities::{
+        Arc, Circle, EntityType, HorizontalAlignment, Insert, Line, VerticalAlignment,
+    };
 
     fn lw(v: i16) -> LineWeight {
         LineWeight::from_value(v)
@@ -6230,6 +6246,139 @@ mod tests {
         // `比例` 填 v1:v2（不是 ATTDEF 的默认值），其它属性保持默认值
         assert_eq!(by_tag("比例"), "1:2");
         assert_eq!(by_tag("图名"), "零件图");
+    }
+
+    /// 模板 `a3_landscape_att` 的 ATTDEF 口径（用户自备模板，2026-09-28 清单 §P2 实测）：
+    /// 格内文字 `halign=Middle`（对齐点=格心，≠ 插入点）、材料/图样名称另带 `valign=Middle`；
+    /// 左上角附加栏的「图样代号」`halign=Left`/`valign=Baseline`、按插入点定位、
+    /// 倒置 180°（DXF group 50=180 ⇒ 记录里是弧度 π）。
+    fn template_like_attdefs() -> Vec<acadrust::entities::AttributeDefinition> {
+        use acadrust::entities::AttributeDefinition;
+
+        let mut code = AttributeDefinition::new("图样代号".into(), "Code".into(), " ".into());
+        code.insertion_point = Vector3::new(59.509, 285.13, 0.0);
+        code.rotation = std::f64::consts::PI;
+        code.height = 7.0;
+        code.text_style = "OCSM_GB".into();
+
+        let mut material = AttributeDefinition::new("材料".into(), "Material".into(), " ".into());
+        material.horizontal_alignment = HorizontalAlignment::Middle;
+        material.vertical_alignment = VerticalAlignment::Middle;
+        material.insertion_point = Vector3::new(299.609, 30.268, 0.0);
+        material.alignment_point = Vector3::new(300.0, 32.5, 0.0);
+        material.height = 5.0;
+        material.text_style = "OCSM_GB".into();
+
+        let mut title = AttributeDefinition::new("图样名称".into(), "Title".into(), " ".into());
+        title.horizontal_alignment = HorizontalAlignment::Middle;
+        title.vertical_alignment = VerticalAlignment::Middle;
+        title.insertion_point = Vector3::new(360.387, 19.697, 0.0);
+        title.alignment_point = Vector3::new(360.0, 22.5, 0.0);
+        title.height = 5.0;
+        title.width_factor = 0.7;
+        title.text_style = "OCSM_GB".into();
+
+        vec![code, material, title]
+    }
+
+    /// 非 1:1 插入与 1:1 **走同一条路**：对齐枚举、对齐点换算、旋转都不许变形。
+    /// （用户清单 §P2 验收：2:1 后 halign/valign 与 1:1 一致、alignment_point = 1:1 值 × 2、
+    /// rotation == π。）
+    #[test]
+    fn frame_insert_keeps_attributes_identical_across_scales() {
+        let attdefs = template_like_attdefs();
+        let one = build_frame_insert("a3_landscape_att", 1.0, "1:1", &attdefs, [0.0, 0.0, 0.0], 0.0);
+        for (scale, label) in [(2.0, "2:1"), (0.5, "1:2")] {
+            let scaled =
+                build_frame_insert("a3_landscape_att", scale, label, &attdefs, [0.0, 0.0, 0.0], 0.0);
+            assert_eq!(scaled.attributes.len(), one.attributes.len(), "{label}");
+            for (base, got) in one.attributes.iter().zip(&scaled.attributes) {
+                assert_eq!(base.tag, got.tag, "{label} 属性顺序与 ATTDEF 一致");
+                assert_eq!(
+                    (base.horizontal_alignment, base.vertical_alignment),
+                    (got.horizontal_alignment, got.vertical_alignment),
+                    "{label} 的 {} 对齐被改动了",
+                    base.tag
+                );
+                assert_eq!(base.width_factor, got.width_factor, "{label} {}", base.tag);
+                assert_eq!(base.text_style, got.text_style, "{label} {}", base.tag);
+                assert!(
+                    (got.alignment_point.x - base.alignment_point.x * scale).abs() < 1e-9
+                        && (got.alignment_point.y - base.alignment_point.y * scale).abs() < 1e-9,
+                    "{label} 的 {} 对齐点没随比例缩放：{:?} → {:?}",
+                    base.tag,
+                    base.alignment_point,
+                    got.alignment_point
+                );
+                assert!(
+                    (got.rotation - base.rotation).abs() < 1e-12,
+                    "{label} 的 {} 旋转被二次换算：{} → {}",
+                    base.tag,
+                    base.rotation,
+                    got.rotation
+                );
+                assert!(
+                    (got.height - base.height * scale).abs() < 1e-9,
+                    "{label} 的 {} 字高没随比例缩放",
+                    base.tag
+                );
+            }
+        }
+
+        // 倒置的「图样代号」：180° 必须还是弧度 π（0.054831 = to_radians(π) 即为二次换算）。
+        let code = one
+            .attributes
+            .iter()
+            .find(|a| a.tag == "图样代号")
+            .expect("图样代号属性");
+        assert!((code.rotation - std::f64::consts::PI).abs() < 1e-12);
+    }
+
+    /// 旋转参数只做一次「度 → 弧度」：`rot 180` ⇒ π（不是 to_radians(π)）。
+    #[test]
+    fn frame_insert_converts_the_rotation_argument_once() {
+        let attdefs = template_like_attdefs();
+        let ins = build_frame_insert(
+            "a3_landscape_att",
+            2.0,
+            "2:1",
+            &attdefs,
+            [0.0, 0.0, 0.0],
+            180.0,
+        );
+        assert!((ins.rotation - std::f64::consts::PI).abs() < 1e-12);
+    }
+
+    /// 对齐点丢失（导出器把 group 11 写空）时退回插入点：文字不许落到块原点。
+    /// 用户清单 §P2.1 的症状就是这个（标题栏看起来空的、「图样代号」横穿图框）。
+    #[test]
+    fn frame_insert_restores_a_missing_attribute_alignment_point() {
+        use acadrust::entities::AttributeDefinition;
+        let mut broken = AttributeDefinition::new("材料".into(), "Material".into(), " ".into());
+        broken.horizontal_alignment = HorizontalAlignment::Middle;
+        broken.vertical_alignment = VerticalAlignment::Middle;
+        broken.insertion_point = Vector3::new(299.609, 30.268, 0.0);
+        broken.alignment_point = Vector3::ZERO;
+        broken.height = 5.0;
+
+        let ins = build_frame_insert(
+            "a3_landscape_att",
+            2.0,
+            "2:1",
+            &[broken],
+            [0.0, 0.0, 0.0],
+            0.0,
+        );
+        let attr = &ins.attributes[0];
+        assert_eq!
+            (
+                attr.alignment_point,
+                attr.insertion_point,
+                "对齐点丢了就退回插入点"
+            );
+        assert!(attr.alignment_point.x.abs() > 1e-9, "文字不该落在块原点");
+        assert_eq!(attr.horizontal_alignment, HorizontalAlignment::Middle);
+        assert_eq!(attr.vertical_alignment, VerticalAlignment::Middle);
     }
 
     #[test]
