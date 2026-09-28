@@ -761,6 +761,7 @@ pub fn load_bytes(name: &str, bytes: Vec<u8>) -> Result<CadDocument, String> {
             fix_pre_r2000_layer_plot_flags(&mut doc, version);
             fix_viewport_status_flags(&mut doc);
             fix_current_style_names(&mut doc);
+            hydrate_true_type_fonts(&mut doc);
             Ok(doc)
         }
         "dxf" => {
@@ -772,6 +773,7 @@ pub fn load_bytes(name: &str, bytes: Vec<u8>) -> Result<CadDocument, String> {
             fix_dxf_layout_plot_settings(&mut doc);
             fix_viewport_status_flags(&mut doc);
             fix_current_style_names(&mut doc);
+            hydrate_true_type_fonts(&mut doc);
             Ok(doc)
         }
         _ => Err(format!("Unsupported file format: .{ext}")),
@@ -1041,6 +1043,7 @@ fn finalize_loaded_outcome(
     }
     fix_viewport_status_flags(doc);
     fix_current_style_names(doc);
+    hydrate_true_type_fonts(doc);
     resolve_raster_image_paths(doc, path.parent());
     doc.source_path = Some(path.to_string_lossy().into_owned());
     Ok(outcome)
@@ -1965,6 +1968,66 @@ pub fn save_to_bytes(
 }
 
 
+// ── TrueType style names: codec has no wire slot for them ──────────────────
+//
+// `codec::tables::TextStyle` carries two face slots — `font_file` (the SHX
+// name) and `true_type_font` (the TrueType name) — but the serialisers only
+// know the first one: opencadcodec's DXF writer emits group 3 out of
+// `font_file` alone (`io/dxf/writer/section_writer.rs::write_style_entry`) and
+// the DXF reader fills `font_file` back from group 3, while the DWG writer /
+// reader likewise move only `font_file` + `big_font_file`. `true_type_font` has
+// no group and no DWG field, so every save dropped it (the `OCSM_GB` style
+// stored by the OCSM plugin came back as `Unicode` — its SHX placeholder — and
+// reopened drawings fell back to another font), and no load could recover it.
+//
+// DXF gives a style exactly one font slot, and for a TrueType style AutoCAD
+// puts the face name in it — the shipped frame template stores `Zhuque
+// Fangsong` in STYLE group 3 with no SHX name anywhere. So on save we mirror
+// `true_type_font` into `font_file` for the snapshot being written, and on load
+// we hydrate `true_type_font` back from a group-3 value that cannot be an SHX
+// reference. Both edits are host-side: the vendored codec is left untouched.
+
+/// SHX face names that mean "no SHX" — the DXF default font (`txt`) and the
+/// Unicode placeholder the OCSM plugin puts in the SHX slot of a TrueType-only
+/// style (`Unicode`). A style naming one of these has its font slot free for
+/// the TrueType name.
+fn is_placeholder_font(file: &str) -> bool {
+    let name = file.trim().trim_end_matches(".shx");
+    file.trim().is_empty() || name.eq_ignore_ascii_case("txt") || name.eq_ignore_ascii_case("unicode")
+}
+
+/// Mirror every style's TrueType name into the slot the codec actually writes.
+///
+/// A real SHX name is never overwritten: for a style that asks for both an SHX
+/// file and a TrueType face the SHX name is the one the format can carry, and
+/// clobbering it would lose the font the drawing was made with.
+fn persist_true_type_fonts(doc: &mut CadDocument) {
+    for style in doc.text_styles.iter_mut() {
+        let ttf = style.true_type_font.trim();
+        if !ttf.is_empty() && is_placeholder_font(&style.font_file) {
+            style.font_file = ttf.to_string();
+        }
+    }
+}
+
+/// Recover `true_type_font` from the font slot a previous save wrote it to.
+///
+/// A value that names an SHX file is left alone — it is a stroke font, not a
+/// TrueType face, and treating it as one would switch the style to the
+/// system-font path (`resolve_text_style` prefers `true_type_font`).
+fn hydrate_true_type_fonts(doc: &mut CadDocument) {
+    for style in doc.text_styles.iter_mut() {
+        if !style.true_type_font.trim().is_empty() {
+            continue;
+        }
+        let file = style.font_file.trim();
+        if is_placeholder_font(file) || file.to_ascii_lowercase().ends_with(".shx") {
+            continue;
+        }
+        style.true_type_font = file.to_string();
+    }
+}
+
 // ── Post-load fixups ──────────────────────────────────────────────────────
 
 // Resolve the current text / dimension / multiline style from the handle the
@@ -2170,6 +2233,11 @@ pub fn set_saved_active_layout(doc: &mut CadDocument, name: &str) {
 /// every representation consistent.
 fn sync_current_styles_on_save(doc: &mut CadDocument) {
     use codec::objects::ObjectType;
+
+    // The codec's writers have no group for `true_type_font` — put the name
+    // where they do write one, before anything serialises the snapshot (see
+    // `persist_true_type_fonts`).
+    persist_true_type_fonts(doc);
 
     // The renderer uses a closed filled arrow when a referenced block is
     // missing. Persist that same default instead of a dangling hard pointer:
@@ -3043,5 +3111,114 @@ mod pre_r2000_layer_plot_tests {
             "{dropped} of {} wires would be dropped from the plot",
             wires.len()
         );
+    }
+}
+
+#[cfg(test)]
+mod true_type_font_roundtrip_tests {
+    use super::*;
+    use codec::tables::TextStyle;
+
+    /// `OCSM_GB` as the plugin defines it: an SHX placeholder in the font slot
+    /// plus the real TrueType face (crates/ocs_ocsm/src/lib.rs `text_style_defs`).
+    fn ocsm_gb_style() -> TextStyle {
+        let mut style = TextStyle::with_truetype("OCSM_GB", "Zhuque Fangsong");
+        style.font_file = "Unicode".to_string();
+        style.height = 3.5;
+        style.width_factor = 0.7;
+        style.annotative = true;
+        style
+    }
+
+    fn document_with_styles() -> CadDocument {
+        let mut doc = CadDocument::new();
+        let mut ocsm = ocsm_gb_style();
+        ocsm.handle = doc.allocate_handle();
+        doc.text_styles.add(ocsm).expect("add OCSM_GB");
+        // A style that really asks for a stroke font — its SHX name must
+        // survive, and must never come back as a TrueType face.
+        let mut shx = TextStyle::new("SHX_STYLE");
+        shx.font_file = "romans.shx".to_string();
+        shx.handle = doc.allocate_handle();
+        doc.text_styles.add(shx).expect("add SHX_STYLE");
+        doc
+    }
+
+    fn style_names(bytes: &[u8], ext: &str) -> CadDocument {
+        load_bytes(&format!("roundtrip.{ext}"), bytes.to_vec()).expect("reload saved drawing")
+    }
+
+    #[test]
+    fn ocsm_gb_true_type_font_is_written_and_read_back() {
+        let doc = document_with_styles();
+
+        for ext in ["dxf", "dwg"] {
+            let bytes = save_to_bytes(&doc, ext, codec::DxfVersion::AC1032).expect("save");
+            let text = String::from_utf8_lossy(&bytes).to_ascii_lowercase();
+            if ext == "dxf" {
+                assert!(
+                    text.contains("zhuque fangsong"),
+                    "the saved DXF must carry the TrueType name ({ext})"
+                );
+            }
+
+            let back = style_names(&bytes, ext);
+            let style = back.text_styles.get("OCSM_GB").expect("OCSM_GB survived");
+            assert_eq!(
+                style.true_type_font, "Zhuque Fangsong",
+                "OCSM_GB lost its TrueType face on a {ext} round trip"
+            );
+            assert_eq!(style.height, 3.5, "{ext}");
+            assert!(style.annotative, "{ext}");
+        }
+    }
+
+    #[test]
+    fn a_real_shx_font_file_is_never_treated_as_a_true_type_face() {
+        let doc = document_with_styles();
+        for ext in ["dxf", "dwg"] {
+            let bytes = save_to_bytes(&doc, ext, codec::DxfVersion::AC1032).expect("save");
+            let back = style_names(&bytes, ext);
+            let style = back.text_styles.get("SHX_STYLE").expect("SHX_STYLE survived");
+            assert_eq!(style.font_file, "romans.shx", "{ext} kept the SHX name");
+            assert!(
+                style.true_type_font.trim().is_empty(),
+                "romans.shx is not a TrueType face ({ext})"
+            );
+        }
+    }
+
+    #[test]
+    fn a_style_asking_for_both_keeps_its_shx_file_on_save() {
+        let mut doc = document_with_styles();
+        let style = doc.text_styles.get_mut("SHX_STYLE").expect("SHX_STYLE");
+        style.true_type_font = "Some Face".to_string();
+
+        let bytes = save_to_bytes(&doc, "dxf", codec::DxfVersion::AC1032).expect("save");
+        let back = style_names(&bytes, "dxf");
+        let style = back.text_styles.get("SHX_STYLE").expect("SHX_STYLE survived");
+        assert_eq!(
+            style.font_file, "romans.shx",
+            "a real SHX name is the one the format can carry — never overwritten"
+        );
+    }
+
+    #[test]
+    fn the_shx_placeholders_are_not_hydrated_as_true_type_faces() {
+        let mut doc = CadDocument::new();
+        for (name, file) in [("TxtPlaceholder", "txt"), ("UnicodeOnly", "Unicode")] {
+            let mut style = TextStyle::new(name);
+            style.font_file = file.to_string();
+            style.handle = doc.allocate_handle();
+            doc.text_styles.add(style).expect("add style");
+        }
+        hydrate_true_type_fonts(&mut doc);
+        for name in ["TxtPlaceholder", "UnicodeOnly"] {
+            let style = doc.text_styles.get(name).expect("style");
+            assert!(
+                style.true_type_font.trim().is_empty(),
+                "{name} names an SHX placeholder, not a TrueType face"
+            );
+        }
     }
 }
