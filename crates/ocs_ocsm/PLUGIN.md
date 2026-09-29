@@ -370,6 +370,15 @@ cargo test -p ocs_plugin_api            # API：IPC round-trip 等（串行 --te
 # 宿主单测（lib）: cargo test --lib 相关模块
 ```
 
+## 发布卫生（维护机）
+
+* **推送/发布前必跑**：`python3 tools/hygiene_scan.py --history`（工作树 + 全历史）。
+  词表在**仓库之外**：`~/.config/ocsm/hygiene-words.txt`（每行一个词，`#` 起注释，权限 600）；
+  脚本里不写任何私有词，命中也只报 `私#N`。**非 0 命中 ⇒ 禁止推送**（含强推重写历史）。
+* 通用件守卫（`tools/frame_clean.py`、`tools/bom_template.py`）同样从仓库外读私有词表：
+  `~/.config/ocsm/junk-names.txt`，或环境变量 `OCSM_JUNK_NAMES`（逗号/换行分隔）；
+  仓里只留通用软件名（`Zwm`/`ZWM`/`PCCAD`/`TH_Paper`/`TH_CSL`）。两份都没有 ⇒ 只用通用词，不报错。
+
 ## 已知限制（v0.2.0）
 
 - 图框 DWG 含**嵌套块**时不支持（报错提示）。

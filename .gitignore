@@ -44,3 +44,7 @@ __pycache__/
 
 # macOS Finder metadata
 .DS_Store
+
+# 本机私有词表（正常在 ~/.config/ocsm/，此处兜底防误拷；见 tools/hygiene_words.py）
+junk-names.txt
+hygiene-words.txt

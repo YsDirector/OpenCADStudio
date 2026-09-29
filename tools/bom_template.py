@@ -69,6 +69,12 @@ from pathlib import Path
 import ezdxf
 from ezdxf.math import Vec3
 
+try:
+    from hygiene_words import GENERIC_JUNK, junk_names
+except ImportError:  # 以包方式导入（tools/ 不在 sys.path 上）时兜底
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from hygiene_words import GENERIC_JUNK, junk_names
+
 OCS = Path.home() / "dev/OpenCADStudio/target/release/OpenCADStudio"
 DXF2DWG = Path.home() / ".local/bin/dxf2dwg"
 PLUGIN_FRAME = Path.home() / ".config/OpenCADStudio/plugins/opencad.ocsm/frame/a3_landscape.dwg"
@@ -356,20 +362,27 @@ def verify(dxf: Path, strict_attribs: bool = True, encoding: str = "utf-8") -> l
     if doc.styles.get(STYLE).dxf.font.strip() == "":
         bad.append("OCSM_GB 样式缺 font")
 
-    # 前公司/旧环境残留守卫（用户 2026-09-15：图框是通用图框，不能带 ZWCAD/PCCAD/前公司命名）
+    # 旧环境残留守卫（用户 2026-09-15：图框是通用图框，不能带 ZWCAD/PCCAD/私有模板命名）
     bad.extend(guard_junk(dxf))
     return bad
 
 
 def guard_junk(path: Path) -> list[str]:
-    """前公司/旧环境残留守卫：图框/模板/块文件都必须是通用件（用户 2026-09-15）。"""
+    """旧环境残留守卫：图框/模板/块文件都必须是通用件（用户 2026-09-15）。
+
+    检查集合 = 本机私有词表（仓库外，`tools/hygiene_words.py`）+ 通用软件名；
+    本机词表缺失 ⇒ 只剩通用词。**私有名称不进仓、也不回显**：非通用词只报 `私#N`
+    （N = `~/.config/ocsm/junk-names.txt` 里的行序号），需要定位就 `tools/hygiene_scan.py --pattern N`。
+    """
     bad: list[str] = []
+    names = junk_names()
     raw = path.read_bytes()
     for enc in ("utf-8", "gb2312", "utf-16-le"):
         text = raw.decode(enc, errors="ignore")
-        for needle in ("[redacted]", "[redacted]", "Zwm", "ZWM", "PCCAD", "TH_Paper"):
+        for i, needle in enumerate(names, 1):
             if needle in text:
-                bad.append(f"检出旧环境残留串 {needle!r}（通用图框必须干净）")
+                tag = repr(needle) if needle in GENERIC_JUNK else f"私#{i}"
+                bad.append(f"检出旧环境残留串 {tag}（通用图框必须干净）")
                 break
     return bad
 

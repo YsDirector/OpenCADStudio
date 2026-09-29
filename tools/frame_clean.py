@@ -2,8 +2,12 @@
 """通用图框清理：去掉旧环境残留（ZWCAD `Zwm*` / 天河 PCCAD `TH_*` 的 CLASSES 与字典对象），
 顺手修掉 LAYER 表颜色损坏（LibreDWG r2004 写坏过）与失效文字样式，再写回 DWG。
 
-背景（用户 2026-09-15）：图框是**通用图框**；之前源模板里出现的 `[redacted][redacted]GB` / `[redacted][redacted]明细表`
-只是 ZWCAD 样式库/明细表定义的名字（随图纸带过来），不能出现在新产出里。
+背景（用户 2026-09-15）：图框是**通用图框**；源模板里曾随图纸带过来一些旧环境的样式库/明细表
+定义名（ZWCAD/PCCAD 那边的命名），不能出现在新产出里。
+
+⚠ **私有名称不进仓**：具体的旧环境/前雇主名称写在**仓库之外**的本机词表里
+（`~/.config/ocsm/junk-names.txt`，或环境变量 `OCSM_JUNK_NAMES`，逗号/换行分隔），
+由 `tools/hygiene_words.py` 读入；两份都没有 ⇒ 只用通用软件名，不报错、不改变清洗行为。
 
 做法：OCS 导出源 DWG → ezdxf 读 → **只挑要的东西**建一份全新 R2000 文档：
     图层（按 OCSM 约定给正确颜色：1轮廓实线层=7、2细线层=4、6文字层=3 …）
@@ -28,6 +32,12 @@ import sys
 from pathlib import Path
 
 import ezdxf
+
+try:
+    from hygiene_words import junk_names
+except ImportError:  # 以包方式导入（tools/ 不在 sys.path 上）时兜底
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from hygiene_words import junk_names
 
 OCS = Path.home() / "dev/OpenCADStudio/target/release/OpenCADStudio"
 DXF2DWG = Path.home() / ".local/bin/dxf2dwg"
@@ -54,7 +64,9 @@ STYLE_FIX = "OCSM_GB"          # 失效/旧 SHX 样式统一换成它
 #   group 3 = TTF 名（不是 SHX 占位 `Unicode`）、宽比 0.7、height = 3.5、annotative = 1。
 STYLE_HEIGHT = 3.5              # 插件口径的固定字高（模板原来是 0.0 = 不定高）
 DWG_VERSION = "r2000"          # 必须：r2004 会写坏 LAYER 表颜色
-JUNK = ("[redacted]", "[redacted]", "Zwm", "ZWM", "PCCAD", "TH_Paper", "TH_CSL")
+# 残留名检查集合 = 本机词表（仓库外，见 tools/hygiene_words.py）+ 通用软件名。
+# 本机词表缺失时只剩通用词 ⇒ 不报错（词表位置与建法见 tools/hygiene_words.py）。
+JUNK = junk_names()
 
 
 def set_annotative(style) -> None:
