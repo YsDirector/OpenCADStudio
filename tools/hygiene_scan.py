@@ -7,7 +7,7 @@
 
 用法（在待发布仓库根目录跑）：
     python3 tools/hygiene_scan.py                  # 工作树（git 已跟踪文件）
-    python3 tools/hygiene_scan.py --history        # 再加全历史（每个提交的树，逐提交 git grep）
+    python3 tools/hygiene_scan.py --history        # 再加全历史（对象级：每个对象的原始字节都比对）
     python3 tools/hygiene_scan.py --pattern <n>    # 只查第 n 个词（1 起）
     python3 tools/hygiene_scan.py -i <词表路径>    # 换词表（例如与 junk-names.txt 共用）
 
@@ -21,6 +21,7 @@ import argparse
 import subprocess
 import sys
 import tempfile
+import threading
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -59,23 +60,69 @@ def scan_worktree(words: list[str]) -> list[tuple[str, list[int]]]:
     return out
 
 
-def scan_history(words: list[str]) -> list[tuple[str, str, list[int]]]:
-    """逐提交扫全历史（用 git grep 定位文件，再按字节复核词序号）。"""
-    shas = [s for s in _git(["rev-list", "--all"]).stdout.split() if s]
-    with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".patterns") as pf:
-        pf.write("\n".join(words) + "\n")
-        pf.flush()
-        out: list[tuple[str, str, list[int]]] = []
-        for n, sha in enumerate(shas, 1):
-            r = _git(["grep", "-l", "-F", "--full-name", "-f", pf.name, sha, "--", "."])
-            for line in r.stdout.splitlines():
-                # 输出形如 "<sha>:<path>"
-                _, _, path = line.partition(":")
-                hits = _scan_file(Path(path), words)
-                if hits:
-                    out.append((sha, path, hits))
-            if n % 200 == 0:
-                print(f"  …已扫 {n}/{len(shas)} 个提交", file=sys.stderr)
+def _enc_variants(word: str) -> list[bytes]:
+    """一个词在常见中文编码下的字节形态（按字节比对，绕开解码 errors=ignore 的假合并）。"""
+    outs: list[bytes] = []
+    for enc in ("utf-8", "gb2312", "utf-16-le"):
+        try:
+            b = word.encode(enc)
+        except Exception:
+            continue
+        if b and b not in outs:
+            outs.append(b)
+    return outs
+
+
+def _scan_bytes(raw: bytes, words: list[str]) -> list[int]:
+    """按字节判命中：blob 内容 / tree 文件名 / commit 信息与作者 / tag 信息都适用。"""
+    return sorted(i for i, w in enumerate(words)
+                  if any(b in raw for b in _enc_variants(w)))
+
+
+def scan_history(words: list[str]) -> list[tuple[str, str, str, list[int]]]:
+    """对象级扫全历史：`cat-file --batch-all-objects` 取出**每个对象**的原始字节再比对。
+
+    为什么不用「逐提交 git grep 文件 + 回读工作树」：旧提交里命中的文件，工作树里
+    往往已是干净版本 ⇒ 回读判 0 ⇒ **假阴性**（实测过：旧提交命中却报「全历史 0」）。
+    对象级覆盖 blob(文件内容)/tree(文件名)/commit(信息+作者)/tag，并且**连不可达对象一起扫**。
+    返回 (对象 sha, 类型, 归属说明, 命中词序号)；只报 sha、不打印提交标题，免得二次泄露。
+    """
+    listing = _git(["cat-file", "--batch-all-objects",
+                    "--batch-check=%(objectname) %(objecttype) %(objectsize)"]).stdout
+    objs: list[tuple[str, str, int]] = []
+    for line in listing.splitlines():
+        parts = line.split()
+        if len(parts) == 3 and parts[1] in ("blob", "tree", "commit", "tag"):
+            objs.append((parts[0], parts[1], int(parts[2])))
+
+    proc = subprocess.Popen(["git", "cat-file", "--batch"],
+                            stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+    assert proc.stdin is not None and proc.stdout is not None
+
+    def _feed() -> None:
+        for sha, _t, _s in objs:
+            proc.stdin.write((sha + "\n").encode())
+        proc.stdin.close()
+
+    threading.Thread(target=_feed, daemon=True).start()
+
+    out: list[tuple[str, str, str, list[int]]] = []
+    for n, (sha, otype, size) in enumerate(objs, 1):
+        if not proc.stdout.readline():
+            break
+        raw = proc.stdout.read(size)
+        proc.stdout.read(1)  # 对象之间的换行
+        hits = _scan_bytes(raw, words)
+        if hits:
+            where = ""
+            if otype == "blob":
+                own = _git(["log", "--all", "--format=%h",
+                            "--find-object=" + sha]).stdout.split()
+                where = "提交 " + ", ".join(own[:3]) if own else "不可达/无归属"
+            out.append((sha, otype, where, hits))
+        if n % 5000 == 0:
+            print(f"  …已扫 {n}/{len(objs)} 个对象", file=sys.stderr)
+    proc.wait()
     return out
 
 
@@ -113,9 +160,10 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.history:
         hist = scan_history(words)
-        print(f"全历史: {len(hist)} 个（提交×文件）命中")
-        for sha, name, hits in hist:
-            print(f"  {sha[:10]}  {name}  {_fmt(hits, 0)}")
+        print(f"全历史: {len(hist)} 个对象命中")
+        for sha, otype, where, hits in hist:
+            tail = f"  ← {where}" if where else ""
+            print(f"  {sha[:10]}  {otype}  {_fmt(hits, 0)}{tail}")
         total += len(hist)
 
     print("结果 : " + ("✓ 干净（0 命中）" if total == 0 else f"✗ {total} 处命中，禁止发布/推送"))
