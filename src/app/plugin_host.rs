@@ -367,9 +367,19 @@ impl<'a> HostSession<'a> {
     }
 
     /// API v5 (OCSMechanical): load `req.path` (a frame DWG), merge its
-    /// tables, and define it as a block under `req.block_name` when absent.
-    /// Returns the block's attribute definitions (ATTDEFs) in draw order so
-    /// the plugin can build an INSERT with concrete attribute values.
+    /// tables, and define it as a block under `req.block_name`. Returns the
+    /// block's attribute definitions (ATTDEFs) in draw order so the plugin can
+    /// build an INSERT with concrete attribute values.
+    ///
+    /// 口径：**画法以模板为准**。图框 DWG 是唯一真源 —— 文档里已有同名块定义
+    /// 时不再无条件复用（早期经有损路径写进去的 ATTDEF 会带着 `style=Standard`、
+    /// `halign/valign=0`、对齐点为空的错误画法被永久继承：标题栏看着是空的、
+    /// 「图样代号」横穿图框、黄色属性用错字体）。做法是两半，缺一不可：
+    /// ① 与模板做**内容指纹**比对，不一致就删掉旧定义、按模板重新定义；
+    /// ② 图上已有的图框 INSERT 属性一并重同步（渲染读的是 INSERT 里的
+    ///    `AttributeEntity`，光修块定义没用）—— **value 保留**，文字呈现按
+    ///    （现在正确的）ATTDEF 重取，并按各 INSERT 自身的比例/旋转变换。
+    /// 两半都幂等：已经与模板一致时一个字节都不动（句柄不变）。
     pub fn import_frame_block_impl(
         &mut self,
         req: ocs_plugin_api::host::ImportFrameBlockRequest,
@@ -380,81 +390,341 @@ impl<'a> HostSession<'a> {
             return Err("OCSMFRAME: 非法的块名".to_string());
         }
 
-        self.push_undo("OCSMFRAME");
+        // 0. 模板先读盘：块定义与属性重同步都以它为准。
+        let frame_doc = crate::io::load_file(std::path::Path::new(&req.path))?;
+        // 同一份图框 DWG 在临时 Scene 里按真实定义路径跑一遍：得到"块应该长成
+        // 什么样"的内容指纹（绘制顺序 + 逐实体句柄无关摘要）与块内 ATTDEF。
+        let (wanted, dry_attdefs) = Self::probe_template_block(&frame_doc)?;
 
-        // 1. Define the block from the frame DWG when it is not present yet.
-        if self.app.tabs[i].scene.document.block_records.get(&block_name).is_none() {
-            let frame_doc = crate::io::load_file(std::path::Path::new(&req.path))?;
+        // 1. 已有同名块定义吗？它还和模板一致吗？
+        let stored = self.app.tabs[i]
+            .scene
+            .document
+            .block_records
+            .get(&block_name)
+            .map(|record| record.handle);
+        let refresh = stored.is_some_and(|handle| {
+            Self::block_content_fingerprint(&self.app.tabs[i].scene.document, handle) != wanted
+        });
+
+        // 2. 预演属性重同步（只读）：undo 标签要写实情，必须先于快照算出来。
+        let planned =
+            Self::inserts_needing_resync(self.document(), &block_name, &dry_attdefs, refresh);
+
+        let mut label = "OCSMFRAME".to_string();
+        if refresh {
+            label.push_str(" · 图框块定义已按模板刷新");
+        }
+        if !planned.is_empty() {
+            label.push_str(&format!(" · 已刷新 {} 个图框实例的属性", planned.len()));
+        }
+        self.push_undo(&label);
+
+        // 3. 按模板（重新）定义块。刷新要先删旧定义（block record + 它自己的
+        //    Block/BlockEnd + 它名下的实体），否则同名定义会被拒。
+        if stored.is_none() || refresh {
+            if refresh {
+                self.drop_block_definition(&block_name);
+            }
             self.import_frame_doc_as_block(&frame_doc, &block_name)?;
             self.app.tabs[i].scene.populate_meshes_from_document();
         }
 
-        // 2. Return the block's attribute definitions in draw order.
-        let doc = &self.app.tabs[i].scene.document;
-        let mut attdefs = Vec::new();
-        if let Some(br) = doc.block_records.get(&block_name) {
-            for &h in &br.entity_handles {
-                if let Some(codec::EntityType::AttributeDefinition(ad)) = doc.get_entity(h) {
-                    attdefs.push(ad.clone());
-                }
-            }
+        // 4. 用块内 ATTDEF（绘制顺序）重算并写回第 2 步预演到的 INSERT 属性。
+        let attdefs = self.block_attribute_definitions(&block_name);
+        if !planned.is_empty() && self.apply_insert_resync(&planned, &attdefs) > 0 {
+            // 单条 INSERT 的派生素描由 `update_entity` 自己刷新；这里让整场景
+            // 几何代际前进一次，免得下游缓存继续沿用旧文字。
+            self.app.tabs[i].scene.bump_geometry();
         }
         Ok(attdefs)
     }
 
-    /// Merge `frame_doc`'s layers / linetypes / text styles into the active
-    /// document (name-collision-safe, no xref-style prefixing), then define a
-    /// block named `block_name` from its model-space entities (ATTDEFs kept).
-    /// Fails when the frame has nested non-layout blocks (unsupported in v1).
-    pub fn import_frame_doc_as_block(
-        &mut self,
-        frame_doc: &codec::CadDocument,
-        block_name: &str,
-    ) -> Result<(), String> {
-        use codec::EntityType;
-        let i = self.tab;
-
-        // ── Tables: layers / linetypes / text styles (by name, keep existing).
-        {
-            let doc = &mut self.app.tabs[i].scene.document;
-            for layer in frame_doc.layers.iter() {
-                if doc.layers.iter().any(|l| l.name.eq_ignore_ascii_case(&layer.name)) {
-                    continue;
-                }
-                let mut cloned = layer.clone();
-                cloned.handle = doc.allocate_handle();
-                doc.layers.add_or_replace(cloned);
-            }
-            for lt in frame_doc.line_types.iter() {
-                let sentinel = lt.name.eq_ignore_ascii_case("ByLayer")
-                    || lt.name.eq_ignore_ascii_case("ByBlock")
-                    || lt.name.eq_ignore_ascii_case("Continuous");
-                if sentinel
-                    || doc
-                        .line_types
-                        .iter()
-                        .any(|l| l.name.eq_ignore_ascii_case(&lt.name))
+    /// `name` 块定义里的 ATTDEF，绘制顺序（= 插件建 INSERT 时照抄的顺序）。
+    fn block_attribute_definitions(&self, name: &str) -> Vec<codec::entities::AttributeDefinition> {
+        let doc = &self.app.tabs[self.tab].scene.document;
+        let mut attdefs = Vec::new();
+        if let Some(record) = doc.block_records.get(name) {
+            for &handle in &record.entity_handles {
+                if let Some(codec::EntityType::AttributeDefinition(definition)) =
+                    doc.get_entity(handle)
                 {
-                    continue;
+                    attdefs.push(definition.clone());
                 }
-                let mut cloned = lt.clone();
-                cloned.handle = doc.allocate_handle();
-                doc.line_types.add_or_replace(cloned);
-            }
-            for style in frame_doc.text_styles.iter() {
-                if doc
-                    .text_styles
-                    .iter()
-                    .any(|s| s.name.eq_ignore_ascii_case(&style.name))
-                {
-                    continue;
-                }
-                let mut cloned = style.clone();
-                cloned.handle = doc.allocate_handle();
-                doc.text_styles.add_or_replace(cloned);
             }
         }
+        attdefs
+    }
 
+    /// 实体摘要：先清掉一切**因地而异的句柄**（顶层、INSERT 子属性、3D 多段线
+    /// 顶点、栅格图像定义）与存储级载荷（DWG 原始记录字节 / 预览图 —— 读盘路径
+    /// 不同就会不同，不属于画法），再 `{:?}`。同一份图框 DWG 定义几次都得到同一
+    /// 串摘要，只有真正的画法差异才会让它变。
+    fn handle_free_digest(entity: &EntityType) -> String {
+        let mut entity = entity.clone();
+        let common = entity.common_mut();
+        common.handle = Handle::NULL;
+        common.owner_handle = Handle::NULL;
+        common.raw_record = None;
+        common.graphic_data = None;
+        match &mut entity {
+            EntityType::Insert(insert) => {
+                for attribute in &mut insert.attributes {
+                    attribute.common.handle = Handle::NULL;
+                    attribute.common.owner_handle = Handle::NULL;
+                }
+            }
+            EntityType::Polyline3D(polyline) => {
+                for vertex in &mut polyline.vertices {
+                    vertex.handle = Handle::NULL;
+                }
+            }
+            EntityType::RasterImage(image) => image.definition_handle = None,
+            _ => {}
+        }
+        format!("{entity:?}")
+    }
+
+    /// 现有块定义的内容指纹：`record.entity_handles` 的绘制顺序 + 逐实体摘要。
+    fn block_content_fingerprint(doc: &CadDocument, record_handle: Handle) -> Vec<String> {
+        let Some(record) = doc
+            .block_records
+            .iter()
+            .find(|record| record.handle == record_handle)
+        else {
+            return Vec::new();
+        };
+        record
+            .entity_handles
+            .iter()
+            .filter_map(|handle| doc.get_entity(*handle))
+            .map(Self::handle_free_digest)
+            .collect()
+    }
+
+    /// 在**临时 Scene** 里按真实定义路径（`define_block_from_owned_entities`：
+    /// 基点平移、子句柄重排、入库）把 `frame_doc` 跑一遍，得到"这份图框 DWG
+    /// 定义出来长什么样"：块内实体的内容指纹 + 块内 ATTDEF（局部坐标、绘制
+    /// 顺序）。与真定义的唯一差别是句柄分配，而指纹已抹平句柄 ⇒ 两者可直接比。
+    fn probe_template_block(
+        frame_doc: &codec::CadDocument,
+    ) -> Result<(Vec<String>, Vec<codec::entities::AttributeDefinition>), String> {
+        let (candidates, base) = Self::frame_block_parts(frame_doc)?;
+        let mut probe = crate::scene::Scene::new();
+        let handles = probe
+            .define_block_from_owned_entities(candidates, "OCSMFRAME_PROBE", base)
+            .map_err(|e| format!("OCSMFRAME: 定义块失败: {e}"))?;
+        let mut fingerprints = Vec::with_capacity(handles.len());
+        let mut attdefs = Vec::new();
+        for handle in handles {
+            let Some(entity) = probe.document.get_entity(handle) else {
+                continue;
+            };
+            if let EntityType::AttributeDefinition(definition) = entity {
+                attdefs.push(definition.clone());
+            }
+            fingerprints.push(Self::handle_free_digest(entity));
+        }
+        Ok((fingerprints, attdefs))
+    }
+
+    /// 画布块记录：模型空间 + 各图纸布局。与渲染器/依赖索引同口径 —— 先取
+    /// `Layout` 对象的 block_record，再补 DWG 导入可能留下的、没有 Layout 对象的
+    /// `*Model_Space` / `*Paper_Space*` 记录。
+    fn canvas_block_handles(doc: &CadDocument) -> std::collections::HashSet<Handle> {
+        let mut handles: std::collections::HashSet<Handle> = doc
+            .objects
+            .values()
+            .filter_map(|object| match object {
+                codec::objects::ObjectType::Layout(layout) if !layout.block_record.is_null() => {
+                    Some(layout.block_record)
+                }
+                _ => None,
+            })
+            .collect();
+        handles.extend(
+            doc.block_records
+                .iter()
+                .filter(|record| {
+                    let name = record.name.to_ascii_uppercase();
+                    name.starts_with("*MODEL_SPACE") || name.starts_with("*PAPER_SPACE")
+                })
+                .map(|record| record.handle),
+        );
+        handles
+    }
+
+    /// 画布上引用 `block_name` 的全部 INSERT（模型空间 + 布局；块内嵌套不算）。
+    fn canvas_inserts<'d>(
+        doc: &'d CadDocument,
+        canvas: &'d std::collections::HashSet<Handle>,
+        block_name: &'d str,
+    ) -> impl Iterator<Item = &'d codec::entities::Insert> + 'd {
+        doc.entities().filter_map(move |entity| match entity {
+            EntityType::Insert(insert)
+                if insert.block_name.eq_ignore_ascii_case(block_name)
+                    && canvas.contains(&insert.common.owner_handle) =>
+            {
+                Some(insert)
+            }
+            _ => None,
+        })
+    }
+
+    /// 只读预演：这次调用会改写哪些图框 INSERT？判据与真正写入时一致
+    /// （`refresh` 时属性一律重写：定义换了，`attdef_handle` 要重新指向）。
+    fn inserts_needing_resync(
+        doc: &CadDocument,
+        block_name: &str,
+        attdefs: &[codec::entities::AttributeDefinition],
+        refresh: bool,
+    ) -> Vec<Handle> {
+        if attdefs.is_empty() {
+            return Vec::new();
+        }
+        let canvas = Self::canvas_block_handles(doc);
+        Self::canvas_inserts(doc, &canvas, block_name)
+            .filter(|insert| refresh || Self::template_attributes(insert, attdefs, false).is_some())
+            .map(|insert| insert.common.handle)
+            .collect()
+    }
+
+    /// 把预演好的 INSERT 属性按**真定义**重算写回；返回实际改写的条数。
+    /// 不在预演名单里的 INSERT 一个字节都不动（幂等）。
+    fn apply_insert_resync(
+        &mut self,
+        planned: &[Handle],
+        attdefs: &[codec::entities::AttributeDefinition],
+    ) -> usize {
+        let mut changed = 0;
+        for &handle in planned {
+            let Some(EntityType::Insert(existing)) = self.document().get_entity(handle).cloned()
+            else {
+                continue;
+            };
+            let Some(attributes) = Self::template_attributes(&existing, attdefs, true) else {
+                continue;
+            };
+            let mut updated = existing;
+            updated.attributes = attributes;
+            // `update_entity` 顺带刷新该 INSERT 的派生缓存（文字 / 填充）。
+            if self.app.tabs[self.tab]
+                .scene
+                .update_entity(EntityType::Insert(updated))
+            {
+                changed += 1;
+            }
+        }
+        changed
+    }
+
+    /// 按 ATTDEF 重取一条 INSERT 的属性：**value 保留**（用户的字一字不改），
+    /// 文字呈现（style / halign / valign / 对齐点 / 字高 / 旋转 / 宽度因子 …）
+    /// 与 `attdef_handle` 按定义重算，并按该 INSERT 自身的比例与旋转变换到世界
+    /// 坐标 —— 与插件侧 `build_frame_insert` 同款语义（含对齐点丢失的兜底）。
+    /// 句柄与图层/颜色等非文字状态沿用原属性，故本函数幂等（重算结果不变）。
+    /// `repoint_attdef=false` 时沿用原 `attdef_handle`（刷新前的预演，新句柄还
+    /// 未知）；返回 `None` = 已经是模板口径，调用方一个字节都不该动。
+    fn template_attributes(
+        insert: &codec::entities::Insert,
+        attdefs: &[codec::entities::AttributeDefinition],
+        repoint_attdef: bool,
+    ) -> Option<Vec<codec::entities::AttributeEntity>> {
+        use codec::entities::{AttributeEntity, HorizontalAlignment, VerticalAlignment};
+        use codec::Entity;
+        let transform = insert.get_transform();
+        let mut attributes = insert.attributes.clone();
+        let mut changed = false;
+        for attribute in attributes.iter_mut() {
+            let Some(definition) = attdefs
+                .iter()
+                .find(|definition| definition.tag.eq_ignore_ascii_case(&attribute.tag))
+            else {
+                continue;
+            };
+            let mut rebuilt =
+                AttributeEntity::from_definition(definition, Some(attribute.value.clone()));
+            // 身份（句柄/owner）与 XDATA 等存储级状态沿用原属性。
+            rebuilt.common = attribute.common.clone();
+            if !repoint_attdef {
+                rebuilt.attdef_handle = attribute.attdef_handle;
+            }
+            // 与 `build_frame_insert` 同款兜底：ATTDEF 的 halign/valign 非默认却把
+            // 对齐点写成 (0,0,0)（有损导出）时退回插入点定字；左/基线对齐的不替换。
+            let alignment_lost = rebuilt.alignment_point.x == 0.0
+                && rebuilt.alignment_point.y == 0.0
+                && rebuilt.alignment_point.z == 0.0;
+            let aligned_by_point = !matches!(
+                definition.horizontal_alignment,
+                HorizontalAlignment::Left
+            ) || !matches!(definition.vertical_alignment, VerticalAlignment::Baseline);
+            if alignment_lost && aligned_by_point {
+                rebuilt.alignment_point = rebuilt.insertion_point;
+            }
+            rebuilt.apply_transform(&transform);
+            if format!("{rebuilt:?}") != format!("{attribute:?}") {
+                *attribute = rebuilt;
+                changed = true;
+            }
+        }
+        changed.then_some(attributes)
+    }
+
+    /// 删掉 `name` 的块定义：BlockRecord + 它自己的 Block/BlockEnd 标记 + 它
+    /// 名下的全部实体。只删"归属本记录"的对象（owner = 记录句柄）⇒ 不会误删
+    /// 别处引用的实体；别处的 INSERT 只按名字引用本块，不受影响。
+    fn drop_block_definition(&mut self, name: &str) {
+        let doc = &mut self.app.tabs[self.tab].scene.document;
+        let Some(record_handle) = doc.block_records.get(name).map(|record| record.handle) else {
+            return;
+        };
+        let mut members: Vec<Handle> = Vec::new();
+        if let Some(record) = doc.block_records.get(name) {
+            members.extend(record.entity_handles.iter().copied());
+            members.push(record.block_entity_handle);
+            members.push(record.block_end_handle);
+        }
+        // 老文件里可能有"归属本记录却没进 entity_handles"的实体，按 owner 兜底。
+        let owned: Vec<Handle> = doc
+            .entities()
+            .filter(|entity| entity.common().owner_handle == record_handle)
+            .map(|entity| entity.common().handle)
+            .collect();
+        members.extend(owned);
+        let mut seen = std::collections::HashSet::new();
+        for member in members {
+            if !member.is_null() && seen.insert(member) {
+                doc.remove_entity(member);
+            }
+        }
+        doc.block_records.remove(name);
+        // 块没了，指向它的 SortEntitiesTable 就成了孤儿（同 BlockDelete 的清理）。
+        let live: std::collections::HashSet<Handle> =
+            doc.block_records.iter().map(|record| record.handle).collect();
+        let orphans: Vec<Handle> = doc
+            .objects
+            .iter()
+            .filter_map(|(handle, object)| match object {
+                codec::objects::ObjectType::SortEntitiesTable(table)
+                    if !live.contains(&table.block_owner_handle) =>
+                {
+                    Some(*handle)
+                }
+                _ => None,
+            })
+            .collect();
+        for orphan in orphans {
+            doc.objects.remove(&orphan);
+        }
+        self.app.tabs[self.tab].scene.invalidate_dependency_index();
+    }
+
+    /// 图框 DWG → 块内候选实体（模型空间绘制顺序）+ 插入基点。
+    /// 校验：拒绝含嵌套块（v1 不支持）的图框、丢弃损坏实体、空图框报错。
+    fn frame_block_parts(
+        frame_doc: &codec::CadDocument,
+    ) -> Result<(Vec<EntityType>, glam::DVec3), String> {
+        use codec::EntityType;
         // ── Nested block records: reject in v1 rather than leave dangling
         // references inside the frame block.
         let nested: Vec<String> = frame_doc
@@ -511,15 +781,92 @@ impl<'a> HostSession<'a> {
         if entities.is_empty() {
             return Err("OCSMFRAME: 图框 DWG 没有可导入的实体".to_string());
         }
-
-        // ── Define the block; base = the frame's model-space insertion base.
         let base_vec = frame_doc.header.model_space_insertion_base;
-        let base = glam::DVec3::new(base_vec.x, base_vec.y, base_vec.z);
+        Ok((
+            entities,
+            glam::DVec3::new(base_vec.x, base_vec.y, base_vec.z),
+        ))
+    }
+
+    /// Merge `frame_doc`'s layers / linetypes / text styles into the active
+    /// document (name-collision-safe, no xref-style prefixing), then define a
+    /// block named `block_name` from its model-space entities (ATTDEFs kept).
+    /// Fails when the frame has nested non-layout blocks (unsupported in v1).
+    pub fn import_frame_doc_as_block(
+        &mut self,
+        frame_doc: &codec::CadDocument,
+        block_name: &str,
+    ) -> Result<(), String> {
+        let i = self.tab;
+        let (entities, base) = Self::frame_block_parts(frame_doc)?;
+        self.merge_frame_tables(frame_doc);
+        self.reseed_handle_counter();
         self.app.tabs[i]
             .scene
             .define_block_from_owned_entities(entities, block_name, base)
             .map_err(|e| format!("OCSMFRAME: 定义块失败: {e}"))?;
         Ok(())
+    }
+
+    /// 把句柄计数器抬到 `header.handle_seed` 这块地板上。
+    ///
+    /// `Scene::define_block_from_owned_entities` 给 BlockRecord/Block/BlockEnd 取号
+    /// 用的是**裸** `next_handle()`（不套地板），而读盘后 `next_handle` 可能落后于
+    /// 既有句柄（嵌套在 INSERT 里的 ATTRIB 句柄不顶计数器）⇒ 直接定义块会跟既有
+    /// 句柄撞号，存盘后别的 CAD 会报重复句柄。这里先走一次 `allocate_handle()`
+    /// （它自带地板逻辑）把计数器抬上去，那个号留个空号，不影响任何东西；
+    /// 正常文档下 `next_handle` 已经在地板之上，这里是空操作。
+    fn reseed_handle_counter(&mut self) {
+        let doc = &mut self.app.tabs[self.tab].scene.document;
+        if doc.next_handle() < doc.header.handle_seed {
+            let _ = doc.allocate_handle();
+        }
+    }
+
+    /// 把图框 DWG 的 图层/线型/文字样式 并进本文档（按名去重 ⇒ 同名保留现有，
+    /// 不做 xref 式前缀）。
+    fn merge_frame_tables(&mut self, frame_doc: &codec::CadDocument) {
+        let i = self.tab;
+        // ── Tables: layers / linetypes / text styles (by name, keep existing).
+        {
+            let doc = &mut self.app.tabs[i].scene.document;
+            for layer in frame_doc.layers.iter() {
+                if doc.layers.iter().any(|l| l.name.eq_ignore_ascii_case(&layer.name)) {
+                    continue;
+                }
+                let mut cloned = layer.clone();
+                cloned.handle = doc.allocate_handle();
+                doc.layers.add_or_replace(cloned);
+            }
+            for lt in frame_doc.line_types.iter() {
+                let sentinel = lt.name.eq_ignore_ascii_case("ByLayer")
+                    || lt.name.eq_ignore_ascii_case("ByBlock")
+                    || lt.name.eq_ignore_ascii_case("Continuous");
+                if sentinel
+                    || doc
+                        .line_types
+                        .iter()
+                        .any(|l| l.name.eq_ignore_ascii_case(&lt.name))
+                {
+                    continue;
+                }
+                let mut cloned = lt.clone();
+                cloned.handle = doc.allocate_handle();
+                doc.line_types.add_or_replace(cloned);
+            }
+            for style in frame_doc.text_styles.iter() {
+                if doc
+                    .text_styles
+                    .iter()
+                    .any(|s| s.name.eq_ignore_ascii_case(&style.name))
+                {
+                    continue;
+                }
+                let mut cloned = style.clone();
+                cloned.handle = doc.allocate_handle();
+                doc.text_styles.add_or_replace(cloned);
+            }
+        }
     }
 
     pub fn bump_geometry(&mut self) {
@@ -4127,6 +4474,31 @@ mod tests {
     }
 
     #[test]
+    fn v5_frame_block_define_respects_the_handle_seed_floor() {
+        // 读盘后 `next_handle` 可能落后于 `header.handle_seed`（嵌套在 INSERT 里的
+        // ATTRIB 句柄不顶计数器）。定义块给 BlockRecord/Block/BlockEnd 取号时必须
+        // 走这块地板，否则新块会和既有句柄撞号，存盘后别的 CAD 报重复句柄。
+        let mut app = OpenCADStudio::new_for_test();
+        app.tabs[0].is_start = false;
+        let seed = 0x400u64;
+        app.tabs[0].scene.document.header.handle_seed = seed;
+        let frame = synthetic_frame_doc();
+        {
+            let mut host = HostSession::new(&mut app, 0);
+            host.import_frame_doc_as_block(&frame, "A3横式图框")
+                .expect("import should succeed");
+        }
+        let doc = &app.tabs[0].scene.document;
+        let br = doc.block_records.get("A3横式图框").expect("block defined");
+        assert!(br.handle.value() >= seed, "块记录句柄落在地板下");
+        assert!(br.block_entity_handle.value() >= seed);
+        assert!(br.block_end_handle.value() >= seed);
+        for handle in &br.entity_handles {
+            assert!(handle.value() >= seed, "块内实体句柄落在地板下：{handle:?}");
+        }
+    }
+
+    #[test]
     fn v5_import_frame_block_round_trips_through_dwg_file() {
         use codec::io::dwg::DwgWriter;
         use ocs_plugin_api::host::ImportFrameBlockRequest;
@@ -4161,6 +4533,321 @@ mod tests {
             assert_eq!(again.len(), 1);
         }
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ── OCSMFRAME 块定义刷新 / 图框属性重同步（用户清单 B1 / B3）─────────────
+
+    /// 模板图框（内存）：一条边框线 + 3 条 OCSM_GB 样式的 ATTDEF
+    /// （居中/正中 + 格心对齐点；「图样代号」竖排 rotation = π）。
+    fn ocsm_frame_template_doc() -> codec::CadDocument {
+        use codec::entities::{AttributeDefinition, HorizontalAlignment, Line, VerticalAlignment};
+        use codec::types::Vector3;
+
+        let mut frame = codec::CadDocument::default();
+        // ATTDEF 的 style 是按句柄引用表项的：少了这条表项，DWG 往返会把
+        // OCSM_GB 丢成 Standard。
+        let mut style = codec::tables::TextStyle::new("OCSM_GB");
+        style.handle = frame.allocate_handle();
+        style.true_type_font = "Zhuque Fangsong".into();
+        style.width_factor = 0.7;
+        frame.text_styles.add(style).expect("add OCSM_GB style");
+
+        let mut line = Line::new();
+        line.start = Vector3::ZERO;
+        line.end = Vector3::new(420.0, 297.0, 0.0);
+        line.common.handle = frame.allocate_handle();
+        let _ = frame.add_entity(EntityType::Line(line));
+
+        for (tag, point, rotation) in [
+            ("比例", (200.0, 280.0, 0.0), 0.0),
+            ("图名", (200.0, 40.0, 0.0), 0.0),
+            ("图样代号", (390.0, 60.0, 0.0), std::f64::consts::PI),
+        ] {
+            let mut definition =
+                AttributeDefinition::new(tag.to_string(), tag.to_string(), String::new());
+            definition.common.handle = frame.allocate_handle();
+            definition.insertion_point = Vector3::new(point.0, point.1, point.2);
+            definition.alignment_point = Vector3::new(point.0, point.1, point.2);
+            definition.height = 3.5;
+            definition.rotation = rotation;
+            definition.width_factor = 0.7;
+            definition.text_style = "OCSM_GB".to_string();
+            definition.horizontal_alignment = HorizontalAlignment::Center;
+            definition.vertical_alignment = VerticalAlignment::Middle;
+            let _ = frame.add_entity(EntityType::AttributeDefinition(definition));
+        }
+        frame
+    }
+
+    /// 模板落盘成 DWG，返回 (路径, 宿主读回的模板 ATTDEF)。期望值一律取"宿主读
+    /// 回来的模板值"而非内存原值 —— DWG 往返本身就是被测路径的一部分。
+    fn write_frame_template(
+        name: &str,
+    ) -> (std::path::PathBuf, Vec<codec::entities::AttributeDefinition>) {
+        use codec::io::dwg::DwgWriter;
+        let dir = std::env::temp_dir().join("ocs_ocsm_frame_refresh_test");
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join(name);
+        DwgWriter::write_to_file(&path, &ocsm_frame_template_doc()).expect("write frame dwg");
+        let loaded = crate::io::load_file(&path).expect("load template");
+        let attdefs = loaded
+            .entities()
+            .filter_map(|entity| match entity {
+                EntityType::AttributeDefinition(definition) => Some(definition.clone()),
+                _ => None,
+            })
+            .collect();
+        (path, attdefs)
+    }
+
+    /// 把"有损路径写坏的"图框搬进文档：同名块定义（ATTDEF 退化成 Standard /
+    /// 左基线 / 对齐点为空 /「图样代号」不旋转）+ 一条引用它的 INSERT
+    /// （2× 比例，带 3 条属性，其中一条是自定义 value）。返回 INSERT 句柄。
+    fn seed_degenerate_frame(app: &mut OpenCADStudio, block_name: &str) -> Handle {
+        use codec::entities::{AttributeDefinition, AttributeEntity, HorizontalAlignment, Insert, VerticalAlignment};
+        use codec::types::Vector3;
+
+        let document = &mut app.tabs[0].scene.document;
+        let next = document.next_handle();
+        let record_handle = Handle::new(next);
+        let block_handle = Handle::new(next + 1);
+        let block_end_handle = Handle::new(next + 2);
+        let mut record = codec::tables::BlockRecord::new(block_name);
+        record.handle = record_handle;
+        record.block_entity_handle = block_handle;
+        record.block_end_handle = block_end_handle;
+        document.block_records.add(record).unwrap();
+        let mut block = codec::entities::Block::new(block_name, Vector3::ZERO);
+        block.common.handle = block_handle;
+        block.common.owner_handle = record_handle;
+        document.add_entity(EntityType::Block(block)).unwrap();
+        let mut end = codec::entities::BlockEnd::new();
+        end.common.handle = block_end_handle;
+        end.common.owner_handle = record_handle;
+        document.add_entity(EntityType::BlockEnd(end)).unwrap();
+
+        let mut degenerate = Vec::new();
+        for tag in ["比例", "图名", "图样代号"] {
+            let mut definition =
+                AttributeDefinition::new(tag.to_string(), tag.to_string(), String::new());
+            definition.common.handle = document.allocate_handle();
+            definition.common.owner_handle = record_handle;
+            // ✗ 退化画法：Standard 字体、左/基线对齐、对齐点为空、不旋转。
+            definition.text_style = "Standard".into();
+            definition.horizontal_alignment = HorizontalAlignment::Left;
+            definition.vertical_alignment = VerticalAlignment::Baseline;
+            definition.alignment_point = Vector3::ZERO;
+            definition.insertion_point = Vector3::new(10.0, 20.0, 0.0);
+            definition.height = 2.5;
+            definition.rotation = 0.0;
+            definition.width_factor = 1.0;
+            document
+                .add_entity(EntityType::AttributeDefinition(definition.clone()))
+                .unwrap();
+            degenerate.push(definition);
+        }
+
+        let mut insert = Insert::new(block_name, Vector3::ZERO);
+        insert.set_x_scale(2.0);
+        insert.set_y_scale(2.0);
+        insert.set_z_scale(2.0);
+        for definition in &degenerate {
+            let value = match definition.tag.as_str() {
+                "比例" => "2:1".to_string(),
+                "图名" => "装配图".to_string(),
+                _ => "ZS-2026-001".to_string(),
+            };
+            let mut attribute = AttributeEntity::from_definition(definition, Some(value));
+            attribute.common.handle = document.allocate_handle();
+            attribute.attdef_handle = definition.common.handle;
+            insert.attributes.push(attribute);
+        }
+        let insert_handle = document
+            .add_entity(EntityType::Insert(insert))
+            .unwrap();
+        if let Some(EntityType::Insert(insert)) = document.get_entity_mut(insert_handle) {
+            for attribute in &mut insert.attributes {
+                attribute.common.owner_handle = insert_handle;
+            }
+        }
+        insert_handle
+    }
+
+    #[test]
+    fn v5_frame_import_refreshes_degenerate_block_and_resyncs_inserts() {
+        use codec::entities::{HorizontalAlignment, VerticalAlignment};
+        use ocs_plugin_api::host::ImportFrameBlockRequest;
+
+        let (path, template) = write_frame_template("refresh_frame.dwg");
+        let definition = |tag: &str| {
+            template
+                .iter()
+                .find(|definition| definition.tag == tag)
+                .expect("模板 ATTDEF")
+                .clone()
+        };
+        // 模板本身必须是"正确画法"，否则本测试白测。
+        assert_eq!(template.len(), 3, "模板应有 3 条 ATTDEF");
+        assert_eq!(definition("图样代号").text_style, "OCSM_GB");
+        assert_eq!(definition("图样代号").rotation, std::f64::consts::PI);
+        assert_eq!(definition("图样代号").horizontal_alignment, HorizontalAlignment::Center);
+        assert_eq!(definition("图样代号").vertical_alignment, VerticalAlignment::Middle);
+        assert_ne!(definition("图样代号").alignment_point, codec::types::Vector3::ZERO);
+
+        let mut app = OpenCADStudio::new_for_test();
+        app.tabs[0].is_start = false;
+        let insert_handle = seed_degenerate_frame(&mut app, "a3_landscape_att");
+
+        let attdefs = {
+            let mut host = HostSession::new(&mut app, 0);
+            host.import_frame_block_impl(ImportFrameBlockRequest {
+                path: path.to_string_lossy().into_owned(),
+                block_name: "a3_landscape_att".into(),
+            })
+            .expect("import_frame_block_impl")
+        };
+
+        // ① 块定义按模板刷新：退化值全被顶掉，顺序 = 模板顺序。
+        assert_eq!(attdefs.len(), 3);
+        assert_eq!(
+            attdefs.iter().map(|d| d.tag.as_str()).collect::<Vec<_>>(),
+            template.iter().map(|d| d.tag.as_str()).collect::<Vec<_>>(),
+        );
+        let code_row = attdefs
+            .iter()
+            .find(|definition| definition.tag == "图样代号")
+            .expect("图样代号");
+        assert_eq!(code_row.text_style, "OCSM_GB");
+        assert_eq!(code_row.rotation, std::f64::consts::PI);
+        assert_eq!(code_row.horizontal_alignment, definition("图样代号").horizontal_alignment);
+        assert_eq!(code_row.vertical_alignment, definition("图样代号").vertical_alignment);
+        assert_eq!(code_row.alignment_point, definition("图样代号").alignment_point);
+        assert_eq!(code_row.height, definition("图样代号").height);
+        assert_eq!(code_row.width_factor, definition("图样代号").width_factor);
+        for other in ["比例", "图名"] {
+            let refreshed = attdefs
+                .iter()
+                .find(|definition| definition.tag == other)
+                .expect("模板 ATTDEF");
+            assert_eq!(refreshed.text_style, "OCSM_GB", "{other} 也要跟模板刷新");
+            assert_eq!(refreshed.alignment_point, definition(other).alignment_point);
+        }
+
+        // ② 图上那条旧 INSERT 的属性也被重同步：value 保留，其余按（现在正确的）
+        //    ATTDEF 重取，并按 INSERT 自身的 2× 比例/旋转变换（= 清单 B3 的确认）。
+        let attributes = {
+            let document = &app.tabs[0].scene.document;
+            let Some(EntityType::Insert(insert)) = document.get_entity(insert_handle) else {
+                panic!("图框 INSERT 不见了");
+            };
+            insert.attributes.clone()
+        };
+        assert_eq!(attributes.len(), 3);
+        let attribute = |tag: &str| {
+            attributes
+                .iter()
+                .find(|attribute| attribute.tag == tag)
+                .expect("INSERT 属性")
+                .clone()
+        };
+        let code_row = attribute("图样代号");
+        assert_eq!(code_row.text_style, "OCSM_GB");
+        assert!(
+            (code_row.rotation - std::f64::consts::PI).abs() < 1e-9,
+            "图样代号必须竖排（π 而非 0.0548），实际 {}",
+            code_row.rotation
+        );
+        let expected_point = definition("图样代号").alignment_point * 2.0;
+        assert!(
+            (code_row.alignment_point.x - expected_point.x).abs() < 1e-9
+                && (code_row.alignment_point.y - expected_point.y).abs() < 1e-9,
+            "对齐点应按 2× 变换：{:?} vs {:?}",
+            code_row.alignment_point,
+            expected_point
+        );
+        assert!((code_row.height - definition("图样代号").height * 2.0).abs() < 1e-9);
+        assert_eq!(code_row.horizontal_alignment, HorizontalAlignment::Center);
+        assert_eq!(code_row.vertical_alignment, VerticalAlignment::Middle);
+        let expected_scale_point = definition("比例").alignment_point * 2.0;
+        assert!((attribute("比例").alignment_point.x - expected_scale_point.x).abs() < 1e-9);
+        // value 一字不改。
+        assert_eq!(code_row.value, "ZS-2026-001");
+        assert_eq!(attribute("图名").value, "装配图");
+        assert_eq!(attribute("比例").value, "2:1");
+
+        // ③ undo 标签把事实说清楚（刷新 + 重同步条数）。
+        app.finish_all_pending_history();
+        let label = app.tabs[0]
+            .history
+            .undo_stack
+            .last()
+            .map(|snapshot| snapshot.label().to_string())
+            .unwrap_or_default();
+        assert_eq!(
+            label,
+            "OCSMFRAME · 图框块定义已按模板刷新 · 已刷新 1 个图框实例的属性"
+        );
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn v5_frame_import_refresh_is_idempotent() {
+        use ocs_plugin_api::host::ImportFrameBlockRequest;
+
+        let (path, _) = write_frame_template("idempotent_frame.dwg");
+        let mut app = OpenCADStudio::new_for_test();
+        app.tabs[0].is_start = false;
+        let insert_handle = seed_degenerate_frame(&mut app, "a3_landscape_att");
+        let request = || ImportFrameBlockRequest {
+            path: path.to_string_lossy().into_owned(),
+            block_name: "a3_landscape_att".into(),
+        };
+        {
+            let mut host = HostSession::new(&mut app, 0);
+            // 第一次：块定义刷新 + 属性重同步。
+            host.import_frame_block_impl(request()).expect("first import");
+        }
+
+        let snapshot = |app: &OpenCADStudio| {
+            let document = &app.tabs[0].scene.document;
+            let mut handles: Vec<Handle> = document
+                .entities()
+                .map(|entity| entity.common().handle)
+                .collect();
+            handles.sort_by_key(|handle| handle.value());
+            let record = document
+                .block_records
+                .get("a3_landscape_att")
+                .expect("块定义还在");
+            let block_handles = record.entity_handles.clone();
+            let block_attdefs: Vec<String> = record
+                .entity_handles
+                .iter()
+                .filter_map(|handle| match document.get_entity(*handle) {
+                    Some(EntityType::AttributeDefinition(definition)) => {
+                        Some(format!("{definition:?}"))
+                    }
+                    _ => None,
+                })
+                .collect();
+            let attributes = match document.get_entity(insert_handle) {
+                Some(EntityType::Insert(insert)) => format!("{:?}", insert.attributes),
+                other => panic!("图框 INSERT 不见了：{other:?}"),
+            };
+            (handles, block_handles, block_attdefs, attributes)
+        };
+
+        let before = snapshot(&app);
+        {
+            let mut host = HostSession::new(&mut app, 0);
+            // 第二次：块与模板一致 ⇒ 不该有任何改动（句柄、属性逐字段不变）。
+            let again = host.import_frame_block_impl(request()).expect("reimport");
+            assert_eq!(again.len(), 3);
+        }
+        assert_eq!(snapshot(&app), before, "重复导入必须一个字节都不动（幂等）");
+
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
