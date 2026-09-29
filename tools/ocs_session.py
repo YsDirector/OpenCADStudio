@@ -21,7 +21,10 @@ token 当十六进制句柄喂进实体拾取步骤 —— 那种写法可以直
 """
 import json, os, subprocess, sys, threading, queue, time
 
-OCS = "/home/ysdirector/dev/OpenCADStudio/target/release/OpenCADStudio"
+# 宿主二进制：优先 $OCS_BIN，否则按「本脚本所在仓库根/target/release」推导
+_OCS_DEFAULT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                            "target", "release", "OpenCADStudio")
+OCS = os.environ.get("OCS_BIN", _OCS_DEFAULT)
 ENV = dict(os.environ)
 ENV.setdefault("WAYLAND_DISPLAY", "wayland-0")
 ENV.setdefault("XDG_RUNTIME_DIR", "/run/user/1000")
