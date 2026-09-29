@@ -30,11 +30,25 @@ token 当十六进制句柄喂进实体拾取步骤 —— 那种写法可以直
     ★ 启动后校验归属：描述符里的 pid 必须属于本脚本 spawn 的子进程；不符即报错退出，
       绝不「降级」去用别人的 session。退出时杀掉自己启动的宿主（不留常驻进程）。
 
+配置种子（默认带最小种子，否则 `newdoc` 建不出图纸）：
+    ★ 空配置（隔离根里没有 settings.json）时，宿主启动模态 AssocPrompt / DonationPrompt
+      （`src/app/startup.rs:5-13`）一直挂在 active_modal 上 ⇒ 任何控制操作都只能返回
+      waiting_input：`newdoc` 建不出图纸、随后 `run` 报 no_document。所以默认把用户真实配置
+      目录（`$XDG_CONFIG_HOME/OpenCADStudio`，在覆盖 XDG 之前先记下）里的**白名单**只读拷进
+      隔离根：settings.json（★ 关键，没有它 newdoc 必卡 waiting_input）、ocad.pgp、
+      ocad.pgp.version、last_dir.txt、plotstyles/、fonts/。实测只留 settings.json 也够。
+    ★ 绝不拷 automation/（实例描述符+令牌，会破坏「只认自己实例」）、绝不拷 plugins/
+      （插件目录已由 OCS_PLUGINS_DIR 回填），也不拷 discussions.json / pi-panel-backend.txt
+      等私人内容。启动横幅会打印「是否种了、种了哪些、从哪来」。
+
 环境变量：
     OCS_BIN=<路径>               宿主二进制（默认按仓库根/target/release 推导）
     OCS_ALLOW_EXISTING=1         ★ 逃生态：不隔离，允许连「现有实例」（含用户正在用的 GUI）。
                                  风险：run/input/save/capture 会直接打进那张正在编辑的图，
                                  仅在你确认目标实例时使用；默认关。
+    OCS_NO_SEED=1                纯空配置：不拷任何种子（`newdoc` 会卡 waiting_input、`run` 报
+                                 no_document；这是验证「种子确实在起作用」的反证档）。
+    OCS_SEED_FROM=<目录>          换种子源（默认取真实配置目录 `$XDG_CONFIG_HOME/OpenCADStudio`）。
     OCS_SESSION_STATE_DIR=<目录>  指定私有状态目录（默认 mktemp -d；调试/测试用）
     OCS_KEEP_HOST=1              退出时保留自己启动的宿主（默认 SIGTERM 掉）
 """
@@ -60,6 +74,51 @@ def _flag(name):
 ALLOW_EXISTING = _flag("OCS_ALLOW_EXISTING")   # 逃生态，见文件头
 KEEP_HOST = _flag("OCS_KEEP_HOST")
 
+# ── 真实配置目录：★ 必须在下面覆盖 $XDG_CONFIG_HOME 之前取到手（种子源 + 插件回填都用它）──
+_REAL_CONFIG_HOME = os.path.abspath(
+    os.environ.get("XDG_CONFIG_HOME") or os.path.join(os.path.expanduser("~"), ".config"))
+_REAL_OCS_CONFIG = os.path.join(_REAL_CONFIG_HOME, "OpenCADStudio")
+
+# 默认种子白名单（★ 绝不收 automation/ 与 plugins/，也不收 discussions.json 等私人内容）：
+#   settings.json 是关键 —— 它的 settings.default_assoc_prompted=true 与
+#   settings.donation_prompt_version 会压掉宿主启动模态（src/app/startup.rs:5-13）；没有它时模态
+#   挂在 active_modal 上，任何控制操作（含 new）都只返回 waiting_input、随后 run 报 no_document。
+#   实测（本机真宿主）：白名单里只留 settings.json 也够让 newdoc=completed；去掉它则
+#   newdoc=waiting_input。其余条目服务命令别名（ocad.pgp）、打印样式与字体。
+SEED_FILES = ("settings.json", "ocad.pgp", "ocad.pgp.version", "last_dir.txt")
+SEED_DIRS = ("plotstyles", "fonts")
+NO_SEED = _flag("OCS_NO_SEED")                 # 纯空配置（反证档：newdoc 应卡 waiting_input）
+SEED_FROM = os.environ.get("OCS_SEED_FROM") or _REAL_OCS_CONFIG   # 种子源，默认真实配置目录
+
+
+def seed_isolated_config(state_dir, source):
+    """把白名单条目从 source **只读**拷到 <state_dir>/OpenCADStudio/（已存在的不动）。
+
+    返回 (copied, skipped) 两个名字列表（skipped 里带原因）；源目录/条目缺失不算错误。
+    """
+    dest = os.path.join(state_dir, "OpenCADStudio")
+    os.makedirs(dest, exist_ok=True)
+    copied, skipped = [], []
+    for name in SEED_FILES + SEED_DIRS:
+        src = os.path.join(source, name)
+        dst = os.path.join(dest, name)
+        if not os.path.exists(src):
+            skipped.append(name + "（源无）")
+            continue
+        if os.path.exists(dst):
+            skipped.append(name + "（已存在）")
+            continue
+        try:
+            if os.path.isdir(src):
+                shutil.copytree(src, dst)
+            else:
+                shutil.copy2(src, dst)
+        except OSError as error:
+            skipped.append("%s（%s）" % (name, error.strerror or error))
+            continue
+        copied.append(name)
+    return copied, skipped
+
 # ── 只认自己启动的实例：把实例发现根指到私有目录 ──────────────────────────────
 _STATE_DIR_OVERRIDE = os.environ.get("OCS_SESSION_STATE_DIR") or None
 STATE_DIR = None
@@ -73,11 +132,23 @@ if not ALLOW_EXISTING:
     if "OCS_PLUGINS_DIR" not in ENV:
         # 插件装在 $XDG_CONFIG_HOME/OpenCADStudio/plugins（src/plugin/external.rs:141-160）：
         # 隔离会把它一起挡掉，默认模式下 OCSM 命令就没了 ⇒ 显式指回用户真实的插件目录。
-        _real_plugins = os.path.join(
-            os.environ.get("XDG_CONFIG_HOME") or os.path.join(os.path.expanduser("~"), ".config"),
-            "OpenCADStudio", "plugins")
+        _real_plugins = os.path.join(_REAL_OCS_CONFIG, "plugins")
         if os.path.isdir(_real_plugins):
             ENV["OCS_PLUGINS_DIR"] = _real_plugins
+    # ── 白名单种子（★ 不是可选装饰：空配置下宿主没有 settings.json，启动模态挡住 `new`）──
+    if NO_SEED:
+        SEED_REPORT = "未种（OCS_NO_SEED=1）：纯空配置 —— newdoc 会卡 waiting_input、run 报 no_document"
+    else:
+        _copied, _skipped = seed_isolated_config(STATE_DIR, SEED_FROM)
+        if _copied:
+            SEED_REPORT = ("已从 %s 拷 %d 项 [%s]%s（OCS_NO_SEED=1 可纯空配置；"
+                           "OCS_SEED_FROM=<目录> 改种子源）"
+                           % (SEED_FROM, len(_copied), ", ".join(_copied),
+                              ("；跳过 " + "、".join(_skipped)) if _skipped else ""))
+        else:
+            SEED_REPORT = ("未种：种子源 %s 没有白名单条目%s —— newdoc 可能卡 waiting_input"
+                           "（OCS_SEED_FROM=<目录> 指一个真实配置目录）"
+                           % (SEED_FROM, "（" + "、".join(_skipped) + "）" if _skipped else ""))
 
 
 def state_automation_dir(state_dir):
@@ -221,6 +292,7 @@ atexit.register(cleanup)
 if STATE_DIR is not None:
     print("# 隔离模式：只认自己启动的实例（state_dir=%s plugins=%s；要连现有实例用 OCS_ALLOW_EXISTING=1）"
           % (STATE_DIR, ENV.get("OCS_PLUGINS_DIR", "-")))
+    print("# 配置种子：%s" % SEED_REPORT)
     start_owned_host()
 else:
     print("# ★ 逃生态 OCS_ALLOW_EXISTING=1：允许连现有实例，写操作可能直接打进用户正在编辑的图纸",
@@ -282,11 +354,25 @@ send("notifications/initialized", None, notify=True)
 
 # 隔离模式下宿主已经是自己起的 ⇒ 不许 MCP 再起一个（launch_if_none=false）；
 # 逃生态保持原行为（没有实例时才允许宿主自己起一个）。
-sess = call_tool("ocs_sessions", {"launch_if_none": STATE_DIR is None})
-rows = sess["result"] if isinstance(sess, dict) and "result" in sess else sess
-if isinstance(rows, dict):
-    rows = [rows]
+def list_sessions():
+    """ocs_sessions → 会话行列表（隔离模式下 launch_if_none=false）。"""
+    sess = call_tool("ocs_sessions", {"launch_if_none": STATE_DIR is None})
+    rows = sess["result"] if isinstance(sess, dict) and "result" in sess else sess
+    if isinstance(rows, dict):
+        rows = [rows]
+    return rows or []
+
+
+rows = list_sessions()
 if STATE_DIR is not None:
+    # 宿主写出描述符（src/app/control/transport.rs:47-60）早于事件循环能应答 hello，而
+    # ocs_sessions 的 hello 只有 1s ⇒ 刚拉起时可能暂时列不出自己；宽限 30s 重试，
+    # 免得把「启动慢」误报成「自己那份描述符缺失」（真宿主实测约 1/3 概率踩到）。
+    deadline = time.time() + 30.0
+    while (HOST_DESC["session_id"] not in [r.get("session_id") for r in rows]
+           and time.time() < deadline):
+        time.sleep(0.3)
+        rows = list_sessions()
     # ── 身份校验：拿到的 session 必须属于本脚本启动的宿主（pid 对不上就报错，绝不静默改用）──
     descs = read_state_descriptors(STATE_DIR)
     outsiders = []
@@ -350,7 +436,9 @@ for raw in sys.stdin.read().splitlines():
         d = call_tool("ocs_execute", {"ocs_session_id": sid, "request": req})
         show(d, f"input {arg!r}")
     elif op == "newdoc":
-        # `newdoc`：新建一张空白图纸（不然新起的会话里没有任何文档，run 会报 no_document）
+        # `newdoc`：新建一张空白图纸（不然新起的会话里没有任何文档，run 会报 no_document）。
+        # ★ 依赖种子：空配置下宿主没有 settings.json，启动模态（src/app/startup.rs:5-13）挂着
+        #   active_modal，`new` 只会停在 waiting_input（见文件头「配置种子」）；带种子才 completed。
         d = call_tool("ocs_execute", {"ocs_session_id": sid,
                                       "request": {"request_id": f"mcp-{_id[0]}", "op": "new"}})
         show(d, "newdoc")
