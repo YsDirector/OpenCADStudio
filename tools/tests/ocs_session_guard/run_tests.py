@@ -13,9 +13,10 @@
   反证 B   OCS_ALLOW_EXISTING=1 才允许看见共享位置那个实例（逃生口，风险写在文件头）。
   反证 C   描述符 pid 对不上 ⇒ 立刻报错退出（绝不降级去用别人的 session）；
            私有目录里混进别人的活会话 ⇒ 发现成功但校验失败、不输出 `# session=`。
-  真宿主   ★ 尽量用真宿主：OCS_BIN 直接指向 target/release/OpenCADStudio。真宿主是 GUI
-           （`--new-instance`，src/mcp.rs:315），本机无显示且测试禁止上屏 ⇒ 起不来就
-           **明确打印「跳过（原因）」**，★ 跳过绝不计入通过。
+  真宿主   ★ 主控路线走真二进制 `--mcp`（无头：真 MCP server + 真应答，本机实测能起）⇒
+           这是必跑的正控制，跑完杀掉自己起的进程并核 pgrep 为空；GUI 路线（`--new-instance`，
+           src/mcp.rs:315）**保留但标注为可选**，本机无显示起不来就 **明确打印「跳过（原因）」**，
+           ★ 跳过绝不计入通过。
   收尾     零 GUI（pgrep -x OpenCADStudio 为空）、拉起过的假进程全部退出、真
            ~/.config/OpenCADStudio/automation 未被触碰（文件数 + 最新 mtime 快照）。
 
@@ -30,12 +31,13 @@
   ★ 夹具钉死：`fixtures/ocs_session_pre_guard.py` 是 commit 6da03e1d 的 `tools/ocs_session.py`
     的**逐字快照**（sha256 记在 FIXTURE_SHA256），红证只许用它。上一批的教训：用
     `git show HEAD:tools/ocs_session.py` 取「隔离版之前」那份，隔离版一提交进 HEAD，同一条命令
-    就取到了新版本，红证静默失效（41/41 直接掉到 38/41）。所以绝不再读 git 历史。
+    就取到了新版本，红证静默失效（41/41 直接掉到 38/41）。所以绝不再读 git 历史；夹具里不加
+    任何注释头（加了 sha256 就对不上），说明文字一律放 README.md。
   ★ OCS_BIN 走 `fixtures/wrap_ocs_bin.sh`：`--mcp` 用真二进制（真 MCP 服务器 + 真描述符发现 /
     hello 握手链路），只有 `--new-instance` 用替身宿主（`fixtures/fake_ocs_host.py`，描述符字段
     照 src/app/control/transport.rs:44）—— 真宿主是 GUI，会开窗上屏，测试禁止。
 """
-import hashlib, json, os, re, shutil, subprocess, sys, tempfile, time
+import hashlib, json, os, queue, re, shutil, subprocess, sys, tempfile, threading, time
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -45,7 +47,7 @@ TOOL = ROOT / "tools" / "ocs_session.py"
 REAL = ROOT / "target" / "release" / "OpenCADStudio"
 
 # 冻结夹具的 sha256（钉死；改夹具就必须同步改这里，别指望测试会「自动适配」）
-FIXTURE_SHA256 = "2c2dce157f20590f645cd445a02caaadea9f8ba6bbb0ce9948d3b6eba31d2649"
+FIXTURE_SHA256 = "ed2a5357d0228e6a37407c4b9995658b989e6a6922e134932d4abdfdbf2fe523"
 
 WORK = Path(os.environ.get("OCS_GUARD_WORK") or tempfile.mkdtemp(prefix="ocs-guard-"))
 KEEP_WORK = os.environ.get("OCS_GUARD_KEEP", "").strip().lower() in ("1", "true", "yes", "on")
@@ -93,13 +95,9 @@ def sha256(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
-def fixture_body(path):
-    """夹具正文 = 去掉文件头注释块（说明这夹具是怎么来的）之后的逐字快照。"""
-    lines = Path(path).read_text(encoding="utf-8").splitlines()
-    i = 0
-    while i < len(lines) and lines[i].startswith("#"):
-        i += 1
-    return "\n".join(lines[i:])
+def fixture_text(path):
+    """夹具全文（= 6da03e1d:tools/ocs_session.py 的逐字节快照；说明文字在 README.md，夹具里没有注释头）。"""
+    return Path(path).read_text(encoding="utf-8")
 
 
 def env_for(wrap_log, ocs_bin=None, nodisplay=False, **extra):
@@ -210,6 +208,77 @@ def real_auto_state():
             max((f.stat().st_mtime for f in REAL_AUTO.glob("*.json")), default=0) if REAL_AUTO.is_dir() else 0)
 
 
+def probe_real_mcp():
+    """真二进制 `--mcp` 无头路线：真 MCP server 起得来、真应答（不需要显示）。
+
+    OK = initialize 与 ocs_sessions(launch_if_none=false) 两个应答都是 id 对得上的 JSON-RPC
+    结果（没有 error）。跑完一定杀掉自己起的进程；返回 (ok, detail, pid)。
+    """
+    xdg = WORK / "real-mcp-xdg"
+    (xdg / "OpenCADStudio" / "automation").mkdir(parents=True, exist_ok=True)
+    env = {k: v for k, v in os.environ.items()
+           if not k.startswith("OCS_") and k not in ("XDG_CONFIG_HOME", "DISPLAY", "WAYLAND_DISPLAY")}
+    env.update({"HOME": str(HOME), "XDG_CONFIG_HOME": str(xdg), "OCS_BIN": str(REAL),
+                "XDG_DATA_HOME": str(WORK / "xdg-data"), "XDG_CACHE_HOME": str(WORK / "xdg-cache"),
+                "XDG_STATE_HOME": str(WORK / "xdg-state")})
+    proc = subprocess.Popen([str(REAL), "--mcp"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                            stderr=subprocess.DEVNULL, text=True, bufsize=1, env=env)
+    q = queue.Queue()
+
+    def reader():
+        for line in proc.stdout:
+            q.put(line)
+
+    threading.Thread(target=reader, daemon=True).start()
+
+    def rpc(payload, timeout=30.0):
+        try:
+            proc.stdin.write(json.dumps(payload) + "\n")
+            proc.stdin.flush()
+        except (BrokenPipeError, OSError):
+            return None
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            try:
+                line = q.get(timeout=max(0.05, deadline - time.time()))
+            except queue.Empty:
+                return None
+            try:
+                obj = json.loads(line)
+            except ValueError:
+                continue
+            if obj.get("id") == payload.get("id"):
+                return obj
+        return None
+
+    init = rpc({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+                "params": {"protocolVersion": "2024-11-05", "capabilities": {},
+                           "clientInfo": {"name": "ocs-guard-probe", "version": "1"}}})
+    if isinstance(init, dict):
+        try:
+            proc.stdin.write(json.dumps({"jsonrpc": "2.0", "method": "notifications/initialized"}) + "\n")
+            proc.stdin.flush()
+        except (BrokenPipeError, OSError):
+            pass
+    sess = rpc({"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+                "params": {"name": "ocs_sessions", "arguments": {"launch_if_none": False}}}) if init else None
+    try:
+        proc.terminate()
+        proc.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait(timeout=5)
+    except OSError:
+        pass
+    init_ok = isinstance(init, dict) and "result" in init and "error" not in init
+    sess_ok = isinstance(sess, dict) and "result" in sess and "error" not in sess
+    return (init_ok and sess_ok,
+            "initialize=%s ocs_sessions=%s rc=%s" % ("ok" if init_ok else "无/坏应答",
+                                                       "ok" if sess_ok else "无/坏应答",
+                                                       proc.returncode),
+            proc.pid)
+
+
 # ── 准备 ─────────────────────────────────────────────────────────────────────
 print("== 准备 ==")
 print("  仓库根: %s" % ROOT)
@@ -219,7 +288,7 @@ check("夹具是隔离版之前的快照（sha256 与记录一致 ⇒ 钉死，�
       ORIG.is_file() and sha256(ORIG) == FIXTURE_SHA256,
       "sha256=%s" % (sha256(ORIG)[:16] if ORIG.is_file() else "缺失"))
 check("夹具正文确实不含隔离/逃生口（没有 OCS_ALLOW_EXISTING，就是改之前那份）",
-      "OCS_ALLOW_EXISTING" not in fixture_body(ORIG), str(ORIG.parent))
+      "OCS_ALLOW_EXISTING" not in fixture_text(ORIG), str(ORIG.parent))
 check("红证夹具来自仓库文件而不是 git 历史", ORIG.is_file() and ORIG.parent.name == "fixtures", str(ORIG))
 check("真二进制存在（--mcp 真链路 + 真宿主探测用）", REAL.is_file(), str(REAL))
 shutil.copy2(FIXTURES / "wrap_ocs_bin.sh", WRAP)
@@ -342,22 +411,30 @@ check("它仍然没自己起宿主（用了现有实例，wrap 无 --new-instanc
 reap(forged)
 reap(victim)
 
-# ── 正控制（真宿主）：尽量用真宿主；起不来就明确跳过，绝不算通过 ─────────────
-print("\n== 正控制（真宿主探测）：OCS_BIN 直接指向真二进制 ==")
+# ── 正控制（真二进制 --mcp 无头路线）：本机能真跑起来，必 PASS ──────────────
+print("\n== 正控制（真二进制 --mcp 无头路线）：%s ==" % REAL)
+ok, detail, mcp_pid = probe_real_mcp()
+check("真二进制 --mcp 无头路线真跑起来：initialize + ocs_sessions 都是真应答（不需要显示）",
+      ok, detail)
+check("自己起的真 --mcp 进程已杀掉（pid=%s）且 pgrep -x OpenCADStudio 为空" % mcp_pid,
+      not alive(mcp_pid) and pgrep_ocs() == [], "pid=%s pgrep=%s" % (mcp_pid, pgrep_ocs()))
+
+# ── 可选（GUI 路线）：真宿主是 GUI；无显示起不来就明确跳过，绝不算通过 ──────
+print("\n== 可选（GUI 路线，需要显示）：OCS_BIN 直接指向真二进制 ==")
 print("  %s（真宿主是 GUI：--new-instance，src/mcp.rs:315；无显示 ⇒ 允许「跳过」，但不许当通过）" % REAL)
 reset_shared()
 r, dt = run_tool(TOOL, WORK / "wrap_real.log", ocs_bin=REAL, nodisplay=True, timeout=240,
                  OCS_FAKE_LOG=WORK / "host_real.log", OCS_SEED_FROM=str(REAL_OCS_CONFIG))
 first_err = next((l.strip() for l in (r.stderr or "").splitlines() if l.strip()), "")
 if r.returncode == 0 and "(0 个)" in r.stdout:
-    check("真宿主路线：真二进制被脚本自己拉起 + 最小 RPC（query → 0 个实体）完成", True,
+    check("可选（GUI 路线）：真宿主被脚本自己拉起 + 最小 RPC（query → 0 个实体）完成", True,
           "rc=0 dt=%.1fs" % dt)
 elif r.returncode != 0 and ("宿主启动失败" in r.stderr or "宿主启动超时" in r.stderr):
-    skip("真宿主路线（真 OCS 宿主 + 最小 RPC）",
-         "跳过（%s；rc=%s dt=%.1fs）—— 不计入通过；替身宿主路径已在上面的 case 实跑"
+    skip("可选（GUI 路线）真 OCS 宿主 + 最小 RPC",
+         "跳过（%s；rc=%s dt=%.1fs）—— 本机无显示；跳过不计入通过；无头 --mcp 路线已在上面的 case 实跑"
          % (first_err[:130], r.returncode, dt))
 else:
-    check("真宿主探测：要么真跑通、要么明确「起不来」（★ 不许被当成通过）", False,
+    check("可选（GUI 路线）：要么真跑通、要么明确「起不来」（★ 不许被当成通过）", False,
           "rc=%s stdout=%r stderr=%r" % (r.returncode, (r.stdout or "")[-160:], first_err[:160]))
 
 # ── 收尾自证 ─────────────────────────────────────────────────────────────────

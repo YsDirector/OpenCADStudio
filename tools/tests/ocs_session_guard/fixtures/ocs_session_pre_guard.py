@@ -1,19 +1,4 @@
 #!/usr/bin/env python3
-# ─────────────────────────────────────────────────────────────────────────────
-# ★ 冻结夹具（fixture）：这是 commit 6da03e1d 的 `tools/ocs_session.py` 的**逐字**快照。
-#
-#   ★ 只用于证明断言**能红**（同布局下老脚本会连进「别人的实例」），
-#     ★ 不是可运行的现行版本 —— 它没有隔离发现 / 身份校验 / OCS_ALLOW_EXISTING 逃生口，
-#     直接跑它会连上 $XDG_CONFIG_HOME/OpenCADStudio/automation 里发现到的任意实例。
-#
-#   为什么冻结进仓库：上一批回归测试用 `git show HEAD:tools/ocs_session.py` 取「隔离版之前」
-#   的那份，一旦隔离版提交进 HEAD，同一个 `git show` 就变成了「隔离版自己」，
-#   红证那条（老脚本 connects>0 / 新脚本 connects==0）静默失效，41/41 直接掉到 38/41。
-#   所以断言需要的旧版本必须**钉死在仓库里**，绝不再读 git 历史。
-#
-#   迁移来源：tools/ocs_session.py@6da03e1d
-#   重新生成：见 tools/tests/ocs_session_guard/README.md（只有刻意换夹具时才做）
-# ─────────────────────────────────────────────────────────────────────────────
 """OCS MCP 单会话驱动：**在一个 MCP 客户端里**跑交互命令的 start+input。
 
 为什么必须单会话：宿主 `src/app/control/mod.rs` 的自动化门要求
