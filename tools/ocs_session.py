@@ -18,8 +18,31 @@ token 当十六进制句柄喂进实体拾取步骤 —— 那种写法可以直
     run D2G
     query line 3中心线层
     PY
+
+安全边界（默认只连「自己启动的那一个实例」）：
+    ★ 实例发现根 = `config_dir()/automation` —— `src/config.rs:28`（Linux 取 $XDG_CONFIG_HOME，
+      缺省 $HOME/.config）→ `src/mcp.rs:267-269` 读该目录；宿主写描述符见
+      `src/app/control/transport.rs:32-57`（字段 session_id / pid / port / token / executable）。
+      发现链路没有其它外部状态：socket 是 127.0.0.1 上的随机端口；端口/锁只用于双击转发
+      （`src/io/single_instance.rs:110-121`），而宿主带 `--new-instance` 直接跳过它。
+    ★ 所以默认把 $XDG_CONFIG_HOME 指到私有临时目录（0700），宿主与 MCP 子进程都在那里互相发现，
+      绝不碰 ~/.config/OpenCADStudio/automation/ 里别人的实例 —— 用户正在画图时也不会被打进他的图。
+    ★ 启动后校验归属：描述符里的 pid 必须属于本脚本 spawn 的子进程；不符即报错退出，
+      绝不「降级」去用别人的 session。退出时杀掉自己启动的宿主（不留常驻进程）。
+
+环境变量：
+    OCS_BIN=<路径>               宿主二进制（默认按仓库根/target/release 推导）
+    OCS_ALLOW_EXISTING=1         ★ 逃生态：不隔离，允许连「现有实例」（含用户正在用的 GUI）。
+                                 风险：run/input/save/capture 会直接打进那张正在编辑的图，
+                                 仅在你确认目标实例时使用；默认关。
+    OCS_SESSION_STATE_DIR=<目录>  指定私有状态目录（默认 mktemp -d；调试/测试用）
+    OCS_KEEP_HOST=1              退出时保留自己启动的宿主（默认 SIGTERM 掉）
 """
-import json, os, subprocess, sys, threading, queue, time
+import atexit, glob, json, os, queue, shutil, subprocess, sys, tempfile, threading, time
+
+if any(arg in ("-h", "--help") for arg in sys.argv[1:]):
+    print(__doc__)          # 含逃生态风险说明；不建目录、不起进程
+    raise SystemExit(0)
 
 # 宿主二进制：优先 $OCS_BIN，否则按「本脚本所在仓库根/target/release」推导
 _OCS_DEFAULT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -28,6 +51,180 @@ OCS = os.environ.get("OCS_BIN", _OCS_DEFAULT)
 ENV = dict(os.environ)
 ENV.setdefault("WAYLAND_DISPLAY", "wayland-0")
 ENV.setdefault("XDG_RUNTIME_DIR", "/run/user/1000")
+
+
+def _flag(name):
+    return os.environ.get(name, "").strip().lower() in ("1", "true", "yes", "on")
+
+
+ALLOW_EXISTING = _flag("OCS_ALLOW_EXISTING")   # 逃生态，见文件头
+KEEP_HOST = _flag("OCS_KEEP_HOST")
+
+# ── 只认自己启动的实例：把实例发现根指到私有目录 ──────────────────────────────
+_STATE_DIR_OVERRIDE = os.environ.get("OCS_SESSION_STATE_DIR") or None
+STATE_DIR = None
+_STATE_DIR_OWNED = False
+if not ALLOW_EXISTING:
+    STATE_DIR = _STATE_DIR_OVERRIDE or tempfile.mkdtemp(prefix="ocs-session-state-")
+    _STATE_DIR_OWNED = _STATE_DIR_OVERRIDE is None
+    os.makedirs(STATE_DIR, exist_ok=True)
+    os.chmod(STATE_DIR, 0o700)
+    ENV["XDG_CONFIG_HOME"] = STATE_DIR       # ← 唯一的发现开关：src/config.rs:28 + src/mcp.rs:267
+    if "OCS_PLUGINS_DIR" not in ENV:
+        # 插件装在 $XDG_CONFIG_HOME/OpenCADStudio/plugins（src/plugin/external.rs:141-160）：
+        # 隔离会把它一起挡掉，默认模式下 OCSM 命令就没了 ⇒ 显式指回用户真实的插件目录。
+        _real_plugins = os.path.join(
+            os.environ.get("XDG_CONFIG_HOME") or os.path.join(os.path.expanduser("~"), ".config"),
+            "OpenCADStudio", "plugins")
+        if os.path.isdir(_real_plugins):
+            ENV["OCS_PLUGINS_DIR"] = _real_plugins
+
+
+def state_automation_dir(state_dir):
+    """私有状态目录里的实例发现目录（与 config_dir()/automation 同构）。"""
+    return os.path.join(state_dir, "OpenCADStudio", "automation")
+
+
+def read_state_descriptors(state_dir):
+    """读私有目录里的实例描述符（格式见 src/app/control/transport.rs:44）。"""
+    found = {}
+    for path in sorted(glob.glob(os.path.join(state_automation_dir(state_dir), "*.json"))):
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                desc = json.load(fh)
+        except (OSError, ValueError):
+            continue
+        if isinstance(desc, dict) and isinstance(desc.get("session_id"), str):
+            desc["_path"] = path
+            found[desc["session_id"]] = desc
+    return found
+
+
+def parent_pid(pid):
+    """/proc 优先、ps 兜底；拿不到返回 None（= 归属无法判定）。"""
+    try:
+        with open("/proc/%d/stat" % pid, "rb") as fh:
+            return int(fh.read().rsplit(b")", 1)[1].split()[1])
+    except (OSError, IndexError, ValueError):
+        pass
+    try:
+        out = subprocess.run(["ps", "-o", "ppid=", "-p", str(pid)],
+                             capture_output=True, text=True, timeout=5)
+        return int(out.stdout.strip())
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+
+
+def owned_by(pid, ancestor):
+    """pid == ancestor 或 ancestor 在其父链上 → True；False = 判定为外人；None = 判定不了。"""
+    seen = set()
+    cur = pid
+    while cur and cur > 1 and cur not in seen:
+        if cur == ancestor:
+            return True
+        seen.add(cur)
+        cur = parent_pid(cur)
+        if cur is None:
+            return None
+    return False
+
+
+def pid_alive(pid):
+    """Linux 读 /proc，其它平台用 ps；判定不了就当「活」。
+
+    不能用 os.kill(pid, 0)：Windows 上它等价 TerminateProcess —— 会把目标进程真杀掉。
+    """
+    if os.path.isdir("/proc"):
+        return os.path.exists("/proc/%d" % pid)
+    try:
+        out = subprocess.run(["ps", "-o", "pid=", "-p", str(pid)],
+                             capture_output=True, text=True, timeout=5)
+        if out.returncode == 0:
+            return bool(out.stdout.strip())
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return True      # 判定不了 ⇒ 按「活」处理（落在报错一侧，安全）
+
+
+FOREIGN_GRACE = 3.0   # 私有目录里冒出别人的活实例后，给自家宿主多久写出描述符再报错
+
+
+HOST = None        # 自己启动的宿主进程（隔离模式下才有）
+HOST_DESC = None   # 它写出来的描述符
+
+
+def start_owned_host(timeout=45.0):
+    """自己起宿主（参数与 src/mcp.rs:start_gui 一致），只认「它自己」写的那份描述符。"""
+    global HOST, HOST_DESC
+    directory = state_automation_dir(STATE_DIR)
+    os.makedirs(directory, exist_ok=True)
+    os.chmod(directory, 0o700)
+    log_path = os.path.join(directory, "gui.log")
+    log = open(log_path, "ab")
+    HOST = subprocess.Popen([OCS, "--new-instance"], stdin=subprocess.DEVNULL, stdout=log,
+                            stderr=log, env=ENV)
+    deadline = time.time() + timeout
+    foreign, foreign_at = [], None
+    while time.time() < deadline:
+        if HOST.poll() is not None:
+            raise SystemExit("# 宿主启动失败：%s --new-instance 退出码 %s（日志 %s）"
+                             % (OCS, HOST.returncode, log_path))
+        found = read_state_descriptors(STATE_DIR)
+        for desc in found.values():
+            try:
+                pid = int(desc.get("pid"))
+            except (TypeError, ValueError):
+                continue
+            if owned_by(pid, HOST.pid) is True:
+                HOST_DESC = desc
+                return
+        # 私有目录里冒出「别人的活实例」：宽限 FOREIGN_GRACE 秒等自家宿主写描述符，之后报错
+        # （不等满 45s 超时，更不降级去用别人的会话）
+        outsiders = [(d.get("session_id"), d.get("pid")) for d in found.values()
+                     if isinstance(d.get("pid"), int) and pid_alive(d["pid"])]
+        if outsiders:
+            if foreign_at is None:
+                foreign, foreign_at = outsiders, time.time()
+            elif time.time() - foreign_at > FOREIGN_GRACE:
+                raise SystemExit(
+                    "# 实例归属校验失败：私有目录 %s 里出现了不属于本脚本（宿主 pid=%s）的活会话 %s；"
+                    "拒绝连接（绝不降级去用别人的实例）。确认目标后可用 OCS_ALLOW_EXISTING=1 显式连现有实例。"
+                    % (STATE_DIR, HOST.pid, "、".join("%s(pid=%s)" % f for f in foreign)))
+        time.sleep(0.2)
+    raise SystemExit("# 宿主启动超时：%ss 内没在 %s 写出自己的描述符（日志 %s）"
+                     % (timeout, directory, log_path))
+
+
+def cleanup():
+    """退出时只收拾自己的东西：自己启动的宿主、MCP 子进程、自己的临时目录。"""
+    if HOST is not None and not KEEP_HOST:
+        try:
+            HOST.terminate()
+            try:
+                HOST.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                HOST.kill()
+        except OSError:
+            pass
+    mcp = globals().get("proc")
+    if mcp is not None:
+        try:
+            mcp.terminate()
+        except OSError:
+            pass
+    if _STATE_DIR_OWNED and STATE_DIR:
+        shutil.rmtree(STATE_DIR, ignore_errors=True)
+
+
+atexit.register(cleanup)
+
+if STATE_DIR is not None:
+    print("# 隔离模式：只认自己启动的实例（state_dir=%s plugins=%s；要连现有实例用 OCS_ALLOW_EXISTING=1）"
+          % (STATE_DIR, ENV.get("OCS_PLUGINS_DIR", "-")))
+    start_owned_host()
+else:
+    print("# ★ 逃生态 OCS_ALLOW_EXISTING=1：允许连现有实例，写操作可能直接打进用户正在编辑的图纸",
+          file=sys.stderr)
 
 proc = subprocess.Popen([OCS, "--mcp"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                         stderr=subprocess.DEVNULL, text=True, bufsize=1, env=ENV)
@@ -83,13 +280,35 @@ send("initialize", {"protocolVersion": "2024-11-05", "capabilities": {},
                     "clientInfo": {"name": "ocs-session", "version": "1"}})
 send("notifications/initialized", None, notify=True)
 
-sess = call_tool("ocs_sessions", {})
+# 隔离模式下宿主已经是自己起的 ⇒ 不许 MCP 再起一个（launch_if_none=false）；
+# 逃生态保持原行为（没有实例时才允许宿主自己起一个）。
+sess = call_tool("ocs_sessions", {"launch_if_none": STATE_DIR is None})
 rows = sess["result"] if isinstance(sess, dict) and "result" in sess else sess
 if isinstance(rows, dict):
     rows = [rows]
+if STATE_DIR is not None:
+    # ── 身份校验：拿到的 session 必须属于本脚本启动的宿主（pid 对不上就报错，绝不静默改用）──
+    descs = read_state_descriptors(STATE_DIR)
+    outsiders = []
+    for row in rows:
+        row_sid = row.get("session_id")
+        desc = descs.get(row_sid)
+        try:
+            pid = int(desc.get("pid")) if desc else None
+        except (TypeError, ValueError):
+            pid = None
+        if desc is None or owned_by(pid, HOST.pid) is not True:
+            outsiders.append("%s(pid=%s)" % (row_sid, pid))
+    if outsiders or HOST_DESC["session_id"] not in [r.get("session_id") for r in rows]:
+        raise SystemExit(
+            "# 实例归属校验失败：%s 里出现了不属于本脚本（宿主 pid=%s）的会话 %s；拒绝连接"
+            "（绝不降级去用别人的实例）。确认目标后可用 OCS_ALLOW_EXISTING=1 显式连现有实例。"
+            % (STATE_DIR, HOST.pid, "、".join(outsiders) or "自己那份描述符缺失"))
+    rows = [r for r in rows if r.get("session_id") == HOST_DESC["session_id"]]
 sid = rows[0]["session_id"]
 doc = rows[0]["document_id"]
-print(f"# session={sid} doc={doc} rev={rows[0]['revision']}")
+print(f"# session={sid} doc={doc} rev={rows[0]['revision']} "
+      f"pid={HOST.pid if HOST else 'existing'}")
 
 def show(d, tag=""):
     if not isinstance(d, dict):
@@ -163,4 +382,4 @@ for raw in sys.stdin.read().splitlines():
     else:
         print(f"  ? 未知指令 {line!r}")
 
-proc.terminate()
+# 收尾由 atexit 的 cleanup() 负责（退出/报错都会跑：杀宿主 + 杀 MCP 子进程 + 删自己的临时目录）
