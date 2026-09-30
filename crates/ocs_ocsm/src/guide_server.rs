@@ -6375,6 +6375,13 @@ fn apply_roughness(
     let scale = frame_scale_at(&doc, [req.x, req.y, 0.0]);
     let s = |v: f64| v * scale;
     let rot: f64 = req.rotation.to_radians();
+    // 注写方向（GB/T 131-2006 ≡ ISO 1302:2002）：数字及符号的方向必须与尺寸数字
+    // 方向一致，字头尽量向上或向左 —— 符号整体旋转到「倒置」方位时，字形需要
+    // 自转 180°（只转、不镜像）。角度先归一化到 [0,360)（GUI 是自由数字输入，
+    // 负数/超 360 都要支持），θ∈(90°,270°] 翻转：θ=90 不翻、θ=270 翻（等价），
+    // 这样字头恒落回「向上/向左」半平面。
+    let theta: f64 = req.rotation.rem_euclid(360.0);
+    let flip: bool = theta > 90.0 && theta <= 270.0;
 
     // ── 几何表（参考坐标）──
     let l1 = ((4.186, 5.35), (7.072, 0.35));
@@ -6507,16 +6514,25 @@ fn apply_roughness(
         ad.insertion_point = Vector3::new(s(x), s(y), 0.0);
         ad.alignment_point = ad.insertion_point;
         ad.height = s(h);
-        ad.rotation = rot; // 符号旋转时文字随符号旋转
+        // 块内 ATTDEF 只放「翻转角」（0/π），与 INSERT 属性同口径：符号旋转由
+        // INSERT 变换一次性施加 —— 这里再放 rot 会双转。
+        ad.rotation = if flip { std::f64::consts::PI } else { 0.0 };
         ad.width_factor = 0.7; // 与 OCSM_GB 一致
         ad.text_style = "OCSM_GB".into();
         // 对齐：rb = 右下（Right+Bottom）、lb = 左下（Left+Bottom），
         // 对应素材块 MTEXT 71:9 / 71:7 的标准渲染。
-        if al == "rb" {
-            ad.set_alignment(HorizontalAlignment::Right, VerticalAlignment::Bottom);
-        } else {
-            ad.set_alignment(HorizontalAlignment::Left, VerticalAlignment::Bottom);
-        }
+        // 翻转时字形坐标系整体取反（u→-u、v→-v），必须成对交换对齐
+        // （Right↔Left 且 Bottom↔Top）文字框才逐点不变：
+        //   (Right,Bottom) 框 = P + a·(-u) + b·v（a∈[0,w], b∈[0,h]）
+        //   换成 (Left,Top) 后 = P + a·u' + b·(-v')，u'=-u、v'=-v ⇒ 同样
+        //   = P + a·(-u) + b·v ⇒ 框相同，锚点/插入点一个字节都不用动。
+        let (halign, valign) = match (al, flip) {
+            ("rb", false) => (HorizontalAlignment::Right, VerticalAlignment::Bottom),
+            ("rb", true) => (HorizontalAlignment::Left, VerticalAlignment::Top),
+            (_, false) => (HorizontalAlignment::Left, VerticalAlignment::Bottom),
+            (_, true) => (HorizontalAlignment::Right, VerticalAlignment::Top),
+        };
+        ad.set_alignment(halign, valign);
         ad.flags.preset = true; // 插入时不逐项提示
         ad
     };
@@ -6561,7 +6577,9 @@ fn apply_roughness(
         let val = if alias == "P" { p_value.clone() } else { value_of(&ad.tag, alias) };
         let val = if val.trim().is_empty() { " ".to_string() } else { val };
         let mut tmpl = ad.clone();
-        tmpl.rotation = 0.0; // 旋转由 INSERT 变换施加（避免双转）
+        // 与 ATTDEF 同口径：只放翻转角（0/π）；符号旋转由 INSERT 变换施加
+        //（避免双转）。对齐沿用模板（翻转时已在 mk_attdef 交换）。
+        tmpl.rotation = if flip { std::f64::consts::PI } else { 0.0 };
         let mut attr = acadrust::entities::AttributeEntity::from_definition(&tmpl, Some(val));
         attr.apply_transform(&ins.get_transform());
         ins.attributes.push(attr);
@@ -13260,6 +13278,60 @@ mod rough_tests {
         // 10 图层 + 1 样式（空文档一次补齐）；重复 apply 不再追加（宿主幂等）。
     }
 
+    /// 取 INSERT 上某个 ATTRIB（宿主把 attributes 当独立世界坐标实体渲染）。
+    fn world_attr(
+        mock: &std::sync::Arc<MockSender>,
+        tag: &str,
+    ) -> acadrust::entities::AttributeEntity {
+        mock.doc
+            .lock()
+            .unwrap()
+            .entities()
+            .find_map(|e| match e {
+                acadrust::EntityType::Insert(i) => Some(i.clone()),
+                _ => None,
+            })
+            .unwrap()
+            .attributes
+            .into_iter()
+            .find(|a| a.tag == tag)
+            .unwrap()
+    }
+
+    #[test]
+    fn attribute_transform_preserves_alignment_and_rotates_once() {
+        use ocs_plugin_api::host::acadrust::entities::Entity as _; // apply_transform
+        // 证据①（宿主渲染口径）：ATTRIB 走 from_definition + INSERT 变换后，
+        // halign/valign 原样保留（不丢、不改写），旋转恰好只得到一次 INSERT
+        // 角（叠加模板里的翻转角），insertion_point/alignment_point 各只变换一次。
+        let mut ad =
+            acadrust::entities::AttributeDefinition::new("T".into(), "p".into(), " ".into());
+        ad.insertion_point = Vector3::new(8.248, 11.65, 0.0);
+        ad.alignment_point = ad.insertion_point;
+        ad.rotation = std::f64::consts::PI; // 模板只放翻转角
+        ad.set_alignment(HorizontalAlignment::Left, VerticalAlignment::Top);
+        let mut ins = Insert::new("*D1", Vector3::new(100.0, 200.0, 0.0));
+        ins.rotation = 126.76_f64.to_radians();
+        let mut attr =
+            acadrust::entities::AttributeEntity::from_definition(&ad, Some("3.2".into()));
+        attr.apply_transform(&ins.get_transform());
+        assert!(matches!(attr.horizontal_alignment, HorizontalAlignment::Left));
+        assert!(matches!(attr.vertical_alignment, VerticalAlignment::Top));
+        let want_rot = 126.76_f64.to_radians() + std::f64::consts::PI;
+        assert!(
+            ((attr.rotation - want_rot) % std::f64::consts::TAU).abs() < 1e-12,
+            "旋转 = 符号角 + 翻转角，只一次：got {}",
+            attr.rotation
+        );
+        let r = 126.76_f64.to_radians();
+        let ex = 8.248 * r.cos() - 11.65 * r.sin() + 100.0;
+        let ey = 8.248 * r.sin() + 11.65 * r.cos() + 200.0;
+        assert!((attr.insertion_point.x - ex).abs() < 1e-12, "插入点只变换一次");
+        assert!((attr.insertion_point.y - ey).abs() < 1e-12, "插入点只变换一次");
+        assert!((attr.alignment_point.x - ex).abs() < 1e-12, "对齐点只变换一次");
+        assert!((attr.alignment_point.y - ey).abs() < 1e-12, "对齐点只变换一次");
+    }
+
     #[test]
     fn apply_roughness_values_and_rotation() {
         let mock = std::sync::Arc::new(MockSender::new(acadrust::CadDocument::new()));
@@ -13278,7 +13350,12 @@ mod rough_tests {
         let ads = count_attdefs(&members);
         let a1 = ads.iter().find(|a| a.tag == "粗糙度上限A′").unwrap();
         assert_eq!(a1.default_value, " ", "ATTDEF 常显空格（值走 attributes）");
-        assert!((a1.rotation - std::f64::consts::PI / 2.0).abs() < 1e-9, "ATTDEF 随符号旋转");
+        assert!(
+            (a1.rotation - 0.0).abs() < 1e-9,
+            "θ=90 不翻：块内 ATTDEF 只放翻转角（符号旋转走 INSERT 变换）"
+        );
+        assert!(matches!(a1.horizontal_alignment, HorizontalAlignment::Right));
+        assert!(matches!(a1.vertical_alignment, VerticalAlignment::Bottom));
         // INSERT attributes 对齐 ATTDEF 值 + 位置随插入点/旋转变换。
         let ins = mock
             .doc
@@ -13309,6 +13386,67 @@ mod rough_tests {
         assert_eq!(e.value, "5");
         let a_lo = attrs.iter().find(|a| a.tag == "粗糙度下限A").unwrap();
         assert_eq!(a_lo.value, "1.6");
+
+        // ── 注写方向边界表（GB/T 131-2006）：θ 归一化 [0,360)，(90,270] 翻 180°。
+        // 每条断言：块内 ATTDEF / 世界 ATTRIB 的翻转角、halign/valign 成对交换、
+        // 插入点与不翻时同点（翻转只动字形，不动框）。
+        let cases: &[(f64, bool)] = &[
+            (0.0, false),
+            (90.0, false),
+            (126.76, true), // 用户真实案例
+            (180.0, true),
+            (270.0, true),
+            (300.0, false),
+            (364.0, false), // ≡ 4°
+            (-30.0, false), // ≡ 330°
+            (-90.0, true),  // ≡ 270° → 翻
+        ];
+        for &(deg, flip) in cases {
+            let mock = std::sync::Arc::new(MockSender::new(acadrust::CadDocument::new()));
+            let body = rough_body(10.0, 20.0, "C1", "R1", "", deg, &[("A′", "3.2")]);
+            let (_, members) = rough_apply(&mock, &body).unwrap();
+            let ads = count_attdefs(&members);
+            let a1 = ads.iter().find(|a| a.tag == "粗糙度上限A′").unwrap();
+            let want = if flip { std::f64::consts::PI } else { 0.0 };
+            assert!(
+                (a1.rotation - want).abs() < 1e-9,
+                "θ={deg}° 块内 ATTDEF 只放翻转角 {want}: got {}",
+                a1.rotation
+            );
+            let (want_ha, want_va) = if flip {
+                (HorizontalAlignment::Left, VerticalAlignment::Top)
+            } else {
+                (HorizontalAlignment::Right, VerticalAlignment::Bottom)
+            };
+            assert_eq!(a1.horizontal_alignment, want_ha, "θ={deg}° 块内 halign");
+            assert_eq!(a1.vertical_alignment, want_va, "θ={deg}° 块内 valign");
+            // 锚点/对齐点与翻转无关：翻转时逐点不变的证据。
+            assert_eq!(
+                a1.insertion_point,
+                Vector3::new(8.248, 11.65, 0.0),
+                "θ={deg}° 块内锚点不因翻转移动"
+            );
+            assert_eq!(a1.alignment_point, a1.insertion_point, "θ={deg}° 块内对齐点");
+            // 世界 ATTRIB：halign/valign 原样保留在实体上；旋转 = 角 + 翻转，一次。
+            let a = world_attr(&mock, "粗糙度上限A′");
+            assert_eq!(a.horizontal_alignment, want_ha, "θ={deg}° ATTRIB halign");
+            assert_eq!(a.vertical_alignment, want_va, "θ={deg}° ATTRIB valign");
+            let raw = deg.to_radians();
+            let want_rot = raw + want;
+            assert!(
+                ((a.rotation - want_rot) % std::f64::consts::TAU).abs() < 1e-9,
+                "θ={deg}° ATTRIB 旋转 = 符号角 + 翻转角（一次）: got {}",
+                a.rotation
+            );
+            // 位置只被 INSERT 变换一次：R(deg)·块内点 + 插入点；翻转不参与。
+            let (bx, by, ix, iy) = (8.248, 11.65, 10.0, 20.0);
+            let ex = bx * raw.cos() - by * raw.sin() + ix;
+            let ey = bx * raw.sin() + by * raw.cos() + iy;
+            assert!((a.insertion_point.x - ex).abs() < 1e-9, "θ={deg}° ATTRIB x");
+            assert!((a.insertion_point.y - ey).abs() < 1e-9, "θ={deg}° ATTRIB y");
+            assert!((a.alignment_point.x - ex).abs() < 1e-9, "θ={deg}° ATTRIB 对齐点 x");
+            assert!((a.alignment_point.y - ey).abs() < 1e-9, "θ={deg}° ATTRIB 对齐点 y");
+        }
     }
 
     #[test]
