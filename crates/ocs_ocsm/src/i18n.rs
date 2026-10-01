@@ -2411,6 +2411,11 @@ pub const CATALOG: &[Msg] = &[
         "无效的附加区 {extra}（应为 R1..R5）",
         "invalid additional area {extra} (expected R1..R5)",
     ),
+    Msg::new(
+        "cmd.rough.err.unknown_value_key",
+        "values 里有不认识的键：{keys}（可用英文代号 A′/A/E/P/B′/B/C/G 或对应中文 tag）",
+        "unknown key(s) in values: {keys} (use the English codes A′/A/E/P/B′/B/C/G or the matching Chinese tag)",
+    ),
 
     // ── 命令输出/报错：OCSMCARD 卡类型分派（guide_server / card_report 同句）──
     Msg::new(

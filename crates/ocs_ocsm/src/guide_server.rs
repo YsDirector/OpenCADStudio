@@ -6345,6 +6345,38 @@ fn apply_roughness(
     let has_p = bi != 1;
     let p_value = if has_p { req.p.clone() } else { String::new() };
 
+    // values 的键只接受英文代号或对应中文 tag；未知键是拼写错误，静默丢弃会让
+    // 用户传的值凭空消失（本图踩过）⇒ 在任何写入生效之前直接报错并列出未知键。
+    // 合法但本形态用不到的键（如 C1R1 传 B′）不算错。
+    const VALUE_KEYS: &[(&str, &str)] = &[
+        ("粗糙度上限A′", "A′"),
+        ("粗糙度下限A", "A"),
+        ("备注E", "E"),
+        ("加工符号P", "P"),
+        ("加工方法B′", "B′"),
+        ("加工方法B", "B"),
+        ("取样长度C", "C"),
+        ("纹理方向G", "G"),
+    ];
+    let mut unknown: Vec<&str> = req
+        .values
+        .keys()
+        .map(String::as_str)
+        .filter(|key| {
+            !VALUE_KEYS
+                .iter()
+                .any(|(tag, alias)| tag == key || alias == key)
+        })
+        .collect();
+    if !unknown.is_empty() {
+        // 字典序：同一个错误请求每次报同一串。
+        unknown.sort_unstable();
+        return Err(crate::i18n::t_fmt(
+            "cmd.rough.err.unknown_value_key",
+            &[("keys", &unknown.join("、"))],
+        ));
+    }
+
     let doc = snapshot(sender)?;
     // 符号会新建块 + 实体、并可能补齐样式/图层 → 开事务，结束时 commit。
     begin_undo(sender, &crate::i18n::t("cmd.rough.undo_insert"))?;
@@ -6509,8 +6541,12 @@ fn apply_roughness(
         attdefs.push(att("纹理方向G", bx, 2.25, 3.5, "lb"));
     }
     // 值（values 键 = 英文代号：A' / A / E / P / B / B' / C / G）
-    let value_of = |_tag: &str, alias: &str| -> String {
-        req.values.get(alias).cloned().unwrap_or_default()
+    let value_of = |tag: &str, alias: &str| -> String {
+        req.values
+            .get(alias)
+            .or_else(|| req.values.get(tag))
+            .cloned()
+            .unwrap_or_default()
     };
     // 块内 ATTDEF 模板（default 一律空格：宿主对空 default 渲染 tag 名会
     // 在符号上堆出中文属性名——真实值只放 INSERT.attributes，图框同套路）。
@@ -13471,6 +13507,68 @@ mod rough_tests {
             assert!((a.alignment_point.x - ex).abs() < 1e-9, "θ={deg}° ATTRIB 对齐点 x");
             assert!((a.alignment_point.y - ey).abs() < 1e-9, "θ={deg}° ATTRIB 对齐点 y");
         }
+    }
+
+    #[test]
+    fn apply_roughness_values_accept_chinese_tags_and_reject_unknown_keys() {
+        // 用户实测（2026-10-01 抄图）：values 只认英文代号时，中文 tag 会被静默
+        // 忽略、值凭空消失。现在：中文 tag 与英文代号等价（同一字段英文优先），
+        // 未知键在任何写入生效前报错并点名。
+        let mock = std::sync::Arc::new(MockSender::new(acadrust::CadDocument::new()));
+        let body = rough_body(
+            0.0,
+            0.0,
+            "C1",
+            "R1",
+            "",
+            0.0,
+            &[("粗糙度上限A′", "3.2"), ("备注E", "5")],
+        );
+        rough_apply(&mock, &body).unwrap();
+        assert_eq!(world_attr(&mock, "粗糙度上限A′").value, "3.2", "中文 tag 键取到值");
+        assert_eq!(world_attr(&mock, "备注E").value, "5", "中文 tag 键取到值");
+
+        // 英文代号照旧（回归）。
+        let mock = std::sync::Arc::new(MockSender::new(acadrust::CadDocument::new()));
+        let body = rough_body(0.0, 0.0, "C1", "R1", "", 0.0, &[("A′", "3.2")]);
+        rough_apply(&mock, &body).unwrap();
+        assert_eq!(world_attr(&mock, "粗糙度上限A′").value, "3.2", "英文代号照旧");
+
+        // 两个键指向同一字段 ⇒ 英文代号优先，行为可预期。
+        let mock = std::sync::Arc::new(MockSender::new(acadrust::CadDocument::new()));
+        let body = rough_body(
+            0.0,
+            0.0,
+            "C1",
+            "R1",
+            "",
+            0.0,
+            &[("A′", "3.2"), ("粗糙度上限A′", "6.3")],
+        );
+        rough_apply(&mock, &body).unwrap();
+        assert_eq!(world_attr(&mock, "粗糙度上限A′").value, "3.2", "英文代号优先");
+
+        // 合法但本形态用不到的键（C1R1 传 B′）不算错。
+        let mock = std::sync::Arc::new(MockSender::new(acadrust::CadDocument::new()));
+        let body = rough_body(0.0, 0.0, "C1", "R1", "", 0.0, &[("B′", "6.3")]);
+        assert!(rough_apply(&mock, &body).is_ok(), "未用到的合法键不算错");
+
+        // 未知键 ⇒ 明确错误 + 键名点名；且请求不落任何写入（连撤销事务都不开）。
+        let mock = std::sync::Arc::new(MockSender::new(acadrust::CadDocument::new()));
+        let body = rough_body(0.0, 0.0, "C1", "R1", "", 0.0, &[("粗糙度A", "6.3")]);
+        let error = rough_apply(&mock, &body).expect_err("未知键必须报错");
+        assert!(error.contains("粗糙度A"), "错误要点名未知键：{error}");
+        assert!(mock.undos().is_empty(), "拒绝请求不得开事务：{:?}", mock.undos());
+        assert!(
+            !mock
+                .doc
+                .lock()
+                .unwrap()
+                .block_records
+                .iter()
+                .any(|br| br.name.starts_with("*D")),
+            "拒绝请求不得建匿名块"
+        );
     }
 
     /// TF 图框（比例 ATTDEF，uniform 2.0）文档：缩放/基点类断言共用。
