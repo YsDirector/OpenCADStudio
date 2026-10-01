@@ -2235,6 +2235,13 @@ fn apply_section(
         PluginResponse::Handles(hs) => (hs.first().copied(), hs.get(1).copied()),
         _ => (None, None),
     };
+    // 视图名 / 比例文本是**模型空间伴生实体**（不在匿名块里）：登记到 INSERT 名下，
+    // 重建时随主标注一起删（否则每次刷新多叠一个视图名）。
+    if let Some(owner) = handle {
+        for h in view_handle.into_iter() {
+            stamp_group(sender, h, owner);
+        }
+    }
 
     Ok(serde_json::json!({
         "ok": true,
@@ -3551,6 +3558,13 @@ fn do_apply(
             doc.get_entity(*h)
                 .is_some_and(|e| guide_kind_of(e) == kind)
         });
+        // 同一引导重做同一类标注 = 替换：旧标注（+ 它的视图名等伴生实体）随后一并删。
+        let stale: Vec<acadrust::Handle> = reuse
+            .and_then(|g| {
+                GuideParams::from_url(&req.url)
+                    .map(|p| stale_artifacts(&doc, g, p.guide_type))
+            })
+            .unwrap_or_default();
         let (work_handle, temp) = match reuse {
             Some(h) => (h, false),
             None => {
@@ -3588,6 +3602,13 @@ fn do_apply(
             PluginRequest::RemoveEntity { handle: posted },
             "RemoveEntity",
         )?;
+        for h in stale.iter().filter(|h| **h != posted) {
+            let _ = req_timed(
+                sender,
+                PluginRequest::RemoveEntity { handle: *h },
+                "RemoveEntity",
+            );
+        }
         let gk = kind.clone();
         for h in produced_handles(&out) {
             stamp_editable(sender, h, &req.url, &pts, &gk, reuse.or(guide));
@@ -3605,21 +3626,41 @@ fn do_apply(
 
     // ── 普通模式（posted = 引导实体）──
     // 先记下引导几何：**多数类型生成后会把引导删掉**（尺寸/基准/向视图/剖切/公差…），
-    // 所以必须生成前取。
-    let pre = snapshot(sender).ok().and_then(|doc| {
+    // 所以必须生成前取。同时记下**生成前**图纸里同一引导的旧标注（+视图名等伴生实体）：
+    // 生成后再扫会把刚建的新标注也当成旧的删掉。
+    let pre_doc = snapshot(sender).ok();
+    let pre = pre_doc.as_ref().and_then(|doc| {
         doc.get_entity(posted).map(|e| {
             (
                 guide_kind_of(e),
-                guide_geom_points(&doc, posted).unwrap_or_default(),
+                guide_geom_points(doc, posted).unwrap_or_default(),
             )
         })
     });
+    let stale_pre: Vec<acadrust::Handle> = match (refresh, pre_doc.as_ref()) {
+        (true, Some(doc)) => GuideParams::from_url(&req.url)
+            .map(|p| stale_artifacts(doc, posted, p.guide_type))
+            .unwrap_or_default(),
+        _ => Vec::new(),
+    };
     let out = do_apply_inner(sender, body, refresh)?;
     if refresh {
         if let Some((kind, pts)) = pre {
             for h in produced_handles(&out) {
                 stamp_editable(sender, h, &req.url, &pts, kind, Some(posted));
             }
+        }
+        // 同一引导再点「应用并刷新」：删掉上一轮的旧标注（引导留着后每次刷新否则会叠一份）。
+        let removed_any = !stale_pre.is_empty();
+        for h in stale_pre {
+            let _ = req_timed(
+                sender,
+                PluginRequest::RemoveEntity { handle: h },
+                "RemoveEntity",
+            );
+        }
+        if removed_any {
+            req_timed(sender, PluginRequest::BumpGeometry, "BumpGeometry")?;
         }
     }
     commit_undo(sender);
@@ -3738,9 +3779,10 @@ fn do_apply_inner(
     }
 
     // 剖切符号：多段 PLINE 路径（2~N 顶点）→ 匿名块 + INSERT（8符号标注层）。
+    // 引导 PLINE **不删**（同 LEADER/WELD/BALLOON：落在 10引导线层、不打印，
+    // 留着才能带着 URL 反复刷新参数；旧行为删引导 ⇒ 第二次刷新报「找不到引导实体」）。
     if params.guide_type == GuideType::Section {
         let out = apply_section(sender, &doc, &pts, &params)?;
-        req_timed(sender, PluginRequest::RemoveEntity { handle }, "RemoveEntity")?;
         req_timed(sender, PluginRequest::BumpGeometry, "BumpGeometry")?;
         mark_dirty(sender)?;
         return Ok(out);
@@ -8776,6 +8818,10 @@ fn apply_balloon(
 //                重建标注所需的原始信息（引线被删的类型靠它恢复）。
 const EDIT_APP: &str = "OCSM_EDIT";
 
+/// 伴生成员记录：挂在标注的**额外生成物**（如剖切符号的视图名 MTEXT）上，
+/// 值 = 主标注（INSERT/DIMENSION）句柄。重建时按它一并删旧，避免叠加重复。
+const GROUP_APP: &str = "OCSM_GRP";
+
 /// 引导种类（重建临时引导用）：line / pline / rect / circle / arc。
 fn guide_kind_of(e: &acadrust::EntityType) -> &'static str {
     use acadrust::EntityType as E;
@@ -8847,6 +8893,14 @@ fn read_edit_record(
         Ok(PluginResponse::Record(Some(rec))) => rec,
         _ => return None,
     };
+    parse_edit_record(&rec)
+}
+
+/// `OCSM_EDIT` 记录的纯解析（不碰 IPC）：`read_edit_record` 与“图纸内扫旧标注”共用。
+#[allow(clippy::type_complexity)]
+fn parse_edit_record(
+    rec: &ExtendedDataRecord,
+) -> Option<(String, Vec<[f64; 3]>, String, Option<acadrust::Handle>)> {
     let strs: Vec<String> = rec
         .values
         .iter()
@@ -8873,6 +8927,71 @@ fn read_edit_record(
         .filter(|s| !s.is_empty())
         .and_then(|s| handle_hex(s).ok());
     Some((url, pts, kind, guide))
+}
+
+/// 伴生成员记录（挂在成员实体上，值 = 主标注句柄）。
+fn group_record(owner: acadrust::Handle) -> ExtendedDataRecord {
+    let mut rec = ExtendedDataRecord::new(GROUP_APP);
+    rec.values
+        .push(XDataValue::String(fmt_handle(owner)));
+    rec
+}
+
+/// 把伴生成员登记到主标注名下（重建时按主标注句柄回收）。
+fn stamp_group(
+    sender: &Arc<dyn PluginRequestSender>,
+    member: acadrust::Handle,
+    owner: acadrust::Handle,
+) {
+    let _ = req_timed(
+        sender,
+        PluginRequest::WriteRecord {
+            handle: member,
+            record: group_record(owner),
+        },
+        "WriteRecord",
+    );
+}
+
+/// 图纸里**同一个引导**已经生成过的旧标注：带 `OCSM_EDIT`、记录的引导 handle == `guide`，
+/// 且记录的 URL 类型 == `want`（不同类型共用一条引导时互不干扰）。
+/// 连同它们的伴生成员（`OCSM_GRP == 旧标注`）一起返回，用于“重建 = 替换而非叠加”。
+fn stale_artifacts(
+    doc: &acadrust::CadDocument,
+    guide: acadrust::Handle,
+    want: GuideType,
+) -> Vec<acadrust::Handle> {
+    let mut stale = Vec::new();
+    let mut owners: Vec<acadrust::Handle> = Vec::new();
+    for e in doc.entities() {
+        let Some(rec) = e.common().extended_data.get_record(EDIT_APP) else {
+            continue;
+        };
+        let Some((url, _pts, _kind, Some(g))) = parse_edit_record(rec) else {
+            continue;
+        };
+        if g != guide {
+            continue;
+        }
+        if GuideParams::from_url(&url).map(|p| p.guide_type) != Some(want) {
+            continue;
+        }
+        owners.push(e.common().handle);
+    }
+    for e in doc.entities() {
+        let Some(rec) = e.common().extended_data.get_record(GROUP_APP) else {
+            continue;
+        };
+        let owner = rec.values.iter().find_map(|v| match v {
+            XDataValue::String(s) => handle_hex(s).ok(),
+            _ => None,
+        });
+        if owner.is_some_and(|o| owners.contains(&o)) {
+            stale.push(e.common().handle);
+        }
+    }
+    stale.extend(owners);
+    stale
 }
 
 /// 按种类 + 顶点造一条临时引导实体（编辑时原引导可能已被删除）。
@@ -9435,6 +9554,55 @@ mod tests {
         let mut p = GuideParams::linear(LinearSub::Aligned, 0.0);
         p.guide_type = GuideType::Section;
         assert!(apply_section(&sender, &doc, &[[0.0, 0.0, 0.0]], &p).is_err());
+    }
+
+    /// C7：`SECTION` 不再消费引导 PLINE（与 `LEADER` 一致）；同一引导连做两次
+    /// 「应用并刷新」都能成功，且第二次是**替换**（旧 INSERT + 旧视图名 MTEXT 被删），
+    /// 不叠加重复视图名。
+    #[test]
+    fn section_refresh_keeps_guide_and_replaces_view_name() {
+        use acadrust::entities::{LwPolyline, MText};
+        use acadrust::types::Vector2;
+        let mut doc = acadrust::CadDocument::new();
+        let mut pl = LwPolyline::new();
+        pl.common.layer = "10引导线层".into();
+        pl.add_point(Vector2::new(0.0, 0.0));
+        pl.add_point(Vector2::new(0.0, -50.0));
+        let gh = doc.add_entity(E::LwPolyline(pl)).unwrap();
+        let mock = Arc::new(MockSender::new(doc));
+        let sender: Arc<dyn PluginRequestSender> = mock.clone();
+        let url = "http://127.0.0.1:23751/DIM/SECTION/0?let=A";
+        let body = serde_json::json!({"handle": fmt_handle(gh), "url": url}).to_string();
+
+        let out1 = do_apply(&sender, body.as_bytes(), true).unwrap();
+        assert!(
+            mock.doc.lock().unwrap().get_entity(gh).is_some(),
+            "SECTION 不得删引导线（否则第二次刷新找不到引导）"
+        );
+        let j1: serde_json::Value = serde_json::from_str(&out1).unwrap();
+        let ins1 = handle_hex(j1["insert_handle"].as_str().unwrap()).unwrap();
+        let vn1 = handle_hex(j1["view_name_handle"].as_str().unwrap()).unwrap();
+
+        // 同一条引导线 + 同一个 URL 再来一次：必须成功，且替换而非叠加。
+        let out2 = do_apply(&sender, body.as_bytes(), true).unwrap();
+        let j2: serde_json::Value = serde_json::from_str(&out2).unwrap();
+        let ins2 = handle_hex(j2["insert_handle"].as_str().unwrap()).unwrap();
+        let vn2 = handle_hex(j2["view_name_handle"].as_str().unwrap()).unwrap();
+        assert_ne!(ins1, ins2, "第二轮应生成新的剖切 INSERT");
+        let doc = mock.doc.lock().unwrap();
+        assert!(doc.get_entity(gh).is_some(), "第二轮后引导线仍在");
+        assert!(doc.get_entity(ins2).is_some(), "新 INSERT 存在");
+        assert!(doc.get_entity(vn2).is_some(), "新视图名 MTEXT 存在");
+        assert!(doc.get_entity(ins1).is_none(), "旧剖切 INSERT 应被替换掉");
+        assert!(
+            doc.get_entity(vn1).is_none(),
+            "旧视图名 MTEXT 应被替换掉（不得叠加重复）"
+        );
+        let view_names = doc
+            .entities()
+            .filter(|e| matches!(e, E::MText(m) if m.value.contains("\\P\\O")))
+            .count();
+        assert_eq!(view_names, 1, "图纸里只应剩一个视图名 MTEXT");
     }
 
     #[test]
