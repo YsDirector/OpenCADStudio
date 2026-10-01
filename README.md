@@ -232,8 +232,11 @@ and `cargo test --lib i18n::tests`.
 `src/**/*.rs` must resolve through `src/locale_catalog.rs`, and no **new** untranslated literal is
 allowed (an uncatalogued literal silently falls back to English in all 21 languages). The literals
 upstream merged without a catalog entry are pinned, with their `git blame` provenance, in
-`scripts/locales_untranslated_baseline.tsv` — that backlog may only shrink. The script explains its
-exact scope (what it does not check, and why) in its module docstring; it is not wired into CI.
+`scripts/locales_untranslated_baseline.tsv` — that backlog may only shrink. Setting
+`OCSM_LOCALE_STRICT=1` turns the script's "this baseline line can be deleted" hint into a non-zero
+exit that names every deletable line, so the backlog can be forced clean on demand; without the
+variable the behaviour is unchanged. The script explains its exact scope (what it does not check,
+and why) in its module docstring; it is not wired into CI.
 
 ## Project growth
 

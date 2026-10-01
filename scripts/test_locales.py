@@ -31,12 +31,21 @@
   ★ 基线只许缩小：某串进了 catalog/locales 之后请从基线里删掉（脚本会提示"可删"）。
   ★ 往基线里加串是**政策决定**（要评审、要写理由），不是让脚本变绿的办法。
 
+两种档（默认 / 严格）
+  默认（不带 OCSM_LOCALE_STRICT）：行为见下面「稳定性质」。基线里出现"已经不需要"的行
+    （该串已进 catalog，或 src/ 里已无该字面量）只**提示**（⚠ 可删），退出码仍是 0 ——
+    上游合并会不断带入新串，提示档不能拦住合并。
+  OCSM_LOCALE_STRICT=1（任意非空且不是 0/false/no/off 的值）：把上述"可删的行"升为**失败**，
+    rc≠0 并逐条点名。理由：上游并入的新串靠基线登记（挡不住也不必挡），但"能删的行"是我们
+    自己的债 —— 想清债时设这一个环境变量就能强制清。
+
 稳定性质
   HEAD 上：绿。新增一条用户可见漏译（或删掉一条 catalog 映射）：非零退出 + 指出那一串。
   本脚本**未**接入 CI（.github/workflows 里没有它）—— 改译文/catalog 前后各手跑一次。
 """
 
 import json
+import os
 from pathlib import Path
 import re
 import sys
@@ -45,6 +54,9 @@ ROOT = Path(__file__).resolve().parents[1]
 STRING = r'"(?:[^"\\]|\\.)*"'
 BASELINE_PATH = ROOT / 'scripts/locales_untranslated_baseline.tsv'
 SCOPE_NOTE = '判据范围见本文件头部；漏译要补就得补 catalog + 21 语言译文'
+
+# 严格档（见头部「两种档」）：只把基线里"可删的行"从提示升为失败；未设该变量时行为逐字不变。
+STRICT = os.environ.get('OCSM_LOCALE_STRICT', '').strip().lower() not in ('', '0', 'false', 'no', 'off')
 
 
 def fail(lines):
@@ -146,6 +158,16 @@ if newly_untranslated:
         '',
         f'修法：在 src/locale_catalog.rs 加映射 + 在 21 个 locales/*/opencadstudio.ftl 加译文；',
         f'（{SCOPE_NOTE}）',
+    ])
+
+if STRICT and baseline_stale:
+    fail([
+        f'✗ OCSM_LOCALE_STRICT=1：基线里这 {len(baseline_stale)} 条已经不需要了 —— '
+        f'请从 {BASELINE_PATH.relative_to(ROOT)} 删掉（基线只许缩小）：',
+        *[f'  {source!r}  ← {baseline[source]}' for source in sorted(baseline_stale)],
+        '',
+        '判据：这些串已进 src/locale_catalog.rs，或 src/ 里已经没有该字面量。'
+        '留在基线里，将来映射被删时会被基线吸收 ⇒ 假绿。',
     ])
 
 print(f'✓ test_locales: {len(lookup)} 条源串映射 · {len(keys)} 个 Fluent 属性 · {cataloged + len(known_untranslated) + without_letters} 处 t!/tf! 字面量')
