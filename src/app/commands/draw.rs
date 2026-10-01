@@ -814,9 +814,22 @@ impl OpenCADStudio {
                     let common = self.tabs[i].scene.document.get_entity(*handle)?.common();
                     Some((model, common.color.clone(), common.transparency))
                 });
-                let new_cmd =
+                // 预选里的候选边界全在关闭/冻结图层：它们不渲染，也不在 boundary_sources
+                // 里，注定进不了边界搜索 —— 提示要说清原因（O 选择路径在驱动里同口径注入）。
+                let preselected_hidden = !selected.is_empty()
+                    && selected.iter().all(|handle| {
+                        self.tabs[i]
+                            .scene
+                            .document
+                            .get_entity(*handle)
+                            .is_some_and(|entity| {
+                                self.tabs[i].scene.layer_hidden(&entity.common().layer)
+                            })
+                    });
+                let mut new_cmd =
                     HatchCommand::new(outlines, boundary_sources, selected, inherited, plane)
                         .with_origin(self.tabs[i].scene.document.hatch_origin());
+                new_cmd.inject_selection_hidden(preselected_hidden);
                 self.command_line.push_info(&new_cmd.prompt());
                 self.tabs[i].active_cmd = Some(Box::new(new_cmd));
                 self.refresh_area_preview(i);

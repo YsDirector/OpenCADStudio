@@ -2530,6 +2530,7 @@ draw =
     .insert-x-no-attributes =   Inserción __ocs_fmt_0__: sin atributos.
     .tag-val =   [__ocs_fmt_0__] = __ocs_fmt_1__
     .no-closed-boundary-found =   ⚠ No se encontró ningún contorno cerrado.
+    .boundary-is-on-a-layer-turned-off-or-frozen-open-the-layer-or-move-the-boundary =   ⚠ El contorno está en una capa desactivada o congelada; active la capa o mueva el contorno.
     .inverted = , invertido
     .value-2-point = 2 puntos
     .value-2d-solid = Sólido 2D

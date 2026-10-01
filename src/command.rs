@@ -2891,6 +2891,12 @@ pub trait CadCommand: Send {
 
     fn inject_selection_entities(&mut self, _entities: Vec<SelectionEntity>) {}
 
+    /// Called right before [`Self::on_selection_complete`] with `true` when
+    /// every selected entity sits on a layer turned off or frozen. Such an
+    /// entity never reaches the boundary wire set, so HATCH says *why* there is
+    /// no boundary instead of a generic “not found”.
+    fn inject_selection_hidden(&mut self, _all_hidden: bool) {}
+
     fn area_preview_regions(&self) -> Option<Vec<AreaPreviewRegion>> {
         None
     }

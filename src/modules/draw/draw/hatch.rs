@@ -192,6 +192,9 @@ pub struct HatchCommand {
     manual_arc_mode: bool,
     manual_arc_midpoint: Option<DVec3>,
     missed: bool,
+    /// 本次选择集全部落在关闭/冻结图层上（`inject_selection_hidden`）：这些实体
+    /// 进不了 `boundary_sources`（边界线只由可见图元构成），提示要说清原因。
+    selection_hidden: bool,
     retain_boundaries: bool,
     pattern_override: Option<(String, HatchPattern)>,
     angle_override: Option<f32>,
@@ -241,6 +244,7 @@ impl HatchCommand {
             manual_arc_mode: false,
             manual_arc_midpoint: None,
             missed: false,
+            selection_hidden: false,
             retain_boundaries: false,
             pattern_override: None,
             angle_override: None,
@@ -530,7 +534,11 @@ impl CadCommand for HatchCommand {
         match &self.mode {
             HatchMode::PickInside => {
                 let miss = if self.missed {
-                    t!("  ⚠ No closed boundary found.").into_owned()
+                    if self.selection_hidden {
+                        t!("  ⚠ Boundary is on a layer turned off or frozen; open the layer or move the boundary.").into_owned()
+                    } else {
+                        t!("  ⚠ No closed boundary found.").into_owned()
+                    }
                 } else {
                     String::new()
                 };
@@ -543,7 +551,11 @@ impl CadCommand for HatchCommand {
             }
             HatchMode::SelectObjects => {
                 let miss = if self.missed {
-                    t!("  ⚠ Selection has no closed boundary.").into_owned()
+                    if self.selection_hidden {
+                        t!("  ⚠ Boundary is on a layer turned off or frozen; open the layer or move the boundary.").into_owned()
+                    } else {
+                        t!("  ⚠ Selection has no closed boundary.").into_owned()
+                    }
                 } else {
                     String::new()
                 };
@@ -762,6 +774,11 @@ impl CadCommand for HatchCommand {
         } else {
             CmdResult::Cancel
         }
+    }
+
+    fn inject_selection_hidden(&mut self, all_hidden: bool) {
+        // 每次选择集完成都重算：换成可见层的边界时这句提示必须消失。
+        self.selection_hidden = all_hidden;
     }
 
     fn on_undo_step(&mut self) -> Option<CmdResult> {

@@ -2530,6 +2530,7 @@ draw =
     .insert-x-no-attributes = __ocs_fmt_0__ einfügen: keine Attribute.
     .tag-val = [__ocs_fmt_0__] = __ocs_fmt_1__
     .no-closed-boundary-found =   ⚠ Keine geschlossene Begrenzung gefunden.
+    .boundary-is-on-a-layer-turned-off-or-frozen-open-the-layer-or-move-the-boundary =   ⚠ Die Grenze liegt auf einer ausgeschalteten oder eingefrorenen Ebene; schalten Sie die Ebene ein oder verschieben Sie die Grenze.
     .inverted = , vertauscht
     .value-2-point = 2-Punkt
     .value-2d-solid = 2D Volumenkörper

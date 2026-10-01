@@ -2529,6 +2529,7 @@ draw =
     .insert-x-no-attributes =   Wstaw __ocs_fmt_0__: brak atrybutów.
     .tag-val =   [__ocs_fmt_0__] = __ocs_fmt_1__
     .no-closed-boundary-found =   ⚠ Nie znaleziono zamkniętej granicy.
+    .boundary-is-on-a-layer-turned-off-or-frozen-open-the-layer-or-move-the-boundary =   ⚠ Granica znajduje się na wyłączonej lub zamrożonej warstwie; włącz warstwę lub przenieś granicę.
     .inverted = , odwrócony
     .value-2-point = 2-punktowy
     .value-2d-solid = Bryła 2D

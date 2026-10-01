@@ -2529,6 +2529,7 @@ draw =
     .insert-x-no-attributes =   __ocs_fmt_0__ beszúrása: nincsenek attribútumok.
     .tag-val =   [__ocs_fmt_0__] = __ocs_fmt_1__
     .no-closed-boundary-found =   ⚠ Nem található zárt határ.
+    .boundary-is-on-a-layer-turned-off-or-frozen-open-the-layer-or-move-the-boundary =   ⚠ A határvonal kikapcsolt vagy fagyasztott rétegen van; kapcsolja be a réteget, vagy helyezze át a határvonalat.
     .inverted = , fordított
     .value-2-point = 2-pont
     .value-2d-solid = 2D szilárd

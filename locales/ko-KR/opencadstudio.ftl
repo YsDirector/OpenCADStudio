@@ -2529,6 +2529,7 @@ draw =
     .insert-x-no-attributes =   __ocs_fmt_0__ 삽입: 속성이 없습니다.
     .tag-val =   [__ocs_fmt_0__] = __ocs_fmt_1__
     .no-closed-boundary-found =   ⚠ 닫힌 경계를 찾을 수 없습니다.
+    .boundary-is-on-a-layer-turned-off-or-frozen-open-the-layer-or-move-the-boundary =   ⚠ 경계가 꺼져 있거나 동결된 레이어에 있습니다. 레이어를 켜거나 경계를 이동하세요.
     .inverted = , 거꾸로
     .value-2-point = 2점
     .value-2d-solid = 2D 솔리드

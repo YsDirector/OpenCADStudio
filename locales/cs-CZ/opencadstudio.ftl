@@ -2529,6 +2529,7 @@ draw =
     .insert-x-no-attributes =   Vložit __ocs_fmt_0__: žádné atributy.
     .tag-val =   [__ocs_fmt_0__] = __ocs_fmt_1__
     .no-closed-boundary-found =   ⚠ Nebyla nalezena žádná uzavřená hranice.
+    .boundary-is-on-a-layer-turned-off-or-frozen-open-the-layer-or-move-the-boundary =   ⚠ Hranice je na vypnuté nebo zmrazené hladině; zapněte hladinu nebo přesuňte hranici.
     .inverted = , obráceně
     .value-2-point = 2-bodový
     .value-2d-solid = 2D pevné

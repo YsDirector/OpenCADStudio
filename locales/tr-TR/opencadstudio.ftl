@@ -2500,6 +2500,7 @@ draw =
     .insert-x-no-attributes = Eklenen blok __ocs_fmt_0__: öznitelik yok.
     .tag-val = [__ocs_fmt_0__] = __ocs_fmt_1__
     .no-closed-boundary-found = ⚠ Kapalı sınır bulunamadı.
+    .boundary-is-on-a-layer-turned-off-or-frozen-open-the-layer-or-move-the-boundary =   ⚠ Sınır, kapalı veya donmuş bir katmanda; katmanı açın veya sınırı taşıyın.
     .inverted = , ters çevrilmiş
     .loaded-multiline-styles = Yüklü çoklu çizgi stilleri: __ocs_fmt_0__
     .mline-current-settings = MLINE  Geçerli ayarlar: Hizalama = __ocs_fmt_0__, Ölçek = __ocs_fmt_1__, Stil = __ocs_fmt_2__

@@ -2529,6 +2529,7 @@ draw =
     .insert-x-no-attributes =   Lisää __ocs_fmt_0__: ei määritteitä.
     .tag-val =   [__ocs_fmt_0__] = __ocs_fmt_1__
     .no-closed-boundary-found =   ⚠ Suljettua rajaa ei löytynyt.
+    .boundary-is-on-a-layer-turned-off-or-frozen-open-the-layer-or-move-the-boundary =   ⚠ Raja on pois päältä kytketyllä tai jäädytetyllä tasolla; kytke taso päälle tai siirrä raja.
     .inverted = , ylösalaisin
     .value-2-point = 2-piste
     .value-2d-solid = 2D kiinteä

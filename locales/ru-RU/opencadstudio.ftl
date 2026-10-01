@@ -2533,6 +2533,7 @@ draw =
     .insert-x-no-attributes = Вставить __ocs_fmt_0__: никаких атрибутов.
     .tag-val = [__ocs_fmt_0__ = __ocs_fmt_1__
     .no-closed-boundary-found =   ⚠ Замкнутая граница не найдена.
+    .boundary-is-on-a-layer-turned-off-or-frozen-open-the-layer-or-move-the-boundary =   ⚠ Граница находится на отключённом или замороженном слое; включите слой или перенесите границу.
     .inverted = перевернутый
     .value-2-point = 2-точка
     .value-2d-solid = 2D-солид

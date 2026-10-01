@@ -623,6 +623,20 @@ impl OpenCADStudio {
             if let Some(command) = self.tabs[i].active_cmd.as_mut() {
                 command.inject_selection_entities(entities);
             }
+            // 整个选区都落在关闭/冻结图层上的实体进不了边界线集（它们不渲染）——
+            // 让命令（HATCH）在“找不到边界”时能说清原因。
+            let all_hidden = {
+                let scene = &self.tabs[i].scene;
+                !handles.is_empty()
+                    && handles.iter().all(|handle| {
+                        scene.document.get_entity(*handle).is_some_and(|entity| {
+                            scene.layer_hidden(&entity.common().layer)
+                        })
+                    })
+            };
+            if let Some(command) = self.tabs[i].active_cmd.as_mut() {
+                command.inject_selection_hidden(all_hidden);
+            }
         }
         if matches!(&input, StepInput::Point(_)) {
             self.refresh_command_point_pick_context(i);

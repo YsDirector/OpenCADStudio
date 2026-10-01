@@ -2518,6 +2518,7 @@ draw =
     .insert-x-no-attributes = Εισαγωγή __ocs_fmt_0__: χωρίς χαρακτηριστικά.
     .tag-val = [__ocs_fmt_0__] = __ocs_fmt_1__
     .no-closed-boundary-found = ⚠ Δεν βρέθηκε κλειστό όριο.
+    .boundary-is-on-a-layer-turned-off-or-frozen-open-the-layer-or-move-the-boundary =   ⚠ Το όριο βρίσκεται σε απενεργοποιημένο ή παγωμένο επίπεδο· ενεργοποιήστε το επίπεδο ή μετακινήστε το όριο.
     .inverted = , αντεστραμμένο
     .loaded-multiline-styles = Φορτωμένα στυλ πολλαπλών γραμμών: __ocs_fmt_0__
     .mline-current-settings = MLINE  Τρέχουσες ρυθμίσεις: Στοίχιση = __ocs_fmt_0__, Κλίμακα = __ocs_fmt_1__, Στυλ = __ocs_fmt_2__

@@ -2530,6 +2530,7 @@ draw =
     .insert-x-no-attributes = __ocs_fmt_0__ invoegen: geen attributen.
     .tag-val = [__ocs_fmt_0__] = __ocs_fmt_1__
     .no-closed-boundary-found =   ⚠ Geen gesloten grens gevonden.
+    .boundary-is-on-a-layer-turned-off-or-frozen-open-the-layer-or-move-the-boundary =   ⚠ De grens ligt op een uitgeschakelde of bevroren laag; zet de laag aan of verplaats de grens.
     .inverted = , omgekeerd
     .value-2-point = 2-punt
     .value-2d-solid = 2D vast

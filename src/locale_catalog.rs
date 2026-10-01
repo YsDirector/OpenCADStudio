@@ -78,6 +78,7 @@ pub(super) fn message_attribute(source: &str) -> Option<(&'static str, &'static 
         "  {:x} [{}]: {} value(s)" => Some(("view", "x-value-s")),
         "  {:x}: no xdata." => Some(("view", "x-no-xdata")),
         "  {k}: {n}" => Some(("inquiry", "k-n")),
+        "  ⚠ Boundary is on a layer turned off or frozen; open the layer or move the boundary." => Some(("draw", "boundary-is-on-a-layer-turned-off-or-frozen-open-the-layer-or-move-the-boundary")),
         "  ⚠ No closed boundary found." => Some(("draw", "no-closed-boundary-found")),
         " (%{count} objects)" => Some(("modify", "count-objects")),
         " [Edge: Extend]" => Some(("modify", "edge-extend-indented-title-case")),

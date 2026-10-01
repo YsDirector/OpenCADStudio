@@ -1928,6 +1928,93 @@ mod tests {
         );
     }
 
+    /// HATCH 的边界搜索只看可见图元（boundary_sources 来自显示线）：选区全在关闭/
+    /// 冻结图层上时，提示要说清原因，而不是笼统的「未找到闭合边界」。
+    fn hatch_boundary_on_layer(app: &mut OpenCADStudio, layer: &str, off: bool) -> codec::Handle {
+        request(app, json!({"op":"new"}));
+        let created = request(
+            app,
+            json!({"op":"entities_create","entities":[{
+                "type":"LwPolyline",
+                "vertices":[[0,0],[16,0],[16,16],[0,16]],
+                "closed":true,
+                "layer":layer
+            }]}),
+        );
+        let handle = created["result"]["handles"][0]
+            .as_str()
+            .unwrap_or_else(|| panic!("entities_create 要回句柄：{created}"))
+            .to_owned();
+        let value = u64::from_str_radix(&handle, 16).unwrap();
+        if off {
+            app.tabs[app.active_tab]
+                .scene
+                .document
+                .layers
+                .get_mut(layer)
+                .unwrap_or_else(|| panic!("图层 {layer} 应已建"))
+                .flags
+                .off = true;
+        }
+        let started = request(app, json!({"op":"run","cmd":"HATCH"}));
+        assert!(
+            app.tabs[app.active_tab].active_cmd.is_some(),
+            "HATCH 应进入交互（waiting_input）：{started}"
+        );
+        assert_eq!(
+            request(app, json!({"op":"input","kind":"token","text":"O"}))["ok"],
+            true
+        );
+        app.tabs[app.active_tab]
+            .scene
+            .select_entity(codec::Handle::new(value), false);
+        request(app, json!({"op":"input","kind":"selection"}));
+        codec::Handle::new(value)
+    }
+
+    #[test]
+    fn hatch_selection_on_off_layer_says_why_no_boundary_was_found() {
+        let mut app = OpenCADStudio::new_for_test();
+        app.main_window = Some(iced::window::Id::unique());
+        let _ = hatch_boundary_on_layer(&mut app, "10引导线层", true);
+        let prompt = app.tabs[app.active_tab]
+            .active_cmd
+            .as_ref()
+            .expect("HATCH 仍在运行")
+            .prompt();
+        let wanted = crate::t!(
+            "  ⚠ Boundary is on a layer turned off or frozen; open the layer or move the boundary."
+        );
+        assert!(prompt.contains(wanted.as_ref()), "应给出关闭层提示：{prompt}");
+        let generic = crate::t!("  ⚠ Selection has no closed boundary.");
+        assert!(
+            !prompt.contains(generic.as_ref()),
+            "不应退回笼统的「未找到闭合边界」：{prompt}"
+        );
+    }
+
+    #[test]
+    fn hatch_selection_on_a_visible_layer_still_hatches() {
+        let mut app = OpenCADStudio::new_for_test();
+        app.main_window = Some(iced::window::Id::unique());
+        let _ = hatch_boundary_on_layer(&mut app, "5剖面线层", false);
+        let prompt = app.tabs[app.active_tab]
+            .active_cmd
+            .as_ref()
+            .expect("HATCH 仍在运行")
+            .prompt();
+        let wanted = crate::t!(
+            "  ⚠ Boundary is on a layer turned off or frozen; open the layer or move the boundary."
+        );
+        assert!(
+            !prompt.contains(wanted.as_ref()),
+            "可见层的正常边界不该报关闭层提示：{prompt}"
+        );
+        request(&mut app, json!({"op":"input","kind":"enter"}));
+        let hatches = app.automation_op(r#"{"op":"query","type":"Hatch","detail":"summary"}"#);
+        assert_eq!(hatches["count"], 1, "可见层的闭合边界照旧生成 HATCH：{hatches}");
+    }
+
     #[test]
     fn user_select_escape_cancels_and_an_empty_enter_confirms_zero() {
         let mut app = OpenCADStudio::new_for_test();

@@ -2530,6 +2530,7 @@ draw =
     .insert-x-no-attributes = Insérer __ocs_fmt_0__: aucun attribut.
     .tag-val = [__ocs_fmt_0__] = __ocs_fmt_1__
     .no-closed-boundary-found =   ⚠ Aucune limite fermée trouvée.
+    .boundary-is-on-a-layer-turned-off-or-frozen-open-the-layer-or-move-the-boundary =   ⚠ La limite se trouve sur un calque désactivé ou gelé ; activez le calque ou déplacez la limite.
     .inverted = , inversé
     .value-2-point = 2 points
     .value-2d-solid = 2D Solide

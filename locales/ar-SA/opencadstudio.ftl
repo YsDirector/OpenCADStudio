@@ -2542,6 +2542,7 @@ draw =
     .insert-x-no-attributes =   الإدراج __ocs_fmt_0__: بلا سمات.
     .tag-val =   [__ocs_fmt_0__] = __ocs_fmt_1__
     .no-closed-boundary-found =   ⚠ لم يُعثر على حد مغلق.
+    .boundary-is-on-a-layer-turned-off-or-frozen-open-the-layer-or-move-the-boundary =   ⚠ الحد على طبقة مُطفأة أو مُجمّدة؛ شغّل الطبقة أو انقل الحد.
     .inverted = ، معكوس
     .value-2-point = نقطتان
     .value-2d-solid = مجسم ثنائي الأبعاد

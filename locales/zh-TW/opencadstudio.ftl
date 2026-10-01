@@ -2529,6 +2529,7 @@ draw =
     .insert-x-no-attributes = 插入__ocs_fmt_0__:沒有屬性。
     .tag-val =   [__ocs_fmt_0__] = __ocs_fmt_1__
     .no-closed-boundary-found =   ⚠ 未找到閉合邊界。
+    .boundary-is-on-a-layer-turned-off-or-frozen-open-the-layer-or-move-the-boundary =   ⚠ 邊界在已關閉或凍結的圖層上；請開啟該圖層，或把邊界移到可見層。
     .inverted = 倒轉
     .value-2-point = 兩點
     .value-2d-solid = 二維實體

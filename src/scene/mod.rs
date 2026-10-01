@@ -8147,8 +8147,10 @@ impl Scene {
         Ok(Some(current))
     }
 
-    /// True when `layer` is turned off or frozen — entities on it never render.
-    fn layer_hidden(&self, layer: &str) -> bool {
+    /// True when `layer` is turned off or frozen — entities on it never render,
+    /// so they are absent from the boundary wire set too (HATCH says so instead
+    /// of reporting a generic miss).
+    pub(crate) fn layer_hidden(&self, layer: &str) -> bool {
         self.document
             .layers
             .get(layer)

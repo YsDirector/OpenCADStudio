@@ -2519,6 +2519,7 @@ draw =
     .insert-x-no-attributes =   Insert __ocs_fmt_0__: no attributes.
     .tag-val =   [__ocs_fmt_0__] = __ocs_fmt_1__
     .no-closed-boundary-found =   ⚠ No closed boundary found.
+    .boundary-is-on-a-layer-turned-off-or-frozen-open-the-layer-or-move-the-boundary =   ⚠ Boundary is on a layer turned off or frozen; open the layer or move the boundary.
     .inverted = , inverted
     .loaded-multiline-styles = Loaded multiline styles: __ocs_fmt_0__
     .mline-current-settings = MLINE  Current settings: Justification = __ocs_fmt_0__, Scale = __ocs_fmt_1__, Style = __ocs_fmt_2__
