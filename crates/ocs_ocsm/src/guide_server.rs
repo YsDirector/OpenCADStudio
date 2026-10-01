@@ -6572,8 +6572,10 @@ fn apply_roughness(
         "AddBlockRecord",
     )?;
 
-    // ── INSERT @ 插入点（层 0 跟参考；rotation 由 GUI 指定；attributes 对齐 ATTDEF）──
+    // ── INSERT @ 插入点（层 = 8符号标注层，与属性/块成员同层；rotation 由 GUI
+    //    指定；attributes 对齐 ATTDEF）──
     let mut ins = Insert::new(block_name.clone(), Vector3::new(req.x, req.y, 0.0));
+    ins.common.layer = "8符号标注层".into();
     ins.rotation = rot;
     // 属性值 = 用户输入（空 → 空格空白显示）；位置 = 块内 ATTDEF 位 ×变换
     //（宿主把 attributes 当独立实体渲染在其自身坐标：必须 transform 到世界，
@@ -13140,7 +13142,7 @@ mod rough_tests {
         // 缺省显示空白：ATTDEF default 用空格（空 default 宿主显示 tag）；
         // 真实值放 INSERT.attributes。
         assert_eq!(a1.default_value, " ");
-        // INSERT：层 0、attributes 与 ATTDEF 对齐。
+        // INSERT：层 = 8符号标注层（与属性/块成员同层），attributes 与 ATTDEF 对齐。
         let inserts: Vec<_> = mock
             .doc
             .lock()
@@ -13156,7 +13158,7 @@ mod rough_tests {
         assert_eq!(ins.block_name, "*D1");
         assert_eq!(ins.insert_point.x, 100.0);
         assert_eq!(ins.insert_point.y, 200.0);
-        assert_eq!(ins.common.layer, "0");
+        assert_eq!(ins.common.layer, "8符号标注层");
         assert_eq!(ins.rotation, 0.0);
         let atags: Vec<&str> = ins.attributes.iter().map(|a| a.tag.as_str()).collect();
         assert_eq!(atags, vec!["粗糙度上限A′", "粗糙度下限A", "备注E", "加工符号P"]);
@@ -13607,6 +13609,46 @@ mod rough_tests {
                 attr.insertion_point.y
             );
         }
+    }
+
+    #[test]
+    fn apply_roughness_insert_lands_on_symbol_layer() {
+        // 需求（用户实测 2026-10-01）：INSERT 自己也要落 `8符号标注层` —— 属性与
+        // 块成员早就在该层，只有 INSERT 留在 0 层，按层过滤的自动化只看到半个符号。
+        let mock = std::sync::Arc::new(MockSender::new(acadrust::CadDocument::new()));
+        let body = rough_body(0.0, 0.0, "C4", "R5", "⊥", 0.0, &[("A", "1.6")]);
+        rough_apply(&mock, &body).unwrap();
+        let ins = mock
+            .doc
+            .lock()
+            .unwrap()
+            .entities()
+            .filter_map(|e| match e {
+                acadrust::EntityType::Insert(i) if i.block_name.starts_with("*D") => {
+                    Some(i.clone())
+                }
+                _ => None,
+            })
+            .next()
+            .expect("粗糙度 INSERT");
+        assert_eq!(ins.common.layer, "8符号标注层", "INSERT 与属性/块成员同层");
+        // 正控制：属性仍在符号层（本次改动没有把它们带走）。
+        assert!(!ins.attributes.is_empty(), "C4R5 应带属性");
+        assert!(
+            ins.attributes
+                .iter()
+                .all(|a| a.common.layer == "8符号标注层"),
+            "属性同在 8符号标注层"
+        );
+        // 块成员（线/圆/填充）也保持同层。
+        let members = mock.block_entities(&ins.block_name);
+        assert!(!members.is_empty(), "块定义应有成员");
+        assert!(
+            members
+                .iter()
+                .all(|m| m.common().layer == "8符号标注层"),
+            "块成员同在 8符号标注层"
+        );
     }
 }
 
