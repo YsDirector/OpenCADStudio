@@ -607,24 +607,70 @@ impl OpenCADStudio {
                     Task::none(),
                 );
             }
-            let applied_search = req["search"].as_str().filter(|search| !search.is_empty());
+            let applied_search = match req.get("search") {
+                None | Some(Value::Null) => None,
+                Some(Value::String(search)) if search.is_empty() => None,
+                Some(Value::String(search)) => Some(search.as_str()),
+                Some(other) => {
+                    return (
+                        failure(
+                            "invalid_filter",
+                            format!("commands search must be a string, got {other}"),
+                        ),
+                        Task::none(),
+                    )
+                }
+            };
             if let Some(search) = applied_search {
                 let search = search.to_ascii_uppercase();
                 names.retain(|name| name.contains(&search));
             }
             let count = names.len();
-            let offset = req["offset"].as_u64().unwrap_or(0) as usize;
-            let limit = req["limit"].as_u64().unwrap_or(200).min(1000) as usize;
+            // 分页参数与 search 一样：用了就必须真生效，用错就报错（不得静默忽略）。
+            let offset = match req.get("offset") {
+                None | Some(Value::Null) => 0usize,
+                Some(value) => match value.as_u64() {
+                    Some(value) => value as usize,
+                    None => {
+                        return (
+                            failure(
+                                "invalid_filter",
+                                format!(
+                                    "commands offset must be a non-negative integer, got {value}"
+                                ),
+                            ),
+                            Task::none(),
+                        )
+                    }
+                },
+            };
+            let limit = match req.get("limit") {
+                None | Some(Value::Null) => 200usize,
+                Some(value) => match value.as_u64().filter(|v| (1..=1000).contains(v)) {
+                    Some(value) => value as usize,
+                    None => {
+                        return (
+                            failure(
+                                "invalid_filter",
+                                format!(
+                                    "commands limit must be an integer in 1..=1000, got {value}"
+                                ),
+                            ),
+                            Task::none(),
+                        )
+                    }
+                },
+            };
             let commands: Vec<String> = names.into_iter().skip(offset).take(limit).collect();
             return (
                 json!({
                     "ok":true,"count":count,"returned":commands.len(),
                     "next_offset":(offset + commands.len() < count).then_some(offset + commands.len()),
                     "commands":commands,"actions":actions::NAMES,
-                    // Report the request that produced this listing instead of a
-                    // fixed example: a client must be able to tell which filter
-                    // was applied. A named request returns the command manifest
-                    // earlier, so a listing never carries a detail name.
+                    // 回显**实际生效**的过滤/分页：调用方不必猜参数有没有被用上。
+                    // 具名请求在上面就返回命令清单了，所以列表里的 name 恒为 null。
+                    "applied":{"name":Value::Null,"search":applied_search,"offset":offset,"limit":limit},
+                    // 兼容旧字段（同义）：detail_parameters.name / search_parameter.search。
                     "detail_parameters":{"name":Value::Null},"search_parameter":{"search":applied_search},
                     "guidance":"Request one command by name for batch examples and interactive input guidance."
                 }),
@@ -1559,6 +1605,62 @@ mod tests {
         );
         let blank = app.control_request(json!({"op":"commands","search":""})).0;
         assert_eq!(blank["search_parameter"]["search"], Value::Null);
+    }
+    /// C5：`search`/`offset`/`limit` 真生效且**回显与实际过滤一致**；非法参数明确报错。
+    #[test]
+    fn command_listing_applies_filters_and_rejects_bad_ones() {
+        let mut app = OpenCADStudio::new_for_test();
+        let all = app.control_request(json!({"op":"commands"})).0;
+        let total = all["count"].as_u64().unwrap();
+        assert!(total > 4, "{all}");
+
+        // search：大小写不敏感子串过滤 —— 用户早先“以为命令表没有 PURGE”就是这条。
+        let purge = app
+            .control_request(json!({"op":"commands","search":"purge"}))
+            .0;
+        let names: Vec<&str> = purge["commands"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(Value::as_str)
+            .collect();
+        assert!(names.contains(&"PURGE"), "search 应找到 PURGE：{purge}");
+        assert!(
+            names.iter().all(|name| name.contains("PURGE")),
+            "只回含它的：{purge}"
+        );
+        assert_eq!(purge["count"].as_u64().unwrap() as usize, names.len());
+        assert_eq!(purge["applied"]["search"], "purge");
+
+        // 翻页：offset/limit 与 next_offset 一致，两页不重叠。
+        let first = app
+            .control_request(json!({"op":"commands","limit":3}))
+            .0;
+        assert_eq!(first["returned"], 3, "{first}");
+        assert_eq!(first["next_offset"], 3, "{first}");
+        assert_eq!(first["applied"]["limit"], 3);
+        let second = app
+            .control_request(json!({"op":"commands","limit":3,"offset":3}))
+            .0;
+        assert_eq!(second["applied"]["offset"], 3);
+        let page1 = first["commands"].as_array().unwrap().clone();
+        let page2 = second["commands"].as_array().unwrap().clone();
+        assert!(
+            page1.iter().all(|name| !page2.contains(name)),
+            "第二页不得与第一页重叠：{page1:?} vs {page2:?}"
+        );
+
+        // 非法参数 ⇒ 明确错误，不静默忽略。
+        for bad in [
+            json!({"op":"commands","search":5}),
+            json!({"op":"commands","offset":-1}),
+            json!({"op":"commands","limit":0}),
+            json!({"op":"commands","limit":"3"}),
+        ] {
+            let response = app.control_request(bad.clone()).0;
+            assert_eq!(response["ok"], false, "{bad} ⇒ {response}");
+            assert_eq!(response["code"], "invalid_filter", "{bad} ⇒ {response}");
+        }
     }
     #[test]
     fn control_queries_exact_curve_relationships_and_metrics() {
