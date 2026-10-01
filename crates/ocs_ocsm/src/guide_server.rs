@@ -6373,7 +6373,13 @@ fn apply_roughness(
         )?;
     }
     let scale = frame_scale_at(&doc, [req.x, req.y, 0.0]);
-    let s = |v: f64| v * scale;
+    // 插入基点 = V 尖端（GB/T 131-2006「符号的尖端必须从材料外指向材料表面」：
+    // 尖端才是用户想定位的点）——位置类坐标在乘 scale **之前**各减尖端参考坐标
+    // (7.072, 0.35)（几何表 l1/l2 的公共点），于是点哪个点尖端就落在哪个点。
+    const TIP: (f64, f64) = (7.072, 0.35);
+    let px = |v: f64| (v - TIP.0) * scale;
+    let py = |v: f64| (v - TIP.1) * scale;
+    let s = |v: f64| v * scale; // 只用于长度量（圆半径、字高）：不减去尖端
     let rot: f64 = req.rotation.to_radians();
     // 注写方向（GB/T 131-2006 ≡ ISO 1302:2002）：数字及符号的方向必须与尺寸数字
     // 方向一致，字头尽量向上或向左 —— 符号整体旋转到「倒置」方位时，字形需要
@@ -6424,13 +6430,13 @@ fn apply_roughness(
         None
     };
 
-    // ── 块成员（局部坐标 = 参考 × scale；块基点 (0,0)）──
+    // ── 块成员（局部坐标 = (参考 − 尖端) × scale；块基点 (0,0) = V 尖端）──
     let mut members: Vec<E> = Vec::new();
     let mut mk_line = |a: (f64, f64), b: (f64, f64)| -> E {
         let mut e = E::Line(Line {
             common: Default::default(),
-            start: Vector3::new(s(a.0), s(a.1), 0.0),
-            end: Vector3::new(s(b.0), s(b.1), 0.0),
+            start: Vector3::new(px(a.0), py(a.1), 0.0),
+            end: Vector3::new(px(b.0), py(b.1), 0.0),
             thickness: 0.0,
             normal: Vector3::new(0.0, 0.0, 1.0),
         });
@@ -6446,7 +6452,7 @@ fn apply_roughness(
     let mut mk_circle = |c: (f64, f64, f64)| -> E {
         let mut e = E::Circle(Circle {
             common: Default::default(),
-            center: Vector3::new(s(c.0), s(c.1), 0.0),
+            center: Vector3::new(px(c.0), py(c.1), 0.0),
             radius: s(c.2),
             thickness: 0.0,
             normal: Vector3::new(0.0, 0.0, 1.0),
@@ -6460,10 +6466,10 @@ fn apply_roughness(
     // C4 焊后加工填充三角（参考 HATCH，宿主用 SOLID 等效；第 4 点 = 第 3 点）
     if let Some((a, b, c)) = base_fill {
         let mut e = E::Solid(Solid::new(
-            Vector3::new(s(a.0), s(a.1), 0.0),
-            Vector3::new(s(b.0), s(b.1), 0.0),
-            Vector3::new(s(c.0), s(c.1), 0.0),
-            Vector3::new(s(c.0), s(c.1), 0.0),
+            Vector3::new(px(a.0), py(a.1), 0.0),
+            Vector3::new(px(b.0), py(b.1), 0.0),
+            Vector3::new(px(c.0), py(c.1), 0.0),
+            Vector3::new(px(c.0), py(c.1), 0.0),
         ));
         set_member_layer(&mut e, "8符号标注层");
         e.common_mut().color = Color::from_index(31);
@@ -6511,7 +6517,7 @@ fn apply_roughness(
     let mut att_templates: Vec<acadrust::entities::AttributeDefinition> = Vec::new();
     let mut mk_attdef = |(tag, x, y, h, al): (String, f64, f64, f64, &str)| -> acadrust::entities::AttributeDefinition {
         let mut ad = AttributeDefinition::new(tag, String::new(), " ".into());
-        ad.insertion_point = Vector3::new(s(x), s(y), 0.0);
+        ad.insertion_point = Vector3::new(px(x), py(y), 0.0);
         ad.alignment_point = ad.insertion_point;
         ad.height = s(h);
         // 块内 ATTDEF 只放「翻转角」（0/π），与 INSERT 属性同口径：符号旋转由
@@ -13065,6 +13071,23 @@ mod rough_tests {
             .collect()
     }
 
+    /// V 尖端参考坐标 = 块插入基点（几何表 L1/L2 的公共点）。依据 GB/T 131-2006
+    /// 「符号的尖端必须从材料外指向材料表面」⇒ 用户点哪个点，尖端就落在哪个点。
+    const TIP: (f64, f64) = (7.072, 0.35);
+    /// 参考几何关键点（与 apply_roughness 几何表同源）。
+    const L1_START: (f64, f64) = (4.186, 5.35);
+    const L2_END: (f64, f64) = (13.423, 11.35);
+
+    /// 参考坐标 → 块局部坐标（尖端为原点，scale=1）。
+    fn loc(p: (f64, f64)) -> Vector3 {
+        loc_scaled(p, 1.0)
+    }
+
+    /// 参考坐标 → 块局部坐标（尖端为原点）× scale。
+    fn loc_scaled(p: (f64, f64), scale: f64) -> Vector3 {
+        Vector3::new((p.0 - TIP.0) * scale, (p.1 - TIP.1) * scale, 0.0)
+    }
+
     #[test]
     fn apply_roughness_c1r1_builds_minimal_block() {
         let mock = std::sync::Arc::new(MockSender::new(acadrust::CadDocument::new()));
@@ -13088,8 +13111,8 @@ mod rough_tests {
                 _ => None,
             })
             .collect();
-        assert!(lines.contains(&(Vector3::new(4.186, 5.35, 0.0), Vector3::new(7.072, 0.35, 0.0))));
-        assert!(lines.contains(&(Vector3::new(7.072, 0.35, 0.0), Vector3::new(13.423, 11.35, 0.0))));
+        assert!(lines.contains(&(loc(L1_START), loc(TIP))), "L1 = 尖端+(−2.886,5.0) → 尖端");
+        assert!(lines.contains(&(loc(TIP), loc(L2_END))), "L2 = 尖端 → 尖端+(6.351,11.0)");
         let ads = count_attdefs(&members);
         assert_eq!(ads.len(), 4);
         let tags: Vec<&str> = ads.iter().map(|a| a.tag.as_str()).collect();
@@ -13099,8 +13122,7 @@ mod rough_tests {
         );
         // A′/A/E：ML 左中、h3.5/4.9、样式 OCSM_GB、绿色、8符号标注层。
         let a1 = &ads[0];
-        assert_eq!(a1.insertion_point.x, 8.248);
-        assert_eq!(a1.insertion_point.y, 11.65);
+        assert_eq!(a1.insertion_point, loc((8.248, 11.65)), "尖端+偏移(+1.176,+11.3)");
         assert_eq!(a1.height, 3.5);
         assert_eq!(a1.text_style, "OCSM_GB");
         assert_eq!(a1.width_factor, 0.7);
@@ -13112,8 +13134,7 @@ mod rough_tests {
         let e1 = &ads[2];
         assert_eq!(e1.height, 4.9, "E 大号字");
         let p1 = &ads[3];
-        assert_eq!(p1.insertion_point.x, 11.009);
-        assert_eq!(p1.insertion_point.y, 1.4);
+        assert_eq!(p1.insertion_point, loc((11.009, 1.4)));
         assert!(matches!(p1.horizontal_alignment, HorizontalAlignment::Left));
         assert!(matches!(p1.vertical_alignment, VerticalAlignment::Bottom));
         // 缺省显示空白：ATTDEF default 用空格（空 default 宿主显示 tag）；
@@ -13139,11 +13160,11 @@ mod rough_tests {
         assert_eq!(ins.rotation, 0.0);
         let atags: Vec<&str> = ins.attributes.iter().map(|a| a.tag.as_str()).collect();
         assert_eq!(atags, vec!["粗糙度上限A′", "粗糙度下限A", "备注E", "加工符号P"]);
-        // 属性渲染位置 = 块内 ATTDEF 位变换到世界（不堆在插入点）。
+        // 属性渲染位置 = 尖端 + 局部偏移（不堆在插入点；基点变不改变相对布局）。
         let a1_attr = ins.attributes.iter().find(|a| a.tag == "粗糙度上限A′").unwrap();
         assert!(
-            (a1_attr.insertion_point.x - 108.248).abs() < 0.01
-                && (a1_attr.insertion_point.y - 211.65).abs() < 0.01,
+            (a1_attr.insertion_point.x - (100.0 + loc((8.248, 11.65)).x)).abs() < 0.01
+                && (a1_attr.insertion_point.y - (200.0 + loc((8.248, 11.65)).y)).abs() < 0.01,
             "attr pos=({:.3},{:.3})",
             a1_attr.insertion_point.x,
             a1_attr.insertion_point.y
@@ -13172,8 +13193,8 @@ mod rough_tests {
                 _ => None,
             })
             .unwrap();
-        assert_eq!(circle.0.x, 7.072);
-        assert_eq!(circle.0.y, 3.683);
+        // V 内圆：圆心 = 尖端 + (0, 3.333)；半径 1.667 是长度量，不随基点平移。
+        assert_eq!(circle.0, loc((7.072, 3.683)));
         assert_eq!(circle.1, 1.667);
         let ads = count_attdefs(&members);
         assert_eq!(ads.len(), 3);
@@ -13227,8 +13248,8 @@ mod rough_tests {
                 _ => None,
             })
             .unwrap();
-        assert_eq!(solid.0.x, 9.959);
-        assert_eq!(solid.1.y, 0.35, "填充三角顶点 = (7.072,0.35)");
+        assert_eq!(solid.0, loc((9.959, 5.35)), "填充三角横边右端 = 尖端+(2.887,5.0)");
+        assert_eq!(solid.1, loc(TIP), "填充三角顶点 = V 尖端（块局部原点）");
         let ads = count_attdefs(&members);
         assert_eq!(
             ads.iter().map(|a| a.tag.as_str()).collect::<Vec<_>>(),
@@ -13239,24 +13260,23 @@ mod rough_tests {
         );
         // R5 台阶文字位：B′@(17.706,18)、B@(17.706,12.4)、C@(17.706,6.8)、G@(17.706,2.25)。
         let by = ads.iter().find(|a| a.tag == "加工方法B′").unwrap();
-        assert_eq!(by.insertion_point.x, 17.706);
-        assert_eq!(by.insertion_point.y, 18.0);
+        assert_eq!(by.insertion_point, loc((17.706, 18.0)));
         let g = ads.iter().find(|a| a.tag == "纹理方向G").unwrap();
-        assert_eq!(g.insertion_point.y, 2.25);
+        assert_eq!(g.insertion_point, loc((17.706, 2.25)));
         // R2 文字 x=16.14、R3 x=14.473。
         let mock2 = std::sync::Arc::new(MockSender::new(acadrust::CadDocument::new()));
         let body2 = rough_body(0.0, 0.0, "C1", "R2", "", 0.0, &[]);
         let (_, m2) = rough_apply(&mock2, &body2).unwrap();
         let ad2 = count_attdefs(&m2);
         let b = ad2.iter().find(|a| a.tag == "加工方法B′").unwrap();
-        assert_eq!(b.insertion_point.x, 16.14);
+        assert_eq!(b.insertion_point, loc((16.14, 12.4)));
         assert_eq!(ad2.len(), 7, "R2 = 公共3 + P + B′/C/G");
         let mock3 = std::sync::Arc::new(MockSender::new(acadrust::CadDocument::new()));
         let body3 = rough_body(0.0, 0.0, "C1", "R3", "", 0.0, &[]);
         let (_, m3) = rough_apply(&mock3, &body3).unwrap();
         let ad3 = count_attdefs(&m3);
         let b3 = ad3.iter().find(|a| a.tag == "加工方法B′").unwrap();
-        assert_eq!(b3.insertion_point.x, 14.473);
+        assert_eq!(b3.insertion_point, loc((14.473, 12.4)));
     }
 
     #[test]
@@ -13279,6 +13299,7 @@ mod rough_tests {
     }
 
     /// 取 INSERT 上某个 ATTRIB（宿主把 attributes 当独立世界坐标实体渲染）。
+    /// 一张图上可能有多个 INSERT（如图框）：按 tag 在所有 INSERT 的 ATTRIB 里找。
     fn world_attr(
         mock: &std::sync::Arc<MockSender>,
         tag: &str,
@@ -13287,13 +13308,11 @@ mod rough_tests {
             .lock()
             .unwrap()
             .entities()
-            .find_map(|e| match e {
+            .filter_map(|e| match e {
                 acadrust::EntityType::Insert(i) => Some(i.clone()),
                 _ => None,
             })
-            .unwrap()
-            .attributes
-            .into_iter()
+            .flat_map(|i| i.attributes)
             .find(|a| a.tag == tag)
             .unwrap()
     }
@@ -13374,9 +13393,11 @@ mod rough_tests {
         assert_eq!(a.value, "3.2");
         let p = attrs.iter().find(|a| a.tag == "加工符号P").unwrap();
         assert_eq!(p.value, "⊥");
-        // 90° 旋转：A′ 块内位 (8.248,11.65) → 绕原点转 → (−11.65,8.248)。
+        // 90° 旋转：A′ 尖端相对偏移 (1.176,11.3) → 绕原点转 90° → (−11.3,1.176)。
+        let a_off = loc((8.248, 11.65));
         assert!(
-            (a.insertion_point.x - (-11.65)).abs() < 0.02 && (a.insertion_point.y - 8.248).abs() < 0.02,
+            (a.insertion_point.x - (-a_off.y)).abs() < 0.02
+                && (a.insertion_point.y - a_off.x).abs() < 0.02,
             "90° attr pos=({:.3},{:.3})",
             a.insertion_point.x,
             a.insertion_point.y
@@ -13420,10 +13441,10 @@ mod rough_tests {
             };
             assert_eq!(a1.horizontal_alignment, want_ha, "θ={deg}° 块内 halign");
             assert_eq!(a1.vertical_alignment, want_va, "θ={deg}° 块内 valign");
-            // 锚点/对齐点与翻转无关：翻转时逐点不变的证据。
+            // 锚点/对齐点与翻转无关：翻转时逐点不变的证据（尖端+局部偏移）。
             assert_eq!(
                 a1.insertion_point,
-                Vector3::new(8.248, 11.65, 0.0),
+                loc((8.248, 11.65)),
                 "θ={deg}° 块内锚点不因翻转移动"
             );
             assert_eq!(a1.alignment_point, a1.insertion_point, "θ={deg}° 块内对齐点");
@@ -13438,10 +13459,11 @@ mod rough_tests {
                 "θ={deg}° ATTRIB 旋转 = 符号角 + 翻转角（一次）: got {}",
                 a.rotation
             );
-            // 位置只被 INSERT 变换一次：R(deg)·块内点 + 插入点；翻转不参与。
-            let (bx, by, ix, iy) = (8.248, 11.65, 10.0, 20.0);
-            let ex = bx * raw.cos() - by * raw.sin() + ix;
-            let ey = bx * raw.sin() + by * raw.cos() + iy;
+            // 位置只被 INSERT 变换一次：R(deg)·(尖端+偏移) + 插入点；翻转不参与。
+            let (ix, iy) = (10.0, 20.0);
+            let off = loc((8.248, 11.65));
+            let ex = off.x * raw.cos() - off.y * raw.sin() + ix;
+            let ey = off.x * raw.sin() + off.y * raw.cos() + iy;
             assert!((a.insertion_point.x - ex).abs() < 1e-9, "θ={deg}° ATTRIB x");
             assert!((a.insertion_point.y - ey).abs() < 1e-9, "θ={deg}° ATTRIB y");
             assert!((a.alignment_point.x - ex).abs() < 1e-9, "θ={deg}° ATTRIB 对齐点 x");
@@ -13449,9 +13471,8 @@ mod rough_tests {
         }
     }
 
-    #[test]
-    fn apply_roughness_frame_scale_doubles_geometry() {
-        // TF 图框（比例 ATTDEF，uniform 2.0）→ 坐标 ×2。
+    /// TF 图框（比例 ATTDEF，uniform 2.0）文档：缩放/基点类断言共用。
+    fn frame2x_doc() -> acadrust::CadDocument {
         let mut doc = acadrust::CadDocument::new();
         let mut att = acadrust::entities::AttributeDefinition::new(
             "比例".into(),
@@ -13484,8 +13505,13 @@ mod rough_tests {
         ins.set_y_scale(2.0);
         ins.set_z_scale(2.0);
         doc.add_entity(E::Insert(ins)).unwrap();
+        doc
+    }
 
-        let mock = std::sync::Arc::new(MockSender::new(doc));
+    #[test]
+    fn apply_roughness_frame_scale_doubles_geometry() {
+        // TF 图框（比例 ATTDEF，uniform 2.0）→ 位置（尖端+偏移）与长度量都 ×2。
+        let mock = std::sync::Arc::new(MockSender::new(frame2x_doc()));
         let body = rough_body(50.0, 30.0, "C1", "R1", "", 0.0, &[]);
         let (j, members) = rough_apply(&mock, &body).unwrap();
         assert_eq!(j["scale"], 2.0, "图框 1:2 → 倍率 2");
@@ -13497,12 +13523,90 @@ mod rough_tests {
             })
             .collect();
         assert!(
-            lines.contains(&(Vector3::new(8.372, 10.7, 0.0), Vector3::new(14.144, 0.7, 0.0))),
-            "L1 ×2"
+            lines.contains(&(loc_scaled(L1_START, 2.0), loc_scaled(TIP, 2.0))),
+            "L1 ×2：尖端+(−5.772,10.0) → 尖端"
         );
         let ads = count_attdefs(&members);
-        assert_eq!(ads[0].insertion_point.x, 16.496, "A′ x ×2");
-        assert_eq!(ads[0].height, 7.0, "字高 ×2");
+        assert_eq!(
+            ads[0].insertion_point,
+            loc_scaled((8.248, 11.65), 2.0),
+            "A′ 尖端+偏移 ×2"
+        );
+        assert_eq!(ads[0].height, 7.0, "字高 ×2（长度量）");
+    }
+
+    #[test]
+    fn apply_roughness_insert_base_is_v_tip() {
+        // 需求（用户截图）：插入基点 = V 尖端 —— 点哪个点，尖端就落在哪个点
+        // （GB/T 131-2006：符号的尖端必须从材料外指向材料表面）。
+        // scale=1/2 各放一个到已知点 (X,Y)：两条斜边的公共端点（V 尖端）必须 = (X,Y)。
+        for (case, doc, x, y, scale) in [
+            ("scale=1", acadrust::CadDocument::new(), 100.0, 100.0, 1.0),
+            ("scale=2", frame2x_doc(), 50.0, 30.0, 2.0),
+        ] {
+            let mock = std::sync::Arc::new(MockSender::new(doc));
+            let body = rough_body(x, y, "C1", "R1", "", 0.0, &[]);
+            let (j, members) = rough_apply(&mock, &body).unwrap();
+            assert_eq!(j["scale"], scale, "{case} 倍率");
+            // C1R1 只有 L1/L2 两条线：公共端点 = V 尖端。
+            let segs: Vec<(Vector3, Vector3)> = members
+                .iter()
+                .filter_map(|e| match e {
+                    E::Line(l) => Some((l.start, l.end)),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(segs.len(), 2, "{case}: C1R1 = L1+L2");
+            let tip_local = [segs[0].0, segs[0].1]
+                .into_iter()
+                .find(|p| *p == segs[1].0 || *p == segs[1].1)
+                .expect("L1/L2 有公共端点（V 尖端）");
+            assert_eq!(tip_local, Vector3::ZERO, "{case}: V 尖端 = 块局部原点（插入基点）");
+            // 世界坐标 = 插入点 + R(rot)·局部（rot=0）⇒ 尖端必须落在用户点的 (X,Y)。
+            let ins = mock
+                .doc
+                .lock()
+                .unwrap()
+                .entities()
+                .filter_map(|e| match e {
+                    acadrust::EntityType::Insert(i) if i.block_name.starts_with("*D") => {
+                        Some(i.clone())
+                    }
+                    _ => None,
+                })
+                .next()
+                .expect("粗糙度 INSERT");
+            let r = ins.rotation;
+            let world = (
+                tip_local.x * r.cos() - tip_local.y * r.sin() + ins.insert_point.x,
+                tip_local.x * r.sin() + tip_local.y * r.cos() + ins.insert_point.y,
+            );
+            assert!(
+                (world.0 - x).abs() < 1e-9 && (world.1 - y).abs() < 1e-9,
+                "{case}: V 尖端世界坐标应为 ({x},{y})，实际 ({:.12},{:.12})",
+                world.0,
+                world.1
+            );
+            // 只动基点、没动相对布局：文字相对尖端的偏移 = 参考位 (8.248, 7.1) − 尖端，
+            // 与改动前逐位相同（块内与世界都验）。
+            let want = loc_scaled((8.248, 7.1), scale);
+            let a_lo = members
+                .iter()
+                .find_map(|e| match e {
+                    E::AttributeDefinition(a) if a.tag == "粗糙度下限A" => Some(a),
+                    _ => None,
+                })
+                .expect("下限A ATTDEF");
+            assert_eq!(a_lo.insertion_point, want, "{case}: 下限A 相对尖端偏移不变");
+            let attr = world_attr(&mock, "粗糙度下限A");
+            assert!(
+                (attr.insertion_point.x - (x + want.x)).abs() < 1e-9
+                    && (attr.insertion_point.y - (y + want.y)).abs() < 1e-9,
+                "{case}: 世界 ATTRIB = 尖端 + 偏移，实际 ({:.9},{:.9})",
+                attr.insertion_point.x,
+                attr.insertion_point.y
+            );
+        }
     }
 }
 
