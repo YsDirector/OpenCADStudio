@@ -1,0 +1,52 @@
+name: Locales
+
+# scripts/test_locales.py guards the t!/tf! lookup catalog: every user-visible literal under
+# src/**/*.rs must resolve through src/locale_catalog.rs, and no *new* untranslated literal may
+# appear outside scripts/locales_untranslated_baseline.tsv. It is pure Python — no Rust toolchain
+# and no build — and finishes in seconds, which is why it gets its own workflow instead of being
+# folded into ci.yml (whose job exists to run the cargo test suite with the GL/audio libraries).
+#
+# It runs the default (hint) mode on purpose: CI should catch newly untranslated strings, not
+# "this baseline line can now be deleted". The strict mode (OCSM_LOCALE_STRICT=1) is a local
+# backlog-clearing tool and is deliberately not wired here.
+#
+# Cost, on purpose: when an upstream merge brings in a user-visible string without a catalog
+# entry, this check goes red until the string is either translated (catalog + all 21 locales) or
+# explicitly recorded in the baseline (a reviewed policy decision, not a way to make it green).
+#
+# The path filter keeps the check off changes that cannot affect it. If it ever becomes a
+# required status check, note that path-filtered workflows report nothing on unrelated PRs.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'locales/**'
+      - 'scripts/test_locales.py'
+      - 'scripts/locales_untranslated_baseline.tsv'
+      - '.github/workflows/locales.yml'
+  pull_request:
+    paths:
+      - 'src/**'
+      - 'locales/**'
+      - 'scripts/test_locales.py'
+      - 'scripts/locales_untranslated_baseline.tsv'
+      - '.github/workflows/locales.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: locales-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test-locales:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Locale catalog coverage (default mode)
+        run: python3 scripts/test_locales.py

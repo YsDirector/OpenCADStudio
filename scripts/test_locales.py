@@ -38,10 +38,12 @@
   OCSM_LOCALE_STRICT=1（任意非空且不是 0/false/no/off 的值）：把上述"可删的行"升为**失败**，
     rc≠0 并逐条点名。理由：上游并入的新串靠基线登记（挡不住也不必挡），但"能删的行"是我们
     自己的债 —— 想清债时设这一个环境变量就能强制清。
+  CI（.github/workflows/locales.yml）跑**默认档**：CI 要抓的是"新增未译串"，而不是"基线可删"。
 
 稳定性质
   HEAD 上：绿。新增一条用户可见漏译（或删掉一条 catalog 映射）：非零退出 + 指出那一串。
-  本脚本**未**接入 CI（.github/workflows 里没有它）—— 改译文/catalog 前后各手跑一次。
+  本脚本已在 CI 里跑**默认档**（.github/workflows/locales.yml，纯 Python、秒级）——
+  改译文/catalog 前后仍建议本地手跑一次（含严格档）。
 """
 
 import json

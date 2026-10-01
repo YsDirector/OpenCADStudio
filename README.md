@@ -236,7 +236,8 @@ upstream merged without a catalog entry are pinned, with their `git blame` prove
 `OCSM_LOCALE_STRICT=1` turns the script's "this baseline line can be deleted" hint into a non-zero
 exit that names every deletable line, so the backlog can be forced clean on demand; without the
 variable the behaviour is unchanged. The script explains its exact scope (what it does not check,
-and why) in its module docstring; it is not wired into CI.
+and why) in its module docstring; it also runs in CI as the `Locales` workflow (default mode),
+where a newly merged untranslated string shows up as a red check.
 
 ## Project growth
 
