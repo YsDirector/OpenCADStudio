@@ -2415,6 +2415,59 @@ mod tests {
         assert_eq!(r["code"], "invalid_text");
     }
 
+    /// C4：`entities_create` 的 MTEXT 与 TEXT 一样接受 `style`；写错/不存在的样式名
+    /// 明确报错（不静默退回默认样式），不带 `style` 时默认行为不变。
+    #[test]
+    fn entities_create_mtext_accepts_style_and_rejects_unknown() {
+        let mut app = OpenCADStudio::new_for_test();
+        app.automation_op(r#"{"op":"new"}"#);
+        // OCSM_GB 文字样式（插件 ensure_text_styles 建的就是这个名）。
+        {
+            let doc = &mut app.tabs[app.active_tab].scene.document;
+            let mut style = codec::tables::TextStyle::new("OCSM_GB");
+            style.handle = doc.allocate_handle();
+            doc.text_styles.add(style).unwrap();
+        }
+        // 1) 带 style ⇒ 读回 style 正确
+        let r = mutate(
+            &mut app,
+            r#"{"protocol":1,"op":"entities_create","request_id":"s1","document_id":{doc},"entities":[
+                {"type":"MText","value":"Ra 3.2","position":[1,1],"height":5,"style":"OCSM_GB"}
+            ]}"#,
+        );
+        assert_eq!(r["ok"], true, "{}", r["error"]);
+        let q = app.automation_op(r#"{"op":"query","type":"MText","detail":"full"}"#);
+        assert_eq!(q["entities"][0]["properties"]["style"], "OCSM_GB", "{q}");
+        // 2) 不带 style ⇒ 默认行为不变（Standard，不报错）
+        let r2 = mutate(
+            &mut app,
+            r#"{"protocol":1,"op":"entities_create","request_id":"s2","document_id":{doc},"entities":[
+                {"type":"MText","value":"plain","position":[2,2]}
+            ]}"#,
+        );
+        assert_eq!(r2["ok"], true, "{}", r2["error"]);
+        let q2 = app.automation_op(r#"{"op":"query","type":"MText","detail":"full"}"#);
+        assert_eq!(q2["entities"][1]["properties"]["style"], "Standard", "{q2}");
+        // 3) 反证面：不存在的样式 ⇒ 明确错误 + 全批量不提交
+        let bad = mutate(
+            &mut app,
+            r#"{"protocol":1,"op":"entities_create","request_id":"s3","document_id":{doc},"entities":[
+                {"type":"MText","value":"nope","position":[3,3],"style":"NO_SUCH_STYLE"}
+            ]}"#,
+        );
+        assert_eq!(bad["ok"], false, "{bad}");
+        assert_eq!(bad["code"], "invalid_text_style", "{bad}");
+        assert_eq!(count_type(&mut app, "MText"), 2, "非法样式不得提交");
+        // 4) TEXT 同样按“必须已存在”校验（与 MTEXT 一致）
+        let bad_text = mutate(
+            &mut app,
+            r#"{"protocol":1,"op":"entities_create","request_id":"s4","document_id":{doc},"entities":[
+                {"type":"Text","value":"nope","position":[4,4],"style":"NO_SUCH_STYLE"}
+            ]}"#,
+        );
+        assert_eq!(bad_text["code"], "invalid_text_style", "{bad_text}");
+    }
+
     #[test]
     fn entities_delete_erases_by_handle_and_validates() {
         let mut app = OpenCADStudio::new_for_test();

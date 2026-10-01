@@ -87,9 +87,24 @@ fn apply_common_properties(spec: &Value, entity: &mut codec::EntityType) -> Pars
     Ok(())
 }
 
+/// `entities` 条目的 `style`：显式给样式名时必须是**文档里已有的文字样式**（与 TEXT/MTEXT
+/// 一致，写错就报错，不静默退回默认样式）；未给/空串 ⇒ None（沿用实体默认）。
+fn text_style_field(spec: &Value, document: &codec::CadDocument) -> Parsed<Option<String>> {
+    let Some(style) = spec["style"].as_str().filter(|s| !s.is_empty()) else {
+        return Ok(None);
+    };
+    if !document.text_styles.contains(style) {
+        return Err(failure(
+            "invalid_text_style",
+            format!("Text style '{style}' does not exist in the document"),
+        ));
+    }
+    Ok(Some(style.to_owned()))
+}
+
 /// One `entities` array entry → a real entity. Geometry validation happens
 /// here so a bad definition aborts the whole batch before anything commits.
-fn build_entity(spec: &Value) -> Parsed<codec::EntityType> {
+fn build_entity(spec: &Value, document: &codec::CadDocument) -> Parsed<codec::EntityType> {
     use codec::entities::*;
     use codec::types::Vector3;
     let kind = spec["type"].as_str().unwrap_or("").to_ascii_uppercase();
@@ -152,8 +167,8 @@ fn build_entity(spec: &Value) -> Parsed<codec::EntityType> {
             let mut text = Text::with_value(value, point_field(spec, "position")?)
                 .with_height(spec["height"].as_f64().unwrap_or(2.5).abs().max(1e-6))
                 .with_rotation(deg_field(spec, "rotation_deg"));
-            if let Some(style) = spec["style"].as_str().filter(|s| !s.is_empty()) {
-                text.style = style.to_owned();
+            if let Some(style) = text_style_field(spec, document)? {
+                text.style = style;
             }
             EntityType::Text(text)
         }
@@ -168,6 +183,9 @@ fn build_entity(spec: &Value) -> Parsed<codec::EntityType> {
                 mtext.rectangle_width = width;
             }
             mtext.rotation = deg_field(spec, "rotation_deg");
+            if let Some(style) = text_style_field(spec, document)? {
+                mtext.style = style;
+            }
             EntityType::MText(mtext)
         }
         "INSERT" => {
@@ -271,7 +289,12 @@ impl OpenCADStudio {
             .as_array()
             .filter(|v| !v.is_empty())
             .ok_or_else(|| failure("entities_required", "Supply entities:[{type:…},…]"))?;
-        let built: Vec<codec::EntityType> = list.iter().map(build_entity).collect::<Parsed<_>>()?;
+        let built: Vec<codec::EntityType> = {
+            let document = &self.tabs[self.active_tab].scene.document;
+            list.iter()
+                .map(|spec| build_entity(spec, document))
+                .collect::<Parsed<_>>()?
+        };
 
         let i = self.active_tab;
         self.push_undo_snapshot(i, "ENTITIESCREATE");
