@@ -228,6 +228,13 @@ Application translations live in `locales/*/opencadstudio.ftl`; source labels ma
 to refresh web and desktop packaging labels. Validate with `python3 scripts/test_site.py`
 and `cargo test --lib i18n::tests`.
 
+`python3 scripts/test_locales.py` guards the `t!`/`tf!` lookups: every user-visible literal under
+`src/**/*.rs` must resolve through `src/locale_catalog.rs`, and no **new** untranslated literal is
+allowed (an uncatalogued literal silently falls back to English in all 21 languages). The literals
+upstream merged without a catalog entry are pinned, with their `git blame` provenance, in
+`scripts/locales_untranslated_baseline.tsv` — that backlog may only shrink. The script explains its
+exact scope (what it does not check, and why) in its module docstring; it is not wired into CI.
+
 ## Project growth
 
 ### Stars

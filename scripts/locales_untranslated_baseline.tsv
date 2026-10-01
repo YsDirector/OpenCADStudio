@@ -1,0 +1,142 @@
+# 已知未译基线 —— scripts/test_locales.py 的「判据范围」数据（为什么/怎么维护见该文件头部）。
+#
+# 这 128 条是**上游并入**的宿主用户可见串：t!/tf! 的字面量在 src/ 里，但既没进
+# src/locale_catalog.rs，也没有 21 语言译文（locales/*/opencadstudio.ftl）
+# ⇒ 21 种语言下都回显英文。上游自己也没补：引入它们的提交全部可从上游 main 到达，
+#    见每行出处（可用 `git blame -L <行>,<行> -- <文件>` 复核）。
+#
+# 补齐 = 128 串 × 21 语言 = 2688 条人工翻译，属独立翻译单；本脚本只保证
+# 「基线之外不再新增漏译」。
+#
+# 格式：<源串原文>\t<upstream|local> <提交> <日期> <作者> @ <位置>
+#      源串里的换行/回车/制表符写作 \n \r \t，反斜杠写作 \\（只有 1 条带换行的串用得上）。
+# 维护：只许缩小 —— 某串进了 catalog/locales 之后请从本文件删掉（脚本会提示"可删"）。
+#      往本文件加串是**政策决定**（要评审、要写理由），不是让脚本变绿的办法。
+0 associative dimensions converted	upstream f2d534bf 2026-09-23 Hakan Seven @ src/app/commands/draw.rs:1414
+1 was filtered out.	upstream e4fa5232 2026-09-24 Karim Jerbi @ src/app/command_driver/utilities.rs:446
+3 Point Angular Dimension	upstream f537aff7 2026-09-25 Hakan Seven @ src/app/properties.rs:1849
+3 Point Angular Dimension (Dynamic)	upstream f537aff7 2026-09-25 Hakan Seven @ src/app/properties.rs:1889
+A sketch is already open — FINISHSKETCH closes it.	upstream 1aa299e2 2026-09-12 Matus Mastena @ src/app/commands/layerprops.rs:647
+Alias already used for command: {} → {}	upstream 10577904 2026-09-15 Karim Jerbi @ src/ui/window/alias_editor.rs:237
+Aligned Dimensional Constraint	upstream f537aff7 2026-09-25 Hakan Seven @ src/app/properties.rs:1883
+Angle = %{angle}° (degenerate rays)	upstream 00e10260 2026-09-22 Karim Jerbi @ src/modules/draw/inquiry/measuregeom.rs:178
+Angular Dimension	upstream f537aff7 2026-09-25 Hakan Seven @ src/app/properties.rs:1846
+Angular Dimension (Dynamic)	upstream f537aff7 2026-09-25 Hakan Seven @ src/app/properties.rs:1886
+Are you sure you want to reset? You will lose all your current aliases!	upstream 10577904 2026-09-15 Karim Jerbi @ src/ui/window/alias_editor.rs:187
+Array size exceeds the limit of {} items.	upstream a3d65e2f 2026-09-17 Christopher Overbeck @ src/modules/draw/modify/array.rs:65
+Associated	upstream f537aff7 2026-09-25 Hakan Seven @ src/app/properties.rs:831
+Association status	upstream f537aff7 2026-09-25 Hakan Seven @ src/app/properties.rs:834
+Attach, Refresh and Change Path stay disabled here: the web build has no filesystem access and no native file pickers, so references can be neither added, reloaded nor repathed — and previews stay unavailable. Nested references are read-only on every platform, and relative paths need the drawing saved first.	upstream ef0c6bf4 2026-09-17 Karim Jerbi @ src/ui/window/xref_help.rs:33
+Bodies ({})	upstream d1c31062 2026-09-12 Matus Mastena @ src/ui/window/browser.rs:126
+Broken reference	upstream f537aff7 2026-09-25 Hakan Seven @ src/app/properties.rs:823
+Browser	upstream 3013c1b5 2026-09-25 Hakan Seven @ src/ui/window/browser.rs:103
+Browser closed.	upstream 1aa299e2 2026-09-12 Matus Mastena @ src/app/commands/layerprops.rs:698
+Browser opened.	upstream 1aa299e2 2026-09-12 Matus Mastena @ src/app/commands/layerprops.rs:695
+Bundled with Open CAD Studio	upstream de51c1a1 2026-09-20 Felix Riestra @ src/ui/window/plugin_manager.rs:314
+Click + Add alias, type the alias and command, accept the row, then Apply. Esc cancels the pending row.	upstream 3e6693b9 2026-08-03 Hakan Seven @ src/ui/window/alias_editor.rs:71
+Click confirms, Esc cancels	upstream 279a8741 2026-09-24 huanld @ src/app/control/interactive.rs:267
+Configure 3D navigation, buttons, and radial menus in 3Dconnexion settings. Pan only and Pan and zoom share the push/tilt mapping and pan settings shown here.	upstream 6a63726e 2026-09-16 Christopher Overbeck @ src/ui/window/options/spacemouse.rs:106
+Connection details	upstream 6a63726e 2026-09-16 Christopher Overbeck @ src/ui/window/options/spacemouse.rs:116
+Constraint	upstream 6969c197 2026-09-21 ramox81 @ src/app/properties.rs:3895
+Constraint Form	upstream 6969c197 2026-09-21 ramox81 @ src/app/properties.rs:3898
+Diameter Dimensional Constraint	upstream f537aff7 2026-09-25 Hakan Seven @ src/app/properties.rs:1895
+Download available	upstream 31711a41 2026-09-23 Luis Martinez @ src/ui/window/missing_fonts.rs:42
+Downloading...	upstream 31711a41 2026-09-23 Luis Martinez @ src/ui/window/missing_fonts.rs:40
+Duplicate alias(es) ignored on Apply: {}	upstream 10577904 2026-09-15 Karim Jerbi @ src/app/alias.rs:364
+EXTERNALREFERENCES on the web build	upstream ef0c6bf4 2026-09-17 Karim Jerbi @ src/ui/window/xref_help.rs:63
+Embed Image (in drawing)	upstream 28efbffd 2026-09-16 huanld @ src/ui/window/xref_manager.rs:578
+Enable SpaceMouse	upstream 6a63726e 2026-09-16 Christopher Overbeck @ src/ui/window/options/spacemouse.rs:42
+Enter a URL, or use Remove to clear all hyperlinks.	upstream 6a1c6490 2026-09-17 ramox81 @ src/app/update/mod.rs:4574
+Enter confirms, Esc cancels	upstream 279a8741 2026-09-24 huanld @ src/app/control/interactive.rs:81
+FONT  Downloaded {name} → {path}	upstream 28efbffd 2026-09-16 huanld @ src/app/update/mod.rs:1330
+FONT  Not available from the selected source: {fonts}. Substitute fonts remain active.	upstream 31711a41 2026-09-23 Luis Martinez @ src/app/update/mod.rs:1336
+Font download failed: {e}	upstream 28efbffd 2026-09-16 huanld @ src/app/update/mod.rs:1356
+Font source — leave empty for the community repository, or point at any folder (e.g. your company's font server):	upstream 28efbffd 2026-09-16 huanld @ src/ui/window/missing_fonts.rs:72
+GCCONCENTRIC  Select first object:	upstream a6a70420 2026-09-17 ramox81 @ src/modules/parametric/concentric.rs:103
+GCCONCENTRIC  Select second object:	upstream a6a70420 2026-09-17 ramox81 @ src/modules/parametric/concentric.rs:101
+GCPERPENDICULAR  Select first object:	upstream 60bfc88b 2026-09-16 ramox81 @ src/modules/parametric/perpendicular.rs:154
+GCPERPENDICULAR  Select second object:	upstream 60bfc88b 2026-09-16 ramox81 @ src/modules/parametric/perpendicular.rs:152
+GCSMOOTH  Select first spline curve endpoint:	upstream 62607239 2026-09-17 ramox81 @ src/modules/parametric/smooth.rs:170
+GCSMOOTH  Select second curve endpoint:	upstream 62607239 2026-09-17 ramox81 @ src/modules/parametric/smooth.rs:168
+Grid X/Y spacings must be positive numbers and Major every 2-100.	upstream 4aa699e0 2026-09-17 Karim Jerbi @ src/app/drafting_settings.rs:78
+Hit something broken or missing? Report it on the GitHub issues page so it can be fixed.	upstream ef0c6bf4 2026-09-17 Karim Jerbi @ src/ui/window/xref_help.rs:39
+How the Reference Manager works on web	upstream ef0c6bf4 2026-09-17 Karim Jerbi @ src/ui/window/xref_help.rs:25
+IMAGEEMBED  "{name}": {w}×{h} px (embedded)	upstream 28efbffd 2026-09-16 huanld @ src/app/update/mod.rs:1238
+IMAGEEMBED: {e}	upstream 28efbffd 2026-09-16 huanld @ src/app/update/mod.rs:1254
+Incomplete alias row discarded.	upstream 10577904 2026-09-15 Karim Jerbi @ src/app/alias.rs:349
+Invalid first selection for Smooth. Select an endpoint of an open spline.	upstream 62607239 2026-09-17 ramox81 @ src/modules/parametric/smooth.rs:148
+Invalid second selection for Smooth. Select an endpoint of a line, arc, polyline segment or open spline.	upstream 62607239 2026-09-17 ramox81 @ src/modules/parametric/smooth.rs:155
+Invalid selection for Concentric. Select a circle, arc, ellipse or polyline arc segment.	upstream a6a70420 2026-09-17 ramox81 @ src/modules/parametric/concentric.rs:30
+Invalid selection for Perpendicular. Select a line segment, polyline segment, text, MText, major or minor axis of ellipse or elliptical arc.	upstream 60bfc88b 2026-09-16 ramox81 @ src/modules/parametric/perpendicular.rs:30
+Invalid selection for Tangent. Select a line, polyline segment, circle, arc or ellipse.	upstream a1e809b6 2026-09-16 ramox81 @ src/modules/parametric/tangent.rs:36
+Linear Dimensional Constraint	upstream f537aff7 2026-09-25 Hakan Seven @ src/app/properties.rs:1897
+Missing fonts	upstream 28efbffd 2026-09-16 huanld @ src/app/view/modal.rs:69
+Model geometry must come from one viewport. Paper-space points can be included.	upstream 5424a194 2026-09-16 Christopher Overbeck @ src/app/dim_viewport.rs:82
+Navigation	upstream 6a63726e 2026-09-16 Christopher Overbeck @ src/ui/window/options/spacemouse.rs:50
+No sketch is open.	upstream 1aa299e2 2026-09-12 Matus Mastena @ src/app/commands/layerprops.rs:1601
+No sketch open	upstream d1c31062 2026-09-12 Matus Mastena @ src/ui/window/browser.rs:121
+No solids yet	upstream d1c31062 2026-09-12 Matus Mastena @ src/ui/window/browser.rs:128
+Node Graph	upstream 857f2f2e 2026-09-25 Hakan Seven @ src/app/node_graph.rs:254
+Node graph	upstream f537aff7 2026-09-25 Hakan Seven @ src/ui/command_line.rs:909
+Node graph saved to {}	upstream 857f2f2e 2026-09-25 Hakan Seven @ src/app/node_graph.rs:266
+Nonassociative	upstream f537aff7 2026-09-25 Hakan Seven @ src/app/properties.rs:819
+None of the requested fonts are available from the selected source. Substitute fonts remain active; this notice will not repeat during this session.	upstream 28efbffd 2026-09-16 huanld @ src/app/update/mod.rs:1309
+Not a node graph file	upstream 857f2f2e 2026-09-25 Hakan Seven @ src/ui/node_graph.rs:329
+Number of aliases	upstream 10577904 2026-09-15 Karim Jerbi @ src/ui/window/alias_editor.rs:178
+Object deleted	upstream f537aff7 2026-09-25 Hakan Seven @ src/ui/node_graph.rs:702
+Object is not a closed curve.	upstream bb390cad 2026-09-25 Hakan Seven @ src/app/command_driver/viewport.rs:78
+Object selected was not a viewport\n.	upstream bb390cad 2026-09-25 Hakan Seven @ src/modules/layout/mview.rs:806
+Open Node Graph	upstream 857f2f2e 2026-09-25 Hakan Seven @ src/app/node_graph.rs:273
+Origin planes	upstream d1c31062 2026-09-12 Matus Mastena @ src/ui/window/browser.rs:107
+Pan speed	upstream 6a63726e 2026-09-16 Christopher Overbeck @ src/ui/window/options/spacemouse.rs:71
+Paper sheets keep rotation locked.	upstream 6a63726e 2026-09-16 Christopher Overbeck @ src/ui/statusbar/spacemouse.rs:48
+Partially associated	upstream f537aff7 2026-09-25 Hakan Seven @ src/app/properties.rs:829
+Paused	upstream 6a63726e 2026-09-16 Christopher Overbeck @ src/app/navigation.rs:69
+Pick a point, then click (Esc cancels).	upstream 279a8741 2026-09-24 huanld @ src/app/control/interactive.rs:258
+Radius Dimensional Constraint	upstream f537aff7 2026-09-25 Hakan Seven @ src/app/properties.rs:1892
+Reference Manager Help	upstream ef0c6bf4 2026-09-17 Karim Jerbi @ src/app/view/modal.rs:72
+Reference Manager — Web	upstream ef0c6bf4 2026-09-17 Karim Jerbi @ src/ui/window/xref_help.rs:61
+Report an issue	upstream 6b374766 2026-09-25 Karim Jerbi @ src/ui/window/xref_help.rs:46
+Resume SpaceMouse	upstream 6a63726e 2026-09-16 Christopher Overbeck @ src/ui/window/options/spacemouse.rs:87
+Reverse pan direction	upstream 6a63726e 2026-09-16 Christopher Overbeck @ src/ui/window/options/spacemouse.rs:64
+SCRIPTCOMMANDS = {state}	upstream 41ecc0c4 2026-09-23 Hakan Seven @ src/app/commands/styleprops.rs:3072
+SCRIPTCOMMANDS takes 1 (scripts may run commands) or 0 (they may not)	upstream 41ecc0c4 2026-09-23 Hakan Seven @ src/app/commands/styleprops.rs:3061
+SETVAR: CETRANSPARENCY LTSCALE CELTSCALE PDMODE PDSIZE TEXTSIZE ORTHOMODE FILLMODE MIRRTEXT FRAME IMAGEFRAME PDFFRAME WIPEOUTFRAME XCLIPFRAME POINTCLOUDCLIPFRAME ZOOMWHEEL ZOOMFACTOR SHORTCUTMENU SHORTCUTMENUDURATION CURSORSIZE PICKBOX CURSORTYPE SNAPANG TEXTFILL CLIPROMPTLINES COMMANDLINEFADETIME ATTREQ ATTDIA DIMASSOC DIMCONTINUEMODE CONSTRAINTSOLVEMODE CONSTRAINTINFER CONSTRAINTBARDISPLAY CONSTRAINTBARMODE CONSTRAINTNAMEFORMAT DYNCONSTRAINTDISPLAY ANGBASE ANGDIR SKETCHINC SKPOLY SKTOLERANCE DONUTID DONUTOD CENTEREXE CENTERLAYER CENTERLTYPE CENTERLTSCALE CENTERLTYPEFILE CENTERCROSSSIZE CENTERCROSSGAP CENTERMARKEXE COLORTHEME SELECTIONAREA SELECTIONAREAOPACITY SELECTIONEFFECT SELECTIONEFFECTCOLOR WINDOWSAREACOLOR CROSSINGAREACOLOR SELECTIONPREVIEW GRIPSIZE GRIPCOLOR GRIPHOT GRIPHOVER GRIPOBJLIMIT | CLAYER CELTYPE TEXTSTYLE (read-only)	upstream 971abe64 2026-09-21 ramox81 @ src/app/commands/styleprops.rs:1096
+Save Node Graph	upstream 857f2f2e 2026-09-25 Hakan Seven @ src/app/node_graph.rs:253
+Save and reopen the drawing to apply the new fonts.	upstream 28efbffd 2026-09-16 huanld @ src/app/update/mod.rs:1349
+Search nodes…	upstream 3013c1b5 2026-09-25 Hakan Seven @ src/ui/node_graph.rs:590
+Select objects, then press Enter to finish (Esc cancels).	upstream 279a8741 2026-09-24 huanld @ src/app/control/interactive.rs:67
+Selected objects have different hyperlink values.	upstream 6a1c6490 2026-09-17 ramox81 @ src/app/view/modal.rs:1904
+Serve the automation API over REST on http://127.0.0.1:PORT	upstream 279a8741 2026-09-24 huanld @ src/cli.rs:90
+Skip	upstream 6b374766 2026-09-25 Karim Jerbi @ src/ui/window/missing_fonts.rs:50
+Snap X and Y spacings must be positive numbers.	upstream 624fe533 2026-09-16 Karim Jerbi @ src/app/drafting_settings.rs:63
+SpaceMouse	upstream 6a63726e 2026-09-16 Christopher Overbeck @ src/ui/window/options/spacemouse.rs:38
+Specify direction of chord for arc (hold Ctrl to switch direction) <%{default}>:	upstream bb390cad 2026-09-25 Hakan Seven @ src/modules/layout/mview.rs:237
+TCONSTRAINT  Select first object:	upstream a1e809b6 2026-09-16 ramox81 @ src/modules/parametric/tangent.rs:110
+TCONSTRAINT  Select second object:	upstream a1e809b6 2026-09-16 ramox81 @ src/modules/parametric/tangent.rs:108
+This drawing uses fonts that are not installed on this machine. OpenCADStudio can download any redistributable fonts that exist in the selected repository; unavailable fonts will keep using a substitute.	upstream 28efbffd 2026-09-16 huanld @ src/ui/window/missing_fonts.rs:61
+This panel lists the drawing's references read-only: status, type, size, date and saved path, plus the Details pane. Select rows to inspect them; List and Tree switch the presentation.	upstream ef0c6bf4 2026-09-17 Karim Jerbi @ src/ui/window/xref_help.rs:27
+UCS FACE  Select a face to draw on:	upstream 9978713a 2026-09-18 Hakan Seven @ src/command.rs:377
+UCS FACE: no planar face at that point.	upstream bfb786d5 2026-09-12 Matus Mastena @ src/app/commands/layerprops.rs:371
+UCS OBJECT  Select object to align UCS:	upstream 9978713a 2026-09-18 Hakan Seven @ src/command.rs:379
+UCS OBJECT: entity defines no plane.	upstream bfb786d5 2026-09-12 Matus Mastena @ src/app/commands/layerprops.rs:440
+UCS aligned to the selected face.	upstream bfb786d5 2026-09-12 Matus Mastena @ src/app/commands/layerprops.rs:367
+UCS aligned to the selected object.	upstream bfb786d5 2026-09-12 Matus Mastena @ src/app/commands/layerprops.rs:435
+URL:	upstream 6a1c6490 2026-09-17 ramox81 @ src/app/view/modal.rs:1913
+Unresolved reference	upstream f537aff7 2026-09-25 Hakan Seven @ src/app/properties.rs:827
+Usage: CREATESKETCH [XY|XZ|YZ]; bare uses the current UCS.	upstream 1aa299e2 2026-09-12 Matus Mastena @ src/app/commands/layerprops.rs:667
+Viewport locked	upstream 6a63726e 2026-09-16 Christopher Overbeck @ src/app/navigation.rs:72
+[getpoint · {}] {}  ({})	upstream 279a8741 2026-09-24 huanld @ src/app/control/interactive.rs:263
+[user_select · {}] {}  ({})	upstream 279a8741 2026-09-24 huanld @ src/app/control/interactive.rs:77
+getpoint {}: {}	upstream 279a8741 2026-09-24 huanld @ src/app/control/interactive.rs:302
+https://server/fonts or a GitHub raw folder	upstream 28efbffd 2026-09-16 huanld @ src/ui/window/missing_fonts.rs:76
+no point — the request was cancelled.	upstream 279a8741 2026-09-24 huanld @ src/app/control/interactive.rs:307
+user_select {}: handed {} object(s) to the client.	upstream 279a8741 2026-09-24 huanld @ src/app/control/interactive.rs:200
+user_select {}: the request was answered with no objects.	upstream 279a8741 2026-09-24 huanld @ src/app/control/interactive.rs:113
+{converted} associative dimensions converted	upstream f2d534bf 2026-09-23 Hakan Seven @ src/app/commands/draw.rs:1518
+{count} were filtered out.	upstream e4fa5232 2026-09-24 Karim Jerbi @ src/app/command_driver/utilities.rs:448
+{refused} associative dimension(s) could not be converted	upstream f2d534bf 2026-09-23 Hakan Seven @ src/app/commands/draw.rs:1416
+{} closed with {} object(s). EXTRUDE then Previous uses them.	upstream 1aa299e2 2026-09-12 Matus Mastena @ src/app/commands/layerprops.rs:1622
+{} closed; nothing was drawn.	upstream 1aa299e2 2026-09-12 Matus Mastena @ src/app/commands/layerprops.rs:1616
+{} object(s) ignored: outside the requested type/layer filter.	upstream 279a8741 2026-09-24 huanld @ src/app/control/interactive.rs:177
+{} open. Draw on the plane, then FINISHSKETCH.	upstream 1aa299e2 2026-09-12 Matus Mastena @ src/app/commands/layerprops.rs:1589
