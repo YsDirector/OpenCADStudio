@@ -42,6 +42,10 @@ __pycache__/
 # Single-instance lock files the app writes next to an open drawing
 *.ocs.lock
 
+# Autosave sidecars the app writes next to an open drawing (a live one may be
+# held by a running instance — never commit or delete it)
+*.ocs-autosave.sv$
+
 # macOS Finder metadata
 .DS_Store
 

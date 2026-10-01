@@ -101,6 +101,108 @@ fn family_from_stored_line(
     }
 }
 
+/// Per-axis fold cell for a prebaked pattern: the smallest translation along
+/// each axis that maps EVERY family onto itself, so the renderer may move a
+/// pattern origin by whole cells without moving the fill.
+///
+/// The historical cell — `spacing * 64` — is such a translation for an
+/// axis-aligned family only. Measured along x it is `64 * spacing / |sin θ|`,
+/// which is a whole number of line spacings only when the family's spacing
+/// divides it; for a 45° family it is `64/√2 ≈ 45.25` spacings, so two fills
+/// whose origins land in neighbouring cells painted a 0.2548-cell fraction
+/// (0.36 * spacing, 0.76 mm in the report) apart at their shared edge.
+///
+/// Every hatch that carries the same pattern computes the same cell here, so
+/// fills that share a stored pattern origin stay in phase wherever they sit.
+/// `legacy` is kept for patterns whose families share no common axis period.
+fn pattern_fold_cell(
+    fams: &[crate::scene::model::hatch_model::PatFamily],
+    legacy: f64,
+) -> [f64; 2] {
+    let (mut x_periods, mut y_periods) = (Vec::new(), Vec::new());
+    for fam in fams {
+        let angle = f64::from(fam.angle_deg).to_radians();
+        let (sin_a, cos_a) = angle.sin_cos();
+        // Unit normal and along-line direction of this family.
+        let (nx, ny) = (-sin_a, cos_a);
+        let (ux, uy) = (cos_a, sin_a);
+        let spacing = f64::from(fam.dy).abs();
+        if spacing > 1.0e-12 {
+            if nx.abs() > 1.0e-9 {
+                x_periods.push(spacing / nx.abs());
+            }
+            if ny.abs() > 1.0e-9 {
+                y_periods.push(spacing / ny.abs());
+            }
+        }
+        // A dashed family repeats along its lines as well. A non-zero `dx`
+        // couples the dash phase to the line index; those families' periods
+        // are not usable this way, so they are left to the symmetry check.
+        let period: f64 = fam.dashes.iter().map(|d| f64::from(d.abs())).sum();
+        if period > 1.0e-9 && f64::from(fam.dx).abs() <= 1.0e-9 {
+            if ux.abs() > 1.0e-9 {
+                x_periods.push(period / ux.abs());
+            }
+            if uy.abs() > 1.0e-9 {
+                y_periods.push(period / uy.abs());
+            }
+        }
+    }
+    let x = common_period(&x_periods)
+        .filter(|cell| pattern_symmetry(fams, [*cell, 0.0]))
+        .unwrap_or(legacy);
+    let y = common_period(&y_periods)
+        .filter(|cell| pattern_symmetry(fams, [0.0, *cell]))
+        .unwrap_or(legacy);
+    [x, y]
+}
+
+/// Smallest common multiple of `values`: every value must divide the result
+/// into whole units within a relative tolerance. `None` when the values are
+/// incommensurate or the list is empty.
+fn common_period(values: &[f64]) -> Option<f64> {
+    let base = values.iter().copied().fold(f64::INFINITY, f64::min);
+    if !base.is_finite() || base <= 0.0 {
+        return None;
+    }
+    for multiple in 1..=64 {
+        let candidate = base * f64::from(multiple);
+        if values.iter().all(|value| {
+            let steps = candidate / value;
+            (steps - steps.round()).abs() <= 1.0e-9 * steps.abs().max(1.0)
+        }) {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
+/// Does the translation `t` (in world axes) map every family of the pattern
+/// onto itself? Mirrors the shader's per-family evaluation: `dy` steps the
+/// lines across, `dx` steps the dash phase with the line index.
+fn pattern_symmetry(fams: &[crate::scene::model::hatch_model::PatFamily], t: [f64; 2]) -> bool {
+    fams.iter().all(|fam| {
+        let angle = f64::from(fam.angle_deg).to_radians();
+        let (sin_a, cos_a) = angle.sin_cos();
+        let dy = f64::from(fam.dy);
+        if dy.abs() <= 1.0e-12 {
+            return true;
+        }
+        let perp = -t[0] * sin_a + t[1] * cos_a;
+        let along = t[0] * cos_a + t[1] * sin_a;
+        let lines = perp / dy;
+        if (lines - lines.round()).abs() > 1.0e-9 * lines.abs().max(1.0) {
+            return false;
+        }
+        let period: f64 = fam.dashes.iter().map(|d| f64::from(d.abs())).sum();
+        if period <= 1.0e-9 {
+            return true;
+        }
+        let dash = (along - lines.round() * f64::from(fam.dx)) / period;
+        (dash - dash.round()).abs() <= 1.0e-9 * dash.abs().max(1.0)
+    })
+}
+
 /// Preserve the selected hue while moving its HSL lightness towards the
 /// persisted one-colour tint/shade target (0 = black, 1 = white).
 fn gradient_tint_color(base: [f32; 4], target: f32) -> [f32; 4] {
@@ -2271,14 +2373,18 @@ impl Scene {
         // dashes at large offsets.
         //
         // So fold the origin's offset from `world_origin` down to a small,
-        // coherence-safe remainder on a grid of `spacing * 64` (many multiples
-        // of the pattern spacing — well inside the coherence range yet far
-        // larger than any realistic grip drag). Applying ONE common fold (from
-        // the reference line) preserves each family's relative phase, which is
-        // what forms the stones. Because the origin grip / Origin X/Y edit
-        // shifts every base point by the same delta, the sub-grid remainder
-        // tracks that delta 1:1, so the grip still moves the fill; a grid
-        // crossing (a whole `spacing * 64` drag) is never hit in practice.
+        // coherence-safe remainder. The fold cell is the pattern's own period
+        // (`pattern_fold_cell`), shared by every hatch that carries the same
+        // pattern, so fills that share a stored base point land in phase even
+        // when their boundary centres fall in different cells (#B7: adjacent
+        // 45° fills stepped 0.76 mm at their shared edge because a
+        // `spacing * 64` cell is 64/√2 spacings across a diagonal family).
+        // Applying ONE common fold (from the reference line) preserves each
+        // family's relative phase, which is what forms the stones. Because the
+        // origin grip / Origin X/Y edit shifts every base point by the same
+        // delta, the remainder tracks that delta 1:1, so the grip still moves
+        // the fill; a cell crossing shifts by a whole pattern period and is
+        // invisible.
         if prebaked {
             if let model::hatch_model::HatchPattern::Pattern(fams) = &mut pattern {
                 if let Some(rb) = dxf.pattern.lines.first().map(|l| l.base_point) {
@@ -2289,13 +2395,13 @@ impl Scene {
                         .map(|l| l.offset.length())
                         .fold(0.0_f64, f64::max)
                         .max(1e-6);
-                    let cell = spacing * 64.0;
-                    let fold = |v: f64, o: f64| -> f64 {
+                    let cell = pattern_fold_cell(fams, spacing * 64.0);
+                    let fold = |v: f64, o: f64, cell: f64| -> f64 {
                         let d = v - o;
                         d - (d / cell).round() * cell
                     };
-                    let ox = fold(rb.x, world_origin[0]);
-                    let oy = fold(rb.y, world_origin[1]);
+                    let ox = fold(rb.x, world_origin[0], cell[0]);
+                    let oy = fold(rb.y, world_origin[1], cell[1]);
                     for (fam, ln) in fams.iter_mut().zip(dxf.pattern.lines.iter()) {
                         fam.x0 = (ln.base_point.x - rb.x + ox) as f32;
                         fam.y0 = (ln.base_point.y - rb.y + oy) as f32;
@@ -2977,5 +3083,82 @@ impl Scene {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod hatch_fold_tests {
+    use super::*;
+    use crate::scene::model::hatch_model::PatFamily;
+
+    fn family(angle_deg: f32, dx: f32, dy: f32, dashes: &[f32]) -> PatFamily {
+        PatFamily {
+            angle_deg,
+            x0: 0.0,
+            y0: 0.0,
+            dx,
+            dy,
+            dashes: dashes.to_vec(),
+        }
+    }
+
+    /// The legacy `spacing * 64` cell is a period of an axis-aligned family but
+    /// NOT of a diagonal one — the root cause of the 0.76 mm edge step (#B7).
+    #[test]
+    fn legacy_cell_is_not_a_period_of_a_diagonal_family() {
+        let diagonal = [family(45.0, 0.0, 3.0, &[])];
+        assert!(!pattern_symmetry(&diagonal, [3.0 * 64.0, 0.0]));
+        let axis_aligned = [family(0.0, 0.0, 3.0, &[])];
+        assert!(pattern_symmetry(&axis_aligned, [3.0 * 64.0, 0.0]));
+    }
+
+    /// The fold cell of a 45° family is its own axis period, √2 * spacing.
+    #[test]
+    fn fold_cell_of_a_diagonal_family_is_its_axis_period() {
+        let fams = [family(45.0, 0.0, 3.0, &[])];
+        let cell = pattern_fold_cell(&fams, 192.0);
+        let expected = 3.0 * std::f64::consts::SQRT_2;
+        assert!((cell[0] - expected).abs() < 1.0e-9, "{cell:?}");
+        assert!((cell[1] - expected).abs() < 1.0e-9, "{cell:?}");
+        assert!(pattern_symmetry(&fams, [cell[0], 0.0]));
+        assert!(pattern_symmetry(&fams, [0.0, cell[1]]));
+    }
+
+    /// Two crossed families: the cell must stay a period of both, or the
+    /// second family's lines step at the shared edge.
+    #[test]
+    fn fold_cell_covers_every_family() {
+        let fams = [family(45.0, 0.0, 3.0, &[]), family(135.0, 0.0, 3.0, &[])];
+        let cell = pattern_fold_cell(&fams, 192.0);
+        assert!(pattern_symmetry(&fams, [cell[0], 0.0]));
+        assert!(pattern_symmetry(&fams, [0.0, cell[1]]));
+        // A cell that only suits the first family would step the second.
+        assert!(!pattern_symmetry(&fams, [3.0 * 64.0, 0.0]));
+    }
+
+    /// A dashed family repeats along its lines too: the cell has to carry whole
+    /// dash periods or the dashes restart at the shared edge.
+    #[test]
+    fn fold_cell_carries_the_dash_period() {
+        // Horizontal dashed family: spacing 3 across, 2 on / 1 off along.
+        let fams = [family(0.0, 0.0, 3.0, &[2.0, -1.0])];
+        let cell = pattern_fold_cell(&fams, 192.0);
+        assert!((cell[0] - 3.0).abs() < 1.0e-9, "{cell:?}");
+        assert!((cell[1] - 3.0).abs() < 1.0e-9, "{cell:?}");
+        assert!(pattern_symmetry(&fams, [3.0, 0.0]));
+        assert!(pattern_symmetry(&fams, [0.0, 3.0]));
+        // Half a dash period is not a period: the dash phase would move.
+        assert!(!pattern_symmetry(&fams, [1.5, 0.0]));
+    }
+
+    /// Incommensurate spacings share no axis period; the fold then keeps the
+    /// legacy cell (small offsets, and no worse than before the fix).
+    #[test]
+    fn fold_cell_falls_back_for_incommensurate_families() {
+        let fams = [
+            family(45.0, 0.0, 3.0, &[]),
+            family(45.0, 0.0, std::f32::consts::PI, &[]),
+        ];
+        assert_eq!(pattern_fold_cell(&fams, 192.0), [192.0, 192.0]);
     }
 }
