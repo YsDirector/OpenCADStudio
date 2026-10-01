@@ -403,10 +403,20 @@ impl Scene {
         // only the writer allocates one, at save time. Allocate here instead,
         // the same fix-up `reset_clone_subhandles` applies to a copy (#129).
         if let EntityType::Insert(insert) = &mut entity {
+            // Nest ATTRIBs are **owned by their INSERT**: allocate the INSERT
+            // handle here (the writers already emit the INSERT handle as the
+            // ATTRIB's 330, so memory must agree) and point every nested
+            // attribute at it. The plugin/script building the INSERT cannot
+            // know the handle yet; this is the one place that can.
+            if insert.common.handle.is_null() {
+                insert.common.handle = self.document.allocate_handle();
+            }
+            let owner = insert.common.handle;
             for attribute in &mut insert.attributes {
                 if attribute.common.handle.is_null() {
                     attribute.common.handle = self.document.allocate_handle();
                 }
+                attribute.common.owner_handle = owner;
             }
         }
         // Only block sentinels mutate a block definition and require rebuilding

@@ -1621,14 +1621,30 @@ mod tests {
             insert.attributes.push(attribute);
         }
         let insert_handle = app.tabs[i].scene.add_entity(EntityType::Insert(insert));
-        if let Some(EntityType::Insert(insert)) =
-            app.tabs[i].scene.document.get_entity_mut(insert_handle)
-        {
-            for attribute in &mut insert.attributes {
-                attribute.common.owner_handle = insert_handle;
-            }
-        }
+        // ★ 不再手工补 owner：嵌套 ATTRIB 的 owner 由宿主在加入时统一写成 INSERT 句柄。
         (insert_handle, handles)
+    }
+
+    /// ⑥：新建 INSERT（含 attributes）时，宿主把每个嵌套 ATTRIB 的 owner 写成
+    /// **该 INSERT 的句柄**（而不是块记录，也不留空）——插件/脚本不必知道句柄。
+    #[test]
+    fn nested_attributes_are_owned_by_their_insert_on_add() {
+        use codec::entities::EntityType;
+        let mut app = OpenCADStudio::new_for_test();
+        app.automation_op(r#"{"op":"new"}"#);
+        let (insert, attributes) = insert_with_inline_attributes(&mut app);
+        let document = &app.tabs[app.active_tab].scene.document;
+        let Some(EntityType::Insert(insert_entity)) = document.get_entity(insert) else {
+            panic!("INSERT 应已加入");
+        };
+        assert_eq!(insert_entity.attributes.len(), 2);
+        for (attribute, handle) in insert_entity.attributes.iter().zip(&attributes) {
+            assert_eq!(attribute.common.handle, *handle, "嵌套 ATTRIB 要拿到真句柄");
+            assert_eq!(
+                attribute.common.owner_handle, insert,
+                "嵌套 ATTRIB 的 owner 必须是 INSERT 句柄（不得为空或指向块记录）"
+            );
+        }
     }
 
     #[test]
