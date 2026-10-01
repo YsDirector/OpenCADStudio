@@ -168,6 +168,14 @@ pub(crate) fn entity_type_matches(entity: &codec::EntityType, requested: &str) -
     record_name != "ENTITY" && record_name.eq_ignore_ascii_case(requested)
 }
 
+/// The layer name a `layer` filter compares against. An empty stored layer is
+/// the default layer `0` (DWG semantics; plugin-written entities may leave it
+/// blank) — so `layer:"0"` finds them and `layer:"5剖面线层"` does not.
+fn entity_layer_name(entity: &codec::EntityType) -> &str {
+    let layer = entity.common().layer.as_str();
+    if layer.is_empty() { "0" } else { layer }
+}
+
 /// One entity as JSON. Summary mode carries identity only, geometry adds the
 /// entity's defining values, and full also includes its world bounds.
 pub(crate) fn entity_json(e: &codec::EntityType, detail: &str) -> Value {
@@ -760,14 +768,18 @@ impl OpenCADStudio {
                     }
                     // Or by type / layer.
                     let type_filter = req["type"].as_str();
-                    let layer_filter = req["layer"].as_str();
+                    // 与 query 同口径：空串/纯空白 = 不过滤，层名 "0" 是合法层名。
+                    let layer_filter = req["layer"]
+                        .as_str()
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty());
                     if type_filter.is_some() || layer_filter.is_some() {
                         let handles: Vec<codec::Handle> = self.tabs[i]
                             .scene
                             .document
                             .entities()
                             .filter(|e| type_filter.is_none_or(|t| entity_type_matches(e, t)))
-                            .filter(|e| layer_filter.is_none_or(|l| e.common().layer == l))
+                            .filter(|e| layer_filter.is_none_or(|l| entity_layer_name(e) == l))
                             .map(|e| e.common().handle)
                             .collect();
                         for h in handles {
@@ -942,7 +954,12 @@ impl OpenCADStudio {
         }
 
         let type_filter = req["type"].as_str();
-        let layer_filter = req["layer"].as_str();
+        // 层名 "0" 是合法层名（只有缺省/空串/纯空白才表示“不过滤”）：空串当层名
+        // 会把查询变成“只要空层实体”，结果条数恒为 0。
+        let layer_filter = req["layer"]
+            .as_str()
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
         let handles: Option<std::collections::HashSet<u64>> = req["handles"]
             .as_array()
             .map(|values| {
@@ -1030,7 +1047,7 @@ impl OpenCADStudio {
                 continue;
             }
             if type_filter.is_some_and(|value| !entity_type_matches(e, value))
-                || layer_filter.is_some_and(|value| e.common().layer != value)
+                || layer_filter.is_some_and(|value| entity_layer_name(e) != value)
             {
                 continue;
             }
@@ -1433,6 +1450,61 @@ mod tests {
         let lines = app.automation_op(r#"{"op":"query","type":"Line"}"#);
         assert_eq!(lines["entities"][0]["layer"], "Annotations");
     }
+    #[test]
+    fn query_layer_filter_treats_zero_as_a_layer_and_empty_as_no_filter() {
+        // 用户实测（2026-10-01 抄图）：`layer:"0"` 过滤对 0 层实体不生效。
+        // 口径：层名 "0" 是合法层名；只有缺省/空串/纯空白才表示“不过滤”，
+        // 且 layer 字段为空的实体（插件写入可能留空）就是 0 层实体。
+        let mut app = super::OpenCADStudio::new_for_test();
+        app.automation_op(r#"{"op":"new"}"#);
+        app.automation_op(r#"{"op":"run","cmd":"LINE 0,0 10,0"}"#); // 0 层
+        app.automation_op(r#"{"op":"run","cmd":"LAYER NEW 5剖面线层"}"#);
+        app.automation_op(r#"{"op":"run","cmd":"CLAYER 5剖面线层"}"#);
+        app.automation_op(r#"{"op":"run","cmd":"LINE 0,0 0,10"}"#); // 5剖面线层
+
+        let all = app.automation_op(r#"{"op":"query","type":"Line","detail":"summary"}"#);
+        assert_eq!(all["count"], 2, "不传 layer ⇒ 全返回：{all}");
+        let zero = app.automation_op(
+            r#"{"op":"query","type":"Line","layer":"0","detail":"summary"}"#,
+        );
+        assert_eq!(zero["count"], 1, "layer:\"0\" 只返回 0 层：{zero}");
+        assert_eq!(zero["entities"][0]["layer"], "0", "{zero}");
+        let five = app.automation_op(
+            r#"{"op":"query","type":"Line","layer":"5剖面线层","detail":"summary"}"#,
+        );
+        assert_eq!(five["count"], 1, "layer:\"5剖面线层\" 不变：{five}");
+        assert_eq!(five["entities"][0]["layer"], "5剖面线层", "{five}");
+        // 空串/纯空白 = 不过滤（不是“查空层实体”）。
+        let blank = app.automation_op(
+            r#"{"op":"query","type":"Line","layer":"","detail":"summary"}"#,
+        );
+        assert_eq!(blank["count"], 2, "layer:\"\" = 不过滤：{blank}");
+        let spaces = app.automation_op(
+            r#"{"op":"query","type":"Line","layer":"   ","detail":"summary"}"#,
+        );
+        assert_eq!(spaces["count"], 2, "layer 全空白 = 不过滤：{spaces}");
+
+        // layer 字段为空的实体 = 0 层实体（DWG 语义：0 是默认层）。
+        let five_handle = five["entities"][0]["handle"].as_str().unwrap().to_owned();
+        let value = u64::from_str_radix(&five_handle, 16).unwrap();
+        app.tabs[app.active_tab]
+            .scene
+            .document
+            .get_entity_mut(codec::Handle::new(value))
+            .unwrap()
+            .common_mut()
+            .layer
+            .clear();
+        let zero = app.automation_op(
+            r#"{"op":"query","type":"Line","layer":"0","detail":"summary"}"#,
+        );
+        assert_eq!(zero["count"], 2, "空层实体归属 0 层：{zero}");
+        let five = app.automation_op(
+            r#"{"op":"query","type":"Line","layer":"5剖面线层","detail":"summary"}"#,
+        );
+        assert_eq!(five["count"], 0, "空层实体不再算 5剖面线层：{five}");
+    }
+
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn built_in_edits_advance_plugin_document_fingerprint_once() {
