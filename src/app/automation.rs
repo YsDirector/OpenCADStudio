@@ -231,6 +231,23 @@ pub(crate) fn entity_json(e: &codec::EntityType, detail: &str) -> Value {
             map.insert("position".into(), v3(t.insertion_point));
             map.insert("height".into(), json!(t.height));
         }
+        // An INSERT's inline ATTRIB. It has no document index entry, so this
+        // arm is what makes `handles:[<ATTRIB handle>]` (and
+        // `include:"attributes"`) return more than identity: the owning INSERT
+        // plus the text, placement, height and style a script needs to move it.
+        E::AttributeEntity(att) => {
+            map.insert("tag".into(), json!(att.tag));
+            map.insert("value".into(), json!(att.value));
+            map.insert(
+                "text".into(),
+                json!(crate::entities::text_support::resolve_dxf_special_chars(&att.value)),
+            );
+            map.insert("position".into(), v3(att.insertion_point));
+            map.insert("alignment_point".into(), v3(att.alignment_point));
+            map.insert("rotation".into(), json!(att.rotation));
+            map.insert("height".into(), json!(att.height));
+            map.insert("style".into(), json!(att.text_style));
+        }
         E::LwPolyline(pl) => {
             let pts: Vec<Value> = pl
                 .vertices
@@ -1038,94 +1055,147 @@ impl OpenCADStudio {
             }
         }
 
-        let mut matched = Vec::new();
-        for e in tab.scene.document.entities() {
-            if handles
-                .as_ref()
-                .is_some_and(|handles| !handles.contains(&e.common().handle.value()))
-            {
-                continue;
+        // Inline INSERT attributes (ATTRIB) are absent from the document
+        // entity index, so a plain query cannot see them. They stay out of
+        // every result set unless the caller asks for them explicitly — by
+        // handle, or with `include:"attributes"` — which keeps existing
+        // queries (and their counts) exactly as they were.
+        let include_attributes = match req["include"].as_str() {
+            None => false,
+            Some("attributes") => true,
+            Some(other) => {
+                return err(format!(
+                    "query include must be \"attributes\", got {other:?}"
+                ))
             }
-            if type_filter.is_some_and(|value| !entity_type_matches(e, value))
-                || layer_filter.is_some_and(|value| entity_layer_name(e) != value)
-            {
-                continue;
-            }
-            if let Some(filters) = req["where"].as_array() {
-                // Filters address  with RFC 6901 pointers, the
-                // same contract as the records op.
-                let properties = serde_json::to_value(e).ok().and_then(|wrapper| {
-                    wrapper.as_object().and_then(|object| object.values().next().cloned())
-                });
-                let mut matches = true;
-                for filter in filters {
-                    let path = filter["path"].as_str().unwrap_or("");
-                    let actual = if path.is_empty() {
-                        properties.as_ref()
-                    } else {
-                        properties.as_ref().and_then(|properties| properties.pointer(path))
-                    };
-                    match crate::app::record_api::compare(
-                        actual,
-                        filter["op"].as_str().unwrap_or("eq"),
-                        filter.get("value"),
-                    ) {
-                        Ok(true) => {}
-                        Ok(false) => {
-                            matches = false;
-                            break;
+        };
+        let attributes_in_scope = include_attributes || handles.is_some();
+
+        // One filter chain, run over the top-level entities and (only when in
+        // scope) over the inline ATTRIBs, so both scans share one contract.
+        let document = &tab.scene.document;
+        let consider =
+            |e: &codec::EntityType| -> Result<Option<(Option<f64>, Value)>, String> {
+                if handles
+                    .as_ref()
+                    .is_some_and(|handles| !handles.contains(&e.common().handle.value()))
+                {
+                    return Ok(None);
+                }
+                if type_filter.is_some_and(|value| !entity_type_matches(e, value))
+                    || layer_filter.is_some_and(|value| entity_layer_name(e) != value)
+                {
+                    return Ok(None);
+                }
+                if let Some(filters) = req["where"].as_array() {
+                    // Filters address  with RFC 6901 pointers, the
+                    // same contract as the records op.
+                    let properties = serde_json::to_value(e).ok().and_then(|wrapper| {
+                        wrapper.as_object().and_then(|object| object.values().next().cloned())
+                    });
+                    for filter in filters {
+                        let path = filter["path"].as_str().unwrap_or("");
+                        let actual = if path.is_empty() {
+                            properties.as_ref()
+                        } else {
+                            properties.as_ref().and_then(|properties| properties.pointer(path))
+                        };
+                        match crate::app::record_api::compare(
+                            actual,
+                            filter["op"].as_str().unwrap_or("eq"),
+                            filter.get("value"),
+                        ) {
+                            Ok(true) => {}
+                            Ok(false) => return Ok(None),
+                            Err(error) => return Err(format!("where filter: {error}")),
                         }
-                        Err(error) => return err(format!("where filter: {error}")),
                     }
                 }
-                if !matches {
-                    continue;
+                if let Some(bounds) = bounds {
+                    let (min, max) = crate::scene::convert::tess::entity_bounds_in(document, e);
+                    if max[0] < bounds[0]
+                        || max[1] < bounds[1]
+                        || min[0] > bounds[2]
+                        || min[1] > bounds[3]
+                    {
+                        return Ok(None);
+                    }
+                }
+                let curve = (near.is_some() || contains.is_some())
+                    .then(|| crate::entities::curve::entity_curve_xy(e))
+                    .flatten();
+                if let Some(point) = contains {
+                    let Some(curve) = curve.as_ref().filter(|curve| curve.is_closed()) else {
+                        return Ok(None);
+                    };
+                    if !kernel::geom2d::contains(
+                        std::slice::from_ref(curve),
+                        point,
+                        kernel::geom2d::Tolerance::default(),
+                    ) {
+                        return Ok(None);
+                    }
+                }
+                let nearest = near.and_then(|point| {
+                    curve
+                        .as_ref()
+                        .map(|curve| kernel::geom2d::closest_point(curve, point))
+                });
+                if near.is_some() && nearest.is_none() {
+                    return Ok(None);
+                }
+                let mut entity = entity_json(e, detail);
+                if let Some(nearest) = nearest {
+                    let object = entity.as_object_mut().expect("entity JSON object");
+                    object.insert("distance".into(), json!(nearest.distance));
+                    object.insert(
+                        "closest_point".into(),
+                        json!([nearest.point[0], nearest.point[1]]),
+                    );
+                    object.insert("parameter".into(), json!(nearest.t));
+                }
+                Ok(Some((nearest.map(|nearest| nearest.distance), entity)))
+            };
+
+        let mut matched = Vec::new();
+        for e in document.entities() {
+            match consider(e) {
+                Ok(Some(entry)) => matched.push(entry),
+                Ok(None) => {}
+                Err(error) => return err(error),
+            }
+        }
+        if attributes_in_scope {
+            // The owning INSERT is the authoritative "owner" — an ATTRIB's stored
+            // owner handle is not always it (files written by this host point
+            // nested ATTRIBs at the block record), so report the container the
+            // scan actually found. The stored value stays visible in
+            // `properties.common.owner_handle` of a full record.
+            let attributes: Vec<(codec::Handle, codec::EntityType)> = document
+                .entities()
+                .filter_map(|entity| match entity {
+                    codec::EntityType::Insert(insert) => Some((
+                        insert.common.handle,
+                        &insert.attributes,
+                    )),
+                    _ => None,
+                })
+                .flat_map(|(owner, attributes)| {
+                    attributes.iter().map(move |attribute| {
+                        (owner, codec::EntityType::AttributeEntity(attribute.clone()))
+                    })
+                })
+                .collect();
+            for (owner, e) in &attributes {
+                match consider(e) {
+                    Ok(Some((distance, mut entry))) => {
+                        entry["owner"] = json!(format!("{:X}", owner.value()));
+                        matched.push((distance, entry));
+                    }
+                    Ok(None) => {}
+                    Err(error) => return err(error),
                 }
             }
-            if let Some(bounds) = bounds {
-                let (min, max) = crate::scene::convert::tess::entity_bounds_in(&tab.scene.document, e);
-                if max[0] < bounds[0]
-                    || max[1] < bounds[1]
-                    || min[0] > bounds[2]
-                    || min[1] > bounds[3]
-                {
-                    continue;
-                }
-            }
-            let curve = (near.is_some() || contains.is_some())
-                .then(|| crate::entities::curve::entity_curve_xy(e))
-                .flatten();
-            if let Some(point) = contains {
-                let Some(curve) = curve.as_ref().filter(|curve| curve.is_closed()) else {
-                    continue;
-                };
-                if !kernel::geom2d::contains(
-                    std::slice::from_ref(curve),
-                    point,
-                    kernel::geom2d::Tolerance::default(),
-                ) {
-                    continue;
-                }
-            }
-            let nearest = near.and_then(|point| {
-                curve
-                    .as_ref()
-                    .map(|curve| kernel::geom2d::closest_point(curve, point))
-            });
-            if near.is_some() && nearest.is_none() {
-                continue;
-            }
-            let mut entity = entity_json(e, detail);
-            if let Some(nearest) = nearest {
-                let object = entity.as_object_mut().expect("entity JSON object");
-                object.insert("distance".into(), json!(nearest.distance));
-                object.insert(
-                    "closest_point".into(),
-                    json!([nearest.point[0], nearest.point[1]]),
-                );
-                object.insert("parameter".into(), json!(nearest.t));
-            }
-            matched.push((nearest.map(|nearest| nearest.distance), entity));
         }
         if near.is_some() {
             matched.sort_by(|left, right| {
@@ -1525,6 +1595,92 @@ mod tests {
         assert_eq!(
             selected["selected"], 0,
             "空层实体不再算 5剖面线层：{selected}"
+        );
+    }
+
+    /// A symbol INSERT with two inline ATTRIBs — the shape the frame and
+    /// roughness blocks use, where the text lives inside the block reference
+    /// and is therefore invisible to a plain query.
+    fn insert_with_inline_attributes(app: &mut OpenCADStudio) -> (codec::Handle, Vec<codec::Handle>) {
+        use codec::entities::{AttributeEntity, EntityType, Insert};
+        use codec::types::Vector3;
+
+        let i = app.active_tab;
+        let mut insert = Insert::new("SYM", Vector3::new(10.0, 20.0, 0.0));
+        let mut handles = Vec::new();
+        for (tag, value) in [("RA", "Ra 6.3"), ("CC", "C2")] {
+            let mut attribute = AttributeEntity::new(tag.to_string(), value.to_string());
+            attribute.common.handle = app.tabs[i].scene.document.allocate_handle();
+            attribute.common.layer = "8符号标注层".into();
+            attribute.insertion_point = Vector3::new(12.0, 21.0, 0.0);
+            attribute.alignment_point = Vector3::new(12.0, 21.0, 0.0);
+            attribute.rotation = 0.5;
+            attribute.height = 2.5;
+            attribute.text_style = "OCSM_GB".into();
+            handles.push(attribute.common.handle);
+            insert.attributes.push(attribute);
+        }
+        let insert_handle = app.tabs[i].scene.add_entity(EntityType::Insert(insert));
+        if let Some(EntityType::Insert(insert)) =
+            app.tabs[i].scene.document.get_entity_mut(insert_handle)
+        {
+            for attribute in &mut insert.attributes {
+                attribute.common.owner_handle = insert_handle;
+            }
+        }
+        (insert_handle, handles)
+    }
+
+    #[test]
+    fn query_addresses_inline_insert_attributes_only_when_asked() {
+        let mut app = OpenCADStudio::new_for_test();
+        app.automation_op(r#"{"op":"new"}"#);
+        let (insert, attributes) = insert_with_inline_attributes(&mut app);
+        let attribute_handle = format!("{:X}", attributes[0].value());
+
+        // A query that does not name a handle keeps its exact result set: the
+        // inline ATTRIBs stay out of it, even when its type filter would name
+        // them.
+        let plain = app.automation_op(r#"{"op":"query","detail":"full"}"#);
+        assert_eq!(plain["count"], 1, "{plain}");
+        assert_eq!(plain["entities"][0]["type"], "Block Reference");
+        let by_type = app.automation_op(r#"{"op":"query","type":"Attrib","detail":"full"}"#);
+        assert_eq!(by_type["count"], 0, "{by_type}");
+
+        // An explicit handle reaches the ATTRIB itself, with everything a
+        // script needs to place its text against the symbol.
+        let found = app.automation_op(&format!(
+            r#"{{"op":"query","handles":["{attribute_handle}"],"detail":"full"}}"#
+        ));
+        assert_eq!(found["count"], 1, "{found}");
+        let attribute = &found["entities"][0];
+        assert_eq!(attribute["handle"], attribute_handle);
+        assert_eq!(attribute["type"], "Attribute");
+        assert_eq!(attribute["owner"], format!("{:X}", insert.value()));
+        assert_eq!(attribute["layer"], "8符号标注层");
+        assert_eq!(attribute["tag"], "RA");
+        assert_eq!(attribute["value"], "Ra 6.3");
+        assert_eq!(attribute["position"], serde_json::json!([12.0, 21.0, 0.0]));
+        assert_eq!(attribute["rotation"], 0.5);
+        assert_eq!(attribute["height"], 2.5);
+        assert_eq!(attribute["style"], "OCSM_GB");
+        assert_eq!(attribute["properties"]["common"]["owner_handle"], insert.value());
+
+        // The explicit switch folds them into an ordinary query.
+        let included =
+            app.automation_op(r#"{"op":"query","include":"attributes","detail":"summary"}"#);
+        assert_eq!(included["count"], 3, "{included}");
+        let typed = app.automation_op(
+            r#"{"op":"query","type":"ATTRIB","include":"attributes","detail":"summary"}"#,
+        );
+        assert_eq!(typed["count"], 2, "{typed}");
+
+        // An unknown switch is refused instead of silently ignored.
+        let bad = app.automation_op(r#"{"op":"query","include":"geometry"}"#);
+        assert_eq!(bad["ok"], false, "{bad}");
+        assert!(
+            bad["error"].as_str().unwrap_or_default().contains("attributes"),
+            "{bad}"
         );
     }
 

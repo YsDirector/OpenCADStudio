@@ -988,6 +988,20 @@ impl OpenCADStudio {
                         .map(codec::Handle::new)
                         .map_err(|_| failure("invalid_handle", "Expected hexadecimal handle"))?;
                         if self.tabs[i].scene.document.get_entity(h).is_none() {
+                            // A nested ATTRIB is addressable by query and
+                            // set_properties, but it is not a top-level object:
+                            // selection, the property panel and the pick paths
+                            // all resolve handles through the document index.
+                            // Name the owner instead of a bare "does not exist".
+                            if let Some(attribute) = self.tabs[i].scene.nested_attribute(h) {
+                                return Err(failure(
+                                    "entity_absent",
+                                    format!(
+                                        "Entity {} is an inline INSERT attribute; select its owner INSERT {:X}",
+                                        v, attribute.common.owner_handle.value()
+                                    ),
+                                ));
+                            }
                             return Err(failure(
                                 "entity_absent",
                                 format!("Entity {} does not exist", v),

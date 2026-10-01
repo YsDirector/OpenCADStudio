@@ -1104,6 +1104,93 @@ fn requested_handle(request: &Value) -> Result<codec::Handle, String> {
         .ok_or_else(|| "set_properties requires a hexadecimal handle".to_string())
 }
 
+/// Read-side field names the write side spells differently, per record kind.
+///
+/// `ocs_read query` reports an INSERT's placement as `position`, and an ATTRIB
+/// as `position` / `style` / `text`; the record model stores `insert_point`,
+/// `insertion_point`, `text_style` and `value`. A caller feeding back the very
+/// name the read op printed must land on the stored field, so those names are
+/// rewritten to the canonical path before the update is applied. Only a whole
+/// field, or one of its `/x` `/y` `/z` components, is rewritten.
+fn canonical_entity_update_path(kind: &str, path: &str) -> Option<String> {
+    let aliases: &[(&str, &str)] = match kind {
+        "AttributeEntity" => &[
+            ("position", "insertion_point"),
+            ("style", "text_style"),
+            ("text", "value"),
+        ],
+        _ => return None,
+    };
+    for (alias, canonical) in aliases {
+        let Some(suffix) = path.strip_prefix('/').and_then(|rest| rest.strip_prefix(alias))
+        else {
+            continue;
+        };
+        if suffix.is_empty() || suffix.starts_with('/') {
+            return Some(format!("/{canonical}{suffix}"));
+        }
+    }
+    None
+}
+
+/// A stored `Vector3` looks like `{"x":…,"y":…,"z":…}`.
+fn is_point_object(value: &Value) -> bool {
+    value.as_object().is_some_and(|object| {
+        object.len() == 3 && ["x", "y", "z"].iter().all(|axis| object[*axis].is_number())
+    })
+}
+
+/// `[x, y, z]` as `{x, y, z}` — the array form `entity_json` prints.
+fn point_from_array(value: &Value) -> Option<Value> {
+    let values = value.as_array()?;
+    if values.len() != 3 || !values.iter().all(Value::is_number) {
+        return None;
+    }
+    Some(json!({"x":values[0],"y":values[1],"z":values[2]}))
+}
+
+/// Rewrite an entity update request into the record model's own spelling:
+/// aliases become canonical paths, and a point handed over as `[x, y, z]` is
+/// accepted wherever the stored value is a `{x, y, z}` object. Returns the
+/// request as-is (borrowed) when nothing had to be rewritten, so the common
+/// path allocates nothing.
+fn entity_update_request<'a>(
+    kind: &str,
+    properties: &Value,
+    request: &'a Value,
+) -> Result<std::borrow::Cow<'a, Value>, String> {
+    let updates = request["updates"]
+        .as_array()
+        .ok_or_else(|| "set_properties requires a non-empty updates array".to_string())?;
+    let mut edits: Vec<Value> = Vec::with_capacity(updates.len());
+    let mut rewritten = false;
+    for update in updates {
+        let mut edit = update.clone();
+        if let Some(canonical) =
+            canonical_entity_update_path(kind, update["path"].as_str().unwrap_or(""))
+        {
+            edit["path"] = Value::String(canonical);
+            rewritten = true;
+        }
+        let path = edit["path"].as_str().unwrap_or("");
+        if properties.pointer(path).is_some_and(is_point_object) {
+            for key in ["value", "expected"] {
+                if let Some(point) = edit.get(key).and_then(point_from_array) {
+                    edit[key] = point;
+                    rewritten = true;
+                }
+            }
+        }
+        edits.push(edit);
+    }
+    if !rewritten {
+        return Ok(std::borrow::Cow::Borrowed(request));
+    }
+    let mut request = request.clone();
+    request["updates"] = Value::Array(edits);
+    Ok(std::borrow::Cow::Owned(request))
+}
+
 fn apply_updates(
     properties: &mut Value,
     request: &Value,
@@ -1481,18 +1568,36 @@ impl OpenCADStudio {
             "entities" => {
                 let handle =
                     requested_handle(request).map_err(|error| failure("invalid_handle", error))?;
-                if self.tabs[i].scene.is_layer_locked(handle) {
-                    return Err(failure("layer_locked", "entity is on a locked layer"));
-                }
+                // An ATTRIB is stored inline on its INSERT, so the document's
+                // entity index has no entry for it: fall back to the owner's
+                // inline attributes before declaring the record absent.
                 let source = self.tabs[i]
                     .scene
                     .document
                     .get_entity(handle)
                     .cloned()
+                    .or_else(|| {
+                        self.tabs[i]
+                            .scene
+                            .nested_attribute(handle)
+                            .cloned()
+                            .map(codec::EntityType::AttributeEntity)
+                    })
                     .ok_or_else(|| failure("record_absent", "entity does not exist"))?;
+                // A nested attribute is locked with its owning INSERT, the same
+                // rule the plugin transaction path applies.
+                let lock_handle = match &source {
+                    codec::EntityType::AttributeEntity(attribute) => attribute.common.owner_handle,
+                    _ => handle,
+                };
+                if self.tabs[i].scene.is_layer_locked(lock_handle) {
+                    return Err(failure("layer_locked", "entity is on a locked layer"));
+                }
                 let (kind, mut properties) =
                     enum_parts(&source).map_err(|error| failure("serialization_failed", error))?;
-                paths = apply_updates(&mut properties, request, collection)
+                let request = entity_update_request(&kind, &properties, request)
+                    .map_err(|error| failure("invalid_update", error))?;
+                paths = apply_updates(&mut properties, &request, collection)
                     .map_err(|error| failure("invalid_update", error))?;
                 let mut edited: codec::EntityType = decode_enum(&kind, properties)
                     .map_err(|error| failure("invalid_value", error))?;
@@ -1503,7 +1608,13 @@ impl OpenCADStudio {
                 changed = edited != source;
                 if changed {
                     self.push_undo_snapshot(i, "MCP SET_PROPERTIES");
-                    if !self.tabs[i].scene.update_entity(edited) {
+                    let updated = match edited {
+                        codec::EntityType::AttributeEntity(attribute) => {
+                            self.tabs[i].scene.update_nested_attribute(attribute)
+                        }
+                        entity => self.tabs[i].scene.update_entity(entity),
+                    };
+                    if !updated {
                         self.discard_last_undo_entry(i);
                         return Err(failure("update_failed", "entity could not be updated"));
                     }
@@ -1832,6 +1943,119 @@ mod tests {
             panic!("expected insert")
         };
         assert_eq!(insert.insert_point.x, 1.5);
+    }
+
+    /// A symbol INSERT with two inline ATTRIBs, each carrying a real handle and
+    /// its owner — the shape the frame / roughness blocks store their text in.
+    fn symbol_insert(app: &mut OpenCADStudio, at: Vector3) -> (Handle, Vec<Handle>) {
+        let i = app.active_tab;
+        let mut insert = Insert::new("SYM", at);
+        let mut handles = Vec::new();
+        for (tag, value) in [("RA", "Ra 6.3"), ("CC", "C2")] {
+            let mut attribute = AttributeEntity::new(tag.to_string(), value.to_string());
+            attribute.common.handle = app.tabs[i].scene.document.allocate_handle();
+            attribute.insertion_point = Vector3::new(at.x + 1.0, at.y + 1.0, 0.0);
+            attribute.alignment_point = Vector3::new(at.x + 1.0, at.y + 1.0, 0.0);
+            attribute.height = 2.5;
+            attribute.text_style = "OCSM_GB".into();
+            handles.push(attribute.common.handle);
+            insert.attributes.push(attribute);
+        }
+        let insert_handle = app.tabs[i].scene.add_entity(EntityType::Insert(insert));
+        if let Some(EntityType::Insert(insert)) =
+            app.tabs[i].scene.document.get_entity_mut(insert_handle)
+        {
+            for attribute in &mut insert.attributes {
+                attribute.common.owner_handle = insert_handle;
+            }
+        }
+        (insert_handle, handles)
+    }
+
+    fn attribute_at(app: &OpenCADStudio, handle: Handle) -> AttributeEntity {
+        app.tabs[app.active_tab]
+            .scene
+            .nested_attribute(handle)
+            .cloned()
+            .expect("inline attribute")
+    }
+
+    fn assert_point_close(actual: Vector3, expected: Vector3, what: &str) {
+        let close = [actual.x, actual.y, actual.z]
+            .iter()
+            .zip([expected.x, expected.y, expected.z])
+            .all(|(actual, expected)| (actual - expected).abs() < 1e-9);
+        assert!(close, "{what}: got {actual:?}, expected {expected:?}");
+    }
+
+    #[test]
+    fn set_properties_edits_an_inline_insert_attribute_by_handle() {
+        let mut app = OpenCADStudio::new_for_test();
+        app.automation_op(r#"{"op":"new"}"#);
+        let (_, attributes) = symbol_insert(&mut app, Vector3::new(10.0, 20.0, 0.0));
+        let handle = format!("{:X}", attributes[0].value());
+
+        // The names `ocs_read query` prints for an ATTRIB (`position`, `style`,
+        // `text`), and the array point form it prints, all land on the stored
+        // fields.
+        let edited = execute(
+            &mut app,
+            json!({
+                "op":"set_properties",
+                "collection":"entities",
+                "handle":handle,
+                "updates":[
+                    {"path":"/position","expected":[11,21,0],"value":[13.0,24.0,0.0]},
+                    {"path":"/rotation","value":0.25},
+                    {"path":"/height","value":3.5},
+                    {"path":"/style","value":"GB_STYLE"},
+                    {"path":"/text","value":"Ra 3.2"}
+                ]
+            }),
+            "edit-attribute",
+        );
+        assert_eq!(edited["status"], "completed", "{edited}");
+        assert_eq!(edited["result"]["changed"], true);
+        assert_eq!(
+            edited["result"]["paths"],
+            json!([
+                "/insertion_point",
+                "/rotation",
+                "/height",
+                "/text_style",
+                "/value"
+            ])
+        );
+        let attribute = attribute_at(&app, attributes[0]);
+        assert_point_close(attribute.insertion_point, Vector3::new(13.0, 24.0, 0.0), "position");
+        assert_eq!(attribute.rotation, 0.25);
+        assert_eq!(attribute.height, 3.5);
+        assert_eq!(attribute.text_style, "GB_STYLE");
+        assert_eq!(attribute.value, "Ra 3.2");
+
+        // Read back exactly what was written (radians, drawing units).
+        let read = app.automation_op(&format!(
+            r#"{{"op":"query","handles":["{handle}"],"detail":"full"}}"#
+        ));
+        assert_eq!(read["entities"][0]["rotation"], 0.25);
+        assert_eq!(read["entities"][0]["position"], json!([13.0, 24.0, 0.0]));
+        assert_eq!(read["entities"][0]["style"], "GB_STYLE");
+        assert_eq!(read["entities"][0]["value"], "Ra 3.2");
+
+        // A wrong JSON type is refused loudly and changes nothing.
+        let bad = execute(
+            &mut app,
+            json!({
+                "op":"set_properties",
+                "collection":"entities",
+                "handle":handle,
+                "updates":[{"path":"/height","value":"tall"}]
+            }),
+            "attribute-bad-height",
+        );
+        assert_ne!(bad["status"], "completed", "{bad}");
+        assert_eq!(bad["code"], "invalid_value");
+        assert_eq!(attribute_at(&app, attributes[0]).height, 3.5);
     }
 
     #[test]

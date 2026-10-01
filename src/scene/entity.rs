@@ -295,6 +295,18 @@ impl Scene {
     }
 
     fn add_entity_internal(&mut self, mut entity: EntityType, bump: bool) -> Handle {
+        // An INSERT's ATTRIBs carry their own handles in a DWG/DXF file; one
+        // built in-process (plugin `AddEntities`, paste) may leave them null,
+        // and a null handle cannot be addressed by query or set_properties —
+        // only the writer allocates one, at save time. Allocate here instead,
+        // the same fix-up `reset_clone_subhandles` applies to a copy (#129).
+        if let EntityType::Insert(insert) = &mut entity {
+            for attribute in &mut insert.attributes {
+                if attribute.common.handle.is_null() {
+                    attribute.common.handle = self.document.allocate_handle();
+                }
+            }
+        }
         // Only block sentinels mutate a block definition and require rebuilding
         // the block cache. A top-level INSERT merely references an existing
         // definition, so adding it can patch just that new render handle.
@@ -645,6 +657,66 @@ impl Scene {
             self.bump_entities(&[(handle, ChangeKind::Modified)]);
         }
         true
+    }
+
+    /// The INSERT attribute (ATTRIB) carrying `handle`, if any.
+    ///
+    /// ATTRIBs live inline inside their owner INSERT (`Insert::attributes`) and
+    /// are therefore absent from the document entity index, so every
+    /// handle-addressed path has to fall back to this scan. `None` when the
+    /// handle belongs to a top-level entity (or to nothing).
+    pub fn nested_attribute(&self, handle: Handle) -> Option<&codec::entities::AttributeEntity> {
+        self.document.entities().find_map(|entity| match entity {
+            EntityType::Insert(insert) => insert
+                .attributes
+                .iter()
+                .find(|attribute| attribute.common.handle == handle),
+            _ => None,
+        })
+    }
+
+    /// Replace the inline ATTRIB carrying `attribute`'s handle inside its
+    /// owning INSERT and refresh the derived caches through
+    /// [`Scene::update_entity`]. This is the single nested-attribute write
+    /// path: the plugin host's `replace_nested_attribute` and the record API
+    /// both route here. Returns `false` when no INSERT holds that attribute.
+    ///
+    /// The container is found by scanning for the attribute handle, not by
+    /// `owner_handle`: an ATTRIB's stored owner is not always its INSERT (files
+    /// written by this host point nested ATTRIBs at the block record, and
+    /// plugin-built ones leave it null), while the handle is unique per
+    /// document. This is the same lookup [`Scene::nested_attribute`] uses.
+    pub fn update_nested_attribute(
+        &mut self,
+        attribute: codec::entities::AttributeEntity,
+    ) -> bool {
+        let handle = attribute.common.handle;
+        let Some(mut insert) = self
+            .document
+            .entities()
+            .find_map(|entity| match entity {
+                EntityType::Insert(insert)
+                    if insert
+                        .attributes
+                        .iter()
+                        .any(|candidate| candidate.common.handle == handle) =>
+                {
+                    Some(insert.clone())
+                }
+                _ => None,
+            })
+        else {
+            return false;
+        };
+        let Some(slot) = insert
+            .attributes
+            .iter_mut()
+            .find(|candidate| candidate.common.handle == handle)
+        else {
+            return false;
+        };
+        *slot = attribute;
+        self.update_entity(EntityType::Insert(insert))
     }
 
     /// Rebuild the per-entity derived caches (hatch fill / raster image / solid

@@ -70,17 +70,11 @@ impl<'a> HostSession<'a> {
     }
 
     fn nested_attribute(&self, handle: Handle) -> Option<EntityType> {
-        self.document().entities().find_map(|entity| {
-            let EntityType::Insert(insert) = entity else {
-                return None;
-            };
-            insert
-                .attributes
-                .iter()
-                .find(|attribute| attribute.common.handle == handle)
-                .cloned()
-                .map(EntityType::AttributeEntity)
-        })
+        self.app.tabs[self.tab]
+            .scene
+            .nested_attribute(handle)
+            .cloned()
+            .map(EntityType::AttributeEntity)
     }
 
     fn host_model_entity(&self, handle: Handle) -> Option<EntityType> {
@@ -91,23 +85,9 @@ impl<'a> HostSession<'a> {
     }
 
     fn replace_nested_attribute(&mut self, attribute: codec::entities::AttributeEntity) -> bool {
-        let owner = attribute.common.owner_handle;
-        let handle = attribute.common.handle;
-        let Some(EntityType::Insert(mut insert)) = self.document().get_entity(owner).cloned()
-        else {
-            return false;
-        };
-        let Some(slot) = insert
-            .attributes
-            .iter_mut()
-            .find(|candidate| candidate.common.handle == handle)
-        else {
-            return false;
-        };
-        *slot = attribute;
         self.app.tabs[self.tab]
             .scene
-            .update_entity(EntityType::Insert(insert))
+            .update_nested_attribute(attribute)
     }
 
     pub fn document_view(&mut self) -> Option<ocs_plugin_api::shm::DocumentViewInfo> {
