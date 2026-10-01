@@ -60,6 +60,12 @@
 #   OCSM_FRAME_SRC=<目录>      从该目录装 `*.dwg` 图框（可选；已存在的同名文件不覆盖）
 #   OCSM_REQUIRE_FRAME=1      严格模式：frame/ 里一个图框都没有 ⇒ 按失败处理（非零退出）
 #                             —— 不设就是默认的“警告 + 指路 + rc 0”
+#   OCSM_HANDBOOK_FROM_HEAD=1 手册改装**提交态**的干净版（`git archive HEAD
+#                             crates/ocs_ocsm/handbook` 导出到临时目录后安装，并删掉安装目录里
+#                             HEAD 没有的 *.md）—— 不动 git 工作区（不用 stash/checkout）。
+#                             ★ 默认**不设** = 装**工作区**那一份（**包括别人未提交的 WIP**）：
+#                             这是想要的行为（OCS 里就要看到最新手册）⇒ 默认行为不改；但每次
+#                             都会在输出里点明来源，有未提交改动时列出「改 N / 未跟踪 N」。
 # 旧变量 `OCSM_SKIP_FRAME_CHECK` 已**删除**（默认就不再因 frame 为空而失败，它已无意义；
 # 传了也只是被忽略的空字符串，不会有任何效果）。
 set -euo pipefail
@@ -122,8 +128,67 @@ sed -e "s|__RUSTC_VERSION__|${RUSTC_VER}|" \
 # 手册：**递归**装（含 en/ 英译篇）。跳过 handbook/tools/ —— 那里面有
 # install-handbook.sh（「仓库 → 安装目录」同步脚本），装进安装目录后它的 SRC/DST 会同时在
 # 安装目录（`find -delete` 后自拷贝）⇒ 一跑就把已部署手册清空；且运行期只读顶层 md 与 en/。
-echo "==> 装手册 handbook/（递归，含 en/；跳过 tools/）"
-copy_tree "$SRC/handbook" "$PLUGIN_DIR/handbook" '^tools/'
+#
+# ★ 来源（2026-09-29 起显式提示）：默认装的是**工作区** $SRC/handbook —— 包括**未提交**的 WIP。
+#   用户已确认这是想要的行为（在 OCS 里就是要看最新手册），所以默认行为一字不改；但必须在
+#   输出里说清来源与未提交改动，别让人以为装的是提交态（那要显式 OCSM_HANDBOOK_FROM_HEAD=1）。
+HANDBOOK_SRC_DIR="$SRC/handbook"
+HANDBOOK_HEAD_TMP=""
+HANDBOOK_ORIGIN="工作区 crates/ocs_ocsm/handbook"
+HANDBOOK_DIRTY=""
+if [[ "${OCSM_HANDBOOK_FROM_HEAD:-}" == "1" ]]; then
+    HANDBOOK_HEAD_TMP=$(mktemp -d "${TMPDIR:-/tmp}/ocsm-handbook-head.XXXXXX")
+    trap 'rm -rf "$HANDBOOK_HEAD_TMP"' EXIT
+    if ! git archive HEAD crates/ocs_ocsm/handbook | tar -x -C "$HANDBOOK_HEAD_TMP"; then
+        echo "✗ OCSM_HANDBOOK_FROM_HEAD=1：git archive HEAD crates/ocs_ocsm/handbook | tar -x 失败" >&2
+        exit 1
+    fi
+    HANDBOOK_SRC_DIR="$HANDBOOK_HEAD_TMP/crates/ocs_ocsm/handbook"
+    if [[ ! -d "$HANDBOOK_SRC_DIR" ]]; then
+        echo "✗ OCSM_HANDBOOK_FROM_HEAD=1：HEAD 提交态里没有 crates/ocs_ocsm/handbook" >&2
+        exit 1
+    fi
+    HANDBOOK_ORIGIN="HEAD $(git rev-parse --short HEAD) 提交态"
+    echo "==> 装手册 handbook/（递归，含 en/；跳过 tools/）：本次装的是 HEAD 版本（$HANDBOOK_ORIGIN；工作区未提交改动**不**装）"
+else
+    echo "==> 装手册 handbook/（递归，含 en/；跳过 tools/）"
+fi
+copy_tree "$HANDBOOK_SRC_DIR" "$PLUGIN_DIR/handbook" '^tools/'
+
+if [[ -n "$HANDBOOK_HEAD_TMP" ]]; then
+    # 干净版语义：安装目录里 HEAD 没有的 *.md 要删掉，否则“装的是 HEAD 版本”名不副实
+    # （工作区那份未提交的新章会赖在安装目录里）。只删安装目录 handbook/ 下的 *.md，跳过 tools/。
+    while IFS= read -r -d '' rel; do
+        rel="${rel#./}"
+        if [[ "$rel" == tools/* ]]; then
+            continue
+        fi
+        if [[ ! -f "$HANDBOOK_SRC_DIR/$rel" ]]; then
+            rm -f -- "$PLUGIN_DIR/handbook/$rel"
+            echo "    - 删除安装目录里 HEAD 没有的手册篇：$rel"
+        fi
+    done < <(cd "$PLUGIN_DIR/handbook" && find . -type f -name '*.md' -print0)
+    echo "==> handbook 来源：**$HANDBOOK_ORIGIN**（OCSM_HANDBOOK_FROM_HEAD=1）"
+else
+    echo "==> handbook 来源：**工作区** $HANDBOOK_SRC_DIR（默认行为；要装提交态干净版：OCSM_HANDBOOK_FROM_HEAD=1）"
+    if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+        echo "    (不是 git 工作树 ⇒ 无法判断未提交改动；装的就是工作区当前内容)"
+    else
+        HANDBOOK_DIRTY=$(git -c core.quotePath=false status --porcelain -- "$SRC/handbook" || true)
+        if [[ -z "$HANDBOOK_DIRTY" ]]; then
+            echo "    该目录无未提交改动（内容与 HEAD 一致）"
+        else
+            n_mod=0; n_new=0; listing=""
+            while IFS= read -r line; do
+                [[ -n "$line" ]] || continue
+                if [[ "${line:0:2}" == "??" ]]; then n_new=$((n_new+1)); else n_mod=$((n_mod+1)); fi
+                listing+="      $line"$'\n'
+            done <<<"$HANDBOOK_DIRTY"
+            echo "    ⚠ 该目录有**未提交改动** ⇒ 本次一并装进应用（改 $n_mod 个 / 未跟踪 $n_new 个；git status --porcelain -- $SRC/handbook）："
+            printf '%s' "$listing"
+        fi
+    fi
+fi
 
 # 明细表模板块：跳过 *.bak（工作副本）与 settings.json（运行期状态，下面单独处理）
 echo "==> 装明细表模板块 bom/（跳过 *.bak）"
@@ -195,8 +260,8 @@ n_bak=$(find "$PLUGIN_DIR/bom" -type f -name '*.bak' 2>/dev/null | wc -l)
 
 printf '  %-22s %4d\n' 'libocs_ocsm.so' "$n_so"
 printf '  %-22s %4d   版本 %s\n' 'plugin.toml' "$n_toml" "$PLUGIN_VER"
-printf '  %-22s %4d   （源 %s）\n' 'handbook/*.md' "$n_zh" "$(find "$SRC/handbook" -maxdepth 1 -type f -name '*.md' | wc -l)"
-printf '  %-22s %4d   （源 %s）\n' 'handbook/en/*.md' "$n_en" "$(find "$SRC/handbook/en" -maxdepth 1 -type f -name '*.md' | wc -l)"
+printf '  %-22s %4d   （源 %s）\n' 'handbook/*.md' "$n_zh" "$(find "$HANDBOOK_SRC_DIR" -maxdepth 1 -type f -name '*.md' | wc -l)"
+printf '  %-22s %4d   （源 %s）\n' 'handbook/en/*.md' "$n_en" "$(find "$HANDBOOK_SRC_DIR/en" -maxdepth 1 -type f -name '*.md' | wc -l)"
 printf '  %-22s %4d   （源 %s，不含 *.bak）\n' 'bom/' "$n_bom" "$(find "$SRC/bom" -type f ! -name '*.bak' | wc -l)"
 printf '  %-22s %4d   %s\n' 'frame/ *.dwg' "$n_frame" "${OCSM_FRAME_SRC:+（来自 OCSM_FRAME_SRC）}"
 
@@ -214,10 +279,31 @@ if [[ -f "$PLUGIN_DIR/plugin.toml" ]]; then
 fi
 
 # 2) handbook：中文篇 + 英译篇都要有（且不少于源，防递归漏装）
-src_zh=$(find "$SRC/handbook" -maxdepth 1 -type f -name '*.md' | wc -l)
-src_en=$(find "$SRC/handbook/en" -maxdepth 1 -type f -name '*.md' | wc -l)
+src_zh=$(find "$HANDBOOK_SRC_DIR" -maxdepth 1 -type f -name '*.md' | wc -l)
+src_en=$(find "$HANDBOOK_SRC_DIR/en" -maxdepth 1 -type f -name '*.md' | wc -l)
 (( n_zh >= src_zh && n_zh > 0 )) || fail "handbook 缺失：$PLUGIN_DIR/handbook 有 $n_zh 篇 ≤ 源 $src_zh 篇"
 (( n_en >= src_en && n_en > 0 )) || fail "handbook/en 缺失：$PLUGIN_DIR/handbook/en 有 $n_en 篇 ≤ 源 $src_en 篇（英译篇漏装）"
+
+# 2b) handbook **内容**核对：安装目录里每篇 *.md 必须与**来源**逐字节相同
+#     （来源 = 工作区那一份，或 OCSM_HANDBOOK_FROM_HEAD=1 时的 HEAD 导出）。防的是：copy_tree
+#     漏拷、陈旧残留、以及“以为装了 HEAD 版其实混进了 WIP”。
+hb_checked=0; hb_bad=0
+while IFS= read -r -d '' rel; do
+    rel="${rel#./}"
+    if [[ "$rel" == tools/* ]]; then
+        continue
+    fi
+    hb_checked=$((hb_checked+1))
+    if [[ ! -f "$PLUGIN_DIR/handbook/$rel" ]]; then
+        echo "  ✗ handbook 缺篇：$rel" >&2
+        hb_bad=$((hb_bad+1))
+    elif ! cmp -s "$HANDBOOK_SRC_DIR/$rel" "$PLUGIN_DIR/handbook/$rel"; then
+        echo "  ✗ handbook 内容与来源不一致：$rel" >&2
+        hb_bad=$((hb_bad+1))
+    fi
+done < <(cd "$HANDBOOK_SRC_DIR" && find . -type f -name '*.md' -print0)
+(( hb_bad == 0 )) || fail "handbook 有 $hb_bad 篇与来源不一致（来源：$HANDBOOK_ORIGIN）"
+echo "  handbook 来源：$HANDBOOK_ORIGIN；$hb_checked 篇与来源逐字节一致${HANDBOOK_DIRTY:+（工作区有未提交改动：改 ${n_mod:-0} 个 / 未跟踪 ${n_new:-0} 个，已一并装进应用）}"
 
 # 3) bom：两个模板块必须在（块内容本身由宿主 import_frame_block 读）
 for f in OCSM_BOMHEAD.dwg OCSM_BOMROW.dwg; do
@@ -245,4 +331,5 @@ if (( MISSING != 0 )); then
 fi
 
 echo "✓ 部署完成：$PLUGIN_DIR"
+echo "  handbook：$HANDBOOK_ORIGIN（$hb_checked 篇，逐字节核对过）"
 echo "  重启 OCS 后命令行应出现：Loaded plugin: OCSMechanical 机械工具包 (opencad.ocsm ${PLUGIN_VER})"
