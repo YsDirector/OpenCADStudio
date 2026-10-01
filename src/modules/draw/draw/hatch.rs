@@ -1690,4 +1690,93 @@ mod tests {
         };
         assert_eq!(region.wires.len(), 2);
     }
+
+    // A selection that sits entirely on turned-off/frozen layers never reaches
+    // `boundary_sources` (hidden geometry is not tessellated), so "no closed
+    // boundary" is true but hides the actionable reason. The prompt must say
+    // the layer is the problem — and must go back to the generic sentence for
+    // a visible selection, otherwise the message would be unconditional.
+    #[test]
+    fn hidden_layer_selection_reports_the_layer_reason() {
+        let hidden_reason = t!("  ⚠ Boundary is on a layer turned off or frozen; open the layer or move the boundary.");
+        let pick_reason = t!("  ⚠ No closed boundary found.");
+        let select_reason = t!("  ⚠ Selection has no closed boundary.");
+
+        // "O" (select objects): the only picked object is a lone open segment,
+        // so there is no closed boundary whatever the layer state is.
+        let handle = Handle::new(1);
+        let segment = Line { start: [0.0, 0.0], end: [10.0, 0.0] };
+        let mut sources = rustc_hash::FxHashMap::default();
+        sources.insert(handle, crate::scene::BoundarySource {
+            curves: vec![Curve::Line(segment)],
+            segments: vec![segment],
+        });
+        let mut command = HatchCommand::new(
+            Vec::new(),
+            sources,
+            vec![handle],
+            None,
+            WorkingPlane::default(),
+        );
+        assert!(command.missed, "precondition: the picked object has no closed boundary");
+
+        command.inject_selection_hidden(true);
+        let prompt = command.prompt();
+        assert!(
+            prompt.contains(hidden_reason.as_ref()),
+            "hidden selection must report the layer reason, got: {prompt}"
+        );
+        assert!(
+            !prompt.contains(select_reason.as_ref()),
+            "hidden selection must not fall back to the generic reason, got: {prompt}"
+        );
+
+        // Positive control: the same selection made visible again keeps the
+        // generic sentence, so the two cases cannot both report the layer.
+        command.inject_selection_hidden(false);
+        let prompt = command.prompt();
+        assert!(
+            prompt.contains(select_reason.as_ref()),
+            "visible selection keeps the generic reason, got: {prompt}"
+        );
+        assert!(
+            !prompt.contains(hidden_reason.as_ref()),
+            "visible selection must not claim the layer reason, got: {prompt}"
+        );
+
+        // HATCH launched with a preselected-but-hidden set falls back to "pick
+        // inside" (the hidden handles are filtered out of `boundary_sources`),
+        // so the pick branch must answer with the same layer reason.
+        let mut command = HatchCommand::new(
+            Vec::new(),
+            rustc_hash::FxHashMap::default(),
+            Vec::new(),
+            None,
+            WorkingPlane::default(),
+        );
+        command.on_point(DVec3::new(50.0, 50.0, 0.0));
+        assert!(command.missed, "precondition: the pick misses every outline");
+
+        command.inject_selection_hidden(true);
+        let prompt = command.prompt();
+        assert!(
+            prompt.contains(hidden_reason.as_ref()),
+            "hidden pick must report the layer reason, got: {prompt}"
+        );
+        assert!(
+            !prompt.contains(pick_reason.as_ref()),
+            "hidden pick must not fall back to the generic reason, got: {prompt}"
+        );
+
+        command.inject_selection_hidden(false);
+        let prompt = command.prompt();
+        assert!(
+            prompt.contains(pick_reason.as_ref()),
+            "visible pick keeps the generic reason, got: {prompt}"
+        );
+        assert!(
+            !prompt.contains(hidden_reason.as_ref()),
+            "visible pick must not claim the layer reason, got: {prompt}"
+        );
+    }
 }
