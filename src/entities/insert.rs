@@ -285,6 +285,46 @@ fn apply_grip(ins: &mut Insert, grip_id: usize, apply: GripApply) {
     }
 }
 
+/// Whether a scripted edit changed the INSERT's own placement (as opposed to
+/// an attribute value or the block name).
+fn placement_changed(old: &Insert, new: &Insert) -> bool {
+    old.insert_point != new.insert_point
+        || old.rotation != new.rotation
+        || old.x_scale() != new.x_scale()
+        || old.y_scale() != new.y_scale()
+        || old.z_scale() != new.z_scale()
+        || old.normal != new.normal
+}
+
+/// Carry an INSERT's inline ATTRIBs through a scripted placement change
+/// (`set_properties` on `/insert_point`, `/rotation` or a scale factor).
+///
+/// ATTRIB geometry is stored in world coordinates beside the block, so writing
+/// the placement fields alone leaves the attribute text behind — the very
+/// "symbol moved, text stayed" failure MOVE used to have (#255). Rebuild the
+/// world-space delta between the old and the new placement
+/// (`world = OCS · translate · rotate · scale`, i.e. [`Insert::get_transform`])
+/// and hand every attribute to opencadcodec's entity-aware attribute transform.
+/// That is the exact call `transform_insert` makes for MOVE / ROTATE / SCALE
+/// (`AttributeEntity::apply_transform`), so a scripted placement edit moves the
+/// text with the same rules the command path uses.
+///
+/// Returns whether any attribute was carried along; a degenerate placement
+/// (singular scale, nothing to move) leaves them untouched.
+pub(crate) fn carry_attributes_with_placement(old: &Insert, new: &mut Insert) -> bool {
+    if new.attributes.is_empty() || !placement_changed(old, new) {
+        return false;
+    }
+    let Some(inverse) = crate::scene::inverse_affine(&old.get_transform()) else {
+        return false;
+    };
+    let delta = Transform::from_matrix(new.get_transform().matrix * inverse.matrix);
+    for attribute in &mut new.attributes {
+        codec::Entity::apply_transform(attribute, &delta);
+    }
+    true
+}
+
 fn apply_transform(ins: &mut Insert, t: &EntityTransform) {
     crate::scene::view::transform::apply_standard_entity_transform(ins, t, |entity, p1, p2| {
         let dx = (p2.x - p1.x) as f64;

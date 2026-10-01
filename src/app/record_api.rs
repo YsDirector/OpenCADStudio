@@ -1114,6 +1114,12 @@ fn requested_handle(request: &Value) -> Result<codec::Handle, String> {
 /// field, or one of its `/x` `/y` `/z` components, is rewritten.
 fn canonical_entity_update_path(kind: &str, path: &str) -> Option<String> {
     let aliases: &[(&str, &str)] = match kind {
+        "Insert" => &[
+            ("position", "insert_point"),
+            ("scale/x", "x_scale"),
+            ("scale/y", "y_scale"),
+            ("scale/z", "z_scale"),
+        ],
         "AttributeEntity" => &[
             ("position", "insertion_point"),
             ("style", "text_style"),
@@ -1149,6 +1155,67 @@ fn point_from_array(value: &Value) -> Option<Value> {
     Some(json!({"x":values[0],"y":values[1],"z":values[2]}))
 }
 
+/// `/scale` is the one INSERT alias that is not a rename: the model stores the
+/// three factors separately (`/x_scale` `/y_scale` `/z_scale`), so one update
+/// expands into up to three. The accepted shapes are the ones the create op
+/// already takes for `scale` — a uniform number, a 3-element array, or an
+/// object with any subset of `x` / `y` / `z`.
+fn expanded_scale_update(kind: &str, update: &Value) -> Option<Vec<Value>> {
+    if kind != "Insert" || update["path"].as_str() != Some("/scale") {
+        return None;
+    }
+    let axes = |value: &Value| -> Option<Vec<(&'static str, Value)>> {
+        if let Some(factor) = value.as_f64() {
+            return Some(
+                ["x", "y", "z"]
+                    .into_iter()
+                    .map(|axis| (axis, json!(factor)))
+                    .collect(),
+            );
+        }
+        if let Some(values) = value.as_array() {
+            if values.len() != 3 || !values.iter().all(Value::is_number) {
+                return None;
+            }
+            return Some(
+                ["x", "y", "z"]
+                    .into_iter()
+                    .zip(values)
+                    .map(|(axis, value)| (axis, value.clone()))
+                    .collect(),
+            );
+        }
+        let object = value.as_object()?;
+        let mut axes = Vec::new();
+        for axis in ["x", "y", "z"] {
+            if let Some(component) = object.get(axis) {
+                if !component.is_number() {
+                    return None;
+                }
+                axes.push((axis, component.clone()));
+            }
+        }
+        (!axes.is_empty()).then_some(axes)
+    };
+    let value = axes(update.get("value")?)?;
+    let expected = update.get("expected").and_then(|expected| axes(expected));
+    Some(
+        value
+            .into_iter()
+            .map(|(axis, value)| {
+                let mut edit = json!({"path":format!("/{axis}_scale"),"value":value});
+                if let Some(component) = expected
+                    .as_ref()
+                    .and_then(|expected| expected.iter().find(|(name, _)| *name == axis))
+                {
+                    edit["expected"] = component.1.clone();
+                }
+                edit
+            })
+            .collect(),
+    )
+}
+
 /// Rewrite an entity update request into the record model's own spelling:
 /// aliases become canonical paths, and a point handed over as `[x, y, z]` is
 /// accepted wherever the stored value is a `{x, y, z}` object. Returns the
@@ -1165,6 +1232,11 @@ fn entity_update_request<'a>(
     let mut edits: Vec<Value> = Vec::with_capacity(updates.len());
     let mut rewritten = false;
     for update in updates {
+        if let Some(expanded) = expanded_scale_update(kind, update) {
+            edits.extend(expanded);
+            rewritten = true;
+            continue;
+        }
         let mut edit = update.clone();
         if let Some(canonical) =
             canonical_entity_update_path(kind, update["path"].as_str().unwrap_or(""))
@@ -1605,6 +1677,16 @@ impl OpenCADStudio {
                     return Err(failure("identity_changed", "entity identity is read-only"));
                 }
                 edited.preserve_storage_data_from(&source);
+                // A placement edit on an INSERT has to carry its inline ATTRIBs
+                // along (they are stored in world coordinates): MOVE/ROTATE move
+                // them, a raw field write would leave the text behind.
+                if let (
+                    codec::EntityType::Insert(old_insert),
+                    codec::EntityType::Insert(new_insert),
+                ) = (&source, &mut edited)
+                {
+                    crate::entities::insert::carry_attributes_with_placement(old_insert, new_insert);
+                }
                 changed = edited != source;
                 if changed {
                     self.push_undo_snapshot(i, "MCP SET_PROPERTIES");
@@ -2056,6 +2138,193 @@ mod tests {
         assert_ne!(bad["status"], "completed", "{bad}");
         assert_eq!(bad["code"], "invalid_value");
         assert_eq!(attribute_at(&app, attributes[0]).height, 3.5);
+    }
+
+    #[test]
+    fn set_properties_moves_an_insert_and_carries_its_attributes() {
+        let mut app = OpenCADStudio::new_for_test();
+        app.automation_op(r#"{"op":"new"}"#);
+        let (insert, attributes) = symbol_insert(&mut app, Vector3::new(10.0, 20.0, 0.0));
+        let handle = format!("{:X}", insert.value());
+        let i = app.active_tab;
+
+        let moved = execute(
+            &mut app,
+            json!({
+                "op":"set_properties",
+                "collection":"entities",
+                "handle":handle,
+                "updates":[{"path":"/position","value":[30.0,50.0,0.0]}]
+            }),
+            "move-insert",
+        );
+        assert_eq!(moved["status"], "completed", "{moved}");
+        let EntityType::Insert(found) = app.tabs[i].scene.document.get_entity(insert).unwrap()
+        else {
+            panic!("expected insert")
+        };
+        assert_point_close(found.insert_point, Vector3::new(30.0, 50.0, 0.0), "insert point");
+        for attribute_handle in &attributes {
+            let attribute = attribute_at(&app, *attribute_handle);
+            assert_point_close(
+                attribute.insertion_point,
+                Vector3::new(31.0, 51.0, 0.0),
+                "attribute moved by the same world delta",
+            );
+            assert_point_close(
+                attribute.alignment_point,
+                Vector3::new(31.0, 51.0, 0.0),
+                "alignment point follows",
+            );
+            assert_eq!(attribute.height, 2.5, "a move must not rescale the text");
+        }
+        let read = app.automation_op(&format!(
+            r#"{{"op":"query","handles":["{handle}"],"detail":"geometry"}}"#
+        ));
+        assert_eq!(read["entities"][0]["position"], json!([30.0, 50.0, 0.0]));
+    }
+
+    #[test]
+    fn set_properties_rotates_and_scales_an_insert_with_its_attributes() {
+        use std::f64::consts::FRAC_PI_2;
+
+        let mut app = OpenCADStudio::new_for_test();
+        app.automation_op(r#"{"op":"new"}"#);
+        let (insert, attributes) = symbol_insert(&mut app, Vector3::new(10.0, 20.0, 0.0));
+        let handle = format!("{:X}", insert.value());
+        let i = app.active_tab;
+
+        // 90° about the insertion point: the attribute at (11, 21) swings to
+        // (9, 21) and its text turns with the symbol.
+        let rotated = execute(
+            &mut app,
+            json!({
+                "op":"set_properties",
+                "collection":"entities",
+                "handle":handle,
+                "updates":[{"path":"/rotation","value":FRAC_PI_2}]
+            }),
+            "rotate-insert",
+        );
+        assert_eq!(rotated["status"], "completed", "{rotated}");
+        let EntityType::Insert(found) = app.tabs[i].scene.document.get_entity(insert).unwrap()
+        else {
+            panic!("expected insert")
+        };
+        assert_eq!(found.rotation, FRAC_PI_2);
+        for attribute_handle in &attributes {
+            let attribute = attribute_at(&app, *attribute_handle);
+            assert_point_close(
+                attribute.insertion_point,
+                Vector3::new(9.0, 21.0, 0.0),
+                "attribute orbits the insertion point",
+            );
+            assert!(
+                (attribute.rotation - FRAC_PI_2).abs() < 1e-9,
+                "attribute text turns with the symbol: {}",
+                attribute.rotation
+            );
+            assert_eq!(attribute.height, 2.5, "a rotation must not rescale the text");
+        }
+
+        // Uniform scale 2 about the same point: (9, 21) → (8, 22), text doubles.
+        // `/scale` takes the shapes the create op accepts for `scale`.
+        let scaled = execute(
+            &mut app,
+            json!({
+                "op":"set_properties",
+                "collection":"entities",
+                "handle":handle,
+                "updates":[{"path":"/scale","expected":{"x":1,"y":1,"z":1},"value":{"x":2.0,"y":2.0,"z":2.0}}]
+            }),
+            "scale-insert",
+        );
+        assert_eq!(scaled["status"], "completed", "{scaled}");
+        assert_eq!(
+            scaled["result"]["paths"],
+            json!(["/x_scale", "/y_scale", "/z_scale"])
+        );
+        let EntityType::Insert(found) = app.tabs[i].scene.document.get_entity(insert).unwrap()
+        else {
+            panic!("expected insert")
+        };
+        assert_eq!(found.x_scale(), 2.0);
+        for attribute_handle in &attributes {
+            let attribute = attribute_at(&app, *attribute_handle);
+            assert_point_close(
+                attribute.insertion_point,
+                Vector3::new(8.0, 22.0, 0.0),
+                "attribute scales about the insertion point",
+            );
+            assert!(
+                (attribute.height - 5.0).abs() < 1e-9,
+                "scaled text height: {}",
+                attribute.height
+            );
+        }
+
+        // The per-axis spelling is an alias of the stored factor.
+        let per_axis = execute(
+            &mut app,
+            json!({
+                "op":"set_properties",
+                "collection":"entities",
+                "handle":handle,
+                "updates":[{"path":"/scale/z","value":3.0}]
+            }),
+            "scale-insert-z",
+        );
+        assert_eq!(per_axis["status"], "completed", "{per_axis}");
+        assert_eq!(per_axis["result"]["paths"], json!(["/z_scale"]));
+        let EntityType::Insert(found) = app.tabs[i].scene.document.get_entity(insert).unwrap()
+        else {
+            panic!("expected insert")
+        };
+        assert_eq!(found.z_scale(), 3.0);
+    }
+
+    #[test]
+    fn set_properties_refuses_a_malformed_insert_position() {
+        let mut app = OpenCADStudio::new_for_test();
+        app.automation_op(r#"{"op":"new"}"#);
+        let (insert, attributes) = symbol_insert(&mut app, Vector3::new(10.0, 20.0, 0.0));
+        let handle = format!("{:X}", insert.value());
+
+        for (label, value) in [
+            ("letters", json!("over there")),
+            ("too few axes", json!([1.0, 2.0])),
+            ("missing axis", json!({"x":1.0,"y":2.0})),
+        ] {
+            let bad = execute(
+                &mut app,
+                json!({
+                    "op":"set_properties",
+                    "collection":"entities",
+                    "handle":handle,
+                    "updates":[{"path":"/position","value":value}]
+                }),
+                "bad-position",
+            );
+            assert_ne!(bad["status"], "completed", "{label}: {bad}");
+            assert_eq!(bad["code"], "invalid_value", "{label}: {bad}");
+        }
+
+        // Nothing moved, and the attributes did not drift either.
+        let EntityType::Insert(found) = app.tabs[app.active_tab]
+            .scene
+            .document
+            .get_entity(insert)
+            .unwrap()
+        else {
+            panic!("expected insert")
+        };
+        assert_eq!(found.insert_point, Vector3::new(10.0, 20.0, 0.0));
+        for attribute_handle in &attributes {
+            assert_eq!(
+                attribute_at(&app, *attribute_handle).insertion_point,
+                Vector3::new(11.0, 21.0, 0.0)
+            );
+        }
     }
 
     #[test]

@@ -54,6 +54,7 @@ mod project;
 mod scene_markers;
 mod selection;
 pub(crate) use selection::{pe_url_description_of, pe_url_of};
+pub(crate) use modify::inverse_affine;
 pub mod parametric_constraints;
 mod parametric_solve;
 
