@@ -1503,6 +1503,29 @@ mod tests {
             r#"{"op":"query","type":"Line","layer":"5剖面线层","detail":"summary"}"#,
         );
         assert_eq!(five["count"], 0, "空层实体不再算 5剖面线层：{five}");
+
+        // select 路径与 query 同口径（同一修复的另一半）：空层实体（插件写入留空）
+        // 也必须能被 layer:"0" 选中；旧写法按字段全等比较会漏掉它。
+        let selected = app.automation_op(r#"{"op":"select","layer":"0"}"#);
+        assert_eq!(
+            selected["selected"], 2,
+            "select layer:\"0\" 应选中 0 层 + 空层实体：{selected}"
+        );
+        let selected = app.automation_op(r#"{"op":"select","type":"Line","layer":""}"#);
+        assert_eq!(
+            selected["selected"], 2,
+            "select layer:\"\" = 不过滤（配 type 才有可选项）：{selected}"
+        );
+        let selected = app.automation_op(r#"{"op":"select","type":"Line","layer":"   "}"#);
+        assert_eq!(
+            selected["selected"], 2,
+            "select layer 全空白 = 不过滤：{selected}"
+        );
+        let selected = app.automation_op(r#"{"op":"select","layer":"5剖面线层"}"#);
+        assert_eq!(
+            selected["selected"], 0,
+            "空层实体不再算 5剖面线层：{selected}"
+        );
     }
 
     #[cfg(not(target_arch = "wasm32"))]
