@@ -3306,7 +3306,7 @@ annotate =
     .dimaligned-specify-text-angle-degrees = DIMALIGNED  Specify text angle (degrees):
     .dimangular-enter-dimension-text-blank-measured = DIMANGULAR  Enter dimension text (blank = measured value):
     .dimangular-enter-formatted-dimension-text-blank-measured = DIMANGULAR  Enter formatted dimension text (blank = measured value):
-    .dimangular-select-arc-circle-line-or-specify-angle-vertex = DIMANGULAR  Select arc, circle, line, or specify an angle vertex:
+    .dimangular-select-arc-circle-line-or-specify-angle-vertex = DIMANGULAR  Select arc, circle, line, or specify the angle vertex directly:
     .dimangular-select-second-line = DIMANGULAR  Select second line:
     .dimangular-specify-angle-vertex = DIMANGULAR  Specify angle vertex:
     .dimangular-specify-dimension-arc-location-options = DIMANGULAR  Specify dimension arc location [Mtext/Text/Angle/Quadrant]:

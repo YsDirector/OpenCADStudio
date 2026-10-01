@@ -3313,7 +3313,7 @@ annotate =
     .dimaligned-specify-text-angle-degrees = DIMALIGNED Zadejte úhel textu (stupně):
     .dimangular-enter-dimension-text-blank-measured = DIMANGULAR Zadejte text kóty (prázdné = naměřená hodnota):
     .dimangular-enter-formatted-dimension-text-blank-measured = DIMANGULAR Zadejte formátovaný text kóty (prázdné = naměřená hodnota):
-    .dimangular-select-arc-circle-line-or-specify-angle-vertex = DIMANGULAR Vyberte oblouk, kružnici či čáru, nebo zadejte vrchol úhlu:
+    .dimangular-select-arc-circle-line-or-specify-angle-vertex = DIMANGULAR Vyberte oblouk, kružnici či čáru, nebo přímo zadejte vrchol úhlu:
     .dimangular-select-second-line = DIMANGULAR Vyberte druhou čáru:
     .dimangular-specify-angle-vertex = DIMANGULAR Zadejte vrchol úhlu:
     .dimangular-specify-dimension-arc-location-options = DIMANGULAR Zadejte umístění oblouku kóty [Mtext/Text/Úhel/Kvadrant]:

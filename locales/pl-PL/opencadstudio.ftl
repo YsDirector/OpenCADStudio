@@ -3315,7 +3315,7 @@ annotate =
     .dimaligned-specify-text-angle-degrees = DIMALIGNED Określ kąt tekstu (w stopniach):
     .dimangular-enter-dimension-text-blank-measured = DIMANGULAR Wprowadź tekst wymiaru (puste = zmierzona wartość):
     .dimangular-enter-formatted-dimension-text-blank-measured = DIMANGULAR Wprowadź sformatowany tekst wymiaru (puste = zmierzona wartość):
-    .dimangular-select-arc-circle-line-or-specify-angle-vertex = DIMANGULAR Wybierz łuk, okrąg lub linię albo określ wierzchołek kąta:
+    .dimangular-select-arc-circle-line-or-specify-angle-vertex = DIMANGULAR Wybierz łuk, okrąg lub linię albo określ bezpośrednio wierzchołek kąta:
     .dimangular-select-second-line = DIMANGULAR Wybierz drugą linię:
     .dimangular-specify-angle-vertex = DIMANGULAR Określ wierzchołek kąta:
     .dimangular-specify-dimension-arc-location-options = DIMANGULAR Określ położenie łuku wymiarowego [Mtext/Tekst/Kąt/Ćwiartka]:

@@ -3317,7 +3317,7 @@ annotate =
     .dimaligned-specify-text-angle-degrees = DIMALIGNED Укажите угол текста (градусы):
     .dimangular-enter-dimension-text-blank-measured = DIMANGULAR Введите текст размера (пусто = измеренное значение):
     .dimangular-enter-formatted-dimension-text-blank-measured = DIMANGULAR Введите форматированный текст размера (пусто = измеренное значение):
-    .dimangular-select-arc-circle-line-or-specify-angle-vertex = DIMANGULAR Выберите дугу, окружность, линию или укажите вершину угла:
+    .dimangular-select-arc-circle-line-or-specify-angle-vertex = DIMANGULAR Выберите дугу, окружность, линию или укажите вершину угла напрямую:
     .dimangular-select-second-line = DIMANGULAR Выберите вторую линию:
     .dimangular-specify-angle-vertex = DIMANGULAR Укажите вершину угла:
     .dimangular-specify-dimension-arc-location-options = DIMANGULAR Укажите положение размерной дуги [Mtext/Текст/Угол/Квадрант]:

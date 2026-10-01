@@ -351,7 +351,7 @@ impl CadCommand for AngularDimensionCommand {
             return match self.step {
                 Step::SecondLine { .. } => t!("DIMANGULAR  Select second line:").into_owned(),
                 _ => t!(
-                    "DIMANGULAR  Select arc, circle, line, or specify an angle vertex:"
+                    "DIMANGULAR  Select arc, circle, line, or specify the angle vertex directly:"
                 )
                 .into_owned(),
             };
@@ -1279,3 +1279,30 @@ fn preview_wire(points: Vec<DVec3>) -> WireModel {
 }
 
 inventory::submit!(crate::command::CommandRegistration { names: &["DIMANGULAR"] });
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// C9：首步提示（还未选任何对象时）必须显式说明“可直接指定角度顶点”——
+    /// 否则调用方只知道“选弧/圆/直线”，以为不能先给点。
+    #[test]
+    fn first_prompt_offers_the_angle_vertex_directly() {
+        // 钉死英文，断言不依赖进程环境 locale（同 plugin_manager 的既有做法）。
+        crate::i18n::set_language(crate::i18n::Language::EnUs)
+            .expect("English locale must be available");
+        let prompt = AngularDimensionCommand::new().prompt();
+        assert!(
+            prompt.contains("angle vertex directly"),
+            "首步提示要看得出可直接给顶点：{prompt}"
+        );
+        // 21 个 locale 同步：中文版必须含“直接指定角度顶点”。
+        let zh = include_str!("../../../locales/zh-CN/opencadstudio.ftl");
+        assert!(
+            zh.contains("选择圆弧、圆或直线，或直接指定角度顶点："),
+            "zh-CN 首步提示缺关键词"
+        );
+        let tw = include_str!("../../../locales/zh-TW/opencadstudio.ftl");
+        assert!(tw.contains("或直接指定角度頂點："), "zh-TW 首步提示缺关键词");
+    }
+}

@@ -3328,7 +3328,7 @@ annotate =
     .dimaligned-specify-text-angle-degrees = DIMALIGNED  حدد زاوية النص (بالدرجات):
     .dimangular-enter-dimension-text-blank-measured = DIMANGULAR  أدخل نص البُعد (فارغ = القيمة المقاسة):
     .dimangular-enter-formatted-dimension-text-blank-measured = DIMANGULAR  أدخل نص البُعد المنسق (فارغ = القيمة المقاسة):
-    .dimangular-select-arc-circle-line-or-specify-angle-vertex = DIMANGULAR  حدد قوسًا أو دائرة أو خطًا، أو حدد رأس زاوية:
+    .dimangular-select-arc-circle-line-or-specify-angle-vertex = DIMANGULAR  حدد قوسًا أو دائرة أو خطًا، أو حدد رأس الزاوية مباشرة:
     .dimangular-select-second-line = DIMANGULAR  حدد الخط الثاني:
     .dimangular-specify-angle-vertex = DIMANGULAR  حدد رأس الزاوية:
     .dimangular-specify-dimension-arc-location-options = DIMANGULAR  حدد موقع قوس البُعد [Mtext/نص/زاوية/ربع]:

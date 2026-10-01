@@ -3306,7 +3306,7 @@ annotate =
     .dimaligned-specify-text-angle-degrees = DIMALIGNED  文字角度を指定（度）:
     .dimangular-enter-dimension-text-blank-measured = DIMANGULAR  寸法値を入力（空白 = 計測値）:
     .dimangular-enter-formatted-dimension-text-blank-measured = DIMANGULAR  書式付き寸法文字を入力（空白 = 計測値）:
-    .dimangular-select-arc-circle-line-or-specify-angle-vertex = DIMANGULAR  円弧、円、線分を選択、または角度の頂点を指定:
+    .dimangular-select-arc-circle-line-or-specify-angle-vertex = DIMANGULAR  円弧、円、線分を選択、または角度の頂点を直接指定:
     .dimangular-select-second-line = DIMANGULAR  2 本目の線分を選択:
     .dimangular-specify-angle-vertex = DIMANGULAR  角度の頂点を指定:
     .dimangular-specify-dimension-arc-location-options = DIMANGULAR  寸法円弧の位置を指定 [Mtext/文字/角度/象限]:

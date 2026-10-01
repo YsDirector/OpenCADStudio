@@ -3285,7 +3285,7 @@ annotate =
     .dimaligned-specify-text-angle-degrees = DIMALIGNED  Metin açısını belirtin (derece):
     .dimangular-enter-dimension-text-blank-measured = DIMANGULAR  Ölçü metnini girin (boş = ölçülen değer):
     .dimangular-enter-formatted-dimension-text-blank-measured = DIMANGULAR  Biçimlendirilmiş ölçü metnini girin (boş = ölçülen değer):
-    .dimangular-select-arc-circle-line-or-specify-angle-vertex = DIMANGULAR  Yay, çember veya çizgi seçin ya da açı köşesi belirtin:
+    .dimangular-select-arc-circle-line-or-specify-angle-vertex = DIMANGULAR  Yay, çember veya çizgi seçin ya da açı köşesini doğrudan belirtin:
     .dimangular-select-second-line = DIMANGULAR  İkinci çizgiyi seçin:
     .dimangular-specify-angle-vertex = DIMANGULAR  Açı köşesini belirtin:
     .dimangular-specify-dimension-arc-location-options = DIMANGULAR  Ölçü yayının konumunu belirtin [Mtext/Metin/Açı/Kadran]:

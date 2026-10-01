@@ -3316,7 +3316,7 @@ annotate =
     .dimaligned-specify-text-angle-degrees = DIMALIGNED Textwinkel angeben (Grad):
     .dimangular-enter-dimension-text-blank-measured = DIMANGULAR Bemaßungstext eingeben (leer = Messwert):
     .dimangular-enter-formatted-dimension-text-blank-measured = DIMANGULAR Formatierten Bemaßungstext eingeben (leer = Messwert):
-    .dimangular-select-arc-circle-line-or-specify-angle-vertex = DIMANGULAR Bogen, Kreis oder Linie wählen oder Winkelspitze angeben:
+    .dimangular-select-arc-circle-line-or-specify-angle-vertex = DIMANGULAR Bogen, Kreis oder Linie wählen oder Winkelspitze direkt angeben:
     .dimangular-select-second-line = DIMANGULAR Zweite Linie wählen:
     .dimangular-specify-angle-vertex = DIMANGULAR Winkelspitze angeben:
     .dimangular-specify-dimension-arc-location-options = DIMANGULAR Bemaßungsbogenlage angeben [Mtext/Text/Winkel/Quadrant]:

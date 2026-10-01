@@ -791,7 +791,7 @@ pub(super) fn message_attribute(source: &str) -> Option<(&'static str, &'static 
         "DIMALIGNED  Specify text angle (degrees):" => Some(("annotate", "dimaligned-specify-text-angle-degrees")),
         "DIMANGULAR  Enter dimension text (blank = measured value):" => Some(("annotate", "dimangular-enter-dimension-text-blank-measured")),
         "DIMANGULAR  Enter formatted dimension text (blank = measured value):" => Some(("annotate", "dimangular-enter-formatted-dimension-text-blank-measured")),
-        "DIMANGULAR  Select arc, circle, line, or specify an angle vertex:" => Some(("annotate", "dimangular-select-arc-circle-line-or-specify-angle-vertex")),
+        "DIMANGULAR  Select arc, circle, line, or specify the angle vertex directly:" => Some(("annotate", "dimangular-select-arc-circle-line-or-specify-angle-vertex")),
         "DIMANGULAR  Select second line:" => Some(("annotate", "dimangular-select-second-line")),
         "DIMANGULAR  Specify angle vertex:" => Some(("annotate", "dimangular-specify-angle-vertex")),
         "DIMANGULAR  Specify dimension arc location [Mtext/Text/Angle/Quadrant]:" => Some(("annotate", "dimangular-specify-dimension-arc-location-options")),

@@ -3315,7 +3315,7 @@ annotate =
     .dimaligned-specify-text-angle-degrees = DIMALIGNED Määritä tekstin kulma (asteita):
     .dimangular-enter-dimension-text-blank-measured = DIMANGULAR Syötä mittateksti (tyhjä = mitattu arvo):
     .dimangular-enter-formatted-dimension-text-blank-measured = DIMANGULAR Syötä muotoiltu mittateksti (tyhjä = mitattu arvo):
-    .dimangular-select-arc-circle-line-or-specify-angle-vertex = DIMANGULAR Valitse kaari, ympyrä tai viiva tai määritä kulman kärkipiste:
+    .dimangular-select-arc-circle-line-or-specify-angle-vertex = DIMANGULAR Valitse kaari, ympyrä tai viiva tai määritä kulman kärkipiste suoraan:
     .dimangular-select-second-line = DIMANGULAR Valitse toinen viiva:
     .dimangular-specify-angle-vertex = DIMANGULAR Määritä kulman kärkipiste:
     .dimangular-specify-dimension-arc-location-options = DIMANGULAR Määritä mittakaaren sijainti [Mtext/Teksti/Kulma/Neljännes]:

@@ -3316,7 +3316,7 @@ annotate =
     .dimaligned-specify-text-angle-degrees = DIMALIGNED Spécifiez l'angle de texte (degrés):
     .dimangular-enter-dimension-text-blank-measured = DIMANGULAR Saisissez le texte de cote (vide = valeur mesurée) :
     .dimangular-enter-formatted-dimension-text-blank-measured = DIMANGULAR Saisissez le texte de cote formaté (vide = valeur mesurée) :
-    .dimangular-select-arc-circle-line-or-specify-angle-vertex = DIMANGULAR Sélectionnez un arc, un cercle ou une ligne, ou spécifiez un sommet d'angle :
+    .dimangular-select-arc-circle-line-or-specify-angle-vertex = DIMANGULAR Sélectionnez un arc, un cercle ou une ligne, ou spécifiez directement un sommet d'angle :
     .dimangular-select-second-line = DIMANGULAR Sélectionnez la deuxième ligne :
     .dimangular-specify-angle-vertex = DIMANGULAR Spécifiez le sommet d'angle:
     .dimangular-specify-dimension-arc-location-options = DIMANGULAR Spécifiez l'emplacement de l'arc de cote [Mtext/Texte/Angle/Quadrant] :

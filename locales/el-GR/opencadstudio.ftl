@@ -3305,7 +3305,7 @@ annotate =
     .dimaligned-specify-text-angle-degrees = DIMALIGNED  Ορίστε γωνία κειμένου (μοίρες):
     .dimangular-enter-dimension-text-blank-measured = DIMANGULAR  Δώστε κείμενο διάστασης (κενό = μετρημένη τιμή):
     .dimangular-enter-formatted-dimension-text-blank-measured = DIMANGULAR  Δώστε μορφοποιημένο κείμενο διάστασης (κενό = μετρημένη τιμή):
-    .dimangular-select-arc-circle-line-or-specify-angle-vertex = DIMANGULAR  Επιλέξτε τόξο, κύκλο, γραμμή ή ορίστε κορυφή γωνίας:
+    .dimangular-select-arc-circle-line-or-specify-angle-vertex = DIMANGULAR  Επιλέξτε τόξο, κύκλο, γραμμή ή ορίστε απευθείας κορυφή γωνίας:
     .dimangular-select-second-line = DIMANGULAR  Επιλέξτε δεύτερη γραμμή:
     .dimangular-specify-angle-vertex = DIMANGULAR  Ορίστε κορυφή γωνίας:
     .dimangular-specify-dimension-arc-location-options = DIMANGULAR  Ορίστε θέση τόξου διάστασης [Mtext/Κείμενο/Γωνία/Τεταρτημόριο]:

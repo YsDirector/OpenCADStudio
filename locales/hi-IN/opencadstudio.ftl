@@ -3304,7 +3304,7 @@ annotate =
     .dimaligned-specify-text-angle-degrees = DIMALIGNED पाठ कोण निर्दिष्ट करें (डिग्री):
     .dimangular-enter-dimension-text-blank-measured = DIMANGULAR आयाम टेक्स्ट दर्ज करें (खाली = मापा मान):
     .dimangular-enter-formatted-dimension-text-blank-measured = DIMANGULAR स्वरूपित आयाम टेक्स्ट दर्ज करें (खाली = मापा मान):
-    .dimangular-select-arc-circle-line-or-specify-angle-vertex = DIMANGULAR चाप, वृत्त या रेखा चुनें, या कोण का शीर्ष निर्दिष्ट करें:
+    .dimangular-select-arc-circle-line-or-specify-angle-vertex = DIMANGULAR चाप, वृत्त या रेखा चुनें, या सीधे कोण का शीर्ष निर्दिष्ट करें:
     .dimangular-select-second-line = DIMANGULAR दूसरी रेखा चुनें:
     .dimangular-specify-angle-vertex = DIMANGULAR कोण वर्टेक्स निर्दिष्ट करें:
     .dimangular-specify-dimension-arc-location-options = DIMANGULAR आयाम आर्क स्थान निर्दिष्ट करें [Mtext/टेक्स्ट/कोण/चतुर्थांश]:

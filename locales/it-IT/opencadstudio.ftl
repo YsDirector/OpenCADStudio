@@ -3315,7 +3315,7 @@ annotate =
     .dimaligned-specify-text-angle-degrees = DIMALIGNED Specificare l'angolo del testo (gradi):
     .dimangular-enter-dimension-text-blank-measured = DIMANGULAR Immettere il testo di quota (vuoto = valore misurato):
     .dimangular-enter-formatted-dimension-text-blank-measured = DIMANGULAR Immettere il testo di quota formattato (vuoto = valore misurato):
-    .dimangular-select-arc-circle-line-or-specify-angle-vertex = DIMANGULAR Selezionare un arco, un cerchio o una linea oppure specificare un vertice dell'angolo:
+    .dimangular-select-arc-circle-line-or-specify-angle-vertex = DIMANGULAR Selezionare un arco, un cerchio o una linea oppure specificare direttamente un vertice dell'angolo:
     .dimangular-select-second-line = DIMANGULAR Selezionare la seconda linea:
     .dimangular-specify-angle-vertex = DIMANGULAR Specificare il vertice dell'angolo:
     .dimangular-specify-dimension-arc-location-options = DIMANGULAR Specificare la posizione dell'arco di quota [Mtext/Testo/Angolo/Quadrante]:

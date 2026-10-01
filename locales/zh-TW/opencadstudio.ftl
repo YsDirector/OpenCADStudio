@@ -3315,7 +3315,7 @@ annotate =
     .dimaligned-specify-text-angle-degrees = DIMALIGNED  指定文字角度（度）：
     .dimangular-enter-dimension-text-blank-measured = DIMANGULAR  輸入標註文字（空白 = 測量值）：
     .dimangular-enter-formatted-dimension-text-blank-measured = DIMANGULAR  輸入帶格式的標註文字（空白 = 測量值）：
-    .dimangular-select-arc-circle-line-or-specify-angle-vertex = DIMANGULAR  選取圓弧、圓或直線，或指定角度頂點：
+    .dimangular-select-arc-circle-line-or-specify-angle-vertex = DIMANGULAR  選取圓弧、圓或直線，或直接指定角度頂點：
     .dimangular-select-second-line = DIMANGULAR  選取第二條直線：
     .dimangular-specify-angle-vertex = DIMANGULAR  指定角度頂點：
     .dimangular-specify-dimension-arc-location-options = DIMANGULAR  指定標註圓弧位置 [Mtext/文字/角度/象限]：

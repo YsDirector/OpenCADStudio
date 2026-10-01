@@ -3315,7 +3315,7 @@ annotate =
     .dimaligned-specify-text-angle-degrees = DIMALIGNED Adja meg a szöveg szögét (fokban):
     .dimangular-enter-dimension-text-blank-measured = DIMANGULAR Adja meg a méretszöveget (üres = mért érték):
     .dimangular-enter-formatted-dimension-text-blank-measured = DIMANGULAR Adja meg a formázott méretszöveget (üres = mért érték):
-    .dimangular-select-arc-circle-line-or-specify-angle-vertex = DIMANGULAR Válasszon ívet, kört vagy vonalat, vagy adjon meg egy szögcsúcsot:
+    .dimangular-select-arc-circle-line-or-specify-angle-vertex = DIMANGULAR Válasszon ívet, kört vagy vonalat, vagy adjon meg közvetlenül egy szögcsúcsot:
     .dimangular-select-second-line = DIMANGULAR Válassza ki a második vonalat:
     .dimangular-specify-angle-vertex = DIMANGULAR Szögcsúcs megadása:
     .dimangular-specify-dimension-arc-location-options = DIMANGULAR Adja meg a méretív helyét [Mtext/Szöveg/Szög/Kvadráns]:

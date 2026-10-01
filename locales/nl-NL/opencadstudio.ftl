@@ -3314,7 +3314,7 @@ annotate =
     .dimaligned-specify-text-angle-degrees = DIMALIGNED Teksthoek (graden) specificeren:
     .dimangular-enter-dimension-text-blank-measured = DIMANGULAR Voer maattekst in (leeg = gemeten waarde):
     .dimangular-enter-formatted-dimension-text-blank-measured = DIMANGULAR Voer opgemaakte maattekst in (leeg = gemeten waarde):
-    .dimangular-select-arc-circle-line-or-specify-angle-vertex = DIMANGULAR Selecteer een boog, cirkel of lijn, of geef een hoekpunt op:
+    .dimangular-select-arc-circle-line-or-specify-angle-vertex = DIMANGULAR Selecteer een boog, cirkel of lijn, of geef direct een hoekpunt op:
     .dimangular-select-second-line = DIMANGULAR Selecteer de tweede lijn:
     .dimangular-specify-angle-vertex = DIMANGULAR Specificeer hoekvertex:
     .dimangular-specify-dimension-arc-location-options = DIMANGULAR Geef de positie van de maatboog op [Mtext/Tekst/Hoek/Kwadrant]:

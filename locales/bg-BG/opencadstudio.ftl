@@ -3315,7 +3315,7 @@ annotate =
     .dimaligned-specify-text-angle-degrees = DIMALIGNED  Посочи ъгъл на текста (градуси):
     .dimangular-enter-dimension-text-blank-measured = DIMANGULAR  Въведи текст на оразмеряване (празно = измерена стойност):
     .dimangular-enter-formatted-dimension-text-blank-measured = DIMANGULAR  Въведи форматиран текст на оразмеряване (празно = измерена стойност):
-    .dimangular-select-arc-circle-line-or-specify-angle-vertex = DIMANGULAR  Избери дъга, окръжност, линия или посочи връх на ъгъла:
+    .dimangular-select-arc-circle-line-or-specify-angle-vertex = DIMANGULAR  Избери дъга, окръжност, линия или директно посочи връх на ъгъла:
     .dimangular-select-second-line = DIMANGULAR  Избери втората линия:
     .dimangular-specify-angle-vertex = DIMANGULAR  Посочи връх на ъгъла:
     .dimangular-specify-dimension-arc-location-options = DIMANGULAR  Посочи местоположение на дъгата за оразмеряване [Mtext/Текст/Ъгъл/Квадрант]:
