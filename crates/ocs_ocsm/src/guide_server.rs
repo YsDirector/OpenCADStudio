@@ -1917,6 +1917,7 @@ pub(crate) fn build_dimension(
         GuideType::Weld => return Err("焊接符号走 do_apply 独立分支".into()),
         GuideType::Leader => return Err("引线标注走 do_apply 独立分支".into()),
         GuideType::Balloon => return Err("序号标注走 do_apply 独立分支".into()),
+        GuideType::Chamfer => return Err("倒角标注走 do_apply 独立分支".into()),
     };
     // 用户指定小数位数：覆盖 XDATA DSTYLE 里的 DIMDEC(271)（样式默认 2）。
     if let Some(d) = params.dec {
@@ -3824,6 +3825,15 @@ fn do_apply_inner(
         return apply_balloon(sender, &doc, pts[0], pts[1], pts[2], &params);
     }
 
+    // 倒角标注：两段 PLINE（恰好 3 顶点）→ 匿名块 *C{n} + INSERT@拐点。
+    // LEADER 的无箭头变体：引线落 7标注层、文字落 6文字层，文字 C{c} / {c}×{a}°。
+    if params.guide_type == GuideType::Chamfer {
+        if pts.len() != 3 {
+            return Err("倒角标注需要两段多段线（PLINE，3 顶点：倒角点→拐点→肩线末端）".into());
+        }
+        return apply_chamfer(sender, &doc, pts[0], pts[1], pts[2], &params);
+    }
+
     let dim = build_dimension(sender, &doc, p1, p2, &params, &style)?;
     let dim_handle = match req_timed(
         sender,
@@ -3941,6 +3951,10 @@ fn api_guide(target: &str, sender: &Arc<dyn PluginRequestSender>) -> (u16, &'sta
                             "items": p.balloon.items,
                             "dir": p.balloon.dir.as_str(),
                             "ins": p.balloon.insert_mode,
+                        },
+                        "chamfer": {
+                            "c": p.chamfer.c,
+                            "a": p.chamfer.a,
                         },
                     }),
                     None => serde_json::Value::Null,
@@ -7016,10 +7030,16 @@ fn weld_syms_json() -> String {
     serde_json::json!({ "ok": true, "syms": syms }).to_string()
 }
 
-/// 焊接块成员：直线（层 8符号标注层 + 显式色；坐标为块局部坐标，已含图幅倍率）。
-fn weld_member_line(a: (f64, f64), b: (f64, f64), color: i16) -> acadrust::EntityType {
+/// 匿名块成员：直线（指定图层/颜色；坐标为块局部坐标，已含图幅倍率）。
+/// 从 `weld_member_line` 提取共用：焊接（8符号标注层 + 显式色）与倒角（7标注层 +
+/// 随层色）走同一条构造。
+fn member_line(
+    a: (f64, f64),
+    b: (f64, f64),
+    layer: &str,
+    color: acadrust::types::Color,
+) -> acadrust::EntityType {
     use acadrust::entities::Line;
-    use acadrust::types::Color;
     use acadrust::EntityType as E;
     let mut e = E::Line(Line {
         common: Default::default(),
@@ -7028,9 +7048,14 @@ fn weld_member_line(a: (f64, f64), b: (f64, f64), color: i16) -> acadrust::Entit
         thickness: 0.0,
         normal: Vector3::new(0.0, 0.0, 1.0),
     });
-    set_member_layer(&mut e, "8符号标注层");
-    e.common_mut().color = Color::from_index(color);
+    set_member_layer(&mut e, layer);
+    e.common_mut().color = color;
     e
+}
+
+/// 焊接块成员：直线（层 8符号标注层 + 显式色；坐标为块局部坐标，已含图幅倍率）。
+fn weld_member_line(a: (f64, f64), b: (f64, f64), color: i16) -> acadrust::EntityType {
+    member_line(a, b, "8符号标注层", acadrust::types::Color::from_index(color))
 }
 
 /// 焊接块成员：圆（色 31）。
@@ -7617,21 +7642,33 @@ pub(crate) struct LeaderParts {
     pub horizontal: bool,
 }
 
-/// 引线标注几何：**纯函数**（不读文档、不建块），交互路径与 D2G 转化共用。
-/// `s` = `frame_scale_at(doc, p0)`。
-pub(crate) fn build_leader_parts(
+/// 引线类（LEADER / CHAMFER）共用的引导几何：顶点0 = 尖端、顶点1 = 拐点、
+/// 顶点2 = 肩线末端。两段校验与「肩线按主分量吸附水平/竖直」的规则在此**只写一份**
+/// （CHAMFER 复用与 LEADER 同一条读取/校验路径；LEADER 行为不变）。
+pub(crate) struct LeaderGeom {
+    /// 引线向量（尖端→拐点）与长度。
+    pub ldx: f64,
+    pub ldy: f64,
+    pub lead_len: f64,
+    /// 箭头长 = DIMASZ（校验下限用；CHAMFER 无箭头也沿用同一下限）。
+    pub asz: f64,
+    /// 肩线（第二段）向量与吸附后的主轴长度。
+    pub bdx: f64,
+    pub bdy: f64,
+    pub horizontal: bool,
+    pub blen_drawn: f64,
+    /// 肩线主轴方向 d_c 与其内容上方 n_up（t 沿世界正方向自坐标较小端起算）。
+    pub d_c: (f64, f64),
+    pub n_up: (f64, f64),
+}
+
+/// 引导几何校验 + 肩线吸附（LEADER / CHAMFER 共用）。
+pub(crate) fn leader_geom(
     p_tip: [f64; 3],
     p0: [f64; 3],
     p_end: [f64; 3],
     s: f64,
-    upper: &str,
-    lower: &str,
-) -> Result<LeaderParts, String> {
-    use acadrust::entities::attribute_definition::{HorizontalAlignment, VerticalAlignment};
-    use acadrust::entities::AttributeDefinition;
-    use acadrust::types::Color;
-    use acadrust::EntityType as E;
-
+) -> Result<LeaderGeom, String> {
     // ── 引导校验 ──
     let ldx = p0[0] - p_tip[0];
     let ldy = p0[1] - p_tip[1];
@@ -7654,6 +7691,76 @@ pub(crate) fn build_leader_parts(
     } else {
         ((0.0, 1.0), (-1.0, 0.0))
     };
+    Ok(LeaderGeom {
+        ldx,
+        ldy,
+        lead_len,
+        asz,
+        bdx,
+        bdy,
+        horizontal,
+        blen_drawn,
+        d_c,
+        n_up,
+    })
+}
+
+impl LeaderGeom {
+    /// 拐点是否就在锚点一侧（= 肩线自拐点朝 +t 方向延伸），供"文字自拐点外移"用。
+    pub fn corner_at_origin(&self) -> bool {
+        (self.horizontal && self.bdx >= 0.0) || (!self.horizontal && self.bdy >= 0.0)
+    }
+
+    /// 肩线局部坐标系锚点（沿主轴坐标较小的一端）；`blen` = 生成用的肩线全长。
+    pub fn anchor_l(&self, blen: f64) -> (f64, f64) {
+        if self.horizontal {
+            (if self.bdx >= 0.0 { 0.0 } else { -blen }, 0.0)
+        } else if self.bdy >= 0.0 {
+            (0.0, 0.0)
+        } else {
+            (0.0, -blen)
+        }
+    }
+
+    /// 肩线局部坐标 (t 沿主轴、v 内容上方) → 块局部坐标（原点 = 拐点）。
+    pub fn tp(&self, blen: f64, t: f64, v: f64) -> (f64, f64) {
+        let anchor_l = self.anchor_l(blen);
+        (
+            anchor_l.0 + t * self.d_c.0 + v * self.n_up.0,
+            anchor_l.1 + t * self.d_c.1 + v * self.n_up.1,
+        )
+    }
+
+    /// 文字书写方向：随肩线轴向（横=0；竖=+90°，自下而上，永不倒置）。
+    pub fn text_rot(&self) -> f64 {
+        if self.horizontal {
+            0.0
+        } else {
+            std::f64::consts::FRAC_PI_2
+        }
+    }
+}
+
+/// 引线标注几何：**纯函数**（不读文档、不建块），交互路径与 D2G 转化共用。
+/// `s` = `frame_scale_at(doc, p0)`。
+pub(crate) fn build_leader_parts(
+    p_tip: [f64; 3],
+    p0: [f64; 3],
+    p_end: [f64; 3],
+    s: f64,
+    upper: &str,
+    lower: &str,
+) -> Result<LeaderParts, String> {
+    use acadrust::entities::attribute_definition::{HorizontalAlignment, VerticalAlignment};
+    use acadrust::entities::AttributeDefinition;
+    use acadrust::types::Color;
+    use acadrust::EntityType as E;
+
+    // ── 引导校验 / 肩线吸附：与 CHAMFER 共用 `leader_geom`（行为与原实现逐字一致）──
+    let g = leader_geom(p_tip, p0, p_end, s)?;
+    let (ldx, ldy, lead_len) = (g.ldx, g.ldy, g.lead_len);
+    let asz = g.asz;
+    let horizontal = g.horizontal;
 
     // ── 肩线长度：内容驱动（照焊接定案：画长收紧、画短延长）──
     // 文字锚点 = 焊接槽位 19.413 − 2.0 = 17.413；单字宽：拉丁/数字 1.45、
@@ -7671,23 +7778,12 @@ pub(crate) fn build_leader_parts(
 
     // 块局部坐标（原点 = 拐点 P0）：锚点 = 沿主轴坐标较小的一端。
     // 拐点是否就在锚点一侧（= 肩线自拐点朝 +t 方向延伸），供"文字自拐点外移"用。
-    let corner_at_origin = (horizontal && bdx >= 0.0) || (!horizontal && bdy >= 0.0);
-    let anchor_l = if horizontal {
-        (if bdx >= 0.0 { 0.0 } else { -blen }, 0.0)
-    } else if bdy >= 0.0 {
-        (0.0, 0.0)
-    } else {
-        (0.0, -blen)
-    };
-    let tp = |t: f64, v: f64| -> (f64, f64) {
-        (
-            anchor_l.0 + t * d_c.0 + v * n_up.0,
-            anchor_l.1 + t * d_c.1 + v * n_up.1,
-        )
-    };
+    let corner_at_origin = g.corner_at_origin();
+    let anchor_l = g.anchor_l(blen);
+    let tp = |t: f64, v: f64| -> (f64, f64) { g.tp(blen, t, v) };
     let tr = |u: f64, v: f64| -> (f64, f64) { tp(u * s, v * s) };
     // 文字书写方向：随肩线轴向（横=0；竖=+90°，自下而上，永不倒置）。
-    let text_rot: f64 = if horizontal { 0.0 } else { std::f64::consts::FRAC_PI_2 };
+    let text_rot: f64 = g.text_rot();
 
     // ── 块成员（颜色同焊接：引线/箭头/肩线=青4、文字=绿3）──
     let mut members: Vec<E> = Vec::new();
@@ -7840,6 +7936,214 @@ fn apply_leader(
         "horizontal": parts.horizontal,
         "upper": params.leader.upper,
         "lower": params.leader.lower,
+    })
+    .to_string())
+}
+
+// ── 倒角标注（CHAMFER）────────────────────────────────────────────────────
+// 定位：引线标注（LEADER）的**无箭头**变体。引导几何与 LEADER 同构
+// （顶点0 = 指向倒角的点、顶点1 = 拐点、顶点2 = 肩线末端），校验/肩线吸附
+// 直接复用 `leader_geom`；图层与 LEADER 不同：引线落 `7标注层`、文字落 `6文字层`。
+// 文字按 GB 倒角：`|a−45| ≤ 1e-3` → `C{c}`；否则 `{c}×{a}°`（× = U+00D7）。
+
+/// 倒角标注构件（块局部坐标已算好；2 条线 + 1 个单行 TEXT，无箭头）。
+#[derive(Debug)]
+pub(crate) struct ChamferParts {
+    /// 块内实体（引线/肩线 + 文字；层已设）。
+    pub members: Vec<acadrust::EntityType>,
+    /// 图幅倍率。
+    pub scale: f64,
+    /// 肩线长度（= 画出的长度，世界单位；不像 LEADER 内容驱动）。
+    pub blen: f64,
+    /// 肩线是否水平（竖肩线 → 文字旋转 90°）。
+    pub horizontal: bool,
+    /// 合成文字（`C1` / `1×30°`）。
+    pub text: String,
+}
+
+/// 去尾零数字（`1` 不是 `1.0`；`0.5`；角度同理）。
+fn format_trim_num(v: f64) -> String {
+    let s = format!("{v:.6}");
+    let s = s.trim_end_matches('0').trim_end_matches('.');
+    if s.is_empty() || s == "-" {
+        "0".to_string()
+    } else {
+        s.to_string()
+    }
+}
+
+/// 倒角文字：45°（±1e-3）→ `C{c}`；其它角度 → `{c}×{a}°`。乘号用真字符 U+00D7。
+/// 1e-9 是浮点容差：十进制边界 44.999 / 45.001 在 f64 里差 0.0010000000000048。
+pub(crate) fn chamfer_text(c: f64, a: f64) -> String {
+    let c_s = format_trim_num(c);
+    if (a - 45.0).abs() <= 1e-3 + 1e-9 {
+        format!("C{c_s}")
+    } else {
+        format!("{c_s}\u{00D7}{}°", format_trim_num(a))
+    }
+}
+
+/// 倒角块成员：单行 TEXT（左对齐/基线；样式 OCSM_GB，字宽比随样式 0.7）。
+fn chamfer_member_text(value: &str, pos: (f64, f64), h: f64, rot: f64) -> acadrust::EntityType {
+    use acadrust::entities::{Text, TextHorizontalAlignment, TextVerticalAlignment};
+    use acadrust::EntityType as E;
+    let mut t = Text::with_value(value, Vector3::new(pos.0, pos.1, 0.0));
+    t.height = h;
+    t.rotation = rot;
+    t.style = "OCSM_GB".into();
+    t.horizontal_alignment = TextHorizontalAlignment::Left;
+    t.vertical_alignment = TextVerticalAlignment::Baseline;
+    let mut e = E::Text(t);
+    set_member_layer(&mut e, "6文字层");
+    e.common_mut().color = acadrust::types::Color::ByLayer;
+    e
+}
+
+/// 倒角标注几何：**纯函数**（不读文档、不建块）。`s` = `frame_scale_at(doc, p0)`。
+pub(crate) fn build_chamfer_parts(
+    p_tip: [f64; 3],
+    p0: [f64; 3],
+    p_end: [f64; 3],
+    s: f64,
+    c: f64,
+    a: f64,
+) -> Result<ChamferParts, String> {
+    if !c.is_finite() || c <= 0.0 {
+        return Err("倒角标注：倒角尺寸 c 必须大于 0".into());
+    }
+    if !a.is_finite() || a <= 0.0 || a >= 90.0 {
+        return Err("倒角标注：角度 a 必须在 0°~90° 之间".into());
+    }
+    // 引导校验 / 肩线吸附：与 LEADER 共用同一条路径（`leader_geom`）。
+    let g = leader_geom(p_tip, p0, p_end, s)?;
+    // 肩线长度 = 画出的长度（样例肩线 4.9/6.3 就是手画的长度，不内容驱动）。
+    let blen = g.blen_drawn;
+    let tip = (p_tip[0] - p0[0], p_tip[1] - p0[1]);
+    let text = chamfer_text(c, a);
+
+    let mut members: Vec<acadrust::EntityType> = Vec::new();
+    // 引线（尖端→拐点，全长；**无箭头**）→ 7标注层、随层色（同样例）。
+    members.push(member_line(
+        tip,
+        (0.0, 0.0),
+        "7标注层",
+        acadrust::types::Color::ByLayer,
+    ));
+    // 肩线（拐点→末端，吸附主轴，长度 = 画出长度）→ 7标注层。
+    members.push(member_line(
+        g.tp(blen, 0.0, 0.0),
+        g.tp(blen, blen, 0.0),
+        "7标注层",
+        acadrust::types::Color::ByLayer,
+    ));
+    // 文字：自肩线**末端**起左对齐、肩线上方 0.38×字高（样例 +0.67 @ h=1.75）；6文字层。
+    let h = 3.5 * s;
+    let far_end = if g.corner_at_origin() {
+        g.tp(blen, blen, 0.0)
+    } else {
+        g.tp(blen, 0.0, 0.0)
+    };
+    let (tx, ty) = (
+        far_end.0 + g.n_up.0 * 0.38 * h,
+        far_end.1 + g.n_up.1 * 0.38 * h,
+    );
+    members.push(chamfer_member_text(&text, (tx, ty), h, g.text_rot()));
+    Ok(ChamferParts {
+        members,
+        scale: s,
+        blen,
+        horizontal: g.horizontal,
+        text,
+    })
+}
+
+/// 由构件组 INSERT（倒角产物落 `7标注层`；与 LEADER 的 `8符号标注层` 不同）。
+pub(crate) fn chamfer_insert(block_name: &str, p0: [f64; 3]) -> acadrust::entities::Insert {
+    use acadrust::entities::Insert;
+    let mut ins = Insert::new(block_name.to_string(), Vector3::new(p0[0], p0[1], 0.0));
+    ins.common.layer = "7标注层".into();
+    ins
+}
+
+/// 交互路径：`POST /api/apply` type=CHAMFER。引导 PLINE 保留（不删，可反复刷新）。
+fn apply_chamfer(
+    sender: &Arc<dyn PluginRequestSender>,
+    doc: &acadrust::CadDocument,
+    p_tip: [f64; 3],
+    p0: [f64; 3],
+    p_end: [f64; 3],
+    params: &GuideParams,
+) -> Result<String, String> {
+    use acadrust::EntityType as E;
+
+    let s = frame_scale_at(doc, p0);
+    let parts = build_chamfer_parts(p_tip, p0, p_end, s, params.chamfer.c, params.chamfer.a)?;
+
+    // ── 幂等 ensure：OCSM_GB 文字样式 / 7标注层 / 6文字层 ──
+    if !doc
+        .text_styles
+        .iter()
+        .any(|st| st.name.eq_ignore_ascii_case("OCSM_GB"))
+    {
+        req_timed(
+            sender,
+            PluginRequest::EnsureTextStyles(crate::text_style_defs()),
+            "EnsureTextStyles",
+        )?;
+    }
+    if ["7标注层", "6文字层"]
+        .iter()
+        .any(|want| !doc.layers.iter().any(|ly| ly.name.eq_ignore_ascii_case(want)))
+    {
+        req_timed(
+            sender,
+            PluginRequest::EnsureLayers(crate::layer_defs()),
+            "EnsureLayers",
+        )?;
+    }
+
+    // ── 匿名块 *C{n}（独立计数器，避开尺寸 *D / 引线 *L / 焊接 *W / 序号 *XH / 向视 *V）──
+    let mut max_n = 0u32;
+    for br in doc.block_records.iter() {
+        if let Some(rest) = br.name.strip_prefix("*C") {
+            if let Ok(n) = rest.parse::<u32>() {
+                max_n = max_n.max(n);
+            }
+        }
+    }
+    let block_name = format!("*C{}", max_n + 1);
+    req_timed(
+        sender,
+        PluginRequest::AddBlockRecord {
+            name: block_name.clone(),
+            entities: parts.members.clone(),
+        },
+        "AddBlockRecord",
+    )?;
+
+    let ins = chamfer_insert(&block_name, p0);
+    let handle = match req_timed(
+        sender,
+        PluginRequest::AddEntities(vec![E::Insert(ins)]),
+        "AddEntities",
+    ) {
+        Ok(PluginResponse::Handles(hs)) => hs.first().copied(),
+        Ok(_) => None,
+        Err(e) => return Err(e),
+    };
+    req_timed(sender, PluginRequest::BumpGeometry, "BumpGeometry")?;
+    mark_dirty(sender)?;
+
+    Ok(serde_json::json!({
+        "ok": true,
+        "block": block_name,
+        "insert_handle": handle.map(fmt_handle),
+        "scale": s,
+        "blen": parts.blen,
+        "horizontal": parts.horizontal,
+        "text": parts.text,
+        "c": params.chamfer.c,
+        "a": params.chamfer.a,
     })
     .to_string())
 }
@@ -9870,7 +10174,7 @@ mod tests {
             fit: None, sym: None, dec: Some(2), ver: crate::guide_url::DatumVersion::GB2008, letter: None, scale: None, flip: crate::guide_url::FlipDir::None, marker: None, angle_mode: crate::guide_url::AngleMode::Minor, section_side: crate::guide_url::SectionSide::Right, show_arrow: true, gdt_sym: None, gdt_dia: false, gdt_tol: None, gdt_d1: None, gdt_d2: None, gdt_d3: None, gdt_rows: Vec::new(), gdt_top: None, gdt_bot: None,
             detail_scale: 2.0, detail_no: None, detail_pos: None,
             detail_frame: 1.0, weld: WeldParams::default(),
-            leader: crate::guide_url::LeaderParams::default(),balloon: Default::default(),
+            leader: crate::guide_url::LeaderParams::default(),balloon: Default::default(),chamfer: Default::default(),
             };
         let dim = build_dimension(&sender, &doc, [0.0, 0.0, 0.0], [40.0, 30.0, 0.0], &pd, "OCSM_GB").unwrap();
         let rec = dim.base().common.extended_data.get_record("ACAD").expect("ACAD XDATA 存在");
@@ -9894,7 +10198,7 @@ mod tests {
             fit: None, sym: None, dec: None, ver: crate::guide_url::DatumVersion::GB2008, letter: None, scale: None, flip: crate::guide_url::FlipDir::None, marker: None, angle_mode: crate::guide_url::AngleMode::Minor, section_side: crate::guide_url::SectionSide::Right, show_arrow: true, gdt_sym: None, gdt_dia: false, gdt_tol: None, gdt_d1: None, gdt_d2: None, gdt_d3: None, gdt_rows: Vec::new(), gdt_top: None, gdt_bot: None,
             detail_scale: 2.0, detail_no: None, detail_pos: None,
             detail_frame: 1.0, weld: WeldParams::default(),
-            leader: crate::guide_url::LeaderParams::default(),balloon: Default::default(),
+            leader: crate::guide_url::LeaderParams::default(),balloon: Default::default(),chamfer: Default::default(),
             };
         // 直径走匿名块路径：mock 的 AddBlockRecord 返回 Ok → 成功。
         assert!(build_dimension(&sender, &doc, [0.0,0.0,0.0], [35.36,35.36,0.0], &pd, "OCSM_GB").is_ok());
@@ -9902,7 +10206,7 @@ mod tests {
             fit: None, sym: None, dec: None, ver: crate::guide_url::DatumVersion::GB2008, letter: None, scale: None, flip: crate::guide_url::FlipDir::None, marker: None, angle_mode: crate::guide_url::AngleMode::Minor, section_side: crate::guide_url::SectionSide::Right, show_arrow: true, gdt_sym: None, gdt_dia: false, gdt_tol: None, gdt_d1: None, gdt_d2: None, gdt_d3: None, gdt_rows: Vec::new(), gdt_top: None, gdt_bot: None,
             detail_scale: 2.0, detail_no: None, detail_pos: None,
             detail_frame: 1.0, weld: WeldParams::default(),
-            leader: crate::guide_url::LeaderParams::default(),balloon: Default::default(),
+            leader: crate::guide_url::LeaderParams::default(),balloon: Default::default(),chamfer: Default::default(),
             };
         assert!(build_dimension(&sender, &doc, [0.0,0.0,0.0], [35.36,35.36,0.0], &pr, "OCSM_GB").is_ok());
     }
@@ -9935,7 +10239,7 @@ mod tests {
                     gdt_sym: None, gdt_dia: false, gdt_tol: None, gdt_d1: None, gdt_d2: None, gdt_d3: None, gdt_rows: Vec::new(), gdt_top: None, gdt_bot: None,
             detail_scale: 2.0, detail_no: None, detail_pos: None,
             detail_frame: 1.0, weld: WeldParams::default(),
-            leader: crate::guide_url::LeaderParams::default(),balloon: Default::default(),
+            leader: crate::guide_url::LeaderParams::default(),balloon: Default::default(),chamfer: Default::default(),
             };
         // "%%c<>" 是默认（GUI 注入一次）→ 不设 user_text（块 TEXT 已用自动值）。
         let dim = build_dimension(&sender, &doc, [0.0, 0.0, 0.0], [35.36, 35.36, 0.0], &pd, "OCSM_GB").unwrap();
@@ -9980,7 +10284,7 @@ mod tests {
                     gdt_sym: None, gdt_dia: false, gdt_tol: None, gdt_d1: None, gdt_d2: None, gdt_d3: None, gdt_rows: Vec::new(), gdt_top: None, gdt_bot: None,
             detail_scale: 2.0, detail_no: None, detail_pos: None,
             detail_frame: 1.0, weld: WeldParams::default(),
-            leader: crate::guide_url::LeaderParams::default(),balloon: Default::default(),
+            leader: crate::guide_url::LeaderParams::default(),balloon: Default::default(),chamfer: Default::default(),
             };
         let dim = build_dimension(&sender, &doc, [0.0, 0.0, 0.0], [100.0, 0.0, 0.0], &pd, "OCSM_GB").unwrap();
         assert_eq!(
@@ -10042,7 +10346,7 @@ mod tests {
                     gdt_sym: None, gdt_dia: false, gdt_tol: None, gdt_d1: None, gdt_d2: None, gdt_d3: None, gdt_rows: Vec::new(), gdt_top: None, gdt_bot: None,
             detail_scale: 2.0, detail_no: None, detail_pos: None,
             detail_frame: 1.0, weld: WeldParams::default(),
-            leader: crate::guide_url::LeaderParams::default(),balloon: Default::default(),
+            leader: crate::guide_url::LeaderParams::default(),balloon: Default::default(),chamfer: Default::default(),
             };
         let dim = build_dimension(&sender, &doc, [0.0, 0.0, 0.0], [25.0, 0.0, 0.0], &pd, "OCSM_GB").unwrap();
         assert_eq!(
@@ -10081,7 +10385,7 @@ mod tests {
                     gdt_sym: None, gdt_dia: false, gdt_tol: None, gdt_d1: None, gdt_d2: None, gdt_d3: None, gdt_rows: Vec::new(), gdt_top: None, gdt_bot: None,
             detail_scale: 2.0, detail_no: None, detail_pos: None,
             detail_frame: 1.0, weld: WeldParams::default(),
-            leader: crate::guide_url::LeaderParams::default(),balloon: Default::default(),
+            leader: crate::guide_url::LeaderParams::default(),balloon: Default::default(),chamfer: Default::default(),
             };
         let dim = build_dimension(&sender, &doc, [0.0, 0.0, 0.0], [25.0, 0.0, 0.0], &pd, "OCSM_GB").unwrap();
         let t = dim.base().text.clone();
@@ -10123,7 +10427,7 @@ mod tests {
                     gdt_sym: None, gdt_dia: false, gdt_tol: None, gdt_d1: None, gdt_d2: None, gdt_d3: None, gdt_rows: Vec::new(), gdt_top: None, gdt_bot: None,
             detail_scale: 2.0, detail_no: None, detail_pos: None,
             detail_frame: 1.0, weld: WeldParams::default(),
-            leader: crate::guide_url::LeaderParams::default(),balloon: Default::default(),
+            leader: crate::guide_url::LeaderParams::default(),balloon: Default::default(),chamfer: Default::default(),
             };
         // fit 代号模式 → 配合代号堆叠（对照示例 `{\C3;\SH7/g6;}`：绿色、斜杠分数）。
         let dim = build_dimension(&sender, &doc, [0.0, 0.0, 0.0], [25.0, 0.0, 0.0], &pd, "OCSM_GB").unwrap();
@@ -10165,7 +10469,7 @@ mod tests {
                     gdt_sym: None, gdt_dia: false, gdt_tol: None, gdt_d1: None, gdt_d2: None, gdt_d3: None, gdt_rows: Vec::new(), gdt_top: None, gdt_bot: None,
             detail_scale: 2.0, detail_no: None, detail_pos: None,
             detail_frame: 1.0, weld: WeldParams::default(),
-            leader: crate::guide_url::LeaderParams::default(),balloon: Default::default(),
+            leader: crate::guide_url::LeaderParams::default(),balloon: Default::default(),chamfer: Default::default(),
             };
         let inner = std::sync::Arc::new(MockSender::new(acadrust::CadDocument::new()));
         let sender: std::sync::Arc<dyn PluginRequestSender> = inner.clone();
@@ -14004,6 +14308,16 @@ mod weld_tests {
             .collect()
     }
 
+    fn texts_of(members: &[E]) -> Vec<acadrust::entities::Text> {
+        members
+            .iter()
+            .filter_map(|e| match e {
+                E::Text(t) => Some(t.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
     fn kinds(members: &[E]) -> (usize, usize, usize, usize, usize, usize) {
         // (line, circle, arc, solid, text, attdef)
         let mut c = (0, 0, 0, 0, 0, 0);
@@ -14488,6 +14802,236 @@ mod weld_tests {
         assert!(should_warn_unsaved(1, &mut warned), "第一次要提");
         assert!(!should_warn_unsaved(1, &mut warned), "同一标签页不再提");
         assert!(should_warn_unsaved(2, &mut warned), "换标签页要提");
+    }
+
+    // ── 倒角标注（CHAMFER）测试────────────────────────────────────────────
+
+    fn chamfer_params(c: f64, a: f64) -> GuideParams {
+        let mut p = GuideParams::linear(LinearSub::Aligned, 0.0);
+        p.guide_type = GuideType::Chamfer;
+        p.sub = None;
+        p.chamfer = crate::guide_url::ChamferParams { c, a };
+        p
+    }
+
+    /// 文字合成：45°（±1e-3）→ `C{c}`；其它角度 → `{c}×{a}°`；乘号是 U+00D7；数字去尾零。
+    #[test]
+    fn chamfer_text_rules_and_times_sign() {
+        assert_eq!(chamfer_text(1.0, 45.0), "C1");
+        // 边界：44.999 / 45.001 是十进制恰好 ±1e-3，必须算 45°
+        // （1e-9 是浮点容差：45.0−44.999 在 f64 里是 0.0010000000000048）。
+        assert_eq!(chamfer_text(1.0, 44.999), "C1");
+        assert_eq!(chamfer_text(1.0, 45.001), "C1");
+        assert_eq!(chamfer_text(1.0, 44.99), "1×44.99°", "超出 1e-3 → × 形式");
+        assert_eq!(chamfer_text(1.0, 45.002), "1×45.002°");
+        assert_eq!(chamfer_text(1.0, 30.0), "1×30°");
+        // 数字去尾零：`1` 不是 `1.0`；`0.5`；角度同理。
+        assert_eq!(chamfer_text(0.5, 45.0), "C0.5");
+        assert_eq!(chamfer_text(2.50, 30.0), "2.5×30°");
+        assert_eq!(chamfer_text(2.0, 30.0), "2×30°");
+        // ★ 乘号断言码点/字节：必须是 U+00D7，不是 ASCII x / ⨯ / *。
+        let s = chamfer_text(1.0, 30.0);
+        assert!(!s.contains('x'), "乘号不许用 ASCII x: {s}");
+        assert!(s.chars().any(|ch| ch == '\u{00D7}'), "缺 U+00D7: {s}");
+        assert!(
+            s.as_bytes().windows(2).any(|w| w == [0xC3, 0x97]),
+            "U+00D7 的 UTF-8 应是 C3 97: {:?}",
+            s.as_bytes()
+        );
+    }
+
+    /// 构件：2 线 + 1 单行 TEXT，**无箭头**（SOLID=0）；引线/肩线落 7标注层、
+    /// 文字落 6文字层；文字在肩线末端上方 0.38×字高、左对齐；字高 3.5×s、样式 OCSM_GB。
+    #[test]
+    fn build_chamfer_parts_layers_text_and_no_arrow() {
+        let parts = build_chamfer_parts(P_TIP, P0, P_END, 1.0, 1.0, 45.0).unwrap();
+        assert_eq!(kinds(&parts.members), (2, 0, 0, 0, 1, 0), "2 线 + 1 文字 + 无箭头");
+        assert_eq!(parts.text, "C1");
+        let lines = lines_of(&parts.members);
+        for l in &lines {
+            assert_eq!(l.common.layer, "7标注层");
+            assert_eq!(l.common.color, acadrust::types::Color::ByLayer);
+        }
+        let ts = texts_of(&parts.members);
+        assert_eq!(ts.len(), 1);
+        let t = &ts[0];
+        assert_eq!(t.value, "C1");
+        assert_eq!(t.common.layer, "6文字层");
+        assert_eq!(t.common.color, acadrust::types::Color::ByLayer);
+        assert_eq!(t.style, "OCSM_GB");
+        assert_eq!(t.height, 3.5);
+        assert_eq!(t.rotation, 0.0);
+        assert!(matches!(
+            t.horizontal_alignment,
+            acadrust::entities::TextHorizontalAlignment::Left
+        ));
+        assert!(matches!(
+            t.vertical_alignment,
+            acadrust::entities::TextVerticalAlignment::Baseline
+        ));
+        // P_END 相对 P0 = +47.647（水平向右）；文字 = 肩线末端 + 0.38×3.5 = +1.33。
+        assert!((t.insertion_point.x - 47.647).abs() < 1e-9, "x={}", t.insertion_point.x);
+        assert!((t.insertion_point.y - 1.33).abs() < 1e-9, "y={}", t.insertion_point.y);
+        // 引线 = 尖端→拐点**全长**（无箭头缩短）：块局部 (−20.405, −18.870) → (0,0)。
+        let lead = lines
+            .iter()
+            .find(|l| (l.start.x + 20.405).abs() < 1e-9 && l.end.x.abs() < 1e-9)
+            .expect("引线");
+        assert!((lead.end.y).abs() < 1e-9 && (lead.start.y + 18.870).abs() < 1e-9);
+    }
+
+    /// 与用户样例「倒角标注」逐字段对照（真实几何：肩线向左 4.899、s=0.5、文字 +0.665）。
+    #[test]
+    fn build_chamfer_parts_matches_user_sample_left_shoulder() {
+        let p_tip = [17.500, 45.071, 0.0];
+        let p0 = [13.894, 48.677, 0.0];
+        let p_end = [8.995, 48.677, 0.0];
+        let parts = build_chamfer_parts(p_tip, p0, p_end, 0.5, 1.0, 45.0).unwrap();
+        assert_eq!(parts.text, "C1");
+        let t = &texts_of(&parts.members)[0];
+        assert_eq!(t.height, 1.75);
+        // 块局部：肩线末端 (−4.899, 0) → 文字 (−4.899, 0.665)；世界 (8.995, 49.342)。
+        assert!((t.insertion_point.x + 4.899).abs() < 1e-9);
+        assert!((t.insertion_point.y - 0.665).abs() < 1e-9);
+        // 样例实测文字 (9.018, 49.347) —— 差 x 0.023 / y 0.005（手画容差）。
+        let (wx, wy) = (p0[0] + t.insertion_point.x, p0[1] + t.insertion_point.y);
+        assert!(
+            (wx - 9.018).abs() < 0.03 && (wy - 49.347).abs() < 0.01,
+            "world=({wx},{wy})"
+        );
+        // 肩线向左：局部两端 = (0,0) 与 (−4.899, 0)（两条线都是 y=0 的那条才是肩线）。
+        let shoulder = lines_of(&parts.members)
+            .into_iter()
+            .find(|l| l.start.y.abs() < 1e-9 && l.end.y.abs() < 1e-9)
+            .expect("肩线");
+        let far = shoulder.start.x.min(shoulder.end.x);
+        assert!((far + 4.899).abs() < 1e-9, "肩线末端 x={far}");
+    }
+
+    /// 竖肩线：文字旋转 90°（沿肩线书写、永不倒置），锚点在肩线末端内容上方（−x 侧）。
+    #[test]
+    fn build_chamfer_parts_vertical_shoulder_rotates_text() {
+        let p_end = [P0[0], P0[1] + 40.0, 0.0];
+        let parts = build_chamfer_parts(P_TIP, P0, p_end, 1.0, 1.0, 30.0).unwrap();
+        assert!(!parts.horizontal);
+        assert_eq!(parts.text, "1×30°");
+        let t = &texts_of(&parts.members)[0];
+        assert!((t.rotation - std::f64::consts::FRAC_PI_2).abs() < 1e-9);
+        // n_up = (−1,0)：肩线末端 (0,40)，文字在其内容上方 → (−1.33, 40)。
+        assert!((t.insertion_point.x + 1.33).abs() < 1e-9, "x={}", t.insertion_point.x);
+        assert!((t.insertion_point.y - 40.0).abs() < 1e-9);
+    }
+
+    /// 坏参数 / 坏引导：c≤0、a 越界、引线过短、肩线零长 → 报错。
+    #[test]
+    fn build_chamfer_parts_rejects_invalid() {
+        let e = build_chamfer_parts(P_TIP, P0, P_END, 1.0, 0.0, 45.0).unwrap_err();
+        assert!(e.contains("c 必须大于 0"), "{e}");
+        let e = build_chamfer_parts(P_TIP, P0, P_END, 1.0, 1.0, 90.0).unwrap_err();
+        assert!(e.contains("0°~90°"), "{e}");
+        let e = build_chamfer_parts(P_TIP, P0, P0, 1.0, 1.0, 45.0).unwrap_err();
+        assert!(e.contains("长度为零"), "{e}");
+        let e = build_chamfer_parts([P0[0] - 1.0, P0[1] - 1.0, 0.0], P0, P_END, 1.0, 1.0, 45.0)
+            .unwrap_err();
+        assert!(e.contains("过短"), "{e}");
+    }
+
+    /// 应用：匿名块 *C1 + INSERT 落 7标注层；文字进块内 TEXT（无 ATTRIB）。
+    #[test]
+    fn apply_chamfer_writes_block_and_insert() {
+        let mock = Arc::new(MockSender::new(weld_doc()));
+        let sender: Arc<dyn PluginRequestSender> = mock.clone();
+        let out = apply_chamfer(&sender, &weld_doc(), P_TIP, P0, P_END, &chamfer_params(1.0, 45.0))
+            .unwrap();
+        assert!(out.contains("\"block\":\"*C1\""), "{out}");
+        assert!(out.contains("\"text\":\"C1\""), "{out}");
+        let members = mock.block_entities("*C1");
+        assert_eq!(kinds(&members), (2, 0, 0, 0, 1, 0), "2 线 + 1 文字 + 无箭头");
+        let doc2 = mock.doc.lock().unwrap();
+        let ins = doc2
+            .entities()
+            .find_map(|e| match e {
+                E::Insert(i) => Some(i.clone()),
+                _ => None,
+            })
+            .expect("INSERT");
+        assert_eq!(ins.common.layer, "7标注层");
+        assert!(ins.attributes.is_empty(), "TEXT 方案不用 ATTRIB");
+        assert!((ins.insert_point.x - P0[0]).abs() < 1e-9);
+    }
+
+    /// HTTP 端到端：两段 PLINE → type=CHAMFER → *C1 + INSERT（引导保留）；
+    /// `/api/guide` 回读 params.chamfer（deep-link 回填）；改 c/a 再刷新 → 文字更新、
+    /// 旧产物被**替换**（不叠加）；非 3 顶点 → 报错。
+    #[test]
+    fn http_server_chamfer_apply_refresh_replaces() {
+        let mut doc = acadrust::CadDocument::new();
+        let mut pl = LwPolyline::new();
+        pl.common.layer = "10引导线层".into();
+        pl.add_point(Vector2::new(0.0, 0.0));
+        pl.add_point(Vector2::new(20.0, 20.0));
+        pl.add_point(Vector2::new(60.0, 20.0));
+        let gh = doc.add_entity(E::LwPolyline(pl)).unwrap();
+        let mock = Arc::new(MockSender::new(doc));
+        // 块记录真进文档（否则第二轮扫不到 *C1，块名计数器永远出 *C1）。
+        mock.mirror_blocks_into_doc();
+        let server = spawn_fixed(mock.clone()).expect("spawn guide server");
+        let hx = format!("{:#X}", u64::from(gh));
+        let url1 = "http://127.0.0.1:1/DIM/CHAMFER/0?c=1&a=45";
+        let body = serde_json::json!({"handle": hx, "url": url1}).to_string();
+        let r = http_req(server.port, "POST", "/api/apply_refresh", &body);
+        let v: serde_json::Value = serde_json::from_str(&r).unwrap();
+        assert_eq!(v["ok"], true, "apply_refresh: {r}");
+        assert_eq!(v["block"], "*C1");
+        assert_eq!(v["text"], "C1");
+        assert!(mock
+            .doc
+            .lock()
+            .unwrap()
+            .entities()
+            .any(|e| matches!(e, E::LwPolyline(_))), "引导 PLINE 保留");
+        assert_eq!(texts_of(&mock.block_entities("*C1"))[0].value, "C1");
+        // 回读（deep-link）：/api/guide 应回 params.type=CHAMFER + chamfer{c,a}。
+        let g = http_req(server.port, "GET", &format!("/api/guide?handle={hx}"), "");
+        let gv: serde_json::Value = serde_json::from_str(&g).unwrap();
+        assert_eq!(gv["params"]["type"], "CHAMFER", "{g}");
+        assert_eq!(gv["params"]["chamfer"]["c"], 1.0);
+        assert_eq!(gv["params"]["chamfer"]["a"], 45.0);
+        // 刷新：c=2、a=30 → 文字 2×30°，块 *C2；旧 *C1 的 INSERT 被替换（不叠加）。
+        let url2 = "http://127.0.0.1:1/DIM/CHAMFER/0?c=2&a=30";
+        let body2 = serde_json::json!({"handle": hx, "url": url2}).to_string();
+        let r2 = http_req(server.port, "POST", "/api/apply_refresh", &body2);
+        let v2: serde_json::Value = serde_json::from_str(&r2).unwrap();
+        assert_eq!(v2["ok"], true, "refresh: {r2}");
+        assert_eq!(v2["block"], "*C2");
+        assert_eq!(v2["text"], "2×30°");
+        let doc2 = mock.doc.lock().unwrap();
+        let inserts: Vec<_> = doc2
+            .entities()
+            .filter_map(|e| match e {
+                E::Insert(i) => Some(i.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(inserts.len(), 1, "刷新后只应剩 1 个 INSERT（旧产物被替换）");
+        assert_eq!(inserts[0].block_name, "*C2");
+        drop(doc2);
+        assert_eq!(texts_of(&mock.block_entities("*C2"))[0].value, "2×30°");
+        drop(server);
+        // 坏引导：4 顶点 PLINE → 报错。
+        let mut doc3 = acadrust::CadDocument::new();
+        let mut pl3 = LwPolyline::new();
+        pl3.common.layer = "10引导线层".into();
+        for pt in [(0.0, 0.0), (10.0, 0.0), (20.0, 0.0), (30.0, 0.0)] {
+            pl3.add_point(Vector2::new(pt.0, pt.1));
+        }
+        let gh3 = doc3.add_entity(E::LwPolyline(pl3)).unwrap();
+        let mock3 = Arc::new(MockSender::new(doc3));
+        let server3 = spawn_fixed(mock3.clone()).expect("spawn guide server 3");
+        let hx3 = format!("{:#X}", u64::from(gh3));
+        let body3 = serde_json::json!({"handle": hx3, "url": url1}).to_string();
+        let r3 = http_req(server3.port, "POST", "/api/apply_refresh", &body3);
+        assert!(r3.contains("3 顶点"), "4 顶点应报错: {r3}");
     }
 
     // ── 序号标注（BALLOON）测试─────────────────────────────────────────────

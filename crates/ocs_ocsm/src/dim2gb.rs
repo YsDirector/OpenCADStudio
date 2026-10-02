@@ -443,6 +443,7 @@ fn base_params(guide_type: GuideType, dist: f64, dec: Option<u32>) -> GuideParam
         weld: WeldParams::default(),
         leader: crate::guide_url::LeaderParams::default(),
         balloon: Default::default(),
+        chamfer: Default::default(),
     }
 }
 

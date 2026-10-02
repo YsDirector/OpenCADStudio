@@ -45,6 +45,9 @@ pub enum GuideType {
     /// 顶点1=拐点，顶点2=肩线末端）；一个组 = 1 指引线 + 1 圆点 + N 条横线
     /// （横向 V 形折线连 / 纵向竖线连）+ N 个序号（各自横线上方居中）。
     Balloon,
+    /// 倒角标注（LEADER 的无箭头变体）：两段 PLINE 引导（顶点0=指向倒角的点，
+    /// 顶点1=拐点，顶点2=肩线末端）；生成 引线 + 肩线 + 单行文字（`C{c}` / `{c}×{a}°`）。
+    Chamfer,
 }
 
 impl GuideType {
@@ -63,6 +66,7 @@ impl GuideType {
             GuideType::Weld => "WELD",
             GuideType::Leader => "LEADER",
             GuideType::Balloon => "BALLOON",
+            GuideType::Chamfer => "CHAMFER",
         }
     }
     fn from_str(s: &str) -> Option<Self> {
@@ -80,6 +84,7 @@ impl GuideType {
             "WELD" | "焊接" => Some(GuideType::Weld),
             "LEADER" | "引线" | "LEAD" => Some(GuideType::Leader),
             "BALLOON" | "序号" | "序号标注" | "XH" => Some(GuideType::Balloon),
+            "CHAMFER" | "倒角" => Some(GuideType::Chamfer),
             _ => None,
         }
     }
@@ -419,6 +424,8 @@ pub struct GuideParams {
     pub leader: LeaderParams,
     /// 序号标注参数（仅 BALLOON）。
     pub balloon: BalloonParams,
+    /// 倒角标注参数（仅 CHAMFER）。
+    pub chamfer: ChamferParams,
 }
 
 /// 序号标注参数。
@@ -434,6 +441,20 @@ pub struct BalloonParams {
     /// 序号冲突时是否"插入后移"（GUI 勾选）：true = 其后所有序号 +1；
     /// false = 视为同一零件，明细表里对应行**数量 +1**。
     pub insert_mode: bool,
+}
+
+/// 倒角标注参数：`c` = 倒角尺寸、`a` = 倒角角度（度，缺省 45）。
+/// 文字规则：`|a−45| ≤ 1e-3` → `C{c}`；否则 `{c}×{a}°`（× = U+00D7）。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ChamferParams {
+    pub c: f64,
+    pub a: f64,
+}
+
+impl Default for ChamferParams {
+    fn default() -> Self {
+        Self { c: 1.0, a: 45.0 }
+    }
 }
 
 /// 引线标注参数：引线上方文字 + 引线下方文字（各单行；空 = 不显示）。
@@ -525,6 +546,7 @@ impl GuideParams {
             weld: WeldParams::default(),
             leader: LeaderParams::default(),
             balloon: BalloonParams::default(),
+            chamfer: ChamferParams::default(),
         }
     }
 
@@ -605,6 +627,7 @@ impl GuideParams {
         let mut weld = WeldParams::default();
         let mut leader = LeaderParams::default();
         let mut balloon = BalloonParams::default();
+        let mut chamfer = ChamferParams::default();
         // 打磨/焊接方法：兼容"两侧同值"旧键 + 上下侧独立新键。
         let mut grind_all = GrindKind::None;
         let mut grind_u: Option<GrindKind> = None;
@@ -669,6 +692,21 @@ impl GuideParams {
                 // 引线标注（仅 LEADER）：lu=上侧文字、ll=下侧文字（单行）。
                 "lu" => leader.upper = v,
                 "ll" => leader.lower = v,
+                // 倒角标注（仅 CHAMFER）：c=倒角尺寸、a=倒角角度（度，缺省 45）。
+                "c" => {
+                    if let Ok(x) = v.parse::<f64>() {
+                        if x.is_finite() {
+                            chamfer.c = x;
+                        }
+                    }
+                }
+                "a" => {
+                    if let Ok(x) = v.parse::<f64>() {
+                        if x.is_finite() {
+                            chamfer.a = x;
+                        }
+                    }
+                }
                 // 序号标注（仅 BALLOON）：items=序号列表（逗号分隔，从指引线向外/向上）、
                 // dir=H 横向 / V 纵向、ins=1 序号冲突时插入后移（否则数量 +1）。
                 "items" | "nos" => balloon.items = crate::balloon::parse_items(&v),
@@ -753,6 +791,7 @@ impl GuideParams {
             weld,
             leader,
             balloon,
+            chamfer,
         })
     }
 
@@ -1007,6 +1046,11 @@ impl GuideParams {
             if b.insert_mode {
                 q.push("ins=1".into());
             }
+        }
+        if self.guide_type == GuideType::Chamfer {
+            // 倒角：c/a 都写（自描述；缺省也写，刷新往返逐字稳定）。
+            q.push(format!("c={}", format_dist(self.chamfer.c)));
+            q.push(format!("a={}", format_dist(self.chamfer.a)));
         }
         if !q.is_empty() {
             url.push('?');
@@ -1438,6 +1482,31 @@ mod tests {
         p.flip = FlipDir::Clockwise;
         let back = GuideParams::from_url(&p.to_url(1)).unwrap();
         assert_eq!(back.flip, FlipDir::Clockwise);
+    }
+
+    /// 倒角标注（CHAMFER）：URL 解析 + 往返（c/a 都写、去尾零）；缺省 a=45/c=1；中文别名。
+    #[test]
+    fn parse_chamfer_url_roundtrip() {
+        let p = GuideParams::from_url("http://127.0.0.1:23751/DIM/CHAMFER/0?c=1&a=45").unwrap();
+        assert_eq!(p.guide_type, GuideType::Chamfer);
+        assert_eq!(p.chamfer.c, 1.0);
+        assert_eq!(p.chamfer.a, 45.0);
+        assert_eq!(p.to_url(23751), "http://127.0.0.1:23751/DIM/CHAMFER/0?c=1&a=45");
+        // 缺省：c 缺省 1、a 缺省 45（只给 dist 段也能解析）。
+        let d = GuideParams::from_url("http://x/DIM/CHAMFER/0").unwrap();
+        assert_eq!(d.chamfer.c, 1.0);
+        assert_eq!(d.chamfer.a, 45.0);
+        // 去尾零：0.5 / 30 不是 0.5 / 30.0。
+        let mut q = p.clone();
+        q.chamfer = ChamferParams { c: 0.5, a: 30.0 };
+        assert_eq!(q.to_url(9), "http://127.0.0.1:9/DIM/CHAMFER/0?c=0.5&a=30");
+        let back = GuideParams::from_url(&q.to_url(9)).unwrap();
+        assert_eq!(back.chamfer, q.chamfer);
+        // 中文别名「倒角」。
+        assert_eq!(
+            GuideParams::from_url("http://x/DIM/%E5%80%92%E8%A7%92/0").unwrap().guide_type,
+            GuideType::Chamfer
+        );
     }
 
     /// 族⑤：引导线 GUI 显示名 —— zh/en 双语（协议别名不译，仍可中文/英文解析）。

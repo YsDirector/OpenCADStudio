@@ -126,6 +126,7 @@
         <button data-t="TOLERANCE">{{i18n:gui.guide.type.tolerance}}</button>
         <button data-t="WELD">{{i18n:gui.guide.type.weld}}</button>
         <button data-t="LEADER">{{i18n:gui.guide.type.leader}}</button>
+        <button data-t="CHAMFER">{{i18n:gui.guide.type.chamfer}}</button>
         <button data-t="BALLOON">{{i18n:gui.guide.type.balloon}}</button>
         <button data-t="ARCLEN">{{i18n:gui.guide.type.arclen}}</button>
         <button data-t="DETAIL">{{i18n:gui.guide.type.detail}}</button>
@@ -277,6 +278,16 @@
         <span class="gdt-hint" style="margin:0">插入工程符号（如 x=深度符号，即 GB 的深度标法）；符号后自动恢复标注字体</span>
       </div>
       <div class="gdt-hint">肩线长度随文字自动调整</div>
+    </div>
+    <!-- 倒角标注（CHAMFER）：倒角尺寸 c + 角度 a（缺省 45；45° 写 C{c}，其它角度写 {c}×{a}°） -->
+    <div class="row" id="row-chamfer" style="display:none; margin-top:8px; flex-direction:column; align-items:stretch; gap:6px">
+      <div class="row" style="display:flex; gap:8px; align-items:center; flex-wrap:wrap">
+        <span class="lbl">{{i18n:gui.guide.chamfer.size}}</span>
+        <input type="number" id="ch-c" value="1" min="0.001" step="0.5" style="width:80px">
+        <span class="lbl">{{i18n:gui.guide.chamfer.angle}}</span>
+        <input type="number" id="ch-a" value="45" min="0.1" max="89.9" step="1" style="width:80px">
+      </div>
+      <div class="gdt-hint">{{i18n:gui.guide.chamfer.hint}}</div>
     </div>
     <!-- 序号标注（BALLOON）：一个组 = 1 指引线 + 1 圆点 + N 横线 + N 序号；可横向/纵向扩展 -->
     <div class="row" id="row-balloon" style="display:none; margin-top:8px; flex-direction:column; align-items:stretch; gap:6px">
@@ -570,7 +581,7 @@
   segBind('seg-type', b => {
     type = b.dataset.t;
     // 所有"类型专属行"先统一隐藏，各分支只负责显示自己需要的（防漏显示）。
-    ['row-weld', 'row-leader', 'row-balloon', 'row-gdt', 'row-detail'].forEach((id) => {
+    ['row-weld', 'row-leader', 'row-balloon', 'row-gdt', 'row-detail', 'row-chamfer'].forEach((id) => {
       document.getElementById(id).style.display = 'none';
     });
     // 文字框保持 <>（= 测量值）；直径/半径的 Ø/R 前缀由生成端自动添加，
@@ -676,6 +687,27 @@
       draw();
       return;
     }
+    // 倒角标注：与引线同构（两段 PLINE：倒角点→拐点→肩线末端），专属面板 row-chamfer。
+    if (type === 'CHAMFER') {
+      document.getElementById('row-sub').style.display = 'none';
+      document.getElementById('row-gdt').style.display = 'none';
+      document.getElementById('row-param').style.display = 'none';
+      document.getElementById('row-txt').style.display = 'none';
+      document.getElementById('row-tol').style.display = 'none';
+      document.getElementById('row-view').style.display = 'none';
+      document.getElementById('row-detail').style.display = 'none';
+      document.getElementById('seg-side').style.display = 'none';
+      document.getElementById('seg-angle-mode').style.display = 'none';
+      document.getElementById('seg-section-side').style.display = 'none';
+      document.getElementById('seg-ver').style.display = 'none';
+      document.getElementById('seg-letter').style.display = 'none';
+      document.getElementById('letter-lbl').style.display = 'none';
+      tolEnabled = false; document.getElementById('tol-enable').checked = false;
+      document.getElementById('row-chamfer').style.display = ''; // 显示倒角专属面板
+      document.getElementById('gdt-row').style.display = 'none';
+      draw();
+      return;
+    }
     document.getElementById('gdt-row').style.display = gdt ? 'none' : '';
     document.getElementById('sub-lbl').textContent = linear ? '线性' : (angle ? '角度' : (section ? '剖切' : (type === 'ARCLEN' ? '偏移' : '位置')));
     document.getElementById('sub-lbl').style.display = (datum || view || angle || section || type === 'ARCLEN') ? 'none' : '';
@@ -748,7 +780,7 @@
     } else if (geom === 'pline') {
       const nV = (PTS && PTS.length) || 0;
       // 焊接：仅两段（恰好 3 顶点：焊缝点→拐点→基准线末端）；引线同构（箭头→拐点→肩线末端）。
-      allow = (nV >= 3) ? ['ANGLE', 'SECTION', 'TOLERANCE'].concat(nV === 3 ? ['WELD', 'LEADER', 'BALLOON'] : [])
+      allow = (nV >= 3) ? ['ANGLE', 'SECTION', 'TOLERANCE'].concat(nV === 3 ? ['WELD', 'LEADER', 'BALLOON', 'CHAMFER'] : [])
                         : ['SECTION', 'TOLERANCE'];
     } else {
       allow = LINE_TYPES;
@@ -1242,6 +1274,15 @@ const BS_FITS = [
       qs.push('items=' + encodeURIComponent(arr.join(',')));
       qs.push('dir=' + xhDir);
       if (document.getElementById('xh-ins').checked) qs.push('ins=1');
+    } else if (type === 'CHAMFER') {
+      // 倒角标注：c=倒角尺寸、a=角度（度）；URL 与 LEADER 同构（dist 段恒 0）。
+      u += '/0';
+      const c = parseFloat(document.getElementById('ch-c').value);
+      const ang = parseFloat(document.getElementById('ch-a').value);
+      if (!isFinite(c) || c <= 0) throw new Error('倒角尺寸无效');
+      if (!isFinite(ang) || ang <= 0 || ang >= 90) throw new Error('倒角角度无效（0~90°）');
+      qs.push('c=' + c);
+      qs.push('a=' + ang);
     } else if (type === 'DETAIL') {
       // 局部放大图：放大比例（绝对）+ 序号（自动）+ 放置偏移（相对引导中心，留空自动）。
       u += '/0';
@@ -1856,6 +1897,56 @@ const BS_FITS = [
     }
   }
 
+  // 倒角标注预览：引导（灰）+ 引线/肩线（青，无箭头）+ 单行文字（绿，肩线末端上方）；
+  // 文字规则与服务端 `chamfer_text` 同构：45°（±1e-3）→ C{c}，否则 {c}×{a}°。
+  function drawChamfer() {
+    svg.innerHTML = '';
+    const a = (PTS && PTS[0]) ? PTS[0] : P1;
+    const p0 = (PTS && PTS[1]) ? PTS[1] : P2;
+    const pe = (PTS && PTS[2]) ? PTS[2] : null;
+    const gpts = (PTS && PTS.length >= 2) ? PTS : [a, p0];
+    for (let i = 0; i + 1 < gpts.length; i++) {
+      svg.appendChild(wline(gpts[i].x, gpts[i].y, gpts[i+1].x, gpts[i+1].y, 1.5, '#bbb'));
+    }
+    const sdx = pe ? (pe.x - p0.x) : 1, sdy = pe ? (pe.y - p0.y) : 0;
+    const horizontal = Math.abs(sdx) >= Math.abs(sdy);
+    const blen = horizontal ? Math.abs(sdx) : Math.abs(sdy);
+    if (!(blen > 1e-9)) return;
+    // 与服务端同构：主轴方向 d_c、内容上方 n_up；锚点 = 沿主轴坐标较小端。
+    const dir = horizontal ? (Math.sign(sdx) || 1) : (Math.sign(sdy) || 1);
+    const d_c = horizontal ? { x: dir, y: 0 } : { x: 0, y: dir };
+    const n_up = horizontal ? { x: 0, y: 1 } : { x: -1, y: 0 };
+    const cornerAtOrigin = (horizontal && sdx >= 0) || (!horizontal && sdy >= 0);
+    const anchor = horizontal
+      ? (sdx >= 0 ? 0 : -blen)
+      : (sdy >= 0 ? 0 : -blen);
+    const anchorP = horizontal ? { x: anchor, y: 0 } : { x: 0, y: anchor };
+    const P = (u, v) => ({
+      x: p0.x + anchorP.x + u * d_c.x + v * n_up.x,
+      y: p0.y + anchorP.y + u * d_c.y + v * n_up.y,
+    });
+    const CY = '#0aa', GR = '#090';
+    // 引线（尖端→拐点，全长；无箭头）+ 肩线。
+    svg.appendChild(wline(a.x, a.y, p0.x, p0.y, 2, CY));
+    const s0 = P(0, 0), s1 = P(blen, 0);
+    svg.appendChild(wline(s0.x, s0.y, s1.x, s1.y, 2, CY));
+    // 文字：肩线末端起左对齐、上方 0.38×字高（字高 3.5）。
+    const far = cornerAtOrigin ? P(blen, 0) : P(0, 0);
+    const h = 3.5;
+    const t = w2s(far.x + n_up.x * 0.38 * h, far.y + n_up.y * 0.38 * h);
+    const num = (v) => String(Math.round(v * 1e6) / 1e6);
+    const c = parseFloat(document.getElementById('ch-c').value);
+    const ang = parseFloat(document.getElementById('ch-a').value);
+    const label = (isFinite(ang) && Math.abs(ang - 45) <= 1e-3)
+      ? ('C' + num(c))
+      : (num(c) + '×' + num(ang) + '°');
+    const tx = el('text', Object.assign(
+      { x: t.x, y: t.y, fill: GR, 'font-size': 12, 'text-anchor': 'start', 'dominant-baseline': 'middle' },
+      weldTextRot(horizontal, t.x, t.y)));
+    tx.textContent = label;
+    svg.appendChild(tx);
+  }
+
   /// 序号标注预览：一个组 = 1 指引线 + 1 圆点（八边形实心）+ N 横线
   /// （横向 V 形折线连 / 纵向竖线连）+ N 个序号（各自横线上方居中）。
   /// 比例与服务端 balloon.rs 完全同源（参考单位 × 图幅倍率；预览按 1:1）。
@@ -1951,6 +2042,7 @@ const BS_FITS = [
     svg.innerHTML = '';
     if (type === 'WELD') { drawWeld(); return; }
     if (type === 'LEADER') { drawLeader(); return; }
+    if (type === 'CHAMFER') { drawChamfer(); return; }
     if (type === 'BALLOON') { drawBalloon(); return; }
     // 引导线（DETAIL 圆引导：圆心→半径点的连线无意义，跳过只留端点标记）
     if (!(type === 'DETAIL' && geom === 'circle')) {
@@ -2524,6 +2616,11 @@ const BS_FITS = [
           const l = j.params.leader;
           document.getElementById('l-up').value = l.upper || '';
           document.getElementById('l-lo').value = l.lower || '';
+        }
+        if (j.params && j.params.chamfer) {
+          const ch = j.params.chamfer;
+          document.getElementById('ch-c').value = ch.c;
+          document.getElementById('ch-a').value = ch.a;
         }
         if (j.params && j.params.balloon) {
           const xb = j.params.balloon;
