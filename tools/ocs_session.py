@@ -11,6 +11,8 @@ token 当十六进制句柄喂进实体拾取步骤 —— 那种写法可以直
 
 用法：
     python3 /tmp/ocs_mcp.py <<'PY'
+    open /path/to/图.dxf        # ★ 打开现成图纸：路径取整行剩余部分（可含空格/中文/括号）
+    query line 3中心线层        #   open 之后 query/run 都落在这份新打开的文档上
     newdoc
     run CENTERMARK
     input entity DD 315,350,0
@@ -18,6 +20,12 @@ token 当十六进制句柄喂进实体拾取步骤 —— 那种写法可以直
     run D2G
     query line 3中心线层
     PY
+
+指令一览：run / input / newdoc / open / cancel / query / select（未知指令原样报「未知指令」）。
+`open <路径>` 的路径 = 整行剩余部分（不按空格切，含空格/中文/括号都行）；若最外层是一对
+单/双引号则只剥掉这一层。先本地预检（见下），再用既有 op `{"op":"open","path":…}`
+（`src/app/automation.rs:612` 实现、`src/mcp.rs:691` 校验、宿主投递见 `src/app/control/mod.rs:958`）。
+打开成功后打印该文档的 document_id / revision / 标题（文件名）。
 
 安全边界（默认只连「自己启动的那一个实例」）：
     ★ 实例发现根 = `config_dir()/automation` —— `src/config.rs:28`（Linux 取 $XDG_CONFIG_HOME，
@@ -29,6 +37,13 @@ token 当十六进制句柄喂进实体拾取步骤 —— 那种写法可以直
       绝不碰 ~/.config/OpenCADStudio/automation/ 里别人的实例 —— 用户正在画图时也不会被打进他的图。
     ★ 启动后校验归属：描述符里的 pid 必须属于本脚本 spawn 的子进程；不符即报错退出，
       绝不「降级」去用别人的 session。退出时杀掉自己启动的宿主（不留常驻进程）。
+    ★ `open <路径>` 打开后，该文档就是后续 run/query 的当前文档：MCP 侧会用响应 state 里的
+      新 document_id/revision 覆盖自己缓存的旧值（`src/mcp.rs:408-412`），本脚本再用
+      `ocs_sessions` 复核并把 document_id/revision/标题打印回来（脚本自己从不硬编码 CAS 值）。
+      执行前本地预检目标文件：不存在 / 后缀不是 .dxf|.dwg|.bak|.sv$（`src/io/mod.rs:760-777`）
+      ⇒ 明确报错、不执行；`.{文件名}.ocs.lock`（`src/io/edit_lock.rs:287`）被别的进程 flock
+      占住（★ 探的是 flock 占用，不是「锁文件存在」）⇒ 报「该文件正被另一个实例打开（pid=…）」
+      并拒绝，绝不抢占/覆盖。自家人（本脚本启动的宿主）已持有的锁不算冲突。
 
 配置种子（默认带最小种子，否则 `newdoc` 建不出图纸）：
     ★ 空配置（隔离根里没有 settings.json）时，宿主启动模态 AssocPrompt / DonationPrompt
@@ -45,6 +60,7 @@ token 当十六进制句柄喂进实体拾取步骤 —— 那种写法可以直
     OCS_BIN=<路径>               宿主二进制（默认按仓库根/target/release 推导）
     OCS_ALLOW_EXISTING=1         ★ 逃生态：不隔离，允许连「现有实例」（含用户正在用的 GUI）。
                                  风险：run/input/save/capture 会直接打进那张正在编辑的图，
+                                 `open` 还会切换该实例正在用的当前文档（随后 query/run 跟着换文档）；
                                  仅在你确认目标实例时使用；默认关。
     OCS_NO_SEED=1                纯空配置：不拷任何种子（`newdoc` 会卡 waiting_input、`run` 报
                                  no_document；这是验证「种子确实在起作用」的反证档）。
@@ -53,6 +69,11 @@ token 当十六进制句柄喂进实体拾取步骤 —— 那种写法可以直
     OCS_KEEP_HOST=1              退出时保留自己启动的宿主（默认 SIGTERM 掉）
 """
 import atexit, glob, json, os, queue, shutil, subprocess, sys, tempfile, threading, time
+
+try:
+    import fcntl                      # 只用于 `open` 的编辑锁预检（src/io/edit_lock.rs）
+except ImportError:                   # 非 Unix（Windows 走 LockFileEx，探不了）⇒ 预检降级为 unknown
+    fcntl = None
 
 if any(arg in ("-h", "--help") for arg in sys.argv[1:]):
     print(__doc__)          # 含逃生态风险说明；不建目录、不起进程
@@ -396,6 +417,71 @@ doc = rows[0]["document_id"]
 print(f"# session={sid} doc={doc} rev={rows[0]['revision']} "
       f"pid={HOST.pid if HOST else 'existing'}")
 
+def lock_sidecar_path(path):
+    """编辑锁 sidecar 路径（与 src/io/edit_lock.rs:284-289 的 sidecar_path 同构：
+    先 canonicalize，再在父目录拼 `.{文件名}.ocs.lock`）。"""
+    canonical = os.path.realpath(path)
+    return os.path.join(os.path.dirname(canonical),
+                        "." + os.path.basename(canonical) + ".ocs.lock")
+
+
+def probe_edit_lock(path):
+    """探测 OCS 编辑锁：返回 (state, owner_pid)。state ∈ free / locked / unknown。
+
+    ★ 探的是 sidecar 上的 flock 占用（宿主用 EditLease 的 try_lock，见
+      src/io/edit_lock.rs:137-190），不是「锁文件是否存在」——残留锁文件不构成占用。
+    ★ 锁文件不存在时绝不创建；探到空闲也立刻释放，绝不占住别人的锁。
+    """
+    if fcntl is None:
+        return "unknown", None
+    lock_path = lock_sidecar_path(path)
+    try:
+        fd = os.open(lock_path, os.O_RDONLY)
+    except FileNotFoundError:
+        return "free", None
+    except OSError as error:
+        print("  # 无法预检编辑锁 %s（%s）：交给宿主判断"
+              % (lock_path, error.strerror or error))
+        return "unknown", None
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            owner = None
+            try:
+                with open(lock_path, "r", encoding="utf-8", errors="replace") as fh:
+                    for token in fh.read().split():
+                        if token.startswith("pid=") and token[4:].isdigit():
+                            owner = int(token[4:])
+                            break
+            except OSError:
+                pass
+            return "locked", owner
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        return "free", None
+    finally:
+        os.close(fd)
+
+
+def open_precheck(path):
+    """`open` 的前置检查：返回错误文案；None = 可以打开（必要时已打印提示）。"""
+    if not os.path.exists(path):
+        return "文件不存在：%s" % path
+    if os.path.isdir(path):
+        return "不是文件（是目录）：%s" % path
+    ext = os.path.splitext(path)[1].lower()
+    if ext not in (".dxf", ".dwg", ".bak", ".sv$"):   # src/io/mod.rs:760-777
+        return "不是 CAD 文件（只认 .dxf/.dwg/.bak/.sv$，实际后缀 %s）：%s" % (ext or "无", path)
+    state, owner = probe_edit_lock(path)
+    if state == "locked":
+        if HOST is not None and owner == HOST.pid:
+            return None      # 自家宿主已持有（同一脚本重复 open 同一份图）⇒ 不是「别的实例」
+        who = "pid=%d" % owner if owner is not None else "pid 未知"
+        return ("该文件正被另一个实例打开（%s，锁 %s）；拒绝打开以免抢占/覆盖"
+                % (who, lock_sidecar_path(path)))
+    return None
+
+
 def show(d, tag=""):
     if not isinstance(d, dict):
         print(f"  {tag} ← {str(d)[:120]}")
@@ -442,6 +528,42 @@ for raw in sys.stdin.read().splitlines():
         d = call_tool("ocs_execute", {"ocs_session_id": sid,
                                       "request": {"request_id": f"mcp-{_id[0]}", "op": "new"}})
         show(d, "newdoc")
+    elif op == "open":
+        # `open <路径>`：打开一份现成图纸，并把它设为后续命令的当前文档。
+        # ★ 路径 = 整行剩余部分（line.split(None, 1) 只按第一个空白切，含空格/中文/括号的路径
+        #   原样保留）；最外层若是一对单/双引号则只剥这一层（不做 shell 词法）。
+        path = arg[1:-1] if len(arg) >= 2 and arg[0] == arg[-1] and arg[0] in "\"'" else arg
+        path = os.path.expanduser(path)
+        problem = open_precheck(path)
+        if problem:
+            print("  ! open 失败：%s" % problem)
+        else:
+            # 用既有 op `{"op":"open","path":…}`（src/app/automation.rs:612 的同名分支实现，
+            # 宿主侧是 src/app/control/mod.rs:958 → Message::OpenExternal）。
+            d = call_tool("ocs_execute", {
+                "ocs_session_id": sid, "wait_seconds": 45,
+                "request": {"request_id": "mcp-%d" % _id[0], "op": "open", "path": path}})
+            status = d.get("status") if isinstance(d, dict) else None
+            if not isinstance(d, dict) or d.get("ok") is not True or status != "completed":
+                why = ((d.get("error") or d.get("code") or "status=%s" % status)
+                       if isinstance(d, dict) else str(d))
+                print("  ! open 失败：%s" % why)
+            else:
+                # 复核当前文档（CAS 口径）：open 的响应 state 已被 MCP 用来覆盖缓存
+                # （src/mcp.rs:408-412），这里再用 ocs_sessions 确认哪份文档是「当前」并打印。
+                rows = list_sessions()
+                mine = next((r for r in rows if r.get("session_id") == sid), None)
+                if mine is None:
+                    print("  ! open 完成，但 ocs_sessions 复核时找不到本会话：不更新当前文档认知")
+                else:
+                    cur_id = mine.get("document_id")
+                    cur = next((x for x in (mine.get("documents") or [])
+                                if x.get("id") == cur_id), None) or {}
+                    title = cur.get("title") or cur.get("name") or "?"
+                    where = cur.get("path") or path
+                    print("  open OK path=%s doc=%s rev=%s title=%r name=%r file=%s"
+                          % (path, cur_id, mine.get("revision"), title,
+                             os.path.basename(where), where))
     elif op == "cancel":
         d = call_tool("ocs_execute", {"ocs_session_id": sid,
                                       "request": {"request_id": f"mcp-{_id[0]}", "op": "cancel"}})
