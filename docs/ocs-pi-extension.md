@@ -63,7 +63,10 @@ Phase 2 功能清单（用户已定案：工具/思考默认折叠、流式中�
 - 面板 `view(width, …)` 必须 `.width(Length::Fixed(width))`（正确范例 `src/ui/properties.rs`）。
 - dock 配置：`~/.config/OpenCADStudio/settings.json` 顶层 `dock` 键；**改配置先关 OCS**。
   当前：`pi: {width: 347.6, auto_collapse: false}`。
-- 构建/重启：`cargo build --release`（≈1.5min）→ `pkill -x OpenCADStudio` → `bash /tmp/launch-ocs.sh 1178`。
+- 构建/重启：`cargo build --release`（≈1.5min）→ ★ **只杀你自己刚起的那个 PID** ✗：先 `pgrep -ax OpenCADStudio` 看清归属 ✓，
+  再 `kill <pid>` ✓ —— ★ **严禁 `pkill -x OpenCADStudio` / `killall OpenCADStudio`** ✗！
+  （★ 2026-10-02 真出过事故：按名字杀，把用户**正在用、且文档未保存**的实例一起杀了 ✓）
+  → `bash /tmp/launch-ocs.sh 1178`。
   自动化接口：`mcporter call ocs.ocs_sessions` → `ocs.ocs_execute {request:{op:"run",cmd:"PI"},ocs_session_id,request_id}`（**request_id 在 request 对象里**）。
   欢迎页不渲染停靠栏，先 `op:"new"`。
 
