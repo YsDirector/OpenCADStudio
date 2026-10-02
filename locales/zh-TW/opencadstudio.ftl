@@ -4252,6 +4252,7 @@ view =
     .layout-tabs =
         配置
         選項卡
+    .mview-object-selected-was-not-a-viewport = 所選物件不是視埠。
     .mview-switch-to-a-paper-space-layout-first = MVIEW:先切換到紙面空間配置.
     .model-viewports = 模型視口
     .mono = 單曲

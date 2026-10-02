@@ -4255,6 +4255,7 @@ view =
     .layout-tabs =
         Layout
         Laschen
+    .mview-object-selected-was-not-a-viewport = Das ausgewählte Objekt war kein Viewport.
     .mview-switch-to-a-paper-space-layout-first = MVIEW: Wechseln Sie zuerst zu einem Papierraumlayout.
     .model-viewports = Modellansichtsfenster
     .mono = Mono

@@ -4245,6 +4245,7 @@ view =
     .layout-tabs =
         लेआउट
         टैब
+    .mview-object-selected-was-not-a-viewport = चयनित ऑब्जेक्ट व्यूपोर्ट नहीं था।
     .mview-switch-to-a-paper-space-layout-first = MVIEW: पहले एक पेपर स्पेस लेआउट पर स्विच करें।
     .model-viewports = मॉडल व्यूपोर्ट
     .mono = मोनो

@@ -4257,6 +4257,7 @@ view =
     .layout-tabs =
         Pestañas de
         presentación
+    .mview-object-selected-was-not-a-viewport = El objeto seleccionado no era una ventana gráfica.
     .mview-switch-to-a-paper-space-layout-first = MVIEW: cambie primero a una presentación de espacio papel.
     .model-viewports = Ventanas gráficas del modelo
     .mono = Mono

@@ -85,7 +85,6 @@ Not a node graph file	upstream 857f2f2e 2026-09-25 Hakan Seven @ src/ui/node_gra
 Number of aliases	upstream 10577904 2026-09-15 Karim Jerbi @ src/ui/window/alias_editor.rs:178
 Object deleted	upstream f537aff7 2026-09-25 Hakan Seven @ src/ui/node_graph.rs:702
 Object is not a closed curve.	upstream bb390cad 2026-09-25 Hakan Seven @ src/app/command_driver/viewport.rs:78
-Object selected was not a viewport\n.	upstream bb390cad 2026-09-25 Hakan Seven @ src/modules/layout/mview.rs:806
 Open Node Graph	upstream 857f2f2e 2026-09-25 Hakan Seven @ src/app/node_graph.rs:273
 Origin planes	upstream d1c31062 2026-09-12 Matus Mastena @ src/ui/window/browser.rs:107
 Pan speed	upstream 6a63726e 2026-09-16 Christopher Overbeck @ src/ui/window/options/spacemouse.rs:71

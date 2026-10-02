@@ -4256,6 +4256,7 @@ view =
     .layout-tabs =
         레이아웃
         탭
+    .mview-object-selected-was-not-a-viewport = 선택한 객체가 뷰포트가 아닙니다.
     .mview-switch-to-a-paper-space-layout-first = MVIEW: 먼저 도면 공간 레이아웃으로 전환합니다.
     .model-viewports = 모델 뷰포트
     .mono = 모노

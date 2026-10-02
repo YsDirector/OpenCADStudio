@@ -4256,6 +4256,7 @@ view =
     .layout-tabs =
         Elrendezés
         Tabs
+    .mview-object-selected-was-not-a-viewport = A kijelölt objektum nem nézetablak.
     .mview-switch-to-a-paper-space-layout-first = MVIEW: először váltson át papírtér-elrendezésre.
     .model-viewports = Modell nézetablak
     .mono = Monó

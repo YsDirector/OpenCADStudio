@@ -4256,6 +4256,7 @@ view =
     .layout-tabs =
         Układ
         Zakładki
+    .mview-object-selected-was-not-a-viewport = Wybrany obiekt nie jest oknem widoku.
     .mview-switch-to-a-paper-space-layout-first = MVIEW: najpierw przełącz na układ obszaru papieru.
     .model-viewports = Rzutnie modelu
     .mono = Mononukleoza

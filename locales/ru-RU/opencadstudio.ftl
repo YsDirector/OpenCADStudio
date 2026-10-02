@@ -4258,6 +4258,7 @@ view =
     .layout-tabs =
         лист
         Вкладки
+    .mview-object-selected-was-not-a-viewport = Выбранный объект не является видовым экраном.
     .mview-switch-to-a-paper-space-layout-first = MVIEW: сначала перейдите на лист.
     .model-viewports = Видовые экраны модели
     .mono = Моно

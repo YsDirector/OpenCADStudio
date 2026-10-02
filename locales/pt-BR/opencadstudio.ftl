@@ -4257,6 +4257,7 @@ view =
     .layout-tabs =
         Guias de
         layout
+    .mview-object-selected-was-not-a-viewport = O objeto selecionado não era uma janela de visualização.
     .mview-switch-to-a-paper-space-layout-first = MVIEW: mude primeiro para um layout de espaço do papel.
     .model-viewports = Janelas de visualização do modelo
     .mono = Mono

@@ -4256,6 +4256,7 @@ view =
     .layout-tabs =
         Asettelu
         Välilehdet
+    .mview-object-selected-was-not-a-viewport = Valittu kohde ei ollut näkymäikkuna.
     .mview-switch-to-a-paper-space-layout-first = MVIEW: vaihda ensin paperitilan asetteluun.
     .model-viewports = Mallin näyttöportit
     .mono = Mono

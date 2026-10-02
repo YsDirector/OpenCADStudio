@@ -4257,6 +4257,7 @@ view =
     .layout-tabs =
         Disposition
         Tables
+    .mview-object-selected-was-not-a-viewport = L'objet sélectionné n'était pas une fenêtre.
     .mview-switch-to-a-paper-space-layout-first = MVIEW : passer d'abord à une disposition de l'espace papier.
     .model-viewports = Fenêtres de l’espace objet
     .mono = Mono

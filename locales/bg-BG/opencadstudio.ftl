@@ -4256,6 +4256,7 @@ view =
     .layout-tabs =
         Раздели
         оформления
+    .mview-object-selected-was-not-a-viewport = Избраният обект не е изглед.
     .mview-switch-to-a-paper-space-layout-first = MVIEW: първо превключи към оформление в лист на хартия.
     .model-viewports = Изгледи на модела
     .mono = Моно

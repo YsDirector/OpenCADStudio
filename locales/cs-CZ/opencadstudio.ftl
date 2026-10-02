@@ -4254,6 +4254,7 @@ view =
     .layout-tabs =
         Rozložení
         Karty
+    .mview-object-selected-was-not-a-viewport = Vybraný objekt není výřez.
     .mview-switch-to-a-paper-space-layout-first = MVIEW: nejprve přepněte na rozložení papírového prostoru.
     .model-viewports = Výřezy modelu
     .mono = Mono

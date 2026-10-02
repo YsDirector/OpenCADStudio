@@ -1893,6 +1893,7 @@ pub(super) fn message_attribute(source: &str) -> Option<(&'static str, &'static 
         "Object is on locked layer \"{layer}\" — unlock the layer to edit its attributes." => Some(("command", "object-is-on-locked-layer-layer-unlock-the-lay")),
         "Object is on locked layer \"{layer}\" — unlock the layer to select or edit it." => Some(("common", "object-is-on-locked-layer-layer-unlock-the-layer-to-select-or-edit-it")),
         "Object lineweights" => Some(("plot", "object-lineweights")),
+        "Object selected was not a viewport." => Some(("view", "mview-object-selected-was-not-a-viewport")),
         "Object type:" => Some(("ui", "object-type")),
         "Object: %{object_label}" => Some(("styles", "object-object-label")),
         "Oblique (°):" => Some(("common", "oblique")),

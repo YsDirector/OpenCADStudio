@@ -4207,6 +4207,7 @@ view =
     .limits-four-finite-numeric-coordinates-require = LIMITS: Dört sonlu sayısal koordinat gereklidir.
     .limits-four-numeric-coordinates-required = LIMITS: Dört sayısal koordinat gereklidir.
     .layout-tabs = Yerleşim Sekmeleri
+    .mview-object-selected-was-not-a-viewport = Seçilen nesne bir görünüm penceresi değildi.
     .mview-switch-to-a-paper-space-layout-first = MVIEW: Önce bir kağıt alanı yerleşimine geçin.
     .model-viewports = Model Görünüm Alanları
     .mono = Tek Renk

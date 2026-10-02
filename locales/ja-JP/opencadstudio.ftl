@@ -4245,6 +4245,7 @@ view =
     .layout-tabs =
         レイアウト
         タブ
+    .mview-object-selected-was-not-a-viewport = 選択したオブジェクトはビューポートではありません。
     .mview-switch-to-a-paper-space-layout-first = MVIEW: 先にペーパー空間レイアウトへ切り替えてください。
     .model-viewports = モデルビューポート
     .mono = モノ

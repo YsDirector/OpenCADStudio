@@ -4269,6 +4269,7 @@ view =
     .layout-tabs =
         علامات تبويب
         التخطيط
+    .mview-object-selected-was-not-a-viewport = الكائن المحدد ليس منفذ عرض.
     .mview-switch-to-a-paper-space-layout-first = MVIEW: انتقل إلى تخطيط مساحة الورق أولًا.
     .model-viewports = منافذ عرض النموذج
     .mono = أحادي

@@ -4252,6 +4252,7 @@ view =
     .layout-tabs =
         Layout
         Tabs
+    .mview-object-selected-was-not-a-viewport = Object selected was not a viewport.
     .mview-switch-to-a-paper-space-layout-first = MVIEW: switch to a paper space layout first.
     .model-viewports = Model Viewports
     .mono = Mono

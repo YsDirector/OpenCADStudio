@@ -4251,6 +4251,7 @@ view =
     .layout-tabs =
         Καρτέλες
         διατάξεων
+    .mview-object-selected-was-not-a-viewport = Το επιλεγμένο αντικείμενο δεν είναι παράθυρο προβολής.
     .mview-switch-to-a-paper-space-layout-first = MVIEW: μεταβείτε πρώτα σε διάταξη χώρου χαρτιού.
     .model-viewports = Θύρες προβολής μοντέλου
     .mono = Μονόχρωμο

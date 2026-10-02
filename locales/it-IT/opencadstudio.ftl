@@ -4256,6 +4256,7 @@ view =
     .layout-tabs =
         Disposizione
         Schede
+    .mview-object-selected-was-not-a-viewport = L'oggetto selezionato non era una finestra.
     .mview-switch-to-a-paper-space-layout-first = MVIEW: passa prima al layout dello spazio carta.
     .model-viewports = Viste del modello
     .mono = Mono

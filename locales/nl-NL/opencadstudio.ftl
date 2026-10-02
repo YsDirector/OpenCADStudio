@@ -4255,6 +4255,7 @@ view =
     .layout-tabs =
         Indeling
         Tabbladen
+    .mview-object-selected-was-not-a-viewport = Het geselecteerde object was geen viewport.
     .mview-switch-to-a-paper-space-layout-first = MVIEW: schakel eerst naar een lay-out in de papierruimte.
     .model-viewports = Modelweergavevensters
     .mono = Mono

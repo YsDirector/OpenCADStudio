@@ -803,7 +803,7 @@ impl CadCommand for MviewCommand {
                     self.step = Step::ClipChoice;
                     CmdResult::NeedPoint
                 }
-                _ => CmdResult::ReportError(t!("Object selected was not a viewport\n.").into_owned()),
+                _ => CmdResult::ReportError(t!("Object selected was not a viewport.").into_owned()),
             };
         }
         CmdResult::MviewCreateClipped {
