@@ -17,7 +17,7 @@ tools/tests/ocs_session_guard/run.sh
 
 | case | 断言要点 |
 | --- | --- |
-| 准备 | 夹具 sha256 与记录一致（钉死）；夹具不含 `OCS_ALLOW_EXISTING`；真二进制存在；`pgrep -x OpenCADStudio` 为空 |
+| 准备 | 夹具 sha256 与记录一致（钉死）；夹具不含 `OCS_ALLOW_EXISTING`；真二进制存在；★ 基线快照已固定（记录跑动前已存在的 `OpenCADStudio` PID 集合，打印出来；用户实例不算残留） |
 | 正控制 | 无外部实例 ⇒ 脚本从零起自己的宿主（wrap 收到 `--new-instance`）、隔离透传到宿主 `XDG_CONFIG_HOME`、`OCS_PLUGINS_DIR` 回填用户真实插件目录、最小 RPC（`query`）跑通、退出后临时目录与宿主都没残留 |
 | 反证 A（隔离） | 共享位置放一个「别人的」活实例 ⇒ 选中的 session 不是它，★ 它收到的 TCP `connect` 数 **== 0**，脚本自己起宿主把活干完 |
 | 红证（★ 关键） | **同一布局**跑「隔离版之前」的老脚本夹具 ⇒ 它 `session=FAKE-SHARED` 且该实例 `connects >= 1`，且没有自己起宿主。`connects==0`（新）对 `connects>=1`（旧）就是整套测试的有效性来源；这条掉了测试即失去意义 |
@@ -25,9 +25,46 @@ tools/tests/ocs_session_guard/run.sh
 | 反证 C1 | 宿主写出的描述符 pid 对不上 ⇒ 非 0 退出 + 「实例归属校验失败」+ 点名 pid，**不输出** `# session=`，且是归属不符（< 20s）而不是 45s 超时 |
 | 反证 C2 | 私有目录里混进别人的活会话 ⇒ 发现阶段成功过（宿主收到过 hello）但校验失败，仍不输出 `# session=` |
 | 反证 C3（对照） | 同一枚「pid 对不上」的描述符放共享位置 + 逃生口 ⇒ 才被允许连，说明默认模式的拒绝确实来自归属校验 |
-| 正控制（真宿主 · `--mcp` 无头路线） | 真二进制 `--mcp` 直接起：`initialize` + `ocs_sessions(launch_if_none=false)` 都是真 JSON-RPC 应答（不需要显示）；跑完杀掉自己起的进程并核 `pgrep -x OpenCADStudio` 为空 |
+| 正控制（真宿主 · `--mcp` 无头路线） | 真二进制 `--mcp` 直接起：`initialize` + `ocs_sessions(launch_if_none=false)` 都是真 JSON-RPC 应答（不需要显示）；跑完杀掉自己起的进程并核★基线差集为空（没有新增） |
 | 可选（GUI 路线） | `OCS_BIN` 直接指向真二进制起真 GUI 宿主（`--new-instance`）：真起得来 = PASS；无显示起不来 ⇒ ★ **明确打印「跳过（原因）」**，跳过绝不计入通过，也绝不当失败吞掉 |
-| 收尾自证 | `pgrep -x OpenCADStudio` 仍为空；拉起过的假进程全部退出（僵尸不算）；真 `~/.config/OpenCADStudio/automation` 的文件数与最新 mtime 快照未被触碰 |
+| 收尾自证 | ★ 基线差集为空（未新增 `OpenCADStudio` 进程）；拉起过的假进程全部退出（僵尸不算）；真 `~/.config/OpenCADStudio/automation` 的文件数与最新 mtime 快照未被触碰 |
+
+## 用户实例在跑时也能安全跑（★ 基线差集口径）
+
+原来的断言是 `pgrep -x OpenCADStudio == []` —— 用户自己的GUI 一开，裸跑就必现 11 条 FAIL。
+现在改成**基线差集**：
+
+1. 开跑时先对 `pgrep -x OpenCADStudio` 做快照，例：
+
+   ```
+   基线：用户实例 2 个（12528/12535）—— 本次不把它们算作残留，只断言「没有新增」
+   ```
+
+2. 之后每条「没有残留」断言都只看「当前集合 − 基线集合 == 空」。对「我们自己 spawn 的假进程/宿主」
+   的断言（`leftover=[]`、`not alive(mcp_pid)`）**保持原语义**，因为那些本来就不在基线里。
+3. ★ 牙齿没丢：跑动过程中只要冒出**新的**同名进程（含我们真宿主没杀干净），断言会 FAIL 并且
+   detail 里会点名新 PID（`基线=… 当前=… 新增=<pid>`）。手工反证：
+
+   ```sh
+   cp /bin/sleep /tmp/OpenCADStudio && /tmp/OpenCADStudio 120 &   # pgrep -x 能匹配到（comm=OpenCADStudio）
+   python3 tools/tests/ocs_session_guard/run_tests.py             # 必须 FAIL 并点名那个新 PID
+   kill <刚起的 PID>                                              # 只杀自己那一个，禁用 pkill 模式杀
+   python3 tools/tests/ocs_session_guard/run_tests.py             # 回到全绿
+   ```
+
+   注意：`bash -c 'exec -a OpenCADStudio sleep 120'` 改的是 argv[0]，`pgrep -x` 看的是 comm，
+   **匹配不到**；要用拷贝/链接成 `OpenCADStudio` 的可执行文件才会被看见。
+
+可选严格档（权宜、依赖内核配置，**不是主路径**）：在 PID 命名空间里跑，把用户实例彻底藏掉，
+顺带验证「连别人的 PID 都看不见」：
+
+```sh
+unshare -Ur --fork --pid --mount-proc python3 ns_init.py   # ns_init 需是 PID 1 并回收孤儿
+```
+
+该配方依赖 `kernel.unprivileged_userns_clone` 等内核配置（有些发行版默认关），而且 PID-1
+必须回收被 re-parent 过来的孤儿，否则脚本自己 SIGTERM 掉的 `--mcp` 真二进制会以僵尸形态
+（`comm=OpenCADStudio`）被 `pgrep` 看到而假红。既然基线差集已经解决问题，严格档只当参考。
 
 ## 为什么这样造
 
@@ -45,7 +82,7 @@ tools/tests/ocs_session_guard/run.sh
   （`src/mcp.rs:315` 的 `start_gui` 就是 `--new-instance`），跑起来会开窗上屏，本测试禁止上屏。
 * **正控制优先走真二进制的 `--mcp` 无头路线**：不需要显示、本机实测能起，所以这是**必跑**的
   正控制（`initialize` + `ocs_sessions(launch_if_none=false)` 真应答），跑完杀掉自己起的进程并核
-  `pgrep -x` 为空。GUI 路线（`--new-instance`，真宿主需要显示）**保留为可选**：把 `WAYLAND_DISPLAY`
+  基线差集为空（没有新增 `OpenCADStudio` 进程）。GUI 路线（`--new-instance`，真宿主需要显示）**保留为可选**：把 `WAYLAND_DISPLAY`
   指到不存在的通道、`XDG_RUNTIME_DIR` 指到临时目录、移掉 `DISPLAY`，保证「即使真宿主意外起来也
   绝不可能把窗口开到用户桌面上」；起不来就按「跳过（原因）」处理，★ 跳过既不算通过也不算失败，
   只在汇总里单列（绝不把 SKIP 当 PASS）。
@@ -59,6 +96,11 @@ tools/tests/ocs_session_guard/run.sh
 | `fixtures/ocs_session_pre_guard.py` | ★ 冻结夹具：`6da03e1d` 版 `tools/ocs_session.py`（逐字节，无注释头），只用于证明断言能红，**不是可运行的现行版本** |
 | `fixtures/fake_ocs_host.py` | 替身宿主（三种角色：自己起的宿主 / 共享位置里「别人的实例」 / 装 pid 对不上） |
 | `fixtures/wrap_ocs_bin.sh` | `OCS_BIN` 替身：`--mcp` → 真二进制，`--new-instance` → 替身宿主 |
+
+## 姊妹测试（手工、不接 CI）
+
+`tools/tests/ocs_session_open_e2e.sh`：用真二进制 `--serve` 无头宿主跑 `open / query / run` 全链路
+（含空格/中文路径、错误路径与编辑锁占用），只用仓库只读模板的临时拷贝，绝不碰用户正在编辑的文件。
 
 ## 权限约定
 

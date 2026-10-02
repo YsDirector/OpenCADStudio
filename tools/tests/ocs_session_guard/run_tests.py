@@ -14,10 +14,14 @@
   反证 C   描述符 pid 对不上 ⇒ 立刻报错退出（绝不降级去用别人的 session）；
            私有目录里混进别人的活会话 ⇒ 发现成功但校验失败、不输出 `# session=`。
   真宿主   ★ 主控路线走真二进制 `--mcp`（无头：真 MCP server + 真应答，本机实测能起）⇒
-           这是必跑的正控制，跑完杀掉自己起的进程并核 pgrep 为空；GUI 路线（`--new-instance`，
+           这是必跑的正控制，跑完杀掉自己起的进程并核基线差集为空；GUI 路线（`--new-instance`，
            src/mcp.rs:315）**保留但标注为可选**，本机无显示起不来就 **明确打印「跳过（原因）」**，
            ★ 跳过绝不计入通过。
-  收尾     零 GUI（pgrep -x OpenCADStudio 为空）、拉起过的假进程全部退出、真
+  ★ 基线差集（用户实例在跑也能安全跑）：开跑时对 `pgrep -x OpenCADStudio` 做基线快照（用户
+           自己的实例 PID 集合，打印出来），之后所有「没有残留」断言都改成「当前集合 − 基线集合
+           == 空」——即只断言我们**没有新增**进程。用户跑动前就有的实例绝不算残留；但跑动中
+           若冒出新的同名进程，断言会 FAIL 并点名新 PID（牙齿仍在）。
+  收尾     零 GUI 残留（基线差集为空）、拉起过的假进程全部退出、真
            ~/.config/OpenCADStudio/automation 未被触碰（文件数 + 最新 mtime 快照）。
 
 怎么跑：
@@ -125,7 +129,8 @@ def run_tool(script, wrap_log, stdin=STDIN, timeout=180, ocs_bin=None, nodisplay
     p = subprocess.run([sys.executable, str(script)], input=stdin, capture_output=True,
                        text=True, env=env_for(wrap_log, ocs_bin=ocs_bin, nodisplay=nodisplay, **extra),
                        timeout=timeout)
-    check("本 case 全程未起真 GUI（pgrep -x OpenCADStudio 为空）", pgrep_ocs() == [], str(pgrep_ocs()))
+    check("本 case 未新增 OpenCADStudio 进程（基线差集为空；允许跑动前已存在的用户实例）",
+          new_ocs_pids() == [], ocs_state_note())
     return p, time.time() - t0
 
 
@@ -201,6 +206,24 @@ def reap(p):
 
 def pgrep_ocs():
     return subprocess.run(["pgrep", "-x", "OpenCADStudio"], capture_output=True, text=True).stdout.split()
+
+
+# ★ 基线快照（在「== 准备 ==」里赋值）：跑动前就存在的 OpenCADStudio 进程（典型：用户正在
+#   画图的实例）不算残留；只断言「当前集合 − 基线集合 == 空」。跑动中冒出的新 PID 必须 FAIL。
+BASELINE_OCS = []
+
+
+def new_ocs_pids():
+    """相对基线的差集：本次跑动中**新增**的 OpenCADStudio 进程（用户跑动前就有的实例被排除）。"""
+    return sorted(set(pgrep_ocs()) - set(BASELINE_OCS), key=int)
+
+
+def ocs_state_note():
+    """断言 detail：基线 / 当前 / 新增 —— 反证时一眼能看到被点名的新 PID。"""
+    cur = sorted(set(pgrep_ocs()), key=int)
+    new = sorted(set(cur) - set(BASELINE_OCS), key=int)
+    return "基线=%s 当前=%s 新增=%s" % ("/".join(sorted(BASELINE_OCS, key=int)) or "无",
+                                          "/".join(cur) or "无", "/".join(new) or "无")
 
 
 def real_auto_state():
@@ -295,7 +318,14 @@ shutil.copy2(FIXTURES / "wrap_ocs_bin.sh", WRAP)
 os.chmod(WRAP, 0o755)
 real_before = real_auto_state()
 print("  真 ~/.config/OpenCADStudio/automation 快照（文件数, 最新 mtime）=", real_before)
-check("起手 pgrep -x OpenCADStudio 为空", pgrep_ocs() == [], str(pgrep_ocs()))
+# ★ 基线快照：用户实例在跑时，它属于基线，不算残留；我们只对自己引入的新进程负责。
+BASELINE_OCS = sorted(set(pgrep_ocs()), key=int)
+if BASELINE_OCS:
+    print("  基线：用户实例 %d 个（%s）—— 本次不把它们算作残留，只断言「没有新增」"
+          % (len(BASELINE_OCS), "/".join(BASELINE_OCS)))
+else:
+    print("  基线：跑动前没有 OpenCADStudio 进程 —— 跑完必须依然为空")
+check("基线快照已固定（用户实例在跑也能安全跑：后续只看差集）", True, ocs_state_note())
 
 # ── 正控制：无任何外部实例 → 从零起自己的实例并完成一次最小 RPC ──────────────
 print("\n== 正控制：无外部实例，从零启动 + 最小 RPC（query） ==")
@@ -416,8 +446,9 @@ print("\n== 正控制（真二进制 --mcp 无头路线）：%s ==" % REAL)
 ok, detail, mcp_pid = probe_real_mcp()
 check("真二进制 --mcp 无头路线真跑起来：initialize + ocs_sessions 都是真应答（不需要显示）",
       ok, detail)
-check("自己起的真 --mcp 进程已杀掉（pid=%s）且 pgrep -x OpenCADStudio 为空" % mcp_pid,
-      not alive(mcp_pid) and pgrep_ocs() == [], "pid=%s pgrep=%s" % (mcp_pid, pgrep_ocs()))
+check("自己起的真 --mcp 进程已杀掉（pid=%s）且未新增 OpenCADStudio 进程" % mcp_pid,
+      not alive(mcp_pid) and new_ocs_pids() == [],
+      "pid=%s %s" % (mcp_pid, ocs_state_note()))
 
 # ── 可选（GUI 路线）：真宿主是 GUI；无显示起不来就明确跳过，绝不算通过 ──────
 print("\n== 可选（GUI 路线，需要显示）：OCS_BIN 直接指向真二进制 ==")
@@ -440,7 +471,8 @@ else:
 # ── 收尾自证 ─────────────────────────────────────────────────────────────────
 print("\n== 收尾自证 ==")
 time.sleep(1.0)
-check("pgrep -x OpenCADStudio 仍为空（全程零 GUI）", pgrep_ocs() == [], str(pgrep_ocs()))
+check("未新增 OpenCADStudio 进程（基线差集为空；全程零 GUI 残留）",
+      new_ocs_pids() == [], ocs_state_note())
 leftover = [p for p in spawn_pids if alive(p)]
 check("本验证拉起的所有假进程都已退出", leftover == [], "leftover=%s" % leftover)
 real_after = real_auto_state()
