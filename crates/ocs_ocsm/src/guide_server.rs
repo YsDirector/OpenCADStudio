@@ -7983,16 +7983,27 @@ pub(crate) fn chamfer_text(c: f64, a: f64) -> String {
     }
 }
 
-/// 倒角块成员：单行 TEXT（左对齐/基线；样式 OCSM_GB，字宽比随样式 0.7）。
-fn chamfer_member_text(value: &str, pos: (f64, f64), h: f64, rot: f64) -> acadrust::EntityType {
+/// 倒角块成员：单行 TEXT（基线；样式 OCSM_GB，字宽比随样式 0.7）。
+/// `halign` 由肩线朝向决定（见 `build_chamfer_parts`）；非左对齐时锚点 = `pos`
+/// （显式写第二对齐点，别让宿主补）。
+fn chamfer_member_text(
+    value: &str,
+    pos: (f64, f64),
+    h: f64,
+    rot: f64,
+    halign: acadrust::entities::TextHorizontalAlignment,
+) -> acadrust::EntityType {
     use acadrust::entities::{Text, TextHorizontalAlignment, TextVerticalAlignment};
     use acadrust::EntityType as E;
     let mut t = Text::with_value(value, Vector3::new(pos.0, pos.1, 0.0));
     t.height = h;
     t.rotation = rot;
     t.style = "OCSM_GB".into();
-    t.horizontal_alignment = TextHorizontalAlignment::Left;
+    t.horizontal_alignment = halign;
     t.vertical_alignment = TextVerticalAlignment::Baseline;
+    if halign != TextHorizontalAlignment::Left {
+        t.alignment_point = Some(Vector3::new(pos.0, pos.1, 0.0));
+    }
     let mut e = E::Text(t);
     set_member_layer(&mut e, "6文字层");
     e.common_mut().color = acadrust::types::Color::ByLayer;
@@ -8036,7 +8047,9 @@ pub(crate) fn build_chamfer_parts(
         "7标注层",
         acadrust::types::Color::ByLayer,
     ));
-    // 文字：自肩线**末端**起左对齐、肩线上方 0.38×字高（样例 +0.67 @ h=1.75）；6文字层。
+    // 文字：自肩线**末端**起、肩线上方 0.38×字高（样例 +0.67 @ h=1.75）；6文字层。
+    // 对齐随肩线朝向（文字始终压在肩线之上）：肩线向左 → Left（自末端向右排）；
+    // 肩线向右 → Right（自末端向左排）。竖直肩线（|Δx| 极小）保留 Left。
     let h = 3.5 * s;
     let far_end = if g.corner_at_origin() {
         g.tp(blen, blen, 0.0)
@@ -8047,7 +8060,18 @@ pub(crate) fn build_chamfer_parts(
         far_end.0 + g.n_up.0 * 0.38 * h,
         far_end.1 + g.n_up.1 * 0.38 * h,
     );
-    members.push(chamfer_member_text(&text, (tx, ty), h, g.text_rot()));
+    let halign = if g.horizontal && g.bdx > 0.0 {
+        acadrust::entities::TextHorizontalAlignment::Right
+    } else {
+        acadrust::entities::TextHorizontalAlignment::Left
+    };
+    members.push(chamfer_member_text(
+        &text,
+        (tx, ty),
+        h,
+        g.text_rot(),
+        halign,
+    ));
     Ok(ChamferParts {
         members,
         scale: s,
@@ -14841,7 +14865,8 @@ mod weld_tests {
     }
 
     /// 构件：2 线 + 1 单行 TEXT，**无箭头**（SOLID=0）；引线/肩线落 7标注层、
-    /// 文字落 6文字层；文字在肩线末端上方 0.38×字高、左对齐；字高 3.5×s、样式 OCSM_GB。
+    /// 文字落 6文字层；文字在肩线末端上方 0.38×字高；字高 3.5×s、样式 OCSM_GB。
+    /// （P_END 肩线**向右** → 文字右对齐于末端，见 `..._left_right_shoulder_text_alignment`。）
     #[test]
     fn build_chamfer_parts_layers_text_and_no_arrow() {
         let parts = build_chamfer_parts(P_TIP, P0, P_END, 1.0, 1.0, 45.0).unwrap();
@@ -14863,13 +14888,16 @@ mod weld_tests {
         assert_eq!(t.rotation, 0.0);
         assert!(matches!(
             t.horizontal_alignment,
-            acadrust::entities::TextHorizontalAlignment::Left
+            acadrust::entities::TextHorizontalAlignment::Right
         ));
         assert!(matches!(
             t.vertical_alignment,
             acadrust::entities::TextVerticalAlignment::Baseline
         ));
         // P_END 相对 P0 = +47.647（水平向右）；文字 = 肩线末端 + 0.38×3.5 = +1.33。
+        // 肩线向右 → Right：实际锚点是第二对齐点（与插入点同位）。
+        let ap = t.alignment_point.expect("Right 应写第二对齐点");
+        assert!((ap.x - 47.647).abs() < 1e-9 && (ap.y - 1.33).abs() < 1e-9, "ap={ap:?}");
         assert!((t.insertion_point.x - 47.647).abs() < 1e-9, "x={}", t.insertion_point.x);
         assert!((t.insertion_point.y - 1.33).abs() < 1e-9, "y={}", t.insertion_point.y);
         // 引线 = 尖端→拐点**全长**（无箭头缩短）：块局部 (−20.405, −18.870) → (0,0)。
@@ -14906,6 +14934,66 @@ mod weld_tests {
             .expect("肩线");
         let far = shoulder.start.x.min(shoulder.end.x);
         assert!((far + 4.899).abs() < 1e-9, "肩线末端 x={far}");
+    }
+
+    /// ★ 文字始终压在肩线之上：肩线向左 → Left（起点 = p_end.x）；肩线向右 → Right
+    /// （右端 = p_end.x ⇒ 文字占 [p_end.x−w, p_end.x]）；两种朝向基线都在肩线上方 0.38×字高。
+    #[test]
+    fn build_chamfer_parts_left_right_shoulder_text_alignment() {
+        use acadrust::entities::TextHorizontalAlignment;
+        // 世界坐标：拐点 p0；肩线向左/向右各 4.899（用户样例 / 主控演示朝向）。
+        let p0 = [13.894, 48.677, 0.0];
+        let p_tip = [17.500, 45.071, 0.0];
+        let shoulder_y = p0[1]; // 水平肩线所在世界 y。
+
+        let left =
+            build_chamfer_parts(p_tip, p0, [p0[0] - 4.899, p0[1], 0.0], 0.5, 1.0, 45.0).unwrap();
+        let t = &texts_of(&left.members)[0];
+        assert!(
+            matches!(t.horizontal_alignment, TextHorizontalAlignment::Left),
+            "肩线向左应保持 Left，得 {:?}",
+            t.horizontal_alignment
+        );
+        assert!(t.alignment_point.is_none(), "Left/Baseline 不写第二对齐点");
+        // 左对齐：文字 x 起点 = p_end.x（世界 = p0 + 块内坐标）。
+        assert!(
+            (p0[0] + t.insertion_point.x - (p0[0] - 4.899)).abs() < 1e-9,
+            "左向：起点 x={}",
+            p0[0] + t.insertion_point.x
+        );
+        // 基线 = 肩线 y + 0.38×字高（h = 3.5×0.5 = 1.75 → +0.665）。
+        assert!(
+            (p0[1] + t.insertion_point.y - (shoulder_y + 0.38 * t.height)).abs() < 1e-9,
+            "左向：文字应在肩线上方，基线 y={}",
+            p0[1] + t.insertion_point.y
+        );
+
+        let right =
+            build_chamfer_parts(p_tip, p0, [p0[0] + 4.899, p0[1], 0.0], 1.0, 1.0, 45.0).unwrap();
+        let t = &texts_of(&right.members)[0];
+        assert!(
+            matches!(t.horizontal_alignment, TextHorizontalAlignment::Right),
+            "肩线向右应改 Right，得 {:?}",
+            t.horizontal_alignment
+        );
+        let ap = t.alignment_point.expect("Right 的实际锚点是第二对齐点");
+        // 右对齐：文字**右端** = p_end.x ⇒ 占据 [p_end.x−w, p_end.x]，压在肩线上。
+        assert!(
+            (p0[0] + ap.x - (p0[0] + 4.899)).abs() < 1e-9,
+            "右向：右端 x={}",
+            p0[0] + ap.x
+        );
+        // 位置与改前逐字不变：插入点 = 第二对齐点。
+        assert!(
+            (t.insertion_point.x - ap.x).abs() < 1e-9 && (t.insertion_point.y - ap.y).abs() < 1e-9,
+            "右向：插入点应保持原位"
+        );
+        // 基线 = 肩线 y + 0.38×字高（h = 3.5 → +1.33）。
+        assert!(
+            (p0[1] + ap.y - (shoulder_y + 0.38 * t.height)).abs() < 1e-9,
+            "右向：文字应在肩线上方，基线 y={}",
+            p0[1] + ap.y
+        );
     }
 
     /// 竖肩线：文字旋转 90°（沿肩线书写、永不倒置），锚点在肩线末端内容上方（−x 侧）。
