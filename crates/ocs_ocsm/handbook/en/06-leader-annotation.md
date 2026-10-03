@@ -37,6 +37,7 @@
 | `VIEW` auxiliary view | 1 **LINE** | the arrow direction line; parameters: letter + direction |
 | `WELD` weld | 1 **two-segment PLINE (3 vertices)** | vertex 1 = weld arrow point, vertex 2 = bend point, vertex 3 = end of the datum line (snaps to the four main axes) |
 | `LEADER` leader | 1 **two-segment PLINE (3 vertices)** | vertex 1 = arrow point, 2 = bend point, 3 = end of the shoulder line |
+| `CHAMFER` chamfer | 1 **PLINE (3 or 5 vertices)** | **3 vertices** = typed-in mode (vertex 1 = point at the chamfer, 2 = bend point, 3 = end of the shoulder line); **5 vertices (4 segments) = measure-from-geometry mode** (segment 1 runs along an adjacent edge (the leg that measures `c`), segment 2 coincides with the chamfer edge, segment 3 = leader head strictly collinear with segment 2, segment 4 = end of the shoulder line); any other count (4 points etc.) ⇒ an error. Parameters: chamfer size `c` + angle `a` (degrees, default 45). 45° renders `C{c}`, other angles render `{c}×{a}°` (× = U+00D7); leader on `7标注层`, text on `6文字层`, **no arrow**. URL: `/DIM/CHAMFER/<dist>?c=1&a=45` (`src=geom` = explicitly measure from geometry) |
 | `BALLOON` item number | 1 **two-segment PLINE (3 vertices)** | vertex 1 = pointer point (draws the dot), 2 = bend point, 3 = end of the shoulder line (**must be horizontal**); parameters: item-number list + extension direction (horizontal/vertical) + insert-on-conflict switch; one group may hold several item numbers (a horizontal row joined by a V-shaped polyline / a vertical column joined by a vertical line). See `14-item-numbers.md` |
 | `RGH` roughness | block reference (INSERT) | the roughness symbol library; parameters: shape + `Ra` value |
 | `GD&T` geometric tolerance | 1 **PLINE** | position of the tolerance frame; parameters: symbol + tolerance value + datum (URL query JSON) |
@@ -44,6 +45,36 @@
 | `TOLERANCE` dimensional tolerance | attaches to a dimension annotation | code mode (`H7`) or limit-deviation mode (`+0.021/0`), fit table ISO 286 |
 
 > One-line mnemonic: **the two endpoints of a line are the start of the extension lines; a two-segment polyline is a leader-type symbol "arrow → bend → shoulder"**.
+
+- **Chamfer annotation (`CHAMFER`, added 2026-10-02)**: the **arrow-less** variant of `LEADER`; guide = a two-segment
+  PLINE (① point at the chamfer ② bend point ③ end of the shoulder line). URL
+  `/DIM/CHAMFER/<dist>?c=<chamfer size>&a=<angle>` (`a` defaults to 45). Text: `|a−45| ≤ 1e-3` renders `C{c}`
+  (e.g. `C1`); other angles render `{c}×{a}°` (e.g. `1×30°`; × is U+00D7, not a lowercase x); trailing zeros are
+  dropped (`1` / `0.5`). **Three states, split by the vertex count** (changed to 5-vertex measuring 2026-10-04):
+  3 vertices = typed-in mode (old behaviour verbatim; a `src=geom` in the URL does not engage either);
+  5 vertices (4 segments) = measure-from-geometry mode: segment 1 runs **along an adjacent edge** (that edge is the
+  leg that measures `c`), segment 2 coincides **exactly** with the chamfer edge, segment 3 is **strictly collinear**
+  with segment 2 (leader head, no arrow), segment 4 = the shoulder line (the text sits on top of it); any other
+  vertex count (4 points etc.) ⇒ an **explicit error**. Measured values are **pre-filled** into the window
+  fields and **remain editable** ("measurement first, typing kept"). Conventions:
+  * `a` = the **acute** angle between segments 1 and 2; `c` = along segment 1, the distance from the **corner**
+    (segment 1's adjacent edge ∩ the other adjacent edge at P3) to P2 (a right-angled 2×30° ⇒ c=2, a=30°).
+  * **Default precision** (2026-10-04): size `c` rounded to **0.01 mm**, angle `a` rounded to **0.1°**; the text
+    writes the **rounded** values and then drops trailing zeros (measured c=1.9998 / a=30.02° ⇒ writes `2×30°`);
+    the **45° test uses the rounded `a`** (44.98° ⇒ 45.0 ⇒ renders `C{c}`); the window shows both the measured
+    values and the values to be written.
+  * Collinearity/endpoint tolerances: endpoints = `1e-6 × max(1, sheet scale)` (world units); collinearity = unit-direction
+    cross product `≤ 1e-6` (≈0.0000573°; a hand-drawn 1° error is rejected).
+  * Unmeasurable (no adjacent edge / segment 3 not collinear / parallel / corner on the wrong side / zero length /
+    out of range) ⇒ **fall back to the typed values + a red in-window reason naming the requirement that failed**
+    (never silently wrong).
+  * Precedence: an explicit `src=geom` or **no** `c`/`a` in the URL ⇒ measured values win; explicitly given values
+    without the measuring flag ⇒ the given values win.
+  The leader lands on `7标注层`, the text on `6文字层` (unlike `LEADER`'s `8符号标注层`),
+  and there is no arrow. The text sits 0.38×text height above the shoulder line and **stays over the shoulder**:
+  shoulder going left ⇒ left-aligned from its end, going right ⇒ right-aligned from its end (a vertical shoulder
+  keeps left alignment); changed 2026-10-03 (height scales with the sheet: 3.5×s). Output = anonymous block `*C{n}` + INSERT (`7标注层`); the guide line is
+  kept, so "apply & refresh" can be repeated (refresh replaces the old output instead of stacking it).
 
 ## 3. What Is Generated and Onto Which Layer
 
