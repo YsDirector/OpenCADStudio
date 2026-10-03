@@ -378,6 +378,9 @@ cargo test -p ocs_plugin_api            # API：IPC round-trip 等（串行 --te
 * 通用件守卫（`tools/frame_clean.py`、`tools/bom_template.py`）同样从仓库外读私有词表：
   `~/.config/ocsm/junk-names.txt`，或环境变量 `OCSM_JUNK_NAMES`（逗号/换行分隔）；
   仓里只留通用软件名（`Zwm`/`ZWM`/`PCCAD`/`TH_Paper`/`TH_CSL`）。两份都没有 ⇒ 只用通用词，不报错。
+* **本机构建必须走护栏**：`tools/cargo_guarded.sh <cargo 参数…>`（如 `tools/cargo_guarded.sh check -p ocs_ocsm`）——
+  固定 `CARGO_BUILD_JOBS=4`/`CARGO_INCREMENTAL=0`、`systemd-run` 内存封顶 16G（禁 zram 换出）、挂载守卫（`/mnt/ocsm-cache/.ocsm-mount-ok` + 目标盘真挂载）和 `flock` 单构建锁；
+  逃生口 `--no-cap`（systemd-run 不可用时自动降级并警告）。理由见脚本头注释。
 
 ## 已知限制（v0.2.0）
 
