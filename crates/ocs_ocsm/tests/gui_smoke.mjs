@@ -280,10 +280,14 @@ if (!leaderBtn) {
 }
 
 // ⑥ 只允许两段 PLINE：「焊接」「引线」必须同在 nV===3 的过滤分支里
-//（防止以后误改成所有多段线都显示）。
-if (!/nV === 3 *\? *\[.*'WELD'.*'LEADER'/.test(html) &&
-    !/nV === 3 *\? *\[.*'LEADER'/.test(html)) {
-  errors.push('几何过滤未把 LEADER 限定在 3 顶点 PLINE');
+//（防止以后误改成所有多段线都显示）；倒角另开一支（3 顶点 = 手填 / 4 顶点 = 几何量取）。
+if (!/\(nV === 3\) *\? *\[[^\]]*'WELD'[^\]]*'LEADER'/.test(html) &&
+    !/\(nV === 3\) *\? *\[[^\]]*'LEADER'[^\]]*'WELD'/.test(html)) {
+  errors.push('几何过滤未把 LEADER/WELD 限定在 3 顶点 PLINE');
+}
+// ⑥b 倒角：3 顶点（手填）或 4 顶点（几何量取）都要显示。
+if (!/\(nV === 3 \|\| nV === 4\) *\? *\['CHAMFER'\]/.test(html)) {
+  errors.push('几何过滤未把 CHAMFER 放开到 3/4 顶点');
 }
 
 // ⑦ A1：编辑模式文案（标题/按钮 → 「更新标注」）

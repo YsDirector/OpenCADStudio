@@ -3825,13 +3825,38 @@ fn do_apply_inner(
         return apply_balloon(sender, &doc, pts[0], pts[1], pts[2], &params);
     }
 
-    // 倒角标注：两段 PLINE（恰好 3 顶点）→ 匿名块 *C{n} + INSERT@拐点。
+    // 倒角标注：3 顶点（手填模式，老语义）/ 4 顶点（几何量取模式）→ 匿名块 *C{n} + INSERT@拐点。
     // LEADER 的无箭头变体：引线落 7标注层、文字落 6文字层，文字 C{c} / {c}×{a}°。
+    // 4 顶点：段1 = 与倒角轮廓重合的倒角边（量取用）、段2 与段1 共线（引线头）、
+    // 段3 = 肩线 ⇒ 生成时引线取 P1→P3（两段共线，等价于一条直线）、肩线取 P3→P4。
     if params.guide_type == GuideType::Chamfer {
-        if pts.len() != 3 {
-            return Err("倒角标注需要两段多段线（PLINE，3 顶点：倒角点→拐点→肩线末端）".into());
+        match pts.len() {
+            // 3 顶点 = 手填模式：逐字保持老语义（c/a 全由窗口/URL 给，量取不参与）。
+            3 => return apply_chamfer(sender, &doc, pts[0], pts[1], pts[2], &params, None),
+            // 4 顶点 = 量取模式：量不到 ⇒ 退回手填 + 明说原因（绝不静默给错数）。
+            4 => {
+                let s = frame_scale_at(&doc, pts[0]);
+                let m = measure_chamfer_geom(&doc, pts[0], pts[1], s);
+                let (c, a, used) = chamfer_effective(&params.chamfer, &m);
+                let mut p4 = params.clone();
+                p4.chamfer.c = c;
+                p4.chamfer.a = a;
+                let extra = serde_json::json!({
+                    "geom": chamfer_measure_json(&m),
+                    "used": used,
+                    "src": if params.chamfer.src_geom { "geom" }
+                           else if used { "auto" }
+                           else { "manual" },
+                });
+                return apply_chamfer(sender, &doc, pts[0], pts[2], pts[3], &p4, Some(extra));
+            }
+            n => {
+                return Err(format!(
+                    "倒角标注需要 3 顶点（手填）或 4 顶点（几何量取：倒角边→引线头→肩线末端）\
+                     的 PLINE，当前 {n} 顶点"
+                ))
+            }
         }
-        return apply_chamfer(sender, &doc, pts[0], pts[1], pts[2], &params);
     }
 
     let dim = build_dimension(sender, &doc, p1, p2, &params, &style)?;
@@ -3955,10 +3980,21 @@ fn api_guide(target: &str, sender: &Arc<dyn PluginRequestSender>) -> (u16, &'sta
                         "chamfer": {
                             "c": p.chamfer.c,
                             "a": p.chamfer.a,
+                            "src_geom": p.chamfer.src_geom,
+                            "c_given": p.chamfer.c_given,
+                            "a_given": p.chamfer.a_given,
                         },
                     }),
                     None => serde_json::Value::Null,
                 };
+                // 4 顶点 PLINE 引导 = 倒角量取模式：把量取结果一并回给窗口——
+                // 预填 c/a（可见、可改）+ 量不到时的原因（别只给个灰值）。
+                // （闭合 4 顶点矩形 = 局部放大引导，geom=rect，不量取。）
+                if pts.len() == 4 && resp["geom"].as_str() == Some("pline") {
+                    let s = frame_scale_at(&doc, pts[0]);
+                    let m = measure_chamfer_geom(&doc, pts[0], pts[1], s);
+                    resp["chamfer_geom"] = chamfer_measure_json(&m);
+                }
                 // 序号标注贴心信息：图纸上已有的序号 + 按"上一个 +1"算出的下一个。
                 {
                     let existing = existing_item_nos(&doc);
@@ -7983,6 +8019,419 @@ pub(crate) fn chamfer_text(c: f64, a: f64) -> String {
     }
 }
 
+// ── 倒角几何量取（4 顶点引导：段1 = 与倒角轮廓完全重合的倒角边）────────────
+// 两态按引导**顶点数**分流（老语义不动）：
+//   3 顶点 = 手填模式（c/a 由窗口/URL 给，逐字老行为）；
+//   4 顶点 = 量取模式（段1 = 倒角边、段2 与段1 共线＝引线头、段3 = 肩线）；
+//   其它顶点数 ⇒ 明确报错（不猜）。
+// 量取口径（用户定案）：
+//   a = 倒角边与邻边的**锐夹角**（2×45° ⇒ 45°、2×30° ⇒ 30°；与边方向无关）；
+//     两端邻边各算一次，**不一致不猜**——列候选 + 「需人工确认」，退回手填。
+//   c = 邻边**被倒角切掉的长度** = 倒角顶点 C 到 P1/P2 的距离（C = 两条邻边直线的交点）；
+//     2×45° 与 2×30° 都得 2（「段1 在邻边方向上的投影」在 120° 夹角上会把 c 算成 3 ⇒ 不用）。
+//   量不到（无邻边 / 角度不一致 / 平行 / 零长 / 顶点在反向 / 值越界）
+//     ⇒ 退回手填值 + 明说原因（绝不静默给错数）。
+
+/// 量取失败（或需人工确认）的原因代号；文案走 i18n（GUI 按代号取词）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ChamferGeomReason {
+    /// 引导段1 长度为 0（P1 与 P2 重合）。
+    ZeroEdge,
+    /// 端点附近找不到可见图层的邻边。
+    NoNeighbor,
+    /// 两端邻边夹角不一致 ⇒ 不猜（列候选，人工确认）。
+    AngleMismatch,
+    /// 两端邻边平行 ⇒ 定位不到倒角顶点。
+    Parallel,
+    /// 倒角顶点落在引导段反向（引导与邻边不相邻）。
+    CornerOutside,
+    /// 两端切掉长度不一致。
+    CMismatch,
+    /// 量取值不在倒角范围（c≤0 或 a≥90°）。
+    BadValue,
+}
+
+impl ChamferGeomReason {
+    pub(crate) fn code(self) -> &'static str {
+        match self {
+            Self::ZeroEdge => "zero_edge",
+            Self::NoNeighbor => "no_neighbor",
+            Self::AngleMismatch => "angle_mismatch",
+            Self::Parallel => "parallel",
+            Self::CornerOutside => "corner_outside",
+            Self::CMismatch => "c_mismatch",
+            Self::BadValue => "bad_value",
+        }
+    }
+
+    fn i18n_key(self) -> &'static str {
+        match self {
+            Self::ZeroEdge => "gui.guide.chamfer.geom.r.zero_edge",
+            Self::NoNeighbor => "gui.guide.chamfer.geom.r.no_neighbor",
+            Self::AngleMismatch => "gui.guide.chamfer.geom.r.angle_mismatch",
+            Self::Parallel => "gui.guide.chamfer.geom.r.parallel",
+            Self::CornerOutside => "gui.guide.chamfer.geom.r.corner_outside",
+            Self::CMismatch => "gui.guide.chamfer.geom.r.c_mismatch",
+            Self::BadValue => "gui.guide.chamfer.geom.r.bad_value",
+        }
+    }
+}
+
+/// 倒角几何量取结果（4 顶点引导）。
+#[derive(Debug, Clone, PartialEq, Default)]
+pub(crate) struct ChamferMeasure {
+    /// 邻边上被倒角切掉的长度；量不到 = None。
+    pub c: Option<f64>,
+    /// 倒角边与邻边的锐夹角（度）；量不到 = None。
+    pub a: Option<f64>,
+    /// P1 端各候选邻边量到的夹角（度，升序）——「不猜」时给窗口列候选。
+    pub a_end1: Vec<f64>,
+    /// P2 端同理。
+    pub a_end2: Vec<f64>,
+    /// 两端不一致时报出的那一对（P1 端，P2 端）。
+    pub mismatch_pair: Option<(f64, f64)>,
+    /// 两端切掉长度不一致时的那一对（C→P1，C→P2）。
+    pub mismatch_c: Option<(f64, f64)>,
+    /// 没找到邻边的端点：(P1 端, P2 端)。
+    pub missing: (bool, bool),
+    /// 失败/需人工确认的原因（None = 量取可信）。
+    pub reason: Option<ChamferGeomReason>,
+}
+
+impl ChamferMeasure {
+    /// 量取可信（有 c、有 a、无待确认原因）才算 ok。
+    pub(crate) fn ok(&self) -> bool {
+        self.reason.is_none() && self.c.is_some() && self.a.is_some()
+    }
+
+    /// 没找到邻边的端点标签（"P1" / "P2" / "P1、P2"）。
+    fn missing_label(&self) -> String {
+        match self.missing {
+            (true, true) => "P1、P2".to_string(),
+            (true, false) => "P1".to_string(),
+            (false, true) => "P2".to_string(),
+            (false, false) => String::new(),
+        }
+    }
+
+    /// 原因文案的占位符（GUI 按代号 + 这些参数自己拼词，AI/日志看 reason_text）。
+    pub(crate) fn reason_args(&self) -> Vec<(&'static str, String)> {
+        let mut out: Vec<(&'static str, String)> = Vec::new();
+        if self.missing.0 || self.missing.1 {
+            out.push(("end", self.missing_label()));
+        }
+        if let Some((e1, e2)) = self.mismatch_pair {
+            out.push(("end1", format_trim_num(e1)));
+            out.push(("end2", format_trim_num(e2)));
+        }
+        if let Some((c1, c2)) = self.mismatch_c {
+            out.push(("c1", format_trim_num(c1)));
+            out.push(("c2", format_trim_num(c2)));
+        }
+        if let Some(c) = self.c {
+            out.push(("c", format_trim_num(c)));
+        }
+        if let Some(a) = self.a {
+            out.push(("a", format_trim_num(a)));
+        }
+        out
+    }
+
+    /// 原因文案（当前语言；AI/日志用）。
+    pub(crate) fn reason_text(&self) -> String {
+        let Some(r) = self.reason else {
+            return String::new();
+        };
+        let args = self.reason_args();
+        let refs: Vec<(&str, &str)> = args.iter().map(|(k, v)| (*k, v.as_str())).collect();
+        crate::i18n::t_fmt(r.i18n_key(), &refs)
+    }
+}
+
+/// 端点匹配容差 = `1e-6 × max(1, 图幅倍率)`（世界单位）。
+/// 理由：引导端点由 OCS 对象捕捉而来、与轮廓顶点同点（误差 ≤1e-9 量级），
+/// 1e-6 留 3 个数量级余量；比 1e-4 更不容易误吸附到近邻的其它顶点。
+pub(crate) fn chamfer_measure_tol(s: f64) -> f64 {
+    1e-6 * s.max(1.0)
+}
+
+/// 两端夹角视为「一致」的容差（度）：真倒角两端相等，浮点噪声 ≤1e-9°，
+/// 1e-6° 足够判等又不把「真不一致」当一致（30° vs 60° 差 30°）。
+const CHAMFER_ANGLE_EQ_TOL_DEG: f64 = 1e-6;
+
+/// 量取值取整到 0.001（µm）：GB 倒角值多为 0.5~3，3 位小数足够，
+/// 又能消掉浮点尾巴（1.9999999999 → 2）。
+fn round_mm3(v: f64) -> f64 {
+    (v * 1000.0).round() / 1000.0
+}
+
+/// 端点 p 上挂着的邻边候选：方向 = 自 p 指向该边**另一端**（远离倒角顶点）。
+struct NeighborCand {
+    dir: (f64, f64),
+}
+
+/// 图层是否可见（关层/冻结层不参与量取——沿用 C6/B6 口径）。
+/// 图层表里没有的层名按可见处理（不因缺表把真实轮廓挡掉）。
+fn layer_visible(doc: &acadrust::CadDocument, name: &str) -> bool {
+    doc.layers
+        .iter()
+        .find(|ly| ly.name.eq_ignore_ascii_case(name))
+        .map(|ly| !ly.flags.off && !ly.flags.frozen)
+        .unwrap_or(true)
+}
+
+/// 多段线顶点 → 边列表（闭合时补最后一条）。
+fn polyline_segments(pts: &[(f64, f64)], closed: bool) -> Vec<((f64, f64), (f64, f64))> {
+    let mut out = Vec::new();
+    for w in pts.windows(2) {
+        out.push((w[0], w[1]));
+    }
+    if closed && pts.len() >= 3 {
+        out.push((pts[pts.len() - 1], pts[0]));
+    }
+    out
+}
+
+/// 在**可见图层**（排除 `10引导线层` 自身）里找端点落在 `p` 容差内的 LINE /
+/// 多段线边。返回候选方向（自 p 指向另一端）。
+fn chamfer_neighbors(doc: &acadrust::CadDocument, p: [f64; 3], tol: f64) -> Vec<NeighborCand> {
+    use acadrust::EntityType as E;
+    let mut out: Vec<NeighborCand> = Vec::new();
+    let d2 = |q: (f64, f64)| {
+        let (dx, dy) = (q.0 - p[0], q.1 - p[1]);
+        dx * dx + dy * dy
+    };
+    for e in doc.entities() {
+        let (layer, segs): (&str, Vec<((f64, f64), (f64, f64))>) = match e {
+            E::Line(l) => (
+                &l.common.layer,
+                vec![((l.start.x, l.start.y), (l.end.x, l.end.y))],
+            ),
+            E::LwPolyline(pl) => {
+                let pts: Vec<(f64, f64)> = pl
+                    .vertices
+                    .iter()
+                    .map(|v| (v.location.x, v.location.y))
+                    .collect();
+                (&pl.common.layer, polyline_segments(&pts, pl.is_closed))
+            }
+            E::Polyline(pl) => {
+                let pts: Vec<(f64, f64)> = pl
+                    .vertices
+                    .iter()
+                    .map(|v| (v.location.x, v.location.y))
+                    .collect();
+                (&pl.common.layer, polyline_segments(&pts, pl.flags.is_closed()))
+            }
+            E::Polyline2D(pl) => {
+                let pts: Vec<(f64, f64)> = pl
+                    .vertices
+                    .iter()
+                    .map(|v| (v.location.x, v.location.y))
+                    .collect();
+                (&pl.common.layer, polyline_segments(&pts, pl.flags.is_closed()))
+            }
+            _ => continue,
+        };
+        // ★ 引导自身（10引导线层）不算邻边；★ 关闭/冻结层不参与（可见性口径）。
+        if layer.eq_ignore_ascii_case("10引导线层") || !layer_visible(doc, layer) {
+            continue;
+        }
+        for (a, b) in segs {
+            let (ma, mb) = (d2(a) <= tol * tol, d2(b) <= tol * tol);
+            let dir = match (ma, mb) {
+                (true, false) => (b.0 - a.0, b.1 - a.1),
+                (false, true) => (a.0 - b.0, a.1 - b.1),
+                // 两端都在容差内 = 退化边；两端都不在 = 不相关。
+                _ => continue,
+            };
+            let len = (dir.0 * dir.0 + dir.1 * dir.1).sqrt();
+            if len <= tol {
+                continue;
+            }
+            out.push(NeighborCand {
+                dir: (dir.0 / len, dir.1 / len),
+            });
+        }
+    }
+    out
+}
+
+/// 候选方向去重：同向（共线且同朝向）只留一个（同一条边被拆成多段时不重复计数）。
+fn dedup_dirs(cands: &mut Vec<NeighborCand>) {
+    let mut kept: Vec<(f64, f64)> = Vec::new();
+    cands.retain(|c| {
+        let dup = kept.iter().any(|k| {
+            (k.0 * c.dir.1 - k.1 * c.dir.0).abs() < 1e-9 && (k.0 * c.dir.0 + k.1 * c.dir.1) > 0.0
+        });
+        if !dup {
+            kept.push(c.dir);
+        }
+        !dup
+    });
+}
+
+/// 几何量取（4 顶点引导的段1）：
+/// * `a` = 段1 与两端邻边的锐夹角（两端一致才算数）；
+/// * `c` = 倒角顶点 C（两邻边直线交点）到 P1/P2 的距离；
+/// * 任一步不成立 ⇒ `reason` 说明原因、c/a 留空（调用方退回手填）。
+pub(crate) fn measure_chamfer_geom(
+    doc: &acadrust::CadDocument,
+    p1: [f64; 3],
+    p2: [f64; 3],
+    s: f64,
+) -> ChamferMeasure {
+    let tol = chamfer_measure_tol(s);
+    let (dx, dy) = (p2[0] - p1[0], p2[1] - p1[1]);
+    let len = (dx * dx + dy * dy).sqrt();
+    if len <= tol {
+        return ChamferMeasure {
+            reason: Some(ChamferGeomReason::ZeroEdge),
+            ..Default::default()
+        };
+    }
+    let u = (dx / len, dy / len);
+    let mut cand1 = chamfer_neighbors(doc, p1, tol);
+    let mut cand2 = chamfer_neighbors(doc, p2, tol);
+    dedup_dirs(&mut cand1);
+    dedup_dirs(&mut cand2);
+    // 锐夹角（与邻边朝向无关）：2×45° ⇒ 45°、2×30° ⇒ 30°。
+    let ang = |d: (f64, f64)| -> f64 {
+        ((u.0 * d.0 + u.1 * d.1).abs().clamp(0.0, 1.0))
+            .acos()
+            .to_degrees()
+    };
+    let mut a1: Vec<f64> = cand1.iter().map(|c| ang(c.dir)).collect();
+    let mut a2: Vec<f64> = cand2.iter().map(|c| ang(c.dir)).collect();
+    a1.sort_by(|x, y| x.partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal));
+    a2.sort_by(|x, y| x.partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal));
+    if cand1.is_empty() || cand2.is_empty() {
+        return ChamferMeasure {
+            a_end1: a1,
+            a_end2: a2,
+            missing: (cand1.is_empty(), cand2.is_empty()),
+            reason: Some(ChamferGeomReason::NoNeighbor),
+            ..Default::default()
+        };
+    }
+    // 选「两端夹角最接近」的一对：真倒角两端相等（P1 端 = P2 端 = a）。
+    // 不一致 ⇒ **不猜**：只报候选，退回手填（窗口/URL 保留手填值）。
+    let mut best: Option<(f64, usize, usize)> = None;
+    for (i, x) in a1.iter().enumerate() {
+        for (j, y) in a2.iter().enumerate() {
+            let m = (x - y).abs();
+            if best.map_or(true, |(bm, _, _)| m < bm) {
+                best = Some((m, i, j));
+            }
+        }
+    }
+    let (mismatch, i1, i2) = best.expect("两端都有候选");
+    if mismatch > CHAMFER_ANGLE_EQ_TOL_DEG {
+        return ChamferMeasure {
+            a_end1: a1.clone(),
+            a_end2: a2.clone(),
+            mismatch_pair: Some((a1[i1], a2[i2])),
+            reason: Some(ChamferGeomReason::AngleMismatch),
+            ..Default::default()
+        };
+    }
+    let a = round_mm3((a1[i1] + a2[i2]) / 2.0);
+    let (w1, w2) = (cand1[i1].dir, cand2[i2].dir);
+    let den = w1.0 * w2.1 - w1.1 * w2.0;
+    if den.abs() < 1e-12 {
+        return ChamferMeasure {
+            a_end1: a1,
+            a_end2: a2,
+            reason: Some(ChamferGeomReason::Parallel),
+            ..Default::default()
+        };
+    }
+    // 倒角顶点 C = P1 + t·w1 = P2 + s2·w2；w 指向远离 C 的一侧 ⇒ t、s2 应为负。
+    let t = (dx * w2.1 - dy * w2.0) / den;
+    let s2 = (dx * w1.1 - dy * w1.0) / den;
+    if t >= 0.0 || s2 >= 0.0 {
+        return ChamferMeasure {
+            a_end1: a1,
+            a_end2: a2,
+            reason: Some(ChamferGeomReason::CornerOutside),
+            ..Default::default()
+        };
+    }
+    let (cut1, cut2) = (-t, -s2);
+    if (cut1 - cut2).abs() > 1e-6 * cut1.max(1.0) {
+        return ChamferMeasure {
+            a_end1: a1,
+            a_end2: a2,
+            mismatch_c: Some((round_mm3(cut1), round_mm3(cut2))),
+            reason: Some(ChamferGeomReason::CMismatch),
+            ..Default::default()
+        };
+    }
+    let c = round_mm3((cut1 + cut2) / 2.0);
+    if !(c > 0.0) || !(a > 0.0) || a >= 90.0 {
+        return ChamferMeasure {
+            c: Some(c),
+            a: Some(a),
+            a_end1: a1,
+            a_end2: a2,
+            reason: Some(ChamferGeomReason::BadValue),
+            ..Default::default()
+        };
+    }
+    ChamferMeasure {
+        c: Some(c),
+        a: Some(a),
+        a_end1: a1,
+        a_end2: a2,
+        ..Default::default()
+    }
+}
+
+/// 量取结果 + 手填参数 →「实际用值」（仅 4 顶点引导走这里）。
+/// * 显式 `src=geom` ⇒ 量取值优先（量不到才退回手填）；
+/// * 未显式给 c（或 a）⇒ 该项用量取值；
+/// * 显式给了且没要量取 ⇒ 以给的为准（量取只作窗口提示）。
+/// 返回（实际 c, 实际 a, 是否至少一项来自量取）。
+pub(crate) fn chamfer_effective(
+    p: &crate::guide_url::ChamferParams,
+    m: &ChamferMeasure,
+) -> (f64, f64, bool) {
+    let (mut c, mut a) = (p.c, p.a);
+    let mut used = false;
+    if m.ok() {
+        if p.src_geom || !p.c_given {
+            c = m.c.unwrap_or(c);
+            used = true;
+        }
+        if p.src_geom || !p.a_given {
+            a = m.a.unwrap_or(a);
+            used = true;
+        }
+    }
+    (c, a, used)
+}
+
+/// 量取结果 → 窗口/AI 用的 JSON：`reason` 是代号（GUI 走 i18n）、
+/// `reason_text` 是当前语言文案（AI/日志）、`reason_args` 是拼词参数。
+pub(crate) fn chamfer_measure_json(m: &ChamferMeasure) -> serde_json::Value {
+    let args: serde_json::Map<String, serde_json::Value> = m
+        .reason_args()
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), serde_json::Value::String(v)))
+        .collect();
+    serde_json::json!({
+        "ok": m.ok(),
+        "c": m.c,
+        "a": m.a,
+        "end1": m.a_end1,
+        "end2": m.a_end2,
+        "mismatch": m.mismatch_pair.map(|(x, y)| [x, y]),
+        "reason": m.reason.map(|r| r.code()),
+        "reason_text": m.reason_text(),
+        "reason_args": args,
+    })
+}
+
 /// 倒角块成员：单行 TEXT（基线；样式 OCSM_GB，字宽比随样式 0.7）。
 /// `halign` 由肩线朝向决定（见 `build_chamfer_parts`）；非左对齐时锚点 = `pos`
 /// （显式写第二对齐点，别让宿主补）。
@@ -8090,6 +8539,8 @@ pub(crate) fn chamfer_insert(block_name: &str, p0: [f64; 3]) -> acadrust::entiti
 }
 
 /// 交互路径：`POST /api/apply` type=CHAMFER。引导 PLINE 保留（不删，可反复刷新）。
+/// `params.chamfer.c/a` 已是**实际用值**（手填或 4 顶点几何量取的结果，由调用方定）；
+/// `chamfer_geom` = 量取过程报告（仅 4 顶点引导有；回给窗口/AI）。
 fn apply_chamfer(
     sender: &Arc<dyn PluginRequestSender>,
     doc: &acadrust::CadDocument,
@@ -8097,6 +8548,7 @@ fn apply_chamfer(
     p0: [f64; 3],
     p_end: [f64; 3],
     params: &GuideParams,
+    chamfer_geom: Option<serde_json::Value>,
 ) -> Result<String, String> {
     use acadrust::EntityType as E;
 
@@ -8168,6 +8620,7 @@ fn apply_chamfer(
         "text": parts.text,
         "c": params.chamfer.c,
         "a": params.chamfer.a,
+        "chamfer_geom": chamfer_geom,
     })
     .to_string())
 }
@@ -14834,7 +15287,13 @@ mod weld_tests {
         let mut p = GuideParams::linear(LinearSub::Aligned, 0.0);
         p.guide_type = GuideType::Chamfer;
         p.sub = None;
-        p.chamfer = crate::guide_url::ChamferParams { c, a };
+        p.chamfer = crate::guide_url::ChamferParams {
+            c,
+            a,
+            src_geom: false,
+            c_given: true,
+            a_given: true,
+        };
         p
     }
 
@@ -15029,7 +15488,7 @@ mod weld_tests {
     fn apply_chamfer_writes_block_and_insert() {
         let mock = Arc::new(MockSender::new(weld_doc()));
         let sender: Arc<dyn PluginRequestSender> = mock.clone();
-        let out = apply_chamfer(&sender, &weld_doc(), P_TIP, P0, P_END, &chamfer_params(1.0, 45.0))
+        let out = apply_chamfer(&sender, &weld_doc(), P_TIP, P0, P_END, &chamfer_params(1.0, 45.0), None)
             .unwrap();
         assert!(out.contains("\"block\":\"*C1\""), "{out}");
         assert!(out.contains("\"text\":\"C1\""), "{out}");
@@ -15106,11 +15565,11 @@ mod weld_tests {
         drop(doc2);
         assert_eq!(texts_of(&mock.block_entities("*C2"))[0].value, "2×30°");
         drop(server);
-        // 坏引导：4 顶点 PLINE → 报错。
+        // 坏引导：5 顶点 PLINE → 报错（4 顶点已是量取模式，不再算坏引导）。
         let mut doc3 = acadrust::CadDocument::new();
         let mut pl3 = LwPolyline::new();
         pl3.common.layer = "10引导线层".into();
-        for pt in [(0.0, 0.0), (10.0, 0.0), (20.0, 0.0), (30.0, 0.0)] {
+        for pt in [(0.0, 0.0), (10.0, 0.0), (20.0, 0.0), (30.0, 0.0), (40.0, 0.0)] {
             pl3.add_point(Vector2::new(pt.0, pt.1));
         }
         let gh3 = doc3.add_entity(E::LwPolyline(pl3)).unwrap();
@@ -15119,7 +15578,392 @@ mod weld_tests {
         let hx3 = format!("{:#X}", u64::from(gh3));
         let body3 = serde_json::json!({"handle": hx3, "url": url1}).to_string();
         let r3 = http_req(server3.port, "POST", "/api/apply_refresh", &body3);
-        assert!(r3.contains("3 顶点"), "4 顶点应报错: {r3}");
+        assert!(r3.contains("3 顶点"), "5 顶点应报错: {r3}");
+        assert!(r3.contains("4 顶点"), "错误里应说清两态（3/4 顶点）: {r3}");
+    }
+
+    // ── 倒角几何量取（4 顶点引导：段1 = 倒角边）测试 ────────────────────────
+
+    /// 量取用文档：两条**止于 P1/P2** 的邻边 + 4 顶点倒角引导 PLINE（10引导线层）。
+    /// `p3` = 段2 末端（与段1 共线 = 引线头）、`p4` = 段3 末端（肩线）。
+    fn chamfer_measure_doc(
+        p1: (f64, f64),
+        p2: (f64, f64),
+        leg1_far: (f64, f64),
+        leg2_far: (f64, f64),
+        p3: (f64, f64),
+        p4: (f64, f64),
+    ) -> (acadrust::CadDocument, acadrust::Handle) {
+        let mut doc = acadrust::CadDocument::new();
+        for (a, b) in [(leg1_far, p1), (p2, leg2_far)] {
+            let mut l = acadrust::entities::Line::new();
+            l.start = Vector3::new(a.0, a.1, 0.0);
+            l.end = Vector3::new(b.0, b.1, 0.0);
+            doc.add_entity(E::Line(l)).unwrap();
+        }
+        let mut pl = LwPolyline::new();
+        pl.common.layer = "10引导线层".into();
+        for (x, y) in [p1, p2, p3, p4] {
+            pl.add_point(Vector2::new(x, y));
+        }
+        let gh = doc.add_entity(E::LwPolyline(pl)).unwrap();
+        (doc, gh)
+    }
+
+    /// 2×45° 真几何：C=(2,0)；段1 = (0,0)→(2,2)；两条腿各切掉 2；两端夹角都是 45°。
+    /// 段2 = 沿段1 方向延伸 20（共线）；段3 = 肩线向右 30。
+    fn chamfer_geometry_2x45() -> (acadrust::CadDocument, acadrust::Handle) {
+        let k = 20.0 / 2f64.sqrt();
+        chamfer_measure_doc(
+            (0.0, 0.0),
+            (2.0, 2.0),
+            (-10.0, 0.0),
+            (2.0, 12.0),
+            (2.0 + k, 2.0 + k),
+            (2.0 + k + 30.0, 2.0 + k),
+        )
+    }
+
+    /// 2×30° 真几何：120° 夹角（两端都是 30°）——投影法会错算成 3，故用顶点交点法。
+    /// C=(0,0)；P1=(−2,0)；P2=(1,√3)；两条腿各切掉 2。
+    fn chamfer_geometry_2x30() -> (acadrust::CadDocument, acadrust::Handle) {
+        let c30 = 3f64.sqrt() / 2.0;
+        let (p1, p2) = ((-2.0, 0.0), (1.0, 3f64.sqrt()));
+        let p3 = (p2.0 + 20.0 * c30, p2.1 + 10.0); // 段2：沿 30° 方向 20
+        let p4 = (p3.0 + 30.0, p3.1); // 段3：肩线向右 30
+        chamfer_measure_doc(
+            p1,
+            p2,
+            (-12.0, 0.0),
+            (p2.0 + 5.0, p2.1 + 10.0 * c30),
+            p3,
+            p4,
+        )
+    }
+
+    /// 1×45° 真几何：C=(0,0)；段1 = (−1,0)→(0,1)；两条腿各切掉 1。
+    fn chamfer_geometry_1x45() -> (acadrust::CadDocument, acadrust::Handle) {
+        let k = 20.0 / 2f64.sqrt();
+        chamfer_measure_doc(
+            (-1.0, 0.0),
+            (0.0, 1.0),
+            (-10.0, 0.0),
+            (0.0, 10.0),
+            (k, 1.0 + k),
+            (k + 30.0, 1.0 + k),
+        )
+    }
+
+    /// ★ 三个算例的公式口径：2×45° ⇒ c=2/a=45；2×30° ⇒ c=2/a=30；1×45° ⇒ c=1/a=45。
+    #[test]
+    fn chamfer_measure_three_canonical_examples() {
+        let cases = [
+            (chamfer_geometry_2x45(), [0.0, 0.0, 0.0], [2.0, 2.0, 0.0], 2.0, 45.0),
+            (
+                chamfer_geometry_2x30(),
+                [-2.0, 0.0, 0.0],
+                [1.0, 3f64.sqrt(), 0.0],
+                2.0,
+                30.0,
+            ),
+            (
+                chamfer_geometry_1x45(),
+                [-1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                1.0,
+                45.0,
+            ),
+        ];
+        for (i, (doc, _), p1, p2, want_c, want_a) in cases
+            .into_iter()
+            .enumerate()
+            .map(|(i, (g, p1, p2, c, a))| (i, g, p1, p2, c, a))
+        {
+            let m = measure_chamfer_geom(&doc, p1, p2, 1.0);
+            assert!(m.ok(), "算例{i} 应量到: {m:?}");
+            assert_eq!(m.c, Some(want_c), "算例{i} c: {m:?}");
+            assert_eq!(m.a, Some(want_a), "算例{i} a: {m:?}");
+        }
+    }
+
+    /// ★ ① 4 顶点 + 2×45° 真几何 ⇒ c=2、a=45、文字 `C2`。
+    /// URL 不给 c/a ⇒ **默认行为 = 量取**；随后显式给 `c=9&a=30` 刷新 ⇒ 以给的为准（手填优先）。
+    #[test]
+    fn chamfer_geom_http_4point_2x45_measures_c2_a45() {
+        let (doc, gh) = chamfer_geometry_2x45();
+        let mock = Arc::new(MockSender::new(doc));
+        mock.mirror_blocks_into_doc();
+        let server = spawn_fixed(mock.clone()).expect("spawn guide server");
+        let hx = format!("{:#X}", u64::from(gh));
+        // /api/guide：窗口预填要拿到量取值（可见、可改）。
+        let g = http_req(server.port, "GET", &format!("/api/guide?handle={hx}"), "");
+        let gv: serde_json::Value = serde_json::from_str(&g).unwrap();
+        assert_eq!(gv["pts"].as_array().unwrap().len(), 4, "{g}");
+        assert_eq!(gv["chamfer_geom"]["ok"], true, "{g}");
+        assert_eq!(gv["chamfer_geom"]["c"], 2.0, "{g}");
+        assert_eq!(gv["chamfer_geom"]["a"], 45.0, "{g}");
+        assert_eq!(gv["params"], serde_json::Value::Null, "无 URL ⇒ 参数为空");
+        // 应用并刷新：URL 没有 c/a ⇒ 4 顶点引导走量取（默认行为）。
+        let url = "http://127.0.0.1:1/DIM/CHAMFER/0";
+        let body = serde_json::json!({"handle": hx, "url": url}).to_string();
+        let r = http_req(server.port, "POST", "/api/apply_refresh", &body);
+        let v: serde_json::Value = serde_json::from_str(&r).unwrap();
+        assert_eq!(v["ok"], true, "apply: {r}");
+        assert_eq!(v["text"], "C2", "{r}");
+        assert_eq!(v["c"], 2.0, "{r}");
+        assert_eq!(v["a"], 45.0, "{r}");
+        assert_eq!(v["chamfer_geom"]["used"], true, "{r}");
+        assert_eq!(v["chamfer_geom"]["src"], "auto", "{r}");
+        assert_eq!(v["chamfer_geom"]["geom"]["ok"], true, "{r}");
+        assert_eq!(texts_of(&mock.block_entities("*C1"))[0].value, "C2");
+        // 显式给了 c/a 且没 src=geom ⇒ 以给的为准（9×30°），刷新替换不叠加。
+        let url2 = "http://127.0.0.1:1/DIM/CHAMFER/0?c=9&a=30";
+        let body2 = serde_json::json!({"handle": hx, "url": url2}).to_string();
+        let r2 = http_req(server.port, "POST", "/api/apply_refresh", &body2);
+        let v2: serde_json::Value = serde_json::from_str(&r2).unwrap();
+        assert_eq!(v2["text"], "9×30°", "{r2}");
+        assert_eq!(v2["chamfer_geom"]["used"], false, "显式给值 ⇒ 手填优先: {r2}");
+        assert_eq!(v2["chamfer_geom"]["src"], "manual", "{r2}");
+        assert_eq!(v2["chamfer_geom"]["geom"]["c"], 2.0, "量取结果仍要可见: {r2}");
+        assert_eq!(
+            mock.doc
+                .lock()
+                .unwrap()
+                .entities()
+                .filter(|e| matches!(e, E::Insert(_)))
+                .count(),
+            1,
+            "刷新后只应剩 1 个 INSERT（旧产物被替换）"
+        );
+        drop(server);
+    }
+
+    /// ★ ② 4 顶点 + 2×30°（120° 夹角，两端都是 30°）⇒ c=2、a=30、文字 `2×30°`。
+    /// （直接走 `do_apply`：本条不另起 HTTP 服务——端口窗 32 个，并行测试要省着用。）
+    #[test]
+    fn chamfer_geom_4point_2x30_measures_c2_a30() {
+        let (doc, gh) = chamfer_geometry_2x30();
+        let mock = Arc::new(MockSender::new(doc));
+        mock.mirror_blocks_into_doc();
+        let sender: Arc<dyn PluginRequestSender> = mock.clone();
+        let body = serde_json::json!({
+            "handle": format!("{:#X}", u64::from(gh)),
+            "url": "http://127.0.0.1:1/DIM/CHAMFER/0",
+        })
+        .to_string();
+        let r = do_apply(&sender, body.as_bytes(), true).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&r).unwrap();
+        assert_eq!(v["text"], "2×30°", "{r}");
+        assert_eq!(v["c"], 2.0, "{r}");
+        assert_eq!(v["a"], 30.0, "{r}");
+        assert_eq!(v["chamfer_geom"]["used"], true, "{r}");
+        assert_eq!(v["chamfer_geom"]["src"], "auto", "{r}");
+        let e1 = v["chamfer_geom"]["geom"]["end1"][0].as_f64().unwrap();
+        let e2 = v["chamfer_geom"]["geom"]["end2"][0].as_f64().unwrap();
+        assert!(
+            (e1 - 30.0).abs() < 1e-9 && (e2 - 30.0).abs() < 1e-9,
+            "两端都是 30°（锐夹角）: {r}"
+        );
+        assert_eq!(texts_of(&mock.block_entities("*C1"))[0].value, "2×30°");
+        // 显式 src=geom（哪怕同时给了 c=9&a=30）⇒ 量取值优先（量取优先，手填保留但不压过它）。
+        let body2 = serde_json::json!({
+            "handle": format!("{:#X}", u64::from(gh)),
+            "url": "http://127.0.0.1:1/DIM/CHAMFER/0?c=9&a=30&src=geom",
+        })
+        .to_string();
+        let r2 = do_apply(&sender, body2.as_bytes(), true).unwrap();
+        let v2: serde_json::Value = serde_json::from_str(&r2).unwrap();
+        assert_eq!(v2["text"], "2×30°", "src=geom 应压过手填: {r2}");
+        assert_eq!(v2["c"], 2.0, "{r2}");
+        assert_eq!(v2["chamfer_geom"]["src"], "geom", "{r2}");
+        assert_eq!(v2["chamfer_geom"]["used"], true, "{r2}");
+        assert_eq!(
+            mock.doc
+                .lock()
+                .unwrap()
+                .entities()
+                .filter(|e| matches!(e, E::Insert(_)))
+                .count(),
+            1,
+            "刷新替换不叠加"
+        );
+    }
+
+    /// ★ ③ 3 顶点老引导 = 手填模式：旁边就摆着可量取的真倒角轮廓也不参与，
+    /// 文字仍严格按 URL 的 c/a（与改前逐字相同）。
+    #[test]
+    fn chamfer_geom_3point_guide_stays_manual() {
+        let (mut doc, _) = chamfer_geometry_2x45();
+        let mut pl = LwPolyline::new();
+        pl.common.layer = "10引导线层".into();
+        for (x, y) in [(2.0, 0.0), (20.0, 20.0), (50.0, 20.0)] {
+            pl.add_point(Vector2::new(x, y));
+        }
+        let gh = doc.add_entity(E::LwPolyline(pl)).unwrap();
+        let mock = Arc::new(MockSender::new(doc));
+        mock.mirror_blocks_into_doc();
+        let sender: Arc<dyn PluginRequestSender> = mock.clone();
+        // 手填 3×30°：即便 URL 带 src=geom 也不介入（3 顶点 = 手填模式）。
+        let body = serde_json::json!({
+            "handle": format!("{:#X}", u64::from(gh)),
+            "url": "http://127.0.0.1:1/DIM/CHAMFER/0?c=3&a=30&src=geom",
+        })
+        .to_string();
+        let r = do_apply(&sender, body.as_bytes(), true).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&r).unwrap();
+        assert_eq!(v["text"], "3×30°", "3 顶点只看手填: {r}");
+        assert_eq!(v["c"], 3.0, "{r}");
+        assert_eq!(v["a"], 30.0, "{r}");
+        assert!(v["chamfer_geom"].is_null(), "3 顶点不回量取信息: {r}");
+    }
+
+    /// ★ ④ 量不到 ⇒ 退回手填 + 明说原因（绝不静默给错数）：
+    /// (a) 一条邻边都没有 → `no_neighbor`；(b) 邻边全在**已关闭层** → 同样量不到。
+    #[test]
+    fn chamfer_geom_falls_back_to_hand_values_with_reason() {
+        // (a) 只有引导、没有邻边。
+        let k = 20.0 / 2f64.sqrt();
+        let mut doc = acadrust::CadDocument::new();
+        let mut pl = LwPolyline::new();
+        pl.common.layer = "10引导线层".into();
+        for (x, y) in [(0.0, 0.0), (2.0, 2.0), (2.0 + k, 2.0 + k), (32.0 + k, 2.0 + k)] {
+            pl.add_point(Vector2::new(x, y));
+        }
+        let gh = doc.add_entity(E::LwPolyline(pl)).unwrap();
+        let mock = Arc::new(MockSender::new(doc));
+        mock.mirror_blocks_into_doc();
+        let sender: Arc<dyn PluginRequestSender> = mock.clone();
+        let body = serde_json::json!({
+            "handle": format!("{:#X}", u64::from(gh)),
+            "url": "http://127.0.0.1:1/DIM/CHAMFER/0?c=3&a=30",
+        })
+        .to_string();
+        let r = do_apply(&sender, body.as_bytes(), true).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&r).unwrap();
+        assert_eq!(v["ok"], true, "量不到也要能出图（用手填值）: {r}");
+        assert_eq!(v["text"], "3×30°", "退回手填: {r}");
+        assert_eq!(v["chamfer_geom"]["used"], false, "{r}");
+        assert_eq!(v["chamfer_geom"]["src"], "manual", "{r}");
+        let cg = &v["chamfer_geom"]["geom"];
+        assert_eq!(cg["ok"], false, "{r}");
+        assert_eq!(cg["reason"], "no_neighbor", "{r}");
+        assert_eq!(cg["reason_args"]["end"], "P1、P2", "{r}");
+        let rt = cg["reason_text"].as_str().unwrap();
+        assert!(!rt.is_empty() && !rt.contains("gui.guide"), "原因文案: {r}");
+
+        // (b) 邻边全在已关闭层（可见图层口径：关层不参与量取）。
+        let (mut doc2, gh2) = chamfer_geometry_2x45();
+        let mut hidden = acadrust::tables::Layer::new("临时关闭层");
+        hidden.flags.off = true;
+        doc2.layers.add_or_replace(hidden);
+        for e in doc2.entities_mut() {
+            if let E::Line(l) = e {
+                l.common.layer = "临时关闭层".into();
+            }
+        }
+        let mock2 = Arc::new(MockSender::new(doc2));
+        let sender2: Arc<dyn PluginRequestSender> = mock2.clone();
+        let body2 = serde_json::json!({
+            "handle": format!("{:#X}", u64::from(gh2)),
+            "url": "http://127.0.0.1:1/DIM/CHAMFER/0?c=5&a=45",
+        })
+        .to_string();
+        let r2 = do_apply(&sender2, body2.as_bytes(), true).unwrap();
+        let v2: serde_json::Value = serde_json::from_str(&r2).unwrap();
+        assert_eq!(v2["chamfer_geom"]["geom"]["ok"], false, "关层不该参与量取: {r2}");
+        assert_eq!(v2["chamfer_geom"]["geom"]["reason"], "no_neighbor", "{r2}");
+        assert_eq!(v2["text"], "C5", "退回手填: {r2}");
+    }
+
+    /// ★ ④b 两端夹角不一致（直角上的非对称 2×30°：一端 60°、另一端 30°）⇒
+    /// **不猜**：列候选 + 需人工确认，退回手填值。
+    #[test]
+    fn chamfer_geom_angle_mismatch_lists_candidates_and_falls_back() {
+        // C=(0,0)；腿1 = x 轴（边 (10,0)→P1=(2,0)）；腿2 = y 轴（边 (0,3.4641)→(0,10)）；
+        // 段2 与段1 共线（沿倒角边方向延伸 20）；段3 = 肩线向右。
+        let (p2x, p2y) = (0.0, 2.0 * 3f64.sqrt());
+        let (p3x, p3y) = (p2x - 10.0, p2y + 10.0 * 3f64.sqrt());
+        let (doc, gh) = chamfer_measure_doc(
+            (2.0, 0.0),
+            (p2x, p2y),
+            (10.0, 0.0),
+            (0.0, 10.0),
+            (p3x, p3y),
+            (p3x + 30.0, p3y),
+        );
+        let mock = Arc::new(MockSender::new(doc));
+        mock.mirror_blocks_into_doc();
+        let sender: Arc<dyn PluginRequestSender> = mock.clone();
+        // 退回手填：文字仍按 URL 的 2×30°。
+        let body = serde_json::json!({
+            "handle": format!("{:#X}", u64::from(gh)),
+            "url": "http://127.0.0.1:1/DIM/CHAMFER/0?c=2&a=30",
+        })
+        .to_string();
+        let r = do_apply(&sender, body.as_bytes(), true).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&r).unwrap();
+        let cg = &v["chamfer_geom"]["geom"];
+        assert_eq!(cg["ok"], false, "{r}");
+        assert_eq!(cg["reason"], "angle_mismatch", "{r}");
+        // 候选角度：P1 端 60°、P2 端 30°（浮点尾巴 → 取下界比较）。
+        let pair = [
+            cg["mismatch"][0].as_f64().unwrap(),
+            cg["mismatch"][1].as_f64().unwrap(),
+        ];
+        assert!(
+            (pair[0] - 60.0).abs() < 1e-9 && (pair[1] - 30.0).abs() < 1e-9,
+            "要报出两端候选角度: {r}"
+        );
+        assert_eq!(cg["reason_args"]["end1"], "60", "{r}");
+        assert_eq!(cg["reason_args"]["end2"], "30", "{r}");
+        assert_eq!(cg["c"], serde_json::Value::Null, "不一致就不给 c（不猜）: {r}");
+        assert!(!cg["reason_text"].as_str().unwrap().is_empty(), "{r}");
+        assert_eq!(v["text"], "2×30°", "{r}");
+        assert_eq!(v["chamfer_geom"]["used"], false, "{r}");
+    }
+
+    /// ★ ⑤ 顶点数异常 ⇒ 明确报错（LINE 2 顶点 / 5 顶点 PLINE；错误里说清 3/4 两态）。
+    #[test]
+    fn chamfer_geom_rejects_odd_vertex_count() {
+        // 5 顶点 PLINE。
+        let mut doc = acadrust::CadDocument::new();
+        let mut pl = LwPolyline::new();
+        pl.common.layer = "10引导线层".into();
+        for (x, y) in [(0.0, 0.0), (2.0, 2.0), (4.0, 4.0), (6.0, 6.0), (8.0, 8.0)] {
+            pl.add_point(Vector2::new(x, y));
+        }
+        let gh = doc.add_entity(E::LwPolyline(pl)).unwrap();
+        let mock = Arc::new(MockSender::new(doc));
+        let sender: Arc<dyn PluginRequestSender> = mock.clone();
+        let body = serde_json::json!({
+            "handle": format!("{:#X}", u64::from(gh)),
+            "url": "http://127.0.0.1:1/DIM/CHAMFER/0?c=1&a=45",
+        })
+        .to_string();
+        let e1 = do_apply(&sender, body.as_bytes(), true).unwrap_err();
+        assert!(
+            e1.contains("3 顶点") && e1.contains("4 顶点"),
+            "5 顶点应明确报错: {e1}"
+        );
+        // LINE（2 顶点）同样报错。
+        let mut doc2 = acadrust::CadDocument::new();
+        let mut l = acadrust::entities::Line::new();
+        l.common.layer = "10引导线层".into();
+        l.start = Vector3::new(0.0, 0.0, 0.0);
+        l.end = Vector3::new(50.0, 0.0, 0.0);
+        let gh2 = doc2.add_entity(E::Line(l)).unwrap();
+        let mock2 = Arc::new(MockSender::new(doc2));
+        let sender2: Arc<dyn PluginRequestSender> = mock2.clone();
+        let body2 = serde_json::json!({
+            "handle": format!("{:#X}", u64::from(gh2)),
+            "url": "http://127.0.0.1:1/DIM/CHAMFER/0?c=1&a=45",
+        })
+        .to_string();
+        let e2 = do_apply(&sender2, body2.as_bytes(), true).unwrap_err();
+        assert!(
+            e2.contains("3 顶点") && e2.contains("4 顶点"),
+            "LINE 应明确报错: {e2}"
+        );
     }
 
     // ── 序号标注（BALLOON）测试─────────────────────────────────────────────

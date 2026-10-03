@@ -445,15 +445,32 @@ pub struct BalloonParams {
 
 /// 倒角标注参数：`c` = 倒角尺寸、`a` = 倒角角度（度，缺省 45）。
 /// 文字规则：`|a−45| ≤ 1e-3` → `C{c}`；否则 `{c}×{a}°`（× = U+00D7）。
+///
+/// 两态（按**引导顶点数**分流，老 URL 语义不变）：
+/// * 3 顶点引导 ⇒ 手填模式：`c`/`a` 就是这里给的（缺省 1/45）。
+/// * 4 顶点引导 ⇒ 几何量取模式：`src_geom`（URL `src=geom`）或未显式给 `c`/`a`
+///   （`c_given`/`a_given` 为 false）时用几何量取值；显式给了且没要量取 ⇒ 以给的为准。
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ChamferParams {
     pub c: f64,
     pub a: f64,
+    /// `src=geom`：显式要求「用几何量取」（仅 4 顶点引导；有它时量取值优先）。
+    pub src_geom: bool,
+    /// `c` 是否由上层显式给出（URL query / 窗口字段）。
+    pub c_given: bool,
+    /// `a` 是否由上层显式给出。
+    pub a_given: bool,
 }
 
 impl Default for ChamferParams {
     fn default() -> Self {
-        Self { c: 1.0, a: 45.0 }
+        Self {
+            c: 1.0,
+            a: 45.0,
+            src_geom: false,
+            c_given: false,
+            a_given: false,
+        }
     }
 }
 
@@ -692,11 +709,13 @@ impl GuideParams {
                 // 引线标注（仅 LEADER）：lu=上侧文字、ll=下侧文字（单行）。
                 "lu" => leader.upper = v,
                 "ll" => leader.lower = v,
-                // 倒角标注（仅 CHAMFER）：c=倒角尺寸、a=倒角角度（度，缺省 45）。
+                // 倒角标注（仅 CHAMFER）：c=倒角尺寸、a=倒角角度（度，缺省 45）；
+                // src=geom = 显式「用几何量取」（4 顶点引导；量取值优先于手填）。
                 "c" => {
                     if let Ok(x) = v.parse::<f64>() {
                         if x.is_finite() {
                             chamfer.c = x;
+                            chamfer.c_given = true;
                         }
                     }
                 }
@@ -704,8 +723,12 @@ impl GuideParams {
                     if let Ok(x) = v.parse::<f64>() {
                         if x.is_finite() {
                             chamfer.a = x;
+                            chamfer.a_given = true;
                         }
                     }
+                }
+                "src" => {
+                    chamfer.src_geom = matches!(&*v, "geom" | "1" | "true" | "yes" | "on" | "量取")
                 }
                 // 序号标注（仅 BALLOON）：items=序号列表（逗号分隔，从指引线向外/向上）、
                 // dir=H 横向 / V 纵向、ins=1 序号冲突时插入后移（否则数量 +1）。
@@ -1051,6 +1074,10 @@ impl GuideParams {
             // 倒角：c/a 都写（自描述；缺省也写，刷新往返逐字稳定）。
             q.push(format!("c={}", format_dist(self.chamfer.c)));
             q.push(format!("a={}", format_dist(self.chamfer.a)));
+            // 几何量取（4 顶点引导）：显式标记必须往返，否则编辑/刷新会退回手填。
+            if self.chamfer.src_geom {
+                q.push("src=geom".into());
+            }
         }
         if !q.is_empty() {
             url.push('?');
@@ -1498,10 +1525,28 @@ mod tests {
         assert_eq!(d.chamfer.a, 45.0);
         // 去尾零：0.5 / 30 不是 0.5 / 30.0。
         let mut q = p.clone();
-        q.chamfer = ChamferParams { c: 0.5, a: 30.0 };
+        q.chamfer = ChamferParams {
+            c: 0.5,
+            a: 30.0,
+            src_geom: false,
+            c_given: true,
+            a_given: true,
+        };
         assert_eq!(q.to_url(9), "http://127.0.0.1:9/DIM/CHAMFER/0?c=0.5&a=30");
         let back = GuideParams::from_url(&q.to_url(9)).unwrap();
         assert_eq!(back.chamfer, q.chamfer);
+        // 几何量取标记（src=geom）往返；★ 只有它显式在 URL 里时才为 true。
+        let mut g = q.clone();
+        g.chamfer.src_geom = true;
+        let gurl = g.to_url(9);
+        assert_eq!(gurl, "http://127.0.0.1:9/DIM/CHAMFER/0?c=0.5&a=30&src=geom");
+        let gback = GuideParams::from_url(&gurl).unwrap();
+        assert!(gback.chamfer.src_geom, "src=geom 应解析为量取标记");
+        assert!(gback.chamfer.c_given && gback.chamfer.a_given);
+        // 显式给了 c/a 但没 src=geom ⇒ 手填优先（不是量取标记）。
+        assert!(back.chamfer.c_given && !back.chamfer.src_geom);
+        // 只给 dist 段：c/a 都没显式给（4 顶点引导时 ⇒ 用量取值）。
+        assert!(!d.chamfer.c_given && !d.chamfer.a_given && !d.chamfer.src_geom);
         // 中文别名「倒角」。
         assert_eq!(
             GuideParams::from_url("http://x/DIM/%E5%80%92%E8%A7%92/0").unwrap().guide_type,

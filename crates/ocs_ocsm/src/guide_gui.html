@@ -286,7 +286,11 @@
         <input type="number" id="ch-c" value="1" min="0.001" step="0.5" style="width:80px">
         <span class="lbl">{{i18n:gui.guide.chamfer.angle}}</span>
         <input type="number" id="ch-a" value="45" min="0.1" max="89.9" step="1" style="width:80px">
+        <label id="ch-geom-lbl" style="display:none; align-items:center; gap:4px">
+          <input type="checkbox" id="ch-geom">{{i18n:gui.guide.chamfer.geom.label}}
+        </label>
       </div>
+      <div class="gdt-hint" id="ch-geom-note" style="display:none"></div>
       <div class="gdt-hint">{{i18n:gui.guide.chamfer.hint}}</div>
     </div>
     <!-- 序号标注（BALLOON）：一个组 = 1 指引线 + 1 圆点 + N 横线 + N 序号；可横向/纵向扩展 -->
@@ -412,6 +416,85 @@
 
   let P1 = {x:0, y:0}, P2 = {x:100, y:75};
   let PTS = null; // 引导线全部顶点（ANGLE 两段 PLINE = 3 个；SECTION 剖切路径 2~N）
+  // 倒角几何量取（4 顶点引导）：/api/guide 带回的 `chamfer_geom` + 手填/量取优先级。
+  let chGeom = null;          // 量取结果（ok / c / a / reason / reason_args）
+  let chGeomApplied = false;  // 本次引导已预填？（切换类型面板不覆盖用户输入）
+  let chGeomSrc = false;      // URL 显式 src=geom（量取优先）
+  let chGeomParams = null;    // URL 里的 chamfer 参数（c_given / a_given）
+  // 量不到的原因（按代号取词；服务端 `reason` 是稳定代号，不靠中文兜底）。
+  const CH_GEOM_REASON = {
+    zero_edge: '{{i18njs:gui.guide.chamfer.geom.r.zero_edge}}',
+    no_neighbor: '{{i18njs:gui.guide.chamfer.geom.r.no_neighbor}}',
+    angle_mismatch: '{{i18njs:gui.guide.chamfer.geom.r.angle_mismatch}}',
+    parallel: '{{i18njs:gui.guide.chamfer.geom.r.parallel}}',
+    corner_outside: '{{i18njs:gui.guide.chamfer.geom.r.corner_outside}}',
+    c_mismatch: '{{i18njs:gui.guide.chamfer.geom.r.c_mismatch}}',
+    bad_value: '{{i18njs:gui.guide.chamfer.geom.r.bad_value}}',
+  };
+  const CH_GEOM_TPL = {
+    ok: '{{i18njs:gui.guide.chamfer.geom.ok}}',
+    avail: '{{i18njs:gui.guide.chamfer.geom.avail}}',
+    manual: '{{i18njs:gui.guide.chamfer.geom.manual}}',
+    fail: '{{i18njs:gui.guide.chamfer.geom.fail}}',
+  };
+  function chFmt(tpl, kv) {
+    return String(tpl).replace(/\{(\w+)\}/g, (m, k) => ((kv && kv[k] !== undefined) ? String(kv[k]) : m));
+  }
+  function chGeomReasonText(g) {
+    const args = (g && g.reason_args) || {};
+    if (g && g.reason && CH_GEOM_REASON[g.reason]) return chFmt(CH_GEOM_REASON[g.reason], args);
+    return (g && g.reason_text) || '';
+  }
+  // 倒角面板显示/切换时：4 顶点引导才显示「几何量取」；量取值预填（可见、可改），
+  // 量不到则明说原因（红字）并保留手填值。
+  function chGeomRefresh() {
+    const lbl = document.getElementById('ch-geom-lbl');
+    const box = document.getElementById('ch-geom');
+    const note = document.getElementById('ch-geom-note');
+    const four = (geom === 'pline' && PTS && PTS.length === 4);
+    lbl.style.display = four ? 'flex' : 'none';
+    note.style.display = four ? '' : 'none';
+    note.className = 'gdt-hint';
+    if (!four) { box.checked = false; note.textContent = ''; return; }
+    if (chGeomApplied) return; // 已定过：用户的后续修改不被覆盖
+    chGeomApplied = true;
+    const g = chGeom;
+    if (g && g.ok) {
+      const pg = chGeomParams || {};
+      const cGiven = !!pg.c_given, aGiven = !!pg.a_given;
+      // 上层显式给了 c/a 且没要量取 ⇒ 以给的为准（量取只作提示）；否则用量取值。
+      if (!chGeomSrc && (cGiven || aGiven)) {
+        if (!cGiven) document.getElementById('ch-c').value = g.c;
+        if (!aGiven) document.getElementById('ch-a').value = g.a;
+        box.checked = false;
+        note.textContent = chFmt(CH_GEOM_TPL.avail, {c: g.c, a: g.a});
+      } else {
+        document.getElementById('ch-c').value = g.c;
+        document.getElementById('ch-a').value = g.a;
+        box.checked = true;
+        note.textContent = chFmt(CH_GEOM_TPL.ok, {c: g.c, a: g.a});
+      }
+    } else if (g) {
+      box.checked = false;
+      note.className = 'gdt-hint bad'; // 量不到：红字明说原因，不静默
+      note.textContent = chFmt(CH_GEOM_TPL.fail, {reason: chGeomReasonText(g)});
+    } else {
+      box.checked = false;
+      note.textContent = CH_GEOM_TPL.manual;
+    }
+  }
+  // 手改 c/a = 选手填：自动取消「几何量取」勾选（量取来的值可见、可改）。
+  ['ch-c', 'ch-a'].forEach((id) => {
+    document.getElementById(id).addEventListener('input', () => {
+      const box = document.getElementById('ch-geom');
+      const note = document.getElementById('ch-geom-note');
+      if (box.checked) box.checked = false;
+      if (note && note.style.display !== 'none') {
+        note.className = 'gdt-hint';
+        note.textContent = CH_GEOM_TPL.manual;
+      }
+    });
+  });
   let type = 'LINEAR', sub = 'H', side = 'in', ver = '2008', letter = 'A', angleMode = 'M';
   let sectionSide = 'R', showArrow = true;
   // 形位公差（TOLERANCE）状态 + QCAD gdt 字体字形（与 DXF 内联 {\Fgdt;X} 同源）。
@@ -705,6 +788,7 @@
       tolEnabled = false; document.getElementById('tol-enable').checked = false;
       document.getElementById('row-chamfer').style.display = ''; // 显示倒角专属面板
       document.getElementById('gdt-row').style.display = 'none';
+      chGeomRefresh(); // 4 顶点引导：量取值预填 / 量不到明说原因
       draw();
       return;
     }
@@ -779,8 +863,10 @@
       allow = ['ARCLEN'];
     } else if (geom === 'pline') {
       const nV = (PTS && PTS.length) || 0;
-      // 焊接：仅两段（恰好 3 顶点：焊缝点→拐点→基准线末端）；引线同构（箭头→拐点→肩线末端）。
-      allow = (nV >= 3) ? ['ANGLE', 'SECTION', 'TOLERANCE'].concat(nV === 3 ? ['WELD', 'LEADER', 'BALLOON', 'CHAMFER'] : [])
+      // 焊接/引线/序号：仅两段（恰好 3 顶点）；倒角：3 顶点（手填）或 4 顶点（几何量取）。
+      const twoSeg = (nV === 3) ? ['WELD', 'LEADER', 'BALLOON'] : [];
+      const chamfer = (nV === 3 || nV === 4) ? ['CHAMFER'] : [];
+      allow = (nV >= 3) ? ['ANGLE', 'SECTION', 'TOLERANCE'].concat(twoSeg, chamfer)
                         : ['SECTION', 'TOLERANCE'];
     } else {
       allow = LINE_TYPES;
@@ -1283,6 +1369,9 @@ const BS_FITS = [
       if (!isFinite(ang) || ang <= 0 || ang >= 90) throw new Error('倒角角度无效（0~90°）');
       qs.push('c=' + c);
       qs.push('a=' + ang);
+      // 4 顶点引导 + 勾选「几何量取」⇒ 显式 src=geom（服务端量取值优先；
+      // 量不到时服务端自动退回手填并在返回值里说明原因）。
+      if (PTS && PTS.length === 4 && document.getElementById('ch-geom').checked) qs.push('src=geom');
     } else if (type === 'DETAIL') {
       // 局部放大图：放大比例（绝对）+ 序号（自动）+ 放置偏移（相对引导中心，留空自动）。
       u += '/0';
@@ -1902,8 +1991,10 @@ const BS_FITS = [
   function drawChamfer() {
     svg.innerHTML = '';
     const a = (PTS && PTS[0]) ? PTS[0] : P1;
-    const p0 = (PTS && PTS[1]) ? PTS[1] : P2;
-    const pe = (PTS && PTS[2]) ? PTS[2] : null;
+    // 4 顶点引导：段1 = 倒角边、段2 与段1 共线（引线头）⇒ 引线 = P1→P3、肩线 = P3→P4。
+    const four = (PTS && PTS.length >= 4);
+    const p0 = four ? PTS[2] : ((PTS && PTS[1]) ? PTS[1] : P2);
+    const pe = four ? PTS[3] : ((PTS && PTS[2]) ? PTS[2] : null);
     const gpts = (PTS && PTS.length >= 2) ? PTS : [a, p0];
     for (let i = 0; i + 1 < gpts.length; i++) {
       svg.appendChild(wline(gpts[i].x, gpts[i].y, gpts[i+1].x, gpts[i+1].y, 1.5, '#bbb'));
@@ -2584,6 +2675,11 @@ const BS_FITS = [
         P2 = {x: j.p2[0], y: j.p2[1]};
         PTS = (j.pts && j.pts.length >= 3) ? j.pts.map(p => ({x:p[0], y:p[1]})) : null;
         geom = j.geom || (PTS ? 'pline' : 'line');
+        // 倒角几何量取：结果 + 手填/量取优先级（4 顶点引导才有）。
+        chGeom = j.chamfer_geom || null;
+        chGeomApplied = false;
+        chGeomParams = (j.params && j.params.chamfer) || null;
+        chGeomSrc = !!(chGeomParams && chGeomParams.src_geom);
         // 引导线长度 = 主尺寸（公差计算默认尺寸）；必须在 j.params 块外，
         // 否则 URL 无参数（首次 GDIM）时测量值不赋值，模态窗口主尺寸为空。
         if (typeof j.measurement === 'number') measurement = j.measurement;
