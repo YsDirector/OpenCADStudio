@@ -12,13 +12,24 @@
     font-weight: normal;
     font-style: normal;
   }
+  html { height: 100%; }
   body { font-family: "Microsoft YaHei", "PingFang SC", sans-serif; color: var(--text);
-         background: #f5f6f8; padding: 18px; width: 620px; }
-  h1 { font-size: 16px; margin-bottom: 14px; }
-  .panel { background: #fff; border: 1px solid var(--line); border-radius: 8px; padding: 14px; margin-bottom: 12px; }
+         background: #f5f6f8; padding: 16px 18px 14px;
+         /* ★ 不再固定 620px ✗：窗口约 1024px 宽时右侧曾空着 400px、类型按钮溢出卡片 ✗ */
+         width: auto; min-width: 420px;
+         min-height: 100vh; display: flex; flex-direction: column; }
+  h1 { font-size: 16px; margin-bottom: 14px; flex: 0 0 auto; }
+  .panel { background: #fff; border: 1px solid var(--line); border-radius: 8px; padding: 14px;
+           margin-bottom: 12px; flex: 0 0 auto; }
+  /* ★ 预览卡吃掉窗口剩余高度 ✗（原来底部留一大片空白） */
+  #panel-preview { flex: 1 1 auto; display: flex; flex-direction: column; min-height: 280px; }
+  #panel-preview svg { flex: 1 1 auto; }
   .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
   .lbl { font-size: 12px; color: #666; margin-right: 4px; }
-  .seg { display: flex; gap: 6px; }
+  .seg { display: flex; gap: 6px; flex-wrap: wrap; }
+  /* ★ 类型按钮：占满一行 + 文字不竖排 ✗（14 个类型全显示后曾挤出卡片 ✓） */
+  #seg-type { flex: 1 1 100%; }
+  #seg-type button { flex: 0 0 auto; white-space: nowrap; }
   .gsym { font-family: 'GDT'; width: 30px; height: 30px; font-size: 17px;
           border: 1px solid #bbb; border-radius: 5px; background: #fff;
           cursor: pointer; color: #111; line-height: 1; padding: 0; }
@@ -60,8 +71,8 @@
   .param { display: flex; align-items: center; gap: 6px; margin-top: 10px; }
   .param input[type=number] { width: 110px; padding: 5px 8px; border: 1px solid #bbb; border-radius: 6px; font-size: 13px; }
   .txt { width: 100%; margin-top: 10px; }
-  .txt input { width: 100%; padding: 7px 9px; border: 1px solid #bbb; border-radius: 6px; font-size: 13px; }
-  svg { width: 100%; height: 260px; background: #fff; border: 1px solid var(--line); border-radius: 6px;
+  .txt input { width: 100%; max-width: 560px; padding: 7px 9px; border: 1px solid #bbb; border-radius: 6px; font-size: 13px; }
+  svg { width: 100%; height: auto; min-height: 240px; background: #fff; border: 1px solid var(--line); border-radius: 6px;
         cursor: grab; touch-action: none; }
   svg:active { cursor: grabbing; }
   .btnrow { display: flex; gap: 10px; justify-content: flex-end; }
@@ -356,7 +367,7 @@
     <div class="hint">线性标注生成在 <b>7标注层</b>；直径/半径在 <b>7标注层</b>（匿名块+INSERT）；基准/向视图在 <b>8符号标注层</b>（匿名块+INSERT）。样式 <b>OCSM_GB</b>。预览可<b>拖拽平移</b>、<b>滚轮缩放</b>。</div>
   </div>
 
-  <div class="panel">
+  <div class="panel" id="panel-preview">
     <svg id="prev"></svg>
   </div>
 
@@ -669,7 +680,7 @@
     return (side === 'in' ? -9 : 11);
   }
   segBind('seg-type', b => {
-    // 服务端判为不可用的类型已 disabled；垫片/脚本直接 .click() 时也拦住（不切面板）。
+    // 服务端判为不可用的类型标了 .offline + aria-disabled；垫片/脚本直接 .click() 时也拦住（不切面板）。
     if (b.disabled || b.classList.contains('offline')) return;
     type = b.dataset.t;
     // 所有"类型专属行"先统一隐藏，各分支只负责显示自己需要的（防漏显示）。
@@ -872,7 +883,7 @@
     need_horizontal_shoulder: '{{i18njs:gui.guide.reason.need_horizontal_shoulder}}',
     need_chamfer_vertices: '{{i18njs:gui.guide.reason.need_chamfer_vertices}}',
   };
-  // 按服务端裁决置灰类型按钮：ok=false ⇒ 置灰不可点（.offline + disabled）+ title 写原因。
+  // 按服务端裁决置灰类型按钮：ok=false ⇒ 置灰不可点（.offline + aria-disabled）+ title 写原因。
   // ★ 老响应没有 types（旧插件 / 垫片）⇒ 一律保持可用：误置灰比误点亮更坏（会挡住合法用法）。
   // ★ 界面置灰 ≠ 后端放宽：各类型原有的形状/量取校验一条都不动（脚本/AI 仍拿到明确错误）。
   function applyGeomFilter() {
@@ -884,11 +895,13 @@
       if (!a) return; // 服务端没列该类型 ⇒ 不置灰（保守）
       if (a.ok) {
         b.classList.remove('offline');
-        b.disabled = false;
+        b.removeAttribute('aria-disabled');
         b.title = '';
       } else {
         b.classList.add('offline');
-        b.disabled = true;
+        // ★ 不用 disabled ✗：禁用的表单控件不派发鼠标事件 ⇒ title 里的置灰原因悬停看不到 ✗。
+        //   可点性由 .offline + segBind 里的守卫保证 ✓。
+        b.setAttribute('aria-disabled', 'true');
         b.title = TYPE_REASONS[a.reason] || a.reason || '';
       }
     });
@@ -2612,6 +2625,15 @@ const BS_FITS = [
   }
 
   // ── 拖拽平移 + 滚轮缩放 ────────────────────────────────────
+  // ★ 视口换算 ✗：svg 元素常比 600×260 的 viewBox 大，而且预览卡会把它拉高（见 #panel-preview 的 flex ✓）。
+  //   preserveAspectRatio 默认 meet ⇒ 图形按 min(宽比, 高比) 缩放并**居中**，
+  //   ★ 早先直接按元素宽高线性换算 ⇒ 元素一被拉高，竖向拖动/缩放就偏 ✗。
+  function px2view(clientX, clientY) {
+    const r = svg.getBoundingClientRect();
+    const s = Math.min(r.width / VPW, r.height / VPH) || 1;
+    const ox = (r.width - VPW * s) / 2, oy = (r.height - VPH * s) / 2;
+    return { x: (clientX - r.left - ox) / s, y: (clientY - r.top - oy) / s };
+  }
   let panning = false, startX = 0, startY = 0, startCam = null;
   svg.addEventListener('mousedown', e => {
     panning = true; startX = e.clientX; startY = e.clientY;
@@ -2620,9 +2642,8 @@ const BS_FITS = [
   });
   window.addEventListener('mousemove', e => {
     if (!panning || !startCam) return;
-    const r = svg.getBoundingClientRect();
-    const dx = (e.clientX - startX) * VPW / r.width;
-    const dy = (e.clientY - startY) * VPH / r.height;
+    const a = px2view(e.clientX, e.clientY), b0 = px2view(startX, startY);
+    const dx = a.x - b0.x, dy = a.y - b0.y;
     cam.cx = startCam.cx - dx / startCam.scale;
     cam.cy = startCam.cy + dy / startCam.scale;
     draw();
@@ -2630,9 +2651,8 @@ const BS_FITS = [
   window.addEventListener('mouseup', () => { panning = false; });
   svg.addEventListener('wheel', e => {
     e.preventDefault();
-    const r = svg.getBoundingClientRect();
-    const sx = (e.clientX - r.left) * VPW / r.width;
-    const sy = (e.clientY - r.top) * VPH / r.height;
+    const p = px2view(e.clientX, e.clientY);
+    const sx = p.x, sy = p.y;
     const w = s2w(sx, sy);
     const f = e.deltaY < 0 ? 1.25 : 0.8;
     cam.scale *= f;

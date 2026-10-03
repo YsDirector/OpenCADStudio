@@ -42,6 +42,7 @@ function mkEl(id, dataset = {}) {
     options: [],
     _handlers: {},
     _innerHTML: '',
+    attrs: {},
     classList: {
       _on: new Set(),
       add(c) { this._on.add(c); },
@@ -61,7 +62,9 @@ function mkEl(id, dataset = {}) {
     },
     querySelector(sel) { return this.querySelectorAll(sel)[0] || null; },
     getBoundingClientRect() { return { left: 0, top: 0, width: 800, height: 600 }; },
-    setAttribute() {},
+    setAttribute(k, v) { this.attrs[k] = String(v); },
+    getAttribute(k) { return Object.prototype.hasOwnProperty.call(this.attrs, k) ? this.attrs[k] : null; },
+    removeAttribute(k) { delete this.attrs[k]; },
     getContext() { return null; },
     closest() { return null; },
     focus() {},
@@ -306,22 +309,38 @@ if (/\bLINE_TYPES\b/.test(html)) {
   errors.push('页面不该再保留自带几何规则表（LINE_TYPES 应为已删）');
 }
 // 折线引导下：ARCLEN 应置灰（ok=false + 原因 title），SECTION 应可用。
+// ★ 置灰用 aria-disabled、而**不用** disabled ✗：禁用的表单控件不派发鼠标事件 ⇒ title 里的原因悬停看不到 ✗。
+//   可点性由 .offline + segBind 守卫拦住 ✓。
 const arclenBtn = typeButtons.find((b) => b.dataset.t === 'ARCLEN');
-if (!arclenBtn || !arclenBtn.classList.contains('offline') || !arclenBtn.disabled) {
-  errors.push('ARCLEN 在折线引导下应置灰不可点（服务端 types ok=false）');
+if (!arclenBtn
+    || !arclenBtn.classList.contains('offline')
+    || arclenBtn.getAttribute('aria-disabled') !== 'true') {
+  errors.push('ARCLEN 在折线引导下应置灰（.offline + aria-disabled，服务端 types ok=false）');
 } else if (!arclenBtn.title) {
   errors.push('ARCLEN 置灰时 title 应写原因文案（i18n 码 → 文案）');
+}
+if (arclenBtn && arclenBtn.disabled) {
+  errors.push('置灰不得用 disabled（会吞掉悬停 title，且是对外可见行为的回退）');
 }
 const sectionBtn = typeButtons.find((b) => b.dataset.t === 'SECTION');
 if (sectionBtn && sectionBtn.classList.contains('offline')) {
   errors.push('SECTION 在折线引导下应可用（服务端 types ok=true）');
 }
-// 置灰按钮被程序化 .click() 也不得切换面板（disabled 在真浏览器里已拦住）。
+// 置灰按钮被程序化 .click() 也不得切换面板（segBind 里的 .offline 守卫拦住）。
 if (arclenBtn) {
   arclenBtn.click();
   if (!arclenBtn.classList.contains('offline')) {
     errors.push('置灰类型被点击后不应恢复可用');
   }
+}
+
+// ⑥b ★ 视口换算 ✗：预览卡会把 svg 拉高（#panel-preview 的 flex ✓），meet 缩放并居中
+//   ⇒ 必须走 px2view（带缩放 s 与居中偏移）；曾按元素宽高线性换算 ⇒ 竖向拖动/缩放偏 ✗。
+if (!/px2view\(e\.clientX/.test(html)) {
+  errors.push('拖拽/滚轮应走 px2view（带缩放 s 与居中偏移）换算视口坐标');
+}
+if (/\* VPW \/ r\.width|\* VPH \/ r\.height/.test(html)) {
+  errors.push('不该再按元素宽高线性换算视口坐标（meet 会留边 ⇒ 竖向偏）');
 }
 
 // ⑦ A1：编辑模式文案（标题/按钮 → 「更新标注」）
