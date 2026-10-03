@@ -76,6 +76,28 @@
   keeps left alignment); changed 2026-10-03 (height scales with the sheet: 3.5×s). Output = anonymous block `*C{n}` + INSERT (`7标注层`); the guide line is
   kept, so "apply & refresh" can be repeated (refresh replaces the old output instead of stacking it).
 
+### Type-Availability Verdict (2026-10-04: a greyed-out button = early feedback)
+
+`GET /api/guide` now also returns a `types` field (machine-readable; the window uses it to **grey out** the type buttons + put the reason into the hover `title`):
+
+```json
+"types":[{"t":"CHAMFER","ok":false,"reason":"need_chamfer_vertices"},
+         {"t":"SECTION","ok":true,"reason":null}, {"t":"LINEAR","ok":true,"reason":null}, …]
+```
+
+- The rule table's **single source of truth** = the "Leader-Geometry Contract" section above; the implementation is centralised on the server in `guide_type_availability()` (one Rust place, table-driven), and the front end only consumes it.
+- **Two tiers must be told apart**: ① the shape **does not conform** to that type's leader protocol ⇒ `ok:false` + a reason code (the UI **greys it out, not clickable**);
+  ② the shape **conforms** but the geometry cannot be computed (e.g. a 5-vertex chamfer whose segment 3 is 1° off segment 2, or no adjacent edge found) ⇒ `ok:true` (**stays lit**) —
+  the generation path reports the measuring failure per the existing convention + falls back to the typed values (**typing is a legitimate path**).
+- **A greyed-out UI ≠ a relaxed back end**: none of the per-type shape/measuring checks are touched (scripts/AI still get explicit errors).
+- Reason codes (stable strings; the copy lives in the i18n catalog under `gui.guide.reason.<code>`, one each for zh/en):
+  `need_line` / `need_guide` / `need_angle_pline` / `need_pline` / `need_arc` /
+  `need_circle_or_rect` / `need_three_vertices` / `need_horizontal_shoulder` / `need_chamfer_vertices`.
+- Key evidence: **a 4-vertex polyline ⇒ `CHAMFER` unavailable** (chamfer only takes 3/5 vertices), but **`SECTION` is available**
+  (a section cut is a polyline with any vertex count ≥2) — so the verdict **cannot be a blanket rule on the vertex count**; it must check whether that type's shape protocol is satisfied.
+- When in doubt, rule it **available** (greying out wrongly is worse than lighting up wrongly — it blocks legitimate use).
+- `RGH` (roughness) is a **block-reference** leader, goes through the `ROUGH` command + `rough_gui.html`, does not pass this window, hence not in `types`.
+
 ## 3. What Is Generated and Onto Which Layer
 
 | Output | Lands on | Notes |
