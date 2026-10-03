@@ -125,6 +125,24 @@ const GUIDE = {
   geom: 'pline',
   url: null,
   measurement: 67.1,
+  // 服务端类型裁决（/api/guide 的 types；规则表 = Rust guide_type_availability）。
+  // 本引导 = 3 顶点折线 [0,0]→[20,20]→[60,20]（肩线水平）。
+  types: [
+    { t: 'LINEAR', ok: false, reason: 'need_line' },
+    { t: 'DIAMETER', ok: false, reason: 'need_line' },
+    { t: 'RADIUS', ok: false, reason: 'need_line' },
+    { t: 'VIEW', ok: false, reason: 'need_line' },
+    { t: 'DATUM', ok: true, reason: null },
+    { t: 'ANGLE', ok: true, reason: null },
+    { t: 'SECTION', ok: true, reason: null },
+    { t: 'TOLERANCE', ok: true, reason: null },
+    { t: 'ARCLEN', ok: false, reason: 'need_arc' },
+    { t: 'DETAIL', ok: false, reason: 'need_circle_or_rect' },
+    { t: 'WELD', ok: true, reason: null },
+    { t: 'LEADER', ok: true, reason: null },
+    { t: 'BALLOON', ok: true, reason: null },
+    { t: 'CHAMFER', ok: true, reason: null },
+  ],
   params: {
     type: 'WELD', dist: 0,
     weld: {
@@ -279,15 +297,31 @@ if (!leaderBtn) {
   }
 }
 
-// ⑥ 只允许两段 PLINE：「焊接」「引线」必须同在 nV===3 的过滤分支里
-//（防止以后误改成所有多段线都显示）；倒角另开一支（3 顶点 = 手填 / 5 顶点 4 段 = 几何量取）。
-if (!/\(nV === 3\) *\? *\[[^\]]*'WELD'[^\]]*'LEADER'/.test(html) &&
-    !/\(nV === 3\) *\? *\[[^\]]*'LEADER'[^\]]*'WELD'/.test(html)) {
-  errors.push('几何过滤未把 LEADER/WELD 限定在 3 顶点 PLINE');
+// ⑥ 类型可用性改由服务端裁决（/api/guide 的 types）：页面只置灰 + 写 title，
+// 不再自带顶点数规则表（规则唯一来源在 Rust：guide_type_availability）。
+if (!/applyGeomFilter/.test(html) || !/guideTypes/.test(html)) {
+  errors.push('页面缺少服务端类型裁决接线（applyGeomFilter/guideTypes）');
 }
-// ⑥b 倒角：3 顶点（手填）或 5 顶点（4 段，几何量取）都要显示。
-if (!/\(nV === 3 \|\| nV === 5\) *\? *\['CHAMFER'\]/.test(html)) {
-  errors.push('几何过滤未把 CHAMFER 放开到 3/5 顶点');
+if (/\bLINE_TYPES\b/.test(html)) {
+  errors.push('页面不该再保留自带几何规则表（LINE_TYPES 应为已删）');
+}
+// 折线引导下：ARCLEN 应置灰（ok=false + 原因 title），SECTION 应可用。
+const arclenBtn = typeButtons.find((b) => b.dataset.t === 'ARCLEN');
+if (!arclenBtn || !arclenBtn.classList.contains('offline') || !arclenBtn.disabled) {
+  errors.push('ARCLEN 在折线引导下应置灰不可点（服务端 types ok=false）');
+} else if (!arclenBtn.title) {
+  errors.push('ARCLEN 置灰时 title 应写原因文案（i18n 码 → 文案）');
+}
+const sectionBtn = typeButtons.find((b) => b.dataset.t === 'SECTION');
+if (sectionBtn && sectionBtn.classList.contains('offline')) {
+  errors.push('SECTION 在折线引导下应可用（服务端 types ok=true）');
+}
+// 置灰按钮被程序化 .click() 也不得切换面板（disabled 在真浏览器里已拦住）。
+if (arclenBtn) {
+  arclenBtn.click();
+  if (!arclenBtn.classList.contains('offline')) {
+    errors.push('置灰类型被点击后不应恢复可用');
+  }
 }
 
 // ⑦ A1：编辑模式文案（标题/按钮 → 「更新标注」）

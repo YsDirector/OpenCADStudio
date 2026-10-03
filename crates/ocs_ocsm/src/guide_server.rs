@@ -1110,6 +1110,73 @@ fn guide_geom_kind(
     }
 }
 
+/// 标注类型可用性裁决（窗口置灰 + 脚本/AI 判据）：`(类型, 可用, 原因码/None)`。
+///
+/// ★ 唯一规则来源 = `handbook/06-引导线标注.md`「二、引导几何契约」的类型表
+/// （一种类型一条；规则集中在这一个函数里 —— 前端/脚本不再各带一份）。
+///
+/// 只判**形状协议**（两档 (i)：形状不符合 ⇒ 不可用）。形状符合但因几何量不出
+/// （两档 (ii)，如 5 顶点倒角段3 差 1°）**不**在这里判 —— 仍然可用：生成路径按既有
+/// 口径提示量取失败原因 + 退回手填，手填是合法路径。
+///
+/// `geom` = `guide_geom_kind` 的返回（line / pline / circle / rect / arc）。
+/// 拿不准的规则一律判**可用**（误置灰比误点亮更坏：会挡住合法用法）。
+pub(crate) fn guide_type_availability(
+    geom: &str,
+    pts: &[[f64; 3]],
+) -> Vec<(&'static str, bool, Option<&'static str>)> {
+    let n = pts.len();
+    let is = |k: &str| geom == k;
+    // BALLOON 肩线（P(n-1)→P(n)）水平判定：浮点容差 1e-6（相对肩线长）。
+    let shoulder_horizontal = n >= 3 && {
+        let (a, b) = (pts[n - 2], pts[n - 1]);
+        (b[1] - a[1]).abs() <= 1e-6 * (b[0] - a[0]).abs().max(1.0)
+    };
+    let rules: &[(&'static str, bool, &'static str)] = &[
+        // 直线型（表：1 条 LINE）。
+        ("LINEAR", is("line"), "need_line"),
+        ("DIAMETER", is("line"), "need_line"),
+        ("RADIUS", is("line"), "need_line"),
+        ("VIEW", is("line"), "need_line"),
+        // 基准：表只写「1 条引导几何」（未限形态）⇒ 按「不确定就判可用」给 ≥2 点全形态。
+        ("DATUM", n >= 2, "need_guide"),
+        // 角度：表=两段 PLINE；后端口径 3 顶点起（取前 3 点 = 角顶点 + 两边）。
+        ("ANGLE", is("pline") && n >= 3, "need_angle_pline"),
+        // 剖切：表=1 条 PLINE（可折线，任意顶点数 ≥2）；直线 = 2 顶点退化路径，后端同样接受。
+        ("SECTION", (is("pline") || is("line")) && n >= 2, "need_pline"),
+        // 形位公差：表=1 条 PLINE（箭头尖 + 框接入点，≥2 顶点）。
+        ("TOLERANCE", is("pline") && n >= 2, "need_pline"),
+        // 弧长：表=1 条 ARC（弧本身）。
+        ("ARCLEN", is("arc"), "need_arc"),
+        // 局部放大：表=CIRCLE / 矩形 / PLINE；后端 guide_geom_win 只收 CIRCLE 或
+        // 闭合 4 顶点矩形（geom=rect）⇒ 按实现判（报告里点名）。
+        ("DETAIL", is("circle") || is("rect"), "need_circle_or_rect"),
+        // 焊接 / 引线：表=两段 PLINE（恰好 3 顶点）。
+        ("WELD", is("pline") && n == 3, "need_three_vertices"),
+        ("LEADER", is("pline") && n == 3, "need_three_vertices"),
+        // 序号：表=两段 PLINE（3 顶点）且肩线（顶点3）**必须水平**。
+        ("BALLOON", is("pline") && n == 3 && shoulder_horizontal, "need_horizontal_shoulder"),
+        // 倒角：表=3 顶点（手填）或 5 顶点（4 段，几何量取）；4 顶点等其它数 ⇒ 不可用。
+        ("CHAMFER", is("pline") && (n == 3 || n == 5), "need_chamfer_vertices"),
+    ];
+    rules
+        .iter()
+        .map(|&(t, ok, code)| (t, ok, if ok { None } else { Some(code) }))
+        .collect()
+}
+
+/// `guide_type_availability` → `/api/guide` 的 `types` 字段（机器可读）：
+/// `{"t":"CHAMFER","ok":false,"reason":"need_chamfer_vertices"}`；可用时 `reason` 为 null。
+/// 原因码 → 文案在页面侧走 i18n catalog（`gui.guide.reason.*`），服务端只给稳定码。
+fn guide_types_json(geom: &str, pts: &[[f64; 3]]) -> serde_json::Value {
+    serde_json::Value::Array(
+        guide_type_availability(geom, pts)
+            .into_iter()
+            .map(|(t, ok, reason)| serde_json::json!({"t": t, "ok": ok, "reason": reason}))
+            .collect(),
+    )
+}
+
 /// 构造与 `OCSMDIMGULIDE1-general.dxf` 标注一致的 DSTYLE XDATA 覆盖
 /// （ACAD/DSTYLE）。OCS 渲染 Dimension 时优先用 XDATA 覆盖样式表
 /// （dim_override），因此必须写入这些参数才能复刻示例渲染：
@@ -3988,6 +4055,13 @@ fn api_guide(target: &str, sender: &Arc<dyn PluginRequestSender>) -> (u16, &'sta
                     }),
                     None => serde_json::Value::Null,
                 };
+                // 类型可用性裁决（窗口据此置灰 + 悬停原因；规则表见 `guide_type_availability`，
+                // 唯一来源 = handbook/06 类型表）。只判形状协议：形状符合但量取可能失败
+                //（如 5 顶点倒角）仍 ok=true —— 置灰 ≠ 后端放宽，各类型原有校验一条不动。
+                {
+                    let kind = resp["geom"].as_str().unwrap_or("line").to_string();
+                    resp["types"] = guide_types_json(&kind, &pts);
+                }
                 // 5 顶点（4 段）PLINE 引导 = 倒角量取模式：把量取结果一并回给窗口——
                 // 预填 c/a（可见、可改）+ 实测值（不静默丢精度）+ 量不到时的原因。
                 // （闭合 4 顶点矩形 = 局部放大引导，geom=rect，不量取。）
@@ -17468,6 +17542,122 @@ mod weld_tests {
         assert_eq!(v["params"]["type"], "LEADER");
         assert_eq!(v["params"]["leader"]["upper"], "通孔", "参数应回填");
         assert_eq!(v["params"]["leader"]["lower"], "深20");
+        assert_eq!(v["types"].as_array().unwrap().len(), 14, "编辑路径也要带类型裁决");
+    }
+
+    /// ★ 表驱动：引导几何形态 × 各类型 ⇒ 可用/不可用 + 原因码（逐行断言）。
+    /// 规则唯一来源 = `guide_type_availability()`（= handbook/06「二、引导几何契约」）。
+    #[test]
+    fn guide_type_availability_table() {
+        let p = |x: f64, y: f64| [x, y, 0.0];
+        // (说明, geom, 顶点, 类型, 期望可用, 期望原因码)
+        let cases: Vec<(&str, &str, Vec<[f64; 3]>, &str, bool, Option<&str>)> = vec![
+            // ① 核心证据：4 顶点折线 —— 倒角只收 3/5 顶点 ⇒ 不可用；
+            //    剖切是任意顶点数 ≥2 的折线 ⇒ **可用**（不能按顶点数一刀切）。
+            ("①4顶点折线/倒角", "pline", vec![p(0.,0.), p(10.,0.), p(20.,10.), p(20.,30.)], "CHAMFER", false, Some("need_chamfer_vertices")),
+            ("①4顶点折线/剖切", "pline", vec![p(0.,0.), p(10.,0.), p(20.,10.), p(20.,30.)], "SECTION", true, None),
+            // ② 5 顶点合规倒角（4 段）⇒ 可用（几何量取）。
+            ("②5顶点倒角/倒角", "pline", vec![p(0.,0.), p(10.,0.), p(10.,10.), p(20.,10.), p(60.,10.)], "CHAMFER", true, None),
+            // ③ 两档 (ii)：5 顶点但段3 与段2 差 1°（量取必失败）⇒ **仍然可用**（退回手填）。
+            ("③5顶点倒角差1°/倒角", "pline", vec![p(0.,0.), p(10.,0.), p(10.,10.), p(20.,10.17), p(60.,10.17)], "CHAMFER", true, None),
+            // ④ 直线 ⇒ 线性可用 / 倒角不可用；直线也是剖切的 2 顶点退化路径 ⇒ 可用。
+            ("④直线/线性", "line", vec![p(0.,0.), p(40.,0.)], "LINEAR", true, None),
+            ("④直线/倒角", "line", vec![p(0.,0.), p(40.,0.)], "CHAMFER", false, Some("need_chamfer_vertices")),
+            ("④直线/剖切", "line", vec![p(0.,0.), p(40.,0.)], "SECTION", true, None),
+            // ⑤ 弧 ⇒ 弧长可用 / 线性不可用；圆/矩形 ⇒ 局部放大可用。
+            ("⑤弧/弧长", "arc", vec![p(0.,0.), p(10.,0.), p(5.,5.)], "ARCLEN", true, None),
+            ("⑤弧/线性", "arc", vec![p(0.,0.), p(10.,0.), p(5.,5.)], "LINEAR", false, Some("need_line")),
+            ("⑤圆/局部放大", "circle", vec![p(0.,0.), p(5.,0.)], "DETAIL", true, None),
+            ("⑤矩形/局部放大", "rect", vec![p(0.,0.), p(10.,0.), p(10.,10.), p(0.,10.)], "DETAIL", true, None),
+            ("⑤圆/弧长", "circle", vec![p(0.,0.), p(5.,0.)], "ARCLEN", false, Some("need_arc")),
+            // ⑥ 3 顶点折线 ⇒ 焊接/引线/序号可用；肩线不水平 ⇒ 序号不可用；5 顶点 ⇒ 焊接不可用。
+            ("⑥3顶点/焊接", "pline", vec![p(0.,0.), p(20.,20.), p(60.,20.)], "WELD", true, None),
+            ("⑥3顶点/引线", "pline", vec![p(0.,0.), p(20.,20.), p(60.,20.)], "LEADER", true, None),
+            ("⑥3顶点肩线水平/序号", "pline", vec![p(0.,0.), p(20.,20.), p(60.,20.)], "BALLOON", true, None),
+            ("⑥3顶点肩线斜/序号", "pline", vec![p(0.,0.), p(20.,20.), p(60.,40.)], "BALLOON", false, Some("need_horizontal_shoulder")),
+            ("⑥5顶点/焊接", "pline", vec![p(0.,0.), p(10.,0.), p(10.,10.), p(20.,10.), p(60.,10.)], "WELD", false, Some("need_three_vertices")),
+            // 其它分界：角度 ≥3 顶点；基准（表未限形态）不确定就判可用；形位公差 = PLINE。
+            ("其它4顶点/角度", "pline", vec![p(0.,0.), p(10.,0.), p(20.,10.), p(20.,30.)], "ANGLE", true, None),
+            ("其它直线/角度", "line", vec![p(0.,0.), p(40.,0.)], "ANGLE", false, Some("need_angle_pline")),
+            ("其它3顶点/倒角", "pline", vec![p(0.,0.), p(20.,20.), p(60.,20.)], "CHAMFER", true, None),
+            ("其它圆/基准", "circle", vec![p(0.,0.), p(5.,0.)], "DATUM", true, None),
+            ("其它直线/形位公差", "line", vec![p(0.,0.), p(40.,0.)], "TOLERANCE", false, Some("need_pline")),
+            // 直线型的其余三种（与 LINEAR 同规则，逐类型点名，保证 14 类型全覆盖）。
+            ("其它直线/直径", "line", vec![p(0.,0.), p(40.,0.)], "DIAMETER", true, None),
+            ("其它直线/半径", "line", vec![p(0.,0.), p(40.,0.)], "RADIUS", true, None),
+            ("其它直线/向视", "line", vec![p(0.,0.), p(40.,0.)], "VIEW", true, None),
+            ("其它弧/直径", "arc", vec![p(0.,0.), p(10.,0.), p(5.,5.)], "DIAMETER", false, Some("need_line")),
+            ("其它弧/半径", "arc", vec![p(0.,0.), p(10.,0.), p(5.,5.)], "RADIUS", false, Some("need_line")),
+            ("其它弧/向视", "arc", vec![p(0.,0.), p(10.,0.), p(5.,5.)], "VIEW", false, Some("need_line")),
+        ];
+        // 每个 GuideType 至少被一条用例点名（防漏类型只查表长、不跑逐类型断言）。
+        let covered: std::collections::BTreeSet<&str> = cases.iter().map(|c| c.3).collect();
+        assert_eq!(covered.len(), 14, "用例应点名全部 14 个类型，实为 {covered:?}");
+        for (what, geom, pts, t, want_ok, want_reason) in cases {
+            let all = guide_type_availability(geom, &pts);
+            let got = all
+                .iter()
+                .find(|(k, _, _)| *k == t)
+                .unwrap_or_else(|| panic!("{what}: 规则表缺类型 {t}"));
+            assert_eq!(
+                (got.1, got.2),
+                (want_ok, want_reason),
+                "{what}: {t} 期望 (ok={want_ok}, reason={want_reason:?})，实得 (ok={}, reason={:?})",
+                got.1,
+                got.2
+            );
+        }
+        // 规则表覆盖全部 14 个 GuideType（防漏一个类型）。
+        let all = guide_type_availability("pline", &[p(0., 0.), p(20., 20.), p(60., 20.)]);
+        assert_eq!(all.len(), 14, "规则表应覆盖全部 14 个类型");
+    }
+
+    /// `/api/guide` 回 `types`（窗口置灰的唯一数据源）：4 顶点折线 ⇒ CHAMFER 不可用 + 原因码、
+    /// SECTION 可用；5 顶点（即使量取会失败）⇒ CHAMFER 可用（两档 (ii)）。
+    #[test]
+    fn api_guide_reports_type_availability() {
+        let mk = |pts: &[(f64, f64)]| {
+            let mut doc = acadrust::CadDocument::new();
+            let mut pl = LwPolyline::new();
+            pl.common.layer = "10引导线层".into();
+            for &(x, y) in pts {
+                pl.add_point(Vector2::new(x, y));
+            }
+            let gh = doc.add_entity(E::LwPolyline(pl)).unwrap();
+            let mock = Arc::new(MockSender::new(doc));
+            let sender: Arc<dyn PluginRequestSender> = mock.clone();
+            (gh, sender)
+        };
+        let find = |v: &serde_json::Value, t: &str| {
+            v["types"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|x| x["t"] == t)
+                .unwrap_or_else(|| panic!("types 缺 {t}"))
+                .clone()
+        };
+
+        // 4 顶点折线：核心证据。
+        let (gh, sender) = mk(&[(0., 0.), (10., 0.), (20., 10.), (20., 30.)]);
+        let (code, _, resp) = api_guide(&format!("?handle={}", fmt_handle(gh)), &sender);
+        assert_eq!(code, 200, "{resp}");
+        let v: serde_json::Value = serde_json::from_str(&resp).unwrap();
+        assert_eq!(
+            find(&v, "CHAMFER"),
+            serde_json::json!({"t": "CHAMFER", "ok": false, "reason": "need_chamfer_vertices"})
+        );
+        assert_eq!(
+            find(&v, "SECTION"),
+            serde_json::json!({"t": "SECTION", "ok": true, "reason": null})
+        );
+
+        // 5 顶点：形状合规 ⇒ 可用（量取失败也不置灰）。
+        let (gh, sender) = mk(&[(0., 0.), (10., 0.), (10., 10.), (20., 10.), (60., 10.)]);
+        let (code, _, resp) = api_guide(&format!("?handle={}", fmt_handle(gh)), &sender);
+        assert_eq!(code, 200, "{resp}");
+        let v: serde_json::Value = serde_json::from_str(&resp).unwrap();
+        assert_eq!(find(&v, "CHAMFER")["ok"], serde_json::json!(true));
     }
 
     /// 只有「应用」（不刷新）时：只更新记录，不重生成。

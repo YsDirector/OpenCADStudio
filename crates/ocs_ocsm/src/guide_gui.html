@@ -542,7 +542,10 @@
     'p': [[[14.0,4.5],[13.467,7.179],[11.95,9.45],[9.679,10.967],[7.0,11.5],[4.321,10.967],[2.05,9.45],[0.533,7.179],[0.0,4.5],[0.533,1.821],[2.05,-0.45],[4.321,-1.967],[7.0,-2.5],[9.679,-1.967],[11.95,-0.45],[13.467,1.821],[14.0,4.5]], [[4.5,1.0],[4.5,8.0]], [[4.5,8.0],[7.75,8.0]], [[4.5,4.5],[7.75,4.5]], [[7.75,4.5],[8.42,4.633],[8.987,5.013],[9.367,5.58],[9.5,6.25],[9.367,6.92],[8.987,7.487],[8.42,7.867],[7.75,8.0]]],
     's': [[[14.0,4.5],[13.467,7.179],[11.95,9.45],[9.679,10.967],[7.0,11.5],[4.321,10.967],[2.05,9.45],[0.533,7.179],[0.0,4.5],[0.533,1.821],[2.05,-0.45],[4.321,-1.967],[7.0,-2.5],[9.679,-1.967],[11.95,-0.45],[13.467,1.821],[14.0,4.5]], [[8.945,7.441],[7.811,7.858],[6.611,8.0],[6.032,7.888],[5.536,7.569],[5.195,7.088],[5.057,6.514],[5.143,5.931],[5.439,5.421],[5.905,5.058],[8.096,3.942],[8.561,3.579],[8.857,3.069],[8.943,2.486],[8.805,1.912],[8.464,1.431],[7.968,1.112],[7.389,1.0],[6.19,1.141],[5.057,1.558]]],
   };
-  let geom = 'line'; // 引导几何：line（LINE）/ pline（多段线）
+  let geom = 'line'; // 引导几何：line（LINE）/ pline（多段线）/ circle / rect / arc
+  // 服务端类型裁决（/api/guide 的 types）：[{t, ok, reason}] —— 窗口据此置灰 + 写 title。
+  // ★ 规则表唯一来源在服务端（guide_type_availability = handbook/06 类型表）；前端不复刻。
+  let guideTypes = null;
   // GB 基准字母禁用集：1996 用 I/O；2008（ISO 5459）加 E/F/J/L/P/R。
   const DATUM_DISABLED = { '1996': 'IO', '2008': 'EFIJLOPR' };
   function renderLetters() {
@@ -666,6 +669,8 @@
     return (side === 'in' ? -9 : 11);
   }
   segBind('seg-type', b => {
+    // 服务端判为不可用的类型已 disabled；垫片/脚本直接 .click() 时也拦住（不切面板）。
+    if (b.disabled || b.classList.contains('offline')) return;
     type = b.dataset.t;
     // 所有"类型专属行"先统一隐藏，各分支只负责显示自己需要的（防漏显示）。
     ['row-weld', 'row-leader', 'row-balloon', 'row-gdt', 'row-detail', 'row-chamfer'].forEach((id) => {
@@ -833,11 +838,7 @@
   });
   segBind('seg-sub', b => { sub = b.dataset.s; draw(); });
   segBind('seg-angle-mode', b => { angleMode = b.dataset.am; draw(); });
-  // 按引导几何过滤类型按钮：LINE → 线性/直径/半径/基准/向视图；
-  // PLINE → 角度（≥3 顶点=两段）/剖切（≥2 顶点=单段）/形位公差（≥2）；
-  //         焊接/引线（恰好 3 顶点=两段：起点→拐点→末端）；
-  // CIRCLE / 闭合矩形（RECTANG）→ 仅局部放大；ARC → 仅弧长（两种形式同构）。
-  const LINE_TYPES = ['LINEAR', 'DIAMETER', 'RADIUS', 'DATUM', 'VIEW'];
+  // 类型可用性由服务端裁决（见下面 `applyGeomFilter`）；前端不再自带几何规则表。
   // 编辑模式文案（标题/按钮 → 「更新标注」）。由 /api/guide 的 edit 标志决定：
   // 标注实体带 OCSM_EDIT 记录时即为编辑（见 guide_server 的 api_guide 回退分支）。
   // 不提供「删除标注」按钮——删除走 OCS 原生 ERASE。
@@ -859,29 +860,43 @@
     if (note) note.style.display = on ? '' : 'none';
   }
 
+  // 类型置灰的原因码 → 文案（服务端只回稳定码；文案走 i18n catalog，zh / en 各一份）。
+  const TYPE_REASONS = {
+    need_line: '{{i18njs:gui.guide.reason.need_line}}',
+    need_guide: '{{i18njs:gui.guide.reason.need_guide}}',
+    need_angle_pline: '{{i18njs:gui.guide.reason.need_angle_pline}}',
+    need_pline: '{{i18njs:gui.guide.reason.need_pline}}',
+    need_arc: '{{i18njs:gui.guide.reason.need_arc}}',
+    need_circle_or_rect: '{{i18njs:gui.guide.reason.need_circle_or_rect}}',
+    need_three_vertices: '{{i18njs:gui.guide.reason.need_three_vertices}}',
+    need_horizontal_shoulder: '{{i18njs:gui.guide.reason.need_horizontal_shoulder}}',
+    need_chamfer_vertices: '{{i18njs:gui.guide.reason.need_chamfer_vertices}}',
+  };
+  // 按服务端裁决置灰类型按钮：ok=false ⇒ 置灰不可点（.offline + disabled）+ title 写原因。
+  // ★ 老响应没有 types（旧插件 / 垫片）⇒ 一律保持可用：误置灰比误点亮更坏（会挡住合法用法）。
+  // ★ 界面置灰 ≠ 后端放宽：各类型原有的形状/量取校验一条都不动（脚本/AI 仍拿到明确错误）。
   function applyGeomFilter() {
-    let allow;
-    if (geom === 'circle' || geom === 'rect') {
-      allow = ['DETAIL'];
-    } else if (geom === 'arc') {
-      allow = ['ARCLEN'];
-    } else if (geom === 'pline') {
-      const nV = (PTS && PTS.length) || 0;
-      // 焊接/引线/序号：仅两段（恰好 3 顶点）；倒角：3 顶点（手填）或 5 顶点（4 段，几何量取）。
-      const twoSeg = (nV === 3) ? ['WELD', 'LEADER', 'BALLOON'] : [];
-      const chamfer = (nV === 3 || nV === 5) ? ['CHAMFER'] : [];
-      allow = (nV >= 3) ? ['ANGLE', 'SECTION', 'TOLERANCE'].concat(twoSeg, chamfer)
-                        : ['SECTION', 'TOLERANCE'];
-    } else {
-      allow = LINE_TYPES;
-    }
+    if (!Array.isArray(guideTypes) || guideTypes.length === 0) return;
+    const byType = {};
+    guideTypes.forEach(a => { if (a && a.t) byType[a.t] = a; });
     document.querySelectorAll('#seg-type button').forEach(b => {
-      b.style.display = allow.includes(b.dataset.t) ? '' : 'none';
+      const a = byType[b.dataset.t];
+      if (!a) return; // 服务端没列该类型 ⇒ 不置灰（保守）
+      if (a.ok) {
+        b.classList.remove('offline');
+        b.disabled = false;
+        b.title = '';
+      } else {
+        b.classList.add('offline');
+        b.disabled = true;
+        b.title = TYPE_REASONS[a.reason] || a.reason || '';
+      }
     });
+    // 当前选中的类型若已不可用 → 自动跳到第一个可用类型（全不可用则退回 linear）。
     const cur = document.querySelector('#seg-type button.on');
-    if (cur && cur.style.display === 'none') {
-      const visible = [...document.querySelectorAll('#seg-type button')].find(b => b.style.display !== 'none');
-      if (visible) { visible.click(); } else { type = 'LINEAR'; }
+    if (cur && cur.classList.contains('offline')) {
+      const first = [...document.querySelectorAll('#seg-type button')].find(x => !x.classList.contains('offline'));
+      if (first) first.click(); else type = 'LINEAR';
     }
   }
   document.querySelectorAll('#seg-side button').forEach(b => {
@@ -2680,6 +2695,9 @@ const BS_FITS = [
         P2 = {x: j.p2[0], y: j.p2[1]};
         PTS = (j.pts && j.pts.length >= 3) ? j.pts.map(p => ({x:p[0], y:p[1]})) : null;
         geom = j.geom || (PTS ? 'pline' : 'line');
+        // 服务端给的类型可用性（置灰 + 悬停原因）：先摆好按钮，再恢复已保存的类型参数。
+        guideTypes = Array.isArray(j.types) ? j.types : null;
+        applyGeomFilter();
         // 倒角几何量取：结果 + 手填/量取优先级（5 顶点/4 段引导才有）。
         chGeom = j.chamfer_geom || null;
         chGeomApplied = false;
@@ -2747,9 +2765,11 @@ const BS_FITS = [
         }
         renderXhList();
         if (j.params) {
-          type = j.params.type || 'LINEAR';
-          const segType = document.querySelector(`#seg-type button[data-t="${type}"]`);
-          if (segType && !segType.classList.contains('offline')) { segType.click(); }
+          // 保存的类型若已不可用（老 URL / 引导几何对不上）⇒ 不切过去（也不把 type 改成它），
+          // 保持 applyGeomFilter 选中的可用类型 —— 不可用就不用它，别等到报错才回退。
+          const savedType = j.params.type || 'LINEAR';
+          const segType = document.querySelector(`#seg-type button[data-t="${savedType}"]`);
+          if (segType && !segType.classList.contains('offline')) { type = savedType; segType.click(); }
           if (type === 'LINEAR' && j.params.sub) {
             sub = j.params.sub;
             const segSub = document.querySelector(`#seg-sub button[data-s="${sub}"]`);
