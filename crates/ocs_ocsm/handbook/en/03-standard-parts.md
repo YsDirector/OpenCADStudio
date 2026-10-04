@@ -26,16 +26,26 @@ OCSMPART <family> <diameter d> <length l> [view <view>] [at x,y] [rot deg]
 
 Example:
 OCSMPART hex_bolt_c 10 95 at 150,30 rot 0
-OCSMPART nut_c41 8 0 at 150,-30            ← nut/washer only takes d (write 0 in the l slot)
-OCSMPART washer_971 8 0 view main at 150,-40
+OCSMPART nut_c41 8 7.9 at 150,-30              ← nut: l = height m (M8 table value = 7.9)
+OCSMPART nut_6170 8 6.8 view end at 150,-30    ← type-1 hex nut: M8 height 6.8
+OCSMPART washer_971 8 1.6 view main at 150,-40 ← washer: l = thickness h (M8 table value = 1.6)
 ```
 
 - **Family names** are the lowercase ids in the table below (the `family=diameter` form is also accepted: see `04`).
-- `view`: `main` front view / `top` top view / `end` left view / `section` section (the views each family supports differ and are
-  listed in the window; an unsupported view is an error).
+- `view`: the only valid ids are `main` front view / `top` top view / `end` left view / `section` section
+  (default `main`). **Which views a family supports differs** (e.g. `round_nut_812` has no `end`;
+  `key_1096_*` is `main|top|section`). The authoritative list is each family's `views` in `GET /api/parts`
+  (with localized names), or the window's tree; an unsupported view is an error.
 - `at x,y`: where the base point lands (if omitted, the "point pending placement" picked in the drawing is used, otherwise the origin).
 - `rot deg`: rotation about the base point (`Insert.rotation` is in radians internally; the argument is given in **degrees**).
-- `l`: bolts/screws need a length; nuts/washers/pins (some) ignore it or use it per family.
+- `l`: **required and must be > 0** (`PartsSpec::parse` enforces this for every non-feature family; writing `0`
+  reports `OCSMPART: l must be a number greater than 0; got \`0\` (family \`nut_c41\`)…` — it **names the family
+  and the value received**). Its meaning is per family: bolts/screws/pins = length; **nuts = height m**,
+  washers = thickness h/s (fixed by the national standard — pass the single value from that family's `lengths`).
+  See each family's `len_label` + `lengths` in `GET /api/parts`.
+- A parse failure now reports **one message naming the offending argument** (with the family and the value
+  received) **followed by the usage text**; it is no longer a single generic "invalid arguments".
+- ⚠ **Historical trap**: earlier docs said "nuts/washers only take d, write 0 in the l slot" — **that is wrong**; `l=0` always errors.
 
 ### Structural Details (the second tree, next to standard parts)
 
@@ -306,7 +316,11 @@ HTTP form (usable from scripts): `POST /api/part_pick`, body = `{"family":"hex_b
 
 1. **`l` must be in that family's table series**: out of range is an error (e.g. the `l` series of 5783 M8 is a table of steps, not arbitrary values).
    To choose a length by requirement → use `OCSMJOINT` from `04` (it picks from the supply series itself).
-2. **A nut/washer `d` is the thread spec** (M8 → `d=8`), not the bore/outside diameter; their thickness comes from the GB table.
+2. **A nut/washer `d` is the thread spec** (M8 → `d=8`), not the bore/outside diameter; their thickness comes
+   from the GB table, and `l` takes that thickness (see the `l` bullet in §2). **"Hex nut" is three families**:
+   for M8 the across-flats s is 13 in all of them, and they differ in height and corner: `nut_6170` type-1 hex nut
+   GB/T 6170-2015 (e14.38 / **m6.8**, the common one) | `nut_c41` hex nut grade C GB/T 41-2016 (e14.2 / **m7.9**) |
+   `nut_61721` thin hex nut GB/T 6172.1-2016 (e14.38 / **m4**). Pick by purpose; do not just grab the first one.
 3. **Wrong view**: a washer's "front view" is the **side profile** (plain washer = rectangle, spring washer = crescent); in an assembly drawing that is the `main` view you want;
    `end` is the face-on ring. A bolt's front view = the side view with a horizontal axis.
 4. **Does re-inserting create duplicate block definitions?** No: a block with the same name is reused (the name is decided by family + spec).
