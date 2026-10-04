@@ -61,9 +61,10 @@ The command can take the **current highlighted selection set** directly (the sam
 | anything else (including 1 line, mixtures) | does not touch the drawing, only reports, then enters pick mode |
 
 ```bash
-# MCP / HTTP example: select a circle, then run ZX
-mcporter call ocs.ocs_execute --args '{"request":{"op":"select","handles":["1F"]}}'
-mcporter call ocs.ocs_execute --args '{"request":{"op":"run","cmd":"ZX"}}'
+# MCP example: select a circle, then run ZX (built-in MCP tool mcp__ocs__ocs_execute,
+# exposure=direct; a standalone script uses tools/ocs_session.py's single long-lived connection)
+#   {"ocs_session_id":"<S>","request":{"op":"select","handles":["1F"]}}
+#   {"ocs_session_id":"<S>","request":{"op":"run","cmd":"ZX"}}
 ```
 
 ## 4. Common Problems

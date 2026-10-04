@@ -56,8 +56,14 @@ Key points:
 
 The host gates ownership of `input`: while a command is active it only lets it through when `control.owner == Some((tab, client_id))`,
 and the MCP server gives **every client instance** a random `client_id` (`src/mcp.rs:326`).
-So the "one new connection per call" approach (e.g. `mcporter call ...`) always returns
-`command_busy` for `input` — you must use **one long-lived connection**: `tools/ocs_session.py` in the repo is exactly that (verified working):
+So `start` and the `input` that follows **must travel over the same MCP connection**, or `input` returns `command_busy`.
+
+- **pi-web / pi's built-in MCP**: each session opens exactly **one** long-lived connection to the server and reuses it
+  (SDK `extensions/mcp/index.js`, `getClient: async () => connection`),
+  so `client_id` is stable within a session ⇒ `start` + `input` work back to back ✓
+  ⚠ Idle release: that connection is unregistered once the session goes 10 minutes without a prompt
+  (`PI_WEB_MCP_IDLE_MS`), and an interaction spanning that gap counts as a new client ⇒ finish long interactions in one go.
+- **Standalone scripts / headless**: use **one long-lived connection** — `tools/ocs_session.py` in the repo is exactly that (verified working):
 
 ```bash
 python3 tools/ocs_session.py <<'EOF'
@@ -120,12 +126,20 @@ EOF
 ## 5. Minimal Runnable Round (copy-paste ready)
 
 ```bash
-MC=/home/ysdirector/.local/bin/mcporter
-S=$($MC call ocs.ocs_sessions --args '{"launch_if_none":false}' --output json | python3 -c 'import json,sys;print(json.load(sys.stdin)["result"][0]["session_id"])')
-$MC call ocs.ocs_read  --args "{\"ocs_session_id\":\"$S\",\"op\":\"state\"}" --output json     # get document_id/revision
-$MC call ocs.ocs_execute --args "{\"ocs_session_id\":\"$S\",\"request\":{\"op\":\"run\",\"request_id\":\"r1\",\"document_id\":1,\"revision\":9,\"cmd\":\"OCSM\"}}" --output json
-$MC call ocs.ocs_read  --args "{\"ocs_session_id\":\"$S\",\"op\":\"history\"}" --output json    # read the plugin report
-$MC call ocs.ocs_capture --args "{\"ocs_session_id\":\"$S\",\"scope\":\"viewport\"}" --save-images /tmp/ocs --output json
+# In pi-web / pi the built-in MCP exposes these 4 tools directly (exposure=direct),
+# so one round is four tool calls. The arguments are the JSON below
+# (the tool schema is {"ocs_session_id", "request"}):
+#   mcp__ocs__ocs_sessions  {"launch_if_none":false}                     -> session_id
+#   mcp__ocs__ocs_read      {"ocs_session_id":"<S>","op":"state"}        -> document_id / revision
+#   mcp__ocs__ocs_execute   {"ocs_session_id":"<S>","request":{"op":"run","request_id":"r1","document_id":1,"revision":9,"cmd":"OCSM"}}
+#   mcp__ocs__ocs_read      {"ocs_session_id":"<S>","op":"history"}      -> the plugin report
+#   mcp__ocs__ocs_capture   {"ocs_session_id":"<S>","scope":"viewport"}  -> screenshot check
+
+# Standalone scripts / headless: one long-lived connection runs the whole round,
+# tools/ocs_session.py in the repo.
+python3 tools/ocs_session.py <<'EOF'
+run OCSM
+EOF
 ```
 
 ## 6. Verification Checklist
