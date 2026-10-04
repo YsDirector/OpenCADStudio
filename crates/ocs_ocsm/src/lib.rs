@@ -901,6 +901,32 @@ fn place_one(
     Ok(())
 }
 
+/// `PartsSpec::parse` 的失败原因：一个 i18n key + 它的插值参数。
+///
+/// 以前 `parse` 返回裸 `Option`，所有失败点塔缩成同一句泛化的「OCSMPART 参数无效」
+/// + 整篇用法——调用方（尤其 AI）无从知道是哪个 token 错、错在哪，只能反复试。
+/// 现在每个失败点都带上具体原因；`cmd_parts` 把原因与用法成对输出（原因在前）。
+#[derive(Debug, PartialEq)]
+struct PartParseError {
+    key: &'static str,
+    args: Vec<(&'static str, String)>,
+}
+
+impl PartParseError {
+    fn new(key: &'static str, args: &[(&'static str, &str)]) -> Self {
+        Self {
+            key,
+            args: args.iter().map(|(k, v)| (*k, (*v).to_string())).collect(),
+        }
+    }
+
+    /// 用当前语言渲染（`{name}` 插值）。
+    fn render(&self) -> String {
+        let args: Vec<(&str, &str)> = self.args.iter().map(|(k, v)| (*k, v.as_str())).collect();
+        crate::i18n::t_fmt(self.key, &args)
+    }
+}
+
 /// `OCSMPART`/`XL` 的参数化形式。
 ///
 /// - **标准件**：`<族> <d> <l> [view <视图>] [at x,y] [rot 度]`
@@ -920,7 +946,8 @@ fn place_one(
 ///   例：`OCSMPART key_1096_a 4 8`（b=4、L=8）、`OCSMPART key_1096_b 22 0`、
 ///   `OCSMPART key_1097_a 8 25`（短键；L1/L2/L3 由 L 查 GB/T 1097 长度系列表派生）。
 ///
-/// 解析失败（或参数为空）返回 `None` → 回退到原 GUI（零件库窗口 + 鼠标放置）流程。
+/// 解析失败返回 `Err(PartParseError)`（带具体原因）。参数为空时 `cmd_parts` 不走本结构，
+/// 直接回退到原 GUI（零件库窗口 + 鼠标放置）流程。
 #[derive(Debug, PartialEq)]
 struct PartsSpec {
     family: String,
@@ -976,14 +1003,21 @@ fn split_detail_param(token: &str) -> Option<(&'static str, &str)> {
 }
 
 impl PartsSpec {
-    fn parse(args: &str) -> Option<Self> {
+    fn parse(args: &str) -> Result<Self, PartParseError> {
         let mut tokens = args.split_whitespace();
-        let family = tokens.next()?;
+        let family = tokens
+            .next()
+            .ok_or_else(|| PartParseError::new("cmd.parts.err.missing_family", &[]))?;
         if family.is_empty() || family.starts_with('-') {
-            return None;
+            return Err(PartParseError::new(
+                "cmd.parts.err.invalid_family",
+                &[("family", family)],
+            ));
         }
         let family = family.to_ascii_lowercase();
-        let second = tokens.next()?;
+        let second = tokens.next().ok_or_else(|| {
+            PartParseError::new("cmd.parts.err.missing_d", &[("family", family.as_str())])
+        })?;
         // 结构要素（磨外圆等）没有长度，第二个数字参数后直接进关键字；
         // 花键的第二个参数是规格代号（`6x23x26x6`）—— 交给族解析。
         let detail = crate::detail::is_detail(&family);
@@ -1011,20 +1045,42 @@ impl PartsSpec {
         };
         if let Ok(d) = second.parse::<f64>() {
             if !(d.is_finite() && d > 0.0) {
-                return None;
+                return Err(PartParseError::new(
+                    "cmd.parts.err.invalid_d",
+                    &[("family", spec.family.as_str()), ("value", second)],
+                ));
             }
             spec.d = d;
         } else if detail {
-            let (d, _) = crate::detail::parse_spec_token(&spec.family, second)?;
+            let (d, _) = crate::detail::parse_spec_token(&spec.family, second).ok_or_else(|| {
+                PartParseError::new(
+                    "cmd.parts.err.invalid_spec",
+                    &[("family", spec.family.as_str()), ("value", second)],
+                )
+            })?;
             spec.d = d;
             spec.spec = Some(second.to_string());
         } else {
-            return None;
+            return Err(PartParseError::new(
+                "cmd.parts.err.invalid_d",
+                &[("family", spec.family.as_str()), ("value", second)],
+            ));
         }
         if !detail {
-            let l: f64 = tokens.next()?.parse().ok()?;
+            let l_token = tokens.next().ok_or_else(|| {
+                PartParseError::new("cmd.parts.err.missing_l", &[("family", spec.family.as_str())])
+            })?;
+            let l: f64 = l_token.parse().map_err(|_| {
+                PartParseError::new(
+                    "cmd.parts.err.invalid_l",
+                    &[("family", spec.family.as_str()), ("value", l_token)],
+                )
+            })?;
             if !(l.is_finite() && l > 0.0) {
-                return None;
+                return Err(PartParseError::new(
+                    "cmd.parts.err.invalid_l",
+                    &[("family", spec.family.as_str()), ("value", l_token)],
+                ));
             }
             spec.l = l;
         }
@@ -1035,19 +1091,35 @@ impl PartsSpec {
             if detail {
                 if let Some((key, attached)) = split_detail_param(&lower) {
                     let value_text = if attached.is_empty() {
-                        tokens.next()?
+                        tokens.next().ok_or_else(|| {
+                            PartParseError::new(
+                                "cmd.parts.err.missing_value",
+                                &[("key", lower.as_str())],
+                            )
+                        })?
                     } else {
                         attached
                     };
                     if key == "spec" {
                         if value_text.is_empty() {
-                            return None;
+                            return Err(PartParseError::new(
+                                "cmd.parts.err.missing_value",
+                                &[("key", lower.as_str())],
+                            ));
                         }
                         spec.spec = Some(value_text.to_string());
                     } else {
-                        let value: f64 = value_text.parse().ok()?;
+                        let value: f64 = value_text.parse().map_err(|_| {
+                            PartParseError::new(
+                                "cmd.parts.err.invalid_number",
+                                &[("key", key), ("value", value_text)],
+                            )
+                        })?;
                         if !value.is_finite() {
-                            return None;
+                            return Err(PartParseError::new(
+                                "cmd.parts.err.invalid_number",
+                                &[("key", key), ("value", value_text)],
+                            ));
                         }
                         spec.params.insert(key.to_string(), value);
                     }
@@ -1057,7 +1129,10 @@ impl PartsSpec {
                 if spec.spec.is_some() && !spec.params.contains_key("len") {
                     if let Ok(value) = lower.parse::<f64>() {
                         if !(value.is_finite() && value > 0.0) {
-                            return None;
+                            return Err(PartParseError::new(
+                                "cmd.parts.err.invalid_number",
+                                &[("key", "len"), ("value", lower.as_str())],
+                            ));
                         }
                         spec.params.insert("len".to_string(), value);
                         continue;
@@ -1067,55 +1142,122 @@ impl PartsSpec {
             match lower.as_str() {
                 // 结构要素的可选 b1 覆盖（标准件不认这个关键字）。
                 "b1" if detail => {
-                    let b1: f64 = tokens.next()?.parse().ok()?;
+                    let b1_token = tokens.next().ok_or_else(|| {
+                        PartParseError::new("cmd.parts.err.missing_value", &[("key", "b1")])
+                    })?;
+                    let b1: f64 = b1_token.parse().map_err(|_| {
+                        PartParseError::new(
+                            "cmd.parts.err.invalid_number",
+                            &[("key", "b1"), ("value", b1_token)],
+                        )
+                    })?;
                     if !b1.is_finite() {
-                        return None;
+                        return Err(PartParseError::new(
+                            "cmd.parts.err.invalid_number",
+                            &[("key", "b1"), ("value", b1_token)],
+                        ));
                     }
                     spec.b1 = Some(b1);
                 }
                 // 结构要素的通用数值参数（退刀槽：P 必给，g1/g2/dg/r/alpha 可选）。
                 // 不在这批关键字里的族会在生成时报“不认识参数 …”。
                 key if detail && matches!(key, "p" | "g1" | "g2" | "dg" | "r" | "alpha") => {
-                    let value: f64 = tokens.next()?.parse().ok()?;
+                    let value_token = tokens.next().ok_or_else(|| {
+                        PartParseError::new("cmd.parts.err.missing_value", &[("key", key)])
+                    })?;
+                    let value: f64 = value_token.parse().map_err(|_| {
+                        PartParseError::new(
+                            "cmd.parts.err.invalid_number",
+                            &[("key", key), ("value", value_token)],
+                        )
+                    })?;
                     if !value.is_finite() {
-                        return None;
+                        return Err(PartParseError::new(
+                            "cmd.parts.err.invalid_number",
+                            &[("key", key), ("value", value_token)],
+                        ));
                     }
                     spec.params.insert(key.to_string(), value);
                 }
                 "view" | "--view" => {
-                    let view = tokens.next()?;
+                    let view = tokens.next().ok_or_else(|| {
+                        PartParseError::new(
+                            "cmd.parts.err.missing_view",
+                            &[("family", spec.family.as_str())],
+                        )
+                    })?;
                     if view.is_empty() {
-                        return None;
+                        return Err(PartParseError::new(
+                            "cmd.parts.err.missing_view",
+                            &[("family", spec.family.as_str())],
+                        ));
                     }
                     spec.view = view.to_ascii_lowercase();
                 }
                 // `at 150,30` 与 `at 150 30` 都收。
                 "at" | "@" => {
-                    let first = tokens.next()?;
+                    let first = tokens.next().ok_or_else(|| {
+                        PartParseError::new("cmd.parts.err.invalid_at", &[("value", "at")])
+                    })?;
                     let (x, y) = match first.split_once(',') {
-                        Some((x, y)) => (x.parse::<f64>().ok()?, y.parse::<f64>().ok()?),
-                        None => (
-                            first.parse::<f64>().ok()?,
-                            tokens.next()?.parse::<f64>().ok()?,
+                        Some((x, y)) => (
+                            x.parse::<f64>().map_err(|_| {
+                                PartParseError::new("cmd.parts.err.invalid_at", &[("value", first)])
+                            })?,
+                            y.parse::<f64>().map_err(|_| {
+                                PartParseError::new("cmd.parts.err.invalid_at", &[("value", first)])
+                            })?,
                         ),
+                        None => {
+                            let y_token = tokens.next().ok_or_else(|| {
+                                PartParseError::new("cmd.parts.err.invalid_at", &[("value", first)])
+                            })?;
+                            (
+                                first.parse::<f64>().map_err(|_| {
+                                    PartParseError::new("cmd.parts.err.invalid_at", &[("value", first)])
+                                })?,
+                                y_token.parse::<f64>().map_err(|_| {
+                                    PartParseError::new(
+                                        "cmd.parts.err.invalid_at",
+                                        &[("value", y_token)],
+                                    )
+                                })?,
+                            )
+                        }
                     };
                     if !(x.is_finite() && y.is_finite()) {
-                        return None;
+                        return Err(PartParseError::new(
+                            "cmd.parts.err.invalid_at",
+                            &[("value", first)],
+                        ));
                     }
                     spec.at = Some([x, y]);
                 }
                 "rot" | "rotation" | "--rot" => {
-                    let deg: f64 = tokens.next()?.parse().ok()?;
+                    let deg_token = tokens.next().ok_or_else(|| {
+                        PartParseError::new("cmd.parts.err.invalid_rot", &[("value", "rot")])
+                    })?;
+                    let deg: f64 = deg_token.parse().map_err(|_| {
+                        PartParseError::new("cmd.parts.err.invalid_rot", &[("value", deg_token)])
+                    })?;
                     if !deg.is_finite() {
-                        return None;
+                        return Err(PartParseError::new(
+                            "cmd.parts.err.invalid_rot",
+                            &[("value", deg_token)],
+                        ));
                     }
                     spec.rotation = Some(deg);
                 }
-                // 多余/无法识别的 token：当作没用参数，回退 GUI 流程。
-                _ => return None,
+                // 多余/无法识别的 token：报出具体是哪个（以前只回一句泛化的用法）。
+                _ => {
+                    return Err(PartParseError::new(
+                        "cmd.parts.err.unknown_token",
+                        &[("token", token), ("family", spec.family.as_str())],
+                    ))
+                }
             }
         }
-        Some(spec)
+        Ok(spec)
     }
 
     /// `/api/part_pick` 的请求体（与选择器页同一条生成/插入路径）。
@@ -2693,12 +2835,20 @@ impl OcsmPlugin {
         // 有参数但解析失败 = 报用法（不静默开浏览器窗口，避免 AI 驱动时弹出无意义窗口）。
         if !args.trim().is_empty() {
             match PartsSpec::parse(args) {
-                Some(spec) => {
+                Ok(spec) => {
                     self.cmd_parts_insert(host, &spec);
                     return;
                 }
-                None => {
-                    host.push_error(&crate::i18n::t("cmd.parts.usage"));
+                Err(err) => {
+                    // 具体原因在前、用法在后，**必须合成一条**消息：宿主的
+                    // `command_line` 只有一个 `last_error` 槽（后写覆盖先写，
+                    // `plugin_host.rs` 的 CommandOutcome 只取 last_error），
+                    // 分两次 push_error 只会留下最后一条——实测原因被用法吃掉。
+                    host.push_error(&format!(
+                        "{}\n{}",
+                        err.render(),
+                        crate::i18n::t("cmd.parts.usage")
+                    ));
                     return;
                 }
             }
@@ -5670,9 +5820,9 @@ mod tests {
     #[test]
     #[test]
     fn parts_spec_parses_parameterized_form() {
-        assert_eq!(PartsSpec::parse(""), None);
-        assert_eq!(PartsSpec::parse("hex_bolt_c"), None);
-        assert_eq!(PartsSpec::parse("hex_bolt_c 10"), None);
+        assert!(PartsSpec::parse("").is_err());
+        assert!(PartsSpec::parse("hex_bolt_c").is_err());
+        assert!(PartsSpec::parse("hex_bolt_c 10").is_err());
         let spec = PartsSpec::parse("HEX_BOLT_C 10 95").unwrap();
         assert_eq!(spec.family, "hex_bolt_c");
         assert_eq!((spec.d, spec.l), (10.0, 95.0));
@@ -5691,8 +5841,8 @@ mod tests {
         assert_eq!(spec.at, Some([150.0, 30.0]));
         assert_eq!(spec.rotation, Some(45.0));
         // 结构要素不接受第二个数字当长度（必须显式 b1），也不接受标准件里的 b1。
-        assert_eq!(PartsSpec::parse("detail_grind_od 100 10"), None);
-        assert_eq!(PartsSpec::parse("hex_bolt_c 10 95 b1 3"), None);
+        assert!(PartsSpec::parse("detail_grind_od 100 10").is_err());
+        assert!(PartsSpec::parse("hex_bolt_c 10 95 b1 3").is_err());
         // to_body：结构要素不带 l、带 b1。
         let body: serde_json::Value = serde_json::from_str(
             &PartsSpec::parse("detail_grind_od 100 b1 8 at 1,2 rot 45")
@@ -5725,7 +5875,7 @@ mod tests {
         assert_eq!(body["params"]["g1"], 2.5);
         assert!(body.get("l").is_none(), "结构要素请求体不应带 l：{body}");
         // 参数关键字只对结构要素开放：标准件写了 P 仍回退 GUI（不误吞）
-        assert_eq!(PartsSpec::parse("hex_bolt_c 10 95 p 1.5"), None);
+        assert!(PartsSpec::parse("hex_bolt_c 10 95 p 1.5").is_err());
 
         let spec = PartsSpec::parse("hex_bolt_c 10 95 view top at 150,30 rot 90").unwrap();
         assert_eq!(spec.view, "top");
@@ -5737,7 +5887,7 @@ mod tests {
             Some([150.0, 30.0])
         );
         // 无法识别的尾巴 → 回退 GUI 流程。
-        assert_eq!(PartsSpec::parse("hex_bolt_c 10 95 嗯"), None);
+        assert!(PartsSpec::parse("hex_bolt_c 10 95 嗯").is_err());
         // 宿主交给插件时可能是大写 → 关键字大小写不敏感（实测：曾经因大写
         // `AT`/`ROT` 解析失败 → 静默回退到 GUI 流程，白开一个浏览器窗口）。
         let spec = PartsSpec::parse("NUT_C41 10 9.5 AT 150,30 ROT 180").unwrap();
@@ -5795,14 +5945,89 @@ mod tests {
         assert_eq!(spec.params.get("b"), Some(&6.0));
         assert_eq!(spec.params.get("len"), Some(&30.0));
         // 非结构要素的第二个 token 不是数字 → 仍回退 GUI（不误吞）
-        assert_eq!(PartsSpec::parse("hex_bolt_c abc 95"), None);
+        assert!(PartsSpec::parse("hex_bolt_c abc 95").is_err());
         // 花键不认 b1，但解析不报错（到生成时统一报「不认识参数」）
-        assert!(PartsSpec::parse("detail_spline_rect 6x23x26x6 L30 b1 3").is_some());
+        assert!(PartsSpec::parse("detail_spline_rect 6x23x26x6 L30 b1 3").is_ok());
 
         // 渐开线花键的 XL 入口已移除：不再作为结构要素族解析（唯一入口 = OCSMGEAR 花键模式）。
+        assert!(PartsSpec::parse("detail_invol_spline GB30R M3 Z20 L30 view side").is_err());
+    }
+
+    /// 解析失败必须**说清是哪里错**：以前所有失败点塔缩成同一句泛化的
+    /// 「OCSMPART 参数无效」+ 整篇用法，调用方（尤其 AI）只能反复试。
+    #[test]
+    fn parts_spec_parse_errors_name_the_offending_argument() {
+        let key = |args: &str| PartsSpec::parse(args).unwrap_err().key;
+
+        // 起因：手册写「螺母/垫圈 l 占位写 0」，而 l 其实必须 > 0。
+        assert_eq!(key("nut_c41 8 0 at 0,0"), "cmd.parts.err.invalid_l");
+        assert_eq!(key("nut_c41 8 -1"), "cmd.parts.err.invalid_l");
+        assert_eq!(key("nut_c41 8"), "cmd.parts.err.missing_l");
+        // 正确写法（M8 螺母高度 7.9）必须通过。
+        assert_eq!(PartsSpec::parse("nut_c41 8 7.9 view end at 0,0").unwrap().l, 7.9);
+
+        // d 缺失 / 非法。
+        assert_eq!(key("hex_bolt_c"), "cmd.parts.err.missing_d");
+        assert_eq!(key("hex_bolt_c abc 95"), "cmd.parts.err.invalid_d");
+        assert_eq!(key("hex_bolt_c 0 95"), "cmd.parts.err.invalid_d");
+
+        // 视图 / 落点 / 旋转。
+        assert_eq!(key("hex_bolt_c 10 95 view"), "cmd.parts.err.missing_view");
+        assert_eq!(key("hex_bolt_c 10 95 at 1"), "cmd.parts.err.invalid_at");
+        assert_eq!(key("hex_bolt_c 10 95 at a,b"), "cmd.parts.err.invalid_at");
+        assert_eq!(key("hex_bolt_c 10 95 rot x"), "cmd.parts.err.invalid_rot");
+
+        // 不认识的 token 要点名（含标准件误用结构要素关键字）。
+        assert_eq!(key("hex_bolt_c 10 95 嗯"), "cmd.parts.err.unknown_token");
+        assert_eq!(key("hex_bolt_c 10 95 p 1.5"), "cmd.parts.err.unknown_token");
+        assert_eq!(key("hex_bolt_c 10 95 b1 3"), "cmd.parts.err.unknown_token");
+
+        // 关键字缺值 / 值非数字。
+        assert_eq!(key("detail_thread_relief 20 P"), "cmd.parts.err.missing_value");
+        assert_eq!(key("detail_thread_relief 20 P x"), "cmd.parts.err.invalid_number");
+        assert_eq!(key("detail_grind_od 100 b1"), "cmd.parts.err.missing_value");
+        assert_eq!(key("detail_grind_od 100 b1 x"), "cmd.parts.err.invalid_number");
+
+        // 渲染文本里必须带上出错的那个值与族名，而不是又一句泛化文案。
+        let rendered = PartsSpec::parse("nut_c41 8 0").unwrap_err().render();
+        assert!(rendered.contains('0'), "错误文本要点名收到的值：{rendered}");
+        assert!(rendered.contains("nut_c41"), "错误文本要点名族：{rendered}");
+        assert!(rendered.contains("7.9"), "螺母的 l 要给出正确口径示例：{rendered}");
+    }
+
+    /// `cmd_parts` 解析失败必须**只推一条**错误，且这条里同时有具体原因与用法。
+    ///
+    /// 为什么强调“一条”：宿主侧 `command_line.last_error` 是**单槽**（后写覆盖先写，
+    /// `plugin_host.rs` 的 `CommandOutcome` 只取 `last_error`）。曾把原因与用法分两次
+    /// `push_error`，结果原因被用法整条吃掉，MCP 侧只看得到泛化用法——实测踩到。
+    #[test]
+    fn cmd_parts_parse_failure_pushes_one_error_with_reason_and_usage() {
+        let mut host = UndoOrderSpy::default();
+        OcsmPlugin.cmd_parts(&mut host, "nut_c41 8 0 at 0,0");
         assert_eq!(
-            PartsSpec::parse("detail_invol_spline GB30R M3 Z20 L30 view side"),
-            None
+            host.errors.len(),
+            1,
+            "宿主的 last_error 是单槽：分多条推只会留下最后一条，必须合成一条：{:?}",
+            host.errors
+        );
+        let err = &host.errors[0];
+        assert!(err.contains("nut_c41"), "要点名族：{err}");
+        assert!(err.contains("7.9"), "要给出螺母 l 的正确口径：{err}");
+        assert!(err.contains("用法"), "仍要带用法：{err}");
+
+        // 不认识的 token 同样只推一条、并点名它。
+        let mut host = UndoOrderSpy::default();
+        OcsmPlugin.cmd_parts(&mut host, "hex_bolt_c 10 95 嗯");
+        assert_eq!(host.errors.len(), 1, "{:?}", host.errors);
+        assert!(host.errors[0].contains("嗯"), "{:?}", host.errors);
+
+        // 合法写法不得报错（回归：别把正常路径也拦了）。
+        let mut host = UndoOrderSpy::default();
+        OcsmPlugin.cmd_parts(&mut host, "nut_c41 8 7.9 view end at 0,0");
+        assert!(
+            !host.errors.iter().any(|e| e.contains("用法")),
+            "合法参数不该走报用法那条路：{:?}",
+            host.errors
         );
     }
 

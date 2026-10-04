@@ -2207,8 +2207,78 @@ pub const CATALOG: &[Msg] = &[
     // ── 命令输出/报错：标准件库 / 结构要素（OCSMPART / XL；lib.rs + partgen*.rs + guide_server）──
     Msg::new(
         "cmd.parts.usage",
-        "OCSMPART 参数无效。用法：标准件 `OCSMPART <族> <d> <l> [view <视图>] [at x,y] [rot 度]`（例：OCSMPART hex_bolt_c 10 95 at 150,30 rot 0）；结构要素 `OCSMPART detail_grind_od <d> [b1 <值>] [at x,y] [rot 度]`（b1 缺省 = 该 d 档默认行）；矩形花键 `OCSMPART detail_spline_rect <规格代号> L<满齿段长> [de <滚刀外径>] [view front|side|section]`（例：OCSMPART detail_spline_rect 6x23x26x6 L30 view side）；外螺纹退刀槽 `OCSMPART detail_thread_relief <d> P <螺距> [g1 值 g2 值 dg 值 r 值 alpha 值] [at x,y] [rot 度]`（P 必给）；毂槽 `OCSMPART detail_hub_keyway <d> [len 毂长] [view main|side]`（例：OCSMPART detail_hub_keyway 25 len 30 view main；b/t₂/r 由 d 查表，len 缺省 30）；平键 `OCSMPART key_1096_{a|b|c} <b> <L> [view main|top|section]`、`OCSMPART key_1097_{a|b} <b> <L> [view main|top]`（例：OCSMPART key_1096_a 4 8、OCSMPART key_1097_a 8 25；L 省略/0 = 该档默认，L 须 ∈ 标准系列且 L<10b，1097 的 L1/L2/L3 由 L 查长度系列表派生）；不带参数则打开零件库窗口。",
-        "Invalid OCSMPART arguments. Usage: standard part `OCSMPART <family> <d> <l> [view <view>] [at x,y] [rot deg]` (e.g. OCSMPART hex_bolt_c 10 95 at 150,30 rot 0); feature `OCSMPART detail_grind_od <d> [b1 <value>] [at x,y] [rot deg]` (b1 omitted = the default row for that d); rectangular spline `OCSMPART detail_spline_rect <spec code> L<full-tooth length> [de <hob OD>] [view front|side|section]` (e.g. OCSMPART detail_spline_rect 6x23x26x6 L30 view side); external thread relief `OCSMPART detail_thread_relief <d> P <pitch> [g1 v g2 v dg v r v alpha v] [at x,y] [rot deg]` (P required); hub keyway `OCSMPART detail_hub_keyway <d> [len hub length] [view main|side]` (e.g. OCSMPART detail_hub_keyway 25 len 30 view main; b/t₂/r looked up from d, len defaults to 30); parallel keys `OCSMPART key_1096_{a|b|c} <b> <L> [view main|top|section]`, `OCSMPART key_1097_{a|b} <b> <L> [view main|top]` (e.g. OCSMPART key_1096_a 4 8, OCSMPART key_1097_a 8 25; L omitted/0 = default for that b, L must be a standard series value with L<10b, and key_1097 derives L1/L2/L3 from the length series table); no arguments opens the parts library window.",
+        "OCSMPART 用法：标准件 `OCSMPART <族> <d> <l> [view main|top|end|section] [at x,y] [rot 度]`（例：`OCSMPART hex_bolt_c 10 95 at 150,30 rot 0`、`OCSMPART nut_c41 8 7.9 view end at 0,0`；**l 必填且 > 0** —— 螺母填高度 m、垫圈填厚度 h，写 0 会报错）；结构要素 `OCSMPART detail_grind_od <d> [b1 <值>] [at x,y] [rot 度]`（b1 缺省 = 该 d 档默认行）；矩形花键 `OCSMPART detail_spline_rect <规格代号> L<满齿段长> [de <滚刀外径>] [view front|side|section]`（例：OCSMPART detail_spline_rect 6x23x26x6 L30 view side）；外螺纹退刀槽 `OCSMPART detail_thread_relief <d> P <螺距> [g1 值 g2 值 dg 值 r 值 alpha 值] [at x,y] [rot 度]`（P 必给）；毂槽 `OCSMPART detail_hub_keyway <d> [len 毂长] [view main|side]`（例：OCSMPART detail_hub_keyway 25 len 30 view main；b/t₂/r 由 d 查表，len 缺省 30）；平键 `OCSMPART key_1096_{a|b|c} <b> <L> [view main|top|section]`、`OCSMPART key_1097_{a|b} <b> <L> [view main|top]`（例：OCSMPART key_1096_a 4 8、OCSMPART key_1097_a 8 25；L 省略/0 = 该档默认，L 须 ∈ 标准系列且 L<10b，1097 的 L1/L2/L3 由 L 查长度系列表派生）；不带参数则打开零件库窗口。",
+        "OCSMPART usage: standard part `OCSMPART <family> <d> <l> [view main|top|end|section] [at x,y] [rot deg]` (e.g. `OCSMPART hex_bolt_c 10 95 at 150,30 rot 0`, `OCSMPART nut_c41 8 7.9 view end at 0,0`; **l is required and must be > 0** — nuts take height m, washers thickness h, and 0 is an error); feature `OCSMPART detail_grind_od <d> [b1 <value>] [at x,y] [rot deg]` (b1 omitted = the default row for that d); rectangular spline `OCSMPART detail_spline_rect <spec code> L<full-tooth length> [de <hob OD>] [view front|side|section]` (e.g. OCSMPART detail_spline_rect 6x23x26x6 L30 view side); external thread relief `OCSMPART detail_thread_relief <d> P <pitch> [g1 v g2 v dg v r v alpha v] [at x,y] [rot deg]` (P required); hub keyway `OCSMPART detail_hub_keyway <d> [len hub length] [view main|side]` (e.g. OCSMPART detail_hub_keyway 25 len 30 view main; b/t₂/r looked up from d, len defaults to 30); parallel keys `OCSMPART key_1096_{a|b|c} <b> <L> [view main|top|section]`, `OCSMPART key_1097_{a|b} <b> <L> [view main|top]` (e.g. OCSMPART key_1096_a 4 8, OCSMPART key_1097_a 8 25; L omitted/0 = default for that b, L must be a standard series value with L<10b, and key_1097 derives L1/L2/L3 from the length series table); no arguments opens the parts library window. Each family's valid views are its `views` in `GET /api/parts`.",
+    ),
+    // ── OCSMPART 解析失败的具体原因 ──
+    // 以前 `PartsSpec::parse` 返回裸 `Option`，任何一处失败都只能回一句泛化的
+    // 「参数无效」+ 整篇用法，调用方（尤其是 AI）无从知道是哪个 token 错、错在哪。
+    // 现在每个失败点都带上具体原因；`cmd_parts` 把原因与用法**合成一条**消息输出
+    // （原因在前）——宿主只有一个 `last_error` 槽，分两次 push 只会留下最后一条。
+    Msg::new(
+        "cmd.parts.err.missing_family",
+        "OCSMPART：缺少族名。",
+        "OCSMPART: missing the family name.",
+    ),
+    Msg::new(
+        "cmd.parts.err.invalid_family",
+        "OCSMPART：族名无效 `{family}`。",
+        "OCSMPART: invalid family name `{family}`.",
+    ),
+    Msg::new(
+        "cmd.parts.err.missing_d",
+        "OCSMPART：族 `{family}` 后面缺少公称直径 d。",
+        "OCSMPART: family `{family}` is missing the nominal diameter d.",
+    ),
+    Msg::new(
+        "cmd.parts.err.invalid_d",
+        "OCSMPART：d 必须是大于 0 的数，收到 `{value}`（族 `{family}`）。",
+        "OCSMPART: d must be a number greater than 0; got `{value}` (family `{family}`).",
+    ),
+    Msg::new(
+        "cmd.parts.err.invalid_spec",
+        "OCSMPART：规格代号无效 `{value}`（族 `{family}`）。",
+        "OCSMPART: invalid spec code `{value}` (family `{family}`).",
+    ),
+    Msg::new(
+        "cmd.parts.err.missing_l",
+        "OCSMPART：族 `{family}` 缺少长度/高度 l（标准件必给，不能省略）。",
+        "OCSMPART: family `{family}` is missing the length/height l (required for standard parts; it cannot be omitted).",
+    ),
+    Msg::new(
+        "cmd.parts.err.invalid_l",
+        "OCSMPART：l 必须是大于 0 的数，收到 `{value}`（族 `{family}`）。螺母的 l = 高度 m、垫圈 = 厚度 h（M8 螺母是 7.9）；写 0 不算「占位」。",
+        "OCSMPART: l must be a number greater than 0; got `{value}` (family `{family}`). For nuts l = height m and for washers = thickness h (an M8 nut is 7.9); 0 is not a placeholder.",
+    ),
+    Msg::new(
+        "cmd.parts.err.missing_value",
+        "OCSMPART：关键字 `{key}` 后面缺少值。",
+        "OCSMPART: keyword `{key}` is missing its value.",
+    ),
+    Msg::new(
+        "cmd.parts.err.invalid_number",
+        "OCSMPART：`{key}` 的值必须是数字，收到 `{value}`。",
+        "OCSMPART: the value of `{key}` must be a number; got `{value}`.",
+    ),
+    Msg::new(
+        "cmd.parts.err.missing_view",
+        "OCSMPART：`view` 后面缺少视图名（合法 id：main 主视图 / top 俯视图 / end 左视图 / section 剖视）。",
+        "OCSMPART: `view` is missing its view name (valid ids: main / top / end / section).",
+    ),
+    Msg::new(
+        "cmd.parts.err.invalid_at",
+        "OCSMPART：`at` 需要 x,y 两个数字坐标，收到 `{value}`。",
+        "OCSMPART: `at` needs two numeric coordinates x,y; got `{value}`.",
+    ),
+    Msg::new(
+        "cmd.parts.err.invalid_rot",
+        "OCSMPART：`rot` 的角度必须是数字，收到 `{value}`。",
+        "OCSMPART: `rot` must be a number of degrees; got `{value}`.",
+    ),
+    Msg::new(
+        "cmd.parts.err.unknown_token",
+        "OCSMPART：不认识的参数 `{token}`（族 `{family}`）。可选关键字：view / at / rot（结构要素另有 b1 与族专属参数）。",
+        "OCSMPART: unrecognized argument `{token}` (family `{family}`). Available keywords: view / at / rot (features also take b1 and family-specific parameters).",
     ),
     Msg::new(
         "cmd.parts.window_opened",
