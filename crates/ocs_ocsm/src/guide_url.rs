@@ -484,13 +484,13 @@ impl Default for ChamferParams {
 /// 引线标注参数：引线上方文字 + 引线下方文字（各单行；空 = 不显示）。
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct LeaderParams {
-    /// 上侧文字（肩线上方，锚点 17.413s / +2.750s，左对齐）。
+    /// 上侧文字（肩线上方，自拐点侧留白 1.5s 起排 / +2.750s，左对齐）。
     pub upper: String,
-    /// 下侧文字（肩线下方，锚点 17.413s / −2.750s，左对齐）。
+    /// 下侧文字（肩线下方，自拐点侧留白 1.5s 起排 / −2.750s，左对齐）。
     pub lower: String,
-    /// Optional shoulder length in unscaled drawing units. `None` preserves
-    /// the historical content-driven length; `blen=`/`shoulder_len=` makes a
-    /// text-free leader usable as a short stub without fake placeholder text.
+    /// 显式肩线长度（未乘图幅比例的绘图单位）。`None` 时按文字内容自适应：
+    /// 最长一行文字宽 + 两端各 1.5 留白；上下都空时为 1 个全角字符长（2.45）。
+    /// `blen=`/`shoulder_len=` 填数则覆盖（无文字也能做一条短引线）。
     pub shoulder_len: Option<f64>,
 }
 

@@ -289,7 +289,7 @@
       <div class="row" style="display:flex; gap:8px; align-items:center">
         <span class="lbl">肩线长度</span>
         <input type="number" id="l-blen" min="0.001" step="0.1" style="width:90px" placeholder="随文字">
-        <span class="gdt-hint" style="margin:0">留空=随文字；无文字时可填短引线长度（未乘图幅比例）</span>
+        <span class="gdt-hint" style="margin:0">留空=随文字（无文字时=1 个全角字符）；填数则覆盖（未乘图幅比例）</span>
       </div>
       <div class="row" style="display:flex; gap:8px; align-items:center">
         <button id="btn-gdt-leader" type="button">GDT 符号…</button>
@@ -1565,9 +1565,9 @@ const BS_FITS = [
     });
   }
 
-  // 引线标注：上下侧文字输入即时重绘（肩线长度随内容自动调整）。
+  // 引线标注：上下侧文字 / 肩线长度输入即时重绘（肩线长度随内容自动调整）。
   function initLeaderRows() {
-    for (const id of ['l-up', 'l-lo']) {
+    for (const id of ['l-up', 'l-lo', 'l-blen']) {
       document.getElementById(id).addEventListener('input', draw);
     }
   }
@@ -1990,13 +1990,19 @@ const BS_FITS = [
     const SCALE = 1.0; // 预览与世界坐标 1:1（与 drawWeld 同规则）
     const up = stripFontCodes(document.getElementById('l-up').value.trim());
     const lo = stripFontCodes(document.getElementById('l-lo').value.trim());
-    // 肩线长度内容驱动：文字锚点 17.413 + 单字宽（拉丁 1.45 / 中日韩 2.45）+ 末端余量 2。
+    // 肩线长度内容驱动：最长一行文字宽 + 两端留白 1.5；无文字时 = 1 个全角字符 2.45。
+    // 「肩线长度」框填了正数则优先用它（与服务端 blen= 同规则，未乘图幅比例）。
     const charW = (s) => {
       let w = 0;
       for (const ch of s) w += (ch.codePointAt(0) >= 0x2E80) ? 2.45 : 1.45;
       return w;
     };
-    const blen = (17.413 + Math.max(charW(up), charW(lo)) + 2.0) * SCALE;
+    const MARGIN = 1.5, FULL_W = 2.45;
+    const longest = Math.max(charW(up), charW(lo));
+    const contentLen = longest > 0 ? longest + 2 * MARGIN : FULL_W;
+    const blenInput = parseFloat(document.getElementById('l-blen').value);
+    const content = (isFinite(blenInput) && blenInput > 0) ? blenInput : contentLen;
+    const blen = content * SCALE;
     const CY = '#0aa', GR = '#090';
     const dxl = p0.x - a.x, dyl = p0.y - a.y;
     const L = Math.hypot(dxl, dyl);
@@ -2019,12 +2025,12 @@ const BS_FITS = [
     const P = (u, v) => ({ x: p0.x + u * d_c.x + v * n_up.x, y: p0.y + u * d_c.y + v * n_up.y });
     const se = P(blen, 0);
     svg.appendChild(wline(p0.x, p0.y, se.x, se.y, 2, CY));
-    // 上下侧文字：自**拐点**沿肩线向外 17.413、±2.750（与服务端一致）。
+    // 上下侧文字：自**拐点**沿肩线向外 1.5（拐点侧留白）、±2.750（与服务端一致）。
     // 方向为负（肩线画向左/下）时改 `text-anchor:end`，让文字同样"向外展开"。
     const anchorMode = dir > 0 ? 'start' : 'end';
     const slots = [
-      [up, P(17.413 * SCALE, 2.750 * SCALE)],
-      [lo, P(17.413 * SCALE, -2.750 * SCALE)],
+      [up, P(MARGIN * SCALE, 2.750 * SCALE)],
+      [lo, P(MARGIN * SCALE, -2.750 * SCALE)],
     ];
     for (const [v, wp] of slots) {
       if (!v) continue;

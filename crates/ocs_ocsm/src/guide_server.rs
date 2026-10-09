@@ -7960,20 +7960,30 @@ pub(crate) fn build_leader_parts(
     let asz = g.asz;
     let horizontal = g.horizontal;
 
-    // ── 肩线长度：内容驱动（照焊接定案：画长收紧、画短延长）──
-    // 文字锚点 = 焊接槽位 19.413 − 2.0 = 17.413；单字宽：拉丁/数字 1.45、
-    // 中日韩 2.45（字高 3.5 × 宽比 0.7 下的方块字宽）。
-    const SLOT: f64 = 17.413;
+    // ── 肩线长度：**随文字内容变化**（上下两侧取最长的一行）──
+    // 单字宽：拉丁/数字 1.45、中日韩 2.45（字高 3.5 × 宽比 0.7 下的方块字宽）。
+    // 肩线 = 最长文字宽 + 两端留白；文字自拐点侧留白起排（不再用固定的
+    // 17.413 文字槽——那会让肩线比文字长得太多）；两侧都没文字时不画文字，
+    // 肩线退化为 **1 个全角字符长** 的短引线。
+    const SHOULDER_MARGIN: f64 = 1.5;
+    /// 1 个全角字符宽（= 字高 3.5 × 宽比 0.7）。
+    const FULL_WIDTH: f64 = 2.45;
     let text_w = |t: &str| -> f64 {
         t.trim()
             .chars()
             .map(|c| if (c as u32) >= 0x2E80 { 2.45 } else { 1.45 })
             .sum::<f64>()
     };
-    let need_u = (SLOT + text_w(upper)).max(SLOT + text_w(lower));
+    let longest_text = text_w(upper).max(text_w(lower));
+    // 参考单位下的肩线全长（URL 的 `blen=` / `shoulder_len=` 优先）。
+    let content_len = if longest_text > 0.0 {
+        longest_text + 2.0 * SHOULDER_MARGIN
+    } else {
+        FULL_WIDTH
+    };
     let blen_ru = shoulder_len
         .filter(|length| length.is_finite() && *length > 0.0)
-        .unwrap_or(need_u + 2.0); // 参考单位下的肩线全长
+        .unwrap_or(content_len);
     let blen = blen_ru * s;
 
     // 块局部坐标（原点 = 拐点 P0）：锚点 = 沿主轴坐标较小的一端。
@@ -8012,7 +8022,8 @@ pub(crate) fn build_leader_parts(
     //    对齐：自**拐点**沿肩线向外偏移 SLOT（左/下向时右对齐 → 镜像对称）。──
     let dir_out: f64 = if corner_at_origin { 1.0 } else { -1.0 };
     let corner_ru: f64 = if corner_at_origin { 0.0 } else { blen_ru };
-    let text_t_ru = corner_ru + dir_out * SLOT;
+    // 文字自拐点侧留白起排（两端各留 SHOULDER_MARGIN，与肩线长度同一规则）。
+    let text_t_ru = corner_ru + dir_out * SHOULDER_MARGIN;
     for (value, v) in [(upper, 2.750_f64), (lower, -2.750_f64)] {
         if value.trim().is_empty() {
             continue; // 空文字 → 不画（无需占位）
@@ -16422,7 +16433,7 @@ mod weld_tests {
         assert!(ins.attributes.is_empty(), "MTEXT 方案不再用 ATTRIB");
         drop(doc2);
 
-        // 有文字：块内 2 个 MTEXT —— 上 +2.750 / 下 −2.750，锚点 x = 17.413（块局部）。
+        // 有文字：块内 2 个 MTEXT —— 上 +2.750 / 下 −2.750，锚点 t = 1.5（拐点侧留白，块局部）。
         let mock2 = Arc::new(MockSender::new(weld_doc()));
         let sender2: Arc<dyn PluginRequestSender> = mock2.clone();
         apply_leader(&sender2, &weld_doc(), P_TIP, P0, P_END, &leader_params("通孔", "深20")).unwrap();
@@ -16430,9 +16441,9 @@ mod weld_tests {
         assert_eq!(ms.len(), 2, "上/下各一个 MTEXT");
         assert_eq!(ms[0].value, "通孔");
         assert_eq!(ms[1].value, "深20");
-        assert!((ms[0].insertion_point.x - 17.413).abs() < 1e-9);
+        assert!((ms[0].insertion_point.x - 1.5).abs() < 1e-9);
         assert!((ms[0].insertion_point.y - 2.750).abs() < 1e-9);
-        assert!((ms[1].insertion_point.x - 17.413).abs() < 1e-9);
+        assert!((ms[1].insertion_point.x - 1.5).abs() < 1e-9);
         assert!((ms[1].insertion_point.y + 2.750).abs() < 1e-9);
         for m in &ms {
             assert_eq!(m.height, 3.5);
@@ -16450,19 +16461,32 @@ mod weld_tests {
         ));
     }
 
-    /// 肩线长度内容驱动：文字越长肩线越长；两行文字取较大者。
+    /// 肩线长度内容驱动：文字越长肩线越长（= 最长一行 + 两端留白）；
+    /// 两行文字取较大者；两侧都空时不画文字、肩线退化为 1 个全角字符长。
     #[test]
     fn apply_leader_content_drives_shoulder_length() {
         let short = build_leader_parts(P_TIP, P0, P_END, 1.0, "A", "", None).unwrap();
         let long = build_leader_parts(P_TIP, P0, P_END, 1.0, "ABCDEFGHIJ", "", None).unwrap();
-        assert!((short.blen - (17.413 + 1.45 + 2.0)).abs() < 1e-9, "{short_blen}", short_blen = short.blen);
+        assert!(
+            (short.blen - (1.45 + 2.0 * 1.5)).abs() < 1e-9,
+            "{short_blen}",
+            short_blen = short.blen
+        );
         assert!(long.blen > short.blen);
         // 中日韩按方块字宽 2.45 估算。
         let cjk = build_leader_parts(P_TIP, P0, P_END, 1.0, "通孔", "", None).unwrap();
-        assert!((cjk.blen - (17.413 + 2.45 * 2.0 + 2.0)).abs() < 1e-9, "{b}", b = cjk.blen);
+        assert!(
+            (cjk.blen - (2.45 * 2.0 + 2.0 * 1.5)).abs() < 1e-9,
+            "{b}",
+            b = cjk.blen
+        );
         // 下侧更长时以下侧为准。
         let lower = build_leader_parts(P_TIP, P0, P_END, 1.0, "A", "ABCDEFGH", None).unwrap();
-        assert!((lower.blen - (17.413 + 1.45 * 8.0 + 2.0)).abs() < 1e-9);
+        assert!((lower.blen - (1.45 * 8.0 + 2.0 * 1.5)).abs() < 1e-9);
+        // 两侧都空：不画文字，肩线 = 1 个全角字符长。
+        let empty = build_leader_parts(P_TIP, P0, P_END, 1.0, "", "", None).unwrap();
+        assert!((empty.blen - 2.45).abs() < 1e-9, "{b}", b = empty.blen);
+        assert!(mtexts_of(&empty.members).is_empty(), "空文字不画 MTEXT");
         // 肩线实体确实到 blen（线末端沿主轴）。
         // 肩线 = 起于块局部原点、沿 +t 的那条线（块局部坐标，原点 = 拐点）。
         let shoulder = lines_of(&long.members)
@@ -16505,13 +16529,13 @@ mod weld_tests {
         assert_eq!(ms.len(), 2);
         assert!((ms[0].rotation - std::f64::consts::FRAC_PI_2).abs() < 1e-9);
         // 竖轴内容坐标系（块局部）：n_up = (−1,0) → v 正方向为 −x，
-        // 故上侧文字在肩线左侧 (−2.750, 17.413)、下侧在右侧 (+2.750, 17.413)。
+        // 故上侧文字在肩线左侧 (−2.750, 1.5)、下侧在右侧 (+2.750, 1.5)。
         assert!((ms[0].insertion_point.x + 2.750).abs() < 1e-9);
-        assert!((ms[0].insertion_point.y - 17.413).abs() < 1e-9);
+        assert!((ms[0].insertion_point.y - 1.5).abs() < 1e-9);
         assert!((ms[1].insertion_point.x - 2.750).abs() < 1e-9);
     }
 
-    /// 左向肩线：文字自**拐点**向外偏移（局部 −17.413）+ 右对齐 → 与右向镜像对称。
+    /// 左向肩线：文字自**拐点**向外偏移（局部 −1.5）+ 右对齐 → 与右向镜像对称。
     #[test]
     fn apply_leader_leftward_text_mirrors() {
         // 肩线自拐点向左画 40。
@@ -16519,15 +16543,15 @@ mod weld_tests {
         let parts = build_leader_parts(P_TIP, P0, p_end, 1.0, "通孔", "深10", None).unwrap();
         let ms = mtexts_of(&parts.members);
         assert_eq!(ms.len(), 2);
-        // 文字锚点 = 拐点 −17.413（块局部 x = −17.413）。
-        assert!((ms[0].insertion_point.x + 17.413).abs() < 1e-9, "上侧文字在拐点左侧 17.413");
-        assert!((ms[1].insertion_point.x + 17.413).abs() < 1e-9);
+        // 文字锚点 = 拐点 −1.5（块局部 x = −1.5）。
+        assert!((ms[0].insertion_point.x + 1.5).abs() < 1e-9, "上侧文字在拐点左侧 1.5");
+        assert!((ms[1].insertion_point.x + 1.5).abs() < 1e-9);
         // 右对齐（MiddleRight）→ 文字仍向外（左）展开 → 与右向镜像对称。
         for m in &ms {
             assert!(matches!(m.attachment_point, acadrust::entities::AttachmentPoint::MiddleRight));
         }
-        // 肩线长度不受方向影响：17.413 + max(字宽) + 2（"深10"=2.45+1.45+1.45=5.35）。
-        assert!((parts.blen - (17.413 + 5.35 + 2.0)).abs() < 1e-9, "{}", parts.blen);
+        // 肩线长度不受方向影响：max(字宽) + 两端留白（"深10"=2.45+1.45+1.45=5.35）。
+        assert!((parts.blen - (5.35 + 2.0 * 1.5)).abs() < 1e-9, "{}", parts.blen);
         // 肩线自拐点向左：一端在拐点 (0,0)、另一端局部 x = −blen（水平线）。
         let sh = lines_of(&parts.members)
             .into_iter()
