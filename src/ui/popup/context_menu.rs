@@ -34,7 +34,7 @@ pub const MENU_WIDTH_WITH_HINTS: f32 = 236.0;
 pub const RECENT_LIMIT: usize = 10;
 
 /// Identifies an inline-expanding (accordion) submenu. Only one is open at a
-/// time; the open one is tracked in `SelectionState::context_menu_ui`.
+/// time; the open one is tracked in `SelectionMenu::ui`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SubmenuId {
     RecentInput,
@@ -521,6 +521,7 @@ fn snap_override_items() -> Vec<MenuItem> {
         snap("Apparent Intersection", SnapType::ApparentIntersection),
         snap("Extension", SnapType::Extension),
         snap("Center", SnapType::Center),
+        snap("Geometric Center", SnapType::GeometricCenter),
         snap("Quadrant", SnapType::Quadrant),
         snap("Tangent", SnapType::Tangent),
         snap("Perpendicular", SnapType::Perpendicular),
@@ -722,6 +723,12 @@ fn idle_rows(
         t!("Quick Select...").into_owned(),
         MenuAction::QuickSelect,
     )));
+    // Count the selected objects, or start a count.
+    rows.push(MenuRow::Item(if has_selection {
+        cmd(t!("Count Selection").into_owned(), "COUNT _C")
+    } else {
+        cmd(t!("Count").into_owned(), "COUNT")
+    }));
     rows.push(MenuRow::Separator);
 
     // ── Panels ─────────────────────────────────────────────────────────
@@ -1070,8 +1077,8 @@ mod tests {
         assert_eq!(menu.default_row_y(), MENU_PAD_TOP);
         let menu = build_context_menu(&idle_ctx(false), None);
         assert_eq!(menu.default_row_y(), MENU_PAD_TOP);
-        // 10 items + 3 submenu headers + 6 separators, plus panel padding.
-        let expected = MENU_PAD_TOP * 2.0 + 13.0 * MENU_ROW_H + 6.0 * MENU_SEP_H;
+        // 11 items + 3 submenu headers + 6 separators, plus panel padding.
+        let expected = MENU_PAD_TOP * 2.0 + 14.0 * MENU_ROW_H + 6.0 * MENU_SEP_H;
         assert_eq!(menu.height(), expected);
     }
 

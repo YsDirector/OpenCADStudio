@@ -4882,12 +4882,14 @@ mod tests {
         // 但 **Debug 会打印**）→ 每个图元的 Debug 串都变，四个指纹全漂。
         // 已按新旧几何未变的前提下重新冻结（图元数不变：section 14 / side / simplified / front）。
         // 2026-09 用户定案：剖视剖面线口径改为 3.0mm（HATCH 图元改了 offset/scale）→ section 指纹重冻。
-        // 下次升 acadrust 若再漂，先确认几何真的没变（比对图元数与关键坐标）再改这里的常数。
+        // 2026-10 合并上游 opencadcodec 0.6 后 Debug 表示再次变化；四个视图
+        // 仍保持既有图元数，故仅重冻指纹，不把它当成几何变化。
+        // 下次升 acadrust/codec 若再漂，先确认几何真的没变（比对图元数与关键坐标）再改这里的常数。
         let frozen: [(&str, u64); 4] = [
-            ("section", 0xfccdf1d19555193c),
-            ("side", 0xdb9046b86e5a3e94),
-            ("simplified", 0x39e0cbb64e6195cd),
-            ("front", 0xbb4f49b5f2d49d91),
+            ("section", 0xeb2a545fdaf3e9e7),
+            ("side", 0x89373ac774bbe11c),
+            ("simplified", 0x556c4a9ef7d55db9),
+            ("front", 0xb04ef1e1a06a3bdb),
         ];
         for (name, want) in frozen {
             let view = GearView::parse(name).unwrap();

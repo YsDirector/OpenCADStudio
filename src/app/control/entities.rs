@@ -713,9 +713,21 @@ impl OpenCADStudio {
         let action = req["action"]
             .as_str()
             .unwrap_or("move")
+            .trim()
             .to_ascii_lowercase();
         let i = self.active_tab;
         require_existing(&self.tabs[i].scene.document, &handles)?;
+        if !matches!(
+            action.as_str(),
+            "move" | "copy" | "rotate" | "scale" | "mirror" | "array"
+        ) {
+            return Err(failure(
+                "invalid_action",
+                format!(
+                    "Unknown transform action '{action}'. Use move, copy, rotate, scale, mirror or array"
+                ),
+            ));
+        }
 
         let transform = |req: &Value| -> Parsed<EntityTransform> {
             Ok(match action.as_str() {
@@ -852,7 +864,14 @@ impl OpenCADStudio {
                 }
                 affected = handles.len();
             }
-            _ => unreachable!("validated by transform()"),
+            other => {
+                return Err(failure(
+                    "invalid_action",
+                    format!(
+                        "Unknown transform action '{other}'. Use move, copy, rotate, scale, mirror or array"
+                    ),
+                ))
+            }
         }
         self.post_ref_op(i);
         self.set_control_result(json!({
@@ -1042,7 +1061,7 @@ impl OpenCADStudio {
 /// Silent no-op for an unknown name (callers validate first);
 /// `*`-prefixed layout records are rejected by the callers. Returns the
 /// number of entities erased.
-fn erase_block_definition(scene: &mut crate::scene::Scene, name: &str) -> usize {
+pub(crate) fn erase_block_definition(scene: &mut crate::scene::Scene, name: &str) -> usize {
     let Some(record) = scene.document.block_records.get(name) else {
         return 0;
     };

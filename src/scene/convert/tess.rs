@@ -794,10 +794,14 @@ fn tessellate_entity_inner(
                             a,
                         ),
                         ProxyColor::Rgb(r, g, b) => (
-                            view::render::adapt_to_bg(
-                                [r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0, 1.0],
-                                bg_color,
-                            ),
+                            {
+                                let [r, g, b] = convert::tess_util::authored_rgb([
+                                    r as f32 / 255.0,
+                                    g as f32 / 255.0,
+                                    b as f32 / 255.0,
+                                ]);
+                                [r, g, b, 1.0]
+                            },
                             0,
                         ),
                         ProxyColor::Inherit => (entity_color, aci),
@@ -957,7 +961,9 @@ fn tessellate_entity_inner(
             plinegen: true,
             fill_tris: vec![],
             fill_tris_low: Vec::new(),
-        }];
+        
+            ..Default::default()
+}];
     }
 
     // Render non-annotative dimensions from their stored picture block.
@@ -1203,7 +1209,9 @@ fn tessellate_entity_inner(
             plinegen: true,
             fill_tris: vec![],
             fill_tris_low: Vec::new(),
-        };
+        
+            ..Default::default()
+};
 
         let expanded = expand_block_object(
             document,
@@ -1316,6 +1324,10 @@ fn tessellate_entity_inner(
             // gathering only visits the pieces near the cursor.
             set_wire_aabb(&mut wire, WireModel::UNBOUNDED_AABB);
             bases.push(wire);
+        }
+        // DWF / DGN content: vector wires, sharp at every zoom.
+        if let Some(def) = crate::entities::underlay::definition(underlay, document) {
+            bases.extend(crate::scene::model::underlay_vector::display_wires(underlay, def, &h.value().to_string(), bg_color));
         }
     }
 
@@ -1584,7 +1596,9 @@ fn lod_stub_wire(
         plinegen: true,
         fill_tris: vec![],
         fill_tris_low: Vec::new(),
-    }
+    
+        ..Default::default()
+}
 }
 
 /// Sub-pixel LOD stub for 3D entities. Emits the entity's 3D AABB as a
@@ -1679,7 +1693,9 @@ fn lod_stub_wire_3d(
         plinegen: true,
         fill_tris: vec![],
         fill_tris_low: Vec::new(),
-    }
+    
+        ..Default::default()
+}
 }
 
 /// Tessellate each visible AttributeEntity attached to an Insert and append
@@ -1749,6 +1765,23 @@ pub(crate) fn set_wire_aabb(w: &mut WireModel, entity_box: [f32; 4]) {
     }
     for (i, &p) in w.pick_tris.iter().enumerate() {
         extend(p, w.pick_tris_low.get(i).copied().unwrap_or([0.0; 3]));
+    }
+    // The entity's snap points ride one wire, which may be only one piece of
+    // it (a polyline drawn per segment): its box must reach them, or a snap
+    // on another piece — an arc segment's quadrant — is never tried.
+    let split = |x: f64| {
+        let high = x as f32;
+        [high, (x - high as f64) as f32]
+    };
+    let points = w
+        .snap_pts
+        .iter()
+        .map(|(p, _)| [p.x, p.y])
+        .chain(w.key_vertices.iter().map(|p| [p[0], p[1]]))
+        .collect::<Vec<_>>();
+    for [x, y] in points {
+        let ([xh, xl], [yh, yl]) = (split(x), split(y));
+        extend([xh, yh, 0.0], [xl, yl, 0.0]);
     }
 
     w.aabb = out;

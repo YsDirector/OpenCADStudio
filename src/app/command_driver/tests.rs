@@ -904,6 +904,7 @@ mod delobj_tests {
             mode,
             options: crate::command::SweepOptions::default(),
             color: [1.0; 4],
+            expressions: [None, None],
         });
 
         let created = app.tabs[i]
@@ -934,14 +935,17 @@ mod delobj_tests {
                 expected,
             );
         }
-        assert_eq!(
-            sweep_source_presence(2, crate::command::ExtrudeMode::Surface),
-            (false, false),
-        );
-        assert_eq!(
-            sweep_source_presence(3, crate::command::ExtrudeMode::Surface),
-            (false, true),
-        );
+        // A swept surface is associative by default (SURFACEASSOCIATIVITY 1)
+        // and keeps the profile and path it follows, whatever DELOBJ says;
+        // DELOBJ reaches surfaces only with associativity off, a profile-wide
+        // switch this parallel test leaves alone.
+        assert!(crate::scene::model::sweep_model::surface_associativity());
+        for value in [2, 3] {
+            assert_eq!(
+                sweep_source_presence(value, crate::command::ExtrudeMode::Surface),
+                (true, true),
+            );
+        }
     }
 }
 
@@ -965,16 +969,16 @@ mod thicken_tests {
         )
         .unwrap();
         let source = app.add_surface_model(
-            codec::EntityType::Surface(Surface::new(SurfaceKind::Plane)),
+            codec::EntityType::Surface(Box::new(Surface::new(SurfaceKind::Plane))),
             body,
         );
         assert!(!source.is_null());
         let i = app.active_tab;
         let invalid = app.tabs[i]
             .scene
-            .add_entity(codec::EntityType::Surface(Surface::new(
+            .add_entity(codec::EntityType::Surface(Box::new(Surface::new(
                 SurfaceKind::Generic,
-            )));
+            ))));
         let original =
             serde_json::to_value(app.tabs[i].scene.document.get_entity(source).unwrap()).unwrap();
         let before = app.tabs[i].history.undo_stack.len();
@@ -1060,7 +1064,7 @@ mod thicken_tests {
             kernel::brep::extrude_surface(Plane::XY, &[Curve::Nurbs(profile)], [0.0, 0.0, 2.0])
                 .unwrap();
         let source = app.add_surface_model(
-            codec::EntityType::Surface(Surface::new(SurfaceKind::Generic)),
+            codec::EntityType::Surface(Box::new(Surface::new(SurfaceKind::Generic))),
             body,
         );
         let i = app.active_tab;

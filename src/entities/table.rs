@@ -13,6 +13,13 @@ use crate::scene::view::transform;
 use crate::scene::model::wire_model::SnapHint;
 use crate::t;
 
+/// Largest cell grid (rows × columns) the property editor may grow a
+/// table to. Row/column counts are iteration counts for
+/// `apply_geom_prop`'s grow loops, but `parse_f64` accepts anything up
+/// to `MAX_TYPED_MAGNITUDE` (1e15) — an unclamped request kept pushing
+/// rows/columns until the allocator failed.
+const MAX_TABLE_CELLS: usize = 1_000_000;
+
 thread_local! {
     static PROPERTY_CELL: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static PROPERTY_CELL_ACTIVE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
@@ -94,12 +101,15 @@ pub(crate) fn style_for_property<'a>(
     cell: &'a codec::entities::table::TableCell,
     property: codec::entities::table::CellStylePropertyFlags,
 ) -> Option<&'a codec::entities::table::CellStyle> {
+    // The cell's own overrides, as either layout (DXF or binary) states them.
+    if let Some(style) = cell.style.as_ref().filter(|style| style.sets(property)) {
+        return Some(style);
+    }
     let column_style = table
         .columns
         .get(column)
         .and_then(|column| column.style.as_ref());
     for style in [
-        cell.style.as_ref(),
         row.style.as_ref(),
         column_style,
         table.base_style.as_ref(),
@@ -112,6 +122,51 @@ pub(crate) fn style_for_property<'a>(
         }
     }
     None
+}
+
+/// A cell's text height: the content's own format when it overrides it,
+/// else the cell, row, column or table style that sets it, else the
+/// content's value.
+fn cell_text_height(
+    table: &Table,
+    row: &codec::entities::table::TableRow,
+    column: usize,
+    cell: &codec::entities::table::TableCell,
+    content: &codec::entities::table::CellContent,
+) -> Option<f64> {
+    use codec::entities::table::CellStylePropertyFlags as P;
+    let set = |h: f64| (h > 1e-6).then_some(h);
+    let own = content.sets(P::TEXT_HEIGHT);
+    own.then(|| set(content.text_height))
+        .flatten()
+        .or_else(|| {
+            style_for_property(table, row, column, cell, P::TEXT_HEIGHT).and_then(|s| set(s.text_height))
+        })
+        .or_else(|| set(content.text_height))
+}
+
+/// A cell's text style: the content's own, else the cell, row, column or
+/// table style that sets it (by handle, or by name for a cell override).
+fn cell_text_style(
+    document: &codec::CadDocument,
+    table: &Table,
+    row: &codec::entities::table::TableRow,
+    column: usize,
+    cell: &codec::entities::table::TableCell,
+    content: Option<&codec::entities::table::CellContent>,
+) -> Option<codec::Handle> {
+    use codec::entities::table::CellStylePropertyFlags as P;
+    content.and_then(|c| c.text_style_handle).or_else(|| {
+        let style = style_for_property(table, row, column, cell, P::TEXT_STYLE)?;
+        style.text_style_handle.or_else(|| {
+            let name = style.text_style_name.trim();
+            document
+                .text_styles
+                .iter()
+                .find(|s| !name.is_empty() && s.name.eq_ignore_ascii_case(name))
+                .map(|s| s.handle)
+        })
+    })
 }
 
 fn style_for_border<'a>(
@@ -505,13 +560,23 @@ fn evaluate_table_formula(table: &Table, expression: &str) -> Option<String> {
     let open = body.find('(')?;
     let close = body.rfind(')')?;
     let function = body[..open].trim().to_ascii_uppercase();
-    let range = &body[open + 1..close];
+    // `find('(')` scans forward while `rfind(')')` scans backward, so a
+    // malformed body like `)(` orders them reversed; the safe `get` yields
+    // None (fall back to the literal text) instead of a slice panic.
+    let range = body.get(open + 1..close)?;
     let (first, last) = range.split_once(':').unwrap_or((range, range));
     let (r1, c1) = table_cell_reference(first)?;
     let (r2, c2) = table_cell_reference(last)?;
     let mut values = Vec::new();
-    for row in r1.min(r2)..=r1.max(r2) {
-        for column in c1.min(c2)..=c1.max(c2) {
+    // A range can name any `usize` (`A1:A18446744073709551615`): `cell()`
+    // returns None outside the table, so clamping the walk to the table's
+    // own rows/columns collects exactly the same values — every skipped
+    // cell would have been None — while keeping an unbounded walk off the
+    // render path (1.8e19 iterations of `..=`).
+    let row_end = r1.max(r2).min(table.rows.len().saturating_sub(1));
+    let col_end = c1.max(c2).min(table.columns.len().saturating_sub(1));
+    for row in r1.min(r2)..=row_end {
+        for column in c1.min(c2)..=col_end {
             if let Some(value) = table
                 .cell(row, column)
                 .and_then(|cell| cell.text_value().trim().parse::<f64>().ok())
@@ -629,7 +694,7 @@ fn content_display_value(
 ) -> String {
     if let Some(handle) = content.field_handle {
         if let Some(value) =
-            crate::entities::field::resolve_handle(document, handle, table.common.handle)
+            crate::entities::field::cell_text(document, handle, table.common.handle)
         {
             return value;
         }
@@ -1233,8 +1298,7 @@ impl RenderConvertible for Table {
                 // Resolve text height: content → cell-style → row-style → 0.18.
                 let content = cell.contents.first();
                 let cell_h = content
-                    .map(|c| c.text_height)
-                    .filter(|h| *h > 1e-6)
+                    .and_then(|c| cell_text_height(self, row, ci, cell, c))
                     .or_else(|| {
                         cell.style
                             .as_ref()
@@ -1247,8 +1311,7 @@ impl RenderConvertible for Table {
                 let margin = cell_h * 0.5_f32;
 
                 // Resolve text-style handle: content → cell-style → row-style.
-                let style_handle = content
-                    .and_then(|c| c.text_style_handle)
+                let style_handle = cell_text_style(document, self, row, ci, cell, content)
                     .or_else(|| cell.style.as_ref().and_then(|s| s.text_style_handle))
                     .or_else(|| row_style.and_then(|s| s.text_style_handle));
                 let font_owned = font_for_handle(style_handle).unwrap_or_else(|| "txt".to_string());
@@ -1468,9 +1531,11 @@ pub fn tessellate_table(
 
     // Accumulators keyed by quantised colour (+ weight for borders).
     let mut fills: HashMap<[u8; 4], ([f32; 4], Vec<[f32; 3]>)> = HashMap::default();
+    let mut field_fills: Vec<[f32; 3]> = Vec::new();
     // SDF cell text: glyph quads (per-vertex coloured) collected across all
     // cells; emitted as one text-carrying wire at the end.
     let mut text_verts: Vec<crate::scene::pipeline::text_gpu::TextVertex> = Vec::new();
+    let mut searchable: Vec<crate::scene::model::wire_model::SearchableTextRun> = Vec::new();
     let mut borders: HashMap<([u8; 4], u32), ([f32; 4], f32, Vec<[f32; 3]>)> = HashMap::default();
     let mut emitted: rustc_hash::FxHashSet<(i32, i32, i32, i32, i32, i32)> =
         rustc_hash::FxHashSet::default();
@@ -1743,11 +1808,8 @@ pub fn tessellate_table(
             let fallback_sizes: Vec<_> = value_contents
                 .iter()
                 .map(|(_, content, text)| {
-                    let height = if content.text_height > 1e-6 {
-                        content.text_height as f32 * anno_scale
-                    } else {
-                        fallback_text_height
-                    };
+                    let height = cell_text_height(tab, row, ci, cell, content)
+                        .map_or(fallback_text_height, |h| h as f32 * anno_scale);
                     let mut max_chars = 0usize;
                     let mut line_count = 0usize;
                     for line in text.split("\\P") {
@@ -1776,20 +1838,7 @@ pub fn tessellate_table(
             for (slot_index, (content_index, content, text)) in
                 value_contents.iter().enumerate()
             {
-                let text_height_style = style_for_property(
-                    tab,
-                    row,
-                    ci,
-                    cell,
-                    codec::entities::table::CellStylePropertyFlags::TEXT_HEIGHT,
-                );
-                let cell_h = (content.text_height > 1e-6)
-                    .then_some(content.text_height)
-                    .or_else(|| {
-                        text_height_style
-                            .map(|style| style.text_height)
-                            .filter(|height| *height > 1e-6)
-                    })
+                let cell_h = cell_text_height(tab, row, ci, cell, content)
                     .or_else(|| {
                         row_style
                             .map(|style| style.text_height)
@@ -1838,16 +1887,7 @@ pub fn tessellate_table(
                     .map(|style| style.margin_bottom as f32 * anno_scale)
                     .filter(|margin| *margin > 1e-6)
                     .unwrap_or_else(|| v_margin.max(cell_h * 0.5));
-                let style_handle = content.text_style_handle.or_else(|| {
-                    style_for_property(
-                        tab,
-                        row,
-                        ci,
-                        cell,
-                        codec::entities::table::CellStylePropertyFlags::TEXT_STYLE,
-                    )
-                    .and_then(|style| style.text_style_handle)
-                })
+                let style_handle = cell_text_style(document, tab, row, ci, cell, Some(content))
                     .or_else(|| row_style.and_then(|style| style.text_style_handle));
                 let font_owned =
                     font_for_handle(style_handle).unwrap_or_else(|| "txt".to_string());
@@ -1923,6 +1963,8 @@ pub fn tessellate_table(
                     .map(|style| style.rotation as f32)
                     .unwrap_or(cell.rotation as f32)
                 };
+                // FIELDDISPLAY boxes come from this same layout's cells.
+                let field_boxes = content.field_handle.is_some() && crate::entities::field::display();
                 let layout = layout_mtext(&MTextRenderOpts {
                     columns: Default::default(),
                     value: text,
@@ -1937,8 +1979,36 @@ pub fn tessellate_table(
                     exact_line_spacing: false,
                     rectangle_height: 0.0,
                     vertical_text: false,
-                    want_glyph_boxes: false,
+                    want_glyph_boxes: field_boxes,
                 });
+                // FIELDDISPLAY: a field cell's text on a gray box, one per line,
+                // from the same layout's character cells (screen only).
+                if field_boxes {
+                    let cells = &layout.glyph_boxes;
+                    let (sin_r, cos_r) = (rot as f64).sin_cos();
+                    let mut lines: Vec<[f64; 4]> = Vec::new();
+                    for b in cells {
+                        let [l, base, r, top] = b.local.map(|v| v as f64);
+                        match lines.last_mut() {
+                            Some(c) if (c[1] - base).abs() <= 1e-3 * (top - base).max(c[3]) => {
+                                c[0] = c[0].min(l);
+                                c[2] = c[2].max(r);
+                                c[3] = c[3].max(top - base);
+                            }
+                            _ => lines.push([l, base, r, top - base]),
+                        }
+                    }
+                    for [l, base, r, h] in lines.into_iter().filter(|[l, _, r, _]| r > l) {
+                        let (b, t) = (base - crate::entities::field::BOX_BELOW * h, base + crate::entities::field::BOX_ABOVE * h);
+                        let w = |x: f64, y: f64| [
+                            (to.x as f64 + x * cos_r - y * sin_r) as f32,
+                            (to.y as f64 + x * sin_r + y * cos_r) as f32,
+                            to.z as f32,
+                        ];
+                        let q = [w(l, b), w(r, b), w(r, t), w(l, t)];
+                        field_fills.extend([q[0], q[1], q[2], q[0], q[2], q[3]]);
+                    }
+                }
                 let tcol = if selected {
                     sel_col
                 } else if !matches!(
@@ -1999,17 +2069,18 @@ pub fn tessellate_table(
                             }
                             continue;
                         }
-                        let quads = crate::scene::text::glyph_quads::layout_glyph_quads(
-                            &mut atlas,
-                            run.height,
-                            run.rotation,
-                            run.width_factor,
-                            run.oblique,
-                            run.tracking,
-                            &run.font,
-                            run.bold,
-                            &run.text,
-                        );
+                        let (quads, pen_adv) =
+                            crate::scene::text::glyph_quads::layout_glyph_quads(
+                                &mut atlas,
+                                run.height,
+                                run.rotation,
+                                run.width_factor,
+                                run.oblique,
+                                run.tracking,
+                                &run.font,
+                                run.bold,
+                                &run.text,
+                            );
                         crate::scene::pipeline::text_gpu::push_glyph_vertices(
                             &mut text_verts,
                             &quads,
@@ -2018,6 +2089,24 @@ pub fn tessellate_table(
                             tcol,
                             0.0,
                         );
+                        {
+                            use crate::scene::model::wire_model::{
+                                clean_searchable_text, SearchableTextRun,
+                            };
+                            let visible = clean_searchable_text(&run.text);
+                            if !visible.is_empty() {
+                                searchable.push(SearchableTextRun {
+                                    text: visible,
+                                    origin: [stroke.origin[0], stroke.origin[1], to.z as f64],
+                                    height: run.height,
+                                    rotation: run.rotation,
+                                    color: tcol,
+                                    bold: run.bold,
+                                    font: run.font.clone(),
+                                    adv_width: pen_adv,
+                                });
+                            }
+                        }
                     }
                 }
             }
@@ -2067,7 +2156,9 @@ pub fn tessellate_table(
                 // (sub-metre error at UTM scale) — not a crash. Follow-up:
                 // double-single-split via points_to_ds to match emit_wire.
                 fill_tris_low: Vec::new(),
-            }
+            
+            ..Default::default()
+}
         };
 
     let mut out: Vec<WireModel> = Vec::new();
@@ -2076,6 +2167,11 @@ pub fn tessellate_table(
         if !tris.is_empty() {
             out.push(mk(color, vec![], tris, 1.0));
         }
+    }
+    if !field_fills.is_empty() {
+        let mut background = mk(crate::entities::field::BACKGROUND, vec![], field_fills, 1.0);
+        background.plot_visible = false;
+        out.push(background);
     }
     for (_, (color, lw, pts)) in borders {
         if !pts.is_empty() {
@@ -2098,6 +2194,7 @@ pub fn tessellate_table(
         let mut w = mk(entity_color, vec![], vec![], line_weight_px);
         w.aabb = [nx as f32, ny as f32, xx as f32, xy as f32];
         w.text_verts = text_verts;
+        w.searchable_text = searchable;
         out.push(w);
     }
     out
@@ -3154,7 +3251,14 @@ impl PropertyEditable for Table {
             }
             "tbl_rows" => {
                 let requested = number.round().max(1.0) as usize;
-                while self.rows.len() < requested {
+                // Grow only up to the cell budget (`requested` may be
+                // 1e15): the grow loop is an iteration count, not
+                // geometry, and used to push rows until the allocator
+                // failed. Shrinking to a smaller requested count stays
+                // exact — `grow_to` is never above `requested`, so the
+                // two loops cannot fight.
+                let grow_to = requested.min(MAX_TABLE_CELLS / self.columns.len().max(1));
+                while self.rows.len() < grow_to {
                     self.add_row();
                 }
                 while self.rows.len() > requested {
@@ -3164,8 +3268,9 @@ impl PropertyEditable for Table {
             }
             "tbl_cols" => {
                 let requested = number.round().max(1.0) as usize;
+                let grow_to = requested.min(MAX_TABLE_CELLS / self.rows.len().max(1));
                 let width = self.columns.last().map(|column| column.width).unwrap_or(2.0);
-                while self.columns.len() < requested {
+                while self.columns.len() < grow_to {
                     self.add_column(width);
                 }
                 while self.columns.len() > requested {
@@ -3365,5 +3470,135 @@ pub(crate) fn normalize_scripted_table(old: Option<&Table>, new: &mut Table) {
             cell.merge_width = range.col_count() as i32;
             cell.merge_height = range.row_count() as i32;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_table() -> Table {
+        let mut table = Table::new(codec::types::Vector3::new(0.0, 0.0, 0.0), 2, 2);
+        table.set_cell_text(0, 0, "10");
+        table.set_cell_text(0, 1, "20");
+        table.set_cell_text(1, 0, "30");
+        table.set_cell_text(1, 1, "40");
+        table
+    }
+
+    /// Delimiters located independently (`find('(')` forward, `rfind(')')`
+    /// backward) must not produce a reversed slice: `=)(` used to build
+    /// `&body[2..0]` — `slice index starts at 2 but ends at 0` — killing the
+    /// render pass from a single pasted cell value.
+    #[test]
+    fn malformed_formula_is_ignored_instead_of_panicking() {
+        let table = sample_table();
+        for expression in ["=)(", "=a)b(c", "=)"] {
+            assert_eq!(
+                evaluate_table_formula(&table, expression),
+                None,
+                "{expression} should not evaluate"
+            );
+        }
+    }
+
+    /// Well-formed formulas keep evaluating across the whole file — the
+    /// guard must only reject malformed delimiters.
+    #[test]
+    fn well_formed_formulas_still_evaluate() {
+        let table = sample_table();
+        assert_eq!(
+            evaluate_table_formula(&table, "=SUM(A1:B2)"),
+            Some("100".to_string())
+        );
+        assert_eq!(
+            evaluate_table_formula(&table, "=AVERAGE(A1:B2)"),
+            Some("25".to_string())
+        );
+        assert_eq!(evaluate_table_formula(&table, "=A1"), Some("10".to_string()));
+        assert_eq!(evaluate_table_formula(&table, "not a formula"), None);
+    }
+
+    /// A cell range can name any `usize` — `A1:A18446744073709551615`
+    /// parses to row ≈ 1.8e19. `cell()` returns None for out-of-bounds
+    /// indices, but the range loop still *walked* every index on the
+    /// render path. Clamping the walk to the table's own rows/columns
+    /// must collect exactly the same values (each skipped cell would
+    /// have been None) and stay instant; the elapsed guard keeps a
+    /// future un-clamped loop from creeping back in.
+    #[test]
+    fn formula_range_evaluation_is_bounded_by_the_table() {
+        let table = sample_table();
+        let start = std::time::Instant::now();
+        assert_eq!(
+            evaluate_table_formula(&table, "=SUM(A1:A18446744073709551615)"),
+            Some("40".to_string()),
+            "A1:A… is column A only: 10 + 30"
+        );
+        assert_eq!(
+            evaluate_table_formula(&table, "=COUNT(A1:A1000000000)"),
+            Some("2".to_string()),
+            "column A holds two numeric cells"
+        );
+        assert_eq!(
+            evaluate_table_formula(&table, "=SUM(A1:Z999999999)"),
+            Some("100".to_string())
+        );
+        assert_eq!(
+            evaluate_table_formula(&table, "=AVERAGE(A1:ZZ18446744073709551615)"),
+            Some("25".to_string())
+        );
+        let elapsed = start.elapsed();
+        assert!(
+            elapsed < std::time::Duration::from_secs(5),
+            "formula evaluation took {elapsed:?} — the range walk is unbounded again"
+        );
+    }
+
+    /// A column count driven to `MAX_TYPED_MAGNITUDE` (1e15) grows one
+    /// column per loop iteration until the allocator fails: the magnitude
+    /// check bounds geometry, not iteration counts. Bound the cell grid
+    /// instead — column growth is limited by the rows already present.
+    #[test]
+    fn tbl_column_count_stays_within_budget() {
+        let mut table = Table::new(codec::types::Vector3::new(0.0, 0.0, 0.0), 1, 1);
+        let cap = MAX_TABLE_CELLS / table.rows.len().max(1);
+        table.apply_geom_prop("tbl_cols", &(cap + 10).to_string());
+        assert!(
+            table.columns.len() <= cap,
+            "tbl_cols grew to {} columns (budget {} cells over {} rows)",
+            table.columns.len(),
+            MAX_TABLE_CELLS,
+            table.rows.len()
+        );
+        table.apply_geom_prop("tbl_cols", "1000000000000000");
+        assert!(
+            table.columns.len() <= cap,
+            "tbl_cols grew to {} columns from a hostile value",
+            table.columns.len()
+        );
+    }
+
+    /// Same budget applied to row growth: with 10 columns the table may
+    /// hold `MAX_TABLE_CELLS / 10` rows, never the requested 1e15.
+    #[test]
+    fn tbl_row_count_stays_within_budget() {
+        let mut table = Table::new(codec::types::Vector3::new(0.0, 0.0, 0.0), 1, 1);
+        table.apply_geom_prop("tbl_cols", "10");
+        let cap = MAX_TABLE_CELLS / table.columns.len().max(1);
+        table.apply_geom_prop("tbl_rows", &(cap + 10).to_string());
+        assert!(
+            table.rows.len() <= cap,
+            "tbl_rows grew to {} rows (budget {} cells over {} columns)",
+            table.rows.len(),
+            MAX_TABLE_CELLS,
+            table.columns.len()
+        );
+        table.apply_geom_prop("tbl_rows", "1000000000000000");
+        assert!(
+            table.rows.len() <= cap,
+            "tbl_rows grew to {} rows from a hostile value",
+            table.rows.len()
+        );
     }
 }

@@ -37,5 +37,9 @@ rustflags = [
     "-Clink-arg=/STACK:16777216",
 ]
 
+# Also sizes rustc's own threads: rustc 1.99 overflows the default 8 MB
+# compiling this crate in release on Windows/macOS.
 [env]
-RUST_MIN_STACK = "8388608"
+# rustc 1.99 can overflow the default 8 MB thread stack while compiling
+# this crate in release on Windows/macOS.
+RUST_MIN_STACK = "67108864"

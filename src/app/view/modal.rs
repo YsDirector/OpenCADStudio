@@ -29,12 +29,19 @@ impl OpenCADStudio {
                 Some(codec::entities::UnderlayType::Dgn) => crate::t!("Attach DGN Underlay").into_owned(),
                 _ => crate::t!("Attach PDF Underlay").into_owned(),
             },
+            Some(K::PointCloudAttach) => crate::t!("Attach Point Cloud").into_owned(),
+            Some(K::PointCloudColorMap) => crate::t!("Point Cloud Color Map").into_owned(),
+            Some(K::PcSection) => crate::t!("Extract Section Lines from Point Cloud").into_owned(),
             Some(K::UnderlayLayers) => crate::t!("Underlay Layers").into_owned(),
             Some(K::PdfImportSettings) => crate::t!("PDF Import Settings").into_owned(),
             Some(K::PdfImportFile) => crate::t!("Import PDF").into_owned(),
             Some(K::XrefAttach) => crate::t!("Attach External Reference").into_owned(),
             Some(K::WriteBlock) => crate::t!("Write Block").into_owned(),
             Some(K::GeometricTolerance) => crate::t!("Geometric Tolerance").into_owned(),
+            Some(K::AttDef) => crate::t!("Attribute Definition").into_owned(),
+            Some(K::AttDefEdit) => crate::t!("Edit Attribute Definition").into_owned(),
+            Some(K::CountInvalidArea) => crate::t!("Count - Invalid Area").into_owned(),
+            Some(K::Field) => crate::t!("Field").into_owned(),
             Some(K::DraftingSettings) => crate::t!("Drafting Settings").into_owned(),
             Some(K::AutoConstrainSettings) => crate::t!("Constraint Settings").into_owned(),
             Some(K::LayerStateEditor) => crate::tr!("modal", "edit-layer-state"),
@@ -70,6 +77,7 @@ impl OpenCADStudio {
             Some(K::RecoveryPrompt) => crate::tr!("modal", "recovery-prompt"),
             Some(K::GpuWarning) => crate::tr!("gpu", "title"),
             Some(K::XrefHelp) => crate::t!("Reference Manager Help").into_owned(),
+            Some(K::SheetSet) => self.sheet_set.dialog.as_ref().map(|d| d.title()).unwrap_or_default(),
             None => String::new(),
         }
     }
@@ -309,6 +317,8 @@ impl OpenCADStudio {
                             cliprompt_lines: self.cliprompt_lines,
                             commandline_fade_ms: self.commandline_fade_ms,
                             zoom_wheel_reversed: self.zoom_wheel_reversed,
+                            touchpad_pan: self.touchpad_pan,
+                            ui_scale_percent: self.ui_scale_percent,
                             zoom_factor: self.zoom_factor,
                             texteditmode: self.texteditmode,
                             dimension_continue_mode: self.dimension_continue_mode,
@@ -325,7 +335,18 @@ impl OpenCADStudio {
                             self.spacemouse_preferences, self.spacemouse.status(),
                             self.spacemouse_paused, self.spacemouse_details,
                         ),
+                        {
+                            #[cfg(not(target_arch = "wasm32"))]
+                            let page = crate::ui::window::options::graphics::view(
+                                self.graphics_prefs,
+                                crate::gpu_backend::active_gpu(),
+                            );
+                            #[cfg(target_arch = "wasm32")]
+                            let page = iced::widget::Space::new().into();
+                            page
+                        },
                         &self.snap_angle_input,
+                        &self.zoom_factor_input,
                         {
                             let header = self
                                 .tabs
@@ -358,6 +379,8 @@ impl OpenCADStudio {
                                         .map(|p| p.display().to_string()),
                                     autosave: crate::config::config_dir()
                                         .map(|_| std::env::temp_dir().display().to_string()),
+                                    fonts: crate::io::font_repo::fonts_dir()
+                                        .map(|p| p.display().to_string()),
                                 }
                             }
                             #[cfg(target_arch = "wasm32")]
@@ -365,11 +388,16 @@ impl OpenCADStudio {
                                 crate::ui::window::options::Folders::default()
                             }
                         },
+                        &self.qnew_template,
                         self.double_click_block_refedit,
                         self.double_click_block_attedit,
                         self.cursor_type,
                         self.crosshair_color,
                         &self.crosshair_color_input,
+                        self.snap_marker_color,
+                        &self.snap_marker_color_input,
+                        self.command_text_color,
+                        &self.command_text_color_input,
                         self.lineweight_display_scale,
                         &self.model_space,
                         &self.model_bg_input,
@@ -523,6 +551,22 @@ impl OpenCADStudio {
                     crate::ui::window::pdf_dialogs::view_attach(state, flow)
                 })
             }
+            super::super::ModalKind::PointCloudAttach => {
+                let state = self.point_cloud_attach.as_ref()?;
+                sized_flow(ex, 880, 560, |flow| {
+                    crate::ui::window::pdf_dialogs::view_point_cloud_attach(state, flow)
+                })
+            }
+            super::super::ModalKind::PointCloudColorMap => {
+                let state = self.point_cloud_color_map.as_ref()?;
+                sized_flow(ex, 760, 560, |flow| {
+                    crate::ui::window::pdf_dialogs::view_point_cloud_color_map(state, flow)
+                })
+            }
+            super::super::ModalKind::PcSection => {
+                let state = self.pc_section.as_ref()?;
+                sized_flow(ex, 760, 470, |flow| crate::ui::window::pdf_dialogs::view_pc_section(state, flow))
+            }
             super::super::ModalKind::UnderlayLayers => {
                 let state = self.underlay_layers.as_ref()?;
                 sized_flow(ex, 460, 520, |flow| {
@@ -553,6 +597,39 @@ impl OpenCADStudio {
                 sized_flow(ex, 440, 395, |flow| {
                     crate::ui::window::wblock::view_window(state, flow)
                 })
+            }
+            super::super::ModalKind::AttDef => {
+                let state = self.attdef_dialog.as_ref()?;
+                sized_flow(ex, 720, 520, |flow| crate::ui::window::attdef_dialog::view(state, flow))
+            }
+            super::super::ModalKind::SheetSet => {
+                let (w, h) = match self.sheet_set.dialog.as_ref()? {
+                    crate::ui::window::sheet_set::SsDialog::Wizard(_) => (720, 560),
+                    crate::ui::window::sheet_set::SsDialog::Properties(_) => (640, 700),
+                    crate::ui::window::sheet_set::SsDialog::Form(f) => match f.kind {
+                        crate::ui::window::sheet_set::FormKind::Rename => (560, 470),
+                        crate::ui::window::sheet_set::FormKind::RenameView => (520, 200),
+                        crate::ui::window::sheet_set::FormKind::ImportLayout => (620, 470),
+                        _ => (560, 420),
+                    },
+                    crate::ui::window::sheet_set::SsDialog::Confirm(..) => (460, 190),
+                    crate::ui::window::sheet_set::SsDialog::Template(_) => (480, 400),
+                    crate::ui::window::sheet_set::SsDialog::Category(_) => (480, 440),
+                    crate::ui::window::sheet_set::SsDialog::BlockList(_) => (540, 330),
+                    crate::ui::window::sheet_set::SsDialog::SelectBlock(_) => (580, 390),
+                };
+                sized_flow(ex, w, h, |flow| crate::ui::window::sheet_set::dialog_view(&self.sheet_set, flow))
+            }
+            super::super::ModalKind::Field => {
+                let state = self.field_dialog.as_ref()?;
+                sized_flow(ex, 760, 660, |flow| crate::ui::window::field_dialog::view(state, flow))
+            }
+            super::super::ModalKind::CountInvalidArea => {
+                sized_flow(ex, 520, 260, |flow| crate::ui::window::count_palette::invalid_area_view(&self.count_palette, flow))
+            }
+            super::super::ModalKind::AttDefEdit => {
+                let state = self.attdef_edit.as_ref()?;
+                sized_flow(ex, 460, 220, |flow| crate::ui::window::attdef_dialog::view_edit(state, flow))
             }
             super::super::ModalKind::GeometricTolerance => {
                 let state = self.geometric_tolerance.as_ref()?;
@@ -1166,7 +1243,9 @@ impl OpenCADStudio {
                 let mut lt_opts: Vec<String> = vec!["ByBlock".to_string()];
                 lt_opts.extend(doc.line_types.iter().map(|lt| lt.name.clone()));
                 let mut textstyle_opts: Vec<String> = vec!["None".to_string()];
-                textstyle_opts.extend(doc.text_styles.iter().map(|t| t.name.clone()));
+                textstyle_opts.extend(
+                    doc.text_styles.iter().filter(|t| !t.is_shape_file).map(|t| t.name.clone()),
+                );
                 let opt_block = |h: Option<codec::types::Handle>| -> String {
                     match h {
                         Some(h) => doc
@@ -1430,7 +1509,11 @@ impl OpenCADStudio {
             let mut lt_opts: Vec<String> = vec!["ByBlock".to_string()];
             lt_opts.extend(doc.line_types.iter().map(|lt| lt.name.clone()));
             let text_style_opts: Vec<String> =
-                doc.text_styles.iter().map(|style| style.name.clone()).collect();
+                doc.text_styles
+                    .iter()
+                    .filter(|style| !style.is_shape_file)
+                    .map(|style| style.name.clone())
+                    .collect();
             let text_style_fixed_height = doc
                 .text_styles
                 .get(&self.ds_dimtxsty)
@@ -1717,9 +1800,10 @@ impl OpenCADStudio {
             }
             super::super::ModalKind::Unsaved => {
                 let tab_name = match &self.pending_close {
-                    Some(super::super::PendingClose::Tab(idx)) => self
+                    Some(super::super::PendingClose::Tab(tab_id)) => self
                         .tabs
-                        .get(*idx)
+                        .iter()
+                        .find(|t| t.id == *tab_id)
                         .map(|t| t.tab_display_name())
                         .unwrap_or_default(),
                     Some(super::super::PendingClose::Quit) => self

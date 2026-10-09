@@ -269,7 +269,7 @@ impl MLeaderCommand {
             ml.text_style_handle = style_handle;
             ml.context.text_style_handle = style_handle;
         }
-        let entity = self.plane.place_entity(EntityType::MultiLeader(ml));
+        let entity = self.plane.place_entity(EntityType::MultiLeader(Box::new(ml)));
         if self.content_type == LeaderContentType::MText && self.text.is_empty() {
             CmdResult::CommitAndEditText(entity)
         } else {
@@ -693,12 +693,7 @@ fn build_mleader(
     let to_right = (elbow_pt - arrow_pt).dot(ux.as_dvec3()) >= 0.0;
     let sign = if to_right { 1.0 } else { -1.0 };
     let landing = ux * (sign as f32);
-    ml.context.text_attachment_point =
-        if to_right {
-            codec::entities::multileader::TextAttachmentPointType::Left
-        } else {
-            codec::entities::multileader::TextAttachmentPointType::Right
-        };
+    crate::entities::multileader::set_mleader_text_side(&mut ml, to_right);
 
     ml.context.text_rotation = (ux.y as f64).atan2(ux.x as f64);
     ml.context.text_direction = Vector3::new(ux.x as f64, ux.y as f64, 0.0);
@@ -799,7 +794,9 @@ fn preview_wire(pts: &[Vec3], arrow_size: f32) -> WireModel {
         plinegen: true,
         fill_tris: vec![],
         fill_tris_low: Vec::new(),
-    }
+    
+            ..Default::default()
+}
 }
 
 fn arrowhead_wings(tip: Vec3, next: Vec3, size: f32) -> [Vec3; 2] {

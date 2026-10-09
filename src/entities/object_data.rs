@@ -149,7 +149,7 @@ fn entity_history_handle(entity: &EntityType) -> Option<Handle> {
     .filter(|handle| handle.is_valid())
 }
 
-fn history_operation_name(operation: &SolidHistoryOperation) -> &'static str {
+pub(crate) fn history_operation_name(operation: &SolidHistoryOperation) -> &'static str {
     match operation {
         SolidHistoryOperation::Unknown => "Unknown",
         SolidHistoryOperation::Box(_) => "Box",
@@ -228,6 +228,8 @@ fn embedded_name(value: Option<&codec::entities::EmbeddedEntity>) -> &'static st
         Some(codec::entities::EmbeddedEntity::Ellipse(_)) => "Ellipse",
         Some(codec::entities::EmbeddedEntity::Spline(_)) => "Spline",
         Some(codec::entities::EmbeddedEntity::LwPolyline(_)) => "Polyline",
+        // A 2D / 3D polyline profile the modeler keeps as a wire body.
+        Some(codec::entities::EmbeddedEntity::Body { .. }) => "Polyline",
         Some(codec::entities::EmbeddedEntity::Region(_)) => "Region",
         Some(codec::entities::EmbeddedEntity::Ray(_)) => "Ray",
         Some(codec::entities::EmbeddedEntity::XLine(_)) => "XLine",
@@ -313,7 +315,7 @@ fn history_operation_text(operation: &SolidHistoryOperation) -> String {
             value.base_face
         ),
         SolidHistoryOperation::Sweep(value) | SolidHistoryOperation::Extrusion(value) => format!(
-            "{}; sweep {}; path {}; direction {:.6},{:.6},{:.6}; draft {:.6}; scale {:.6}; twist {:.6}; align {:.6}; bank {}; intersections {}",
+            "{}; sweep {}; path {}; direction {:.6},{:.6},{:.6}; draft {:.6}; scale {:.6}; twist {:.6}; align {:.6}; align start {}; bank {}",
             history_base_text(&value.base),
             embedded_name(value.sweep_entity.as_ref()),
             embedded_name(value.path_entity.as_ref()),
@@ -324,8 +326,8 @@ fn history_operation_text(operation: &SolidHistoryOperation) -> String {
             value.scale_factor,
             value.twist_angle,
             value.align_angle,
-            value.bank,
-            value.check_intersections
+            value.align_start,
+            value.bank
         ),
         SolidHistoryOperation::Loft(value) => format!(
             "{}; cross sections {}; guides {}",
@@ -901,6 +903,7 @@ fn associative_data_name(data: &AssociativeData) -> &'static str {
         AssociativeData::ArrayParameters(_) => "Array Parameters",
         AssociativeData::ArrayActionBody(_) => "Array Action",
         AssociativeData::ArrayModifyActionBody(_) => "Array Modify Action",
+        AssociativeData::SmartCenterActionBody(_) => "Center Mark/Line Action",
         AssociativeData::DimensionAssociation(_) => "Dimension Association",
         AssociativeData::PersSubentManagerStatic(_) => "Static Subentity Manager",
         AssociativeData::ViewRepActionBody(_) => "View Representation Action",
@@ -1432,11 +1435,7 @@ fn class_object_section(
                     "Ramps",
                     bounded_join(
                         value.color_ramps.iter().map(|ramp| {
-                            format!(
-                                "v{} [{}]",
-                                ramp.class_version,
-                                ramp.color_schemes.join(", ")
-                            )
+                            format!("{} v{} ({} colours)", ramp.name, ramp.class_version, ramp.colors.len())
                         }),
                         32,
                     ),
@@ -1445,11 +1444,7 @@ fn class_object_section(
                     "Classification Ramps",
                     bounded_join(
                         value.classification_color_ramps.iter().map(|ramp| {
-                            format!(
-                                "v{} [{}]",
-                                ramp.class_version,
-                                ramp.color_schemes.join(", ")
-                            )
+                            format!("{} v{} ({} colours)", ramp.name, ramp.class_version, ramp.colors.len())
                         }),
                         32,
                     ),

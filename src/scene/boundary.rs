@@ -720,6 +720,39 @@ pub(crate) fn boundary_entities_from_sources(
         .collect()
 }
 
+/// A duplicated associative hatch must follow the duplicated boundary, not the
+/// source one — otherwise editing the source regenerates the duplicate onto
+/// the source's outline and it seems to vanish. A path whose boundary was not
+/// duplicated along loses its association. `handle_map` maps source handles
+/// to their duplicates (COPY and paste both build one). (#1370)
+pub(crate) fn remap_hatch_associations(
+    doc: &mut codec::CadDocument,
+    handle_map: &rustc_hash::FxHashMap<Handle, Handle>,
+) -> bool {
+    let mut touched = false;
+    for &copy in handle_map.values() {
+        let Some(EntityType::Hatch(hatch)) = doc.get_entity_mut(copy) else {
+            continue;
+        };
+        if !hatch.is_associative {
+            continue;
+        }
+        for path in &mut hatch.paths {
+            if path.boundary_handles.iter().all(|source| handle_map.contains_key(source)) {
+                for source in &mut path.boundary_handles {
+                    *source = handle_map[source];
+                }
+            } else {
+                path.boundary_handles.clear();
+                path.flags.set_external(false);
+            }
+        }
+        hatch.is_associative = hatch.paths.iter().any(|path| !path.boundary_handles.is_empty());
+        touched = true;
+    }
+    touched
+}
+
 impl Scene {
     pub(crate) fn replace_hatch_association(&mut self,handle:Handle,paths:Vec<codec::entities::BoundaryPath>) {
         let Some(EntityType::Hatch(hatch))=self.document.get_entity_mut(handle) else{return;};
@@ -727,6 +760,16 @@ impl Scene {
         hatch.is_associative=true;
         self.associative_hatch_source_cache.borrow_mut().take();
         self.refresh_fill_model(handle);
+    }
+
+    /// COPY's half of [`remap_hatch_associations`], plus the cache it feeds.
+    pub(crate) fn copy_hatch_associations(
+        &mut self,
+        handle_map: &rustc_hash::FxHashMap<Handle, Handle>,
+    ) {
+        if remap_hatch_associations(&mut self.document, handle_map) {
+            self.associative_hatch_source_cache.borrow_mut().take();
+        }
     }
 
     pub(crate) fn edit_hatch_boundary_handles(
@@ -771,6 +814,48 @@ impl Scene {
             self.refresh_fill_model(hatch_handle);
         }
         true
+    }
+
+    /// A boundary source split into pieces (TRIM, BREAK): every associative
+    /// hatch bounded by `old` is bounded by all of `pieces` instead, so the
+    /// region survives `old` being erased.
+    pub(crate) fn split_hatch_source(&mut self, old: Handle, pieces: &[Handle]) {
+        if pieces.is_empty() {
+            return;
+        }
+        let dependents = self.associative_hatch_dependents(&std::iter::once(old).collect());
+        if dependents.is_empty() {
+            return;
+        }
+        for &hatch_handle in &dependents {
+            if self.is_recording_undo() {
+                let before = self.document.get_entity_arc(hatch_handle);
+                self.record_undo_before(hatch_handle, before);
+            }
+            let Some(EntityType::Hatch(hatch)) = self.document.get_entity_mut(hatch_handle) else {
+                continue;
+            };
+            for path in &mut hatch.paths {
+                if !path.boundary_handles.contains(&old) {
+                    continue;
+                }
+                path.boundary_handles.retain(|source| *source != old);
+                for &piece in pieces {
+                    if !path.boundary_handles.contains(&piece) {
+                        path.boundary_handles.push(piece);
+                    }
+                }
+            }
+        }
+        self.associative_hatch_source_cache.borrow_mut().take();
+        let changes: Vec<_> = pieces
+            .iter()
+            .map(|&piece| (piece, ChangeKind::Modified))
+            .collect();
+        let refreshed = self.refresh_associative_hatches(&changes);
+        if !refreshed.is_empty() {
+            self.bump_entities(&refreshed);
+        }
     }
 
     fn associative_hatch_dependents(

@@ -2,7 +2,6 @@
 
 #![allow(unused_imports)]
 use super::util::*;
-use crate::ui::window::block_palette::BlockPaletteMsg;
 use super::{format_size, VIEWCUBE_HIT_SIZE};
 use crate::app::helpers::{
     parse_coord, polar_constrain_near, ucs_rotate_vec, ucs_to_wcs, ucs_z_axis,
@@ -121,25 +120,9 @@ pub(super) fn on_ribbon_tool_click(&mut self, tool_id: String, event: ModuleEven
                 self.ribbon.note_panel_tool(&tool_id);
                 self.ribbon.activate_tool(&tool_id);
                 match event {
-                    ModuleEvent::Command(cmd) => {
-                        let task = self.dispatch_command(&cmd);
-                        // One-shot tools (view changes, clipboard, toggles,
-                        // audits…) leave nothing running: no interactive
-                        // command and no dialog. Their highlight would stick
-                        // forever — turn it off now. Interactive commands and
-                        // dialog owners keep theirs; the command end / modal
-                        // close clears those. (#355)
-                        let i = self.active_tab;
-                        if self.tabs[i].active_cmd.is_none()
-                            && self.active_modal.is_none()
-                            && !self.tabs[i].pan_mode
-                            && !self.tabs[i].orbit_mode
-                            && !self.tabs[i].zoom_dynamic_mode
-                        {
-                            self.ribbon.deactivate_tool();
-                        }
-                        return task;
-                    }
+                    // `dispatch_command` turns a one-shot tool's highlight off
+                    // again once nothing is left running (#355).
+                    ModuleEvent::Command(cmd) => return self.dispatch_command(&cmd),
                     ModuleEvent::OpenFileDialog => {
                         self.command_line
                             .push_info(crate::t!("Open DWG/DXF: not yet implemented.").as_ref());
@@ -200,8 +183,14 @@ pub(super) fn on_ribbon_tool_click(&mut self, tool_id: String, event: ModuleEven
 
     pub(super) fn on_unsaved_dialog_discard(&mut self) -> Task<Message> {
                 match self.pending_close.take() {
-                    Some(crate::app::PendingClose::Tab(idx)) => {
+                    Some(crate::app::PendingClose::Tab(tab_id)) => {
                         let close_win = self.close_unsaved_dialog_window();
+                        // Resolve the id now: the tab may have closed while
+                        // the dialog was open (batched close, automation),
+                        // in which case there is nothing left to discard.
+                        let Some(idx) = self.tabs.iter().position(|t| t.id == tab_id) else {
+                            return Task::batch([close_win, self.continue_tab_close_queue()]);
+                        };
                         // Discarded — drop this tab's autosave recovery copy.
                         #[cfg(not(target_arch = "wasm32"))]
                         let _ = std::fs::remove_file(self.autosave_target(idx));
@@ -249,7 +238,17 @@ pub(super) fn on_ribbon_tool_click(&mut self, tool_id: String, event: ModuleEven
                 return Task::none();
             };
             let (idx, continuation) = match pending {
-                crate::app::PendingClose::Tab(idx) => {
+                crate::app::PendingClose::Tab(tab_id) => {
+                    // The pending target is an id; resolve it against the
+                    // current tab list so a tab closed in the meantime can
+                    // neither panic the save path nor save the wrong file.
+                    let Some(idx) = self.tabs.iter().position(|t| t.id == tab_id) else {
+                        self.pending_close = None;
+                        return Task::batch([
+                            self.close_unsaved_dialog_window(),
+                            self.continue_tab_close_queue(),
+                        ]);
+                    };
                     (idx, crate::app::SaveContinuation::CloseTab)
                 }
                 crate::app::PendingClose::Quit => {
@@ -298,8 +297,14 @@ pub(super) fn on_ribbon_tool_click(&mut self, tool_id: String, event: ModuleEven
         #[cfg(target_arch = "wasm32")]
         {
             match self.pending_close.take() {
-                Some(crate::app::PendingClose::Tab(idx)) => {
-                    self.pending_close = Some(crate::app::PendingClose::Tab(idx));
+                Some(crate::app::PendingClose::Tab(tab_id)) => {
+                    let Some(idx) = self.tabs.iter().position(|t| t.id == tab_id) else {
+                        return Task::batch([
+                            self.close_unsaved_dialog_window(),
+                            self.continue_tab_close_queue(),
+                        ]);
+                    };
+                    self.pending_close = Some(crate::app::PendingClose::Tab(tab_id));
                     self.save_dialog_for_unsaved = true;
                     let close = self.close_unsaved_dialog_window();
                     let save = self.save_with_default_format(idx);
@@ -351,21 +356,41 @@ pub(super) fn on_ribbon_tool_click(&mut self, tool_id: String, event: ModuleEven
     /// one new block in the active drawing. Returns the new block's name, or an
     /// error message. Nested block definitions are imported first so nested
     /// INSERTs render (AutoCAD's "inserting a drawing imports its block defs").
-    fn import_file_as_block(&mut self, path: std::path::PathBuf) -> Result<String, String> {
+    pub(in crate::app) fn import_file_as_block(&mut self, path: std::path::PathBuf) -> Result<String, String> {
+        self.import_drawing_block(path, false)
+    }
+
+    /// [`Self::import_file_as_block`]; with `redefine` a block already named
+    /// after the file takes the file's contents instead of a new name.
+    pub(super) fn import_drawing_block(
+        &mut self,
+        path: std::path::PathBuf,
+        redefine: bool,
+    ) -> Result<String, String> {
         let doc = crate::io::load_file(&path).map_err(|e| e.to_string())?;
         let stem = path
             .file_stem()
             .map(|s| s.to_string_lossy().into_owned())
             .unwrap_or_else(|| "Block".to_string());
-        self.import_document_as_block(doc, stem)
+        self.import_document_block(doc, stem, redefine)
     }
 
     /// Define one block in the active drawing from a loaded `CadDocument`'s
     /// model-space entities (base = the file's model-space insertion base).
+    #[cfg(test)]
     fn import_document_as_block(
         &mut self,
         doc: codec::CadDocument,
         stem: String,
+    ) -> Result<String, String> {
+        self.import_document_block(doc, stem, false)
+    }
+
+    fn import_document_block(
+        &mut self,
+        doc: codec::CadDocument,
+        stem: String,
+        redefine: bool,
     ) -> Result<String, String> {
         let i = self.active_tab;
         // Model-space block record handle (Layout object first, name fallback).
@@ -419,7 +444,13 @@ pub(super) fn on_ribbon_tool_click(&mut self, tool_id: String, event: ModuleEven
             doc.header.model_space_insertion_base.y,
             doc.header.model_space_insertion_base.z,
         );
-        let name = self.block_name_from_file(&stem);
+        let redefine = redefine
+            && self.tabs[i].scene.document.block_records.get(stem.trim()).is_some();
+        let name = if redefine {
+            stem.trim().to_string()
+        } else {
+            self.block_name_from_file(&stem)
+        };
         // Capture every table record needed by the top-level entities and their
         // nested block definitions. Importing only the definitions leaves
         // source-only layers, linetypes, and text/dimension styles dangling.
@@ -491,72 +522,20 @@ pub(super) fn on_ribbon_tool_click(&mut self, tool_id: String, event: ModuleEven
                 .scene
                 .define_block_raw(&def.name, def.base_point, def.entities);
         }
-        self.tabs[i]
-            .scene
-            .define_block_from_owned_entities(entities, &name, base)?;
+        if redefine {
+            self.tabs[i].scene.redefine_block_raw(
+                &name,
+                codec::types::Vector3::new(base.x, base.y, base.z),
+                entities,
+            );
+        } else {
+            self.tabs[i]
+                .scene
+                .define_block_from_owned_entities(entities, &name, base)?;
+        }
         self.tabs[i].scene.populate_meshes_from_document();
         self.tabs[i].dirty = true;
         Ok(name)
-    }
-
-    pub(super) fn on_block_palette(&mut self, m: crate::ui::window::block_palette::BlockPaletteMsg) -> iced::Task<Message> {
-        use crate::ui::window::block_palette::{BlockEntry, BlockPaletteMsg};
-        match m {
-            BlockPaletteMsg::Search(s) => {
-                self.block_palette.search = s;
-                iced::Task::none()
-            }
-            BlockPaletteMsg::CyclePreviewSize => {
-                self.block_palette.preview_size =
-                    crate::ui::window::block_palette::cycle_preview_size(
-                        self.block_palette.preview_size,
-                    );
-                iced::Task::none()
-            }
-            BlockPaletteMsg::Refresh => {
-                self.refresh_block_palette();
-                iced::Task::none()
-            }
-            BlockPaletteMsg::PickFile => iced::Task::perform(
-                async {
-                    let handle = rfd::AsyncFileDialog::new()
-                        .set_title(crate::t!("Select Drawing to Insert as Block").as_ref())
-                        .add_filter(crate::t!("DWG/DXF Files").as_ref(), &["dwg", "dxf", "DWG", "DXF"])
-                        .pick_file()
-                        .await;
-                    match handle {
-                        Some(h) => Ok(crate::sys::handle_path(&h)),
-                        None => Err("Cancelled".to_string()),
-                    }
-                },
-                |r| Message::BlockPalette(BlockPaletteMsg::FilePicked(r)),
-            ),
-            BlockPaletteMsg::FilePicked(Ok(path)) => {
-                match self.import_file_as_block(path) {
-                    Ok(name) => {
-                        self.command_line
-                            .push_output(&crate::tf!("Inserting \"{name}\" from file."));
-                        self.refresh_block_palette();
-                        self.start_block_placement(&name);
-                    }
-                    Err(e) if e != "Cancelled" => {
-                        self.command_line.push_error(&crate::tf!("INSERT FILE: {e}"));
-                    }
-                    Err(_) => {}
-                }
-                iced::Task::none()
-            }
-            BlockPaletteMsg::FilePicked(Err(e)) => {
-                if e != "Cancelled" {
-                    self.command_line.push_error(&e);
-                }
-                iced::Task::none()
-            }
-            BlockPaletteMsg::Insert(name) => {
-                self.start_block_placement(&name);
-                iced::Task::none()
-            }
-        }
     }
 
     /// Dock chrome interaction (grab / pin / resize / hover / move) applied to
@@ -608,6 +587,17 @@ pub(super) fn on_ribbon_tool_click(&mut self, tool_id: String, event: ModuleEven
                     PanelId::NodeGraph => {
                         self.show_node_graph = false;
                     }
+                    PanelId::PointCloudManager => {
+                        self.pc_manager.show = false;
+                    }
+                    PanelId::Count => {
+                        self.count_palette.show = false;
+                        self.ribbon.set_count_palette(false);
+                    }
+                    PanelId::SheetSetManager => {
+                        self.sheet_set.show = false;
+                        self.ribbon.set_sheet_set(false);
+                    }
                     PanelId::Properties => {
                         self.show_properties = false;
                         self.ribbon.set_properties(false);
@@ -658,7 +648,7 @@ pub(super) fn on_ribbon_tool_click(&mut self, tool_id: String, event: ModuleEven
                 // produced a one-time jump plus a stuck drag. Column moves
                 // arrive via Message::XrefColMove only.
                 if self.dock_dragging.is_some() {
-                    let avail = self.tabs[self.active_tab].scene.selection.borrow().vp_size.1;
+                    let avail = self.tabs[self.active_tab].scene.selection.borrow().view.vp_size.1;
                     let side = if point.x < self.win_size.0 * 0.5 {
                         DockSide::Left
                     } else {
@@ -721,6 +711,9 @@ pub(super) fn on_ribbon_tool_click(&mut self, tool_id: String, event: ModuleEven
             PanelId::ExternalReferences => self.show_external_references,
             PanelId::Browser => self.show_browser,
             PanelId::NodeGraph => self.show_node_graph,
+            PanelId::PointCloudManager => self.pc_manager.show,
+            PanelId::Count => self.count_palette.show,
+            PanelId::SheetSetManager => self.sheet_set.show,
         }
     }
 
@@ -735,56 +728,6 @@ pub(super) fn on_ribbon_tool_click(&mut self, tool_id: String, event: ModuleEven
         ids.iter()
             .filter(|id| self.dock_panel_visible(**id))
             .count()
-    }
-
-    /// Start placing `name` through the INSERT command, skipping the name prompt.
-    fn start_block_placement(&mut self, name: &str) {
-        let i = self.active_tab;
-        let wires = self
-            .block_palette
-            .blocks
-            .iter()
-            .find(|b| b.name == name)
-            .map(|b| b.wires.clone())
-            .unwrap_or_else(|| self.tabs[i].scene.block_preview_wires(name));
-        use crate::modules::insert::insert_block::InsertBlockCommand;
-        let cmd = InsertBlockCommand::new_for_block(name.to_string(), wires, glam::Vec3::ZERO);
-        use crate::command::CadCommand;
-        self.command_line.push_info(&cmd.prompt());
-        self.tabs[i].active_cmd = Some(Box::new(cmd));
-        self.block_palette.placing = Some(name.to_string());
-    }
-
-    /// Rebuild the panel's block list + cached wires from the active drawing.
-    pub(crate) fn refresh_block_palette(&mut self) {
-        let i = self.active_tab;
-        let names = self.tabs[i].scene.custom_block_names();
-        self.block_palette.cached_names = names.clone();
-        self.block_palette.source_tab_id = Some(self.tabs[i].id);
-        self.block_palette.source_block_epoch = self.tabs[i].scene.block_epoch;
-        self.block_palette.blocks = names
-            .into_iter()
-            .map(|name| {
-                let wires = self.tabs[i].scene.block_preview_wires(&name);
-                crate::ui::window::block_palette::BlockEntry { name, wires }
-            })
-            .collect();
-    }
-
-    /// Cheap per-update check: rebuild when the active drawing's definitions
-    /// changed, even when their names happen to stay the same.
-    pub(crate) fn refresh_block_palette_if_stale(&mut self) {
-        if !self.show_block_palette {
-            return;
-        }
-        let i = self.active_tab;
-        // `block_epoch` advances for every block-definition change, so it
-        // avoids re-scanning every block name on unrelated application updates.
-        if self.block_palette.source_tab_id != Some(self.tabs[i].id)
-            || self.block_palette.source_block_epoch != self.tabs[i].scene.block_epoch
-        {
-            self.refresh_block_palette();
-        }
     }
 
     /// Rebuild the Reference Manager's entry list from the active drawing.
@@ -1003,6 +946,8 @@ pub(super) fn on_ribbon_tool_click(&mut self, tool_id: String, event: ModuleEven
                     }
                 }
                 self.tabs[i].scene.reseed_underlays();
+                // Point clouds redraw as unloaded (box and saved path).
+                self.tabs[i].scene.bump_geometry();
             }
             XrefPaletteOp::Reload => {
                 let base_dir: std::path::PathBuf = host
@@ -1044,6 +989,18 @@ pub(super) fn on_ribbon_tool_click(&mut self, tool_id: String, event: ModuleEven
                             self.tabs[i].xref_unloaded.remove(key);
                         }
                         self.tabs[i].scene.reseed_underlays();
+                    } else if *kind == crate::io::xref_model::RefKind::PointCloud {
+                        // A point cloud reloads by setting its definition loaded.
+                        for (key, row_name, row_kind, _) in &picked {
+                            if row_kind == kind && row_name == name {
+                                crate::io::xref::set_point_cloud_loaded(
+                                    &mut self.tabs[i].scene.document,
+                                    codec::types::Handle::new(*key),
+                                    true,
+                                );
+                            }
+                        }
+                        self.tabs[i].scene.bump_geometry();
                     } else if *kind != crate::io::xref_model::RefKind::DwgXref {
                         self.command_line.push_error(crate::tf!(
                             "{}: reload applies to drawing references only.",
@@ -1594,7 +1551,7 @@ mod tests {
         assert!(app.block_palette.blocks.iter().any(|b| b.name == "Fixture"));
         app.start_block_placement(&name);
         let cmd = app.tabs[app.active_tab].active_cmd.as_ref().expect("INSERT running");
-        assert_eq!(cmd.name(), "INSERT");
+        assert_eq!(cmd.name(), "-INSERT");
         assert_eq!(app.block_palette.placing.as_deref(), Some("Fixture"));
     }
 
@@ -1723,7 +1680,7 @@ mod tests {
         app.show_block_palette = false;
         app.show_properties = true;
         let i = app.active_tab;
-        app.tabs[i].scene.selection.borrow_mut().vp_size = (1600.0, 900.0);
+        app.tabs[i].scene.selection.borrow_mut().view.vp_size = (1600.0, 900.0);
         app.win_size = (1600.0, 900.0).into();
         let id = crate::ui::dock::PanelId::Properties;
         let _ = app.on_dock(crate::ui::dock::DockMsg::DockGrab(id));
@@ -1750,7 +1707,7 @@ mod tests {
         app.show_block_palette = true;
         app.show_properties = true;
         let i = app.active_tab;
-        app.tabs[i].scene.selection.borrow_mut().vp_size = (1600.0, 900.0);
+        app.tabs[i].scene.selection.borrow_mut().view.vp_size = (1600.0, 900.0);
         app.win_size = (1600.0, 900.0).into();
         let id = crate::ui::dock::PanelId::Properties;
         let _ = app.on_dock(crate::ui::dock::DockMsg::DockGrab(id));

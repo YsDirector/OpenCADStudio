@@ -1,5 +1,6 @@
 // Kernel B-rep construction and display tessellation.
 
+use glam::DVec3;
 use kernel::brep::{self, Body, Curve3, EdgeKey, FaceKey, Surface};
 
 use crate::scene::model::mesh_model::{MeshLodSet, MeshModel};
@@ -371,6 +372,124 @@ pub fn planar_face_normal(body: &Body, face: FaceKey) -> Option<[f64; 3]> {
     Some(if face.forward { normal } else { -normal }.to_array())
 }
 
+/// Construct a UCS aligned with a solid's planar face:
+/// - Origin snaps to the face vertex closest to the pick point.
+/// - X-axis aligns along the boundary edge emanating from that vertex closest to the pick point.
+/// - Z-axis is the face's outward normal.
+/// - Y-axis is Z × X (in-plane, right-handed).
+pub fn planar_face_ucs(
+    body: &Body,
+    face: FaceKey,
+    pick: [f64; 3],
+) -> Option<codec::tables::Ucs> {
+    let normal = planar_face_normal(body, face)?;
+    let z = DVec3::from_array(normal).normalize_or_zero();
+    if z.length_squared() < 1e-12 {
+        return None;
+    }
+    let pick_vec = DVec3::from_array(pick);
+
+    // 1. Origin: snap to nearest face vertex to the pick point.
+    let mut best_origin: Option<(kernel::brep::VertexKey, DVec3, f64)> = None;
+    for coedge_key in body.face_coedges(face) {
+        let Some((va, vb)) = body.coedge_vertices(coedge_key) else {
+            continue;
+        };
+        for vk in [va, vb] {
+            let Some(v) = body.vertices.get(vk) else {
+                continue;
+            };
+            let pt = DVec3::from_array(v.point);
+            if !pt.is_finite() {
+                continue;
+            }
+            let dist_sq = pt.distance_squared(pick_vec);
+            match best_origin {
+                None => best_origin = Some((vk, pt, dist_sq)),
+                Some((_, _, best_sq)) if dist_sq < best_sq => {
+                    best_origin = Some((vk, pt, dist_sq));
+                }
+                _ => {}
+            }
+        }
+    }
+
+    let (origin, origin_key) = match best_origin {
+        Some((vk, pt, _)) => (pt, Some(vk)),
+        None => (pick_vec, None),
+    };
+
+    // 2. X-axis: align along the boundary edge emanating from origin closest to pick.
+    let mut best_edge_dir: Option<DVec3> = None;
+    let mut best_edge_dist_sq = f64::INFINITY;
+
+    if let Some(origin_vk) = origin_key {
+        for coedge_key in body.face_coedges(face) {
+            let Some((va, vb)) = body.coedge_vertices(coedge_key) else {
+                continue;
+            };
+            if va != origin_vk && vb != origin_vk {
+                continue;
+            }
+            let Some(coedge) = body.coedges.get(coedge_key) else {
+                continue;
+            };
+            let Some(edge) = body.edges.get(coedge.edge) else {
+                continue;
+            };
+
+            let other_vk = if va == origin_vk { vb } else { va };
+            if other_vk != origin_vk {
+                if let Some(other_v) = body.vertices.get(other_vk) {
+                    let other_pt = DVec3::from_array(other_v.point);
+                    let seg = other_pt - origin;
+                    let seg_len_sq = seg.length_squared();
+                    if seg_len_sq > 1e-12 {
+                        let t = ((pick_vec - origin).dot(seg) / seg_len_sq).clamp(0.0, 1.0);
+                        let closest = origin + seg * t;
+                        let dist_sq = pick_vec.distance_squared(closest);
+                        if dist_sq < best_edge_dist_sq {
+                            best_edge_dist_sq = dist_sq;
+                            best_edge_dir = Some(seg);
+                        }
+                    }
+                }
+            } else {
+                // Closed edge sharing start and end vertex (e.g. circle seam).
+                if let Some(curve) = body.curves.get(edge.curve) {
+                    let tangent = DVec3::from_array(curve.tangent_at(edge.start_parameter));
+                    let dir = if coedge.forward { tangent } else { -tangent };
+                    let dist_sq = pick_vec.distance_squared(origin);
+                    if dist_sq < best_edge_dist_sq {
+                        best_edge_dist_sq = dist_sq;
+                        best_edge_dir = Some(dir);
+                    }
+                }
+            }
+        }
+    }
+
+    // Project candidate X onto face plane and orthogonalize against normal Z.
+    let x = best_edge_dir
+        .and_then(|dir| {
+            let in_plane = dir - z * dir.dot(z);
+            let unit_x = in_plane.normalize_or_zero();
+            (unit_x.length_squared() > 1e-6).then_some(unit_x)
+        })
+        .unwrap_or_else(|| {
+            let ((xx, xy, xz), _) = crate::scene::view::transform::ocs_axes((z.x, z.y, z.z));
+            DVec3::new(xx, xy, xz)
+        });
+
+    let y = z.cross(x).normalize_or_zero();
+
+    let mut ucs = codec::tables::Ucs::new("*ACTIVE*");
+    ucs.origin = codec::types::Vector3::new(origin.x, origin.y, origin.z);
+    ucs.x_axis = codec::types::Vector3::new(x.x, x.y, x.z);
+    ucs.y_axis = codec::types::Vector3::new(y.x, y.y, y.z);
+    Some(ucs)
+}
+
 /// Centre of every B-rep face: the average of its boundary-loop vertices.
 /// Exact for planar faces; for curved faces the loop average floats slightly
 /// inside the surface — a documented approximation the snap path must not pay
@@ -638,6 +757,41 @@ mod tests {
         assert_eq!(display([1, 0], true) - boundaries, 12);
         assert_eq!(display([0, 2], true) - boundaries, 24);
         assert_eq!(display([2, 2], false), boundaries);
+    }
+
+    /// A file-sourced header `$ISOLINES` bypasses `SETVAR` entirely, so the
+    /// consumption side must clamp too: `prepare_solid_model_display` hands
+    /// the header count to the kernel for every curved face, and 32767
+    /// isolines on a cylinder is a ~100k-vertex preview rebuilt per cursor
+    /// event.
+    #[test]
+    fn header_isolines_are_clamped_before_display_tessellation() {
+        let measure = |value: i16| {
+            let mut scene = crate::scene::Scene::new();
+            scene.document.header.isolines = value;
+            let body = cylinder_solid([0.0; 3], 5.0, 12.0).unwrap();
+            scene
+                .prepare_solid_model_display(codec::Handle::new(0xDEAD), &body)
+                .expect("cylinder display")
+                .0
+                .edge_verts
+                .len()
+        };
+
+        // A hostile file-sourced header must render exactly like the
+        // largest value the Options slider can request — and a negative
+        // one exactly like zero.
+        let hostile = measure(i16::MAX);
+        assert_eq!(
+            hostile,
+            measure(crate::entities::solid3d::MAX_HEADER_ISOLINES),
+            "header.isolines must be clamped before tessellation"
+        );
+        assert_eq!(measure(-5), measure(0));
+        assert!(
+            hostile < 20_000,
+            "even the ceiling must stay a bounded preview: {hostile} vertices"
+        );
     }
 
     #[test]

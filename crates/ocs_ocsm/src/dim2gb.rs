@@ -2476,7 +2476,7 @@ mod tests {
         let _g = zh_guard();
         let mut doc = Doc::new();
         let mh = doc
-            .add_entity(Entity::MultiLeader(acadrust::entities::MultiLeader::new()))
+            .add_entity(Entity::MultiLeader(Box::new(acadrust::entities::MultiLeader::new())))
             .unwrap();
         let plan = plan(&doc, &[mh]);
         assert_eq!(plan.converted, 0);

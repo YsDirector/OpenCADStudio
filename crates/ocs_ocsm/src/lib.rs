@@ -7228,8 +7228,8 @@ mod tests {
             &mut self,
             _plugin_id: &'static str,
             init: &mut dyn FnMut() -> Box<dyn std::any::Any + Send + Sync>,
-        ) -> &mut (dyn std::any::Any + Send + Sync) {
-            Box::leak(init())
+        ) -> Option<&mut (dyn std::any::Any + Send + Sync)> {
+            Some(Box::leak(init()))
         }
         fn document_path(&self, _tab_id: u64) -> Option<std::path::PathBuf> {
             self.path.clone()

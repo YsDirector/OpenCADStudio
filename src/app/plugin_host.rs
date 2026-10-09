@@ -178,14 +178,14 @@ impl<'a> HostSession<'a> {
         }
         if let EntityType::Helix(new) = entity {
             let old = match old {
-                Some(EntityType::Helix(old)) => Some(old),
+                Some(EntityType::Helix(old)) => Some(&**old),
                 _ => None,
             };
             crate::entities::helix::normalize_scripted_helix(old, new)?;
         }
         if let EntityType::Table(new) = entity {
             let old = match old {
-                Some(EntityType::Table(old)) => Some(old),
+                Some(EntityType::Table(old)) => Some(&**old),
                 _ => None,
             };
             crate::entities::table::normalize_scripted_table(old, new);
@@ -330,6 +330,7 @@ impl<'a> HostSession<'a> {
             return handle;
         }
         let handle = self.app.tabs[self.tab].scene.add_entity(entity);
+        self.app.sync_registered_layers(self.tab);
         self.publish_document_view();
         handle
     }
@@ -342,6 +343,7 @@ impl<'a> HostSession<'a> {
             let _ = self.normalize_scripted_entity(None, entity);
         }
         let handles = self.app.tabs[self.tab].scene.add_entities(entities);
+        self.app.sync_registered_layers(self.tab);
         self.publish_document_view();
         handles
     }
@@ -864,6 +866,7 @@ impl<'a> HostSession<'a> {
             EntityType::AttributeEntity(attribute) => self.replace_nested_attribute(attribute),
             entity => self.app.tabs[self.tab].scene.update_entity(entity),
         };
+        self.app.sync_registered_layers(self.tab);
         if ok {
             self.publish_document_view();
         }
@@ -922,6 +925,7 @@ impl<'a> HostSession<'a> {
             };
             assert!(updated);
         }
+        self.app.sync_registered_layers(self.tab);
         self.set_dirty();
         self.publish_document_view();
         Ok(())
@@ -1241,7 +1245,7 @@ impl<'a> HostSession<'a> {
                 surface.wires = model::edge_wires(&body);
                 surface.acis_data = codec::entities::AcisData::from_sat(&sat.to_sat_string());
                 surface.common.layer = layer;
-                self.commit_profile_result(EntityType::Surface(surface), source, delete_source, "Create surface")
+                self.commit_profile_result(EntityType::Surface(Box::new(surface)), source, delete_source, "Create surface")
             }
             SolidOperation::Extrude { source, direction, layer, delete_source } => {
                 if direction.iter().any(|v| !v.is_finite()) {
@@ -1271,7 +1275,7 @@ impl<'a> HostSession<'a> {
                     surface.wires = model::edge_wires(&body);
                     surface.acis_data = codec::entities::AcisData::from_sat(&sat.to_sat_string());
                     surface.common.layer = layer;
-                    EntityType::Surface(surface)
+                    EntityType::Surface(Box::new(surface))
                 };
                 self.commit_profile_result(result, source, delete_source, "Extrude profile")
             }
@@ -3106,12 +3110,14 @@ impl HostApi for HostSession<'_> {
         &mut self,
         plugin_id: &'static str,
         init: &mut dyn FnMut() -> Box<dyn Any + Send + Sync>,
-    ) -> &mut (dyn Any + Send + Sync) {
-        self.app.tabs[self.tab]
-            .plugin_state
-            .entry(plugin_id)
-            .or_insert_with(|| init())
-            .as_mut()
+    ) -> Option<&mut (dyn Any + Send + Sync)> {
+        Some(
+            self.app.tabs[self.tab]
+                .plugin_state
+                .entry(plugin_id)
+                .or_insert_with(|| init())
+                .as_mut(),
+        )
     }
     fn document_reader(&self) -> Box<dyn ocs_plugin_api::host::DocumentReader + '_> {
         Box::new(ocs_plugin_api::host::CadDocumentReader(self.document()))
@@ -9135,7 +9141,7 @@ mod tests {
         let unliftable = host.add_entity(EntityType::Solid3D(codec::entities::Solid3D::new()));
         let mut plane = codec::entities::Surface::new(codec::entities::SurfaceKind::Plane);
         plane.acis_data = codec::entities::AcisData::new();
-        let surface = host.add_entity(EntityType::Surface(plane));
+        let surface = host.add_entity(EntityType::Surface(Box::new(plane)));
         let far = { dispatch(&mut host, "PY_EVAL ocs.active_document.solids.box(center=(500, 500, 500), size=(1, 1, 1)).handle");
             *solids_in(host.document()).last().unwrap() };
         let counts = (host.document().entities().count(), host.app.tabs[0].history.undo_stack.len());
@@ -11097,7 +11103,7 @@ step('undo_move', lambda: M.move([u], (0, 0, 0), (7, 0, 0)))
         // Absent before first use.
         assert!(host::plugin_state::<u32>(&*host, "opencad.demo").is_none());
         // Insert via ensure, then mutate.
-        *host::ensure_plugin_state(host, "opencad.demo", || 7u32) += 1;
+        *host::ensure_plugin_state(host, "opencad.demo", || 7u32).unwrap() += 1;
         assert_eq!(
             *host::plugin_state::<u32>(&*host, "opencad.demo").unwrap(),
             8
@@ -11107,6 +11113,28 @@ step('undo_move', lambda: M.move([u], (0, 0, 0), (7, 0, 0)))
             *host::plugin_state::<u32>(&*host, "opencad.demo").unwrap(),
             100
         );
+    }
+
+    #[test]
+    fn ensure_plugin_state_type_mismatch_does_not_panic() {
+        use ocs_plugin_api::host::{self, HostApi};
+        let mut app = OpenCADStudio::new_for_test();
+        let mut session = HostSession::new(&mut app, 0);
+        let host: &mut dyn HostApi = &mut session;
+        let _ = host::ensure_plugin_state(host, "opencad.demo", || 7u32);
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ =
+                host::ensure_plugin_state::<String>(&mut *host, "opencad.demo", || "x".to_string());
+        }));
+        assert!(
+            outcome.is_ok(),
+            "type mismatch in ensure_plugin_state must degrade, not panic: {:?}",
+            outcome.err()
+        );
+        assert!(
+            host::ensure_plugin_state::<String>(host, "opencad.demo", || "x".to_string()).is_none()
+        );
+        assert_eq!(*host::ensure_plugin_state::<u32>(host, "opencad.demo", || 0).unwrap(), 7);
     }
 
     #[test]
@@ -11667,6 +11695,44 @@ step('undo_move', lambda: M.move([u], (0, 0, 0), (7, 0, 0)))
             ..Default::default()
         };
         assert!(!host.modify_layer(non_existent));
+    }
+
+    #[test]
+    fn test_entity_creation_with_novel_layer_refreshes_gui() {
+        let mut app = OpenCADStudio::new_for_test();
+        app.tabs[0].is_start = false;
+
+        // Verify COGO_LINES does not exist initially
+        assert!(!app.tabs[0].scene.document.layers.contains("COGO_LINES"));
+        assert!(!app.ribbon.layer_names.contains(&"COGO_LINES".to_string()));
+
+        // 1. Add entity via HostSession (simulating plugin add_entity / add_line)
+        {
+            let mut host = HostSession::new(&mut app, 0);
+            let mut line = codec::entities::Line::from_coords(0.0, 0.0, 0.0, 10.0, 10.0, 0.0);
+            line.common.layer = "COGO_LINES".to_string();
+            let handle = host.add_entity(codec::EntityType::Line(line));
+            assert_ne!(handle, codec::Handle::NULL);
+        }
+
+        // Verify layer is created in document AND refreshed in ribbon + layer panel
+        assert!(app.tabs[0].scene.document.layers.contains("COGO_LINES"));
+        assert!(app.ribbon.layer_names.contains(&"COGO_LINES".to_string()),
+            "Ribbon layers should contain COGO_LINES after add_entity");
+        assert!(app.tabs[0].layers.layers.iter().any(|l| l.name == "COGO_LINES"),
+            "Layer panel should contain COGO_LINES after add_entity");
+
+        // 2. Commit entity via command driver (simulating interactive tool / palette commit)
+        let mut line2 = codec::entities::Line::from_coords(10.0, 10.0, 0.0, 20.0, 20.0, 0.0);
+        line2.common.layer = "SURVEY_TRAVERSE".to_string();
+        let _ = app.commit_entity_handle_preserve_layer(codec::EntityType::Line(line2));
+
+        // Verify SURVEY_TRAVERSE layer is created and refreshed in ribbon + layer panel
+        assert!(app.tabs[0].scene.document.layers.contains("SURVEY_TRAVERSE"));
+        assert!(app.ribbon.layer_names.contains(&"SURVEY_TRAVERSE".to_string()),
+            "Ribbon layers should contain SURVEY_TRAVERSE after commit_entity");
+        assert!(app.tabs[0].layers.layers.iter().any(|l| l.name == "SURVEY_TRAVERSE"),
+            "Layer panel should contain SURVEY_TRAVERSE after commit_entity");
     }
 
     #[test]

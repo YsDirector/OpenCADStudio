@@ -114,6 +114,7 @@ pub fn explode_entity(entity: &EntityType, document: &CadDocument) -> Vec<Entity
         }
         EntityType::MLine(ml) => explode_mline(ml),
         EntityType::Dimension(dim) => explode_dimension(dim, document),
+        EntityType::MText(t) => crate::entities::mtext::explode_mtext(t, document),
         _ => vec![],
     }
 }
@@ -465,6 +466,7 @@ fn dim_geom_entities(
     for (points, common) in [
         (geometry.ext_lines.as_slice(), ext_common),
         (geometry.dim_lines.as_slice(), dim_common),
+        (geometry.arrow_lines.as_slice(), dim_common),
     ] {
         for run in points.split(|point| point[0].is_nan()) {
             for pair in run.windows(2) {
@@ -1967,5 +1969,78 @@ mod tests {
         assert!((line.thickness + 4.0).abs() < 1e-12);
         assert!((line.start.x - 2.0).abs() < 1e-12);
         assert!((line.end.x - 2.0).abs() < 1e-12);
+    }
+
+    // RED (TDD): a real DIMLINEAR must survive save -> reload with its baked
+    // *D geometry intact and a clean handle graph (no duplicates, no dangling
+    // owners). Headless codec round-trip, no GUI needed.
+    #[test]
+    fn dimlinear_survives_save_reload_with_baked_geometry() {
+        let mut failures = Vec::new();
+        for ext in ["dxf", "dwg"] {
+            let mut doc = CadDocument::new();
+            let mut d =
+                DimensionLinear::new(Vector3::new(0.0, 0.0, 0.0), Vector3::new(10.0, 0.0, 0.0));
+            d.definition_point = Vector3::new(0.0, 5.0, 0.0);
+            d.base.text_middle_point = Vector3::new(5.0, 5.0, 0.0);
+            doc.add_entity(EntityType::Dimension(Dimension::Linear(d)))
+                .unwrap();
+
+            let path = std::env::temp_dir().join(format!(
+                "ocs_dim_rt_{}.{ext}",
+                std::process::id()
+            ));
+            crate::io::save_as_version(&doc, &path, codec::DxfVersion::AC1032)
+                .expect("save");
+            let loaded = crate::io::load_file(&path).expect("load");
+            let _ = std::fs::remove_file(&path);
+
+            let mut seen = std::collections::HashSet::new();
+            for e in loaded.entities() {
+                if !seen.insert(e.common().handle) {
+                    failures.push(format!(
+                        "{ext}: duplicate handle {:?}",
+                        e.common().handle
+                    ));
+                }
+            }
+            let dims: Vec<_> = loaded
+                .entities()
+                .filter_map(|e| match e {
+                    EntityType::Dimension(d) => Some(d.clone()),
+                    _ => None,
+                })
+                .collect();
+            if dims.len() != 1 {
+                failures.push(format!("{ext}: dimension entity lost"));
+                continue;
+            }
+            let block_name = dims[0].base().block_name.clone();
+            if block_name.trim().is_empty() {
+                failures.push(format!("{ext}: dimension came back blockless"));
+                continue;
+            }
+            let Some(rec) = loaded.block_records.get(&block_name) else {
+                failures.push(format!("{ext}: *D block {block_name} missing after reload"));
+                continue;
+            };
+            let owned: Vec<Handle> = {
+                let mut h = rec.entity_handles.clone();
+                h.push(rec.block_entity_handle);
+                h.push(rec.block_end_handle);
+                h
+            };
+            if rec.entity_handles.is_empty() {
+                failures.push(format!("{ext}: baked block has no sub-entities"));
+            }
+            for h in &owned {
+                if h.is_null() || loaded.get_entity(*h).is_none() {
+                    failures.push(format!(
+                        "{ext}: dangling handle {h:?} in baked block {block_name}"
+                    ));
+                }
+            }
+        }
+        assert!(failures.is_empty(), "round-trip failures:\n{}", failures.join("\n"));
     }
 }

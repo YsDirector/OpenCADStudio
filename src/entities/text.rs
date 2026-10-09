@@ -281,42 +281,20 @@ pub fn text_run_placement_at_scale(
         // box one way while the strokes run the other (the bounds advance is
         // always positive — it uses |width_factor|). Left keeps its 0 reference.
         let sign = width_factor.signum();
-        let is_rtl = {
-            let mut strong_rtl = false;
-            for ch in value_for_bounds.chars() {
-                match unicode_bidi::bidi_class(ch) {
-                    unicode_bidi::BidiClass::R | unicode_bidi::BidiClass::AL => {
-                        strong_rtl = true;
-                        break;
-                    }
-                    unicode_bidi::BidiClass::L => {
-                        break;
-                    }
-                    _ => {}
-                }
-            }
-            strong_rtl
-        };
+        // Left / right alignment do not depend on the text's script: the
+        // reference lays a line that starts with Hebrew or Arabic out from its
+        // left end like any other.
         let ax = match t.horizontal_alignment {
-            HA::Left => {
-                if is_rtl {
-                    b.advance * sign
-                } else {
-                    0.0
-                }
-            }
+            HA::Left => 0.0,
             HA::Center | HA::Middle => b.advance * 0.5 * sign,
-            HA::Right => {
-                if is_rtl {
-                    0.0
-                } else {
-                    b.advance * sign
-                }
-            }
+            HA::Right => b.advance * sign,
             HA::Aligned | HA::Fit => 0.0,
         };
         // Vertical anchor uses the inked extent (cap / baseline geometry).
+        // `Middle` (72 = 4) centres on half the text height whatever its
+        // vertical code says; its baseline sits h/2 below the point. (#767)
         let ay = match t.vertical_alignment {
+            _ if matches!(t.horizontal_alignment, HA::Middle) => height * 0.5,
             VA::Baseline => 0.0,
             VA::Bottom => b.ink_min[1],
             VA::Middle => (b.ink_min[1] + b.ink_max[1]) * 0.5,
@@ -727,9 +705,13 @@ mod tests {
         let doc = codec::CadDocument::default();
         let placement = text_run_placement_at_scale(&t, &doc, 1.0);
 
-        // For Arabic text with default HA::Left, origin should be shifted left
-        // so the right edge of the text sits at the insertion point (X = 10.0).
-        assert!(placement.origin[0] < 10.0, "Arabic text origin must be to the left of insertion point: origin_x={}", placement.origin[0]);
+        // Left alignment does not depend on the script: Arabic text starts
+        // at the insertion point like any other.
+        assert!(
+            (placement.origin[0] - 10.0).abs() < 1e-9,
+            "Left-aligned Arabic text starts at the insertion point: origin_x={}",
+            placement.origin[0]
+        );
     }
 }
 

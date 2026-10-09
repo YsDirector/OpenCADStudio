@@ -1958,7 +1958,7 @@ pub fn validate_entity_mutation(
             if old.is_mpolygon != new.is_mpolygon
                 || old.mpolygon_hatch_color != new.mpolygon_hatch_color
                 || old.mpolygon_x_direction != new.mpolygon_x_direction
-                || old.mpolygon_boundary_handle_count != new.mpolygon_boundary_handle_count
+                || old.mpolygon_invalid_loops != new.mpolygon_invalid_loops
             {
                 return Err("Hatch MPOLYGON fields are unmapped and read-only".into());
             }
@@ -3412,9 +3412,13 @@ mod tests {
                 .contains("no whitespace")
         );
     }
+    #[cfg(feature = "host")]
     #[test]
     fn hatch_geometry_and_boundaries_are_validated() {
-        use codec::entities::hatch::{BoundaryEdge, BoundaryPath, LineEdge};
+        use crate::host::codec::{
+            self,
+            entities::hatch::{BoundaryEdge, BoundaryPath, LineEdge},
+        };
         let mut hatch = codec::entities::Hatch::new();
         let mut path = BoundaryPath::new();
         for (start, end) in [

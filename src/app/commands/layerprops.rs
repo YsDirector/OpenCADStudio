@@ -247,6 +247,7 @@ impl OpenCADStudio {
                                 .document
                                 .ucss
                                 .add_or_replace(ucs.clone());
+                            self.tabs[i].scene.bump_ucs_epoch();
                             self.tabs[i].active_ucs = Some(ucs);
                             active_changed = true;
                             self.tabs[i].dirty = true;
@@ -261,6 +262,7 @@ impl OpenCADStudio {
                         } else if let Some(removed) =
                             self.tabs[i].scene.document.ucss.remove(&name)
                         {
+                            self.tabs[i].scene.bump_ucs_epoch();
                             let removed_handle = removed.handle;
                             for entity in self.tabs[i].scene.document.entities_mut() {
                                 if let codec::EntityType::Viewport(viewport) = entity {
@@ -343,6 +345,7 @@ impl OpenCADStudio {
                                 self.tabs[i].active_cmd = Some(Box::new(picker));
                             }
                             Some((handle, pick)) => {
+                                self.tabs[i].scene.restore_solid_models(&[handle]);
                                 let built = self.tabs[i]
                                     .scene
                                     .solid_models
@@ -351,13 +354,7 @@ impl OpenCADStudio {
                                         use crate::scene::model::solid_model;
                                         let face =
                                             solid_model::nearest_planar_face(body, pick.to_array())?;
-                                        solid_model::planar_face_normal(body, face)
-                                    })
-                                    .and_then(|normal| {
-                                        super::super::helpers::ucs_from_normal(
-                                            pick,
-                                            glam::DVec3::from_array(normal),
-                                        )
+                                        solid_model::planar_face_ucs(body, face, pick.to_array())
                                     });
                                 match built {
                                     Some(ucs) => {
@@ -808,6 +805,29 @@ impl OpenCADStudio {
                                 .push_output(crate::tf!("View '{}' saved.", name).as_ref());
                         }
                     }
+                    "WINDOW" | "W" => {
+                        // A plan view of the window between two corners.
+                        let args: Vec<&str> = parts.get(2).map(|s| s.split_whitespace().collect()).unwrap_or_default();
+                        let corner = |s: &str| {
+                            let mut c = s.split(',');
+                            Some((c.next()?.trim().parse::<f64>().ok()?, c.next()?.trim().parse::<f64>().ok()?))
+                        };
+                        match (args.first(), args.get(1).and_then(|s| corner(s)), args.get(2).and_then(|s| corner(s))) {
+                            (Some(name), Some(a), Some(b)) if a.0 != b.0 && a.1 != b.1 => {
+                                use codec::types::Vector3;
+                                let mut view = self.tabs[i].scene.current_as_named_view(name);
+                                view.target = Vector3 { x: (a.0 + b.0) / 2.0, y: (a.1 + b.1) / 2.0, z: 0.0 };
+                                view.direction = Vector3 { x: 0.0, y: 0.0, z: 1.0 };
+                                view.width = (b.0 - a.0).abs();
+                                view.height = (b.1 - a.1).abs();
+                                self.tabs[i].scene.document.views.add_or_replace(view);
+                                self.command_line.push_output(crate::tf!("View '{}' saved.", name).as_ref());
+                            }
+                            _ => self
+                                .command_line
+                                .push_error(crate::t!("Usage: VIEW WINDOW <name> <x1,y1> <x2,y2>").as_ref()),
+                        }
+                    }
                     "DELETE" | "DEL" | "D" => {
                         let name = parts.get(2).map(|s| s.trim()).unwrap_or("").to_string();
                         if name.is_empty() {
@@ -857,8 +877,25 @@ impl OpenCADStudio {
                             crate::scene::CubeRegion::Face(face),
                         )));
                     }
-                    "ISO" | "ISOMETRIC" | "SWISO" => {
-                        return Some(Task::done(Message::ViewCubeHome));
+                    // Isometric presets snap to the matching ViewCube corner;
+                    // ISO alone is the south-west one.
+                    "ISO" | "ISOMETRIC" | "SWISO" | "SEISO" | "NEISO" | "NWISO" => {
+                        let (x, y) = match sub.as_str() {
+                            "SEISO" => (1.0, -1.0),
+                            "NEISO" => (1.0, 1.0),
+                            "NWISO" => (-1.0, 1.0),
+                            _ => (-1.0, -1.0),
+                        };
+                        let want = glam::Vec3::new(x, y, 1.0).normalize();
+                        let corner = (18..26)
+                            .map(crate::scene::CubeRegion::Corner)
+                            .max_by(|a, b| {
+                                a.snap_direction()
+                                    .dot(want)
+                                    .total_cmp(&b.snap_direction().dot(want))
+                            })
+                            .expect("the cube has corners");
+                        return Some(Task::done(Message::ViewCubeSnap(corner)));
                     }
                     // VIEW <name> shortcut for restore
                     _ => {

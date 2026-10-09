@@ -94,7 +94,9 @@ mod text_edit;
 mod constraint;
 mod dim_edit;
 
-pub(crate) use clipboard::{copy_to_clipboard_kernel, remap_ext_subtree_reference};
+pub(crate) use clipboard::{
+    copy_to_clipboard_kernel, paste_entities_kernel, remap_ext_subtree_reference, PasteSpace,
+};
 
 impl OpenCADStudio {
     /// Applies one command result, then — when that result ended the active
@@ -379,8 +381,7 @@ impl OpenCADStudio {
                 .document
                 .get_entity(handle)
                 .map(|entity| entity.common().owner_handle);
-            self.tabs[tab].scene.erase_entities(&[handle]);
-            entities
+            let pieces: Vec<Handle> = entities
                 .into_iter()
                 .map(|mut entity| {
                     entity.common_mut().handle = Handle::NULL;
@@ -389,7 +390,11 @@ impl OpenCADStudio {
                     }
                     self.tabs[tab].scene.add_entity(entity)
                 })
-                .collect()
+                .collect();
+            // Hand the hatch associations over before the original goes.
+            self.tabs[tab].scene.split_hatch_source(handle, &pieces);
+            self.tabs[tab].scene.erase_entities(&[handle]);
+            pieces
         };
         for &updated in &handles {
             if matches!(
@@ -505,7 +510,7 @@ impl OpenCADStudio {
                 self.handle_copy_to_clipboard(handles, base);
             }
             CmdResult::CommitAndExit(entity) => {
-                if let Some(task) = self.handle_commit_and_exit(entity) {
+                if let Some(task) = self.handle_commit_and_exit(entity, preserve_commit_layer) {
                     return task;
                 }
             }
@@ -612,6 +617,15 @@ impl OpenCADStudio {
                     i,
                     crate::app::commands::pdf_import::PdfImportSource::File(import),
                 );
+            }
+            CmdResult::AttachPointCloud { placement, message } => {
+                let label = self.history_label_from_active_cmd(i, "POINTCLOUDATTACH");
+                self.tabs[i].scene.clear_preview_wire();
+                self.tabs[i].active_cmd = None;
+                self.tabs[i].snap_result = None;
+                self.command_line.push_output(&message);
+                self.attach_point_cloud(i, label, placement);
+                self.restore_pre_cmd_tangent();
             }
             CmdResult::AttachPdfPages { kind, path, pages } => {
                 let label = self.history_label_from_active_cmd(i, "PDFATTACH");
@@ -754,6 +768,32 @@ impl OpenCADStudio {
             CmdResult::ReplaceEntity(handle, new_entities) => {
                 if let Some(task) = self.handle_replace_entity(handle, new_entities) {
                     return task;
+                }
+            }
+            CmdResult::CommitExplodedInsert { insert, keep_going } => {
+                let i = self.active_tab;
+                if let codec::EntityType::Insert(ins) = &insert {
+                    let name = ins.block_name.clone();
+                    self.record_block_insert(&name);
+                }
+                let pieces = crate::modules::draw::modify::explode::explode_entity(
+                    &insert,
+                    &self.tabs[i].scene.document,
+                );
+                if keep_going {
+                    if let Some(task) = self.handle_commit_entities(
+                        pieces,
+                        preserve_commit_style,
+                        preserve_commit_layer,
+                    ) {
+                        return task;
+                    }
+                } else {
+                    self.handle_commit_entities_and_exit(
+                        pieces,
+                        preserve_commit_style,
+                        preserve_commit_layer,
+                    );
                 }
             }
             CmdResult::AttreqNeeded { block_name } => {
@@ -1092,7 +1132,9 @@ impl OpenCADStudio {
     }
 
     fn handle_cancel_with_message(&mut self, message: String) -> Task<Message> {
-        self.command_line.push_error(&message);
+        for line in message.lines() {
+            self.command_line.push_error(line);
+        }
         self.apply_cmd_result(CmdResult::Cancel)
     }
 
@@ -1106,7 +1148,7 @@ impl OpenCADStudio {
         // The command picked the path; the hit test lives here, where
         // the camera and the drawing's geometry are. Everything after
         // matches what a lasso does, Remove included.
-        let canvas = self.tabs[i].scene.selection.borrow().vp_size;
+        let canvas = self.tabs[i].scene.selection.borrow().view.vp_size;
         let bounds = iced::Rectangle {
             x: 0.0,
             y: 0.0,

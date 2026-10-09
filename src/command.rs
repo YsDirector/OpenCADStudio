@@ -384,6 +384,10 @@ impl CadCommand for UcsPickCommand {
         true
     }
 
+    fn entity_pick_includes_fills(&self) -> bool {
+        self.face
+    }
+
     fn entity_pick_uses_surface_point(&self) -> bool {
         self.face
     }
@@ -1352,6 +1356,9 @@ pub struct SweepOptions {
     pub scale: f64,
     /// Total twist along the path, in radians.
     pub twist_angle: f64,
+    /// Where the path was picked: an open path is swept from its end nearest
+    /// this point (seen from above), as the reference does.
+    pub path_pick: Option<DVec3>,
 }
 
 impl Default for SweepOptions {
@@ -1362,6 +1369,7 @@ impl Default for SweepOptions {
             base_point: None,
             scale: 1.0,
             twist_angle: 0.0,
+            path_pick: None,
         }
     }
 }
@@ -1572,6 +1580,13 @@ pub enum CmdResult {
     OpenPdfImportSettings,
     /// Import a page of a file (PDFIMPORT File); ends the command.
     PdfImportFile(crate::modules::insert::pdf_import::PdfFileImport),
+    /// Attach a point cloud: the host creates or reuses its definition,
+    /// commits the cloud in one undo step, then ends the command. The
+    /// message is the last prompt's echo.
+    AttachPointCloud {
+        placement: crate::modules::insert::pc_attach::PointCloudPlacement,
+        message: String,
+    },
     /// Attach PDF pages: each page's underlay with its file (as stored) and
     /// page; the host creates or reuses the definitions and commits them all
     /// in one undo step, then ends the command.
@@ -1881,6 +1896,12 @@ pub enum CmdResult {
     ReportError(String),
     /// Reports an error and ends the command (`Lines are parallel.`).
     CancelWithMessage(String),
+    /// Explode this block reference and commit its pieces; end the command
+    /// unless `keep_going` (repeated placement).
+    CommitExplodedInsert {
+        insert: EntityType,
+        keep_going: bool,
+    },
     /// Print a measurement result, clear the current selection, and keep the command active.
     ReportMeasurementAndDeselect(String),
     /// Clear the current selection and keep the command active at its updated step.
@@ -2083,6 +2104,9 @@ pub enum CmdResult {
         mode: ExtrudeMode,
         options: SweepOptions,
         color: [f32; 4],
+        /// Scale and twist expressions entered with the Expression option;
+        /// a swept surface stays linked to them.
+        expressions: [Option<String>; 2],
     },
     /// Loft through ordered cross-sections, with optional guides or a path.
     LoftEntities {
@@ -2621,6 +2645,12 @@ pub trait CadCommand: Send {
     /// Resume the command with collected rich text.
     fn on_editor_text(&mut self, _value: String) {}
 
+    /// A field (code and referenced objects) to attach to the entity this
+    /// command commits.
+    fn text_field(&self) -> Option<(String, Vec<Handle>)> {
+        None
+    }
+
     fn on_editor_display_height(&mut self, _height: f64) {}
 
     /// Called when the user clicks and `needs_entity_pick()` is true.
@@ -2688,10 +2718,11 @@ pub trait CadCommand: Send {
     /// Commands that stay active across replaces should update their internal snapshots here.
     fn on_entity_replaced(&mut self, _old: Handle, _new_handles: &[Handle]) {}
 
-    /// Called after `CmdResult::CommitEntities` adds entities while the command
-    /// remains active. Commands that keep an internal entity snapshot can bind
-    /// the newly allocated handles here.
-    fn on_entities_committed(&mut self, _new_handles: &[Handle]) {}
+    /// Called after `CmdResult::CommitEntity` / `CommitEntities` added
+    /// entities while the command stays active, with the entities as stored
+    /// (fresh handles). Commands that pick from a snapshot add them here so
+    /// their own results can be hovered and picked next. (#673)
+    fn on_entities_committed(&mut self, _entities: &[codec::EntityType]) {}
 
     /// Called after a PEDIT operation changed its target.
     fn on_pedit_applied(&mut self) {}
@@ -2878,6 +2909,12 @@ pub trait CadCommand: Send {
         false
     }
 
+    /// The command moves, turns or resizes what it gathers: the host drops
+    /// locked point clouds from each completed selection and says so.
+    fn selection_drops_locked_point_clouds(&self) -> bool {
+        false
+    }
+
     /// Before each input the host says which block references carry a clip
     /// boundary.
     fn inject_clipped(&mut self, _clipped: &dyn Fn(Handle) -> bool) {}
@@ -2920,6 +2957,12 @@ pub trait CadCommand: Send {
         false
     }
 
+    /// The step draws a window that selects objects rather than placing
+    /// geometry: no coordinate boxes at the cursor. Default `false`.
+    fn selects_by_window(&self) -> bool {
+        false
+    }
+
     /// The already-picked first corner of the selection window (world space)
     /// while `window_corner_pick()` is true and the opposite corner is being
     /// dragged. The host projects it and draws a filled selection marquee to the
@@ -2952,6 +2995,12 @@ pub trait CadCommand: Send {
         _attdefs: Vec<codec::entities::AttributeDefinition>,
     ) -> Option<codec::EntityType> {
         None
+    }
+
+    /// After the host commits an ATTREQ insert: keep the command running
+    /// (repeated placement) instead of ending it.
+    fn attreq_continue(&self) -> bool {
+        false
     }
 
     /// Returns the INSERT entity built so far (pending attr fill) if this is an

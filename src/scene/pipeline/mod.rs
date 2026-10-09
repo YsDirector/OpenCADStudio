@@ -26,6 +26,7 @@ pub mod gpu_upload;
 pub mod hatch_gpu;
 pub mod wipeout_gpu;
 pub mod image_gpu;
+pub mod point_cloud_gpu;
 pub mod mesh_gpu;
 pub mod text_gpu;
 pub mod uniforms;
@@ -136,6 +137,7 @@ pub struct Pipeline {
     /// private backends behind one upload/LOD/draw lifecycle.
     hatch_gpu: hatch_gpu::HatchGpu,
     image_pipeline: wgpu::RenderPipeline,
+    point_cloud_pipeline: wgpu::RenderPipeline,
     /// SDF text-quad pipeline (Phase 2b): draws per-glyph quads sampling the
     /// shared glyph atlas. Fed only when `OCS_TEXT_SDF` is set (else no verts).
     text_pipeline: wgpu::RenderPipeline,
@@ -313,6 +315,7 @@ pub struct Pipeline {
     /// viewport rect. Recomputed by `compute_wipeout_lod`.
     wipeout_skip_flags: Vec<bool>,
     gpu_images: Vec<ImageGpu>,
+    gpu_point_clouds: point_cloud_gpu::PointCloudGpu,
     /// Batched mesh geometry — every solid's LOD0 concatenated into a few large
     /// buffers so the whole set draws in a handful of calls instead of one per
     /// solid. Hover / selection never re-pack it.
@@ -344,6 +347,8 @@ pub struct Pipeline {
     pub cached_preview_hatch_source: Option<std::sync::Arc<Vec<HatchModel>>>,
     pub cached_wipeout_source: Option<std::sync::Arc<Vec<HatchModel>>>,
     pub cached_image_source: Option<std::sync::Arc<Vec<ImageModel>>>,
+    pub cached_point_cloud_source:
+        Option<std::sync::Arc<crate::scene::model::point_cloud::PointCloudSet>>,
     pub cached_text_source: Option<std::sync::Arc<Vec<text_gpu::TextVertex>>>,
     pub cached_annotation_highlight_source: Option<std::sync::Arc<Vec<WireModel>>>,
     pub cached_mesh_source: Option<std::sync::Arc<Vec<MeshLodSet>>>,
@@ -2109,6 +2114,61 @@ impl Pipeline {
             cache: None,
         });
 
+        // ── Point cloud sprites ────────────────────────────────────────────
+        let point_cloud_bgl1 = point_cloud_gpu::params_layout(device);
+        let point_cloud_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("point_cloud.pipeline_layout"),
+            bind_group_layouts: &[&frame_bgl, &point_cloud_bgl1].map(Some),
+            immediate_size: 0,
+        });
+        let point_cloud_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("point_cloud.shader"),
+            source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/src/shaders/point_cloud.wgsl"
+            )))),
+        });
+        let point_cloud_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("point_cloud.pipeline"),
+            layout: Some(&point_cloud_layout),
+            vertex: wgpu::VertexState {
+                module: &point_cloud_shader,
+                entry_point: Some("vs_main"),
+                buffers: &[point_cloud_gpu::instance_layout()],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            },
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                cull_mode: None,
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth24PlusStencil8,
+                depth_write_enabled: Some(true),
+                depth_compare: Some(wgpu::CompareFunction::LessEqual),
+                stencil: content_stencil.clone(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState {
+                count: MSAA_SAMPLES,
+                mask: !0,
+                alpha_to_coverage_enabled: false,
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &point_cloud_shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
+        let gpu_point_clouds = point_cloud_gpu::PointCloudGpu::new(device, &point_cloud_bgl1);
+
         // ── Text (SDF glyph quads) ─────────────────────────────────────────
         let text_atlas_bgl = text_gpu::TextAtlasGpu::bind_group_layout(device);
         let (
@@ -2294,6 +2354,7 @@ impl Pipeline {
             wipeout_pipeline,
             hatch_gpu,
             image_pipeline,
+            point_cloud_pipeline,
             text_pipeline,
             block_text_pipeline,
             text_highlight_pipeline,
@@ -2385,6 +2446,7 @@ impl Pipeline {
             gpu_wipeouts: vec![],
             wipeout_skip_flags: vec![],
             gpu_images: vec![],
+            gpu_point_clouds,
             gpu_mesh_batch: vec![],
             gpu_mesh_dynamic: vec![],
             mesh_disabled_chunks: rustc_hash::FxHashSet::default(),
@@ -2400,6 +2462,7 @@ impl Pipeline {
             cached_preview_hatch_source: None,
             cached_wipeout_source: None,
             cached_image_source: None,
+            cached_point_cloud_source: None,
             cached_text_source: None,
             cached_annotation_highlight_source: None,
             cached_mesh_source: None,
@@ -2750,7 +2813,9 @@ impl Pipeline {
                 );
                 for &i in idxs {
                     if let Some(w) = wires.get(i as usize) {
-                        if !w.display_visible {
+                        // An unseen pick hull (a point cloud's extents box) shows while
+                        // highlighted, as the reference does.
+                        if !w.display_visible && (w.pick_tris.is_empty() || w.snap_only) {
                             continue;
                         }
                         selected_wires.push(w);
@@ -2762,7 +2827,9 @@ impl Pipeline {
             if let Some(idxs) = self.wire_handle_index.get(&h.value()) {
                 for &i in idxs {
                     if let Some(w) = wires.get(i as usize) {
-                        if !w.display_visible {
+                        // An unseen pick hull (a point cloud's extents box) shows while
+                        // highlighted, as the reference does.
+                        if !w.display_visible && (w.pick_tris.is_empty() || w.snap_only) {
                             continue;
                         }
                         hover_wires.push(w);
@@ -3776,6 +3843,19 @@ analytic={:.1} regular={:.1} blocks={:.1}",
         self.gpu_images = ImageGpu::from_models(device, queue, images, &self.image_bgl1);
     }
 
+    pub fn upload_point_clouds(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        set: &crate::scene::model::point_cloud::PointCloudSet,
+    ) {
+        self.gpu_point_clouds.upload(device, queue, set);
+    }
+
+    pub fn set_point_cloud_view(&mut self, queue: &wgpu::Queue, light: [f32; 12]) {
+        self.gpu_point_clouds.set_view(queue, light);
+    }
+
     /// Upload the frame's SDF text-quad vertices, and (re)build the GPU glyph
     /// atlas from the shared CPU atlas when it grew (new glyphs baked by the
     /// text collector). `verts` empty (flag off) leaves nothing to draw.
@@ -4187,6 +4267,38 @@ analytic={:.1} regular={:.1} blocks={:.1}",
                 pass.set_vertex_buffer(1, img.instance_buffer.slice(..));
                 pass.draw(0..img.vertex_count, 0..img.instance_count);
             }
+        }
+
+        // ── Pass 3: point clouds ──────────────────────────────────────────
+        if !self.gpu_point_clouds.is_empty() {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("point_cloud.render_pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: msaa,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &self.depth_view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store }),
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_viewport(raster.x, raster.y, raster.width, raster.height, 0.0, 1.0);
+            pass.set_pipeline(&self.point_cloud_pipeline);
+            pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+            pass.set_stencil_reference(stencil_ref);
+            self.gpu_point_clouds.draw(&mut pass);
         }
 
         // ── Pass 4: solid meshes (batched) ────────────────────────────────
@@ -4706,44 +4818,6 @@ analytic={:.1} regular={:.1} blocks={:.1}",
                     }
                 }
             }
-            // Live overlay wires (command preview / interim / grip drag) always
-            // on top: the xray pipeline (depth_compare=Always, no depth write)
-            // keeps them visible through any occluding geometry — a 3D solid, or
-            // 2D geometry drawn in front — so a command preview is never hidden.
-            // No scissor.
-            if self.gpu_preview_wires.iter().any(|pw| pw.instance_count > 0) {
-                pass.set_pipeline(&self.wire_xray_pipeline);
-                for pw in &self.gpu_preview_wires {
-                    if pw.instance_count > 0 {
-                        if let Some(bg) = &pw.const_bind_group {
-                            pass.set_bind_group(1, bg.as_ref(), &[]);
-                        }
-                        pass.set_vertex_buffer(0, pw.instance_buffer.slice(..));
-                        pass.draw(
-                            0..6,
-                            pw.first_instance..pw.first_instance + pw.instance_count,
-                        );
-                    }
-                }
-            }
-            if self.gpu_preview_circles.iter().any(|cg| cg.instance_count > 0) {
-                pass.set_pipeline(&self.circle_xray_pipeline);
-                for cg in &self.gpu_preview_circles {
-                    if cg.instance_count > 0 {
-                        pass.set_vertex_buffer(0, cg.instance_buffer.slice(..));
-                        pass.draw(0..6, 0..cg.instance_count);
-                    }
-                }
-            }
-            if self.gpu_preview_ellipses.iter().any(|eg| eg.instance_count > 0) {
-                pass.set_pipeline(&self.ellipse_xray_pipeline);
-                for eg in &self.gpu_preview_ellipses {
-                    if eg.instance_count > 0 {
-                        pass.set_vertex_buffer(0, eg.instance_buffer.slice(..));
-                        pass.draw(0..6, 0..eg.instance_count);
-                    }
-                }
-            }
         }
 
         // ── Pass 5c: SDF text quads (drawn over wires) ────────────────────
@@ -4752,9 +4826,7 @@ analytic={:.1} regular={:.1} blocks={:.1}",
         if let Some(atlas) = &self.text_atlas_gpu {
             let have_base = !self.text_gpu.is_empty();
             let have_blocks = !self.block_text_gpu.is_empty();
-            let have_preview =
-                !self.text_preview_gpu.is_empty();
-            if have_base || have_blocks || have_preview {
+            if have_base || have_blocks {
                 let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("text.render_pass"),
                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -4793,14 +4865,6 @@ analytic={:.1} regular={:.1} blocks={:.1}",
                         pass.set_vertex_buffer(0, text.vertex_buffer.slice(..));
                         pass.set_vertex_buffer(1, text.instance_buffer.slice(..));
                         pass.draw(0..text.vertex_count, 0..text.instance_count);
-                    }
-                }
-                // Grip-drag / command-preview glyphs, drawn over the base text.
-                if have_preview {
-                    pass.set_pipeline(&self.text_pipeline);
-                    for text in &self.text_preview_gpu {
-                        pass.set_vertex_buffer(0, text.vertex_buffer.slice(..));
-                        pass.draw(0..text.vertex_count, 0..1);
                     }
                 }
             }
@@ -4846,9 +4910,115 @@ analytic={:.1} regular={:.1} blocks={:.1}",
             }
         }
 
+        // ── Pass 6b: live command/grip preview overlay ────────────────────
+        // Wipeouts intentionally mask resident drawing geometry, but they must
+        // never mask temporary construction geometry belonging to an active
+        // command or grip edit. Draw those previews after the wipeout pass.
+        //
+        // The xray variants keep previews independent of resident depth while
+        // the shared content stencil still respects viewport/XCLIP clipping.
+        let have_preview_overlay =
+            self.gpu_preview_wires.iter().any(|wire| wire.instance_count > 0)
+                || self.gpu_preview_circles.iter().any(|circle| circle.instance_count > 0)
+                || self.gpu_preview_ellipses.iter().any(|ellipse| ellipse.instance_count > 0)
+                || !self.text_preview_gpu.is_empty();
+
+        if have_preview_overlay {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("preview_overlay.render_pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: msaa,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &self.depth_view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    }),
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+
+            pass.set_viewport(
+                raster.x,
+                raster.y,
+                raster.width,
+                raster.height,
+                0.0,
+                1.0,
+            );
+            pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+            pass.set_stencil_reference(stencil_ref);
+
+            if self.gpu_preview_wires.iter().any(|wire| wire.instance_count > 0) {
+                pass.set_pipeline(&self.wire_xray_pipeline);
+                for wire in &self.gpu_preview_wires {
+                    if wire.instance_count == 0 {
+                        continue;
+                    }
+                    if let Some(bg) = &wire.const_bind_group {
+                        pass.set_bind_group(1, bg.as_ref(), &[]);
+                    }
+                    pass.set_vertex_buffer(0, wire.instance_buffer.slice(..));
+                    pass.draw(
+                        0..6,
+                        wire.first_instance..wire.first_instance + wire.instance_count,
+                    );
+                }
+            }
+
+            if self.gpu_preview_circles.iter().any(|circle| circle.instance_count > 0) {
+                pass.set_pipeline(&self.circle_xray_pipeline);
+                for circle in &self.gpu_preview_circles {
+                    if circle.instance_count > 0 {
+                        pass.set_vertex_buffer(0, circle.instance_buffer.slice(..));
+                        pass.draw(0..6, 0..circle.instance_count);
+                    }
+                }
+            }
+
+            if self.gpu_preview_ellipses.iter().any(|ellipse| ellipse.instance_count > 0) {
+                pass.set_pipeline(&self.ellipse_xray_pipeline);
+                for ellipse in &self.gpu_preview_ellipses {
+                    if ellipse.instance_count > 0 {
+                        pass.set_vertex_buffer(0, ellipse.instance_buffer.slice(..));
+                        pass.draw(0..6, 0..ellipse.instance_count);
+                    }
+                }
+            }
+
+            if let Some(atlas) = &self.text_atlas_gpu {
+                if !self.text_preview_gpu.is_empty() {
+                    // Same glyph shader as ordinary text, but depth-independent:
+                    // previews are temporary UI geometry, not resident drawing.
+                    pass.set_pipeline(&self.text_highlight_pipeline);
+                    pass.set_bind_group(1, &atlas.bind_group, &[]);
+                    for text in &self.text_preview_gpu {
+                        pass.set_vertex_buffer(0, text.vertex_buffer.slice(..));
+                        pass.draw(0..text.vertex_count, 0..1);
+                    }
+                }
+            }
+        }
+
         // ── Pass 7: selection overlay pass ───────────────────────────────
         // Redraws selected wires and text with depth_compare=Always so both
-        // appear on top of all other geometry at full brightness.
+        // appear on top of all other geometry at full brightness — unless
+        // faces are drawn: then edges behind a surface stay hidden while
+        // selected, as they are when not (#1031).
+        let occluded = hidden_line || !mesh_wireframe;
         let have_text_highlight =
             (!self.text_highlight_gpu.is_empty())
                 || !self.block_text_highlight_gpu.is_empty();
@@ -4885,7 +5055,7 @@ analytic={:.1} regular={:.1} blocks={:.1}",
             pass.set_bind_group(0, &self.uniform_bind_group, &[]);
             pass.set_stencil_reference(stencil_ref);
             if !self.gpu_selected_wires.is_empty() {
-                pass.set_pipeline(if hidden_line {
+                pass.set_pipeline(if occluded {
                     &self.wire_pipeline
                 } else {
                     &self.wire_xray_pipeline
@@ -4904,7 +5074,7 @@ analytic={:.1} regular={:.1} blocks={:.1}",
                 }
             }
             if !self.gpu_selected_block_wires.is_empty() {
-                pass.set_pipeline(if hidden_line {
+                pass.set_pipeline(if occluded {
                     &self.block_wire_pipeline
                 } else {
                     &self.block_wire_xray_pipeline
@@ -4917,7 +5087,7 @@ analytic={:.1} regular={:.1} blocks={:.1}",
                 }
             }
             if !self.gpu_selected_circles.is_empty() {
-                pass.set_pipeline(if hidden_line {
+                pass.set_pipeline(if occluded {
                     &self.circle_pipeline
                 } else {
                     &self.circle_xray_pipeline
@@ -4931,7 +5101,7 @@ analytic={:.1} regular={:.1} blocks={:.1}",
                 }
             }
             if !self.gpu_selected_ellipses.is_empty() {
-                pass.set_pipeline(if hidden_line {
+                pass.set_pipeline(if occluded {
                     &self.ellipse_pipeline
                 } else {
                     &self.ellipse_xray_pipeline
@@ -5043,6 +5213,7 @@ analytic={:.1} regular={:.1} blocks={:.1}",
         self.cached_preview_hatch_source = None;
         self.cached_wipeout_source = None;
         self.cached_image_source = None;
+        self.cached_point_cloud_source = None;
         self.cached_text_source = None;
         self.cached_mesh_source = None;
         self.cached_face3d_source = None;

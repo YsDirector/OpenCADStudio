@@ -44,14 +44,15 @@ The host and each plugin run in separate OS processes. The host re-executes itse
 
 ## Versioning and ABI stability
 
-- `API_VERSION` (currently `6`) is the host's advertised major.
-- `API_VERSION_MIN_SUPPORTED` (currently `2`) is the oldest plugin major the host loads.
-- `OCS_PLUGIN_MAX_API_VERSION` can cap the accepted major at runtime (e.g. `5` to disable V6).
+- `API_VERSION` (currently `7`) is the host's advertised major.
+- `API_VERSION_MIN_SUPPORTED` (currently `3`) is the oldest plugin major the host loads.
+- `OCS_PLUGIN_MAX_API_VERSION` can cap the accepted major at runtime (e.g. `6` to disable V7).
 - A plugin built against major `N` runs on a host whose major is `>= N` because new vtable entries and enum variants are appended at the end.
 - V4 introduces the **opencadcodec gate**: plugins targeting API v4 or later must resolve the same `opencadcodec` source as the host (see [`src/version_info.rs`](src/version_info.rs)).
 - V5 introduces `BuiltinPlugin::on_load` and tab-keyed document paths.
 - V6 appends typed system-variable access to `HostApi`; the host currently
   supports `CLAYER` and `SNAPANG` (plus a read-only `CTAB`).
+- V7 appends atomic entity transactions and tab-scoped selection methods.
 
 The runtime enforces three gates:
 

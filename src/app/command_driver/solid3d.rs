@@ -176,7 +176,7 @@ impl OpenCADStudio {
             }
             self.tabs[i].dirty = true;
             self.command_line.push_output(
-                crate::tf!(
+                crate::t!(
                     "EXTRUDE: created %{created} object(s); %{failed} source(s) could not be extruded.",
                     created = created_handles.len(),
                     failed = failed
@@ -427,7 +427,7 @@ impl OpenCADStudio {
             }
             self.tabs[i].dirty = true;
             self.command_line.push_output(
-                crate::tf!(
+                crate::t!(
                     "REVOLVE: created %{created} object(s); %{failed} source(s) could not be revolved.",
                     created = created_handles.len(),
                     failed = failed
@@ -459,6 +459,7 @@ impl OpenCADStudio {
             mode,
             options,
             color: _,
+            expressions,
         } = result
         else {
             unreachable!("router only routes the matching variant");
@@ -486,6 +487,10 @@ impl OpenCADStudio {
             .iter()
             .map(|(_, entity)| entity.clone())
             .collect::<Vec<_>>();
+        // Group 294: a base point the user picked.
+        let picked_base = options.base_point.is_some();
+        let several = profiles.len() > 1;
+        let picked = options;
         let options = sweep_model::sweep_selection_options(&selection, options);
         let pending = if profiles.is_empty() {
             None
@@ -495,30 +500,65 @@ impl OpenCADStudio {
         let mut created_handles = Vec::new();
         let mut consumed = Vec::new();
         for (handle, profile) in profiles {
-            let result = path.as_ref().zip(options).and_then(|(path, options)| {
-                let record = sweep_model::sweep_record(&profile, path, options)?;
+            // A refused sweep reports the modeler error code, as the
+            // reference does.
+            let result = (|| -> Result<_, Option<u32>> {
+                let (path, options) = path.as_ref().zip(options).ok_or(None)?;
+                if sweep_model::spatial_profile(&profile).is_some() {
+                    let record = sweep_model::spatial_sweep_record(&profile, path, options)?;
+                    let body = kernel::acis::rebuild_sweep_with_mode(&record, true).map_err(|_| None)?;
+                    return Ok((body, record, true));
+                }
+                let mut record = sweep_model::sweep_record(&profile, path, options).ok_or(None)?;
+                record.flags_294_296[0] |= picked_base;
                 let (_, _, closed) = kernel::acis::sweep_profile_geometry(
-                    record.sweep_entity.as_ref()?,
+                    record.sweep_entity.as_ref().ok_or(None)?,
                     record.sweep_entity_transform,
                 )
-                .ok()?;
+                .map_err(|_| None)?;
                 let surface = mode == ExtrudeMode::Surface || !closed;
-                let body =
-                    kernel::acis::rebuild_sweep_with_mode(&record, surface).ok()?;
-                Some((body, record, surface))
-            });
-            let Some((body, record, surface)) = result else {
-                failed += 1;
-                continue;
+                let body = kernel::acis::rebuild_sweep_with_mode(&record, surface).map_err(|error| match error {
+                    kernel::acis::HistoryRebuildError::Refused(why) => Some(sweep_model::sweep_refusal_code(why)),
+                    _ => None,
+                })?;
+                Ok((body, record, surface))
+            })();
+            let (body, record, surface) = match result {
+                Ok(value) => value,
+                Err(code) => {
+                    if let Some(code) = code {
+                        self.command_line.push_output(crate::t!("Modeling Operation Error:").as_ref());
+                        self.command_line.push_output(crate::tf!("Error Code Number is {code}", code = code).as_ref());
+                    }
+                    failed += 1;
+                    continue;
+                }
             };
+            // An associative surface keeps the profile and path it reads.
+            let associative = surface && sweep_model::surface_associativity();
             let deletes_path =
-                crate::app::delobj_deletes_auxiliary(delete_objects, surface);
+                !associative && crate::app::delobj_deletes_auxiliary(delete_objects, surface);
             if deletes_path && self.tabs[i].scene.is_layer_locked(path_handle) {
                 failed += 1;
                 continue;
             }
             let created = if surface {
-                self.add_surface_model(sweep_model::swept_surface_entity(&record), body)
+                let created =
+                    self.add_surface_model(sweep_model::swept_surface_entity(&record), body);
+                sweep_model::link_sweep_expressions(
+                    &mut self.tabs[i].scene.document,
+                    created,
+                    &expressions,
+                );
+                if associative {
+                    // A picked base point, or the one several profiles share.
+                    let linked = crate::command::SweepOptions {
+                        base_point: if picked_base || several { options.and_then(|o| o.base_point) } else { None },
+                        ..picked
+                    };
+                    sweep_model::link_sweep_sources(&mut self.tabs[i].scene.document, created, handle, path_handle, &linked);
+                }
+                created
             } else {
                 self.add_solid_model(
                     empty_solid3d(),
@@ -530,7 +570,7 @@ impl OpenCADStudio {
                 failed += 1;
             } else {
                 created_handles.push(created);
-                if delete_profiles {
+                if delete_profiles && !associative {
                     consumed.push(handle);
                 }
                 if deletes_path {
@@ -547,14 +587,9 @@ impl OpenCADStudio {
                 self.tabs[i].scene.select_entity(*handle, true);
             }
             self.tabs[i].dirty = true;
-            self.command_line.push_output(crate::tf!(
-                "SWEEP: created {created} object(s); {failed} source(s) could not be swept.",
-                created = created_handles.len(), failed = failed
-            ).as_ref());
-        } else {
-            self.command_line.push_error(
-                crate::t!("SWEEP: could not sweep the profile along the path.").as_ref(),
-            );
+        }
+        if failed > 0 {
+            self.command_line.push_output(crate::tf!("Unable to sweep {failed} selected objects.", failed = failed).as_ref());
         }
         if let Some(pending) = pending {
             self.commit_undo_delta(i, pending);

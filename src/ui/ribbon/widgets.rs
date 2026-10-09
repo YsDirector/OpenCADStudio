@@ -37,7 +37,9 @@ pub(super) struct ToggleState {
     pub show_viewcube: bool,
     pub show_ucs_icon: bool,
     pub show_properties: bool,
+    pub show_count_palette: bool,
     pub show_block_palette: bool,
+    pub show_sheet_set: bool,
     pub show_file_tabs: bool,
     pub show_layout_tabs: bool,
 }
@@ -308,7 +310,7 @@ pub(super) const TOP_HIST_GAP: f32 = 4.0;
 
 pub(crate) const UNDO_HISTORY_ID: &str = "UNDO_HISTORY";
 pub(crate) const REDO_HISTORY_ID: &str = "REDO_HISTORY";
-pub(super) const LAYER_COMBO_ID: &str = "LAYER_COMBO";
+pub(crate) const LAYER_COMBO_ID: &str = "LAYER_COMBO";
 /// Dropdown id for the tab-bar panel-density selector.
 pub(super) const COLLAPSE_MODE_ID: &str = "COLLAPSE_MODE";
 pub(super) const PROP_COLOR_ID: &str = "PROP_COLOR";
@@ -379,7 +381,9 @@ pub(super) fn is_active_tool(
         "NAVVCUBE" => state.show_viewcube,
         "UCSICON" => state.show_ucs_icon,
         "PROPERTIES" => state.show_properties,
+        "COUNTLIST" => state.show_count_palette,
         "BLOCKPALETTE" => state.show_block_palette,
+        "SHEETSET" => state.show_sheet_set,
         "FILETAB" => state.show_file_tabs,
         "LAYOUTTAB" => state.show_layout_tabs,
         id => active_tool.as_deref() == Some(id),
@@ -446,7 +450,7 @@ pub(super) fn combo_btn_style(
     }
 }
 
-pub(super) fn popup_row_style(theme: &Theme, status: button::Status) -> button::Style {
+pub(crate) fn popup_row_style(theme: &Theme, status: button::Status) -> button::Style {
     let palette = theme.palette();
     let pair = if matches!(status, button::Status::Hovered | button::Status::Pressed) {
         palette.background.weak
@@ -460,7 +464,7 @@ pub(super) fn popup_row_style(theme: &Theme, status: button::Status) -> button::
     }
 }
 
-pub(super) fn popup_panel_style(theme: &Theme) -> container::Style {
+pub(crate) fn popup_panel_style(theme: &Theme) -> container::Style {
     let palette = theme.palette();
     container::Style {
         background: Some(Background::Color(palette.background.base.color)),
@@ -992,7 +996,9 @@ pub(super) fn render_large<'a>(
             let tools_w = tool_count * TOOL_BUTTON_W
                 + (tool_count - 1.0).max(0.0) * TOOL_SPACING
                 + GROUP_PADDING;
-            let combo_w = (LARGE_W * 2.5).max(tools_w);
+            // Wide enough to read a typical layer name (about 25 characters)
+            // in the closed combo.
+            let combo_w = (LARGE_W * 2.5).max(tools_w).max(250.0);
 
             let info = layer_infos.iter().find(|l| l.name == active_layer);
             let lc = info.map(|l| l.color).unwrap_or(Color::WHITE);

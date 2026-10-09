@@ -3,6 +3,65 @@ use super::*;
 impl OpenCADStudio {
     pub(super) fn dispatch_styleprops(&mut self, cmd: &str, i: usize) -> Option<Task<Message>> {
         match cmd {
+            // View / grid variables held by the app rather than the header,
+            // typed bare or through SETVAR (#1524, #1618).
+            cmd if matches!(
+                cmd.strip_prefix("SETVAR ").unwrap_or(cmd).split_whitespace().next(),
+                Some("PERSPECTIVE" | "GRIDMODE" | "GRIDUNIT")
+            ) =>
+            {
+                let mut words = cmd.strip_prefix("SETVAR ").unwrap_or(cmd).splitn(2, ' ');
+                let name = words.next().unwrap_or_default().to_string();
+                let value = words.next().map(str::trim).filter(|v| !v.is_empty());
+                let current = match name.as_str() {
+                    "PERSPECTIVE" => {
+                        let persp = self.tabs[i].scene.camera.borrow().projection
+                            == crate::scene::Projection::Perspective;
+                        (persp as i32).to_string()
+                    }
+                    "GRIDMODE" => (self.show_grid as i32).to_string(),
+                    _ => format!("{},{}", self.grid_spacing_x, self.grid_spacing_y),
+                };
+                let Some(value) = value else {
+                    self.command_line
+                        .push_output(&crate::tf!("Enter new value for {name} <{current}>:"));
+                    self.pending_setvar = Some(name);
+                    return Some(Task::none());
+                };
+                match (name.as_str(), value) {
+                    ("PERSPECTIVE", "0" | "1") => {
+                        return Some(Task::done(Message::SetProjection(value == "0")));
+                    }
+                    ("GRIDMODE", "0" | "1") => {
+                        if (value == "1") != self.show_grid {
+                            return Some(Task::done(Message::ToggleGrid));
+                        }
+                    }
+                    ("GRIDUNIT", _) => {
+                        let mut parts = value.split(',').map(|p| p.trim().parse::<f32>());
+                        let x = parts.next().and_then(Result::ok).filter(|v| *v > 0.0);
+                        let y = match parts.next() {
+                            Some(p) => p.ok().filter(|v| *v > 0.0),
+                            None => x,
+                        };
+                        let (Some(x), Some(y)) = (x, y) else {
+                            self.command_line.push_error(
+                                crate::t!("Requires two positive values (x,y) or one for both.")
+                                    .as_ref(),
+                            );
+                            return Some(Task::none());
+                        };
+                        self.grid_spacing_x = x;
+                        self.grid_spacing_y = y;
+                        self.sync_vport_display(i);
+                        self.persist_settings_if_changed();
+                    }
+                    _ => self
+                        .command_line
+                        .push_error(crate::t!("Requires 0 or 1").as_ref()),
+                }
+                return Some(Task::none());
+            }
             "CETRANSPARENCY" => return self.dispatch_styleprops("SETVAR CETRANSPARENCY", i),
             cmd if cmd.starts_with("CETRANSPARENCY ") => {
                 return self.dispatch_styleprops(&format!("SETVAR {cmd}"), i);
@@ -84,9 +143,10 @@ impl OpenCADStudio {
                 use crate::command::KeywordCommand;
                 let c = KeywordCommand::new(
                     "LINETYPE",
-                    "LINETYPE  [List / Set]:",
+                    "LINETYPE  [List / Set / Load]:",
                     vec![
                         ("List", "LIST", None),
+                        ("Load", "LOAD", None),
                         ("Set", "SET", Some("LINETYPE SET  linetype name (ByLayer / ByBlock / …):")),
                     ],
                 );
@@ -98,6 +158,13 @@ impl OpenCADStudio {
                 let parts: Vec<&str> = raw_rest.split_whitespace().collect();
                 let sub = parts.get(0).map(|s| s.to_uppercase()).unwrap_or_default();
                 match sub.as_str() {
+                    // Load the definitions of a `.lin` file (#1588).
+                    "LOAD" | "L" => {
+                        return Some(Task::perform(
+                            crate::io::pick_linetype_file(),
+                            Message::LinetypeLoaded,
+                        ));
+                    }
                     "" | "LIST" | "?" => {
                         let ltypes: Vec<String> = self.tabs[i]
                             .scene
@@ -212,7 +279,7 @@ impl OpenCADStudio {
                             if name.is_empty() {
                                 None
                             } else {
-                                Some(name.clone())
+                                Some(name.to_uppercase())
                             }
                         })
                         .collect();
@@ -243,6 +310,17 @@ impl OpenCADStudio {
                                 .map(|ds| ds.dimtxsty.clone()),
                         )
                         .filter(|s| !s.is_empty())
+                        .map(|s| s.to_uppercase())
+                        .collect();
+                    // Complex linetypes reach their text and shape styles by handle.
+                    let linetype_styles: rustc_hash::FxHashSet<codec::Handle> = self.tabs[i]
+                        .scene
+                        .document
+                        .line_types
+                        .iter()
+                        .flat_map(|lt| lt.elements.iter())
+                        .filter_map(|element| element.complex.as_ref())
+                        .map(|complex| complex.style_handle)
                         .collect();
                     // Linetypes: entity references plus every layer's own
                     // linetype — a ByLayer entity reaches it through the layer.
@@ -267,6 +345,7 @@ impl OpenCADStudio {
                                 .map(|l| l.line_type.clone()),
                         )
                         .filter(|s| !s.is_empty())
+                        .map(|s| s.to_uppercase())
                         .collect();
 
                     // Live blocks are reachable from layouts and style roots
@@ -336,7 +415,9 @@ impl OpenCADStudio {
                             .document
                             .layers
                             .iter()
-                            .filter(|l| l.name != "0" && !used_layers.contains(&l.name))
+                            .filter(|l| {
+                                l.name != "0" && !used_layers.contains(&l.name.to_uppercase())
+                            })
                             .map(|l| l.name.clone())
                             .collect()
                     } else {
@@ -348,8 +429,14 @@ impl OpenCADStudio {
                             .document
                             .text_styles
                             .iter()
+                            // Unnamed shape-file records serve complex linetypes
+                            // and are never listed for purging.
                             .filter(|s| {
-                                s.name != "Standard" && !used_text_styles.contains(&s.name)
+                                !s.name.is_empty()
+                                    && !s.is_shape_file
+                                    && !s.name.eq_ignore_ascii_case("Standard")
+                                    && !used_text_styles.contains(&s.name.to_uppercase())
+                                    && !linetype_styles.contains(&s.handle)
                             })
                             .map(|s| s.name.clone())
                             .collect()
@@ -365,7 +452,7 @@ impl OpenCADStudio {
                             .iter()
                             .filter(|lt| {
                                 !standard.iter().any(|s| s.eq_ignore_ascii_case(&lt.name))
-                                    && !used_linetypes.contains(&lt.name)
+                                    && !used_linetypes.contains(&lt.name.to_uppercase())
                             })
                             .map(|lt| lt.name.clone())
                             .collect()
@@ -412,16 +499,17 @@ impl OpenCADStudio {
                         snapshot_pushed = true;
                     }
 
-                    // Apply removals (mutable)
-                    for name in &layer_remove {
-                        self.tabs[i].scene.document.layers.remove(name);
-                    }
-                    for name in &style_remove {
-                        self.tabs[i].scene.document.text_styles.remove(name);
-                    }
-                    for name in &lt_remove {
-                        self.tabs[i].scene.document.line_types.remove(name);
-                    }
+                    // Apply removals (mutable). Count what actually went: an
+                    // entry the table cannot remove by name would otherwise be
+                    // listed again on every pass and never let the loop end.
+                    let doc = &mut self.tabs[i].scene.document;
+                    let layers_gone =
+                        layer_remove.iter().filter(|n| doc.layers.remove(n).is_some()).count();
+                    let styles_gone =
+                        style_remove.iter().filter(|n| doc.text_styles.remove(n).is_some()).count();
+                    let lts_gone =
+                        lt_remove.iter().filter(|n| doc.line_types.remove(n).is_some()).count();
+                    let mut blocks_gone = 0usize;
                     for name in &block_remove {
                         // Drop the block definition's member entities (and the
                         // BLOCK/ENDBLK delimiters) before the record so no orphaned
@@ -439,12 +527,17 @@ impl OpenCADStudio {
                         for h in handles {
                             self.tabs[i].scene.document.remove_entity(h);
                         }
-                        self.tabs[i].scene.document.block_records.remove(name);
+                        if self.tabs[i].scene.document.block_records.remove(name).is_some() {
+                            blocks_gone += 1;
+                        }
                     }
-                    n_layers += layer_remove.len();
-                    n_styles += style_remove.len();
-                    n_lts += lt_remove.len();
-                    n_blocks += block_remove.len();
+                    n_layers += layers_gone;
+                    n_styles += styles_gone;
+                    n_lts += lts_gone;
+                    n_blocks += blocks_gone;
+                    if layers_gone + styles_gone + lts_gone + blocks_gone == 0 {
+                        break;
+                    }
                 }
 
                 // Remove draw-order tables whose owning blocks are gone.
@@ -1025,12 +1118,29 @@ impl OpenCADStudio {
                     | "DWFOSNAP"
                     | "DGNOSNAP"
                     | "UOSNAP"
+                    | "FIELDDISPLAY"
+                    | "SURFACEASSOCIATIVITY"
                     | "PDFIMPORTMODE"
                     | "PDFIMPORTFILTER"
                     | "PDFIMPORTLAYERS"
                     | "PDFIMPORTIMAGEPATH"
                     | "XDWGFADECTL"
                     | "POINTCLOUDCLIPFRAME"
+                    | "POINTCLOUDDENSITY"
+                    | "POINTCLOUDPOINTSIZE"
+                    | "POINTCLOUDLOCK"
+                    | "POINTCLOUDAUTOUPDATE"
+                    | "POINTCLOUDBOUNDARY"
+                    | "POINTCLOUDRTDENSITY"
+                    | "POINTCLOUDLOD"
+                    | "POINTCLOUDPOINTMAX"
+                    | "POINTCLOUDVISRETAIN"
+                    | "POINTCLOUDSHADING"
+                    | "POINTCLOUDCACHESIZE"
+                    | "POINTCLOUD2DVSDISPLAY"
+                    | "POINTCLOUDLIGHTING"
+                    | "POINTCLOUDLIGHTSOURCE"
+                    | "POINTCLOUDPOINTMAXLEGACY"
                     | "XCLIPFRAME"
                     | "WIPEOUTFRAME"
                     | "HALOGAP"
@@ -1070,6 +1180,7 @@ impl OpenCADStudio {
                     | "CONSTRAINTNAMEFORMAT"
                     | "DYNCONSTRAINTDISPLAY"
                     | "CCONSTRAINTFORM"
+                    | "DYNMODE"
             ) =>
             {
                 return self.dispatch_styleprops(&format!("SETVAR {cmd}"), i);
@@ -1092,10 +1203,44 @@ impl OpenCADStudio {
                 let value = it.next().map(|s| s.trim().to_string());
                 if name.is_empty() || name == "?" {
                     self.command_line.push_info(&super::plotvars::setvar_listing());
+                    self.command_line.push_info(&super::blockvars::setvar_listing());
                     self.command_line.push_info(
-                        crate::t!("SETVAR: CETRANSPARENCY LTSCALE CELTSCALE PDMODE PDSIZE TEXTSIZE ORTHOMODE FILLMODE MIRRTEXT FRAME IMAGEFRAME PDFFRAME WIPEOUTFRAME XCLIPFRAME POINTCLOUDCLIPFRAME ZOOMWHEEL ZOOMFACTOR SHORTCUTMENU SHORTCUTMENUDURATION CURSORSIZE PICKBOX CURSORTYPE SNAPANG TEXTFILL CLIPROMPTLINES COMMANDLINEFADETIME ATTREQ ATTDIA DIMASSOC DIMCONTINUEMODE CONSTRAINTSOLVEMODE CONSTRAINTINFER CONSTRAINTBARDISPLAY CONSTRAINTBARMODE CONSTRAINTNAMEFORMAT DYNCONSTRAINTDISPLAY ANGBASE ANGDIR SKETCHINC SKPOLY SKTOLERANCE DONUTID DONUTOD CENTEREXE CENTERLAYER CENTERLTYPE CENTERLTSCALE CENTERLTYPEFILE CENTERCROSSSIZE CENTERCROSSGAP CENTERMARKEXE COLORTHEME SELECTIONAREA SELECTIONAREAOPACITY SELECTIONEFFECT SELECTIONEFFECTCOLOR WINDOWSAREACOLOR CROSSINGAREACOLOR SELECTIONPREVIEW GRIPSIZE GRIPCOLOR GRIPHOT GRIPHOVER GRIPOBJLIMIT | CLAYER CELTYPE TEXTSTYLE (read-only)").as_ref(),
+                        crate::t!("SETVAR: CETRANSPARENCY LTSCALE CELTSCALE PDMODE PDSIZE TEXTSIZE ORTHOMODE FILLMODE MIRRTEXT FRAME IMAGEFRAME PDFFRAME WIPEOUTFRAME XCLIPFRAME POINTCLOUDCLIPFRAME ZOOMWHEEL ZOOMFACTOR SHORTCUTMENU SHORTCUTMENUDURATION CURSORSIZE PICKBOX CURSORTYPE SNAPANG TEXTFILL CLIPROMPTLINES COMMANDLINEFADETIME ATTREQ ATTDIA DIMASSOC DIMCONTINUEMODE CONSTRAINTSOLVEMODE CONSTRAINTINFER CONSTRAINTBARDISPLAY CONSTRAINTBARMODE CONSTRAINTNAMEFORMAT DYNCONSTRAINTDISPLAY DYNMODE ANGBASE ANGDIR SKETCHINC SKPOLY SKTOLERANCE DONUTID DONUTOD CENTEREXE CENTERLAYER CENTERLTYPE CENTERLTSCALE CENTERLTYPEFILE CENTERCROSSSIZE CENTERCROSSGAP CENTERMARKEXE COLORTHEME SELECTIONAREA SELECTIONAREAOPACITY SELECTIONEFFECT SELECTIONEFFECTCOLOR WINDOWSAREACOLOR CROSSINGAREACOLOR SELECTIONPREVIEW GRIPSIZE GRIPCOLOR GRIPHOT GRIPHOVER GRIPOBJLIMIT | CLAYER CELTYPE TEXTSTYLE (read-only)").as_ref(),
                     );
                 } else {
+                    // Point cloud settings, kept with the drawing.
+                    if let Some(setting) = crate::scene::model::point_cloud::setting(&name) {
+                        let document = &self.tabs[i].scene.document;
+                        let current = crate::scene::model::point_cloud::setting_value(document, setting);
+                        match value.as_deref().map(|value| setting.check(value)) {
+                            Some(Ok(new)) => {
+                                if new != current {
+                                    crate::io::set_drawing_variable(
+                                        &mut self.tabs[i].scene.document,
+                                        setting.name,
+                                        &new.to_string(),
+                                    );
+                                    self.tabs[i].scene.bump_geometry();
+                                    self.tabs[i].dirty = true;
+                                }
+                            }
+                            // Refused: say why, and ask again unless the value ends it.
+                            Some(Err(refusal)) => {
+                                for line in &refusal.lines {
+                                    self.command_line.push_error(line);
+                                }
+                                if refusal.ask_again {
+                                    self.command_line.push_output(&format!("Enter new value for {name} <{current}>:"));
+                                    self.pending_setvar = Some(name.clone());
+                                }
+                            }
+                            None => {
+                                self.command_line.push_output(&format!("Enter new value for {name} <{current}>:"));
+                                self.pending_setvar = Some(name.clone());
+                            }
+                        }
+                        return Some(self.finish_dispatch(cmd));
+                    }
                     if name == "XDWGFADECTL" {
                         let current = crate::scene::cache::block_cache::xref_fade_ctl();
                         if let Some(value) = &value {
@@ -1178,6 +1323,62 @@ impl OpenCADStudio {
                                     "Enter new value for PDFIMPORTIMAGEPATH, or . for none <\"{}\">:",
                                     image_path()
                                 ));
+                                self.pending_setvar = Some(name.clone());
+                            }
+                        }
+                        return Some(self.finish_dispatch(cmd));
+                    }
+                    if name == "SURFACEASSOCIATIVITY" {
+                        use crate::scene::model::sweep_model;
+                        let current = i16::from(sweep_model::surface_associativity());
+                        match value.as_deref().map(|v| v.trim().parse::<i16>().ok().filter(|v| (0..=1).contains(v))) {
+                            Some(Some(mode)) => {
+                                if current != mode {
+                                    sweep_model::set_surface_associativity(mode == 1);
+                                    self.save_config();
+                                }
+                            }
+                            Some(None) => {
+                                self.command_line.push_error(crate::t!("Requires 0 or 1 only.").as_ref());
+                                self.command_line.push_output(&format!("Enter new value for SURFACEASSOCIATIVITY <{current}>:"));
+                                self.pending_setvar = Some(name.clone());
+                            }
+                            None => {
+                                self.command_line.push_output(&format!("Enter new value for SURFACEASSOCIATIVITY <{current}>:"));
+                                self.pending_setvar = Some(name.clone());
+                            }
+                        }
+                        return Some(self.finish_dispatch(cmd));
+                    }
+                    if name == "FIELDDISPLAY" {
+                        let current = i16::from(crate::entities::field::display());
+                        match value.as_deref().map(|v| v.trim().parse::<i16>().ok().filter(|v| (0..=1).contains(v))) {
+                            Some(Some(mode)) => {
+                                if current != mode {
+                                    crate::entities::field::set_display(mode == 1);
+                                    // A profile setting: redraw the fields of every open drawing.
+                                    for tab in &mut self.tabs {
+                                        let changes: Vec<_> = tab
+                                            .scene
+                                            .document
+                                            .entities()
+                                            .filter(|e| crate::entities::field::hosts_field(&tab.scene.document, e))
+                                            .map(|e| (e.common().handle, crate::scene::ChangeKind::Modified))
+                                            .collect();
+                                        if !changes.is_empty() {
+                                            tab.scene.bump_entities(&changes);
+                                        }
+                                    }
+                                    self.save_config();
+                                }
+                            }
+                            Some(None) => {
+                                self.command_line.push_error(crate::t!("Requires 0 or 1 only.").as_ref());
+                                self.command_line.push_output(&format!("Enter new value for FIELDDISPLAY <{current}>:"));
+                                self.pending_setvar = Some(name.clone());
+                            }
+                            None => {
+                                self.command_line.push_output(&format!("Enter new value for FIELDDISPLAY <{current}>:"));
                                 self.pending_setvar = Some(name.clone());
                             }
                         }
@@ -1619,6 +1820,17 @@ impl OpenCADStudio {
                                     .ok_or_else(|| "SETVAR: 0 or 1 required.".into()),
                                 None => Ok((format!("MIRRTEXT = {}", h.mirror_text as i32), false)),
                             },
+                            "DYNMODE" => match &value {
+                                Some(v) => match v.parse::<i16>() {
+                                    Ok(mode) if (-3..=3).contains(&mode) => {
+                                        self.dyn_mode = mode;
+                                        self.dyn_input = mode > 0;
+                                        Ok((format!("DYNMODE = {mode}"), true))
+                                    }
+                                    _ => Err("SETVAR: integer from -3 to 3 required.".into()),
+                                },
+                                None => Ok((format!("DYNMODE = {}", self.dyn_mode), false)),
+                            },
                             "ZOOMWHEEL" => match &value {
                                 Some(v) => match parse_bool(v) {
                                     Some(reversed) => {
@@ -1638,13 +1850,23 @@ impl OpenCADStudio {
                                     false,
                                 )),
                             },
+                            // The system variable keeps its own range. The
+                            // Options window reaches further
+                            // (`settings::ZOOM_FACTOR_MAX`) and may have
+                            // stored a value above this, which a bare
+                            // `SETVAR ZOOMFACTOR` still reports; only setting
+                            // one is held to the range of the variable.
                             "ZOOMFACTOR" => match &value {
                                 Some(v) => match v.parse::<i32>() {
-                                    Ok(factor) if (3..=100).contains(&factor) => {
+                                    Ok(factor)
+                                        if (crate::app::settings::ZOOM_FACTOR_MIN
+                                            ..=crate::app::settings::ZOOM_FACTOR_MAX)
+                                            .contains(&factor) =>
+                                    {
                                         self.zoom_factor = factor;
                                         Ok((format!("ZOOMFACTOR = {factor}"), true))
                                     }
-                                    _ => Err("SETVAR: integer from 3 to 100 required.".into()),
+                                    _ => Err("SETVAR: integer from 3 to 500 required.".into()),
                                 },
                                 None => {
                                     Ok((format!("ZOOMFACTOR = {}", self.zoom_factor), false))
@@ -2149,6 +2371,7 @@ impl OpenCADStudio {
                                 Some(v) => v
                                     .parse::<i16>()
                                     .map(|x| {
+                                        let x = x.clamp(0, 8);
                                         h.linear_unit_precision = x;
                                         (format!("LUPREC = {x}"), true)
                                     })
@@ -2171,6 +2394,7 @@ impl OpenCADStudio {
                                 Some(v) => v
                                     .parse::<i16>()
                                     .map(|x| {
+                                        let x = x.clamp(0, 8);
                                         h.angular_unit_precision = x;
                                         (format!("AUPREC = {x}"), true)
                                     })
@@ -2223,6 +2447,14 @@ impl OpenCADStudio {
                                 Some(v) => v
                                     .parse::<i16>()
                                     .map(|x| {
+                                        // Stored values stay inside the range
+                                        // the Options slider can ask for; the
+                                        // consumption sites clamp again for
+                                        // file-sourced headers.
+                                        let x = x.clamp(
+                                            0,
+                                            crate::entities::solid3d::MAX_HEADER_ISOLINES,
+                                        );
                                         h.isolines = x;
                                         (format!("ISOLINES = {x}"), true)
                                     })
@@ -2581,6 +2813,7 @@ impl OpenCADStudio {
                                         // Without this it marked the drawing
                                         // modified instead of persisting.
                                         | "TEXTFILL"
+                                        | "DYNMODE"
                                 ) {
                                     self.persist_settings_if_changed();
                                 } else {
@@ -2813,6 +3046,7 @@ impl OpenCADStudio {
                             self.tabs[i].scene.bump_geometry_no_blocks();
                         }
                         if type_str == "UCS" {
+                            self.tabs[i].scene.bump_ucs_epoch();
                             if let Some(active) = self.tabs[i].active_ucs.as_mut() {
                                 if active.name.eq_ignore_ascii_case(&old_name) {
                                     active.name = new_name.clone();
@@ -3130,7 +3364,7 @@ impl OpenCADStudio {
                     );
                 }
             }
-            cmd if cmd == "DDPTYPE" => {
+            cmd if cmd == "DDPTYPE" || cmd == "PTYPE" => {
                 // The dialog shows the magnitude; the sign (relative/absolute)
                 // is driven by the radio buttons. A positive PDSIZE is absolute;
                 // zero or negative is relative.
@@ -3416,6 +3650,73 @@ mod tests {
         app
     }
 
+    /// `SETVAR ZOOMFACTOR` is the system variable, so it keeps the range
+    /// the variable has — the Options window is where a wheel faster than
+    /// that is set, and a value set there is still what the variable
+    /// reports.
+    #[test]
+    fn setvar_zoomfactor_keeps_the_range_of_the_system_variable() {
+        let mut app = fresh_app();
+
+        let _ = app.run_command_line("SETVAR ZOOMFACTOR 500");
+        assert_eq!(app.zoom_factor, 500);
+
+        let _ = app.run_command_line("SETVAR ZOOMFACTOR 501");
+        assert_eq!(app.zoom_factor, 500, "501 is not a value the variable takes");
+
+        let _ = app.run_command_line("SETVAR ZOOMFACTOR 2");
+        assert_eq!(app.zoom_factor, 500, "and neither is 2");
+
+        // What the Options field reached is still reported here.
+        let _ = app.update(crate::app::Message::ZoomFactorInputChanged("250".into()));
+        assert_eq!(app.zoom_factor, 250);
+        let _ = app.run_command_line("SETVAR ZOOMFACTOR 60");
+        assert_eq!(app.zoom_factor, 60);
+    }
+
+    /// `SETVAR ISOLINES` stored any parseable `i16` verbatim. The header
+    /// value is the per-face isolate count handed to the tessellation
+    /// kernel (which loops `0..count`), so `ISOLINES 32767` made every
+    /// rebuild and per-cursor preview allocate without bound. The stored
+    /// value must stay inside the range the app's own UI can ask for
+    /// (the Options slider is 0..=64).
+    #[test]
+    fn setvar_isolines_stays_within_the_renderable_range() {
+        let mut app = fresh_app();
+        let i = app.active_tab;
+
+        let _ = app.run_command_line("SETVAR ISOLINES 32767");
+        assert_eq!(app.tabs[i].scene.document.header.isolines, 64);
+
+        let _ = app.run_command_line("SETVAR ISOLINES 8");
+        assert_eq!(app.tabs[i].scene.document.header.isolines, 8);
+
+        let _ = app.run_command_line("SETVAR ISOLINES -3");
+        assert_eq!(app.tabs[i].scene.document.header.isolines, 0);
+    }
+
+    /// `SETVAR LUPREC` / `AUPREC` stored any parseable `i16` verbatim. The
+    /// units dialog only ever offers 0-8 places, and the formatters read the
+    /// header on every properties/annotation call, so an unclamped value
+    /// (positive or negative) fed unbounded strings into those hot paths.
+    #[test]
+    fn setvar_precision_stays_within_the_range_the_units_dialog_offers() {
+        let mut app = fresh_app();
+        let i = app.active_tab;
+
+        let _ = app.run_command_line("SETVAR LUPREC 30000");
+        assert_eq!(app.tabs[i].scene.document.header.linear_unit_precision, 8);
+
+        let _ = app.run_command_line("SETVAR AUPREC 30000");
+        assert_eq!(app.tabs[i].scene.document.header.angular_unit_precision, 8);
+
+        let _ = app.run_command_line("SETVAR LUPREC -3");
+        assert_eq!(app.tabs[i].scene.document.header.linear_unit_precision, 0);
+
+        let _ = app.run_command_line("SETVAR LUPREC 5");
+        assert_eq!(app.tabs[i].scene.document.header.linear_unit_precision, 5);
+    }
+
     #[test]
     fn selection_commands_gather_instead_of_using_the_whole_drawing() {
         for command in ["SETBYLAYER", "OVERKILL"] {
@@ -3609,6 +3910,51 @@ mod tests {
 
         let _ = app.run_command_line("SETVAR DELOBJ 4");
         assert_eq!(app.delete_objects, 3);
+    }
+
+    #[test]
+    fn dynmode_direct_and_setvar_toggles_dynamic_input() {
+        let mut app = fresh_app();
+        assert!(app.dyn_input);
+        assert_eq!(app.dyn_mode, 3);
+
+        // Turn off via direct command: DYNMODE 0
+        let _ = app.run_command_line("DYNMODE 0");
+        assert!(!app.dyn_input);
+        assert_eq!(app.dyn_mode, 0);
+
+        // Turn on via direct command: DYNMODE 3
+        let _ = app.run_command_line("DYNMODE 3");
+        assert!(app.dyn_input);
+        assert_eq!(app.dyn_mode, 3);
+
+        // Turn off via SETVAR: SETVAR DYNMODE 0
+        let _ = app.run_command_line("SETVAR DYNMODE 0");
+        assert!(!app.dyn_input);
+        assert_eq!(app.dyn_mode, 0);
+
+        // Turn on via SETVAR: SETVAR DYNMODE 1 (pointer input only)
+        let _ = app.run_command_line("SETVAR DYNMODE 1");
+        assert!(app.dyn_input);
+        assert_eq!(app.dyn_mode, 1);
+
+        // Out of range rejected
+        let _ = app.run_command_line("DYNMODE 5");
+        assert_eq!(app.dyn_mode, 1);
+        assert!(app.dyn_input);
+
+        let _ = app.run_command_line("DYNMODE -5");
+        assert_eq!(app.dyn_mode, 1);
+        assert!(app.dyn_input);
+
+        // F12 turns it off temporarily (negative) and restores the mode.
+        let _ = app.update(crate::app::Message::ToggleDynInput);
+        assert!(!app.dyn_input);
+        assert_eq!(app.dyn_mode, -1);
+
+        let _ = app.update(crate::app::Message::ToggleDynInput);
+        assert!(app.dyn_input);
+        assert_eq!(app.dyn_mode, 1);
     }
 }
 

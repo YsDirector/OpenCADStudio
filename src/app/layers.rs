@@ -62,10 +62,34 @@ impl OpenCADStudio {
         let i = self.active_tab;
         let doc_layers = self.tabs[i].scene.document.layers.clone();
         let vp_info = self.tabs[i].scene.viewport_list();
+        let names_before: Vec<String> =
+            self.tabs[i].layers.layers.iter().map(|l| l.name.clone()).collect();
         self.tabs[i]
             .layers
             .sync_with_viewports(&doc_layers, vp_info);
         self.sync_ribbon_layers();
+        // The Properties palette lists layer names it read when it was built;
+        // a layer added, removed or renamed must reach that list too (#1664).
+        // Only then: the rebuild is costly for a large selection.
+        let names_changed = self.tabs[i].layers.layers.len() != names_before.len()
+            || self.tabs[i]
+                .layers
+                .layers
+                .iter()
+                .zip(&names_before)
+                .any(|(layer, before)| layer.name != *before);
+        if names_changed {
+            self.refresh_properties();
+        }
+    }
+
+    /// Pick up layers an entity edit registered on the fly (`ensure_layer`).
+    pub(super) fn sync_registered_layers(&mut self, tab: usize) {
+        if !std::mem::take(&mut self.tabs[tab].scene.layer_table_dirty) {
+            return;
+        }
+        self.tabs[tab].dirty = true;
+        self.refresh_layer_panel();
     }
 
     pub(super) fn sync_ribbon_layers(&mut self) {
@@ -79,6 +103,11 @@ impl OpenCADStudio {
             return;
         }
         let active = self.tabs[i].active_layer.clone();
+        let vp_column = self.tabs[i].scene.active_viewport.and_then(|vp| {
+            (self.tabs[i].scene.current_layout != "Model")
+                .then(|| self.tabs[i].layers.vp_cols.iter().position(|c| c.handle == vp))
+                .flatten()
+        });
         let infos: Vec<crate::ui::ribbon::LayerInfo> = self.tabs[i]
             .layers
             .layers
@@ -91,6 +120,8 @@ impl OpenCADStudio {
                 visible: l.visible,
                 frozen: l.frozen,
                 locked: l.locked,
+                vp_frozen: vp_column
+                    .map(|column| (column, l.vp_frozen.get(column).copied().unwrap_or(false))),
             })
             .collect();
         let names: Vec<String> = infos.iter().map(|l| l.name.clone()).collect();
@@ -133,7 +164,12 @@ impl OpenCADStudio {
         }
         let doc = &self.tabs[i].scene.document;
 
-        let text_names: Vec<String> = doc.text_styles.iter().map(|s| s.name.clone()).collect();
+        let text_names: Vec<String> = doc
+            .text_styles
+            .iter()
+            .filter(|s| !s.is_shape_file)
+            .map(|s| s.name.clone())
+            .collect();
         let active_text = doc.header.current_text_style_name.clone();
         let active_text = if text_names.contains(&active_text) {
             active_text

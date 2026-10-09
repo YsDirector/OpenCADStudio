@@ -4,7 +4,7 @@ use codec::{
     entities::{
         AcisData, EntityCommon, Region, Solid3D, Surface, SurfaceData, SurfaceKind, Wire,
     },
-    objects::SolidHistoryOperation,
+    objects::{SolidHistoryBoolean, SolidHistoryOperation},
     EntityType, Handle,
 };
 use kernel::brep::{Body, EdgeKey, FaceKey};
@@ -655,16 +655,9 @@ impl super::OpenCADStudio {
         };
 
         self.push_undo_snapshot(i, "FILLETEDGE");
-        if self.tabs[i].scene.document.solid_history_graph(handle).is_none()
-            && !self.tabs[i]
-                .scene
-                .create_solid_history(handle, solid_history::brep_op(source))
-        {
-            self.command_line
-                .push_error(crate::t!("The edge body history could not be created.").as_ref());
-            return false;
-        }
-        if !self.tabs[i].scene.append_solid_history(
+        // A solid without history stays without one, as in the reference.
+        let has_history = self.tabs[i].scene.document.solid_history_graph(handle).is_some();
+        if has_history && !self.tabs[i].scene.append_solid_history(
             handle,
             solid_history::fillet_op(history_edges, radius),
         ) {
@@ -672,11 +665,13 @@ impl super::OpenCADStudio {
                 .push_error(crate::t!("The fillet history could not be recorded.").as_ref());
             return false;
         }
-        let _ = self.tabs[i].scene.apply_solid_history_choice(
-            handle,
-            solid_history::PROP_HISTORY,
-            "Record",
-        );
+        if has_history {
+            let _ = self.tabs[i].scene.apply_solid_history_choice(
+                handle,
+                solid_history::PROP_HISTORY,
+                "Record",
+            );
+        }
         let Some(entity) = self.tabs[i].scene.document.get_entity(handle).cloned() else {
             return false;
         };
@@ -743,16 +738,8 @@ impl super::OpenCADStudio {
         };
 
         self.push_undo_snapshot(i, "CHAMFEREDGE");
-        if self.tabs[i].scene.document.solid_history_graph(handle).is_none()
-            && !self.tabs[i]
-                .scene
-                .create_solid_history(handle, solid_history::brep_op(source))
-        {
-            self.command_line
-                .push_error(crate::t!("The edge body history could not be created.").as_ref());
-            return false;
-        }
-        if !self.tabs[i].scene.append_solid_history(
+        let has_history = self.tabs[i].scene.document.solid_history_graph(handle).is_some();
+        if has_history && !self.tabs[i].scene.append_solid_history(
             handle,
             solid_history::chamfer_op(
                 history_edges,
@@ -765,11 +752,13 @@ impl super::OpenCADStudio {
                 .push_error(crate::t!("The chamfer history could not be recorded.").as_ref());
             return false;
         }
-        let _ = self.tabs[i].scene.apply_solid_history_choice(
-            handle,
-            solid_history::PROP_HISTORY,
-            "Record",
-        );
+        if has_history {
+            let _ = self.tabs[i].scene.apply_solid_history_choice(
+                handle,
+                solid_history::PROP_HISTORY,
+                "Record",
+            );
+        }
         let Some(entity) = self.tabs[i].scene.document.get_entity(handle).cloned() else {
             return false;
         };
@@ -1017,6 +1006,32 @@ impl super::OpenCADStudio {
     }
 
     /// Intersect compatible selected solids, Regions, and coplanar Surfaces.
+    /// Before a boolean replaces `retained` with `entity`: with SOLIDHIST on,
+    /// join the histories of the solids it combined (`steps`, in the order
+    /// the result applied them) into `retained`'s and hand that history to
+    /// `entity`; otherwise drop it. True when the history was kept.
+    fn join_boolean_history(
+        &mut self,
+        retained: Handle,
+        entity: &mut EntityType,
+        steps: &[(Handle, u8)],
+        bodies: &HashMap<Handle, Body>,
+    ) -> bool {
+        let scene = &mut self.tabs[self.active_tab].scene;
+        let joined = scene.document.header.record_solid_history
+            && scene.join_boolean_histories(retained, retained, steps, bodies);
+        if !joined {
+            scene.delete_solid_history(retained);
+            return false;
+        }
+        if let (EntityType::Solid3D(entity), Some(EntityType::Solid3D(current))) =
+            (entity, scene.document.get_entity(retained))
+        {
+            entity.history_handle = current.history_handle;
+        }
+        true
+    }
+
     pub(super) fn solid_intersect(&mut self) -> Task<Message> {
         let i = self.active_tab;
         let mut handles = self.selected_intersect_handles();
@@ -1133,7 +1148,7 @@ impl super::OpenCADStudio {
 
         if prepared.is_empty() {
             self.command_line.push_output(
-                crate::tf!(
+                crate::t!(
                     "INTERSECT: no positive-area common result; %{count} original object(s) retained.",
                     count = retained_without_change
                 )
@@ -1150,11 +1165,17 @@ impl super::OpenCADStudio {
             match group.outcome {
                 PreparedIntersectOutcome::Replace {
                     retained,
-                    entity,
+                    mut entity,
                     body,
                     display,
                 } => {
-                    self.tabs[i].scene.delete_solid_history(retained);
+                    let steps = group
+                        .handles
+                        .iter()
+                        .filter(|handle| **handle != retained)
+                        .map(|handle| (*handle, SolidHistoryBoolean::INTERSECT))
+                        .collect::<Vec<_>>();
+                    let joined = self.join_boolean_history(retained, &mut entity, &steps, &bodies);
                     if !self.tabs[i].scene.update_entity(entity) {
                         self.command_line.push_error(
                             crate::t!("INTERSECT: the retained object could not be updated.")
@@ -1163,6 +1184,7 @@ impl super::OpenCADStudio {
                         return Task::none();
                     }
                     if record_history
+                        && !joined
                         && matches!(
                             self.tabs[i].scene.document.get_entity(retained),
                             Some(EntityType::Solid3D(_))
@@ -1193,7 +1215,7 @@ impl super::OpenCADStudio {
         self.tabs[i].dirty = true;
         self.refresh_properties();
         self.command_line.push_output(
-            crate::tf!(
+            crate::t!(
                 "INTERSECT: created %{count} result object(s).",
                 count = results.len()
             )
@@ -1339,11 +1361,37 @@ impl super::OpenCADStudio {
                     let history = solid_history::brep_op(&group.body);
                     let mut entity = Solid3D::new();
                     entity.common = group.common;
-                    self.add_solid_model_preserving_style(
+                    let handle = self.add_solid_model_preserving_style(
                         EntityType::Solid3D(entity),
                         group.body,
                         history,
-                    )
+                    );
+                    // The new solid's history becomes the joined histories
+                    // of the solids it unites.
+                    let record = self.tabs[i].scene.document.header.record_solid_history;
+                    if !handle.is_null() && record {
+                        let bodies = group
+                            .handles
+                            .iter()
+                            .filter_map(|operand| {
+                                let body = self.tabs[i].scene.solid_models.get(operand)?;
+                                Some((*operand, body.clone()))
+                            })
+                            .collect::<HashMap<_, _>>();
+                        let steps = group
+                            .handles
+                            .iter()
+                            .skip(1)
+                            .map(|operand| (*operand, SolidHistoryBoolean::UNION))
+                            .collect::<Vec<_>>();
+                        let scene = &mut self.tabs[i].scene;
+                        if !scene.join_boolean_histories(handle, group.handles[0], &steps, &bodies) {
+                            if let Some(body) = scene.solid_models.get(&handle).cloned() {
+                                scene.create_solid_history(handle, solid_history::brep_op(&body));
+                            }
+                        }
+                    }
+                    handle
                 }
                 UnionEntityKind::Region => {
                     let mut entity = Region::new();
@@ -1354,7 +1402,7 @@ impl super::OpenCADStudio {
                     let mut entity = Surface::new(SurfaceKind::Generic);
                     entity.common = group.common;
                     self.add_surface_model_preserving_style(
-                        EntityType::Surface(entity),
+                        EntityType::Surface(Box::new(entity)),
                         group.body,
                     )
                 }
@@ -1375,7 +1423,7 @@ impl super::OpenCADStudio {
         self.tabs[i].dirty = true;
         self.refresh_properties();
         self.command_line.push_output(
-            crate::tf!("UNION: created %{count} result object(s).", count = created.len()).as_ref(),
+            crate::t!("UNION: created %{count} result object(s).", count = created.len()).as_ref(),
         );
         Task::none()
     }
@@ -1599,8 +1647,20 @@ impl super::OpenCADStudio {
         let mut retained = Vec::new();
         let mut consumed = Vec::new();
         for group in prepared {
-            if let Some((handle, entity, body, display)) = group.result {
-                self.tabs[i].scene.delete_solid_history(handle);
+            if let Some((handle, mut entity, body, display)) = group.result {
+                let steps = group
+                    .bases
+                    .iter()
+                    .skip(1)
+                    .map(|base| (*base, SolidHistoryBoolean::UNION))
+                    .chain(
+                        group
+                            .cutters
+                            .iter()
+                            .map(|cutter| (*cutter, SolidHistoryBoolean::SUBTRACT)),
+                    )
+                    .collect::<Vec<_>>();
+                let joined = self.join_boolean_history(handle, &mut entity, &steps, &operand_bodies);
                 if !self.tabs[i].scene.update_entity(entity) {
                     self.command_line.push_error(
                         crate::t!("SUBTRACT: the retained base object could not be updated.").as_ref(),
@@ -1608,6 +1668,7 @@ impl super::OpenCADStudio {
                     return Task::none();
                 }
                 if record_history
+                    && !joined
                     && matches!(
                         self.tabs[i].scene.document.get_entity(handle),
                         Some(EntityType::Solid3D(_))
@@ -1634,7 +1695,7 @@ impl super::OpenCADStudio {
         self.tabs[i].dirty = true;
         self.refresh_properties();
         self.command_line.push_output(
-            crate::tf!(
+            crate::t!(
                 "SUBTRACT: created %{count} result object(s).",
                 count = retained.len()
             )
@@ -1867,7 +1928,7 @@ impl super::OpenCADStudio {
         self.tabs[i].dirty = true;
         self.refresh_properties();
         self.command_line.push_output(
-            crate::tf!(
+            crate::t!(
                 "SLICE: created %{count} result object(s).",
                 count = retained.len()
             )
@@ -2316,7 +2377,7 @@ impl super::OpenCADStudio {
         }
         let n = surfaces.len();
         for surf in surfaces {
-            self.tabs[i].scene.add_entity(EntityType::Surface(surf));
+            self.tabs[i].scene.add_entity(EntityType::Surface(Box::new(surf)));
         }
         self.tabs[i].dirty = true;
         self.refresh_properties();

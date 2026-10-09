@@ -9,7 +9,7 @@
 //   Pick two lines (line-only; arcs are not chamferable).
 //   Finds intersection, backs off dist1 along line 1 and dist2 along line 2.
 
-use codec::entities::{Arc as ArcEnt, Line as LineEnt, LwPolyline};
+use codec::entities::{Arc as ArcEnt, Line as LineEnt, LwPolyline, LwVertex};
 
 // Shared plane geometry, from opencadkernel via the local adapters.
 use super::geom;
@@ -769,6 +769,9 @@ enum FilletEntity {
         handle: Handle,
         seg_idx: usize,
     },
+    /// A circle, ellipse or spline: filleted through the kernel's general
+    /// construction, and trimmed only when it has ends to trim.
+    Curve(EntityType),
 }
 
 impl FilletEntity {
@@ -776,6 +779,9 @@ impl FilletEntity {
         match e {
             EntityType::Line(l) => Some(Self::Line(l.clone())),
             EntityType::Arc(a) => Some(Self::Arc(a.clone())),
+            EntityType::Circle(_) | EntityType::Ellipse(_) | EntityType::Spline(_) => {
+                crate::entities::curve::entity_curve_xy(e).map(|_| Self::Curve(e.clone()))
+            }
             _ => None,
         }
     }
@@ -794,6 +800,7 @@ impl FilletEntity {
             Self::Line(l) => EntityType::Line(l.clone()),
             Self::Arc(a) => EntityType::Arc(a.clone()),
             Self::LwPoly { poly, .. } => EntityType::LwPolyline(poly.clone()),
+            Self::Curve(entity) => entity.clone(),
         }
     }
 
@@ -802,6 +809,20 @@ impl FilletEntity {
             Self::Line(l) => l.start.z,
             Self::Arc(a) => a.center.z,
             Self::LwPoly { poly, .. } => poly.elevation,
+            Self::Curve(EntityType::Circle(c)) => c.center.z,
+            Self::Curve(EntityType::Ellipse(e)) => e.center.z,
+            Self::Curve(EntityType::Spline(s)) => s.control_points.first().map_or(0.0, |p| p.z),
+            Self::Curve(_) => 0.0,
+        }
+    }
+
+    /// The shape as a kernel curve in plan.
+    fn kernel_curve(&self) -> Option<KernelCurve> {
+        match self {
+            Self::Line(l) => Some(line_curve(l)),
+            Self::Arc(a) => Some(arc_curve(a)),
+            Self::LwPoly { poly, seg_idx, .. } => Some(line_curve(&lwpoly_seg_as_line(poly, *seg_idx))),
+            Self::Curve(entity) => crate::entities::curve::entity_curve_xy(entity),
         }
     }
 }
@@ -828,6 +849,17 @@ fn compute_fillet_entities(
     radius: f64,
 ) -> Option<(EntityType, EntityType, Option<EntityType>)> {
     let z = e1.elevation();
+    // A polyline arc segment would be filleted as its straight chord.
+    let picks_arc_segment = |entity: &FilletEntity| {
+        matches!(entity, FilletEntity::LwPoly { poly, seg_idx, .. }
+            if poly.vertices.get(*seg_idx).is_some_and(|vertex| vertex.bulge.abs() > 1e-12))
+    };
+    if picks_arc_segment(e1) || picks_arc_segment(e2) {
+        return None;
+    }
+    if matches!(e1, FilletEntity::Curve(_)) || matches!(e2, FilletEntity::Curve(_)) {
+        return fillet_curves(e1, click1, e2, click2, radius, z);
+    }
 
     match (e1, e2) {
         // ── Line × Line ───────────────────────────────────────────────────
@@ -859,24 +891,39 @@ fn compute_fillet_entities(
                 ..
             },
         ) if h1 == h2 => {
-            // Adjacent segments share a corner vertex — fillet that corner.
-            let (low, high) = if *s1 < *s2 { (*s1, *s2) } else { (*s2, *s1) };
             let n = p1.vertices.len();
-            // The wrap-around corner of a closed polyline joins the last
-            // segment (n-1) and the first (0); their shared vertex is v0.
-            let wrap = p1.is_closed && low == 0 && high == n.saturating_sub(1);
-            // Segments must be consecutive, or the wrap-around pair above.
-            if !(high == low + 1 || wrap) {
+            let closed = p1.is_closed;
+            let seg_count = if closed { n } else { n.saturating_sub(1) };
+            let next = |seg: usize| if closed { (seg + 1) % n } else { seg + 1 };
+            let straight = |seg: usize| seg < seg_count && p1.vertices[seg].bulge.abs() < 1e-12;
+            // `before` runs into the corner and `after` leaves it. Between them
+            // sits nothing (a sharp corner), an old fillet arc being replaced,
+            // or — on an open polyline — the gap between its two ends, which
+            // the fillet closes. Arc segments themselves are never filleted:
+            // treating one as its chord bent the result across the shape.
+            enum Between {
+                Corner,
+                Arc(usize),
+                OpenEnds,
+            }
+            let order = |a: usize, b: usize| {
+                if next(a) == b {
+                    Some((a, b, Between::Corner))
+                } else if next(a) < seg_count
+                    && next(next(a)) == b
+                    && !straight(next(a))
+                {
+                    Some((a, b, Between::Arc(next(a))))
+                } else if !closed && seg_count >= 2 && a == seg_count - 1 && b == 0 {
+                    Some((a, b, Between::OpenEnds))
+                } else {
+                    None
+                }
+            };
+            let (before_seg, after_seg, between) = order(*s1, *s2).or_else(|| order(*s2, *s1))?;
+            if !straight(before_seg) || !straight(after_seg) {
                 return None;
             }
-            // `before_seg` ends at the shared corner vertex, `after_seg` starts
-            // there. For the wrap corner that is seg n-1 → v0 → seg 0; for a
-            // normal corner it is seg low → v[high] → seg high.
-            let (before_seg, after_seg, corner_idx) = if wrap {
-                (high, low, 0)
-            } else {
-                (low, high, high)
-            };
             let l1 = lwpoly_seg_as_line(p1, before_seg);
             let l2 = lwpoly_seg_as_line(p1, after_seg);
             // Re-map click to whichever segment each was picked on.
@@ -885,23 +932,49 @@ fn compute_fillet_entities(
             } else {
                 (click2, click1)
             };
-            match compute_fillet(&l1, c1, &l2, c2, radius)? {
-                (EntityType::Line(tl1), EntityType::Line(tl2), maybe_arc) => {
-                    let t1 = [tl1.end.x, tl1.end.y]; // trimmed end of seg before corner
-                    let t2 = [tl2.start.x, tl2.start.y]; // trimmed start of seg after corner
-                    let bulge = if let Some(EntityType::Arc(ref fa)) = maybe_arc {
-                        // center from arc entity
-                        compute_bulge(t1, t2, [fa.center.x, fa.center.y])
-                    } else {
-                        0.0 // r=0, sharp corner
-                    };
-                    let new_poly = lwpoly_replace_corner(p1, corner_idx, t1, t2, bulge);
-                    let et = EntityType::LwPolyline(new_poly);
-                    // Return same rebuilt poly for both slots; caller uses only h1.
-                    Some((et.clone(), et, None))
+            let (EntityType::Line(tl1), EntityType::Line(tl2), maybe_arc) =
+                compute_fillet(&l1, c1, &l2, c2, radius)?
+            else {
+                return None;
+            };
+            let t1 = [tl1.end.x, tl1.end.y]; // trimmed end of seg before corner
+            let t2 = [tl2.start.x, tl2.start.y]; // trimmed start of seg after corner
+            let bulge = match maybe_arc {
+                Some(EntityType::Arc(ref fa)) => compute_bulge(t1, t2, [fa.center.x, fa.center.y]),
+                _ => 0.0, // r=0, sharp corner
+            };
+            let new_poly = match between {
+                Between::Corner => lwpoly_replace_corner(p1, after_seg, t1, t2, bulge),
+                // The old arc runs from its own vertex to the `after` vertex:
+                // move both onto the new tangent points.
+                Between::Arc(arc_seg) => {
+                    let mut poly = p1.clone();
+                    poly.common.handle = Handle::NULL;
+                    poly.vertices[arc_seg].location.x = t1[0];
+                    poly.vertices[arc_seg].location.y = t1[1];
+                    poly.vertices[arc_seg].bulge = bulge;
+                    poly.vertices[after_seg].location.x = t2[0];
+                    poly.vertices[after_seg].location.y = t2[1];
+                    poly
                 }
-                _ => None,
-            }
+                // The last vertex becomes the start of the fillet and the
+                // closing segment is the fillet itself.
+                Between::OpenEnds => {
+                    let mut poly = p1.clone();
+                    poly.common.handle = Handle::NULL;
+                    let last = n - 1;
+                    poly.vertices[last].location.x = t1[0];
+                    poly.vertices[last].location.y = t1[1];
+                    poly.vertices[last].bulge = bulge;
+                    poly.vertices[0].location.x = t2[0];
+                    poly.vertices[0].location.y = t2[1];
+                    poly.is_closed = true;
+                    poly
+                }
+            };
+            let et = EntityType::LwPolyline(new_poly);
+            // Return same rebuilt poly for both slots; caller uses only h1.
+            Some((et.clone(), et, None))
         }
         // ── LwPoly × LwPoly (different entities) ──────────────────────────
         (
@@ -973,6 +1046,8 @@ fn compute_fillet_entities(
                 None
             }
         }
+        // Answered by `fillet_curves` above.
+        (FilletEntity::Curve(_), _) | (_, FilletEntity::Curve(_)) => None,
     }
 }
 
@@ -1230,6 +1305,116 @@ fn fillet_arc_arc(
     None
 }
 
+/// FILLET where one side is a circle, ellipse or spline. The kernel finds the
+/// tangent arcs; each side is then cut back to its tangent point, keeping the
+/// part that was picked. A closed curve has no end to cut back and is left
+/// whole.
+fn fillet_curves(
+    e1: &FilletEntity,
+    click1: [f64; 2],
+    e2: &FilletEntity,
+    click2: [f64; 2],
+    radius: f64,
+    z: f64,
+) -> Option<(EntityType, EntityType, Option<EntityType>)> {
+    if radius < 1e-9 {
+        return None;
+    }
+    let (a, b) = (e1.kernel_curve()?, e2.kernel_curve()?);
+    let common = match e1 {
+        FilletEntity::Line(l) => l.common.clone(),
+        FilletEntity::Arc(a) => a.common.clone(),
+        FilletEntity::LwPoly { poly, .. } => poly.common.clone(),
+        FilletEntity::Curve(entity) => entity.common().clone(),
+    };
+    for fillet in ranked_fillets(&a, click1, &b, click2, radius) {
+        let (Some(first), Some(second)) = (
+            trim_to_tangent(e1, &a, fillet.tangent1, click1),
+            trim_to_tangent(e2, &b, fillet.tangent2, click2),
+        ) else {
+            continue;
+        };
+        return Some((
+            first,
+            second,
+            Some(EntityType::Arc(fillet_entity(&fillet, radius, z, &common))),
+        ));
+    }
+    None
+}
+
+/// One side of a fillet cut back to where the arc touches it, the picked part
+/// kept. `None` when the touch is off a bounded curve's drawn part — only a
+/// line may be extended to meet the arc.
+fn trim_to_tangent(
+    entity: &FilletEntity,
+    curve: &KernelCurve,
+    touch: [f64; 2],
+    click: [f64; 2],
+) -> Option<EntityType> {
+    match entity {
+        FilletEntity::Line(l) => trim_line_to_point(l, touch, click).map(EntityType::Line),
+        FilletEntity::LwPoly { poly, seg_idx, .. } => {
+            let line = lwpoly_seg_as_line(poly, *seg_idx);
+            let trimmed = trim_line_to_point(&line, touch, click)?;
+            Some(EntityType::LwPolyline(rebuild_poly_from_trimmed_line(poly, *seg_idx, &line, &trimmed)))
+        }
+        FilletEntity::Arc(arc) => {
+            let (centre, _, start, end, _) = arc_geom(arc);
+            let at = arc_angle_at(centre, touch);
+            let clamped = clamp_angle_to_arc(at, start, end);
+            if (norm_angle(at) - norm_angle(clamped)).abs() > 0.01 {
+                return None;
+            }
+            let picked = clamp_angle_to_arc(arc_angle_at(centre, click), start, end);
+            Some(EntityType::Arc(
+                if (clamped - start).rem_euclid(TAU) <= (picked - start).rem_euclid(TAU) {
+                    trim_arc(arc, clamped, end)
+                } else {
+                    trim_arc(arc, start, clamped)
+                },
+            ))
+        }
+        FilletEntity::Curve(source) => {
+            let at = curve.parameter_at(touch);
+            let on = curve.point_at(at);
+            let scale = 1e-6 * (1.0 + touch[0].abs().max(touch[1].abs()));
+            if (on[0] - touch[0]).hypot(on[1] - touch[1]) > scale.max(1e-6 * curve.length()) {
+                return None;
+            }
+            if curve.is_closed() {
+                return Some(source.clone());
+            }
+            let keep_end = curve.parameter_at(click) >= at;
+            match source {
+                // Its plan image runs the entity's own parameter only when
+                // it faces up; a mirrored one is left alone.
+                EntityType::Ellipse(ellipse) if ellipse.normal.z > 0.0 => {
+                    let mut trimmed = ellipse.clone();
+                    trimmed.common.handle = Handle::NULL;
+                    let sweep = {
+                        let raw = ellipse.end_parameter - ellipse.start_parameter;
+                        if raw <= 0.0 { raw + TAU } else { raw }
+                    };
+                    let cut = ellipse.start_parameter + at * sweep;
+                    if keep_end {
+                        trimmed.start_parameter = cut;
+                    } else {
+                        trimmed.end_parameter = cut;
+                    }
+                    Some(EntityType::Ellipse(trimmed))
+                }
+                EntityType::Spline(spline) => {
+                    let (low, high) = super::spline_ops::spline_range(spline)?;
+                    let (head, tail) = super::spline_ops::spline_cut(spline, low + at * (high - low))?;
+                    Some(EntityType::Spline(if keep_end { tail } else { head }))
+                }
+                _ => None,
+            }
+        }
+    }
+}
+
 /// Trim a line endpoint nearest to the intersection point, keeping the click side.
 fn trim_line_to_point(line: &LineEnt, isect: [f64; 2], click: [f64; 2]) -> Option<LineEnt> {
     let mut l = line.clone();
@@ -1316,6 +1501,9 @@ enum FilletStep {
     // Radius may be typed directly or measured by picking two points.
     WaitingForRadius,
 
+    /// Trim / No trim: whether the picked objects are cut back to the arc.
+    TrimMode,
+
     RadiusSecondPoint {
         first: DVec3,
     },
@@ -1354,7 +1542,7 @@ impl FilletCommand {
         let entity_index = ModifyEntityIndex::build(&all_entities);
         Self {
             radius: radius as f64,
-            trim: true,
+            trim: defaults::get_fillet_trim(),
             step: FilletStep::First,
             all_entities,
             entity_index,
@@ -1366,12 +1554,16 @@ impl FilletCommand {
     /// Switch to the radius sub-step, remembering the first pick (if any) so
     /// it can be restored afterwards.
     fn enter_radius_substep(&mut self) {
+        self.enter_substep(FilletStep::WaitingForRadius);
+    }
+
+    fn enter_substep(&mut self, step: FilletStep) {
         self.resume_second = if let FilletStep::Second { h1, e1, click1 } = &self.step {
             Some((*h1, e1.clone(), *click1))
         } else {
             None
         };
-        self.step = FilletStep::WaitingForRadius;
+        self.step = step;
     }
 
     /// Leave the radius sub-step, resuming the second pick when a first object
@@ -1383,7 +1575,12 @@ impl FilletCommand {
         };
     }
 
-    fn continue_after_fillet(&mut self, replacements: Vec<(Handle, Vec<EntityType>)>) -> CmdResult {
+    fn continue_after_fillet(&mut self, mut replacements: Vec<(Handle, Vec<EntityType>)>) -> CmdResult {
+        for entity in replacements.iter_mut().flat_map(|(_, entities)| entities.iter_mut()) {
+            if let EntityType::LwPolyline(poly) = entity {
+                drop_zero_length_segments(poly);
+            }
+        }
         self.all_entities.retain(|entity| {
             !replacements
                 .iter()
@@ -1468,6 +1665,12 @@ impl CadCommand for FilletCommand {
             FilletStep::RadiusSecondPoint { .. } => {
                 crate::t!("FILLET  Specify second point for radius:").into_owned()
             }
+            FilletStep::TrimMode => if self.trim {
+                crate::t!("FILLET  Enter Trim mode option [Trim/No trim] <Trim>:")
+            } else {
+                crate::t!("FILLET  Enter Trim mode option [Trim/No trim] <No trim>:")
+            }
+            .into_owned(),
             FilletStep::Second { .. } => {
                 crate::tf!(
                     "FILLET  Select second object (Line/Arc/LwPolyline)  [R={:.4}]:",
@@ -1506,6 +1709,9 @@ impl CadCommand for FilletCommand {
                     },
                 ]
             }
+            FilletStep::TrimMode => {
+                vec![CmdOption::new("Trim", "T"), CmdOption::new("No trim", "N")]
+            }
             FilletStep::Polyline
             | FilletStep::WaitingForRadius
             | FilletStep::RadiusSecondPoint { .. } => vec![],
@@ -1513,7 +1719,7 @@ impl CadCommand for FilletCommand {
     }
 
     fn wants_text_input(&self) -> bool {
-        matches!(self.step, FilletStep::WaitingForRadius)
+        matches!(self.step, FilletStep::WaitingForRadius | FilletStep::TrimMode)
     }
 
     fn dyn_field(&self) -> crate::command::DynField {
@@ -1544,6 +1750,22 @@ impl CadCommand for FilletCommand {
                 // Invalid — stay and re-prompt
                 Some(CmdResult::NeedPoint)
             }
+            FilletStep::TrimMode => {
+                match text.trim().to_uppercase().as_str() {
+                    "" => {}
+                    "T" | "TRIM" => {
+                        self.trim = true;
+                        defaults::set_fillet_trim(true);
+                    }
+                    "N" | "NO TRIM" | "NOTRIM" => {
+                        self.trim = false;
+                        defaults::set_fillet_trim(false);
+                    }
+                    _ => return Some(CmdResult::NeedPoint),
+                }
+                self.resume_after_radius();
+                Some(CmdResult::NeedPoint)
+            }
             FilletStep::First | FilletStep::Second { .. } => {
                 let t = text.trim();
                 let upper = t.to_uppercase();
@@ -1561,6 +1783,10 @@ impl CadCommand for FilletCommand {
                 }
                 if upper == "U" || upper == "UNDO" {
                     return self.undo_last();
+                }
+                if upper == "T" || upper == "TRIM" {
+                    self.enter_substep(FilletStep::TrimMode);
+                    return Some(CmdResult::NeedPoint);
                 }
                 // "R" alone → enter sub-step to collect radius
                 if upper == "R" {
@@ -1594,6 +1820,7 @@ impl CadCommand for FilletCommand {
             self.step,
             FilletStep::WaitingForRadius
                 | FilletStep::RadiusSecondPoint { .. }
+                | FilletStep::TrimMode
         )
     }
 
@@ -1619,7 +1846,8 @@ impl CadCommand for FilletCommand {
 
         match &self.step {
             FilletStep::WaitingForRadius
-            | FilletStep::RadiusSecondPoint { .. } => {
+            | FilletStep::RadiusSecondPoint { .. }
+            | FilletStep::TrimMode => {
                 return CmdResult::NeedPoint;
             }
 
@@ -1741,7 +1969,8 @@ impl CadCommand for FilletCommand {
 
         match &self.step {
             FilletStep::WaitingForRadius
-            | FilletStep::RadiusSecondPoint { .. } => vec![],
+            | FilletStep::RadiusSecondPoint { .. }
+            | FilletStep::TrimMode => vec![],
             FilletStep::Polyline => {
                 let preview = self
                     .entity_index
@@ -1799,23 +2028,27 @@ impl CadCommand for FilletCommand {
                 // For non-LwPoly, skip same-entity hover.
                 let _ = h1;
                 if let Some(e2) = e2 {
+                    if !self.trim && !no_trim_pair_supported(&e1, &e2) {
+                        return vec![];
+                    }
                     if let Some((new_e1, new_e2, maybe_arc)) =
                         compute_fillet_entities(&e1, click1, &e2, click, self.radius)
                     {
-                        let mut out = vec![
-                            WireModel::solid(
+                        let mut out = Vec::new();
+                        if self.trim {
+                            out.push(WireModel::solid(
                                 "fillet_e1".into(),
                                 entity_pts(&new_e1),
                                 WireModel::CYAN,
                                 false,
-                            ),
-                            WireModel::solid(
+                            ));
+                            out.push(WireModel::solid(
                                 "fillet_e2".into(),
                                 entity_pts(&new_e2),
                                 WireModel::CYAN,
                                 false,
-                            ),
-                        ];
+                            ));
+                        }
                         if let Some(arc) = maybe_arc {
                             out.push(WireModel::solid(
                                 "fillet_arc".into(),
@@ -1877,8 +2110,8 @@ impl CadCommand for FilletCommand {
         self.entity_index = ModifyEntityIndex::build(&self.all_entities);
     }
 
-    fn on_entities_committed(&mut self, new_handles: &[Handle]) {
-        let mut handles = new_handles.iter().copied();
+    fn on_entities_committed(&mut self, entities: &[EntityType]) {
+        let mut handles = entities.iter().map(|entity| entity.common().handle);
         for entity in self
             .all_entities
             .iter_mut()
@@ -1897,6 +2130,29 @@ impl CadCommand for FilletCommand {
     }
     fn on_escape(&mut self) -> CmdResult {
         CmdResult::Cancel
+    }
+}
+
+/// A radius-0 fillet over an existing arc leaves its two ends on one point;
+/// the zero-length segment between them blocked every later fillet of that
+/// corner (#1422). The later vertex carries the next segment, so it survives.
+fn drop_zero_length_segments(poly: &mut LwPolyline) {
+    let same = |a: &LwVertex, b: &LwVertex| {
+        (a.location.x - b.location.x).abs() < 1e-9 && (a.location.y - b.location.y).abs() < 1e-9
+    };
+    let mut i = 0;
+    while i + 1 < poly.vertices.len() && poly.vertices.len() > 2 {
+        if same(&poly.vertices[i], &poly.vertices[i + 1]) {
+            poly.vertices.remove(i);
+        } else {
+            i += 1;
+        }
+    }
+    if poly.is_closed && poly.vertices.len() > 2 {
+        let n = poly.vertices.len();
+        if same(&poly.vertices[n - 1], &poly.vertices[0]) {
+            poly.vertices.pop();
+        }
     }
 }
 
@@ -2303,8 +2559,8 @@ impl CadCommand for ChamferCommand {
         true
     }
 
-    fn on_entities_committed(&mut self, new_handles: &[Handle]) {
-        let mut handles = new_handles.iter().copied();
+    fn on_entities_committed(&mut self, entities: &[EntityType]) {
+        let mut handles = entities.iter().map(|entity| entity.common().handle);
         for entity in self
             .all_entities
             .iter_mut()
@@ -2649,7 +2905,7 @@ mod tests {
             .iter()
             .any(|entity| matches!(entity, EntityType::Arc(arc) if arc.common.handle.is_null())));
 
-        command.on_entities_committed(&[Handle::new(10)]);
+        command.on_entities_committed(&[line(0.0, 0.0, 0.0, 0.0, 10)]);
         assert!(command
             .all_entities
             .iter()
@@ -2816,7 +3072,7 @@ mod tests {
             _ => panic!("Multiple 模式的不修剪应继续运行"),
         }
         assert!(matches!(multi.step, ChamferStep::First));
-        multi.on_entities_committed(&[Handle::new(10)]);
+        multi.on_entities_committed(&[line(0.0, 0.0, 0.0, 0.0, 10)]);
         assert!(multi
             .all_entities
             .iter()

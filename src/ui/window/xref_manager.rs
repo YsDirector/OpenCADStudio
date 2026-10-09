@@ -10,6 +10,7 @@ use crate::io::xref::collect_entries_with_prev;
 use crate::io::xref_model::{normalize_lexical, Pathtype, RefKind, RefStatus, RefType, ReferenceEntry};
 use crate::ui::ROW_H;
 use crate::ui::style::common::muted_style;
+use crate::ui::style::row_button::cell_button_style;
 use codec::CadDocument;
 use iced::widget::{button, column, container, mouse_area, row, scrollable, text, tooltip};
 use iced::Padding;
@@ -1103,6 +1104,11 @@ fn direct_identities(doc: &CadDocument) -> HashSet<(u64, String)> {
             ObjectType::UnderlayDefinition(def) => {
                 ids.insert((handle.value(), def.file_path.clone()));
             }
+            ObjectType::ClassObject(object) => {
+                if let codec::objects::ClassObjectData::PointCloudDefinitionEx(def) = &object.data {
+                    ids.insert((handle.value(), def.source_filename.clone()));
+                }
+            }
             _ => {}
         }
     }
@@ -1193,6 +1199,14 @@ fn type_text(entry: &ReferenceEntry) -> std::borrow::Cow<'static, str> {
                 _ => crate::t!("PDF"),
             }
         }
+        // The file's own kind: RCP (project) or RCS (scan).
+        RefKind::PointCloud => {
+            let ext = std::path::Path::new(&entry.saved_path.replace('\\', "/"))
+                .extension()
+                .map(|e| e.to_string_lossy().to_ascii_uppercase())
+                .unwrap_or_default();
+            if ext == "RCS" { "RCS".into() } else { "RCP".into() }
+        }
     }
 }
 
@@ -1245,27 +1259,6 @@ fn format_date(modified: Option<SystemTime>) -> String {
 }
 
 // ── Widget helpers (layers.rs conventions) ────────────────────────────────
-
-fn row_button_style(selected: bool, index: usize) -> impl Fn(&Theme, button::Status) -> button::Style {
-    move |theme: &Theme, status: button::Status| {
-        let palette = theme.palette();
-        let highlighted = matches!(status, button::Status::Hovered);
-        let pair = if highlighted {
-            palette.background.strong
-        } else if selected {
-            palette.primary.weak
-        } else if index % 2 == 0 {
-            palette.background.base
-        } else {
-            palette.background.weak
-        };
-        button::Style {
-            background: highlighted.then_some(Background::Color(pair.color)),
-            text_color: pair.text,
-            ..Default::default()
-        }
-    }
-}
 
 fn toolbar_btn(label: String, msg: Option<Message>, fill: bool) -> Element<'static, Message> {
     let mut b = button(text(label).size(11))
@@ -1795,7 +1788,7 @@ fn xref_row<'a>(
         let key = entry.key;
         let arrow = button(crate::ui::icons::themed_arrow_toggle(is_expanded, 10.0))
             .on_press(Message::XrefManagerToggleExpand(key))
-            .style(row_button_style(is_selected, display.index))
+            .style(cell_button_style(is_selected, display.index))
             .padding(Padding {
                 top: 6.0,
                 bottom: 6.0,
@@ -1880,7 +1873,7 @@ fn tree_row(
         let key = entry.key;
         let arrow = button(crate::ui::icons::themed_arrow_toggle(is_expanded, 10.0))
             .on_press(Message::XrefManagerToggleExpand(key))
-            .style(row_button_style(is_selected, display.index))
+            .style(cell_button_style(is_selected, display.index))
             .padding(Padding {
                 top: 6.0,
                 bottom: 6.0,
@@ -2125,7 +2118,7 @@ fn reference_preview(entry: &ReferenceEntry) -> Option<image::RgbaImage> {
             let img = image::open(found).ok()?;
             Some(img.thumbnail(PREVIEW_MAX, PREVIEW_MAX).to_rgba8())
         }
-        RefKind::Underlay => None,
+        RefKind::Underlay | RefKind::PointCloud => None,
     }
 }
 

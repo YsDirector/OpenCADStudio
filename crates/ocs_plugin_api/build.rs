@@ -163,6 +163,10 @@ fn generate_type_registry(out_dir: &Path) {
             trace_simple::<codec::objects::AssocConstraintNodeData>,
         ),
         (
+            "AssocCurveValue",
+            trace_simple::<codec::objects::AssocCurveValue>,
+        ),
+        (
             "AssocEvalValue",
             trace_simple::<codec::objects::AssocEvalValue>,
         ),
@@ -1284,7 +1288,7 @@ fn generate_version_info(out_dir: &Path) {
         "acadrust_source": opencadcodec.source.as_ref().map(|s| s.to_string()),
         "rustc_version": rustc_version,
         "api_version": 7,
-        "api_version_min_supported": 2,
+        "api_version_min_supported": 3,
         "build_timestamp": build_timestamp,
     });
     fs::write(out_dir.join("version_info.json"), info.to_string()).unwrap();

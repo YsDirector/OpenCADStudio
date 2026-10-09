@@ -1,5 +1,8 @@
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) mod graphics;
 pub(crate) mod spacemouse;
 use crate::app::config::UiThemeConfig;
+use crate::app::settings;
 use crate::app::settings::{CursorType, RightClickMode};
 use crate::app::Message;
 use crate::ui::style::form::{dialog_button, dialog_button_styled_opt};
@@ -34,6 +37,7 @@ pub enum OptionsTab {
     Modeling,
     Selection,
     UserPreferences,
+    Graphics,
 }
 
 /// Application preferences the dialog reads that are plain scalars on the app.
@@ -55,7 +59,12 @@ pub struct AppPrefs {
     pub commandline_fade_ms: i32,
     /// ZOOMWHEEL: reverse the mouse-wheel zoom direction.
     pub zoom_wheel_reversed: bool,
-    /// ZOOMFACTOR, 3..=100.
+    /// Scroll pans and Ctrl+scroll zooms (touchpads).
+    pub touchpad_pan: bool,
+    /// Interface scale in percent.
+    pub ui_scale_percent: u16,
+    /// ZOOMFACTOR. The slider sets the range the system variable has; the
+    /// field beside it reaches `settings::ZOOM_FACTOR_MAX`.
     pub zoom_factor: i32,
     /// TEXTEDITMODE: TEXTEDIT keeps prompting for the next object.
     pub texteditmode: bool,
@@ -92,6 +101,9 @@ pub struct Folders {
     pub plot_styles: Option<String>,
     pub plugins: Option<String>,
     pub autosave: Option<String>,
+    /// Where `.shx` / `.ttf` fonts dropped in by the user (or downloaded for
+    /// a drawing) are found.
+    pub fonts: Option<String>,
 }
 
 /// Values read from the current drawing's header rather than from preferences.
@@ -199,14 +211,21 @@ pub fn view_window<'a>(
     selection: SelectionPrefs,
     prefs: AppPrefs,
     spacemouse: Element<'a, Message>,
+    graphics: Element<'a, Message>,
     snap_angle_input: &'a str,
+    zoom_factor_input: &'a str,
     drawing_prefs: DrawingPrefs,
     folders: Folders,
+    qnew_template: &'a str,
     double_click_block_refedit: bool,
     double_click_block_attedit: bool,
     cursor_type: CursorType,
     crosshair_color: Option<[u8; 3]>,
     crosshair_color_input: &'a str,
+    snap_marker_color: Option<[u8; 3]>,
+    snap_marker_color_input: &'a str,
+    command_text_color: Option<[u8; 3]>,
+    command_text_color_input: &'a str,
     lineweight_display_scale: i32,
     model_space: &'a crate::app::config::ModelSpaceThemeConfig,
     model_bg_input: &'a str,
@@ -415,7 +434,8 @@ pub fn view_window<'a>(
             text(crate::tr!("options", "default-save-format-label")).size(12).width(150),
             iced::widget::pick_list(
                 selected_format,
-                crate::io::SAVE_FORMAT_OPTIONS,
+                // Drawings, not the template entry (the list's last).
+                &crate::io::SAVE_FORMAT_OPTIONS[..crate::io::SAVE_FORMAT_OPTIONS.len() - 1],
                 |value| value.to_string(),
             )
             .on_select(|format: &str| Message::DefaultSaveFormatChanged(format.to_string()))
@@ -506,6 +526,42 @@ pub fn view_window<'a>(
                 crosshair_rgb[0],
                 crosshair_rgb[1],
                 crosshair_rgb[2],
+            ))),
+            border: Border {
+                color: theme.palette().background.strong.color,
+                width: 1.0,
+                radius: 3.0.into(),
+            },
+            ..Default::default()
+        });
+
+    let command_rgb = command_text_color.unwrap_or([220, 220, 220]);
+    let command_swatch = container(Space::new())
+        .width(28)
+        .height(22)
+        .style(move |theme: &Theme| container::Style {
+            background: Some(Background::Color(iced::Color::from_rgb8(
+                command_rgb[0],
+                command_rgb[1],
+                command_rgb[2],
+            ))),
+            border: Border {
+                color: theme.palette().background.strong.color,
+                width: 1.0,
+                radius: 3.0.into(),
+            },
+            ..Default::default()
+        });
+
+    let snap_rgb = snap_marker_color.unwrap_or([255, 230, 26]);
+    let snap_swatch = container(Space::new())
+        .width(28)
+        .height(22)
+        .style(move |theme: &Theme| container::Style {
+            background: Some(Background::Color(iced::Color::from_rgb8(
+                snap_rgb[0],
+                snap_rgb[1],
+                snap_rgb[2],
             ))),
             border: Border {
                 color: theme.palette().background.strong.color,
@@ -625,6 +681,23 @@ pub fn view_window<'a>(
         .width(sizing.width),
         Space::new().height(12),
         color_controls,
+        Space::new().height(16),
+        // A list, not a slider: the dialog rescales under the cursor as the
+        // value changes, which would drag a slider along with it.
+        row![
+            text(crate::t!("Interface scale")).size(12).width(150),
+            iced::widget::pick_list(
+                Some(format!("{}%", prefs.ui_scale_percent)),
+                [75u16, 100, 125, 150, 175, 200].map(|p| format!("{p}%")).to_vec(),
+                |label: &String| label.clone(),
+            )
+            .on_select(|label: String| {
+                Message::UiScaleChanged(label.trim_end_matches('%').parse().unwrap_or(100))
+            })
+            .width(sizing.width),
+        ]
+        .spacing(12)
+        .align_y(iced::Center),
         Space::new().height(24),
         row![
             text(crate::t!("Model Space Appearance")).size(15),
@@ -762,6 +835,30 @@ pub fn view_window<'a>(
             .spacing(10)
             .align_y(iced::Center),
         )
+        .push(Space::new().height(10))
+        .push(
+            row![
+                text(crate::t!("Snap marker color")).size(12).width(140),
+                snap_swatch,
+                text_input(crate::t!("#RRGGBB or blank").as_ref(), snap_marker_color_input)
+                    .on_input(Message::SnapMarkerColorChanged)
+                    .width(150),
+            ]
+            .spacing(10)
+            .align_y(iced::Center),
+        )
+        .push(Space::new().height(10))
+        .push(
+            row![
+                text(crate::t!("Command line text color")).size(12).width(140),
+                command_swatch,
+                text_input(crate::t!("#RRGGBB or blank").as_ref(), command_text_color_input)
+                    .on_input(Message::CommandTextColorChanged)
+                    .width(150),
+            ]
+            .spacing(10)
+            .align_y(iced::Center),
+        )
         .push(Space::new().height(6))
         .push(
             text(crate::t!("Leave the color blank to keep automatic viewport contrast."))
@@ -845,7 +942,7 @@ pub fn view_window<'a>(
                 .step(250)
                 .width(Fill),
                 text(if prefs.commandline_fade_ms <= 0 {
-                    crate::t!("Off").into_owned()
+                    crate::t!("Never").into_owned()
                 } else {
                     format!("{:.1} s", prefs.commandline_fade_ms as f32 / 1000.0)
                 })
@@ -858,7 +955,7 @@ pub fn view_window<'a>(
         .push(Space::new().height(6))
         .push(
             text(crate::t!(
-                "How long overlay history lines stay visible; 0 skips them (COMMANDLINEFADETIME)."
+                "How long overlay history lines stay visible; 0 means never fade (COMMANDLINEFADETIME)."
             ))
             .size(11)
             .width(sizing.width),
@@ -1178,13 +1275,36 @@ pub fn view_window<'a>(
         ]
         .spacing(8)
         .align_y(iced::Center),
+        Space::new().height(8),
+        row![
+            iced::widget::checkbox(prefs.touchpad_pan)
+                .on_toggle(Message::TouchpadPanChanged)
+                .size(15),
+            text(crate::t!("Touchpad: scroll pans, Ctrl+scroll or pinch zooms")).size(12),
+        ]
+        .spacing(8)
+        .align_y(iced::Center),
         Space::new().height(12),
         row![
             text(crate::t!("Zoom factor")).size(12).width(150),
-            slider(3..=100, prefs.zoom_factor.clamp(3, 100), Message::ZoomFactorChanged)
-                .step(1)
-                .width(Fill),
-            text(prefs.zoom_factor.clamp(3, 100).to_string()).size(11).width(44),
+            slider(
+                settings::ZOOM_FACTOR_MIN..=settings::ZOOM_FACTOR_SYSVAR_MAX,
+                prefs
+                    .zoom_factor
+                    .clamp(settings::ZOOM_FACTOR_MIN, settings::ZOOM_FACTOR_SYSVAR_MAX),
+                Message::ZoomFactorChanged,
+            )
+            .step(1)
+            .width(Fill),
+            text_input("60", zoom_factor_input)
+                .on_input(Message::ZoomFactorInputChanged)
+                .width(52),
+            text(crate::tf!(
+                "{:.1}% a notch",
+                settings::zoom_notch_percent(prefs.zoom_factor)
+            ))
+            .size(11)
+            .width(76),
         ]
         .spacing(10)
         .align_y(iced::Center),
@@ -1192,6 +1312,15 @@ pub fn view_window<'a>(
         text(crate::t!("How far one wheel notch zooms (ZOOMFACTOR)."))
             .size(11)
             .width(sizing.width),
+        Space::new().height(4),
+        text(crate::tf!(
+            "The slider covers the system variable's {} to {}; the field takes up to {} for a faster wheel.",
+            settings::ZOOM_FACTOR_MIN,
+            settings::ZOOM_FACTOR_SYSVAR_MAX,
+            settings::ZOOM_FACTOR_MAX
+        ))
+        .size(11)
+        .width(sizing.width),
         Space::new().height(24),
         text(crate::t!("Text and Dimensions")).size(15),
         Space::new().height(10),
@@ -1636,6 +1765,23 @@ pub fn view_window<'a>(
         folder_row(crate::t!("Plugins"), folders.plugins.clone()),
         Space::new().height(12),
         folder_row(crate::t!("Autosave files"), folders.autosave.clone()),
+        Space::new().height(12),
+        folder_row(crate::t!("Fonts"), folders.fonts.clone()),
+        Space::new().height(16),
+        text(crate::t!("Default template for new drawings")).size(12),
+        Space::new().height(4),
+        row![
+            text_input(crate::t!("Blank drawing").as_ref(), qnew_template)
+                .on_input(Message::QnewTemplateChanged)
+                .size(11)
+                .width(Fill),
+            button(text(crate::t!("Browse...")).size(11))
+                .padding([4, 10])
+                .style(button::secondary)
+                .on_press(Message::QnewTemplateBrowse),
+        ]
+        .spacing(10)
+        .align_y(iced::Center),
     ]
     .spacing(0)
     .width(sizing.width);
@@ -1649,6 +1795,7 @@ pub fn view_window<'a>(
         OptionsTab::Drafting => drafting.into(),
         OptionsTab::Modeling => modeling.into(),
         OptionsTab::UserPreferences => user_prefs.into(),
+        OptionsTab::Graphics => graphics,
     };
 
     // A vertical rail rather than a horizontal strip: the tab names are
@@ -1671,7 +1818,11 @@ pub fn view_window<'a>(
         tab_button(crate::t!("3D Modeling"), OptionsTab::Modeling),
         tab_button(crate::t!("Selection"), OptionsTab::Selection),
         tab_button(crate::t!("User Preferences"), OptionsTab::UserPreferences),
-    ]
+    ];
+    // The web build has no backend to choose, so it has no Graphics page.
+    #[cfg(not(target_arch = "wasm32"))]
+    let tabs = tabs.push(tab_button(crate::t!("Graphics"), OptionsTab::Graphics));
+    let tabs = tabs
     .spacing(2)
     .width(iced::Length::Fixed(TAB_RAIL_WIDTH));
 

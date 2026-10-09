@@ -28,9 +28,12 @@ impl OpenCADStudio {
         }
         self.tabs[index].dirty = false;
         let remaining = self.tabs.len();
+        // Resolve the stable id now; the message may be handled after other
+        // batched messages have shifted `index`.
+        let tab_id = self.tabs[index].id;
         // The close may queue async work (autosave cleanup) — return the
         // task so the runtime drives it.
-        let close_task = self.update(Message::TabClose(index));
+        let close_task = self.update(Message::TabClose(tab_id));
         let closed_document = req["document_id"].as_u64();
         self.set_control_result(json!({
             "closed": true,
@@ -255,8 +258,9 @@ impl OpenCADStudio {
         req: &Value,
     ) -> Result<Task<Message>, Value> {
         let handles = crate::app::control::entities::hex_handles(req, "handles")?;
-        let target = req["document_id"]
+        let target = req["target_document_id"]
             .as_u64()
+            .or_else(|| req["document_id"].as_u64())
             .ok_or_else(|| failure("document_required", "Supply the target document_id"))?;
         let source_index = self.active_tab;
         let target_index = self

@@ -417,6 +417,7 @@ impl OpenCADStudio {
         let pending = self.begin_undo(i, "Apply named parameters", touched.len(), true);
         self.tabs[i].scene.record_undo_named_parameters_before();
         self.tabs[i].scene.named_parameters = table;
+        self.tabs[i].scene.refresh_expression_sweeps();
         self.tabs[i].dirty = true;
         if !touched.is_empty() {
             let changes: Vec<(Handle, crate::scene::ChangeKind)> = touched
@@ -448,6 +449,7 @@ impl OpenCADStudio {
     /// table, so unlike that whole-table Apply this can cheaply scope the
     /// re-solve to just the entities that actually reference it.
     fn resolve_named_parameter_edit(&mut self, i: usize, name: &str) {
+        self.tabs[i].scene.refresh_expression_sweeps();
         let readers: Vec<&crate::scene::parametric_constraints::ParametricConstraint> = self
             .tabs[i]
             .scene

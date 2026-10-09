@@ -179,6 +179,8 @@ impl OpenCADStudio {
                     else {
                         continue;
                     };
+                    // `changed` tracks this table while the action runs.
+                    let changed_before = std::mem::take(&mut changed);
                     match &action {
                         TableAction::Cell(row, column, text) => {
                             if let Some(cell) = table.cell_mut(*row, *column) {
@@ -321,6 +323,12 @@ impl OpenCADStudio {
                         }
                         _ => {}
                     }
+                    if changed {
+                        // The stored picture no longer shows the cells: draw
+                        // from them, and redraw the picture.
+                        table.block_record_handle = None;
+                    }
+                    changed |= changed_before;
                 }
                 if changed {
                     self.invalidate_property_targets(i, &selected_handles);
@@ -511,6 +519,8 @@ impl OpenCADStudio {
             }
             // Rebuild tessellation caches without modifying the document.
             "REGEN" | "REGENALL" => {
+                // A regen is a field evaluation event (FIELDEVAL bit 16).
+                self.tabs[i].scene.update_fields(16, None);
                 self.tabs[i].scene.populate_meshes_from_document();
                 self.command_line.push_output(crate::t!("REGEN: regenerated model.").as_ref());
                 return Some(Task::none());
@@ -592,12 +602,6 @@ impl OpenCADStudio {
             "TOOLPALETTES" => {
                 self.command_line
                     .push_info(crate::t!("TOOLPALETTES: Tool Palettes not yet implemented.").as_ref());
-            }
-
-            // ── SHEETSET — not yet implemented ───────────────────────────────────
-            "SHEETSET" => {
-                self.command_line
-                    .push_info(crate::t!("SHEETSET: Sheet Set Manager not yet implemented.").as_ref());
             }
 
             // ── XDATA — read/write extended entity data ──────────────────────────
@@ -789,7 +793,7 @@ impl OpenCADStudio {
                 use crate::modules::insert::solid3d_cmds::PresspullCommand;
                 let color = self.tabs[i].scene.layer_color(&self.tabs[i].active_layer);
                 let mut command = PresspullCommand::new(color);
-                command.set_isolines(self.tabs[i].scene.document.header.isolines.max(0) as usize);
+                command.set_isolines(crate::entities::solid3d::clamp_header_isolines(self.tabs[i].scene.document.header.isolines));
                 command.set_preselection(self.presspull_preselection());
                 self.command_line.push_info(&command.prompt());
                 self.tabs[i].active_cmd = Some(Box::new(command));
@@ -800,7 +804,7 @@ impl OpenCADStudio {
                 use crate::modules::insert::solid3d_cmds::RevolveCommand;
                 let selected: Vec<_> = self.tabs[i].scene.selected_entities().into_iter().collect();
                 let color = self.tabs[i].scene.layer_color(&self.tabs[i].active_layer);
-                let isolines = self.tabs[i].scene.document.header.isolines.max(0) as usize;
+                let isolines = crate::entities::solid3d::clamp_header_isolines(self.tabs[i].scene.document.header.isolines);
                 let mut cmd = RevolveCommand::new(color, isolines);
                 if !selected.is_empty() {
                     cmd.set_preselection(
@@ -818,8 +822,9 @@ impl OpenCADStudio {
             "SWEEP" => {
                 use crate::modules::insert::solid3d_cmds::SweepCommand;
                 let color = self.tabs[i].scene.layer_color(&self.tabs[i].active_layer);
-                let isolines = self.tabs[i].scene.document.header.isolines.max(0) as usize;
+                let isolines = crate::entities::solid3d::clamp_header_isolines(self.tabs[i].scene.document.header.isolines);
                 let mut cmd = SweepCommand::new(color, isolines);
+                cmd.set_parameters(self.tabs[i].scene.named_parameters().clone());
                 let selected = self.tabs[i].scene.selected_handles_in_order()
                     .into_iter()
                     .filter_map(|handle| self.tabs[i].scene.document.get_entity(handle)
@@ -836,7 +841,7 @@ impl OpenCADStudio {
             "LOFT" => {
                 use crate::modules::insert::solid3d_cmds::LoftCommand;
                 let color = self.tabs[i].scene.layer_color(&self.tabs[i].active_layer);
-                let isolines = self.tabs[i].scene.document.header.isolines.max(0) as usize;
+                let isolines = crate::entities::solid3d::clamp_header_isolines(self.tabs[i].scene.document.header.isolines);
                 let selected = self.tabs[i].scene.selected_handles_in_order().into_iter()
                     .filter_map(|handle| self.tabs[i].scene.document.get_entity(handle)
                         .cloned().map(|entity| (handle, entity))).collect();
@@ -1918,7 +1923,7 @@ impl OpenCADStudio {
             }
 
             "UNDERLAYLAYERS" | "ULAYERS" => self.open_underlay_layers_dialog(i),
-            "POINTCLOUDATTACH" | "RECAP" | "SYNCPVIEWPORTS" => {
+            "RECAP" | "SYNCPVIEWPORTS" => {
                 self.command_line
                     .push_info(crate::tf!("{cmd}: not yet implemented.").as_ref());
             }

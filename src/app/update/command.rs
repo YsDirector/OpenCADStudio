@@ -149,7 +149,7 @@ pub(super) fn begin_tab_close_queue(&mut self, tab_ids: Vec<u64>) -> Task<Messag
                 continue;
             }
             if self.tabs[idx].dirty {
-                self.pending_close = Some(crate::app::PendingClose::Tab(idx));
+                self.pending_close = Some(crate::app::PendingClose::Tab(tab_id));
                 tasks.push(self.open_unsaved_dialog_window());
                 break;
             }
@@ -168,7 +168,8 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                 // now rather than risk it applying to a different tab's document.
                 self.cancel_attr_editor();
                 if self.tabs.get(idx).map_or(false, |t| t.dirty) {
-                    self.pending_close = Some(crate::app::PendingClose::Tab(idx));
+                    self.pending_close =
+                        Some(crate::app::PendingClose::Tab(self.tabs[idx].id));
                     return self.open_unsaved_dialog_window();
                 }
                 // Pending client interactive requests pinned to this drawing
@@ -268,7 +269,7 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                     let dyn_field_char = !s.is_empty()
                         && s.chars().all(|c| {
                             c.is_ascii_digit()
-                                || matches!(c, '.' | '-' | '+' | '*' | '/' | '^' | '%' | '(' | ')')
+                                || matches!(c, '.' | '-' | '+' | '*' | '/' | '^' | '%' | '(' | ')' | '\'' | '"')
                         });
                     if dyn_field_char
                         && self.command_line.input.is_empty()
@@ -976,7 +977,8 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
         // A tracking ray carries its own base, so it needs no anchor: that is
         // how OTRACK and Extension accepted a bare distance for the *first*
         // point of a command, before any anchor exists.
-        let pt = if let Some((base, dir)) = self.active_distance_ray(i) {
+        let distance_ray = self.active_distance_ray(i);
+        let pt = if let Some((base, dir)) = distance_ray {
             base + dir * dist
         } else {
             let anchor = self.tabs[i]
@@ -1009,6 +1011,9 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
         self.dyn_coord_absolute = false;
         self.sync_dyn_fields();
         self.reset_tracking_after_point();
+        if let Some((_, dir)) = distance_ray {
+            self.snapper.remember_distance_reference(dir);
+        }
         self.push_ucs_to_cmd(i);
 
         let result = self.tabs[i].active_cmd.as_mut().map(|c| c.on_point(pt))?;
@@ -1176,13 +1181,13 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                     self.tabs[i].zoom_dynamic_mode = false;
                     {
                         let mut sel = self.tabs[i].scene.selection.borrow_mut();
-                        sel.middle_down = false;
-                        sel.middle_last_pos = None;
-                        sel.orbit_pivot = None;
-                        sel.box_anchor = None;
-                        sel.box_anchor_world = None;
-                        sel.box_current = None;
-                        sel.box_crossing_locked = false;
+                        sel.input.middle_down = false;
+                        sel.input.middle_last_pos = None;
+                        sel.orbit.pivot = None;
+                        sel.gesture.box_anchor = None;
+                        sel.gesture.box_anchor_world = None;
+                        sel.gesture.box_current = None;
+                        sel.gesture.box_crossing_locked = false;
                     }
                     if was_pan {
                         self.command_line.push_output(crate::t!("PAN ended.").as_ref());
@@ -1229,8 +1234,8 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                 }
                 {
                     let mut sel = self.tabs[i_e].scene.selection.borrow_mut();
-                    if sel.context_menu.is_some() {
-                        sel.context_menu = None;
+                    if sel.menu.open_at.is_some() {
+                        sel.menu.open_at = None;
                         return Task::none();
                     }
                 }
@@ -1260,13 +1265,13 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                     self.tabs[i].scene.deselect_all();
                     self.refresh_properties();
                     let mut sel = self.tabs[i].scene.selection.borrow_mut();
-                    sel.box_anchor = None;
+                    sel.gesture.box_anchor = None;
                     // Also drop the world-space anchor, or the next pan/zoom
                     // re-projects it back into `box_anchor` and the cancelled
                     // marquee springs back to life (reproject_box_anchor).
-                    sel.box_anchor_world = None;
-                    sel.box_current = None;
-                    sel.box_crossing = false;
+                    sel.gesture.box_anchor_world = None;
+                    sel.gesture.box_current = None;
+                    sel.gesture.box_crossing = false;
                 }
                 Task::none()
     }
@@ -1310,6 +1315,7 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                         self.tabs[i]
                             .layers
                             .sync_with_viewports(&doc_layers, vp_info);
+                        self.sync_ribbon_layers();
                         // Per-viewport layer visibility changes the resident
                         // assembly, not any entity's tessellated geometry.
                         self.tabs[i].scene.bump_geometry_no_blocks();
@@ -1446,6 +1452,18 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
         self.sync_layer_panel(i);
         self.refresh_properties();
         Task::none()
+    }
+
+    /// Resolve a layer name to its current panel-row index at dispatch time.
+    /// `Message::Layer*` carries the name (not the row) so a resort between
+    /// view() and handler dispatch cannot mistarget; `None`
+    /// (deleted/renamed meanwhile) lets the caller no-op gracefully (#22).
+    pub(super) fn layer_panel_index(&self, i: usize, name: &str) -> Option<usize> {
+        self.tabs[i]
+            .layers
+            .layers
+            .iter()
+            .position(|l| l.name == name)
     }
 
     /// Layers a Layer-manager row toggle (visibility / lock / freeze /
@@ -1934,6 +1952,14 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                 } else {
                     None
                 };
+                if matches!(item.action, GripMenuAction::AboveDimLine) {
+                    crate::entities::dim_override::set_property(
+                        &mut self.tabs[i].scene.document,
+                        popup.handle,
+                        "dim_text_pos_vert",
+                        "Above",
+                    );
+                }
                 if let Some(entity) = self.tabs[i].scene.document.get_entity_mut(popup.handle) {
                     entity.apply_grip_menu(popup.grip_id, item.action);
                 }
@@ -2064,7 +2090,7 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
 
     pub(super) fn on_qselect_open(&mut self) -> Task<Message> {
                 let i = self.active_tab;
-                self.tabs[i].scene.selection.borrow_mut().context_menu = None;
+                self.tabs[i].scene.selection.borrow_mut().menu.open_at = None;
                 let remembered = self.qselect_settings.clone();
                 let scope = remembered.as_ref().map_or(
                     crate::app::QSelectScope::CurrentSpace,
@@ -2360,6 +2386,18 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
             return self.on_dynamic_dimension_choice(field, &value);
         }
         let i = self.active_tab;
+        if field == "ext_pcx_locked" {
+            let handles = self.point_cloud_lock_targets(i);
+            self.apply_property_op(i, "CHPROP", &handles, |app, handle| {
+                if let Some(codec::EntityType::Extended(extended)) =
+                    app.tabs[i].scene.document.get_entity_mut(handle)
+                {
+                    crate::entities::traits::PropertyEditable::apply_geom_prop(extended, field, &value);
+                }
+            });
+            self.tabs[i].properties.edit_choice_open = false;
+            return Task::none();
+        }
         let handles = self.property_target_handles(i);
         // The Annotative Yes/No list drives the per-object annotative toggle
         // (MTEXT's own flag, the annotation context for the rest).
@@ -2696,6 +2734,19 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                         .apply_solid_history_property(handle, field, &value);
                 });
                 self.tabs[i].properties.edit_choice_open = false;
+                return Task::none();
+            }
+            if field == crate::scene::model::solid_history::PROP_OPERAND {
+                // Which solid of a composite to edit: palette state only.
+                for handle in &handles {
+                    crate::scene::model::solid_history::select_operand(
+                        &self.tabs[i].scene.document,
+                        *handle,
+                        &value,
+                    );
+                }
+                self.tabs[i].properties.edit_choice_open = false;
+                self.refresh_properties();
                 return Task::none();
             }
             if crate::scene::model::solid_history::is_history_choice(field) {
@@ -3598,6 +3649,22 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                         };
                         // Underlay rows: reject what the reference rejects, and
                         // write a Width / Height as the scale that produces it.
+                        if field.starts_with("ext_pcx_") {
+                            if let Err(message) =
+                                crate::entities::extended::validate_point_cloud_property(field, &val)
+                            {
+                                self.command_line.push_error(message);
+                                return Task::none();
+                            }
+                        }
+                        if field.starts_with("att_") {
+                            if let Err(message) =
+                                crate::entities::attribute::validate_definition_property(field, &val)
+                            {
+                                self.command_line.push_error(message);
+                                return Task::none();
+                            }
+                        }
                         if field.starts_with("ul_") {
                             if let Err(message) =
                                 crate::entities::underlay::validate_property(field, &val)
@@ -3888,11 +3955,21 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                                         if crate::scene::model::solid_history::is_primitive_property(
                                             field,
                                         ) {
-                                            self.tabs[i].scene.apply_solid_history_property(
+                                            if !self.tabs[i].scene.apply_solid_history_property(
                                                 handle,
                                                 field,
                                                 &val,
-                                            );
+                                            ) {
+                                                if let Some(code) = self.tabs[i]
+                                                    .scene
+                                                    .solid_history_property_refusal(handle, field, &val)
+                                                {
+                                                    self.command_line.push_output(crate::t!("Modeling Operation Error:").as_ref());
+                                                    self.command_line.push_output(
+                                                        crate::tf!("Error Code Number is {code}", code = code).as_ref(),
+                                                    );
+                                                }
+                                            }
                                         } else if self.tabs[i]
                                             .scene
                                             .apply_solid_position_property(
@@ -4504,6 +4581,119 @@ mod layer_rename_tests {
 }
 
 #[cfg(test)]
+mod layer_name_target_tests {
+    // RED: `Message::LayerToggleVisible` currently carries a panel-row `usize`;
+    // these tests pass a layer `String` name and fail to compile until the
+    // #22 migration lands.
+    use crate::app::{Message, OpenCADStudio};
+    use crate::ui::window::layers::LayerSortCol;
+
+    fn rename_layer(app: &mut OpenCADStudio, old_name: &str, new_name: &str) {
+        let i = app.active_tab;
+        let idx = app.tabs[i]
+            .layers
+            .layers
+            .iter()
+            .position(|layer| layer.name == old_name)
+            .expect("layer exists in panel");
+        app.tabs[i].layers.editing = Some(idx);
+        app.tabs[i].layers.edit_buf = new_name.to_string();
+        let _ = app.on_layer_rename_commit();
+    }
+
+    fn app_with_zulu_alpha() -> OpenCADStudio {
+        let mut app = OpenCADStudio::new_for_test();
+        app.automation_op(r#"{"op":"new"}"#);
+        let _ = app.on_layer_new();
+        let first = app.tabs[app.active_tab].layers.edit_buf.clone();
+        rename_layer(&mut app, &first, "ZULU");
+        let _ = app.on_layer_new();
+        let second = app.tabs[app.active_tab].layers.edit_buf.clone();
+        rename_layer(&mut app, &second, "ALPHA");
+        app
+    }
+
+    #[test]
+    fn layer_toggle_visible_targets_layer_by_name_after_resort() {
+        let mut app = app_with_zulu_alpha();
+        // Flip the panel order; a stale row index would now point at the
+        // wrong layer, but the name still resolves to ZULU.
+        let _ = app.update(Message::LayerSort(LayerSortCol::Name));
+        let _ = app.update(Message::LayerToggleVisible("ZULU".to_string()));
+        let i = app.active_tab;
+        let zulu = app.tabs[i]
+            .layers
+            .layers
+            .iter()
+            .find(|l| l.name == "ZULU")
+            .expect("ZULU in panel");
+        let alpha = app.tabs[i]
+            .layers
+            .layers
+            .iter()
+            .find(|l| l.name == "ALPHA")
+            .expect("ALPHA in panel");
+        assert!(!zulu.visible, "ZULU should be toggled off");
+        assert!(alpha.visible, "ALPHA must be untouched");
+        assert!(
+            app.tabs[i].scene.document.layers.get("ZULU").unwrap().flags.off,
+            "document ZULU should be off"
+        );
+    }
+
+    #[test]
+    fn layer_toggle_visible_unknown_name_is_noop() {
+        let mut app = app_with_zulu_alpha();
+        let i = app.active_tab;
+        let before: Vec<(String, bool)> = app.tabs[i]
+            .layers
+            .layers
+            .iter()
+            .map(|l| (l.name.clone(), l.visible))
+            .collect();
+        let _ = app.update(Message::LayerToggleVisible("DELETED".to_string()));
+        let after: Vec<(String, bool)> = app.tabs[i]
+            .layers
+            .layers
+            .iter()
+            .map(|l| (l.name.clone(), l.visible))
+            .collect();
+        assert_eq!(before, after, "unknown name must change nothing");
+    }
+
+    #[test]
+    fn layer_transparency_edit_pushes_undo() {
+        // #43: every sibling layer arm pushes an undo entry; transparency must too.
+        let mut app = OpenCADStudio::new_for_test();
+        app.automation_op(r#"{"op":"new"}"#);
+        let i = app.active_tab;
+        app.finish_pending_history(i);
+        let before = app.tabs[i].history.undo_stack.len();
+        let _ = app.update(Message::LayerTransparencyEdit("0".to_string(), "50".to_string()));
+        assert_eq!(
+            app.tabs[i].history.undo_stack.len(),
+            before + 1,
+            "transparency edit must push an undo entry like its siblings"
+        );
+        let panel = app.tabs[i]
+            .layers
+            .layers
+            .iter()
+            .find(|l| l.name == "0")
+            .expect("layer 0 in panel");
+        assert_eq!(panel.transparency, 50);
+        app.undo_active_tab();
+        let panel = app.tabs[i]
+            .layers
+            .layers
+            .iter()
+            .find(|l| l.name == "0")
+            .expect("layer 0 in panel");
+        assert_eq!(panel.transparency, 0, "undo must restore transparency");
+    }
+}
+
+#[cfg(test)]
 mod plot_style_ctb_guard_tests {
     use crate::app::OpenCADStudio;
     use codec::entities::Line;
@@ -4549,5 +4739,108 @@ mod plot_style_ctb_guard_tests {
             before,
             "CTB-mode plot_style choice must not add an undo entry"
         );
+    }
+}
+
+/// Reproductions for the stale-tab-index crashes: iced dispatches every
+/// message produced from one view snapshot before rebuilding it, so a second
+/// `TabClose` (or a `PendingClose::Tab` stashed while the unsaved dialog is
+/// open) can carry an index the first removal already invalidated.
+#[cfg(test)]
+mod tab_close_tests {
+    use crate::app::{Message, OpenCADStudio};
+
+    /// `[Start, Drawing A, Drawing B]` — three clean tabs.
+    fn three_tabs() -> OpenCADStudio {
+        let mut app = OpenCADStudio::new_for_test();
+        app.push_test_document();
+        app.push_test_document();
+        assert_eq!(app.tabs.len(), 3, "start page plus two drawings");
+        assert!(!app.tabs[1].is_start && !app.tabs[2].is_start);
+        app
+    }
+
+    /// Two close messages built from the same view snapshot: the first one
+    /// removes the tab, the second carries the now-outdated reference. The
+    /// close request must degrade to a no-op, not panic.
+    #[test]
+    fn stale_tab_close_is_a_no_op() {
+        let mut app = three_tabs();
+        let id = app.tabs[app.tabs.len() - 1].id;
+
+        let _ = app.update(Message::TabClose(id));
+        assert_eq!(app.tabs.len(), 2, "first close removed the tab");
+
+        // Same target again, as the batched second message from one snapshot.
+        let _ = app.update(Message::TabClose(id));
+        assert_eq!(
+            app.tabs.len(),
+            2,
+            "stale close must not remove another tab or panic"
+        );
+    }
+
+    /// Double-clicking one tab's × in a single batch must close that tab
+    /// exactly once; the second message must not slide onto the tab that
+    /// shifted into its place.
+    #[test]
+    fn double_close_from_one_snapshot_closes_only_the_clicked_tab() {
+        let mut app = three_tabs();
+        let first_id = app.tabs[1].id;
+        let other_id = app.tabs[2].id;
+
+        let _ = app.update(Message::TabClose(first_id));
+        let _ = app.update(Message::TabClose(first_id));
+
+        assert!(
+            app.tabs.iter().all(|t| t.id != first_id),
+            "the clicked tab must be closed"
+        );
+        assert!(
+            app.tabs.iter().any(|t| t.id == other_id),
+            "the tab that shifted into index 1 must survive"
+        );
+    }
+
+    /// The unsaved dialog stashes a close target while it is open. Another
+    /// close landing before the user answers shifts the vector, so Discard
+    /// must still discard the tab the dialog was opened for.
+    #[test]
+    fn unsaved_dialog_discard_closes_the_tab_it_was_opened_for() {
+        let mut app = OpenCADStudio::new_for_test();
+        app.push_test_document(); // A
+        app.push_test_document(); // B
+        app.push_test_document(); // C
+        assert_eq!(app.tabs.len(), 4);
+        let a_id = app.tabs[1].id;
+        let b_id = app.tabs[2].id;
+        let c_id = app.tabs[3].id;
+        app.tabs[2].dirty = true;
+
+        // Close dirty B: opens the dialog and stashes the pending target.
+        let _ = app.update(Message::TabClose(b_id));
+        assert!(
+            app.pending_close.is_some(),
+            "dirty close opens the unsaved dialog"
+        );
+
+        // A second close lands while the dialog is pending (batched message /
+        // automation `close` / save continuation) and shifts indices.
+        let _ = app.update(Message::TabClose(a_id));
+        assert!(app.tabs.iter().all(|t| t.id != a_id));
+
+        // User picks Discard.
+        let _ = app.update(Message::UnsavedDialogDiscard);
+
+        assert!(
+            app.tabs.iter().all(|t| t.id != b_id),
+            "the dirty tab the dialog was opened for must be discarded"
+        );
+        assert!(
+            app.tabs.iter().any(|t| t.id == c_id),
+            "C must survive the stale pending index"
+        );
+        assert!(app.pending_close.is_none(), "pending target consumed");
+        assert!(app.active_tab < app.tabs.len(), "active tab stays valid");
     }
 }

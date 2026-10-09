@@ -62,6 +62,7 @@ impl OpenCADStudio {
         }
         if let Some(handle) = committed {
             self.apply_continuous_constraints(i, &[handle]);
+            self.notify_entities_committed(i, &[handle]);
         }
         self.tabs[i].dirty = true;
         let prompt = self.tabs[i].active_cmd.as_ref().map(|c| c.prompt());
@@ -123,9 +124,7 @@ impl OpenCADStudio {
             committed.extend(handle);
         }
         self.apply_continuous_constraints(i, &committed);
-        if let Some(command) = self.tabs[i].active_cmd.as_mut() {
-            command.on_entities_committed(&committed);
-        }
+        self.notify_entities_committed(i, &committed);
         self.tabs[i].dirty = true;
         self.tabs[i].scene.clear_preview_wire();
         let prompt = self.tabs[i].active_cmd.as_ref().map(|c| c.prompt());
@@ -136,6 +135,18 @@ impl OpenCADStudio {
             self.commit_undo_delta(i, pd);
         }
         None
+    }
+
+    /// Hand the stored copies of freshly committed entities to the command
+    /// that is still running.
+    fn notify_entities_committed(&mut self, i: usize, handles: &[codec::Handle]) {
+        let entities: Vec<codec::EntityType> = handles
+            .iter()
+            .filter_map(|handle| self.tabs[i].scene.document.get_entity(*handle).cloned())
+            .collect();
+        if let Some(command) = self.tabs[i].active_cmd.as_mut() {
+            command.on_entities_committed(&entities);
+        }
     }
 
     pub(super) fn handle_commit_entities_and_exit(
@@ -189,6 +200,7 @@ impl OpenCADStudio {
     pub(super) fn handle_commit_and_exit(
         &mut self,
         entity: codec::EntityType,
+        preserve_commit_layer: bool,
     ) -> Option<Task<Message>> {
         let i = self.active_tab;
         // XATTACH: the definition and its INSERT are created together
@@ -209,8 +221,31 @@ impl OpenCADStudio {
         // Record where this draw ended so ARC_CONT can continue from it
         // (before `entity` is moved into commit_entity).
         self.update_cont_anchor(&entity);
+        // ATTDEF's height becomes the next text height (TEXTSIZE), as TEXT's does.
+        if let codec::EntityType::AttributeDefinition(attribute) = &entity {
+            if self.tabs[i].active_cmd.as_ref().is_some_and(|cmd| cmd.name().ends_with("ATTDEF")) {
+                self.tabs[i].scene.document.header.text_height = attribute.height;
+            }
+        }
+        // A field the committed text shows (FIELD, an ATTDEF Default from the
+        // Field dialog) is attached once the entity has its handle; the field
+        // objects are not part of the add delta, so the step is a snapshot.
+        let text_field = self.tabs[i].active_cmd.as_ref().and_then(|cmd| cmd.text_field());
         let label = self.history_label_from_active_cmd(i, "ENTITY");
-        let delta_safe = self.delta_add_safe(i, &entity);
+        // A block reference whose attribute definitions carry fields gets
+        // them copied onto its attributes (field objects: snapshot step).
+        let attribute_fields = match &entity {
+            codec::EntityType::Insert(insert) if !insert.attributes.is_empty() => {
+                crate::entities::field::block_has_attribute_fields(&self.tabs[i].scene.document, &insert.block_name)
+            }
+            _ => false,
+        };
+        let delta_safe = text_field.is_none() && !attribute_fields && self.delta_add_safe(i, &entity);
+        let field_value = match &entity {
+            codec::EntityType::MText(m) => m.value.clone(),
+            codec::EntityType::AttributeDefinition(a) => a.default_value.clone(),
+            _ => String::new(),
+        };
         let pending = self.begin_undo(i, label, 1, delta_safe);
         let is_associative_dimension = matches!(
             entity,
@@ -221,7 +256,11 @@ impl OpenCADStudio {
         );
         let association_enabled =
             self.tabs[i].scene.document.header.dimension_associativity == 2;
-        let committed = self.commit_entity_handle(entity);
+        let committed = if preserve_commit_layer {
+            self.commit_entity_handle_preserve_layer(entity)
+        } else {
+            self.commit_entity_handle(entity)
+        };
         if is_associative_dimension && association_enabled {
             if let Some(handle) = committed {
                 let sources = self.infer_dimension_sources_guarded(i, handle);
@@ -229,6 +268,18 @@ impl OpenCADStudio {
                     .scene
                     .attach_dimension_association(handle, sources);
             }
+        }
+        if let (Some(handle), Some(field)) = (committed, text_field) {
+            crate::entities::field::set_text_field(
+                &mut self.tabs[i].scene.document,
+                handle,
+                Some(field),
+                &field_value,
+            );
+        }
+        if let (Some(handle), true) = (committed, attribute_fields) {
+            crate::entities::field::attach_attribute_fields(&mut self.tabs[i].scene.document, handle);
+            self.tabs[i].scene.bump_entities(&[(handle, crate::scene::ChangeKind::Modified)]);
         }
         if let Some(handle) = committed {
             self.apply_continuous_constraints(i, &[handle]);
@@ -737,6 +788,7 @@ impl OpenCADStudio {
                 self.command_line
                     .push_output(crate::tf!("Block \"{name}\" created.").as_ref());
                 self.refresh_properties();
+                self.note_recent_block(&name);
                 self.refresh_block_palette();
             }
             Err(err) => {
@@ -937,7 +989,7 @@ impl OpenCADStudio {
         let i = self.active_tab;
         // Collect the full AttributeDefinitions owned by this block
         // record so each created attribute keeps its geometry (#255).
-        let attdefs: Vec<codec::entities::AttributeDefinition> = {
+        let mut attdefs: Vec<codec::entities::AttributeDefinition> = {
             let doc = &self.tabs[i].scene.document;
             if let Some(br) = doc.block_records.get(&block_name) {
                 br.entity_handles
@@ -957,6 +1009,12 @@ impl OpenCADStudio {
             }
         };
 
+        // ATTREQ 0: attributes take their defaults without prompting.
+        if !self.tabs[i].scene.document.header.attribute_request {
+            for attdef in &mut attdefs {
+                attdef.flags.preset = true;
+            }
+        }
         if attdefs.is_empty() {
             // No attribute definitions — commit the INSERT directly.
             let entity = self.tabs[i]
@@ -974,7 +1032,16 @@ impl OpenCADStudio {
                 self.commit_entity(entity);
                 self.tabs[i].dirty = true;
                 self.tabs[i].scene.clear_preview_wire();
-                self.tabs[i].active_cmd = None;
+                // A repeating insertion keeps its command for the next block.
+                let keep = self.tabs[i].active_cmd.as_ref().is_some_and(|c| c.attreq_continue());
+                if keep {
+                    let prompt = self.tabs[i].active_cmd.as_ref().map(|c| c.prompt());
+                    if let Some(p) = prompt {
+                        self.command_line.push_info(&p);
+                    }
+                } else {
+                    self.tabs[i].active_cmd = None;
+                }
                 self.tabs[i].snap_result = None;
                 if let Some(n) = insert_name {
                     self.record_block_insert(&n);
@@ -990,7 +1057,16 @@ impl OpenCADStudio {
                 .as_mut()
                 .and_then(|cmd| cmd.attreq_set_attdefs(attdefs));
             if let Some(entity) = completed {
-                return Some(self.apply_cmd_result(CmdResult::CommitAndExit(entity)));
+                if let codec::EntityType::Insert(ins) = &entity {
+                    let name = ins.block_name.clone();
+                    self.record_block_insert(&name);
+                }
+                let keep = self.tabs[i].active_cmd.as_ref().is_some_and(|c| c.attreq_continue());
+                return Some(self.apply_cmd_result(if keep {
+                    CmdResult::CommitEntity(entity)
+                } else {
+                    CmdResult::CommitAndExit(entity)
+                }));
             }
             let prompt = self.tabs[i].active_cmd.as_ref().map(|c| c.prompt());
             if let Some(p) = prompt {

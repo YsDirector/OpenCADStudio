@@ -52,6 +52,12 @@ pub enum PanelId {
     Browser,
     /// Node library of the node graph overlay.
     NodeGraph,
+    /// Regions and scans of the drawing's point clouds.
+    PointCloudManager,
+    /// Block counts (COUNTLIST).
+    Count,
+    /// The open sheet sets: subsets and sheets.
+    SheetSetManager,
 }
 
 impl PanelId {
@@ -59,13 +65,16 @@ impl PanelId {
     // fork: `ALL` is the single list every width/normalization loop walks, so a new
     // upstream variant must be added here too (NodeGraph arrived with upstream's
     // node-graph panel on 2026-09-28).
-    pub const ALL: [PanelId; 6] = [
+    pub const ALL: [PanelId; 9] = [
         PanelId::Properties,
         PanelId::BlockPalette,
         PanelId::Pi,
         PanelId::ExternalReferences,
         PanelId::Browser,
         PanelId::NodeGraph,
+        PanelId::PointCloudManager,
+        PanelId::Count,
+        PanelId::SheetSetManager,
     ];
 
     /// Localized-friendly display name used by the collapsed/edge chrome.
@@ -77,6 +86,9 @@ impl PanelId {
             PanelId::ExternalReferences => "External References",
             PanelId::Browser => "Browser",
             PanelId::NodeGraph => "Node Graph",
+            PanelId::PointCloudManager => "Point Cloud Manager",
+            PanelId::Count => "Count",
+            PanelId::SheetSetManager => "Sheet Set Manager",
         }
     }
 
@@ -90,6 +102,9 @@ impl PanelId {
             PanelId::ExternalReferences => 460.0,
             PanelId::Browser => 230.0,
             PanelId::NodeGraph => 220.0,
+            PanelId::PointCloudManager => 280.0,
+            PanelId::Count => 280.0,
+            PanelId::SheetSetManager => 280.0,
         }
     }
 

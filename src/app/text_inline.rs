@@ -155,6 +155,13 @@ impl super::OpenCADStudio {
             self.open_tolerance_dialog(Some(target));
             return iced::Task::none();
         }
+        if matches!(
+            self.tabs[i].scene.document.get_entity(target),
+            Some(EntityType::AttributeDefinition(_))
+        ) {
+            self.open_attdef_edit(target);
+            return iced::Task::none();
+        }
         // Snapshot what we need before borrowing `self` mutably to open.
         let Some(entity) = self.tabs[i].scene.document.get_entity(target) else {
             return iced::Task::none();
@@ -207,7 +214,7 @@ impl super::OpenCADStudio {
             creation,
             screen_anchor: iced::Point::new(60.0, 90.0),
         };
-        if let Some(p) = self.tabs[self.active_tab].scene.selection.borrow().last_move_pos {
+        if let Some(p) = self.tabs[self.active_tab].scene.selection.borrow().input.last_move_pos {
             state.screen_anchor = p;
         }
         self.text_inline = Some(state);

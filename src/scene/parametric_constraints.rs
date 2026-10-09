@@ -2533,6 +2533,7 @@ impl super::Scene {
             }
         }
         crate::io::xref::strip_resolved_xref_content(&mut document);
+        crate::entities::field::stamp_save_dates(&mut document);
         document
     }
 
@@ -3067,7 +3068,7 @@ impl super::Scene {
     /// `(id, anchor, outward_screen_direction, label, is_conflicting,
     /// hover_points)` for every enabled, visible constraint whose glyph
     /// projects on-screen.
-    /// `vp_size` is the full canvas size (as `SelectionState::vp_size`
+    /// `vp_size` is the full canvas size (as `SelectionView::vp_size`
     /// reports it), matching what `viewport_edit_frame`/
     /// `active_model_tile_bounds` expect. Mirrors the projection
     /// `crate::app::view` builds its own render list with. The memoised
@@ -3807,7 +3808,7 @@ mod tests {
                 Vector3::new(1.0, 0.0, 0.0),
             ),
         ));
-        scene.selection.borrow_mut().vp_size = (800.0, 600.0);
+        scene.selection.borrow_mut().view.vp_size = (800.0, 600.0);
         let id = scene.parametric_constraint_set_mut(scope).add(
             ConstraintKind::Horizontal,
             vec![ParametricRef::whole(line)],
@@ -3847,7 +3848,7 @@ mod tests {
                 Vector3::new(1.0, 0.0, 0.0),
             ),
         ));
-        scene.selection.borrow_mut().vp_size = (800.0, 600.0);
+        scene.selection.borrow_mut().view.vp_size = (800.0, 600.0);
         let id = scene.parametric_constraint_set_mut(scope).add(
             ConstraintKind::Horizontal,
             vec![ParametricRef::whole(line)],
@@ -3877,7 +3878,7 @@ mod tests {
                 Vector3::new(1.0, 0.0, 0.0),
             ),
         ));
-        scene.selection.borrow_mut().vp_size = (800.0, 600.0);
+        scene.selection.borrow_mut().view.vp_size = (800.0, 600.0);
         let id = scene.parametric_constraint_set_mut(scope).add(
             ConstraintKind::Horizontal,
             vec![ParametricRef::whole(line)],
