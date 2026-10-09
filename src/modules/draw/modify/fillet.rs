@@ -1973,9 +1973,18 @@ enum ChamferStep {
     },
 }
 
+/// The refusal a no-trim CHAMFER prints for anything but two independent Lines.
+const NO_TRIM_CHAMFER_LINES_ONLY: &str =
+    "No-trim chamfer supports two independent lines only.";
+
 pub struct ChamferCommand {
     dist1: f64,
     dist2: f64,
+    /// Whether the two source lines are shortened to the chamfer points.
+    /// The default preserves the historical CHAMFER behavior. No-trim is
+    /// defined for two independent Lines only; any polyline corner or
+    /// non-line pair is refused instead of being trimmed silently.
+    trim: bool,
     step: ChamferStep,
     all_entities: Vec<EntityType>,
     entity_index: ModifyEntityIndex,
@@ -1999,6 +2008,7 @@ impl ChamferCommand {
         Self {
             dist1: dist as f64,
             dist2: defaults::get_chamfer_dist2(),
+            trim: true,
             step: ChamferStep::First,
             all_entities,
             entity_index,
@@ -2053,6 +2063,22 @@ impl ChamferCommand {
         self.resume_pick = None;
         self.made += 1;
         CmdResult::ReplaceManyContinue(replacements)
+    }
+
+    /// No-trim mode: keep both source lines and add only the chamfer line.
+    /// Single mode adds it and ends; Multiple mode turns it into a new cached
+    /// entity (via `on_entities_committed`) and returns to the first pick.
+    fn continue_after_addition(&mut self, addition: EntityType) -> CmdResult {
+        self.all_entities.push(addition.clone());
+        self.entity_index = ModifyEntityIndex::build(&self.all_entities);
+        self.step = ChamferStep::First;
+        self.resume_pick = None;
+        self.made += 1;
+        if self.multiple {
+            CmdResult::CommitEntities(vec![addition])
+        } else {
+            CmdResult::CommitEntitiesAndExit(vec![addition])
+        }
     }
 
     fn undo_last(&mut self) -> Option<CmdResult> {
@@ -2125,10 +2151,22 @@ impl CadCommand for ChamferCommand {
                 if !self.multiple {
                     opts.push(CmdOption::new("Multiple", "M"));
                 }
+                opts.push(if self.trim {
+                    CmdOption::new("No trim", "N")
+                } else {
+                    CmdOption::new("Trim", "T")
+                });
                 opts
             }
             ChamferStep::Second { .. } | ChamferStep::SecondPoly { .. } => {
-                vec![CmdOption::new("Distance", "D")]
+                vec![
+                    CmdOption::new("Distance", "D"),
+                    if self.trim {
+                        CmdOption::new("No trim", "N")
+                    } else {
+                        CmdOption::new("Trim", "T")
+                    },
+                ]
             }
             ChamferStep::WaitingForDist1 | ChamferStep::WaitingForDist2 => vec![],
         }
@@ -2191,6 +2229,15 @@ impl CadCommand for ChamferCommand {
             | ChamferStep::SecondPoly { .. } => {
                 let t = text.trim();
                 let upper = t.to_uppercase();
+                // 不修剪开关：与 FILLET（D7）同一组写法/同一语义。
+                if matches!(upper.as_str(), "N" | "NOTRIM" | "NO TRIM" | "TRIM=FALSE") {
+                    self.trim = false;
+                    return Some(CmdResult::NeedPoint);
+                }
+                if matches!(upper.as_str(), "T" | "TRIM" | "TRIM=TRUE") {
+                    self.trim = true;
+                    return Some(CmdResult::NeedPoint);
+                }
                 if matches!(self.step, ChamferStep::First) {
                     match upper.as_str() {
                         "M" | "MULTIPLE" => {
@@ -2250,6 +2297,27 @@ impl CadCommand for ChamferCommand {
         self.resume_pick = None;
     }
 
+    fn preserve_commit_layer(&self) -> bool {
+        // A no-trim chamfer is an addition derived from the picked lines; keep
+        // it on their layer instead of moving it to the current creation layer.
+        true
+    }
+
+    fn on_entities_committed(&mut self, new_handles: &[Handle]) {
+        let mut handles = new_handles.iter().copied();
+        for entity in self
+            .all_entities
+            .iter_mut()
+            .filter(|entity| entity.common().handle.is_null())
+        {
+            let Some(handle) = handles.next() else {
+                break;
+            };
+            entity.common_mut().handle = handle;
+        }
+        self.entity_index = ModifyEntityIndex::build(&self.all_entities);
+    }
+
     fn needs_entity_pick(&self) -> bool {
         !matches!(
             self.step,
@@ -2279,6 +2347,12 @@ impl CadCommand for ChamferCommand {
                         };
                     }
                     Some(EntityType::LwPolyline(p)) => {
+                        // 不修剪只定义在两条独立直线之间：多段线角点必须重建整条。
+                        if !self.trim {
+                            return CmdResult::ReportError(
+                                NO_TRIM_CHAMFER_LINES_ONLY.to_string(),
+                            );
+                        }
                         self.step = ChamferStep::SecondPoly {
                             h1: handle,
                             poly: p.clone(),
@@ -2293,6 +2367,12 @@ impl CadCommand for ChamferCommand {
                 let h1 = *h1;
                 let poly = poly.clone();
                 let click1 = *click1;
+                // 先选了多段线、中途才按 N 的情形：同样明确拒绝，不停在模棱两可的状态。
+                if !self.trim {
+                    self.step = ChamferStep::First;
+                    self.resume_pick = None;
+                    return CmdResult::ReportError(NO_TRIM_CHAMFER_LINES_ONLY.to_string());
+                }
                 if handle != h1 {
                     // Chamfer corners only within the same polyline.
                     return CmdResult::NeedPoint;
@@ -2324,6 +2404,11 @@ impl CadCommand for ChamferCommand {
                 if let Some(l2) = l2 {
                     match compute_chamfer(&l1, click1, self.dist1, &l2, click, self.dist2) {
                         Some((new_l1, new_l2, chamfer_line)) => {
+                            // 不修剪：两条源直线原样保留（含句柄/图层），只加倒角线；
+                            // 单次模式加完就结束。
+                            if !self.trim {
+                                return self.continue_after_addition(chamfer_line);
+                            }
                             // Single mode adds the chamfer line as a new entity;
                             // Multiple folds it into the first line's replacement
                             // so the command can carry on.
@@ -2341,6 +2426,11 @@ impl CadCommand for ChamferCommand {
                         }
                         None => CmdResult::NeedPoint,
                     }
+                } else if !self.trim {
+                    // 不修剪模式里的第二个对象必须是另一条直线：不静默什么都不做。
+                    self.step = ChamferStep::First;
+                    self.resume_pick = None;
+                    CmdResult::ReportError(NO_TRIM_CHAMFER_LINES_ONLY.to_string())
                 } else {
                     CmdResult::NeedPoint
                 }
@@ -2393,6 +2483,15 @@ impl CadCommand for ChamferCommand {
                     if let Some((new_l1, new_l2, cline)) =
                         compute_chamfer(&l1, click1, self.dist1, &l2, click, self.dist2)
                     {
+                        // 不修剪 → 预览只画倒角线（两条源线保持原样）。
+                        if !self.trim {
+                            return vec![WireModel::solid(
+                                "chamfer_line".into(),
+                                entity_pts(&cline),
+                                WireModel::CYAN,
+                                false,
+                            )];
+                        }
                         return vec![
                             WireModel::solid(
                                 "chamfer_l1".into(),
@@ -2634,7 +2733,7 @@ mod tests {
     fn chamfer_multiple_keeps_going_and_single_ends() {
         let lines = || vec![line(0.0, 0.0, 10.0, 0.0, 1), line(0.0, 0.0, 0.0, 10.0, 2)];
         let mut single = ChamferCommand::new(1.0, lines());
-        assert_eq!(keywords(&single), ["D", "M"]);
+        assert_eq!(keywords(&single), ["D", "M", "N"]);
         single.on_entity_pick(Handle::new(1), DVec3::new(5.0, 0.0, 0.0));
         assert!(matches!(
             single.on_entity_pick(Handle::new(2), DVec3::new(0.0, 5.0, 0.0)),
@@ -2643,7 +2742,7 @@ mod tests {
 
         let mut multi = ChamferCommand::new(1.0, lines());
         assert!(matches!(multi.on_text_input("M"), Some(CmdResult::NeedPoint)));
-        assert_eq!(keywords(&multi), ["D"], "Multiple is not offered twice");
+        assert_eq!(keywords(&multi), ["D", "N"], "Multiple is not offered twice");
         multi.on_entity_pick(Handle::new(1), DVec3::new(5.0, 0.0, 0.0));
         match multi.on_entity_pick(Handle::new(2), DVec3::new(0.0, 5.0, 0.0)) {
             CmdResult::ReplaceManyContinue(replacements) => {
@@ -2653,8 +2752,103 @@ mod tests {
             }
             _ => panic!("multiple mode should keep the command active"),
         }
-        assert_eq!(keywords(&multi), ["U", "D"]);
+        assert_eq!(keywords(&multi), ["U", "D", "N"]);
         assert!(matches!(multi.on_text_input("U"), Some(CmdResult::UndoDocument)));
+    }
+
+    /// D7 对称：CHAMFER 也有不修剪开关——两条源线（含句柄/几何）原样保留，
+    /// 只加一条倒角线；单次模式加完结束，Multiple 模式留在命令里继续。
+    #[test]
+    fn no_trim_chamfer_adds_only_the_cut_line_and_keeps_source_handles() {
+        let first = Handle::new(1);
+        let second = Handle::new(2);
+        let lines = || vec![line(0.0, 0.0, 10.0, 0.0, 1), line(0.0, 0.0, 0.0, 10.0, 2)];
+
+        // 单次模式：只提交一条新倒角线，并结束命令。
+        let mut single = ChamferCommand::new(1.0, lines());
+        // `new()` 的 dist2 来自持久化默认值（用户上次输入的 D2），这里固定它，
+        // 否则断言会随环境变。
+        single.dist2 = 1.0;
+        assert!(matches!(single.on_text_input("N"), Some(CmdResult::NeedPoint)));
+        assert!(!single.trim);
+        assert!(matches!(
+            single.on_entity_pick(first, DVec3::new(5.0, 0.0, 0.0)),
+            CmdResult::NeedPoint
+        ));
+        let addition = match single.on_entity_pick(second, DVec3::new(0.0, 5.0, 0.0)) {
+            CmdResult::CommitEntitiesAndExit(mut entities) => {
+                assert_eq!(entities.len(), 1, "只加一条倒角线");
+                entities.pop().unwrap()
+            }
+            _ => panic!("no-trim CHAMFER 应只加实体并结束"),
+        };
+        let EntityType::Line(cut) = &addition else {
+            panic!("倒角线应是 Line")
+        };
+        // 倒角点 = 距交点（原点）各 dist： (1,0) → (0,1)。
+        assert!((cut.start.x - 1.0).abs() < 1e-9 && cut.start.y.abs() < 1e-9);
+        assert!(cut.end.x.abs() < 1e-9 && (cut.end.y - 1.0).abs() < 1e-9);
+        // 两条源线在命令缓存里没被替换（原句柄仍在，几何未修剪）。
+        assert!(single
+            .all_entities
+            .iter()
+            .any(|entity| entity.common().handle == first));
+        assert!(single
+            .all_entities
+            .iter()
+            .any(|entity| entity.common().handle == second));
+        assert!(single.all_entities.iter().any(|entity| matches!(
+            entity,
+            EntityType::Line(l)
+                if (l.start.x - 0.0).abs() < 1e-9 && (l.end.x - 10.0).abs() < 1e-9
+        )));
+
+        // Multiple 模式：留在命令里，缓存拿到新句柄。
+        let mut multi = ChamferCommand::new(1.0, lines());
+        assert!(matches!(multi.on_text_input("M"), Some(CmdResult::NeedPoint)));
+        assert!(matches!(multi.on_text_input("N"), Some(CmdResult::NeedPoint)));
+        assert!(matches!(
+            multi.on_entity_pick(first, DVec3::new(5.0, 0.0, 0.0)),
+            CmdResult::NeedPoint
+        ));
+        match multi.on_entity_pick(second, DVec3::new(0.0, 5.0, 0.0)) {
+            CmdResult::CommitEntities(entities) => assert_eq!(entities.len(), 1),
+            _ => panic!("Multiple 模式的不修剪应继续运行"),
+        }
+        assert!(matches!(multi.step, ChamferStep::First));
+        multi.on_entities_committed(&[Handle::new(10)]);
+        assert!(multi
+            .all_entities
+            .iter()
+            .any(|entity| entity.common().handle == Handle::new(10)));
+    }
+
+    /// 不修剪只支持两条独立直线：多段线角点/非直线对象明确报错，不静默修剪。
+    #[test]
+    fn no_trim_chamfer_refuses_polyline_corners() {
+        for token in ["N", "NOTRIM", "NO TRIM", "TRIM=FALSE"] {
+            let mut command = ChamferCommand::new(1.0, Vec::new());
+            assert!(matches!(command.on_text_input(token), Some(CmdResult::NeedPoint)));
+            assert!(!command.trim, "{token}");
+        }
+        for token in ["T", "TRIM", "TRIM=TRUE"] {
+            let mut command = ChamferCommand::new(1.0, Vec::new());
+            assert!(matches!(command.on_text_input(token), Some(CmdResult::NeedPoint)));
+            assert!(command.trim, "{token}");
+        }
+        // 多段线首拾取在 no-trim 下直接报错并留在第一步。
+        let mut poly = LwPolyline::new();
+        poly.add_point(codec::types::Vector2::new(0.0, 0.0));
+        poly.add_point(codec::types::Vector2::new(10.0, 0.0));
+        poly.add_point(codec::types::Vector2::new(10.0, 10.0));
+        poly.common.handle = Handle::new(3);
+        let mut command = ChamferCommand::new(1.0, vec![EntityType::LwPolyline(poly)]);
+        assert!(matches!(command.on_text_input("N"), Some(CmdResult::NeedPoint)));
+        assert!(matches!(
+            command.on_entity_pick(Handle::new(3), DVec3::new(5.0, 0.0, 0.0)),
+            CmdResult::ReportError(_)
+        ));
+        assert!(matches!(command.step, ChamferStep::First));
     }
 
     #[test]

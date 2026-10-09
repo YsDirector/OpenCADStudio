@@ -761,18 +761,21 @@ class _Modify:
             lambda c: c.token("Y" if erase_source else "N"),
         ], entities)
 
-    def chamfer(self, first, second, distance1, distance2=None, at1=None, at2=None):
+    def chamfer(self, first, second, distance1, distance2=None, at1=None, at2=None, trim=True):
         """Cut the corner between two lines; `distance1` is measured along `first`
-        and `distance2` (default the same) along `second`. Returns the new line."""
+        and `distance2` (default the same) along `second`. With ``trim=False`` both
+        source lines stay intact and only the cut line is added. Returns the new line."""
         if distance2 is None:
             distance2 = distance1
-        result = self._run("CHAMFER", [
+        steps = [] if trim else [lambda c: c.token("N")]
+        steps += [
             lambda c: c.token("D"),
             lambda c: c.text(distance1),
             lambda c: c.text(distance2),
             lambda c: c.entity(first, self._at(first, at1)),
             lambda c: c.entity(second, self._at(second, at2)),
-        ])
+        ]
+        result = self._run("CHAMFER", steps)
         if not result:
             raise RuntimeError("CHAMFER produced nothing")
         return result[0]

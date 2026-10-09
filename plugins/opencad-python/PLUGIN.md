@@ -282,7 +282,7 @@ M.fillet(first, second, radius=2)           # radius 0 squares; trim=False (two 
 M.move([a, b], (0, 0, 0), (5, 5, 0)); M.copy([a], base, target)
 M.rotate([a], base, 90); M.scale([a], base, 2)
 M.mirror([a], p1, p2, erase_source=False); M.erase([a])
-M.chamfer(first, second, 2, 3)              # distance 2 along first, 3 along second
+M.chamfer(first, second, 2, 3)              # distance 2 along first, 3 along second; trim=False keeps both
 M.array_rect([a], rows=2, columns=3, row_spacing=10, column_spacing=20)
 M.array_polar([a], center, count=4, angle=360)   # counts include the original
 M.explode([polyline]); M.join([line1, line2])

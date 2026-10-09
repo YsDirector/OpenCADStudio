@@ -109,6 +109,16 @@ class DocumentModelTests(unittest.TestCase):
         self.doc.modify.chamfer(1, 2, 4, at1=(0, 0, 0), at2=(1, 1, 0))
         texts = [c[2]["text"] for c in self.calls if c[0] == "step" and c[1] == "text"]
         self.assertEqual(texts, ["4", "4"])
+        self.assertEqual(
+            [c[2]["text"] for c in self.calls if c[0] == "step" and c[1] == "token"],
+            ["D"],
+        )
+        self.calls.clear()
+        self.doc.modify.chamfer(1, 2, 4, at1=(0, 0, 0), at2=(1, 1, 0), trim=False)
+        self.assertEqual(
+            [c[2]["text"] for c in self.calls if c[0] == "step" and c[1] == "token"],
+            ["N", "D"],
+        )
         self.calls.clear()
         self.doc.modify.fillet(1, 2, 2, at1=(3, 2, 0), at2=(1, 2, 0))
         self.assertEqual(
