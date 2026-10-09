@@ -727,15 +727,17 @@ class _Modify:
         """Extend `target` from the end nearest `at` to the next entity in its way."""
         return self._run("EXTEND", [lambda c: c.entity(target, at), lambda c: c.enter()])
 
-    def fillet(self, first, second, radius=0, at1=None, at2=None):
-        """Round (or, with radius 0, square) the corner between two entities."""
-        return self._run("FILLET", [
+    def fillet(self, first, second, radius=0, at1=None, at2=None, trim=True):
+        """Round the corner; with ``trim=False`` keep both source lines intact and add only the arc."""
+        steps = [] if trim else [lambda c: c.token("N")]
+        steps += [
             lambda c: c.token("R"),
             lambda c: c.text(radius),
             lambda c: c.entity(first, self._at(first, at1)),
             lambda c: c.entity(second, self._at(second, at2)),
             lambda c: c.enter(),
-        ])
+        ]
+        return self._run("FILLET", steps)
 
     def move(self, entities, base, target):
         self._run("MOVE", [lambda c: c.point(base), lambda c: c.point(target)], entities)

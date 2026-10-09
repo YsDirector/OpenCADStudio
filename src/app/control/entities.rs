@@ -8,30 +8,220 @@ use crate::command::EntityTransform;
 
 type Parsed<T> = Result<T, Value>;
 
-/// `[x,y]` or `[x,y,z]` (missing z = 0) from `req[key]`.
-fn point_field(req: &Value, key: &str) -> Parsed<codec::types::Vector3> {
-    let values = req[key]
-        .as_array()
+/// Parse `[x,y]` or `[x,y,z]` (missing z = 0) without silently turning a
+/// malformed coordinate into zero. `label` is included in the validation
+/// error so nested geometry (for example `corners[2]`) remains actionable.
+fn point_value(value: Option<&Value>, label: &str, code: &str) -> Parsed<codec::types::Vector3> {
+    let values = value
+        .and_then(Value::as_array)
         .filter(|v| (2..=3).contains(&v.len()))
-        .ok_or_else(|| failure("invalid_point", format!("{key} must be [x,y] or [x,y,z]")))?;
+        .ok_or_else(|| failure(code, format!("{label} must be [x,y] or [x,y,z]")))?;
     let coord = |i: usize| {
         values[i]
             .as_f64()
             .filter(|v| v.is_finite())
-            .ok_or_else(|| failure("invalid_point", format!("{key} needs finite coordinates")))
+            .ok_or_else(|| failure(code, format!("{label} needs finite coordinates")))
     };
-    Ok(codec::types::Vector3::new(coord(0)?, coord(1)?, values.get(2).and_then(Value::as_f64).unwrap_or(0.0)))
+    let z = values
+        .get(2)
+        .map(|value| {
+            value
+                .as_f64()
+                .filter(|v| v.is_finite())
+                .ok_or_else(|| failure(code, format!("{label} needs finite coordinates")))
+        })
+        .transpose()?
+        .unwrap_or(0.0);
+    Ok(codec::types::Vector3::new(coord(0)?, coord(1)?, z))
+}
+
+/// `[x,y]` or `[x,y,z]` (missing z = 0) from `req[key]`.
+fn point_field(req: &Value, key: &str) -> Parsed<codec::types::Vector3> {
+    point_value(req.get(key), key, "invalid_point")
+}
+
+fn point_list_field(
+    spec: &Value,
+    key: &str,
+    minimum: usize,
+) -> Parsed<Vec<codec::types::Vector3>> {
+    let points = spec[key]
+        .as_array()
+        .filter(|points| points.len() >= minimum)
+        .ok_or_else(|| {
+            failure(
+                "invalid_spline_points",
+                format!("{key} needs at least {minimum} points"),
+            )
+        })?;
+    points
+        .iter()
+        .enumerate()
+        .map(|(index, point)| {
+            point_value(
+                Some(point),
+                &format!("{key}[{index}]"),
+                "invalid_spline_points",
+            )
+        })
+        .collect()
+}
+
+fn finite_number_list_field(spec: &Value, key: &str) -> Parsed<Vec<f64>> {
+    let values = spec[key]
+        .as_array()
+        .filter(|values| !values.is_empty())
+        .ok_or_else(|| failure("invalid_spline_values", format!("{key} needs a non-empty array")))?;
+    values
+        .iter()
+        .enumerate()
+        .map(|(index, value)| {
+            value
+                .as_f64()
+                .filter(|value| value.is_finite())
+                .ok_or_else(|| {
+                    failure(
+                        "invalid_spline_values",
+                        format!("{key}[{index}] must be finite"),
+                    )
+                })
+        })
+        .collect()
 }
 
 fn deg_field(req: &Value, key: &str) -> f64 {
     req[key].as_f64().unwrap_or(0.0).to_radians()
 }
 
+/// A type-specific schema for `entities_create`. Previously, fields that the
+/// builder did not read were ignored. That made a typo such as ARC's legacy
+/// `start_angle` look like a successful request while the constructor received
+/// the default angle. Keep the schema local to this operation so the wire API
+/// remains explicit and every geometry field has one spelling.
+fn validate_entity_fields(spec: &Value, kind: &str) -> Parsed<()> {
+    let Some(object) = spec.as_object() else {
+        return Ok(());
+    };
+    for field in object.keys() {
+        let allowed = match kind {
+            "LINE" => matches!(
+                field.as_str(),
+                "type" | "start" | "end" | "thickness" | "layer" | "color"
+            ),
+            "CIRCLE" => matches!(
+                field.as_str(),
+                "type" | "center" | "radius" | "layer" | "color"
+            ),
+            "ARC" => matches!(
+                field.as_str(),
+                "type"
+                    | "center"
+                    | "radius"
+                    | "start_angle_deg"
+                    | "end_angle_deg"
+                    | "layer"
+                    | "color"
+            ),
+            "SPLINE" => matches!(
+                field.as_str(),
+                "type"
+                    | "degree"
+                    | "knots"
+                    | "control_points"
+                    | "fit_points"
+                    | "weights"
+                    | "closed"
+                    | "periodic"
+                    | "rational"
+                    | "planar"
+                    | "linear"
+                    | "layer"
+                    | "color"
+            ),
+            "LWPOLYLINE" | "POLYLINE" => matches!(
+                field.as_str(),
+                "type" | "vertices" | "closed" | "constant_width" | "layer" | "color"
+            ),
+            "POINT" => matches!(field.as_str(), "type" | "location" | "layer" | "color"),
+            "TEXT" => matches!(
+                field.as_str(),
+                "type"
+                    | "value"
+                    | "position"
+                    | "height"
+                    | "rotation_deg"
+                    | "style"
+                    | "layer"
+                    | "color"
+            ),
+            "MTEXT" => matches!(
+                field.as_str(),
+                "type"
+                    | "value"
+                    | "position"
+                    | "height"
+                    | "width"
+                    | "rotation_deg"
+                    | "style"
+                    | "layer"
+                    | "color"
+            ),
+            "INSERT" => matches!(
+                field.as_str(),
+                "type" | "block" | "position" | "scale" | "rotation_deg" | "layer" | "color"
+            ),
+            "SOLID" => matches!(field.as_str(), "type" | "corners" | "layer" | "color"),
+            "HATCH" => matches!(
+                field.as_str(),
+                "type"
+                    | "boundary"
+                    | "solid"
+                    | "pattern"
+                    | "pattern_scale"
+                    | "pattern_angle_deg"
+                    | "layer"
+                    | "color"
+            ),
+            _ => true,
+        };
+        if !allowed {
+            return Err(failure(
+                "unknown_entity_field",
+                format!("Unknown field '{field}' for {kind} entity"),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Required finite angle in degrees, converted to the radians used by the
+/// codec. Unlike `deg_field`, this intentionally does not provide a default.
+fn finite_angle_field(spec: &Value, key: &str) -> Parsed<f64> {
+    let degrees = spec[key]
+        .as_f64()
+        .filter(|value| value.is_finite())
+        .ok_or_else(|| failure("invalid_angle", format!("arc needs a finite {key}")))?;
+    let radians = degrees.to_radians();
+    if radians.is_finite() {
+        Ok(radians)
+    } else {
+        Err(failure(
+            "invalid_angle",
+            format!("arc needs a finite {key}"),
+        ))
+    }
+}
+
 pub(super) fn hex_handles(req: &Value, key: &str) -> Parsed<Vec<codec::Handle>> {
     let list = req[key]
         .as_array()
         .filter(|v| !v.is_empty())
-        .ok_or_else(|| failure("handles_required", format!("Supply a non-empty {key}:[…] list")))?;
+        .ok_or_else(|| {
+            failure(
+                "handles_required",
+                format!("Supply a non-empty {key}:[…] list"),
+            )
+        })?;
     list.iter()
         .map(|v| {
             u64::from_str_radix(
@@ -54,7 +244,10 @@ pub(super) fn hex_handles(req: &Value, key: &str) -> Parsed<Vec<codec::Handle>> 
 
 /// Every handle must exist in the document; otherwise `entity_absent` naming
 /// the missing ones so the caller can refresh instead of guessing.
-pub(super) fn require_existing(document: &codec::CadDocument, handles: &[codec::Handle]) -> Parsed<()> {
+pub(super) fn require_existing(
+    document: &codec::CadDocument,
+    handles: &[codec::Handle],
+) -> Parsed<()> {
     let missing: Vec<String> = handles
         .iter()
         .filter(|h| document.get_entity(**h).is_none())
@@ -108,6 +301,7 @@ fn build_entity(spec: &Value, document: &codec::CadDocument) -> Parsed<codec::En
     use codec::entities::*;
     use codec::types::Vector3;
     let kind = spec["type"].as_str().unwrap_or("").to_ascii_uppercase();
+    validate_entity_fields(spec, &kind)?;
     let entity = match kind.as_str() {
         "LINE" => {
             let mut line = Line::from_points(point_field(spec, "start")?, point_field(spec, "end")?);
@@ -128,12 +322,160 @@ fn build_entity(spec: &Value, document: &codec::CadDocument) -> Parsed<codec::En
                 .as_f64()
                 .filter(|r| r.is_finite() && *r > 0.0)
                 .ok_or_else(|| failure("invalid_radius", "arc needs a finite radius > 0"))?;
-            EntityType::Arc(Arc::from_center_radius_angles(
+            let arc = Arc::from_center_radius_angles(
                 point_field(spec, "center")?,
                 radius,
-                deg_field(spec, "start_angle_deg"),
-                deg_field(spec, "end_angle_deg"),
-            ))
+                finite_angle_field(spec, "start_angle_deg")?,
+                finite_angle_field(spec, "end_angle_deg")?,
+            );
+            if !arc.sweep_angle().is_finite() || arc.sweep_angle() <= 0.0 {
+                return Err(failure(
+                    "invalid_sweep",
+                    "arc start_angle_deg and end_angle_deg must define a finite non-zero sweep",
+                ));
+            }
+            EntityType::Arc(arc)
+        }
+        "SPLINE" => {
+            let control_points = if spec.get("control_points").is_some() {
+                point_list_field(spec, "control_points", 2)?
+            } else {
+                Vec::new()
+            };
+            let fit_points = if spec.get("fit_points").is_some() {
+                point_list_field(spec, "fit_points", 2)?
+            } else {
+                Vec::new()
+            };
+            if control_points.is_empty() && fit_points.is_empty() {
+                return Err(failure(
+                    "invalid_spline_points",
+                    "spline needs control_points or fit_points (at least 2 points)",
+                ));
+            }
+            let degree = match spec.get("degree") {
+                None | Some(Value::Null) => 3,
+                Some(value) => {
+                    // `as_i64()` 对 JSON 浮点返回 None：直接 `unwrap_or(3)` 会把
+                    // 2.0 / 2.5 / 30.0 静默当成 3（还躲过下面的范围检查）。整值浮点
+                    // （2.0）接受，其余显式值一律报错。
+                    let parsed = value.as_i64().or_else(|| {
+                        value
+                            .as_f64()
+                            .filter(|number| number.is_finite() && number.fract() == 0.0)
+                            .map(|number| number as i64)
+                    });
+                    match parsed.filter(|degree| (1..=25).contains(degree)) {
+                        Some(degree) => degree,
+                        None => {
+                            return Err(failure(
+                                "invalid_spline_degree",
+                                "spline degree must be an integer from 1 through 25",
+                            ))
+                        }
+                    }
+                }
+            };
+            if !control_points.is_empty() && degree as usize >= control_points.len() {
+                return Err(failure(
+                    "invalid_spline_degree",
+                    "spline degree must be smaller than the control-point count",
+                ));
+            }
+            // fit 点插值恒为三次（`Spline::from_fit_points` / 内核
+            // `interpolate_fit` 都不读 degree）：显式给别的次数只会让查询
+            // 显示一个假值，不如直接报错。
+            if control_points.is_empty()
+                && !fit_points.is_empty()
+                && spec.get("degree").is_some_and(|value| !value.is_null())
+                && degree != 3
+            {
+                return Err(failure(
+                    "invalid_spline_degree",
+                    "fit-point splines interpolate at degree 3; omit degree or set it to 3",
+                ));
+            }
+            let mut spline = if control_points.is_empty() {
+                Spline::from_fit_points(fit_points.clone())
+            } else {
+                Spline::from_control_points(degree as i32, control_points)
+            };
+            spline.degree = degree as i32;
+            if !fit_points.is_empty() {
+                spline.fit_points = fit_points;
+            }
+            if spec.get("knots").is_some() {
+                if spline.control_points.is_empty() {
+                    return Err(failure(
+                        "invalid_spline_values",
+                        "spline knots require control_points",
+                    ));
+                }
+                let knots = finite_number_list_field(spec, "knots")?;
+                let expected = spline.control_points.len() + degree as usize + 1;
+                // 除长度与非降外，还要有**正跨度**：全相等的 knots 能过这里，
+                // 但内核严格构造（`nurbs3()` 的 `new_strict`）会拒掉 → 实体
+                // 建得出来却算不了（TRIM/OFFSET、约束、关联标注静默失效）。
+                let zero_span = knots
+                    .first()
+                    .zip(knots.last())
+                    .is_some_and(|(first, last)| first >= last);
+                if knots.len() != expected
+                    || knots.windows(2).any(|pair| pair[0] > pair[1])
+                    || zero_span
+                {
+                    return Err(failure(
+                        "invalid_spline_values",
+                        format!(
+                            "spline knots must be nondecreasing with a positive span and contain {expected} values"
+                        ),
+                    ));
+                }
+                spline.knots = knots;
+            }
+            if spec.get("weights").is_some() {
+                if spline.control_points.is_empty() {
+                    return Err(failure(
+                        "invalid_spline_values",
+                        "spline weights require control_points",
+                    ));
+                }
+                let weights = finite_number_list_field(spec, "weights")?;
+                if weights.len() != spline.control_points.len()
+                    || weights.iter().any(|weight| *weight <= 0.0)
+                {
+                    return Err(failure(
+                        "invalid_spline_values",
+                        "spline weights must be positive and match control_points",
+                    ));
+                }
+                spline.weights = weights;
+                spline.flags.rational = true;
+            }
+            if let Some(value) = spec["closed"].as_bool() {
+                spline.flags.closed = value;
+            }
+            if let Some(value) = spec["periodic"].as_bool() {
+                spline.flags.periodic = value;
+            }
+            if let Some(value) = spec["rational"].as_bool() {
+                // weights 必须置 rational：codec 的 DXF writer 只在 rational
+                // 时写组码 41，存盘重开后权重会静默消失（曲线变多项式）。
+                if !value && !spline.weights.is_empty() {
+                    return Err(failure(
+                        "invalid_spline_values",
+                        "spline weights require rational=true (they are dropped otherwise)",
+                    ));
+                }
+                spline.flags.rational = value;
+            }
+            if let Some(value) = spec["planar"].as_bool() {
+                spline.flags.planar = value;
+            }
+            if let Some(value) = spec["linear"].as_bool() {
+                spline.flags.linear = value;
+            }
+            EntityType::Spline(spline)
         }
         "LWPOLYLINE" | "POLYLINE" => {
             let vertices = spec["vertices"]
@@ -219,21 +561,32 @@ fn build_entity(spec: &Value, document: &codec::CadDocument) -> Parsed<codec::En
                 .as_array()
                 .filter(|v| (3..=4).contains(&v.len()))
                 .ok_or_else(|| failure("invalid_corners", "solid needs 3 or 4 corners"))?;
-            let corner = |i: usize| -> Parsed<Vector3> {
-                let raw = &corners[i];
-                let coord = |k: usize| {
-                    raw.get(k)
-                        .and_then(Value::as_f64)
-                        .filter(|v| v.is_finite())
-                        .unwrap_or(0.0)
-                };
-                Ok(Vector3::new(coord(0), coord(1), coord(2)))
+            let corners: Vec<Vector3> = corners
+                .iter()
+                .enumerate()
+                .map(|(index, value)| {
+                    if value.as_array().is_none_or(|values| values.len() != 3) {
+                        return Err(failure(
+                            "invalid_corners",
+                            format!("corners[{index}] must be [x,y,z]"),
+                        ));
+                    }
+                    point_value(
+                        Some(value),
+                        &format!("corners[{index}]"),
+                        "invalid_corners",
+                    )
+                })
+                .collect::<Parsed<_>>()?;
+            // `Solid::triangle` is a formal codec/API shape: its fourth
+            // stored corner is deliberately the same as the third. Never
+            // synthesize an unrelated origin point for a 3-corner request.
+            let solid = match corners.as_slice() {
+                [first, second, third] => Solid::triangle(*first, *second, *third),
+                [first, second, third, fourth] => Solid::new(*first, *second, *third, *fourth),
+                _ => unreachable!("corner count was validated above"),
             };
-            let fourth = corners
-                .get(3)
-                .map(|_| corner(3))
-                .unwrap_or_else(|| Ok(Vector3::ZERO));
-            EntityType::Solid(Solid::new(corner(0)?, corner(1)?, corner(2)?, fourth?))
+            EntityType::Solid(solid)
         }
         "HATCH" => {
             let boundary = spec["boundary"]
@@ -270,7 +623,7 @@ fn build_entity(spec: &Value, document: &codec::CadDocument) -> Parsed<codec::En
             return Err(failure(
                 "unknown_entity_type",
                 format!(
-                    "Unknown entity type '{other}'. Supported: Line, Circle, Arc, LwPolyline, Point, Text, MText, Insert, Solid, Hatch"
+                    "Unknown entity type '{other}'. Supported: Line, Circle, Arc, Spline, LwPolyline, Point, Text, MText, Insert, Solid, Hatch"
                 ),
             ))
         }
@@ -357,7 +710,10 @@ impl OpenCADStudio {
         req: &Value,
     ) -> Result<Task<Message>, Value> {
         let handles = hex_handles(req, "handles")?;
-        let action = req["action"].as_str().unwrap_or("move").to_ascii_lowercase();
+        let action = req["action"]
+            .as_str()
+            .unwrap_or("move")
+            .to_ascii_lowercase();
         let i = self.active_tab;
         require_existing(&self.tabs[i].scene.document, &handles)?;
 
@@ -561,7 +917,11 @@ impl OpenCADStudio {
                     .map(|record| {
                         (
                             record.application_name.clone(),
-                            json!(record.values.iter().map(xdata_value_json).collect::<Vec<_>>()),
+                            json!(record
+                                .values
+                                .iter()
+                                .map(xdata_value_json)
+                                .collect::<Vec<_>>()),
                         )
                     })
                     .collect();
@@ -595,11 +955,10 @@ impl OpenCADStudio {
 
         // World → block space translates `base` onto the block origin; the
         // inverse places the Insert so entities keep their world position.
-        let world_to_block = codec::types::Transform::from_translation(
-            codec::types::Vector3::new(-base.x, -base.y, -base.z),
-        );
-        let block_to_world =
-            codec::types::Transform::from_translation(insert_at);
+        let world_to_block = codec::types::Transform::from_translation(codec::types::Vector3::new(
+            -base.x, -base.y, -base.z,
+        ));
+        let block_to_world = codec::types::Transform::from_translation(insert_at);
         self.push_undo_snapshot(i, "BLOCKDEFINE");
         // CF-01.3 (barcode re-import): `replace:true` drops the previous
         // definition — its children, markers and inserts — inside the same
@@ -630,7 +989,13 @@ impl OpenCADStudio {
             ));
         }
         let i = self.active_tab;
-        if self.tabs[i].scene.document.block_records.get(&name).is_none() {
+        if self.tabs[i]
+            .scene
+            .document
+            .block_records
+            .get(&name)
+            .is_none()
+        {
             return Err(failure(
                 "block_missing",
                 format!("Block '{name}' does not exist"),

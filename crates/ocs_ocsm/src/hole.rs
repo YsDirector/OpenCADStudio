@@ -533,6 +533,10 @@ pub struct HoleModel {
     pub drill_d: Option<f64>,
     /// 沉头孔推荐值：`gb70_1`（内六角圆柱头 GB/T 70.1，默认）/ `gb70_2`（内六角平圆头，GB/T 152.3 无表 → 报错）/ `gb6190`（GB 6190/6191/65）。
     pub reco: String,
+    /// 非标沉头孔直径（`cb_d2`/`cb_t` 必须成对提供；均为空时沿用推荐值表）。
+    pub cb_d2: Option<f64>,
+    /// 非标沉头孔深度（仅 `HoleKind::Counterbore` 可用；单位 mm）。
+    pub cb_t: Option<f64>,
     pub range: HoleRange,
     /// 孔深（从沉孔底/埋头锥底起算；无沉/埋时即孔口）；`None` = 自动。
     pub hole_depth: Option<f64>,
@@ -560,6 +564,8 @@ impl Default for HoleModel {
             custom_d: None,
             drill_d: None,
             reco: "gb70_1".to_string(),
+            cb_d2: None,
+            cb_t: None,
             range: HoleRange::Blind,
             hole_depth: None,
             thread_len: None,
@@ -657,6 +663,30 @@ pub fn resolve(model: &HoleModel) -> Result<HoleValues, String> {
     if !(model.d.is_finite() && model.d > 0.0) {
         return Err(t_fmt("cmd.hole.err.d_invalid", &[("d", &model.d.to_string())]));
     }
+    // 非标沉头尺寸必须成对出现，并且不能悄悄落到埋头/简单/螺纹孔路径。
+    let custom_counterbore = if model.cb_d2.is_some() || model.cb_t.is_some() {
+        if model.kind != HoleKind::Counterbore {
+            return Err(t("cmd.hole.err.cb_custom_only"));
+        }
+        let (Some(d2), Some(t)) = (model.cb_d2, model.cb_t) else {
+            return Err(t("cmd.hole.err.cb_custom_pair"));
+        };
+        if !(d2.is_finite() && d2 > 0.0) {
+            return Err(t_fmt(
+                "cmd.hole.err.cb_custom_d2_invalid",
+                &[("d2", &d2.to_string())],
+            ));
+        }
+        if !(t.is_finite() && t > 0.0) {
+            return Err(t_fmt(
+                "cmd.hole.err.cb_custom_t_invalid",
+                &[("t", &t.to_string())],
+            ));
+        }
+        Some((d2, t))
+    } else {
+        None
+    };
     // 子类型与孔类型一致
     match model.kind {
         HoleKind::Simple => {
@@ -841,18 +871,32 @@ pub fn resolve(model: &HoleModel) -> Result<HoleValues, String> {
     };
     let (bore_d, bore_t, sink_d, sink_t) = match model.kind {
         HoleKind::Counterbore => {
-            let r = counterbore_row(model.d, &model.reco)?;
-            if base_d >= r.d2 - 1e-9 {
-                return Err(t_fmt(
-                    "cmd.hole.err.cbore_pilot_ge_sink",
-                    &[
-                        ("base", &fmt3(base_d)),
-                        ("sink", &fmt3(r.d2)),
-                        ("d", &fmt(model.d)),
-                    ],
-                ));
+            // 无覆盖值时保持原有 GB/T 152.3 推荐值路径；有覆盖值时允许非标准规格
+            //（包括不在推荐表里的底孔公称值），但仍执行几何关系校验。
+            let (d2, t) = if let Some((d2, t)) = custom_counterbore {
+                (d2, t)
+            } else {
+                let r = counterbore_row(model.d, &model.reco)?;
+                (r.d2, r.t)
+            };
+            if base_d >= d2 - 1e-9 {
+                return Err(if custom_counterbore.is_some() {
+                    t_fmt(
+                        "cmd.hole.err.cbore_custom_pilot_ge_sink",
+                        &[("base", &fmt3(base_d)), ("sink", &fmt3(d2))],
+                    )
+                } else {
+                    t_fmt(
+                        "cmd.hole.err.cbore_pilot_ge_sink",
+                        &[
+                            ("base", &fmt3(base_d)),
+                            ("sink", &fmt3(d2)),
+                            ("d", &fmt(model.d)),
+                        ],
+                    )
+                });
             }
-            (Some(r.d2), Some(r.t), None, None)
+            (Some(d2), Some(t), None, None)
         }
         HoleKind::Countersink => {
             let r = countersink_row(model.d)?;
@@ -1190,7 +1234,9 @@ pub fn place(entities: Vec<EntityType>, at: [f64; 2], rot_deg: f64) -> Vec<Entit
 
 /// 块名：只由几何模型决定（FNV-1a，跨进程稳定）。
 pub fn block_name(model: &HoleModel) -> String {
-    let canonical = format!(
+    // 保留旧模型（两个字段均为 None）的块名，避免普通标准孔的块名/缓存发生无谓变化；
+    // 非标沉头尺寸进入额外字段后必须参与哈希，防止不同 d2/t 复用同一几何块。
+    let mut canonical = format!(
         "{}|{}|{:?}|{:?}|{}|{}|{:?}|{:?}|{}|{}|{}|{}|{}|{:?}|{}",
         model.thread_system.key(),
         model.thread_group.as_deref().unwrap_or(""),
@@ -1208,6 +1254,13 @@ pub fn block_name(model: &HoleModel) -> String {
         model.range,
         format!("{:?}|{}", model.drill_d, model.reco),
     );
+    if model.cb_d2.is_some() || model.cb_t.is_some() {
+        canonical.push_str(&format!(
+            "|cb_d2={}|cb_t={}",
+            model.cb_d2.map(fmt).unwrap_or_default(),
+            model.cb_t.map(fmt).unwrap_or_default(),
+        ));
+    }
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
     for byte in canonical.as_bytes() {
         hash ^= u64::from(*byte);
@@ -1534,6 +1587,20 @@ pub fn parse_program(text: &str) -> Result<HoleModel, String> {
                 m.custom_d = Some(
                     v.parse()
                         .map_err(|_| t_fmt("cmd.hole.err.custom_d_invalid", &[("v", &v)]))?,
+                );
+            }
+            _ if lower.starts_with("cb_d2") || lower.starts_with("cbd2") || t.starts_with("沉孔径") => {
+                let v = take_arg(&tokens, &mut i, t, &["cb_d2", "cbd2", "沉孔径"])?;
+                m.cb_d2 = Some(
+                    v.parse()
+                        .map_err(|_| t_fmt("cmd.hole.err.cb_custom_d2_invalid", &[("d2", &v)]))?,
+                );
+            }
+            _ if lower.starts_with("cb_t") || t.starts_with("沉孔深") => {
+                let v = take_arg(&tokens, &mut i, t, &["cb_t", "沉孔深"])?;
+                m.cb_t = Some(
+                    v.parse()
+                        .map_err(|_| t_fmt("cmd.hole.err.cb_custom_t_invalid", &[("t", &v)]))?,
                 );
             }
             _ if t.starts_with("配合") || lower.starts_with("fit") => {
@@ -2407,6 +2474,85 @@ mod tests {
             .filter(|e| matches!(e, EntityType::Circle(_)))
             .count();
         assert_eq!(circles, 2);
+    }
+
+    /// 非标浅沉台：Ø28×3 + Ø15 通孔必须绕过推荐值表，但仍校验底孔/沉孔关系。
+    #[test]
+    fn custom_counterbore_supports_nonstandard_shallow_through_hole() {
+        let _g = zh_guard();
+        let m = parse_program(
+            "沉头孔 无螺纹 钻孔 Ø15 cb_d2=28 cb_t=3 通孔 H20",
+        )
+        .unwrap();
+        assert_eq!(m.kind, HoleKind::Counterbore);
+        assert_eq!(m.subtype, HoleSubtype::Drill);
+        assert_eq!(m.d, 15.0);
+        assert_eq!(m.drill_d, Some(15.0));
+        assert_eq!(m.cb_d2, Some(28.0));
+        assert_eq!(m.cb_t, Some(3.0));
+        assert_eq!(m.range, HoleRange::Through);
+
+        let v = resolve(&m).unwrap();
+        assert_eq!(v.base_d, 15.0);
+        assert_eq!(v.bore_d, Some(28.0));
+        assert_eq!(v.bore_t, Some(3.0));
+        assert_eq!(v.base_start, 3.0);
+        assert_eq!(v.cone_height, 0.0);
+
+        let built = build(&m).unwrap();
+        assert!(built.entities.iter().any(|e| matches!(
+            e,
+            EntityType::Line(l)
+                if l.common.layer == LAYER_MAIN
+                    && (l.start.x.abs() - 14.0).abs() < 1e-9
+                    && l.start.y.abs() < 1e-9
+        )));
+        assert!(built.entities.iter().any(|e| matches!(
+            e,
+            EntityType::Line(l)
+                if l.common.layer == LAYER_MAIN
+                    && (l.start.y + 3.0).abs() < 1e-9
+                    && l.start.x.abs() > 13.9
+        )));
+        assert!(
+            !built.entities.iter().any(|e| matches!(
+                e,
+                EntityType::Line(l)
+                    if l.common.layer == LAYER_MAIN
+                        && (l.start.x - l.end.x).abs() > 1e-9
+                        && (l.start.y - l.end.y).abs() > 1e-9
+            )),
+            "贯通非标沉头孔不应生成底锥斜线"
+        );
+        assert!(preview_svg(&m).unwrap().contains("沉孔Ø28×3"));
+
+        // 两个显式字段参与块名；老模型（None/None）继续使用旧块名输入。
+        let mut legacy = m.clone();
+        legacy.cb_d2 = None;
+        legacy.cb_t = None;
+        assert_ne!(block_name(&m), block_name(&legacy));
+        let mut other = m.clone();
+        other.cb_t = Some(4.0);
+        assert_ne!(block_name(&m), block_name(&other));
+
+        // 覆盖值必须成对、有限、正，并且 d2 严格大于底孔径；非沉头孔不能携带。
+        let mut bad = m.clone();
+        bad.cb_t = None;
+        assert!(resolve(&bad).unwrap_err().contains("同时提供"));
+        bad = m.clone();
+        bad.cb_d2 = Some(f64::NAN);
+        assert!(resolve(&bad).unwrap_err().contains("有限"));
+        bad = m.clone();
+        bad.cb_t = Some(f64::INFINITY);
+        assert!(resolve(&bad).unwrap_err().contains("有限"));
+        bad = m.clone();
+        bad.cb_t = Some(0.0);
+        assert!(resolve(&bad).unwrap_err().contains("cb_t"));
+        bad = m.clone();
+        bad.cb_d2 = Some(15.0);
+        assert!(resolve(&bad).unwrap_err().contains("cb_d2"));
+        bad.kind = HoleKind::Countersink;
+        assert!(resolve(&bad).unwrap_err().contains("仅适用于沉头孔"));
     }
 
     /// 全长：L = H；孔深自动被拒；不画终止线。

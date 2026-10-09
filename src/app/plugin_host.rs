@@ -4122,6 +4122,24 @@ mod tests {
         }
     }
 
+    /// D2：自动化 `op:"select"` 的选区必须能被插件侧 `selected_handles()` 看到
+    /// —— ZX/XL/ME 那套命令靠它吃「当前高亮的选择集」。
+    #[test]
+    fn v5_selected_handles_follow_the_automation_select_op() {
+        let mut app = OpenCADStudio::new_for_test();
+        app.tabs[0].is_start = false;
+        let h1 = {
+            let mut host = HostSession::new(&mut app, 0);
+            host.add_entity(EntityType::Point(Point::new()))
+        };
+        let request = format!(r#"{{"op":"select","handles":["{:X}"]}}"#, h1.value());
+        app.automation_op(&request);
+        {
+            let host = HostSession::new(&mut app, 0);
+            assert_eq!(host.selected_handles(), vec![h1]);
+        }
+    }
+
     #[test]
     fn v5_ensure_linetypes_and_text_styles_idempotent() {
         let mut app = OpenCADStudio::new_for_test();
@@ -10201,6 +10219,8 @@ h2 = line((200, 0), (209, 0)); w = line((215, -5), (215, 5))
 step('extend', lambda: M.extend(h2, (208, 0)))
 f1 = line((300, 0), (310, 0)); f2 = line((300, 0), (300, 10))
 step('fillet', lambda: M.fillet(f1, f2, 2, (308, 0), (300, 8)))
+nf1 = line((350, 0), (360, 0)); nf2 = line((350, 0), (350, 10))
+step('fillet_notrim', lambda: M.fillet(nf1, nf2, 2, (358, 0), (350, 8), trim=False))
 m = circle((400, 0), 1)
 step('move', lambda: M.move([m], (0, 0, 0), (5, 5, 0)))
 c = circle((500, 0), 1)
@@ -10283,6 +10303,8 @@ check('bad_point', lambda: ocs.command_step('point', {'point': [0, 0, 0]}))
         assert!(has_line(100.0, 0.0, 105.0, 0.0), "trim: {:?}", describe());
         assert!(has_line(200.0, 0.0, 215.0, 0.0), "extend: {:?}", describe());
         assert!(arcs.iter().any(|a| near(a.radius, 2.0) && near(a.center.x, 302.0) && near(a.center.y, 2.0)), "fillet arc: {arcs:?}");
+        assert!(arcs.iter().any(|a| near(a.radius, 2.0) && near(a.center.x, 352.0) && near(a.center.y, 2.0)), "no-trim fillet arc: {arcs:?}");
+        assert!(has_line(350.0, 0.0, 360.0, 0.0) && has_line(350.0, 0.0, 350.0, 10.0), "no-trim keeps both source lines: {:?}", describe());
         assert!(circles.iter().any(|c| near(c.center.x, 405.0) && near(c.center.y, 5.0)), "move: {circles:?}");
         assert!(!circles.iter().any(|c| near(c.center.x, 400.0)), "move left the original: {circles:?}");
         assert!(circles.iter().any(|c| near(c.center.x, 500.0) && near(c.center.y, 0.0)) && circles.iter().any(|c| near(c.center.x, 500.0) && near(c.center.y, 10.0)), "copy: {circles:?}");

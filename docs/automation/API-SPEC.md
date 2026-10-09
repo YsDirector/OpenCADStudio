@@ -205,7 +205,7 @@ and stable; branch on it, not on message text.
 | `invalid_detail` | `user_select` `detail` outside `summary`/`geometry`/`full` | no |
 | `selection_changed` | Precondition `selection[]` no longer matches | re-read and confirm |
 | `name_required`, `entities_required`, `selection_required`, `app_required`, `path_required`, `handles_required`, `block_required` | Missing mandatory field | no |
-| `unknown_entity_type`, `invalid_radius`, `invalid_vertices`, `invalid_point`, `invalid_text`, `invalid_scale`, `invalid_paper`, `invalid_handle`, `invalid_xdata`, `invalid_sysvar_value` | Validation failures — nothing commits | no |
+| `unknown_entity_type`, `unknown_entity_field`, `invalid_radius`, `invalid_angle`, `invalid_sweep`, `invalid_corners`, `invalid_vertices`, `invalid_point`, `invalid_text`, `invalid_scale`, `invalid_paper`, `invalid_handle`, `invalid_xdata`, `invalid_sysvar_value` | Validation failures — nothing commits | no |
 | `unknown_sysvar` | Variable outside the registry (§6.7) | no |
 | `layout_exists`, `layout_missing`, `layer_failed`, `block_failed`, `block_missing`, `block_protected`, `selection_set_missing`, `template_missing`, `template_failed`, `save_failed` | Domain refusals, self-explanatory | no |
 
@@ -247,16 +247,21 @@ and `color` (index).
 |---|---|
 | `Line` | `start`, `end`, optional `thickness` |
 | `Circle` | `center`, `radius` (≥ 0) |
-| `Arc` | `center`, `radius` (> 0), `start_angle_deg`, `end_angle_deg` |
+| `Arc` | `center`, `radius` (> 0), finite `start_angle_deg`, finite `end_angle_deg`; the resulting sweep must be non-zero |
+| `Spline` | `control_points` (≥ 2) or `fit_points` (≥ 2), optional `degree` (integers 1–25; `2.0` is accepted as 2, `2.5`/`30.0`/strings are rejected), explicit `knots` (exact count = points + degree + 1, nondecreasing, positive span) / positive `weights` for control-point splines (weights require `rational=true`; an explicit `rational:false` with weights is refused so DXF round-trips keep them), `closed`/`periodic`/`rational`/`planar`/`linear` flags. Fit-point splines always interpolate at degree 3, so an explicit other degree is refused instead of being stored as fake metadata. |
 | `LwPolyline` | `vertices` (≥ 2), `closed`, optional `constant_width` |
 | `Point` | `location` |
 | `Text` | `value`, `position`, optional `height` (default 2.5), `rotation_deg`, `style` |
 | `MText` | `value`, `position`, optional `height`, `width`, `rotation_deg` |
 | `Insert` | `block` (must exist), `position`, optional `scale` (number or `[x,y,z]`, nonzero), `rotation_deg` |
-| `Solid` | `corners` (3 or 4 `[x,y,z]`) |
+| `Solid` | `corners` (3 or 4 explicit finite `[x,y,z]` points; 3 is the formal triangular Solid form and stores corner 4 equal to corner 3) |
 | `Hatch` | `boundary` (≥ 3 points, closed), `solid`, or `pattern` (catalog name, default `ANSI31`), `pattern_scale`, `pattern_angle_deg` |
 
-Result: `{"handles":[…],"created":N,"layers_created":[…]}` → HTTP 201.
+Unknown fields are rejected with `unknown_entity_field` instead of being
+ignored. Missing or malformed arc angles return `invalid_angle`, a zero sweep
+returns `invalid_sweep`, and malformed Solid points return `invalid_corners`;
+all are atomic validation failures. Result:
+`{"handles":[…],"created":N,"layers_created":[…]}` → HTTP 201.
 
 ### 6.3 Entity modification
 
@@ -399,9 +404,9 @@ dedicated op needed:
 | `select` | Change the current selection (`handles`, `clear`, filters). |
 | `events` | Cursor-paged event stream (command lifecycle, document and selection changes, 128-event ring, `resync` flag). Polling by design. |
 | `history` | Command-line history (also the person's view of what clients did — see §6.12). |
-| `capture` | PNG snapshot of the viewport or full window (`scope`, `max_dimension`). |
+| `capture` | PNG snapshot of the viewport or full window (`scope`, `max_dimension`). The request parks until the window has drawn another frame, so the PNG reflects the latest geometry (`waited_for_frame`: `true` = a redraw was observed, `false` = the anti-hang timer won and the screen was already current); a minimized window reports an error instead. |
 | `view_focus` | Zoom-to-fit + highlight the listed handles (GUI sessions; headless answers `gui_required`). |
-| `action` | The 20 UI toggles (grid, ortho, …) by name. |
+| `action` | The UI toggles (grid, ortho, …) plus dialog actions (`close_modal`, the `external_change_*` reload/overwrite/save-as/cancel buttons) by name. |
 
 ### 6.11 Complete REST endpoint table
 

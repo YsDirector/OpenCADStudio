@@ -53,6 +53,10 @@ pub(crate) struct Dim2GbPlan {
     pub adds: Vec<Entity>,
     /// 需要删除的原标注 handle。
     pub removes: Vec<Handle>,
+    /// 旧 → 新句柄映射的区间：`(旧 handle, adds 区间起, adds 区间止)`。
+    /// 命令把区间内的新实体都盖上 `OCSM_REPLACED_FROM`（旧句柄）XDATA，
+    /// 脚本用 `xdata_get` 就能把旧句柄翻译成新句柄（C10）。
+    pub replacements: Vec<(Handle, usize, usize)>,
     /// 成功转换数。
     pub converted: usize,
     /// 其中：引线标注（Leader + MText）转换数。
@@ -105,6 +109,12 @@ impl CollectSender {
         let blocks = std::mem::take(&mut *self.blocks.lock().unwrap());
         let adds = std::mem::take(&mut *self.adds.lock().unwrap());
         (styles, blocks, adds)
+    }
+
+    /// 只取走已收集的实体（每次转换后调用，保证 `plan.adds` 的顺序
+    /// 与旧→新映射的区间索引一致）。
+    fn take_adds(&self) -> Vec<Entity> {
+        std::mem::take(&mut *self.adds.lock().unwrap())
     }
 }
 
@@ -412,6 +422,7 @@ fn base_params(guide_type: GuideType, dist: f64, dec: Option<u32>) -> GuideParam
         guide_type,
         sub: None,
         dist,
+        suppress_text_leader: false,
         text: None,
         tol: None,
         up: None,
@@ -422,6 +433,7 @@ fn base_params(guide_type: GuideType, dist: f64, dec: Option<u32>) -> GuideParam
         ver: DatumVersion::GB2008,
         letter: None,
         scale: None,
+        title: None,
         flip: FlipDir::None,
         marker: None,
         angle_mode: AngleMode::Minor,
@@ -944,7 +956,22 @@ fn convert_leader(
     let lower = lines.get(1).cloned().unwrap_or_default();
 
     let s = crate::frame_scale_at(doc, p0);
-    let parts = gs::build_leader_parts(p_tip, p0, p_end, s, &upper, &lower)?;
+    // Preserve the source LEADER shoulder length in the editable URL. Without
+    // this, a text-free source is rebuilt with the historical 19.413 mm
+    // content slot instead of the geometry the user actually converted.
+    let source_shoulder_len = {
+        let raw = ((p_end[0] - p0[0]).powi(2) + (p_end[1] - p0[1]).powi(2)).sqrt();
+        (s.is_finite() && s > 1e-9 && raw.is_finite() && raw > 1e-9).then_some(raw / s)
+    };
+    let parts = gs::build_leader_parts(
+        p_tip,
+        p0,
+        p_end,
+        s,
+        &upper,
+        &lower,
+        source_shoulder_len,
+    )?;
 
     // 匿名块 *L{n}（scratch 已回灌本批收集到的块名，避免重名）。
     let mut max_n = 0u32;
@@ -969,6 +996,7 @@ fn convert_leader(
         params.leader = crate::guide_url::LeaderParams {
             upper: upper.clone(),
             lower: lower.clone(),
+            shoulder_len: source_shoulder_len,
         };
         let mut e = Entity::Insert(ins.clone());
         stamp_edit(&mut e, &params, &[p_tip, p0, p_end], "pline");
@@ -1023,6 +1051,7 @@ pub(crate) fn plan(doc: &Doc, selected: &[Handle]) -> Dim2GbPlan {
         plan.seen += 1;
         let label = type_label(&dim);
         sync_collected_blocks(&mut scratch, &collector);
+        let adds_before = plan.adds.len();
         let check = convert_one(&c_dyn, &scratch, &dim).and_then(|out| {
             // 几何自检：线性/对齐测量值必须一致；角度允许补角（原标注画的是优角时）。
             if let Some(entity) = &out {
@@ -1060,6 +1089,10 @@ pub(crate) fn plan(doc: &Doc, selected: &[Handle]) -> Dim2GbPlan {
             }
             Ok(out)
         });
+        let converted_ok = check.is_ok();
+        // 弧长等类型的新实体走收集器的 AddEntities 通道：立刻并入 `plan.adds`，
+        // 旧→新映射的区间索引才能在命令侧对齐 `add_entities` 的句柄顺序（C10）。
+        plan.adds.extend(collector.take_adds());
         match check {
             Ok(Some(entity)) => {
                 plan.adds.push(entity);
@@ -1072,6 +1105,9 @@ pub(crate) fn plan(doc: &Doc, selected: &[Handle]) -> Dim2GbPlan {
                 plan.converted += 1;
             }
             Err(e) => plan.skipped.push(t_fmt("cmd.d2g.skip.dim", &[("label", &label), ("e", &e)])),
+        }
+        if converted_ok && plan.adds.len() > adds_before {
+            plan.replacements.push((handle, adds_before, plan.adds.len()));
         }
     }
 
@@ -1099,14 +1135,26 @@ pub(crate) fn plan(doc: &Doc, selected: &[Handle]) -> Dim2GbPlan {
         plan.seen += 1;
         sync_collected_blocks(&mut scratch, &collector);
         let text = ann.as_ref().map(|(_, t)| t.as_str());
+        let mtext_handle = ann.as_ref().map(|(mh, _)| *mh);
+        let adds_before = plan.adds.len();
         match convert_leader(&c_dyn, &scratch, &leader, text) {
             Ok(()) => {
+                plan.adds.extend(collector.take_adds());
                 plan.removes.push(handle);
-                if let Some((mh, _)) = ann {
+                if let Some(mh) = mtext_handle {
                     plan.removes.push(mh);
                 }
                 plan.converted += 1;
                 plan.leaders += 1;
+                if plan.adds.len() > adds_before {
+                    // 引线与其绑定 MText 都被新标注替换：两个旧句柄都指向同一个新区间。
+                    plan.replacements
+                        .push((handle, adds_before, plan.adds.len()));
+                    if let Some(mh) = mtext_handle {
+                        plan.replacements
+                            .push((mh, adds_before, plan.adds.len()));
+                    }
+                }
             }
             Err(e) => plan.skipped.push(t_fmt("cmd.d2g.skip.leader", &[("e", &e)])),
         }
@@ -1143,10 +1191,14 @@ pub(crate) fn plan(doc: &Doc, selected: &[Handle]) -> Dim2GbPlan {
         let center = to_arr(assoc.center);
         let scale = crate::frame_scale_at(doc, center);
         let segs = crate::centerline::cross_for_circle(center, assoc.radius, scale);
+        let adds_before = plan.adds.len();
         plan.adds.extend(crate::centerline::lines_of(&segs));
         plan.removes.push(handle);
         plan.converted += 1;
         plan.marks += 1;
+        if plan.adds.len() > adds_before {
+            plan.replacements.push((handle, adds_before, plan.adds.len()));
+        }
     }
 
     let (styles, blocks, adds) = collector.drain();
@@ -1296,6 +1348,7 @@ mod tests {
         assert_eq!(plan.converted, 1, "转换成功 1 个");
         assert_eq!(plan.removes, vec![handle], "删除原标注");
         assert!(plan.skipped.is_empty(), "无跳过: {:?}", plan.skipped);
+        assert_eq!(plan.replacements, vec![(handle, 0, 1)], "旧→新映射");
 
         let Entity::Dimension(new) = &plan.adds[0] else {
             panic!("产物应为 DIMENSION");
@@ -1563,6 +1616,10 @@ mod tests {
             "产出 INSERT"
         );
         assert_eq!(plan.removes.len(), 1, "删除原弧长标注");
+        // C10：旧→新映射覆盖收集器通道产出的实体，区间对齐 plan.adds。
+        assert_eq!(plan.replacements.len(), 1, "一条旧标注一个映射");
+        let (_, start, end) = plan.replacements[0];
+        assert_eq!((start, end), (0, plan.adds.len()));
         // 弧长产出的 INSERT 也要带 OCSM_EDIT（可再编辑）——它由 apply_arclen
         // 内部产出、经收集器加入，所以记录是在 apply_arclen 里挂到实体上的。
         let ins = plan
@@ -1600,6 +1657,7 @@ mod tests {
         assert_eq!(plan.marks, 1);
         assert_eq!(plan.removes, vec![carrier], "载波线要删掉");
         assert_eq!(plan.adds.len(), 2, "十字 = 两条");
+        assert_eq!(plan.replacements, vec![(carrier, 0, 2)], "旧载波线→两条中心线");
         for e in &plan.adds {
             let Entity::Line(l) = e else {
                 panic!("应当是直线")
@@ -2287,6 +2345,17 @@ mod tests {
         assert!(plan.skipped.is_empty(), "{:?}", plan.skipped);
         assert_eq!(plan.removes.len(), 2, "删 Leader + MText");
         assert!(plan.removes.contains(&lh) && plan.removes.contains(&mh.unwrap()));
+        assert_eq!(plan.replacements.len(), 2, "Leader 与 MText 都记旧→新映射");
+        let olds: Vec<Handle> = plan.replacements.iter().map(|(h, _, _)| *h).collect();
+        assert!(olds.contains(&lh) && olds.contains(&mh.unwrap()));
+        let (_, start, end) = plan.replacements[0];
+        assert_eq!((start, end), (0, plan.adds.len()));
+        assert!(
+            plan.replacements
+                .iter()
+                .all(|(_, s, e)| (*s, *e) == (start, end)),
+            "两个旧句柄指向同一新区间"
+        );
         assert_eq!(plan.blocks.len(), 1);
         assert_eq!(plan.blocks[0].0, "*L1");
         let ins = plan
@@ -2336,6 +2405,8 @@ mod tests {
         let (doc, _, _) = leader_doc(None);
         let plan = plan(&doc, &[]);
         assert_eq!(plan.converted, 1, "{:?}", plan.skipped);
+        assert!(block_texts(&plan.blocks[0]).is_empty(), "无文字 → 块内无 MTEXT");
+        assert_eq!(plan.removes.len(), 1, "只删 Leader（无 MText）");
         let ins = plan
             .adds
             .iter()
@@ -2344,8 +2415,18 @@ mod tests {
                 _ => None,
             })
             .expect("INSERT");
-        assert!(block_texts(&plan.blocks[0]).is_empty(), "无文字 → 块内无 MTEXT");
-        assert_eq!(plan.removes.len(), 1, "只删 Leader（无 MText）");
+        let url = ins
+            .common
+            .extended_data
+            .get_record("OCSM_EDIT")
+            .and_then(|record| {
+                record.values.iter().find_map(|value| match value {
+                    XDataValue::String(value) if value.starts_with("http") => Some(value),
+                    _ => None,
+                })
+            })
+            .expect("无文字转换仍应保存原肩线长度");
+        assert!(url.contains("blen=4"), "OCSM_EDIT 应带原肩线长度: {url}");
     }
 
     /// D2G 产出的标注要带 `OCSM_EDIT`（参数 + 引导几何），才可再编辑。

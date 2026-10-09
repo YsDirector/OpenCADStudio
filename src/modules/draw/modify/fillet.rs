@@ -806,6 +806,17 @@ impl FilletEntity {
     }
 }
 
+/// The refusal a no-trim FILLET prints for anything but two independent Lines.
+const NO_TRIM_LINES_ONLY: &str = "No-trim fillet supports two independent lines only.";
+
+/// No-trim FILLET is defined for two independent Lines only: the addition path
+/// keeps both sources untouched, which the arc / polyline branches cannot
+/// express — they would silently fall through to the trimming path and trim the
+/// very geometry the caller asked to keep.
+fn no_trim_pair_supported(first: &FilletEntity, second: &FilletEntity) -> bool {
+    matches!(first, FilletEntity::Line(_)) && matches!(second, FilletEntity::Line(_))
+}
+
 /// Compute FILLET between two entities (Line, Arc, or LwPolyline segment).
 /// Returns (trimmed_e1, trimmed_e2, optional_fillet_arc).
 /// For same-poly corner fillet the two returned entities are identical (the rebuilt poly).
@@ -1318,6 +1329,11 @@ enum FilletStep {
 
 pub struct FilletCommand {
     radius: f64,
+    /// Whether the two source entities are shortened to the tangent points.
+    /// The default preserves the historical FILLET behavior. No-trim is defined
+    /// for two independent Lines only; any other pair is refused instead of
+    /// being trimmed silently.
+    trim: bool,
     step: FilletStep,
     all_entities: Vec<EntityType>,
     entity_index: ModifyEntityIndex,
@@ -1338,6 +1354,7 @@ impl FilletCommand {
         let entity_index = ModifyEntityIndex::build(&all_entities);
         Self {
             radius: radius as f64,
+            trim: true,
             step: FilletStep::First,
             all_entities,
             entity_index,
@@ -1382,6 +1399,18 @@ impl FilletCommand {
         self.resume_second = None;
         self.made += 1;
         CmdResult::ReplaceManyContinue(replacements)
+    }
+
+    /// Keep both source lines and add only the tangent arc. The host commits
+    /// the addition as one undo step and calls `on_entities_committed` so the
+    /// command's private entity index receives the allocated handle.
+    fn continue_after_addition(&mut self, addition: EntityType) -> CmdResult {
+        self.all_entities.push(addition.clone());
+        self.entity_index = ModifyEntityIndex::build(&self.all_entities);
+        self.step = FilletStep::First;
+        self.resume_second = None;
+        self.made += 1;
+        CmdResult::CommitEntities(vec![addition])
     }
 
     /// Undo option: take back the last fillet of this command. The host
@@ -1460,10 +1489,22 @@ impl CadCommand for FilletCommand {
                 }
                 opts.push(CmdOption::new("Polyline", "P"));
                 opts.push(CmdOption::new("Radius", "R"));
+                opts.push(if self.trim {
+                    CmdOption::new("No trim", "N")
+                } else {
+                    CmdOption::new("Trim", "T")
+                });
                 opts
             }
             FilletStep::Second { .. } => {
-                vec![CmdOption::new("Radius", "R")]
+                vec![
+                    CmdOption::new("Radius", "R"),
+                    if self.trim {
+                        CmdOption::new("No trim", "N")
+                    } else {
+                        CmdOption::new("Trim", "T")
+                    },
+                ]
             }
             FilletStep::Polyline
             | FilletStep::WaitingForRadius
@@ -1506,6 +1547,14 @@ impl CadCommand for FilletCommand {
             FilletStep::First | FilletStep::Second { .. } => {
                 let t = text.trim();
                 let upper = t.to_uppercase();
+                if matches!(upper.as_str(), "N" | "NOTRIM" | "NO TRIM" | "TRIM=FALSE") {
+                    self.trim = false;
+                    return Some(CmdResult::NeedPoint);
+                }
+                if matches!(upper.as_str(), "T" | "TRIM" | "TRIM=TRUE") {
+                    self.trim = true;
+                    return Some(CmdResult::NeedPoint);
+                }
                 if matches!(self.step, FilletStep::First) && upper == "P" {
                     self.step = FilletStep::Polyline;
                     return Some(CmdResult::NeedPoint);
@@ -1607,6 +1656,12 @@ impl CadCommand for FilletCommand {
                         other => FilletEntity::from_entity(other),
                     });
                 if let Some(e) = e1 {
+                    // Never accept a first object the mode cannot honour: the
+                    // second pick would otherwise either trim it or fail with a
+                    // confusing "second object" complaint.
+                    if !self.trim && !matches!(e, FilletEntity::Line(_)) {
+                        return CmdResult::ReportError(NO_TRIM_LINES_ONLY.to_string());
+                    }
                     self.step = FilletStep::Second {
                         h1: handle,
                         e1: e,
@@ -1641,6 +1696,22 @@ impl CadCommand for FilletCommand {
                 if let Some(e2) = e2 {
                     match compute_fillet_entities(&e1, click1, &e2, click, self.radius) {
                         Some((new_e1, new_e2, maybe_arc)) => {
+                            // In no-trim mode only two independent Lines are
+                            // supported. Reuse the normal solver so the pick
+                            // side still chooses the same arc branch, then
+                            // discard its shortened-line results. Any other
+                            // pair is refused — the trim flag may have been set
+                            // after the first pick, so both sides are checked.
+                            if !self.trim {
+                                if !no_trim_pair_supported(&e1, &e2) {
+                                    self.step = FilletStep::First;
+                                    self.resume_second = None;
+                                    return CmdResult::ReportError(NO_TRIM_LINES_ONLY.to_string());
+                                }
+                                return maybe_arc
+                                    .map(|arc| self.continue_after_addition(arc))
+                                    .unwrap_or(CmdResult::NeedPoint);
+                            }
                             let mut first_replacements = vec![new_e1];
                             if let Some(arc) = maybe_arc {
                                 first_replacements.push(arc);
@@ -1785,6 +1856,12 @@ impl CadCommand for FilletCommand {
             _ => CmdResult::NeedPoint,
         }
     }
+    fn preserve_commit_layer(&self) -> bool {
+        // A no-trim fillet is an addition derived from the picked lines; keep
+        // it on their layer instead of moving it to the current creation layer.
+        true
+    }
+
     fn on_entity_replaced(&mut self, _old: Handle, new_handles: &[Handle]) {
         let mut handles = new_handles.iter().copied();
         for entity in self
@@ -1799,6 +1876,22 @@ impl CadCommand for FilletCommand {
         }
         self.entity_index = ModifyEntityIndex::build(&self.all_entities);
     }
+
+    fn on_entities_committed(&mut self, new_handles: &[Handle]) {
+        let mut handles = new_handles.iter().copied();
+        for entity in self
+            .all_entities
+            .iter_mut()
+            .filter(|entity| entity.common().handle.is_null())
+        {
+            let Some(handle) = handles.next() else {
+                break;
+            };
+            entity.common_mut().handle = handle;
+        }
+        self.entity_index = ModifyEntityIndex::build(&self.all_entities);
+    }
+
     fn on_enter(&mut self) -> CmdResult {
         CmdResult::Cancel
     }
@@ -2399,22 +2492,142 @@ mod tests {
             1.0,
             vec![line(0.0, 0.0, 10.0, 0.0, 1), line(0.0, 0.0, 0.0, 10.0, 2)],
         );
-        assert_eq!(keywords(&command), ["P", "R"]);
+        assert_eq!(keywords(&command), ["P", "R", "N"]);
         assert!(command.on_text_input("U").is_none(), "nothing to undo yet");
         command.on_entity_pick(Handle::new(1), DVec3::new(5.0, 0.0, 0.0));
         assert!(matches!(
             command.on_entity_pick(Handle::new(2), DVec3::new(0.0, 5.0, 0.0)),
             CmdResult::ReplaceManyContinue(_)
         ));
-        assert_eq!(keywords(&command), ["U", "P", "R"]);
+        assert_eq!(keywords(&command), ["U", "P", "R", "N"]);
         assert!(matches!(command.on_text_input("U"), Some(CmdResult::UndoDocument)));
-        assert_eq!(keywords(&command), ["P", "R"]);
+        assert_eq!(keywords(&command), ["P", "R", "N"]);
         // The host hands the restored document back; the cache follows it.
         let mut doc = codec::CadDocument::new();
         let _ = doc.add_entity(line(0.0, 0.0, 20.0, 0.0, 7));
         command.on_document_undone(&doc);
         assert_eq!(command.all_entities.len(), 1);
         assert_eq!(command.all_entities[0].common().handle, Handle::new(7));
+    }
+
+    #[test]
+    fn no_trim_fillet_adds_only_an_arc_and_keeps_source_handles() {
+        let first = Handle::new(1);
+        let second = Handle::new(2);
+        let original = vec![
+            line(0.0, 0.0, 10.0, 0.0, 1),
+            line(0.0, 0.0, 0.0, 10.0, 2),
+        ];
+        let mut command = FilletCommand::new(1.0, original.clone());
+        assert!(matches!(command.on_text_input("N"), Some(CmdResult::NeedPoint)));
+        assert!(!command.trim);
+        assert!(matches!(
+            command.on_entity_pick(first, DVec3::new(5.0, 0.0, 0.0)),
+            CmdResult::NeedPoint
+        ));
+        let addition = match command.on_entity_pick(second, DVec3::new(0.0, 5.0, 0.0)) {
+            CmdResult::CommitEntities(mut entities) => {
+                assert_eq!(entities.len(), 1);
+                entities.pop().unwrap()
+            }
+            _ => panic!("no-trim FILLET should add one arc"),
+        };
+        let arc = match &addition {
+            EntityType::Arc(arc) => arc,
+            _ => panic!("no-trim FILLET should add an arc"),
+        };
+        assert!((arc.radius - 1.0).abs() < 1e-9);
+        assert!(command
+            .all_entities
+            .iter()
+            .any(|entity| entity.common().handle == first));
+        assert!(command
+            .all_entities
+            .iter()
+            .any(|entity| entity.common().handle == second));
+        assert!(command
+            .all_entities
+            .iter()
+            .any(|entity| matches!(entity, EntityType::Arc(arc) if arc.common.handle.is_null())));
+
+        command.on_entities_committed(&[Handle::new(10)]);
+        assert!(command
+            .all_entities
+            .iter()
+            .any(|entity| entity.common().handle == Handle::new(10)));
+        let source_lines: Vec<_> = command
+            .all_entities
+            .iter()
+            .filter_map(|entity| match entity {
+                EntityType::Line(line) => Some((line.start, line.end)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(source_lines[0], (Vector3::new(0.0, 0.0, 0.0), Vector3::new(10.0, 0.0, 0.0)));
+        assert_eq!(source_lines[1], (Vector3::new(0.0, 0.0, 0.0), Vector3::new(0.0, 10.0, 0.0)));
+        // The original handles remain pickable for another no-trim fillet.
+        assert!(matches!(
+            command.on_entity_pick(first, DVec3::new(5.0, 0.0, 0.0)),
+            CmdResult::NeedPoint
+        ));
+    }
+
+    #[test]
+    fn no_trim_toggle_accepts_false_and_true_forms() {
+        let mut command = FilletCommand::new(1.0, Vec::new());
+        for token in ["N", "NOTRIM", "NO TRIM", "TRIM=FALSE"] {
+            assert!(matches!(command.on_text_input(token), Some(CmdResult::NeedPoint)));
+            assert!(!command.trim, "{token}");
+        }
+        for token in ["T", "TRIM", "TRIM=TRUE"] {
+            assert!(matches!(command.on_text_input(token), Some(CmdResult::NeedPoint)));
+            assert!(command.trim, "{token}");
+        }
+    }
+
+    /// No-trim must never fall back to trimming: a line/arc or arc/arc pair is
+    /// refused (with a message) instead of silently cutting the source.
+    #[test]
+    fn no_trim_fillet_refuses_non_line_pairs() {
+        let mut arc = ArcEnt::new();
+        arc.center = Vector3::new(10.0, 10.0, 0.0);
+        arc.radius = 5.0;
+        arc.start_angle = std::f64::consts::PI;
+        arc.end_angle = std::f64::consts::PI * 1.5;
+        arc.common.handle = Handle::new(2);
+
+        let first_line = FilletEntity::from_entity(&line(0.0, 0.0, 10.0, 0.0, 1)).unwrap();
+        let second_line = FilletEntity::from_entity(&line(0.0, 0.0, 0.0, 10.0, 2)).unwrap();
+        let arc = FilletEntity::from_entity(&EntityType::Arc(arc)).unwrap();
+        assert!(no_trim_pair_supported(&first_line, &second_line));
+        assert!(!no_trim_pair_supported(&first_line, &arc));
+        assert!(!no_trim_pair_supported(&arc, &first_line));
+
+        // The first pick itself is refused, so the command keeps waiting on a
+        // line instead of advancing with an arc it cannot honour.
+        let mut command = FilletCommand::new(
+            1.0,
+            vec![
+                line(0.0, 10.0, 20.0, 10.0, 1),
+                EntityType::Arc(match &arc {
+                    FilletEntity::Arc(a) => a.clone(),
+                    _ => unreachable!(),
+                }),
+            ],
+        );
+        assert!(matches!(command.on_text_input("N"), Some(CmdResult::NeedPoint)));
+        assert!(matches!(
+            command.on_entity_pick(Handle::new(2), DVec3::new(10.0, 5.0, 0.0)),
+            CmdResult::ReportError(_)
+        ));
+        assert!(matches!(command.step, FilletStep::First));
+        // A line first pick is still accepted, and the source geometry stays
+        // untouched until a second line is picked.
+        assert!(matches!(
+            command.on_entity_pick(Handle::new(1), DVec3::new(5.0, 10.0, 0.0)),
+            CmdResult::NeedPoint
+        ));
+        assert!(matches!(command.step, FilletStep::Second { .. }));
     }
 
     #[test]

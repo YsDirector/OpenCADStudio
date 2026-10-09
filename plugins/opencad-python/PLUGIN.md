@@ -278,7 +278,7 @@ with doc.start_command("OFFSET") as c:      # or answer prompt by prompt
 M = doc.modify                              # the common tools as plain calls
 M.offset(line, 2, side=(5, 5))              # returns the new entity
 M.trim(target, at=(108, 0)); M.extend(target, at=(208, 0))
-M.fillet(first, second, radius=2)           # radius 0 squares the corner
+M.fillet(first, second, radius=2)           # radius 0 squares; trim=False (two lines) keeps the sources
 M.move([a, b], (0, 0, 0), (5, 5, 0)); M.copy([a], base, target)
 M.rotate([a], base, 90); M.scale([a], base, 2)
 M.mirror([a], p1, p2, erase_source=False); M.erase([a])

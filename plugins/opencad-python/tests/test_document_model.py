@@ -110,6 +110,18 @@ class DocumentModelTests(unittest.TestCase):
         texts = [c[2]["text"] for c in self.calls if c[0] == "step" and c[1] == "text"]
         self.assertEqual(texts, ["4", "4"])
         self.calls.clear()
+        self.doc.modify.fillet(1, 2, 2, at1=(3, 2, 0), at2=(1, 2, 0))
+        self.assertEqual(
+            [c[2]["text"] for c in self.calls if c[0] == "step" and c[1] == "token"],
+            ["R"],
+        )
+        self.calls.clear()
+        self.doc.modify.fillet(1, 2, 2, at1=(3, 2, 0), at2=(1, 2, 0), trim=False)
+        self.assertEqual(
+            [c[2]["text"] for c in self.calls if c[0] == "step" and c[1] == "token"],
+            ["N", "R"],
+        )
+        self.calls.clear()
         self.doc.modify.array_rect([1], 2, 3, 10, 20)
         self.assertEqual([c[2]["text"] for c in self.calls if c[0] == "step" and c[1] == "text"], ["2", "3", "10", "20"])
         self.calls.clear()

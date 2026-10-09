@@ -185,6 +185,8 @@
     <div class="row" id="row-view" style="display:none; margin-top:8px">
       <span class="lbl">比例</span>
       <input type="text" id="view-scale" value="" placeholder="1:1" style="width:70px">
+      <span class="lbl" style="margin-left:10px">视图标题</span>
+      <input type="text" id="view-title" value="" placeholder="A" style="width:70px">
       <label class="lbl" id="flip-lbl" style="margin-left:10px">翻转方向</label>
       <select id="view-flip" style="width:92px">
         <option value="none" selected>无</option>
@@ -285,6 +287,11 @@
         <input type="text" id="l-lo" style="flex:1" placeholder="肩线下方文字（可空）">
       </div>
       <div class="row" style="display:flex; gap:8px; align-items:center">
+        <span class="lbl">肩线长度</span>
+        <input type="number" id="l-blen" min="0.001" step="0.1" style="width:90px" placeholder="随文字">
+        <span class="gdt-hint" style="margin:0">留空=随文字；无文字时可填短引线长度（未乘图幅比例）</span>
+      </div>
+      <div class="row" style="display:flex; gap:8px; align-items:center">
         <button id="btn-gdt-leader" type="button">GDT 符号…</button>
         <span class="gdt-hint" style="margin:0">插入工程符号（如 x=深度符号，即 GB 的深度标法）；符号后自动恢复标注字体</span>
       </div>
@@ -334,6 +341,12 @@
     </div>
     <div class="txt" id="row-txt">
       <input type="text" id="text" value="&lt;&gt;" placeholder="标注文字（&lt;&gt; = 测量值）">
+    </div>
+    <div class="row" id="row-text-leader" style="display:none; margin-top:6px; font-size:13px">
+      <label style="display:flex; align-items:center; gap:6px; cursor:pointer">
+        <input type="checkbox" id="suppress-text-leader"> 文字外移不加细引线
+      </label>
+      <span class="gdt-hint" style="margin:0 0 0 8px">仅线性/对齐标注；保留文字位置与尺寸测量线</span>
     </div>
     <!-- GDT 符号插入：按钮弹模态窗口，点击在光标处插入 {\fGDT;<字符>}（花括号作用域自动恢复标注字体） -->
     <div class="row" id="gdt-row">
@@ -684,7 +697,7 @@
     if (b.disabled || b.classList.contains('offline')) return;
     type = b.dataset.t;
     // 所有"类型专属行"先统一隐藏，各分支只负责显示自己需要的（防漏显示）。
-    ['row-weld', 'row-leader', 'row-balloon', 'row-gdt', 'row-detail', 'row-chamfer'].forEach((id) => {
+    ['row-weld', 'row-leader', 'row-balloon', 'row-gdt', 'row-detail', 'row-chamfer', 'row-text-leader'].forEach((id) => {
       document.getElementById(id).style.display = 'none';
     });
     // 文字框保持 <>（= 测量值）；直径/半径的 Ø/R 前缀由生成端自动添加，
@@ -828,6 +841,7 @@
     document.getElementById('row-param').style.display = (datum || view || section) ? 'none' : '';
     document.getElementById('dist-lbl').textContent = (type === 'ARCLEN') ? '偏移距离' : '(与P2距离)';
     document.getElementById('row-txt').style.display = (datum || view || section) ? 'none' : '';
+    document.getElementById('row-text-leader').style.display = linear ? '' : 'none';
     // 公差：线性/直径/半径 都支持（线性=dimtext 堆叠；直径/半径=块内 MTEXT 堆叠）。
     const withTol = (type === 'LINEAR' || type === 'DIAMETER' || type === 'RADIUS');
     document.getElementById('row-tol').style.display = withTol ? '' : 'none';
@@ -1301,6 +1315,8 @@ const BS_FITS = [
       qs.push('let=' + letter);
       const scale = document.getElementById('view-scale').value.trim();
       if (scale) qs.push('scale=' + encodeURIComponent(scale));
+      const title = document.getElementById('view-title').value.trim();
+      if (title) qs.push('title=' + encodeURIComponent(title));
       const flip = document.getElementById('view-flip').value;
       if (flip !== 'none') qs.push('flip=' + flip);
       const mx = document.getElementById('view-mx').value.trim();
@@ -1382,8 +1398,10 @@ const BS_FITS = [
       u += '/0';
       const lu = document.getElementById('l-up').value.trim();
       const ll = document.getElementById('l-lo').value.trim();
+      const blen = parseFloat(document.getElementById('l-blen').value);
       if (lu) qs.push('lu=' + encodeURIComponent(lu));
       if (ll) qs.push('ll=' + encodeURIComponent(ll));
+      if (isFinite(blen) && blen > 0) qs.push('blen=' + blen);
     } else if (type === 'BALLOON') {
       // 序号标注：序号列表（items，从指引线向外/向上）+ 方向（dir）+ 插入模式（ins）。
       u += '/0';
@@ -1420,6 +1438,7 @@ const BS_FITS = [
       if (!isFinite(dist)) throw new Error('距离无效');
       if (type === 'LINEAR') u += `/${sub}/${dist}`;
       else u += `/${dist}`;
+      if (type === 'LINEAR' && document.getElementById('suppress-text-leader').checked) qs.push('tl=0');
       const dec = parseInt(document.getElementById('dec').value, 10);
       if (isFinite(dec) && dec >= 0) qs.push('dec=' + Math.min(dec, 8));
     }
@@ -2697,6 +2716,7 @@ const BS_FITS = [
   }
   document.getElementById('btn-apply').addEventListener('click', () => submit(false));
   document.getElementById('btn-refresh').addEventListener('click', () => submit(true));
+  document.getElementById('suppress-text-leader').addEventListener('change', draw);
 
   // ── 初始化加载 ─────────────────────────────────────────────
   async function load() {
@@ -2755,6 +2775,7 @@ const BS_FITS = [
           const l = j.params.leader;
           document.getElementById('l-up').value = l.upper || '';
           document.getElementById('l-lo').value = l.lower || '';
+          document.getElementById('l-blen').value = l.shoulder_len || '';
         }
         if (j.params && j.params.chamfer) {
           const ch = j.params.chamfer;
@@ -2794,6 +2815,7 @@ const BS_FITS = [
             sub = j.params.sub;
             const segSub = document.querySelector(`#seg-sub button[data-s="${sub}"]`);
             if (segSub) segSub.click();
+            document.getElementById('suppress-text-leader').checked = !!j.params.suppress_text_leader;
           }
           if (typeof j.params.dist === 'number') distInput().value = j.params.dist;
           if (j.params.text) document.getElementById('text').value = j.params.text;
@@ -2828,6 +2850,20 @@ const BS_FITS = [
             document.querySelectorAll('#seg-angle-mode button').forEach(x => x.classList.remove('on'));
             const am = document.querySelector(`#seg-angle-mode button[data-am="${angleMode}"]`);
             if (am) am.classList.add('on');
+          }
+          if (type === 'VIEW') {
+            // 恢复向视图：字母 + 比例 + 独立标题 + 标记放置点。
+            if (j.params.letter) {
+              letter = j.params.letter;
+              const sg = document.getElementById('seg-letter');
+              if ([...sg.options].some(o => o.value === letter)) sg.value = letter;
+            }
+            if (j.params.scale) document.getElementById('view-scale').value = j.params.scale;
+            if (j.params.title) document.getElementById('view-title').value = j.params.title;
+            if (j.params.marker) {
+              document.getElementById('view-mx').value = j.params.marker[0];
+              document.getElementById('view-my').value = j.params.marker[1];
+            }
           }
           if (type === 'SECTION') {
             // 恢复剖切：左右视向 + 显示箭头 + 字母 + 比例/放置点。

@@ -393,7 +393,7 @@ mod tests {
     fn bridge_serves_get_selection_over_http_and_refuses_unknown_paths() {
         let mut app = OpenCADStudio::new_for_test();
         app.main_window = Some(iced::window::Id::unique());
-        let _ = app.control_request(json!({"protocol":1,"op":"new","request_id":"n1"}));
+        let _ = answer(&mut app, json!({"protocol":1,"op":"new","request_id":"n1"}));
         app.automation_op(r#"{"op":"run","cmd":"LINE 0,0 10,10"}"#);
         let handle = app.automation_op(r#"{"op":"query","type":"LINE","detail":"summary"}"#)
             ["entities"][0]["handle"]
@@ -423,7 +423,7 @@ mod tests {
         assert_eq!(envelope.request["op"], "get_selection");
         assert!(envelope.request["session_id"].is_null());
         assert_eq!(envelope.request["request_id"], "bridge-1");
-        let reply = app.control_request(envelope.request).0;
+        let reply = answer(&mut app, envelope.request);
         envelope.reply.send(reply);
 
         let (status, body) = read_response(&mut stream);
@@ -452,11 +452,39 @@ mod tests {
         stream
     }
 
+    /// The GUI half of one bridge request: answer it and drive the returned
+    /// task exactly like the live runtime does. Non-interactive ops may answer
+    /// `accepted` first, so poll `operation` the way `transact` does; a dropped
+    /// task would leave the operation's completion counter waiting forever.
+    fn answer(app: &mut OpenCADStudio, request: Value) -> Value {
+        let op = request["op"].as_str().unwrap_or("").to_owned();
+        let request_id = request["request_id"].clone();
+        let (mut reply, task) = app.control_request(request);
+        app.drive_headless_task(task)
+            .expect("bridge request must run headlessly");
+        // Picks and polls park on purpose; everything else settles through
+        // the poll loop the bridge itself would run.
+        let mut polls = 0usize;
+        while matches!(reply["status"].as_str(), Some("accepted" | "running"))
+            && !matches!(op.as_str(), "getpoint" | "user_select" | "operation" | "cancel")
+            && polls < 100
+        {
+            polls += 1;
+            let (poll, task) = app.control_request(
+                json!({"protocol":1,"op":"operation","request_id":request_id}),
+            );
+            app.drive_headless_task(task)
+                .expect("operation poll must run headlessly");
+            reply = poll;
+        }
+        reply
+    }
+
     /// Answer the next `count` envelopes the way the live GUI would.
     fn drain(app: &mut OpenCADStudio, receiver: &mut mpsc::Receiver<Envelope>, count: usize) {
         for _ in 0..count {
             let envelope = iced::futures::executor::block_on(receiver.next()).unwrap();
-            let reply = app.control_request(envelope.request.clone()).0;
+            let reply = answer(app, envelope.request.clone());
             envelope.reply.send(reply);
         }
     }
@@ -465,7 +493,7 @@ mod tests {
     fn bridge_parks_getpoint_without_blocking_other_reads() {
         let mut app = OpenCADStudio::new_for_test();
         app.main_window = Some(iced::window::Id::unique());
-        let _ = app.control_request(json!({"protocol":1,"op":"new","request_id":"n1"}));
+        let _ = answer(&mut app, json!({"protocol":1,"op":"new","request_id":"n1"}));
         app.automation_op(r#"{"op":"run","cmd":"LINE 0,0 10,10"}"#);
         let handle = app.automation_op(r#"{"op":"query","type":"LINE","detail":"summary"}"#)
             ["entities"][0]["handle"]
@@ -495,7 +523,7 @@ mod tests {
         let mut polls = 0usize;
         let (point_status, point_body, sel_body) = loop {
             let envelope = iced::futures::executor::block_on(receiver.next()).unwrap();
-            let reply = app.control_request(envelope.request.clone()).0;
+            let reply = answer(&mut app, envelope.request.clone());
             if envelope.request["op"] == "getpoint" {
                 // The GUI accepted the pick; the bridge now polls `operation`
                 // until the person answers. Simulate the click right away.
@@ -535,7 +563,7 @@ mod tests {
     fn bridge_cancels_a_parked_pick_when_the_client_disconnects() {
         let mut app = OpenCADStudio::new_for_test();
         app.main_window = Some(iced::window::Id::unique());
-        let _ = app.control_request(json!({"protocol":1,"op":"new","request_id":"n1"}));
+        let _ = answer(&mut app, json!({"protocol":1,"op":"new","request_id":"n1"}));
 
         let (sender, mut receiver) = mpsc::channel::<Envelope>(8);
         let bound = Arc::new(AtomicU16::new(0));
@@ -547,7 +575,7 @@ mod tests {
         let point_conn = post(port, "/api/v1/getpoint", r#"{"request_id":"gp-drop"}"#);
         let envelope = iced::futures::executor::block_on(receiver.next()).unwrap();
         assert_eq!(envelope.request["op"], "getpoint");
-        let reply = app.control_request(envelope.request.clone()).0;
+        let reply = answer(&mut app, envelope.request.clone());
         assert_eq!(reply["status"], "accepted", "{reply}");
         envelope.reply.send(reply);
 
@@ -562,7 +590,7 @@ mod tests {
             let envelope = iced::futures::executor::block_on(receiver.next()).unwrap();
             if envelope.request["op"] == "cancel" {
                 assert_eq!(envelope.request["request_id"], "gp-drop");
-                let reply = app.control_request(envelope.request).0;
+                let reply = answer(&mut app, envelope.request);
                 assert_eq!(reply["status"], "cancelled", "{reply}");
                 assert_eq!(reply["result"]["cancelled"], true, "{reply}");
                 break;
@@ -570,7 +598,7 @@ mod tests {
             assert_eq!(envelope.request["op"], "operation", "unexpected envelope");
             polls += 1;
             assert!(polls < 100, "the disconnect was never noticed");
-            let reply = app.control_request(envelope.request.clone()).0;
+            let reply = answer(&mut app, envelope.request.clone());
             envelope.reply.send(reply);
         }
 
@@ -580,7 +608,7 @@ mod tests {
         let mut next_conn = post(port, "/api/v1/getpoint", r#"{"request_id":"gp-next"}"#);
         let envelope = iced::futures::executor::block_on(receiver.next()).unwrap();
         assert_eq!(envelope.request["op"], "getpoint");
-        let reply = app.control_request(envelope.request).0;
+        let reply = answer(&mut app, envelope.request);
         assert_eq!(reply["status"], "accepted", "{reply}");
         envelope.reply.send(reply);
         app.tabs[app.active_tab].last_cursor_world = glam::DVec3::new(2.0, 3.0, 0.0);
@@ -588,7 +616,7 @@ mod tests {
         let mut polls = 0usize;
         let (_, body) = loop {
             let envelope = iced::futures::executor::block_on(receiver.next()).unwrap();
-            let reply = app.control_request(envelope.request.clone()).0;
+            let reply = answer(&mut app, envelope.request.clone());
             envelope.reply.send(reply.clone());
             polls += 1;
             assert!(polls < 100, "the retry pick never completed: {reply}");
@@ -604,7 +632,7 @@ mod tests {
     fn bridge_parks_user_select_until_the_person_answers() {
         let mut app = OpenCADStudio::new_for_test();
         app.main_window = Some(iced::window::Id::unique());
-        let _ = app.control_request(json!({"protocol":1,"op":"new","request_id":"n1"}));
+        let _ = answer(&mut app, json!({"protocol":1,"op":"new","request_id":"n1"}));
         app.automation_op(r#"{"op":"run","cmd":"LINE 0,0 10,10"}"#);
         let handle = app.automation_op(r#"{"op":"query","type":"LINE","detail":"summary"}"#)
             ["entities"][0]["handle"]
@@ -634,7 +662,7 @@ mod tests {
             let mut polls = 0usize;
             loop {
                 let envelope = iced::futures::executor::block_on(receiver.next()).unwrap();
-                let reply = app.control_request(envelope.request.clone()).0;
+                let reply = answer(app, envelope.request.clone());
                 if envelope.request["op"] == "user_select" {
                     // The GUI accepted the pick; the bridge now polls
                     // `operation` until the person answers.
@@ -699,7 +727,7 @@ mod tests {
     fn bridge_runs_the_full_rest_surface_against_the_live_gui() {
         let mut app = OpenCADStudio::new_for_test();
         app.main_window = Some(iced::window::Id::unique());
-        let _ = app.control_request(json!({"protocol":1,"op":"new","request_id":"n1"}));
+        let _ = answer(&mut app, json!({"protocol":1,"op":"new","request_id":"n1"}));
 
         let (sender, mut receiver) = mpsc::channel::<Envelope>(8);
         let bound = Arc::new(AtomicU16::new(0));
@@ -744,7 +772,8 @@ mod tests {
         // A stale cache (the person switched documents) costs one state
         // refresh and a retry, not an error.
         let fresh = app.push_test_document();
-        let _ = app.control_request(
+        let _ = answer(
+            &mut app,
             json!({"protocol":1,"op":"activate","document_id":fresh,"request_id":"a1"}),
         );
         let mut stale_conn = post(

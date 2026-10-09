@@ -1023,6 +1023,31 @@ pub const CATALOG: &[Msg] = &[
         "Pilot diameter Ø{base} is not smaller than the counterbore diameter Ø{sink} (GB/T 152.3 M{d})",
     ),
     Msg::new(
+        "cmd.hole.err.cb_custom_only",
+        "cb_d2/cb_t 自定义沉孔参数仅适用于沉头孔（counterbore）",
+        "Custom counterbore parameters cb_d2/cb_t are only valid for counterbore holes",
+    ),
+    Msg::new(
+        "cmd.hole.err.cb_custom_pair",
+        "自定义沉孔必须同时提供 cb_d2（直径）和 cb_t（深度）",
+        "Custom counterbore dimensions require both cb_d2 (diameter) and cb_t (depth)",
+    ),
+    Msg::new(
+        "cmd.hole.err.cb_custom_d2_invalid",
+        "自定义沉孔直径 cb_d2={d2} 非法（必须是有限且 > 0 的数）",
+        "Custom counterbore diameter cb_d2={d2} is invalid (must be finite and > 0)",
+    ),
+    Msg::new(
+        "cmd.hole.err.cb_custom_t_invalid",
+        "自定义沉孔深度 cb_t={t} 非法（必须是有限且 > 0 的数）",
+        "Custom counterbore depth cb_t={t} is invalid (must be finite and > 0)",
+    ),
+    Msg::new(
+        "cmd.hole.err.cbore_custom_pilot_ge_sink",
+        "底孔径 Ø{base} 不小于自定义沉孔直径 Ø{sink}（cb_d2 必须大于底孔径）",
+        "Pilot diameter Ø{base} is not smaller than the custom counterbore diameter Ø{sink} (cb_d2 must be greater than the pilot diameter)",
+    ),
+    Msg::new(
         "cmd.hole.err.csink_pilot_ge_sink",
         "底孔径 Ø{base} 不小于埋头直径 Ø{sink}（GB/T 152.2 M{d}）",
         "Pilot diameter Ø{base} is not smaller than the countersink diameter Ø{sink} (GB/T 152.2 M{d})",
@@ -1104,8 +1129,8 @@ pub const CATALOG: &[Msg] = &[
     ),
     Msg::new(
         "cmd.hole.usage",
-        "OCSMHOLE / DK：\n`OCSMHOLE [简单孔|螺纹孔|沉头孔|埋头孔] [带螺纹|无螺纹] [公制|UN/UNC/UNF/UNEF|G/BSPP|R/BSPT|NPT|ACME|矮牙|Tr] [钻孔 Ø8.5|自定义 孔径8.5|间隙 中等装配] [规格名 M10|M10×1.25|G1/8|1/4-20|NPT1/2|Tr8×1.5|ACME 1/4-16|公称6.35 P1.058] [P1.5] [推荐70.1|70.2] [H18] [L15] [盲孔|贯通] [全长] [6H|6G] [view 侧视图|俯视图|双视图] [at x,y] [rot 度]`\n（规格名直接查 GUI 同一份表 `name`：G 1/8、1/4-20、NPT1/2、Tr8x1.5 等都收；数值写法 `公称6.35 P1.058` 照旧）",
-        "OCSMHOLE / DK:\n`OCSMHOLE [简单孔|螺纹孔|沉头孔|埋头孔] [带螺纹|无螺纹] [公制|UN/UNC/UNF/UNEF|G/BSPP|R/BSPT|NPT|ACME|矮牙|Tr] [钻孔 Ø8.5|自定义 孔径8.5|间隙 中等装配] [规格名 M10|M10×1.25|G1/8|1/4-20|NPT1/2|Tr8×1.5|ACME 1/4-16|公称6.35 P1.058] [P1.5] [推荐70.1|70.2] [H18] [L15] [盲孔|贯通] [全长] [6H|6G] [view 侧视图|俯视图|双视图] [at x,y] [rot deg]`\n(size names are looked up directly in the same `name` table as the GUI: G 1/8, 1/4-20, NPT1/2, Tr8x1.5 etc. are all accepted; the numeric form `公称6.35 P1.058` still works)",
+        "OCSMHOLE / DK：\n`OCSMHOLE [简单孔|螺纹孔|沉头孔|埋头孔] [带螺纹|无螺纹] [公制|UN/UNC/UNF/UNEF|G/BSPP|R/BSPT|NPT|ACME|矮牙|Tr] [钻孔 Ø8.5|自定义 孔径8.5|间隙 中等装配] [规格名 M10|M10×1.25|G1/8|1/4-20|NPT1/2|Tr8×1.5|ACME 1/4-16|公称6.35 P1.058] [cb_d2=28 cb_t=3] [P1.5] [推荐70.1|70.2] [H18] [L15] [盲孔|贯通] [全长] [6H|6G] [view 侧视图|俯视图|双视图] [at x,y] [rot 度]`\n（规格名直接查 GUI 同一份表 `name`：G 1/8、1/4-20、NPT1/2、Tr8x1.5 等都收；数值写法 `公称6.35 P1.058` 照旧；`cb_d2/cb_t` 仅沉头孔可用，须成对提供）",
+        "OCSMHOLE / DK:\n`OCSMHOLE [简单孔|螺纹孔|沉头孔|埋头孔] [带螺纹|无螺纹] [公制|UN/UNC/UNF/UNEF|G/BSPP|R/BSPT|NPT|ACME|矮牙|Tr] [钻孔 Ø8.5|自定义 孔径8.5|间隙 中等装配] [规格名 M10|M10×1.25|G1/8|1/4-20|NPT1/2|Tr8×1.5|ACME 1/4-16|公称6.35 P1.058] [cb_d2=28 cb_t=3] [P1.5] [推荐70.1|70.2] [H18] [L15] [盲孔|贯通] [全长] [6H|6G] [view 侧视图|俯视图|双视图] [at x,y] [rot deg]`\n(size names are looked up directly in the same `name` table as the GUI: G 1/8, 1/4-20, NPT1/2, Tr8x1.5 etc. are all accepted; the numeric form `公称6.35 P1.058` still works; `cb_d2/cb_t` are counterbore-only and must be provided together)",
     ),
     Msg::new(
         "cmd.hole.err.missing_args",
@@ -1791,6 +1816,11 @@ pub const CATALOG: &[Msg] = &[
         " skipped {n}:",
     ),
     Msg::new("cmd.d2g.report.none_skipped", "无跳过。", " none skipped."),
+    Msg::new(
+        "cmd.d2g.info.replaced_map",
+        "旧→新句柄映射见新实体的 XDATA `OCSM_REPLACED_FROM`（1000 = 旧句柄）；用 `xdata_get` 查询。",
+        "Old→new handle map is on the new entities as XDATA `OCSM_REPLACED_FROM` (1000 = old handle); read it with `xdata_get`.",
+    ),
     Msg::new(
         "cmd.d2g.report.undo_hint",
         "（可用一次 Ctrl+Z 全部撤销）",

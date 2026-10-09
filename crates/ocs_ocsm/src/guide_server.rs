@@ -988,6 +988,16 @@ pub(crate) fn pe_url_record(url: &str) -> ExtendedDataRecord {
     rec
 }
 
+/// 旧→新句柄映射（C10）：重建（D2G / 引导刷新）会换掉全部句柄，
+/// 新实体带上被它替掉的旧句柄，脚本用 `xdata_get app:"OCSM_REPLACED_FROM"`
+/// 就能把旧句柄翻译成新句柄。
+pub(crate) fn replaced_from_record(old: acadrust::Handle) -> ExtendedDataRecord {
+    let mut rec = ExtendedDataRecord::new("OCSM_REPLACED_FROM");
+    rec.values
+        .push(XDataValue::String(format!("{:#X}", old.value())));
+    rec
+}
+
 fn read_pe_url(
     sender: &Arc<dyn PluginRequestSender>,
     handle: acadrust::Handle,
@@ -1182,11 +1192,16 @@ fn guide_types_json(geom: &str, pts: &[[f64; 3]]) -> serde_json::Value {
 /// （dim_override），因此必须写入这些参数才能复刻示例渲染：
 /// dimdec=2（2 位小数）、dimtoh=1（文字水平）、dimdli=0.38 等。
 fn dim_override_record() -> ExtendedDataRecord {
-    dim_override_record_dec(2)
+    dim_override_record_dec_move(2, 1)
 }
 
-/// `dec`：DIMDEC(271) 测量值小数位数覆盖。
+/// `dec`：DIMDEC(271) 测量值小数位数覆盖；默认 DIMTMOVE=1（移动文字时加引线）。
 fn dim_override_record_dec(dec: i16) -> ExtendedDataRecord {
+    dim_override_record_dec_move(dec, 1)
+}
+
+/// 构造尺寸样式覆盖；DIMTMOVE(279)=2 表示文字可自由外移但不画细引线。
+fn dim_override_record_dec_move(dec: i16, text_movement: i16) -> ExtendedDataRecord {
     use acadrust::xdata::XDataValue as V;
     let mut rec = ExtendedDataRecord::new("ACAD");
     rec.add_value(V::String("DSTYLE".into()));
@@ -1196,9 +1211,8 @@ fn dim_override_record_dec(dec: i16) -> ExtendedDataRecord {
         (170, 0), (171, 3), (172, 1), (173, 1), (174, 0), (175, 0),
         (176, 130), (177, 130), (178, 3), (179, 0),
         (271, dec), (272, 3), (273, 2), (274, 3), (275, 0), (276, 0),
-        // DIMTMOVE(279)=1：文字被拖到尺寸线范围外时，尺寸线沿轴延伸到文字底下
-        // （GB/T 4458.4 画法；宿主按此渲染引线）。
-        (277, 2), (278, 46), (279, 1), (280, 0), (281, 0), (282, 0),
+        // DIMTMOVE(279)：1=文字外移时加引线；2=文字外移不加细引线。
+        (277, 2), (278, 46), (279, text_movement), (280, 0), (281, 0), (282, 0),
         (283, 0), (284, 8), (285, 0), (286, 0), (288, 0), (289, 3), (290, 0), (294, 0),
         (371, -1), (372, -1),
     ];
@@ -1231,6 +1245,17 @@ fn build_guide_linear(
     sub: LinearSub,
     dist: f64,
     style: &str,
+) -> Dimension {
+    build_guide_linear_with_text_leader(p1, p2, sub, dist, style, false)
+}
+
+fn build_guide_linear_with_text_leader(
+    p1: [f64; 3],
+    p2: [f64; 3],
+    sub: LinearSub,
+    dist: f64,
+    style: &str,
+    suppress_text_leader: bool,
 ) -> Dimension {
     use acadrust::entities::{DimensionAligned, DimensionLinear};
     let (first, second) = (v3(p1), v3(p2));
@@ -1273,7 +1298,11 @@ fn build_guide_linear(
         }
     };
     let mut dim = stamp(dim, style);
-    dim.base_mut().common.extended_data.add_record(dim_override_record());
+    let text_movement = if suppress_text_leader { 2 } else { 1 };
+    dim.base_mut()
+        .common
+        .extended_data
+        .add_record(dim_override_record_dec_move(2, text_movement));
     // 文字旋转（机械制图规范）。位置已在上面按样式抬升（宿主以
     // text_middle_point 为锚点，不再二次计算）；对齐/竖直随线旋转。
     // 不用 text_user_positioned（否则强制用 text_middle_point，对齐文字会
@@ -1964,7 +1993,14 @@ pub(crate) fn build_dimension(
     let mut dim = match params.guide_type {
         GuideType::Linear => {
             let sub = params.sub.ok_or("线性标注缺少对齐子类型")?;
-            build_guide_linear(p1, p2, sub, params.dist, style)
+            build_guide_linear_with_text_leader(
+                p1,
+                p2,
+                sub,
+                params.dist,
+                style,
+                params.suppress_text_leader,
+            )
         }
         // 直径/半径：匿名块形态（AutoCAD 画法，渲染走 walk_block）。
         GuideType::Diameter | GuideType::Radius => {
@@ -3571,12 +3607,34 @@ fn apply_view(
         _ => Vec::new(),
     };
 
+    // The view title is deliberately a separate model-space MTEXT.  Keep the
+    // existing arrow/marker INSERT pair byte-for-byte on the old path; title
+    // support is opt-in and uses the marker point as its centre anchor.
+    let title_handle = params
+        .title
+        .as_ref()
+        .filter(|title| !title.is_empty())
+        .map(|title| {
+            let title_entity = mk_mtext(title.clone(), Vector3::new(mx, my, 0.0), 0.0);
+            match req_timed(
+                sender,
+                PluginRequest::AddEntities(vec![title_entity]),
+                "AddEntities",
+            ) {
+                Ok(PluginResponse::Handles(hs)) => hs.first().copied(),
+                _ => None,
+            }
+        })
+        .flatten();
+
     Ok(serde_json::json!({
         "ok": true,
         "arrow_insert_handle": handles.first().copied().map(fmt_handle),
         "marker_insert_handle": handles.get(1).copied().map(fmt_handle),
+        "title_handle": title_handle.map(fmt_handle),
         "style": "OCSM_GB",
         "letter": letter,
+        "title": params.title,
         "scale": params.scale,
         "flip": params.flip.as_str(),
     })
@@ -3681,6 +3739,17 @@ fn do_apply(
         for h in produced_handles(&out) {
             stamp_editable(sender, h, &req.url, &pts, &gk, reuse.or(guide));
         }
+        // C10：新标注记下它替掉的旧句柄（编辑模式即 posted）。
+        for h in produced_handles(&out) {
+            let _ = req_timed(
+                sender,
+                PluginRequest::WriteRecord {
+                    handle: h,
+                    record: replaced_from_record(posted),
+                },
+                "WriteRecord",
+            );
+        }
         req_timed(sender, PluginRequest::BumpGeometry, "BumpGeometry")?;
         mark_dirty(sender)?;
         commit_undo(sender);
@@ -3716,6 +3785,21 @@ fn do_apply(
         if let Some((kind, pts)) = pre {
             for h in produced_handles(&out) {
                 stamp_editable(sender, h, &req.url, &pts, kind, Some(posted));
+            }
+            // C10：刷新会删掉同一引导的旧标注；新标注带上旧句柄（posted
+            // 是引导，旧标注句柄在 stale_pre 里），脚本可反查。
+            let produced = produced_handles(&out);
+            for h in &produced {
+                for old in &stale_pre {
+                    let _ = req_timed(
+                        sender,
+                        PluginRequest::WriteRecord {
+                            handle: *h,
+                            record: replaced_from_record(*old),
+                        },
+                        "WriteRecord",
+                    );
+                }
             }
         }
         // 同一引导再点「应用并刷新」：删掉上一轮的旧标注（引导留着后每次刷新否则会叠一份）。
@@ -4009,6 +4093,7 @@ fn api_guide(target: &str, sender: &Arc<dyn PluginRequestSender>) -> (u16, &'sta
                         "sub": p.sub.map(|s| s.as_str().to_string()),
                         "angle_mode": p.angle_mode.as_str().to_string(),
                         "dist": p.dist,
+                        "suppress_text_leader": p.suppress_text_leader,
                         "text": p.text,
                         "tol": p.tol,
                         "up": p.up,
@@ -4039,6 +4124,7 @@ fn api_guide(target: &str, sender: &Arc<dyn PluginRequestSender>) -> (u16, &'sta
                         "leader": {
                             "upper": p.leader.upper,
                             "lower": p.leader.lower,
+                            "shoulder_len": p.leader.shoulder_len,
                         },
                         "balloon": {
                             "items": p.balloon.items,
@@ -7861,6 +7947,7 @@ pub(crate) fn build_leader_parts(
     s: f64,
     upper: &str,
     lower: &str,
+    shoulder_len: Option<f64>,
 ) -> Result<LeaderParts, String> {
     use acadrust::entities::attribute_definition::{HorizontalAlignment, VerticalAlignment};
     use acadrust::entities::AttributeDefinition;
@@ -7884,7 +7971,9 @@ pub(crate) fn build_leader_parts(
             .sum::<f64>()
     };
     let need_u = (SLOT + text_w(upper)).max(SLOT + text_w(lower));
-    let blen_ru = need_u + 2.0; // 参考单位下的肩线全长
+    let blen_ru = shoulder_len
+        .filter(|length| length.is_finite() && *length > 0.0)
+        .unwrap_or(need_u + 2.0); // 参考单位下的肩线全长
     let blen = blen_ru * s;
 
     // 块局部坐标（原点 = 拐点 P0）：锚点 = 沿主轴坐标较小的一端。
@@ -7980,7 +8069,15 @@ fn apply_leader(
     use acadrust::EntityType as E;
 
     let s = frame_scale_at(doc, p0);
-    let parts = build_leader_parts(p_tip, p0, p_end, s, &params.leader.upper, &params.leader.lower)?;
+    let parts = build_leader_parts(
+        p_tip,
+        p0,
+        p_end,
+        s,
+        &params.leader.upper,
+        &params.leader.lower,
+        params.leader.shoulder_len,
+    )?;
 
     // ── 幂等 ensure：OCSM_GB 样式 / 8符号标注层（无虚线 → 不需要 ACISOWELD）──
     if !doc
@@ -9991,6 +10088,7 @@ fn produced_handles(out: &str) -> Vec<acadrust::Handle> {
         "dimension_handle",
         "arrow_insert_handle",
         "marker_insert_handle",
+        "title_handle",
     ]
     .iter()
     .filter_map(|k| v.get(*k).and_then(|s| s.as_str()))
@@ -10741,8 +10839,8 @@ mod tests {
         let inner = std::sync::Arc::new(MockSender::new(acadrust::CadDocument::new()));
         let sender: std::sync::Arc<dyn PluginRequestSender> = inner.clone();
         let doc = inner.doc.lock().unwrap().clone();
-        let pd = GuideParams { guide_type: GuideType::Linear, sub: Some(LinearSub::Aligned), dist: 10.0, text: None, tol: None, up: None, dn: None,
-            fit: None, sym: None, dec: Some(2), ver: crate::guide_url::DatumVersion::GB2008, letter: None, scale: None, flip: crate::guide_url::FlipDir::None, marker: None, angle_mode: crate::guide_url::AngleMode::Minor, section_side: crate::guide_url::SectionSide::Right, show_arrow: true, gdt_sym: None, gdt_dia: false, gdt_tol: None, gdt_d1: None, gdt_d2: None, gdt_d3: None, gdt_rows: Vec::new(), gdt_top: None, gdt_bot: None,
+        let pd = GuideParams { guide_type: GuideType::Linear, sub: Some(LinearSub::Aligned), dist: 10.0, suppress_text_leader: false, text: None, tol: None, up: None, dn: None,
+            fit: None, sym: None, dec: Some(2), ver: crate::guide_url::DatumVersion::GB2008, letter: None, scale: None, title: None, flip: crate::guide_url::FlipDir::None, marker: None, angle_mode: crate::guide_url::AngleMode::Minor, section_side: crate::guide_url::SectionSide::Right, show_arrow: true, gdt_sym: None, gdt_dia: false, gdt_tol: None, gdt_d1: None, gdt_d2: None, gdt_d3: None, gdt_rows: Vec::new(), gdt_top: None, gdt_bot: None,
             detail_scale: 2.0, detail_no: None, detail_pos: None,
             detail_frame: 1.0, weld: WeldParams::default(),
             leader: crate::guide_url::LeaderParams::default(),balloon: Default::default(),chamfer: Default::default(),
@@ -10761,20 +10859,50 @@ mod tests {
     }
 
     #[test]
+    fn build_dimension_no_text_leader_sets_dimtmove_two() {
+        use acadrust::xdata::XDataValue as V;
+        let inner = std::sync::Arc::new(MockSender::new(acadrust::CadDocument::new()));
+        let sender: std::sync::Arc<dyn PluginRequestSender> = inner.clone();
+        let doc = inner.doc.lock().unwrap().clone();
+        let mut params = GuideParams::linear(LinearSub::Aligned, 10.0);
+        params.suppress_text_leader = true;
+        let dim = build_dimension(
+            &sender,
+            &doc,
+            [0.0, 0.0, 0.0],
+            [40.0, 30.0, 0.0],
+            &params,
+            "OCSM_GB",
+        )
+        .unwrap();
+        let rec = dim
+            .base()
+            .common
+            .extended_data
+            .get_record("ACAD")
+            .expect("ACAD XDATA 存在");
+        let movement = rec.values.windows(2).find_map(|w| match w {
+            [V::Integer16(279), V::Integer16(value)] => Some(*value),
+            _ => None,
+        });
+        assert_eq!(movement, Some(2), "无引线选项必须写 DIMTMOVE=2");
+    }
+
+    #[test]
     fn build_dimension_supports_radial_types() {
         let inner = std::sync::Arc::new(MockSender::new(acadrust::CadDocument::new()));
         let sender: std::sync::Arc<dyn PluginRequestSender> = inner.clone();
         let doc = inner.doc.lock().unwrap().clone();
-        let pd = GuideParams { guide_type: GuideType::Diameter, sub: None, dist: -9.0, text: None, tol: None, up: None, dn: None,
-            fit: None, sym: None, dec: None, ver: crate::guide_url::DatumVersion::GB2008, letter: None, scale: None, flip: crate::guide_url::FlipDir::None, marker: None, angle_mode: crate::guide_url::AngleMode::Minor, section_side: crate::guide_url::SectionSide::Right, show_arrow: true, gdt_sym: None, gdt_dia: false, gdt_tol: None, gdt_d1: None, gdt_d2: None, gdt_d3: None, gdt_rows: Vec::new(), gdt_top: None, gdt_bot: None,
+        let pd = GuideParams { guide_type: GuideType::Diameter, sub: None, dist: -9.0, suppress_text_leader: false, text: None, tol: None, up: None, dn: None,
+            fit: None, sym: None, dec: None, ver: crate::guide_url::DatumVersion::GB2008, letter: None, scale: None, title: None, flip: crate::guide_url::FlipDir::None, marker: None, angle_mode: crate::guide_url::AngleMode::Minor, section_side: crate::guide_url::SectionSide::Right, show_arrow: true, gdt_sym: None, gdt_dia: false, gdt_tol: None, gdt_d1: None, gdt_d2: None, gdt_d3: None, gdt_rows: Vec::new(), gdt_top: None, gdt_bot: None,
             detail_scale: 2.0, detail_no: None, detail_pos: None,
             detail_frame: 1.0, weld: WeldParams::default(),
             leader: crate::guide_url::LeaderParams::default(),balloon: Default::default(),chamfer: Default::default(),
             };
         // 直径走匿名块路径：mock 的 AddBlockRecord 返回 Ok → 成功。
         assert!(build_dimension(&sender, &doc, [0.0,0.0,0.0], [35.36,35.36,0.0], &pd, "OCSM_GB").is_ok());
-        let pr = GuideParams { guide_type: GuideType::Radius, sub: None, dist: 11.0, text: None, tol: None, up: None, dn: None,
-            fit: None, sym: None, dec: None, ver: crate::guide_url::DatumVersion::GB2008, letter: None, scale: None, flip: crate::guide_url::FlipDir::None, marker: None, angle_mode: crate::guide_url::AngleMode::Minor, section_side: crate::guide_url::SectionSide::Right, show_arrow: true, gdt_sym: None, gdt_dia: false, gdt_tol: None, gdt_d1: None, gdt_d2: None, gdt_d3: None, gdt_rows: Vec::new(), gdt_top: None, gdt_bot: None,
+        let pr = GuideParams { guide_type: GuideType::Radius, sub: None, dist: 11.0, suppress_text_leader: false, text: None, tol: None, up: None, dn: None,
+            fit: None, sym: None, dec: None, ver: crate::guide_url::DatumVersion::GB2008, letter: None, scale: None, title: None, flip: crate::guide_url::FlipDir::None, marker: None, angle_mode: crate::guide_url::AngleMode::Minor, section_side: crate::guide_url::SectionSide::Right, show_arrow: true, gdt_sym: None, gdt_dia: false, gdt_tol: None, gdt_d1: None, gdt_d2: None, gdt_d3: None, gdt_rows: Vec::new(), gdt_top: None, gdt_bot: None,
             detail_scale: 2.0, detail_no: None, detail_pos: None,
             detail_frame: 1.0, weld: WeldParams::default(),
             leader: crate::guide_url::LeaderParams::default(),balloon: Default::default(),chamfer: Default::default(),
@@ -10791,6 +10919,7 @@ mod tests {
             guide_type: GuideType::Diameter,
             sub: None,
             dist: -9.0,
+            suppress_text_leader: false,
             text: Some("%%c<>".into()),
             tol: None,
             up: None,
@@ -10801,6 +10930,7 @@ mod tests {
             ver: crate::guide_url::DatumVersion::GB2008,
             letter: None,
             scale: None,
+            title: None,
             flip: crate::guide_url::FlipDir::None,
             marker: None,
         angle_mode: crate::guide_url::AngleMode::Minor,
@@ -10836,6 +10966,7 @@ mod tests {
             guide_type: GuideType::Linear,
             sub: Some(LinearSub::Horizontal),
             dist: 25.0,
+            suppress_text_leader: false,
             text: None,
             tol: None,
             up: Some("+0.035".into()),
@@ -10846,6 +10977,7 @@ mod tests {
             ver: crate::guide_url::DatumVersion::GB2008,
             letter: None,
             scale: None,
+            title: None,
             flip: crate::guide_url::FlipDir::None,
             marker: None,
         angle_mode: crate::guide_url::AngleMode::Minor,
@@ -10898,6 +11030,7 @@ mod tests {
             guide_type: GuideType::Linear,
             sub: Some(LinearSub::Horizontal),
             dist: 25.0,
+            suppress_text_leader: false,
             text: Some("%%c<>|||,通".into()),
             tol: None,
             up: None,
@@ -10908,6 +11041,7 @@ mod tests {
             ver: crate::guide_url::DatumVersion::GB2008,
             letter: None,
             scale: None,
+            title: None,
             flip: crate::guide_url::FlipDir::None,
             marker: None,
         angle_mode: crate::guide_url::AngleMode::Minor,
@@ -10937,6 +11071,7 @@ mod tests {
             guide_type: GuideType::Linear,
             sub: Some(LinearSub::Horizontal),
             dist: 25.0,
+            suppress_text_leader: false,
             text: Some("%%c<>,通".into()),
             tol: None,
             up: None,
@@ -10947,6 +11082,7 @@ mod tests {
             ver: crate::guide_url::DatumVersion::GB2008,
             letter: None,
             scale: None,
+            title: None,
             flip: crate::guide_url::FlipDir::None,
             marker: None,
         angle_mode: crate::guide_url::AngleMode::Minor,
@@ -10979,6 +11115,7 @@ mod tests {
             guide_type: GuideType::Linear,
             sub: Some(LinearSub::Horizontal),
             dist: 25.0,
+            suppress_text_leader: false,
             text: None,
             tol: None,
             up: None,
@@ -10989,6 +11126,7 @@ mod tests {
             ver: crate::guide_url::DatumVersion::GB2008,
             letter: None,
             scale: None,
+            title: None,
             flip: crate::guide_url::FlipDir::None,
             marker: None,
         angle_mode: crate::guide_url::AngleMode::Minor,
@@ -11021,6 +11159,7 @@ mod tests {
             guide_type: GuideType::Datum,
             sub: None,
             dist: 5.0,
+            suppress_text_leader: false,
             text: None,
             tol: None,
             up: None,
@@ -11031,6 +11170,7 @@ mod tests {
             ver: crate::guide_url::DatumVersion::GB2008,
             letter: None,
             scale: None,
+            title: None,
             flip: crate::guide_url::FlipDir::None,
             marker: None,
         angle_mode: crate::guide_url::AngleMode::Minor,
@@ -12876,6 +13016,50 @@ mod integration {
             !doc.entities().any(|e| matches!(e, EntityType::Line(_))),
             "引导线应被删除"
         );
+    }
+
+    #[test]
+    fn http_server_view_title_is_independent_modelspace_mtext() {
+        use ocs_plugin_api::host::acadrust::entities::AttachmentPoint;
+
+        let mut doc = acadrust::CadDocument::new();
+        let mut line = Line {
+            common: Default::default(),
+            start: Vector3::new(0.0, 0.0, 0.0),
+            end: Vector3::new(10.0, 0.0, 0.0),
+            thickness: 0.0,
+            normal: Vector3::new(0.0, 0.0, 1.0),
+        };
+        line.common.layer = "10引导线层".into();
+        let gh = doc.add_entity(EntityType::Line(line)).unwrap();
+        let mock = std::sync::Arc::new(MockSender::new(doc));
+        let server = spawn_fixed(mock.clone()).expect("spawn");
+        let hx = format!("{:#X}", u64::from(gh));
+        let body = serde_json::json!({
+            "handle": hx,
+            "url": "http://127.0.0.1:23751/DIM/VIEW/0?let=A&title=A%20%E5%90%91%E8%A7%86%E5%9B%BE&mx=12&my=34"
+        })
+        .to_string();
+        let response = http_req(server.port, "POST", "/api/apply_refresh", &body);
+        let result: serde_json::Value = serde_json::from_str(&response).unwrap();
+        assert_eq!(result["ok"], true, "VIEW title apply: {result}");
+        assert!(result["title_handle"].is_string(), "{result}");
+
+        let doc = mock.doc.lock().unwrap();
+        let titles: Vec<_> = doc
+            .entities()
+            .filter_map(|entity| match entity {
+                EntityType::MText(text) => Some(text),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(titles.len(), 1, "标题必须是独立的 model-space MTEXT");
+        let title = titles[0];
+        assert_eq!(title.value, "A 向视图");
+        assert_eq!(title.attachment_point, AttachmentPoint::MiddleCenter);
+        assert_eq!(title.rotation, 0.0);
+        assert_eq!(title.insertion_point, Vector3::new(12.0, 34.0, 0.0));
+        assert_eq!(title.common.layer, "8符号标注层");
     }
 
     #[test]
@@ -15362,6 +15546,7 @@ mod weld_tests {
         p.leader = crate::guide_url::LeaderParams {
             upper: upper.into(),
             lower: lower.into(),
+            shoulder_len: None,
         };
         p
     }
@@ -16268,15 +16453,15 @@ mod weld_tests {
     /// 肩线长度内容驱动：文字越长肩线越长；两行文字取较大者。
     #[test]
     fn apply_leader_content_drives_shoulder_length() {
-        let short = build_leader_parts(P_TIP, P0, P_END, 1.0, "A", "").unwrap();
-        let long = build_leader_parts(P_TIP, P0, P_END, 1.0, "ABCDEFGHIJ", "").unwrap();
+        let short = build_leader_parts(P_TIP, P0, P_END, 1.0, "A", "", None).unwrap();
+        let long = build_leader_parts(P_TIP, P0, P_END, 1.0, "ABCDEFGHIJ", "", None).unwrap();
         assert!((short.blen - (17.413 + 1.45 + 2.0)).abs() < 1e-9, "{short_blen}", short_blen = short.blen);
         assert!(long.blen > short.blen);
         // 中日韩按方块字宽 2.45 估算。
-        let cjk = build_leader_parts(P_TIP, P0, P_END, 1.0, "通孔", "").unwrap();
+        let cjk = build_leader_parts(P_TIP, P0, P_END, 1.0, "通孔", "", None).unwrap();
         assert!((cjk.blen - (17.413 + 2.45 * 2.0 + 2.0)).abs() < 1e-9, "{b}", b = cjk.blen);
         // 下侧更长时以下侧为准。
-        let lower = build_leader_parts(P_TIP, P0, P_END, 1.0, "A", "ABCDEFGH").unwrap();
+        let lower = build_leader_parts(P_TIP, P0, P_END, 1.0, "A", "ABCDEFGH", None).unwrap();
         assert!((lower.blen - (17.413 + 1.45 * 8.0 + 2.0)).abs() < 1e-9);
         // 肩线实体确实到 blen（线末端沿主轴）。
         // 肩线 = 起于块局部原点、沿 +t 的那条线（块局部坐标，原点 = 拐点）。
@@ -16286,6 +16471,12 @@ mod weld_tests {
             .map(|l| (l.start, l.end))
             .expect("肩线");
         assert!((shoulder.1.x - long.blen).abs() < 1e-9, "肩线末 t = blen");
+
+        // Explicit `blen` allows a text-free leader to use a short stub rather
+        // than the historical 19.413-unit empty-text slot.
+        let short_stub = build_leader_parts(P_TIP, P0, P_END, 1.0, "", "", Some(3.0)).unwrap();
+        assert!((short_stub.blen - 3.0).abs() < 1e-9);
+        assert!(mtexts_of(&short_stub.members).is_empty());
     }
 
     /// 文字值进 INSERT.attributes（上/下侧各一）。
@@ -16308,7 +16499,7 @@ mod weld_tests {
     fn apply_leader_vertical_rotates_text() {
         // 拐点 → 上方 40（竖肩线，bdy>0）。
         let p_end = [P0[0], P0[1] + 40.0, 0.0];
-        let parts = build_leader_parts(P_TIP, P0, p_end, 1.0, "A", "B").unwrap();
+        let parts = build_leader_parts(P_TIP, P0, p_end, 1.0, "A", "B", None).unwrap();
         assert!(!parts.horizontal);
         let ms = mtexts_of(&parts.members);
         assert_eq!(ms.len(), 2);
@@ -16325,7 +16516,7 @@ mod weld_tests {
     fn apply_leader_leftward_text_mirrors() {
         // 肩线自拐点向左画 40。
         let p_end = [P0[0] - 40.0, P0[1], 0.0];
-        let parts = build_leader_parts(P_TIP, P0, p_end, 1.0, "通孔", "深10").unwrap();
+        let parts = build_leader_parts(P_TIP, P0, p_end, 1.0, "通孔", "深10", None).unwrap();
         let ms = mtexts_of(&parts.members);
         assert_eq!(ms.len(), 2);
         // 文字锚点 = 拐点 −17.413（块局部 x = −17.413）。
@@ -17438,7 +17629,11 @@ mod weld_tests {
         let sender: Arc<dyn PluginRequestSender> = mock.clone();
         let mut params = GuideParams::linear(LinearSub::Aligned, 0.0);
         params.guide_type = GuideType::Leader;
-        params.leader = crate::guide_url::LeaderParams { upper: up, lower: lo };
+        params.leader = crate::guide_url::LeaderParams {
+            upper: up,
+            lower: lo,
+            shoulder_len: Some(seg_len),
+        };
         let p_end = match dir.as_str() {
             "up" => [100.0, 100.0 + seg_len, 0.0],
             "left" => [100.0 - seg_len, 100.0, 0.0],
@@ -18513,6 +18708,7 @@ mod weld_tests {
         assert!(html.contains("/api/hole_sizes"), "尺寸表端点");
         assert!(html.contains("/api/hole_preview"), "预览端点");
         assert!(html.contains("/api/hole_export"), "导出端点");
+        assert!(html.contains("id=\"cbD2\"") && html.contains("id=\"cbT\"") && html.contains("id=\"cbCustom\""), "非标沉孔控件");
         // 四套表
         let j = http_req(server.port, "GET", "/api/hole_sizes", "");
         let v: serde_json::Value = serde_json::from_str(&j).unwrap();
@@ -18641,6 +18837,38 @@ mod weld_tests {
         assert_eq!(v["values"]["base_d"], "11", "{j}");
         assert_eq!(v["values"]["bore_d"], "18");
         assert_eq!(v["values"]["bore_t"], "11");
+        // 非标浅沉台：API JSON 明确传 cb_d2/cb_t，允许 Ø15 通孔绕过推荐值表。
+        let custom_body = serde_json::json!({
+            "kind": "counterbore", "subtype": "drill", "d": 15.0,
+            "drill_d": 15.0, "cb_d2": 28.0, "cb_t": 3.0,
+            "range": "through", "hole_depth": 20.0,
+            "views": {"side": true, "top": false}
+        })
+        .to_string();
+        let j = http_req(server.port, "POST", "/api/hole_preview", &custom_body);
+        let v: serde_json::Value = serde_json::from_str(&j).unwrap();
+        assert_eq!(v["ok"], true, "{j}");
+        assert_eq!(v["values"]["base_d"], "15", "{j}");
+        assert_eq!(v["values"]["bore_d"], "28", "{j}");
+        assert_eq!(v["values"]["bore_t"], "3", "{j}");
+        assert_eq!(v["values"]["base_start"], "3", "{j}");
+        assert_eq!(v["values"]["cone_height"], "0", "{j}");
+        assert!(v["svg"].as_str().unwrap().contains("沉孔Ø28×3"), "{j}");
+        let custom_direct = serde_json::json!({
+            "kind": "counterbore", "subtype": "drill", "d": 15.0,
+            "drill_d": 15.0, "cb_d2": 28.0, "cb_t": 3.0,
+            "range": "through", "hole_depth": 20.0,
+            "views": {"side": true, "top": false}, "at": [30.0, 40.0]
+        })
+        .to_string();
+        let exported = http_req(
+            server.port,
+            "POST",
+            "/api/hole_export?tab=2",
+            &custom_direct,
+        );
+        let exported_json: serde_json::Value = serde_json::from_str(&exported).unwrap();
+        assert_eq!(exported_json["ok"], true, "{exported}");
         // 表外规格明确报错（不插值：M7 不在 152.3 表内；先给钻头避免提前报钻头缺失）
         let bad = serde_json::json!({
             "kind": "counterbore", "subtype": "drill", "d": 7.0, "drill_d": 8.5,

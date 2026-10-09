@@ -307,11 +307,19 @@ function computeValues(m) {
     return { error: '子类型与孔类型不匹配' };
   }
   if (m.kind === 'counterbore') {
-    if (m.reco === 'gb70_2') return { error: 'GB/T 152.3 无 70.2 表（标缺）' };
-    const key = m.reco === 'gb6190' ? 'gb6190' : 'gb70';
-    const r = CBORE.find((x) => x.table === key && Number(x.d) === Number(m.d));
-    if (!r) return { error: `沉头表 ${key} 没有 M${m.d}` };
-    bore_d = r.d2; bore_t = r.t; base_start = r.t;
+    if (m.cb_d2 != null || m.cb_t != null) {
+      if (m.cb_d2 == null || m.cb_t == null) return { error: '自定义沉孔必须同时提供 cb_d2 和 cb_t' };
+      if (!Number.isFinite(Number(m.cb_d2)) || Number(m.cb_d2) <= 0) return { error: 'cb_d2 非法' };
+      if (!Number.isFinite(Number(m.cb_t)) || Number(m.cb_t) <= 0) return { error: 'cb_t 非法' };
+      if (base_d >= Number(m.cb_d2)) return { error: 'cb_d2 必须大于底孔径' };
+      bore_d = Number(m.cb_d2); bore_t = Number(m.cb_t); base_start = bore_t;
+    } else {
+      if (m.reco === 'gb70_2') return { error: 'GB/T 152.3 无 70.2 表（标缺）' };
+      const key = m.reco === 'gb6190' ? 'gb6190' : 'gb70';
+      const r = CBORE.find((x) => x.table === key && Number(x.d) === Number(m.d));
+      if (!r) return { error: `沉头表 ${key} 没有 M${m.d}` };
+      bore_d = r.d2; bore_t = r.t; base_start = r.t;
+    }
   }
   if (m.kind === 'countersink') {
     const r = CSINK.find((x) => Number(x.d) === Number(m.d));
@@ -623,7 +631,34 @@ check(Number(el('nominal').value) === 10, `公称默认应 M10，实为 ${el('no
 await H.refresh();
 check(lastPreviewModel.kind === 'counterbore' && lastPreviewModel.reco === 'gb70_1', '沉头预览模型应带 reco=gb70_1');
 check((el('extraOut').textContent || '').includes('沉孔 Ø18 × 11'), '读数应显示沉孔 Ø18×11：' + el('extraOut').textContent);
-// 70.2 → 明确报错（标缺）
+// 非标浅沉台：GUI 传 cb_d2/cb_t，底孔 Ø15，贯通。
+el('subtype').value = 'custom';
+el('subtype')._fire('change', el('subtype'));
+await tick();
+el('customD').value = '15';
+el('customD')._fire('input', el('customD'));
+el('cbCustom').checked = true;
+el('cbCustom')._fire('change', el('cbCustom'));
+await tick();
+el('cbD2').value = '28';
+el('cbD2')._fire('input', el('cbD2'));
+el('cbT').value = '3';
+el('cbT')._fire('input', el('cbT'));
+el('range').value = 'through';
+el('range')._fire('change', el('range'));
+el('hDepth').value = '20';
+el('hDepth')._fire('input', el('hDepth'));
+await tick();
+await H.refresh();
+check(lastPreviewModel.cb_d2 === 28 && lastPreviewModel.cb_t === 3, `非标沉孔字段应进 JSON：${JSON.stringify(lastPreviewModel)}`);
+check(lastPreviewModel.range === 'through' && lastPreviewModel.hole_depth === 20, `非标通孔参数：${JSON.stringify(lastPreviewModel)}`);
+check((el('extraOut').textContent || '').includes('沉孔 Ø28 × 3'), '读数应显示非标沉孔 Ø28×3：' + el('extraOut').textContent);
+// 还原标准路径，70.2 → 明确报错（标缺）
+el('cbCustom').checked = false;
+el('cbCustom')._fire('change', el('cbCustom'));
+el('subtype').value = 'drill';
+el('subtype')._fire('change', el('subtype'));
+await tick();
 el('reco').value = 'gb70_2';
 el('reco')._fire('change', el('reco'));
 await tick();
@@ -632,7 +667,6 @@ check((el('status').textContent || '').includes('70.2'), '选 70.2 应显示标�
 el('reco').value = 'gb70_1';
 el('reco')._fire('change', el('reco'));
 await tick();
-
 // ⑤ 埋头孔：GB/T 152.2-2014（M1.6–M10，90°）
 H.setKind('countersink');
 await tick();

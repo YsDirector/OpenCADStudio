@@ -123,6 +123,9 @@ impl OpenCADStudio {
             committed.extend(handle);
         }
         self.apply_continuous_constraints(i, &committed);
+        if let Some(command) = self.tabs[i].active_cmd.as_mut() {
+            command.on_entities_committed(&committed);
+        }
         self.tabs[i].dirty = true;
         self.tabs[i].scene.clear_preview_wire();
         let prompt = self.tabs[i].active_cmd.as_ref().map(|c| c.prompt());

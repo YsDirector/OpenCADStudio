@@ -2688,6 +2688,11 @@ pub trait CadCommand: Send {
     /// Commands that stay active across replaces should update their internal snapshots here.
     fn on_entity_replaced(&mut self, _old: Handle, _new_handles: &[Handle]) {}
 
+    /// Called after `CmdResult::CommitEntities` adds entities while the command
+    /// remains active. Commands that keep an internal entity snapshot can bind
+    /// the newly allocated handles here.
+    fn on_entities_committed(&mut self, _new_handles: &[Handle]) {}
+
     /// Called after a PEDIT operation changed its target.
     fn on_pedit_applied(&mut self) {}
 

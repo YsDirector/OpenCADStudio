@@ -2570,6 +2570,17 @@ impl OpenCADStudio {
         } else {
             Subscription::none()
         };
+        // C11：停驻的 `capture` 请求等窗口再画一帧再截。帧事件是确定性路径；
+        // 若没有待重绘的帧（状态已是最新），50ms 计时兜底防挂。
+        let capture_frame = if self.control.capture_frame_pending {
+            Subscription::batch([
+                window::frames().map(|_| Message::ControlCaptureFrame { redrew: true }),
+                iced::time::every(std::time::Duration::from_millis(50))
+                    .map(|_| Message::ControlCaptureFrame { redrew: false }),
+            ])
+        } else {
+            Subscription::none()
+        };
         // Blink the MText preview caret while the editor is open.
         let caret_blink = if self.mtext_editor.is_some() {
             iced::time::every(std::time::Duration::from_millis(530))
@@ -2816,6 +2827,7 @@ impl OpenCADStudio {
             nav_settle,
             gpu_probe,
             thumbnail_capture,
+            capture_frame,
             caret_blink,
             web_fonts,
             autosave,

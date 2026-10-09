@@ -80,6 +80,24 @@ fn close_op_guards_dirty_documents_and_discards() {
 }
 
 #[test]
+fn reused_request_id_explains_idempotency_recovery() {
+    let mut app = OpenCADStudio::new_for_test();
+    app.automation_op(r#"{"op":"new"}"#);
+    let first = mutate(
+        &mut app,
+        r#"{"protocol":1,"op":"entities_create","request_id":"reuse-demo","document_id":{doc},"entities":[{"type":"Point","location":[0,0]}]}"#,
+    );
+    assert_eq!(first["ok"], true, "{first}");
+    let second = mutate(
+        &mut app,
+        r#"{"protocol":1,"op":"entities_create","request_id":"reuse-demo","document_id":{doc},"entities":[{"type":"Point","location":[1,0]}]}"#,
+    );
+    assert_eq!(second["ok"], false, "{second}");
+    assert_eq!(second["code"], "request_id_reused", "{second}");
+    assert!(second["error"].as_str().unwrap().contains("new unique request_id"));
+}
+
+#[test]
 fn sysvar_round_trips_and_refuses_unknowns() {
     let mut app = OpenCADStudio::new_for_test();
     app.automation_op(r#"{"op":"new"}"#);
@@ -108,10 +126,19 @@ fn sysvar_round_trips_and_refuses_unknowns() {
         r#"{{"protocol":1,"op":"sysvar","request_id":"sv3","document_id":{doc},"set":{{"clayer":"Walls"}}}}"#
     ));
     assert_eq!(r["ok"], true, "{}", r["error"]);
+    let i = app.active_tab;
     assert_eq!(
-        app.tabs[app.active_tab].scene.document.header.current_layer_name,
+        app.tabs[i].scene.document.header.current_layer_name,
         "Walls"
     );
+    assert_eq!(app.tabs[i].active_layer, "Walls");
+    assert_eq!(app.tabs[i].layers.current_layer, "Walls");
+    assert_eq!(app.ribbon.active_layer, "Walls");
+    assert!(app.tabs[i]
+        .layers
+        .layers
+        .iter()
+        .any(|layer| layer.name == "Walls"));
     let r = app.automation_op(&format!(
         r#"{{"protocol":1,"op":"sysvar","request_id":"sv4","document_id":{doc},"set":{{"clayer":"NOPE"}}}}"#
     ));
@@ -123,6 +150,49 @@ fn sysvar_round_trips_and_refuses_unknowns() {
     ));
     assert_eq!(r["ok"], false);
     assert_eq!(r["code"], "unknown_sysvar");
+}
+
+#[test]
+fn sysvar_batches_validate_atomically_and_undo_as_one_step() {
+    let mut app = OpenCADStudio::new_for_test();
+    app.automation_op(r#"{"op":"new"}"#);
+    let state = app.automation_op(r#"{"protocol":1,"op":"state"}"#);
+    let doc = state["document_id"].as_u64().unwrap();
+    mutate(
+        &mut app,
+        r#"{"protocol":1,"op":"entities_create","request_id":"sv-atomic-layer","document_id":{doc},"entities":[{"type":"Point","location":[0,0],"layer":"Walls"}]}"#,
+    );
+    let i = app.active_tab;
+    // Isolate this operation's dirty/history assertions from the layer setup.
+    app.tabs[i].dirty = false;
+    let history_before = app.tabs[i].history.undo_stack.len();
+
+    let r = app.automation_op(&format!(
+        r#"{{"protocol":1,"op":"sysvar","request_id":"sv-atomic-ok","document_id":{doc},"set":{{"ltscale":2.5,"clayer":"Walls"}}}}"#
+    ));
+    assert_eq!(r["ok"], true, "{}", r["error"]);
+    assert_eq!(app.tabs[i].scene.document.header.current_layer_name, "Walls");
+    assert_eq!(app.tabs[i].scene.document.header.linetype_scale, 2.5);
+    assert!(app.tabs[i].dirty);
+    assert_eq!(app.tabs[i].history.undo_stack.len(), history_before + 1);
+
+    // A bad later value must not leak the valid earlier value or an undo entry.
+    let r = app.automation_op(&format!(
+        r#"{{"protocol":1,"op":"sysvar","request_id":"sv-atomic-bad","document_id":{doc},"set":{{"ltscale":9.0,"clayer":"NOPE"}}}}"#
+    ));
+    assert_eq!(r["ok"], false);
+    assert_eq!(r["code"], "invalid_sysvar_value");
+    assert_eq!(app.tabs[i].scene.document.header.linetype_scale, 2.5);
+    assert_eq!(app.tabs[i].scene.document.header.current_layer_name, "Walls");
+    assert_eq!(app.tabs[i].history.undo_stack.len(), history_before + 1);
+
+    // One undo restores both header variables and all current-layer mirrors.
+    app.automation_op(r#"{"op":"undo"}"#);
+    assert_eq!(app.tabs[i].scene.document.header.linetype_scale, 1.0);
+    assert_eq!(app.tabs[i].scene.document.header.current_layer_name, "0");
+    assert_eq!(app.tabs[i].active_layer, "0");
+    assert_eq!(app.tabs[i].layers.current_layer, "0");
+    assert_eq!(app.ribbon.active_layer, "0");
 }
 
 #[test]
@@ -371,6 +441,104 @@ fn plot_per_page_writes_one_pdf_per_layout() {
         assert!(bytes.starts_with(b"%PDF"));
         let _ = std::fs::remove_file(file["path"].as_str().unwrap());
     }
+}
+
+#[test]
+fn entities_create_supports_control_and_fit_point_splines() {
+    let mut app = OpenCADStudio::new_for_test();
+    app.automation_op(r#"{"op":"new"}"#);
+    let control = mutate(
+        &mut app,
+        r#"{"protocol":1,"op":"entities_create","request_id":"spline-control","document_id":{doc},"entities":[
+            {"type":"Spline","degree":2,"knots":[0,0,0,1,1,1],"control_points":[[0,0,0],[5,5,0],[10,0,0]],"weights":[1,2,1],"layer":"CURVES"}
+        ]}"#,
+    );
+    assert_eq!(control["ok"], true, "{control}");
+    let fit = mutate(
+        &mut app,
+        r#"{"protocol":1,"op":"entities_create","request_id":"spline-fit","document_id":{doc},"entities":[
+            {"type":"Spline","degree":3,"fit_points":[[20,0],[25,5],[30,0]]}
+        ]}"#,
+    );
+    assert_eq!(fit["ok"], true, "{fit}");
+    let query = app.automation_op(r#"{"op":"query","type":"Spline","detail":"geometry"}"#);
+    assert_eq!(query["count"], 2, "{query}");
+    let control_entity = query["entities"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entity| entity["layer"] == "CURVES")
+        .unwrap();
+    assert_eq!(control_entity["degree"], 2, "{control_entity}");
+    assert_eq!(control_entity["control_points"].as_array().unwrap().len(), 3);
+    assert_eq!(control_entity["weights"], json!([1.0, 2.0, 1.0]));
+}
+
+/// D3 边界：显式字段不得被静默忽略。degree 非整数/越界、knots 零跨度、
+/// weights 配 `rational:false`、fit 点配假次数、未知字段、非有限坐标
+/// 都要在写文档之前报错；整值浮点 `2.0` 应被当作 2 而不是回退 3。
+#[test]
+fn entities_create_validates_spline_fields_explicitly() {
+    let mut app = OpenCADStudio::new_for_test();
+    app.automation_op(r#"{"op":"new"}"#);
+    let accepted = mutate(
+        &mut app,
+        r#"{"protocol":1,"op":"entities_create","request_id":"spline-float-degree","document_id":{doc},"entities":[
+            {"type":"Spline","degree":2.0,"control_points":[[0,0],[1,1],[2,0],[3,1]]}
+        ]}"#,
+    );
+    assert_eq!(accepted["ok"], true, "{accepted}");
+    let query = app.automation_op(r#"{"op":"query","type":"Spline","detail":"geometry"}"#);
+    assert_eq!(query["entities"][0]["degree"], 2, "{query}");
+
+    let cases: &[(&str, &str)] = &[
+        (
+            "degree 2.5",
+            r#"{"type":"Spline","degree":2.5,"control_points":[[0,0],[1,1],[2,0],[3,1]]}"#,
+        ),
+        (
+            "degree 30.0",
+            r#"{"type":"Spline","degree":30.0,"control_points":[[0,0],[1,1],[2,0],[3,1]]}"#,
+        ),
+        (
+            "degree string",
+            r#"{"type":"Spline","degree":"2","control_points":[[0,0],[1,1],[2,0],[3,1]]}"#,
+        ),
+        (
+            "degree >= points",
+            r#"{"type":"Spline","degree":4,"control_points":[[0,0],[1,1],[2,0],[3,1]]}"#,
+        ),
+        (
+            "knots zero span",
+            r#"{"type":"Spline","degree":2,"knots":[0,0,0,0,0,0],"control_points":[[0,0],[1,1],[2,0]]}"#,
+        ),
+        (
+            "weights with rational false",
+            r#"{"type":"Spline","degree":2,"control_points":[[0,0],[1,1],[2,0]],"weights":[1,2,1],"rational":false}"#,
+        ),
+        (
+            "fit points with degree 2",
+            r#"{"type":"Spline","degree":2,"fit_points":[[0,0],[10,10],[20,0],[30,10]]}"#,
+        ),
+        (
+            "unknown field",
+            r#"{"type":"Spline","degree":2,"control_points":[[0,0],[1,1],[2,0]],"control_pts":[[9,9]]}"#,
+        ),
+        (
+            "non-finite point",
+            r#"{"type":"Spline","degree":2,"control_points":[[0,0],[1,"x"],[2,0]]}"#,
+        ),
+    ];
+    for (index, (label, entity)) in cases.iter().enumerate() {
+        let request = format!(
+            r#"{{"protocol":1,"op":"entities_create","request_id":"bad-spline-{index}","document_id":{{doc}},"entities":[{entity}]}}"#
+        );
+        let rejected = mutate(&mut app, &request);
+        assert_eq!(rejected["ok"], false, "{label} 应报错：{rejected}");
+    }
+    // 校验失败不在文档里留残渣：仍然只有那条合法样条。
+    let query = app.automation_op(r#"{"op":"query","type":"Spline","detail":"summary"}"#);
+    assert_eq!(query["count"], 1, "{query}");
 }
 
 #[test]

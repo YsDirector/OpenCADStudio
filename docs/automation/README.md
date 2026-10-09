@@ -561,19 +561,22 @@ undo step; missing `layer`s are created and reported in `layers_created`.
 |---|---|
 | `Line` | `start`, `end`, optional `thickness` |
 | `Circle` | `center`, `radius` (≥ 0) |
-| `Arc` | `center`, `radius` (> 0), `start_angle_deg`, `end_angle_deg` |
+| `Arc` | `center`, `radius` (> 0), finite `start_angle_deg`, finite `end_angle_deg`; the resulting sweep must be non-zero |
+| `Spline` | `control_points` (≥ 2) or `fit_points` (≥ 2), optional `degree` (integers 1–25; `2.0` is accepted as 2, `2.5`/`30.0`/strings are rejected), explicit `knots` (exact count = points + degree + 1, nondecreasing, positive span) / positive `weights` for control-point splines (weights require `rational=true`; an explicit `rational:false` with weights is refused so DXF round-trips keep them), `closed`/`periodic`/`rational`/`planar`/`linear` flags. Fit-point splines always interpolate at degree 3, so an explicit other degree is refused instead of being stored as fake metadata. |
 | `LwPolyline` | `vertices` (≥ 2), `closed`, optional `constant_width` |
 | `Point` | `location` |
 | `Text` | `value`, `position`, optional `height` (default 2.5), `rotation_deg`, `style` |
 | `MText` | `value`, `position`, optional `height`, `width`, `rotation_deg` |
 | `Insert` | `block` (must exist), `position`, optional `scale` (number or `[x,y,z]`, nonzero), `rotation_deg` |
-| `Solid` | `corners` (3 or 4 `[x,y,z]`) |
+| `Solid` | `corners` (3 or 4 explicit finite `[x,y,z]` points; 3 is the formal triangular Solid form and stores corner 4 equal to corner 3) |
 | `Hatch` | `boundary` (≥ 3 points, closed), `solid`, or `pattern` (catalog name, default `ANSI31`), `pattern_scale`, `pattern_angle_deg` |
 
-Every definition also accepts `layer` and `color` (ACI index). Response:
+Every definition also accepts `layer` and `color` (ACI index). Unknown
+fields are rejected (`unknown_entity_field`) rather than ignored. Response:
 `{"handles":[…], "created":N, "layers_created":[…]}`. An invalid definition
-(`unknown_entity_type`, `invalid_radius`, `invalid_vertices`, …) aborts the
-whole batch with nothing committed.
+(`unknown_entity_type`, `invalid_radius`, `invalid_angle`, `invalid_sweep`,
+`invalid_corners`, `invalid_vertices`, …) aborts the whole batch with nothing
+committed.
 
 ### `entities_delete` — erase entities
 

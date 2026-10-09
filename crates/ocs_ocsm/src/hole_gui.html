@@ -101,6 +101,20 @@
         <input type="number" id="customD" value="8.5" step="0.1" min="0.1">
         <span class="unit">mm</span>
       </div>
+      <div class="numrow" id="cbCustomToggleRow" style="display:none">
+        <label class="chk" style="margin:0"><input type="checkbox" id="cbCustom">自定义沉孔</label>
+      </div>
+      <div class="numrow" id="cbD2Row" style="display:none">
+        <span class="unit">沉孔Ø</span>
+        <input type="number" id="cbD2" step="0.1" min="0.1">
+        <span class="unit">mm</span>
+      </div>
+      <div class="numrow" id="cbTRow" style="display:none">
+        <span class="unit">沉孔深 t</span>
+        <input type="number" id="cbT" step="0.1" min="0.1">
+        <span class="unit">mm</span>
+      </div>
+      <div class="hint" id="cbCustomHint" style="display:none">自定义沉孔须同时填写 cb_d2/cb_t，且 cb_d2 大于底孔径、cb_t 大于 0。</div>
       <div class="readout">
         <div id="majorLine">螺纹大径D1：<b id="majorOut">10</b> mm</div>
         <div id="minorLine">螺纹小径D：<b id="minorOut">8.376</b> mm</div>
@@ -234,6 +248,19 @@ function nominalOptions() {
   return table.map((r) => [String(r.d), `M${r.d}`]);
 }
 
+function currentCounterboreNominal() {
+  if (isThreaded()) return Number((el("size").value || "").split("|")[0] || 10);
+  return Number(el("nominal").value || 10);
+}
+
+function seedCounterboreCustomValues() {
+  const table = sizeTable();
+  const row = table && table.find((r) => Number(r.d) === currentCounterboreNominal());
+  if (!row) return;
+  if (!String(el("cbD2").value || "").trim()) el("cbD2").value = row.d2;
+  if (!String(el("cbT").value || "").trim()) el("cbT").value = row.t;
+}
+
 function fitOptions() {
   const th = isThreaded();
   if (th) {
@@ -316,6 +343,15 @@ function syncUi() {
   const isCb = kind === "counterbore";
   el("recoLabel").style.display = isCb ? "" : "none";
   el("reco").style.display = isCb ? "" : "none";
+  // 非标沉孔覆盖值只进 counterbore 模型；未勾选时两个字段传 null，保持标准表路径。
+  const cbCustom = isCb && el("cbCustom").checked;
+  el("cbCustomToggleRow").style.display = isCb ? "" : "none";
+  el("cbCustom").disabled = !isCb;
+  el("cbD2Row").style.display = cbCustom ? "" : "none";
+  el("cbTRow").style.display = cbCustom ? "" : "none";
+  el("cbCustomHint").style.display = cbCustom ? "" : "none";
+  el("cbD2").disabled = !cbCustom;
+  el("cbT").disabled = !cbCustom;
   // 动态提示：只在真正选中“无标准有效长度”的管螺纹规格时弹出（正常规格不常驻；
   // 公式/口径说明在控件 title 悬停里）。
   const isPipe = th && sysObj && sysObj.is_pipe;
@@ -375,6 +411,7 @@ function currentModel() {
   const th = isThreaded();
   const sub = el("subtype").value;
   const counter = isCounter();
+  const cbCustom = kind === "counterbore" && el("cbCustom").checked;
   const subDrill = !th && sub === "drill";
   const subCustom = !th && sub === "custom";
   const useNominal = counter && (subDrill || subCustom);
@@ -413,6 +450,8 @@ function currentModel() {
     custom_d: subCustom ? Number(el("customD").value) : null,
     drill_d,
     reco: el("reco").value,
+    cb_d2: cbCustom && String(el("cbD2").value).trim() !== "" ? Number(el("cbD2").value) : null,
+    cb_t: cbCustom && String(el("cbT").value).trim() !== "" ? Number(el("cbT").value) : null,
     range: el("range").value,
     hole_depth: el("hAuto").checked ? null : Number(el("hDepth").value),
     thread_len:
@@ -533,6 +572,13 @@ el("reco").addEventListener("change", () => {
   syncUi();
   schedulePreview();
 });
+el("cbCustom").addEventListener("change", () => {
+  if (el("cbCustom").checked) seedCounterboreCustomValues();
+  syncUi();
+  schedulePreview();
+});
+el("cbD2").addEventListener("input", () => schedulePreview());
+el("cbT").addEventListener("input", () => schedulePreview());
 el("hAuto").addEventListener("change", () => {
   syncUi();
   schedulePreview();

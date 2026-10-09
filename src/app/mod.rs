@@ -33,6 +33,7 @@ mod presspull_ops;
 mod properties;
 mod recent;
 mod record_api;
+mod title_fit;
 pub(crate) mod settings;
 mod shortcuts;
 mod startup;
@@ -2130,6 +2131,10 @@ pub enum Message {
     ControlStep(String, Box<Message>),
     ControlTaskDone(String),
     ControlScreenshot(String, Option<iced::window::Screenshot>),
+    /// A frame has been drawn (or the anti-hang timer expired) for a parked
+    /// `capture` request: take the screenshot now, so it shows the latest
+    /// state instead of the previous frame (C11).
+    ControlCaptureFrame { redrew: bool },
     ControlToggle,
     /// Node graph overlay interaction.
     Graph(crate::ui::node_graph::GraphMsg),

@@ -2459,6 +2459,25 @@ impl OcsmPlugin {
                     host.write_record(h, crate::guide_server::pe_url_record(&gui));
                 }
             }
+            // C10：旧→新句柄映射。新实体写 XDATA `OCSM_REPLACED_FROM`
+            // （1000 = 旧句柄），脚本先 `query` 出新句柄清单，再用
+            // `xdata_get app:"OCSM_REPLACED_FROM"` 把旧句柄翻译成新句柄。
+            for (old, start, end) in &plan.replacements {
+                let old_hex = format!("{:#X}", old.value());
+                for handle in handles.get(*start..*end).into_iter().flatten() {
+                    let mut record =
+                        ocs_plugin_api::host::acadrust::xdata::ExtendedDataRecord::new(
+                            "OCSM_REPLACED_FROM",
+                        );
+                    record.values.push(
+                        ocs_plugin_api::host::acadrust::xdata::XDataValue::String(old_hex.clone()),
+                    );
+                    let _ = host.write_record(*handle, record);
+                }
+            }
+            if !plan.replacements.is_empty() {
+                host.push_info(&crate::i18n::t("cmd.d2g.info.replaced_map"));
+            }
         }
         for h in &plan.removes {
             host.remove_entity(*h);

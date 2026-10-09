@@ -95,6 +95,8 @@ mod context_menu;
 mod dialog;
 mod dynamic;
 mod file;
+#[cfg(not(target_arch = "wasm32"))]
+pub(in crate::app) use file::native_paths_match;
 mod page_setup_import;
 mod pi;
 mod style;
@@ -646,6 +648,7 @@ impl OpenCADStudio {
                 self.control_screenshot(path, screenshot);
                 Task::none()
             }
+            Message::ControlCaptureFrame { redrew } => self.on_control_capture_frame(redrew),
             Message::Graph(message) => self.on_graph(message),
 
             Message::ControlToggle => {

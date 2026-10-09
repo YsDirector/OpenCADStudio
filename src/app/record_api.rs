@@ -1687,6 +1687,14 @@ impl OpenCADStudio {
                 {
                     crate::entities::insert::carry_attributes_with_placement(old_insert, new_insert);
                 }
+                // P4：长图号等标题栏文字按格宽自动压缩宽度因子（只在这个
+                // 请求确实改了属性值时触发；显式设置的 width_factor 优先）。
+                crate::app::title_fit::fit_edited_attributes(
+                    &self.tabs[i].scene.document,
+                    &source,
+                    &mut edited,
+                    &paths,
+                );
                 changed = edited != source;
                 if changed {
                     self.push_undo_snapshot(i, "MCP SET_PROPERTIES");
@@ -2025,6 +2033,68 @@ mod tests {
             panic!("expected insert")
         };
         assert_eq!(insert.insert_point.x, 1.5);
+    }
+
+    /// P4：标题栏填长图号时，宿主按格宽自动压缩实体级 `width_factor`。
+    #[test]
+    fn setting_a_long_drawing_number_compresses_the_attribute_width() {
+        let mut app = OpenCADStudio::new_for_test();
+        app.automation_op(r#"{"op":"new"}"#);
+        let i = app.active_tab;
+        // 图框块：60×12 格子（块空间），属性贴右墙、字高 7、180°。
+        let mut record = codec::tables::BlockRecord::new("TITLE");
+        for (start, end) in [
+            ([0.0, 0.0, 0.0], [60.0, 0.0, 0.0]),
+            ([0.0, 12.0, 0.0], [60.0, 12.0, 0.0]),
+            ([0.0, 0.0, 0.0], [0.0, 12.0, 0.0]),
+            ([60.0, 0.0, 0.0], [60.0, 12.0, 0.0]),
+        ] {
+            let mut line = codec::entities::Line::new();
+            line.start = Vector3::new(start[0], start[1], start[2]);
+            line.end = Vector3::new(end[0], end[1], end[2]);
+            let handle = app.tabs[i].scene.add_entity(EntityType::Line(line));
+            record.entity_handles.push(handle);
+        }
+        app.tabs[i]
+            .scene
+            .document
+            .block_records
+            .add(record)
+            .unwrap();
+
+        let scale = 0.5;
+        let mut insert = Insert::new("TITLE", Vector3::new(0.0, 0.0, 0.0));
+        insert.set_x_scale(scale);
+        insert.set_y_scale(scale);
+        insert.set_z_scale(scale);
+        let mut attribute = AttributeEntity::simple("图样代号", "YSD06");
+        attribute.insertion_point = Vector3::new(59.5 * scale, 6.0 * scale, 0.0);
+        attribute.height = 7.0 * scale;
+        attribute.rotation = std::f64::consts::PI;
+        attribute.width_factor = 1.0;
+        insert.attributes.push(attribute);
+        let entity = app.tabs[i].scene.add_entity(EntityType::Insert(insert));
+
+        let edited = execute(
+            &mut app,
+            json!({
+                "op":"set_properties",
+                "collection":"entities",
+                "handle":format!("{:X}", entity.value()),
+                "updates":[{"path":"/attributes/0/value","value":"YSD06-260928-b"}]
+            }),
+            "fit-title",
+        );
+        assert_eq!(edited["status"], "completed", "{edited}");
+        let EntityType::Insert(insert) = app.tabs[i].scene.document.get_entity(entity).unwrap()
+        else {
+            panic!("expected insert")
+        };
+        assert!(
+            insert.attributes[0].width_factor < 0.8,
+            "长图号应自动压缩宽度因子：{}",
+            insert.attributes[0].width_factor
+        );
     }
 
     /// A symbol INSERT with two inline ATTRIBs, each carrying a real handle and

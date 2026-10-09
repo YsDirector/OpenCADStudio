@@ -363,6 +363,9 @@ pub struct GuideParams {
     pub sub: Option<LinearSub>,
     /// 与 P2 距离（法向偏移）。
     pub dist: f64,
+    /// `DIMTMOVE=2`：文字外移时不生成细引线；文字位置仍由宿主保留的
+    /// `text_middle_point`/属性编辑控制。URL: `tl=0` 或 `noleader=1`。
+    pub suppress_text_leader: bool,
     /// 标注文字（`<>` 或 None = 测量值）。
     pub text: Option<String>,
     /// 公差（可空）。
@@ -383,6 +386,8 @@ pub struct GuideParams {
     pub letter: Option<String>,
     /// 向视图比例文本（仅 VIEW；可缺省，如 "1:1"）。
     pub scale: Option<String>,
+    /// 向视图标题（仅 VIEW；独立于方向标记，水平居中）。
+    pub title: Option<String>,
     /// 向视图翻转方向（仅 VIEW；None=无，Clockwise=顺时针，CounterClockwise=逆时针）。
     pub flip: FlipDir,
     /// 向视图标记放置点（仅 VIEW；缺省 (0,0)，字母中心锚定）。
@@ -477,12 +482,16 @@ impl Default for ChamferParams {
 }
 
 /// 引线标注参数：引线上方文字 + 引线下方文字（各单行；空 = 不显示）。
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct LeaderParams {
     /// 上侧文字（肩线上方，锚点 17.413s / +2.750s，左对齐）。
     pub upper: String,
     /// 下侧文字（肩线下方，锚点 17.413s / −2.750s，左对齐）。
     pub lower: String,
+    /// Optional shoulder length in unscaled drawing units. `None` preserves
+    /// the historical content-driven length; `blen=`/`shoulder_len=` makes a
+    /// text-free leader usable as a short stub without fake placeholder text.
+    pub shoulder_len: Option<f64>,
 }
 
 /// 形位公差单行：符号 + ⌀ + 公差值 + 修饰符(ⓂⓁⓅⓈ) + 基准1/2/3。
@@ -534,6 +543,7 @@ impl GuideParams {
             guide_type: GuideType::Linear,
             sub: Some(sub),
             dist,
+            suppress_text_leader: false,
             text: None,
             tol: None,
             up: None,
@@ -544,6 +554,7 @@ impl GuideParams {
             ver: DatumVersion::GB2008,
             letter: None,
             scale: None,
+            title: None,
             flip: FlipDir::None,
             marker: None,
             angle_mode: AngleMode::Minor,
@@ -616,6 +627,7 @@ impl GuideParams {
         };
 
         // query 参数（text/tol/up/dn/sym）。
+        let mut suppress_text_leader = false;
         let mut text = None;
         let mut tol = None;
         let mut up: Option<String> = None;
@@ -626,6 +638,7 @@ impl GuideParams {
         let mut ver = DatumVersion::GB2008;
         let mut letter = None;
         let mut scale = None;
+        let mut title = None;
         let mut flip = FlipDir::None;
         let mut marker = None;
         let mut section_side = SectionSide::Right;
@@ -659,6 +672,10 @@ impl GuideParams {
             let v = percent_decode(v);
             match k {
                 "text" => text = Some(v),
+                "tl" => suppress_text_leader = matches!(&*v, "0" | "false" | "no" | "off"),
+                "noleader" | "no_leader" => {
+                    suppress_text_leader = matches!(&*v, "1" | "true" | "yes" | "on");
+                }
                 "tol" => tol = Some(v),
                 "up" => up = Some(v),
                 "dn" => dn = Some(v),
@@ -668,6 +685,7 @@ impl GuideParams {
                 "ver" => ver = DatumVersion::from_str(&v).unwrap_or(DatumVersion::GB2008),
                 "let" => letter = Some(v),
                 "scale" => scale = (!v.is_empty()).then_some(v),
+                "title" | "vt" => title = (!v.is_empty()).then_some(v),
                 "flip" => flip = FlipDir::from_url(&v).unwrap_or(FlipDir::None),
                 "mx" | "my" => {
                     let (mut mx, mut my) = marker.unwrap_or((0.0, 0.0));
@@ -708,9 +726,13 @@ impl GuideParams {
                 // wtail/wc=五开关；wut/wuq/wlt/wlq/wtt=五文字槽。
                 "wu" => weld.upper = v,
                 "wl" => weld.lower = v,
-                // 引线标注（仅 LEADER）：lu=上侧文字、ll=下侧文字（单行）。
+                // 引线标注（仅 LEADER）：lu/ll=上下侧文字（单行）；
+                // blen/shoulder_len=显式肩线长度（未乘图框比例）。
                 "lu" => leader.upper = v,
                 "ll" => leader.lower = v,
+                "blen" | "shoulder_len" => {
+                    leader.shoulder_len = v.parse::<f64>().ok().filter(|value| value.is_finite() && *value > 0.0);
+                }
                 // 倒角标注（仅 CHAMFER）：c=倒角尺寸、a=倒角角度（度，缺省 45）；
                 // src=geom = 显式「用几何量取」（4 顶点引导；量取值优先于手填）。
                 "c" => {
@@ -785,6 +807,7 @@ impl GuideParams {
             guide_type,
             sub,
             dist,
+            suppress_text_leader,
             text,
             tol,
             up,
@@ -795,6 +818,7 @@ impl GuideParams {
             ver,
             letter,
             scale,
+            title,
             flip,
             marker,
             angle_mode,
@@ -871,6 +895,9 @@ impl GuideParams {
                 q.push(format!("text={}", percent_encode(t)));
             }
         }
+        if self.guide_type == GuideType::Linear && self.suppress_text_leader {
+            q.push("tl=0".to_string());
+        }
         if let Some(t) = &self.tol {
             if !t.is_empty() {
                 q.push(format!("tol={}", percent_encode(t)));
@@ -910,6 +937,11 @@ impl GuideParams {
         if let Some(s) = &self.scale {
             if !s.is_empty() {
                 q.push(format!("scale={}", percent_encode(s)));
+            }
+        }
+        if let Some(t) = &self.title {
+            if !t.is_empty() {
+                q.push(format!("title={}", percent_encode(t)));
             }
         }
         if self.flip != FlipDir::None {
@@ -1061,6 +1093,9 @@ impl GuideParams {
                     q.push(format!("{k}={}", percent_encode(v)));
                 }
             }
+            if let Some(length) = l.shoulder_len {
+                q.push(format!("blen={}", format_dist(length)));
+            }
         }
         if self.guide_type == GuideType::Balloon {
             let b = &self.balloon;
@@ -1158,6 +1193,17 @@ mod tests {
     }
 
     #[test]
+    fn parse_linear_no_text_leader_roundtrip() {
+        let p = GuideParams::from_url("http://x/DIM/LINEAR/A/8?tl=0").unwrap();
+        assert!(p.suppress_text_leader);
+        let url = p.to_url(1);
+        assert!(url.contains("tl=0"));
+        assert!(GuideParams::from_url(&url).unwrap().suppress_text_leader);
+        let normal = GuideParams::from_url("http://x/DIM/LINEAR/A/8?tl=1").unwrap();
+        assert!(!normal.suppress_text_leader);
+    }
+
+    #[test]
     fn parse_linear_vertical_with_text() {
         let p = GuideParams::from_url(
             "http://127.0.0.1:23751/DIM/LINEAR/V/-14.2?text=%3C%3E&tol=%2B0.1",
@@ -1186,6 +1232,16 @@ mod tests {
             GuideParams::from_url("http://x/DIM/DATUM/0").unwrap().guide_type,
             GuideType::Datum
         );
+    }
+
+    #[test]
+    fn parse_leader_shoulder_length_roundtrip() {
+        let p = GuideParams::from_url("http://x/DIM/LEADER/0?lu=A&blen=3.5").unwrap();
+        assert_eq!(p.guide_type, GuideType::Leader);
+        assert_eq!(p.leader.upper, "A");
+        assert_eq!(p.leader.shoulder_len, Some(3.5));
+        let back = GuideParams::from_url(&p.to_url(1)).unwrap();
+        assert_eq!(back.leader, p.leader);
     }
 
     #[test]
@@ -1283,11 +1339,13 @@ mod tests {
         p2.guide_type = GuideType::Section;
         p2.letter = Some("C".into());
         p2.scale = Some("1:2".into());
+        p2.title = Some("C 向视图".into());
         p2.marker = Some((12.0, 34.0));
         let back = GuideParams::from_url(&p2.to_url(1)).unwrap();
         assert_eq!(back.guide_type, GuideType::Section);
         assert_eq!(back.letter.as_deref(), Some("C"));
         assert_eq!(back.scale.as_deref(), Some("1:2"));
+        assert_eq!(back.title.as_deref(), Some("C 向视图"));
         assert_eq!(back.marker, Some((12.0, 34.0)));
         // 左侧往返（side=L）。
         p2.section_side = SS::Left;
