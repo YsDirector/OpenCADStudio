@@ -5,10 +5,10 @@
 > 宿主侧改动，供**每次同步上游后照单核对**，避免补丁被合掉却无人发现。
 >
 > 上游：`origin` = HakanSeven12/OpenCADStudio（经 ghfast 镜像）
-> 最近同步点：`fd0f5dc2`（Merge tag **`v2026.38`** = 上游 `0d023d26`，**148 提交**，执行记录见 §0.12）
-> 台账基准：`git diff v2026.38..HEAD -- src/ crates/ocs_plugin_api Cargo.toml tests/`
-> （**46 文件 / +11093 −103**，不含插件 crate；含 `crates/ocs_ocsm*` 则为 186 文件 / +114306 −107）
-> ⚠️ 上一个同步点 `5200ef5d`（Merge 上游 `65c0fe54`，213 提交，见 §0.11）→ 本次之前上游又走了 148 提交。
+> 最近同步点：`913e42d3`（Merge `origin/main` **`2a2d9b55`**，**414 提交**，执行记录见 §0.16）
+> 台账基准：`git diff origin/main..HEAD -- src/ crates/ocs_plugin_api Cargo.toml tests/`
+> （**70 文件 / +17210 −463**，不含 `crates/ocs_ocsm*` 插件本体；插件与工具等 fork 内容另计）
+> ⚠️ 上一个同步点 `fd0f5dc2`（Merge tag **`v2026.38`** = 上游 `0d023d26`，见 §0.12）→ 本次上游又走了 414 提交。
 >
 > **2026-09-21 状态刷新**：
 > * `§0.6/§0.7/§0.9/§0.10` 的分支仍在 `prf`、上游 PR 仍未开（同 §0.11 记录）。
@@ -424,7 +424,41 @@ LC_ALL=C cargo test -p OpenCADStudio --lib \
 > **不含** `ocs_ocsm`，两者不是一回事。判据：
 > `cargo tree -i interprocess --target wasm32-unknown-unknown -p OpenCADStudio -p ocs_web_worker` ⇒ `nothing to print`。
 
-## 1. 补丁总表（基准：上游 tag `v2026.38` = `0d023d26` → 合并 `fd0f5dc2`，**46 文件 / +11093 −103**，不含插件 crate）
+## 0.16 上游同步执行记录（2026-10-09，`origin/main` `2a2d9b55` / **414 提交**）
+
+> 合并提交：`913e42d3`（父：fork `62074cf9` + 上游 `2a2d9b55`）。
+> 安全网仍保留：分支 `pre-sync-2026-10-09-62074cf9`、tag
+> `presync-62074cf9-2026-10-09`。共同祖先 `1bbdce31`；上游相对共同祖先为
+> **418 文件 / +69694 −7189**，fork 相对共同祖先为 401 个提交。
+>
+> **16 个文本冲突的语义处置**：
+>
+> | 文件/区域 | 处置 |
+> |---|---|
+> | `.cargo/config.toml` | 保留上游 `RUST_MIN_STACK = 67108864` 与 fork 的构建守卫配置。 |
+> | `src/command.rs`、`src/app/command_driver/entity_commit.rs` | 采用上游完整 `EntityType` 提交回调；FILLET/CHAMFER 继续接收新句柄。 |
+> | `src/app/document.rs`、`src/app/history.rs` | 并集保留插件跨请求 `deferred` 撤销事务与上游 `keep_empty` 语义。 |
+> | `src/app/control/{entities,mod}.rs` | 保留 active-tab/实体自动化，同时吸收 capture framing、空间 grounding、C11 下一帧截图与 50ms 兜底。 |
+> | `src/app/automation.rs`、`src/app/update/{mod,viewport}.rs` | 保留插件/自动化选择语义、OSNAP 点选、`click_snap`、活动标签路由及上游新操作。 |
+> | `src/app/view/mod.rs`、`src/ui/{dock,overlay}.rs` | 保留 Pi 与 Sheet Set 面板；`PanelId::ALL` 补齐 PointCloud/Count/SheetSet；合并导航光标与上游 overlay。 |
+> | `src/io/mod.rs`、`src/mcp.rs` | 同时保留 TrueType/date hydration、上游 MCP request schema 及 `text_search`/`text_audit`。 |
+> | `src/modules/draw/modify/fillet.rs` | 合并上游 TrimMode/默认值与本地 no-trim：仅两条独立 LINE，不满足时精确拒绝，不静默修剪。 |
+>
+> **合并后发现并修正的兼容项**：
+> * LoLa 补齐上游新增的 2 个目录/视口译文 key；
+> * Linux 只有 `hunspell` 可执行文件而没有词典时不再报告“spellcheck available”；
+> * MCP tool schema pin 更新为 `e7bd0169…`；
+> * opencadcodec 0.6 导致 Debug 指纹变化，确认四个 gear 视图图元数不变后重冻指纹；OCSM 测试辅助适配 `ensure_plugin_state_any -> Option` 与 `MultiLeader(Box<…>)`。
+>
+> **验证（均在合并树）**：
+> * `LC_ALL=C tools/cargo_guarded.sh test --workspace --locked`：宿主 **2091 passed / 0 failed / 24 ignored**；OCSM **898 / 0 / 25**；其它 workspace test groups 全绿；
+> * Python document model：**16 passed**；
+> * release 宿主构建：`target/release/OpenCADStudio`，112009024 bytes；OCSM 插件：`libocs_ocsm.so`，11214912 bytes；
+> * `OCS_SMOKE_PLUGIN=…/libocs_ocsm.so OCS_PLUGIN_RUNNER_EXE=…/OpenCADStudio cargo test -p OpenCADStudio --lib installed_plugin_registers_its_ribbon`：**1 passed**。
+>
+> **未做**：没有安全部署 `.so` 到运行目录，也没有重启用户现有 GUI/MCP；真实 Python IPC、GUI C11/P6 像素和 CHAMFER 现场验证仍按问题清单保留。合并 diff 相对上游仍包含 origin 带入的空白诊断（`git diff --check 62074cf9..origin/main` 计 136 行），本次不做全树格式化。
+
+## 1. 补丁总表（基准：上游 `origin/main` `2a2d9b55` → 合并 `913e42d3`，**70 文件 / +17210 −463**，不含插件本体）
 
 > A–E 组的行数是 v2026.36 基准时的记录（功能性描述仍适用）；F 组为 2026-09-16 新增。
 
