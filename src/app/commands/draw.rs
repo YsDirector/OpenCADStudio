@@ -438,9 +438,7 @@ impl OpenCADStudio {
                     .document
                     .entities()
                     .filter_map(|entity| match entity {
-                        codec::EntityType::Face3D(face) => {
-                            Some((face.common.handle, face.clone()))
-                        }
+                        codec::EntityType::Face3D(face) => Some((face.common.handle, face.clone())),
                         _ => None,
                     })
                     .collect();
@@ -778,7 +776,8 @@ impl OpenCADStudio {
                     });
                 let mut new_cmd =
                     HatchCommand::new(outlines, boundary_sources, selected, inherited, plane)
-                        .with_origin(self.tabs[i].scene.document.hatch_origin());
+                        .with_origin(self.tabs[i].scene.document.hatch_origin())
+                        .with_associative(self.hatch_associative);
                 new_cmd.inject_selection_hidden(preselected_hidden);
                 self.command_line.push_info(&new_cmd.prompt());
                 self.tabs[i].active_cmd = Some(Box::new(new_cmd));
@@ -1043,9 +1042,8 @@ impl OpenCADStudio {
                         false,
                         true,
                     );
-                    self.command_line.push_output(
-                        format!("{} constraint bar(s) reset.", count).as_str(),
-                    );
+                    self.command_line
+                        .push_output(format!("{} constraint bar(s) reset.", count).as_str());
                 }
             }
 
@@ -1158,20 +1156,15 @@ impl OpenCADStudio {
                     self.tabs[i].active_cmd = Some(Box::new(sel));
                 } else {
                     let scope = self.tabs[i].current_parametric_scope();
-                    let inferred = self.tabs[i]
-                        .scene
-                        .inferred_parametric_constraints(
-                            scope,
-                            &handles,
-                            &self.auto_constrain_settings,
-                        );
+                    let inferred = self.tabs[i].scene.inferred_parametric_constraints(
+                        scope,
+                        &handles,
+                        &self.auto_constrain_settings,
+                    );
                     if inferred.is_empty() {
                         self.command_line.push_output(
-                            format!(
-                                "0 constraint(s) applied to {} object(s).",
-                                handles.len()
-                            )
-                            .as_str(),
+                            format!("0 constraint(s) applied to {} object(s).", handles.len())
+                                .as_str(),
                         );
                         self.tabs[i].scene.deselect_all();
                         self.refresh_selected_grips();
@@ -1294,8 +1287,7 @@ impl OpenCADStudio {
                 use crate::scene::named_parameters::DrivingValue;
                 use crate::scene::parametric_constraints::{
                     dynamic_dimension_text, next_angular_parameter_name,
-                    next_dimensional_parameter_name, next_radial_parameter_name,
-                    ConstraintKind,
+                    next_dimensional_parameter_name, next_radial_parameter_name, ConstraintKind,
                 };
 
                 let scope = self.tabs[i].current_parametric_scope();
@@ -1335,7 +1327,11 @@ impl OpenCADStudio {
                     };
                     if self.tabs[i]
                         .scene
-                        .validate_parametric_constraint(kind, &refs, Some(&DrivingValue::Literal(measured)))
+                        .validate_parametric_constraint(
+                            kind,
+                            &refs,
+                            Some(&DrivingValue::Literal(measured)),
+                        )
                         .is_err()
                     {
                         refused += 1;
@@ -1464,10 +1460,12 @@ impl OpenCADStudio {
                 self.tabs[i].scene.deselect_all();
                 self.tabs[i].dirty = true;
                 self.refresh_properties();
-                self.command_line
-                    .push_output(crate::tf!("{converted} associative dimensions converted").as_ref());
                 self.command_line.push_output(
-                    crate::tf!("{refused} associative dimension(s) could not be converted").as_ref(),
+                    crate::tf!("{converted} associative dimensions converted").as_ref(),
+                );
+                self.command_line.push_output(
+                    crate::tf!("{refused} associative dimension(s) could not be converted")
+                        .as_ref(),
                 );
                 if let Some(pd) = pending {
                     self.commit_undo_delta(i, pd);
@@ -1485,7 +1483,11 @@ impl OpenCADStudio {
                 let (kind, axis, label) = if vertical {
                     (ConstraintKind::Vertical, "Vertical", "Vertical constraint")
                 } else {
-                    (ConstraintKind::Horizontal, "Horizontal", "Horizontal constraint")
+                    (
+                        ConstraintKind::Horizontal,
+                        "Horizontal",
+                        "Horizontal constraint",
+                    )
                 };
                 let new_command = || {
                     if vertical {
@@ -1504,13 +1506,14 @@ impl OpenCADStudio {
                         .push_error(&format!("{axis}: select exactly one compatible object."));
                 } else {
                     let handle = handles[0];
-                    let reference = self.tabs[i]
-                        .scene
-                        .document
-                        .get_entity(handle)
-                        .and_then(|entity| {
-                            HorizontalConstraintCommand::preselected_reference(entity, handle)
-                        });
+                    let reference =
+                        self.tabs[i]
+                            .scene
+                            .document
+                            .get_entity(handle)
+                            .and_then(|entity| {
+                                HorizontalConstraintCommand::preselected_reference(entity, handle)
+                            });
                     if let Some(reference) = reference {
                         let plane = self.tabs[i].ucs_xform().working_plane();
                         let direction = if vertical { plane.y } else { plane.x };
@@ -1545,13 +1548,14 @@ impl OpenCADStudio {
                 // the reference's own point-or-object prompt.
                 let handles = self.tabs[i].scene.selected_handles_in_order();
                 if let [handle] = handles.as_slice() {
-                    let reference = self.tabs[i]
-                        .scene
-                        .document
-                        .get_entity(*handle)
-                        .and_then(|entity| {
-                            FixConstraintCommand::preselected_reference(entity, *handle)
-                        });
+                    let reference =
+                        self.tabs[i]
+                            .scene
+                            .document
+                            .get_entity(*handle)
+                            .and_then(|entity| {
+                                FixConstraintCommand::preselected_reference(entity, *handle)
+                            });
                     if let Some(reference) = reference {
                         return Some(self.apply_cmd_result(CmdResult::AddParametricConstraint {
                             kind: ConstraintKind::Fixed,
@@ -1731,13 +1735,15 @@ impl OpenCADStudio {
                         })
                         .collect::<Vec<_>>();
                     if picks.len() == 2 && picks[0].reference != picks[1].reference {
-                        return Some(self.apply_cmd_result(CmdResult::AddPerpendicularConstraint {
-                            first: picks[0].reference,
-                            second: picks[1].reference,
-                            first_fixed: picks[0].fixed_reference,
-                            second_start: picks[1].start_reference,
-                            label: "Perpendicular constraint",
-                        }));
+                        return Some(self.apply_cmd_result(
+                            CmdResult::AddPerpendicularConstraint {
+                                first: picks[0].reference,
+                                second: picks[1].reference,
+                                first_fixed: picks[0].fixed_reference,
+                                second_start: picks[1].start_reference,
+                                label: "Perpendicular constraint",
+                            },
+                        ));
                     }
                     self.tabs[i].scene.deselect_all();
                     self.command_line.push_error(
@@ -1873,21 +1879,21 @@ impl OpenCADStudio {
                     self.command_line.push_info(&command.prompt());
                     self.tabs[i].active_cmd = Some(Box::new(command));
                 } else {
-                    use crate::command::{
-                        CmdResult, SymmetricConstraintSelection,
-                    };
+                    use crate::command::{CmdResult, SymmetricConstraintSelection};
                     use crate::modules::parametric::SymmetricConstraintCommand;
 
-                    let refs = (handles.len() == 3).then(|| {
-                        let first = self.tabs[i].scene.document.get_entity(handles[0])?;
-                        let second = self.tabs[i].scene.document.get_entity(handles[1])?;
-                        let axis = self.tabs[i].scene.document.get_entity(handles[2])?;
-                        SymmetricConstraintCommand::preselected_refs(
-                            (first, handles[0]),
-                            (second, handles[1]),
-                            (axis, handles[2]),
-                        )
-                    }).flatten();
+                    let refs = (handles.len() == 3)
+                        .then(|| {
+                            let first = self.tabs[i].scene.document.get_entity(handles[0])?;
+                            let second = self.tabs[i].scene.document.get_entity(handles[1])?;
+                            let axis = self.tabs[i].scene.document.get_entity(handles[2])?;
+                            SymmetricConstraintCommand::preselected_refs(
+                                (first, handles[0]),
+                                (second, handles[1]),
+                                (axis, handles[2]),
+                            )
+                        })
+                        .flatten();
                     if let Some([first, second, axis]) = refs {
                         return Some(self.apply_cmd_result(CmdResult::AddSymmetricConstraint {
                             selection: SymmetricConstraintSelection::Objects(first, second),
@@ -1975,10 +1981,8 @@ impl OpenCADStudio {
                 // asked for this command.
                 // The reference asks for the circle itself, whatever is
                 // selected, so a pick-first set is left alone.
-                let name = next_radial_parameter_name(
-                    self.tabs[i].scene.named_parameters(),
-                    diameter,
-                );
+                let name =
+                    next_radial_parameter_name(self.tabs[i].scene.named_parameters(), diameter);
                 let command = DimConstraintCommand::new(
                     if diameter {
                         DimConstraintAxis::Diameter
@@ -2157,6 +2161,11 @@ impl OpenCADStudio {
                 self.tabs[i].active_cmd = Some(Box::new(subtract));
             }
 
+            // SECTIONCULL — erase what lies outside a section object.
+            "SECTIONCULL" => {
+                return Some(self.section_cull());
+            }
+
             // INTERFERE — non-destructive intersect: solid from the overlap.
             "INTERFERE" => {
                 return Some(self.solid_interfere());
@@ -2317,6 +2326,9 @@ impl OpenCADStudio {
                         self.tabs[i].scene.erase_entities(&sources);
                         self.refresh_properties();
                     }
+                    // The command consumes the selection, kept sources included.
+                    self.tabs[i].scene.deselect_all();
+                    self.refresh_properties();
                     self.tabs[i].dirty = true;
                     self.command_line
                         .push_output(crate::tf!("REGION: created {count} region(s).").as_ref());
@@ -2553,16 +2565,34 @@ impl OpenCADStudio {
                                 Some(
                                     codec::EntityType::Solid3D(_)
                                         | codec::EntityType::Surface(_)
+                                        | codec::EntityType::Mesh(_)
+                                        | codec::EntityType::PolygonMesh(_)
+                                        | codec::EntityType::PolyfaceMesh(_)
                                 )
                             )
                         })
                         .collect::<Vec<_>>();
                     scene.restore_solid_models(&targets);
-                    targets.retain(|handle| scene.solid_models.contains_key(handle));
+                    let mesh_extent = |handle: &codec::Handle| {
+                        let entity = scene.document.get_entity(*handle)?;
+                        let (vertices, _) = crate::entities::mesh::mesh_polygons(entity)?;
+                        vertices.iter().fold(None, |bounds, point| {
+                            let (mut min, mut max) = bounds.unwrap_or((*point, *point));
+                            for axis in 0..3 {
+                                min[axis] = f64::min(min[axis], point[axis]);
+                                max[axis] = f64::max(max[axis], point[axis]);
+                            }
+                            Some((min, max))
+                        })
+                    };
+                    targets.retain(|handle| {
+                        scene.solid_models.contains_key(handle) || mesh_extent(handle).is_some()
+                    });
                     let bounds = targets
                         .iter()
-                        .filter_map(|handle| {
-                            crate::scene::model::solid_model::extent(&scene.solid_models[handle])
+                        .filter_map(|handle| match scene.solid_models.get(handle) {
+                            Some(body) => crate::scene::model::solid_model::extent(body),
+                            None => mesh_extent(handle),
                         })
                         .fold(None::<([f64; 3], [f64; 3])>, |bounds, (low, high)| {
                             Some(match bounds {

@@ -354,6 +354,50 @@ impl CadCommand for ValuePromptCommand {
     }
 }
 
+/// One-value prompt that preserves spaces and letter casing. This is intended
+/// for symbol names entered through the command line, where a space belongs to
+/// the value instead of submitting the current token.
+pub struct FreeTextValuePromptCommand {
+    name: &'static str,
+    prompt: &'static str,
+}
+
+impl FreeTextValuePromptCommand {
+    pub fn new(name: &'static str, prompt: &'static str) -> Self {
+        Self { name, prompt }
+    }
+}
+
+impl CadCommand for FreeTextValuePromptCommand {
+    fn name(&self) -> &'static str {
+        self.name
+    }
+
+    fn prompt(&self) -> String {
+        crate::t!(self.prompt).into_owned()
+    }
+
+    fn input_kind(&self) -> InputKind {
+        InputKind::FreeText
+    }
+
+    fn on_text_input(&mut self, text: &str) -> Option<CmdResult> {
+        Some(CmdResult::Dispatch(format!(
+            "{} {}",
+            self.name,
+            text.trim()
+        )))
+    }
+
+    fn on_point(&mut self, _pt: DVec3) -> CmdResult {
+        CmdResult::NeedPoint
+    }
+
+    fn on_enter(&mut self) -> CmdResult {
+        CmdResult::Dispatch(format!("{} ", self.name))
+    }
+}
+
 /// Interactive pick for `UCS FACE` and `UCS OBJECT`.
 ///
 /// Hands the picked entity to the inline `UCS FACE <handle> <x,y,z>` /
@@ -734,6 +778,8 @@ impl CadCommand for KeywordCommand {
             // Consumed inputs that keep prompting return `Some(NeedPoint)` —
             // `None` would hand the same text to the command a second time.
             None => {
+                // A leading underscore marks the English keyword, as in scripts.
+                let t = t.strip_prefix('_').unwrap_or(t);
                 let Some((_, keyword, value_prompt)) = match_cmd_option(&self.options, t) else {
                     // Unknown verb — keep prompting rather than dispatch garbage.
                     return Some(CmdResult::NeedPoint);
@@ -1468,6 +1514,12 @@ impl DimensionPreview {
 /// Returned by every `CadCommand` method to tell main.rs what to do.
 #[allow(dead_code)]
 pub enum CmdResult {
+    /// Return the suspended filter after a read-only sample pick or cancellation.
+    QSelectSample {
+        state: Box<crate::app::QSelectState>,
+        tab_id: u64,
+        handle: Option<Handle>,
+    },
     /// Command is still waiting for the next point; show updated prompt.
     NeedPoint,
     /// Update the committed-segment wire (normal colour) and keep collecting points.
@@ -1569,6 +1621,11 @@ pub enum CmdResult {
     },
     /// Copy selected entities with multiple transforms (e.g. rectangular array); end command.
     BatchCopy(Vec<Handle>, Vec<EntityTransform>),
+    /// Turn the objects into an associative array; end command.
+    AssocArray {
+        handles: Vec<Handle>,
+        spec: crate::scene::assoc_array::AssocArraySpec,
+    },
     /// Erase `handle` and replace with new entities; command stays active.
     ReplaceEntity(Handle, Vec<EntityType>),
     /// XCLIP on block references; ends the command.
@@ -1883,12 +1940,33 @@ pub enum CmdResult {
     PasteClipboard {
         base_pt: DVec3,
     },
+    /// Set the view's twist about its line of sight (radians,
+    /// counter-clockwise); the command stays active.
+    TwistView(f64),
     /// Zoom the model-space camera to fit the given corner points; end command.
     ZoomToWindow {
         p1: DVec3,
         p2: DVec3,
     },
-    /// Print a measurement result to the command line and end the command.
+    /// Zoom to the given corner points; the command stays active.
+    Show {
+        p1: DVec3,
+        p2: DVec3,
+    },
+    /// Commit `entity`, then zoom to the given corner points; end command.
+    CommitAndZoom {
+        entity: EntityType,
+        p1: DVec3,
+        p2: DVec3,
+    },
+    /// Scale the given layout viewports to `factor` paper units per model
+    /// unit; end command.
+    ScaleViewports {
+        handles: Vec<Handle>,
+        factor: f64,
+    },
+    /// Print a measurement result to the command line and end the command
+    /// (an empty one ends it silently).
     Measurement(String),
     /// Print a measurement result and keep the command active.
     ReportMeasurement(String),
@@ -2092,6 +2170,9 @@ pub enum CmdResult {
         handles: Vec<Handle>,
         axis_start: glam::DVec3,
         axis_end: glam::DVec3,
+        /// The line picked as the axis (Object), which an associative
+        /// surface keeps reading.
+        axis_object: Option<Handle>,
         angle: f64,
         start_angle: f64,
         mode: ExtrudeMode,
@@ -2430,6 +2511,32 @@ pub struct PointPickContext {
     pub aperture_px: f32,
 }
 
+/// One context-sensitive command-line autocomplete entry.
+///
+/// Normal command-name autocomplete only needs `value`. Interactive commands
+/// may optionally attach CAD display metadata, allowing the shared suggestion
+/// popup to render richer rows without knowing which command supplied them.
+#[derive(Clone, Debug)]
+pub struct CommandSuggestion {
+    pub value: String,
+    pub color: Option<codec::types::Color>,
+    pub visible: Option<bool>,
+    pub frozen: Option<bool>,
+    pub locked: Option<bool>,
+}
+
+impl CommandSuggestion {
+    pub fn plain(value: impl Into<String>) -> Self {
+        Self {
+            value: value.into(),
+            color: None,
+            visible: None,
+            frozen: None,
+            locked: None,
+        }
+    }
+}
+
 pub trait CadCommand: Send {
     /// Preserve source appearance for commands that extract existing entities.
     fn preserve_commit_style(&self) -> bool {
@@ -2469,6 +2576,15 @@ pub trait CadCommand: Send {
     /// sorting.
     fn on_live_input(&mut self, _input: &str) -> bool {
         false
+    }
+
+    /// Context-sensitive autocomplete entries for the command line while this
+    /// command is active. Unlike normal command-name completion these entries
+    /// may be drawing data such as layer, block or style names.
+    ///
+    /// Commands that do not provide contextual completion leave this empty.
+    fn text_suggestions(&self, _input: &str) -> Vec<CommandSuggestion> {
+        Vec::new()
     }
 
     /// Push the active coordinate frame in full precision. Geometry commands
@@ -2903,6 +3019,12 @@ pub trait CadCommand: Send {
         false
     }
 
+    /// The kinds of object the command takes (ADJUST): the host drops the
+    /// rest of each completed selection without a word.
+    fn selection_entity_filter(&self) -> Option<fn(&EntityType) -> bool> {
+        None
+    }
+
     /// The command takes block references only (XCLIP): the host drops the
     /// rest and says how many were ineligible.
     fn selection_keeps_block_references(&self) -> bool {
@@ -2996,6 +3118,11 @@ pub trait CadCommand: Send {
     ) -> Option<codec::EntityType> {
         None
     }
+
+    /// Supply the referenced block's insertion base point so the attributes
+    /// the command now owns are placed through the same base-point convention
+    /// as the render path. Default: no-op (no base point).
+    fn attreq_set_block_base(&mut self, _base: codec::types::Vector3) {}
 
     /// After the host commits an ATTREQ insert: keep the command running
     /// (repeated placement) instead of ending it.

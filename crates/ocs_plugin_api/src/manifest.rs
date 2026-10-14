@@ -21,17 +21,15 @@
 /// adds the `BuiltinPlugin::on_load` lifecycle callback and
 /// `HostApi::document_path`. v6 appends generic host system-variable access
 /// (`HostApi::system_variable` / `set_system_variable`). v7 appends atomic,
-/// undoable replacement of a set of existing entities.
+/// undoable replacement of a set of existing entities. v8 appends name-addressed
+/// XRecord object CRUD under named-object-dictionary paths
+/// (`HostApi::create_xrecord` / `read_xrecord` / `update_xrecord` /
+/// `delete_xrecord` / `list_xrecords`).
 ///
-/// fork: `API_VERSION` follows upstream. The fork's OCSMechanical surface
-/// (`selected_handles`, `set_current_layer`, `ensure_layers`, `ensure_linetypes`,
-/// `ensure_text_styles`, `ensure_dim_styles`, `show_frame_picker`,
-/// `take_pending_frame_selection`, `import_frame_block`, `add_block_record`,
-/// `begin_undo` / `commit_undo`, the interactive-command hooks and
-/// `CommandStep::Ignored`) is appended **after** the v6/v7 entries, so the
-/// vtable prefix stays compatible with plugins built against upstream alone.
-/// See `docs/fork-patches.md` §A-1.
-pub const API_VERSION: u32 = 7;
+/// Fork compatibility: OCSMechanical-only methods and IPC variants are appended
+/// after the upstream v8 prefix. Fork plugins must be rebuilt with this API; the
+/// upstream ABI/protocol prefix remains stable.
+pub const API_VERSION: u32 = 8;
 
 /// Oldest plugin API major the current host still loads. This keeps previously
 /// compiled cdylibs usable as long as their vtable layout is a prefix of the
@@ -41,8 +39,8 @@ pub const API_VERSION: u32 = 7;
 pub const API_VERSION_MIN_SUPPORTED: u32 = 3;
 
 /// Environment variable that caps the API major accepted by the host at
-/// runtime. Set to `6` to disable V7 plugins, `5` to disable V6, `4` to
-/// disable V5, or `3` for V3-only mode.
+/// runtime. Set to `7` to disable V8 plugins, `6` to disable V7, `5` to
+/// disable V6, `4` to disable V5, or `3` for V3-only mode.
 pub const MAX_API_VERSION_ENV: &str = "OCS_PLUGIN_MAX_API_VERSION";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

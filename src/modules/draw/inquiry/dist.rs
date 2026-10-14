@@ -1,7 +1,7 @@
 // DIST command — measure distance and angle between two picked points.
 
-use glam::DVec3;
 use crate::t;
+use glam::DVec3;
 
 use crate::command::{CadCommand, CmdResult, WorkingPlane};
 use crate::entities::common::{format_length, unit_context, without_negative_zero};
@@ -14,8 +14,7 @@ pub struct DistCommand {
     first: Option<DVec3>,
     plane: WorkingPlane,
 }
-pub const ICON: IconKind =
-    IconKind::Svg(include_bytes!("../../../../assets/icons/measure.svg"));
+pub const ICON: IconKind = IconKind::Svg(include_bytes!("../../../../assets/icons/measure.svg"));
 impl DistCommand {
     pub fn new() -> Self {
         Self {
@@ -50,8 +49,12 @@ impl CadCommand for DistCommand {
             let dy = delta.y;
             let dz = delta.z;
 
-            // Angle in XY plane — degrees from +X
-            let angle_xy = dy.atan2(dx).to_degrees();
+            // Angle in XY plane — a direction, so counted from ANGBASE the
+            // way ANGDIR runs, like every other direction the drawing shows.
+            let ctx = unit_context();
+            let sign = if ctx.angdir_cw { -1.0 } else { 1.0 };
+            let turn = std::f64::consts::TAU;
+            let angle_xy = (sign * (dy.atan2(dx) - ctx.angbase)).rem_euclid(turn).to_degrees();
             // Angle from XY plane toward Z (elevation angle)
             let dist_xy = dx.hypot(dy);
             let angle_z = dz.atan2(dist_xy).to_degrees();
@@ -124,15 +127,14 @@ impl CadCommand for DistCommand {
             plinegen: true,
             fill_tris: vec![],
             fill_tris_low: Vec::new(),
-        
+
             ..Default::default()
-})
+        })
     }
 }
 
-
 // ── Autocomplete registry ─────────────────────────────────
-inventory::submit!(crate::command::CommandRegistration { names: &["DIST"] });  // DistCommand
+inventory::submit!(crate::command::CommandRegistration { names: &["DIST"] }); // DistCommand
 
 #[cfg(test)]
 mod tests {
@@ -152,15 +154,33 @@ mod tests {
             angdir_cw: false,
         });
 
-        assert!(matches!(cmd.on_point(DVec3::new(0.0, 0.0, 0.0)), CmdResult::NeedPoint));
+        assert!(matches!(
+            cmd.on_point(DVec3::new(0.0, 0.0, 0.0)),
+            CmdResult::NeedPoint
+        ));
         let res = cmd.on_point(DVec3::new(10.0, 0.0, 0.0));
         match res {
             CmdResult::Measurement(msg) => {
-                assert!(msg.contains("Distance = 10"), "Expected 'Distance = 10' in '{msg}'");
-                assert!(msg.contains("Delta X = 10"), "Expected 'Delta X = 10' in '{msg}'");
-                assert!(msg.contains("Delta Y = 0"), "Expected 'Delta Y = 0' in '{msg}'");
-                assert!(msg.contains("Delta Z = 0"), "Expected 'Delta Z = 0' in '{msg}'");
-                assert!(msg.contains("Angle in XY Plane = 0°"), "Expected 'Angle in XY Plane = 0°' in '{msg}'");
+                assert!(
+                    msg.contains("Distance = 10"),
+                    "Expected 'Distance = 10' in '{msg}'"
+                );
+                assert!(
+                    msg.contains("Delta X = 10"),
+                    "Expected 'Delta X = 10' in '{msg}'"
+                );
+                assert!(
+                    msg.contains("Delta Y = 0"),
+                    "Expected 'Delta Y = 0' in '{msg}'"
+                );
+                assert!(
+                    msg.contains("Delta Z = 0"),
+                    "Expected 'Delta Z = 0' in '{msg}'"
+                );
+                assert!(
+                    msg.contains("Angle in XY Plane = 0°"),
+                    "Expected 'Angle in XY Plane = 0°' in '{msg}'"
+                );
             }
             _ => panic!("Expected CmdResult::Measurement"),
         }
@@ -178,14 +198,29 @@ mod tests {
             angdir_cw: false,
         });
 
-        assert!(matches!(cmd.on_point(DVec3::new(0.0, 0.0, 0.0)), CmdResult::NeedPoint));
+        assert!(matches!(
+            cmd.on_point(DVec3::new(0.0, 0.0, 0.0)),
+            CmdResult::NeedPoint
+        ));
         let res = cmd.on_point(DVec3::new(10.0, 5.0, 0.0));
         match res {
             CmdResult::Measurement(msg) => {
-                assert!(msg.contains("Distance = 11.1803"), "Expected 'Distance = 11.1803' in '{msg}'");
-                assert!(msg.contains("Delta X = 10.0000"), "Expected 'Delta X = 10.0000' in '{msg}'");
-                assert!(msg.contains("Delta Y = 5.0000"), "Expected 'Delta Y = 5.0000' in '{msg}'");
-                assert!(msg.contains("Angle in XY Plane = 26.57°"), "Expected 'Angle in XY Plane = 26.57°' in '{msg}'");
+                assert!(
+                    msg.contains("Distance = 11.1803"),
+                    "Expected 'Distance = 11.1803' in '{msg}'"
+                );
+                assert!(
+                    msg.contains("Delta X = 10.0000"),
+                    "Expected 'Delta X = 10.0000' in '{msg}'"
+                );
+                assert!(
+                    msg.contains("Delta Y = 5.0000"),
+                    "Expected 'Delta Y = 5.0000' in '{msg}'"
+                );
+                assert!(
+                    msg.contains("Angle in XY Plane = 26.57°"),
+                    "Expected 'Angle in XY Plane = 26.57°' in '{msg}'"
+                );
             }
             _ => panic!("Expected CmdResult::Measurement"),
         }
@@ -203,7 +238,10 @@ mod tests {
             angdir_cw: false,
         });
 
-        assert!(matches!(cmd.on_point(DVec3::new(0.0, 0.0, 0.0)), CmdResult::NeedPoint));
+        assert!(matches!(
+            cmd.on_point(DVec3::new(0.0, 0.0, 0.0)),
+            CmdResult::NeedPoint
+        ));
         let res = cmd.on_point(DVec3::new(18.0, 0.0, 0.0));
         match res {
             CmdResult::Measurement(msg) => {

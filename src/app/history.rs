@@ -152,7 +152,7 @@ impl OpenCADStudio {
         defer_history_drop(discarded);
     }
 
-    fn push_undo_entry(&mut self, i: usize, snapshot: HistorySnapshot) {
+    pub(super) fn push_undo_entry(&mut self, i: usize, snapshot: HistorySnapshot) {
         self.tabs[i].history.undo_stack.push(snapshot);
         self.tabs[i].edit_revision = self.tabs[i].edit_revision.wrapping_add(1);
         self.clear_redo_history(i);
@@ -283,6 +283,7 @@ impl OpenCADStudio {
             return;
         };
         self.tabs[i].scene.document.end_entity_change_recording();
+        self.reconcile_block_edit_membership(i);
         let structure_after = self.tabs[i].scene.document.snapshot_structure();
         let before_images = pending.recorder.take_before_images();
         let added_handles: Vec<Handle> = before_images
@@ -292,11 +293,25 @@ impl OpenCADStudio {
                     .then_some(*handle)
             })
             .collect();
+        let block_members = self.tabs[i]
+            .active_block_edit_session()
+            .and_then(|session| {
+                pending
+                    .structure_before
+                    .block_records
+                    .get(&session.block_name)
+                    .map(|record| (session.block_name.clone(), record.entity_handles.clone()))
+            });
         codec::CadDocument::align_added_entity_structure(
             &mut pending.structure_before,
             &structure_after,
             &added_handles,
         );
+        if let Some((name, members)) = block_members {
+            if let Some(record) = pending.structure_before.block_records.get_mut(&name) {
+                record.entity_handles = members;
+            }
+        }
         let structure_changed = pending.structure_before != structure_after;
         let entities: Vec<_> = before_images
             .into_iter()
@@ -439,8 +454,8 @@ impl OpenCADStudio {
     ) -> Option<PendingDelta> {
         self.finish_pending_history(i);
         let label = label.into();
-        let structure_before =
-            (!delta_safe).then(|| self.tabs[i].scene.document.snapshot_structure());
+        let structure_before = (!delta_safe || self.tabs[i].active_block_edit.is_some())
+            .then(|| self.tabs[i].scene.document.snapshot_structure());
         self.tabs[i].scene.begin_undo_recording();
         Some(PendingDelta {
             label,
@@ -777,6 +792,7 @@ impl OpenCADStudio {
         let Some(rec) = self.tabs[i].scene.take_undo_recording() else {
             return;
         };
+        self.reconcile_block_edit_membership(i);
         // The predicate should have kept the command entity-only; if a primitive
         // still poisoned the recording we've already mutated and the pre-command
         // full state is gone, so the entity delta is the best we can do (its
@@ -850,6 +866,16 @@ impl OpenCADStudio {
         let mut structure = pending.structure_before.map(StructureSnapshot::Full);
         if let Some(before_structure) = structure.as_mut() {
             if let StructureSnapshot::Full(before_structure) = before_structure {
+                let block_members = self.tabs[i]
+                    .active_block_edit_session()
+                    .and_then(|session| {
+                        before_structure
+                            .block_records
+                            .get(&session.block_name)
+                            .map(|record| {
+                                (session.block_name.clone(), record.entity_handles.clone())
+                            })
+                    });
                 let after_structure = self.tabs[i].scene.document.snapshot_structure();
                 let added_handles: Vec<Handle> = entities
                     .iter()
@@ -862,6 +888,11 @@ impl OpenCADStudio {
                     &after_structure,
                     &added_handles,
                 );
+                if let Some((name, members)) = block_members {
+                    if let Some(record) = before_structure.block_records.get_mut(&name) {
+                        record.entity_handles = members;
+                    }
+                }
                 if *before_structure == after_structure {
                     structure = None;
                 }
@@ -985,20 +1016,18 @@ impl OpenCADStudio {
                         // Either direction can add/remove a layout: undoing
                         // an insert removes it (`before` is `None`), redoing
                         // re-inserts it — so both sides must be inspected.
-                        layout_touched |= matches!(
-                            entry.before,
-                            Some(codec::objects::ObjectType::Layout(_))
-                        ) || matches!(
-                            entry.after,
-                            Some(codec::objects::ObjectType::Layout(_))
-                        );
-                        scale_touched |= matches!(
-                            entry.before,
-                            Some(codec::objects::ObjectType::Scale(_))
-                        ) || matches!(
-                            entry.after,
-                            Some(codec::objects::ObjectType::Scale(_))
-                        );
+                        layout_touched |=
+                            matches!(entry.before, Some(codec::objects::ObjectType::Layout(_)))
+                                || matches!(
+                                    entry.after,
+                                    Some(codec::objects::ObjectType::Layout(_))
+                                );
+                        scale_touched |=
+                            matches!(entry.before, Some(codec::objects::ObjectType::Scale(_)))
+                                || matches!(
+                                    entry.after,
+                                    Some(codec::objects::ObjectType::Scale(_))
+                                );
                         if let Some(object) = value {
                             self.tabs[i]
                                 .scene
@@ -1043,6 +1072,20 @@ impl OpenCADStudio {
             scene.bump_constraints_epoch();
         }
         for entry in &d.parametric_constraints {
+            if let crate::scene::parametric_constraints::ParametricScope::Block(owner) = entry.scope
+            {
+                if !scene
+                    .document
+                    .block_records
+                    .iter()
+                    .any(|record| record.handle == owner)
+                {
+                    scene
+                        .parametric_constraints
+                        .retain(|set| set.scope != entry.scope);
+                    continue;
+                }
+            }
             let value = if undo { &entry.before } else { &entry.after };
             *scene.parametric_constraint_set_mut(entry.scope) = value.clone();
         }
@@ -1120,6 +1163,7 @@ impl OpenCADStudio {
         i: usize,
         had_full: bool,
         layer_panel_changed: bool,
+        native_graph_changed: bool,
         changes: &[(Handle, crate::scene::ChangeKind)],
     ) {
         self.tabs[i].edit_revision = self.tabs[i].edit_revision.wrapping_add(1);
@@ -1167,7 +1211,11 @@ impl OpenCADStudio {
                     }
                 }
             }
-            scene.sync_native_parametric_graph();
+            // Geometry or visibility replay does not change the constraint
+            // model. Rebuilding its graph would replace imported networks.
+            if native_graph_changed {
+                scene.sync_native_parametric_graph();
+            }
             scene.clear_preview_wire();
         }
         // UCS state is cached separately from its persisted header/viewport
@@ -1210,14 +1258,18 @@ impl OpenCADStudio {
         let mut last_label = String::new();
         let mut had_full = false;
         let mut layer_panel_changed = false;
+        let mut native_graph_changed = false;
         let mut changes = Vec::new();
         for _ in 0..steps {
             let Some(snapshot) = self.tabs[i].history.undo_stack.pop() else {
                 break;
             };
             last_label = snapshot.label().to_string();
+            let step_label = last_label.clone();
             match snapshot {
                 HistorySnapshot::Delta(mut d) => {
+                    native_graph_changed |=
+                        !d.parametric_constraints.is_empty() || d.named_parameters.is_some();
                     // Symmetric: undo applies the before side, then the same
                     // delta rides to the redo stack (it still holds the after
                     // side) — no current-state capture needed.
@@ -1250,8 +1302,15 @@ impl OpenCADStudio {
                         .push(HistorySnapshot::ObjectVisibility(v));
                 }
             }
+            self.refedit_after_history_step(i, &step_label, true);
         }
-        self.finish_history_apply(i, had_full, layer_panel_changed, &changes);
+        self.finish_history_apply(
+            i,
+            had_full,
+            layer_panel_changed,
+            native_graph_changed,
+            &changes,
+        );
         self.command_line
             .push_output(crate::tf!("Undo: {last_label}").as_ref());
     }
@@ -1270,14 +1329,18 @@ impl OpenCADStudio {
         let mut last_label = String::new();
         let mut had_full = false;
         let mut layer_panel_changed = false;
+        let mut native_graph_changed = false;
         let mut changes = Vec::new();
         for _ in 0..steps {
             let Some(snapshot) = self.tabs[i].history.redo_stack.pop() else {
                 break;
             };
             last_label = snapshot.label().to_string();
+            let step_label = last_label.clone();
             match snapshot {
                 HistorySnapshot::Delta(mut d) => {
+                    native_graph_changed |=
+                        !d.parametric_constraints.is_empty() || d.named_parameters.is_some();
                     layer_panel_changed |= d.structure.as_ref().is_some_and(|structure| {
                         matches!(
                             structure,
@@ -1307,8 +1370,15 @@ impl OpenCADStudio {
                         .push(HistorySnapshot::ObjectVisibility(v));
                 }
             }
+            self.refedit_after_history_step(i, &step_label, false);
         }
-        self.finish_history_apply(i, had_full, layer_panel_changed, &changes);
+        self.finish_history_apply(
+            i,
+            had_full,
+            layer_panel_changed,
+            native_graph_changed,
+            &changes,
+        );
         self.command_line
             .push_output(crate::tf!("Redo: {last_label}").as_ref());
     }

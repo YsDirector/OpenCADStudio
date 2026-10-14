@@ -8,9 +8,9 @@
 // Single-object commands (e.g. LAYMCUR) use `instant()` instead: the first
 // completed selection action fires straight away, no Enter required.
 
+use crate::t;
 use codec::Handle;
 use glam::DVec3;
-use crate::t;
 
 use crate::command::{CadCommand, CmdOption, CmdResult};
 use crate::modules::draw::fence::FencePick;
@@ -41,6 +41,9 @@ pub struct SelectObjectsCommand {
     /// The command works on associative dimensions only; the host drops
     /// everything else from each completed selection.
     associative_dimensions_only: bool,
+    /// The kinds of object the command takes; the host drops the rest of
+    /// each completed selection silently, and Enter on nothing ends quietly.
+    keep: Option<fn(&codec::EntityType) -> bool>,
 }
 
 impl SelectObjectsCommand {
@@ -57,6 +60,7 @@ impl SelectObjectsCommand {
             auto_constrain_settings: false,
             prompt_text: None,
             associative_dimensions_only: false,
+            keep: None,
         }
     }
 
@@ -74,6 +78,7 @@ impl SelectObjectsCommand {
             auto_constrain_settings: false,
             prompt_text: None,
             associative_dimensions_only: false,
+            keep: None,
         }
     }
 
@@ -91,6 +96,7 @@ impl SelectObjectsCommand {
             auto_constrain_settings: false,
             prompt_text: None,
             associative_dimensions_only: false,
+            keep: None,
         }
     }
 
@@ -108,6 +114,7 @@ impl SelectObjectsCommand {
             auto_constrain_settings: false,
             prompt_text: None,
             associative_dimensions_only: false,
+            keep: None,
         }
     }
 
@@ -128,6 +135,18 @@ impl SelectObjectsCommand {
     pub fn with_prompt(prompt_cmd: &str, pending_cmd: &str, prompt_text: &'static str) -> Self {
         let mut command = Self::plain(prompt_cmd, pending_cmd);
         command.prompt_text = Some(prompt_text);
+        command
+    }
+
+    /// The command's own wording, keeping only what `keep` accepts.
+    pub fn filtered(
+        prompt_cmd: &str,
+        pending_cmd: &str,
+        prompt_text: &'static str,
+        keep: fn(&codec::EntityType) -> bool,
+    ) -> Self {
+        let mut command = Self::with_prompt(prompt_cmd, pending_cmd, prompt_text);
+        command.keep = Some(keep);
         command
     }
 
@@ -201,6 +220,10 @@ impl CadCommand for SelectObjectsCommand {
 
     fn selection_keeps_associative_dimensions(&self) -> bool {
         self.associative_dimensions_only
+    }
+
+    fn selection_entity_filter(&self) -> Option<fn(&codec::EntityType) -> bool> {
+        self.keep
     }
 
     fn selection_drops_locked_point_clouds(&self) -> bool {
@@ -320,6 +343,9 @@ impl CadCommand for SelectObjectsCommand {
             }
             return CmdResult::NeedPoint;
         }
+        if self.keep.is_some() && self.handles.is_empty() {
+            return CmdResult::Relaunch(std::mem::take(&mut self.pending_cmd), Vec::new());
+        }
         if !self.commit_on_enter || self.handles.is_empty() {
             return CmdResult::Cancel;
         }
@@ -337,6 +363,30 @@ impl CadCommand for SelectObjectsCommand {
     }
 }
 
-
 // ── Autocomplete registry ─────────────────────────────────
-inventory::submit!(crate::command::CommandRegistration { names: &["ARRAY", "ARRAYPATH", "ARRAYPOLAR", "ARRAYRECT", "BLOCK", "COPY", "COPYCLIP", "CUTCLIP", "ERASE", "EXPLODE", "GROUP", "LAYFRZ", "LAYLCK", "LAYMCUR", "LAYOFF", "LAYULK", "MIRROR", "MOVE", "ROTATE", "SCALE", "STRETCH"] });  // SelectObjectsCommand
+inventory::submit!(crate::command::CommandRegistration {
+    names: &[
+        "ARRAY",
+        "ARRAYPATH",
+        "ARRAYPOLAR",
+        "ARRAYRECT",
+        "BLOCK",
+        "COPY",
+        "COPYCLIP",
+        "CUTCLIP",
+        "ERASE",
+        "EXPLODE",
+        "GROUP",
+        "LAYFRZ",
+        "LAYLCK",
+        "LAYMCUR",
+        "LAYOFF",
+        "LAYULK",
+        "MIRROR",
+        "MOVE",
+        "ROTATE",
+        "SCALE",
+        "STRETCH",
+        "TXTEXP"
+    ]
+}); // SelectObjectsCommand

@@ -543,7 +543,9 @@ LC_ALL=C cargo test -p OpenCADStudio --lib \
   `entity_pick_applies_osnap`。
 - **IPC**：`PluginRequest/PluginResponse` **末尾追加**变体（bincode discriminant 稳定）；
   类型：`LayerDef`/`LinetypeDef`/`TextStyleDef`/`DimStyleDef`/`FrameItem`/`FrameSelection`/
-  `ImportFrameBlockRequest`。
+  `ImportFrameBlockRequest`。交互事件保留上游两字段 `ObjectPick { handle, pt }` 的 wire 形状，
+  OSNAP 信息通过末尾追加的 `InteractiveEvent::ObjectPickSnapped` 传输；不要给旧变体直接加字段，
+  否则 API v3–v7 的 bincode 帧无法解码。
 - **`DimStyleDef` 类型专属 DIMVAR 补全（2026-09-23）**：`host.rs` 追加 `dimlfac`（线性比例，144）、
   `dimtfac`（公差字高，146）、`dimazin`（角度消零，79）、`dimfrac`（角度小数制，276）、
   `dimtmove`（文字移动，279）；默认值 1.0 / 1.0 / 0 / 0 / 0。

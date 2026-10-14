@@ -9,7 +9,7 @@ use super::widgets::{
     make_icon, make_tip, muted_text_style, popup_panel_style, popup_row_style, tip_style,
     tool_btn_style, LARGE_DROPDOWN_ARROW_SIZE,
 };
-use super::{dropdown_backdrop, position_ribbon_dropdown, Ribbon};
+use super::{dropdown_backdrop, keytips, position_ribbon_dropdown, Ribbon};
 use crate::app::Message;
 use crate::modules::IconKind;
 use crate::t;
@@ -125,21 +125,50 @@ const REFERENCE_TOOLS: &[Tool] = &[Tool {
 pub(super) const REFERENCE_PANEL_ID: &str = "reference_extension";
 
 const fn icon_tool(command: &'static str, label: &'static str, icon: &'static [u8]) -> Tool {
-    Tool { command, label, icon, options: &[] }
+    Tool {
+        command,
+        label,
+        icon,
+        options: &[],
+    }
 }
 
 /// Home > Block slide-out.
 const HOME_BLOCK_TOOLS: &[Tool] = &[
-    icon_tool("ATTDEF", "Define Attributes", include_bytes!("../../../assets/icons/attdef.svg")),
-    icon_tool("ATTMAN", "Manage Attributes", include_bytes!("../../../assets/icons/attman.svg")),
-    icon_tool("ATTSYNC", "Synchronize", include_bytes!("../../../assets/icons/attsync.svg")),
-    icon_tool("BASE", "Set Base Point", include_bytes!("../../../assets/icons/base_point.svg")),
+    icon_tool(
+        "ATTDEF",
+        "Define Attributes",
+        include_bytes!("../../../assets/icons/attdef.svg"),
+    ),
+    icon_tool(
+        "ATTMAN",
+        "Manage Attributes",
+        include_bytes!("../../../assets/icons/attman.svg"),
+    ),
+    icon_tool(
+        "ATTSYNC",
+        "Synchronize",
+        include_bytes!("../../../assets/icons/attsync.svg"),
+    ),
+    icon_tool(
+        "BASE",
+        "Set Base Point",
+        include_bytes!("../../../assets/icons/base_point.svg"),
+    ),
 ];
 
 /// Insert > Block Definition slide-out.
 const BLOCK_DEFINITION_TOOLS: &[Tool] = &[
-    icon_tool("BASE", "Set Base Point", include_bytes!("../../../assets/icons/base_point.svg")),
-    icon_tool("ATTSYNC", "Synchronize", include_bytes!("../../../assets/icons/attsync.svg")),
+    icon_tool(
+        "BASE",
+        "Set Base Point",
+        include_bytes!("../../../assets/icons/base_point.svg"),
+    ),
+    icon_tool(
+        "ATTSYNC",
+        "Synchronize",
+        include_bytes!("../../../assets/icons/attsync.svg"),
+    ),
 ];
 
 const PANELS: &[Panel] = &[
@@ -213,8 +242,36 @@ fn panel_for_group(title: &str, group_ids: &[&'static str]) -> Option<Panel> {
     PANELS.iter().copied().find(|panel| {
         panel.title == title
             && !panel.tools.is_empty()
-            && panel.anchor.is_none_or(|anchor| group_ids.contains(&anchor))
+            && panel
+                .anchor
+                .is_none_or(|anchor| group_ids.contains(&anchor))
     })
+}
+
+/// The slide-out under the group `title`, if it has one.
+pub(super) fn slide_out_id(title: &str, group_ids: &[&'static str]) -> Option<&'static str> {
+    panel_for_group(title, group_ids).map(|panel| panel.id)
+}
+
+/// What the open slide-out or tool submenu `id` offers, as (dropdown id,
+/// command, opens a submenu) in display order.
+pub(super) fn keytip_items(id: &str) -> Vec<(&'static str, &'static str, bool)> {
+    let Some(panel) = panel_for_dropdown(id) else {
+        return Vec::new();
+    };
+    if panel.id == id {
+        return panel
+            .tools
+            .iter()
+            .map(|tool| (panel.id, tool.command, !tool.options.is_empty()))
+            .collect();
+    }
+    panel
+        .tools
+        .iter()
+        .filter(|tool| tool.command == id)
+        .flat_map(|tool| tool.options.iter().map(|(cmd, _)| (tool.command, *cmd, false)))
+        .collect()
 }
 
 /// Every command the slide-out of the group `title` offers: each tool and
@@ -252,7 +309,11 @@ pub(super) fn group_title<'a>(
     let expanded = open.as_deref().and_then(parent_panel) == Some(panel.id);
     // A command running from the closed slide-out lights its title, the way a
     // dropdown lights while one of its items runs.
-    let lit = expanded || panel.tools.iter().any(|tool| tool_is_active(tool, active_tool));
+    let lit = expanded
+        || panel
+            .tools
+            .iter()
+            .any(|tool| tool_is_active(tool, active_tool));
     let arrow = if expanded {
         icons::themed_arrow_up(GROUP_TITLE_ARROW_SIZE)
     } else {
@@ -276,7 +337,8 @@ pub(super) fn group_title<'a>(
     if panel.id != REFERENCE_PANEL_ID {
         return title_button;
     }
-    // The corner arrow opens the External References palette.
+    // The corner arrow opens the External References palette, or closes it
+    // when it is open.
     let launcher = tooltip(
         // A right arrow turned to point into the corner.
         button(
@@ -288,18 +350,20 @@ pub(super) fn group_title<'a>(
                     color: Some(theme.palette().background.base.text),
                 }),
         )
-        .on_press(Message::RibbonToolClick {
-            tool_id: "EXTERNALREFERENCES".to_string(),
-            event: crate::modules::ModuleEvent::Command("EXTERNALREFERENCES".to_string()),
-        })
+        .on_press(Message::ToggleXrefManager)
         .style(move |theme: &Theme, status| tool_btn_style(theme, false, status))
         .padding([0, 3]),
-        make_tip(format!("{}\n{} EXTERNALREFERENCES", t!("External References"), t!("Command:"))),
+        make_tip(format!(
+            "{}\n{} EXTERNALREFERENCES",
+            t!("External References"),
+            t!("Command:")
+        )),
         tooltip::Position::Bottom,
     )
     .delay(Duration::from_millis(400))
     .style(tip_style);
     // Shrink-sized: a Fill here would make the panel claim the whole row.
+    let launcher = keytips::anchor(keytips::XREF_LAUNCHER, launcher);
     row![title_button, launcher]
         .spacing(6)
         .align_y(iced::Center)
@@ -325,6 +389,7 @@ fn tool_button(tool: &Tool, active: bool, panel_id: &'static str) -> Element<'st
         .delay(Duration::from_millis(400))
         .style(tip_style)
         .into();
+    let face = keytips::anchor_with(|| keytips::item_anchor(panel_id, tool.command), face);
     if !tool.options.is_empty() {
         row![
             face,
@@ -364,6 +429,7 @@ fn reference_overlay<'a>(ribbon: &Ribbon, panel: Panel, win: (f32, f32)) -> Elem
     .style(popup_row_style)
     .width(Fill)
     .padding([3, 6]);
+    let edit = keytips::anchor_with(|| keytips::item_anchor(panel.id, tool.command), edit);
     let fade = ribbon.xref_fade;
     let on = fade > 0;
     let switch = button(make_icon(
@@ -374,14 +440,23 @@ fn reference_overlay<'a>(ribbon: &Ribbon, panel: Panel, win: (f32, f32)) -> Elem
     .style(move |theme: &Theme, status| tool_btn_style(theme, on, status))
     .padding(3);
     let amount = fade.unsigned_abs().min(90) as u8;
+    let switch = tooltip(
+        switch,
+        make_tip(format!(
+            "{}\n{} XDWGFADECTL",
+            t!("Xref fading"),
+            t!("Command:")
+        )),
+        tooltip::Position::Bottom,
+    )
+    .delay(Duration::from_millis(400))
+    .style(tip_style);
+    let switch = keytips::anchor_with(
+        || keytips::item_anchor(panel.id, keytips::XREF_FADE),
+        switch,
+    );
     let fading = row![
-        tooltip(
-            switch,
-            make_tip(format!("{}\n{} XDWGFADECTL", t!("Xref fading"), t!("Command:"))),
-            tooltip::Position::Bottom
-        )
-        .delay(Duration::from_millis(400))
-        .style(tip_style),
+        switch,
         text(t!("Xref fading")).size(11),
         iced::widget::slider(0..=90u8, amount, Message::XrefFadeSlide)
             .on_release(Message::XrefFadeCommit)
@@ -427,7 +502,7 @@ pub(super) fn overlay<'a>(ribbon: &Ribbon, id: &str, win: (f32, f32)) -> Element
             tool.options
                 .iter()
                 .map(|&(cmd, label)| {
-                    button(text(t!(label)).size(11))
+                    let item = button(text(t!(label)).size(11))
                         .on_press(Message::DropdownSelectItem {
                             dropdown_id: tool.command,
                             cmd,
@@ -435,8 +510,8 @@ pub(super) fn overlay<'a>(ribbon: &Ribbon, id: &str, win: (f32, f32)) -> Element
                         .style(popup_row_style)
                         .width(Fill)
                         .height(OPTION_HEIGHT)
-                        .padding([3, 7])
-                        .into()
+                        .padding([3, 7]);
+                    keytips::anchor_with(|| keytips::item_anchor(tool.command, cmd), item)
                 })
                 .collect::<Vec<Element<'static, Message>>>(),
         )

@@ -116,16 +116,18 @@ impl OpenCADStudio {
     }
 
     /// `layout_create` — add a layout with the default A4 page setup.
-    pub(super) fn control_layout_create(
-        &mut self,
-        req: &Value,
-    ) -> Result<Task<Message>, Value> {
+    pub(super) fn control_layout_create(&mut self, req: &Value) -> Result<Task<Message>, Value> {
         let name = string(req, "name")?.to_owned();
         if name.is_empty() {
             return Err(failure("name_required", "Supply a layout name"));
         }
         let i = self.active_tab;
-        if self.tabs[i].scene.layout_names().iter().any(|n| n.eq_ignore_ascii_case(&name)) {
+        if self.tabs[i]
+            .scene
+            .layout_names()
+            .iter()
+            .any(|n| n.eq_ignore_ascii_case(&name))
+        {
             return Err(failure(
                 "layout_exists",
                 format!("Layout '{name}' already exists"),
@@ -134,7 +136,6 @@ impl OpenCADStudio {
         self.push_undo_snapshot(i, "LAYOUTCREATE");
         self.tabs[i]
             .scene
-            .document
             .add_layout(&name)
             .map_err(|e| failure("layout_failed", e))?;
         let plot_style = self
@@ -142,9 +143,14 @@ impl OpenCADStudio {
             .as_ref()
             .map(|style| style.name.clone())
             .unwrap_or_default();
-        let layout_flags = i16::from(
-            self.tabs[i].scene.document.header.paper_space_linetype_scaling,
-        ) | (i16::from(self.tabs[i].scene.document.header.paper_space_limit_check) << 1);
+        let layout_flags =
+            i16::from(
+                self.tabs[i]
+                    .scene
+                    .document
+                    .header
+                    .paper_space_linetype_scaling,
+            ) | (i16::from(self.tabs[i].scene.document.header.paper_space_limit_check) << 1);
         for obj in self.tabs[i].scene.document.objects.values_mut() {
             if let codec::objects::ObjectType::Layout(layout) = obj {
                 if layout.name == name {
@@ -165,20 +171,21 @@ impl OpenCADStudio {
     /// Explicit fields win; everything else
     /// keeps the layout's stored setup. Paper names resolve through the
     /// catalog; scales are `"fit"` or `"paper:drawing"` like `"1:100"`.
-    pub(super) fn control_page_setup_set(
-        &mut self,
-        req: &Value,
-    ) -> Result<Task<Message>, Value> {
+    pub(super) fn control_page_setup_set(&mut self, req: &Value) -> Result<Task<Message>, Value> {
         let layout = string(req, "layout")?.to_owned();
         let i = self.active_tab;
-        if !self.tabs[i].scene.layout_names().iter().any(|n| n.eq_ignore_ascii_case(&layout)) {
+        if !self.tabs[i]
+            .scene
+            .layout_names()
+            .iter()
+            .any(|n| n.eq_ignore_ascii_case(&layout))
+        {
             return Err(failure(
                 "layout_missing",
                 format!("Layout '{layout}' does not exist"),
             ));
         }
-        let mut ps = self
-            .tabs[i]
+        let mut ps = self.tabs[i]
             .scene
             .plot_settings_for(&layout)
             .unwrap_or_else(|| codec::objects::PlotSettings::new(String::new()));
@@ -189,7 +196,10 @@ impl OpenCADStudio {
             let (width, height) = resolved.portrait_mm();
             ps.paper_width = width;
             ps.paper_height = height;
-            ps.rotation = if req["orientation"].as_str().is_some_and(|o| o.eq_ignore_ascii_case("portrait")) {
+            ps.rotation = if req["orientation"]
+                .as_str()
+                .is_some_and(|o| o.eq_ignore_ascii_case("portrait"))
+            {
                 codec::objects::PlotRotation::None
             } else {
                 codec::objects::PlotRotation::Degrees90
@@ -234,7 +244,10 @@ impl OpenCADStudio {
         }
         self.push_undo_snapshot(i, "PAGESETUP");
         if !self.tabs[i].scene.set_layout_plot_settings(&layout, &ps) {
-            return Err(failure("layout_missing", format!("Layout '{layout}' vanished")));
+            return Err(failure(
+                "layout_missing",
+                format!("Layout '{layout}' vanished"),
+            ));
         }
         self.tabs[i].dirty = true;
         self.set_control_result(json!({
@@ -253,10 +266,7 @@ impl OpenCADStudio {
     /// `entities_copy_to` — copy entities into another open document
     /// Referenced layer definitions travel along;
     /// the new handles are returned.
-    pub(super) fn control_entities_copy_to(
-        &mut self,
-        req: &Value,
-    ) -> Result<Task<Message>, Value> {
+    pub(super) fn control_entities_copy_to(&mut self, req: &Value) -> Result<Task<Message>, Value> {
         let handles = crate::app::control::entities::hex_handles(req, "handles")?;
         let target = req["target_document_id"]
             .as_u64()
@@ -358,13 +368,8 @@ impl OpenCADStudio {
             return Err(failure("name_required", "Supply a set name"));
         }
         let handles = crate::app::control::entities::hex_handles(req, "handles")?;
-        let stored: Vec<String> = handles
-            .iter()
-            .map(|h| format!("{:X}", h.value()))
-            .collect();
-        self.control
-            .selection_sets
-            .insert(name.clone(), handles);
+        let stored: Vec<String> = handles.iter().map(|h| format!("{:X}", h.value())).collect();
+        self.control.selection_sets.insert(name.clone(), handles);
         let count = self
             .control
             .selection_sets
@@ -388,10 +393,7 @@ impl OpenCADStudio {
             .get(&name)
             .cloned()
             .ok_or_else(|| failure("selection_set_missing", format!("No set named '{name}'")))?;
-        let stored: Vec<String> = handles
-            .iter()
-            .map(|h| format!("{:X}", h.value()))
-            .collect();
+        let stored: Vec<String> = handles.iter().map(|h| format!("{:X}", h.value())).collect();
         let select = req["select"].as_bool().unwrap_or(true);
         let mut selected = 0;
         if select {
@@ -565,8 +567,18 @@ pub(crate) fn new_guid_v4() -> String {
 
 /// The readable registry; `WRITABLE_SYSVARS` is the subset `set` accepts.
 const READABLE_SYSVARS: &[&str] = &[
-    "celtscale", "clayer", "ctextstyle", "extmax", "extmin", "filletrad",
-    "insunits", "ltscale", "mirrtext", "osmode", "pdmode", "pdsize",
+    "celtscale",
+    "clayer",
+    "ctextstyle",
+    "extmax",
+    "extmin",
+    "filletrad",
+    "insunits",
+    "ltscale",
+    "mirrtext",
+    "osmode",
+    "pdmode",
+    "pdsize",
     "textsize",
 ];
 
@@ -749,22 +761,14 @@ fn set_sysvar(document: &mut codec::CadDocument, name: &str, value: &Value) -> R
     Ok(())
 }
 
-fn positive(
-    value: &Value,
-    name: &str,
-    failure: impl Fn(&str) -> Value,
-) -> Result<f64, Value> {
+fn positive(value: &Value, name: &str, failure: impl Fn(&str) -> Value) -> Result<f64, Value> {
     value
         .as_f64()
         .filter(|v| v.is_finite() && *v > 0.0)
         .ok_or_else(|| failure(&format!("{name} needs a finite number > 0")))
 }
 
-fn integer(
-    value: &Value,
-    name: &str,
-    failure: impl Fn(&str) -> Value,
-) -> Result<i16, Value> {
+fn integer(value: &Value, name: &str, failure: impl Fn(&str) -> Value) -> Result<i16, Value> {
     value
         .as_i64()
         .and_then(|v| i16::try_from(v).ok())

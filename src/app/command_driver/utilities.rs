@@ -43,16 +43,10 @@ impl OpenCADStudio {
                     return Some(glam::DVec3::new(line.end.x, line.end.y, line.end.z));
                 }
                 codec::EntityType::Arc(_) => Some(2),
-                codec::EntityType::LwPolyline(polyline) => {
-                    polyline.vertices.len().checked_sub(1)
-                }
+                codec::EntityType::LwPolyline(polyline) => polyline.vertices.len().checked_sub(1),
                 codec::EntityType::Polyline(polyline) => polyline.vertices.len().checked_sub(1),
-                codec::EntityType::Polyline2D(polyline) => {
-                    polyline.vertices.len().checked_sub(1)
-                }
-                codec::EntityType::Polyline3D(polyline) => {
-                    polyline.vertices.len().checked_sub(1)
-                }
+                codec::EntityType::Polyline2D(polyline) => polyline.vertices.len().checked_sub(1),
+                codec::EntityType::Polyline3D(polyline) => polyline.vertices.len().checked_sub(1),
                 _ => None,
             }?;
             crate::scene::view::dispatch::grips(entity)
@@ -104,6 +98,7 @@ impl OpenCADStudio {
         self.otrack_cross = None;
         self.otrack_kind = None;
         self.axis_lock_dir = None;
+        self.angle_override = None;
         self.dyn_user_reshaped = false;
         self.dyn_coord_absolute = false;
         self.grip_hover = None;
@@ -127,10 +122,16 @@ impl OpenCADStudio {
     ) {
         let touched: Vec<_> = grip.targets.iter().map(|target| target.handle).collect();
         let connected = self.tabs[i].scene.parametric_connected_handles(
-            self.tabs[i].current_parametric_scope(), &touched, true,
+            self.tabs[i].current_parametric_scope(),
+            &touched,
+            true,
         );
         for handle in connected {
-            if !self.grip_originals.iter().any(|(original, _)| *original == handle) {
+            if !self
+                .grip_originals
+                .iter()
+                .any(|(original, _)| *original == handle)
+            {
                 if let Some(entity) = self.tabs[i].scene.document.get_entity(handle).cloned() {
                     self.grip_originals.push((handle, entity));
                 }
@@ -142,15 +143,29 @@ impl OpenCADStudio {
                 }
             }
         }
-        let driven_refs: Vec<_> = grip.targets.iter().flat_map(|target| {
-            self.tabs[i].scene.document.get_entity(target.handle)
-                .map(|entity| crate::scene::parametric_constraints::grip_solve_anchor_refs(
-                    entity, target.handle, target.grip_id,
-                )).unwrap_or_default()
-        }).collect();
+        let driven_refs: Vec<_> = grip
+            .targets
+            .iter()
+            .flat_map(|target| {
+                self.tabs[i]
+                    .scene
+                    .document
+                    .get_entity(target.handle)
+                    .map(|entity| {
+                        crate::scene::parametric_constraints::grip_solve_anchor_refs(
+                            entity,
+                            target.handle,
+                            target.grip_id,
+                        )
+                    })
+                    .unwrap_or_default()
+            })
+            .collect();
         let retain_size = self.constraint_solve_mode
             && !driven_refs.is_empty()
-            && driven_refs.iter().all(|reference| reference.marker.is_some());
+            && driven_refs
+                .iter()
+                .all(|reference| reference.marker.is_some());
         let solved = self.tabs[i].scene.solve_parametric_constraints_preview(
             &touched,
             &driven_refs,
@@ -267,7 +282,9 @@ impl OpenCADStudio {
             .into_iter()
             .map(|handle| (handle, crate::scene::ChangeKind::Modified))
             .collect();
-        self.tabs[i].scene.bump_entities_after_parametric_solve(&changes);
+        self.tabs[i]
+            .scene
+            .bump_entities_after_parametric_solve(&changes);
         if let Some(dirty_before) = self.grip_dirty_before.take() {
             self.tabs[i].dirty = dirty_before;
         }
@@ -490,6 +507,32 @@ impl OpenCADStudio {
         StepInput::SelectionComplete(kept)
     }
 
+    /// Keeps only the kinds of object the active command takes, dropping
+    /// the rest of a completed selection silently.
+    fn filter_command_entity_selection(&mut self, input: StepInput) -> StepInput {
+        let StepInput::SelectionComplete(handles) = input else {
+            return input;
+        };
+        let i = self.active_tab;
+        let Some(keep) = self.tabs[i]
+            .active_cmd
+            .as_ref()
+            .and_then(|command| command.selection_entity_filter())
+        else {
+            return StepInput::SelectionComplete(handles);
+        };
+        let (kept, dropped): (Vec<Handle>, Vec<Handle>) = handles
+            .into_iter()
+            .partition(|h| self.tabs[i].scene.document.get_entity(*h).is_some_and(keep));
+        for handle in &dropped {
+            self.tabs[i].scene.deselect_entity(*handle);
+        }
+        if !dropped.is_empty() {
+            self.refresh_properties();
+        }
+        StepInput::SelectionComplete(kept)
+    }
+
     /// Drops locked point clouds from a completed selection when the active
     /// command would move them, saying which were locked and how many went.
     fn filter_locked_point_cloud_selection(&mut self, input: StepInput) -> StepInput {
@@ -535,13 +578,17 @@ impl OpenCADStudio {
     /// Only a `Text` token can come back unclaimed (`on_text_input` returning
     /// `None`), which is what lets the caller read it as something else — a
     /// typed distance, say — instead of guessing beforehand.
-    pub(in crate::app) fn feed_command_consumed(&mut self, input: StepInput) -> (Task<Message>, bool) {
+    pub(in crate::app) fn feed_command_consumed(
+        &mut self,
+        input: StepInput,
+    ) -> (Task<Message>, bool) {
         // A command that takes associative dimensions only keeps just those:
         // the rest leave the selection and the count of what went is reported,
         // as the reference does while gathering.
         let input = self.filter_associative_dimension_selection(input);
         let input = self.filter_block_reference_selection(input);
         let input = self.filter_locked_point_cloud_selection(input);
+        let input = self.filter_command_entity_selection(input);
         // XCLIP / CLIP learn which chosen references carry a clip already.
         {
             let i = self.active_tab;
@@ -576,6 +623,7 @@ impl OpenCADStudio {
             if !self.command_point_allowed(i, *point) {
                 return (Task::none(), true);
             }
+            self.angle_override = None;
             // Typed / dynamic-input / headless points carry no snap, but the
             // accepted-snap list must stay index-parallel with the points the
             // command collects. Interactive picks record themselves in
@@ -583,6 +631,7 @@ impl OpenCADStudio {
             if !self.record_accepted_snap(i, None, None, *point) {
                 return (Task::none(), true);
             }
+            self.snapper.clear_override();
         }
         if default_start {
             let StepInput::Point(point) = &input else {
@@ -783,7 +832,11 @@ impl OpenCADStudio {
     /// false: the line is one instalment and the tool stays at its next prompt
     /// for the following one. Only a plugin streaming a command feeds it that
     /// way; the command line and the automation feeder always finish.
-    pub(in crate::app) fn run_command_line_streaming(&mut self, cmd: &str, finish: bool) -> Task<Message> {
+    pub(in crate::app) fn run_command_line_streaming(
+        &mut self,
+        cmd: &str,
+        finish: bool,
+    ) -> Task<Message> {
         let i = self.active_tab;
         self.command_line.unconsumed.clear();
         let tokens: Vec<&str> = cmd.split_whitespace().collect();
@@ -842,7 +895,11 @@ impl OpenCADStudio {
     ///   silently dropped and `TEXT 0,0 5 0 hi` created nothing at all.
     /// * Anything still left over was never claimed by any prompt; it is
     ///   recorded in [`CommandLine::unconsumed`] instead of vanishing.
-    pub(in crate::app) fn finish_active_command(&mut self, tokens: &[String], finish: bool) -> Task<Message> {
+    pub(in crate::app) fn finish_active_command(
+        &mut self,
+        tokens: &[String],
+        finish: bool,
+    ) -> Task<Message> {
         let i = self.active_tab;
         if self.tabs[i].active_cmd.is_none() {
             return Task::none();
@@ -1107,25 +1164,17 @@ impl OpenCADStudio {
         let is_mtp = token.trim_start_matches('_').eq_ignore_ascii_case("MTP")
             || token.trim_start_matches('_').eq_ignore_ascii_case("M2P");
         if is_mtp {
-            let is_point_step = !self.tabs[i]
-                .active_cmd
-                .as_ref()
-                .map(|c| c.input_kind().wants_text())
-                .unwrap_or(true)
-                || self.tabs[i]
-                    .active_cmd
-                    .as_ref()
-                    .map(|c| c.point_step_accepts_keywords())
-                    .unwrap_or(false);
-            let not_entity_pick = !self.tabs[i]
-                .active_cmd
-                .as_ref()
-                .map(|c| c.needs_entity_pick())
-                .unwrap_or(false);
-            if is_point_step && not_entity_pick {
+            if self.point_modifier_step(i) {
                 self.start_mtp_modifier(i);
                 return Task::none();
             }
+        }
+        if let Some(kind) = self.typed_snap_override(i, token) {
+            self.apply_snap_override(kind);
+            return Task::none();
+        }
+        if self.try_angle_override(token) {
+            return Task::none();
         }
         if let Some((coord, kind)) = crate::app::helpers::parse_coord(token) {
             // Match the GUI command line: typed coordinates are in the active
@@ -1158,7 +1207,13 @@ impl OpenCADStudio {
             // bare number is the step's own value, not a distance — ROTATE's
             // angle, SCALE's factor, CIRCLE's radius. Only a token no step
             // claims becomes direct distance entry, measured along the cursor
-            // direction from the command's anchor.
+            // direction from the command's anchor. Under a typed `<angle`
+            // the number is the distance along it first.
+            if self.angle_override.is_some() {
+                if let Some(distance) = self.try_direct_distance_entry(token) {
+                    return distance;
+                }
+            }
             let (task, consumed) = self.feed_command_consumed(StepInput::Text(token.to_string()));
             if consumed {
                 return task;

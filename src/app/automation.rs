@@ -16,9 +16,9 @@
 
 #[cfg(not(target_arch = "wasm32"))]
 use crate::io::line_read::{lines_capped, MAX_LINE_BYTES};
+use std::collections::{BTreeMap, HashSet};
 #[cfg(not(target_arch = "wasm32"))]
 use std::io::Write;
-use std::collections::{BTreeMap, HashSet};
 use std::path::PathBuf;
 
 use serde_json::{json, Value};
@@ -202,9 +202,7 @@ fn serve_socket_with_idle(
 
 /// The entities inside block definitions: owned by (or listed in) a block
 /// record that is not a layout's model or paper space.
-fn definition_members(
-    document: &codec::CadDocument,
-) -> std::collections::HashSet<codec::Handle> {
+fn definition_members(document: &codec::CadDocument) -> std::collections::HashSet<codec::Handle> {
     let mut layouts: std::collections::HashSet<codec::Handle> = document
         .objects
         .values()
@@ -296,17 +294,22 @@ pub(crate) fn entity_json(e: &codec::EntityType, detail: &str) -> Value {
         }
         E::Spline(spline) => {
             map.insert("degree".into(), json!(spline.degree));
-            map.insert(
-                "knots".into(),
-                json!(spline.knots),
-            );
+            map.insert("knots".into(), json!(spline.knots));
             map.insert(
                 "control_points".into(),
-                json!(spline.control_points.iter().map(|point| v3(*point)).collect::<Vec<_>>()),
+                json!(spline
+                    .control_points
+                    .iter()
+                    .map(|point| v3(*point))
+                    .collect::<Vec<_>>()),
             );
             map.insert(
                 "fit_points".into(),
-                json!(spline.fit_points.iter().map(|point| v3(*point)).collect::<Vec<_>>()),
+                json!(spline
+                    .fit_points
+                    .iter()
+                    .map(|point| v3(*point))
+                    .collect::<Vec<_>>()),
             );
             map.insert("weights".into(), json!(spline.weights));
         }
@@ -321,7 +324,9 @@ pub(crate) fn entity_json(e: &codec::EntityType, detail: &str) -> Value {
             map.insert("value".into(), json!(t.value));
             map.insert(
                 "text".into(),
-                json!(crate::entities::text_support::resolve_dxf_special_chars(&t.value)),
+                json!(crate::entities::text_support::resolve_dxf_special_chars(
+                    &t.value
+                )),
             );
             map.insert("position".into(), v3(t.insertion_point));
             map.insert("height".into(), json!(t.height));
@@ -330,8 +335,7 @@ pub(crate) fn entity_json(e: &codec::EntityType, detail: &str) -> Value {
             map.insert("value".into(), json!(t.value));
             map.insert(
                 "text".into(),
-                json!(codec::entities::mtext_format::parse_mtext(&t.value, true)
-                    .to_plain_text()),
+                json!(codec::entities::mtext_format::parse_mtext(&t.value, true).to_plain_text()),
             );
             map.insert("position".into(), v3(t.insertion_point));
             map.insert("height".into(), json!(t.height));
@@ -382,13 +386,11 @@ pub(crate) fn entity_json(e: &codec::EntityType, detail: &str) -> Value {
                     .edges
                     .iter()
                     .filter_map(|edge| match edge {
-                        codec::entities::BoundaryEdge::Polyline(polyline) => Some(
-                            json!(polyline
-                                .vertices
-                                .iter()
-                                .map(|v| [v.x, v.y])
-                                .collect::<Vec<_>>()),
-                        ),
+                        codec::entities::BoundaryEdge::Polyline(polyline) => Some(json!(polyline
+                            .vertices
+                            .iter()
+                            .map(|v| [v.x, v.y])
+                            .collect::<Vec<_>>())),
                         _ => None,
                     })
                     .collect();
@@ -476,7 +478,11 @@ pub(super) fn requested_save_target(
     let requested_format = match req["target_format"].as_str() {
         Some(value) if value.eq_ignore_ascii_case("dxf") => Some("dxf".to_string()),
         Some(value) if value.eq_ignore_ascii_case("dwg") => Some("dwg".to_string()),
-        Some(value) => return Err(format!("unsupported target format {value:?}; use dwg or dxf")),
+        Some(value) => {
+            return Err(format!(
+                "unsupported target format {value:?}; use dwg or dxf"
+            ))
+        }
         None => None,
     };
     if let (Some(requested), Some(extension)) = (&requested_format, &path_format) {
@@ -549,7 +555,9 @@ fn audit_ascii_dxf_references(path: &std::path::Path) -> Result<Value, String> {
     let text = String::from_utf8_lossy(&bytes).replace("\r\n", "\n");
     let lines: Vec<&str> = text.lines().collect();
     if lines.len() % 2 != 0 {
-        return Ok(json!({"ok":false,"malformed_pairs":true,"duplicate_handles":[],"dangling_handles":[]}));
+        return Ok(
+            json!({"ok":false,"malformed_pairs":true,"duplicate_handles":[],"dangling_handles":[]}),
+        );
     }
     let mut declared = HashSet::from(["0".to_string()]);
     let mut duplicate = std::collections::BTreeSet::new();
@@ -559,7 +567,9 @@ fn audit_ascii_dxf_references(path: &std::path::Path) -> Result<Value, String> {
     let mut variable = None;
     for pair in lines.chunks_exact(2) {
         let Ok(code) = pair[0].trim().parse::<i32>() else {
-            return Ok(json!({"ok":false,"malformed_pairs":true,"duplicate_handles":[],"dangling_handles":[]}));
+            return Ok(
+                json!({"ok":false,"malformed_pairs":true,"duplicate_handles":[],"dangling_handles":[]}),
+            );
         };
         let value = pair[1].trim().to_ascii_uppercase();
         pairs.push((code, value.clone()));
@@ -715,6 +725,9 @@ impl OpenCADStudio {
         };
         match req["op"].as_str().unwrap_or("") {
             "new" => {
+                if self.tabs[self.active_tab].block_edit_history.is_some() {
+                    return err("Close the block editor before replacing the drawing.");
+                }
                 if let Some(template) = req["template"].as_str() {
                     let purged = match self.apply_template(template) {
                         Ok(purged) => purged,
@@ -738,6 +751,9 @@ impl OpenCADStudio {
             }
             #[cfg(not(target_arch = "wasm32"))]
             "open" => {
+                if self.tabs[self.active_tab].block_edit_history.is_some() {
+                    return err("Close the block editor before replacing the drawing.");
+                }
                 let Some(path) = req["path"].as_str() else {
                     return err("open: missing \"path\"");
                 };
@@ -1051,23 +1067,16 @@ impl OpenCADStudio {
                     Ok(target) => target,
                     Err(error) => return err(format!("save: {error}")),
                 };
-                let dropped = crate::io::dropped_on_save_count(
-                    &self.tabs[i].scene.document,
-                    version,
-                    is_dxf,
-                );
+                let dropped =
+                    crate::io::dropped_on_save_count(&self.tabs[i].scene.document, version, is_dxf);
                 if dropped > 0 && req["allow_lossy"].as_bool() != Some(true) {
                     return err(format!(
                         "save: conversion would drop {dropped} unsupported record(s); set allow_lossy=true to acknowledge"
                     ));
                 }
                 #[cfg(not(target_arch = "wasm32"))]
-                let result = self.save_tab_synchronously_protected_as(
-                    i,
-                    path.clone(),
-                    version,
-                    true,
-                );
+                let result =
+                    self.save_tab_synchronously_protected_as(i, path.clone(), version, true);
                 #[cfg(target_arch = "wasm32")]
                 let result = crate::io::save(&self.tabs[i].scene.document, &path)
                     .map_err(crate::io::SaveFailure::other);
@@ -1240,8 +1249,18 @@ impl OpenCADStudio {
         let offset = req["offset"].as_u64().unwrap_or(0) as usize;
 
         const WHERE_OPS: &[&str] = &[
-            "eq", "ne", "lt", "lte", "gt", "gte", "contains",
-            "starts_with", "ends_with", "in", "exists", "not_exists",
+            "eq",
+            "ne",
+            "lt",
+            "lte",
+            "gt",
+            "gte",
+            "contains",
+            "starts_with",
+            "ends_with",
+            "in",
+            "exists",
+            "not_exists",
         ];
         if let Some(filters) = req["where"].as_array() {
             for filter in filters {
@@ -1438,15 +1457,11 @@ impl OpenCADStudio {
             .as_str()
             .map(std::path::Path::new)
             .or(tab.current_path.as_deref());
-        let (target_version, target_is_dxf) = match requested_save_target(
-            req,
-            document.version,
-            source_is_dxf,
-            path,
-        ) {
-            Ok(target) => target,
-            Err(error) => return err(format!("audit: {error}")),
-        };
+        let (target_version, target_is_dxf) =
+            match requested_save_target(req, document.version, source_is_dxf, path) {
+                Ok(target) => target,
+                Err(error) => return err(format!("audit: {error}")),
+            };
 
         let declared_layers: HashSet<String> = document
             .layers
@@ -1508,14 +1523,12 @@ impl OpenCADStudio {
             }
         }
 
-        let dropped = crate::io::dropped_on_save_count(
-            document,
-            target_version,
-            target_is_dxf,
-        );
+        let dropped = crate::io::dropped_on_save_count(document, target_version, target_is_dxf);
         let mut issues = Vec::new();
         if !missing_layers.is_empty() {
-            issues.push(json!({"severity":"error","code":"undeclared_layer","values":missing_layers}));
+            issues.push(
+                json!({"severity":"error","code":"undeclared_layer","values":missing_layers}),
+            );
         }
         if !missing_blocks.is_empty() {
             issues.push(json!({"severity":"error","code":"missing_block","values":missing_blocks}));
@@ -1527,7 +1540,9 @@ impl OpenCADStudio {
             issues.push(json!({"severity":"error","code":"non_serializable_record","values":serialization_errors}));
         }
         if !non_finite_bounds.is_empty() {
-            issues.push(json!({"severity":"error","code":"non_finite_bounds","handles":non_finite_bounds}));
+            issues.push(
+                json!({"severity":"error","code":"non_finite_bounds","handles":non_finite_bounds}),
+            );
         }
         if dropped > 0 {
             issues.push(json!({
@@ -1556,10 +1571,19 @@ impl OpenCADStudio {
                 "details":source_dxf_structure.clone(),
             }));
         }
-        let errors = issues.iter().filter(|issue| issue["severity"] == "error").count();
-        let warnings = issues.iter().filter(|issue| issue["severity"] == "warning").count();
+        let errors = issues
+            .iter()
+            .filter(|issue| issue["severity"] == "error")
+            .count();
+        let warnings = issues
+            .iter()
+            .filter(|issue| issue["severity"] == "warning")
+            .count();
         #[cfg(not(target_arch = "wasm32"))]
-        let source_sha256 = tab.current_path.as_deref().filter(|path| path.is_file())
+        let source_sha256 = tab
+            .current_path
+            .as_deref()
+            .filter(|path| path.is_file())
             .and_then(|path| sha256_file(path).ok());
         #[cfg(target_arch = "wasm32")]
         let source_sha256: Option<String> = None;
@@ -1592,31 +1616,37 @@ impl OpenCADStudio {
     pub(super) fn save_verified_request(&mut self, req: &Value) -> Result<Value, Value> {
         let i = self.active_tab;
         let Some(raw_path) = req["path"].as_str() else {
-            return Err(json!({"ok":false,"status":"failed","code":"path_required","error":"save_verified requires an explicit absolute path"}));
+            return Err(
+                json!({"ok":false,"status":"failed","code":"path_required","error":"save_verified requires an explicit absolute path"}),
+            );
         };
         let path = std::path::PathBuf::from(raw_path);
         if !path.is_absolute() {
-            return Err(json!({"ok":false,"status":"failed","code":"absolute_path_required","error":"save_verified path must be absolute"}));
+            return Err(
+                json!({"ok":false,"status":"failed","code":"absolute_path_required","error":"save_verified path must be absolute"}),
+            );
         }
         let extension = path
             .extension()
             .and_then(|value| value.to_str())
             .map(str::to_ascii_lowercase);
         if !matches!(extension.as_deref(), Some("dwg" | "dxf")) {
-            return Err(json!({"ok":false,"status":"failed","code":"unsupported_format","error":"save_verified path must end in .dwg or .dxf"}));
+            return Err(
+                json!({"ok":false,"status":"failed","code":"unsupported_format","error":"save_verified path must end in .dwg or .dxf"}),
+            );
         }
         if path.exists() && req["overwrite"].as_bool() != Some(true) {
-            return Err(json!({"ok":false,"status":"failed","code":"destination_exists","error":"destination exists; set overwrite=true to replace it"}));
+            return Err(
+                json!({"ok":false,"status":"failed","code":"destination_exists","error":"destination exists; set overwrite=true to replace it"}),
+            );
         }
         let document = &self.tabs[i].scene.document;
-        let source_is_dxf = crate::io::source_is_dxf(self.tabs[i].current_path.as_deref(), document);
-        let (version, is_dxf) = requested_save_target(
-            req,
-            document.version,
-            source_is_dxf,
-            Some(&path),
-        )
-        .map_err(|error| json!({"ok":false,"status":"failed","code":"invalid_target","error":error}))?;
+        let source_is_dxf =
+            crate::io::source_is_dxf(self.tabs[i].current_path.as_deref(), document);
+        let (version, is_dxf) =
+            requested_save_target(req, document.version, source_is_dxf, Some(&path)).map_err(
+                |error| json!({"ok":false,"status":"failed","code":"invalid_target","error":error}),
+            )?;
         let audit = self.document_audit(req);
         if audit["summary"]["errors"].as_u64().unwrap_or(0) > 0 {
             return Err(json!({
@@ -1644,10 +1674,11 @@ impl OpenCADStudio {
         let mut baked_view = snapshot.clone();
         crate::modules::draw::modify::explode::bake_dimension_blocks(&mut baked_view);
         let before = document_manifest(&baked_view);
-        crate::io::save_as_version(&snapshot, &path, version)
-            .map_err(|error| json!({
+        crate::io::save_as_version(&snapshot, &path, version).map_err(|error| {
+            json!({
                 "ok":false,"status":"failed","code":"save_failed","error":error,
-            }))?;
+            })
+        })?;
         // The bytes are now ours even if a later hash/audit/reopen check fails.
         // Refresh the guard immediately so a diagnostic failure cannot make the
         // next ordinary save look like an external edit of the same path.
@@ -1663,10 +1694,12 @@ impl OpenCADStudio {
             "saved":path,
         }))?;
         let dxf_structure = if is_dxf {
-            Some(audit_ascii_dxf_references(&path).map_err(|error| json!({
-                "ok":false,"status":"failed","code":"dxf_audit_failed","error":error,
-                "saved":path,"sha256":sha256,
-            }))?)
+            Some(audit_ascii_dxf_references(&path).map_err(|error| {
+                json!({
+                    "ok":false,"status":"failed","code":"dxf_audit_failed","error":error,
+                    "saved":path,"sha256":sha256,
+                })
+            })?)
         } else {
             None
         };
@@ -1681,10 +1714,12 @@ impl OpenCADStudio {
                 "target_version":format!("{version:?}"),
             }));
         }
-        let reopened = crate::io::load_file(&path).map_err(|error| json!({
-            "ok":false,"status":"failed","code":"reopen_failed","error":error,
-            "saved":path,"sha256":sha256,
-        }))?;
+        let reopened = crate::io::load_file(&path).map_err(|error| {
+            json!({
+                "ok":false,"status":"failed","code":"reopen_failed","error":error,
+                "saved":path,"sha256":sha256,
+            })
+        })?;
         if reopened.version != version {
             return Err(json!({
                 "ok":false,"status":"failed","code":"version_mismatch",
@@ -1969,7 +2004,8 @@ mod tests {
             .expect("line")
             .common_mut()
             .layer = "NOT_DECLARED".into();
-        let audit = app.automation_op(r#"{"op":"audit","target_format":"dwg","target_version":"R14"}"#);
+        let audit =
+            app.automation_op(r#"{"op":"audit","target_format":"dwg","target_version":"R14"}"#);
         assert_eq!(audit["ok"], false, "{audit}");
         assert_eq!(audit["issues"][0]["code"], "undeclared_layer", "{audit}");
     }
@@ -2153,10 +2189,8 @@ mod tests {
 
     #[test]
     fn raw_dxf_audit_detects_dangling_handle_references() {
-        let path = std::env::temp_dir().join(format!(
-            "ocs_dangling_handle_{}.dxf",
-            std::process::id()
-        ));
+        let path =
+            std::env::temp_dir().join(format!("ocs_dangling_handle_{}.dxf", std::process::id()));
         std::fs::write(&path, "  0\nLINE\n  5\n1\n330\n2\n").unwrap();
         let audit = super::audit_ascii_dxf_references(&path).unwrap();
         assert_eq!(audit["ok"], false, "{audit}");
@@ -2166,10 +2200,7 @@ mod tests {
 
     #[test]
     fn raw_dxf_audit_marks_binary_input_as_skipped() {
-        let path = std::env::temp_dir().join(format!(
-            "ocs_binary_dxf_{}.dxf",
-            std::process::id()
-        ));
+        let path = std::env::temp_dir().join(format!("ocs_binary_dxf_{}.dxf", std::process::id()));
         std::fs::write(&path, b"AutoCAD Binary DXF\r\n\x1a\0").unwrap();
         let audit = super::audit_ascii_dxf_references(&path).unwrap();
         assert_eq!(audit["ok"], true, "{audit}");
@@ -2179,10 +2210,8 @@ mod tests {
 
     #[test]
     fn raw_dxf_audit_detects_objects_orphaned_from_the_root_dictionary() {
-        let path = std::env::temp_dir().join(format!(
-            "ocs_orphaned_object_{}.dxf",
-            std::process::id()
-        ));
+        let path =
+            std::env::temp_dir().join(format!("ocs_orphaned_object_{}.dxf", std::process::id()));
         std::fs::write(
             &path,
             "0\nSECTION\n2\nOBJECTS\n0\nDICTIONARY\n5\nC\n330\n0\n0\nDICTIONARY\n5\n23\n330\nC\n0\nENDSEC\n0\nEOF\n",
@@ -2272,9 +2301,8 @@ mod tests {
 
         let line = app.automation_op(r#"{"op":"run","cmd":"LINE 0,0 200,0"}"#);
         assert_eq!(line["added"], 1, "{line}");
-        let text = app.automation_op(
-            r#"{"op":"run","cmd":"TEXT 100,135 8 0 OPEN CAD MCP ACCEPTANCE"}"#,
-        );
+        let text =
+            app.automation_op(r#"{"op":"run","cmd":"TEXT 100,135 8 0 OPEN CAD MCP ACCEPTANCE"}"#);
         assert_eq!(text["added"], 1, "{text}");
 
         app.tabs[i].scene.selection.borrow_mut().view.vp_size = (1600.0, 800.0);
@@ -2372,7 +2400,11 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert_eq!(texts.len(), 1, "expected exactly one Text entity, got {texts:?}");
+        assert_eq!(
+            texts.len(),
+            1,
+            "expected exactly one Text entity, got {texts:?}"
+        );
         texts.into_iter().next().unwrap()
     }
 
@@ -2517,8 +2549,7 @@ mod tests {
             .map(|e| format!("\"{}\"", e["handle"].as_str().unwrap()))
             .collect();
 
-        let path =
-            std::env::temp_dir().join(format!("ocs_wblock_{}.dxf", std::process::id()));
+        let path = std::env::temp_dir().join(format!("ocs_wblock_{}.dxf", std::process::id()));
         let _ = std::fs::remove_file(&path);
         let p = path.to_string_lossy().replace('\\', "\\\\");
         let r = app.automation_op(&format!(
@@ -2550,7 +2581,11 @@ mod tests {
         let mut line = codec::entities::Line::new();
         line.start = codec::types::Vector3::new(0.0, 0.0, 0.0);
         line.end = codec::types::Vector3::new(10.0, 0.0, 0.0);
-        let handle = app.tabs[i].scene.document.add_entity(codec::EntityType::Line(line)).unwrap();
+        let handle = app.tabs[i]
+            .scene
+            .document
+            .add_entity(codec::EntityType::Line(line))
+            .unwrap();
         let mut br = codec::tables::BlockRecord::new("A_CPT");
         br.handle = app.tabs[i].scene.document.allocate_handle();
         br.entity_handles = vec![handle];
@@ -2558,7 +2593,8 @@ mod tests {
         let state = app.automation_op(r#"{"protocol":1,"op":"state"}"#);
         let doc = state["document_id"].as_u64().unwrap();
 
-        let path = std::env::temp_dir().join(format!("ocs_wblock_block_{}.dxf", std::process::id()));
+        let path =
+            std::env::temp_dir().join(format!("ocs_wblock_block_{}.dxf", std::process::id()));
         let _ = std::fs::remove_file(&path);
         let p = path.to_string_lossy().replace('\\', "\\\\");
         let r = app.automation_op(&format!(
@@ -2623,7 +2659,10 @@ mod tests {
         app.automation_op(r#"{"op":"new"}"#);
         let state = app.automation_op(r#"{"protocol":1,"op":"state"}"#);
         let doc = state["document_id"].as_u64().unwrap();
-        let p = std::env::temp_dir().join("ocs_plot_bad.pdf").to_string_lossy().replace('\\', "\\\\");
+        let p = std::env::temp_dir()
+            .join("ocs_plot_bad.pdf")
+            .to_string_lossy()
+            .replace('\\', "\\\\");
         let r = app.automation_op(&format!(
             r#"{{"protocol":1,"op":"plot","request_id":"plot-2","document_id":{doc},"path":"{p}","layout":"NOPE"}}"#
         ));
@@ -2641,11 +2680,11 @@ mod tests {
         let mut app = OpenCADStudio::new_for_test();
         app.automation_op(r#"{"op":"new"}"#);
         let i = app.active_tab;
-        let mtext = codec::MText::with_value(
-            "\\A1;10.5000",
-            codec::types::Vector3::new(10.0, 20.0, 0.0),
-        );
-        app.tabs[i].scene.add_entity(codec::EntityType::MText(mtext));
+        let mtext =
+            codec::MText::with_value("\\A1;10.5000", codec::types::Vector3::new(10.0, 20.0, 0.0));
+        app.tabs[i]
+            .scene
+            .add_entity(codec::EntityType::MText(mtext));
 
         let q = app.automation_op(
             r#"{"op":"query","type":"MTEXT","detail":"full","fields":["value","text","height","bounds"]}"#,
@@ -2686,7 +2725,9 @@ mod tests {
     }
 
     fn count_type(app: &mut OpenCADStudio, kind: &str) -> u64 {
-        let q = app.automation_op(&format!(r#"{{"op":"query","type":"{kind}","detail":"summary"}}"#));
+        let q = app.automation_op(&format!(
+            r#"{{"op":"query","type":"{kind}","detail":"summary"}}"#
+        ));
         q["count"].as_u64().unwrap()
     }
 
@@ -2986,8 +3027,8 @@ mod tests {
         let mut app = OpenCADStudio::new_for_test();
         app.automation_op(r#"{"op":"new"}"#);
         app.automation_op(r#"{"op":"run","cmd":"LINE 0,0 10,0"}"#);
-        let handle = app.automation_op(r#"{"op":"query","type":"Line","detail":"summary"}"#)["entities"][0]
-            ["handle"]
+        let handle = app.automation_op(r#"{"op":"query","type":"Line","detail":"summary"}"#)
+            ["entities"][0]["handle"]
             .as_str()
             .unwrap()
             .to_owned();
@@ -3016,7 +3057,12 @@ mod tests {
             .as_array()
             .unwrap()
             .iter()
-            .map(|e| (e["start"][0].as_f64().unwrap(), e["start"][1].as_f64().unwrap()))
+            .map(|e| {
+                (
+                    e["start"][0].as_f64().unwrap(),
+                    e["start"][1].as_f64().unwrap(),
+                )
+            })
             .collect();
         assert!(starts.contains(&(5.0, 0.0)));
         assert!(starts.contains(&(5.0, 10.0)));
@@ -3027,8 +3073,8 @@ mod tests {
         let mut app = OpenCADStudio::new_for_test();
         app.automation_op(r#"{"op":"new"}"#);
         app.automation_op(r#"{"op":"run","cmd":"LINE 10,0 20,0"}"#);
-        let handle = app.automation_op(r#"{"op":"query","type":"Line","detail":"summary"}"#)["entities"][0]
-            ["handle"]
+        let handle = app.automation_op(r#"{"op":"query","type":"Line","detail":"summary"}"#)
+            ["entities"][0]["handle"]
             .as_str()
             .unwrap()
             .to_owned();
@@ -3091,8 +3137,8 @@ mod tests {
         let mut app = OpenCADStudio::new_for_test();
         app.automation_op(r#"{"op":"new"}"#);
         app.automation_op(r#"{"op":"run","cmd":"CIRCLE 0,0 1"}"#);
-        let handle = app.automation_op(r#"{"op":"query","type":"Circle","detail":"summary"}"#)["entities"][0]
-            ["handle"]
+        let handle = app.automation_op(r#"{"op":"query","type":"Circle","detail":"summary"}"#)
+            ["entities"][0]["handle"]
             .as_str()
             .unwrap()
             .to_owned();
@@ -3126,8 +3172,8 @@ mod tests {
         let mut app = OpenCADStudio::new_for_test();
         app.automation_op(r#"{"op":"new"}"#);
         app.automation_op(r#"{"op":"run","cmd":"CIRCLE 5,5 2"}"#);
-        let handle = app.automation_op(r#"{"op":"query","type":"Circle","detail":"summary"}"#)["entities"][0]
-            ["handle"]
+        let handle = app.automation_op(r#"{"op":"query","type":"Circle","detail":"summary"}"#)
+            ["entities"][0]["handle"]
             .as_str()
             .unwrap()
             .to_owned();
@@ -3221,8 +3267,14 @@ mod tests {
         let path = std::env::temp_dir().join(format!("ocs_block_{}.dxf", std::process::id()));
         let _ = std::fs::remove_file(&path);
         let p = path.to_string_lossy().replace('\\', "\\\\");
-        assert_eq!(app.automation_op(&format!(r#"{{"op":"save","path":"{p}"}}"#))["ok"], true);
-        assert_eq!(app.automation_op(&format!(r#"{{"op":"open","path":"{p}"}}"#))["ok"], true);
+        assert_eq!(
+            app.automation_op(&format!(r#"{{"op":"save","path":"{p}"}}"#))["ok"],
+            true
+        );
+        assert_eq!(
+            app.automation_op(&format!(r#"{{"op":"open","path":"{p}"}}"#))["ok"],
+            true
+        );
         assert_eq!(count_type(&mut app, "Insert"), 1);
         drop(app);
         let sidecar = path.with_file_name(format!(
@@ -3238,8 +3290,8 @@ mod tests {
         let mut app = OpenCADStudio::new_for_test();
         app.automation_op(r#"{"op":"new"}"#);
         app.automation_op(r#"{"op":"run","cmd":"CIRCLE 5,5 2"}"#);
-        let handle = app.automation_op(r#"{"op":"query","type":"Circle","detail":"summary"}"#)["entities"][0]
-            ["handle"]
+        let handle = app.automation_op(r#"{"op":"query","type":"Circle","detail":"summary"}"#)
+            ["entities"][0]["handle"]
             .as_str()
             .unwrap()
             .to_owned();
@@ -3520,16 +3572,24 @@ mod tests {
             }
             {
                 let sel = app.tabs[i].scene.selection.borrow();
-                assert!(sel.input.left_dragging, "drag must start (add={add} rect={rect})");
+                assert!(
+                    sel.input.left_dragging,
+                    "drag must start (add={add} rect={rect})"
+                );
                 if rect {
                     // Rectangle mode drives the box machinery, not the lasso.
                     assert!(
-                        sel.gesture.box_anchor.is_some() && sel.gesture.box_current.is_some() && !sel.gesture.poly_active,
+                        sel.gesture.box_anchor.is_some()
+                            && sel.gesture.box_current.is_some()
+                            && !sel.gesture.poly_active,
                         "rect marquee must arm the box (add={add})"
                     );
                 } else {
                     assert!(sel.gesture.poly_active, "lasso must start (add={add})");
-                    assert!(sel.gesture.poly_points.len() >= 3, "lasso points (add={add})");
+                    assert!(
+                        sel.gesture.poly_points.len() >= 3,
+                        "lasso points (add={add})"
+                    );
                 }
             }
             let _ = app.update(Message::ViewportLeftRelease);
@@ -3808,8 +3868,7 @@ mod tests {
         corrupt.center = codec::types::Vector3::new(1.0, 1.0, 0.0);
         // An absurd radius is rejected; a zero radius is valid.
         corrupt.radius = 1.0e11;
-        doc.add_entity(codec::EntityType::Circle(corrupt))
-            .unwrap();
+        doc.add_entity(codec::EntityType::Circle(corrupt)).unwrap();
         let bytes = crate::io::save_to_bytes(&doc, "dxf", doc.version)
             .expect("save a document containing a corrupt entity");
         std::fs::write(&path, bytes).unwrap();
@@ -4068,6 +4127,81 @@ mod tests {
     }
 
     #[test]
+    fn test_snap_override_typed_in_line_command() {
+        use crate::app::Message;
+        let mut app = OpenCADStudio::new_for_test();
+        app.automation_op(r#"{"op":"new"}"#);
+        {
+            app.tabs[0].scene.selection.borrow_mut().view.vp_size = (1920.0, 1080.0);
+            app.tabs[0].scene.sync_tiles_from_panes(1920.0, 1080.0);
+        }
+
+        // Start LINE
+        let _ = app.update(Message::CommandInput("LINE".to_string()));
+        let _ = app.update(Message::CommandSubmit);
+        assert_eq!(
+            app.tabs[0].active_cmd.as_ref().map(|c| c.name()),
+            Some("LINE")
+        );
+
+        // Turn running osnap off to prove override temporarily enables snapping
+        app.snapper.snap_enabled = false;
+        assert!(!app.snapper.snap_enabled);
+
+        // Type MID at first point prompt
+        let _ = app.update(Message::CommandInput("MID".to_string()));
+        let _ = app.update(Message::CommandSubmit);
+
+        // LINE remains the active command
+        assert_eq!(
+            app.tabs[0].active_cmd.as_ref().map(|c| c.name()),
+            Some("LINE")
+        );
+        // Snapper is now forced on with only Midpoint enabled
+        assert!(app.snapper.snap_enabled);
+        assert_eq!(app.snapper.enabled.len(), 1);
+        assert!(app.snapper.enabled.contains(&crate::snap::SnapType::Midpoint));
+
+        // Submit first point (0,0)
+        let _ = app.update(Message::CommandInput("0,0".to_string()));
+        let _ = app.update(Message::CommandSubmit);
+
+        // Override is consumed by the point commit, restoring snap_enabled == false
+        assert!(!app.snapper.snap_enabled);
+
+        // At next point prompt, type END
+        let _ = app.update(Message::CommandInput("END".to_string()));
+        let _ = app.update(Message::CommandSubmit);
+        assert!(app.snapper.snap_enabled);
+        assert!(app.snapper.enabled.contains(&crate::snap::SnapType::Endpoint));
+
+        // Escape cancels LINE and clears unconsumed snap override
+        let _ = app.update(Message::CommandEscape);
+        assert!(app.tabs[0].active_cmd.is_none());
+        assert!(!app.snapper.snap_enabled);
+    }
+
+    #[test]
+    fn test_snap_override_feed_token() {
+        use crate::app::Message;
+        let mut app = OpenCADStudio::new_for_test();
+        app.automation_op(r#"{"op":"new"}"#);
+        let _ = app.update(Message::CommandInput("LINE".to_string()));
+        let _ = app.update(Message::CommandSubmit);
+
+        app.snapper.snap_enabled = false;
+        let _ = app.feed_active_cmd("CEN");
+        assert!(app.snapper.snap_enabled);
+        assert_eq!(app.snapper.enabled.len(), 1);
+        assert!(app.snapper.enabled.contains(&crate::snap::SnapType::Center));
+
+        let _ = app.feed_active_cmd("5,5");
+        assert!(!app.snapper.snap_enabled);
+
+        let _ = app.update(Message::CommandEscape);
+    }
+
+    #[test]
     fn test_open_color_dropdown() {
         use crate::app::Message;
         let mut app = OpenCADStudio::new_for_test();
@@ -4162,12 +4296,7 @@ mod tests {
         let listen_bound = bound.clone();
         std::thread::spawn(move || {
             let mut app = super::OpenCADStudio::new_for_test();
-            super::serve_socket_with_idle(
-                &mut app,
-                0,
-                &listen_bound,
-                Duration::from_millis(300),
-            );
+            super::serve_socket_with_idle(&mut app, 0, &listen_bound, Duration::from_millis(300));
         });
         let mut port = 0;
         for _ in 0..50 {
@@ -4203,7 +4332,9 @@ mod tests {
             .expect("read timeout");
         let mut reader2 = BufReader::new(second.try_clone().expect("clone"));
         let mut banner2 = String::new();
-        reader2.read_line(&mut banner2).expect("second ready banner");
+        reader2
+            .read_line(&mut banner2)
+            .expect("second ready banner");
         assert!(banner2.contains("ready"), "{banner2}");
     }
 }

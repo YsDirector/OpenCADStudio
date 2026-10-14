@@ -6,9 +6,7 @@ use crate::app::settings;
 use crate::app::settings::{CursorType, RightClickMode};
 use crate::app::Message;
 use crate::ui::style::form::{dialog_button, dialog_button_styled_opt};
-use iced::widget::{
-    button, column, container, row, scrollable, slider, text, text_input, Space,
-};
+use iced::widget::{button, column, container, row, scrollable, slider, text, text_input, Space};
 use iced::{Background, Border, Element, Fill, Theme};
 use std::fmt;
 
@@ -23,9 +21,7 @@ const DIALOG_HEIGHT: f32 = 620.0;
 ///
 /// Persisted: with nine pages, reopening on General every time means hunting
 /// for the one you were last in.
-#[derive(
-    Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize,
-)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum OptionsTab {
     #[default]
@@ -57,6 +53,14 @@ pub struct AppPrefs {
     pub cliprompt_lines: i32,
     /// COMMANDLINEFADETIME: how long overlay history lines stay visible, in ms.
     pub commandline_fade_ms: i32,
+    /// COMMANDLINEOPACITY: command-line panel opacity in percent.
+    pub command_line_opacity: u8,
+    /// MENUBAR: the pull-down menus show above the ribbon.
+    pub show_menu_bar: bool,
+    /// The ribbon shows (RIBBON / RIBBONCLOSE).
+    pub show_ribbon: bool,
+    /// HPASSOC: new hatches follow their boundary objects.
+    pub hatch_associative: bool,
     /// ZOOMWHEEL: reverse the mouse-wheel zoom direction.
     pub zoom_wheel_reversed: bool,
     /// Scroll pans and Ctrl+scroll zooms (touchpads).
@@ -298,7 +302,10 @@ pub fn view_window<'a>(
 
     let palette = ui_theme.palette.to_iced();
     let colors = [
-        (crate::tr!("options", "color-background"), palette.background),
+        (
+            crate::tr!("options", "color-background"),
+            palette.background,
+        ),
         (crate::tr!("options", "color-text"), palette.text),
         (crate::tr!("options", "color-primary"), palette.primary),
         (crate::tr!("options", "color-success"), palette.success),
@@ -351,12 +358,12 @@ pub fn view_window<'a>(
         text(crate::tr!("options", "language-section")).size(15),
         Space::new().height(10),
         row![
-            text(crate::tr!("options", "language-label")).size(12).width(150),
-            iced::widget::pick_list(
-                selected_language,
-                language_options,
-                |choice| choice.label.clone(),
-            )
+            text(crate::tr!("options", "language-label"))
+                .size(12)
+                .width(150),
+            iced::widget::pick_list(selected_language, language_options, |choice| choice
+                .label
+                .clone(),)
             .on_select(|choice| Message::LanguageChanged(choice.value))
             .width(sizing.width),
         ]
@@ -366,7 +373,9 @@ pub fn view_window<'a>(
         text(crate::t!("Applications")).size(15),
         Space::new().height(10),
         row![
-            text(crate::t!("Installed plugins and their sources")).size(12).width(Fill),
+            text(crate::t!("Installed plugins and their sources"))
+                .size(12)
+                .width(Fill),
             button(text(crate::t!("Plugins…")).size(11))
                 .on_press(Message::PluginManagerOpen)
                 .padding([4, 10])
@@ -421,7 +430,6 @@ pub fn view_window<'a>(
     .spacing(0)
     .width(sizing.width);
 
-
     // Saving preferences, gathered onto one page. The format and the file
     // association were on General, which had become a page of three unrelated
     // controls; the autosave interval and the backup toggle have existed since
@@ -431,7 +439,9 @@ pub fn view_window<'a>(
         Space::new().height(10),
         Space::new().height(10),
         row![
-            text(crate::tr!("options", "default-save-format-label")).size(12).width(150),
+            text(crate::tr!("options", "default-save-format-label"))
+                .size(12)
+                .width(150),
             iced::widget::pick_list(
                 selected_format,
                 // Drawings, not the template entry (the list's last).
@@ -445,15 +455,14 @@ pub fn view_window<'a>(
         .align_y(iced::Center),
         Space::new().height(8),
         text(crate::tr!("options", "default-save-format-help"))
-        .size(11)
-        .width(sizing.width),
+            .size(11)
+            .width(sizing.width),
         Space::new().height(14),
         row![
             iced::widget::checkbox(file_assoc_enabled)
                 .on_toggle(Message::FileAssocChanged)
                 .size(15),
-            text(crate::t!("Open .dwg and .dxf files with Open CAD Studio"))
-                .size(12),
+            text(crate::t!("Open .dwg and .dxf files with Open CAD Studio")).size(12),
         ]
         .spacing(8)
         .align_y(iced::Center),
@@ -468,7 +477,10 @@ pub fn view_window<'a>(
             iced::widget::checkbox(show_constraint_values)
                 .on_toggle(Message::ShowConstraintValuesChanged)
                 .size(15),
-            text(crate::t!("Show values and parameter names on constraint markers")).size(12),
+            text(crate::t!(
+                "Show values and parameter names on constraint markers"
+            ))
+            .size(12),
         ]
         .spacing(8)
         .align_y(iced::Center),
@@ -485,9 +497,13 @@ pub fn view_window<'a>(
         Space::new().height(10),
         row![
             text(crate::t!("Automatic save")).size(12).width(150),
-            slider(0..=120, prefs.savetime_min.clamp(0, 120), Message::SaveTimeChanged)
-                .step(1)
-                .width(Fill),
+            slider(
+                0..=120,
+                prefs.savetime_min.clamp(0, 120),
+                Message::SaveTimeChanged
+            )
+            .step(1)
+            .width(Fill),
             text(if prefs.savetime_min <= 0 {
                 crate::t!("Off").into_owned()
             } else {
@@ -509,7 +525,10 @@ pub fn view_window<'a>(
             iced::widget::checkbox(prefs.backup_on_save)
                 .on_toggle(Message::BackupOnSaveChanged)
                 .size(15),
-            text(crate::t!("Keep a .bak copy when overwriting a drawing (ISAVEBAK)")).size(12),
+            text(crate::t!(
+                "Keep a .bak copy when overwriting a drawing (ISAVEBAK)"
+            ))
+            .size(12),
         ]
         .spacing(8)
         .align_y(iced::Center),
@@ -518,40 +537,42 @@ pub fn view_window<'a>(
     .width(sizing.width);
 
     let crosshair_rgb = crosshair_color.unwrap_or([255, 255, 255]);
-    let crosshair_swatch = container(Space::new())
-        .width(28)
-        .height(22)
-        .style(move |theme: &Theme| container::Style {
-            background: Some(Background::Color(iced::Color::from_rgb8(
-                crosshair_rgb[0],
-                crosshair_rgb[1],
-                crosshair_rgb[2],
-            ))),
-            border: Border {
-                color: theme.palette().background.strong.color,
-                width: 1.0,
-                radius: 3.0.into(),
-            },
-            ..Default::default()
-        });
+    let crosshair_swatch =
+        container(Space::new())
+            .width(28)
+            .height(22)
+            .style(move |theme: &Theme| container::Style {
+                background: Some(Background::Color(iced::Color::from_rgb8(
+                    crosshair_rgb[0],
+                    crosshair_rgb[1],
+                    crosshair_rgb[2],
+                ))),
+                border: Border {
+                    color: theme.palette().background.strong.color,
+                    width: 1.0,
+                    radius: 3.0.into(),
+                },
+                ..Default::default()
+            });
 
     let command_rgb = command_text_color.unwrap_or([220, 220, 220]);
-    let command_swatch = container(Space::new())
-        .width(28)
-        .height(22)
-        .style(move |theme: &Theme| container::Style {
-            background: Some(Background::Color(iced::Color::from_rgb8(
-                command_rgb[0],
-                command_rgb[1],
-                command_rgb[2],
-            ))),
-            border: Border {
-                color: theme.palette().background.strong.color,
-                width: 1.0,
-                radius: 3.0.into(),
-            },
-            ..Default::default()
-        });
+    let command_swatch =
+        container(Space::new())
+            .width(28)
+            .height(22)
+            .style(move |theme: &Theme| container::Style {
+                background: Some(Background::Color(iced::Color::from_rgb8(
+                    command_rgb[0],
+                    command_rgb[1],
+                    command_rgb[2],
+                ))),
+                border: Border {
+                    color: theme.palette().background.strong.color,
+                    width: 1.0,
+                    radius: 3.0.into(),
+                },
+                ..Default::default()
+            });
 
     let snap_rgb = snap_marker_color.unwrap_or([255, 230, 26]);
     let snap_swatch = container(Space::new())
@@ -571,11 +592,17 @@ pub fn view_window<'a>(
             ..Default::default()
         });
 
-    let model_bg_rgb = model_space.custom_bg.unwrap_or(crate::app::config::CLASSIC_CAD_DARK_BG);
+    let model_bg_rgb = model_space
+        .custom_bg
+        .unwrap_or(crate::app::config::CLASSIC_CAD_DARK_BG);
 
-    let paper_bg_rgb = model_space.custom_paper_bg.unwrap_or(crate::app::config::DEFAULT_PAPER_BG);
+    let paper_bg_rgb = model_space
+        .custom_paper_bg
+        .unwrap_or(crate::app::config::DEFAULT_PAPER_BG);
 
-    let desk_bg_rgb = model_space.custom_desk_bg.unwrap_or(crate::app::config::DEFAULT_DESK_BG);
+    let desk_bg_rgb = model_space
+        .custom_desk_bg
+        .unwrap_or(crate::app::config::DEFAULT_DESK_BG);
 
     let mode_options = crate::app::config::ModelSpaceMode::ALL
         .into_iter()
@@ -664,21 +691,19 @@ pub fn view_window<'a>(
         text(crate::tr!("options", "theme-section")).size(15),
         Space::new().height(10),
         row![
-            text(crate::tr!("options", "theme-label")).size(12).width(150),
-            iced::widget::pick_list(
-                selected_theme,
-                theme_options,
-                |choice| choice.label.clone(),
-            )
-            .on_select(|choice| Message::OptionsThemeChanged(choice.value))
-            .width(sizing.width),
+            text(crate::tr!("options", "theme-label"))
+                .size(12)
+                .width(150),
+            iced::widget::pick_list(selected_theme, theme_options, |choice| choice.label.clone(),)
+                .on_select(|choice| Message::OptionsThemeChanged(choice.value))
+                .width(sizing.width),
         ]
         .spacing(12)
         .align_y(iced::Center),
         Space::new().height(8),
         text(crate::tr!("options", "theme-help"))
-        .size(11)
-        .width(sizing.width),
+            .size(11)
+            .width(sizing.width),
         Space::new().height(12),
         color_controls,
         Space::new().height(16),
@@ -688,7 +713,9 @@ pub fn view_window<'a>(
             text(crate::t!("Interface scale")).size(12).width(150),
             iced::widget::pick_list(
                 Some(format!("{}%", prefs.ui_scale_percent)),
-                [75u16, 100, 125, 150, 175, 200].map(|p| format!("{p}%")).to_vec(),
+                [75u16, 100, 125, 150, 175, 200]
+                    .map(|p| format!("{p}%"))
+                    .to_vec(),
                 |label: &String| label.clone(),
             )
             .on_select(|label: String| {
@@ -711,13 +738,9 @@ pub fn view_window<'a>(
         Space::new().height(10),
         row![
             text(crate::t!("Canvas mode")).size(12).width(140),
-            iced::widget::pick_list(
-                selected_mode,
-                mode_options,
-                |choice| choice.label.clone(),
-            )
-            .on_select(|choice| Message::ModelSpaceModeChanged(choice.value))
-            .width(Fill),
+            iced::widget::pick_list(selected_mode, mode_options, |choice| choice.label.clone(),)
+                .on_select(|choice| Message::ModelSpaceModeChanged(choice.value))
+                .width(Fill),
         ]
         .spacing(10)
         .align_y(iced::Center),
@@ -903,6 +926,30 @@ pub fn view_window<'a>(
             .align_y(iced::Center),
         )
         .push(Space::new().height(24))
+        .push(text(crate::t!("Window Elements")).size(15))
+        .push(Space::new().height(10))
+        .push(
+            row![
+                iced::widget::checkbox(prefs.show_menu_bar)
+                    .on_toggle(Message::MenuBarChanged)
+                    .size(15),
+                text(crate::t!("Show the menu bar (MENUBAR)")).size(12),
+            ]
+            .spacing(8)
+            .align_y(iced::Center),
+        )
+        .push(Space::new().height(8))
+        .push(
+            row![
+                iced::widget::checkbox(prefs.show_ribbon)
+                    .on_toggle(Message::RibbonVisibleChanged)
+                    .size(15),
+                text(crate::t!("Show the ribbon (RIBBON / RIBBONCLOSE)")).size(12),
+            ]
+            .spacing(8)
+            .align_y(iced::Center),
+        )
+        .push(Space::new().height(24))
         .push(text(crate::t!("Command Line")).size(15))
         .push(Space::new().height(10))
         .push(
@@ -959,6 +1006,22 @@ pub fn view_window<'a>(
             ))
             .size(11)
             .width(sizing.width),
+        )
+        .push(Space::new().height(12))
+        .push(
+            row![
+                text(crate::t!("Command line opacity")).size(12).width(140),
+                slider(
+                    20..=100,
+                    prefs.command_line_opacity.clamp(20, 100),
+                    Message::CommandLineOpacityChanged,
+                )
+                .step(5u8)
+                .width(Fill),
+                text(format!("{}%", prefs.command_line_opacity)).size(11).width(44),
+            ]
+            .spacing(10)
+            .align_y(iced::Center),
         );
 
     let display_element = display.spacing(0).width(sizing.width);
@@ -1245,16 +1308,13 @@ pub fn view_window<'a>(
         .find(|choice| choice.value == prefs.annotation_auto_scale.max(0))
         .cloned();
 
-    let qdim_options = [
-        (0u8, "Endpoints"),
-        (1, "Intersections"),
-    ]
-    .into_iter()
-    .map(|(value, label)| Labelled {
-        value,
-        label: crate::t!(label).into_owned(),
-    })
-    .collect::<Vec<_>>();
+    let qdim_options = [(0u8, "Endpoints"), (1, "Intersections")]
+        .into_iter()
+        .map(|(value, label)| Labelled {
+            value,
+            label: crate::t!(label).into_owned(),
+        })
+        .collect::<Vec<_>>();
     let selected_qdim = qdim_options
         .iter()
         .find(|choice| choice.value == prefs.qdim_snap_priority)
@@ -1449,10 +1509,20 @@ pub fn view_window<'a>(
         ]
         .spacing(10)
         .align_y(iced::Center),
+        Space::new().height(24),
+        text(crate::t!("Hatch")).size(15),
+        Space::new().height(10),
+        row![
+            iced::widget::checkbox(prefs.hatch_associative)
+                .on_toggle(Message::HatchAssociativeChanged)
+                .size(15),
+            text(crate::t!("New hatches follow their boundaries (HPASSOC)")).size(12),
+        ]
+        .spacing(8)
+        .align_y(iced::Center),
     ]
     .spacing(0)
     .width(sizing.width);
-
 
     // Snap modes, grid and object snap stay in the Drafting Settings dialog.
     // These two have no home: Drafting Settings shows the rotation angle but
@@ -1497,7 +1567,9 @@ pub fn view_window<'a>(
         .width(sizing.width),
         Space::new().height(14),
         row![
-            text(crate::t!("Polar tracking increment")).size(12).width(150),
+            text(crate::t!("Polar tracking increment"))
+                .size(12)
+                .width(150),
             iced::widget::pick_list(Some(selected_polar), polar_options, |choice| {
                 choice.label.clone()
             })
@@ -1524,7 +1596,6 @@ pub fn view_window<'a>(
     .spacing(0)
     .width(sizing.width);
 
-
     let surface_type_options = [
         (5i16, "Quadratic B-spline"),
         (6, "Cubic B-spline"),
@@ -1541,17 +1612,13 @@ pub fn view_window<'a>(
         .find(|choice| choice.value == drawing_prefs.surface_type)
         .cloned();
 
-    let show_history_options = [
-        (0i16, "Never"),
-        (1, "As set per solid"),
-        (2, "Always"),
-    ]
-    .into_iter()
-    .map(|(value, label)| Labelled {
-        value,
-        label: crate::t!(label).into_owned(),
-    })
-    .collect::<Vec<_>>();
+    let show_history_options = [(0i16, "Never"), (1, "As set per solid"), (2, "Always")]
+        .into_iter()
+        .map(|(value, label)| Labelled {
+            value,
+            label: crate::t!(label).into_owned(),
+        })
+        .collect::<Vec<_>>();
     let selected_show_history = show_history_options
         .iter()
         .find(|choice| choice.value == drawing_prefs.show_solid_history.clamp(0, 2))
@@ -1584,7 +1651,10 @@ pub fn view_window<'a>(
             iced::widget::checkbox(prefs.ucs_icon_at_origin)
                 .on_toggle(Message::UcsIconAtOriginChanged)
                 .size(15),
-            text(crate::t!("Place the UCS icon at the origin (UCSICON ORigin)")).size(12),
+            text(crate::t!(
+                "Place the UCS icon at the origin (UCSICON ORigin)"
+            ))
+            .size(12),
         ]
         .spacing(8)
         .align_y(iced::Center),
@@ -1698,8 +1768,10 @@ pub fn view_window<'a>(
                     iced::widget::checkbox(drawing_prefs.record_solid_history)
                         .on_toggle(Message::SolidHistChanged)
                         .size(15),
-                    text(crate::t!("Record the history of composite solids (SOLIDHIST)"))
-                        .size(12),
+                    text(crate::t!(
+                        "Record the history of composite solids (SOLIDHIST)"
+                    ))
+                    .size(12),
                 ]
                 .spacing(8)
                 .align_y(iced::Center),
@@ -1723,13 +1795,14 @@ pub fn view_window<'a>(
 
     let modeling = modeling.spacing(0).width(sizing.width);
 
-
     // The application has no support-file search path, so this page does not
     // pretend to offer one. It shows where things actually live and opens the
     // folder — which is the question people are really asking when they go
     // looking for a Files page.
     let folder_row = |label: std::borrow::Cow<'a, str>, path: Option<String>| {
-        let shown = path.clone().unwrap_or_else(|| crate::t!("Not available").into_owned());
+        let shown = path
+            .clone()
+            .unwrap_or_else(|| crate::t!("Not available").into_owned());
         let mut open = button(text(crate::t!("Open folder")).size(11))
             .padding([4, 10])
             .style(button::secondary);
@@ -1737,12 +1810,9 @@ pub fn view_window<'a>(
             open = open.on_press(Message::OpenFolder(path));
         }
         row![
-            column![
-                text(label).size(12),
-                text(shown).size(11),
-            ]
-            .spacing(2)
-            .width(Fill),
+            column![text(label).size(12), text(shown).size(11),]
+                .spacing(2)
+                .width(Fill),
             open,
         ]
         .spacing(10)
@@ -1807,7 +1877,11 @@ pub fn view_window<'a>(
             .on_press(Message::OptionsTabChanged(tab))
             .padding([7, 12])
             .width(Fill)
-            .style(if selected { button::primary } else { button::text })
+            .style(if selected {
+                button::primary
+            } else {
+                button::text
+            })
     };
     let tabs = column![
         tab_button(crate::t!("General"), OptionsTab::General),
@@ -1822,9 +1896,7 @@ pub fn view_window<'a>(
     // The web build has no backend to choose, so it has no Graphics page.
     #[cfg(not(target_arch = "wasm32"))]
     let tabs = tabs.push(tab_button(crate::t!("Graphics"), OptionsTab::Graphics));
-    let tabs = tabs
-    .spacing(2)
-    .width(iced::Length::Fixed(TAB_RAIL_WIDTH));
+    let tabs = tabs.spacing(2).width(iced::Length::Fixed(TAB_RAIL_WIDTH));
 
     let pane = column![
         // Keep the scrollbar in its own lane instead of floating over the
@@ -1844,10 +1916,22 @@ pub fn view_window<'a>(
     let main = container(body)
         .style(container::rounded_box)
         .padding([16, 18])
-        .width(if intrinsic { iced::Length::Fixed(DIALOG_WIDTH) } else { sizing.width })
-        .height(if intrinsic { iced::Length::Fixed(DIALOG_HEIGHT) } else { sizing.height });
+        .width(if intrinsic {
+            iced::Length::Fixed(DIALOG_WIDTH)
+        } else {
+            sizing.width
+        })
+        .height(if intrinsic {
+            iced::Length::Fixed(DIALOG_HEIGHT)
+        } else {
+            sizing.height
+        });
     if !close_confirm {
         return main.into();
     }
-    crate::ui::modal::discard_guard(main, Message::OptionsCloseDiscard, Message::OptionsCloseKeep)
+    crate::ui::modal::discard_guard(
+        main,
+        Message::OptionsCloseDiscard,
+        Message::OptionsCloseKeep,
+    )
 }

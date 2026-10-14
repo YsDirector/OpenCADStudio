@@ -696,6 +696,119 @@ impl HostApi for PluginHostApi {
         }
     }
 
+    fn create_xrecord(
+        &mut self,
+        dictionary_path: &[&str],
+        name: &str,
+        entries: Vec<crate::host::XRecordEntry>,
+    ) -> Result<Handle, String> {
+        match self.client.request(PluginRequest::CreateXRecord {
+            dictionary_path: dictionary_path.iter().map(|s| s.to_string()).collect(),
+            name: name.to_string(),
+            entries,
+        }) {
+            Ok(PluginResponse::XRecordCreateResult(result)) => {
+                if result.is_ok() {
+                    self.document_cache = OnceCell::new();
+                }
+                result
+            }
+            Ok(PluginResponse::Error(error)) => Err(error),
+            Ok(other) => Err(format!("unexpected XRecord create response: {other:?}")),
+            Err(error) => Err(error.to_string()),
+        }
+    }
+
+    fn read_xrecord(
+        &self,
+        dictionary_path: &[&str],
+        name: &str,
+    ) -> Result<Vec<crate::host::XRecordEntry>, String> {
+        match self.client.request(PluginRequest::ReadXRecord {
+            dictionary_path: dictionary_path.iter().map(|s| s.to_string()).collect(),
+            name: name.to_string(),
+        }) {
+            Ok(PluginResponse::XRecordEntries(result)) => result,
+            Ok(PluginResponse::Error(error)) => Err(error),
+            Ok(other) => Err(format!("unexpected XRecord read response: {other:?}")),
+            Err(error) => Err(error.to_string()),
+        }
+    }
+
+    fn update_xrecord(
+        &mut self,
+        dictionary_path: &[&str],
+        name: &str,
+        entries: Vec<crate::host::XRecordEntry>,
+    ) -> Result<Handle, String> {
+        match self.client.request(PluginRequest::UpdateXRecord {
+            dictionary_path: dictionary_path.iter().map(|s| s.to_string()).collect(),
+            name: name.to_string(),
+            entries,
+        }) {
+            Ok(PluginResponse::XRecordUpdateResult(result)) => {
+                if result.is_ok() {
+                    self.document_cache = OnceCell::new();
+                }
+                result
+            }
+            Ok(PluginResponse::Error(error)) => Err(error),
+            Ok(other) => Err(format!("unexpected XRecord update response: {other:?}")),
+            Err(error) => Err(error.to_string()),
+        }
+    }
+
+    fn delete_xrecord(
+        &mut self,
+        dictionary_path: &[&str],
+        name: &str,
+    ) -> Result<crate::host::XRecord, String> {
+        match self.client.request(PluginRequest::DeleteXRecord {
+            dictionary_path: dictionary_path.iter().map(|s| s.to_string()).collect(),
+            name: name.to_string(),
+        }) {
+            Ok(PluginResponse::XRecordDeleteResult(result)) => {
+                if result.is_ok() {
+                    self.document_cache = OnceCell::new();
+                }
+                result
+            }
+            Ok(PluginResponse::Error(error)) => Err(error),
+            Ok(other) => Err(format!("unexpected XRecord delete response: {other:?}")),
+            Err(error) => Err(error.to_string()),
+        }
+    }
+
+    fn list_xrecords(&self, dictionary_path: &[&str]) -> Result<Vec<String>, String> {
+        match self.client.request(PluginRequest::ListXRecords {
+            dictionary_path: dictionary_path.iter().map(|s| s.to_string()).collect(),
+        }) {
+            Ok(PluginResponse::XRecordNames(result)) => result,
+            Ok(PluginResponse::Error(error)) => Err(error),
+            Ok(other) => Err(format!("unexpected XRecord list response: {other:?}")),
+            Err(error) => Err(error.to_string()),
+        }
+    }
+
+    fn add_block_record(
+        &mut self,
+        name: &str,
+        entities: Vec<codec::EntityType>,
+    ) -> Result<codec::Handle, String> {
+        match self.client.request(PluginRequest::AddBlockRecord {
+            name: name.to_string(),
+            entities,
+        }) {
+            Ok(PluginResponse::Handle(handle)) => {
+                self.document_cache = OnceCell::new();
+                Ok(handle)
+            }
+            Ok(PluginResponse::Error(error)) => Err(error),
+            Ok(other) => Err(format!("unexpected AddBlockRecord response: {other:?}")),
+            Err(error) => Err(error.to_string()),
+        }
+    }
+
     // ── fork: the fork's own additions follow the upstream ones ─────────────
     // (same policy as `crate::host`: upstream's slots/positions stay untouched,
     // fork-only methods are appended. See docs/fork-patches.md §A-1.)

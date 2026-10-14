@@ -2464,71 +2464,75 @@ impl<'a> HostSession<'a> {
                 Ok(handle)
             }
             TableOperation::BlockRename { from, to } => {
-                let (from, handle) = editable_block(self.document(), from.trim())?;
-                let to = validated_symbol_name(&to, "a block name")?;
-                if to.starts_with('*') {
-                    return Err("a block name cannot start with '*'".to_owned());
+                let from = from.trim().to_owned();
+                let to = to.trim().to_owned();
+                let open_edits = self.open_block_edits();
+                let handle = self
+                    .document()
+                    .block_records
+                    .get(&from)
+                    .map(|record| record.handle)
+                    .unwrap_or(Handle::NULL);
+                self.push_undo(&format!("Rename block {from} to {to}"));
+                match crate::scene::block_service::rename(
+                    &mut self.app.tabs[self.tab].scene,
+                    &from,
+                    &to,
+                    &open_edits,
+                ) {
+                    Ok(_) => {
+                        self.finish_block_change();
+                        Ok(handle)
+                    }
+                    Err(error) => {
+                        self.app.discard_last_undo_entry(self.tab);
+                        Err(error.to_string())
+                    }
                 }
-                if from.eq_ignore_ascii_case(&to) {
-                    return Err("the new block name matches the current one (a case-only change is not supported)".to_owned());
-                }
-                if self.document().block_records.get(&to).is_some() {
-                    return Err(format!("block {to:?} already exists"));
-                }
-                self.push_undo("Rename block");
-                if !self.app.tabs[self.tab].scene.rename_block(&from, &to) {
-                    return Err("the block could not be renamed".to_owned());
-                }
-                self.finish_block_change();
-                Ok(handle)
             }
             TableOperation::BlockDelete { name } => {
-                let (name, handle) = editable_block(self.document(), name.trim())?;
-                let doc = self.document();
-                let referenced = doc.entities().any(|entity| match entity {
-                    E::Insert(insert) => insert.block_name.eq_ignore_ascii_case(&name),
-                    E::MultiLeader(leader) => {
-                        leader.block_content_handle == Some(handle)
-                            || leader.context.block_content_handle == Some(handle)
+                let name = name.trim().to_owned();
+                // The external API has no force flag, so a referenced block is
+                // always refused here — same rule as the palette.
+                let open_edits = self.open_block_edits();
+                let handle = self
+                    .document()
+                    .block_records
+                    .get(&name)
+                    .map(|record| record.handle)
+                    .unwrap_or(Handle::NULL);
+                self.push_undo(&format!("Delete block {name}"));
+                match crate::scene::block_service::delete(
+                    &mut self.app.tabs[self.tab].scene,
+                    &name,
+                    crate::scene::block_service::DeleteOptions {
+                        force: false,
+                        open_edits: &open_edits,
+                    },
+                ) {
+                    Ok(_) => {
+                        self.finish_block_change();
+                        Ok(handle)
                     }
-                    _ => false,
-                }) || doc.dim_styles.iter().any(|style| {
-                    [style.dimblk, style.dimblk1, style.dimblk2, style.dimldrblk].contains(&handle)
-                });
-                if referenced {
-                    return Err(format!("block {name:?} is still inserted or used by a style or leader"));
+                    Err(error) => {
+                        self.app.discard_last_undo_entry(self.tab);
+                        Err(error.to_string())
+                    }
                 }
-                let members: Vec<Handle> = {
-                    let record = doc.block_records.get(&name).expect("checked above");
-                    let mut members = record.entity_handles.clone();
-                    members.push(record.block_entity_handle);
-                    members.push(record.block_end_handle);
-                    members
-                };
-                self.push_undo("Delete block");
-                let doc = self.document_mut();
-                for member in members {
-                    doc.remove_entity(member);
-                }
-                doc.block_records.remove(&name);
-                let orphans: Vec<Handle> = {
-                    let live: std::collections::HashSet<Handle> = doc.block_records.iter().map(|r| r.handle).collect();
-                    doc.objects
-                        .iter()
-                        .filter_map(|(h, object)| match object {
-                            codec::objects::ObjectType::SortEntitiesTable(table) if !live.contains(&table.block_owner_handle) => Some(*h),
-                            _ => None,
-                        })
-                        .collect()
-                };
-                for orphan in orphans {
-                    doc.objects.remove(&orphan);
-                }
-                self.finish_block_change();
-                Ok(handle)
             }
             _ => Err("unsupported table operation".to_owned()),
         }
+    }
+
+    /// Block records this document has open in a BEDIT session. Nested
+    /// sessions all count, so the whole stack is handed to the block service,
+    /// which refuses delete/rename and skips PURGE for every one of them.
+    fn open_block_edits(&self) -> Vec<Handle> {
+        self.app.tabs[self.tab]
+            .block_edits
+            .iter()
+            .map(|session| session.br_handle)
+            .collect()
     }
 
     fn finish_block_change(&mut self) {
@@ -2856,6 +2860,368 @@ impl<'a> HostSession<'a> {
         self.publish_document_view();
         true
     }
+    // ── XRecord objects (API v8, additive) ────────────────────────────────────
+    //
+    // XRecords are non-graphical objects: name-addressed typed group-code/value
+    // pairs stored under the drawing's named-object dictionary, where a
+    // drawing keeps application data. They give scripts a record carrier that
+    // lives in the file and survives model view entirely, with no carrier
+    // entity.
+
+    /// The dictionary addressed by `dictionary_path` under the named-object
+    /// dictionary root (an empty path is the root itself). Nothing is created:
+    /// a missing fragment is an error, and so is a fragment that exists but
+    /// names a non-dictionary object.
+    fn xrecord_dictionary_at(&self, dictionary_path: &[&str]) -> Result<Handle, String> {
+        use codec::objects::ObjectType;
+        let root = self.document().header.named_objects_dict_handle;
+        if !matches!(
+            self.document().objects.get(&root),
+            Some(ObjectType::Dictionary(_))
+        ) {
+            return Err("the drawing has no named-object dictionary".to_owned());
+        }
+        let mut current = root;
+        for fragment in dictionary_path {
+            let name = validated_symbol_name(fragment, "a dictionary name")?;
+            match self.document().objects.get(&current) {
+                Some(ObjectType::Dictionary(dictionary)) => match dictionary.get(&name) {
+                    Some(child) => {
+                        if !matches!(
+                            self.document().objects.get(&child),
+                            Some(ObjectType::Dictionary(_))
+                        ) {
+                            return Err(format!("dictionary entry {name:?} is not a dictionary"));
+                        }
+                        current = child;
+                    }
+                    None => return Err(format!("dictionary {name:?} does not exist")),
+                },
+                _ => return Err(format!("dictionary {current:?} does not exist")),
+            }
+        }
+        Ok(current)
+    }
+
+    /// The deepest ancestor of `dictionary_path` that already exists, and how
+    /// deep the path resolved. Errors when a fragment that exists names a
+    /// non-dictionary object. Creation calls this first so its refusals happen
+    /// before the undo step is recorded.
+    fn deepest_existing_xrecord_dictionary(
+        &self,
+        dictionary_path: &[&str],
+    ) -> Result<(Handle, usize), String> {
+        use codec::objects::ObjectType;
+        let root = self.document().header.named_objects_dict_handle;
+        if !matches!(
+            self.document().objects.get(&root),
+            Some(ObjectType::Dictionary(_))
+        ) {
+            return Err("the drawing has no named-object dictionary".to_owned());
+        }
+        let mut current = root;
+        let mut depth = 0usize;
+        // Validate the complete path before walking it. If an existing prefix
+        // is followed by an invalid or malformed fragment, stopping at the
+        // first missing name would otherwise defer the error until after the
+        // undo scope has opened (and the creation walk could panic).
+        for fragment in dictionary_path {
+            validated_symbol_name(fragment, "a dictionary name")?;
+        }
+        for fragment in dictionary_path {
+            let name = validated_symbol_name(fragment, "a dictionary name")?;
+            match self.document().objects.get(&current) {
+                Some(ObjectType::Dictionary(dictionary)) => match dictionary.get(&name) {
+                    Some(child) => {
+                        if !matches!(
+                            self.document().objects.get(&child),
+                            Some(ObjectType::Dictionary(_))
+                        ) {
+                            return Err(format!("dictionary entry {name:?} is not a dictionary"));
+                        }
+                        current = child;
+                        depth += 1;
+                    }
+                    None => break,
+                },
+                _ => return Err(format!("dictionary {current:?} does not exist")),
+            }
+        }
+        Ok((current, depth))
+    }
+
+    /// Walk `dictionary_path` from the named-object dictionary root, creating
+    /// missing dictionaries on the way — the same bootstrap
+    /// `ensure_image_dictionary` uses for ACAD_IMAGE_DICT: each new dictionary
+    /// owns its handle, is owned by its parent and is registered in the parent
+    /// under its name. Mutates; only valid after the caller validated the path
+    /// and recorded its undo step.
+    fn xrecord_dictionary_at_or_create(
+        &mut self,
+        dictionary_path: &[&str],
+    ) -> Result<Handle, String> {
+        use codec::objects::{Dictionary, ObjectType};
+        let root = self.document().header.named_objects_dict_handle;
+        if !matches!(
+            self.document().objects.get(&root),
+            Some(ObjectType::Dictionary(_))
+        ) {
+            return Err("the drawing has no named-object dictionary".to_owned());
+        }
+        let mut current = root;
+        for fragment in dictionary_path {
+            let name = validated_symbol_name(fragment, "a dictionary name")?;
+            let existing = match self.document().objects.get(&current) {
+                Some(ObjectType::Dictionary(dictionary)) => dictionary.get(&name),
+                _ => return Err(format!("dictionary {current:?} does not exist")),
+            };
+            match existing {
+                Some(child) => {
+                    if !matches!(
+                        self.document().objects.get(&child),
+                        Some(ObjectType::Dictionary(_))
+                    ) {
+                        return Err(format!("dictionary entry {name:?} is not a dictionary"));
+                    }
+                    current = child;
+                }
+                None => {
+                    let child = self.document_mut().allocate_handle();
+                    let mut dictionary = Dictionary::new();
+                    dictionary.handle = child;
+                    dictionary.owner = current;
+                    self.document_mut()
+                        .objects
+                        .insert(child, ObjectType::Dictionary(dictionary));
+                    if let Some(ObjectType::Dictionary(entries)) =
+                        self.document_mut().objects.get_mut(&current)
+                    {
+                        entries.add_entry(name, child);
+                    }
+                    current = child;
+                }
+            }
+        }
+        Ok(current)
+    }
+
+    /// Undo composition for XRecord writes. Plugins may open one `push_undo`
+    /// scope for a whole operation — the same contract entity writes follow
+    /// (`add_entity` and friends perform no undo bookkeeping of their own) —
+    /// and every XRecord mutation inside it joins that open scope, so the
+    /// finished scope is a single undo step under the plugin's own label that
+    /// restores (and redoes) the whole operation at once. Only a mutation with
+    /// no scope open opens its own — and then the caller finishes it again,
+    /// keeping a scope-less call one undo step (the `table_operation` /
+    /// `update_entities_transaction` behavior). Refusals never reach this:
+    /// they are decided before any change. Returns whether this call opened
+    /// its own scope.
+    fn ensure_xrecord_undo_scope(&mut self, label: &str) -> bool {
+        if self.app.tabs[self.tab].history.pending.is_none() {
+            self.push_undo(label);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Create an XRecord named `name` under `dictionary_path`, storing
+    /// `entries` (API v8, additive). Missing dictionaries on the path are
+    /// created, so the first call seeds a plugin's namespace; the name must be
+    /// unused (dictionary lookup is case-insensitive). Every refusal happens
+    /// before the undo scope is touched, so a failure changes nothing. The
+    /// created record is registered in — and owned by — its dictionary, and
+    /// the new handle is returned.
+    ///
+    /// Undo composition: a mutation inside a plugin-opened `push_undo` scope
+    /// joins it (see [`HostSession::ensure_xrecord_undo_scope`]); a scope-less
+    /// call is one undo step of its own.
+    pub fn create_xrecord(
+        &mut self,
+        dictionary_path: &[&str],
+        name: &str,
+        entries: Vec<codec::objects::XRecordEntry>,
+    ) -> Result<Handle, String> {
+        use codec::objects::{ObjectType, XRecord};
+        let name = validated_symbol_name(name, "an XRecord name")?;
+        validated_xrecord_entries(&entries)?;
+        // Pre-check the path: fragments that already exist must be
+        // dictionaries, and when the full path exists the name must be free —
+        // create must never silently overwrite a key.
+        let (deepest, depth) = self.deepest_existing_xrecord_dictionary(dictionary_path)?;
+        if depth == dictionary_path.len() {
+            if let Some(ObjectType::Dictionary(dictionary)) = self.document().objects.get(&deepest)
+            {
+                if dictionary.get(&name).is_some() {
+                    return Err(format!("XRecord {name:?} already exists"));
+                }
+            }
+        }
+        let own_scope = self.ensure_xrecord_undo_scope("Create XRecord");
+        // The pre-check ruled out every failure mode; the walk now only creates
+        // the dictionary fragments that were missing.
+        let dictionary = self.xrecord_dictionary_at_or_create(dictionary_path)?;
+        let handle = self.document_mut().allocate_handle();
+        let mut record = XRecord::named(name.clone());
+        record.handle = handle;
+        record.owner = dictionary;
+        record.entries = entries;
+        record.synchronize_object_references();
+        self.document_mut()
+            .objects
+            .insert(handle, ObjectType::XRecord(record));
+        if let Some(ObjectType::Dictionary(entries)) =
+            self.document_mut().objects.get_mut(&dictionary)
+        {
+            entries.add_entry(name, handle);
+        }
+        self.set_dirty();
+        self.publish_document_view();
+        if own_scope {
+            self.app.finish_pending_history(self.tab);
+        }
+        Ok(handle)
+    }
+
+    /// Read the entries of an existing XRecord by name (API v8, additive).
+    /// The entries are returned verbatim; the path, the name and the target
+    /// kind are validated first, so a refusal changes nothing.
+    pub fn read_xrecord(
+        &self,
+        dictionary_path: &[&str],
+        name: &str,
+    ) -> Result<Vec<codec::objects::XRecordEntry>, String> {
+        use codec::objects::ObjectType;
+        let (_, _, handle) = self.xrecord_lookup(dictionary_path, name)?;
+        match self.document().objects.get(&handle) {
+            Some(ObjectType::XRecord(record)) => Ok(record.entries.clone()),
+            _ => unreachable!("validated XRecord"),
+        }
+    }
+
+    /// Atomically replace the entries of an existing XRecord (API v8,
+    /// additive). Neither the path nor its dictionaries are created — an
+    /// update must never create anything silently. Identity (handle, owning
+    /// dictionary, name) stays; the entries and their DWG handle-reference
+    /// stream are replaced and the record's verbatim raw payloads are dropped,
+    /// so later saves emit the new content. Every refusal happens before the
+    /// undo scope is touched. Undo composition: a mutation inside a
+    /// plugin-opened `push_undo` scope joins it (see
+    /// [`HostSession::ensure_xrecord_undo_scope`]); a scope-less call is one
+    /// undo step of its own.
+    pub fn update_xrecord(
+        &mut self,
+        dictionary_path: &[&str],
+        name: &str,
+        entries: Vec<codec::objects::XRecordEntry>,
+    ) -> Result<Handle, String> {
+        use codec::objects::ObjectType;
+        validated_xrecord_entries(&entries)?;
+        let (_, _, handle) = self.xrecord_lookup(dictionary_path, name)?;
+        let own_scope = self.ensure_xrecord_undo_scope("Update XRecord");
+        let record = match self.document_mut().objects.get_mut(&handle) {
+            Some(ObjectType::XRecord(record)) => record,
+            _ => unreachable!("validated XRecord"),
+        };
+        record.entries = entries;
+        // Rebuild the DWG object-reference stream from the new 330-369 entries
+        // and drop the verbatim bytes an earlier load kept: the update fully
+        // defines the record now.
+        record.synchronize_object_references();
+        record.preserve_object_reference_stream = false;
+        record.entries_complete = true;
+        record.raw_data.clear();
+        record.raw_dwg_data = None;
+        record.raw_dwg_handle_bits = 0;
+        record.raw_dwg_version = None;
+        self.set_dirty();
+        self.publish_document_view();
+        if own_scope {
+            self.app.finish_pending_history(self.tab);
+        }
+        Ok(handle)
+    }
+
+    /// Delete the XRecord named `name` and its dictionary entry (API v8,
+    /// additive). Returns the removed record with its prior content, so audits
+    /// keep what they removed. Every refusal happens before the undo scope is
+    /// touched. Undo composition: a mutation inside a plugin-opened
+    /// `push_undo` scope joins it (see
+    /// [`HostSession::ensure_xrecord_undo_scope`]); a scope-less call is one
+    /// undo step of its own.
+    pub fn delete_xrecord(
+        &mut self,
+        dictionary_path: &[&str],
+        name: &str,
+    ) -> Result<codec::objects::XRecord, String> {
+        use codec::objects::ObjectType;
+        let (dictionary, name, handle) = self.xrecord_lookup(dictionary_path, name)?;
+        let own_scope = self.ensure_xrecord_undo_scope("Delete XRecord");
+        let removed = match self.document_mut().objects.remove(&handle) {
+            Some(ObjectType::XRecord(record)) => record,
+            _ => unreachable!("validated XRecord"),
+        };
+        if let Some(ObjectType::Dictionary(entries)) =
+            self.document_mut().objects.get_mut(&dictionary)
+        {
+            entries
+                .entries
+                .retain(|(key, value)| !key.eq_ignore_ascii_case(&name) || *value != handle);
+        }
+        self.set_dirty();
+        self.publish_document_view();
+        if own_scope {
+            self.app.finish_pending_history(self.tab);
+        }
+        Ok(removed)
+    }
+
+    /// List the XRecord names under the dictionary addressed by
+    /// `dictionary_path` (API v8, additive): the dictionary keys that address
+    /// XRecord objects, in the dictionary's own order, so consumers can audit
+    /// and export without knowing names in advance. Non-XRecord entries are
+    /// not listed.
+    pub fn list_xrecords(&self, dictionary_path: &[&str]) -> Result<Vec<String>, String> {
+        use codec::objects::ObjectType;
+        let dictionary = self.xrecord_dictionary_at(dictionary_path)?;
+        let Some(ObjectType::Dictionary(entries)) = self.document().objects.get(&dictionary) else {
+            return Err(format!("dictionary {dictionary:?} does not exist"));
+        };
+        Ok(entries
+            .entries
+            .iter()
+            .filter_map(|(key, handle)| match self.document().objects.get(handle) {
+                Some(ObjectType::XRecord(_)) => Some(key.clone()),
+                _ => None,
+            })
+            .collect())
+    }
+
+    /// Resolve an existing XRecord to its containing dictionary, its validated
+    /// name and its handle, after validating the path, the name and the target
+    /// kind.
+    fn xrecord_lookup(
+        &self,
+        dictionary_path: &[&str],
+        name: &str,
+    ) -> Result<(Handle, String, Handle), String> {
+        use codec::objects::ObjectType;
+        let dictionary = self.xrecord_dictionary_at(dictionary_path)?;
+        let name = validated_symbol_name(name, "an XRecord name")?;
+        let Some(ObjectType::Dictionary(entries)) = self.document().objects.get(&dictionary) else {
+            return Err(format!("dictionary {dictionary:?} does not exist"));
+        };
+        let Some(handle) = entries.get(&name) else {
+            return Err(format!("XRecord {name:?} does not exist"));
+        };
+        if !matches!(
+            self.document().objects.get(&handle),
+            Some(ObjectType::XRecord(_))
+        ) {
+            return Err(format!("dictionary entry {name:?} is not an XRecord"));
+        }
+        Ok((dictionary, name, handle))
+    }
 }
 
 /// True when block `outer` (transitively) contains an insert of `target`.
@@ -2893,6 +3259,24 @@ fn validated_symbol_name(raw: &str, what: &str) -> Result<String, String> {
         return Err(format!("{what} cannot contain {bad:?}"));
     }
     Ok(name.to_owned())
+}
+
+fn validated_xrecord_entries(entries: &[codec::objects::XRecordEntry]) -> Result<(), String> {
+    for entry in entries {
+        if !(1..=369).contains(&entry.code) {
+            return Err(format!(
+                "XRecord group code {} is out of range 1..=369",
+                entry.code
+            ));
+        }
+        if entry.code == 5 || entry.code == 105 {
+            return Err(format!(
+                "XRecord group code {} is reserved for the object handle",
+                entry.code
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn apply_text_style_config(
@@ -3163,6 +3547,40 @@ impl HostApi for HostSession<'_> {
     }
     fn run_command(&mut self, request: ocs_plugin_api::host::CommandRequest) -> Result<ocs_plugin_api::host::CommandOutcome, String> {
         self.run_command(request)
+    }
+
+    fn create_xrecord(
+        &mut self,
+        dictionary_path: &[&str],
+        name: &str,
+        entries: Vec<ocs_plugin_api::host::XRecordEntry>,
+    ) -> Result<Handle, String> {
+        self.create_xrecord(dictionary_path, name, entries)
+    }
+    fn read_xrecord(
+        &self,
+        dictionary_path: &[&str],
+        name: &str,
+    ) -> Result<Vec<ocs_plugin_api::host::XRecordEntry>, String> {
+        self.read_xrecord(dictionary_path, name)
+    }
+    fn update_xrecord(
+        &mut self,
+        dictionary_path: &[&str],
+        name: &str,
+        entries: Vec<ocs_plugin_api::host::XRecordEntry>,
+    ) -> Result<Handle, String> {
+        self.update_xrecord(dictionary_path, name, entries)
+    }
+    fn delete_xrecord(
+        &mut self,
+        dictionary_path: &[&str],
+        name: &str,
+    ) -> Result<ocs_plugin_api::host::XRecord, String> {
+        self.delete_xrecord(dictionary_path, name)
+    }
+    fn list_xrecords(&self, dictionary_path: &[&str]) -> Result<Vec<String>, String> {
+        self.list_xrecords(dictionary_path)
     }
 
     // ── fork: API v5 (OCSMechanical) — appended *after* upstream's methods so a
@@ -3771,7 +4189,7 @@ impl crate::command::CadCommand for PluginProcessInteractiveAdapter {
             .process
             .interactive_event(
                 self.command_id,
-                InteractiveEvent::ObjectPick {
+                InteractiveEvent::ObjectPickSnapped {
                     handle,
                     pt: [pt.x, pt.y, pt.z],
                     snapped,
@@ -3922,6 +4340,45 @@ mod tests {
             plottable: true,
             off: false,
         }
+    }
+
+    #[test]
+    fn v8_xrecord_roundtrip_and_full_path_validation() {
+        let mut app = OpenCADStudio::new_for_test();
+        app.tabs[0].is_start = false;
+        let mut host = HostSession::new(&mut app, 0);
+        let initial = vec![codec::objects::XRecordEntry::string(1, "initial")];
+
+        let handle = host
+            .create_xrecord(&["OCSM", "META"], "STATE", initial.clone())
+            .expect("create XRecord");
+        assert!(!handle.is_null());
+        assert_eq!(host.list_xrecords(&["OCSM", "META"]).unwrap(), vec!["STATE"]);
+        assert!(matches!(
+            host.read_xrecord(&["OCSM", "META"], "STATE").unwrap()[0].value,
+            codec::objects::XRecordValue::String(ref value) if value == "initial"
+        ));
+
+        let updated = vec![codec::objects::XRecordEntry::string(1, "updated")];
+        assert_eq!(host.update_xrecord(&["OCSM", "META"], "STATE", updated), Ok(handle));
+        assert!(matches!(
+            host.read_xrecord(&["OCSM", "META"], "STATE").unwrap()[0].value,
+            codec::objects::XRecordValue::String(ref value) if value == "updated"
+        ));
+
+        // Validate every path fragment before opening undo or creating a prefix.
+        let rejected = host.create_xrecord(&["OCSM", "bad/name"], "BAD", Vec::new());
+        assert!(rejected.is_err());
+        assert_eq!(host.list_xrecords(&["OCSM", "META"]).unwrap(), vec!["STATE"]);
+
+        let removed = host
+            .delete_xrecord(&["OCSM", "META"], "STATE")
+            .expect("delete XRecord");
+        assert!(matches!(
+            removed.entries[0].value,
+            codec::objects::XRecordValue::String(ref value) if value == "updated"
+        ));
+        assert!(host.list_xrecords(&["OCSM", "META"]).unwrap().is_empty());
     }
 
     #[test]
@@ -4118,12 +4575,12 @@ mod tests {
         };
         app.tabs[0].scene.selected.insert(h1);
         {
-            let mut host = HostSession::new(&mut app, 0);
+            let host = HostSession::new(&mut app, 0);
             assert_eq!(host.selected_handles(), vec![h1]);
         }
         app.tabs[0].scene.selected.insert(h2);
         {
-            let mut host = HostSession::new(&mut app, 0);
+            let host = HostSession::new(&mut app, 0);
             assert_eq!(host.selected_handles().len(), 2);
         }
     }
@@ -4392,7 +4849,7 @@ mod tests {
             pending_snap: None,
         };
         use crate::command::CadCommand;
-        assert!(adapter.wants_text_input());
+        assert!(adapter.input_kind().wants_text());
         adapter.on_text_input("A");
         assert_eq!(spy.lock().unwrap().text, "A");
         // 注入 OSNAP 命中 → on_entity_pick 转发 snapped=true 且 pt 为命中点。
@@ -11704,7 +12161,11 @@ step('undo_move', lambda: M.move([u], (0, 0, 0), (7, 0, 0)))
 
         // Verify COGO_LINES does not exist initially
         assert!(!app.tabs[0].scene.document.layers.contains("COGO_LINES"));
-        assert!(!app.ribbon.layer_names.contains(&"COGO_LINES".to_string()));
+        assert!(!app
+            .ribbon
+            .layer_infos
+            .iter()
+            .any(|layer| layer.name == "COGO_LINES"));
 
         // 1. Add entity via HostSession (simulating plugin add_entity / add_line)
         {
@@ -11717,8 +12178,13 @@ step('undo_move', lambda: M.move([u], (0, 0, 0), (7, 0, 0)))
 
         // Verify layer is created in document AND refreshed in ribbon + layer panel
         assert!(app.tabs[0].scene.document.layers.contains("COGO_LINES"));
-        assert!(app.ribbon.layer_names.contains(&"COGO_LINES".to_string()),
-            "Ribbon layers should contain COGO_LINES after add_entity");
+        assert!(
+            app.ribbon
+                .layer_infos
+                .iter()
+                .any(|layer| layer.name == "COGO_LINES"),
+            "Ribbon layers should contain COGO_LINES after add_entity"
+        );
         assert!(app.tabs[0].layers.layers.iter().any(|l| l.name == "COGO_LINES"),
             "Layer panel should contain COGO_LINES after add_entity");
 
@@ -11729,8 +12195,13 @@ step('undo_move', lambda: M.move([u], (0, 0, 0), (7, 0, 0)))
 
         // Verify SURVEY_TRAVERSE layer is created and refreshed in ribbon + layer panel
         assert!(app.tabs[0].scene.document.layers.contains("SURVEY_TRAVERSE"));
-        assert!(app.ribbon.layer_names.contains(&"SURVEY_TRAVERSE".to_string()),
-            "Ribbon layers should contain SURVEY_TRAVERSE after commit_entity");
+        assert!(
+            app.ribbon
+                .layer_infos
+                .iter()
+                .any(|layer| layer.name == "SURVEY_TRAVERSE"),
+            "Ribbon layers should contain SURVEY_TRAVERSE after commit_entity"
+        );
         assert!(app.tabs[0].layers.layers.iter().any(|l| l.name == "SURVEY_TRAVERSE"),
             "Layer panel should contain SURVEY_TRAVERSE after commit_entity");
     }

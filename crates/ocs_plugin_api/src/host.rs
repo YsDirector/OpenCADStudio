@@ -1327,6 +1327,52 @@ pub trait HostApi {
         let _ = cmd;
         false
     }
+
+    // ── Upstream API v8 XRecord methods. Keep these before fork-only methods
+    // to preserve the upstream vtable prefix; fork plugins are rebuilt.
+    /// Create an XRecord under a named-object-dictionary path.
+    fn create_xrecord(
+        &mut self,
+        _dictionary_path: &[&str],
+        _name: &str,
+        _entries: Vec<XRecordEntry>,
+    ) -> Result<Handle, String> {
+        Err("XRecord creation is not supported by this host".to_owned())
+    }
+
+    /// Read an existing XRecord's entries by dictionary path and name.
+    fn read_xrecord(
+        &self,
+        _dictionary_path: &[&str],
+        _name: &str,
+    ) -> Result<Vec<XRecordEntry>, String> {
+        Err("XRecord reads are not supported by this host".to_owned())
+    }
+
+    /// Replace an existing XRecord's entries atomically.
+    fn update_xrecord(
+        &mut self,
+        _dictionary_path: &[&str],
+        _name: &str,
+        _entries: Vec<XRecordEntry>,
+    ) -> Result<Handle, String> {
+        Err("XRecord updates are not supported by this host".to_owned())
+    }
+
+    /// Delete an XRecord and return its previous content.
+    fn delete_xrecord(
+        &mut self,
+        _dictionary_path: &[&str],
+        _name: &str,
+    ) -> Result<XRecord, String> {
+        Err("XRecord deletes are not supported by this host".to_owned())
+    }
+
+    /// List XRecord names under a dictionary path.
+    fn list_xrecords(&self, _dictionary_path: &[&str]) -> Result<Vec<String>, String> {
+        Err("XRecord listing is not supported by this host".to_owned())
+    }
+
     // ── fork: API v5 HostApi surface (OCSMechanical) ───────────────────────
     // Appended **after** upstream's v6/v7 methods so a plugin built against
     // upstream alone keeps byte-compatible vtable offsets; fork plugins are
