@@ -1870,6 +1870,7 @@ pub fn style_sections(
     let s = &effective_style;
     let dimfxlon = int(ov::DIMFXLON, s.dimfxlon as i16) != 0;
     let dimtix = int(ov::DIMTIX, s.dimtix as i16) != 0;
+    let dimsah = int(ov::DIMSAH, s.dimsah as i16) != 0;
     let dimlunit = int(ov::DIMLUNIT, s.dimlunit);
     let dimfrac = int(ov::DIMFRAC, s.dimfrac);
     let dimalt = int(ov::DIMALT, s.dimalt as i16) != 0;
@@ -1934,15 +1935,7 @@ pub fn style_sections(
         }
     };
 
-    let mut arrow_options: Vec<String> = std::iter::once("Closed filled".to_string())
-        .chain(
-            document
-                .block_records
-                .iter()
-                .map(|record| record.name.clone())
-                .filter(|name| !name.is_empty()),
-        )
-        .collect();
+    let mut arrow_options = crate::scene::convert::tessellate::arrowhead_options(document);
     let mut linetype_options: Vec<String> = document
         .line_types
         .iter()
@@ -1956,10 +1949,10 @@ pub fn style_sections(
         .filter(|name| !name.is_empty())
         .collect();
 
-    let arrow_name = |code, inherited_handle, inherited_name: &str| {
-        ov::handle(data, code)
-            .map(|handle| block_name(document, handle, inherited_name))
-            .unwrap_or_else(|| block_name(document, inherited_handle, inherited_name))
+    let arrow_name = |code, inherited_handle, inherited_name: &str| match ov::handle(data, code) {
+        Some(handle) if handle.is_null() => "Closed filled".to_string(),
+        Some(handle) => block_name(document, handle, ""),
+        None => block_name(document, inherited_handle, inherited_name),
     };
     let linetype =
         |code, inherited| linetype_name(document, ov::handle(data, code).unwrap_or(inherited));
@@ -1969,18 +1962,15 @@ pub fn style_sections(
             ov::handle(data, ov::DIMLDRBLK).unwrap_or(s.dimldrblk),
             "Closed filled",
         )
+    } else if dimsah {
+        arrow_name(ov::DIMBLK1, s.dimblk1, &s.dimblk1_name)
     } else {
-        let inherited = if matches!(dimension, Dimension::Diameter(_)) && !s.dimsah {
-            (s.dimblk, s.dimblk_name.as_str())
-        } else {
-            (s.dimblk1, s.dimblk1_name.as_str())
-        };
-        arrow_name(ov::DIMBLK1, inherited.0, inherited.1)
+        arrow_name(ov::DIMBLK, s.dimblk, &s.dimblk_name)
     };
-    let arrow_2 = if matches!(dimension, Dimension::Diameter(_)) && !s.dimsah {
-        arrow_name(ov::DIMBLK2, s.dimblk, &s.dimblk_name)
-    } else {
+    let arrow_2 = if dimsah {
         arrow_name(ov::DIMBLK2, s.dimblk2, &s.dimblk2_name)
+    } else {
+        arrow_name(ov::DIMBLK, s.dimblk, &s.dimblk_name)
     };
     for current in [&arrow_1, &arrow_2] {
         if !arrow_options.contains(current) {
@@ -3385,14 +3375,18 @@ fn choice_value(selected: &str, options: &[&str]) -> crate::scene::model::object
 
 fn block_name(document: &CadDocument, handle: codec::Handle, fallback: &str) -> String {
     if handle.is_null() {
-        return "Closed filled".to_string();
+        return if fallback.trim().is_empty() {
+            "Closed filled".to_string()
+        } else {
+            crate::scene::convert::tessellate::arrowhead_label(fallback)
+        };
     }
     document
         .block_records
         .iter()
         .find(|record| record.handle == handle)
-        .map(|record| record.name.clone())
-        .unwrap_or_else(|| fallback.to_string())
+        .map(|record| crate::scene::convert::tessellate::arrowhead_label(&record.name))
+        .unwrap_or_else(|| crate::scene::convert::tessellate::arrowhead_label(fallback))
 }
 
 fn linetype_name(document: &CadDocument, handle: codec::Handle) -> String {
@@ -3419,8 +3413,8 @@ use codec::{CadDocument, EntityType, Handle};
 
 use crate::scene::convert::tess_util::aci_to_rgba;
 use crate::scene::convert::tessellate::{
-    add_polyline, add_segment, append_arrow, arrow_from_block,
-    arrow_from_block_with_deferred_hatch, normalized_or, ArrowKind, DimGeom,
+    add_polyline, add_segment, append_arrow, arrow_from_block, arrow_from_block_with_name,
+    normalized_or, ArrowKind, DimGeom,
 };
 use crate::scene::model::wire_model::{SnapHint, TangentGeom, WireModel};
 
@@ -3797,7 +3791,7 @@ fn tessellate_dimension_inner(
     //   2. Radius and large-radius dimensions → DIMLDRBLK.
     //   3. DIMSAH false → DIMBLK on both ends.
     //   4. DIMSAH true  → DIMBLK1 (first end), DIMBLK2 (second end).
-    // Unknown / NULL block handles fall back to ClosedFilled.
+    // Unknown blocks and empty handle/name pairs fall back to ClosedFilled.
     let dimasz = (dimasz_raw as f32).max(0.001);
     let defer_arrow_hatches = {
         let name = dim.base().block_name.trim();
@@ -3811,50 +3805,48 @@ fn tessellate_dimension_inner(
         };
         (t.clone(), t)
     } else if let Some(s) = style {
+        let data = &dim.base().common.extended_data;
+        let style_arrow = |handle, name: &str| {
+            arrow_from_block_with_name(document, handle, name, dimasz, defer_arrow_hatches)
+        };
+        let override_arrow = |code, handle, name: &str| {
+            crate::entities::dim_override::handle(data, code)
+                .map(|handle| style_arrow(handle, ""))
+                .unwrap_or_else(|| style_arrow(handle, name))
+        };
         if matches!(dim, Dimension::Radius(_) | Dimension::LargeRadial(_)) {
-            let handle = crate::entities::dim_override::handle(
-                &dim.base().common.extended_data,
-                crate::entities::dim_override::DIMLDRBLK,
-            )
-            .unwrap_or(s.dimldrblk);
-            let arrow =
-                arrow_from_block_with_deferred_hatch(document, handle, dimasz, defer_arrow_hatches);
+            let arrow = override_arrow(crate::entities::dim_override::DIMLDRBLK, s.dimldrblk, "");
             (arrow.clone(), arrow)
         } else if matches!(dim, Dimension::Diameter(_)) {
-            let data = &dim.base().common.extended_data;
-            let first =
-                crate::entities::dim_override::handle(data, crate::entities::dim_override::DIMBLK1)
-                    .unwrap_or(if dimsah { s.dimblk1 } else { s.dimblk });
-            let second =
-                crate::entities::dim_override::handle(data, crate::entities::dim_override::DIMBLK2)
-                    .unwrap_or(if dimsah { s.dimblk2 } else { s.dimblk });
-            (
-                arrow_from_block_with_deferred_hatch(document, first, dimasz, defer_arrow_hatches),
-                arrow_from_block_with_deferred_hatch(document, second, dimasz, defer_arrow_hatches),
-            )
+            if dimsah {
+                (
+                    override_arrow(
+                        crate::entities::dim_override::DIMBLK1,
+                        s.dimblk1,
+                        &s.dimblk1_name,
+                    ),
+                    override_arrow(
+                        crate::entities::dim_override::DIMBLK2,
+                        s.dimblk2,
+                        &s.dimblk2_name,
+                    ),
+                )
+            } else {
+                let arrow = override_arrow(
+                    crate::entities::dim_override::DIMBLK,
+                    s.dimblk,
+                    &s.dimblk_name,
+                );
+                (arrow.clone(), arrow)
+            }
         } else if dimsah {
             (
-                arrow_from_block_with_deferred_hatch(
-                    document,
-                    s.dimblk1,
-                    dimasz,
-                    defer_arrow_hatches,
-                ),
-                arrow_from_block_with_deferred_hatch(
-                    document,
-                    s.dimblk2,
-                    dimasz,
-                    defer_arrow_hatches,
-                ),
+                style_arrow(s.dimblk1, &s.dimblk1_name),
+                style_arrow(s.dimblk2, &s.dimblk2_name),
             )
         } else {
-            let a = arrow_from_block_with_deferred_hatch(
-                document,
-                s.dimblk,
-                dimasz,
-                defer_arrow_hatches,
-            );
-            (a.clone(), a)
+            let arrow = style_arrow(s.dimblk, &s.dimblk_name);
+            (arrow.clone(), arrow)
         }
     } else {
         let a = ArrowKind::Triangle {

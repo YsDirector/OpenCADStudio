@@ -11901,9 +11901,11 @@ impl OpenCADStudio {
                     {
                         if style.dimblk1.is_null() {
                             style.dimblk1 = style.dimblk;
+                            style.dimblk1_name = style.dimblk_name.clone();
                         }
                         if style.dimblk2.is_null() {
                             style.dimblk2 = style.dimblk1;
+                            style.dimblk2_name = style.dimblk1_name.clone();
                         }
                     }
                 }

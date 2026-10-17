@@ -1442,22 +1442,14 @@ impl OpenCADStudio {
                     .map(|s| s.name.clone())
                     .collect();
                 let doc = &tab.scene.document;
-                // Dropdown options (names must match the records exactly so the
-                // selection can be resolved back to a handle on the update side).
+                // Default is the legacy label for the null-handle closed
+                // filled arrow. Keep it for compatibility, then expose the
+                // same built-in/custom choices as the entity properties panel.
                 let mut block_opts: Vec<String> = vec!["Default".to_string()];
                 block_opts.extend(
-                    doc.block_records
-                        .iter()
-                        .filter(|b| {
-                            !b.is_layout()
-                                && !b.is_model_space()
-                                && !b.is_paper_space()
-                                && !b.flags.is_xref
-                                && !b.flags.is_xref_overlay
-                                && !b.flags.is_external
-                                && !b.name.starts_with('*')
-                        })
-                        .map(|b| b.name.clone()),
+                    crate::scene::convert::tessellate::arrowhead_options(doc)
+                        .into_iter()
+                        .filter(|option| option != "Closed filled"),
                 );
                 let mut lt_opts: Vec<String> = vec!["ByBlock".to_string()];
                 lt_opts.extend(doc.line_types.iter().map(|lt| lt.name.clone()));
@@ -1479,7 +1471,7 @@ impl OpenCADStudio {
                         doc.block_records
                             .iter()
                             .find(|b| b.handle == h)
-                            .map(|b| b.name.clone())
+                            .map(|b| crate::scene::convert::tessellate::arrowhead_label(&b.name))
                             .unwrap_or_else(|| "Default".to_string())
                     }
                 };

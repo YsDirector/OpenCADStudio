@@ -3287,18 +3287,6 @@ impl OpenCADStudio {
                 // the DIMLWD / DIMTAD enum value.
                 use crate::entities::dim_override as dov;
                 use codec::xdata::XDataValue;
-                let arrow_h: Option<codec::Handle> =
-                    if field == "arrow_block" && value != "Closed filled" {
-                        self.tabs[i]
-                            .scene
-                            .document
-                            .block_records
-                            .iter()
-                            .find(|b| crate::app::properties::arrowhead_label(&b.name) == value)
-                            .map(|b| b.handle)
-                    } else {
-                        None
-                    };
                 for &handle in &handles {
                     if self.tabs[i].scene.is_layer_locked(handle) {
                         continue;
@@ -3330,18 +3318,14 @@ impl OpenCADStudio {
                             )),
                         ),
                         "arrow_block" => {
-                            // "Closed filled" is an explicit override to
-                            // the null-handle default arrow (not a clear),
-                            // so the pick sticks even when the style's
-                            // arrow differs.
-                            if value == "Closed filled" {
-                                dov::set(
-                                    doc,
-                                    handle,
-                                    dov::DIMLDRBLK,
-                                    Some(XDataValue::Handle(codec::Handle::NULL)),
-                                );
-                            } else if let Some(h) = arrow_h {
+                            // Built-in choices materialize canonical arrow
+                            // block records; Closed filled remains the DXF
+                            // null-handle default.
+                            if let Some(h) =
+                                crate::scene::convert::tessellate::arrowhead_handle_for_choice(
+                                    doc, &value,
+                                )
+                            {
                                 dov::set(doc, handle, dov::DIMLDRBLK, Some(XDataValue::Handle(h)));
                             }
                         }

@@ -1018,14 +1018,7 @@ impl OpenCADStudio {
                             .unwrap_or_else(|| "Closed filled".to_string()),
                         None => leader_arrow_label(doc, ds, ld.arrow_enabled),
                     };
-                    let mut arrow_opts: Vec<String> = std::iter::once("Closed filled".to_string())
-                        .chain(
-                            doc.block_records
-                                .iter()
-                                .filter(|b| b.name.starts_with('_'))
-                                .map(|b| arrowhead_label(&b.name)),
-                        )
-                        .collect();
+                    let mut arrow_opts = crate::scene::convert::tessellate::arrowhead_options(doc);
                     // Keep the current value selectable even when it
                     // isn't in the standard list (e.g. "None", or a
                     // style arrow whose block isn't underscore-named).
@@ -4080,35 +4073,12 @@ fn dimtad_label(dimtad: i16) -> &'static str {
     }
 }
 
-/// Friendly arrowhead name from an arrowhead block-record name (the `_CLOSED…`
-/// style internal names map to their palette labels; a null/empty name is the
-/// closed-filled default).
+/// Friendly arrowhead name from an arrowhead block-record name. Keep this
+/// compatibility wrapper in `app::properties` because the property update
+/// path uses it when resolving leader overrides; the renderer owns the shared
+/// built-in name table.
 pub(crate) fn arrowhead_label(name: &str) -> String {
-    let key = name.trim().trim_start_matches('_').to_ascii_uppercase();
-    let label = match key.as_str() {
-        "" | "CLOSEDFILLED" => "Closed filled",
-        "CLOSED" => "Closed",
-        "CLOSEDBLANK" => "Closed blank",
-        "DOT" => "Dot",
-        "DOTSMALL" => "Dot small",
-        "DOTBLANK" => "Dot blank",
-        "SMALLDOTBLANK" => "Dot small blank",
-        "ORIGIN" => "Origin indicator",
-        "ORIGIN2" => "Origin indicator 2",
-        "OPEN" => "Open",
-        "OPEN90" => "Right angle",
-        "OPEN30" => "Open 30",
-        "NONE" => "None",
-        "OBLIQUE" => "Oblique",
-        "ARCHTICK" => "Architectural tick",
-        "BOXBLANK" => "Box",
-        "BOXFILLED" => "Box filled",
-        "DATUMBLANK" => "Datum triangle",
-        "DATUMFILLED" => "Datum triangle filled",
-        "INTEGRAL" => "Integral",
-        _ => return name.to_string(),
-    };
-    label.to_string()
+    crate::scene::convert::tessellate::arrowhead_label(name)
 }
 
 /// The leader's arrowhead label, resolved from the dim style's DIMLDRBLK block.

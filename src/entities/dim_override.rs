@@ -394,6 +394,7 @@ fn inherited_int(doc: &CadDocument, handle: Handle, code: i16) -> i16 {
         DIMTOL => style.dimtol as i16,
         DIMLIM => style.dimlim as i16,
         DIMALT => style.dimalt as i16,
+        DIMSAH => style.dimsah as i16,
         DIMAZIN => style.dimazin,
         DIMAUNIT => style.dimaunit,
         DIMADEC => style.dimadec,
@@ -496,8 +497,15 @@ fn apply_property(doc: &mut CadDocument, handle: Handle, field: &str, value: &st
     }
     let handle_field = match field {
         "dim_radial_arrow" => Some(DIMLDRBLK),
-        "dim_arrowhead_1" => Some(DIMBLK1),
-        "dim_arrowhead_2" => Some(DIMBLK2),
+        "dim_arrowhead_1" | "dim_arrowhead_2" => Some(if inherited_int(doc, handle, DIMSAH) != 0 {
+            if field == "dim_arrowhead_1" {
+                DIMBLK1
+            } else {
+                DIMBLK2
+            }
+        } else {
+            DIMBLK
+        }),
         "dim_linetype" => Some(DIMLTYPE),
         "dim_ext_linetype_1" => Some(DIMLTEX1),
         "dim_ext_linetype_2" => Some(DIMLTEX2),
@@ -507,14 +515,7 @@ fn apply_property(doc: &mut CadDocument, handle: Handle, field: &str, value: &st
     if let Some(code) = handle_field {
         let resolved = match field {
             "dim_radial_arrow" | "dim_arrowhead_1" | "dim_arrowhead_2" => {
-                if trimmed == "Closed filled" {
-                    Some(Handle::NULL)
-                } else {
-                    doc.block_records
-                        .iter()
-                        .find(|record| record.name == trimmed)
-                        .map(|record| record.handle)
-                }
+                crate::scene::convert::tessellate::arrowhead_handle_for_choice(doc, trimmed)
             }
             "dim_text_style" => doc
                 .text_styles
@@ -837,5 +838,42 @@ fn parse_lineweight_label(value: &str) -> Option<i16> {
             .parse::<f64>()
             .ok()
             .map(|millimetres| (millimetres * 100.0).round() as i16),
+    }
+}
+
+#[cfg(test)]
+mod dimsah_arrow_tests {
+    use super::{handle as override_handle, set_property, DIMBLK, DIMBLK1};
+    use codec::entities::{Dimension, DimensionLinear};
+    use codec::types::Vector3;
+    use codec::{CadDocument, EntityType};
+
+    #[test]
+    fn arrow_property_uses_shared_dimblk_when_dimsah_is_off() {
+        let mut document = CadDocument::new();
+        document.dim_styles.get_mut("Standard").unwrap().dimsah = false;
+        let expected =
+            crate::scene::convert::tessellate::arrowhead_handle_for_choice(&mut document, "None")
+                .unwrap();
+
+        let mut linear =
+            DimensionLinear::horizontal(Vector3::new(0.0, 0.0, 0.0), Vector3::new(10.0, 0.0, 0.0));
+        linear.base.style_name = "Standard".to_string();
+        let entity_handle = document
+            .add_entity(EntityType::Dimension(Dimension::Linear(linear)))
+            .unwrap();
+
+        assert!(set_property(
+            &mut document,
+            entity_handle,
+            "dim_arrowhead_1",
+            "None"
+        ));
+        let EntityType::Dimension(dimension) = document.get_entity(entity_handle).unwrap() else {
+            panic!("dimension disappeared");
+        };
+        let data = &dimension.base().common.extended_data;
+        assert_eq!(override_handle(data, DIMBLK), Some(expected));
+        assert_eq!(override_handle(data, DIMBLK1), None);
     }
 }

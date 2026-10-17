@@ -2686,6 +2686,56 @@ fn sync_current_styles_on_save(doc: &mut CadDocument) {
     // `persist_true_type_fonts`).
     persist_true_type_fonts(doc);
 
+    // R13/R14 DIMSTYLE records carry arrow names in addition to the newer
+    // hard pointers. Resolve a name-only style before writing a modern DXF or
+    // DWG so an ARCHTICK/None/etc. choice is not silently replaced by the
+    // null-handle closed-filled default.
+    let legacy_arrow_names: Vec<(String, u8, String)> = doc
+        .dim_styles
+        .iter()
+        .flat_map(|style| {
+            let style_name = style.name.clone();
+            [
+                (0_u8, style.dimblk_name.clone()),
+                (1_u8, style.dimblk1_name.clone()),
+                (2_u8, style.dimblk2_name.clone()),
+            ]
+            .into_iter()
+            .filter(|(_, name)| !name.trim().is_empty())
+            .map(move |(slot, name)| (style_name.clone(), slot, name))
+        })
+        .collect();
+    for (style_name, slot, arrow_name) in legacy_arrow_names {
+        let Some(handle) =
+            crate::scene::convert::tessellate::arrowhead_handle_for_choice(doc, &arrow_name)
+        else {
+            continue;
+        };
+        if let Some(style) = doc.dim_styles.get_mut(&style_name) {
+            match slot {
+                0 => {
+                    style.dimblk = handle;
+                    if handle.is_null() {
+                        style.dimblk_name.clear();
+                    }
+                }
+                1 => {
+                    style.dimblk1 = handle;
+                    if handle.is_null() {
+                        style.dimblk1_name.clear();
+                    }
+                }
+                2 => {
+                    style.dimblk2 = handle;
+                    if handle.is_null() {
+                        style.dimblk2_name.clear();
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
     // The renderer uses a closed filled arrow when a referenced block is
     // missing. Persist that same default instead of a dangling hard pointer:
     // Rhino otherwise drops every dimension using the affected DIMSTYLE.
@@ -2703,6 +2753,25 @@ fn sync_current_styles_on_save(doc: &mut CadDocument) {
         ] {
             if !handle.is_null() && !block_handles.contains(handle) {
                 *handle = codec::Handle::NULL;
+            }
+        }
+    }
+
+    // Keep the legacy names in sync with valid handles too; old writers use
+    // these slots even when the drawing currently targets a newer version.
+    let block_names: rustc_hash::FxHashMap<_, _> = doc
+        .block_records
+        .iter()
+        .map(|record| (record.handle, record.name.clone()))
+        .collect();
+    for style in doc.dim_styles.iter_mut() {
+        for (handle, name) in [
+            (&style.dimblk, &mut style.dimblk_name),
+            (&style.dimblk1, &mut style.dimblk1_name),
+            (&style.dimblk2, &mut style.dimblk2_name),
+        ] {
+            if let Some(block_name) = block_names.get(handle) {
+                *name = block_name.clone();
             }
         }
     }
@@ -3077,6 +3146,40 @@ mod dimension_arrow_save_tests {
             (style.dimasz, style.dimtxt, style.dimscale),
             (6.0, 3.0, 15.0)
         );
+    }
+
+    #[test]
+    fn legacy_arrow_names_resolve_handles_before_modern_save() {
+        let mut doc = CadDocument::new();
+        let mut style = DimStyle::new("LegacyArrowNames");
+        style.handle = doc.allocate_handle();
+        style.dimblk_name = "ARCHTICK".to_string();
+        style.dimblk1_name = "_NONE".to_string();
+        style.dimblk2_name = "DOTSMALL".to_string();
+        doc.dim_styles.add(style).unwrap();
+
+        sync_current_styles_on_save(&mut doc);
+        let style = doc.dim_styles.get("LegacyArrowNames").unwrap();
+        let names = [style.dimblk, style.dimblk1, style.dimblk2].map(|handle| {
+            doc.block_records
+                .iter()
+                .find(|record| record.handle == handle)
+                .map(|record| record.name.as_str())
+                .unwrap()
+        });
+        assert_eq!(names, ["_ARCHTICK", "_NONE", "_DOTSMALL"]);
+        assert_eq!(
+            [
+                style.dimblk_name.as_str(),
+                style.dimblk1_name.as_str(),
+                style.dimblk2_name.as_str()
+            ],
+            ["_ARCHTICK", "_NONE", "_DOTSMALL"]
+        );
+        for ext in ["dxf", "dwg"] {
+            save_to_bytes(&doc, ext, codec::DxfVersion::AC1032)
+                .unwrap_or_else(|error| panic!("{ext} save failed: {error}"));
+        }
     }
 
     #[test]

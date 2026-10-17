@@ -2747,12 +2747,221 @@ pub(crate) enum ArrowKind {
     },
 }
 
+/// Built-in dimension arrow choices exposed by AutoCAD's DIMBLK/DIMBLK1/2
+/// controls. The second item is the canonical block-record name used when a
+/// choice needs a real handle; an empty name is the DXF null-handle default.
+const BUILTIN_ARROWHEAD_CHOICES: &[(&str, &str)] = &[
+    ("Closed filled", ""),
+    ("Closed", "_CLOSED"),
+    ("None", "_NONE"),
+    ("Closed blank", "_CLOSEDBLANK"),
+    ("Small", "_SMALL"),
+    ("Open", "_OPEN"),
+    ("Open 30", "_OPEN30"),
+    ("Right angle", "_OPEN90"),
+    ("Dot", "_DOT"),
+    ("Dot small", "_DOTSMALL"),
+    ("Dot blank", "_DOTBLANK"),
+    ("Dot small blank", "_DOTSMALLBLANK"),
+    ("Origin indicator", "_ORIGIN"),
+    ("Origin indicator 2", "_ORIGIN2"),
+    ("Oblique", "_OBLIQUE"),
+    ("Architectural tick", "_ARCHTICK"),
+    ("Box", "_BOXBLANK"),
+    ("Box filled", "_BOXFILLED"),
+    ("Datum triangle", "_DATUMBLANK"),
+    ("Datum triangle filled", "_DATUMFILLED"),
+];
+
+fn arrowhead_key(value: &str) -> String {
+    value
+        .trim()
+        .trim_start_matches('_')
+        .chars()
+        .filter(|ch| !ch.is_whitespace() && *ch != '-')
+        .map(|ch| ch.to_ascii_uppercase())
+        .collect()
+}
+
+/// Friendly label for a built-in arrow block name. Unknown custom block names
+/// remain unchanged so they can still be selected and resolved exactly.
+pub(crate) fn arrowhead_label(name: &str) -> String {
+    let key = arrowhead_key(name);
+    match key.as_str() {
+        "" | "CLOSEDFILLED" => "Closed filled",
+        "CLOSED" => "Closed",
+        "CLOSEDBLANK" => "Closed blank",
+        "SMALL" => "Small",
+        "OPEN" => "Open",
+        "OPEN30" => "Open 30",
+        "OPEN90" => "Right angle",
+        "DOT" => "Dot",
+        "DOTSMALL" => "Dot small",
+        "DOTBLANK" => "Dot blank",
+        "DOTSMALLBLANK" | "SMALLDOTBLANK" => "Dot small blank",
+        "ORIGIN" | "ORIGININDICATOR" => "Origin indicator",
+        "ORIGIN2" | "ORIGININDICATOR2" => "Origin indicator 2",
+        "OBLIQUE" => "Oblique",
+        "ARCHTICK" => "Architectural tick",
+        "BOX" | "BOXBLANK" => "Box",
+        "BOXFILLED" => "Box filled",
+        "DATUMBLANK" | "DATUMTRIANGLE" => "Datum triangle",
+        "DATUMFILLED" | "DATUMTRIANGLEFILLED" => "Datum triangle filled",
+        "NONE" => "None",
+        "INTEGRAL" => "Integral",
+        _ => name,
+    }
+    .to_string()
+}
+
+fn builtin_arrowhead_block_name(value: &str) -> Option<&'static str> {
+    let key = arrowhead_key(value);
+    match key.as_str() {
+        "" | "DEFAULT" | "CLOSEDFILLED" => Some(""),
+        "CLOSED" => Some("_CLOSED"),
+        "NONE" => Some("_NONE"),
+        "CLOSEDBLANK" => Some("_CLOSEDBLANK"),
+        "SMALL" => Some("_SMALL"),
+        "OPEN" => Some("_OPEN"),
+        "OPEN30" => Some("_OPEN30"),
+        "RIGHTANGLE" | "OPEN90" => Some("_OPEN90"),
+        "DOT" => Some("_DOT"),
+        "DOTSMALL" => Some("_DOTSMALL"),
+        "DOTBLANK" => Some("_DOTBLANK"),
+        "DOTSMALLBLANK" | "SMALLDOTBLANK" => Some("_DOTSMALLBLANK"),
+        "ORIGIN" | "ORIGININDICATOR" => Some("_ORIGIN"),
+        "ORIGIN2" | "ORIGININDICATOR2" => Some("_ORIGIN2"),
+        "OBLIQUE" => Some("_OBLIQUE"),
+        "ARCHTICK" | "ARCHITECTURALTICK" => Some("_ARCHTICK"),
+        "BOX" | "BOXBLANK" => Some("_BOXBLANK"),
+        "BOXFILLED" => Some("_BOXFILLED"),
+        "DATUMBLANK" | "DATUMTRIANGLE" => Some("_DATUMBLANK"),
+        "DATUMFILLED" | "DATUMTRIANGLEFILLED" => Some("_DATUMFILLED"),
+        _ => None,
+    }
+}
+
+fn same_builtin_block_name(actual: &str, canonical: &str) -> bool {
+    arrowhead_key(actual) == arrowhead_key(canonical)
+}
+
+/// Return the built-in choices followed by usable custom arrow blocks. Layout,
+/// anonymous, xref, and model/paper-space records are not arrow choices.
+pub(crate) fn arrowhead_options(document: &CadDocument) -> Vec<String> {
+    let mut options: Vec<String> = BUILTIN_ARROWHEAD_CHOICES
+        .iter()
+        .map(|(label, _)| (*label).to_string())
+        .collect();
+    for record in document.block_records.iter().filter(|record| {
+        !record.name.is_empty()
+            && !record.name.starts_with('*')
+            && !record.is_layout()
+            && !record.is_model_space()
+            && !record.is_paper_space()
+            && !record.flags.is_xref
+            && !record.flags.is_xref_overlay
+            && !record.flags.is_external
+    }) {
+        let label = arrowhead_label(&record.name);
+        if !options
+            .iter()
+            .any(|option| option.eq_ignore_ascii_case(&label))
+        {
+            options.push(label);
+        }
+    }
+    options
+}
+
+/// Resolve a property/style arrow choice to a dimension block handle. Built-in
+/// choices are materialized as lightweight canonical block records when the
+/// drawing does not already carry one, allowing `_NONE` and the other choices
+/// to round-trip through DXF/DWG instead of being mistaken for the null-handle
+/// closed-filled default.
+pub(crate) fn arrowhead_handle_for_choice(
+    document: &mut CadDocument,
+    choice: &str,
+) -> Option<Handle> {
+    if let Some(canonical) = builtin_arrowhead_block_name(choice) {
+        if canonical.is_empty() {
+            return Some(Handle::NULL);
+        }
+        if let Some(record) = document
+            .block_records
+            .iter()
+            .find(|record| same_builtin_block_name(&record.name, canonical))
+        {
+            return Some(record.handle);
+        }
+        let mut record = codec::tables::BlockRecord::new(canonical);
+        record.handle = document.allocate_handle();
+        let block_handle = document.allocate_handle();
+        let end_handle = document.allocate_handle();
+        record.block_entity_handle = block_handle;
+        record.block_end_handle = end_handle;
+        let handle = record.handle;
+        document.block_records.add(record).ok()?;
+
+        let mut block =
+            codec::entities::Block::new(canonical, codec::types::Vector3::new(0.0, 0.0, 0.0));
+        block.common.handle = block_handle;
+        block.common.owner_handle = handle;
+        document.add_entity(EntityType::Block(block)).ok()?;
+
+        let mut block_end = codec::entities::BlockEnd::new();
+        block_end.common.handle = end_handle;
+        block_end.common.owner_handle = handle;
+        document.add_entity(EntityType::BlockEnd(block_end)).ok()?;
+        return Some(handle);
+    }
+    document
+        .block_records
+        .iter()
+        .find(|record| {
+            record.name.eq_ignore_ascii_case(choice.trim())
+                || arrowhead_label(&record.name).eq_ignore_ascii_case(choice.trim())
+        })
+        .map(|record| record.handle)
+}
+
 pub(crate) fn arrow_from_block(
     doc: &CadDocument,
     handle: codec::types::Handle,
     dimasz: f32,
 ) -> ArrowKind {
     arrow_from_block_with_deferred_hatch(doc, handle, dimasz, false)
+}
+
+/// Resolve a dimension-style arrow that may have only its legacy name. R13/R14
+/// DIMSTYLE records carry DIMBLK/DIMBLK1/DIMBLK2 names separately from the
+/// hard pointers used by newer formats, so a null handle is not always the
+/// closed-filled default.
+pub(crate) fn arrow_from_block_with_name(
+    doc: &CadDocument,
+    handle: codec::types::Handle,
+    name: &str,
+    dimasz: f32,
+    defer_hatch: bool,
+) -> ArrowKind {
+    if !handle.is_null() {
+        return arrow_from_block_with_deferred_hatch(doc, handle, dimasz, defer_hatch);
+    }
+    let name = name.trim();
+    if name.is_empty() {
+        return arrow_from_block_with_deferred_hatch(doc, handle, dimasz, defer_hatch);
+    }
+    if let Some(arrow) = builtin_arrow_from_block_name(name, dimasz) {
+        return arrow;
+    }
+    if let Some(record) = doc.block_records.iter().find(|record| {
+        record.name.eq_ignore_ascii_case(name)
+            || arrowhead_label(&record.name).eq_ignore_ascii_case(name)
+    }) {
+        if !record.handle.is_null() {
+            return arrow_from_block_with_deferred_hatch(doc, record.handle, dimasz, defer_hatch);
+        }
+    }
+    arrow_from_block_with_deferred_hatch(doc, handle, dimasz, defer_hatch)
 }
 
 pub(crate) fn arrow_from_block_with_deferred_hatch(
@@ -2787,9 +2996,9 @@ pub(crate) fn arrow_from_block_name(name: Option<&str>, dimasz: f32) -> ArrowKin
 }
 
 fn builtin_arrow_from_block_name(name: &str, dimasz: f32) -> Option<ArrowKind> {
-    // Built-in arrow block names may carry a leading underscore. Normalize it
-    // before matching the canonical names.
-    let n = name.trim().trim_start_matches('_').to_ascii_uppercase();
+    // Built-in arrow block names may carry a leading underscore or arrive as
+    // the friendly UI label. Normalize both forms before matching.
+    let n = arrowhead_key(name);
     match n.as_str() {
         "" | "CLOSEDFILLED" => Some(ArrowKind::Triangle {
             size: dimasz,
@@ -3463,6 +3672,70 @@ mod tests {
         ));
         assert!(matches!(
             arrow_from_block_name(None, 1.0),
+            ArrowKind::Triangle { filled: true, .. }
+        ));
+    }
+
+    #[test]
+    fn legacy_name_only_arrow_choices_render_without_handles() {
+        let document = CadDocument::new();
+        assert!(matches!(
+            arrow_from_block_with_name(&document, Handle::NULL, "ARCHTICK", 1.0, false),
+            ArrowKind::Tick { .. }
+        ));
+        assert!(matches!(
+            arrow_from_block_with_name(&document, Handle::NULL, "_NONE", 1.0, false),
+            ArrowKind::None
+        ));
+        assert!(matches!(
+            arrow_from_block_with_name(&document, Handle::NULL, "", 1.0, false),
+            ArrowKind::Triangle { filled: true, .. }
+        ));
+    }
+
+    #[test]
+    fn builtin_arrow_choices_are_exposed_and_round_trip_to_renderers() {
+        let mut document = CadDocument::new();
+        let options = arrowhead_options(&document);
+        for expected in [
+            "None",
+            "Closed",
+            "Closed filled",
+            "Closed blank",
+            "Dot",
+            "Dot small",
+        ] {
+            assert!(
+                options.iter().any(|option| option == expected),
+                "missing {expected}"
+            );
+        }
+        assert!(!options.iter().any(|option| option.starts_with('*')));
+
+        let none = arrowhead_handle_for_choice(&mut document, "None").unwrap();
+        assert!(matches!(
+            arrow_from_block(&document, none, 1.0),
+            ArrowKind::None
+        ));
+        let closed = arrowhead_handle_for_choice(&mut document, "Closed").unwrap();
+        assert!(matches!(
+            arrow_from_block(&document, closed, 1.0),
+            ArrowKind::Triangle { filled: false, .. }
+        ));
+        let blank = arrowhead_handle_for_choice(&mut document, "Closed blank").unwrap();
+        assert!(matches!(
+            arrow_from_block(&document, blank, 1.0),
+            ArrowKind::Triangle { filled: false, .. }
+        ));
+        let dot = arrowhead_handle_for_choice(&mut document, "Dot small").unwrap();
+        assert!(matches!(
+            arrow_from_block(&document, dot, 1.0),
+            ArrowKind::Dot { filled: true, .. }
+        ));
+        let filled = arrowhead_handle_for_choice(&mut document, "Closed filled").unwrap();
+        assert!(filled.is_null());
+        assert!(matches!(
+            arrow_from_block(&document, filled, 1.0),
             ArrowKind::Triangle { filled: true, .. }
         ));
     }

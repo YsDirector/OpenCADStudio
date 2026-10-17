@@ -1228,7 +1228,7 @@ impl OpenCADStudio {
             field,
             "dimltex_handle" | "dimltex1_handle" | "dimltex2_handle"
         );
-        let doc = &self.tabs[i].scene.document;
+        let doc = &mut self.tabs[i].scene.document;
         let handle = if value == "Default" || value == "ByBlock" {
             codec::types::Handle::NULL
         } else if is_lt {
@@ -1238,18 +1238,36 @@ impl OpenCADStudio {
                 .map(|lt| lt.handle)
                 .unwrap_or(codec::types::Handle::NULL)
         } else {
-            doc.block_records
-                .iter()
-                .find(|b| b.name == value)
-                .map(|b| b.handle)
+            crate::scene::convert::tessellate::arrowhead_handle_for_choice(doc, &value)
                 .unwrap_or(codec::types::Handle::NULL)
         };
+        // The legacy DXF/DWG writers use the DIMBLK/DIMBLK1/DIMBLK2 name
+        // slots for R13/R14. Keep those names synchronized with the selected
+        // hard pointer rather than leaving the old name behind after a UI pick.
+        let arrow_name = (!is_lt && !handle.is_null())
+            .then(|| {
+                doc.block_records
+                    .iter()
+                    .find(|record| record.handle == handle)
+                    .map(|record| record.name.clone())
+            })
+            .flatten()
+            .unwrap_or_default();
         // Staged: persists on Apply.
         if let Some(ds) = self.tabs[i].scene.document.dim_styles.get_mut(&name) {
             match field {
-                "dimblk" => ds.dimblk = handle,
-                "dimblk1" => ds.dimblk1 = handle,
-                "dimblk2" => ds.dimblk2 = handle,
+                "dimblk" => {
+                    ds.dimblk = handle;
+                    ds.dimblk_name = arrow_name.clone();
+                }
+                "dimblk1" => {
+                    ds.dimblk1 = handle;
+                    ds.dimblk1_name = arrow_name.clone();
+                }
+                "dimblk2" => {
+                    ds.dimblk2 = handle;
+                    ds.dimblk2_name = arrow_name.clone();
+                }
                 "dimldrblk" => ds.dimldrblk = handle,
                 "dimltex_handle" => ds.dimltex_handle = handle,
                 "dimltex1_handle" => ds.dimltex1_handle = handle,
@@ -1322,5 +1340,55 @@ mod ds_set_handle_tests {
             ds.dimblk2, hb,
             "picking the first arrowhead must not touch the second"
         );
+        assert_eq!(ds.dimblk1_name, "ARROW_A");
+    }
+
+    #[test]
+    fn builtin_none_pick_creates_a_serializable_arrow_block() {
+        let mut app = app_with_arrow_blocks();
+        let i = app.active_tab;
+        let name = app.dimstyle_selected.clone();
+        let _ = app.on_ds_set_handle("dimblk1", "None".to_string());
+        let handle = app.tabs[i]
+            .scene
+            .document
+            .dim_styles
+            .get(&name)
+            .unwrap()
+            .dimblk1;
+        let record = app.tabs[i]
+            .scene
+            .document
+            .block_records
+            .iter()
+            .find(|record| record.handle == handle)
+            .expect("_NONE block record");
+        assert_eq!(record.name, "_NONE");
+        assert_eq!(
+            app.tabs[i]
+                .scene
+                .document
+                .dim_styles
+                .get(&name)
+                .unwrap()
+                .dimblk1_name,
+            "_NONE"
+        );
+        assert!(!record.block_entity_handle.is_null());
+        assert!(!record.block_end_handle.is_null());
+        assert!(matches!(
+            app.tabs[i]
+                .scene
+                .document
+                .get_entity(record.block_entity_handle),
+            Some(codec::EntityType::Block(_))
+        ));
+        assert!(matches!(
+            app.tabs[i]
+                .scene
+                .document
+                .get_entity(record.block_end_handle),
+            Some(codec::EntityType::BlockEnd(_))
+        ));
     }
 }

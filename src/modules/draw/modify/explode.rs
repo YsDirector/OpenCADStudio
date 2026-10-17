@@ -773,7 +773,9 @@ fn dim_metrics(dim: &Dimension, doc: &CadDocument) -> DimMetrics {
     let scale = style
         .map(|s| if s.dimscale > 1e-6 { s.dimscale } else { 1.0 })
         .unwrap_or(1.0);
-    use crate::scene::convert::tessellate::{arrow_from_block, ArrowKind};
+    use crate::scene::convert::tessellate::{
+        arrow_from_block, arrow_from_block_with_name, ArrowKind,
+    };
     let dimasz = style
         .map(|s| s.dimasz * scale)
         .unwrap_or(0.18 * scale)
@@ -789,31 +791,30 @@ fn dim_metrics(dim: &Dimension, doc: &CadDocument) -> DimMetrics {
         if matches!(dim, Dimension::Radius(_) | Dimension::LargeRadial(_)) {
             let arrow = arrow_from_block(doc, s.dimldrblk, asz);
             (arrow.clone(), arrow)
-        } else if matches!(dim, Dimension::Diameter(_)) {
+        } else {
             use crate::entities::dim_override as ov;
             let data = &dim.base().common.extended_data;
-            let first = ov::handle(data, ov::DIMBLK1).unwrap_or(if s.dimsah {
-                s.dimblk1
+            let style_arrow =
+                |handle, name: &str| arrow_from_block_with_name(doc, handle, name, asz, false);
+            let override_arrow = |code, handle, name: &str| {
+                ov::handle(data, code)
+                    .map(|handle| arrow_from_block(doc, handle, asz))
+                    .unwrap_or_else(|| style_arrow(handle, name))
+            };
+            if matches!(dim, Dimension::Diameter(_)) && s.dimsah {
+                (
+                    override_arrow(ov::DIMBLK1, s.dimblk1, &s.dimblk1_name),
+                    override_arrow(ov::DIMBLK2, s.dimblk2, &s.dimblk2_name),
+                )
+            } else if s.dimsah {
+                (
+                    style_arrow(s.dimblk1, &s.dimblk1_name),
+                    style_arrow(s.dimblk2, &s.dimblk2_name),
+                )
             } else {
-                s.dimblk
-            });
-            let second = ov::handle(data, ov::DIMBLK2).unwrap_or(if s.dimsah {
-                s.dimblk2
-            } else {
-                s.dimblk
-            });
-            (
-                arrow_from_block(doc, first, asz),
-                arrow_from_block(doc, second, asz),
-            )
-        } else if s.dimsah {
-            (
-                arrow_from_block(doc, s.dimblk1, asz),
-                arrow_from_block(doc, s.dimblk2, asz),
-            )
-        } else {
-            let a = arrow_from_block(doc, s.dimblk, asz);
-            (a.clone(), a)
+                let arrow = override_arrow(ov::DIMBLK, s.dimblk, &s.dimblk_name);
+                (arrow.clone(), arrow)
+            }
         }
     } else {
         let a = ArrowKind::Triangle {
