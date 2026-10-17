@@ -1,4 +1,4 @@
-# 10 BOM / Parts List (`BOM` / `BOMCFG`)
+# 10 BOM / Parts List
 
 > English translation of `handbook/10-明细表BOM.md` (the Chinese original is the source of truth).
 
@@ -6,11 +6,11 @@
 
 ## 1. Commands
 
-| Command | Alias | Purpose |
-| --- | --- | --- |
-| `OCSMBOM` | `BOM` | **build / refresh** the BOM; may take a parameter: `BOM 30` = lay out **30 rows** in the first column this time |
-| `OCSMBOMCFG` | `BOMCFG` | **configure** (columns/header/format etc.); also takes the row-count parameter |
-| `OCSMBOMEDIT` | `BOMEDIT` | **open the web editor** (a standalone chromium window; see §5) |
+| Formal command | Purpose |
+| --- | --- |
+| `OCSMBOM` | **build / refresh** the BOM; may take a parameter: `OCSMBOM 30` = lay out **30 rows** in the first column this time |
+| `OCSMBOMCFG` | **configure** (columns/header/format etc.); also takes the row-count parameter |
+| `OCSMBOMEDIT` | **open the web editor** (a standalone chromium window; see §5) |
 
 - Data source: the **XDATA `OCSM_PART`** on standard-part INSERTs in the drawing (family/spec/standard number/material/weight…)
   → so **do not explode standard parts**, and do not hand-draw bolt outlines (they would not be counted).
@@ -18,7 +18,7 @@
 
 ## 2. Placement Rules (measured from the drawing frame; re-measure when the frame changes)
 
-Taking `a3_landscape.dwg` (A3 landscape, **180×45** title block + a vertical side column on the left) as an example:
+Taking `a3_landscape_att.dwg` (A3 landscape, **180×45** title block + a vertical side column on the left) as an example:
 
 | Edge | Datum | Measured on A3 landscape |
 | --- | --- | --- |
@@ -36,9 +36,9 @@ General rule: **the right edge aligns with the inner frame's right edge; width =
 - The BOM trio = table + header + **item balloons** (carrying each part's item number onto the assembly drawing).
 - The **only coupling point** between balloons and the table **is the item number**: the number is fixed in the table, the balloon points at the matching part; changing a number must be synced on both sides.
 
-## 3.5 Balloon Sync (`BOMSYNC`)
+## 3.5 Balloon Sync (`OCSMBOMSYNC`)
 
-`BOM` "builds the table from the part ledger" (item no. = row no.); once **item balloons** are bound, use **`BOMSYNC`**
+`OCSMBOM` "builds the table from the part ledger" (item no. = row no.); once **item balloons** are bound, use **`OCSMBOMSYNC`**
 to reorder by balloon (it can also run automatically when balloons are created/changed):
 
 - row = each entry of the balloon group + aggregated parts not referenced by any balloon (reusing the old table's item number, otherwise auto-assigned);
@@ -46,7 +46,7 @@ to reorder by balloon (it can also run automatically when balloons are created/c
 - when ticking "插入序号" (insert item numbers) causes a conflict: the affected existing balloons are all +1 and the table is reordered accordingly;
 - row order is by **ascending item number**, bottom-up (item 1 at the bottom).
 
-> In one sentence: **the item number is the only key between balloons and the table**. `BOM` builds the table (ledger view), `BOMSYNC` matches numbers (balloon view).
+> In one sentence: **the item number is the only key between balloons and the table**. `OCSMBOM` builds the table (ledger view), `OCSMBOMSYNC` matches numbers (balloon view).
 
 ### Manual-Edit Protection (settled by the user 2026-09-15)
 
@@ -58,10 +58,10 @@ Sync has **replace semantics** (delete the old rows and rebuild), so manual edit
 | **Quantity** | **a switchable lock**: unlocked → computed by the rules (part count / balloon references); locked → **the locked value is always used** |
 | Drawing no. / name / material / unit weight / notes | **kept once non-empty** (an "unbreakable lock"): once a row exists, non-empty fields are never overwritten; only **blank cells** receive new values |
 
-- **Lock command**: `BOMLOCK <item no.|drawing no.> [qty|off]`
-  * `BOMLOCK 5` → lock at the current on-row value (I edited it by hand, do not overwrite)
-  * `BOMLOCK 5 3` → set the quantity to 3 and lock it (`总重` (total weight) is automatically = unit weight × 3)
-  * `BOMLOCK 5 off` → unlock; the next sync recomputes
+- **Lock command**: `OCSMBOMLOCK <item no.|drawing no.> [qty|off]`
+  * `OCSMBOMLOCK 5` → lock at the current on-row value (I edited it by hand, do not overwrite)
+  * `OCSMBOMLOCK 5 3` → set the quantity to 3 and lock it (`总重` (total weight) is automatically = unit weight × 3)
+  * `OCSMBOMLOCK 5 off` → unlock; the next sync recomputes
 - **The other way to reset a lock**: **delete** that row; the next sync rebuilds it by the rules (only then does the "value passed at creation" take effect).
 - Total weight is **computed** (unit weight × quantity); it always follows the quantity and does not count as a manual edit.
 - Locked rows appear in the sync report: `N 行数量已锁定，未覆盖：…` (N rows have locked quantities and were not overwritten: …) — never silent.
@@ -94,22 +94,22 @@ Actual cases (template text height 5.0, **uniform for the whole table, never com
 - To verify the parsing: `cargo test -p ocs_ocsm --lib dump_row_template_widths -- --ignored --nocapture`
   (reads `bom/OCSM_BOMROW.dwg`, prints the column widths + compression results for common content).
 
-## 3.6 External `.xlsx` Collaboration (`BOMXLSX` / `BOMXLSXI`)
+## 3.6 External `.xlsx` Collaboration (`OCSMBOMXLSX` / `OCSMBOMXLSXI`)
 
 ```
-BOMXLSX                    → export to "<drawing name>-明细表.xlsx" (same directory), and link it from the header (Ctrl+click to open)
-BOMXLSX D:/表.xlsx          → explicit path (a missing extension is filled in as .xlsx; the path keeps its original case)
-BOMXLSX D:/表.csv          → with `.csv` it exports CSV (UTF-8 with BOM; opens in Excel/WPS/text editors)
-BOMXLSXI                   → import from the file linked in the header (no link → default path)
-BOMXLSXI D:/表.xlsx         → explicit file (`.csv` is also accepted)
+OCSMBOMXLSX                    → export to "<drawing name>-明细表.xlsx" (same directory), and link it from the header (Ctrl+click to open)
+OCSMBOMXLSX D:/表.xlsx          → explicit path (a missing extension is filled in as .xlsx; the path keeps its original case)
+OCSMBOMXLSX D:/表.csv          → with `.csv` it exports CSV (UTF-8 with BOM; opens in Excel/WPS/text editors)
+OCSMBOMXLSXI                   → import from the file linked in the header (no link → default path)
+OCSMBOMXLSXI D:/表.xlsx         → explicit file (`.csv` is also accepted)
 ```
 
 **Save first, then draw item numbers** (important): by default the xlsx goes into the **drawing's own directory**, so a new drawing that has never been saved falls back to the default directory
 (the **system temporary directory** `/tmp/OCSM/明细表.xlsx`; `%TEMP%\OCSM\` on Windows — via `std::env::temp_dir()`, one cross-platform code path). The plugin warns in three places:
 
-* **before** drawing item numbers: an orange notice line on the "序号" (item number) panel of the GDIM window;
+* **before** drawing item numbers: an orange notice line on the "序号" (item number) panel of the `OCSMDIMGULIDE` window;
 * **when they are placed**: the command line says "本图还没存过盘" (this drawing has never been saved) (once per tab, does not block the main flow);
-* when `BOMXLSX` exports: it states where the file goes and how to change that.
+* when `OCSMBOMXLSX` exports: it states where the file goes and how to change that.
 
 **Column order** (the first 8 columns = the on-drawing BOM itself; column 9 exists only in this file and **does not go into the drawing table**):
 
@@ -144,9 +144,9 @@ BOMXLSXI D:/表.xlsx         → explicit file (`.csv` is also accepted)
 // 1) first see which standard parts exist (is there anything to count)
 { "op": "read", "op": "query", "parameters": { "type": "Insert" } }
 // 2) build/refresh the table (lay out 20 rows first if needed)
-{ "op": "execute", "request": { "op": "run", "request_id": "b1", "document_id": 1, "revision": 60, "cmd": "BOM 20" } }
+{ "op": "execute", "request": { "op": "run", "request_id": "b1", "document_id": 1, "revision": 60, "cmd": "OCSMBOM 20" } }
 // 3) configure (header/columns)
-{ "op": "execute", "request": { "op": "run", "request_id": "b2", "document_id": 1, "revision": 61, "cmd": "BOMCFG 20" } }
+{ "op": "execute", "request": { "op": "run", "request_id": "b2", "document_id": 1, "revision": 61, "cmd": "OCSMBOMCFG 20" } }
 // 4) verify: the table's row-block INSERTs + each row's ATTDEF values (do quantities/weights add up)
 { "op": "read", "op": "query", "parameters": { "type": "Insert", "layer": "6文字层" } }
 ```
@@ -155,7 +155,7 @@ BOMXLSXI D:/表.xlsx         → explicit file (`.csv` is also accepted)
 
 Two ways to open it (added 2026-09-16):
 
-- **`OCSMBOMEDIT` / `BOMEDIT`** (command, recommended) → opens a **standalone chromium `--app` window** directly (as clean as the annotation configuration window);
+- **`OCSMBOMEDIT`** (command, recommended) → opens a **standalone chromium `--app` window** directly (as clean as the annotation configuration window);
   the window URL carries `tab=<drawing id>` → multiple drawings can each keep their own editor window without mixing tables;
 - **Ctrl+click the header/row block** → the host only opens it with `xdg-open`, landing in a **browser tab with an address bar**; when the plugin sees such an
   "external open" it **adds an app window on top**, and replaces that tab with an "already opened in a new window" notice page (which can just be closed).
@@ -170,17 +170,17 @@ The BOM editor page (the drawing = the single source of truth):
   on apply the backend maps identity by "drawing no. + name + material" and **renumbers the balloons in sync** (reusing the balloon GUI rebuild mechanism; unmatched rows are left alone with a warning).
 - **export**: `POST /api/bom_export?fmt=xlsx|csv&name=…` → bytes over JSON → the browser's "save as" (default "<drawing name>-明细表.xlsx");
   the **export baseline** is recorded at the same time (row-block `OCSM_BOMXEXP`).
-- **import**: the page's file picker reads xlsx/csv bytes → `POST /api/bom_import` → reuses `BOMXLSXI`'s merge rules
+- **import**: the page's file picker reads xlsx/csv bytes → `POST /api/bom_import` → reuses `OCSMBOMXLSXI`'s merge rules
   (non-empty overwrites / blanks kept / missing item nos. kept / **edited ⇒ locked**).
 - The truth about locks always lives in the drawing's row-block `OCSM_BOMLOCK`; the "锁定数量" column in xlsx is only the import/export representation.
 - PE_URLs in old drawings that point at an xlsx file path (the host's `web_hyperlink` only allows http/https, so they are dead links that can never open)
-  are rewritten automatically into bom.html links during port refresh / table build; the last export path is stored in `OCSM_BOMXPATH` (the default path for `BOMXLSXI`).
+  are rewritten automatically into bom.html links during port refresh / table build; the last export path is stored in `OCSM_BOMXPATH` (the default path for `OCSMBOMXLSXI`).
 
 ## 6. Pitfalls
 
 1. **No standard parts, no content**: hand-drawn bolts do not enter the table (no `OCSM_PART` record).
 2. **The width is not 200**: this frame's title block is **180** wide — laying out at 200 would exceed the inner frame (the numbers in `bom/README.md` are authoritative; this page is synced with the code: table width 180, left x=210, right x=390, bottom y=45).
-3. **Not enough rows**: `BOM 30` only means "lay out 30 rows in the first column this time"; the actual row count is decided by the number of part kinds in the drawing; re-running refreshes it.
+3. **Not enough rows**: `OCSMBOM 30` only means "lay out 30 rows in the first column this time"; the actual row count is decided by the number of part kinds in the drawing; re-running refreshes it.
 4. **Weight**: standard-part weight is estimated as volume × steel 7.85 g/cm³ (see `03-standard-parts.md`); check non-steel materials yourself.
 5. **Changing the frame**: the placement datums change (inner-frame right / title-block width / title-block top edge) and the table must be repositioned.
 6. **Opens empty and needs a refresh click?** That was the page's opening script throwing (`add` in `addEventListener('click', add)`

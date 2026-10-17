@@ -659,10 +659,13 @@ pub fn build_insert(
     table: &SplineTable,
     at: [f64; 2],
     rot_deg: f64,
+    frame_scale: f64,
 ) -> Result<Insert, String> {
     let values = values(side, table)?;
     let mut ins = Insert::new(block_name(side), Vector3::new(at[0], at[1], 0.0));
     ins.rotation = rot_deg.to_radians();
+    // 图框比例：非 1:1 时卡片随图框缩放（必须在本函数的属性 apply_transform 之前）。
+    crate::apply_card_frame_scale(&mut ins, frame_scale);
     {
         let c = &mut ins.common;
         c.layer = crate::partgen::LAYER_MAIN.to_string();

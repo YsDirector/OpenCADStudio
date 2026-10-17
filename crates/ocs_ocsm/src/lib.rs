@@ -5,12 +5,12 @@
 //!    迁移）+ 防御性线型 + 文字样式 `OCSM_GB`。
 //! 2. 数字键 `1`~`10` 快速切层：无选中切当前图层（不记 undo）；有选中把对象
 //!    移到目标层（记 undo、保留选择集，锁定层被宿主拒绝）。
-//! 3. `TF` / `OCSMFRAMEINIT`：打开宿主侧图框选择窗口，从插件目录 `frame/`
+//! 3. `OCSMFRAMEINIT`：打开宿主侧图框选择窗口（宿主别名由 `assets/ocad.pgp` 展开到此），从插件目录 `frame/`
 //!    选择 DWG，填写比例 `值1:值2`（int 且其一为 1），点击后以块插入；
 //!    插入比例 = 值2/值1，`比例`/`SCALE` 属性填入 `值1:值2`。
 //!
 //! 标注引导服务：
-//! - `OCSMDIMGULIDE` / `GDIM`：选中引导线（`10引导线层` LINE）后弹浏览器
+//! - `OCSMDIMGULIDE`：选中引导线（`10引导线层` LINE）后弹浏览器
 //!   GUI 配置标注参数；`应用` 写 PE_URL 超链接，`应用并刷新` 经标注更新
 //!   服务器把引导线替换为真实标注（7标注层 / OCSM_GB）并 REGEN。
 //! - `OCSMMCP`：确保标注更新服务器运行（独立 MCP 二进制经 TCP 桥接）。
@@ -78,22 +78,16 @@ static MANIFEST: PluginManifest = PluginManifest {
     // 单一来源：Cargo.toml 的 [package] version（= plugin.toml 的 [plugin] version，
     // 由 tests 守住；见 plugin_toml_version_matches_cargo_pkg_version）。
     version: env!("CARGO_PKG_VERSION"),
-    description: "OCSM 初始化 + 数字键 1-10 快速图层 + 图框插入（TF）+ 智能标注（D）",
+    description: "OCSM 初始化 + 数字键 1-10 快速图层 + 图框/标注转换 + 标准件与机械制图工具",
     api_version: ApiVersion { major: 5 },
     ribbon_order: 100,
     xdata_apps: &["OCSM_BOM"],
     command_prefixes: &[
-        "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "TF", "OCSM",
-        "OCSMFRAMEINIT", "OCSMFRAMEINSERT", "D", "OCSMPOWERDIM", "OCSMDIMGULIDE",
-        "GDIM", "OCSMMCP", "OCSMRGH", "CC", "OCSMDIM2GB", "D2G", "OCSMEDIT", "ME",
-        "OCSMPART", "XL", "OCSMJOINT", "OCSMHELP", "OH", "OCSMBOM", "BOM", "BOMSYNC", "OCSMBOMSYNC", "OCSMBOMCFG", "BOMCFG",
-        "OCSMBOMEDIT", "BOMEDIT", "OCSMBOMLOCK", "BOMLOCK", "OCSMBOMXLSX", "BOMXLSX", "OCSMBOMXLSXI", "BOMXLSXI",
-        "OCSMCENTERLINE", "ZX",
-        "OCSMGEAR",
-        "OCSMSHAFT",
-        "OCSMHOLE",
-        "DK",
-        "OCSMCARD",
+        "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "OCSM",
+        "OCSMFRAMEINIT", "OCSMFRAMEINSERT", "OCSMDIMGULIDE", "OCSMMCP", "OCSMRGH",
+        "OCSMDIM2GB", "OCSMEDIT", "OCSMPART", "OCSMJOINT", "OCSMHELP", "OCSMBOM",
+        "OCSMBOMSYNC", "OCSMBOMEDIT", "OCSMBOMLOCK", "OCSMBOMXLSX", "OCSMBOMXLSXI",
+        "OCSMBOMCFG", "OCSMCENTERLINE", "OCSMGEAR", "OCSMSHAFT", "OCSMHOLE", "OCSMCARD",
     ],
 };
 
@@ -369,7 +363,7 @@ fn frame_dir() -> std::path::PathBuf {
     std::path::PathBuf::from("frame")
 }
 
-/// `OCSMBOM`/`BOM`/`OCSMBOMCFG`/`BOMCFG`/`BOMEDIT`（整行可能带参数，如 `BOM 30`）。
+/// Formal `OCSMBOM*` commands (the host expands `BOM*` aliases first).
 fn is_bom_command(cmd: &str) -> bool {
     let name = cmd
         .trim()
@@ -377,7 +371,16 @@ fn is_bom_command(cmd: &str) -> bool {
         .next()
         .unwrap_or_default()
         .to_ascii_uppercase();
-    matches!(name.as_str(), "OCSMBOM" | "BOM" | "OCSMBOMCFG" | "BOMCFG" | "OCSMBOMSYNC" | "BOMSYNC" | "OCSMBOMLOCK" | "BOMLOCK" | "OCSMBOMXLSX" | "BOMXLSX" | "OCSMBOMXLSXI" | "BOMXLSXI" | "OCSMBOMEDIT" | "BOMEDIT")
+    matches!(
+        name.as_str(),
+        "OCSMBOM"
+            | "OCSMBOMCFG"
+            | "OCSMBOMSYNC"
+            | "OCSMBOMLOCK"
+            | "OCSMBOMXLSX"
+            | "OCSMBOMXLSXI"
+            | "OCSMBOMEDIT"
+    )
 }
 
 struct OcsmPlugin;
@@ -664,7 +667,7 @@ unsafe fn libc_getuid() -> u32 {
     getuid()
 }
 
-/// 待放置零件（「零件出库」登记，`XL` 放置态读它做光标预览与落件）。
+/// 待放置零件（「零件出库」登记，`OCSMPART` 放置态读它做光标预览与落件）。
 #[derive(Clone)]
 pub(crate) struct PendingPart {
     pub block: String,
@@ -675,6 +678,9 @@ pub(crate) struct PendingPart {
     pub attrs: Vec<(acadrust::entities::AttributeDefinition, String)>,
     /// INSERT 缩放（默认 1.0；NF/DIN 卡整表 0.17 —— 与直接落点的 build_insert 同口径）。
     pub scale: f64,
+    /// 这是**参数表卡片**（不是零件/轴/孔几何）：落件与预览时还要按落点处的图框比例缩放。
+    /// 卡片是纸面尺寸的表（字高/线宽按纸面），必须随图框比例；真实几何保持 false。
+    pub frame_scaled: bool,
 }
 
 impl PendingPart {
@@ -690,6 +696,7 @@ impl PendingPart {
             label: label.into(),
             attrs: Vec::new(),
             scale: 1.0,
+            frame_scaled: false,
         }
     }
 
@@ -706,7 +713,14 @@ impl PendingPart {
             label: label.into(),
             attrs,
             scale: 1.0,
+            frame_scaled: false,
         }
+    }
+
+    /// 链式标记：这是**参数表卡片**（纸面尺寸的表）——落件/预览时随落点处的图框比例缩放。
+    pub(crate) fn with_frame_scaled(mut self) -> Self {
+        self.frame_scaled = true;
+        self
     }
 
     /// 链式设置 INSERT 缩放（整表卡 NF/DIN 用 0.17；默认 1.0 = 不缩放）。
@@ -746,6 +760,15 @@ fn pending_part_label() -> Option<String> {
 
 fn pending_block() -> Option<String> {
     pending_slot().lock().unwrap().as_ref().map(|p| p.block.clone())
+}
+
+/// 待放置件的（整表缩放, 是否随图框比例）——放置态预览用（与 `place_one` 同口径）。
+fn pending_scale_flags() -> Option<(f64, bool)> {
+    pending_slot()
+        .lock()
+        .unwrap()
+        .as_ref()
+        .map(|p| (p.scale, p.frame_scaled))
 }
 
 /// 测试用：取待放置件的元数据 JSON（校验轴块 `gears[]` 快照等）。
@@ -810,7 +833,7 @@ pub(crate) struct PlaceTask {
     pub sender: std::sync::Arc<dyn PluginRequestSender>,
 }
 
-/// 落件通道（`XL` 放置态第二下点击 → 放置 worker 落一个件）。
+/// 落件通道（`OCSMPART` 放置态第二下点击 → 放置 worker 落一个件）。
 static PLACE_TX: std::sync::OnceLock<std::sync::mpsc::Sender<PlaceTask>> =
     std::sync::OnceLock::new();
 
@@ -857,9 +880,16 @@ fn place_one(
     // Insert.rotation 单位是**弧度**（同 Arc，DXF 读入已转换）
     ins.rotation = task.rotation;
     // 整表缩放（NF/DIN 卡 0.17）：与 `build_insert` 同口径；ATTRIB 随 INSERT 缩放。
-    ins.set_x_scale(p.scale);
-    ins.set_y_scale(p.scale);
-    ins.set_z_scale(p.scale);
+    // 参数表卡片再乘上**落点处**的图框比例（与 `build_insert` 收到的 frame_scale 同口径）：
+    // 图框比例非 1:1 时卡片随图框缩放；零件/轴/孔是真实尺寸（frame_scaled = false），不乘。
+    let factor = if p.frame_scaled {
+        crate::guide_server::card_frame_factor_via_sender(sender, [pt[0], pt[1]])?
+    } else {
+        1.0
+    };
+    ins.set_x_scale(p.scale * factor);
+    ins.set_y_scale(p.scale * factor);
+    ins.set_z_scale(p.scale * factor);
     {
         let c = &mut ins.common;
         c.layer = partgen::LAYER_MAIN.to_string();
@@ -927,15 +957,15 @@ impl PartParseError {
     }
 }
 
-/// `OCSMPART`/`XL` 的参数化形式。
+/// `OCSMPART` 的参数化形式。
 ///
 /// - **标准件**：`<族> <d> <l> [view <视图>] [at x,y] [rot 度]`
 ///   例：`OCSMPART hex_bolt_c 10 95 at 150,30 rot 0`、`OCSMPART hex_bolt_ab 8 40`。
 /// - **结构要素**（`detail_*`）：没有长度 l，`<族> <d> [b1 <值>] [view <视图>] [at x,y] [rot 度]`
 ///   例：`OCSMPART detail_grind_od 100 b1 10 at 150,30 rot 0`（b1 缺省 = 该 d 档默认行）。
 /// - **矩形花键**（`detail_spline_rect`）：`<族> <规格代号> [L 满齿段长] [de 覆盖] [view 视图] [at x,y] [rot]`
-///   例：`XL detail_spline_rect 6x23x26x6 L30 de63 view side`（规格代号可自定义，de 表外规格必给）。
-/// - **渐开线花键**：**只在 OCSMGEAR 的花键模式生成**（XL 旧入口与轴段 `INVOLSPLINE` 均已移除；
+///   例：`OCSMPART detail_spline_rect 6x23x26x6 L30 de63 view side`（规格代号可自定义，de 表外规格必给）。
+/// - **渐开线花键**：**只在 OCSMGEAR 的花键模式生成**（OCSMPART 旧入口与轴段 `INVOLSPLINE` 均已移除；
 ///   引擎仍在 `invol_spline.rs`）。
 /// - **外螺纹退刀槽**（`detail_thread_relief`）：`<族> <d> P <螺距> [g1 值 g2 值 dg 值 r 值 alpha 值] [at x,y] [rot 度]`
 ///   例：`OCSMPART detail_thread_relief 20 P 1.5`（P 必给，其余可选，见 `detail.rs` 表 2）。
@@ -1125,7 +1155,7 @@ impl PartsSpec {
                     }
                     continue;
                 }
-                // 规格代号族的裸数字 = L（例 `XL detail_spline_rect 6x23x26x6 30`）。
+                // 规格代号族的裸数字 = L（例 `OCSMPART detail_spline_rect 6x23x26x6 30`）。
                 if spec.spec.is_some() && !spec.params.contains_key("len") {
                     if let Ok(value) = lower.parse::<f64>() {
                         if !(value.is_finite() && value > 0.0) {
@@ -1657,8 +1687,6 @@ const ICON_CENTERLINE: IconKind =
     IconKind::Svg(include_bytes!("../assets/icons/centerline.svg"));
 const ICON_GEAR: IconKind = IconKind::Svg(include_bytes!("../assets/icons/gear.svg"));
 const ICON_SHAFT: IconKind = IconKind::Svg(include_bytes!("../assets/icons/shaft.svg"));
-const ICON_POWERDIM: IconKind =
-    IconKind::Svg(include_bytes!("../assets/icons/powerdim.svg"));
 const ICON_DIMGUIDE: IconKind =
     IconKind::Svg(include_bytes!("../assets/icons/dimguide.svg"));
 const ICON_DIM2GB: IconKind = IconKind::Svg(include_bytes!("../assets/icons/dim2gb.svg"));
@@ -1753,12 +1781,6 @@ impl BuiltinPlugin for OcsmPlugin {
                             title: "标注",
                             tools: vec![
                                 RibbonItem::LargeTool(ToolDef {
-                                    id: "OCSMPOWERDIM",
-                                    label: "智能标注",
-                                    icon: ICON_POWERDIM,
-                                    event: ModuleEvent::Command("OCSMPOWERDIM".to_string()),
-                                }),
-                                RibbonItem::LargeTool(ToolDef {
                                     id: "OCSMDIMGULIDE",
                                     label: "尺寸引导",
                                     icon: ICON_DIMGUIDE,
@@ -1806,7 +1828,7 @@ impl BuiltinPlugin for OcsmPlugin {
     fn dispatch(&self, host: &mut dyn HostApi, cmd: &str) -> bool {
         // auto-start：宿主把每条命令（含核心命令）都路由给插件 dispatch，
         // 在这里幂等启动标注更新服务器（GUIDE_PORT 防重），MCP 客户端无需
-        // 先手动运行 OCSMMCP/GDIM 即可连接。失败静默，GDIM/OCSMMCP 会给出
+        // 先手动运行 OCSMMCP 即可连接。失败静默，OCSMDIMGULIDE/OCSMMCP 会给出
         // 明确错误。
         let _ = self.ensure_guide_server(host);
         // 顺路刷新"这图存过盘没有"（HTTP 侧要用来提示 xlsx 落点）。
@@ -1827,7 +1849,7 @@ impl BuiltinPlugin for OcsmPlugin {
                 self.cmd_init(host);
                 true
             }
-            "TF" | "OCSMFRAMEINIT" => {
+            "OCSMFRAMEINIT" => {
                 self.cmd_frame_init(host, rest);
                 true
             }
@@ -1835,12 +1857,8 @@ impl BuiltinPlugin for OcsmPlugin {
                 self.cmd_frame_insert(host, rest);
                 true
             }
-            "D" | "OCSMPOWERDIM" => {
-                self.cmd_powerdim(host);
-                true
-            }
             // 中心线：点圆/圆弧 → 十字；点两根直线 → 角平分线（`3中心线层`）
-            "OCSMCENTERLINE" | "ZX" => {
+            "OCSMCENTERLINE" => {
                 self::centerline::cmd_centerline(host);
                 true
             }
@@ -1855,24 +1873,24 @@ impl BuiltinPlugin for OcsmPlugin {
                 true
             }
             // 孔生成器：不带参数 = 孔窗口 + 放置态；带参数 = 一行直插
-            "OCSMHOLE" | "DK" => {
+            "OCSMHOLE" => {
                 self.cmd_hole(host, rest);
                 true
             }
-            "OCSMDIMGULIDE" | "GDIM" => {
+            "OCSMDIMGULIDE" => {
                 self.cmd_guide(host);
                 true
             }
-            "OCSMEDIT" | "ME" => {
+            "OCSMEDIT" => {
                 self.cmd_edit(host);
                 true
             }
-            "OCSMRGH" | "CC" => {
+            "OCSMRGH" => {
                 self.cmd_roughness(host);
                 true
             }
             // 按件链装配螺栓副（确定性执行器）：`OCSMJOINT at … bolt=… plate=… nut=…`
-            "OCSMHELP" | "OH" => {
+            "OCSMHELP" => {
                 self.cmd_help(host);
                 true
             }
@@ -1880,7 +1898,7 @@ impl BuiltinPlugin for OcsmPlugin {
                 self.cmd_joint(host, rest);
                 true
             }
-            "OCSMPART" | "XL" => {
+            "OCSMPART" => {
                 self.cmd_parts(host, rest);
                 true
             }
@@ -1895,10 +1913,10 @@ impl BuiltinPlugin for OcsmPlugin {
                 host.push_output(&crate::card::usage_line());
                 true
             }
-            // 明细表：建表/刷新（`BOM 30` = 本次首列 30 行）、配置（`BOMCFG 30`）
+            // 明细表：建表/刷新（`OCSMBOM 30` = 本次首列 30 行）、配置（`OCSMBOMCFG 30`）
             _ if is_bom_command(cmd) => {
                 // 只有**命令名**转大写；参数（路径、序号等）保留原始大小写
-                // —— 否则 `BOMXLSXI ~/桌面/x.xlsx` 会变成 `~/桌面/X.XLSX` 找不到文件。
+                // —— 否则 `OCSMBOMXLSXI ~/桌面/x.xlsx` 会变成 `~/桌面/X.XLSX` 找不到文件。
                 let trimmed = cmd.trim();
                 let name = trimmed
                     .split_whitespace()
@@ -1906,24 +1924,24 @@ impl BuiltinPlugin for OcsmPlugin {
                     .unwrap_or("")
                     .to_ascii_uppercase();
                 let rest = trimmed[name.len().min(trimmed.len())..].trim().to_string();
-                if name == "OCSMBOMCFG" || name == "BOMCFG" {
+                if name == "OCSMBOMCFG" {
                     bom::cmd_bom_cfg(host, &rest);
-                } else if name == "OCSMBOMEDIT" || name == "BOMEDIT" {
+                } else if name == "OCSMBOMEDIT" {
                     self.cmd_bom_edit(host);
-                } else if name == "OCSMBOMSYNC" || name == "BOMSYNC" {
+                } else if name == "OCSMBOMSYNC" {
                     bom::cmd_bom_sync(host, &rest);
-                } else if name == "OCSMBOMLOCK" || name == "BOMLOCK" {
+                } else if name == "OCSMBOMLOCK" {
                     bom::cmd_bom_lock(host, &rest);
-                } else if name == "OCSMBOMXLSX" || name == "BOMXLSX" {
+                } else if name == "OCSMBOMXLSX" {
                     bom::cmd_bom_xlsx(host, &rest);
-                } else if name == "OCSMBOMXLSXI" || name == "BOMXLSXI" {
+                } else if name == "OCSMBOMXLSXI" {
                     bom::cmd_bom_xlsxi(host, &rest);
                 } else {
                     bom::cmd_bom(host, &rest);
                 }
                 true
             }
-            "OCSMDIM2GB" | "D2G" => {
+            "OCSMDIM2GB" => {
                 self.cmd_dim2gb(host);
                 true
             }
@@ -1964,7 +1982,7 @@ fn auto_init_skipped_command(upper: &str) -> bool {
             upper,
             "NEW" | "OPEN" | "EXIT" | "QUIT" | "REPORT" | "CHANGELOG" | "ABOUT"
                 | "PLUGINS" | "PLUGINMANAGER" | "DONATE" | "WEBVERSION" | "HELP"
-                | "OCSMHELP" | "OH" | "PERF" | "CUI" | "ALIASEDIT" | "CUILOAD"
+                | "OCSMHELP" | "PERF" | "CUI" | "ALIASEDIT" | "CUILOAD"
                 | "CUIIMPORT" | "OPTIONS" | "OP"
         )
 }
@@ -2003,7 +2021,7 @@ const AUTO_INIT_INFO: &str = "新建图纸：自动执行 OCSM 初始化（旧�
 /// 初始化完成行：手动 `OCSM` 与两条自动路径共用（逐字一致）。
 fn ocsm_init_done_line(layers: usize, linetypes: usize, styles: usize, dim_styles: usize) -> String {
     format!(
-        "OCSM 初始化完成：新增图层 {layers} 个、线型 {linetypes} 个、文字样式 {styles} 个（OCSM_GB）、标注样式 {dim_styles} 个（OCSM_GB，当前样式）。数字键 1-10、TF、D 已就绪。"
+        "OCSM 初始化完成：新增图层 {layers} 个、线型 {linetypes} 个、文字样式 {styles} 个（OCSM_GB）、标注样式 {dim_styles} 个（OCSM_GB，当前样式）。数字键 1-10、正式 OCSM 命令与宿主别名已就绪。"
     )
 }
 
@@ -2272,7 +2290,7 @@ impl OcsmPlugin {
         self.init_ocsm_tables(host);
     }
 
-    /// `OCSMDIMGULIDE` / `GDIM`：选中引导线 → 启动标注更新服务器 →
+    /// `OCSMDIMGULIDE`：选中引导线 → 启动标注更新服务器 →
     /// 浏览器打开标注配置 GUI。
     fn cmd_guide(&self, host: &mut dyn HostApi) {
         let selected = host.selected_handles();
@@ -2281,7 +2299,7 @@ impl OcsmPlugin {
             return;
         };
         let doc = host.document();
-        let Some(e) = doc.get_entity(h) else {
+        let Some(e) = crate::guide_server::entity_by_handle(doc, h) else {
             host.push_error("OCSM: 找不到选中的实体。");
             return;
         };
@@ -2331,7 +2349,7 @@ impl OcsmPlugin {
         });
     }
 
-    /// `OCSMEDIT` / `ME`：选中一个 OCSM 生成的标注（带 `OCSM_EDIT` 记录）→
+    /// `OCSMEDIT`：选中一个 OCSM 生成的标注（带 `OCSM_EDIT` 记录）→
     /// 打开同一个标注配置 GUI 改它：GUI 从 `/api/guide` 读该标注的记录恢复
     /// 全部参数；「应用并刷新」时插件会删旧标注并用原引导几何重生成（替换）。
     /// 注意：命令里**不能**用 sender（会与主线程死锁）——直接读 host.document()。
@@ -2343,7 +2361,7 @@ impl OcsmPlugin {
         };
         let has_edit = {
             let doc = host.document();
-            doc.get_entity(h).is_some_and(|e| {
+            crate::guide_server::entity_by_handle(doc, h).is_some_and(|e| {
                 e.common()
                     .extended_data
                     .get_record("OCSM_EDIT")
@@ -2377,7 +2395,7 @@ impl OcsmPlugin {
         });
     }
 
-    /// `OCSMDIM2GB` / `D2G`：把宿主原生标注（模型空间 DIMENSION）**重建**为 OCSM 的
+    /// `OCSMDIM2GB`：把宿主原生标注（模型空间 DIMENSION）**重建**为 OCSM 的
     /// GB 标准版本——OCSM_GB_x{图框比例} 样式 + `7标注层`（尺寸）/ 匿名块（直径、
     /// 半径、角度、弧长），保留原文字覆盖、小数位、样式前后缀与公差。
     /// 另外转**引线标注**（`LEADER` + 绑定 `MTEXT`）：文字 1~2 行→OCSM 引线标注
@@ -2435,9 +2453,9 @@ impl OcsmPlugin {
         }
         if !plan.adds.is_empty() {
             let handles = host.add_entities(plan.adds.clone());
-            // D2G 产出的标注带 `OCSM_EDIT`（参数 + 引导几何）→ 再补上回编辑 GUI 的
+            // 标注转换产出的标注带 `OCSM_EDIT`（参数 + 引导几何）→ 再补上回编辑 GUI 的
             // `PE_URL`。**必须等实体有了句柄**（URL 里要嵌 handle），所以放在这里。
-            // 插件服务没起（端口未知）时跳过——`ME` 命令仍可编辑。
+            // 插件服务没起（端口未知）时跳过——`OCSMEDIT` 命令仍可编辑。
             if let Some(port) = crate::current_guide_port() {
                 let targets: Vec<acadrust::Handle> = handles
                     .iter()
@@ -2486,7 +2504,7 @@ impl OcsmPlugin {
         host.set_dirty();
     }
 
-    /// `OCSMRGH` / `CC`：表面粗糙度——交互点选插入点 → 打开粗糙度配置 GUI。
+    /// `OCSMRGH`：表面粗糙度——交互点选插入点 → 打开粗糙度配置 GUI。
     /// 无引导线：点选位置即符号插入点（URL 带坐标），GUI 里选形态/填属性后
     /// POST /api/rough_apply 生成匿名块（ATTDEF 文字）+ INSERT。
     fn cmd_roughness(&self, host: &mut dyn HostApi) {
@@ -2606,6 +2624,7 @@ impl OcsmPlugin {
             base: std::cell::Cell::new([0.0, 0.0, 0.0]),
             what: "OCSM 齿轮".to_string(),
             where_to: "请在齿轮窗口里点「生成到图纸」".to_string(),
+            doc: Some(host.document().clone()),
         }));
     }
 
@@ -2647,6 +2666,7 @@ impl OcsmPlugin {
                 base: std::cell::Cell::new([0.0, 0.0, 0.0]),
                 what: crate::i18n::t("cmd.shaft.place.what"),
                 where_to: crate::i18n::t("cmd.shaft.place.where"),
+                doc: Some(host.document().clone()),
             }));
             return;
         }
@@ -2692,7 +2712,7 @@ impl OcsmPlugin {
         }
         let at = program.at.unwrap_or([0.0, 0.0]);
         let rot = program.rot.unwrap_or(0.0);
-        // 图框比例在落点处查（与 D/GDIM/中心线同口径）；无图框 = 1.0。
+        // 图框比例在落点处查（与尺寸引导/中心线同口径）；无图框 = 1.0。
         let scale = crate::frame_scale_at(host.document(), [at[0], at[1], 0.0]);
         let shaft = match crate::shaft::build(&program, scale) {
             Ok(shaft) => shaft,
@@ -2737,7 +2757,7 @@ impl OcsmPlugin {
         ));
     }
 
-    /// `OCSMHOLE` / `DK`：孔生成器（简单孔 / 螺纹孔 / 沉头孔 / 埋头孔）。
+    /// `OCSMHOLE`：孔生成器（简单孔 / 螺纹孔 / 沉头孔 / 埋头孔）。
     ///
     /// * 不带参数 = 人类侧：开孔生成器窗口（孔类型 2×2 + 子类型/大小/配合 +
     ///   盲孔/贯通 + 孔深/螺纹范围自动 + 实时剖面预览）+ 进放置态；
@@ -2841,10 +2861,11 @@ impl OcsmPlugin {
             base: std::cell::Cell::new([0.0, 0.0, 0.0]),
             what: crate::i18n::t("cmd.hole.place_what"),
             where_to: crate::i18n::t("cmd.hole.hint.click_ok"),
+            doc: Some(host.document().clone()),
         }));
     }
 
-    /// `OCSMPART` / `XL`：直接打开标准件库窗口，并进入放置态
+    /// `OCSMPART`：直接打开标准件库窗口，并进入放置态
     /// （窗口里「零件出库」→ 回到图纸鼠标跟随预览 → 左键点击放置，可连续，Esc 结束）。
     fn cmd_parts(&self, host: &mut dyn HostApi, args: &str) {
         // 带参数 = 参数化直接插入（给 MCP/AI 一行驱动）：
@@ -2894,10 +2915,11 @@ impl OcsmPlugin {
             base: std::cell::Cell::new([0.0, 0.0, 0.0]),
             what: crate::i18n::t("cmd.parts.prompt.what"),
             where_to: crate::i18n::t("cmd.parts.prompt.where"),
+            doc: Some(host.document().clone()),
         }));
     }
 
-    /// `OCSMPART`/`XL` 参数化插入：直接调零件库同一条生成/插入路径
+    /// `OCSMPART` 参数化插入：直接调零件库同一条生成/插入路径
     /// （`guide_server::apply_part_pick`，已带 Begin/Commit 撤销事务）。
     fn cmd_parts_insert(&self, host: &mut dyn HostApi, spec: &PartsSpec) {
         let Some(sender) = host.plugin_request_sender() else {
@@ -2920,7 +2942,7 @@ impl OcsmPlugin {
     /// `OCSMCARD`：**智能卡片**（通用卡片生成器；11 张卡：GB 花键内/外、齿轮、
     /// ANSI 内/外×中/英、NF 内/外、DIN 内/外；一卡一方向）。
     ///
-    /// * 不带参数 = 人类侧：开智能卡片窗口 + 进放置态（与 DK/OCSMHOLE 同款）。
+    /// * 不带参数 = 人类侧：开智能卡片窗口 + 进放置态（与 OCSMHOLE 同款）。
     /// * 带参数 = `OCSMCARD <卡类型> …`；卡类型/方向从 `card::CARD_TYPES` 表里查
     ///   （旧写法 `OCSMCARD 花键参数表 [std GB] 内 6H <九字段表达式> …` 仍兼容）。
     ///
@@ -2980,7 +3002,7 @@ impl OcsmPlugin {
         }
     }
 
-    /// 开智能卡片窗口 + 进放置态（`OCSMCARD` 无参调用；与 DK/OCSMHOLE 同款）。
+    /// 开智能卡片窗口 + 进放置态（`OCSMCARD` 无参调用；与 OCSMHOLE 同款）。
     fn open_card_window_and_place(&self, host: &mut dyn HostApi) {
         let Some(port) = self.ensure_guide_server(host) else {
             host.push_error(&crate::i18n::t("cmd.card.err.no_worker"));
@@ -3000,6 +3022,7 @@ impl OcsmPlugin {
             base: std::cell::Cell::new([0.0, 0.0, 0.0]),
             what: crate::i18n::t("cmd.card.place.what"),
             where_to: crate::i18n::t("cmd.card.place.where"),
+            doc: Some(host.document().clone()),
         }));
     }
 
@@ -3052,7 +3075,9 @@ impl OcsmPlugin {
                 .unwrap_or([0.0, 0.0])
         });
         // CLI 与 GUI 导出共用这一条建 INSERT 路径（21 个 ATTRIB 在函数里填好）。
-        let ins = match crate::spline_table::build_insert(side, &table, at, spec.rot) {
+        // 卡片随图框比例缩放：落点处的图框比例（无图框 = 1.0）。
+        let frame_scale = crate::card_frame_factor(host.document(), at);
+        let ins = match crate::spline_table::build_insert(side, &table, at, spec.rot, frame_scale) {
             Ok(i) => i,
             Err(e) => {
                 host.push_error(&crate::i18n::t_fmt("cmd.card.err.spline_prefix", &[("e", &e)]));
@@ -3147,7 +3172,9 @@ impl OcsmPlugin {
                 .map(|p| [p[0], p[1]])
                 .unwrap_or([0.0, 0.0])
         });
-        let ins = match crate::spline_lite::build_insert(side, &table, at, spec.rot) {
+        // 卡片随图框比例缩放：落点处的图框比例（无图框 = 1.0）。
+        let frame_scale = crate::card_frame_factor(host.document(), at);
+        let ins = match crate::spline_lite::build_insert(side, &table, at, spec.rot, frame_scale) {
             Ok(i) => i,
             Err(e) => {
                 host.push_error(&crate::i18n::t_fmt("cmd.card.err.lite_prefix", &[("e", &e)]));
@@ -3220,7 +3247,9 @@ impl OcsmPlugin {
                 .map(|p| [p[0], p[1]])
                 .unwrap_or([0.0, 0.0])
         });
-        let ins = match crate::card_lite::build_insert(c, &values, at, rot) {
+        // 卡片随图框比例缩放：落点处的图框比例（无图框 = 1.0）。
+        let frame_scale = crate::card_frame_factor(host.document(), at);
+        let ins = match crate::card_lite::build_insert(c, &values, at, rot, frame_scale) {
             Ok(i) => i,
             Err(e) => {
                 host.push_error(&crate::i18n::t_fmt("cmd.card.err.lite_card_prefix", &[("id", c.id), ("e", &e)]));
@@ -3274,7 +3303,9 @@ impl OcsmPlugin {
                 .map(|p| [p[0], p[1]])
                 .unwrap_or([0.0, 0.0])
         });
-        let ins = match crate::gear_table::build_insert(&spec, at, spec.rot) {
+        // 卡片随图框比例缩放：落点处的图框比例（无图框 = 1.0）。
+        let frame_scale = crate::card_frame_factor(host.document(), at);
+        let ins = match crate::gear_table::build_insert(&spec, at, spec.rot, frame_scale) {
             Ok(i) => i,
             Err(e) => {
                 host.push_error(&crate::i18n::t_fmt("cmd.card.gear.err_prefix", &[("e", &e)]));
@@ -3338,7 +3369,9 @@ impl OcsmPlugin {
                 .map(|p| [p[0], p[1]])
                 .unwrap_or([0.0, 0.0])
         });
-        let ins = match crate::ansi_table::build_insert(&spec, at, spec.rot) {
+        // 卡片随图框比例缩放：落点处的图框比例（无图框 = 1.0）。
+        let frame_scale = crate::card_frame_factor(host.document(), at);
+        let ins = match crate::ansi_table::build_insert(&spec, at, spec.rot, frame_scale) {
             Ok(i) => i,
             Err(e) => {
                 host.push_error(&crate::i18n::t_fmt("cmd.card.ansi.err_prefix", &[("e", &e)]));
@@ -3398,7 +3431,9 @@ impl OcsmPlugin {
                 .map(|p| [p[0], p[1]])
                 .unwrap_or([0.0, 0.0])
         });
-        let ins = match crate::nf_table::build_insert(&spec, at, spec.rot) {
+        // 卡片随图框比例缩放：落点处的图框比例（无图框 = 1.0）。
+        let frame_scale = crate::card_frame_factor(host.document(), at);
+        let ins = match crate::nf_table::build_insert(&spec, at, spec.rot, frame_scale) {
             Ok(i) => i,
             Err(e) => {
                 host.push_error(&crate::i18n::t_fmt("cmd.card.nf.err_prefix", &[("e", &e)]));
@@ -3465,7 +3500,9 @@ impl OcsmPlugin {
                 .map(|p| [p[0], p[1]])
                 .unwrap_or([0.0, 0.0])
         });
-        let ins = match crate::nf_ext_table::build_insert(&spec, at, spec.rot) {
+        // 卡片随图框比例缩放：落点处的图框比例（无图框 = 1.0）。
+        let frame_scale = crate::card_frame_factor(host.document(), at);
+        let ins = match crate::nf_ext_table::build_insert(&spec, at, spec.rot, frame_scale) {
             Ok(i) => i,
             Err(e) => {
                 host.push_error(&crate::i18n::t_fmt("cmd.card.nfext.err_prefix", &[("e", &e)]));
@@ -3532,7 +3569,9 @@ impl OcsmPlugin {
                 .map(|p| [p[0], p[1]])
                 .unwrap_or([0.0, 0.0])
         });
-        let ins = match crate::din_table::build_insert(&spec, hub, at, spec.rot) {
+        // 卡片随图框比例缩放：落点处的图框比例（无图框 = 1.0）。
+        let frame_scale = crate::card_frame_factor(host.document(), at);
+        let ins = match crate::din_table::build_insert(&spec, hub, at, spec.rot, frame_scale) {
             Ok(i) => i,
             Err(e) => {
                 host.push_error(&crate::i18n::t_fmt("cmd.card.din.err_prefix", &[("e", &e)]));
@@ -3578,7 +3617,7 @@ impl OcsmPlugin {
         ));
     }
 
-    /// `OCSMBOMEDIT` / `BOMEDIT`：打开**明细表网页编辑器**（chromium `--app` 独立窗口，
+    /// `OCSMBOMEDIT`：打开**明细表网页编辑器**（chromium `--app` 独立窗口，
     /// 与零件库/螺栓副/引导窗口同一个开窗方式）。
     ///
     /// 原来只有一条路：Ctrl+点击图纸里的表头/行块（`PE_URL` 链接）—— 那是宿主
@@ -3604,7 +3643,7 @@ impl OcsmPlugin {
         });
     }
 
-    /// `OCSMHELP` / `OH`：打开命令手册窗口（命令目录 + 操作教程）。
+    /// `OCSMHELP`：打开命令手册窗口（命令目录 + 操作教程）。
     ///
     /// 教程正文是**磁盘上的 md**（`guide_server::manual_dirs()` 搜索：
     /// `OCSM_MANUAL_DIR` → `~/.agents/skills/ocsm-manual/manual` → 仓库 `handbook/`），
@@ -3724,54 +3763,114 @@ impl OcsmPlugin {
             return;
         }
 
-        // 有选中对象：移动（不切当前层），记 undo、保留选择集。
-        host.push_undo(&format!("移动到图层{target}"));
-        let mut moved = 0usize;
-        let mut refused = 0usize;
+        // 有选中对象：移动（不切当前层），保留选择集。
+        //
+        // 这里不能再用 `push_undo` + 多次 `update_entity`：V4 插件的每个
+        // HostApi 调用都是一条 IPC 消息，宿主会在消息边界收尾普通 undo
+        // snapshot；因此这个写法既可能把 undo 点和真正的修改拆开，又会
+        // 漏掉 `update_entity` 路径要求调用方显式 `set_dirty()` 的契约。
+        // 先尝试原子事务；事务自身负责 undo、dirty 和整批校验。
+        let label = format!("移动到图层{target}");
+        let mut updates = Vec::with_capacity(selected.len());
+        let mut missing = 0usize;
         for h in selected {
-            let Some(mut entity) = host.document().get_entity(h).cloned() else {
+            let Some(mut entity) = crate::guide_server::entity_by_handle(host.document(), h).cloned()
+            else {
+                // V4 的序列化文档快照可能尚未重建 get_entity() 的句柄索引；
+                // 选择集来自宿主实况，不能只用索引查找，否则会把真实存在的
+                // D3/8D 误判成“快照中不存在”。
+                missing += 1;
                 continue;
             };
-            entity.common_mut().layer = target.clone();
-            if host.update_entity(entity) {
-                moved += 1;
-            } else {
-                refused += 1; // 锁定层对象被宿主拒绝
+            if entity.common().layer != target {
+                entity.common_mut().layer = target.clone();
+                updates.push(entity);
             }
         }
-        let mut msg = format!("已将 {moved} 个对象移动到「{target}」。");
-        if refused > 0 {
-            msg.push_str(&format!("（{refused} 个在锁定图层上，已跳过）"));
+
+        if updates.is_empty() {
+            let mut msg = format!("已将 0 个对象移动到「{target}」。");
+            if missing > 0 {
+                msg.push_str(&format!("（{missing} 个选中对象在文档快照中不存在）"));
+            }
+            host.push_info(&msg);
+            return;
         }
-        host.push_info(&msg);
+
+        let attempted = updates.len();
+        match host.update_entities_transaction(&label, updates.clone()) {
+            Ok(()) => {
+                let mut msg = format!("已将 {attempted} 个对象移动到「{target}」。");
+                if missing > 0 {
+                    msg.push_str(&format!("（{missing} 个选中对象在文档快照中不存在）"));
+                }
+                host.push_info(&msg);
+            }
+            Err(transaction_error) => {
+                // 事务校验会因为其中一个锁定对象而整批拒绝。保留原来的
+                // “可移动的先移动、锁定的跳过”用户口径，但把跨 IPC 的
+                // undo scope 改成 deferred transaction；若全部失败，则把
+                // 宿主的真实拒绝原因显示出来，而不是误报“移动 0 个”。
+                host.begin_undo(&label);
+                let mut moved = 0usize;
+                let mut refused = 0usize;
+                for entity in updates {
+                    if host.update_entity(entity) {
+                        moved += 1;
+                    } else {
+                        refused += 1;
+                    }
+                }
+                if moved > 0 {
+                    host.set_dirty();
+                }
+                host.commit_undo();
+
+                if moved == 0 {
+                    host.push_error(&format!(
+                        "OCSM: 无法将选中对象移动到「{target}」：{transaction_error}"
+                    ));
+                    return;
+                }
+
+                let mut msg = format!("已将 {moved} 个对象移动到「{target}」。");
+                if refused > 0 {
+                    msg.push_str(&format!("（{refused} 个对象被宿主拒绝，已跳过）"));
+                }
+                if missing > 0 {
+                    msg.push_str(&format!("（{missing} 个选中对象在文档快照中不存在）"));
+                }
+                host.push_info(&msg);
+            }
+        }
     }
 
-    /// `TF` / `OCSMFRAMEINIT`：
+    /// `OCSMFRAMEINIT`：
     ///
     /// * **不带参数** → 扫描图框文件夹并打开宿主侧选择窗口（**人侧**，与原来一致）；
-    /// * **带参数** → `TF <名称> [比例] [at x,y] [rot 度]` **直接插图框**（**AI/自动化侧**）：
+    /// * **带参数** → `OCSMFRAMEINIT <名称> [比例] [at x,y] [rot 度]` **直接插图框**（**AI/自动化侧**）：
     ///   给了 `at` 就一次落图（不进交互），只给名称/比例则进光标跟随放置。
     fn cmd_frame_init(&self, host: &mut dyn HostApi, rest: &str) {
         match parse_frame_args(rest) {
-            Err(e) => host.push_error(&format!("TF：{e}")),
+            Err(e) => host.push_error(&format!("OCSMFRAMEINIT：{e}")),
             Ok(Some(args)) => self.cmd_frame_direct(host, args),
             Ok(None) => self.cmd_frame_picker(host),
         }
     }
 
-    /// `TF` 带参数：把名称解析到 `frame/*.dwg` 后直接走插入。
+    /// `OCSMFRAMEINIT` 带参数：把名称解析到 `frame/*.dwg` 后直接走插入。
     fn cmd_frame_direct(&self, host: &mut dyn HostApi, args: FrameArgs) {
         let frames = match frame_files() {
             Ok(f) => f,
             Err(e) => {
-                host.push_error(&format!("TF：{e}"));
+                host.push_error(&format!("OCSMFRAMEINIT：{e}"));
                 return;
             }
         };
         let item = match resolve_frame(&frames, &args.name) {
             Ok(item) => item,
             Err(e) => {
-                host.push_error(&format!("TF：{e}"));
+                host.push_error(&format!("OCSMFRAMEINIT：{e}"));
                 return;
             }
         };
@@ -3782,11 +3881,11 @@ impl OcsmPlugin {
             args.v2,
             args.at,
             args.rot_deg,
-            "TF",
+            "OCSMFRAMEINIT",
         );
     }
 
-    /// `TF` 不带参数：打开图框选择窗口（人侧流程）。
+    /// `OCSMFRAMEINIT` 不带参数：打开图框选择窗口（人侧流程）。
     fn cmd_frame_picker(&self, host: &mut dyn HostApi) {
         let frames = match frame_files() {
             Ok(f) => f,
@@ -3806,7 +3905,7 @@ impl OcsmPlugin {
 
     /// 定义图框块 + 插入：`at` 给了就一次落图，否则进交互放置（光标跟随）。
     ///
-    /// `who` 只用于错误信息前缀（`TF` / `OCSMFRAMEINSERT`）。
+    /// `who` 只用于错误信息前缀（`OCSMFRAMEINIT` / `OCSMFRAMEINSERT`）。
     fn frame_insert(
         &self,
         host: &mut dyn HostApi,
@@ -3833,15 +3932,9 @@ impl OcsmPlugin {
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| "frame".to_string());
 
-        // 图框比例感知：为本次缩放创建对应标注样式（如 OCSM_GB_x2），
-        // POWERDIM 在 frame 内标注时按此样式放大文字/箭头。
-        // 缩放样式（以及随后的块导入/插入）都要可撤销：宿主 import 自带 push，
-        // 这里补一次覆盖缩放样式创建；无改动时宿主会丢弃空条目。
+        // 图框插入本身仍是一个可撤销事务；尺寸转换/引导标注在实际标注锚点处
+        // 按需创建 `OCSM_GB_xN`，图框插入不再预创建标注样式。
         host.push_undo(&crate::i18n::t("cmd.frame.undo_label"));
-        if (scale - 1.0).abs() > 1e-9 {
-            host.ensure_dim_styles(vec![scaled_dim_style_def(scale)]);
-        }
-
         // 先在宿主侧定义块（幂等），并取回 ATTDEF 供插入时构造属性。
         let attdefs = match host.import_frame_block(ImportFrameBlockRequest {
             path: path.to_string(),
@@ -3895,7 +3988,7 @@ impl OcsmPlugin {
         }
     }
 
-    /// `OCSMFRAMEINSERT`：带参数同 `TF <名称> <比例> at x,y`；
+    /// `OCSMFRAMEINSERT`：带参数同 `OCSMFRAMEINIT <名称> <比例> at x,y`；
     /// 不带参数 = 取走选择窗口的结果（人侧两步流程）。
     fn cmd_frame_insert(&self, host: &mut dyn HostApi, rest: &str) {
         if !rest.trim().is_empty() {
@@ -3916,684 +4009,17 @@ impl OcsmPlugin {
         );
     }
 
-    /// `D` / `OCSMPOWERDIM`：智能标注（点/直线/圆/圆弧 → 自动推断标注类型，
-    /// 光标跟随预览，frame 比例感知）。
-    fn cmd_powerdim(&self, host: &mut dyn HostApi) {
-        // 标注固定放 7标注层（模板层），兜底确保存在；同时确保文字/标注样式
-        // 就绪——否则样式缺失时标注回退默认参数（文字变图层色、尺寸异常）。
-        // 样式补齐也是文档改动 → 先声明撤销点（标注实体本身由宿主在每次提交时
-        // 各自入栈，这里覆盖的是样式表）。
-        host.push_undo("OCSM 智能标注");
-        host.ensure_layers(layer_defs());
-        host.ensure_text_styles(text_style_defs());
-        host.ensure_dim_styles(dim_style_defs());
-        // 本次 dispatch 的 host proxy 是新建的，document() 快照即最新
-        // （用户此前画的线/圆/圆弧/图框都在里面），供命令内几何查询。
-        let doc = host.document().clone();
-        host.push_info(
-            "OCSMPOWERDIM: 拾取点模式（选端点/圆心/交点），Enter 切换线段点选；Esc 取消。",
-        );
-        host.start_interactive(Box::new(PowerDim::new(doc)));
-    }
 }
 
-// ── OCSMPOWERDIM ────────────────────────────────────────────────────────────
 
-/// 拾取对象的最小几何描述（命令内不持有宿主，只读快照）。
+// ── 中性几何/样式辅助 ───────────────────────────────────────────────────────
+
+/// 两点直线的最小几何描述，供标注转换/引导标注共享。
 #[derive(Clone, Copy)]
 pub(crate) struct LineGeom {
-    start: [f64; 3],
-    end: [f64; 3],
+    pub(crate) start: [f64; 3],
+    pub(crate) end: [f64; 3],
 }
-
-#[derive(Clone, Copy)]
-struct CircleGeom {
-    center: [f64; 3],
-    radius: f64,
-}
-
-#[derive(Clone, Copy)]
-struct ArcGeom {
-    center: [f64; 3],
-    radius: f64,
-    start_angle: f64,
-    end_angle: f64,
-}
-
-#[derive(Clone, Copy)]
-enum PickKind {
-    Line(LineGeom),
-    Circle(CircleGeom),
-    Arc(ArcGeom),
-}
-
-#[derive(Clone, Copy, PartialEq)]
-enum PlaceMode {
-    Aligned,
-    Horizontal,
-    Vertical,
-}
-
-#[derive(Clone, Copy, PartialEq)]
-enum CircleMode {
-    Diameter,
-    Radius,
-}
-
-#[derive(Clone, Copy, PartialEq)]
-enum ArcMode {
-    Radius,
-    ArcLength,
-}
-
-enum Step {
-    /// 等待第一个点击（对象或拾取点）。
-    First,
-    /// 已有一个拾取点，等待第二个。
-    TwoPoints { first: [f64; 3] },
-    /// 两个拾取点，等待放置点（A/H/V 关键字可锁定行为）。
-    TwoPointPlace {
-        first: [f64; 3],
-        second: [f64; 3],
-        mode: PlaceMode,
-    },
-    /// 已点一条直线，等待放置点。
-    LinePlace {
-        line: LineGeom,
-        mode: PlaceMode,
-    },
-    /// 两直线夹角（劣角/优角关键字可切换）。
-    AngularPlace {
-        line1: LineGeom,
-        line2: LineGeom,
-        major: bool,
-    },
-    /// 圆：直径/半径。
-    Circle {
-        circle: CircleGeom,
-        mode: CircleMode,
-    },
-    /// 圆弧：半径/弧长。
-    Arc {
-        arc: ArcGeom,
-        mode: ArcMode,
-    },
-}
-
-/// 拾取模式：`Points` = 双拾取点（对象捕捉开）；`Segments` = 线段点选
-/// （对象捕捉关，直接点直线/圆/圆弧，光标只留拾取方框）。按 Enter 切换。
-#[derive(Clone, Copy, PartialEq)]
-enum PickMode {
-    Points,
-    Segments,
-}
-
-impl Clone for Step {
-    fn clone(&self) -> Self {
-        *self
-    }
-}
-impl Copy for Step {}
-
-/// 智能标注交互命令。全程 entity-pick（`snapped=true` 的点视为拾取点，
-/// 未吸附的实体点击视为对象选择；空白点击=自由拾取点）。
-struct PowerDim {
-    doc: acadrust::CadDocument,
-    step: Step,
-    /// 拾取模式：Points（默认，对象捕捉开）↔ Segments（Enter 切换，点选线段）。
-    pick_mode: PickMode,
-    /// 第一个拾取点所在 frame 的缩放比例（决定标注样式）。
-    frame_scale: f64,
-    style_name: String,
-    /// 样式缺失时的提示（附加在 prompt 尾部）。
-    style_hint: Option<String>,
-    /// 刚点了平行线时的提示。
-    parallel_notice: bool,
-}
-
-impl PowerDim {
-    fn new(doc: acadrust::CadDocument) -> Self {
-        Self {
-            doc,
-            step: Step::First,
-            pick_mode: PickMode::Points,
-            frame_scale: 1.0,
-            style_name: "OCSM_GB".to_string(),
-            style_hint: None,
-            parallel_notice: false,
-        }
-    }
-
-    /// 按句柄从快照读取几何。
-    fn classify(&self, handle: acadrust::Handle) -> Option<PickKind> {
-        use acadrust::entities::EntityType as E;
-        let e = self.doc.get_entity(handle)?;
-        match e {
-            E::Line(l) => Some(PickKind::Line(LineGeom {
-                start: to_arr(&l.start),
-                end: to_arr(&l.end),
-            })),
-            E::Circle(c) => Some(PickKind::Circle(CircleGeom {
-                center: to_arr(&c.center),
-                radius: c.radius,
-            })),
-            E::Arc(a) => Some(PickKind::Arc(ArcGeom {
-                center: to_arr(&a.center),
-                radius: a.radius,
-                start_angle: a.start_angle,
-                end_angle: a.end_angle,
-            })),
-            _ => None,
-        }
-    }
-
-    /// 第一个拾取点处计算 frame 缩放比例，选定标注样式。
-    fn resolve_style(&mut self, pt: [f64; 3]) {
-        let scale = frame_scale_at(&self.doc, pt);
-        self.frame_scale = scale;
-        if (scale - 1.0).abs() < 1e-9 {
-            self.style_name = "OCSM_GB".to_string();
-            self.style_hint = None;
-            return;
-        }
-        let name = format!("OCSM_GB_x{}", trim_scale(scale));
-        if self
-            .doc
-            .dim_styles
-            .iter()
-            .any(|s| s.name.eq_ignore_ascii_case(&name))
-        {
-            self.style_name = name;
-            self.style_hint = None;
-        } else {
-            // 缩放样式不存在（如旧图）：回退 OCSM_GB 并在提示里说明。
-            self.style_name = "OCSM_GB".to_string();
-            self.style_hint = Some(format!(
-                "（未找到标注样式 {name}，已回退 OCSM_GB——请重新插入图框或运行 OCSM）"
-            ));
-        }
-    }
-
-    fn set_place_mode(&mut self, mode: PlaceMode) {
-        match &mut self.step {
-            Step::TwoPointPlace { mode: m, .. } | Step::LinePlace { mode: m, .. } => *m = mode,
-            _ => {}
-        }
-    }
-
-    fn set_major(&mut self, major: bool) {
-        if let Step::AngularPlace { major: m, .. } = &mut self.step {
-            *m = major;
-        }
-    }
-
-    fn set_circle_mode(&mut self, mode: CircleMode) {
-        if let Step::Circle { mode: m, .. } = &mut self.step {
-            *m = mode;
-        }
-    }
-
-    fn set_arc_mode(&mut self, mode: ArcMode) {
-        if let Step::Arc { mode: m, .. } = &mut self.step {
-            *m = mode;
-        }
-    }
-
-    /// 构建线性/对齐标注（放置点=pt），并盖上图层/样式。
-    fn build_linear(
-        &self,
-        first: [f64; 3],
-        second: [f64; 3],
-        pt: [f64; 3],
-        mode: PlaceMode,
-    ) -> Dimension {
-        use acadrust::entities::{DimensionAligned, DimensionLinear};
-        let (first, second, pt) = (v3(first), v3(second), v3(pt));
-        let lift = linear_text_lift(&self.style_name);
-        let dim = match mode {
-            PlaceMode::Aligned => {
-                let mut d = DimensionAligned::new(first, second);
-                let axis = (second - first).normalize();
-                d.definition_point = pt;
-                d.base.definition_point = pt;
-                let tp = linear_text_pos(first, second, pt, axis, lift);
-                d.base.text_middle_point = tp;
-                d.base.insertion_point = tp;
-                d.base.actual_measurement = d.measurement();
-                Dimension::Aligned(d)
-            }
-            PlaceMode::Horizontal => {
-                let mut d = DimensionLinear::horizontal(first, second);
-                let tp = linear_text_pos(first, second, pt, Vector3::new(1.0, 0.0, 0.0), lift);
-                d.definition_point = pt;
-                d.base.definition_point = pt;
-                d.base.text_middle_point = tp;
-                d.base.insertion_point = tp;
-                d.base.actual_measurement = d.measurement();
-                Dimension::Linear(d)
-            }
-            PlaceMode::Vertical => {
-                let mut d = DimensionLinear::vertical(first, second);
-                let tp = linear_text_pos(first, second, pt, Vector3::new(0.0, 1.0, 0.0), lift);
-                d.definition_point = pt;
-                d.base.definition_point = pt;
-                d.base.text_middle_point = tp;
-                d.base.insertion_point = tp;
-                d.base.actual_measurement = d.measurement();
-                Dimension::Linear(d)
-            }
-        };
-        stamp(dim, &self.style_name)
-    }
-
-    /// 圆/圆弧：直径或半径（光标在内→内标注，在外→外标注+引出线）。
-    fn build_radial(
-        &self,
-        center: [f64; 3],
-        radius: f64,
-        pt: [f64; 3],
-        mode: CircleMode,
-    ) -> Dimension {
-        use acadrust::entities::{DimensionDiameter, DimensionRadius};
-        let (center, pt) = (v3(center), v3(pt));
-        let rim = rim_toward(center, pt, radius);
-        let dist = pt.distance(&rim);
-        let leader = if dist < radius { 0.0 } else { dist };
-        let dim = match mode {
-            CircleMode::Diameter => {
-                let mut d = DimensionDiameter::new(center, rim);
-                d.base.definition_point = rim;
-                d.base.text_middle_point = pt;
-                d.base.insertion_point = pt;
-                d.leader_length = leader;
-                // 注意：v0.9.8 cadcodec 的 Diameter measurement() = 两点距离
-                //（圆心↔圆周点 = 半径），直径需 ×2。
-                d.base.actual_measurement = d.measurement() * 2.0;
-                Dimension::Diameter(d)
-            }
-            CircleMode::Radius => {
-                let mut d = DimensionRadius::new(center, rim);
-                d.base.text_middle_point = pt;
-                d.base.insertion_point = pt;
-                d.leader_length = leader;
-                d.base.actual_measurement = d.measurement();
-                Dimension::Radius(d)
-            }
-        };
-        let mut dim = stamp(dim, &self.style_name);
-        // 文字跟随点击/光标位置（否则宿主按样式重算，尺寸线总在圆内侧）。
-        dim.base_mut().text_user_positioned = true;
-        // 宿主自然旋转对半径/直径返回 0（水平）；这里插件直接把字旋转角设为
-        // 径向方向（从圆心指向文字点），并 clamp 到 (-90°, 90°] 防倒置。
-        let ang = (pt.y - center.y).atan2(pt.x - center.x);
-        let pi = std::f64::consts::PI;
-        let rot = if ang > pi / 2.0 {
-            ang - pi
-        } else if ang <= -pi / 2.0 {
-            ang + pi
-        } else {
-            ang
-        };
-        dim.base_mut().text_rotation = rot;
-        dim
-    }
-
-    /// 圆弧：半径或弧长。
-    fn build_arc(&self, arc: &ArcGeom, pt: [f64; 3], mode: ArcMode) -> Dimension {
-        use acadrust::entities::{DimensionArc, DimensionBase, DimensionType};
-        match mode {
-            ArcMode::Radius => self.build_radial(arc.center, arc.radius, pt, CircleMode::Radius),
-            ArcMode::ArcLength => {
-                let center = v3(arc.center);
-                let start_pt = center
-                    + Vector3::new(arc.start_angle.cos(), arc.start_angle.sin(), 0.0) * arc.radius;
-                let end_pt = center
-                    + Vector3::new(arc.end_angle.cos(), arc.end_angle.sin(), 0.0) * arc.radius;
-                let def = v3(pt);
-                let outside = def.distance(&center) > arc.radius;
-                // 被标注弧的实际扫角（rem_euclid 规范化跨 0° 方向），
-                // 保证优弧（>180°）按优弧长度标注并画优弧。
-                let sweep = (arc.end_angle - arc.start_angle).rem_euclid(std::f64::consts::TAU);
-                let mut d = DimensionArc {
-                    base: DimensionBase::new(DimensionType::ArcLength),
-                    definition_point: def,
-                    first_extension_point: start_pt,
-                    second_extension_point: end_pt,
-                    center_point: center,
-                    is_partial: true,
-                    arc_start_parameter: arc.start_angle,
-                    // 端点=起点+实际扫角，measurement = r × sweep（含优弧）。
-                    arc_end_parameter: arc.start_angle + sweep,
-                    has_leader: outside,
-                    first_leader_point: def,
-                    second_leader_point: rim_toward(center, def, arc.radius),
-                };
-                d.base.text_middle_point = def;
-                d.base.insertion_point = def;
-                d.base.actual_measurement = d.measurement();
-                let mut dim = stamp(Dimension::Arc(d), &self.style_name);
-                dim.base_mut().text_user_positioned = true;
-                dim
-            }
-        }
-    }
-
-    /// 两直线夹角标注（劣角默认；优角 = 360°−劣角，弧取优弧）。
-    fn build_angular(
-        &self,
-        line1: LineGeom,
-        line2: LineGeom,
-        pt: [f64; 3],
-        major: bool,
-    ) -> Dimension {
-        use acadrust::entities::{DimensionAngular2Ln, DimensionBase, DimensionType};
-        let minor_deg = angular_minor_sweep_deg(&line1, &line2, pt);
-        let measurement = if major {
-            360.0 - minor_deg
-        } else {
-            minor_deg
-        };
-        let mut d = DimensionAngular2Ln {
-            base: DimensionBase::new(DimensionType::Angular),
-            dimension_arc: v3(pt),
-            first_point: v3(line1.start),
-            second_point: v3(line1.end),
-            angle_vertex: v3(line2.start),
-            definition_point: v3(line2.end),
-        };
-        d.base.text_middle_point = v3(pt);
-        d.base.insertion_point = v3(pt);
-        d.base.actual_measurement = measurement;
-        // 宿主对 Angular2Ln 的文字用 measurement()（对两线存储语义错误，
-        // 可能导致恒 90°）。不改宿主，这里直接用 user_text 提供正确角度值。
-        d.base.user_text = Some(format!("{:.0}°", measurement));
-        let mut dim = stamp(Dimension::Angular2Ln(d), &self.style_name);
-        dim.base_mut().text_user_positioned = true;
-        dim
-    }
-}
-
-impl ocs_plugin_api::host::InteractiveCommand for PowerDim {
-    fn prompt(&self) -> String {
-        let base = match &self.step {
-            Step::First => {
-                if matches!(self.pick_mode, PickMode::Points) {
-                    "OCSMPOWERDIM 拾取点模式：选择端点/圆心/交点等，或 Enter 切换为线段点选。".to_string()
-                } else {
-                    "OCSMPOWERDIM 线段点选模式：点击直线/圆/圆弧创建标注，或 Enter 返回拾取点。".to_string()
-                }
-            }
-            Step::TwoPoints { .. } => "选择下一个拾取点。".to_string(),
-            Step::TwoPointPlace { .. } | Step::LinePlace { .. } => {
-                "选择标注行为：`对齐(A默认)`,`水平(H)`,`竖直(V)`。选择一根与当前直线不平行的直线以创建角度标注。或选择下一个拾取点以放置标注。".to_string()
-            }
-            Step::AngularPlace { .. } => {
-                "选择标注的行为：`劣角(I默认)`,`优角(R)`。或选择下一个拾取点以放置标注。".to_string()
-            }
-            Step::Circle { .. } => {
-                "选择标注行为：`直径(D默认)`，`半径(R)`。或选择下一个拾取点以放置标注。".to_string()
-            }
-            Step::Arc { .. } => {
-                "选择标注行为：`半径(R默认)`，`弧长(A)`。或选择下一个拾取点以放置标注。".to_string()
-            }
-        };
-        if self.parallel_notice {
-            format!("{base}（两直线平行，无法创建角度标注）")
-        } else if let Some(hint) = &self.style_hint {
-            format!("{base}{hint}")
-        } else {
-            base
-        }
-    }
-
-    fn on_point(&mut self, _pt: [f64; 3]) -> CommandStep {
-        CommandStep::NeedPoint
-    }
-
-    fn on_enter(&mut self) -> CommandStep {
-        // First 状态：Enter 在 拾取点模式 ↔ 线段点选模式 间切换；
-        // 其它状态：Enter 取消命令。
-        if matches!(self.step, Step::First) {
-            self.pick_mode = match self.pick_mode {
-                PickMode::Points => PickMode::Segments,
-                PickMode::Segments => PickMode::Points,
-            };
-            CommandStep::NeedPoint
-        } else {
-            CommandStep::Cancel
-        }
-    }
-
-    fn wants_text_input(&self) -> bool {
-        true
-    }
-
-    fn on_text_input(&mut self, text: &str) -> CommandStep {
-        let kw = text.trim().to_ascii_uppercase();
-        let mut consumed = false;
-        match &self.step {
-            Step::TwoPointPlace { .. } | Step::LinePlace { .. } => match kw.as_str() {
-                "A" | "ALIGNED" => {
-                    self.set_place_mode(PlaceMode::Aligned);
-                    consumed = true;
-                }
-                "H" | "HORIZONTAL" => {
-                    self.set_place_mode(PlaceMode::Horizontal);
-                    consumed = true;
-                }
-                "V" | "VERTICAL" => {
-                    self.set_place_mode(PlaceMode::Vertical);
-                    consumed = true;
-                }
-                _ => {}
-            },
-            Step::AngularPlace { .. } => match kw.as_str() {
-                "I" | "INTERIOR" | "MINOR" => {
-                    self.set_major(false);
-                    consumed = true;
-                }
-                "R" | "REFLEX" | "MAJOR" => {
-                    self.set_major(true);
-                    consumed = true;
-                }
-                _ => {}
-            },
-            Step::Circle { .. } => match kw.as_str() {
-                "D" | "DIAMETER" => {
-                    self.set_circle_mode(CircleMode::Diameter);
-                    consumed = true;
-                }
-                "R" | "RADIUS" => {
-                    self.set_circle_mode(CircleMode::Radius);
-                    consumed = true;
-                }
-                _ => {}
-            },
-            Step::Arc { .. } => match kw.as_str() {
-                "R" | "RADIUS" => {
-                    self.set_arc_mode(ArcMode::Radius);
-                    consumed = true;
-                }
-                "A" | "ARCLENGTH" | "LENGTH" => {
-                    self.set_arc_mode(ArcMode::ArcLength);
-                    consumed = true;
-                }
-                _ => {}
-            },
-            _ => {}
-        }
-        if consumed {
-            CommandStep::NeedPoint
-        } else {
-            // 非关键字：让宿主按常规解释（实体拾取步骤 → 句柄读取）。
-            CommandStep::Ignored
-        }
-    }
-
-    fn needs_object_pick(&self) -> bool {
-        true
-    }
-
-    /// 拾取点模式（默认）跑对象捕捉；线段点选模式（Enter 切换）关闭，
-    /// 直接点选直线/圆/圆弧（光标只留拾取方框）。
-    fn entity_pick_applies_osnap(&self) -> bool {
-        matches!(self.pick_mode, PickMode::Points)
-    }
-
-    fn on_object_pick_snapped(
-        &mut self,
-        handle: acadrust::Handle,
-        pt: [f64; 3],
-        snapped: bool,
-    ) -> CommandStep {
-        use acadrust::entities::EntityType as E;
-        let kind = if handle.is_null() {
-            None
-        } else {
-            self.classify(handle)
-        };
-        let is_line = matches!(kind, Some(PickKind::Line(_)));
-        let segment_select = matches!(self.pick_mode, PickMode::Segments);
-        // Step 的字段全部 Copy，先取一份再改 self.step。
-        let step = self.step;
-        match step {
-            Step::First => {
-                // 线段点选模式：只认实体点击（无 OSNAP，snapped 恒 false）；
-                // 空白点击忽略。拾取点模式：吸附点/空白=拾取点。
-                if segment_select && handle.is_null() {
-                    return CommandStep::NeedPoint;
-                }
-                match kind {
-                    Some(PickKind::Circle(c)) if !snapped => {
-                        self.resolve_style(pt);
-                        self.step = Step::Circle {
-                            circle: c,
-                            mode: CircleMode::Diameter,
-                        };
-                    }
-                    Some(PickKind::Arc(a)) if !snapped => {
-                        self.resolve_style(pt);
-                        self.step = Step::Arc {
-                            arc: a,
-                            mode: ArcMode::Radius,
-                        };
-                    }
-                    Some(PickKind::Line(l)) if !snapped => {
-                        self.resolve_style(pt);
-                        self.step = Step::LinePlace {
-                            line: l,
-                            mode: PlaceMode::Aligned,
-                        };
-                    }
-                    _ => {
-                        // 拾取点（吸附点 / 自由点击 / 非几何实体点击）。
-                        self.resolve_style(pt);
-                        self.step = Step::TwoPoints { first: pt };
-                    }
-                }
-            }
-            Step::TwoPoints { first } => {
-                self.step = Step::TwoPointPlace {
-                    first,
-                    second: pt,
-                    mode: PlaceMode::Aligned,
-                };
-            }
-            Step::TwoPointPlace { .. } | Step::LinePlace { .. } => {
-                // 点击另一条（不平行）直线 → 角度标注；否则放置。
-                if is_line && !snapped {
-                    let line1 = match step {
-                        Step::TwoPointPlace { first, second, .. } => LineGeom {
-                            start: first,
-                            end: second,
-                        },
-                        Step::LinePlace { line, .. } => line,
-                        _ => unreachable!(),
-                    };
-                    let Some(PickKind::Line(line2)) = kind else {
-                        unreachable!()
-                    };
-                    if lines_parallel(&line1, &line2) {
-                        self.parallel_notice = true;
-                        return CommandStep::NeedPoint;
-                    }
-                    self.parallel_notice = false;
-                    self.step = Step::AngularPlace {
-                        line1,
-                        line2,
-                        major: false,
-                    };
-                    return CommandStep::NeedPoint;
-                }
-                self.parallel_notice = false;
-                let dim = match step {
-                    Step::TwoPointPlace { first, second, mode } => {
-                        self.build_linear(first, second, pt, mode)
-                    }
-                    Step::LinePlace { line, mode } => {
-                        self.build_linear(line.start, line.end, pt, mode)
-                    }
-                    _ => unreachable!(),
-                };
-                return CommandStep::CommitAndEnd(E::Dimension(dim));
-            }
-            Step::AngularPlace {
-                line1,
-                line2,
-                major,
-            } => {
-                let dim = self.build_angular(line1, line2, pt, major);
-                return CommandStep::CommitAndEnd(E::Dimension(dim));
-            }
-            Step::Circle { circle, mode } => {
-                let dim = self.build_radial(circle.center, circle.radius, pt, mode);
-                return CommandStep::CommitAndEnd(E::Dimension(dim));
-            }
-            Step::Arc { arc, mode } => {
-                let dim = self.build_arc(&arc, pt, mode);
-                return CommandStep::CommitAndEnd(E::Dimension(dim));
-            }
-        }
-        CommandStep::NeedPoint
-    }
-
-    fn wants_mouse_move(&self) -> bool {
-        !matches!(self.step, Step::First)
-    }
-
-    fn on_mouse_move(&mut self, pt: [f64; 3]) -> Option<acadrust::EntityType> {
-        use acadrust::entities::{Line, EntityType as E};
-        match &self.step {
-            Step::First => None,
-            Step::TwoPoints { first } => {
-                let mut l = Line::new();
-                l.start = v3(*first);
-                l.end = v3(pt);
-                Some(E::Line(l))
-            }
-            Step::TwoPointPlace { first, second, mode } => {
-                Some(E::Dimension(self.build_linear(*first, *second, pt, *mode)))
-            }
-            Step::LinePlace { line, mode } => {
-                Some(E::Dimension(self.build_linear(line.start, line.end, pt, *mode)))
-            }
-            Step::AngularPlace { line1, line2, major } => Some(E::Dimension(
-                self.build_angular(*line1, *line2, pt, *major),
-            )),
-            Step::Circle { circle, mode } => Some(E::Dimension(self.build_radial(
-                circle.center,
-                circle.radius,
-                pt,
-                *mode,
-            ))),
-            Step::Arc { arc, mode } => {
-                Some(E::Dimension(self.build_arc(arc, pt, *mode)))
-            }
-        }
-    }
-}
-
-// ── 几何/样式辅助 ───────────────────────────────────────────────────────────
 
 pub(crate) fn v3(p: [f64; 3]) -> Vector3 {
     Vector3::new(p[0], p[1], p[2])
@@ -4609,6 +4035,27 @@ pub(crate) fn stamp(mut dim: Dimension, style_name: &str) -> Dimension {
     base.common.layer = "7标注层".to_string();
     base.style_name = style_name.to_string();
     dim
+}
+
+/// 给标注挂上「世界坐标图片块」（匿名块形态）：块成员按**世界坐标**烘焙
+/// （AutoCAD 画法，对照 `OCSMDIMGULIDE2/3-*.dxf` —— 那里的 DIMENSION 不写 group 12），
+/// 因此标注自身的**图片放置**必须同时复位成恒等。
+///
+/// 宿主渲染把非零的 `insertion_point` / `insertion_rotation` / `insertion_scale`
+/// 当作匿名块的插入变换，叠加到已是世界坐标的块成员上
+/// （`scene::render_graph::dimension_picture_insert` → `entity_owned_block_uses`）；
+/// 原生线性/半径标注才用 `insertion_point` 记文字锚点，图片块形态照抄它
+/// ⇒ 整幅标注被平移一个文字锚点距离（“飞位”）。
+///
+/// ★ 这个症状有欺骗性：宿主 DXF 写出器不落 group 12（只有 DWG 落），存盘重开后
+/// 非零值自己消失、显示又正常 —— “重启就好”是假象；根治必须在生成处写成恒等，
+/// 否则内存里渲染出的位置与存盘重开后的位置不一致。
+pub(crate) fn attach_picture_block(dim: &mut Dimension, block_name: String) {
+    let base = dim.base_mut();
+    base.block_name = block_name;
+    base.insertion_point = Vector3::ZERO;
+    base.insertion_rotation = 0.0;
+    base.insertion_scale = Vector3::new(1.0, 1.0, 1.0);
 }
 
 /// 线性标注文字中心相对尺寸线的法向抬升（世界单位）。
@@ -4650,23 +4097,6 @@ pub(crate) fn linear_text_pos(
     }
     let up = Vector3::new(-n.y, n.x, 0.0);
     (d1 + d2) * 0.5 + up * lift
-}
-
-/// 从中心朝 `pt` 方向的圆周点。
-pub(crate) fn rim_toward(center: Vector3, pt: Vector3, radius: f64) -> Vector3 {
-    let dir = pt - center;
-    if dir.length() < 1e-9 {
-        return center + Vector3::new(radius, 0.0, 0.0);
-    }
-    center + dir.normalize() * radius
-}
-
-/// 两直线是否平行（叉积 ≈ 0）。
-fn lines_parallel(a: &LineGeom, b: &LineGeom) -> bool {
-    let u = v3(a.end) - v3(a.start);
-    let v = v3(b.end) - v3(b.start);
-    let cross = u.x * v.y - u.y * v.x;
-    cross.abs() <= 1e-9 * u.length().max(v.length()).max(1.0)
 }
 
 /// 两直线交点（平行返回 None）。
@@ -4723,6 +4153,28 @@ pub(crate) fn angular_minor_sweep_deg(a: &LineGeom, b: &LineGeom, arc_pt: [f64; 
 /// 候选：块名 ∈ frame 目录 stem，或块内含 tag 比例/SCALE 的 ATTDEF。
 pub(crate) fn frame_scale_at(doc: &acadrust::CadDocument, pt: [f64; 3]) -> f64 {
     frame_anchor_at(doc, pt).map(|(_, s)| s).unwrap_or(1.0)
+}
+
+/// 卡片（参数表）插入用的图框比例因子：落点处最内层图框 INSERT 的均匀缩放；无图框 = 1.0。
+///
+/// 与杆件（`shaft::build(..., scale)`）、标注/中心线（`frame_scale_at`）、明细表
+/// （`bom_frame_anchor`）同口径 —— 卡片是这套口径里**唯一漏掉**的一类：图框按 1:2 插入
+/// （INSERT 缩放 2.0）时卡片仍按 1.0 落地，只有图框的一半大，用户只能事后手动 `SCALE`。
+pub(crate) fn card_frame_factor(doc: &acadrust::CadDocument, at: [f64; 2]) -> f64 {
+    frame_scale_at(doc, [at[0], at[1], 0.0])
+}
+
+/// 把卡片 INSERT 的整表缩放再乘上图框比例因子（各卡片 `build_insert` 统一调用）。
+///
+/// ★ 必须在属性 `attr.apply_transform(&ins.get_transform())` **之前**调用：
+/// ATTRIB 是按当时的 INSERT 变换换算成世界坐标存进 INSERT 的，事后改缩放只会让
+/// 块几何变大、属性留在原地 —— 表格线框与文字错位。
+pub(crate) fn apply_card_frame_scale(ins: &mut acadrust::entities::Insert, factor: f64) {
+    if factor.is_finite() && factor > 0.0 && (factor - 1.0).abs() > 1e-12 {
+        ins.set_x_scale(ins.x_scale() * factor);
+        ins.set_y_scale(ins.y_scale() * factor);
+        ins.set_z_scale(ins.z_scale() * factor);
+    }
 }
 
 /// 含 `pt` 的（最内层）图框 Insert：返回（插入点，均匀缩放）。无命中 = None。
@@ -4803,7 +4255,11 @@ fn is_frame_insert(
         return false;
     };
     br.entity_handles.iter().any(|h| {
-        doc.get_entity(*h).is_some_and(|e| {
+        // ★ 用 `entity_by_handle`（带 `entities()` 兜底）：插件侧的镜像文档经序列化往返后
+        // 句柄索引未必重建，`get_entity()` 对块内实体全取不到——这正是 §四「按句柄查不到」
+        // 的同一个坑，当时只修了引导线链路，此处（图框识别）拖到 2026-10-15 才暴露：
+        // AABB 取不到 ⇒ 图框被跳过 ⇒ `frame_scale_at` 恒回 1.0。
+        crate::guide_server::entity_by_handle(doc, *h).is_some_and(|e| {
             matches!(
                 e,
                 E::AttributeDefinition(ad)
@@ -4824,7 +4280,13 @@ pub(crate) fn insert_world_aabb(
     let mut min: Option<Vector3> = None;
     let mut max: Option<Vector3> = None;
     for h in &br.entity_handles {
-        let Some(e) = doc.get_entity(*h) else { continue };
+        // ★ 同上：块内实体必须走 `entity_by_handle`（带 `entities()` 兜底）。
+        // 只靠 `get_entity()` 时本函数对每个图框都返回 `None`，导致
+        // `frame_anchor_at` 一个图框都认不出来（2026-10-15 实机探针实测：
+        // `br_handles=184 aabb=None`）——卡片、杆件等按图框比例缩放的路径全部退化成 1.0。
+        let Some(e) = crate::guide_server::entity_by_handle(doc, *h) else {
+            continue;
+        };
         if matches!(e, E::Block(_) | E::BlockEnd(_)) {
             continue;
         }
@@ -4980,7 +4442,7 @@ fn resolve_frame(frames: &[FrameItem], name: &str) -> Result<FrameItem, String> 
     }
 }
 
-/// `TF` 的参数（AI/自动化侧直插图框）。
+/// `OCSMFRAMEINIT` 的参数（AI/自动化侧直插图框）。
 #[derive(Debug, Clone, PartialEq)]
 struct FrameArgs {
     /// 图框名（`frame/` 里的 dwg 文件名，可省 `.dwg`；空 = 目录里唯一的那个）。
@@ -5005,7 +4467,7 @@ fn trim_num(v: f64) -> String {
     }
 }
 
-/// 解析 `TF` 的 rest：
+/// 解析 `OCSMFRAMEINIT` 的 rest：
 ///
 /// ```text
 /// ""                          → Ok(None)（人侧：弹选择窗口）
@@ -5454,6 +4916,10 @@ struct PartPlace {
     what: String,
     /// 去哪里出图（“请在零件库窗口里点「零件出库」” / “请在齿轮窗口里点「生成到图纸」”）
     where_to: String,
+    /// 放置开始时的图纸快照：**只为**参数表卡片的预览算「落点处的图框比例」。
+    /// `on_mouse_move` 拿不到 host，而每移动一下就发一次快照请求太贵；
+    /// 这里只需要“图框在哪、缩多少”这一个事实，放置期间图框不会变。
+    doc: Option<acadrust::CadDocument>,
 }
 
 /// 放置阶段：`Follow` = 零件跟光标（未定位基点）；`Rotate` = 已定位基点、跟随光标绕基点旋转。
@@ -5482,7 +4948,7 @@ impl InteractiveCommand for PartPlace {
         }
     }
 
-    /// 光标跟随预览（与 POWERDIM 同机制）：定位前跟光标走，定位后绕基点旋转。
+    /// 光标跟随预览：定位前跟光标走，定位后绕基点旋转。
     fn wants_mouse_move(&self) -> bool {
         true
     }
@@ -5495,6 +4961,26 @@ impl InteractiveCommand for PartPlace {
         };
         let mut ins = acadrust::entities::Insert::new(&block, Vector3::new(at[0], at[1], at[2]));
         ins.rotation = rot;
+        // 预览尺寸必须与落件一致（`place_one` 同口径）：
+        // ① 整表缩放（NF/DIN 卡 0.17）以前预览根本没管 —— 幽灵是 1.0、落地是 0.17；
+        // ② 参数表卡片还要再乘**落点处**的图框比例（图框非 1:1 时卡片随图框缩放）；
+        // 零件/轴/孔是真实尺寸（frame_scaled = false），一个都不乘。
+        if let Some((scale, frame_scaled)) = pending_scale_flags() {
+            let factor = if frame_scaled {
+                self.doc
+                    .as_ref()
+                    .map(|doc| crate::card_frame_factor(doc, [at[0], at[1]]))
+                    .unwrap_or(1.0)
+            } else {
+                1.0
+            };
+            let k = scale * factor;
+            if k.is_finite() && k > 0.0 && (k - 1.0).abs() > 1e-12 {
+                ins.set_x_scale(k);
+                ins.set_y_scale(k);
+                ins.set_z_scale(k);
+            }
+        }
         {
             let c = &mut ins.common;
             c.layer = partgen::LAYER_MAIN.to_string();
@@ -5736,10 +5222,10 @@ mod tests {
                 }
             }
         }
-        assert_eq!(checked, 10, "功能区应有 10 个 LargeTool 按钮（当前 {checked}）");
+        assert_eq!(checked, 9, "功能区应有 9 个 LargeTool 按钮（当前 {checked}）");
     }
 
-    /// XL/`OCSMPART` 按钮：点击（不带参数）开「OCSM 标准件库」窗口 + 放置态。
+    /// `OCSMPART` 按钮：点击（不带参数）开「OCSM 标准件库」窗口 + 放置态。
     /// id/label/组/事件 + 图标非空都锁住，避免以后再出现「命令能用但按钮不见了」。
     #[test]
     fn ribbon_registers_parts_button_open_library() {
@@ -5764,11 +5250,11 @@ mod tests {
                 }
             }
         }
-        assert!(found, "功能区缺少「标准件库」按钮（OCSMPART / XL）");
+        assert!(found, "功能区缺少「标准件库」按钮（OCSMPART）");
         assert!(
             MANIFEST.command_prefixes.contains(&"OCSMPART")
-                && MANIFEST.command_prefixes.contains(&"XL"),
-            "MANIFEST.command_prefixes 缺少 OCSMPART/XL"
+                && !MANIFEST.command_prefixes.contains(&"XL"),
+            "MANIFEST.command_prefixes 应只注册 OCSMPART 正式命令"
         );
     }
 
@@ -5945,7 +5431,7 @@ mod tests {
             "side"
         );
         assert_eq!(PartsSpec::parse("detail_grind_od 100").unwrap().view, "main");
-        // 裸数字 = L（规格代号族）：`XL detail_spline_rect 6x23x26x6 30`
+        // 裸数字 = L（规格代号族）：`OCSMPART detail_spline_rect 6x23x26x6 30`
         let spec = PartsSpec::parse("detail_spline_rect 6x23x26x6 30 de63").unwrap();
         assert_eq!(spec.params.get("len"), Some(&30.0));
         assert_eq!(spec.params.get("de"), Some(&63.0));
@@ -5968,7 +5454,7 @@ mod tests {
         // 花键不认 b1，但解析不报错（到生成时统一报「不认识参数」）
         assert!(PartsSpec::parse("detail_spline_rect 6x23x26x6 L30 b1 3").is_ok());
 
-        // 渐开线花键的 XL 入口已移除：不再作为结构要素族解析（唯一入口 = OCSMGEAR 花键模式）。
+        // 渐开线花键的 OCSMPART 入口已移除：不再作为结构要素族解析（唯一入口 = OCSMGEAR 花键模式）。
         assert!(PartsSpec::parse("detail_invol_spline GB30R M3 Z20 L30 view side").is_err());
     }
 
@@ -6474,16 +5960,16 @@ mod tests {
         crate::i18n::set_lang(crate::i18n::Lang::Zh);
         let zh = parse_frame_args("a3 1:2 乱写").unwrap_err();
         assert!(zh.contains("认不出的参数「乱写」。"), "{zh}");
-        assert!(zh.contains("用法：TF <名称>"), "{zh}");
+        assert!(zh.contains("用法：OCSMFRAMEINIT <名称>"), "{zh}");
 
         crate::i18n::set_lang(crate::i18n::Lang::En);
         let en = parse_frame_args("a3 1:2 乱写").unwrap_err();
         assert!(en.contains("Unrecognized argument \"乱写\"."), "{en}");
-        assert!(en.contains("Usage: TF <name>"), "{en}");
+        assert!(en.contains("Usage: OCSMFRAMEINIT <name>"), "{en}");
         assert!(!en.contains("用法"), "英文模式不该再出中文用法：{en}");
         // 用法串本身也随语言（另一条错误路径：at 缺坐标）。
         let en_at = parse_frame_args("a3 at").unwrap_err();
-        assert!(en_at.contains("Usage: TF <name>"), "{en_at}");
+        assert!(en_at.contains("Usage: OCSMFRAMEINIT <name>"), "{en_at}");
         crate::i18n::set_lang_auto();
     }
 
@@ -6700,6 +6186,105 @@ mod tests {
         assert_eq!(frame_scale_at(&doc, [50.0, 101.0, 0.0]), 1.0);
     }
 
+    /// 卡片（参数表）随图框比例缩放（2026-10-15）：
+    /// 图框按 1:2 插入（INSERT 缩放 2.0）时，落在框内的参数表 INSERT 必须按 2.0 插入
+    /// ——过去卡片恒为 1.0，只有图框的一半大，用户只能事后手动 `SCALE`。
+    /// 钉住三件事：① 框内按图框比例；② 框外 / 1:1 保持原比例；
+    /// ③ NF/DIN 卡的**整表缩放 0.17** 是与图框比例**相乘**（0.34），不是被它顶掉。
+    #[test]
+    fn cards_follow_the_frame_scale_at_their_point() {
+        use crate::gear_table::GearTableSpec;
+        use crate::nf_table::NfTableSpec;
+        let doc = synthetic_frame_doc(2.0, [0.0, 0.0]); // 块 100×50 × 2 ⇒ 世界 200×100
+        let spec = GearTableSpec::parse("GEAR EX M2 Z40 ALPHA20 X0 DA84 DF75 BETA0 H20").unwrap();
+
+        // ① 框内 (50,25)：插入比例 = 图框比例 2.0；属性跟着同一个变换走（字高 ×2）。
+        let k = card_frame_factor(&doc, [50.0, 25.0]);
+        assert_eq!(k, 2.0);
+        let inside = crate::gear_table::build_insert(&spec, [50.0, 25.0], 0.0, k).unwrap();
+        assert!((inside.x_scale() - 2.0).abs() < 1e-12, "框内 x_scale={}", inside.x_scale());
+        assert!((inside.y_scale() - 2.0).abs() < 1e-12);
+        let mod_tag = inside
+            .attributes
+            .iter()
+            .find(|a| a.tag == "法向模数")
+            .expect("法向模数 ATTRIB");
+        assert!(
+            (mod_tag.height - 7.0).abs() < 1e-9,
+            "属性字高应随 INSERT 缩放（3.5×2=7）：{}",
+            mod_tag.height
+        );
+
+        // ② 1:1 图框、以及框外落点：都保持原来的 1.0（不添缩放）。
+        let one = synthetic_frame_doc(1.0, [0.0, 0.0]);
+        let plain = crate::gear_table::build_insert(
+            &spec,
+            [50.0, 25.0],
+            0.0,
+            card_frame_factor(&one, [50.0, 25.0]),
+        )
+        .unwrap();
+        assert!((plain.x_scale() - 1.0).abs() < 1e-12, "1:1 图框不该缩放");
+        let outside = crate::gear_table::build_insert(
+            &spec,
+            [500.0, 500.0],
+            0.0,
+            card_frame_factor(&doc, [500.0, 500.0]),
+        )
+        .unwrap();
+        assert!((outside.x_scale() - 1.0).abs() < 1e-12, "框外不该缩放");
+
+        // ③ NF 卡自带整表 0.17：与图框比例相乘（0.17×2=0.34）。
+        let nf_spec = NfTableSpec::parse("A300 M7.5 Z38").expect("NF 规格可解析");
+        let nf = crate::nf_table::build_insert(&nf_spec, [50.0, 25.0], 0.0, k).unwrap();
+        let expected = crate::nf_table::TABLE_SCALE * 2.0;
+        assert!(
+            (nf.x_scale() - expected).abs() < 1e-12,
+            "NF 卡应为整表×图框 = {expected}，实际 {}",
+            nf.x_scale()
+        );
+    }
+
+    /// 块内实体必须经 `entity_by_handle`（带 `entities()` 兜底）才能取到：
+    /// 插件侧的镜像文档是序列化往返来的，句柄索引未必重建（与 §四 同一个坑）。
+    /// 这里直接构造“索引为空”的图框文档——即 2026-10-15 实机探针现场
+    /// （`br_handles=184 aabb=None`）：`frame_scale_at` 必须仍能认出图框。
+    #[test]
+    fn frame_scale_survives_a_missing_snapshot_handle_index() {
+        let doc = synthetic_frame_doc(2.0, [0.0, 0.0]);
+        let mut value = serde_json::to_value(&doc).unwrap();
+        value["entity_index"] = serde_json::json!({});
+        let snapshot: acadrust::CadDocument = serde_json::from_value(value).unwrap();
+        assert!(
+            !snapshot
+                .block_records
+                .get("a3_test")
+                .expect("块记录")
+                .entity_handles
+                .iter()
+                .any(|h| snapshot.get_entity(*h).is_some()),
+            "fixture 必须真的缺句柄索引（否则本测试白测）"
+        );
+        assert_eq!(frame_scale_at(&snapshot, [50.0, 25.0, 0.0]), 2.0);
+        assert_eq!(frame_scale_at(&snapshot, [201.0, 25.0, 0.0]), 1.0);
+    }
+
+    /// 预览与落件必须同口径：两个都是 `整表缩放 × 落点图框比例`，
+    /// 且零件（frame_scaled=false）一个都不乘。
+    #[test]
+    fn card_frame_scaling_only_applies_to_card_tables() {
+        let mut card = PendingPart::with_attrs("B", "{}", "表", Vec::new()).with_frame_scaled();
+        assert!(card.frame_scaled);
+        card.scale = 0.17;
+        let doc = synthetic_frame_doc(2.0, [0.0, 0.0]);
+        let preview = card.scale * crate::card_frame_factor(&doc, [10.0, 10.0]);
+        assert!((preview - 0.34).abs() < 1e-12);
+        // 零件：不带 frame_scaled ⇒ 真实尺寸，不随图框比例。
+        let part = PendingPart::new("P", "{}", "M10×40");
+        assert!(!part.frame_scaled);
+        let _ = &mut card;
+    }
+
     #[test]
     fn frame_scale_at_prefers_innermost_smaller_frame() {
         // 外层 4x（0,0 起 400×200）内含 2x（100,100 起 200×100）：取内层 2。
@@ -6729,408 +6314,6 @@ mod tests {
         assert_eq!(frame_scale_at(&doc, [350.0, 150.0, 0.0]), 4.0);
     }
 
-    // ── POWERDIM 状态机 ───────────────────────────────────────────────────────
-
-    #[test]
-    fn powerdim_two_points_places_aligned_dimension() {
-        use ocs_plugin_api::host::InteractiveCommand as Ic;
-        let mut cmd = PowerDim::new(acadrust::CadDocument::default());
-        // 第一次点击：自由拾取点（handle NULL）。
-        assert!(matches!(
-            cmd.on_object_pick_snapped(acadrust::Handle::NULL, [0.0, 0.0, 0.0], false),
-            CommandStep::NeedPoint
-        ));
-        assert!(cmd.prompt().contains("选择下一个拾取点"));
-        // 第二次点击：另一个拾取点。
-        assert!(matches!(
-            cmd.on_object_pick_snapped(acadrust::Handle::NULL, [100.0, 0.0, 0.0], false),
-            CommandStep::NeedPoint
-        ));
-        assert!(cmd.prompt().contains("对齐(A默认)"));
-        // 第三次点击：放置 → 对齐标注。
-        match cmd.on_object_pick_snapped(acadrust::Handle::NULL, [50.0, -20.0, 0.0], false) {
-            CommandStep::CommitAndEnd(acadrust::EntityType::Dimension(dim)) => {
-                assert!(matches!(dim, Dimension::Aligned(_)));
-                assert_eq!(dim.base().common.layer, "7标注层");
-                assert_eq!(dim.base().style_name, "OCSM_GB");
-                assert!((dim.base().actual_measurement - 100.0).abs() < 1e-6);
-            }
-            other => panic!("expected CommitAndEnd Aligned, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn powerdim_keywords_lock_horizontal_vertical() {
-        use ocs_plugin_api::host::InteractiveCommand as Ic;
-        let mut cmd = PowerDim::new(acadrust::CadDocument::default());
-        let _ = cmd.on_object_pick_snapped(acadrust::Handle::NULL, [0.0, 0.0, 0.0], false);
-        let _ = cmd.on_object_pick_snapped(acadrust::Handle::NULL, [100.0, 0.0, 0.0], false);
-        // 关键字 H → 水平线性标注。
-        assert!(matches!(cmd.on_text_input("H"), CommandStep::NeedPoint));
-        match cmd.on_object_pick_snapped(acadrust::Handle::NULL, [50.0, -20.0, 0.0], false) {
-            CommandStep::CommitAndEnd(acadrust::EntityType::Dimension(Dimension::Linear(d))) => {
-                assert!(d.rotation.abs() < 1e-9);
-                assert!((d.base.actual_measurement - 100.0).abs() < 1e-6);
-            }
-            other => panic!("expected horizontal Linear, got {other:?}"),
-        }
-        // V → 竖直。
-        let mut cmd = PowerDim::new(acadrust::CadDocument::default());
-        let _ = cmd.on_object_pick_snapped(acadrust::Handle::NULL, [0.0, 0.0, 0.0], false);
-        let _ = cmd.on_object_pick_snapped(acadrust::Handle::NULL, [0.0, 80.0, 0.0], false);
-        assert!(matches!(cmd.on_text_input("V"), CommandStep::NeedPoint));
-        match cmd.on_object_pick_snapped(acadrust::Handle::NULL, [30.0, 40.0, 0.0], false) {
-            CommandStep::CommitAndEnd(acadrust::EntityType::Dimension(Dimension::Linear(d))) => {
-                assert!((d.rotation - std::f64::consts::FRAC_PI_2).abs() < 1e-9);
-                assert!((d.base.actual_measurement - 80.0).abs() < 1e-6);
-            }
-            other => panic!("expected vertical Linear, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn powerdim_line_line_creates_angular_with_major() {
-        use ocs_plugin_api::host::InteractiveCommand as Ic;
-        let mut doc = acadrust::CadDocument::default();
-        // 两条不平行线段：L1 (0,0)-(100,0)，L2 (0,0)-(0,100)。
-        let h1 = doc
-            .add_entity(EntityType::Line(Line {
-                common: Default::default(),
-                start: Vector3::new(0.0, 0.0, 0.0),
-                end: Vector3::new(100.0, 0.0, 0.0),
-                thickness: 0.0,
-                normal: Vector3::new(0.0, 0.0, 1.0),
-            }))
-            .unwrap();
-        let h2 = doc
-            .add_entity(EntityType::Line(Line {
-                common: Default::default(),
-                start: Vector3::new(0.0, 0.0, 0.0),
-                end: Vector3::new(0.0, 100.0, 0.0),
-                thickness: 0.0,
-                normal: Vector3::new(0.0, 0.0, 1.0),
-            }))
-            .unwrap();
-        let mut cmd = PowerDim::new(doc.clone());
-        // 先点 L1（无吸附）→ LinePlace。
-        assert!(matches!(
-            cmd.on_object_pick_snapped(h1, [50.0, 0.0, 0.0], false),
-            CommandStep::NeedPoint
-        ));
-        // 再点 L2 → AngularPlace。
-        assert!(matches!(
-            cmd.on_object_pick_snapped(h2, [0.0, 50.0, 0.0], false),
-            CommandStep::NeedPoint
-        ));
-        assert!(cmd.prompt().contains("劣角(I默认)"));
-        // 劣角：点击在夹角内侧 → 90°（actual_measurement + user_text）。
-        match cmd.on_object_pick_snapped(acadrust::Handle::NULL, [25.0, 25.0, 0.0], false) {
-            CommandStep::CommitAndEnd(acadrust::EntityType::Dimension(Dimension::Angular2Ln(
-                d,
-            ))) => {
-                assert!((d.base.actual_measurement - 90.0).abs() < 1e-6);
-                assert_eq!(d.base.user_text.as_deref(), Some("90°"));
-            }
-            other => panic!("expected Angular2Ln, got {other:?}"),
-        }
-        // 优角：R 关键字 → 270°。
-        let mut cmd = PowerDim::new(doc.clone());
-        let _ = cmd.on_object_pick_snapped(h1, [50.0, 0.0, 0.0], false);
-        let _ = cmd.on_object_pick_snapped(h2, [0.0, 50.0, 0.0], false);
-        assert!(matches!(cmd.on_text_input("R"), CommandStep::NeedPoint));
-        match cmd.on_object_pick_snapped(acadrust::Handle::NULL, [25.0, 25.0, 0.0], false) {
-            CommandStep::CommitAndEnd(acadrust::EntityType::Dimension(Dimension::Angular2Ln(
-                d,
-            ))) => {
-                assert!((d.base.actual_measurement - 270.0).abs() < 1e-6);
-                assert_eq!(d.base.user_text.as_deref(), Some("270°"));
-            }
-            other => panic!("expected Angular2Ln major, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn powerdim_parallel_lines_reject_angle() {
-        use ocs_plugin_api::host::InteractiveCommand as Ic;
-        let mut doc = acadrust::CadDocument::default();
-        let h1 = doc
-            .add_entity(EntityType::Line(Line {
-                common: Default::default(),
-                start: Vector3::new(0.0, 0.0, 0.0),
-                end: Vector3::new(100.0, 0.0, 0.0),
-                thickness: 0.0,
-                normal: Vector3::new(0.0, 0.0, 1.0),
-            }))
-            .unwrap();
-        let h2 = doc
-            .add_entity(EntityType::Line(Line {
-                common: Default::default(),
-                start: Vector3::new(0.0, 10.0, 0.0),
-                end: Vector3::new(100.0, 10.0, 0.0),
-                thickness: 0.0,
-                normal: Vector3::new(0.0, 0.0, 1.0),
-            }))
-            .unwrap();
-        let mut cmd = PowerDim::new(doc);
-        let _ = cmd.on_object_pick_snapped(h1, [50.0, 0.0, 0.0], false);
-        assert!(matches!(
-            cmd.on_object_pick_snapped(h2, [50.0, 10.0, 0.0], false),
-            CommandStep::NeedPoint
-        ));
-        assert!(cmd.parallel_notice);
-        assert!(cmd.prompt().contains("两直线平行"));
-    }
-
-    #[test]
-    fn powerdim_circle_inside_outside_leader() {
-        use ocs_plugin_api::host::InteractiveCommand as Ic;
-        let mut doc = acadrust::CadDocument::default();
-        let h = doc
-            .add_entity(EntityType::Circle(Circle {
-                common: Default::default(),
-                center: Vector3::new(50.0, 50.0, 0.0),
-                radius: 20.0,
-                thickness: 0.0,
-                normal: Vector3::new(0.0, 0.0, 1.0),
-            }))
-            .unwrap();
-        let mut cmd = PowerDim::new(doc.clone());
-        // 点击圆（无吸附）→ 直径模式提示。
-        assert!(matches!(
-            cmd.on_object_pick_snapped(h, [50.0, 30.0, 0.0], false),
-            CommandStep::NeedPoint
-        ));
-        assert!(cmd.prompt().contains("直径(D默认)"));
-        // 光标在圆外 → 外标注（leader>0）。
-        match cmd.on_object_pick_snapped(acadrust::Handle::NULL, [100.0, 50.0, 0.0], false) {
-            CommandStep::CommitAndEnd(acadrust::EntityType::Dimension(Dimension::Diameter(d))) => {
-                assert!(d.leader_length > 0.0);
-                assert!((d.base.actual_measurement - 40.0).abs() < 1e-6);
-            }
-            other => panic!("expected Diameter, got {other:?}"),
-        }
-        // R 关键字 → 半径；光标在圆内 → 内标注（leader=0）。
-        let mut cmd = PowerDim::new(doc.clone());
-        let _ = cmd.on_object_pick_snapped(h, [50.0, 30.0, 0.0], false);
-        assert!(matches!(cmd.on_text_input("R"), CommandStep::NeedPoint));
-        match cmd.on_object_pick_snapped(acadrust::Handle::NULL, [55.0, 55.0, 0.0], false) {
-            CommandStep::CommitAndEnd(acadrust::EntityType::Dimension(Dimension::Radius(d))) => {
-                assert_eq!(d.leader_length, 0.0);
-                assert!((d.base.actual_measurement - 20.0).abs() < 1e-6);
-            }
-            other => panic!("expected Radius, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn powerdim_arc_radius_and_arclength() {
-        use ocs_plugin_api::host::InteractiveCommand as Ic;
-        let mut doc = acadrust::CadDocument::default();
-        let h = doc
-            .add_entity(EntityType::Arc(Arc {
-                common: Default::default(),
-                center: Vector3::new(0.0, 0.0, 0.0),
-                radius: 50.0,
-                start_angle: 0.0,
-                end_angle: std::f64::consts::FRAC_PI_2,
-                thickness: 0.0,
-                normal: Vector3::new(0.0, 0.0, 1.0),
-            }))
-            .unwrap();
-        // 半径模式（默认）。
-        let mut cmd = PowerDim::new(doc.clone());
-        let _ = cmd.on_object_pick_snapped(h, [50.0, 0.0, 0.0], false);
-        assert!(cmd.prompt().contains("半径(R默认)"));
-        match cmd.on_object_pick_snapped(acadrust::Handle::NULL, [100.0, 50.0, 0.0], false) {
-            CommandStep::CommitAndEnd(acadrust::EntityType::Dimension(Dimension::Radius(d))) => {
-                assert!((d.base.actual_measurement - 50.0).abs() < 1e-6);
-            }
-            other => panic!("expected Radius, got {other:?}"),
-        }
-        // 弧长模式：A 关键字 → DimensionArc，弧长 = r·(π/2)。
-        let mut cmd = PowerDim::new(doc.clone());
-        let _ = cmd.on_object_pick_snapped(h, [50.0, 0.0, 0.0], false);
-        assert!(matches!(cmd.on_text_input("A"), CommandStep::NeedPoint));
-        match cmd.on_object_pick_snapped(acadrust::Handle::NULL, [80.0, 80.0, 0.0], false) {
-            CommandStep::CommitAndEnd(acadrust::EntityType::Dimension(Dimension::Arc(d))) => {
-                let expected = 50.0 * std::f64::consts::FRAC_PI_2;
-                assert!((d.base.actual_measurement - expected).abs() < 1e-6);
-                assert!(d.has_leader); // 光标在外侧
-            }
-            other => panic!("expected Arc, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn powerdim_resolve_style_uses_scaled_style_when_present() {
-        use ocs_plugin_api::host::InteractiveCommand as Ic;
-        use acadrust::tables::DimStyle;
-        let mut doc = synthetic_frame_doc(2.0, [0.0, 0.0]);
-        // 模拟 TF 已创建缩放样式：OCSM_GB_x2 存在。
-        let mut style = DimStyle::new("OCSM_GB_x2");
-        style.handle = doc.allocate_handle();
-        style.dimscale = 2.0;
-        doc.dim_styles.add_or_replace(style);
-        let mut cmd = PowerDim::new(doc);
-        // 第一次点击在 2x 框内 → 样式 OCSM_GB_x2。
-        let _ = cmd.on_object_pick_snapped(acadrust::Handle::NULL, [50.0, 25.0, 0.0], true);
-        assert_eq!(cmd.style_name, "OCSM_GB_x2");
-        assert!(cmd.style_hint.is_none());
-        // 缩放样式缺失时回退 OCSM_GB 并提示。
-        let mut cmd = PowerDim::new(synthetic_frame_doc(4.0, [0.0, 0.0]));
-        let _ = cmd.on_object_pick_snapped(acadrust::Handle::NULL, [50.0, 25.0, 0.0], true);
-        assert_eq!(cmd.style_name, "OCSM_GB");
-        assert!(cmd.style_hint.is_some());
-    }
-
-    #[test]
-    fn powerdim_enter_toggles_segment_select_mode() {
-        use ocs_plugin_api::host::InteractiveCommand as Ic;
-        let mut doc = acadrust::CadDocument::default();
-        let h = doc
-            .add_entity(EntityType::Line(Line {
-                common: Default::default(),
-                start: Vector3::new(0.0, 0.0, 0.0),
-                end: Vector3::new(100.0, 0.0, 0.0),
-                thickness: 0.0,
-                normal: Vector3::new(0.0, 0.0, 1.0),
-            }))
-            .unwrap();
-        let mut cmd = PowerDim::new(doc);
-        // 默认拾取点模式：OSNAP 开。
-        assert!(cmd.entity_pick_applies_osnap());
-        assert!(cmd.prompt().contains("拾取点模式"));
-        // Enter → 线段点选模式：OSNAP 关。
-        assert!(matches!(cmd.on_enter(), CommandStep::NeedPoint));
-        assert!(!cmd.entity_pick_applies_osnap());
-        assert!(cmd.prompt().contains("线段点选"));
-        // 点选模式下点击直线（snapped=false）→ 立即进入线段标注。
-        assert!(matches!(
-            cmd.on_object_pick_snapped(h, [50.0, 0.0, 0.0], false),
-            CommandStep::NeedPoint
-        ));
-        assert!(cmd.prompt().contains("对齐(A默认)"));
-        // 放置（任意点）→ 对齐标注。
-        match cmd.on_object_pick_snapped(acadrust::Handle::NULL, [50.0, -20.0, 0.0], false) {
-            CommandStep::CommitAndEnd(acadrust::EntityType::Dimension(dim)) => {
-                assert!(matches!(dim, Dimension::Aligned(_)));
-            }
-            other => panic!("expected Aligned, got {other:?}"),
-        }
-        // 点选模式下 First 状态：空白点击忽略。
-        let mut cmd = PowerDim::new(acadrust::CadDocument::default());
-        assert!(matches!(cmd.on_enter(), CommandStep::NeedPoint));
-        assert!(matches!(
-            cmd.on_object_pick_snapped(acadrust::Handle::NULL, [10.0, 10.0, 0.0], false),
-            CommandStep::NeedPoint
-        ));
-        assert!(matches!(cmd.step, Step::First));
-        // 再 Enter 回到拾取点模式。
-        assert!(matches!(cmd.on_enter(), CommandStep::NeedPoint));
-        assert!(cmd.entity_pick_applies_osnap());
-    }
-
-    #[test]
-    fn powerdim_radial_text_is_user_positioned_for_outside() {
-        use ocs_plugin_api::host::InteractiveCommand as Ic;
-        let mut doc = acadrust::CadDocument::default();
-        let h = doc
-            .add_entity(EntityType::Circle(Circle {
-                common: Default::default(),
-                center: Vector3::new(50.0, 50.0, 0.0),
-                radius: 20.0,
-                thickness: 0.0,
-                normal: Vector3::new(0.0, 0.0, 1.0),
-            }))
-            .unwrap();
-        let mut cmd = PowerDim::new(doc);
-        let _ = cmd.on_object_pick_snapped(h, [50.0, 30.0, 0.0], false);
-        // 光标在圆外 → 外标注：leader>0 且文字跟随点击点（user_positioned）。
-        match cmd.on_object_pick_snapped(acadrust::Handle::NULL, [100.0, 50.0, 0.0], false) {
-            CommandStep::CommitAndEnd(acadrust::EntityType::Dimension(Dimension::Diameter(d))) => {
-                assert!(d.leader_length > 0.0);
-                assert!(d.base.text_user_positioned);
-                assert!((d.base.text_middle_point.x - 100.0).abs() < 1e-9);
-            }
-            other => panic!("expected Diameter, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn powerdim_arc_length_uses_actual_sweep_including_major() {
-        use ocs_plugin_api::host::InteractiveCommand as Ic;
-        let mut doc = acadrust::CadDocument::default();
-        // 270° 优弧：start=0°, end=270°。
-        let h = doc
-            .add_entity(EntityType::Arc(Arc {
-                common: Default::default(),
-                center: Vector3::new(0.0, 0.0, 0.0),
-                radius: 50.0,
-                start_angle: 0.0,
-                end_angle: std::f64::consts::TAU * 0.75,
-                thickness: 0.0,
-                normal: Vector3::new(0.0, 0.0, 1.0),
-            }))
-            .unwrap();
-        let mut cmd = PowerDim::new(doc);
-        let _ = cmd.on_object_pick_snapped(h, [50.0, 0.0, 0.0], false);
-        assert!(matches!(cmd.on_text_input("A"), CommandStep::NeedPoint));
-        match cmd.on_object_pick_snapped(acadrust::Handle::NULL, [80.0, 80.0, 0.0], false) {
-            CommandStep::CommitAndEnd(acadrust::EntityType::Dimension(Dimension::Arc(d))) => {
-                let expected = 50.0 * std::f64::consts::TAU * 0.75;
-                assert!(
-                    (d.base.actual_measurement - expected).abs() < 1e-6,
-                    "arc length should be the major sweep, got {}",
-                    d.base.actual_measurement
-                );
-                assert!(d.is_partial, "partial sweep keeps the major arc");
-                assert!(d.base.text_user_positioned);
-            }
-            other => panic!("expected Arc, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn powerdim_angular_measures_45_degrees_not_90() {
-        use ocs_plugin_api::host::InteractiveCommand as Ic;
-        // 45° 相交的两条线（非正交），验证角度值正确（F5 回归）。
-        let minor = angular_minor_sweep_deg(
-            &LineGeom {
-                start: [0.0, 0.0, 0.0],
-                end: [100.0, 0.0, 0.0],
-            },
-            &LineGeom {
-                start: [0.0, 0.0, 0.0],
-                end: [100.0, 100.0, 0.0],
-            },
-            [50.0, 20.0, 0.0],
-        );
-        assert!((minor - 45.0).abs() < 1e-6, "got {minor}");
-    }
-
-    #[test]
-    fn powerdim_preview_follows_cursor() {
-        use ocs_plugin_api::host::InteractiveCommand as Ic;
-        let mut cmd = PowerDim::new(acadrust::CadDocument::default());
-        // 第一步无预览。
-        assert!(cmd.on_mouse_move([10.0, 10.0, 0.0]).is_none());
-        let _ = cmd.on_object_pick_snapped(acadrust::Handle::NULL, [0.0, 0.0, 0.0], false);
-        // 两点步骤：橡皮筋线。
-        assert!(matches!(
-            cmd.on_mouse_move([50.0, 30.0, 0.0]),
-            Some(EntityType::Line(_))
-        ));
-        let _ = cmd.on_object_pick_snapped(acadrust::Handle::NULL, [100.0, 0.0, 0.0], false);
-        // 放置步骤：标注实体预览（跟随光标）。
-        match cmd.on_mouse_move([50.0, -20.0, 0.0]) {
-            Some(EntityType::Dimension(dim)) => {
-                assert!(matches!(dim, Dimension::Aligned(_)));
-                assert_eq!(dim.base().common.layer, "7标注层");
-                assert_eq!(dim.base().style_name, "OCSM_GB");
-            }
-            other => panic!("expected preview Dimension, got {other:?}"),
-        }
-    }
     /// 只关心“谁先动了文档”的宿主桩：HostApi 的 ensure_* / ensure_plugin_state 默认
     /// 什么都不做，这里覆盖成记录调用，用来断言 push_undo 发生在表变更之前。
     #[derive(Default)]
@@ -7147,6 +6330,8 @@ mod tests {
         layers: Vec<ocs_plugin_api::host::LayerDef>,
         text_styles: Vec<ocs_plugin_api::host::TextStyleDef>,
         dim_styles: Vec<ocs_plugin_api::host::DimStyleDef>,
+        selected: Vec<ocs_plugin_api::host::Handle>,
+        transactions: Vec<(String, Vec<ocs_plugin_api::host::Handle>)>,
     }
     /// 空的只读文档视图（HostApi 要求实现 DocumentReader）。
     struct SpyReader;
@@ -7177,6 +6362,31 @@ mod tests {
         }
         fn bump_geometry(&mut self) {
             self.log.push("bump_geometry".into());
+        }
+        fn selected_handles(&self) -> Vec<ocs_plugin_api::host::Handle> {
+            self.selected.clone()
+        }
+        fn update_entities_transaction(
+            &mut self,
+            label: &str,
+            entities: Vec<ocs_plugin_api::host::EntityType>,
+        ) -> Result<(), String> {
+            self.transactions.push((
+                label.to_string(),
+                entities.iter().map(|entity| entity.common().handle).collect(),
+            ));
+            for entity in entities {
+                let handle = entity.common().handle;
+                let Some(slot) = self
+                    .doc
+                    .entities_mut()
+                    .find(|candidate| candidate.common().handle == handle)
+                else {
+                    return Err(format!("missing entity {handle:?}"));
+                };
+                *slot = entity;
+            }
+            Ok(())
         }
         fn read_record(
             &self,
@@ -7344,6 +6554,41 @@ mod tests {
     }
 
     #[test]
+    fn layer_key_moves_selected_entities_in_one_transaction() {
+        let mut host = UndoOrderSpy::default();
+        let handle = host
+            .doc
+            .add_entity(EntityType::Point(acadrust::entities::Point::at(Vector3::new(
+                1.0, 2.0, 0.0,
+            ))))
+            .expect("test point handle");
+        host.selected = vec![handle];
+        // DocumentSnapshot may preserve flat storage while losing the derived
+        // handle index. This is the exact shape that previously produced 0.
+        let mut snapshot = serde_json::to_value(&host.doc).unwrap();
+        snapshot["entity_index"] = serde_json::json!({});
+        host.doc = serde_json::from_value(snapshot).unwrap();
+        assert!(host.doc.get_entity(handle).is_none());
+
+        OcsmPlugin.cmd_layer_key(&mut host, 5);
+
+        assert_eq!(host.transactions.len(), 1);
+        assert_eq!(host.transactions[0].0, "移动到图层5剖面线层");
+        assert_eq!(host.transactions[0].1, vec![handle]);
+        assert_eq!(
+            host.doc
+                .entities()
+                .find(|entity| entity.common().handle == handle)
+                .unwrap()
+                .common()
+                .layer,
+            "5剖面线层"
+        );
+        assert!(host.undo.is_empty(), "事务自己管理 undo，不应再开普通 undo 点");
+        assert!(host.infos.iter().any(|line| line.contains("已将 1 个对象移动")));
+    }
+
+    #[test]
     fn mutating_commands_push_undo_before_touching_tables() {
         // 宿主 ensure_* 直接改表、不自动入撤销栈（MCP `op:"undo"` 也撤不掉），
         // 所以命令必须自己先声明撤销点 —— 2026-09-15 发现的契约缺口。
@@ -7361,14 +6606,6 @@ mod tests {
             host.log
         );
 
-        let mut host = UndoOrderSpy::default();
-        OcsmPlugin.cmd_powerdim(&mut host);
-        assert_eq!(
-            host.log.first().map(String::as_str),
-            Some("push_undo:OCSM 智能标注"),
-            "{:?}",
-            host.log
-        );
     }
 
     // ── 新建空图纸自动初始化（宿主无「文档新建/打开」事件 → 严格启发式）──
@@ -8027,6 +7264,7 @@ mod tests {
             base: std::cell::Cell::new([0.0, 0.0, 0.0]),
         what: "OCSM 标准件".to_string(),
         where_to: "请在零件库窗口里点「零件出库」".to_string(),
+        doc: None,
         };
         // 未定位：预览跟光标（旋转 0）
         let prev = cmd.on_mouse_move([7.0, 8.0, 0.0]).expect("预览");
@@ -8068,6 +7306,7 @@ mod tests {
             base: std::cell::Cell::new([0.0, 0.0, 0.0]),
             what: "OCSM 标准件".to_string(),
             where_to: "请在零件库窗口里点「零件出库」".to_string(),
+            doc: None,
         };
         let _ = cmd2.on_point([1.0, 1.0, 0.0]);
         assert!(cmd2.prompt().contains("绕基点旋转"));
@@ -8089,7 +7328,7 @@ mod tests {
         assert_eq!(parse_session_env("DISPLAY=:1\nDISPLAY=:2\n").len(), 1);
     }
 
-    // ── 引导服务器：请求必须跟着“当前图纸”走（2026-09-16 GDIM bug）──────
+    // ── 引导服务器：请求必须跟着“当前图纸”走（2026-09-16 标注引导 bug）──────
 
     /// 记下自己被要求过几次（用来断言请求落到了哪张图的 sender）。
     struct TabSender {
@@ -8117,7 +7356,7 @@ mod tests {
     /// **回归：请求跟着“当前活跃图纸”走**（用户报的 bug + 后续加固）。
     ///
     /// 插件进程比一张图纸活得久：端口进程级复用，但 sender 绑定标签页。旧写法把
-    /// 首次 spawn 的 sender 固定进服务器线程，于是「关掉当前图纸 → 新建一张 → GDIM」
+    /// 首次 spawn 的 sender 固定进服务器线程，于是「关掉当前图纸 → 新建一张 → OCSMDIMGULIDE」
     /// 之后 HTTP 侧还在对着已经关闭的标签页发请求（宿主不回答 → 5 s 超时 →
     /// GUI 读不到引导线）。现在：带 `tab=` 的窗口对号入座；不带 `tab=` 的跟宿主通知
     /// 的活跃图纸；目标图没了/没登记过就明确报错，不猜着写到别的图上。

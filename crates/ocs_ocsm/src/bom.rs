@@ -1,4 +1,4 @@
-//! `OCSMBOM` / `BOM`：明细表建表 / 刷新（扫全图 `OCSM_PART` → 聚合 → 替换语义重建行块）。
+//! `OCSMBOM`：明细表建表 / 刷新（扫全图 `OCSM_PART` → 聚合 → 替换语义重建行块）。
 //!
 //! 规则来自用户 2026-09-15 的演示图与定案（计划 §30）：
 //!
@@ -30,9 +30,9 @@ use crate::i18n::{t, t_fmt};
 pub(crate) const XDATA_BOM: &str = "OCSM_BOM";
 /// 行块上的「数量锁」记录（用户手改数量后不应被同步覆盖）。
 pub(crate) const LOCK_APP: &str = "OCSM_BOMLOCK";
-/// 行块上的「上次导出数量」记录（`BOMXLSX` 写；导入侧"手改即锁"的比对基线）。
+/// 行块上的「上次导出数量」记录（`OCSMBOMXLSX` 写；导入侧"手改即锁"的比对基线）。
 pub(crate) const EXPORTED_APP: &str = "OCSM_BOMXEXP";
-/// 表头块上的「上次导出 xlsx 路径」记录（`BOMXLSX` 写；导入默认路径，与
+/// 表头块上的「上次导出 xlsx 路径」记录（`OCSMBOMXLSX` 写；导入默认路径，与
 /// Ctrl+点击链接解耦 —— 老版本写在 PE_URL 里的文件路径宿主打不开，见 `stamp_bom_links`）。
 pub(crate) const XLSX_PATH_APP: &str = "OCSM_BOMXPATH";
 pub(crate) const XDATA_PART: &str = "OCSM_PART";
@@ -570,7 +570,7 @@ pub(crate) struct BomReport {
     pub squeezed_hard: Vec<String>,
 }
 
-/// **建行核心**（命令 `BOM` 与球标联动共用）：按 `rows` 的次序重建全部行块，
+/// **建行核心**（命令 `OCSMBOM` 与球标联动共用）：按 `rows` 的次序重建全部行块，
 /// 保留布局规则（自下而上、首列贴标题栏、写满另起一列、续列自带表头）。
 pub(crate) fn fill_bom(
     sink: &mut dyn BomSink,
@@ -728,7 +728,7 @@ pub(crate) fn fill_bom(
                 ));
                 ins.common.extended_data.add_record(rec);
             }
-            // 导出基线（`BOMXLSX` 时写下）：导入侧靠它判断"人手改过数量"
+            // 导出基线（`OCSMBOMXLSX` 时写下）：导入侧靠它判断"人手改过数量"
             if let Some(b) = rows[seq - 1].exported {
                 let mut rec = ExtendedDataRecord::new(EXPORTED_APP);
                 rec.values.push(XDataValue::String(
@@ -843,7 +843,7 @@ fn insert_common<'a>(
     &mut ins.common
 }
 
-/// `OCSMBOM [每列行数]` / `BOM [每列行数]`。
+/// `OCSMBOM [每列行数]`。
 pub(crate) fn cmd_bom(host: &mut dyn HostApi, args: &str) {
     let dir = bom_dir();
     let cfg = load_config(&dir);
@@ -868,8 +868,8 @@ pub(crate) fn cmd_bom(host: &mut dyn HostApi, args: &str) {
         .enumerate()
         .map(|(i, it)| RowSpec::from_item(it, (i + 1).to_string()))
         .collect();
-    // 与 BOMSYNC/网页 apply/导入 同一套政策：现有表行里手改过的列（非空即保留）与
-    // `BOMLOCK` 数量锁不能被这次刷新冲掉（此前 `BOM` 少了这一步，见 `merge_existing` 注释）。
+    // 与 OCSMBOMSYNC/网页 apply/导入 同一套政策：现有表行里手改过的列（非空即保留）与
+    // OCSMBOMLOCK 数量锁不能被这次刷新冲掉（此前 OCSMBOM 少了这一步，见 `merge_existing` 注释）。
     crate::balloon_sync::merge_existing(&mut rows, &doc);
 
     match fill_bom(&mut HostSink(host), &doc, &rows, per_col) {
@@ -906,7 +906,7 @@ pub(crate) fn cmd_bom(host: &mut dyn HostApi, args: &str) {
     }
 }
 
-/// `OCSMBOMSYNC` / `BOMSYNC`：按**序号球标台账**重排/重建明细表（球标联动的手动入口）。
+/// `OCSMBOMSYNC`：按**序号球标台账**重排/重建明细表（球标联动的手动入口）。
 ///
 /// 规则（用户 2026-09-15 定）：行 = 序号（球标组每个条目一个）∪ 未被球标引用的聚合零件
 /// （沿用它们在旧表里的序号，没表则自动接号）；行序按序号升序、自下而上。
@@ -968,7 +968,7 @@ pub(crate) fn cmd_bom_sync(host: &mut dyn HostApi, _args: &str) {
     }
 }
 
-/// `BOMLOCK <序号|图号> [数量|off]`：给某一行**加/改/清数量锁**。
+/// `OCSMBOMLOCK <序号|图号> [数量|off]`：给某一行**加/改/清数量锁**。
 ///
 /// * 不给数量 → 用行上现值的数量锁上（"我手动改过，别覆盖"）；
 /// * 给数量   → 把数量改成该值并锁上；
@@ -1106,7 +1106,7 @@ fn default_xlsx_path(host: &dyn HostApi) -> std::path::PathBuf {
     saved.unwrap_or_else(|| default_xlsx_dir().join("明细表.xlsx"))
 }
 
-/// 把 xlsx 路径写进**表头块**的 `OCSM_BOMXPATH`（`BOMXLSXI` 导入时的默认路径）。
+/// 把 xlsx 路径写进**表头块**的 `OCSM_BOMXPATH`（`OCSMBOMXLSXI` 导入时的默认路径）。
 ///
 /// 注意：不要把文件路径写进 `PE_URL` —— 宿主 `web_hyperlink` 只放行 http/https，
 /// 文件路径链接永远打不开（这是“明细表 Ctrl+点击失效”的根因）；Ctrl+点击链接
@@ -1134,7 +1134,7 @@ fn xlsx_url_of(host: &dyn HostApi) -> Option<std::path::PathBuf> {
     for e in doc.model_space_entities() {
         if let EntityType::Insert(ins) = e {
             if ins.block_name == HEAD_BLOCK {
-                // 新记录：上次导出路径（`BOMXLSX` 写；与 Ctrl+点击链接解耦）。
+                // 新记录：上次导出路径（`OCSMBOMXLSX` 写；与 Ctrl+点击链接解耦）。
                 if let Some(rec) = ins.common.extended_data.get_record(XLSX_PATH_APP) {
                     if let Some(XDataValue::String(s)) =
                         rec.values.iter().find(|v| matches!(v, XDataValue::String(_)))
@@ -1258,7 +1258,7 @@ pub(crate) fn rowspec_from_cells(
 }
 
 /// 明细表现状指纹（图纸路径 + 全部行值/锁/基线）：网页「应用到图纸」时校验
-/// 打开网页之后图纸有没有被别的路径（如球标联动 BOMSYNC）改过 —— 变了就拒绝
+/// 打开网页之后图纸有没有被别的路径（如球标联动 OCSMBOMSYNC）改过 —— 变了就拒绝
 /// 并提示刷新，防止把旧视图上的整表盖回新图纸。
 pub(crate) fn fingerprint(doc_path: Option<&str>, rows: &[SheetRow]) -> String {
     use std::hash::{Hash, Hasher};
@@ -1340,7 +1340,7 @@ pub(crate) fn stamp_bom_links(host: &mut dyn HostApi) {
     }
 }
 
-/// `OCSMBOMXLSX` / `BOMXLSX [路径]`：把**当前明细表**导出成 `.xlsx`（带「锁定数量」列）。
+/// `OCSMBOMXLSX [路径]`：把**当前明细表**导出成 `.xlsx`（带「锁定数量」列）。
 ///
 /// 导出的同时把每行当时的数量记进行块 XDATA（导入侧"手改即锁"的基线），
 /// 并把文件路径写进表头块的 `PE_URL`（Ctrl+点击打开）。
@@ -1366,7 +1366,7 @@ pub(crate) fn cmd_bom_xlsx(host: &mut dyn HostApi, args: &str) {
         .map(|(_, (v, lock, _))| crate::bom_xlsx::xrow_from_cells(v, *lock))
         .collect();
     // 按扩展名分派：`.csv` → 写 CSV（UTF-8 **带 BOM**，Excel/WPS 认中文）；
-    // 其它 → 写真 xlsx。两种格式导入侧都收（见 `BOMXLSXI`）。
+    // 其它 → 写真 xlsx。两种格式导入侧都收（见 `OCSMBOMXLSXI`）。
     let as_csv = path
         .extension()
         .map(|e| e.eq_ignore_ascii_case("csv"))
@@ -1433,7 +1433,7 @@ pub(crate) fn cmd_bom_xlsx(host: &mut dyn HostApi, args: &str) {
     ));
 }
 
-/// `OCSMBOMXLSXI` / `BOMXLSXI [路径]`：读 `.xlsx`（或 `.csv`）回灌明细表。
+/// `OCSMBOMXLSXI [路径]`：读 `.xlsx`（或 `.csv`）回灌明细表。
 ///
 /// 规则：文件里**非空**的单元格覆盖图纸；**空白**保留图纸现值；文件里没有的序号保留；
 /// **总重**列忽略输入（算出来的）；数量与"导出基线"不一致 = 手改 → **自动上锁**。
@@ -1529,7 +1529,7 @@ pub(crate) fn cmd_bom_xlsxi(host: &mut dyn HostApi, args: &str) {
     }
 }
 
-/// `OCSMBOMCFG` / `BOMCFG [每列行数]`：查看/修改 `bom/settings.json`。
+/// `OCSMBOMCFG [每列行数]`：查看/修改 `bom/settings.json`。
 pub(crate) fn cmd_bom_cfg(host: &mut dyn HostApi, args: &str) {
     let dir = bom_dir();
     let mut cfg = load_config(&dir);

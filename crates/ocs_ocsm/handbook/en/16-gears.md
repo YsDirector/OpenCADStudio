@@ -8,7 +8,7 @@
 >
 > Parametrically draw a **cylindrical gear** (spur / helical, optionally with profile shift), one view per run, any of four views:
 > **section view / side view / simplified front view / regular front view**.
-> Placement is **exactly the same** as `XL` (standard parts): click "生成到图纸" (generate to drawing) in the window → back in the drawing pick the base point →
+> Placement is **exactly the same** as `OCSMPART` (standard parts): click "生成到图纸" (generate to drawing) in the window → back in the drawing pick the base point →
 > move the cursor to rotate → click again to settle (repeatable, Esc to finish).
 >
 > **Stage 1 draws external gears only**; internal gears are stage 2 (after the external gear is accepted).
@@ -238,7 +238,7 @@ Example: `OCSMGEAR m=2 z=40 h=20 alpha 45 ha=0.5 view 常规正视图`.
 | The three thin lines are not visible in the side view | β=0 (spur) does not draw them; filling in only degrees/minutes without degrees also counts as 0 |
 | The centerline is a bit longer than in old drawings | Old drawings were hand-drawn with `+4`; this command uses the GB convention `+6n` throughout |
 | The section view has no chamfer step line, the side view has | Per the template: a full section omits that edge |
-| The generated drawing is too big / too small | Gears are drawn at **true size**; the sheet scale is controlled by the frame (`TF`), and only the centerline/thin-line spacing follows the scale |
+| The generated drawing is too big / too small | Gears are drawn at **true size**; the sheet scale is controlled by the frame (`OCSMFRAMEINIT`), and only the centerline/thin-line spacing follows the scale |
 
 ## 8. How to Change the Drawing Method
 
@@ -258,7 +258,7 @@ Example: `OCSMGEAR m=2 z=40 h=20 alpha 45 ha=0.5 view 常规正视图`.
 > (GB/T 3478.1-2008 / DIN 5480-1:2015) basic profiles and fit conventions. The core geometry (conversion / table lookup / inspection / transverse profile) lives in the
 > **shared calculation engine `src/invol_spline.rs`**; the **only generation entry point is the "花键模式" (spline mode) of the gear generator (`OCSMGEAR`)**
 > (views/block names/GUI/command line are all organised the gear way).
-> **Involute splines are generated only by the gear generator (decided by the user, 2026-09-22)**: XL's `detail_invol_spline`
+> **Involute splines are generated only by the gear generator (decided by the user, 2026-09-22)**: the standard-parts library's `detail_invol_spline`
 > and the shaft generator's `INVOLSPLINE` shaft segment **have both been removed**; there is no involute-spline segment on a shaft any more — for a spline on a shaft use the
 > rectangular spline `SPLINE`.
 
@@ -281,7 +281,7 @@ Example: `OCSMGEAR m=2 z=40 h=20 alpha 45 ha=0.5 view 常规正视图`.
   The old syntax is still accepted; for copying the expression from the gear window see "Interoperability With the Shaft Generator (Expressions)" at the end of §1.
   The shaft-generator window **has only the regular / section views** (the dual view was removed 2026-09-23; the old `VIEW 双` is a clear error and does not silently degrade to regular);
   **it opens with an empty segment table** (no pre-filled example shaft features): click "+ 加行" (add row) to add the first segment, or paste an expression into the "行文本" (row text) / expression box.
-- ~~Old XL structural element~~: `XL detail_invol_spline …` has been removed (2026-09-22) — to produce a spline drawing use the gear generator above.
+- ~~Old structural element~~: `OCSMPART detail_invol_spline …` has been removed (2026-09-22) — to produce a spline drawing use the gear generator above.
 
 ### Presets and Conventions
 
@@ -338,7 +338,7 @@ Example: `OCSMGEAR m=2 z=40 h=20 alpha 45 ha=0.5 view 常规正视图`.
 
 - Geometry, preset tables, code parsing, DIN 5480-2 table lookup and inspection dimensions all live in **`src/invol_spline.rs`** (the top comment holds the
   authoritative formulas, the reverse-engineering conventions and their sources); the view organisation/block names/meta of spline mode are in **`src/gear.rs`**;
-  shaft segments are in `src/shaft.rs` (the XL structural-element entry and the shaft segment `INVOLSPLINE` have both been removed; `src/detail.rs` no longer has involute splines).
+  shaft segments are in `src/shaft.rs` (the standard-parts structural-element entry and the shaft segment `INVOLSPLINE` have both been removed; `src/detail.rs` no longer has involute splines).
   Run `cargo test -p ocs_ocsm --lib invol` / `gear::` (including the whole d_B table/formula suite and the spline regressions).
 - Repository copy of the DIN 5480-2 nominal table: `crates/ocs_ocsm/assets/din5480_2_nominal.csv` (721 rows,
   columns include `flags/source` for traceability); notes in `crates/ocs_ocsm/assets/din5480_2_notes.md`.

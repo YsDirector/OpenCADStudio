@@ -1826,7 +1826,7 @@ pub fn module_series_check(std: SplineStd, m: f64) -> Result<(), String> {
 /// **花键引擎目录数据**（JSON）：预设表、DIN/NF 名义表、DIN 检验表、各体系模数/径节候选。
 ///
 /// 齿轮生成器（`gear_gui.html`）与轴生成器（`shaft_gui.html`）共用；由 `partgen::catalog_json`
-/// 以顶层 `spline_engine` 字段下发。渐开线花键的 XL 结构要素入口已移除，本数据不再挂在
+/// 以顶层 `spline_engine` 字段下发。渐开线花键的 OCSMPART 结构要素入口已移除，本数据不再挂在
 /// `families` 下（避免再次出现第二个“生成入口”）。
 pub fn catalog_payload() -> serde_json::Value {
     let presets: Vec<serde_json::Value> =

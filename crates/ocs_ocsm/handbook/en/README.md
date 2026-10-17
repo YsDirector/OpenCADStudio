@@ -3,7 +3,7 @@
 > English mirror of the Chinese handbook in `handbook/`. **The Chinese original is the source of truth**;
 > when the two disagree, fix the translation, not the original.
 > Started 2026-09-27 (stage 4 of the OCSM bilingual i18n roadmap; see `~/桌面/OCSM/review/handbook_英译_进度.md`).
-> **Stage 4 is complete: all 23 pages are translated** (2026-09-27); this table is the zh→en file mapping.
+> **Stage 4 currently covers 22 English pages** (2026-09-27); this table is the zh→en file mapping for the files present under `handbook/en/`.
 
 ## Files
 
@@ -14,7 +14,6 @@
 | `02-sheet-and-frame.md` | `02-图幅与图框.md` | ✅ translated |
 | `03-standard-parts.md` | `03-标准件库.md` | ✅ translated |
 | `04-bolt-joint.md` | `04-螺栓副装配.md` | ✅ translated (batch 7) |
-| `05-smart-dimension-d.md` | `05-智能标注D.md` | ✅ translated |
 | `06-leader-annotation.md` | `06-引导线标注.md` | ✅ translated (batch 6) |
 | `07-one-click-gb.md` | `07-一键转国标.md` | ✅ translated |
 | `08-tolerance-roughness-gdt.md` | `08-公差粗糙度与GDT.md` | ✅ translated (batch 6) |
@@ -27,6 +26,7 @@
 | `15-centerlines.md` | `15-中心线.md` | ✅ translated (batch 6) |
 | `16-gears.md` | `16-齿轮.md` | ✅ translated (big page, batch 5) |
 | `17-hole-generator.md` | `17-孔生成器.md` | ✅ translated (batch 7) |
+| *(fallback)* | `18-抄图实战口径.md` | ⚠️ no English page yet; the English manual falls back to the Chinese original |
 | `20-knowledge-gb-drafting.md` | `20-知识-国标制图画法.md` | ✅ translated (batch 6) |
 | `21-knowledge-fastener-selection.md` | `21-知识-紧固件选型与防松.md` | ✅ translated |
 | `22-knowledge-tolerances-fits.md` | `22-知识-公差与配合.md` | ✅ translated |
@@ -35,7 +35,7 @@
 
 ## Translation conventions
 
-* **Never translated**: command names/aliases and command keywords, CLI argument tokens, layer/linetype/style names
+* **Never translated**: formal command names and command keywords, CLI argument tokens, layer/linetype/style names
   (`1轮廓实线层`, `OCSM_GB`…), standard symbols (`D_ei`, `Az`, `Wn`, `Kn`, `d_B`, `m`, `z`, `αD`…), standard numbers
   (GB/T …, ISO …, DIN …, ANSI …, NF …), table `name` values (`G1/8`…), catalog keys, file names, block names and ATTDEF tags,
   numbers and formulas.
@@ -44,7 +44,7 @@
   English in the surrounding prose — e.g. `未知命令` (unknown command).
 * **Terminology**: taken from the product catalog `crates/ocs_ocsm/src/i18n.rs` (read-only reference) to stay consistent
   with the bilingual GUI/command/card strings: layer, linetype, text style, dimension style, parts library, standard parts,
-  structural details, bolt joint assembly, smart dimension, leader annotation, one-click GB conversion, BOM, item balloon,
+  structural details, bolt joint assembly, host-native quick dimension (QDIM), leader annotation, one-click GB conversion, BOM, item balloon,
   centerline, gear, internal gear (ring), shaft generator, hole generator, spline table, smart card, tolerance, roughness,
   geometric tolerance, section view, end/front view, …
 * **Cross-references** point to the English file names in this table (not to the Chinese originals).

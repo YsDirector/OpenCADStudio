@@ -25,7 +25,7 @@
 //! 明细表按序号升序排列（`item_no_key` 给排序键）。
 //!
 //! 本模块是**纯函数**：不读文档、不建块、不发插件请求（与 `build_leader_parts` 同规矩，
-//! 交互路径与 D2G 转化共用；可单测）。
+//! 交互路径与 OCSMDIM2GB 转化共用；可单测）。
 
 use ocs_plugin_api::host::acadrust::entities::{AttachmentPoint, Line, MText, Solid};
 use ocs_plugin_api::host::acadrust::types::{Color, Vector3};

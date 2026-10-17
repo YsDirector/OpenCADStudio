@@ -986,7 +986,12 @@ pub fn values(spec: &NfTableSpec) -> Result<Vec<(String, String)>, String> {
 }
 
 /// 建 INSERT（基点在 `at`，旋转 `rot_deg` 度；18 个 ATTRIB 取自 `values()`）。
-pub fn build_insert(spec: &NfTableSpec, at: [f64; 2], rot_deg: f64) -> Result<Insert, String> {
+pub fn build_insert(
+    spec: &NfTableSpec,
+    at: [f64; 2],
+    rot_deg: f64,
+    frame_scale: f64,
+) -> Result<Insert, String> {
     let vals = values(spec)?;
     let mut ins = Insert::new(BLOCK, Vector3::new(at[0], at[1], 0.0));
     ins.rotation = rot_deg.to_radians();
@@ -994,6 +999,8 @@ pub fn build_insert(spec: &NfTableSpec, at: [f64; 2], rot_deg: f64) -> Result<In
     ins.set_x_scale(TABLE_SCALE);
     ins.set_y_scale(TABLE_SCALE);
     ins.set_z_scale(TABLE_SCALE);
+    // 图框比例：整表缩放之后再乘（非 1:1 时卡片随图框缩放）。
+    crate::apply_card_frame_scale(&mut ins, frame_scale);
     {
         let c = &mut ins.common;
         c.layer = crate::partgen::LAYER_MAIN.to_string();
@@ -1460,7 +1467,7 @@ impl NfTableModel {
     pub fn build_insert(&self) -> Result<Insert, String> {
         let spec = self.spec()?;
         let at = self.at.unwrap_or([0.0, 0.0]);
-        build_insert(&spec, at, self.rot)
+        build_insert(&spec, at, self.rot, 1.0)
     }
 
     /// 插入回执里的一段。
@@ -1891,7 +1898,7 @@ mod tests {
     }
 
     fn value_map(spec: &NfTableSpec, at: [f64; 2]) -> HashMap<String, String> {
-        build_insert(spec, at, 0.0)
+        build_insert(spec, at, 0.0, 1.0)
             .unwrap()
             .attributes
             .iter()

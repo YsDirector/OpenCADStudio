@@ -1,4 +1,4 @@
-# 03 Standard Parts Library (`OCSMPART` / `XL`)
+# 03 Standard Parts Library (`OCSMPART`)
 
 > English translation of `handbook/03-标准件库.md` (the Chinese original is the source of truth).
 
@@ -8,7 +8,7 @@
 
 | Usage | Command | Good for |
 | --- | --- | --- |
-| **Human**: open a window and pick | `XL` (= `OCSMPART`, **without arguments**) | Picking a spec while watching the preview; placing as you go |
+| **Human**: open a window and pick | `OCSMPART` (**without arguments**) | Picking a spec while watching the preview; placing as you go |
 | **AI/script**: one line, direct insert | `OCSMPART <family> <d> <l> [view <view>] [at x,y] [rot deg]` | Known spec, batch work, reproducible |
 
 The no-argument flow (human):
@@ -49,7 +49,7 @@ OCSMPART washer_971 8 1.6 view main at 150,-40 ← washer: l = thickness h (M8 t
 
 ### Structural Details (the second tree, next to standard parts)
 
-The left side of the `XL` window is the "结构要素" (Structural elements) tree: **`d` is free input** (not a fixed spec dropdown). Currently on the shelf:
+The left side of the `OCSMPART` window is the "结构要素" (Structural elements) tree: **`d` is free input** (not a fixed spec dropdown). Currently on the shelf:
 
 | Family id | Name | Command line |
 | --- | --- | --- |
@@ -58,17 +58,17 @@ The left side of the `XL` window is the "结构要素" (Structural elements) tre
 | `detail_spline_rect` | Rectangular spline GB/T 1144-2001 | `OCSMPART detail_spline_rect <spec code N×d×D×B> L <full-tooth length> [de value] [view front/side/section] [at x,y] [rot deg]` (de is looked up for specs in the table; required for off-table specs) |
 | `detail_hub_keyway` | Parallel-key hub keyway GB/T 1095-2003 | `OCSMPART detail_hub_keyway <d> [len hub length] [view main/side] [at x,y] [rot deg]` (b/t₂/r looked up from d in the 1095 table; len defaults to 30) |
 
-> **Involute splines are generated only by the gear generator `OCSMGEAR`** (the old XL structural-element entry was removed on 2026-09-22 to prevent two entry points):
+> **Involute splines are generated only by the gear generator `OCSMGEAR`** (the old `OCSMPART` structural-element entry was removed on 2026-09-22 to prevent two entry points):
 > open the window without arguments, tick "花键模式" (spline mode) at the top →
 > standard number / tooth profile / reference diameter d_B + m/z/α/ha*/hf*/ρf*/cF*; the same "齿轮种类" (gear kind) switch toggles external/internal spline.
 > In gear mode, giving a standard number or d_B is a clear error; under GB, d_B is not shown (the system has no such concept). Internal splines share the internal-gear convention:
 > **section view + end view only, no side view** (decided by the user). See `16-gears.md` §9.
 
-Rectangular-spline spec codes are a **dropdown** in both the `XL` window and the shaft-generator segment table (33 rows in the GB/T 1144 table,
+Rectangular-spline spec codes are a **dropdown** in both the `OCSMPART` window and the shaft-generator segment table (33 rows in the GB/T 1144 table,
 with "自定义…" (custom…) at the end for typing an off-table spec; selecting one fills in the derived de/h/l values, and the de box can be edited = override).
 
 The shaft generator **no longer offers** an involute-spline segment (`INVOLSPLINE` was removed on 2026-09-22; the user decided "generate only in the gear generator");
-use the rectangular spline `SPLINE` for shaft splines. The involute spline is gone from the XL window too; the engine data reaches the catalog at the top level as `spline_engine`
+use the rectangular spline `SPLINE` for shaft splines. The involute spline is gone from the `OCSMPART` window too; the engine data reaches the catalog at the top level as `spline_engine`
 and is used only by the gear generator's spline mode (presets / DIN 5480-2 nominal table / inspection table / modules per system).
 
 - Thread-relief geometry follows GB/T 3-1997 figure 2: shoulder-face vertical line (to `d/2+r`) → R=r fillet → groove bottom `y=dg/2` (`x=r…g1`)
@@ -87,7 +87,7 @@ and is used only by the gear generator's spline mode (presets / DIN 5480-2 nomin
 ### Parallel Keys (GB/T 1096 types A/B/C, GB/T 1097 types A/B)
 
 Parallel-key families use the **two-parameter model**'s `d` slot to carry the **key width b** (`h` is derived from the table), and `l` for the length
-(`l=0`/omitted = that step's default L). The type (A/B/C) is encoded in the family id; in the `XL` window it is a **type dropdown**
+(`l=0`/omitted = that step's default L). The type (A/B/C) is encoded in the family id; in the `OCSMPART` window it is a **type dropdown**
 (rendered from the catalog's `type_group`; changing the type = changing the family, and the tree highlight / view / spec dropdown all follow).
 
 | Family id | Name | Standard | Specs | Views |
@@ -338,9 +338,9 @@ HTTP form (usable from scripts): `POST /api/part_pick`, body = `{"family":"hex_b
 ## 9. Involute Spline Parameter Table (GB/T 3478 data + formula layer, stage 1)
 
 > Status: **data + formula layer landed** (`src/spline_tol.rs` + `assets/spline_gb3478_*.csv`);
-> the GUI/XL command is stage 2 (not done). XL's keyway/spline entries see `00-overview.md`'s `OCSMPART XL`.
+> the GUI/OCSMPART command is stage 2 (not done). The standard-parts keyway/spline entries are listed in `00-overview.md` under `OCSMPART`.
 
-- **Target shape**: XL gains a "花键参数表" (spline parameter table) (choose internal/external → compute automatically → fill 21 attributes → insert the drawing + a report);
+- **Target shape**: the standard-parts library gains a "花键参数表" (spline parameter table) (choose internal/external → compute automatically → fill 21 attributes → insert the drawing + a report);
   the ATTDEFs of the templates `~/桌面/GB/参数表/内花键参数表GB.dxf` / `外花键参数表GB.dxf` are exactly those 21 items.
 - **Only three things are hand-entered** (ruling by the user on 2026-09-25): ① tolerance grade and fit class (`6H` / `5f`-style: grades 4/5/6/7 +
   hole basis H/d/e/f/h/js/k); ② pin diameter `Dp` (optional; blank = chosen automatically by the standard R40 rule); ③ `m/z/αD` inherited from the GEAR/spline segment.
@@ -394,7 +394,7 @@ OCSMCARD                                   ← no arguments: opens the smart-car
 - **Hand-entered/source items**: ① tolerance grade and fit class (`6H`/`5f`, grades 4/5/6/7); ② pin diameter `dp` (blank = per
   GB/T 3478.6 §3.1.1 formula (1) compute `D'` then take the nearest larger R40 value; the **3 engineering alternatives** are listed in the echo,
   and `dp` can be entered by hand to recompute `Md`); ③ all parameters come from the expression (no longer reading a block in the drawing).
-- **The old short command `XLT` has been removed** (name convergence): calling it reports a clear error and points to `OCSMCARD`; the `XL 花键参数表`
+- **The old short command has been removed** (name convergence): calling it reports a clear error and points to `OCSMCARD`; the standard-parts "花键参数表"
   subcommand is no longer offered either.
 - **Drawing / layout**: built-in table blocks `OCSM_SPTABLE_GB_INT` / `..._EXT` (22 lines + 35 TEXT + 1 MTEXT + 21 ATTDEF,
   entity by entity per `~/桌面/GB/参数表/内(外)花键参数表GB.dxf`, **no external DXF dependency**); each insert fills the 21 values via
@@ -421,6 +421,10 @@ OCSMCARD        ← no arguments: opens the smart-card window + enters placement
 - **Result**: 21 items listed live; formulas/conventions/sources are in each row's `title=` hover, the always-visible text holds only operational guidance, and anomalies are reported dynamically.
 - **Insert**: with `at x,y` (+ `rot`) = inserted directly; without = back in the drawing click the base point → cursor rotates → click again to place (repeatable).
   The table block geometry and 21 attributes go through **the same path** as the command line (`spline_table::build_insert`).
+- **Follows the frame scale (`OCSMFRAMEINIT` other than 1:1, fixed 2026-10-15)**: a parameter table is a **paper-sized** table (text height / line weight are paper-sized),
+  so it is scaled by the frame its landing point falls into (`frame_scale_at`, the same convention as shafts/dimensions/BOM; no frame = 1.0).
+  The NF/DIN cards' built-in whole-table scale 0.17 is **multiplied by** the frame scale (0.34 inside a 1:2 frame, not replaced by it).
+  The preview and the landing use **the same factor** (`place_one` and the placement-mode cursor ghost); parts/shafts/holes are true geometry and **do not** follow the frame scale.
 - **Report**: the "计算书" (report) button at the bottom of the window = a Markdown report of the same computation as the card (formulas/substitutions/results/sources;
   can be copied or have the "summary table inserted into the drawing") — usage and convention see **9.10** of this section.
 - **Table-driven unified appearance**: card type/system/21-item formula conventions are handed down by `GET /api/spline_options` from the backend

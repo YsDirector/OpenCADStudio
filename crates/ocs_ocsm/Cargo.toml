@@ -5,7 +5,7 @@ name = "ocs_ocsm"
 # 一致性由 src/lib.rs 的 plugin_toml_version_matches_cargo_pkg_version 测试守住。
 version = "0.2.0"
 edition = "2021"
-description = "OCSMechanical 机械工具包：OCSM 初始化 + 数字键快速图层 + 图框插入 (OCSMFRAMEINIT/TF) + 智能标注 (D) + 尺寸引导 (GDIM/OCSMMCP)"
+description = "OCSMechanical 机械工具包：OCSM 初始化 + 数字键快速图层 + 图框插入 + 尺寸引导/标注转换 + 标准件与机械制图工具"
 license = "GPL-3.0-only"
 
 # A plugin is a C-ABI dynamic library the host loads at runtime.

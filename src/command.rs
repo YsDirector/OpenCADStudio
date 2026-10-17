@@ -559,7 +559,7 @@ impl CadCommand for RenameCommand {
                     "LAYER" | "LA" => "LAYER",
                     "BLOCK" | "B" => "BLOCK",
                     "STYLE" | "TEXTSTYLE" | "ST" => "STYLE",
-                    "DIMSTYLE" | "D" => "DIMSTYLE",
+                    "DIMSTYLE" => "DIMSTYLE",
                     "LINETYPE" | "LT" => "LINETYPE",
                     "UCS" => "UCS",
                     "VIEW" | "V" => "VIEW",
@@ -2891,7 +2891,7 @@ pub trait CadCommand: Send {
     }
 
     /// True when this command wants object-snap results at entity-pick clicks
-    /// (plugin POWERDIM-style commands that must tell a snapped *pick point*
+    /// (interactive plugin commands that must tell a snapped *pick point*
     /// apart from an *object selection* click on the same entity). Built-in
     /// entity-pick commands keep the current raw-click behaviour.
     fn entity_pick_applies_osnap(&self) -> bool {
@@ -2900,16 +2900,16 @@ pub trait CadCommand: Send {
 
     /// True when an entity-pick click on EMPTY space must still be forwarded
     /// to [`on_entity_pick`](Self::on_entity_pick) with a NULL handle, so the
-    /// command can place / ignore it itself. POWERDIM needs this in both
-    /// pick-point and segment-select modes (segment-select runs with object
-    /// snap off, so the blank-click path must not key off the OSNAP flag).
+    /// command can place / ignore it itself. Interactive plugins may need this
+    /// for both point-pick and direct-entity modes (the latter can run with
+    /// object snap off, so the blank-click path must not key off the OSNAP flag).
     fn entity_pick_blank_forwards(&self) -> bool {
         false
     }
 
     /// True when the command replaces the CAD crosshair with a pure pick box
-    /// (POWERDIM's segment-select mode: object snap off, click geometry
-    /// directly). Built-in commands keep the crosshair.
+    /// (for a direct-entity mode with object snap off). Built-in commands keep
+    /// the crosshair.
     fn hides_crosshair(&self) -> bool {
         false
     }

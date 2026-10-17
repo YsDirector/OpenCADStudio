@@ -1,4 +1,4 @@
-//! `OCSMDIM2GB`（短命令 `D2G`）：把宿主原生标注（`DIMENSION`）**重建**为 OCSM 的
+//! `OCSMDIM2GB`：把宿主原生标注（`DIMENSION`）**重建**为 OCSM 的
 //! GB 标准版本——OCSM_GB_x{图框比例} 标注样式 + `7标注层`（尺寸）/ 匿名块（直径、
 //! 半径、角度、弧长），文字样式 OCSM_GB、箭头实心闭合。
 //!
@@ -407,7 +407,7 @@ fn pick_linear_sub(dim: &Dimension, first: Vector3, second: Vector3, measured: f
     cands[0].0
 }
 
-/// 给 D2G 产出的标注挂 `OCSM_EDIT`（参数 URL + 引导几何 + 引导种类）。
+/// 给 OCSMDIM2GB 产出的标注挂 `OCSM_EDIT`（参数 URL + 引导几何 + 引导种类）。
 /// 用实体自己的 XDATA（不需要 handle），所以能在加入文档前直接挂；
 /// 回编辑 GUI 的 `PE_URL` 需要实体句柄，由 `cmd_dim2gb` 在 `add_entities` 后补写。
 fn stamp_edit(entity: &mut Entity, params: &GuideParams, pts: &[[f64; 3]], kind: &str) {
@@ -592,7 +592,7 @@ fn convert_angular(
         style,
     )?;
     let mut e = Entity::Dimension(dim);
-    // 角度引导 = 两段 PLINE，**顶点在中间**（与 GDIM 的 ANGLE 约定一致）。
+    // 角度引导 = 两段 PLINE，**顶点在中间**（与 OCSMDIMGULIDE 的 ANGLE 约定一致）。
     stamp_edit(&mut e, &params, &[to_arr(ray1), to_arr(vertex), to_arr(ray2)], "pline");
     Ok(e)
 }
@@ -1160,7 +1160,7 @@ pub(crate) fn plan(doc: &Doc, selected: &[Handle]) -> Dim2GbPlan {
         }
     }
 
-    // ── 智能圆心标记（`CENTERMARK`）→ OCSM 中心线（与 `ZX` 同款十字）──
+    // ── 智能圆心标记（`CENTERMARK`）→ OCSM 中心线（与 `OCSMCENTERLINE` 同款十字）──
     //
     // 智能标记落图只是**一个载波 LINE**（中心→中心的退化线），界面上的十字是渲染时现画的；
     // 圆心与**半径**存在 XDATA（app `OCS_CENTERMARK`，签名 `CENTERMARK_ASSOCIATION`）
@@ -1645,7 +1645,7 @@ mod tests {
     }
 
     /// 智能圆心标记（`CENTERMARK`）→ 两条 `3中心线层` 中心线，删载波线。
-    /// 半径存在 XDATA（`OCS_CENTERMARK`），长度 = `直径 + n×6`（与 `ZX` 一致）。
+    /// 半径存在 XDATA（`OCS_CENTERMARK`），长度 = `直径 + n×6`（与 `OCSMCENTERLINE` 一致）。
     #[test]
     fn plan_converts_smart_center_mark_to_centerlines() {
         let _g = zh_guard();
@@ -2073,7 +2073,7 @@ mod tests {
         if out.trim().is_empty() {
             return; // 未设环境变量：只跑断言，不落盘
         }
-        // 输入版（未转换的原生标注）：给用户在 OCS 里实测 D2G 用。
+        // 输入版（未转换的原生标注）：给用户在 OCS 里实测 OCSMDIM2GB 用。
         if let Some(input_path) = out.strip_suffix(".dxf") {
             acadrust::io::DxfWriter::new(&doc)
                 .write_to_file(&format!("{input_path}-输入.dxf"))
@@ -2161,7 +2161,7 @@ mod tests {
         rec
     }
 
-    /// 用户实测反馈：OCS 自带公差写在**实体 XDATA 覆盖**里，D2G 必须带过来
+    /// 用户实测反馈：OCS 自带公差写在**实体 XDATA 覆盖**里，OCSMDIM2GB 必须带过来
     /// （只读样式表会全丢）。线性：堆叠进 dimtext。
     #[test]
     fn plan_carries_entity_level_tolerance_linear() {
@@ -2429,7 +2429,7 @@ mod tests {
         assert!(url.contains("blen=4"), "OCSM_EDIT 应带原肩线长度: {url}");
     }
 
-    /// D2G 产出的标注要带 `OCSM_EDIT`（参数 + 引导几何），才可再编辑。
+    /// OCSMDIM2GB 产出的标注要带 `OCSM_EDIT`（参数 + 引导几何），才可再编辑。
     #[test]
     fn plan_converted_dim_carries_edit_record() {
         let mut d = DimensionLinear::horizontal(
@@ -2487,7 +2487,7 @@ mod tests {
         );
     }
 
-    /// D2G 回执/跳过原因/实体名随语言切换，关键数据（数量、handle）原样保留。
+    /// OCSMDIM2GB 回执/跳过原因/实体名随语言切换，关键数据（数量、handle）原样保留。
     #[test]
     fn dim2gb_messages_switch_language_keeping_data() {
         let _g = zh_guard();

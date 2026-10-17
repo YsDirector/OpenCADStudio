@@ -136,5 +136,5 @@ x₁ = (d_B − m(z + 1.1)) / (2m)
   `D_M` 借用同 m 最邻近表行；结果带“公式导出/邻近行”来源说明。
 - 露面：`OCSMGEAR` 花键模式的 CHECK 把 `inspection_summary`（M1/M2/D_M/k/W_k + 来源）
   附到 spec/模型；默认不开、既有行为不变。
-  （XL `detail_invol_spline` 与轴段 `INVOLSPLINE` 均已于 2026-09-22 移除；齿轮 GUI 花键模式
+  （结构要素 `detail_invol_spline` 与轴段 `INVOLSPLINE` 均已于 2026-09-22 移除；齿轮 GUI 花键模式
   按目录顶层 `spline_engine.din_inspection` 表显示检验值。）

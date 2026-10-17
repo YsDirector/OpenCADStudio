@@ -76,7 +76,7 @@ def set_annotative(style) -> None:
     （`AnnotativeData { 1 <flag> }`，与 opencadcodec `write_annotative_xdata` 同形状）。
     ⚠ 实测（2026-09-28）：这一步只在**清理出的 DXF** 里可靠 —— 下游 `dxf2dwg`
     （LibreDWG r2000）写 DWG 时会丢掉 STYLE 的 XDATA，装进插件目录的 DWG 读回仍是
-    annotative=0。不影响出图：插件在 `TF`/`D` 前调 `ensure_text_styles()`，用
+    annotative=0。不影响出图：插件在 `OCSMFRAMEINIT`/`QDIM` 前调 `ensure_text_styles()`，用
     `TextStyleDef` 把宿主里的 `OCSM_GB` 对齐到插件口径（含 annotative）—— 交付件取的是
     插件侧（见清单 §P3）。height=3.5 能过 DWG 这道，已由 `check()` 守住。
     """

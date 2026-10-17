@@ -1,4 +1,4 @@
-# 17 Hole Generator (`OCSMHOLE` / short command `DK`)
+# 17 Hole Generator (`OCSMHOLE`)
 
 > English translation of `handbook/17-孔生成器.md` (the Chinese original is the source of truth).
 
@@ -15,7 +15,7 @@
 
 | Usage | Command | Result |
 | --- | --- | --- |
-| Human (recommended) | `OCSMHOLE` or `DK` | opens the **hole generator window** (hole type 2×2 + subtype/size/fit + blind/through + automatic switches + live section preview); after clicking "确定" (OK) the cursor carries the drawing, click to place |
+| Human (recommended) | `OCSMHOLE` | opens the **hole generator window** (hole type 2×2 + subtype/size/fit + blind/through + automatic switches + live section preview); after clicking "确定" (OK) the cursor carries the drawing, click to place |
 | AI / script | `OCSMHOLE [type] [带螺纹\|无螺纹] [公制\|UN/UNC/UNF/UNEF\|G/BSPP\|R/BSPT\|NPT\|ACME\|矮牙\|Tr] [钻孔\|自定义\|间隙] [规格名 M10\|M10×1.25\|G1/8\|1/4-20\|NPT1/2\|Tr8×1.5\|ACME 1/4-16\|公称6.35 P1.058] [P1.5] [孔径8.5] [H18] [L15] [盲孔\|贯通] [全长] [6H\|6G\|精装配\|中等装配\|粗装配] [view 侧视图\|俯视图\|双视图] [at x,y] [rot deg]` | one-line direct insert (with `at` it lands at that point) |
 
 The bracketed Chinese tokens are the **literal CLI keywords** (threaded/unthreaded, thread system, drill/custom/clearance, spec name, pilot diameter, blind/through, full thread, tolerance class, view); each is explained in §2 below.

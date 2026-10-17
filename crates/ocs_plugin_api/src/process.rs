@@ -751,7 +751,7 @@ impl PluginProcess {
     }
 
     /// Ask the plugin process whether entity-pick clicks should run object
-    /// snap (POWERDIM's pick-point vs segment-select mode toggle).
+    /// snap (point-pick vs direct-entity selection mode toggle).
     pub fn get_entity_pick_osnap(&self, command_id: u64) -> Result<bool, PluginError> {
         self.call_wants_bool(command_id, "EntityPickOsnap", |id| {
             HostRequest::EntityPickOsnap { command_id: id }

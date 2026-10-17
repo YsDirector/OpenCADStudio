@@ -962,7 +962,7 @@ pub fn selection_overlay<'a>(
     pane_drop_rect: Option<iced::Rectangle>,
     nav: NavCursor,
     // The active command replaces the CAD crosshair with a pure pick box
-    // (POWERDIM segment-select mode).
+    // (direct-entity selection mode).
     hide_crosshair: bool,
     suppressed: bool,
     hover_locked: bool,
@@ -1056,7 +1056,7 @@ struct SelectionCanvas {
     /// picks its own cursor in `mouse_interaction`.
     nav: NavCursor,
     /// The active command replaces the CAD crosshair with a pure pick box
-    /// (POWERDIM segment-select mode).
+    /// (direct-entity selection mode).
     hide_crosshair: bool,
     /// A ribbon dropdown (or similar overlay) is open over the viewport. The
     /// crosshair is not drawn and the OS cursor is shown normally so the panel
@@ -2128,7 +2128,7 @@ impl canvas::Program<Message> for SelectionCanvas {
                     pick_box_half_px(self.crosshair.pick_box)
                 };
                 // fork: hidden entirely when the active command asks for a pure
-                // pick-box cursor (POWERDIM segment-select).
+                // pick-box cursor (direct-entity selection).
                 // upstream: also hidden for a *waiting* pick — the arms stay only
                 // for the normal (non-pending) cursor, so a waiting pick shows the
                 // box alone, regardless of the UCS rotation.
@@ -2166,7 +2166,7 @@ impl canvas::Program<Message> for SelectionCanvas {
                 } else {
                     // upstream: a pending pick keeps the square visible even when
                     // the user's PICKBOX setting would hide it.
-                    // fork: this is also the whole cursor in POWERDIM's segment-select
+                    // fork: this is also the whole cursor in direct-entity selection
                     // mode (`hide_crosshair`), where the arms are suppressed below.
                     let sq = if pick_pending { sq.max(8.0) } else { sq };
                     if sq > 0.0 {

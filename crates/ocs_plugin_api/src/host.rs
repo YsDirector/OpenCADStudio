@@ -640,8 +640,8 @@ pub trait InteractiveCommand: Send {
     /// True while the next typed line is captured as command text (a keyword
     /// letter, a value, or an override) rather than a coordinate. Commands in
     /// object-pick steps receive every typed token through
-    /// [`on_text_input`](Self::on_text_input) regardless, so POWERDIM-style
-    /// keyword steps (A/H/V/I/R/D) work without opting in here.
+    /// [`on_text_input`](Self::on_text_input) regardless, so keyword-driven
+    /// interactive steps work without opting in here.
     fn wants_text_input(&self) -> bool {
         false
     }
@@ -681,10 +681,9 @@ pub trait InteractiveCommand: Send {
         self.on_object_pick(handle, pt)
     }
 
-    /// Whether entity-pick clicks should also run the object snap. POWERDIM
-    /// toggles this when the user switches between pick-point mode (snap on)
-    /// and segment-select mode (snap off, click lines/circles directly).
-    /// Defaults to `true` (current behaviour).
+    /// Whether entity-pick clicks should also run the object snap. Interactive
+    /// plugins may toggle this between point-pick mode (snap on) and direct
+    /// entity-selection mode (snap off). Defaults to `true` (current behaviour).
     fn entity_pick_applies_osnap(&self) -> bool {
         true
     }

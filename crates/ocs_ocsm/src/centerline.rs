@@ -1,4 +1,4 @@
-//! 中心线（`OCSMCENTERLINE`，命令别名 **`ZX`**）。
+//! 中心线（`OCSMCENTERLINE`）。
 //!
 //! 两种输入（用户 2026-09-17 定案）：
 //!
@@ -217,7 +217,7 @@ pub(crate) enum Advance {
     },
 }
 
-/// `ZX` 交互命令：点圆/圆弧 → 十字中心线；点直线 → 再点一根 → 角平分线中心线。
+/// `OCSMCENTERLINE` 交互命令：点圆/圆弧 → 十字中心线；点直线 → 再点一根 → 角平分线中心线。
 pub(crate) struct CenterLinePick {
     doc: CadDocument,
     first: Option<Seg>,
@@ -238,7 +238,7 @@ impl CenterLinePick {
 
     /// 按句柄从快照读几何。
     fn classify(&self, handle: Handle) -> Option<Picked> {
-        match self.doc.get_entity(handle)? {
+        match crate::guide_server::entity_by_handle(&self.doc, handle)? {
             EntityType::Line(l) => Some(Picked::Straight(Seg::new(to_arr(&l.start), to_arr(&l.end)))),
             EntityType::Circle(c) => Some(Picked::Round {
                 center: to_arr(&c.center),
@@ -254,7 +254,7 @@ impl CenterLinePick {
 
     /// 拾取一次（纯逻辑，便于单测）。
     pub(crate) fn advance(&mut self, handle: Handle, pick_pt: P) -> Advance {
-        // 图框比例跟拾取点走（和 D/GDIM 的"比例感知"一致）。
+        // 图框比例跟拾取点走（和尺寸引导的"比例感知"一致）。
         self.scale = crate::frame_scale_at(&self.doc, pick_pt);
         let Some(picked) = self.classify(handle) else {
             self.notice = Some(crate::i18n::t("cmd.centerline.err.bad_pick"));
@@ -343,8 +343,8 @@ impl InteractiveCommand for CenterLinePick {
     }
 
     /// 非关键字 token（十六进制句柄、坐标）**不消费**，交回宿主按常规解释
-    /// —— 这样自动化/MCP 里可以直接 `ZX <handle>` 指定要处理的对象
-    /// （宿主把句柄喂进实体拾取步骤；POWERDIM 同款写法）。
+    /// —— 这样自动化/MCP 里可以直接 `OCSMCENTERLINE <handle>` 指定要处理的对象
+    /// （宿主把句柄喂进实体拾取步骤；与其他交互插件一致）。
     fn on_text_input(&mut self, _text: &str) -> CommandStep {
         CommandStep::Ignored
     }
@@ -371,7 +371,7 @@ impl InteractiveCommand for CenterLinePick {
 /// （调用方转交互拾取）。
 pub(crate) fn from_selection(doc: &CadDocument, handles: &[Handle], scale: f64) -> Option<(Vec<Seg>, String)> {
     let picked: Vec<Picked> = handles.iter().filter_map(|h| {
-        match doc.get_entity(*h)? {
+        match crate::guide_server::entity_by_handle(doc, *h)? {
             EntityType::Line(l) => Some(Picked::Straight(Seg::new(to_arr(&l.start), to_arr(&l.end)))),
             EntityType::Circle(c) => Some(Picked::Round {
                 center: to_arr(&c.center),
@@ -424,7 +424,7 @@ pub(crate) fn cmd_centerline(host: &mut dyn HostApi) {
         // 图框比例按选区里第一个实体的基准点查（自动化路径没有“拾取点”）。
         let scale_pt = sel
             .iter()
-            .find_map(|h| doc.get_entity(*h))
+            .find_map(|h| crate::guide_server::entity_by_handle(&doc, *h))
             .map(|e| match e {
                 EntityType::Line(l) => to_arr(&l.start),
                 EntityType::Circle(c) => to_arr(&c.center),
@@ -638,6 +638,49 @@ mod tests {
     }
 
     #[test]
+    fn snapshot_without_handle_index_still_supports_lines_circles_and_arcs() {
+        let _g = zh_guard();
+        let (mut doc, c, l1, l2) = doc_with_circle_and_lines();
+        let arc = doc
+            .add_entity(EntityType::Arc(
+                acadrust::entities::Arc::from_center_radius_angles(
+                    Vector3::new(80.0, 80.0, 0.0),
+                    8.0,
+                    0.0,
+                    std::f64::consts::FRAC_PI_2,
+                ),
+            ))
+            .unwrap();
+        let mut value = serde_json::to_value(&doc).unwrap();
+        value["entity_index"] = serde_json::json!({});
+        let snapshot: CadDocument = serde_json::from_value(value).unwrap();
+        assert!(snapshot.get_entity(c).is_none());
+        assert!(snapshot.entities().any(|e| e.common().handle == c));
+
+        let mut circle_cmd = CenterLinePick::new(snapshot.clone());
+        assert!(matches!(
+            circle_cmd.advance(c, [60.0, 50.0, 0.0]),
+            Advance::Commit { segs, .. } if segs.len() == 2
+        ));
+        let mut arc_cmd = CenterLinePick::new(snapshot.clone());
+        assert!(matches!(
+            arc_cmd.advance(arc, [88.0, 80.0, 0.0]),
+            Advance::Commit { segs, .. } if segs.len() == 2
+        ));
+        let mut line_cmd = CenterLinePick::new(snapshot.clone());
+        assert!(matches!(
+            line_cmd.advance(l1, [50.0, 0.0, 0.0]),
+            Advance::KeepGoing(None)
+        ));
+        assert!(matches!(
+            line_cmd.advance(l2, [50.0, 10.0, 0.0]),
+            Advance::Commit { segs, .. } if segs.len() == 1
+        ));
+        assert!(from_selection(&snapshot, &[c], 1.0).is_some());
+        assert!(from_selection(&snapshot, &[l1, l2], 1.0).is_some());
+    }
+
+    #[test]
     fn picking_a_circle_commits_two_cross_lines_in_one_step() {
         let _g = zh_guard();
         let (doc, c, _, _) = doc_with_circle_and_lines();
@@ -699,7 +742,7 @@ mod tests {
         assert!(!cmd.entity_pick_applies_osnap(), "点对象本身，不要捕捉");
         assert!(!cmd.wants_mouse_move());
         assert!(cmd.prompt().contains("点圆/圆弧"));
-        // 句柄/坐标 token 必须**不消费**（宿主才能按句柄拾取；`ZX 70` 自动化路径）
+        // 句柄/坐标 token 必须**不消费**（宿主才能按句柄拾取；`OCSMCENTERLINE 70` 自动化路径）
         assert!(matches!(
             cmd.on_text_input("70"),
             CommandStep::Ignored

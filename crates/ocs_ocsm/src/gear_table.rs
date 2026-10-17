@@ -179,17 +179,6 @@ pub const TEMPLATE_TAGS: &[&str] = &[
     "公法线K",
 ];
 
-fn halign_of(v: i16) -> HorizontalAlignment {
-    match v {
-        1 => HorizontalAlignment::Center,
-        2 => HorizontalAlignment::Right,
-        3 => HorizontalAlignment::Aligned,
-        4 => HorizontalAlignment::Middle,
-        5 => HorizontalAlignment::Fit,
-        _ => HorizontalAlignment::Left,
-    }
-}
-
 fn text_halign_of(v: i16) -> TextHorizontalAlignment {
     match v {
         1 => TextHorizontalAlignment::Center,
@@ -310,14 +299,56 @@ fn attdef(
     let mut ad = AttributeDefinition::new(tag.to_string(), String::new(), " ".to_string());
     ad.insertion_point = Vector3::new(x, y, 0.0);
     ad.alignment_point = Vector3::new(ax, ay, 0.0);
+    // 保留模板 ATTDEF 的原始字高（普通值 3.5 mm、精度等级样例 3.0 mm）。
+    // 模板原 ATTDEF 的 Fit 只是两点范围表达，不能继续传给 INSERT，
+    // 否则短值会被强行拉伸成“矮胖”；值列改为左对齐，宽度按实体级规则处理。
+    let _ = halign;
     ad.height = h;
     ad.width_factor = VALUE_WIDTH_FACTOR;
     ad.text_style = "OCSM_GB".into();
-    ad.horizontal_alignment = halign_of(halign);
+    ad.horizontal_alignment = HorizontalAlignment::Left;
     ad.vertical_alignment = VerticalAlignment::Baseline;
     ad.flags.preset = true;
     ad.common = common_of(layer);
     ad
+}
+
+/// 齿轮表值列的左右留白合计（mm），与 BOM 的单元格拟合模型保持一致。
+const VALUE_CELL_PADDING: f64 = 2.5;
+
+/// 根据内建模板的竖线求值属性从插入点到本行右侧边界的实际可用宽度。
+///
+/// `GEAR_ATTDEFS` 的 group-10 是值文字起点，不是列边界；而「螺旋方向」等行会跨过
+/// 一段没有中间竖线的区域，不能把所有值都硬编码成 20 mm。按属性 y 找当前行最近的
+/// 右侧竖线；没有中间竖线时取外框 x=0。拟合的是 Left 锚定后从插入点向右的真实空间。
+fn value_cell_available_width(ad: &AttributeDefinition) -> f64 {
+    let y = ad.insertion_point.y;
+    let mut right = 0.0;
+    for (a, b, _) in GEAR_LINES {
+        if (a[0] - b[0]).abs() > 1.0e-9 {
+            continue;
+        }
+        let ymin = a[1].min(b[1]);
+        let ymax = a[1].max(b[1]);
+        if y + 1.0e-6 >= ymin
+            && y - 1.0e-6 <= ymax
+            && a[0] > ad.insertion_point.x + 1.0e-6
+            && a[0] < right + 1.0e-6
+        {
+            right = a[0];
+        }
+    }
+    (right - ad.insertion_point.x - VALUE_CELL_PADDING).max(0.0)
+}
+
+/// 生成 INSERT 属性的宽度因子：短值保持 0.7，只有超过实际单元格才横向压缩。
+fn value_width_factor(value: &str, ad: &AttributeDefinition) -> f64 {
+    crate::bom::fit_cell_text(
+        value,
+        value_cell_available_width(ad),
+        ad.height,
+        VALUE_WIDTH_FACTOR,
+    )
 }
 
 /// 表格块成员：27 线 + 46 标签/符号 TEXT（**标签随语言**）+ 19 ATTDEF（18 模板项 + `精度等级`）。
@@ -541,10 +572,17 @@ pub fn values(spec: &GearTableSpec) -> Result<Vec<(String, String)>, String> {
 }
 
 /// 建 INSERT（基点在 `at`，旋转 `rot_deg` 度；19 个 `INSERT.attributes` 取自 `values()`）。
-pub fn build_insert(spec: &GearTableSpec, at: [f64; 2], rot_deg: f64) -> Result<Insert, String> {
+pub fn build_insert(
+    spec: &GearTableSpec,
+    at: [f64; 2],
+    rot_deg: f64,
+    frame_scale: f64,
+) -> Result<Insert, String> {
     let values = values(spec)?;
     let mut ins = Insert::new(BLOCK, Vector3::new(at[0], at[1], 0.0));
     ins.rotation = rot_deg.to_radians();
+    // 图框比例：非 1:1 时卡片随图框缩放（必须在本函数的属性 apply_transform 之前）。
+    crate::apply_card_frame_scale(&mut ins, frame_scale);
     {
         let c = &mut ins.common;
         c.layer = crate::partgen::LAYER_MAIN.to_string();
@@ -560,6 +598,12 @@ pub fn build_insert(spec: &GearTableSpec, at: [f64; 2], rot_deg: f64) -> Result<
             .unwrap_or_default();
         let mut tmpl = ad.clone();
         tmpl.rotation = 0.0; // 旋转由 INSERT 变换施加
+        // 历史模板 ATTDEF 曾用 Fit 表达两点范围；宿主渲染器会把 Fit 的
+        // 短文本强行拉伸到两点之间，正是 B9「矮胖」的来源。值属性沿用
+        // 模板原始字高并固定为左锚，保留 group-10 的自然输入起点；超出
+        // 真实列宽时只压实体 width_factor，不改全局 OCSM_GB。
+        tmpl.horizontal_alignment = HorizontalAlignment::Left;
+        tmpl.width_factor = value_width_factor(&val, &ad);
         let mut attr = AttributeEntity::from_definition(&tmpl, Some(val));
         attr.apply_transform(&ins.get_transform());
         ins.attributes.push(attr);
@@ -982,7 +1026,7 @@ impl GearTableModel {
     pub fn build_insert(&self) -> Result<Insert, String> {
         let spec = self.spec()?;
         let at = self.at.unwrap_or([0.0, 0.0]);
-        build_insert(&spec, at, self.rot)
+        build_insert(&spec, at, self.rot, 1.0)
     }
 
     /// 插入回执里的一段。
@@ -1255,6 +1299,69 @@ mod tests {
             assert_eq!(c.tag, ad.tag, "第 {} 项", i + 1);
             assert!(!c.label().is_empty() && !c.formula().is_empty() && !c.source().is_empty());
         }
+    }
+
+    /// 生成的值属性不能继续走模板 Fit（Fit 会把短值拉伸成“矮胖”），而应按
+    /// 实际行列宽只在超长时压实体级 width_factor；GUI 待放置与直接插入共用此路径。
+    #[test]
+    fn gear_value_attributes_keep_nominal_width_and_fit_long_values() {
+        let spec = model().spec().unwrap();
+        let direct = build_insert(&spec, [10.0, 20.0], 0.0, 1.0).unwrap();
+        let short = direct
+            .attributes
+            .iter()
+            .find(|a| a.tag == "法向模数")
+            .expect("法向模数属性");
+        assert_eq!(short.value, "2");
+        assert_eq!(short.horizontal_alignment, HorizontalAlignment::Left);
+        assert_eq!(short.height, 3.5);
+        assert!(near(short.width_factor, VALUE_WIDTH_FACTOR));
+
+        for tag in ["法向模数", "齿数", "齿形角"] {
+            let ad = attdefs()
+                .into_iter()
+                .find(|ad| ad.tag == tag)
+                .expect("齿轮值属性定义");
+            assert_eq!(ad.horizontal_alignment, HorizontalAlignment::Left, "{tag}");
+            assert_eq!(ad.height, 3.5, "{tag}");
+        }
+        let grade = attdefs()
+            .into_iter()
+            .find(|ad| ad.tag == GRADE_TAG)
+            .expect("精度等级属性定义");
+        assert_eq!(grade.height, 3.0);
+
+        let long_value = "超长图号".repeat(12);
+        let mut long_model = model();
+        long_model.mate_dwg = Some(long_value.clone());
+        let long_spec = long_model.spec().unwrap();
+        let direct_long = build_insert(&long_spec, [0.0, 0.0], 0.0, 1.0).unwrap();
+        let long_attr = direct_long
+            .attributes
+            .iter()
+            .find(|a| a.tag == "配对齿轮图号")
+            .expect("配对齿轮图号属性");
+        let ad = attdefs()
+            .into_iter()
+            .find(|a| a.tag == "配对齿轮图号")
+            .expect("配对齿轮图号定义");
+        assert_eq!(long_attr.value, long_value);
+        assert_eq!(long_attr.horizontal_alignment, HorizontalAlignment::Left);
+        assert!(long_attr.width_factor < VALUE_WIDTH_FACTOR);
+        assert!(near(
+            long_attr.width_factor,
+            value_width_factor(&long_value, &ad)
+        ));
+
+        // 待放置卡片最终也调用 GearTableModel::build_insert，而不是另建一套属性路径。
+        let pending = long_model.build_insert().unwrap();
+        let pending_attr = pending
+            .attributes
+            .iter()
+            .find(|a| a.tag == "配对齿轮图号")
+            .expect("待放置配对齿轮图号属性");
+        assert_eq!(pending_attr.horizontal_alignment, HorizontalAlignment::Left);
+        assert!(near(pending_attr.width_factor, long_attr.width_factor));
     }
 
     /// 取值正确性：模板档 m2 z40 α20 → ha*=1、c*=0.25、全齿高 4.5、W 27.6896、k=5。

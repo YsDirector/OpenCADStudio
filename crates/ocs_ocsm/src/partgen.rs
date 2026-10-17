@@ -984,7 +984,7 @@ pub fn catalog_json() -> String {
         insert_tree_leaf(&mut tree, &path, &family, implemented);
     }
     // 渐开线花键引擎数据（预设/DIN·NF 名义表/检验表/模数候选）：齿轮生成器与轴生成器共用。
-    // 它是**引擎数据**、不是上架族——XL 结构要素里的渐开线花键入口已移除，避免两个生成入口。
+    // 它是**引擎数据**、不是上架族——OCSMPART 结构要素里的渐开线花键入口已移除，避免两个生成入口。
     serde_json::json!({
         "tree": tree,
         "families": families,
@@ -2295,7 +2295,7 @@ mod tests {
         insert_tree_leaf(&mut weird, "零件库/挡圈/X", "ring_893", true);
     }
 
-    /// PART/XL 报错随语言切换，关键数据（M8/表号/视图名）原样保留。
+    /// OCSMPART 报错随语言切换，关键数据（M8/表号/视图名）原样保留。
     #[test]
     fn parts_messages_switch_language_keeping_data() {
         let _g = zh_guard();

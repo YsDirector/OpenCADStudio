@@ -27,6 +27,9 @@ mod dim_leader_render_check;
 #[path = "dim_line_color_roundtrip.rs"]
 mod dim_line_color_roundtrip;
 
+#[path = "dimension_picture_placement.rs"]
+mod dimension_picture_placement;
+
 #[path = "explode_regression.rs"]
 mod explode_regression;
 

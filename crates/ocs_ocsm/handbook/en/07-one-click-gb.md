@@ -1,4 +1,4 @@
-# 07 One-Click GB Conversion `D2G` (`OCSMDIM2GB`)
+# 07 One-Click GB Conversion (`OCSMDIM2GB`)
 
 > English translation of `handbook/07-一键转国标.md` (the Chinese original is the source of truth).
 
@@ -7,7 +7,7 @@
 ## 1. Usage
 
 ```
-Command: D2G        (= OCSMDIM2GB)
+Command: OCSMDIM2GB
 ```
 
 Behaviour:
@@ -19,12 +19,12 @@ Behaviour:
    - idempotently fills in the infrastructure (layers / `OCSM_GB` text style / the required dimension styles — even if this drawing never ran `OCSM` initialization);
    - creates an **anonymous block** per dimension (referenced by an `INSERT`) — dimension text/arrows are redrawn per the GB drawing convention;
    - **smart center mark** (the ribbon's Center Mark) → replaced by **two cross centerlines** on `3中心线层`,
-     length = **diameter + sheet scale×6** (exactly the same as `ZX`), and the original invisible carrier line is deleted;
+     length = **diameter + sheet scale×6** (exactly the same as `OCSMCENTERLINE`), and the original invisible carrier line is deleted;
      the radius comes from the associativity record carried by the mark, **no guessing**.
      (The loose crosses drawn by the old-style `DIMCENTER` are **not converted** — it does not store a radius and they cannot be distinguished from hand-drawn crosses;
-     if you need one, just `ZX` on that circle.)
+     if you need one, just run `OCSMCENTERLINE` on that circle.)
    - new entities are added → **the original dimension is deleted**;
-   - the new dimension carries `OCSM_EDIT` (parameters + guide geometry) → it can be edited further with `ME` (a centerline is an ordinary `LINE`, edit it directly).
+   - the new dimension carries `OCSM_EDIT` (parameters + guide geometry) → it can be edited further with `OCSMEDIT` (a centerline is an ordinary `LINE`, edit it directly).
 4. **One undo entry**: `OCSMDIM2GB 原生标注转 GB`.
 
 Example output: `OCSMDIM2GB：…` (the report gives seen/converted/skipped counts and the skip reasons).
@@ -33,13 +33,13 @@ When no convertible annotation is found: `OCSMDIM2GB：未找到可转换的原�
 
 ## 2. When to Use It
 
-| Scenario | Use D2G? |
+| Scenario | Use `OCSMDIM2GB`? |
 | --- | --- |
 | A drawing from a customer/upstream whose dimensions are ordinary ones and must be unified to your style | ✅ |
 | The drawing has the host's **smart center marks** (ribbon Center Mark) and you want GB centerlines | ✅ converted along with them (`diameter + n×6`, onto `3中心线层`) |
-| The drawing has loose crosses from the old-style `DIMCENTER` | ❌ not converted (no radius stored) — just `ZX` on that circle, which is faster |
+| The drawing has loose crosses from the old-style `DIMCENTER` | ❌ not converted (no radius stored) — just run `OCSMCENTERLINE` on that circle, which is faster |
 | You dimensioned with the host's native `DIMLINEAR` and want the GB drawing method | ✅ |
-| The dimension is already OCSM-generated (`ME` can open it) | ❌ not needed (edit it with `ME`) |
+| The dimension is already OCSM-generated (`OCSMEDIT` can open it) | ❌ not needed (edit it with `OCSMEDIT`) |
 | The dimension is in a **layout/paper space** | ⚠️ not supported (only model space is scanned) |
 
 ## 3. AI-Side Recipe
@@ -48,7 +48,7 @@ When no convertible annotation is found: `OCSMDIM2GB：未找到可转换的原�
 // 1) see which dimensions exist
 { "op": "read", "op": "query", "parameters": { "type": "Dimension" } }
 // 2) convert (all, or select some handles first and then convert)
-{ "op": "execute", "request": { "op": "run", "request_id": "d2g1", "document_id": 1, "revision": 30, "cmd": "D2G" } }
+{ "op": "execute", "request": { "op": "run", "request_id": "d2g1", "document_id": 1, "revision": 30, "cmd": "OCSMDIM2GB" } }
 // 3) read the report + verify
 { "op": "read", "op": "history" }
 { "op": "read", "op": "query", "parameters": { "type": "Insert" } }   // anonymous-block INSERT
@@ -59,12 +59,12 @@ When no convertible annotation is found: `OCSMDIM2GB：未找到可转换的原�
 1. **Model space only**: dimensions in paper space are not touched (put them in model space, or move them there with a host command first).
 2. **The conversion "deletes the old and creates new"**: if something else was attached to the dimension (custom extended data), it is not preserved by the conversion.
 3. **Dimension-value semantics**: the conversion rebuilds from the original dimension's measured value/text; if the original had **manually edited text** (e.g. a hard-coded "10"),
-   the converted one is still redrawn from the measured value → note those special cases before converting and fix them one by one with `ME` afterwards.
-4. **Printing at a different scale**: if you change the frame scale after converting, the dimension style must follow (a new frame creates `OCSM_GB_xN`).
+   the converted one is still redrawn from the measured value → note those special cases before converting and fix them one by one with `OCSMEDIT` afterwards.
+4. **Printing at a different scale**: after changing the frame scale, rerun `OCSMDIM2GB`, or generate with `OCSMDIMGULIDE` at the actual anchor so the matching `OCSM_GB_xN` is created and selected on demand.
 
 ## 5. Verification Checklist
 
 - [ ] The log report's converted count = the number you expected to convert.
 - [ ] The dimensions in the drawing have style `OCSM_GB*` and layer `7标注层`.
-- [ ] Pick one at random and select it → `ME` opens the configuration window (which means it carries `OCSM_EDIT`).
+- [ ] Pick one at random and select it → `OCSMEDIT` opens the configuration window (which means it carries `OCSM_EDIT`).
 - [ ] A single `undo` rolls the whole conversion back (including the deleted original dimensions).

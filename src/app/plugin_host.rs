@@ -3976,7 +3976,7 @@ impl crate::command::CadCommand for PluginInteractiveAdapter {
         })
         .unwrap_or(true)
     }
-    // 插件命令：空白点击也转发（POWERDIM 两种模式都需要任意点放置）。
+    // 插件命令：空白点击也转发（交互插件可能需要任意点放置）。
     fn entity_pick_blank_forwards(&self) -> bool {
         true
     }
@@ -4035,8 +4035,8 @@ pub(crate) struct PluginProcessInteractiveAdapter {
     // every command event
     wants_text_input: Option<bool>,
     wants_mouse_move: Option<bool>,
-    /// Cached object-snap-at-entity-pick flag (POWERDIM pick-point vs
-    /// segment-select mode). Refreshed after every command event.
+    /// Cached object-snap-at-entity-pick flag (point-pick vs direct-entity
+    /// selection mode). Refreshed after every command event.
     entity_pick_osnap: Option<bool>,
     /// OSNAP result computed at the pending entity-pick click (injected by the
     /// view layer when [`CadCommand::entity_pick_applies_osnap`] is true).
@@ -4169,11 +4169,11 @@ impl crate::command::CadCommand for PluginProcessInteractiveAdapter {
     fn entity_pick_applies_osnap(&self) -> bool {
         self.entity_pick_osnap.unwrap_or(true)
     }
-    /// Segment-select mode (object snap off) shows a pure pick-box cursor.
+    /// Direct-entity selection mode (object snap off) shows a pure pick-box cursor.
     fn hides_crosshair(&self) -> bool {
         self.entity_pick_osnap == Some(false)
     }
-    // 插件命令：空白点击也转发（POWERDIM 两种模式都需要任意点放置）。
+    // 插件命令：空白点击也转发（交互插件可能需要任意点放置）。
     fn entity_pick_blank_forwards(&self) -> bool {
         true
     }
@@ -4586,7 +4586,7 @@ mod tests {
     }
 
     /// D2：自动化 `op:"select"` 的选区必须能被插件侧 `selected_handles()` 看到
-    /// —— ZX/XL/ME 那套命令靠它吃「当前高亮的选择集」。
+    /// —— 中心线、标准件、改标注等交互命令靠它读取「当前高亮的选择集」。
     #[test]
     fn v5_selected_handles_follow_the_automation_select_op() {
         let mut app = OpenCADStudio::new_for_test();
@@ -5147,8 +5147,15 @@ mod tests {
                 .expect("模板 ATTDEF")
                 .clone()
         };
-        // 模板本身必须是"正确画法"，否则本测试白测。
+        // 文字位置必须直接来自已经修正并清洗的源模板；宿主不再运行时补偿。
         assert_eq!(template.len(), 3, "模板应有 3 条 ATTDEF");
+        let raw_title = template
+            .iter()
+            .find(|definition| definition.tag == "图名")
+            .expect("原始模板图名");
+        let imported_title = definition("图名");
+        assert_eq!(imported_title.insertion_point, raw_title.insertion_point);
+        assert_eq!(imported_title.alignment_point, raw_title.alignment_point);
         assert_eq!(definition("图样代号").text_style, "OCSM_GB");
         assert_eq!(definition("图样代号").rotation, std::f64::consts::PI);
         assert_eq!(definition("图样代号").horizontal_alignment, HorizontalAlignment::Center);
@@ -5549,6 +5556,134 @@ mod tests {
         assert!(
             matches!(app.tabs[0].scene.document.get_entity(second), Some(EntityType::Point(p)) if p.location.x == 20.0)
         );
+    }
+
+    /// Opt-in end-to-end check for OCSMCENTERLINE over the real plugin IPC.
+    /// Run with OCS_TEST_OCSM_PLUGIN and OCS_PLUGIN_RUNNER_EXE set.
+    #[test]
+    fn staged_ocsm_centerline_line_pick_over_real_ipc() {
+        let Some(plugin_path) = std::env::var_os("OCS_TEST_OCSM_PLUGIN") else {
+            return;
+        };
+        let runner_path = std::env::var_os("OCS_PLUGIN_RUNNER_EXE")
+            .expect("set OCS_PLUGIN_RUNNER_EXE to the built OpenCADStudio executable");
+        assert!(std::path::Path::new(&plugin_path).is_file());
+        assert!(std::path::Path::new(&runner_path).is_file());
+
+        let mut app = OpenCADStudio::new_for_test();
+        app.tabs[0].is_start = false;
+        let (line_handle, parallel_handle, circle_handle, arc_handle) = {
+            let mut host = HostSession::new(&mut app, 0);
+            let line_handle = host.add_entity(EntityType::Line(Line::from_points(
+                codec::types::Vector3::new(0.0, 0.0, 0.0),
+                codec::types::Vector3::new(10.0, 0.0, 0.0),
+            )));
+            let parallel_handle = host.add_entity(EntityType::Line(Line::from_points(
+                codec::types::Vector3::new(0.0, 10.0, 0.0),
+                codec::types::Vector3::new(10.0, 10.0, 0.0),
+            )));
+            let circle_handle = host.add_entity(EntityType::Circle(
+                codec::entities::Circle::from_center_radius(
+                    codec::types::Vector3::new(30.0, 30.0, 0.0),
+                    5.0,
+                ),
+            ));
+            let arc_handle = host.add_entity(EntityType::Arc(
+                codec::entities::Arc::from_center_radius_angles(
+                    codec::types::Vector3::new(50.0, 50.0, 0.0),
+                    6.0,
+                    0.0,
+                    std::f64::consts::FRAC_PI_2,
+                ),
+            ));
+            (line_handle, parallel_handle, circle_handle, arc_handle)
+        };
+        let process = {
+            let mut host = HostSession::new(&mut app, 0);
+            std::sync::Arc::new(
+                ocs_plugin_api::process::PluginProcess::spawn(
+                    std::path::Path::new(&plugin_path),
+                    &mut host,
+                    crate::plugin::v4_support::notification_handler(),
+                )
+                .expect("spawn OCSM plugin"),
+            )
+        };
+
+        let start_centerline = |app: &mut OpenCADStudio| {
+            let mut command_id = None;
+            let mut host = HostSession::new(app, 0);
+            assert!(process
+                .dispatch(&mut host, "OCSMCENTERLINE", &mut |id| command_id = Some(id))
+                .unwrap());
+            let command_id = command_id.expect("centerline command started");
+            assert!(process.needs_entity_pick(command_id).unwrap());
+            command_id
+        };
+
+        let command_id = start_centerline(&mut app);
+        let step = process
+            .interactive_event(
+                command_id,
+                ocs_plugin_api::ipc::protocol::InteractiveEvent::ObjectPickSnapped {
+                    handle: line_handle,
+                    pt: [5.0, 0.0, 0.0],
+                    snapped: false,
+                },
+            )
+            .expect("first line pick response");
+        assert!(matches!(step, ocs_plugin_api::host::CommandStep::NeedPoint));
+        let prompt = process.get_prompt(command_id).unwrap();
+        assert!(prompt.contains("第二根直线"), "{prompt}");
+        let step = process
+            .interactive_event(
+                command_id,
+                ocs_plugin_api::ipc::protocol::InteractiveEvent::ObjectPickSnapped {
+                    handle: parallel_handle,
+                    pt: [5.0, 10.0, 0.0],
+                    snapped: false,
+                },
+            )
+            .expect("second line pick response");
+        assert!(matches!(
+            step,
+            ocs_plugin_api::host::CommandStep::CommitManyAndEnd(ref entities)
+                if entities.len() == 1
+        ));
+
+        let command_id = start_centerline(&mut app);
+        let step = process
+            .interactive_event(
+                command_id,
+                ocs_plugin_api::ipc::protocol::InteractiveEvent::ObjectPickSnapped {
+                    handle: circle_handle,
+                    pt: [35.0, 30.0, 0.0],
+                    snapped: false,
+                },
+            )
+            .expect("circle pick response");
+        assert!(matches!(
+            step,
+            ocs_plugin_api::host::CommandStep::CommitManyAndEnd(ref entities)
+                if entities.len() == 2
+        ));
+
+        let command_id = start_centerline(&mut app);
+        let step = process
+            .interactive_event(
+                command_id,
+                ocs_plugin_api::ipc::protocol::InteractiveEvent::ObjectPickSnapped {
+                    handle: arc_handle,
+                    pt: [56.0, 50.0, 0.0],
+                    snapped: false,
+                },
+            )
+            .expect("arc pick response");
+        assert!(matches!(
+            step,
+            ocs_plugin_api::host::CommandStep::CommitManyAndEnd(ref entities)
+                if entities.len() == 2
+        ));
     }
 
     /// Opt-in end-to-end check using the staged Python cdylib and the actual

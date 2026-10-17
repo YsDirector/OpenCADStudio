@@ -18,8 +18,8 @@ It does four things (adds whatever is missing, **idempotent**, safe to re-run):
 4. **Dimension style**: `OCSM_GB` (parameters taken from Mechanical in the dimension sample dwg, font switched to `OCSM_GB`), set as the **current style**.
 
 Example of a successful output, as emitted (still Chinese):
-`OCSM 初始化完成：新增图层 N 个、线型 N 个、文字样式 N 个（OCSM_GB）、标注样式 N 个（OCSM_GB，当前样式）。数字键 1-10、TF、D 已就绪。`
-(OCSM initialization complete: added N layers, N linetypes, N text styles (OCSM_GB), N dimension styles (OCSM_GB, current style). Number keys 1-10, TF, D are ready.)
+`OCSM 初始化完成：新增图层 N 个、线型 N 个、文字样式 N 个（OCSM_GB）、标注样式 N 个（OCSM_GB，当前样式）。数字键 1-10、OCSMFRAMEINIT 已就绪。`
+(OCSM initialization complete: added N layers, N linetypes, N text styles (OCSM_GB), N dimension styles (OCSM_GB, current style). Number keys 1-10 and OCSMFRAMEINIT are ready; `QDIM` is the host-native command, not an OCSM command.)
 
 > Initialization itself is a **document change** (the host does not automatically push table changes onto the undo stack), so the plugin declares its own undo point "OCSM 初始化" (OCSM initialization).
 
@@ -76,10 +76,10 @@ So "move these lines to the centerline layer" = select the lines → press `3`; 
 ## 5. Pitfalls
 
 1. **Dimensioning without running `OCSM`**: text style/dimension style missing → dimensions fall back to defaults (text takes the layer colour, the height is wrong).
-   Fix: run `OCSM` once, then use `D2G` / regenerate the dimensions.
-2. **Number keys do not work "while a command is running"**: during an interactive command (such as `D`, or placement mode) the input is taken as a point/parameter;
+   Fix: run `OCSM` once, then use `OCSMDIM2GB` / regenerate the dimensions.
+2. **Number keys do not work "while a command is running"**: during an interactive command (such as `OCSMDIMGULIDE`, or placement mode) the input is taken as a point/parameter;
    press `Esc` first (on the MCP side `op:"cancel"`), then switch layer.
-3. **Always use the 10 layer names the plugin provides**: self-made layers are not recognized by the "dimension/symbol" commands (e.g. a dimension outside `7标注层` will not be edited by `ME`).
+3. **Always use the 10 layer names the plugin provides**: self-made layers are not recognized by the "dimension/symbol" commands (e.g. a dimension outside `7标注层` will not be edited by `OCSMEDIT`).
 4. If the layer template is missing it reports `OCSM: 图层模板缺失。请先运行 OCSM 初始化。` (OCSM: layer template missing. Run OCSM initialization first.) — that simply means it was not initialized.
 
 ## 6. Verification Checklist

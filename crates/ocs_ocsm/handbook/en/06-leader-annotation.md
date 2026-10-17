@@ -1,4 +1,4 @@
-# 06 Leader Annotation (`GDIM` / `OCSMDIMGULIDE`)
+# 06 Leader Annotation (`OCSMDIMGULIDE`)
 
 > English translation of `handbook/06-引导线标注.md` (the Chinese original is the source of truth).
 
@@ -11,11 +11,11 @@
 1) draw the leader line (on 10引导线层; linetype/colour do not matter, the layer is off by default and does not print)
    different types need different geometry (see the table below)
 2) select that leader line
-3) GDIM            (= OCSMDIMGULIDE) → opens the "标注配置" (annotation settings) window
+3) OCSMDIMGULIDE  → opens the "标注配置" (annotation settings) window
 4) in the window: pick type/style/text/alignment parameters → look at the preview
    "应用"        = only writes the parameters back onto the leader line (the leader carries the hyperlink URL)
    "应用并刷新"  = generates the real annotation entities (7标注层 / symbols go to 8符号标注层)
-5) to change it: select the annotation → ME (= OCSMEDIT) → change parameters in the same window → apply & refresh (deletes the old and rebuilds)
+5) to change it: select the annotation → OCSMEDIT → change parameters in the same window → apply & refresh (deletes the old and rebuilds)
 ```
 
 - Nothing selected → `OCSM: 请先选中一条引导线（10引导线层 的直线或两段多段线）。`
@@ -39,12 +39,28 @@
 | `LEADER` leader | 1 **two-segment PLINE (3 vertices)** | vertex 1 = arrow point, 2 = bend point, 3 = end of the shoulder line; the **shoulder length follows the text**: longest line's estimated width (Latin/digits 1.45, full-width 2.45 reference units) + 1.5 of margin at each end, taking the longer of the upper/lower line; with no text at all it is a **1 full-width character** (2.45) stub. `blen=` / `shoulder_len=` in the URL overrides it (not multiplied by the sheet scale) |
 | `CHAMFER` chamfer | 1 **PLINE (3 or 5 vertices)** | **3 vertices** = typed-in mode (vertex 1 = point at the chamfer, 2 = bend point, 3 = end of the shoulder line); **5 vertices (4 segments) = measure-from-geometry mode** (segment 1 runs along an adjacent edge (the leg that measures `c`), segment 2 coincides with the chamfer edge, segment 3 = leader head strictly collinear with segment 2, segment 4 = end of the shoulder line); any other count (4 points etc.) ⇒ an error. Parameters: chamfer size `c` + angle `a` (degrees, default 45). 45° renders `C{c}`, other angles render `{c}×{a}°` (× = U+00D7); leader on `7标注层`, text on `6文字层`, **no arrow**. URL: `/DIM/CHAMFER/<dist>?c=1&a=45` (`src=geom` = explicitly measure from geometry) |
 | `BALLOON` item number | 1 **two-segment PLINE (3 vertices)** | vertex 1 = pointer point (draws the dot), 2 = bend point, 3 = end of the shoulder line (**must be horizontal**); parameters: item-number list + extension direction (horizontal/vertical) + insert-on-conflict switch; one group may hold several item numbers (a horizontal row joined by a V-shaped polyline / a vertical column joined by a vertical line). See `14-item-numbers.md` |
-| `RGH` roughness | block reference (INSERT) | the roughness symbol library; parameters: shape + `Ra` value |
+| `OCSMRGH` roughness | block reference (INSERT) | the roughness symbol library; parameters: shape + `Ra` value |
 | `GD&T` geometric tolerance | 1 **PLINE** | position of the tolerance frame; parameters: symbol + tolerance value + datum (URL query JSON) |
 | `DATUM` datum | 1 piece of leader geometry | datum symbol (the two drawing conventions, 1996/2008) |
 | `TOLERANCE` dimensional tolerance | attaches to a dimension annotation | code mode (`H7`) or limit-deviation mode (`+0.021/0`), fit table ISO 286 |
 
 > One-line mnemonic: **the two endpoints of a line are the start of the extension lines; a two-segment polyline is a leader-type symbol "arrow → bend → shoulder"**.
+
+### Where a radius/diameter annotation goes (user's rule, 2026-10-17)
+
+- **The position is free**: text and leader go in **any clean, clear** spot — there is **no
+  inside/outside rule**. The only criterion is that they overlap no outline, no hatch and no other
+  annotation.
+- **With hatching, use the unhatched side** (the R4 case went into the clear area outside the hatch).
+- **The sign of `dist` is a positional parameter**: `/DIM/RADIUS/<dist>` offsets the text from the rim
+  point along the radius (implementation: `-` draws the short inside line + radial text, `+` draws the
+  outside landing + horizontal text). That is an **implementation detail**, not a drafting rule that a
+  radius must be dimensioned inside or outside — pick whichever side is clear.
+- The **arrow lands on a real arc point**, the radial line stays short, and there is no extra horizontal
+  foot.
+- Always generate the leader with the command: `OCSMDIMGULIDE` (new) or `OCSMEDIT` → "Apply and refresh"
+  (change). **Never** drag the generated geometry by hand (`OCSM_EDIT` plus the leader geometry are the
+  source of truth).
 
 - **Chamfer annotation (`CHAMFER`, added 2026-10-02)**: the **arrow-less** variant of `LEADER`; guide = a two-segment
   PLINE (① point at the chamfer ② bend point ③ end of the shoulder line). URL
@@ -96,7 +112,7 @@
 - Key evidence: **a 4-vertex polyline ⇒ `CHAMFER` unavailable** (chamfer only takes 3/5 vertices), but **`SECTION` is available**
   (a section cut is a polyline with any vertex count ≥2) — so the verdict **cannot be a blanket rule on the vertex count**; it must check whether that type's shape protocol is satisfied.
 - When in doubt, rule it **available** (greying out wrongly is worse than lighting up wrongly — it blocks legitimate use).
-- `RGH` (roughness) is a **block-reference** leader, goes through the `ROUGH` command + `rough_gui.html`, does not pass this window, hence not in `types`.
+- Roughness (`OCSMRGH`) is a **block reference** handled by its standalone roughness settings window, does not pass this window, hence not in `types`.
 
 ## 3. What Is Generated and Onto Which Layer
 
@@ -116,7 +132,7 @@
 { "op": "read", "op": "query", "parameters": { "type": "Line", "layer": "10引导线层" } }   // get the handle
 { "op": "run", "request_id": "g3", "document_id": 1, "revision": 21, "cmd": "SELECT 2A" } // or let the host set the selection set
 // 3) open the settings window (a human fixes type/text/offset in the window → apply & refresh)
-{ "op": "run", "request_id": "g4", "document_id": 1, "revision": 21, "cmd": "GDIM" }
+{ "op": "run", "request_id": "g4", "document_id": 1, "revision": 21, "cmd": "OCSMDIMGULIDE" }
 // 4) verify: the annotation entity + the hyperlink (the URL on the leader line)
 { "op": "read", "op": "query", "parameters": { "type": "Dimension" } }
 ```
@@ -137,21 +153,21 @@
 
 ## 5. Pitfalls
 
-1. **The leader line must be on `10引导线层` first**: `GDIM` only accepts that layer (a line on the wrong layer reports "请先选中一条引导线" (select a leader line first)).
+1. **The leader line must be on `10引导线层` first**: `OCSMDIMGULIDE` only accepts that layer (a line on the wrong layer reports "请先选中一条引导线" (select a leader line first)).
 2. **Type and geometry disagree**: e.g. using a 1-segment PLINE as a weld leader (a weld needs 3 vertices / two segments) → it errors out or draws crooked.
 3. **Forgetting "apply & refresh" after changing parameters**: "应用" (apply) alone only writes the hyperlink, and the drawing still shows the old annotation (or none at all).
-4. **Changes are replace-style**: `ME` + apply & refresh = delete the old annotation and regenerate it from the original leader geometry → **do not edit a generated annotation by hand**,
+4. **Changes are replace-style**: `OCSMEDIT` + apply & refresh = delete the old annotation and regenerate it from the original leader geometry → **do not edit a generated annotation by hand**,
    the next refresh wipes it.
-5. **After swapping the frame for a different scale**: old annotations still use the old style, new ones use the new style. To unify them → use `D2G` or regenerate.
+5. **After swapping the frame for a different scale**: old annotations still use the old style, new ones use the new style. To unify them → use `OCSMDIM2GB` or regenerate.
 6. **Text moved outwards** (dragging linear-dimension text outside the dimension line): the dimension line is extended along the axis to below the text (the GB/T 4458.4 drawing method, already implemented).
 7. **The settings window is "pinned to a drawing" (fixed 2026-09-16)**: the plugin process (and its port) outlives a single drawing, so when a window opens it writes the drawing id into the URL
    (`/guide.html?handle=0x2A&tab=3`), and from then on every read/write is delivered only to **that drawing**.
-   The same rule applies to the parts library (`/parts`), bolt joint assembly (`/joint`), surface roughness (`/rough.html`) and the BOM editor (`/bom.html`, command `BOMEDIT`) windows.
+   The same rule applies to the parts library (`/parts`), bolt joint assembly (`/joint`), surface roughness (`/rough.html`) and the BOM editor (`/bom.html`, command `OCSMBOMEDIT`) windows.
    - **`Ctrl+click` can only land on a browser tab that has an address bar** (the host's `sys::open_url` → `xdg-open`, which the plugin cannot intercept):
      when the plugin sees this kind of "external open" it **adds an app window of its own** and replaces that tab with a "已在新窗口打开" (opened in a new window) notice page
      (if the same window is already open it is not opened a second time). So the final effect of Ctrl+click is an independent window as well.
-   - **After a drawing is closed, its old window reports on the very first action**: "这个窗口对应的图纸（标签页 N）已经关闭了 —— 请重新运行 GDIM / ME 打开新窗口。"
-     (the drawing this window belongs to (tab N) has been closed — run GDIM / ME again to open a new window) (HTTP 409). This is **deliberate**: the old window will no longer (after waiting 5 s)
+   - **After a drawing is closed, its old window reports on the very first action**: "这个窗口对应的图纸（标签页 N）已经关闭了 —— 请重新运行 OCSMDIMGULIDE / OCSMEDIT 打开新窗口。"
+     (the drawing this window belongs to (tab N) has been closed — run OCSMDIMGULIDE / OCSMEDIT again to open a new window) (HTTP 409). This is **deliberate**: the old window will no longer (after waiting 5 s)
      write the annotation onto some other drawing.
    - Several drawings can each have their own window open, with no crosstalk.
    - **A request without a drawing id** (a `Ctrl+click` on an annotation link, an AI/MCP direct `/api/guide`, `/api/apply_refresh` etc.)
@@ -159,11 +175,11 @@
      so you just switch tabs (no command needed) and it knows which drawing you are looking at.
      One precondition: the plugin can only send requests to a tab that has **run at least one OCSM (or any) command**; when you
      `Ctrl+click` right after opening one it may report "当前活跃图纸还没跑过 OCSM 命令" (the currently active drawing has not run an OCSM command yet) (HTTP 409) — just
-     run any command on that drawing (e.g. select an annotation and `ME`) and everything works from then on.
+     run any command on that drawing (e.g. select an annotation and `OCSMEDIT`) and everything works from then on.
 
 ## 6. Verification Checklist
 
 - [ ] The leader line is on `10引导线层` and carries a URL hyperlink (the hyperlink in the `read` record).
 - [ ] After "apply & refresh" the annotation/symbol entities appear, on the right layer, with style `OCSM_GB*`.
-- [ ] Selecting a generated annotation opens the same window again with `ME` (which means it carries an `OCSM_EDIT` record).
+- [ ] Selecting a generated annotation opens the same window again with `OCSMEDIT` (which means it carries an `OCSM_EDIT` record).
 - [ ] Take a screenshot and check the symbol orientation/text position (GB requires: readable from the top, the leader does not cross the text).

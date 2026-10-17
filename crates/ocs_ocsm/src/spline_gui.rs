@@ -1147,11 +1147,15 @@ impl SplineTableModel {
     }
 
     /// `INSERT`（直接落点用；与 CLI `cmd_spline_card` 同一构造函数）。
-    pub fn build_insert(&self) -> Result<ocs_plugin_api::host::acadrust::entities::Insert, String> {
+    /// `frame_scale` = 落点处的图框比例（无图框 = 1.0）——卡片随图框比例缩放。
+    pub fn build_insert(
+        &self,
+        frame_scale: f64,
+    ) -> Result<ocs_plugin_api::host::acadrust::entities::Insert, String> {
         let input = self.to_input()?;
         let table = crate::spline_tol::compute(&input)?;
         let at = self.at.unwrap_or([0.0, 0.0]);
-        crate::spline_table::build_insert(input.side, &table, at, self.rot)
+        crate::spline_table::build_insert(input.side, &table, at, self.rot, frame_scale)
     }
 
     /// 插入回执里的一段（等级/配合 + Dp 口径）。
@@ -1476,7 +1480,7 @@ mod tests {
                 dp: None,
             };
             let table = crate::spline_tol::compute(&input).unwrap();
-            let ins = build_insert(side, &table, [0.0, 0.0], 0.0).unwrap();
+            let ins = build_insert(side, &table, [0.0, 0.0], 0.0, 1.0).unwrap();
             let attrs: HashMap<String, _> = ins
                 .attributes
                 .iter()

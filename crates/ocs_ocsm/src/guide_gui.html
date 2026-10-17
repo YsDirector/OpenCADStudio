@@ -330,7 +330,7 @@
         </label>
       </div>
       <div id="xh-list" style="display:flex; flex-direction:column; gap:4px"></div>
-      <div id="xh-unsaved" style="display:none; color:#b60; font-size:12px">⚠ 本图还没存过盘：序号与明细表照常生成，但 `BOMXLSX` 导出的 xlsx 会落到<b>临时目录</b>（<span id="xh-unsaved-dir">…</span>，会被系统清理）。建议先 Ctrl+S 存盘。</div>
+      <div id="xh-unsaved" style="display:none; color:#b60; font-size:12px">⚠ 本图还没存过盘：序号与明细表照常生成，但 `OCSMBOMXLSX` 导出的 xlsx 会落到<b>临时目录</b>（<span id="xh-unsaved-dir">…</span>，会被系统清理）。建议先 Ctrl+S 存盘。</div>
       <div class="gdt-hint">一个组共用**一条指引线 + 一个圆点**（指针点落在零件块内则挂靠到该零件）；条目顺序 = 从指引线向外/向上（5 贴指引线、6 在上）。比例按参考图实测：横线长 = 文字宽 + 1.0h、数字在横线上方 0.3h、横向间隙 0.5h/V 深 0.38h、纵向节距 1.6h、圆点 Ø0.33h。生成在 8符号标注层（匿名块 *XH + INSERT）。</div>
     </div>
     <div class="param" id="row-param">
@@ -433,7 +433,7 @@
 (function () {
   const q = new URLSearchParams(location.search);
   const handle = q.get('handle');
-  // 本窗口属于哪张图纸（标签页号，由 GDIM/ME 写在 URL 上）。请求带回插件后，
+  // 本窗口属于哪张图纸（标签页号，由 OCSMDIMGULIDE/OCSMEDIT 写在 URL 上）。请求带回插件后，
   // 插件只把请求投给**这张图**——否则多张图各自开着配置窗口时会串图（甚至写错图）。
   const tab = q.get('tab');
   document.getElementById('h').textContent = handle ? ('#' + handle) : '';
@@ -2750,7 +2750,7 @@ const BS_FITS = [
         chGeomParams = (j.params && j.params.chamfer) || null;
         chGeomSrc = !!(chGeomParams && chGeomParams.src_geom);
         // 引导线长度 = 主尺寸（公差计算默认尺寸）；必须在 j.params 块外，
-        // 否则 URL 无参数（首次 GDIM）时测量值不赋值，模态窗口主尺寸为空。
+        // 否则 URL 无参数（首次 OCSMDIMGULIDE）时测量值不赋值，模态窗口主尺寸为空。
         if (typeof j.measurement === 'number') measurement = j.measurement;
         if (j.params && j.params.weld) {
           const w = j.params.weld;
@@ -3221,7 +3221,7 @@ const BS_FITS = [
 /* 页面心跳：告诉插件本窗口还开着（避免重复开窗）；关闭时 bye=1。
    键 = `guide-<句柄十六进制（去0x、小写）>[@<图纸号>]`，与插件开窗时的键**完全一致**
    —— 以前拿 `location.search` 当键，跟插件记的 `handle=2A` 对不上，等于从来不生效
-   （同一个引导线反复 GDIM 会开出一堆重复窗口）。 */
+   （同一个引导线反复 OCSMDIMGULIDE 会开出一堆重复窗口）。 */
 (function () {
   var q = new URLSearchParams(location.search);
   var h = (q.get('handle') || '').replace(/^0x/i, '').toLowerCase();

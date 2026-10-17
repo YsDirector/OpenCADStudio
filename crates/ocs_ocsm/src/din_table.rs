@@ -1313,6 +1313,7 @@ pub fn build_insert(
     hub: bool,
     at: [f64; 2],
     rot_deg: f64,
+    frame_scale: f64,
 ) -> Result<Insert, String> {
     let vals = values(spec, hub)?;
     let mut ins = Insert::new(block_name(hub), Vector3::new(at[0], at[1], 0.0));
@@ -1320,6 +1321,8 @@ pub fn build_insert(
     ins.set_x_scale(TABLE_SCALE);
     ins.set_y_scale(TABLE_SCALE);
     ins.set_z_scale(TABLE_SCALE);
+    // 图框比例：整表缩放之后再乘（非 1:1 时卡片随图框缩放）。
+    crate::apply_card_frame_scale(&mut ins, frame_scale);
     {
         let c = &mut ins.common;
         c.layer = crate::partgen::LAYER_MAIN.to_string();
@@ -1746,7 +1749,7 @@ impl DinTableModel {
         let hub = self.hub();
         let spec = self.spec()?;
         let at = self.at.unwrap_or([0.0, 0.0]);
-        build_insert(&spec, hub, at, self.rot)
+        build_insert(&spec, hub, at, self.rot, 1.0)
     }
 
     /// 插入回执里的一段（单栏，只报本侧）。
@@ -2838,7 +2841,7 @@ mod tests {
     fn insert_attributes() {
         let spec = example();
         for hub in [true, false] {
-            let ins = build_insert(&spec, hub, [5.0, 7.0], 15.0).unwrap();
+            let ins = build_insert(&spec, hub, [5.0, 7.0], 15.0, 1.0).unwrap();
             assert_eq!(ins.attributes.len(), 13);
             assert_eq!(ins.block_name, block_name(hub));
             assert!(near(ins.rotation.to_degrees(), 15.0));
@@ -2848,7 +2851,7 @@ mod tests {
             assert!(ins.attributes[0].value.contains(if hub { "N120×3×38×9H" } else { "W120×3×38×8f" }));
             // ATTRIB 随 INSERT 缩放：字高 = 块内 25 × 0.17；位置从基点 + 局部×0.17
             assert!(near6(ins.attributes[0].height, TEXT_H * TABLE_SCALE));
-            let flat = build_insert(&spec, hub, [5.0, 7.0], 0.0).unwrap();
+            let flat = build_insert(&spec, hub, [5.0, 7.0], 0.0, 1.0).unwrap();
             assert!(near6(flat.attributes[0].insertion_point.x, 5.0 + VALUE_X * TABLE_SCALE));
             let last_tag = if hub { "N量距min" } else { "W量距min" };
             assert_eq!(ins.attributes[12].tag, last_tag);

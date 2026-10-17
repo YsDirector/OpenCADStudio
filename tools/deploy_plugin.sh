@@ -27,7 +27,7 @@
 #                             src/bom.rs:94 `bom_dir()`（env `OCSM_BOM_DIR` 覆盖）→ 116 `dir.join("bom")`；
 #                             116→583 `dir.join("OCSM_BOMHEAD.dwg")`
 #   bom/OCSM_BOMROW.dwg       明细表行块（8 个单元格 ATTDEF）—— src/bom.rs:584
-#   frame/*.dwg               图框（`TF`/`OCSMFRAMEINSERT` 扫描此目录）
+#   frame/*.dwg               图框（`OCSMFRAMEINIT`/`OCSMFRAMEINSERT` 扫描此目录；`TF` 是宿主别名）
 #                             src/lib.rs:348 `frame_dir()`（env `OCSM_FRAME_DIR` 覆盖）→ 361
 #                             `dir.join("frame")` → 4644 `std::fs::read_dir(&dir)`
 #   **frame/ 内容不在仓库里**（`crates/ocs_ocsm/` 下没有 `frame/` 目录）：样例图框在本机
@@ -75,10 +75,12 @@ export PATH="$PATH:$HOME/.cargo/bin"
 
 PLUGIN_DIR="${OCSM_PLUGIN_DIR:-$HOME/.config/OpenCADStudio/plugins/opencad.ocsm}"
 SRC=crates/ocs_ocsm
+CARGO_BIN="${CARGO_BIN:-$HOME/.cargo/bin/cargo}"
+BUILD_TARGET_DIR="${CARGO_TARGET_DIR:-target}"
 
 if [[ "${1:-}" != "--skip-build" ]]; then
-    echo "==> 编插件（release）"
-    cargo build --release -p ocs_ocsm
+    echo "==> 编插件（release；target=${BUILD_TARGET_DIR}）"
+    CARGO_TARGET_DIR="$BUILD_TARGET_DIR" "$CARGO_BIN" build --release -p ocs_ocsm
 fi
 
 ACADRUST_SRC=$(python3 - <<'PY'
@@ -105,7 +107,7 @@ RUSTC_VER=$(rustc --version)
 PLUGIN_VER=$(sed -n 's/^version = "\(.*\)"$/\1/p' "$SRC/plugin.toml" | head -1)
 [[ -n "$PLUGIN_VER" ]] || { echo "✗ plugin.toml 里读不到 [plugin] version" >&2; exit 1; }
 
-# 递归复制目录内容（保留相对层级；只增不删，目标是安装目录，不碰用户其它文件）
+# 递归复制目录内容（保留相对层级；默认只增不删，目标是安装目录，不碰用户其它文件）
 # 用法：copy_tree <源目录> <目标目录> [跳过的相对路径 ERE]
 copy_tree() {
     local src="$1" dst="$2" skip="${3:-}" rel
@@ -120,10 +122,11 @@ copy_tree() {
 mkdir -p "$PLUGIN_DIR/handbook" "$PLUGIN_DIR/bom" "$PLUGIN_DIR/frame"
 
 echo "==> 装 .so + plugin.toml（rustc=${RUSTC_VER}；acadrust=…${ACADRUST_SRC: -40}；版本=${PLUGIN_VER}）"
-cp target/release/libocs_ocsm.so "$PLUGIN_DIR/"
+cp "$BUILD_TARGET_DIR/release/libocs_ocsm.so" "$PLUGIN_DIR/"
 sed -e "s|__RUSTC_VERSION__|${RUSTC_VER}|" \
     -e "s|__ACADRUST_SOURCE__|${ACADRUST_SRC}|" \
     "$SRC/plugin.toml" > "$PLUGIN_DIR/plugin.toml"
+cp -p "$SRC/PLUGIN.md" "$PLUGIN_DIR/PLUGIN.md"
 
 # 手册：**递归**装（含 en/ 英译篇）。跳过 handbook/tools/ —— 那里面有
 # install-handbook.sh（「仓库 → 安装目录」同步脚本），装进安装目录后它的 SRC/DST 会同时在
@@ -154,6 +157,14 @@ else
     echo "==> 装手册 handbook/（递归，含 en/；跳过 tools/）"
 fi
 copy_tree "$HANDBOOK_SRC_DIR" "$PLUGIN_DIR/handbook" '^tools/'
+
+# 明确清理本次迁移已删除的旧入口手册；其它用户自备篇章仍按“只增不删”保留。
+for obsolete in '05-智能标注D.md' 'en/05-smart-dimension-d.md'; do
+    if [[ ! -f "$HANDBOOK_SRC_DIR/$obsolete" && -f "$PLUGIN_DIR/handbook/$obsolete" ]]; then
+        rm -f -- "$PLUGIN_DIR/handbook/$obsolete"
+        echo "    - 删除安装目录里的已废弃手册篇：$obsolete"
+    fi
+done
 
 if [[ -n "$HANDBOOK_HEAD_TMP" ]]; then
     # 干净版语义：安装目录里 HEAD 没有的 *.md 要删掉，否则“装的是 HEAD 版本”名不副实
@@ -317,7 +328,7 @@ done
 # 4) frame：**用户自备**数据 ⇒ 默认只**警告 + 指路**（rc 仍 0，不算失败）；要当硬门禁就
 #    显式设 OCSM_REQUIRE_FRAME=1（发布/CI 用）。其余自检项不受此开关影响，仍硬失败。
 if (( n_frame == 0 )); then
-    FRAME_HINT="frame/ 没有任何 *.dwg：TF/OCSMFRAMEINIT 会报「找不到图框文件夹」。请把图框 DWG 放进 $PLUGIN_DIR/frame/，或部署时用 OCSM_FRAME_SRC=<放图框的目录> 一起装（样例图框可用 tools/frame_clean.py --install 清洗后落进 frame/）。"
+    FRAME_HINT="frame/ 没有任何 *.dwg：OCSMFRAMEINIT 会报「找不到图框文件夹」。请把图框 DWG 放进 $PLUGIN_DIR/frame/，或部署时用 OCSM_FRAME_SRC=<放图框的目录> 一起装（样例图框可用 tools/frame_clean.py --install 清洗后落进 frame/）。"
     if [[ "${OCSM_REQUIRE_FRAME:-}" == "1" ]]; then
         fail "frame 缺失（OCSM_REQUIRE_FRAME=1 严格模式）：$FRAME_HINT"
     else

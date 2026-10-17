@@ -79,8 +79,9 @@ const WEB_ALIAS_KEY: &str = "opencadstudio.aliases";
 /// defaults add aliases or change a default target, so existing profiles can be
 /// migrated forward (see `introduced_at` / `migrate_aliases`). Version 1 shipped
 /// the pre-REDRAW table; version 2 introduced the REDRAW-family aliases; version 3
-/// introduced HB (HATCHTOBACK); version 4 introduced ER (EXTERNALREFERENCES).
-const DEFAULT_ALIASES_VERSION: u32 = 9;
+/// introduced HB (HATCHTOBACK); version 4 introduced ER (EXTERNALREFERENCES);
+/// version 10 moves the OCSM shortcuts into the host table and routes `D` to QDIM.
+const DEFAULT_ALIASES_VERSION: u32 = 10;
 
 #[cfg(target_arch = "wasm32")]
 const WEB_ALIAS_VERSION_KEY: &str = "opencadstudio.aliases.version";
@@ -104,9 +105,35 @@ fn introduced_at(version: u32) -> &'static [(&'static str, &'static str)] {
         7 => &[("DV", "DVIEW")],
         8 => &[("-XR", "-XREF"), ("XC", "XCLIP"), ("ICL", "IMAGECLIP")],
         9 => &[("IAD", "IMAGEADJUST")],
+        // OCSM short names are host aliases, not plugin-registered commands.
+        // D/CC/XL already existed in older profiles and are handled by the
+        // exact legacy-default rewrite below; the remaining names are new.
+        10 => &[
+            ("TF", "OCSMFRAMEINIT"),
+            ("GDIM", "OCSMDIMGULIDE"),
+            ("D2G", "OCSMDIM2GB"),
+            ("DK", "OCSMHOLE"),
+            ("ZX", "OCSMCENTERLINE"),
+            ("OH", "OCSMHELP"),
+            ("BOM", "OCSMBOM"),
+            ("BOMSYNC", "OCSMBOMSYNC"),
+            ("BOMEDIT", "OCSMBOMEDIT"),
+            ("BOMLOCK", "OCSMBOMLOCK"),
+            ("BOMXLSX", "OCSMBOMXLSX"),
+            ("BOMXLSXI", "OCSMBOMXLSXI"),
+            ("BOMCFG", "OCSMBOMCFG"),
+        ],
         _ => &[],
     }
 }
+
+/// Mappings that changed in version 10. Only the exact old shipped default is
+/// rewritten; an existing custom target (or a deliberately absent alias) wins.
+const LEGACY_DEFAULT_REWRITES: &[(&str, &str, &str)] = &[
+    ("D", "DIMSTYLE", "QDIM"),
+    ("CC", "COPYCLIP", "OCSMRGH"),
+    ("XL", "XLINE", "OCSMPART"),
+];
 
 /// Fold the defaults introduced after `from_version` into `stored`, adding only
 /// aliases the user does not already define (so overrides and custom targets
@@ -118,6 +145,14 @@ fn migrate_aliases(stored: &mut FxHashMap<String, String>, from_version: u32) ->
     }
     let mut changed = false;
     for version in from_version + 1..=DEFAULT_ALIASES_VERSION {
+        if version == 10 {
+            for (alias, old, new) in LEGACY_DEFAULT_REWRITES {
+                if stored.get(*alias).is_some_and(|current| current == old) {
+                    stored.insert((*alias).to_string(), (*new).to_string());
+                    changed = true;
+                }
+            }
+        }
         for (alias, cmd) in introduced_at(version) {
             let key = alias.to_uppercase();
             if stored.contains_key(&key) {
@@ -459,6 +494,51 @@ mod tests {
         );
         assert_eq!(stored.len(), 1);
         assert_eq!(stored.get("L").map(String::as_str), Some("LINE"));
+    }
+
+    #[test]
+    fn migration_v10_moves_legacy_defaults_and_adds_missing_ocsm_aliases() {
+        let mut stored = map(&[
+            ("D", "DIMSTYLE"),
+            ("CC", "COPYCLIP"),
+            ("XL", "XLINE"),
+            ("TF", "CUSTOM_FRAME"),
+            ("ME", "MEASURE"),
+            ("ED", "DDEDIT"),
+        ]);
+        assert!(migrate_aliases(&mut stored, 9));
+        assert_eq!(stored.get("D").map(String::as_str), Some("QDIM"));
+        assert_eq!(stored.get("CC").map(String::as_str), Some("OCSMRGH"));
+        assert_eq!(stored.get("XL").map(String::as_str), Some("OCSMPART"));
+        assert_eq!(stored.get("TF").map(String::as_str), Some("CUSTOM_FRAME"));
+        assert_eq!(stored.get("ME").map(String::as_str), Some("MEASURE"));
+        assert_eq!(stored.get("ED").map(String::as_str), Some("DDEDIT"));
+        for (alias, command) in introduced_at(10) {
+            if *alias != "TF" {
+                assert_eq!(stored.get(*alias).map(String::as_str), Some(*command));
+            }
+        }
+    }
+
+    #[test]
+    fn migration_v10_does_not_rewrite_custom_legacy_targets() {
+        let mut stored = map(&[
+            ("D", "MY_DIMSTYLE"),
+            ("CC", "COPYCLIP"),
+            ("XL", "MY_PARTS"),
+        ]);
+        assert!(migrate_aliases(&mut stored, 9));
+        assert_eq!(stored.get("D").map(String::as_str), Some("MY_DIMSTYLE"));
+        assert_eq!(stored.get("CC").map(String::as_str), Some("OCSMRGH"));
+        assert_eq!(stored.get("XL").map(String::as_str), Some("MY_PARTS"));
+    }
+
+    #[test]
+    fn migration_v10_does_not_resurrect_a_current_profile_deletion() {
+        let mut stored = map(&[("D", "QDIM")]);
+        assert!(!migrate_aliases(&mut stored, DEFAULT_ALIASES_VERSION));
+        assert!(!stored.contains_key("TF"));
+        assert_eq!(stored.get("D").map(String::as_str), Some("QDIM"));
     }
 
     /// Migrating a mid-range profile (one that saw v1) pulls in v2's and v3's

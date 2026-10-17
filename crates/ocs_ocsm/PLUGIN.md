@@ -12,36 +12,19 @@ Open CAD Studio 机械工具包插件（`opencad.ocsm`，API v5）。为机械�
 2. **数字键 `1`~`9` 快速切层**（从 `opencad.layers_quick` 迁移；`0` 不注册）：
    - 无选中：切换当前图层（不记 undo）；
    - 有选中：把对象移到目标层（记 undo、保留选择集；锁定层对象被宿主拒绝）。
-3. **`TF` / `OCSMFRAMEINIT` 图框插入**：
+3. **`OCSMFRAMEINIT` / `OCSMFRAMEINSERT` 图框插入**：
    - 从插件安装目录 `frame/` 子文件夹扫描 DWG，弹出宿主侧选择窗口；
    - 填写比例 `值1:值2`（两个正整数，**其中一个必须为 1**）；
    - 确定后点击指定插入点，以**块**形式插入；插入比例 = `值2/值1`
      （`1:2` → 2 倍；`2:1` → 0.5 倍）；
    - 块内所有 ATTDEF 带出为属性，tag `比例`（或 `SCALE`，大小写不敏感）填入
      `值1:值2` 文本；
-   - **插入时同步创建缩放标注样式** `OCSM_GB_x{scale}`（如 2 倍 → `OCSM_GB_x2`），
-     POWERDIM 在 frame 内标注时自动使用（文字/箭头随图框缩放）。
-4. **`D` / `OCSMPOWERDIM` 智能标注**：
-   - **两种拾取模式，按 Enter 切换**（提示栏会说明当前模式）：
-     - **拾取点模式**（默认，对象捕捉开）：点端点/圆心/交点/空白 → 两点标注；
-       也支持直接点选直线（未吸附时）→ 线性/对齐/角度。
-     - **线段点选模式**（Enter 切换，对象捕捉关，光标只留拾取方框）：点击直线/
-       圆/圆弧 → 立即进入对应标注（动态预览跟随光标）。
-   - 点选直线 → 线性/对齐；再点另一条不平行直线 → 角度；圆 → 直径/半径；
-     圆弧 → 半径/弧长。
-   - 关键字：`A` 对齐 / `H` 水平 / `V` 竖直；`D` 直径 / `R` 半径；`R` 半径 /
-     `A` 弧长；`I` 劣角 / `R` 优角。
-   - 放置时任意点可点击（靠近对象捕捉点才附着）；半径/直径/角度/弧长标注的
-     文字跟随点击位置（光标在圆/弧内侧→内标注，外侧→外标注+引出线）。
-   - 弧长按圆弧实际扫角（含优弧 >180°）；角度按两线实际夹角（劣角默认，
-     优角 = 360°−劣角）。
-   - 光标跟随预览（宿主瞬态渲染插件返回的标注实体）；Esc 取消；放置一个标注后命令结束。
-   - 标注固定放 **`7标注层`**、样式 `OCSM_GB`（或在 frame 内时为 `OCSM_GB_x{scale}`）。
-  - 实体 DSTYLE 覆盖默认写 **`DIMTMOVE(279)=1`**：线性/对齐标注的文字被拖到尺寸线
-    范围外时，**尺寸线沿轴延伸到文字底下**（GB/T 4458.4 画法）。引导窗口/URL
-    加 `tl=0`（或 `noleader=1`）时改写为 **`DIMTMOVE(279)=2`**，文字可自由外移但不
-    生成这根细引线；旧图里的标注不会自动改变，需用 GDIM 刷新或 `D2G` 重建。
-   - 文字样式 dimtoh=0：标注文字沿尺寸线方向旋转（对齐/竖直标注文字随尺寸线）。
+   - 图框插入不预创建缩放标注样式；`OCSMDIMGULIDE` 与 `OCSMDIM2GB` 在实际标注锚点处按需
+     创建 `OCSM_GB_x{scale}`，使文字/箭头随图框缩放。
+4. **尺寸引导与标注转换**：
+   - `OCSMDIMGULIDE` 读取引导线并打开配置窗口，生成线性、角度、半径、弧长、焊接、引线等国标标注；
+   - `OCSMDIM2GB` 把宿主原生标注转换为 OCSM_GB 标准版，并在转换点选择正确的图框比例样式；
+   - `QDIM` 保留宿主原生语义，不由 OCSM 接管；旧插件尺寸入口已移除且不提供兼容转发。
 
 ## 构建与安装
 
@@ -64,7 +47,7 @@ tools/deploy_plugin.sh
 OCSM_FRAME_SRC=~/桌面/OCSM/frame tools/deploy_plugin.sh --skip-build
 #    脚本自检：handbook/（含 en/）、bom 两个模板块——缺哪项非零退出；
 #    frame/ 为空**默认只警告**（图框是用户自备数据，不拦新用户）⇒ 要当硬门禁设 OCSM_REQUIRE_FRAME=1；
-#    bom/settings.json 是运行期状态（BOMCFG 会改）⇒ 已存在就不覆盖。
+#    bom/settings.json 是运行期状态（OCSMBOMCFG 会改）⇒ 已存在就不覆盖。
 
 # 4. 卸载旧 layers_quick（宿主升 v5 后它会重新加载并与 OCSM 数字键冲突）
 rm -rf "$HOME/.config/OpenCADStudio/plugins/opencad.layers_quick"
@@ -81,18 +64,16 @@ rm -rf "$HOME/.config/OpenCADStudio/plugins/opencad.layers_quick"
 
 - 输入 `OCSM` → 初始化图层/线型/文字样式/标注样式（幂等，可重复执行）。
 - 按数字键 `1`~`9`：无选中切当前图层；有选中移动对象到该层。
-- 输入 `TF`（或 `OCSMFRAMEINIT`）→ 选择图框 + 填比例 → 点击插入。
-- 输入 `D`（或 `OCSMPOWERDIM`）→ 智能标注：拾取点/直线/圆/圆弧 → 自动推断类型。
-- 输入 `CC`（或 `OCSMRGH`）→ 表面粗糙度：点选插入点 → GUI 选 20 形态之
-  一（4 基础体 × 5 附加区）+ 填属性文字（转 ATTDEF，可缺省空白）→ 应用插入。
-  基础体：C1 通用 / C2 以不去除材料的方法获得（此时 P 强制空白）/ C3 去除材料 /
-  C4 焊后加工；附加区：R1 基础 / R2 周边相同处理 / R3 高级 /
-  R4 上限开关 / R5 上限开关+周边相同处理。注意 `CC` 原为 COPYCLIP
-  别名，插件命令优先级更高，会接管（COPYCLIP 可输全名）。
+- 输入 `OCSMFRAMEINIT` → 选择图框 + 填比例 → 点击插入；`OCSMFRAMEINSERT` 用于完成选择窗口的插入。
+- 输入 `QDIM` → 使用宿主原生命令；OCSM 不注册宿主命令。
+- 输入 `OCSMRGH` → 表面粗糙度：点选插入点 → GUI 选 20 形态之一（4 基础体 × 5 附加区）+
+  填属性文字（转 ATTDEF，可缺省空白）→ 应用插入。基础体：C1 通用 / C2 以不去除材料的方法获得
+  （此时 P 强制空白）/ C3 去除材料 / C4 焊后加工；附加区：R1 基础 / R2 周边相同处理 /
+  R3 高级 / R4 上限开关 / R5 上限开关+周边相同处理。宿主原生 `COPYCLIP` 保留全名入口。
 - `OCSMGEAR`：**参数化齿轮**（外齿轮 / 内齿轮齿圈；原先的 `CL` 短命令已取消）。不带参数 = 打开**齿轮窗口**
   （参数表：模数/齿数/**压力角 α**（默认 20°，快捷档 14.5/15/17.5/20/22.5/25/30/37.5/45，可自定义 10°<α<50°）/ha*/c*/螺旋角(度分秒，右旋为正)/厚度/轴向倒角(只读=round(0.6m))/变位系数
   + **4 个视图按钮**（剖视图/侧视图/简化正视图/常规正视图）+ 实时预览），
-  点「生成到图纸」→ **放置方式与 `XL` 完全一样**（点基点 → 光标旋转 → 落定，可连续）；
+  点「生成到图纸」→ **放置方式与 `OCSMPART` 完全一样**（点基点 → 光标旋转 → 落定，可连续）；
   带参数 = 一行直插：`OCSMGEAR 2 40 20 [h] [alpha=25 或 α25] [ha= c= beta= x=] [view 剖视图] [at x,y] [rot 度]`。
   α 进 `db=d·cosαt`/ψ(R)/齿厚公式；**ha*/c*/ρ=0.38m 不随 α 自动变**（45° 花键请手动给短齿顶，如 `ha=0.5`；
   全齿高下 45° 会在齿顶变尖 → 常规正视图明确报错，剖视/侧视/简化正视图照常）。
@@ -131,10 +112,10 @@ rm -rf "$HOME/.config/OpenCADStudio/plugins/opencad.layers_quick"
   **`INVOLSPLINE` 渐开线花键段已于 2026-09-22 移除**（用户定案：渐开线花键只在齿轮生成器生成）；
   轴上花键用 `SPLINE` 矩形花键段。
   **插入前也要先跑过 `OCSM` 初始化**（与齿轮同判据）。
-- 工具栏「轴」组有 **轴生成器**（阶梯轴+中心线双色图标）按钮，等效输入 `OCSMSHAFT`（不带参数：打开轴生成器窗口 + 进入放置态，放置方式与 `XL` 相同）。
-- 工具栏「标准件」组有 **标准件库**（六角头螺栓双色图标）按钮，等效输入 `XL` / `OCSMPART`（不带参数：打开零件库窗口 + 进入放置态，与输入命令一致）。
-- 工具栏「标注」组有 **标注转GB**（循环箭头双色图标）按钮，等效输入 `D2G` / `OCSMDIM2GB`。
-- 输入 `D2G`（或 `OCSMDIM2GB`）→ **把宿主原生标注重建为 OCSM 的 GB 标准版**：
+- 工具栏「轴」组有 **轴生成器**（阶梯轴+中心线双色图标）按钮，等效输入 `OCSMSHAFT`（不带参数：打开轴生成器窗口 + 进入放置态，放置方式与 `OCSMPART` 相同）。
+- 工具栏「标准件」组有 **标准件库**（六角头螺栓双色图标）按钮，等效输入 `OCSMPART`（不带参数：打开零件库窗口 + 进入放置态，与输入命令一致）。
+- 工具栏「标注」组有 **标注转GB**（循环箭头双色图标）按钮，等效输入 `OCSMDIM2GB`。
+- 输入 `OCSMDIM2GB` → **把宿主原生标注重建为 OCSM 的 GB 标准版**：
   有选中只转选中集，无选中扫全图（模型空间）。产物 = OCSM_GB_x{图框比例}
   标注样式 + `7标注层`（线性/对齐用原生 `DIMENSION`；直径/半径/角度/弧长用
   匿名块 + MTEXT，与引导标注同构）。**尽量保留用户所见**：文字覆盖、小数位
@@ -149,16 +130,16 @@ rm -rf "$HOME/.config/OpenCADStudio/plugins/opencad.layers_quick"
   坐标、折弯半径等本期跳过，结束时打印「转换 N 个 / 跳过 M 个（原因）」，
   整批一次 Ctrl+Z 可全撤。自动幂等补 OCSM_GB 样式、图层与文字样式，
   未跑过 `OCSM` 初始化的图纸也能直接用。
-- `TF` / `OCSMFRAMEINIT`：**不带参数** = 打开图框选择窗口（人侧）；**带参数 = 一行直插**（AI/自动化侧）：
-  `TF <名称> [比例] [at x,y] [rot 度]`，例 `TF a3_landscape 1:2 at 0,0`（名称可省 `.dwg`/可写唯一片段；
+- `OCSMFRAMEINIT`：**不带参数** = 打开图框选择窗口；**带参数 = 一行直插**：
+  `OCSMFRAMEINIT <名称> [比例] [at x,y] [rot 度]`，例 `OCSMFRAMEINIT a3_landscape 1:2 at 0,0`（名称可省 `.dwg`/可写唯一片段；
   比例 `1:2` = 缩放 2 倍；给了 `at` 就一次落图、不给就进光标跟随放置）。
-  选择窗口与直插走**同一段插入代码**（比例感知标注样式 `OCSM_GB_x{n}` + 块导入 + `比例` 属性填 `v1:v2`），
-  保证两条路结果一致。
-- `D2G` 除原生标注外，还把**智能圆心标记**（功能区 Center Mark；落图是个带
+  `OCSMFRAMEINSERT` 完成选择窗口的插入。图框插入不预创建缩放样式；实际标注由
+  `OCSMDIMGULIDE` / `OCSMDIM2GB` 在锚点处创建 `OCSM_GB_x{n}`，保证两条路径比例一致。
+- `OCSMDIM2GB` 除原生标注外，还把**智能圆心标记**（功能区 Center Mark；落图是个带
   `OCS_CENTERMARK` XDATA 的载波 `Line`，十字是渲染现画的）换成 `3中心线层` 的两条中心线，
-  长度 = `直径 + 图框比例×6`（与 `ZX` 同款，半径取自关联记录，不用猜）；
+  长度 = `直径 + 图框比例×6`（与 `OCSMCENTERLINE` 同款，半径取自关联记录，不用猜）；
   老式 `DIMCENTER` 的散十字**不转**（不存半径，与手画十字无法区分 —— 用户 2026-09-17 定案“只转 CENTERMARK”）。
-- 选中引导线后输入 `OCSMDIMGULIDE`（或 `GDIM`）→ 浏览器标注配置 GUI：
+- 选中引导线后输入 `OCSMDIMGULIDE` → 浏览器标注配置 GUI：
   按引导几何出选项卡（线性/直径/半径/基准/向视图/角度/剖切/形位公差/
   弧长/局部放大）。选中**恰好两段 PLINE（3 顶点：焊缝点→拐点→水平右端）**
   时另有**焊接**选项卡：上/下侧焊缝符号（24 镜像对 + 3 跨线单置，
@@ -186,7 +167,7 @@ rm -rf "$HOME/.config/OpenCADStudio/plugins/opencad.layers_quick"
   独立禁用；URL 分侧键 `wgru`/`wgrl`、`wmu`/`wml`，两侧相同时用紧凑键
   `wgr`/`wm`）。
 - **引线标注（`LEADER`，焊接的减法版）**：选中**恰好两段 PLINE（3 顶点：
-  箭头点→拐点→肩线末端）**时，`GDIM` GUI 出现**引线**选项卡：上/下侧单行文字
+  箭头点→拐点→肩线末端）**时，`OCSMDIMGULIDE` GUI 出现**引线**选项卡：上/下侧单行文字
   （`lu`/`ll`，都空也允许=只出骨架）→ 生成匿名块 `*L{n}` + INSERT@拐点
   （8符号标注层）。块内 = **引线 + 实心箭头（长 2.5×图幅，色4） + 肩线（色4） +
   上/下侧文字**。文字槽是**块内 MTEXT**（不是 ATTDEF）——只有这样**内联字体码才生效**：
@@ -200,35 +181,35 @@ rm -rf "$HOME/.config/OpenCADStudio/plugins/opencad.layers_quick"
   **文字自拐点沿肩线向外 1.5×图幅、垂直 ±2.750×图幅**；肩线画向左/下时改用右对齐，使文字同样"向外展开"
   （左/右、上/下镜像对称）。与焊接一致：主轴吸附、内容永远按可读朝向渲染
   （竖肩线时文字旋转 +90° 沿肩线书写，永不倒置）。引导 PLINE 保留不删。
-  **转化（并入 `D2G`）**：宿主 `LEADER` + 绑定 `MText` → 文字 **1~2 行转**
+  **转化（并入 `OCSMDIM2GB`）**：宿主 `LEADER` + 绑定 `MText` → 文字 **1~2 行转**
   （第 1 行→上侧、第 2 行→下侧；0 行=空文字骨架）、**≥3 行跳过并报告**；
   删原 Leader + MText；多重引线（`MULTILEADER`）本期不转（选中时报明原因）。
-- **标注再编辑（`OCSMEDIT` / `ME`，2026-09-13）**：引导生成的标注生成后会被打上两份
+- **标注再编辑（`OCSMEDIT`，2026-09-13）**：引导生成的标注生成后会被打上两份
   XDATA —— ① 标准超链接 `PE_URL` = 回插件 GUI 的链接（宿主 **Ctrl+点击** 即用浏览器打开，
   前提是宿主已实现 Ctrl+点击跟随超链接）；② `OCSM_EDIT` = [参数 URL, 引导顶点, 引导种类,
   原引导 handle]（重建标注所需的原始信息，**引导被删除的类型也能靠它恢复**）。
   两种进入编辑的方式：**Ctrl+点击标注**（打开 GUI 即预填好参数），或选中标注后执行
-  `OCSMEDIT`（短命令 `ME`）。编辑模式下 GUI 文案随之切换：标题与主按钮显示**「更新标注」**、
+  `OCSMEDIT`。编辑模式下 GUI 文案随之切换：标题与主按钮显示**「更新标注」**、
   副按钮显示「另存为新标注」（保留原标注另生成一个），并显示一行说明提示；**没有「删除标注」
   按钮**——删除请用 OCS 原生 `ERASE`。改完点「更新标注」→ 插件用原引导几何（若引导已删则临时
   重建一条、用完即删）重生成，并**删除旧标注**（替换语义，不会叠加）。支持 LINE/PLINE/
-  RECT/CIRCLE/ARC 五类引导；批量 D2G 转出来的标注同样带这两份记录。
+  RECT/CIRCLE/ARC 五类引导；批量 OCSMDIM2GB 转出来的标注同样带这两份记录。
   标注链接里的端口由插件自己维护：端口变化时 `refresh_edit_links()` 自动把老标注的 `PE_URL`
   改写到当前端口（只在端口/handle 不符时才改，并只在真改动时把图纸标脏）。
-- **已交付（2026-09-17 刷新）**：11 种标注类型（线性/直径/半径/基准/向视图/角度/剖切/形位公差/局部放大/弧长/焊接）+ **序号球标**（GDIM「序号」页签，手册 `14`）+ **明细表 BOM**（`BOM`/`BOMSYNC`/`BOMEDIT`/`BOMXLSX`/`BOMXLSXI`/`BOMLOCK`/`BOMCFG`，手册 `10`）。
+- **已交付（2026-09-17 刷新）**：11 种标注类型（线性/直径/半径/基准/向视图/角度/剖切/形位公差/局部放大/弧长/焊接）+ **序号球标**（OCSMDIMGULIDE「序号」页签，手册 `14`）+ **明细表 BOM**（`OCSMBOM`/`OCSMBOMSYNC`/`OCSMBOMEDIT`/`OCSMBOMXLSX`/`OCSMBOMXLSXI`/`OCSMBOMLOCK`/`OCSMBOMCFG`，手册 `10`）。
   **仍未实现**（真实欠账清单，详见 `~/桌面/OCSM/` 各计划文档与 2026-09-17 的调查）：
-  ① 可配置命令映射（宿主 `plugin_wins` 硬编码）；② 插件侧通用光标样式 API（宿主 protocol 未暴露）；
+  ① 可配置命令映射（别名迁移已统一由宿主 `assets/ocad.pgp` 管理）；② 插件侧通用光标样式 API（宿主 protocol 未暴露）；
   ③ 其它 GB 机械标注的 OCSM 化：**中心线/中心标记、倒角、基准目标、坐标标注、多重引线、表格**；
-  ④ D2G 三类不转：坐标标注、折弯半径、多重引线；
+  ④ OCSMDIM2GB 三类不转：坐标标注、折弯半径、多重引线；
   ⑤ 动态块（ADR）：RFC 未发上游、visibility 写回仍 flag 级、类型化参数读取/Setter、闭源桥；
   ⑥ 引导线协议里的 `DIML` 交互命令、`PROCESSDIM` 全图扫描、MCP `create_guide_line`/`process_guides`。
-  不在范围（刻意不做）：编辑 **宿主自带命令**画的标注（本插件生成的标注已可再编辑 `OCSMEDIT`/`ME`）。
+  不在范围（刻意不做）：编辑 **宿主自带命令**画的标注（本插件生成的标注已可再编辑 `OCSMEDIT`）。
 - 环境变量 `OCSM_FRAME_DIR` 可覆盖图框文件夹（测试/排障用）。
 
 
-### 标准件（参数化）——`OCSMPART` / `XL`
+### 标准件（参数化）——`OCSMPART`
 
-- 输入 `XL`（或 `OCSMPART`）→ **直接弹出零件库窗口**：优先 **chromium `--app=` 独立窗口**（沉浸式、无地址栏/标签栏，
+- 输入 `OCSMPART` → **直接弹出零件库窗口**：优先 **chromium `--app=` 独立窗口**（沉浸式、无地址栏/标签栏，
   `--window-size=440,880`），没有 chromium 才退回 `xdg-open`；同时进入**放置态**；
   不需要先在图纸上点插入点。点「零件出库」后**该窗口会自己关闭**（页面 `window.close()`；实测 chromium 标签页/`--app` 窗口都允许自关），
   浏览器没有其它标签时窗口随之退出，焦点自然回到图纸。
@@ -281,7 +262,7 @@ rm -rf "$HOME/.config/OpenCADStudio/plugins/opencad.layers_quick"
   第一期 `detail_grind_od`（磨外圆砂轮越程槽 GB/T 6403.5-2008，可选 `b1`）；
   第二期 `detail_thread_relief`（外螺纹退刀槽 GB/T 3-1997 表 2，`P` 必给 + 可选 `g1/g2/dg/r/alpha`，斜壁 30° 下限）；
   第三期 `detail_spline_rect`（矩形花键 GB/T 1144-2001，规格代号下拉/自定义，de 自动查 GB/T 10952 表 1/表 2）。
-  渐开线花键（GB/T 3478.1-2008 / DIN 5480-1:2015）：**XL 旧入口已于 2026-09-22 移除，
+  渐开线花键（GB/T 3478.1-2008 / DIN 5480-1:2015）：**标准件旧入口已于 2026-09-22 移除，
   渐开线花键只在齿轮生成器里生成**——入口是 `OCSMGEAR` 的「花键模式」（复选框：标准/齿廓/d_B/hf*/ρf*/cF*，
   「齿轮种类」开关复用为外/内花键；内花键与内齿轮同口径，只有 剖视图 + 端视图、无侧视图）；几何全在
   `src/invol_spline.rs` 共用引擎（DIN 5480-2 名义表 721 行入库；d_B 为主参数，m/z 可缺一个；
@@ -300,8 +281,7 @@ rm -rf "$HOME/.config/OpenCADStudio/plugins/opencad.layers_quick"
   用（headless）chromium + CDP 点树/切视图/截图即可核对渲染。
 - 说明：**不用系统剪切板**（除技术原因外，还有跨平台考虑：Windows 下"外部替换剪切板 + 模拟按键"极易被安全软件当成病毒行为）。OCS 的 `PASTECLIP` 走内部剪切板，系统剪切板只接受"命令文本"
   （见 `src/app/update/mod.rs` 的 `SystemClipboardPaste`），没有 CAD 剪贴板格式；
-  本插件用宿主 API v5 的**光标跟随预览**（`wants_mouse_move`/`on_mouse_move`，与 POWERDIM 同机制）达到同样效果，
-  **无需改动宿主**。
+  本插件用宿主 API v5 的**光标跟随预览**（`wants_mouse_move`/`on_mouse_move`）完成交互，**无需改动宿主**。
 
 ## 图层模板（9 层）
 
@@ -343,10 +323,10 @@ rm -rf "$HOME/.config/OpenCADStudio/plugins/opencad.layers_quick"
 
 | 方法 | 说明 |
 |------|------|
-| `wants_text_input() -> bool` + `on_text_input(&str) -> CommandStep` | 关键字/文本输入（POWERDIM 的 A/H/V/I/R/D）；`CommandStep::Ignored` 表示未消费，宿主按常规解释（如实体拾取步骤的句柄读取） |
+| `wants_text_input() -> bool` + `on_text_input(&str) -> CommandStep` | 交互插件的关键字/文本输入；`CommandStep::Ignored` 表示未消费，宿主按常规解释（如实体拾取步骤的句柄读取） |
 | `wants_mouse_move() -> bool` + `on_mouse_move(pt) -> Option<EntityType>` | 光标跟随预览：插件返回将提交的实体，宿主瞬态渲染 |
 | `on_object_pick_snapped(handle, pt, snapped) -> CommandStep` | 实体拾取 + OSNAP 感知：`snapped=true` 表示 pt 是吸附点（拾取点），否则是对象选择点击 |
-| `entity_pick_applies_osnap() -> bool` | 实体拾取点击是否跑对象捕捉（POWERDIM 拾取点/线段点选模式切换） |
+| `entity_pick_applies_osnap() -> bool` | 实体拾取点击是否跑对象捕捉，供需要区分吸附点与实体选择的交互插件使用 |
 
 命令返回值（`CommandStep`）在 v5 **末尾追加**（2026-09-17，`OCSMCENTERLINE` 需要一次落两条线）：
 
@@ -355,13 +335,12 @@ rm -rf "$HOME/.config/OpenCADStudio/plugins/opencad.layers_quick"
 | `CommitEntities(Vec<EntityType>)` | 一步提交**多个**实体并继续（映射宿主 `CmdResult::CommitEntities`） |
 | `CommitEntitiesAndExit(Vec<EntityType>)` | 一步提交多个实体并结束（映射 `CmdResult::CommitEntitiesAndExit`）—— 与单实体版本共用同一套撤销分组（一个 Ctrl+Z 一起回去），不需要为了“一步一实体”把复合几何塞进匿名块 |
 
-功能区也加了一组「中心线」（圆+点划线十字双色图标，等效 `ZX`）。
+功能区也加了一组「中心线」（圆+点划线十字双色图标，等效 `OCSMCENTERLINE`）。
 
 宿主侧配套：`CadCommand` 新增 `plugin_preview_entity` / `entity_pick_applies_osnap` /
 `inject_pick_snap`；`InteractiveEvent` 增 `snapped` 字段与 `Text`/`MouseMove` 变体；
 `HostRequest` 增 `WantsTextInput`/`WantsMouseMove`；`HostResponse` 增 `Preview`。
-另外：**插件注册的命令优先级高于命令别名**——OCSM 的 `D` 覆盖内置 `D → *DIMSTYLE`
-别名（project.md 要求）。
+命令解析由宿主统一完成；OCSM 只注册正式命令名，`QDIM` 由宿主原生处理。
 
 ## 测试
 
@@ -390,9 +369,8 @@ cargo test -p ocs_plugin_api            # API：IPC round-trip 等（串行 --te
 - 宿主 STYLE 写出器不持久化 `true_type_font`（TTF 字体名）与 `annotative` 标志到
   DWG/DXF——OCSM_GB 的 `height/width/font` 正常落盘，字体名与注释性仅存在于
   当前文档内存中（宿主内置 STYLE 命令创建的样式同样如此）。
-- 一次 `TF` 插入一个图框；Esc 取消时块定义保留（与 AutoCAD 一致）。
-- POWERDIM 放置一个标注后命令结束（不做连续标注）；以点击为主，实体拾取步骤不支持
-  键入坐标（宿主 entity-pick 步骤语义）。
-- 缩放标注样式 `OCSM_GB_x{scale}` 由 TF 插入时创建；旧图（样式缺失）回退 `OCSM_GB`
-  并在提示中说明（请重新插入图框或运行 OCSM）。
+- 一次 `OCSMFRAMEINIT` 插入一个图框；Esc 取消时块定义保留（与 AutoCAD 一致）。
+- 交互插件的实体拾取步骤以点击为主，不支持键入坐标（宿主 entity-pick 步骤语义）。
+- 缩放标注样式 `OCSM_GB_x{scale}` 由 OCSMDIM2GB/OCSMDIMGULIDE 在实际标注锚点处创建；旧图（样式缺失）
+  回退 `OCSM_GB` 并在提示中说明（可运行 OCSM 或重新生成标注）。
 - 功能区共 6 组：图框 / 中心线 / 齿轮 / 轴 / 标准件 / 标注；按钮图标为一套自绘的**双色扁平化 SVG**（24×24 网格、1.625 线宽、圆角端点，主色 token `#B4B6B9` + 强调色 token `#6DB7ED`，宿主按当前主题解析为文字色/主色并重上色），随 `.so` 内嵌分发。

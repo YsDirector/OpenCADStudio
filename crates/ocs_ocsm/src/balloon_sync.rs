@@ -170,13 +170,13 @@ pub(crate) fn merge_prev(r: &mut RowSpec, prev: &([String; 8], Option<usize>, Op
     r.exported = *exported;
 }
 
-/// **把现有表行的手改/数量锁合并进新算出的行**（BOM / BOMSYNC / 网页 apply / 导入 共用同一套政策）。
+/// **把现有表行的手改/数量锁合并进新算出的行**（OCSMBOM / OCSMBOMSYNC / 网页 apply / 导入 共用同一套政策）。
 ///
-/// 回归背景（2026-09-17 用户要求“调查计划余项”时发现）：`BOM` 刷新路径原先只走
+/// 回归背景（2026-09-17 用户要求“调查计划余项”时发现）：`OCSMBOM` 刷新路径原先只走
 /// `aggregate → fill_bom` 全量重建，**不走 `merge_prev`** → 手改过的图号/名称/材料/备注
-/// 与 `BOMLOCK` 数量锁会被冲掉，与 `b3df1fca` 定的“非空即保留、手改即锁”政策不一致。
-/// 合并按**序号**对齐：表里的序号与本次算出来的行号一致才合并（BOMSYNC 按球标重编过号时，
-/// 想让手改保留请继续用 `BOMSYNC`/网页编辑器 —— 它们本来就是按序号对齐的）。
+/// 与 `OCSMBOMLOCK` 数量锁会被冲掉，与 `b3df1fca` 定的“非空即保留、手改即锁”政策不一致。
+/// 合并按**序号**对齐：表里的序号与本次算出来的行号一致才合并（OCSMBOMSYNC 按球标重编过号时，
+/// 想让手改保留请继续用 `OCSMBOMSYNC`/网页编辑器 —— 它们本来就是按序号对齐的）。
 pub(crate) fn merge_existing(rows: &mut [RowSpec], doc: &CadDocument) {
     let prev = old_rows(doc);
     if prev.is_empty() {
@@ -440,7 +440,7 @@ where
 // ── 验收图（联动，人工/命令路径检查）─────────────────────────────────
 
 /// 出"序号↔明细表联动验收图"：两个零件台账 + 三个球标组（其中一个零件被两个球标引用）
-/// → 在 OCS 里 `OCSM` + `BOMSYNC` 后应得到：序号 5（螺栓，数量 2）、6（空行）、7（空行）、8（偏心轴）。
+/// → 在 OCS 里 `OCSM` + `OCSMBOMSYNC` 后应得到：序号 5（螺栓，数量 2）、6（空行）、7（空行）、8（偏心轴）。
 ///
 /// `cargo test -p ocs_ocsm --lib dump_bom_sync_case -- --ignored --nocapture`
 #[cfg(test)]
@@ -530,7 +530,7 @@ fn dump_bom_sync_case() {
     let dxf = dir.join("序号联动-验收.dxf");
     DwgWriter::write_to_file(&dwg, &doc).expect("写 DWG");
     DxfWriter::new(&doc).write_to_file(&dxf).expect("写 DXF");
-    println!("已写出（在 OCS 里跑 OCSM + BOMSYNC）：\n  {}", dwg.display());
+    println!("已写出（在 OCS 里跑 OCSM + OCSMBOMSYNC）：\n  {}", dwg.display());
 }
 
 #[cfg(test)]
@@ -556,7 +556,7 @@ mod tests {
         v.to_string()
     }
 
-    /// `BOM` 刷新（以及其它路径）必须保住现有表行的手改与 `BOMLOCK` 数量锁。
+    /// `OCSMBOM` 刷新（以及其它路径）必须保住现有表行的手改与 `OCSMBOMLOCK` 数量锁。
     /// 回归：`cmd_bom` 曾经不走 `merge_prev` → 手改列与锁被全量重建冲掉。
     #[test]
     fn merge_existing_keeps_manual_edits_and_qty_lock() {

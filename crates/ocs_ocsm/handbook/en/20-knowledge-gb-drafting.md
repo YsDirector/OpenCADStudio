@@ -22,9 +22,9 @@
 
 - Basic formats: A0 841×1189, A1 594×841, A2 420×594, A3 **297×420**, A4 210×297.
 - Margins: 25 for the binding edge, 5 for the others (for A4 portrait the 25 binding margin is on the left).
-- Title block: the title block of this plugin's frame `a3_landscape.dwg` is **185×40** (placed bottom right) + an additional vertical column on the left.
+- Title block: the title block of this plugin's frame `a3_landscape_att.dwg` is **185×40** (placed bottom right) + an additional vertical column on the left.
 - Scale series: 1:1, 1:2, 1:5, 1:10, 1:2×10ⁿ…; enlargement 2:1, 5:1….
-  **How OCSM does it**: the geometry is always 1:1; the scale is carried by the frame scaling + the `OCSM_GB_xN` dimension style (see `02-sheet-and-frame.md`).
+  **How OCSM does it**: the geometry is always 1:1; the frame carries the scale, while `OCSM_GB_xN` is created by `OCSMDIMGULIDE` / `OCSMDIM2GB` on demand at the actual annotation anchor (see `02-sheet-and-frame.md`).
 
 ## 3. Thread Drawing (GB/T 4459.1)
 
@@ -33,7 +33,7 @@
 - Internal thread (section view): thin line at the crest, thick line at the root (the opposite of an external thread).
 - The screwed-together part is drawn as an **external thread**; for a blind hole use a dashed line for the drilled depth and a thin continuous line for the thread run-out.
 - OCSM has checked this against the templates one by one (`hex_bolt_b_full` / `nut_c41` / `nut_61721` etc.) —
-  **do not draw these by hand**, use `XL`/`OCSMJOINT`.
+  **do not draw these by hand**, use `OCSMPART`/`OCSMJOINT`.
 
 ## 4. Sections and Cut Views (GB/T 4458.6 / 17452)
 

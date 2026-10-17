@@ -147,29 +147,10 @@ impl OpenCADStudio {
             Some(rest) => (rest.trim(), true),
             None => (cmd, false),
         };
-        //
-        // A verb a plugin registers wins over the alias table: OCSM's `D`
-        // (OCSMPOWERDIM) must beat the shipped `D` → `*DIMSTYLE` alias, or the
-        // plugin command would be unreachable by typing. (project.md)
-        //
-        // Web build: `disabled_plugin_ids` (and the out-of-process plugin
-        // registry behind it) is desktop-only, and so is any external plugin —
-        // no plugin verb can win there.
-        #[cfg(not(target_arch = "wasm32"))]
-        let plugin_wins = {
-            let verb = cmd.split_whitespace().next().unwrap_or(cmd);
-            let disabled = self.disabled_plugin_ids();
-            crate::plugin::plugin_command_names(&disabled)
-                .iter()
-                .any(|n| n.eq_ignore_ascii_case(verb))
-        };
-        #[cfg(target_arch = "wasm32")]
-        let plugin_wins = false;
-        let resolved = if plugin_wins {
-            None
-        } else {
-            self.resolve_alias(cmd)
-        };
+        // Plugin commands use their formal names. Shortcuts are expanded by the
+        // host alias table first, so plugin dispatch receives the same canonical
+        // command whether it came from typing, a script, or a ribbon action.
+        let resolved = self.resolve_alias(cmd);
         let cmd = resolved.as_deref().unwrap_or(cmd);
         if is_spacemouse_command(cmd) {
             return self.run_action(cmd);

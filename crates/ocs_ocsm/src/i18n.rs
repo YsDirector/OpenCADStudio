@@ -66,7 +66,7 @@ impl Lang {
 /// 一条词条：**一行一 key：`zh` / `en`**。
 #[derive(Debug, Clone, Copy)]
 pub struct Msg {
-    /// 稳定 key（`域.对象.用途`，如 `cmd.tf.usage`）。
+    /// 稳定 key（`域.对象.用途`，如 `cmd.frame.usage`）。
     pub key: &'static str,
     /// 中文（缺省语言；本阶段字段名照「先立骨架」口径保留）。
     pub zh: &'static str,
@@ -345,15 +345,15 @@ pub const CATALOG: &[Msg] = &[
     Msg::new("meta.lang.en", "英文", "English"),
 
     // ── 命令输出（命令回执 / 用法 / 提示）────────────────────────────
-    // 竖切域 ①：`TF` 的用法串（见 lib.rs::parse_frame_args）。
+    // 竖切域 ①：`OCSMFRAMEINIT` 的用法串（见 lib.rs::parse_frame_args）。
     Msg::new(
         "cmd.tf.usage",
-        "用法：TF <名称> [比例] [at x,y] [rot 度]（不带参数 = 打开选择窗口）",
-        "Usage: TF <name> [scale] [at x,y] [rot deg] (no args = open the picker window)",
+        "用法：OCSMFRAMEINIT <名称> [比例] [at x,y] [rot 度]（不带参数 = 打开选择窗口）",
+        "Usage: OCSMFRAMEINIT <name> [scale] [at x,y] [rot deg] (no args = open the picker window)",
     ),
 
     // ── 报错（解析错误 / 校验失败）──────────────────────────────────
-    // 竖切域 ②：`TF` 参数认不出（带 `{arg}` / `{usage}` 插值，见 lib.rs）。
+    // 竖切域 ②：`OCSMFRAMEINIT` 参数认不出（带 `{arg}` / `{usage}` 插值，见 lib.rs）。
     Msg::new(
         "cmd.tf.err.unknown_param",
         "认不出的参数「{arg}」。{usage}",
@@ -786,18 +786,18 @@ pub const CATALOG: &[Msg] = &[
     ),
     Msg::new(
         "cmd.catalog.frameinit",
-        "图框：不带参数=打开图框选择窗口；带参数=一行直插（`TF a3_landscape 1:2 at 0,0 [rot 度]`）",
-        "Frame: no args = open the frame picker; with args = insert in one line (`TF a3_landscape 1:2 at 0,0 [rot deg]`)",
+        "图框：不带参数=打开图框选择窗口；带参数=一行直插（`OCSMFRAMEINIT a3_landscape 1:2 at 0,0 [rot 度]`）",
+        "Frame: no args = open the frame picker; with args = insert in one line (`OCSMFRAMEINIT a3_landscape 1:2 at 0,0 [rot deg]`)",
     ),
     Msg::new(
         "cmd.catalog.frameinsert",
-        "按所选图框 + 比例插入（光标跟随，比例感知标注样式）；也可带参数直插（同 TF）",
-        "Insert the chosen frame at the chosen scale (cursor-follow, scale-aware dimension styles); args work like TF",
+        "按所选图框 + 比例插入（光标跟随，比例感知标注样式）；也可带参数直插（同 OCSMFRAMEINIT）",
+        "Insert the chosen frame at the chosen scale (cursor-follow, scale-aware dimension styles); args work like OCSMFRAMEINIT",
     ),
     Msg::new(
         "cmd.catalog.part",
-        "标准件/结构要素插入：不带参数=开零件库窗口（左「标准件」树 + 右「结构要素」树）+放置态；带参数=一行直插（标准件 `XL 族 d l [view …] [at x,y] [rot 度]`；结构要素 `XL detail_grind_od d [b1 值] [at x,y] [rot 度]`；外螺纹退刀槽 `XL detail_thread_relief d P 螺距 [g1 值 g2 值 dg 值 r 值 alpha 值] [at x,y] [rot 度]`；毂槽 `XL detail_hub_keyway d [len 毂长] [view main|side]`（b/t₂/r 由 d 查表，len 缺省 30）；平键 `XL key_1096_{a|b|c} b L`、`XL key_1097_{a|b} b L`（d 槽位=键宽 b，L 省略/0=该档默认，L 须 ∈ 标准系列且 L<10b；1097 的 L1/L2/L3 由 L 查 GB/T 1097 长度系列表派生，表外 L 报错））",
-        "Standard parts / structural details: no args = open the parts library window (left \"Standard parts\" tree + right \"Structural details\" tree) + placement mode; with args = insert in one line (standard part `XL family d l [view …] [at x,y] [rot deg]`; structural detail `XL detail_grind_od d [b1 value] [at x,y] [rot deg]`; external thread relief `XL detail_thread_relief d P pitch [g1 v g2 v dg v r v alpha v] [at x,y] [rot deg]`; hub keyway `XL detail_hub_keyway d [len hub length] [view main|side]` (b/t₂/r looked up from d; len defaults to 30); parallel key `XL key_1096_{a|b|c} b L`, `XL key_1097_{a|b} b L` (the `d` argument position = key width b; L omitted/0 = default for that range; L must be in the standard series and L<10b; for 1097, L1/L2/L3 are derived by looking up the GB/T 1097 length-series table; L outside the table is an error))",
+        "标准件/结构要素插入：不带参数=开零件库窗口（左「标准件」树 + 右「结构要素」树）+放置态；带参数=一行直插（标准件 `OCSMPART 族 d l [view …] [at x,y] [rot 度]`；结构要素 `OCSMPART detail_grind_od d [b1 值] [at x,y] [rot 度]`；外螺纹退刀槽 `OCSMPART detail_thread_relief d P 螺距 [g1 值 g2 值 dg 值 r 值 alpha 值] [at x,y] [rot 度]`；毂槽 `OCSMPART detail_hub_keyway d [len 毂长] [view main|side]`（b/t₂/r 由 d 查表，len 缺省 30）；平键 `OCSMPART key_1096_{a|b|c} b L`、`OCSMPART key_1097_{a|b} b L`（d 槽位=键宽 b，L 省略/0=该档默认，L 须 ∈ 标准系列且 L<10b；1097 的 L1/L2/L3 由 L 查 GB/T 1097 长度系列表派生，表外 L 报错））",
+        "Standard parts / structural details: no args = open the parts library window (left \"Standard parts\" tree + right \"Structural details\" tree) + placement mode; with args = insert in one line (standard part `OCSMPART family d l [view …] [at x,y] [rot deg]`; structural detail `OCSMPART detail_grind_od d [b1 value] [at x,y] [rot deg]`; external thread relief `OCSMPART detail_thread_relief d P pitch [g1 v g2 v dg v r v alpha v] [at x,y] [rot deg]`; hub keyway `OCSMPART detail_hub_keyway d [len hub length] [view main|side]` (b/t₂/r looked up from d; len defaults to 30); parallel key `OCSMPART key_1096_{a|b|c} b L`, `OCSMPART key_1097_{a|b} b L` (the `d` argument position = key width b; L omitted/0 = default for that range; L must be in the standard series and L<10b; for 1097, L1/L2/L3 are derived by looking up the GB/T 1097 length-series table; L outside the table is an error))",
     ),
     Msg::new(
         "cmd.catalog.card",
@@ -808,11 +808,6 @@ pub const CATALOG: &[Msg] = &[
         "cmd.catalog.joint",
         "螺栓副装配：不带参数=开装配窗口+放置态；带参数=一行直装（件链算长度、遮挡裁剪、一次撤销）",
         "Bolt joint assembly: no args = open the assembly window + placement mode; with args = assemble in one line (chain length computed, occlusion clipping, single undo)",
-    ),
-    Msg::new(
-        "cmd.catalog.powerdim",
-        "智能标注：拾取点模式标线性/对齐/半径/直径（Enter 切线段点选）",
-        "Smart dimension: point-pick mode for linear/aligned/radius/diameter (Enter switches to segment picking)",
     ),
     Msg::new(
         "cmd.catalog.dimgulide",
@@ -856,8 +851,8 @@ pub const CATALOG: &[Msg] = &[
     ),
     Msg::new(
         "cmd.catalog.bom",
-        "明细表：建表/刷新（BOM 30 = 本次首列 30 行；现有行的手改与数量锁保留）",
-        "BOM: build/refresh (BOM 30 = 30 rows in the first column this time; manual edits to existing rows and quantity locks are kept)",
+        "明细表：建表/刷新（OCSMBOM 30 = 本次首列 30 行；现有行的手改与数量锁保留）",
+        "BOM: build/refresh (OCSMBOM 30 = 30 rows in the first column this time; manual edits to existing rows and quantity locks are kept)",
     ),
     Msg::new(
         "cmd.catalog.bomsync",
@@ -871,8 +866,8 @@ pub const CATALOG: &[Msg] = &[
     ),
     Msg::new(
         "cmd.catalog.bomlock",
-        "明细表：锁定某行数量（BOMLOCK 5 3 / BOMLOCK 5 off）",
-        "BOM: lock a row's quantity (BOMLOCK 5 3 / BOMLOCK 5 off)",
+        "明细表：锁定某行数量（OCSMBOMLOCK 5 3 / OCSMBOMLOCK 5 off）",
+        "BOM: lock a row's quantity (OCSMBOMLOCK 5 3 / OCSMBOMLOCK 5 off)",
     ),
     Msg::new(
         "cmd.catalog.bomxlsx",
@@ -900,7 +895,7 @@ pub const CATALOG: &[Msg] = &[
         "Open this manual window (command list + tutorials)",
     ),
 
-    // ── 命令输出/报错：孔生成器（OCSMHOLE / DK；hole.rs）+ 螺纹表（thread.rs）──
+    // ── 命令输出/报错：孔生成器（OCSMHOLE；hole.rs）+ 螺纹表（thread.rs）──
     // 报错里保留可核对的原始信息（值/表名/规格名）；命令关键字与表内 `name` 不译。
     Msg::new(
         "cmd.hole.err.thread_pair_missing",
@@ -1129,8 +1124,8 @@ pub const CATALOG: &[Msg] = &[
     ),
     Msg::new(
         "cmd.hole.usage",
-        "OCSMHOLE / DK：\n`OCSMHOLE [简单孔|螺纹孔|沉头孔|埋头孔] [带螺纹|无螺纹] [公制|UN/UNC/UNF/UNEF|G/BSPP|R/BSPT|NPT|ACME|矮牙|Tr] [钻孔 Ø8.5|自定义 孔径8.5|间隙 中等装配] [规格名 M10|M10×1.25|G1/8|1/4-20|NPT1/2|Tr8×1.5|ACME 1/4-16|公称6.35 P1.058] [cb_d2=28 cb_t=3] [P1.5] [推荐70.1|70.2] [H18] [L15] [盲孔|贯通] [全长] [6H|6G] [view 侧视图|俯视图|双视图] [at x,y] [rot 度]`\n（规格名直接查 GUI 同一份表 `name`：G 1/8、1/4-20、NPT1/2、Tr8x1.5 等都收；数值写法 `公称6.35 P1.058` 照旧；`cb_d2/cb_t` 仅沉头孔可用，须成对提供）",
-        "OCSMHOLE / DK:\n`OCSMHOLE [简单孔|螺纹孔|沉头孔|埋头孔] [带螺纹|无螺纹] [公制|UN/UNC/UNF/UNEF|G/BSPP|R/BSPT|NPT|ACME|矮牙|Tr] [钻孔 Ø8.5|自定义 孔径8.5|间隙 中等装配] [规格名 M10|M10×1.25|G1/8|1/4-20|NPT1/2|Tr8×1.5|ACME 1/4-16|公称6.35 P1.058] [cb_d2=28 cb_t=3] [P1.5] [推荐70.1|70.2] [H18] [L15] [盲孔|贯通] [全长] [6H|6G] [view 侧视图|俯视图|双视图] [at x,y] [rot deg]`\n(size names are looked up directly in the same `name` table as the GUI: G 1/8, 1/4-20, NPT1/2, Tr8x1.5 etc. are all accepted; the numeric form `公称6.35 P1.058` still works; `cb_d2/cb_t` are counterbore-only and must be provided together)",
+        "OCSMHOLE：\n`OCSMHOLE [简单孔|螺纹孔|沉头孔|埋头孔] [带螺纹|无螺纹] [公制|UN/UNC/UNF/UNEF|G/BSPP|R/BSPT|NPT|ACME|矮牙|Tr] [钻孔 Ø8.5|自定义 孔径8.5|间隙 中等装配] [规格名 M10|M10×1.25|G1/8|1/4-20|NPT1/2|Tr8×1.5|ACME 1/4-16|公称6.35 P1.058] [cb_d2=28 cb_t=3] [P1.5] [推荐70.1|70.2] [H18] [L15] [盲孔|贯通] [全长] [6H|6G] [view 侧视图|俯视图|双视图] [at x,y] [rot 度]`\n（规格名直接查 GUI 同一份表 `name`：G 1/8、1/4-20、NPT1/2、Tr8x1.5 等都收；数值写法 `公称6.35 P1.058` 照旧；`cb_d2/cb_t` 仅沉头孔可用，须成对提供）",
+        "OCSMHOLE:\n`OCSMHOLE [简单孔|螺纹孔|沉头孔|埋头孔] [带螺纹|无螺纹] [公制|UN/UNC/UNF/UNEF|G/BSPP|R/BSPT|NPT|ACME|矮牙|Tr] [钻孔 Ø8.5|自定义 孔径8.5|间隙 中等装配] [规格名 M10|M10×1.25|G1/8|1/4-20|NPT1/2|Tr8×1.5|ACME 1/4-16|公称6.35 P1.058] [cb_d2=28 cb_t=3] [P1.5] [推荐70.1|70.2] [H18] [L15] [盲孔|贯通] [全长] [6H|6G] [view 侧视图|俯视图|双视图] [at x,y] [rot deg]`\n(size names are looked up directly in the same `name` table as the GUI: G 1/8, 1/4-20, NPT1/2, Tr8x1.5 etc. are all accepted; the numeric form `公称6.35 P1.058` still works; `cb_d2/cb_t` are counterbore-only and must be provided together)",
     ),
     Msg::new(
         "cmd.hole.err.missing_args",
@@ -1348,7 +1343,7 @@ pub const CATALOG: &[Msg] = &[
         "{what}: {l} — move the cursor to rotate about the base point, then click to place (Esc to cancel)",
     ),
 
-    // ── 命令输出/报错：中心线（OCSMCENTERLINE / ZX；centerline.rs）──────
+    // ── 命令输出/报错：中心线（OCSMCENTERLINE；centerline.rs）──────
     Msg::new(
         "cmd.centerline.err.bad_pick",
         "只能点圆/圆弧或直线",
@@ -1447,7 +1442,7 @@ pub const CATALOG: &[Msg] = &[
         "Item-number annotation: the second segment (horizontal direction) has zero length",
     ),
 
-    // ── 命令输出/报错：图框（TF / OCSMFRAMEINIT / OCSMFRAMEINSERT；lib.rs）──
+    // ── 命令输出/报错：图框（OCSMFRAMEINIT / OCSMFRAMEINSERT；lib.rs）──
     Msg::new(
         "cmd.frame.err.folder_missing",
         "找不到图框文件夹 {dir}。请在插件目录的 frame/ 中放入 DWG。",
@@ -1511,11 +1506,11 @@ pub const CATALOG: &[Msg] = &[
     Msg::new("cmd.frame.undo_label", "OCSM 插入图框", "OCSM insert frame"),
     Msg::new(
         "cmd.frame.err.no_pending",
-        "OCSMFRAMEINSERT: 没有待处理的图框选择。请先运行 TF。",
-        "OCSMFRAMEINSERT: no pending frame selection. Run TF first.",
+        "OCSMFRAMEINSERT: 没有待处理的图框选择。请先运行 OCSMFRAMEINIT。",
+        "OCSMFRAMEINSERT: no pending frame selection. Run OCSMFRAMEINIT first.",
     ),
 
-    // ── 命令输出/报错：TF 参数校验（lib.rs::parse_frame_args / parse_point / parse_scale）──
+    // ── 命令输出/报错：OCSMFRAMEINIT 参数校验（lib.rs::parse_frame_args / parse_point / parse_scale）──
     Msg::new(
         "cmd.tf.err.at_twice",
         "基点给了两次。{usage}",
@@ -1794,7 +1789,7 @@ pub const CATALOG: &[Msg] = &[
         "Not a finite number: {raw}",
     ),
 
-    // ── 命令输出/报错：一键转国标（OCSMDIM2GB / D2G；dim2gb.rs）───────
+    // ── 命令输出/报错：一键转国标（OCSMDIM2GB；dim2gb.rs）───────
     Msg::new(
         "cmd.d2g.report",
         "OCSMDIM2GB：扫描原生标注 {seen} 个，转换成功 {converted} 个。",
@@ -2000,8 +1995,8 @@ pub const CATALOG: &[Msg] = &[
     ),
     Msg::new(
         "cmd.bom.info.built",
-        "OCSMBOM: {rows} 件 → {cols} 列（{desc}）；旧表元 {removed} 个已替换（Ctrl+Z 可整体撤销）；现有行里手改过的列与 BOMLOCK 数量锁已保留。",
-        "OCSMBOM: {rows} parts → {cols} columns ({desc}); {removed} old table entities replaced (Ctrl+Z undoes all); manually edited cells and BOMLOCK quantity locks were kept.",
+        "OCSMBOM: {rows} 件 → {cols} 列（{desc}）；旧表元 {removed} 个已替换（Ctrl+Z 可整体撤销）；现有行里手改过的列与 OCSMBOMLOCK 数量锁已保留。",
+        "OCSMBOM: {rows} parts → {cols} columns ({desc}); {removed} old table entities replaced (Ctrl+Z undoes all); manually edited cells and OCSMBOMLOCK quantity locks were kept.",
     ),
     Msg::new(
         "cmd.bom.info.count_hint",
@@ -2010,8 +2005,8 @@ pub const CATALOG: &[Msg] = &[
     ),
     Msg::new(
         "cmd.bom.info.untracked",
-        "OCSMBOM: 注意——图中有 {n} 个 OCSM_ 零件块引用但没有 OCSM_PART 台账记录（多为离线生成/早期版本的文件），它们不会进明细表。用 XL 重新放置，或后续用表格导入补录。",
-        "OCSMBOM: warning — {n} OCSM_ part block references have no OCSM_PART ledger record (usually from offline/older files); they will not appear in the BOM. Re-place them with XL, or add them later via table import.",
+        "OCSMBOM: 注意——图中有 {n} 个 OCSM_ 零件块引用但没有 OCSM_PART 台账记录（多为离线生成/早期版本的文件），它们不会进明细表。用 OCSMPART 重新放置，或后续用表格导入补录。",
+        "OCSMBOM: warning — {n} OCSM_ part block references have no OCSM_PART ledger record (usually from offline/older files); they will not appear in the BOM. Re-place them with OCSMPART, or add them later via table import.",
     ),
     Msg::new(
         "cmd.bom.err.sync_nothing",
@@ -2035,8 +2030,8 @@ pub const CATALOG: &[Msg] = &[
     ),
     Msg::new(
         "cmd.bom.info.sync_locked",
-        "OCSMBOMSYNC: {n} 行数量已锁定，未覆盖：{list}。要重算用 `BOMLOCK <序号> off`。",
-        "OCSMBOMSYNC: quantity locked on {n} rows, not overwritten: {list}. Use `BOMLOCK <item no> off` to unlock.",
+        "OCSMBOMSYNC: {n} 行数量已锁定，未覆盖：{list}。要重算用 `OCSMBOMLOCK <序号> off`。",
+        "OCSMBOMSYNC: quantity locked on {n} rows, not overwritten: {list}. Use `OCSMBOMLOCK <item no> off` to unlock.",
     ),
     Msg::new(
         "cmd.bom.info.squeezed",
@@ -2055,8 +2050,8 @@ pub const CATALOG: &[Msg] = &[
     ),
     Msg::new(
         "cmd.bom.lock.usage",
-        "OCSMBOMLOCK / BOMLOCK 用法：BOMLOCK <序号|图号> [数量|off]（不给数量 = 按行上现值锁；off = 解锁）",
-        "OCSMBOMLOCK / BOMLOCK usage: BOMLOCK <item no|drawing no> [qty|off] (no qty = lock at the current value; off = unlock)",
+        "OCSMBOMLOCK 用法：OCSMBOMLOCK <序号|图号> [数量|off]（不给数量 = 按行上现值锁；off = 解锁）",
+        "OCSMBOMLOCK usage: OCSMBOMLOCK <item no|drawing no> [qty|off] (no qty = lock at the current value; off = unlock)",
     ),
     Msg::new(
         "cmd.bom.lock.err.row_missing",
@@ -2075,8 +2070,8 @@ pub const CATALOG: &[Msg] = &[
     ),
     Msg::new(
         "cmd.bom.lock.info.locked",
-        "OCSMBOMLOCK: 序号 {key} 数量锁定为 {qty}（同步不再重算；BOMLOCK {key} off 可解锁）。",
-        "OCSMBOMLOCK: {key} quantity locked to {qty} (sync will not recompute; BOMLOCK {key} off unlocks).",
+        "OCSMBOMLOCK: 序号 {key} 数量锁定为 {qty}（同步不再重算；OCSMBOMLOCK {key} off 可解锁）。",
+        "OCSMBOMLOCK: {key} quantity locked to {qty} (sync will not recompute; OCSMBOMLOCK {key} off unlocks).",
     ),
     Msg::new(
         "cmd.bom.err.row_no_empty",
@@ -2095,13 +2090,13 @@ pub const CATALOG: &[Msg] = &[
     ),
     Msg::new(
         "cmd.bom.info.links_stamped",
-        "OCSMBOM: 已把 {changed} 个表块链接指向明细表编辑页（Ctrl+点击打开；或运行 `BOMEDIT` 在新窗口打开）。",
-        "OCSMBOM: {changed} table blocks now link to the BOM edit page (Ctrl+click, or run `BOMEDIT`).",
+        "OCSMBOM: 已把 {changed} 个表块链接指向明细表编辑页（Ctrl+点击打开；或运行 `OCSMBOMEDIT` 在新窗口打开）。",
+        "OCSMBOM: {changed} table blocks now link to the BOM edit page (Ctrl+click, or run `OCSMBOMEDIT`).",
     ),
     Msg::new(
         "cmd.bom.err.export_empty",
-        "OCSMBOMXLSX: 图上还没有明细表行（先 `BOM` 或 `BOMSYNC` 建表）。",
-        "OCSMBOMXLSX: the drawing has no BOM rows yet (run `BOM` or `BOMSYNC` first).",
+        "OCSMBOMXLSX: 图上还没有明细表行（先 `OCSMBOM` 或 `OCSMBOMSYNC` 建表）。",
+        "OCSMBOMXLSX: the drawing has no BOM rows yet (run `OCSMBOM` or `OCSMBOMSYNC` first).",
     ),
     Msg::new(
         "cmd.bom.err.write_failed",
@@ -2130,8 +2125,8 @@ pub const CATALOG: &[Msg] = &[
     ),
     Msg::new(
         "cmd.bom.err.import_missing",
-        "OCSMBOMXLSXI: 找不到文件 {path}（先 `BOMXLSX` 导出，或给个路径）。",
-        "OCSMBOMXLSXI: file not found: {path} (run `BOMXLSX` first, or give a path).",
+        "OCSMBOMXLSXI: 找不到文件 {path}（先 `OCSMBOMXLSX` 导出，或给个路径）。",
+        "OCSMBOMXLSXI: file not found: {path} (run `OCSMBOMXLSX` first, or give a path).",
     ),
     Msg::new(
         "cmd.bom.err.import_csv",
@@ -2165,8 +2160,8 @@ pub const CATALOG: &[Msg] = &[
     ),
     Msg::new(
         "cmd.bom.cfg.info.show",
-        "OCSMBOMCFG: 首列行数 {n}（配置 {path}）；用法：BOMCFG 30 改默认，BOM 30 只改本次。",
-        "OCSMBOMCFG: first-column row count {n} (config {path}); usage: BOMCFG 30 changes the default, BOM 30 changes only this run.",
+        "OCSMBOMCFG: 首列行数 {n}（配置 {path}）；用法：OCSMBOMCFG 30 改默认，OCSMBOM 30 只改本次。",
+        "OCSMBOMCFG: first-column row count {n} (config {path}); usage: OCSMBOMCFG 30 changes the default, OCSMBOM 30 changes only this run.",
     ),
     Msg::new(
         "cmd.bomxlsx.err.too_many_cols",
@@ -2234,7 +2229,7 @@ pub const CATALOG: &[Msg] = &[
         "failed to read the worksheet",
     ),
 
-    // ── 命令输出/报错：标准件库 / 结构要素（OCSMPART / XL；lib.rs + partgen*.rs + guide_server）──
+    // ── 命令输出/报错：标准件库 / 结构要素（OCSMPART；lib.rs + partgen*.rs + guide_server）──
     Msg::new(
         "cmd.parts.usage",
         "OCSMPART 用法：标准件 `OCSMPART <族> <d> <l> [view main|top|end|section] [at x,y] [rot 度]`（例：`OCSMPART hex_bolt_c 10 95 at 150,30 rot 0`、`OCSMPART nut_c41 8 7.9 view end at 0,0`；**l 必填且 > 0** —— 螺母填高度 m、垫圈填厚度 h，写 0 会报错）；结构要素 `OCSMPART detail_grind_od <d> [b1 <值>] [at x,y] [rot 度]`（b1 缺省 = 该 d 档默认行）；矩形花键 `OCSMPART detail_spline_rect <规格代号> L<满齿段长> [de <滚刀外径>] [view front|side|section]`（例：OCSMPART detail_spline_rect 6x23x26x6 L30 view side）；外螺纹退刀槽 `OCSMPART detail_thread_relief <d> P <螺距> [g1 值 g2 值 dg 值 r 值 alpha 值] [at x,y] [rot 度]`（P 必给）；毂槽 `OCSMPART detail_hub_keyway <d> [len 毂长] [view main|side]`（例：OCSMPART detail_hub_keyway 25 len 30 view main；b/t₂/r 由 d 查表，len 缺省 30）；平键 `OCSMPART key_1096_{a|b|c} <b> <L> [view main|top|section]`、`OCSMPART key_1097_{a|b} <b> <L> [view main|top]`（例：OCSMPART key_1096_a 4 8、OCSMPART key_1097_a 8 25；L 省略/0 = 该档默认，L 须 ∈ 标准系列且 L<10b，1097 的 L1/L2/L3 由 L 查长度系列表派生）；不带参数则打开零件库窗口。",
@@ -2521,7 +2516,7 @@ pub const CATALOG: &[Msg] = &[
         "no view {view} (available: {avail})",
     ),
 
-    // ── 命令输出/报错：表面粗糙度（OCSMRGH / CC；guide_server::apply_roughness）──
+    // ── 命令输出/报错：表面粗糙度（OCSMRGH；guide_server::apply_roughness）──
     Msg::new("cmd.rough.undo_insert", "表面粗糙度", "roughness symbol"),
     Msg::new(
         "cmd.rough.prompt",
@@ -5886,7 +5881,7 @@ pub const CATALOG: &[Msg] = &[
     Msg::new("cmd.detail.thread.err.p_not_in_table", "外螺纹退刀槽：表 2 没有螺距 P={p}（可用 P = {choices}；表 2 从 0.25 起，无 0.2）", "External thread relief: Table 2 has no pitch P={p} (available P = {choices}; Table 2 starts at 0.25, no 0.2)"),
     Msg::new("cmd.detail.thread.err.unknown_param", "外螺纹退刀槽：不认识参数 {list}（本族支持 P/g1/g2/dg/r/alpha）", "External thread relief: unrecognized parameter {list} (this family supports P/g1/g2/dg/r/alpha)"),
     Msg::new("cmd.detail.thread.err.d_positive", "外螺纹退刀槽：d 必须是正数（收到 {d}）", "External thread relief: d must be positive (got {d})"),
-    Msg::new("cmd.detail.thread.err.p_missing", "外螺纹退刀槽：缺少螺距 P（写法 `XL detail_thread_relief <d> P <P>`）", "External thread relief: missing pitch P (write `XL detail_thread_relief <d> P <P>`)"),
+    Msg::new("cmd.detail.thread.err.p_missing", "外螺纹退刀槽：缺少螺距 P（写法 `OCSMPART detail_thread_relief <d> P <P>`）", "External thread relief: missing pitch P (write `OCSMPART detail_thread_relief <d> P <P>`)"),
     Msg::new("cmd.detail.relief.err.d_positive", "{what}：d 必须是正数（收到 {d}）", "{what}: d must be positive (got {d})"),
     Msg::new("cmd.detail.relief.err.value_positive", "{what}：{name} 必须是正数（收到 {value}）", "{what}: {name} must be positive (got {value})"),
     Msg::new("cmd.detail.relief.err.alpha_finite", "{what}：alpha 不是有限数", "{what}: alpha is not a finite number"),
@@ -5896,7 +5891,7 @@ pub const CATALOG: &[Msg] = &[
     Msg::new("cmd.detail.relief.err.g1_gt_r", "{what}：g1（{g1}）必须大于圆角 r（{r}），否则圆角与斜壁打架", "{what}: g1 ({g1}) must be greater than the fillet r ({r}), otherwise the fillet clashes with the tapered wall"),
     Msg::new("cmd.detail.relief.err.r_le_half", "{what}：圆角 r（{r}）超过槽深 (d−dg)/2（{half}），圆角伸到{big}之外", "{what}: fillet r ({r}) exceeds the groove depth (d−dg)/2 ({half}); the fillet sticks out beyond the {big}"),
     Msg::new("cmd.detail.relief.err.wall_angle", "{what}：斜壁实际角 {wall}° 小于 alpha {alpha}°（含表 2 取整容差 {tol}°）—— 检查 g1/g2/dg 覆盖值", "{what}: the actual tapered-wall angle {wall}° is smaller than alpha {alpha}° (including the Table 2 rounding tolerance {tol}°) — check the g1/g2/dg overrides"),
-    Msg::new("cmd.detail.thread.err.p_hint", "外螺纹退刀槽需要螺距 P：请用 `XL detail_thread_relief <d> P <P> [g1 值 …]`", "External thread relief needs pitch P: use `XL detail_thread_relief <d> P <P> [g1 value …]`"),
+    Msg::new("cmd.detail.thread.err.p_hint", "外螺纹退刀槽需要螺距 P：请用 `OCSMPART detail_thread_relief <d> P <P> [g1 值 …]`", "External thread relief needs pitch P: use `OCSMPART detail_thread_relief <d> P <P> [g1 value …]`"),
     Msg::new("cmd.detail.hub.err.unknown_param", "毂槽：不认识参数 {list}（本族只支持 len 毂长；b/t₂/r 由 d 查表）", "Hub keyway: unrecognized parameter {list} (this family only supports len; b/t₂/r are looked up from d)"),
     Msg::new("cmd.detail.hub.err.d_positive", "毂槽：孔径 d 必须是正数（收到 {d}）", "Hub keyway: bore d must be positive (got {d})"),
     Msg::new("cmd.detail.hub.err.d_not_in_table", "毂槽：d={d} 不在 GB/T 1095 的 d 选型表（6…500）里，无法按孔径定键宽 b", "Hub keyway: d={d} is not in the GB/T 1095 d selection table (6…500), cannot determine key width b from the bore"),
@@ -5918,7 +5913,7 @@ pub const CATALOG: &[Msg] = &[
     Msg::new("cmd.detail.spline.err.missing_b", "矩形花键：缺键宽 B（数字参数写法 `B6`）", "Rectangular spline: missing key width B (numeric form `B6`)"),
     Msg::new("cmd.detail.spline.err.d_minor_positive", "矩形花键：小径 d={d} 必须是正数", "Rectangular spline: minor diameter d={d} must be positive"),
     Msg::new("cmd.detail.spline.err.de_not_found", "矩形花键：该 N/d/D/B 不在 GB/T 10952-2005 表 1/表 2 里，de 查不到 —— 请给 de", "Rectangular spline: this N/d/D/B is not in GB/T 10952-2005 Table 1/2, de cannot be looked up — please give de"),
-    Msg::new("cmd.detail.spline.usage", "矩形花键请给规格代号：`XL detail_spline_rect 6x23x26x6 L30 [de 63] [view side|section|front]`", "Rectangular spline: please give a spec code: `XL detail_spline_rect 6x23x26x6 L30 [de 63] [view side|section|front]`"),
+    Msg::new("cmd.detail.spline.usage", "矩形花键请给规格代号：`OCSMPART detail_spline_rect 6x23x26x6 L30 [de 63] [view side|section|front]`", "Rectangular spline: please give a spec code: `OCSMPART detail_spline_rect 6x23x26x6 L30 [de 63] [view side|section|front]`"),
     Msg::new("cmd.detail.spline.err.need_len_side", "矩形花键：常规侧视图需要 L（满齿段长，例 `L30` / `&len=30`）", "Rectangular spline: the regular side view needs L (full-tooth length, e.g. `L30` / `&len=30`)"),
     Msg::new("cmd.detail.spline.err.need_len_section", "矩形花键：侧剖视图需要 L（满齿段长，例 `L30` / `&len=30`）", "Rectangular spline: the side section view needs L (full-tooth length, e.g. `L30` / `&len=30`)"),
     Msg::new("cmd.detail.spline.err.view_unimplemented", "矩形花键：视图 {view} 尚未实现", "Rectangular spline: view {view} is not implemented yet"),
@@ -6993,10 +6988,10 @@ mod tests {
         let _g = lock();
         set_lang(Lang::Zh);
         let zh = t("cmd.tf.usage");
-        assert!(zh.starts_with("用法：TF <名称>"), "中文取词：{zh}");
+        assert!(zh.starts_with("用法：OCSMFRAMEINIT <名称>"), "中文取词：{zh}");
         set_lang(Lang::En);
         let en = t("cmd.tf.usage");
-        assert!(en.starts_with("Usage: TF <name>"), "英文取词：{en}");
+        assert!(en.starts_with("Usage: OCSMFRAMEINIT <name>"), "英文取词：{en}");
         assert_ne!(zh, en);
         set_lang_auto();
     }

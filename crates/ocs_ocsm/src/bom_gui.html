@@ -77,7 +77,7 @@
   const $ = (id) => document.getElementById(id);
   const COLS = ['item_no', 'code', 'name', 'qty', 'material', 'unit_weight', 'total_weight', 'remark'];
   const state = { fp: '', doc: {}, xlsxName: '明细表.xlsx', rows: [], busy: false };
-  // 本窗口钉在哪张图纸上（`BOMEDIT` 开窗时写在 URL 上）——请求带回给插件，
+  // 本窗口钉在哪张图纸上（`OCSMBOMEDIT` 开窗时写在 URL 上）——请求带回给插件，
   // 多张图各开编辑窗不串表；不带（Ctrl+点击链接、AI/MCP 直连）则按“当前活跃图纸”算。
   const TAB = new URLSearchParams(location.search).get('tab');
   const withTab = (url) => (TAB ? url + (url.includes('?') ? '&' : '?') + 'tab=' + encodeURIComponent(TAB) : url);

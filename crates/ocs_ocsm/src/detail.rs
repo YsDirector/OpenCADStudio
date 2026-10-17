@@ -200,7 +200,7 @@ pub fn family_views(family: &str) -> Vec<&'static str> {
     find(family).map(|e| e.views().to_vec()).unwrap_or_default()
 }
 
-/// 结构要素的「规格代号」入口（CLI `XL` 用）：族不认返回 None。
+/// 结构要素的「规格代号」入口（CLI `OCSMPART` 用）：族不认返回 None。
 pub fn parse_spec_token(family: &str, token: &str) -> Option<(f64, DetailParams)> {
     find(family).and_then(|element| element.parse_spec_token(token))
 }
@@ -1114,7 +1114,7 @@ impl DetailElement for ThreadRelief {
 }
 
 // ══════════════════════════════════════════════════════════════════════════
-// 毂槽：GB/T 1095-2003（XL 结构要素；数据复用 keyway_gb1095.csv + 1096 d 列）
+// 毂槽：GB/T 1095-2003（OCSMPART 结构要素；数据复用 keyway_gb1095.csv + 1096 d 列）
 // ══════════════════════════════════════════════════════════════════════════
 //
 // 画法与数据出处：`review/毂槽_几何反解.md` + `review/毂槽_设计.md`；
@@ -2159,7 +2159,7 @@ mod tests {
     fn spline_rect_registry_catalog_and_preview() {
         assert!(is_detail(FAMILY_SPLINE_RECT));
         assert_eq!(family_views(FAMILY_SPLINE_RECT), vec!["front", "side", "section"]);
-        // 规格代号入口（XL CLI 用）：解析出小径 d，并预设 spec
+        // 规格代号入口（OCSMPART CLI 用）：解析出小径 d，并预设 spec
         let (d, params) = parse_spec_token(FAMILY_SPLINE_RECT, "6x23x26x6").expect("认规格代号");
         assert_eq!(d, 23.0);
         assert_eq!(params.spec(), Some("6x23x26x6"));
@@ -2230,7 +2230,7 @@ mod tests {
             .unwrap()
             .expect_err("花键不认 b1");
         assert!(err.contains("不认识参数"), "{err}");
-        // 数字参数路线（XL CLI / MCP）：`d=23 N6 D26 B6 len30 de63`
+        // 数字参数路线（OCSMPART CLI / MCP）：`d=23 N6 D26 B6 len30 de63`
         let svg = preview_svg(
             "family=detail_spline_rect&d=23&N=6&big=26&B=6&len=30&de=63&view=side",
         )
@@ -2541,7 +2541,7 @@ mod tests {
         assert!(near(b100.t2, 19.5), "b=100 的 t₂ 取官方 19.5（主源 19.4 仅留 flags）");
     }
 
-    /// XL 注册/目录/树/两条生成入口 + 预览（照既有结构要素的接线口径）。
+    /// OCSMPART 注册/目录/树/两条生成入口 + 预览（照既有结构要素的接线口径）。
     #[test]
     fn hub_keyway_registered_in_xl_catalog() {
         assert!(is_detail(FAMILY_HUB_KEYWAY));

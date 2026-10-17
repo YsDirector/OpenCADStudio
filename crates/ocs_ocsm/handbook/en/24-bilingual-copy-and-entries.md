@@ -140,7 +140,7 @@ the templates contain **no Chinese fallback**, only placeholders; the plugin's H
 ## 7. Stage Boundaries (delivered / not done)
 
 * **Stage 1 (delivered)**: `src/i18n.rs` skeleton (catalog + lookup + language sources + conservative missing-key defaults + unit tests);
-  one vertical slice = the `TF` usage string + the "unrecognised parameter" error (bilingual and switchable on a real product path);
+  one vertical slice = the `OCSMFRAMEINIT` usage string + the "unrecognised parameter" error (bilingual and switchable on a real product path);
   full inventory in `~/桌面/OCSM/review/i18n_盘点.md`.
 * **Stage 2 ① batch (delivered, 2026-09-27)**: the `{{i18n*:}}` path + `/api/i18n` + the page language control;
   all 10 pages wired, with guide/parts/hole/spline/joint/rough/bom/gear/shaft/manual's
@@ -149,19 +149,19 @@ the templates contain **no Chinese fallback**, only placeholders; the plugin's H
   deep per-card form labels are left to later batches.
 * **Stage 2 ② batch (first part delivered, 2026-09-27)**: command output and errors:
   the 25 `COMMAND_CATALOG` long summaries (third field = a `cmd.catalog.*` key, `/api/manual` renders per language) +
-  the full `OCSMHOLE`/`DK` errors/hints/usage/receipts (`hole.rs` + `thread.rs` + `lib.rs::cmd_hole` + placement prompt) +
-  centerlines `OCSM CENTERLINE`/`ZX` + the 5 item-balloon errors in `balloon.rs` + TF/frame family (`parse_frame_args`,
+  the full `OCSMHOLE` errors/hints/usage/receipts (`hole.rs` + `thread.rs` + `lib.rs::cmd_hole` + placement prompt) +
+  centerlines `OCSMCENTERLINE` + the 5 item-balloon errors in `balloon.rs` + `OCSMFRAMEINIT`/frame family (`parse_frame_args`,
   `frame_files`/`resolve_frame`, insert receipts/hints, `FramePlace` prompt).
 * **Stage 2 ③ batch (part delivered, 2026-09-27)**: command output and errors of the remaining command families:
-  `OCSMJOINT` (joint.rs), `OCSMDIM2GB`/`D2G` (dim2gb.rs + `lib.rs::cmd_dim2gb`),
+  `OCSMJOINT` (joint.rs), `OCSMDIM2GB` (dim2gb.rs + `lib.rs::cmd_dim2gb`),
   the BOM family (bom.rs / bom_xlsx.rs; column headers/in-table tags belong to the ③ card-face batch),
-  `OCSMPART`/`XL` (lib.rs + all `partgen*.rs` generation errors + `guide_server::apply_part_pick`),
-  `OCSMRGH`/`CC` (`RoughnessPlace` + `apply_roughness`), plus the 8 endpoint `请求 JSON 无效` strings unified.
+  `OCSMPART` (lib.rs + all `partgen*.rs` generation errors + `guide_server::apply_part_pick`),
+  `OCSMRGH` (`RoughnessPlace` + `apply_roughness`), plus the 8 endpoint `请求 JSON 无效` strings unified.
   **Not done (later small batches)**: OCSMCARD per-card validation/wording (card*.rs + spline_tol/gear_table/
   ansi_table/nf*/din*/spline_table/spline_lite/card_lite/card_expr), shaft `shaft.rs`,
   gears/involute splines `gear.rs`/`invol_spline.rs`, `guide_url.rs` (GUI label and protocol aliases),
   `detail.rs` (structural-detail previews/errors), `OCSMPART` GUI catalog metadata (`name`/`base_hint`/
-  `len_label`/view names/tree paths), `BOM`/`parts` GUI deep labels.
+  `len_label`/view names/tree paths), `OCSMBOM`/`parts` GUI deep labels.
 
 * **Stage 2 ④ batch (part delivered, 2026-09-27)**:
   * ① OCSMCARD in-card validation/wording (**done**): `guide_server` card-type dispatch (9 strings) + the parse/validation/lookup errors of `card_expr`/`spline_tol`/`spline_table`/
@@ -187,7 +187,7 @@ the templates contain **no Chinese fallback**, only placeholders; the plugin's H
   * **⑤ `guide_url.rs` (done)**: `cmd.guide.*` 13 GUI display names (`label()` → `String`); protocol aliases (H/V/A,
     LEFT/RIGHT, M/R, LIN/CAV/CVX/DBL/ZIG and the Chinese aliases) are never translated.
   * **⑥ GUI deep metadata (not done)**: `partgen*`/`detail`'s `name`/`base_hint`/`len_label`/`tree_dir`/
-    `view_labels`/`source`, BOM column headers/tags, deep notes of the remaining pages (the trait returns `&'static str` and needs a uniform rework).
+    `view_labels`/`source`, OCSMBOM column headers/tags, deep notes of the remaining pages (the trait returns `&'static str` and needs a uniform rework).
   * Gates (this session): `cargo test -p ocs_ocsm --lib` **10 consecutive runs, all 834 passed / 0 failed / 25 ignored**;
     all seven smokes pass; `cargo build --release -p ocs_ocsm` passes (compile only, no deployment);
     live recheck with the real plugin: en **0 errors** / zh literals **0 errors** (temporary XDG, deployed replacement plugin.toml,

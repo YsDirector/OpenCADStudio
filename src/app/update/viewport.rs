@@ -2433,9 +2433,9 @@ impl OpenCADStudio {
                 .as_ref()
                 .map(|c| c.needs_tangent_pick())
                 .unwrap_or(false);
-            // Entity-pick commands normally suppress object snap, but plugin
-            // POWERDIM-style commands and built-in point-taking entity picks
-            // explicitly need the snap result.
+            // Entity-pick commands normally suppress object snap, but interactive
+            // plugin commands and built-in point-taking entity picks may explicitly
+            // need the snap result.
             let plugin_osnap = self.tabs[i]
                 .active_cmd
                 .as_ref()
@@ -4946,8 +4946,8 @@ impl OpenCADStudio {
                     .as_ref()
                     .is_some_and(|c| c.entity_pick_blank_forwards())
                 {
-                    // 插件 POWERDIM 类命令：点击空白也回调（handle=NULL），
-                    // 由命令决定（放置标注 / 拾取点 / 忽略）。两种拾取模式都需要。
+                    // 交互插件：点击空白也回调（handle=NULL），由命令决定
+                    //（放置、拾取点或忽略）。
                     let shift = self.shift_down;
                     let result = self.tabs[i].active_cmd.as_mut().map(|c| {
                         if c.entity_pick_applies_osnap() {

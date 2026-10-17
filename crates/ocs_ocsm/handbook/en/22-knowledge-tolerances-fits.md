@@ -51,8 +51,8 @@
 
 - In the annotation settings window choose **TOLERANCE**: code mode (`⌀30H7`) or limit-deviation mode (`⌀30 +0.021/0`);
   the plugin computes the deviations from the ISO 286 tables and draws them with an **anonymous block + stacked MTEXT**.
-- **GD&T** / **DATUM** are in the same window (feature-control frame / datum symbol, two GB drawing conventions).
-- Roughness: `CC` (`OCSMRGH`) interactively pick the insertion point → fill in the form and value in the window.
+- **GD&T** / **DATUM** are in the same `OCSMDIMGULIDE` window (feature-control frame / datum symbol, two GB drawing conventions).
+- Roughness: `OCSMRGH` interactively pick the insertion point → fill in the form and value in the window.
 
 ## To Be Added
 

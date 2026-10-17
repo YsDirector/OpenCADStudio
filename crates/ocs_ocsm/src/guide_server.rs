@@ -39,7 +39,7 @@ pub struct GuideServer {
 /// 引导服务器的**端口**是进程级复用的（lib.rs 的 `GUIDE_PORT`），但
 /// `PluginRequestSender` 是**绑定标签页**的（宿主按 `tab_id` 把请求投给对应会话，
 /// 见 `ocs_plugin_api::process::v4::drain_requests`）。旧写法把首次 `spawn` 时的
-/// sender 固定进服务器线程，于是「关掉当前图纸 → 新建一张 → GDIM」之后：
+/// sender 固定进服务器线程，于是「关掉当前图纸 → 新建一张 → OCSMDIMGULIDE」之后：
 ///
 /// - 那张图**已关闭** → 宿主把带该死 `tab_id` 的请求永远挂在 deferred 队列里 →
 ///   HTTP 5 s 超时 → GUI 报「读不到引导线」（用户报的 bug）；
@@ -47,7 +47,7 @@ pub struct GuideServer {
 ///
 /// 现在服务器线程每次请求都从这里解析目标：
 ///
-/// 1. **带 `tab=` 的页面窗口**（GDIM/ME、零件库、螺栓副、粗糙度开的那几个）→ 对号
+/// 1. **带 `tab=` 的页面窗口**（OCSMDIMGULIDE/OCSMEDIT、零件库、螺栓副、粗糙度开的那几个）→ 对号
 ///    入座；图纸已关闭 → 直接报「窗口过期」而不是空转 5 s，更不会写到别的图上。
 /// 2. **不带 `tab=` 的请求**（AI/MCP、`PE_URL` Ctrl+点击）→ **宿主通知里的当前活跃
 ///    图纸**（`HostNotification::SelectionChangedV4` 只对活动标签页发）；拿不到就退回
@@ -150,7 +150,7 @@ impl SenderRouter {
                 .contains(&tab)
             {
                 return Err(format!(
-                    "这个窗口对应的图纸（标签页 {tab}）已经关闭了 —— 请重新运行 GDIM / ME 打开新窗口。"
+                    "这个窗口对应的图纸（标签页 {tab}）已经关闭了 —— 请重新运行 OCSMDIMGULIDE / OCSMEDIT 打开新窗口。"
                 ));
             }
             return by_tab_lookup(tab).ok_or_else(|| {
@@ -173,7 +173,7 @@ impl SenderRouter {
             if !closed {
                 return Err(format!(
                     "当前活跃图纸（标签页 {tab}）还没跑过 OCSM 命令 —— 插件拿不到它的请求通道；\
-                     请先在这张图上执行任意 OCSM 命令（例：选中标注后运行 ME，或运行 GDIM）再操作。"
+                     请先在这张图上执行任意 OCSM 命令（例：选中标注后运行 OCSMEDIT，或运行 OCSMDIMGULIDE）再操作。"
                 ));
             }
         }
@@ -486,7 +486,7 @@ button:hover { border-color: #2b6fe0; background: #eef4ff; }
 </style></head><body>
 <h1>{{i18n:gui.notice.opened_title}}</h1>
 <p>{{i18n:gui.notice.opened_body1}}<b>{{i18n:gui.notice.opened_body2}}</b>{{i18n:gui.notice.opened_body3}}</p>
-<p>{{i18n:gui.notice.bom_hint1}}<code>BOMEDIT</code>{{i18n:gui.notice.bom_hint2}}</p>
+<p>{{i18n:gui.notice.bom_hint1}}<code>OCSMBOMEDIT</code>{{i18n:gui.notice.bom_hint2}}</p>
 <p><button onclick="window.close()">{{i18n:gui.notice.close_page}}</button></p>
 <script>try { window.close(); } catch (e) {}</script>
 </body></html>"#;
@@ -765,7 +765,7 @@ fn route(
     let json = "application/json; charset=utf-8";
     let text = "text/plain; charset=utf-8";
     // **每次请求都重新解析**该发给哪张图：端口是进程级复用的，图纸会换
-    // （关图 → 新建图 → 再 GDIM），固定的 sender 会指向已经关闭的标签页。
+    // （关图 → 新建图 → 再 OCSMDIMGULIDE），固定的 sender 会指向已经关闭的标签页。
     // 只有**要动图纸**的端点才需要它 —— 静态页/心跳/查表拿默认目标就行，
     // 不能让「窗口过期」把页面本身也挡在门外。
     macro_rules! sender {
@@ -949,6 +949,17 @@ fn snapshot(sender: &Arc<dyn PluginRequestSender>) -> Result<acadrust::CadDocume
     }
 }
 
+/// 卡片落点处的图框比例因子（读一份宿主快照后交给 `card_frame_factor`）。
+///
+/// `snapshot` 是本模块私有的，而落件 worker（`lib.rs::place_one`）与
+/// 卡片导出路径都需要这个值 —— 统一从这里出，避免把快照请求散出去。
+pub(crate) fn card_frame_factor_via_sender(
+    sender: &Arc<dyn PluginRequestSender>,
+    at: [f64; 2],
+) -> Result<f64, String> {
+    Ok(crate::card_frame_factor(&snapshot(sender)?, at))
+}
+
 /// 开启插件撤销事务（`HostApi::begin_undo`）。
 ///
 /// HTTP/GUI 流程的一次用户动作会向宿主发多条请求（各占一条 message），而宿主在每条
@@ -988,7 +999,7 @@ pub(crate) fn pe_url_record(url: &str) -> ExtendedDataRecord {
     rec
 }
 
-/// 旧→新句柄映射（C10）：重建（D2G / 引导刷新）会换掉全部句柄，
+/// 旧→新句柄映射（C10）：重建（OCSMDIM2GB / 引导刷新）会换掉全部句柄，
 /// 新实体带上被它替掉的旧句柄，脚本用 `xdata_get app:"OCSM_REPLACED_FROM"`
 /// 就能把旧句柄翻译成新句柄。
 pub(crate) fn replaced_from_record(old: acadrust::Handle) -> ExtendedDataRecord {
@@ -1028,6 +1039,23 @@ fn fmt_handle(h: acadrust::Handle) -> String {
     format!("{:#X}", h) // 0x3AE
 }
 
+/// Look up an entity in a document snapshot by handle.
+///
+/// `DocumentSnapshot` is a serialized/cloned CAD document in some hosts. Its
+/// flat `entities()` storage is authoritative there, while the optional
+/// handle index used by `get_entity()` may not have been rebuilt yet. Guide
+/// operations used to consult only that index, so the same entity was visible
+/// to `mcp_list_guides` but reported as "not found" by `/api/guide` and
+/// `/api/apply_refresh`. Keep the fast indexed path for live documents and
+/// fall back to the flat storage for snapshots.
+pub(crate) fn entity_by_handle<'a>(
+    doc: &'a acadrust::CadDocument,
+    handle: acadrust::Handle,
+) -> Option<&'a acadrust::EntityType> {
+    doc.get_entity(handle)
+        .or_else(|| doc.entities().find(|e| e.common().handle == handle))
+}
+
 fn guide_line_points(
     doc: &acadrust::CadDocument,
     handle: acadrust::Handle,
@@ -1046,7 +1074,7 @@ fn guide_geom_points(
     doc: &acadrust::CadDocument,
     handle: acadrust::Handle,
 ) -> Result<Vec<[f64; 3]>, String> {
-    let e = doc.get_entity(handle).ok_or("找不到引导线实体")?;
+    let e = entity_by_handle(doc, handle).ok_or("找不到引导线实体")?;
     match e {
         acadrust::EntityType::Line(l) => Ok(vec![
             [l.start.x, l.start.y, l.start.z],
@@ -1100,7 +1128,7 @@ fn guide_geom_kind(
     doc: &acadrust::CadDocument,
     handle: acadrust::Handle,
 ) -> Result<&'static str, String> {
-    let e = doc.get_entity(handle).ok_or("找不到引导线实体")?;
+    let e = entity_by_handle(doc, handle).ok_or("找不到引导线实体")?;
     match e {
         acadrust::EntityType::Line(_) => Ok("line"),
         acadrust::EntityType::Circle(_) => Ok("circle"),
@@ -1236,7 +1264,7 @@ fn dim_override_record_dec_move(dec: i16, text_movement: i16) -> ExtendedDataRec
     rec
 }
 
-/// 与 PowerDim::build_linear 相同的生成逻辑，但放置点由 dist 计算：
+/// 与共享线性标注生成逻辑一致，但放置点由 dist 计算：
 /// pt = P2 + 法向 × dist（"与 P2 距离"语义）。产物带 DSTYLE XDATA 覆盖，
 /// 渲染与 `OCSMDIMGULIDE1-general.dxf` 的示例一致。
 fn build_guide_linear(
@@ -1333,7 +1361,7 @@ fn build_guide_linear_with_text_leader(
 
 /// 角度标注（两段 PLINE 引导线）：p0→p1→p2，p1=角度顶点、两段即两边。
 /// 放置点 = 顶点 + 角平分线方向（劣角内部）× dist。
-/// 复用 PowerDim build_angular 的 Angular2Ln 构建逻辑（lib.rs），
+/// 复用共享 Angular2Ln 构建逻辑（lib.rs），
 /// 角模式：劣角（默认）/ 补角（180°−劣角）/ 优角（360°−劣角）。
 fn build_guide_angular(
     p0: [f64; 3],
@@ -1524,14 +1552,14 @@ pub(crate) fn build_guide_angular_block(
 
     // DIMENSION（Angular2Ln 几何/文字 + 引用匿名块）。
     let mut dim = build_guide_angular(p0, p1, p2, params.dist, params.angle_mode, style)?;
-    dim.base_mut().block_name = block_name;
+    crate::attach_picture_block(&mut dim, block_name);
     Ok(dim)
 }
 
 /// 直径/半径标注生成：引导线 P1=圆心、P2=圆周点（线长=半径，方向=偏转角）。
 /// dist = 文字沿偏转角方向相对圆周点的偏移（负=圆内侧，正=圆外侧），
-/// 与线性「与P2距离」语义一致。文字径向旋转（复用 PowerDim build_radial
-/// 已验证逻辑），内外都无引出线（对照 OCSMDIMGULIDE2 inside/outside 示例）。
+/// 与线性「与P2距离」语义一致。文字径向旋转沿用已验证的机械标注逻辑，
+/// 内外都无引出线（对照 OCSMDIMGULIDE2 inside/outside 示例）。
 fn build_guide_radial(
     p1: [f64; 3],
     p2: [f64; 3],
@@ -1618,16 +1646,16 @@ fn build_guide_radial(
     dim
 }
 
-/// GDIM 生成前的基建幂等补齐：OCSM 十层 / `OCSM_GB` 文字样式 / 基线 `OCSM_GB`
+/// OCSMDIMGULIDE 生成前的基建幂等补齐：OCSM 十层 / `OCSM_GB` 文字样式 / 基线 `OCSM_GB`
 /// 标注样式。
 ///
-/// 旧图（从没跑过 OCSM）直接跑 GDIM 时，**线性标注是原生 DIMENSION**：宿主按
+/// 旧图（从没跑过 OCSM）直接跑 OCSMDIMGULIDE 时，**线性标注是原生 DIMENSION**：宿主按
 /// `style_name` 在标注样式表解析样式，样式缺失时连 XDATA DSTYLE 覆盖一并被忽略、
 /// 整套退回宿主默认（实测箭头 0.18×0.132，GB 应为 2.25×1.833）；角度/半径/直径
-/// 是匿名块形态（几何已烘焙）所以看不出。D2G 在 `cmd_dim2gb`
+/// 是匿名块形态（几何已烘焙）所以看不出。OCSMDIM2GB 在 `cmd_dim2gb`
 /// （`crates/ocs_ocsm/src/lib.rs:2018` `ensure_layers`/`ensure_text_styles` +
 /// `crates/ocs_ocsm/src/dim2gb.rs:1144` 基线标注样式）已有同款基建补齐，
-/// 这里给 GDIM 补上同一套（缺失才发请求，已初始化图纸零开销）。
+/// 这里给 OCSMDIMGULIDE 补上同一套（缺失才发请求，已初始化图纸零开销）。
 fn ensure_ocsm_base_infra(
     sender: &Arc<dyn PluginRequestSender>,
     doc: &acadrust::CadDocument,
@@ -1669,8 +1697,8 @@ fn ensure_ocsm_base_infra(
     Ok(())
 }
 
-/// frame 比例感知的标注样式（与 PowerDim::resolve_style 同逻辑）：检查
-/// `pt` 是否在 TF 图幅块内，返回对应缩放样式名；样式缺失时经 sender 向宿主
+/// frame 比例感知的标注样式：检查
+/// `pt` 是否在图框块内，返回对应缩放样式名；样式缺失时经 sender 向宿主
 /// 创建 `OCSM_GB_x{scale}`（确保生成标注能应用文字/箭头缩放）。
 pub(crate) fn ensure_style_for_point(
     sender: &Arc<dyn PluginRequestSender>,
@@ -1957,8 +1985,10 @@ fn build_guide_radial_block(
     // ── DIMENSION 实体（引用匿名块；几何字段保持正确语义） ──
     let mut dim = build_guide_radial(p1, p2, params.guide_type, dist, style);
     {
+        // 图片块 = 世界坐标烘焙 ⇒ 放置必须恒等（见 `attach_picture_block`：
+        // 否则宿主会把文字锚点当插入变换，整幅标注平移出去）。
+        crate::attach_picture_block(&mut dim, block_name);
         let base = dim.base_mut();
-        base.block_name = block_name;
         base.text = params.text.clone().unwrap_or_default();
         if let Some(t) = &params.text {
             if !t.is_empty() && t != "%%c<>" {
@@ -2400,7 +2430,7 @@ fn guide_geom_win(
     handle: acadrust::Handle,
 ) -> Result<(crate::detail_clip::Win, GuideShape), String> {
     use acadrust::EntityType as E;
-    let e = doc.get_entity(handle).ok_or("找不到引导实体")?;
+    let e = entity_by_handle(doc, handle).ok_or("找不到引导实体")?;
     match e {
         E::Circle(c) => {
             let center = (c.center.x, c.center.y);
@@ -2481,7 +2511,7 @@ fn next_detail_no(doc: &acadrust::CadDocument) -> Result<String, String> {
 /// 对照 OCSMDIMGULIDE/局部放大/局部放大图.dxf：
 /// - 引导形状保留原位，移入 8符号标注层 色31（表示放大区域）。
 /// - 抽出 5 层（+层 0）中引导窗口内的实体，超界部分**裁剪**，整体
-///   ×(绝对比例 × TF 图幅倍率) 后以匿名块粘贴在图纸其它位置（自动偏移可拖）。
+///   ×(绝对比例 × 图框倍率) 后以匿名块粘贴在图纸其它位置（自动偏移可拖）。
 /// - 放大块 = 框线（色31，= 引导形状×系数）+ 内容（保留原图层）+ 顶部序号/比例。
 /// - 引导旁：引出折线（色31）+ 序号 MTEXT（色3）。
 /// - INSERT 挂 PE_URL（s/frame）供标注换算系数检测。
@@ -2518,7 +2548,7 @@ fn apply_detail(
         Some(n) if !n.is_empty() => n.clone(),
         _ => next_detail_no(doc)?,
     };
-    let h = 5.0 * frame; // 文字高跟随 TF 图幅。
+    let h = 5.0 * frame; // 文字高跟随图框比例。
 
     // 3) 放大块：内容 + 框线（色31）+ 顶部序号/比例（色3）。
     let member_count = members.len();
@@ -2760,7 +2790,7 @@ pub(crate) fn apply_arclen(
     use acadrust::types::{Color, Vector3};
     use acadrust::EntityType as E;
 
-    let e = doc.get_entity(handle).ok_or("找不到引导弧实体")?;
+    let e = entity_by_handle(doc, handle).ok_or("找不到引导弧实体")?;
     let acadrust::EntityType::Arc(a) = e else {
         return Err("弧长标注需要 ARC 引导（10引导线层 的圆弧）".into());
     };
@@ -3681,7 +3711,7 @@ fn do_apply(
         // 优先复用原引导（若还在且类型兼容），否则造临时引导。
         let doc = snapshot(sender)?;
         let reuse = guide.filter(|h| {
-            doc.get_entity(*h)
+            entity_by_handle(&doc, *h)
                 .is_some_and(|e| guide_kind_of(e) == kind)
         });
         // 同一引导重做同一类标注 = 替换：旧标注（+ 它的视图名等伴生实体）随后一并删。
@@ -3767,7 +3797,7 @@ fn do_apply(
     // 生成后再扫会把刚建的新标注也当成旧的删掉。
     let pre_doc = snapshot(sender).ok();
     let pre = pre_doc.as_ref().and_then(|doc| {
-        doc.get_entity(posted).map(|e| {
+        entity_by_handle(doc, posted).map(|e| {
             (
                 guide_kind_of(e),
                 guide_geom_points(doc, posted).unwrap_or_default(),
@@ -4287,7 +4317,7 @@ fn api_mcp(body: &[u8], sender: &Arc<dyn PluginRequestSender>) -> (u16, &'static
     }
 }
 
-/// `POST /api/rough_apply`：表面粗糙度符号生成（命令 OCSMRGH / CC，无引导线）。
+/// `POST /api/rough_apply`：表面粗糙度符号生成（命令 OCSMRGH，无引导线）。
 fn api_rough_apply(body: &[u8], sender: &Arc<dyn PluginRequestSender>) -> (u16, &'static str, String) {
     let json = "application/json; charset=utf-8";
     match apply_roughness(sender, body) {
@@ -4320,7 +4350,7 @@ fn api_rough_apply(body: &[u8], sender: &Arc<dyn PluginRequestSender>) -> (u16, 
 /// 块名规则 `OCSM_<族>_<规格>`，重复插入同一规格复用块定义。
 
 /// `POST /api/part_export`：**零件出库** —— 生成零件、建好块（幂等）、登记为"待放置"，
-/// 之后图纸里的 `XL` 放置态即可用鼠标跟随预览并连续点放（不需要任何剪切板/宿主改动）。
+/// 之后图纸里的 `OCSMPART` 放置态即可用鼠标跟随预览并连续点放（不需要任何剪切板/宿主改动）。
 /// 零件块名：`OCSM_<族>_<规格>`（只留 ASCII 字母数字/下划线，利于复用、BOM 与排查；
 /// “M8×35”→`M8_35`、“Ø8”→`8`）。
 fn part_block_name(family: &str, spec: &str) -> String {
@@ -4457,35 +4487,34 @@ pub(crate) fn apply_joint(
     .to_string())
 }
 
-/// 人类侧的**命令目录**（窗口左侧那个总表）：一句话 + 别名。
+/// 人类侧的**命令目录**（窗口左侧那个总表）：一句话 + 正式命令名。
 /// 第三字段是 catalog key（`cmd.catalog.*`）——`/api/manual` 按当前语言渲染；
 /// 这是"插件自带"的部分——手册 md 没装也能看命令清单。
 pub const COMMAND_CATALOG: &[(&str, &str, &str)] = &[
     ("OCSM", "", "cmd.catalog.ocsm"),
     ("1 … 10", "数字键", "cmd.catalog.digits"),
-    ("OCSMFRAMEINIT", "TF", "cmd.catalog.frameinit"),
+    ("OCSMFRAMEINIT", "", "cmd.catalog.frameinit"),
     ("OCSMFRAMEINSERT", "", "cmd.catalog.frameinsert"),
-    ("OCSMPART", "XL", "cmd.catalog.part"),
+    ("OCSMPART", "", "cmd.catalog.part"),
     ("OCSMCARD", "", "cmd.catalog.card"),
     ("OCSMJOINT", "", "cmd.catalog.joint"),
-    ("OCSMPOWERDIM", "D", "cmd.catalog.powerdim"),
-    ("OCSMDIMGULIDE", "GDIM", "cmd.catalog.dimgulide"),
-    ("OCSMCENTERLINE", "ZX", "cmd.catalog.centerline"),
+    ("OCSMDIMGULIDE", "", "cmd.catalog.dimgulide"),
+    ("OCSMCENTERLINE", "", "cmd.catalog.centerline"),
     ("OCSMGEAR", "", "cmd.catalog.gear"),
     ("OCSMSHAFT", "", "cmd.catalog.shaft"),
-    ("OCSMHOLE", "DK", "cmd.catalog.hole"),
-    ("OCSMEDIT", "ME", "cmd.catalog.edit"),
-    ("OCSMRGH", "CC", "cmd.catalog.rgh"),
-    ("OCSMDIM2GB", "D2G", "cmd.catalog.dim2gb"),
-    ("OCSMBOM", "BOM", "cmd.catalog.bom"),
-    ("OCSMBOMSYNC", "BOMSYNC", "cmd.catalog.bomsync"),
-    ("OCSMBOMEDIT", "BOMEDIT", "cmd.catalog.bomedit"),
-    ("OCSMBOMLOCK", "BOMLOCK", "cmd.catalog.bomlock"),
-    ("OCSMBOMXLSX", "BOMXLSX", "cmd.catalog.bomxlsx"),
-    ("OCSMBOMXLSXI", "BOMXLSXI", "cmd.catalog.bomxlsxi"),
-    ("OCSMBOMCFG", "BOMCFG", "cmd.catalog.bomcfg"),
+    ("OCSMHOLE", "", "cmd.catalog.hole"),
+    ("OCSMEDIT", "", "cmd.catalog.edit"),
+    ("OCSMRGH", "", "cmd.catalog.rgh"),
+    ("OCSMDIM2GB", "", "cmd.catalog.dim2gb"),
+    ("OCSMBOM", "", "cmd.catalog.bom"),
+    ("OCSMBOMSYNC", "", "cmd.catalog.bomsync"),
+    ("OCSMBOMEDIT", "", "cmd.catalog.bomedit"),
+    ("OCSMBOMLOCK", "", "cmd.catalog.bomlock"),
+    ("OCSMBOMXLSX", "", "cmd.catalog.bomxlsx"),
+    ("OCSMBOMXLSXI", "", "cmd.catalog.bomxlsxi"),
+    ("OCSMBOMCFG", "", "cmd.catalog.bomcfg"),
     ("OCSMMCP", "", "cmd.catalog.mcp"),
-    ("OCSMHELP", "OH", "cmd.catalog.help"),
+    ("OCSMHELP", "", "cmd.catalog.help"),
 ];
 
 /// 手册 md 的搜索目录（按优先级）：
@@ -5749,7 +5778,9 @@ pub(crate) fn apply_spline_export(
         )?;
     }
     if let Some(at) = model.at {
-        let ins = model.build_insert()?;
+        // 卡片随图框比例缩放：与 CLI/GUI 导出同口径（落点处的图框比例，无图框 = 1.0）。
+        let frame_scale = card_frame_factor_via_sender(sender, at)?;
+        let ins = model.build_insert(frame_scale)?;
         req_timed(
             sender,
             PluginRequest::AddEntities(vec![acadrust::EntityType::Insert(ins)]),
@@ -5784,6 +5815,7 @@ pub(crate) fn apply_spline_export(
         .to_string());
     }
     // 无落点 → 登记待放置件（带 21 个 ATTRIB；`place_one` 落件时一起插入）。
+    // `with_frame_scaled()`：这是**参数表卡片**（不是零件几何）——落件时还要按落点图框比例缩放。
     crate::set_pending_part(crate::PendingPart::with_attrs(
         block.to_string(),
         model.part_meta_json()?,
@@ -5802,7 +5834,8 @@ pub(crate) fn apply_spline_export(
             ],
         ),
         model.pending_attrs()?,
-    ));
+    )
+    .with_frame_scaled());
     commit_undo(sender);
     Ok(serde_json::json!({
         "ok": true,
@@ -5947,6 +5980,16 @@ pub(crate) fn apply_card_export(
 ) -> Result<String, String> {
     use crate::card::CardRenderer;
     let (v, card) = card_model_value(body)?;
+    // 卡片随图框比例缩放：给了落点（`at`）就按**落点处**的图框比例直接落地；
+    // 没给落点（登记待放置件）时这里保持 1.0 —— 真正落件时由 `place_one` 按落点算。
+    // ★ 不能先乘进去：`.with_scale()` 是从 `ins.x_scale()` 读的（NF/DIN 的 0.17），
+    //   把落点未知时的比例烘进去会被带进 pending，落件时再乘一次就翻倍。
+    let frame_scale_for = |at: Option<[f64; 2]>| -> Result<f64, String> {
+        match at {
+            Some(p) => card_frame_factor_via_sender(sender, p),
+            None => Ok(1.0),
+        }
+    };
     // 先在内存里算一遍：参数/表外/非法值全在这拦下（不写半个块）。
     #[allow(clippy::type_complexity)]
     let (kind_label, block, members, at, rot, ins, attrs, meta, echo): (
@@ -5974,11 +6017,14 @@ pub(crate) fn apply_card_export(
             let block = crate::spline_table::block_name(side).to_string();
             let at = m.at;
             let rot = m.rot;
+            // 卡片随图框比例缩放：落点处的图框比例（无图框 = 1.0）。
+            let frame_scale = frame_scale_for(at)?;
             let ins = acadrust::EntityType::Insert(crate::spline_table::build_insert(
                 side,
                 &table,
                 at.unwrap_or([0.0, 0.0]),
                 rot,
+                frame_scale,
             )?);
             let attrs = m.pending_attrs()?;
             let meta = m.part_meta_json()?;
@@ -6007,11 +6053,14 @@ pub(crate) fn apply_card_export(
             let block = crate::spline_lite::block_name(side).to_string();
             let at = m.at;
             let rot = m.rot;
+            // 卡片随图框比例缩放：落点处的图框比例（无图框 = 1.0）。
+            let frame_scale = frame_scale_for(at)?;
             let ins = acadrust::EntityType::Insert(crate::spline_lite::build_insert(
                 side,
                 &table,
                 at.unwrap_or([0.0, 0.0]),
                 rot,
+                frame_scale,
             )?);
             let attrs = crate::spline_lite::pending_attrs(side, &table)?;
             let meta = crate::spline_lite::part_meta_json(side, &input, m.dp);
@@ -6034,10 +6083,13 @@ pub(crate) fn apply_card_export(
             let echo = m.echo_note()?;
             let at = m.at;
             let rot = m.rot;
+            // 卡片随图框比例缩放：落点处的图框比例（无图框 = 1.0）。
+            let frame_scale = frame_scale_for(at)?;
             let ins = acadrust::EntityType::Insert(crate::gear_table::build_insert(
                 &spec,
                 at.unwrap_or([0.0, 0.0]),
                 rot,
+                frame_scale,
             )?);
             let attrs = m.pending_attrs()?;
             let meta = m.part_meta_json()?;
@@ -6069,10 +6121,13 @@ pub(crate) fn apply_card_export(
             let echo = m.echo_note()?;
             let at = m.at;
             let rot = m.rot;
+            // 卡片随图框比例缩放：落点处的图框比例（无图框 = 1.0）。
+            let frame_scale = frame_scale_for(at)?;
             let ins = acadrust::EntityType::Insert(crate::ansi_table::build_insert(
                 &spec,
                 at.unwrap_or([0.0, 0.0]),
                 rot,
+                frame_scale,
             )?);
             let attrs = m.pending_attrs()?;
             let meta = m.part_meta_json()?;
@@ -6099,10 +6154,13 @@ pub(crate) fn apply_card_export(
             let echo = m.echo_note()?;
             let at = m.at;
             let rot = m.rot;
+            // 卡片随图框比例缩放：落点处的图框比例（无图框 = 1.0）。
+            let frame_scale = frame_scale_for(at)?;
             let ins = acadrust::EntityType::Insert(crate::nf_table::build_insert(
                 &spec,
                 at.unwrap_or([0.0, 0.0]),
                 rot,
+                frame_scale,
             )?);
             let attrs = m.pending_attrs()?;
             let meta = m.part_meta_json()?;
@@ -6125,10 +6183,13 @@ pub(crate) fn apply_card_export(
             let echo = m.echo_note()?;
             let at = m.at;
             let rot = m.rot;
+            // 卡片随图框比例缩放：落点处的图框比例（无图框 = 1.0）。
+            let frame_scale = frame_scale_for(at)?;
             let ins = acadrust::EntityType::Insert(crate::nf_ext_table::build_insert(
                 &spec,
                 at.unwrap_or([0.0, 0.0]),
                 rot,
+                frame_scale,
             )?);
             let attrs = m.pending_attrs()?;
             let meta = m.part_meta_json()?;
@@ -6155,11 +6216,14 @@ pub(crate) fn apply_card_export(
             let echo = m.echo_note()?;
             let at = m.at;
             let rot = m.rot;
+            // 卡片随图框比例缩放：落点处的图框比例（无图框 = 1.0）。
+            let frame_scale = frame_scale_for(at)?;
             let ins = acadrust::EntityType::Insert(crate::din_table::build_insert(
                 &spec,
                 hub,
                 at.unwrap_or([0.0, 0.0]),
                 rot,
+                frame_scale,
             )?);
             let attrs = m.pending_attrs()?;
             let meta = m.part_meta_json()?;
@@ -6186,11 +6250,14 @@ pub(crate) fn apply_card_export(
                 .get("at")
                 .and_then(|a| serde_json::from_value::<[f64; 2]>(a.clone()).ok());
             let rot = v.get("rot").and_then(|r| r.as_f64()).unwrap_or(0.0);
+            // 卡片随图框比例缩放：落点处的图框比例（无图框 = 1.0）。
+            let frame_scale = frame_scale_for(at)?;
             let ins = acadrust::EntityType::Insert(crate::card_lite::build_insert(
                 c,
                 &values,
                 at.unwrap_or([0.0, 0.0]),
                 rot,
+                frame_scale,
             )?);
             let attrs = crate::card_lite::pending_attrs(c, &values);
             let meta = crate::card_lite::part_meta_json(c);
@@ -6271,7 +6338,8 @@ pub(crate) fn apply_card_export(
         ),
             attrs,
         )
-        .with_scale(scale),
+        .with_scale(scale)
+        .with_frame_scaled(),
     );
     commit_undo(sender);
     Ok(serde_json::json!({
@@ -6350,7 +6418,7 @@ fn apply_part_export(
         )?;
     }
 
-    // 登记为待放置件（`XL` 放置态的光标预览 + 点击落件都读它）
+    // 登记为待放置件（`OCSMPART` 放置态的光标预览 + 点击落件都读它）
     let meta_json = serde_json::json!({
         "family": req.family,
         "view": req.view,
@@ -6633,7 +6701,7 @@ fn apply_roughness(
     let doc = snapshot(sender)?;
     // 符号会新建块 + 实体、并可能补齐样式/图层 → 开事务，结束时 commit。
     begin_undo(sender, &crate::i18n::t("cmd.rough.undo_insert"))?;
-    // 幂等 ensure：文档缺 OCSM_GB 样式 / 8符号标注层时补齐（新图纸直接 CC
+    // 幂等 ensure：文档缺 OCSM_GB 样式 / 8符号标注层时补齐（新图纸直接 OCSMRGH
     // 时宿主渲染 ATTDEF 会 fallback 未知字体、图层色错乱——用户实测）。
     if !doc
         .text_styles
@@ -7827,7 +7895,7 @@ fn apply_weld(
 // 无虚线、无全周边圆、无现场旗、无尾叉、无 C、无上下符号槽。
 // 引导几何与焊接同构：顶点0 = 箭头点、顶点1 = 拐点 P0、顶点2 = 肩线末端。
 
-/// 引线标注构件（块局部坐标已算好；ATTDEF 模板与取值分列，便于 D2G 复用）。
+/// 引线标注构件（块局部坐标已算好；ATTDEF 模板与取值分列，便于 OCSMDIM2GB 复用）。
 pub(crate) struct LeaderParts {
     /// 块内实体（含上/下侧 MTEXT；层与颜色已设）。
     pub members: Vec<acadrust::EntityType>,
@@ -7938,7 +8006,7 @@ impl LeaderGeom {
     }
 }
 
-/// 引线标注几何：**纯函数**（不读文档、不建块），交互路径与 D2G 转化共用。
+/// 引线标注几何：**纯函数**（不读文档、不建块），交互路径与 OCSMDIM2GB 转化共用。
 /// `s` = `frame_scale_at(doc, p0)`。
 pub(crate) fn build_leader_parts(
     p_tip: [f64; 3],
@@ -9027,7 +9095,7 @@ fn balloon_sync_after(
     match crate::bom::fill_bom(&mut SenderSink(sender), &doc2, &rows, per_col) {
         Ok(rep) => {
             // 表块挂编辑页链接（同一撤销事务；2026-09-16 补：此前球标自动联动建表
-            // 漏了挂链 → Ctrl+点击打不开编辑页，只有 BOM/BOMSYNC 命令路径有链接）。
+            // 漏了挂链 → Ctrl+点击打不开编辑页，只有 OCSMBOM/OCSMBOMSYNC 命令路径有链接）。
             stamp_bom_links_http(sender);
             (
                 Some(serde_json::json!({
@@ -9398,7 +9466,7 @@ fn api_bom_apply(body: &[u8], sender: &Arc<dyn PluginRequestSender>) -> (u16, &'
 }
 
 /// POST /api/bom_import?name=xxx.xlsx｜xxx.csv —— 浏览器读文件字节上传，
-/// 复用 `BOMXLSXI` 的解析与合并规则（非空覆盖/空白保留/缺序号保留/手改即锁）。
+/// 复用 `OCSMBOMXLSXI` 的解析与合并规则（非空覆盖/空白保留/缺序号保留/手改即锁）。
 fn api_bom_import(
     target: &str,
     body: &[u8],
@@ -9664,7 +9732,7 @@ fn apply_balloon(
         return Err("序号标注：至少要有一个序号（在窗口里加条目）".into());
     }
     // ── "这图还没存过盘"的提示（每个标签页只提一次）──
-    // 为什么要提：`BOMXLSX` 导出的 xlsx 默认落在**图纸同目录**；新图没存盘时只能落到
+    // 为什么要提：`OCSMBOMXLSX` 导出的 xlsx 默认落在**图纸同目录**；新图没存盘时只能落到
     // 会落到**临时目录**（`std::env::temp_dir()/OCSM`，Linux = /tmp、Windows = %TEMP%），
     // 容易被系统清理/找不到。球标与明细表本身不受影响，所以只提示、不拦。
     if let Some(tab) = crate::current_doc_unsaved() {
@@ -9676,7 +9744,7 @@ fn apply_balloon(
             let _ = req_timed(
                 sender,
                 PluginRequest::PushInfo(format!(
-                    "OCSM: 本图还没存过盘 —— 序号球标与明细表照常生成，但 `BOMXLSX` 导出的 xlsx 会落到**临时目录**（{}，会被系统清理）。建议先 Ctrl+S 存盘：xlsx 就会生成在图纸同目录、名为「图纸同名-明细表.xlsx」。",
+                    "OCSM: 本图还没存过盘 —— 序号球标与明细表照常生成，但 `OCSMBOMXLSX` 导出的 xlsx 会落到**临时目录**（{}，会被系统清理）。建议先 Ctrl+S 存盘：xlsx 就会生成在图纸同目录、名为「图纸同名-明细表.xlsx」。",
                     crate::bom::default_xlsx_dir().display()
                 )),
                 "PushInfo",
@@ -10044,7 +10112,7 @@ fn temp_guide_entity(kind: &str, pts: &[[f64; 3]]) -> Result<acadrust::EntityTyp
 
 /// 把 `OCSM_EDIT`（参数 URL + 引导几何 + 种类）**直接挂到实体对象**上。
 /// 与 `stamp_editable` 的区别：不需要 sender、不需要 handle —— 所以实体无论是
-/// 直接返回、还是经收集器/宿主加进文档，记录都跟着走（D2G 场景必需）。
+/// 直接返回、还是经收集器/宿主加进文档，记录都跟着走（OCSMDIM2GB 场景必需）。
 pub(crate) fn stamp_edit_entity(
     entity: &mut acadrust::EntityType,
     params_url: &str,
@@ -10155,7 +10223,7 @@ const PARTS_HTML: &str = include_str!("parts_gui.html");
 const GEAR_HTML: &str = include_str!("gear_gui.html");
 /// 轴生成器页（段表 ↔ 行文本双向同步 + 实时预览；`OCSMSHAFT` 不带参数时打开）。
 const SHAFT_HTML: &str = include_str!("shaft_gui.html");
-/// 孔生成器页（简单/螺纹/沉头/埋头 + 盲孔/贯通 + 实时预览；`OCSMHOLE`/`DK` 不带参数时打开）。
+/// 孔生成器页（简单/螺纹/沉头/埋头 + 盲孔/贯通 + 实时预览；`OCSMHOLE` 不带参数时打开）。
 const HOLE_HTML: &str = include_str!("hole_gui.html");
 /// 智能卡片页（11 张卡、一卡一方向；字段/结果/出表由卡类型表统一下发；
 /// 齿形表达式反解；`OCSMCARD` 不带参数时打开）。
@@ -10899,6 +10967,101 @@ mod tests {
         assert_eq!(movement, Some(2), "无引线选项必须写 DIMTMOVE=2");
     }
 
+    /// 回归（“半径标注飞位”，2026-10-17）：图片块形态的标注**不携带图片放置**。
+    ///
+    /// 症状：`/DIM/RADIUS/-8` 生成后整幅标注平移到“文字锚点”处（宿主把非零
+    /// `insertion_point` 当匿名块插入变换，叠加在世界坐标块成员之上），
+    /// 存盘重开后又正常 —— 宿主 DXF 写出器不落 group 12（只有 DWG 落），
+    /// 所以“重启就好”只是假象。不变量：图片块成员已按世界坐标烘焙
+    /// （对照 AutoCAD 示例 `OCSMDIMGULIDE2/3-*.dxf`：DIMENSION 一律不写 group 12）
+    /// ⇒ 放置必须恒等，内存渲染位置才会与存盘重开后一致。
+    #[test]
+    fn picture_form_dimensions_carry_no_placement() {
+        fn assert_identity_placement(dim: &Dimension, what: &str) {
+            let base = dim.base();
+            assert!(
+                base.block_name.starts_with('*'),
+                "{what}: 应引用匿名图片块，实际 {:?}",
+                base.block_name
+            );
+            let p = base.insertion_point;
+            assert!(
+                p.x.abs() < 1e-12 && p.y.abs() < 1e-12 && p.z.abs() < 1e-12,
+                "{what}: 宿主会把 insertion_point 当匿名块插入变换叠加在块成员上 ⇒ 飞位；实际 {p:?}"
+            );
+            assert!(
+                base.insertion_rotation.abs() < 1e-12,
+                "{what}: 放置旋转应为恒等，实际 {}",
+                base.insertion_rotation
+            );
+            let s = base.insertion_scale;
+            assert!(
+                (s.x - 1.0).abs() < 1e-12 && (s.y - 1.0).abs() < 1e-12 && (s.z - 1.0).abs() < 1e-12,
+                "{what}: 放置缩放应为恒等，实际 {s:?}"
+            );
+        }
+
+        use acadrust::EntityType as E;
+        let inner = std::sync::Arc::new(MockSender::new(acadrust::CadDocument::new()));
+        let sender: std::sync::Arc<dyn PluginRequestSender> = inner.clone();
+        let doc = inner.doc.lock().unwrap().clone();
+        let center = [75.0, 175.0, 0.0];
+        let rim = [72.171572875, 172.171572875, 0.0];
+
+        // ① 半径、内侧、引导线圆心→圆弧（本 BUG 的现场参数）。
+        let mut pr = GuideParams::linear(LinearSub::Aligned, 0.0);
+        pr.guide_type = GuideType::Radius;
+        pr.dist = -8.0;
+        let radial = build_dimension(&sender, &doc, center, rim, &pr, "OCSM_GB").unwrap();
+        assert_identity_placement(&radial, "半径图片块");
+        // 此刻只建了这一个块（mock 文档里没有块记录，名字都是 *D1）—— 就地取成员。
+        let radial_members = inner.blocks().last().map(|(_, v)| v.clone()).unwrap_or_default();
+
+        // ② 直径、外侧：同一条生成路径的另一分支。
+        let mut pd = GuideParams::linear(LinearSub::Aligned, 0.0);
+        pd.guide_type = GuideType::Diameter;
+        pd.dist = 11.0;
+        let diameter = build_dimension(&sender, &doc, center, rim, &pd, "OCSM_GB").unwrap();
+        assert_identity_placement(&diameter, "直径图片块");
+
+        // ③ 角度：另一个匿名块形态的标注生成器。
+        let mut pa = GuideParams::linear(LinearSub::Aligned, 0.0);
+        pa.guide_type = GuideType::Angle;
+        pa.dist = 20.0;
+        let angular = build_guide_angular_block(
+            &sender,
+            &doc,
+            [50.0, 0.0, 0.0],
+            [0.0, 0.0, 0.0],
+            [0.0, 50.0, 0.0],
+            &pa,
+            "OCSM_GB",
+        )
+        .unwrap();
+        assert_identity_placement(&angular, "角度图片块");
+
+        // 块成员本身就是**世界坐标**（这正是放置必须是恒等的原因）：半径内侧块的
+        // 首条线从圆周点起画 —— 若再叠加一次放置变换，圆弧点就会移位。
+        let shapes: Vec<&str> = radial_members
+            .iter()
+            .map(|e| match e {
+                E::Line(_) => "line",
+                E::Solid(_) => "solid",
+                E::MText(_) => "mtext",
+                _ => "other",
+            })
+            .collect();
+        let line = radial_members.iter().find_map(|e| match e {
+            E::Line(l) => Some((l.start, l.end)),
+            _ => None,
+        });
+        let (start, _) = line.unwrap_or_else(|| panic!("半径图片块应有直线成员：{shapes:?}"));
+        assert!(
+            (start.x - rim[0]).abs() < 1e-9 && (start.y - rim[1]).abs() < 1e-9,
+            "块成员按世界坐标烘焙（线首点应落在圆周点），实际 {start:?}"
+        );
+    }
+
     #[test]
     fn build_dimension_supports_radial_types() {
         let inner = std::sync::Arc::new(MockSender::new(acadrust::CadDocument::new()));
@@ -11278,7 +11441,7 @@ mod tests {
         // 提示页：标题随页面变，并且会尝试自关
         let bom_notice = opened_elsewhere_html(&page_label("/bom.html"));
         assert!(bom_notice.contains("明细表编辑"));
-        assert!(bom_notice.contains("BOMEDIT"));
+        assert!(bom_notice.contains("OCSMBOMEDIT"));
         assert!(bom_notice.contains("window.close()"));
         assert!(opened_elsewhere_html(&page_label("/guide.html")).contains("标注配置"));
         // 英文时提示页同步切换（页头/按钮均为 catalog 渲染）
@@ -12803,7 +12966,7 @@ mod integration {
                 && !dim.base().style_name.eq_ignore_ascii_case("Standard"),
             "负断言：不得退化成 OCS 默认样式"
         );
-        // 旧图没基建 → GDIM 必须先补 OCSM_GB 文字/标注样式 + 图层（否则原生
+        // 旧图没基建 → OCSMDIMGULIDE 必须先补 OCSM_GB 文字/标注样式 + 图层（否则原生
         // DIMENSION 解析不到样式，渲染退回宿主默认）。
         let ensures = mock.ensures.lock().unwrap().clone();
         assert!(ensures.iter().any(|e| e == "text:OCSM_GB"), "{ensures:?}");
@@ -12815,8 +12978,8 @@ mod integration {
         );
     }
 
-    /// 三种线性子类型（对齐/水平/竖直）经完整 GDIM 生成路径 → OCSM_GB + 7标注层。
-    /// 裸文档（无 OCSM 基建）是重点：旧图直接跑 GDIM 的情形。
+    /// 三种线性子类型（对齐/水平/竖直）经完整 OCSMDIMGULIDE 生成路径 → OCSM_GB + 7标注层。
+    /// 裸文档（无 OCSM 基建）是重点：旧图直接跑 OCSMDIMGULIDE 的情形。
     #[test]
     fn gdim_linear_subtypes_land_on_ocsm_gb_layer() {
         for sub in ["A", "H", "V"] {
@@ -12868,8 +13031,8 @@ mod integration {
         }
     }
 
-    /// 落盘 DXF 校验（对应任务：GDIM 画一遍 → 导出 DXF → 与参考逐字段比对）：
-    /// 完整 GDIM（HTTP）→ DxfWriter → DxfReader 回读。
+    /// 落盘 DXF 校验（对应任务：OCSMDIMGULIDE 画一遍 → 导出 DXF → 与参考逐字段比对）：
+    /// 完整 OCSMDIMGULIDE（HTTP）→ DxfWriter → DxfReader 回读。
     /// DIMENSION 的 group 11（text_middle_point）相对尺寸线法向应 = 2.25
     ///（中心；底边离线 1.0 = DIMGAP，对照 general.dxf 块 MTEXT），
     /// 且类型专属 DSTYLE 覆盖仍在（147=1.0 / 77=1 / 140=2.5）。
@@ -13293,6 +13456,29 @@ mod integration {
         let h2 = doc.add_entity(acadrust::EntityType::Line(line)).unwrap();
         let pts2 = guide_geom_points(&doc, h2).unwrap();
         assert_eq!(pts2.len(), 2);
+    }
+
+    #[test]
+    fn guide_lookup_falls_back_when_snapshot_handle_index_is_missing() {
+        use acadrust::entities::Line;
+        let mut doc = acadrust::CadDocument::new();
+        let mut line = Line::new();
+        line.start = v3([13.0, 195.0, 0.0]);
+        line.end = v3([13.0, 225.0, 0.0]);
+        let handle = doc.add_entity(acadrust::EntityType::Line(line)).unwrap();
+
+        // DocumentSnapshot crosses the plugin boundary. Simulate the reported
+        // condition: the flat entity list survived but its derived lookup index
+        // did not. This must still be queryable through guide operations.
+        let mut value = serde_json::to_value(&doc).unwrap();
+        value["entity_index"] = serde_json::json!({});
+        let snapshot: acadrust::CadDocument = serde_json::from_value(value).unwrap();
+        assert!(snapshot.get_entity(handle).is_none(), "fixture must lack the index entry");
+        assert_eq!(guide_geom_points(&snapshot, handle).unwrap(), vec![
+            [13.0, 195.0, 0.0],
+            [13.0, 225.0, 0.0],
+        ]);
+        assert_eq!(guide_geom_kind(&snapshot, handle).unwrap(), "line");
     }
 
     // ── 弧长标注 ARCLEN ─────────────────────────────────────────
@@ -13867,7 +14053,7 @@ mod rough_tests {
     use ocs_plugin_api::host::acadrust::types::{Color, Vector3};
     use ocs_plugin_api::host::acadrust::EntityType as E;
 
-    // ── 表面粗糙度 OCSMRGH / CC（apply_roughness）───────────────────────
+    // ── 表面粗糙度 OCSMRGH（apply_roughness）───────────────────────
 
     fn rough_body(
         x: f64,
@@ -14134,7 +14320,7 @@ mod rough_tests {
         let en = manual_topics_in(&repo);
         let by_slug: std::collections::HashMap<&str, &ManualTopic> =
             en.iter().map(|t| (t.slug.as_str(), t)).collect();
-        for slug in ["00-overview", "05-smart-dimension-d", "12-troubleshooting"] {
+        for slug in ["00-overview", "06-leader-annotation", "12-troubleshooting"] {
             let t = by_slug.get(slug).unwrap_or_else(|| panic!("en 环境应列 {slug}：{:?}", by_slug.keys()));
             assert_eq!(t.lang, "en", "{slug} 应是英译篇");
             assert!(!t.fallback, "{slug} 不该标回退");
@@ -14557,7 +14743,7 @@ mod rough_tests {
 
     #[test]
     fn apply_roughness_ensures_ocsm_style_and_layers() {
-        // 空文档（未初始化）直接 CC：必须补 OCSM_GB 样式与 8符号标注层，
+        // 空文档（未初始化）直接 OCSMRGH：必须补 OCSM_GB 样式与 8符号标注层，
         // 否则宿主渲染 ATTDEF 时 fallback 未知字体、文字堆叠（用户实测）。
         let mock = std::sync::Arc::new(MockSender::new(acadrust::CadDocument::new()));
         let body = rough_body(0.0, 0.0, "C1", "R1", "", 0.0, &[]);
@@ -14809,7 +14995,7 @@ mod rough_tests {
         );
     }
 
-    /// TF 图框（比例 ATTDEF，uniform 2.0）文档：缩放/基点类断言共用。
+    /// 图框（比例 ATTDEF，uniform 2.0）文档：缩放/基点类断言共用。
     fn frame2x_doc() -> acadrust::CadDocument {
         let mut doc = acadrust::CadDocument::new();
         let mut att = acadrust::entities::AttributeDefinition::new(
@@ -14848,7 +15034,7 @@ mod rough_tests {
 
     #[test]
     fn apply_roughness_frame_scale_doubles_geometry() {
-        // TF 图框（比例 ATTDEF，uniform 2.0）→ 位置（尖端+偏移）与长度量都 ×2。
+        // 图框（比例 ATTDEF，uniform 2.0）→ 位置（尖端+偏移）与长度量都 ×2。
         let mock = std::sync::Arc::new(MockSender::new(frame2x_doc()));
         let body = rough_body(50.0, 30.0, "C1", "R1", "", 0.0, &[]);
         let (j, members) = rough_apply(&mock, &body).unwrap();
@@ -18169,11 +18355,11 @@ mod weld_tests {
             "",
         );
         assert!(bad.contains("error") && bad.contains("de"), "表外规格缺 de 报错：{bad}");
-        // 渐开线花键的 XL 入口已移除：目录树/族里都没有它，引擎数据走顶层 `spline_engine`
-        // （齿轮生成器与轴生成器 GUI 共用）；`detail_invol_spline` 不再可预览/插入。
+        // 渐开线花键的结构要素入口已移除：目录树/族里都没有它，引擎数据走顶层
+        // `spline_engine`（齿轮生成器与轴生成器 GUI 共用）；`detail_invol_spline` 不再可预览/插入。
         assert!(
             !cat.contains("detail_invol_spline") && !cat.contains("渐开线花键 GB/T 3478.1-2008"),
-            "XL 渐开线花键入口应已从目录中撤掉"
+            "渐开线花键结构要素入口应已从目录中撤掉"
         );
         assert!(
             cat.contains("\"spline_engine\"") && cat.contains("\"invol_presets\"")
@@ -18497,7 +18683,7 @@ mod weld_tests {
 
     /// **回归：换图之后引导服务器必须跟着换图**（2026-09-16 用户报的 bug）。
     ///
-    /// 症状：关掉当前图纸、新建一张、画引导线跑 GDIM —— GUI 读不到引导线。根因是
+    /// 症状：关掉当前图纸、新建一张、画引导线跑 OCSMDIMGULIDE —— GUI 读不到引导线。根因是
     /// 端口进程级复用、而 sender 绑定的标签页固定在了首次 spawn 那张图上（旧图被关掉
     /// 后宿主根本不回答那个 tab 的请求 → HTTP 5 s 超时）。这里用两张图（句柄按图纸重置、
     /// 两张图里撞成同一个，模拟真实现场）验证每种请求各自打到哪张图。
@@ -18594,14 +18780,14 @@ mod weld_tests {
         assert!(resp.contains("\"ok\":true"), "{resp}");
         assert!(resp.contains("零件出库") || resp.contains("已出库"), "回执提示：{resp}");
         assert_eq!(mock.block_entities("OCSM_HEX_BOLT_C_M5_25_MAIN").len() > 12, true, "块已建好");
-        // 待放置件登记（供 XL 放置态预览/落件）
+        // 待放置件登记（供 OCSMPART 放置态预览/落件）
         let label = crate::pending_part_label().expect("已登记待放置件");
         assert!(label.contains("M5x25") && label.contains("GB/T 5780-2016"), "{label}");
         assert_eq!(crate::pending_block().as_deref(), Some("OCSM_HEX_BOLT_C_M5_25_MAIN"));
         // 越界/未知族报错
         assert!(apply_part_export(&sender, br#"{"family":"hex_bolt_c","d":5,"l":9999}"#).is_err());
         assert!(apply_part_export(&sender, br#"{"family":"nope","d":5,"l":25}"#).is_err());
-        // 矩形花键（spec 规格代号 + len/de）：出库建块 + 待放置件（XL 入口）
+        // 矩形花键（spec 规格代号 + len/de）：出库建块 + 待放置件（OCSMPART 入口）
         let resp = apply_part_export(
             &sender,
             br#"{"family":"detail_spline_rect","d":23,"spec":"6x23x26x6","params":{"len":30,"de":63},"view":"side"}"#,

@@ -1,4 +1,4 @@
-//! **孔生成器**（`OCSMHOLE` / 短命令 `DK`）——简单孔 / 螺纹孔 / 沉头孔 / 埋头孔
+//! **孔生成器**（`OCSMHOLE`）——简单孔 / 螺纹孔 / 沉头孔 / 埋头孔
 //! （盲孔 / 贯通；沉头/埋头可选带螺纹或不带螺纹）。
 //!
 //! GUI 参考：`~/桌面/GB/螺纹生成器GUI.png`。数据来源（逐表落在 `tables/hole*.json` 的
@@ -1379,7 +1379,7 @@ fn spec_name_lookup(
 /// 解析命令行（英文/中文关键字都收）。
 pub fn parse_program(text: &str) -> Result<HoleModel, String> {
     let mut s = text.trim();
-    for cmd in ["OCSMHOLE", "DK"] {
+    for cmd in ["OCSMHOLE"] {
         if s.get(..cmd.len())
             .is_some_and(|p| p.eq_ignore_ascii_case(cmd))
         {
@@ -2715,7 +2715,7 @@ mod tests {
         // ② 变体容错：同一行不同写法互相等价
         let g18 = values("螺纹孔 G G1/8");
         for variant in [
-            "DK 螺纹孔 带螺纹 G G1/8",
+            "OCSMHOLE 螺纹孔 带螺纹 G G1/8",
             "螺纹孔 G 1/8",
             "螺纹孔 管用平行 g1/8",
         ] {

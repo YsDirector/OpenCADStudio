@@ -33,7 +33,7 @@
 //! （y 0→±d/2，x 0→L），**不填齿部**；一个 HATCH、2 个边界环、每环 4 条 LineEdge、
 //! `flags = external|outermost`（与模板一致）。
 //!
-//! ## 轴段特征（`SPLINE` / XL 独立插入以外，见 `shaft.rs`）
+//! ## 轴段特征（`SPLINE` / `OCSMPART` 独立插入以外，见 `shaft.rs`)
 //!
 //! 局部系 `x′=0` = 段左端面、轴线 = x 轴：
 //!

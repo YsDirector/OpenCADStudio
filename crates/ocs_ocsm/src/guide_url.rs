@@ -421,7 +421,7 @@ pub struct GuideParams {
     pub detail_no: Option<String>,
     /// 局部放大图：放置点偏移（相对引导中心，缺省 = 自动偏移）。
     pub detail_pos: Option<(f64, f64)>,
-    /// 局部放大图：生成时的 TF 图幅倍率（frame_scale_at 记录，标注系数用）。
+    /// 局部放大图：生成时的图框倍率（frame_scale_at 记录，标注系数用）。
     pub detail_frame: f64,
     /// 焊接符号参数（仅 WELD）。
     pub weld: WeldParams,

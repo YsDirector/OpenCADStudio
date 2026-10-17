@@ -801,11 +801,18 @@ pub fn values(spec: &AnsiTableSpec) -> Result<Vec<(String, String)>, String> {
 }
 
 /// 建 INSERT（基点在 `at`，旋转 `rot_deg` 度；17 个 ATTRIB 取自 `values()`）。
-pub fn build_insert(spec: &AnsiTableSpec, at: [f64; 2], rot_deg: f64) -> Result<Insert, String> {
+pub fn build_insert(
+    spec: &AnsiTableSpec,
+    at: [f64; 2],
+    rot_deg: f64,
+    frame_scale: f64,
+) -> Result<Insert, String> {
     let values = values(spec)?;
     let block = block_name(spec.side, spec.lang);
     let mut ins = Insert::new(block, Vector3::new(at[0], at[1], 0.0));
     ins.rotation = rot_deg.to_radians();
+    // 图框比例：非 1:1 时卡片随图框缩放（必须在本函数的属性 apply_transform 之前）。
+    crate::apply_card_frame_scale(&mut ins, frame_scale);
     {
         let c = &mut ins.common;
         c.layer = crate::partgen::LAYER_MAIN.to_string();
@@ -1205,7 +1212,7 @@ impl AnsiTableModel {
     pub fn build_insert(&self) -> Result<Insert, String> {
         let spec = self.spec()?;
         let at = self.at.unwrap_or([0.0, 0.0]);
-        build_insert(&spec, at, self.rot)
+        build_insert(&spec, at, self.rot, 1.0)
     }
 
     /// 插入回执里的一段。

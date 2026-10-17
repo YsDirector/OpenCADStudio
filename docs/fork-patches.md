@@ -50,6 +50,15 @@ OCS_SMOKE_PLUGIN=$PWD/target/release/libocs_ocsm.so \
 所以**改到宿主 `src/` 的渲染/几何逻辑必须重编宿主**（只换 `.so` 会看到旧渲染，
 2026-09-13 曾因此误判"改了没效果"）。
 
+> ★ **下次同步（`1a9de7b1d` → 上游 `ae3292696`，281 提交）必须一并带上的一项**：
+> 上游在 `68d9ebe26` 把四个 git 依赖**整套**升级 —— codec `3bdc002→cf3a040`（包名 `opencadcodec`→`acadrust`）、
+> kernel/kernel-constraints `a496394→2659c33`、graph `04ca67c→800878a`；四个 pin 必须一起换
+> （`opencadkernel@a496394` 里写死 codec `3bdc002`，单独升 codec 会出现两个 codec 版本）。
+> 新 codec 含一次**表示层变更**（`EntityType` 六类宽变体装箱，`3480374`）⇒ 下游要改
+> **≈275 处**（隔离树实测：宿主本体 199 / 插件 75，另有 4 类真 API 适配）。
+> ★ **不要单独升 pin**（等于重做上游的活，且与本次同步大面积冲突）—— 评估与做法见
+> `~/桌面/OCSM/升级-codec-pin-评估.md`，可复用补丁 `~/桌面/OCSM/升级-codec-pin.patch`。
+
 ## 0.5 已上游化（2026-09-14 记 — **已在同日的上游同步中执行完毕**）
 
 > ✅ **执行结果**：`git merge origin/main`（上游 `fc1788df`，即 **v2026.37.0**）完成，
@@ -526,13 +535,6 @@ LC_ALL=C cargo test -p OpenCADStudio --lib \
   PR 分支上该文件的注释为**英文**（上游语境），且**不含 C-2**（文字宽度补丁是 fork 本地项）。
   即：PR 分支与本仓库该文件会有注释语言差异——上游若合并，记得同步回来（或保留 fork 版本）。
 
-### B-1 `src/app/commands/mod.rs` — 插件命令优先于别名表（`plugin_wins`）
-
-- **为什么**：OCSM 的 `D`（OCSMPOWERDIM）、`CC`（粗糙度）必须压过随包别名 `D`→`*DIMSTYLE`、
-  `CC`→`COPYCLIP`，否则用户敲不出来。
-- **合并注意**：上游若重构别名解析（`src/app/alias.rs` 与 dispatch 顺序），要保证
-  **先查插件命令、后查别名**。
-
 ### A-1 插件 API v5（`crates/ocs_plugin_api`）
 
 - **新增 HostApi**（全部带默认实现，旧插件仍可加载）：`selected_handles`、`set_current_layer`、
@@ -568,9 +570,19 @@ LC_ALL=C cargo test -p OpenCADStudio --lib \
 - **合并注意**：上游更新 acadrust rev 时，需确认插件依赖的实体 API（ATTDEF/块/标注字段）
   没变；必要时同步升 rev 并重跑插件测试。~~**不要**让上游覆盖成本地的镜像 URL（网络环境原因）~~
   —— **2026-09-28 起这条作废**：镜像 `[patch]` 已摘除，见 §2 A-3。
+- **2026-10-17 评估（结论：随下次同步一起升，不单独升）**：我们钉的 `3bdc002`（codec `v0.6.0-195`）
+  已落后上游 OCS `main` 的 `cf3a040`（codec `v0.6.4`）；上游 `68d9ebe26` 把
+  codec/kernel/kernel-constraints/graph **四个 pin 整套**换掉，并把 codec 包名改回 `acadrust`。
+  隔离工作树 `~/dev/ocs-codec-bump` 实测：`ocs_plugin_api`(host)+`ocs_save`+`ocs_web_worker` **0 错**，
+  插件 `ocs_ocsm` **25**（`--all-targets` **75**）错，宿主本体 **199 错**（合计 ≈275 / ≈50 文件）。
+  主体是新 codec 的 `EntityType` 宽变体装箱（`MText/Dimension/Hatch/Viewport/Light/Ole2Frame`
+  payload 变 `Box<T>`；构造点包 `Box::new`），另有 4 类真适配（`GradientColorEntry` 新字段
+  `book_name/color_name`、`BlockAction.parameter_ids` 移除、`TabStop::DecimalWithCharacter` 新变体、
+  `Box<T>` 的 trait 实现）。两处 fork 代码必须跟着改：`crates/ocs_plugin_api/build.rs` 的包名查找
+  （`"opencadcodec"`→`"acadrust"`，否则 `expect` panic）与 `src/io/recovery.rs` 的 rev 匹配串。
+  评估全文与可复用补丁：`~/桌面/OCSM/升级-codec-pin-评估.md`、`~/桌面/OCSM/升级-codec-pin.patch`。
 
 ### A-3 `Cargo.toml` — opencadcodec 镜像 `[patch]` 摘除（2026-09-28，**CI 依赖，勿回退**）
-
 - **原样**（曾长期存在）：`[patch."https://github.com/HakanSeven12/opencadcodec.git"]` 把上游的官方 URL
   指到 `https://ghfast.top/https://github.com/…`，本机拉得快；代价是 `Cargo.lock` 的 source 变成
   **第三方代理 URL**。

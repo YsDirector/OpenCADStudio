@@ -1,4 +1,4 @@
-# 14 Item Number Balloons (`BALLOON`, pick "序号" (item number) in GDIM)
+# 14 Item Number Balloons (pick "序号" (item number) in `OCSMDIMGULIDE`)
 
 > English translation of `handbook/14-序号标注.md` (the Chinese original is the source of truth).
 
@@ -63,11 +63,11 @@ Leader geometry (a **two-segment PLINE with 3 vertices** on `10引导线层`, ex
 
 ```
 1) on 10引导线层 draw a two-segment PLINE: pointer point → bend point → end of the shoulder line (draw the second segment horizontally)
-2) select it → GDIM → pick the type "序号"
+2) select it → `OCSMDIMGULIDE` → pick the type "序号"
 3) fill in the entries in the panel: + add / auto number (previous +1) / ▲▼ reorder / ✕ delete
    pick the extension direction (horizontal/vertical); check "插入序号" when you need to insert in the middle
 4) look at the preview (the same set of proportions as the server) → "应用并刷新" → generated on 8符号标注层 (anonymous block *XH + INSERT)
-   the leader PLINE is kept (does not print); later select the annotation → ME to change it again
+   the leader PLINE is kept (does not print); later select the annotation → `OCSMEDIT` to change it again
 ```
 
 - Pick-point snapping: **when the pointer point falls inside a part block** → link that part (by reading `XDATA OCSM_PART`) and record it in the ledger;
@@ -95,11 +95,11 @@ Leader geometry (a **two-segment PLINE with 3 vertices** on `10引导线层`, ex
 3. **The order of the entries**: `items` is "outwards/upwards from the leader line", not top to bottom.
 4. **One group has only one dot**: if you want to lead to different parts individually, draw two groups (or use two leader lines).
 5. Numbering depends on the balloons/BOM rows that "already exist" in the drawing — on a brand-new drawing the first number taken is `1`.
-6. The output is an **anonymous block** (`*XH{n}`); change parameters with `ME` (delete the old and rebuild), do not hand-edit the text inside the block.
+6. The output is an **anonymous block** (`*XH{n}`); change parameters with `OCSMEDIT` (delete the old and rebuild), do not hand-edit the text inside the block.
 
 ## 7. BOM Sync (implemented)
 
-After a balloon is generated/renumbered the **BOM is synced automatically** (you can also re-sort by hand at any time with the command `BOMSYNC`):
+After a balloon is generated/renumbered the **BOM is synced automatically** (you can also re-sort by hand at any time with the command `OCSMBOMSYNC`):
 
 | Rule | Implementation |
 | --- | --- |
@@ -108,7 +108,7 @@ After a balloon is generated/renumbered the **BOM is synced automatically** (you
 | duplicate item number → "插入序号" checked: everything after it gets **+1** | the affected existing balloons are **renumbered as a whole** (blocks rebuilt, geometry/ledger updated together) + the table is re-sorted |
 | duplicate item number → unchecked: that item number's **quantity gets +1** | the same item number is referenced by N balloons → that row's quantity = max(aggregated parts, references), total weight = unit weight × quantity |
 | parts not referenced by any balloon | keep the item number of the same **(drawing no., name)** in the old table; if it is not in the old table → take the next number automatically (highest item number + 1) |
-| **manual-edit protection** | the item number is never locked; the **quantity** can be locked (`BOMLOCK 5 3` / `BOMLOCK 5 off`); all other columns are **kept as long as they are non-empty** (only blanks get a new value). Deleting a row = reset |
+| **manual-edit protection** | the item number is never locked; the **quantity** can be locked (`OCSMBOMLOCK 5 3` / `OCSMBOMLOCK 5 off`); all other columns are **kept as long as they are non-empty** (only blanks get a new value). Deleting a row = reset |
 
 - The row contents come from the part ledger `OCSM_PART`: drawing no. = code, name = name + specification, material, unit weight; the total weight is computed automatically.
 - Precondition: the only part that can be linked is **the one the pointer point sits in** (the first entry of the group) — the user decided: snapping only.
@@ -120,5 +120,5 @@ After a balloon is generated/renumbered the **BOM is synced automatically** (you
 
 - [ ] The horizontal line is horizontal, the item number is centred above it, and the dot is at the pointer point;
 - [ ] The V-shaped polyline of a horizontal extension and the vertical line of a vertical extension are both on the correct side ("away from the pointer / hugging the leader line");
-- [ ] The item numbers and the BOM are **consistent** (after `BOMSYNC` you can check row by row: item number/drawing no./name/quantity/total weight);
+- [ ] The item numbers and the BOM are **consistent** (after `OCSMBOMSYNC` you can check row by row: item number/drawing no./name/quantity/total weight);
 - [ ] The pointer point is inside a part block (so the ledger can link it), otherwise the BOM will only show empty rows.

@@ -38,8 +38,8 @@ The `op` of `request`:
 | op | Description |
 | --- | --- |
 | `run` | run a command (**plugin commands go through here too**): `{"op":"run","request_id":"…","document_id":N,"revision":R,"cmd":"OCSMJOINT at …"}` |
-| ↑ direct frame insertion | `cmd:"TF a3_landscape 1:2 at 0,0"` — **no need to click a selection window** (`TF` with parameters = direct insert, see `02-sheet-and-frame.md`); only without parameters does it pop up a window |
-| ↑ entity as the answer | `cmd:"ZX 62"` (hexadecimal handle) — the plugin must hand non-keyword tokens back to the host (`on_text_input → Ignored`), and only then does the host feed the handle into the pick step |
+| ↑ direct frame insertion | `cmd:"OCSMFRAMEINIT a3_landscape 1:2 at 0,0"` — **no need to click a selection window** (`OCSMFRAMEINIT` with parameters = direct insert, see `02-sheet-and-frame.md`); only without parameters does it pop up a window |
+| ↑ entity as the answer | `cmd:"OCSMCENTERLINE 62"` (hexadecimal handle) — the plugin must hand non-keyword tokens back to the host (`on_text_input → Ignored`), and only then does the host feed the handle into the pick step |
 | `cancel` | cancel the current interactive command (= Esc); **it is recommended to cancel before sending the next command** |
 | `undo` | undo one step (equivalent to Ctrl+Z) |
 | `new` / `open` / `save` | create/open/save a document |
@@ -70,13 +70,13 @@ python3 tools/ocs_session.py <<'EOF'
 run CENTERMARK
 input entity DD 315,350,0      # entity pick: handle + pick point
 cancel                         # end that interactive command
-run D2G
+run OCSMDIM2GB
 query line 3中心线层
 EOF
 ```
 
 * Plugin commands have another shortcut: as long as the plugin returns `CommandStep::Ignored` from `on_text_input`,
-  you can send the **hexadecimal handle as the command answer** in one shot: `{"op":"run","cmd":"ZX 62"}`.
+  you can send the **hexadecimal handle as the command answer** in one shot: `{"op":"run","cmd":"OCSMCENTERLINE 62"}`.
 * Host-native commands (`CENTERMARK`/`DIMCENTER`/`DIMLINEAR`…) do not accept this kind of answer; they must go through `start`+`input`.
 
 ## 3. Plugin HTTP (shared by scripts / windows)
@@ -99,7 +99,7 @@ EOF
 | `GET/POST /api/shaft_parse` | DSL/JSON → normalized segment model (used to fill the segment table back from the GUI line text; errors carry "第 N 行/段 + 原因" (line/segment N + reason)). The POST body is `{"dsl":"…"}` or a JSON model / line DSL; GET uses `?dsl=` |
 | `GET/POST /api/shaft_preview` | shaft side-view preview SVG (parameters as above; does not touch the drawing) |
 | `POST /api/shaft_export` | shaft "生成到图纸": body = JSON model (+ optional `at`/`rot` + `tab`). Without `at` = create a block + register a pending part (used by the human-side window button); with `at` = insert directly. **If `OCSM` has never been run it returns 400 + the block reason** |
-| `GET /hole` | **hole generator window** (simple/threaded/counterbore/countersink + blind/through + automatic switch + live section preview; opens when `OCSMHOLE`/`DK` are run without parameters) |
+| `GET /hole` | **hole generator window** (simple/threaded/counterbore/countersink + blind/through + automatic switch + live section preview; opens when `OCSMHOLE` is run without parameters) |
 | `GET /api/hole_sizes` | the hole generator's four data tables (ISO 724 coarse/fine thread, drill pilot-hole diameter, GB/T 152.3 counterbore, GB/T 152.2 countersink, GB/T 5277 clearance), each with `source`/`note` |
 | `POST /api/hole_preview` | hole model JSON → `{ok, svg, values}` (preview + derived values; does not touch the drawing) |
 | `POST /api/hole_export` | hole "确定" (OK): body = JSON model (+ optional `at`/`rot` + `tab`). Without `at` = create a block + register a pending part; with `at` = insert directly. **If `OCSM` has never been run it returns 400 + the block reason** |

@@ -2,7 +2,7 @@
 
 > English translation of `handbook/08-公差粗糙度与GDT.md` (the Chinese original is the source of truth).
 
-> Dimensional tolerances, fit designations, surface roughness, geometric tolerances / datums / engineering symbols — all of them are done in the **annotation settings window** (opened with `GDIM`).
+> Dimensional tolerances, fit designations, surface roughness, geometric tolerances / datums / engineering symbols — all of them are done in the **annotation settings window** (opened with `OCSMDIMGULIDE`).
 
 ## 1. Dimensional Tolerance (`TOLERANCE`)
 
@@ -25,32 +25,31 @@ Two modes (switched in the settings window):
 - **Datum symbol**: two GB drawing conventions (1996 / 2008); pick per the project's requirement.
 - Symbol-type output lands on `8符号标注层` (anonymous block + INSERT).
 
-## 3. Surface Roughness (`CC` / `OCSMRGH`)
+## 3. Surface Roughness (`OCSMRGH`)
 
 ```
-Command: CC        (= OCSMRGH)
+Command: OCSMRGH
 Flow: interactively pick the symbol insertion point → open the "粗糙度配置" (roughness settings) window → pick the form + fill in the Ra value → "确定" (OK)
 Output: anonymous block (with ATTDEF text) + INSERT (onto 8符号标注层)
 ```
 
 - Forms: basic symbol / material removal / no material removal / with annotation (e.g. `Ra 3.2`, `Ra 1.6`, `Rz`…).
-- If you want to manage it uniformly through **leader lines**, a `RGH`-type leader + `GDIM` was an option too.
-  → **Correction (2026-09-17)**: there is **no** `Rgh` in `GuideType` (and no roughness tab in the GDIM window either), so roughness always goes through the standalone `OCSMRGH`/`CC` command (pick the insertion point + settings window); the old statement on this line is void.
+- Roughness is **not a leader-annotation type** (`GuideType` has no `Rgh`, and the `OCSMDIMGULIDE` window has no roughness tab); always use the standalone `OCSMRGH` command (pick the insertion point + settings window).
 
 ## 4. AI-Side Recipe
 
 ```jsonc
 // roughness: pick the insertion point first (enters interactive mode) → the window parameters are submitted by a human or over HTTP
-{ "op": "run", "request_id": "r1", "document_id": 1, "revision": 40, "cmd": "CC" }
+{ "op": "run", "request_id": "r1", "document_id": 1, "revision": 40, "cmd": "OCSMRGH" }
 POST /api/rough_apply   { "x": 30, "y": 12, "shape": "remove", "value": "3.2", … }   // creates an anonymous block + INSERT
-// tolerance/geometric tolerance: leader line + the GDIM settings window (or POST /api/apply_refresh with parameters)
+// tolerance/geometric tolerance: leader line + the OCSMDIMGULIDE settings window (or POST /api/apply_refresh with parameters)
 { "op": "run", "request_id": "t1", "document_id": 1, "revision": 41, "cmd": "LINE 0,0 30,0" }  // dimension leader line
-{ "op": "run", "request_id": "t2", "document_id": 1, "revision": 41, "cmd": "GDIM" }           // pick the tolerance in the window
+{ "op": "run", "request_id": "t2", "document_id": 1, "revision": 41, "cmd": "OCSMDIMGULIDE" }           // pick the tolerance in the window
 ```
 
 ## 5. Pitfalls
 
-1. **A tolerance attaches to a dimension**: `TOLERANCE` adds deviations to a **dimension annotation**, it is not a standalone symbol → there must be a dimension first (`D` or a leader dimension).
+1. **A tolerance attaches to a dimension**: `TOLERANCE` adds deviations to a **dimension annotation**, it is not a standalone symbol → there must be a dimension first (the host-native `QDIM` or a leader dimension from `OCSMDIMGULIDE`).
 2. **Pick the right basis system for a fit code**: `H7/k6` is hole basis (common), `K7/h6` is shaft basis; pick the wrong one and the deviations come out pointing the other way.
 3. **Do not type GDT symbols by hand**: the font carries dedicated symbols; only picking them in the settings window guarantees the right shape and avoids rare/unsupported characters.
 4. **A roughness value omits "Ra"**: the default is `Ra`; for `Rz` you must change the symbol type in the window.

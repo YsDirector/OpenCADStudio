@@ -1,4 +1,4 @@
-# 15 Centerlines (`OCSMCENTERLINE` / `ZX`)
+# 15 Centerlines (`OCSMCENTERLINE`)
 
 > English translation of `handbook/15-中心线.md` (the Chinese original is the source of truth).
 
@@ -14,7 +14,7 @@
 | **A line**, then a **second line** | One line lying on the **angle bisector of the two lines** | `projected length of the first line + n×6` |
 
 * `n` = the **frame scale** (the `比例` attribute of the frame block in that drawing; with no frame it is 1). The frame containing the pick point decides n,
-  the same "scale awareness" as `D` (smart dimension) / `GDIM`.
+  the same "scale awareness" as the host-native `QDIM` / `OCSMDIMGULIDE`.
 * The overshoot is always **6 mm × n** (a 1:1 drawing → 3 mm overshoot at each end).
 * The cross is always the **world-coordinate horizontal + vertical** (this plugin draws in world coordinates and does not follow the UCS).
 
@@ -23,7 +23,7 @@
 ### 1. Circle / Arc → Cross Centerlines
 
 ```
-ZX            ← or click "中心线" (centerline) on the ribbon
+OCSMCENTERLINE  ← or click "中心线" (centerline) on the ribbon
 pick a circle/arc      ← one edge is enough, no need to pick the centre
 ```
 → the cross appears immediately (**two lines in one operation, one Ctrl+Z to undo**).
@@ -31,7 +31,7 @@ pick a circle/arc      ← one edge is enough, no need to pick the centre
 ### 2. Two Lines → Angle-Bisector Centerline
 
 ```
-ZX
+OCSMCENTERLINE
 pick the first line
 pick the second line     ← what comes out is "the line in the middle" of the two
 ```
@@ -52,7 +52,7 @@ The **position** of the midline/bisector is decided by the first line: **midpoin
 
 ## 3. Running with a Selection Set (for scripts / AI)
 
-The command can take the **current highlighted selection set** directly (the same as `XL`/`ME`; in MCP, `op:"select"` names the handles):
+The command can take the **current highlighted selection set** directly (the same as `OCSMPART`/`OCSMEDIT`; in MCP, `op:"select"` names the handles):
 
 | Selection | Result |
 | --- | --- |
@@ -61,18 +61,18 @@ The command can take the **current highlighted selection set** directly (the sam
 | anything else (including 1 line, mixtures) | does not touch the drawing, only reports, then enters pick mode |
 
 ```bash
-# MCP example: select a circle, then run ZX (built-in MCP tool mcp__ocs__ocs_execute,
+# MCP example: select a circle, then run OCSMCENTERLINE (built-in MCP tool mcp__ocs__ocs_execute,
 # exposure=direct; a standalone script uses tools/ocs_session.py's single long-lived connection)
 #   {"ocs_session_id":"<S>","request":{"op":"select","handles":["1F"]}}
-#   {"ocs_session_id":"<S>","request":{"op":"run","cmd":"ZX"}}
+#   {"ocs_session_id":"<S>","request":{"op":"run","cmd":"OCSMCENTERLINE"}}
 ```
 
 ## 4. Common Problems
 
 | Symptom | Cause / what to do |
 | --- | --- |
-| Picking a circle does nothing and it reports "只能点圆/圆弧或直线" (only a circle/arc or a line can be picked) | You hit an entity inside a block / a spline / a polyline. **A polyline (LwPolyline) is not a line**: explode it with `X` first, or run `ZX` and then pick an edge that really is a `LINE` |
-| The cross overshoot is wrong | No frame inserted / the frame has no `比例` attribute → `n` is taken as 1. Insert a frame again with `TF` + `OCSMFRAMEINSERT` |
+| Picking a circle does nothing and it reports "只能点圆/圆弧或直线" (only a circle/arc or a line can be picked) | First confirm that the picked object is a top-level `LINE` / `CIRCLE` / `ARC`, not block content, a spline, or a polyline. **A polyline (LwPolyline) is not a line**: explode it with `X` first. If it really is one of these three types but still fails, update the plugin and restart the host (the plugin snapshot now falls back to the flat entity table when its derived handle index is absent). |
+| The cross overshoot is wrong | No frame inserted / the frame has no `比例` attribute → `n` is taken as 1. Insert a frame again with `OCSMFRAMEINIT` + `OCSMFRAMEINSERT` |
 | The two lines give a direction that "cuts across" | The two picked lines are **not parallel** and form an angle close to 90° — that is the interior-angle bisector, not a bug; if you wanted the "midline", do not use two lines: use 1 circle or a parallel line aligned with the first line's midpoint |
 | Line too long/too short | Length = diameter (or projected length) + n×6; for an exact length grip-drag it directly (it is an ordinary `LINE`) |
 | Undo | The cross is **one** undo entry (both lines go back together) |
@@ -85,4 +85,4 @@ The command can take the **current highlighted selection set** directly (the sam
 | Colour / line weight / linetype | **always ByLayer** (change the layer and everything follows) |
 | Printing | Centerlines **are printed** (unlike `10引导线层`, which is a non-printing annotation-intent layer) |
 
-> `ZX` also works on a drawing where `OCSM` has never run: the command idempotently fills in the layers/linetypes first (`1轮廓实线层` … `10引导线层`).
+> `OCSMCENTERLINE` also works on a drawing where `OCSM` has never run: the command idempotently fills in the layers/linetypes first (`1轮廓实线层` … `10引导线层`).
