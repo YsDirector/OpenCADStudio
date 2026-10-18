@@ -33,8 +33,11 @@ Flow: interactively pick the symbol insertion point → open the "粗糙度配�
 Output: anonymous block (with ATTDEF text) + INSERT (onto 8符号标注层)
 ```
 
-- Forms: basic symbol / material removal / no material removal / with annotation (e.g. `Ra 3.2`, `Ra 1.6`, `Rz`…).
+- Forms: basic symbol / material removal / no material removal / with annotation (e.g. `Ra 3.2`, `Ra 1.6`, `Rz`…). Machined surfaces normally use **material removal** (`shape:"remove"`); only follow another form when the source drawing explicitly shows it.
 - Roughness is **not a leader-annotation type** (`GuideType` has no `Rgh`, and the `OCSMDIMGULIDE` window has no roughness tab); always use the standalone `OCSMRGH` command (pick the insertion point + settings window).
+- **Position, rotation and clearance are acceptance rules**: the V-tip must snap to the target contour or a legal extension, and the whole symbol must rotate with that local geometry; never use a global 0° default or rotate text alone. For a horizontal sectioned surface, 0° and 180° share the same baseline but put the symbol body on opposite sides; choose the side that leaves the body/value in clear space. For sloped lines, arcs and an end view of a bore, follow the local tangent/surface-facing relationship; for an internal bore, the body normally occupies the empty bore side.
+- **Rotate the whole INSERT/block** (symbol, value and ATTDEF layout). When the block is flipped through the 90°–270° range, adjust local ATTDEF alignment/text rotation so the final text remains upright/readable.
+- **Repeated callouts across views**: if the same machined surface is marked in a section and an end view, the values and engineering meaning are the same; each INSERT may use a different 0°/180° or local angle to fit its view. Different orientations do not imply different roughness requirements.
 
 ## 4. AI-Side Recipe
 
