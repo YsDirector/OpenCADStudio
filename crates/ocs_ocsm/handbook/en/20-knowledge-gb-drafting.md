@@ -67,7 +67,7 @@
 ## 7. Surface Roughness and Geometric Tolerance (GB/T 131 / 1182)
 
 - Roughness: basic symbol + value (`Ra`); for material removal draw the small triangle; write it on the contour line/dimension line with the triangle tip pointing at the surface.
-- Roughness rotation follows “tip on the surface, phase follows the local contour, choose the side by clearance”; do not use 0° universally. A horizontal sectioned surface usually chooses 0° or 180°; an end-view bore normally puts the symbol body in the empty bore. Sloped lines and arcs follow their local tangent/surface-facing relationship. Rotate the whole INSERT/block and keep the text upright; repeated callouts for one surface may have different orientations but must keep the same value and meaning.
+- Roughness rotation follows “tip on the surface, phase follows the local contour, choose the side by clearance”; do not use 0° universally. A horizontal sectioned surface usually chooses 0° or 180°; an end-view bore normally puts the symbol body in the empty bore. Sloped lines and arcs follow their local tangent/surface-facing relationship. Rotate the whole INSERT/block and keep the text upright; repeated callouts for one surface may have different orientations but must keep the same value and meaning. Parallel opposite end faces use opposite rotations according to their outward normals (vertical left/right faces may use +90°/-90°); C2's circle-in-V means no material removal, and blank A/A′ fields do not justify inventing a value.
 - Feature-control frame: as many cells as needed (symbol / tolerance value / datum); the leader line comes out of the frame's edge.
 - Datum symbol: two GB drawing conventions (1996 / 2008); keep one style per project.
 

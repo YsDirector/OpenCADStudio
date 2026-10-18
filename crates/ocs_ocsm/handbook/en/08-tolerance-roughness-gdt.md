@@ -38,6 +38,8 @@ Output: anonymous block (with ATTDEF text) + INSERT (onto 8符号标注层)
 - **Position, rotation and clearance are acceptance rules**: the V-tip must snap to the target contour or a legal extension, and the whole symbol must rotate with that local geometry; never use a global 0° default or rotate text alone. For a horizontal sectioned surface, 0° and 180° share the same baseline but put the symbol body on opposite sides; choose the side that leaves the body/value in clear space. For sloped lines, arcs and an end view of a bore, follow the local tangent/surface-facing relationship; for an internal bore, the body normally occupies the empty bore side.
 - **Rotate the whole INSERT/block** (symbol, value and ATTDEF layout). When the block is flipped through the 90°–270° range, adjust local ATTDEF alignment/text rotation so the final text remains upright/readable.
 - **Repeated callouts across views**: if the same machined surface is marked in a section and an end view, the values and engineering meaning are the same; each INSERT may use a different 0°/180° or local angle to fit its view. Different orientations do not imply different roughness requirements.
+- **Opposite-end-face normal rule**: when two parallel opposite end faces are marked, choose opposite rotations according to their opposite outward normals; for example, vertical left/right faces may use `+90°`/`-90°`. The V-tip stays on each face and the body points into material-free/clear space; do not force both faces to use one angle.
+- **C2 form**: a circle inside the V means “obtained without material removal”; when `A/A′` are blank, do not invent a numeric roughness value.
 
 ## 4. AI-Side Recipe
 
