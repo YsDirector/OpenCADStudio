@@ -635,6 +635,11 @@ impl OpenCADStudio {
                 return Some(Task::done(Message::ToggleQuickProperties));
             }
 
+            "BAUTHORPALETTE" | "BAUTHORPALETTECLOSE" => {
+                let open = cmd == "BAUTHORPALETTE" && !self.show_authoring_palettes;
+                return Some(self.dock_set_open(crate::ui::dock::PanelId::AuthoringPalettes, open));
+            }
+
             // ── TOOLPALETTES — not yet implemented ───────────────────────────────
             "TOOLPALETTES" => {
                 self.command_line.push_info(
@@ -1615,12 +1620,14 @@ impl OpenCADStudio {
                 }
                 self.push_undo_snapshot(i, "ANNOUPDATE");
                 let scale = self.tabs[i].scene.creation_annotation_scale_handle();
+                let paper_to_model = self.tabs[i].scene.creation_annotation_multiplier();
                 let mut updated = 0usize;
                 for handle in &handles {
                     if crate::scene::annotative::update_entity_from_annotation_style(
                         &mut self.tabs[i].scene.document,
                         *handle,
                         scale,
+                        paper_to_model,
                     ) {
                         updated += 1;
                     }
@@ -2160,16 +2167,17 @@ impl OpenCADStudio {
         }
         let doc = &self.tabs[i].scene.document;
         let current_style = doc.header.current_table_style_name.clone();
-        table.table_style_handle = doc.objects.iter().find_map(|(handle, object)| {
-            match object {
+        table.table_style_handle = doc
+            .objects
+            .iter()
+            .find_map(|(handle, object)| match object {
                 codec::objects::ObjectType::TableStyle(style)
                     if style.name.eq_ignore_ascii_case(&current_style) =>
                 {
                     Some(*handle)
                 }
                 _ => None,
-            }
-        });
+            });
         let command =
             crate::modules::annotate::data_link::DataLinkPlaceCommand::new(table, link_path);
         self.command_line
@@ -2548,6 +2556,7 @@ mod tests {
             instance_transform: None,
             instance_handle: None,
             instance_color: None,
+            edge_color: None,
             instance_aabb: None,
         }
     }

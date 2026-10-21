@@ -1393,7 +1393,7 @@ mod tests {
         let mtexts: Vec<&ocs_plugin_api::host::acadrust::entities::MText> = ents
             .iter()
             .filter_map(|e| match e {
-                EntityType::MText(m) => Some(m),
+                EntityType::MText(m) => Some(m.as_ref()),
                 _ => None,
             })
             .collect();

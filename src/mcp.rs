@@ -30,9 +30,11 @@ const MODERN_PROTOCOL_VERSION: &str = "2026-07-28";
 /// changes, so schema drift (new params, renamed tools) is always a conscious,
 /// reviewed edit — and clients can detect a stale bridge by comparing digests.
 ///
-/// `block_delete` gained its optional `force` parameter.
+/// `block_delete` gained its optional `force` parameter. With API v11
+/// `grip_drag` became optional-`handle` (built-in entity grips) plus optional
+/// `plugin` (dragging a plugin-declared custom grip, routed to its owner).
 #[cfg(test)]
-const TOOL_SCHEMA_DIGEST: &str = "9a7aeb5e1fd76b94fabece3a7ba213f622f449076fac9c25c7e69592989094fd";
+const TOOL_SCHEMA_DIGEST: &str = "b06754d44bc42582eef9fa16df46b77c42b00c1b29e3a0bb83c6313d8884dd6c";
 const MAX_REQUEST: usize = 1_048_576;
 const MAX_RESPONSE: u64 = 16 * 1024 * 1024;
 const CACHE_TTL_MS: u64 = 3_600_000;
@@ -726,6 +728,10 @@ fn exchange(
         timeout,
     )
     .map_err(CallError::infra)?;
+    // One request line in, one reply line out: Nagle + the GUI's delayed ACK
+    // would hold every reply's tail segment for ~200 ms per round. Matches
+    // the GUI-side set_nodelay on the accepted stream (control/transport).
+    let _ = stream.set_nodelay(true);
     stream
         .set_read_timeout(Some(timeout))
         .map_err(CallError::infra)?;
@@ -857,6 +863,8 @@ fn now_unix_secs() -> u64 {
 fn write_startup_lock_at(directory: &Path, pid: u64, started: u64) -> Result<(), String> {
     let text = serde_json::to_string(&json!({"pid": pid, "started": started}))
         .map_err(|error| error.to_string())?;
+    // On a profile that never ran the editor nothing has made the folder yet.
+    std::fs::create_dir_all(directory).map_err(|error| error.to_string())?;
     std::fs::write(startup_lock_path_for(directory), text).map_err(|error| error.to_string())
 }
 
@@ -3101,7 +3109,14 @@ pub fn run() {
             }
         };
         if let Some(response) = response {
-            if writeln!(output, "{response}")
+            // Serialize once: write_fmt on a Value Display streams every
+            // JSON token through the (line-buffered) stdout lock as its own
+            // write, so big replies pay hundreds of pipe writes. One String
+            // + one write_all produces the identical bytes.
+            let mut response_line = response.to_string();
+            response_line.push('\n');
+            if output
+                .write_all(response_line.as_bytes())
                 .and_then(|_| output.flush())
                 .is_err()
             {

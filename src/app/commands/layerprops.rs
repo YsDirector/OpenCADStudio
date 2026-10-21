@@ -785,7 +785,8 @@ impl OpenCADStudio {
             // the command one by one, as typed.
             "-VIEW" => {
                 use crate::command::CadCommand;
-                let c = crate::modules::view::view_cmd::DashViewCommand::new(self.dash_view_names(i));
+                let c =
+                    crate::modules::view::view_cmd::DashViewCommand::new(self.dash_view_names(i));
                 self.command_line.push_info(&c.prompt());
                 self.tabs[i].active_cmd = Some(Box::new(c));
             }
@@ -926,7 +927,8 @@ impl OpenCADStudio {
                     // Standard orientation presets: the world views -VIEW sets,
                     // with the orthographic UCS while UCSORTHO is on. These
                     // names take precedence over a same-named saved view.
-                    "TOP" | "FRONT" | "BACK" | "LEFT" | "RIGHT" | "BOTTOM" | "SWISO" | "SEISO" | "NEISO" | "NWISO" => {
+                    "TOP" | "FRONT" | "BACK" | "LEFT" | "RIGHT" | "BOTTOM" | "SWISO" | "SEISO"
+                    | "NEISO" | "NWISO" => {
                         return Some(self.apply_view_preset(&sub));
                     }
                     // ISO alone is the south-west one.
@@ -1770,7 +1772,7 @@ impl OpenCADStudio {
         }
     }
 
-    fn plan_snap(&mut self, i: usize, r_ucs: glam::Mat4) {
+    pub(in crate::app) fn plan_snap(&mut self, i: usize, r_ucs: glam::Mat4) {
         let eye_dir = r_ucs.transform_vector3(
             crate::scene::CubeRegion::Face(crate::scene::pipeline::viewcube::FACE_TOP)
                 .snap_direction(),

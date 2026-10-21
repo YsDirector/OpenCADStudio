@@ -299,7 +299,7 @@ fn mtext_ent(
         _ => AttachmentPoint::BottomLeft,
     };
     m.common = common_of(layer);
-    EntityType::MText(m)
+    EntityType::MText(Box::new(m))
 }
 
 fn attdef(tag: &str, x: f64, y: f64, h: f64, layer: &str) -> AttributeDefinition {

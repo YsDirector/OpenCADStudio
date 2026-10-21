@@ -18,6 +18,52 @@ pub(crate) struct HostSession<'a> {
     doc_store: Option<DocumentSnapshotStore<DocumentViewData>>,
 }
 
+/// A plugin request that drives commands: sets `plugin_request_active` (the
+/// driven commands join the plugin's open undo scope) and optionally
+/// suppresses the command-line echo. Both reset on drop, so a panicking
+/// command cannot leave the host quiet or the scope joined.
+struct PluginRequest<'s, 'a> {
+    session: &'s mut HostSession<'a>,
+    was_active: bool,
+    quiet: bool,
+}
+
+impl<'s, 'a> PluginRequest<'s, 'a> {
+    fn new(session: &'s mut HostSession<'a>, quiet: bool) -> Self {
+        let was_active = std::mem::replace(&mut session.app.plugin_request_active, true);
+        if quiet {
+            session.app.command_line.begin_quiet_replay();
+        }
+        Self {
+            session,
+            was_active,
+            quiet,
+        }
+    }
+}
+
+impl<'a> std::ops::Deref for PluginRequest<'_, 'a> {
+    type Target = HostSession<'a>;
+    fn deref(&self) -> &Self::Target {
+        self.session
+    }
+}
+
+impl std::ops::DerefMut for PluginRequest<'_, '_> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.session
+    }
+}
+
+impl Drop for PluginRequest<'_, '_> {
+    fn drop(&mut self) {
+        if self.quiet {
+            self.session.app.command_line.end_quiet_replay();
+        }
+        self.session.app.plugin_request_active = self.was_active;
+    }
+}
+
 impl<'a> HostSession<'a> {
     pub(crate) fn new(app: &'a mut OpenCADStudio, tab: usize) -> Self {
         Self {
@@ -85,9 +131,35 @@ impl<'a> HostSession<'a> {
     }
 
     fn replace_nested_attribute(&mut self, attribute: codec::entities::AttributeEntity) -> bool {
+        // ATTRIBs are inline and their stored owner is not reliable for older
+        // drawings. Scan by attribute handle before taking the mutable scene
+        // borrow, then use the plugin write path so reference-only INSERTs
+        // remain writable by their owning plugin.
+        let handle = attribute.common.handle;
+        let Some(mut insert) = self.document().entities().find_map(|entity| match entity {
+            EntityType::Insert(insert)
+                if insert
+                    .attributes
+                    .iter()
+                    .any(|candidate| candidate.common.handle == handle) =>
+            {
+                Some(insert.clone())
+            }
+            _ => None,
+        }) else {
+            return false;
+        };
+        let Some(slot) = insert
+            .attributes
+            .iter_mut()
+            .find(|candidate| candidate.common.handle == handle)
+        else {
+            return false;
+        };
+        *slot = attribute;
         self.app.tabs[self.tab]
             .scene
-            .update_nested_attribute(attribute)
+            .update_entity_plugin(EntityType::Insert(insert))
     }
 
     pub fn document_view(&mut self) -> Option<ocs_plugin_api::shm::DocumentViewInfo> {
@@ -120,12 +192,55 @@ impl<'a> HostSession<'a> {
         #[cfg(not(target_arch = "wasm32"))]
         {
             let key = (self.tab_id(), self.app.tabs[self.tab].scene.geometry_epoch);
-            if self.app.last_plugin_document != Some(key) {
+            let key_changed = self.app.last_plugin_document != Some(key);
+            if key_changed {
                 v4_support::publish_drawing_changed(key.0, key.1);
+                // The plain `DocumentChanged` follows the same immediate
+                // publish contract (API v9): a plugin-initiated write settles
+                // here, so native plugins' `on_notification` sees it now —
+                // the message boundary's fingerprint guard then dedupes.
+                v4_support::publish_document_changed(key.1);
             }
             v4_support::publish_document_view_v4(self.tab_id(), doc);
+            if key_changed {
+                // API v13 dirty regions: the plugin-write boundary carries
+                // the touched identity set, so consumers visit only what
+                // changed (empty sets mean "walk everything").
+                self.publish_plugin_dirty_regions();
+            }
             self.app.last_plugin_document =
                 Some((self.tab_id(), self.app.tabs[self.tab].scene.geometry_epoch));
+        }
+    }
+
+    /// Take this tab's accumulated dirty-region set and broadcast it as
+    /// `DocumentChangedRegions` (API v13). The plugin-write path's twin of
+    /// the message-boundary publisher in `update::mod`.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn publish_plugin_dirty_regions(&mut self) {
+        let tab = &mut self.app.tabs[self.tab];
+        let (entities, records) = tab.take_plugin_dirty();
+        v4_support::publish_document_changed_regions(
+            tab.id,
+            tab.scene.geometry_epoch,
+            entities,
+            records,
+        );
+    }
+
+    fn geometry_epoch(&self) -> u64 {
+        self.app.tabs[self.tab].scene.geometry_epoch
+    }
+
+    /// Plugin-driven edits refresh the app-side selection caches exactly
+    /// like built-in edit paths: a selected entity's grip markers are cached
+    /// and would otherwise rest at their pre-edit positions (found by the
+    /// civil plugin's manual QA, 2026-10-12).
+    fn refresh_grips_of_active_tab(&mut self) {
+        // The grip cache mirrors the active tab's scene; a session may target
+        // a background tab, whose edits must not disturb it.
+        if self.tab == self.app.active_tab {
+            self.app.refresh_selected_grips();
         }
     }
 
@@ -299,6 +414,7 @@ impl<'a> HostSession<'a> {
         if self.prepare_scripted_raster_image(&mut entity).is_err() {
             return Handle::NULL;
         }
+        let epoch = self.geometry_epoch();
         if self.normalize_scripted_entity(None, &mut entity).is_err() {
             return Handle::NULL;
         }
@@ -322,15 +438,17 @@ impl<'a> HostSession<'a> {
             insert.attributes.push(attribute);
             if !self.app.tabs[self.tab]
                 .scene
-                .update_entity(EntityType::Insert(insert))
+                .update_entity_plugin(EntityType::Insert(insert))
             {
                 return Handle::NULL;
             }
+            self.app.tabs[self.tab].mark_plugin_entity_dirty(handle, epoch);
             self.publish_document_view();
             return handle;
         }
         let handle = self.app.tabs[self.tab].scene.add_entity(entity);
         self.app.sync_registered_layers(self.tab);
+        self.app.tabs[self.tab].mark_plugin_entity_dirty(handle, epoch);
         self.publish_document_view();
         handle
     }
@@ -342,8 +460,12 @@ impl<'a> HostSession<'a> {
             // simply keeps its supplied (unnormalized) vertices.
             let _ = self.normalize_scripted_entity(None, entity);
         }
+        let epoch = self.geometry_epoch();
         let handles = self.app.tabs[self.tab].scene.add_entities(entities);
         self.app.sync_registered_layers(self.tab);
+        for handle in &handles {
+            self.app.tabs[self.tab].mark_plugin_entity_dirty(*handle, epoch);
+        }
         self.publish_document_view();
         handles
     }
@@ -857,14 +979,24 @@ impl<'a> HostSession<'a> {
 
     /// Replace the entity carrying `entity`'s handle in place, refreshing the
     /// scene's derived caches. Returns `false` when no entity has that handle.
-    pub fn update_entity(&mut self, mut entity: EntityType) -> bool {
+    pub fn update_entity(&mut self, entity: EntityType) -> bool {
+        let result_handle = entity.common().handle;
+        // API v13 dirty regions: mark BEFORE the write's boundary publish
+        // (the inner publishes immediately) so the region set is complete
+        // when the notification rides.
+        let epoch = self.geometry_epoch();
+        self.app.tabs[self.tab].mark_plugin_entity_dirty(result_handle, epoch);
+        self.update_entity_inner(entity)
+    }
+
+    fn update_entity_inner(&mut self, mut entity: EntityType) -> bool {
         let old = self.document().get_entity(entity.common().handle).cloned();
         if self.normalize_scripted_entity(old.as_ref(), &mut entity).is_err() {
             return false;
         }
         let ok = match entity {
             EntityType::AttributeEntity(attribute) => self.replace_nested_attribute(attribute),
-            entity => self.app.tabs[self.tab].scene.update_entity(entity),
+            entity => self.app.tabs[self.tab].scene.update_entity_plugin(entity),
         };
         self.app.sync_registered_layers(self.tab);
         if ok {
@@ -915,15 +1047,41 @@ impl<'a> HostSession<'a> {
                 return Err(format!("entity {handle:?} is on a locked layer"));
             }
         }
+        // API v13 dirty regions: mark every entity BEFORE the batch below
+        // (the inner publishes immediately) so the region set is complete
+        // when the notification rides.
+        let epoch = self.geometry_epoch();
+        for entity in &entities {
+            self.app.tabs[self.tab].mark_plugin_entity_dirty(entity.common().handle, epoch);
+        }
         self.push_undo(label);
+        // The plain entities ride ONE batched scene write: a single
+        // update_entities_plugin call publishes one geometry bump for the
+        // whole set, so the parametric constraint solver (which runs on the
+        // bump) sees the FINAL state of every entity at once. A per-entity
+        // loop here would solve over each half-updated intermediate and the
+        // constrained neighbors would drag the result off the written
+        // geometry (the plugin settle drift the consumer walk caught:
+        // bonded elements written one by one landed ~1e0 off the records).
+        // Nested attributes keep their special replace path (they are not
+        // scene-model entities).
+        let mut plain = Vec::with_capacity(entities.len());
         for entity in entities {
-            // Validation above makes this infallible while the session owns
-            // the document exclusively.
-            let updated = match entity {
-                EntityType::AttributeEntity(attribute) => self.replace_nested_attribute(attribute),
-                entity => self.app.tabs[self.tab].scene.update_entity(entity),
-            };
-            assert!(updated);
+            match entity {
+                EntityType::AttributeEntity(attribute) => {
+                    // Validation above makes this infallible while the
+                    // session owns the document exclusively.
+                    assert!(self.replace_nested_attribute(attribute));
+                }
+                entity => plain.push(entity),
+            }
+        }
+        if !plain.is_empty() {
+            let expected = plain.len();
+            let moved = self.app.tabs[self.tab].scene.update_entities_plugin(plain);
+            // Validation above makes the batch infallible while the session
+            // owns the document exclusively.
+            assert_eq!(moved, expected);
         }
         self.app.sync_registered_layers(self.tab);
         self.set_dirty();
@@ -966,10 +1124,40 @@ impl<'a> HostSession<'a> {
         Ok(())
     }
 
+    /// Erase through the plugin path while keeping reference-only designations
+    /// undoable with the erase (API v9). The designation set is scene state,
+    /// not a document write: erasing drops the set entry in
+    /// `Scene::remove_entities`, so its first-touch before-image must join the
+    /// open plugin scope here — otherwise undoing the erase would restore the
+    /// entity without its designation. No-op for undesignated handles and when
+    /// no scope is open (then the erase follows the same no-bookkeeping
+    /// contract as any other entity write).
+    fn erase_entities_recording_designations(&mut self, handles: &[Handle]) {
+        for &handle in handles {
+            if self.app.tabs[self.tab]
+                .scene
+                .reference_only
+                .is_marked(handle)
+            {
+                self.app
+                    .record_reference_designation_before_pending(self.tab, handle, true);
+            }
+        }
+        self.app.tabs[self.tab].scene.erase_entities_plugin(handles);
+    }
+
     /// Delete the entity with `handle`, keeping the scene's render caches in
     /// sync. Returns `false` when the entity is absent or on a locked layer
     /// (which `erase_entities` refuses to remove).
     pub fn remove_entity(&mut self, handle: Handle) -> bool {
+        // API v13 dirty regions: mark before the boundary publish; a removed
+        // handle still rides the set (consumers detect its absence).
+        let epoch = self.geometry_epoch();
+        self.app.tabs[self.tab].mark_plugin_entity_dirty(handle, epoch);
+        self.remove_entity_inner(handle)
+    }
+
+    fn remove_entity_inner(&mut self, handle: Handle) -> bool {
         if self.document().get_entity(handle).is_none() {
             let Some(EntityType::AttributeEntity(attribute)) = self.nested_attribute(handle) else {
             return false;
@@ -990,8 +1178,11 @@ impl<'a> HostSession<'a> {
             }
             return removed;
         }
-        let owner = self.document().get_entity(handle).map(|entity| entity.common().owner_handle);
-        self.app.tabs[self.tab].scene.erase_entities(&[handle]);
+        let owner = self
+            .document()
+            .get_entity(handle)
+            .map(|entity| entity.common().owner_handle);
+        self.erase_entities_recording_designations(&[handle]);
         let removed = self.document().get_entity(handle).is_none();
         if removed {
             // The document keeps a block record's member list separately from the
@@ -1055,6 +1246,10 @@ impl<'a> HostSession<'a> {
         if let Some(ah) = app_handle {
             xd.raw_dwg_eed.retain(|(a, _)| *a != ah);
         }
+        // API v13 dirty regions: the touched (entity, app) pair rides the
+        // boundary notification — marked BEFORE the publish that carries it.
+        let epoch = self.geometry_epoch();
+        self.app.tabs[self.tab].mark_plugin_record_dirty(handle, app, epoch);
         self.bump_geometry();
         self.set_dirty();
         self.publish_document_view();
@@ -1297,7 +1492,7 @@ impl<'a> HostSession<'a> {
                     frame.common.layer = layer;
                 }
                 self.push_undo("Embed picture");
-                let handle = self.add_entity(EntityType::Ole2Frame(frame));
+                let handle = self.add_entity(EntityType::Ole2Frame(Box::new(frame)));
                 if handle.is_null() {
                     return Err("the picture frame could not be added".into());
                 }
@@ -1485,7 +1680,7 @@ impl<'a> HostSession<'a> {
             return Err("the result could not be added".into());
         }
         if delete_source {
-            self.app.tabs[self.tab].scene.erase_entities(&[source]);
+            self.erase_entities_recording_designations(&[source]);
             self.publish_document_view();
         }
         Ok(handle)
@@ -1493,6 +1688,9 @@ impl<'a> HostSession<'a> {
 
     pub fn push_undo(&mut self, label: &str) {
         self.app.push_undo_snapshot(self.tab, label);
+        if let Some(pending) = self.app.tabs[self.tab].history.pending.as_mut() {
+            pending.plugin_owned = true;
+        }
     }
 
     pub fn set_dirty(&mut self) {
@@ -1730,7 +1928,7 @@ impl<'a> HostSession<'a> {
                 self.push_undo("Delete layer");
                 self.document_mut().layers.remove(&name);
                 if !on_layer.is_empty() {
-                    self.app.tabs[self.tab].scene.erase_entities(&on_layer);
+                    self.erase_entities_recording_designations(&on_layer);
                 }
                 self.finish_layer_change(&[name]);
                 Ok(handle)
@@ -1802,6 +2000,17 @@ impl<'a> HostSession<'a> {
         &mut self,
         request: ocs_plugin_api::host::CommandRequest,
     ) -> Result<ocs_plugin_api::host::CommandOutcome, String> {
+        let quiet = matches!(
+            request,
+            ocs_plugin_api::host::CommandRequest::RunQuiet { .. }
+        );
+        PluginRequest::new(self, quiet).run_command_inner(request)
+    }
+
+    fn run_command_inner(
+        &mut self,
+        request: ocs_plugin_api::host::CommandRequest,
+    ) -> Result<ocs_plugin_api::host::CommandOutcome, String> {
         use crate::command::StepInput;
         use ocs_plugin_api::host::CommandRequest as R;
         if self.tab != self.app.active_tab {
@@ -1821,7 +2030,10 @@ impl<'a> HostSession<'a> {
         let modal_before = self.app.active_modal.is_some();
         self.app.command_line.unconsumed.clear();
         let task = match request {
-            R::Run { line } => {
+            // API v13: `RunQuiet` is `Run` with the command-line echo
+            // suppressed for the whole request (see `run_command`); errors
+            // still surface.
+            R::Run { line } | R::RunQuiet { line } => {
                 if line.trim().is_empty() {
                     return Err("a command line is empty".to_owned());
                 }
@@ -1891,7 +2103,9 @@ impl<'a> HostSession<'a> {
                     }
                     R::Selection => StepInput::SelectionComplete(self.app.tabs[tab].scene.selected_handles_in_order()),
                     R::Enter => StepInput::Enter,
-                    R::Run { .. } | R::Start { .. } | R::Cancel => unreachable!(),
+                    R::Run { .. } | R::Start { .. } | R::RunQuiet { .. } | R::Cancel => {
+                        unreachable!()
+                    }
                 };
                 self.app.feed_command(input)
             }
@@ -2397,7 +2611,7 @@ impl<'a> HostSession<'a> {
                     }
                 }
                 if erase_originals {
-                    self.app.tabs[self.tab].scene.erase_entities(&entities);
+                    self.erase_entities_recording_designations(&entities);
                 }
                 self.finish_block_change();
                 Ok(handle)
@@ -3135,6 +3349,9 @@ impl<'a> HostSession<'a> {
         record.raw_dwg_handle_bits = 0;
         record.raw_dwg_version = None;
         self.set_dirty();
+        // API v13 dirty regions — before the publish that carries them.
+        let epoch = self.geometry_epoch();
+        self.app.tabs[self.tab].mark_plugin_record_dirty(handle, "NOD".to_string(), epoch);
         self.publish_document_view();
         if own_scope {
             self.app.finish_pending_history(self.tab);
@@ -3195,6 +3412,306 @@ impl<'a> HostSession<'a> {
                 _ => None,
             })
             .collect())
+    }
+
+    /// Mark (or unmark) an entity as reference-only (API v9, additive):
+    /// plugin-owned display geometry the built-in edit paths treat like a
+    /// locked-layer entity, while the owning plugin keeps full write access
+    /// through this session. The designation is a scene-scoped in-memory set
+    /// keyed by handle: nothing is written to the saved DWG/DXF, the set dies
+    /// with the tab, and a reloaded drawing starts undesignated — the owning
+    /// plugin re-marks on the `DocumentOpened` notification, which makes the
+    /// in-memory designation fully equivalent to a persisted one for its use
+    /// case.
+    ///
+    /// Every refusal — absent entity, locked layer — is decided before the
+    /// undo scope is touched, so a failure changes nothing. A call that would
+    /// not change the current designation succeeds without recording an undo
+    /// step, without bumping the geometry epoch and without publishing — the
+    /// idempotence that terminates the re-mark loop driven by the
+    /// document-changed dispatch. Undo composition: a change inside a
+    /// plugin-opened `push_undo` scope joins it (see
+    /// [`HostSession::ensure_xrecord_undo_scope`]); a scope-less call is one
+    /// undo step of its own. The set is scene state, not a document write, so
+    /// the undo delta restores it through the explicit designation channel
+    /// (`DeltaSnapshot::reference_designations`).
+    pub fn set_reference_only(
+        &mut self,
+        handle: Handle,
+        reference_only: bool,
+    ) -> Result<(), String> {
+        // Refusals precede any change (and any undo step).
+        if self.document().get_entity(handle).is_none() {
+            return Err(format!("entity {handle:?} does not exist"));
+        }
+        if self.app.tabs[self.tab].scene.is_layer_locked(handle) {
+            return Err(format!("entity {handle:?} is on a locked layer"));
+        }
+        if self.app.tabs[self.tab].scene.is_reference_only(handle) == reference_only {
+            return Ok(());
+        }
+        let own_scope = self.ensure_xrecord_undo_scope("Set Reference-Only");
+        // First-touch before-image for the pending scope's designation
+        // channel, recorded before the set changes (see
+        // `Scene::record_undo_reference_designation_before`).
+        let before = self.app.tabs[self.tab]
+            .scene
+            .reference_only
+            .is_marked(handle);
+        self.app
+            .record_reference_designation_before_pending(self.tab, handle, before);
+        self.app.tabs[self.tab]
+            .scene
+            .set_reference_only_membership(handle, reference_only);
+        debug_assert!(
+            self.app.tabs[self.tab]
+                .scene
+                .reference_only
+                .is_marked(handle)
+                == reference_only,
+            "designation state was checked before the mutation"
+        );
+        // The wires carry the click-through stamp baked at tessellation, so a
+        // designation change must rebuild them: bump_geometry clears the
+        // tessellation memos and resident wire sets exactly like an entity
+        // edit would.
+        self.bump_geometry();
+        self.set_dirty();
+        self.publish_document_view();
+        if own_scope {
+            self.app.finish_pending_history(self.tab);
+        }
+        Ok(())
+    }
+
+    /// Enumerate an entity's built-in grips with viewport parity (API v11):
+    /// the same per-entity enumeration the selection cache builder produces —
+    /// whatever each entity module declares, generic over every entity type.
+    /// Reference-only entities and locked layers answer an empty list, the
+    /// same answer the viewport gives. This is a pure read: it opens no undo
+    /// scope, records nothing, and audits nothing.
+    pub fn entity_grips(
+        &self,
+        handle: Handle,
+    ) -> Result<Vec<ocs_plugin_api::host::GripInfo>, String> {
+        let grips = self.app.entity_grips_for(self.tab, handle)?;
+        Ok(grips
+            .into_iter()
+            .map(|grip| ocs_plugin_api::host::GripInfo {
+                grip_id: grip.id,
+                point: grip.world.to_array(),
+                moves_entity: grip.is_midpoint,
+                shape: format!("{:?}", grip.shape),
+                axis: grip.axis.map(|axis| axis.to_array()),
+            })
+            .collect())
+    }
+
+    /// Perform the grip edit an interactive drag performs (API v11): the ONE
+    /// shared pipeline (select → engage → move with snaps off → commit),
+    /// exactly one undo step labeled like the interactive grip step,
+    /// byte-exact restore on undo, refusal parity (unknown entity/grip,
+    /// reference-only, locked layer, point out of view).
+    pub fn grip_drag(
+        &mut self,
+        handle: Handle,
+        grip_id: usize,
+        to: [f64; 3],
+    ) -> Result<(), String> {
+        let task = self
+            .app
+            .perform_grip_drag(self.tab, handle, grip_id, to)
+            .map_err(|(code, message)| format!("grip drag failed ({code}): {message}"))?;
+        let _ = task;
+        Ok(())
+    }
+
+    /// Read specific entities by handle (API v12) — the live document's
+    /// current entity per handle, `None` for an unknown handle. The cheap
+    /// refresh-pass path: a plugin that writes and re-reads never needs the
+    /// invalidated full-document snapshot (the v11.1 per-boundary cost).
+    pub fn entities_batch(
+        &self,
+        handles: &[Handle],
+    ) -> Result<Vec<Option<codec::EntityType>>, String> {
+        if self.app.tabs.len() <= self.tab {
+            return Err(format!("tab {} does not exist", self.tab));
+        }
+        Ok(handles
+            .iter()
+            .map(|handle| self.document().get_entity(*handle).cloned())
+            .collect())
+    }
+
+    /// Create a parametric constraint directly (API v13): the SAME constraint
+    /// machinery the interactive COINCIDENT (`GCCOINCIDENT`) and TANGENT
+    /// (`TCONSTRAINT`) commands drive, reached without the command line — no
+    /// prompts, no echo — through the command driver's own apply path, so
+    /// validation, initial solve and undo composition behave identically.
+    /// Inside a plugin-opened `push_undo` scope the constraint joins that
+    /// scope (the entity-write contract); the re-bond a plugin composes of
+    /// writes + constraints is its single labeled step.
+    pub fn constraint_create(
+        &mut self,
+        constraint: ocs_plugin_api::host::PluginConstraint,
+    ) -> Result<(), String> {
+        if self.tab != self.app.active_tab {
+            return Err("constraints act on the active document; switch to it first".to_owned());
+        }
+        let tab = self.tab;
+        let to_pick =
+            |pick: &ocs_plugin_api::host::PluginConstraintPick| crate::command::CoincidentPick {
+                handle: pick.handle,
+                point: glam::DVec3::new(pick.point[0], pick.point[1], pick.point[2]),
+                whole_curve: pick.whole_curve,
+            };
+        let result = match constraint {
+            ocs_plugin_api::host::PluginConstraint::Coincident { first, second } => {
+                crate::command::CmdResult::AddCoincidentConstraint {
+                    first: to_pick(&first),
+                    second: to_pick(&second),
+                    multiple: false,
+                    label: "Coincident constraint",
+                }
+            }
+            ocs_plugin_api::host::PluginConstraint::Tangent { first, second } => {
+                // Resolve the picks the way the interactive TANGENT command
+                // does, against the live document and the tab's scope.
+                let scope = self.app.tabs[tab].current_parametric_scope();
+                let document = &self.app.tabs[tab].scene.document;
+                let resolve = |pick: &ocs_plugin_api::host::PluginConstraintPick,
+                               exclude: Option<Handle>| {
+                    let point =
+                        codec::types::Vector3::new(pick.point[0], pick.point[1], pick.point[2]);
+                    if pick.whole_curve {
+                        pick.handle.and_then(|handle| {
+                            crate::scene::parametric_constraints::parametric_curve_ref_for_pick(
+                                document, scope, handle, point,
+                            )
+                        })
+                    } else if let Some(handle) = pick.handle {
+                        crate::scene::parametric_constraints::nearest_parametric_point_on_entity(
+                            document, scope, handle, point,
+                        )
+                    } else {
+                        crate::scene::parametric_constraints::nearest_parametric_point(
+                            document, scope, point, exclude,
+                        )
+                    }
+                };
+                let first_ref = resolve(&first, None);
+                let second_ref = first_ref.and_then(|r| resolve(&second, Some(r.entity)));
+                let (Some(first), Some(second)) = (first_ref, second_ref) else {
+                    return Err(
+                        "tangent picks did not resolve to parametric references on the live \
+                         document; pick concrete points/curves of existing entities"
+                            .to_owned(),
+                    );
+                };
+                crate::command::CmdResult::AddTangentConstraint {
+                    first,
+                    second,
+                    label: "Tangent constraint",
+                }
+            }
+        };
+        // The driver's success feedback ("Coincident constraint applied") is
+        // interactive echo — the direct API path is quiet by contract
+        // (errors still surface; the gate is the same one RunQuiet uses).
+        let mut request = PluginRequest::new(self, true);
+        let task = request.app.apply_cmd_result(result);
+        request.app.drive_headless_task(task)
+    }
+
+    /// Read several XRecords in one call (API v13): per-entry results, `Err`
+    /// per missing path/name instead of failing the whole batch.
+    pub fn read_xrecords(
+        &self,
+        reads: &[ocs_plugin_api::host::XRecordRead],
+    ) -> Result<Vec<Result<Vec<ocs_plugin_api::host::XRecordEntry>, String>>, String> {
+        Ok(reads
+            .iter()
+            .map(|read| {
+                let path: Vec<&str> = read.dictionary_path.iter().map(|s| s.as_str()).collect();
+                self.read_xrecord(&path, &read.name)
+            })
+            .collect())
+    }
+
+    /// Replace the entries of several XRecords in one call (API v13): each
+    /// entry applies the single-update contract; the batch shares the
+    /// entity-write undo composition (inside a plugin-opened `push_undo`
+    /// scope it joins that scope).
+    pub fn update_xrecords(
+        &mut self,
+        updates: &[ocs_plugin_api::host::XRecordUpdate],
+    ) -> Result<Vec<Result<Handle, String>>, String> {
+        Ok(updates
+            .iter()
+            .map(|update| {
+                let path: Vec<&str> = update.dictionary_path.iter().map(|s| s.as_str()).collect();
+                self.update_xrecord(&path, &update.name, update.entries.clone())
+            })
+            .collect())
+    }
+
+    /// List a dictionary's XRecords WITH their entries in one call (API v13):
+    /// the discovery walk (list, then one read per record) collapses to a
+    /// single frame.
+    pub fn list_xrecords_with_entries(
+        &self,
+        dictionary_path: &[&str],
+    ) -> Result<Vec<(String, Vec<ocs_plugin_api::host::XRecordEntry>)>, String> {
+        let names = self.list_xrecords(dictionary_path)?;
+        Ok(names
+            .into_iter()
+            .map(|name| {
+                let entries = self
+                    .read_xrecord(dictionary_path, &name)
+                    .unwrap_or_default();
+                (name, entries)
+            })
+            .collect())
+    }
+
+    /// Declare (or clear) the calling plugin's custom grip points (API v11).
+    /// The whole batch REPLACES the plugin's previous set; the host applies
+    /// it as a diff keyed by grip id so an unchanged re-declare is near-free
+    /// (the pull model's message-boundary re-declare). Display-session state
+    /// only: nothing is persisted, nothing is host-interpreted, and the set
+    /// dies with the plugin's process.
+    ///
+    /// `plugin_id` is the identity the transport attached: over the plugin
+    /// IPC the host serves this with the speaking process's own manifest id
+    /// and refuses mismatches, so a plugin cannot declare grips in another
+    /// plugin's name; an in-process host (tests) registers the id it passes.
+    pub fn set_plugin_grips(
+        &mut self,
+        plugin_id: &str,
+        grips: Vec<ocs_plugin_api::host::PluginGrip>,
+    ) -> Result<(), String> {
+        let known = crate::plugin::grip_points::visibility(&self.app.disabled_plugins)(plugin_id);
+        if !known {
+            return Err(format!(
+                "plugin {plugin_id:?} is not a loaded, alive plugin; custom grips must be \
+                 declared by their owner"
+            ));
+        }
+        // Anchors accept ANY live entity handle — never a type restriction —
+        // and never add host-side movement semantics (the points are absolute).
+        for grip in &grips {
+            if let Some(anchor) = grip.anchor {
+                if self.document().get_entity(anchor).is_none() {
+                    return Err(format!(
+                        "grip {} anchors entity {anchor:?}, which does not exist",
+                        grip.grip_id
+                    ));
+                }
+            }
+        }
+        let tab = self.tab;
+        self.app.tabs[tab].plugin_grips.declare(plugin_id, grips)?;
+        Ok(())
     }
 
     /// Resolve an existing XRecord to its containing dictionary, its validated
@@ -3582,7 +4099,51 @@ impl HostApi for HostSession<'_> {
     fn list_xrecords(&self, dictionary_path: &[&str]) -> Result<Vec<String>, String> {
         self.list_xrecords(dictionary_path)
     }
+    fn set_reference_only(&mut self, handle: Handle, reference_only: bool) -> Result<(), String> {
+        self.set_reference_only(handle, reference_only)
+    }
+    fn entity_grips(&self, handle: Handle) -> Result<Vec<ocs_plugin_api::host::GripInfo>, String> {
+        self.entity_grips(handle)
+    }
+    fn grip_drag(&mut self, handle: Handle, grip_id: usize, to: [f64; 3]) -> Result<(), String> {
+        self.grip_drag(handle, grip_id, to)
+    }
+    fn set_plugin_grips(
+        &mut self,
+        plugin_id: &str,
+        grips: Vec<ocs_plugin_api::host::PluginGrip>,
+    ) -> Result<(), String> {
+        self.set_plugin_grips(plugin_id, grips)
+    }
+    fn entities_batch(&self, handles: &[Handle]) -> Result<Vec<Option<codec::EntityType>>, String> {
+        self.entities_batch(handles)
+    }
+    fn constraint_create(
+        &mut self,
+        constraint: ocs_plugin_api::host::PluginConstraint,
+    ) -> Result<(), String> {
+        self.constraint_create(constraint)
+    }
+    fn read_xrecords(
+        &self,
+        reads: &[ocs_plugin_api::host::XRecordRead],
+    ) -> Result<Vec<Result<Vec<ocs_plugin_api::host::XRecordEntry>, String>>, String> {
+        self.read_xrecords(reads)
+    }
+    fn update_xrecords(
+        &mut self,
+        updates: &[ocs_plugin_api::host::XRecordUpdate],
+    ) -> Result<Vec<Result<Handle, String>>, String> {
+        self.update_xrecords(updates)
+    }
+    fn list_xrecords_with_entries(
+        &self,
+        dictionary_path: &[&str],
+    ) -> Result<Vec<(String, Vec<ocs_plugin_api::host::XRecordEntry>)>, String> {
+        self.list_xrecords_with_entries(dictionary_path)
+    }
 
+    // ── fork: OCSMechanical additions follow the upstream v13 methods. ──
     // ── fork: API v5 (OCSMechanical) — appended *after* upstream's methods so a
     // plugin built against upstream alone keeps byte-compatible vtable offsets.
     // See docs/fork-patches.md §A-1. ──
@@ -4229,7 +4790,9 @@ impl crate::command::CadCommand for PluginProcessInteractiveAdapter {
     }
 }
 
-fn convert_preview_wires(
+/// Convert plugin-declared preview wires to scene wire models. Shared by the
+/// interactive-command previews and the custom-grip drag previews (API v11).
+pub(in crate::app) fn convert_preview_wires(
     raw_wires: Vec<ocs_plugin_api::host::PreviewWire>,
 ) -> Vec<crate::scene::model::wire_model::WireModel> {
     use ocs_plugin_api::host::PreviewWire;
@@ -6369,7 +6932,7 @@ mod tests {
         assert!(strokes.iter().any(|stroke| stroke
             .run
             .as_ref()
-            .is_some_and(|run| run.text.contains("PN-002"))));
+            .is_some_and(|run| run.text.contains("PART_NO"))));
 
         for (label, patch, message) in [
             ("Reject tag", "'tag':'BAD TAG'", "whitespace"),
@@ -7422,8 +7985,12 @@ mod tests {
         for (name, mut document) in [("dimension-reedit.dwg", dwg), ("dimension-reedit.dxf", dxf)] {
             let before = document.get_entity(linear).unwrap().clone();
             let mut after = before.clone();
-            let EntityType::Dimension(dimension) = &mut after else { unreachable!() };
-            if let codec::entities::Dimension::Linear(value) = dimension { value.second_point.x = 30.0; }
+            let EntityType::Dimension(dimension) = &mut after else {
+                unreachable!()
+            };
+            if let codec::entities::Dimension::Linear(value) = &mut **dimension {
+                value.second_point.x = 30.0;
+            }
             ocs_plugin_api::entity_coverage::validate_entity_mutation(&before, &after).unwrap();
             ocs_plugin_api::entity_coverage::validate_canvas_entity_references(&document, &after).unwrap();
             let EntityType::Dimension(dimension) = &mut after else { unreachable!() };
@@ -7876,7 +8443,7 @@ mod tests {
             let owner = host.document().block_records.iter().find(|r| r.is_paper_space()).map(|r| r.handle).unwrap();
             let mut viewport = codec::entities::Viewport::new();
             viewport.common.owner_handle = owner;
-            let viewport_handle = host.add_entity(EntityType::Viewport(viewport));
+            let viewport_handle = host.add_entity(EntityType::Viewport(Box::new(viewport)));
             let scale_handle = host.document_mut().allocate_handle();
             let mut scale = codec::objects::Scale::new("1:1", 1.0, 1.0);
             scale.handle = scale_handle;
@@ -8939,12 +9506,8 @@ mod tests {
             expect_created: "PART_NO|Part number|PN-001 ins1.0,2.0 al3.0,4.0 h2.5 r0.25 wf1.25 ob0.10 Center/Top f1010 fl12 tg2 lock1",
             expect_edited: "PART_NO|Serial|PN-002 ins4.0,5.0 al3.0,4.0 h3.0 r0.50 wf0.80 ob0.20 Right/Middle f0101 fl20 tg2 lock1",
             expect_reedited: "PART_NO|Serial|PN-003 ins4.0,5.0 al3.0,4.0 h3.0 r0.50 wf0.80 ob0.20 Right/Middle f0101 fl20 tg2 lock1",
-            // BLOCKER (opencadcodec): the DXF ATTDEF writer emits no group 280 at
-            // all — neither the version byte nor the lock-position flag the
-            // reader looks for after it — so `lock_position` reopens false. Every
-            // other field round-trips since opencadcodec dd1d7bf.
-            expect_edited_dxf: "PART_NO|Serial|PN-002 ins4.0,5.0 al3.0,4.0 h3.0 r0.50 wf0.80 ob0.20 Right/Middle f0101 fl20 tg2 lock0",
-            expect_reedited_dxf: "PART_NO|Serial|PN-003 ins4.0,5.0 al3.0,4.0 h3.0 r0.50 wf0.80 ob0.20 Right/Middle f0101 fl20 tg2 lock0",
+            expect_edited_dxf: "",
+            expect_reedited_dxf: "",
             expect_edited_dwg: "",
             expect_reedited_dwg: "",
         });
@@ -10050,8 +10613,17 @@ mod tests {
         bare.common.owner_handle = paper;
         bare.width = 40.0;
         bare.height = 30.0;
-        let bare = host.document_mut().add_entity(EntityType::Viewport(bare)).unwrap();
-        assert_eq!(host.document().get_entity(bare).map(|e| match e { EntityType::Viewport(v) => v.id, _ => -1 }), Some(0));
+        let bare = host
+            .document_mut()
+            .add_entity(EntityType::Viewport(Box::new(bare)))
+            .unwrap();
+        assert_eq!(
+            host.document().get_entity(bare).map(|e| match e {
+                EntityType::Viewport(v) => v.id,
+                _ => -1,
+            }),
+            Some(0)
+        );
         assert!(!host.app.tabs[0].scene.wire_models_for(&[bare]).is_empty());
     }
 
@@ -10774,6 +11346,9 @@ LT.delete('Temp')
         let Some(plugin_path) = std::env::var_os("OCS_TEST_PYTHON_PLUGIN") else {
             return;
         };
+        // The array assertions below check loose copies; ARRAYRECT/ARRAYPOLAR
+        // build associative arrays by default (thread-local, this thread only).
+        crate::modules::draw::defaults::set_array_assoc(0.0);
         let mut app = OpenCADStudio::new_for_test();
         app.tabs[0].is_start = false;
         let mut host = HostSession::new(&mut app, 0);
@@ -11787,6 +12362,304 @@ step('undo_move', lambda: M.move([u], (0, 0, 0), (7, 0, 0)))
         let mut ghost = Point::new();
         ghost.common.handle = Handle::new(999_999);
         assert!(!host.update_entity(EntityType::Point(ghost)));
+    }
+
+    fn reference_test_line(end_x: f64, y: f64, handle: Handle) -> EntityType {
+        let mut line = codec::entities::Line::from_points(
+            codec::types::Vector3::new(0.0, y, 0.0),
+            codec::types::Vector3::new(end_x, y, 0.0),
+        );
+        line.common.handle = handle;
+        EntityType::Line(line)
+    }
+
+    #[test]
+    fn reference_only_refusals_record_no_undo_step() {
+        let mut app = OpenCADStudio::new_for_test();
+        app.tabs[0].is_start = false;
+        let mut host = HostSession::new(&mut app, 0);
+        // Marking an absent entity refuses.
+        assert!(host.set_reference_only(Handle::new(999_999), true).is_err());
+        let handle = host.add_entity(reference_test_line(10.0, 0.0, Handle::NULL));
+        // A locked layer is as unwritable for the designation as for every
+        // other plugin write.
+        host.app.tabs[0]
+            .scene
+            .document
+            .layers
+            .get_mut("0")
+            .map(|layer| layer.lock());
+        assert!(host.set_reference_only(handle, true).is_err());
+        host.app.tabs[0]
+            .scene
+            .document
+            .layers
+            .get_mut("0")
+            .map(|layer| layer.unlock());
+        assert!(
+            !host.app.tabs[0].scene.is_reference_only(handle),
+            "refusals must not partially apply the designation"
+        );
+        assert_eq!(
+            host.app.tabs[0].history.undo_stack.len(),
+            0,
+            "refusals record no undo step"
+        );
+        // An idempotent re-mark succeeds without recording another step.
+        host.set_reference_only(handle, true).unwrap();
+        assert_eq!(host.app.tabs[0].history.undo_stack.len(), 1);
+        host.set_reference_only(handle, true).unwrap();
+        assert_eq!(
+            host.app.tabs[0].history.undo_stack.len(),
+            1,
+            "an idempotent re-mark records no undo step"
+        );
+    }
+
+    #[test]
+    fn reference_only_designation_composes_undo_like_entity_writes() {
+        let mut app = OpenCADStudio::new_for_test();
+        app.tabs[0].is_start = false;
+        let mut host = HostSession::new(&mut app, 0);
+        let handle = host.add_entity(reference_test_line(10.0, 0.0, Handle::NULL));
+        // A scope-less designation is one undo step of its own.
+        host.set_reference_only(handle, true).unwrap();
+        host.set_reference_only(handle, false).unwrap();
+        assert_eq!(host.app.tabs[0].history.undo_stack.len(), 2);
+
+        // Undo reverts the unmark, redo re-applies it.
+        drop(host);
+        app.undo_steps(1);
+        let host = HostSession::new(&mut app, 0);
+        assert!(host.app.tabs[0].scene.is_reference_only(handle));
+        drop(host);
+        app.redo_steps(1);
+        let mut host = HostSession::new(&mut app, 0);
+        assert!(!host.app.tabs[0].scene.is_reference_only(handle));
+
+        // Inside a plugin-opened push_undo scope the designation joins the
+        // scope: an entity write plus two markings is ONE step under the
+        // plugin's label.
+        host.push_undo("CVI: refresh");
+        let preview = host.add_entity(EntityType::Point(Point::at(codec::types::Vector3::new(
+            3.0, 0.0, 0.0,
+        ))));
+        host.set_reference_only(preview, true).unwrap();
+        host.set_reference_only(handle, true).unwrap();
+        drop(host);
+        app.finish_pending_history(0);
+        assert_eq!(app.tabs[0].history.undo_stack.len(), 3);
+        assert_eq!(app.tabs[0].history.undo_stack[2].label(), "CVI: refresh");
+
+        // Undoing the plugin operation reverts it whole.
+        app.undo_steps(1);
+        let host = HostSession::new(&mut app, 0);
+        assert!(
+            host.app.tabs[0]
+                .scene
+                .document
+                .get_entity(preview)
+                .is_none(),
+            "undoing the scope removed the entity created inside it"
+        );
+        assert!(
+            !host.app.tabs[0].scene.is_reference_only(handle),
+            "undoing the scope restored the designation's prior state"
+        );
+    }
+
+    #[test]
+    fn reference_only_designation_is_not_written_to_dwg_or_dxf() {
+        let mut app = OpenCADStudio::new_for_test();
+        app.tabs[0].is_start = false;
+        let mut host = HostSession::new(&mut app, 0);
+        let handle = host.add_entity(reference_test_line(10.0, 0.0, Handle::NULL));
+        host.set_reference_only(handle, true).unwrap();
+        // The designation lives in the scene's in-memory set only.
+        assert!(host.app.tabs[0].scene.is_reference_only(handle));
+
+        // The host writes nothing of its own into the document: no APPID
+        // registration, no marker XDATA on the designated entity.
+        assert!(host.document().app_ids.get("OCS").is_none());
+        assert!(host
+            .document()
+            .get_entity(handle)
+            .expect("designated entity")
+            .common()
+            .extended_data
+            .get_record("OCS")
+            .is_none());
+
+        let contains_marker =
+            |bytes: &[u8]| bytes.windows(15).any(|window| window == b"REFERENCE_ONLY");
+
+        // DWG: the marker string appears nowhere in the saved bytes, and a
+        // reopened file carries neither the host APPID nor the marker record.
+        let dwg = codec::DwgWriter::write_to_vec(host.document()).unwrap();
+        assert!(
+            !contains_marker(&dwg),
+            "DWG save must not contain the designation marker"
+        );
+        let reloaded = crate::io::load_bytes("reference-only.dwg", dwg).unwrap();
+        assert!(reloaded.app_ids.get("OCS").is_none());
+        assert!(reloaded
+            .get_entity(handle)
+            .expect("the line survives the round trip")
+            .common()
+            .extended_data
+            .get_record("OCS")
+            .is_none());
+        assert!(
+            !contains_marker(&codec::DwgWriter::write_to_vec(&reloaded).unwrap()),
+            "a re-save of the reopened file stays marker-free"
+        );
+
+        // DXF: same contract for the text format.
+        let dxf = codec::DxfWriter::new(host.document())
+            .write_to_vec()
+            .unwrap();
+        assert!(
+            !contains_marker(&dxf),
+            "DXF save must not contain the designation marker"
+        );
+        let reloaded = crate::io::load_bytes("reference-only.dxf", dxf).unwrap();
+        assert!(reloaded.app_ids.get("OCS").is_none());
+        assert!(reloaded
+            .get_entity(handle)
+            .expect("the line survives the round trip")
+            .common()
+            .extended_data
+            .get_record("OCS")
+            .is_none());
+    }
+
+    #[test]
+    fn erasing_a_designated_entity_undoes_designation_with_it() {
+        let mut app = OpenCADStudio::new_for_test();
+        app.tabs[0].is_start = false;
+        let mut host = HostSession::new(&mut app, 0);
+        let handle = host.add_entity(reference_test_line(10.0, 0.0, Handle::NULL));
+        host.set_reference_only(handle, true).unwrap();
+
+        // The plugin erase path removes a designated entity inside a scope:
+        // entity and set entry leave together.
+        host.push_undo("CVI: replace the underlying model");
+        host.remove_entity(handle);
+        drop(host);
+        app.finish_pending_history(0);
+        let host = HostSession::new(&mut app, 0);
+        assert!(host.app.tabs[0].scene.document.get_entity(handle).is_none());
+        assert!(!host.app.tabs[0].scene.is_reference_only(handle));
+        drop(host);
+
+        // Undoing the erase restores the entity AND its designation: the set
+        // mutation rode the scope as an explicit designation channel.
+        app.undo_steps(1);
+        let host = HostSession::new(&mut app, 0);
+        assert!(
+            host.app.tabs[0].scene.document.get_entity(handle).is_some(),
+            "undo restored the erased entity"
+        );
+        assert!(
+            host.app.tabs[0].scene.is_reference_only(handle),
+            "undo restored the designation together with its entity"
+        );
+    }
+
+    #[test]
+    fn user_paths_refuse_and_plugin_paths_write_reference_only_entities() {
+        let mut app = OpenCADStudio::new_for_test();
+        app.tabs[0].is_start = false;
+        let mut host = HostSession::new(&mut app, 0);
+        let handle = host.add_entity(reference_test_line(10.0, 0.0, Handle::NULL));
+        host.set_reference_only(handle, true).unwrap();
+        let plain = host.add_entity(reference_test_line(10.0, 5.0, Handle::NULL));
+
+        // Grips: the reference-only entity contributes none; the editable one
+        // keeps its own.
+        host.set_selection(&[handle]).unwrap();
+        host.app.refresh_selected_grips();
+        assert!(
+            host.app.tabs[0].selected_grips.is_empty(),
+            "reference-only entities contribute no grips"
+        );
+        host.set_selection(&[plain]).unwrap();
+        host.app.refresh_selected_grips();
+        assert!(!host.app.tabs[0].selected_grips.is_empty());
+
+        // The user in-place update refuses; the user batch skips only the
+        // reference-only member; the plugin-owned variants write through.
+        assert!(!host.app.tabs[0]
+            .scene
+            .update_entity(reference_test_line(20.0, 0.0, handle)));
+        let applied = host.app.tabs[0].scene.update_entities(vec![
+            reference_test_line(20.0, 0.0, handle),
+            reference_test_line(20.0, 5.0, plain),
+        ]);
+        assert_eq!(
+            applied, 1,
+            "the user batch applies only the editable entity"
+        );
+        let end_x = |scene: &crate::scene::Scene, h: Handle| match scene.document.get_entity(h) {
+            Some(EntityType::Line(line)) => line.end.x,
+            _ => panic!("entity {h:?} must be a line"),
+        };
+        let scene = &host.app.tabs[0].scene;
+        assert_eq!(
+            end_x(scene, handle),
+            10.0,
+            "the user paths refused the write"
+        );
+        assert_eq!(end_x(scene, plain), 20.0);
+        // The plugin-owned variant writes through. A real plugin refresh
+        // clones the live entity (designation included), edits it, and
+        // replaces it — so model that flow instead of a bare synthetic.
+        let mut moved = match host.app.tabs[0].scene.document.get_entity(handle) {
+            Some(entity) => entity.clone(),
+            _ => unreachable!("the entity exists"),
+        };
+        if let EntityType::Line(line) = &mut moved {
+            line.end.x = 30.0;
+        }
+        assert!(host.app.tabs[0].scene.update_entity_plugin(moved));
+        let scene = &host.app.tabs[0].scene;
+        assert_eq!(
+            end_x(scene, handle),
+            30.0,
+            "the plugin-owned update writes through"
+        );
+        assert!(
+            scene.is_reference_only(handle),
+            "a refresh-style plugin write preserves the designation"
+        );
+
+        // User erase skips reference-only entities; the plugin erase path
+        // removes them.
+        host.app.tabs[0].scene.erase_entities(&[handle]);
+        assert!(
+            host.app.tabs[0].scene.document.get_entity(handle).is_some(),
+            "user erase skips reference-only entities"
+        );
+        host.app.tabs[0].scene.erase_entities_plugin(&[handle]);
+        assert!(
+            host.app.tabs[0].scene.document.get_entity(handle).is_none(),
+            "the plugin erase path removes reference-only entities"
+        );
+        assert!(host.app.tabs[0].scene.document.get_entity(plain).is_some());
+    }
+
+    #[test]
+    fn select_all_visible_skips_reference_only_entities() {
+        let mut app = OpenCADStudio::new_for_test();
+        app.tabs[0].is_start = false;
+        let mut host = HostSession::new(&mut app, 0);
+        let handle = host.add_entity(reference_test_line(10.0, 0.0, Handle::NULL));
+        host.set_reference_only(handle, true).unwrap();
+        let plain = host.add_entity(reference_test_line(10.0, 5.0, Handle::NULL));
+
+        assert_eq!(host.app.tabs[0].scene.select_all_visible(), 1);
+        let selected = host.app.tabs[0].scene.selected_handles_in_order();
+        assert_eq!(selected, vec![plain]);
     }
 
     #[test]

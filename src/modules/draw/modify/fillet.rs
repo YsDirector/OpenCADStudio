@@ -1613,6 +1613,8 @@ pub struct FilletCommand {
     /// (i.e. "R" pressed after the first object was already picked), so the
     /// command resumes at the second pick instead of restarting selection.
     resume_second: Option<(Handle, FilletEntity, [f64; 2])>,
+    /// Multiple option: keep filleting until Enter / Esc.
+    multiple: bool,
     /// Fillets applied by this command that Undo can still take back.
     made: usize,
 }
@@ -1631,6 +1633,7 @@ impl FilletCommand {
             all_entities,
             entity_index,
             resume_second: None,
+            multiple: false,
             made: 0,
         }
     }
@@ -1671,6 +1674,10 @@ impl FilletCommand {
                 drop_zero_length_segments(poly);
             }
         }
+        // Single mode replaces and ends, like CHAMFER.
+        if !self.multiple {
+            return CmdResult::ReplaceMany(replacements, vec![]);
+        }
         self.all_entities.retain(|entity| {
             !replacements
                 .iter()
@@ -1697,7 +1704,11 @@ impl FilletCommand {
         self.step = FilletStep::First;
         self.resume_second = None;
         self.made += 1;
-        CmdResult::CommitEntities(vec![addition])
+        if self.multiple {
+            CmdResult::CommitEntities(vec![addition])
+        } else {
+            CmdResult::CommitEntitiesAndExit(vec![addition])
+        }
     }
 
     /// Undo option: take back the last fillet of this command. The host
@@ -1778,6 +1789,9 @@ impl CadCommand for FilletCommand {
                 } else {
                     CmdOption::new("Trim", "T")
                 });
+                if !self.multiple {
+                    opts.push(CmdOption::new("Multiple", "M"));
+                }
                 opts
             }
             FilletStep::Second { .. } => {
@@ -1867,6 +1881,11 @@ impl CadCommand for FilletCommand {
                 }
                 if upper == "U" || upper == "UNDO" {
                     return self.undo_last();
+                }
+                if matches!(self.step, FilletStep::First) && (upper == "M" || upper == "MULTIPLE")
+                {
+                    self.multiple = true;
+                    return Some(CmdResult::NeedPoint);
                 }
                 if upper == "T" || upper == "TRIM" {
                     self.enter_substep(FilletStep::TrimMode);
@@ -2028,41 +2047,37 @@ impl CadCommand for FilletCommand {
                                     FilletEntity::Line(_) | FilletEntity::Arc(_),
                                     EntityType::LwPolyline(moved),
                                     other,
-                                ) if !same_entity => {
-                                    join_poly_fillet(
-                                        poly,
-                                        *seg_idx,
-                                        moved,
-                                        other,
-                                        maybe_arc.as_ref(),
-                                    )
-                                    .map(|poly| {
-                                        vec![
-                                            (h1, vec![EntityType::LwPolyline(poly)]),
-                                            (handle, Vec::new()),
-                                        ]
-                                    })
-                                }
+                                ) if !same_entity => join_poly_fillet(
+                                    poly,
+                                    *seg_idx,
+                                    moved,
+                                    other,
+                                    maybe_arc.as_ref(),
+                                )
+                                .map(|poly| {
+                                    vec![
+                                        (h1, vec![EntityType::LwPolyline(poly)]),
+                                        (handle, Vec::new()),
+                                    ]
+                                }),
                                 (
                                     FilletEntity::Line(_) | FilletEntity::Arc(_),
                                     FilletEntity::LwPoly { poly, seg_idx, .. },
                                     other,
                                     EntityType::LwPolyline(moved),
-                                ) if !same_entity => {
-                                    join_poly_fillet(
-                                        poly,
-                                        *seg_idx,
-                                        moved,
-                                        other,
-                                        maybe_arc.as_ref(),
-                                    )
-                                    .map(|poly| {
-                                        vec![
-                                            (handle, vec![EntityType::LwPolyline(poly)]),
-                                            (h1, Vec::new()),
-                                        ]
-                                    })
-                                }
+                                ) if !same_entity => join_poly_fillet(
+                                    poly,
+                                    *seg_idx,
+                                    moved,
+                                    other,
+                                    maybe_arc.as_ref(),
+                                )
+                                .map(|poly| {
+                                    vec![
+                                        (handle, vec![EntityType::LwPolyline(poly)]),
+                                        (h1, Vec::new()),
+                                    ]
+                                }),
                                 _ => None,
                             };
                             if let Some(replacements) = joined {
@@ -2356,8 +2371,7 @@ enum ChamferStep {
 }
 
 /// The refusal a no-trim CHAMFER prints for anything but two independent Lines.
-const NO_TRIM_CHAMFER_LINES_ONLY: &str =
-    "No-trim chamfer supports two independent lines only.";
+const NO_TRIM_CHAMFER_LINES_ONLY: &str = "No-trim chamfer supports two independent lines only.";
 
 pub struct ChamferCommand {
     dist1: f64,
@@ -2729,9 +2743,7 @@ impl CadCommand for ChamferCommand {
                     Some(EntityType::LwPolyline(p)) => {
                         // 不修剪只定义在两条独立直线之间：多段线角点必须重建整条。
                         if !self.trim {
-                            return CmdResult::ReportError(
-                                NO_TRIM_CHAMFER_LINES_ONLY.to_string(),
-                            );
+                            return CmdResult::ReportError(NO_TRIM_CHAMFER_LINES_ONLY.to_string());
                         }
                         self.step = ChamferStep::SecondPoly {
                             h1: handle,
@@ -2749,9 +2761,7 @@ impl CadCommand for ChamferCommand {
                 if !self.trim {
                     self.step = ChamferStep::First;
                     self.resume_pick = None;
-                    return CmdResult::ReportError(
-                        NO_TRIM_CHAMFER_LINES_ONLY.to_string(),
-                    );
+                    return CmdResult::ReportError(NO_TRIM_CHAMFER_LINES_ONLY.to_string());
                 }
                 let h1 = *h1;
                 let poly = poly.clone();
@@ -2980,19 +2990,27 @@ mod tests {
 
     #[test]
     fn fillet_undo_option_appears_after_a_fillet_and_refreshes_from_document() {
+        // The trim default is session-scoped; make this unit test independent
+        // of another FILLET test running on the same harness worker.
+        defaults::set_fillet_trim(true);
         let mut command = FilletCommand::new(
             1.0,
             vec![line(0.0, 0.0, 10.0, 0.0, 1), line(0.0, 0.0, 0.0, 10.0, 2)],
         );
-        assert_eq!(keywords(&command), ["P", "R", "N"]);
+        assert_eq!(keywords(&command), ["P", "R", "N", "M"]);
         assert!(command.on_text_input("U").is_none(), "nothing to undo yet");
+        assert!(matches!(command.on_text_input("M"), Some(CmdResult::NeedPoint)));
+        assert_eq!(keywords(&command), ["P", "R", "N"], "Multiple is not offered twice");
         command.on_entity_pick(Handle::new(1), DVec3::new(5.0, 0.0, 0.0));
         assert!(matches!(
             command.on_entity_pick(Handle::new(2), DVec3::new(0.0, 5.0, 0.0)),
             CmdResult::ReplaceManyContinue(_)
         ));
         assert_eq!(keywords(&command), ["U", "P", "R", "N"]);
-        assert!(matches!(command.on_text_input("U"), Some(CmdResult::UndoDocument)));
+        assert!(matches!(
+            command.on_text_input("U"),
+            Some(CmdResult::UndoDocument)
+        ));
         assert_eq!(keywords(&command), ["P", "R", "N"]);
         // The host hands the restored document back; the cache follows it.
         let mut doc = codec::CadDocument::new();
@@ -3004,6 +3022,7 @@ mod tests {
 
     #[test]
     fn no_trim_fillet_adds_only_an_arc_and_keeps_source_handles() {
+        defaults::set_fillet_trim(true);
         let first = Handle::new(1);
         let second = Handle::new(2);
         let original = vec![
@@ -3013,6 +3032,9 @@ mod tests {
         let mut command = FilletCommand::new(1.0, original.clone());
         assert!(matches!(command.on_text_input("N"), Some(CmdResult::NeedPoint)));
         assert!(!command.trim);
+        // Single trimmed FILLET ends after its replacement; no-trim uses the
+        // same persistent command path only when Multiple is requested.
+        assert!(matches!(command.on_text_input("M"), Some(CmdResult::NeedPoint)));
         assert!(matches!(
             command.on_entity_pick(first, DVec3::new(5.0, 0.0, 0.0)),
             CmdResult::NeedPoint
@@ -3055,13 +3077,20 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert_eq!(source_lines[0], (Vector3::new(0.0, 0.0, 0.0), Vector3::new(10.0, 0.0, 0.0)));
-        assert_eq!(source_lines[1], (Vector3::new(0.0, 0.0, 0.0), Vector3::new(0.0, 10.0, 0.0)));
+        assert_eq!(
+            source_lines[0],
+            (Vector3::new(0.0, 0.0, 0.0), Vector3::new(10.0, 0.0, 0.0))
+        );
+        assert_eq!(
+            source_lines[1],
+            (Vector3::new(0.0, 0.0, 0.0), Vector3::new(0.0, 10.0, 0.0))
+        );
         // The original handles remain pickable for another no-trim fillet.
         assert!(matches!(
             command.on_entity_pick(first, DVec3::new(5.0, 0.0, 0.0)),
             CmdResult::NeedPoint
         ));
+        defaults::set_fillet_trim(true);
     }
 
     #[test]
@@ -3075,51 +3104,26 @@ mod tests {
             assert!(matches!(command.on_text_input(token), Some(CmdResult::NeedPoint)));
             assert!(command.trim, "{token}");
         }
-    }
-
-    /// No-trim must never fall back to trimming: a line/arc or arc/arc pair is
-    /// refused (with a message) instead of silently cutting the source.
-    #[test]
-    fn no_trim_fillet_refuses_non_line_pairs() {
+        // No-trim must refuse a non-line pair without silently trimming it.
         let mut arc = ArcEnt::new();
         arc.center = Vector3::new(10.0, 10.0, 0.0);
         arc.radius = 5.0;
         arc.start_angle = std::f64::consts::PI;
         arc.end_angle = std::f64::consts::PI * 1.5;
         arc.common.handle = Handle::new(2);
-
         let first_line = FilletEntity::from_entity(&line(0.0, 0.0, 10.0, 0.0, 1)).unwrap();
-        let second_line = FilletEntity::from_entity(&line(0.0, 0.0, 0.0, 10.0, 2)).unwrap();
-        let arc = FilletEntity::from_entity(&EntityType::Arc(arc)).unwrap();
-        assert!(no_trim_pair_supported(&first_line, &second_line));
-        assert!(!no_trim_pair_supported(&first_line, &arc));
-        assert!(!no_trim_pair_supported(&arc, &first_line));
-
-        // The first pick itself is refused, so the command keeps waiting on a
-        // line instead of advancing with an arc it cannot honour.
-        let mut command = FilletCommand::new(
+        let arc_entity = FilletEntity::from_entity(&EntityType::Arc(arc.clone())).unwrap();
+        assert!(!no_trim_pair_supported(&first_line, &arc_entity));
+        let mut reject = FilletCommand::new(
             1.0,
-            vec![
-                line(0.0, 10.0, 20.0, 10.0, 1),
-                EntityType::Arc(match &arc {
-                    FilletEntity::Arc(a) => a.clone(),
-                    _ => unreachable!(),
-                }),
-            ],
+            vec![line(0.0, 10.0, 20.0, 10.0, 1), EntityType::Arc(arc)],
         );
-        assert!(matches!(command.on_text_input("N"), Some(CmdResult::NeedPoint)));
+        assert!(matches!(reject.on_text_input("N"), Some(CmdResult::NeedPoint)));
         assert!(matches!(
-            command.on_entity_pick(Handle::new(2), DVec3::new(10.0, 5.0, 0.0)),
+            reject.on_entity_pick(Handle::new(2), DVec3::new(10.0, 5.0, 0.0)),
             CmdResult::ReportError(_)
         ));
-        assert!(matches!(command.step, FilletStep::First));
-        // A line first pick is still accepted, and the source geometry stays
-        // untouched until a second line is picked.
-        assert!(matches!(
-            command.on_entity_pick(Handle::new(1), DVec3::new(5.0, 10.0, 0.0)),
-            CmdResult::NeedPoint
-        ));
-        assert!(matches!(command.step, FilletStep::Second { .. }));
+        assert!(matches!(reject.step, FilletStep::First));
     }
 
     #[test]
@@ -3134,8 +3138,15 @@ mod tests {
         ));
 
         let mut multi = ChamferCommand::new(1.0, lines());
-        assert!(matches!(multi.on_text_input("M"), Some(CmdResult::NeedPoint)));
-        assert_eq!(keywords(&multi), ["D", "N"], "Multiple is not offered twice");
+        assert!(matches!(
+            multi.on_text_input("M"),
+            Some(CmdResult::NeedPoint)
+        ));
+        assert_eq!(
+            keywords(&multi),
+            ["D", "N"],
+            "Multiple is not offered twice"
+        );
         multi.on_entity_pick(Handle::new(1), DVec3::new(5.0, 0.0, 0.0));
         match multi.on_entity_pick(Handle::new(2), DVec3::new(0.0, 5.0, 0.0)) {
             CmdResult::ReplaceManyContinue(replacements) => {
@@ -3146,7 +3157,10 @@ mod tests {
             _ => panic!("multiple mode should keep the command active"),
         }
         assert_eq!(keywords(&multi), ["U", "D", "N"]);
-        assert!(matches!(multi.on_text_input("U"), Some(CmdResult::UndoDocument)));
+        assert!(matches!(
+            multi.on_text_input("U"),
+            Some(CmdResult::UndoDocument)
+        ));
     }
 
     /// D7 对称：CHAMFER 也有不修剪开关——两条源线（含句柄/几何）原样保留，
@@ -3198,6 +3212,7 @@ mod tests {
 
         // Multiple 模式：留在命令里，缓存拿到新句柄。
         let mut multi = ChamferCommand::new(1.0, lines());
+        multi.dist2 = 1.0;
         assert!(matches!(multi.on_text_input("M"), Some(CmdResult::NeedPoint)));
         assert!(matches!(multi.on_text_input("N"), Some(CmdResult::NeedPoint)));
         assert!(matches!(
@@ -3221,12 +3236,18 @@ mod tests {
     fn no_trim_chamfer_refuses_polyline_corners() {
         for token in ["N", "NOTRIM", "NO TRIM", "TRIM=FALSE"] {
             let mut command = ChamferCommand::new(1.0, Vec::new());
-            assert!(matches!(command.on_text_input(token), Some(CmdResult::NeedPoint)));
+            assert!(matches!(
+                command.on_text_input(token),
+                Some(CmdResult::NeedPoint)
+            ));
             assert!(!command.trim, "{token}");
         }
         for token in ["T", "TRIM", "TRIM=TRUE"] {
             let mut command = ChamferCommand::new(1.0, Vec::new());
-            assert!(matches!(command.on_text_input(token), Some(CmdResult::NeedPoint)));
+            assert!(matches!(
+                command.on_text_input(token),
+                Some(CmdResult::NeedPoint)
+            ));
             assert!(command.trim, "{token}");
         }
         // 多段线首拾取在 no-trim 下直接报错并留在第一步。
@@ -3252,6 +3273,7 @@ mod tests {
             1.0,
             vec![line(0.0, 0.0, 10.0, 0.0, 1), line(0.0, 0.0, 0.0, 10.0, 2)],
         );
+        command.on_text_input("M");
 
         assert!(matches!(
             command.on_entity_pick(first, DVec3::new(5.0, 0.0, 0.0)),

@@ -1117,66 +1117,133 @@ impl HostApi for V4PluginHostApi {
     // ── fork: the fork's own additions follow the upstream ones ─────────────
     // (same policy as `crate::host`: upstream's slots/positions stay untouched,
     // fork-only methods are appended. See docs/fork-patches.md §A-1.)
-    fn import_frame_block(
-        &mut self,
-        req: crate::host::ImportFrameBlockRequest,
-    ) -> Result<Vec<codec::entities::AttributeDefinition>, String> {
-        match self.request(PluginRequest::ImportFrameBlock(req)) {
-            Ok(PluginResponse::ImportFrameBlock(result)) => {
+    fn set_reference_only(&mut self, handle: Handle, reference_only: bool) -> Result<(), String> {
+        match self.request(PluginRequest::SetReferenceOnly {
+            handle,
+            reference_only,
+        }) {
+            Ok(PluginResponse::SetReferenceOnlyResult(result)) => {
                 if result.is_ok() {
                     self.document_cache = OnceCell::new();
                 }
                 result
             }
-            Ok(other) => {
-                eprintln!("[plugin] unexpected ImportFrameBlock response: {other:?}");
-                Err(format!("unexpected response: {other:?}"))
-            }
-            Err(e) => {
-                eprintln!("[plugin] ImportFrameBlock failed: {e}");
-                Err(e.to_string())
-            }
+            Ok(PluginResponse::Error(error)) => Err(error),
+            Ok(other) => Err(format!("unexpected reference-only response: {other:?}")),
+            Err(error) => Err(error.to_string()),
         }
     }
 
-    fn ensure_dim_styles(&mut self, defs: Vec<crate::host::DimStyleDef>) -> usize {
-        match self.request(PluginRequest::EnsureDimStyles(defs)) {
-            Ok(PluginResponse::Count(n)) => {
-                if n > 0 {
-                    self.document_cache = OnceCell::new();
-                }
-                n
-            }
-            Ok(other) => {
-                eprintln!("[plugin] unexpected EnsureDimStyles response: {other:?}");
-                0
-            }
-            Err(e) => {
-                eprintln!("[plugin] EnsureDimStyles failed: {e}");
-                0
-            }
+    fn entity_grips(&self, handle: Handle) -> Result<Vec<crate::host::GripInfo>, String> {
+        match self.request(PluginRequest::EntityGrips { handle }) {
+            Ok(PluginResponse::EntityGripsResult(result)) => result,
+            Ok(PluginResponse::Error(error)) => Err(error),
+            Ok(other) => Err(format!("unexpected entity-grips response: {other:?}")),
+            Err(error) => Err(error.to_string()),
         }
     }
 
-    fn add_block_record(
-        &mut self,
-        name: &str,
-        entities: Vec<codec::EntityType>,
-    ) -> Result<codec::Handle, String> {
-        match self.request(PluginRequest::AddBlockRecord {
-            name: name.to_string(),
-            entities,
+    fn grip_drag(&mut self, handle: Handle, grip_id: usize, to: [f64; 3]) -> Result<(), String> {
+        match self.request(PluginRequest::GripDrag {
+            handle,
+            grip_id,
+            to,
         }) {
-            Ok(PluginResponse::Handle(h)) => {
-                self.document_cache = OnceCell::new();
-                Ok(h)
-            }
-            Ok(PluginResponse::Error(e)) => Err(e),
-            Ok(other) => {
-                eprintln!("[plugin] unexpected AddBlockRecord response: {other:?}");
-                Err("unexpected AddBlockRecord response".to_string())
-            }
-            Err(e) => Err(e.to_string()),
+            Ok(PluginResponse::GripDragResult(result)) => result,
+            Ok(PluginResponse::Error(error)) => Err(error),
+            Ok(other) => Err(format!("unexpected grip-drag response: {other:?}")),
+            Err(error) => Err(error.to_string()),
+        }
+    }
+
+    fn set_plugin_grips(
+        &mut self,
+        _plugin_id: &str,
+        grips: Vec<crate::host::PluginGrip>,
+    ) -> Result<(), String> {
+        // The plugin id never crosses the wire: the host attaches the serving
+        // process's own manifest id, so a plugin cannot declare grips in
+        // another plugin's name.
+        match self.request(PluginRequest::SetPluginGrips { grips }) {
+            Ok(PluginResponse::SetPluginGripsResult(result)) => result,
+            Ok(PluginResponse::Error(error)) => Err(error),
+            Ok(other) => Err(format!("unexpected plugin-grips response: {other:?}")),
+            Err(error) => Err(error.to_string()),
+        }
+    }
+
+    fn entities_batch(
+        &self,
+        handles: &[codec::Handle],
+    ) -> Result<Vec<Option<codec::EntityType>>, String> {
+        // API v12: per-entity reads — refresh passes never need to re-clone
+        // the invalidated document snapshot after writes.
+        match self.request(PluginRequest::GetEntitiesBatch {
+            handles: handles.to_vec(),
+        }) {
+            Ok(PluginResponse::GetEntitiesBatchResult(result)) => result,
+            Ok(PluginResponse::Error(error)) => Err(error),
+            Ok(other) => Err(format!("unexpected entities-batch response: {other:?}")),
+            Err(error) => Err(error.to_string()),
+        }
+    }
+
+    fn constraint_create(
+        &mut self,
+        constraint: crate::host::PluginConstraint,
+    ) -> Result<(), String> {
+        // API v13: the interactive constraint machinery, no command line.
+        match self.request(PluginRequest::CreateConstraint { constraint }) {
+            Ok(PluginResponse::CreateConstraintResult(result)) => result,
+            Ok(PluginResponse::Error(error)) => Err(error),
+            Ok(other) => Err(format!("unexpected constraint response: {other:?}")),
+            Err(error) => Err(error.to_string()),
+        }
+    }
+
+    fn read_xrecords(
+        &self,
+        reads: &[crate::host::XRecordRead],
+    ) -> Result<Vec<Result<Vec<crate::host::XRecordEntry>, String>>, String> {
+        // API v13: one frame answers the whole store walk.
+        match self.request(PluginRequest::ReadXRecords {
+            reads: reads.to_vec(),
+        }) {
+            Ok(PluginResponse::ReadXRecordsResult(result)) => result,
+            Ok(PluginResponse::Error(error)) => Err(error),
+            Ok(other) => Err(format!("unexpected xrecords-batch response: {other:?}")),
+            Err(error) => Err(error.to_string()),
+        }
+    }
+
+    fn update_xrecords(
+        &mut self,
+        updates: &[crate::host::XRecordUpdate],
+    ) -> Result<Vec<Result<codec::Handle, String>>, String> {
+        // API v13: one frame (one undo composition) replaces the whole
+        // per-record write loop.
+        match self.request(PluginRequest::UpdateXRecords {
+            updates: updates.to_vec(),
+        }) {
+            Ok(PluginResponse::UpdateXRecordsResult(result)) => result,
+            Ok(PluginResponse::Error(error)) => Err(error),
+            Ok(other) => Err(format!("unexpected xrecords-update response: {other:?}")),
+            Err(error) => Err(error.to_string()),
+        }
+    }
+
+    fn list_xrecords_with_entries(
+        &self,
+        dictionary_path: &[&str],
+    ) -> Result<Vec<(String, Vec<crate::host::XRecordEntry>)>, String> {
+        // API v13: discovery and content in one answer.
+        match self.request(PluginRequest::ListXRecordsWithEntries {
+            dictionary_path: dictionary_path.iter().map(|s| s.to_string()).collect(),
+        }) {
+            Ok(PluginResponse::ListXRecordsWithEntriesResult(result)) => result,
+            Ok(PluginResponse::Error(error)) => Err(error),
+            Ok(other) => Err(format!("unexpected xrecords-list response: {other:?}")),
+            Err(error) => Err(error.to_string()),
         }
     }
 }
@@ -1196,9 +1263,7 @@ impl V4Client {
         });
         let shared_for_reader = Arc::clone(&shared);
         let notifications = Arc::new(Mutex::new(notify_rx));
-        std::thread::spawn(move || {
-            reader_thread(reader, shared_for_reader, notify_tx, runner_tx)
-        });
+        std::thread::spawn(move || reader_thread(reader, shared_for_reader, notify_tx, runner_tx));
         Self {
             shared,
             notifications,
@@ -1378,13 +1443,16 @@ mod tests {
         });
 
         assert!(matches!(first.join().unwrap(), PluginResponse::Bool(true)));
-        assert!(matches!(second.join().unwrap(), PluginResponse::Bool(false)));
+        assert!(matches!(
+            second.join().unwrap(),
+            PluginResponse::Bool(false)
+        ));
         runner.join().unwrap();
     }
 
     #[test]
     fn v4_client_notification_queue_size_env_is_honored() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let prev = std::env::var("OCS_PLUGIN_NOTIFY_QUEUE_SIZE").ok();
         std::env::set_var("OCS_PLUGIN_NOTIFY_QUEUE_SIZE", "7");
         assert_eq!(notify_queue_size(), 7);
@@ -1396,7 +1464,7 @@ mod tests {
 
     #[test]
     fn v4_client_notification_queue_drops_newest_on_overflow() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let prev = std::env::var("OCS_PLUGIN_NOTIFY_QUEUE_SIZE").ok();
         std::env::set_var("OCS_PLUGIN_NOTIFY_QUEUE_SIZE", "1");
         let (host_stream, mut runner_stream) = connect_pair();
@@ -1464,4 +1532,5 @@ mod tests {
             other => panic!("unexpected frame: {other:?}"),
         }
     }
+
 }

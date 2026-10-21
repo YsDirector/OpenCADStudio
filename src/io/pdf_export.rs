@@ -185,7 +185,8 @@ fn emit_image(
     let mut height = image.height;
     let mut pixels: std::borrow::Cow<[u8]> = std::borrow::Cow::Borrowed(image.pixels.as_slice());
     if let Some(target) = options.quality.target_dpi() {
-        let dist = |a: [f32; 2], b: [f32; 2]| ((b[0] - a[0]).powi(2) + (b[1] - a[1]).powi(2)).sqrt();
+        let dist =
+            |a: [f32; 2], b: [f32; 2]| ((b[0] - a[0]).powi(2) + (b[1] - a[1]).powi(2)).sqrt();
         let width_edge = dist(corners[0], corners[1]);
         let height_edge = dist(corners[0], corners[3]);
         // A degenerate (zero-area) placement keeps the native pixels.
@@ -208,8 +209,12 @@ fn emit_image(
                 if let Some(buffer) =
                     image::RgbaImage::from_raw(width, height, image.pixels.as_ref().clone())
                 {
-                    let resized =
-                        image::imageops::resize(&buffer, w, h, image::imageops::FilterType::Triangle);
+                    let resized = image::imageops::resize(
+                        &buffer,
+                        w,
+                        h,
+                        image::imageops::FilterType::Triangle,
+                    );
                     width = w;
                     height = h;
                     pixels = std::borrow::Cow::Owned(resized.into_raw());
@@ -437,11 +442,14 @@ pub(crate) fn render_pdf_bytes(
     // Allocation addresses cannot be reused by another source during this export.
     let mut image_resources = std::collections::HashMap::new();
     let mut text_fonts = TextFonts::default();
+    // One optional-content group per drawing layer, shared by every page.
+    let mut layer_ids = std::collections::HashMap::new();
     for (index, page) in pages.iter().enumerate() {
         append_pdf_page(
             &mut doc,
             &mut image_resources,
             &mut text_fonts,
+            &mut layer_ids,
             page,
             plot_style,
             &fonts,
@@ -468,6 +476,7 @@ fn append_pdf_page(
     doc: &mut PdfDocument,
     image_resources: &mut std::collections::HashMap<(usize, u32, u32), printpdf::XObjectId>,
     text_fonts: &mut TextFonts,
+    layer_ids: &mut std::collections::HashMap<String, printpdf::LayerInternalId>,
     page: &PdfPageInput,
     fallback_plot_style: Option<&PlotStyleTable>,
     fonts: &SearchableFontSet,
@@ -489,7 +498,13 @@ fn append_pdf_page(
         wipeouts,
         images,
         group_splits,
+        entity_layers,
     } = &page.content;
+    let layer_of = |name: &str| {
+        crate::scene::Scene::handle_from_wire_name(name)
+            .and_then(|handle| entity_layers.get(&handle))
+            .map(String::as_str)
+    };
     let (paper_w, paper_h) = (page.paper_w as f32, page.paper_h as f32);
     let (ox, oy) = (page.offset_x, page.offset_y);
     let (rotation_deg, scale, clip) = (page.rotation_deg, page.scale, page.clip);
@@ -681,8 +696,35 @@ fn append_pdf_page(
         // Current PDF dash array (empty = solid). Tracked so the dash op is only
         // re-emitted when it actually changes between wires.
         let mut last_dash: Option<Vec<i64>> = None;
+        // Consecutive items on one drawing layer share a marked-content run,
+        // so a viewer's layer panel can hide that layer.
+        let mut open_layer: Option<&str> = None;
 
         for (_, _, _, item) in draw_items {
+            let layer = match &item {
+                DrawItem::WireFill(wire) | DrawItem::Wire(wire) | DrawItem::Text(wire) => {
+                    layer_of(&wire.name)
+                }
+                DrawItem::Hatch(hatch) => layer_of(&hatch.name),
+                DrawItem::Image(_) => None,
+            };
+            if layer != open_layer {
+                if open_layer.is_some() {
+                    ops.push(Op::EndLayer);
+                }
+                if let Some(name) = layer {
+                    let layer_id = layer_ids
+                        .entry(name.to_string())
+                        .or_insert_with(|| {
+                            let mut layer = printpdf::Layer::new(name);
+                            layer.creator = "Open CAD Studio".into();
+                            doc.add_layer(&layer)
+                        })
+                        .clone();
+                    ops.push(Op::BeginLayer { layer_id });
+                }
+                open_layer = layer;
+            }
             let wire = match item {
                 DrawItem::WireFill(wire) => {
                     emit_wire_fills(
@@ -739,6 +781,7 @@ fn append_pdf_page(
                             std::slice::from_ref(&wire.wire),
                             ox,
                             oy,
+                            scale,
                             clip,
                             plot_style,
                             options,
@@ -751,7 +794,16 @@ fn append_pdf_page(
                     continue;
                 }
                 DrawItem::Image(image) => {
-                    emit_image(doc, image_resources, &mut ops, image, ox, oy, scale, options)?;
+                    emit_image(
+                        doc,
+                        image_resources,
+                        &mut ops,
+                        image,
+                        ox,
+                        oy,
+                        scale,
+                        options,
+                    )?;
                     continue;
                 }
                 DrawItem::Wire(wire) => wire,
@@ -802,28 +854,12 @@ fn append_pdf_page(
                     }
                 }
             }
-            // Near-white and near-yellow (viewport active border) → dark grey for print
-            // (only when no CTB override was applied).
+            // Colour 7 plots black on the white sheet (only when no CTB
+            // override was applied).
             // `aci == 0` is an explicit true colour and plots as drawn, like the
             // hatch pass (#1621); only a pure white there is an unresolved colour 7.
             if !color_overridden && (wire.aci != 0 || [r, g, b] == [1.0; 3]) {
-                // An authored white (not colour 7) plots as drawn, like on screen.
-                let is_light = r > 0.80
-                    && g > 0.80
-                    && b > 0.80
-                    && !crate::scene::convert::tess_util::is_authored_white([r, g, b]);
-                let is_yellow = r > 0.80 && g > 0.70 && b < 0.30;
-                let is_cyan = r < 0.30 && g > 0.70 && b > 0.70;
-                if is_light || is_yellow {
-                    r = 0.0;
-                    g = 0.0;
-                    b = 0.0;
-                } else if is_cyan {
-                    // Viewport border: print as dark blue.
-                    r = 0.0;
-                    g = 0.15;
-                    b = 0.50;
-                }
+                [r, g, b] = adapt_to_paper([r, g, b]);
             }
             [r, g, b] = plotted_color([r, g, b], a, screening, options);
 
@@ -897,7 +933,20 @@ fn append_pdf_page(
             // Linetype dash pattern. Without this every wire exported as a solid
             // line regardless of its linetype (dashed / centre / dash-dot). (#155)
             let dash_arr = dash_array_from_pattern(wire.pattern_length, &wire.pattern, MM_TO_PT);
-            let stationed = !dash_arr.is_empty() && wire.pattern_stations.len() > wire.points.len();
+            // Dash entries are whole points in the plot's user space, so a
+            // pattern only a fraction of a drawing unit long (an inch sheet)
+            // rounds away; such a wire is cut into its dashes here (#1739).
+            let page_h = paper_h as f64 / scale.max(1e-6) as f64;
+            let synthesized;
+            let stations: &[f32] = if wire.pattern_stations.len() > wire.points.len() {
+                &wire.pattern_stations
+            } else if !dash_arr.is_empty() && dash_rounds_off(&wire.pattern) {
+                synthesized = length_stations(wire, page_h);
+                &synthesized
+            } else {
+                &[]
+            };
+            let stationed = !dash_arr.is_empty() && !stations.is_empty();
             if stationed {
                 if last_dash.as_ref().is_none_or(|dash| !dash.is_empty()) {
                     ops.push(Op::SetLineDashPattern {
@@ -910,11 +959,11 @@ fn append_pdf_page(
                     {
                         continue;
                     }
-                    let start = wire.point_world(index, paper_h as f64 / scale.max(1e-6) as f64);
-                    let end = wire.point_world(index + 1, paper_h as f64 / scale.max(1e-6) as f64);
+                    let start = wire.point_world(index, page_h);
+                    let end = wire.point_world(index + 1, page_h);
                     for [from, to] in visible_station_ranges(
-                        wire.pattern_stations[index],
-                        wire.pattern_stations[index + 1],
+                        stations[index],
+                        stations[index + 1],
                         wire.pattern_length,
                         &wire.pattern,
                     ) {
@@ -1043,6 +1092,9 @@ fn append_pdf_page(
             }
             flush_line(&mut ops, &segment, dot_radius);
         }
+        if open_layer.is_some() {
+            ops.push(Op::EndLayer);
+        }
     }
 
     if needs_state {
@@ -1141,6 +1193,38 @@ fn dash_array_from_pattern(pattern_length: f32, pattern: &[f32; 8], mm_to_pt: f3
         // 1 pt floor so a zero-length dot still prints as a short mark.
         .map(|&v| (((v.abs() * mm_to_pt).round()) as i64).max(1))
         .collect()
+}
+
+/// Whether a pattern element is too short for a whole-point dash entry to
+/// carry it within 5 %.
+fn dash_rounds_off(pattern: &[f32; 8]) -> bool {
+    pattern
+        .iter()
+        .any(|value| *value != 0.0 && value.abs() * MM_TO_PT < 10.0)
+}
+
+/// Distance along the wire at each point (restarting after a pen-up), plus
+/// the total, in the layout `visible_station_ranges` reads.
+fn length_stations(wire: &crate::scene::WireModel, page_h: f64) -> Vec<f32> {
+    let mut stations = Vec::with_capacity(wire.points.len() + 1);
+    let mut along = 0.0_f64;
+    let mut previous: Option<glam::DVec3> = None;
+    for index in 0..wire.points.len() {
+        if !wire.points[index][0].is_finite() {
+            previous = None;
+            along = 0.0;
+            stations.push(0.0);
+            continue;
+        }
+        let point = wire.point_world(index, page_h);
+        if let Some(previous) = previous {
+            along += point.distance(previous);
+        }
+        previous = Some(point);
+        stations.push(along as f32);
+    }
+    stations.push(along as f32);
+    stations
 }
 
 fn visible_station_ranges(
@@ -1379,7 +1463,7 @@ fn emit_wire_fills(
                 }
             }
             if !color_overridden {
-                [r, g, b] = adapt_text_color([r, g, b]);
+                [r, g, b] = adapt_to_paper([r, g, b]);
             }
             [r, g, b] = plotted_color([r, g, b], a, screening, options);
         }
@@ -1492,8 +1576,7 @@ fn emit_hatch(
     }
     // Adapt hatch fills to the white sheet, mirroring the wire pass: colours
     // arrive adapted to the (dark) screen background, so a white/ACI-7 fill
-    // would vanish white-on-white on paper. Force near-white/near-yellow → black
-    // and near-cyan → dark blue for a readable white-sheet result.
+    // would vanish white-on-white on paper, so near-white turns black.
     // Genuine colours are untouched; WIPEOUTS keep their paper-white mask.
     let is_wipeout = hatch.name == "WIPEOUT_FILL";
     let mut screening = 1.0;
@@ -1527,22 +1610,7 @@ fn emit_hatch(
         && hatch.aci != 0
         && !(hatch.aci == 7 && matches!(hatch.pattern, HatchPattern::Solid))
     {
-        // An authored white (not colour 7) plots as drawn, like on screen.
-        let is_light = r > 0.80
-            && g > 0.80
-            && b > 0.80
-            && !crate::scene::convert::tess_util::is_authored_white([r, g, b]);
-        let is_yellow = r > 0.80 && g > 0.70 && b < 0.30;
-        let is_cyan = r < 0.30 && g > 0.70 && b > 0.70;
-        if is_light || is_yellow {
-            r = 0.0;
-            g = 0.0;
-            b = 0.0;
-        } else if is_cyan {
-            r = 0.0;
-            g = 0.15;
-            b = 0.50;
-        }
+        [r, g, b] = adapt_to_paper([r, g, b]);
     }
     [r, g, b] = plotted_color([r, g, b], a, screening, options);
     // `boundary` holds f32 offsets from the f64 `world_origin`, so resolve the
@@ -1595,7 +1663,7 @@ fn emit_hatch(
                 [r, g, b]
             } else {
                 plotted_color(
-                    adapt_text_color([color2[0], color2[1], color2[2]]),
+                    adapt_to_paper([color2[0], color2[1], color2[2]]),
                     color2[3],
                     screening,
                     options,
@@ -1707,20 +1775,17 @@ fn glyph_world_xy(v: &crate::scene::pipeline::text_gpu::TextVertex) -> [f64; 2] 
     ]
 }
 
-/// Adapt a text colour to the white sheet, mirroring the wire/hatch passes:
-/// near-white / near-yellow (colour-7-on-white) → black, near-cyan → dark blue.
-fn adapt_text_color([r, g, b]: [f32; 3]) -> [f32; 3] {
+/// Adapt a screen colour to the white sheet, shared by every PDF/SVG pass:
+/// only near-white (colour 7) turns black. Every other colour, yellow and
+/// cyan included, plots as drawn. (#1926)
+pub(crate) fn adapt_to_paper([r, g, b]: [f32; 3]) -> [f32; 3] {
     // An authored white (not colour 7) plots as drawn, like on screen.
     let is_light = r > 0.80
         && g > 0.80
         && b > 0.80
         && !crate::scene::convert::tess_util::is_authored_white([r, g, b]);
-    let is_yellow = r > 0.80 && g > 0.70 && b < 0.30;
-    let is_cyan = r < 0.30 && g > 0.70 && b > 0.70;
-    if is_light || is_yellow {
+    if is_light {
         [0.0, 0.0, 0.0]
-    } else if is_cyan {
-        [0.0, 0.15, 0.50]
     } else {
         [r, g, b]
     }
@@ -1772,6 +1837,7 @@ fn emit_searchable_text(
     wires: &[WireModel],
     ox: f64,
     oy: f64,
+    scale: f32,
     clip: Option<(f32, f32, f32, f32)>,
     plot_style: Option<&PlotStyleTable>,
     options: PdfPlotOptions,
@@ -1780,6 +1846,8 @@ fn emit_searchable_text(
     use crate::scene::model::wire_model::run_rect_overlap;
     /// Helvetica cap height ≈ 0.72 em.
     const HELVETICA_CAP_RATIO: f32 = 0.72;
+    // Sizes are in page user space (under the plot CTM): floor at 0.1 pt on paper.
+    let min_size = 0.1 / scale.max(1e-6);
     let mut emitted = 0;
     for wire in wires {
         if wire.searchable_text.is_empty() {
@@ -1829,7 +1897,7 @@ fn emit_searchable_text(
                 continue;
             }
             let rgb = ctb_color
-                .unwrap_or_else(|| adapt_text_color([run.color[0], run.color[1], run.color[2]]));
+                .unwrap_or_else(|| adapt_to_paper([run.color[0], run.color[1], run.color[2]]));
             let [r, g, b] = plotted_color(rgb, run.color[3], screening, options);
             // World mm → page points; the page CTM (plot scale/rotation/clip)
             // applies on top, exactly as for the wire geometry.
@@ -1842,7 +1910,7 @@ fn emit_searchable_text(
             // Tm x-basis (= Tz, the only horizontal scaling printpdf exposes).
             let (font_handle, size_pt, width_k) = match choice {
                 RunFont::Subset(sub) => {
-                    let size = (run.height * MM_TO_PT / sub.cap_ratio).max(0.1);
+                    let size = (run.height * MM_TO_PT / sub.cap_ratio).max(min_size);
                     (
                         PdfFontHandle::External(sub.font_id.clone()),
                         size,
@@ -1850,7 +1918,7 @@ fn emit_searchable_text(
                     )
                 }
                 RunFont::Helvetica => {
-                    let size = (run.height * MM_TO_PT / HELVETICA_CAP_RATIO).max(0.1);
+                    let size = (run.height * MM_TO_PT / HELVETICA_CAP_RATIO).max(min_size);
                     let handle = PdfFontHandle::Builtin(if run.bold {
                         BuiltinFont::HelveticaBold
                     } else {
@@ -1863,6 +1931,10 @@ fn emit_searchable_text(
                 continue;
             }
             let (sin_r, cos_r) = run.rotation.sin_cos();
+            // `Tr` and the fill colour are graphics state that `ET` keeps:
+            // without the save/restore, every embedded-font run drawn after
+            // this one would inherit the invisible mode.
+            ops.push(Op::SaveGraphicsState);
             ops.push(Op::StartTextSection);
             ops.push(Op::SetFont {
                 font: font_handle,
@@ -1893,6 +1965,7 @@ fn emit_searchable_text(
                 items: vec![TextItem::Text(run.text.clone())],
             });
             ops.push(Op::EndTextSection);
+            ops.push(Op::RestoreGraphicsState);
             emitted += 1;
         }
     }
@@ -2191,7 +2264,7 @@ fn emit_text(
             // as in the wire pass — else a monochrome.ctb plot plots the lines
             // black and leaves the text on its screen colour.
             let rgb = ctb_color.unwrap_or_else(|| {
-                adapt_text_color([quad[0].color[0], quad[0].color[1], quad[0].color[2]])
+                adapt_to_paper([quad[0].color[0], quad[0].color[1], quad[0].color[2]])
             });
             let [r, g, b] = plotted_color(rgb, a, screening, options);
 
@@ -2288,8 +2361,10 @@ fn emit_text(
                         let glyph_unit_mm = (((tl[0] - bl[0]).powi(2) + (tl[1] - bl[1]).powi(2))
                             .sqrt()
                             / sy.abs() as f64) as f32;
+                        // The pen is in page user space (under the plot CTM),
+                        // so the 0.1 pt physical floor is divided by the scale.
                         (2.0 * sdf_atlas::stroke_pen_half_units(ge.bold) * glyph_unit_mm * MM_TO_PT)
-                            .max(0.1)
+                            .max(0.1 / scale.max(1e-6))
                     };
                     ops.push(Op::SetOutlineThickness { pt: Pt(pen) });
                     for stroke in &ge.strokes {
@@ -2641,7 +2716,16 @@ pub(crate) fn pdf_stream_text(bytes: &[u8]) -> String {
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
+    use crate::io::plot_style::PlotStyleTableExt as _;
     use super::*;
+
+    #[test]
+    fn only_colour_7_adapts_to_the_white_sheet() {
+        assert_eq!(adapt_to_paper([1.0, 1.0, 1.0]), [0.0, 0.0, 0.0]);
+        for rgb in [[1.0, 1.0, 0.0], [0.0, 1.0, 1.0], [1.0, 1.0, 0.5]] {
+            assert_eq!(adapt_to_paper(rgb), rgb, "{rgb:?} must plot as drawn");
+        }
+    }
 
     fn test_page(wires: Vec<PlotWire>) -> PdfPageInput {
         PdfPageInput {

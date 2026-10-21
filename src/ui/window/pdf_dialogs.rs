@@ -101,6 +101,13 @@ pub enum PdfDialogMsg {
     Lineweights(bool),
     Linetypes(bool),
     SettingsOk,
+    // Text to MText Settings (TXT2MTXT)
+    T2mCombine(bool),
+    /// Keep the selection order (else top-down).
+    T2mSelectOrder(bool),
+    T2mWrap(bool),
+    T2mUniform(bool),
+    T2mOk,
     // Import PDF
     ImportBrowse,
     ImportPage(usize),
@@ -312,7 +319,10 @@ pub(crate) fn well_style(theme: &Theme) -> container::Style {
 }
 
 /// A titled card.
-pub(crate) fn card<'a>(title: String, content: impl Into<Element<'a, Message>>) -> Element<'a, Message> {
+pub(crate) fn card<'a>(
+    title: String,
+    content: impl Into<Element<'a, Message>>,
+) -> Element<'a, Message> {
     container(
         column![
             text(title.to_uppercase()).size(10).style(accent_text),
@@ -348,7 +358,7 @@ fn segmented<'a, T: Copy + PartialEq + 'a>(
 }
 
 /// A switch shown as a chip: filled with a tick while on.
-fn chip<'a>(label: String, on: bool, message: Message) -> Element<'a, Message> {
+pub(crate) fn chip<'a>(label: String, on: bool, message: Message) -> Element<'a, Message> {
     // The tick is an SVG: the web build's font has no check-mark glyph.
     let mut content = row![].spacing(4).align_y(iced::Center);
     if on {
@@ -1250,6 +1260,194 @@ pub fn view_import_settings<'a>(
             Some(more.into()),
             t!("Save"),
             PdfDialogMsg::SettingsOk
+        ),
+    ]
+    .spacing(10)
+    .padding([10, 12])
+    .width(sizing.width)
+    .into()
+}
+
+// ── Text to MText Settings (TXT2MTXT) ──────────────────────────────────────
+
+/// A labelled switch; inactive (dimmed) while `on` is None.
+fn t2m_switch<'a>(
+    label: String,
+    hint: String,
+    value: bool,
+    on: Option<fn(bool) -> PdfDialogMsg>,
+) -> Element<'a, Message> {
+    let enabled = on.is_some();
+    let mut switch = iced::widget::toggler(value).size(18.0);
+    if let Some(on) = on {
+        switch = switch.on_toggle(move |v| msg(on(v)));
+    }
+    let dim = move |theme: &Theme| text::Style {
+        color: Some(theme.palette().background.strong.color),
+    };
+    let name = text(label).size(12);
+    let name = if enabled { name } else { name.style(dim) };
+    row![
+        switch,
+        name,
+        text(hint).size(11).style(if enabled { muted_style } else { dim }),
+    ]
+    .spacing(8)
+    .align_y(iced::Center)
+    .into()
+}
+
+/// Top-down or selection order, as joined buttons; inactive without `enabled`.
+fn t2m_order<'a>(select_order: bool, enabled: bool) -> Element<'a, Message> {
+    let choice = |value: bool, label: String| -> Element<'a, Message> {
+        let chosen = enabled && value == select_order;
+        button(text(label).size(11).width(Fill).align_x(iced::Center))
+            .on_press_maybe(enabled.then(|| msg(PdfDialogMsg::T2mSelectOrder(value))))
+            .style(move |theme: &Theme, status| {
+                let mut style = button_style(chosen)(theme, status);
+                if !enabled {
+                    style.text_color = theme.palette().background.strong.color;
+                }
+                style
+            })
+            .padding([5, 6])
+            .width(Fill)
+            .into()
+    };
+    container(
+        row![
+            choice(false, crate::tr!("txt2mtxt", "top-down")),
+            choice(true, crate::tr!("txt2mtxt", "selection-order"))
+        ]
+        .spacing(2),
+    )
+    .padding(2)
+    .width(Length::Fixed(300.0))
+    .style(well_style)
+    .into()
+}
+
+/// A text sample in a well, one line per entry.
+fn t2m_sample<'a>(lines: Vec<String>, framed: bool, width: f32) -> Element<'a, Message> {
+    let body = iced::widget::Column::with_children(
+        lines
+            .into_iter()
+            .map(|l| text(l).size(12).font(iced::Font::MONOSPACE).into())
+            .collect::<Vec<_>>(),
+    )
+    .spacing(6);
+    let inner = container(body).padding([6, 8]).width(Fill);
+    let inner: Element<'a, Message> = if framed {
+        inner
+            .style(|theme: &Theme| container::Style {
+                border: Border {
+                    width: 1.0,
+                    radius: 2.0.into(),
+                    color: theme.palette().primary.base.color,
+                },
+                ..Default::default()
+            })
+            .into()
+    } else {
+        inner.into()
+    };
+    container(inner)
+        .padding(6)
+        .width(Length::Fixed(width))
+        .height(Length::Fixed(86.0))
+        .style(well_style)
+        .into()
+}
+
+pub fn view_txt2mtxt_settings<'a>(
+    s: &'a crate::app::settings::Txt2MtxtSettings,
+    sizing: crate::ui::modal::ModalSizing,
+) -> Element<'a, Message> {
+    let result = card(
+        crate::tr!("txt2mtxt", "result"),
+        column![
+            t2m_switch(
+                crate::tr!("txt2mtxt", "combine"),
+                String::new(),
+                s.combine,
+                Some(PdfDialogMsg::T2mCombine),
+            ),
+            column![
+                text(crate::tr!("txt2mtxt", "order")).size(11).style(muted_style),
+                t2m_order(s.select_order, s.combine),
+            ]
+            .spacing(6)
+            .padding(iced::Padding::ZERO.left(44)),
+            text(crate::tr!("txt2mtxt", "combine-note"))
+            .size(11)
+            .style(muted_style),
+        ]
+        .spacing(8),
+    );
+    let lines = card(
+        crate::tr!("txt2mtxt", "lines"),
+        column![
+            t2m_switch(
+                crate::tr!("txt2mtxt", "wrap"),
+                crate::tr!("txt2mtxt", "wrap-hint"),
+                s.word_wrap,
+                s.combine.then_some(PdfDialogMsg::T2mWrap as fn(bool) -> PdfDialogMsg),
+            ),
+            t2m_switch(
+                crate::tr!("txt2mtxt", "uniform"),
+                crate::tr!("txt2mtxt", "uniform-hint"),
+                s.uniform_spacing || s.word_wrap,
+                (s.combine && !s.word_wrap)
+                    .then_some(PdfDialogMsg::T2mUniform as fn(bool) -> PdfDialogMsg),
+            ),
+        ]
+        .spacing(10),
+    );
+    let sample: Vec<String> = ["First line", "Second line", "Third line"]
+        .into_iter()
+        .map(String::from)
+        .collect();
+    let (count, out) = if !s.combine {
+        (3, sample.clone())
+    } else if s.word_wrap {
+        (
+            1,
+            vec!["First line Second line Third".into(), "line".into()],
+        )
+    } else {
+        (1, sample.clone())
+    };
+    let preview = container(
+        row![
+            column![
+                text(crate::tr!("txt2mtxt", "selected")).size(11).style(muted_style),
+                t2m_sample(sample, false, 190.0)
+            ]
+            .spacing(4),
+            text("→").size(20).style(accent_text),
+            column![
+                text(crate::tr!("txt2mtxt", "result-count", count = count))
+                    .size(11)
+                    .style(muted_style),
+                t2m_sample(out, true, 262.0)
+            ]
+            .spacing(4),
+        ]
+        .spacing(14)
+        .align_y(iced::Center),
+    )
+    .padding([10, 12])
+    .width(Fill)
+    .style(card_style);
+    column![
+        result,
+        lines,
+        preview,
+        footer(
+            "txt2mtxt",
+            None,
+            crate::tr!("txt2mtxt", "apply").into(),
+            PdfDialogMsg::T2mOk,
         ),
     ]
     .spacing(10)
@@ -2212,12 +2410,27 @@ pub struct BgPreview {
 pub fn bg_preview(path: &str) -> Option<BgPreview> {
     let decoded = ::image::open(path.trim()).ok()?;
     let size = [decoded.width(), decoded.height()];
-    let small = if size[0].max(size[1]) > 512 { decoded.thumbnail(512, 512) } else { decoded }.to_rgba8();
-    let handle = |pixels: ::image::RgbaImage| image::Handle::from_rgba(pixels.width(), pixels.height(), pixels.into_raw());
+    let small = if size[0].max(size[1]) > 512 {
+        decoded.thumbnail(512, 512)
+    } else {
+        decoded
+    }
+    .to_rgba8();
+    let handle = |pixels: ::image::RgbaImage| {
+        image::Handle::from_rgba(pixels.width(), pixels.height(), pixels.into_raw())
+    };
     let flip_x = ::image::imageops::flip_horizontal(&small);
     let flip_y = ::image::imageops::flip_vertical(&small);
     let flip_xy = ::image::imageops::flip_vertical(&flip_x);
-    Some(BgPreview { size, handles: [handle(small), handle(flip_x), handle(flip_y), handle(flip_xy)] })
+    Some(BgPreview {
+        size,
+        handles: [
+            handle(small),
+            handle(flip_x),
+            handle(flip_y),
+            handle(flip_xy),
+        ],
+    })
 }
 
 /// Image offsets the reference's Adjust Image sliders reach, in pixels.
@@ -2325,7 +2538,11 @@ pub fn view_background<'a>(
                 if state.position == BgPosition::Stretch {
                     // Filling the view; keeping the aspect ratio it covers
                     // the view and the overflow is cut off.
-                    let fit = if state.aspect { iced::ContentFit::Cover } else { iced::ContentFit::Fill };
+                    let fit = if state.aspect {
+                        iced::ContentFit::Cover
+                    } else {
+                        iced::ContentFit::Fill
+                    };
                     let handle = state.preview.as_ref().map_or_else(
                         || image::Handle::from_path(state.image.trim()),
                         |preview| preview.handles[0].clone(),
@@ -2338,13 +2555,26 @@ pub fn view_background<'a>(
                 } else {
                     // The image at its size times its scale, moved by its
                     // offset, in a view of the drawing viewport's shape.
-                    let parse = |v: &String, d: f64| v.trim().parse::<f64>().ok().filter(|v| v.is_finite()).unwrap_or(d);
+                    let parse = |v: &String, d: f64| {
+                        v.trim()
+                            .parse::<f64>()
+                            .ok()
+                            .filter(|v| v.is_finite())
+                            .unwrap_or(d)
+                    };
                     let offset = [parse(&state.offset[0], 0.0), parse(&state.offset[1], 0.0)];
                     let scale = [0, 1].map(|k| {
                         let v = parse(&state.scale[k], state.scale_base[k]);
-                        if v.abs() < 1e-9 { state.scale_base[k] } else { v }
+                        if v.abs() < 1e-9 {
+                            state.scale_base[k]
+                        } else {
+                            v
+                        }
                     });
-                    let [iw, ih] = state.preview.as_ref().map_or([1, 1], |preview| preview.size);
+                    let [iw, ih] = state
+                        .preview
+                        .as_ref()
+                        .map_or([1, 1], |preview| preview.size);
                     // A negative scale mirrors the image.
                     let mirrored = usize::from(scale[0] < 0.0) | usize::from(scale[1] < 0.0) << 1;
                     let handle = state.preview.as_ref().map_or_else(
@@ -2363,7 +2593,10 @@ pub fn view_background<'a>(
                         let x = size.width / 2.0 + offset[0] as f32 * factor - w / 2.0;
                         let y = size.height / 2.0 + offset[1] as f32 * factor - h / 2.0;
                         let (cols, rows) = if tile {
-                            ((size.width / w).ceil() as i32 + 1, (size.height / h).ceil() as i32 + 1)
+                            (
+                                (size.width / w).ceil() as i32 + 1,
+                                (size.height / h).ceil() as i32 + 1,
+                            )
                         } else {
                             (0, 0)
                         };
@@ -2375,7 +2608,10 @@ pub fn view_background<'a>(
                         let y0 = if tile { y - (y / h).ceil() * h } else { y };
                         for row_index in 0..=rows.min(60) {
                             for col_index in 0..=cols.min(60) {
-                                let at = iced::Point::new(x0 + col_index as f32 * w, y0 + row_index as f32 * h);
+                                let at = iced::Point::new(
+                                    x0 + col_index as f32 * w,
+                                    y0 + row_index as f32 * h,
+                                );
                                 layers = layers.push(
                                     iced::widget::pin(
                                         image(handle.clone())
@@ -2398,7 +2634,9 @@ pub fn view_background<'a>(
             } else {
                 container(note(crate::tr!("view-background", "no-image")))
                     .center(Fill)
-                    .style(fill(Background::Color(iced::Color::from_rgb8(0x1a, 0x1a, 0x1a))))
+                    .style(fill(Background::Color(iced::Color::from_rgb8(
+                        0x1a, 0x1a, 0x1a,
+                    ))))
                     .into()
             }
         }
@@ -2421,26 +2659,27 @@ pub fn view_background<'a>(
             })
             .width(Length::Fixed(92.0))
     };
-    let color_row = |name: String, slot: u8, color: [u8; 3], enabled: bool| -> Element<'a, Message> {
-        let mut pick = button(text(crate::tr!("view-background", "select")).size(11))
-            .style(button_style(false))
-            .padding([4, 10]);
-        if enabled {
-            pick = pick.on_press(msg(PdfDialogMsg::BgPickColor(slot)));
-        }
-        row![
-            label(name, enabled),
-            swatch(color, 64.0, 22.0),
-            text(format!("{},{},{}", color[0], color[1], color[2]))
-                .size(11)
-                .style(muted_style),
-            Space::new().width(Fill),
-            pick,
-        ]
-        .spacing(8)
-        .align_y(iced::Center)
-        .into()
-    };
+    let color_row =
+        |name: String, slot: u8, color: [u8; 3], enabled: bool| -> Element<'a, Message> {
+            let mut pick = button(text(crate::tr!("view-background", "select")).size(11))
+                .style(button_style(false))
+                .padding([4, 10]);
+            if enabled {
+                pick = pick.on_press(msg(PdfDialogMsg::BgPickColor(slot)));
+            }
+            row![
+                label(name, enabled),
+                swatch(color, 64.0, 22.0),
+                text(format!("{},{},{}", color[0], color[1], color[2]))
+                    .size(11)
+                    .style(muted_style),
+                Space::new().width(Fill),
+                pick,
+            ]
+            .spacing(8)
+            .align_y(iced::Center)
+            .into()
+        };
     let options: Element<'a, Message> = match state.kind {
         BgKind::None => card(
             crate::tr!("view-background", "info"),
@@ -2473,8 +2712,18 @@ pub fn view_background<'a>(
                 .spacing(8)
                 .align_y(iced::Center),
                 color_row(crate::tr!("view-background", "top"), 1, state.top, true),
-                color_row(crate::tr!("view-background", "middle"), 2, state.middle, state.three),
-                color_row(crate::tr!("view-background", "bottom"), 3, state.bottom, true),
+                color_row(
+                    crate::tr!("view-background", "middle"),
+                    2,
+                    state.middle,
+                    state.three
+                ),
+                color_row(
+                    crate::tr!("view-background", "bottom"),
+                    3,
+                    state.bottom,
+                    true
+                ),
             ]
             .spacing(8),
         ),
@@ -2497,9 +2746,11 @@ pub fn view_background<'a>(
                 .align_y(iced::Center),
                 row![
                     label(crate::tr!("view-background", "position"), true),
-                    pick_list(Some(state.position), BgPosition::ALL.to_vec(), |p: &BgPosition| {
-                        p.to_string()
-                    })
+                    pick_list(
+                        Some(state.position),
+                        BgPosition::ALL.to_vec(),
+                        |p: &BgPosition| { p.to_string() }
+                    )
                     .on_select(|p| msg(PdfDialogMsg::BgPosition(p)))
                     .text_size(12)
                     .padding([4, 8])
@@ -2545,11 +2796,17 @@ fn adjust_card<'a>(state: &'a ViewBackgroundState) -> Element<'a, Message> {
         if enabled {
             muted_style(theme)
         } else {
-            text::Style { color: Some(theme.palette().background.strong.color) }
+            text::Style {
+                color: Some(theme.palette().background.strong.color),
+            }
         }
     };
     let spin = |field: u8| -> Element<'a, Message> {
-        let value = if field < 2 { &state.offset[field as usize] } else { &state.scale[field as usize - 2] };
+        let value = if field < 2 {
+            &state.offset[field as usize]
+        } else {
+            &state.scale[field as usize - 2]
+        };
         let mut input = text_input("", value)
             .size(11)
             .padding([4, 8])
@@ -2583,7 +2840,10 @@ fn adjust_card<'a>(state: &'a ViewBackgroundState) -> Element<'a, Message> {
             }
             b
         };
-        row![input, column![arrow(true), arrow(false)].spacing(1)].spacing(2).align_y(iced::Center).into()
+        row![input, column![arrow(true), arrow(false)].spacing(1)]
+            .spacing(2)
+            .align_y(iced::Center)
+            .into()
     };
     let axis = |name: &'static str| text(name).size(11).style(dim);
     let line = |label: String, a: u8, b: u8, unit: bool| -> Element<'a, Message> {
@@ -2597,7 +2857,11 @@ fn adjust_card<'a>(state: &'a ViewBackgroundState) -> Element<'a, Message> {
         .spacing(6)
         .align_y(iced::Center);
         if unit {
-            r = r.push(text(crate::tr!("view-background", "pixels")).size(11).style(dim));
+            r = r.push(
+                text(crate::tr!("view-background", "pixels"))
+                    .size(11)
+                    .style(dim),
+            );
         }
         r.into()
     };
@@ -2610,9 +2874,15 @@ fn adjust_card<'a>(state: &'a ViewBackgroundState) -> Element<'a, Message> {
     container(
         column![
             row![
-                text(crate::tr!("view-background", "adjust").to_uppercase()).size(10).style(move |theme: &Theme| {
-                    if enabled { accent_text(theme) } else { dim(theme) }
-                }),
+                text(crate::tr!("view-background", "adjust").to_uppercase())
+                    .size(10)
+                    .style(move |theme: &Theme| {
+                        if enabled {
+                            accent_text(theme)
+                        } else {
+                            dim(theme)
+                        }
+                    }),
                 Space::new().width(Fill),
                 reset,
             ]
@@ -2653,11 +2923,16 @@ pub const IMAGE_ADJUST_DEFAULTS: [u8; 3] = [50, 50, 0];
 
 impl ImageAdjustState {
     pub fn new(handles: Vec<codec::Handle>, path: &str, values: [u8; 3], canvas: [u8; 3]) -> Self {
-        let name = std::path::Path::new(path.trim())
-            .file_name()
-            .map_or_else(|| path.trim().to_string(), |n| n.to_string_lossy().into_owned());
+        let name = std::path::Path::new(path.trim()).file_name().map_or_else(
+            || path.trim().to_string(),
+            |n| n.to_string_lossy().into_owned(),
+        );
         let source = crate::scene::model::image_model::resolve_image(path).and_then(|decoded| {
-            let full = ::image::RgbaImage::from_raw(decoded.width, decoded.height, decoded.pixels.to_vec())?;
+            let full = ::image::RgbaImage::from_raw(
+                decoded.width,
+                decoded.height,
+                decoded.pixels.to_vec(),
+            )?;
             let small = if full.width().max(full.height()) > 512 {
                 ::image::imageops::thumbnail(&full, 512, 512)
             } else {
@@ -2690,7 +2965,10 @@ impl ImageAdjustState {
         self.preview = self.source.as_ref().map(|(w, h, pixels)| {
             // As the drawing shows it: brightness then contrast per channel,
             // fade as the image's opacity over the drawing area.
-            let lut = crate::scene::model::image_model::brightness_contrast_lut(self.values[0], self.values[1]);
+            let lut = crate::scene::model::image_model::brightness_contrast_lut(
+                self.values[0],
+                self.values[1],
+            );
             let opacity = 1.0 - f32::from(self.values[2]) / 100.0;
             let mut out = Vec::with_capacity(pixels.len());
             for (k, px) in pixels.chunks_exact(4).enumerate() {
@@ -2741,16 +3019,20 @@ pub fn image_adjust<'a>(
             .width(Fill)
             .height(Fill)
             .into(),
-        None => container(text(crate::tr!("image-adjust", "no-preview")).size(11).style(muted_style))
-            .center(Fill)
-            .into(),
+        None => container(
+            text(crate::tr!("image-adjust", "no-preview"))
+                .size(11)
+                .style(muted_style),
+        )
+        .center(Fill)
+        .into(),
     };
-    let divider = container(
-        container(Space::new().width(2.0).height(Fill)).style(|theme: &Theme| container::Style {
+    let divider = container(container(Space::new().width(2.0).height(Fill)).style(
+        |theme: &Theme| container::Style {
             background: Some(Background::Color(theme.palette().primary.base.color)),
             ..Default::default()
-        }),
-    )
+        },
+    ))
     .center_x(Fill)
     .height(Fill);
     let badges = row![
@@ -2759,7 +3041,10 @@ pub fn image_adjust<'a>(
         badge(crate::tr!("image-adjust", "after"), true),
     ]
     .padding(8);
-    let mut layers = iced::widget::Stack::new().width(Fill).height(Fill).push(picture);
+    let mut layers = iced::widget::Stack::new()
+        .width(Fill)
+        .height(Fill)
+        .push(picture);
     if state.preview.is_some() {
         layers = layers.push(divider).push(badges);
     }
@@ -2771,15 +3056,24 @@ pub fn image_adjust<'a>(
             .clip(true)
             .style(move |_: &Theme| container::Style {
                 background: Some(Background::Color(canvas)),
-                border: Border { radius: 5.0.into(), ..Default::default() },
+                border: Border {
+                    radius: 5.0.into(),
+                    ..Default::default()
+                },
                 ..Default::default()
             }),
     );
     let ramp = |row: u8| -> Background {
         let (from, to) = match row {
             // Contrast: grey, the flat image its zero gives.
-            1 => (iced::Color::from_rgb8(0x77, 0x77, 0x77), iced::Color::from_rgb8(0x77, 0x77, 0x77)),
-            _ => (iced::Color::from_rgb8(0x22, 0x22, 0x22), iced::Color::from_rgb8(0xee, 0xee, 0xee)),
+            1 => (
+                iced::Color::from_rgb8(0x77, 0x77, 0x77),
+                iced::Color::from_rgb8(0x77, 0x77, 0x77),
+            ),
+            _ => (
+                iced::Color::from_rgb8(0x22, 0x22, 0x22),
+                iced::Color::from_rgb8(0xee, 0xee, 0xee),
+            ),
         };
         Background::Gradient(iced::Gradient::Linear(
             iced::gradient::Linear::new(iced::Radians(std::f32::consts::FRAC_PI_2))
@@ -2789,30 +3083,41 @@ pub fn image_adjust<'a>(
     };
     let line = |row: u8, label: String| -> Element<'a, Message> {
         let k = row as usize;
-        let bar = container(container(Space::new()).width(Fill).height(8.0).style(move |_: &Theme| {
-            container::Style {
+        let bar = container(container(Space::new()).width(Fill).height(8.0).style(
+            move |_: &Theme| container::Style {
                 background: Some(ramp(row)),
-                border: Border { radius: 4.0.into(), ..Default::default() },
+                border: Border {
+                    radius: 4.0.into(),
+                    ..Default::default()
+                },
                 ..Default::default()
-            }
-        }))
+            },
+        ))
         .center_y(16.0)
         .width(Fill);
-        let slide = iced::widget::slider(0..=100u8, state.values[k], move |v| msg(PdfDialogMsg::IaValue(row, v)))
-            .height(16.0)
-            .style(|theme: &Theme, _| iced::widget::slider::Style {
-                rail: iced::widget::slider::Rail {
-                    backgrounds: (iced::Color::TRANSPARENT.into(), iced::Color::TRANSPARENT.into()),
-                    width: 0.0,
-                    border: Border::default(),
+        let slide = iced::widget::slider(0..=100u8, state.values[k], move |v| {
+            msg(PdfDialogMsg::IaValue(row, v))
+        })
+        .height(16.0)
+        .style(|theme: &Theme, _| iced::widget::slider::Style {
+            rail: iced::widget::slider::Rail {
+                backgrounds: (
+                    iced::Color::TRANSPARENT.into(),
+                    iced::Color::TRANSPARENT.into(),
+                ),
+                width: 0.0,
+                border: Border::default(),
+            },
+            handle: iced::widget::slider::Handle {
+                shape: iced::widget::slider::HandleShape::Rectangle {
+                    width: 4,
+                    border_radius: 2.0.into(),
                 },
-                handle: iced::widget::slider::Handle {
-                    shape: iced::widget::slider::HandleShape::Rectangle { width: 4, border_radius: 2.0.into() },
-                    background: theme.palette().primary.base.color.into(),
-                    border_width: 0.0,
-                    border_color: iced::Color::TRANSPARENT,
-                },
-            });
+                background: theme.palette().primary.base.color.into(),
+                border_width: 0.0,
+                border_color: iced::Color::TRANSPARENT,
+            },
+        });
         let step = |dir: i8| {
             button(text(if dir < 0 { "\u{2212}" } else { "+" }).size(12))
                 .on_press(msg(PdfDialogMsg::IaStep(row, dir)))
@@ -2829,9 +3134,13 @@ pub fn image_adjust<'a>(
         row![
             text(label).size(11).width(Length::Fixed(72.0)),
             iced::widget::Stack::new().width(Fill).push(bar).push(slide),
-            container(row![step(-1), value, step(1)].spacing(2).align_y(iced::Center))
-                .padding(2)
-                .style(well_style),
+            container(
+                row![step(-1), value, step(1)]
+                    .spacing(2)
+                    .align_y(iced::Center)
+            )
+            .padding(2)
+            .style(well_style),
         ]
         .spacing(10)
         .align_y(iced::Center)
@@ -2843,18 +3152,29 @@ pub fn image_adjust<'a>(
             line(0, crate::tr!("image-adjust", "brightness")),
             line(1, crate::tr!("image-adjust", "contrast")),
             line(2, crate::tr!("image-adjust", "fade")),
-            text(crate::tr!("image-adjust", "hint")).size(10).style(muted_style),
+            text(crate::tr!("image-adjust", "hint"))
+                .size(10)
+                .style(muted_style),
         ]
         .spacing(10),
     );
-    let reset = button(text(crate::tr!("image-adjust", "reset")).size(11).style(accent_text))
-        .on_press(msg(PdfDialogMsg::IaReset))
-        .style(button::text)
-        .padding([5, 4]);
+    let reset = button(
+        text(crate::tr!("image-adjust", "reset"))
+            .size(11)
+            .style(accent_text),
+    )
+    .on_press(msg(PdfDialogMsg::IaReset))
+    .style(button::text)
+    .padding([5, 4]);
     column![
         preview,
         adjust,
-        footer("imageadjust", Some(reset.into()), crate::tr!("image-adjust", "apply").into(), PdfDialogMsg::IaApply),
+        footer(
+            "imageadjust",
+            Some(reset.into()),
+            crate::tr!("image-adjust", "apply").into(),
+            PdfDialogMsg::IaApply
+        ),
     ]
     .spacing(10)
     .padding([10, 12])

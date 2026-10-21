@@ -508,9 +508,7 @@ pub fn block_const_bind_group_layout(
         ty: wgpu::BindingType::Buffer {
             ty: wgpu::BufferBindingType::Uniform,
             has_dynamic_offset: true,
-            min_binding_size: std::num::NonZeroU64::new(
-                std::mem::size_of::<WireConst>() as u64,
-            ),
+            min_binding_size: std::num::NonZeroU64::new(std::mem::size_of::<WireConst>() as u64),
         },
         count: None,
     }];
@@ -863,7 +861,7 @@ pub(crate) fn emit_wire_packed(
         wire.pattern[6],
         wire.pattern[7],
     ];
-    let half_width = wire.line_weight_px * 0.5;
+    let half_width = wire.line_weight_px.max(1.0) * 0.5;
     let n = wire.points.len();
     let seg_count = n.saturating_sub(1);
     if seg_count == 0 {
@@ -965,7 +963,7 @@ pub(crate) fn emit_wire_native(
             wire.pattern[6],
             wire.pattern[7],
         ],
-        half_width: wire.line_weight_px * 0.5,
+        half_width: wire.line_weight_px.max(1.0) * 0.5,
         pattern_length: wire.pattern_length,
         draw_depth,
         align_end,
@@ -1155,10 +1153,7 @@ pub struct BlockWireTarget<'a> {
 /// Device bytes the arenas behind these batches hold, counting each arena once
 /// however many batches draw out of it. `seen` carries the arenas already
 /// counted, so slots that share a cached build are not counted twice.
-pub fn block_arena_bytes(
-    batches: &[BlockWireGpu],
-    seen: &mut rustc_hash::FxHashSet<usize>,
-) -> u64 {
+pub fn block_arena_bytes(batches: &[BlockWireGpu], seen: &mut rustc_hash::FxHashSet<usize>) -> u64 {
     batches
         .iter()
         .filter(|batch| seen.insert(std::sync::Arc::as_ptr(&batch.arena) as usize))
@@ -1209,8 +1204,7 @@ impl BlockWireGpu {
         let mut groups: Vec<(bool, Vec<BlockRef<'_>>)> = Vec::new();
         for &block in wires {
             let wire = block.wire;
-            if color_override.is_none()
-                && !(wire.display_visible && block.named().display_visible)
+            if color_override.is_none() && !(wire.display_visible && block.named().display_visible)
             {
                 continue;
             }
@@ -1279,8 +1273,7 @@ impl BlockWireGpu {
                         })
                         .collect();
                     emitted_segments += records.len();
-                    let built =
-                        std::sync::Arc::new(BlockGeometryRecords { constant, records });
+                    let built = std::sync::Arc::new(BlockGeometryRecords { constant, records });
                     // Records are device-independent, so a build the device
                     // rejected poisons nothing: the next one packs these same
                     // records into fresh buffers instead of caching a buffer
@@ -1306,7 +1299,11 @@ impl BlockWireGpu {
             crate::perf_record!(
                 "[perf] block-wire-geometry mode={} definitions={} arenas={} batches={} \
 segments={} bytes={} bytes_if_per_definition={} emitted={}",
-                if mode.uses_storage() { "storage" } else { "packed" },
+                if mode.uses_storage() {
+                    "storage"
+                } else {
+                    "packed"
+                },
                 live_keys.len(),
                 arena.arenas,
                 out.len(),

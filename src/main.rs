@@ -27,7 +27,14 @@ fn main() -> iced::Result {
     #[cfg(not(target_arch = "wasm32"))]
     {
         use clap::Parser;
-        let args = cli::Cli::parse();
+        // `/b script.scr`, the startup switch shortcuts carry, is `--script`.
+        let args = cli::Cli::parse_from(std::env::args_os().map(|arg| {
+            if arg == "/b" || arg == "/B" {
+                "--script".into()
+            } else {
+                arg
+            }
+        }));
 
         // GPU probe child: exercise one backend offscreen, print one JSON
         // line on success and exit 0/1. This must run before any logging/GUI
@@ -122,7 +129,7 @@ fn main() -> iced::Result {
         // Headless modes exit without ever creating a window.
         if let Some(port) = args.http {
             if args.files.is_empty() {
-                rest::serve(port);
+                rest::serve(port, args.read_only);
                 return Ok(());
             }
             // Files + --http: boot the GUI and host the loopback REST channel
@@ -133,7 +140,7 @@ fn main() -> iced::Result {
         }
         if args.serve {
             // `app::serve` reads --port itself from the raw args.
-            app::serve();
+            app::serve(args.read_only);
             return Ok(());
         }
         if let Some(io) = &args.export {

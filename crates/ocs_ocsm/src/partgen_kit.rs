@@ -283,7 +283,7 @@ fn hatch_edges_with(
         h.paths.push(bp);
     }
     set_layer(&mut h, LAYER_HATCH);
-    EntityType::Hatch(h)
+    EntityType::Hatch(Box::new(h))
 }
 
 /// 同上，但边界用**闭合折线**（顶点顺序任意，闭合由工具处理）。

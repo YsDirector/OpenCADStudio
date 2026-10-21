@@ -128,6 +128,7 @@ pub(super) struct DocumentTab {
     /// must never target a tab by its transient vector index.
     pub(super) id: u64,
     pub(super) scene: Scene,
+    pub(super) table_grip: Option<super::visibility::TableGrip>,
     pub(super) current_path: Option<PathBuf>,
     /// Persistent native edit lease for the drawing currently at
     /// `current_path`. The sidecar portion survives atomic file replacement.
@@ -147,12 +148,23 @@ pub(super) struct DocumentTab {
     /// Monotonic committed-edit/undo/redo revision. Background save completion
     /// uses it with scene epochs so an older snapshot never clears newer work.
     pub(super) edit_revision: u64,
+    /// A whole document replaced this tab's content (file open, template new,
+    /// system open) and native plugins have not been told yet: the
+    /// message boundary (`OpenCADStudio::notify_plugins_document_opened`,
+    /// API v9) dispatches `DocumentOpened` once and clears it, so edits and
+    /// switching between tabs never announce the same load again.
+    pub(super) document_opened_pending: bool,
     pub(super) tab_title: String,
     pub(super) properties: PropertiesPanel,
     /// OCS Pi Extension panel (native chat over the local pi-web API).
     pub(super) pi_panel: crate::ui::pi_panel::PiPanelState,
     pub(super) layers: LayerPanel,
     pub(super) active_cmd: Option<Box<dyn CadCommand>>,
+    /// Follow-up command for a Parameter Set macro after parameter placement.
+    pub(super) pending_parameter_set_follow_up: Option<&'static str>,
+    pub(super) pending_xy_box_set: Option<(codec::Handle, crate::scene::block_actions::Kind, u8)>,
+    pub(super) pending_action_pair: Option<(codec::Handle, crate::scene::block_actions::Kind, u8)>,
+    pub(super) measurement: super::measurement::MeasurementDisplay,
     /// Remaining command tokens queued behind a PAUSE (or `\`) awaiting user interaction.
     pub(super) pending_pause_tokens: Option<Vec<String>>,
     /// The selection set the most recent command worked on, captured when a
@@ -168,6 +180,30 @@ pub(super) struct DocumentTab {
     pub(super) selected_grips: Vec<GripDef>,
     /// Entity handle for each entry in `selected_grips`.
     pub(super) selected_grip_handles: Vec<Handle>,
+    /// Plugin-declared custom grip points for this tab (API v11): session
+    /// display state only — never persisted, never host-interpreted.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) plugin_grips: crate::plugin::grip_points::PluginGripStore,
+    /// DIRTY REGION accumulation (API v13): the identity set of what plugin
+    /// and built-in paths changed since the previous boundary notification —
+    /// `DocumentChangedRegions` carries it so boundary work is O(changed),
+    /// not O(store). Cleared at each boundary; over the cap the sets
+    /// degrade to empty (an honest full-walk signal).
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    pub(super) plugin_dirty_entities: rustc_hash::FxHashSet<codec::Handle>,
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    pub(super) plugin_dirty_records: rustc_hash::FxHashSet<(codec::Handle, String)>,
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    pub(super) plugin_dirty_overflow: bool,
+    /// Geometry epoch the last region set was published at; a plugin write
+    /// starting from another epoch means something else changed the drawing
+    /// in between, so the sets degrade to empty.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    pub(super) plugin_dirty_epoch: u64,
+    /// The active custom-grip drag, if any (at most one; rides the same
+    /// drag/active-command lifecycle as built-in grip drags).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) active_plugin_grip: Option<crate::plugin::grip_points::ActivePluginGrip>,
     /// Shift-selected grips, keyed by entity and object-local grip id.
     pub(super) hot_grips: rustc_hash::FxHashSet<(Handle, usize)>,
     /// Grip-mode "Copy" toggle (context menu): each grip placement leaves the
@@ -177,6 +213,8 @@ pub(super) struct DocumentTab {
     /// the active grip edit instead of committing it.
     pub(super) grip_base_pending: bool,
     pub(super) selected_handle: Option<Handle>,
+    pub(super) selected_authoring: Option<Handle>,
+    pub(super) action_bars: super::block_action_bars::ViewState,
     /// Dynamic-block visibility grip for the current single selection.
     pub(super) visibility_grip: Option<super::visibility::VisibilityGrip>,
     pub(super) wireframe: bool,
@@ -209,6 +247,7 @@ pub(super) struct DocumentTab {
     pub(super) history: HistoryState,
     /// Drawing history is suspended while `history` belongs to BEDIT.
     pub(super) block_edit_history: Option<super::block_editor::BlockEditHistory>,
+    pub(super) block_test: Option<super::block_test::BlockTestSession>,
     pub(super) active_layer: String,
     /// Block references whose properties panel shows per-axis Scale X/Y/Z even
     /// though the three factors are currently equal — the user unchecked the
@@ -285,6 +324,8 @@ pub(super) struct DocumentTab {
     /// Model-space corners of the last crossing window drawn with no command
     /// running: STRETCH on that selection stretches through it (#1068).
     pub(super) last_crossing_window: Option<([f64; 2], [f64; 2])>,
+    /// Colours picked in this drawing this session, newest first. Not saved.
+    pub(super) recent_colors: Vec<codec::types::Color>,
 }
 
 impl DocumentTab {
@@ -322,6 +363,61 @@ impl DocumentTab {
                 crate::scene::parametric_constraints::ParametricScope::Block(session.br_handle)
             }
             None => crate::scene::parametric_constraints::ParametricScope::ModelSpace,
+        }
+    }
+
+    /// Record one entity a plugin write touched (API v13 dirty regions).
+    /// `epoch_before` is the geometry epoch before that write.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    pub(super) fn mark_plugin_entity_dirty(&mut self, handle: codec::Handle, epoch_before: u64) {
+        if !self.plugin_dirty_degraded(epoch_before) {
+            self.plugin_dirty_entities.insert(handle);
+        }
+    }
+
+    /// Record one (entity, app) XDATA/XRecord touch (API v13 dirty regions).
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    pub(super) fn mark_plugin_record_dirty(
+        &mut self,
+        handle: codec::Handle,
+        app: String,
+        epoch_before: u64,
+    ) {
+        if !self.plugin_dirty_degraded(epoch_before) {
+            self.plugin_dirty_records.insert((handle, app));
+        }
+    }
+
+    /// Degrade the sets to "walk everything" when they can no longer be
+    /// complete: over the cap, or when the drawing changed outside plugin
+    /// writes since the last publish.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    fn plugin_dirty_degraded(&mut self, epoch_before: u64) -> bool {
+        const DIRTY_CAP: usize = 10_000;
+        if epoch_before != self.plugin_dirty_epoch
+            || self.plugin_dirty_entities.len() + self.plugin_dirty_records.len() >= DIRTY_CAP
+        {
+            self.plugin_dirty_overflow = true;
+            self.plugin_dirty_entities.clear();
+            self.plugin_dirty_records.clear();
+        }
+        self.plugin_dirty_overflow
+    }
+
+    /// Take the region sets for a boundary publish at the current epoch;
+    /// empty sets ("walk everything") when degraded.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    pub(super) fn take_plugin_dirty(
+        &mut self,
+    ) -> (Vec<codec::Handle>, Vec<(codec::Handle, String)>) {
+        let entities = std::mem::take(&mut self.plugin_dirty_entities);
+        let records = std::mem::take(&mut self.plugin_dirty_records);
+        let degraded = std::mem::replace(&mut self.plugin_dirty_overflow, false);
+        self.plugin_dirty_epoch = self.scene.geometry_epoch;
+        if degraded {
+            (Vec::new(), Vec::new())
+        } else {
+            (entities.into_iter().collect(), records.into_iter().collect())
         }
     }
 
@@ -631,12 +727,17 @@ impl DocumentTab {
             dirty: false,
             recovery_save_as_required: false,
             edit_revision: 0,
+            document_opened_pending: true,
             prev_selection: Vec::new(),
             tab_title: format!("Drawing{}", n),
             properties: PropertiesPanel::empty(),
             pi_panel: crate::ui::pi_panel::PiPanelState::empty(),
             layers: LayerPanel::default(),
             active_cmd: None,
+            pending_parameter_set_follow_up: None,
+            pending_xy_box_set: None,
+            pending_action_pair: None,
+            measurement: super::measurement::MeasurementDisplay::default(),
             pending_pause_tokens: None,
             last_cmd: None,
             last_draw_anchor: None,
@@ -644,11 +745,22 @@ impl DocumentTab {
             active_grip: None,
             selected_grips: vec![],
             selected_grip_handles: vec![],
+            #[cfg(not(target_arch = "wasm32"))]
+            plugin_grips: Default::default(),
+            plugin_dirty_entities: Default::default(),
+            plugin_dirty_records: Default::default(),
+            plugin_dirty_overflow: false,
+            plugin_dirty_epoch: 0,
+            #[cfg(not(target_arch = "wasm32"))]
+            active_plugin_grip: None,
             hot_grips: rustc_hash::FxHashSet::default(),
             grip_copy: false,
             grip_base_pending: false,
             selected_handle: None,
+            selected_authoring: None,
+            action_bars: Default::default(),
             visibility_grip: None,
+            table_grip: None,
             wireframe: false,
             render_mode: codec::entities::ViewportRenderMode::Wireframe2D,
             visual_style: "Wireframe 2D".into(),
@@ -663,6 +775,7 @@ impl DocumentTab {
             dyn_active: 0,
             history: HistoryState::default(),
             block_edit_history: None,
+            block_test: None,
             active_layer: "0".to_string(),
             props_asym_scale: std::collections::HashSet::new(),
             graph: Default::default(),
@@ -691,6 +804,7 @@ impl DocumentTab {
             suspended_cmd: None,
             transparent_resume: false,
             last_crossing_window: None,
+            recent_colors: Vec::new(),
         }
     }
 
@@ -702,6 +816,14 @@ impl DocumentTab {
         t.tab_title = "Start".to_string();
         t.is_start = true;
         t
+    }
+
+    /// A whole document just replaced this tab's content (file open, template
+    /// new, system open): the next message boundary announces
+    /// `DocumentOpened` once for this load (API v9). Call after the document
+    /// and its derived caches have settled.
+    pub(super) fn note_document_loaded(&mut self) {
+        self.document_opened_pending = true;
     }
 
     pub(super) fn tab_display_name(&self) -> String {
@@ -778,6 +900,10 @@ impl HistorySnapshot {
                 .saturating_add(d.named_parameters.as_ref().map_or(0, |(before, after)| {
                     before.len().saturating_add(after.len()).saturating_mul(128)
                 }))
+                .saturating_add(d.visibility_states.as_ref().map_or(0, |(before, after)| {
+                    (before.len() + after.len()).saturating_mul(32)
+                }))
+                .saturating_add(d.reference_designations.len().saturating_mul(16))
                 .saturating_add(d.label.len()),
             HistorySnapshot::ObjectVisibility(v) => v
                 .before
@@ -813,6 +939,11 @@ pub(super) struct ObjectVisibilitySnapshot {
 /// cloning the flat entity store.
 #[derive(Clone)]
 pub(super) struct DeltaSnapshot {
+    /// Editor current-state indices must follow undo even when two states show identical objects.
+    pub(super) visibility_states: Option<(
+        rustc_hash::FxHashMap<Handle, usize>,
+        rustc_hash::FxHashMap<Handle, usize>,
+    )>,
     pub(super) entities: Vec<(Handle, Option<Arc<EntityType>>, Option<Arc<EntityType>>)>,
     pub(super) current_layout_before: String,
     pub(super) current_layout_after: String,
@@ -830,6 +961,12 @@ pub(super) struct DeltaSnapshot {
     /// `document.objects`, so it needs its own channel here rather than
     /// riding along with `entities`/`structure`. Almost always empty.
     pub(super) parametric_constraints: Vec<ParametricConstraintsEntryDelta>,
+    /// Reference-only designations (API v9) this same command changed — set
+    /// state on `Scene` (see `scene::reference_only`), recorded as explicit
+    /// first-touch before/afters so undo/redo restores the designation with
+    /// the entity it belongs to (e.g. a plugin scope that both erases and
+    /// re-designates). Almost always empty.
+    pub(super) reference_designations: Vec<ReferenceDesignationDelta>,
     /// Drawing-wide parameter table changed by this transaction.
     pub(super) named_parameters: Option<(
         crate::scene::named_parameters::ParameterTable,
@@ -840,6 +977,8 @@ pub(super) struct DeltaSnapshot {
 
 #[derive(Clone)]
 pub(super) enum StructureSnapshot {
+    /// A broad save-time synchronization followed by a command's bounded edits.
+    Combined(Vec<StructureSnapshot>),
     /// Compatibility fallback for genuinely broad structural commands.
     Full(CadDocument),
     /// Exact layer-table entries touched by one command.
@@ -865,6 +1004,7 @@ pub(super) enum StructureSnapshot {
 impl StructureSnapshot {
     pub(super) fn estimated_bytes(&self) -> usize {
         match self {
+            Self::Combined(parts) => parts.iter().map(Self::estimated_bytes).sum(),
             Self::Full(doc) => doc.objects.len().saturating_mul(192),
             Self::Layers(entries) => entries.len().saturating_mul(256),
             Self::TextStyles(entries) => entries.len().saturating_mul(320),
@@ -878,6 +1018,7 @@ impl StructureSnapshot {
 
     pub(super) fn is_full(&self) -> bool {
         matches!(self, Self::Full(_))
+            || matches!(self,Self::Combined(parts) if parts.iter().any(Self::is_full))
     }
 }
 
@@ -904,6 +1045,17 @@ pub(super) struct ParametricConstraintsEntryDelta {
     pub(super) after: crate::scene::parametric_constraints::ParametricConstraintSet,
 }
 
+/// One reference-only designation's before/after value within an entity delta
+/// (API v9). The designation set lives on `Scene`, not in the document, so
+/// the value rides its own channel — symmetric like every other delta field,
+/// undo applies the before value, redo the after value.
+#[derive(Clone)]
+pub(super) struct ReferenceDesignationDelta {
+    pub(super) handle: Handle,
+    pub(super) before: bool,
+    pub(super) after: bool,
+}
+
 #[derive(Default)]
 pub(super) struct HistoryState {
     pub(super) undo_stack: Vec<HistorySnapshot>,
@@ -912,6 +1064,7 @@ pub(super) struct HistoryState {
 }
 
 pub(super) struct PendingHistorySnapshot {
+    pub(super) visibility_states_before: rustc_hash::FxHashMap<Handle, usize>,
     pub(super) label: String,
     pub(super) current_layout: String,
     pub(super) active_layer: String,
@@ -923,6 +1076,20 @@ pub(super) struct PendingHistorySnapshot {
     /// message boundaries until `commit_deferred_undo` closes it, so a flow made
     /// of several host requests still lands in one entry.
     pub(super) deferred: bool,
+    /// First-touch before-values of reference-only designations (API v9)
+    /// mutated inside this plugin scope (see `scene::reference_only`). Set
+    /// mutations are not document writes, so the scope closes by reading the
+    /// set's current state as the after-image and keeping entries whose value
+    /// actually flipped.
+    pub(super) reference_designations_before: Vec<(Handle, bool)>,
+    /// Parametric constraint sets when the scope opened; the scope closes
+    /// with a before/after entry for every set that changed, so undo also
+    /// removes a constraint a plugin created inside its scope.
+    pub(super) parametric_constraints_before:
+        Vec<crate::scene::parametric_constraints::ParametricConstraintSet>,
+    /// Opened by a plugin's `push_undo`: while a plugin request runs, the
+    /// commands it drives join this scope instead of closing it.
+    pub(super) plugin_owned: bool,
     /// Kept as an undo step even when nothing changed.
     pub(super) keep_empty: bool,
 }

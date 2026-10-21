@@ -513,7 +513,7 @@ fn convert_linear(
             b.text_rotation = base.text_rotation;
         }
     }
-    let mut e = Entity::Dimension(dim);
+    let mut e = Entity::Dimension(Box::new(dim));
     stamp_edit(&mut e, &params, &[to_arr(first), to_arr(second)], "line");
     Ok(e)
 }
@@ -554,7 +554,7 @@ fn convert_radial(
     params.dn = dn;
 
     let dim = gs::build_dimension(c, doc, to_arr(center), to_arr(rim), &params, style)?;
-    let mut e = Entity::Dimension(dim);
+    let mut e = Entity::Dimension(Box::new(dim));
     stamp_edit(&mut e, &params, &[to_arr(center), to_arr(rim)], "line");
     Ok(e)
 }
@@ -591,7 +591,7 @@ fn convert_angular(
         &params,
         style,
     )?;
-    let mut e = Entity::Dimension(dim);
+    let mut e = Entity::Dimension(Box::new(dim));
     // 角度引导 = 两段 PLINE，**顶点在中间**（与 OCSMDIMGULIDE 的 ANGLE 约定一致）。
     stamp_edit(&mut e, &params, &[to_arr(ray1), to_arr(vertex), to_arr(ray2)], "pline");
     Ok(e)
@@ -1032,7 +1032,7 @@ pub(crate) fn plan(doc: &Doc, selected: &[Handle]) -> Dim2GbPlan {
         }
     }
 
-    let targets: Vec<(Handle, Dimension)> = doc
+    let targets: Vec<(Handle, Box<Dimension>)> = doc
         .entities()
         .filter(|e| matches!(e, Entity::Dimension(_)))
         .filter(|e| selected.is_empty() || selected.contains(&e.common().handle))
@@ -1059,7 +1059,7 @@ pub(crate) fn plan(doc: &Doc, selected: &[Handle]) -> Dim2GbPlan {
                     // 参考测量值取源实体自身几何：外来图档里 base.actual_measurement
                     // 可能是旧值（甚至角度按弧度存），直接比会把能转的线性/角度标注
                     // 全部拒掉（用户报「样式部分丢失」）；几何是重建的真实依据。
-                    let before = match &dim {
+                    let before = match &*dim {
                         Dimension::Linear(l) => l.measurement(),
                         Dimension::Aligned(a) => a.measurement(),
                         Dimension::Angular2Ln(g) => g.measurement_degrees(),
@@ -1068,7 +1068,7 @@ pub(crate) fn plan(doc: &Doc, selected: &[Handle]) -> Dim2GbPlan {
                     };
                     let after = new.base().actual_measurement;
                     let tol = before.abs() * 1e-6 + 1e-9;
-                    let ok = match dim {
+                    let ok = match &*dim {
                         Dimension::Linear(_) | Dimension::Aligned(_) => (after - before).abs() <= tol,
                         Dimension::Angular2Ln(_) | Dimension::Angular3Pt(_) => {
                             (after - before).abs() <= tol
@@ -1340,7 +1340,7 @@ mod tests {
         d.base.style_name = "Standard".into();
         let mut doc = Doc::new();
         let handle = doc
-            .add_entity(Entity::Dimension(Dimension::Linear(d)))
+            .add_entity(Entity::Dimension(Box::new(Dimension::Linear(d))))
             .unwrap();
 
         let plan = plan(&doc, &[]);
@@ -1380,7 +1380,7 @@ mod tests {
         d.definition_point = Vector3::new(15.0, 8.0, 0.0);
         d.base.actual_measurement = 30.0;
         d.base.style_name = "STD2".into();
-        doc.add_entity(Entity::Dimension(Dimension::Linear(d))).unwrap();
+        doc.add_entity(Entity::Dimension(Box::new(Dimension::Linear(d)))).unwrap();
 
         let plan_a = plan(&doc, &[]);
         let Entity::Dimension(new) = &plan_a.adds[0] else {
@@ -1407,7 +1407,7 @@ mod tests {
         let mut d2 = d2;
         d2.base.text = "自定义".into();
         d2.base.user_text = Some("自定义".into());
-        doc2.add_entity(Entity::Dimension(Dimension::Linear(d2))).unwrap();
+        doc2.add_entity(Entity::Dimension(Box::new(Dimension::Linear(d2)))).unwrap();
         let plan_b = plan(&doc2, &[]);
         let Entity::Dimension(new2) = &plan_b.adds[0] else {
             panic!()
@@ -1433,7 +1433,7 @@ mod tests {
         d.base.definition_point = d.base.text_middle_point;
         d.base.actual_measurement = 40.0; // 宿主的 2× 值
         d.base.style_name = "Standard".into();
-        doc.add_entity(Entity::Dimension(Dimension::Diameter(d))).unwrap();
+        doc.add_entity(Entity::Dimension(Box::new(Dimension::Diameter(d)))).unwrap();
 
         let plan = plan(&doc, &[]);
         assert_eq!(plan.converted, 1, "直径转换成功: {:?}", plan.skipped);
@@ -1456,7 +1456,7 @@ mod tests {
         d.base.definition_point = d.base.text_middle_point;
         d.base.actual_measurement = 25.0;
         d.base.style_name = "Standard".into();
-        let doc = doc_with(vec![Entity::Dimension(Dimension::Radius(d))]);
+        let doc = doc_with(vec![Entity::Dimension(Box::new(Dimension::Radius(d)))]);
 
         let plan = plan(&doc, &[]);
         assert_eq!(plan.converted, 1, "半径转换成功: {:?}", plan.skipped);
@@ -1479,7 +1479,7 @@ mod tests {
         g.base.actual_measurement = 90.0;
         g.base.style_name = "Standard".into();
         g.base.text = "90°".into();
-        let doc = doc_with(vec![Entity::Dimension(Dimension::Angular2Ln(g))]);
+        let doc = doc_with(vec![Entity::Dimension(Box::new(Dimension::Angular2Ln(g)))]);
 
         let plan = plan(&doc, &[]);
         assert_eq!(plan.converted, 1, "角度转换成功: {:?}", plan.skipped);
@@ -1503,7 +1503,7 @@ mod tests {
         g.base.text_middle_point = Vector3::new(650.0, 110.0, 0.0);
         g.base.actual_measurement = 0.959_931_088_596_879_3; // 55°（弧度口径）
         g.base.style_name = "Standard".into();
-        let doc = doc_with(vec![Entity::Dimension(Dimension::Angular2Ln(g))]);
+        let doc = doc_with(vec![Entity::Dimension(Box::new(Dimension::Angular2Ln(g)))]);
 
         let plan = plan(&doc, &[]);
         assert_eq!(
@@ -1537,7 +1537,7 @@ mod tests {
         g.base.text_middle_point = Vector3::new(107.0, 13.0, 0.0);
         g.base.actual_measurement = 40.0;
         g.base.style_name = "Standard".into();
-        let doc = doc_with(vec![Entity::Dimension(Dimension::Angular2Ln(g))]);
+        let doc = doc_with(vec![Entity::Dimension(Box::new(Dimension::Angular2Ln(g)))]);
 
         let plan = plan(&doc, &[]);
         assert_eq!(
@@ -1569,7 +1569,7 @@ mod tests {
         l.base.actual_measurement = 1150.0; // 旧值（与几何不符）
         l.base.text = "550".into();
         l.base.style_name = "Standard".into();
-        let doc = doc_with(vec![Entity::Dimension(Dimension::Linear(l))]);
+        let doc = doc_with(vec![Entity::Dimension(Box::new(Dimension::Linear(l)))]);
 
         let plan = plan(&doc, &[]);
         assert_eq!(
@@ -1604,7 +1604,7 @@ mod tests {
         a.base.text_middle_point = Vector3::new(24.0, 8.0, 0.0);
         a.base.actual_measurement = 20.0 * std::f64::consts::FRAC_PI_2;
         a.base.style_name = "Standard".into();
-        let doc = doc_with(vec![Entity::Dimension(Dimension::Arc(a))]);
+        let doc = doc_with(vec![Entity::Dimension(Box::new(Dimension::Arc(a)))]);
 
         let plan = plan(&doc, &[]);
         assert_eq!(plan.converted, 1, "弧长转换成功: {:?}", plan.skipped);
@@ -1743,8 +1743,8 @@ mod tests {
         l.base.actual_measurement = 10.0;
         l.base.style_name = "Standard".into();
         let doc = doc_with(vec![
-            Entity::Dimension(Dimension::Ordinate(o)),
-            Entity::Dimension(Dimension::Linear(l)),
+            Entity::Dimension(Box::new(Dimension::Ordinate(o))),
+            Entity::Dimension(Box::new(Dimension::Linear(l))),
         ]);
 
         let plan = plan(&doc, &[]);
@@ -1769,7 +1769,7 @@ mod tests {
             l.definition_point = Vector3::new(x + 5.0, 5.0, 0.0);
             l.base.actual_measurement = 10.0;
             l.base.style_name = "Standard".into();
-            doc.add_entity(Entity::Dimension(Dimension::Linear(l)))
+            doc.add_entity(Entity::Dimension(Box::new(Dimension::Linear(l))))
                 .unwrap()
         };
         let h1 = mk(0.0);
@@ -1795,7 +1795,7 @@ mod tests {
     #[test]
     fn plan_reports_non_dimension_selection() {
         let _g = zh_guard();
-        let doc = doc_with(vec![Entity::MText(MText::new())]);
+        let doc = doc_with(vec![Entity::MText(Box::new(MText::new()))]);
         let h = doc.entities().next().unwrap().common().handle;
         let plan = plan(&doc, &[h]);
         assert_eq!(plan.seen, 0);
@@ -1813,7 +1813,7 @@ mod tests {
         a.definition_point = Vector3::new(21.0, 28.0, 0.0);
         a.base.actual_measurement = 50.0;
         a.base.style_name = "Standard".into();
-        let doc = doc_with(vec![Entity::Dimension(Dimension::Aligned(a))]);
+        let doc = doc_with(vec![Entity::Dimension(Box::new(Dimension::Aligned(a)))]);
         let plan = plan(&doc, &[]);
         assert_eq!(plan.converted, 1, "{:?}", plan.skipped);
         let Entity::Dimension(new) = &plan.adds[0] else {
@@ -1832,7 +1832,7 @@ mod tests {
         d.base.definition_point = d.definition_point;
         d.base.actual_measurement = 40.0; // 水平：量的是 |dx|
         d.base.style_name = "Standard".into();
-        let doc = doc_with(vec![Entity::Dimension(Dimension::Linear(d))]);
+        let doc = doc_with(vec![Entity::Dimension(Box::new(Dimension::Linear(d)))]);
 
         let plan = plan(&doc, &[]);
         assert_eq!(plan.converted, 1, "转换成功: {:?}", plan.skipped);
@@ -1862,7 +1862,7 @@ mod tests {
         d.base.definition_point = d.definition_point;
         d.base.actual_measurement = 30.0;
         d.base.style_name = "Standard".into();
-        let doc = doc_with(vec![Entity::Dimension(Dimension::Linear(d))]);
+        let doc = doc_with(vec![Entity::Dimension(Box::new(Dimension::Linear(d)))]);
         let plan = plan(&doc, &[]);
         assert_eq!(plan.converted, 1, "{:?}", plan.skipped);
         let Entity::Dimension(new) = &plan.adds[0] else {
@@ -1985,7 +1985,7 @@ mod tests {
             (48, XDataValue::Real(0.14)),
             (272, XDataValue::Integer16(3)),
         ]));
-        doc.add_entity(Entity::Dimension(Dimension::Linear(l1))).unwrap();
+        doc.add_entity(Entity::Dimension(Box::new(Dimension::Linear(l1)))).unwrap();
 
         let mut l2 = DimensionLinear::vertical(
             Vector3::new(10.0, 10.0, 0.0),
@@ -1995,7 +1995,7 @@ mod tests {
         l2.base.definition_point = l2.definition_point;
         l2.base.actual_measurement = 50.0;
         l2.base.style_name = "Standard".into();
-        doc.add_entity(Entity::Dimension(Dimension::Linear(l2))).unwrap();
+        doc.add_entity(Entity::Dimension(Box::new(Dimension::Linear(l2)))).unwrap();
 
         let mut a1 = DimensionAligned::new(
             Vector3::new(80.0, 10.0, 0.0),
@@ -2004,7 +2004,7 @@ mod tests {
         a1.definition_point = Vector3::new(105.0, 20.0, 0.0);
         a1.base.actual_measurement = 50.0;
         a1.base.style_name = "Standard".into();
-        doc.add_entity(Entity::Dimension(Dimension::Aligned(a1))).unwrap();
+        doc.add_entity(Entity::Dimension(Box::new(Dimension::Aligned(a1)))).unwrap();
 
         let mut r1 = DimensionRadius::new(
             Vector3::new(160.0, 30.0, 0.0),
@@ -2020,7 +2020,7 @@ mod tests {
             (48, XDataValue::Real(0.02)),
             (272, XDataValue::Integer16(2)),
         ]));
-        doc.add_entity(Entity::Dimension(Dimension::Radius(r1))).unwrap();
+        doc.add_entity(Entity::Dimension(Box::new(Dimension::Radius(r1)))).unwrap();
 
         let mut circle = Circle::new();
         circle.center = Vector3::new(230.0, 30.0, 0.0);
@@ -2034,7 +2034,7 @@ mod tests {
         d1.base.definition_point = d1.base.text_middle_point;
         d1.base.actual_measurement = 80.0; // 宿主口径的 2× 值
         d1.base.style_name = "Standard".into();
-        doc.add_entity(Entity::Dimension(Dimension::Diameter(d1))).unwrap();
+        doc.add_entity(Entity::Dimension(Box::new(Dimension::Diameter(d1)))).unwrap();
 
         let mut g = DimensionAngular2Ln::default();
         g.angle_vertex = Vector3::new(320.0, 30.0, 0.0);
@@ -2046,7 +2046,7 @@ mod tests {
         g.base.text_middle_point = Vector3::new(350.0, 50.0, 0.0);
         g.base.actual_measurement = 90.0;
         g.base.style_name = "Standard".into();
-        doc.add_entity(Entity::Dimension(Dimension::Angular2Ln(g))).unwrap();
+        doc.add_entity(Entity::Dimension(Box::new(Dimension::Angular2Ln(g)))).unwrap();
 
         let mut ar = DimensionArc::default();
         ar.center_point = Vector3::new(420.0, 30.0, 0.0);
@@ -2059,7 +2059,7 @@ mod tests {
         ar.base.text_middle_point = Vector3::new(455.0, 42.0, 0.0);
         ar.base.actual_measurement = 30.0 * std::f64::consts::FRAC_PI_2;
         ar.base.style_name = "Standard".into();
-        doc.add_entity(Entity::Dimension(Dimension::Arc(ar))).unwrap();
+        doc.add_entity(Entity::Dimension(Box::new(Dimension::Arc(ar)))).unwrap();
 
         let plan = plan(&doc, &[]);
         assert_eq!(plan.seen, 7, "扫到 7 个原生标注");
@@ -2096,7 +2096,7 @@ mod tests {
         r.base.text_middle_point = Vector3::new(0.0, 14.0, 0.0);
         r.base.actual_measurement = 10.0;
         r.base.style_name = "Standard".into();
-        doc.add_entity(Entity::Dimension(Dimension::Radius(r))).unwrap();
+        doc.add_entity(Entity::Dimension(Box::new(Dimension::Radius(r)))).unwrap();
         // 角度
         let mut g = DimensionAngular2Ln::default();
         g.angle_vertex = Vector3::new(50.0, 0.0, 0.0);
@@ -2108,7 +2108,7 @@ mod tests {
         g.base.text_middle_point = Vector3::new(58.0, 8.0, 0.0);
         g.base.actual_measurement = 90.0;
         g.base.style_name = "Standard".into();
-        doc.add_entity(Entity::Dimension(Dimension::Angular2Ln(g))).unwrap();
+        doc.add_entity(Entity::Dimension(Box::new(Dimension::Angular2Ln(g)))).unwrap();
         // 弧长
         let mut a = DimensionArc::default();
         a.center_point = Vector3::new(100.0, 0.0, 0.0);
@@ -2121,7 +2121,7 @@ mod tests {
         a.base.text_middle_point = Vector3::new(124.0, 8.0, 0.0);
         a.base.actual_measurement = 20.0 * std::f64::consts::FRAC_PI_2;
         a.base.style_name = "Standard".into();
-        doc.add_entity(Entity::Dimension(Dimension::Arc(a))).unwrap();
+        doc.add_entity(Entity::Dimension(Box::new(Dimension::Arc(a)))).unwrap();
 
         let plan = plan(&doc, &[]);
         assert_eq!(plan.converted, 3, "{:?}", plan.skipped);
@@ -2178,7 +2178,7 @@ mod tests {
             (48, XDataValue::Real(0.14)),     // DIMTM
             (272, XDataValue::Integer16(3)),  // DIMTDEC
         ]));
-        let doc = doc_with(vec![Entity::Dimension(Dimension::Linear(l))]);
+        let doc = doc_with(vec![Entity::Dimension(Box::new(Dimension::Linear(l)))]);
 
         let plan = plan(&doc, &[]);
         assert_eq!(plan.converted, 1, "{:?}", plan.skipped);
@@ -2209,7 +2209,7 @@ mod tests {
             (48, XDataValue::Real(0.05)),
             (272, XDataValue::Integer16(2)),
         ]));
-        let doc = doc_with(vec![Entity::Dimension(Dimension::Radius(r))]);
+        let doc = doc_with(vec![Entity::Dimension(Box::new(Dimension::Radius(r)))]);
 
         let plan = plan(&doc, &[]);
         assert_eq!(plan.converted, 1, "{:?}", plan.skipped);
@@ -2238,7 +2238,7 @@ mod tests {
         l.definition_point = Vector3::new(15.0, 6.0, 0.0);
         l.base.actual_measurement = 30.0;
         l.base.style_name = "STDTOL".into();
-        doc.add_entity(Entity::Dimension(Dimension::Linear(l))).unwrap();
+        doc.add_entity(Entity::Dimension(Box::new(Dimension::Linear(l)))).unwrap();
 
         let plan = plan(&doc, &[]);
         let Entity::Dimension(new) = &plan.adds[0] else {
@@ -2284,7 +2284,7 @@ mod tests {
             (48, XDataValue::Real(-0.0)),
             (272, XDataValue::Integer16(4)),
         ]));
-        let doc = doc_with(vec![Entity::Dimension(Dimension::Linear(l))]);
+        let doc = doc_with(vec![Entity::Dimension(Box::new(Dimension::Linear(l)))]);
         let plan = plan(&doc, &[]);
         let Entity::Dimension(new) = &plan.adds[0] else {
             panic!()
@@ -2323,7 +2323,7 @@ mod tests {
             let mut m = MText::new();
             m.value = t.to_string();
             m.insertion_point = Vector3::new(24.0, 20.0, 0.0);
-            let h = doc.add_entity(Entity::MText(m)).unwrap();
+            let h = doc.add_entity(Entity::MText(Box::new(m))).unwrap();
             h
         });
         if let Some(h) = mh {
@@ -2439,7 +2439,7 @@ mod tests {
         d.definition_point = Vector3::new(0.0, -10.0, 0.0);
         d.base.definition_point = d.definition_point;
         d.base.actual_measurement = 50.0;
-        let doc = doc_with(vec![Entity::Dimension(Dimension::Linear(d))]);
+        let doc = doc_with(vec![Entity::Dimension(Box::new(Dimension::Linear(d)))]);
         let plan = plan(&doc, &[]);
         assert_eq!(plan.converted, 1, "{:?}", plan.skipped);
         let e = plan
@@ -2507,8 +2507,8 @@ mod tests {
         l.base.actual_measurement = 10.0;
         l.base.style_name = "Standard".into();
         let doc = doc_with(vec![
-            Entity::Dimension(Dimension::Ordinate(o)),
-            Entity::Dimension(Dimension::Linear(l)),
+            Entity::Dimension(Box::new(Dimension::Ordinate(o))),
+            Entity::Dimension(Box::new(Dimension::Linear(l))),
         ]);
         let plan_zh = plan(&doc, &[]);
         assert_eq!(plan_zh.seen, 2);
@@ -2540,8 +2540,8 @@ mod tests {
         l.base.actual_measurement = 10.0;
         l.base.style_name = "Standard".into();
         let doc = doc_with(vec![
-            Entity::Dimension(Dimension::Ordinate(o)),
-            Entity::Dimension(Dimension::Linear(l)),
+            Entity::Dimension(Box::new(Dimension::Ordinate(o))),
+            Entity::Dimension(Box::new(Dimension::Linear(l))),
         ]);
         let plan_en = plan(&doc, &[]);
         assert!(plan_en.skipped[0].contains("ordinate dimension"), "{:?}", plan_en.skipped);

@@ -13,6 +13,32 @@ use codec::{CadDocument, TableEntry};
 
 // ── Complex linetype types ────────────────────────────────────────────────
 
+/// How a complex linetype element's rotation is measured (`.lin` `R=`,
+/// `A=`, `U=`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum LtRotation {
+    /// Relative to the line direction.
+    #[default]
+    Relative,
+    /// Relative to the world X axis, whatever the line direction.
+    Absolute,
+    /// Relative to the line, turned half a turn where it would read upside
+    /// down.
+    Upright,
+}
+
+impl LtRotation {
+    fn of(data: &codec::tables::linetype::LineTypeComplexData) -> Self {
+        if data.upright {
+            Self::Upright
+        } else if data.absolute_rotation {
+            Self::Absolute
+        } else {
+            Self::Relative
+        }
+    }
+}
+
 /// One element in a complex linetype pattern.
 #[derive(Clone, Debug)]
 pub enum LtSegment {
@@ -39,6 +65,8 @@ pub enum LtSegment {
         scale: f32,
         /// Optional rotation in degrees (0 = along the line).
         rot_deg: f32,
+        /// What `rot_deg` is measured from.
+        rot_mode: LtRotation,
     },
     /// Draw a text string at the current pen position.
     Text {
@@ -54,6 +82,8 @@ pub enum LtSegment {
         scale: f32,
         /// Rotation in degrees (0 = along the line).
         rot_deg: f32,
+        /// What `rot_deg` is measured from.
+        rot_mode: LtRotation,
     },
 }
 
@@ -133,6 +163,7 @@ pub fn document_lt_segments(document: &CadDocument, name: &str) -> Option<Comple
                         // DWG stores the element rotation in RADIANS; the
                         // segment field carries degrees (the `.lin` unit).
                         rot_deg: (c.rotation as f32).to_degrees(),
+                        rot_mode: LtRotation::of(c),
                     });
                 }
                 LineTypeComplexContent::Shape { shape_number } => {
@@ -173,6 +204,7 @@ pub fn document_lt_segments(document: &CadDocument, name: &str) -> Option<Comple
                         y: c.offset[1] as f32,
                         scale: if scale.abs() < 1e-6 { 1.0 } else { scale },
                         rot_deg: (c.rotation as f32).to_degrees(),
+                        rot_mode: LtRotation::of(c),
                     });
                 }
             }
@@ -236,7 +268,10 @@ const LIN_SOURCE: &str = include_str!("../../assets/linetypes/OpenCADStudio.lin"
 fn lin_source() -> &'static str {
     static SOURCE: OnceLock<String> = OnceLock::new();
     SOURCE.get_or_init(|| {
-        format!("{LIN_SOURCE}\n{}", crate::io::patterns::user_definitions("linetypes", "lin"))
+        format!(
+            "{LIN_SOURCE}\n{}",
+            crate::io::patterns::user_definitions("linetypes", "lin")
+        )
     })
 }
 
@@ -268,6 +303,40 @@ pub fn populate_document(doc: &mut CadDocument) {
     populate_document_from_source(doc, lin_source());
 }
 
+/// Repair the catalog linetypes `doc` already has (see
+/// [`populate_document_from_source`]) without adding any: an opened drawing
+/// keeps exactly its own linetypes, so a purged one stays purged.
+pub fn repair_document(doc: &mut CadDocument) {
+    populate_matching(doc, lin_source(), |_| false);
+}
+
+/// The catalog linetypes `doc` does not have, as (name, description): what a
+/// picker offers beside the drawing's own. Picking one loads it with
+/// [`ensure_catalog_linetype`].
+pub fn catalog_missing_from(doc: &CadDocument) -> Vec<(String, String)> {
+    static CATALOG: OnceLock<Vec<(String, String)>> = OnceLock::new();
+    CATALOG
+        .get_or_init(|| {
+            parse(lin_source())
+                .into_iter()
+                .map(|lt| (lt.name, lt.description))
+                .collect()
+        })
+        .iter()
+        .filter(|(name, _)| !doc.line_types.contains(name))
+        .cloned()
+        .collect()
+}
+
+/// Load catalog linetype `name` into `doc` when the drawing lacks it.
+/// Returns whether it was added.
+pub fn ensure_catalog_linetype(doc: &mut CadDocument, name: &str) -> bool {
+    !doc.line_types.contains(name)
+        && populate_matching(doc, lin_source(), |candidate| {
+            candidate.eq_ignore_ascii_case(name)
+        }) > 0
+}
+
 /// Add the linetypes of a caller-supplied `.lin` source, embedded shapes and
 /// text included, so the drawing draws them and a saved file carries them.
 /// Returns the number of definitions newly registered in the drawing.
@@ -277,6 +346,12 @@ pub fn populate_document(doc: &mut CadDocument) {
 /// and so saved) gets its shapes and text back when its dashes match the
 /// source's exactly.
 pub fn populate_document_from_source(doc: &mut CadDocument, source: &str) -> usize {
+    populate_matching(doc, source, |_| true)
+}
+
+/// [`populate_document_from_source`], adding only the missing linetypes
+/// `add` accepts by name; existing ones are repaired either way.
+fn populate_matching(doc: &mut CadDocument, source: &str, add: impl Fn(&str) -> bool) -> usize {
     let complex = parse_complex(source);
     let mut added = 0;
     for mut lt in parse(source) {
@@ -298,6 +373,9 @@ pub fn populate_document_from_source(doc: &mut CadDocument, source: &str) -> usi
                     }
                 }
             }
+            continue;
+        }
+        if !add(&lt.name) {
             continue;
         }
         if let Some(elements) = segments.and_then(|s| complex_elements(doc, s, &lt.elements)) {
@@ -411,6 +489,7 @@ fn complex_elements(
                 y,
                 scale,
                 rot_deg,
+                rot_mode,
                 ..
             } => {
                 let stem = shape_file_stem(shx_file);
@@ -425,7 +504,9 @@ fn complex_elements(
                     style_handle: shape_file_style(doc, shx_file),
                     scale: decimal(*scale),
                     rotation: decimal(*rot_deg).to_radians(),
-                    absolute_rotation: false,
+                    absolute_rotation: *rot_mode == LtRotation::Absolute,
+                    upright: *rot_mode == LtRotation::Upright,
+                    source_flags: 0,
                     offset: [decimal(*x), decimal(*y)],
                 }
             }
@@ -436,6 +517,7 @@ fn complex_elements(
                 y,
                 scale,
                 rot_deg,
+                rot_mode,
             } => LineTypeComplexData {
                 content: LineTypeComplexContent::Text { text: text.clone() },
                 style_handle: doc
@@ -445,7 +527,9 @@ fn complex_elements(
                     .handle,
                 scale: decimal(*scale),
                 rotation: decimal(*rot_deg).to_radians(),
-                absolute_rotation: false,
+                absolute_rotation: *rot_mode == LtRotation::Absolute,
+                upright: *rot_mode == LtRotation::Upright,
+                source_flags: 0,
                 offset: [decimal(*x), decimal(*y)],
             },
         };
@@ -677,6 +761,7 @@ fn parse_shape_element(inner: &str) -> Option<LtSegment> {
     let mut y = 0.0f32;
     let mut scale = 1.0f32;
     let mut rot_deg = 0.0f32;
+    let mut rot_mode = LtRotation::Relative;
     let mut shx_file = String::new();
 
     for part in parts {
@@ -687,13 +772,9 @@ fn parse_shape_element(inner: &str) -> Option<LtSegment> {
             y = v.parse().unwrap_or(0.0);
         } else if let Some(v) = p.strip_prefix("s=").or_else(|| p.strip_prefix("S=")) {
             scale = v.parse().unwrap_or(1.0);
-        } else if let Some(v) = p
-            .strip_prefix("r=")
-            .or_else(|| p.strip_prefix("R="))
-            .or_else(|| p.strip_prefix("u="))
-            .or_else(|| p.strip_prefix("U="))
-        {
-            rot_deg = v.parse().unwrap_or(0.0);
+        } else if let Some((mode, v)) = rotation_field(p) {
+            rot_mode = mode;
+            rot_deg = v;
         } else if p.to_ascii_lowercase().ends_with(".shx") {
             // `[NAME,ltypeshp.shx,…]` — the shape file reference.
             shx_file = p.to_string();
@@ -708,7 +789,20 @@ fn parse_shape_element(inner: &str) -> Option<LtSegment> {
         y,
         scale,
         rot_deg,
+        rot_mode,
     })
+}
+
+/// A `R=` / `A=` / `U=` rotation field: its mode and angle in degrees.
+fn rotation_field(part: &str) -> Option<(LtRotation, f32)> {
+    let (key, value) = part.split_once('=')?;
+    let mode = match key.trim() {
+        "r" | "R" => LtRotation::Relative,
+        "a" | "A" => LtRotation::Absolute,
+        "u" | "U" => LtRotation::Upright,
+        _ => return None,
+    };
+    Some((mode, value.trim().parse().unwrap_or(0.0)))
 }
 
 /// Parse `"TEXT",STYLE,x=v,y=v,s=v,r=v` into an `LtSegment::Text`.
@@ -734,6 +828,7 @@ fn parse_text_element(inner: &str) -> Option<LtSegment> {
     let mut y = 0.0f32;
     let mut scale = 1.0f32;
     let mut rot_deg = 0.0f32;
+    let mut rot_mode = LtRotation::Relative;
 
     for part in parts {
         let p = part.trim();
@@ -743,13 +838,9 @@ fn parse_text_element(inner: &str) -> Option<LtSegment> {
             y = v.parse().unwrap_or(0.0);
         } else if let Some(v) = p.strip_prefix("s=").or_else(|| p.strip_prefix("S=")) {
             scale = v.parse().unwrap_or(1.0);
-        } else if let Some(v) = p
-            .strip_prefix("r=")
-            .or_else(|| p.strip_prefix("R="))
-            .or_else(|| p.strip_prefix("u="))
-            .or_else(|| p.strip_prefix("U="))
-        {
-            rot_deg = v.parse().unwrap_or(0.0);
+        } else if let Some((mode, v)) = rotation_field(p) {
+            rot_mode = mode;
+            rot_deg = v;
         }
     }
 
@@ -760,6 +851,7 @@ fn parse_text_element(inner: &str) -> Option<LtSegment> {
         y,
         scale,
         rot_deg,
+        rot_mode,
     })
 }
 
@@ -806,5 +898,28 @@ mod header_tests {
         let types = parse("*DASHED,Dashed __ __\nA,.5,-.25\n");
         assert_eq!(types[0].name, "DASHED");
         assert_eq!(types[0].description, "Dashed __ __");
+    }
+}
+
+#[cfg(test)]
+mod rotation_tests {
+    use super::{parse_text_element, LtRotation, LtSegment};
+
+    #[test]
+    fn rotation_fields_keep_their_mode() {
+        for (field, mode, deg) in [
+            ("R=10", LtRotation::Relative, 10.0),
+            ("a=45", LtRotation::Absolute, 45.0),
+            ("U=0.0", LtRotation::Upright, 0.0),
+        ] {
+            let inner = format!("\"GAS\",STANDARD,S=.1,{field},X=-0.1,Y=-.05");
+            let Some(LtSegment::Text {
+                rot_mode, rot_deg, ..
+            }) = parse_text_element(&inner)
+            else {
+                panic!("{inner} did not parse");
+            };
+            assert_eq!((rot_mode, rot_deg), (mode, deg), "{inner}");
+        }
     }
 }

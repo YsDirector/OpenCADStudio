@@ -1526,7 +1526,7 @@ pub(crate) fn build_guide_angular_block(
     m.rotation = text_rot;
     m.style = "OCSM_GB".into();
     m.attachment_point = AttachmentPoint::BottomCenter;
-    let mut e = E::MText(m);
+    let mut e = E::MText(Box::new(m));
     set_member_layer(&mut e, "7标注层");
     e.common_mut().color = acadrust::Color::from_index(3); // 绿色（对照示例 *D67 MTEXT 62=3）
     members.push(e);
@@ -1894,7 +1894,7 @@ fn build_guide_radial_block(
         m.rotation = rotation;
         m.style = "OCSM_GB".into();
         m.attachment_point = AttachmentPoint::BottomCenter;
-        let mut e = E::MText(m);
+        let mut e = E::MText(Box::new(m));
         set_member_layer(&mut e, "7标注层");
         e
     };
@@ -2235,7 +2235,7 @@ fn apply_section(
         m.rotation = 0.0;
         m.style = text_style.into();
         m.attachment_point = AttachmentPoint::MiddleCenter;
-        let mut e = E::MText(m);
+        let mut e = E::MText(Box::new(m));
         set_member_layer(&mut e, "8符号标注层");
         e.common_mut().color = Color::from_index(3); // 绿色（对照示例字母/视图名）
         e
@@ -2585,7 +2585,7 @@ fn apply_detail(
     lm.rotation = 0.0;
     lm.style = "OCSM_GB".into();
     lm.attachment_point = AttachmentPoint::MiddleCenter;
-    let mut le = E::MText(lm);
+    let mut le = E::MText(Box::new(lm));
     set_member_layer(&mut le, "8符号标注层");
     le.common_mut().color = Color::from_index(3);
     blk.push(le);
@@ -2667,7 +2667,7 @@ fn apply_detail(
     nm.rotation = 0.0;
     nm.style = "OCSM_GB".into();
     nm.attachment_point = AttachmentPoint::MiddleCenter;
-    let mut ne = E::MText(nm);
+    let mut ne = E::MText(Box::new(nm));
     set_member_layer(&mut ne, "8符号标注层");
     ne.common_mut().color = Color::from_index(3);
     origin_blk.push(ne);
@@ -2905,7 +2905,7 @@ pub(crate) fn apply_arclen(
         m.rotation = text_rot;
         m.style = "OCSM_GB".into();
         m.attachment_point = AttachmentPoint::MiddleCenter; // 中心锚点：文字整体居弧上方
-        let mut e = E::MText(m);
+        let mut e = E::MText(Box::new(m));
         set_member_layer(&mut e, "7标注层");
         e.common_mut().color = Color::from_index(3);
         e
@@ -3009,6 +3009,151 @@ pub(crate) fn apply_arclen(
 /// + 方框 LINE(色 31) + 单元格 MTEXT(色 3)。默认格宽/高 = 2h，h = 5×scale。
 /// 单元格内容：[符号][Φ?]公差1][基准1][基准2][基准3]。符号格文本
 /// 用 `{\Fgdt;X}` 内联字体码（OCSM MTEXT 支持）；公差前缀 ⌀ 用 `%%c`。
+///
+/// 语义字段走 `GuideParams::gdt_semantic()`；旧 URL 没有这些字段时保留渲染兼容，
+/// 但一旦进入语义预检路径，缺少“被测要素/特征项目/公差带/基准自由度/TED/投影高度”
+/// 中任一项就明确返回 `INPUT_CONTRADICTION`，不生成半成品 FCF。
+fn gdt_input_preflight(pts: &[[f64; 3]], rows: &[GdtRow], params: &GuideParams) -> Result<(), String> {
+    const SYMBOLS: &str = "ucegdkabfjirht";
+    let semantic = params.gdt_semantic();
+    for row in rows {
+        let sym = row.sym.trim().to_ascii_lowercase();
+        if sym.is_empty() || !sym.chars().all(|ch| SYMBOLS.contains(ch) || ch == 'o') {
+            return Err(format!("INPUT_CONTRADICTION: 未知或缺失的特征项目符号 `{}`", row.sym));
+        }
+        let tol = row.tol.trim().parse::<f64>().map_err(|_| {
+            format!("INPUT_CONTRADICTION: 公差值 `{}` 不是数值", row.tol)
+        })?;
+        if !tol.is_finite() || tol <= 0.0 {
+            return Err(format!("INPUT_CONTRADICTION: 公差值必须为正数，实际 `{}`", row.tol));
+        }
+        let mut seen = std::collections::BTreeSet::new();
+        for datum in [&row.d1, &row.d2, &row.d3] {
+            // `A-B` is one rendered common-datum cell, but it contains two
+            // datum features for the freedom accounting below.  Keep the
+            // cell intact for rendering while splitting its members here.
+            for member in datum.split(['-', '—', '–']).map(str::trim).filter(|s| !s.is_empty()) {
+                if !seen.insert(member.to_ascii_uppercase()) {
+                    return Err(format!("INPUT_CONTRADICTION: 基准 `{member}` 重复，基准体系不唯一"));
+                }
+            }
+        }
+    }
+    let Some(s) = semantic else {
+        // 历史 URL 没有结构化字段：不在兼容入口猜测语义；新入口通过 semantic 字段启用严格链。
+        return Ok(());
+    };
+    let need = |name: &str, value: &str| {
+        if value.trim().is_empty() {
+            Err(format!("INPUT_CONTRADICTION: GDT 缺少{name}"))
+        } else {
+            Ok(())
+        }
+    };
+    need("被测要素 target", &s.target)?;
+    need("特征项目 feature", &s.feature)?;
+    need("公差带 zone", &s.zone)?;
+    need("基准自由度 datum_dof", &s.datum_dof)?;
+    need("TED/基本尺寸 ted", &s.ted)?;
+    need("投影高度 projection_height", &s.projection_height)?;
+
+    let feature = s.feature.to_ascii_lowercase();
+    let sym = rows[0].sym.trim().to_ascii_lowercase();
+    let expected: &[&str] = match sym.as_str() {
+        "j" => &["position", "位置度"],
+        "r" => &["coaxiality", "同轴度"],
+        "c" => &["runout", "圆跳动", "circular_runout"],
+        _ => &[],
+    };
+    if !expected.is_empty() && !expected.iter().any(|word| feature.contains(word)) {
+        return Err(format!(
+            "INPUT_CONTRADICTION: 符号 `{}` 与特征项目 `{}` 不一致",
+            rows[0].sym, s.feature
+        ));
+    }
+    let zone = s.zone.to_ascii_lowercase();
+    if sym == "j" && !(zone.contains("cylind") || zone.contains("圆柱")) {
+        return Err(format!(
+            "INPUT_CONTRADICTION: 位置度的公差带必须是圆柱，实际 `{}`",
+            s.zone
+        ));
+    }
+    let datum_relation = s.datum_relation.to_ascii_lowercase();
+    if datum_relation.contains("parallel") || s.datum_relation.contains("平行") {
+        let datum_count = [&rows[0].d1, &rows[0].d2, &rows[0].d3]
+            .iter()
+            .filter(|d| !d.trim().is_empty())
+            .count();
+        if datum_count >= 2 {
+            return Err("INPUT_CONTRADICTION: 多基准被声明为平行，无法提供唯一基准体系自由度".into());
+        }
+    }
+    if datum_relation.contains("common") || s.datum_relation.contains("共") {
+        let has_common_cell = [&rows[0].d1, &rows[0].d2, &rows[0].d3]
+            .iter()
+            .any(|d| d.contains('-') || d.contains('—') || d.contains('–'));
+        if !has_common_cell {
+            return Err("INPUT_CONTRADICTION: 共用基准关系必须在同一基准格中写成 A-B".into());
+        }
+    }
+    let mut dof_sum = 0u32;
+    let mut dofs = std::collections::BTreeMap::<String, u32>::new();
+    let no_datum_dof = matches!(
+        s.datum_dof.trim().to_ascii_lowercase().as_str(),
+        "none" | "n/a" | "na" | "not_applicable" | "不适用" | "无"
+    );
+    if !no_datum_dof {
+        for item in s.datum_dof.split([',', ';', '|']).filter(|x| !x.trim().is_empty()) {
+            let (name, value) = item.split_once(':').ok_or_else(|| {
+                format!("INPUT_CONTRADICTION: 基准自由度 `{item}` 应写成 A:2,B:1")
+            })?;
+            let value = value.trim().parse::<u32>().map_err(|_| {
+                format!("INPUT_CONTRADICTION: 基准 `{name}` 的自由度不是整数")
+            })?;
+            if value == 0 || value > 3 || dofs.insert(name.trim().to_ascii_uppercase(), value).is_some() {
+                return Err(format!("INPUT_CONTRADICTION: 基准自由度 `{item}` 无效或重复"));
+            }
+            dof_sum += value;
+        }
+    }
+    let used_datums: std::collections::BTreeSet<String> = [&rows[0].d1, &rows[0].d2, &rows[0].d3]
+        .iter()
+        .flat_map(|d| d.split(['-', '—', '–']))
+        .map(str::trim)
+        .filter(|d| !d.is_empty())
+        .map(str::to_ascii_uppercase)
+        .collect();
+    if no_datum_dof {
+        if !used_datums.is_empty() {
+            return Err(format!(
+                "INPUT_CONTRADICTION: 基准列 `{}` 不能与 datum_dof=none 同时出现",
+                used_datums.iter().cloned().collect::<Vec<_>>().join(",")
+            ));
+        }
+    } else if used_datums.iter().any(|d| !dofs.contains_key(d)) || dof_sum != 3 {
+        return Err(format!(
+            "INPUT_CONTRADICTION: 基准自由度 `{}` 与基准列不匹配（总自由度必须为 3）",
+            s.datum_dof
+        ));
+    }
+    let is_none = |value: &str| matches!(value.trim().to_ascii_lowercase().as_str(), "none" | "n/a" | "na" | "not_applicable" | "不适用" | "无");
+    if !is_none(&s.projection_height) {
+        let h = s.projection_height.trim().parse::<f64>().map_err(|_| {
+            format!("INPUT_CONTRADICTION: 投影高度 `{}` 不是数值或 none", s.projection_height)
+        })?;
+        if !h.is_finite() || h <= 0.0 {
+            return Err("INPUT_CONTRADICTION: 投影高度必须为正数或 none".into());
+        }
+    }
+    if !is_none(&s.ted) && s.ted.trim().parse::<f64>().is_err() {
+        return Err(format!("INPUT_CONTRADICTION: TED `{}` 不是数值或 none", s.ted));
+    }
+    if pts.len() < 2 {
+        return Err("INPUT_CONTRADICTION: GDT 语义预检需要被测要素引导线".into());
+    }
+    Ok(())
+}
+
 fn apply_tolerance(
     sender: &Arc<dyn PluginRequestSender>,
     doc: &acadrust::CadDocument,
@@ -3053,7 +3198,7 @@ fn apply_tolerance(
         m.rotation = rotation;
         m.style = text_style.into();
         m.attachment_point = AttachmentPoint::MiddleCenter;
-        let mut e = E::MText(m);
+        let mut e = E::MText(Box::new(m));
         set_member_layer(&mut e, "8符号标注层");
         e.common_mut().color = Color::from_index(3);
         e
@@ -3092,6 +3237,7 @@ fn apply_tolerance(
     if rows.is_empty() {
         return Err("形位公差需至少一行（符号/公差/基准）".into());
     }
+    gdt_input_preflight(pts, &rows, params)?;
 
     let attach = to_local(&pts[pts.len() - 1]); // 框接入点（局部）
     // 书写方向规范化：
@@ -3156,6 +3302,14 @@ fn apply_tolerance(
     // 每行内容 → 单元格列表 (文本, 格宽)：符号/基准格 cw_sym，数字格自适应。
     // gdt 字形统一 80%：{\Fgdt;\H0.8x;X}（宿主 text_support 支持 \H…x; 相对高度）。
     // 顺序 = 读数顺序：符号 → [⌀公差+修饰符] → 基准1 → 基准2 → 基准3。
+    // 源图的同轴度框只画“◎ 0.015”，没有可见基准格；A/B 柱面互为共同
+    // 基准仍保留在 semantic/XData（d1=A-B、rel=common、dof=A:2,B:1），这里只隐藏
+    // 渲染格，避免把语义上的共同基准误画成源图不存在的 “A-B” 文字。
+    let hide_coaxiality_common_datum = params.gdt_semantic().is_some_and(|s| {
+        s.feature.to_ascii_lowercase().contains("coaxiality")
+            && s.datum_relation.to_ascii_lowercase().contains("common")
+            && rows.first().is_some_and(|r| r.d1.trim().eq_ignore_ascii_case("A-B"))
+    });
     let cells_of = |r: &GdtRow| -> Vec<(String, f64)> {
         let mut c = Vec::new();
         if let Some(ch) = r.sym.chars().next() {
@@ -3173,9 +3327,11 @@ fn apply_tolerance(
             }
             c.push((v.clone(), num_w(&v)));
         }
-        for d in [&r.d1, &r.d2, &r.d3] {
-            if !d.is_empty() {
-                c.push((d.clone(), cw_sym));
+        if !hide_coaxiality_common_datum {
+            for d in [&r.d1, &r.d2, &r.d3] {
+                if !d.is_empty() {
+                    c.push((d.clone(), cw_sym));
+                }
             }
         }
         c
@@ -3347,7 +3503,7 @@ fn apply_datum(
         m.rotation = 0.0;
         m.style = "OCSM_GB".into();
         m.attachment_point = AttachmentPoint::MiddleCenter;
-        let mut e = E::MText(m);
+        let mut e = E::MText(Box::new(m));
         set_member_layer(&mut e, "8符号标注层");
         e
     };
@@ -3498,7 +3654,7 @@ fn apply_view(
         m.rotation = rotation;
         m.style = "OCSM_GB".into();
         m.attachment_point = AttachmentPoint::MiddleCenter;
-        let mut e = E::MText(m);
+        let mut e = E::MText(Box::new(m));
         set_member_layer(&mut e, "8符号标注层");
         e
     };
@@ -3942,7 +4098,7 @@ fn do_apply_inner(
         let dim = build_guide_angular_block(sender, &doc, pts[0], pts[1], pts[2], &params, &style)?;
         let dim_handle = match req_timed(
             sender,
-            PluginRequest::AddEntities(vec![acadrust::EntityType::Dimension(dim)]),
+            PluginRequest::AddEntities(vec![acadrust::EntityType::Dimension(Box::new(dim))]),
             "AddEntities",
         ) {
             Ok(PluginResponse::Handles(hs)) => hs.first().copied(),
@@ -4044,7 +4200,7 @@ fn do_apply_inner(
     let dim = build_dimension(sender, &doc, p1, p2, &params, &style)?;
     let dim_handle = match req_timed(
         sender,
-        PluginRequest::AddEntities(vec![acadrust::EntityType::Dimension(dim)]),
+        PluginRequest::AddEntities(vec![acadrust::EntityType::Dimension(Box::new(dim))]),
         "AddEntities",
     ) {
         Ok(PluginResponse::Handles(hs)) => hs.first().copied(),
@@ -4144,7 +4300,19 @@ fn api_guide(target: &str, sender: &Arc<dyn PluginRequestSender>) -> (u16, &'sta
                         "gdt_rows": p.gdt_rows.iter().map(|r| serde_json::json!({
                             "sym": r.sym, "dia": r.dia, "tol": r.tol, "mods": r.mods,
                             "d1": r.d1, "d2": r.d2, "d3": r.d3,
+                            "semantic": r.semantic.as_ref().map(|s| serde_json::json!({
+                                "target": s.target, "feature": s.feature, "zone": s.zone,
+                                "datum_dof": s.datum_dof, "ted": s.ted,
+                                "projection_height": s.projection_height,
+                                "datum_relation": s.datum_relation,
+                            })),
                         })).collect::<Vec<_>>(),
+                        "gdt_semantic": p.gdt_semantic().map(|s| serde_json::json!({
+                            "target": s.target, "feature": s.feature, "zone": s.zone,
+                            "datum_dof": s.datum_dof, "ted": s.ted,
+                            "projection_height": s.projection_height,
+                            "datum_relation": s.datum_relation,
+                        })),
                         "gdt_top": p.gdt_top,
                         "gdt_bot": p.gdt_bot,
                         "detail_scale": p.detail_scale,
@@ -5412,6 +5580,7 @@ fn api_shaft_parse(target: &str, body: &[u8]) -> (u16, &'static str, String) {
                 "rot": program.rot,
                 "view": program.view.key(),
                 "view_label": program.view.label(),
+                "local_section": program.local_section,
             })
             .to_string(),
         ),
@@ -8115,7 +8284,7 @@ pub(crate) fn build_leader_parts(
         } else {
             acadrust::entities::AttachmentPoint::MiddleRight
         };
-        let mut e = E::MText(m);
+        let mut e = E::MText(Box::new(m));
         set_member_layer(&mut e, "8符号标注层");
         e.common_mut().color = Color::from_index(3);
         members.push(e);
@@ -10587,7 +10756,7 @@ mod tests {
         let mut m = acadrust::entities::MText::new();
         m.value = "A".into();
         m.insertion_point = acadrust::types::Vector3::new(1.0, 1.0, 0.0);
-        let _ = doc.add_entity(acadrust::EntityType::MText(m));
+        let _ = doc.add_entity(acadrust::EntityType::MText(Box::new(m)));
         inner.doc.lock().unwrap().clone_from(&doc);
         let doc2 = inner.doc.lock().unwrap().clone();
         let pts = vec![[5.0, 5.0, 0.0], [15.0, 5.0, 0.0]]; // 水平剖切路径
@@ -10721,8 +10890,8 @@ mod tests {
         let mut p = GuideParams::linear(LinearSub::Aligned, 0.0);
         p.guide_type = GuideType::Tolerance;
         p.gdt_rows = vec![
-            GdtRow { sym: "f".into(), dia: false, tol: "0.02".into(), mods: String::new(), d1: "A".into(), d2: String::new(), d3: String::new() },
-            GdtRow { sym: "j".into(), dia: true, tol: "0.05".into(), mods: String::new(), d1: "A".into(), d2: "B".into(), d3: "C".into() },
+            GdtRow { sym: "f".into(), dia: false, tol: "0.02".into(), mods: String::new(), d1: "A".into(), d2: String::new(), d3: String::new(), semantic: None },
+            GdtRow { sym: "j".into(), dia: true, tol: "0.05".into(), mods: String::new(), d1: "A".into(), d2: "B".into(), d3: "C".into(), semantic: None },
         ];
         let out = apply_tolerance(&sender, &doc, &pts, &p).unwrap();
         let j: serde_json::Value = serde_json::from_str(&out).unwrap();
@@ -10779,7 +10948,7 @@ mod tests {
         let mut p = GuideParams::linear(LinearSub::Aligned, 0.0);
         p.guide_type = GuideType::Tolerance;
         p.gdt_rows = vec![
-            GdtRow { sym: "j".into(), dia: true, tol: "0.05".into(), mods: "m".into(), d1: "A".into(), d2: "B".into(), d3: String::new() },
+            GdtRow { sym: "j".into(), dia: true, tol: "0.05".into(), mods: "m".into(), d1: "A".into(), d2: "B".into(), d3: String::new(), semantic: None },
         ];
         p.gdt_top = Some("最大实体".into());
         p.gdt_bot = Some("基本尺100".into());
@@ -10819,7 +10988,7 @@ mod tests {
         p.guide_type = GuideType::Tolerance;
         p.gdt_rows = vec![GdtRow {
             sym: "f".into(), dia: false, tol: "0.02".into(), mods: "m".into(),
-            d1: "A".into(), d2: String::new(), d3: String::new(),
+            d1: "A".into(), d2: String::new(), d3: String::new(), semantic: None,
         }];
         let out = apply_tolerance(&sender, &doc, &pts, &p).unwrap();
         let j: serde_json::Value = serde_json::from_str(&out).unwrap();
@@ -10850,7 +11019,7 @@ mod tests {
         p.guide_type = GuideType::Tolerance;
         p.gdt_rows = vec![GdtRow {
             sym: "j".into(), dia: true, tol: "0.123456789".into(), mods: "m".into(),
-            d1: "A".into(), d2: String::new(), d3: String::new(),
+            d1: "A".into(), d2: String::new(), d3: String::new(), semantic: None,
         }];
         let out = apply_tolerance(&sender, &doc, &pts, &p).unwrap();
         let j: serde_json::Value = serde_json::from_str(&out).unwrap();
@@ -10875,7 +11044,7 @@ mod tests {
         p.guide_type = GuideType::Tolerance;
         p.gdt_rows = vec![GdtRow {
             sym: "f".into(), dia: false, tol: "0.02".into(), mods: String::new(),
-            d1: "A".into(), d2: String::new(), d3: String::new(),
+            d1: "A".into(), d2: String::new(), d3: String::new(), semantic: None,
         }];
         let out = apply_tolerance(&sender, &doc, &pts, &p).unwrap();
         let j: serde_json::Value = serde_json::from_str(&out).unwrap();
@@ -10910,6 +11079,62 @@ mod tests {
         let ents2 = inner.block_entities(bn2);        let xmin2 = ents2.iter().filter_map(frame).map(|(lo, _)| lo).fold(f64::MAX, f64::min);
         let anchor2_x = pts2[2][0] - pts2[0][0]; // = 80
         assert!((xmin2 - anchor2_x).abs() < 1e-6, "框左缘应贴锚点(符号侧)，左缘={xmin2} 锚点={anchor2_x}");
+    }
+
+    #[test]
+    fn apply_tolerance_rejects_incomplete_gdt_semantic() {
+        let inner = std::sync::Arc::new(MockSender::new(acadrust::CadDocument::new()));
+        let sender: std::sync::Arc<dyn PluginRequestSender> = inner.clone();
+        let doc = inner.doc.lock().unwrap().clone();
+        let params = GuideParams::from_url(
+            "http://x/DIM/TOLERANCE/0?gdt=j&dia=1&gtol=0.05&d1=A&d2=B&target=axis&feature=position",
+        )
+        .unwrap();
+        let err = apply_tolerance(&sender, &doc, &[[0.0, 0.0, 0.0], [10.0, 0.0, 0.0]], &params)
+            .unwrap_err();
+        assert!(err.contains("INPUT_CONTRADICTION"), "实际错误：{err}");
+    }
+
+    #[test]
+    fn apply_tolerance_accepts_complete_gdt_semantic() {
+        let inner = std::sync::Arc::new(MockSender::new(acadrust::CadDocument::new()));
+        let sender: std::sync::Arc<dyn PluginRequestSender> = inner.clone();
+        let doc = inner.doc.lock().unwrap().clone();
+        let params = GuideParams::from_url(
+            "http://x/DIM/TOLERANCE/0?gdt=j&dia=1&gtol=0.05&d1=A&d2=B&target=axis&feature=position&zone=cylindrical&dof=A%3A2%2CB%3A1&ted=none&proj=none&rel=primary-secondary",
+        )
+        .unwrap();
+        let out = apply_tolerance(&sender, &doc, &[[0.0, 0.0, 0.0], [10.0, 0.0, 0.0]], &params)
+            .unwrap();
+        assert!(out.contains("\"block\""));
+    }
+
+    #[test]
+    fn apply_tolerance_accepts_common_datum_cell_for_circular_runout() {
+        let inner = std::sync::Arc::new(MockSender::new(acadrust::CadDocument::new()));
+        let sender: std::sync::Arc<dyn PluginRequestSender> = inner.clone();
+        let doc = inner.doc.lock().unwrap().clone();
+        let params = GuideParams::from_url(
+            "http://x/DIM/TOLERANCE/0?gdt=c&dia=0&gtol=0.02&d1=A-B&target=surface&feature=circular_runout&zone=radial_between_circles&dof=A%3A2%2CB%3A1&ted=none&proj=none&rel=common",
+        )
+        .unwrap();
+        let out = apply_tolerance(&sender, &doc, &[[0.0, 0.0, 0.0], [10.0, 0.0, 0.0]], &params)
+            .unwrap();
+        assert!(out.contains("\"block\""));
+    }
+
+    #[test]
+    fn apply_tolerance_accepts_explicit_no_datum_coaxiality() {
+        let inner = std::sync::Arc::new(MockSender::new(acadrust::CadDocument::new()));
+        let sender: std::sync::Arc<dyn PluginRequestSender> = inner.clone();
+        let doc = inner.doc.lock().unwrap().clone();
+        let params = GuideParams::from_url(
+            "http://x/DIM/TOLERANCE/0?gdt=r&dia=0&gtol=0.015&target=axis&feature=coaxiality&zone=cylindrical&dof=none&ted=none&proj=none&rel=independent",
+        )
+        .unwrap();
+        let out = apply_tolerance(&sender, &doc, &[[0.0, 0.0, 0.0], [10.0, 0.0, 0.0]], &params)
+            .unwrap();
+        assert!(out.contains("\"block\""));
     }
 
     #[test]
@@ -13343,16 +13568,19 @@ mod integration {
         let mut found_line = false;
         for e in d.entities() {
             match e {
-                EntityType::Dimension(acadrust::entities::Dimension::Diameter(dd)) => {
-                    found_diameter = true;
-                    assert!((dd.base.actual_measurement - 100.0).abs() < 1e-6);
-                    assert_eq!(dd.base.common.layer, "7标注层");
-                    assert_eq!(dd.base.style_name, "OCSM_GB");
-                    // 文字锚点：径向 41 + 法向 1.0。
-                    let tm = dd.base.text_middle_point;
-                    let radial = (tm.x + tm.y) / (2.0f64).sqrt();
-                    assert!((radial - 41.0).abs() < 1e-6, "径向 {radial}");
-                }
+                EntityType::Dimension(dim) => match dim.as_ref() {
+                    acadrust::entities::Dimension::Diameter(dd) => {
+                        found_diameter = true;
+                        assert!((dd.base.actual_measurement - 100.0).abs() < 1e-6);
+                        assert_eq!(dd.base.common.layer, "7标注层");
+                        assert_eq!(dd.base.style_name, "OCSM_GB");
+                        // 文字锚点：径向 41 + 法向 1.0。
+                        let tm = dd.base.text_middle_point;
+                        let radial = (tm.x + tm.y) / (2.0f64).sqrt();
+                        assert!((radial - 41.0).abs() < 1e-6, "径向 {radial}");
+                    }
+                    _ => {}
+                },
                 EntityType::Line(_) => found_line = true,
                 _ => {}
             }
@@ -13969,7 +14197,7 @@ mod integration {
             let mut m = acadrust::entities::MText::new();
             m.value = no.into();
             m.insertion_point = Vector3::new(1.0, 1.0, 0.0);
-            let _ = doc.add_entity(E::MText(m));
+            let _ = doc.add_entity(E::MText(Box::new(m)));
         }
         let mut g = E::Circle(Circle::from_center_radius(Vector3::new(100.0, 100.0, 0.0), 10.0));
         g.common_mut().layer = "10引导线层".into();
@@ -13988,7 +14216,7 @@ mod integration {
             let mut m = acadrust::entities::MText::new();
             m.value = no.into();
             m.insertion_point = Vector3::new(1.0, 1.0, 0.0);
-            let _ = doc2.add_entity(E::MText(m));
+            let _ = doc2.add_entity(E::MText(Box::new(m)));
         }
         let mut g2 = E::Circle(Circle::from_center_radius(Vector3::new(200.0, 200.0, 0.0), 10.0));
         g2.common_mut().layer = "10引导线层".into();
@@ -15254,7 +15482,7 @@ mod weld_tests {
         members
             .iter()
             .filter_map(|e| match e {
-                E::MText(m) => Some(m.clone()),
+                E::MText(m) => Some(m.as_ref().clone()),
                 _ => None,
             })
             .collect()

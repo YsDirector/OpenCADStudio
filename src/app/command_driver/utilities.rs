@@ -105,6 +105,7 @@ impl OpenCADStudio {
         self.grip_popup = None;
         self.grip_pending = None;
         self.visibility_popup = None;
+        self.table_popup = None;
         self.hover_dwell = None;
         self.ucs_grip_drag = None;
         self.ucs_icon_selected = false;
@@ -194,10 +195,28 @@ impl OpenCADStudio {
 
     pub(in crate::app) fn cancel_active_grip_edit(&mut self) -> bool {
         let i = self.active_tab;
+        // API v11/v12: a custom plugin-grip drag cancels through the same
+        // lifecycle exit every other interruption uses (Esc, another command
+        // starting, tab switches): the owning plugin gets the cancel phase
+        // and drops its preview state with zero writes — the drawing stays
+        // byte-identical. While the drag's SETTLE is streaming (the plugin
+        // write window), the watchdog owns the window instead: a cancel
+        // would race the plugin's authoritative writes.
+        #[cfg(not(target_arch = "wasm32"))]
+        let had_plugin_grip = {
+            let had_plugin_grip = self.tabs[i].active_plugin_grip.is_some();
+            if had_plugin_grip && !self.is_plugin_grip_settling() {
+                let _ = self.cancel_plugin_grip_drag();
+            }
+            had_plugin_grip && !self.is_plugin_grip_settling()
+        };
+        #[cfg(target_arch = "wasm32")]
+        let had_plugin_grip = false;
         // Grip-menu toggles live only as long as the gesture.
         self.tabs[i].grip_copy = false;
         self.tabs[i].grip_base_pending = false;
         let had_grip = self.tabs[i].active_grip.take().is_some()
+            || had_plugin_grip
             || self.grip_add_provisional.is_some()
             || !self.grip_preview_handles.is_empty()
             || !self.grip_history_originals.is_empty();
@@ -574,6 +593,98 @@ impl OpenCADStudio {
         StepInput::SelectionComplete(kept)
     }
 
+    /// What one selection step picked, as the reference words it: `N found`
+    /// for the first step, `N found, M total`, `N found (D duplicate), M
+    /// total` when some were chosen already, `N found, R removed, M total` in
+    /// remove mode. Returns the command's key while it gathers.
+    fn report_selection_found(&mut self, input: &StepInput) -> Option<usize> {
+        let StepInput::SelectionComplete(handles) = input else {
+            return None;
+        };
+        // A pick belongs to this step only; never to a later one.
+        let last_pick = self.last_pick.take();
+        let command = self.tabs[self.active_tab].active_cmd.as_ref()?;
+        if !command.is_selection_gathering() {
+            return None;
+        }
+        let key = &**command as *const dyn crate::command::CadCommand as *const () as usize;
+        let previous: rustc_hash::FxHashSet<Handle> = match &self.selection_report {
+            Some((k, previous)) if *k == key => previous.iter().copied().collect(),
+            _ => Default::default(),
+        };
+        let now: rustc_hash::FxHashSet<Handle> = handles.iter().copied().collect();
+        let total = now.len();
+        // What the step picked: its own objects when the pick says so, else
+        // what the selection gained or lost.
+        let (picked, remove) = match last_pick {
+            Some((picked, remove)) => (picked.into_iter().collect(), remove),
+            None => {
+                let lost: rustc_hash::FxHashSet<Handle> =
+                    previous.difference(&now).copied().collect();
+                if lost.is_empty() {
+                    (now.difference(&previous).copied().collect(), false)
+                } else {
+                    (lost, true)
+                }
+            }
+        };
+        let found = picked.len();
+        let known = picked.intersection(&previous).count();
+        let line = if found == 0 || previous.is_empty() && !remove {
+            crate::tf!("{found} found")
+        } else if remove && known > 0 {
+            crate::tf!("{found} found, {known} removed, {total} total")
+        } else if !remove && known > 0 {
+            crate::tf!("{found} found ({known} duplicate), {total} total")
+        } else {
+            crate::tf!("{found} found, {total} total")
+        };
+        self.command_line.push_info(line.as_ref());
+        Some(key)
+    }
+
+    /// Dynamic UCS: a command's first point picked on a planar solid face sets
+    /// the UCS to that face for the rest of the command. Returns the picked
+    /// point on the face. A snapped point (`snapped`) off the face's plane
+    /// belongs to other geometry, so it leaves the UCS alone.
+    pub(in crate::app) fn apply_dynamic_ucs(
+        &mut self,
+        snapped: Option<glam::DVec3>,
+    ) -> Option<glam::DVec3> {
+        let i = self.active_tab;
+        if !self.dynamic_ucs
+            || self.dynamic_ucs_restore.is_some()
+            || self.last_point.is_some()
+            || !self.tabs[i].editing_model_space()
+            || self.tabs[i]
+                .active_cmd
+                .as_ref()
+                .is_none_or(|command| command.name().starts_with("UCS"))
+        {
+            return None;
+        }
+        let cursor = self.tabs[i].scene.selection.borrow().input.last_move_pos?;
+        let (vw, vh) = self.tabs[i].scene.selection.borrow().view.vp_size;
+        let bounds = self.tabs[i].scene.active_model_tile_bounds(vw, vh);
+        let local = iced::Point::new(cursor.x - bounds.x, cursor.y - bounds.y);
+        let (ucs, pick) = self.tabs[i].scene.planar_face_ucs_at(bounds, local)?;
+        if let Some(point) = snapped {
+            let normal = glam::DVec3::new(ucs.x_axis.x, ucs.x_axis.y, ucs.x_axis.z)
+                .cross(glam::DVec3::new(ucs.y_axis.x, ucs.y_axis.y, ucs.y_axis.z))
+                .normalize_or_zero();
+            let off_plane = (point - pick).dot(normal).abs();
+            if off_plane > 1.0e-6 * (1.0 + point.length().max(pick.length())) {
+                return None;
+            }
+        }
+        let saved = self.tabs[i].active_ucs.take();
+        self.dynamic_ucs_restore = Some((self.tabs[i].id, saved));
+        self.tabs[i].active_ucs = Some(ucs);
+        self.tabs[i].sync_ucs_to_scene();
+        self.push_ucs_to_cmd(i);
+        Some(pick)
+    }
+
     /// `feed_command`, also reporting whether the step actually took the input.
     /// Only a `Text` token can come back unclaimed (`on_text_input` returning
     /// `None`), which is what lets the caller read it as something else — a
@@ -582,6 +693,10 @@ impl OpenCADStudio {
         &mut self,
         input: StepInput,
     ) -> (Task<Message>, bool) {
+        if matches!(input, StepInput::Point(_)) {
+            let _ = self.apply_dynamic_ucs(None);
+        }
+        let gathering = self.report_selection_found(&input);
         // A command that takes associative dimensions only keeps just those:
         // the rest leave the selection and the count of what went is reported,
         // as the reference does while gathering.
@@ -589,6 +704,9 @@ impl OpenCADStudio {
         let input = self.filter_block_reference_selection(input);
         let input = self.filter_locked_point_cloud_selection(input);
         let input = self.filter_command_entity_selection(input);
+        if let (Some(key), StepInput::SelectionComplete(kept)) = (gathering, &input) {
+            self.selection_report = Some((key, kept.clone()));
+        }
         // XCLIP / CLIP learn which chosen references carry a clip already.
         {
             let i = self.active_tab;
@@ -1059,12 +1177,10 @@ impl OpenCADStudio {
             );
             return Some(Task::none());
         }
-        let count = add.len();
+        self.last_pick = Some((add.clone(), false));
         for h in add {
             self.tabs[i].scene.select_entity(h, false);
         }
-        self.command_line
-            .push_info(crate::tf!("{count} object(s) added to selection.").as_ref());
         self.refresh_properties();
         let handles: Vec<Handle> = self.tabs[i]
             .scene

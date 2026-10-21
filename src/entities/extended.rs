@@ -596,6 +596,10 @@ pub(crate) fn point_cloud_frame_lines(entity: &ExtendedEntity) -> Option<Vec<[f6
 }
 
 fn camera_lines(document: &codec::CadDocument, view_handle: Handle) -> Vec<[f64; 3]> {
+    // CAMERADISPLAY 0 hides every camera glyph.
+    if !document.header.camera_display {
+        return Vec::new();
+    }
     let Some(view) = document
         .views
         .iter()
@@ -1973,9 +1977,11 @@ fn grips(entity: &ExtendedEntity) -> Vec<GripDef> {
             };
             // A section volume is also pushed or pulled at its top and bottom.
             if data.state == 4 {
-                grips.extend(section_plane_edge_grips(data).into_iter().filter(|grip| {
-                    matches!(grip.id, SECTION_GRIP_TOP | SECTION_GRIP_BOTTOM)
-                }));
+                grips.extend(
+                    section_plane_edge_grips(data)
+                        .into_iter()
+                        .filter(|grip| matches!(grip.id, SECTION_GRIP_TOP | SECTION_GRIP_BOTTOM)),
+                );
             }
             if let Some(right) = data.vertices.last() {
                 let vertical = normalized(data.vertical_direction, Vector3::UNIT_Z);

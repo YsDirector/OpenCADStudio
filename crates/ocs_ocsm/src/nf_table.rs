@@ -523,7 +523,7 @@ pub(crate) fn mtext_ent(value: &str, x: f64, y: f64, attach: i16) -> EntityType 
         _ => AttachmentPoint::MiddleLeft,
     };
     m.common = common_of("6文字层");
-    EntityType::MText(m)
+    EntityType::MText(Box::new(m))
 }
 
 /// 带内联字宽码的 MTEXT：`\W0.66;Number of teeth z`（`wf` = 内联因子，有效字宽 = 0.7 × wf）。
@@ -1991,7 +1991,7 @@ mod tests {
         let mtexts: Vec<&MText> = ents
             .iter()
             .filter_map(|e| match e {
-                EntityType::MText(m) => Some(m),
+                EntityType::MText(m) => Some(m.as_ref()),
                 _ => None,
             })
             .collect();

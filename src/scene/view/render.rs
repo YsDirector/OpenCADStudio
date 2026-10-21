@@ -1,6 +1,7 @@
 // GPU rendering primitives, shader::Program / shader::Primitive impls,
 // and entity render-style helpers for the Scene.
 
+use crate::io::plot_style::PlotStyleTableExt as _;
 use codec::tables::LineType;
 use codec::types::{Color as AcadColor, LineWeight};
 use codec::{CadDocument, EntityType, Handle};
@@ -269,6 +270,8 @@ pub struct Primitive {
     pub(in crate::scene) selection_color: [f32; 4],
     /// Whether selection visual effect (glow/highlight) is enabled.
     pub(in crate::scene) selection_effect: bool,
+    /// Extra screen pixels the selection highlight is drawn wider.
+    pub(in crate::scene) selection_widen: f32,
     /// One input-to-render sample, carried only when PERF tracing is enabled.
     pub(in crate::scene) nav_perf: Option<NavPerfSample>,
 }
@@ -373,8 +376,8 @@ impl shader::Primitive for Primitive {
     ) {
         let nav_prepare_started = iced::time::Instant::now();
         if let Some(gap_ms) = crate::perf::take_view_to_prepare_ms() {
-            if gap_ms >= 1.0 {
-                crate::perf_record!("[perf] layout-draw {:>7.1}ms", gap_ms);
+            if gap_ms >= 1.0 && crate::perf::has_pending_pointer_moves() {
+                crate::perf_record!("[perf] view-to-prepare {:>7.1}ms", gap_ms);
             }
         }
         let errors_at_entry = crate::scene::pipeline::gpu_errors_seen();
@@ -452,7 +455,47 @@ impl shader::Primitive for Primitive {
             // drawing size. The ViewCube is excluded from the signature and
             // keeps updating in its own always-on pass, so cube hover still
             // tracks while the scene is cached.
-            let sig = render_signature(vp, &placement);
+            // Upload simple wire previews before checking the base-scene cache.
+            // Their dedicated overlay pass can then follow a cached resolve
+            // without making the resident geometry dirty on every cursor move.
+            let preview_wires_preuploaded = !vp.preview_wires.is_empty()
+                && vp.preview_hatches.is_empty()
+                && vp.preview_text_verts.is_empty()
+                && vp.clip_boundary_ndc.is_empty();
+            if preview_wires_preuploaded {
+                let Some(draw_depths) = vp.draw_depths.upgrade() else {
+                    inner.render_sig = u64::MAX;
+                    inner.skip_geometry = true;
+                    continue;
+                };
+                inner.upload_preview_wires(device, queue, &vp.preview_wires[..], &draw_depths);
+                // No preview text this frame; drop the last frame's glyphs.
+                inner.text_preview_gpu.clear();
+                // The direct pass draws straight into `surface_dest`, so it
+                // lines up with the cached scene only when that rectangle is
+                // the whole pixel-aligned raster (not cropped off the window).
+                // Instanced block previews cannot use the direct wire overlay.
+                inner.preview_overlay_direct = placement.surface_matches_raster()
+                    && inner
+                        .gpu_preview_block_wires
+                        .iter()
+                        .all(|wire| wire.instance_count == 0)
+                    && inner
+                        .gpu_preview_circles
+                        .iter()
+                        .all(|circle| circle.instance_count == 0)
+                    && inner
+                        .gpu_preview_ellipses
+                        .iter()
+                        .all(|ellipse| ellipse.instance_count == 0)
+                    && inner
+                        .gpu_preview_wires
+                        .iter()
+                        .any(|wire| wire.instance_count > 0);
+            } else {
+                inner.preview_overlay_direct = false;
+            }
+            let sig = render_signature(vp, &placement, inner.preview_overlay_direct);
             // REDRAW bypass: pin render_sig to force a full pass this frame
             // even if the signature is otherwise unchanged. The request is
             // one-shot per viewport (consumed by the builder that produced
@@ -463,6 +506,13 @@ impl shader::Primitive for Primitive {
             let skip = inner.render_sig != u64::MAX && sig == inner.render_sig;
             inner.render_sig = sig;
             inner.skip_geometry = skip;
+            if !skip && !vp.preview_wires.is_empty() && crate::perf::enabled() {
+                crate::perf_record!(
+                    "[perf] preview-render full-scene=1 direct-overlay={} wires={}",
+                    inner.preview_overlay_direct,
+                    vp.preview_wires.len(),
+                );
+            }
             // Interaction LOD: skip the hatch draw this frame while navigating.
             inner.skip_hatch_frame = vp.skip_hatch;
             inner.skip_background = vp.skip_background;
@@ -568,12 +618,17 @@ impl shader::Primitive for Primitive {
                 inner.cached_point_cloud_source = Some(Arc::clone(&vp.point_clouds));
             }
             inner.set_point_cloud_view(queue, vp.point_cloud_light);
-            if inner
+            let text_source_changed = inner
                 .cached_text_source
                 .as_ref()
-                .map_or(true, |source| !Arc::ptr_eq(source, &vp.text_verts))
-                || vp.wire_content_id != inner.cached_wire_id
-            {
+                .map_or(true, |source| !Arc::ptr_eq(source, &vp.text_verts));
+            // A patch proves the text pass unchanged only when it applies to
+            // the wire set this slot last uploaded.
+            let text_wire_changed = vp.wire_content_id != inner.cached_wire_id
+                && vp.wire_patch.as_ref().map_or(true, |(base, patch)| {
+                    *base != inner.cached_wire_id || patch.text_pass_changed
+                });
+            if text_source_changed || text_wire_changed {
                 inner.upload_text(
                     device,
                     queue,
@@ -581,8 +636,10 @@ impl shader::Primitive for Primitive {
                     &vp_wires[..],
                     &draw_depths,
                 );
-                inner.cached_text_source = Some(Arc::clone(&vp.text_verts));
             }
+            // Advance the source key even when an ordinary wire patch leaves
+            // both document text and block-instance text unchanged.
+            inner.cached_text_source = Some(Arc::clone(&vp.text_verts));
             inner.cached_fill_mode = fill_mode;
             inner.cached_epoch = cur_key;
             // Face3D edge/fill buffers are world-space and selection-independent
@@ -592,25 +649,45 @@ impl shader::Primitive for Primitive {
             // rebuilding it when another entity category alone changes. Never
             // retain `vp.wires` here: Scene needs unique ownership to splice a
             // one-entity edit into the resident set.
-            let face_pass_unchanged = vp
-                .wire_patch
-                .as_ref()
-                .is_some_and(|(_, patch)| !patch.face_pass_changed);
-            let face3d_changed = inner
+            let face_pass_unchanged = vp.wire_patch.as_ref().is_some_and(|(base, patch)| {
+                *base == inner.cached_face3d_key.0 && !patch.face_pass_changed
+            });
+            let face_source_changed = inner
                 .cached_face3d_source
                 .as_ref()
-                .map_or(true, |source| !Arc::ptr_eq(source, &vp.face3d_wires))
-                || inner
-                    .cached_face3d_depth_source
-                    .as_ref()
-                    .and_then(std::sync::Weak::upgrade)
-                    .map_or(true, |source| !Arc::ptr_eq(&source, &draw_depths))
-                || (inner.cached_face3d_key.0 != vp.wire_content_id && !face_pass_unchanged);
-            if face3d_changed
-                || face3d_fill_active != inner.cached_face3d_key.1
-                || solid_fill_active != inner.cached_face3d_key.2
-                || solid_visibility_key != inner.cached_face3d_key.3
+                .map_or(true, |source| !Arc::ptr_eq(source, &vp.face3d_wires));
+            let face_depth_changed = inner
+                .cached_face3d_depth_source
+                .as_ref()
+                .and_then(std::sync::Weak::upgrade)
+                .map_or(true, |source| !Arc::ptr_eq(&source, &draw_depths));
+            let face_wire_changed =
+                inner.cached_face3d_key.0 != vp.wire_content_id && !face_pass_unchanged;
+            let face_fill_mode_changed = face3d_fill_active != inner.cached_face3d_key.1;
+            let solid_fill_mode_changed = solid_fill_active != inner.cached_face3d_key.2;
+            let solid_visibility_changed = solid_visibility_key != inner.cached_face3d_key.3;
+            if face_source_changed
+                || face_depth_changed
+                || face_wire_changed
+                || face_fill_mode_changed
+                || solid_fill_mode_changed
+                || solid_visibility_changed
             {
+                if crate::perf::enabled() {
+                    crate::perf_record!(
+                        "[perf] face3d-upload-gate patch_present={} face_pass_changed={} source_changed={} depth_changed={} wire_id_changed={} fill_mode_changed={} solid_mode_changed={} visibility_changed={}",
+                        vp.wire_patch.is_some(),
+                        vp.wire_patch
+                            .as_ref()
+                            .map_or(true, |(_, patch)| patch.face_pass_changed),
+                        face_source_changed,
+                        face_depth_changed,
+                        face_wire_changed,
+                        face_fill_mode_changed,
+                        solid_fill_mode_changed,
+                        solid_visibility_changed,
+                    );
+                }
                 inner.upload_face3d(
                     device,
                     queue,
@@ -1134,8 +1211,10 @@ retained_contributors={}",
             // Live overlay (command preview / interim / grip drag) — small and
             // refreshed every frame it's present, so a drag never re-uploads
             // the resident base wire buffer.
-            inner.upload_preview_wires(device, queue, &vp.preview_wires[..], &draw_depths);
-            inner.upload_preview_text(device, queue, &vp.preview_text_verts[..]);
+            if !preview_wires_preuploaded {
+                inner.upload_preview_wires(device, queue, &vp.preview_wires[..], &draw_depths);
+                inner.upload_preview_text(device, queue, &vp.preview_text_verts[..]);
+            }
             // Cull / scissor / LOD project AABBs relative-to-eye (matching the
             // GPU's RTE path) so the math stays precise at UTM-scale coords.
             let view_rot = vp.uniforms.view_rot;
@@ -1380,11 +1459,14 @@ retained_contributors={}",
 /// scene-render cache in `Primitive::prepare` / `Pipeline::render`).
 ///
 /// Deliberately EXCLUDES `hover_region` — the ViewCube highlight renders in its
-/// own always-on pass, so cube hover must not force a full scene re-render. The
-/// live preview IS included (its coordinates), so a rubber-band tracking the
-/// cursor still renders, and the frame where the preview clears erases it
-/// instead of freezing the last overlay on screen.
-fn render_signature(vp: &ViewportData, placement: &PhysicalViewport) -> u64 {
+/// own always-on pass, so cube hover must not force a full scene re-render. Most
+/// live previews remain in the signature; simple unclipped wires use a separate
+/// surface overlay and do not dirty the cached resident scene.
+fn render_signature(
+    vp: &ViewportData,
+    placement: &PhysicalViewport,
+    direct_wire_preview: bool,
+) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = rustc_hash::FxHasher::default();
     // Camera + per-view shading flags all live in the uniforms (view_rot, eye
@@ -1449,13 +1531,8 @@ fn render_signature(vp: &ViewportData, placement: &PhysicalViewport) -> u64 {
     // Live overlay (command preview / interim / grip drag). Small — a handful
     // of wires — so hashing its coordinates is cheap and catches the endpoint
     // moving with the cursor as well as the preview appearing / clearing.
-    for w in vp.preview_wires.iter() {
-        w.points.len().hash(&mut h);
-        for p in &w.points {
-            p[0].to_bits().hash(&mut h);
-            p[1].to_bits().hash(&mut h);
-            p[2].to_bits().hash(&mut h);
-        }
+    if !direct_wire_preview && !vp.preview_wires.is_empty() {
+        hash_preview_wires(&vp.preview_wires, &mut h);
     }
     // Live hatch preview. Pattern-origin grip drags keep the boundary fixed and
     // move only the family anchors, so hash both geometry and pattern data.
@@ -1526,6 +1603,113 @@ fn render_signature(vp: &ViewportData, placement: &PhysicalViewport) -> u64 {
     h.finish()
 }
 
+/// The overlay Vec is rebuilt by build_primitive even on unrelated UI events.
+/// Hash rendered content, never its allocation address. Include low residuals
+/// (UTM-scale motion), style and analytical curves as well as high coordinates.
+fn hash_preview_wires(wires: &[WireModel], h: &mut impl std::hash::Hasher) {
+    use crate::scene::model::wire_model::TangentGeom;
+    use std::hash::Hash;
+    wires.len().hash(h);
+    for w in wires {
+        w.name.hash(h);
+        for data in [&w.points, &w.points_low, &w.fill_tris, &w.fill_tris_low] {
+            bytemuck::cast_slice::<_, u8>(data).hash(h);
+        }
+        for data in [
+            &w.taper_widths[..],
+            &w.pattern_stations,
+            &w.color,
+            &w.pattern,
+        ] {
+            bytemuck::cast_slice::<_, u8>(data).hash(h);
+        }
+        for value in [w.pattern_length, w.line_weight_px, w.world_width] {
+            value.to_bits().hash(h);
+        }
+        w.depth_override.map(f32::to_bits).hash(h);
+        w.dash_align_end.map(f32::to_bits).hash(h);
+        w.plinegen.hash(h);
+        w.dash_from_start.hash(h);
+        w.display_visible.hash(h);
+        w.fill_is_3d.hash(h);
+        w.fill_is_2d_solid.hash(h);
+        bytemuck::cast_slice::<_, u8>(&w.text_verts).hash(h);
+        w.point_marker.is_some().hash(h);
+        if let Some(marker) = w.point_marker {
+            for v in [marker.origin, marker.normal, marker.axis_x, marker.axis_y] {
+                v.to_array().map(f64::to_bits).hash(h);
+            }
+            marker.viewport_percent.to_bits().hash(h);
+        }
+        w.tangent_geoms.len().hash(h);
+        for geometry in &w.tangent_geoms {
+            std::mem::discriminant(geometry).hash(h);
+            match geometry {
+                TangentGeom::Line { p1, p2 } => {
+                    p1.map(f32::to_bits).hash(h);
+                    p2.map(f32::to_bits).hash(h);
+                }
+                TangentGeom::Circle { center, radius } => {
+                    center.map(f32::to_bits).hash(h);
+                    radius.to_bits().hash(h);
+                }
+                TangentGeom::PlanarCircle {
+                    center,
+                    axis_x,
+                    axis_y,
+                    radius,
+                } => {
+                    for v in [center, axis_x, axis_y] {
+                        v.map(f64::to_bits).hash(h);
+                    }
+                    radius.to_bits().hash(h);
+                }
+                TangentGeom::Arc {
+                    center,
+                    axis_x,
+                    axis_y,
+                    radius,
+                    start_angle,
+                    end_angle,
+                } => {
+                    for v in [center, axis_x, axis_y] {
+                        v.map(f64::to_bits).hash(h);
+                    }
+                    for v in [radius, start_angle, end_angle] {
+                        v.to_bits().hash(h);
+                    }
+                }
+                TangentGeom::PlanarEllipse {
+                    center,
+                    major_axis,
+                    normal,
+                    minor_axis_ratio,
+                    start_param,
+                    end_param,
+                } => {
+                    for v in [center, major_axis, normal] {
+                        v.map(f64::to_bits).hash(h);
+                    }
+                    for v in [minor_axis_ratio, start_param, end_param] {
+                        v.to_bits().hash(h);
+                    }
+                }
+            }
+        }
+        w.render_instance.is_some().hash(h);
+        if let Some(instance) = w.render_instance {
+            instance.source_id.hash(h);
+            instance.translation.map(f64::to_bits).hash(h);
+        }
+        w.stub.is_some().hash(h);
+        if let Some(stub) = &w.stub {
+            Arc::as_ptr(&stub.prototype).hash(h);
+            stub.delta.map(f64::to_bits).hash(h);
+            stub.depth_delta.to_bits().hash(h);
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 pub(in crate::scene) struct PhysicalViewport {
     size: Size<u32>,
@@ -1533,6 +1717,18 @@ pub(in crate::scene) struct PhysicalViewport {
     surface: Rectangle<u32>,
     uv_offset: [f32; 2],
     uv_scale: [f32; 2],
+}
+
+impl PhysicalViewport {
+    /// The visible surface rectangle maps 1:1 onto the offscreen raster: the
+    /// viewport lies fully inside the window and on whole pixels.
+    fn surface_matches_raster(&self) -> bool {
+        self.uv_scale == [1.0, 1.0]
+            && self.raster.x == 0.0
+            && self.raster.y == 0.0
+            && self.raster.width == self.size.width as f32
+            && self.raster.height == self.size.height as f32
+    }
 }
 
 fn physical_viewport(rect: Rectangle, window: Size<u32>) -> PhysicalViewport {
@@ -1562,6 +1758,38 @@ fn physical_viewport(rect: Rectangle, window: Size<u32>) -> PhysicalViewport {
         },
         uv_offset: [(left - x) / width, (top - y) / height],
         uv_scale: [visible_w / width, visible_h / height],
+    }
+}
+
+#[cfg(test)]
+mod preview_signature_tests {
+    use super::*;
+    use std::hash::Hasher;
+
+    fn signature(wires: &[WireModel]) -> u64 {
+        let mut h = rustc_hash::FxHasher::default();
+        hash_preview_wires(wires, &mut h);
+        h.finish()
+    }
+
+    #[test]
+    fn preview_signature_tracks_content_instead_of_allocations() {
+        let wires = Arc::new(vec![WireModel::solid_f64(
+            "rubber_band".into(),
+            vec![[6_000_000.0, 0.0, 0.0], [6_000_010.0, 1.0, 0.0]],
+            WireModel::CYAN,
+            false,
+        )]);
+        let mut rebuilt = Arc::new(wires.as_ref().clone());
+        assert!(!Arc::ptr_eq(&wires, &rebuilt));
+        assert_eq!(signature(&wires), signature(&rebuilt));
+        // Sub-f32 motion must still invalidate at large world coordinates.
+        Arc::make_mut(&mut rebuilt)[0].points_low[1][0] += 0.001;
+        assert_ne!(signature(&wires), signature(&rebuilt));
+        let mut style = wires.as_ref().clone();
+        style[0].color = WireModel::WHITE;
+        assert_ne!(signature(&wires), signature(&style));
+        assert_ne!(signature(&wires), signature(&[]));
     }
 }
 
@@ -2044,7 +2272,8 @@ text_atlas={:.1} wire_arena={:.1} block_geometry={:.1}",
 impl Scene {
     /// The model-space viewport record of the active tile.
     pub(crate) fn active_tile_vport_handle(&self) -> Option<Handle> {
-        self.model_tile_vport(self.active_model_tile.get()).map(|value| value.handle)
+        self.model_tile_vport(self.active_model_tile.get())
+            .map(|value| value.handle)
     }
 
     fn model_tile_vport(&self, index: usize) -> Option<&codec::tables::VPort> {
@@ -2562,7 +2791,12 @@ impl Scene {
             if let Some(EntityType::Viewport(value)) = self.document.get_entity(handle) {
                 // The sheet keeps its page and desk: a paper-space view's
                 // background is kept with the layout but not drawn.
-                return build(value.visual_style_handle, value.brightness, value.contrast, Handle::NULL);
+                return build(
+                    value.visual_style_handle,
+                    value.brightness,
+                    value.contrast,
+                    Handle::NULL,
+                );
             }
         } else if viewport.handle.is_valid() {
             if let Some(EntityType::Viewport(value)) = self.document.get_entity(viewport.handle) {
@@ -2571,7 +2805,11 @@ impl Scene {
                     value.visual_style_handle,
                     value.brightness,
                     value.contrast,
-                    if flat { Handle::NULL } else { value.background_handle },
+                    if flat {
+                        Handle::NULL
+                    } else {
+                        value.background_handle
+                    },
                 );
             }
         } else if self.current_layout == "Model" {
@@ -2585,7 +2823,11 @@ impl Scene {
                     value.visual_style_handle,
                     value.brightness,
                     value.contrast,
-                    if flat { Handle::NULL } else { value.background_handle },
+                    if flat {
+                        Handle::NULL
+                    } else {
+                        value.background_handle
+                    },
                 );
             }
         }
@@ -3433,6 +3675,32 @@ pub(in crate::scene) fn render_style_for(
     render_style_for_viewport(document, e, None)
 }
 
+/// A viewport layer colour override as the format packs it (code 420): the
+/// top byte says what follows — 0xC3 an index colour in the low byte, 0xC2 a
+/// 24-bit true colour, 0xC0 / 0xC1 ByLayer / ByBlock. A bare 24-bit value is
+/// read as true colour.
+pub(crate) fn layer_override_color(value: i32) -> AcadColor {
+    match (value as u32) >> 24 {
+        0xC0 => AcadColor::ByLayer,
+        0xC1 => AcadColor::ByBlock,
+        0xC3 => AcadColor::Index((value & 0xFF) as u8),
+        _ => AcadColor::from_true_color_value(value),
+    }
+}
+
+/// [`layer_override_color`] the other way round; `None` for a colour an
+/// override cannot hold.
+pub(crate) fn pack_layer_override_color(color: &AcadColor) -> Option<i32> {
+    let packed = match color {
+        AcadColor::Index(index) => 0xC300_0000u32 | *index as u32,
+        AcadColor::Rgb { r, g, b } => {
+            0xC200_0000u32 | (*r as u32) << 16 | (*g as u32) << 8 | *b as u32
+        }
+        _ => return None,
+    };
+    Some(packed as i32)
+}
+
 fn viewport_override(
     document: &CadDocument,
     layer_name: &str,
@@ -3473,7 +3741,7 @@ pub(crate) fn render_style_for_common_viewport(
                         codec::objects::KnownXRecordKind::LayerViewportColorOverride,
                     )
                     .and_then(|value| value.as_i32())
-                    .map(AcadColor::from_true_color_value)
+                    .map(layer_override_color)
                 })
                 .flatten();
         let resolved = if *ec == AcadColor::ByLayer {
@@ -3589,9 +3857,11 @@ pub struct InheritStyle {
 }
 
 /// Convert a concrete (already layer-resolved) lineweight to display pixels.
+/// Kept below 1 px for thin weights so plots and SVG get the true width;
+/// the GPU paths draw at least 1 px (#1749).
 pub(crate) fn lineweight_to_px(lw: &LineWeight) -> f32 {
     lw.millimeters()
-        .map(|mm| (mm as f32 * MM_TO_PX).max(1.0))
+        .map(|mm| mm as f32 * MM_TO_PX)
         .unwrap_or(1.0)
 }
 
@@ -3620,7 +3890,7 @@ pub(crate) fn layer_render_style_viewport(
             codec::objects::KnownXRecordKind::LayerViewportColorOverride,
         )
         .and_then(|value| value.as_i32())
-        .map(AcadColor::from_true_color_value)
+        .map(layer_override_color)
     } else {
         None
     };
@@ -4175,6 +4445,7 @@ impl Scene {
                     None,
                     None,
                     content_viewport,
+                    self.reference_only.handles(),
                 );
                 for wire in &mut context_wires {
                     wire.color = tint;
@@ -4254,6 +4525,7 @@ impl Scene {
             viewcube_text_color,
             selection_color: self.selection_color,
             selection_effect: self.selection_effect,
+            selection_widen: self.selection_widen,
             nav_perf: perf_nav,
         }
     }
@@ -4286,6 +4558,7 @@ impl Scene {
                 viewcube_text_color,
                 selection_color: self.selection_color,
                 selection_effect: self.selection_effect,
+                selection_widen: self.selection_widen,
                 nav_perf: None,
             };
         };
@@ -4348,6 +4621,7 @@ impl Scene {
             viewcube_text_color,
             selection_color: self.selection_color,
             selection_effect: self.selection_effect,
+            selection_widen: self.selection_widen,
             nav_perf: perf_nav,
         }
     }
@@ -4569,7 +4843,7 @@ impl Scene {
             Arc::new(v)
         };
         let preview_hatches = if show_live_overlay {
-            Arc::clone(&self.preview_hatches)
+            self.render_preview_hatches()
         } else {
             Arc::new(Vec::new())
         };
@@ -4644,6 +4918,7 @@ impl Scene {
         uniforms.viewport_size = [visible_w, visible_h];
         uniforms.flat_shade = if flags.flat_shade { 1.0 } else { 0.0 };
         uniforms.transparency_enable = if self.transparency_display { 1.0 } else { 0.0 };
+        uniforms.highlight_widen = self.selection_widen;
         uniforms.viewport_background = display.background.base;
         uniforms.view_tone = [display.brightness, display.contrast, 0.0, 0.0];
         uniforms.background_top = display.background.colors[0];

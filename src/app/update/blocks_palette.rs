@@ -306,6 +306,11 @@ impl OpenCADStudio {
             options.repeat = false;
         }
         let mut cmd = InsertBlockCommand::palette(name.to_string(), wires, &options);
+        if let Some(record)=self.tabs[i].scene.document.block_records.get(name) {
+            let doc=&self.tabs[i].scene.document;
+            cmd.set_insertion_points(crate::scene::render_graph::block_base_point(doc,name),
+                crate::scene::block_grips::insertion_points(doc,record.handle));
+        }
         if let Some(point) = drop_at {
             cmd.set_point(point);
         }
@@ -424,17 +429,33 @@ impl OpenCADStudio {
         let i = self.active_tab;
         self.push_undo_snapshot(i, "INSERT");
         self.merge_dependencies(i, &deps);
-        for def in deps.blocks {
+        let apps = crate::app::command_driver::clipboard::eed_app_map(
+            &self.tabs[i].scene.document,
+            &deps,
+        );
+        let mut created = Vec::new();
+        for def in &deps.blocks {
             let scene = &mut self.tabs[i].scene;
+            let mut entities = def.entities.clone();
+            for entity in &mut entities {
+                crate::app::command_driver::clipboard::remap_eed_apps(entity, &apps);
+            }
             if redefine && def.name.eq_ignore_ascii_case(name) {
-                if let Err(err) = scene.redefine_block_raw(&def.name, def.base_point, def.entities)
-                {
+                if let Err(err) = scene.redefine_block_raw(&def.name, def.base_point, entities) {
                     self.command_line.push_error(&err);
                     return Err(err);
                 }
             } else if scene.document.block_records.get(&def.name).is_none() {
-                scene.define_block_raw(&def.name, def.base_point, def.entities);
+                scene.define_block_raw(&def.name, def.base_point, entities);
+                created.push(def);
             }
+        }
+        // A dynamic definition keeps its parameters and states.
+        use crate::app::command_driver::clipboard::{block_record_map, import_block_def_graph};
+        let document = &mut self.tabs[i].scene.document;
+        let records = block_record_map(document, &deps.blocks);
+        for def in created {
+            import_block_def_graph(document, def, &records);
         }
         self.tabs[i].scene.populate_meshes_from_document();
         self.tabs[i].dirty = true;
@@ -629,14 +650,7 @@ impl OpenCADStudio {
         self.block_palette.source_tab_id = Some(self.tabs[i].id);
         self.block_palette.source_block_epoch = self.tabs[i].scene.block_epoch;
         let doc = &self.tabs[i].scene.document;
-        let annotative = |name: &str| {
-            doc.block_records.get(name).is_some_and(|br| {
-                matches!(
-                    doc.get_entity(br.block_entity_handle),
-                    Some(codec::EntityType::Block(b)) if b.common.extended_data.records().iter().any(|r| r.application_name == "AcadAnnotative")
-                )
-            })
-        };
+        let annotative = |name: &str| crate::scene::annotative::block_is_annotative(doc, name);
         let entries: Vec<BlockEntry> = names
             .into_iter()
             .map(|name| BlockEntry {
@@ -689,6 +703,7 @@ impl OpenCADStudio {
         let mut user = Vec::new();
         let mut unnamed = 0;
         let mut units = rustc_hash::FxHashMap::default();
+        let mut insertion_points = rustc_hash::FxHashMap::default();
         for br in doc.block_records.iter() {
             if br.flags.is_xref
                 || br.name.eq_ignore_ascii_case("*Model_Space")
@@ -710,6 +725,10 @@ impl OpenCADStudio {
                 ),
             );
             user.push(br.name.clone());
+            insertion_points.insert(br.name.to_ascii_uppercase(),(
+                crate::scene::render_graph::block_base_point(doc,&br.name),
+                crate::scene::block_grips::insertion_points(doc,br.handle),
+            ));
         }
         user.sort_by_key(|n| n.to_ascii_uppercase());
         let search_path = std::env::current_dir()
@@ -720,6 +739,7 @@ impl OpenCADStudio {
             unnamed,
             units,
             search_path,
+            insertion_points,
         }
     }
 }

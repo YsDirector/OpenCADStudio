@@ -37,6 +37,11 @@ fn fonts() -> &'static SysFonts {
         let db = {
             let mut db = fontdb::Database::new();
             db.load_system_fonts();
+            // TrueType files dropped into the Fonts folder resolve like
+            // installed ones, as the folder's SHX fonts already do (#925).
+            if let Some(dir) = crate::io::font_repo::fonts_dir() {
+                db.load_fonts_dir(dir);
+            }
             db
         };
         #[cfg(target_arch = "wasm32")]
@@ -65,7 +70,6 @@ fn fonts() -> &'static SysFonts {
         }
     })
 }
-
 
 /// Sorted, de-duplicated family names of every face currently in `db`.
 fn family_names(db: &fontdb::Database) -> Vec<String> {
@@ -293,6 +297,22 @@ fn face_id_weighted(family: &str, weight: fontdb::Weight) -> Option<fontdb::ID> 
     fonts().db.lock().unwrap().query(&query)
 }
 
+/// The file name (lower case) of the installed face of exactly `family` —
+/// no stand-in family — in the bold and italic asked for, or `None`.
+pub fn face_file(family: &str, bold: bool, italic: bool) -> Option<String> {
+    let db = fonts().db.lock().unwrap();
+    let id = db.query(&fontdb::Query {
+        families: &[fontdb::Family::Name(family)],
+        weight: if bold { fontdb::Weight::BOLD } else { fontdb::Weight::NORMAL },
+        style: if italic { fontdb::Style::Italic } else { fontdb::Style::Normal },
+        ..Default::default()
+    })?;
+    match &db.face(id)?.source {
+        fontdb::Source::File(path) => Some(path.file_name()?.to_string_lossy().to_ascii_lowercase()),
+        _ => None,
+    }
+}
+
 /// Borrow the raw face bytes for `family` and run `f` over them. The byte slice
 /// is only valid inside the closure, so callers extract everything they need
 /// (e.g. flattened glyph outlines) before returning. `index` is the face index
@@ -316,7 +336,7 @@ pub fn with_face_data_weighted<T>(
 
 /// The family of the installed face whose file is named `name` — a bare file
 /// name or any path to one, matched case-insensitively.
-fn family_for_file(name: &str) -> Option<String> {
+pub(crate) fn family_for_file(name: &str) -> Option<String> {
     let file = name.rsplit(['/', '\\']).next()?.trim();
     if file.is_empty() {
         return None;
@@ -446,14 +466,19 @@ mod tests {
     /// and whether it comes as a bare name or as a path.
     #[test]
     fn face_files_resolve_to_their_family() {
-        let found = fonts().db.lock().unwrap().faces().find_map(|face| match &face.source {
-            fontdb::Source::File(path) => {
-                let file = path.file_name()?.to_string_lossy().into_owned();
-                let family = face.families.first().map(|(name, _)| name.clone())?;
-                Some((file, family))
-            }
-            _ => None,
-        });
+        let found = fonts()
+            .db
+            .lock()
+            .unwrap()
+            .faces()
+            .find_map(|face| match &face.source {
+                fontdb::Source::File(path) => {
+                    let file = path.file_name()?.to_string_lossy().into_owned();
+                    let family = face.families.first().map(|(name, _)| name.clone())?;
+                    Some((file, family))
+                }
+                _ => None,
+            });
         let Some((file, family)) = found else {
             eprintln!("no installed face files on this host; skipping");
             return;

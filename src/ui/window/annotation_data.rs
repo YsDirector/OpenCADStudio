@@ -386,6 +386,24 @@ impl Default for DataExtractionState {
                     category: "Geometry".into(),
                     checked: true,
                 },
+                ExtractionProperty {
+                    key: "position_x".into(),
+                    name: "Position X".into(),
+                    category: "Geometry".into(),
+                    checked: true,
+                },
+                ExtractionProperty {
+                    key: "position_y".into(),
+                    name: "Position Y".into(),
+                    category: "Geometry".into(),
+                    checked: true,
+                },
+                ExtractionProperty {
+                    key: "position_z".into(),
+                    name: "Position Z".into(),
+                    category: "Geometry".into(),
+                    checked: true,
+                },
             ],
             categories: ["General".to_string(), "Geometry".to_string()]
                 .into_iter()
@@ -904,9 +922,14 @@ pub fn data_extraction_view(
     #[cfg(target_arch = "wasm32")]
     let add_folder = iced::widget::tooltip(
         add_folder,
-        container(text(t!("Adding folders is not available in the browser. Add drawing files instead.")).size(11))
-            .padding([3, 6])
-            .style(container::bordered_box),
+        container(
+            text(t!(
+                "Adding folders is not available in the browser. Add drawing files instead."
+            ))
+            .size(11),
+        )
+        .padding([3, 6])
+        .style(container::bordered_box),
         iced::widget::tooltip::Position::Top,
     )
     .gap(4);

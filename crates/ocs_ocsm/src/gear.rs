@@ -13,7 +13,7 @@
 //! | 齿根过渡圆角 | ρ = **0.38m**（GB/T 1356），圆心在 `r = rf+ρ` 上、且到齿廓起点距离 = ρ | 模板圆心 r=38.2600 = rf+ρ；其弧终点与样条起点同一点 |
 //! | 齿顶弧 / 齿根弧 | 齿顶弧在**齿中心线**两侧各半条；齿根弧在**齿槽中心线**两侧各半条 | 每齿 8 个实体，40 齿 = 320 个 |
 //! | 分度圆 | 点划线（3中心线层）圆 | 簇3/簇4 都在 3中心线层 |
-//! | 剖视图剖面线 | ANSI31、比例 **0.9448818897637796 = 3.0/3.175**（垂距 **3.0mm**，用户定案）、角度 0，**一个 HATCH 两个边界环**（轴线上下各一环，flags=17） | 模板 HATCH offset 分量 ±3.0/√2 |
+//! | 剖视图剖面线 | ANSI31、基准比例 **0.9448818897637796 = 3.0/3.175**（1:1 垂距 **3.0mm**，随图框 n 成比例）、角度 0，**一个 HATCH 两个边界环**（轴线上下各一环，flags=17） | 模板 HATCH offset 分量 ±3.0/√2 |
 //! | 轴向倒角 | C = **round(0.6m)**（用户定案 2026-09-17），45°，落在齿顶圆柱两端 | 模板 C=1 = round(0.6×2) |
 //! | 中心线 | 长度 = 直径/长度 + **6n**（n=视图比例），与 `OCSMCENTERLINE` 同一口径 | 簇4 十字 = da+6；模板另两处 da+4/h+4 属手绘偏差，统一取 6n |
 //! | 螺旋线（斜齿轮） | **侧视图**里三条平行的 2细线层细实线，与中心线夹角 = 90°−β，间距 k×5mm，左旋 `\\` 右旋 `/` | 用户 2026-09-17 口述规则 |
@@ -42,9 +42,10 @@ use crate::partgen_kit::{hatch_ansi31_rings, HatchEdge};
 /// 剖面线层（与 partgen_more/partgen_kit 同一层名）。
 pub const LAYER_HATCH: &str = "5剖面线层";
 
-/// 齿轮/花键剖面线的**垂直距离** = 3.0 mm（用户定案，照模板 `齿轮画法.dxf`）。
+/// 齿轮/花键剖面线的**1:1 垂直距离** = 3.0 mm（照模板 `齿轮画法.dxf`）。
 ///
-/// 模板 HATCH 的比例就是 0.9448818897637796 = 3.0/3.175，offset 分量 ±3.0/√2。
+/// 模板 HATCH 的基准比例就是 0.9448818897637796 = 3.0/3.175，
+/// 实际出图使用 `HATCH_PATTERN_SCALE × n`；因此 1:2 图框 n=2 时垂距为 6.0 mm。
 pub const HATCH_SPACING_MM: f64 = 3.0;
 /// 3.0 mm 垂距对应的 ANSI31 `pattern_scale` = `HATCH_SPACING_MM / partgen_kit::ANSI31_SPACING_MM`。
 pub const HATCH_PATTERN_SCALE: f64 = HATCH_SPACING_MM / crate::partgen_kit::ANSI31_SPACING_MM;
@@ -1757,7 +1758,7 @@ fn section_view(p: &GearParams, n: f64) -> Result<Vec<EntityType>, String> {
     out.push(line([-cl / 2.0, -d2], [cl / 2.0, -d2], LAYER_CENTER));
     out.push(line([-cl / 2.0, 0.0], [cl / 2.0, 0.0], LAYER_CENTER));
     // 剖面线：一个 HATCH、两个边界环（齿根圆 ↔ 轴线，上下各一环）—— 齿部按不剖
-    out.push(section_hatch(p.h, rf));
+    out.push(section_hatch(p.h, rf, n));
     Ok(out)
 }
 
@@ -1765,7 +1766,7 @@ fn section_view(p: &GearParams, n: f64) -> Result<Vec<EntityType>, String> {
 ///
 /// 间距口径见 [`HATCH_SPACING_MM`]：走 `partgen_kit::hatch_ansi31_rings`（预览读的是同一份
 /// 图案定义），环 flags = EXTERNAL|OUTERMOST（与花键 flags=17 同口径）。
-fn section_hatch(h: f64, rf: f64) -> EntityType {
+fn section_hatch(h: f64, rf: f64, n: f64) -> EntityType {
     let ring = |y0: f64, y1: f64| {
         vec![
             HatchEdge::Line { a: [-h / 2.0, y0], b: [h / 2.0, y0] },
@@ -1774,7 +1775,7 @@ fn section_hatch(h: f64, rf: f64) -> EntityType {
             HatchEdge::Line { a: [-h / 2.0, y1], b: [-h / 2.0, y0] },
         ]
     };
-    hatch_ansi31_rings(&[ring(-rf, 0.0), ring(0.0, rf)], 0.0, HATCH_PATTERN_SCALE)
+    hatch_ansi31_rings(&[ring(-rf, 0.0), ring(0.0, rf)], 0.0, HATCH_PATTERN_SCALE * n)
 }
 
 // ─────────────────── 内齿轮（齿圈）—— 二期，用户 2026-09-17 给模板 ───────────────────
@@ -2297,8 +2298,8 @@ pub fn ocsm_ready(doc: &ocs_plugin_api::host::acadrust::CadDocument) -> Result<(
 
 /// 生成一个视图的图元（已落 OCSM 图层）。
 ///
-/// `n` = 视图比例系数（图框 `比例` 属性，1:2 → 2.0）：只影响中心线/螺旋线的伸出与间距，
-/// 不影响齿轮本身尺寸（齿轮始终按真实尺寸画，图框负责比例）。
+/// `n` = 视图比例系数（图框 `比例` 属性，1:2 → 2.0）：影响中心线/螺旋线的伸出与间距，
+/// 以及剖面线图案比例；不影响齿轮本身尺寸（齿轮始终按真实尺寸画，图框负责比例）。
 pub fn generate(p: &GearParams, view: GearView, n: f64) -> Result<GenPart, String> {
     if p.is_spline() {
         return generate_spline(p, view, n);
@@ -2350,7 +2351,7 @@ fn spline_chamfer(p: &crate::invol_spline::InvolParams) -> f64 {
 
 /// 外花键模式的剖面线：轴线↔齿根圆两环（齿部按不剖）。x 跨度 = 有效长度 L。
 /// 内花键**不打剖面线**（用户定案：同内齿轮齿圈剖视，走 [`internal_bore_section`]）。
-fn spline_section_hatch(p: &crate::invol_spline::InvolParams, len: f64) -> EntityType {
+fn spline_section_hatch(p: &crate::invol_spline::InvolParams, len: f64, n: f64) -> EntityType {
     let r_in = 0.0;
     let r_out = p.df() / 2.0;
     let upper = vec![
@@ -2365,7 +2366,7 @@ fn spline_section_hatch(p: &crate::invol_spline::InvolParams, len: f64) -> Entit
         HatchEdge::Line { a: [len, -r_out], b: [len, -r_in] },
         HatchEdge::Line { a: [len, -r_in], b: [0.0, -r_in] },
     ];
-    hatch_ansi31_rings(&[upper, lower], 0.0, HATCH_PATTERN_SCALE)
+    hatch_ansi31_rings(&[upper, lower], 0.0, HATCH_PATTERN_SCALE * n)
 }
 
 /// 外花键轴向视图（GEAR 侧视/剖视共用）：**两端倒角**，口径照齿轮 [`axial_outline`]。
@@ -2507,7 +2508,7 @@ fn generate_spline(p: &GearParams, view: GearView, n: f64) -> Result<GenPart, St
             } else {
                 // 剖视同齿轮 `section_view`：倒角照画，但不画两条台阶竖线（全剖时该棱边按惯例省略）。
                 let mut v = external_spline_axial_view(&engine, len, n, LAYER_MAIN, false)?;
-                v.push(spline_section_hatch(&engine, len));
+                v.push(spline_section_hatch(&engine, len, n));
                 v
             }
         }
@@ -4240,8 +4241,8 @@ mod tests {
         (-ln.offset.x * ln.angle.sin() + ln.offset.y * ln.angle.cos()).abs()
     }
 
-    /// ① 剖面线垂距 3.0mm 全体系覆盖：外齿轮 / 外花键 / 矩形花键侧剖；
-    /// 内齿圈（内齿轮 + 内花键）按用户定案不剖 → 无 HATCH（保持）。
+    /// ① 1:1 剖面线垂距 3.0mm 全体系覆盖；图框比例 n 还要统一放大图案周期：
+    /// 外齿轮 / 外花键 / 矩形花键侧剖；内齿圈（内齿轮 + 内花键）按用户定案不剖 → 无 HATCH。
     #[test]
     fn hatch_spacing_is_3mm_across_gear_and_splines() {
         // 外齿轮剖视（用户实测旧口径 3.175×√2 = 4.4901mm 的那处）
@@ -4252,6 +4253,13 @@ mod tests {
             .find(|e| matches!(e, EntityType::Hatch(_)))
             .expect("外齿轮剖视有剖面线");
         assert!((host_hatch_dy(gh) - HATCH_SPACING_MM).abs() < 1e-9, "齿轮垂距");
+        let g2 = generate(&tmpl(), GearView::Section, 2.0).unwrap();
+        let gh2 = g2
+            .entities
+            .iter()
+            .find(|e| matches!(e, EntityType::Hatch(_)))
+            .expect("1:2 外齿轮剖视有剖面线");
+        assert!((host_hatch_dy(gh2) - 2.0 * HATCH_SPACING_MM).abs() < 1e-9, "1:2 齿轮垂距");
         // 外花键剖视（gear.rs 花键模式）
         let mut p = spline_tmpl(crate::invol_spline::SplineStd::GB);
         p.spline.as_mut().unwrap().m = Some(3.0);
@@ -4263,6 +4271,13 @@ mod tests {
             .find(|e| matches!(e, EntityType::Hatch(_)))
             .expect("外花键剖视有剖面线");
         assert!((host_hatch_dy(sh) - HATCH_SPACING_MM).abs() < 1e-9, "花键垂距");
+        let s2 = generate(&p, GearView::Section, 2.0).unwrap();
+        let sh2 = s2
+            .entities
+            .iter()
+            .find(|e| matches!(e, EntityType::Hatch(_)))
+            .expect("1:2 外花键剖视有剖面线");
+        assert!((host_hatch_dy(sh2) - 2.0 * HATCH_SPACING_MM).abs() < 1e-9, "1:2 花键垂距");
         // 矩形花键侧剖（spline.rs 同一口径）
         let rs = crate::spline::RectSpline::from_code("6x23x26x6", None, 30.0).unwrap();
         let rh = rs
@@ -4886,10 +4901,10 @@ mod tests {
         // 仍保持既有图元数，故仅重冻指纹，不把它当成几何变化。
         // 下次升 acadrust/codec 若再漂，先确认几何真的没变（比对图元数与关键坐标）再改这里的常数。
         let frozen: [(&str, u64); 4] = [
-            ("section", 0xeb2a545fdaf3e9e7),
-            ("side", 0x89373ac774bbe11c),
-            ("simplified", 0x556c4a9ef7d55db9),
-            ("front", 0xb04ef1e1a06a3bdb),
+            ("section", 0x9ac4a0cc5f5b3c6d),
+            ("side", 0x442037f0498bf299),
+            ("simplified", 0xc42575dab2268d3a),
+            ("front", 0x29aaac9901d56294),
         ];
         for (name, want) in frozen {
             let view = GearView::parse(name).unwrap();

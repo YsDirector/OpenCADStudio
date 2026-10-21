@@ -653,7 +653,7 @@ fn clip_hatch_entity(win: &Win, h: &Hatch, k: f64, origin: (f64, f64)) -> Vec<E>
     if fully_inside {
         let mut nh = h.clone();
         transform_hatch(&mut nh, k, origin);
-        return vec![E::Hatch(nh)];
+        return vec![E::Hatch(Box::new(nh))];
     }
     let mut nh = h.clone();
     nh.paths = Vec::new();
@@ -672,7 +672,7 @@ fn clip_hatch_entity(win: &Win, h: &Hatch, k: f64, origin: (f64, f64)) -> Vec<E>
     if nh.paths.is_empty() {
         return Vec::new();
     }
-    vec![E::Hatch(nh)]
+    vec![E::Hatch(Box::new(nh))]
 }
 
 /// 边界边是否完全在窗口内。
@@ -1172,7 +1172,7 @@ mod tests {
         ])));
         h.paths.push(path);
         let w = circle_win();
-        let out = clip_entity(&w, &E::Hatch(h), 2.0, (1.0, 1.0));
+        let out = clip_entity(&w, &E::Hatch(Box::new(h)), 2.0, (1.0, 1.0));
         assert_eq!(out.len(), 1);
         match &out[0] {
             E::Hatch(nh) => {

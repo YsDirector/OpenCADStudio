@@ -2186,7 +2186,7 @@ fn hatch_ansi31(verts: &[[f64; 2]], angle_deg: f64) -> EntityType {
     }
     h.paths.push(bp);
     set_layer(&mut h, LAYER_HATCH);
-    EntityType::Hatch(h)
+    EntityType::Hatch(Box::new(h))
 }
 
 /// 点列 → 单条闭合 LwPolyline（插入走 AddBlockRecord 全量透传，任意实体类型均可）。
@@ -2758,7 +2758,7 @@ mod acm_ref_tests {
             .entities
             .iter()
             .filter_map(|x| match x {
-                EntityType::Hatch(h) => Some(h),
+                EntityType::Hatch(h) => Some(h.as_ref()),
                 _ => None,
             })
             .collect();
@@ -2917,7 +2917,7 @@ mod acm_ref_tests {
             .entities
             .iter()
             .filter_map(|x| match x {
-                EntityType::Hatch(h) => Some(h),
+                EntityType::Hatch(h) => Some(h.as_ref()),
                 _ => None,
             })
             .collect();
@@ -3058,7 +3058,7 @@ mod acm_ref_tests {
             .entities
             .iter()
             .filter_map(|e| match e {
-                EntityType::Hatch(h) => Some(h),
+                EntityType::Hatch(h) => Some(h.as_ref()),
                 _ => None,
             })
             .collect();
@@ -3114,7 +3114,7 @@ mod acm_ref_tests {
                 .entities
                 .iter()
                 .filter_map(|e| match e {
-                    EntityType::Hatch(h) => Some(h),
+                    EntityType::Hatch(h) => Some(h.as_ref()),
                     _ => None,
                 })
                 .collect();

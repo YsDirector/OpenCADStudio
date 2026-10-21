@@ -508,14 +508,6 @@ fn referenced_block_tree(doc: &CadDocument, root: &str, anno_scale: f32) -> Vec<
     seen.into_iter().collect()
 }
 
-/// True when `layer` is turned off or frozen — entities on it never render.
-fn layer_hidden(doc: &CadDocument, layer: &str) -> bool {
-    doc.layers
-        .get(layer)
-        .map(|l| l.flags.off || l.flags.frozen)
-        .unwrap_or(false)
-}
-
 fn nested_instance_transform(nref: &NestedRef, offset: [f64; 3]) -> Transform {
     if offset == [0.0; 3] {
         nref.xform.clone()
@@ -568,10 +560,11 @@ fn build_defn(
             continue;
         }
         // A sub-entity on a layer that is off or frozen must not render, same
-        // as a top-level entity on that layer. The defn cache is rebuilt on
+        // as a top-level entity on that layer — except that layer 0 being off
+        // leaves its members to the insert's layer. The defn cache is rebuilt on
         // every layer off/freeze toggle (bump_geometry bumps block_epoch), so
         // baking the visibility here stays in sync.
-        if layer_hidden(doc, &entity.common().layer) {
+        if crate::scene::render_graph::block_member_layer_hidden(doc, &entity.common().layer) {
             continue;
         }
         // Annotative scale representation: bake only the current scale's copy
@@ -747,7 +740,7 @@ fn tessellate_sub_local(
     // Sanity guard: skip sub-entities whose primary dimension is so large
     // that adaptive tessellation will explode into hundreds of millions
     // of points. These are typically corrupt-radius primitives that slipped
-    // past purge_corrupt_entities (finite but absurd values).
+    // past the codec's unusable-geometry audit (finite but absurd values).
     if is_unreasonable_extent(sub) {
         return vec![];
     }
@@ -792,6 +785,9 @@ fn tessellate_sub_local(
     // top-level entities, applied per-defn.
     let wires_out = if let EntityType::Dimension(dimension) = sub {
         use crate::entities::dimension::DimensionTess;
+        // Block-definition members never carry the reference-only
+        // designation (it targets top-level geometry — see the API v9
+        // known-limit note), so the block cache tessellates with an empty set.
         dimension.tessellate(
             doc,
             h,
@@ -804,6 +800,7 @@ fn tessellate_sub_local(
             bg_color,
             None,
             None,
+            &HashSet::default(),
         )
     } else {
         tessellate::tessellate(
@@ -1068,29 +1065,27 @@ pub fn expand_insert(
         LocalSub::Wire(wire) => wire.canvas_color,
         LocalSub::Nested(_) => false,
     });
-    let prototype_key = if !ins.is_array()
-        && !has_masks
-        && cache.prototype_blocks.contains(&ins.block_name)
-    {
-        Some(expansion_prototype_key(
-            ins,
-            &xform,
-            ins_resolved_color,
-            ins_pat_len,
-            ins_pat,
-            ins_lw_px,
-            ins_layer,
-            ins_layer_plottable,
-            selected,
-            pslt_factor,
-            is_xref,
-            bg_color,
-            anno_scale,
-            suppress_root_points,
-        ))
-    } else {
-        None
-    };
+    let prototype_key =
+        if !ins.is_array() && !has_masks && cache.prototype_blocks.contains(&ins.block_name) {
+            Some(expansion_prototype_key(
+                ins,
+                &xform,
+                ins_resolved_color,
+                ins_pat_len,
+                ins_pat,
+                ins_lw_px,
+                ins_layer,
+                ins_layer_plottable,
+                selected,
+                pslt_factor,
+                is_xref,
+                bg_color,
+                anno_scale,
+                suppress_root_points,
+            ))
+        } else {
+            None
+        };
     let prototype_slot = prototype_key.as_ref().map(|key| {
         let mut prototypes = cache
             .expansion_prototypes
@@ -1344,15 +1339,17 @@ pub(crate) fn translated_prototype_wire(
     let mut wire = source.clone();
     wire.name = name.to_string();
     if let Some(stub) = &source.stub {
-        wire.stub = Some(Arc::new(crate::scene::model::instance_model::InstanceStub {
-            prototype: Arc::clone(&stub.prototype),
-            delta: [
-                stub.delta[0] + delta[0],
-                stub.delta[1] + delta[1],
-                stub.delta[2] + delta[2],
-            ],
-            depth_delta: stub.depth_delta,
-        }));
+        wire.stub = Some(Arc::new(
+            crate::scene::model::instance_model::InstanceStub {
+                prototype: Arc::clone(&stub.prototype),
+                delta: [
+                    stub.delta[0] + delta[0],
+                    stub.delta[1] + delta[1],
+                    stub.delta[2] + delta[2],
+                ],
+                depth_delta: stub.depth_delta,
+            },
+        ));
     }
     if let Some(instance) = wire.render_instance.as_mut() {
         for axis in 0..3 {
@@ -1840,6 +1837,7 @@ impl Batches {
                     depth_override: b.local_depth,
                     display_visible: !b.hide_unselected || selected,
                     snap_only: false,
+                    reference_only: false,
                     plot_visible: b.plot_visible,
                     fill_is_3d: b.fill_is_3d,
                     fill_is_2d_solid: b.fill_is_2d_solid,

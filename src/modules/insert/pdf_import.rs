@@ -199,11 +199,16 @@ pub struct PdfFileImport {
 }
 
 impl PdfFileImport {
-    /// The underlay the page would be as an attachment, for placing it.
+    /// Where the page's content goes: one drawing unit per page inch times
+    /// the scale, or, on a page with a viewport measure (a plot), its
+    /// measured units (a 1:1 millimetre plot comes in at its millimetres);
+    /// a page's user unit multiplies either.
     pub fn placement(&self) -> Underlay {
         let mut u = Underlay::pdf();
         u.insertion_point = Vector3::new(self.insertion.x, self.insertion.y, self.insertion.z);
-        u.set_scale(self.scale);
+        let units = crate::scene::model::pdf_raster::page_units_per_inch(&self.path, &self.page)
+            .unwrap_or(1.0);
+        u.set_scale(self.scale * units);
         u.rotation = self.rotation;
         u
     }
@@ -243,6 +248,32 @@ enum Step {
     Opposite,
     Polygon,
     Mode,
+    // The File option on the command line (-PDFIMPORT, or FILEDIA 0).
+    FileName,
+    Page,
+    PageList,
+    Insertion,
+    Scale,
+    Rotation,
+}
+
+/// What a file name that is no readable PDF (damaged, empty, not a PDF)
+/// prints before the name is asked for again.
+const UNREADABLE_FILE: &str = "This file cannot be opened.\n\
+The problem can be caused by several things:\n\
+- The data in the file is corrupted\n\
+- The file is an earlier format that is no longer used\n\
+- The file format is not supported\n\
+Try to obtain a better copy of the file, recreate the file using different settings, \
+or convert the file to a supported file format.";
+
+/// A typed page number: digits only (no sign, decimals or ranges); one too
+/// large for a 32-bit count is the largest one.
+fn page_number(token: &str) -> Option<usize> {
+    if token.is_empty() || !token.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    Some(token.parse::<u64>().map_or(i32::MAX as u64, |n| n.min(i32::MAX as u64)) as usize)
 }
 
 pub struct PdfImportCommand {
@@ -251,6 +282,10 @@ pub struct PdfImportCommand {
     picked: Option<EntityType>,
     points: Vec<DVec3>,
     area: ImportArea,
+    /// -PDFIMPORT: the file is always asked on the command line.
+    dash: bool,
+    file: PdfFileImport,
+    pages: usize,
 }
 
 impl PdfImportCommand {
@@ -271,7 +306,137 @@ impl PdfImportCommand {
             picked: None,
             points: Vec::new(),
             area: ImportArea::All,
+            dash: false,
+            file: PdfFileImport {
+                path: String::new(),
+                page: "1".to_string(),
+                scale: 1.0,
+                rotation: 0.0,
+                insertion: DVec3::ZERO,
+            },
+            pages: 0,
         }
+    }
+
+    /// -PDFIMPORT.
+    pub fn command_line() -> Self {
+        Self {
+            dash: true,
+            ..Self::new()
+        }
+    }
+
+    /// The File option: the file dialog while FILEDIA is on (PDFIMPORT
+    /// only), otherwise the file name prompt.
+    fn file_option(&mut self) -> CmdResult {
+        if !self.dash && crate::sys::file_dia() {
+            return CmdResult::Dispatch("_PDFIMPORTFILE".to_string());
+        }
+        self.step = Step::FileName;
+        CmdResult::NeedPoint
+    }
+
+    fn file_name(&mut self, text: &str) -> CmdResult {
+        let typed = text.trim().trim_matches('"');
+        if typed.is_empty() {
+            return CmdResult::ReportError("Filename cannot be blank".to_string());
+        }
+        // A name without an extension is a .pdf file.
+        let path = if std::path::Path::new(typed).extension().is_none() {
+            format!("{typed}.pdf")
+        } else {
+            typed.to_string()
+        };
+        let shown = crate::entities::underlay::display_path(&path);
+        let Ok(bytes) = std::fs::read(&path) else {
+            return CmdResult::ReportError(format!("File {shown} does not exist."));
+        };
+        // A damaged file is repaired only when it still has its trailer (the
+        // `trailer` dictionary or a cross-reference stream); a cut-off one
+        // cannot be opened.
+        // ponytail: byte search; a compressed stream holding these bytes
+        // would pass the test.
+        let has = |key: &[u8]| bytes.windows(key.len()).any(|w| w == key);
+        if !has(b"trailer") && !has(b"/XRef") {
+            return CmdResult::ReportError(UNREADABLE_FILE.to_string());
+        }
+        crate::scene::model::pdf_raster::register_source(&path, std::sync::Arc::new(bytes));
+        let notice = match crate::scene::model::pdf_password::prompt_gate(&path, text, false) {
+            Ok(notice) => notice,
+            Err(ask) => return ask,
+        };
+        let Some(pages) =
+            crate::scene::model::pdf_raster::page_count(&path).filter(|&pages| pages > 0)
+        else {
+            return CmdResult::ReportError(UNREADABLE_FILE.to_string());
+        };
+        self.pages = pages;
+        self.file.path = path;
+        self.step = Step::Page;
+        notice.map_or(CmdResult::NeedPoint, CmdResult::ReportMeasurement)
+    }
+
+    fn page(&mut self, text: &str) -> CmdResult {
+        let token = text.trim();
+        if token == "?" {
+            self.step = Step::PageList;
+            return CmdResult::NeedPoint;
+        }
+        let page = if token.is_empty() {
+            1
+        } else {
+            match page_number(token) {
+                // Zero is asked again without a message.
+                Some(0) => return CmdResult::NeedPoint,
+                Some(n) => n,
+                None => {
+                    return CmdResult::ReportError("Please enter page number or '?'.".to_string())
+                }
+            }
+        };
+        if page > self.pages {
+            let shown = crate::entities::underlay::display_path(&self.file.path);
+            return CmdResult::ReportError(format!("There is no {page} in {shown}."));
+        }
+        self.file.page = page.to_string();
+        self.step = Step::Insertion;
+        CmdResult::NeedPoint
+    }
+
+    fn page_list(&mut self, text: &str) -> CmdResult {
+        let token = text.trim();
+        if token.is_empty() || token == "*" {
+            self.step = Step::Page;
+            let all: Vec<String> = (1..=self.pages).map(|n| n.to_string()).collect();
+            return CmdResult::ReportMeasurement(all.join("\n"));
+        }
+        match page_number(token) {
+            // Zero, or anything but a page number, is asked again.
+            Some(0) => CmdResult::NeedPoint,
+            None => CmdResult::ReportError("Please enter page number or *.".to_string()),
+            Some(n) => {
+                self.step = Step::Page;
+                CmdResult::ReportMeasurement(if n <= self.pages {
+                    format!("Found page {n}.")
+                } else {
+                    "No matching page found.".to_string()
+                })
+            }
+        }
+    }
+
+    fn scale(&mut self, value: f64) -> CmdResult {
+        if value <= 0.0 {
+            return CmdResult::ReportError("Value must be positive and nonzero.".to_string());
+        }
+        self.file.scale = value;
+        self.step = Step::Rotation;
+        CmdResult::NeedPoint
+    }
+
+    fn rotation(&mut self, radians: f64) -> CmdResult {
+        self.file.rotation = radians;
+        CmdResult::PdfImportFile(self.file.clone())
     }
 
     fn area_choice(&mut self, text: &str) -> CmdResult {
@@ -308,7 +473,11 @@ impl PdfImportCommand {
 
 impl CadCommand for PdfImportCommand {
     fn name(&self) -> &'static str {
-        "PDFIMPORT"
+        if self.dash {
+            "-PDFIMPORT"
+        } else {
+            "PDFIMPORT"
+        }
     }
 
     fn prompt(&self) -> String {
@@ -324,6 +493,12 @@ impl CadCommand for PdfImportCommand {
             Step::Mode => {
                 "Keep, Detach or Unload PDF underlay? [Keep/Detach/Unload] <Unload>:".to_string()
             }
+            Step::FileName => "Enter filename for PDF import:".to_string(),
+            Step::Page => "Enter page number or [?] <1>:".to_string(),
+            Step::PageList => "Enter page to list <*>:".to_string(),
+            Step::Insertion => "Specify insertion point <0,0>:".to_string(),
+            Step::Scale => "Specify scale factor <1.0>:".to_string(),
+            Step::Rotation => "Specify rotation <0>:".to_string(),
         }
     }
 
@@ -347,13 +522,17 @@ impl CadCommand for PdfImportCommand {
 
     fn input_kind(&self) -> InputKind {
         match self.step {
-            Step::Mode => InputKind::SingleToken,
+            Step::Mode | Step::Page | Step::PageList => InputKind::SingleToken,
+            Step::FileName => InputKind::FreeText,
             _ => InputKind::Point,
         }
     }
 
     fn point_step_accepts_keywords(&self) -> bool {
-        matches!(self.step, Step::Select | Step::Area | Step::Polygon)
+        matches!(
+            self.step,
+            Step::Select | Step::Area | Step::Polygon | Step::Scale | Step::Rotation
+        )
     }
 
     fn needs_entity_pick(&self) -> bool {
@@ -401,6 +580,21 @@ impl CadCommand for PdfImportCommand {
                 self.points.push(pt);
                 CmdResult::NeedPoint
             }
+            Step::Insertion => {
+                self.file.insertion = pt;
+                self.step = Step::Scale;
+                CmdResult::NeedPoint
+            }
+            // A second point gives the scale, or the angle, from the
+            // insertion point.
+            Step::Scale => {
+                let d = (pt - self.file.insertion).truncate().length();
+                self.scale(d)
+            }
+            Step::Rotation => {
+                let d = (pt - self.file.insertion).truncate();
+                self.rotation(d.y.atan2(d.x))
+            }
             _ => CmdResult::NeedPoint,
         }
     }
@@ -408,8 +602,8 @@ impl CadCommand for PdfImportCommand {
     fn on_text_input(&mut self, text: &str) -> Option<CmdResult> {
         let token = text.trim().to_ascii_uppercase();
         Some(match self.step {
-            Step::Select if token == "F" || token == "FILE" => {
-                CmdResult::Dispatch("_PDFIMPORTFILE".to_string())
+            Step::Select if matches!(token.as_str(), "F" | "FILE" | "_F" | "_FILE") => {
+                self.file_option()
             }
             Step::Area => self.area_choice(&token),
             Step::Polygon if token == "U" || token == "UNDO" => {
@@ -417,13 +611,30 @@ impl CadCommand for PdfImportCommand {
                 CmdResult::NeedPoint
             }
             Step::Mode => self.mode_choice(&token),
+            Step::FileName => self.file_name(text),
+            Step::Page => self.page(text),
+            Step::PageList => self.page_list(text),
+            Step::Scale => match token.parse::<f64>() {
+                Ok(v) => self.scale(v),
+                Err(_) if token.is_empty() => self.scale(1.0),
+                Err(_) => CmdResult::ReportError(
+                    "Requires numeric distance or second point.".to_string(),
+                ),
+            },
+            Step::Rotation => match token.parse::<f64>() {
+                Ok(v) => self.rotation(v.to_radians()),
+                Err(_) if token.is_empty() => self.rotation(0.0),
+                Err(_) => CmdResult::ReportError(
+                    "Requires valid numeric angle or second point.".to_string(),
+                ),
+            },
             _ => return None,
         })
     }
 
     fn on_enter(&mut self) -> CmdResult {
         match self.step {
-            Step::Select => CmdResult::Dispatch("_PDFIMPORTFILE".to_string()),
+            Step::Select => self.file_option(),
             Step::Area => self.area_choice(""),
             Step::Polygon if self.points.len() >= 3 => {
                 self.area = ImportArea::Polygon(self.points.clone());
@@ -433,6 +644,12 @@ impl CadCommand for PdfImportCommand {
             Step::Polygon => CmdResult::NeedPoint,
             Step::Mode => self.mode_choice(""),
             Step::Opposite => CmdResult::NeedPoint,
+            Step::FileName => self.file_name(""),
+            Step::Page => self.page(""),
+            Step::PageList => self.page_list(""),
+            Step::Insertion => self.on_point(DVec3::ZERO),
+            Step::Scale => self.scale(1.0),
+            Step::Rotation => self.rotation(0.0),
         }
     }
 
@@ -489,7 +706,8 @@ fn color_of(rgb: [u8; 3]) -> Color {
         [0, 255, 255] => Color::Index(4),
         [0, 0, 255] => Color::Index(5),
         [255, 0, 255] => Color::Index(6),
-        [0, 0, 0] | [255, 255, 255] => Color::Index(7),
+        // Black is 7; white stays a true colour.
+        [0, 0, 0] => Color::Index(7),
         [r, g, b] => Color::Rgb { r, g, b },
     }
 }
@@ -500,8 +718,9 @@ fn lineweight_of(width_pt: f64) -> LineWeight {
         0, 5, 9, 13, 15, 18, 20, 25, 30, 35, 40, 50, 53, 60, 70, 80, 90, 100, 106, 120, 140, 158,
         200, 211,
     ];
+    // A zero-width (thinnest) line is the 0.00 mm weight.
     if width_pt <= 0.0 {
-        return LineWeight::ByLayer;
+        return LineWeight::Value(0);
     }
     let hundredths = width_pt * 25.4 / 72.0 * 100.0;
     let best = STANDARD
@@ -606,6 +825,8 @@ pub const DASH_LINETYPE: &str = "PDF_IMPORT";
 /// as dashes. `bulges[i]` bends the segment from point i to the next (the
 /// closing one on a closed stroke; 0 after an open stroke's last point).
 struct Stroke {
+    /// Drawing position: the objects are created in drawing order.
+    order: usize,
     layer: String,
     color: Color,
     weight: LineWeight,
@@ -632,6 +853,12 @@ impl Stroke {
 /// three-quarter points on the circle through its ends and midpoint), from
 /// its midpoint's height over the chord; positive counter-clockwise.
 fn arc_bulge(seg: &Segment) -> Option<f64> {
+    arc_bulge_within(seg, 2e-3)
+}
+
+/// [`arc_bulge`] with the curve allowed `tolerance` (a share of the
+/// radius) off the circle.
+fn arc_bulge_within(seg: &Segment, tolerance: f64) -> Option<f64> {
     let Segment::Cubic(p0, _, _, p3) = seg else {
         return None;
     };
@@ -647,7 +874,7 @@ fn arc_bulge(seg: &Segment) -> Option<f64> {
     let (a2, b2) = (ax * ax + ay * ay, bx * bx + by * by);
     let c = [(by * a2 - ay * b2) / d, (ax * b2 - bx * a2) / d];
     let r = c[0].hypot(c[1]);
-    let tol = r * 2e-3;
+    let tol = r * tolerance;
     let on = [0.25, 0.75].iter().all(|t| {
         let q = bezier(seg, *t);
         ((q[0] - p0[0] - c[0]).hypot(q[1] - p0[1] - c[1]) - r).abs() <= tol
@@ -657,6 +884,312 @@ fn arc_bulge(seg: &Segment) -> Option<f64> {
     }
     let h = (ax * by - ay * bx) / chord;
     Some(2.0 * h / chord)
+}
+
+/// A subpath cut where its curves are not circular arcs.
+enum Piece {
+    /// Points, bulges (as in [`Stroke`]) and whether it closes.
+    Run(Vec<[f64; 2]>, Vec<f64>, bool),
+    /// A cubic that is no circular arc.
+    Curve(Segment),
+}
+
+/// The straight-and-arc runs of a subpath between its other curves. A
+/// subpath without other curves is one run (closed when it closes).
+fn run_strokes(segments: &[Segment], closed: bool) -> Vec<Piece> {
+    let whole = !segments
+        .iter()
+        .any(|s| matches!(s, Segment::Cubic(..)) && arc_bulge(s).is_none());
+    let mut out = Vec::new();
+    let mut points: Vec<[f64; 2]> = Vec::new();
+    let mut bulges: Vec<f64> = Vec::new();
+    let flush = |points: &mut Vec<[f64; 2]>, bulges: &mut Vec<f64>, out: &mut Vec<Piece>| {
+        if points.len() > 1 {
+            bulges.push(0.0);
+            out.push(Piece::Run(
+                std::mem::take(points),
+                std::mem::take(bulges),
+                false,
+            ));
+        }
+        points.clear();
+        bulges.clear();
+    };
+    for seg in segments {
+        let bulge = match seg {
+            Segment::Line(..) => Some(0.0),
+            cubic => arc_bulge(cubic),
+        };
+        match bulge {
+            Some(b) => {
+                if points.is_empty() {
+                    points.push(seg.start());
+                }
+                points.push(seg.end());
+                bulges.push(b);
+            }
+            None => {
+                flush(&mut points, &mut bulges, &mut out);
+                out.push(Piece::Curve(seg.clone()));
+            }
+        }
+    }
+    if whole && closed && points.len() > 2 {
+        // The closing point is the first again.
+        points.pop();
+        out.push(Piece::Run(points, bulges, true));
+    } else {
+        flush(&mut points, &mut bulges, &mut out);
+    }
+    out
+}
+
+/// Circle through three points: centre and radius.
+fn circle_through(a: [f64; 2], b: [f64; 2], c: [f64; 2]) -> Option<([f64; 2], f64)> {
+    let d = 2.0 * (a[0] * (b[1] - c[1]) + b[0] * (c[1] - a[1]) + c[0] * (a[1] - b[1]));
+    if d.abs() < 1e-12 {
+        return None;
+    }
+    let (a2, b2, c2) = (
+        a[0] * a[0] + a[1] * a[1],
+        b[0] * b[0] + b[1] * b[1],
+        c[0] * c[0] + c[1] * c[1],
+    );
+    let x = (a2 * (b[1] - c[1]) + b2 * (c[1] - a[1]) + c2 * (a[1] - b[1])) / d;
+    let y = (a2 * (c[0] - b[0]) + b2 * (a[0] - c[0]) + c2 * (b[0] - a[0])) / d;
+    Some(([x, y], (a[0] - x).hypot(a[1] - y)))
+}
+
+/// An ellipse: centre, unit major direction, semi-axes.
+struct Conic {
+    center: [f64; 2],
+    major: [f64; 2],
+    a: f64,
+    b: f64,
+}
+
+impl Conic {
+    /// The ellipse through five points (none at their centroid).
+    fn through(points: &[[f64; 2]; 5]) -> Option<Self> {
+        let o = [
+            points.iter().map(|p| p[0]).sum::<f64>() / 5.0,
+            points.iter().map(|p| p[1]).sum::<f64>() / 5.0,
+        ];
+        // A x² + B xy + C y² + D x + E y = 1 about the centroid.
+        let mut m = [[0.0f64; 6]; 5];
+        for (row, p) in m.iter_mut().zip(points) {
+            let (x, y) = (p[0] - o[0], p[1] - o[1]);
+            *row = [x * x, x * y, y * y, x, y, 1.0];
+        }
+        for col in 0..5 {
+            let pivot = (col..5).max_by(|i, j| m[*i][col].abs().total_cmp(&m[*j][col].abs()))?;
+            m.swap(col, pivot);
+            if m[col][col].abs() < 1e-18 {
+                return None;
+            }
+            for row in 0..5 {
+                if row != col {
+                    let f = m[row][col] / m[col][col];
+                    for k in col..6 {
+                        m[row][k] -= f * m[col][k];
+                    }
+                }
+            }
+        }
+        let s: Vec<f64> = (0..5).map(|i| m[i][5] / m[i][i]).collect();
+        let (a, b, c, d, e) = (s[0], s[1], s[2], s[3], s[4]);
+        let det = 4.0 * a * c - b * b;
+        if det <= 0.0 {
+            return None;
+        }
+        let x0 = (b * e - 2.0 * c * d) / det;
+        let y0 = (b * d - 2.0 * a * e) / det;
+        let f = a * x0 * x0 + b * x0 * y0 + c * y0 * y0 + d * x0 + e * y0 - 1.0;
+        if f >= 0.0 {
+            return None;
+        }
+        // Eigen-directions of the quadratic part; the smaller value is the
+        // major axis.
+        let theta = 0.5 * b.atan2(a - c);
+        let (ct, st) = (theta.cos(), theta.sin());
+        let q1 = a * ct * ct + b * ct * st + c * st * st;
+        let q2 = a * st * st - b * ct * st + c * ct * ct;
+        let (r1, r2) = ((-f / q1).sqrt(), (-f / q2).sqrt());
+        let (major, ra, rb) = if r1 >= r2 {
+            ([ct, st], r1, r2)
+        } else {
+            ([-st, ct], r2, r1)
+        };
+        Some(Self {
+            center: [x0 + o[0], y0 + o[1]],
+            major,
+            a: ra,
+            b: rb,
+        })
+    }
+
+    /// (u, v) of a point in the ellipse's own frame, scaled to the unit
+    /// circle.
+    fn unit(&self, p: [f64; 2]) -> (f64, f64) {
+        let (dx, dy) = (p[0] - self.center[0], p[1] - self.center[1]);
+        let u = dx * self.major[0] + dy * self.major[1];
+        let v = -dx * self.major[1] + dy * self.major[0];
+        (u / self.a, v / self.b)
+    }
+}
+
+/// Turning of a run of points about a centre: positive counter-clockwise.
+fn sweep_sign(points: &[[f64; 2]], c: [f64; 2]) -> f64 {
+    points
+        .windows(2)
+        .map(|w| (w[0][0] - c[0]) * (w[1][1] - c[1]) - (w[0][1] - c[1]) * (w[1][0] - c[0]))
+        .sum::<f64>()
+        .signum()
+}
+
+/// Minimum segments of a straight polyline read as a curve.
+const CURVE_MIN_SEGMENTS: usize = 9;
+/// Share of the vertices that must lie within tolerance of the curve.
+const CURVE_INLIERS: f64 = 0.85;
+/// Radial tolerance of an arc through the first, middle and last vertex.
+const ARC_TOLERANCE: f64 = 0.07;
+/// Tolerance of an ellipse through five vertices (in its unit circle).
+const ELLIPSE_TOLERANCE: f64 = 0.015;
+/// An ellipse at least this round is a circle.
+const CIRCLE_RATIO: f64 = 0.96;
+
+/// A joined stroke read as a curve, in drawing coordinates (`points`):
+/// a run of arcs on one circle is an ARC (a CIRCLE when it closes); a
+/// straight polyline of nine or more segments whose vertices lie on a
+/// circular arc an ARC, on an ellipse a CIRCLE (round) or an ELLIPSE (an
+/// elliptical arc when open).
+// ponytail: tolerances fitted to measured samples (glyph outlines, noisy
+// and exact polygons); vertices off the curve are allowed for 15%.
+fn curve_of(points: &[[f64; 2]], bulges: &[f64], closed: bool, z: f64) -> Option<EntityType> {
+    use std::f64::consts::TAU;
+    let n = points.len();
+    let segs = if closed { n } else { n.saturating_sub(1) };
+    if segs == 0 {
+        return None;
+    }
+    let arc = |c: [f64; 2], r: f64, first: [f64; 2], last: [f64; 2], ccw: bool| {
+        let angle = |p: [f64; 2]| (p[1] - c[1]).atan2(p[0] - c[0]).rem_euclid(TAU);
+        let (start, end) = if ccw {
+            (angle(first), angle(last))
+        } else {
+            (angle(last), angle(first))
+        };
+        EntityType::Arc(Arc::from_center_radius_angles(
+            Vector3::new(c[0], c[1], z),
+            r,
+            start,
+            end,
+        ))
+    };
+    // Arcs of one circle, all turning the same way.
+    if bulges[..segs].iter().all(|b| *b != 0.0) {
+        let turn = bulges[0].signum();
+        let arcs: Vec<_> = (0..segs)
+            .map(|i| {
+                crate::entities::common::BulgeArc::from_bulge(
+                    points[i],
+                    points[(i + 1) % n],
+                    bulges[i],
+                )
+            })
+            .collect::<Option<_>>()?;
+        let first = &arcs[0];
+        let same = arcs.iter().zip(&bulges[..segs]).all(|(a, b)| {
+            b.signum() == turn
+                && (a.radius - first.radius).abs() <= first.radius * 1e-4
+                && (a.center[0] - first.center[0]).hypot(a.center[1] - first.center[1])
+                    <= first.radius * 1e-4
+        });
+        if !same || segs < 2 {
+            return None;
+        }
+        return Some(if closed {
+            EntityType::Circle(Circle::from_center_radius(
+                Vector3::new(first.center[0], first.center[1], z),
+                first.radius,
+            ))
+        } else {
+            arc(first.center, first.radius, points[0], points[n - 1], turn > 0.0)
+        });
+    }
+    if bulges.iter().any(|b| *b != 0.0) || segs < CURVE_MIN_SEGMENTS {
+        return None;
+    }
+    let enough = |inliers: usize| inliers as f64 >= CURVE_INLIERS * n as f64;
+    if !closed {
+        if let Some((c, r)) = circle_through(points[0], points[n / 2], points[n - 1]) {
+            let inliers = points
+                .iter()
+                .filter(|p| ((p[0] - c[0]).hypot(p[1] - c[1]) - r).abs() <= ARC_TOLERANCE * r)
+                .count();
+            if enough(inliers) {
+                return Some(arc(c, r, points[0], points[n - 1], sweep_sign(points, c) > 0.0));
+            }
+        }
+    }
+    // Five vertices spread along the run: a fifth of a closed loop apart,
+    // or the ends and quarters of an open one.
+    let step = if closed {
+        (n as f64 / 5.0).round()
+    } else {
+        (n - 1) as f64 / 4.0
+    };
+    let idx: Vec<usize> = (0..5)
+        .map(|k| ((k as f64 * step).round() as usize) % n)
+        .collect();
+    let five = [
+        points[idx[0]],
+        points[idx[1]],
+        points[idx[2]],
+        points[idx[3]],
+        points[idx[4]],
+    ];
+    let e = Conic::through(&five)?;
+    let inliers = points
+        .iter()
+        .filter(|p| {
+            let (u, v) = e.unit(**p);
+            (u.hypot(v) - 1.0).abs() <= ELLIPSE_TOLERANCE
+        })
+        .count();
+    if !enough(inliers) {
+        return None;
+    }
+    if closed && e.b / e.a >= CIRCLE_RATIO {
+        let (c, r) = circle_through(five[0], five[2], five[4])?;
+        return Some(EntityType::Circle(Circle::from_center_radius(
+            Vector3::new(c[0], c[1], z),
+            r,
+        )));
+    }
+    let param = |p: [f64; 2]| {
+        let (u, v) = e.unit(p);
+        v.atan2(u).rem_euclid(TAU)
+    };
+    let (start, mut end) = if closed {
+        let s = param(points[0]);
+        (s, s + TAU)
+    } else if sweep_sign(points, e.center) > 0.0 {
+        (param(points[0]), param(points[n - 1]))
+    } else {
+        (param(points[n - 1]), param(points[0]))
+    };
+    if end <= start {
+        end += TAU;
+    }
+    let mut ellipse = codec::entities::Ellipse::from_center_axes(
+        Vector3::new(e.center[0], e.center[1], z),
+        Vector3::new(e.major[0] * e.a, e.major[1] * e.a, 0.0),
+        e.b / e.a,
+    );
+    ellipse.start_parameter = start;
+    ellipse.end_parameter = end;
+    Some(EntityType::Ellipse(ellipse))
 }
 
 fn same_point(a: [f64; 2], b: [f64; 2]) -> bool {
@@ -722,6 +1255,8 @@ fn join_strokes(strokes: Vec<Stroke>, join: bool) -> Vec<Stroke> {
         }
         out.push(chain);
     }
+    // A chain takes the place of its first stroke.
+    out.sort_by_key(|s| s.order);
     out
 }
 
@@ -729,6 +1264,7 @@ fn join_strokes(strokes: Vec<Stroke>, join: bool) -> Vec<Stroke> {
 fn split_at_arcs(stroke: Stroke) -> Vec<Stroke> {
     let mut out = Vec::new();
     let piece = |points: Vec<[f64; 2]>, bulges: Vec<f64>| Stroke {
+        order: stroke.order,
         layer: stroke.layer.clone(),
         color: stroke.color,
         weight: stroke.weight,
@@ -862,26 +1398,21 @@ pub fn convert(
     let in_area = |p: [f64; 2]| area_local.as_deref().is_none_or(|a| inside(a, p));
 
     let mut result = ImportResult::default();
+    // Layers in the order their first object comes; the colours are settled
+    // once every object is made (see `layer_colours_by_majority`).
     let mut layer_colors: Vec<(String, Color)> = Vec::new();
-    // A layer takes the colour of its first object; objects of that colour
-    // then follow the layer.
     let mut color_on = |layer: &str, color: Color| -> Color {
-        let layer_color = match layer_colors.iter().find(|(n, _)| n == layer) {
-            Some((_, c)) => *c,
-            None => {
-                layer_colors.push((layer.to_string(), color));
-                color
-            }
-        };
-        if color == layer_color {
-            Color::ByLayer
-        } else {
-            color
+        if !layer_colors.iter().any(|(n, _)| n == layer) {
+            layer_colors.push((layer.to_string(), color));
         }
+        color
     };
     let fill_transparency = codec::types::Transparency::from_alpha_value(0x0200_007F);
+    // A mirrored placement turns arcs the other way.
+    let turn = (underlay.x_scale * underlay.y_scale).signum();
     let mut strokes: Vec<Stroke> = Vec::new();
-    let mut curves: Vec<EntityType> = Vec::new();
+    // Circles and splines, by drawing position like the strokes.
+    let mut curves: Vec<(usize, EntityType)> = Vec::new();
 
     for (pdf_layer, page) in content {
         let pdf_layer = pdf_layer.as_deref();
@@ -891,6 +1422,34 @@ pub fn convert(
                     continue;
                 }
                 match (path.stroke, path.fill) {
+                    // Filled and stroked by one operator: the fill, at the
+                    // stroke's weight; curves that cannot bound it are lines
+                    // in the stroke's colour.
+                    (Some((stroke_rgb, width)), Some(rgb)) if settings.fills => {
+                        let layer = naming.layer(pdf_layer, Kind::Fill);
+                        let color = color_on(&layer, color_of(rgb));
+                        let weight = if settings.lineweights {
+                            lineweight_of(width)
+                        } else {
+                            LineWeight::ByLayer
+                        };
+                        let (fills, loose) =
+                            fill_entities(path, settings.hatches, turn, &world2, &world3, z);
+                        for mut entity in fills {
+                            let common = entity.common_mut();
+                            (common.layer, common.color, common.transparency, common.line_weight) =
+                                (layer.clone(), color, fill_transparency, weight);
+                            result.entities.push(entity);
+                        }
+                        let layer = naming.layer(pdf_layer, Kind::Geometry);
+                        let color = color_on(&layer, color_of(stroke_rgb));
+                        for mut entity in loose {
+                            let common = entity.common_mut();
+                            (common.layer, common.color, common.line_weight) =
+                                (layer.clone(), color, weight);
+                            curves.push((strokes.len() + curves.len(), entity));
+                        }
+                    }
                     (Some((rgb, width)), _) => {
                         let layer = naming.layer(pdf_layer, Kind::Geometry);
                         let color = color_on(&layer, color_of(rgb));
@@ -900,6 +1459,7 @@ pub fn convert(
                             LineWeight::ByLayer
                         };
                         for sp in &path.subpaths {
+                            let order = strokes.len() + curves.len();
                             if let Some((c, r)) = as_circle(sp) {
                                 let w = world(c);
                                 let mut circle = EntityType::Circle(Circle::from_center_radius(
@@ -909,55 +1469,68 @@ pub fn convert(
                                 let common = circle.common_mut();
                                 (common.layer, common.color, common.line_weight) =
                                     (layer.clone(), color, weight);
-                                curves.push(circle);
-                            } else if let Some(mut bulges) = sp
-                                .segments
-                                .iter()
-                                .map(|s| match s {
-                                    Segment::Line(..) => Some(0.0),
-                                    cubic => arc_bulge(cubic),
-                                })
-                                .collect::<Option<Vec<f64>>>()
-                            {
-                                let mut points = vec![sp.segments[0].start()];
-                                points.extend(sp.segments.iter().map(|s| s.end()));
-                                if sp.closed && points.len() > 2 {
-                                    points.pop();
-                                } else {
-                                    bulges.push(0.0);
-                                }
-                                let stroke = Stroke {
-                                    layer: layer.clone(),
-                                    color,
-                                    weight,
-                                    points,
-                                    bulges,
-                                    closed: sp.closed,
-                                };
-                                if settings.join || stroke.straight() || stroke.closed {
-                                    strokes.push(stroke);
-                                } else {
-                                    // Join off: each arc apart, straight runs between them.
-                                    strokes.extend(split_at_arcs(stroke));
-                                }
+                                curves.push((order, circle));
                             } else {
-                                let mut spline = EntityType::Spline(spline_of(sp, &world3));
-                                let common = spline.common_mut();
-                                (common.layer, common.color, common.line_weight) =
-                                    (layer.clone(), color, weight);
-                                curves.push(spline);
+                                // Straight and circular runs become polylines;
+                                // each other curve its own one-span SPLINE.
+                                let all_runs = run_strokes(&sp.segments, sp.closed);
+                                for piece in all_runs {
+                                    match piece {
+                                        Piece::Run(points, bulges, closed) => {
+                                            let stroke = Stroke {
+                                                order,
+                                                layer: layer.clone(),
+                                                color,
+                                                weight,
+                                                points,
+                                                bulges,
+                                                closed,
+                                            };
+                                            if settings.join || stroke.straight() || stroke.closed
+                                            {
+                                                strokes.push(stroke);
+                                            } else {
+                                                // Join off: each arc apart, straight runs
+                                                // between them.
+                                                strokes.extend(split_at_arcs(stroke));
+                                            }
+                                        }
+                                        Piece::Curve(seg) => {
+                                            let one = SubPath {
+                                                segments: vec![seg],
+                                                closed: false,
+                                            };
+                                            let mut spline =
+                                                EntityType::Spline(spline_of(&one, &world3));
+                                            let common = spline.common_mut();
+                                            (common.layer, common.color, common.line_weight) =
+                                                (layer.clone(), color, weight);
+                                            curves.push((order, spline));
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
                     (None, Some(rgb)) if settings.fills => {
                         let layer = naming.layer(pdf_layer, Kind::Fill);
                         let color = color_on(&layer, color_of(rgb));
-                        for mut entity in fill_entities(path, settings.hatches, &world2, &world3, z)
-                        {
+                        let (fills, loose) =
+                            fill_entities(path, settings.hatches, turn, &world2, &world3, z);
+                        for mut entity in fills {
                             let common = entity.common_mut();
                             (common.layer, common.color, common.transparency) =
                                 (layer.clone(), color, fill_transparency);
                             result.entities.push(entity);
+                        }
+                        // Curves that cannot bound the fill are lines in its
+                        // colour.
+                        let layer = naming.layer(pdf_layer, Kind::Geometry);
+                        let color = color_on(&layer, color_of(rgb));
+                        for mut entity in loose {
+                            let common = entity.common_mut();
+                            (common.layer, common.color) = (layer.clone(), color);
+                            curves.push((strokes.len() + curves.len(), entity));
                         }
                     }
                     _ => {}
@@ -994,10 +1567,11 @@ pub fn convert(
                 mtext.rotation = text.rotation + underlay.rotation;
                 mtext.style = style;
                 mtext.attachment_point = AttachmentPoint::MiddleLeft;
-                let layer = naming.layer(pdf_layer, Kind::Text);
+                // Text goes to the text layer whatever PDF layer holds it.
+                let layer = naming.layer(None, Kind::Text);
                 mtext.common.color = color_on(&layer, color_of(text.color));
                 mtext.common.layer = layer;
-                result.entities.push(EntityType::MText(mtext));
+                result.entities.push(EntityType::MText(Box::new(mtext)));
             }
         }
 
@@ -1037,13 +1611,36 @@ pub fn convert(
 
     // The joined strokes, then (when asked) dashes read as one dashed line.
     let strokes = join_strokes(strokes, settings.join);
+    // Joined strokes that trace circles, arcs and ellipses become those.
+    let strokes: Vec<Stroke> = strokes
+        .into_iter()
+        .filter_map(|stroke| {
+            let points: Vec<[f64; 2]> = stroke
+                .points
+                .iter()
+                .map(|p| {
+                    let w = world2(*p);
+                    [w.x, w.y]
+                })
+                .collect();
+            let bulges: Vec<f64> = stroke.bulges.iter().map(|b| b * turn).collect();
+            match curve_of(&points, &bulges, stroke.closed, z) {
+                Some(mut curve) => {
+                    let common = curve.common_mut();
+                    (common.layer, common.color, common.line_weight) =
+                        (stroke.layer, stroke.color, stroke.weight);
+                    curves.push((stroke.order, curve));
+                    None
+                }
+                None => Some(stroke),
+            }
+        })
+        .collect();
     let strokes: Vec<(Stroke, Option<f64>)> = if settings.linetypes {
         infer_dashes(strokes)
     } else {
         strokes.into_iter().map(|s| (s, None)).collect()
     };
-    // A mirrored placement turns arcs the other way.
-    let turn = (underlay.x_scale * underlay.y_scale).signum();
     for (stroke, dash) in strokes {
         // A lone arc is an ARC.
         if !stroke.closed && stroke.points.len() == 2 && stroke.bulges[0] != 0.0 {
@@ -1066,7 +1663,7 @@ pub fn convert(
                 );
                 (arc.common.layer, arc.common.color, arc.common.line_weight) =
                     (stroke.layer, stroke.color, stroke.weight);
-                result.entities.push(EntityType::Arc(arc));
+                curves.push((stroke.order, EntityType::Arc(arc)));
                 continue;
             }
         }
@@ -1083,16 +1680,47 @@ pub fn convert(
             pl.common.linetype_scale = dash * scale;
             result.dashed = true;
         }
-        result.entities.push(EntityType::LwPolyline(pl));
+        curves.push((stroke.order, EntityType::LwPolyline(pl)));
     }
-    result.entities.extend(curves);
+    // In drawing order (the sort is stable: a subpath's pieces keep theirs).
+    curves.sort_by_key(|(order, _)| *order);
+    result.entities.extend(curves.into_iter().map(|(_, entity)| entity));
     result.layers = layer_colors;
+    layer_colours_by_majority(&mut result);
     for image in &result.images {
         if !result.layers.iter().any(|(n, _)| *n == image.layer) {
             result.layers.push((image.layer.clone(), Color::Index(7)));
         }
     }
     result
+}
+
+/// Each layer takes the colour most of its objects have (the first such
+/// colour on a tie); those objects then follow the layer.
+fn layer_colours_by_majority(result: &mut ImportResult) {
+    for (layer, layer_color) in &mut result.layers {
+        let mut counts: Vec<(Color, usize)> = Vec::new();
+        for entity in &result.entities {
+            let common = entity.common();
+            if common.layer != *layer {
+                continue;
+            }
+            match counts.iter_mut().find(|(c, _)| *c == common.color) {
+                Some((_, n)) => *n += 1,
+                None => counts.push((common.color, 1)),
+            }
+        }
+        // `max_by_key` keeps the last maximum: search from the back.
+        if let Some((color, _)) = counts.iter().rev().max_by_key(|(_, n)| *n) {
+            *layer_color = *color;
+        }
+        for entity in &mut result.entities {
+            let common = entity.common_mut();
+            if common.layer == *layer && common.color == *layer_color {
+                common.color = Color::ByLayer;
+            }
+        }
+    }
 }
 
 /// One cubic B-spline through a subpath's Bézier control points (lines as
@@ -1134,77 +1762,144 @@ fn spline_of(sp: &SubPath, world3: &dyn Fn([f64; 2]) -> Vector3) -> Spline {
     spline
 }
 
-/// A filled area: a triangle or four-cornered straight loop is a SOLID; any
-/// other loop, and every loop but a triangle when fills become hatches, one
+/// A filled area, and the curves that cannot bound it: a lone triangle or
+/// four-cornered straight loop is a SOLID; other loops (with circular arcs
+/// as bulges), and every loop but a triangle when fills become hatches, one
 /// solid HATCH.
 fn fill_entities(
     path: &PdfPath,
     hatches: bool,
+    turn: f64,
     world2: &dyn Fn([f64; 2]) -> Vector2,
     world3: &dyn Fn([f64; 2]) -> Vector3,
     z: f64,
-) -> Vec<EntityType> {
-    let straight = |sp: &SubPath| sp.segments.iter().all(|s| matches!(s, Segment::Line(..)));
-    let corners = |sp: &SubPath| {
-        let mut pts: Vec<[f64; 2]> = sp.segments.iter().map(|s| s.start()).collect();
-        pts.dedup_by(|a, b| same_point(*a, *b));
-        if pts.len() > 1 && same_point(pts[0], *pts.last().unwrap()) {
-            pts.pop();
+) -> (Vec<EntityType>, Vec<EntityType>) {
+    // Each subpath splits where a curve is not a circular arc (within the
+    // error of the usual four-curve circle): such a curve is its own spline,
+    // a straight one a two-point polyline (the reference cannot bound a fill
+    // with them), and each run of lines and arcs between them is one loop
+    // of the fill.
+    let arc = |seg: &Segment| arc_bulge_within(seg, 5e-4);
+    // A run that goes all round closes on its start; one cut by a curve
+    // ends at its last point. A loop that stays on one point (to the file's
+    // single precision) bounds nothing.
+    let finish = |mut run: Vec<([f64; 2], f64)>, end: Option<[f64; 2]>| {
+        if let Some(e) = end {
+            if !run.first().is_some_and(|(p, _)| same_point(*p, e)) {
+                run.push((e, 0.0));
+            }
         }
-        pts
+        run.dedup_by(|a, b| same_point(a.0, b.0) && a.1 == 0.0 && b.1 == 0.0);
+        if let [(first, _), .., (last, bulge)] = run.as_slice() {
+            if same_point(*first, *last) && *bulge == 0.0 {
+                run.pop();
+            }
+        }
+        let o = run.first().map_or([0.0; 2], |(p, _)| *p);
+        run.iter()
+            .any(|(p, _)| (p[0] - o[0]).hypot(p[1] - o[1]) > 1e-5)
+            .then_some(run)
     };
-    if path.subpaths.len() == 1 && straight(&path.subpaths[0]) {
-        let pts = corners(&path.subpaths[0]);
-        match pts.len() {
-            3 => {
-                return vec![EntityType::Solid(Solid::triangle(
-                    world3(pts[0]),
-                    world3(pts[1]),
-                    world3(pts[2]),
-                ))]
+    let mut loops: Vec<Vec<([f64; 2], f64)>> = Vec::new();
+    let mut curves: Vec<EntityType> = Vec::new();
+    for sp in &path.subpaths {
+        let mut segments = sp.segments.clone();
+        // A fill closes every subpath; the walk starts after its first
+        // curve that cannot bound the fill, so the run through the
+        // subpath's start stays one loop.
+        if let (Some(first), Some(last)) = (segments.first(), segments.last()) {
+            let (first, last) = (first.start(), last.end());
+            if !same_point(first, last) {
+                segments.push(Segment::Line(last, first));
             }
-            4 if !hatches => {
-                // SOLID corners run 1-2-4-3 (the second edge crosses).
-                return vec![EntityType::Solid(Solid::new(
-                    world3(pts[0]),
-                    world3(pts[1]),
-                    world3(pts[3]),
-                    world3(pts[2]),
-                ))];
+        }
+        let cut = |seg: &Segment| matches!(seg, Segment::Cubic(..)) && arc(seg).is_none();
+        if let Some(k) = segments.iter().position(cut) {
+            segments.rotate_left(k + 1);
+        }
+        let mut run: Vec<([f64; 2], f64)> = Vec::new();
+        let mut end: Option<[f64; 2]> = None;
+        for seg in &segments {
+            match seg {
+                Segment::Cubic(a, b, c, d) if cut(seg) => {
+                    loops.extend(finish(std::mem::take(&mut run), end.take()));
+                    let off = |p: &[f64; 2]| {
+                        let (dx, dy) = (d[0] - a[0], d[1] - a[1]);
+                        let cross = (p[0] - a[0]) * dy - (p[1] - a[1]) * dx;
+                        cross.abs() / dx.hypot(dy).max(1e-12)
+                    };
+                    if off(b) <= 1e-9 && off(c) <= 1e-9 {
+                        let mut line = LwPolyline::from_points(vec![world2(*a), world2(*d)]);
+                        line.elevation = z;
+                        curves.push(EntityType::LwPolyline(line));
+                    } else {
+                        let one = SubPath {
+                            segments: vec![seg.clone()],
+                            closed: false,
+                        };
+                        curves.push(EntityType::Spline(spline_of(&one, world3)));
+                    }
+                }
+                _ => {
+                    run.push((seg.start(), arc(seg).unwrap_or(0.0)));
+                    end = Some(seg.end());
+                }
             }
-            _ => {}
+        }
+        loops.extend(finish(run, end));
+    }
+    let straight = |l: &Vec<([f64; 2], f64)>| l.iter().all(|(_, b)| *b == 0.0);
+    if let [only] = loops.as_slice() {
+        if straight(only) {
+            let pts: Vec<[f64; 2]> = only.iter().map(|(p, _)| *p).collect();
+            match pts.len() {
+                3 => {
+                    return (
+                        vec![EntityType::Solid(Solid::triangle(
+                            world3(pts[0]),
+                            world3(pts[1]),
+                            world3(pts[2]),
+                        ))],
+                        curves,
+                    )
+                }
+                4 if !hatches => {
+                    // SOLID corners run 1-2-4-3 (the second edge crosses).
+                    return (
+                        vec![EntityType::Solid(Solid::new(
+                            world3(pts[0]),
+                            world3(pts[1]),
+                            world3(pts[3]),
+                            world3(pts[2]),
+                        ))],
+                        curves,
+                    );
+                }
+                _ => {}
+            }
         }
     }
     let mut hatch = Hatch::solid();
-    for sp in &path.subpaths {
-        let mut ring: Vec<Vector2> = Vec::new();
-        for seg in &sp.segments {
-            let steps = if matches!(seg, Segment::Cubic(..)) {
-                8
-            } else {
-                1
-            };
-            for k in 0..steps {
-                ring.push(world2(bezier(seg, k as f64 / steps as f64)));
-            }
-        }
-        if ring.len() < 3 {
+    for l in &loops {
+        if l.len() < 2 {
             continue;
+        }
+        let mut edge = PolylineEdge::new(Vec::new(), true);
+        for (p, bulge) in l {
+            edge.add_vertex(world2(*p), bulge * turn);
         }
         let mut boundary = BoundaryPath::external();
         boundary.flags.set_polyline(true);
-        boundary
-            .edges
-            .push(BoundaryEdge::Polyline(PolylineEdge::new(ring, true)));
+        boundary.edges.push(BoundaryEdge::Polyline(edge));
         hatch.add_path(boundary);
     }
     if hatch.paths.is_empty() {
-        return Vec::new();
+        return (Vec::new(), curves);
     }
     hatch.elevation = z;
-    vec![EntityType::Hatch(hatch)]
+    (vec![EntityType::Hatch(Box::new(hatch))], curves)
 }
 
 inventory::submit!(crate::command::CommandRegistration {
-    names: &["PDFIMPORT"]
+    names: &["PDFIMPORT", "-PDFIMPORT"]
 });

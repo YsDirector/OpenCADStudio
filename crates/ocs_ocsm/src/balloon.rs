@@ -361,7 +361,7 @@ fn item_text(value: &str, at: (f64, f64), rot: f64, s: f64) -> E {
     // 序号短：行宽给足，避免被按 10 单位折行（同引线）。
     m.rectangle_width = (H_REF * s * 10.0).max(10.0 * s);
     m.attachment_point = AttachmentPoint::BottomCenter;
-    let mut e = E::MText(m);
+    let mut e = E::MText(Box::new(m));
     set_layer(&mut e, LAYER);
     e.common_mut().color = Color::from_index(3);
     e

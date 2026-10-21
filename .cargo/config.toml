@@ -43,3 +43,7 @@ rustflags = [
 # rustc 1.99 can overflow the default 8 MB thread stack while compiling
 # this crate in release on Windows/macOS.
 RUST_MIN_STACK = "67108864"
+# UI tests render through iced_test, which picks wgpu by default. Several
+# test threads opening GPU devices at once crash the driver (SIGSEGV, about
+# every other parallel `cargo test` run); the software renderer is safe.
+ICED_TEST_BACKEND = "tiny-skia"

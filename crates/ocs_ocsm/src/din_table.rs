@@ -557,7 +557,7 @@ fn mtext_ent(value: &str, x: f64, y: f64, height: f64, attach: i16) -> EntityTyp
         _ => AttachmentPoint::MiddleLeft,
     };
     m.common = common_of("6文字层");
-    EntityType::MText(m)
+    EntityType::MText(Box::new(m))
 }
 
 /// 标签/标题 MTEXT 的**内联字宽因子表**（`\W<f>;`；有效字宽 = 样式字宽 0.7 × f）。

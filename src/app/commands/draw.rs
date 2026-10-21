@@ -598,9 +598,13 @@ impl OpenCADStudio {
                 }
             }
 
-            "MEASUREGEOM" => {
+            "MEASUREGEOM" | "MEASURERADIUS" | "MEASUREANGLE" => {
                 use crate::modules::draw::inquiry::measuregeom::MeasureGeomCommand;
-                let new_cmd = MeasureGeomCommand::new();
+                let new_cmd = match cmd {
+                    "MEASURERADIUS" => MeasureGeomCommand::radius(),
+                    "MEASUREANGLE" => MeasureGeomCommand::angle(),
+                    _ => MeasureGeomCommand::new(),
+                };
                 self.command_line.push_info(&new_cmd.prompt());
                 self.tabs[i].active_cmd = Some(Box::new(new_cmd));
             }
@@ -733,6 +737,8 @@ impl OpenCADStudio {
 
             "HATCH" => {
                 use crate::modules::draw::draw::hatch::HatchCommand;
+                let perf_hatch = crate::perf::enabled();
+                let hatch_start = perf_hatch.then(iced::time::Instant::now);
                 let working_plane = if self.tabs[i].editing_model_space() {
                     self.tabs[i].ucs_xform().working_plane()
                 } else {
@@ -749,8 +755,24 @@ impl OpenCADStudio {
                     glam::DVec3::from_array(storage.x_axis),
                     glam::DVec3::from_array(storage.y_axis),
                 );
+                let sources_started = crate::perf::enabled().then(iced::time::Instant::now);
                 let boundary_sources = self.tabs[i].scene.boundary_sources_on_plane(plane, 1.0e-6);
-                let outlines = crate::scene::boundary_faces(&boundary_sources, 1.0e-6);
+                let sources_ms = crate::perf::elapsed_ms(sources_started);
+                let (source_count, segment_count, curve_count) = if perf_hatch {
+                    (
+                        boundary_sources.len(),
+                        boundary_sources
+                            .values()
+                            .map(|source| source.segments.len())
+                            .sum::<usize>(),
+                        boundary_sources
+                            .values()
+                            .map(|source| source.curves.len())
+                            .sum::<usize>(),
+                    )
+                } else {
+                    (0, 0, 0)
+                };
                 let selected = self.tabs[i]
                     .scene
                     .selected_entities()
@@ -774,14 +796,32 @@ impl OpenCADStudio {
                                 self.tabs[i].scene.layer_hidden(&entity.common().layer)
                             })
                     });
-                let mut new_cmd =
-                    HatchCommand::new(outlines, boundary_sources, selected, inherited, plane)
-                        .with_origin(self.tabs[i].scene.document.hatch_origin())
-                        .with_associative(self.hatch_associative);
+                // Hidden preselected boundaries are available for point-pick
+                // hatching (the reference permits off-layer boundaries), but
+                // explicit object selection must not silently turn into a
+                // successful hatch: report that the selected boundary is
+                // hidden instead.
+                let command_sources = if preselected_hidden {
+                    boundary_sources
+                        .into_iter()
+                        .filter(|(handle, _)| !selected.contains(handle))
+                        .collect()
+                } else {
+                    boundary_sources
+                };
+                let mut new_cmd = HatchCommand::new(command_sources, selected, inherited, plane)
+                    .with_origin(self.tabs[i].scene.document.hatch_origin())
+                    .with_associative(self.hatch_associative);
                 new_cmd.inject_selection_hidden(preselected_hidden);
                 self.command_line.push_info(&new_cmd.prompt());
                 self.tabs[i].active_cmd = Some(Box::new(new_cmd));
                 self.refresh_area_preview(i);
+                let total_ms = crate::perf::elapsed_ms(hatch_start);
+                if perf_hatch && total_ms >= 1.0 {
+                    crate::perf_record!(
+                        "[perf] hatch-command-start total={total_ms:.1}ms sources={source_count} segments={segment_count} curves={curve_count} source-query={sources_ms:.1}ms"
+                    );
+                }
             }
 
             "HATCHEDIT" => {
@@ -843,8 +883,7 @@ impl OpenCADStudio {
                 let boundary_sources = self.tabs[i]
                     .scene
                     .boundary_sources_on_plane(crate::command::WorkingPlane::default(), 1.0e-6);
-                let outlines = crate::scene::boundary_faces(&boundary_sources, 1.0e-6);
-                let new_cmd = GradientCommand::new(outlines, boundary_sources);
+                let new_cmd = GradientCommand::new(boundary_sources);
                 self.command_line.push_info(&new_cmd.prompt());
                 self.tabs[i].active_cmd = Some(Box::new(new_cmd));
             }
@@ -945,6 +984,12 @@ impl OpenCADStudio {
             }
 
             "ERASE" => {
+                // A selected Block Editor parameter/action erases like Delete.
+                if self.tabs[i].selected_authoring.is_some()
+                    && self.tabs[i].scene.selected.is_empty()
+                {
+                    return Some(self.update(Message::DeleteSelected));
+                }
                 let handles: Vec<_> = self.tabs[i]
                     .scene
                     .selected_entities()
@@ -2706,6 +2751,16 @@ impl OpenCADStudio {
                     .header
                     .current_text_style_name
                     .clone();
+                // An annotative style's default height is on paper; the editor
+                // and the entity work in the model height of this scale.
+                let height = if crate::scene::annotative::text_style_is_annotative(
+                    &self.tabs[i].scene.document,
+                    &style,
+                ) {
+                    height * self.tabs[i].scene.creation_annotation_multiplier()
+                } else {
+                    height
+                };
                 let new_cmd = MTextCommand::with_defaults(height, style);
                 self.command_line.push_info(&new_cmd.prompt());
                 self.tabs[i].active_cmd = Some(Box::new(new_cmd));

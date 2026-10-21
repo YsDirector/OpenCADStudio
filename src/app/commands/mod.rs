@@ -5,10 +5,14 @@ use iced::Task;
 use std::path::PathBuf;
 
 mod attdef;
+mod attman;
+mod block_cmdline;
 mod blocks;
 mod blockvars;
+mod block_editor_vars;
 mod bvisibility;
 mod count;
+mod dgn_import;
 mod dim;
 pub(crate) mod display;
 mod draw;
@@ -17,16 +21,20 @@ mod fileops;
 mod inquiry;
 mod layerprops;
 mod layers;
+mod model_import;
 mod pc_colormap;
 mod pc_extract;
 mod pdf_dialogs;
 pub(crate) mod pdf_import;
+mod pdf_password;
+mod pdf_shx_text;
 mod pdf_underlay;
-mod refedit;
 mod plotvars;
 mod point_cloud;
+mod refedit;
 pub(crate) mod sheet_set;
 mod styleprops;
+mod ucsfollow;
 mod view;
 mod view_presets;
 mod xclip;
@@ -63,6 +71,7 @@ impl OpenCADStudio {
     /// (the block palette), so they don't inherit the previous command's last
     /// point, snaps or dynamic-input values. (#1525)
     pub(in crate::app) fn reset_command_start_state(&mut self, i: usize) {
+        self.tabs[i].measurement.clear();
         // A command parked behind a transparent zoom / MTP goes with it.
         self.tabs[i].suspended_cmd = None;
         self.tabs[i].transparent_resume = false;
@@ -102,6 +111,25 @@ impl OpenCADStudio {
         let task = self.dispatch_command_inner(cmd, false);
         self.clear_idle_tool_highlight();
         task
+    }
+
+    /// Run a ribbon command. A `;` stands for Enter, as in a menu macro: each
+    /// part answers the running command's prompt, or starts a command when
+    /// none runs (`PDFIMPORT;FILE`).
+    pub(super) fn dispatch_ribbon_command(&mut self, cmd: &str) -> Task<Message> {
+        if !cmd.contains(';') {
+            return self.dispatch_command(cmd);
+        }
+        let i = self.active_tab;
+        let mut tasks = Vec::new();
+        for part in cmd.split(';') {
+            tasks.push(if self.tabs[i].active_cmd.is_some() {
+                self.feed_active_cmd(part)
+            } else {
+                self.dispatch_command(part)
+            });
+        }
+        Task::batch(tasks)
     }
 
     /// Turn the ribbon highlight off when the command just dispatched left
@@ -152,6 +180,150 @@ impl OpenCADStudio {
         // command whether it came from typing, a script, or a ribbon action.
         let resolved = self.resolve_alias(cmd);
         let cmd = resolved.as_deref().unwrap_or(cmd);
+        if let Some(task) = self.dispatch_block_editor_vars(cmd, i) {
+            return task;
+        }
+        if cmd.trim_start_matches(['_', '.']) == "BCYCLEORDER" {
+            return self.open_block_cycle_order();
+        }
+        let verb = cmd
+            .split([' ', ':'])
+            .next()
+            .unwrap_or(cmd)
+            .trim_start_matches(['_', '.']);
+        if self.block_editor_preferences.locked
+            && matches!(verb, "BEDIT" | "BEDIT_BEGIN" | "BEDIT_OPEN" | "BEDIT_NEW")
+        {
+            self.command_line.push_error(
+                crate::t!("The Block Editor is locked by BLOCKEDITLOCK.").as_ref(),
+            );
+            return Task::none();
+        }
+        if cmd == "BACTIONSET" {
+            if let Some(error) = self.action_set_error() {
+                self.command_line.push_error(crate::t!(error).as_ref());
+                return Task::none();
+            }
+        }
+        if cmd == "BASSOCIATE" {
+            if let Some(error)=self.action_association_error() {
+                self.command_line.push_error(crate::t!(error).as_ref());
+                return Task::none();
+            }
+        }
+        if cmd == "BACTIONBAR" || cmd.starts_with("BACTIONBAR ") {
+            if let Some(error)=self.action_bar_error() {
+                self.command_line.push_error(crate::t!(error).as_ref());
+                return Task::none();
+            }
+        }
+        if self.block_editor_preferences.action_bars && self.tabs[i].active_block_edit_session().is_some()
+            && matches!(verb,"BACTIONSET"|"BASSOCIATE"|"BLOOKUPTABLE") {
+            self.command_line.push_error(crate::t!("Use the action bar to edit this action, or set BACTIONBARMODE to 0.").as_ref());
+            return Task::none();
+        }
+        if matches!(
+            cmd.split(' ').next(),
+            Some("BACTION" | "BACTIONTOOL" | "BARRAY")
+        ) {
+            let args = if cmd == "BARRAY" || cmd.starts_with("BARRAY ") {
+                "ARRAY"
+            } else {
+                cmd.split_once(' ').map_or("", |(_, a)| a.trim())
+            };
+            if !args.is_empty() && crate::scene::block_actions::Kind::parse(args).is_none() {
+                self.command_line.push_error(
+                    crate::t!(
+                        "Supported actions: Move, Scale, Stretch, Polar Stretch, Rotate, Flip, Array. Other action types are not wired yet."
+                    )
+                    .as_ref(),
+                );
+                return Task::none();
+            }
+            if let Some(error) = self.action_error(crate::scene::block_actions::Kind::parse(args)) {
+                self.command_line.push_error(crate::t!(error).as_ref());
+                return Task::none();
+            }
+        }
+        if cmd == "BPARAMETER" || cmd.starts_with("BPARAMETER ") {
+            if let Some(error) =
+                self.parameter_placement_error(cmd.strip_prefix("BPARAMETER").unwrap().trim())
+            {
+                self.command_line.push_error(crate::t!(error).as_ref());
+                return Task::none();
+            }
+        }
+        if cmd == "BLOOKUPTABLE" || cmd.starts_with("BLOOKUPTABLE ") {
+            if let Some(error) = self.lookup_table_error() {
+                self.command_line.push_error(crate::t!(error).as_ref());
+                return Task::none();
+            }
+        }
+        if cmd == "BTABLE" || cmd == "BPROPERTIESTABLE" || cmd.starts_with("BPROPERTIESTABLE ") {
+            if let Some(error) = self.properties_table_error() {
+                self.command_line.push_error(crate::t!(error).as_ref());
+                return Task::none();
+            }
+        }
+        if matches!(cmd, "RESETBLOCK" | "RESETBLOCK APPLY")
+            && self.tabs[i].active_block_edit_session().is_some()
+        {
+            self.command_line.push_error(
+                crate::t!("RESETBLOCK is not available inside the Block Editor.").as_ref(),
+            );
+            return Task::none();
+        }
+        if self.tabs[i].block_test.is_some() {
+            let name = cmd.split([' ', ':']).next().unwrap_or(cmd);
+            if matches!(
+                name,
+                "BEDIT"
+                    | "BEDIT_BEGIN"
+                    | "BEDIT_OPEN"
+                    | "REFEDIT"
+                    | "REFEDIT_BEGIN"
+                    | "BSAVE"
+                    | "BSAVEAS"
+                    | "SAVE"
+                    | "QSAVE"
+                    | "SAVEAS"
+                    | "SAVEALL"
+                    | "WBLOCK"
+                    | "EXPORT"
+                    | "ETRANSMIT"
+                    | "ARCHIVE"
+            ) {
+                self.command_line.push_error(
+                    crate::t!("Close Test Block before saving or opening another block editor.")
+                        .as_ref(),
+                );
+                return Task::none();
+            }
+        }
+        // V7 (reference check): inside a block editor session a set of
+        // commands is refused outright. The hook sits after alias resolution
+        // and before the transparent split and the running-command teardown,
+        // so a rejected command leaves whatever is running untouched.
+        if self.tabs[i].active_block_edit.is_some() {
+            let name = cmd.split([' ', ':']).next().unwrap_or(cmd);
+            if matches!(
+                name,
+                "LAYOUT"
+                    | "VPORTS"
+                    | "MVIEW"
+                    | "WBLOCK"
+                    | "PURGE"
+                    | "RENAME"
+                    | "REFEDIT"
+                    | "REFEDIT_BEGIN"
+                    | "PLOT"
+            ) {
+                self.command_line.push_error(
+                    crate::tf!("{} command not allowed in block editor", name).as_ref(),
+                );
+                return Task::none();
+            }
+        }
         if is_spacemouse_command(cmd) {
             return self.run_action(cmd);
         }
@@ -196,6 +368,9 @@ impl OpenCADStudio {
         }
         // Cancel any running command before starting a new one.
         if self.tabs[i].active_cmd.is_some() {
+            self.tabs[i].pending_parameter_set_follow_up = None;
+            self.tabs[i].pending_xy_box_set = None;
+            self.tabs[i].pending_action_pair = None;
             self.tabs[i].scene.clear_preview_wire();
             self.tabs[i].active_cmd = None;
             // Interrupting an ADDSELECTED draw with another command reverts its
@@ -297,6 +472,9 @@ impl OpenCADStudio {
     /// `finish_dispatch`), or `None` to defer to the next — equivalent to one
     /// sequential `match` over all arms.
     fn dispatch_families(&mut self, cmd: &str, i: usize) -> Option<Task<Message>> {
+        if let Some(t) = self.dispatch_ucsfollow(cmd, i) {
+            return Some(t);
+        }
         if let Some(t) = self.dispatch_fileops(cmd, i) {
             return Some(t);
         }
@@ -306,7 +484,16 @@ impl OpenCADStudio {
         if let Some(t) = self.dispatch_xref_attach(cmd, i) {
             return Some(t);
         }
+        if let Some(t) = self.dispatch_import(cmd, i) {
+            return Some(t);
+        }
+        if let Some(t) = self.dispatch_model_import(cmd, i) {
+            return Some(t);
+        }
         if let Some(t) = self.dispatch_bvisibility(cmd, i) {
+            return Some(t);
+        }
+        if let Some(t) = self.dispatch_block_cmdline(cmd, i) {
             return Some(t);
         }
         if let Some(t) = self.dispatch_blocks(cmd, i) {
@@ -414,7 +601,15 @@ pub fn is_transparent(cmd: &str) -> bool {
     is_spacemouse_command(cmd)
         || matches!(
             cmd,
-            "ORTHO" | "GRID" | "SNAP" | "POLAR" | "OSNAP" | "DSETTINGS"
+            "ORTHO"
+                | "GRID"
+                | "SNAP"
+                | "POLAR"
+                | "OSNAP"
+                | "DSETTINGS"
+                | "BAUTHORPALETTE"
+                | "BAUTHORPALETTECLOSE"
+                | "PARAMETERSCLOSE"
         )
 }
 
@@ -475,10 +670,18 @@ inventory::submit!(crate::command::CommandRegistration {
         // Drafting-aid / display toggles + customization entry points wired in the
         // dispatch families (no interactive command module of their own).
         "ALIASEDIT",
+        // Implemented command-line block forms must also validate in ALIASEDIT.
+        "-BLOCK",
+        "-BMAKE",
+        "-WBLOCK",
+        "-WB",
+        "-ATTEDIT",
         "CLEANSCREEN",
         "CUI",
         "DSETTINGS",
         "PARAMETERS",
+        "PARAMETERSCLOSE",
+        "BTABLE",
         "GRID",
         "GRAPHICATTRIBUTES",
         "ISODRAFT",
@@ -555,6 +758,8 @@ inventory::submit!(crate::command::CommandRegistration {
         "INSNAME",
         "ATTMAN",
         "BATTMAN",
+        "-BEDIT",
+        "INSBASE",
         // Drawing-content overview.
         "ADCENTER",
         "CONTENTBROWSER",
@@ -659,6 +864,7 @@ inventory::submit!(crate::command::CommandRegistration {
         "SHORTCUTMENUDURATION",
         "CURSORSIZE",
         "PICKBOX",
+        "APERTURE",
         "CURSORTYPE",
         "SNAPANG",
         "ATTREQ",
@@ -669,6 +875,7 @@ inventory::submit!(crate::command::CommandRegistration {
         "REGENMODE",
         "BLIPMODE",
         "SPLFRAME",
+        "CAMERADISPLAY",
         "DELOBJ",
         "PLINEGEN",
         "PSLTSCALE",
@@ -725,13 +932,24 @@ inventory::submit!(crate::command::CommandRegistration {
         "UOSNAP",
         "FIELDDISPLAY",
         "FILEDIA",
+        "TRIMEXTENDMODE",
+        "SELECTIONCYCLING",
+        "UCSDETECT",
         "SURFACEASSOCIATIVITY",
+        "DGNIMPORTMODE",
         "LAYOUTCREATEVIEWPORT",
+        "TXT2MTXTCOMBINEMTEXT",
+        "TXT2MTXTTEXTORDER",
+        "TXT2MTXTWORDWRAP",
+        "TXT2MTXTLINESPACING",
         "FIELDEVAL",
         "PDFIMPORTMODE",
         "PDFIMPORTFILTER",
         "PDFIMPORTLAYERS",
         "PDFIMPORTIMAGEPATH",
+        "PDFSHXLAYER",
+        "PDFSHXBESTFONT",
+        "PDFSHXTEXTSETTINGS",
         "XDWGFADECTL",
         "POINTCLOUDCLIPFRAME",
         "POINTCLOUDDENSITY",
@@ -878,6 +1096,11 @@ inventory::submit!(crate::command::CommandRegistration {
         "NEW",
         "QNEW",
         "OBJIMPORT",
+        "IMPORT",
+        "ACISIN",
+        "WMFIN",
+        "DGNIMPORT",
+        "-DGNIMPORT",
         "OPEN",
         "ORTHO",
         "P",
@@ -939,6 +1162,8 @@ inventory::submit!(crate::command::CommandRegistration {
         "STYLE",
         "STYLESMANAGER",
         "TABLESTYLE",
+        "BAUTHORPALETTE",
+        "BAUTHORPALETTECLOSE",
         "TOOLPALETTES",
         "TP",
         "TS",

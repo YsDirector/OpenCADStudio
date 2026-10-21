@@ -494,6 +494,38 @@ pub struct LeaderParams {
     pub shoulder_len: Option<f64>,
 }
 
+/// 形位公差语义预检字段：把“被测要素 → 特征项目 → 公差带 → 基准自由度 → TED/投影高度”
+/// 从渲染字符串中分离出来。空字段不替用户猜测，严格入口会报 `INPUT_CONTRADICTION`。
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct GdtSemantic {
+    /// 被测要素：surface / axis / median_plane / derived_axis …。
+    pub target: String,
+    /// 特征项目的工程语义（例如 position / coaxiality / runout）。
+    pub feature: String,
+    /// 公差带：cylindrical / two_parallel_planes / radial_between_circles …。
+    pub zone: String,
+    /// 基准体系自由度，例如 `A:2,B:1`；不接受只写 A/B 不写自由度。
+    pub datum_dof: String,
+    /// TED/基本尺寸；没有 TED 时必须显式写 `none`/`not_applicable`。
+    pub ted: String,
+    /// 投影公差带高度；没有投影要求时必须显式写 `none`/`not_applicable`。
+    pub projection_height: String,
+    /// 基准几何关系：orthogonal / parallel / independent …。
+    pub datum_relation: String,
+}
+
+impl GdtSemantic {
+    pub fn is_empty(&self) -> bool {
+        self.target.is_empty()
+            && self.feature.is_empty()
+            && self.zone.is_empty()
+            && self.datum_dof.is_empty()
+            && self.ted.is_empty()
+            && self.projection_height.is_empty()
+            && self.datum_relation.is_empty()
+    }
+}
+
 /// 形位公差单行：符号 + ⌀ + 公差值 + 修饰符(ⓂⓁⓅⓈ) + 基准1/2/3。
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct GdtRow {
@@ -504,18 +536,22 @@ pub struct GdtRow {
     pub d1: String,
     pub d2: String,
     pub d3: String,
+    /// 仅第一行使用：结构化语义预检字段；其余行可为空。
+    pub semantic: Option<GdtSemantic>,
 }
 
 impl GdtRow {
-    /// 该行是否有可渲染内容（符号/公差/基准/修饰符）。
+    /// 该行是否有可渲染内容（符号/公差/基准/修饰符/语义）。
     pub fn is_empty(&self) -> bool {
         self.sym.is_empty() && self.tol.is_empty() && self.mods.is_empty()
             && self.d1.is_empty() && self.d2.is_empty() && self.d3.is_empty()
+            && self.semantic.as_ref().is_none_or(GdtSemantic::is_empty)
     }
 }
 
-/// 解析多行形位公差 URL 参数（`rows=sym,dia,tol,mods,d1,d2,d3;...`）。
-/// dia/mods 为修饰符相关；每行 7 个字段，行内逗号分隔、行间分号。
+/// 解析多行形位公差 URL 参数。
+/// 基本前 7 字段仍为 `sym,dia,tol,mods,d1,d2,d3`；可选追加
+/// `target,feature,zone,datum_dof,ted,projection_height,datum_relation`。
 fn parse_gdt_rows(v: &str) -> Vec<GdtRow> {
     let mut rows = Vec::new();
     for seg in v.split(';').filter(|s| !s.is_empty()) {
@@ -527,7 +563,21 @@ fn parse_gdt_rows(v: &str) -> Vec<GdtRow> {
         let d1 = f.next().unwrap_or("").to_string();
         let d2 = f.next().unwrap_or("").to_string();
         let d3 = f.next().unwrap_or("").to_string();
-        let row = GdtRow { sym, dia, tol, mods, d1, d2, d3 };
+        let semantic_fields: Vec<String> = f.map(str::to_string).collect();
+        let semantic = if semantic_fields.iter().any(|s| !s.is_empty()) {
+            Some(GdtSemantic {
+                target: semantic_fields.first().cloned().unwrap_or_default(),
+                feature: semantic_fields.get(1).cloned().unwrap_or_default(),
+                zone: semantic_fields.get(2).cloned().unwrap_or_default(),
+                datum_dof: semantic_fields.get(3).cloned().unwrap_or_default(),
+                ted: semantic_fields.get(4).cloned().unwrap_or_default(),
+                projection_height: semantic_fields.get(5).cloned().unwrap_or_default(),
+                datum_relation: semantic_fields.get(6).cloned().unwrap_or_default(),
+            })
+        } else {
+            None
+        };
+        let row = GdtRow { sym, dia, tol, mods, d1, d2, d3, semantic };
         if !row.is_empty() {
             rows.push(row);
         }
@@ -650,6 +700,13 @@ impl GuideParams {
         let mut gdt_d2 = None;
         let mut gdt_d3 = None;
         let mut gdt_rows: Vec<GdtRow> = Vec::new();
+        let mut gdt_target = String::new();
+        let mut gdt_feature = String::new();
+        let mut gdt_zone = String::new();
+        let mut gdt_datum_dof = String::new();
+        let mut gdt_ted = String::new();
+        let mut gdt_projection_height = String::new();
+        let mut gdt_datum_relation = String::new();
         let mut gdt_top = None;
         let mut gdt_bot = None;
         let mut detail_scale = 2.0;
@@ -708,6 +765,14 @@ impl GuideParams {
                 "rows" => {
                     gdt_rows = parse_gdt_rows(&v);
                 }
+                // 形位公差语义预检字段（短键 + 长键都接受）。
+                "target" | "gdt_target" => gdt_target = v,
+                "feature" | "gdt_feature" => gdt_feature = v,
+                "zone" | "gdt_zone" => gdt_zone = v,
+                "dof" | "datum_dof" => gdt_datum_dof = v,
+                "ted" | "basic" => gdt_ted = v,
+                "proj" | "projection" | "projection_height" => gdt_projection_height = v,
+                "rel" | "datum_relation" => gdt_datum_relation = v,
                 "top" => gdt_top = (!v.is_empty()).then_some(v),
                 "bot" => gdt_bot = (!v.is_empty()).then_some(v),
                 "s" => detail_scale = v.parse::<f64>().ok().filter(|s| *s > 0.0).unwrap_or(2.0),
@@ -803,6 +868,32 @@ impl GuideParams {
         weld.method_upper = method_u.unwrap_or_else(|| method_all.clone());
         weld.method_lower = method_l.unwrap_or(method_all);
 
+        let semantic = GdtSemantic {
+            target: gdt_target,
+            feature: gdt_feature,
+            zone: gdt_zone,
+            datum_dof: gdt_datum_dof,
+            ted: gdt_ted,
+            projection_height: gdt_projection_height,
+            datum_relation: gdt_datum_relation,
+        };
+        if !semantic.is_empty() {
+            if let Some(first) = gdt_rows.first_mut() {
+                first.semantic = Some(semantic);
+            } else {
+                gdt_rows.push(GdtRow {
+                    sym: gdt_sym.clone().unwrap_or_default(),
+                    dia: gdt_dia,
+                    tol: gdt_tol.clone().unwrap_or_default(),
+                    mods: String::new(),
+                    d1: gdt_d1.clone().unwrap_or_default(),
+                    d2: gdt_d2.clone().unwrap_or_default(),
+                    d3: gdt_d3.clone().unwrap_or_default(),
+                    semantic: Some(semantic),
+                });
+            }
+        }
+
         Some(GuideParams {
             guide_type,
             sub,
@@ -857,7 +948,16 @@ impl GuideParams {
             d1: self.gdt_d1.clone().unwrap_or_default(),
             d2: self.gdt_d2.clone().unwrap_or_default(),
             d3: self.gdt_d3.clone().unwrap_or_default(),
+            semantic: None,
         }
+    }
+
+    /// 当前 FCF 的结构化语义（多行时取第一行）。
+    pub fn gdt_semantic(&self) -> Option<GdtSemantic> {
+        self.gdt_rows
+            .iter()
+            .find(|row| !row.is_empty())
+            .and_then(|row| row.semantic.clone())
     }
 
     /// 形位公差有效行：优先 gdt_rows（过滤空行）；否则单行字段合成一行。
@@ -979,8 +1079,8 @@ impl GuideParams {
                 }
             }
         }
-        // 多行形位公差：rows=sym,dia,tol,mods,d1,d2,d3;... 仅当存在多行时输出（单行走上面的单字段）。
-        if self.gdt_rows.len() > 1 {
+        // 多行形位公差：rows=sym,dia,tol,mods,d1,d2,d3;...；带结构化语义的单行也必须保留。
+        if self.gdt_rows.len() > 1 || self.gdt_rows.iter().any(|r| r.semantic.is_some()) {
             let rows = self
                 .gdt_rows
                 .iter()
@@ -999,6 +1099,21 @@ impl GuideParams {
                 .join(";");
             if !rows.is_empty() {
                 q.push(format!("rows={}", percent_encode(&rows)));
+            }
+        }
+        if let Some(s) = self.gdt_semantic() {
+            for (key, value) in [
+                ("target", s.target),
+                ("feature", s.feature),
+                ("zone", s.zone),
+                ("dof", s.datum_dof),
+                ("ted", s.ted),
+                ("proj", s.projection_height),
+                ("rel", s.datum_relation),
+            ] {
+                if !value.is_empty() {
+                    q.push(format!("{key}={}", percent_encode(&value)));
+                }
             }
         }
         // 形位公差顶部/底部注释（FCF 框上方/下方）。
@@ -1274,6 +1389,23 @@ mod tests {
             GuideParams::from_url("http://x/DIM/TOL/0").unwrap().guide_type,
             GT::Tolerance
         );
+    }
+
+    #[test]
+    fn parse_tolerance_structured_semantic_roundtrip() {
+        let p = GuideParams::from_url(
+            "http://x/DIM/TOLERANCE/0?gdt=j&dia=1&gtol=0.05&d1=A&d2=B&target=axis&feature=position&zone=cylindrical&dof=A%3A2%2CB%3A1&ted=none&proj=none&rel=primary-secondary",
+        )
+        .unwrap();
+        let semantic = p.gdt_semantic().expect("结构化 GDT 语义");
+        assert_eq!(semantic.target, "axis");
+        assert_eq!(semantic.feature, "position");
+        assert_eq!(semantic.zone, "cylindrical");
+        assert_eq!(semantic.datum_dof, "A:2,B:1");
+        assert_eq!(semantic.ted, "none");
+        assert_eq!(semantic.projection_height, "none");
+        let back = GuideParams::from_url(&p.to_url(23751)).unwrap();
+        assert_eq!(back.gdt_semantic(), Some(semantic));
     }
 
     #[test]

@@ -182,6 +182,13 @@ pub struct SelectionEntity {
     pub surface_area: Option<f64>,
 }
 
+/// Live preview shown while a selection-gathering command hovers a target.
+#[derive(Default)]
+pub struct SelectionHoverPreview {
+    pub wires: Vec<WireModel>,
+    pub hatches: Vec<HatchModel>,
+}
+
 /// Association source with an optional sub-entity marker.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct DimensionAssociationSource {
@@ -1514,6 +1521,94 @@ impl DimensionPreview {
 /// Returned by every `CadCommand` method to tell main.rs what to do.
 #[allow(dead_code)]
 pub enum CmdResult {
+    SetBlockActionBars {
+        document: u64,
+        definition: Handle,
+        mode: crate::modules::block_editor::action_bar::Mode,
+        parameters: Vec<Handle>,
+    },
+    AssociateBlockAction {
+        document: u64,
+        definition: Handle,
+        action: Handle,
+        expected: Box<codec::objects::ObjectType>,
+        parameter: Handle,
+        key_point: Option<crate::scene::block_actions::XyKeyPoint>,
+    },
+    EditBlockActionSet {
+        document: u64,
+        definition: Handle,
+        action: Handle,
+        expected: Box<codec::objects::ObjectType>,
+        targets: Vec<Handle>,
+        frame: Option<Vec<DVec3>>,
+        rotate_only: Option<Vec<Handle>>,
+    },
+    EditBlockAuthoring {
+        document: u64,
+        definition: Handle,
+        handle: Handle,
+        part: crate::scene::block_authoring::edit::Part,
+        position: DVec3,
+    },
+    PlaceBlockAction {
+        document: u64,
+        definition: Handle,
+        kind: crate::scene::block_actions::Kind,
+        parameter: Handle,
+        xy_key_point: Option<crate::scene::block_actions::XyKeyPoint>,
+        targets: Vec<Handle>,
+        location: DVec3,
+        frame: Option<Vec<DVec3>>,
+        array_offsets: Option<(f64, f64)>,
+        displacement_overrides: Option<(f64, f64)>,
+        rotate_only: Vec<Handle>,
+    },
+    EvaluateBlockParameter {
+        insert: Option<Handle>,
+        document: u64,
+        definition: Handle,
+        parameter: Handle,
+        value: crate::scene::block_actions::Value,
+    },
+    /// Place or relocate a Basepoint, or place a Lookup parameter.
+    PlaceBlockSingleParameter {
+        document_id: u64,
+        definition: Handle,
+        kind: crate::modules::block_editor::single_parameter::Kind,
+        location: DVec3,
+    },
+    /// Place a native Rotation, Alignment or Flip parameter.
+    PlaceBlockOrientationParameter {
+        document_id: u64,
+        definition: Handle,
+        kind: crate::scene::block_orientation_parameter::Kind,
+        base: DVec3,
+        end: DVec3,
+        reference: DVec3,
+    },
+    /// Place a native two-point parameter after its base, end and label picks.
+    PlaceBlockDistanceParameter {
+        document_id: u64,
+        definition: Handle,
+        kind: crate::scene::block_distance_parameter::Kind,
+        base: DVec3,
+        end: DVec3,
+        label: DVec3,
+    },
+    /// Place a native Point parameter after both authoring picks complete.
+    PlaceBlockPointParameter {
+        document_id: u64,
+        definition: Handle,
+        location: DVec3,
+        label: DVec3,
+    },
+    /// Place the visibility parameter in the definition that requested it.
+    PlaceBlockVisibilityParameter {
+        document_id: u64,
+        definition: Handle,
+        location: DVec3,
+    },
     /// Return the suspended filter after a read-only sample pick or cancellation.
     QSelectSample {
         state: Box<crate::app::QSelectState>,
@@ -1635,6 +1730,21 @@ pub enum CmdResult {
     },
     /// Open the PDF Import Settings dialog; the command keeps its prompt.
     OpenPdfImportSettings,
+    /// Ask for the password of an encrypted PDF typed at a file prompt; the
+    /// command keeps its prompt and gets `input` again once the file is
+    /// unlocked.
+    PdfPassword {
+        path: String,
+        input: String,
+        stage: crate::scene::model::pdf_password::Stage,
+        /// A password supplied earlier opened the document but not its
+        /// restrictions.
+        remembered: bool,
+        /// Attaching: document access is enough and cancelling prints that
+        /// the file is encrypted. Importing needs owner access and asks
+        /// again silently.
+        attach: bool,
+    },
     /// Import a page of a file (PDFIMPORT File); ends the command.
     PdfImportFile(crate::modules::insert::pdf_import::PdfFileImport),
     /// Attach a point cloud: the host creates or reuses its definition,
@@ -1812,6 +1922,9 @@ pub enum CmdResult {
         second: crate::scene::parametric_constraints::ParametricRef,
         label: &'static str,
     },
+    /// Opens the Text to MText Settings dialog from TXT2MTXT's selection
+    /// prompt; the command keeps its prompt.
+    OpenTxt2MtxtSettings,
     /// Opens the Auto Constrain settings dialog from the selection prompt.
     OpenAutoConstrainSettings,
     /// Adds an ordered Coincident relation.  Point/point selections create a
@@ -2129,6 +2242,11 @@ pub enum CmdResult {
         handles: Vec<Handle>,
         /// Every crossing window gathered so far.
         windows: Vec<(DVec3, DVec3)>,
+        /// Previously selected vertices removed with Shift+click or Shift+window.
+        excluded_points: Vec<(Handle, DVec3)>,
+        /// A Shift+window excludes points inside this area without adding a
+        /// new crossing window or subtracting whole entities.
+        subtract_window: Option<(DVec3, DVec3)>,
     },
     /// Stretch entities: move only vertices/endpoints inside any gathered
     /// crossing window.
@@ -2136,6 +2254,8 @@ pub enum CmdResult {
         handles: Vec<Handle>,
         /// Independent crossing windows that define the points to move.
         windows: Vec<(DVec3, DVec3)>,
+        /// Vertices explicitly removed from this operation using Shift+click.
+        excluded_points: Vec<(Handle, DVec3)>,
         /// Translation vector applied once to every selected point.
         delta: DVec3,
     },
@@ -2269,6 +2389,8 @@ pub enum CmdResult {
     SetTexteditMode(bool),
     /// Return a resolved point back to a suspended parent command (e.g. MTP / M2P).
     ReturnPoint(DVec3),
+    /// Import a DGN model (DGNIMPORT); ends the command.
+    DgnImport(crate::modules::insert::dgn_import::DgnImportRequest),
 }
 
 /// What kind of value the active command is currently asking for. Drives
@@ -2602,6 +2724,17 @@ pub trait CadCommand: Send {
     /// during TRIM and trims during EXTEND, #336). Default no-op.
     fn set_shift(&mut self, _shift: bool) {}
 
+    /// Remove one selected vertex in STRETCH's crossing-window collection stage.
+    /// Other commands keep the normal Shift+grip behavior.
+    fn remove_stretch_point(&mut self, _handle: Handle, _world: DVec3) -> bool {
+        false
+    }
+
+    /// Consume the matching release after STRETCH removed a selected grip.
+    fn consume_stretch_remove_release(&mut self) -> bool {
+        false
+    }
+
     /// Constrain the cursor to a construction axis for this step.
     fn cursor_axis(&self) -> Option<(DVec3, DVec3)> {
         None
@@ -2806,7 +2939,8 @@ pub trait CadCommand: Send {
         vec![]
     }
 
-    /// Message when `resolve_object_pick` returns none on click.
+    /// Message when `resolve_object_pick` returns none on click; an empty one
+    /// passes the click to `on_point` instead.
     fn object_pick_miss_message(&self) -> &'static str {
         "No object near click."
     }
@@ -2840,18 +2974,49 @@ pub trait CadCommand: Send {
     /// their own results can be hovered and picked next. (#673)
     fn on_entities_committed(&mut self, _entities: &[codec::EntityType]) {}
 
+    /// Batch counterpart of `on_entity_replaced` for `ReplaceManyContinue`.
+    /// The default forwards each pair; commands with derived caches override
+    /// it to rebuild once per batch.
+    fn on_entities_replaced(&mut self, replacements: &[(Handle, Vec<Handle>)]) {
+        for (old, new_handles) in replacements {
+            self.on_entity_replaced(*old, new_handles);
+        }
+    }
+
     /// Called after a PEDIT operation changed its target.
     fn on_pedit_applied(&mut self) {}
 
     /// Consume a lasso or drag-box gesture while the command is active.
     /// `fence` is the gesture boundary in drawing coordinates; `window` is
-    /// present for rectangular gestures. Returning `Some` prevents the normal
+    /// present for rectangular gestures and `crossing` tells a right-to-left
+    /// box from a left-to-right window. Returning `Some` prevents the normal
     /// selection system from selecting the crossed entities.
     fn on_drag_selection(
         &mut self,
         _fence: &[[f64; 2]],
         _window: Option<([f64; 2], [f64; 2])>,
+        _crossing: bool,
     ) -> Option<CmdResult> {
+        None
+    }
+
+    /// Opt in only for commands with useful, potentially expensive preview
+    /// geometry. Normal selection and other modify commands stay untouched.
+    fn drag_selection_preview_enabled(&self) -> bool {
+        false
+    }
+
+    /// Live preview for a drag box or lasso, before the mouse release commits
+    /// its selection. The host supplies only spatially nearby handles so an
+    /// interactive preview need not scan every entity in a large DWG.
+    /// Returning None retains the command's ordinary hover preview.
+    fn on_drag_selection_preview(
+        &mut self,
+        _fence: &[[f64; 2]],
+        _window: Option<([f64; 2], [f64; 2])>,
+        _crossing: bool,
+        _candidate_handles: &[Handle],
+    ) -> Option<Vec<WireModel>> {
         None
     }
 
@@ -2875,6 +3040,24 @@ pub trait CadCommand: Send {
     }
 
     fn inject_hover_entity(&mut self, _handle: Handle, _entity: EntityType) {}
+
+    /// Preview wires that must survive generic command-preview refreshes such
+    /// as snap-dwell ticks. Transient hover candidates remain supplied by
+    /// `on_hover_entity` on viewport moves.
+    fn persistent_preview_wires(&self) -> Vec<WireModel> {
+        vec![]
+    }
+
+    /// Opt in to transient measurement text; unrelated Measurement users keep
+    /// their existing command-line-only behavior.
+    fn has_measurement_readout(&self) -> bool {
+        false
+    }
+
+    /// Live inquiry text at the same full-precision point as the preview.
+    fn measurement_readout(&self, _cursor: DVec3) -> Option<String> {
+        None
+    }
 
     /// Called on every mouse-move in the viewport.
     /// Return `Some(WireModel)` to update the rubber-band preview, `None` to skip.
@@ -2934,10 +3117,24 @@ pub trait CadCommand: Send {
         self.on_preview_wires(pt)
     }
 
+    /// Entities the host draws as the live preview, tessellated like the
+    /// drawing's own (arcs, text, linetypes and all). Commands whose preview
+    /// changes an entity's shape return edited copies of it here.
+    fn preview_entities(&mut self, _document: &codec::CadDocument, _pt: DVec3) -> Vec<EntityType> {
+        Vec::new()
+    }
+
     /// Source entities replaced by the current live preview. The host removes
     /// these from the resident render until the command commits or cancels.
     /// Commands such as COPY keep their sources visible and use the default.
     fn preview_hidden_handles(&self) -> &[Handle] {
+        &[]
+    }
+
+    /// Original, stationary wires available as discrete snap references while
+    /// a command shows replacement geometry. Never includes the moving preview.
+    /// The default leaves every other command's snapping unchanged.
+    fn preview_original_snap_wires(&self) -> &[WireModel] {
         &[]
     }
 
@@ -3004,8 +3201,40 @@ pub trait CadCommand: Send {
     /// While true, viewport clicks are routed through the normal selection
     /// system (single / box / polygon) instead of the command's point-pick path.
     /// After each completed selection action the host calls `on_selection_complete`.
+    /// A selection command may reveal state-hidden BEDIT members for picking.
+    /// This is a display request only; the document visibility flags stay intact.
+    fn reveals_hidden_block_objects(&self) -> bool {
+        false
+    }
+
+    /// Native parameter being edited, for read-only grip feedback. A missing
+    /// reference denotes the editor's temporary Test Block reference.
+    fn block_parameter_target(&self) -> Option<(Option<codec::Handle>, codec::Handle)> {
+        None
+    }
+
+    /// Advance the insertion anchor on a rising Ctrl key edge.
+    fn cycle_insertion_point(&mut self) -> bool {
+        false
+    }
+
     fn is_selection_gathering(&self) -> bool {
         false
+    }
+
+    /// Enable a lightweight hover pick while gathering entities. Commands can
+    /// return geometry restyled with their pending operation without changing
+    /// the document.
+    fn selection_hover_preview_enabled(&self) -> bool {
+        false
+    }
+
+    fn selection_hover_preview(
+        &self,
+        _scene: &Scene,
+        _hovered: Option<Handle>,
+    ) -> Option<SelectionHoverPreview> {
+        None
     }
 
     fn selection_forces_add(&self) -> bool {
@@ -3267,6 +3496,17 @@ pub fn all_registered_command_names() -> Vec<&'static str> {
 #[cfg(test)]
 mod constraint_registry_tests {
     use super::*;
+
+    #[test]
+    fn default_block_alias_targets_are_registered() {
+        let names = all_registered_command_names();
+        for target in ["-BLOCK", "-WBLOCK", "-ATTEDIT"] {
+            assert!(
+                names.contains(&target),
+                "{target} must validate in ALIASEDIT"
+            );
+        }
+    }
 
     /// Ensures every constraint command remains discoverable by autocomplete
     /// and command listings.

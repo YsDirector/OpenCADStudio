@@ -30,6 +30,19 @@ Walk through the list below item by item (ask a batch at a time, do not dribble;
 
 > These five items are the top-level inputs of the design chain (see §3): **load → preload → number/size/grade of bolts → hole diameter → bearing pressure → torque → material/heat treatment → drawing**.
 
+### 2-A. When the design input contains GD&T: run the semantic pre-check first
+
+For from-scratch design, GD&T is not text to be added at the end. When the input contains geometric tolerances or datums, first read the “semantic pre-checks for GD&T input” section in `08-tolerance-roughness-gdt.md` and build this chain for every FCF:
+
+```text
+measured element → characteristic → tolerance zone → datum role / degrees of freedom → TED/basic dimensions → inspection direction
+```
+
+- Check form, orientation, location, profile and run-out characteristics against their applicable datum rules.
+- Characteristics that require a rotation axis — circular run-out, total run-out, coaxiality, etc. — must not accept “single end face/plane = datum axis”.
+- Position, profile and modifiers are not legal merely because the dialog has an empty cell; if theoretical location, nominal profile, a feature of size or a projection length is missing, return `INPUT_CONTRADICTION` and request the upstream input.
+- Generate geometry only after the pre-check passes. Then read back the datum attachment point, `OCSM_EDIT` `p1/p2` and FCF parameters, and run the same matrix in reverse.
+
 ## 3. The Knowledge Is **Nested Layer by Layer** (each layer: input → output → feedback)
 
 ```

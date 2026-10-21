@@ -286,7 +286,7 @@ fn mtext_ent(value: &str, x: f64, y: f64, h: f64, layer: &str) -> EntityType {
     m.common.layer = layer.to_string();
     m.common.color = Color::ByLayer;
     m.common.linetype = "ByLayer".into();
-    EntityType::MText(m)
+    EntityType::MText(Box::new(m))
 }
 
 /// 值列/公差列的**实体级**字宽压缩（不动全局样式 `OCSM_GB`，只影响本表 ATTRIB）。

@@ -28,7 +28,7 @@ fn fixture() -> (OpenCADStudio, Handle, ViewportFrame) {
     viewport.custom_scale = 0.1;
     viewport.view_direction = Vector3::UNIT_Z;
     viewport.turn_on();
-    let viewport = scene.add_entity(EntityType::Viewport(viewport));
+    let viewport = scene.add_entity(EntityType::Viewport(Box::new(viewport)));
     let frame = scene.viewport_frame(viewport).unwrap();
     scene.document.header.dimension_associativity = 2;
     let i = app.active_tab;
@@ -323,7 +323,7 @@ fn viewport_dimension_linear_aligned_and_radial_object_picks() {
         assert_eq!(
             preview_text(
                 &app,
-                &EntityType::Dimension(dimension(&app.tabs[i].scene.document).clone())
+                &EntityType::Dimension(Box::new(dimension(&app.tabs[i].scene.document).clone()))
             ),
             value,
             "{name}"
@@ -361,7 +361,7 @@ fn viewport_dimension_angular_preserves_angle_without_length_factor() {
     let _ = app.feed_command(StepInput::Point(place));
     let doc = &app.tabs[app.active_tab].scene.document;
     assert_eq!(
-        preview_text(&app, &EntityType::Dimension(dimension(doc).clone())),
+        preview_text(&app, &EntityType::Dimension(Box::new(dimension(doc).clone()))),
         value
     );
     assert!((dimension(doc).measurement() - 90.0).abs() < 1e-5);
@@ -1461,9 +1461,9 @@ fn viewport_dimension_invalid_paths_leave_no_partial_association() {
         Vector3::new(55.0, 60.0, 0.0),
     )));
     for (source, path) in [(model, vec![Handle::new(u64::MAX)]), (leaf, vec![root])] {
-        let dim = scene.add_entity(EntityType::Dimension(Dimension::Aligned(
+        let dim = scene.add_entity(EntityType::Dimension(Box::new(Dimension::Aligned(
             DimensionAligned::new(Vector3::new(50.0, 50.0, 0.0), Vector3::new(55.0, 50.0, 0.0)),
-        )));
+        ))));
         let invalid = AcceptedSnap {
             paper_point: DVec3::new(50.0, 50.0, 0.0),
             model_point: DVec3::ZERO,
@@ -1494,4 +1494,28 @@ fn viewport_dimension_invalid_paths_leave_no_partial_association() {
             vec![(1, crate::scene::ReferenceStatus::Resolved)]
         );
     }
+}
+
+#[test]
+fn layer_state_restored_in_a_viewport_turns_off_only_there() {
+    let (mut app, _, frame) = fixture();
+    let i = app.active_tab;
+    let doc = &mut app.tabs[i].scene.document;
+    let mut red = codec::tables::Layer::new("Red");
+    red.handle = doc.allocate_handle();
+    let _ = doc.layers.add(red);
+    doc.layers.get_mut("Red").unwrap().flags.off = true;
+    doc.capture_layer_state("NO RED", "");
+    doc.layers.get_mut("Red").unwrap().flags.off = false;
+    app.tabs[i].scene.active_viewport = Some(frame.viewport);
+
+    app.restore_layer_state_here(i, "NO RED");
+
+    let doc = &app.tabs[i].scene.document;
+    let red = doc.layers.get("Red").unwrap();
+    assert!(!red.flags.off, "the drawing-wide layer stays on");
+    let Some(EntityType::Viewport(vp)) = doc.get_entity(frame.viewport) else {
+        panic!()
+    };
+    assert!(vp.frozen_layers.contains(&red.handle));
 }

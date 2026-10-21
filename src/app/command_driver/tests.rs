@@ -87,6 +87,94 @@ mod command_replacement_tests {
 }
 
 #[cfg(test)]
+mod trim_extend_history_tests {
+    use super::super::*;
+    use crate::modules::draw::modify::trim::{ExtendCommand, TrimCommand};
+    use codec::entities::Line;
+    use codec::types::Vector3;
+
+    fn add_line(app: &mut OpenCADStudio, a: [f64; 2], b: [f64; 2]) -> Handle {
+        app.tabs[app.active_tab]
+            .scene
+            .add_entity(codec::EntityType::Line(Line::from_points(
+                Vector3::new(a[0], a[1], 0.0),
+                Vector3::new(b[0], b[1], 0.0),
+            )))
+    }
+
+    fn assert_line_exists(app: &OpenCADStudio, a: [f64; 2], b: [f64; 2]) {
+        assert!(
+            app.tabs[app.active_tab]
+                .scene
+                .document
+                .entities()
+                .any(|entity| {
+                    matches!(entity, codec::EntityType::Line(line)
+                if (line.start.x - a[0]).abs() < 1e-9
+                    && (line.start.y - a[1]).abs() < 1e-9
+                    && (line.end.x - b[0]).abs() < 1e-9
+                    && (line.end.y - b[1]).abs() < 1e-9)
+                }),
+            "line from {a:?} to {b:?} should exist"
+        );
+    }
+
+    #[test]
+    fn trim_replacement_survives_undo_and_redo() {
+        let mut app = OpenCADStudio::new_for_test();
+        let _ = app.automation_op(r#"{"op":"new"}"#);
+        let target = add_line(&mut app, [0.0, 0.0], [10.0, 0.0]);
+        let _boundary = add_line(&mut app, [6.0, -2.0], [6.0, 2.0]);
+        let all: Vec<_> = app.tabs[app.active_tab]
+            .scene
+            .document
+            .entities()
+            .cloned()
+            .collect();
+        app.tabs[app.active_tab].active_cmd = Some(Box::new(TrimCommand::new(all)));
+        let result = app.tabs[app.active_tab]
+            .active_cmd
+            .as_mut()
+            .unwrap()
+            .on_entity_pick(target, glam::DVec3::new(8.0, 0.0, 0.0));
+        let _ = app.apply_cmd_result(result);
+        assert_line_exists(&app, [0.0, 0.0], [6.0, 0.0]);
+
+        app.undo_active_tab();
+        assert_line_exists(&app, [0.0, 0.0], [10.0, 0.0]);
+        app.redo_active_tab();
+        assert_line_exists(&app, [0.0, 0.0], [6.0, 0.0]);
+    }
+
+    #[test]
+    fn extend_replacement_survives_undo_and_redo() {
+        let mut app = OpenCADStudio::new_for_test();
+        let _ = app.automation_op(r#"{"op":"new"}"#);
+        let target = add_line(&mut app, [0.0, 0.0], [4.0, 0.0]);
+        let _boundary = add_line(&mut app, [8.0, -2.0], [8.0, 2.0]);
+        let all: Vec<_> = app.tabs[app.active_tab]
+            .scene
+            .document
+            .entities()
+            .cloned()
+            .collect();
+        app.tabs[app.active_tab].active_cmd = Some(Box::new(ExtendCommand::new(all)));
+        let result = app.tabs[app.active_tab]
+            .active_cmd
+            .as_mut()
+            .unwrap()
+            .on_entity_pick(target, glam::DVec3::new(3.5, 0.0, 0.0));
+        let _ = app.apply_cmd_result(result);
+        assert_line_exists(&app, [0.0, 0.0], [8.0, 0.0]);
+
+        app.undo_active_tab();
+        assert_line_exists(&app, [0.0, 0.0], [4.0, 0.0]);
+        app.redo_active_tab();
+        assert_line_exists(&app, [0.0, 0.0], [8.0, 0.0]);
+    }
+}
+
+#[cfg(test)]
 mod parametric_constraint_undo_tests {
     use super::super::*;
     use crate::scene::parametric_constraints::{ConstraintKind, ParametricRef, ParametricScope};
@@ -1318,6 +1406,115 @@ mod bedit_characterization_tests {
         assert!(app.tabs[tab].block_edits.is_empty());
     }
 
+    /// V7 (reference check): while a block editor session is open this
+    /// command set is refused outright with "not allowed in block editor";
+    /// the refusal pushes no undo entry and starts no command.
+    #[test]
+    fn locked_deny_list_refuses_while_session_open() {
+        let mut app = OpenCADStudio::new_for_test();
+        let (insert, _) = setup_block_and_insert(&mut app);
+        let tab = app.active_tab;
+        let _ = app.dispatch_command(&format!("BEDIT_BEGIN:{}", insert.value()));
+        assert!(
+            app.tabs[tab].active_block_edit.is_some(),
+            "setup: BEDIT_BEGIN should open a session"
+        );
+        let undo_depth = app.tabs[tab].history.undo_stack.len();
+        for verb in [
+            "LAYOUT",
+            "VPORTS",
+            "MVIEW",
+            "WBLOCK",
+            "PURGE",
+            "RENAME",
+            "REFEDIT",
+            "REFEDIT_BEGIN",
+            "PLOT",
+        ] {
+            let revision = app.command_line.error_revision;
+            let _ = app.dispatch_command(verb);
+            assert_eq!(
+                app.command_line.error_revision,
+                revision.wrapping_add(1),
+                "{verb} must refuse with a command-line error"
+            );
+            assert!(
+                app.command_line
+                    .last_error
+                    .as_deref()
+                    .unwrap_or_default()
+                    .contains("command not allowed in block editor"),
+                "{verb}: got {:?}",
+                app.command_line.last_error
+            );
+            assert!(
+                app.tabs[tab].active_block_edit.is_some(),
+                "{verb} must keep the session open"
+            );
+            assert!(
+                app.tabs[tab].active_cmd.is_none(),
+                "{verb} must not install a command"
+            );
+            assert_eq!(
+                app.tabs[tab].history.undo_stack.len(),
+                undo_depth,
+                "{verb} must push no undo entry"
+            );
+        }
+    }
+
+    /// Spec 8: a rejected command must not cancel a running command — the
+    /// deny hook sits before the running-command teardown.
+    #[test]
+    fn locked_deny_list_does_not_cancel_a_running_command() {
+        let mut app = OpenCADStudio::new_for_test();
+        let (insert, _) = setup_block_and_insert(&mut app);
+        let tab = app.active_tab;
+        let _ = app.dispatch_command(&format!("BEDIT_BEGIN:{}", insert.value()));
+        assert!(app.tabs[tab].active_block_edit.is_some());
+        let _ = app.dispatch_command("LINE");
+        assert_eq!(
+            app.tabs[tab].active_cmd.as_deref().map(|cmd| cmd.name()),
+            Some("LINE"),
+            "setup: LINE should be running inside the session"
+        );
+        let _ = app.dispatch_command("LAYOUT");
+        assert!(app
+            .command_line
+            .last_error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("command not allowed in block editor"));
+        assert_eq!(
+            app.tabs[tab].active_cmd.as_deref().map(|cmd| cmd.name()),
+            Some("LINE"),
+            "the refused command must leave the running LINE untouched"
+        );
+    }
+
+    /// V7: the reference keeps XREF, NEW, OPEN, SAVEAS and BEDIT available
+    /// inside the editor — the deny list must not touch them.
+    #[test]
+    fn locked_deny_list_leaves_v7_allowed_commands_alone() {
+        for verb in ["XREF", "NEW", "OPEN", "SAVEAS", "BEDIT"] {
+            let mut app = OpenCADStudio::new_for_test();
+            let (insert, _) = setup_block_and_insert(&mut app);
+            let tab = app.active_tab;
+            let _ = app.dispatch_command(&format!("BEDIT_BEGIN:{}", insert.value()));
+            assert!(app.tabs[tab].active_block_edit.is_some());
+            let _ = app.dispatch_command(verb);
+            assert!(
+                !app.command_line
+                    .last_error
+                    .as_deref()
+                    .unwrap_or_default()
+                    .contains("not allowed in block editor"),
+                "{verb} is available in the reference session and must not be denied: {:?}",
+                app.command_line.last_error
+            );
+        }
+    }
+
     // ---- documenting: today's behavior, expected to flip in Phase 1 ----
 
     /// Discard removes local before-images before drawing undo resumes.
@@ -1582,8 +1779,8 @@ mod block_base_point_tests {
             app.block_definition
                 .as_ref()
                 .map(|s| s.base_point_y.as_str()),
-            Some("0.0000"),
-            "a new block still starts at 0.0000"
+            Some("0"),
+            "a new block starts at 0"
         );
 
         let _ = app.update(Message::BlockDefNameSelect("DEF_BASE".to_string()));

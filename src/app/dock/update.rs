@@ -207,6 +207,15 @@ impl OpenCADStudio {
                         Some(HoverPending::Hide)
                             if self.dock_peek.is_some_and(|id| self.dock.auto_hides(id)) =>
                         {
+                            // The edge's hover zone keeps a dropdown inside
+                            // it from reading as a leave; a colour popup can
+                            // still reach past it (or be the Select Color
+                            // window). Keep the panel out until it closes, so
+                            // a pick can still land; then hide unless the
+                            // pointer is back (its re-entry cancels this).
+                            if self.dock_popup_open() {
+                                return self.dock_hover_arm(HoverPending::Hide);
+                            }
                             self.dock_peek = None;
                         }
                         _ => {}
@@ -412,6 +421,17 @@ impl OpenCADStudio {
         })
     }
 
+    /// Whether a popup a pallet opened is showing: a colour dropdown in the
+    /// Layer Manager or Properties, or the Select Color window.
+    fn dock_popup_open(&self) -> bool {
+        let tab = &self.tabs[self.active_tab];
+        tab.layers.color_picker_row.is_some()
+            || tab.properties.color_picker_open
+            || tab.properties.bg_color_picker_open
+            || tab.properties.open_color_field.is_some()
+            || self.color_picker.is_some()
+    }
+
     /// Drop any pending delayed reveal / hide.
     fn dock_hover_cancel(&mut self) {
         self.dock_hover_gen = self.dock_hover_gen.wrapping_add(1);
@@ -435,6 +455,16 @@ impl OpenCADStudio {
     ) -> iced::Task<Message> {
         use crate::ui::dock::{DockDrag, PanelId};
         let mut task = iced::Task::none();
+        if open
+            && id == PanelId::AuthoringPalettes
+            && self.tabs[self.active_tab]
+                .active_block_edit_session()
+                .is_none()
+        {
+            self.command_line
+                .push_error(crate::t!("Open the Block Editor to use Authoring Palettes.").as_ref());
+            return task;
+        }
         if open {
             if !self.dock_panel_visible(id) {
                 match id {
@@ -451,6 +481,12 @@ impl OpenCADStudio {
                     PanelId::Pi => {
                         self.show_pi_panel = true;
                         self.tabs[self.active_tab].pi_panel.ensure_worker();
+                    }
+                    PanelId::AuthoringPalettes => {
+                        self.show_authoring_palettes = true;
+                        self.ribbon.show_authoring_palettes = true;
+                        self.dock_open_at_default(id);
+                        self.save_config();
                     }
                     PanelId::ExternalReferences => {
                         self.show_external_references = true;
@@ -480,6 +516,10 @@ impl OpenCADStudio {
             PanelId::Pi => {
                 self.show_pi_panel = false;
                 self.tabs[self.active_tab].pi_panel.stop_worker();
+            }
+            PanelId::AuthoringPalettes => {
+                self.show_authoring_palettes = false;
+                self.ribbon.show_authoring_palettes = false;
             }
             PanelId::ExternalReferences => self.show_external_references = false,
             PanelId::Browser => self.show_browser = false,
@@ -561,13 +601,22 @@ impl OpenCADStudio {
     /// renderer applies before building each side's stack.
     pub(crate) fn dock_panel_visible(&self, id: crate::ui::dock::PanelId) -> bool {
         use crate::ui::dock::PanelId;
-        if self.tabs[self.active_tab].is_start || self.clean_screen {
+        if self.tabs[self.active_tab].is_start {
+            return false;
+        }
+        if self.clean_screen && !(id == PanelId::Properties && self.clean_screen_properties) {
             return false;
         }
         match id {
             PanelId::Properties => self.show_properties,
             PanelId::BlockPalette => self.show_block_palette,
             PanelId::Pi => self.show_pi_panel,
+            PanelId::AuthoringPalettes => {
+                self.show_authoring_palettes
+                    && self.tabs[self.active_tab]
+                        .active_block_edit_session()
+                        .is_some()
+            }
             PanelId::ExternalReferences => self.show_external_references,
             PanelId::Browser => self.show_browser,
             PanelId::NodeGraph => self.show_node_graph,

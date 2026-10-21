@@ -71,7 +71,7 @@ fn scene_with_picture_dim(insertion_point: Vector3) -> Scene {
     let mut dim = DimensionRadius::new(v(CENTER), v(RIM));
     dim.base.block_name = PICTURE.to_string();
     dim.base.insertion_point = insertion_point;
-    scene.add_entity(EntityType::Dimension(Dimension::Radius(dim)));
+    scene.add_entity(EntityType::Dimension(Box::new(Dimension::Radius(dim))));
     scene.bump_geometry();
     scene
 }

@@ -74,6 +74,9 @@
 //! - `VIEW 常规|剖视`：视图开关（默认 `常规`）；独立一行或段内关键字都认
 //!   （`VIEW 剖视` / `VIEW=section`），只影响整体视图（**双视图已于 2026-09-23 移除**，
 //!   旧 `VIEW 双` 明确报错、不静默降级）；
+//! - `LOCALSECTION x0 x1`（或 `局部剖 x0,x1`）：按轴向段端面给出局部剖范围；
+//!   生成器用常规视图的两侧裁剪 + 局部段的原生剖视几何拼合，保留闭合 HATCH，
+//!   不用全长剖面线冒充局部剖；边界必须落在段端面上；
 //! - 多段可用 `|` 或换行分隔；行尾可跟放置参数 `at x,y rot 度`；
 //! - 解析错误报「第 N 行（第 k 段）：…」，几何错误报「第 N 段：…」。
 //!
@@ -153,6 +156,8 @@
 //!   按 x 排序后拆成**上/下两个环**（参考件 `轴剖视图.dxf` 右视图：2 环 21+21 边）；
 //!   普通全螺纹段按**小径包络**、齿轮段按**齿根圆**取剖面线边界（牙顶/齿部不剖）。
 //!   （旧的 `双` = 常规+剖视并排**已于 2026-09-23 移除**：`VIEW 双` 明确报错。）
+//! - 局部剖是同一基点下的重合视图：外侧保留常规轮廓，指定段使用剖视几何；
+//!   不会静默生成一个覆盖全轴的第二个剖视图。
 //!
 //! ## JSON（同一模型，给 GUI/HTTP：`/api/shaft_parse` / `/api/shaft_preview` / `/api/shaft_export`）
 //!
@@ -203,7 +208,8 @@ pub(crate) fn seg_label(n: usize) -> String {
 /// 视图开关（用户 2026-09-18 定案；**双视图已于 2026-09-23 移除**）：`常规` / `剖视`。
 ///
 /// * `常规` = 只画外形可见线（默认）；贯通竖线只属于常规视图；
-/// * `剖视` = **真实几何**（不含贯通竖线）+ ANSI31 剖面线（`5剖面线层`，上下两环）。
+/// * `剖视` = **真实几何**（不含贯通竖线）+ ANSI31 剖面线（`5剖面线层`，上下两环）；
+/// * `LOCALSECTION` 不是第三种视图，而是对 `剖视` 的局部组合约束。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ShaftView {
@@ -975,6 +981,9 @@ pub struct Program {
     /// 视图（默认 `常规`）；`serde` 里序列化成 `normal`/`section`（`both` 已移除）。
     #[serde(default)]
     pub view: ShaftView,
+    /// 局部剖的轴向范围 `[x0, x1]`，坐标以第 1 段左端为 0；必须落在段端面上。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub local_section: Option<[f64; 2]>,
 }
 
 impl Program {
@@ -996,6 +1005,7 @@ pub fn parse_program(text: &str) -> Result<Program, String> {
     }
     let mut program = Program::default();
     let mut view_seen: Option<ShaftView> = None;
+    let mut local_section_seen: Option<[f64; 2]> = None;
     // 全文一个「逻辑段」计数器对不上的情况：同一行用 `|` 分多段时单独标「第 k 段」。
     for (line_idx, raw_line) in text.lines().enumerate() {
         let line_no = line_idx + 1;
@@ -1032,6 +1042,7 @@ pub fn parse_program(text: &str) -> Result<Program, String> {
             // `VIEW 剖视` / `视图 剖视` 是整体视图开关：独立一行或段内关键字都认。
             let tokens: Vec<&str> = chunk.split_whitespace().collect();
             let tokens = extract_view_directives(&tokens, &label, &mut view_seen)?;
+            let tokens = extract_local_section_directives(&tokens, &label, &mut local_section_seen)?;
             if tokens.is_empty() {
                 continue;
             }
@@ -1046,7 +1057,14 @@ pub fn parse_program(text: &str) -> Result<Program, String> {
     if program.segments.is_empty() {
         return Err(crate::i18n::t("cmd.shaft.err.no_segments"));
     }
+    if local_section_seen.is_some() {
+        if view_seen == Some(ShaftView::Normal) {
+            return Err("局部剖必须使用 VIEW 剖视，不能与 VIEW 常规冲突".into());
+        }
+        view_seen = Some(ShaftView::Section);
+    }
     program.view = view_seen.unwrap_or_default();
+    program.local_section = local_section_seen;
     Ok(program)
 }
 
@@ -1094,6 +1112,83 @@ fn extract_view_directives<'a>(
         index += 1;
     }
     Ok(out)
+}
+
+/// 从 DSL 中提取 `LOCALSECTION x0 x1` / `局部剖 x0,x1`。
+///
+/// 局部剖边界以轴生成器的原始轴向坐标表示（第 1 段左端为 0），
+/// 允许写成一个逗号 token 或两个空格分隔的数值；真正的段端面约束在 build 阶段校验。
+fn extract_local_section_directives<'a>(
+    tokens: &[&'a str],
+    label: &str,
+    local_section: &mut Option<[f64; 2]>,
+) -> Result<Vec<&'a str>, String> {
+    let mut out = Vec::with_capacity(tokens.len());
+    let mut index = 0;
+    while index < tokens.len() {
+        let token = tokens[index];
+        let upper = token.to_ascii_uppercase();
+        let inline = [
+            upper.strip_prefix("LOCALSECTION=").map(|s| s.to_string()),
+            upper.strip_prefix("LOCALSECTION:").map(|s| s.to_string()),
+            upper.strip_prefix("SECTIONCLIP=").map(|s| s.to_string()),
+            upper.strip_prefix("SECTIONCLIP:").map(|s| s.to_string()),
+        ]
+        .into_iter()
+        .flatten()
+        .next();
+        let is_name = matches!(
+            upper.as_str(),
+            "LOCALSECTION" | "LOCAL_SECTION" | "SECTIONCLIP"
+        ) || matches!(token, "局部剖" | "局部剖视");
+        let pair = if let Some(rest) = inline {
+            parse_local_section_pair(&[rest.as_str()], label)?
+        } else if is_name {
+            let rest = &tokens[index + 1..];
+            let consumed = if rest.first().is_some_and(|s| s.contains(',')) {
+                1
+            } else {
+                2
+            };
+            if rest.len() < consumed {
+                return Err(format!("{label}：局部剖需要 x0,x1 或 x0 x1"));
+            }
+            let pair = parse_local_section_pair(&rest[..consumed], label)?;
+            index += consumed;
+            pair
+        } else {
+            out.push(token);
+            index += 1;
+            continue;
+        };
+        if let Some(prev) = *local_section {
+            if (prev[0] - pair[0]).abs() > 1e-9 || (prev[1] - pair[1]).abs() > 1e-9 {
+                return Err(format!("{label}：局部剖范围重复且不一致"));
+            }
+        } else {
+            *local_section = Some(pair);
+        }
+        index += 1;
+    }
+    Ok(out)
+}
+
+fn parse_local_section_pair(tokens: &[&str], label: &str) -> Result<[f64; 2], String> {
+    let (a, b) = if tokens.len() == 1 {
+        tokens[0].split_once(',').ok_or_else(|| {
+            format!("{label}：局部剖需要 x0,x1 或 x0 x1")
+        })?
+    } else if tokens.len() == 2 {
+        (tokens[0], tokens[1])
+    } else {
+        return Err(format!("{label}：局部剖需要 x0,x1 或 x0 x1"));
+    };
+    let x0 = a.trim().parse::<f64>().map_err(|_| format!("{label}：局部剖 x0 不是数值"))?;
+    let x1 = b.trim().parse::<f64>().map_err(|_| format!("{label}：局部剖 x1 不是数值"))?;
+    if !x0.is_finite() || !x1.is_finite() {
+        return Err(format!("{label}：局部剖坐标必须是有限数"));
+    }
+    Ok([x0, x1])
 }
 
 fn unknown_keyword(token: &str, label: &str) -> String {
@@ -2457,6 +2552,9 @@ struct JsonProgram {
     /// 视图：`normal|section` 或中文名；缺省 = 常规（`both`/`双` 已移除：明确报错）。
     #[serde(default)]
     view: Option<String>,
+    /// 局部剖轴向范围 `[x0,x1]`；也接受旧/显式别名 `section_window`。
+    #[serde(default, alias = "section_window")]
+    local_section: Option<[f64; 2]>,
 }
 
 #[derive(serde::Deserialize)]
@@ -2977,10 +3075,16 @@ fn parse_json(text: &str) -> Result<Program, String> {
             keyway,
         });
     }
-    let view = match &raw.view {
+    let mut view = match &raw.view {
         None => ShaftView::default(),
         Some(text) => ShaftView::parse(text).map_err(|e| format!("JSON：{e}"))?,
     };
+    if raw.local_section.is_some() {
+        if view == ShaftView::Normal && raw.view.is_some() {
+            return Err("JSON：局部剖必须使用 view=section，不能与 view=normal 冲突".into());
+        }
+        view = ShaftView::Section;
+    }
     if raw.rot.is_some_and(|v| !v.is_finite()) {
         return Err(crate::i18n::t("cmd.shaft.err.json_rot_not_finite").into());
     }
@@ -2989,6 +3093,7 @@ fn parse_json(text: &str) -> Result<Program, String> {
         at: raw.at,
         rot: raw.rot,
         view,
+        local_section: raw.local_section,
     })
 }
 
@@ -3882,9 +3987,111 @@ struct Geometry {
     segment_count: usize,
 }
 
-/// 解析 → 校验 → 生成（`frame_scale` 用于轴线 `6n` 伸出量；无图框传 1.0）。
+/// 解析 → 校验 → 生成（`frame_scale` 用于轴线 `6n` 伸出量和剖面线比例；无图框传 1.0）。
 /// 返回的图元已按 `program.view` 组合（常规 / 剖视；双视图已移除）。
+///
+/// `LOCALSECTION` 走同一基点下的重合视图组合：常规视图在局部范围两侧裁剪，
+/// 局部范围内改用按原生段几何生成的剖视子模型。这样 HATCH 边界仍然是闭合环，
+/// 不会把完整轴的 HATCH 逐边裁成开口边界。
 pub fn build(program: &Program, frame_scale: f64) -> Result<Shaft, String> {
+    let Some([x0, x1]) = program.local_section else {
+        return build_full(program, frame_scale);
+    };
+    build_local_section(program, frame_scale, x0, x1)
+}
+
+fn build_local_section(
+    program: &Program,
+    frame_scale: f64,
+    x0: f64,
+    x1: f64,
+) -> Result<Shaft, String> {
+    validate(program)?;
+    let (i0, i1) = local_section_indices(program, x0, x1)?;
+    if program.view != ShaftView::Section {
+        return Err("局部剖必须使用 VIEW 剖视".into());
+    }
+    let total = program.total_length();
+    if (x0 - 0.0).abs() <= 1e-9 && (x1 - total).abs() <= 1e-9 {
+        let mut full = program.clone();
+        full.local_section = None;
+        return build_full(&full, frame_scale);
+    }
+
+    let mut normal_program = program.clone();
+    normal_program.view = ShaftView::Normal;
+    normal_program.local_section = None;
+    let normal = build_full(&normal_program, frame_scale)?;
+
+    // 只用局部范围内的完整轴段重建剖视，避免对 HATCH 边界逐边裁剪后得到开口环。
+    let mut section_program = program.clone();
+    section_program.segments = program.segments[i0..i1].to_vec();
+    section_program.view = ShaftView::Section;
+    section_program.local_section = None;
+    section_program.at = None;
+    section_program.rot = None;
+    let section = build_full(&section_program, frame_scale)?;
+
+    let inf = 1.0e12;
+    let left = crate::detail_clip::Win::Rect {
+        min: (-inf, -inf),
+        max: (x0, inf),
+    };
+    let right = crate::detail_clip::Win::Rect {
+        min: (x1, -inf),
+        max: (inf, inf),
+    };
+    let mut entities = Vec::new();
+    for entity in &normal.entities {
+        entities.extend(crate::detail_clip::clip_entity(&left, entity, 1.0, (0.0, 0.0)));
+        entities.extend(crate::detail_clip::clip_entity(&right, entity, 1.0, (0.0, 0.0)));
+    }
+    // 子模型以自身左端为 x=0，平移回原轴的局部剖起点。
+    entities.extend(place(section.entities, [x0, 0.0], 0.0));
+
+    Ok(Shaft {
+        entities,
+        total_length: normal.total_length,
+        max_diameter: normal.max_diameter,
+        segment_count: normal.segment_count,
+    })
+}
+
+fn local_section_indices(program: &Program, x0: f64, x1: f64) -> Result<(usize, usize), String> {
+    let total = program.total_length();
+    if !x0.is_finite() || !x1.is_finite() || x0 < -1e-9 || x1 > total + 1e-9 || x1 <= x0 + 1e-9 {
+        return Err(format!(
+            "局部剖范围无效：应满足 0 ≤ x0 < x1 ≤ 总长 {}，实际为 {}, {}",
+            trim(total),
+            trim(x0),
+            trim(x1)
+        ));
+    }
+    let mut boundaries = Vec::with_capacity(program.segments.len() + 1);
+    boundaries.push(0.0);
+    let mut cursor = 0.0;
+    for segment in &program.segments {
+        cursor += segment.l;
+        boundaries.push(cursor);
+    }
+    let find = |value: f64| {
+        boundaries
+            .iter()
+            .position(|known| (*known - value).abs() <= 1e-7)
+    };
+    let i0 = find(x0).ok_or_else(|| {
+        format!("局部剖左边界 {} 不在轴段端面上", trim(x0))
+    })?;
+    let i1 = find(x1).ok_or_else(|| {
+        format!("局部剖右边界 {} 不在轴段端面上", trim(x1))
+    })?;
+    if i1 <= i0 {
+        return Err("局部剖至少应包含一个完整轴段".into());
+    }
+    Ok((i0, i1))
+}
+
+fn build_full(program: &Program, frame_scale: f64) -> Result<Shaft, String> {
     let Geometry {
         entities,
         through,
@@ -3910,8 +4117,9 @@ pub fn build(program: &Program, frame_scale: f64) -> Result<Shaft, String> {
         if rings.is_empty() {
             Vec::new()
         } else {
-            // ANSI31 / 比例 1.0，轴线上/下两个环（走 partgen_kit 的既有 HATCH 通路）。
-            vec![crate::partgen_kit::hatch_ansi31_rings(&rings, 0.0, 1.0)]
+            // ANSI31 / 比例跟随图框 n，轴线上/下两个环（走 partgen_kit 的既有 HATCH 通路）。
+            // 例如 1:2 图框 n=2，HATCH pattern_scale=2，宿主读出的垂距也随之为 2 倍。
+            vec![crate::partgen_kit::hatch_ansi31_rings(&rings, 0.0, frame_scale)]
         }
     };
     let entities = match program.view {
@@ -5532,12 +5740,14 @@ pub fn ocsm_ready(doc: &ocs_plugin_api::host::acadrust::CadDocument) -> Result<(
     ))
 }
 
-/// 轴块名：只由几何（段序列 + 视图）决定 —— 同模型复用一个块，不同模型不会误用别人的块。
-/// 用 FNV-1a 64 位而不是 `DefaultHasher`：跨进程/跨版本稳定，写进 DWG 的块名可复现。
+/// 轴块名：由几何（段序列 + 视图 + 局部剖范围）决定 —— 同模型复用一个块，
+/// 不同模型不会误用别人的块。用 FNV-1a 64 位而不是 `DefaultHasher`：
+/// 跨进程/跨版本稳定，写进 DWG 的块名可复现。
 pub fn block_name(program: &Program) -> String {
     let canonical = format!(
-        "{}|{}",
+        "{}|{:?}|{}",
         program.view.key(),
+        program.local_section,
         serde_json::to_string(&program.segments).unwrap_or_default()
     );
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
@@ -5554,7 +5764,12 @@ pub fn block_name(program: &Program) -> String {
 /// 轴的剖面环是带台阶/倒角/槽的多边形 → 先在 `preview_entities` 里把 HATCH
 /// 换成**裁剪到真实边界**的 45° 线，再交给同一套渲染。导出图纸仍是真 HATCH。
 pub fn preview_svg(program: &Program) -> Result<String, String> {
-    let shaft = build(program, 1.0)?;
+    preview_svg_scaled(program, 1.0)
+}
+
+/// 预览与出图共用图框比例口径；GUI 未提供比例时仍由 `preview_svg` 使用 1.0。
+pub fn preview_svg_scaled(program: &Program, frame_scale: f64) -> Result<String, String> {
+    let shaft = build(program, frame_scale)?;
     Ok(crate::gear::svg_of(&preview_entities(&shaft.entities), 460.0))
 }
 
@@ -6340,7 +6555,7 @@ GEAR M3 Z20";
             at: None,
             rot: None,
             view: ShaftView::Normal,
-
+            local_section: None,
         })
         .unwrap_err();
         assert!(err.contains("不能与越程槽"), "{err}");
@@ -7824,7 +8039,7 @@ GEAR M3 Z20";
             .entities
             .iter()
             .filter_map(|e| match e {
-                EntityType::Hatch(h) => Some(h),
+                EntityType::Hatch(h) => Some(h.as_ref()),
                 _ => None,
             })
             .collect();
@@ -7885,6 +8100,58 @@ GEAR M3 Z20";
             near(x0, 0.0) && near(x1, 42.0) && near(y0, -25.0) && near(y1, 25.0),
             "环 bbox = ({x0},{y0})..({x1},{y1})"
         );
+        let scaled = build(&program, 2.0).unwrap();
+        let scaled_hatch = scaled
+            .entities
+            .iter()
+            .find_map(|e| match e {
+                EntityType::Hatch(h) => Some(h),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(scaled_hatch.pattern_scale, 2.0, "1:2 图框的轴剖面线比例");
+    }
+
+    #[test]
+    fn local_section_composes_closed_native_hatch_at_segment_boundaries() {
+        let program = parse_program(
+            "S30 E30 L10 | S40 E40 L20 | S30 E30 L10 VIEW 剖视 LOCALSECTION 10,30",
+        )
+        .unwrap();
+        assert_eq!(program.view, ShaftView::Section);
+        assert_eq!(program.local_section, Some([10.0, 30.0]));
+        let json = serde_json::to_string(&program).unwrap();
+        assert_eq!(parse_program(&json).unwrap(), program);
+
+        let shaft = build(&program, 2.0).unwrap();
+        let hatches: Vec<&Hatch> = shaft
+            .entities
+            .iter()
+            .filter_map(|e| match e {
+                EntityType::Hatch(h) => Some(h.as_ref()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(hatches.len(), 1, "局部剖只保留局部 HATCH");
+        assert_eq!(hatches[0].pattern_scale, 2.0);
+        let mut min_x = f64::INFINITY;
+        let mut max_x = f64::NEG_INFINITY;
+        for path in &hatches[0].paths {
+            for edge in &path.edges {
+                if let BoundaryEdge::Line(line) = edge {
+                    min_x = min_x.min(line.start.x).min(line.end.x);
+                    max_x = max_x.max(line.start.x).max(line.end.x);
+                }
+            }
+        }
+        assert!(near(min_x, 10.0) && near(max_x, 30.0), "局部 HATCH 范围 {min_x}..{max_x}");
+
+        let err = parse_program("S30 L10 | S40 L20 VIEW 剖视 LOCALSECTION 5,25")
+            .and_then(|p| build(&p, 1.0).map(|_| ()))
+            .unwrap_err();
+        assert!(err.contains("段端面"), "{err}");
+        let err = parse_program("S30 L10 VIEW 常规 LOCALSECTION 0,10").unwrap_err();
+        assert!(err.contains("VIEW 剖视"), "{err}");
     }
 
     /// 双视图已移除（用户 2026-09-23 定案）：DSL/JSON 都给**明确报错**，

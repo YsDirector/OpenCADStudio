@@ -790,6 +790,24 @@ impl HostApi for PluginHostApi {
         }
     }
 
+    fn set_reference_only(&mut self, handle: Handle, reference_only: bool) -> Result<(), String> {
+        match self.client.request(PluginRequest::SetReferenceOnly {
+            handle,
+            reference_only,
+        }) {
+            Ok(PluginResponse::SetReferenceOnlyResult(result)) => {
+                if result.is_ok() {
+                    self.document_cache = OnceCell::new();
+                }
+                result
+            }
+            Ok(PluginResponse::Error(error)) => Err(error),
+            Ok(other) => Err(format!("unexpected reference-only response: {other:?}")),
+            Err(error) => Err(error.to_string()),
+        }
+    }
+
+    // ── fork: OCSMechanical additions follow the upstream v13 methods. ──
     fn add_block_record(
         &mut self,
         name: &str,

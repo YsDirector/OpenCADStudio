@@ -308,7 +308,17 @@ fn command_category(name: &str) -> &'static str {
     .contains(&name)
     {
         "modify"
-    } else if ["DIST", "ID", "AREA", "MEASURE", "MEASUREGEOM"].contains(&name) {
+    } else if [
+        "DIST",
+        "ID",
+        "AREA",
+        "MEASURE",
+        "MEASUREGEOM",
+        "MEASURERADIUS",
+        "MEASUREANGLE",
+    ]
+    .contains(&name)
+    {
         "inspect"
     } else if ["ZOOM", "PAN", "UCS", "PLAN", "VPORTS", "3DORBIT"].contains(&name) {
         "view"
@@ -371,9 +381,11 @@ fn command_selection_policy(name: &str) -> &'static str {
         "ERASE",
         "EXPLODE",
         "TXTEXP",
+        "TXT2MTXT",
         "GROUP",
         "LAYFRZ",
         "LAYLCK",
+        "LAYCUR",
         "LAYMCUR",
         "LAYOFF",
         "LAYULK",
@@ -463,6 +475,23 @@ pub(super) fn active_command_metadata(command: &dyn crate::command::CadCommand) 
 impl OpenCADStudio {
     pub(super) fn control_busy(&self) -> bool {
         self.control.pending.is_some()
+    }
+
+    /// A client's `cancel`: Esc, repeated while a command is still active.
+    /// One Esc may only dismiss what sits in front of the command (an open
+    /// dialog, a popup, typed text) or step a command back a level, and the
+    /// client has no other way to finish the job. (#1930)
+    fn control_cancel(&mut self) -> Task<Message> {
+        let mut tasks = vec![self.update(Message::CommandEscape)];
+        // ponytail: fixed Esc budget; covers every overlay + step-back chain
+        // in the escape path today, raise it if a deeper chain appears.
+        for _ in 0..8 {
+            if self.tabs[self.active_tab].active_cmd.is_none() {
+                break;
+            }
+            tasks.push(self.update(Message::CommandEscape));
+        }
+        Task::batch(tasks)
     }
 
     /// Mirror a real selection change into the automation event stream. The
@@ -818,6 +847,30 @@ impl OpenCADStudio {
                         Task::none(),
                     );
                 }
+                // Any other request settles once the work it started reports
+                // back. When that never happens (a save or open whose result
+                // never arrives) the bridge would stay busy until the app is
+                // killed, so `cancel` ends the active command and closes the
+                // request as cancelled. (#1801)
+                if op == "cancel" {
+                    let task = self.control_cancel();
+                    if let Some(p) = self.control.pending.as_mut() {
+                        p.cancelled = true;
+                        p.pending = 0;
+                    }
+                    self.control_settle_inner(true);
+                    let response = self
+                        .control
+                        .completed
+                        .iter()
+                        .find(|(i, _, _)| *i == pending_id)
+                        .map(|(_, _, r)| r.clone());
+                    return (
+                        response
+                            .unwrap_or_else(|| failure("busy", "Wait for the running operation")),
+                        task,
+                    );
+                }
                 return (
                     failure("busy", "Wait for the running operation"),
                     Task::none(),
@@ -903,7 +956,9 @@ impl OpenCADStudio {
                     }
                 }
                 "grips" => self.control_grips(),
-                "keytips" => self.ribbon.keytips_json(req["detail"].as_str() == Some("full")),
+                "keytips" => self
+                    .ribbon
+                    .keytips_json(req["detail"].as_str() == Some("full")),
                 "xdata_get" => self.xdata_read(&req),
                 "get_selection" => self.control_get_selection(),
                 "text_search" => self.control_text_search(&req).unwrap_or_else(|e| e),
@@ -1023,10 +1078,9 @@ impl OpenCADStudio {
             "new" => {
                 if let Some(template) = req["template"].as_str() {
                     match self.apply_template(template) {
-                        Ok(purged) => {
+                        Ok(()) => {
                             self.set_control_result(json!({
                                 "template": template,
-                                "purged": purged,
                                 "total": self.tabs[i].scene.document.entities().count(),
                             }));
                             Task::none()
@@ -1139,7 +1193,7 @@ impl OpenCADStudio {
                     _ => return Err(failure("invalid_input", "Unknown input kind")),
                 }
             }
-            "cancel" => self.update(Message::CommandEscape),
+            "cancel" => self.control_cancel(),
             "undo" => self.update(Message::Undo),
             "redo" => self.update(Message::Redo),
             "select" => {
@@ -1214,6 +1268,15 @@ impl OpenCADStudio {
             "view_focus" => self.control_view_focus(req)?,
             #[cfg(not(target_arch = "wasm32"))]
             "save" => {
+                if let Some(refusal) = self.read_only_save_refusal() {
+                    return Err(refusal);
+                }
+                if self.tabs[i].block_test.is_some() {
+                    return Err(failure(
+                        "temporary_document",
+                        "Test Block is temporary and cannot be saved",
+                    ));
+                }
                 let path = req["path"]
                     .as_str()
                     .map(std::path::PathBuf::from)
@@ -1264,6 +1327,12 @@ impl OpenCADStudio {
             // Web: no filesystem path; the drawing comes back in the reply.
             #[cfg(target_arch = "wasm32")]
             "save" => {
+                if self.tabs[i].block_test.is_some() {
+                    return Err(failure(
+                        "temporary_document",
+                        "Test Block is temporary and cannot be saved",
+                    ));
+                }
                 use base64::Engine as _;
                 let default_is_dxf = crate::io::source_is_dxf(None, &self.tabs[i].scene.document);
                 let (version, is_dxf) = super::automation::requested_save_target(
@@ -1306,6 +1375,9 @@ impl OpenCADStudio {
             }
             #[cfg(not(target_arch = "wasm32"))]
             "save_verified" => {
+                if let Some(refusal) = self.read_only_save_refusal() {
+                    return Err(refusal);
+                }
                 let result = self.save_verified_request(req)?;
                 self.set_control_result(result);
                 Task::none()
@@ -1399,14 +1471,9 @@ impl OpenCADStudio {
     pub(super) fn control_track(&mut self, task: Task<Message>) -> Task<Message> {
         let track_zero_unit = self.control.pending.as_ref().is_some_and(|p| {
             p.request["op"] == "run"
-                && p.request["cmd"]
-                    .as_str()
-                    .is_some_and(|cmd| {
-                        matches!(
-                            cmd.trim().to_ascii_uppercase().as_str(),
-                            "SAVE" | "QSAVE"
-                        )
-                    })
+                && p.request["cmd"].as_str().is_some_and(|cmd| {
+                    matches!(cmd.trim().to_ascii_uppercase().as_str(), "SAVE" | "QSAVE")
+                })
         });
         // Most zero-unit tasks are `Task::none()` and have already completed
         // synchronously. SAVE/QSAVE are the deliberate exception: the command
@@ -1490,11 +1557,22 @@ impl OpenCADStudio {
         }
     }
     pub(super) fn control_settle(&mut self) {
-        if self.control.pending.as_ref().is_none_or(|p| p.pending != 0) || self.opening.is_some() {
+        self.control_settle_inner(false);
+    }
+
+    /// `force` closes the request even while an open or a save it may have
+    /// started is still running.
+    fn control_settle_inner(&mut self, force: bool) {
+        if self.control.pending.as_ref().is_none_or(|p| p.pending != 0) {
+            return;
+        }
+        if !force && self.opening.is_some() {
             return;
         }
         #[cfg(not(target_arch = "wasm32"))]
-        if !self.active_save_jobs.is_empty() || self.pending_native_thumbnail_save.is_some() {
+        if !force
+            && (!self.active_save_jobs.is_empty() || self.pending_native_thumbnail_save.is_some())
+        {
             return;
         }
         let p = self.control.pending.take().unwrap();
@@ -1917,10 +1995,7 @@ mod tests {
                 .as_nanos(),
         ));
         let _ = std::fs::remove_file(&path);
-        let saved = request(
-            &mut app,
-            json!({"op":"save","path":path,"overwrite":true}),
-        );
+        let saved = request(&mut app, json!({"op":"save","path":path,"overwrite":true}));
         assert_eq!(saved["ok"], true, "{saved}");
         assert_eq!(
             request(&mut app, json!({"op":"run","cmd":"LINE 0,5 10,5"}))["status"],
@@ -1957,10 +2032,7 @@ mod tests {
         ));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("blocked.dwg");
-        let saved = request(
-            &mut app,
-            json!({"op":"save","path":path,"overwrite":true}),
-        );
+        let saved = request(&mut app, json!({"op":"save","path":path,"overwrite":true}));
         assert_eq!(saved["ok"], true, "{saved}");
         // A directory at the target path makes the next write fail
         // deterministically; the operation must settle as failed instead of
@@ -1974,7 +2046,9 @@ mod tests {
         let qsave = request(&mut app, json!({"op":"run","cmd":"QSAVE"}));
         assert_eq!(qsave["status"], "failed", "{qsave}");
         assert!(
-            qsave["error"].as_str().is_some_and(|error| !error.is_empty()),
+            qsave["error"]
+                .as_str()
+                .is_some_and(|error| !error.is_empty()),
             "{qsave}"
         );
         let _ = std::fs::remove_dir_all(&dir);
@@ -2000,7 +2074,10 @@ mod tests {
         // C11: capture waits for the next rendered frame rather than reading
         // a stale frame from the same batch.
         assert_eq!(parked["status"], "accepted", "{parked}");
-        assert!(app.control.capture_frame_pending, "capture should wait for a frame");
+        assert!(
+            app.control.capture_frame_pending,
+            "capture should wait for a frame"
+        );
         let running = app
             .control_request(json!({"op":"operation","request_id":"cap-frame"}))
             .0;
@@ -2009,11 +2086,8 @@ mod tests {
         // Feed the frame result directly in the headless test.
         let _frame_task = app.on_control_capture_frame(true);
         assert!(!app.control.capture_frame_pending);
-        let screenshot = iced::window::Screenshot::new(
-            vec![0u8; 4 * 4 * 4],
-            iced::Size::new(4, 4),
-            1.0,
-        );
+        let screenshot =
+            iced::window::Screenshot::new(vec![0u8; 4 * 4 * 4], iced::Size::new(4, 4), 1.0);
         app.control_screenshot(path.to_string_lossy().into_owned(), Some(screenshot));
         let done = app
             .control_request(json!({"op":"operation","request_id":"cap-frame"}))
@@ -2090,14 +2164,13 @@ mod tests {
         let mut app = OpenCADStudio::new_for_test();
         request(&mut app, json!({"op":"new"}));
         request(&mut app, json!({"op":"run","cmd":"LINE 0,0 10,0"}));
-        let handle = request(&mut app, json!({"op":"query","type":"Line"}))["entities"][0]["handle"]
+        let handle = request(&mut app, json!({"op":"query","type":"Line"}))["entities"][0]
+            ["handle"]
             .as_str()
             .unwrap()
             .to_string();
         let before = app.control_state()["selection_revision"].as_u64().unwrap();
-        let selected = app.automation_op(&format!(
-            r#"{{"op":"select","handles":["{handle}"]}}"#
-        ));
+        let selected = app.automation_op(&format!(r#"{{"op":"select","handles":["{handle}"]}}"#));
         assert_eq!(selected["ok"], true, "{selected}");
         let state = app.control_state();
         assert_eq!(
@@ -2106,7 +2179,10 @@ mod tests {
             "selection revision should increment once: {state}"
         );
         assert!(
-            state["selection"].as_array().unwrap().contains(&json!(handle)),
+            state["selection"]
+                .as_array()
+                .unwrap()
+                .contains(&json!(handle)),
             "{state}"
         );
         let events = app.control_request(json!({"op":"events"})).0;
@@ -2114,7 +2190,10 @@ mod tests {
         assert_eq!(last["kind"], "selection", "{events}");
         assert_eq!(last["document_id"], state["document_id"], "{events}");
         assert!(
-            last["selection"].as_array().unwrap().contains(&json!(handle)),
+            last["selection"]
+                .as_array()
+                .unwrap()
+                .contains(&json!(handle)),
             "{events}"
         );
     }
@@ -2395,7 +2474,10 @@ mod tests {
     fn pending_request_id_reuse_rejects_changed_payload() {
         let mut app = OpenCADStudio::new_for_test();
         app.main_window = Some(iced::window::Id::unique());
-        assert_eq!(request(&mut app, json!({"op":"new"}))["status"], "completed");
+        assert_eq!(
+            request(&mut app, json!({"op":"new"}))["status"],
+            "completed"
+        );
 
         let pending = request(
             &mut app,
@@ -2417,10 +2499,7 @@ mod tests {
         );
         assert_eq!(changed["code"], "request_id_reused", "{changed}");
         assert!(
-            changed["error"]
-                .as_str()
-                .unwrap()
-                .contains("pending-reuse"),
+            changed["error"].as_str().unwrap().contains("pending-reuse"),
             "{changed}"
         );
 
@@ -2445,6 +2524,19 @@ mod tests {
             app.automation_op(r#"{"op":"run","cmd":"NONEXISTENT_COMMAND"}"#)["ok"],
             false
         );
+    }
+    #[test]
+    fn cancel_ends_the_started_command() {
+        let mut app = OpenCADStudio::new_for_test();
+        request(&mut app, json!({"op":"new"}));
+        let started = request(&mut app, json!({"op":"start","cmd":"PURGE"}));
+        assert_eq!(started["status"], "waiting_input", "{started}");
+        // A dialog left open by the load (missing fonts) takes the first Esc.
+        app.active_modal = Some(crate::app::ModalKind::MissingFonts);
+        let cancelled = request(&mut app, json!({"op":"cancel"}));
+        assert_eq!(cancelled["state"]["command"], Value::Null, "{cancelled}");
+        let next = request(&mut app, json!({"op":"start","cmd":"LINE"}));
+        assert_eq!(next["status"], "waiting_input", "{next}");
     }
     #[test]
     fn direct_user_input_takes_command_ownership() {
@@ -3144,8 +3236,8 @@ mod tests {
         assert_eq!(response["status"], "completed", "{response}");
 
         // The plotted PDF carries two distinct pen widths — the per-layer
-        // 0.13 mm / 0.50 mm hierarchy survives the plot style (thin clamps to
-        // the 1 px floor, so the ratio is the clamped-pixel ratio 1.889).
+        // 0.13 mm / 0.50 mm hierarchy survives the plot style at its true
+        // ratio; the screen's 1 px floor does not reach the plot (#1749).
         let text =
             crate::io::pdf_export::pdf_stream_text(&std::fs::read(&pdf).expect("pdf written"));
         let tokens: Vec<&str> = text.split_whitespace().collect();
@@ -3168,7 +3260,7 @@ mod tests {
             "two layer weights in the plotted PDF: {widths:?}"
         );
         assert!(
-            (widths[1] / widths[0] - 1.889).abs() < 0.15,
+            (widths[1] / widths[0] - 50.0 / 13.0).abs() < 0.15,
             "0.50 mm vs 0.13 mm hierarchy: {widths:?}"
         );
         let _ = std::fs::remove_file(&pdf);
@@ -3267,8 +3359,8 @@ mod tests {
                 .all(|(channel, expected)| (channel - expected).abs() < 0.02)
         };
         assert!(
-            color_ops.iter().any(|c| near(c, [0.0, 0.15, 0.5])),
-            "unstyled cyan frame plots as the dark-blue print remap: {color_ops:?}"
+            color_ops.iter().any(|c| near(c, [0.0, 1.0, 1.0])),
+            "unstyled cyan frame keeps its colour on paper (#1926): {color_ops:?}"
         );
         assert!(
             color_ops.iter().any(|c| near(c, [1.0, 0.0, 0.0])),

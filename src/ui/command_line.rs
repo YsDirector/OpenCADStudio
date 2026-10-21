@@ -125,6 +125,11 @@ const MAX_HISTORY: usize = 64;
 #[derive(Clone)]
 pub struct CommandLine {
     pub input: String,
+    /// Depth of active QUIET MACHINE REPLAYS (`CommandRequest::RunQuiet`,
+    /// API v13): while > 0, `push` suppresses Command/Output/Info echo so a
+    /// plugin's constraint/SETVAR replays leave no machinery noise in the
+    /// user-visible history. Errors always surface.
+    pub(crate) quiet_replay: usize,
     /// Persistent literal-space mode (the `>` toggle button): while on, every
     /// line behaves as if it started with `>` — Space stays in the input
     /// instead of submitting. Saved in the user config.
@@ -194,11 +199,15 @@ pub struct CommandLine {
     /// COMMANDLINEOPACITY: how opaque the command line's panels are, in
     /// percent (20–100, default 80), so the drawing shows through.
     opacity_percent: u8,
+    /// Since when the pointer rests on the overlay history: lines still
+    /// showing then stay until it leaves, and fade from that moment.
+    hover_since: Option<Instant>,
 }
 
 impl Default for CommandLine {
     fn default() -> Self {
         Self {
+            quiet_replay: 0,
             input: String::new(),
             literal_spaces: false,
             history: Vec::new(),
@@ -221,6 +230,7 @@ impl Default for CommandLine {
             cliprompt_lines: 3,
             fade_ms: DEFAULT_COMMANDLINE_FADE_MS,
             opacity_percent: 80,
+            hover_since: None,
         }
     }
 }
@@ -452,7 +462,26 @@ impl CommandLine {
     pub fn push_info(&mut self, msg: &str) {
         self.push(EntryKind::Info, format_info(msg));
     }
+
+    /// Enter a quiet machine replay scope (API v13): command-line echo is
+    /// suppressed until the matching [`Self::end_quiet_replay`]. Depth-
+    /// counted so nested quiet replays unwind correctly; errors always
+    /// surface through `push_error`.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    pub(crate) fn begin_quiet_replay(&mut self) {
+        self.quiet_replay = self.quiet_replay.saturating_add(1);
+    }
+
+    /// Leave one quiet machine replay scope (API v13).
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    pub(crate) fn end_quiet_replay(&mut self) {
+        self.quiet_replay = self.quiet_replay.saturating_sub(1);
+    }
     fn push(&mut self, kind: EntryKind, text: String) {
+        if self.quiet_replay > 0 && !matches!(kind, EntryKind::Error) {
+            // A quiet machine replay (API v13) leaves no echo; errors pass.
+            return;
+        }
         self.history.push(HistoryEntry {
             kind,
             text,
@@ -527,7 +556,36 @@ impl CommandLine {
     }
 
     fn entry_visible(&self, e: &HistoryEntry) -> bool {
-        e.pinned || self.fade_ms == 0 || e.created_at.elapsed().as_secs_f32() < self.fade_secs()
+        let held = self.hover_since.is_some_and(|since| {
+            since.saturating_duration_since(e.created_at).as_secs_f32() < self.fade_secs()
+        });
+        e.pinned
+            || self.fade_ms == 0
+            || held
+            || e.created_at.elapsed().as_secs_f32() < self.fade_secs()
+    }
+
+    /// The pointer entered or left the overlay history. Leaving restarts the
+    /// fade of every line it held.
+    pub fn set_history_hover(&mut self, hovered: bool) {
+        if hovered {
+            self.hover_since.get_or_insert_with(Instant::now);
+            return;
+        }
+        let Some(since) = self.hover_since.take() else {
+            return;
+        };
+        let fade = self.fade_secs();
+        let now = Instant::now();
+        for entry in &mut self.history {
+            if since
+                .saturating_duration_since(entry.created_at)
+                .as_secs_f32()
+                < fade
+            {
+                entry.created_at = now;
+            }
+        }
     }
 
     /// Height of the overlaid prompt lines currently shown above the input
@@ -1144,16 +1202,20 @@ impl CommandLine {
         let recent_history: Element<'a, Message> = if self.history_open || !has_recent_history {
             container(column![]).height(0).into()
         } else {
-            container(history_rows)
-                .style(move |theme: &Theme| container::Style {
-                    background: Some(Background::Color(
-                        theme.palette().background.base.color.scale_alpha(opacity),
-                    )),
-                    ..Default::default()
-                })
-                .width(Length::Fill)
-                .padding([2, 0])
-                .into()
+            iced::widget::mouse_area(
+                container(history_rows)
+                    .style(move |theme: &Theme| container::Style {
+                        background: Some(Background::Color(
+                            theme.palette().background.base.color.scale_alpha(opacity),
+                        )),
+                        ..Default::default()
+                    })
+                    .width(Length::Fill)
+                    .padding([2, 0]),
+            )
+            .on_enter(Message::CommandHistoryHover(true))
+            .on_exit(Message::CommandHistoryHover(false))
+            .into()
         };
         let history_divider: Element<'a, Message> = if self.history_open {
             rule::horizontal(1).into()
@@ -1390,6 +1452,16 @@ mod tests {
     fn builtin_commands_still_match_with_an_empty_pool() {
         let m = ranked_matches("LINE", &[], &FxHashMap::default());
         assert!(m.iter().any(|c| c == "LINE"), "got {m:?}");
+    }
+
+    #[test]
+    fn submit_uppercases_only_the_command_verb() {
+        let mut line = CommandLine::new();
+        line.input = "open /home/u/My.dwg --PluginArg".to_string();
+        assert_eq!(
+            line.submit().as_deref(),
+            Some("OPEN /home/u/My.dwg --PluginArg")
+        );
     }
 
     #[test]

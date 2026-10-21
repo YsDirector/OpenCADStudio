@@ -319,10 +319,12 @@ impl OpenCADStudio {
 
             "REPORT" => {
                 // Pre-fill the GitHub issue body with version + platform so
-                // reports arrive with the basics already filled in.
+                // reports arrive with the basics already filled in. The rule
+                // is `***`: text typed right above a `---` line turns into a
+                // Markdown heading.
                 let body = format!(
                     "<!-- Describe the issue and the steps to reproduce it. -->\n\n\n\
-                     ---\n- Open CAD Studio: v{}\n- Revision: {} ({}, {})\n- Platform: {}\n",
+                     ***\n- Open CAD Studio: v{}\n- Revision: {} ({}, {})\n- Platform: {}\n",
                     env!("OCS_FULL_VERSION"),
                     env!("OCS_GIT_REV"),
                     env!("OCS_COMMIT_DATE"),
@@ -377,6 +379,14 @@ impl OpenCADStudio {
 
             "PARAMETERS" => {
                 return Some(Task::done(Message::NamedParametersOpen));
+            }
+            "PARAMETERSCLOSE" => {
+                if self.active_modal == Some(crate::app::ModalKind::NamedParameters) {
+                    self.active_modal = None;
+                    self.named_parameter_editor_rows.clear();
+                    self.reset_modal_geometry();
+                }
+                return Some(Task::none());
             }
 
             // CUIEXPORT <path> — write the keyboard-shortcut customizations
@@ -589,9 +599,9 @@ impl OpenCADStudio {
                     self.active_theme = resolved;
                     self.sync_model_space_theme(true);
                     self.persist_settings_if_changed();
-                    self.command_line.push_output(crate::tf!(
-                        "Color scheme set to 'System' (currently {name})."
-                    ).as_ref());
+                    self.command_line.push_output(
+                        crate::tf!("Color scheme set to 'System' (currently {name}).").as_ref(),
+                    );
                     return Some(Task::none());
                 }
                 let theme = crate::app::config::parse_theme_name(sub);
@@ -1000,7 +1010,10 @@ impl OpenCADStudio {
                             match self.tabs[i]
                                 .scene
                                 .document
-                                .add_entity_to_layout(codec::EntityType::Viewport(vp), &layout_name)
+                                .add_entity_to_layout(
+                                    codec::EntityType::Viewport(Box::new(vp)),
+                                    &layout_name,
+                                )
                             {
                                 Ok(handle) => {
                                     self.tabs[i].scene.auto_fit_viewport(handle);
@@ -2207,7 +2220,7 @@ mod tests {
         locked_hatch.common.layer = "LOCKED_LAYER".into();
         let h_locked_hatch = app.tabs[i]
             .scene
-            .add_entity_clone(EntityType::Hatch(locked_hatch));
+            .add_entity_clone(EntityType::Hatch(Box::new(locked_hatch)));
 
         let h_line = app.tabs[i]
             .scene

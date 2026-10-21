@@ -383,6 +383,7 @@ fn inherited_int(doc: &CadDocument, handle: Handle, code: i16) -> i16 {
         return 0;
     };
     match code {
+        DIMSAH => style.dimsah as i16,
         DIMSD1 => style.dimsd1 as i16,
         DIMSD2 => style.dimsd2 as i16,
         DIMSE1 => style.dimse1 as i16,
@@ -394,7 +395,6 @@ fn inherited_int(doc: &CadDocument, handle: Handle, code: i16) -> i16 {
         DIMTOL => style.dimtol as i16,
         DIMLIM => style.dimlim as i16,
         DIMALT => style.dimalt as i16,
-        DIMSAH => style.dimsah as i16,
         DIMAZIN => style.dimazin,
         DIMAUNIT => style.dimaunit,
         DIMADEC => style.dimadec,
@@ -402,6 +402,28 @@ fn inherited_int(doc: &CadDocument, handle: Handle, code: i16) -> i16 {
         DIMTALN => 0,
         DIMARCSYM => style.dimarcsym,
         _ => 0,
+    }
+}
+
+fn inherited_handle(doc: &CadDocument, handle: Handle, code: i16) -> Handle {
+    let Some(EntityType::Dimension(dimension)) = doc.get_entity(handle) else {
+        return Handle::NULL;
+    };
+    let Some(style) = doc.dim_styles.iter().find(|style| {
+        style
+            .name
+            .eq_ignore_ascii_case(&dimension.base().style_name)
+            || (dimension.base().style_name.trim().is_empty()
+                && style.name.eq_ignore_ascii_case("Standard"))
+    }) else {
+        return Handle::NULL;
+    };
+    let style = crate::entities::dimension::resolved_dimension_style(style, dimension, doc);
+    match code {
+        DIMBLK => style.dimblk,
+        DIMBLK1 => style.dimblk1,
+        DIMBLK2 => style.dimblk2,
+        _ => Handle::NULL,
     }
 }
 
@@ -497,15 +519,8 @@ fn apply_property(doc: &mut CadDocument, handle: Handle, field: &str, value: &st
     }
     let handle_field = match field {
         "dim_radial_arrow" => Some(DIMLDRBLK),
-        "dim_arrowhead_1" | "dim_arrowhead_2" => Some(if inherited_int(doc, handle, DIMSAH) != 0 {
-            if field == "dim_arrowhead_1" {
-                DIMBLK1
-            } else {
-                DIMBLK2
-            }
-        } else {
-            DIMBLK
-        }),
+        "dim_arrowhead_1" => Some(DIMBLK1),
+        "dim_arrowhead_2" => Some(DIMBLK2),
         "dim_linetype" => Some(DIMLTYPE),
         "dim_ext_linetype_1" => Some(DIMLTEX1),
         "dim_ext_linetype_2" => Some(DIMLTEX2),
@@ -515,7 +530,7 @@ fn apply_property(doc: &mut CadDocument, handle: Handle, field: &str, value: &st
     if let Some(code) = handle_field {
         let resolved = match field {
             "dim_radial_arrow" | "dim_arrowhead_1" | "dim_arrowhead_2" => {
-                crate::scene::convert::tessellate::arrowhead_handle_for_choice(doc, trimmed)
+                crate::entities::arrowheads::resolve(doc, trimmed)
             }
             "dim_text_style" => doc
                 .text_styles
@@ -531,6 +546,16 @@ fn apply_property(doc: &mut CadDocument, handle: Handle, field: &str, value: &st
         let Some(resolved) = resolved else {
             return false;
         };
+        // With separate arrows off both ends draw DIMBLK, so a one-end pick
+        // turns them on and keeps the other end's arrow. (#1916)
+        if matches!(field, "dim_arrowhead_1" | "dim_arrowhead_2")
+            && inherited_int(doc, handle, DIMSAH) == 0
+        {
+            let both = inherited_handle(doc, handle, DIMBLK);
+            let other = if code == DIMBLK1 { DIMBLK2 } else { DIMBLK1 };
+            set(doc, handle, other, Some(XDataValue::Handle(both)));
+            set(doc, handle, DIMSAH, Some(XDataValue::Integer16(1)));
+        }
         set(doc, handle, code, Some(XDataValue::Handle(resolved)));
         return true;
     }
@@ -849,7 +874,7 @@ mod dimsah_arrow_tests {
     use codec::{CadDocument, EntityType};
 
     #[test]
-    fn arrow_property_uses_shared_dimblk_when_dimsah_is_off() {
+    fn arrow_property_turns_on_separate_arrows_when_dimsah_is_off() {
         let mut document = CadDocument::new();
         document.dim_styles.get_mut("Standard").unwrap().dimsah = false;
         let expected =
@@ -860,7 +885,7 @@ mod dimsah_arrow_tests {
             DimensionLinear::horizontal(Vector3::new(0.0, 0.0, 0.0), Vector3::new(10.0, 0.0, 0.0));
         linear.base.style_name = "Standard".to_string();
         let entity_handle = document
-            .add_entity(EntityType::Dimension(Dimension::Linear(linear)))
+            .add_entity(EntityType::Dimension(Box::new(Dimension::Linear(linear))))
             .unwrap();
 
         assert!(set_property(
@@ -873,7 +898,7 @@ mod dimsah_arrow_tests {
             panic!("dimension disappeared");
         };
         let data = &dimension.base().common.extended_data;
-        assert_eq!(override_handle(data, DIMBLK), Some(expected));
-        assert_eq!(override_handle(data, DIMBLK1), None);
+        assert_eq!(override_handle(data, DIMBLK), None);
+        assert_eq!(override_handle(data, DIMBLK1), Some(expected));
     }
 }
