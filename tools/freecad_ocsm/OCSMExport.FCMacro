@@ -1,0 +1,78 @@
+# -*- coding: utf-8 -*-
+# Run only in an already open FreeCAD desktop. This macro installs nothing.
+# Copy alongside ocsm_export/, install the whole folder in user Mod/OCSMExport,
+# or set OCSM_EXPORT_ROOT to the plugin directory (or repository root).
+
+
+def _run_ocsm_export():
+    import importlib
+    import os
+    from pathlib import Path
+    import sys
+    import traceback
+    import FreeCAD
+    import FreeCADGui
+
+    def fail(text, details=""):
+        FreeCAD.Console.PrintError(text + "\n" + details + "\n")
+        if getattr(FreeCAD, "GuiUp", False):
+            from PySide import QtCore
+            try:
+                from PySide import QtWidgets
+            except ImportError:
+                from PySide import QtGui as QtWidgets
+            message = QtWidgets.QMessageBox(FreeCADGui.getMainWindow())
+            message.setWindowTitle("OCSMExport — 安装/运行提示")
+            message.setTextFormat(QtCore.Qt.PlainText)
+            message.setText(text)
+            message.setIcon(QtWidgets.QMessageBox.Critical)
+            if details:
+                message.setDetailedText(details)
+            execute = getattr(message, "exec", None) or message.exec_
+            execute()
+
+    if not getattr(FreeCAD, "GuiUp", False):
+        fail("请在已启动的 FreeCAD 桌面中执行此宏；此宏不会启动 GUI。")
+        return
+    try:
+        # An installed workbench/package already on sys.path takes priority.
+        try:
+            module = importlib.import_module("ocsm_export.gui")
+        except ModuleNotFoundError as exc:
+            if exc.name not in ("ocsm_export", "ocsm_export.gui"):
+                raise
+            roots = []
+            configured = os.environ.get("OCSM_EXPORT_ROOT", "").strip()
+            if configured:
+                roots.append(Path(configured).expanduser())
+            # co_filename works even where FreeCAD's macro executor omits __file__.
+            filename = sys._getframe().f_code.co_filename
+            if filename and not filename.startswith("<"):
+                folder = Path(filename).resolve().parent
+                roots.extend((folder, folder.parent))
+            mod_dir = Path(FreeCAD.getUserAppDataDir()) / "Mod"
+            roots.append(mod_dir / "OCSMExport")
+            # FreeCAD already knows its plugin directories; no recursive home scan.
+            roots.extend(Path(p) for p in getattr(FreeCAD, "__ModDirs__", ()))
+            candidates = []
+            for root in roots:
+                candidates.extend((root, root / "freecad_ocsm", root / "tools" / "freecad_ocsm"))
+            package_root = next((p for p in candidates if (p / "ocsm_export" / "gui.py").is_file()), None)
+            if package_root is None:
+                fail("未找到 ocsm_export/gui.py。\n"
+                     "请将完整 freecad_ocsm 目录（含 ocsm_export/、Init.py、InitGui.py）放入\n"
+                     f"{mod_dir / 'OCSMExport'}\n并重启 FreeCAD；或将此宏放在插件目录旁。\n"
+                     "宏单独复制时，可设置 OCSM_EXPORT_ROOT 为插件目录或仓库根目录，再启动 FreeCAD。\n"
+                     "工具不会联网下载或自动安装依赖。")
+                return
+            sys.path.insert(0, str(package_root.resolve()))
+            importlib.invalidate_caches()
+            module = importlib.import_module("ocsm_export.gui")
+        module.show()
+    except Exception as exc:
+        fail(f"OCSMExport 运行失败：{type(exc).__name__}: {exc}\n"
+             "未报告导出成功。请核对插件是否完整及 FreeCAD/PySide 是否可用；本宏不会自动安装依赖。",
+             traceback.format_exc())
+
+
+_run_ocsm_export()

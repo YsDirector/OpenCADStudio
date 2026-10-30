@@ -1,0 +1,34 @@
+"""Run real FreeCAD/OCCT integration tests in an isolated console process."""
+import json
+import os
+from pathlib import Path
+import sys
+import traceback
+import unittest
+
+root = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(root))
+sys.path.insert(0, str(root / 'tests'))
+out = Path(os.environ.get('OCSM_EXPORT_ARTIFACT_DIR', root / 'artifacts'))
+out.mkdir(parents=True, exist_ok=True)
+status = 1
+try:
+    import FreeCAD as App
+    import Part
+    suite = unittest.TestSuite()
+    for module in ('test_model', 'test_freecad_core'):
+        suite.addTests(unittest.defaultTestLoader.loadTestsFromName(module))
+    result = unittest.TextTestRunner(verbosity=2).run(suite)
+    report = {'tests_run': result.testsRun, 'failures': [(str(t),tb) for t,tb in result.failures],
+              'errors': [(str(t),tb) for t,tb in result.errors],
+              'skipped': [(str(t),why) for t,why in result.skipped],
+              'freecad_version': list(App.Version()), 'occt_version': Part.OCC_VERSION,
+              'success': result.wasSuccessful()}
+    status = 0 if result.wasSuccessful() else 1
+except Exception:
+    report = {'success': False, 'error': traceback.format_exc()}
+(out / 'freecad-tests.json').write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')
+print(json.dumps(report, ensure_ascii=False, indent=2))
+sys.stdout.flush()
+sys.stderr.flush()
+os._exit(status)

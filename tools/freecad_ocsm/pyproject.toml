@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "freecad-ocsm-export"
+version = "0.1.0"
+description = "Semantic FreeCAD engineering-view export to OCSM-layered DXF"
+requires-python = ">=3.11"
+dependencies = ["ezdxf>=1.4,<2"]
+
+[project.scripts]
+ocsm-dxf-write = "ocsm_export.writer_cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["ocsm_export*"]

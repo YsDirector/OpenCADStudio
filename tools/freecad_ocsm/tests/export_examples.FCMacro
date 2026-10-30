@@ -1,0 +1,66 @@
+"""Produce reproducible model/IR/DXF examples in a private FreeCADCmd process."""
+import json
+import os
+from pathlib import Path
+import sys
+import traceback
+
+import FreeCAD as App
+import Part
+
+root=Path(__file__).resolve().parents[1]
+sys.path.insert(0,str(root))
+from ocsm_export.api import build_scene,export_scene
+from ocsm_export.model import ExportOptions,SectionSpec,STANDARD_VIEWS,ViewSpec
+
+out=Path(os.environ.get('OCSM_EXPORT_ARTIFACT_DIR',root/'artifacts'/'examples'))
+out.mkdir(parents=True,exist_ok=True)
+report={'freecad':list(App.Version()),'occt':Part.OCC_VERSION,'gui_up':bool(App.GuiUp),'exports':[]}
+status=1
+try:
+    def emit(name,objects,options):
+        scene=build_scene(objects,options)
+        (out/(name+'.scene.json')).write_text(json.dumps(scene,ensure_ascii=False,indent=2),encoding='utf-8')
+        result=export_scene(scene,out/(name+'.dxf'),overwrite=True)
+        try:
+            from ocsm_export.preview import scene_svg
+            (out/(name+'.svg')).write_text(scene_svg(scene),encoding='utf-8')
+        except ImportError:
+            pass
+        report['exports'].append({'name':name,'report':result})
+
+    doc=App.newDocument('OCSMExportBlindHoleBlock')
+    obj=doc.addObject('Part::Feature','BlindHoleBlock')
+    obj.Shape=Part.makeBox(40,30,20).cut(Part.makeCylinder(4,10,App.Vector(12,0,10),App.Vector(0,1,0)))
+    doc.recompute();doc.saveAs(str(out/'blind-hole-block.FCStd'))
+    for mode in ('visible','hidden'):
+        emit('block-'+mode+'-7views',[obj],ExportOptions(views=tuple(STANDARD_VIEWS.values()),mode=mode))
+        for name in ('front','back','iso'):
+            emit('block-'+mode+'-'+name,[obj],ExportOptions(views=(STANDARD_VIEWS[name],),mode=mode))
+    emit('block-arbitrary-rotated',[obj],ExportOptions(views=(ViewSpec('arbitrary',(2,-3,4),(0,0,1),23),),mode='hidden'))
+    App.closeDocument(doc.Name)
+
+    doc=App.newDocument('OCSMExportAnnularSleeve')
+    obj=doc.addObject('Part::Feature','AnnularSleeve')
+    obj.Shape=Part.makeCylinder(10,20).cut(Part.makeCylinder(4,20))
+    doc.recompute();doc.saveAs(str(out/'annular-sleeve.FCStd'))
+    for name in ('top','iso'):
+        emit('sleeve-section-'+name,[obj],ExportOptions(views=(STANDARD_VIEWS[name],),mode='section',
+             section=SectionSpec((0,0,10),(0,0,1))))
+    emit('sleeve-section-offset',[obj],ExportOptions(views=(STANDARD_VIEWS['right'],),mode='section',
+         section=SectionSpec((2,0,0),(1,0,0))))
+    App.closeDocument(doc.Name)
+
+    doc=App.newDocument('OCSMExportOcclusion')
+    front=doc.addObject('Part::Feature','FrontBlock');front.Shape=Part.makeBox(40,10,30)
+    behind=doc.addObject('Part::Feature','BehindBlock');behind.Shape=Part.makeBox(10,5,10,App.Vector(10,20,10))
+    doc.recompute();doc.saveAs(str(out/'occlusion.FCStd'))
+    for mode in ('visible','hidden'):
+        emit('mutual-occlusion-'+mode,[front,behind],ExportOptions(mode=mode))
+    App.closeDocument(doc.Name)
+    report['status']='ok';status=0
+except Exception:
+    report['error']=traceback.format_exc()
+(out/'examples-report.json').write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf-8')
+print(json.dumps(report,ensure_ascii=False,indent=2))
+sys.stdout.flush();sys.stderr.flush();os._exit(status)

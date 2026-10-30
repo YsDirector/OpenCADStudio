@@ -1,0 +1,127 @@
+"""Read-only-to-user-documents baseline, run in its OWN FreeCADCmd process.
+
+Usage: QT_QPA_PLATFORM=offscreen FreeCADCmd tests/probe_native.FCMacro
+Outputs go to OCSM_EXPORT_ARTIFACT_DIR or tools/freecad_ocsm/artifacts/native.
+"""
+import json
+import os
+from pathlib import Path
+import sys
+import traceback
+
+import FreeCAD as App
+import Part
+import TechDraw
+from PySide import QtCore
+
+root = Path(__file__).resolve().parents[1]
+out = Path(os.environ.get("OCSM_EXPORT_ARTIFACT_DIR", root / "artifacts" / "native"))
+out.mkdir(parents=True, exist_ok=True)
+report = {"freecad": list(App.Version()), "occt": getattr(Part, "OCC_VERSION", None),
+          "python": sys.version, "gui_up": bool(App.GuiUp)}
+status = 1
+try:
+    app = QtCore.QCoreApplication.instance() or QtCore.QCoreApplication([])
+    doc = App.newDocument("OCSMExportNativeBaseline")
+    source = doc.addObject("Part::Feature", "BlindHoleBlock")
+    source.Shape = Part.makeBox(40, 30, 20).cut(
+        Part.makeCylinder(4, 10, App.Vector(12, 0, 10), App.Vector(0, 1, 0)))
+    page = doc.addObject("TechDraw::DrawPage", "Page")
+    template = doc.addObject("TechDraw::DrawSVGTemplate", "Template")
+    template.Template = str(root / 'tests' / 'minimal-template.svg')
+    page.Template = template
+    view = doc.addObject("TechDraw::DrawViewPart", "View")
+    page.addView(view)
+    view.Source = [source]
+    view.Direction = (0, 1, 0)
+    view.HardHidden = True
+    view.ScaleType = "Custom"
+    view.Scale = 0.5
+    view.Rotation = 30
+    doc.recompute()
+    def wait_ready(target):
+        loop = QtCore.QEventLoop()
+        poll = QtCore.QTimer()
+        timeout = QtCore.QTimer()
+        timeout.setSingleShot(True)
+        timed_out = [False]
+        def check_ready():
+            if target.getVisibleEdges():
+                loop.quit()
+        def expired():
+            timed_out[0] = True
+            loop.quit()
+        poll.timeout.connect(check_ready)
+        timeout.timeout.connect(expired)
+        poll.start(50)
+        timeout.start(20000)
+        loop.exec()
+        poll.stop()
+        timeout.stop()
+        if timed_out[0]:
+            raise RuntimeError("Native TechDraw HLR did not become ready in 20 seconds")
+    wait_ready(view)
+    report['properties'] = {key: str(getattr(view, key)) for key in
+                            ('Direction','XDirection','Scale','Rotation','CenterLines','CosmeticEdges','GeomFormats')}
+    report['base_visible'] = len(view.getVisibleEdges(True))
+    report['base_hidden'] = len(view.getHiddenEdges(True))
+    report['base_edge_points'] = [[list(e.valueAt(e.FirstParameter)),list(e.valueAt(e.LastParameter))] for e in view.getVisibleEdges(True)]
+    sys.path.insert(0, str(root))
+    from ocsm_export.api import options_from_techdraw, build_scene
+    settings = options_from_techdraw(view)
+    model_scene = build_scene([view], settings)
+    report['inherited_settings'] = str(settings)
+    report['rebuilt_lines'] = [(e.get('start'),e.get('end')) for e in model_scene['views'][0]['entities'] if e['type']=='LINE' and e['role']=='visible']
+    tag = view.makeCosmeticLine(App.Vector(-5, -8, 0), App.Vector(5, -8, 0), 1, 0.18, (0.,0.,0.,0.))
+    cosmetic = view.getCosmeticEdge(tag)
+    def attributes(item):
+        result = {}
+        for key in dir(item):
+            if not key.startswith('_'):
+                try:
+                    result[key] = str(getattr(item, key))
+                except Exception as exc:
+                    result[key] = 'ERROR: ' + str(exc)
+        return result
+    report['cosmetic_attributes'] = attributes(cosmetic)
+    report['cosmetic_property'] = str(view.CosmeticEdges)
+    try:
+        center_tag = view.makeCenterLine(['Face1'], 0)
+        center = view.getCenterLine(center_tag)
+        report['center_attributes'] = attributes(center)
+    except Exception as exc:
+        report['center_probe_error'] = str(exc)
+    doc.recompute()
+    TechDraw.writeDXFView(view, str(out / 'native-view.dxf'), False)
+    TechDraw.writeDXFPage(page, str(out / 'native-page.dxf'))
+    report['view_properties_list'] = list(view.PropertiesList)
+    tube = doc.addObject('Part::Feature','Sleeve')
+    tube.Shape = Part.makeCylinder(10,20).cut(Part.makeCylinder(4,20))
+    base = doc.addObject('TechDraw::DrawViewPart','SleeveView')
+    page.addView(base); base.Source=[tube]; base.Direction=(0,0,1)
+    doc.recompute(); wait_ready(base)
+    section = doc.addObject('TechDraw::DrawViewSection','Section')
+    page.addView(section); section.Source=[tube]; section.BaseView=base
+    section.SectionDirection='Aligned'; section.Direction=(0,0,1)
+    section.SectionNormal=(0,0,1); section.SectionOrigin=(0,0,10)
+    section.FuseBeforeCut=False
+    section.CutSurfaceDisplay='PatHatch'
+    section.FileGeomPattern=str(Path(App.getResourceDir())/'Mod'/'TechDraw'/'PAT'/'FCPAT.pat')
+    section.NameGeomPattern='ANSI31'
+    doc.recompute(); wait_ready(section)
+    TechDraw.writeDXFView(section,str(out/'native-section.dxf'),False)
+    report['section']={key:str(getattr(section,key)) for key in ('Direction','XDirection','SectionNormal','SectionOrigin','CutSurfaceDisplay','FileGeomPattern','NameGeomPattern','HatchScale','HatchRotation')}
+    report['section']['visible_edges']=len(section.getVisibleEdges(True))
+    section_settings=options_from_techdraw(section)
+    rebuilt=build_scene([section],section_settings)
+    report['section']['rebuilt_hatches']=len(rebuilt['views'][0]['hatches'])
+    report['section']['rebuilt_loop_counts']=[len(h['loops']) for h in rebuilt['views'][0]['hatches']]
+    report['status'] = 'ok'
+    status = 0
+except Exception:
+    report['error'] = traceback.format_exc()
+(out / 'baseline.json').write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')
+print(json.dumps(report, ensure_ascii=False, indent=2))
+sys.stdout.flush()
+sys.stderr.flush()
+os._exit(status)
