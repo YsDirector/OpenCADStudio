@@ -51,6 +51,43 @@
 - Common section views: full section, half section, local section, aligned (revolved) section, offset (stepped) section (`SECTION` leader lines support polylines = aligned/offset sections).
 - Hatching of metal parts is a thin continuous line with 2–4 mm spacing (adjust to the sheet format).
 
+### 4.1 Local (Broken-out) Sections by Complementary Trimming (OCSM / FreeCAD)
+
+> Confirmed by the user on 2026-10-25 using the four-stage example `~/桌面/OCSM/局部剖示例.dxf`.
+> Applies to OCSM shaft-generator output and to 2D views generated/exported from a FreeCAD 3D model.
+
+**Principle: a local section is not a layer of hatch placed over a normal view. Trim the normal and full-section views into complementary parts, then combine them.**
+
+#### Prerequisites
+
+- Both views must represent **the same part/model and dimensions, viewing direction, projection convention, scale and units**. Preserve the originals and trim working copies.
+- For OCSM, use the same complete shaft expression to generate `VIEW 常规` and `VIEW 剖视`; do not redraw the entire shaft outline by hand.
+- For FreeCAD 3D-to-2D work, prepare the corresponding normal projection and a **genuine section derived from the model**. Its cutting plane/depth must reveal the intended local internal features; do not combine an unrelated orientation or arbitrary cutting depth.
+
+#### Four stages, left to right
+
+| Stage | Normal view | Full-section view / combined result |
+| --- | --- | --- |
+| 1. Prepare both views | Retain the complete unsectioned appearance | Prepare the matching full section, including actual cut contours and correct hatching |
+| 2. Define the same local region R | Draw the break-boundary curves required by the reference | **Copy the same curves using corresponding datums**; do not independently sketch two sets that merely look alike |
+| 3. Trim complementary parts | **Remove the lines inside R** that the section replaces; keep the unsectioned part outside R | **Keep only the cut contours, internal-feature lines and hatch inside R**; remove the content outside R |
+| 4. Align and combine | Align both parts precisely using the same axis, end face or datum point | Form one local-section view; retain one copy of each break boundary and remove coincident lines/duplicate centerlines caused by joining views of the same part |
+
+In short: **result = normal view outside R + full-section view inside R + one copy of the break boundary.**
+R may contain one or several areas bounded by free curves; it is not restricted to an axial rectangular window. The upper/lower patches in this example do not require all parts to use symmetric local sections.
+
+#### Trimming and acceptance checks
+
+- **Process contours, internal-feature lines and HATCH boundaries together**, not just hatch strokes. Compute the break-line/contour intersections and share their exact endpoints; retain true circles/arcs rather than approximating them with polylines.
+- Hatch boundaries must enclose the **trimmed material regions**. Do not fill holes or slots. Preserve the original section's prescribed unhatched features, such as gear teeth.
+- Leave no hatch or section-only internal lines in unsectioned areas, and no superseded normal-view lines in the cut region. The combined result must have no missing lines, gaps, duplicate outlines caused by joining views of the same part or duplicate break boundaries. This does not require deleting intentional coincident outlines retained in different assembly-part blocks for independent reuse; check assembly visibility and downstream export as well (chapter `16` §6a).
+- Keep hatch direction and spacing consistent within one part. Preserve layers and ByLayer properties: break boundaries on `2细线层`, HATCH on `5剖面线层`.
+- Verify **datum coordinates/intersections, detail screenshots and hatch-loop closure**; alignment by eye is insufficient. Apply the drawing audit and save/reload checks required by the practical tracing rules in chapter 18.
+- **Do not** substitute a full section for a local section in the reference, blanket the normal view with HATCH, or use white masking to pretend that complementary trimming was performed.
+
+This is a general drafting workflow, **not a claim that a one-command arbitrary-curve local-section feature exists**. Use only trimming commands or automation interfaces verified for the current host.
+The worked example and source-file notes are in [chapter 18 (Chinese)](../18-抄图实战口径.md), §9.
+
 ## 5. Dimension Annotation Elements (GB/T 4458.4)
 
 - Extension lines are led out from the contour, leaving a gap of 2–3 to the contour; the spacing between dimension lines is ≥ 5 (small dimensions may be moved outside).

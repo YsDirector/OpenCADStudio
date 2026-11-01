@@ -97,6 +97,24 @@ OCSMFRAMEINIT <name> [scale] [at x,y] [rot deg]      (OCSMFRAMEINSERT uses the s
   4. enter **cursor-follow** interaction: moving the mouse carries the frame preview → **one click to settle**.
 - After settling, the title-block attributes (drawing name / drawing number / material / scale / weight etc.) can be edited directly by double-clicking the ATTDEF, or with the host's attribute editor.
 
+## Title-block sign-off convention (local A3 template, 2026-10-27)
+
+This is the local workflow mapping, not a claim that every GB title block must contain these fields:
+
+| Workflow role | Visible field / tag | English prompt |
+| --- | --- | --- |
+| Design and self-check | 设计 | DESIGN |
+| Proofreading / drawing-form review | **标准化** | STANDARD |
+| Engineering review | 审核 | REVIEWED |
+| Human approval | **批准**, immediately above the main date cell, on the engineering-review row | APPROVED |
+| Material | 材料 | **MATERIAL**, no longer PRODUCT_NAME |
+
+- Do not add a separate 校对 field. Proofreading signs 标准化; engineering review checks that same frame instance's actual 标准化 value before proceeding. A rejection invalidates the proofreading and engineering-review signatures. Approval remains a human decision.
+- Sign with the model-family short name; retain the full model, drawing version, and evidence in the review report. Edit the selected **INSERT attribute value**, not its shared ATTDEF. A tag displayed for an empty attribute is not a signature.
+- The installed template originally contained 20 ATTDEFs and now contains 21 after adding approval. A single insert into a blank drawing produces **one INSERT with 21 instance attributes**. Do not double-count the definitions as another instance; repeated date/drawing-number tags in the side and main panels serve different locations.
+- A desktop `frame/clean/` intermediate copy contained 40 ATTDEFs; it is not the installed template. Do not delete installed fields on that basis or overwrite the new template with that old intermediate. Original backup: `a3_landscape_att.dwg.bak-20261027-171902`.
+- In this run the dedicated `OCSMFRAMEINIT ... at ...` automation path reported `import_frame_block: not supported by this host`. Native `-INSERT` and a DWG 2000 `save_verified` roundtrip passed; this does not mean the dedicated host integration has been fixed.
+
 ## 2. The Relation Between Scale and Dimensions (key concept)
 
 | Concept | Where | Notes |

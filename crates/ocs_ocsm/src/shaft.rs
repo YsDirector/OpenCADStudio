@@ -20,6 +20,10 @@
 //!
 //! - `S` 起始直径（靠左）、`E` 终点直径（省略 = 圆柱段，`E=S`）、`L` 段长（必给）；
 //! - `CH2@L` / `CH2@R`：端面倒角 C2，贴该段左/右端（`@` 省略默认右端）；
+//! - `FI2@L` / `FI2@R`：端面凸圆角 R2（落大径侧，旧写法不变）；
+//!   `FI2@L:CONCAVE` / `FI2@R:CONCAVE`：轴肩根部凹圆角（落小径侧）；
+//!   同端不能同时使用 FI 与 CH，异端允许并存；`@` 省略默认右端。
+//!   圆柱/圆锥均相切。FI 不复用 `r` 关键字（后者仍是 RL 槽根半径）。
 //! - `OV` / `OV3` / `OV3@L`：磨外圆砂轮越程槽（GB/T 6403.5），不写值 = 按该端
 //!   直径查表；`@` 省略默认右端；
 //! - `M` / `M1.5`：**螺纹段标记**（外螺纹侧视图）。不写值 = 简化画法小径 0.85d；
@@ -513,6 +517,9 @@ pub struct Keyway {
     #[serde(rename = "type")]
     pub kind: KeyKind,
     pub l: f64,
+    /// 独立实际槽总长（SL）；提供时不再按键型、键长与端置 t1 换算。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slot_l: Option<f64>,
     pub place: KeywayPlace,
     /// 键宽 b：省略 = 按该段直径查 GB/T 1095 d 列；给了必须等于该轴径档的标准 b。
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -561,6 +568,7 @@ impl Keyway {
     /// 实际槽长：中置 = 折算长度；端置 = 折算长度 + t₁（模板 LC = 端部槽长口径）。
     /// **导向**：槽长 = 键长 L（固定键；键填满槽本身）；导向只有中置，无端置分支。
     pub fn slot_len(&self, t1: f64, b: f64) -> f64 {
+        if let Some(length) = self.slot_l { return length; }
         if self.guided {
             return self.l;
         }
@@ -933,6 +941,9 @@ pub struct Segment {
     pub l: f64,
     /// 倒角（同一端最多一个）。
     pub ch: Vec<Chamfer>,
+    /// 端面凸圆角 / 轴肩根部凹圆角（半径 R；与 CH 同端互斥，异端可并存）。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fillet: Vec<Fillet>,
     /// 越程槽（同一端最多一个）。
     pub ov: Vec<Overtravel>,
     /// 段级退刀槽（`RL@L`/`RL@R`；同一端最多一个）。`M` 段的右端螺纹收尾
@@ -1315,6 +1326,75 @@ fn parse_ch(token: &str, rest: &str, label: &str) -> Result<Chamfer, String> {
     })
 }
 
+/// 凸角（切去大径侧外角）/ 轴肩根部凹角（在小径侧与肩面相切）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FilletKind {
+    #[default]
+    Convex,
+    Concave,
+}
+
+impl FilletKind {
+    fn is_convex(&self) -> bool { *self == Self::Convex }
+
+    fn parse(text: &str, label: &str) -> Result<Self, String> {
+        match text.to_ascii_uppercase().as_str() {
+            "CONVEX" | "OUT" | "凸" => Ok(Self::Convex),
+            "CONCAVE" | "IN" | "ROOT" | "凹" | "根部" => Ok(Self::Concave),
+            _ => Err(crate::i18n::t_fmt("cmd.shaft.err.fillet_kind", &[("label", label), ("kind", text)])),
+        }
+    }
+}
+
+/// 端面圆角的参数/组合检查在 DSL、JSON 和直接构建模型时共用。
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize)]
+pub struct Fillet {
+    pub r: f64,
+    pub end: End,
+    #[serde(default, skip_serializing_if = "FilletKind::is_convex")]
+    pub kind: FilletKind,
+}
+
+fn validate_fillets(fillet: &[Fillet], ch: &[Chamfer], special: bool, label: &str) -> Result<(), String> {
+    let err = |key| crate::i18n::t_fmt(key, &[("label", label)]);
+    if fillet.iter().any(|f| ch.iter().any(|c| c.end == f.end)) {
+        return Err(err("cmd.shaft.err.fillet_ch_conflict"));
+    }
+    if special && !fillet.is_empty() {
+        return Err(err("cmd.shaft.err.fillet_special"));
+    }
+    for (i, f) in fillet.iter().enumerate() {
+        if !f.r.is_finite() || f.r <= 0.0 {
+            return Err(err("cmd.shaft.err.fillet_positive"));
+        }
+        if fillet[..i].iter().any(|other| other.end == f.end) {
+            return Err(err("cmd.shaft.err.fillet_dup_end"));
+        }
+    }
+    Ok(())
+}
+
+fn parse_fillet(token: &str, rest: &str, label: &str) -> Result<Fillet, String> {
+    let rest = rest.strip_prefix(['=', ':']).unwrap_or(rest);
+    if rest.is_empty() {
+        return Err(crate::i18n::t_fmt("cmd.shaft.err.key_no_value", &[("label", label), ("what", "FI")]));
+    }
+    if !starts_number(rest) {
+        return Err(unknown_keyword(token, label));
+    }
+    let (rest, kind) = match rest.rsplit_once(':') {
+        Some((value, kind)) => (value, FilletKind::parse(kind, label)?),
+        None => (rest, FilletKind::Convex),
+    };
+    let (value, end) = split_end(rest);
+    Ok(Fillet {
+        r: parse_number(value, label, "FI")?,
+        end: parse_end_token(end, label, "FI")?,
+        kind,
+    })
+}
+
 fn parse_ov(token: &str, rest: &str, label: &str) -> Result<Overtravel, String> {
     let rest = rest.strip_prefix(['=', ':']).unwrap_or(rest);
     let (value, end) = split_end(rest);
@@ -1488,6 +1568,7 @@ enum KeyParam {
     /// 合并键型记号（`导向A` / `GUIDED_A` 等；用户 2026-09-25 收尾，键型下拉的 DSL 形式）。
     Style,
     Len,
+    SlotLen,
     B,
     H,
     T1,
@@ -1561,7 +1642,7 @@ fn key_param_key(token: &str) -> Option<(KeyParam, &str)> {
             return Some((KeyParam::LegacyLc, &token[..]));
         }
     }
-    for (prefix, kind) in [("T1", KeyParam::T1), ("H", KeyParam::H), ("B", KeyParam::B)] {
+    for (prefix, kind) in [("SL", KeyParam::SlotLen), ("T1", KeyParam::T1), ("H", KeyParam::H), ("B", KeyParam::B)] {
         let Some(rest_upper) = upper.strip_prefix(prefix) else {
             continue;
         };
@@ -1606,6 +1687,7 @@ fn key_places_cn(places: &[&str]) -> String {
 fn assemble_keyway(
     key_kind: Option<KeyKind>,
     key_len: Option<f64>,
+    key_slot_l: Option<f64>,
     key_b: Option<f64>,
     key_h: Option<f64>,
     key_t1: Option<f64>,
@@ -1615,6 +1697,7 @@ fn assemble_keyway(
     label: &str,
 ) -> Result<Option<Keyway>, String> {
     let any_param = key_kind.is_some()
+        || key_slot_l.is_some()
         || key_len.is_some()
         || key_b.is_some()
         || key_h.is_some()
@@ -1688,12 +1771,21 @@ fn assemble_keyway(
             }
         }
     }
-    let l = key_len.ok_or_else(|| {
+    if let Some(sl) = key_slot_l {
+        if !sl.is_finite() || sl <= 0.0 {
+            return Err(crate::i18n::t_fmt("cmd.shaft.err.slot_l_positive", &[("label", label)]));
+        }
+        if key_guided {
+            return Err(crate::i18n::t_fmt("cmd.shaft.err.slot_l_guided", &[("label", label)]));
+        }
+    }
+    let l = key_len.or(key_slot_l).ok_or_else(|| {
         crate::i18n::t_fmt("cmd.shaft.err.key_no_len", &[("label", label)])
     })?;
     Ok(Some(Keyway {
         kind,
         l,
+        slot_l: key_slot_l,
         place,
         b: key_b,
         h: key_h,
@@ -1707,6 +1799,7 @@ fn parse_segment(chunk: &str, label: &str, program: &mut Program) -> Result<Segm
     let tokens: Vec<&str> = chunk.split_whitespace().collect();
     let (mut s, mut e, mut l) = (None, None, None);
     let mut ch: Vec<Chamfer> = Vec::new();
+    let mut fillet: Vec<Fillet> = Vec::new();
     let mut ov: Vec<Overtravel> = Vec::new();
     let mut thread: Option<Thread> = None;
     // 轴槽 KEY（GB/T 1095）：**轴段类型**（与 M/SPLINE 同级）= 键型 A/B/C + 键长 L + 位置；
@@ -1714,6 +1807,7 @@ fn parse_segment(chunk: &str, label: &str, program: &mut Program) -> Result<Segm
     let mut key_on = false;
     let mut key_kind: Option<KeyKind> = None;
     let mut key_len: Option<f64> = None;
+    let mut key_slot_l: Option<f64> = None;
     let mut key_b: Option<f64> = None;
     let mut key_h: Option<f64> = None;
     let mut key_t1: Option<f64> = None;
@@ -1821,6 +1915,7 @@ fn parse_segment(chunk: &str, label: &str, program: &mut Program) -> Result<Segm
             let name = match param {
                 KeyParam::Kind | KeyParam::Style => crate::i18n::t("cmd.shaft.err.keyparam.kind"),
                 KeyParam::Len => crate::i18n::t("cmd.shaft.err.keyparam.len"),
+                KeyParam::SlotLen => "SL".to_string(),
                 KeyParam::B => "b".to_string(),
                 KeyParam::H => "h".to_string(),
                 KeyParam::T1 => "t1".to_string(),
@@ -1978,6 +2073,7 @@ fn parse_segment(chunk: &str, label: &str, program: &mut Program) -> Result<Segm
                     }
                     let slot = match param {
                         KeyParam::Len => &mut key_len,
+                        KeyParam::SlotLen => &mut key_slot_l,
                         KeyParam::B => &mut key_b,
                         KeyParam::H => &mut key_h,
                         KeyParam::T1 => &mut key_t1,
@@ -1992,6 +2088,8 @@ fn parse_segment(chunk: &str, label: &str, program: &mut Program) -> Result<Segm
                     *slot = Some(value);
                 }
             }
+        } else if upper.starts_with("FI") {
+            fillet.push(parse_fillet(token, &token[2..], label)?);
         } else if upper.starts_with("CH") {
             let item = parse_ch(token, &token[2..], label)?;
             if ch.iter().any(|x| x.end == item.end) {
@@ -2243,8 +2341,9 @@ fn parse_segment(chunk: &str, label: &str, program: &mut Program) -> Result<Segm
         }
         index += 1;
     }
+    validate_fillets(&fillet, &ch, gear_on || spline_on, label)?;
     // ── KEY 轴槽（GB/T 1095）：组装子关键字；键型/键尺寸 b×h/键长必给。──
-    let keyway = assemble_keyway(key_kind, key_len, key_b, key_h, key_t1, key_place, key_double, key_guided, label)?;
+    let keyway = assemble_keyway(key_kind, key_len, key_slot_l, key_b, key_h, key_t1, key_place, key_double, key_guided, label)?;
     if keyway.is_some() && (gear_on || spline_on) {
         return Err(crate::i18n::t_fmt("cmd.shaft.err.key_gear_conflict", &[("label", label)]));
     }
@@ -2287,6 +2386,7 @@ fn parse_segment(chunk: &str, label: &str, program: &mut Program) -> Result<Segm
                 e: spline.big,
                 l: spline.segment_len(),
                 ch: Vec::new(),
+                fillet: Vec::new(),
                 ov: Vec::new(),
                 relief: Vec::new(),
                 thread: None,
@@ -2352,6 +2452,7 @@ fn parse_segment(chunk: &str, label: &str, program: &mut Program) -> Result<Segm
             e: e.unwrap_or(s),
             l,
             ch,
+            fillet,
             ov,
             relief,
             thread,
@@ -2418,6 +2519,7 @@ fn parse_segment(chunk: &str, label: &str, program: &mut Program) -> Result<Segm
         e: d,
         l: gear.width(),
         ch,
+        fillet,
         ov,
         relief: Vec::new(),
         thread,
@@ -2568,6 +2670,8 @@ struct JsonSegment {
     #[serde(default, deserialize_with = "one_or_many")]
     ch: Vec<JsonChamfer>,
     #[serde(default, deserialize_with = "one_or_many")]
+    fillet: Vec<JsonFillet>,
+    #[serde(default, deserialize_with = "one_or_many")]
     ov: Vec<JsonOvertravel>,
     /// 段级退刀槽（`RL@L`/`RL@R`）：对象或数组；`M` 段右端收尾仍走 `thread.relief`。
     #[serde(default, deserialize_with = "one_or_many")]
@@ -2597,6 +2701,9 @@ struct JsonKeyway {
     /// 键长 L（标准系列；别名 `len`）。
     #[serde(default, alias = "len")]
     l: Option<f64>,
+    /// 独立槽总长 SL（不按键型/键长换算）。
+    #[serde(default, alias = "slot_length")]
+    slot_l: Option<f64>,
     /// 位置：`mid`/`end`（中文「中/端」也认）；省 = 中置。
     #[serde(default)]
     place: Option<String>,
@@ -2647,6 +2754,16 @@ struct JsonChamfer {
     c: f64,
     #[serde(default)]
     end: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct JsonFillet {
+    r: f64,
+    #[serde(default)]
+    end: Option<String>,
+    #[serde(default)]
+    kind: Option<String>,
 }
 
 #[derive(serde::Deserialize)]
@@ -2837,6 +2954,14 @@ fn parse_json(text: &str) -> Result<Program, String> {
             }
             ch.push(Chamfer { c: value.c, end });
         }
+        let fillet = item.fillet.iter().map(|f| {
+            Ok(Fillet {
+                r: f.r,
+                end: parse_end_token(f.end.as_deref(), &seg_label(number), "FI")?,
+                kind: FilletKind::parse(f.kind.as_deref().unwrap_or("convex"), &seg_label(number))?,
+            })
+        }).collect::<Result<Vec<_>, String>>()?;
+        validate_fillets(&fillet, &ch, item.gear.is_some() || item.spline.is_some(), &seg_label(number))?;
         let mut ov = Vec::new();
         for (k, value) in item.ov.iter().enumerate() {
             let end = match &value.end {
@@ -2898,6 +3023,7 @@ fn parse_json(text: &str) -> Result<Program, String> {
                 assemble_keyway(
                     Some(kind),
                     k.l,
+                    k.slot_l,
                     k.b,
                     k.h,
                     k.t1,
@@ -2970,6 +3096,7 @@ fn parse_json(text: &str) -> Result<Program, String> {
                 e: spline.big,
                 l: spline.segment_len(),
                 ch: Vec::new(),
+                fillet: Vec::new(),
                 ov: Vec::new(),
                 relief: Vec::new(),
                 thread: None,
@@ -3044,6 +3171,7 @@ fn parse_json(text: &str) -> Result<Program, String> {
                 e: d,
                 l: gear.width(),
                 ch,
+                fillet,
                 ov,
                 relief: Vec::new(),
                 thread,
@@ -3067,6 +3195,7 @@ fn parse_json(text: &str) -> Result<Program, String> {
             e: item.e.unwrap_or(s),
             l,
             ch,
+            fillet,
             ov,
             relief,
             thread,
@@ -3104,6 +3233,61 @@ fn parse_json(text: &str) -> Result<Program, String> {
 /// 与端面无关的逐段检查（段长/直径/倒角/重复特征）。
 /// 端面之间的检查（倒角直径变化量、越程槽台阶…）在 [`build`] 里做。
 pub fn validate(program: &Program) -> Result<(), String> {
+    validate_resolved(&resolve_fillet_landings(program)?)
+}
+
+/// 将 FI 请求归到真实落点段（凸角大径侧 / 根部凹角小径侧）。原始 GUI/DSL 锚点保留；
+/// 几何、KEY 净长校验及局部剖切片必须使用同一份已解析落点的模型。
+fn resolve_fillet_landings(program: &Program) -> Result<Program, String> {
+    let mut resolved = program.clone();
+    for seg in &mut resolved.segments {
+        seg.fillet.clear();
+    }
+    for (i, seg) in program.segments.iter().enumerate() {
+        let label = seg_label(i + 1);
+        validate_fillets(&seg.fillet, &seg.ch, seg.gear.is_some() || seg.spline.is_some(), &label)?;
+        for f in &seg.fillet {
+            if f.end == End::R && seg.thread.as_ref().is_some_and(|t| t.tl.is_some() || t.relief) {
+                return Err(crate::i18n::t_fmt("cmd.shaft.err.fillet_relief", &[("label", &label)]));
+            }
+            let neighbor = match f.end {
+                End::L => i.checked_sub(1),
+                End::R => (i + 1 < program.segments.len()).then_some(i + 1),
+            };
+            let opposite = if f.end == End::L { End::R } else { End::L };
+            let mut target = i;
+            let mut end = f.end;
+            if let Some(j) = neighbor {
+                let other = &program.segments[j];
+                if f.kind == FilletKind::Convex && other.ch.iter().any(|c| c.end == opposite) {
+                    return Err(crate::i18n::t_fmt("cmd.shaft.err.fillet_same_face", &[("label", &label)]));
+                }
+                let r = seg.outer_radius(f.end);
+                let rn = other.outer_radius(opposite);
+                if (r - rn).abs() < 1e-12 {
+                    return Err(crate::i18n::t_fmt("cmd.shaft.err.fillet_no_face", &[("label", &label)]));
+                }
+                if (f.kind == FilletKind::Convex && rn > r) || (f.kind == FilletKind::Concave && rn < r) {
+                    target = j;
+                    end = opposite;
+                }
+            } else if f.kind == FilletKind::Concave {
+                return Err(crate::i18n::t_fmt("cmd.shaft.err.fillet_root_needs_shoulder", &[("label", &label)]));
+            }
+            let land = &mut resolved.segments[target];
+            if land.gear.is_some() || land.spline.is_some() {
+                return Err(crate::i18n::t_fmt("cmd.shaft.err.fillet_special", &[("label", &label)]));
+            }
+            if land.fillet.iter().any(|f| f.end == end) {
+                return Err(crate::i18n::t_fmt("cmd.shaft.err.fillet_same_face", &[("label", &label)]));
+            }
+            land.fillet.push(Fillet { r: f.r, end, kind: f.kind });
+        }
+    }
+    Ok(resolved)
+}
+
+fn validate_resolved(program: &Program) -> Result<(), String> {
     if program.segments.is_empty() {
         return Err(crate::i18n::t("cmd.shaft.err.validate_no_segments").into());
     }
@@ -3125,6 +3309,9 @@ pub fn validate(program: &Program) -> Result<(), String> {
         if !seg.e.is_finite() || seg.e <= 0.0 {
             return Err(crate::i18n::t_fmt("cmd.shaft.err.seg_e_positive", &[("label", &seg_label(number)), ("p0", &(trim(seg.e)).to_string())]));
         }
+        // 原始行 CH/FI 互斥已在 resolve_fillet_landings 检查；这里 FI 已移到真实落点，
+        // CH 则仍保留其原始锚点。实际落点上的 CH/FI 冲突在 build_geometry 统一检查。
+        validate_fillets(&seg.fillet, &[], seg.gear.is_some() || seg.spline.is_some(), &seg_label(number))?;
         for chamfer in &seg.ch {
             if !chamfer.c.is_finite() || chamfer.c <= 0.0 {
                 return Err(crate::i18n::t_fmt("cmd.shaft.err.chamfer_positive", &[("label", &seg_label(number)), ("p0", &(trim(chamfer.c)).to_string())]));
@@ -3194,6 +3381,9 @@ pub fn validate(program: &Program) -> Result<(), String> {
                     return Err(crate::i18n::t_fmt("cmd.shaft.err.rl_g2_too_long", &[("label", &seg_label(number)), ("p0", &(trim(dims.g2)).to_string()), ("p1", &(trim(seg.l)).to_string())]));
                 }
                 // 同一段同端的 CH / OV 是「同端只能有一个槽/倒角」。
+                if seg.fillet.iter().any(|f| f.end == spec.end) {
+                    return Err(crate::i18n::t_fmt("cmd.shaft.err.fillet_relief", &[("label", &seg_label(number))]));
+                }
                 if seg.ch.iter().any(|c| c.end == spec.end) {
                     return Err(crate::i18n::t_fmt("cmd.shaft.err.rl_ch_conflict", &[("label", &seg_label(number)), ("p0", &(end_cn(spec.end)).to_string())]));
                 }
@@ -3204,6 +3394,8 @@ pub fn validate(program: &Program) -> Result<(), String> {
         }
         // ── 轴槽 KEY（GB/T 1095）：结构、装得下、端置位置（几何定位在 `keyway_geom`）──
         if let Some(keyway) = &seg.keyway {
+            let key_seg = keyway_segment(program, index);
+            let seg = &key_seg;
             if seg.gear.is_some() || seg.spline.is_some() {
                 return Err(crate::i18n::t_fmt("cmd.shaft.err.key_gear_conflict", &[("label", &seg_label(number))]));
             }
@@ -3276,7 +3468,7 @@ pub fn validate(program: &Program) -> Result<(), String> {
                         }
                     }
                 }
-            } else {
+            } else if keyway.slot_l.is_none() {
                 crate::partgen_keys::check_length_1096(b, keyway.l)
                     .map_err(|e| crate::i18n::t_fmt("cmd.shaft.err.keyway_prefix", &[("label", &seg_label(number)), ("e", &e.to_string())]))?;
             }
@@ -3304,6 +3496,19 @@ pub fn validate(program: &Program) -> Result<(), String> {
                 }
             }
             let slot_len = keyway.slot_len(t1, b);
+            if let Some(sl) = keyway.slot_l {
+                if !sl.is_finite() || sl <= 0.0 {
+                    return Err(crate::i18n::t_fmt("cmd.shaft.err.slot_l_positive", &[("label", &seg_label(number))]));
+                }
+                if keyway.guided {
+                    return Err(crate::i18n::t_fmt("cmd.shaft.err.slot_l_guided", &[("label", &seg_label(number))]));
+                }
+                let render_len = sl - if keyway.place == KeywayPlace::End { t1 } else { 0.0 };
+                let min_len = if keyway.place == KeywayPlace::End { b / 2.0 } else { b };
+                if render_len < min_len - 1e-9 {
+                    return Err(crate::i18n::t_fmt("cmd.shaft.err.slot_l_shape", &[("label", &seg_label(number))]));
+                }
+            }
             let x0 = x0s[index];
             let ch_l = keyway_chamfer(seg, End::L);
             let ch_r = keyway_chamfer(seg, End::R);
@@ -3325,6 +3530,10 @@ pub fn validate(program: &Program) -> Result<(), String> {
                     } else {
                         return Err(crate::i18n::t_fmt("cmd.shaft.err.key_end_place_only", &[("label", &seg_label(number))]));
                     };
+                    let opposite_fillet = seg.fillet.iter().find(|f| f.end != side).map(|f| f.r).unwrap_or(0.0);
+                    if slot_len > seg.l - opposite_fillet + 1e-9 && opposite_fillet > 0.0 {
+                        return Err(crate::i18n::t_fmt("cmd.shaft.err.fillet_key_overlap", &[("label", &seg_label(number))]));
+                    }
                     if slot_len > seg.l + 1e-9 {
                         return Err(crate::i18n::t_fmt("cmd.shaft.err.key_slot_len_too_long", &[("label", &seg_label(number)), ("p0", &(trim(keyway.l)).to_string()), ("p1", &(trim(t1)).to_string()), ("p2", &(trim(slot_len)).to_string()), ("p3", &(trim(seg.l)).to_string())]));
                     }
@@ -3333,6 +3542,9 @@ pub fn validate(program: &Program) -> Result<(), String> {
                         End::R => ch_r,
                     };
                     if c > 0.0 && t1 < c - 1e-9 {
+                        if seg.fillet.iter().any(|f| f.end == side) {
+                            return Err(crate::i18n::t_fmt("cmd.shaft.err.fillet_key_overlap", &[("label", &seg_label(number))]));
+                        }
                         return Err(crate::i18n::t_fmt("cmd.shaft.err.key_t1_lt_chamfer", &[("label", &seg_label(number)), ("p0", &(trim(t1)).to_string()), ("p1", &(end_cn(side)).to_string()), ("p2", &(trim(c)).to_string())]));
                     }
                 }
@@ -3400,6 +3612,9 @@ pub fn validate(program: &Program) -> Result<(), String> {
                     if need > seg.l + 1e-9 {
                         return Err(crate::i18n::t_fmt("cmd.shaft.err.sd_tl_too_long", &[("label", &seg_label(number)), ("p0", &(trim(a)).to_string()), ("p1", &(trim(tl)).to_string()), ("p2", &(trim(need)).to_string()), ("p3", &(trim(seg.l)).to_string())]));
                     }
+                }
+                if seg.fillet.iter().any(|f| f.end == End::R) {
+                    return Err(crate::i18n::t_fmt("cmd.shaft.err.fillet_relief", &[("label", &seg_label(number))]));
                 }
                 if seg.ch.iter().any(|c| c.end == End::R) {
                     return Err(crate::i18n::t_fmt("cmd.shaft.err.tlro_no_chamfer_v", &[("label", &seg_label(number))]));
@@ -3492,17 +3707,146 @@ fn chamfer_geom(seg: &Segment, x0: f64, end: End, c: f64) -> ([f64; 2], [f64; 2]
 }
 
 // ══════════════════════════════════════════════════════════════════════════
-// 轴槽几何（GB/T 1095；口径见 `review/键槽_设计.md`）
+// 端面凸圆角（FI）与轴槽几何
+// 轴槽（GB/T 1095）口径见 `review/键槽_设计.md`
 // ══════════════════════════════════════════════════════════════════════════
 
-/// 键槽落在本段上的倒角内缩量（倒角根距端面；无 CH = 0）。
+/// 圆角上半轮廓：与竖直端面、圆柱/圆锥外轮廓同时相切的真圆弧。
+#[derive(Debug, Clone, Copy)]
+struct FilletGeom {
+    contour: [f64; 2],
+    face: [f64; 2],
+    c: [f64; 2],
+    r: f64,
+    end: End,
+    kind: FilletKind,
+}
+
+impl FilletGeom {
+    fn angle(self, p: [f64; 2]) -> f64 {
+        (p[1] - self.c[1]).atan2(p[0] - self.c[0]).to_degrees().rem_euclid(360.0)
+    }
+
+    fn inset(self) -> f64 {
+        (self.contour[0] - self.face[0]).abs()
+    }
+
+    fn entities(self) -> [EntityType; 2] {
+        let a = self.angle(self.contour);
+        let (start, end) = match (self.kind, self.end) {
+            (FilletKind::Convex, End::L) => (a, 180.0),
+            (FilletKind::Convex, End::R) => (0.0, a),
+            (FilletKind::Concave, End::L) => (180.0, a),
+            (FilletKind::Concave, End::R) => (a, 360.0),
+        };
+        [
+            arc(self.c, self.r, start, end, LAYER_MAIN),
+            arc([self.c[0], -self.c[1]], self.r, (360.0 - end) % 360.0, 360.0 - start, LAYER_MAIN),
+        ]
+    }
+
+    /// 上半剖面边界一律左→右：凸角为 CW，根部凹角为 CCW。原生 ARC 均按 CCW 存储。
+    fn edge(self) -> HatchEdge {
+        let a = self.angle(self.contour);
+        let (start_deg, end_deg) = match self.end {
+            End::L => (180.0, a),
+            End::R => (a, if self.kind == FilletKind::Concave { 360.0 } else { 0.0 }),
+        };
+        HatchEdge::Arc { c: self.c, r: self.r, start_deg, end_deg, ccw: self.kind == FilletKind::Concave }
+    }
+
+    /// 圆柱螺纹小径与圆角的交点。小径低于端面切点时无须内缩。
+    fn minor_clip(self, y: f64) -> Option<(f64, HatchEdge)> {
+        if self.kind == FilletKind::Concave || y <= self.face[1] + 1e-12 {
+            return None;
+        }
+        let dx = (self.r * self.r - (y - self.c[1]).powi(2)).max(0.0).sqrt();
+        let x = self.c[0] + if self.end == End::L { -dx } else { dx };
+        let angle = self.angle([x, y]);
+        let (start_deg, end_deg) = match self.end {
+            End::L => (180.0, angle),
+            End::R => (angle, 0.0),
+        };
+        Some((x, HatchEdge::Arc { c: self.c, r: self.r, start_deg, end_deg, ccw: false }))
+    }
+
+    fn minor_inset(self, y: f64) -> f64 {
+        self.minor_clip(y).map(|(x, _)| (x - self.face[0]).abs()).unwrap_or(0.0)
+    }
+}
+
+// Legacy convex helper retained for regression tests; construction uses the typed helper below.
+#[cfg(test)]
+fn fillet_geom(seg: &Segment, x0: f64, end: End, r: f64) -> FilletGeom {
+    fillet_geom_kind(seg, x0, end, r, FilletKind::Convex)
+}
+
+fn fillet_geom_kind(seg: &Segment, x0: f64, end: End, r: f64, kind: FilletKind) -> FilletGeom {
+    let m = (seg.e - seg.s) / (2.0 * seg.l);
+    let norm = m.hypot(1.0);
+    let (x, radius, dir) = match end {
+        End::L => (x0, seg.s / 2.0, 1.0),
+        End::R => (x0 + seg.l, seg.e / 2.0, -1.0),
+    };
+    let sign = if kind == FilletKind::Concave { 1.0 } else { -1.0 };
+    let c = [x + dir * r, radius + r * (sign * norm + dir * m)];
+    FilletGeom {
+        contour: [c[0] + sign * r * m / norm, c[1] - sign * r / norm],
+        face: [x, c[1]],
+        c,
+        r,
+        end,
+        kind,
+    }
+}
+
+fn check_fillet_geom(seg: &Segment, g: FilletGeom, bottom: f64, label: &str) -> Result<(), String> {
+    let eats_face = match g.kind {
+        FilletKind::Convex => g.face[1] <= bottom + 1e-9,
+        FilletKind::Concave => g.face[1] >= bottom - 1e-9,
+    };
+    if !g.face[1].is_finite() || g.face[1] <= 1e-9 || eats_face {
+        return Err(crate::i18n::t_fmt("cmd.shaft.err.fillet_face", &[("label", label)]));
+    }
+    if !g.inset().is_finite() || g.inset() >= seg.l - 1e-9 {
+        return Err(crate::i18n::t_fmt("cmd.shaft.err.fillet_length", &[("label", label)]));
+    }
+    Ok(())
+}
+
+/// 键槽落在本段上的端部内缩量（CH / FI；键槽只能在圆柱段，所以 FI 内缩量 = R）。
 /// 中置槽按「倒角根↔段末」净圆柱的中点定位（模板槽中心 = 该段中点 ✓）。
 fn keyway_chamfer(seg: &Segment, end: End) -> f64 {
     seg.ch
         .iter()
         .find(|c| c.end == end)
         .map(|c| c.c)
+        .or_else(|| seg.fillet.iter().find(|f| f.end == end).map(|f| f.r))
         .unwrap_or(0.0)
+}
+
+/// KEY 的端部净长按实际 CH 落点计算，不按请求锚点截短；FI 已在 build 入口归位。
+fn keyway_segment(program: &Program, index: usize) -> Segment {
+    let mut result = program.segments[index].clone();
+    result.ch.clear();
+    for i in index.saturating_sub(1)..=(index + 1).min(program.segments.len() - 1) {
+        let seg = &program.segments[i];
+        for ch in &seg.ch {
+            let neighbor = match ch.end {
+                End::L => i.checked_sub(1),
+                End::R => (i + 1 < program.segments.len()).then_some(i + 1),
+            };
+            let opposite = if ch.end == End::L { End::R } else { End::L };
+            let (land, end) = match neighbor {
+                Some(j) if program.segments[j].outer_radius(opposite) > seg.outer_radius(ch.end) => (j, opposite),
+                _ => (i, ch.end),
+            };
+            if land == index {
+                result.ch.push(Chamfer { c: ch.c, end });
+            }
+        }
+    }
+    result
 }
 
 /// 一个轴槽在局部坐标系里的全部几何量（局部：段左端 x0、轴线 y=0）。
@@ -3661,7 +4005,7 @@ fn keyway_geom(
         kind: kw.kind,
         double: kw.double,
         b,
-        l: kw.effective_len(b),
+        l: if kw.slot_l.is_some() { slot_len - if kw.place == KeywayPlace::End { t1 } else { 0.0 } } else { kw.effective_len(b) },
         slot_len,
         t1,
         place: kw.place,
@@ -3784,7 +4128,7 @@ fn guided_floor(
 /// 键叠画（仅常规侧视图）：按平键族型别 A/B/C 画键形 + 键中心线；
 /// 端置再加模板的 40° 导入斜线（层 0；x 跨度 = t₁）。
 /// 中心线伸出 = `3.0 × frame_scale`（与轴线的 `3n` 同一口径；模板无图框 n=1 → 3.0）。
-fn emit_key_overlay(out: &mut Vec<EntityType>, kg: &KeywayGeom, frame_scale: f64) {
+fn emit_key_overlay(out: &mut Vec<EntityType>, kg: &KeywayGeom, frame_scale: f64, slot_only: bool) {
     if let Some(gh) = &kg.guided {
         emit_guided_overlay(out, kg, gh, frame_scale);
         return;
@@ -3819,7 +4163,7 @@ fn emit_key_overlay(out: &mut Vec<EntityType>, kg: &KeywayGeom, frame_scale: f64
             // 键体：[face + t₁, face + t₁ + 折算长度]；内端正好到槽闭端。
             let x_flat = face + sgn * kg.t1;
             let x_inner = face + sgn * (kg.t1 + l);
-            if kg.kind == KeyKind::A {
+            if kg.kind == KeyKind::A && !slot_only {
                 // A 型端置：双圆头（外端朝开口）。
                 let co = x_flat + sgn * rk;
                 let ci = x_inner - sgn * rk;
@@ -3836,22 +4180,29 @@ fn emit_key_overlay(out: &mut Vec<EntityType>, kg: &KeywayGeom, frame_scale: f64
                 // B/C 端置（俯视/开口槽口径）：**显示 C** —— 平端朝开口（不画端线）+ 内端圆头；
                 // B 的折算长度已 +b/2，直段正好容纳 L_B。
                 let ci = x_inner - sgn * rk;
-                out.push(line([x_flat, rk], [ci, rk], LAYER_MAIN));
-                out.push(line([x_flat, -rk], [ci, -rk], LAYER_MAIN));
+                // 独立 SL 描述真实开口槽，不叠画装配键的导入斜线；直边一直开到端面。
+                let start = if slot_only { face } else { x_flat };
+                out.push(line([start, rk], [ci, rk], LAYER_MAIN));
+                out.push(line([start, -rk], [ci, -rk], LAYER_MAIN));
                 let (a0, a1) = if sgn > 0.0 { (270.0, 450.0) } else { (90.0, 270.0) };
                 arc(out, [ci, 0.0], a0, a1);
                 out.push(line([ci, -(rk + over)], [ci, rk + over], LAYER_CENTER));
                 // 40° 导入斜线（层 0；x 跨度 = t₁，y 偏移 = (b/2)·tan20°）。
-                let dy = rk * tan20;
-                out.push(line([x_flat, rk], [face, rk + dy], "0"));
-                out.push(line([x_flat, -rk], [face, -rk - dy], "0"));
+                if !slot_only {
+                    let dy = rk * tan20;
+                    out.push(line([x_flat, rk], [face, rk + dy], "0"));
+                    out.push(line([x_flat, -rk], [face, -rk - dy], "0"));
+                }
             }
             let (hx0, hx1) = if sgn > 0.0 {
                 (face - over, x_inner + over)
             } else {
                 (x_inner - over, face + over)
             };
-            out.push(line([hx0, 0.0], [hx1, 0.0], LAYER_CENTER));
+            if !slot_only {
+                // 独立槽不重复叠画轴向中心线，整轴已经有一条贯通轴线。
+                out.push(line([hx0, 0.0], [hx1, 0.0], LAYER_CENTER));
+            }
         }
     }
 }
@@ -3994,6 +4345,8 @@ struct Geometry {
 /// 局部范围内改用按原生段几何生成的剖视子模型。这样 HATCH 边界仍然是闭合环，
 /// 不会把完整轴的 HATCH 逐边裁成开口边界。
 pub fn build(program: &Program, frame_scale: f64) -> Result<Shaft, String> {
+    let resolved = resolve_fillet_landings(program)?;
+    let program = &resolved;
     let Some([x0, x1]) = program.local_section else {
         return build_full(program, frame_scale);
     };
@@ -4006,7 +4359,7 @@ fn build_local_section(
     x0: f64,
     x1: f64,
 ) -> Result<Shaft, String> {
-    validate(program)?;
+    validate_resolved(program)?;
     let (i0, i1) = local_section_indices(program, x0, x1)?;
     if program.view != ShaftView::Section {
         return Err("局部剖必须使用 VIEW 剖视".into());
@@ -4025,7 +4378,9 @@ fn build_local_section(
 
     // 只用局部范围内的完整轴段重建剖视，避免对 HATCH 边界逐边裁剪后得到开口环。
     let mut section_program = program.clone();
-    section_program.segments = program.segments[i0..i1].to_vec();
+    // 切片前把 CH 也按实际凸角归位：落到范围外的请求不能变成切片自由端倒角，
+    // 范围外邻段请求、实际落在范围内的 CH 则必须继承（与入口已归位的 FI 一致）。
+    section_program.segments = (i0..i1).map(|i| keyway_segment(program, i)).collect();
     section_program.view = ShaftView::Section;
     section_program.local_section = None;
     section_program.at = None;
@@ -4209,7 +4564,7 @@ fn side_auto_chamfer(c: Option<f64>, own_r: f64, neighbor_r: Option<f64>) -> Opt
 
 /// 解析 → 校验 → 生成常规视图轮廓，并顺手记录剖面线环用的上半外轮廓段。
 fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, String> {
-    validate(program)?;
+    validate_resolved(program)?;
     let segs = &program.segments;
     let count = segs.len();
 
@@ -4298,6 +4653,7 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
 
     // 倒角 / 越程槽 / 段级退刀槽落在**本段自己**身上的量（决定本段轮廓线被吃掉多少）。
     let mut own_ch = vec![[None::<f64>; 2]; count]; // [左, 右]
+    let mut own_fillet = vec![[None::<FilletGeom>; 2]; count];
     let mut own_ov = vec![[None::<f64>; 2]; count];
     let mut own_relief = vec![[None::<f64>; 2]; count];
     let mut entities: Vec<EntityType> = Vec::new();
@@ -4358,8 +4714,23 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
             (None, Some(c)) => (Some(c), false),
             (None, None) => (None, false),
         };
+        let fi_r = segs[i].fillet.iter().find(|f| f.end == End::R).copied();
+        let fi_l = segs[k].fillet.iter().find(|f| f.end == End::L).copied();
+        let requests: Vec<(usize, Fillet)> = [fi_r.map(|f| (i, f)), fi_l.map(|f| (k, f))].into_iter().flatten().collect();
+        if fi_r.zip(fi_l).is_some_and(|(a, b)| a.kind == b.kind) {
+            return Err(crate::i18n::t_fmt("cmd.shaft.err.fillet_same_face", &[("label", &seg_label(i + 1))]));
+        }
+        let convex_req = requests.iter().find(|(_, f)| f.kind == FilletKind::Convex).copied();
+        let root_req = requests.iter().find(|(_, f)| f.kind == FilletKind::Concave).copied();
+        let fillet = convex_req.map(|(_, f)| f);
+        if fillet.is_some() && chamfer.is_some() {
+            return Err(crate::i18n::t_fmt("cmd.shaft.err.fillet_same_face", &[("label", &seg_label(i + 1))]));
+        }
         let ov_r = segs[i].ov.iter().find(|o| o.end == End::R).copied();
         let ov_l = segs[k].ov.iter().find(|o| o.end == End::L).copied();
+        if root_req.is_some() && (ov_r.is_some() || ov_l.is_some()) {
+            return Err(crate::i18n::t_fmt("cmd.shaft.err.fillet_groove_conflict", &[("label", &seg_label(i + 1))]));
+        }
         if ov_r.is_some() && ov_l.is_some() {
             return Err(crate::i18n::t_fmt("cmd.shaft.err.ov_same_face", &[("label", &seg_label(i + 1)), ("p0", &(k + 1).to_string())]));
         }
@@ -4375,6 +4746,9 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
             return Err(crate::i18n::t_fmt("cmd.shaft.err.one_relief_per_face", &[("label", &seg_label(i + 1))]));
         }
         if relief_kinds > 0 {
+            if fillet.is_some() || root_req.is_some() {
+                return Err(crate::i18n::t_fmt("cmd.shaft.err.fillet_relief", &[("label", &seg_label(i + 1))]));
+            }
             if chamfer.is_some() {
                 return Err(crate::i18n::t_fmt("cmd.shaft.err.rl_no_chamfer", &[("label", &seg_label(i + 1))]));
             }
@@ -4387,7 +4761,7 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
         let rb = segs[k].outer_radius(End::L);
         // 齿轮/渐开线花键端面自动倒角 C = round(0.6m)：按单侧规则决定该端倒不倒
         //（自由端/邻段更小 → 倒；邻段更大/齐平 → 不倒；用户 CH 已占该侧时让位）。
-        let user_land = chamfer.map(|_| if rb > ra { k } else { i });
+        let user_land = (chamfer.is_some() || fillet.is_some()).then_some(if rb > ra { k } else { i });
         let auto_c_r = if user_land == Some(i) {
             None
         } else {
@@ -4401,6 +4775,9 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
 
         let mut bottom = (ra - auto_c_r.unwrap_or(0.0)).min(rb - auto_c_l.unwrap_or(0.0));
         let mut top = (ra - auto_c_r.unwrap_or(0.0)).max(rb - auto_c_l.unwrap_or(0.0));
+        // FI 复用端面切点/落点信息，但发射真圆弧而非倒角线，也不画光滑切点的贯通线。
+        let mut round_geom: Option<FilletGeom> = None;
+        let mut root_geom: Option<(usize, FilletGeom)> = None;
         let mut chamfer_lines: Option<([f64; 2], [f64; 2])> = None;
         // 带 CH 倒角的落点段（用于判断剖面线边界是否由螺纹小径包络接管）。
         let mut chamfer_land: Option<usize> = None;
@@ -4469,6 +4846,41 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
             } else {
                 own_ch[i][1] = Some(c);
             }
+        }
+
+        if let Some(f) = fillet {
+            let requester = convex_req.expect("fillet 来源于 convex_req").0;
+            let label = seg_label(requester + 1);
+            if (ra - rb).abs() < 1e-12 {
+                return Err(crate::i18n::t_fmt("cmd.shaft.err.fillet_no_face", &[("label", &label)]));
+            }
+            let (land, end, side) = if rb > ra { (k, End::L, 0) } else { (i, End::R, 1) };
+            if segs[land].gear.is_some() || segs[land].spline.is_some() {
+                return Err(crate::i18n::t_fmt("cmd.shaft.err.fillet_special", &[("label", &label)]));
+            }
+            let g = fillet_geom_kind(&segs[land], x0s[land], end, f.r, f.kind);
+            check_fillet_geom(&segs[land], g, bottom, &label)?;
+            own_fillet[land][side] = Some(g);
+            top = g.face[1];
+            chamfer_land = Some(land);
+            chamfer_lines = Some((g.contour, g.face));
+            round_geom = Some(g);
+        }
+        if let Some((requester, f)) = root_req {
+            let label = seg_label(requester + 1);
+            if (ra - rb).abs() < 1e-12 {
+                return Err(crate::i18n::t_fmt("cmd.shaft.err.fillet_no_face", &[("label", &label)]));
+            }
+            // 根部凹圆角落小径侧；与大径外角的自动/显式倒角可共用肩面，但切点不能相撞。
+            let (land, end, side) = if rb > ra { (i, End::R, 1) } else { (k, End::L, 0) };
+            if segs[land].gear.is_some() || segs[land].spline.is_some() {
+                return Err(crate::i18n::t_fmt("cmd.shaft.err.fillet_special", &[("label", &label)]));
+            }
+            let g = fillet_geom_kind(&segs[land], x0s[land], end, f.r, f.kind);
+            check_fillet_geom(&segs[land], g, top, &label)?;
+            own_fillet[land][side] = Some(g);
+            bottom = g.face[1];
+            root_geom = Some((land, g));
         }
 
         if let Some(ov) = ov_r {
@@ -4645,6 +5057,9 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
                 left_eff = face_point[1];
             }
         }
+        if let Some((land, g)) = root_geom {
+            if land == i { left_eff = g.face[1]; } else { right_eff = g.face[1]; }
+        }
         if ov_r.is_some() {
             left_eff = bottom;
         }
@@ -4707,22 +5122,34 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
                 b: [x_face, right_eff],
             });
         }
+        if let Some((land, g)) = root_geom {
+            entities.extend(g.entities());
+            if plain_thread(&segs[land]).is_none() {
+                profile.push(g.edge());
+            }
+        }
         if let Some((contour, face_point)) = chamfer_lines {
-            entities.push(line(face_point, contour, LAYER_MAIN));
-            entities.push(line(
-                [face_point[0], -face_point[1]],
-                [contour[0], -contour[1]],
-                LAYER_MAIN,
-            ));
+            if let Some(g) = round_geom {
+                entities.extend(g.entities());
+            } else {
+                entities.push(line(face_point, contour, LAYER_MAIN));
+                entities.push(line(
+                    [face_point[0], -face_point[1]],
+                    [contour[0], -contour[1]],
+                    LAYER_MAIN,
+                ));
+            }
             // 剖面线边界：倒角落在普通全螺纹段时由小径包络接管；
             // 落在花键段时由花键段的小径包络接管（下面花键块里补倒角段）。
             if chamfer_land.map_or(true, |land| {
                 plain_thread(&segs[land]).is_none() && !is_spline_seg(&segs[land])
             }) {
-                profile.push(lr_line(face_point, contour));
+                profile.push(round_geom.map(|g| g.edge()).unwrap_or_else(|| lr_line(face_point, contour)));
             }
-            // 倒角终点（根）贯通竖线，半高 = 倒角根半径（用户版 x=2 ±14）。
-            through_line(&mut through, contour[0], contour[1]);
+            // FI 的切点光滑相接，不按 CH 画倒角根竖线。
+            if round_geom.is_none() {
+                through_line(&mut through, contour[0], contour[1]);
+            }
         }
     }
 
@@ -4736,7 +5163,7 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
         .as_ref()
         .filter(|k| k.place == KeywayPlace::End);
     if let Some(kw) = key_end_left {
-        let kg = keyway_geom(&segs[0], kw, 0.0, 0, count, &seg_label(1))?;
+        let kg = keyway_geom(&keyway_segment(program, 0), kw, 0.0, 0, count, &seg_label(1))?;
         let double = kw.double;
         let c = segs[0].ch.iter().find(|c| c.end == End::L).map(|c| c.c);
         // face_lo 统一为“端面下端点”的 y（负值），无倒角时为 -R；
@@ -4764,6 +5191,19 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
             keyway_normal.push(line(face_point, contour, LAYER_MAIN));
             through_line(&mut through, contour[0], contour[1]);
             -face_point[1]
+        } else if let Some(f) = segs[0].fillet.iter().find(|f| f.end == End::L) {
+            let g = fillet_geom_kind(&segs[0], 0.0, End::L, f.r, f.kind);
+            check_fillet_geom(&segs[0], g, if f.kind == FilletKind::Concave { f64::INFINITY } else { 0.0 }, &seg_label(1))?;
+            own_fillet[0][0] = Some(g);
+            let [upper, lower] = g.entities();
+            keyway_normal.push(upper);
+            if double {
+                keyway_normal.push(lower);
+            } else {
+                entities.push(lower);
+                keyway_plain_extra.push(g.edge());
+            }
+            -g.face[1]
         } else {
             -segs[0].outer_radius(End::L)
         };
@@ -4820,6 +5260,15 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
         // 倒角终点（根）贯通竖线，半高 = 倒角根半径（用户版 x=2 ±14）。
         through_line(&mut through, contour[0], contour[1]);
         face_point[1]
+    } else if let Some(f) = segs[0].fillet.iter().find(|f| f.end == End::L) {
+        let g = fillet_geom_kind(&segs[0], 0.0, End::L, f.r, f.kind);
+        check_fillet_geom(&segs[0], g, if f.kind == FilletKind::Concave { f64::INFINITY } else { 0.0 }, &seg_label(1))?;
+        own_fillet[0][0] = Some(g);
+        entities.extend(g.entities());
+        if plain_thread(&segs[0]).is_none() {
+            profile.push(g.edge());
+        }
+        g.face[1]
     } else {
         segs[0].outer_radius(End::L)
     };
@@ -4839,7 +5288,7 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
         .filter(|k| k.place == KeywayPlace::End);
     if let Some(kw) = key_end_right {
         let kg = keyway_geom(
-            &segs[last],
+            &keyway_segment(program, last),
             kw,
             x0s[last],
             last,
@@ -4868,6 +5317,19 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
             keyway_normal.push(line(face_point, contour, LAYER_MAIN));
             through_line(&mut through, contour[0], contour[1]);
             face_point[1]
+        } else if let Some(f) = segs[last].fillet.iter().find(|f| f.end == End::R) {
+            let g = fillet_geom_kind(&segs[last], x0s[last], End::R, f.r, f.kind);
+            check_fillet_geom(&segs[last], g, if f.kind == FilletKind::Concave { f64::INFINITY } else { 0.0 }, &seg_label(last + 1))?;
+            own_fillet[last][1] = Some(g);
+            let [upper, lower] = g.entities();
+            keyway_normal.push(upper);
+            if double {
+                keyway_normal.push(lower);
+            } else {
+                entities.push(lower);
+                keyway_plain_extra.push(g.edge());
+            }
+            g.face[1]
         } else {
             segs[last].outer_radius(End::R)
         };
@@ -4885,6 +5347,9 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
         .filter(|lay| lay.relief.is_some())
         .map(|lay| lay.relief_tangent);
     let right_face = if let Some(tangent) = relief_tail {
+        if segs[last].fillet.iter().any(|f| f.end == End::R) {
+            return Err(crate::i18n::t_fmt("cmd.shaft.err.fillet_relief", &[("label", &seg_label(last + 1))]));
+        }
         if segs[last].ch.iter().any(|c| c.end == End::R) {
             return Err(crate::i18n::t_fmt("cmd.shaft.err.tlro_no_chamfer_plain", &[("label", &seg_label(last + 1))]));
         }
@@ -4935,13 +5400,29 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
         // 倒角终点（根）贯通竖线，半高 = 倒角根半径。
         through_line(&mut through, contour[0], contour[1]);
         face_point[1]
+    } else if let Some(f) = segs[last].fillet.iter().find(|f| f.end == End::R) {
+        let g = fillet_geom_kind(&segs[last], x0s[last], End::R, f.r, f.kind);
+        check_fillet_geom(&segs[last], g, if f.kind == FilletKind::Concave { f64::INFINITY } else { 0.0 }, &seg_label(last + 1))?;
+        own_fillet[last][1] = Some(g);
+        entities.extend(g.entities());
+        if plain_thread(&segs[last]).is_none() {
+            profile.push(g.edge());
+        }
+        g.face[1]
     } else {
         segs[last].outer_radius(End::R)
     };
     entities.push(line([x_end, -right_face], [x_end, right_face], LAYER_MAIN));
     }
 
-    // ── 每段上下轮廓线（两端被倒角/越程槽吃掉多少已定）；
+    // 请求可从邻段贴到本段：实际落点同端的 CH/FI 互斥，异端允许并存。
+    for index in 0..count {
+        if (0..2).any(|end| own_fillet[index][end].is_some() && own_ch[index][end].is_some()) {
+            return Err(crate::i18n::t_fmt("cmd.shaft.err.fillet_ch_conflict", &[("label", &seg_label(index + 1))]));
+        }
+    }
+
+    // ── 每段上下轮廓线（两端被倒角/圆角/越程槽吃掉多少已定）；
     //    齿轮段 = 齿顶线（轮廓，两端带 C 倒角）+ 分度线；螺纹段另加小径细实线 ──
     for (index, seg) in segs.iter().enumerate() {
         if let Some(gear) = &seg.gear {
@@ -5045,9 +5526,13 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
         //    hatch 边界走带台阶的真实轮廓（模板 C0/C1 逐图元）。──
         if let Some(kw) = &seg.keyway {
             let label = seg_label(index + 1);
-            let kg = keyway_geom(seg, kw, x0s[index], index, count, &label)?;
-            let xs = x0s[index] + keyway_chamfer(seg, End::L);
-            let xe = x0s[index] + seg.l - keyway_chamfer(seg, End::R);
+            let key_seg = keyway_segment(program, index);
+            let kg = keyway_geom(&key_seg, kw, x0s[index], index, count, &label)?;
+            let xs = x0s[index] + keyway_chamfer(&key_seg, End::L).max(own_fillet[index][0].map(|g| g.inset()).unwrap_or(0.0));
+            let xe = x0s[index] + seg.l - keyway_chamfer(&key_seg, End::R).max(own_fillet[index][1].map(|g| g.inset()).unwrap_or(0.0));
+            if xe < xs - 1e-9 {
+                return Err(crate::i18n::t_fmt("cmd.shaft.err.fillet_length", &[("label", &label)]));
+            }
             if xe - xs > 1e-9 {
                 if kg.double {
                     // 双槽：下轮廓在剖视里也按槽拆（镜像槽），常规仍整段。
@@ -5200,15 +5685,22 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
                     }
                 }
             }
-            emit_key_overlay(&mut keyway_normal, &kg, frame_scale);
+            emit_key_overlay(&mut keyway_normal, &kg, frame_scale, kw.slot_l.is_some());
             continue;
+        }
+        if let (Some(g), Some(lay)) = (own_fillet[index][0], local_threads[index]) {
+            if seg.thread.as_ref().is_some_and(|t| t.tl.is_some()) && g.contour[0] > lay.full_start + 1e-9 {
+                return Err(crate::i18n::t_fmt("cmd.shaft.err.fillet_thread_overlap", &[("label", &seg_label(index + 1))]));
+            }
         }
         let start_shift = own_ch[index][0]
             .unwrap_or(0.0)
+            .max(own_fillet[index][0].map(|g| g.inset()).unwrap_or(0.0))
             .max(own_ov[index][0].unwrap_or(0.0))
             .max(own_relief[index][0].unwrap_or(0.0));
         let end_shift = own_ch[index][1]
             .unwrap_or(0.0)
+            .max(own_fillet[index][1].map(|g| g.inset()).unwrap_or(0.0))
             .max(own_ov[index][1].unwrap_or(0.0))
             .max(own_relief[index][1].unwrap_or(0.0))
             .max(
@@ -5246,6 +5738,11 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
                     profile.push(lr_line([x0, face_y], [x_cross, r1]));
                     flat_start = x_cross;
                 }
+            } else if let Some(g) = own_fillet[index][0] {
+                if let Some((x, edge)) = g.minor_clip(r1) {
+                    profile.push(edge);
+                    flat_start = x;
+                }
             } else if own_ov[index][0].is_some() || own_relief[index][0].is_some() {
                 // 槽体边界已由端面循环推入；从小径线起（垂直落下去）。
                 flat_start = xs;
@@ -5256,12 +5753,17 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
             }
             // 右端：倒角（贴本段时）与 r1 的交点；否则到段末。
             let mut flat_end = x1;
-            let mut right_piece: Option<([f64; 2], [f64; 2])> = None;
+            let mut right_piece: Option<HatchEdge> = None;
             if let Some(c) = own_ch[index][1] {
                 let face_y = r - c;
                 if face_y < r1 - 1e-12 {
                     flat_end = x1 - (c - cut);
-                    right_piece = Some(([flat_end, r1], [x1, face_y]));
+                    right_piece = Some(lr_line([flat_end, r1], [x1, face_y]));
+                }
+            } else if let Some(g) = own_fillet[index][1] {
+                if let Some((x, edge)) = g.minor_clip(r1) {
+                    flat_end = x;
+                    right_piece = Some(edge);
                 }
             } else if own_ov[index][1].is_some() || own_relief[index][1].is_some() {
                 flat_end = xe;
@@ -5273,14 +5775,17 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
             if flat_end - flat_start > 1e-9 {
                 profile.push(lr_line([flat_start, r1], [flat_end, r1]));
             }
-            if let Some((a, b)) = right_piece {
-                profile.push(lr_line(a, b));
+            if let Some(edge) = right_piece {
+                profile.push(edge);
             }
         }
         // ── 螺纹段：`TL`/`RL` 局部螺纹（右端台肩），或旧口径整段全螺纹；
         //    小径细实线上下各一条（2细线层），左端按倒角内缩、右端止于螺尾/
         //    退刀槽斜壁；同段端面倒角比小径深时不挑出材料外。 ──
         if let Some(lay) = local_threads[index] {
+            if own_fillet[index][1].is_some() {
+                return Err(crate::i18n::t_fmt("cmd.shaft.err.fillet_relief", &[("label", &seg_label(index + 1))]));
+            }
             if own_ch[index][1].is_some() {
                 return Err(crate::i18n::t_fmt("cmd.shaft.err.tlro_no_chamfer_plain", &[("label", &seg_label(index + 1))]));
             }
@@ -5343,7 +5848,8 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
             let mut left_inset = own_ch[index][0]
                 .filter(|c| *c > cut + 1e-12)
                 .map(|c| c - cut)
-                .unwrap_or(0.0);
+                .unwrap_or(0.0)
+                .max(own_fillet[index][0].map(|g| g.minor_inset(lay.r1)).unwrap_or(0.0));
             if let Some(dims) = relief_dims[index][0] {
                 left_inset = left_inset.max(relief_minor_inset(lay.r, lay.r1, &dims));
             }
@@ -5365,13 +5871,15 @@ fn build_geometry(program: &Program, frame_scale: f64) -> Result<Geometry, Strin
                     .unwrap_or(0.0)
             };
             let xt0 = x0 + {
-                let mut left = inset(own_ch[index][0]);
+                let mut left = inset(own_ch[index][0])
+                    .max(own_fillet[index][0].map(|g| g.minor_inset(minor)).unwrap_or(0.0));
                 if let Some(dims) = relief_dims[index][0] {
                     left = left.max(relief_minor_inset(seg.s / 2.0, minor, &dims));
                 }
                 left
             };
-            let xt1 = x1 - inset(own_ch[index][1]);
+            let xt1 = x1 - inset(own_ch[index][1])
+                .max(own_fillet[index][1].map(|g| g.minor_inset(minor)).unwrap_or(0.0));
             if xt1 - xt0 > 1e-9 {
                 entities.push(line([xt0, minor], [xt1, minor], LAYER_THIN));
                 entities.push(line([xt0, -minor], [xt1, -minor], LAYER_THIN));
@@ -5659,8 +6167,9 @@ pub fn place(entities: Vec<EntityType>, at: [f64; 2], rot_deg: f64) -> Vec<Entit
                             BoundaryEdge::CircularArc(e) => {
                                 let c = map([e.center.x, e.center.y]);
                                 e.center = Vector2::new(c[0], c[1]);
-                                e.start_angle += rad;
-                                e.end_angle += rad;
+                                let angle = if e.counter_clockwise { rad } else { -rad };
+                                e.start_angle += angle;
+                                e.end_angle += angle;
                             }
                             BoundaryEdge::EllipticArc(e) => {
                                 let c = map([e.center.x, e.center.y]);
@@ -5786,7 +6295,7 @@ pub fn build_report(program: &Program) -> Result<String, String> {
         crate::i18n::t("cmd.shaft.report.list_header")
     ));
     for (i, seg) in program.segments.iter().enumerate() {
-        let (kind, params) = if let Some(g) = &seg.gear {
+        let (kind, mut params) = if let Some(g) = &seg.gear {
             let gp = g.params();
             (
                 crate::i18n::t("cmd.shaft.report.type_gear"),
@@ -5813,9 +6322,13 @@ pub fn build_report(program: &Program) -> Result<String, String> {
                     .map(trim)
                     .unwrap_or_else(|_| "?".into());
                 params.push_str(&crate::i18n::t_fmt("cmd.shaft.report.keyway", &[("p0", &(keyway.kind.cn()).to_string()), ("p1", &(trim(keyway.l)).to_string()), ("p2", &(keyway.place.cn()).to_string()), ("p3", &(trim(b)).to_string()), ("p4", &(t1).to_string())]));
+                if let Some(sl) = keyway.slot_l { params.push_str(&format!(" SL={}", trim(sl))); }
             }
             (crate::i18n::t("cmd.shaft.report.type_plain"), params)
         };
+        for f in &seg.fillet {
+            params.push_str(&format!(" FI R{}@{}{}", trim(f.r), if f.end == End::L { "L" } else { "R" }, if f.kind == FilletKind::Concave { ":CONCAVE" } else { "" }));
+        }
         md.push_str(&format!(
             "| {} | {} | {} | {} | {} |\n",
             i + 1,
@@ -5882,10 +6395,14 @@ fn hatch_preview_lines(h: &Hatch) -> Vec<EntityType> {
                 }
                 BoundaryEdge::CircularArc(a) => {
                     let tau = std::f64::consts::TAU;
+                    // Native CW edges store clockwise-measured angles, not mathematical angles.
+                    let sign = if a.counter_clockwise { 1.0 } else { -1.0 };
+                    let start = sign * a.start_angle;
+                    let end = sign * a.end_angle;
                     let sweep = if a.counter_clockwise {
-                        (a.end_angle - a.start_angle).rem_euclid(tau)
+                        (end - start).rem_euclid(tau)
                     } else {
-                        -((a.start_angle - a.end_angle).rem_euclid(tau))
+                        -((start - end).rem_euclid(tau))
                     };
                     let point = |angle: f64| {
                         [
@@ -5894,9 +6411,9 @@ fn hatch_preview_lines(h: &Hatch) -> Vec<EntityType> {
                         ]
                     };
                     let n = 24;
-                    let mut prev = point(a.start_angle);
+                    let mut prev = point(start);
                     for i in 1..=n {
-                        let p = point(a.start_angle + sweep * i as f64 / n as f64);
+                        let p = point(start + sweep * i as f64 / n as f64);
                         segs.push((prev, p));
                         prev = p;
                     }
@@ -5957,6 +6474,14 @@ fn hatch_preview_lines(h: &Hatch) -> Vec<EntityType> {
 // ══════════════════════════════════════════════════════════════════════════
 // 测试
 // ══════════════════════════════════════════════════════════════════════════
+
+#[cfg(test)]
+#[path = "shaft_fillet_tests.rs"]
+mod fillet_tests;
+
+#[cfg(test)]
+#[path = "shaft_concave_tests.rs"]
+mod concave_tests;
 
 #[cfg(test)]
 mod tests {
@@ -6543,6 +7068,7 @@ GEAR M3 Z20";
             e: 30.0,
             l: 20.0,
             ch: Vec::new(),
+            fillet: Vec::new(),
             ov: vec![Overtravel { b1: Some(3.0), end: End::R }],
             relief: Vec::new(),
             thread: Some(Thread { pitch: Some(1.5), ..Thread::default() }),

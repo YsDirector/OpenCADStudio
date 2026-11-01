@@ -10,6 +10,8 @@
 
 ### 🚀 New Features
 
+* **OCSM Shaft Fillets and Independent Keyway Lengths:** Added independent left/right convex fillets (`FI2@L` / `FI2@R`) and concave shoulder-root fillets (`FI2@L:CONCAVE`), tangent to cylindrical or tapered outlines. CH/FI are mutually exclusive only at the same end; a root fillet may share a shoulder with the neighbouring outer chamfer. Optional keyway `SL` sets the actual slot length and draws the open slot without assembly-key lead-in geometry. DSL/JSON, preview, native section boundaries and export share the same validation.
+* **Hatch Region Trimming:** `TRIM` now accepts interior hatch picks and removes only the filled region delimited by cutting edges, leaving outlines and cutting geometry intact. Retains hatch pattern properties, supports repeated picks and Undo/Redo, and preserves holes; the clipped hatch is detached from its old full-boundary association. See [usage and scope](../docs/trim-hatch.md).
 * **Native Block Properties Table Grips:** Author and edit table values through native grips, with must-match row behavior.
 * **Reference-Side Row Selection:** Select a Block Properties Table row from a dynamic block reference and see its authoring state in the Block Editor.
 * **Authoring Selection and Preview:** The Block Editor now presents table popup and selection state, edits and previews parameters, and manages parameter and base-point graph items more consistently.

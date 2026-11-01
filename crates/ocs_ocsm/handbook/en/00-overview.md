@@ -41,6 +41,18 @@ Database format: `formal command` — purpose — type (**Window** = opens a bro
 
 > Command names are **case-insensitive**; `rest` (the argument part) is forwarded verbatim.
 
+## Shaft generator: convex/concave FI and independent slot length SL
+
+- The **FI Fillet** column beside CH offers independent left/right radius inputs and convex/concave shoulder-root mode.
+- Convex: `FI2@L` / `FI2@R` (unchanged), on the larger-diameter outer corner. Concave: `FI2@L:CONCAVE` / `FI2@R:CONCAVE`, on the smaller-diameter shoulder root. Omitted end defaults to R. `:CONVEX` is also accepted.
+- JSON: `"fillet":[{"r":2,"end":"L","kind":"concave"}]`; omit `kind` for convex. Cylinders and tapers use native arcs tangent to the face and outline.
+- **CH and FI are mutually exclusive at the same end, but may coexist at opposite ends** (user confirmation 2026-10-25, superseding whole-segment exclusion). Adjacent requests cannot duplicate the same corner. A convex chamfer and a concave root fillet may share a shoulder face when their tangencies leave positive clearance.
+- Concave mode requires an adjacent shoulder, not a free end or equal-diameter join. It cannot overlap OV/RL or a partial-thread run-out. FI cannot land on a gear/rectangular-spline segment; a plain shaft's concave root may meet a gear shoulder while preserving its automatic outer chamfer.
+- Normal/section views, preview and export share native tangent arcs with direction-correct hatch encoding. Smooth tangencies add no chamfer-root vertical line. Face consumption, axis crossing, excessive landing length and overlap with TL/keyways are rejected.
+- **Independent SL**: `S65 L98 CH1@L FI1@R:CONCAVE KEY C SL50 @端 t1 7 | S75 L23`. SL is the actual total slot length, from the end face to the farthest point of the round end. It overrides key-type/key-length/end-depth conversion. An explicit L is retained for compatibility but does not control the slot when SL is present; it does not select an installed assembly key.
+- JSON keyways accept `"slot_l":50` (alias `slot_length`). Without SL, the original standard-key length-series behavior is unchanged. SL must be finite, positive, large enough for the round end/end depth and fit the segment; guided keyways GB/T 1097 do not allow this override.
+- Existing relief-groove `r` syntax remains unchanged.
+
 ## 2. Task Index (what to do → which file to read)
 
 | I want to… | Read in order |
@@ -59,12 +71,16 @@ Database format: `formal command` — purpose — type (**Window** = opens a bro
 | Dimension a hole's diameter + tolerance + roughness | `06` (diameter leader) → `08` (tolerance/fit/GDT) |
 | Existing native dimensions should be unified to OCSM style | `07` OCSMDIM2GB (also converts **smart center marks** into centerlines) |
 | Draw a gear (section/side/simplified/regular front view) | `16` gears (`OCSMGEAR`; external gear: spur/helical/profile-shifted; placement same as `OCSMPART`) |
+| Repair an assembly gear-bore gap / check a straight locating sleeve | `16` §6a–6b (independent gear/shaft outlines, support annulus, bearing data and assembly path) |
 | Draw an **internal gear (ring)** | `16` gears §4.2 (`OCSMGEAR int 2 40 30 view 剖视图`; only section view + end view; the section view is not hatched and the ring's outer wall is left for the user to extend) |
 | Draw a shaft (shoulders/chamfers/grinding relief grooves/threads/gear segments/parallel-key keyways) | `OCSMSHAFT` (no args opens the shaft generator window: segment table ↔ line text two-way sync + live preview; relief grooves via segment-level `RL@L/@R` or a short small-diameter segment; gear segments via `GEAR`) |
+| Model-section a bearing cover, insert an FB seal and assess the shaft lead | `03` §2 “FB Seals, Model-Sectioned Covers and Shaft-Lead Clearance”: real cover section + XL seal + lip assembly/occlusion and boundary checks |
+| Create a local (broken-out) section from OCSM shaft output / FreeCAD 3D-to-2D views | `20` §4.1: normal/full-section pair → identical break boundaries → complementary trimming → alignment; example in chapter `18` §9 (Chinese) |
 | Draw a hole (simple/threaded/counterbore/countersink; blind/through; threaded or not) | `17` hole generator (`OCSMHOLE`; automatic thread length 1.5d, automatic depth +2P; through holes have no 118° cone) |
 | Add centerlines / symmetry centerlines | `15` centerlines (`OCSMCENTERLINE`; circle→cross, two lines→angle bisector) |
 | Produce a BOM | `10` (only parts carrying XDATA from `03`/`04` have content) |
 | I want to drive OCS drawing from scripts/AI | `11` automation API (**must read**) + `12` troubleshooting |
+| Save all OCS drawings while protecting approved drawings and historical snapshots | `11` §2 “Saving All Tabs”: separate verified snapshots from working copies and read back each tab |
 | Add Chinese/English entries for the GUI/commands/card faces (bilingual) | `24` bilingual copy and new entries (mechanism + new-entry checklist + `OCSMLANG` switching) |
 | A command does not respond / revision error / a window does not open | `12` troubleshooting |
 

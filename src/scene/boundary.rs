@@ -52,6 +52,38 @@ fn wire_segments_on_plane(wire: &WireModel, plane: WorkingPlane, tolerance: f64)
 }
 
 fn entity_curves_on_plane(entity: &EntityType, plane: WorkingPlane, tolerance: f64) -> Vec<Curve> {
+    // A straight entity lies in many support planes. Test its actual points
+    // and direction, not the arbitrary plane chosen by entity_curve.
+    let straight = match entity {
+        EntityType::Line(line) => Some((line.start, line.end, None)),
+        EntityType::Ray(ray) => Some((ray.base_point, ray.base_point, Some((ray.direction, true)))),
+        EntityType::XLine(line) => Some((line.base_point, line.base_point, Some((line.direction, false)))),
+        _ => None,
+    };
+    if let Some((start, end, direction)) = straight {
+        let local = |p: codec::types::Vector3| plane.to_local(glam::DVec3::new(p.x, p.y, p.z));
+        let start = local(start);
+        let end = local(end);
+        if start.z.abs() > tolerance || end.z.abs() > tolerance {
+            return Vec::new();
+        }
+        let start = [start.x, start.y];
+        let curve = if let Some((direction, ray)) = direction {
+            let direction = plane.vector_to_local(glam::DVec3::new(direction.x, direction.y, direction.z));
+            if direction.z.abs() > 1.0e-9 || direction.x.hypot(direction.y) < 1.0e-12 {
+                return Vec::new();
+            }
+            let direction = [direction.x, direction.y];
+            if ray {
+                Curve::Ray(kernel::geom2d::Ray { origin: start, direction })
+            } else {
+                Curve::XLine(kernel::geom2d::XLine { base: start, direction })
+            }
+        } else {
+            Curve::Line(Line { start, end: [end.x, end.y] })
+        };
+        return vec![curve];
+    }
     let Some(planar) = crate::entities::curve::entity_curve(entity) else {
         return Vec::new();
     };
@@ -77,7 +109,7 @@ fn entity_curves_on_plane(entity: &EntityType, plane: WorkingPlane, tolerance: f
     }
 }
 
-fn entity_boundary_source_on_plane(
+pub(crate) fn entity_boundary_source_on_plane(
     entity: &EntityType,
     plane: WorkingPlane,
     tolerance: f64,
@@ -134,7 +166,7 @@ fn needs_scene_boundary_sources(entity: &EntityType, plane: WorkingPlane, tolera
 /// tessellating them raw yields a unit stub that can never close a face.
 /// With no bounds there is nothing to clip against, so unbounded curves
 /// contribute nothing.
-fn live_segments_for_curves(
+pub(crate) fn live_segments_for_curves(
     curves: &[Curve],
     clip_bounds: Option<([f64; 2], [f64; 2])>,
     tolerance: f64,

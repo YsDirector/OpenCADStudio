@@ -274,8 +274,10 @@ fn hatch_edges_with(
                 } => bp.add_edge(BoundaryEdge::CircularArc(CircularArcEdge {
                     center: Vector2::new(c[0], c[1]),
                     radius: r,
-                    start_angle: start_deg.to_radians(),
-                    end_angle: end_deg.to_radians(),
+                    // HatchEdge 使用数学角度；DXF/codec 的 CW 边把角度沿顺时针计量。
+                    // 直接写数学角度会把凸圆角翻到另一侧，并把短弧误解为长弧。
+                    start_angle: (if ccw { start_deg } else { (-start_deg).rem_euclid(360.0) }).to_radians(),
+                    end_angle: (if ccw { end_deg } else { (-end_deg).rem_euclid(360.0) }).to_radians(),
                     counter_clockwise: ccw,
                 })),
             }

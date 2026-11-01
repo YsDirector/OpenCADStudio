@@ -3,7 +3,8 @@
 // TRIM  (TR): Click the segment you want to remove. The command finds all
 //             intersections of that entity with every other entity and trims
 //             out the clicked interval. Stays active — click more segments,
-//             press Enter to finish.
+//             press Enter to finish. Clicking a HATCH's interior removes only
+//             the filled region delimited by cutting edges, not its outline.
 //
 // EXTEND (EX): Click near one end of an entity.  The command extends that
 //              endpoint to the nearest intersecting boundary. Stays active.
@@ -48,6 +49,9 @@ use crate::scene::model::wire_model::WireModel;
 use crate::t;
 
 use super::entity_index::ModifyEntityIndex;
+
+#[path = "trim_hatch.rs"]
+mod hatch;
 
 // ── Dropdown constants ─────────────────────────────────────────────────────
 
@@ -3153,6 +3157,27 @@ impl TrimCommand {
     }
 }
 
+impl TrimCommand {
+    fn hatch_trim_at(&self, handle: Handle, point: DVec3) -> Option<hatch::HatchTrim> {
+        let EntityType::Hatch(hatch) = self.entity_index.get(&self.all_entities, handle)? else {
+            return None;
+        };
+        let nearby = (!self.implied_edges)
+            .then(|| self.entity_index.nearby_handles(&self.all_entities, handle))
+            .flatten();
+        let edges: std::collections::HashSet<_> = self.edge_set.iter().copied().collect();
+        let cutters = self.all_entities.iter().filter(|entity| {
+            let handle = entity.common().handle;
+            is_trim_boundary_entity(entity)
+                && (edges.is_empty() || edges.contains(&handle))
+                && nearby
+                    .as_ref()
+                    .is_none_or(|handles| handles.contains(&handle))
+        });
+        hatch::trim(hatch, cutters, point, self.implied_edges)
+    }
+}
+
 impl CadCommand for TrimCommand {
     fn name(&self) -> &'static str {
         "TRIM"
@@ -3283,6 +3308,10 @@ impl CadCommand for TrimCommand {
         )
     }
 
+    fn entity_pick_includes_fills(&self) -> bool {
+        matches!(self.mode, TrimMode::Pick | TrimMode::Erase)
+    }
+
     fn on_entity_pick(&mut self, handle: Handle, pt: DVec3) -> CmdResult {
         if handle.is_null() {
             return CmdResult::NeedPoint;
@@ -3307,6 +3336,12 @@ impl CadCommand for TrimCommand {
                 let new_entities = if self.shift {
                     // Shift+click swaps to Extend for this pick (#336).
                     pick_extend_at(&self.all_entities, &self.geos, handle, px, py).map(|e| vec![e])
+                } else if matches!(
+                    self.entity_index.get(&self.all_entities, handle),
+                    Some(EntityType::Hatch(_))
+                ) {
+                    self.hatch_trim_at(handle, pt)
+                        .map(|trim| vec![EntityType::Hatch(Box::new(trim.kept))])
                 } else {
                     let geos = self.nearby_geos(handle);
                     if self.quick {
@@ -3464,6 +3499,10 @@ impl CadCommand for TrimCommand {
         let entity = self.entity_index.get(&self.all_entities, handle);
 
         let mut hover_wires = match entity {
+            Some(EntityType::Hatch(_)) => self
+                .hatch_trim_at(handle, pt)
+                .map(|trim| trim.preview_wires())
+                .unwrap_or_default(),
             Some(EntityType::Line(l)) => {
                 let ax = l.start.x;
                 let ay = l.start.y;

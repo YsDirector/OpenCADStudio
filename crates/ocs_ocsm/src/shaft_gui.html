@@ -36,7 +36,7 @@
              border: 1px solid #e2e6ea; border-radius: 6px; background: #111; margin-top: 10px; }
   /* ── 段表：横向可滚；行选中高亮；输入框紧凑 ── */
   .tblwrap { overflow-x: auto; margin-top: 4px; }
-  table.seg { border-collapse: collapse; width: 100%; min-width: 1180px; }
+  table.seg { border-collapse: collapse; width: 100%; min-width: 1420px; }
   table.seg th, table.seg td { border: 1px solid #e2e6ea; padding: 4px 6px; font-size: 12.5px; vertical-align: top; }
   table.seg th { background: #f6f8fa; color: #555; font-weight: 600; text-align: center; white-space: nowrap; }
   table.seg tbody tr { cursor: pointer; }
@@ -92,6 +92,7 @@
             <th>E 直径</th>
             <th>L 段长</th>
             <th>CH 倒角</th>
+            <th>{{i18n:gui.shaft.fillet_header}}</th>
             <th>OV 越程槽</th>
             <th>M 螺纹段</th>
             <th>KEY 平键轴槽</th>
@@ -126,7 +127,7 @@
   <!-- ④ 行文本：可粘贴/编辑；解析成功回填段表，失败标行号 -->
   <div class="card">
     <h2>行文本（可粘贴/编辑；解析成功后回填段表）</h2>
-    <textarea id="dsl" spellcheck="false" title="段级退刀槽：RL@L / RL@R（P 查 GB/T 3 表 2，或显式 g1/g2/dg/r）；齿轮段可加 ALPHA（省略 = 20°）；矩形花键：表内规格 de 自动查表，de 63 = 覆盖，表外规格必须给 de，引入倒角在相邻段写 CH；视图可写 VIEW 剖视（独立一行或段内关键字）"></textarea>
+    <textarea id="dsl" spellcheck="false" title="段级退刀槽：RL@L / RL@R（P 查 GB/T 3 表 2，或显式 g1/g2/dg/r）；齿轮段可加 ALPHA（省略 = 20°）；矩形花键：表内规格 de 自动查表，de 63 = 覆盖，表外规格必须给 de，引入倒角在相邻段写 CH；视图可写 VIEW 剖视（独立一行或段内关键字） {{i18n:gui.shaft.fillet_title}} {{i18n:gui.shaft.key_slot_l_title}}"></textarea>
     <div id="dslErr"></div>
     <div class="hint" id="dslHint">
       一行一段，从左到右拼接；多段用 <code>|</code> 或换行分隔；大小写不敏感、段内关键字顺序无关。
@@ -204,9 +205,10 @@ function blankRow() {
   return {
     s: "30", e: "", l: "10",
     ch: { l: { on: false, c: "2" }, r: { on: false, c: "2" } },
+    fi: { l: { on: false, r: "2", kind: "convex" }, r: { on: false, r: "2", kind: "convex" } },
     ov: { l: { on: false, b1: "" }, r: { on: false, b1: "" } },
     m: { on: false, p: "" },
-    key: { on: false, style: "A", l: "", place: "mid", b: "", h: "", t1: "", double: false },
+    key: { on: false, style: "A", l: "", slot_l: "", place: "mid", b: "", h: "", t1: "", double: false },
     gear: { on: false, mark: "GEAR", kind: "EX", m: "3", z: "20", x: "", da: "", df: "", h: "", alpha: "" },
     spline: { on: false, spec: "6x23x26x6", len: "30", de: "" },
   };
@@ -368,14 +370,18 @@ function keyDeriveHtml(r) {
   const hTxt = size && size.h !== undefined ? "×h" + fmt(size.h) : "×h?";
   let txt = spec.label + "（" + spec.standard + "）：d" + fmt(d) + " → b" + fmt(b) + hTxt + (Number.isFinite(t1) ? " t1=" + fmt(t1) : "");
   const l = numOrNaN(r.key.l);
+  const slotRaw = String(r.key.slot_l).trim();
+  if (slotRaw !== "") {
+    txt += " · " + "{{i18njs:gui.shaft.key_slot_l_derive}}".replace("{length}", fmt(numOrNaN(r.key.slot_l)));
+  }
   if (l > 0 && Number.isFinite(b)) {
     if (spec.guided) {
       if (!size) return txt + "（GB/T 1097 表无此 b）";
       const lr = key1097LenRow(spec.kind, l);
-      txt += " · 槽长 " + fmt(l) + "（= 键长 L）";
+      if (slotRaw === "") txt += " · 槽长 " + fmt(l) + "（= 键长 L）";
       if (lr) txt += " · L1=" + fmt(lr.l1) + " L3=" + fmt(lr.l3);
       txt += " · 固定螺钉孔 M" + fmt(size.d0) + "×深" + fmt(size.l0) + "×2";
-    } else {
+    } else if (slotRaw === "") {
       txt += " · 槽长 " + fmt(keySlotLen(spec.kind, r.key.place, l, b, Number.isFinite(t1) ? t1 : 0));
     }
   }
@@ -517,14 +523,18 @@ function rowHtml(r, i) {
   const dis = (v) => (v ? " disabled" : "");
   const endCell = (kind, end, o) => {
     const label = end.toUpperCase();
-    const extra = kind === "ov"
-      ? `<input type="number" step="0.1" min="0" data-f="ov.${end}.b1" value="${esc(o.b1)}" placeholder="默认"${dis(gearOn || mOn || splineOn)}>`
-      : `<input type="number" step="0.1" min="0" data-f="ch.${end}.c" value="${esc(o.c)}" placeholder="2"${dis(gearOn || splineOn)}>`;
-    const boxDis = kind === "ov" ? (gearOn || mOn || splineOn) : (gearOn || splineOn);
+    const boxDis = gearOn || splineOn || (kind === "ov" && mOn)
+      || (kind === "ch" && r.fi[end].on) || (kind === "fi" && r.ch[end].on);
+    const valueKey = kind === "ov" ? "b1" : (kind === "fi" ? "r" : "c");
+    const inputTitle = kind === "fi" ? ` title="${esc("{{i18njs:gui.shaft.fillet_radius_title}}")}"` : "";
+    const extra = `<input type="number" step="0.1" min="0" data-f="${kind}.${end}.${valueKey}" value="${esc(o[valueKey])}" placeholder="${kind === "ov" ? "默认" : "2"}"${inputTitle}${dis(boxDis)}>`;
+    const mode = kind === "fi"
+      ? `<select data-f="fi.${end}.kind" title="${esc("{{i18njs:gui.shaft.fillet_kind_title}}")}"${dis(boxDis)}><option value="convex"${o.kind !== "concave" ? " selected" : ""}>${esc("{{i18njs:gui.shaft.fillet_convex}}")}</option><option value="concave"${o.kind === "concave" ? " selected" : ""}>${esc("{{i18njs:gui.shaft.fillet_concave}}")}</option></select>`
+      : "";
     const boxTitle = kind === "ov"
       ? "越程槽（b1 留空 = 按直径查 GB/T 3 表 2）"
-      : "端部倒角（C×45°）";
-    return `<div class="frow"><label class="chk"><input type="checkbox" data-f="${kind}.${end}.on" title="${boxTitle}"${ck(o.on)}${dis(boxDis)}>${label}</label>${extra}</div>`;
+      : (kind === "fi" ? "{{i18njs:gui.shaft.fillet_title}}" : "端部倒角（C×45°）");
+    return `<div class="frow"><label class="chk"><input type="checkbox" data-f="${kind}.${end}.on" title="${esc(boxTitle)}"${ck(o.on)}${dis(boxDis)}>${label}</label>${extra}${mode}</div>`;
   };
   return `<tr data-row="${i}" class="${i === sel ? "sel" : ""}">
     <td class="idx">${i + 1}</td>
@@ -532,15 +542,17 @@ function rowHtml(r, i) {
     <td><input type="number" step="0.1" min="0" data-f="e" title="终点直径 E（mm）；留空 = 圆柱段（E = S）" value="${esc(r.e)}" placeholder="= S"${dis(gearOn || splineOn)}></td>
     <td><input type="number" step="0.1" min="0" data-f="l" title="段长 L（mm）" value="${esc(r.l)}"${dis(gearOn || splineOn)}></td>
     <td class="feat">${endCell("ch", "l", r.ch.l)}${endCell("ch", "r", r.ch.r)}</td>
+    <td class="feat">${endCell("fi", "l", r.fi.l)}${endCell("fi", "r", r.fi.r)}</td>
     <td class="feat">${endCell("ov", "l", r.ov.l)}${endCell("ov", "r", r.ov.r)}</td>
     <td class="feat"><div class="frow"><label class="chk"><input type="checkbox" data-f="m.on" title="螺纹段：要求 S=E；不写值 = 小径 0.85d 简化画法；M1.5 = 螺距 P 精确小径"${ck(mOn)}${dis(gearOn || ovOn || splineOn || keyOn)}>M</label>
       <input type="number" step="0.1" min="0" data-f="m.p" value="${esc(r.m.p)}" placeholder="0.85d"${dis(gearOn || ovOn || splineOn || keyOn)}></div></td>
     <td class="feat"><div class="frow"><label class="chk"><input type="checkbox" data-f="key.on" title="平键轴槽（与 GEAR / SPLINE / M / OV 互斥）；b×h 与 t1 由该段直径 d 查 GB/T 1095 自动定"${ck(keyOn)}${dis(gearOn || splineOn || mOn || ovOn)}>KEY</label>
       <select data-f="key.style" title="键型（表驱动）：普通平键（GB/T 1096）A 双圆头 / B 双平头 / C 单圆头；导向平键（GB/T 1097）A/B（自动画 2 个固定螺钉螺纹孔、只有中置）；槽长按型别折算：B 中置 +b / 端置 +b/2，C 中置 +b/2 / 端置不折算"${dis(!keyOn)}>${keyStyleOptionsHtml(r.key.style)}</select>
       <select data-f="key.place" title="位置：中置 = 槽两端封闭（居中于净圆柱）；端置 = 开在轴首/末段自由端（槽长 = 键长 + t1）；显示：中置常规侧视恒显示 A（双圆头），端置 B/C 显示 C（单圆头）；导向平键只有中置（端置禁用）"${dis(!keyOn)}><option value="mid"${r.key.place !== "end" ? " selected" : ""}>中置</option><option value="end"${r.key.place === "end" ? " selected" : ""}${keyStyleSpec(r.key.style).places.includes("end") ? "" : " disabled"}>端置</option></select></div>
-      <div class="frow"><span class="chk">L</span><select data-f="key.l" title="键长 L（1096：平键族系列∩L<10b；导向：GB/T 1097 系列 25…450∩L<10b）"${dis(!keyOn)}>${keyLengthOptionsHtml(r)}</select>
+      <div class="frow"><span class="chk">L</span><select data-f="key.l" title="键长 L（1096：平键族系列∩L<10b；导向：GB/T 1097 系列 25…450∩L<10b）"${dis(!keyOn || String(r.key.slot_l).trim() !== "")}>${keyLengthOptionsHtml(r)}</select>
       <label class="chk" title="双键槽：绕轴心 180° 对置（仅剖视图体现；可承受转矩约为单键联接的 1.5 倍）；导向平键不支持"><input type="checkbox" data-f="key.double"${ck(r.key.double)}${dis(!keyOn || !keyStyleSpec(r.key.style).allow_double)}>双槽</label>
       <span class="chk key-derive" title="由轴段直径查 GB/T 1095 得 b×h；t1 按 b 查表；槽长/固定螺钉孔按所选标准派生">${keyDeriveHtml(r)}</span></div>
+      <div class="frow"><label class="chk">${esc("{{i18njs:gui.shaft.key_slot_l_label}}")}<input type="number" step="0.1" min="0" data-f="key.slot_l" title="${esc("{{i18njs:gui.shaft.key_slot_l_title}}")}" value="${esc(r.key.slot_l)}"${dis(!keyOn)}></label></div>
       </td>
     <td class="feat"><div class="frow"><label class="chk"><input type="checkbox" data-f="gear.on" title="齿轮 / 渐开线齿形段（与 KEY / SPLINE / M / OV 互斥）；轴段只支持模数制 M"${ck(gearOn)}${dis(splineOn || keyOn)}>GEAR</label>
       <select data-f="gear.mark" title="MARK 画法开关：SPLINE（渐开线花键）常规侧视图画小径细实线；GEAR（齿轮）不画"${dis(!gearOn)}><option value="GEAR"${r.gear.mark === "GEAR" ? " selected" : ""}>GEAR</option><option value="SPLINE"${r.gear.mark === "SPLINE" ? " selected" : ""}>SPLINE</option></select>
@@ -552,7 +564,7 @@ function rowHtml(r, i) {
       <span class="chk">DF</span><input type="number" step="0.1" min="0" data-f="gear.df" title="齿根圆直径 DF（留空 = 按 m/z/α 自动推算）" value="${esc(r.gear.df)}" placeholder="推" style="width:64px"${dis(!gearOn)}>
       <span class="chk">H</span><input type="number" step="0.1" min="0" data-f="gear.h" title="齿宽 H（留空 = 10m）" value="${esc(r.gear.h)}" placeholder="10m" style="width:52px"${dis(!gearOn)}>
       <span class="chk">α</span><input type="number" step="0.5" min="10.1" max="49.9" data-f="gear.alpha" value="${esc(r.gear.alpha)}" placeholder="20" title="基准齿形角，度（省略 = 20°，可给 10°<α<50°）" style="width:58px"${dis(!gearOn)}></div></td>
-    <td class="feat"><div class="frow"><label class="chk"><input type="checkbox" data-f="spline.on" title="矩形花键段（GB/T 1144 轻/中系列 33 条，规格下拉）；不能与 CH/OV/M/GEAR 同段"${ck(splineOn)}${dis(gearOn || keyOn)}>SPLINE</label></div>
+    <td class="feat"><div class="frow"><label class="chk"><input type="checkbox" data-f="spline.on" title="${esc("{{i18njs:gui.shaft.fillet_spline_title}}")}"${ck(splineOn)}${dis(gearOn || keyOn)}>SPLINE</label></div>
       <div class="frow"><select data-f="spline.spec" title="规格来自 GB/T 1144 轻/中系列（33 条）；选中自动带出 d/D/B/de/h/l（de 可改 = 覆盖）；表外规格选「自定义…」并必须给 de"${dis(!splineOn)}>${splineOptionsHtml(specSel)}</select></div>
       <div class="frow"><input type="text" data-f="spline.spec" title="表外规格 N×d×D×B（必须给 de）" value="${esc(r.spline.spec)}" placeholder="自定义 N×d×D×B" style="width:128px${specHit ? ";display:none" : ""}"${dis(!splineOn)}></div>
       <div class="frow"><span class="chk">L</span><input type="number" step="0.1" min="0" data-f="spline.len" title="满齿段长 L（段长 = L + 收尾 l）" value="${esc(r.spline.len)}" placeholder="满齿段长"${dis(!splineOn)}>
@@ -564,7 +576,7 @@ function rowHtml(r, i) {
 function renderTable() {
   if (!rows.length) {
     el("segBody").innerHTML =
-      '<tr><td colspan="10" class="empty-guide">暂无轴段：点上方「+ 加行」添加第一段，' +
+      '<tr><td colspan="11" class="empty-guide">暂无轴段：点上方「+ 加行」添加第一段，' +
       '或把表达式粘贴到下方文本框 / 表达式框。</td></tr>';
   } else {
     el("segBody").innerHTML = rows.map((r, i) => rowHtml(r, i)).join("");
@@ -572,15 +584,16 @@ function renderTable() {
   updateButtons();
 }
 
-// 特征互斥：GEAR / SPLINE 各自独占；M 与 OV 不能同段（与后端校验同口径）
+// 特征互斥：GEAR / SPLINE 各自独占；M 与 OV 不能同段（与后端校验同口径）。
+// CH / FI 只在同端禁用对方控件，允许异端并存；不在归一化时择一删除导入冲突。
 function enforceExclusive(r) {
   if (r.gear.on) {
-    r.ch.l.on = r.ch.r.on = r.ov.l.on = r.ov.r.on = r.m.on = false;
+    r.ch.l.on = r.ch.r.on = r.fi.l.on = r.fi.r.on = r.ov.l.on = r.ov.r.on = r.m.on = false;
     r.spline.on = false;
     r.key.on = false;
   }
   if (r.spline.on) {
-    r.ch.l.on = r.ch.r.on = r.ov.l.on = r.ov.r.on = r.m.on = false;
+    r.ch.l.on = r.ch.r.on = r.fi.l.on = r.fi.r.on = r.ov.l.on = r.ov.r.on = r.m.on = false;
     r.gear.on = false;
     r.key.on = false;
   }
@@ -649,6 +662,7 @@ function rowToDsl(r) {
   for (const end of ["l", "r"]) {
     const E = end.toUpperCase();
     if (r.ch[end].on) s += " CH" + numTok(r.ch[end].c) + "@" + E;
+    if (r.fi[end].on) s += " FI" + numTok(r.fi[end].r) + "@" + E + (r.fi[end].kind === "concave" ? ":CONCAVE" : "");
     if (r.ov[end].on) {
       s += " OV" + (String(r.ov[end].b1).trim() === "" ? "" : numTok(r.ov[end].b1)) + "@" + E;
     }
@@ -657,6 +671,7 @@ function rowToDsl(r) {
     // 新写法：键型记号直接带「导向」（`KEY 导向A 36`）；普通键仍 `KEY A 36`。
     s += " KEY " + keyStyleSpec(r.key.style).id + " " + numTok(r.key.l);
     if (r.key.place === "end") s += " @端";
+    if (String(r.key.slot_l).trim() !== "") s += " SL" + numTok(r.key.slot_l);
     // b/h 只在行里有显式值时写（默认按轴径自动定；覆盖才进 DSL）。
     const bRaw = String(r.key.b).trim();
     if (bRaw !== "") {
@@ -710,6 +725,14 @@ function rowFromSegment(seg) {
     const end = (c.end || "R").toLowerCase();
     if (r.ch[end]) { r.ch[end].on = true; r.ch[end].c = fmt(c.c); }
   }
+  for (const f of seg.fillet || []) {
+    const end = (f.end || "R").toLowerCase();
+    if (r.fi[end]) {
+      r.fi[end].on = true;
+      r.fi[end].r = fmt(f.r);
+      r.fi[end].kind = f.kind === "concave" ? "concave" : "convex";
+    }
+  }
   const ovs = seg.ov || [];
   for (const o of ovs) {
     const end = (o.end || "R").toLowerCase();
@@ -731,6 +754,7 @@ function rowFromSegment(seg) {
     const byId = keyStyles.find((s) => s.id === rawType);
     r.key.style = (byKind || byId || keyStyles[0]).id;
     r.key.l = fmt(seg.keyway.l);
+    r.key.slot_l = seg.keyway.slot_l === null || seg.keyway.slot_l === undefined ? "" : fmt(seg.keyway.slot_l);
     r.key.place = seg.keyway.place === "end" ? "end" : "mid";
     r.key.b = seg.keyway.b === null || seg.keyway.b === undefined ? "" : fmt(seg.keyway.b);
     r.key.h = seg.keyway.h === null || seg.keyway.h === undefined ? "" : fmt(seg.keyway.h);
@@ -985,6 +1009,12 @@ function onTableInput(e) {
       if (hit && String(r.spline.de).trim() === "") r.spline.de = fmt(hit.de);
     }
     renderTable();   // 勾选会改 disabled 状态 → 整表重渲染（点选不丢内容）
+  } else if (field === "key.slot_l") {
+    // SL 连续输入不重建整行，避免每敲一位就丢焦点；L 禁用态与实际槽长仍即时同步。
+    const lengthField = tr.querySelector('[data-f="key.l"]');
+    if (lengthField) lengthField.disabled = !r.key.on || String(r.key.slot_l).trim() !== "";
+    const derive = tr.querySelector(".key-derive");
+    if (derive) derive.textContent = keyDeriveHtml(r);
   } else if (field.indexOf("key.") === 0) {
     // KEY 列：只读的 b×h/t1 派生与 B/端置警示随选择重算。
     renderTable();
@@ -1178,6 +1208,16 @@ function modelFromRows() {
       ch.push({ c, end: end.toUpperCase() });
     }
     if (ch.length) seg.ch = ch;
+    const fillet = [];
+    for (const end of ["l", "r"]) {
+      if (!r.fi[end].on) continue;
+      const radius = numOrNaN(r.fi[end].r);
+      if (!Number.isFinite(radius) || !(radius > 0)) return fail("{{i18njs:gui.shaft.fillet_radius_positive}}");
+      const f = { r: radius, end: end.toUpperCase() };
+      if (r.fi[end].kind === "concave") f.kind = "concave";
+      fillet.push(f);
+    }
+    if (fillet.length) seg.fillet = fillet;
     const ov = [];
     for (const end of ["l", "r"]) {
       if (!r.ov[end].on) continue;
@@ -1205,6 +1245,11 @@ function modelFromRows() {
       const spec = keyStyleSpec(r.key.style);
       // JSON 保持既有 schema（`type` + `guided`）：新/旧读取方都能用。
       const keyway = { type: spec.kind, l: kl, place: r.key.place === "end" ? "end" : "mid" };
+      if (String(r.key.slot_l).trim() !== "") {
+        const slotL = numOrNaN(r.key.slot_l);
+        if (!Number.isFinite(slotL) || !(slotL > 0)) return fail("{{i18njs:gui.shaft.key_slot_l_positive}}");
+        keyway.slot_l = slotL;
+      }
       // b×h 默认按轴段直径由后端查 GB/T 1095 定；行里有显式值时才作为覆盖送去校验。
       const bRaw = String(r.key.b).trim();
       if (bRaw !== "") {

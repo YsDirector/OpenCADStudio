@@ -20474,6 +20474,39 @@ mod weld_tests {
     }
 
     #[test]
+    fn shaft_fillet_routes_parse_preview_export_and_reject_conflict() {
+        let _g = export_lock();
+        let mock = Arc::new(MockSender::new(ocsm_layered_doc()));
+        let server = spawn_fixed(mock.clone()).expect("shaft fillet server");
+        let dsl = serde_json::json!({"dsl":"S30 L40 FI2@L FI3@R"}).to_string();
+        let parsed = http_req(server.port, "POST", "/api/shaft_parse", &dsl);
+        let model: serde_json::Value = serde_json::from_str(&parsed).unwrap();
+        assert_eq!(model["ok"], true, "{parsed}");
+        assert_eq!(model["segments"][0]["fillet"], serde_json::json!([
+            {"r":2.0,"end":"L"}, {"r":3.0,"end":"R"}
+        ]));
+        let mut export = serde_json::json!({"segments":model["segments"], "view":"section"});
+        let svg = http_req(server.port, "POST", "/api/shaft_preview", &export.to_string());
+        assert!(svg.contains("<svg") && svg.contains("#3fa13f"), "{svg}");
+        let response = http_req(server.port, "POST", "/api/shaft_export", &export.to_string());
+        assert!(response.contains("\"ok\":true"), "{response}");
+        let block = crate::pending_block().unwrap();
+        let entities = mock.block_entities(&block);
+        assert_eq!(entities.iter().filter(|e| matches!(e, acadrust::EntityType::Arc(_))).count(), 4);
+        assert!(entities.iter().any(|e| matches!(e, acadrust::EntityType::Hatch(_))));
+        export["segments"][0]["ch"] = serde_json::json!([{"c":1,"end":"R"}]);
+        let blocks = mock.blocks().len();
+        for route in ["/api/shaft_parse", "/api/shaft_preview", "/api/shaft_export"] {
+            let bad = http_req(server.port, "POST", route, &export.to_string());
+            let bad: serde_json::Value = serde_json::from_str(&bad).unwrap();
+            assert_eq!(bad["ok"], false, "{route}: {bad}");
+            let error = bad["error"].as_str().unwrap();
+            assert!(error.contains("FI") && error.contains("CH"), "{error}");
+        }
+        assert_eq!(mock.blocks().len(), blocks, "conflicts must not write geometry");
+    }
+
+    #[test]
     fn shaft_export_registers_pending_part_and_direct_insert() {
         let _g = export_lock();
         let mock = Arc::new(MockSender::new(ocsm_layered_doc()));

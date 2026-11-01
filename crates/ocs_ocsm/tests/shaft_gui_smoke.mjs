@@ -8,7 +8,10 @@
 //   ③ 选「自定义…」→ 文本框出现并接受手输，de 清空；
 //   ④ 表外规格缺 de → 沿用后端既有报错文案（桩里复刻 spline.rs 的报错）显示在 dslErr；
 //   ⑤ JSON 模型里表内规格不显式带 de（后端仍会查表）；
-//   ⑥ 渐开线花键轴段 INVOLSPLINE 已撤：段表面板/行文本/表达式框都拒绝（唯一入口 = OCSMGEAR 花键模式）。
+//   ⑥ 渐开线花键轴段 INVOLSPLINE 已撤：段表面板/行文本/表达式框都拒绝（唯一入口 = OCSMGEAR 花键模式）；
+//   ⑦ FI 凸/凹圆角的 DSL/JSON 双向回填、左右独立模式与半径、CH/FI 同端互斥/异端共存、复制/特殊段清理；
+//   ⑧ CH/FI 同端冲突导入由后端报错，不静默吞掉任一特征，也不能绕过解析错误导出；
+//   ⑨ KEY 独立槽总长 SL 的回填/复制/导出/正数校验与留空兼容，及新增控件的空表兼容。
 //
 // 用法：node shaft_gui_smoke.mjs <shaft_gui.html 路径>
 
@@ -20,7 +23,32 @@ if (!htmlPath) {
   console.error('usage: node shaft_gui_smoke.mjs <shaft_gui.html>');
   process.exit(2);
 }
-const html = renderZh(fs.readFileSync(htmlPath, 'utf8'));
+// 本次只改本页与本 smoke；新增 FI/SL 词条的中文测试夹具放在这里，不改共享 fixture。
+// 产品页面仍只有占位符，catalog 由后端任务补齐；这不是产品路径的中文兜底。
+const SHAFT_ZH = {
+  'gui.shaft.fillet_header': 'FI 圆角',
+  'gui.shaft.fillet_title': '圆角 FI2@L（凸角）/ FI2@L:CONCAVE（凹角）；省略端默认 R；CH/FI 同端互斥，异端可并存',
+  'gui.shaft.fillet_radius_title': '圆角半径 R（mm，必须 > 0）',
+  'gui.shaft.fillet_radius_positive': 'FI 圆角的半径 R 必须是大于 0 的有限数。',
+  'gui.shaft.fillet_spline_title': '矩形花键段（GB/T 1144 轻/中系列 33 条，规格下拉）；不能与 CH/FI/OV/M/GEAR 同段',
+  'gui.shaft.fillet_kind_title': '圆角模式：凸角沿用 CH 落点（贴端面、大直径一侧）；凹角位于轴肩根部',
+  'gui.shaft.fillet_convex': '凸角',
+  'gui.shaft.fillet_concave': '轴肩根部凹角',
+  'gui.shaft.key_slot_l_label': 'SL 槽总长',
+  'gui.shaft.key_slot_l_title': '独立键槽总长 SL（mm）；填写后直接作为实际槽长，不再按键长 L、键型或端置 t1 换算；留空沿用原规则',
+  'gui.shaft.key_slot_l_positive': '独立键槽总长 SL 必须是大于 0 的有限数（留空沿用原规则）。',
+  'gui.shaft.key_slot_l_derive': '槽长 {length}（SL）',
+};
+const html = renderZh(fs.readFileSync(htmlPath, 'utf8')).replace(
+  /\{\{i18n(js)?:(gui\.shaft\.(?:fillet_|key_slot_l_)[^}]+)\}\}/g,
+  (placeholder, js, key) => {
+    if (!Object.hasOwn(SHAFT_ZH, key)) throw new Error('缺轴 GUI 中文测试词条：' + key);
+    const text = SHAFT_ZH[key];
+    return js
+      ? JSON.stringify(text).slice(1, -1).replace(/</g, '\\u003c').replace(/>/g, '\\u003e')
+      : text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  },
+);
 const m = html.match(/<script>([\s\S]*?)<\/script>/);
 if (!m) {
   console.error('no <script> found');
@@ -45,7 +73,7 @@ const SPECS = [
 const KEY_SIZES = [
   { d: 8, b: 8, h: 7, label: 'b=8×h=7', l_min: 6, l_max: 79, lengths: [18, 6, 8, 10, 12, 14, 16, 20, 22, 25], extra: 'h=7；c=0.25（按 b 分档取范围下限）；默认 L=18' },
   { d: 10, b: 10, h: 8, label: 'b=10×h=8', l_min: 6, l_max: 99, lengths: [22, 6, 8, 10, 12, 14, 16, 18, 20, 25], extra: 'h=8；c=0.4（按 b 分档取范围下限）；默认 L=22' },
-  { d: 14, b: 14, h: 9, label: 'b=14×h=9', l_min: 6, l_max: 139, lengths: [32, 6, 8, 10, 12, 14, 16, 18, 20, 22, 25, 28], extra: 'h=9；c=0.4；默认 L=32' },
+  { d: 14, b: 14, h: 9, label: 'b=14×h=9', l_min: 6, l_max: 139, lengths: [32, 6, 8, 10, 12, 14, 16, 18, 20, 22, 25, 28, 50], extra: 'h=9；c=0.4；默认 L=32' },
 ];
 const KEY_RANGES = [
   { d_lo: 6, d_hi: 8, lo_inclusive: true, b: 2, t1: 1.2 },
@@ -175,6 +203,14 @@ function mkEl(id) {
         f._tr = tr;
         f.closest = (sel) => (sel === 'tr[data-row]' ? tr : null);
       }
+      const derive = mkEl('key-derive');
+      const deriveMatch = /class="chk key-derive"[^>]*>([^<]*)<\/span>/.exec(rowHtml);
+      derive.textContent = htmlDecode(deriveMatch?.[1] || '');
+      tr.querySelector = (sel) => {
+        if (sel === '.key-derive') return derive;
+        const field = /^\[data-f="([^"]+)"\]$/.exec(sel);
+        return field ? tr._fields.find((f) => f.dataset.f === field[1]) || null : null;
+      };
       this._rows.push(tr);
     }
   };
@@ -262,8 +298,16 @@ function textResp(text, status = 200) {
   return { ok: status < 400, status, text: async () => text, json: async () => JSON.parse(text) };
 }
 
-// DSL → 归一化段模型（够本测试用：花键行按规格表查 de，齿轮行按真实子关键字回填；INVOLSPLINE 视为非法段）。
+// DSL/JSON → 归一化段模型（够本测试用：含 CH/FI；花键查 de，齿轮回填；INVOLSPLINE 非法）。
 function segmentsFor(dsl) {
+  if (String(dsl).trimStart().startsWith('{')) {
+    try {
+      const model = JSON.parse(dsl);
+      return model.segments.map((seg) => ({ ...seg, e: seg.e ?? seg.s }));
+    } catch (e) {
+      return { error: 'JSON 模型解析失败：' + e.message };
+    }
+  }
   const out = [];
   for (const raw of String(dsl).split(/[\n|]/)) {
     const line = raw.trim();
@@ -308,7 +352,7 @@ function segmentsFor(dsl) {
       out.push({ gear: g });
       continue;
     }
-    // 普通轴段（S/E/L…）：本测试不细解 S/E/L，给一个圆柱段；KEY 子关键字回填 keyway（与后端同形）。
+    // 普通轴段（S/E/L…）：保留真实尺寸，CH/FI/KEY 子关键字回填后端同形模型。
     if (/^S\s*=?\s*[\d.]/i.test(line)) {
       // 保留 S/E/L 真值（KEY 折算探针需要真实轴径；缺省回退 30/30/10）。
       const sm = /\bS\s*=?\s*([\d.]+)/i.exec(line);
@@ -316,6 +360,16 @@ function segmentsFor(dsl) {
       const lm = /\bL\s*=?\s*([\d.]+)/i.exec(line);
       const s0 = sm ? Number(sm[1]) : 30;
       const seg = { s: s0, e: em ? Number(em[1]) : s0, l: lm ? Number(lm[1]) : 10 };
+      for (const [keyword, field, size] of [['CH', 'ch', 'c'], ['FI', 'fillet', 'r']]) {
+        const re = new RegExp('\\b' + keyword + '\\s*=?\\s*([+-]?[\\d.]+)(?:\\s*@\\s*([LR]))?'
+          + (keyword === 'FI' ? '(?::(CONCAVE|CONVEX))?' : ''), 'gi');
+        const features = [...line.matchAll(re)].map((it) => {
+          const f = { [size]: Number(it[1]), end: (it[2] || 'R').toUpperCase() };
+          if (keyword === 'FI' && it[3]?.toUpperCase() === 'CONCAVE') f.kind = 'concave';
+          return f;
+        });
+        if (features.length) seg[field] = features;
+      }
       const km = /\bKEY\s+(\S+)\s+(?:KL\s*=?\s*)?([\d.]+)/i.exec(line);
       if (km) {
         const rawType = km[1];
@@ -334,6 +388,8 @@ function segmentsFor(dsl) {
           seg.keyway.b = Number(bm[1]);
           if (bm[2] !== undefined) seg.keyway.h = Number(bm[2]);
         }
+        const sl = /\bSL\s*=?\s*([+-]?[\d.]+)/i.exec(line);
+        if (sl) seg.keyway.slot_l = Number(sl[1]);
         const tm = /\bt1\s*=?\s*([\d.]+)/i.exec(line);
         if (tm) seg.keyway.t1 = Number(tm[1]);
         if (/双槽|\bDOUBLE\b/i.test(line)) seg.keyway.double = true;
@@ -350,6 +406,8 @@ function segmentsFor(dsl) {
 }
 
 let lastParseDsl = '';
+let lastExportModel = null;
+let exportRequests = 0;
 global.fetch = async (u, opts = {}) => {
   const url = String(u);
   if (url.startsWith('/api/parts')) {
@@ -382,7 +440,17 @@ global.fetch = async (u, opts = {}) => {
     }
     const parsed = segmentsFor(dsl);
     if (parsed.error) return jsonResp({ ok: false, error: parsed.error }, 400);
+    const conflict = parsed.findIndex((seg) => (seg.ch || []).some((c) =>
+      (seg.fillet || []).some((f) => (c.end || 'R').toUpperCase() === (f.end || 'R').toUpperCase())));
+    if (conflict >= 0) {
+      return jsonResp({ ok: false, error: `第 ${conflict + 1} 段：CH 与 FI 不能位于同一端。` }, 400);
+    }
     return jsonResp({ ok: true, segments: parsed, at: null, rot: null, view: 'normal' });
+  }
+  if (url.startsWith('/api/shaft_export')) {
+    lastExportModel = JSON.parse(opts.body || '{}');
+    exportRequests += 1;
+    return jsonResp({ ok: true, message: '已生成到图纸' });
   }
   if (url.startsWith('/api/shaft_preview')) {
     return textResp('<svg xmlns="http://www.w3.org/2000/svg"><line x1="0" y1="0" x2="1" y2="1"/></svg>');
@@ -395,7 +463,7 @@ const probed = script.replace(/\}\)\(\);\s*$/, `;globalThis.__shaft = {
   get rows() { return rows; },
   get sel() { return sel; },
   set sel(v) { sel = v; renderTable(); },
-  refreshFromText, modelFromRows, rowToDsl,
+  refreshFromText, modelFromRows, rowToDsl, rowFromSegment,
   get specs() { return splineSpecs; },
 };
 })();`);
@@ -420,6 +488,7 @@ if (!S) report();
 // ⓪ 打开即为空段表（用户 2026-09-23 定案：不再预填示例轴特征）；视图按钮只有 常规/剖视。
 check(S.rows.length === 0, '打开轴生成器应为空段表，实为 ' + S.rows.length);
 check(segBody._rows.length === 0, '段表 DOM 应为空，实为 ' + segBody._rows.length);
+check(segBody._innerHTML.includes('colspan="11"'), '加入 FI 列后空表提示应跨 11 列');
 check(dslEl.value === '', '行文本应为空，实为 ' + JSON.stringify(dslEl.value));
 check(!segBody._innerHTML.includes('S30 E30 L45'), '不应预填示例轴特征');
 const viewNames = document.getElementById('viewRow').children.map((b) => b.textContent);
@@ -431,7 +500,8 @@ check(S.rows.length === 1 && segBody._rows.length === 1, '空表点「+ 加行�
 const firstModel = S.modelFromRows();
 check(
   !!firstModel && firstModel.segments.length === 1
-    && firstModel.segments[0].s === 30 && firstModel.segments[0].l === 10,
+    && firstModel.segments[0].s === 30 && firstModel.segments[0].l === 10
+    && !Object.hasOwn(firstModel.segments[0], 'fillet'),
   '加第一段后应能生成模型（S30 L10）：' + JSON.stringify(firstModel)
 );
 // 回到空表（后面用例自己设置行文本）
@@ -819,6 +889,285 @@ S.sel = 0;
 check(S.rows[0].key.style === 'A' && S.rows[0].key.place === 'end', '普通平键端置仍可用：' + JSON.stringify(S.rows[0].key));
 const nPlace = segBody._rows[0]._fields.find((f) => f.dataset.f === 'key.place');
 check(nPlace.options.find((o) => o.value === 'end').disabled !== true, '普通平键端置不应禁用');
+
+// ⑨ FI 凸/凹圆角：邻接 CH 列、左右独立半径/模式、DSL（含默认右端）/JSON 往返与导出请求。
+function rowField(path, index = 0) {
+  return segBody._rows[index]?._fields.find((f) => f.dataset.f === path);
+}
+function setRowField(path, value, index = 0) {
+  const f = rowField(path, index);
+  check(!!f && !f.disabled, `字段 ${index + 1}/${path} 应存在且可编辑`);
+  if (!f || f.disabled) return;
+  if (f.type === 'checkbox') f.checked = value;
+  else f.value = String(value);
+  segBody._fire(f.type === 'checkbox' ? 'change' : 'input', f);
+}
+function checkEndDisabled(kind, end, disabled, why) {
+  for (const part of kind === 'fi' ? ['on', 'r', 'kind'] : ['on', 'c']) {
+    const path = `${kind}.${end}.${part}`;
+    check(rowField(path)?.disabled === disabled, `${why}：${path} disabled 应为 ${disabled}`);
+  }
+}
+function checkFeatureDisabled(kind, disabled, why) {
+  for (const end of ['l', 'r']) checkEndDisabled(kind, end, disabled, why);
+}
+check(/<th>CH 倒角<\/th>\s*<th>FI 圆角<\/th>\s*<th>OV 越程槽<\/th>/.test(html), 'FI 列应紧邻 CH，位于 CH/OV 之间');
+dslEl.value = 'S40 L20 FI2';
+check(await S.refreshFromText(), 'FI2 默认右端应解析成功');
+check(!S.rows[0].fi.l.on && S.rows[0].fi.r.on && S.rows[0].fi.r.r === '2', '省略 @ 的 FI2 应只勾右端并回填半径 2');
+check(rowField('fi.r.on')?.checked && !rowField('fi.l.on')?.checked, 'FI 默认右端应回显到实际勾选框');
+check(rowField('fi.r.r')?._attrs.title === SHAFT_ZH['gui.shaft.fillet_radius_title'], 'FI 半径输入应带 i18n 半径说明');
+check(rowField('fi.r.on')?._attrs.title === SHAFT_ZH['gui.shaft.fillet_title'], 'FI 勾选框应带凸/凹语法与同端互斥说明');
+check(S.rows[0].fi.r.kind === 'convex' && rowField('fi.r.kind')?.value === 'convex', '旧 FI DSL 应默认凸角');
+for (const end of ['l', 'r']) {
+  const mode = rowField(`fi.${end}.kind`);
+  check(mode?.tagName === 'SELECT' && mode.options.map((o) => o.value).join('|') === 'convex|concave', 'FI 每端应有 convex/concave 模式选择');
+  check(mode?.options.map((o) => o.textContent).join('|') === '凸角|轴肩根部凹角', 'FI 模式名称应来自 i18n');
+  check(mode?._attrs.title === SHAFT_ZH['gui.shaft.fillet_kind_title'], 'FI 模式下拉应带凸角/轴肩根部说明');
+}
+checkEndDisabled('ch', 'l', false, '仅右 FI 时左 CH 仍可用');
+checkEndDisabled('ch', 'r', true, '仅右 FI 时只禁用右 CH');
+check(S.rowToDsl(S.rows[0]) === 'S40 L20 FI2@R', 'FI 默认右端应回写显式 @R 且不增加凸角后缀');
+setRowField('fi.l.r', 1.25);
+setRowField('fi.l.on', true);
+setRowField('fi.r.r', 2.5);
+check(dslEl.value === 'S40 L20 FI1.25@L FI2.5@R', '左右半径应独立写进 FI DSL：' + dslEl.value);
+const bothFillets = [{ r: 1.25, end: 'L' }, { r: 2.5, end: 'R' }];
+check(JSON.stringify(S.modelFromRows()?.segments[0].fillet) === JSON.stringify(bothFillets), 'FI JSON 应使用 fillet:[{r,end}]，保留左右独立半径');
+checkFeatureDisabled('ch', true, 'FI 两端启用时对应 CH 两端均禁用');
+checkFeatureDisabled('fi', false, 'FI 两端可独立编辑');
+dslEl.value = 's40 l20 fi1.25@l fi2.5@r';
+check(await S.refreshFromText(), 'FI DSL 应大小写不敏感');
+check(JSON.stringify(S.modelFromRows()?.segments[0].fillet) === JSON.stringify(bothFillets), '双端 FI DSL 应回填相同 JSON');
+
+dslEl.value = 'S40 L20 FI2:CONCAVE';
+check(await S.refreshFromText(), '省略端的 FI2:CONCAVE 应解析为右端凹角');
+check(S.rows[0].fi.r.kind === 'concave' && !S.rows[0].fi.l.on, '默认端凹角应回填右端模式');
+check(S.rowToDsl(S.rows[0]) === 'S40 L20 FI2@R:CONCAVE', '默认端凹角应回写显式 @R:CONCAVE');
+dslEl.value = 's40 l20 fi1.25@l:concave fi2.5@r';
+check(await S.refreshFromText(), '凹角模式 DSL 应大小写不敏感');
+const mixedFillets = [{ r: 1.25, end: 'L', kind: 'concave' }, { r: 2.5, end: 'R' }];
+check(JSON.stringify(S.modelFromRows().segments[0].fillet) === JSON.stringify(mixedFillets), '混合凸/凹 DSL 应仅给凹角序列化 kind');
+setRowField('fi.r.kind', 'concave');
+check(S.rows[0].fi.l.kind === 'concave' && dslEl.value === 'S40 L20 FI1.25@L:CONCAVE FI2.5@R:CONCAVE', '左右模式可独立选择并立即同步 DSL');
+setRowField('fi.l.kind', 'convex');
+check(!Object.hasOwn(S.modelFromRows().segments[0].fillet[0], 'kind') && S.rows[0].fi.r.kind === 'concave', '切回凸角应省略 kind 且不改变对侧模式');
+
+const fiJson = { segments: [{ s: 44, e: 38, l: 32, fillet: [mixedFillets[0], { ...mixedFillets[1], kind: 'convex' }] }] };
+dslEl.value = JSON.stringify(fiJson);
+check(await S.refreshFromText(), '凸/凹 FI JSON 应可从行文本解析回填');
+check(rowField('fi.l.on')?.checked && rowField('fi.r.on')?.checked
+  && rowField('fi.l.r')?.value === '1.25' && rowField('fi.r.r')?.value === '2.5'
+  && rowField('fi.l.kind')?.value === 'concave' && rowField('fi.r.kind')?.value === 'convex', 'FI JSON 应回填两端勾选、半径与模式');
+setRowField('fi.r.r', 3.75);
+check(dslEl.value === 'S44 E38 L32 FI1.25@L:CONCAVE FI3.75@R', 'JSON 回填后改半径应保留锥段尺寸与另一端模式：' + dslEl.value);
+const fiRoundModel = S.modelFromRows();
+check(!Object.hasOwn(fiRoundModel.segments[0].fillet[1], 'kind'), '显式 convex JSON 回写模型时也应省略默认 kind');
+check(await S.refreshFromText(), '表生成的凸/凹 FI DSL 应可再次解析');
+check(JSON.stringify(S.modelFromRows()) === JSON.stringify(fiRoundModel), 'FI JSON → GUI → DSL → GUI → JSON 应保留凸/凹模式');
+elv('out').click();
+await tick();
+check(exportRequests === 1 && JSON.stringify(lastExportModel?.segments) === JSON.stringify(fiRoundModel.segments), '实际导出请求应携带 FI 半径/端点/凹模式');
+for (const invalid of ['', '0', '-1', 'Infinity', 'NaN']) {
+  setRowField('fi.r.r', invalid);
+  check(S.modelFromRows() === null, '非法 FI 半径应阻止生成模型：' + JSON.stringify(invalid));
+  check(elv('status').textContent.includes(SHAFT_ZH['gui.shaft.fillet_radius_positive']), '非法 FI 半径应显示 i18n 正数/有限数错误');
+}
+
+// ⑨.1 CH/FI 同端双向互斥：只禁用同端勾选/半径/模式，对侧可用并能实际启用、解析回填。
+for (const [kind, other] of [['ch', 'fi'], ['fi', 'ch']]) {
+  for (const end of ['l', 'r']) {
+    dslEl.value = 'S40 L20';
+    await S.refreshFromText();
+    const opposite = end === 'l' ? 'r' : 'l';
+    setRowField(`${kind}.${end}.on`, true);
+    checkEndDisabled(other, end, true, `${kind} 应只禁用同端 ${other}`);
+    checkEndDisabled(other, opposite, false, `${kind} 不应禁用异端 ${other}`);
+    checkFeatureDisabled(kind, false, `${kind} 本身仍可独立操作两端`);
+    setRowField(`${other}.${opposite}.on`, true);
+    if (other === 'fi') setRowField(`fi.${opposite}.kind`, 'concave');
+    const coexist = S.modelFromRows();
+    check(coexist?.segments[0].ch?.length === 1 && coexist?.segments[0].fillet?.length === 1, '异端 CH/FI 应同时保留到模型');
+    check(await S.refreshFromText(), 'GUI 生成的异端 CH/FI DSL 应解析成功');
+    check(JSON.stringify(S.modelFromRows()) === JSON.stringify(coexist), '异端 CH/FI 应往返回填而不丢特征');
+    checkEndDisabled(kind, opposite, true, '异端并存后各自只禁用另一特征的同端');
+    setRowField(`${kind}.${end}.on`, false);
+    checkEndDisabled(other, end, false, '关闭一端特征应立即解除该端禁用，不受对侧影响');
+    setRowField(`${other}.${opposite}.on`, false);
+    checkFeatureDisabled(other, false, '清除特征后两端均应可用');
+  }
+}
+check(!Object.hasOwn(S.modelFromRows().segments[0], 'fillet') && !/\bFI/.test(dslEl.value), 'FI 全关时 DSL/JSON 均应省略圆角');
+for (const coexistText of ['S40 L20 CH2@L FI2@R', 'S40 L20 FI2@L:CONCAVE CH2@R', JSON.stringify({ segments: [{ s: 40, l: 20, ch: [{ c: 2, end: 'L' }], fillet: [{ r: 2, end: 'R', kind: 'concave' }] }] })]) {
+  dslEl.value = coexistText;
+  check(await S.refreshFromText(), '导入异端 CH/FI（凸/凹 DSL、JSON）应接受：' + coexistText);
+  check(S.modelFromRows()?.segments[0].ch?.length === 1 && S.modelFromRows()?.segments[0].fillet?.length === 1, '异端 CH/FI 导入应完整回填');
+}
+
+// ⑨.2 复制为深拷贝：两端圆角与模式完整保留，编辑副本不修改原行。
+dslEl.value = 'S40 L20 FI1.25@L:CONCAVE FI2.5@R';
+await S.refreshFromText();
+S.sel = 0;
+elv('copyRow').click();
+check(S.rows.length === 2 && S.sel === 1, '复制 FI 行应新增并选中副本');
+check(S.rows[0].fi !== S.rows[1].fi && S.rows[0].fi.l !== S.rows[1].fi.l && S.rows[0].fi.r !== S.rows[1].fi.r, '圆角复制应深拷贝左右端对象');
+check(S.modelFromRows().segments.every((seg) => JSON.stringify(seg.fillet) === JSON.stringify(mixedFillets)), '复制行应保留左右端圆角与模式 JSON');
+check(dslEl.value === 'S40 L20 FI1.25@L:CONCAVE FI2.5@R\nS40 L20 FI1.25@L:CONCAVE FI2.5@R', '复制行应保留凸/凹 FI DSL');
+setRowField('fi.l.r', 4, 1);
+setRowField('fi.l.kind', 'convex', 1);
+setRowField('fi.r.on', false, 1);
+check(S.rows[0].fi.l.r === '1.25' && S.rows[0].fi.l.kind === 'concave' && S.rows[0].fi.r.on && S.rows[0].fi.r.r === '2.5', '编辑副本半径/模式/勾选不得影响原行');
+check(JSON.stringify(S.modelFromRows().segments[1].fillet) === JSON.stringify([{ r: 4, end: 'L' }]), '副本改成凸角并取消右圆角后应只序列化左圆角且省略 kind');
+
+// ⑨.3 切换 GEAR / 矩形 SPLINE 清理圆角，不在退出特殊段型时复活。
+for (const kind of ['gear', 'spline']) {
+  dslEl.value = 'S40 L20 FI1.25@L:CONCAVE FI2.5@R';
+  await S.refreshFromText();
+  setRowField(`${kind}.on`, true);
+  check(!S.rows[0].fi.l.on && !S.rows[0].fi.r.on, `${kind} 应清理 FI 两端勾选`);
+  checkFeatureDisabled('fi', true, `${kind} 应禁用所有 FI 控件`);
+  check(!/\bFI/.test(dslEl.value) && !Object.hasOwn(S.modelFromRows().segments[0], 'fillet'), `${kind} DSL/JSON 不应残留 FI`);
+  setRowField(`${kind}.on`, false);
+  checkFeatureDisabled('fi', false, `退出 ${kind} 应恢复 FI 控件可用`);
+  check(!S.rows[0].fi.l.on && !S.rows[0].fi.r.on && !/\bFI/.test(dslEl.value), `退出 ${kind} 不应复活旧圆角`);
+  check(!Object.hasOwn(S.modelFromRows().segments[0], 'fillet'), `退出 ${kind} 的普通段模型不应残留 FI`);
+}
+
+// ⑨.4 兼容不带 fillet / 空 fillet 的旧 JSON；归一化不会把 CH/FI 导入冲突择一吞掉。
+for (const legacySeg of [{ s: 30, l: 20 }, { s: 30, l: 20, fillet: [] }]) {
+  dslEl.value = JSON.stringify({ segments: [legacySeg] });
+  check(await S.refreshFromText(), '旧 JSON 缺省/空 fillet 应可回填');
+  check(!S.rows[0].fi.l.on && !S.rows[0].fi.r.on, '旧 JSON 应初始化两端 FI 为未勾选');
+  check(!Object.hasOwn(S.modelFromRows().segments[0], 'fillet'), '空 fillet 不应序列化为空数组');
+}
+const conflictSeg = { s: 40, e: 40, l: 20, ch: [{ c: 2, end: 'L' }], fillet: [{ r: 2, end: 'L', kind: 'concave' }] };
+const conflictRow = S.rowFromSegment(conflictSeg);
+check(conflictRow.ch.l.on && conflictRow.fi.l.on && conflictRow.fi.l.kind === 'concave', '归一化不应静默删除同端 CH/FI 冲突中的任一特征或凹模式');
+check(S.rowToDsl(conflictRow) === 'S40 L20 CH2@L FI2@L:CONCAVE', '同端冲突行回写 DSL 仍应保留 CH/FI，交后端拒绝');
+const savedRow = S.rows[0];
+S.rows[0] = conflictRow;
+const conflictModel = S.modelFromRows();
+check(conflictModel?.segments[0].ch?.length === 1 && conflictModel?.segments[0].fillet?.length === 1, '冲突模型也不得静默择一，应把完整输入交后端校验');
+S.rows[0] = savedRow;
+
+// ⑨.5 后端拒绝 CH/FI 同端（凸/凹/默认端/JSON）时保留原段表与输入，不能绕过错误导出。
+dslEl.value = 'S40 L20 FI1.25@L:CONCAVE FI2.5@R';
+await S.refreshFromText();
+const beforeConflicts = JSON.stringify(S.rows);
+for (const conflictText of ['S40 L20 CH2@L FI2@L', 'S40 L20 CH2@R FI2@R:CONCAVE', 'S40 L20 CH2 FI2', JSON.stringify({ segments: [conflictSeg] })]) {
+  dslEl.value = conflictText;
+  dslEl._fire('input', dslEl);
+  check(await S.refreshFromText() === false, 'CH/FI 冲突输入应由后端解析错误拒绝');
+  check(lastParseDsl === conflictText && dslEl.value === conflictText, '冲突输入应完整送后端并留在文本框，不应静默删特征');
+  check(JSON.stringify(S.rows) === beforeConflicts, '冲突解析失败不得修改原段表');
+  check(dslErr.textContent.includes('CH') && dslErr.textContent.includes('FI') && dslEl.classList.contains('bad'), '冲突应显示后端 CH/FI 错误并标红文本框');
+  const exportsBefore = exportRequests;
+  elv('out').click();
+  await tick();
+  check(exportRequests === exportsBefore, '冲突文本未修正时不得用旧段表生成图纸');
+}
+
+// ⑨.6 空表/首行模板/删最后一行仍兼容新增列与 FI 缺省值。
+dslEl.value = '';
+await S.refreshFromText();
+check(S.rows.length === 0 && segBody._rows.length === 0 && segBody._innerHTML.includes('colspan="11"'), '清空 FI/冲突文本应恢复跨 11 列的空表');
+elv('copyRow').click();
+check(S.rows.length === 0, '空表复制应仍为空表');
+elv('addRow').click();
+check(!S.rows[0].fi.l.on && !S.rows[0].fi.r.on && S.rows[0].fi.l.r === '2' && S.rows[0].fi.r.r === '2'
+  && S.rows[0].fi.l.kind === 'convex' && S.rows[0].fi.r.kind === 'convex', '空表新行应初始化左右独立默认半径与凸角模式');
+check(S.rows[0].key.slot_l === '' && rowField('key.slot_l')?.disabled, '空白行 SL 应默认为空且随未启用 KEY 禁用');
+checkFeatureDisabled('fi', false, '新空白行的 FI 应可操作');
+setRowField('fi.l.on', true);
+elv('delRow').click();
+check(S.rows.length === 1 && !S.rows[0].fi.l.on && !S.rows[0].fi.r.on, '删最后一行重置模板时应清理圆角');
+check(!Object.hasOwn(S.modelFromRows().segments[0], 'fillet'), '空白模板模型应继续省略 fillet');
+
+// ⑩ KEY 独立槽总长 SL：覆盖槽长而不折算键长/键型/t1，保留合法 L 与所有既有键参数。
+dslEl.value = 'S45 L80 KEY C 50 @端 SL50 t1 7';
+check(await S.refreshFromText(), 'KEY C 50 @端 SL50 t1 7 应解析成功');
+S.sel = 0;
+check(S.rows[0].key.slot_l === '50' && S.rows[0].key.l === '50' && S.rows[0].key.t1 === '7', '独立槽长 DSL 应分别回填 SL/L/t1');
+check(rowField('key.slot_l')?.value === '50' && !rowField('key.slot_l')?.disabled, 'SL 应显示在可编辑的独立输入框');
+check(rowField('key.slot_l')?._attrs.title === SHAFT_ZH['gui.shaft.key_slot_l_title'], 'SL 说明应走 i18n');
+check(rowField('key.l')?.disabled && rowField('key.l')?.value === '50', 'SL 非空应禁用 L 下拉但保留原合法 L');
+const slotDerive = () => segBody._rows[0].querySelector('.key-derive').textContent;
+check(slotDerive().includes('槽长 50（SL）') && !slotDerive().includes('槽长 57'), '独立槽长显示不得叠加端置 t1');
+check(S.rowToDsl(S.rows[0]) === 'S45 L80 KEY C 50 @端 SL50 t1 7', 'SL 应原样写回 KEY DSL 且保留 L/t1');
+check(S.modelFromRows().segments[0].keyway.slot_l === 50 && S.modelFromRows().segments[0].keyway.l === 50, 'JSON 应分别序列化数值 slot_l 与兼容 L');
+setRowField('key.style', 'B');
+check(slotDerive().includes('槽长 50（SL）'), 'SL 不应按 B 键型补偿长度');
+setRowField('key.place', 'mid');
+check(slotDerive().includes('槽长 50（SL）'), 'SL 不应按中置/端置重新折算');
+setRowField('key.double', true);
+setRowField('key.style', 'C');
+setRowField('key.place', 'end');
+const liveSlotInput = rowField('key.slot_l');
+for (const value of [5, 50, 50.25]) {
+  setRowField('key.slot_l', value);
+  check(rowField('key.slot_l') === liveSlotInput, '连续输入 SL 不应重建输入框、打断焦点');
+  check(rowField('key.l')?.disabled && S.rows[0].key.l === '50', '连续输入 SL 时应保留兼容 L 并即时更新禁用态');
+  check(slotDerive().includes(`槽长 ${value}（SL）`), '连续输入 SL 时派生槽长应即时同步');
+}
+const slotRoundModel = S.modelFromRows();
+check(slotRoundModel.segments[0].keyway.slot_l === 50.25 && slotRoundModel.segments[0].keyway.t1 === 7
+  && slotRoundModel.segments[0].keyway.double === true, 'SL 不应覆盖 t1/双槽等现有键参数');
+check(await S.refreshFromText(), 'GUI 输出的 SL DSL 应可再次解析');
+check(JSON.stringify(S.modelFromRows()) === JSON.stringify(slotRoundModel), 'SL GUI → DSL → GUI → JSON 应往返一致');
+dslEl.value = JSON.stringify(slotRoundModel);
+check(await S.refreshFromText(), 'SL JSON 应可回填');
+check(S.rows[0].key.slot_l === '50.25' && rowField('key.slot_l')?.value === '50.25' && rowField('key.l')?.disabled, 'SL JSON 应回填输入与 L 禁用态');
+const slotExportsBefore = exportRequests;
+elv('out').click();
+await tick();
+check(exportRequests === slotExportsBefore + 1 && JSON.stringify(lastExportModel?.segments) === JSON.stringify(slotRoundModel.segments), '实际导出请求应带独立 slot_l 及原有合法 L/键参数');
+
+// ⑩.1 SL 随 KEY 行深拷贝；副本修改/关闭 KEY 不影响原行，也不向无 KEY 的模型泄露 SL。
+S.sel = 0;
+elv('copyRow').click();
+check(S.rows.length === 2 && S.rows[0].key !== S.rows[1].key
+  && S.rows.every((r) => r.key.slot_l === '50.25' && r.key.l === '50'), '复制 KEY 应保留独立槽长与兼容 L，且深拷贝键参数');
+setRowField('key.slot_l', 60, 1);
+check(S.rows[0].key.slot_l === '50.25' && S.modelFromRows().segments[1].keyway.slot_l === 60, '修改副本 SL 不得影响原行');
+setRowField('key.on', false, 1);
+check(!S.modelFromRows().segments[1].keyway && !/\bSL/.test(dslEl.value.split('\n')[1]), '关闭 KEY 后副本 DSL/JSON 不应残留 SL');
+setRowField('key.on', true, 1);
+check(S.rows[1].key.slot_l === '60' && rowField('key.l', 1)?.disabled, '重新启用 KEY 应沿用该行的独立槽长与禁用态');
+dslEl.value = JSON.stringify(slotRoundModel);
+await S.refreshFromText();
+for (const invalid of ['0', '-1', 'Infinity', 'NaN']) {
+  setRowField('key.slot_l', invalid);
+  check(S.modelFromRows() === null, '非法 SL 应阻止模型生成：' + invalid);
+  check(elv('status').textContent.includes(SHAFT_ZH['gui.shaft.key_slot_l_positive']), '非法 SL 应显示 i18n 正数/有限数错误');
+  const exportsBefore = exportRequests;
+  elv('out').click();
+  await tick();
+  check(exportRequests === exportsBefore, '非法 SL 不得发出导出请求');
+}
+
+// ⑩.2 SL 留空恢复旧规则；键型/端置/导向与原 L、双槽约束不变。
+dslEl.value = 'S45 L80 KEY B 20';
+await S.refreshFromText();
+check(S.rows[0].key.slot_l === '' && !rowField('key.l')?.disabled
+  && !Object.hasOwn(S.modelFromRows().segments[0].keyway, 'slot_l'), '旧 KEY DSL 不带 SL 时应默认空值且省略 JSON slot_l');
+for (const [place, oldLength, blank] of [['mid', 34, ''], ['end', 32.5, '  ']]) {
+  setRowField('key.place', place);
+  setRowField('key.slot_l', 50);
+  check(slotDerive().includes('槽长 50（SL）'), '填写 SL 应覆盖原折算槽长');
+  setRowField('key.slot_l', blank);
+  check(!rowField('key.l')?.disabled && S.rows[0].key.l === '20', '清空 SL 应恢复 L 下拉且保留原 L');
+  check(slotDerive().includes('槽长 ' + oldLength) && !slotDerive().includes('（SL）'), '清空 SL 应恢复既有 B 型/端置 t1 折算');
+  check(!/\bSL/.test(dslEl.value) && !Object.hasOwn(S.modelFromRows().segments[0].keyway, 'slot_l'), '空白 SL 在 DSL/JSON 中均应省略');
+}
+dslEl.value = JSON.stringify({ segments: [{ s: 30, l: 50, keyway: { type: 'A', l: 18, place: 'mid' } }] });
+check(await S.refreshFromText(), '旧 KEY JSON 不带 slot_l 应可回填');
+check(S.rows[0].key.slot_l === '' && !rowField('key.l')?.disabled, '旧 JSON 应恢复默认空 SL 与可编辑 L');
+dslEl.value = 'S30 L80 KEY 导向A 25 SL40';
+await S.refreshFromText();
+check(S.modelFromRows().segments[0].keyway.guided === true && slotDerive().includes('槽长 40（SL）'), '导向键应保留 guided 并采用独立槽长显示');
+check(rowField('key.double')?.disabled && rowField('key.place')?.options.find((o) => o.value === 'end').disabled, 'SL 不应改变导向键的双槽/端置限制');
+setRowField('key.slot_l', '');
+check(slotDerive().includes('槽长 25（= 键长 L）') && !rowField('key.l')?.disabled, '清空导向键 SL 应恢复原槽长与 L 下拉');
 report();
 
 function report() {
@@ -826,6 +1175,6 @@ function report() {
     console.error('轴 GUI 冒烟失败：\n- ' + errors.join('\n- '));
     process.exit(1);
   }
-  console.log('轴 GUI 冒烟通过：规格下拉 / de 自动填 / 派生值 / 自定义手输 / 表外缺 de 报错 / 表达式粘贴往返 / INVOLSPLINE 已撤护栏');
+  console.log('轴 GUI 冒烟通过：规格下拉 / de 自动填 / 派生值 / 自定义手输 / 表外缺 de 报错 / 表达式粘贴往返 / INVOLSPLINE 已撤护栏 / FI 凸凹模式 DSL/JSON 往返与导出 / CH/FI 同端互斥与异端共存 / 圆角复制与特殊段清理 / KEY 独立槽长 SL 往返/复制/导出/正数校验/留空兼容 / 空表兼容');
   process.exit(0);
 }

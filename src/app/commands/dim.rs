@@ -1414,7 +1414,17 @@ impl OpenCADStudio {
                             .then_some(handle)
                     })
                     .collect();
-                let all_entities: Vec<_> = entities.into_iter().map(|(_, e)| e).collect();
+                let mut all_entities: Vec<_> = entities.into_iter().map(|(_, e)| e).collect();
+                // Patterned/solid hatches need not have an entity wire. Include
+                // visible top-level fills so an interior pick can trim them too.
+                let mut seen: std::collections::HashSet<_> = all_entities
+                    .iter().map(|entity| entity.common().handle).collect();
+                let scene = &self.tabs[i].scene;
+                all_entities.extend(scene.document.entities().filter(|entity| {
+                    matches!(entity, codec::EntityType::Hatch(_))
+                        && scene.hatch_visible_for_interaction(entity.common().handle)
+                        && seen.insert(entity.common().handle)
+                }).cloned());
                 let new_cmd = TrimCommand::with_cutting_edges(all_entities, initial_edges);
                 self.command_line.push_info(&new_cmd.prompt());
                 self.tabs[i].active_cmd = Some(Box::new(new_cmd));

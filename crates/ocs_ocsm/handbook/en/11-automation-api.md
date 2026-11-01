@@ -43,6 +43,8 @@ The `op` of `request`:
 | `cancel` | cancel the current interactive command (= Esc); **it is recommended to cancel before sending the next command** |
 | `undo` | undo one step (equivalent to Ctrl+Z) |
 | `new` / `open` / `save` | create/open/save a document |
+| `save_verified` | save to an explicit path, reload and audit the roundtrip; not a Save As of the active tab |
+| `activate` / `switch_document` | switch to a specified open document; re-read state before operating |
 
 Key points:
 - **`request_id` must be unique**; reusing one reports `Request payload changed` (see `12-troubleshooting.md`).
@@ -51,6 +53,15 @@ Key points:
 
 ### `ocs_capture`
 `scope: viewport|window`, `max_dimension`. **Take a screenshot after every step and verify against it**; do not just look at the returned ok.
+
+### Saving All Tabs: Protect Originals Separately From Verified Snapshots
+
+When the task requires saving every OCS drawing, use `ocs_sessions`/`state` to inventory **all sessions and documents**, their active tabs, paths and `dirty` status; do not save only the current tab. Do not overwrite approved drawings, historical candidates or pre-revision snapshots simply to clear dirty state.
+
+1. Work session by session and dirty document by document: read the current `state` and use `activate` / `switch_document` with the target `document_id`, current active tab's `revision` and, if it must remain unchanged, `selection`; re-read `state` and confirm the active `document_id`, `revision` and selection before saving. An inactive document cannot be saved directly; restore the original active tab afterwards.
+2. For a state requiring protection, first attempt `ocs_execute` `save_verified` at a unique new path for a verified snapshot: `path` must be absolute, its parent must already exist, and overwrite is off by default. **This is not a Save As of the active tab**: in the tested version it neither switches the tab path nor clears `dirty`. Audit, format or roundtrip checks can fail; a failed verification may already have written the destination. Do not treat it as verified or blindly retry the same path; preserve the state and use a fresh path.
+3. Use `save` to Save As that tab to a different unique working-copy path. First re-read `state` and guard with `document_id` and `revision`, plus `selection` if it must remain unchanged. GUI saves can be queued asynchronously: **a successful response alone does not prove that the write has finished**. Wait for completion, re-read path and `dirty=false` in `state.documents`, check the disk file, and reopen/compare critical geometry or data as appropriate. Do not overwrite approved drawings, historical candidates or pre-revision snapshots without explicit user authorization; saving a working copy does not update the original path.
+4. If the verified snapshot fails but a safe Save As is possible, `save` to **another** new path and check independently. If lossless preservation cannot be assured, preserve the state, record the error and stop for the user's decision. In an older version, `save_verified` on drawings with GDIM dimensions produced a roundtrip false alarm and an external-change prompt; **never reload/overwrite to discard unsaved changes**. Record original/copy paths and verify original hashes and the content that needed saving; `dirty=false`, a screenshot or a successful snapshot is not engineering sign-off.
 
 ### Interactive commands (`start` + `input`) — must use the **same MCP session**
 

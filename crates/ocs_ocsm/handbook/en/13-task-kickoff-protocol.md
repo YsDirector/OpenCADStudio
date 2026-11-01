@@ -13,7 +13,7 @@
 | **A Complete / reverse-engineer** | The drawing **already has holes/outline/plate thickness**, and the user says "add a bolt here", "match this hole", "dimension it" | Read the conditions from the **existing geometry** (hole diameter, plate thickness, contour) → back-solve the specification → run the command (`OCSMJOINT`/`OCSMPART`/`OCSMDIMGULIDE`…). **Treat the upstream constraints as assumptions — and list the assumptions** |
 | **B Design from scratch** | Only functional requirements ("join these two plates", "design this housing/cylinder") | Follow the **normal design order**: **ask the user for the design inputs first** (see §2), then compute down layer by layer |
 | **C Copy / convert a drawing** | There is a reference drawing / original drawing / DXF | Measure the geometry from the drawing; take the specifications from the drawing notes; **ask before changing any GB difference (drawing method/font/layer)** |
-| **D Modify / revise a drawing** | An existing drawing has to be changed | Read the current state first (`ocs_read state/query`) → change only the part that was asked for → **do not overturn existing conventions that were not confirmed** |
+| **D Modify / revise a drawing** | An existing drawing has to be changed | Read the current state first (`ocs_read state/query`) → change only the requested part; if entity geometry changes, record and delete the related annotations/guides, then redraw the guides and regenerate the annotations with OCSM → **do not overturn existing conventions that were not confirmed** |
 
 **If the criterion is unclear, ask one question** ("is this Ø10 hole given, or may I change it?") — asking wrongly costs far less than guessing wrongly.
 
